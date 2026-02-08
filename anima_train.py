@@ -1469,6 +1469,69 @@ class RepeatDataset(Dataset):
         return self.dataset[idx % len(self.dataset)]
 
 
+class BucketBatchSampler:
+    """Batch sampler that groups samples by bucket so latents in each batch have the same size."""
+    def __init__(self, dataset, batch_size, drop_last=True, shuffle=True, seed=42):
+        self.dataset = dataset
+        self.batch_size = int(batch_size)
+        self.drop_last = bool(drop_last)
+        self.shuffle = bool(shuffle)
+        self.seed = int(seed)
+        self.epoch = 0
+        self._cached_dataset = self._get_cached_dataset(dataset)
+        self._base_len = len(self._cached_dataset) if self._cached_dataset else 0
+
+    def _get_cached_dataset(self, d):
+        if hasattr(d, "bucket_for_index"):
+            return d
+        if hasattr(d, "dataset"):
+            return self._get_cached_dataset(d.dataset)
+        return None
+
+    def set_epoch(self, epoch):
+        self.epoch = int(epoch)
+
+    def __len__(self):
+        n = len(self.dataset)
+        if self.drop_last:
+            return n // self.batch_size
+        return (n + self.batch_size - 1) // self.batch_size
+
+    def __iter__(self):
+        rng = random.Random(self.seed + self.epoch)
+        if self._cached_dataset is None:
+            indices = list(range(len(self.dataset)))
+            if self.shuffle:
+                rng.shuffle(indices)
+            for i in range(0, len(indices), self.batch_size):
+                batch = indices[i:i + self.batch_size]
+                if len(batch) < self.batch_size and self.drop_last:
+                    continue
+                yield batch
+            return
+
+        bucket_to_indices = {}
+        for idx in range(len(self.dataset)):
+            base_idx = idx % self._base_len
+            bucket = self._cached_dataset.bucket_for_index[base_idx]
+            if bucket is None:
+                bucket = (0, 0)
+            bucket_to_indices.setdefault(bucket, []).append(idx)
+
+        buckets = list(bucket_to_indices.keys())
+        if self.shuffle:
+            rng.shuffle(buckets)
+        for bucket in buckets:
+            indices = bucket_to_indices[bucket]
+            if self.shuffle:
+                rng.shuffle(indices)
+            for i in range(0, len(indices), self.batch_size):
+                batch = indices[i:i + self.batch_size]
+                if len(batch) < self.batch_size and self.drop_last:
+                    continue
+                yield batch
+
+
 class CachedLatentDataset(Dataset):
     """Kohya 风格 npz 文件缓存的数据集"""
     def __init__(self, base_dataset, vae, device, dtype, cache_dir=None):
@@ -1478,6 +1541,7 @@ class CachedLatentDataset(Dataset):
         # 获取原始数据集的 samples 列表
         self.samples = self._get_base_samples(base_dataset)
         self.cache_dir = Path(cache_dir) if cache_dir else None
+        self.bucket_for_index = []
         self._build_cache(vae, device, dtype)
 
     def _get_base_samples(self, dataset):
@@ -1494,10 +1558,25 @@ class CachedLatentDataset(Dataset):
         return img_path.with_suffix(".npz")
 
     def _is_cache_valid(self, img_path, npz_path):
-        """检查缓存是否有效（图像未修改）"""
+        """检查缓存是否有效（图像未修改，且格式含 latent 键）。
+        若为其他模型的不兼容缓存，则删除并返回 False。"""
         if not npz_path.exists():
             return False
-        return npz_path.stat().st_mtime >= img_path.stat().st_mtime
+        if npz_path.stat().st_mtime < img_path.stat().st_mtime:
+            return False
+        try:
+            data = self.np.load(npz_path)
+            if "latent" not in data.files:
+                npz_path.unlink()
+                logger.debug(f"已删除不兼容缓存: {npz_path.name}")
+                return False
+        except Exception:
+            try:
+                npz_path.unlink()
+            except Exception:
+                pass
+            return False
+        return True
 
     def _build_cache(self, vae, device, dtype):
         """构建/加载 npz 缓存"""
@@ -1515,17 +1594,38 @@ class CachedLatentDataset(Dataset):
         else:
             logger.info(f"所有 {len(self.samples)} 张图像已缓存")
 
+        self._fill_bucket_for_index()
+
+    def _fill_bucket_for_index(self):
+        """Fill bucket_for_index for all samples (needed for BucketBatchSampler).
+        Uses latent spatial shape (h, w) as grouping key so batches have consistent tensor sizes."""
+        self.bucket_for_index = [None] * len(self.samples)
+        for i in range(len(self.samples)):
+            npz_path = self._get_npz_path(self.samples[i]["image"])
+            if not npz_path.exists():
+                continue
+            data = self.np.load(npz_path)
+            latent = data["latent"]
+            s = latent.shape
+            if len(s) == 5:
+                _, _, _, h, w = s
+            else:
+                _, _, h, w = s
+            self.bucket_for_index[i] = (int(h), int(w))
+
     def _encode_and_save(self, indices, vae, device, dtype):
         """编码图像并保存为 npz"""
         for count, i in enumerate(indices):
             item = self.base_dataset[i]
             pixels = item["pixel_values"].unsqueeze(0).to(device, dtype=dtype)
+            _, _, ph, pw = pixels.shape
+            bucket_w, bucket_h = pw, ph
             with torch.no_grad():
                 pixels_5d = pixels.unsqueeze(2)
                 latent = vae.model.encode(pixels_5d, vae.scale)
             latent_np = latent.squeeze(0).cpu().float().numpy()
             npz_path = self._get_npz_path(self.samples[i]["image"])
-            self.np.savez(npz_path, latent=latent_np)
+            self.np.savez(npz_path, latent=latent_np, bucket_w=bucket_w, bucket_h=bucket_h)
             if (count + 1) % 10 == 0 or count == len(indices) - 1:
                 logger.info(f"  编码进度: {count + 1}/{len(indices)}")
 
@@ -2033,12 +2133,24 @@ def main():
         logger.warning("num_workers > 0 在 Windows 上容易崩溃：已强制设为 0（避免多进程 spawn 问题）")
         args.num_workers = 0
 
-    dataloader = DataLoader(
-        dataset, batch_size=args.batch_size,
-        shuffle=True,
-        collate_fn=collate_fn_cached if use_cached else collate_fn,
-        num_workers=args.num_workers
-    )
+    if use_cached:
+        batch_sampler = BucketBatchSampler(
+            dataset, batch_size=args.batch_size,
+            drop_last=True, shuffle=True,
+            seed=getattr(args, "seed", 42),
+        )
+        dataloader = DataLoader(
+            dataset, batch_sampler=batch_sampler,
+            collate_fn=collate_fn_cached,
+            num_workers=args.num_workers,
+        )
+    else:
+        dataloader = DataLoader(
+            dataset, batch_size=args.batch_size,
+            shuffle=True,
+            collate_fn=collate_fn,
+            num_workers=args.num_workers,
+        )
 
     # 训练前自检：VAE encode->decode 循环（快速排除 VAE/scale/shape 问题）
     try:
@@ -2218,6 +2330,8 @@ def main():
 
     for epoch in range(start_epoch, args.epochs):
         current_epoch = epoch
+        if use_cached and hasattr(dataloader, "batch_sampler") and hasattr(dataloader.batch_sampler, "set_epoch"):
+            dataloader.batch_sampler.set_epoch(epoch)
         for batch_idx, batch in enumerate(dataloader):
             # 在累积周期开始时记录时间
             if batch_idx % args.grad_accum == 0:
