@@ -54,6 +54,9 @@ scripts/
 models/text_encoders/tokenizer.json
 models/text_encoders/vocab.json
 
+# Dataset (training images)
+dataset/
+
 # Misc
 nul
 AGENTS.md

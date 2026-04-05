@@ -116,6 +116,9 @@ def apply_yaml_config(args, config):
         "t5_tokenizer_path": "t5_tokenizer",
         # 数据集
         "data_dir": "data_dir",
+        "reg_data_dir": "reg_data_dir",
+        "reg_repeats": "reg_repeats",
+        "reg_caption": "reg_caption",
         "resolution": "resolution",
         "repeats": "repeats",
         "shuffle_caption": "shuffle_caption",
@@ -136,6 +139,12 @@ def apply_yaml_config(args, config):
         "batch_size": "batch_size",
         "grad_accum": "grad_accum",
         "learning_rate": "lr",
+        "lr_scheduler": "lr_scheduler",
+        "lr_scheduler_t0": "lr_scheduler_t0",
+        "lr_scheduler_t_mult": "lr_scheduler_t_mult",
+        "lr_scheduler_eta_min": "lr_scheduler_eta_min",
+        "weight_decay": "weight_decay",
+        "grad_clip_max_norm": "grad_clip_max_norm",
         "mixed_precision": "mixed_precision",
         "grad_checkpoint": "grad_checkpoint",
         "xformers": "xformers",
@@ -178,6 +187,9 @@ def apply_yaml_config(args, config):
         "qwen": "",
         "t5_tokenizer": "",
         "data_dir": "",
+        "reg_data_dir": "",
+        "reg_repeats": 1,
+        "reg_caption": "",
         "resolution": 1024,
         "repeats": 1,
         "shuffle_caption": False,
@@ -196,6 +208,12 @@ def apply_yaml_config(args, config):
         "batch_size": 1,
         "grad_accum": 1,
         "lr": 1e-4,
+        "lr_scheduler": "none",
+        "lr_scheduler_t0": 500,
+        "lr_scheduler_t_mult": 2.0,
+        "lr_scheduler_eta_min": 0.0,
+        "weight_decay": 0.01,
+        "grad_clip_max_norm": 1.0,
         "mixed_precision": "bf16",
         "grad_checkpoint": False,
         "xformers": False,
@@ -1004,12 +1022,10 @@ class LoRALayer(torch.nn.Module):
 
 
 class LoKrLayer(torch.nn.Module):
-    """LyCORIS LoKr 层 (ComfyUI 兼容)"""
+    """LyCORIS LoKr 层 (ComfyUI 兼容) — w2 低秩分解版"""
     def __init__(self, in_features, out_features, rank=4, alpha=1.0, factor=8, dropout=0.0):
         super().__init__()
-        self.rank = rank
         self.alpha = alpha
-        self.scaling = alpha / rank
 
         # 自动调整 factor 确保能整除
         factor = self._find_factor(in_features, out_features, factor)
@@ -1018,14 +1034,22 @@ class LoKrLayer(torch.nn.Module):
         self.in_dim = in_features // factor
         self.out_dim = out_features // factor
 
-        # LoKr 分解: W = kron(w1, w2)
-        # w1: [factor, factor], w2: [out_dim, in_dim]
+        # cap rank 防止小层溢出
+        self.rank = min(rank, self.out_dim, self.in_dim)
+        self.scaling = alpha / self.rank
+
+        # LoKr 分解: W = kron(w1, w2_a @ w2_b) * scaling
+        # w1: [factor, factor]
+        # w2_a: [out_dim, rank], w2_b: [rank, in_dim]
         self.lokr_w1 = torch.nn.Parameter(torch.empty(factor, factor))
-        self.lokr_w2 = torch.nn.Parameter(torch.empty(self.out_dim, self.in_dim))
+        self.lokr_w2_a = torch.nn.Parameter(torch.empty(self.out_dim, self.rank))
+        self.lokr_w2_b = torch.nn.Parameter(torch.empty(self.rank, self.in_dim))
         self.dropout = torch.nn.Dropout(dropout) if dropout > 0 else torch.nn.Identity()
 
+        # LyCORIS 标准初始化: w1=kaiming, w2_a=kaiming, w2_b=zeros
         torch.nn.init.kaiming_uniform_(self.lokr_w1, a=5**0.5)
-        torch.nn.init.zeros_(self.lokr_w2)
+        torch.nn.init.kaiming_uniform_(self.lokr_w2_a, a=5**0.5)
+        torch.nn.init.zeros_(self.lokr_w2_b)
 
     def _find_factor(self, in_f, out_f, target_factor):
         """找到能同时整除 in_features 和 out_features 的 factor"""
@@ -1035,7 +1059,8 @@ class LoKrLayer(torch.nn.Module):
         return 1
 
     def forward(self, x):
-        weight = torch.kron(self.lokr_w1, self.lokr_w2)
+        w2 = self.lokr_w2_a @ self.lokr_w2_b
+        weight = torch.kron(self.lokr_w1, w2)
         return F.linear(self.dropout(x), weight) * self.scaling
 
 
@@ -1117,6 +1142,23 @@ class LoRAInjector:
             params.extend(lora.adapter.parameters())
         return params
 
+    def get_param_groups(self, weight_decay):
+        """获取参数组，LoKr 模式下 w1 排除 weight_decay"""
+        if not self.use_lokr or weight_decay == 0:
+            return [{"params": self.get_params(), "weight_decay": weight_decay}]
+
+        no_decay_params = []  # w1
+        decay_params = []     # w2_a, w2_b
+        for lora in self.injected.values():
+            no_decay_params.append(lora.adapter.lokr_w1)
+            decay_params.append(lora.adapter.lokr_w2_a)
+            decay_params.append(lora.adapter.lokr_w2_b)
+
+        return [
+            {"params": decay_params, "weight_decay": weight_decay},
+            {"params": no_decay_params, "weight_decay": 0.0},
+        ]
+
     def state_dict(self):
         """导出 LoRA 权重 (ComfyUI 兼容格式)"""
         sd = {}
@@ -1127,7 +1169,8 @@ class LoRAInjector:
 
             if self.use_lokr:
                 sd[f"{base}.lokr_w1"] = lora.adapter.lokr_w1.data.clone()
-                sd[f"{base}.lokr_w2"] = lora.adapter.lokr_w2.data.clone()
+                sd[f"{base}.lokr_w2_a"] = lora.adapter.lokr_w2_a.data.clone()
+                sd[f"{base}.lokr_w2_b"] = lora.adapter.lokr_w2_b.data.clone()
             else:
                 sd[f"{base}.lora_down.weight"] = lora.adapter.lora_down.weight.data.clone()
                 sd[f"{base}.lora_up.weight"] = lora.adapter.lora_up.weight.data.clone()
@@ -1164,11 +1207,16 @@ class LoRAInjector:
             
             if self.use_lokr:
                 w1_key = f"{base}.lokr_w1"
-                w2_key = f"{base}.lokr_w2"
-                if w1_key in sd and w2_key in sd:
+                w2a_key = f"{base}.lokr_w2_a"
+                w2b_key = f"{base}.lokr_w2_b"
+                w2_old_key = f"{base}.lokr_w2"
+                if w1_key in sd and w2a_key in sd and w2b_key in sd:
                     lora.adapter.lokr_w1.data.copy_(sd[w1_key])
-                    lora.adapter.lokr_w2.data.copy_(sd[w2_key])
+                    lora.adapter.lokr_w2_a.data.copy_(sd[w2a_key])
+                    lora.adapter.lokr_w2_b.data.copy_(sd[w2b_key])
                     loaded_count += 1
+                elif w1_key in sd and w2_old_key in sd:
+                    logger.warning(f"跳过旧格式 lokr_w2 全矩阵层: {name}（需重新训练）")
             else:
                 down_key = f"{base}.lora_down.weight"
                 up_key = f"{base}.lora_up.weight"
@@ -1176,7 +1224,7 @@ class LoRAInjector:
                     lora.adapter.lora_down.weight.data.copy_(sd[down_key])
                     lora.adapter.lora_up.weight.data.copy_(sd[up_key])
                     loaded_count += 1
-        
+
         logger.info(f"从 checkpoint 加载了 {loaded_count}/{len(self.injected)} 层 LoRA 权重")
 
 
@@ -1184,7 +1232,7 @@ class LoRAInjector:
 # 训练状态保存/恢复（断点续训）
 # ============================================================================
 
-def save_training_state(path, injector, optimizer, epoch, global_step, loss_history=None, rng_state=None, monitor_state=None):
+def save_training_state(path, injector, optimizer, epoch, global_step, loss_history=None, rng_state=None, monitor_state=None, scheduler=None):
     """保存完整训练状态，支持断点续训"""
     state = {
         "lora_state_dict": injector.state_dict(),
@@ -1199,11 +1247,13 @@ def save_training_state(path, injector, optimizer, epoch, global_step, loss_hist
         },
         "monitor_state": monitor_state,  # 保存监控面板数据（用于恢复 loss 曲线）
     }
+    if scheduler is not None:
+        state["scheduler_state_dict"] = scheduler.state_dict()
     torch.save(state, path)
     logger.info(f"训练状态已保存: {path} (epoch={epoch}, step={global_step})")
 
 
-def load_training_state(path, injector, optimizer):
+def load_training_state(path, injector, optimizer, scheduler=None):
     """加载训练状态，返回 (epoch, global_step, loss_history, monitor_state)"""
     logger.info(f"加载训练状态: {path}")
     state = torch.load(path, map_location="cpu", weights_only=False)
@@ -1214,10 +1264,15 @@ def load_training_state(path, injector, optimizer):
         base = "lora_unet_" + name.replace(".", "_")
         if injector.use_lokr:
             w1_key = f"{base}.lokr_w1"
-            w2_key = f"{base}.lokr_w2"
-            if w1_key in lora_sd and w2_key in lora_sd:
+            w2a_key = f"{base}.lokr_w2_a"
+            w2b_key = f"{base}.lokr_w2_b"
+            w2_old_key = f"{base}.lokr_w2"
+            if w1_key in lora_sd and w2a_key in lora_sd and w2b_key in lora_sd:
                 lora.adapter.lokr_w1.data.copy_(lora_sd[w1_key])
-                lora.adapter.lokr_w2.data.copy_(lora_sd[w2_key])
+                lora.adapter.lokr_w2_a.data.copy_(lora_sd[w2a_key])
+                lora.adapter.lokr_w2_b.data.copy_(lora_sd[w2b_key])
+            elif w1_key in lora_sd and w2_old_key in lora_sd:
+                logger.warning(f"跳过旧格式 lokr_w2 全矩阵层: {name}（需重新训练）")
         else:
             down_key = f"{base}.lora_down.weight"
             up_key = f"{base}.lora_up.weight"
@@ -1227,7 +1282,14 @@ def load_training_state(path, injector, optimizer):
     
     # 加载优化器状态
     optimizer.load_state_dict(state["optimizer_state_dict"])
-    
+
+    # 加载调度器状态
+    if scheduler is not None and "scheduler_state_dict" in state:
+        try:
+            scheduler.load_state_dict(state["scheduler_state_dict"])
+        except Exception as e:
+            logger.warning(f"调度器状态恢复失败（将从头开始）: {e}")
+
     # 恢复随机数状态
     if "rng_state" in state:
         rng = state["rng_state"]
@@ -1293,7 +1355,7 @@ class ImageDataset(Dataset):
 
     def __init__(self, data_dir, resolution=1024, bucket_mgr=None,
                  shuffle_caption=False, keep_tokens=0, flip_augment=False,
-                 tag_dropout=0.0, prefer_json=True):
+                 tag_dropout=0.0, prefer_json=True, caption_override=None):
         self.data_dir = Path(data_dir)
         self.resolution = resolution
         self.bucket_mgr = bucket_mgr
@@ -1302,6 +1364,7 @@ class ImageDataset(Dataset):
         self.flip_augment = flip_augment
         self.tag_dropout = tag_dropout
         self.prefer_json = prefer_json
+        self.caption_override = caption_override  # 正则集：统一 caption，如 "1girl, solo"
         
         # 尝试导入 caption_utils（直接导入避开 __init__.py）
         self.caption_utils = None
@@ -1418,9 +1481,11 @@ class ImageDataset(Dataset):
         sample = self.samples[idx]
         img = Image.open(sample["image"]).convert("RGB")
         
-        # 获取 caption
+        # 获取 caption（正则集可用 caption_override 统一覆盖）
         caption = None
-        if sample.get("json_path"):
+        if self.caption_override is not None:
+            caption = self.caption_override
+        elif sample.get("json_path"):
             caption = self._process_caption_json(sample["json_path"])
         
         if caption is None and sample.get("txt_path"):
@@ -1467,6 +1532,53 @@ class RepeatDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.dataset[idx % len(self.dataset)]
+
+
+class MergedDataset(Dataset):
+    """合并主数据集与正则数据集（Kohya 风格 reg）"""
+    def __init__(self, main_dataset, reg_dataset):
+        self.main_dataset = main_dataset
+        self.reg_dataset = reg_dataset
+        self._main_len = len(main_dataset)
+        self._reg_len = len(reg_dataset)
+
+        # 为 BucketBatchSampler 构建 bucket_for_index
+        self.bucket_for_index = self._build_bucket_for_index()
+
+    def _get_cached_dataset(self, d):
+        if hasattr(d, "bucket_for_index"):
+            return d
+        if hasattr(d, "dataset"):
+            return self._get_cached_dataset(d.dataset)
+        return None
+
+    def _build_bucket_for_index(self):
+        main_cached = self._get_cached_dataset(self.main_dataset)
+        reg_cached = self._get_cached_dataset(self.reg_dataset)
+        buckets = []
+        if main_cached and main_cached.bucket_for_index:
+            main_base_len = len(main_cached.bucket_for_index)
+            for idx in range(self._main_len):
+                b = main_cached.bucket_for_index[idx % main_base_len]
+                buckets.append(b if b is not None else (0, 0))
+        else:
+            buckets.extend([(0, 0)] * self._main_len)
+        if reg_cached and reg_cached.bucket_for_index:
+            reg_base_len = len(reg_cached.bucket_for_index)
+            for idx in range(self._reg_len):
+                b = reg_cached.bucket_for_index[idx % reg_base_len]
+                buckets.append(b if b is not None else (0, 0))
+        else:
+            buckets.extend([(0, 0)] * self._reg_len)
+        return buckets
+
+    def __len__(self):
+        return self._main_len + self._reg_len
+
+    def __getitem__(self, idx):
+        if idx < self._main_len:
+            return self.main_dataset[idx]
+        return self.reg_dataset[idx - self._main_len]
 
 
 class BucketBatchSampler:
@@ -1643,9 +1755,11 @@ class CachedLatentDataset(Dataset):
         while hasattr(base, "dataset"):
             base = base.dataset
         
-        # 处理 caption（JSON 或 TXT 模式）
+        # 处理 caption（正则集 caption_override 优先）
         caption = None
-        if sample.get("json_path") and hasattr(base, "_process_caption_json"):
+        if getattr(base, "caption_override", None) is not None:
+            caption = base.caption_override
+        elif sample.get("json_path") and hasattr(base, "_process_caption_json"):
             caption = base._process_caption_json(sample["json_path"])
         
         if caption is None and sample.get("txt_path"):
@@ -1837,6 +1951,12 @@ def parse_args():
     p.add_argument("--batch-size", type=int, default=1)
     p.add_argument("--grad-accum", type=int, default=1)
     p.add_argument("--lr", type=float, default=1e-4)
+    p.add_argument("--lr-scheduler", default="none", choices=["none", "cosine", "cosine_with_restart"], help="学习率调度器")
+    p.add_argument("--lr-scheduler-t0", type=int, default=500, help="cosine_with_restart: 首次 restart 周期 (step)")
+    p.add_argument("--lr-scheduler-t-mult", type=float, default=2.0, help="cosine_with_restart: 每次 restart 周期倍数")
+    p.add_argument("--lr-scheduler-eta-min", type=float, default=0.0, help="cosine/cosine_with_restart: 最小学习率")
+    p.add_argument("--weight-decay", type=float, default=0.01, help="AdamW 权重衰减 (L2 正则, 0=禁用)")
+    p.add_argument("--grad-clip-max-norm", type=float, default=1.0, help="梯度裁剪最大范数 (0=禁用)")
     p.add_argument("--resolution", type=int, default=1024)
     p.add_argument("--mixed-precision", choices=["fp32", "bf16"], default="bf16")
     p.add_argument("--grad-checkpoint", action="store_true", help="启用梯度检查点减少显存")
@@ -1846,6 +1966,9 @@ def parse_args():
 
     # 数据集参数
     p.add_argument("--repeats", type=int, default=1, help="数据集重复次数 (Kohya 风格)")
+    p.add_argument("--reg-data-dir", default="", help="正则数据集目录（防过拟合，Kohya 风格）")
+    p.add_argument("--reg-repeats", type=int, default=1, help="正则集每张图重复次数")
+    p.add_argument("--reg-caption", default="", help="正则集统一 caption，如 1girl, solo（空则用各图自带）")
     p.add_argument("--shuffle-caption", action="store_true", help="打乱 caption tags（分类 shuffle）")
     p.add_argument("--keep-tokens", type=int, default=0, help="保留前 N 个 tokens 不打乱")
     p.add_argument("--flip-augment", action="store_true", help="随机水平翻转增强")
@@ -2076,6 +2199,9 @@ def main():
     args.qwen = resolve_path_best_effort(args.qwen, bases)
     args.t5_tokenizer = resolve_path_best_effort(getattr(args, "t5_tokenizer", ""), bases)
     args.data_dir = resolve_path_best_effort(args.data_dir, bases)
+    reg_data_dir = getattr(args, "reg_data_dir", "") or ""
+    if reg_data_dir:
+        args.reg_data_dir = resolve_path_best_effort(reg_data_dir, bases)
 
     # 加载模型
     logger.info("加载 Transformer...")
@@ -2120,14 +2246,44 @@ def main():
     )
     dataset = base_dataset
 
+    # 正则数据集（Kohya 风格，防过拟合）
+    reg_data_dir = getattr(args, "reg_data_dir", "") or ""
+    reg_dataset = None
+    if reg_data_dir:
+        if not Path(reg_data_dir).exists():
+            logger.warning(f"正则数据集路径不存在，已跳过: {reg_data_dir}")
+        elif len(base_dataset) == 0:
+            logger.warning("主数据集为空，正则集已跳过")
+        else:
+            reg_caption = (getattr(args, "reg_caption", "") or "").strip()
+            reg_repeats = max(1, int(getattr(args, "reg_repeats", 1)) or 1)
+            reg_base = ImageDataset(
+                reg_data_dir, args.resolution, bucket_mgr,
+                shuffle_caption=args.shuffle_caption,
+                keep_tokens=args.keep_tokens,
+                flip_augment=args.flip_augment,
+                tag_dropout=0.0,  # 正则集通常不用 dropout
+                prefer_json=args.prefer_json,
+                caption_override=reg_caption if reg_caption else None,
+            )
+            reg_dataset = reg_base
+            cap_preview = f", caption=\"{reg_caption[:50]}{'...' if len(reg_caption) > 50 else ''}\"" if reg_caption else ""
+            logger.info(f"正则数据集: {reg_data_dir} ({len(reg_base)} 张, repeats={reg_repeats}){cap_preview}")
+
     # 缓存 VAE latents（在 repeat 之前）
     use_cached = getattr(args, "cache_latents", False)
     if use_cached:
         dataset = CachedLatentDataset(dataset, vae, device, dtype)
+    if reg_dataset is not None and use_cached:
+        reg_dataset = CachedLatentDataset(reg_dataset, vae, device, dtype)
 
     # repeat 放在缓存之后
     if args.repeats > 1:
         dataset = RepeatDataset(dataset, repeats=args.repeats)
+    if reg_dataset is not None:
+        reg_repeats = max(1, int(getattr(args, "reg_repeats", 1)) or 1)
+        reg_dataset = RepeatDataset(reg_dataset, repeats=reg_repeats)
+        dataset = MergedDataset(dataset, reg_dataset)
 
     if args.num_workers > 0 and os.name == "nt":
         logger.warning("num_workers > 0 在 Windows 上容易崩溃：已强制设为 0（避免多进程 spawn 问题）")
@@ -2168,8 +2324,18 @@ def main():
         logger.warning(f"VAE roundtrip 自检失败（若 sample 仍是噪点，请优先修这个）: {e}")
 
     # 优化器
-    params = injector.get_params()
-    optimizer = torch.optim.AdamW(params, lr=args.lr)
+    weight_decay = float(getattr(args, "weight_decay", 0.01) or 0.0)
+    param_groups = injector.get_param_groups(weight_decay)
+    optimizer = torch.optim.AdamW(param_groups, lr=args.lr)
+    if weight_decay > 0:
+        wd_info = f"AdamW weight_decay={weight_decay}"
+        if injector.use_lokr:
+            wd_info += "（w1 排除 weight_decay）"
+        logger.info(wd_info)
+    grad_clip = float(getattr(args, "grad_clip_max_norm", 0) or 0)
+    if grad_clip > 0:
+        logger.info(f"梯度裁剪 max_norm={grad_clip}")
+    trainable_params = [p for group in optimizer.param_groups for p in group["params"]]
 
     # 计算总步数
     try:
@@ -2185,6 +2351,27 @@ def main():
         total_steps = None
 
     logger.info(f"数据集大小: {len(dataset)}, 每 epoch 步数: {steps_per_epoch}, 总步数: {total_steps}")
+
+    # 学习率调度器
+    scheduler = None
+    lr_sched = getattr(args, "lr_scheduler", "none") or "none"
+    if lr_sched == "cosine":
+        eta_min = float(getattr(args, "lr_scheduler_eta_min", 0.0) or 0.0)
+        if total_steps is None:
+            logger.warning("cosine 调度器需要已知 total_steps，回退到 none")
+        else:
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=total_steps, eta_min=eta_min
+            )
+            logger.info(f"学习率调度: cosine (T_max={total_steps}, eta_min={eta_min})")
+    elif lr_sched == "cosine_with_restart":
+        t0 = int(getattr(args, "lr_scheduler_t0", 500) or 500)
+        t_mult = int(getattr(args, "lr_scheduler_t_mult", 2) or 2)
+        eta_min = float(getattr(args, "lr_scheduler_eta_min", 0.0) or 0.0)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer, T_0=t0, T_mult=t_mult, eta_min=eta_min
+        )
+        logger.info(f"学习率调度: cosine_with_restart (T_0={t0}, T_mult={t_mult}, eta_min={eta_min})")
 
     # 初始化进度显示
     progress, task_id, progress_kind = init_progress(not args.no_progress, total_steps)
@@ -2225,7 +2412,7 @@ def main():
     # 从训练状态恢复（断点续训）
     if getattr(args, "resume_state", "") and Path(args.resume_state).exists():
         start_epoch, global_step, loss_history, saved_monitor_state = load_training_state(
-            args.resume_state, injector, optimizer
+            args.resume_state, injector, optimizer, scheduler
         )
         emit(f"从断点恢复训练: epoch={start_epoch}, step={global_step}")
         
@@ -2262,7 +2449,7 @@ def main():
                 monitor_data = get_state()
             except Exception:
                 pass
-        save_training_state(state_path, injector, optimizer, current_epoch, global_step, loss_history, monitor_state=monitor_data)
+        save_training_state(state_path, injector, optimizer, current_epoch, global_step, loss_history, monitor_state=monitor_data, scheduler=scheduler)
         # 同时保存 LoRA 权重
         lora_path = output_dir / f"{args.output_name}_interrupted_step{global_step}.safetensors"
         injector.save(lora_path)
@@ -2384,7 +2571,11 @@ def main():
             loss.backward()
 
             if (batch_idx + 1) % args.grad_accum == 0:
+                if grad_clip > 0:
+                    torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=grad_clip)
                 optimizer.step()
+                if scheduler is not None:
+                    scheduler.step()
                 optimizer.zero_grad()
                 global_step += 1
 
@@ -2474,7 +2665,7 @@ def main():
                             monitor_data = get_state()
                         except Exception:
                             pass
-                    save_training_state(state_path, injector, optimizer, epoch, global_step, loss_history, monitor_state=monitor_data)
+                    save_training_state(state_path, injector, optimizer, epoch, global_step, loss_history, monitor_state=monitor_data, scheduler=scheduler)
                     # 同时保存 LoRA 权重
                     lora_path = output_dir / f"{args.output_name}_step{global_step}.safetensors"
                     injector.save(lora_path)

@@ -21,6 +21,11 @@ data_dir: "./dataset"                # 数据集目录
 resolution: 1024                     # 训练分辨率
 repeats: 1                           # 数据重复次数（小数据集增加）
 
+# 正则数据集（Kohya 风格，防过拟合）
+# reg_data_dir: ""                   # 正则图目录（通用 1girl 等，不含角色）
+# reg_repeats: 1                     # 正则集每张图重复次数（通常 1）
+# reg_caption: "1girl, solo"          # 正则集统一 caption（空则用各图自带 .txt/.json）
+
 # Caption 处理
 shuffle_caption: true                # 启用标签打乱
                                      #   - JSON 模式: 分类 shuffle（appearance/tags/environment 各自内部打乱）

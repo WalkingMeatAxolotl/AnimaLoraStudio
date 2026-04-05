@@ -157,6 +157,11 @@ data_dir: "./dataset"
 resolution: 1024
 repeats: 10              # 数据重复次数
 
+# 正则数据集（Kohya 风格，防过拟合）
+# reg_data_dir: "./reg"   # 通用图目录（1girl 等，不含角色）
+# reg_repeats: 1          # 正则集重复次数
+# reg_caption: "1girl, solo"  # 统一 caption（空则用各图自带）
+
 # Caption 处理
 shuffle_caption: true    # 打乱标签顺序
 keep_tokens: 0           # 保护前 N 个标签不打乱
