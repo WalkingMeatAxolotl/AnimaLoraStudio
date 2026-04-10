@@ -52,6 +52,12 @@ max_steps: 0                         # 最大步数 (0=不限制)
 batch_size: 1                        # 批次大小
 grad_accum: 4                        # 梯度累积步数（有效 batch = batch_size × grad_accum）
 learning_rate: 1.0e-4                # 学习率
+lr_scheduler: "none"  # 学习率调度: "none", "cosine", "cosine_with_restart"
+lr_scheduler_t0: 500                 # cosine_with_restart: 首次 restart 周期 (step)
+lr_scheduler_t_mult: 2.0             # cosine_with_restart: 每次 restart 周期倍数 (T_i = T_{i-1} * T_mult)
+lr_scheduler_eta_min: 1.0e-6         # 最小学习率 (避免 LR 降到 0 导致训练停滞)
+weight_decay: 0                  # AdamW 权重衰减 (L2 正则, 0=禁用; LoKr 模式下 w1 自动排除)
+grad_clip_max_norm: 0              # 梯度裁剪最大范数 (0=禁用)
 mixed_precision: "bf16"              # 混合精度 ("bf16", "fp16", "no")
 grad_checkpoint: true                # 梯度检查点（省显存）
 xformers: false                      # xformers attention（5090 用 false）
