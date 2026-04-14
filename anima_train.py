@@ -117,7 +117,6 @@ def apply_yaml_config(args, config):
         # 数据集
         "data_dir": "data_dir",
         "reg_data_dir": "reg_data_dir",
-        "reg_repeats": "reg_repeats",
         "reg_caption": "reg_caption",
         "reg_weight": "reg_weight",
         "resolution": "resolution",
@@ -189,7 +188,6 @@ def apply_yaml_config(args, config):
         "t5_tokenizer": "",
         "data_dir": "",
         "reg_data_dir": "",
-        "reg_repeats": 1,
         "reg_caption": "",
         "resolution": 1024,
         "repeats": 1,
@@ -2328,7 +2326,6 @@ def main():
             logger.warning("主数据集为空，正则集已跳过")
         else:
             reg_caption = (getattr(args, "reg_caption", "") or "").strip()
-            reg_repeats = max(1, int(getattr(args, "reg_repeats", 1)) or 1)
             reg_base = ImageDataset(
                 reg_data_dir, args.resolution, bucket_mgr,
                 shuffle_caption=args.shuffle_caption,
@@ -2342,7 +2339,7 @@ def main():
             reg_weight = float(getattr(args, "reg_weight", 1.0) or 1.0)
             cap_preview = f", caption=\"{reg_caption[:50]}{'...' if len(reg_caption) > 50 else ''}\"" if reg_caption else ""
             weight_info = f", weight={reg_weight}" if reg_weight != 1.0 else ""
-            logger.info(f"正则数据集: {reg_data_dir} ({len(reg_base)} 张, repeats={reg_repeats}{weight_info}){cap_preview}")
+            logger.info(f"正则数据集: {reg_data_dir} ({len(reg_base)} 样本, per-folder repeat{weight_info}){cap_preview}")
 
     # 缓存 VAE latents（在 repeat 之前）
     use_cached = getattr(args, "cache_latents", False)
@@ -2351,12 +2348,9 @@ def main():
     if reg_dataset is not None and use_cached:
         reg_dataset = CachedLatentDataset(reg_dataset, vae, device, dtype)
 
-    # repeat: 主数据集已通过文件夹名 Kohya 风格 repeat（如 5_concept），无需全局 repeat
-    # 正则数据集仍使用 RepeatDataset 包装
+    # repeat: 主数据集和正则数据集均通过文件夹名 Kohya 风格 repeat（如 5_concept），无需全局 repeat
     if reg_dataset is not None:
-        reg_repeats = max(1, int(getattr(args, "reg_repeats", 1)) or 1)
         reg_weight = float(getattr(args, "reg_weight", 1.0) or 1.0)
-        reg_dataset = RepeatDataset(reg_dataset, repeats=reg_repeats)
         dataset = MergedDataset(dataset, reg_dataset, reg_weight=reg_weight)
 
     if args.num_workers > 0 and os.name == "nt":
