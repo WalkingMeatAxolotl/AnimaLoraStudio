@@ -29,6 +29,7 @@ resolution: 1024                     # 训练分辨率
 # reg_data_dir: ""                   # 正则图目录（通用 1girl 等，不含角色）
 # reg_repeats: 1                     # 正则集每张图重复次数（通常 1）
 # reg_caption: "1girl, solo"          # 正则集统一 caption（空则用各图自带 .txt/.json）
+# reg_weight: 1.0                    # 正则集 loss 权重 (0-1)，降低可减弱正则强度，如 0.5
 
 # Caption 处理
 shuffle_caption: true                # 启用标签打乱

@@ -119,6 +119,7 @@ def apply_yaml_config(args, config):
         "reg_data_dir": "reg_data_dir",
         "reg_repeats": "reg_repeats",
         "reg_caption": "reg_caption",
+        "reg_weight": "reg_weight",
         "resolution": "resolution",
         "repeats": "repeats",
         "shuffle_caption": "shuffle_caption",
@@ -1597,9 +1598,10 @@ class RepeatDataset(Dataset):
 
 class MergedDataset(Dataset):
     """合并主数据集与正则数据集（Kohya 风格 reg）"""
-    def __init__(self, main_dataset, reg_dataset):
+    def __init__(self, main_dataset, reg_dataset, reg_weight: float = 1.0):
         self.main_dataset = main_dataset
         self.reg_dataset = reg_dataset
+        self.reg_weight = float(reg_weight)
         self._main_len = len(main_dataset)
         self._reg_len = len(reg_dataset)
 
@@ -1638,8 +1640,12 @@ class MergedDataset(Dataset):
 
     def __getitem__(self, idx):
         if idx < self._main_len:
-            return self.main_dataset[idx]
-        return self.reg_dataset[idx - self._main_len]
+            item = self.main_dataset[idx]
+            item["loss_weight"] = 1.0
+            return item
+        item = self.reg_dataset[idx - self._main_len]
+        item["loss_weight"] = self.reg_weight
+        return item
 
 
 class BucketBatchSampler:
@@ -1980,14 +1986,20 @@ def collate_fn(batch):
     """DataLoader collate"""
     pixels = torch.stack([b["pixel_values"] for b in batch])
     captions = [b["caption"] for b in batch]
-    return {"pixel_values": pixels, "captions": captions}
+    result = {"pixel_values": pixels, "captions": captions}
+    if "loss_weight" in batch[0]:
+        result["loss_weight"] = torch.tensor([b["loss_weight"] for b in batch], dtype=torch.float32)
+    return result
 
 
 def collate_fn_cached(batch):
     """DataLoader collate for cached latents"""
     latents = torch.stack([b["latent"] for b in batch])
     captions = [b["caption"] for b in batch]
-    return {"latents": latents, "captions": captions}
+    result = {"latents": latents, "captions": captions}
+    if "loss_weight" in batch[0]:
+        result["loss_weight"] = torch.tensor([b["loss_weight"] for b in batch], dtype=torch.float32)
+    return result
 
 
 # ============================================================================
@@ -2327,8 +2339,10 @@ def main():
                 caption_override=reg_caption if reg_caption else None,
             )
             reg_dataset = reg_base
+            reg_weight = float(getattr(args, "reg_weight", 1.0) or 1.0)
             cap_preview = f", caption=\"{reg_caption[:50]}{'...' if len(reg_caption) > 50 else ''}\"" if reg_caption else ""
-            logger.info(f"正则数据集: {reg_data_dir} ({len(reg_base)} 张, repeats={reg_repeats}){cap_preview}")
+            weight_info = f", weight={reg_weight}" if reg_weight != 1.0 else ""
+            logger.info(f"正则数据集: {reg_data_dir} ({len(reg_base)} 张, repeats={reg_repeats}{weight_info}){cap_preview}")
 
     # 缓存 VAE latents（在 repeat 之前）
     use_cached = getattr(args, "cache_latents", False)
@@ -2341,8 +2355,9 @@ def main():
     # 正则数据集仍使用 RepeatDataset 包装
     if reg_dataset is not None:
         reg_repeats = max(1, int(getattr(args, "reg_repeats", 1)) or 1)
+        reg_weight = float(getattr(args, "reg_weight", 1.0) or 1.0)
         reg_dataset = RepeatDataset(reg_dataset, repeats=reg_repeats)
-        dataset = MergedDataset(dataset, reg_dataset)
+        dataset = MergedDataset(dataset, reg_dataset, reg_weight=reg_weight)
 
     if args.num_workers > 0 and os.name == "nt":
         logger.warning("num_workers > 0 在 Windows 上容易崩溃：已强制设为 0（避免多进程 spawn 问题）")
@@ -2623,7 +2638,12 @@ def main():
                     model, noisy, t.view(-1, 1), cross, pad_mask,
                     use_checkpoint=args.grad_checkpoint
                 )
-                loss = F.mse_loss(pred.float(), target.float())
+                loss_per_sample = F.mse_loss(pred.float(), target.float(), reduction="none")
+                # 按样本加权（正则集可降低权重）
+                if "loss_weight" in batch:
+                    w = batch["loss_weight"].to(device).view(-1, *([1] * (loss_per_sample.dim() - 1)))
+                    loss_per_sample = loss_per_sample * w
+                loss = loss_per_sample.mean()
 
             # 反向传播
             loss = loss / args.grad_accum
