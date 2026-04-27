@@ -4,7 +4,13 @@ import { useToast } from '../../components/Toast'
 
 const MASK = '***'
 
-type Section = 'gelbooru' | 'huggingface' | 'joycaption' | 'wd14'
+type Section =
+  | 'gelbooru'
+  | 'danbooru'
+  | 'download'
+  | 'huggingface'
+  | 'joycaption'
+  | 'wd14'
 
 const EMPTY: Secrets = {
   gelbooru: {
@@ -14,6 +20,8 @@ const EMPTY: Secrets = {
     convert_to_png: true,
     remove_alpha_channel: false,
   },
+  danbooru: { username: '', api_key: '' },
+  download: { exclude_tags: [] },
   huggingface: { token: '' },
   joycaption: {
     base_url: 'http://localhost:8000/v1',
@@ -143,6 +151,49 @@ export default function SettingsPage() {
             onChange={(v) => update('gelbooru', 'remove_alpha_channel', v)}
           />
         </Field>
+      </Section>
+
+      <Section title="Danbooru">
+        <Field label="username">
+          <input
+            type="text"
+            value={draft.danbooru.username}
+            onChange={(e) => update('danbooru', 'username', e.target.value)}
+            placeholder="可选；匿名也能跑（仅速率受限）"
+            className={textInput}
+          />
+        </Field>
+        <Field label="api_key">
+          <SensitiveInput
+            value={draft.danbooru.api_key}
+            serverValue={server?.danbooru.api_key ?? ''}
+            onChange={(v) => update('danbooru', 'api_key', v)}
+          />
+        </Field>
+      </Section>
+
+      <Section title="下载（全局）">
+        <Field label="exclude_tags (逗号分隔)">
+          <input
+            type="text"
+            value={draft.download.exclude_tags.join(', ')}
+            onChange={(e) =>
+              update(
+                'download',
+                'exclude_tags',
+                e.target.value
+                  .split(',')
+                  .map((t) => t.trim().replace(/^-+/, ''))
+                  .filter(Boolean)
+              )
+            }
+            placeholder="例：comic, monochrome, lowres"
+            className={textInput}
+          />
+        </Field>
+        <p className="text-[11px] text-slate-500 px-1">
+          搜索时自动追加 <code>-tag</code>，对 Gelbooru 与 Danbooru 同样生效。
+        </p>
       </Section>
 
       <Section title="HuggingFace">

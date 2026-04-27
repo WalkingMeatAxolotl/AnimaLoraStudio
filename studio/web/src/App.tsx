@@ -5,6 +5,7 @@ import ProjectsPage from './pages/Projects'
 import QueuePage from './pages/Queue'
 import ProjectLayout from './pages/project/Layout'
 import ProjectOverview from './pages/project/Overview'
+import DownloadPage from './pages/project/steps/Download'
 import StepPlaceholder from './pages/project/steps/Placeholder'
 import MonitorPage from './pages/tools/Monitor'
 import PresetsPage from './pages/tools/Presets'
@@ -24,10 +25,7 @@ export default function App() {
             {/* PP1: project layout + stepper + version tabs */}
             <Route path="/projects/:pid" element={<ProjectLayout />}>
               <Route index element={<ProjectOverview />} />
-              <Route
-                path="download"
-                element={<StepPlaceholder step="① 下载" doc="PP2" />}
-              />
+              <Route path="download" element={<DownloadPage />} />
               <Route path="v/:vid">
                 <Route
                   path="curate"

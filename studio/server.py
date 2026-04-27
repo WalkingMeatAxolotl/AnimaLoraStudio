@@ -28,8 +28,19 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import browse, datasets, db, presets_io, projects, queue_io, secrets, versions
+from . import (
+    browse,
+    datasets,
+    db,
+    presets_io,
+    project_jobs,
+    projects,
+    queue_io,
+    secrets,
+    versions,
+)
 from .event_bus import bus
+from .services import downloader
 from .paths import (
     LEGACY_MONITOR_HTML,
     LOGS_DIR,
@@ -426,6 +437,219 @@ def activate_version_endpoint(pid: int, vid: int) -> dict[str, Any]:
     assert p is not None
     _publish_project_state(p)
     return _project_payload(p)
+
+
+# ---------------------------------------------------------------------------
+# /api/projects/{pid}/download + /api/projects/{pid}/files + /api/jobs/*  (PP2)
+# ---------------------------------------------------------------------------
+
+
+class DownloadRequest(BaseModel):
+    tag: str
+    count: int = 20
+    api_source: str = "gelbooru"
+
+
+class EstimateRequest(BaseModel):
+    tag: str
+    api_source: str = "gelbooru"
+
+
+def _publish_job_state(job: dict[str, Any]) -> None:
+    bus.publish({
+        "type": "job_state_changed",
+        "job_id": job["id"],
+        "project_id": job["project_id"],
+        "version_id": job.get("version_id"),
+        "kind": job["kind"],
+        "status": job["status"],
+    })
+
+
+@app.post("/api/projects/{pid}/download/estimate")
+def estimate_download(pid: int, body: EstimateRequest) -> dict[str, Any]:
+    """先调 booru 的 count API 估算命中数，再让用户决定 count。
+
+    返回 -1 表示未知（API 不支持精确计数）；前端按「下载全部」处理。
+    """
+    if body.api_source not in {"gelbooru", "danbooru"}:
+        raise HTTPException(400, f"不支持的 api_source: {body.api_source}")
+    if not body.tag.strip():
+        raise HTTPException(400, "tag 不能为空")
+    if not secrets.has_credentials_for(body.api_source):
+        raise HTTPException(
+            400,
+            f"未配置 {body.api_source} 凭据，请先到「设置」页填写",
+        )
+    with db.connection_for() as conn:
+        if not projects.get_project(conn, pid):
+            raise HTTPException(404, f"项目不存在: id={pid}")
+    sec = secrets.load()
+    if body.api_source == "danbooru":
+        opts = downloader.DownloadOptions(
+            tag=body.tag.strip(),
+            count=1,
+            api_source="danbooru",
+            username=sec.danbooru.username,
+            api_key=sec.danbooru.api_key,
+            exclude_tags=list(sec.download.exclude_tags),
+        )
+    else:
+        opts = downloader.DownloadOptions(
+            tag=body.tag.strip(),
+            count=1,
+            api_source="gelbooru",
+            user_id=sec.gelbooru.user_id,
+            api_key=sec.gelbooru.api_key,
+            exclude_tags=list(sec.download.exclude_tags),
+        )
+    count = downloader.estimate(opts)
+    return {
+        "tag": body.tag.strip(),
+        "api_source": body.api_source,
+        "exclude_tags": list(sec.download.exclude_tags),
+        "effective_query": opts.effective_tag_query(),
+        "count": count,
+    }
+
+
+@app.post("/api/projects/{pid}/download")
+def start_download(pid: int, body: DownloadRequest) -> dict[str, Any]:
+    if not body.tag.strip():
+        raise HTTPException(400, "tag 不能为空")
+    if body.count < 1:
+        raise HTTPException(400, "count 必须 >= 1")
+    if body.api_source not in {"gelbooru", "danbooru"}:
+        raise HTTPException(400, f"不支持的 api_source: {body.api_source}")
+    if not secrets.has_credentials_for(body.api_source):
+        raise HTTPException(
+            400,
+            f"未配置 {body.api_source} 凭据，请先到「设置」页填写",
+        )
+
+    with db.connection_for() as conn:
+        if not projects.get_project(conn, pid):
+            raise HTTPException(404, f"项目不存在: id={pid}")
+        job = project_jobs.create_job(
+            conn,
+            project_id=pid,
+            kind="download",
+            params={
+                "tag": body.tag.strip(),
+                "count": body.count,
+                "api_source": body.api_source,
+            },
+        )
+        # 推进项目 stage → downloading
+        p = projects.advance_stage(conn, pid, "downloading")
+    _publish_job_state(job)
+    _publish_project_state(p)
+    return job
+
+
+@app.get("/api/projects/{pid}/download/status")
+def download_status(pid: int) -> dict[str, Any]:
+    with db.connection_for() as conn:
+        if not projects.get_project(conn, pid):
+            raise HTTPException(404, f"项目不存在: id={pid}")
+        job = project_jobs.latest_for(conn, project_id=pid, kind="download")
+    if not job:
+        return {"job": None, "log_tail": ""}
+    log_path = Path(job.get("log_path") or "")
+    tail = ""
+    if log_path.exists():
+        try:
+            text = log_path.read_text(encoding="utf-8", errors="replace")
+            tail = "\n".join(text.splitlines()[-50:])
+        except Exception:
+            tail = ""
+    return {"job": job, "log_tail": tail}
+
+
+@app.get("/api/projects/{pid}/files")
+def list_files(pid: int, bucket: str = "download") -> dict[str, Any]:
+    if bucket != "download":
+        raise HTTPException(
+            400, f"PP2 仅支持 bucket=download（PP3 会加 train/reg/samples）"
+        )
+    with db.connection_for() as conn:
+        p = projects.get_project(conn, pid)
+    if not p:
+        raise HTTPException(404, f"项目不存在: id={pid}")
+    pdir = projects.project_dir(p["id"], p["slug"]) / "download"
+    items: list[dict[str, Any]] = []
+    if pdir.exists():
+        for f in sorted(pdir.iterdir()):
+            if f.is_file() and f.suffix.lower() in datasets.IMAGE_EXTS:
+                items.append({
+                    "name": f.name,
+                    "size": f.stat().st_size,
+                    "has_meta": f.with_suffix(".booru.txt").exists(),
+                })
+    return {"items": items, "count": len(items)}
+
+
+@app.get("/api/projects/{pid}/thumb")
+def project_thumb(pid: int, bucket: str = "download", name: str = "") -> FileResponse:
+    """直接 serve 原图（不缩；前端 CSS 缩）。PP3 加缩略缓存。"""
+    if bucket != "download":
+        raise HTTPException(400, "PP2 仅支持 bucket=download")
+    if "/" in name or "\\" in name or ".." in name or not name:
+        raise HTTPException(400, "invalid name")
+    with db.connection_for() as conn:
+        p = projects.get_project(conn, pid)
+    if not p:
+        raise HTTPException(404, f"项目不存在: id={pid}")
+    f = projects.project_dir(p["id"], p["slug"]) / "download" / name
+    if not f.exists() or f.suffix.lower() not in datasets.IMAGE_EXTS:
+        raise HTTPException(404)
+    return FileResponse(f)
+
+
+# /api/jobs/* —————————————————————————————————————————————————————————
+
+
+@app.get("/api/jobs/{jid}")
+def get_job_endpoint(jid: int) -> dict[str, Any]:
+    with db.connection_for() as conn:
+        job = project_jobs.get_job(conn, jid)
+    if not job:
+        raise HTTPException(404, f"job 不存在: id={jid}")
+    return job
+
+
+@app.get("/api/jobs/{jid}/log")
+def get_job_log(jid: int, tail: int = 0) -> dict[str, Any]:
+    with db.connection_for() as conn:
+        job = project_jobs.get_job(conn, jid)
+    if not job:
+        raise HTTPException(404, f"job 不存在: id={jid}")
+    log_path = Path(job.get("log_path") or "")
+    if not log_path.exists():
+        return {"job_id": jid, "content": "", "size": 0}
+    text = log_path.read_text(encoding="utf-8", errors="replace")
+    if tail and tail > 0:
+        text = "\n".join(text.splitlines()[-tail:])
+    return {
+        "job_id": jid,
+        "content": text,
+        "size": len(text.encode("utf-8")),
+    }
+
+
+@app.post("/api/jobs/{jid}/cancel")
+def cancel_job_endpoint(jid: int) -> dict[str, Any]:
+    sup = _supervisor()
+    ok = sup.cancel_job(jid)
+    if not ok:
+        with db.connection_for() as conn:
+            job = project_jobs.get_job(conn, jid)
+        if not job:
+            raise HTTPException(404, f"job 不存在: id={jid}")
+        if job["status"] in project_jobs.TERMINAL_STATUSES:
+            raise HTTPException(400, f"job 已 {job['status']}")
+        raise HTTPException(409, "cancel rejected (state mismatch)")
+    return {"job_id": jid, "canceled": True}
 
 
 # ---------------------------------------------------------------------------

@@ -54,6 +54,15 @@ export interface GelbooruConfig {
   remove_alpha_channel: boolean
 }
 
+export interface DanbooruConfig {
+  username: string
+  api_key: string
+}
+
+export interface DownloadGlobalConfig {
+  exclude_tags: string[]
+}
+
 export interface HuggingFaceConfig {
   token: string
 }
@@ -74,6 +83,8 @@ export interface WD14Config {
 
 export interface Secrets {
   gelbooru: GelbooruConfig
+  danbooru: DanbooruConfig
+  download: DownloadGlobalConfig
   huggingface: HuggingFaceConfig
   joycaption: JoyCaptionConfig
   wd14: WD14Config
@@ -138,6 +149,32 @@ export interface ProjectSummary {
 export interface ProjectDetail extends ProjectSummary {
   versions: Version[]
   download_image_count: number
+}
+
+// ---- jobs (PP2) -----------------------------------------------------------
+
+export type JobStatus = 'pending' | 'running' | 'done' | 'failed' | 'canceled'
+export type JobKind = 'download' | 'tag' | 'reg_build'
+
+export interface Job {
+  id: number
+  project_id: number
+  version_id: number | null
+  kind: JobKind
+  params: string
+  params_decoded?: Record<string, unknown> | null
+  status: JobStatus
+  started_at: number | null
+  finished_at: number | null
+  pid: number | null
+  log_path: string | null
+  error_msg: string | null
+}
+
+export interface DownloadFile {
+  name: string
+  size: number
+  has_meta: boolean
 }
 
 export type TaskStatus = 'pending' | 'running' | 'done' | 'failed' | 'canceled'
@@ -344,6 +381,51 @@ export const api = {
       `/api/projects/${pid}/versions/${vid}/activate`,
       { method: 'POST' }
     ),
+
+  // Download / jobs (PP2) ------------------------------------------------
+  estimateDownload: (
+    pid: number,
+    body: { tag: string; api_source?: 'gelbooru' | 'danbooru' }
+  ) =>
+    req<{
+      tag: string
+      api_source: 'gelbooru' | 'danbooru'
+      exclude_tags: string[]
+      effective_query: string
+      count: number
+    }>(`/api/projects/${pid}/download/estimate`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  startDownload: (
+    pid: number,
+    body: { tag: string; count: number; api_source?: 'gelbooru' | 'danbooru' }
+  ) =>
+    req<Job>(`/api/projects/${pid}/download`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  getDownloadStatus: (pid: number) =>
+    req<{ job: Job | null; log_tail: string }>(
+      `/api/projects/${pid}/download/status`
+    ),
+  listFiles: (pid: number, bucket = 'download') =>
+    req<{ items: DownloadFile[]; count: number }>(
+      `/api/projects/${pid}/files?bucket=${encodeURIComponent(bucket)}`
+    ),
+  projectThumbUrl: (pid: number, name: string, bucket = 'download') =>
+    `/api/projects/${pid}/thumb?bucket=${encodeURIComponent(bucket)}&name=${encodeURIComponent(name)}`,
+  getJob: (jid: number) => req<Job>(`/api/jobs/${jid}`),
+  getJobLog: (jid: number, tail?: number) => {
+    const qs = tail ? `?tail=${tail}` : ''
+    return req<{ job_id: number; content: string; size: number }>(
+      `/api/jobs/${jid}/log${qs}`
+    )
+  },
+  cancelJob: (jid: number) =>
+    req<{ job_id: number; canceled: boolean }>(`/api/jobs/${jid}/cancel`, {
+      method: 'POST',
+    }),
 
   // Queue --------------------------------------------------------------
   listQueue: (status?: TaskStatus) => {

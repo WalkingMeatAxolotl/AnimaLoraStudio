@@ -1,6 +1,6 @@
 # PP2 — Gelbooru/Danbooru 下载集成
 
-**状态**：计划中
+**状态**：已完成
 **前置依赖**：PP1
 **预估工作量**：2 工作日
 **外部脚本来源**：`C:\Users\Mei\Desktop\SD\danbooru\dev\danbooru_downloader.py`

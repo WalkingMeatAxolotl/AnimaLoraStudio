@@ -122,7 +122,7 @@ def test_missing_config_marks_failed(env) -> None:
 
     with db.connection_for(env["db"]) as conn:
         task = db.get_task(conn, tid)
-    assert "config not found" in (task["error_msg"] or "")
+    assert "preset not found" in (task["error_msg"] or "")
 
 
 def test_serial_execution(env) -> None:
