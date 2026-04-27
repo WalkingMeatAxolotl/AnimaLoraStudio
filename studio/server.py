@@ -28,7 +28,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import configs_io, datasets, db, queue_io
+from . import browse, configs_io, datasets, db, queue_io
 from .event_bus import bus
 from .paths import (
     LEGACY_MONITOR_HTML,
@@ -319,6 +319,18 @@ def get_datasets(path: str = "") -> dict[str, Any]:
     if not root.is_absolute():
         root = (REPO_ROOT / root).resolve()
     return datasets.scan_dataset_root(root)
+
+
+@app.get("/api/browse")
+def browse_dir(path: str = "") -> dict[str, Any]:
+    """目录浏览（给前端 path picker 用）。缺省 = REPO_ROOT。"""
+    target = Path(path) if path else REPO_ROOT
+    if not target.is_absolute():
+        target = (REPO_ROOT / target).resolve()
+    try:
+        return browse.list_dir(target)
+    except browse.BrowseError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
 
 @app.get("/api/datasets/thumbnail")
