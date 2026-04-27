@@ -84,6 +84,62 @@ export type SecretsPatch = Partial<{
   [K in keyof Secrets]: Partial<Secrets[K]>
 }>
 
+// ---- projects / versions (PP1) -------------------------------------------
+
+export type ProjectStage =
+  | 'created'
+  | 'downloading'
+  | 'curating'
+  | 'tagging'
+  | 'regularizing'
+  | 'configured'
+  | 'training'
+  | 'done'
+
+export type VersionStage =
+  | 'curating'
+  | 'tagging'
+  | 'regularizing'
+  | 'ready'
+  | 'training'
+  | 'done'
+
+export interface VersionStats {
+  train_image_count: number
+  train_folders: Array<{ name: string; image_count: number }>
+  reg_image_count: number
+  has_output: boolean
+}
+
+export interface Version {
+  id: number
+  project_id: number
+  label: string
+  config_name: string | null
+  stage: VersionStage
+  created_at: number
+  output_lora_path: string | null
+  note: string | null
+  stats?: VersionStats
+}
+
+export interface ProjectSummary {
+  id: number
+  slug: string
+  title: string
+  stage: ProjectStage
+  active_version_id: number | null
+  created_at: number
+  updated_at: number
+  note: string | null
+  download_image_count?: number
+}
+
+export interface ProjectDetail extends ProjectSummary {
+  versions: Version[]
+  download_image_count: number
+}
+
 export type TaskStatus = 'pending' | 'running' | 'done' | 'failed' | 'canceled'
 
 export interface Task {
@@ -214,6 +270,80 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(patch),
     }),
+
+  // Projects / Versions (PP1) -------------------------------------------
+  listProjects: () =>
+    req<{ items: ProjectSummary[] }>('/api/projects').then((r) => r.items),
+  getProject: (pid: number) =>
+    req<ProjectDetail>(`/api/projects/${pid}`),
+  createProject: (body: {
+    title: string
+    slug?: string
+    note?: string
+    initial_version_label?: string
+  }) =>
+    req<ProjectDetail>('/api/projects', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  updateProject: (
+    pid: number,
+    body: Partial<{
+      title: string
+      note: string
+      stage: ProjectStage
+      active_version_id: number | null
+    }>
+  ) =>
+    req<ProjectDetail>(`/api/projects/${pid}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  deleteProject: (pid: number) =>
+    req<{ deleted: number }>(`/api/projects/${pid}`, { method: 'DELETE' }),
+  emptyTrash: () =>
+    req<{ removed: number }>('/api/projects/_trash/empty', { method: 'POST' }),
+
+  listVersions: (pid: number) =>
+    req<{ items: Version[] }>(`/api/projects/${pid}/versions`).then(
+      (r) => r.items
+    ),
+  getVersion: (pid: number, vid: number) =>
+    req<Version>(`/api/projects/${pid}/versions/${vid}`),
+  createVersion: (
+    pid: number,
+    body: {
+      label: string
+      fork_from_version_id?: number
+      note?: string
+    }
+  ) =>
+    req<Version>(`/api/projects/${pid}/versions`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  updateVersion: (
+    pid: number,
+    vid: number,
+    body: Partial<{
+      note: string
+      stage: VersionStage
+      config_name: string | null
+    }>
+  ) =>
+    req<Version>(`/api/projects/${pid}/versions/${vid}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  deleteVersion: (pid: number, vid: number) =>
+    req<{ deleted: number }>(`/api/projects/${pid}/versions/${vid}`, {
+      method: 'DELETE',
+    }),
+  activateVersion: (pid: number, vid: number) =>
+    req<ProjectDetail>(
+      `/api/projects/${pid}/versions/${vid}/activate`,
+      { method: 'POST' }
+    ),
 
   // Queue --------------------------------------------------------------
   listQueue: (status?: TaskStatus) => {

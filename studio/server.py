@@ -28,7 +28,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import browse, datasets, db, presets_io, queue_io, secrets
+from . import browse, datasets, db, presets_io, projects, queue_io, secrets, versions
 from .event_bus import bus
 from .paths import (
     LEGACY_MONITOR_HTML,
@@ -203,6 +203,229 @@ def get_secrets() -> dict[str, Any]:
 def put_secrets(body: dict[str, Any]) -> dict[str, Any]:
     new = secrets.update(body)
     return secrets.to_masked_dict(new)
+
+
+# ---------------------------------------------------------------------------
+# /api/projects + /api/projects/{pid}/versions  (PP1)
+# ---------------------------------------------------------------------------
+
+
+class ProjectCreate(BaseModel):
+    title: str
+    slug: Optional[str] = None
+    note: Optional[str] = None
+    initial_version_label: Optional[str] = "v1"
+
+
+class ProjectUpdate(BaseModel):
+    title: Optional[str] = None
+    note: Optional[str] = None
+    stage: Optional[str] = None
+    active_version_id: Optional[int] = None
+
+
+class VersionCreate(BaseModel):
+    label: str
+    fork_from_version_id: Optional[int] = None
+    note: Optional[str] = None
+
+
+class VersionUpdate(BaseModel):
+    note: Optional[str] = None
+    stage: Optional[str] = None
+    config_name: Optional[str] = None
+
+
+def _project_payload(p: dict[str, Any]) -> dict[str, Any]:
+    """对外详情 payload：项目本身 + versions[] 含 stats + download stats。"""
+    out = dict(p)
+    out.update(projects.stats_for_project(p))
+    with db.connection_for() as conn:
+        vs = versions.list_versions(conn, p["id"])
+    out["versions"] = [
+        {**v, "stats": versions.stats_for_version(p, v)} for v in vs
+    ]
+    return out
+
+
+def _publish_project_state(p: dict[str, Any]) -> None:
+    bus.publish({
+        "type": "project_state_changed",
+        "project_id": p["id"],
+        "stage": p["stage"],
+    })
+
+
+def _publish_version_state(v: dict[str, Any]) -> None:
+    bus.publish({
+        "type": "version_state_changed",
+        "project_id": v["project_id"],
+        "version_id": v["id"],
+        "stage": v["stage"],
+    })
+
+
+def _project_err_code(exc: Exception) -> int:
+    msg = str(exc)
+    if "不存在" in msg:
+        return 404
+    if "已存在" in msg or "非法" in msg or "不能为空" in msg:
+        return 400
+    return 422
+
+
+@app.get("/api/projects")
+def list_projects_endpoint() -> dict[str, Any]:
+    with db.connection_for() as conn:
+        rows = projects.list_projects(conn)
+    return {"items": projects.projects_with_stats(rows)}
+
+
+@app.post("/api/projects")
+def create_project_endpoint(body: ProjectCreate) -> dict[str, Any]:
+    with db.connection_for() as conn:
+        try:
+            p = projects.create_project(
+                conn, title=body.title, slug=body.slug, note=body.note
+            )
+        except projects.ProjectError as exc:
+            raise HTTPException(_project_err_code(exc), str(exc)) from exc
+        if body.initial_version_label:
+            try:
+                versions.create_version(
+                    conn, project_id=p["id"], label=body.initial_version_label
+                )
+            except versions.VersionError as exc:
+                # 项目已建好；版本失败给前端但保留项目
+                raise HTTPException(_project_err_code(exc), str(exc)) from exc
+        p = projects.get_project(conn, p["id"])
+    assert p is not None
+    _publish_project_state(p)
+    return _project_payload(p)
+
+
+@app.get("/api/projects/{pid}")
+def get_project_endpoint(pid: int) -> dict[str, Any]:
+    with db.connection_for() as conn:
+        p = projects.get_project(conn, pid)
+    if not p:
+        raise HTTPException(404, f"项目不存在: id={pid}")
+    return _project_payload(p)
+
+
+@app.patch("/api/projects/{pid}")
+def patch_project_endpoint(pid: int, body: ProjectUpdate) -> dict[str, Any]:
+    fields = body.model_dump(exclude_unset=True)
+    with db.connection_for() as conn:
+        try:
+            p = projects.update_project(conn, pid, **fields)
+        except projects.ProjectError as exc:
+            raise HTTPException(_project_err_code(exc), str(exc)) from exc
+    _publish_project_state(p)
+    return _project_payload(p)
+
+
+@app.delete("/api/projects/{pid}")
+def delete_project_endpoint(pid: int) -> dict[str, Any]:
+    with db.connection_for() as conn:
+        try:
+            projects.soft_delete_project(conn, pid)
+        except projects.ProjectError as exc:
+            raise HTTPException(_project_err_code(exc), str(exc)) from exc
+    return {"deleted": pid}
+
+
+@app.post("/api/projects/_trash/empty")
+def empty_trash_endpoint() -> dict[str, Any]:
+    return {"removed": projects.empty_trash()}
+
+
+# Versions ------------------------------------------------------------------
+
+
+@app.get("/api/projects/{pid}/versions")
+def list_versions_endpoint(pid: int) -> dict[str, Any]:
+    with db.connection_for() as conn:
+        if not projects.get_project(conn, pid):
+            raise HTTPException(404, f"项目不存在: id={pid}")
+        vs = versions.list_versions(conn, pid)
+        p = projects.get_project(conn, pid)
+    assert p is not None
+    return {
+        "items": [
+            {**v, "stats": versions.stats_for_version(p, v)} for v in vs
+        ]
+    }
+
+
+@app.post("/api/projects/{pid}/versions")
+def create_version_endpoint(pid: int, body: VersionCreate) -> dict[str, Any]:
+    with db.connection_for() as conn:
+        if not projects.get_project(conn, pid):
+            raise HTTPException(404, f"项目不存在: id={pid}")
+        try:
+            v = versions.create_version(
+                conn,
+                project_id=pid,
+                label=body.label,
+                fork_from_version_id=body.fork_from_version_id,
+                note=body.note,
+            )
+        except versions.VersionError as exc:
+            raise HTTPException(_project_err_code(exc), str(exc)) from exc
+    _publish_version_state(v)
+    return v
+
+
+@app.get("/api/projects/{pid}/versions/{vid}")
+def get_version_endpoint(pid: int, vid: int) -> dict[str, Any]:
+    with db.connection_for() as conn:
+        v = versions.get_version(conn, vid)
+        p = projects.get_project(conn, pid)
+    if not v or v["project_id"] != pid:
+        raise HTTPException(404, f"版本不存在: id={vid}")
+    assert p is not None
+    return {**v, "stats": versions.stats_for_version(p, v)}
+
+
+@app.patch("/api/projects/{pid}/versions/{vid}")
+def patch_version_endpoint(
+    pid: int, vid: int, body: VersionUpdate
+) -> dict[str, Any]:
+    fields = body.model_dump(exclude_unset=True)
+    with db.connection_for() as conn:
+        v = versions.get_version(conn, vid)
+        if not v or v["project_id"] != pid:
+            raise HTTPException(404, f"版本不存在: id={vid}")
+        try:
+            v = versions.update_version(conn, vid, **fields)
+        except versions.VersionError as exc:
+            raise HTTPException(_project_err_code(exc), str(exc)) from exc
+    _publish_version_state(v)
+    return v
+
+
+@app.delete("/api/projects/{pid}/versions/{vid}")
+def delete_version_endpoint(pid: int, vid: int) -> dict[str, Any]:
+    with db.connection_for() as conn:
+        v = versions.get_version(conn, vid)
+        if not v or v["project_id"] != pid:
+            raise HTTPException(404, f"版本不存在: id={vid}")
+        versions.delete_version(conn, vid)
+    return {"deleted": vid}
+
+
+@app.post("/api/projects/{pid}/versions/{vid}/activate")
+def activate_version_endpoint(pid: int, vid: int) -> dict[str, Any]:
+    with db.connection_for() as conn:
+        v = versions.get_version(conn, vid)
+        if not v or v["project_id"] != pid:
+            raise HTTPException(404, f"版本不存在: id={vid}")
+        v = versions.activate_version(conn, vid)
+        p = projects.get_project(conn, pid)
+    assert p is not None
+    _publish_project_state(p)
+    return _project_payload(p)
 
 
 # ---------------------------------------------------------------------------

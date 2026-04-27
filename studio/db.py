@@ -58,9 +58,13 @@ def connection_for(path: Optional[Path] = None) -> Iterator[sqlite3.Connection]:
 
 
 def init_db(path: Optional[Path] = None) -> None:
+    """建基础表 + 把 schema 升级到最新版本（PRAGMA user_version 跟踪）。"""
+    from .migrations import apply_all
+
     with connection_for(path) as conn:
         conn.executescript(SCHEMA)
         conn.commit()
+        apply_all(conn)
 
 
 # ---------------------------------------------------------------------------

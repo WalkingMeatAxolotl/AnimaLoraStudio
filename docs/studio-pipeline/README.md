@@ -8,7 +8,7 @@
 |---|---|
 | [overview.md](overview.md) | 架构总览：数据模型、目录布局、SQLite schema、secrets.json、Sidebar、SSE、Tagger 抽象、Preset 关系、复用现有组件清单 |
 | [pp0-restructure.md](pp0-restructure.md) | ✅ 已完成 — Sidebar 重构 / `configs/` → `presets/` 迁移 / Settings 页 / 旧 Datasets 删除 |
-| [pp1-project-version.md](pp1-project-version.md) | Project + Version 数据模型、CRUD、Stepper、VersionTabs |
+| [pp1-project-version.md](pp1-project-version.md) | ✅ 已完成 — Project + Version 数据模型、CRUD、Stepper、VersionTabs |
 | [pp2-download.md](pp2-download.md) | Gelbooru/Danbooru 下载集成、project_jobs、Job 守护扩展 |
 | [pp3-curation.md](pp3-curation.md) | download / train 双面板、缩略图、复制/移除、子文件夹管理 |
 | [pp4-tagging.md](pp4-tagging.md) | Tagger 协议、WD14 (本地+HF 自动下载)、JoyCaption (vLLM)、单图标签编辑、批量增/删/去重/统计 |
