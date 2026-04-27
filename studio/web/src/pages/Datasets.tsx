@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, type DatasetScan } from '../api/client'
+import PathPicker from '../components/PathPicker'
 
 export default function DatasetsPage() {
   const [path, setPath] = useState('')
   const [scan, setScan] = useState<DatasetScan | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [picking, setPicking] = useState(false)
 
   const reload = useCallback(async (p: string) => {
     setLoading(true)
@@ -43,6 +45,12 @@ export default function DatasetsPage() {
             />
           </div>
           <button
+            onClick={() => setPicking(true)}
+            className="px-3 py-1.5 rounded text-sm bg-slate-700 hover:bg-slate-600"
+          >
+            浏览
+          </button>
+          <button
             onClick={() => void reload(path)}
             disabled={loading}
             className="px-3 py-1.5 rounded text-sm bg-cyan-600 hover:bg-cyan-500
@@ -51,6 +59,18 @@ export default function DatasetsPage() {
             {loading ? '扫描中...' : '扫描'}
           </button>
         </div>
+        {picking && (
+          <PathPicker
+            initialPath={path || undefined}
+            dirOnly
+            onPick={(p) => {
+              setPath(p)
+              setPicking(false)
+              void reload(p)
+            }}
+            onClose={() => setPicking(false)}
+          />
+        )}
         {scan && (
           <div className="mt-3 text-xs text-slate-500 font-mono break-all">
             {scan.root}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, type ConfigSummary, type Task, type TaskStatus } from '../api/client'
+import { useToast } from '../components/Toast'
 import { useEventStream } from '../lib/useEventStream'
 
 async function downloadJson(filename: string, data: unknown) {
@@ -77,6 +78,7 @@ export default function QueuePage() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const reloadTimer = useRef<number | null>(null)
+  const { toast } = useToast()
 
   const reload = useCallback(async () => {
     try {
@@ -126,7 +128,7 @@ export default function QueuePage() {
   }
 
   const cancel = async (id: number) => {
-    if (!confirm('取消任务？')) return
+    if (!window.confirm('取消任务？')) return
     setBusy(true)
     try {
       await api.cancelTask(id)
@@ -151,7 +153,7 @@ export default function QueuePage() {
   }
 
   const remove = async (id: number) => {
-    if (!confirm('删除任务记录？')) return
+    if (!window.confirm('删除任务记录？')) return
     setBusy(true)
     try {
       await api.deleteTask(id)
@@ -237,11 +239,11 @@ export default function QueuePage() {
                 setBusy(true)
                 try {
                   const r = await api.importQueue(payload)
-                  alert(
+                  const renamed = Object.keys(r.renamed).length
+                  toast(
                     `已导入 ${r.imported_count} 个任务` +
-                      (Object.keys(r.renamed).length
-                        ? `\n重命名: ${JSON.stringify(r.renamed)}`
-                        : '')
+                      (renamed ? `（${renamed} 个改名）` : ''),
+                    'success'
                   )
                   await reload()
                 } catch (e) {

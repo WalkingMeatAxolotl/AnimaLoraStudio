@@ -19,6 +19,14 @@ studio/
 
 ## 启动
 
+### 一键启动（Windows）
+
+```cmd
+studio.bat            REM 自动 build 前端 + 起后端
+studio.bat dev        REM 前后端开发模式（5173 + 8765）
+studio.bat build      REM 仅 build 前端
+```
+
 ### 后端守护进程
 
 ```bash
@@ -61,6 +69,7 @@ npm run build          # 输出到 studio/web/dist/
 - [x] **P2-C** `anima_train.py` 迁移到 schema；React Configs 页（schema-driven 表单 + 列表 CRUD）
 - [x] **P3** 任务队列 + supervisor + SSE（`Queue.tsx` 列表 + 操作，`Log.tsx` 实时日志）
 - [x] **P4** 数据集浏览 (`Datasets.tsx`) + 队列 JSON 导入导出
+- [x] **P5** Toast 通知、监控页内嵌 iframe、PathPicker 浏览控件、`/api/browse` 端点、`studio.bat` 一键启动、Vitest 框架 + 首批测试
 - [ ] **P5** 一键启动脚本、字段说明 tooltip、错误提示、Vitest 前端测试
 
 详见仓库根的 plan。

@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import type { SchemaProperty } from '../api/client'
 import { controlKind, fieldLabel } from '../lib/schema'
+import PathPicker from './PathPicker'
 
 interface Props {
   name: string
@@ -130,6 +132,28 @@ export default function Field({ name, prop, value, onChange }: Props) {
 
   // string / path -------------------------------------------------------
   return (
+    <PathStringField
+      label={label}
+      kind={kind}
+      help={help}
+      value={value}
+      onChange={onChange}
+    />
+  )
+}
+
+interface PathFieldProps {
+  label: string
+  kind: 'path' | 'string'
+  help: string | undefined
+  value: unknown
+  onChange: (v: unknown) => void
+}
+
+function PathStringField({ label, kind, help, value, onChange }: PathFieldProps) {
+  const [picking, setPicking] = useState(false)
+  const text = value === null || value === undefined ? '' : String(value)
+  return (
     <div className="py-1.5">
       <div className={labelCls}>
         {label}
@@ -137,13 +161,34 @@ export default function Field({ name, prop, value, onChange }: Props) {
           <span className="ml-2 text-xs text-slate-500">(path)</span>
         )}
       </div>
-      <input
-        type="text"
-        value={value === null || value === undefined ? '' : String(value)}
-        onChange={(e) => onChange(e.target.value)}
-        className={inputCls + (kind === 'path' ? ' font-mono' : '')}
-      />
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={text}
+          onChange={(e) => onChange(e.target.value)}
+          className={inputCls + (kind === 'path' ? ' font-mono' : '')}
+        />
+        {kind === 'path' && (
+          <button
+            type="button"
+            onClick={() => setPicking(true)}
+            className="px-2 py-1 text-xs rounded bg-slate-700 hover:bg-slate-600 shrink-0"
+          >
+            浏览
+          </button>
+        )}
+      </div>
       {help && <div className={helpCls}>{help}</div>}
+      {picking && (
+        <PathPicker
+          initialPath={text || undefined}
+          onPick={(p) => {
+            onChange(p)
+            setPicking(false)
+          }}
+          onClose={() => setPicking(false)}
+        />
+      )}
     </div>
   )
 }

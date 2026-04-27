@@ -15,43 +15,35 @@ export default function MonitorPage() {
   const ok = !error && health?.status === 'ok'
 
   return (
-    <div className="space-y-4">
-      <section className="rounded-xl border border-slate-700 bg-slate-800/40 p-5">
-        <h2 className="text-base font-semibold mb-2 text-slate-200">
-          守护进程状态
-        </h2>
-        <div className="flex items-center gap-3">
-          <span
-            className={`inline-block w-2 h-2 rounded-full ${
-              ok ? 'bg-emerald-400' : 'bg-red-400'
-            }`}
-          />
-          <span className={ok ? 'text-emerald-400' : 'text-red-400'}>
-            {error ? 'offline' : health?.status ?? '...'}
-          </span>
-          {health && (
-            <span className="text-slate-500 text-sm">v{health.version}</span>
-          )}
-        </div>
-        {error && (
-          <p className="text-red-400 text-sm mt-2 font-mono">{error}</p>
+    <div className="flex flex-col h-full gap-3">
+      <section className="rounded-xl border border-slate-700 bg-slate-800/40 px-5 py-3 flex items-center gap-3">
+        <span
+          className={`inline-block w-2 h-2 rounded-full ${
+            ok ? 'bg-emerald-400' : 'bg-red-400'
+          }`}
+        />
+        <span className={ok ? 'text-emerald-400' : 'text-red-400'}>
+          {error ? 'offline' : health?.status ?? '...'}
+        </span>
+        {health && (
+          <span className="text-slate-500 text-sm">v{health.version}</span>
         )}
-      </section>
-
-      <section className="rounded-xl border border-slate-700 bg-slate-800/40 p-5">
-        <h2 className="text-base font-semibold mb-3 text-slate-200">
-          实时训练监控
-        </h2>
-        <p className="text-slate-400 text-sm mb-3">
-          loss 曲线、采样图、训练进度仍在旧 UI 上。后续 P5 会把它内嵌到这里。
-        </p>
+        <span className="flex-1" />
         <a
           href="/"
-          className="inline-block px-3 py-1.5 rounded text-sm bg-cyan-600 hover:bg-cyan-500"
+          target="_blank"
+          rel="noreferrer"
+          className="text-xs text-slate-400 hover:text-slate-200"
         >
-          打开监控面板 →
+          在新窗口打开 ↗
         </a>
       </section>
+
+      <iframe
+        src="/"
+        title="Anima Training Monitor"
+        className="flex-1 w-full rounded-xl border border-slate-700 bg-black/30 min-h-0"
+      />
     </div>
   )
 }

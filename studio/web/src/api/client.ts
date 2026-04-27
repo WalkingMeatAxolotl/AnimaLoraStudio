@@ -190,4 +190,21 @@ export const api = {
   },
   thumbnailUrl: (folder: string, name: string) =>
     `/api/datasets/thumbnail?folder=${encodeURIComponent(folder)}&name=${encodeURIComponent(name)}`,
+
+  // Browse -------------------------------------------------------------
+  browse: (path?: string) => {
+    const qs = path ? `?path=${encodeURIComponent(path)}` : ''
+    return req<BrowseResult>(`/api/browse${qs}`)
+  },
+}
+
+export interface BrowseEntry {
+  name: string
+  type: 'dir' | 'file'
+}
+
+export interface BrowseResult {
+  path: string
+  parent: string | null
+  entries: BrowseEntry[]
 }
