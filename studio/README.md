@@ -53,18 +53,38 @@ npm run build          # 输出到 studio/web/dist/
 # 后端不用重启，刷新浏览器即可（服务端启动时检测 dist/ 是否存在）
 ```
 
-## 当前阶段（P1）
+## 当前进度
 
-- [x] FastAPI 骨架（`/api/health`、`/api/state`、`/samples/{name}`）
-- [x] 旧监控页保留在 `/`
-- [x] React 工程骨架（Vite + TS + Tailwind）
-- [x] 训练侧 `--no-monitor` 已可用，使用 Studio 时跑训练加这个 flag
-
-## 后续阶段
-
-- **P2** 配置 schema + CRUD（`anima_train.py` 的 argparse 改用同一份 schema 自动生成）
-- **P3** 任务队列 + supervisor + SSE
-- **P4** 数据集浏览 + JSON 导入导出
-- **P5** 一键启动脚本、字段说明 tooltip、错误提示
+- [x] **P1** FastAPI 骨架 + Vite/React/TS 工程骨架；`/api/health`、`/api/state`、`/samples/{name}` 端点；旧监控页保留在 `/`；训练侧 `--no-monitor` 接通
+- [x] **P2-A** 配置 schema（`studio.schema.TrainingConfig` 单一权威源）+ CRUD 端点（`/api/schema`、`/api/configs/*`）
+- [x] **P2-B** `studio.argparse_bridge` schema → argparse 反向生成
+- [x] **P2-C** `anima_train.py` 迁移到 schema；React Configs 页（schema-driven 表单 + 列表 CRUD）
+- [ ] **P3** 任务队列 + supervisor + SSE
+- [ ] **P4** 数据集浏览 + JSON 导入导出
+- [ ] **P5** 一键启动脚本、字段说明 tooltip、错误提示、Vitest 前端测试
 
 详见仓库根的 plan。
+
+## 前端页面（已上线）
+
+- `/` 旧监控页（loss / lr / 采样图）
+- `/studio/` React 应用入口
+  - `监控` 守护进程状态 + 跳转旧监控
+  - `配置` schema-driven 表单 + 列表（新建 / 保存 / 复制 / 删除）
+  - `数据集` `队列` 占位
+
+需要本地起前端开发服务器：
+
+```bash
+cd studio/web
+npm install
+npm run dev      # http://127.0.0.1:5173/studio/
+```
+
+或构建后由后端 `/studio/` 路径服务：
+
+```bash
+cd studio/web && npm run build
+# 启动后端：python -m studio.server
+# 浏览器：http://127.0.0.1:8765/studio/
+```
