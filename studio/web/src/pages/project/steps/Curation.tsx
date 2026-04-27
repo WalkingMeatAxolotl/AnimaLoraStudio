@@ -49,8 +49,44 @@ export default function CurationPage() {
   const [rightSel, setRightSel] = useState<Set<string>>(new Set())
   const [rightAnchor, setRightAnchor] = useState<string | null>(null)
 
-  // 共享大图预览
+  // alt + hover 触发的悬浮大图预览
   const [focus, setFocus] = useState<Focus | null>(null)
+  const [altHeld, setAltHeld] = useState(false)
+  useEffect(() => {
+    // 浏览器默认行为：单按 Alt 会聚焦菜单栏，抢走页面键盘焦点，导致后续
+    // Alt keydown/keyup 事件不再触发 window 监听器（必须点回页面才能恢复）。
+    // 这里 preventDefault 阻止默认菜单激活；同时用 mousemove 的 altKey 兜底同步，
+    // 万一焦点真的被抢走，鼠标一动也能重新拿到正确状态。
+    const isAlt = (e: KeyboardEvent) =>
+      e.key === 'Alt' || e.code === 'AltLeft' || e.code === 'AltRight'
+    const down = (e: KeyboardEvent) => {
+      if (isAlt(e)) {
+        e.preventDefault()
+        setAltHeld(true)
+      }
+    }
+    const up = (e: KeyboardEvent) => {
+      if (isAlt(e)) {
+        e.preventDefault()
+        setAltHeld(false)
+      }
+    }
+    const move = (e: MouseEvent) => {
+      // 鼠标事件随时带最新的 altKey 状态，作为 keyboard 监听的兜底
+      if (e.altKey !== altHeld) setAltHeld(e.altKey)
+    }
+    const blur = () => setAltHeld(false)
+    window.addEventListener('keydown', down)
+    window.addEventListener('keyup', up)
+    window.addEventListener('mousemove', move)
+    window.addEventListener('blur', blur)
+    return () => {
+      window.removeEventListener('keydown', down)
+      window.removeEventListener('keyup', up)
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('blur', blur)
+    }
+  }, [altHeld])
 
   // 复制目标 = rightFolder（当前查看的就是复制目标），不再单独维护。
   const [newFolder, setNewFolder] = useState<string>('')
@@ -191,40 +227,6 @@ export default function CurationPage() {
     setRightSel(r.next)
     setRightAnchor(r.anchor)
   }
-
-  const togglePreviewSelection = () => {
-    if (!focus) return
-    if (focus.side === 'left') {
-      const r = applySelection(
-        leftSel,
-        focus.name,
-        { shiftKey: false } as React.MouseEvent,
-        view.left,
-        leftAnchor
-      )
-      setLeftSel(r.next)
-      setLeftAnchor(r.anchor)
-    } else {
-      // 预览的 folder 可能不是当前查看的 folder（用户切了 folder 但 focus 还指旧的）
-      // 这种情况下提示用户先切回去；正常情况 folder == rightFolder
-      if (focus.folder !== rightFolder) return
-      const r = applySelection(
-        rightSel,
-        focus.name,
-        { shiftKey: false } as React.MouseEvent,
-        trainList,
-        rightAnchor
-      )
-      setRightSel(r.next)
-      setRightAnchor(r.anchor)
-    }
-  }
-
-  const previewIsSelected = focus
-    ? focus.side === 'left'
-      ? leftSel.has(focus.name)
-      : focus.folder === rightFolder && rightSel.has(focus.name)
-    : false
 
   // ---------- copy / remove / folder ops ----------
   const doCopy = async () => {
@@ -386,23 +388,18 @@ export default function CurationPage() {
 
   return (
     <div className="flex flex-col h-full w-full gap-3">
-      {/* 标题压缩成单行：题号 + 步骤 + 一句说明 */}
+      {/* 标题压缩成单行 */}
       <header className="flex items-baseline gap-2 flex-wrap shrink-0">
         <h2 className="text-base font-semibold">② 筛选</h2>
         <span className="text-xs text-slate-500">
-          download → train · download 永远保留，复制/移除只动 train 副本
+          download → train · download 永远保留 · 按住{' '}
+          <kbd className="px-1 rounded bg-slate-800 text-slate-300">Alt</kbd>{' '}
+          悬停缩略图查看大图
         </span>
       </header>
 
-      {/* 三列同行：预览（630，比之前的 420 宽 50%）+ Download + Train（剩余平分）。
-       * flex-1 min-h-0 让这一行吃掉剩余可视高度，配合面板内部 SCROLL_BOX flex-1，
-       * 缩略图区会自动延伸到屏幕底部。 */}
-      <div className="grid grid-cols-1 xl:grid-cols-[630px_1fr_1fr] gap-3 items-stretch flex-1 min-h-0">
-        <SharedPreview
-          focus={focus}
-          isSelected={previewIsSelected}
-          onToggle={focus ? togglePreviewSelection : undefined}
-        />
+      {/* Download + Train 两列平分整宽；预览改为 alt+hover 浮层，不占布局位置。 */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 items-stretch flex-1 min-h-0">
         <PanelCard
           accent="emerald"
           title="Download — 全量备份"
@@ -545,6 +542,10 @@ export default function CurationPage() {
         </PanelCard>
       </div>
 
+      {/* alt + hover 触发的浮层大图：pointer-events-none 让 hover 事件继续命中底层缩略图，
+       * 用户按住 alt 在网格上滑动时，预览随 focus 切换，不阻塞选择。 */}
+      {altHeld && focus && <AltHoverPreview focus={focus} />}
+
       {preview && (
         <ImagePreviewModal
           src={preview.url}
@@ -642,68 +643,43 @@ function FolderSummary({
   )
 }
 
-function SharedPreview({
-  focus,
-  isSelected,
-  onToggle,
-}: {
-  focus: Focus | null
-  isSelected: boolean
-  onToggle?: () => void
-}) {
+/** 按住 Alt 时浮在所有内容上方的大图预览。
+ *
+ * 用 `pointer-events-none` 让鼠标事件透传到底层 ImageGrid，所以用户可以一边
+ * 按 alt 一边在缩略图上滑动，预览随焦点切换；松开 alt（或 window blur）即消失。
+ */
+function AltHoverPreview({ focus }: { focus: Focus }) {
   const sourceLabel =
-    focus?.side === 'left'
-      ? 'download'
-      : focus?.side === 'right'
-        ? `train / ${focus.folder}`
-        : '—'
+    focus.side === 'left' ? 'download' : `train / ${focus.folder}`
   return (
     <div
-      className="rounded-lg border border-slate-700 bg-slate-900/60 flex flex-col overflow-hidden"
-      title="点击缩略图 = 切换选中 · shift+点击 = 区间多选 · ⤢ = 全屏预览"
+      aria-hidden
+      className="fixed inset-0 z-40 pointer-events-none flex items-center justify-center p-6"
     >
-      {/* 图片：占满列高（min-h-[420px] 保证小屏也看得清） */}
-      <div className="flex-1 min-h-[420px] bg-black/40 flex items-center justify-center">
-        {focus ? (
-          <img
-            src={focus.url}
-            alt={focus.name}
-            className="max-w-full max-h-full object-contain"
-          />
-        ) : (
-          <span className="text-xs text-slate-600">悬停缩略图查看大图</span>
-        )}
-      </div>
-      {/* 底部 info bar：source / 文件名 / 选中按钮，单行 */}
-      <div className="border-t border-slate-700 px-2 py-2 flex items-center gap-2 text-xs">
-        <span
-          className={
-            'text-[10px] px-1.5 py-0.5 rounded font-mono shrink-0 ' +
-            (focus?.side === 'left'
-              ? 'bg-emerald-700/40 text-emerald-200'
-              : focus?.side === 'right'
-                ? 'bg-cyan-700/40 text-cyan-200'
-                : 'bg-slate-700/60 text-slate-500')
-          }
-        >
-          {sourceLabel}
-        </span>
-        <code className="text-slate-200 truncate flex-1 min-w-0">
-          {focus?.name ?? '—'}
-        </code>
-        {focus && onToggle && (
-          <button
-            onClick={onToggle}
+      <div className="relative bg-black/85 rounded-lg border border-slate-700 shadow-2xl flex flex-col overflow-hidden max-w-[95vw] max-h-[95vh]">
+        <img
+          src={focus.url}
+          alt={focus.name}
+          className="max-w-[95vw] max-h-[88vh] object-contain"
+        />
+        <div className="flex items-center gap-2 px-3 py-1.5 border-t border-slate-800 text-xs">
+          <span
             className={
-              'px-2.5 py-1 rounded shrink-0 text-xs ' +
-              (isSelected
-                ? 'bg-slate-700 hover:bg-slate-600 text-slate-200'
-                : 'bg-cyan-600 hover:bg-cyan-500 text-white')
+              'text-[10px] px-1.5 py-0.5 rounded font-mono shrink-0 ' +
+              (focus.side === 'left'
+                ? 'bg-emerald-700/40 text-emerald-200'
+                : 'bg-cyan-700/40 text-cyan-200')
             }
           >
-            {isSelected ? '✓ 已选' : '加入选中'}
-          </button>
-        )}
+            {sourceLabel}
+          </span>
+          <code className="text-slate-200 truncate flex-1 min-w-0">
+            {focus.name}
+          </code>
+          <span className="text-[10px] text-slate-500 shrink-0">
+            松开 Alt 关闭
+          </span>
+        </div>
       </div>
     </div>
   )
