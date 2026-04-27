@@ -19,20 +19,28 @@ studio/
 
 ## 启动
 
-### 一键启动（Windows）
+### 跨平台启动器（推荐）
 
-```cmd
-studio.bat            REM 自动 build 前端 + 起后端
-studio.bat dev        REM 前后端开发模式（5173 + 8765）
-studio.bat build      REM 仅 build 前端
-```
-
-### 后端守护进程
+`python -m studio` 是统一入口，子进程由 Python 管理（Windows / macOS / Linux 都用一样的命令）：
 
 ```bash
-# 依赖已在 requirements.txt（fastapi / uvicorn / pydantic / pyyaml）
-python -m studio.server
-# → http://127.0.0.1:8765
+python -m studio              # 默认 = run
+python -m studio run          # 构建前端（如缺）+ 起后端
+python -m studio dev          # 前后端开发模式（5173 + 8765 --reload，并行）
+python -m studio build        # 仅构建前端
+python -m studio test         # 跑 pytest + vitest
+```
+
+dev 模式会同时起 Vite 和 uvicorn 两个子进程，Ctrl+C 会一起干掉（Windows 用 `CTRL_BREAK_EVENT`，POSIX 用进程组 SIGTERM）。
+
+### Windows 快捷脚本
+
+`studio.bat` 调同一份 Python 启动器，双击即可。
+
+### 直接调后端
+
+```bash
+python -m studio.server --host 0.0.0.0 --port 8765
 ```
 
 参数：
