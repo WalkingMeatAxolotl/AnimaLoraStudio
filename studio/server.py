@@ -23,7 +23,9 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
+from . import configs_io
 from .paths import (
     LEGACY_MONITOR_HTML,
     MONITOR_STATE_FILE,
@@ -31,6 +33,7 @@ from .paths import (
     WEB_DIST,
     ensure_dirs,
 )
+from .schema import GROUP_ORDER, TrainingConfig
 
 ensure_dirs()
 
@@ -70,6 +73,79 @@ def get_state() -> JSONResponse:
     except Exception as exc:
         raise HTTPException(500, f"failed to read state: {exc}")
     return JSONResponse(data)
+
+
+# ---------------------------------------------------------------------------
+# /api/schema, /api/configs/*
+# ---------------------------------------------------------------------------
+
+
+class DuplicateRequest(BaseModel):
+    new_name: str
+
+
+@app.get("/api/schema")
+def get_schema() -> dict[str, Any]:
+    """返回 TrainingConfig 的 JSON Schema + 分组顺序，前端据此渲染表单。"""
+    return {
+        "schema": TrainingConfig.model_json_schema(),
+        "groups": [{"key": k, "label": label} for k, label in GROUP_ORDER],
+    }
+
+
+@app.get("/api/configs")
+def list_configs_endpoint() -> dict[str, Any]:
+    return {"items": configs_io.list_configs()}
+
+
+@app.get("/api/configs/{name}")
+def get_config(name: str) -> dict[str, Any]:
+    try:
+        return configs_io.read_config(name)
+    except configs_io.ConfigError as exc:
+        raise HTTPException(status_code=_err_code(exc), detail=str(exc)) from exc
+
+
+@app.put("/api/configs/{name}")
+def put_config(name: str, body: dict[str, Any]) -> dict[str, str]:
+    try:
+        path = configs_io.write_config(name, body)
+    except configs_io.ConfigError as exc:
+        raise HTTPException(status_code=_err_code(exc), detail=str(exc)) from exc
+    return {"name": name, "path": str(path)}
+
+
+@app.delete("/api/configs/{name}")
+def delete_config_endpoint(name: str) -> dict[str, str]:
+    try:
+        configs_io.delete_config(name)
+    except configs_io.ConfigError as exc:
+        raise HTTPException(status_code=_err_code(exc), detail=str(exc)) from exc
+    return {"deleted": name}
+
+
+@app.post("/api/configs/{name}/duplicate")
+def duplicate_config_endpoint(name: str, body: DuplicateRequest) -> dict[str, str]:
+    try:
+        path = configs_io.duplicate_config(name, body.new_name)
+    except configs_io.ConfigError as exc:
+        raise HTTPException(status_code=_err_code(exc), detail=str(exc)) from exc
+    return {"name": body.new_name, "path": str(path)}
+
+
+def _err_code(exc: configs_io.ConfigError) -> int:
+    """ConfigError → HTTP 状态码：'不存在' → 404，名字非法 → 400，其它 → 422。"""
+    msg = str(exc)
+    if "不存在" in msg:
+        return 404
+    if "非法配置名" in msg or "已存在" in msg:
+        return 400
+    return 422
+
+
+# ---------------------------------------------------------------------------
+# /samples
+# ---------------------------------------------------------------------------
 
 
 @app.get("/samples/{filename}")
