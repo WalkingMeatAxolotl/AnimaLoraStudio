@@ -1,10 +1,10 @@
 @echo off
-REM AnimaStudio Windows 快捷启动 —— 转发到 python -m studio。
-REM 用法:
-REM   studio.bat            等同 python -m studio run
-REM   studio.bat dev        前后端开发模式
-REM   studio.bat build      仅构建前端
-REM   studio.bat test       跑 pytest + vitest
+REM AnimaStudio Windows shortcut -- forwards to: python -m studio
+REM Usage:
+REM   studio.bat            same as: python -m studio run
+REM   studio.bat dev        frontend + backend dev mode
+REM   studio.bat build      build frontend only
+REM   studio.bat test       run pytest + vitest
 
 setlocal
 cd /d "%~dp0"
