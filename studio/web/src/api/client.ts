@@ -120,6 +120,7 @@ export interface VersionStats {
   tagged_image_count: number
   train_folders: Array<{ name: string; image_count: number }>
   reg_image_count: number
+  reg_meta_exists: boolean
   has_output: boolean
 }
 
@@ -263,6 +264,41 @@ export interface CaptionSnapshot {
   created_at: number
   size: number
   file_count: number
+}
+
+// PP5 ----------------------------------------------------------------
+
+export interface RegMeta {
+  generated_at: number
+  based_on_version: string
+  api_source: string
+  target_count: number
+  actual_count: number
+  source_tags: string[]
+  excluded_tags: string[]
+  blacklist_tags: string[]
+  failed_tags: string[]
+  train_tag_distribution: Record<string, number>
+  auto_tagged: boolean
+}
+
+export interface RegStatus {
+  exists: boolean
+  meta: RegMeta | null
+  image_count: number
+  files: string[]
+}
+
+export interface RegTagCount {
+  tag: string
+  count: number
+}
+
+export interface RegBuildRequest {
+  target_count?: number | null
+  excluded_tags?: string[]
+  auto_tag?: boolean
+  api_source?: 'gelbooru' | 'danbooru'
 }
 
 export type TaskStatus = 'pending' | 'running' | 'done' | 'failed' | 'canceled'
@@ -582,6 +618,24 @@ export const api = {
   deleteCaptionSnapshot: (pid: number, vid: number, sid: string) =>
     req<{ deleted: string }>(
       `/api/projects/${pid}/versions/${vid}/captions/snapshots/${sid}`,
+      { method: 'DELETE' }
+    ),
+
+  // Regularization (PP5) ------------------------------------------------
+  getRegStatus: (pid: number, vid: number) =>
+    req<RegStatus>(`/api/projects/${pid}/versions/${vid}/reg`),
+  previewRegTags: (pid: number, vid: number, top = 20) =>
+    req<{ items: RegTagCount[] }>(
+      `/api/projects/${pid}/versions/${vid}/reg/preview-tags?top=${top}`
+    ).then((r) => r.items),
+  startRegBuild: (pid: number, vid: number, body: RegBuildRequest) =>
+    req<Job>(`/api/projects/${pid}/versions/${vid}/reg/build`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  deleteReg: (pid: number, vid: number) =>
+    req<{ deleted: boolean; reason?: string }>(
+      `/api/projects/${pid}/versions/${vid}/reg`,
       { method: 'DELETE' }
     ),
 

@@ -42,7 +42,7 @@ from . import (
     versions,
 )
 from .event_bus import bus
-from .services import caption_snapshot, downloader, tagedit
+from .services import caption_snapshot, downloader, reg_builder, tagedit
 from .services.tagger import VALID_TAGGER_NAMES, get_tagger
 from .paths import (
     LEGACY_MONITOR_HTML,
@@ -1007,6 +1007,113 @@ def batch_caption_endpoint(
     if op == "stats":
         return {"op": op, "items": tagedit.stats(scope, train, top=max(1, body.top))}
     raise HTTPException(400, f"unknown op: {op}")
+
+
+# ---------------------------------------------------------------------------
+# /api/projects/{pid}/versions/{vid}/reg  (PP5)
+# ---------------------------------------------------------------------------
+
+
+REG_DEFAULT_FOLDER = "1_general"
+
+
+class RegBuildRequest(BaseModel):
+    target_count: Optional[int] = None
+    excluded_tags: list[str] = []
+    auto_tag: bool = True
+    api_source: str = "gelbooru"
+
+
+def _reg_dir(vdir: Path) -> Path:
+    return vdir / "reg" / REG_DEFAULT_FOLDER
+
+
+@app.get("/api/projects/{pid}/versions/{vid}/reg/preview-tags")
+def reg_preview_tags(pid: int, vid: int, top: int = 20) -> dict[str, Any]:
+    """返回 train 的 tag 频率 top N（不真生成 reg）。给 UI「排除 tag」勾选用。"""
+    _, _, vdir = _version_dir_or_404(pid, vid)
+    train = vdir / "train"
+    items = reg_builder.preview_train_tag_distribution(train, top=max(1, top))
+    return {"items": [{"tag": t, "count": c} for t, c in items]}
+
+
+@app.get("/api/projects/{pid}/versions/{vid}/reg")
+def get_reg_status(pid: int, vid: int) -> dict[str, Any]:
+    """返回 reg 集状态（meta + 图片数 + 文件名列表）。"""
+    _, _, vdir = _version_dir_or_404(pid, vid)
+    rdir = _reg_dir(vdir)
+    if not rdir.exists():
+        return {"exists": False, "meta": None, "image_count": 0, "files": []}
+    images: list[str] = []
+    for f in sorted(rdir.rglob("*")):
+        if f.is_file() and f.suffix.lower() in datasets.IMAGE_EXTS:
+            try:
+                rel = f.relative_to(rdir).as_posix()
+            except ValueError:
+                continue
+            images.append(rel)
+    meta = reg_builder.read_meta(rdir)
+    meta_dict = None
+    if meta is not None:
+        from dataclasses import asdict as _asdict
+        meta_dict = _asdict(meta)
+    return {
+        "exists": bool(images) or meta is not None,
+        "meta": meta_dict,
+        "image_count": len(images),
+        "files": images,
+    }
+
+
+@app.post("/api/projects/{pid}/versions/{vid}/reg/build")
+def start_reg_build(pid: int, vid: int, body: RegBuildRequest) -> dict[str, Any]:
+    if body.api_source not in {"gelbooru", "danbooru"}:
+        raise HTTPException(400, "api_source must be gelbooru|danbooru")
+    if body.target_count is not None and body.target_count <= 0:
+        raise HTTPException(400, "target_count must be > 0 or null")
+    _, v, vdir = _version_dir_or_404(pid, vid)
+    train = vdir / "train"
+    has_image = train.exists() and any(
+        f.is_file() and f.suffix.lower() in datasets.IMAGE_EXTS
+        for f in train.rglob("*")
+    )
+    if not has_image:
+        raise HTTPException(400, "train 还没有图片，先去 ① 整理 / ② 下载")
+
+    with db.connection_for() as conn:
+        job = project_jobs.create_job(
+            conn,
+            project_id=pid,
+            version_id=vid,
+            kind="reg_build",
+            params={
+                "version_id": vid,
+                "target_count": body.target_count,
+                "excluded_tags": list(body.excluded_tags),
+                "auto_tag": bool(body.auto_tag),
+                "api_source": body.api_source,
+            },
+        )
+        if v["stage"] in ("curating", "tagging"):
+            updated = versions.advance_stage(conn, vid, "regularizing")
+            _publish_version_state(updated)
+    _publish_job_state(job)
+    return job
+
+
+@app.delete("/api/projects/{pid}/versions/{vid}/reg")
+def delete_reg(pid: int, vid: int) -> dict[str, Any]:
+    """清空 reg/1_general/（含 meta.json 和所有图片）。"""
+    import shutil as _shutil
+    _, _, vdir = _version_dir_or_404(pid, vid)
+    rdir = _reg_dir(vdir)
+    if not rdir.exists():
+        return {"deleted": False, "reason": "reg dir not exist"}
+    try:
+        _shutil.rmtree(rdir)
+    except OSError as exc:
+        raise HTTPException(500, f"删除失败: {exc}") from exc
+    return {"deleted": True}
 
 
 # version 级缩略图：bucket = train | reg | samples（PP3 加 train，reg/samples 留作 PP4-5）

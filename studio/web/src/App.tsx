@@ -8,6 +8,7 @@ import ProjectOverview from './pages/project/Overview'
 import CurationPage from './pages/project/steps/Curation'
 import DownloadPage from './pages/project/steps/Download'
 import StepPlaceholder from './pages/project/steps/Placeholder'
+import RegularizationPage from './pages/project/steps/Regularization'
 import TagEditPage from './pages/project/steps/TagEdit'
 import TaggingPage from './pages/project/steps/Tagging'
 import MonitorPage from './pages/tools/Monitor'
@@ -33,10 +34,7 @@ export default function App() {
                 <Route path="curate" element={<CurationPage />} />
                 <Route path="tag" element={<TaggingPage />} />
                 <Route path="edit" element={<TagEditPage />} />
-                <Route
-                  path="reg"
-                  element={<StepPlaceholder step="⑤ 正则集" doc="PP5" />}
-                />
+                <Route path="reg" element={<RegularizationPage />} />
                 <Route
                   path="train"
                   element={<StepPlaceholder step="⑥ 训练" doc="PP6" />}

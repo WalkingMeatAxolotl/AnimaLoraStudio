@@ -12,7 +12,7 @@
 | [pp2-download.md](pp2-download.md) | ✅ 已完成 — Gelbooru/Danbooru 下载集成、project_jobs、Job 守护扩展 |
 | [pp3-curation.md](pp3-curation.md) | ✅ 已完成 — download / train 双面板、缩略图、复制/移除、子文件夹管理 |
 | [pp4-tagging.md](pp4-tagging.md) | ✅ 已完成 — Tagger 协议、WD14 (本地+HF 自动下载)、JoyCaption (vLLM)；pipeline 拆成「③ 打标」「④ 标签编辑」两步 |
-| [pp5-regularization.md](pp5-regularization.md) | 基于 train tag 分布生成正则集，version 级 |
+| [pp5-regularization.md](pp5-regularization.md) | ✅ 已完成 — `regex_dataset_builder.py` 库化、reg_build worker、auto_tag 内联、reg 集页 |
 | [pp6-train.md](pp6-train.md) | Preset fork/save、Train 页、入队带 project_id+version_id、monitor 按 version 拆分 |
 
 ## 实施原则

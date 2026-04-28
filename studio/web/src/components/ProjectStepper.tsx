@@ -64,6 +64,13 @@ function statusFor(
       return 'done'
     }
   }
+  // reg 派生覆盖：reg/1_general/ 已生成（meta 存在 + 至少 1 张图）→ done
+  if (step.key === 'reg' && version?.stats) {
+    const s = version.stats
+    if (s.reg_meta_exists && s.reg_image_count > 0) {
+      return 'done'
+    }
+  }
   return status
 }
 

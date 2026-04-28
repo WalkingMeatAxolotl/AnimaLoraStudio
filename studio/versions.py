@@ -277,13 +277,13 @@ def stats_for_version(p: dict[str, Any], v: dict[str, Any]) -> dict[str, Any]:
                 train_total += cnt
     reg_dir = vdir / "reg"
     reg_total = 0
+    reg_meta_exists = False
     if reg_dir.exists():
-        for sub in reg_dir.iterdir():
-            if sub.is_dir():
-                reg_total += sum(
-                    1 for f in sub.iterdir()
-                    if f.is_file() and f.suffix.lower() in IMAGE_EXTS
-                )
+        # reg/1_general/{train-subfolder}/{post_id}.png — 递归扫
+        for f in reg_dir.rglob("*"):
+            if f.is_file() and f.suffix.lower() in IMAGE_EXTS:
+                reg_total += 1
+        reg_meta_exists = (reg_dir / "1_general" / "meta.json").exists()
     output_dir = vdir / "output"
     has_output = output_dir.exists() and any(output_dir.iterdir())
     return {
@@ -291,5 +291,6 @@ def stats_for_version(p: dict[str, Any], v: dict[str, Any]) -> dict[str, Any]:
         "tagged_image_count": tagged_total,
         "train_folders": train_folders,
         "reg_image_count": reg_total,
+        "reg_meta_exists": reg_meta_exists,
         "has_output": has_output,
     }

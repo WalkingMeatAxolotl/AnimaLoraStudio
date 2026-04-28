@@ -84,6 +84,7 @@ describe('ProjectStepper (PP1)', () => {
         tagged_image_count: 10,
         train_folders: [],
         reg_image_count: 0,
+        reg_meta_exists: false,
         has_output: false,
       },
     }
@@ -102,6 +103,7 @@ describe('ProjectStepper (PP1)', () => {
         tagged_image_count: 5,
         train_folders: [],
         reg_image_count: 0,
+        reg_meta_exists: false,
         has_output: false,
       },
     }
@@ -109,5 +111,23 @@ describe('ProjectStepper (PP1)', () => {
     const list = screen.getByRole('list', { name: 'pipeline-stepper' })
     const items = within(list).getAllByRole('listitem')
     expect(items[2].textContent).toMatch(/●.*打标/)
+  })
+
+  it('marks reg done when reg meta exists and images present', () => {
+    const v: Version = {
+      ...version('regularizing'),
+      stats: {
+        train_image_count: 10,
+        tagged_image_count: 10,
+        train_folders: [],
+        reg_image_count: 8,
+        reg_meta_exists: true,
+        has_output: false,
+      },
+    }
+    renderStepper(project('tagging'), v)
+    const list = screen.getByRole('list', { name: 'pipeline-stepper' })
+    const items = within(list).getAllByRole('listitem')
+    expect(items[4].textContent).toMatch(/✓.*正则集/)
   })
 })
