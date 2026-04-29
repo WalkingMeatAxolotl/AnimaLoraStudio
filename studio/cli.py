@@ -209,12 +209,44 @@ def _bootstrap_onnxruntime() -> None:
         print(f"[studio] onnxruntime bootstrap 异常（已忽略）: {exc}", file=sys.stderr)
 
 
+WEB_SRC = WEB_DIR / "src"
+
+
+def _web_dist_is_stale() -> bool:
+    """dist 是否落后于 src（云上 git pull 新代码后旧 dist 还在的常见坑）。
+
+    比较 dist/index.html mtime vs src/ 树最新 mtime。dist 不存在 → True。
+    """
+    dist_index = WEB_DIST / "index.html"
+    if not dist_index.exists():
+        return True
+    try:
+        dist_mtime = dist_index.stat().st_mtime
+        src_latest = max(
+            (p.stat().st_mtime for p in WEB_SRC.rglob("*") if p.is_file()),
+            default=0.0,
+        )
+        # package.json / vite.config 改了也算
+        for f in (WEB_DIR / "package.json", WEB_DIR / "vite.config.ts", WEB_DIR / "tsconfig.json"):
+            if f.exists():
+                src_latest = max(src_latest, f.stat().st_mtime)
+        return src_latest > dist_mtime
+    except OSError:
+        return False
+
+
 def cmd_run(args: argparse.Namespace) -> int:
-    if not WEB_DIST.exists() and not args.no_build:
-        print("[studio] studio/web/dist 不存在，先构建前端...")
-        rc = cmd_build(args)
-        if rc != 0:
-            return rc
+    if not args.no_build:
+        if not WEB_DIST.exists():
+            print("[studio] studio/web/dist 不存在，先构建前端...")
+            rc = cmd_build(args)
+            if rc != 0:
+                return rc
+        elif _web_dist_is_stale():
+            print("[studio] studio/web/dist 比 src 旧（git pull 后未重建？），重新构建前端...")
+            rc = cmd_build(args)
+            if rc != 0:
+                return rc
     _bootstrap_onnxruntime()
     url = f"http://{args.host}:{args.port}/studio/"
     print(f"[studio] 启动后端 → {url}")
