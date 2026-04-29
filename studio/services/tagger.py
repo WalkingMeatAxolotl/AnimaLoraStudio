@@ -42,11 +42,15 @@ class Tagger(Protocol):
         """流式：每张图 yield 一次 TagResult；失败时 result 含 'error' 字段。"""
 
 
-def get_tagger(name: str) -> Tagger:
-    """工厂：name = 'wd14' | 'joycaption'。"""
+def get_tagger(name: str, overrides: dict | None = None) -> Tagger:
+    """工厂：name = 'wd14' | 'joycaption'。
+
+    `overrides` 仅 wd14 当前消费 —— 本次打标参数覆盖（threshold / model_id /
+    blacklist_tags 等）；不影响全局 secrets.json。joycaption 暂时忽略。
+    """
     if name == "wd14":
         from .wd14_tagger import WD14Tagger
-        return WD14Tagger()
+        return WD14Tagger(overrides=overrides)
     if name == "joycaption":
         from .joycaption_tagger import JoyCaptionTagger
         return JoyCaptionTagger()

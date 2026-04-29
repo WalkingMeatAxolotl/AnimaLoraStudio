@@ -26,12 +26,17 @@ import torch
 from torch import nn
 
 # Diffusers 相关
+# diffusers 0.31+ 把 `CosmosPipeline` 重命名为 `CosmosTextToWorldPipeline`，
+# 用别名兼容；下方代码继续用 CosmosPipeline 名字。
 from diffusers import (
     AutoencoderKLCosmos,
     CosmosTransformer3DModel,
     FlowMatchEulerDiscreteScheduler,
-    CosmosPipeline,
 )
+try:
+    from diffusers import CosmosPipeline
+except ImportError:
+    from diffusers import CosmosTextToWorldPipeline as CosmosPipeline
 from diffusers.loaders import FromSingleFileMixin
 
 # Transformers 相关

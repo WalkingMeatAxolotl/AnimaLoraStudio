@@ -30,17 +30,34 @@ class WD14Tagger:
     name = "wd14"
     requires_service = False
 
-    def __init__(self) -> None:
+    def __init__(self, overrides: dict | None = None) -> None:
+        """`overrides` 是本次打标的临时覆盖（仅内存生效）。
+
+        合并自 `secrets.WD14Config` 的同名字段（`threshold_general` /
+        `threshold_character` / `model_id` / `local_dir` / `blacklist_tags`）；
+        值为 None 的项沿用全局 settings，不影响 secrets.json 文件。
+        """
+        self._overrides = {k: v for k, v in (overrides or {}).items() if v is not None}
         self._session = None
         self._tags: list[str] = []
         self._tag_categories: list[int] = []  # 0=general, 4=character, 9=rating
         self._input_size: int = 448  # 默认；prepare 时覆盖
         self._input_name: str | None = None
 
+    # -------------------- config --------------------
+
+    def _cfg(self) -> "secrets.WD14Config":
+        """全局 secrets + 本次 overrides 合并出本次生效的配置。"""
+        base = secrets.load().wd14.model_dump()
+        for k, v in self._overrides.items():
+            if k in base:
+                base[k] = v
+        return secrets.WD14Config(**base)
+
     # -------------------- model resolution --------------------
 
     def _resolve_model_dir(self) -> Path:
-        cfg = secrets.load().wd14
+        cfg = self._cfg()
         if cfg.local_dir:
             d = Path(cfg.local_dir)
             if not (d / "model.onnx").exists() or not (d / "selected_tags.csv").exists():
@@ -129,7 +146,7 @@ class WD14Tagger:
     def _postprocess(
         self, logits: np.ndarray
     ) -> tuple[list[str], dict[str, float]]:
-        cfg = secrets.load().wd14
+        cfg = self._cfg()
         scores = logits[0]
         out: list[tuple[str, float]] = []
         blacklist = set(cfg.blacklist_tags)

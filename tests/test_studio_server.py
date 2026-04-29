@@ -171,6 +171,49 @@ def test_sample_blocks_traversal(client: TestClient, bad: str) -> None:
     assert resp.status_code != 200
 
 
+def test_sample_with_task_id_finds_in_output_samples(
+    client: TestClient, isolated_paths: dict[str, Path]
+) -> None:
+    """回归 Q4：anima_train 把 sample 写到 `output_dir/samples/`，端点应在
+    `monitor_state_path 同级 output/samples/` 也能命中（之前只查了同级 samples/）。"""
+    from studio import db as _db
+    state_path = isolated_paths["tmp"] / "v1" / "monitor_state.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text("{}", encoding="utf-8")
+    out_samples = state_path.parent / "output" / "samples"
+    out_samples.mkdir(parents=True)
+    (out_samples / "step_0_baseline_0.png").write_bytes(b"sample-bytes")
+
+    with _db.connection_for(isolated_paths["db"]) as conn:
+        tid = _db.create_task(conn, name="t", config_name="x")
+        _db.update_task(conn, tid, monitor_state_path=str(state_path))
+
+    resp = client.get(f"/samples/step_0_baseline_0.png?task_id={tid}")
+    assert resp.status_code == 200, resp.text
+    assert resp.content == b"sample-bytes"
+
+
+def test_sample_with_task_id_finds_in_state_dir_samples(
+    client: TestClient, isolated_paths: dict[str, Path]
+) -> None:
+    """旧约定路径（monitor_state.json 同级 samples/）仍兼容。"""
+    from studio import db as _db
+    state_path = isolated_paths["tmp"] / "v2" / "monitor_state.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text("{}", encoding="utf-8")
+    samples = state_path.parent / "samples"
+    samples.mkdir()
+    (samples / "step_5.png").write_bytes(b"old-layout")
+
+    with _db.connection_for(isolated_paths["db"]) as conn:
+        tid = _db.create_task(conn, name="t", config_name="x")
+        _db.update_task(conn, tid, monitor_state_path=str(state_path))
+
+    resp = client.get(f"/samples/step_5.png?task_id={tid}")
+    assert resp.status_code == 200
+    assert resp.content == b"old-layout"
+
+
 # ---------------------------------------------------------------------------
 # /
 # ---------------------------------------------------------------------------

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .paths import STUDIO_DATA
 
@@ -54,12 +54,41 @@ class JoyCaptionConfig(BaseModel):
     prompt_template: str = "Descriptive Caption"
 
 
+# 默认 WD14 候选模型；用户可在「设置 → WD14 → 候选模型」里增删，
+# 当前选中的 `model_id` 永远会被规范化进 `model_ids`（见 WD14Config validator）。
+DEFAULT_WD14_MODELS: tuple[str, ...] = (
+    "SmilingWolf/wd-eva02-large-tagger-v3",
+    "SmilingWolf/wd-vit-tagger-v3",
+    "SmilingWolf/wd-vit-large-tagger-v3",
+    "SmilingWolf/wd-v1-4-convnext-tagger-v2",
+)
+
+
 class WD14Config(BaseModel):
-    model_id: str = "SmilingWolf/wd-vit-tagger-v3"
+    model_id: str = "SmilingWolf/wd-eva02-large-tagger-v3"
+    model_ids: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_WD14_MODELS)
+    )
     local_dir: Optional[str] = None
     threshold_general: float = 0.35
     threshold_character: float = 0.85
     blacklist_tags: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _ensure_model_ids_invariant(self) -> "WD14Config":
+        """保证 `model_id ∈ model_ids` 且候选列表不为空。
+
+        - 列表为空（含旧 secrets.json 没这个字段然后被显式置空）→ 回填默认 4 项。
+        - 当前选中的 model_id 不在列表里 → 加到列表头（用户既能跑临时模型，
+          dropdown 也始终能显示当前值）。
+        副作用：用户若想从候选中「删除当前选中」，需先在打标 / 设置页切到另一个
+        model_id 再删；前端会强制这种顺序。
+        """
+        if not self.model_ids:
+            self.model_ids = list(DEFAULT_WD14_MODELS)
+        if self.model_id and self.model_id not in self.model_ids:
+            self.model_ids = [self.model_id, *self.model_ids]
+        return self
 
 
 class Secrets(BaseModel):

@@ -35,10 +35,14 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(projects, "PROJECTS_DIR", tmp_path / "projects")
     monkeypatch.setattr(projects, "TRASH_DIR", tmp_path / "_trash")
     monkeypatch.setattr(project_jobs, "JOB_LOGS_DIR", tmp_path / "jobs")
-    # tag_worker 内部 import 用的是 studio.services.tagger.get_tagger
-    monkeypatch.setattr(tagger_mod, "get_tagger", lambda name: _FakeTagger())
+    # tag_worker 内部 import 用的是 studio.services.tagger.get_tagger；
+    # 接受 overrides=... 的新签名（由 PP4 后续 wd14 per-job 覆盖功能引入）。
     monkeypatch.setattr(
-        "studio.workers.tag_worker.get_tagger", lambda name: _FakeTagger()
+        tagger_mod, "get_tagger", lambda name, overrides=None: _FakeTagger()
+    )
+    monkeypatch.setattr(
+        "studio.workers.tag_worker.get_tagger",
+        lambda name, overrides=None: _FakeTagger(),
     )
     with db.connection_for(dbfile) as conn:
         p = projects.create_project(conn, title="P")
@@ -82,6 +86,31 @@ def test_run_with_json_format(env, monkeypatch: pytest.MonkeyPatch) -> None:
     assert rc == 0
     data = json.loads((env["train"] / "a.json").read_text(encoding="utf-8"))
     assert data["tags"] == ["tag_a", "common"]
+
+
+def test_run_passes_wd14_overrides_through(env, monkeypatch) -> None:
+    """worker 应把 params['wd14_overrides'] 透传到 get_tagger(overrides=...)。"""
+    captured: dict = {}
+
+    def _factory(name: str, overrides=None):
+        captured["name"] = name
+        captured["overrides"] = overrides
+        return _FakeTagger()
+
+    monkeypatch.setattr("studio.workers.tag_worker.get_tagger", _factory)
+
+    with db.connection_for(env["db"]) as conn:
+        conn.execute(
+            "UPDATE project_jobs SET params = json_set(params, "
+            "'$.wd14_overrides', json(?)) WHERE id = ?",
+            (json.dumps({"threshold_general": 0.2}), env["job_id"]),
+        )
+        conn.commit()
+
+    rc = tag_worker.run(env["job_id"])
+    assert rc == 0
+    assert captured["name"] == "wd14"
+    assert captured["overrides"] == {"threshold_general": 0.2}
 
 
 def test_run_unknown_job(env) -> None:

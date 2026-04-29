@@ -17,6 +17,7 @@ import logging
 import os
 import threading
 from pathlib import Path
+from typing import Optional
 
 from PIL import Image, ImageOps
 
@@ -41,11 +42,18 @@ def _key_lock(key: str) -> threading.Lock:
         return lk
 
 
-def _key_for(src: Path, size: int) -> str:
+def _key_for(src: Path, size: int) -> Optional[str]:
+    """缓存键：sha1(abs_path|mtime_ns|size)。
+
+    stat 失败时返回 None —— 不再退化用 mtime=0，否则 Windows 偶发 stat 失败
+    （杀软扫描 / 文件锁）会让所有受影响图片共享同一个 cache 键，串图。
+    上层拿 None 应该跳过缓存直接生成临时缩略图（或退回原图）。
+    """
     try:
         mtime = src.stat().st_mtime_ns
-    except OSError:
-        mtime = 0
+    except OSError as exc:
+        logger.warning("thumb cache: stat failed for %s: %s", src, exc)
+        return None
     payload = f"{src.resolve()}|{mtime}|{size}".encode("utf-8")
     return hashlib.sha1(payload).hexdigest()
 
@@ -61,6 +69,10 @@ def get_or_make_thumb(src: Path, size: int) -> Path:
         return src
     THUMB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     key = _key_for(src, size)
+    if key is None:
+        # stat 失败：不缓存，不串图；直接返回原图（Cache-Control: no-cache 让浏览器
+        # 下次会重试，stat 恢复后能拿到正常缩略图）
+        return src
     out = THUMB_CACHE_DIR / f"{key}.jpg"
     if out.exists():
         return out

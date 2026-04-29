@@ -44,6 +44,60 @@ def test_load_corrupt_json_returns_defaults(secrets_file: Path) -> None:
     assert s.gelbooru.user_id == ""
 
 
+def test_wd14_defaults_include_candidate_list(secrets_file: Path) -> None:
+    s = secrets.load()
+    assert s.wd14.model_id in s.wd14.model_ids
+    assert set(secrets.DEFAULT_WD14_MODELS).issubset(set(s.wd14.model_ids))
+
+
+def test_wd14_legacy_file_without_model_ids_gets_defaults(
+    secrets_file: Path,
+) -> None:
+    """旧 secrets.json 没有 model_ids 字段时，加载后用默认列表填充并把
+    当前 model_id 也保证在内。"""
+    secrets_file.write_text(
+        json.dumps({"wd14": {"model_id": "Custom/my-tagger"}}),
+        encoding="utf-8",
+    )
+    s = secrets.load()
+    assert "Custom/my-tagger" in s.wd14.model_ids
+    # 默认 4 项也仍在列表里
+    for m in secrets.DEFAULT_WD14_MODELS:
+        assert m in s.wd14.model_ids
+
+
+def test_wd14_empty_model_ids_falls_back_to_defaults(
+    secrets_file: Path,
+) -> None:
+    secrets.update({"wd14": {"model_ids": []}})
+    s = secrets.load()
+    assert list(s.wd14.model_ids) == list(secrets.DEFAULT_WD14_MODELS)
+
+
+def test_wd14_cannot_drop_current_model_id(secrets_file: Path) -> None:
+    """删除候选时如果删掉当前 model_id，validator 自动加回去。"""
+    secrets.update(
+        {"wd14": {"model_id": "SmilingWolf/wd-vit-tagger-v3"}}
+    )
+    # 用户提交一个不含当前 model_id 的候选列表
+    s = secrets.update({"wd14": {"model_ids": ["A/m1", "B/m2"]}})
+    assert s.wd14.model_id == "SmilingWolf/wd-vit-tagger-v3"
+    assert s.wd14.model_id in s.wd14.model_ids
+
+
+def test_wd14_user_can_replace_current_then_drop(secrets_file: Path) -> None:
+    """先切到另一个再删，才能真正从候选中移除原 model_id。"""
+    s = secrets.update({"wd14": {"model_id": "A/m1"}})
+    assert "A/m1" in s.wd14.model_ids
+    # 切到一个新 id（model_validator 会把它加进列表）
+    s = secrets.update({"wd14": {"model_id": "B/m2"}})
+    assert s.wd14.model_id == "B/m2"
+    # 现在 patch 列表把 A/m1 去掉
+    s = secrets.update({"wd14": {"model_ids": [m for m in s.wd14.model_ids if m != "A/m1"]}})
+    assert "A/m1" not in s.wd14.model_ids
+    assert "B/m2" in s.wd14.model_ids
+
+
 # ---------------------------------------------------------------------------
 # update / mask round-trip
 # ---------------------------------------------------------------------------

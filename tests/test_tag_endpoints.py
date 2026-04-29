@@ -111,6 +111,69 @@ def test_start_tag_bad_format_400(client: TestClient) -> None:
     assert r.status_code == 400
 
 
+def test_start_tag_with_wd14_overrides(client: TestClient) -> None:
+    """传 wd14_overrides 时，端点应把它落进 params['wd14_overrides']。"""
+    import json as _json
+    pid, vid = _make(client)
+    r = client.post(
+        f"/api/projects/{pid}/versions/{vid}/tag",
+        json={
+            "tagger": "wd14",
+            "output_format": "txt",
+            "wd14_overrides": {
+                "threshold_general": 0.2,
+                "blacklist_tags": ["solo"],
+            },
+        },
+    )
+    assert r.status_code == 200, r.text
+    params = _json.loads(r.json()["params"])
+    assert params["wd14_overrides"] == {
+        "threshold_general": 0.2,
+        "blacklist_tags": ["solo"],
+    }
+
+
+def test_start_tag_drops_empty_wd14_overrides(client: TestClient) -> None:
+    """全部字段都是 None 时不要写空 dict 进 params。"""
+    import json as _json
+    pid, vid = _make(client)
+    r = client.post(
+        f"/api/projects/{pid}/versions/{vid}/tag",
+        json={
+            "tagger": "wd14",
+            "output_format": "txt",
+            "wd14_overrides": {
+                "threshold_general": None,
+                "threshold_character": None,
+            },
+        },
+    )
+    params = _json.loads(r.json()["params"])
+    assert "wd14_overrides" not in params
+
+
+def test_start_tag_ignores_overrides_for_joycaption(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """tagger != wd14 时即便传了 overrides 也不应入 params。"""
+    import json as _json
+    fake = MagicMock()
+    fake.is_available.return_value = (True, "ok")
+    fake.requires_service = True
+    monkeypatch.setattr(server, "get_tagger", lambda name: fake)
+    pid, vid = _make(client)
+    r = client.post(
+        f"/api/projects/{pid}/versions/{vid}/tag",
+        json={
+            "tagger": "joycaption",
+            "wd14_overrides": {"threshold_general": 0.1},
+        },
+    )
+    params = _json.loads(r.json()["params"])
+    assert "wd14_overrides" not in params
+
+
 # ---------------------------------------------------------------------------
 # /captions
 # ---------------------------------------------------------------------------

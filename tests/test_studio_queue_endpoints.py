@@ -130,6 +130,31 @@ def test_retry_running_400(client: TestClient) -> None:
     assert resp.status_code == 400
 
 
+def test_retry_copies_full_training_context(client: TestClient) -> None:
+    """retry 必须复制 config_path / project_id / version_id，否则重试会
+    走老降级路径用全局 preset 而不是 version 私有 config。"""
+    tid = client.post("/api/queue", json={"config_name": "good"}).json()["id"]
+    with db.connection_for() as conn:
+        db.update_task(
+            conn,
+            tid,
+            status="failed",
+            config_path="/abs/path/to/version_private.yaml",
+            project_id=42,
+            version_id=99,
+        )
+    new = client.post(f"/api/queue/{tid}/retry").json()
+    assert new["config_path"] == "/abs/path/to/version_private.yaml"
+    assert new["project_id"] == 42
+    assert new["version_id"] == 99
+    # 「上次跑」的字段不应该带过来
+    assert new["status"] == "pending"
+    assert new.get("started_at") is None
+    assert new.get("finished_at") is None
+    assert new.get("error_msg") is None
+    assert new.get("monitor_state_path") is None
+
+
 def test_delete_only_terminal(client: TestClient) -> None:
     tid = client.post("/api/queue", json={"config_name": "good"}).json()["id"]
     # pending 状态不能删

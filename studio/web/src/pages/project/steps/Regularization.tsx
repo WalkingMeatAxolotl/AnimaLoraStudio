@@ -551,37 +551,117 @@ function ExcludeTagsPicker({
   excluded: Set<string>
   onToggle: (tag: string) => void
 }) {
-  if (trainTags.length === 0) {
-    return (
-      <p className="text-xs text-slate-500">
-        train 还没有 tag 分布（先打标）。可以直接开始生成，会按 booru 默认搜索。
-      </p>
-    )
+  const [draft, setDraft] = useState('')
+  const trainTagSet = useMemo(
+    () => new Set(trainTags.map((t) => t.tag)),
+    [trainTags]
+  )
+  // 自定义 = excluded 里那些不在 train top tag 列表里的（含画师等 train 没出现的 tag）
+  const customTags = useMemo(
+    () => Array.from(excluded).filter((t) => !trainTagSet.has(t)).sort(),
+    [excluded, trainTagSet]
+  )
+
+  // 与后端 `_normalize_tags` 对齐：小写、空白→下划线、去重。
+  const normalize = (raw: string): string =>
+    raw.trim().toLowerCase().replace(/\s+/g, '_')
+
+  const addCustom = () => {
+    // 支持一次粘多个：逗号 / 空格 / 换行分隔
+    const items = draft
+      .split(/[,，\n]+/)
+      .map(normalize)
+      .filter(Boolean)
+    if (items.length === 0) return
+    for (const tag of items) {
+      if (!excluded.has(tag)) onToggle(tag)
+    }
+    setDraft('')
   }
+
+  const showTrainList = trainTags.length > 0
+
   return (
-    <div>
-      <p className="text-[11px] text-slate-500 mb-1">
-        排除 train top tag（项目特定 tag 不应作为搜索条件，例如角色名）：
-      </p>
-      <div className="flex flex-wrap gap-1">
-        {trainTags.map((t) => {
-          const on = excluded.has(t.tag)
-          return (
-            <button
-              key={t.tag}
-              onClick={() => onToggle(t.tag)}
-              className={
-                'px-2 py-0.5 rounded border text-[11px] font-mono transition ' +
-                (on
-                  ? 'bg-amber-700/40 border-amber-600 text-amber-200'
-                  : 'bg-slate-800 border-slate-700 text-slate-300 hover:border-slate-500')
+    <div className="space-y-2">
+      {showTrainList ? (
+        <div>
+          <p className="text-[11px] text-slate-500 mb-1">
+            排除 train top tag（项目特定 tag，例如角色名）：
+          </p>
+          <div className="flex flex-wrap gap-1">
+            {trainTags.map((t) => {
+              const on = excluded.has(t.tag)
+              return (
+                <button
+                  key={t.tag}
+                  onClick={() => onToggle(t.tag)}
+                  className={
+                    'px-2 py-0.5 rounded border text-[11px] font-mono transition ' +
+                    (on
+                      ? 'bg-amber-700/40 border-amber-600 text-amber-200'
+                      : 'bg-slate-800 border-slate-700 text-slate-300 hover:border-slate-500')
+                  }
+                  title={on ? '点击取消排除' : '点击加入排除'}
+                >
+                  {on ? '✕' : '+'} {t.tag}{' '}
+                  <span className="opacity-50">×{t.count}</span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      ) : (
+        <p className="text-xs text-slate-500">
+          train 还没有 tag 分布（先打标）。也可以仅靠下方「自定义排除」继续。
+        </p>
+      )}
+
+      <div>
+        <p className="text-[11px] text-slate-500 mb-1">
+          自定义排除（train 里没有也行，常用于画师 / 风格类 tag，例如{' '}
+          <code className="text-slate-400">artist_foo</code>）：
+        </p>
+        <div className="flex items-center gap-1.5">
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                addCustom()
               }
-              title={on ? '点击取消排除' : '点击加入排除'}
-            >
-              {on ? '✕' : '+'} {t.tag} <span className="opacity-50">×{t.count}</span>
-            </button>
-          )
-        })}
+            }}
+            placeholder="如 artist_foo, sensitive 等；逗号 / 换行分隔可一次加多个"
+            className="flex-1 px-2 py-1 rounded bg-slate-950 border border-slate-700 text-xs focus:outline-none focus:border-cyan-500"
+          />
+          <button
+            onClick={addCustom}
+            disabled={!draft.trim()}
+            className="text-xs px-2.5 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-200 disabled:bg-slate-800 disabled:text-slate-500"
+          >
+            + 添加
+          </button>
+        </div>
+        {customTags.length > 0 && (
+          <div className="flex flex-wrap gap-1 mt-1.5">
+            {customTags.map((t) => (
+              <span
+                key={t}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-amber-600 bg-amber-700/40 text-amber-200 text-[11px] font-mono"
+                title="自定义排除（点 × 移除）"
+              >
+                {t}
+                <button
+                  onClick={() => onToggle(t)}
+                  className="text-amber-300 hover:text-amber-100"
+                  aria-label={`移除 ${t}`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )

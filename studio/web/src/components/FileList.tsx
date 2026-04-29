@@ -19,8 +19,8 @@ export default function FileList({
     return <p className="text-slate-500 text-sm">{emptyHint}</p>
   }
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2">
-      {items.slice(0, 200).map((f) => (
+    <div className="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-8 lg:grid-cols-10 xl:grid-cols-12 gap-1.5">
+      {items.map((f) => (
         <button
           key={f.name}
           onClick={() => onPreview?.(f.name)}
@@ -35,11 +35,6 @@ export default function FileList({
           />
         </button>
       ))}
-      {items.length > 200 && (
-        <p className="col-span-full text-xs text-slate-500">
-          仅显示前 200 张（共 {items.length} 张）
-        </p>
-      )}
     </div>
   )
 }

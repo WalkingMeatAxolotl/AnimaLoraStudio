@@ -18,13 +18,15 @@ P1 范围（本文件目前实现）：
 from __future__ import annotations
 
 import asyncio
+import io
 import json
+import logging
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -49,6 +51,7 @@ from .services import (
     presets as preset_flow,
     reg_builder,
     tagedit,
+    uploads as uploads_svc,
     version_config,
 )
 from .services.tagger import VALID_TAGGER_NAMES, get_tagger
@@ -68,6 +71,8 @@ from .supervisor import Supervisor
 
 ensure_dirs()
 db.init_db()
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -583,6 +588,38 @@ def start_download(pid: int, body: DownloadRequest) -> dict[str, Any]:
     return job
 
 
+@app.post("/api/projects/{pid}/upload")
+async def upload_local_files(
+    pid: int, files: list[UploadFile] = File(...)
+) -> dict[str, Any]:
+    """本地上传：单图（jpg/png）或 zip 包（自动解压）→ project 的 download/。
+
+    与 booru 下载共用同一份「全量备份」目录；上传不走 job 系统，端点同步处理
+    并返回 added / skipped 列表。任一文件成功即把项目 stage 推到 downloading。
+    """
+    if not files:
+        raise HTTPException(400, "没有上传文件")
+    with db.connection_for() as conn:
+        p = projects.get_project(conn, pid)
+    if not p:
+        raise HTTPException(404, f"项目不存在: id={pid}")
+    pdir = projects.project_dir(p["id"], p["slug"]) / "download"
+
+    # 全量读入内存交给 service 解析；FastAPI 的 UploadFile 内部本就是 SpooledTemporaryFile，
+    # 大文件会落临时盘，所以这里 read() 不会立即吃光内存。
+    pairs: list[tuple[str, io.BytesIO]] = []
+    for f in files:
+        data = await f.read()
+        pairs.append((f.filename or "", io.BytesIO(data)))
+    result = uploads_svc.accept_many(pairs, pdir)
+
+    if result.added:
+        with db.connection_for() as conn:
+            updated = projects.advance_stage(conn, pid, "downloading")
+        _publish_project_state(updated)
+    return result.as_dict()
+
+
 @app.get("/api/projects/{pid}/download/status")
 def download_status(pid: int) -> dict[str, Any]:
     with db.connection_for() as conn:
@@ -625,6 +662,28 @@ def list_files(pid: int, bucket: str = "download") -> dict[str, Any]:
     return {"items": items, "count": len(items)}
 
 
+def _thumb_response(src: Path, size: int) -> FileResponse:
+    """统一 thumb 响应：弱 etag（基于 src mtime+size）+ no-cache 强制重验。
+
+    早先用 `Cache-Control: public, max-age=86400` 会让浏览器记住所有响应 24h，
+    包括重启过渡期的失败响应；用户视角就是「重启后图片加载不了」。改用 etag +
+    no-cache 后，浏览器每次发条件请求，命中走 304 几 ms，错过响应不再阻塞。
+    """
+    out = thumb_cache.get_or_make_thumb(src, size)
+    try:
+        mtime_ns = out.stat().st_mtime_ns
+    except OSError:
+        mtime_ns = 0
+    etag = f'W/"{mtime_ns}-{size}"'
+    return FileResponse(
+        out,
+        headers={
+            "Cache-Control": "no-cache, must-revalidate",
+            "ETag": etag,
+        },
+    )
+
+
 @app.get("/api/projects/{pid}/thumb")
 def project_thumb(
     pid: int,
@@ -636,6 +695,9 @@ def project_thumb(
 
     缓存路径：`studio_data/thumb_cache/{sha1(src+mtime+size)}.jpg`。
     源文件 mtime 变化会自动 invalidate（hash 变）。
+
+    Cache 策略见 `_thumb_response` —— 不让浏览器长缓存，避免重启过渡期失败响应
+    把图片锁死 24h。
     """
     if bucket != "download":
         raise HTTPException(400, "PP2 仅支持 bucket=download")
@@ -647,9 +709,9 @@ def project_thumb(
         raise HTTPException(404, f"项目不存在: id={pid}")
     f = projects.project_dir(p["id"], p["slug"]) / "download" / name
     if not f.exists() or f.suffix.lower() not in datasets.IMAGE_EXTS:
+        logger.info("thumb 404: pid=%s bucket=%s name=%s -> %s", pid, bucket, name, f)
         raise HTTPException(404)
-    out = thumb_cache.get_or_make_thumb(f, size)
-    return FileResponse(out, headers={"Cache-Control": "public, max-age=86400"})
+    return _thumb_response(f, size)
 
 
 # /api/jobs/* —————————————————————————————————————————————————————————
@@ -809,9 +871,20 @@ def folder_op(
 # ---------------------------------------------------------------------------
 
 
+class Wd14Overrides(BaseModel):
+    """打标页对 wd14 设置的「本次任务覆盖」—— 仅在 worker 进程内生效，
+    不写回 secrets.json。"""
+    threshold_general: Optional[float] = None
+    threshold_character: Optional[float] = None
+    model_id: Optional[str] = None
+    local_dir: Optional[str] = None
+    blacklist_tags: Optional[list[str]] = None
+
+
 class TagJobRequest(BaseModel):
     tagger: str = "wd14"
     output_format: str = "txt"                # "txt" | "json"
+    wd14_overrides: Optional[Wd14Overrides] = None
 
 
 class CaptionEdit(BaseModel):
@@ -873,17 +946,24 @@ def start_tag(pid: int, vid: int, body: TagJobRequest) -> dict[str, Any]:
         raise HTTPException(400, "output_format must be txt|json")
     _, v, _ = _version_train_dir_or_404(pid, vid)
 
+    params: dict[str, Any] = {
+        "tagger": body.tagger,
+        "version_id": vid,
+        "output_format": body.output_format,
+    }
+    if body.tagger == "wd14" and body.wd14_overrides is not None:
+        # 仅保留用户实际填写的字段；空 dict 也不写
+        ov = body.wd14_overrides.model_dump(exclude_none=True)
+        if ov:
+            params["wd14_overrides"] = ov
+
     with db.connection_for() as conn:
         job = project_jobs.create_job(
             conn,
             project_id=pid,
             version_id=vid,
             kind="tag",
-            params={
-                "tagger": body.tagger,
-                "version_id": vid,
-                "output_format": body.output_format,
-            },
+            params=params,
         )
         # 推 stage：tagging
         if v["stage"] in ("curating",):
@@ -1386,9 +1466,12 @@ def version_thumb(
     else:
         f = vdir / name
     if not f.exists() or f.suffix.lower() not in datasets.IMAGE_EXTS:
+        logger.info(
+            "version thumb 404: pid=%s vid=%s bucket=%s folder=%s name=%s -> %s",
+            pid, vid, bucket, folder, name, f,
+        )
         raise HTTPException(404)
-    out = thumb_cache.get_or_make_thumb(f, size)
-    return FileResponse(out, headers={"Cache-Control": "public, max-age=86400"})
+    return _thumb_response(f, size)
 
 
 # ---------------------------------------------------------------------------
@@ -1492,7 +1575,17 @@ def cancel_task(task_id: int) -> dict[str, Any]:
 
 @app.post("/api/queue/{task_id}/retry")
 def retry_task(task_id: int) -> dict[str, Any]:
-    """已结束任务重新入队：复制 config_name 创建新 task。"""
+    """已结束任务重新入队：复制完整训练上下文创建新 task。
+
+    需要复制的字段（PP6.1+ 引入；老的 retry 只复制 name/config_name/priority
+    会让 supervisor 走老降级路径用全局 preset 而不是 version 私有 config，
+    导致重试参数与原任务不一致）：
+    - config_path：version 私有 config 的绝对路径
+    - project_id / version_id：用于 monitor_state_path 解析与 stage 推进
+
+    不复制：status / pid / *_at / exit_code / error_msg / monitor_state_path
+    （都是「上次跑」的产物；新任务从 pending 开始，supervisor 会重新解析）。
+    """
     with db.connection_for() as conn:
         original = db.get_task(conn, task_id)
         if not original:
@@ -1505,6 +1598,12 @@ def retry_task(task_id: int) -> dict[str, Any]:
             config_name=original["config_name"],
             priority=original["priority"],
         )
+        copy_fields: dict[str, Any] = {}
+        for k in ("config_path", "project_id", "version_id"):
+            if original.get(k) is not None:
+                copy_fields[k] = original[k]
+        if copy_fields:
+            db.update_task(conn, new_id, **copy_fields)
         new_task = db.get_task(conn, new_id)
     bus.publish(
         {"type": "task_state_changed", "task_id": new_id, "status": "pending"}
@@ -1618,9 +1717,13 @@ def get_sample(
 ) -> FileResponse:
     """采样图代理。
 
-    PP6.1：`?task_id=N` 给了 → 从该任务的 monitor_state_path 同级 samples/
-    读取（即 `versions/{label}/samples/{filename}`）；没给 → 全局 OUTPUT_DIR
-    /samples/ 兜底（旧训练直接命令行的兼容）。
+    `?task_id=N` 给了 → 在该任务 monitor_state_path 周围按多个候选目录查找：
+    - `monitor_state.json` 同级 `samples/`（PP6.1 当初约定）
+    - `monitor_state.json` 同级 `output/samples/`（anima_train 实际写法 ——
+      sample_dir = output_dir/samples，output_dir 通常是 versions/{label}/output）
+    - 同级 `output/<任意子目录>/samples/`（兜底防 anima_train 用别的 output 名）
+
+    没给 task_id → 兜底全局 OUTPUT_DIR/samples/（旧训练直接命令行的兼容）。
     """
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(400, "invalid filename")
@@ -1631,12 +1734,26 @@ def get_sample(
                 "SELECT monitor_state_path FROM tasks WHERE id = ?",
                 (task_id,),
             ).fetchone()
-        if row and row["monitor_state_path"]:
-            # samples 与 monitor_state.json 同级
-            samples_dir = Path(row["monitor_state_path"]).parent / "samples"
-            path = samples_dir / filename
-            if path.exists():
-                return FileResponse(path)
+        if not row or not row["monitor_state_path"]:
+            raise HTTPException(404)
+        monitor_dir = Path(row["monitor_state_path"]).parent
+        candidates = [
+            monitor_dir / "samples" / filename,
+            monitor_dir / "output" / "samples" / filename,
+        ]
+        # 再扫一层 output/<sub>/samples/ 兜底（用户改 output_dir 名字时仍能找到）
+        output_root = monitor_dir / "output"
+        if output_root.is_dir():
+            for sub in output_root.iterdir():
+                if sub.is_dir():
+                    candidates.append(sub / "samples" / filename)
+        for p in candidates:
+            if p.exists():
+                return FileResponse(p)
+        logger.info(
+            "sample 404: task_id=%s file=%s tried=%s",
+            task_id, filename, [str(p) for p in candidates],
+        )
         raise HTTPException(404)
 
     path = OUTPUT_DIR / "samples" / filename

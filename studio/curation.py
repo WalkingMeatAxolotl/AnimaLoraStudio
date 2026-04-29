@@ -4,6 +4,8 @@
 - 复制 / 移除只动 `versions/{label}/train/{folder}/` 的副本
 - 文件名做差集：left = download − all-train，right = train 按 folder 分组
 - 子文件夹遵 Kohya 风格 N_xxx（PP4 / PP6 训练时仍按 dataset.parse_repeat 解析）
+- 每张图返回 `{name, mtime}`（mtime 为 unix 秒），排序由前端按用户偏好决定；
+  后端只保证按 name 字典序的稳定输出
 
 约束：
 - 不允许 path traversal（folder / 文件名都校验）
@@ -67,13 +69,25 @@ def _version_train_dir(conn, project_id: int, version_id: int) -> tuple[
     return p, v, train_dir
 
 
-def _list_image_names(d: Path) -> list[str]:
+def _list_image_entries(d: Path) -> list[dict[str, Any]]:
+    """目录下的图像列表 → `[{name, mtime}, ...]`，按 name 字典序稳定输出。
+
+    mtime 取自磁盘 stat，单位为 unix 秒（float）；前端拿到后可按 id / name /
+    mtime 自由重排。
+    """
     if not d.exists():
         return []
-    return sorted(
-        f.name for f in d.iterdir()
-        if f.is_file() and f.suffix.lower() in IMAGE_EXTS
-    )
+    entries: list[dict[str, Any]] = []
+    for f in d.iterdir():
+        if not f.is_file() or f.suffix.lower() not in IMAGE_EXTS:
+            continue
+        try:
+            mtime = f.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        entries.append({"name": f.name, "mtime": mtime})
+    entries.sort(key=lambda e: e["name"])
+    return entries
 
 
 # ---------------------------------------------------------------------------
@@ -81,34 +95,37 @@ def _list_image_names(d: Path) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def list_download(conn, project_id: int) -> list[str]:
+def list_download(conn, project_id: int) -> list[dict[str, Any]]:
     p, pdir = _project_dir(conn, project_id)
-    return _list_image_names(pdir / "download")
+    return _list_image_entries(pdir / "download")
 
 
 def list_train(
     conn, project_id: int, version_id: int
-) -> dict[str, list[str]]:
-    """train 子文件夹 → [filename, ...]。"""
+) -> dict[str, list[dict[str, Any]]]:
+    """train 子文件夹 → [{name, mtime}, ...]。"""
     _, _, train = _version_train_dir(conn, project_id, version_id)
     if not train.exists():
         return {}
-    out: dict[str, list[str]] = {}
+    out: dict[str, list[dict[str, Any]]] = {}
     for sub in sorted(train.iterdir()):
         if sub.is_dir():
-            out[sub.name] = _list_image_names(sub)
+            out[sub.name] = _list_image_entries(sub)
     return out
 
 
 def curation_view(conn, project_id: int, version_id: int) -> dict[str, Any]:
-    """前端用：left = download − train，right = train 按 folder 分组。"""
+    """前端用：left = download − train，right = train 按 folder 分组。
+
+    每个文件返回 `{name, mtime}`；前端用 mtime 提供「按下载时间」排序。
+    """
     download = list_download(conn, project_id)
     train = list_train(conn, project_id, version_id)
     used: set[str] = set()
     for files in train.values():
-        used.update(files)
+        used.update(e["name"] for e in files)
     return {
-        "left": [name for name in download if name not in used],
+        "left": [e for e in download if e["name"] not in used],
         "right": train,
         "download_total": len(download),
         "train_total": sum(len(v) for v in train.values()),

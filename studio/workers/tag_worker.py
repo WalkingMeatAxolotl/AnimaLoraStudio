@@ -72,6 +72,7 @@ def run(job_id: int) -> int:
             tagger_name = params.get("tagger", "wd14")
             version_id = int(params["version_id"])
             fmt = str(params.get("output_format", "txt"))
+            wd14_overrides = params.get("wd14_overrides") or None
 
             with db.connection_for() as conn:
                 v = versions.get_version(conn, version_id)
@@ -92,8 +93,12 @@ def run(job_id: int) -> int:
                 f"images={len(images)} format={fmt}"
             )
 
-            tagger = get_tagger(tagger_name)
+            tagger = get_tagger(tagger_name, overrides=wd14_overrides)
             tagger.prepare()
+            if wd14_overrides:
+                progress(
+                    f"[overrides] {', '.join(f'{k}={v}' for k, v in wd14_overrides.items())}"
+                )
             progress(f"[ready] {tagger_name} 已就绪")
 
             ok = 0

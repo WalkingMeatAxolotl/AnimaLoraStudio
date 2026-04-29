@@ -18,12 +18,17 @@ import torch
 from torch import nn
 
 # Diffusers 相关
+# diffusers 0.31 之后把 `CosmosPipeline` 重命名为 `CosmosTextToWorldPipeline`，
+# 这里用别名兼容当前 0.36，保持下方代码用 `CosmosPipeline` 的写法不变。
 from diffusers import (
     AutoencoderKLCosmos,
     CosmosTransformer3DModel,
     FlowMatchEulerDiscreteScheduler,
-    CosmosPipeline,
 )
+try:
+    from diffusers import CosmosPipeline  # 旧版 diffusers
+except ImportError:
+    from diffusers import CosmosTextToWorldPipeline as CosmosPipeline
 from diffusers.models.attention_processor import AttnProcessor2_0
 from diffusers.utils.import_utils import is_xformers_available
 
@@ -32,9 +37,15 @@ from peft import LoraConfig, get_peft_model, PeftModel
 from peft.tuners.lora import LoraLayer
 
 # LyCORIS 相关
+# 新版 lycoris-lora 把 `PRESET_NETWORK_CONFIGS` 重命名为 `BUILTIN_PRESET_CONFIGS`，
+# 旧名不存在会让整个 try 块抛 ImportError，误把 LYCORIS_AVAILABLE 设成 False
+# （但 lycoris 其实装好了）。这里两个名字都试一遍。
 try:
     from lycoris.kohya import create_network_from_weights
-    from lycoris.config import PRESET_NETWORK_CONFIGS
+    try:
+        from lycoris.config import PRESET_NETWORK_CONFIGS  # 旧版
+    except ImportError:
+        from lycoris.config import BUILTIN_PRESET_CONFIGS as PRESET_NETWORK_CONFIGS  # 新版
     LYCORIS_AVAILABLE = True
 except ImportError:
     LYCORIS_AVAILABLE = False

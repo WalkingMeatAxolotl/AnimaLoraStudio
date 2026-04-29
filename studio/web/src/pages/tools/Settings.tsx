@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, type Secrets, type SecretsPatch } from '../../api/client'
+import {
+  api,
+  DEFAULT_WD14_MODELS,
+  type Secrets,
+  type SecretsPatch,
+} from '../../api/client'
 import { useToast } from '../../components/Toast'
 
 const MASK = '***'
@@ -29,7 +34,8 @@ const EMPTY: Secrets = {
     prompt_template: 'Descriptive Caption',
   },
   wd14: {
-    model_id: 'SmilingWolf/wd-vit-tagger-v3',
+    model_id: 'SmilingWolf/wd-eva02-large-tagger-v3',
+    model_ids: [...DEFAULT_WD14_MODELS],
     local_dir: null,
     threshold_general: 0.35,
     threshold_character: 0.85,
@@ -253,12 +259,29 @@ export default function SettingsPage() {
       </Section>
 
       <Section title="WD14">
-        <Field label="model_id">
-          <input
-            type="text"
+        <Field label="model_id (当前选用)">
+          <select
             value={draft.wd14.model_id}
             onChange={(e) => update('wd14', 'model_id', e.target.value)}
             className={textInput}
+          >
+            {/* 候选列表渲染。后端 validator 会保证 model_id ∈ model_ids，
+             * 所以这里 dropdown 一定能命中当前值。 */}
+            {(draft.wd14.model_ids.length > 0
+              ? draft.wd14.model_ids
+              : [...DEFAULT_WD14_MODELS]
+            ).map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="候选模型 (model_ids)">
+          <ModelIdsEditor
+            ids={draft.wd14.model_ids}
+            currentId={draft.wd14.model_id}
+            onChange={(next) => update('wd14', 'model_ids', next)}
           />
         </Field>
         <Field label="local_dir (留空 = 自动 HF 下载)">
@@ -391,6 +414,95 @@ function SensitiveInput({
       onChange={(e) => onChange(e.target.value || MASK)}
       className={textInput}
     />
+  )
+}
+
+function ModelIdsEditor({
+  ids,
+  currentId,
+  onChange,
+}: {
+  ids: string[]
+  currentId: string
+  onChange: (next: string[]) => void
+}) {
+  const [draft, setDraft] = useState('')
+  const seen = new Set(ids)
+
+  const add = () => {
+    const v = draft.trim()
+    if (!v) return
+    if (seen.has(v)) {
+      setDraft('')
+      return
+    }
+    onChange([...ids, v])
+    setDraft('')
+  }
+  const remove = (m: string) => {
+    if (m === currentId) return // 后端 validator 会兜底，但前端先拦一道，提示更清晰
+    onChange(ids.filter((x) => x !== m))
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <ul className="space-y-1">
+        {ids.map((m) => {
+          const isCurrent = m === currentId
+          return (
+            <li
+              key={m}
+              className={
+                'flex items-center gap-2 px-2 py-1 rounded border text-xs ' +
+                (isCurrent
+                  ? 'border-cyan-700 bg-cyan-950/30'
+                  : 'border-slate-700 bg-slate-900/40')
+              }
+            >
+              <code className="font-mono text-slate-200 truncate flex-1 min-w-0">
+                {m}
+              </code>
+              {isCurrent ? (
+                <span className="text-[10px] text-cyan-300">当前</span>
+              ) : (
+                <button
+                  onClick={() => remove(m)}
+                  className="text-[11px] text-slate-500 hover:text-red-400 px-1"
+                  title="删除"
+                >
+                  ×
+                </button>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+      <div className="flex gap-1.5">
+        <input
+          type="text"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              add()
+            }
+          }}
+          placeholder="添加 HuggingFace 模型 ID，如 SmilingWolf/wd-vit-tagger-v3"
+          className={textInput + ' flex-1'}
+        />
+        <button
+          onClick={add}
+          disabled={!draft.trim() || seen.has(draft.trim())}
+          className="px-2.5 py-1 rounded bg-slate-700 hover:bg-slate-600 text-xs text-slate-200 disabled:bg-slate-800 disabled:text-slate-500"
+        >
+          + 添加
+        </button>
+      </div>
+      <p className="text-[10px] text-slate-500">
+        当前选用的模型不能在此删除，需先在上方下拉切到另一个再删。
+      </p>
+    </div>
   )
 }
 

@@ -76,11 +76,20 @@ export interface JoyCaptionConfig {
 
 export interface WD14Config {
   model_id: string
+  /** 候选模型列表；用户在「设置 → WD14」里维护，model_id 必属于该列表。 */
+  model_ids: string[]
   local_dir: string | null
   threshold_general: number
   threshold_character: number
   blacklist_tags: string[]
 }
+
+export const DEFAULT_WD14_MODELS: readonly string[] = [
+  'SmilingWolf/wd-eva02-large-tagger-v3',
+  'SmilingWolf/wd-vit-tagger-v3',
+  'SmilingWolf/wd-vit-large-tagger-v3',
+  'SmilingWolf/wd-v1-4-convnext-tagger-v2',
+]
 
 export interface Secrets {
   gelbooru: GelbooruConfig
@@ -180,11 +189,26 @@ export interface DownloadFile {
   has_meta: boolean
 }
 
+export interface UploadResult {
+  added: string[]
+  skipped: { name: string; reason: string }[]
+}
+
 // ---- curation (PP3) -------------------------------------------------------
 
+/**
+ * Curation 列表里的一项：文件名 + 磁盘 mtime（unix 秒）。
+ * mtime 用于支持「按下载时间」排序；后端不做排序保证（除按 name 字典序的稳定输出），
+ * 排序由前端按用户偏好决定。
+ */
+export interface CurationItem {
+  name: string
+  mtime: number
+}
+
 export interface CurationView {
-  left: string[] // download − train
-  right: Record<string, string[]> // folder → filenames
+  left: CurationItem[] // download − train
+  right: Record<string, CurationItem[]> // folder → items
   download_total: number
   train_total: number
   folders: string[]
@@ -563,6 +587,32 @@ export const api = {
     req<{ job: Job | null; log_tail: string }>(
       `/api/projects/${pid}/download/status`
     ),
+  /**
+   * 本地上传：单图（jpg/png）或 zip 包。绕过 `req` 的 JSON header，
+   * 让浏览器自己加 multipart boundary。后端同步处理并返回结果。
+   */
+  uploadProjectFiles: async (
+    pid: number,
+    files: File[]
+  ): Promise<UploadResult> => {
+    const fd = new FormData()
+    for (const f of files) fd.append('files', f, f.name)
+    const resp = await fetch(`/api/projects/${pid}/upload`, {
+      method: 'POST',
+      body: fd,
+    })
+    if (!resp.ok) {
+      let detail = `${resp.status} ${resp.statusText}`
+      try {
+        const body = await resp.json()
+        if (body?.detail) detail = body.detail
+      } catch {
+        /* ignore */
+      }
+      throw new Error(detail)
+    }
+    return (await resp.json()) as UploadResult
+  },
   listFiles: (pid: number, bucket = 'download') =>
     req<{ items: DownloadFile[]; count: number }>(
       `/api/projects/${pid}/files?bucket=${encodeURIComponent(bucket)}`
@@ -590,6 +640,17 @@ export const api = {
     body: {
       tagger: TaggerName
       output_format?: 'txt' | 'json'
+      /**
+       * wd14 本次任务的临时覆盖；仅在 worker 进程生效，不写回 settings。
+       * 字段为 undefined / null 时沿用全局 settings。
+       */
+      wd14_overrides?: {
+        threshold_general?: number | null
+        threshold_character?: number | null
+        model_id?: string | null
+        local_dir?: string | null
+        blacklist_tags?: string[] | null
+      }
     }
   ) =>
     req<Job>(`/api/projects/${pid}/versions/${vid}/tag`, {

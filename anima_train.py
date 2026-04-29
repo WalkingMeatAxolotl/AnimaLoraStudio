@@ -24,6 +24,16 @@ import time
 import types
 from pathlib import Path
 
+# Windows 控制台默认 cp936，logging / print 写中文会 UnicodeEncodeError，
+# 默认 handler 的 errors='backslashreplace' 会把中文转成 \uXXXX 形式 ——
+# 这就是 task log 里看到的「检查 VAE」之类乱码的来源。
+# 强制 stdout/stderr UTF-8 + replace 让中文 / emoji 永远直出。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass
+
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset

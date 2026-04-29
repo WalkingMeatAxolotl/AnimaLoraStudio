@@ -171,6 +171,45 @@ def test_cancel_pending(env) -> None:
     assert _task_status(env["db"], tid) == "canceled"
 
 
+def test_cancel_running_returns_immediately(env) -> None:
+    """cancel running task 必须**立刻返回**，不能阻塞 grace 期 (30s)。
+
+    回归 Q6：原 `_terminate_current` 同步等 wait(grace)，让 web 请求挂 30s。
+    现在通过 `_signal_terminate_async` 起后台 grace timer，cancel() 立即返。
+    """
+    events, on_event = _events_collector()
+
+    # 长时间 sleep 的子进程，模拟训练
+    sleep_cmd = lambda *_: [sys.executable, "-c", "import time; time.sleep(30)"]
+
+    sup = Supervisor(
+        on_event=on_event,
+        cmd_builder=sleep_cmd,
+        db_path=env["db"], logs_dir=env["logs"], configs_dir=env["configs"],
+        poll_interval=0.05,
+        terminate_grace=20.0,  # 即使 grace=20s，cancel 也必须立即返
+    )
+    with db.connection_for(env["db"]) as conn:
+        tid = db.create_task(conn, name="t", config_name="fake")
+    sup.start()
+    try:
+        # 等子进程跑起来
+        assert _wait_for(
+            lambda: _task_status(env["db"], tid) == "running", timeout=5
+        )
+        t0 = time.time()
+        assert sup.cancel(tid) is True
+        elapsed = time.time() - t0
+        # cancel 必须在 1s 内返回（远小于 grace 20s）
+        assert elapsed < 1.0, f"cancel blocked for {elapsed:.1f}s"
+        # supervisor 主循环 poll 到进程退出后会把 status 改成 canceled
+        assert _wait_for(
+            lambda: _task_status(env["db"], tid) == "canceled", timeout=15
+        )
+    finally:
+        sup.stop()
+
+
 def test_orphan_running_marked_failed_on_start(env) -> None:
     """启动时清理 status='running' 但 pid 已死的任务。"""
     with db.connection_for(env["db"]) as conn:

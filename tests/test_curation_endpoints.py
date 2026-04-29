@@ -46,6 +46,10 @@ def _drop(client, pid: int, name: str = "1.png") -> Path:
 # ---------------------------------------------------------------------------
 
 
+def _names(entries: list[dict]) -> list[str]:
+    return [e["name"] for e in entries]
+
+
 def test_curation_view_initial_empty(client: TestClient) -> None:
     """新 version 默认有一个 1_data 训练文件夹，里面是空的。"""
     pid, vid = _make(client)
@@ -69,8 +73,10 @@ def test_copy_then_view(client: TestClient) -> None:
     ).json()
     assert r["copied"] == ["1.png"]
     view = client.get(f"/api/projects/{pid}/versions/{vid}/curation").json()
-    assert view["left"] == ["2.png"]
-    assert view["right"]["5_concept"] == ["1.png"]
+    assert _names(view["left"]) == ["2.png"]
+    # mtime 字段附带；前端按需排序
+    assert all("mtime" in e for e in view["left"])
+    assert _names(view["right"]["5_concept"]) == ["1.png"]
     assert view["right"]["1_data"] == []
     assert set(view["folders"]) == {"1_data", "5_concept"}
 
@@ -102,7 +108,7 @@ def test_remove_only_deletes_train(client: TestClient) -> None:
     assert r["removed"] == ["1.png"]
     # download/ 应保留
     view = client.get(f"/api/projects/{pid}/versions/{vid}/curation").json()
-    assert view["left"] == ["1.png"]
+    assert _names(view["left"]) == ["1.png"]
     assert view["right"]["5_x"] == []
     assert view["right"]["1_data"] == []
 

@@ -87,6 +87,55 @@ def test_preprocess_pads_to_square(isolated_secrets: Path) -> None:
     assert arr[0, 8, 8, 2] == pytest.approx(255.0, abs=1.0)
 
 
+def test_overrides_replace_thresholds(isolated_secrets: Path) -> None:
+    """overrides 应在内存里盖过 secrets 的 threshold，不写盘。"""
+    secrets.update({
+        "wd14": {
+            "threshold_general": 0.5,
+            "threshold_character": 0.85,
+            "blacklist_tags": [],
+        }
+    })
+    t = wd14_tagger.WD14Tagger(
+        overrides={"threshold_general": 0.2, "blacklist_tags": ["solo"]}
+    )
+    t._tags = ["1girl", "solo", "rare"]
+    t._tag_categories = [0, 0, 0]
+    logits = np.array([[0.3, 0.9, 0.25]])
+    tags, _ = t._postprocess(logits)
+    # threshold_general 被压到 0.2 → 1girl(0.3) / rare(0.25) 都过；solo 被新 blacklist 屏蔽
+    assert sorted(tags) == ["1girl", "rare"]
+    # 全局没被改写
+    assert secrets.load().wd14.threshold_general == 0.5
+    assert secrets.load().wd14.blacklist_tags == []
+
+
+def test_overrides_none_falls_back_to_global(isolated_secrets: Path) -> None:
+    """overrides 中字段为 None / 缺失 → 沿用全局 settings。"""
+    secrets.update({"wd14": {"threshold_general": 0.7}})
+    t = wd14_tagger.WD14Tagger(overrides={"threshold_general": None})
+    cfg = t._cfg()
+    assert cfg.threshold_general == 0.7
+
+
+def test_overrides_redirect_local_dir(isolated_secrets: Path) -> None:
+    """override 的 local_dir 改路径解析，不改全局。"""
+    a = isolated_secrets / "a"
+    b = isolated_secrets / "b"
+    _make_local_model(a, [("x", 0)])
+    _make_local_model(b, [("y", 0)])
+    secrets.update({"wd14": {"local_dir": str(a)}})
+
+    # 不带 overrides → 走 a
+    assert wd14_tagger.WD14Tagger()._resolve_model_dir() == a
+    # 带 override → 走 b，全局仍是 a
+    assert (
+        wd14_tagger.WD14Tagger(overrides={"local_dir": str(b)})._resolve_model_dir()
+        == b
+    )
+    assert secrets.load().wd14.local_dir == str(a)
+
+
 def test_tag_iterator_handles_io_error(
     isolated_secrets: Path, tmp_path: Path
 ) -> None:

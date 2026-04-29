@@ -177,7 +177,12 @@ class Supervisor:
             self._thread.join(timeout=timeout)
 
     def cancel(self, task_id: int) -> bool:
-        """取消 task：pending → status=canceled；running → SIGTERM。"""
+        """取消 task：pending → status=canceled；running → 异步发信号立即返回。
+
+        异步路径关键：**不阻塞 web 请求线程**。supervisor 主循环会自然 poll
+        proc.poll() 拿到退出码并走 `_finish_current` 流程，把 status 写为
+        canceled。后台 grace timer 在 30s 后还没退就强杀整棵进程树。
+        """
         with db.connection_for(self._db_path) as conn:
             task = db.get_task(conn, task_id)
             if not task:
@@ -195,12 +200,12 @@ class Supervisor:
             and self._current_kind == "task"
             and self._current_id == task_id
         ):
-            self._terminate_current()
+            self._signal_terminate_async()
             return True
         return False
 
     def cancel_job(self, job_id: int) -> bool:
-        """取消 project_job：pending → canceled；running → SIGTERM。"""
+        """取消 project_job：pending → canceled；running → 异步发信号立即返回。"""
         with db.connection_for(self._db_path) as conn:
             job = project_jobs.get_job(conn, job_id)
             if not job:
@@ -223,7 +228,7 @@ class Supervisor:
             and self._current_kind == "job"
             and self._current_id == job_id
         ):
-            self._terminate_current()
+            self._signal_terminate_async()
             return True
         return False
 
@@ -415,12 +420,27 @@ class Supervisor:
         creationflags = 0
         if os.name == "nt":
             creationflags = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+        # Windows 默认 stdout 用 cp936；任何 worker 写中文 / emoji 会触发
+        # UnicodeEncodeError，logging 默认 backslashreplace 转成 \uXXXX，让
+        # task log 里全是乱码。这里给所有子进程兜底 UTF-8 + 不缓冲。
+        env = os.environ.copy()
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+        env.setdefault("PYTHONUTF8", "1")
+        env.setdefault("PYTHONUNBUFFERED", "1")
+        # 减少底层库的加载进度条（safetensors / transformers / accelerate 等
+        # 在 stdout=pipe 时会逐行打几百行 `Loading weights: NN%|...`，淹没用户
+        # 自己的训练日志）。仅静音「加载进度」，不影响 logger.error / 训练步进。
+        env.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+        env.setdefault("TRANSFORMERS_VERBOSITY", "error")
+        env.setdefault("DIFFUSERS_VERBOSITY", "error")
+        env.setdefault("ACCELERATE_DISABLE_RICH", "1")
         return subprocess.Popen(
             cmd,
             stdout=log_fp,
             stderr=subprocess.STDOUT,
             cwd=str(REPO_ROOT),
             creationflags=creationflags,
+            env=env,
         )
 
     def _finish_current(self, rc: int) -> None:
@@ -490,27 +510,94 @@ class Supervisor:
         self._cancel_pending = False
 
     def _terminate_current(self) -> None:
+        """同步终止当前子进程（仅 supervisor.stop() 用 —— 进程退出时走这里）。
+
+        web 请求路径下的 cancel 请用 `_signal_terminate_async`，避免阻塞
+        请求线程 30 秒。
+        """
         if not self._current_proc:
             return
         self._cancel_pending = True
+        proc = self._current_proc
+        self._send_terminate_signal(proc)
         try:
-            if os.name == "nt":
-                self._current_proc.send_signal(signal.CTRL_BREAK_EVENT)
-            else:
-                self._current_proc.terminate()
-        except Exception:
-            logger.exception("send terminate signal failed")
-        try:
-            self._current_proc.wait(timeout=self._grace)
+            proc.wait(timeout=self._grace)
         except subprocess.TimeoutExpired:
             logger.warning(
-                "%s %s did not exit in %.0fs, killing",
+                "%s %s did not exit in %.0fs, killing process tree",
                 self._current_kind,
                 self._current_id,
                 self._grace,
             )
-            self._current_proc.kill()
+            _kill_process_tree(proc.pid)
             try:
-                self._current_proc.wait(timeout=5)
+                proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 pass
+
+    def _signal_terminate_async(self) -> None:
+        """非阻塞：发软终止信号，启动后台 grace timer 强杀进程树。
+
+        web 请求线程立刻返回，让 reload() 不被取消请求阻塞 30 秒。supervisor
+        主循环每 POLL_INTERVAL 秒 poll proc.poll()，进程一旦退出就走
+        `_finish_current` 把 status 改成 canceled 并 publish 事件。
+        """
+        if not self._current_proc:
+            return
+        self._cancel_pending = True
+        proc = self._current_proc
+        self._send_terminate_signal(proc)
+
+        grace = self._grace
+
+        def _grace_then_kill_tree() -> None:
+            # 不能用 proc.wait() — 会跟 supervisor 主循环的 poll 抢；改成轮询
+            deadline = time.time() + grace
+            while time.time() < deadline:
+                if proc.poll() is not None:
+                    return
+                time.sleep(0.5)
+            if proc.poll() is None:
+                logger.warning(
+                    "proc %d did not exit in %.0fs, killing process tree",
+                    proc.pid, grace,
+                )
+                _kill_process_tree(proc.pid)
+
+        threading.Thread(
+            target=_grace_then_kill_tree,
+            name=f"cancel-grace-{proc.pid}",
+            daemon=True,
+        ).start()
+
+    @staticmethod
+    def _send_terminate_signal(proc: subprocess.Popen) -> None:
+        try:
+            if os.name == "nt":
+                proc.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                proc.terminate()
+        except Exception:
+            logger.exception("send terminate signal failed")
+
+
+def _kill_process_tree(pid: int) -> None:
+    """杀掉以 pid 为根的整棵进程树。
+
+    Windows 上 `proc.kill()` 只杀 immediate child，DataLoader workers /
+    accelerate 的 sub-subprocess 会留下来占着 GPU；用 `taskkill /T /F` 能
+    递归到整个进程树。POSIX 用 killpg。
+    """
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(pid)],
+                check=False, capture_output=True, timeout=10,
+            )
+        except Exception:
+            logger.exception("taskkill /T /F failed for pid %d", pid)
+    else:
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+        except Exception:
+            logger.exception("killpg failed for pid %d", pid)

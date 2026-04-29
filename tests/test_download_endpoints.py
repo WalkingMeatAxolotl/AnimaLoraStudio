@@ -235,6 +235,95 @@ def test_thumb_rejects_path_traversal(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
+# upload
+# ---------------------------------------------------------------------------
+
+
+def _zip_bytes(entries: dict[str, bytes]) -> bytes:
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for n, d in entries.items():
+            zf.writestr(n, d)
+    return buf.getvalue()
+
+
+def test_upload_single_image(client: TestClient) -> None:
+    p = _make_project(client)
+    r = client.post(
+        f"/api/projects/{p['id']}/upload",
+        files=[("files", ("a.jpg", b"\xff\xd8jpgdata", "image/jpeg"))],
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["added"] == ["a.jpg"]
+    assert body["skipped"] == []
+    pdir = projects.project_dir(p["id"], p["slug"]) / "download"
+    assert (pdir / "a.jpg").read_bytes() == b"\xff\xd8jpgdata"
+    # 推进 stage → downloading（与 booru 下载一致）
+    p2 = client.get(f"/api/projects/{p['id']}").json()
+    assert p2["stage"] == "downloading"
+
+
+def test_upload_zip_extracts_images(client: TestClient) -> None:
+    p = _make_project(client)
+    blob = _zip_bytes({"a.jpg": b"AA", "sub/b.png": b"BB", "skip.txt": b"X"})
+    r = client.post(
+        f"/api/projects/{p['id']}/upload",
+        files=[("files", ("pack.zip", blob, "application/zip"))],
+    )
+    body = r.json()
+    assert sorted(body["added"]) == ["a.jpg", "b.png"]
+    assert any("skip.txt" in s["name"] for s in body["skipped"])
+
+
+def test_upload_rejects_unsupported_format(client: TestClient) -> None:
+    p = _make_project(client)
+    r = client.post(
+        f"/api/projects/{p['id']}/upload",
+        files=[("files", ("note.txt", b"x", "text/plain"))],
+    )
+    body = r.json()
+    assert body["added"] == []
+    assert len(body["skipped"]) == 1
+    # 没有任何文件落盘 → stage 不应被推到 downloading
+    p2 = client.get(f"/api/projects/{p['id']}").json()
+    assert p2["stage"] == "created"
+
+
+def test_upload_skip_existing(client: TestClient) -> None:
+    p = _make_project(client)
+    pdir = projects.project_dir(p["id"], p["slug"]) / "download"
+    pdir.mkdir(parents=True, exist_ok=True)
+    (pdir / "x.png").write_bytes(b"old")
+    r = client.post(
+        f"/api/projects/{p['id']}/upload",
+        files=[("files", ("x.png", b"new", "image/png"))],
+    )
+    body = r.json()
+    assert body["added"] == []
+    assert body["skipped"][0]["reason"] == "已存在，跳过"
+    assert (pdir / "x.png").read_bytes() == b"old"
+
+
+def test_upload_404_for_unknown_project(client: TestClient) -> None:
+    r = client.post(
+        "/api/projects/999/upload",
+        files=[("files", ("a.jpg", b"a", "image/jpeg"))],
+    )
+    assert r.status_code == 404
+
+
+def test_upload_400_for_no_files(client: TestClient) -> None:
+    p = _make_project(client)
+    # FastAPI 在没有任何 files= 表单时返回 422（schema validation），
+    # 此测验证 422/400 两者皆可接受作为「客户端错」。
+    r = client.post(f"/api/projects/{p['id']}/upload")
+    assert r.status_code in (400, 422)
+
+
+# ---------------------------------------------------------------------------
 # cancel
 # ---------------------------------------------------------------------------
 

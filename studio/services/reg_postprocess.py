@@ -1,17 +1,32 @@
-"""正则集分辨率聚类后处理（PP5.5）。
+"""正则集长宽比聚类后处理（PP5.5；2026-04-28 修正）。
 
-由 `regex_dataset_builder.py` 的 postprocess 块库化而来。逻辑必须与源脚本
-一致 — 阈值 / 常量 / K 选择策略 / 合并规则照搬：
+**目的**：把长宽比（ar）接近的图 center-crop 成相同 ar，让 ARB 训练时多张图
+落入同一桶 → 减少桶数。**只对齐 ar，不强制对齐分辨率** —— 训练 dataloader
+会按桶把每张图 resize 到桶分辨率，所以 reg 集只要 ar 一致即可，分辨率保留
+原图（不 upscale 不糊）。
 
+由 `regex_dataset_builder.py` 的 postprocess 块库化而来；2026-04-28 修了
+源脚本两个 bug：
+1. KMeans 特征里掺了 log(width)，导致同 ar 但分辨率差异大的图被分到不同
+   cluster；现仅用 [aspect_ratio]
+2. smart 模式 ar 完全相等时走 stretch 公式，把 resize 比例算成 crop_ratio；
+   现 smart 永远只 crop ar 不 resize，crop_ratio 纯按 ar 差算
+
+算法：
 - min_cluster_size = 2（< 2 → 不聚类，全放 cluster 0）
-- 特征：[aspect_ratio, log(max(width, 1))] z-score 标准化
-- KMeans(random_state=42, n_init=10)
-- 从 k=1 递增到 max_k = len(images)，找第一个让所有 cluster 中
-  max_crop ≤ max_crop_ratio 的方案
-- 找不到满足限制的 K → 保持原样不修改（返回 None）
+- 特征：仅 [aspect_ratio]（z-score 标准化）
+- KMeans(random_state=42, n_init=10)，从 k=1 递增到 max_k = len(images)，找
+  第一个让所有 cluster 中 max_crop ≤ max_crop_ratio 的方案
+- 找不到满足限制的 K → 保持原样不修改（返回 None)
 - 合并相似聚类：abs aspect 差 < 0.02 OR 相对差 < 5% 且合并后仍满足
   max_crop 限制
 - inplace = True 永远（PP5.5 决议：不做备份）
+
+method 语义：
+- `smart` (默认)：仅 center crop 到 target_ar，**保留原分辨率**（推荐；
+  ar 一致即落同 ARB 桶，不会因 upscale 糊化小图）
+- `stretch`：直接拉伸到 target_w × target_h（变形）
+- `crop`：先按 target_ar center crop 再 resize 到 target_w × target_h
 
 用户视角入口：`postprocess(reg_dir, *, method='smart', max_crop_ratio=0.1)`，
 返回 dict 摘要。失败 / 找不到 K 都不抛异常。
@@ -80,21 +95,22 @@ def _collect_images(reg_dir: Path) -> list[_ImageInfo]:
 def calculate_crop_ratio(
     img_w: int, img_h: int, target_w: int, target_h: int, method: str = "smart"
 ) -> float:
-    """与源脚本一致：smart / stretch / crop 三种方法的实际裁剪 / 拉伸比例。"""
+    """smart / stretch / crop 三种方法的「成本」估计，用于聚类阶段判 max_crop。
+
+    - smart：纯按 ar 差算，crop_ratio = 1 - min(orig_ar, target_ar) /
+      max(orig_ar, target_ar)。同 ar 返回 0；不参考绝对分辨率（修源脚本 bug）。
+    - stretch：max(|w_diff|/w, |h_diff|/h)，衡量拉伸幅度。
+    - crop：跟 smart 类似的 ar 差，但实际跑 resize_and_crop 时还要 resize 到
+      target_w × target_h，所以加上 resize 维度也合理；保持源脚本公式。
+    """
     if not img_w or not img_h or not target_w or not target_h:
         return 1.0
     if method == "smart":
-        original_ar = img_w / img_h
+        orig_ar = img_w / img_h
         target_ar = target_w / target_h
-        if abs(original_ar - target_ar) < 0.001:
-            wr = abs(img_w - target_w) / max(img_w, 1)
-            hr = abs(img_h - target_h) / max(img_h, 1)
-            return max(wr, hr)
-        if original_ar > target_ar:
-            scaled_w = img_w * (target_h / img_h)
-            return (scaled_w - target_w) / scaled_w if scaled_w > 0 else 0.0
-        scaled_h = img_h * (target_w / img_w)
-        return (scaled_h - target_h) / scaled_h if scaled_h > 0 else 0.0
+        big = max(orig_ar, target_ar)
+        small = min(orig_ar, target_ar)
+        return 1.0 - small / big if big > 0 else 0.0
     if method == "stretch":
         wr = abs(img_w - target_w) / max(img_w, 1)
         hr = abs(img_h - target_h) / max(img_h, 1)
@@ -226,14 +242,15 @@ def cluster_by_resolution(
 ) -> Optional[dict[int, list[_ImageInfo]]]:
     """从 k=1 递增找第一个满足 max_crop ≤ limit 的 K，再做合并。
 
+    特征仅 [aspect_ratio]（修源脚本 bug：原来 [ar, log(width)] 会让同 ar 但
+    分辨率差异大的图分到不同 cluster，与 ARB 分桶目的不符）。
+
     返回 None 表示找不到满足限制的方案 — 上层应该保持原样不动文件。
     """
     if len(images) < 2:
         return {0: list(images)} if images else None
 
-    features = np.array(
-        [[i.aspect_ratio, np.log(max(i.width, 1))] for i in images]
-    )
+    features = np.array([[i.aspect_ratio] for i in images], dtype=float)
     mean = features.mean(axis=0)
     std = features.std(axis=0)
     std = np.where(std == 0, 1, std)
@@ -277,7 +294,12 @@ def cluster_by_resolution(
 def resize_and_crop_image(
     image_path: Path, target_w: int, target_h: int, output_path: Path, method: str
 ) -> bool:
-    """与源脚本一致的 smart / stretch / crop。失败返回 False。"""
+    """smart / stretch / crop 三种实际写盘行为。失败返回 False。
+
+    smart 模式只 center-crop 到 target_ar，**保留原分辨率**（不 resize 不
+    upscale），因为 ARB 训练时 dataloader 会按桶 resize。stretch / crop
+    保持源脚本行为（强制对齐到 target_w × target_h）。
+    """
     try:
         with Image.open(image_path) as img:
             ow, oh = img.size
@@ -285,16 +307,18 @@ def resize_and_crop_image(
             target_ar = target_w / target_h if target_h > 0 else 1.0
 
             if method == "smart":
+                # 仅 center-crop 到 target_ar；保留尽可能大的原分辨率。
+                if abs(original_ar - target_ar) < 1e-6:
+                    img.save(output_path, quality=95)
+                    return True
                 if original_ar > target_ar:
-                    new_h = target_h
-                    new_w = int(ow * (target_h / oh))
+                    crop_w = max(1, int(round(oh * target_ar)))
+                    left = (ow - crop_w) // 2
+                    cropped = img.crop((left, 0, left + crop_w, oh))
                 else:
-                    new_w = target_w
-                    new_h = int(oh * (target_w / ow))
-                resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-                left = (new_w - target_w) // 2
-                top = (new_h - target_h) // 2
-                cropped = resized.crop((left, top, left + target_w, top + target_h))
+                    crop_h = max(1, int(round(ow / target_ar)))
+                    top = (oh - crop_h) // 2
+                    cropped = img.crop((0, top, ow, top + crop_h))
                 cropped.save(output_path, quality=95)
             elif method == "stretch":
                 resized = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
@@ -416,17 +440,25 @@ def postprocess(
             on_progress("[postprocess] [cancel] 用户中止")
             break
         cluster = clusters[cid]
-        tw, th, _tar = _adjusted_target_for_cluster(cluster)
+        tw, th, target_ar = _adjusted_target_for_cluster(cluster)
         on_progress(
-            f"[postprocess] 处理聚类 {cid} ({len(cluster)} 张) → {tw}x{th}"
+            f"[postprocess] 处理聚类 {cid} ({len(cluster)} 张) → "
+            f"{'ar=' + format(target_ar, '.3f') if method == 'smart' else f'{tw}x{th}'}"
         )
         targets.append((tw, th, len(cluster)))
         for info in cluster:
             if cancel_event and cancel_event.is_set():
                 break
-            if info.width == tw and info.height == th:
-                skipped += 1
-                continue
+            # smart 只对齐 ar、保留原分辨率，跳过条件按 ar 判；
+            # stretch / crop 仍按 target 分辨率判。
+            if method == "smart":
+                if abs(info.aspect_ratio - target_ar) < 1e-6:
+                    skipped += 1
+                    continue
+            else:
+                if info.width == tw and info.height == th:
+                    skipped += 1
+                    continue
             ok = resize_and_crop_image(info.path, tw, th, info.path, method)
             if ok:
                 processed += 1

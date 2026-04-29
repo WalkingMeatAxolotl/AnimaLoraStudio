@@ -5,12 +5,15 @@ import {
   type DownloadFile,
   type Job,
   type ProjectDetail,
+  type UploadResult,
   type Version,
 } from '../../../api/client'
 import FileList from '../../../components/FileList'
-import JobProgress from '../../../components/JobProgress'
 import { useToast } from '../../../components/Toast'
 import { useEventStream } from '../../../lib/useEventStream'
+
+const UPLOAD_ACCEPT =
+  '.jpg,.jpeg,.png,.zip,image/jpeg,image/png,application/zip'
 
 interface Ctx {
   project: ProjectDetail
@@ -23,9 +26,18 @@ interface Estimate {
   api_source: 'gelbooru' | 'danbooru'
   exclude_tags: string[]
   effective_query: string
-  count: number  // -1 表示未知
+  count: number // -1 表示未知
 }
 
+const STATUS_COLOR: Record<Job['status'], string> = {
+  pending: 'bg-slate-700/60 text-slate-300',
+  running: 'bg-amber-700/40 text-amber-200',
+  done: 'bg-emerald-700/40 text-emerald-200',
+  failed: 'bg-red-800/50 text-red-200',
+  canceled: 'bg-slate-700/60 text-slate-300',
+}
+
+// 信息密度优先：每个 panel 紧凑成单/双 inline 行；已下载 grid 占主区域。
 export default function DownloadPage() {
   const { project, reload } = useOutletContext<Ctx>()
   const { toast } = useToast()
@@ -39,6 +51,7 @@ export default function DownloadPage() {
   const [estimate, setEstimate] = useState<Estimate | null>(null)
   const [count, setCount] = useState<number>(20)
   const [busy, setBusy] = useState(false)
+  const [lastUpload, setLastUpload] = useState<UploadResult | null>(null)
 
   const refreshFiles = useCallback(async () => {
     try {
@@ -64,7 +77,6 @@ export default function DownloadPage() {
     void refreshFiles()
   }, [refreshStatus, refreshFiles])
 
-  // SSE 实时推
   const jobIdRef = useRef<number | null>(null)
   jobIdRef.current = job?.id ?? null
   useEventStream((evt) => {
@@ -85,7 +97,6 @@ export default function DownloadPage() {
     }
   })
 
-  // 当 tag / api_source 变化，丢掉旧估算，强制用户重新查
   useEffect(() => {
     setEstimate(null)
   }, [tag, apiSource])
@@ -102,14 +113,9 @@ export default function DownloadPage() {
         api_source: apiSource,
       })
       setEstimate(r)
-      // 默认 count：未知 → 20；已知 → min(全部, 200) 作为合理默认
-      if (r.count > 0) {
-        setCount(Math.min(r.count, 200))
-      } else if (r.count === 0) {
-        setCount(0)
-      } else {
-        setCount(20)
-      }
+      if (r.count > 0) setCount(Math.min(r.count, 200))
+      else if (r.count === 0) setCount(0)
+      else setCount(20)
     } catch (e) {
       toast(String(e), 'error')
     } finally {
@@ -119,14 +125,9 @@ export default function DownloadPage() {
 
   const start = async () => {
     if (!estimate) return
-    if (estimate.count === 0) {
-      toast('查询结果为 0，没有可下载的图', 'error')
-      return
-    }
-    if (count < 1) {
-      toast('count 必须 >= 1', 'error')
-      return
-    }
+    if (estimate.count === 0)
+      return toast('查询结果为 0，没有可下载的图', 'error')
+    if (count < 1) return toast('count 必须 >= 1', 'error')
     setBusy(true)
     try {
       const j = await api.startDownload(project.id, {
@@ -155,138 +156,455 @@ export default function DownloadPage() {
   }
 
   const isLive = job?.status === 'running' || job?.status === 'pending'
-  // 已知总数时：count 上限 = 估算值；未知时不限
   const maxCount = estimate && estimate.count > 0 ? estimate.count : 5000
 
   return (
-    <div className="space-y-4 max-w-3xl">
-      <header>
-        <h2 className="text-lg font-semibold">① 下载数据</h2>
-        <p className="text-sm text-slate-400">
-          来源：Gelbooru / Danbooru。下载到{' '}
-          <code className="text-slate-300">{project.slug}/download/</code>，
-          所有版本共享。
-        </p>
+    <div className="flex flex-col h-full gap-2 min-h-0">
+      {/* 单行标题 */}
+      <header className="flex items-baseline gap-2 flex-wrap shrink-0">
+        <h2 className="text-base font-semibold">① 下载</h2>
+        <span className="text-xs text-slate-500">
+          Booru 抓取 + 本地上传，共享{' '}
+          <code className="text-slate-400">{project.slug}/download/</code> ·{' '}
+          <Link to="/tools/settings" className="text-cyan-400 hover:underline">
+            设置
+          </Link>{' '}
+          配置 exclude / 凭据
+        </span>
       </header>
 
-      <div className="text-xs text-slate-500">
-        全局 exclude tag、Gelbooru / Danbooru 凭据请在{' '}
-        <Link to="/tools/settings" className="text-cyan-400 hover:underline">
-          设置
-        </Link>{' '}
-        配置。
+      {/* 操作行：两个紧凑 panel 并排（窄屏堆叠） */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-2 shrink-0">
+        <BooruPanel
+          tag={tag}
+          setTag={setTag}
+          apiSource={apiSource}
+          setApiSource={setApiSource}
+          estimate={estimate}
+          count={count}
+          setCount={setCount}
+          maxCount={maxCount}
+          busy={busy}
+          isLive={!!isLive}
+          onEstimate={doEstimate}
+          onStart={start}
+        />
+        <UploadPanel
+          pid={project.id}
+          onUploaded={(r) => {
+            setLastUpload(r)
+            void refreshFiles()
+            void reload()
+          }}
+        />
       </div>
 
-      {/* 第一步：tag + 渠道 + 查询 */}
-      <section className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
-        <div className="grid grid-cols-[120px_1fr] gap-3 items-center">
-          <label className="text-xs text-slate-400 font-mono">tag</label>
-          <input
-            value={tag}
-            onChange={(e) => setTag(e.target.value)}
-            disabled={busy || isLive}
-            placeholder="例：character_x rating:safe"
-            className="px-2 py-1.5 rounded bg-slate-950 border border-slate-700 text-sm focus:outline-none focus:border-cyan-500"
-          />
-          <label className="text-xs text-slate-400 font-mono">api_source</label>
-          <select
-            value={apiSource}
-            onChange={(e) =>
-              setApiSource(e.target.value as 'gelbooru' | 'danbooru')
-            }
-            disabled={busy || isLive}
-            className="px-2 py-1.5 rounded bg-slate-950 border border-slate-700 text-sm w-40 focus:outline-none focus:border-cyan-500"
-          >
-            <option value="gelbooru">Gelbooru</option>
-            <option value="danbooru">Danbooru</option>
-          </select>
+      {/* 状态条：仅在有 job / 上次上传结果时出现，details 折叠 */}
+      {(job || lastUpload) && (
+        <div className="flex flex-col gap-1.5 shrink-0">
+          {job && (
+            <JobStrip
+              job={job}
+              logs={logs}
+              onCancel={isLive ? cancel : undefined}
+            />
+          )}
+          {lastUpload && (
+            <UploadResultStrip
+              result={lastUpload}
+              onDismiss={() => setLastUpload(null)}
+            />
+          )}
         </div>
-        <div>
-          <button
-            onClick={doEstimate}
-            disabled={busy || isLive || !tag.trim()}
-            className="px-3 py-1.5 rounded text-sm bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 disabled:text-slate-500"
-          >
-            {busy ? '查询中...' : '查询数量'}
-          </button>
+      )}
+
+      {/* 已下载 grid — 占满剩余高度 */}
+      <section className="rounded-lg border border-slate-700 bg-slate-800/30 overflow-hidden flex flex-col flex-1 min-h-0">
+        <header className="px-3 py-1.5 border-b border-slate-700 flex items-center gap-2 shrink-0">
+          <h3 className="text-xs font-semibold text-slate-200">已下载</h3>
+          <span className="text-[11px] text-slate-500">{files.length} 张</span>
+        </header>
+        <div className="flex-1 min-h-0 overflow-y-auto p-2">
+          <FileList pid={project.id} items={files} />
         </div>
       </section>
+    </div>
+  )
+}
 
-      {/* 第二步：估算结果 + 选择 count + 启动 */}
+// ---------------------------------------------------------------------------
+// Booru 紧凑 panel
+// ---------------------------------------------------------------------------
+
+interface BooruPanelProps {
+  tag: string
+  setTag: (v: string) => void
+  apiSource: 'gelbooru' | 'danbooru'
+  setApiSource: (v: 'gelbooru' | 'danbooru') => void
+  estimate: Estimate | null
+  count: number
+  setCount: (n: number) => void
+  maxCount: number
+  busy: boolean
+  isLive: boolean
+  onEstimate: () => void
+  onStart: () => void
+}
+
+function BooruPanel({
+  tag,
+  setTag,
+  apiSource,
+  setApiSource,
+  estimate,
+  count,
+  setCount,
+  maxCount,
+  busy,
+  isLive,
+  onEstimate,
+  onStart,
+}: BooruPanelProps) {
+  const disabled = busy || isLive
+  return (
+    <section className="rounded-lg border border-slate-700 bg-slate-800/40 px-3 py-2 space-y-1.5">
+      <PanelTitle accent="cyan">Booru 抓取</PanelTitle>
+      <div className="flex items-center gap-1.5">
+        <select
+          value={apiSource}
+          onChange={(e) =>
+            setApiSource(e.target.value as 'gelbooru' | 'danbooru')
+          }
+          disabled={disabled}
+          className="px-2 py-1 rounded bg-slate-950 border border-slate-700 text-xs w-24"
+        >
+          <option value="gelbooru">Gelbooru</option>
+          <option value="danbooru">Danbooru</option>
+        </select>
+        <input
+          value={tag}
+          onChange={(e) => setTag(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && tag.trim() && !disabled) onEstimate()
+          }}
+          disabled={disabled}
+          placeholder="tag (如 character_x rating:safe)"
+          className="flex-1 px-2 py-1 rounded bg-slate-950 border border-slate-700 text-xs focus:outline-none focus:border-cyan-500"
+        />
+        <button
+          onClick={onEstimate}
+          disabled={disabled || !tag.trim()}
+          className="text-xs px-2.5 py-1 rounded bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 disabled:text-slate-500"
+        >
+          {busy && !estimate ? '查询中...' : '查询'}
+        </button>
+      </div>
       {estimate && (
-        <section className="rounded-lg border border-cyan-800 bg-cyan-950/20 p-4 space-y-3">
-          <div className="text-sm text-slate-200">
+        <div className="flex items-center gap-1.5 flex-wrap text-xs">
+          <span className="text-slate-300">
             匹配{' '}
             {estimate.count >= 0 ? (
               <strong className="text-cyan-300">{estimate.count}</strong>
             ) : (
-              <strong className="text-amber-300">数量未知</strong>
-            )}{' '}
-            张
-            <span className="text-slate-500 text-xs ml-2">
-              query: <code>{estimate.effective_query}</code>
-            </span>
-          </div>
-          {estimate.exclude_tags.length > 0 && (
-            <div className="text-xs text-slate-400">
-              已应用全局 exclude:{' '}
-              <code className="text-slate-300">
-                {estimate.exclude_tags.join(', ')}
-              </code>
-            </div>
-          )}
-
+              <strong className="text-amber-300">未知</strong>
+            )}
+          </span>
           {estimate.count !== 0 && (
             <>
-              <div className="grid grid-cols-[120px_1fr] gap-3 items-center">
-                <label className="text-xs text-slate-400 font-mono">
-                  count
-                </label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    min={1}
-                    max={maxCount}
-                    value={count}
-                    onChange={(e) =>
-                      setCount(Math.min(Number(e.target.value) || 1, maxCount))
-                    }
-                    disabled={busy || isLive}
-                    className="px-2 py-1.5 rounded bg-slate-950 border border-slate-700 text-sm w-32 focus:outline-none focus:border-cyan-500"
-                  />
-                  {estimate.count > 0 && (
-                    <button
-                      onClick={() => setCount(estimate.count)}
-                      disabled={busy || isLive}
-                      className="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-200"
-                    >
-                      全部 ({estimate.count})
-                    </button>
-                  )}
-                </div>
-              </div>
-              <div>
+              <span className="text-slate-500">·</span>
+              <span className="text-slate-500">count</span>
+              <input
+                type="number"
+                min={1}
+                max={maxCount}
+                value={count}
+                onChange={(e) =>
+                  setCount(Math.min(Number(e.target.value) || 1, maxCount))
+                }
+                disabled={disabled}
+                className="px-1.5 py-0.5 rounded bg-slate-950 border border-slate-700 text-xs w-20 focus:outline-none focus:border-cyan-500"
+              />
+              {estimate.count > 0 && (
                 <button
-                  onClick={start}
-                  disabled={busy || isLive || count < 1}
-                  className="px-3 py-1.5 rounded text-sm bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-700 disabled:text-slate-500"
+                  onClick={() => setCount(estimate.count)}
+                  disabled={disabled}
+                  className="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 hover:bg-slate-600 text-slate-200"
                 >
-                  {isLive ? '下载中...' : `开始下载 ${count} 张`}
+                  全部 {estimate.count}
                 </button>
-              </div>
+              )}
+              <button
+                onClick={onStart}
+                disabled={disabled || count < 1}
+                className="ml-auto text-xs px-2.5 py-1 rounded bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-700 disabled:text-slate-500"
+              >
+                {isLive ? '下载中...' : `开始 ${count}`}
+              </button>
             </>
           )}
-        </section>
+          <span
+            className="basis-full text-[10px] text-slate-500 truncate"
+            title={estimate.effective_query}
+          >
+            query: <code>{estimate.effective_query}</code>
+            {estimate.exclude_tags.length > 0 && (
+              <>
+                {' · exclude: '}
+                <code>{estimate.exclude_tags.join(', ')}</code>
+              </>
+            )}
+          </span>
+        </div>
       )}
+    </section>
+  )
+}
 
-      {job && <JobProgress job={job} logs={logs} onCancel={cancel} />}
+// ---------------------------------------------------------------------------
+// 本地上传紧凑 panel
+// ---------------------------------------------------------------------------
 
-      <section>
-        <h3 className="text-sm font-semibold text-slate-300 mb-2">
-          已下载 ({files.length})
-        </h3>
-        <FileList pid={project.id} items={files} />
-      </section>
-    </div>
+function UploadPanel({
+  pid,
+  onUploaded,
+}: {
+  pid: number
+  onUploaded: (r: UploadResult) => void
+}) {
+  const { toast } = useToast()
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [picked, setPicked] = useState<File[]>([])
+  const [uploading, setUploading] = useState(false)
+  const [dragging, setDragging] = useState(false)
+
+  const choose = (fl: FileList | null) => {
+    if (!fl || fl.length === 0) return
+    setPicked(Array.from(fl))
+  }
+  const reset = () => {
+    setPicked([])
+    if (inputRef.current) inputRef.current.value = ''
+  }
+  const submit = async () => {
+    if (picked.length === 0) return
+    setUploading(true)
+    try {
+      const r = await api.uploadProjectFiles(pid, picked)
+      const skipped = r.skipped.length
+      toast(
+        `已添加 ${r.added.length} 张${skipped ? ` · 跳过 ${skipped}` : ''}`,
+        r.added.length > 0 ? 'success' : 'error'
+      )
+      reset()
+      onUploaded(r)
+    } catch (e) {
+      toast(String(e), 'error')
+    } finally {
+      setUploading(false)
+    }
+  }
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setDragging(false)
+    if (uploading) return
+    if (e.dataTransfer.files?.length) choose(e.dataTransfer.files)
+  }
+  const totalBytes = picked.reduce((s, f) => s + f.size, 0)
+  const fileNames = picked.map((f) => f.name).join(', ')
+
+  return (
+    <section className="rounded-lg border border-slate-700 bg-slate-800/40 px-3 py-2 space-y-1.5">
+      <PanelTitle accent="emerald">本地上传</PanelTitle>
+      <label
+        onDragOver={(e) => {
+          e.preventDefault()
+          if (!uploading) setDragging(true)
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={onDrop}
+        className={
+          'flex items-center gap-2 cursor-pointer rounded border border-dashed px-2.5 py-1.5 text-xs transition-colors ' +
+          (dragging
+            ? 'border-emerald-500 bg-emerald-950/30 text-emerald-200'
+            : 'border-slate-600 hover:border-slate-400 text-slate-300')
+        }
+      >
+        <input
+          ref={inputRef}
+          type="file"
+          multiple
+          accept={UPLOAD_ACCEPT}
+          onChange={(e) => choose(e.target.files)}
+          disabled={uploading}
+          className="hidden"
+        />
+        <span className="font-medium">点击选择 / 拖入</span>
+        <span className="text-slate-500">
+          · .jpg / .png / .zip(自动解压)
+        </span>
+        <span className="flex-1" />
+        {picked.length > 0 && (
+          <span className="text-emerald-300">
+            已选 {picked.length} · {(totalBytes / 1024 / 1024).toFixed(1)} MB
+          </span>
+        )}
+      </label>
+      {picked.length > 0 && (
+        <div className="flex items-center gap-1.5 text-xs">
+          <button
+            onClick={submit}
+            disabled={uploading}
+            className="text-xs px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500"
+          >
+            {uploading ? '上传中...' : `上传 ${picked.length}`}
+          </button>
+          <button
+            onClick={reset}
+            disabled={uploading}
+            className="text-[11px] px-2 py-1 rounded text-slate-400 hover:text-slate-200"
+          >
+            清空
+          </button>
+          <span
+            className="ml-1 text-[10px] text-slate-500 truncate min-w-0 flex-1"
+            title={fileNames}
+          >
+            {fileNames}
+          </span>
+        </div>
+      )}
+    </section>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// 状态条 — 1 行 summary，details 折叠完整内容
+// ---------------------------------------------------------------------------
+
+function JobStrip({
+  job,
+  logs,
+  onCancel,
+}: {
+  job: Job
+  logs: string[]
+  onCancel?: () => void
+}) {
+  const elapsed =
+    job.started_at && (job.finished_at ?? Date.now() / 1000) - job.started_at
+  const isLive = job.status === 'running' || job.status === 'pending'
+  const lastLine = logs[logs.length - 1] ?? ''
+  return (
+    <details
+      open={isLive}
+      className="group rounded-lg border border-slate-700 bg-slate-800/40 overflow-hidden"
+    >
+      <summary className="px-3 py-1.5 cursor-pointer flex items-center gap-2 text-xs select-none list-none">
+        <span className="text-slate-500 group-open:rotate-90 transition-transform inline-block w-3">
+          ▸
+        </span>
+        <span
+          className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${STATUS_COLOR[job.status]}`}
+        >
+          {job.status}
+        </span>
+        <span className="text-slate-400 font-mono">job #{job.id}</span>
+        {elapsed && elapsed > 0 && (
+          <span className="text-slate-500">· {Math.round(elapsed)}s</span>
+        )}
+        <span className="text-slate-300 truncate flex-1 min-w-0 font-mono text-[11px]">
+          {lastLine}
+        </span>
+        {isLive && onCancel && (
+          <button
+            onClick={(e) => {
+              e.preventDefault()
+              onCancel()
+            }}
+            className="text-[11px] px-2 py-0.5 rounded text-red-300 hover:text-red-200 hover:bg-red-900/30"
+          >
+            取消
+          </button>
+        )}
+      </summary>
+      <pre className="p-2.5 text-[11px] font-mono text-slate-300 bg-slate-950/40 max-h-56 overflow-y-auto whitespace-pre-wrap border-t border-slate-700">
+        {logs.length === 0 ? '(等待日志...)' : logs.slice(-1000).join('\n')}
+      </pre>
+    </details>
+  )
+}
+
+function UploadResultStrip({
+  result,
+  onDismiss,
+}: {
+  result: UploadResult
+  onDismiss: () => void
+}) {
+  const skipped = result.skipped.length
+  const ok = result.added.length
+  return (
+    <details className="group rounded-lg border border-slate-700 bg-slate-800/40 overflow-hidden">
+      <summary className="px-3 py-1.5 cursor-pointer flex items-center gap-2 text-xs select-none list-none">
+        <span className="text-slate-500 group-open:rotate-90 transition-transform inline-block w-3">
+          ▸
+        </span>
+        <span className="text-[10px] px-1.5 py-0.5 rounded font-mono bg-emerald-700/40 text-emerald-200">
+          upload
+        </span>
+        <span className="text-slate-300">
+          添加 <strong className="text-emerald-300">{ok}</strong>
+          {skipped > 0 && (
+            <>
+              {' · '}跳过 <strong className="text-amber-300">{skipped}</strong>
+            </>
+          )}
+        </span>
+        <span className="flex-1" />
+        <button
+          onClick={(e) => {
+            e.preventDefault()
+            onDismiss()
+          }}
+          className="text-[11px] px-1.5 py-0.5 rounded text-slate-400 hover:text-slate-200"
+          title="关闭"
+        >
+          ×
+        </button>
+      </summary>
+      {skipped > 0 ? (
+        <ul className="p-2.5 text-[11px] font-mono text-amber-300/90 max-h-40 overflow-y-auto space-y-0.5 border-t border-slate-700">
+          {result.skipped.map((s, i) => (
+            <li key={`${s.name}-${i}`} className="truncate">
+              {s.name} <span className="text-slate-500">— {s.reason}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="p-2.5 text-[11px] text-slate-500 border-t border-slate-700">
+          全部成功，无跳过。
+        </p>
+      )}
+    </details>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// 杂项 — 小标题
+// ---------------------------------------------------------------------------
+
+function PanelTitle({
+  accent,
+  children,
+}: {
+  accent: 'cyan' | 'emerald'
+  children: React.ReactNode
+}) {
+  const dot = accent === 'cyan' ? 'bg-cyan-400' : 'bg-emerald-400'
+  return (
+    <h3 className="text-[10px] font-semibold text-slate-400 flex items-center gap-1.5 uppercase tracking-wider">
+      <span className={`inline-block w-1.5 h-1.5 rounded-full ${dot}`} />
+      {children}
+    </h3>
   )
 }

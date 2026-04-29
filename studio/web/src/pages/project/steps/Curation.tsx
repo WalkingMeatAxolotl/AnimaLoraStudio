@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import {
   api,
+  type CurationItem,
   type CurationView,
   type ProjectDetail,
   type Version,
@@ -10,6 +11,77 @@ import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import ImagePreviewModal from '../../../components/ImagePreviewModal'
 import { useToast } from '../../../components/Toast'
 import { useEventStream } from '../../../lib/useEventStream'
+
+// ---------- 排序 ----------
+type SortMode =
+  | 'id-asc'
+  | 'id-desc'
+  | 'name-asc'
+  | 'name-desc'
+  | 'mtime-asc'
+  | 'mtime-desc'
+
+const SORT_OPTIONS: { value: SortMode; label: string }[] = [
+  { value: 'id-asc', label: 'ID ↑' },
+  { value: 'id-desc', label: 'ID ↓' },
+  { value: 'name-asc', label: '文件名 ↑' },
+  { value: 'name-desc', label: '文件名 ↓' },
+  { value: 'mtime-asc', label: '下载时间 ↑' },
+  { value: 'mtime-desc', label: '下载时间 ↓' },
+]
+
+const SORT_STORAGE_KEY = 'curation:sort'
+const DEFAULT_SORT: SortMode = 'id-asc'
+
+/**
+ * 取文件名「数字 id」key —— booru 默认下载文件名是 `<post_id>.<ext>`，stem 整段
+ * 是数字时按数字排；否则给一个超大值，让非数字名排到末尾再按 name 兜底。
+ */
+function numericIdKey(name: string): number {
+  const stem = name.replace(/\.[^.]+$/, '')
+  return /^\d+$/.test(stem) ? Number(stem) : Number.POSITIVE_INFINITY
+}
+
+function compareItems(a: CurationItem, b: CurationItem, mode: SortMode): number {
+  switch (mode) {
+    case 'id-asc':
+    case 'id-desc': {
+      const ka = numericIdKey(a.name)
+      const kb = numericIdKey(b.name)
+      const d = ka === kb ? a.name.localeCompare(b.name) : ka - kb
+      return mode === 'id-asc' ? d : -d
+    }
+    case 'name-asc':
+      return a.name.localeCompare(b.name)
+    case 'name-desc':
+      return b.name.localeCompare(a.name)
+    case 'mtime-asc':
+      return a.mtime - b.mtime || a.name.localeCompare(b.name)
+    case 'mtime-desc':
+      return b.mtime - a.mtime || a.name.localeCompare(b.name)
+  }
+}
+
+/**
+ * 把后端可能返回的两种形状统一成 CurationItem：
+ * - 新格式：`{name, mtime}`
+ * - 老格式（后端尚未升级 / 字段缺失兜底）：纯 string 文件名 → mtime 取 0
+ *
+ * 这样前端 sort 不会因为 `a.name` 为 undefined 直接崩。
+ */
+function normalizeItem(it: CurationItem | string | undefined): CurationItem {
+  if (typeof it === 'string') return { name: it, mtime: 0 }
+  if (it && typeof it.name === 'string')
+    return { name: it.name, mtime: typeof it.mtime === 'number' ? it.mtime : 0 }
+  return { name: '', mtime: 0 }
+}
+
+function sortItems(
+  items: (CurationItem | string)[],
+  mode: SortMode
+): CurationItem[] {
+  return items.map(normalizeItem).sort((a, b) => compareItems(a, b, mode))
+}
 
 interface Ctx {
   project: ProjectDetail
@@ -96,6 +168,20 @@ export default function CurationPage() {
   } | null>(null)
   const [preview, setPreview] = useState<Preview | null>(null)
 
+  // 排序模式（左右两 grid 共享）；持久化到 localStorage 让用户偏好跨页保留。
+  const [sortMode, setSortMode] = useState<SortMode>(() => {
+    if (typeof window === 'undefined') return DEFAULT_SORT
+    const v = window.localStorage.getItem(SORT_STORAGE_KEY)
+    return SORT_OPTIONS.some((o) => o.value === v)
+      ? (v as SortMode)
+      : DEFAULT_SORT
+  })
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(SORT_STORAGE_KEY, sortMode)
+    }
+  }, [sortMode])
+
   const versionId = activeVersion?.id ?? null
 
   const refresh = useCallback(async () => {
@@ -133,24 +219,35 @@ export default function CurationPage() {
   })
 
   const folderNames = view?.folders ?? []
-  const trainList = useMemo(
+
+  // sortMode 应用到左右两侧后得到「显示顺序」的名字数组；范围选择 / preview
+  // 翻页 / 全选 都基于这个顺序。
+  const leftSortedNames = useMemo(
+    () => sortItems(view?.left ?? [], sortMode).map((e) => e.name),
+    [view, sortMode]
+  )
+  const trainEntries = useMemo(
     () => (view && rightFolder ? view.right[rightFolder] ?? [] : []),
     [view, rightFolder]
+  )
+  const rightSortedNames = useMemo(
+    () => sortItems(trainEntries, sortMode).map((e) => e.name),
+    [trainEntries, sortMode]
   )
 
   const leftItems = useMemo(
     () =>
-      (view?.left ?? []).map((n) => ({
+      leftSortedNames.map((n) => ({
         name: n,
         thumbUrl: api.projectThumbUrl(project.id, n),
       })),
-    [view, project.id]
+    [leftSortedNames, project.id]
   )
   const rightItems = useMemo(
     () =>
       versionId == null
         ? []
-        : trainList.map((n) => ({
+        : rightSortedNames.map((n) => ({
             name: n,
             thumbUrl: api.versionThumbUrl(
               project.id,
@@ -160,7 +257,7 @@ export default function CurationPage() {
               rightFolder
             ),
           })),
-    [trainList, project.id, versionId, rightFolder]
+    [rightSortedNames, project.id, versionId, rightFolder]
   )
 
   // 大图预览用 768px 缓存版本（足够清晰，文件比原图小一两个数量级）
@@ -220,13 +317,13 @@ export default function CurationPage() {
 
   // ---------- handlers ----------
   const handleLeftClick = (name: string, e: React.MouseEvent) => {
-    const r = applySelection(leftSel, name, e, view.left, leftAnchor)
+    const r = applySelection(leftSel, name, e, leftSortedNames, leftAnchor)
     setLeftSel(r.next)
     setLeftAnchor(r.anchor)
   }
 
   const handleRightClick = (name: string, e: React.MouseEvent) => {
-    const r = applySelection(rightSel, name, e, trainList, rightAnchor)
+    const r = applySelection(rightSel, name, e, rightSortedNames, rightAnchor)
     setRightSel(r.next)
     setRightAnchor(r.anchor)
   }
@@ -354,8 +451,8 @@ export default function CurationPage() {
     setPreview({
       url: api.projectThumbUrl(project.id, name),
       caption: name,
-      list: view.left,
-      index: view.left.indexOf(name),
+      list: leftSortedNames,
+      index: leftSortedNames.indexOf(name),
       resolve: (n) => api.projectThumbUrl(project.id, n),
     })
   }
@@ -370,8 +467,8 @@ export default function CurationPage() {
         rightFolder
       ),
       caption: `${rightFolder}/${name}`,
-      list: trainList,
-      index: trainList.indexOf(name),
+      list: rightSortedNames,
+      index: rightSortedNames.indexOf(name),
       resolve: (n) =>
         api.versionThumbUrl(project.id, versionId, 'train', n, rightFolder),
     })
@@ -399,6 +496,22 @@ export default function CurationPage() {
           <kbd className="px-1 rounded bg-slate-800 text-slate-300">Alt</kbd>{' '}
           悬停缩略图查看大图
         </span>
+        <span className="flex-1" />
+        <label className="flex items-center gap-1.5 text-xs text-slate-400">
+          排序
+          <select
+            value={sortMode}
+            onChange={(e) => setSortMode(e.target.value as SortMode)}
+            className="px-1.5 py-0.5 rounded bg-slate-950 border border-slate-700 text-xs text-slate-200"
+            title="排序作用于左右两个网格"
+          >
+            {SORT_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
       </header>
 
       {/* Download + Train 两列平分整宽；预览改为 alt+hover 浮层，不占布局位置。 */}
@@ -410,8 +523,8 @@ export default function CurationPage() {
           actions={
             <>
               <BtnSecondary
-                onClick={() => setLeftSel(new Set(view.left))}
-                disabled={busy || view.left.length === 0}
+                onClick={() => setLeftSel(new Set(leftSortedNames))}
+                disabled={busy || leftSortedNames.length === 0}
               >
                 全选
               </BtnSecondary>
@@ -467,8 +580,8 @@ export default function CurationPage() {
                 创建
               </BtnSecondary>
               <BtnSecondary
-                onClick={() => setRightSel(new Set(trainList))}
-                disabled={busy || trainList.length === 0}
+                onClick={() => setRightSel(new Set(rightSortedNames))}
+                disabled={busy || rightSortedNames.length === 0}
               >
                 全选
               </BtnSecondary>

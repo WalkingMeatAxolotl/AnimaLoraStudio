@@ -21,7 +21,13 @@ const initialServerState = {
     prompt_template: 'Descriptive Caption',
   },
   wd14: {
-    model_id: 'SmilingWolf/wd-vit-tagger-v3',
+    model_id: 'SmilingWolf/wd-eva02-large-tagger-v3',
+    model_ids: [
+      'SmilingWolf/wd-eva02-large-tagger-v3',
+      'SmilingWolf/wd-vit-tagger-v3',
+      'SmilingWolf/wd-vit-large-tagger-v3',
+      'SmilingWolf/wd-v1-4-convnext-tagger-v2',
+    ],
     local_dir: null,
     threshold_general: 0.35,
     threshold_character: 0.85,

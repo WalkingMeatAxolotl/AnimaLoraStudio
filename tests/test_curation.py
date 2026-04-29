@@ -51,6 +51,10 @@ def _train_dir(env, folder: str) -> Path:
 # ---------------------------------------------------------------------------
 
 
+def _names(entries: list[dict]) -> list[str]:
+    return [e["name"] for e in entries]
+
+
 def test_curation_view_left_minus_right(env) -> None:
     _dl(env, "1.png")
     _dl(env, "2.png")
@@ -62,9 +66,11 @@ def test_curation_view_left_minus_right(env) -> None:
         view = curation.curation_view(
             conn, env["p"]["id"], env["v"]["id"]
         )
-    assert view["left"] == ["2.png", "3.png"]
+    assert _names(view["left"]) == ["2.png", "3.png"]
+    # 每条记录都带 mtime（float 秒）
+    assert all(isinstance(e.get("mtime"), float) for e in view["left"])
     # 默认 1_data 始终存在；这里只断言我们刚复制进去的 5_concept
-    assert view["right"]["5_concept"] == ["1.png"]
+    assert _names(view["right"]["5_concept"]) == ["1.png"]
     assert view["right"]["1_data"] == []
     assert view["download_total"] == 3
     assert view["train_total"] == 1

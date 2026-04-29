@@ -10,6 +10,7 @@ peft>=0.8.0
 # wandb>=0.16.0          # Optional: experiment tracking
 # bitsandbytes>=0.41.0   # Optional: 8-bit AdamW (may not work on Windows)
 lycoris-lora>=1.9.0
+prodigyopt>=1.0          # Prodigy 优化器（anima_train.py optimizer=prodigy 时必需）
 safetensors>=0.4.0
 Pillow>=10.0.0
 numpy>=1.24.0
