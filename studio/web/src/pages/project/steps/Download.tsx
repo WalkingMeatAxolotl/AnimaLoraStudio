@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useOutletContext } from 'react-router-dom'
 import {
   api,
@@ -8,7 +8,7 @@ import {
   type UploadResult,
   type Version,
 } from '../../../api/client'
-import FileList from '../../../components/FileList'
+import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import { useToast } from '../../../components/Toast'
 import { useEventStream } from '../../../lib/useEventStream'
 
@@ -44,6 +44,9 @@ export default function DownloadPage() {
   const [job, setJob] = useState<Job | null>(null)
   const [logs, setLogs] = useState<string[]>([])
   const [files, setFiles] = useState<DownloadFile[]>([])
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [anchor, setAnchor] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const [tag, setTag] = useState('')
   const [apiSource, setApiSource] = useState<'gelbooru' | 'danbooru'>(
     'gelbooru'
@@ -218,17 +221,141 @@ export default function DownloadPage() {
         </div>
       )}
 
-      {/* 已下载 grid — 占满剩余高度 */}
-      <section className="rounded-lg border border-slate-700 bg-slate-800/30 overflow-hidden flex flex-col flex-1 min-h-0">
-        <header className="px-3 py-1.5 border-b border-slate-700 flex items-center gap-2 shrink-0">
-          <h3 className="text-xs font-semibold text-slate-200">已下载</h3>
-          <span className="text-[11px] text-slate-500">{files.length} 张</span>
-        </header>
-        <div className="flex-1 min-h-0 overflow-y-auto p-2">
-          <FileList pid={project.id} items={files} />
-        </div>
-      </section>
+      {/* 已下载 grid — 占满剩余高度，支持多选 + 删除 */}
+      <DownloadedGrid
+        project={project}
+        files={files}
+        selected={selected}
+        anchor={anchor}
+        deleting={deleting}
+        onSelect={(name, e) => {
+          const r = applySelection(
+            selected,
+            name,
+            e,
+            files.map((f) => f.name),
+            anchor
+          )
+          setSelected(r.next)
+          setAnchor(r.anchor)
+        }}
+        onSelectAll={() => setSelected(new Set(files.map((f) => f.name)))}
+        onClear={() => {
+          setSelected(new Set())
+          setAnchor(null)
+        }}
+        onDelete={async () => {
+          if (selected.size === 0) return
+          if (
+            !window.confirm(
+              `从 download/ 删除 ${selected.size} 张图片（含同名 caption metadata）？\n操作不可恢复。`
+            )
+          )
+            return
+          setDeleting(true)
+          try {
+            const r = await api.deleteProjectFiles(
+              project.id,
+              Array.from(selected)
+            )
+            toast(
+              `已删除 ${r.deleted.length} 张${
+                r.missing.length ? ` · 跳过 ${r.missing.length} 张（不存在）` : ''
+              }`,
+              'success'
+            )
+            setSelected(new Set())
+            setAnchor(null)
+            await refreshFiles()
+            void reload()
+          } catch (e) {
+            toast(String(e), 'error')
+          } finally {
+            setDeleting(false)
+          }
+        }}
+      />
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// 已下载 grid — 多选 + 删除
+// ---------------------------------------------------------------------------
+
+function DownloadedGrid({
+  project,
+  files,
+  selected,
+  anchor,
+  deleting,
+  onSelect,
+  onSelectAll,
+  onClear,
+  onDelete,
+}: {
+  project: ProjectDetail
+  files: DownloadFile[]
+  selected: Set<string>
+  anchor: string | null
+  deleting: boolean
+  onSelect: (name: string, e: React.MouseEvent) => void
+  onSelectAll: () => void
+  onClear: () => void
+  onDelete: () => void | Promise<void>
+}) {
+  // anchor 仅父组件用，这里不读但保留参数避免未来漂移
+  void anchor
+  const items = useMemo(
+    () =>
+      files.map((f) => ({
+        name: f.name,
+        thumbUrl: api.projectThumbUrl(project.id, f.name),
+      })),
+    [files, project.id]
+  )
+  return (
+    <section className="rounded-lg border border-slate-700 bg-slate-800/30 overflow-hidden flex flex-col flex-1 min-h-0">
+      <header className="px-3 py-1.5 border-b border-slate-700 flex items-center gap-2 shrink-0 text-xs">
+        <h3 className="font-semibold text-slate-200">已下载</h3>
+        <span className="text-slate-500">{files.length} 张</span>
+        {selected.size > 0 && (
+          <span className="text-cyan-300">· 已选 {selected.size}</span>
+        )}
+        <span className="flex-1" />
+        <button
+          onClick={onSelectAll}
+          disabled={files.length === 0 || deleting}
+          className="px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-50"
+        >
+          全选
+        </button>
+        <button
+          onClick={onClear}
+          disabled={selected.size === 0 || deleting}
+          className="px-2 py-0.5 rounded text-slate-400 hover:text-slate-200 disabled:opacity-30"
+        >
+          清空
+        </button>
+        <button
+          onClick={() => void onDelete()}
+          disabled={selected.size === 0 || deleting}
+          className="px-2 py-0.5 rounded bg-red-700/80 hover:bg-red-700 text-red-100 disabled:opacity-40"
+          title="删除选中的图片 + 同名 caption metadata"
+        >
+          {deleting ? '删除中...' : `🗑 删除 ${selected.size}`}
+        </button>
+      </header>
+      <div className="flex-1 min-h-0 overflow-y-auto p-2">
+        <ImageGrid
+          items={items}
+          selected={selected}
+          onSelect={onSelect}
+          ariaLabel="downloaded-grid"
+          emptyHint="还没有图片 — 用上方 Booru 抓取或本地上传"
+        />
+      </div>
+    </section>
   )
 }
 

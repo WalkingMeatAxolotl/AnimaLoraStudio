@@ -1,9 +1,8 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import Sidebar from './components/Sidebar'
-import LogPage from './pages/Log'
 import ProjectsPage from './pages/Projects'
 import QueuePage from './pages/Queue'
-import QueueMonitorPage from './pages/QueueMonitor'
+import QueueDetailPage from './pages/QueueDetail'
 import ProjectLayout from './pages/project/Layout'
 import ProjectOverview from './pages/project/Overview'
 import CurationPage from './pages/project/steps/Curation'
@@ -16,6 +15,19 @@ import MonitorPage from './pages/tools/Monitor'
 import PresetsPage from './pages/tools/Presets'
 import SettingsPage from './pages/tools/Settings'
 
+/**
+ * 老路径 `/queue/:id/log` 和 `/queue/:id/monitor` 的兼容跳转：保留 URL 不删，
+ * 转到新 detail 页对应 tab（用 hash 表达 tab）。让书签 / 收藏链接不失效。
+ */
+function QueueDetailRedirect({ tab }: { tab: 'log' | 'monitor' }) {
+  const path = window.location.pathname
+  const id = path.match(/\/queue\/(\d+)/)?.[1]
+  if (!id) return <Navigate to="/queue" replace />
+  return (
+    <Navigate to={{ pathname: `/queue/${id}`, hash: tab }} replace />
+  )
+}
+
 export default function App() {
   return (
     <BrowserRouter basename="/studio">
@@ -25,8 +37,17 @@ export default function App() {
           <Routes>
             <Route path="/" element={<ProjectsPage />} />
             <Route path="/queue" element={<QueuePage />} />
-            <Route path="/queue/:id/log" element={<LogPage />} />
-            <Route path="/queue/:id/monitor" element={<QueueMonitorPage />} />
+            <Route path="/queue/:id" element={<QueueDetailPage />} />
+            {/* 旧 → 新（合并日志/监控/输出到一个 detail 页 with tabs）。
+             * 默认 tab 用 hash 切换：#log / #monitor / #outputs / #overview。 */}
+            <Route
+              path="/queue/:id/log"
+              element={<QueueDetailRedirect tab="log" />}
+            />
+            <Route
+              path="/queue/:id/monitor"
+              element={<QueueDetailRedirect tab="monitor" />}
+            />
 
             {/* PP1: project layout + stepper + version tabs */}
             <Route path="/projects/:pid" element={<ProjectLayout />}>

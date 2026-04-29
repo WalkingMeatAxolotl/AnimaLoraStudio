@@ -886,6 +886,7 @@
                 document.getElementById('step').textContent = data.step || 0;
                 document.getElementById('speed').textContent = (data.speed || 0).toFixed(2);
                 if (data.total_steps) document.getElementById('total-steps').textContent = data.total_steps;
+                if (data.total_epochs) document.getElementById('total-epochs').textContent = data.total_epochs;
 
                 // Charts
                 updateCharts(data);

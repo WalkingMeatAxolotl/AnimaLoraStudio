@@ -21,12 +21,20 @@ import asyncio
 import io
 import json
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    File,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -99,6 +107,7 @@ EMPTY_STATE: dict[str, Any] = {
     "losses": [],
     "lr_history": [],
     "epoch": 0,
+    "total_epochs": 0,
     "step": 0,
     "total_steps": 0,
     "speed": 0.0,
@@ -637,6 +646,63 @@ def download_status(pid: int) -> dict[str, Any]:
         except Exception:
             tail = ""
     return {"job": job, "log_tail": tail}
+
+
+class DeleteFilesRequest(BaseModel):
+    names: list[str]
+
+
+@app.post("/api/projects/{pid}/files/delete")
+def delete_project_files(
+    pid: int, body: DeleteFilesRequest
+) -> dict[str, Any]:
+    """从项目 `download/` 删除指定文件（含同名 caption metadata）。
+
+    metadata 命名约定：
+    - booru 下载会写 `{stem}.booru.txt`
+    - tag/caption 流程可能写 `{stem}.txt` 或 `{stem}.json`
+    都一并清理；不存在的扩展静默跳过。
+    """
+    if not body.names:
+        return {"deleted": [], "missing": []}
+    with db.connection_for() as conn:
+        p = projects.get_project(conn, pid)
+    if not p:
+        raise HTTPException(404, f"项目不存在: id={pid}")
+    pdir = projects.project_dir(p["id"], p["slug"]) / "download"
+    if not pdir.exists():
+        return {"deleted": [], "missing": list(body.names)}
+
+    META_EXTS = (".booru.txt", ".txt", ".json")
+    deleted: list[str] = []
+    missing: list[str] = []
+    for name in body.names:
+        if (
+            not name
+            or "/" in name
+            or "\\" in name
+            or ".." in name
+        ):
+            raise HTTPException(400, f"invalid name: {name!r}")
+        f = pdir / name
+        if not f.exists() or not f.is_file():
+            missing.append(name)
+            continue
+        try:
+            f.unlink()
+        except OSError as exc:
+            raise HTTPException(500, f"删除失败 {name}: {exc}") from exc
+        # 清理同 stem 的 metadata（best-effort，失败仅日志）
+        stem = f.stem
+        for ext in META_EXTS:
+            m = pdir / f"{stem}{ext}"
+            if m.exists():
+                try:
+                    m.unlink()
+                except OSError as exc:
+                    logger.warning("删 metadata 失败 %s: %s", m, exc)
+        deleted.append(name)
+    return {"deleted": deleted, "missing": missing}
 
 
 @app.get("/api/projects/{pid}/files")
@@ -1609,6 +1675,176 @@ def retry_task(task_id: int) -> dict[str, Any]:
         {"type": "task_state_changed", "task_id": new_id, "status": "pending"}
     )
     return new_task or {"id": new_id}
+
+
+# ---------------------------------------------------------------------------
+# /api/queue/{task_id}/outputs — 查看 / 下载训练产物
+# ---------------------------------------------------------------------------
+
+
+_LOCALHOST_HOSTS = {"127.0.0.1", "::1", "localhost"}
+_LORA_EXTS = {".safetensors", ".ckpt", ".pt", ".bin"}
+
+
+def _task_output_dir(task: dict[str, Any]) -> Optional[Path]:
+    """根据 task 推断 output 目录：versions/{label}/output。
+
+    没 project_id / version_id 的老任务（PP1 之前）→ 返回 None；调用方应该
+    处理为「无 output 目录」。
+    """
+    pid = task.get("project_id")
+    vid = task.get("version_id")
+    if not (pid and vid):
+        return None
+    with db.connection_for() as conn:
+        v = versions.get_version(conn, int(vid))
+        p = projects.get_project(conn, int(pid))
+    if not v or not p or v["project_id"] != pid:
+        return None
+    return versions.version_dir(int(pid), p["slug"], v["label"]) / "output"
+
+
+def _is_loopback(request: Request) -> bool:
+    client = request.client
+    return bool(client and client.host in _LOCALHOST_HOSTS)
+
+
+@app.get("/api/queue/{task_id}/outputs")
+def list_task_outputs(task_id: int, request: Request) -> dict[str, Any]:
+    """列出 task 关联 version 的 output 目录里所有文件。
+
+    `supports_open_folder` 仅在请求来自 loopback（同机浏览器）时为 True；
+    云端部署时永远为 False，避免前端显示一个无意义按钮。
+    """
+    with db.connection_for() as conn:
+        task = db.get_task(conn, task_id)
+    if not task:
+        raise HTTPException(404)
+    out_dir = _task_output_dir(task)
+    files: list[dict[str, Any]] = []
+    if out_dir and out_dir.exists():
+        for f in sorted(out_dir.iterdir(), key=lambda p: p.name):
+            if not f.is_file():
+                continue
+            try:
+                st = f.stat()
+            except OSError:
+                continue
+            files.append({
+                "name": f.name,
+                "size": st.st_size,
+                "mtime": st.st_mtime,
+                "is_lora": f.suffix.lower() in _LORA_EXTS,
+            })
+    return {
+        "task_id": task_id,
+        "output_dir": str(out_dir) if out_dir else None,
+        "exists": bool(out_dir and out_dir.exists()),
+        "supports_open_folder": _is_loopback(request),
+        "files": files,
+    }
+
+
+@app.get("/api/queue/{task_id}/outputs.zip")
+def download_task_outputs_zip(
+    task_id: int, background: BackgroundTasks
+) -> FileResponse:
+    """把 output 目录全部文件打包成 zip 一次性下载。
+
+    实现：写到临时文件再 FileResponse；响应发完后用 BackgroundTasks 清理。
+    safetensors / pt 几乎都是已压缩二进制，用 ZIP_STORED（不再压缩，CPU 省一倍）。
+    """
+    import tempfile
+    import zipfile
+    with db.connection_for() as conn:
+        task = db.get_task(conn, task_id)
+    if not task:
+        raise HTTPException(404)
+    out_dir = _task_output_dir(task)
+    if not out_dir or not out_dir.exists():
+        raise HTTPException(404, "no output dir")
+    files = [f for f in sorted(out_dir.iterdir()) if f.is_file()]
+    if not files:
+        raise HTTPException(404, "empty output dir")
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    tmp.close()
+    tmp_path = Path(tmp.name)
+    try:
+        with zipfile.ZipFile(
+            tmp_path, "w", compression=zipfile.ZIP_STORED, allowZip64=True
+        ) as zf:
+            for f in files:
+                zf.write(f, arcname=f.name)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+    background.add_task(lambda: tmp_path.unlink(missing_ok=True))
+
+    archive_name = f"task_{task_id}_outputs.zip"
+    return FileResponse(
+        tmp_path,
+        media_type="application/zip",
+        filename=archive_name,
+        background=background,
+    )
+
+
+@app.get("/api/queue/{task_id}/output/{filename}")
+def download_task_output(task_id: int, filename: str) -> FileResponse:
+    """下载 output 目录下的指定文件。`Content-Disposition: attachment` 让
+    浏览器走「保存」对话框而不是 inline 渲染。"""
+    if "/" in filename or "\\" in filename or ".." in filename or not filename:
+        raise HTTPException(400, "invalid filename")
+    with db.connection_for() as conn:
+        task = db.get_task(conn, task_id)
+    if not task:
+        raise HTTPException(404)
+    out_dir = _task_output_dir(task)
+    if not out_dir or not out_dir.exists():
+        raise HTTPException(404, "no output dir")
+    f = out_dir / filename
+    if not f.exists() or not f.is_file():
+        raise HTTPException(404, "file not found")
+    return FileResponse(
+        f,
+        media_type="application/octet-stream",
+        filename=filename,  # 让 starlette 自动加 Content-Disposition
+    )
+
+
+@app.post("/api/queue/{task_id}/open-folder")
+def open_task_folder(task_id: int, request: Request) -> dict[str, Any]:
+    """在 server 主机上用 OS 文件管理器打开 output 目录。
+
+    **仅 loopback 请求允许**：云端部署时浏览器不在 server 那台机，开了用户也
+    看不到，反而是远程命令执行入口；这里直接 403 拒绝。
+    """
+    if not _is_loopback(request):
+        raise HTTPException(
+            403, "open-folder is only available for local (loopback) requests"
+        )
+    with db.connection_for() as conn:
+        task = db.get_task(conn, task_id)
+    if not task:
+        raise HTTPException(404)
+    out_dir = _task_output_dir(task)
+    if not out_dir or not out_dir.exists():
+        raise HTTPException(404, "no output dir")
+    try:
+        import platform
+        import subprocess as _sub
+        sysname = platform.system()
+        if sysname == "Windows":
+            os.startfile(str(out_dir))  # type: ignore[attr-defined]
+        elif sysname == "Darwin":
+            _sub.Popen(["open", str(out_dir)])
+        else:
+            _sub.Popen(["xdg-open", str(out_dir)])
+    except Exception as exc:
+        raise HTTPException(500, f"failed to open folder: {exc}") from exc
+    return {"opened": str(out_dir)}
 
 
 @app.delete("/api/queue/{task_id}")

@@ -2045,17 +2045,20 @@ def main():
             else output_dir / "monitor_state.json"
         )
         set_state_file(state_path)
-        update_monitor(config={
-            "model": "Anima LoKr" if args.lora_type == "lokr" else "Anima LoRA",
-            "rank": args.lora_rank,
-            "alpha": args.lora_alpha,
-            "epochs": args.epochs,
-            "batch_size": args.batch_size,
-            "grad_accum": args.grad_accum,
-            "lr": args.learning_rate,
-            "resolution": args.resolution,
-            "data_dir": str(args.data_dir),
-        })
+        update_monitor(
+            total_epochs=int(args.epochs or 0),
+            config={
+                "model": "Anima LoKr" if args.lora_type == "lokr" else "Anima LoRA",
+                "rank": args.lora_rank,
+                "alpha": args.lora_alpha,
+                "epochs": args.epochs,
+                "batch_size": args.batch_size,
+                "grad_accum": args.grad_accum,
+                "lr": args.learning_rate,
+                "resolution": args.resolution,
+                "data_dir": str(args.data_dir),
+            },
+        )
         logger.info(f"📊 训练监控状态文件: {state_path}")
     except Exception as e:
         logger.warning(f"监控状态写入初始化失败: {e}")
@@ -2235,14 +2238,24 @@ def main():
     except Exception:
         steps_per_epoch = None
 
-    if args.max_steps and args.max_steps > 0:
-        total_steps = args.max_steps
-    elif steps_per_epoch is not None:
-        total_steps = steps_per_epoch * args.epochs
-    else:
-        total_steps = None
+    # total_steps：训练实际会跑到的步数。终止条件是「epoch 上限和 max_steps
+    # 哪个先到就停」(见下方 max_steps break + for epoch 自然退出)，所以
+    # 取两个候选的 min，进度条才不会出现「100 epoch 跑完了但只显示 86%」。
+    by_epochs = (
+        steps_per_epoch * args.epochs
+        if steps_per_epoch is not None and args.epochs and args.epochs > 0
+        else None
+    )
+    by_max_steps = (
+        args.max_steps if (args.max_steps and args.max_steps > 0) else None
+    )
+    candidates = [c for c in (by_epochs, by_max_steps) if c is not None and c > 0]
+    total_steps = min(candidates) if candidates else None
 
-    logger.info(f"数据集大小: {len(dataset)}, 每 epoch 步数: {steps_per_epoch}, 总步数: {total_steps}")
+    logger.info(
+        f"数据集大小: {len(dataset)}, 每 epoch 步数: {steps_per_epoch}, "
+        f"总步数: {total_steps} (by_epochs={by_epochs}, by_max_steps={by_max_steps})"
+    )
 
     # 学习率调度器
     scheduler = None
@@ -2489,7 +2502,9 @@ def main():
                 if monitor_server:
                     try:
                         update_monitor(
-                            loss=loss_val, lr=lr, epoch=epoch+1, step=global_step,
+                            loss=loss_val, lr=lr, epoch=epoch+1,
+                            total_epochs=int(args.epochs or 0),
+                            step=global_step,
                             total_steps=total_steps, speed=speed_ema or 0
                         )
                     except Exception:

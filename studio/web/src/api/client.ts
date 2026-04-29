@@ -378,6 +378,22 @@ export interface LogResponse {
   size: number
 }
 
+export interface TaskOutputFile {
+  name: string
+  size: number
+  mtime: number
+  is_lora: boolean
+}
+
+export interface TaskOutputs {
+  task_id: number
+  output_dir: string | null
+  exists: boolean
+  /** 仅 loopback 请求为 true；云端永远 false。前端按此控制「打开文件夹」按钮可见性。 */
+  supports_open_folder: boolean
+  files: TaskOutputFile[]
+}
+
 export interface DatasetFolder {
   name: string
   label: string
@@ -617,6 +633,15 @@ export const api = {
     req<{ items: DownloadFile[]; count: number }>(
       `/api/projects/${pid}/files?bucket=${encodeURIComponent(bucket)}`
     ),
+  /** 从 project 的 download/ 删除指定图片 + 同名 metadata（.booru.txt/.txt/.json）。 */
+  deleteProjectFiles: (pid: number, names: string[]) =>
+    req<{ deleted: string[]; missing: string[] }>(
+      `/api/projects/${pid}/files/delete`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ names }),
+      }
+    ),
   projectThumbUrl: (pid: number, name: string, bucket = 'download', size = 256) =>
     `/api/projects/${pid}/thumb?bucket=${encodeURIComponent(bucket)}&name=${encodeURIComponent(name)}&size=${size}`,
   getJob: (jid: number) => req<Job>(`/api/jobs/${jid}`),
@@ -825,6 +850,20 @@ export const api = {
     req<Task>(`/api/queue/${id}/retry`, { method: 'POST' }),
   deleteTask: (id: number) =>
     req<{ deleted: number }>(`/api/queue/${id}`, { method: 'DELETE' }),
+  /** 列 task 关联的 output 目录里所有文件（含 size/mtime/是否 lora）。
+   * `supports_open_folder` 仅在请求来自 loopback 时为 true，云端为 false。 */
+  getTaskOutputs: (id: number) =>
+    req<TaskOutputs>(`/api/queue/${id}/outputs`),
+  /** 下载单个 output 文件的直链，不发请求。<a href={...} download> 即可。 */
+  taskOutputDownloadUrl: (id: number, filename: string) =>
+    `/api/queue/${id}/output/${encodeURIComponent(filename)}`,
+  /** 把 output 目录全部文件打包成 zip 下载的直链。 */
+  taskOutputsZipUrl: (id: number) => `/api/queue/${id}/outputs.zip`,
+  /** 在 server 主机的 OS 文件管理器里打开 output 目录（仅 loopback 可用）。 */
+  openTaskFolder: (id: number) =>
+    req<{ opened: string }>(`/api/queue/${id}/open-folder`, {
+      method: 'POST',
+    }),
   reorderQueue: (orderedIds: number[]) =>
     req<{ reordered: number }>('/api/queue/reorder', {
       method: 'POST',

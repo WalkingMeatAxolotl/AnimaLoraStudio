@@ -11,8 +11,9 @@ API：
 - `get_state()` — 读当前 state（拷贝，避免被外部修改）
 - `_downsample_uniform(points, n)` — 工具：均匀降采样，给前端展示用
 
-状态结构：losses / lr_history / samples / epoch / step / total_steps / speed /
-start_time / config，与原来兼容（前端 monitor_smooth.html 仍能解析）。
+状态结构：losses / lr_history / samples / epoch / total_epochs / step /
+total_steps / speed / start_time / config，与原来兼容（前端 monitor_smooth.html
+仍能解析；total_epochs 是 PP6.x 后期补的，老 state 缺失时前端按 0 兜底）。
 """
 from __future__ import annotations
 
@@ -27,6 +28,7 @@ MONITOR_STATE: dict[str, Any] = {
     "losses": [],
     "lr_history": [],
     "epoch": 0,
+    "total_epochs": 0,
     "step": 0,
     "total_steps": 0,
     "speed": 0.0,
@@ -66,12 +68,14 @@ def save_state() -> None:
 
 
 def update_monitor(
-    loss=None, lr=None, epoch=None, step=None, total_steps=None,
-    speed=None, sample_path=None, config=None,
+    loss=None, lr=None, epoch=None, total_epochs=None, step=None,
+    total_steps=None, speed=None, sample_path=None, config=None,
 ):
     """更新监控状态。先更新 step/epoch 等元信息，再追加 loss/lr 点位。"""
     if epoch is not None:
         MONITOR_STATE["epoch"] = epoch
+    if total_epochs is not None:
+        MONITOR_STATE["total_epochs"] = total_epochs
     if step is not None:
         MONITOR_STATE["step"] = step
     if total_steps is not None:
@@ -117,7 +121,7 @@ def get_state() -> dict[str, Any]:
 
 
 def restore_monitor_state(
-    losses=None, lr_history=None, epoch=None, step=None,
+    losses=None, lr_history=None, epoch=None, total_epochs=None, step=None,
     total_steps=None, start_time=None, config=None,
 ):
     """断点续训：把存档里的历史曲线灌回 in-memory state，再落盘。"""
@@ -127,6 +131,8 @@ def restore_monitor_state(
         MONITOR_STATE["lr_history"] = lr_history
     if epoch is not None:
         MONITOR_STATE["epoch"] = epoch
+    if total_epochs is not None:
+        MONITOR_STATE["total_epochs"] = total_epochs
     if step is not None:
         MONITOR_STATE["step"] = step
     if total_steps is not None:
@@ -162,6 +168,7 @@ def reset_state() -> None:
         "losses": [],
         "lr_history": [],
         "epoch": 0,
+        "total_epochs": 0,
         "step": 0,
         "total_steps": 0,
         "speed": 0.0,

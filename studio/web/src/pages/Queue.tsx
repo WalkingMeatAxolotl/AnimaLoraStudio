@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { api, type ConfigSummary, type Task, type TaskStatus } from '../api/client'
+import { Link, useNavigate } from 'react-router-dom'
+import {
+  api,
+  type ConfigSummary,
+  type Task,
+  type TaskStatus,
+} from '../api/client'
 import { useToast } from '../components/Toast'
 import { useEventStream } from '../lib/useEventStream'
 
@@ -79,6 +84,7 @@ export default function QueuePage() {
   const [busy, setBusy] = useState(false)
   const reloadTimer = useRef<number | null>(null)
   const { toast } = useToast()
+  const navigate = useNavigate()
 
   const reload = useCallback(async () => {
     try {
@@ -127,43 +133,9 @@ export default function QueuePage() {
     }
   }
 
-  const cancel = async (id: number) => {
-    if (!window.confirm('取消任务？')) return
-    setBusy(true)
-    try {
-      await api.cancelTask(id)
-      await reload()
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const retry = async (id: number) => {
-    setBusy(true)
-    try {
-      await api.retryTask(id)
-      await reload()
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const remove = async (id: number) => {
-    if (!window.confirm('删除任务记录？')) return
-    setBusy(true)
-    try {
-      await api.deleteTask(id)
-      await reload()
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
+  // 每行操作（取消/重试/删除/查看日志/监控/输出）全部移到 detail 页：
+  // 用户从列表点行 → /queue/:id（4 tabs：详情/日志/监控/输出 + 底部操作按钮）。
+  // 这样列表保持干净，破坏性操作在 detail 页带 confirm modal，避免误触。
 
   return (
     <div className="space-y-4">
@@ -279,14 +251,16 @@ export default function QueuePage() {
                 <th className="px-3 py-2 text-left font-normal">状态</th>
                 <th className="px-3 py-2 text-left font-normal">入队时间</th>
                 <th className="px-3 py-2 text-left font-normal">运行时长</th>
-                <th className="px-3 py-2 text-right font-normal">操作</th>
+                <th className="px-3 py-2 text-right font-normal w-8"></th>
               </tr>
             </thead>
             <tbody>
               {tasks.map((t) => (
                 <tr
                   key={t.id}
-                  className="border-b border-slate-800 last:border-0 hover:bg-slate-800/30"
+                  onClick={() => navigate(`/queue/${t.id}`)}
+                  className="border-b border-slate-800 last:border-0 hover:bg-slate-800/40 cursor-pointer"
+                  title="查看详情 / 日志 / 监控 / 输出 / 取消 / 重试 / 删除"
                 >
                   <td className="px-3 py-2 text-slate-500 font-mono">{t.id}</td>
                   <td className="px-3 py-2">
@@ -295,7 +269,10 @@ export default function QueuePage() {
                       {t.config_name}.yaml
                     </div>
                   </td>
-                  <td className="px-3 py-2 text-xs">
+                  <td
+                    className="px-3 py-2 text-xs"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     {t.project_id && t.version_id ? (
                       <Link
                         to={`/projects/${t.project_id}/v/${t.version_id}/train`}
@@ -332,49 +309,13 @@ export default function QueuePage() {
                   <td className="px-3 py-2 text-slate-400 text-xs">
                     {fmtDuration(t.started_at, t.finished_at)}
                   </td>
-                  <td className="px-3 py-2 text-right space-x-1">
-                    <Link
-                      to={`/queue/${t.id}/log`}
-                      className="text-xs text-slate-400 hover:text-cyan-400"
+                  <td className="px-3 py-2 text-right">
+                    <span
+                      className="text-slate-500 text-sm"
+                      aria-hidden
                     >
-                      日志
-                    </Link>
-                    <Link
-                      to={`/queue/${t.id}/monitor`}
-                      className="text-xs text-slate-400 hover:text-cyan-400 ml-2"
-                      title="查看训练曲线 / 采样图"
-                    >
-                      📊 监控
-                    </Link>
-                    {(t.status === 'pending' || t.status === 'running') && (
-                      <button
-                        disabled={busy}
-                        onClick={() => void cancel(t.id)}
-                        className="text-xs text-slate-400 hover:text-amber-400 ml-2"
-                      >
-                        取消
-                      </button>
-                    )}
-                    {(t.status === 'failed' ||
-                      t.status === 'done' ||
-                      t.status === 'canceled') && (
-                      <>
-                        <button
-                          disabled={busy}
-                          onClick={() => void retry(t.id)}
-                          className="text-xs text-slate-400 hover:text-cyan-400 ml-2"
-                        >
-                          重试
-                        </button>
-                        <button
-                          disabled={busy}
-                          onClick={() => void remove(t.id)}
-                          className="text-xs text-slate-400 hover:text-red-400 ml-2"
-                        >
-                          删除
-                        </button>
-                      </>
-                    )}
+                      ›
+                    </span>
                   </td>
                 </tr>
               ))}
@@ -385,3 +326,4 @@ export default function QueuePage() {
     </div>
   )
 }
+

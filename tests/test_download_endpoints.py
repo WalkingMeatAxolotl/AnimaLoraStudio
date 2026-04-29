@@ -235,6 +235,72 @@ def test_thumb_rejects_path_traversal(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
+# delete files
+# ---------------------------------------------------------------------------
+
+
+def test_delete_files_removes_image_and_metadata(client: TestClient) -> None:
+    p = _make_project(client)
+    pdir = projects.project_dir(p["id"], p["slug"]) / "download"
+    pdir.mkdir(parents=True, exist_ok=True)
+    (pdir / "a.png").write_bytes(b"img")
+    (pdir / "a.booru.txt").write_text("tags", encoding="utf-8")
+    (pdir / "a.txt").write_text("more tags", encoding="utf-8")
+    (pdir / "a.json").write_text("{}", encoding="utf-8")
+    (pdir / "b.png").write_bytes(b"img2")  # 不在删除列表
+
+    r = client.post(
+        f"/api/projects/{p['id']}/files/delete",
+        json={"names": ["a.png"]},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["deleted"] == ["a.png"]
+    assert body["missing"] == []
+    # a.png 及其全部 metadata 都不在了
+    assert not (pdir / "a.png").exists()
+    assert not (pdir / "a.booru.txt").exists()
+    assert not (pdir / "a.txt").exists()
+    assert not (pdir / "a.json").exists()
+    # b.png 不动
+    assert (pdir / "b.png").exists()
+
+
+def test_delete_files_reports_missing(client: TestClient) -> None:
+    p = _make_project(client)
+    pdir = projects.project_dir(p["id"], p["slug"]) / "download"
+    pdir.mkdir(parents=True, exist_ok=True)
+    (pdir / "exists.png").write_bytes(b"x")
+    r = client.post(
+        f"/api/projects/{p['id']}/files/delete",
+        json={"names": ["exists.png", "ghost.png"]},
+    )
+    body = r.json()
+    assert body["deleted"] == ["exists.png"]
+    assert body["missing"] == ["ghost.png"]
+
+
+def test_delete_files_blocks_traversal(client: TestClient) -> None:
+    p = _make_project(client)
+    for bad in ("../escape.png", "..\\escape.png", "sub/x.png", ""):
+        r = client.post(
+            f"/api/projects/{p['id']}/files/delete",
+            json={"names": [bad]},
+        )
+        assert r.status_code == 400
+
+
+def test_delete_files_empty_request(client: TestClient) -> None:
+    p = _make_project(client)
+    r = client.post(
+        f"/api/projects/{p['id']}/files/delete",
+        json={"names": []},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"deleted": [], "missing": []}
+
+
+# ---------------------------------------------------------------------------
 # upload
 # ---------------------------------------------------------------------------
 

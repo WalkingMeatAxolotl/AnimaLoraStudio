@@ -155,6 +155,134 @@ def test_retry_copies_full_training_context(client: TestClient) -> None:
     assert new.get("monitor_state_path") is None
 
 
+def test_outputs_list_with_files(
+    client: TestClient, isolated, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """task 关联 project+version 时，端点返回 output 目录里所有文件 + meta。"""
+    from studio import projects as projects_mod, versions as versions_mod
+    monkeypatch.setattr(projects_mod, "PROJECTS_DIR", isolated / "projects")
+    with db.connection_for() as conn:
+        p = projects_mod.create_project(conn, title="P")
+        v = versions_mod.create_version(conn, project_id=p["id"], label="v1")
+        tid = db.create_task(conn, name="t", config_name="good")
+        db.update_task(conn, tid, status="done", project_id=p["id"], version_id=v["id"])
+    out_dir = (
+        versions_mod.version_dir(p["id"], p["slug"], v["label"]) / "output"
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "lora_final.safetensors").write_bytes(b"x" * 100)
+    (out_dir / "training_state_step100.pt").write_bytes(b"y" * 50)
+
+    resp = client.get(f"/api/queue/{tid}/outputs")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["task_id"] == tid
+    assert body["exists"] is True
+    names = sorted(f["name"] for f in body["files"])
+    assert names == ["lora_final.safetensors", "training_state_step100.pt"]
+    by_name = {f["name"]: f for f in body["files"]}
+    assert by_name["lora_final.safetensors"]["is_lora"] is True
+    assert by_name["lora_final.safetensors"]["size"] == 100
+    # TestClient 默认 client.host 是 "testclient" 不在 loopback 集合里 → False
+    assert body["supports_open_folder"] is False
+
+
+def test_outputs_list_no_version(client: TestClient) -> None:
+    """task 没有 project/version → output_dir 为 None，files 空。"""
+    with db.connection_for() as conn:
+        tid = db.create_task(conn, name="t", config_name="good")
+        db.update_task(conn, tid, status="done")
+    body = client.get(f"/api/queue/{tid}/outputs").json()
+    assert body["output_dir"] is None
+    assert body["exists"] is False
+    assert body["files"] == []
+
+
+def test_download_output_file(
+    client: TestClient, isolated, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from studio import projects as projects_mod, versions as versions_mod
+    monkeypatch.setattr(projects_mod, "PROJECTS_DIR", isolated / "projects")
+    with db.connection_for() as conn:
+        p = projects_mod.create_project(conn, title="P")
+        v = versions_mod.create_version(conn, project_id=p["id"], label="v1")
+        tid = db.create_task(conn, name="t", config_name="good")
+        db.update_task(conn, tid, status="done", project_id=p["id"], version_id=v["id"])
+    out_dir = versions_mod.version_dir(p["id"], p["slug"], v["label"]) / "output"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "lora_final.safetensors").write_bytes(b"BLOB")
+
+    resp = client.get(f"/api/queue/{tid}/output/lora_final.safetensors")
+    assert resp.status_code == 200
+    assert resp.content == b"BLOB"
+    # FileResponse(filename=...) 自动加 Content-Disposition: attachment
+    assert "attachment" in resp.headers.get("content-disposition", "").lower()
+
+
+def test_download_outputs_zip(
+    client: TestClient, isolated, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """全量 zip 端点应把 output 目录所有文件打包返回。"""
+    import io
+    import zipfile
+    from studio import projects as projects_mod, versions as versions_mod
+    monkeypatch.setattr(projects_mod, "PROJECTS_DIR", isolated / "projects")
+    with db.connection_for() as conn:
+        p = projects_mod.create_project(conn, title="P")
+        v = versions_mod.create_version(conn, project_id=p["id"], label="v1")
+        tid = db.create_task(conn, name="t", config_name="good")
+        db.update_task(conn, tid, status="done", project_id=p["id"], version_id=v["id"])
+    out_dir = versions_mod.version_dir(p["id"], p["slug"], v["label"]) / "output"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "lora_final.safetensors").write_bytes(b"AAA")
+    (out_dir / "training_state_step100.pt").write_bytes(b"BB")
+
+    resp = client.get(f"/api/queue/{tid}/outputs.zip")
+    assert resp.status_code == 200
+    assert resp.headers.get("content-type") == "application/zip"
+    assert "task_%d_outputs.zip" % tid in resp.headers.get("content-disposition", "")
+
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+        names = sorted(zf.namelist())
+        assert names == ["lora_final.safetensors", "training_state_step100.pt"]
+        assert zf.read("lora_final.safetensors") == b"AAA"
+        assert zf.read("training_state_step100.pt") == b"BB"
+
+
+def test_download_outputs_zip_empty_dir_404(
+    client: TestClient, isolated, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """目录存在但空 → 404 而不是返回空 zip。"""
+    from studio import projects as projects_mod, versions as versions_mod
+    monkeypatch.setattr(projects_mod, "PROJECTS_DIR", isolated / "projects")
+    with db.connection_for() as conn:
+        p = projects_mod.create_project(conn, title="P")
+        v = versions_mod.create_version(conn, project_id=p["id"], label="v1")
+        tid = db.create_task(conn, name="t", config_name="good")
+        db.update_task(conn, tid, status="done", project_id=p["id"], version_id=v["id"])
+    out_dir = versions_mod.version_dir(p["id"], p["slug"], v["label"]) / "output"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    resp = client.get(f"/api/queue/{tid}/outputs.zip")
+    assert resp.status_code == 404
+
+
+def test_download_output_blocks_traversal(client: TestClient) -> None:
+    with db.connection_for() as conn:
+        tid = db.create_task(conn, name="t", config_name="good")
+    for bad in ("../etc.txt", "..\\etc.txt", ""):
+        resp = client.get(f"/api/queue/{tid}/output/{bad}")
+        assert resp.status_code != 200
+
+
+def test_open_folder_blocks_non_loopback(client: TestClient) -> None:
+    """TestClient 默认 client.host = 'testclient'，不算 loopback → 403。"""
+    with db.connection_for() as conn:
+        tid = db.create_task(conn, name="t", config_name="good")
+    resp = client.post(f"/api/queue/{tid}/open-folder")
+    assert resp.status_code == 403
+
+
 def test_delete_only_terminal(client: TestClient) -> None:
     tid = client.post("/api/queue", json={"config_name": "good"}).json()["id"]
     # pending 状态不能删
