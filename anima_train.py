@@ -23,6 +23,7 @@ import sys
 import time
 import types
 from pathlib import Path
+from typing import Optional
 
 # Windows 控制台默认 cp936，logging / print 写中文会 UnicodeEncodeError，
 # 默认 handler 的 errors='backslashreplace' 会把中文转成 \uXXXX 形式 ——
@@ -1951,12 +1952,37 @@ def _ask_float(label, default):
 
 
 def _guess_default_paths():
-    base = Path(__file__).resolve().parent
-    transformer = base / "anima" / "diffusion_models" / "anima-preview.safetensors"
-    vae = base / "anima" / "vae" / "qwen_image_vae.safetensors"
-    qwen = base / "anima" / "text_encoders"
+    """猜默认模型路径（仅在用户没在 yaml/CLI 显式指定时用）。
+
+    根目录：优先 `secrets.models.root`（Studio 设置页配置），否则 `REPO_ROOT/models/`
+    （与 schema.py 默认 + WD14 已用的 `models/wd14/` 对齐）。
+
+    Transformer：用户可能装多个 Anima 版本（preview / preview2 / preview3-base），
+    按 ANIMA_VARIANTS 顺序找第一个存在的（latest 优先）。
+    """
+    repo_root = Path(__file__).resolve().parent
+    # secrets 不一定可 import（直接 CLI 跑训练时 studio package 可用；其他场景兜底）
+    base: Optional[Path] = None
+    transformer_path: str = ""
+    try:
+        from studio.services.model_downloader import find_anima_main, models_root
+        base = models_root()
+        existing = find_anima_main(base)
+        if existing:
+            transformer_path = str(existing)
+    except Exception:
+        base = repo_root / "models"
+    if not base:
+        base = repo_root / "models"
+    if not transformer_path:
+        # services 不可用 / 都没下载 → 给最新版默认名作为提示，方便用户填路径
+        candidate = base / "diffusion_models" / "anima-preview3-base.safetensors"
+        transformer_path = str(candidate) if candidate.exists() else ""
+
+    vae = base / "vae" / "qwen_image_vae.safetensors"
+    qwen = base / "text_encoders"
     return {
-        "transformer": str(transformer) if transformer.exists() else "",
+        "transformer": transformer_path,
         "vae": str(vae) if vae.exists() else "",
         "qwen": str(qwen) if qwen.exists() else "",
     }

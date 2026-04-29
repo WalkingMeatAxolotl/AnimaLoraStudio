@@ -13,6 +13,8 @@ export interface StudioEvent {
  */
 export function useEventStream(onEvent: (evt: StudioEvent) => void): void {
   useEffect(() => {
+    // jsdom / SSR / 老浏览器没有 EventSource — 不连 SSE 让组件在测试环境也能挂载
+    if (typeof EventSource === 'undefined') return
     const es = new EventSource('/api/events')
     es.onmessage = (e) => {
       try {

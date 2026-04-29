@@ -28,8 +28,13 @@ class TrainingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # ---------------------------------------------------------------- 模型路径
+    # 这些路径在 Studio 创建 version 时会被替换成 **绝对路径**（基于
+    # secrets.models.root + secrets.models.selected_anima），用户在 yaml /
+    # Train 页看到的总是无歧义的绝对路径，不用考虑相对路径锚定。
+    # 这里的默认值仅 fallback：裸 CLI 跑训练 + yaml 完全没填时，按 repo
+    # 相对路径解析（与历史行为一致）。
     transformer_path: str = Field(
-        "models/transformers/anima-preview.safetensors",
+        "models/diffusion_models/anima-preview3-base.safetensors",
         description="主 transformer 权重 (.safetensors)",
         json_schema_extra=_meta("model", "path", cli_alias="--transformer"),
     )
@@ -371,13 +376,16 @@ class TrainingConfig(BaseModel):
 # 分组顺序（前端按这个顺序渲染区块）
 # ---------------------------------------------------------------------------
 
-GROUP_ORDER: list[tuple[str, str]] = [
-    ("model", "模型路径"),
-    ("dataset", "数据集"),
-    ("caption", "Caption 处理"),
-    ("lora", "LoRA / LoKr"),
-    ("training", "训练参数"),
-    ("output", "输出与保存"),
-    ("sample", "采样"),
-    ("monitor", "监控与进度"),
+# 每组：(key, label, default_collapsed)。default_collapsed=True 让前端 SchemaForm
+# 初始默认折叠（用户能手动展开）。模型路径 readonly 显示「自动 · 全局设置」徽章
+# （跟 output_dir 等项目特定字段同款），不再折叠。
+GROUP_ORDER: list[tuple[str, str, bool]] = [
+    ("model", "模型路径", False),
+    ("dataset", "数据集", False),
+    ("caption", "Caption 处理", False),
+    ("lora", "LoRA / LoKr", False),
+    ("training", "训练参数", False),
+    ("output", "输出与保存", False),
+    ("sample", "采样", False),
+    ("monitor", "监控与进度", False),
 ]

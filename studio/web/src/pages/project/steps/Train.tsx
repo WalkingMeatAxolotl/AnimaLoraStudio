@@ -51,10 +51,26 @@ export default function TrainPage() {
     void refreshConfig()
   }, [refreshConfig])
 
+  // 项目特定字段（data_dir 等）+ 全局模型路径都灰显 readonly。前者来自后端
+  // project_specific_fields；后者前端 hardcode（统一来自 settings.models 配置）。
+  const GLOBAL_MODEL_FIELDS = [
+    'transformer_path',
+    'vae_path',
+    'text_encoder_path',
+    't5_tokenizer_path',
+  ]
   const disabledFields = useMemo(
-    () => configResp?.project_specific_fields ?? [],
+    () => [
+      ...(configResp?.project_specific_fields ?? []),
+      ...GLOBAL_MODEL_FIELDS,
+    ],
     [configResp]
   )
+  const disabledHints = useMemo(() => {
+    const h: Record<string, string> = {}
+    for (const f of GLOBAL_MODEL_FIELDS) h[f] = '自动 · 全局设置'
+    return h
+  }, [])
 
   const dirty = useMemo(() => {
     if (!config || !configResp?.config) return false
@@ -224,6 +240,7 @@ export default function TrainPage() {
             values={config}
             onChange={setConfig}
             disabledFields={disabledFields}
+            disabledHints={disabledHints}
           />
         </section>
       ) : (

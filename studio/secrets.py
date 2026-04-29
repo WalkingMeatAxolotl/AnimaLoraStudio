@@ -91,6 +91,20 @@ class WD14Config(BaseModel):
         return self
 
 
+class ModelsConfig(BaseModel):
+    """全局模型配置（PP7）。
+
+    - `root`：模型存放根目录。`None/""` → 回退到 `REPO_ROOT/models/`（默认）。
+      云端 / 大容量数据盘可改成绝对路径，比如 `D:/anima-models` 或 `/data/anima`。
+      所有训练模型（Anima / VAE / Qwen3 / T5 tokenizer / WD14）共享这一根目录。
+    - `selected_anima`：当前默认主模型 variant。Studio 创建新 version 时根据
+      此字段把 `transformer_path` 写成绝对路径到 yaml；已存在 version 不动
+      （保证训练重现性）。
+    """
+    root: Optional[str] = None
+    selected_anima: str = "preview3-base"
+
+
 class Secrets(BaseModel):
     gelbooru: GelbooruConfig = Field(default_factory=GelbooruConfig)
     danbooru: DanbooruConfig = Field(default_factory=DanbooruConfig)
@@ -98,6 +112,7 @@ class Secrets(BaseModel):
     huggingface: HuggingFaceConfig = Field(default_factory=HuggingFaceConfig)
     joycaption: JoyCaptionConfig = Field(default_factory=JoyCaptionConfig)
     wd14: WD14Config = Field(default_factory=WD14Config)
+    models: ModelsConfig = Field(default_factory=ModelsConfig)
 
 
 # ---------------------------------------------------------------------------

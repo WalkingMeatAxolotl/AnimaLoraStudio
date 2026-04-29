@@ -85,6 +85,59 @@ def test_wd14_cannot_drop_current_model_id(secrets_file: Path) -> None:
     assert s.wd14.model_id in s.wd14.model_ids
 
 
+def test_models_root_default_none(secrets_file: Path) -> None:
+    """默认 secrets 里 models.root = None；下游应自行回退默认路径。"""
+    s = secrets.load()
+    assert s.models.root is None
+
+
+def test_models_root_persists(secrets_file: Path) -> None:
+    """patch 保存后能从磁盘读回；空字符串视作 None（下游回退默认）。"""
+    secrets.update({"models": {"root": "/data/anima"}})
+    assert secrets.load().models.root == "/data/anima"
+    secrets.update({"models": {"root": None}})
+    assert secrets.load().models.root is None
+
+
+def test_model_downloader_uses_secrets_root(
+    secrets_file: Path, tmp_path: Path
+) -> None:
+    """model_downloader.models_root() 优先读 secrets；未设回退 REPO_ROOT/models。
+
+    （与 schema.py 默认 + WD14 已用的 `models/wd14/` 对齐）
+    """
+    from studio.services import model_downloader
+    # 未设
+    secrets.update({"models": {"root": None}})
+    fallback = model_downloader.models_root()
+    assert fallback.name == "models"
+    # 设了
+    custom = tmp_path / "custom_models"
+    secrets.update({"models": {"root": str(custom)}})
+    assert model_downloader.models_root() == custom
+
+
+def test_find_anima_main_picks_latest(secrets_file: Path, tmp_path: Path) -> None:
+    """多版本并存时按 ANIMA_VARIANTS 顺序（latest 优先）返回第一个存在的。"""
+    from studio.services import model_downloader
+    secrets.update({"models": {"root": str(tmp_path)}})
+    dm = tmp_path / "diffusion_models"
+    dm.mkdir(parents=True)
+
+    # 一个都没 → None
+    assert model_downloader.find_anima_main() is None
+
+    # 只有 preview2 → 返回 preview2
+    (dm / "anima-preview2.safetensors").write_bytes(b"x")
+    assert model_downloader.find_anima_main().name == "anima-preview2.safetensors"
+
+    # preview3-base 装上 → latest 优先返回 preview3-base
+    (dm / "anima-preview3-base.safetensors").write_bytes(b"y")
+    assert (
+        model_downloader.find_anima_main().name == "anima-preview3-base.safetensors"
+    )
+
+
 def test_wd14_user_can_replace_current_then_drop(secrets_file: Path) -> None:
     """先切到另一个再删，才能真正从候选中移除原 model_id。"""
     s = secrets.update({"wd14": {"model_id": "A/m1"}})

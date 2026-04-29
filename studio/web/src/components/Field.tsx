@@ -8,8 +8,10 @@ interface Props {
   prop: SchemaProperty
   value: unknown
   onChange: (v: unknown) => void
-  /** PP6.3：disabled 状态（项目特定字段灰显 readonly）。 */
+  /** disabled 状态（自动控制字段灰显 readonly）。 */
   disabled?: boolean
+  /** 自定义 disabled 徽章文字；不传则用默认「自动 · 项目控制」。 */
+  disabledHint?: string
 }
 
 const labelCls = 'text-sm font-medium text-slate-300 mb-1'
@@ -19,19 +21,22 @@ const inputCls =
   'focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 ' +
   'text-sm disabled:opacity-50 disabled:cursor-not-allowed'
 
-const disabledHint = (
+const renderHint = (text: string) => (
   <span className="ml-2 text-[10px] text-amber-400/80 align-middle">
-    自动 · 项目控制
+    {text}
   </span>
 )
 
 /** 单个表单字段，按 control kind 分发渲染。 */
 export default function Field({
-  name, prop, value, onChange, disabled = false,
+  name, prop, value, onChange, disabled = false, disabledHint,
 }: Props) {
   const kind = controlKind(prop)
   const label = fieldLabel(name)
   const help = prop.description
+  const hintNode = disabled
+    ? renderHint(disabledHint ?? '自动 · 项目控制')
+    : null
   void name
 
   // bool ----------------------------------------------------------------
@@ -54,7 +59,7 @@ export default function Field({
         <span className="flex-1">
           <div className="text-sm text-slate-200">
             {label}
-            {disabled && disabledHint}
+            {hintNode}
           </div>
           {help && <div className={helpCls}>{help}</div>}
         </span>
@@ -68,7 +73,7 @@ export default function Field({
       <div className="py-1.5">
         <div className={labelCls}>
           {label}
-          {disabled && disabledHint}
+          {hintNode}
         </div>
         <select
           value={String(value ?? '')}
@@ -93,7 +98,7 @@ export default function Field({
       <div className="py-1.5">
         <div className={labelCls}>
           {label}
-          {disabled && disabledHint}
+          {hintNode}
         </div>
         <textarea
           rows={3}
@@ -115,7 +120,7 @@ export default function Field({
       <div className="py-1.5">
         <div className={labelCls}>
           {label}（每行一项）
-          {disabled && disabledHint}
+          {hintNode}
         </div>
         <textarea
           rows={Math.max(3, list.length + 1)}
@@ -141,7 +146,7 @@ export default function Field({
       <div className="py-1.5">
         <div className={labelCls}>
           {label}
-          {disabled && disabledHint}
+          {hintNode}
         </div>
         <input
           type="number"
@@ -175,6 +180,7 @@ export default function Field({
       value={value}
       onChange={onChange}
       disabled={disabled}
+      hintNode={hintNode}
     />
   )
 }
@@ -186,10 +192,11 @@ interface PathFieldProps {
   value: unknown
   onChange: (v: unknown) => void
   disabled?: boolean
+  hintNode?: React.ReactNode
 }
 
 function PathStringField({
-  label, kind, help, value, onChange, disabled = false,
+  label, kind, help, value, onChange, disabled = false, hintNode,
 }: PathFieldProps) {
   const [picking, setPicking] = useState(false)
   const text = value === null || value === undefined ? '' : String(value)
@@ -200,7 +207,7 @@ function PathStringField({
         {kind === 'path' && (
           <span className="ml-2 text-xs text-slate-500">(path)</span>
         )}
-        {disabled && disabledHint}
+        {hintNode}
       </div>
       <div className="flex gap-2">
         <input

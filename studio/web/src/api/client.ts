@@ -30,7 +30,7 @@ export interface JsonSchema {
 
 export interface SchemaResponse {
   schema: JsonSchema
-  groups: Array<{ key: string; label: string }>
+  groups: Array<{ key: string; label: string; default_collapsed?: boolean }>
 }
 
 export interface PresetSummary {
@@ -91,6 +91,15 @@ export const DEFAULT_WD14_MODELS: readonly string[] = [
   'SmilingWolf/wd-v1-4-convnext-tagger-v2',
 ]
 
+export interface ModelsConfig {
+  /** 训练模型根目录；null/空 → 回退 REPO_ROOT/models/（云端机改这里） */
+  root: string | null
+  /** 当前默认主模型 variant（preview3-base / preview2 / preview）。
+   * Studio 创建新 version 时把它展开成绝对路径写到 yaml.transformer_path；
+   * 已存在 version 不动（保证训练重现性）。 */
+  selected_anima: string
+}
+
 export interface Secrets {
   gelbooru: GelbooruConfig
   danbooru: DanbooruConfig
@@ -98,12 +107,71 @@ export interface Secrets {
   huggingface: HuggingFaceConfig
   joycaption: JoyCaptionConfig
   wd14: WD14Config
+  models: ModelsConfig
 }
 
 /** PUT /api/secrets 的 body：嵌套的 partial dict；MASK ("***") 表示「保持不变」。 */
 export type SecretsPatch = Partial<{
   [K in keyof Secrets]: Partial<Secrets[K]>
 }>
+
+// ---- models management (PP7) ---------------------------------------------
+
+export interface ModelFileStatus {
+  exists: boolean
+  size: number
+  mtime: number
+}
+
+export interface AnimaVariantInfo extends ModelFileStatus {
+  variant: string
+  is_latest: boolean
+  target_path: string
+}
+
+export interface AnimaMainCatalog {
+  id: 'anima_main'
+  name: string
+  description: string
+  repo: string
+  variants: AnimaVariantInfo[]
+  latest: string
+}
+
+export interface AnimaVaeCatalog extends ModelFileStatus {
+  id: 'anima_vae'
+  name: string
+  description: string
+  repo: string
+  target_path: string
+}
+
+export interface ModelDirCatalog {
+  id: 'qwen3' | 't5_tokenizer'
+  name: string
+  description: string
+  repo: string
+  target_dir: string
+  files: Array<{ name: string; exists: boolean; size: number; mtime: number }>
+}
+
+export interface ModelDownloadStatus {
+  key: string
+  status: 'pending' | 'running' | 'done' | 'failed'
+  started_at: number
+  finished_at: number | null
+  message: string
+  log_tail: string[]
+}
+
+export interface ModelsCatalog {
+  models_root: string
+  anima_main: AnimaMainCatalog
+  anima_vae: AnimaVaeCatalog
+  qwen3: ModelDirCatalog
+  t5_tokenizer: ModelDirCatalog
+  downloads: Record<string, ModelDownloadStatus>
+}
 
 // ---- projects / versions (PP1) -------------------------------------------
 
@@ -496,6 +564,14 @@ export const api = {
 
   // Secrets ------------------------------------------------------------
   getSecrets: () => req<Secrets>('/api/secrets'),
+
+  // Models management (PP7) ------------------------------------------------
+  getModelsCatalog: () => req<ModelsCatalog>('/api/models/catalog'),
+  startModelDownload: (body: { model_id: string; variant?: string }) =>
+    req<{ key: string; status: string }>('/api/models/download', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   updateSecrets: (patch: SecretsPatch) =>
     req<Secrets>('/api/secrets', {
       method: 'PUT',

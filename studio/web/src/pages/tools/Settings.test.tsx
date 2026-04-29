@@ -33,6 +33,46 @@ const initialServerState = {
     threshold_character: 0.85,
     blacklist_tags: [],
   },
+  models: { root: null, selected_anima: 'preview3-base' },
+}
+
+const emptyModelsCatalog = {
+  models_root: '/tmp/anima',
+  anima_main: {
+    id: 'anima_main',
+    name: 'Anima 主模型',
+    description: 'test',
+    repo: 'circlestone-labs/Anima',
+    variants: [],
+    latest: 'preview3-base',
+  },
+  anima_vae: {
+    id: 'anima_vae',
+    name: 'VAE',
+    description: 'test',
+    repo: 'circlestone-labs/Anima',
+    target_path: '/tmp/anima/vae/x.safetensors',
+    exists: false,
+    size: 0,
+    mtime: 0,
+  },
+  qwen3: {
+    id: 'qwen3',
+    name: 'Qwen3',
+    description: 'test',
+    repo: 'Qwen/Qwen3-0.6B-Base',
+    target_dir: '/tmp/anima/text_encoders',
+    files: [],
+  },
+  t5_tokenizer: {
+    id: 't5_tokenizer',
+    name: 'T5',
+    description: 'test',
+    repo: 'google/t5-v1_1-xxl',
+    target_dir: '/tmp/anima/t5_tokenizer',
+    files: [],
+  },
+  downloads: {},
 }
 
 const fetchMock = vi.fn()
@@ -40,7 +80,7 @@ const fetchMock = vi.fn()
 beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock)
   fetchMock.mockReset()
-  fetchMock.mockImplementation((_url: string, init?: RequestInit) => {
+  fetchMock.mockImplementation((url: string, init?: RequestInit) => {
     if (init?.method === 'PUT') {
       const body = JSON.parse(String(init.body)) as Record<
         string,
@@ -52,6 +92,11 @@ beforeEach(() => {
       }
       return Promise.resolve(
         new Response(JSON.stringify(merged), { status: 200 })
+      )
+    }
+    if (typeof url === 'string' && url.includes('/api/models/catalog')) {
+      return Promise.resolve(
+        new Response(JSON.stringify(emptyModelsCatalog), { status: 200 })
       )
     }
     return Promise.resolve(
@@ -91,7 +136,9 @@ describe('SettingsPage (PP0)', () => {
     await user.clear(userInput)
     await user.type(userInput, 'bob')
 
-    const saveBtn = screen.getByRole('button', { name: /保存/ })
+    // 主表单 Save 按钮文案就是「保存」；Models 区块的「保存路径」按钮
+    // 也含「保存」字样，正则匹配会撞 → 用精确名定位主按钮。
+    const saveBtn = screen.getByRole('button', { name: '保存' })
     await user.click(saveBtn)
 
     await waitFor(() => {

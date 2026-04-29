@@ -7,8 +7,10 @@ interface Props {
   schema: SchemaResponse
   values: ConfigData
   onChange: (values: ConfigData) => void
-  /** 这些字段名将以 readonly / disabled 渲染（PP6.3：项目特定字段）。 */
+  /** 这些字段名将以 readonly / disabled 渲染（项目特定 / 全局控制）。 */
   disabledFields?: string[]
+  /** 每个 disabled 字段的徽章文字；缺省走 Field 默认「自动 · 项目控制」。 */
+  disabledHints?: Record<string, string>
 }
 
 /**
@@ -16,10 +18,18 @@ interface Props {
  * show_when 用 evalShowWhen 做条件显示，依赖当前 values。
  */
 export default function SchemaForm({
-  schema, values, onChange, disabledFields,
+  schema, values, onChange, disabledFields, disabledHints,
 }: Props) {
   const disabledSet = new Set(disabledFields ?? [])
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
+  const hints = disabledHints ?? {}
+  // 用 schema.groups[].default_collapsed 决定初始折叠状态；用户手动改后保留状态。
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => {
+    const out: Record<string, boolean> = {}
+    for (const g of schema.groups) {
+      if (g.default_collapsed) out[g.key] = true
+    }
+    return out
+  })
   const setField = (name: string, v: unknown) =>
     onChange({ ...values, [name]: v })
 
@@ -71,6 +81,7 @@ export default function SchemaForm({
                       value={values[name]}
                       onChange={(v) => setField(name, v)}
                       disabled={disabledSet.has(name)}
+                      disabledHint={hints[name]}
                     />
                   )
                 })}

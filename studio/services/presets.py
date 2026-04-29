@@ -13,7 +13,7 @@ from typing import Any
 
 from .. import presets_io
 from ..schema import TrainingConfig
-from . import version_config
+from . import model_downloader, version_config
 
 
 def fork_preset_for_version(
@@ -25,13 +25,16 @@ def fork_preset_for_version(
 
     1. 读全局 preset（presets_io 校验）
     2. 应用项目特定字段（data_dir / output_dir / output_name…）
-    3. 写到 `versions/{label}/config.yaml`
+    3. **应用当前全局模型选择**（settings.models.selected_anima 决定 transformer_path；
+       VAE / qwen3 / t5 也从 models_root 算成绝对路径）—— 一次性注入，之后用户
+       在 Train 页改了不会被「保存」覆盖（write_version_config 不 force 模型路径）
+    4. 写到 `versions/{label}/config.yaml`
     返回最终落盘的 config dict。
     """
     src = presets_io.read_preset(src_preset_name)
     new_data = deepcopy(src)
-    overrides = version_config.project_specific_overrides(project, version)
-    new_data.update(overrides)
+    new_data.update(version_config.project_specific_overrides(project, version))
+    new_data.update(model_downloader.default_paths_for_new_version())
     version_config.write_version_config(
         project, version, new_data, force_project_overrides=True
     )

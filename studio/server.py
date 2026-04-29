@@ -57,6 +57,7 @@ from .services import (
     caption_snapshot,
     downloader,
     presets as preset_flow,
+    model_downloader,
     reg_builder,
     tagedit,
     uploads as uploads_svc,
@@ -174,7 +175,10 @@ def get_schema() -> dict[str, Any]:
     """返回 TrainingConfig 的 JSON Schema + 分组顺序，前端据此渲染表单。"""
     return {
         "schema": TrainingConfig.model_json_schema(),
-        "groups": [{"key": k, "label": label} for k, label in GROUP_ORDER],
+        "groups": [
+            {"key": k, "label": label, "default_collapsed": dc}
+            for k, label, dc in GROUP_ORDER
+        ],
     }
 
 
@@ -264,6 +268,34 @@ def get_secrets() -> dict[str, Any]:
 def put_secrets(body: dict[str, Any]) -> dict[str, Any]:
     new = secrets.update(body)
     return secrets.to_masked_dict(new)
+
+
+# ---------------------------------------------------------------------------
+# /api/models — 下载训练所需主模型 / VAE / tokenizer（PP7 第一刀）
+# ---------------------------------------------------------------------------
+
+
+class ModelDownloadRequest(BaseModel):
+    model_id: str           # "anima_main" | "anima_vae" | "qwen3" | "t5_tokenizer"
+    variant: Optional[str] = None  # 仅 anima_main 用，其他忽略
+
+
+@app.get("/api/models/catalog")
+def get_models_catalog() -> dict[str, Any]:
+    """前端设置页 Models 区块用：列已知模型 + 各自磁盘状态 + 当前下载状态。"""
+    return model_downloader.build_catalog()
+
+
+@app.post("/api/models/download")
+def start_model_download(body: ModelDownloadRequest) -> dict[str, Any]:
+    """启动后台下载，立即返回 status key；前端通过 SSE
+    (`model_download_changed`) 或轮询 catalog 看进度。"""
+    try:
+        key = model_downloader.trigger(body.model_id, body.variant)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    snap = model_downloader.get_status_snapshot()
+    return {"key": key, "status": snap.get(key, {}).get("status", "running")}
 
 
 # ---------------------------------------------------------------------------
