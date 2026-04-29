@@ -11,6 +11,7 @@ huggingface_hub + Pillow + numpy。
 from __future__ import annotations
 
 import csv
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Iterator, Optional
 
@@ -177,6 +178,21 @@ class WD14Tagger:
                 return 1
         return n
 
+    def _preprocess_one_safe(
+        self, indexed: tuple[int, Path]
+    ) -> tuple[int, Optional[np.ndarray], Optional[str]]:
+        """`(j, path) → (j, arr_or_None, err_or_None)`，给 ThreadPool 用。
+
+        PIL.Image.open / thumbnail / paste 在 C 层释放 GIL —— 多线程能真正并行，
+        在弱单核 + 强 GPU（云上 EPYC + RTX 5090）上把 preprocess 从瓶颈解开。
+        """
+        j, p = indexed
+        try:
+            with Image.open(p) as raw:
+                return j, self._preprocess(raw), None
+        except Exception as exc:  # noqa: BLE001
+            return j, None, str(exc)
+
     def tag(
         self,
         image_paths: list[Path],
@@ -189,20 +205,57 @@ class WD14Tagger:
         batch_n = self._effective_batch_size()
         done = 0
         i = 0
+
+        # PP10 — batch > 1 时 preprocess 走线程池，把单核 PIL 瓶颈拆开。
+        # CPU EP 路径 batch_n 强制 1，pool=None 走原单线程逻辑（零回归）。
+        pool: Optional[ThreadPoolExecutor] = None
+        if batch_n > 1:
+            pool = ThreadPoolExecutor(
+                max_workers=batch_n, thread_name_prefix="wd14-prep"
+            )
+        try:
+            yield from self._tag_loop(
+                image_paths, batch_n, pool, total, done, i, on_progress
+            )
+        finally:
+            if pool is not None:
+                pool.shutdown(wait=False)
+
+    def _tag_loop(
+        self,
+        image_paths: list[Path],
+        batch_n: int,
+        pool: Optional[ThreadPoolExecutor],
+        total: int,
+        done: int,
+        i: int,
+        on_progress: ProgressFn,
+    ) -> Iterator[TagResult]:
+        assert self._session is not None
         while i < total:
             chunk = image_paths[i : i + batch_n]
-            # 先逐张 preprocess（PIL 解码失败的图记下 error，跳过推理）
             arrs: list[np.ndarray] = []
             ok_idx: list[int] = []  # chunk 内成功 preprocess 的索引
             errs: dict[int, str] = {}
-            for j, p in enumerate(chunk):
-                try:
-                    with Image.open(p) as raw:
-                        arr = self._preprocess(raw)
-                    arrs.append(arr)
-                    ok_idx.append(j)
-                except Exception as exc:  # noqa: BLE001
-                    errs[j] = str(exc)
+            if pool is None:
+                # 单线程路径（CPU EP / batch=1，与 PP8 行为一致）
+                for j, p in enumerate(chunk):
+                    j, arr, err = self._preprocess_one_safe((j, p))
+                    if err is None and arr is not None:
+                        arrs.append(arr)
+                        ok_idx.append(j)
+                    else:
+                        errs[j] = err or "preprocess failed"
+            else:
+                # 并发 preprocess —— pool.map 保序，结果按 chunk index 顺序回来
+                for j, arr, err in pool.map(
+                    self._preprocess_one_safe, list(enumerate(chunk))
+                ):
+                    if err is None and arr is not None:
+                        arrs.append(arr)
+                        ok_idx.append(j)
+                    else:
+                        errs[j] = err or "preprocess failed"
             # batch 推理（剩 0 张就跳过）
             logits_batch: Optional[np.ndarray] = None
             if arrs:

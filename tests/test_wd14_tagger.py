@@ -267,3 +267,122 @@ def test_tag_batch_keeps_decode_errors(
     assert t._session.run.call_count == 1
     fed = t._session.run.call_args[0][1]["input"]
     assert fed.shape == (2, 4, 4, 3)
+
+
+# ---------------------------------------------------------------------------
+# PP10 — preprocess 并发
+# ---------------------------------------------------------------------------
+
+
+def test_preprocess_runs_concurrently_on_gpu_ep(
+    isolated_secrets: Path, tmp_path: Path
+) -> None:
+    """batch > 1 + GPU EP → preprocess 用 wd14-prep 线程池跑，多线程同时活跃。
+
+    用 Barrier(N) 强制 N 个 preprocess 必须并发才能解锁；如果是串行会 deadlock 卡 timeout。
+    """
+    import threading
+
+    secrets.update({"wd14": {"threshold_general": 0.1, "batch_size": 4}})
+    t = wd14_tagger.WD14Tagger()
+    t._session = MagicMock()
+    t._session.get_providers.return_value = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    t._session.run.return_value = (np.array([[0.9], [0.9], [0.9], [0.9]]),)
+    t._tags = ["x"]
+    t._tag_categories = [0]
+    t._input_name = "input"
+    t._input_size = 4
+
+    barrier = threading.Barrier(parties=4, timeout=2.0)
+    seen_threads: set[str] = set()
+    seen_threads_lock = threading.Lock()
+
+    real_preprocess = t._preprocess
+
+    def gated_preprocess(img):
+        with seen_threads_lock:
+            seen_threads.add(threading.current_thread().name)
+        # 必须 4 个 worker 同时到达才放行 —— 串行会 timeout
+        barrier.wait()
+        return real_preprocess(img)
+
+    t._preprocess = gated_preprocess  # type: ignore[method-assign]
+
+    paths = []
+    for i in range(4):
+        p = tmp_path / f"img{i}.png"
+        Image.new("RGB", (8, 8)).save(p)
+        paths.append(p)
+
+    results = list(t.tag(paths))
+    assert len(results) == 4
+    assert all(r["tags"] == ["x"] for r in results)
+    # 至少 2 个 wd14-prep 线程参与（实际应该 4 个，但 OS 调度允许 race）
+    prep_threads = {n for n in seen_threads if n.startswith("wd14-prep")}
+    assert len(prep_threads) >= 2, f"expected concurrent preprocess threads, saw {seen_threads}"
+
+
+def test_cpu_ep_path_does_not_spawn_pool(
+    isolated_secrets: Path, tmp_path: Path
+) -> None:
+    """CPU EP（batch_size 强制 1） → 不开 ThreadPool，行为与 PP8 完全一致。"""
+    import threading
+
+    secrets.update({"wd14": {"threshold_general": 0.1, "batch_size": 8}})
+    t = wd14_tagger.WD14Tagger()
+    t._session = MagicMock()
+    t._session.get_providers.return_value = ["CPUExecutionProvider"]
+    t._session.run.return_value = (np.array([[0.9]]),)
+    t._tags = ["x"]
+    t._tag_categories = [0]
+    t._input_name = "input"
+    t._input_size = 4
+
+    seen_threads: set[str] = set()
+    real_preprocess = t._preprocess
+
+    def tracking_preprocess(img):
+        seen_threads.add(threading.current_thread().name)
+        return real_preprocess(img)
+
+    t._preprocess = tracking_preprocess  # type: ignore[method-assign]
+
+    paths = []
+    for i in range(3):
+        p = tmp_path / f"img{i}.png"
+        Image.new("RGB", (8, 8)).save(p)
+        paths.append(p)
+
+    list(t.tag(paths))
+    # 全部应该在主线程跑 —— 没 wd14-prep 线程
+    prep_threads = {n for n in seen_threads if n.startswith("wd14-prep")}
+    assert prep_threads == set(), f"CPU 路径不应开 pool，saw {seen_threads}"
+
+
+def test_preprocess_concurrent_preserves_chunk_order(
+    isolated_secrets: Path, tmp_path: Path
+) -> None:
+    """并发 preprocess 后 yield 顺序仍按 chunk 输入顺序。"""
+    secrets.update({"wd14": {"threshold_general": 0.1, "batch_size": 4}})
+    t = wd14_tagger.WD14Tagger()
+    t._session = MagicMock()
+    t._session.get_providers.return_value = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    # 4 张图，session.run 的输出按 batch 顺序 (chunk 顺序)
+    t._session.run.return_value = (
+        np.array([[0.5], [0.6], [0.7], [0.8]]),
+    )
+    t._tags = ["x"]
+    t._tag_categories = [0]
+    t._input_name = "input"
+    t._input_size = 4
+
+    paths = []
+    for i in range(4):
+        p = tmp_path / f"img{i}.png"
+        Image.new("RGB", (8, 8), (i * 60, 0, 0)).save(p)
+        paths.append(p)
+
+    results = list(t.tag(paths))
+    # 顺序：results[k]['image'] == paths[k]
+    for k, r in enumerate(results):
+        assert r["image"] == paths[k]
