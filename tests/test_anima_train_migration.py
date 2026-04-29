@@ -109,36 +109,6 @@ def test_unknown_yaml_keys_ignored(at, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# train_template.yaml 全量加载
-# ---------------------------------------------------------------------------
-
-
-def test_train_template_yaml_loads_cleanly(at, monkeypatch: pytest.MonkeyPatch) -> None:
-    """仓库自带的 config/train_template.yaml 必须能被完整解析、验证、合并。"""
-    monkeypatch.setattr(sys, "argv", ["anima_train.py"])
-    args = at.parse_args()
-    template = Path(__file__).resolve().parent.parent / "config" / "train_template.yaml"
-    with open(template, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    at.apply_yaml_config(args, data)
-
-    # 抽样校验关键字段被正确写入
-    assert args.transformer_path == data["transformer_path"]
-    assert args.lora_type == data["lora_type"]
-    assert args.lora_rank == data["lora_rank"]
-    assert args.optimizer_type == data["optimizer_type"]
-    assert args.epochs == data["epochs"]
-    assert args.shuffle_caption is True
-    assert args.cache_latents is True
-
-
-def test_template_yaml_passes_pydantic_validation() -> None:
-    """train_template.yaml 应当能被 TrainingConfig 完整验证（无 unknown 字段）。"""
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from studio.schema import TrainingConfig  # noqa: PLC0415
-
-    template = Path(__file__).resolve().parent.parent / "config" / "train_template.yaml"
-    with open(template, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    cfg = TrainingConfig.model_validate(data)
-    assert cfg.transformer_path == data["transformer_path"]
+# config/train_template.yaml 已随 CLI 工作流一并删除（Studio 改走 preset 池），
+# 这两条 fixture 测试同步移除。Studio 模式下 yaml 由 fork_preset_for_version 注入
+# 绝对路径，覆盖在 test_version_config / test_presets_io 等里。

@@ -187,7 +187,10 @@ def test_cancel_running_returns_immediately(env) -> None:
         cmd_builder=sleep_cmd,
         db_path=env["db"], logs_dir=env["logs"], configs_dir=env["configs"],
         poll_interval=0.05,
-        terminate_grace=20.0,  # 即使 grace=20s，cancel 也必须立即返
+        # grace=3s 就足够验证「cancel 立即返回」的核心断言（仍 >>1s）；
+        # Windows 下 Python sleep 不响应 CTRL_BREAK_EVENT，得等 grace 后
+        # taskkill /T /F 才退，timeout 给 grace + 充足缓冲。
+        terminate_grace=3.0,
     )
     with db.connection_for(env["db"]) as conn:
         tid = db.create_task(conn, name="t", config_name="fake")
@@ -200,11 +203,12 @@ def test_cancel_running_returns_immediately(env) -> None:
         t0 = time.time()
         assert sup.cancel(tid) is True
         elapsed = time.time() - t0
-        # cancel 必须在 1s 内返回（远小于 grace 20s）
+        # cancel 必须在 1s 内返回（远小于 grace）
         assert elapsed < 1.0, f"cancel blocked for {elapsed:.1f}s"
-        # supervisor 主循环 poll 到进程退出后会把 status 改成 canceled
+        # supervisor 主循环 poll 到进程退出后会把 status 改成 canceled。
+        # grace 3s + 主循环 poll 0.05s + 容错 buffer
         assert _wait_for(
-            lambda: _task_status(env["db"], tid) == "canceled", timeout=15
+            lambda: _task_status(env["db"], tid) == "canceled", timeout=10
         )
     finally:
         sup.stop()

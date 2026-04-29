@@ -31,10 +31,8 @@ studio/web/node_modules/
 studio/web/dist/
 studio/web/.vite/
 
-# User-specific training configs (keep templates only)
-config/train_*.yaml
-!config/train_template.yaml
-!config/train_local.yaml
+# Studio 走 preset 池（studio_data/presets/，已被 studio_data/ 总规则覆盖），
+# 旧的 config/ 目录已删，不再需要 user yaml 排除规则。
 
 # OS / editor
 .DS_Store
@@ -48,9 +46,6 @@ Thumbs.db
 # Caches (HF/Transformers etc.)
 **/.cache/
 
-# Deleted directories (prevent re-creation)
-examples/
-scripts/
 
 # Model weights (keep code/config, ignore large weights)
 *.safetensors
