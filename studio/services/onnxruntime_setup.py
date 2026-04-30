@@ -14,11 +14,23 @@
 - 「装错了 cuda 版本」体现为 `import onnxruntime` 成功但 `CUDAExecutionProvider`
   不在 providers 里；不自动重装（用户可能故意），UI 给手动按钮 + 警告
 - 装包用 `subprocess.run([sys.executable, "-m", "pip", ...])`，不调内部 pip API
+
+PP9.5 — CUDA 共享库预加载 + session 创建 fallback：
+- onnxruntime-gpu 不带 CUDA runtime so（libcurand / libcublas / libcudnn ...）。
+  Linux 上常见踩坑：`get_available_providers()` 报 CUDA EP 可用，但创 session
+  时 dlopen 挂在 `libcurand.so.10: cannot open shared object file`。
+- 解法：模块顶层在 import onnxruntime **之前**用 ctypes RTLD_GLOBAL 预加载
+  torch 自带的 `nvidia/*/lib/*.so`（PyTorch 默认安装 nvidia-* wheel 到这里）。
+  这条路在 ComfyUI / WD14 生态里**没人做**，但是最便宜的通用 fix。
+- 失败时 wd14_tagger 仍会捕异常降 CPU；本模块用 record_cuda_load_error 把
+  原因 stash 出来给 UI 显示。
 """
 from __future__ import annotations
 
+import ctypes
 import importlib
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -31,6 +43,129 @@ CPU_PACKAGE = "onnxruntime"
 # onnxruntime-gpu 1.19+ PyPI 默认 CUDA 12.x，覆盖 RTX 30/40/50（5090 Blackwell 需 1.20+）
 GPU_VERSION_SPEC = ">=1.20"
 CPU_VERSION_SPEC = ">=1.16"
+
+# torch 装 GPU build 时拉的 nvidia-* wheel 安装到 site-packages/nvidia/<sub>/lib/
+# 下面这张表覆盖 onnxruntime-gpu 1.20 (CUDA 12.x / cuDNN 9.x) 创 session 时
+# 真正用到的 so。同 soname 多个候选包按顺序 try（cublasLt 通常在 cublas 包里）。
+_TORCH_NVIDIA_LIBS_LINUX: tuple[tuple[str, str], ...] = (
+    ("nvidia.cuda_runtime", "libcudart.so.12"),
+    ("nvidia.cuda_nvrtc", "libnvrtc.so.12"),
+    ("nvidia.cublas", "libcublas.so.12"),
+    ("nvidia.cublas", "libcublasLt.so.12"),
+    ("nvidia.cufft", "libcufft.so.11"),
+    ("nvidia.curand", "libcurand.so.10"),
+    ("nvidia.cusparse", "libcusparse.so.12"),
+    ("nvidia.cusolver", "libcusolver.so.11"),
+    ("nvidia.cudnn", "libcudnn.so.9"),
+)
+
+
+# ---------------------------------------------------------------------------
+# CUDA 共享库预加载（PP9.5）
+# ---------------------------------------------------------------------------
+
+
+_PRELOAD_RESULT: Optional[dict[str, Any]] = None
+_CUDA_LOAD_ERROR: Optional[str] = None
+
+
+def _preload_torch_cuda_libs() -> dict[str, Any]:
+    """Linux 上 ctypes RTLD_GLOBAL 预加载 torch 自带的 CUDA runtime so。
+
+    背景：onnxruntime-gpu wheel 不打包 CUDA runtime；用户机器没系统装 CUDA
+    时，CUDA EP 在 `get_available_providers()` 里看着可用，但创 session 时
+    dlopen 失败（典型 `libcurand.so.10: cannot open shared object file`）。
+    PyTorch 装 GPU build 会带一组 `nvidia-*-cu12` wheel，把 so 放到
+    `site-packages/nvidia/*/lib/`；提前 RTLD_GLOBAL 加载它们后，onnxruntime
+    后续 dlopen 就能从已加载的全局符号表里解析。
+
+    只对**当前进程**生效；server 子进程必须自己再跑一次（本模块在 import 时
+    自动跑）。
+
+    返回 `{"applied", "platform_skip", "preloaded", "errors", "candidates"}`：
+    - `platform_skip=True`：非 Linux，整体跳过（Windows / macOS 走别的路子）
+    - `preloaded`：成功 dlopen 的绝对路径列表
+    - `errors`：尝试 dlopen 但失败的 (path, reason) 列表
+    - `candidates`：被检视的 nvidia.* 子包数（用来观测 venv 里是否有 torch CUDA）
+    """
+    if not sys.platform.startswith("linux"):
+        return {
+            "applied": False,
+            "platform_skip": True,
+            "preloaded": [],
+            "errors": [],
+            "candidates": 0,
+        }
+    preloaded: list[str] = []
+    errors: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    candidates = 0
+    for pkg, soname in _TORCH_NVIDIA_LIBS_LINUX:
+        if soname in seen:
+            continue
+        try:
+            mod = importlib.import_module(pkg)
+        except ImportError:
+            continue
+        candidates += 1
+        for base in getattr(mod, "__path__", []):
+            candidate = os.path.join(base, "lib", soname)
+            if not os.path.exists(candidate):
+                continue
+            try:
+                ctypes.CDLL(candidate, mode=ctypes.RTLD_GLOBAL)
+            except OSError as exc:
+                errors.append((candidate, str(exc)))
+                continue
+            preloaded.append(candidate)
+            seen.add(soname)
+            break
+    return {
+        "applied": True,
+        "platform_skip": False,
+        "preloaded": preloaded,
+        "errors": errors,
+        "candidates": candidates,
+    }
+
+
+def _ensure_preload() -> dict[str, Any]:
+    """幂等触发预加载；首次调用时跑一次，后续返回 cached 结果。"""
+    global _PRELOAD_RESULT
+    if _PRELOAD_RESULT is None:
+        _PRELOAD_RESULT = _preload_torch_cuda_libs()
+        if _PRELOAD_RESULT["preloaded"]:
+            logger.info(
+                "[onnx_setup] 预加载 torch 自带 CUDA 库 %d 个: %s",
+                len(_PRELOAD_RESULT["preloaded"]),
+                ", ".join(
+                    os.path.basename(p) for p in _PRELOAD_RESULT["preloaded"]
+                ),
+            )
+        elif _PRELOAD_RESULT["applied"] and _PRELOAD_RESULT["candidates"] == 0:
+            logger.debug(
+                "[onnx_setup] 未发现 torch 自带 CUDA wheel；GPU EP 依赖系统 CUDA"
+            )
+    return _PRELOAD_RESULT
+
+
+def record_cuda_load_error(msg: Optional[str]) -> None:
+    """wd14_tagger.prepare 创 InferenceSession 失败 → 调本函数 stash 原因。
+
+    None 表示成功 / 清空（成功的 session 创建会清旧错误）。
+    """
+    global _CUDA_LOAD_ERROR
+    _CUDA_LOAD_ERROR = msg
+
+
+def get_cuda_load_error() -> Optional[str]:
+    return _CUDA_LOAD_ERROR
+
+
+# 模块加载即触发预加载 —— 必须在任何地方 `import onnxruntime` 之前生效。
+# server.py 顶层 `from .services import onnxruntime_setup` 已经覆盖 server 子进程；
+# cli.py 也在 cmd_run 早期 import 本模块。
+_ensure_preload()
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +241,11 @@ def current_runtime() -> dict[str, Any]:
         "providers": providers,
         "cuda_available": "CUDAExecutionProvider" in providers,
         "restart_required": restart_required,
+        # PP9.5 — 创 InferenceSession 时实际 dlopen 报的错（如 `libcurand.so.10`
+        # 缺失）；wd14_tagger.prepare 降 CPU 后填进来。None=没碰过 / 上次成功。
+        "cuda_load_error": _CUDA_LOAD_ERROR,
+        # PP9.5 — torch 自带 CUDA so 预加载结果（Linux only）；UI 诊断用
+        "preload": _PRELOAD_RESULT,
     }
 
 

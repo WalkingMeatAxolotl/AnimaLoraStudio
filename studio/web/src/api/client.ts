@@ -100,6 +100,17 @@ export interface WD14Runtime {
   cuda_available: boolean
   /** 装的包（dist-info）与当前进程已 import 的 .pyd 不一致 → 需重启 Studio。 */
   restart_required: boolean
+  /** PP9.5 — InferenceSession 创建时实际 dlopen 报的错（如缺 libcurand.so.10）；
+   *  非 null 表示已自动降级到 CPU EP，UI 应提示用户装 CUDA 库。 */
+  cuda_load_error: string | null
+  /** PP9.5 — torch 自带 CUDA so 预加载结果（Linux 才会 applied=true）。 */
+  preload?: {
+    applied: boolean
+    platform_skip: boolean
+    preloaded: string[]
+    errors: [string, string][]
+    candidates: number
+  } | null
   cuda_detect: {
     available: boolean
     driver_version: string | null

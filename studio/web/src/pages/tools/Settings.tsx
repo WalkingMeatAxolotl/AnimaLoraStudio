@@ -1076,6 +1076,8 @@ function WD14RuntimePanel() {
         providers: result.providers,
         cuda_available: result.cuda_available,
         restart_required: result.restart_required,
+        cuda_load_error: result.cuda_load_error,
+        preload: result.preload,
         cuda_detect: result.cuda_detect,
       })
       const newPkg = result.installed_pkg ?? result.installed ?? '?'
@@ -1137,6 +1139,30 @@ function WD14RuntimePanel() {
       {!restartRequired && mismatched && (
         <div className="text-amber-300 text-[11px] leading-relaxed">
           ⚠️ 检测到 NVIDIA GPU 但 onnxruntime 只有 CPU EP — WD14 会跑得很慢。点下方「重装为 GPU 版」修复。
+        </div>
+      )}
+      {rt.cuda_load_error && (
+        <div className="rounded border border-red-700/60 bg-red-900/30 px-2 py-1.5 text-red-200 text-[11px] leading-relaxed space-y-1">
+          <div>
+            ⚠️ CUDA EP 加载失败，本次打标已降级到 CPU。常见原因：缺系统 CUDA runtime
+            （onnxruntime-gpu wheel 不带）。
+          </div>
+          <code className="block font-mono text-[10px] text-red-100/90 break-all whitespace-pre-wrap">
+            {rt.cuda_load_error}
+          </code>
+          {rt.preload && rt.preload.applied && rt.preload.candidates === 0 && (
+            <div className="text-[10px] text-red-100/80">
+              提示：venv 里没装 torch CUDA wheel，无法借 PyTorch 自带 nvidia/* 库
+              兜底。可 `pip install torch --index-url https://download.pytorch.org/whl/cu121`
+              或系统装 CUDA 12 + cuDNN 9。
+            </div>
+          )}
+          {rt.preload && rt.preload.preloaded.length > 0 && (
+            <div className="text-[10px] text-red-100/80">
+              已预加载 {rt.preload.preloaded.length} 个 torch CUDA so 但仍失败 —
+              可能 onnxruntime 与 CUDA minor 版本不匹配。
+            </div>
+          )}
         </div>
       )}
       <div className="flex gap-2 flex-wrap pt-1">

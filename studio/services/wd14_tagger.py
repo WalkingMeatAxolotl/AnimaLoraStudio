@@ -11,6 +11,7 @@ huggingface_hub + Pillow + numpy。
 from __future__ import annotations
 
 import csv
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Iterator, Optional
@@ -20,7 +21,10 @@ from PIL import Image, ImageOps
 
 from .. import secrets
 from ..paths import REPO_ROOT
+from . import onnxruntime_setup
 from .tagger import ProgressFn, TagResult
+
+logger = logging.getLogger(__name__)
 
 
 def _safe_dir_name(model_id: str) -> str:
@@ -109,9 +113,27 @@ class WD14Tagger:
         avail = ort.get_available_providers()
         if "CUDAExecutionProvider" in avail:
             providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        self._session = ort.InferenceSession(
-            str(model_dir / "model.onnx"), providers=providers
-        )
+        # PP9.5 — get_available_providers() 报 CUDA 可用 ≠ 真能 dlopen。
+        # onnxruntime-gpu 在创 session 时才真去 dlopen libcurand/libcublas/...，
+        # 缺系统 CUDA runtime 会挂在这里。捕异常降 CPU 重试，把原因 stash 给
+        # Settings UI 显示，避免「打标全挂」的硬错误。
+        model_path = str(model_dir / "model.onnx")
+        try:
+            self._session = ort.InferenceSession(model_path, providers=providers)
+        except Exception as exc:  # noqa: BLE001
+            if "CUDAExecutionProvider" not in providers:
+                raise
+            err = str(exc)
+            logger.warning(
+                "WD14 CUDA session 创建失败，降级 CPU 重试: %s", err
+            )
+            onnxruntime_setup.record_cuda_load_error(err)
+            self._session = ort.InferenceSession(
+                model_path, providers=["CPUExecutionProvider"]
+            )
+        else:
+            # 成功（无论 CUDA 还是 CPU）→ 清掉旧错误状态
+            onnxruntime_setup.record_cuda_load_error(None)
         # 输入：通常 [N, H, W, C]；H==W
         ish = self._session.get_inputs()[0].shape
         self._input_name = self._session.get_inputs()[0].name
