@@ -218,17 +218,22 @@ def test_sample_with_task_id_finds_in_state_dir_samples(
 # /
 # ---------------------------------------------------------------------------
 
-def test_root_serves_legacy_html(client: TestClient, isolated_paths: dict[str, Path]) -> None:
-    isolated_paths["legacy_html"].write_text("<!DOCTYPE html><h1>legacy</h1>", encoding="utf-8")
-    resp = client.get("/")
-    assert resp.status_code == 200
-    assert "legacy" in resp.text
+def test_root_redirects_to_studio_when_built(
+    client: TestClient, isolated_paths: dict[str, Path]
+) -> None:
+    """前端 dist 存在时，/ 应 302 跳转到 /studio/。"""
+    isolated_paths["web_dist"].mkdir(parents=True, exist_ok=True)
+    resp = client.get("/", follow_redirects=False)
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "/studio/"
 
 
-def test_root_fallback_when_no_legacy(client: TestClient, isolated_paths: dict[str, Path]) -> None:
-    """旧监控页缺失时返回 JSON 提示，而不是 404。"""
-    assert not isolated_paths["legacy_html"].exists()
-    resp = client.get("/")
+def test_root_fallback_when_no_dist(
+    client: TestClient, isolated_paths: dict[str, Path]
+) -> None:
+    """前端未构建时返回 JSON 提示，而不是 404 / 跳转。"""
+    assert not isolated_paths["web_dist"].exists()
+    resp = client.get("/", follow_redirects=False)
     assert resp.status_code == 200
     body = resp.json()
     assert "AnimaStudio" in body["message"]

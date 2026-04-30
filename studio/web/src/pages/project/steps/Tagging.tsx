@@ -86,6 +86,20 @@ export default function TaggingPage() {
       )
   }, [tagger])
 
+  // 页面刷新 / 进入时回放最近一次 tag job：锁回 jid + 回放历史日志，让 SSE 接力
+  const vid = activeVersion?.id ?? null
+  useEffect(() => {
+    if (!vid) return
+    void api
+      .getLatestVersionJob(project.id, vid, 'tag')
+      .then((r) => {
+        if (!r.job) return
+        setJob(r.job)
+        setLogs(r.log ? r.log.split('\n') : [])
+      })
+      .catch(() => {})
+  }, [project.id, vid])
+
   useEventStream((evt) => {
     const jid = jobIdRef.current
     if (evt.type === 'job_log_appended' && jid && evt.job_id === jid) {

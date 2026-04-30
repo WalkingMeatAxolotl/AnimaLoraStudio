@@ -812,6 +812,14 @@ export const api = {
     req<{ job_id: number; canceled: boolean }>(`/api/jobs/${jid}/cancel`, {
       method: 'POST',
     }),
+  getLatestVersionJob: (
+    pid: number,
+    vid: number,
+    kind: 'download' | 'tag' | 'reg_build',
+  ) =>
+    req<{ job: Job | null; log: string }>(
+      `/api/projects/${pid}/versions/${vid}/jobs/latest?kind=${kind}`,
+    ),
 
   // Tagging (PP4) --------------------------------------------------------
   checkTagger: (name: TaggerName) =>

@@ -130,7 +130,9 @@ def get_state(task_id: Optional[int] = None) -> JSONResponse:
 
     `task_id` 给了 → 查 tasks.monitor_state_path 对应文件；没有 / 文件缺失 →
     返回 EMPTY_STATE，不报错。
-    `task_id` 没给 → 返回当前 running task 的 state；没 running 也返回空。
+    `task_id` 没给 → 优先 running 的 task；没 running 时回退到**最近一次**
+    （done / failed / canceled）带 monitor_state_path 的 task，让监控页结束
+    后还能看到上一次训练的曲线。都没有再返回 EMPTY_STATE。
 
     旧的全局 `monitor_data/state.json` 路径已退役（PP6.1）。
     """
@@ -144,12 +146,20 @@ def get_state(task_id: Optional[int] = None) -> JSONResponse:
         if row and row["monitor_state_path"]:
             target_path = Path(row["monitor_state_path"])
     else:
-        # 没给 task_id：找当前 running 的 task
+        # 没给 task_id：先找 running 的 task；没 running 回退到最近的完成任务
         with db.connection_for() as conn:
             row = conn.execute(
                 "SELECT monitor_state_path FROM tasks WHERE status = 'running' "
+                "AND monitor_state_path IS NOT NULL "
                 "ORDER BY started_at DESC LIMIT 1"
             ).fetchone()
+            if not (row and row["monitor_state_path"]):
+                row = conn.execute(
+                    "SELECT monitor_state_path FROM tasks "
+                    "WHERE monitor_state_path IS NOT NULL "
+                    "ORDER BY COALESCE(finished_at, started_at, created_at) DESC "
+                    "LIMIT 1"
+                ).fetchone()
         if row and row["monitor_state_path"]:
             target_path = Path(row["monitor_state_path"])
 
@@ -904,6 +914,35 @@ def get_job_endpoint(jid: int) -> dict[str, Any]:
     if not job:
         raise HTTPException(404, f"job 不存在: id={jid}")
     return job
+
+
+_HYDRATABLE_JOB_KINDS = {"download", "tag", "reg_build"}
+
+
+@app.get("/api/projects/{pid}/versions/{vid}/jobs/latest")
+def get_latest_version_job(pid: int, vid: int, kind: str) -> dict[str, Any]:
+    """页面刷新 hydrate 用：返回该 version 下指定 kind 的最近一条 job + 全量日志。
+
+    Tagging / Regularization 页之前只在本会话 startBuild 后才知道 jid，刷新一下
+    就丢了；这里给个起点让前端 mount 时锁回 jid + 回放历史日志，SSE 继续接力。
+    `job` 可能是 running / pending / 已完成；前端按 status 决定要不要继续等事件。
+    """
+    if kind not in _HYDRATABLE_JOB_KINDS:
+        raise HTTPException(400, f"unknown kind: {kind}")
+    with db.connection_for() as conn:
+        job = project_jobs.latest_for(
+            conn, project_id=pid, kind=kind, version_id=vid
+        )
+    if not job:
+        return {"job": None, "log": ""}
+    log_path = Path(job.get("log_path") or "")
+    log = ""
+    if log_path.exists():
+        try:
+            log = log_path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            log = ""
+    return {"job": job, "log": log}
 
 
 @app.get("/api/jobs/{jid}/log")

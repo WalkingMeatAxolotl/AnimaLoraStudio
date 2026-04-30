@@ -89,6 +89,19 @@ export default function RegularizationPage() {
     void refreshTrainTags()
   }, [refreshReg, refreshTrainTags])
 
+  // 刷新 / 进入页面时回放最近一次 reg_build job：锁回 jid + 回放历史日志
+  useEffect(() => {
+    if (!vid) return
+    void api
+      .getLatestVersionJob(project.id, vid, 'reg_build')
+      .then((r) => {
+        if (!r.job) return
+        setJob(r.job)
+        setLogs(r.log ? r.log.split('\n') : [])
+      })
+      .catch(() => {})
+  }, [project.id, vid])
+
   useEventStream((evt) => {
     const jid = jobIdRef.current
     if (evt.type === 'job_log_appended' && jid && evt.job_id === jid) {
