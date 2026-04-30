@@ -107,7 +107,9 @@ def report_environment() -> None:
 def probe_provider(model_path: str, provider: str) -> tuple[bool, str, object]:
     """真去创 InferenceSession；返回 (ok, msg, session_or_err_str)。
 
-    主要分辨 provider 在 advertised list 里但 dlopen 真挂的情况。
+    onnxruntime 在请求的 EP dlopen 失败时**不会抛**，会静默降级到下一个可用
+    EP（通常 CPU）。所以 ok 不只看 try/except，还要比对 sess.get_providers()
+    第一项 == requested。不一致 → 报为「降级」，实际是失败。
     """
     import onnxruntime as ort
 
@@ -116,6 +118,8 @@ def probe_provider(model_path: str, provider: str) -> tuple[bool, str, object]:
     except Exception as exc:  # noqa: BLE001
         return False, str(exc), None
     actual = sess.get_providers()
+    if provider not in actual:
+        return False, f"silently downgraded to {actual} (requested {provider} 失败)", None
     return True, f"providers={actual}", sess
 
 
