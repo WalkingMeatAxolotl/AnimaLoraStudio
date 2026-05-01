@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from . import db, project_jobs
-from .log_tail import LogTailer
+from .log_tail import LogTailer, MonitorStatePoller
 from .paths import LOGS_DIR, REPO_ROOT, STUDIO_DATA, STUDIO_DB, USER_PRESETS_DIR
 
 logger = logging.getLogger(__name__)
@@ -156,6 +156,7 @@ class Supervisor:
         self._current_id: Optional[int] = None
         self._current_log_fp: Optional[Any] = None
         self._current_tailer: Optional[LogTailer] = None
+        self._current_state_poller: Optional[MonitorStatePoller] = None
         self._cancel_pending = False
         self._log_seq = itertools.count()
 
@@ -350,6 +351,33 @@ class Supervisor:
         self._current_log_fp = log_fp
         self._cancel_pending = False
 
+        # PP6.4 — log tail → SSE（取代前端 2s 轮询 /api/logs/{id}）
+        tid = task["id"]
+
+        def _on_task_log(line: str) -> None:
+            self._on_event({
+                "type": "task_log_appended",
+                "task_id": tid,
+                "text": line,
+                "seq": next(self._log_seq),
+            })
+
+        self._current_tailer = LogTailer(log_path, _on_task_log)
+        self._current_tailer.start()
+
+        # PP6.4 — monitor_state.json 变化 → SSE（取代前端 1Hz 轮询 /api/state）
+        def _on_state(state: dict[str, Any]) -> None:
+            self._on_event({
+                "type": "monitor_state_updated",
+                "task_id": tid,
+                "state": state,
+            })
+
+        self._current_state_poller = MonitorStatePoller(
+            monitor_state_path, _on_state
+        )
+        self._current_state_poller.start()
+
         with db.connection_for(self._db_path) as conn:
             db.update_task(
                 conn,
@@ -457,6 +485,11 @@ class Supervisor:
                 self._current_tailer.stop()
             except Exception:
                 pass
+        if self._current_state_poller:
+            try:
+                self._current_state_poller.stop()
+            except Exception:
+                pass
 
         if self._cancel_pending:
             status = "canceled"
@@ -507,6 +540,7 @@ class Supervisor:
         self._current_id = None
         self._current_log_fp = None
         self._current_tailer = None
+        self._current_state_poller = None
         self._cancel_pending = False
 
     def _terminate_current(self) -> None:

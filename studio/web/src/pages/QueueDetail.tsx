@@ -395,7 +395,7 @@ function OverviewTab({ task }: { task: Task }) {
 
 function LogTab({
   taskId,
-  status,
+  status: _status,
 }: {
   taskId: number
   status: TaskStatus | null
@@ -404,34 +404,42 @@ function LogTab({
   const [error, setError] = useState<string | null>(null)
   const [autoScroll, setAutoScroll] = useState(true)
   const preRef = useRef<HTMLPreElement>(null)
+  // SSE 增量回调用 ref 拿最新 content，避免重新订阅
+  const contentRef = useRef('')
+
+  const setBoth = useCallback((s: string) => {
+    contentRef.current = s
+    setContent(s)
+  }, [])
 
   const refresh = useCallback(async () => {
     try {
       const log = await api.getLog(taskId)
-      setContent(log.content)
+      setBoth(log.content)
       setError(null)
     } catch (e) {
       setError(String(e))
     }
-  }, [taskId])
+  }, [taskId, setBoth])
 
+  // 切 taskId：先清空，再拉 snapshot —— 避免上一个 task 的尾巴跟新 task 的 SSE 帧拼在一起
   useEffect(() => {
+    setBoth('')
     void refresh()
-  }, [refresh])
+  }, [taskId, refresh, setBoth])
 
-  // 状态变化时刷新
+  // PP6.4 — SSE：log 增量直接追加；状态变化时重拉 snapshot 兜底
   useEventStream((evt) => {
-    if (evt.type === 'task_state_changed' && evt.task_id === taskId) {
+    if (evt.task_id !== taskId) return
+    if (evt.type === 'task_log_appended') {
+      const text = typeof evt.text === 'string' ? evt.text : ''
+      const prev = contentRef.current
+      const sep = prev && !prev.endsWith('\n') ? '\n' : ''
+      setBoth(prev + sep + text + '\n')
+    } else if (evt.type === 'task_state_changed') {
       void refresh()
     }
   })
-
-  // running 时每 2s 拉一次
-  useEffect(() => {
-    if (status !== 'running') return
-    const tick = window.setInterval(() => void refresh(), 2000)
-    return () => window.clearInterval(tick)
-  }, [status, refresh])
 
   useEffect(() => {
     if (autoScroll && preRef.current) {

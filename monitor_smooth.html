@@ -871,60 +871,65 @@
             }
         }
 
-        async function updateData() {
+        // PP6.4 — 把渲染从拉数据里拆出来，拉一次（snapshot）和 SSE 推送共用同一段
+        function applyState(data) {
+            lastData = data;
+            lastUpdate = Date.now();
+
+            document.getElementById('status-text').textContent = 'TRAINING';
+            document.getElementById('connection-status').innerHTML = '<span style="color:#39ff14">● Connected</span>';
+
+            // Stats
+            document.getElementById('epoch').textContent = data.epoch || 0;
+            document.getElementById('step').textContent = data.step || 0;
+            document.getElementById('speed').textContent = (data.speed || 0).toFixed(2);
+            if (data.total_steps) document.getElementById('total-steps').textContent = data.total_steps;
+            if (data.total_epochs) document.getElementById('total-epochs').textContent = data.total_epochs;
+
+            // Charts
+            updateCharts(data);
+
+            if (data.lr_history?.length > 0) {
+                const lr = data.lr_history.slice(-500);
+                lrChart.data.labels = lr.map(l => l.step);
+                lrChart.data.datasets[0].data = lr.map(l => l.lr);
+                lrChart.update('none');
+            }
+
+            // Progress
+            if (data.total_steps > 0) {
+                const pct = Math.min(100, (data.step / data.total_steps) * 100);
+                document.getElementById('progress-bar').style.width = `${pct}%`;
+                document.getElementById('progress-pct').textContent = `${pct.toFixed(1)}%`;
+                const elapsed = data.start_time ? (Date.now() / 1000 - data.start_time) : 0;
+                const eta = data.speed > 0 ? (data.total_steps - data.step) / data.speed : 0;
+                document.getElementById('elapsed').textContent = formatTime(elapsed);
+                document.getElementById('eta').textContent = formatTime(eta);
+            }
+
+            // Samples - Dock style
+            if (data.samples?.length > 0) {
+                updateSamplesGrid(data.samples);
+            }
+
+            // Config
+            if (data.config && Object.keys(data.config).length) {
+                const html = Object.entries(data.config).map(([k, v]) => `
+                    <div class="config-row">
+                        <span class="config-key">${k}</span>
+                        <span class="config-value">${v}</span>
+                    </div>
+                `).join('');
+                document.getElementById('config').innerHTML = html;
+            }
+        }
+
+        // 一次性拉 snapshot：训练已结束 / 没在写文件时也能看到上次的曲线
+        async function loadSnapshot() {
             try {
                 const resp = await fetch(`${API_BASE}/api/state?max_points=${MAX_CHART_POINTS}${TASK_QS}&_=${Date.now()}`);
                 const data = await resp.json();
-                lastData = data;
-                lastUpdate = Date.now();
-
-                document.getElementById('status-text').textContent = 'TRAINING';
-                document.getElementById('connection-status').innerHTML = '<span style="color:#39ff14">● Connected</span>';
-
-                // Stats
-                document.getElementById('epoch').textContent = data.epoch || 0;
-                document.getElementById('step').textContent = data.step || 0;
-                document.getElementById('speed').textContent = (data.speed || 0).toFixed(2);
-                if (data.total_steps) document.getElementById('total-steps').textContent = data.total_steps;
-                if (data.total_epochs) document.getElementById('total-epochs').textContent = data.total_epochs;
-
-                // Charts
-                updateCharts(data);
-
-                if (data.lr_history?.length > 0) {
-                    const lr = data.lr_history.slice(-500);
-                    lrChart.data.labels = lr.map(l => l.step);
-                    lrChart.data.datasets[0].data = lr.map(l => l.lr);
-                    lrChart.update('none');
-                }
-                
-                // Progress
-                if (data.total_steps > 0) {
-                    const pct = Math.min(100, (data.step / data.total_steps) * 100);
-                    document.getElementById('progress-bar').style.width = `${pct}%`;
-                    document.getElementById('progress-pct').textContent = `${pct.toFixed(1)}%`;
-                    const elapsed = data.start_time ? (Date.now() / 1000 - data.start_time) : 0;
-                    const eta = data.speed > 0 ? (data.total_steps - data.step) / data.speed : 0;
-                    document.getElementById('elapsed').textContent = formatTime(elapsed);
-                    document.getElementById('eta').textContent = formatTime(eta);
-                }
-
-                // Samples - Dock style
-                if (data.samples?.length > 0) {
-                    updateSamplesGrid(data.samples);
-                }
-                
-                // Config
-                if (data.config && Object.keys(data.config).length) {
-                    const html = Object.entries(data.config).map(([k, v]) => `
-                        <div class="config-row">
-                            <span class="config-key">${k}</span>
-                            <span class="config-value">${v}</span>
-                        </div>
-                    `).join('');
-                    document.getElementById('config').innerHTML = html;
-                }
-
+                applyState(data);
             } catch (e) {
                 if (Date.now() - lastUpdate > 5000) {
                     document.getElementById('status-text').textContent = 'OFFLINE';
@@ -933,8 +938,42 @@
             }
         }
 
-        setInterval(updateData, 1000);
-        updateData();
+        // SSE：监听 /api/events，收到 monitor_state_updated 就刷新；
+        // 同时收 task_state_changed 重拉 snapshot（任务切换 / 结束时兜底）
+        function startEventStream() {
+            if (typeof EventSource === 'undefined') {
+                // 老浏览器兜底：保持轮询
+                setInterval(loadSnapshot, 1000);
+                return;
+            }
+            const es = new EventSource(`${API_BASE}/api/events`);
+            es.onmessage = (e) => {
+                let evt;
+                try { evt = JSON.parse(e.data); } catch { return; }
+                if (evt.type === 'monitor_state_updated') {
+                    // 没指定 TASK_ID → 全收（与原 /api/state 默认行为一致）；
+                    // 指定了就只认匹配的那个
+                    if (TASK_ID === null || String(evt.task_id) === TASK_ID) {
+                        if (evt.state) applyState(evt.state);
+                    }
+                } else if (evt.type === 'task_state_changed') {
+                    // 任务结束 / 状态变化时重拉 snapshot 保证一致
+                    if (TASK_ID === null || String(evt.task_id) === TASK_ID) {
+                        loadSnapshot();
+                    }
+                }
+            };
+            es.onerror = () => {
+                // EventSource 自动重连；超 5s 没数据 → 标 offline
+                if (Date.now() - lastUpdate > 5000) {
+                    document.getElementById('status-text').textContent = 'OFFLINE';
+                    document.getElementById('connection-status').innerHTML = '<span style="color:#ff3366">● Disconnected</span>';
+                }
+            };
+        }
+
+        loadSnapshot();
+        startEventStream();
 
         // ==================== 缩略图网格 ====================
         let currentSamples = [];
