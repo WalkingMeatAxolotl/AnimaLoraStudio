@@ -87,26 +87,13 @@ def baseline_targets(model: nn.Module) -> set[str]:
 
 
 # --------------------------------------------------------------------- lycoris
-ANIMA_PRESET = {
-    "enable_conv": False,
-    "target_module": [],  # 空 — 我们用 target_name 而非 module class 匹配
-    "target_name": [
-        "*q_proj", "*k_proj", "*v_proj", "*output_proj",
-        "*mlp.layer1", "*mlp.layer2",
-    ],
-    "exclude_name": ["llm_adapter*"],
-    "use_fnmatch": True,
-    "lora_prefix": "lora_unet",  # 保持与现有 ComfyUI 加载流程兼容
-    "module_algo_map": {},
-    "name_algo_map": {},
-}
-
-
 def lycoris_targets(model: nn.Module) -> tuple[set[str], object]:
     """通过反向查 lora.org_module 拿到真实 named_modules 路径，避免 _→. 还原歧义"""
     from lycoris import LycorisNetwork
 
-    LycorisNetwork.apply_preset(ANIMA_PRESET)
+    from utils.lokr_preset import apply as apply_anima_preset
+
+    apply_anima_preset(LycorisNetwork)
     network = LycorisNetwork(
         model,
         multiplier=1.0,
