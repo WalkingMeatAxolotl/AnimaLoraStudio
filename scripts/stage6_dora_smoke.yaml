@@ -1,0 +1,86 @@
+# Stage 3b — 真实 Anima + lycoris-lora 1 step smoke
+# 仅验证：注入成功 / forward+backward 无错 / optimizer.step() 工作 / save 产出 ComfyUI 兼容文件
+# 跑完应在 5-10 分钟内完成（取决于 VAE 缓存预处理）
+
+transformer_path: models\diffusion_models\anima-preview3-base.safetensors
+vae_path: models\vae\qwen_image_vae.safetensors
+text_encoder_path: models\text_encoders
+t5_tokenizer_path: models\t5_tokenizer
+
+# 用户数据集（71 张图，repeat=2）
+data_dir: C:\Users\Mei\Desktop\SD\danbooru\dev\train\poharo
+resolution: 1024
+
+reg_data_dir: null
+reg_caption: null
+reg_weight: 1.0
+
+shuffle_caption: false       # smoke：减少不确定性
+keep_tokens: 0
+flip_augment: false
+tag_dropout: 0.0
+prefer_json: false           # 数据集是 .txt，不强求 JSON
+
+cache_latents: false         # 跳过 VAE 预缓存以加快首次启动
+
+lora_type: lokr
+lora_rank: 8
+lora_alpha: 8.0
+lokr_factor: 8
+lora_dora: true              # Stage 6 验证 DoRA 启用路径
+lora_rs: true                # rs_lora 启用
+lora_module_dropout: 0.1     # 启用模块 dropout
+
+epochs: 1                    # epoch 循环至少进入 1 次（max_steps=5 会先触发 break）
+max_steps: 5                 # 只跑 5 步
+batch_size: 1
+grad_accum: 1
+learning_rate: 0.0001
+
+lr_scheduler: none
+lr_scheduler_t0: 500
+lr_scheduler_t_mult: 2.0
+lr_scheduler_eta_min: 1.0e-06
+
+optimizer_type: adamw        # 用最常规的，Prodigy 第一步特殊
+prodigy_d_coef: 1.0
+prodigy_safeguard_warmup: true
+weight_decay: 0.01           # 触发 w1 排除 WD 的分组分支
+grad_clip_max_norm: 0.0
+
+mixed_precision: bf16
+grad_checkpoint: true
+xformers: false
+num_workers: 0
+
+output_dir: G:\AnimaLoraToolkit\scripts\stage6_dora_output
+output_name: stage6_dora
+
+save_every: 0
+save_every_steps: 0          # 只保存 final
+save_state_every: 0          # 不保存 state.pt
+seed: 42
+resume_lora: null
+resume_state: null
+
+# 关闭采样出图（耗时且与 LoRA 注入正确性无关）
+sample_every: 0
+sample_steps: 0
+sample_infer_steps: 25
+sample_cfg_scale: 4.0
+sample_sampler_name: er_sde
+sample_scheduler: simple
+sample_width: 0
+sample_height: 0
+sample_seed: 0
+sample_negative_prompt: ''
+sample_prompt: ''
+sample_prompts: []
+
+loss_curve_steps: 100
+no_progress: false
+log_every: 1                 # 每步打印 loss
+no_monitor: true             # 跳过 monitor 服务，纯 CLI
+monitor_host: 127.0.0.1
+monitor_port: 8765
+no_browser: true

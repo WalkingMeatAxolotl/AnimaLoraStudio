@@ -114,25 +114,50 @@ class TrainingConfig(BaseModel):
     )
 
     # ------------------------------------------------------------------- LoRA
-    lora_type: Literal["lora", "lokr"] = Field(
+    lora_type: Literal["lora", "lokr", "loha"] = Field(
         "lokr",
-        description="适配器类型",
+        description="适配器算法（lora/lokr/loha）",
         json_schema_extra=_meta("lora"),
     )
     lora_rank: int = Field(
         32, ge=4, le=256,
-        description="LoRA rank（推荐 8/16/32/64）",
+        description="rank（推荐 8/16/32/64）",
         json_schema_extra=_meta("lora"),
     )
     lora_alpha: float = Field(
         32.0, ge=0.0,
-        description="LoRA alpha（通常与 rank 相同）",
+        description="alpha（通常与 rank 相同；rs_lora 开启时常设为 √rank）",
         json_schema_extra=_meta("lora"),
     )
     lokr_factor: int = Field(
         8, ge=2,
         description="LoKr 分解因子（仅 lora_type=lokr）",
         json_schema_extra=_meta("lora", show_when="lora_type==lokr"),
+    )
+    lora_dora: bool = Field(
+        False,
+        description="DoRA：方向/幅度分离训练，社区共识收敛更稳",
+        json_schema_extra=_meta("lora"),
+    )
+    lora_rs: bool = Field(
+        False,
+        description="rs-LoRA：scale=α/√r 而非 α/r，高 rank（>32）训练更稳",
+        json_schema_extra=_meta("lora"),
+    )
+    lora_dropout: float = Field(
+        0.0, ge=0.0, le=1.0,
+        description="LoRA 输入 dropout（0 关闭）",
+        json_schema_extra=_meta("lora"),
+    )
+    lora_rank_dropout: float = Field(
+        0.0, ge=0.0, le=1.0,
+        description="rank 维 dropout（防过拟合，对小数据集效果好）",
+        json_schema_extra=_meta("lora"),
+    )
+    lora_module_dropout: float = Field(
+        0.0, ge=0.0, le=1.0,
+        description="层级 stochastic depth（整层级别随机跳过）",
+        json_schema_extra=_meta("lora"),
     )
 
     # ------------------------------------------------------------------ 训练
