@@ -12,7 +12,9 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR" || { echo "studio.sh: cannot cd to $SCRIPT_DIR" >&2; exit 1; }
 
-if [ -x "venv/bin/python" ]; then
+if [ -x "/opt/venv/bin/python" ]; then
+    PYTHON="/opt/venv/bin/python"
+elif [ -x "venv/bin/python" ]; then
     PYTHON="venv/bin/python"
 elif [ -x ".venv/bin/python" ]; then
     PYTHON=".venv/bin/python"
@@ -44,10 +46,9 @@ else
 fi
 
 echo "studio.sh: using $PYTHON"
-"$PYTHON" -m studio "$@"
-EXIT_CODE=$?
-if [ $EXIT_CODE -ne 0 ]; then
-    echo ""
-    echo "[studio] 退出码 $EXIT_CODE，请检查上方错误信息。"
+if [ -f "/.dockerenv" ] && [ $# -eq 0 ]; then
+    # 容器环境（Docker / CNB）：监听全部接口，无需自动开浏览器
+    exec "$PYTHON" -m studio run --host 0.0.0.0 --no-browser
+else
+    exec "$PYTHON" -m studio "$@"
 fi
-exit $EXIT_CODE

@@ -1,11 +1,12 @@
-name: Build CNB Docker Image
+name: Build Docker Image
 
 on:
   push:
-    branches: [feat/cnb-adaptation]
+    branches: [master]
     paths:
       - '.ide/Dockerfile'
       - 'requirements.txt'
+      - 'studio/web/package*.json'
   workflow_dispatch:
 
 jobs:
@@ -26,4 +27,4 @@ jobs:
           context: .
           file: .ide/Dockerfile
           push: true
-          tags: saltycocoa/animalorastudio-cnb:latest
+          tags: saltycocoa/animalorastudio:latest

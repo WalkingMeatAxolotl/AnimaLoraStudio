@@ -1,8 +1,12 @@
-vscode:
-  - runner:
-      tags: cnb:arch:amd64:gpu:H20
-    docker:
-      image: saltycocoa/animalorastudio-cnb:latest
-    services:
-      - vscode
-      - docker
+$:
+  vscode:
+    - runner:
+        tags: cnb:arch:amd64:gpu:H20
+      docker:
+        image: mirror.ccs.tencentyun.com/saltycocoa/animalorastudio:latest
+      services:
+        - vscode
+        - docker
+      stages:
+        - name: setup
+          script: bash setup.sh

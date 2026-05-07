@@ -1,0 +1,18 @@
+services:
+  studio:
+    image: saltycocoa/animalorastudio:latest
+    # 本地构建时可改为: build: { context: ., dockerfile: .ide/Dockerfile }
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - .:/workspace
+    ports:
+      - "8765:8765"
+    working_dir: /workspace
+    command: bash -c "bash setup.sh && bash studio.sh"
+    restart: unless-stopped

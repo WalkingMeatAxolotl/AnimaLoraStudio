@@ -33,23 +33,32 @@ RUN apt-get update && \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. 安装 Git LFS
+# 2. 安装 Node.js 20
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# 3. 安装 Git LFS
 RUN git lfs install --system
 
-# 3. 创建持久化虚拟环境（镜像层缓存，容器重启不丢失）
+# 4. 创建持久化虚拟环境
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# 4. 安装 PyTorch（CUDA 12.x 预编译包）
+# 5. 安装 PyTorch（CUDA 12.x 预编译包）
 RUN pip install --no-cache-dir \
     torch \
     torchvision \
     --index-url https://download.pytorch.org/whl/cu124
 
-# 5. 复制 requirements.txt 并安装其余 Python 依赖
+# 6. 安装其余 Python 依赖
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt && \
     rm /tmp/requirements.txt
 
-# 6. 工作目录（CNB 会将仓库代码挂载到这里）
+# 7. 预安装前端 node_modules（避免每次新环境重跑 npm install）
+COPY studio/web/package*.json /opt/studio-web/
+RUN cd /opt/studio-web && npm ci
+
+# 8. 工作目录（CNB 会将仓库代码挂载到这里）
 WORKDIR /workspace
