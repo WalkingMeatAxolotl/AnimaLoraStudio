@@ -3,7 +3,7 @@ $:
     - runner:
         tags: cnb:arch:amd64:gpu:H20
       docker:
-        image: saltycocoa/animalorastudio-cnb:latest
+        image: saltycocoa/animalorastudio:latest
       services:
         - vscode
         - docker
