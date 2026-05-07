@@ -11,9 +11,6 @@
 
 # --- 用户配置区域 (User Configuration) ---
 
-# 虚拟环境 Python 路径
-PYTHON_BIN="./venv/bin/python"
-
 # 训练脚本路径
 TRAIN_SCRIPT="./anima_train.py"
 
@@ -30,10 +27,27 @@ LOG_FILE="./anima_training.log"
 
 STOP_SCRIPT="./stop_anima_training.sh"
 
+# --- 0. 检测 Python 环境（CNB 镜像内置 vs 本地 venv）---
+echo "正在检测 Python 环境..."
+PYTHON_BIN=""
+if [ -f "/opt/venv/bin/python" ]; then
+    PYTHON_BIN="/opt/venv/bin/python"
+    echo "  使用 CNB 镜像内置环境: $PYTHON_BIN"
+elif [ -f "./venv/bin/python" ]; then
+    PYTHON_BIN="./venv/bin/python"
+    echo "  使用本地虚拟环境: $PYTHON_BIN"
+elif command -v python3 &> /dev/null; then
+    PYTHON_BIN="$(command -v python3)"
+    echo "  使用系统 Python: $PYTHON_BIN"
+else
+    echo "错误: 未找到可用的 Python 环境"
+    exit 1
+fi
+
 # --- 1. 路径与文件检查 ---
 echo "正在检查运行环境..."
 if [ ! -f "$PYTHON_BIN" ]; then
-    echo "错误: Python 虚拟环境未找到: $PYTHON_BIN"
+    echo "错误: Python 不可用: $PYTHON_BIN"
     exit 1
 fi
 

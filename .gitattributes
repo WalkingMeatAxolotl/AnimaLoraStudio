@@ -13,3 +13,32 @@
 
 # Shell scripts must use LF; CRLF breaks shebang and bash parsing on Linux.
 *.sh text eol=lf
+
+# ============================================================================
+# Git LFS 追踪规则 —— CNB 环境持久化关键
+#
+# 模型权重和训练产出是大文件（几百 MB ~ 数 GB），必须走 LFS。
+# CNB 环境仅通过 Git 仓库持久化数据，容器重启后所有非 git 文件丢失。
+# ============================================================================
+
+# ---- 模型权重 ----
+*.safetensors filter=lfs diff=lfs merge=lfs -text
+*.ckpt         filter=lfs diff=lfs merge=lfs -text
+*.bin          filter=lfs diff=lfs merge=lfs -text
+*.pt           filter=lfs diff=lfs merge=lfs -text
+*.pth          filter=lfs diff=lfs merge=lfs -text
+
+# ---- VAE latent 缓存 ----
+*.npz          filter=lfs diff=lfs merge=lfs -text
+
+# ---- 训练输出（按目录精确匹配，避免误伤 Python 项目中的小 .bin）----
+output/**/*.safetensors filter=lfs diff=lfs merge=lfs -text
+output/**/*.bin         filter=lfs diff=lfs merge=lfs -text
+output/**/*.pt          filter=lfs diff=lfs merge=lfs -text
+
+# ---- 大型图片数据集（可选，按需取消注释）----
+# dataset/**/*.png   filter=lfs diff=lfs merge=lfs -text
+# dataset/**/*.jpg   filter=lfs diff=lfs merge=lfs -text
+# dataset/**/*.jpeg  filter=lfs diff=lfs merge=lfs -text
+# dataset/**/*.webp  filter=lfs diff=lfs merge=lfs -text
+# dataset/**/*.npz   filter=lfs diff=lfs merge=lfs -text
