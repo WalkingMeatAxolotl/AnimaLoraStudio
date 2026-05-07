@@ -18,6 +18,8 @@ USER_PRESETS_DIR = STUDIO_DATA / "presets"
 USER_CONFIGS_DIR = USER_PRESETS_DIR  # 兼容别名（PP0 后将随 configs_io 一起移除）
 LOGS_DIR = STUDIO_DATA / "logs"
 THUMB_CACHE_DIR = STUDIO_DATA / "thumb_cache"
+GENERATE_JOBS_DIR = STUDIO_DATA / "generate_jobs"
+GENERATE_CONFIGS_DIR = STUDIO_DATA / "generate_configs"
 
 # React 前端
 WEB_DIR = REPO_ROOT / "studio" / "web"
@@ -36,5 +38,5 @@ def ensure_dirs() -> None:
     """首次运行时创建必要目录。"""
     STUDIO_DATA.mkdir(parents=True, exist_ok=True)
     migrate_configs_to_presets()
-    for d in (USER_PRESETS_DIR, LOGS_DIR):
+    for d in (USER_PRESETS_DIR, LOGS_DIR, GENERATE_JOBS_DIR, GENERATE_CONFIGS_DIR):
         d.mkdir(parents=True, exist_ok=True)

@@ -28,7 +28,9 @@ from typing import Any, Callable, Optional
 
 from . import db, project_jobs, secrets as _secrets
 from .log_tail import LogTailer, MonitorStatePoller
-from .paths import LOGS_DIR, REPO_ROOT, STUDIO_DATA, STUDIO_DB, USER_PRESETS_DIR
+from .paths import (
+    GENERATE_JOBS_DIR, LOGS_DIR, REPO_ROOT, STUDIO_DATA, STUDIO_DB, USER_PRESETS_DIR,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,10 +81,12 @@ JobCmdBuilder = Callable[[dict[str, Any]], list[str]]
 
 
 def _default_cmd_builder(task: dict[str, Any], config_path: Path) -> list[str]:
-    """默认调用 anima_train.py --config <path> --monitor-state-file <state>。"""
+    """根据 task_type 路由到 anima_train.py 或 anima_generate.py。"""
+    task_type = task.get("task_type", "train")
+    script = "anima_generate.py" if task_type == "generate" else "anima_train.py"
     cmd = [
         sys.executable,
-        str(REPO_ROOT / "anima_train.py"),
+        str(REPO_ROOT / script),
         "--config",
         str(config_path),
     ]
@@ -127,11 +131,13 @@ def _maybe_finalize_version(conn: Any, task_id: int) -> None:
 def _resolve_monitor_state_path(task: dict[str, Any]) -> Path:
     """PP6.1 — 决定 task 的 monitor_state.json 落盘路径。
 
-    有 version_id：`versions/{label}/monitor_state.json`，与 train/output/samples
-    放一起；用户切 version 监控自然独立。
-    没有 version_id（PP1 之前的旧任务）：兜底到
-    `studio_data/monitors/task_{id}/state.json`，避免老任务无处可写。
+    generate 任务：`studio_data/generate_jobs/{id}/monitor_state.json`。
+    训练任务有 version_id：`versions/{label}/monitor_state.json`。
+    旧任务兜底：`studio_data/monitors/task_{id}/state.json`。
     """
+    if task.get("task_type") == "generate":
+        return GENERATE_JOBS_DIR / str(task["id"]) / "monitor_state.json"
+
     vid = task.get("version_id")
     pid = task.get("project_id")
     if vid and pid:

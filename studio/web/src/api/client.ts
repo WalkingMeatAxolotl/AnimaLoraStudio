@@ -1100,6 +1100,15 @@ export const api = {
   sampleImageUrl: (filename: string, taskId: number, w?: number) =>
     `/samples/${filename}?task_id=${taskId}${w ? `&w=${w}` : ''}`,
 
+  // Generate (独立图片生成) -----------------------------------------------
+  enqueueGenerate: (body: GenerateRequest) =>
+    req<Task>('/api/generate', { method: 'POST', body: JSON.stringify(body) }),
+  listGenerateTasks: (status?: TaskStatus) => {
+    const qs = status ? `?status=${status}` : ''
+    return req<{ items: Task[] }>(`/api/generate${qs}`).then((r) => r.items)
+  },
+  getGenerateTask: (id: number) => req<Task>(`/api/generate/${id}`),
+
   // Queue import / export ---------------------------------------------
   exportQueue: (ids?: number[]) => {
     const qs = ids && ids.length ? `?ids=${ids.join(',')}` : ''
@@ -1124,6 +1133,29 @@ export const api = {
     const qs = path ? `?path=${encodeURIComponent(path)}` : ''
     return req<BrowseResult>(`/api/browse${qs}`)
   },
+}
+
+// Generate (独立图片生成) -------------------------------------------------------
+
+export interface LoraEntry {
+  path: string
+  scale: number
+}
+
+export interface GenerateRequest {
+  prompts: string[]
+  negative_prompt?: string
+  width?: number
+  height?: number
+  steps?: number
+  cfg_scale?: number
+  sampler_name?: string
+  scheduler?: string
+  count?: number
+  seed?: number
+  lora_configs?: LoraEntry[]
+  mixed_precision?: string
+  xformers?: boolean
 }
 
 export interface BrowseEntry {

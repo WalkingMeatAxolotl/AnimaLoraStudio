@@ -10,3 +10,6 @@
 
 # PowerShell tolerates LF on modern Windows; keep normalization.
 *.ps1 text eol=crlf
+
+# Shell scripts must use LF; CRLF breaks shebang and bash parsing on Linux.
+*.sh text eol=lf

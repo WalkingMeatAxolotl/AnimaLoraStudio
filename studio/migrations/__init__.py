@@ -17,6 +17,7 @@ from typing import Callable
 from ._v2_projects import migrate as _migrate_v2
 from ._v3_monitor_state import migrate as _migrate_v3
 from ._v4_task_config_path import migrate as _migrate_v4
+from ._v5_generate import migrate as _migrate_v5
 
 Migration = Callable[[sqlite3.Connection], None]
 
@@ -25,6 +26,7 @@ MIGRATIONS: list[Migration] = [
     _migrate_v2,  # v2: projects / versions / project_jobs + tasks 扩字段
     _migrate_v3,  # v3: tasks.monitor_state_path（PP6.1 per-version monitor）
     _migrate_v4,  # v4: tasks.config_path（PP6.3 私有 config 路径）
+    _migrate_v5,  # v5: tasks.task_type（区分 train / generate）
 ]
 
 

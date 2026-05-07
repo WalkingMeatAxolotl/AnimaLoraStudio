@@ -67,6 +67,8 @@ from .services import (
 )
 from .services.tagger import VALID_TAGGER_NAMES, get_tagger
 from .paths import (
+    GENERATE_CONFIGS_DIR,
+    GENERATE_JOBS_DIR,
     LEGACY_MONITOR_HTML,
     LOGS_DIR,
     OUTPUT_DIR,
@@ -76,7 +78,7 @@ from .paths import (
     WEB_DIST,
     ensure_dirs,
 )
-from .schema import GROUP_ORDER, TrainingConfig
+from .schema import GROUP_ORDER, GenerateConfig, TrainingConfig
 from .supervisor import Supervisor
 
 ensure_dirs()
@@ -1734,6 +1736,111 @@ def version_thumb(
         )
         raise HTTPException(404)
     return _thumb_response(f, size)
+
+
+# ---------------------------------------------------------------------------
+# /api/generate  — 独立图片生成（复用 anima_generate.py 推理链路）
+# ---------------------------------------------------------------------------
+
+
+class _LoraEntry(BaseModel):
+    path: str
+    scale: float = 1.0
+
+
+class GenerateRequest(BaseModel):
+    prompts: list[str] = ["newest, safe, 1girl, masterpiece, best quality"]
+    negative_prompt: str = ""
+    width: int = 1024
+    height: int = 1024
+    steps: int = 25
+    cfg_scale: float = 4.0
+    sampler_name: str = "er_sde"
+    scheduler: str = "simple"
+    count: int = 1
+    seed: int = 0
+    lora_configs: list[_LoraEntry] = []
+    mixed_precision: str = "bf16"
+    xformers: bool = False
+
+
+def _resolve_model_paths() -> dict[str, str]:
+    """从 secrets 解析默认模型路径（与 version_config 逻辑对齐）。"""
+    from .services.model_downloader import models_root
+    root = models_root()
+    return {
+        "transformer_path": str(root / "diffusion_models" / "anima-preview3-base.safetensors"),
+        "vae_path": str(root / "vae" / "qwen_image_vae.safetensors"),
+        "text_encoder_path": str(root / "text_encoders"),
+        "t5_tokenizer_path": str(root / "t5_tokenizer"),
+    }
+
+
+@app.post("/api/generate")
+def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
+    """创建独立图片生成任务并入队。"""
+    model_paths = _resolve_model_paths()
+
+    with db.connection_for() as conn:
+        task_id = db.create_task(
+            conn, name="generate", config_name="generate", priority=0
+        )
+        db.update_task(conn, task_id, task_type="generate")
+
+    job_dir = GENERATE_JOBS_DIR / str(task_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    cfg = GenerateConfig(
+        **model_paths,
+        output_dir=str(job_dir),
+        prompts=body.prompts,
+        negative_prompt=body.negative_prompt,
+        width=body.width,
+        height=body.height,
+        steps=body.steps,
+        cfg_scale=body.cfg_scale,
+        sampler_name=body.sampler_name,
+        scheduler=body.scheduler,
+        count=body.count,
+        seed=body.seed,
+        lora_configs=[lc.model_dump() for lc in body.lora_configs],
+        mixed_precision=body.mixed_precision,
+        xformers=body.xformers,
+    )
+
+    cfg_path = GENERATE_CONFIGS_DIR / f"gen_{task_id}.json"
+    cfg_path.write_text(cfg.model_dump_json(indent=2), encoding="utf-8")
+
+    with db.connection_for() as conn:
+        db.update_task(conn, task_id, config_path=str(cfg_path))
+        task = db.get_task(conn, task_id)
+
+    bus.publish({"type": "task_state_changed", "task_id": task_id, "status": "pending"})
+    return task or {"id": task_id}
+
+
+@app.get("/api/generate")
+def list_generate_tasks(status: Optional[str] = None) -> dict[str, Any]:
+    """列出所有生成任务。"""
+    if status and status not in db.VALID_STATUSES:
+        raise HTTPException(400, f"unknown status: {status}")
+    with db.connection_for() as conn:
+        rows = conn.execute(
+            "SELECT * FROM tasks WHERE task_type = 'generate' "
+            + ("AND status = ? " if status else "")
+            + "ORDER BY created_at DESC",
+            (status,) if status else (),
+        ).fetchall()
+    return {"items": [dict(r) for r in rows]}
+
+
+@app.get("/api/generate/{task_id}")
+def get_generate_task(task_id: int) -> dict[str, Any]:
+    with db.connection_for() as conn:
+        task = db.get_task(conn, task_id)
+    if not task or task.get("task_type") != "generate":
+        raise HTTPException(404)
+    return task
 
 
 # ---------------------------------------------------------------------------

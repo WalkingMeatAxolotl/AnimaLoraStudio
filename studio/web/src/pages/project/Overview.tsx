@@ -273,7 +273,7 @@ export default function ProjectOverview() {
 
         {/* Pipeline timeline */}
         <div className="card p-0 overflow-hidden">
-          <div className="px-4.5 py-3.5 border-b border-subtle flex items-center justify-between">
+          <div className="px-[18px] py-3.5 border-b border-subtle flex items-center justify-between">
             <h2 className="text-md font-semibold" style={{ margin: 0 }}>流水线进度</h2>
             <span className="caption">stages</span>
           </div>

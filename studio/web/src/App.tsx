@@ -14,6 +14,7 @@ import RegularizationPage from './pages/project/steps/Regularization'
 import TagEditPage from './pages/project/steps/TagEdit'
 import TaggingPage from './pages/project/steps/Tagging'
 import TrainPage from './pages/project/steps/Train'
+import GeneratePage from './pages/tools/Generate'
 import MonitorPage from './pages/tools/Monitor'
 import PresetsPage from './pages/tools/Presets'
 import SettingsPage from './pages/tools/Settings'
@@ -72,6 +73,7 @@ export default function App() {
             </Route>
 
             <Route path="/tools/presets" element={<PresetsPage />} />
+            <Route path="/tools/generate" element={<GeneratePage />} />
             <Route path="/tools/monitor" element={<MonitorPage />} />
             <Route path="/tools/settings" element={<SettingsPage />} />
 
