@@ -4,7 +4,8 @@
     {
       "tagger": "wd14" | "cltagger" | "joycaption",
       "version_id": int,
-      "output_format": "txt"|"json"  # 默认 "txt"，已存在的 .json 仍按 .json 写
+      "output_format": "txt"|"json",  # 默认 "txt"，已存在的 .json 仍按 .json 写
+      "<tagger>_overrides": {...}     # 可选；本次任务对全局 settings 的覆盖
     }
 
 打标永远覆盖 train/ 下全部 repeat 子目录（不再支持按 folder 划分）。
@@ -67,8 +68,8 @@ def run(job_id: int) -> int:
         tagger_name = params.get("tagger", "wd14")
         version_id = int(params["version_id"])
         fmt = str(params.get("output_format", "txt"))
-        wd14_overrides = params.get("wd14_overrides") or None
-        cltagger_overrides = params.get("cltagger_overrides") or None
+        # 约定：每个支持本次覆盖的 tagger 都把 overrides 存在 `<name>_overrides` 键下
+        overrides = params.get(f"{tagger_name}_overrides") or None
 
         with db.connection_for() as conn:
             v = versions.get_version(conn, version_id)
@@ -89,7 +90,6 @@ def run(job_id: int) -> int:
             f"images={len(images)} format={fmt}"
         )
 
-        overrides = cltagger_overrides if tagger_name == "cltagger" else wd14_overrides
         tagger = get_tagger(tagger_name, overrides=overrides)
         tagger.prepare()
         if overrides:

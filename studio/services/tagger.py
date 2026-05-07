@@ -9,6 +9,7 @@ worker 拿到 name 后调 `get_tagger(name)` 取实例，跑 `prepare()` → 流
 """
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 from typing import Callable, Iterator, Protocol, TypedDict, runtime_checkable
 
@@ -42,22 +43,28 @@ class Tagger(Protocol):
         """流式：每张图 yield 一次 TagResult；失败时 result 含 'error' 字段。"""
 
 
+# tagger 名 → (模块路径, 类名, 是否吃 overrides 参数)
+# 加新 tagger 在这里加一行；server.py 的 TagJobRequest 同步加 `<name>_overrides`
+# 字段（如果支持本次任务覆盖）即可。worker 走通用 `params.get(f"{name}_overrides")`。
+_TAGGER_SPEC: dict[str, tuple[str, str, bool]] = {
+    "wd14": ("studio.services.wd14_tagger", "WD14Tagger", True),
+    "cltagger": ("studio.services.cltagger_tagger", "CLTagger", True),
+    "joycaption": ("studio.services.joycaption_tagger", "JoyCaptionTagger", False),
+}
+
+
 def get_tagger(name: str, overrides: dict | None = None) -> Tagger:
-    """工厂：name = 'wd14' | 'cltagger' | 'joycaption'。
+    """工厂：按 `_TAGGER_SPEC` 懒加载实现并实例化。
 
-    `overrides` 仅本地 ONNX tagger 当前消费 —— 本次打标参数覆盖；
-    不影响全局 secrets.json。joycaption 暂时忽略。
+    `overrides` 仅本地 ONNX tagger 当前消费 —— 本次打标参数覆盖，不影响全局
+    secrets.json；不接 overrides 的 tagger（如 joycaption）会忽略。
     """
-    if name == "wd14":
-        from .wd14_tagger import WD14Tagger
-        return WD14Tagger(overrides=overrides)
-    if name == "cltagger":
-        from .cltagger_tagger import CLTagger
-        return CLTagger(overrides=overrides)
-    if name == "joycaption":
-        from .joycaption_tagger import JoyCaptionTagger
-        return JoyCaptionTagger()
-    raise ValueError(f"unknown tagger: {name!r}")
+    spec = _TAGGER_SPEC.get(name)
+    if spec is None:
+        raise ValueError(f"unknown tagger: {name!r}")
+    module_path, cls_name, takes_overrides = spec
+    klass = getattr(importlib.import_module(module_path), cls_name)
+    return klass(overrides=overrides) if takes_overrides else klass()
 
 
-VALID_TAGGER_NAMES: tuple[str, ...] = ("wd14", "cltagger", "joycaption")
+VALID_TAGGER_NAMES: tuple[str, ...] = tuple(_TAGGER_SPEC.keys())
