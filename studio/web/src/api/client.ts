@@ -1108,6 +1108,13 @@ export const api = {
     return req<{ items: Task[] }>(`/api/generate${qs}`).then((r) => r.items)
   },
   getGenerateTask: (id: number) => req<Task>(`/api/generate/${id}`),
+  enqueueRegAi: (pid: number, vid: number, body: RegAiRequest) =>
+    req<Task>(`/api/projects/${pid}/versions/${vid}/reg/generate-ai`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  getRegAiTask: (pid: number, vid: number, taskId: number) =>
+    req<Task>(`/api/projects/${pid}/versions/${vid}/reg/generate-ai/${taskId}`),
 
   // Queue import / export ---------------------------------------------
   exportQueue: (ids?: number[]) => {
@@ -1154,6 +1161,22 @@ export interface GenerateRequest {
   count?: number
   seed?: number
   lora_configs?: LoraEntry[]
+  mixed_precision?: string
+  xformers?: boolean
+}
+
+export interface RegAiRequest {
+  excluded_tags?: string[]
+  negative_prompt?: string
+  width?: number
+  height?: number
+  steps?: number
+  cfg_scale?: number
+  sampler_name?: string
+  scheduler?: string
+  seed?: number
+  lora_configs?: LoraEntry[]
+  incremental?: boolean
   mixed_precision?: string
   xformers?: boolean
 }

@@ -91,7 +91,8 @@ def main() -> None:
         cfg = json.load(f)
 
     output_dir = Path(cfg.get("output_dir", "./generate_output"))
-    sample_dir = output_dir / "samples"
+    sample_subdir: str = cfg.get("sample_subdir", "samples")
+    sample_dir = output_dir / sample_subdir
     sample_dir.mkdir(parents=True, exist_ok=True)
 
     prompts: list[str] = cfg.get("prompts") or ["newest, safe, 1girl, masterpiece, best quality"]

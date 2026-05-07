@@ -81,9 +81,14 @@ JobCmdBuilder = Callable[[dict[str, Any]], list[str]]
 
 
 def _default_cmd_builder(task: dict[str, Any], config_path: Path) -> list[str]:
-    """根据 task_type 路由到 anima_train.py 或 anima_generate.py。"""
+    """根据 task_type 路由到对应脚本。"""
     task_type = task.get("task_type", "train")
-    script = "anima_generate.py" if task_type == "generate" else "anima_train.py"
+    if task_type == "generate":
+        script = "anima_generate.py"
+    elif task_type == "reg_ai":
+        script = "anima_reg_ai.py"
+    else:
+        script = "anima_train.py"
     cmd = [
         sys.executable,
         str(REPO_ROOT / script),
@@ -135,7 +140,7 @@ def _resolve_monitor_state_path(task: dict[str, Any]) -> Path:
     训练任务有 version_id：`versions/{label}/monitor_state.json`。
     旧任务兜底：`studio_data/monitors/task_{id}/state.json`。
     """
-    if task.get("task_type") == "generate":
+    if task.get("task_type") in ("generate", "reg_ai"):
         return GENERATE_JOBS_DIR / str(task["id"]) / "monitor_state.json"
 
     vid = task.get("version_id")

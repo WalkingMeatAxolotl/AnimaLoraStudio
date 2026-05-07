@@ -78,7 +78,7 @@ from .paths import (
     WEB_DIST,
     ensure_dirs,
 )
-from .schema import GROUP_ORDER, GenerateConfig, TrainingConfig
+from .schema import GROUP_ORDER, GenerateConfig, RegAiConfig, TrainingConfig
 from .supervisor import Supervisor
 
 ensure_dirs()
@@ -1538,6 +1538,85 @@ def delete_reg(pid: int, vid: int) -> dict[str, Any]:
     except OSError as exc:
         raise HTTPException(500, f"删除失败: {exc}") from exc
     return {"deleted": True}
+
+
+class RegAiRequest(BaseModel):
+    excluded_tags: list[str] = []
+    negative_prompt: str = ""
+    width: int = 1024
+    height: int = 1024
+    steps: int = 25
+    cfg_scale: float = 4.0
+    sampler_name: str = "er_sde"
+    scheduler: str = "simple"
+    seed: int = 0
+    lora_configs: list[_LoraEntry] = []
+    incremental: bool = False
+    mixed_precision: str = "bf16"
+    xformers: bool = False
+
+
+@app.post("/api/projects/{pid}/versions/{vid}/reg/generate-ai")
+def reg_generate_ai(pid: int, vid: int, body: RegAiRequest) -> dict[str, Any]:
+    """逐图 AI 正则图生成：用每张 train 图的 tag 作 prompt，生成对应正则图。"""
+    model_paths = _resolve_model_paths()
+    _, _, vdir = _version_dir_or_404(pid, vid)
+    train_dir = vdir / "train"
+    if not train_dir.exists() or not any(
+        f.is_file() and f.suffix.lower() in datasets.IMAGE_EXTS
+        for f in train_dir.rglob("*")
+    ):
+        raise HTTPException(400, "train 还没有图片，先去 ① 整理 / ② 下载")
+
+    rdir = _reg_dir(vdir)
+    rdir.mkdir(parents=True, exist_ok=True)
+
+    with db.connection_for() as conn:
+        task_id = db.create_task(
+            conn, name=f"reg-ai p{pid}v{vid}", config_name="reg_ai", priority=0
+        )
+        db.update_task(conn, task_id, task_type="reg_ai")
+
+    job_dir = GENERATE_JOBS_DIR / str(task_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    cfg = RegAiConfig(
+        **model_paths,
+        train_dir=str(train_dir),
+        reg_dir=str(rdir),
+        excluded_tags=list(body.excluded_tags),
+        negative_prompt=body.negative_prompt,
+        width=body.width,
+        height=body.height,
+        steps=body.steps,
+        cfg_scale=body.cfg_scale,
+        sampler_name=body.sampler_name,
+        scheduler=body.scheduler,
+        seed=body.seed,
+        lora_configs=[lc.model_dump() for lc in body.lora_configs],
+        incremental=body.incremental,
+        mixed_precision=body.mixed_precision,
+        xformers=body.xformers,
+    )
+
+    cfg_path = GENERATE_CONFIGS_DIR / f"reg_ai_{task_id}.json"
+    cfg_path.write_text(cfg.model_dump_json(indent=2), encoding="utf-8")
+
+    with db.connection_for() as conn:
+        db.update_task(conn, task_id, config_path=str(cfg_path))
+        task = db.get_task(conn, task_id)
+
+    bus.publish({"type": "task_state_changed", "task_id": task_id, "status": "pending"})
+    return task or {"id": task_id}
+
+
+@app.get("/api/projects/{pid}/versions/{vid}/reg/generate-ai/{task_id}")
+def get_reg_ai_task(pid: int, vid: int, task_id: int) -> dict[str, Any]:
+    with db.connection_for() as conn:
+        task = db.get_task(conn, task_id)
+    if not task or task.get("task_type") != "reg_ai":
+        raise HTTPException(404)
+    return task
 
 
 # ---------------------------------------------------------------------------

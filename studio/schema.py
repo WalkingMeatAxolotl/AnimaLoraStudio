@@ -437,8 +437,45 @@ class GenerateConfig(BaseModel):
 
     # 运行时
     output_dir: str = Field("", description="输出目录（由服务端填充）")
+    sample_subdir: str = Field("samples", description="图片输出子目录名（reg-AI 生成时设为目标文件夹）")
     mixed_precision: str = Field("bf16", description="混合精度")
     xformers: bool = Field(False, description="xformers attention")
+
+
+# ---------------------------------------------------------------------------
+# AI 正则图生成配置（对应 anima_reg_ai.py）
+# ---------------------------------------------------------------------------
+
+
+class RegAiConfig(BaseModel):
+    """逐图 AI 正则生成任务参数。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # 模型路径（由服务端从 secrets 填充）
+    transformer_path: str = Field("")
+    vae_path: str = Field("")
+    text_encoder_path: str = Field("")
+    t5_tokenizer_path: str = Field("")
+
+    # 数据目录（由服务端填充）
+    train_dir: str = Field("")
+    reg_dir: str = Field("")
+
+    # 生成控制
+    excluded_tags: list[str] = Field(default_factory=list, description="排除的 tag")
+    negative_prompt: str = Field("")
+    width: int = Field(1024, ge=256, le=4096)
+    height: int = Field(1024, ge=256, le=4096)
+    steps: int = Field(25, ge=1, le=150)
+    cfg_scale: float = Field(4.0, ge=0.0, le=20.0)
+    sampler_name: str = Field("er_sde")
+    scheduler: str = Field("simple")
+    seed: int = Field(0, description="随机种子（0=随机）")
+    lora_configs: list[dict] = Field(default_factory=list)
+    incremental: bool = Field(False, description="补足模式：跳过已有对应正则图的 train 图")
+    mixed_precision: str = Field("bf16")
+    xformers: bool = Field(False)
 
 
 # ---------------------------------------------------------------------------

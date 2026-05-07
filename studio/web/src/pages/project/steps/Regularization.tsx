@@ -3,15 +3,19 @@ import { useOutletContext } from 'react-router-dom'
 import {
   api,
   type Job,
+  type LoraEntry,
   type ProjectDetail,
+  type RegAiRequest,
   type RegBuildRequest,
   type RegStatus,
   type RegTagCount,
+  type Task,
   type Version,
 } from '../../../api/client'
 import ImageGrid from '../../../components/ImageGrid'
 import ImagePreviewModal from '../../../components/ImagePreviewModal'
 import JobProgress from '../../../components/JobProgress'
+import PathPicker from '../../../components/PathPicker'
 import StepShell from '../../../components/StepShell'
 import { useToast } from '../../../components/Toast'
 import { useEventStream } from '../../../lib/useEventStream'
@@ -62,8 +66,21 @@ export default function RegularizationPage() {
   const jobIdRef = useRef<number | null>(null)
   jobIdRef.current = job?.id ?? null
 
-  // Tab：设置&日志 / 图片预览。job done 时自动切到图片，让用户看成果。
-  const [activeTab, setActiveTab] = useState<'config' | 'images'>('config')
+  // Tab：设置&日志 / 图片预览 / 模型生成。job done 时自动切到图片，让用户看成果。
+  const [activeTab, setActiveTab] = useState<'config' | 'images' | 'ai'>('config')
+
+  // AI 生成参数（排除 tag 复用主组件的 excluded 状态）
+  const [aiNeg, setAiNeg] = useState('worst quality, low quality, score_1, score_2, score_3, blurry, jpeg artifacts, bad anatomy')
+  const [aiWidth, setAiWidth] = useState(1024)
+  const [aiHeight, setAiHeight] = useState(1024)
+  const [aiSteps, setAiSteps] = useState(25)
+  const [aiCfg, setAiCfg] = useState(4.0)
+  const [aiSeed, setAiSeed] = useState(0)
+  const [aiLoras, setAiLoras] = useState<LoraEntry[]>([])
+  const [aiIncremental, setAiIncremental] = useState(false)
+  const [aiTask, setAiTask] = useState<Task | null>(null)
+  const [aiBusy, setAiBusy] = useState(false)
+  const [aiPickerIdx, setAiPickerIdx] = useState<number | null>(null)
 
   // 预览 modal
   const [previewIdx, setPreviewIdx] = useState<number | null>(null)
@@ -154,6 +171,54 @@ export default function RegularizationPage() {
     }
   })
 
+  // 轮询 AI 正则生成任务状态
+  const aiTaskId = aiTask?.id
+  useEffect(() => {
+    if (aiTaskId == null) return
+    let active = true
+    const poll = async () => {
+      if (!active) return
+      try {
+        const t = await api.getRegAiTask(project.id, vid!, aiTaskId)
+        if (!active) return
+        setAiTask(t)
+        if (['done', 'failed', 'canceled'].includes(t.status)) {
+          setAiBusy(false)
+          void refreshReg()
+          if (t.status === 'done') setActiveTab('images')
+        }
+      } catch { /* ignore */ }
+    }
+    void poll()
+    const interval = setInterval(poll, 2000)
+    return () => { active = false; clearInterval(interval) }
+  }, [aiTaskId, project.id, vid, refreshReg])
+
+  const handleAiGenerate = async () => {
+    if (!vid) return
+    setAiBusy(true)
+    setAiTask(null)
+    try {
+      const body: RegAiRequest = {
+        excluded_tags: Array.from(excluded),
+        negative_prompt: aiNeg,
+        width: aiWidth,
+        height: aiHeight,
+        steps: aiSteps,
+        cfg_scale: aiCfg,
+        seed: aiSeed,
+        lora_configs: aiLoras.filter((l) => l.path.trim()),
+        incremental: aiIncremental,
+      }
+      const task = await api.enqueueRegAi(project.id, vid, body)
+      setAiTask(task)
+      toast(`AI 正则生成任务 #${task.id} 已入队`, 'success')
+    } catch (e) {
+      toast(String(e), 'error')
+      setAiBusy(false)
+    }
+  }
+
   const trainImageCount = activeVersion?.stats?.train_image_count ?? 0
   const isLive = job?.status === 'running' || job?.status === 'pending'
 
@@ -230,13 +295,23 @@ export default function RegularizationPage() {
       title="正则集"
       subtitle="基于 train tag 拉正则图，镜像结构到 reg/"
       actions={
-        <button
-          onClick={() => void startBuild(false)}
-          disabled={isLive || trainImageCount <= 0}
-          className="btn btn-primary"
-        >
-          {isLive ? '生成中…' : '开始生成'}
-        </button>
+        activeTab !== 'ai' ? (
+          <button
+            onClick={() => void startBuild(false)}
+            disabled={isLive || trainImageCount <= 0}
+            className="btn btn-primary"
+          >
+            {isLive ? '生成中…' : '开始生成'}
+          </button>
+        ) : (
+          <button
+            onClick={() => void handleAiGenerate()}
+            disabled={aiBusy}
+            className="btn btn-primary"
+          >
+            {aiBusy ? '生成中…' : '模型生成'}
+          </button>
+        )
       }
     >
     <div className="flex flex-col h-full gap-3 min-h-0">
@@ -264,10 +339,32 @@ export default function RegularizationPage() {
           label="图片"
           badge={reg && reg.image_count > 0 ? String(reg.image_count) : undefined}
         />
+        <TabButton
+          active={activeTab === 'ai'}
+          onClick={() => setActiveTab('ai')}
+          label="模型生成"
+          badge={aiBusy ? 'live' : aiTask?.status === 'done' ? '✓' : undefined}
+        />
       </div>
 
       {/* tab 内容（占满剩余高度，全宽） */}
-      {activeTab === 'config' ? (
+      {activeTab === 'ai' ? (
+        <AiGenPanel
+          trainTags={trainTags}
+          excluded={excluded} onToggle={toggleTag}
+          neg={aiNeg} onNegChange={setAiNeg}
+          width={aiWidth} onWidthChange={setAiWidth}
+          height={aiHeight} onHeightChange={setAiHeight}
+          steps={aiSteps} onStepsChange={setAiSteps}
+          cfg={aiCfg} onCfgChange={setAiCfg}
+          seed={aiSeed} onSeedChange={setAiSeed}
+          loras={aiLoras} onLorasChange={setAiLoras}
+          incremental={aiIncremental} onIncrementalChange={setAiIncremental}
+          pickerIdx={aiPickerIdx} onPickerIdxChange={setAiPickerIdx}
+          task={aiTask}
+          trainImageCount={trainImageCount}
+        />
+      ) : activeTab === 'config' ? (
         <div className="flex flex-col gap-3 min-h-0 flex-1 overflow-y-auto">
           <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 flex flex-col gap-2.5 shrink-0">
             <div className="flex flex-wrap items-center gap-2.5 text-xs">
@@ -849,6 +946,193 @@ function RegPreview({
         ariaLabel="reg-preview"
       />
     </section>
+  )
+}
+
+// ── AiGenPanel ──────────────────────────────────────────────────────────────
+
+function AiNumField({ label, value, onChange, min, max, step }: {
+  label: string; value: number
+  onChange: (v: number) => void
+  min?: number; max?: number; step?: number
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <label className="caption">{label}</label>
+      <input
+        type="number" className="input"
+        min={min} max={max} step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+      />
+    </div>
+  )
+}
+
+function AiTaskStatus({ task }: { task: Task | null }) {
+  if (!task) return null
+  const label =
+    task.status === 'done' ? '已完成' :
+    task.status === 'running' ? '生成中' :
+    task.status === 'failed' ? '失败' :
+    task.status === 'pending' ? '排队中' :
+    task.status === 'canceled' ? '已取消' : task.status
+  const cls =
+    task.status === 'done' ? 'badge badge-ok' :
+    task.status === 'running' ? 'badge badge-info' :
+    task.status === 'failed' ? 'badge badge-err' : 'badge'
+  return (
+    <div className="flex items-center gap-2 text-sm">
+      <span className={cls}>{label}</span>
+      <span className="caption font-mono">#{task.id}</span>
+      {task.status === 'done' && (
+        <span className="text-xs text-fg-tertiary">已写入 reg 对应子目录</span>
+      )}
+      {task.status === 'failed' && task.error_msg && (
+        <span className="text-xs text-err">{task.error_msg}</span>
+      )}
+    </div>
+  )
+}
+
+function AiGenPanel({
+  trainTags,
+  excluded, onToggle,
+  neg, onNegChange,
+  width, onWidthChange,
+  height, onHeightChange,
+  steps, onStepsChange,
+  cfg, onCfgChange,
+  seed, onSeedChange,
+  loras, onLorasChange,
+  incremental, onIncrementalChange,
+  pickerIdx, onPickerIdxChange,
+  task,
+  trainImageCount,
+}: {
+  trainTags: RegTagCount[]
+  excluded: Set<string>; onToggle: (tag: string) => void
+  neg: string; onNegChange: (v: string) => void
+  width: number; onWidthChange: (v: number) => void
+  height: number; onHeightChange: (v: number) => void
+  steps: number; onStepsChange: (v: number) => void
+  cfg: number; onCfgChange: (v: number) => void
+  seed: number; onSeedChange: (v: number) => void
+  loras: LoraEntry[]; onLorasChange: (v: LoraEntry[]) => void
+  incremental: boolean; onIncrementalChange: (v: boolean) => void
+  pickerIdx: number | null; onPickerIdxChange: (v: number | null) => void
+  task: Task | null
+  trainImageCount: number
+}) {
+  const addLora = () => onLorasChange([...loras, { path: '', scale: 1.0 }])
+  const delLora = (i: number) => onLorasChange(loras.filter((_, idx) => idx !== i))
+  const setLoraPath = (i: number, path: string) =>
+    onLorasChange(loras.map((l, idx) => idx === i ? { ...l, path } : l))
+  const setLoraScale = (i: number, scale: number) =>
+    onLorasChange(loras.map((l, idx) => idx === i ? { ...l, scale } : l))
+
+  return (
+    <div className="flex flex-col gap-3 min-h-0 flex-1 overflow-y-auto">
+      <section className="rounded-md border border-subtle bg-surface px-3.5 py-3 flex flex-col gap-3 shrink-0 text-sm">
+        <p className="text-2xs text-fg-tertiary m-0">
+          逐图生成：为 train 每张图（共{' '}
+          <span className="font-mono text-fg-primary">{trainImageCount}</span>
+          {' '}张）的 tag 生成对应正则图，写入 <span className="font-mono">reg/{'{subfolder}'}/</span>。
+          排除 tag 与左侧「Booru」共用，修改后两边同步生效。
+        </p>
+
+        {/* 排除 tag（复用 ExcludeTagsPicker） */}
+        <ExcludeTagsPicker trainTags={trainTags} excluded={excluded} onToggle={onToggle} />
+
+        {/* 负面提示词 */}
+        <div className="flex flex-col gap-1">
+          <label className="caption">负面提示词</label>
+          <textarea
+            className="input font-mono text-sm resize-y"
+            rows={2}
+            value={neg}
+            onChange={(e) => onNegChange(e.target.value)}
+          />
+        </div>
+
+        {/* 数值参数 */}
+        <div className="flex gap-2">
+          <AiNumField label="宽度" value={width} onChange={onWidthChange} min={256} max={4096} step={64} />
+          <AiNumField label="高度" value={height} onChange={onHeightChange} min={256} max={4096} step={64} />
+        </div>
+        <div className="flex gap-2">
+          <AiNumField label="步数" value={steps} onChange={onStepsChange} min={1} max={150} />
+          <AiNumField label="CFG Scale" value={cfg} onChange={onCfgChange} min={0} max={20} step={0.5} />
+        </div>
+        <AiNumField label="种子（0=随机）" value={seed} onChange={onSeedChange} min={0} />
+
+        {/* 补足模式 */}
+        <label className="flex items-center gap-1.5 cursor-pointer text-xs">
+          <input
+            type="checkbox"
+            checked={incremental}
+            onChange={(e) => onIncrementalChange(e.target.checked)}
+          />
+          <span className="text-fg-secondary">补足模式（跳过 reg 目录中已有对应文件的图）</span>
+        </label>
+
+        {/* LoRA */}
+        <div className="flex flex-col gap-2">
+          <label className="caption">LoRA（可选）</label>
+          {loras.map((l, i) => (
+            <div key={i} className="flex gap-1.5 items-center">
+              <div className="flex-1 flex gap-1 items-center bg-sunken border border-dim rounded-md px-2 py-1.5">
+                <span className="text-xs text-fg-tertiary shrink-0 w-4 text-center font-mono">{i + 1}</span>
+                <input
+                  type="text"
+                  className="input input-mono flex-1 border-0 bg-transparent p-0 text-xs"
+                  style={{ outline: 'none', boxShadow: 'none' }}
+                  placeholder="LoRA 路径…"
+                  value={l.path}
+                  onChange={(e) => setLoraPath(i, e.target.value)}
+                />
+                <button
+                  onClick={() => onPickerIdxChange(i)}
+                  className="btn btn-ghost btn-sm text-xs shrink-0 px-1.5"
+                  title="浏览文件"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                  </svg>
+                </button>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <span className="text-xs text-fg-tertiary">×</span>
+                <input
+                  type="number"
+                  className="input text-center text-sm"
+                  style={{ width: 60, padding: '5px 6px' }}
+                  min={0} max={2} step={0.05}
+                  value={l.scale}
+                  onChange={(e) => setLoraScale(i, Number(e.target.value))}
+                  title="权重倍率"
+                />
+              </div>
+              <button onClick={() => delLora(i)} className="btn btn-ghost btn-sm text-fg-tertiary hover:text-err shrink-0 px-1.5">×</button>
+            </div>
+          ))}
+          <button onClick={addLora} className="btn btn-ghost btn-sm self-start text-xs text-fg-tertiary">
+            + 添加 LoRA
+          </button>
+        </div>
+
+        {/* 任务状态 */}
+        <AiTaskStatus task={task} />
+      </section>
+
+      {pickerIdx !== null && (
+        <PathPicker
+          dirOnly={false}
+          onPick={(p) => { setLoraPath(pickerIdx, p); onPickerIdxChange(null) }}
+          onClose={() => onPickerIdxChange(null)}
+        />
+      )}
+    </div>
   )
 }
 
