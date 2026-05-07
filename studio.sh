@@ -46,9 +46,9 @@ else
 fi
 
 echo "studio.sh: using $PYTHON"
-if [ "$PYTHON" = "/opt/venv/bin/python" ] && [ $# -eq 0 ]; then
-    # CNB 环境：监听全部接口，无需自动开浏览器
-exec "$PYTHON" -m studio run --host 0.0.0.0 --no-browser
+if [ -f "/.dockerenv" ] && [ $# -eq 0 ]; then
+    # 容器环境（Docker / CNB）：监听全部接口，无需自动开浏览器
+    exec "$PYTHON" -m studio run --host 0.0.0.0 --no-browser
 else
     exec "$PYTHON" -m studio "$@"
 fi
