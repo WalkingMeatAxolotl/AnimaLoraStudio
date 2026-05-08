@@ -197,10 +197,38 @@ class ProcGroup:
 # ---------------------------------------------------------------------------
 
 
+def _print_npm_install_hint() -> None:
+    """`find_npm()` 返回 None 时打印平台相关安装提示。
+
+    放 stderr，与 `[studio] 错误：找不到 npm` 同流；root 环境去掉 sudo（直接 root 跑装包）。
+    """
+    print("[studio] 错误：找不到 npm。请安装 Node.js 18+", file=sys.stderr)
+    if os.name == "nt":
+        print(
+            "  Windows：前往 https://nodejs.org 下载安装包，"
+            "或用 winget install OpenJS.NodeJS.LTS",
+            file=sys.stderr,
+        )
+    else:
+        sudo = "" if (hasattr(os, "getuid") and os.getuid() == 0) else "sudo "
+        print(
+            f"  Ubuntu/Debian：curl -fsSL https://deb.nodesource.com/setup_22.x "
+            f"| {sudo}bash - && {sudo}apt-get install -y nodejs",
+            file=sys.stderr,
+        )
+        print(
+            "  或使用 nvm（无需 sudo）："
+            "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh "
+            "| bash && nvm install --lts",
+            file=sys.stderr,
+        )
+    print("  安装后重新运行本命令。", file=sys.stderr)
+
+
 def cmd_build(_args: argparse.Namespace) -> int:
     npm = find_npm()
     if not npm:
-        print("[studio] 错误：找不到 npm。请安装 Node 18+", file=sys.stderr)
+        _print_npm_install_hint()
         return 2
     rc = npm_install_if_missing(npm)
     if rc != 0:
@@ -263,6 +291,110 @@ def _spawn_browser_opener(url: str, *, delay: float = 1.0) -> None:
 
     t = threading.Thread(target=_wait_and_open, name="studio-browser", daemon=True)
     t.start()
+
+
+def _apply_pending_install() -> None:
+    """启动期处理 server 进程不能完成的 pip 安装请求（torch 重装）。
+
+    必须在 `_check_torch_cuda` 之前跑：那里会 import torch，之后 .pyd 被锁就装不动了。
+    失败不抛 —— pending_install.apply_pending 内部已打印错误，让 launcher 继续起。
+    """
+    try:
+        from studio.services import pending_install  # noqa: PLC0415
+        pending_install.apply_pending()
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"[studio] 警告：处理 pending 安装请求时异常（{exc}），跳过",
+            file=sys.stderr,
+        )
+
+
+def _try_enable_flash_attn() -> None:
+    """启动期检查 flash_attn 是否装好；装好就开 cosmos / anima 状态机。
+
+    没装就 silently skip（_check_torch_cuda 不重复提示，flash_attn 是 nice-to-have）。
+    动态 import 避免拖慢 cli import 时间（cosmos_predict2_modeling 加载触发 torch import）。
+    """
+    try:
+        from studio.services import flash_attention_setup  # noqa: PLC0415
+        if not flash_attention_setup.current_status()["installed"]:
+            return
+        from models.cosmos_predict2_modeling import set_flash_attn_enabled  # noqa: PLC0415
+        if set_flash_attn_enabled(True):
+            print("[studio] flash_attn 启用")
+        else:
+            # 装了 flash_attn 但 set_flash_attn_enabled 拒绝（_FLASH_ATTN_AVAILABLE=False）
+            # 通常意味着 import 时挂了（CUDA 版本不匹配等）；不噪声只 stderr 警告
+            print(
+                "[studio] 警告：flash_attn 已安装但模型层 import 失败，"
+                "继续走 SDPA fallback",
+                file=sys.stderr,
+            )
+    except Exception as exc:  # noqa: BLE001
+        # Studio 启动不能为这一项加速 fail；记 warn 但放行
+        print(
+            f"[studio] 警告：flash_attn 启用时异常（{exc}），跳过加速",
+            file=sys.stderr,
+        )
+
+
+def _check_torch_cuda() -> None:
+    """启动期检查 torch 是否能用 CUDA；CPU-only torch 跑训练 / 出图会极慢。
+
+    四种状态：
+    - CUDA 可用                       → 一行 OK
+    - torch 是 CPU-only build + 有 GPU → 大警告 + 重装命令（最常见误装）
+    - torch 是 CPU-only build + 无 GPU → 一行 info（用户确实在 CPU 机器上）
+    - torch 是 CUDA build 但 cuda 不可用 → 警告（驱动 / WSL 问题）
+
+    `torch.version.cuda` 在 CPU-only wheel 上是 None；在 cu* wheel 上是 "12.8" 等。
+    用它区分误装与驱动问题。
+    """
+    try:
+        import torch  # noqa: PLC0415
+    except ImportError:
+        return  # _ensure_python_deps 会在更早路径处理
+
+    if torch.cuda.is_available():
+        try:
+            name = torch.cuda.get_device_name(0)
+        except Exception:  # noqa: BLE001
+            name = "?"
+        print(f"[studio] torch {torch.__version__}（GPU: {name}）")
+        return
+
+    cuda_build = getattr(torch.version, "cuda", None)
+    if cuda_build is None:
+        # CPU-only wheel：进一步判断本机是否其实有 NVIDIA GPU（误装）
+        try:
+            from studio.services import onnxruntime_setup  # noqa: PLC0415
+            has_gpu = bool(onnxruntime_setup.detect_cuda().get("available"))
+        except Exception:  # noqa: BLE001
+            has_gpu = False
+        if has_gpu:
+            print(
+                f"[studio] 警告：检测到 NVIDIA GPU，但当前安装的是 CPU-only 版 PyTorch "
+                f"({torch.__version__})。\n"
+                f"        训练 / 出图将跑在 CPU 上，速度极慢（单步常需数十秒）。\n"
+                f"        请卸载后重装 CUDA 版：\n"
+                f"          pip uninstall torch torchvision -y\n"
+                f"          # 按你的 CUDA 版本选；如 CUDA 12.8：\n"
+                f"          pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"[studio] torch {torch.__version__}（CPU-only build，未检测到 NVIDIA GPU）"
+            )
+        return
+
+    # CUDA build 但运行时不可用：驱动 / WSL / 容器问题
+    print(
+        f"[studio] 警告：torch {torch.__version__}（CUDA {cuda_build} build），"
+        f"但 torch.cuda.is_available()=False。\n"
+        f"        可能原因：NVIDIA 驱动未安装 / 版本过低 / WSL 缺 CUDA 支持。",
+        file=sys.stderr,
+    )
 
 
 def _bootstrap_onnxruntime() -> None:
@@ -394,6 +526,9 @@ def cmd_run(args: argparse.Namespace) -> int:
             rc = cmd_build(args)
             if rc != 0:
                 return rc
+    _apply_pending_install()
+    _check_torch_cuda()
+    _try_enable_flash_attn()
     _bootstrap_onnxruntime()
     url = f"http://{args.host}:{args.port}/studio/"
     print(f"[studio] 启动后端 → {url}")
@@ -410,11 +545,14 @@ def cmd_dev(args: argparse.Namespace) -> int:
         return rc
     npm = find_npm()
     if not npm:
-        print("[studio] 错误：找不到 npm", file=sys.stderr)
+        _print_npm_install_hint()
         return 2
     rc = npm_install_if_missing(npm)
     if rc != 0:
         return rc
+    _apply_pending_install()
+    _check_torch_cuda()
+    _try_enable_flash_attn()
     _bootstrap_onnxruntime()
 
     pg = ProcGroup()

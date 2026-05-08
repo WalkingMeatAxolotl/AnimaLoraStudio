@@ -15,13 +15,12 @@ Anima LoRA / LoKr 训练工具集，**附带完整 Web 工作台 (AnimaLoraStudi
 本仓库的核心训练脚本派生自 [**Moeblack/AnimaLoraToolkit**](https://github.com/Moeblack/AnimaLoraToolkit)。
 
 - 主模型 / VAE：[circlestone-labs / Anima](https://huggingface.co/circlestone-labs/Anima)
-- 早期训练监控页 `monitor_smooth.html`（已被 React `MonitorDashboard` 取代，保留作独立窗口 fallback）
 
 ---
 
 ## 主要特性
 
-**核心训练 (`anima_train.py`)**
+**核心训练 (`scripts/anima_train.py`)**
 - LoRA + LyCORIS LoKr 双模式，输出原生 ComfyUI 格式
 - Flow Matching + ARB 分桶 + 梯度检查点
 - 断点续训（state.pt 含 optimizer / RNG / loss 历史）
@@ -93,7 +92,9 @@ python -m studio test         # pytest + vitest
 
 ### 2. 在 Studio 里下载模型
 
-打开后先去 **设置（Settings）→ Models**，点按钮一键下载训练所需的全部权重 + tokenizer（默认走 hf-mirror.com，国内可直接拉；可在页面里切官方源、改根目录、看实时进度）。
+打开后先去 **设置（Settings）→ Models**，点按钮一键下载训练所需的全部权重 + tokenizer。
+
+下载源默认走 `hf-mirror.com`（国内反代，社区维护）—— 国内用户开箱即用。海外用户去 **Settings → 训练 → HuggingFace → endpoint** 切换到 `huggingface.co` 官方源（更快直连），或粘贴自建反代 URL。CLI 用户可以在 `python tools/download_models.py` 加 `--no-mirror` / `--endpoint URL` 显式覆盖。
 
 下载内容（默认落到 `./models/`）：
 
@@ -137,18 +138,18 @@ WD14 打标模型不在这里——首次进 ③ 打标时自动从 HF 拉到 `m
 
 ```
 AnimaLoraStudio/
-├── anima_train.py            # 训练核心（被 Studio worker 通过 subprocess 拉起）
-├── train_monitor.py          # 训练状态写入器（被 anima_train 调）
-├── monitor_smooth.html       # 早期监控页（已被 React MonitorDashboard 取代，保留作独立窗口 fallback）
+├── scripts/
+│   └── anima_train.py        # 训练核心（被 Studio worker 通过 subprocess 拉起）
 ├── studio/                   # AnimaStudio Web 工作台（FastAPI + React）
 │   ├── server.py             # 守护进程入口
 │   ├── services/             # 业务逻辑（uploads / 打标 / 正则集 / model_downloader 等）
 │   ├── workers/              # 后台任务子进程（download / tag / reg_build）
 │   └── web/                  # React + Vite 前端
 ├── tools/
+│   ├── train_monitor.py      # 训练状态写入器（被 anima_train 调）
 │   └── download_models.py    # 一键下载训练所需模型（CLI 薄壳，与 Studio UI 共用 services）
 ├── docs/                     # 详细文档（标签格式 / 正则集原理 / Studio 设计等）
-├── utils/                    # anima_train.py import 的 utility（model loader / optimizer 等）
+├── utils/                    # anima_train 共享 utility（model loader / optimizer 等）
 └── models/                   # 模型代码 + tokenizer 预置文件 + 大权重落点（混合）
     ├── anima_modeling*.py    # tracked：Anima Cosmos transformer 的 PyTorch 实现
     ├── cosmos_predict2_modeling.py

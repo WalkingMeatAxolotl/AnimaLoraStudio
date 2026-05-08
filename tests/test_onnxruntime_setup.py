@@ -521,3 +521,79 @@ def test_current_runtime_exposes_cuda_load_error(
         assert "preload" in rt
     finally:
         ors.record_cuda_load_error(None)
+
+
+# ---------------------------------------------------------------------------
+# PR-3 — 系统 CUDA 检测：避免覆盖系统 cuBLAS 造成 ABI 错位
+# ---------------------------------------------------------------------------
+
+
+def test_has_system_cuda_libs_via_cuda_home(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """CUDA_HOME 指向带 lib64 的目录 → True。"""
+    fake_root = tmp_path / "fake-cuda"
+    (fake_root / "lib64").mkdir(parents=True)
+    monkeypatch.setenv("CUDA_HOME", str(fake_root))
+    monkeypatch.delenv("CUDA_PATH", raising=False)
+    # 确保 /usr/local/cuda/lib64 不存在 + ctypes.find_library 不命中（隔离环境）
+    monkeypatch.setattr(ors.os.path, "isdir", lambda p: p.endswith(str(fake_root / "lib64")))
+    import ctypes.util as _cu  # noqa: PLC0415
+    monkeypatch.setattr(_cu, "find_library", lambda _name: None)
+    assert ors._has_system_cuda_libs() is True
+
+
+def test_has_system_cuda_libs_via_default_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """没设 CUDA_HOME 但 /usr/local/cuda/lib64 存在 → True。"""
+    monkeypatch.delenv("CUDA_HOME", raising=False)
+    monkeypatch.delenv("CUDA_PATH", raising=False)
+    monkeypatch.setattr(
+        ors.os.path,
+        "isdir",
+        lambda p: p == "/usr/local/cuda/lib64",
+    )
+    import ctypes.util as _cu  # noqa: PLC0415
+    monkeypatch.setattr(_cu, "find_library", lambda _name: None)
+    assert ors._has_system_cuda_libs() is True
+
+
+def test_has_system_cuda_libs_returns_false_when_no_signals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CUDA_HOME", raising=False)
+    monkeypatch.delenv("CUDA_PATH", raising=False)
+    monkeypatch.setattr(ors.os.path, "isdir", lambda _p: False)
+    import ctypes.util as _cu  # noqa: PLC0415
+    monkeypatch.setattr(_cu, "find_library", lambda _name: None)
+    assert ors._has_system_cuda_libs() is False
+
+
+def test_preload_skips_when_system_cuda_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Linux + 系统 CUDA → 跳过 preload，避免 torch wheel 与系统 cuBLAS ABI 冲突。"""
+    monkeypatch.setattr(ors.sys, "platform", "linux")
+    monkeypatch.setattr(ors, "_has_system_cuda_libs", lambda: True)
+    res = ors._preload_torch_cuda_libs()
+    assert res["system_cuda_skip"] is True
+    assert res["applied"] is False
+    assert res["preloaded"] == []
+    assert res["candidates"] == 0
+
+
+def test_preload_runs_when_system_cuda_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Linux + 没系统 CUDA → 走原 preload 路径（哪怕没 torch wheel，至少 applied=True）。"""
+    monkeypatch.setattr(ors.sys, "platform", "linux")
+    monkeypatch.setattr(ors, "_has_system_cuda_libs", lambda: False)
+
+    def _no_pkg(_name: str):
+        raise ImportError("not installed")
+
+    monkeypatch.setattr(ors.importlib, "import_module", _no_pkg)
+    res = ors._preload_torch_cuda_libs()
+    assert res["applied"] is True
+    assert res["system_cuda_skip"] is False

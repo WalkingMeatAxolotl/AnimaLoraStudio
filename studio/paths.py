@@ -9,7 +9,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # `studio_data/projects/{id}-{slug}/versions/{label}/output/samples/`。
 # PP6.1 后全局 `monitor_data/` 已退役（监控状态走 per-task），不再保留常量 / 创建目录。
 OUTPUT_DIR = REPO_ROOT / "output"
-LEGACY_MONITOR_HTML = REPO_ROOT / "monitor_smooth.html"
 
 # Studio 持久化（SQLite + 用户保存的 preset + 任务日志）
 STUDIO_DATA = REPO_ROOT / "studio_data"

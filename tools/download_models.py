@@ -41,7 +41,6 @@ from studio.services.model_downloader import (  # noqa: E402
     download_qwen3,
     download_t5_tokenizer,
     models_root,
-    setup_mirror,
 )
 
 
@@ -54,12 +53,18 @@ Anima 主模型版本（--variant）:
 {chr(10).join(f"  {k:<14} {v}" for k, v in ANIMA_VARIANTS.items())}
   latest         (= {LATEST_ANIMA})
 
-国内用户默认走 hf-mirror.com；如果镜像有问题加 --no-mirror。
+下载源：默认从 secrets.huggingface.endpoint 读（首装是 hf-mirror.com）。
+  - --no-mirror     用 HuggingFace 官方源（覆盖 secrets）
+  - --endpoint URL  自定义 endpoint URL（覆盖 secrets 和 --no-mirror）
 """,
     )
     parser.add_argument(
         "--no-mirror", action="store_true",
-        help="使用 HuggingFace 官方源（默认走 hf-mirror.com）",
+        help="使用 HuggingFace 官方源（等价于 --endpoint=https://huggingface.co）",
+    )
+    parser.add_argument(
+        "--endpoint", default=None,
+        help="自定义 HF endpoint URL（覆盖 secrets 配置 + --no-mirror）",
     )
     parser.add_argument(
         "--output", default="",
@@ -76,11 +81,17 @@ Anima 主模型版本（--variant）:
     parser.add_argument("--skip-t5",   action="store_true")
     args = parser.parse_args()
 
-    setup_mirror(use_mirror=not args.no_mirror)
-    print(
-        "使用镜像: https://hf-mirror.com" if not args.no_mirror
-        else "使用官方源: https://huggingface.co"
-    )
+    # CLI 显式 flag 覆盖 secrets：--endpoint 最强；--no-mirror 设 HF 官方；都没传 → secrets。
+    import os  # noqa: PLC0415
+    if args.endpoint:
+        os.environ["HF_ENDPOINT"] = args.endpoint
+    elif args.no_mirror:
+        os.environ["HF_ENDPOINT"] = "https://huggingface.co"
+    # 不传 → 让 _resolve_endpoint 读 secrets（默认 hf-mirror.com）
+
+    from studio.services.model_downloader import _resolve_endpoint  # noqa: PLC0415
+    active = _resolve_endpoint() or "https://huggingface.co (HF 默认)"
+    print(f"使用 endpoint: {active}")
 
     out_root = Path(args.output) if args.output else models_root()
     print(f"📁 目标根目录: {out_root.absolute()}")

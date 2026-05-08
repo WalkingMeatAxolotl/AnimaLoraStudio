@@ -6,7 +6,15 @@ export default function MonitorPage() {
   const [health, setHealth] = useState<HealthResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [tasks, setTasks] = useState<Task[]>([])
-  const [taskId, setTaskId] = useState<number | null>(null)
+  // `?task=N` 来自 MonitorDashboard 的「独立监控」按钮（旧 monitor_smooth.html 替代品），
+  // 让独立窗口直接锁定到 dashboard 当前的 task。
+  const initialTaskId = useMemo<number | null>(() => {
+    if (typeof window === 'undefined') return null
+    const raw = new URLSearchParams(window.location.search).get('task')
+    const n = raw === null ? NaN : Number(raw)
+    return Number.isFinite(n) && n > 0 ? n : null
+  }, [])
+  const [taskId, setTaskId] = useState<number | null>(initialTaskId)
 
   useEffect(() => {
     api.health().then(setHealth).catch((e) => setError(String(e)))

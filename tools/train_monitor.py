@@ -12,8 +12,8 @@ API：
 - `_downsample_uniform(points, n)` — 工具：均匀降采样，给前端展示用
 
 状态结构：losses / lr_history / samples / epoch / total_epochs / step /
-total_steps / speed / start_time / config，与原来兼容（前端 monitor_smooth.html
-仍能解析；total_epochs 是 PP6.x 后期补的，老 state 缺失时前端按 0 兜底）。
+total_steps / speed / start_time / config（total_epochs 是 PP6.x 后期补的，
+老 state 缺失时前端按 0 兜底）。
 """
 from __future__ import annotations
 

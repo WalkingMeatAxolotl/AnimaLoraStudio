@@ -144,19 +144,18 @@
 
 ### 使用训练监控
 
-```bash
-# 启动监控服务器
-python train_monitor.py
-
-# 浏览器访问
-http://localhost:8080
-```
+走 Studio 的监控页：启动训练后打开 <http://127.0.0.1:8765/studio/tools/monitor>，
+或在 ⑥ 训练 / 队列页里点任务进入 **任务详情 → 监控** 标签。
 
 监控面板显示：
 - 实时 loss 曲线
 - 学习率变化
 - 采样图预览
 - 训练速度
+
+> 旧的 `python train_monitor.py` 自带 HTTP server 已在 PP6.1 删除（详见
+> `tools/train_monitor.py` 顶部 docstring）；现在它只是个状态写入器，由
+> `anima_train` 调用，不需要单独启动。
 
 ---
 
@@ -176,7 +175,7 @@ http://localhost:8080
 
 3. ✅ 小批量测试
    ```bash
-   python anima_train.py --config config.yaml --epochs 3 --save_every 1
+   python scripts/anima_train.py --config config.yaml --epochs 3 --save_every 1
    ```
 
 ### 训练中

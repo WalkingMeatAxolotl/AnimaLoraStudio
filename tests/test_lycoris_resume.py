@@ -18,8 +18,9 @@ import torch.nn as nn
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # 手动 import anima_train.py 中的 save/load_training_state（不走包导入避免顶层副作用）
+# PR-1 后脚本搬到 scripts/。
 _spec = importlib.util.spec_from_file_location(
-    "_anima_train_for_test", REPO_ROOT / "anima_train.py"
+    "_anima_train_for_test", REPO_ROOT / "scripts" / "anima_train.py"
 )
 # 这个 import 会触发依赖检测 — 如果环境缺包就跳过整个测试文件
 try:

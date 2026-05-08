@@ -376,7 +376,7 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
         )}
         <span className="flex-1" />
         <a
-          href={`/monitor_smooth.html?task_id=${taskId}`}
+          href={`/tools/monitor?task=${taskId}`}
           target="_blank"
           rel="noopener"
           className="text-fg-tertiary no-underline hover:text-fg-primary transition-colors"

@@ -42,6 +42,13 @@ class DanbooruConfig(BaseModel):
 
 class HuggingFaceConfig(BaseModel):
     token: str = ""
+    # PR-S3: HF 模型下载端点。`""` 走 huggingface_hub 默认（直连 huggingface.co）。
+    # 默认 `hf-mirror.com` —— 项目主战场是国内用户，海外用户 Settings 切换。
+    # 自定义 URL 也支持（tencent / sjtug / 自建反代等）。
+    # huggingface_hub>=0.20 起 hf_hub_download / snapshot_download 都支持 `endpoint=` kwarg，
+    # 我们 per-call 传，不依赖 HF_ENDPOINT env var（env var 只在模块 import 时读，
+    # runtime 改设置无效）。
+    endpoint: str = "https://hf-mirror.com"
 
 
 class DownloadConfig(BaseModel):

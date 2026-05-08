@@ -178,10 +178,34 @@ def default_paths_for_new_version() -> dict[str, str]:
 
 
 def setup_mirror(use_mirror: bool) -> None:
-    """设置 HF 镜像端点。CLI 启动一次，UI 启动一次。"""
+    """[Legacy] 设置 HF_ENDPOINT 环境变量。
+
+    PR-S3 之后 Studio UI 走 secrets.huggingface.endpoint per-call 传给 HF 库，
+    不依赖 env var（env var 只在 huggingface_hub 模块 import 时读一次）。
+    本函数仅保留给 `tools/download_models.py` CLI 早期 setup 流程兼容。
+    """
     if use_mirror:
         os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
     # 关镜像不主动 unset HF_ENDPOINT — 留给上层显式管理
+
+
+def _resolve_endpoint() -> Optional[str]:
+    """决定本次下载用什么 HF endpoint。优先级：
+
+    1. `HF_ENDPOINT` 环境变量（CLI 走 setup_mirror 设的，或用户手 export）
+    2. `secrets.huggingface.endpoint`（Studio UI 配的）
+    3. None（让 huggingface_hub 用默认 huggingface.co）
+
+    每次下载都调一次，UI 改了配置无需重启 server。
+    """
+    env = os.environ.get("HF_ENDPOINT", "").strip()
+    if env:
+        return env
+    try:
+        endpoint = secrets.load().huggingface.endpoint
+    except Exception:  # noqa: BLE001  secrets 损坏不应阻断下载
+        return None
+    return endpoint or None
 
 
 def download_flat(
@@ -205,13 +229,17 @@ def download_flat(
         on_log("   ✗ 缺 huggingface_hub")
         return False
     target.parent.mkdir(parents=True, exist_ok=True)
+    endpoint = _resolve_endpoint()
     try:
-        hf_hub_download(
+        kwargs = dict(
             repo_id=repo_id,
             filename=repo_subpath,
             local_dir=str(target.parent),
             local_dir_use_symlinks=False,
         )
+        if endpoint:
+            kwargs["endpoint"] = endpoint
+        hf_hub_download(**kwargs)
     except Exception as exc:
         on_log(f"   ✗ {target.name}: {exc}")
         return False
@@ -506,6 +534,10 @@ def start_download_async(
             ds.log.append(line)
             if len(ds.log) > 200:
                 del ds.log[:-200]
+        # 回显到 backend stdout —— UI ring buffer 容量 200 行；长下载早期日志会被
+        # 截掉，print 让 studio_*.log / 终端保留完整流，调试 / oncall 排错时能直接 grep。
+        # 锁外执行避免持锁做 I/O 拖慢其它 download tasks 写日志。
+        print(line, flush=True)
 
     def _run() -> None:
         bus.publish({

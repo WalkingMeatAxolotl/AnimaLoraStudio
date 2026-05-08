@@ -25,6 +25,15 @@ import types
 from pathlib import Path
 from typing import Optional
 
+# 脚本搬到 scripts/ 后仍按裸脚本启动（`python scripts/anima_train.py`）。
+# 把仓库根 + tools/ 注入 sys.path，让 `import utils.*` / `import train_monitor` 等
+# 不需要改成包导入。
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+for _p in (_REPO_ROOT, _REPO_ROOT / "tools"):
+    _ps = str(_p)
+    if _ps not in sys.path:
+        sys.path.insert(0, _ps)
+
 # Windows 控制台默认 cp936，logging / print 写中文会 UnicodeEncodeError，
 # 默认 handler 的 errors='backslashreplace' 会把中文转成 \uXXXX 形式 ——
 # 这就是 task log 里看到的「检查 VAE」之类乱码的来源。
@@ -469,6 +478,16 @@ def load_anima_model(transformer_path, device, dtype, repo_root):
         repo_root / "anima_modeling.py",
     )
     Anima = anima_modeling.Anima
+
+    # flash_attn 加速：模型类加载完后 try-enable。set_flash_attn_enabled 内部
+    # 检查 _FLASH_ATTN_AVAILABLE，未装时返回 False 不抛错，安全 idempotent。
+    fn = getattr(cosmos_modeling, "set_flash_attn_enabled", None)
+    if fn is not None:
+        try:
+            if fn(True):
+                logger.info("flash_attn 启用（训练 + sample 走 fast path）")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("flash_attn 启用失败，继续走 SDPA fallback: %s", exc)
 
     # 从 checkpoint 推断配置
     with safe_open(transformer_path, framework="pt", device="cpu") as f:

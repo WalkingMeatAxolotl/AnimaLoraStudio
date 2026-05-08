@@ -193,3 +193,191 @@ def test_test_pytest_failure_short_circuits(
     assert rc == 7
     assert all("vitest" not in " ".join(c) for c in calls)
     assert all(c[:3] != ["fake-npm", "run", "test"] for c in calls)
+
+
+# ---------------------------------------------------------------------------
+# PR-4 — _check_torch_cuda
+# ---------------------------------------------------------------------------
+
+
+class _FakeTorchVersion:
+    def __init__(self, cuda):
+        self.cuda = cuda
+
+
+class _FakeTorch:
+    """最小 torch 替身：cuda.is_available / get_device_name + version.cuda + __version__。"""
+    def __init__(self, *, available: bool, cuda_build, version: str = "2.5.0", device_name: str = "RTX 5090"):
+        self._available = available
+        self._device_name = device_name
+        self.__version__ = version
+        self.version = _FakeTorchVersion(cuda_build)
+        # 简化 cuda 命名空间
+        outer = self
+        class _Cuda:
+            @staticmethod
+            def is_available():
+                return outer._available
+            @staticmethod
+            def get_device_name(_idx):
+                return outer._device_name
+        self.cuda = _Cuda()
+
+
+def _install_fake_torch(monkeypatch: pytest.MonkeyPatch, torch_module) -> None:
+    """把 _FakeTorch 注入 sys.modules，让 `_check_torch_cuda` 内部 `import torch` 拿到它。"""
+    import sys as _sys
+    monkeypatch.setitem(_sys.modules, "torch", torch_module)
+
+
+def test_check_torch_cuda_silent_when_torch_missing(
+    monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """torch 没装时静默返回，让 _ensure_python_deps 接手。"""
+    import sys as _sys
+    monkeypatch.delitem(_sys.modules, "torch", raising=False)
+
+    real_import = __builtins__["__import__"] if isinstance(__builtins__, dict) else __builtins__.__import__
+
+    def _fake_import(name, *a, **k):
+        if name == "torch":
+            raise ImportError("simulated")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr("builtins.__import__", _fake_import)
+    cli._check_torch_cuda()
+    out = capsys.readouterr()
+    assert out.out == ""
+    assert out.err == ""
+
+
+def test_check_torch_cuda_prints_ok_when_available(
+    monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """CUDA 可用 → stdout 一行 OK，无 stderr 噪声。"""
+    _install_fake_torch(
+        monkeypatch,
+        _FakeTorch(available=True, cuda_build="12.8", version="2.5.0", device_name="RTX 5090"),
+    )
+    cli._check_torch_cuda()
+    out = capsys.readouterr()
+    assert "RTX 5090" in out.out
+    assert "2.5.0" in out.out
+    assert out.err == ""  # 一切正常不该写 stderr
+
+
+def test_check_torch_cuda_warns_on_cpu_only_with_gpu(
+    monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """CPU-only torch + 检测到 NVIDIA GPU → 大警告 + 重装命令（最常见误装）。"""
+    _install_fake_torch(
+        monkeypatch,
+        _FakeTorch(available=False, cuda_build=None, version="2.5.0+cpu"),
+    )
+    from studio.services import onnxruntime_setup
+    monkeypatch.setattr(
+        onnxruntime_setup,
+        "detect_cuda",
+        lambda: {"available": True, "driver_version": "551.86", "gpu_name": "RTX 5090"},
+    )
+    cli._check_torch_cuda()
+    out = capsys.readouterr()
+    assert out.out == ""  # 警告全走 stderr
+    assert "CPU-only" in out.err
+    assert "pip install torch" in out.err
+    assert "--index-url" in out.err
+    # 不该再用 emoji
+    assert "✓" not in out.err
+    assert "⚠" not in out.err
+
+
+def test_check_torch_cuda_info_on_cpu_only_without_gpu(
+    monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """CPU-only torch + 没 NVIDIA GPU → benign info（用户确实在 CPU 机器）。"""
+    _install_fake_torch(
+        monkeypatch,
+        _FakeTorch(available=False, cuda_build=None, version="2.5.0+cpu"),
+    )
+    from studio.services import onnxruntime_setup
+    monkeypatch.setattr(
+        onnxruntime_setup,
+        "detect_cuda",
+        lambda: {"available": False, "driver_version": None, "gpu_name": None},
+    )
+    cli._check_torch_cuda()
+    out = capsys.readouterr()
+    assert "CPU-only build" in out.out
+    assert "未检测到 NVIDIA GPU" in out.out
+    assert out.err == ""
+
+
+def test_check_torch_cuda_warns_on_cuda_build_but_unavailable(
+    monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """CUDA build + cuda.is_available()=False → 驱动 / WSL 警告。"""
+    _install_fake_torch(
+        monkeypatch,
+        _FakeTorch(available=False, cuda_build="12.8", version="2.5.0+cu128"),
+    )
+    cli._check_torch_cuda()
+    out = capsys.readouterr()
+    assert "CUDA 12.8 build" in out.err
+    assert "is_available()=False" in out.err
+    # 该路径不应给出 pip install 重装建议（torch 装得没问题，是驱动 / WSL 问题）
+    assert "pip install torch" not in out.err
+
+
+# ---------------------------------------------------------------------------
+# PR-5 — _print_npm_install_hint
+# ---------------------------------------------------------------------------
+
+
+def test_npm_hint_windows(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    monkeypatch.setattr(cli.os, "name", "nt")
+    cli._print_npm_install_hint()
+    err = capsys.readouterr().err
+    assert "Node.js 18+" in err
+    assert "winget install" in err
+    assert "nodejs.org" in err
+    # 不应该泄漏 Linux-only 内容
+    assert "nodesource" not in err
+    assert "nvm" not in err
+
+
+def test_npm_hint_linux_non_root(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    monkeypatch.setattr(cli.os, "name", "posix")
+    monkeypatch.setattr(cli.os, "getuid", lambda: 1000, raising=False)
+    cli._print_npm_install_hint()
+    err = capsys.readouterr().err
+    assert "nodesource.com" in err
+    assert "sudo bash" in err  # 非 root → 命令带 sudo 前缀
+    assert "nvm" in err
+    # 不应该有 Windows-only 内容
+    assert "winget" not in err
+
+
+def test_npm_hint_linux_root_drops_sudo(
+    monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    monkeypatch.setattr(cli.os, "name", "posix")
+    monkeypatch.setattr(cli.os, "getuid", lambda: 0, raising=False)
+    cli._print_npm_install_hint()
+    err = capsys.readouterr().err
+    # root 环境直接跑命令，sudo 字样不应出现（避免误导：sudo 在容器里常无）
+    assert " sudo " not in err
+    assert "sudo bash" not in err
+    assert "nodesource.com" in err
+
+
+def test_cmd_build_no_npm_prints_install_hint(
+    monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """cmd_build 找不到 npm 时应通过 _print_npm_install_hint 输出（不只是「找不到 npm」一行）。"""
+    monkeypatch.setattr(cli, "find_npm", lambda: None)
+    monkeypatch.setattr(cli.os, "name", "nt")
+    rc = cli.main(["build"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "winget" in err
+    assert "Node.js 18+" in err

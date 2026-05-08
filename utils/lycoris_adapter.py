@@ -17,8 +17,14 @@ from safetensors.torch import save_file
 from safetensors import safe_open
 
 from utils.lokr_preset import apply as apply_anima_preset
+from utils.lycoris_patch import apply_lokr_device_patch
 
 logger = logging.getLogger(__name__)
+
+# lycoris-lora 3.4.0 LokrModule.get_weight rank_dropout device bug 一次性修复。
+# 模块级调用：任何路径走到 lycoris_adapter（CLI 训练 / Studio worker / 测试）
+# 都会先 patch 一次。返回值供测试断言；正常 import 路径下结果落到 logger。
+_LOKR_PATCH_STATUS = apply_lokr_device_patch()
 
 
 class AnimaLycorisAdapter:

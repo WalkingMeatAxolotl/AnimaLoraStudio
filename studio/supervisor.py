@@ -79,10 +79,10 @@ JobCmdBuilder = Callable[[dict[str, Any]], list[str]]
 
 
 def _default_cmd_builder(task: dict[str, Any], config_path: Path) -> list[str]:
-    """默认调用 anima_train.py --config <path> --monitor-state-file <state>。"""
+    """默认调用 scripts/anima_train.py --config <path> --monitor-state-file <state>。"""
     cmd = [
         sys.executable,
-        str(REPO_ROOT / "anima_train.py"),
+        str(REPO_ROOT / "scripts" / "anima_train.py"),
         "--config",
         str(config_path),
     ]

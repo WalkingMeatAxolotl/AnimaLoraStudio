@@ -3,10 +3,13 @@ import {
   api,
   DEFAULT_WD14_MODELS,
   type CLTaggerVariantInfo,
+  type FlashAttnStatus,
   type ModelDownloadStatus,
   type ModelsCatalog,
   type Secrets,
   type SecretsPatch,
+  type TorchCuTag,
+  type TorchStatus,
   type WD14Runtime,
 } from '../../api/client'
 import PageHeader from '../../components/PageHeader'
@@ -63,7 +66,7 @@ const EMPTY: Secrets = {
     api_rate_per_sec: 2,
     cdn_rate_per_sec: 5,
   },
-  huggingface: { token: '' },
+  huggingface: { token: '', endpoint: 'https://hf-mirror.com' },
   joycaption: {
     base_url: 'http://localhost:8000/v1',
     model: 'fancyfeast/llama-joycaption-beta-one-hf-llava',
@@ -496,6 +499,13 @@ export default function SettingsPage() {
         <p className="text-xs text-fg-tertiary px-1">
           用于 HF 私有 repo 鉴权；公开仓库（含 SmilingWolf WD14 / cella110n CLTagger）不用填。
         </p>
+
+        <SettingsField label="endpoint" desc="模型下载端点。国内推荐 hf-mirror，海外推荐官方源">
+          <HFEndpointSelect
+            value={draft.huggingface.endpoint}
+            onChange={(v) => update('huggingface', 'endpoint', v)}
+          />
+        </SettingsField>
       </SettingsSection>
 
       <SettingsSection title="队列调度">
@@ -508,6 +518,10 @@ export default function SettingsPage() {
           </div>
         </SettingsField>
       </SettingsSection>
+
+      <PyTorchSection />
+
+      <FlashAttentionSection />
 
       <ModelsSection
         catalog={catalog}
@@ -577,6 +591,62 @@ function SensitiveInput({ value, serverValue, onChange }: {
       placeholder={serverValue === MASK ? '已保存（不显示），输入新值才覆盖' : ''}
       onChange={(e) => onChange(e.target.value || MASK)}
       className={textInputClass}                />
+  )
+}
+
+// ── HFEndpointSelect ────────────────────────────────────────────────────────
+//
+// HF 模型下载 endpoint 选择器：3 个 preset + 自定义 URL 输入。
+// 默认 hf-mirror.com（项目主战场国内）；海外用户切到 huggingface.co；
+// 也支持粘贴自定义 URL（自建反代 / sjtug / 腾讯镜像等）。
+
+const HF_ENDPOINT_PRESETS: { value: string; label: string; hint: string }[] = [
+  { value: 'https://hf-mirror.com', label: 'hf-mirror.com', hint: '国内推荐（社区维护反代）' },
+  { value: '', label: 'huggingface.co', hint: '官方源；海外推荐' },
+  { value: '__custom__', label: '自定义 URL...', hint: '粘贴自建反代 / sjtug / 腾讯等' },
+]
+
+function HFEndpointSelect({ value, onChange }: {
+  value: string; onChange: (v: string) => void
+}) {
+  const isPreset = HF_ENDPOINT_PRESETS.some(p => p.value !== '__custom__' && p.value === value)
+  const [mode, setMode] = useState<'preset' | 'custom'>(isPreset ? 'preset' : 'custom')
+  const selectedPreset = isPreset
+    ? value
+    : (mode === 'custom' ? '__custom__' : 'https://hf-mirror.com')
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <select
+        value={selectedPreset}
+        onChange={(e) => {
+          const v = e.target.value
+          if (v === '__custom__') {
+            setMode('custom')
+            // 不清当前值，让用户在下方输入
+          } else {
+            setMode('preset')
+            onChange(v)
+          }
+        }}
+        className={`${textInputClass} max-w-md`}
+      >
+        {HF_ENDPOINT_PRESETS.map(p => (
+          <option key={p.value} value={p.value}>
+            {p.label}{p.hint ? ` — ${p.hint}` : ''}
+          </option>
+        ))}
+      </select>
+      {mode === 'custom' && (
+        <input
+          type="text"
+          value={value && !isPreset ? value : ''}
+          placeholder="https://your-mirror.example.com"
+          onChange={(e) => onChange(e.target.value.trim())}
+          className={`${textInputClass} max-w-md`}
+        />
+      )}
+    </div>
   )
 }
 
@@ -1149,6 +1219,373 @@ function ONNXRuntimeSection() {
             )}
           </>
         )}
+      </div>
+    </details>
+  )
+}
+
+// ── PyTorch Section（训练 tab）──────────────────────────────────────────────
+//
+// 已有 venv 用户的「一键修」入口。PR-4 启动期会 warn「检测到 GPU 但 torch 是
+// CPU 版」并给 pip 命令；这里把命令 UI 化，普通用户不用进终端。
+//
+// 三种状态：
+// - cuda_available=True               → ✓ 一切 OK（折叠默认；提供「换 CUDA 版本」高级选项）
+// - is_cpu_with_gpu=True               → 红色误装提示 + 显著「重装为 CUDA」主按钮
+// - is_cuda_build_unavailable=True     → 黄色驱动警告（pip 修不了，给文档链接）
+
+function PyTorchSection() {
+  const [status, setStatus] = useState<TorchStatus | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const { toast } = useToast()
+
+  const refresh = useCallback(async () => {
+    try {
+      const s = await api.getTorchStatus()
+      setStatus(s)
+      setError(null)
+    } catch (e) {
+      setError(String(e))
+    }
+  }, [])
+
+  useEffect(() => { void refresh() }, [refresh])
+
+  const reinstall = async (target: 'auto' | TorchCuTag) => {
+    const tag = target === 'auto' ? status?.recommended_cu_tag ?? '?' : target
+    // 注册 → 用户 Ctrl+C 重启 → launcher 进程跑 pip。Windows 上 torch.pyd 被
+    // 当前 server 进程锁住，没法直接 replace；只能 defer 到 launcher。
+    const msg = `将注册 torch 重装请求（${tag} 版）。\n` +
+      `提交后请 Ctrl+C 关闭 Studio 重新运行 studio.bat —— 启动时会装 torch（~3 GB，5-30 分钟）。继续？`
+    if (!confirm(msg)) return
+    setBusy(true)
+    try {
+      const result = await api.reinstallTorch(target)
+      // 后端已写 marker，server 进程没真装；提示用户去重启
+      toast(result.message, 'success')
+    } catch (e) {
+      toast(`注册失败: ${e}`, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const hasIssue = !!error || (status && (status.is_cpu_with_gpu || status.is_cuda_build_unavailable || !status.installed))
+  const statusOk = status?.cuda_available && !error
+  const statusLabel = error
+    ? '加载失败'
+    : !status
+      ? '加载中...'
+      : !status.installed
+        ? '未安装'
+        : status.is_cpu_with_gpu
+          ? 'CPU 版（误装）'
+          : !status.cuda_available && status.cuda_build !== 'cpu'
+            ? 'CUDA 不可用（驱动？）'
+            : status.cuda_available
+              ? `CUDA ✓ ${status.cuda_build}`
+              : `CPU ${status.cuda_build}`
+
+  return (
+    <details open={!!hasIssue} className="rounded-md border border-subtle bg-surface group">
+      <summary className="cursor-pointer p-4 list-none flex items-center gap-2">
+        <span className="text-fg-tertiary text-xs transition-transform group-open:rotate-90 inline-block w-3">▸</span>
+        <h2 className="text-sm font-semibold text-fg-primary m-0">PyTorch</h2>
+        <span className="text-xs text-fg-tertiary">训练核心依赖</span>
+        <span className={`ml-auto text-xs font-mono ${statusOk ? 'text-ok' : status?.is_cpu_with_gpu ? 'text-err' : 'text-warn'}`}>
+          {statusLabel}
+        </span>
+      </summary>
+
+      <div className="px-4 pb-4 flex flex-col gap-3">
+        {error && <div className="text-err text-xs font-mono">{error}</div>}
+        {!error && !status && <div className="text-xs text-fg-tertiary">加载状态...</div>}
+
+        {status && (<>
+          {/* 当前状态卡 */}
+          <div className="rounded-sm border border-subtle bg-sunken p-2 flex flex-col gap-1 text-xs">
+            <div className="flex gap-4 flex-wrap">
+              <span className="text-fg-tertiary">torch: <code className="text-fg-secondary font-mono">{status.version ?? '（未安装）'}</code></span>
+              {status.cuda_build && (
+                <span className="text-fg-tertiary">build: <code className="text-fg-secondary font-mono">{status.cuda_build}</code></span>
+              )}
+              {status.cuda_available && status.device_name && (
+                <span className="text-fg-tertiary">GPU: <code className="text-fg-secondary font-mono">{status.device_name}</code></span>
+              )}
+            </div>
+            <div className="flex gap-4 flex-wrap">
+              <span className="text-fg-tertiary">
+                NVIDIA 驱动:{' '}
+                <code className="text-fg-secondary font-mono">
+                  {status.cuda_detect.driver_version ?? '未检测到'}
+                </code>
+              </span>
+              {status.cuda_detect.gpu_name && !status.cuda_available && (
+                <span className="text-fg-tertiary">
+                  系统 GPU:{' '}
+                  <code className="text-fg-secondary font-mono">{status.cuda_detect.gpu_name}</code>
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* 误装：CPU torch + 有 GPU */}
+          {status.is_cpu_with_gpu && (
+            <div className="rounded-sm border border-err bg-err-soft px-2 py-1.5 text-err text-xs">
+              检测到 NVIDIA GPU 但当前装的是 CPU 版 torch —— 训练 / 出图会跑在 CPU 上，单步常需数十秒。
+              点下方按钮一键重装为 <code className="font-mono">{status.recommended_cu_tag}</code> 版。
+            </div>
+          )}
+
+          {/* CUDA build 但运行时不可用：驱动 / WSL 问题 */}
+          {status.is_cuda_build_unavailable && (
+            <div className="rounded-sm border border-warn bg-warn-soft px-2 py-1.5 text-warn text-xs">
+              torch 是 CUDA 版但 <code className="font-mono">torch.cuda.is_available()=False</code>。
+              这通常不是 pip 能修的（驱动版本过低 / WSL 缺 CUDA 支持 / 容器无 GPU 直通）。
+              请检查 NVIDIA 驱动与 CUDA Toolkit。
+            </div>
+          )}
+
+          {/* 操作按钮 */}
+          <div className="flex gap-1.5 items-center flex-wrap">
+            <button
+              onClick={() => void reinstall('auto')}
+              disabled={busy || !status.cuda_detect.available}
+              className={status.is_cpu_with_gpu ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+              title={status.cuda_detect.available
+                ? `自动选择：${status.recommended_cu_tag}`
+                : '没检测到 NVIDIA 驱动，无法装 CUDA 版'}
+            >
+              {busy ? '安装中...' : status.is_cpu_with_gpu
+                ? `⤓ 重装为 CUDA 版（${status.recommended_cu_tag}）`
+                : `↻ 重装（auto: ${status.recommended_cu_tag}）`}
+            </button>
+            <button onClick={() => void refresh()} disabled={busy}
+              className="px-2 py-0.5 text-fg-tertiary bg-transparent border-none cursor-pointer rounded-sm">↻</button>
+            <button type="button" onClick={() => setAdvancedOpen(!advancedOpen)}
+              className="btn btn-ghost btn-sm text-xs text-fg-tertiary ml-auto">
+              {advancedOpen ? '▾' : '▸'} 高级（手动选 CUDA 版本）
+            </button>
+          </div>
+
+          {/* 手动选版本 */}
+          {advancedOpen && (
+            <div className="flex flex-col gap-1.5 pt-2 border-t border-subtle text-xs">
+              <p className="text-fg-tertiary m-0">
+                按你的驱动 / 偏好选；通常用 auto 即可。
+                选错版本会在 import 时报错，需重新选。
+              </p>
+              <div className="flex gap-1.5 flex-wrap">
+                {(['cu128', 'cu126', 'cu124', 'cu118', 'cpu'] as const).map((tag) => (
+                  <button
+                    key={tag}
+                    onClick={() => void reinstall(tag)}
+                    disabled={busy}
+                    className={`btn btn-secondary btn-sm ${
+                      status.cuda_build === tag ? 'border-accent' : ''
+                    }`}
+                    title={
+                      tag === 'cpu'
+                        ? '装 CPU 版（极慢，仅诊断 / 无 GPU 用）'
+                        : `装 ${tag} 版（PyTorch index: /whl/${tag}）`
+                    }
+                  >
+                    {tag}{status.cuda_build === tag ? ' ✓' : ''}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </>)}
+      </div>
+    </details>
+  )
+}
+
+// ── Flash Attention Section（训练 tab）─────────────────────────────────────
+//
+// 训练加速的可选优化。装好 flash_attn 后启动期会自动 set_flash_attn_enabled(True)。
+// 本组件给 UI 一键装 wheel 的能力，复用 PR-7a 的 service：状态 + GitHub 候选 + 安装。
+//
+// 设计要点：
+// - install 是同步 pip（几分钟），用 confirm() + busy 状态防误触
+// - Python ABI 不一致的 wheel（usable=false）灰显，但保留「强制安装」按钮（
+//   极少数情况用户可能在 ABI 兼容子集里跑）
+// - GitHub API 限流时 candidates=[] + fetch_error，给手动 URL 输入兜底
+
+function FlashAttentionSection() {
+  const [status, setStatus] = useState<FlashAttnStatus | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [candidatesOpen, setCandidatesOpen] = useState(false)
+  const [manualUrl, setManualUrl] = useState('')
+  const { toast } = useToast()
+
+  const refresh = useCallback(async () => {
+    try {
+      const s = await api.getFlashAttnStatus()
+      setStatus(s)
+      setError(null)
+    } catch (e) {
+      setError(String(e))
+    }
+  }, [])
+
+  useEffect(() => { void refresh() }, [refresh])
+
+  const install = async (url: string | null) => {
+    const msg = url
+      ? '将 pip install 该 wheel，装包需要几分钟。\n装完后必须重启 Studio 才能生效。继续？'
+      : '将自动从 GitHub Releases 选择最匹配的 flash_attn wheel 并安装。\n装包需要几分钟，装完后必须重启 Studio。继续？'
+    if (!confirm(msg)) return
+    setBusy(true)
+    try {
+      const result = await api.installFlashAttn(url)
+      toast(`flash_attn==${result.version ?? '?'} 安装成功，请重启 Studio`, 'success')
+      await refresh()
+    } catch (e) {
+      toast(`安装失败: ${e}`, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const env = status?.env
+  const candidates = status?.candidates ?? []
+  const fetchError = status?.fetch_error ?? null
+  const usable = candidates.filter((c) => c.usable)
+  const bestCandidate = usable[0] ?? null
+  const hasIssue = !!error || (status && !status.installed)
+  const canAutoInstall = !!env?.torch_tag && !!env?.platform && usable.length > 0
+
+  const statusLabel = error
+    ? '加载失败'
+    : !status
+      ? '加载中...'
+      : status.installed
+        ? `已安装 v${status.version ?? '?'}`
+        : '未安装'
+  const statusOk = status?.installed && !error
+
+  return (
+    <details open={!!hasIssue} className="rounded-md border border-subtle bg-surface group">
+      <summary className="cursor-pointer p-4 list-none flex items-center gap-2">
+        <span className="text-fg-tertiary text-xs transition-transform group-open:rotate-90 inline-block w-3">▸</span>
+        <h2 className="text-sm font-semibold text-fg-primary m-0">Flash Attention</h2>
+        <span className="text-xs text-fg-tertiary">训练加速（可选）</span>
+        <span className={`ml-auto text-xs font-mono ${statusOk ? 'text-ok' : 'text-warn'}`}>{statusLabel}</span>
+      </summary>
+
+      <div className="px-4 pb-4 flex flex-col gap-3">
+        {error && <div className="text-err text-xs font-mono">{error}</div>}
+        {!error && !status && <div className="text-xs text-fg-tertiary">加载状态...</div>}
+
+        {status && env && (<>
+          {/* 环境信息 */}
+          <div className="rounded-sm border border-subtle bg-sunken p-2 flex flex-col gap-1 text-xs">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-fg-tertiary shrink-0">flash_attn:</span>
+              <code className="font-mono text-fg-primary">
+                {status.installed ? `v${status.version ?? '?'}` : '（未安装）'}
+              </code>
+              {status.installed && <StatusLabel bg="bg-ok-soft" fg="text-ok" text="已安装" />}
+            </div>
+            <div className="flex gap-4 flex-wrap">
+              <span className="text-fg-tertiary">Python: <code className="text-fg-secondary font-mono">{env.python_tag}</code></span>
+              <span className="text-fg-tertiary">CUDA: <code className="text-fg-secondary font-mono">{env.cuda_tag ?? '未检测到'}</code></span>
+              <span className="text-fg-tertiary">PyTorch: <code className="text-fg-secondary font-mono">{env.torch_tag ?? '未检测到'}</code></span>
+              <span className="text-fg-tertiary">平台: <code className="text-fg-secondary font-mono">{env.platform ?? '不支持'}</code></span>
+            </div>
+          </div>
+
+          {/* GitHub API 失败 */}
+          {fetchError && (
+            <div className="rounded-sm border border-err bg-err-soft px-2 py-1.5 text-err text-xs">
+              GitHub API 请求失败（国内网络可能不稳定，请刷新重试）：
+              <code className="block mt-0.5 break-all">{fetchError}</code>
+            </div>
+          )}
+
+          {/* 没匹配 wheel */}
+          {!canAutoInstall && !fetchError && env.platform && env.torch_tag && (
+            <div className="rounded-sm border border-warn bg-warn-soft px-2 py-1.5 text-warn text-xs">
+              未找到 {env.python_tag} 的预编译 wheel（当前 Python 版本可能尚无支持）。
+              请在下方候选列表手动选择其他版本，或从 GitHub Releases 粘贴 URL。
+            </div>
+          )}
+
+          {/* 操作按钮 */}
+          <div className="flex gap-1.5 items-center flex-wrap">
+            <button
+              onClick={() => void install(null)}
+              disabled={busy || !canAutoInstall}
+              className="btn btn-primary btn-sm"
+              title={canAutoInstall
+                ? `自动选择：${bestCandidate?.name ?? ''}`
+                : '无可用 wheel，请手动选择'}
+            >
+              {busy ? '安装中...' : status.installed ? '↻ 重装（自动匹配）' : '⤓ 自动匹配安装'}
+            </button>
+            <button onClick={() => void refresh()} disabled={busy}
+              className="px-2 py-0.5 text-fg-tertiary bg-transparent border-none cursor-pointer rounded-sm">↻</button>
+            <button type="button" onClick={() => setCandidatesOpen(!candidatesOpen)}
+              className="btn btn-ghost btn-sm text-xs text-fg-tertiary ml-auto">
+              {candidatesOpen ? '▾' : '▸'} 候选 wheel（{usable.length} 可用）
+            </button>
+          </div>
+
+          {/* 候选列表 + 手动 URL */}
+          {candidatesOpen && (
+            <div className="flex flex-col gap-2 pt-2 border-t border-subtle">
+              {candidates.length === 0 ? (
+                <p className="text-xs text-fg-tertiary m-0">查询失败或无匹配（检查网络连接）</p>
+              ) : (
+                <ul className="list-none m-0 p-0 flex flex-col gap-1">
+                  {candidates.map((c) => (
+                    <li key={c.url} className={`flex items-start gap-2 text-xs px-2 py-1.5 rounded-sm border ${
+                      c.usable ? 'border-subtle bg-sunken' : 'border-transparent bg-transparent opacity-50'
+                    }`}>
+                      <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+                        <code className="font-mono text-fg-primary text-[11px] break-all">{c.name}</code>
+                        {c.notes.map((n, i) => (
+                          <span key={i} className="text-warn text-[10px]">{n}</span>
+                        ))}
+                      </div>
+                      <button
+                        onClick={() => void install(c.url)}
+                        disabled={busy}
+                        className={c.usable ? 'btn btn-primary btn-sm shrink-0' : 'btn btn-secondary btn-sm shrink-0'}
+                        title={c.usable ? '安装此 wheel' : 'Python ABI 不兼容，强制安装可能失败'}
+                      >
+                        {c.usable ? '⤓ 安装' : '强制安装'}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <div className="flex flex-col gap-1 pt-1 border-t border-subtle">
+                <p className="text-xs text-fg-tertiary m-0">手动粘贴 URL：</p>
+                <div className="flex gap-1.5">
+                  <input
+                    type="text"
+                    value={manualUrl}
+                    onChange={(e) => setManualUrl(e.target.value)}
+                    placeholder="https://github.com/.../flash_attn-...whl"
+                    className={`${textInputClass} flex-1`}
+                  />
+                  <button
+                    onClick={() => { if (manualUrl.trim()) void install(manualUrl.trim()) }}
+                    disabled={busy || !manualUrl.trim()}
+                    className="btn btn-secondary btn-sm shrink-0"
+                  >安装</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </>)}
       </div>
     </details>
   )

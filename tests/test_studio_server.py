@@ -1,7 +1,7 @@
 """Studio FastAPI 守护进程的端点冒烟测试（P1 范围）。
 
 测试只覆盖 server.py 暴露的 5 个端点。每个用例通过 monkeypatch 把
-`studio.server` 模块里指向运行时数据/HTML 的路径常量改写到 tmp_path，
+`studio.server` 模块里指向运行时数据的路径常量改写到 tmp_path，
 避免污染仓库真实目录。
 """
 from __future__ import annotations
@@ -21,7 +21,6 @@ def isolated_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str,
     from studio import db
     output = tmp_path / "output"
     samples_dir = output / "samples"
-    legacy_html = tmp_path / "monitor_smooth.html"
     web_dist = tmp_path / "web_dist"  # 不创建即模拟未构建
     samples_dir.mkdir(parents=True)
 
@@ -30,14 +29,12 @@ def isolated_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str,
     monkeypatch.setattr(db, "STUDIO_DB", dbfile)
     monkeypatch.setattr(server.db, "STUDIO_DB", dbfile)
     monkeypatch.setattr(server, "OUTPUT_DIR", output)
-    monkeypatch.setattr(server, "LEGACY_MONITOR_HTML", legacy_html)
     monkeypatch.setattr(server, "WEB_DIST", web_dist)
     return {
         "tmp": tmp_path,
         "db": dbfile,
         "output": output,
         "samples_dir": samples_dir,
-        "legacy_html": legacy_html,
         "web_dist": web_dist,
     }
 
@@ -62,6 +59,177 @@ def test_health_returns_ok(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 # /api/state
 # ---------------------------------------------------------------------------
+
+def test_torch_status_proxies_service(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET /api/torch/status 把 torch_setup.current_status() 透传给前端。"""
+    from studio.services import torch_setup
+    monkeypatch.setattr(torch_setup, "current_status", lambda: {
+        "installed": True,
+        "version": "2.5.0+cpu",
+        "cuda_build": "cpu",
+        "cuda_available": False,
+        "device_name": None,
+        "cuda_detect": {"available": True, "driver_version": "555.86", "gpu_name": "RTX 5090"},
+        "recommended_cu_tag": "cu128",
+        "is_cpu_with_gpu": True,
+        "is_cuda_build_unavailable": False,
+    })
+    resp = client.get("/api/torch/status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["is_cpu_with_gpu"] is True
+    assert body["recommended_cu_tag"] == "cu128"
+
+
+def test_torch_reinstall_registers_marker_returns_pending(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """POST /api/torch/reinstall 不真装，写 marker 返回 pending。"""
+    from studio.services import pending_install, torch_setup
+    monkeypatch.setattr(pending_install, "STUDIO_DATA", tmp_path)
+    monkeypatch.setattr(pending_install, "PENDING_MARKER", tmp_path / ".pending-pip-install.json")
+    monkeypatch.setattr(torch_setup, "_decide_target_tag", lambda _t: "cu128")
+
+    resp = client.post("/api/torch/reinstall", json={"target": "auto"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["pending"] is True
+    assert body["tag"] == "cu128"
+    assert body["target"] == "auto"
+    assert "studio.bat" in body["message"]
+    # marker 文件已写
+    assert (tmp_path / ".pending-pip-install.json").exists()
+
+
+def test_torch_reinstall_invalid_target_returns_400(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from studio.services import torch_setup
+    monkeypatch.setattr(
+        torch_setup, "_decide_target_tag",
+        lambda t: (_ for _ in ()).throw(ValueError(f"非法 target: {t!r}")),
+    )
+    resp = client.post("/api/torch/reinstall", json={"target": "xpu"})
+    assert resp.status_code == 400
+    assert "非法 target" in resp.json()["detail"]
+
+
+def test_flash_attention_status_returns_env_and_candidates(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET /api/flash-attention/status 应返回 status + env + slim candidates + fetch_error。"""
+    from studio.services import flash_attention_setup
+    monkeypatch.setattr(flash_attention_setup, "current_status", lambda: {
+        "installed": True, "version": "2.8.3"
+    })
+    monkeypatch.setattr(flash_attention_setup, "detect_env", lambda: {
+        "python_tag": "cp311", "cuda_tag": "cu128", "cuda_ver": "12.8",
+        "torch_tag": "torch2.5", "torch_ver": "2.5.0+cu128", "platform": "win_amd64",
+    })
+    monkeypatch.setattr(flash_attention_setup, "find_candidates", lambda _env: ([
+        {
+            "url": "https://x/wheel.whl",
+            "name": "flash_attn-2.8.3+cu128torch2.5-cp311-cp311-win_amd64.whl",
+            "score": 40,  # 应被剥掉
+            "notes": [],
+            "usable": True,
+            "tags": {"cuda": "cu128"},  # 应被剥掉
+        },
+    ], None))
+
+    resp = client.get("/api/flash-attention/status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["installed"] is True
+    assert body["version"] == "2.8.3"
+    assert body["env"]["platform"] == "win_amd64"
+    # candidates 只保留 url/name/notes/usable —— score / tags 不暴露给前端
+    assert len(body["candidates"]) == 1
+    c = body["candidates"][0]
+    assert set(c.keys()) == {"url", "name", "notes", "usable"}
+    assert body["fetch_error"] is None
+
+
+def test_flash_attention_status_passes_fetch_error_through(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GitHub 限流 / 网络异常时 fetch_error 透传给 UI。"""
+    from studio.services import flash_attention_setup
+    monkeypatch.setattr(flash_attention_setup, "current_status", lambda: {
+        "installed": False, "version": None,
+    })
+    monkeypatch.setattr(flash_attention_setup, "detect_env", lambda: {
+        "python_tag": "cp311", "cuda_tag": None, "cuda_ver": None,
+        "torch_tag": None, "torch_ver": None, "platform": "linux_x86_64",
+    })
+    monkeypatch.setattr(
+        flash_attention_setup, "find_candidates",
+        lambda _env: ([], "GitHub API 错误: API rate limit exceeded"),
+    )
+    resp = client.get("/api/flash-attention/status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["candidates"] == []
+    assert "rate limit" in body["fetch_error"]
+
+
+def test_flash_attention_install_success(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from studio.services import flash_attention_setup
+    captured: dict = {}
+
+    def fake_install(url):
+        captured["url"] = url
+        return {
+            "installed": True, "version": "2.8.3",
+            "url": url or "https://auto/wheel.whl",
+            "stdout_tail": "Successfully installed",
+            "restart_required": True,
+        }
+
+    monkeypatch.setattr(flash_attention_setup, "install", fake_install)
+    resp = client.post("/api/flash-attention/install", json={"url": "https://x/manual.whl"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["installed"] is True
+    assert body["restart_required"] is True
+    assert captured["url"] == "https://x/manual.whl"
+
+
+def test_flash_attention_install_url_null_uses_auto(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """前端不传 url（或显式 null）→ service 收到 None，走自动匹配。"""
+    from studio.services import flash_attention_setup
+    captured: dict = {}
+
+    def fake_install(url):
+        captured["url"] = url
+        return {"installed": True, "version": "2.8.3", "url": "auto",
+                "stdout_tail": "", "restart_required": True}
+
+    monkeypatch.setattr(flash_attention_setup, "install", fake_install)
+    resp = client.post("/api/flash-attention/install", json={"url": None})
+    assert resp.status_code == 200
+    assert captured["url"] is None
+
+
+def test_flash_attention_install_failure_returns_500(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from studio.services import flash_attention_setup
+
+    def boom(_url):
+        raise RuntimeError("pip install 失败:\nERROR: bad wheel")
+
+    monkeypatch.setattr(flash_attention_setup, "install", boom)
+    resp = client.post("/api/flash-attention/install", json={"url": "https://x/bad.whl"})
+    assert resp.status_code == 500
+    assert "bad wheel" in resp.json()["detail"]
+
 
 def test_state_missing_returns_empty(client: TestClient, isolated_paths: dict[str, Path]) -> None:
     """没有 task_id 也没有 running 任务时返回空状态。"""

@@ -5,7 +5,11 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from models.cosmos_predict2_modeling import MiniTrainDIT
+from models.cosmos_predict2_modeling import (
+    MiniTrainDIT,
+    set_flash_attn_enabled,  # noqa: F401  re-export for callers that import via this module
+    try_flash_attn,
+)
 
 
 def rotate_half(x):
@@ -80,6 +84,18 @@ class LLMAdapterAttention(nn.Module):
             query_states = apply_rotary_pos_emb(query_states, cos, sin)
             cos, sin = position_embeddings_context
             key_states = apply_rotary_pos_emb(key_states, cos, sin)
+
+        # flash_attn 不支持任意 mask；只在 mask=None（cross-attention 默认情形）时尝试。
+        # 状态判断 + warn-once 由 try_flash_attn 统一处理。
+        if mask is None:
+            out, used = try_flash_attn(
+                query_states.transpose(1, 2),
+                key_states.transpose(1, 2),
+                value_states.transpose(1, 2),
+                "LLMAdapterAttention",
+            )
+            if used:
+                return self.o_proj(out.reshape(*input_shape, -1).contiguous())
 
         attn_output = F.scaled_dot_product_attention(query_states, key_states, value_states, attn_mask=mask)
 

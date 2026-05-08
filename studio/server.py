@@ -1,7 +1,7 @@
 """AnimaStudio 守护服务（FastAPI）。
 
 P1 范围（本文件目前实现）：
-    - GET  /                   302 跳转到 /studio/（旧监控页搬到 /monitor_smooth.html）
+    - GET  /                   302 跳转到 /studio/
     - GET  /api/health         健康检查
     - GET  /api/state          读取 task 的 per-task monitor state
     - GET  /samples/{name}     代理采样图（按 task_id 解析到 version 目录）
@@ -58,7 +58,10 @@ from .services import (
     downloader,
     presets as preset_flow,
     model_downloader,
+    flash_attention_setup,
     onnxruntime_setup,
+    pending_install,
+    torch_setup,
     reg_builder,
     tagedit,
     train_io,
@@ -67,7 +70,6 @@ from .services import (
 )
 from .services.tagger import VALID_TAGGER_NAMES, get_tagger
 from .paths import (
-    LEGACY_MONITOR_HTML,
     LOGS_DIR,
     OUTPUT_DIR,
     REPO_ROOT,
@@ -1185,6 +1187,86 @@ def wd14_install(body: WD14InstallRequest) -> dict[str, Any]:
     }
 
 
+# PyTorch 运行时 / 重装（PR-S2）-------------------------------------------
+
+
+@app.get("/api/torch/status")
+def torch_status() -> dict[str, Any]:
+    """返回 torch 当前状态 + 驱动检测 + 推荐 cu tag + 误装诊断 flag。
+
+    UI 用 `is_cpu_with_gpu` 决定是否显著提示「检测到 GPU 但装的是 CPU 版」。
+    `is_cuda_build_unavailable` 标志驱动 / WSL 问题（不是 pip 能修的，UI 给文档链接）。
+    """
+    return torch_setup.current_status()
+
+
+class TorchReinstallRequest(BaseModel):
+    target: str = "auto"  # "auto" | "cu128" | "cu126" | "cu124" | "cu118" | "cpu"
+
+
+@app.post("/api/torch/reinstall")
+def torch_reinstall(body: TorchReinstallRequest) -> dict[str, Any]:
+    """注册 torch 重装请求；下次 Studio 启动时由 launcher 进程执行。
+
+    为什么不直接装：server 进程已 import 了 torch（flash_attention_setup 等间接拉
+    上的），Windows 上 `torch\\_C.cp311-win_amd64.pyd` 被锁，pip uninstall / replace
+    会撞 [WinError 5] 拒绝访问。改成写 marker → 用户 Ctrl+C 重启 → cli.py 启动
+    时还没 import torch，pip 能正常替换文件。
+
+    返回 `{pending: true, target, tag, message}`，UI 显示「请关闭并重启 Studio」。
+    """
+    try:
+        tag = torch_setup._decide_target_tag(body.target)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    pending_install.register_torch_reinstall(body.target)
+    return {
+        "pending": True,
+        "target": body.target,
+        "tag": tag,
+        "message": "重装请求已注册。请 Ctrl+C 关闭 Studio 后重新运行 studio.bat / studio.sh —— 启动时会自动安装 torch（~3 GB，5-30 分钟），然后正常起 server。",
+    }
+
+
+# FlashAttention runtime（PR-7b）-----------------------------------------
+
+
+class FlashAttnInstallRequest(BaseModel):
+    url: Optional[str] = None  # None = 自动从 GitHub Releases 选最优
+
+
+@app.get("/api/flash-attention/status")
+def flash_attn_status() -> dict[str, Any]:
+    """返回 flash_attn 安装状态 + 当前环境检测 + GitHub 候选 wheel 列表。
+
+    candidates 里 score / tags 等 UI 不需要的字段已剥掉，只保留 url/name/notes/usable。
+    候选最多取前 20 个，避免 GitHub 历史 release 一大坨刷屏。
+    fetch_error 非 None 表示 GitHub API 请求失败（限流 / 网络 / 国内防火墙）；
+    UI 要展示这条让用户能选择手动粘 URL。
+    """
+    status = flash_attention_setup.current_status()
+    env = flash_attention_setup.detect_env()
+    candidates, fetch_error = flash_attention_setup.find_candidates(env)
+    slim = [
+        {"url": c["url"], "name": c["name"], "notes": c["notes"], "usable": c["usable"]}
+        for c in candidates[:20]
+    ]
+    return {**status, "env": env, "candidates": slim, "fetch_error": fetch_error}
+
+
+@app.post("/api/flash-attention/install")
+def flash_attn_install(body: FlashAttnInstallRequest) -> dict[str, Any]:
+    """安装 flash_attn wheel；url=null 走 service 的自动匹配。
+
+    同步 pip install（远端 wheel ~150MB），可能几分钟；UI 按钮必须带 loading。
+    flash_attn 是 C extension，装完必须重启 Studio 才能切换；返回 restart_required=True。
+    """
+    try:
+        return flash_attention_setup.install(body.url)
+    except RuntimeError as exc:
+        raise HTTPException(500, str(exc)) from exc
+
+
 @app.get("/api/tagger/{name}/check")
 def check_tagger(name: str) -> dict[str, Any]:
     if name not in VALID_TAGGER_NAMES:
@@ -2266,7 +2348,6 @@ if WEB_DIST.exists():
 def root() -> RedirectResponse | JSONResponse:
     """根路径 302 跳转到 React 应用 `/studio/`。
 
-    旧监控页仍可通过 `/monitor_smooth.html` 直达（QueueMonitor iframe 用）。
     若前端尚未构建（dist 缺失），返回 JSON 提示。"""
     if WEB_DIST.exists():
         return RedirectResponse(url="/studio/", status_code=302)
@@ -2276,14 +2357,6 @@ def root() -> RedirectResponse | JSONResponse:
             "(npm install && npm run build) to enable the new UI."
         }
     )
-
-
-@app.get("/monitor_smooth.html", response_model=None, include_in_schema=False)
-def monitor_smooth_html() -> FileResponse:
-    """直接路径访问 monitor_smooth.html（PP6.1：QueueMonitor iframe 走这里）。"""
-    if not LEGACY_MONITOR_HTML.exists():
-        raise HTTPException(404, "monitor_smooth.html not found")
-    return FileResponse(LEGACY_MONITOR_HTML)
 
 
 # ---------------------------------------------------------------------------

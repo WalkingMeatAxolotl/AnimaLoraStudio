@@ -75,6 +75,11 @@ export interface DownloadGlobalConfig {
 
 export interface HuggingFaceConfig {
   token: string
+  /** PR-S3 — HF 模型下载端点 endpoint。
+   *  `""` → huggingface_hub 默认（直连 huggingface.co）；海外用户推荐
+   *  `"https://hf-mirror.com"` → 国内默认（项目主战场国内）
+   *  其它 URL → 自定义反代 / 自建镜像 */
+  endpoint: string
 }
 
 export interface JoyCaptionConfig {
@@ -106,6 +111,64 @@ export interface CLTaggerConfig {
   add_model_tag: boolean
   blacklist_tags: string[]
   batch_size: number
+}
+
+/** PR-S2 — PyTorch 安装状态 + 驱动检测 + 推荐 cu tag。 */
+export type TorchCuTag = 'cu128' | 'cu126' | 'cu124' | 'cu118' | 'cpu'
+export interface TorchStatus {
+  installed: boolean
+  version: string | null              // "2.5.0+cu128"
+  cuda_build: TorchCuTag | null       // 解析自 +suffix
+  cuda_available: boolean             // torch.cuda.is_available()
+  device_name: string | null          // "NVIDIA GeForce RTX 5090"
+  cuda_detect: {
+    available: boolean
+    driver_version: string | null
+    gpu_name: string | null
+  }
+  recommended_cu_tag: TorchCuTag      // 按驱动版本推荐
+  /** 装了 CPU wheel 但有 NVIDIA GPU → 误装，UI 显示「重装为 CUDA 版」红色提示。 */
+  is_cpu_with_gpu: boolean
+  /** 装了 CUDA wheel 但 cuda.is_available()=False → 驱动 / WSL 问题，pip 修不了。 */
+  is_cuda_build_unavailable: boolean
+}
+/** torch reinstall 总是 deferred：server 写 marker，下次 launcher 启动时跑 pip。
+ *  这样避开 Windows 上 torch .pyd 已被 server 进程加载、pip 无法 replace 的死锁。 */
+export interface TorchReinstallResult {
+  pending: true                       // 永远 true，提示 UI 走「请重启」分支
+  target: string                      // 用户传的（"auto" 等）
+  tag: TorchCuTag                     // 实际选定（auto 已被 server 解析）
+  message: string                     // 中文人话提示，UI 直接显示
+}
+
+/** PR-7b — Flash Attention 安装状态 + 环境检测 + GitHub 候选 wheel。 */
+export interface FlashAttnEnv {
+  python_tag: string                 // cp311
+  cuda_tag: string | null            // cu128 / null = 没 nvidia-smi
+  cuda_ver: string | null            // 12.8
+  torch_tag: string | null           // torch2.5
+  torch_ver: string | null
+  platform: 'linux_x86_64' | 'win_amd64' | null
+}
+export interface FlashAttnCandidate {
+  url: string
+  name: string                       // flash_attn-2.8.3+cu128torch2.5-cp311-cp311-win_amd64.whl
+  notes: string[]                    // 兼容性说明（CUDA 大版本不同 / Python 不兼容）
+  usable: boolean                    // false = Python ABI 不匹配，UI 灰显但允许强装
+}
+export interface FlashAttnStatus {
+  installed: boolean
+  version: string | null
+  env: FlashAttnEnv
+  candidates: FlashAttnCandidate[]   // 按 score 降序，最多 20
+  fetch_error: string | null         // GitHub API 限流 / 网络异常
+}
+export interface FlashAttnInstallResult {
+  installed: boolean
+  version: string | null
+  url: string
+  stdout_tail: string                // pip 输出末 40 行
+  restart_required: boolean
 }
 
 /** PP8 — onnxruntime 装包状态 + nvidia-smi 检测结果。 */
@@ -1126,6 +1189,30 @@ export const api = {
     req<WD14InstallResult>('/api/wd14/install', {
       method: 'POST',
       body: JSON.stringify({ target }),
+    }),
+
+  // PR-S2 — PyTorch 运行时 / 一键重装 ---------------------------------------
+  /** 当前 torch 状态：版本 / CUDA build / cuda.is_available / 驱动检测 / 推荐 cu tag。 */
+  getTorchStatus: () => req<TorchStatus>('/api/torch/status'),
+  /** 卸装重装 torch + torchvision；同步 pip，可能 5-30 分钟，UI 必须带 loading。
+   *  装完必须重启 Studio（C extension 不能热替换）。 */
+  reinstallTorch: (target: 'auto' | TorchCuTag) =>
+    req<TorchReinstallResult>('/api/torch/reinstall', {
+      method: 'POST',
+      body: JSON.stringify({ target }),
+    }),
+
+  // PR-7b — Flash Attention 运行时 / wheel 安装 ----------------------------
+  /** 当前 flash_attn 状态 + 环境检测 + GitHub 候选 wheel 列表（前 20）。
+   *  fetch_error 非 null 时 candidates=[]，UI 应提示用户改用手动 URL。 */
+  getFlashAttnStatus: () => req<FlashAttnStatus>('/api/flash-attention/status'),
+  /** 安装 flash_attn wheel；url=null 走 service 自动匹配。
+   *  同步 pip install（远端 wheel ~150MB），可能几分钟；UI 按钮必须带 loading。
+   *  装完必须重启 Studio 才能切换（C extension 不能热替换）。 */
+  installFlashAttn: (url: string | null) =>
+    req<FlashAttnInstallResult>('/api/flash-attention/install', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
     }),
 
   // PP7 — 训练集导出 / 导入 -----------------------------------------------
