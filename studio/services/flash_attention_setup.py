@@ -96,11 +96,14 @@ def _cuda_major(tag: str) -> int:
     return int(m.group(1)) // 10 if m else -1
 
 
-def find_candidates(env: dict[str, Any]) -> list[dict[str, Any]]:
-    """查询 GitHub Releases，返回按匹配度排序的候选 wheel 列表。
+def find_candidates(
+    env: dict[str, Any],
+) -> tuple[list[dict[str, Any]], Optional[str]]:
+    """查询 GitHub Releases，返回 (candidates, fetch_error)。
 
-    每项包含：url / name / score / notes / usable
+    candidates 每项包含：url / name / score / notes / usable
     usable=True 表示当前环境可以直接安装。
+    fetch_error 非 None 时表示 GitHub API 请求失败（网络/限流等）。
     """
     plat = env.get("platform")
     torch_tag = env.get("torch_tag")
@@ -108,15 +111,16 @@ def find_candidates(env: dict[str, Any]) -> list[dict[str, Any]]:
     python_tag = env.get("python_tag")
 
     if not plat:
-        return []
+        return [], None
 
     try:
         req = urllib.request.Request(
-            FA_RELEASES_URL, headers={"User-Agent": "AnimaLoraStudio"}
+            FA_RELEASES_URL + "?per_page=100",
+            headers={"User-Agent": "AnimaLoraStudio"},
         )
         data = json.loads(urllib.request.urlopen(req, timeout=15).read())
-    except Exception:
-        return []
+    except Exception as exc:
+        return [], str(exc)
 
     candidates: list[dict[str, Any]] = []
     for release in data:
@@ -167,12 +171,13 @@ def find_candidates(env: dict[str, Any]) -> list[dict[str, Any]]:
                 "tags": tags,
             })
 
-    return sorted(candidates, key=lambda x: -x["score"])
+    return sorted(candidates, key=lambda x: -x["score"]), None
 
 
 def find_best_wheel(env: dict[str, Any]) -> Optional[str]:
     """返回最优可用 wheel URL，无则返回 None。"""
-    for c in find_candidates(env):
+    candidates, _ = find_candidates(env)
+    for c in candidates:
         if c["usable"]:
             return c["url"]
     return None

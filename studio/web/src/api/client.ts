@@ -131,6 +131,7 @@ export interface FlashAttnStatus {
   version: string | null
   env: FlashAttnEnv
   candidates: FlashAttnCandidate[]
+  fetch_error: string | null
 }
 
 export interface FlashAttnInstallResult {

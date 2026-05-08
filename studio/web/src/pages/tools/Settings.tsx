@@ -1237,6 +1237,7 @@ function FlashAttentionSection() {
 
   const env = status?.env
   const candidates = status?.candidates ?? []
+  const fetchError = status?.fetch_error ?? null
   const usable = candidates.filter((c) => c.usable)
   const bestCandidate = usable[0] ?? null
   const hasIssue = !!error || (status && !status.installed)
@@ -1282,8 +1283,16 @@ function FlashAttentionSection() {
             </div>
           </div>
 
+          {/* GitHub API 请求失败 */}
+          {fetchError && (
+            <div className="rounded-sm border border-err bg-err-soft px-2 py-1.5 text-err text-xs">
+              GitHub API 请求失败（国内网络可能不稳定，请刷新重试）：
+              <code className="block mt-0.5 break-all">{fetchError}</code>
+            </div>
+          )}
+
           {/* 无可用 wheel 时的提示 */}
-          {!canAutoInstall && env.platform && env.torch_tag && (
+          {!canAutoInstall && !fetchError && env.platform && env.torch_tag && (
             <div className="rounded-sm border border-warn bg-warn-soft px-2 py-1.5 text-warn text-xs">
               未找到 {env.python_tag} 的预编译 wheel（当前 Python 版本可能尚无支持）。
               请在下方候选列表手动选择其他版本，或从 GitHub Releases 粘贴 URL。
