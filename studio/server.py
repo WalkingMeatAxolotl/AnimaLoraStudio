@@ -1200,10 +1200,16 @@ class FlashAttnInstallRequest(BaseModel):
 
 @app.get("/api/flash-attention/status")
 def flash_attn_status() -> dict[str, Any]:
-    """返回 flash_attn 安装状态 + 当前环境检测（Python / CUDA / PyTorch / 平台）。"""
+    """返回 flash_attn 安装状态 + 当前环境检测 + GitHub 候选 wheel 列表。"""
     status = flash_attention_setup.current_status()
     env = flash_attention_setup.detect_env()
-    return {**status, "env": env}
+    candidates = flash_attention_setup.find_candidates(env)
+    # 只传 url/name/notes/usable，score/tags 前端不需要
+    slim = [
+        {"url": c["url"], "name": c["name"], "notes": c["notes"], "usable": c["usable"]}
+        for c in candidates[:20]
+    ]
+    return {**status, "env": env, "candidates": slim}
 
 
 @app.post("/api/flash-attention/install")

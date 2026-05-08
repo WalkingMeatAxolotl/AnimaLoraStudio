@@ -1,9 +1,14 @@
 """Flash Attention wheel 查找与安装。
 
-逻辑对齐 install.sh / install.bat：
-- 检测 Python / CUDA / PyTorch 版本 → 生成 pattern
-- 从 GitHub Releases (mjun0812/flash-attention-prebuild-wheels) 查匹配 wheel
-- pip install <url>（同步，可能几分钟）
+wheel 命名规律（mjun0812/flash-attention-prebuild-wheels）：
+  flash_attn-{fa_ver}+{cuda}{torch}-{pyver}-{pyver}-{platform}.whl
+  例：flash_attn-2.8.3+cu130torch2.11-cp312-cp312-win_amd64.whl
+
+匹配策略：
+- platform：必须精确一致
+- torch：必须精确一致（2.11 ≠ 2.10）
+- CUDA：精确 > 同大版本（cu132 → 接受 cu130，CUDA 小版本向下兼容）
+- Python：必须精确（cp312 wheel 无法在 cp313 上运行，ABI 不同）
 """
 from __future__ import annotations
 
@@ -23,7 +28,7 @@ FA_RELEASES_URL = (
 
 
 def detect_env() -> dict[str, Any]:
-    """检测当前 Python / CUDA / PyTorch / 平台，返回 pattern 等信息。"""
+    """检测当前 Python / CUDA / PyTorch / 平台。"""
     vi = sys.version_info
     python_tag = f"cp{vi.major}{vi.minor}"
 
@@ -60,10 +65,6 @@ def detect_env() -> dict[str, Any]:
     except ImportError:
         pass
 
-    pattern: Optional[str] = None
-    if cuda_tag and torch_tag and plat:
-        pattern = f"{cuda_tag}{torch_tag}-{python_tag}-{python_tag}-{plat}"
-
     return {
         "python_tag": python_tag,
         "cuda_tag": cuda_tag,
@@ -71,24 +72,109 @@ def detect_env() -> dict[str, Any]:
         "torch_tag": torch_tag,
         "torch_ver": torch_ver,
         "platform": plat,
-        "pattern": pattern,
     }
 
 
-def find_wheel(pattern: str) -> Optional[str]:
-    """从 GitHub Releases 查找包含 pattern 的第一个 wheel URL。"""
+def _parse_wheel(name: str) -> Optional[dict[str, str]]:
+    """从 wheel 文件名解析出 cuda / torch / python / platform 标签。"""
+    m = re.search(
+        r"\+(cu\d+)(torch[\d.]+)-(cp\d+)-cp\d+-([\w]+)\.whl$", name
+    )
+    if not m:
+        return None
+    return {
+        "cuda": m.group(1),
+        "torch": m.group(2),
+        "python": m.group(3),
+        "platform": m.group(4),
+    }
+
+
+def _cuda_major(tag: str) -> int:
+    """cu130 → 13, cu124 → 12"""
+    m = re.search(r"cu(\d+)", tag)
+    return int(m.group(1)) // 10 if m else -1
+
+
+def find_candidates(env: dict[str, Any]) -> list[dict[str, Any]]:
+    """查询 GitHub Releases，返回按匹配度排序的候选 wheel 列表。
+
+    每项包含：url / name / score / notes / usable
+    usable=True 表示当前环境可以直接安装。
+    """
+    plat = env.get("platform")
+    torch_tag = env.get("torch_tag")
+    cuda_tag = env.get("cuda_tag")
+    python_tag = env.get("python_tag")
+
+    if not plat:
+        return []
+
     try:
         req = urllib.request.Request(
-            FA_RELEASES_URL,
-            headers={"User-Agent": "AnimaLoraStudio"},
+            FA_RELEASES_URL, headers={"User-Agent": "AnimaLoraStudio"}
         )
         data = json.loads(urllib.request.urlopen(req, timeout=15).read())
-        for release in data:
-            for asset in release.get("assets", []):
-                if pattern in asset["name"]:
-                    return asset["browser_download_url"]
     except Exception:
-        pass
+        return []
+
+    candidates: list[dict[str, Any]] = []
+    for release in data:
+        for asset in release.get("assets", []):
+            tags = _parse_wheel(asset["name"])
+            if not tags:
+                continue
+            if tags["platform"] != plat:
+                continue
+            if torch_tag and tags["torch"] != torch_tag:
+                continue
+
+            score = 0
+            notes: list[str] = []
+            usable = True
+
+            # Python ABI：严格匹配，不同版本无法使用
+            if python_tag:
+                if tags["python"] == python_tag:
+                    score += 20
+                else:
+                    usable = False
+                    notes.append(
+                        f"Python 不兼容（wheel={tags['python']}，当前={python_tag}）"
+                    )
+
+            # CUDA：同大版本可用，但不如精确匹配
+            if cuda_tag:
+                if tags["cuda"] == cuda_tag:
+                    score += 20
+                elif _cuda_major(tags["cuda"]) == _cuda_major(cuda_tag):
+                    score += 10
+                    notes.append(
+                        f"CUDA 小版本不同（wheel={tags['cuda']}，当前={cuda_tag}，同大版本应兼容）"
+                    )
+                else:
+                    score -= 5
+                    notes.append(
+                        f"CUDA 大版本不同（wheel={tags['cuda']}，当前={cuda_tag}）"
+                    )
+
+            candidates.append({
+                "url": asset["browser_download_url"],
+                "name": asset["name"],
+                "score": score,
+                "notes": notes,
+                "usable": usable,
+                "tags": tags,
+            })
+
+    return sorted(candidates, key=lambda x: -x["score"])
+
+
+def find_best_wheel(env: dict[str, Any]) -> Optional[str]:
+    """返回最优可用 wheel URL，无则返回 None。"""
+    for c in find_candidates(env):
+        if c["usable"]:
+            return c["url"]
     return None
 
 
@@ -102,7 +188,7 @@ def current_status() -> dict[str, Any]:
 
 
 def install(url: Optional[str] = None) -> dict[str, Any]:
-    """安装 flash_attn wheel。url=None 则自动查 GitHub。
+    """安装 flash_attn wheel。url=None 则自动从 GitHub 找最优匹配。
 
     同步 pip install，可能需要几分钟；前端按钮必须带 loading 状态。
     flash_attn 是 C extension，pip 重装后必须重启进程才能切换。
@@ -110,17 +196,17 @@ def install(url: Optional[str] = None) -> dict[str, Any]:
     env = detect_env()
 
     if url is None:
-        pattern = env.get("pattern")
-        if not pattern:
-            raise RuntimeError(
-                "无法确定环境 pattern（缺 CUDA / PyTorch 或不支持的平台）"
-            )
-        url = find_wheel(pattern)
+        if not env.get("platform"):
+            raise RuntimeError("不支持的平台（仅 linux_x86_64 / win_amd64）")
+        if not env.get("torch_tag"):
+            raise RuntimeError("未检测到 PyTorch，无法自动匹配 wheel")
+        url = find_best_wheel(env)
         if not url:
             raise RuntimeError(
-                f"未找到匹配 wheel（pattern: {pattern}）\n"
-                "请前往 https://github.com/mjun0812/flash-attention-prebuild-wheels/releases "
-                "手动粘贴 URL"
+                f"未找到可用 wheel（Python={env.get('python_tag')}，"
+                f"CUDA={env.get('cuda_tag')}，Torch={env.get('torch_tag')}）\n"
+                "请在下方候选列表中手动选择，或前往 "
+                "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases 粘贴 URL"
             )
 
     r = subprocess.run(
