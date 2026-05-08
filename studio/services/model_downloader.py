@@ -690,7 +690,11 @@ def download_wd14_ms(
     r = root or models_root()
     target = wd14_target_dir(r, model_id)
     on_log(f"\n📥 WD14 {model_id} (ModelScope) → {target}")
-    return _ms_download_repo(ms_repo, target, on_log)
+    ok = True
+    for f in WD14_FILES:
+        if not _ms_download_file(ms_repo, f, target, on_log):
+            ok = False
+    return ok
 
 
 def trigger(model_id: str, variant: Optional[str] = None, source: str = "huggingface") -> str:
