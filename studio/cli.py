@@ -265,6 +265,48 @@ def _spawn_browser_opener(url: str, *, delay: float = 1.0) -> None:
     t.start()
 
 
+def _check_torch_cuda() -> None:
+    """启动期检查 torch 是否带 CUDA 支持；CPU-only 版会让训练/生成极慢。"""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            name = torch.cuda.get_device_name(0)
+            print(f"[studio] torch {torch.__version__}  GPU: {name}  ✓")
+            return
+        # CUDA 不可用：区分 CPU-only build 与真无 GPU
+        cuda_build = getattr(torch.version, "cuda", None)
+        if cuda_build is None:
+            # CPU-only wheel（最常见的误装情况）
+            try:
+                from studio.services import onnxruntime_setup
+                has_gpu = onnxruntime_setup.detect_cuda().get("available", False)
+            except Exception:
+                has_gpu = False
+            if has_gpu:
+                print(
+                    f"\n[studio] ⚠  警告：检测到 NVIDIA GPU，但当前安装的是 CPU-only 版 PyTorch"
+                    f"（{torch.__version__}）。\n"
+                    f"         训练和图片生成将在 CPU 上运行，速度极慢（单步可能需要数十秒）。\n"
+                    f"         请卸载后重装 CUDA 版：\n"
+                    f"           pip uninstall torch torchvision -y\n"
+                    f"           # 根据你的 CUDA 版本选择，例如 CUDA 12.8：\n"
+                    f"           pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128\n",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"[studio] torch {torch.__version__}（CPU-only build，未检测到 NVIDIA GPU）")
+        else:
+            # CUDA build 但 GPU 不可用（驱动问题、WSL 等）
+            print(
+                f"\n[studio] ⚠  警告：torch {torch.__version__}（CUDA {cuda_build} build）"
+                f" 但 torch.cuda.is_available()=False。\n"
+                f"         可能原因：NVIDIA 驱动未安装 / 版本过低 / WSL 缺少 CUDA 支持。\n",
+                file=sys.stderr,
+            )
+    except ImportError:
+        pass  # torch 未装，_ensure_python_deps 会处理
+
+
 def _bootstrap_onnxruntime() -> None:
     """PP8 — 启动期检测 GPU 后按需装 onnxruntime / onnxruntime-gpu。
 
@@ -394,6 +436,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             rc = cmd_build(args)
             if rc != 0:
                 return rc
+    _check_torch_cuda()
     _bootstrap_onnxruntime()
     url = f"http://{args.host}:{args.port}/studio/"
 
@@ -437,6 +480,7 @@ def cmd_dev(args: argparse.Namespace) -> int:
     rc = npm_install_if_missing(npm)
     if rc != 0:
         return rc
+    _check_torch_cuda()
     _bootstrap_onnxruntime()
 
     pg = ProcGroup()
