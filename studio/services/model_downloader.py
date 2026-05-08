@@ -506,6 +506,10 @@ def start_download_async(
             ds.log.append(line)
             if len(ds.log) > 200:
                 del ds.log[:-200]
+        # 回显到 backend stdout —— UI ring buffer 容量 200 行；长下载早期日志会被
+        # 截掉，print 让 studio_*.log / 终端保留完整流，调试 / oncall 排错时能直接 grep。
+        # 锁外执行避免持锁做 I/O 拖慢其它 download tasks 写日志。
+        print(line, flush=True)
 
     def _run() -> None:
         bus.publish({
