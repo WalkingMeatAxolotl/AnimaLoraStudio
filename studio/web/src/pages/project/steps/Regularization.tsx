@@ -65,6 +65,8 @@ export default function RegularizationPage() {
   const [logs, setLogs] = useState<string[]>([])
   const jobIdRef = useRef<number | null>(null)
   jobIdRef.current = job?.id ?? null
+  const aiTaskIdRef = useRef<number | null>(null)
+  aiTaskIdRef.current = aiTask?.id ?? null
 
   // Tab：设置&日志 / 图片预览 / 模型生成。job done 时自动切到图片，让用户看成果。
   const [activeTab, setActiveTab] = useState<'config' | 'images' | 'ai'>('config')
@@ -158,6 +160,7 @@ export default function RegularizationPage() {
 
   useEventStream((evt) => {
     const jid = jobIdRef.current
+    const tid = aiTaskIdRef.current
     if (evt.type === 'job_log_appended' && jid && evt.job_id === jid) {
       setLogs((prev) => [...prev, String(evt.text ?? '')])
     } else if (evt.type === 'job_state_changed' && jid && evt.job_id === jid) {
@@ -165,34 +168,19 @@ export default function RegularizationPage() {
       if (evt.status === 'done' || evt.status === 'failed' || evt.status === 'canceled') {
         void refreshReg()
         void reload()
-        // job 成功完成 → 自动切到图片 tab，让用户看成果
         if (evt.status === 'done') setActiveTab('images')
       }
-    }
-  })
-
-  // 轮询 AI 正则生成任务状态
-  const aiTaskId = aiTask?.id
-  useEffect(() => {
-    if (aiTaskId == null) return
-    let active = true
-    const poll = async () => {
-      if (!active) return
-      try {
-        const t = await api.getRegAiTask(project.id, vid!, aiTaskId)
-        if (!active) return
+    } else if (evt.type === 'task_state_changed' && tid && evt.task_id === tid) {
+      void api.getRegAiTask(project.id, vid!, tid).then((t) => {
         setAiTask(t)
         if (['done', 'failed', 'canceled'].includes(t.status)) {
           setAiBusy(false)
           void refreshReg()
           if (t.status === 'done') setActiveTab('images')
         }
-      } catch { /* ignore */ }
+      }).catch(() => {})
     }
-    void poll()
-    const interval = setInterval(poll, 2000)
-    return () => { active = false; clearInterval(interval) }
-  }, [aiTaskId, project.id, vid, refreshReg])
+  })
 
   const handleAiGenerate = async () => {
     if (!vid) return
