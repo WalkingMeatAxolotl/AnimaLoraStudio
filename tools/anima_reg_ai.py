@@ -210,6 +210,7 @@ def main() -> None:
     incremental: bool = bool(cfg.get("incremental", False))
     mixed_precision: str = cfg.get("mixed_precision", "bf16")
     xformers: bool = bool(cfg.get("xformers", False))
+    flash_attn: bool = bool(cfg.get("flash_attn", True))
 
     transformer_path: str = cfg["transformer_path"]
     vae_path: str = cfg["vae_path"]
@@ -271,7 +272,8 @@ def main() -> None:
         t5_tokenizer_path = _T.resolve_path_best_effort(t5_tokenizer_path, bases)
 
     logger.info("加载 Transformer...")
-    model = _T.load_anima_model(transformer_path, device, dtype, repo_root)
+    use_flash = flash_attn and not xformers
+    model = _T.load_anima_model(transformer_path, device, dtype, repo_root, flash_attn=use_flash)
     if xformers:
         _T.enable_xformers(model)
 

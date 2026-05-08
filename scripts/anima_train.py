@@ -465,7 +465,7 @@ def ensure_models_namespace(repo_root):
         sys.path.insert(0, str(repo_root.parent))
 
 
-def load_anima_model(transformer_path, device, dtype, repo_root):
+def load_anima_model(transformer_path, device, dtype, repo_root, flash_attn: bool = True):
     """加载 Anima transformer 模型"""
     from safetensors import safe_open
 
@@ -532,8 +532,8 @@ def load_anima_model(transformer_path, device, dtype, repo_root):
     model = model.to(device=device, dtype=dtype)
     model.requires_grad_(False)
 
-    # 自动启用 flash attention（已安装时优先于 SDPA）
-    _try_enable_flash_attn(cosmos_modeling, anima_modeling)
+    if flash_attn:
+        _try_enable_flash_attn(cosmos_modeling, anima_modeling)
 
     logger.info(f"Anima 模型加载完成: {model_channels}ch, {num_blocks} blocks")
     return model
@@ -1913,12 +1913,12 @@ def main():
     if reg_data_dir:
         args.reg_data_dir = resolve_path_best_effort(reg_data_dir, bases)
 
-    # 加载模型
+    # 加载模型（flash_attn 在 load 内部自动启用；xformers 互斥，优先 flash_attn）
     logger.info("加载 Transformer...")
-    model = load_anima_model(args.transformer_path, device, dtype, repo_root)
+    use_flash = getattr(args, "flash_attn", True) and not getattr(args, "xformers", False)
+    model = load_anima_model(args.transformer_path, device, dtype, repo_root, flash_attn=use_flash)
 
-    # 启用 xformers
-    if args.xformers:
+    if getattr(args, "xformers", False):
         enable_xformers(model)
 
     logger.info("加载 VAE...")

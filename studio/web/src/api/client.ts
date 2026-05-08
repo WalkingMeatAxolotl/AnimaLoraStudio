@@ -1277,6 +1277,7 @@ export interface GenerateRequest {
   lora_configs?: LoraEntry[]
   mixed_precision?: string
   xformers?: boolean
+  flash_attn?: boolean
 }
 
 export interface RegAiRequest {
@@ -1293,6 +1294,7 @@ export interface RegAiRequest {
   incremental?: boolean
   mixed_precision?: string
   xformers?: boolean
+  flash_attn?: boolean
 }
 
 export interface BrowseEntry {

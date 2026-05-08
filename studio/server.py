@@ -1611,6 +1611,7 @@ class RegAiRequest(BaseModel):
     incremental: bool = False
     mixed_precision: str = "bf16"
     xformers: bool = False
+    flash_attn: bool = True
 
 
 @app.post("/api/projects/{pid}/versions/{vid}/reg/generate-ai")
@@ -1654,6 +1655,7 @@ def reg_generate_ai(pid: int, vid: int, body: RegAiRequest) -> dict[str, Any]:
         incremental=body.incremental,
         mixed_precision=body.mixed_precision,
         xformers=body.xformers,
+        flash_attn=body.flash_attn,
     )
 
     cfg_path = GENERATE_CONFIGS_DIR / f"reg_ai_{task_id}.json"
@@ -1898,6 +1900,7 @@ class GenerateRequest(BaseModel):
     lora_configs: list[_LoraEntry] = []
     mixed_precision: str = "bf16"
     xformers: bool = False
+    flash_attn: bool = True
 
 
 def _resolve_model_paths() -> dict[str, str]:
@@ -1942,6 +1945,7 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
         lora_configs=[lc.model_dump() for lc in body.lora_configs],
         mixed_precision=body.mixed_precision,
         xformers=body.xformers,
+        flash_attn=body.flash_attn,
     )
 
     cfg_path = GENERATE_CONFIGS_DIR / f"gen_{task_id}.json"

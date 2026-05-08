@@ -79,6 +79,7 @@ export default function RegularizationPage() {
   const [aiSeed, setAiSeed] = useState(0)
   const [aiLoras, setAiLoras] = useState<LoraEntry[]>([])
   const [aiIncremental, setAiIncremental] = useState(false)
+  const [aiFlashAttn, setAiFlashAttn] = useState(true)
   const [aiTask, setAiTask] = useState<Task | null>(null)
   aiTaskIdRef.current = aiTask?.id ?? null
   const [aiBusy, setAiBusy] = useState(false)
@@ -197,6 +198,7 @@ export default function RegularizationPage() {
         seed: aiSeed,
         lora_configs: aiLoras.filter((l) => l.path.trim()),
         incremental: aiIncremental,
+        flash_attn: aiFlashAttn,
       }
       const task = await api.enqueueRegAi(project.id, vid, body)
       setAiTask(task)
@@ -348,6 +350,7 @@ export default function RegularizationPage() {
           seed={aiSeed} onSeedChange={setAiSeed}
           loras={aiLoras} onLorasChange={setAiLoras}
           incremental={aiIncremental} onIncrementalChange={setAiIncremental}
+          flashAttn={aiFlashAttn} onFlashAttnChange={setAiFlashAttn}
           pickerIdx={aiPickerIdx} onPickerIdxChange={setAiPickerIdx}
           task={aiTask}
           trainImageCount={trainImageCount}
@@ -994,6 +997,7 @@ function AiGenPanel({
   seed, onSeedChange,
   loras, onLorasChange,
   incremental, onIncrementalChange,
+  flashAttn, onFlashAttnChange,
   pickerIdx, onPickerIdxChange,
   task,
   trainImageCount,
@@ -1008,6 +1012,7 @@ function AiGenPanel({
   seed: number; onSeedChange: (v: number) => void
   loras: LoraEntry[]; onLorasChange: (v: LoraEntry[]) => void
   incremental: boolean; onIncrementalChange: (v: boolean) => void
+  flashAttn: boolean; onFlashAttnChange: (v: boolean) => void
   pickerIdx: number | null; onPickerIdxChange: (v: number | null) => void
   task: Task | null
   trainImageCount: number
@@ -1054,15 +1059,25 @@ function AiGenPanel({
         </div>
         <AiNumField label="种子（0=随机）" value={seed} onChange={onSeedChange} min={0} />
 
-        {/* 补足模式 */}
-        <label className="flex items-center gap-1.5 cursor-pointer text-xs">
-          <input
-            type="checkbox"
-            checked={incremental}
-            onChange={(e) => onIncrementalChange(e.target.checked)}
-          />
-          <span className="text-fg-secondary">补足模式（跳过 reg 目录中已有对应文件的图）</span>
-        </label>
+        {/* 补足模式 + Flash Attention */}
+        <div className="flex flex-wrap gap-3">
+          <label className="flex items-center gap-1.5 cursor-pointer text-xs">
+            <input
+              type="checkbox"
+              checked={incremental}
+              onChange={(e) => onIncrementalChange(e.target.checked)}
+            />
+            <span className="text-fg-secondary">补足模式（跳过 reg 目录中已有对应文件的图）</span>
+          </label>
+          <label className="flex items-center gap-1.5 cursor-pointer text-xs">
+            <input
+              type="checkbox"
+              checked={flashAttn}
+              onChange={(e) => onFlashAttnChange(e.target.checked)}
+            />
+            <span className="text-fg-secondary">Flash Attention</span>
+          </label>
+        </div>
 
         {/* LoRA */}
         <div className="flex flex-col gap-2">

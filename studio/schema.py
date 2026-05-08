@@ -247,6 +247,11 @@ class TrainingConfig(BaseModel):
         description="xformers attention（5090 推荐 false）",
         json_schema_extra=_meta("training"),
     )
+    flash_attn: bool = Field(
+        True,
+        description="Flash Attention（需 flash_attn 包，推荐开启）",
+        json_schema_extra=_meta("training"),
+    )
     num_workers: int = Field(
         0, ge=0,
         description="数据加载线程（Windows 必须 0）",
@@ -448,6 +453,7 @@ class GenerateConfig(BaseModel):
     sample_subdir: str = Field("samples", description="图片输出子目录名（reg-AI 生成时设为目标文件夹）")
     mixed_precision: str = Field("bf16", description="混合精度")
     xformers: bool = Field(False, description="xformers attention")
+    flash_attn: bool = Field(True, description="Flash Attention（需 flash_attn 包）")
 
 
 # ---------------------------------------------------------------------------
@@ -484,6 +490,7 @@ class RegAiConfig(BaseModel):
     incremental: bool = Field(False, description="补足模式：跳过已有对应正则图的 train 图")
     mixed_precision: str = Field("bf16")
     xformers: bool = Field(False)
+    flash_attn: bool = Field(True)
 
 
 # ---------------------------------------------------------------------------
