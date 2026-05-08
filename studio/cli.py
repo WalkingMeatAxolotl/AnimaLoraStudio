@@ -53,7 +53,7 @@ def find_python() -> str:
     return sys.executable
 
 
-_NPM_MIRROR = "https://registry.npmmirror.com"
+_NPM_MIRROR = "https://mirrors.cloud.tencent.com/npm/"
 _PIP_MIRROR = "https://mirrors.aliyun.com/pypi/simple/"
 
 
