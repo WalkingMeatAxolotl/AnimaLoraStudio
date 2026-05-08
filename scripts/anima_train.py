@@ -35,10 +35,13 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, OSError):
         pass
 
-# train_monitor 已移动到 tools/；懒导入前先确保路径可找到
-_TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools"
-if str(_TOOLS_DIR) not in sys.path:
-    sys.path.insert(0, str(_TOOLS_DIR))
+# 本文件在 scripts/；repo root 和 tools/ 都需要在 sys.path 上
+# repo root：studio 包（argparse_bridge 等）
+# tools/：train_monitor
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+for _p in (_REPO_ROOT, _REPO_ROOT / "tools"):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 import torch
 import torch.nn.functional as F
