@@ -509,6 +509,7 @@ def start_download_async(
             ds.log.append(line)
             if len(ds.log) > 200:
                 del ds.log[:-200]
+        bus.publish({"type": "model_download_changed", "key": key, "status": "running"})
 
     def _run() -> None:
         bus.publish({
@@ -605,6 +606,14 @@ def _ms_download_file(
     except Exception as exc:
         on_log(f"   ✗ {exc}")
         return False
+    finally:
+        # 清理 modelscope 留下的空子目录（._____temp / split_files 等）
+        for d in sorted(local_dir.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+            if d.is_dir() and d != local_dir:
+                try:
+                    d.rmdir()
+                except OSError:
+                    pass
 
     if target.exists():
         on_log(f"   ✓ {fname}")
