@@ -592,29 +592,19 @@ def _ms_download_file(
         return True
 
     on_log(f"   ↓ ModelScope {ms_repo} / {repo_path} ...")
-    r = subprocess.run(
-        [sys.executable, "-m", "modelscope", "download",
-         "--model", ms_repo, repo_path, "--local_dir", str(local_dir)],
-        capture_output=True, text=True,
-    )
-    for line in (r.stdout + r.stderr).splitlines():
-        if line.strip():
-            on_log(f"   {line}")
-    if r.returncode != 0:
-        on_log("   ✗ 下载命令失败")
+    try:
+        from modelscope.hub.file_download import model_file_download  # type: ignore
+        saved = Path(model_file_download(
+            model_id=ms_repo,
+            file_path=repo_path,
+            local_dir=str(local_dir),
+        ))
+        if saved != target and saved.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(saved), str(target))
+    except Exception as exc:
+        on_log(f"   ✗ {exc}")
         return False
-
-    # modelscope 保留 repo 内部目录结构 → 打平
-    if not target.exists():
-        matches = list(local_dir.rglob(fname))
-        if matches:
-            shutil.move(str(matches[0]), str(target))
-            for d in sorted(local_dir.rglob("*"), reverse=True):
-                if d.is_dir() and d != local_dir:
-                    try:
-                        d.rmdir()
-                    except OSError:
-                        pass
 
     if target.exists():
         on_log(f"   ✓ {fname}")
@@ -631,16 +621,11 @@ def _ms_download_repo(
     """用 modelscope CLI 下载整个 repo 到 local_dir。"""
     local_dir.mkdir(parents=True, exist_ok=True)
     on_log(f"   ↓ ModelScope {ms_repo} → {local_dir} ...")
-    r = subprocess.run(
-        [sys.executable, "-m", "modelscope", "download",
-         "--model", ms_repo, "--local_dir", str(local_dir)],
-        capture_output=True, text=True,
-    )
-    for line in (r.stdout + r.stderr).splitlines():
-        if line.strip():
-            on_log(f"   {line}")
-    if r.returncode != 0:
-        on_log("   ✗ 下载命令失败")
+    try:
+        from modelscope import snapshot_download  # type: ignore
+        snapshot_download(model_id=ms_repo, local_dir=str(local_dir))
+    except Exception as exc:
+        on_log(f"   ✗ {exc}")
         return False
     on_log("   ✓ 下载完成")
     return True
