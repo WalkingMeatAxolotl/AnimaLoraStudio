@@ -201,7 +201,13 @@ class ProcGroup:
 def cmd_build(_args: argparse.Namespace) -> int:
     npm = find_npm()
     if not npm:
-        print("[studio] 错误：找不到 npm。请安装 Node 18+", file=sys.stderr)
+        print("[studio] 错误：找不到 npm。请安装 Node.js 18+", file=sys.stderr)
+        if os.name == "nt":
+            print("  Windows：前往 https://nodejs.org 下载安装包，或用 winget install OpenJS.NodeJS.LTS", file=sys.stderr)
+        else:
+            print("  Ubuntu/Debian：curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs", file=sys.stderr)
+            print("  或使用 nvm：curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash && nvm install --lts", file=sys.stderr)
+        print("  安装后重新运行本命令。", file=sys.stderr)
         return 2
     rc = npm_install_if_missing(npm)
     if rc != 0:
@@ -490,7 +496,13 @@ def cmd_dev(args: argparse.Namespace) -> int:
         return rc
     npm = find_npm()
     if not npm:
-        print("[studio] 错误：找不到 npm", file=sys.stderr)
+        print("[studio] 错误：找不到 npm。请安装 Node.js 18+", file=sys.stderr)
+        if os.name == "nt":
+            print("  Windows：前往 https://nodejs.org 下载安装包，或用 winget install OpenJS.NodeJS.LTS", file=sys.stderr)
+        else:
+            print("  Ubuntu/Debian：curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs", file=sys.stderr)
+            print("  或使用 nvm：curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash && nvm install --lts", file=sys.stderr)
+        print("  安装后重新运行本命令。", file=sys.stderr)
         return 2
     rc = npm_install_if_missing(npm)
     if rc != 0:
