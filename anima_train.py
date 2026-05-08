@@ -715,7 +715,9 @@ def _sample_er_sde_const_x0(
     num_integration_points = 200.0
     point_indice = torch.arange(0, num_integration_points, dtype=torch.float32, device=x.device)
 
-    for i in range(len(sigmas) - 1):
+    n_steps = len(sigmas) - 1
+    for i in range(n_steps):
+        logger.info(f"[Sampler] step {i + 1}/{n_steps}  σ={float(sigmas[i]):.4f}")
         sigma = sigmas[i]
         denoised = denoise_fn(x, sigma)
 
