@@ -10,7 +10,7 @@ import {
 import PageHeader from '../../components/PageHeader'
 import { useToast } from '../../components/Toast'
 import { useEventStream } from '../../lib/useEventStream'
-import AspectChips, { type AspectName } from './generate/AspectChips'
+import AspectChips, { aspectFromDimensions, type AspectName } from './generate/AspectChips'
 import DaemonControls from './generate/DaemonControls'
 import NumField from './generate/NumField'
 import PreviewCompare from './generate/PreviewCompare'
@@ -318,9 +318,37 @@ export default function GeneratePage() {
                     }}
                   />
                 </div>
-                <div className="flex gap-2">
-                  <NumField label="宽" value={width} onChange={(v) => { setWidth(v); setAspect('custom') }} min={256} max={4096} step={64} />
-                  <NumField label="高" value={height} onChange={(v) => { setHeight(v); setAspect('custom') }} min={256} max={4096} step={64} />
+                <div className="flex gap-2 items-end">
+                  <NumField label="宽" value={width} onChange={(v) => { setWidth(v); setAspect(aspectFromDimensions(v, height)) }} min={256} max={4096} step={64} />
+                  <NumField label="高" value={height} onChange={(v) => { setHeight(v); setAspect(aspectFromDimensions(width, v)) }} min={256} max={4096} step={64} />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const newW = height, newH = width
+                      setWidth(newW); setHeight(newH)
+                      setAspect(aspectFromDimensions(newW, newH))
+                    }}
+                    title="交换宽高（横版 ↔ 竖版）"
+                    className="font-mono inline-flex items-center gap-1.5 shrink-0"
+                    style={{
+                      border: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-sunken)',
+                      borderRadius: 'var(--r-md)',
+                      padding: '7px 10px',
+                      fontSize: 12,
+                      color: 'var(--fg-secondary)',
+                      cursor: 'pointer',
+                      height: 32,
+                    }}
+                  >
+                    <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M16 3l4 4-4 4"/>
+                      <path d="M20 7H4"/>
+                      <path d="M8 21l-4-4 4-4"/>
+                      <path d="M4 17h16"/>
+                    </svg>
+                    Swap
+                  </button>
                 </div>
                 <div className="flex gap-2">
                   <NumField label="步数" value={steps} onChange={setSteps} min={1} max={150} />
