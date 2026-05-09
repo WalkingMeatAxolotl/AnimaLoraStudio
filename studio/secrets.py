@@ -156,7 +156,7 @@ class GenerateConfig(BaseModel):
       （优先级 flash_attn > xformers > none/SDPA）；显式值（flash_attn/
       xformers/none）则强制 —— 想 debug 或对比时手动指定。
     """
-    preview_every_n_steps: int = 0
+    preview_every_n_steps: int = 3
     attention_backend: str = "auto"
 
 

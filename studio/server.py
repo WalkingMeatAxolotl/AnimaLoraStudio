@@ -103,8 +103,22 @@ async def _lifespan(app_: FastAPI) -> AsyncIterator[None]:
     """启动绑定 event bus 到当前 loop 并起 supervisor；关闭时停 supervisor。"""
     # 测试出图 tempdir 遗留清扫（防 supervisor crash 泄漏 anima_gen_* 目录）
     from .services.inference_core import cleanup_stale_generate_tempdirs
-    from .services import generate_cache
+    from .services import generate_cache, model_downloader as _md
     cleanup_stale_generate_tempdirs()
+
+    # TAEFlux（中间步预览）后台下载：跟 server 一起启动；下载失败不阻塞 server。
+    # 如果已下载则 noop；下载期间用户能正常用其他功能，预览功能等下载完才生效。
+    def _bg_download_taeflux() -> None:
+        try:
+            if _md.taeflux_available():
+                return
+            logger.info("background-downloading TAEFlux (~1.6MB)…")
+            ok = _md.download_taeflux(on_log=lambda m: logger.info("[taeflux] %s", m))
+            if not ok:
+                logger.warning("taeflux background download failed; preview disabled until manual install")
+        except Exception:
+            logger.exception("taeflux background download crashed")
+    threading.Thread(target=_bg_download_taeflux, name="taeflux-bg-download", daemon=True).start()
 
     bus.attach_loop(asyncio.get_running_loop())
 
