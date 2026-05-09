@@ -149,7 +149,7 @@ describe('InlineLoraPicker', () => {
   it('triggers onPickExternal when 外部文件 is clicked', async () => {
     const user = userEvent.setup()
     const { onPickExternal } = renderPicker()
-    await user.click(screen.getByText('外部文件…'))
+    await user.click(screen.getByText('外部文件'))
     expect(onPickExternal).toHaveBeenCalled()
   })
 })

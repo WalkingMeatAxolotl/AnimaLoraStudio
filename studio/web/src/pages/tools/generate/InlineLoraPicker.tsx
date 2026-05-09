@@ -61,7 +61,7 @@ export default function InlineLoraPicker({
       className="rounded-md border border-subtle bg-overlay p-2.5 flex flex-col gap-2"
       data-testid="inline-lora-picker"
     >
-      {/* header: search + count + close */}
+      {/* header: search + count + 外部文件 + close（image 2 design：外部文件靠右与搜索同行） */}
       <div className="flex items-center gap-2">
         <input
           type="text"
@@ -74,6 +74,13 @@ export default function InlineLoraPicker({
         <span className="text-2xs text-fg-tertiary whitespace-nowrap">
           {projectCount} 项目 · {versionCount} 版本
         </span>
+        <button
+          onClick={onPickExternal}
+          className="btn btn-ghost btn-sm text-2xs text-fg-tertiary"
+          title="选系统中任意 .safetensors 文件"
+        >
+          外部文件
+        </button>
         <button
           onClick={onClose}
           className="btn btn-ghost btn-sm text-fg-tertiary px-1.5"
@@ -112,6 +119,9 @@ export default function InlineLoraPicker({
                         <span className="badge badge-info" style={{ fontSize: 10 }}>训练中</span>
                       )}
                     </div>
+                    <div className="text-2xs text-fg-tertiary truncate">
+                      {l.stage} · {new Date(l.createdAt * 1000).toLocaleDateString()}
+                    </div>
                   </div>
                   <span className="font-mono text-2xs shrink-0">
                     {added ? '已添加' : '+'}
@@ -129,16 +139,6 @@ export default function InlineLoraPicker({
         )}
       </div>
 
-      {/* footer: external file fallback */}
-      <div className="flex justify-end pt-1 border-t border-subtle">
-        <button
-          onClick={onPickExternal}
-          className="btn btn-ghost btn-sm text-xs text-fg-tertiary"
-          title="选系统中任意 .safetensors 文件"
-        >
-          外部文件…
-        </button>
-      </div>
     </div>
   )
 }

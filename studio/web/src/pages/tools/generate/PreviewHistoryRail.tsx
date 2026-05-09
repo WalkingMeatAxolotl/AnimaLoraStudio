@@ -24,8 +24,8 @@ export default function PreviewHistoryRail({
   if (list.length === 0) {
     return (
       <div
-        className="text-fg-tertiary text-xs text-center"
-        style={{ width: 80, paddingTop: 16 }}
+        className="text-fg-tertiary text-2xs text-center"
+        style={{ width: 64, paddingTop: 16 }}
       >
         暂无历史
       </div>
@@ -34,13 +34,13 @@ export default function PreviewHistoryRail({
 
   return (
     <div
-      className="flex flex-col gap-2"
-      style={{ width: 80, maxHeight: 720, overflowY: 'auto' }}
+      className="flex flex-col gap-1"
+      style={{ width: 64, maxHeight: 720, overflowY: 'auto' }}
     >
       {onClear && (
         <button
-          className="btn btn-ghost text-xs"
-          style={{ padding: '2px 6px' }}
+          className="btn btn-ghost text-2xs"
+          style={{ padding: '1px 4px' }}
           onClick={onClear}
           title={`清空当前 ${mode} 历史`}
         >
@@ -68,8 +68,8 @@ interface ItemProps {
 function HistoryItem({ entry, onSelect, onRemove }: ItemProps) {
   return (
     <div
-      className="relative rounded-md border border-subtle hover:border-strong cursor-pointer overflow-hidden"
-      style={{ width: 72, height: 72 }}
+      className="relative rounded-sm border border-subtle hover:border-strong cursor-pointer overflow-hidden"
+      style={{ width: 56, height: 56 }}
       onClick={onSelect}
       title={`#${entry.taskId} · ${new Date(entry.createdAt).toLocaleString()}`}
     >
