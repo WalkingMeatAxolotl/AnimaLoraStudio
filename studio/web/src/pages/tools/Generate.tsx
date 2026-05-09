@@ -196,6 +196,27 @@ export default function GeneratePage() {
     const filenames = samples
       .map((s) => s.path.split(/[\\/]/).pop() ?? '')
       .filter(Boolean)
+    // commit: xy 历史回看用 PreviewXYGrid 重建网格 → 入库时收集 axis + sample 元数据
+    let xyMeta: import('./generate/useGenerateHistory').HistoryXYMeta | undefined
+    if (mode === 'xy') {
+      const xValues = xDraft.raw.split(',').map((s) => s.trim()).filter(Boolean)
+      const yValues = yDraft
+        ? yDraft.raw.split(',').map((s) => s.trim()).filter(Boolean)
+        : [null as string | null]
+      const xySamples = samples
+        .filter((s): s is typeof s & { xy: NonNullable<typeof s.xy> } => s.xy != null)
+        .map((s) => ({
+          path: s.path,
+          xy: {
+            xi: s.xy.xi, yi: s.xy.yi,
+            xv: s.xy.xv ?? '', yv: s.xy.yv ?? null,
+          },
+        }))
+      xyMeta = {
+        xAxis: xDraft.axis, yAxis: yDraft?.axis ?? null,
+        xValues, yValues, samples: xySamples,
+      }
+    }
     void makeThumbnail(api.generateSampleUrl(taskId, filename), 256)
       .then((dataUrl) => history.add({
         mode,
@@ -203,9 +224,10 @@ export default function GeneratePage() {
         thumbnailDataUrl: dataUrl,
         filenames,
         badge: badge || undefined,
+        xy: xyMeta,
       }))
       .catch(() => { /* thumbnail 失败 — 不入库（避免无封面 entry） */ })
-  }, [currentTask, samples, mode, selectedIndices, history])
+  }, [currentTask, samples, mode, selectedIndices, history, xDraft, yDraft])
 
   const handleHistorySelect = (entry: HistoryEntry) => {
     setHistoryOverride(entry)
@@ -454,8 +476,32 @@ export default function GeneratePage() {
 
               {historyOverride ? (
                 <div className="flex-1 min-h-0 flex flex-col gap-2">
-                  {historyOverride.mode === 'xy' && historyOverride.filenames.length > 1 ? (
-                    /* xy 概览：grid 平铺所有 filenames */
+                  {historyOverride.mode === 'xy' && historyOverride.xy ? (
+                    /* xy 历史回看：用 PreviewXYGrid 重建（带轴标签 + 双击全屏） */
+                    <PreviewXYGrid
+                      samples={historyOverride.xy.samples.map((s) => ({
+                        path: s.path,
+                        xy: {
+                          xi: s.xy.xi, yi: s.xy.yi,
+                          xv: s.xy.xv as never, yv: s.xy.yv as never,
+                        },
+                      }))}
+                      taskId={historyOverride.taskId}
+                      xDraft={{
+                        axis: historyOverride.xy.xAxis as never,
+                        raw: historyOverride.xy.xValues.join(', '),
+                        loraIndex: null,
+                      }}
+                      yDraft={historyOverride.xy.yAxis ? {
+                        axis: historyOverride.xy.yAxis as never,
+                        raw: (historyOverride.xy.yValues as string[]).filter(Boolean).join(', '),
+                        loraIndex: null,
+                      } : null}
+                      onCellClick={undefined /* 历史回看不允许选 cell 进 compare */}
+                      selectedIndices={[]}
+                    />
+                  ) : historyOverride.mode === 'xy' && historyOverride.filenames.length > 1 ? (
+                    /* legacy: 旧 entry 没 xy meta，回退到 grid auto-fit 平铺 */
                     <div className="flex-1 min-h-0 overflow-auto">
                       <div
                         style={{
@@ -470,7 +516,6 @@ export default function GeneratePage() {
                             <a
                               key={fn} href={url} target="_blank" rel="noreferrer"
                               className="block bg-sunken rounded-sm overflow-hidden"
-                              style={{ aspectRatio: '1' }}
                             >
                               <img
                                 src={url}
@@ -479,7 +524,7 @@ export default function GeneratePage() {
                                   ;(e.currentTarget as HTMLImageElement).title = '原图已释放，仅封面缩略可见'
                                 }}
                                 alt={fn}
-                                className="w-full h-full object-cover"
+                                className="block w-full h-auto"
                                 loading="lazy"
                               />
                             </a>

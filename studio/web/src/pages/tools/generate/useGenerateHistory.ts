@@ -20,6 +20,20 @@ const STORE = 'entries'
 
 export type HistoryMode = 'single' | 'xy' | 'compare'
 
+/** XY 历史回看用的 axis 元数据。回看时复用 PreviewXYGrid 渲染（带轴标签）。 */
+export interface HistoryXYMeta {
+  /** 'lora_ckpt' / 'lora_scale' / 'steps' / 'cfg_scale' */
+  xAxis: string
+  yAxis: string | null
+  xValues: string[]
+  yValues: Array<string | null>
+  /** 每个 sample 的 xy 元数据；filename 来自 path 末段 */
+  samples: Array<{
+    path: string
+    xy: { xi: number; yi: number; xv: string | number; yv: string | number | null }
+  }>
+}
+
 export interface HistoryEntry {
   id: string
   mode: HistoryMode
@@ -30,6 +44,8 @@ export interface HistoryEntry {
   filenames: string[]
   /** XY: 'XY M×N'；compare: '2×'；single: '' */
   badge?: string
+  /** XY 模式才填：回看时重建 PreviewXYGrid 用 */
+  xy?: HistoryXYMeta
 }
 
 function openDb(): Promise<IDBDatabase> {
