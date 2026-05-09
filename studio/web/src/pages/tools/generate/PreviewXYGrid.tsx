@@ -3,10 +3,12 @@ import { api, type MonitorState } from '../../../api/client'
 import FullscreenViewer from './FullscreenViewer'
 import { AXIS_LABELS, formatAxisValue, type XYAxisDraft } from './xy'
 
-const ZOOM_MIN = 60
-const ZOOM_MAX = 480
-const ZOOM_DEFAULT = 160
-const ZOOM_STEP = 16
+// zoom = 单 cell 物理宽度（px）。固定列宽 → 滚轮 zoom 视觉立即生效；
+// 列总宽 > 容器时横滚（已有 overflow:auto 兜底）。
+const ZOOM_MIN = 80
+const ZOOM_MAX = 600
+const ZOOM_DEFAULT = 200
+const ZOOM_STEP = 20
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v))
@@ -30,7 +32,7 @@ export default function PreviewXYGrid({
   onCellClick?: (sampleIdx: number) => void
   selectedIndices?: number[]
 }) {
-  const [zoomMinW, setZoomMinW] = useState(ZOOM_DEFAULT)
+  const [cellW, setCellW] = useState(ZOOM_DEFAULT)
   const [fullscreenIdx, setFullscreenIdx] = useState<number | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   // pan 状态。movedRef 让"拖动过"的 mouseup 不触发 cell click（capture 阶段拦截）
@@ -46,7 +48,7 @@ export default function PreviewXYGrid({
       if (e.shiftKey) return
       e.preventDefault()
       const delta = e.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP
-      setZoomMinW((prev) => clamp(prev + delta, ZOOM_MIN, ZOOM_MAX))
+      setCellW((prev) => clamp(prev + delta, ZOOM_MIN, ZOOM_MAX))
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
@@ -108,14 +110,15 @@ export default function PreviewXYGrid({
     return m
   }, [samples])
 
-  const minW = zoomMinW
   const selSet = new Set(selectedIndices ?? [])
 
-  // grid 列：左 axis label 列 + N 个图 cell 列。yDraft 不存在时省略 label 列。
+  // grid 列：固定 cellW（zoom 调它），yDraft 时左侧多一列 axis label。
+  // 用 ${cellW}px 而非 minmax(MIN, 1fr) —— 后者在容器宽时按 1fr 均分，
+  // zoom 就看不出来；固定列宽让滚轮 zoom 视觉立即生效。
   const labelColW = yDraft ? 60 : 0
   const gridCols = yDraft
-    ? `${labelColW}px repeat(${xLen}, minmax(${minW}px, 1fr))`
-    : `repeat(${xLen}, minmax(${minW}px, 1fr))`
+    ? `${labelColW}px repeat(${xLen}, ${cellW}px)`
+    : `repeat(${xLen}, ${cellW}px)`
 
   return (
     <div className="flex flex-col gap-2 flex-1 min-h-0">
@@ -129,11 +132,11 @@ export default function PreviewXYGrid({
         <div className="flex items-center gap-2 text-2xs text-fg-tertiary font-mono">
           <span>滚轮缩放 · 拖动平移 · shift+滚轮横滚</span>
           <button
-            onClick={() => setZoomMinW(ZOOM_DEFAULT)}
+            onClick={() => setCellW(ZOOM_DEFAULT)}
             className="btn btn-ghost text-xs"
             title="重置缩放"
           >
-            {Math.round((zoomMinW / ZOOM_DEFAULT) * 100)}%
+            {Math.round((cellW / ZOOM_DEFAULT) * 100)}%
           </button>
         </div>
       </div>
