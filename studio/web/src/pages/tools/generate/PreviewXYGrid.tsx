@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, type MonitorState } from '../../../api/client'
+import { exportXYMatrix } from './exportXY'
 import FullscreenViewer from './FullscreenViewer'
 import { AXIS_LABELS, formatAxisValue, type XYAxisDraft } from './xy'
 
@@ -37,7 +38,34 @@ export default function PreviewXYGrid({
   const [cellW, setCellW] = useState(ZOOM_DEFAULT)
   const [maxW, setMaxW] = useState(ZOOM_DEFAULT * 6) // 容器还没 mount 时的兜底值
   const [fullscreenIdx, setFullscreenIdx] = useState<number | null>(null)
+  const [exporting, setExporting] = useState(false)
+  const [exportMsg, setExportMsg] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  const handleExport = async () => {
+    if (exporting) return
+    setExporting(true)
+    setExportMsg(null)
+    try {
+      const exportSamples = samples
+        .filter((s): s is typeof s & { xy: NonNullable<typeof s.xy> } => s.xy != null)
+        .map((s) => ({ path: s.path, xy: { xi: s.xy.xi, yi: s.xy.yi } }))
+      await exportXYMatrix({
+        samples: exportSamples,
+        taskId,
+        xAxis: xDraft.axis,
+        yAxis: yDraft?.axis ?? null,
+        xValues,
+        yValues,
+      })
+      setExportMsg('已下载')
+      setTimeout(() => setExportMsg(null), 3000)
+    } catch (e) {
+      setExportMsg(`失败: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setExporting(false)
+    }
+  }
   // pan 状态。movedRef 让"拖动过"的 mouseup 不触发 cell click（capture 阶段拦截）
   const dragRef = useRef<{ startX: number; startY: number; sX: number; sY: number } | null>(null)
   const movedRef = useRef(false)
@@ -161,6 +189,19 @@ export default function PreviewXYGrid({
           >
             {Math.round((cellW / ZOOM_DEFAULT) * 100)}%
           </button>
+          <button
+            onClick={() => void handleExport()}
+            disabled={exporting || samples.length === 0}
+            className="btn btn-secondary text-xs"
+            title="把整个 XY 矩阵 + 轴标签合并成一张 PNG 下载"
+          >
+            {exporting ? '导出中…' : '导出 PNG'}
+          </button>
+          {exportMsg && (
+            <span className={`text-2xs ${exportMsg.startsWith('失败') ? 'text-err' : 'text-ok'}`}>
+              {exportMsg}
+            </span>
+          )}
         </div>
       </div>
 
