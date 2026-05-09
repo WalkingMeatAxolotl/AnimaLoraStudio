@@ -33,6 +33,24 @@ def current_status() -> dict[str, Any]:
         return {"installed": False, "version": None}
 
 
+def detect_attention_backend() -> str:
+    """根据当前装了什么决定 attention backend。
+    优先级 flash_attn > xformers > none（PyTorch SDPA）。
+    给 secrets.generate.attention_backend='auto' 时用。
+    """
+    try:
+        importlib.metadata.version("flash_attn")
+        return "flash_attn"
+    except importlib.metadata.PackageNotFoundError:
+        pass
+    try:
+        importlib.metadata.version("xformers")
+        return "xformers"
+    except importlib.metadata.PackageNotFoundError:
+        pass
+    return "none"
+
+
 def _torch_cuda_index() -> Optional[str]:
     """从 `torch.__version__` 的 `+cuXXX` 后缀推 PyTorch CUDA index URL。
 

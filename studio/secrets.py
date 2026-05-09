@@ -152,12 +152,12 @@ class GenerateConfig(BaseModel):
     - `preview_every_n_steps`：中间步预览节流。0=关；>0 → daemon 用 TAEFlux
       decode 每 N 步推一张 256px JPEG 给前端。需要 TAEFlux 模型已下载
       （settings 入口或 POST /api/generate/taeflux/install）。
-    - `attention_backend`：注意力后端默认值（design 决策：用户配置一次，不
-      每次出图都改）。Generate 页的 enqueue 自动注入此值；想临时换值仍可
-      通过其他 endpoint 覆盖（保留 GenerateConfig 字段路径）。
+    - `attention_backend`：注意力后端选择。`'auto'`（默认）→ 装了什么用什么
+      （优先级 flash_attn > xformers > none/SDPA）；显式值（flash_attn/
+      xformers/none）则强制 —— 想 debug 或对比时手动指定。
     """
     preview_every_n_steps: int = 0
-    attention_backend: str = "flash_attn"
+    attention_backend: str = "auto"
 
 
 class Secrets(BaseModel):

@@ -1854,15 +1854,19 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
     tempdir = generate_tempdir(task_id)
     tempdir.mkdir(parents=True, exist_ok=True)
 
-    # commit C：attention_backend 默认从 secrets 读；body 给值则覆盖（兼容旧客户端）
+    # attention_backend：secrets 读默认；body 给值则覆盖（兼容旧客户端）
+    # secrets 默认 'auto' → 调 detect_attention_backend 按"装了什么用什么"决定
     try:
         gen_cfg = secrets.load().generate
         attn_default = gen_cfg.attention_backend
         preview_n = int(gen_cfg.preview_every_n_steps or 0)
     except Exception:
-        attn_default = "flash_attn"
+        attn_default = "auto"
         preview_n = 0
     attn = body.attention_backend or attn_default
+    if attn == "auto":
+        from .services.xformers_setup import detect_attention_backend
+        attn = detect_attention_backend()
 
     cfg = GenerateConfig(
         **model_paths,

@@ -33,12 +33,13 @@ type Section =
   | 'queue'
   | 'generate'
 
-type Tab = 'dataset' | 'tagging' | 'training' | 'appearance'
+type Tab = 'dataset' | 'tagging' | 'training' | 'testing' | 'appearance'
 
 const TAB_LIST: { id: Tab; label: string }[] = [
   { id: 'dataset', label: '数据集' },
   { id: 'tagging', label: '打标' },
   { id: 'training', label: '训练' },
+  { id: 'testing', label: '测试' },
   { id: 'appearance', label: '页面' },
 ]
 
@@ -47,7 +48,7 @@ const TAB_STORAGE_KEY = 'studio.settings.activeTab'
 function getStoredTab(): Tab {
   try {
     const v = localStorage.getItem(TAB_STORAGE_KEY)
-    if (v === 'dataset' || v === 'tagging' || v === 'training' || v === 'appearance') return v
+    if (v === 'dataset' || v === 'tagging' || v === 'training' || v === 'testing' || v === 'appearance') return v
   } catch {
     /* ignore localStorage errors */
   }
@@ -98,7 +99,7 @@ const EMPTY: Secrets = {
   },
   models: { root: null, selected_anima: 'preview3-base' },
   queue: { allow_gpu_during_train: false },
-  generate: { preview_every_n_steps: 0, attention_backend: 'flash_attn' },
+  generate: { preview_every_n_steps: 0, attention_backend: 'auto' },
 }
 
 const textInputClass = 'w-full px-2 py-1 outline-none rounded-sm bg-sunken border border-subtle text-sm text-fg-primary focus:border-accent'
@@ -523,30 +524,11 @@ export default function SettingsPage() {
         </SettingsField>
       </SettingsSection>
 
-      <SettingsSection title="测试出图">
-        <SettingsField
-          label="注意力后端"
-          desc="测试出图默认用的 attention 实现。每次生成不必再选；Flash Attention 性能最好（sm_80+），xformers 兼容广，无走 PyTorch SDPA。"
-        >
-          <select
-            className="input"
-            value={draft.generate.attention_backend}
-            onChange={(e) => update('generate', 'attention_backend', e.target.value as 'none' | 'xformers' | 'flash_attn')}
-          >
-            <option value="flash_attn">Flash Attention</option>
-            <option value="xformers">xformers</option>
-            <option value="none">无（PyTorch SDPA）</option>
-          </select>
-        </SettingsField>
-      </SettingsSection>
-
       <PyTorchSection />
 
       <FlashAttentionSection />
 
       <XformersSection />
-
-      <TaeFluxSection draft={draft} update={update} />
 
       <ModelsSection
         catalog={catalog}
@@ -555,6 +537,28 @@ export default function SettingsPage() {
         reloadCatalog={reloadCatalog}
         catalogError={catalogError}
       />
+      </>)}
+
+      {tab === 'testing' && (<>
+        <SettingsSection title="注意力后端">
+          <SettingsField
+            label="测试出图用的 attention"
+            desc="默认 auto：装了什么用什么（flash_attn > xformers > SDPA）。极端场景（debug / 对比）才需要显式指定。安装管理在『训练』tab 的 Flash Attention / xformers section。"
+          >
+            <select
+              className="input"
+              value={draft.generate.attention_backend}
+              onChange={(e) => update('generate', 'attention_backend', e.target.value as 'auto' | 'none' | 'xformers' | 'flash_attn')}
+            >
+              <option value="auto">auto（按装了什么用，推荐）</option>
+              <option value="flash_attn">强制 Flash Attention</option>
+              <option value="xformers">强制 xformers</option>
+              <option value="none">强制无（PyTorch SDPA）</option>
+            </select>
+          </SettingsField>
+        </SettingsSection>
+
+        <TaeFluxSection draft={draft} update={update} />
       </>)}
 
       {tab === 'appearance' && (

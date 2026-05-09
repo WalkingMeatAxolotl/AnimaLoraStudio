@@ -610,7 +610,10 @@ export interface RegBuildRequest {
 }
 
 /** Attention backend 三选一 — 替代原 xformers/flash_attn 双 bool。 */
-export type AttentionBackend = 'none' | 'xformers' | 'flash_attn'
+/** secrets.generate.attention_backend：'auto' = 按装了什么用（默认）；
+ *  显式值（flash_attn/xformers/none）则强制。GenerateRequest 也接此 type
+ *  作为 per-request 覆盖（前端不再发；server 自动从 secrets 读 + auto 解析）。 */
+export type AttentionBackend = 'auto' | 'none' | 'xformers' | 'flash_attn'
 
 /** PR-9 — 先验生成（base 模型反向出 reg 集，无 LoRA）。 */
 export interface RegAiRequest {
