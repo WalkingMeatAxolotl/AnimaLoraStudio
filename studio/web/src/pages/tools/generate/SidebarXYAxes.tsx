@@ -39,7 +39,6 @@ function CkptMultiPicker({
       .catch((e) => {
         if (cancelled) return
         const msg = e instanceof Error ? e.message : String(e)
-        // eslint-disable-next-line no-console
         console.error('listVersionLoraCkpts failed', { projectId, versionId, error: msg })
         setCkpts([])
         setError(msg)
