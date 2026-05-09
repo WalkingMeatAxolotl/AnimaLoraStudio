@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { api, type MonitorState } from '../../../api/client'
+import FullscreenViewer from './FullscreenViewer'
 import { AXIS_LABELS, formatAxisValue, type XYAxisDraft } from './xy'
 
 type Density = 'compact' | 'standard' | 'large'
@@ -31,6 +32,7 @@ export default function PreviewXYGrid({
   selectedIndices?: number[]
 }) {
   const [density, setDensity] = useState<Density>('standard')
+  const [fullscreenIdx, setFullscreenIdx] = useState<number | null>(null)
 
   const xValues = useMemo(
     () => xDraft.raw.split(',').map((s) => s.trim()).filter(Boolean),
@@ -111,16 +113,38 @@ export default function PreviewXYGrid({
               taskId={taskId}
               selSet={selSet}
               onCellClick={onCellClick}
+              onCellDoubleClick={(idx) => setFullscreenIdx(idx)}
             />
           ))}
         </div>
       </div>
+
+      {fullscreenIdx != null && samples[fullscreenIdx] && (() => {
+        const s = samples[fullscreenIdx]
+        const fn = s.path.split(/[\\/]/).pop() ?? ''
+        const captionParts: string[] = []
+        if (s.xy) {
+          captionParts.push(`${AXIS_LABELS[xDraft.axis]}=${formatAxisValue(xDraft.axis, String(s.xy.xv ?? ''))}`)
+          if (yDraft && s.xy.yv != null) {
+            captionParts.push(`${AXIS_LABELS[yDraft.axis]}=${formatAxisValue(yDraft.axis, String(s.xy.yv))}`)
+          }
+        }
+        return (
+          <FullscreenViewer
+            src={api.generateSampleUrl(taskId, fn)}
+            alt={fn}
+            caption={captionParts.join(' · ')}
+            onClose={() => setFullscreenIdx(null)}
+          />
+        )
+      })()}
     </div>
   )
 }
 
 function Row({
-  yi, yv, xValues, xDraft, yDraft, cellIndex, samples, taskId, selSet, onCellClick,
+  yi, yv, xValues, xDraft, yDraft, cellIndex, samples, taskId, selSet,
+  onCellClick, onCellDoubleClick,
 }: {
   yi: number
   yv: string | null
@@ -132,6 +156,7 @@ function Row({
   taskId: number
   selSet: Set<number>
   onCellClick?: (sampleIdx: number) => void
+  onCellDoubleClick?: (sampleIdx: number) => void
 }) {
   return (
     <>
@@ -154,13 +179,13 @@ function Row({
             {sample && filename ? (
               <button
                 onClick={() => idx != null && onCellClick?.(idx)}
-                onDoubleClick={() => filename && window.open(api.generateSampleUrl(taskId, filename), '_blank')}
+                onDoubleClick={() => idx != null && onCellDoubleClick?.(idx)}
                 className={`block w-full h-full p-0 cursor-pointer overflow-hidden rounded-sm border-2 bg-transparent ${
                   isSel ? 'border-accent' : 'border-transparent hover:border-dim'
                 }`}
-                title={!yDraft
+                title={(!yDraft
                   ? `${AXIS_LABELS[xDraft.axis]}=${formatAxisValue(xDraft.axis, xv)}`
-                  : `${AXIS_LABELS[xDraft.axis]}=${formatAxisValue(xDraft.axis, xv)} · ${AXIS_LABELS[yDraft.axis]}=${formatAxisValue(yDraft.axis, yv ?? '')}`}
+                  : `${AXIS_LABELS[xDraft.axis]}=${formatAxisValue(xDraft.axis, xv)} · ${AXIS_LABELS[yDraft.axis]}=${formatAxisValue(yDraft.axis, yv ?? '')}`) + ' · 双击全屏'}
               >
                 <img
                   src={api.generateSampleUrl(taskId, filename)}

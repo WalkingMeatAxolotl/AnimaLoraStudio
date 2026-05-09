@@ -72,10 +72,10 @@ describe('PreviewCompare', () => {
     expect(screen.getByText('B')).toBeInTheDocument()
   })
 
-  it('triggers onBack when 返回 XY clicked', async () => {
+  it('triggers onBack when 返回网格 clicked', async () => {
     const user = userEvent.setup()
     const { onBack } = renderCompare()
-    await user.click(screen.getByText(/返回 XY/))
+    await user.click(screen.getByText(/返回网格/))
     expect(onBack).toHaveBeenCalled()
   })
 
@@ -83,13 +83,13 @@ describe('PreviewCompare', () => {
     renderCompare({ selectedIndices: [5, 7] })
     expect(screen.getByText(/所选样本已不可用/)).toBeInTheDocument()
     // 仍渲染返回按钮
-    expect(screen.getByText(/返回 XY/)).toBeInTheDocument()
+    expect(screen.getByText(/返回网格/)).toBeInTheDocument()
   })
 
   it('triggers onBack from fallback view too', async () => {
     const user = userEvent.setup()
     const { onBack } = renderCompare({ selectedIndices: [5, 7] })
-    await user.click(screen.getByText(/返回 XY/))
+    await user.click(screen.getByText(/返回网格/))
     expect(onBack).toHaveBeenCalled()
   })
 })

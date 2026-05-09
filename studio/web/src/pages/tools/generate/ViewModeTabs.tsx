@@ -1,22 +1,22 @@
-/** 视图模式 tab：单图 / XY 矩阵 / 双图对比（compare 仅 XY 完成后选 2 张时可用）。 */
+/** 视图模式 tab：单图 / XY 矩阵。
+ *
+ * 用户决策：双图对比合并进 XY 模式内部（selectedIndices=2 时自动切到
+ * compare sub-view，不再单独占顶部 tab）。 */
 
-export type ViewMode = 'single' | 'xy' | 'compare'
+export type ViewMode = 'single' | 'xy'
 
 export default function ViewModeTabs({
-  mode, onModeChange, compareEnabled,
+  mode, onModeChange,
 }: {
   mode: ViewMode
   onModeChange: (m: ViewMode) => void
-  /** 双图对比仅在 XY 已生成 + 选了 2 张时可用 —— commit 6 用 */
-  compareEnabled: boolean
 }) {
-  const tab = (m: ViewMode, label: string, disabled = false) => (
+  const tab = (m: ViewMode, label: string) => (
     <button
-      onClick={() => !disabled && onModeChange(m)}
-      disabled={disabled}
+      onClick={() => onModeChange(m)}
       className={`btn btn-sm text-xs ${
         mode === m ? 'btn-primary' : 'btn-ghost text-fg-secondary'
-      } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+      }`}
     >
       {label}
     </button>
@@ -25,7 +25,6 @@ export default function ViewModeTabs({
     <div className="flex items-center gap-1.5" role="tablist">
       {tab('single', '单图')}
       {tab('xy', 'XY 矩阵')}
-      {tab('compare', '双图对比', !compareEnabled)}
     </div>
   )
 }

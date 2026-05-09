@@ -79,13 +79,14 @@ export default function GeneratePage() {
       if (prev.includes(idx)) return prev.filter((i) => i !== idx)
       if (prev.length >= 2) return [prev[1], idx]
       const next = [...prev, idx]
-      if (next.length === 2) setMode('compare')
+      // 选 2 张自动进入 xy 内部的 compare sub-view（不切顶部 mode）
+      // 当前 mode 已经是 'xy'（cell click 仅 xy mode 触发），无需 setMode
       return next
     })
   }
 
-  const compareEnabled =
-    (mode === 'xy' && selectedIndices.length === 2) || mode === 'compare'
+  // xy mode 内部 selectedIndices=2 时切 compare sub-view
+  const showCompareView = mode === 'xy' && selectedIndices.length === 2
 
   const projectLoras = useProjectLoras()
   // 用 useMemo 稳定引用：monitorState 不变时 samples 引用不变，避免下方
@@ -174,9 +175,6 @@ export default function GeneratePage() {
     const taskId = currentTask.id
     // 选封面 sample
     let coverIdx = 0
-    if (mode === 'compare' && selectedIndices.length === 2) {
-      coverIdx = selectedIndices[0]
-    }
     // XY：找 (xi=0, yi=0) 那张；找不到 fallback 0
     if (mode === 'xy') {
       const found = samples.findIndex(
@@ -194,8 +192,6 @@ export default function GeneratePage() {
       const xs = new Set(samples.map((s) => s.xy?.xi).filter((x) => x !== undefined))
       const ys = new Set(samples.map((s) => s.xy?.yi).filter((x) => x !== undefined))
       badge = `XY ${xs.size}×${ys.size || 1}`
-    } else if (mode === 'compare') {
-      badge = '2×'
     }
     const filenames = samples
       .map((s) => s.path.split(/[\\/]/).pop() ?? '')
@@ -451,7 +447,7 @@ export default function GeneratePage() {
                     <span className="text-xs text-err ml-1">{currentTask.error_msg}</span>
                   )}
                 </div>
-                <ViewModeTabs mode={mode} onModeChange={setMode} compareEnabled={compareEnabled} />
+                <ViewModeTabs mode={mode} onModeChange={setMode} />
               </div>
 
               <GenerateProgressBar busy={busy} progress={progress} />
@@ -530,14 +526,15 @@ export default function GeneratePage() {
                 <div className="flex-1 grid place-items-center rounded-md border border-subtle bg-sunken text-fg-tertiary text-sm">
                   填写参数后点击「开始生成」
                 </div>
-              ) : mode === 'compare' && selectedIndices.length === 2 ? (
+              ) : mode === 'xy' && showCompareView ? (
+                /* xy 内部 sub-view：选 2 张时切到 compare（不切顶部 mode） */
                 <PreviewCompare
                   samples={samples}
                   taskId={currentTask.id}
                   selectedIndices={selectedIndices as [number, number]}
                   xDraft={xDraft}
                   yDraft={yDraft}
-                  onBack={() => setMode('xy')}
+                  onBack={() => setSelectedIndices([])}
                 />
               ) : mode === 'xy' ? (
                 <PreviewXYGrid
