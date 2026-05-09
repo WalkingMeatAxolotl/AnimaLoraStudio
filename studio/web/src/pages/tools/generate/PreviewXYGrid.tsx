@@ -272,6 +272,13 @@ function GridCell({
   onDoubleClick?: (idx: number) => void
 }) {
   const [errored, setErrored] = useState(false)
+
+  // 切 task / filename 变（如点击历史回看）时 reset errored，让 img
+  // 重新尝试加载。否则上次 errored=true 残留，新 src 来了仍显示 "..."
+  useEffect(() => {
+    setErrored(false)
+  }, [taskId, filename])
+
   // 占位（无 sample / cache miss）：minHeight 撑高让 grid 行不塌缩
   if (!filename || errored) {
     return (
@@ -279,7 +286,7 @@ function GridCell({
         className="grid place-items-center rounded-sm border border-subtle bg-sunken text-fg-tertiary text-2xs"
         style={{ minHeight: 80 }}
       >
-        …
+        {errored ? '原图已释放' : '…'}
       </div>
     )
   }
@@ -297,8 +304,10 @@ function GridCell({
       title={tooltip}
       style={{ minHeight: 80 }}
     >
-      {/* h-auto: 按图实际宽高；draggable=false 阻止浏览器原生 img drag */}
+      {/* key 加 taskId+filename 让 src 变化时 React 强制重挂载 img，避免
+          上次失败的浏览器缓存或 onError 状态残留 */}
       <img
+        key={`${taskId}-${filename}`}
         src={api.generateSampleUrl(taskId, filename)}
         className="block w-full h-auto pointer-events-none"
         alt={filename}
