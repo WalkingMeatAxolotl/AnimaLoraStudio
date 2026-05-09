@@ -27,6 +27,13 @@ export default function SidebarLoras({
     return (path: string): string => map.get(path) ?? ''
   }, [projectLoras])
 
+  // path → stage 反查（训练中卡片要描边 accent）
+  const stageOf = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const l of projectLoras) map.set(l.path, l.stage)
+    return (path: string): string | undefined => map.get(path)
+  }, [projectLoras])
+
   const selectedPaths = useMemo(() => new Set(loras.map((l) => l.path)), [loras])
 
   const addLora = (path: string) => {
@@ -44,6 +51,7 @@ export default function SidebarLoras({
           key={`${l.path}-${i}`}
           lora={l}
           label={labelOf(l.path)}
+          stage={stageOf(l.path)}
           onScaleChange={(s) => setScaleAt(i, s)}
           onRemove={() => removeAt(i)}
         />
@@ -52,10 +60,25 @@ export default function SidebarLoras({
       {!pickerOpen ? (
         <button
           onClick={() => setPickerOpen(true)}
-          className="w-full text-sm text-accent hover:bg-surface rounded-md border border-dashed border-subtle hover:border-accent transition-colors"
-          style={{ padding: '10px 12px' }}
+          className="font-mono inline-flex items-center gap-1.5 self-start"
+          style={{
+            border: '1px solid var(--border-subtle)',
+            background: 'var(--bg-sunken)',
+            borderRadius: 'var(--r-md)',
+            padding: '6px 10px',
+            fontSize: 12,
+            color: 'var(--fg-tertiary)',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = 'var(--fg-primary)'
+            e.currentTarget.style.borderColor = 'var(--border-default)'
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = 'var(--fg-tertiary)'
+            e.currentTarget.style.borderColor = 'var(--border-subtle)'
+          }}
         >
-          + 选 LoRA
+          + 从项目添加 LoRA
         </button>
       ) : (
         <InlineLoraPicker

@@ -40,7 +40,8 @@ export default function GeneratePage() {
   const [count, setCount] = useState(1)
   const [seed, setSeed] = useState(0)
   const [loras, setLoras] = useState<LoraEntry[]>([])
-  const [attentionBackend, setAttentionBackend] = useState<AttentionBackend>('flash_attn')
+  // commit C: attention backend 移到 Settings；这里先暂留默认值，后续从 secrets 读
+  const attentionBackend: AttentionBackend = 'flash_attn'
 
   // XY 模式 state（mode='single' 时不参与 enqueue）
   const [xDraft, setXDraft] = useState<XYAxisDraft>({ axis: 'steps', raw: '20, 25, 30', loraIndex: null })
@@ -267,25 +268,14 @@ export default function GeneratePage() {
 
       <div className="p-6 flex gap-4 items-stretch flex-wrap xl:flex-nowrap flex-1 min-h-0">
 
-          {/* 左：sidebar — 顺序按 design image 1：提示词 → LoRA → (XY) → 参数 → 加速 → 按钮 */}
-          <div className="flex flex-col gap-4 w-full xl:w-[340px] shrink-0">
+          {/* 左：sidebar — 对齐 Test 重设计.html v1：LoRA → 提示词 → 参数 → Generate bar */}
+          <div className="flex flex-col gap-4 w-full xl:w-[420px] shrink-0">
 
-            <div className="card" style={{ padding: 16 }}>
-              <div className="text-sm font-semibold mb-2">正向提示词</div>
-              <PromptList prompts={prompts} onChange={setPrompts} />
-              <div className="mt-3">
-                <label className="caption block mb-1">负面提示词</label>
-                <textarea
-                  className="input w-full font-mono text-xs resize-y"
-                  rows={5}
-                  value={negPrompt}
-                  onChange={(e) => setNegPrompt(e.target.value)}
-                />
+            <div className="card" style={{ padding: 18 }}>
+              <div className="flex items-baseline justify-between mb-3">
+                <h3 className="m-0 text-md font-semibold">LoRA</h3>
+                <span className="text-xs text-fg-tertiary">从项目挑版本，权重单滑块调</span>
               </div>
-            </div>
-
-            <div className="card" style={{ padding: 16 }}>
-              <div className="text-sm font-semibold mb-2">LoRA</div>
               <SidebarLoras loras={loras} onChange={setLoras} projectLoras={projectLoras} />
             </div>
 
@@ -299,8 +289,21 @@ export default function GeneratePage() {
               />
             )}
 
-            <div className="card" style={{ padding: 16 }}>
-              <div className="text-sm font-semibold mb-2">参数</div>
+            <div className="card" style={{ padding: 18 }}>
+              <h3 className="m-0 text-md font-semibold mb-3">提示词</h3>
+              <label className="caption block mb-1">正向</label>
+              <PromptList prompts={prompts} onChange={setPrompts} />
+              <label className="caption block mb-1 mt-3">负向</label>
+              <textarea
+                className="input w-full font-mono text-xs resize-y"
+                rows={5}
+                value={negPrompt}
+                onChange={(e) => setNegPrompt(e.target.value)}
+              />
+            </div>
+
+            <div className="card" style={{ padding: 18 }}>
+              <h3 className="m-0 text-md font-semibold mb-3">采样参数</h3>
               <div className="flex flex-col gap-2.5">
                 <div className="flex gap-2">
                   <NumField label="宽度" value={width} onChange={setWidth} min={256} max={4096} step={64} />
@@ -308,38 +311,45 @@ export default function GeneratePage() {
                 </div>
                 <div className="flex gap-2">
                   <NumField label="步数" value={steps} onChange={setSteps} min={1} max={150} />
-                  <NumField label="CFG Scale" value={cfgScale} onChange={setCfgScale} min={0} max={20} step={0.5} />
+                  <NumField label="CFG" value={cfgScale} onChange={setCfgScale} min={0} max={20} step={0.5} />
+                  {mode !== 'xy' && (
+                    <NumField label="每 prompt" value={count} onChange={setCount} min={1} max={32} />
+                  )}
                 </div>
                 <div className="flex gap-2">
-                  {mode !== 'xy' && (
-                    <NumField label="每 prompt 张数" value={count} onChange={setCount} min={1} max={32} />
-                  )}
                   <NumField label="种子（0=随机）" value={seed} onChange={setSeed} min={0} />
                 </div>
               </div>
             </div>
 
-            <div className="flex flex-col gap-1">
-              <label className="caption">加速</label>
-              <select
-                className="input"
-                value={attentionBackend}
-                onChange={(e) => setAttentionBackend(e.target.value as AttentionBackend)}
+            {/* Generate bar：对齐 design 的 .gen-bar — 橙色大按钮 + 右侧 meta */}
+            <div
+              className="flex items-center gap-3"
+              style={{
+                padding: '10px 12px',
+                borderRadius: 'var(--r-lg)',
+                border: '1px solid var(--border-subtle)',
+                background: 'var(--bg-elevated)',
+              }}
+            >
+              <button
+                className="btn btn-primary flex-1"
+                style={{ padding: 12, fontWeight: 600, justifyContent: 'center' }}
+                onClick={handleGenerate}
+                disabled={busy}
               >
-                <option value="flash_attn">Flash Attention</option>
-                <option value="xformers">xformers</option>
-                <option value="none">无（PyTorch SDPA）</option>
-              </select>
-            </div>
-
-            <div className="flex gap-2">
-              <button className="btn btn-primary flex-1" onClick={handleGenerate} disabled={busy}>
                 {generateLabel}
               </button>
               {cancelable && (
                 <button className="btn btn-ghost" onClick={handleCancel} title="取消当前任务">
                   取消
                 </button>
+              )}
+              {!cancelable && (
+                <div className="font-mono text-xs text-fg-tertiary text-right" style={{ lineHeight: 1.3 }}>
+                  <div>{width}×{height}</div>
+                  <div>{busy ? '生成中…' : '与训练共享 GPU'}</div>
+                </div>
               )}
             </div>
           </div>
