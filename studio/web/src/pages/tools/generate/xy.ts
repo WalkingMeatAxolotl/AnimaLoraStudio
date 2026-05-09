@@ -76,3 +76,15 @@ export function draftToSpec(
 export function cellCount(xLen: number, yLen: number | null): number {
   return xLen * (yLen ?? 1)
 }
+
+/** path → 不带目录前缀和 .safetensors 后缀的"短名"（XY 标头 / LoRA 卡片用）。 */
+export function ckptStemFromPath(path: string): string {
+  const filename = path.split(/[\\/]/).pop() ?? path
+  return filename.replace(/\.safetensors$/i, '')
+}
+
+/** 如果 axis 是 lora_ckpt（值是 path），用 stem 显示；其他类型原样返回。 */
+export function formatAxisValue(axis: XYAxisType, value: string): string {
+  if (axis === 'lora_ckpt') return ckptStemFromPath(value)
+  return value
+}

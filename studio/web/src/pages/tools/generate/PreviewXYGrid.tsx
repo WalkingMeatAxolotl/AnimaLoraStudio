@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { api, type MonitorState } from '../../../api/client'
-import { AXIS_LABELS } from './xy'
+import { AXIS_LABELS, formatAxisValue } from './xy'
 import type { XYAxisDraft } from './xy'
 
 type Density = 'compact' | 'standard' | 'large'
@@ -91,8 +91,8 @@ export default function PreviewXYGrid({
                   {AXIS_LABELS[yDraft.axis]} \ {AXIS_LABELS[xDraft.axis]}
                 </th>
                 {xValues.slice(0, cols).map((xv, xi) => (
-                  <th key={xi} className="text-2xs text-fg-tertiary font-mono p-1 text-center" style={{ width: thumb }}>
-                    {xv}
+                  <th key={xi} className="text-2xs text-fg-tertiary font-mono p-1 text-center truncate" style={{ width: thumb, maxWidth: thumb }} title={xv}>
+                    {formatAxisValue(xDraft.axis, xv)}
                   </th>
                 ))}
               </tr>
@@ -102,8 +102,8 @@ export default function PreviewXYGrid({
             {yValues.map((yv, yi) => (
               <tr key={yi}>
                 {yDraft && (
-                  <td className="text-2xs text-fg-tertiary font-mono p-1 text-right" style={{ width: 60 }}>
-                    {yv ?? ''}
+                  <td className="text-2xs text-fg-tertiary font-mono p-1 text-right truncate" style={{ width: 60, maxWidth: 60 }} title={yv ?? ''}>
+                    {yv != null ? formatAxisValue(yDraft.axis, yv) : ''}
                   </td>
                 )}
                 {xValues.slice(0, cols).map((xv, xi) => {
@@ -122,8 +122,8 @@ export default function PreviewXYGrid({
                           }`}
                           style={{ width: thumb, height: thumb }}
                           title={!yDraft
-                            ? `${AXIS_LABELS[xDraft.axis]}=${xv}`
-                            : `${AXIS_LABELS[xDraft.axis]}=${xv} · ${AXIS_LABELS[yDraft.axis]}=${yv}`}
+                            ? `${AXIS_LABELS[xDraft.axis]}=${formatAxisValue(xDraft.axis, xv)}`
+                            : `${AXIS_LABELS[xDraft.axis]}=${formatAxisValue(xDraft.axis, xv)} · ${AXIS_LABELS[yDraft.axis]}=${formatAxisValue(yDraft.axis, yv ?? '')}`}
                         >
                           <img
                             src={api.generateSampleUrl(taskId, filename)}
@@ -141,7 +141,9 @@ export default function PreviewXYGrid({
                         </div>
                       )}
                       {!yDraft && (
-                        <div className="text-2xs text-fg-tertiary text-center font-mono mt-0.5">{xv}</div>
+                        <div className="text-2xs text-fg-tertiary text-center font-mono mt-0.5 truncate" style={{ maxWidth: thumb }} title={xv}>
+                          {formatAxisValue(xDraft.axis, xv)}
+                        </div>
                       )}
                     </td>
                   )

@@ -70,8 +70,12 @@ def save_state() -> None:
 def update_monitor(
     loss=None, lr=None, epoch=None, total_epochs=None, step=None,
     total_steps=None, speed=None, sample_path=None, config=None,
+    xy=None,
 ):
-    """更新监控状态。先更新 step/epoch 等元信息，再追加 loss/lr 点位。"""
+    """更新监控状态。先更新 step/epoch 等元信息，再追加 loss/lr 点位。
+
+    `xy`：可选 dict {xi, yi, xv, yv}，仅 generate XY 矩阵 task 用。前端
+    PreviewXYGrid 按它给 cell 找位置。"""
     if epoch is not None:
         MONITOR_STATE["epoch"] = epoch
     if total_epochs is not None:
@@ -98,11 +102,14 @@ def update_monitor(
             MONITOR_STATE["lr_history"] = MONITOR_STATE["lr_history"][-50000:]
 
     if sample_path is not None:
-        MONITOR_STATE["samples"].append({
+        sample = {
             "path": str(sample_path),
             "step": MONITOR_STATE["step"],
             "time": time.time(),
-        })
+        }
+        if xy is not None:
+            sample["xy"] = xy
+        MONITOR_STATE["samples"].append(sample)
         if len(MONITOR_STATE["samples"]) > 50:
             MONITOR_STATE["samples"] = MONITOR_STATE["samples"][-50:]
 

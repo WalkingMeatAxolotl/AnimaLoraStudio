@@ -3,7 +3,7 @@ import { api, type LoraCkpt, type LoraEntry, type XYAxisType } from '../../../ap
 import PathPicker from '../../../components/PathPicker'
 import InlineLoraPicker from './InlineLoraPicker'
 import type { ProjectLora } from './types'
-import { AXIS_LABELS, AXIS_VALUE_TYPE, REQUIRES_LORA_INDEX, type XYAxisDraft } from './xy'
+import { AXIS_LABELS, AXIS_VALUE_TYPE, REQUIRES_LORA_INDEX, ckptStemFromPath, type XYAxisDraft } from './xy'
 
 const ALL_AXES: XYAxisType[] = ['lora_ckpt', 'lora_scale', 'cfg_scale', 'steps']
 
@@ -111,7 +111,7 @@ function AxisLoraPicker({
     const matched = projectLoras.find((p) => p.versionId === bound.version_id)
     const label = matched
       ? `${matched.projectTitle} / ${matched.versionLabel}`
-      : (bound.path.split(/[\\/]/).pop() ?? bound.path)
+      : ckptStemFromPath(bound.path)
     return (
       <div
         className="flex items-center gap-2 text-xs"

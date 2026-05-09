@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, type LoraCkpt, type LoraEntry } from '../../../api/client'
 import { projectAbbr } from './InlineLoraPicker'
+import { ckptStemFromPath } from './xy'
 
 /** 已添加的 LoRA 卡片（对齐 Test 重设计.html 的 .ver-row 风格）：
  *
@@ -22,7 +23,7 @@ export default function LoraCard({
   onChange: (next: LoraEntry) => void
   onRemove: () => void
 }) {
-  const filename = lora.path.split(/[\\/]/).pop() ?? lora.path
+  const filename = ckptStemFromPath(lora.path)
   const live = stage === 'training'
 
   const [ckpts, setCkpts] = useState<LoraCkpt[]>([])
