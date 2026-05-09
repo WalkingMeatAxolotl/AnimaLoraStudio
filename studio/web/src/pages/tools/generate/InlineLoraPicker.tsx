@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { ProjectLora } from './types'
+import { ckptStemFromPath } from './xy'
 
 /** 项目缩写图标（2 字符 uppercase，从 title 提字母数字派生）。 */
 export function projectAbbr(title: string): string {
@@ -15,16 +16,24 @@ function ProjectIcon({ title }: { title: string }) {
   )
 }
 
-/** Image 8 「PICKER B · 内嵌展开」—— "+ 选 LoRA" 就地展开成挑选区，关闭后折叠。
+/** 内嵌 LoRA 多选挑选器：扁平列表 + 搜索 + 一键清空 + 短名显示。
  *
- * 不是 modal —— 在 sidebar 内部 inline 展开；选中一个不自动关闭，方便连续选多个。
- * 「外部文件…」打开 PathPicker 走兜底（自由路径）。 */
+ * 列表每行：[项目 icon] [项目 / 版本] [训练中 pill] [短名] [✓ / +]
+ * 不再按 project 分组（用户反馈分组冗余）；显示 stem 名（去 .safetensors）。
+ *
+ * onRemove 可选：传了就支持点击已添加项取消勾选（多选 toggle）。
+ * onClearAll 可选：传了就显示一键清空按钮。
+ */
 export default function InlineLoraPicker({
-  projectLoras, selectedPaths, onPick, onClose, onPickExternal,
+  projectLoras, selectedPaths,
+  onPick, onRemove, onClearAll,
+  onClose, onPickExternal,
 }: {
   projectLoras: ProjectLora[]
   selectedPaths: Set<string>
   onPick: (path: string) => void
+  onRemove?: (path: string) => void
+  onClearAll?: () => void
   onClose: () => void
   onPickExternal: () => void
 }) {
@@ -36,44 +45,40 @@ export default function InlineLoraPicker({
     return projectLoras.filter(
       (l) =>
         l.projectTitle.toLowerCase().includes(q) ||
-        l.versionLabel.toLowerCase().includes(q)
+        l.versionLabel.toLowerCase().includes(q) ||
+        ckptStemFromPath(l.path).toLowerCase().includes(q)
     )
   }, [projectLoras, search])
 
-  const grouped = useMemo(() => {
-    const map = new Map<number, { projectTitle: string; loras: ProjectLora[] }>()
-    for (const l of filtered) {
-      let g = map.get(l.projectId)
-      if (!g) {
-        g = { projectTitle: l.projectTitle, loras: [] }
-        map.set(l.projectId, g)
-      }
-      g.loras.push(l)
-    }
-    return Array.from(map.values())
-  }, [filtered])
-
-  const projectCount = grouped.length
-  const versionCount = filtered.length
+  const selectedCount = selectedPaths.size
 
   return (
     <div
       className="rounded-md border border-subtle bg-overlay p-2.5 flex flex-col gap-2"
       data-testid="inline-lora-picker"
     >
-      {/* header: search + count + 外部文件 + close（image 2 design：外部文件靠右与搜索同行） */}
+      {/* header: 搜索 + 计数 + 一键清空 + 外部文件 + 关闭 */}
       <div className="flex items-center gap-2">
         <input
           type="text"
           className="input flex-1 text-xs"
-          placeholder="搜索项目 / 版本…"
+          placeholder="搜索项目 / 版本 / 文件名…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           autoFocus
         />
         <span className="text-2xs text-fg-tertiary whitespace-nowrap">
-          {projectCount} 项目 · {versionCount} 版本
+          已选 {selectedCount} / {filtered.length}
         </span>
+        {onClearAll && selectedCount > 0 && (
+          <button
+            onClick={onClearAll}
+            className="btn btn-ghost btn-sm text-2xs text-fg-tertiary"
+            title="清空所有已选 LoRA"
+          >
+            一键清空
+          </button>
+        )}
         <button
           onClick={onPickExternal}
           className="btn btn-ghost btn-sm text-2xs text-fg-tertiary"
@@ -91,54 +96,61 @@ export default function InlineLoraPicker({
         </button>
       </div>
 
-      {/* list — 按 project 分组 */}
-      <div className="flex flex-col gap-2 overflow-y-auto" style={{ maxHeight: 320 }}>
-        {grouped.map((group) => (
-          <div key={group.projectTitle} className="flex flex-col gap-px">
-            <div className="caption text-2xs text-fg-tertiary px-1 uppercase tracking-wider">
-              {group.projectTitle}
-            </div>
-            {group.loras.map((l) => {
-              const added = selectedPaths.has(l.path)
-              return (
-                <button
-                  key={l.versionId}
-                  disabled={added}
-                  onClick={() => onPick(l.path)}
-                  className={`flex items-center gap-2 px-2 py-1.5 rounded text-xs text-left border-none transition-colors ${
-                    added
-                      ? 'bg-sunken text-fg-tertiary cursor-not-allowed'
-                      : 'bg-transparent hover:bg-surface text-fg-secondary cursor-pointer'
-                  }`}
-                >
-                  <ProjectIcon title={l.projectTitle} />
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium truncate flex items-center gap-1.5">
-                      <span>{l.projectTitle} / {l.versionLabel}</span>
-                      {l.stage === 'training' && (
-                        <span className="badge badge-info" style={{ fontSize: 10 }}>训练中</span>
-                      )}
-                    </div>
-                    <div className="text-2xs text-fg-tertiary truncate">
-                      {l.stage} · {new Date(l.createdAt * 1000).toLocaleDateString()}
-                    </div>
-                  </div>
-                  <span className="font-mono text-2xs shrink-0">
-                    {added ? '已添加' : '+'}
-                  </span>
-                </button>
-              )
-            })}
-          </div>
-        ))}
+      {/* 列表：扁平，每行一个 LoRA */}
+      <div className="flex flex-col gap-px overflow-y-auto" style={{ maxHeight: 360 }}>
+        {filtered.map((l) => {
+          const added = selectedPaths.has(l.path)
+          const stem = ckptStemFromPath(l.path)
+          const handleClick = () => {
+            if (added) {
+              if (onRemove) onRemove(l.path)
+            } else {
+              onPick(l.path)
+            }
+          }
+          return (
+            <button
+              key={`${l.projectId}-${l.versionId}`}
+              onClick={handleClick}
+              disabled={added && !onRemove}
+              className={`flex items-center gap-2 px-2 py-1.5 rounded text-xs text-left border-none transition-colors ${
+                added
+                  ? (onRemove
+                      ? 'bg-accent-soft text-accent cursor-pointer hover:opacity-80'
+                      : 'bg-sunken text-fg-tertiary cursor-not-allowed')
+                  : 'bg-transparent hover:bg-surface text-fg-secondary cursor-pointer'
+              }`}
+              style={{
+                background: added
+                  ? 'var(--accent-soft)'
+                  : undefined,
+              }}
+            >
+              <ProjectIcon title={l.projectTitle} />
+              <div className="flex-1 min-w-0 flex flex-col gap-px">
+                <div className="font-medium truncate flex items-center gap-1.5">
+                  <span>{l.projectTitle} / {l.versionLabel}</span>
+                  {l.stage === 'training' && (
+                    <span className="badge badge-info" style={{ fontSize: 10 }}>训练中</span>
+                  )}
+                </div>
+                <div className="text-2xs text-fg-tertiary font-mono truncate" title={l.path}>
+                  {stem}
+                </div>
+              </div>
+              <span className="font-mono text-2xs shrink-0" style={{ minWidth: 16, textAlign: 'right' }}>
+                {added ? '✓' : '+'}
+              </span>
+            </button>
+          )
+        })}
 
-        {!grouped.length && (
+        {filtered.length === 0 && (
           <div className="text-fg-tertiary text-xs px-2 py-4 text-center">
             {search ? '没有匹配的 LoRA' : '还没有训练好的 LoRA —— 先去训练一个，或用「外部文件」'}
           </div>
         )}
       </div>
-
     </div>
   )
 }

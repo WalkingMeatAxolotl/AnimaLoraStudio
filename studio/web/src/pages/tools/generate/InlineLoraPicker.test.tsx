@@ -57,10 +57,10 @@ describe('InlineLoraPicker', () => {
     return { ...utils, onPick, onClose, onPickExternal }
   }
 
-  it('shows project / version count in header', () => {
+  it('shows count in header (已选 / 总)', () => {
     renderPicker()
-    // 2 项目（cute_chibi + noir_portrait）· 3 版本
-    expect(screen.getByText(/2 项目 · 3 版本/)).toBeInTheDocument()
+    // 改成扁平 + 已选/总。3 个总，0 已选
+    expect(screen.getByText(/已选 0 \/ 3/)).toBeInTheDocument()
   })
 
   it('groups versions by project title', () => {
@@ -77,14 +77,14 @@ describe('InlineLoraPicker', () => {
     expect(screen.getByText('训练中')).toBeInTheDocument()
   })
 
-  it('marks already-added versions as 已添加 + disables the button', () => {
+  it('marks already-added versions with ✓ marker; disables when no onRemove (multi-select off)', () => {
     renderPicker({
       selectedPaths: new Set(['/loras/cute_chibi/v3.safetensors']),
     })
     const addedBtn = screen.getByText(/cute_chibi \/ v3/).closest('button')!
+    // 没传 onRemove → multi-select off → button disabled
     expect(addedBtn).toBeDisabled()
-    // "已添加" 文字
-    expect(addedBtn.textContent).toContain('已添加')
+    expect(addedBtn.textContent).toContain('✓')
   })
 
   it('calls onPick with path when a version is clicked', async () => {
@@ -108,19 +108,19 @@ describe('InlineLoraPicker', () => {
   it('filters by project title via search', async () => {
     const user = userEvent.setup()
     renderPicker()
-    const search = screen.getByPlaceholderText('搜索项目 / 版本…')
+    const search = screen.getByPlaceholderText('搜索项目 / 版本 / 文件名…')
     await user.type(search, 'noir')
     // cute_chibi 的版本应该消失
     expect(screen.queryByText(/cute_chibi \/ v3/)).not.toBeInTheDocument()
     expect(screen.getByText(/noir_portrait \/ v1/)).toBeInTheDocument()
-    // count 更新
-    expect(screen.getByText(/1 项目 · 1 版本/)).toBeInTheDocument()
+    // count 更新（改成 已选 0/总）
+    expect(screen.getByText(/已选 0 \/ 1/)).toBeInTheDocument()
   })
 
   it('filters by version label via search', async () => {
     const user = userEvent.setup()
     renderPicker()
-    const search = screen.getByPlaceholderText('搜索项目 / 版本…')
+    const search = screen.getByPlaceholderText('搜索项目 / 版本 / 文件名…')
     await user.type(search, 'v3')
     expect(screen.getByText(/cute_chibi \/ v3/)).toBeInTheDocument()
     expect(screen.queryByText(/cute_chibi \/ v2/)).not.toBeInTheDocument()
@@ -130,7 +130,7 @@ describe('InlineLoraPicker', () => {
   it('shows empty hint when no matches', async () => {
     const user = userEvent.setup()
     renderPicker()
-    await user.type(screen.getByPlaceholderText('搜索项目 / 版本…'), 'zzznomatch')
+    await user.type(screen.getByPlaceholderText('搜索项目 / 版本 / 文件名…'), 'zzznomatch')
     expect(screen.getByText(/没有匹配的 LoRA/)).toBeInTheDocument()
   })
 

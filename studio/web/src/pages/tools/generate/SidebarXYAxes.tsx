@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { api, type LoraCkpt, type LoraEntry, type XYAxisType } from '../../../api/client'
 import PathPicker from '../../../components/PathPicker'
 import InlineLoraPicker from './InlineLoraPicker'
+import NumberListInput from './NumberListInput'
 import type { ProjectLora } from './types'
 import { AXIS_LABELS, AXIS_VALUE_TYPE, REQUIRES_LORA_INDEX, ckptStemFromPath, type XYAxisDraft } from './xy'
 
@@ -242,7 +243,8 @@ function AxisCard({
         />
       )}
 
-      {/* 数值轴（steps/cfg）& lora_scale：text input；lora_ckpt：ckpt 多选 */}
+      {/* axis=lora_ckpt：ckpt 多选 chip；axis=lora_scale：+ 添加 数字 chip；
+          其他数值轴（steps/cfg）：text input（范围广用逗号分隔够直观）。 */}
       {isCkpt ? (
         bound && bound.version_id && bound.project_id ? (
           <CkptMultiPicker
@@ -254,6 +256,15 @@ function AxisCard({
         ) : bound ? (
           <div className="text-2xs text-fg-tertiary">外部文件 LoRA 没法列 ckpt（要 picker 选项目里的）</div>
         ) : null
+      ) : draft.axis === 'lora_scale' ? (
+        <NumberListInput
+          raw={draft.raw}
+          onChange={(raw) => onChange({ ...draft, raw })}
+          min={0}
+          max={1}
+          step={0.05}
+          placeholder="0.85"
+        />
       ) : (
         <input
           type="text"

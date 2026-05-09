@@ -95,6 +95,8 @@ export default function SidebarLoras({
           projectLoras={projectLoras}
           selectedPaths={selectedPaths}
           onPick={(path) => addLora(path)}
+          onRemove={(path) => onChange(loras.filter((l) => l.path !== path))}
+          onClearAll={() => onChange([])}
           onClose={() => setPickerOpen(false)}
           onPickExternal={() => setPathPickerOpen(true)}
         />
