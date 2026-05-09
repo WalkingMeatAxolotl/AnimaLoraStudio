@@ -163,11 +163,13 @@ export default function GeneratePage() {
   }, [currentTask?.id, mode])
 
   // task done + 有样本 → 入库历史。lastSnapshotRef 防同 task 多次触发
+  // 之前 dedup 还比 mode → 用户切 mode 时同 task 反复入库（"历史克隆"bug）。
+  // 修：只 dedup taskId；entry.mode 记当时生成时的 mode，不被切 mode 影响。
   useEffect(() => {
     if (!currentTask || currentTask.status !== 'done') return
     if (samples.length === 0) return
     const snap = lastSnapshotRef.current
-    if (snap && snap.taskId === currentTask.id && snap.mode === mode) return
+    if (snap?.taskId === currentTask.id) return
     lastSnapshotRef.current = { taskId: currentTask.id, mode }
     const taskId = currentTask.id
     // 选封面 sample
@@ -455,28 +457,66 @@ export default function GeneratePage() {
               <GenerateProgressBar busy={busy} progress={progress} />
 
               {historyOverride ? (
-                <div className="flex-1 min-h-0 flex flex-col items-center gap-2">
-                  <a
-                    className="flex-1 min-h-0 flex items-center justify-center w-full"
-                    href={api.generateSampleUrl(historyOverride.taskId, historyOverride.filenames[0] ?? '')}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <img
-                      key={historyOverride.id}
-                      src={api.generateSampleUrl(historyOverride.taskId, historyOverride.filenames[0] ?? '')}
-                      onError={(e) => {
-                        (e.currentTarget as HTMLImageElement).src = historyOverride.thumbnailDataUrl
-                        ;(e.currentTarget as HTMLImageElement).title = '原图已释放，仅缩略图可见'
-                      }}
-                      alt={`history #${historyOverride.taskId}`}
-                      className="rounded-md object-contain"
-                      style={{ maxWidth: '100%', maxHeight: '100%' }}
-                    />
-                  </a>
+                <div className="flex-1 min-h-0 flex flex-col gap-2">
+                  {historyOverride.mode === 'xy' && historyOverride.filenames.length > 1 ? (
+                    /* xy 概览：grid 平铺所有 filenames */
+                    <div className="flex-1 min-h-0 overflow-auto">
+                      <div
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                          gap: 2,
+                        }}
+                      >
+                        {historyOverride.filenames.map((fn) => {
+                          const url = api.generateSampleUrl(historyOverride.taskId, fn)
+                          return (
+                            <a
+                              key={fn} href={url} target="_blank" rel="noreferrer"
+                              className="block bg-sunken rounded-sm overflow-hidden"
+                              style={{ aspectRatio: '1' }}
+                            >
+                              <img
+                                src={url}
+                                onError={(e) => {
+                                  (e.currentTarget as HTMLImageElement).src = historyOverride.thumbnailDataUrl
+                                  ;(e.currentTarget as HTMLImageElement).title = '原图已释放，仅封面缩略可见'
+                                }}
+                                alt={fn}
+                                className="w-full h-full object-cover"
+                                loading="lazy"
+                              />
+                            </a>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  ) : (
+                    /* 单图回看（single / compare 历史 / 单张 xy） */
+                    <a
+                      className="flex-1 min-h-0 flex items-center justify-center w-full"
+                      href={api.generateSampleUrl(historyOverride.taskId, historyOverride.filenames[0] ?? '')}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <img
+                        key={historyOverride.id}
+                        src={api.generateSampleUrl(historyOverride.taskId, historyOverride.filenames[0] ?? '')}
+                        onError={(e) => {
+                          (e.currentTarget as HTMLImageElement).src = historyOverride.thumbnailDataUrl
+                          ;(e.currentTarget as HTMLImageElement).title = '原图已释放，仅缩略图可见'
+                        }}
+                        alt={`history #${historyOverride.taskId}`}
+                        className="rounded-md object-contain"
+                        style={{ maxWidth: '100%', maxHeight: '100%' }}
+                      />
+                    </a>
+                  )}
                   <div className="text-xs text-fg-tertiary shrink-0">
                     历史 #{historyOverride.taskId}
                     {historyOverride.badge ? ` · ${historyOverride.badge}` : ''}
+                    {historyOverride.mode === 'xy' && historyOverride.filenames.length > 1
+                      ? ` · ${historyOverride.filenames.length} 张` : ''}
                     <button
                       className="btn btn-ghost text-xs ml-2"
                       style={{ padding: '2px 8px' }}

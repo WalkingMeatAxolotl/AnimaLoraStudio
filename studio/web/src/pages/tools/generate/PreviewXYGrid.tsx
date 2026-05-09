@@ -1,25 +1,25 @@
 import { useMemo, useState } from 'react'
 import { api, type MonitorState } from '../../../api/client'
-import { AXIS_LABELS, formatAxisValue } from './xy'
-import type { XYAxisDraft } from './xy'
+import { AXIS_LABELS, formatAxisValue, type XYAxisDraft } from './xy'
 
 type Density = 'compact' | 'standard' | 'large'
 
-const DENSITY_THUMB: Record<Density, number> = {
-  compact: 96,
+/** 紧凑/标准/大图 → 单 cell 最小宽度（px）；多余空间按 1fr 均分到所有列。
+ * 用 minmax(MIN, 1fr)，让 cell 同时撑满容器宽度 + 不至于太小。 */
+const DENSITY_MIN: Record<Density, number> = {
+  compact: 80,
   standard: 160,
-  large: 240,
+  large: 280,
 }
 
-/** 计算每行最大列数 —— 基于 X values 数量；超过 5 自动滚动 */
-function colsForX(xLen: number): number {
-  return Math.min(Math.max(xLen, 1), 5)
-}
-
-/** XY 模式预览网格：按 monitorState.samples[].xy 排成 N×M。
+/** XY 模式预览网格：按 monitorState.samples[].xy 排成 N×M（CSS grid）。
  *
- * 缺图占位灰格（task 还在跑中或某 cell 失败）。点 cell 触发选中（compare
- * 模式 commit 6 用），双击放大新窗口看原图。 */
+ * - 不再限制列数（之前 colsForX 截到 5 → 12 张矩阵只显 10）
+ * - gap 2px（用户决策）
+ * - cell aspect 1:1，object-cover 填满
+ * - 列模板 `60px repeat(xLen, minmax(MIN, 1fr))` 让每行所有 cell 同宽
+ *   且至少 MIN 宽，多余空间均分；超出容器宽时整个 grid 横滚
+ */
 export default function PreviewXYGrid({
   samples, taskId, xDraft, yDraft, onCellClick, selectedIndices,
 }: {
@@ -28,12 +28,10 @@ export default function PreviewXYGrid({
   xDraft: XYAxisDraft
   yDraft: XYAxisDraft | null
   onCellClick?: (sampleIdx: number) => void
-  /** 高亮已选中的 cell（compare 模式候选） */
   selectedIndices?: number[]
 }) {
   const [density, setDensity] = useState<Density>('standard')
 
-  // 把 samples 索引到 (xi, yi) 二维表
   const xValues = useMemo(
     () => xDraft.raw.split(',').map((s) => s.trim()).filter(Boolean),
     [xDraft.raw],
@@ -45,7 +43,6 @@ export default function PreviewXYGrid({
   const xLen = xValues.length
   const yLen = yValues.length
 
-  // (yi, xi) → sample 在 samples[] 里的索引（用于 selectedIndices 高亮 + click）
   const cellIndex = useMemo(() => {
     const m = new Map<string, number>()
     samples.forEach((s, idx) => {
@@ -54,14 +51,18 @@ export default function PreviewXYGrid({
     return m
   }, [samples])
 
-  const thumb = DENSITY_THUMB[density]
-  const cols = colsForX(xLen)
+  const minW = DENSITY_MIN[density]
   const selSet = new Set(selectedIndices ?? [])
 
+  // grid 列：左 axis label 列 + N 个图 cell 列。yDraft 不存在时省略 label 列。
+  const labelColW = yDraft ? 60 : 0
+  const gridCols = yDraft
+    ? `${labelColW}px repeat(${xLen}, minmax(${minW}px, 1fr))`
+    : `repeat(${xLen}, minmax(${minW}px, 1fr))`
+
   return (
-    <div className="flex flex-col gap-3">
-      {/* 工具条：列宽切换 + 计数 */}
-      <div className="flex items-center justify-between">
+    <div className="flex flex-col gap-2 flex-1 min-h-0">
+      <div className="flex items-center justify-between shrink-0">
         <span className="caption">
           {xLen}{yDraft ? ` × ${yLen}` : ''} = {xLen * yLen} 张
           {samples.length < xLen * yLen && samples.length > 0 && (
@@ -81,78 +82,101 @@ export default function PreviewXYGrid({
         </div>
       </div>
 
-      {/* 网格本体 */}
-      <div className="overflow-x-auto">
-        <table className="border-collapse" style={{ tableLayout: 'fixed' }}>
-          {yDraft && (
-            <thead>
-              <tr>
-                <th className="text-2xs text-fg-tertiary p-1">
-                  {AXIS_LABELS[yDraft.axis]} \ {AXIS_LABELS[xDraft.axis]}
-                </th>
-                {xValues.slice(0, cols).map((xv, xi) => (
-                  <th key={xi} className="text-2xs text-fg-tertiary font-mono p-1 text-center truncate" style={{ width: thumb, maxWidth: thumb }} title={xv}>
-                    {formatAxisValue(xDraft.axis, xv)}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-          )}
-          <tbody>
-            {yValues.map((yv, yi) => (
-              <tr key={yi}>
-                {yDraft && (
-                  <td className="text-2xs text-fg-tertiary font-mono p-1 text-right truncate" style={{ width: 60, maxWidth: 60 }} title={yv ?? ''}>
-                    {yv != null ? formatAxisValue(yDraft.axis, yv) : ''}
-                  </td>
-                )}
-                {xValues.slice(0, cols).map((xv, xi) => {
-                  const idx = cellIndex.get(`${yi}_${xi}`)
-                  const sample = idx != null ? samples[idx] : null
-                  const filename = sample ? sample.path.split(/[\\/]/).pop() : null
-                  const isSel = idx != null && selSet.has(idx)
-                  return (
-                    <td key={xi} className="p-1 align-top">
-                      {sample && filename ? (
-                        <button
-                          onClick={() => idx != null && onCellClick?.(idx)}
-                          onDoubleClick={() => filename && window.open(api.generateSampleUrl(taskId, filename), '_blank')}
-                          className={`block p-0 cursor-pointer overflow-hidden rounded border-2 bg-transparent ${
-                            isSel ? 'border-accent' : 'border-transparent hover:border-dim'
-                          }`}
-                          style={{ width: thumb, height: thumb }}
-                          title={!yDraft
-                            ? `${AXIS_LABELS[xDraft.axis]}=${formatAxisValue(xDraft.axis, xv)}`
-                            : `${AXIS_LABELS[xDraft.axis]}=${formatAxisValue(xDraft.axis, xv)} · ${AXIS_LABELS[yDraft.axis]}=${formatAxisValue(yDraft.axis, yv ?? '')}`}
-                        >
-                          <img
-                            src={api.generateSampleUrl(taskId, filename)}
-                            className="w-full h-full object-cover"
-                            alt={filename}
-                            loading="lazy"
-                          />
-                        </button>
-                      ) : (
-                        <div
-                          className="grid place-items-center rounded border border-subtle bg-sunken text-fg-tertiary text-2xs"
-                          style={{ width: thumb, height: thumb }}
-                        >
-                          …
-                        </div>
-                      )}
-                      {!yDraft && (
-                        <div className="text-2xs text-fg-tertiary text-center font-mono mt-0.5 truncate" style={{ maxWidth: thumb }} title={xv}>
-                          {formatAxisValue(xDraft.axis, xv)}
-                        </div>
-                      )}
-                    </td>
-                  )
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      {/* grid 自带横向滚动（X 列太多撑爆容器时） */}
+      <div className="flex-1 min-h-0 overflow-auto">
+        <div style={{ display: 'grid', gridTemplateColumns: gridCols, gap: 2 }}>
+          {/* 表头：左上角空白（仅当有 yDraft）+ X 标签 */}
+          {yDraft && <div />}
+          {xValues.map((xv, xi) => (
+            <div
+              key={`h-${xi}`}
+              className="text-2xs text-fg-tertiary font-mono text-center truncate"
+              style={{ padding: '4px 2px' }}
+              title={xv}
+            >
+              {formatAxisValue(xDraft.axis, xv)}
+            </div>
+          ))}
+
+          {/* 数据行 */}
+          {yValues.map((yv, yi) => (
+            <Row
+              key={`y-${yi}`}
+              yi={yi} yv={yv}
+              xValues={xValues}
+              xDraft={xDraft}
+              yDraft={yDraft}
+              cellIndex={cellIndex}
+              samples={samples}
+              taskId={taskId}
+              selSet={selSet}
+              onCellClick={onCellClick}
+            />
+          ))}
+        </div>
       </div>
     </div>
+  )
+}
+
+function Row({
+  yi, yv, xValues, xDraft, yDraft, cellIndex, samples, taskId, selSet, onCellClick,
+}: {
+  yi: number
+  yv: string | null
+  xValues: string[]
+  xDraft: XYAxisDraft
+  yDraft: XYAxisDraft | null
+  cellIndex: Map<string, number>
+  samples: NonNullable<MonitorState['samples']>
+  taskId: number
+  selSet: Set<number>
+  onCellClick?: (sampleIdx: number) => void
+}) {
+  return (
+    <>
+      {yDraft && (
+        <div
+          className="text-2xs text-fg-tertiary font-mono text-right truncate self-center"
+          style={{ paddingRight: 4 }}
+          title={yv ?? ''}
+        >
+          {yv != null ? formatAxisValue(yDraft.axis, yv) : ''}
+        </div>
+      )}
+      {xValues.map((xv, xi) => {
+        const idx = cellIndex.get(`${yi}_${xi}`)
+        const sample = idx != null ? samples[idx] : null
+        const filename = sample ? sample.path.split(/[\\/]/).pop() : null
+        const isSel = idx != null && selSet.has(idx)
+        return (
+          <div key={`c-${yi}-${xi}`} style={{ aspectRatio: '1' }}>
+            {sample && filename ? (
+              <button
+                onClick={() => idx != null && onCellClick?.(idx)}
+                onDoubleClick={() => filename && window.open(api.generateSampleUrl(taskId, filename), '_blank')}
+                className={`block w-full h-full p-0 cursor-pointer overflow-hidden rounded-sm border-2 bg-transparent ${
+                  isSel ? 'border-accent' : 'border-transparent hover:border-dim'
+                }`}
+                title={!yDraft
+                  ? `${AXIS_LABELS[xDraft.axis]}=${formatAxisValue(xDraft.axis, xv)}`
+                  : `${AXIS_LABELS[xDraft.axis]}=${formatAxisValue(xDraft.axis, xv)} · ${AXIS_LABELS[yDraft.axis]}=${formatAxisValue(yDraft.axis, yv ?? '')}`}
+              >
+                <img
+                  src={api.generateSampleUrl(taskId, filename)}
+                  className="w-full h-full object-cover"
+                  alt={filename}
+                  loading="lazy"
+                />
+              </button>
+            ) : (
+              <div className="grid place-items-center w-full h-full rounded-sm border border-subtle bg-sunken text-fg-tertiary text-2xs">
+                …
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </>
   )
 }
