@@ -718,7 +718,12 @@ export interface MonitorState {
   start_time?: number     // unix seconds
   losses?: Array<{ step: number; loss: number }>
   lr_history?: Array<{ step: number; lr: number }>
-  samples?: Array<{ path: string; step?: number }>
+  samples?: Array<{
+    path: string
+    step?: number
+    /** XY 模式时携带 cell 元数据（generate task 才有；训练 task 为空）。 */
+    xy?: { xi: number; yi: number; xv: number | string; yv: number | string | null }
+  }>
   config?: Record<string, string | number | boolean>
   vram_used_gb?: number
   vram_total_gb?: number
