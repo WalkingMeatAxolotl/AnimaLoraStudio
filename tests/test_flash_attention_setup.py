@@ -82,24 +82,78 @@ def test_cuda_major(tag: str, expected: int) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_detect_env_no_nvidia_smi(monkeypatch: pytest.MonkeyPatch) -> None:
-    """nvidia-smi 不存在 → cuda_tag/cuda_ver=None，其余字段不影响。"""
+def _patch_torch(monkeypatch: pytest.MonkeyPatch, version: str | None) -> None:
+    """注入 / 移除 fake torch 模块。version=None 表示 torch 不可 import。"""
+    import sys
+    import types
+    if version is None:
+        monkeypatch.setitem(sys.modules, "torch", None)  # type: ignore[arg-type]
+        # `import torch` 在 sys.modules[torch]=None 时抛 ImportError，正是要的
+        return
+    fake = types.ModuleType("torch")
+    fake.__version__ = version  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "torch", fake)
+
+
+def test_detect_env_no_nvidia_smi_no_torch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """nvidia-smi + torch 都缺 → cuda_tag/cuda_ver/driver_cuda_ver 全 None。"""
     def boom(*_a, **_k):
         raise FileNotFoundError("no nvidia-smi")
     monkeypatch.setattr(fa.subprocess, "run", boom)
+    _patch_torch(monkeypatch, None)
     env = fa.detect_env()
     assert env["cuda_tag"] is None
     assert env["cuda_ver"] is None
-    # python_tag 永远有
+    assert env["driver_cuda_ver"] is None
+    assert env["torch_tag"] is None
     assert env["python_tag"].startswith("cp")
 
 
-def test_detect_env_parses_cuda_version(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake = MagicMock(returncode=0, stdout="CUDA Version: 12.8 \n", stderr="")
+def test_detect_env_prefers_torch_cu_tag_over_nvidia_smi(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """关键回归：torch 装的是 cu128，driver 报 13.0 → cuda_tag = cu128（torch 的 ABI），
+    driver_cuda_ver = "13.0" 单独存供 UI 显示。
+
+    此前把 nvidia-smi 当 cuda_tag 来源 → 选 cu130 wheel → ABI 不匹配 → import 失败。
+    """
+    fake = MagicMock(returncode=0, stdout="CUDA Version: 13.0 \n", stderr="")
     monkeypatch.setattr(fa.subprocess, "run", lambda *a, **k: fake)
+    _patch_torch(monkeypatch, "2.11.0+cu128")
     env = fa.detect_env()
     assert env["cuda_tag"] == "cu128"
     assert env["cuda_ver"] == "12.8"
+    assert env["driver_cuda_ver"] == "13.0"
+    assert env["torch_tag"] == "torch2.11"
+    assert env["torch_ver"] == "2.11.0+cu128"
+
+
+def test_detect_env_falls_back_to_nvidia_smi_when_torch_has_no_cu_suffix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CPU-only torch（无 +cu 后缀）→ fallback nvidia-smi 给 cuda_tag。"""
+    fake = MagicMock(returncode=0, stdout="CUDA Version: 12.8 \n", stderr="")
+    monkeypatch.setattr(fa.subprocess, "run", lambda *a, **k: fake)
+    _patch_torch(monkeypatch, "2.11.0")  # 没 +cu
+    env = fa.detect_env()
+    assert env["cuda_tag"] == "cu128"
+    assert env["cuda_ver"] == "12.8"
+    assert env["driver_cuda_ver"] == "12.8"
+    assert env["torch_tag"] == "torch2.11"
+
+
+def test_detect_env_no_torch_falls_back_to_nvidia_smi(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """torch 没装时（venv 还没初始化）→ 用 nvidia-smi 拿 cuda_tag，让用户至少能选个候选。"""
+    fake = MagicMock(returncode=0, stdout="CUDA Version: 12.8 \n", stderr="")
+    monkeypatch.setattr(fa.subprocess, "run", lambda *a, **k: fake)
+    _patch_torch(monkeypatch, None)
+    env = fa.detect_env()
+    assert env["cuda_tag"] == "cu128"
+    assert env["cuda_ver"] == "12.8"
+    assert env["driver_cuda_ver"] == "12.8"
+    assert env["torch_tag"] is None
 
 
 # ---------------------------------------------------------------------------

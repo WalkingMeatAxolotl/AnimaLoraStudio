@@ -144,8 +144,11 @@ export interface TorchReinstallResult {
 /** PR-7b — Flash Attention 安装状态 + 环境检测 + GitHub 候选 wheel。 */
 export interface FlashAttnEnv {
   python_tag: string                 // cp311
-  cuda_tag: string | null            // cu128 / null = 没 nvidia-smi
-  cuda_ver: string | null            // 12.8
+  cuda_tag: string | null            // cu128 / null = 没 nvidia-smi 也没 torch
+  cuda_ver: string | null            // 12.8（PyTorch 编译时绑定，flash_attn ABI 跟它走）
+  /** nvidia-smi 报告的驱动支持的最高 CUDA；与 cuda_ver 可能不同。
+   * 排错时给用户看："驱动支持 cu130，PyTorch 是 cu128，应装 cu128 wheel"。 */
+  driver_cuda_ver: string | null
   torch_tag: string | null           // torch2.5
   torch_ver: string | null
   platform: 'linux_x86_64' | 'win_amd64' | null

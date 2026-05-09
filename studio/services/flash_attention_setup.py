@@ -54,8 +54,37 @@ def detect_env() -> dict[str, Any]:
     else:
         plat = None
 
+    # cuda_tag 必须匹配 **PyTorch 编译时**使用的 CUDA runtime —— flash_attn ABI 跟着
+    # torch 走，不是跟着 driver。优先从 `torch.__version__` 的 `+cuXXX` 后缀拿。
+    #
+    # 历史 bug（PR-7）：原实现从 nvidia-smi 拿 cuda_tag。但 `nvidia-smi` 输出的
+    # "CUDA Version: X.Y" 是**驱动支持的最高 CUDA 版本**，与 PyTorch 编译时锁定的 CUDA
+    # 不是一回事。例：5090 driver 报 13.0，venv 装 torch 2.11.0+cu128 → flash_attn 必须
+    # 装 cu128 wheel；原实现却把 cuda_tag 设成 cu130 → 选了 cu130 wheel → ABI 不匹配
+    # → flash_attn import 失败。
     cuda_tag: Optional[str] = None
     cuda_ver: Optional[str] = None
+    torch_tag: Optional[str] = None
+    torch_ver: Optional[str] = None
+    try:
+        import torch  # type: ignore[import-not-found]  # noqa: PLC0415
+        torch_ver = torch.__version__
+        v = torch_ver.split("+")[0].split(".")
+        torch_tag = f"torch{v[0]}.{v[1]}"
+        m = re.search(r"\+cu(\d+)", torch_ver)
+        if m:
+            num = m.group(1)
+            cuda_tag = f"cu{num}"
+            # cu128 → 12.8、cu130 → 13.0（最后一位 minor，其余 major）
+            if len(num) >= 2:
+                cuda_ver = f"{num[:-1]}.{num[-1]}"
+    except ImportError:
+        pass
+
+    # nvidia-smi 仍跑一下：torch 没 +cu 后缀（CPU-only build）→ fallback 给 cuda_tag；
+    # driver 版本始终单独存到 `driver_cuda_ver` 供 UI 显示与排错（让用户看到「驱动支持
+    # cu130，PyTorch 是 cu128」这种场景，立刻明白为什么 wheel 应该选 cu128）。
+    driver_cuda_ver: Optional[str] = None
     try:
         r = subprocess.run(
             ["nvidia-smi"], capture_output=True, text=True, timeout=10
@@ -63,25 +92,18 @@ def detect_env() -> dict[str, Any]:
         if r.returncode == 0:
             m = re.search(r"CUDA Version:\s*(\d+)\.(\d+)", r.stdout)
             if m:
-                cuda_ver = f"{m.group(1)}.{m.group(2)}"
-                cuda_tag = f"cu{m.group(1)}{m.group(2)}"
+                driver_cuda_ver = f"{m.group(1)}.{m.group(2)}"
+                if cuda_tag is None:
+                    cuda_tag = f"cu{m.group(1)}{m.group(2)}"
+                    cuda_ver = driver_cuda_ver
     except (subprocess.SubprocessError, OSError):
-        pass
-
-    torch_tag: Optional[str] = None
-    torch_ver: Optional[str] = None
-    try:
-        import torch  # type: ignore[import-not-found]  # noqa: PLC0415
-        v = torch.__version__.split("+")[0].split(".")
-        torch_tag = f"torch{v[0]}.{v[1]}"
-        torch_ver = torch.__version__
-    except ImportError:
         pass
 
     return {
         "python_tag": python_tag,
         "cuda_tag": cuda_tag,
         "cuda_ver": cuda_ver,
+        "driver_cuda_ver": driver_cuda_ver,
         "torch_tag": torch_tag,
         "torch_ver": torch_ver,
         "platform": plat,
