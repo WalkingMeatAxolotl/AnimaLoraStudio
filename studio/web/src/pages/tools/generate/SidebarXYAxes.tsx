@@ -334,7 +334,11 @@ export default function SidebarXYAxes({
           />
         ) : (
           <button
-            onClick={() => onYChange({ axis: 'cfg_scale', raw: '3.0, 4.0, 5.0', loraIndex: null })}
+            onClick={() => onYChange({
+              axis: 'lora_scale',
+              raw: '1',  // 默认就一个值，用户自己 + 添加；不再带 3,4,5 误导
+              loraIndex: loras.length > 0 ? 0 : null,
+            })}
             className="btn btn-ghost btn-sm self-start text-xs text-fg-tertiary"
           >
             + 添加 Y 轴

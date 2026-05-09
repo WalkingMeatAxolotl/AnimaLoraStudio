@@ -101,23 +101,13 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(body.count).toBe(1)
   })
 
-  it('mode=xy + 多 prompt → toast 报错，不调 /api/generate', async () => {
-    const user = userEvent.setup()
+  it('多 prompt 轮换功能已隐藏：只有一个 textarea，"添加 prompt"按钮不存在', () => {
     setup()
-
-    // 先加一个 prompt 并填内容（空 prompt 会被 filter 掉，不触发互斥校验）
-    await user.click(screen.getByRole('button', { name: /添加 prompt/ }))
+    // 单 textarea
     const promptInputs = screen.getAllByPlaceholderText('输入正向提示词…')
-    expect(promptInputs.length).toBe(2)
-    await user.type(promptInputs[1], 'second prompt')
-
-    await user.click(screen.getByRole('button', { name: 'XY 矩阵' }))
-    await user.click(screen.getByRole('button', { name: /开始生成 · 3 张/ }))
-
-    await waitFor(() =>
-      expect(screen.getByText(/XY 模式只支持单条 prompt/)).toBeInTheDocument()
-    )
-    expect(lastEnqueueBody).toBeNull()
+    expect(promptInputs.length).toBe(1)
+    // 「+ 添加 prompt」按钮不再渲染
+    expect(screen.queryByRole('button', { name: /添加 prompt/ })).toBeNull()
   })
 
   it('切到 xy 再切回 single：sidebar 已填的 prompts/seed 等保留', async () => {
