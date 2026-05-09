@@ -354,7 +354,11 @@ def _setup_monitor(cfg: dict[str, Any]) -> Any:
     if not msf:
         return None
     try:
-        from train_monitor import set_state_file, update_monitor
+        from train_monitor import reset_monitor, set_state_file, update_monitor
+        # 关键：daemon 复用进程跨 task 时 MONITOR_STATE 残留，必须清。
+        # 否则上一 task 的 samples 会混入新 task 的 monitor_state.json，
+        # 前端用 currentTask.id 拼 URL 拿旧 filename → 404 破图。
+        reset_monitor()
         set_state_file(msf)
         update_monitor(config={
             "type": "generate",

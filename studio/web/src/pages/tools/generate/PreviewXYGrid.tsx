@@ -172,36 +172,70 @@ function Row({
       {xValues.map((xv, xi) => {
         const idx = cellIndex.get(`${yi}_${xi}`)
         const sample = idx != null ? samples[idx] : null
-        const filename = sample ? sample.path.split(/[\\/]/).pop() : null
+        const filename = sample ? sample.path.split(/[\\/]/).pop() ?? null : null
         const isSel = idx != null && selSet.has(idx)
+        const tooltip = (!yDraft
+          ? `${AXIS_LABELS[xDraft.axis]}=${formatAxisValue(xDraft.axis, xv)}`
+          : `${AXIS_LABELS[xDraft.axis]}=${formatAxisValue(xDraft.axis, xv)} · ${AXIS_LABELS[yDraft.axis]}=${formatAxisValue(yDraft.axis, yv ?? '')}`) + ' · 双击全屏'
         return (
-          <div key={`c-${yi}-${xi}`} style={{ aspectRatio: '1' }}>
-            {sample && filename ? (
-              <button
-                onClick={() => idx != null && onCellClick?.(idx)}
-                onDoubleClick={() => idx != null && onCellDoubleClick?.(idx)}
-                className={`block w-full h-full p-0 cursor-pointer overflow-hidden rounded-sm border-2 bg-transparent ${
-                  isSel ? 'border-accent' : 'border-transparent hover:border-dim'
-                }`}
-                title={(!yDraft
-                  ? `${AXIS_LABELS[xDraft.axis]}=${formatAxisValue(xDraft.axis, xv)}`
-                  : `${AXIS_LABELS[xDraft.axis]}=${formatAxisValue(xDraft.axis, xv)} · ${AXIS_LABELS[yDraft.axis]}=${formatAxisValue(yDraft.axis, yv ?? '')}`) + ' · 双击全屏'}
-              >
-                <img
-                  src={api.generateSampleUrl(taskId, filename)}
-                  className="w-full h-full object-cover"
-                  alt={filename}
-                  loading="lazy"
-                />
-              </button>
-            ) : (
-              <div className="grid place-items-center w-full h-full rounded-sm border border-subtle bg-sunken text-fg-tertiary text-2xs">
-                …
-              </div>
-            )}
-          </div>
+          <GridCell
+            key={`c-${yi}-${xi}`}
+            taskId={taskId}
+            filename={filename}
+            sampleIdx={idx ?? null}
+            isSelected={isSel}
+            tooltip={tooltip}
+            onClick={onCellClick}
+            onDoubleClick={onCellDoubleClick}
+          />
         )
       })}
     </>
+  )
+}
+
+function GridCell({
+  taskId, filename, sampleIdx, isSelected, tooltip, onClick, onDoubleClick,
+}: {
+  taskId: number
+  filename: string | null
+  sampleIdx: number | null
+  isSelected: boolean
+  tooltip: string
+  onClick?: (idx: number) => void
+  onDoubleClick?: (idx: number) => void
+}) {
+  const [errored, setErrored] = useState(false)
+  // 占位（无 sample / cache miss）：minHeight 撑高让 grid 行不塌缩
+  if (!filename || errored) {
+    return (
+      <div
+        className="grid place-items-center rounded-sm border border-subtle bg-sunken text-fg-tertiary text-2xs"
+        style={{ minHeight: 80 }}
+      >
+        …
+      </div>
+    )
+  }
+  return (
+    <button
+      onClick={() => sampleIdx != null && onClick?.(sampleIdx)}
+      onDoubleClick={() => sampleIdx != null && onDoubleClick?.(sampleIdx)}
+      className={`block p-0 cursor-pointer overflow-hidden rounded-sm border-2 bg-sunken ${
+        isSelected ? 'border-accent' : 'border-transparent hover:border-dim'
+      }`}
+      title={tooltip}
+      style={{ minHeight: 80 }}
+    >
+      {/* h-auto: 按图实际宽高，避免 1:1 强制（用户场景图常竖版 832×1216） */}
+      <img
+        src={api.generateSampleUrl(taskId, filename)}
+        className="block w-full h-auto"
+        alt={filename}
+        loading="lazy"
+        onError={() => setErrored(true)}
+        onLoad={() => setErrored(false)}
+      />
+    </button>
   )
 }

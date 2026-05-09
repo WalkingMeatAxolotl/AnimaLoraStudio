@@ -56,6 +56,20 @@ def set_state_file(path: Optional[Path | str]) -> None:
     _state_file = p
 
 
+def reset_monitor() -> None:
+    """清空 in-memory MONITOR_STATE。daemon 跨 task 复用进程时必调，
+    否则上一 task 的 samples/step/loss 会残留到下一 task。"""
+    MONITOR_STATE.update({
+        "losses": [], "lr_history": [],
+        "samples": [],
+        "epoch": 0, "total_epochs": 0,
+        "step": 0, "total_steps": 0,
+        "speed": 0.0,
+        "start_time": None,
+        "config": {},
+    })
+
+
 def save_state() -> None:
     """把当前 MONITOR_STATE 写到 _state_file（如果配置了）。失败静默吞。"""
     if _state_file is None:
