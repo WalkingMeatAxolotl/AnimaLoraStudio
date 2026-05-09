@@ -1,13 +1,82 @@
-import type { LoraEntry, XYAxisType } from '../../../api/client'
+import { useEffect, useState } from 'react'
+import { api, type LoraCkpt, type LoraEntry, type XYAxisType } from '../../../api/client'
 import { AXIS_LABELS, AXIS_VALUE_TYPE, REQUIRES_LORA_INDEX, type XYAxisDraft } from './xy'
 
 const ALL_AXES: XYAxisType[] = ['steps', 'cfg_scale', 'lora_scale', 'lora_ckpt']
 
 function placeholderFor(axis: XYAxisType): string {
   const t = AXIS_VALUE_TYPE[axis]
-  if (axis === 'lora_ckpt') return '从下方 LoRA ckpt 列表多选'
   if (t === 'int') return '20, 25, 30'
   return '0.6, 0.8, 1.0'
+}
+
+/** 把 raw 字符串解析成 path 数组。"/a.safetensors, /b.safetensors" → ["/a.safetensors", "/b.safetensors"] */
+function parsePathList(raw: string): string[] {
+  return raw.split(',').map((s) => s.trim()).filter(Boolean)
+}
+
+function CkptMultiPicker({
+  versionId, projectId, raw, onChange,
+}: {
+  versionId: number
+  projectId: number
+  raw: string
+  onChange: (raw: string) => void
+}) {
+  const [ckpts, setCkpts] = useState<LoraCkpt[]>([])
+  const [loaded, setLoaded] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    setLoaded(false)
+    void api.listVersionLoraCkpts(projectId, versionId)
+      .then((items) => {
+        if (cancelled) return
+        setCkpts(items); setLoaded(true)
+      })
+      .catch(() => { if (!cancelled) { setCkpts([]); setLoaded(true) } })
+    return () => { cancelled = true }
+  }, [projectId, versionId])
+
+  const selected = new Set(parsePathList(raw))
+  const toggle = (p: string) => {
+    const next = new Set(selected)
+    if (next.has(p)) next.delete(p); else next.add(p)
+    onChange(Array.from(next).join(', '))
+  }
+
+  if (!loaded) {
+    return <div className="text-2xs text-fg-tertiary">加载 ckpt…</div>
+  }
+  if (ckpts.length === 0) {
+    return <div className="text-2xs text-fg-tertiary">该 LoRA 没扫到 ckpt 文件（output/ 下需有 *.safetensors）</div>
+  }
+  return (
+    <div className="flex flex-wrap gap-1">
+      {ckpts.map((c) => {
+        const on = selected.has(c.path)
+        return (
+          <button
+            key={c.path}
+            type="button"
+            onClick={() => toggle(c.path)}
+            className="font-mono"
+            style={{
+              fontSize: 11,
+              padding: '3px 9px',
+              borderRadius: 999,
+              border: on ? '1px solid transparent' : '1px solid var(--border-subtle)',
+              background: on ? 'var(--accent-soft)' : 'var(--bg-sunken)',
+              color: on ? 'var(--accent)' : 'var(--fg-secondary)',
+              cursor: 'pointer',
+            }}
+            title={c.path}
+          >
+            {on ? '✓ ' : '+ '}{c.label}
+          </button>
+        )
+      })}
+    </div>
+  )
 }
 
 function AxisCard({
@@ -20,6 +89,11 @@ function AxisCard({
   loras: LoraEntry[]
 }) {
   const needsLora = REQUIRES_LORA_INDEX.has(draft.axis)
+  const isCkpt = draft.axis === 'lora_ckpt'
+  const boundLora =
+    draft.loraIndex !== null && draft.loraIndex < loras.length
+      ? loras[draft.loraIndex]
+      : null
   return (
     <div className="bg-sunken border border-subtle rounded-md px-2.5 py-2 flex flex-col gap-2">
       <div className="flex items-center gap-2">
@@ -32,6 +106,7 @@ function AxisCard({
             onChange({
               ...draft,
               axis: newAxis,
+              raw: newAxis === 'lora_ckpt' ? '' : draft.raw,
               loraIndex: REQUIRES_LORA_INDEX.has(newAxis)
                 ? (loras.length > 0 ? 0 : null)
                 : null,
@@ -53,13 +128,31 @@ function AxisCard({
           </button>
         )}
       </div>
-      <input
-        type="text"
-        className="input font-mono text-xs"
-        placeholder={placeholderFor(draft.axis)}
-        value={draft.raw}
-        onChange={(e) => onChange({ ...draft, raw: e.target.value })}
-      />
+
+      {/* lora_ckpt 用 checkbox 多选；其他轴用 text input */}
+      {isCkpt ? (
+        boundLora && boundLora.version_id && boundLora.project_id ? (
+          <CkptMultiPicker
+            projectId={boundLora.project_id}
+            versionId={boundLora.version_id}
+            raw={draft.raw}
+            onChange={(raw) => onChange({ ...draft, raw })}
+          />
+        ) : (
+          <div className="text-2xs text-fg-tertiary">
+            选一个绑定到项目的 LoRA（外部文件不行）
+          </div>
+        )
+      ) : (
+        <input
+          type="text"
+          className="input font-mono text-xs"
+          placeholder={placeholderFor(draft.axis)}
+          value={draft.raw}
+          onChange={(e) => onChange({ ...draft, raw: e.target.value })}
+        />
+      )}
+
       {needsLora && (
         <select
           className="input text-xs"
