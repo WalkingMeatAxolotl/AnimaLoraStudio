@@ -179,32 +179,43 @@ export default function GeneratePage() {
     <div className="fade-in">
       <PageHeader eyebrow="工具" title="测试" subtitle="独立推理 · 单图 / XY 矩阵 / 双图对比（出图不保存，关页面即丢）" />
 
-      <div className="p-6 flex flex-col gap-4">
+      <div className="p-6 flex gap-4 items-start flex-wrap xl:flex-nowrap">
 
-        {/* ── 提示词（全宽） ── */}
-        <div className="card" style={{ padding: 18 }}>
-          <div className="text-md font-semibold mb-3">正向提示词</div>
-          <PromptList prompts={prompts} onChange={setPrompts} />
-          <div className="mt-4">
-            <label className="caption block mb-1.5">负面提示词</label>
-            <textarea
-              className="input w-full font-mono text-sm resize-y"
-              rows={3}
-              value={negPrompt}
-              onChange={(e) => setNegPrompt(e.target.value)}
-            />
-          </div>
-        </div>
-
-        {/* ── 主体：参数 + 结果 ── */}
-        <div className="flex gap-4 items-start flex-wrap xl:flex-nowrap">
-
-          {/* 左：参数 */}
+          {/* 左：sidebar — 顺序按 design image 1：提示词 → LoRA → (XY) → 参数 → 加速 → 按钮 */}
           <div className="flex flex-col gap-4 w-full xl:w-[340px] shrink-0">
 
-            <div className="card" style={{ padding: 18 }}>
-              <div className="text-md font-semibold mb-3">生成参数</div>
-              <div className="flex flex-col gap-3">
+            <div className="card" style={{ padding: 16 }}>
+              <div className="text-sm font-semibold mb-2">正向提示词</div>
+              <PromptList prompts={prompts} onChange={setPrompts} />
+              <div className="mt-3">
+                <label className="caption block mb-1">负面提示词</label>
+                <textarea
+                  className="input w-full font-mono text-xs resize-y"
+                  rows={2}
+                  value={negPrompt}
+                  onChange={(e) => setNegPrompt(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="card" style={{ padding: 16 }}>
+              <div className="text-sm font-semibold mb-2">LoRA</div>
+              <SidebarLoras loras={loras} onChange={setLoras} projectLoras={projectLoras} />
+            </div>
+
+            {mode === 'xy' && (
+              <SidebarXYAxes
+                xDraft={xDraft}
+                yDraft={yDraft}
+                onXChange={setXDraft}
+                onYChange={setYDraft}
+                loras={loras}
+              />
+            )}
+
+            <div className="card" style={{ padding: 16 }}>
+              <div className="text-sm font-semibold mb-2">参数</div>
+              <div className="flex flex-col gap-2.5">
                 <div className="flex gap-2">
                   <NumField label="宽度" value={width} onChange={setWidth} min={256} max={4096} step={64} />
                   <NumField label="高度" value={height} onChange={setHeight} min={256} max={4096} step={64} />
@@ -221,21 +232,6 @@ export default function GeneratePage() {
                 </div>
               </div>
             </div>
-
-            <div className="card" style={{ padding: 18 }}>
-              <div className="text-md font-semibold mb-3">LoRA</div>
-              <SidebarLoras loras={loras} onChange={setLoras} projectLoras={projectLoras} />
-            </div>
-
-            {mode === 'xy' && (
-              <SidebarXYAxes
-                xDraft={xDraft}
-                yDraft={yDraft}
-                onXChange={setXDraft}
-                onYChange={setYDraft}
-                loras={loras}
-              />
-            )}
 
             <div className="flex flex-col gap-1">
               <label className="caption">加速</label>
@@ -311,7 +307,6 @@ export default function GeneratePage() {
               )}
             </div>
           </div>
-        </div>
       </div>
     </div>
   )
