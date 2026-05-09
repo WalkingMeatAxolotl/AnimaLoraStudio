@@ -177,7 +177,7 @@ export default function GeneratePage() {
 
   return (
     <div className="fade-in">
-      <PageHeader eyebrow="工具" title="测试" subtitle="独立运行推理，复用训练采样逻辑（出图不保存，关页面即丢）" />
+      <PageHeader eyebrow="工具" title="测试" subtitle="独立推理 · 单图 / XY 矩阵 / 双图对比（出图不保存，关页面即丢）" />
 
       <div className="p-6 flex flex-col gap-4">
 
