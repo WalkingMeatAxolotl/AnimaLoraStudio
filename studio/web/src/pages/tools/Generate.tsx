@@ -83,7 +83,9 @@ export default function GeneratePage() {
     (mode === 'xy' && selectedIndices.length === 2) || mode === 'compare'
 
   const projectLoras = useProjectLoras()
-  const samples = monitorState?.samples ?? []
+  // 用 useMemo 稳定引用：monitorState 不变时 samples 引用不变，避免下方
+  // useEffect 把 samples 当依赖触发不必要的重跑
+  const samples = useMemo(() => monitorState?.samples ?? [], [monitorState])
 
   // XY mode 时，按钮显示「生成 N×M=K 张」
   const xyCellCount = useMemo(() => {
