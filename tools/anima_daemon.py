@@ -227,22 +227,36 @@ class ModelCache:
         self.last_lora_specs = []
 
     def apply_loras(self, lora_configs: list[dict[str, Any]]) -> list[Any]:
-        """按 lora_configs (重新) inject adapters；commit 9 简化版每次都重 inject。"""
-        # 先把旧 adapters 引用丢掉（让 GC 清掉 hook 来源）
-        # NOTE：lycoris adapter 没暴露 detach 接口；下次 inject 会在 model 上叠
-        # 新 hook，旧 hook 通过 multiplier=0 间接禁用 —— 但这会无限累积。
-        # 为简化 commit 9：每次 ensure_loaded 后调 apply_loras，且对 model 做
-        # 完全 reload（needs_reload=True 时 unload）。non-reload 路径下 adapters
-        # 累积是已知问题，commit 后续 fix（暴露 adapter.detach()）。
+        """按 lora_configs (重新) inject adapters。
+
+        commit 20：先 detach 旧 adapters（撤销 lycoris hook + 还原 model.train
+        劫持），再 inject 新的。失败 fallback 到模型整体 reload（粗暴但安全 ——
+        旧版 lycoris 没 restore 接口时走这条）。具体路径：
+          - specs 不变且已 inject → 直接复用
+          - specs 变了 → adapter.detach() 全部成功 → inject 新的（快路径，<2s）
+          - detach 失败（hook 残留）→ unload+_load 重 load 整个 transformer（30-60s）
+        """
         specs = [
             LoRASpec(path=str(lc.get("path", "")), scale=float(lc.get("scale", 1.0)))
             for lc in lora_configs
         ]
         if specs == self.last_lora_specs and self.adapters:
             return self.adapters
-        # specs 变了 → 用 model reload 兜底（粗暴但 commit 9 可接受）
-        if self.last_lora_specs and self.last_lora_specs != specs:
-            logger.info("lora specs changed, reloading model to detach old adapters")
+
+        # 撤销旧 adapters（commit 20 快路径）
+        all_detached = True
+        for adapter in self.adapters:
+            try:
+                if not adapter.detach():
+                    all_detached = False
+            except Exception:
+                logger.exception("adapter detach failed")
+                all_detached = False
+        self.adapters = []
+
+        # detach 不彻底 → fallback 到 model reload（保证 inference 干净）
+        if not all_detached and self.last_lora_specs:
+            logger.warning("detach failed, reloading model to ensure clean state")
             saved_paths = (
                 self.transformer_path, self.vae_path,
                 self.text_encoder_path, self.t5_tokenizer_path,
@@ -258,6 +272,9 @@ class ModelCache:
                 precision=saved_paths[5],
             )
             _emit_evt("loaded")
+        self.last_lora_specs = []
+
+        # inject 新的
         self.adapters = apply_loras(self.model, specs, self.device, self.dtype)
         self.last_lora_specs = specs
         self.model.eval()
