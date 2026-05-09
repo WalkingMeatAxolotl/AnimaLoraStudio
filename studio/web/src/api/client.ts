@@ -238,6 +238,13 @@ export interface QueueConfig {
   allow_gpu_during_train: boolean
 }
 
+/** Phase 2 commit 14 — 测试出图 daemon 行为。 */
+export interface GenerateSecretsConfig {
+  /** TAEFlux 中间步预览节流。0=关；>0 → daemon 每 N 步推 256px JPEG。
+   * 模型缺失时 daemon 静默回退（无预览不影响出图）。 */
+  preview_every_n_steps: number
+}
+
 export interface Secrets {
   gelbooru: GelbooruConfig
   danbooru: DanbooruConfig
@@ -248,6 +255,7 @@ export interface Secrets {
   cltagger: CLTaggerConfig
   models: ModelsConfig
   queue: QueueConfig
+  generate: GenerateSecretsConfig
 }
 
 /** PUT /api/secrets 的 body：嵌套的 partial dict；MASK ("***") 表示「保持不变」。 */
@@ -662,6 +670,13 @@ export interface GenerateRequest {
   attention_backend?: AttentionBackend
   /** 设值时 prompts 限单条 + count=1（schema 校验） */
   xy_matrix?: XYMatrixSpec | null
+}
+
+/** Phase 2 commit 14 — TAEFlux 模型状态（GET /api/generate/taeflux/status）。 */
+export interface TaeFluxStatus {
+  available: boolean
+  dir: string
+  files: string[]
 }
 
 /** Phase 2 — Inference daemon 当前状态（GET /api/generate/daemon/status）。 */
@@ -1198,6 +1213,12 @@ export const api = {
   /** Phase 2 — 手动卸载 daemon 模型（busy 时 409）。 */
   unloadDaemon: () => req<{ ok: boolean; noop?: boolean }>(
     '/api/generate/daemon/unload', { method: 'POST' }
+  ),
+  /** Phase 2 commit 14 — TAEFlux 状态。 */
+  getTaeFluxStatus: () => req<TaeFluxStatus>('/api/generate/taeflux/status'),
+  /** Phase 2 commit 14 — 同步下载 TAEFlux（~1.6MB，秒级）。已存在 noop。 */
+  installTaeFlux: () => req<{ ok: boolean; noop?: boolean }>(
+    '/api/generate/taeflux/install', { method: 'POST' }
   ),
 
   // Train config (PP6.2) -------------------------------------------------

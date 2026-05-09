@@ -9,6 +9,7 @@ import {
   type ModelsCatalog,
   type Secrets,
   type SecretsPatch,
+  type TaeFluxStatus,
   type TorchCuTag,
   type TorchStatus,
   type WD14Runtime,
@@ -30,6 +31,7 @@ type Section =
   | 'cltagger'
   | 'models'
   | 'queue'
+  | 'generate'
 
 type Tab = 'dataset' | 'tagging' | 'training' | 'appearance'
 
@@ -96,6 +98,7 @@ const EMPTY: Secrets = {
   },
   models: { root: null, selected_anima: 'preview3-base' },
   queue: { allow_gpu_during_train: false },
+  generate: { preview_every_n_steps: 0 },
 }
 
 const textInputClass = 'w-full px-2 py-1 outline-none rounded-sm bg-sunken border border-subtle text-sm text-fg-primary focus:border-accent'
@@ -525,6 +528,8 @@ export default function SettingsPage() {
       <FlashAttentionSection />
 
       <XformersSection />
+
+      <TaeFluxSection draft={draft} update={update} />
 
       <ModelsSection
         catalog={catalog}
@@ -1703,6 +1708,122 @@ function XformersSection() {
     </details>
   )
 }
+
+// ── TAEFlux Section（训练 tab）─────────────────────────────────────────────
+//
+// Phase 2 commit 18：测试出图 daemon 中间步预览。TAEFlux 是 1.6MB tiny
+// autoencoder，不需要的话直接关；开启时 daemon 在采样每 N 步通过它把
+// latent 解码成 256px JPEG 推回前端，类似 ComfyUI / NovelAI 的逐步可见。
+
+function TaeFluxSection({
+  draft, update,
+}: {
+  draft: Secrets
+  update: <S extends keyof Secrets, K extends keyof Secrets[S]>(
+    section: S, key: K, value: Secrets[S][K],
+  ) => void
+}) {
+  const [status, setStatus] = useState<TaeFluxStatus | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const { toast } = useToast()
+
+  const refresh = useCallback(async () => {
+    try {
+      setStatus(await api.getTaeFluxStatus())
+      setError(null)
+    } catch (e) {
+      setError(String(e))
+    }
+  }, [])
+
+  useEffect(() => { void refresh() }, [refresh])
+
+  const install = async () => {
+    setBusy(true)
+    try {
+      const r = await api.installTaeFlux()
+      toast(r.noop ? 'TAEFlux 已就绪' : 'TAEFlux 下载完成', 'success')
+      await refresh()
+    } catch (e) {
+      toast(`下载失败: ${e}`, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const n = draft.generate.preview_every_n_steps
+  const enabled = n > 0
+
+  return (
+    <details className="rounded-md border border-subtle bg-surface group">
+      <summary className="cursor-pointer p-4 list-none flex items-center gap-2">
+        <span className="text-fg-tertiary text-xs transition-transform group-open:rotate-90 inline-block w-3">▸</span>
+        <h2 className="text-sm font-semibold text-fg-primary m-0">中间步预览（TAEFlux）</h2>
+        <span className="text-xs text-fg-tertiary">测试出图采样过程可见</span>
+        <span className={`ml-auto text-xs font-mono ${enabled && status?.available ? 'text-ok' : 'text-fg-tertiary'}`}>
+          {enabled ? `每 ${n} 步` : '关'}
+          {status && (status.available ? '' : '（未下载）')}
+        </span>
+      </summary>
+
+      <div className="px-4 pb-4 flex flex-col gap-3">
+        {error && <div className="text-err text-xs font-mono">{error}</div>}
+
+        <div className="rounded-sm border border-subtle bg-sunken p-2 flex items-center gap-2 text-xs">
+          <span className="text-fg-tertiary shrink-0">TAEFlux:</span>
+          <code className="font-mono text-fg-primary">
+            {status?.available ? '已下载' : '未下载'}
+          </code>
+          {status?.available && <StatusLabel bg="bg-ok-soft" fg="text-ok" text="就绪" />}
+        </div>
+
+        <p className="text-2xs text-fg-tertiary m-0 leading-relaxed">
+          TAEFlux 是 1.6MB 的 tiny autoencoder，daemon 用它把每步 latent 解码成 256px
+          JPEG 推回前端（类似 ComfyUI 的逐步可见）。<strong>需要先下载</strong>，开启后
+          单图模式生成时实时显示中间步；XY 矩阵不开预览。
+        </p>
+
+        <div className="flex gap-2">
+          <button
+            onClick={() => void install()}
+            disabled={busy || status?.available}
+            className="btn btn-primary btn-sm"
+          >
+            {busy ? '下载中…' : status?.available ? '已下载' : '下载 TAEFlux'}
+          </button>
+          <button
+            onClick={() => void refresh()}
+            disabled={busy}
+            className="btn btn-ghost btn-sm"
+            title="刷新状态"
+          >↻</button>
+        </div>
+
+        <SettingsField label="节流（每 N 步推一次预览）" desc="0 = 关闭中间步预览；推荐 3-5">
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={0}
+              max={50}
+              value={n}
+              onChange={(e) => update('generate', 'preview_every_n_steps', Number(e.target.value) || 0)}
+              className="input"
+              style={{ width: 80 }}
+              disabled={!status?.available && n === 0}
+            />
+            <span className="text-2xs text-fg-tertiary">
+              {!status?.available && n > 0
+                ? '需要先下载 TAEFlux'
+                : enabled ? `每 ${n} 步推一张 256px JPEG（~10KB/步）` : '不推预览（0）'}
+            </span>
+          </div>
+        </SettingsField>
+      </div>
+    </details>
+  )
+}
+
 
 // ── Display Section ────────────────────────────────────────────────────────
 
