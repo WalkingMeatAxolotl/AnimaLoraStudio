@@ -10,10 +10,14 @@
       stdin  → {"id": "<req_id>", "action": "generate"|"unload"|"ping", ...}
       stdout → {"id": "<req_id>"|"_evt", "kind": "started"|"image_done"|
                  "done"|"error"|"loaded"|"unloaded", ...}
+  - image_done 事件 payload 含 base64 PNG bytes（commit 10 起）；reader
+    把它解码进 generate_cache，再把"瘦身版"事件（去 b64）转发给 supervisor
+    callback，避免大 payload 进日志/SSE 链路
   - reader thread 把 stdout 事件分发回 callback；调用方（supervisor）注册 callback
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -26,6 +30,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ..paths import REPO_ROOT
+from . import generate_cache
 
 logger = logging.getLogger(__name__)
 
@@ -327,8 +332,20 @@ class InferenceDaemon:
         if active is None or active.request_id != msg_id:
             logger.warning("event for unknown request: %s", msg_id)
             return
+
+        # commit 10：image_done 含 base64 PNG → 入 cache，转发瘦身版
+        forward_msg = msg
+        if kind == "image_done" and "image_b64" in msg:
+            filename = msg.get("filename") or ""
+            try:
+                data = base64.b64decode(msg["image_b64"])
+                generate_cache.cache_image(active.task_id, filename, data)
+            except Exception:
+                logger.exception("cache_image failed for %s", filename)
+            forward_msg = {k: v for k, v in msg.items() if k != "image_b64"}
+
         try:
-            active.on_event({**msg, "task_id": active.task_id})
+            active.on_event({**forward_msg, "task_id": active.task_id})
         except Exception:
             logger.exception("task on_event handler failed")
 

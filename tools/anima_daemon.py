@@ -21,6 +21,8 @@ stdout 仅协议；日志全走 stderr（避免污染协议流）。
 """
 from __future__ import annotations
 
+import base64
+import io
 import json
 import logging
 import random
@@ -300,9 +302,10 @@ def _apply_axis(
 def _setup_monitor(cfg: dict[str, Any]) -> Any:
     """初始化 train_monitor（每个 task 一份独立 monitor_state.json）。
 
-    前端通过 SSE monitor_state_updated 拿 samples + xy 元信息；commit 10
-    会改成走协议 PNG bytes，但 commit 9 双写兼容。返回 update_monitor 函数
-    或 None。
+    前端通过 SSE monitor_state_updated 拿 samples + xy 元信息；图本身的
+    bytes 走协议 image_done 事件入 server 内存 cache（commit 10 起）。
+    sample_path 字段写虚拟路径（前端只用 split+pop 拿 filename 来构建
+    /api/generate/{tid}/sample/{fn} URL），磁盘上不会有这个文件。
     """
     msf = cfg.get("__monitor_state_file")
     if not msf:
@@ -323,15 +326,30 @@ def _setup_monitor(cfg: dict[str, Any]) -> Any:
         return None
 
 
+def _encode_png(img: Any) -> tuple[str, int]:
+    """PIL.Image → PNG bytes → base64 string。返回 (b64_str, raw_byte_size)。"""
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    raw = buf.getvalue()
+    return base64.b64encode(raw).decode("ascii"), len(raw)
+
+
+def _virtual_path(task_id: int, filename: str) -> str:
+    """前端只用 split+pop 拿 filename，所以给个看起来像绝对路径的字符串。"""
+    return f"/anima_gen_{task_id}/{filename}"
+
+
 def _run_generate(req_id: str, task_id: int, cfg: dict[str, Any], output_dir: Path) -> None:
-    """跑一次完整 generate（含可选 XY）。文件写到 output_dir，事件推 stdout。
+    """跑一次完整 generate（含可选 XY）。
 
-    commit 9：仍写盘到 output_dir（兼容现有 HTTP 拉图路径）+ monitor_state
-    双写（兼容前端 SSE samples 流）；commit 10 改成 PNG bytes 推 stdout 进
-    server 内存 dict，删 monitor_state 写盘路径。
+    commit 10 起：PNG bytes base64 推 stdout（image_done 事件）→ server
+    侧 InferenceDaemon 入 generate_cache；output_dir 不再写盘（保留参数
+    给 anima_generate.py CLI 用法走 fallback 路径）。
+
+    monitor_state.json 仍写（前端 sample_path SSE 链路兼容），但 sample_path
+    是虚拟路径，磁盘上无对应文件 —— 前端只用它 split+pop 拿 filename 来
+    构建 /api/generate/{tid}/sample/{fn} URL。
     """
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     update_monitor = _setup_monitor(cfg)
 
     CACHE.ensure_loaded(cfg)
@@ -391,14 +409,15 @@ def _run_generate(req_id: str, task_id: int, cfg: dict[str, Any], output_dir: Pa
                     dtype=CACHE.dtype,
                 )
                 fname = f"gen_{img_idx:04d}_p{pi}_c{ci}_s{seed}.png"
-                out_path = output_dir / fname
-                img.save(out_path)
+                vpath = _virtual_path(task_id, fname)
+                b64, byte_size = _encode_png(img)
                 if update_monitor:
-                    update_monitor(sample_path=str(out_path), step=img_idx + 1)
+                    update_monitor(sample_path=vpath, step=img_idx + 1)
                 _emit_for(
                     req_id, "image_done",
-                    filename=fname, path=str(out_path),
+                    filename=fname, path=vpath,
                     step=img_idx + 1, total=total,
+                    image_b64=b64, byte_size=byte_size,
                 )
             except Exception as e:
                 logger.exception("generate failed")
@@ -483,19 +502,20 @@ def _run_xy(
                     dtype=CACHE.dtype,
                 )
                 fname = f"xy_x{xi:02d}_y{yi:02d}_s{cur_seed}.png"
-                out_path = output_dir / fname
-                img.save(out_path)
+                vpath = _virtual_path(task_id, fname)
+                b64, byte_size = _encode_png(img)
                 if update_monitor:
                     update_monitor(
-                        sample_path=str(out_path),
+                        sample_path=vpath,
                         step=img_idx + 1,
                         xy={"xi": xi, "yi": yi, "xv": xv, "yv": yv},
                     )
                 _emit_for(
                     req_id, "image_done",
-                    filename=fname, path=str(out_path),
+                    filename=fname, path=vpath,
                     step=img_idx + 1, total=total,
                     xy={"xi": xi, "yi": yi, "xv": xv, "yv": yv},
+                    image_b64=b64, byte_size=byte_size,
                 )
             except Exception as e:
                 logger.exception("XY [%d,%d] failed", xi, yi)

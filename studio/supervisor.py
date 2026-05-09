@@ -735,8 +735,11 @@ class Supervisor:
     ) -> None:
         """daemon 上 task 终态收尾：标 db 状态 + 停 poller + 清 active 标记。
 
-        commit 9 仍调 cleanup_generate_tempdir（兼容现有 tempdir 写盘路径）；
-        commit 10 把磁盘缓存路径删掉后这里也跟着改。
+        commit 10 起：图本身在 server 内存 cache（非磁盘），不在这里清 ——
+        让客户端断连 / LRU / lifespan 决定（commit 11）。这里只清 task
+        在磁盘上的小附属物：
+          - anima_gen_{tid}/config.json + 空目录
+          - monitors/task_{tid}/state.json（如果 fallback 路径写过）
         """
         with self._daemon_lock:
             if self._daemon_active_task_id == task_id:
@@ -861,13 +864,9 @@ class Supervisor:
                 # PP6.3：训练成功时回填 version.output_lora_path + 推 stage=done
                 if status == "done":
                     _maybe_finalize_version(conn, cid)
-            # 测试出图 tempdir 清理：generate task 结束（任意状态）都清掉。
-            # 函数内部 if d.exists() 兜底，非 generate task 调进来也安全。
-            try:
-                from .services.inference_core import cleanup_generate_tempdir
-                cleanup_generate_tempdir(cid)
-            except Exception as e:
-                logger.warning("cleanup generate tempdir failed: %s", e)
+            # commit 10 起：generate task 走 daemon 不进 SLOT_TRAIN，
+            # 这条 _finish_slot 路径只跑 train / reg_ai；不再需要 generate
+            # tempdir 清理（已搬到 _finalize_daemon_task）。
             self._on_event(
                 {"type": "task_state_changed", "task_id": cid, "status": status}
             )

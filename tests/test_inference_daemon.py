@@ -34,9 +34,10 @@ from studio.services.inference_daemon import (
 
 _MOCK_DAEMON = textwrap.dedent(
     """
-    import json, sys, os, time
+    import base64, json, sys, os, time
     sys.stdout.write(json.dumps({"id":"_evt","kind":"ready"}) + "\\n")
     sys.stdout.flush()
+    fake_b64 = base64.b64encode(b"FAKE-PNG").decode("ascii")
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -54,8 +55,8 @@ _MOCK_DAEMON = textwrap.dedent(
             tid = msg.get("task_id", 0)
             sys.stdout.write(json.dumps({"id":rid,"kind":"started","task_id":tid}) + "\\n")
             sys.stdout.flush()
-            # 模拟出 1 张图（不写盘 —— 测试不验文件）
-            sys.stdout.write(json.dumps({"id":rid,"kind":"image_done","task_id":tid,"filename":"fake.png","path":"/tmp/fake.png","step":1,"total":1}) + "\\n")
+            # 出 1 张图：bytes 走协议 b64 字段（commit 10），不写磁盘
+            sys.stdout.write(json.dumps({"id":rid,"kind":"image_done","task_id":tid,"filename":"fake.png","path":"/anima_gen_%d/fake.png" % tid,"step":1,"total":1,"image_b64":fake_b64,"byte_size":8}) + "\\n")
             sys.stdout.flush()
             sys.stdout.write(json.dumps({"id":rid,"kind":"done","task_id":tid}) + "\\n")
             sys.stdout.flush()
@@ -107,6 +108,9 @@ def test_daemon_starts_and_reaches_idle(mock_daemon_script: Path) -> None:
 
 
 def test_submit_task_runs_to_done(mock_daemon_script: Path) -> None:
+    from studio.services import generate_cache
+
+    generate_cache.clear_all()
     d = InferenceDaemon(script_path=mock_daemon_script)
     d.start()
     events: list[dict[str, Any]] = []
@@ -130,6 +134,15 @@ def test_submit_task_runs_to_done(mock_daemon_script: Path) -> None:
     # task_id 透传
     for e in events:
         assert e.get("task_id") == 42
+
+    # commit 10：bytes 已入 server-side cache（mock daemon 推的是 b"FAKE-PNG" b64）
+    assert generate_cache.get_image(42, "fake.png") == b"FAKE-PNG"
+    # 转发给 callback 的事件不应该再带 image_b64（已被 reader 剥掉）
+    image_done_events = [e for e in events if e.get("kind") == "image_done"]
+    assert image_done_events
+    for e in image_done_events:
+        assert "image_b64" not in e
+    generate_cache.clear_all()
 
 
 def test_daemon_crash_emits_error(mock_daemon_script: Path) -> None:

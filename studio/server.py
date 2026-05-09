@@ -1756,8 +1756,12 @@ def get_reg_prior_task(pid: int, vid: int, task_id: int) -> dict[str, Any]:
 # /api/generate — 测试出图（独立工具页，多 LoRA + multi-prompt）
 # ---------------------------------------------------------------------------
 #
-# 用户决策："测试" 出图不保存：图写到 tempfile.gettempdir() / anima_gen_{task_id}/，
-# task 结束 supervisor 自动清；启动时扫清遗留。前端没有 history 列表 —— 看完即丢。
+# 用户决策："测试" 出图不持久化（commit 10 起完全去磁盘）：
+#   - daemon 把 PNG bytes base64 推回 server 入 generate_cache（内存 dict）
+#   - HTTP `/api/generate/{tid}/sample/{fn}` 从 cache 取
+#   - tempdir 仅装 config.json（小 JSON）；task 结束 supervisor 仍调
+#     cleanup_generate_tempdir 清掉空目录 + config.json
+#   - server 重启 → 内存 cache 自动没；强杀也不残留
 
 
 class GenerateRequest(BaseModel):
@@ -1842,15 +1846,22 @@ def get_generate_task(task_id: int) -> dict[str, Any]:
 
 @app.get("/api/generate/{task_id}/sample/{filename}")
 def get_generate_sample(task_id: int, filename: str) -> Any:
-    """读 generate task 的输出图（task 还在跑或刚结束时；清理后 404）。"""
+    """读 generate task 的输出图（commit 10：从 server 内存 cache 取，无磁盘）。
+
+    daemon 出图完成后把 PNG bytes 推回 server 入 generate_cache；HTTP 这里
+    直接返回 bytes。LRU / 客户端断连清理在 commit 11 加 —— 在那之前 cache
+    跟着 supervisor finalize 释放（一 task 一组 entry，task 终止时全清）。
+    """
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(400, "invalid filename")
-    from fastapi.responses import FileResponse
-    from .services.inference_core import generate_tempdir
-    img = generate_tempdir(task_id) / filename
-    if not img.exists() or img.suffix.lower() not in datasets.IMAGE_EXTS:
+    if not filename.lower().endswith(".png"):
+        raise HTTPException(400, "only .png supported")
+    from fastapi.responses import Response
+    from .services import generate_cache
+    data = generate_cache.get_image(task_id, filename)
+    if data is None:
         raise HTTPException(404)
-    return FileResponse(str(img))
+    return Response(content=data, media_type="image/png")
 
 
 @app.delete("/api/projects/{pid}/versions/{vid}/reg")
