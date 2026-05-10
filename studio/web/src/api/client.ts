@@ -82,6 +82,11 @@ export interface HuggingFaceConfig {
   endpoint: string
 }
 
+export interface ModelScopeConfig {
+  /** 魔搭社区 token。公开模型可不填；私有 / 限速时需要。 */
+  token: string
+}
+
 export interface JoyCaptionConfig {
   base_url: string
   model: string
@@ -253,6 +258,10 @@ export interface Secrets {
   danbooru: DanbooruConfig
   download: DownloadGlobalConfig
   huggingface: HuggingFaceConfig
+  modelscope: ModelScopeConfig
+  /** 模型下载源：'huggingface'（默认）或 'modelscope'。
+   *  选 modelscope 时，有映射的模型走魔搭 CLI 下载；无映射的自动回退 HF。 */
+  download_source: string
   joycaption: JoyCaptionConfig
   wd14: WD14Config
   cltagger: CLTaggerConfig

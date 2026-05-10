@@ -209,6 +209,18 @@ def default_paths_for_new_version() -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# ModelScope 镜像源映射
+# ---------------------------------------------------------------------------
+
+# ModelScope 镜像路径常量。
+# circlestone-labs 同步在 HF 和魔搭发布，repo ID 一致；
+# 魔搭里 Anima repo 将主模型 / VAE / 文本编码器全部打包在 split_files/ 下，
+# 文本编码器是单个 safetensors（而不是 HF 上 Qwen3 的散文件目录）。
+MS_ANIMA_TEXT_ENCODER_PATH = "split_files/text_encoders/qwen_3_06b_base.safetensors"
+# T5 tokenizer / TAEFlux / WD14 / CLTagger 在魔搭暂无对应镜像，走 HF 回退。
+
+
+# ---------------------------------------------------------------------------
 # 同步下载 helper
 # ---------------------------------------------------------------------------
 
@@ -242,6 +254,92 @@ def _resolve_endpoint() -> Optional[str]:
     except Exception:  # noqa: BLE001  secrets 损坏不应阻断下载
         return None
     return endpoint or None
+
+
+def _get_download_source() -> str:
+    """返回当前配置的下载源（'huggingface' 或 'modelscope'）。
+
+    优先读 MODELSCOPE_SOURCE env var（CLI flag 用）；否则读 secrets。
+    """
+    env = os.environ.get("MODELSCOPE_SOURCE", "").strip()
+    if env:
+        return env
+    try:
+        return secrets.load().download_source or "huggingface"
+    except Exception:  # noqa: BLE001
+        return "huggingface"
+
+
+def _ms_token() -> Optional[str]:
+    """读 ModelScope token：环境变量优先，其次 secrets。"""
+    env = os.environ.get("MODELSCOPE_API_TOKEN", "").strip()
+    if env:
+        return env
+    try:
+        t = secrets.load().modelscope.token
+        return t or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def download_flat_ms(
+    ms_repo_id: str,
+    repo_subpath: str,
+    target: Path,
+    *,
+    on_log: Callable[[str], None] = print,
+) -> bool:
+    """用 modelscope Python API 下载单个文件到 target。
+
+    `model_file_download(local_dir=target.parent)` 会把文件落在
+    `target.parent / repo_subpath`（保留 repo 内路径结构），之后复用与
+    `download_flat` 完全相同的 rename + 清理空目录逻辑把文件移到 target。
+
+    需要 ``pip install modelscope``；未安装时返回 False 并打印提示。
+    token 优先读 MODELSCOPE_API_TOKEN env var，其次 secrets.modelscope.token。
+    """
+    if target.exists():
+        on_log(f"   ✓ {target.name} 已存在，跳过")
+        return True
+    try:
+        from modelscope.hub.file_download import model_file_download
+    except ImportError:
+        on_log("   ✗ 缺 modelscope（pip install modelscope）")
+        return False
+    target.parent.mkdir(parents=True, exist_ok=True)
+    token = _ms_token()
+    try:
+        kwargs: dict = dict(
+            model_id=ms_repo_id,
+            file_path=repo_subpath,
+            local_dir=str(target.parent),
+        )
+        if token:
+            kwargs["token"] = token
+        model_file_download(**kwargs)
+    except Exception as exc:
+        on_log(f"   ✗ {target.name} (ModelScope): {exc}")
+        return False
+    # model_file_download 保留 repo 内路径；与 download_flat 逻辑完全一致
+    src = target.parent / repo_subpath
+    if src != target:
+        try:
+            target.unlink(missing_ok=True)
+            src.rename(target)
+        except OSError as exc:
+            on_log(f"   ✗ rename 失败 {src} → {target}: {exc}")
+            return False
+        parent = src.parent
+        while parent != target.parent and parent.exists():
+            try:
+                if any(parent.iterdir()):
+                    break
+                parent.rmdir()
+            except OSError:
+                break
+            parent = parent.parent
+    on_log(f"   ✓ {target.name} (via ModelScope)")
+    return True
 
 
 def download_flat(
@@ -310,18 +408,38 @@ def download_anima_main(
         on_log(f"✗ 未知 variant {variant!r}")
         return False
     target = anima_main_target(root, variant)
+    subpath = ANIMA_VARIANTS[variant]
     on_log(f"\n📥 Anima 主模型 [{variant}] (~4 GB)")
-    return download_flat(ANIMA_REPO, ANIMA_VARIANTS[variant], target, on_log=on_log)
+    if _get_download_source() == "modelscope":
+        return download_flat_ms(ANIMA_REPO, subpath, target, on_log=on_log)
+    return download_flat(ANIMA_REPO, subpath, target, on_log=on_log)
 
 
 def download_anima_vae(root: Path, *, on_log: Callable[[str], None] = print) -> bool:
     target = anima_vae_target(root)
     on_log("\n📥 Anima VAE (~250 MB)")
+    if _get_download_source() == "modelscope":
+        return download_flat_ms(ANIMA_REPO, ANIMA_VAE_PATH, target, on_log=on_log)
     return download_flat(ANIMA_REPO, ANIMA_VAE_PATH, target, on_log=on_log)
 
 
 def download_qwen3(root: Path, *, on_log: Callable[[str], None] = print) -> bool:
+    """下载文本编码器（Qwen3）。
+
+    - HuggingFace 源：从 Qwen/Qwen3-0.6B-Base 下载 6 个散文件到 text_encoders/ 目录。
+    - ModelScope 源：从 circlestone-labs/Anima 下载单文件
+      split_files/text_encoders/qwen_3_06b_base.safetensors，
+      落到 text_encoders/qwen_3_06b_base.safetensors。
+      （魔搭 Anima repo 已预先合并，无需单独拉 Qwen repo。）
+    """
     target_dir = qwen_dir(root)
+    if _get_download_source() == "modelscope":
+        on_log(f"\n📥 Anima 文本编码器（ModelScope 单文件）→ {target_dir}")
+        target_dir.mkdir(parents=True, exist_ok=True)
+        # 魔搭 Anima repo 里文件名是 qwen_3_06b_base.safetensors；
+        # 训练脚本按 HF 惯例找 model.safetensors，下载后重命名。
+        target = target_dir / "model.safetensors"
+        return download_flat_ms(ANIMA_REPO, MS_ANIMA_TEXT_ENCODER_PATH, target, on_log=on_log)
     on_log(f"\n📥 Qwen3-0.6B-Base (~1.2 GB) → {target_dir}")
     target_dir.mkdir(parents=True, exist_ok=True)
     ok = True

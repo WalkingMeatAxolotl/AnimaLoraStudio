@@ -56,6 +56,7 @@ Anima 主模型版本（--variant）:
 下载源：默认从 secrets.huggingface.endpoint 读（首装是 hf-mirror.com）。
   - --no-mirror     用 HuggingFace 官方源（覆盖 secrets）
   - --endpoint URL  自定义 endpoint URL（覆盖 secrets 和 --no-mirror）
+  - --modelscope    走魔搭社区下载（需 pip install modelscope）
 """,
     )
     parser.add_argument(
@@ -65,6 +66,10 @@ Anima 主模型版本（--variant）:
     parser.add_argument(
         "--endpoint", default=None,
         help="自定义 HF endpoint URL（覆盖 secrets 配置 + --no-mirror）",
+    )
+    parser.add_argument(
+        "--modelscope", action="store_true",
+        help="走魔搭社区（ModelScope）下载；无映射的模型自动回退 HF",
     )
     parser.add_argument(
         "--output", default="",
@@ -81,17 +86,19 @@ Anima 主模型版本（--variant）:
     parser.add_argument("--skip-t5",   action="store_true")
     args = parser.parse_args()
 
-    # CLI 显式 flag 覆盖 secrets：--endpoint 最强；--no-mirror 设 HF 官方；都没传 → secrets。
     import os  # noqa: PLC0415
-    if args.endpoint:
-        os.environ["HF_ENDPOINT"] = args.endpoint
-    elif args.no_mirror:
-        os.environ["HF_ENDPOINT"] = "https://huggingface.co"
-    # 不传 → 让 _resolve_endpoint 读 secrets（默认 hf-mirror.com）
-
-    from studio.services.model_downloader import _resolve_endpoint  # noqa: PLC0415
-    active = _resolve_endpoint() or "https://huggingface.co (HF 默认)"
-    print(f"使用 endpoint: {active}")
+    if args.modelscope:
+        os.environ["MODELSCOPE_SOURCE"] = "modelscope"
+        print("使用下载源: ModelScope（无映射模型自动回退 HF）")
+    else:
+        # CLI 显式 flag 覆盖 secrets：--endpoint 最强；--no-mirror 设 HF 官方；都没传 → secrets。
+        if args.endpoint:
+            os.environ["HF_ENDPOINT"] = args.endpoint
+        elif args.no_mirror:
+            os.environ["HF_ENDPOINT"] = "https://huggingface.co"
+        from studio.services.model_downloader import _resolve_endpoint  # noqa: PLC0415
+        active = _resolve_endpoint() or "https://huggingface.co (HF 默认)"
+        print(f"使用下载源: HuggingFace  endpoint: {active}")
 
     out_root = Path(args.output) if args.output else models_root()
     print(f"📁 目标根目录: {out_root.absolute()}")

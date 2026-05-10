@@ -19,6 +19,7 @@ SENSITIVE_FIELDS: tuple[str, ...] = (
     "gelbooru.api_key",
     "danbooru.api_key",
     "huggingface.token",
+    "modelscope.token",
 )
 
 
@@ -49,6 +50,13 @@ class HuggingFaceConfig(BaseModel):
     # 我们 per-call 传，不依赖 HF_ENDPOINT env var（env var 只在模块 import 时读，
     # runtime 改设置无效）。
     endpoint: str = "https://hf-mirror.com"
+
+
+class ModelScopeConfig(BaseModel):
+    token: str = ""
+    # 魔搭社区（modelscope.cn）下载 token。公开模型不填也能下，私有 / 限速时需要。
+    # 使用前需 pip install modelscope；下载时会优先找 MODELSCOPE_REPO_MAP 里的对应仓库，
+    # 没有映射的模型自动回退 HuggingFace。
 
 
 class DownloadConfig(BaseModel):
@@ -165,6 +173,10 @@ class Secrets(BaseModel):
     danbooru: DanbooruConfig = Field(default_factory=DanbooruConfig)
     download: DownloadConfig = Field(default_factory=DownloadConfig)
     huggingface: HuggingFaceConfig = Field(default_factory=HuggingFaceConfig)
+    modelscope: ModelScopeConfig = Field(default_factory=ModelScopeConfig)
+    # 模型下载源。"huggingface"（默认）走 HF + endpoint 配置；
+    # "modelscope" 走魔搭社区，没有对应映射的模型自动回退 HF。
+    download_source: str = "huggingface"
     joycaption: JoyCaptionConfig = Field(default_factory=JoyCaptionConfig)
     wd14: WD14Config = Field(default_factory=WD14Config)
     cltagger: CLTaggerConfig = Field(default_factory=CLTaggerConfig)

@@ -25,6 +25,7 @@ type Section =
   | 'danbooru'
   | 'download'
   | 'huggingface'
+  | 'modelscope'
   | 'joycaption'
   | 'wd14'
   | 'cltagger'
@@ -70,6 +71,8 @@ const EMPTY: Secrets = {
     cdn_rate_per_sec: 5,
   },
   huggingface: { token: '', endpoint: 'https://hf-mirror.com' },
+  modelscope: { token: '' },
+  download_source: 'huggingface',
   joycaption: {
     base_url: 'http://localhost:8000/v1',
     model: 'fancyfeast/llama-joycaption-beta-one-hf-llava',
@@ -179,6 +182,11 @@ export default function SettingsPage() {
       ...prev,
       [section]: { ...prev[section], [key]: value },
     }))
+  }
+
+  /** 更新 Secrets 顶层非对象字段（如 download_source）。 */
+  const updateTop = <K extends keyof Secrets>(key: K, value: Secrets[K]) => {
+    setDraft((prev) => ({ ...prev, [key]: value }))
   }
 
   const save = async () => {
@@ -492,6 +500,15 @@ export default function SettingsPage() {
       </>)}
 
       {tab === 'training' && (<>
+      <SettingsSection title="模型下载源">
+        <SettingsField label="下载源" desc="魔搭（ModelScope）对国内用户更快；无映射的模型自动回退 HuggingFace">
+          <DownloadSourceSelect
+            value={draft.download_source}
+            onChange={(v) => updateTop('download_source', v)}
+          />
+        </SettingsField>
+      </SettingsSection>
+
       <SettingsSection title="HuggingFace">
         <SettingsField label="token">
           <SensitiveInput
@@ -510,6 +527,19 @@ export default function SettingsPage() {
             onChange={(v) => update('huggingface', 'endpoint', v)}
           />
         </SettingsField>
+      </SettingsSection>
+
+      <SettingsSection title="ModelScope（魔搭社区）">
+        <SettingsField label="token">
+          <SensitiveInput
+            value={draft.modelscope.token}
+            serverValue={server?.modelscope.token ?? ''}
+            onChange={(v) => update('modelscope', 'token', v)}
+          />
+        </SettingsField>
+        <p className="text-xs text-fg-tertiary px-1">
+          公开模型不用填；私有仓库或限速时需要。需先 <code>pip install modelscope</code> 安装命令行工具。
+        </p>
       </SettingsSection>
 
       <SettingsSection title="队列调度">
@@ -660,6 +690,23 @@ function HFEndpointSelect({ value, onChange }: {
         />
       )}
     </div>
+  )
+}
+
+// ── DownloadSourceSelect ────────────────────────────────────────────────────
+
+function DownloadSourceSelect({ value, onChange }: {
+  value: string; onChange: (v: string) => void
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className={`${textInputClass} max-w-xs`}
+    >
+      <option value="huggingface">HuggingFace（含 hf-mirror 等镜像）</option>
+      <option value="modelscope">ModelScope（魔搭社区，国内直连）</option>
+    </select>
   )
 }
 
@@ -858,9 +905,16 @@ function CLTaggerModelCard({
   )
 }
 
+// 顶层非 object 字段（string / number / bool），直接比较后塞入 patch。
+const TOP_LEVEL_SCALARS: (keyof Secrets)[] = ['download_source']
+
 function buildPatch(draft: Secrets, server: Secrets): SecretsPatch {
-  const out: Record<string, Record<string, unknown>> = {}
-  for (const key of Object.keys(draft) as Section[]) {
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(draft) as (keyof Secrets)[]) {
+    if (TOP_LEVEL_SCALARS.includes(key)) {
+      if (draft[key] !== server[key]) out[key] = draft[key]
+      continue
+    }
     const sub: Record<string, unknown> = {}
     const d = draft[key] as unknown as Record<string, unknown>
     const s = server[key] as unknown as Record<string, unknown>
