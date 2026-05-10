@@ -680,7 +680,7 @@ export interface GenerateRequest {
   xy_matrix?: XYMatrixSpec | null
 }
 
-/** version output/ 下扫到的 training_state_step*.pt（断点续训用，GET .../state_ckpts）。 */
+/** version output/ 下扫到的 training_state_step*.pt（断点续训用）。 */
 export interface StateCkpt {
   /** global_step 数 */
   step: number
@@ -690,6 +690,14 @@ export interface StateCkpt {
   path: string
   /** 文件 mtime 时间戳 */
   mtime: number
+}
+
+/** 项目级按 version 分组的 ckpt 列表（resume_state / resume_lora picker 用）。 */
+export interface VersionCkptGroup<T> {
+  version_id: number
+  /** version label，如 "baseline" / "high-lr" */
+  label: string
+  items: T[]
 }
 
 /** version output/ 下扫到的 LoRA ckpt 文件（GET .../lora_ckpts）。 */
@@ -1239,10 +1247,15 @@ export const api = {
     req<{ items: LoraCkpt[] }>(`/api/projects/${pid}/versions/${vid}/lora_ckpts`)
       .then((r) => r.items),
 
-  /** 列出 version output/ 下所有 training_state_step*.pt（Train 页断点续训 picker）。 */
-  listVersionStateCkpts: (pid: number, vid: number) =>
-    req<{ items: StateCkpt[] }>(`/api/projects/${pid}/versions/${vid}/state_ckpts`)
-      .then((r) => r.items),
+  /** 列出项目所有 versions 的 state.pt，按 version 分组（Train 页 resume_state picker）。 */
+  listProjectStateCkpts: (pid: number) =>
+    req<{ groups: VersionCkptGroup<StateCkpt>[] }>(`/api/projects/${pid}/state_ckpts`)
+      .then((r) => r.groups),
+
+  /** 列出项目所有 versions 的 LoRA ckpt，按 version 分组（Train 页 resume_lora picker）。 */
+  listProjectLoraCkpts: (pid: number) =>
+    req<{ groups: VersionCkptGroup<LoraCkpt>[] }>(`/api/projects/${pid}/lora_ckpts`)
+      .then((r) => r.groups),
 
   /** PR-9 — 启动测试出图 task。Phase 2 起：图走 server 内存 cache，关页面即丢。 */
   enqueueGenerate: (body: GenerateRequest) =>

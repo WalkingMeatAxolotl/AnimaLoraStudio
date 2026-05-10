@@ -14,11 +14,13 @@
 
 ### 新增
 
-- **断点续训 picker**
-  - Train 页 SchemaForm 上方加「断点续训」下拉，自动列当前 version 的 `output/training_state_step*.pt`，选中后写 `config.resume_state`
-  - 后端 `versions.list_state_ckpts()` + `/api/projects/.../versions/.../state_ckpts` 端点
-  - 解决 UX：之前用户必须手填深路径（`studio_data/projects/.../output/training_state_step*.pt`）才能续训，现在直接下拉
-  - 高级场景（接别 version 的 state、或只接 LoRA 权重）仍可在 SchemaForm 的 PathPicker 里手填 `resume_state` / `resume_lora`
+- **断点续训 / resume_lora 字段内语义 picker**
+  - `resume_state` / `resume_lora` 字段旁边的「📁 浏览本项目」按钮：弹出 dropdown 贴字段，按 version 分组列出项目所有可用文件，用户看的是「baseline / step 2476」这种语义 label，不暴露 `studio_data/projects/.../output/...` 深路径
+  - 选中后写绝对路径回字段（schema 字段值仍是真路径，后端协议不变）
+  - 外部文件 / 别项目的 ckpt 用户直接在字段 input 手填即可（不弹 picker，留空白逃生口）
+  - 后端：`versions.list_project_state_ckpts()` / `list_project_lora_ckpts()` 项目级 + `/api/projects/{pid}/state_ckpts` / `/lora_ckpts` 端点
+  - 前端：`ResumeFieldPicker` 组件 + `Field.tsx` 按字段名 dispatch（resume_state / resume_lora 走专用 picker，其它 path 字段保留 PathPicker）
+  - 解决 UX 根因：之前用户必须从 REPO_ROOT 5 层深挖到 `output/training_state_step*.pt` 才能续训
 - **测试出图（Generate）**
   - 侧栏「测试」入口；`/api/generate` + `runtime/anima_generate.py`（#19）
   - 推理 daemon（常驻 GPU，避免每次重载）+ XY 矩阵评测（参数扫）（#22）

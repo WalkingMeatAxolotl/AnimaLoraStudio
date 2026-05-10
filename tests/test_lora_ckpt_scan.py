@@ -1,11 +1,17 @@
-"""commit: versions.list_lora_ckpts / list_state_ckpts —— 扫 version output/ 列 ckpt 文件。"""
+"""commit: versions.list_lora_ckpts / list_state_ckpts / list_project_*_ckpts —— 扫 version output/ 列 ckpt 文件。"""
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
 
-from studio.versions import list_lora_ckpts, list_state_ckpts
+from studio import db, projects, versions as versions_mod
+from studio.versions import (
+    list_lora_ckpts,
+    list_project_lora_ckpts,
+    list_project_state_ckpts,
+    list_state_ckpts,
+)
 
 
 @pytest.fixture
@@ -150,3 +156,77 @@ def test_state_ckpts_path_is_string(vdir: Path) -> None:
     items = list_state_ckpts(vdir)
     assert items[0]["path"].endswith("training_state_step42.pt")
     assert "mtime" in items[0]
+
+
+# ---------------------------------------------------------------------------
+# list_project_state_ckpts / list_project_lora_ckpts —— 项目级，按 version 分组
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def project_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """建 fake DB + 项目 + 3 个 version，落产出文件，返回 (dbfile, project)。
+
+    复用 test_versions.py 的 isolation 模式：monkeypatch projects 模块的
+    PROJECTS_DIR / TRASH_DIR + db.STUDIO_DB。
+    """
+    dbfile = tmp_path / "studio.db"
+    db.init_db(dbfile)
+    monkeypatch.setattr(projects, "PROJECTS_DIR", tmp_path / "projects")
+    monkeypatch.setattr(projects, "TRASH_DIR", tmp_path / "_trash" / "projects")
+    monkeypatch.setattr(db, "STUDIO_DB", dbfile)
+
+    with db.connection_for(dbfile) as conn:
+        p = projects.create_project(conn, title="Test Proj")
+        v1 = versions_mod.create_version(conn, project_id=p["id"], label="baseline")
+        v2 = versions_mod.create_version(conn, project_id=p["id"], label="high-lr")
+        versions_mod.create_version(conn, project_id=p["id"], label="empty")
+
+        # baseline: 2 个 state + 2 个 lora
+        v1dir = versions_mod.version_dir(p["id"], p["slug"], v1["label"])
+        (v1dir / "output" / "training_state_step1500.pt").touch()
+        (v1dir / "output" / "training_state_step500.pt").touch()
+        (v1dir / "output" / "myproj_step1500.safetensors").touch()
+        (v1dir / "output" / "myproj_final.safetensors").touch()
+
+        # high-lr: 1 个 state，没 lora
+        v2dir = versions_mod.version_dir(p["id"], p["slug"], v2["label"])
+        (v2dir / "output" / "training_state_step800.pt").touch()
+
+        # empty: 啥都没有
+
+    return dbfile, p
+
+
+def test_project_state_ckpts_grouped_by_version(project_env) -> None:
+    dbfile, p = project_env
+    with db.connection_for(dbfile) as conn:
+        groups = list_project_state_ckpts(conn, p)
+    by_label = {g["label"]: g for g in groups}
+    assert set(by_label.keys()) == {"baseline", "high-lr", "empty"}
+    assert [it["step"] for it in by_label["baseline"]["items"]] == [1500, 500]
+    assert [it["step"] for it in by_label["high-lr"]["items"]] == [800]
+    assert by_label["empty"]["items"] == []
+    for g in groups:
+        assert isinstance(g["version_id"], int)
+
+
+def test_project_lora_ckpts_grouped_by_version(project_env) -> None:
+    dbfile, p = project_env
+    with db.connection_for(dbfile) as conn:
+        groups = list_project_lora_ckpts(conn, p)
+    by_label = {g["label"]: g for g in groups}
+    # baseline 有 final + step（final 排前 — list_lora_ckpts 内置排序）
+    base_kinds = [(it["kind"], it["value"]) for it in by_label["baseline"]["items"]]
+    assert base_kinds == [("final", 0), ("step", 1500)]
+    # high-lr / empty 没 .safetensors → items 空
+    assert by_label["high-lr"]["items"] == []
+    assert by_label["empty"]["items"] == []
+
+
+def test_project_ckpts_version_order_follows_created_at(project_env) -> None:
+    """版本顺序按 created_at 升序（list_versions 语义）。"""
+    dbfile, p = project_env
+    with db.connection_for(dbfile) as conn:
+        groups = list_project_state_ckpts(conn, p)
+    assert [g["label"] for g in groups] == ["baseline", "high-lr", "empty"]

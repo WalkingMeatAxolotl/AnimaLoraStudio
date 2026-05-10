@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import type { SchemaProperty } from '../api/client'
+import { useProjectCtx } from '../context/ProjectContext'
 import { controlKind, fieldLabel } from '../lib/schema'
 import PathPicker from './PathPicker'
+import ResumeFieldPicker from './ResumeFieldPicker'
 
 interface Props {
   name: string
@@ -152,6 +154,7 @@ export default function Field({
   // string / path -------------------------------------------------------
   return (
     <PathStringField
+      name={name}
       label={label}
       kind={kind}
       help={help}
@@ -240,6 +243,8 @@ function NumberField({
 }
 
 interface PathFieldProps {
+  /** schema 字段名，让 path 字段判定是否走专用 picker（resume_state / resume_lora）。 */
+  name: string
   label: string
   kind: 'path' | 'string'
   help: string | undefined
@@ -250,12 +255,22 @@ interface PathFieldProps {
 }
 
 function PathStringField({
-  label, kind, help, value, onChange, disabled = false, hintNode,
+  name, label, kind, help, value, onChange, disabled = false, hintNode,
 }: PathFieldProps) {
   const [picking, setPicking] = useState(false)
   const text = value === null || value === undefined ? '' : String(value)
+  const browseBtnRef = useRef<HTMLButtonElement | null>(null)
+  const projectCtx = useProjectCtx()
+
+  // resume_state / resume_lora：走项目内语义 picker（dropdown），用户看不到深路径。
+  // 外部文件用户直接在 input 手填即可。
+  const resumeKind: 'state' | 'lora' | null =
+    name === 'resume_state' ? 'state' :
+    name === 'resume_lora' ? 'lora' : null
+  const useResumePicker = kind === 'path' && resumeKind !== null && projectCtx !== null
+
   return (
-    <div className="py-1.5">
+    <div className="py-1.5 relative">
       <div className="text-sm font-medium text-fg-secondary mb-1">
         {label}
         {kind === 'path' && (
@@ -273,17 +288,30 @@ function PathStringField({
         />
         {kind === 'path' && (
           <button
+            ref={browseBtnRef}
             type="button"
-            onClick={() => setPicking(true)}
+            onClick={() => setPicking((p) => !p)}
             disabled={disabled}
             className="btn btn-secondary btn-sm shrink-0"
           >
-            浏览
+            {useResumePicker ? '📁 浏览本项目' : '浏览'}
           </button>
         )}
       </div>
       {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
-      {picking && !disabled && (
+      {/* resume_state / resume_lora：贴字段的 dropdown，按 version 分组列文件 */}
+      {useResumePicker && picking && !disabled && (
+        <ResumeFieldPicker
+          pid={projectCtx!.project.id}
+          kind={resumeKind!}
+          value={text}
+          onChange={onChange as (v: string) => void}
+          onClose={() => setPicking(false)}
+          anchorRef={browseBtnRef}
+        />
+      )}
+      {/* 其它 path 字段：保留 PathPicker 模态框（外部模型路径等场景） */}
+      {!useResumePicker && picking && !disabled && (
         <PathPicker
           initialPath={text || undefined}
           onPick={(p) => {

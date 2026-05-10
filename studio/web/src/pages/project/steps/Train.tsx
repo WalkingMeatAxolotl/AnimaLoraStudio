@@ -7,7 +7,6 @@ import {
   type ProjectDetail,
   type RegStatus,
   type SchemaResponse,
-  type StateCkpt,
   type Version,
   type VersionConfigResponse,
 } from '../../../api/client'
@@ -473,14 +472,6 @@ export default function TrainPage() {
               </div>
             ) : config ? (
               <section className="flex-1 min-h-0 overflow-y-auto pr-1">
-                {vid != null && (
-                  <ResumeFromCkptCard
-                    pid={project.id}
-                    vid={vid}
-                    currentResumeState={typeof config.resume_state === 'string' ? config.resume_state : null}
-                    onSelect={(path) => setConfigSync({ ...config, resume_state: path })}
-                  />
-                )}
                 <SchemaForm
                   schema={schema}
                   values={config}
@@ -732,74 +723,5 @@ function ConfigSkeleton() {
       ))}
       <span className="sr-only">加载训练配置中...</span>
     </section>
-  )
-}
-
-/** 「从断点续训」快捷选择器：扫当前 version output/ 下的 training_state_step*.pt
- * 列出来给用户挑，选中后写 config.resume_state。空列表时显示提示，不阻塞。
- *
- * 高级场景（接别 version 的 state 或 LoRA 权重）请在 SchemaForm 的 PathPicker
- * 里手填 resume_state / resume_lora —— 本组件只覆盖最常用的「接当前 version 最新断点」。
- */
-function ResumeFromCkptCard({
-  pid,
-  vid,
-  currentResumeState,
-  onSelect,
-}: {
-  pid: number
-  vid: number
-  currentResumeState: string | null
-  onSelect: (path: string | null) => void
-}) {
-  const [ckpts, setCkpts] = useState<StateCkpt[]>([])
-  const [loaded, setLoaded] = useState(false)
-
-  useEffect(() => {
-    let alive = true
-    api.listVersionStateCkpts(pid, vid)
-      .then((items) => { if (alive) { setCkpts(items); setLoaded(true) } })
-      .catch(() => { if (alive) setLoaded(true) })
-    return () => { alive = false }
-  }, [pid, vid])
-
-  // current 在 ckpts 里能找到 → 显示 step；找不到（手填了别 version 的）→ 显示路径尾段
-  const currentInList = ckpts.find((c) => c.path === currentResumeState)
-  const currentLabel = currentInList
-    ? currentInList.label
-    : currentResumeState
-      ? `自定义路径 · ${currentResumeState.split(/[/\\]/).pop()}`
-      : null
-
-  return (
-    <div className="mb-3 px-3 py-2 rounded-md border border-subtle bg-surface text-xs flex items-center gap-3 flex-wrap">
-      <span className="text-fg-secondary shrink-0 font-medium">断点续训</span>
-      {!loaded ? (
-        <span className="text-fg-tertiary italic">扫描中…</span>
-      ) : ckpts.length === 0 ? (
-        <span className="text-fg-tertiary italic">
-          该 version 还没产出 training_state_step*.pt — 先按 save_every 跑一轮训练
-        </span>
-      ) : (
-        <>
-          <select
-            value={currentResumeState ?? ''}
-            onChange={(e) => onSelect(e.target.value || null)}
-            className="px-2 py-1 rounded-sm border border-dim bg-canvas text-fg-primary text-xs cursor-pointer hover:border-bold focus:outline-none focus:border-accent"
-          >
-            <option value="">从头开始</option>
-            {ckpts.map((c) => (
-              <option key={c.path} value={c.path}>{c.label}</option>
-            ))}
-          </select>
-          {currentLabel && currentInList && (
-            <span className="text-fg-tertiary">→ 续 {currentLabel}（含 optimizer / RNG / loss 历史）</span>
-          )}
-          {currentLabel && !currentInList && (
-            <span className="text-warn">→ {currentLabel}</span>
-          )}
-        </>
-      )}
-    </div>
   )
 }

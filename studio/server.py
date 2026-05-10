@@ -541,14 +541,31 @@ def list_version_lora_ckpts(pid: int, vid: int) -> dict[str, Any]:
     return {"items": versions.list_lora_ckpts(vdir)}
 
 
-@app.get("/api/projects/{pid}/versions/{vid}/state_ckpts")
-def list_version_state_ckpts(pid: int, vid: int) -> dict[str, Any]:
-    """列出 version output/ 下所有 training_state_step*.pt（断点续训 picker 用）。
+@app.get("/api/projects/{pid}/state_ckpts")
+def list_project_state_ckpts(pid: int) -> dict[str, Any]:
+    """列出项目所有 versions 的 training_state_step*.pt，按 version 分组。
 
-    返回按 step 降序排列，方便前端默认选中最新断点。
+    给 Train 页 resume_state 字段的「浏览本项目」picker 用：用户看 version
+    分组的语义化文件列表，选中后前端把绝对路径写入字段。
     """
-    p, v, vdir = _version_dir_or_404(pid, vid)
-    return {"items": versions.list_state_ckpts(vdir)}
+    with db.connection_for() as conn:
+        p = projects.get_project(conn, pid)
+        if not p:
+            raise HTTPException(404, f"项目不存在: id={pid}")
+        return {"groups": versions.list_project_state_ckpts(conn, p)}
+
+
+@app.get("/api/projects/{pid}/lora_ckpts")
+def list_project_lora_ckpts(pid: int) -> dict[str, Any]:
+    """列出项目所有 versions 的 LoRA ckpt（.safetensors），按 version 分组。
+
+    给 Train 页 resume_lora 字段的「浏览本项目」picker 用。
+    """
+    with db.connection_for() as conn:
+        p = projects.get_project(conn, pid)
+        if not p:
+            raise HTTPException(404, f"项目不存在: id={pid}")
+        return {"groups": versions.list_project_lora_ckpts(conn, p)}
 
 
 @app.post("/api/projects/{pid}/versions")

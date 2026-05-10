@@ -152,6 +152,48 @@ def list_state_ckpts(vdir: Path) -> list[dict[str, Any]]:
     return items
 
 
+def list_project_state_ckpts(
+    conn: sqlite3.Connection, project: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """列项目所有 versions 的 state.pt，按 version 分组（Train 页 resume_state picker 用）。
+
+    返回 [{version_id, label, items: [{step, label, path, mtime}, ...]}]，按 version
+    `created_at` 升序，items 按 step 降序。空 version（没产出 .pt）保留分组但 items 为空。
+    """
+    pid = int(project["id"])
+    slug = str(project["slug"])
+    groups: list[dict[str, Any]] = []
+    for v in list_versions(conn, pid):
+        vdir = version_dir(pid, slug, str(v["label"]))
+        groups.append({
+            "version_id": int(v["id"]),
+            "label": str(v["label"]),
+            "items": list_state_ckpts(vdir),
+        })
+    return groups
+
+
+def list_project_lora_ckpts(
+    conn: sqlite3.Connection, project: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """列项目所有 versions 的 LoRA ckpt（.safetensors），按 version 分组（resume_lora picker 用）。
+
+    返回 [{version_id, label, items: [{kind, value, label, path, mtime}, ...]}]，
+    按 version `created_at` 升序；items 按 list_lora_ckpts 内置排序（final → step desc → epoch desc → other）。
+    """
+    pid = int(project["id"])
+    slug = str(project["slug"])
+    groups: list[dict[str, Any]] = []
+    for v in list_versions(conn, pid):
+        vdir = version_dir(pid, slug, str(v["label"]))
+        groups.append({
+            "version_id": int(v["id"]),
+            "label": str(v["label"]),
+            "items": list_lora_ckpts(vdir),
+        })
+    return groups
+
+
 def _write_version_json(v: dict[str, Any], pdir_label_path: Path) -> None:
     pdir_label_path.mkdir(parents=True, exist_ok=True)
     (pdir_label_path / "version.json").write_text(
