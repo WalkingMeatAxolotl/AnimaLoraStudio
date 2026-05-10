@@ -2392,6 +2392,11 @@ def main():
         logger.info(f"梯度裁剪 max_norm={grad_clip}")
     trainable_params = [p for group in optimizer.param_groups for p in group["params"]]
 
+    # OrthoGrad 配置（manual 模式下在 optimizer.step() 前投影梯度）
+    from utils.orthograd import build_orthograd_config, warn_double_orthograd, apply_partial_orthograd_
+    orthograd_cfg = build_orthograd_config(args)
+    warn_double_orthograd(args)
+
     # 计算总步数
     try:
         steps_per_epoch = len(dataloader) // args.grad_accum
@@ -2703,6 +2708,18 @@ def main():
 
                 if grad_clip > 0:
                     torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=grad_clip)
+
+                # 手动 OrthoGrad（排除零初始化的幅度参数）
+                if orthograd_cfg.enable:
+                    if args.lora_type == "tlora":
+                        _og_named = (
+                            [(f"{k}.lora_down", lyr.down.weight) for k, lyr in injector._layer_keys.items()]
+                            + [(f"{k}.lora_up", lyr.up.weight) for k, lyr in injector._layer_keys.items()]
+                        )
+                    else:
+                        _og_named = list(injector.network.named_parameters())
+                    apply_partial_orthograd_(_og_named, global_step, orthograd_cfg)
+
                 optimizer.step()
                 if scheduler is not None and optimizer_type != "prodigy_plus_schedulefree":
                     scheduler.step()

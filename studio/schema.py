@@ -388,6 +388,31 @@ class TrainingConfig(BaseModel):
         description="【损失加权】Batch 内权重 max/min 比上限（0=禁用；小 batch+Prodigy 建议 5）",
         json_schema_extra=_meta("training", show_when="loss_weighting!=none"),
     )
+    orthograd_mode: Literal["off", "manual"] = Field(
+        "off",
+        description="手动 OrthoGrad 模式（manual=在 optimizer.step() 前去掉梯度沿权重的径向分量；需同时关闭优化器内置 use_orthograd）",
+        json_schema_extra=_meta("training"),
+    )
+    orthograd_enable_after: int = Field(
+        0, ge=0,
+        description="前 N 步不应用 OrthoGrad（让模型先走全梯度建立结构）",
+        json_schema_extra=_meta("training", show_when="orthograd_mode==manual"),
+    )
+    orthograd_ramp_steps: int = Field(
+        0, ge=0,
+        description="OrthoGrad 强度线性 ramp 步数（0=立即全强度）",
+        json_schema_extra=_meta("training", show_when="orthograd_mode==manual"),
+    )
+    orthograd_strength: float = Field(
+        1.0, ge=0.0, le=1.0,
+        description="OrthoGrad 混合强度（1.0=纯正交梯度；<1.0=与原梯度插值）",
+        json_schema_extra=_meta("training", show_when="orthograd_mode==manual"),
+    )
+    orthograd_rescale: bool = Field(
+        True,
+        description="投影后按原梯度范数重新缩放（保持梯度幅度不变）",
+        json_schema_extra=_meta("training", show_when="orthograd_mode==manual"),
+    )
     grad_clip_max_norm: float = Field(
         0.0, ge=0.0,
         description="梯度裁剪最大范数（0=禁用）",
