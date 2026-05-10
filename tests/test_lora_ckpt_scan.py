@@ -73,3 +73,36 @@ def test_ignores_non_safetensors(vdir: Path) -> None:
     items = list_lora_ckpts(vdir)
     assert len(items) == 1
     assert items[0]["kind"] == "step"
+
+
+def test_other_kind_sorts_by_natural_key(vdir: Path) -> None:
+    """非约定命名（other）按 label 自然序升序，让 a_5 排在 a_60 前面。
+
+    没自然序的话 lex 序会把 a_60 排到 a_9 前面（'6' < '9'）；mtime 序会被
+    创建时间扰乱。XY 轴 ckpt 列顺序需要与文件名数字直觉一致。
+    """
+    out = vdir / "output"
+    # 故意按反序 touch，且让 a_60 比 a_5 更晚（mtime 更新），验证不被 mtime 影响
+    for name in ["a_9", "a_60", "a_5", "a_100"]:
+        (out / f"{name}.safetensors").touch()
+
+    items = list_lora_ckpts(vdir)
+    labels = [it["label"] for it in items]
+    assert labels == ["a_5", "a_9", "a_60", "a_100"]
+
+
+def test_mixed_kinds_other_after_step_epoch(vdir: Path) -> None:
+    """final → step desc → epoch desc → other 自然序。"""
+    out = vdir / "output"
+    (out / "p_step100.safetensors").touch()
+    (out / "p_step20.safetensors").touch()
+    (out / "p_epoch3.safetensors").touch()
+    (out / "p_final.safetensors").touch()
+    (out / "custom_60.safetensors").touch()
+    (out / "custom_5.safetensors").touch()
+
+    items = list_lora_ckpts(vdir)
+    labels = [it["label"] for it in items]
+    assert labels == [
+        "final", "step 100", "step 20", "epoch 3", "custom_5", "custom_60",
+    ]

@@ -53,7 +53,11 @@ export default function GeneratePage() {
   // 双图对比：选中的 2 个 sample 索引（从 PreviewXYGrid cell click 收集）
   const [selectedIndices, setSelectedIndices] = useState<number[]>([])
 
-  const [busy, setBusy] = useState(false)
+  // submitting：HTTP 入队中（短暂窗口，currentTask 还没回来）
+  // busy 派生自 currentTask.status，避免靠 setBusy(false) 清状态卡 UI——
+  // 之前用 useState 时遇过 SSE 漏事件 / race 后 busy=true 卡住，按钮 disabled
+  // 没法重试也没法取消（status=failed 时 cancelable=false）
+  const [submitting, setSubmitting] = useState(false)
   const [currentTask, setCurrentTask] = useState<Task | null>(null)
   const [monitorState, setMonitorState] = useState<MonitorState | null>(null)
   // commit 14：中间步预览（仅 single 模式有意义；XY/对比 cell 多预览意义小）
@@ -115,8 +119,7 @@ export default function GeneratePage() {
       void api.getGenerateTask(tid).then((t) => {
         setCurrentTask(t)
         if (t.status === 'done' || t.status === 'failed' || t.status === 'canceled') {
-          setBusy(false)
-          // 清进度（不让上次跑残留显示）
+          // busy 已是派生自 status，无需 setBusy；只清进度防残留
           setProgress({ batchIdx: null, batchTotal: null, currentStep: null, totalSteps: null })
         }
       }).catch(() => { /* task 已清也走这里 */ })
@@ -260,7 +263,7 @@ export default function GeneratePage() {
       }
     }
 
-    setBusy(true)
+    setSubmitting(true)
     setCurrentTask(null)
     setMonitorState(null)
     setSelectedIndices([])  // 新一轮生成 — 旧选择已失效
@@ -278,11 +281,16 @@ export default function GeneratePage() {
         xy_matrix,
       }
       const t = await api.enqueueGenerate(body)
+      // 立即同步 ref，避免 supervisor 在 enqueue 返回 → setCurrentTask 渲染
+      // 之间已经处理完任务并发了 task_state_changed 事件（config 缺失这种
+      // 早期失败会马上发 SSE，handler 拿 taskIdRef 还是 null → 漏事件）
+      taskIdRef.current = t.id
       setCurrentTask(t)
       toast(`测试任务 #${t.id} 已入队`, 'success')
     } catch (e) {
       toast(String(e), 'error')
-      setBusy(false)
+    } finally {
+      setSubmitting(false)
     }
   }
 
@@ -298,6 +306,10 @@ export default function GeneratePage() {
 
   const cancelable = currentTask
     && (currentTask.status === 'pending' || currentTask.status === 'running')
+
+  // busy 派生：HTTP 入队中 OR 任务还在 pending/running。terminal status
+  //（done/failed/canceled）一律 busy=false，让 button 立刻可点重试
+  const busy: boolean = submitting || Boolean(cancelable)
 
   const generateLabel = busy
     ? '生成中…'

@@ -42,6 +42,16 @@ def version_dir(project_id: int, slug: str, label: str) -> Path:
     return projects.project_dir(project_id, slug) / "versions" / label
 
 
+def _natural_key(s: str) -> list[Any]:
+    """自然序 key：字符串里的数字段当 int 比较，让 a_5 < a_60。
+
+    re.split(r'(\\d+)', 'a_60') -> ['a_', '60', '']
+    转换为 ['a_', 60, '']，与同样转换后的 'a_5' -> ['a_', 5, ''] 按位比较。
+    """
+    parts = re.split(r"(\d+)", s)
+    return [int(p) if p.isdigit() else p.lower() for p in parts]
+
+
 def list_lora_ckpts(vdir: Path) -> list[dict[str, Any]]:
     """扫 versions/{label}/output/*.safetensors，列所有 LoRA ckpt 文件。
 
@@ -56,7 +66,8 @@ def list_lora_ckpts(vdir: Path) -> list[dict[str, Any]]:
       - label: 显示用，"step 2476" / "epoch 5" / "final" / 文件名
       - path: 绝对路径字符串
       - mtime: 修改时间戳（前端按时间倒序展示）
-    排序：final 在前 → step 数字降序 → epoch 数字降序 → 其他按 mtime 降序。
+    排序：final 在前 → step 数字降序 → epoch 数字降序 → 其他按 label 自然序升序
+    （让 a_5 < a_60，避免 lex 序把 a_60 排到 a_9 前面或 mtime 序乱掉用户预期）。
     """
     output_dir = vdir / "output"
     if not output_dir.exists():
@@ -93,13 +104,17 @@ def list_lora_ckpts(vdir: Path) -> list[dict[str, Any]]:
             "path": str(f), "mtime": mtime,
         })
 
-    # 排序：final 顶部；同 kind 按 value 降序；其他按 mtime 降序
+    # 排序：final 顶部；step/epoch 按 value 降序；other 按 label 自然序升序
     kind_order = {"final": 0, "step": 1, "epoch": 2, "other": 3}
-    items.sort(key=lambda x: (
-        kind_order.get(x["kind"], 9),
-        -x["value"],
-        -x["mtime"],
-    ))
+
+    def _sort_key(x: dict[str, Any]) -> tuple[Any, ...]:
+        ko = kind_order.get(x["kind"], 9)
+        if x["kind"] in ("step", "epoch"):
+            return (ko, -x["value"], [], -x["mtime"])
+        # final / other：value 都是 0，按 label 自然序升序（other 主要受益）
+        return (ko, 0, _natural_key(x["label"]), -x["mtime"])
+
+    items.sort(key=_sort_key)
     return items
 
 

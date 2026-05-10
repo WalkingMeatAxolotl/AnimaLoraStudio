@@ -51,7 +51,10 @@ function CkptMultiPicker({
   const toggle = (p: string) => {
     const next = new Set(selected)
     if (next.has(p)) next.delete(p); else next.add(p)
-    onChange(Array.from(next).join(', '))
+    // 按 ckpts 列表顺序输出（server 已 final → step desc → epoch desc → 自然序）
+    // 而非 set 插入序，让 XY 网格列顺序与可选列表一致，避免点击次序污染。
+    const ordered = ckpts.map((c) => c.path).filter((path) => next.has(path))
+    onChange(ordered.join(', '))
   }
 
   if (!loaded) {

@@ -4,6 +4,18 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AnimaStudio</title>
+    <link id="favicon" rel="icon" type="image/png" href="./icons/noal_smug.png" />
+    <script type="module">
+      // 10 张 noal 表情头每次刷新随机选一张作 favicon。
+      const icons = [
+        'noal_conf2.png', 'noal_confused.png', 'noal_emb.png',
+        'noal_heart.png', 'noal_sad.png', 'noal_shock.png',
+        'noal_shy_mad.png', 'noal_shy_mad2.png', 'noal_sleepy.png',
+        'noal_smug.png',
+      ]
+      const pick = icons[Math.floor(Math.random() * icons.length)]
+      document.getElementById('favicon').href = `${import.meta.env.BASE_URL}icons/${pick}`
+    </script>
   </head>
   <body>
     <div id="root"></div>

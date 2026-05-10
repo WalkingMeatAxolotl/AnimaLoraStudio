@@ -92,7 +92,9 @@ function HistoryItem({ entry, onSelect, onRemove }: ItemProps) {
   return (
     <div
       className="relative rounded-sm border border-subtle hover:border-strong cursor-pointer overflow-hidden"
-      style={{ width: 56, height: 56 }}
+      // flexShrink:0：父容器是 flex-col，默认 shrink=1 会在历史满时把高度压扁（56xN，N<56），
+      //   破坏 1:1 长宽比 + 让 overflowY:auto 失效（永远没溢出）。
+      style={{ width: 56, height: 56, flexShrink: 0 }}
       onClick={onSelect}
       title={`#${entry.taskId} · ${new Date(entry.createdAt).toLocaleString()}`}
     >
