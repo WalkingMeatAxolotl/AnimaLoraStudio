@@ -169,9 +169,9 @@ class TrainingConfig(BaseModel):
     )
 
     # ------------------------------------------------------------------- LoRA
-    lora_type: Literal["lora", "lokr", "loha"] = Field(
+    lora_type: Literal["lora", "lokr", "loha", "tlora", "orthohydra"] = Field(
         "lokr",
-        description="适配器算法（lora/lokr/loha）",
+        description="适配器算法（lora/lokr/loha/tlora/orthohydra）",
         json_schema_extra=_meta("lora"),
     )
     lora_rank: int = Field(
@@ -223,6 +223,26 @@ class TrainingConfig(BaseModel):
         None,
         description='T-LoRA 模块级学习率覆盖，正则→lr，如 {".*blocks_0.*": 1e-4}（仅 lora_type=tlora）',
         json_schema_extra=_meta("lora", show_when="lora_type==tlora"),
+    )
+    orthohydra_num_experts: int = Field(
+        8, ge=2, le=32,
+        description="Ortho-Hydra expert 数量（仅 lora_type=orthohydra）",
+        json_schema_extra=_meta("lora", show_when="lora_type==orthohydra"),
+    )
+    orthohydra_balance_loss_weight: float = Field(
+        5e-7, ge=0.0,
+        description="Expert balance auxiliary loss 权重（仅 lora_type=orthohydra）",
+        json_schema_extra=_meta("lora", show_when="lora_type==orthohydra"),
+    )
+    orthohydra_balance_warmup_ratio: float = Field(
+        0.4, ge=0.0, le=1.0,
+        description="Balance loss 热身比例，前 X% 步不加（仅 lora_type=orthohydra）",
+        json_schema_extra=_meta("lora", show_when="lora_type==orthohydra"),
+    )
+    orthohydra_router_lr_scale: float = Field(
+        10.0, ge=1.0,
+        description="Router 学习率倍数（相对于 adapter lr，仅 lora_type=orthohydra）",
+        json_schema_extra=_meta("lora", show_when="lora_type==orthohydra"),
     )
 
     # ------------------------------------------------------------------ 训练

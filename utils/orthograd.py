@@ -56,6 +56,7 @@ DEFAULT_EXCLUDE_PARAM_KEYWORDS: Tuple[str, ...] = (
     "lokr_w1",
     "lokr_w2_b",
     "lora_B",
+    "lambda_layer",  # OrthoHydra: zero-init magnitude-bearing scale
 )
 
 DEFAULT_EXCLUDE_MODULE_KEYWORDS: Tuple[str, ...] = ()

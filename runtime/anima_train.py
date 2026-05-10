@@ -2160,7 +2160,7 @@ def main():
         update_monitor(
             total_epochs=int(args.epochs or 0),
             config={
-                "model": {"lokr": "Anima LoKr"}.get(args.lora_type, "Anima LoRA"),
+                "model": {"lokr": "Anima LoKr", "tlora": "Anima T-LoRA", "orthohydra": "Anima Ortho-Hydra"}.get(args.lora_type, "Anima LoRA"),
                 "rank": args.lora_rank,
                 "alpha": args.lora_alpha,
                 "epochs": args.epochs,
@@ -2235,6 +2235,16 @@ def main():
             min_rank=int(getattr(args, "tlora_min_rank", 1) or 1),
             reg_dims=getattr(args, "tlora_reg_dims", None) or None,
             reg_lrs=getattr(args, "tlora_reg_lrs", None) or None,
+        )
+    elif args.lora_type == "orthohydra":
+        from utils.orthohydra_adapter import AnimaOrthoHydraAdapter
+        injector = AnimaOrthoHydraAdapter(
+            rank=args.lora_rank,
+            alpha=args.lora_alpha,
+            num_experts=int(getattr(args, "orthohydra_num_experts", 8) or 8),
+            balance_loss_weight=float(getattr(args, "orthohydra_balance_loss_weight", 5e-7) or 5e-7),
+            balance_warmup_ratio=float(getattr(args, "orthohydra_balance_warmup_ratio", 0.4) or 0.4),
+            router_lr_scale=float(getattr(args, "orthohydra_router_lr_scale", 10.0) or 10.0),
         )
     else:
         from utils.lycoris_adapter import AnimaLycorisAdapter
@@ -2346,6 +2356,11 @@ def main():
     # 优化器
     weight_decay = float(getattr(args, "weight_decay", 0.01) or 0.0)
     param_groups = injector.get_param_groups(weight_decay)
+    if args.lora_type == "orthohydra":
+        _router_lr_scale = float(getattr(args, "orthohydra_router_lr_scale", 10.0) or 10.0)
+        for _g in param_groups:
+            if _g.pop("_is_router_group", False):
+                _g["lr"] = args.learning_rate * _router_lr_scale
     optimizer_type = (getattr(args, "optimizer_type", "adamw") or "adamw").lower()
     from utils.optimizer_utils import create_optimizer, optimizer_eval_mode
     optimizer_extra: dict = {}
@@ -2651,6 +2666,10 @@ def main():
                 mode=str(getattr(args, "timestep_sampling", "logit_normal") or "logit_normal"),
                 shift=float(getattr(args, "timestep_shift", 3.0) or 3.0),
             )
+            if args.lora_type == "tlora":
+                injector.set_mask(injector.build_sigma_mask(t, device))
+            elif args.lora_type == "orthohydra":
+                injector.set_sigma(float(t.mean().item()))
             t_exp = t.view(-1, 1, 1, 1, 1)
             noise = make_noise(
                 latents,
@@ -2685,6 +2704,15 @@ def main():
                     loss_per_sample = loss_per_sample * lw.view(-1, *([1] * (loss_per_sample.dim() - 1)))
                 loss = loss_per_sample.mean()
 
+            # Ortho-Hydra expert balance auxiliary loss (outside autocast; gate tensors retain grad)
+            if args.lora_type == "orthohydra":
+                _warmup_done = (
+                    not total_steps
+                    or global_step >= int(total_steps * injector.balance_warmup_ratio)
+                )
+                if _warmup_done:
+                    loss = loss + injector.balance_loss_weight * injector.get_balance_loss()
+
             # NaN 检测：forward 出 NaN 时跳过本 micro-batch
             if not torch.isfinite(loss):
                 logger.warning(f"step {global_step} micro-batch {batch_idx}: loss={loss.item():.4g}，跳过")
@@ -2716,6 +2744,9 @@ def main():
                             [(f"{k}.lora_down", lyr.down.weight) for k, lyr in injector._layer_keys.items()]
                             + [(f"{k}.lora_up", lyr.up.weight) for k, lyr in injector._layer_keys.items()]
                         )
+                    elif args.lora_type == "orthohydra":
+                        # lambda_layer is zero-init/magnitude-bearing; excluded by default keyword
+                        _og_named = injector.named_trainable_params()
                     else:
                         _og_named = list(injector.network.named_parameters())
                     apply_partial_orthograd_(_og_named, global_step, orthograd_cfg)
