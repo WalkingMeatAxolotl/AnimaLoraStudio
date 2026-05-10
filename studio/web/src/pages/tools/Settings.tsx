@@ -1777,7 +1777,7 @@ function TaeFluxSection({
   draft, update,
 }: {
   draft: Secrets
-  update: <S extends keyof Secrets, K extends keyof Secrets[S]>(
+  update: <S extends Section, K extends keyof Secrets[S]>(
     section: S, key: K, value: Secrets[S][K],
   ) => void
 }) {
