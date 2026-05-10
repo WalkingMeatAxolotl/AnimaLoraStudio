@@ -1673,12 +1673,35 @@ def sample_image(
 # 训练辅助
 # ============================================================================
 
-def sample_t(bs, device):
-    """采样时间步 (logit-normal)"""
-    t = torch.sigmoid(torch.randn(bs, device=device))
-    shift = 3.0
-    t = (t * shift) / (1 + (shift - 1) * t)
-    return t
+def sample_t(bs, device, mode: str = "logit_normal", shift: float = 3.0) -> torch.Tensor:
+    """采样 Flow Matching 时间步 t ∈ (0, 1)。
+
+    mode:
+      logit_normal      — SD3/Anima 默认，偏向中间 t；shift>1 推向高噪声端
+      uniform           — 均匀采样，对细节端和结构端覆盖更均衡
+      logit_normal_low  — logit-normal 反向 shift，偏向低噪声/细节端
+      mode              — SD3 mode-distribution，集中在某个 sigma 附近
+    """
+    mode = (mode or "logit_normal").lower()
+    u = torch.sigmoid(torch.randn(bs, device=device))
+
+    if mode == "uniform":
+        return torch.rand(bs, device=device).clamp(1e-4, 1 - 1e-4)
+
+    if mode == "logit_normal_low":
+        s = max(float(shift), 1e-4)
+        u = (u * (1.0 / s)) / (1 + (1.0 / s - 1) * u)
+        return u.clamp(1e-4, 1 - 1e-4)
+
+    if mode == "mode":
+        s = float(shift)
+        u = 1 - u - s * (torch.cos(torch.pi * 0.5 * u) ** 2 - 1 + u)
+        return u.clamp(1e-4, 1 - 1e-4)
+
+    # logit_normal（默认）+ shift
+    s = float(shift)
+    u = (u * s) / (1 + (s - 1) * u)
+    return u.clamp(1e-4, 1 - 1e-4)
 
 
 def compute_loss_weight(
@@ -1945,7 +1968,7 @@ def main():
         update_monitor(
             total_epochs=int(args.epochs or 0),
             config={
-                "model": "Anima LoKr" if args.lora_type == "lokr" else "Anima LoRA",
+                "model": {"lokr": "Anima LoKr", "tlora": "Anima T-LoRA"}.get(args.lora_type, "Anima LoRA"),
                 "rank": args.lora_rank,
                 "alpha": args.lora_alpha,
                 "epochs": args.epochs,
@@ -2010,20 +2033,28 @@ def main():
         args.text_encoder_path, args.t5_tokenizer_path, device, dtype
     )
 
-    # 注入 LoRA（lycoris-lora backend，Stage 3 切换）
+    # 注入 LoRA
     logger.info(f"注入 {args.lora_type.upper()}...")
-    from utils.lycoris_adapter import AnimaLycorisAdapter
-    injector = AnimaLycorisAdapter(
-        algo=args.lora_type,
-        rank=args.lora_rank,
-        alpha=args.lora_alpha,
-        factor=args.lokr_factor,
-        dropout=float(getattr(args, "lora_dropout", 0.0) or 0.0),
-        rank_dropout=float(getattr(args, "lora_rank_dropout", 0.0) or 0.0),
-        module_dropout=float(getattr(args, "lora_module_dropout", 0.0) or 0.0),
-        weight_decompose=bool(getattr(args, "lora_dora", False)),
-        rs_lora=bool(getattr(args, "lora_rs", False)),
-    )
+    if args.lora_type == "tlora":
+        from utils.tlora_adapter import AnimaTLoRAAdapter
+        injector = AnimaTLoRAAdapter(
+            rank=args.lora_rank,
+            alpha=args.lora_alpha,
+            min_rank=int(getattr(args, "tlora_min_rank", 1) or 1),
+        )
+    else:
+        from utils.lycoris_adapter import AnimaLycorisAdapter
+        injector = AnimaLycorisAdapter(
+            algo=args.lora_type,
+            rank=args.lora_rank,
+            alpha=args.lora_alpha,
+            factor=args.lokr_factor,
+            dropout=float(getattr(args, "lora_dropout", 0.0) or 0.0),
+            rank_dropout=float(getattr(args, "lora_rank_dropout", 0.0) or 0.0),
+            module_dropout=float(getattr(args, "lora_module_dropout", 0.0) or 0.0),
+            weight_decompose=bool(getattr(args, "lora_dora", False)),
+            rs_lora=bool(getattr(args, "lora_rs", False)),
+        )
     injector.inject(model)
     
     # 从已有 LoRA 继续训练
@@ -2124,7 +2155,7 @@ def main():
     optimizer_type = (getattr(args, "optimizer_type", "adamw") or "adamw").lower()
     from utils.optimizer_utils import create_optimizer
     optimizer_extra = {}
-    if optimizer_type == "prodigy":
+    if optimizer_type in ("prodigy", "prodigy_plus"):
         optimizer_extra["d_coef"] = float(getattr(args, "prodigy_d_coef", 1.0))
         optimizer_extra["safeguard_warmup"] = bool(getattr(args, "prodigy_safeguard_warmup", True))
     if optimizer_type == "prodigy_plus":
@@ -2280,6 +2311,8 @@ def main():
     
     current_epoch = start_epoch
     model.train()
+    if optimizer_type == "prodigy_plus" and hasattr(optimizer, "train"):
+        optimizer.train()
     step_start_time = time.perf_counter()
 
     # 设置采样提示词列表（支持多角色轮换）
@@ -2370,7 +2403,13 @@ def main():
                     cross = F.pad(cross, (0, 0, 0, 512 - cross.shape[1]))
 
             # Flow Matching
-            t = sample_t(bs, device)
+            t = sample_t(
+                bs, device,
+                mode=str(getattr(args, "timestep_sampling", "logit_normal") or "logit_normal"),
+                shift=float(getattr(args, "timestep_shift", 3.0) or 3.0),
+            )
+            if args.lora_type == "tlora":
+                injector.set_mask(injector.build_sigma_mask(t, device))
             t_exp = t.view(-1, 1, 1, 1, 1)
             noise = torch.randn_like(latents)
             noisy = (1 - t_exp) * latents + t_exp * noise
@@ -2424,7 +2463,7 @@ def main():
                 if grad_clip > 0:
                     torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=grad_clip)
                 optimizer.step()
-                if scheduler is not None:
+                if scheduler is not None and optimizer_type != "prodigy_plus":
                     scheduler.step()
                 optimizer.zero_grad()
                 global_step += 1
@@ -2472,6 +2511,8 @@ def main():
                     prompt = get_next_sample_prompt()
                     prompt_short = prompt[:50] + "..." if len(prompt) > 50 else prompt
                     emit(f"采样中 (step {global_step}): {prompt_short}")
+                    if optimizer_type == "prodigy_plus" and hasattr(optimizer, "eval"):
+                        optimizer.eval()
                     model.eval()
                     s_w = int(getattr(args, "sample_width", 0) or 0) or int(args.resolution)
                     s_h = int(getattr(args, "sample_height", 0) or 0) or int(args.resolution)
@@ -2497,6 +2538,8 @@ def main():
                         except Exception:
                             pass
                     model.train()
+                    if optimizer_type == "prodigy_plus" and hasattr(optimizer, "train"):
+                        optimizer.train()
 
                 # 定期保存 LoRA 权重（按 step）
                 save_every_steps = getattr(args, "save_every_steps", 0)
@@ -2540,6 +2583,8 @@ def main():
                 prompt = get_next_sample_prompt()
                 prompt_short = prompt[:50] + "..." if len(prompt) > 50 else prompt
                 emit(f"采样中 (epoch {current_epoch}): {prompt_short}")
+                if optimizer_type == "prodigy_plus" and hasattr(optimizer, "eval"):
+                    optimizer.eval()
                 model.eval()
                 s_w = int(getattr(args, "sample_width", 0) or 0) or int(args.resolution)
                 s_h = int(getattr(args, "sample_height", 0) or 0) or int(args.resolution)
@@ -2560,6 +2605,8 @@ def main():
                 img.save(sample_path)
                 emit(f"采样保存: epoch_{current_epoch}.png")
                 model.train()
+                if optimizer_type == "prodigy_plus" and hasattr(optimizer, "train"):
+                    optimizer.train()
                 
                 # 更新监控面板
                 if monitor_server:

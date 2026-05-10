@@ -277,6 +277,16 @@ class TrainingConfig(BaseModel):
         description="权重衰减（0=禁用）",
         json_schema_extra=_meta("training"),
     )
+    timestep_sampling: Literal["logit_normal", "uniform", "logit_normal_low", "mode"] = Field(
+        "logit_normal",
+        description="时间步采样分布（logit_normal 为 SD3/Anima 默认）",
+        json_schema_extra=_meta("training"),
+    )
+    timestep_shift: float = Field(
+        3.0, ge=0.1, le=10.0,
+        description="logit-normal / mode shift（>1 偏向高噪声端，<1 偏向细节端）",
+        json_schema_extra=_meta("training", show_when="timestep_sampling!=uniform"),
+    )
     loss_weighting: Literal["none", "min_snr", "detail_inv_t", "cosmap"] = Field(
         "none",
         description="Loss 加权方案（min_snr 推荐；detail_inv_t 细节强化；cosmap SD3 风格）",
