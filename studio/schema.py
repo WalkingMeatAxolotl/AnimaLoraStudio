@@ -214,6 +214,16 @@ class TrainingConfig(BaseModel):
         description="层级 stochastic depth（整层级别随机跳过）",
         json_schema_extra=_meta("lora"),
     )
+    tlora_reg_dims: Optional[dict] = Field(
+        None,
+        description='T-LoRA 模块级 rank 覆盖，正则→rank，如 {".*blocks_0.*": 8}（仅 lora_type=tlora）',
+        json_schema_extra=_meta("lora", show_when="lora_type==tlora"),
+    )
+    tlora_reg_lrs: Optional[dict] = Field(
+        None,
+        description='T-LoRA 模块级学习率覆盖，正则→lr，如 {".*blocks_0.*": 1e-4}（仅 lora_type=tlora）',
+        json_schema_extra=_meta("lora", show_when="lora_type==tlora"),
+    )
 
     # ------------------------------------------------------------------ 训练
     epochs: int = Field(

@@ -2233,6 +2233,8 @@ def main():
             rank=args.lora_rank,
             alpha=args.lora_alpha,
             min_rank=int(getattr(args, "tlora_min_rank", 1) or 1),
+            reg_dims=getattr(args, "tlora_reg_dims", None) or None,
+            reg_lrs=getattr(args, "tlora_reg_lrs", None) or None,
         )
     else:
         from utils.lycoris_adapter import AnimaLycorisAdapter
