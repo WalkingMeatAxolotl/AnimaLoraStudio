@@ -277,6 +277,21 @@ class TrainingConfig(BaseModel):
         description="权重衰减（0=禁用）",
         json_schema_extra=_meta("training"),
     )
+    loss_weighting: Literal["none", "min_snr", "detail_inv_t", "cosmap"] = Field(
+        "none",
+        description="Loss 加权方案（min_snr 推荐；detail_inv_t 细节强化；cosmap SD3 风格）",
+        json_schema_extra=_meta("training"),
+    )
+    min_snr_gamma: float = Field(
+        5.0, ge=0.1, le=20.0,
+        description="Min-SNR gamma 值（仅 loss_weighting=min_snr）",
+        json_schema_extra=_meta("training", show_when="loss_weighting==min_snr"),
+    )
+    weight_cap_ratio: float = Field(
+        0.0, ge=0.0, le=50.0,
+        description="Batch 内 loss 权重 max/min 比上限（0=禁用；小 batch+Prodigy 建议 5）",
+        json_schema_extra=_meta("training", show_when="loss_weighting!=none"),
+    )
     grad_clip_max_norm: float = Field(
         0.0, ge=0.0,
         description="梯度裁剪最大范数（0=禁用）",
