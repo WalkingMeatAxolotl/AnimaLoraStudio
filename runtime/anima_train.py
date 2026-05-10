@@ -2524,11 +2524,27 @@ def main():
                     loss_per_sample = loss_per_sample * w
                 loss = loss_per_sample.mean()
 
+            # NaN 检测：forward 出 NaN 时跳过本 micro-batch
+            if not torch.isfinite(loss):
+                logger.warning(f"step {global_step} micro-batch {batch_idx}: loss={loss.item():.4g}，跳过")
+                optimizer.zero_grad()
+                continue
+
             # 反向传播
             loss = loss / args.grad_accum
             loss.backward()
 
             if (batch_idx + 1) % args.grad_accum == 0:
+                # NaN 梯度检测：跳过本次 update，清零继续
+                has_nan_grad = any(
+                    p.grad is not None and not torch.isfinite(p.grad).all()
+                    for p in trainable_params
+                )
+                if has_nan_grad:
+                    logger.warning(f"step {global_step}: 梯度含 NaN/Inf，跳过 optimizer.step()")
+                    optimizer.zero_grad()
+                    continue
+
                 if grad_clip > 0:
                     torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=grad_clip)
                 optimizer.step()
