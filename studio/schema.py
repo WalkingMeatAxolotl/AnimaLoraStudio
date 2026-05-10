@@ -277,6 +277,21 @@ class TrainingConfig(BaseModel):
         description="权重衰减（0=禁用）",
         json_schema_extra=_meta("training"),
     )
+    noise_offset: float = Field(
+        0.0, ge=0.0, le=0.2,
+        description="噪声低频偏移强度，缓解亮度均值偏差（0=禁用，推荐 0.05-0.1）",
+        json_schema_extra=_meta("training"),
+    )
+    pyramid_noise_iters: int = Field(
+        0, ge=0, le=6,
+        description="多尺度噪声叠加层数（0=禁用；2-3 帮助全局光照构图学习）",
+        json_schema_extra=_meta("training"),
+    )
+    pyramid_noise_discount: float = Field(
+        0.35, ge=0.1, le=0.9,
+        description="每层噪声衰减系数（仅 pyramid_noise_iters > 0）",
+        json_schema_extra=_meta("training", show_when="pyramid_noise_iters!=0"),
+    )
     timestep_sampling: Literal["logit_normal", "uniform", "logit_normal_low", "mode"] = Field(
         "logit_normal",
         description="时间步采样分布（logit_normal 为 SD3/Anima 默认）",
