@@ -217,7 +217,19 @@ def default_paths_for_new_version() -> dict[str, str]:
 # 魔搭里 Anima repo 将主模型 / VAE / 文本编码器全部打包在 split_files/ 下，
 # 文本编码器是单个 safetensors（而不是 HF 上 Qwen3 的散文件目录）。
 MS_ANIMA_TEXT_ENCODER_PATH = "split_files/text_encoders/qwen_3_06b_base.safetensors"
-# T5 tokenizer / TAEFlux / WD14 / CLTagger 在魔搭暂无对应镜像，走 HF 回退。
+# T5 tokenizer / TAEFlux / CLTagger 在魔搭暂无对应镜像，走 HF 回退。
+# WD14：fireicewolf 在魔搭镜像了 SmilingWolf 系列，repo 命名规则为
+#   SmilingWolf/{name} → fireicewolf/{name}
+_MS_WD14_OWNER = "fireicewolf"
+_HF_WD14_OWNER = "SmilingWolf"
+
+
+def _ms_wd14_repo_id(hf_repo_id: str) -> Optional[str]:
+    """把 SmilingWolf/wd-xxx 换成 fireicewolf/wd-xxx；其它 repo 返回 None。"""
+    if hf_repo_id.startswith(_HF_WD14_OWNER + "/"):
+        name = hf_repo_id[len(_HF_WD14_OWNER) + 1:]
+        return f"{_MS_WD14_OWNER}/{name}"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -484,12 +496,26 @@ def download_wd14(
     *,
     on_log: Callable[[str], None] = print,
 ) -> bool:
-    """下载 WD14 单个 model_id 的两个文件到 `{models_root}/wd14/{safe_id}/`。"""
+    """下载 WD14 单个 model_id 的两个文件到 `{models_root}/wd14/{safe_id}/`。
+
+    ModelScope 源：SmilingWolf/* → fireicewolf/*（fireicewolf 在魔搭镜像了全套）。
+    没有 MS 映射（非 SmilingWolf 前缀）时自动回退 HF。
+    """
     r = root or models_root()
     target = wd14_target_dir(r, model_id)
-    on_log(f"\n📥 WD14 {model_id} → {target}")
     target.mkdir(parents=True, exist_ok=True)
     ok = True
+    if _get_download_source() == "modelscope":
+        ms_repo = _ms_wd14_repo_id(model_id)
+        if ms_repo:
+            on_log(f"\n📥 WD14 {model_id} → {target}（via ModelScope: {ms_repo}）")
+            for f in WD14_FILES:
+                if not download_flat_ms(ms_repo, f, target / f, on_log=on_log):
+                    ok = False
+            return ok
+        on_log(f"\n📥 WD14 {model_id}：无魔搭映射，回退 HuggingFace")
+    else:
+        on_log(f"\n📥 WD14 {model_id} → {target}")
     for f in WD14_FILES:
         if not download_flat(model_id, f, target / f, on_log=on_log):
             ok = False

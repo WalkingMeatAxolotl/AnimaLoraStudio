@@ -322,9 +322,17 @@ def current_runtime() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _pip(args: list[str]) -> tuple[int, str]:
-    """跑 `<sys.executable> -m pip <args>`；返回 (rc, combined_output)。"""
+_PIP_FALLBACK_MIRROR = "https://mirrors.cloud.tencent.com/pypi/simple/"
+
+
+def _pip(args: list[str], *, mirror: str = "") -> tuple[int, str]:
+    """跑 `<sys.executable> -m pip <args>`；返回 (rc, combined_output)。
+
+    mirror 非空时追加 `-i {mirror}`（用于镜像 fallback 重试）。
+    """
     cmd = [sys.executable, "-m", "pip", *args]
+    if mirror:
+        cmd += ["-i", mirror]
     logger.info("[onnx_setup] %s", " ".join(cmd))
     try:
         out = subprocess.run(
@@ -407,6 +415,9 @@ def _install_cuda_runtime_wheels() -> dict[str, Any]:
         }
     rc, out = _pip(["install", *targets])
     if rc != 0:
+        logger.warning("[onnx_setup] CUDA wheels pip 官方源失败，切换腾讯镜像重试...")
+        rc, out = _pip(["install", *targets], mirror=_PIP_FALLBACK_MIRROR)
+    if rc != 0:
         # 回滚：把本次想装的从 venv 里再卸掉，保持装包前的状态
         # （pip install 失败时部分包可能已装；不区分，统一卸）
         rb_rc, rb_out = _pip(["uninstall", "-y", *targets])
@@ -437,6 +448,9 @@ def install_runtime(target: str = "auto") -> dict[str, Any]:
     spec = _decide_target(target)
     rc1, log1 = _pip(["uninstall", "-y", GPU_PACKAGE, CPU_PACKAGE])
     rc2, log2 = _pip(["install", "--upgrade", spec])
+    if rc2 != 0:
+        logger.warning("[onnx_setup] pip 官方源失败，切换腾讯镜像重试...")
+        rc2, log2 = _pip(["install", "--upgrade", spec], mirror=_PIP_FALLBACK_MIRROR)
     if rc2 != 0:
         raise RuntimeError(f"安装 {spec} 失败（rc={rc2}）:\n{log2}")
 

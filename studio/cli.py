@@ -53,7 +53,7 @@ def find_python() -> str:
 
 
 _NPM_MIRROR = "https://registry.npmmirror.com"
-_PIP_MIRROR = "https://mirrors.aliyun.com/pypi/simple/"
+_PIP_MIRROR = "https://mirrors.cloud.tencent.com/pypi/simple/"
 
 
 def _npm_call(npm: str, args: list[str], cwd: str, timeout: int = 180) -> int:
