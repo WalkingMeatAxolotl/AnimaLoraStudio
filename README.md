@@ -183,14 +183,23 @@ AnimaLoraStudio/
 
 ## 文档
 
-- [CHANGELOG.md](CHANGELOG.md) — 版本更新历史
-- [docs/json-caption-format.md](docs/json-caption-format.md) — JSON 标签格式 + 分类 shuffle
-- [docs/tagging-guide.md](docs/tagging-guide.md) — Anima 标签格式与最佳实践
-- [docs/training-tips.md](docs/training-tips.md) — 训练参数 / 断点续训 / 常见问题
-- [docs/regularization-analysis.md](docs/regularization-analysis.md) — 正则集生成原理
-- [docs/trainer-optimization-analysis.md](docs/trainer-optimization-analysis.md) — 训练性能调优
-- [docs/studio-pipeline/](docs/studio-pipeline/) — Studio 七步改造的设计文档（开发者向）
-- [studio/README.md](studio/README.md) — Studio 内部架构
+文档总入口：[docs/README.md](docs/README.md)。分三块：
+
+**用户向**（[`docs/user-guide/`](docs/user-guide/)）
+- [tagging-guide.md](docs/user-guide/tagging-guide.md) — Anima 标签格式与最佳实践
+- [training-tips.md](docs/user-guide/training-tips.md) — 训练参数 / 显存配置矩阵 / 常见问题
+- [regularization.md](docs/user-guide/regularization.md) — 正则集生成原理
+- [caption-format.md](docs/user-guide/caption-format.md) — JSON 标签格式 + 分类 shuffle
+
+**开发者向**
+- [docs/architecture/studio-pipeline.md](docs/architecture/studio-pipeline.md) — Studio 跨步骤架构总览
+- [studio/README.md](studio/README.md) — Studio 内部模块结构
+
+**历史决策**（[`docs/adr/`](docs/adr/)）
+- 记录「为什么选 X 而不选 Y」，已落地的不删
+
+**版本变更**
+- [CHANGELOG.md](CHANGELOG.md)
 
 ---
 

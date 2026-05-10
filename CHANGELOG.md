@@ -46,6 +46,13 @@
 - **版本控制**
   - 版本号集中到 `studio/__init__.py:__version__`，FastAPI / Sidebar 都从这派生
   - 新建本 `CHANGELOG.md`
+- **文档结构重构**
+  - 拆 `docs/` 为三块：`user-guide/`（用户向）、`architecture/`（开发者向）、`adr/`（决策记录）
+  - 新建 `docs/README.md` 总入口 + `docs/adr/README.md` 含 ADR 模板
+  - 三篇互斥方案文档合并为 [ADR 0001 — LoKr 走 lycoris-lora 而不切 sd-scripts](docs/adr/0001-lokr-via-lycoris-lora.md)
+  - 删除已落地的 11 篇 PP 阶段 plan（`studio-pipeline/PP0–PP10`），保留 overview 改写为 `architecture/studio-pipeline.md`
+  - 删除过期的 `trainer-optimization-analysis.md`（2025-02 快照，建议项已落地）
+  - `docs/_local/` 进 `.gitignore` 收个人草稿
 
 ### 变更
 
