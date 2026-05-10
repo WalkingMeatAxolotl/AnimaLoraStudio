@@ -9,12 +9,18 @@ Optimizer Utils Module - 优化器创建
    解决 Prodigy 在扩散 LoRA 训练中的 mutation ep / 风格突变问题。
 """
 
+from __future__ import annotations
+
 from contextlib import contextmanager
+import inspect
+import logging
 from typing import List, Dict, Any, Optional, Iterator
 
 import torch
 from torch import nn
 from torch.optim import Optimizer, AdamW
+
+logger = logging.getLogger(__name__)
 
 # 尝试导入 bitsandbytes
 try:
@@ -22,6 +28,38 @@ try:
     BITSANDBYTES_AVAILABLE = True
 except ImportError:
     BITSANDBYTES_AVAILABLE = False
+
+
+def _is_param_groups(params: Any) -> bool:
+    if isinstance(params, (list, tuple)) and len(params) > 0:
+        return isinstance(params[0], dict) and "params" in params[0]
+    return False
+
+
+def _filter_kwargs_by_signature(cls_or_fn, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        sig = inspect.signature(cls_or_fn)
+    except (TypeError, ValueError):
+        return dict(kwargs)
+
+    accepted, has_var_keyword = set(), False
+    for name, param in sig.parameters.items():
+        if param.kind is inspect.Parameter.VAR_KEYWORD:
+            has_var_keyword = True
+            break
+        accepted.add(name)
+
+    if has_var_keyword:
+        return dict(kwargs)
+
+    filtered = {k: v for k, v in kwargs.items() if k in accepted}
+    dropped = [k for k in kwargs if k not in accepted]
+    if dropped:
+        logger.warning(
+            f"[optimizer] Dropped unsupported kwargs for "
+            f"{getattr(cls_or_fn, '__name__', cls_or_fn)}: {dropped}"
+        )
+    return filtered
 
 
 def create_optimizer(
@@ -301,7 +339,7 @@ def create_prodigy_plus_schedulefree(
     lr: float,
     betas: tuple = (0.9, 0.999),
     weight_decay: float = 0.0,
-    eps: float = 1e-8,
+    eps: Optional[float] = None,
     d_coef: float = 1.0,
     prodigy_steps: int = 0,
     split_groups: bool = True,
@@ -358,29 +396,22 @@ def create_prodigy_plus_schedulefree(
         ) from e
 
     if abs(lr - 1.0) > 1e-9:
-        print(
-            f"[WARN] ProdigyPlusScheduleFree requires lr=1.0 (received {lr}); forcing lr=1.0. "
-            f"Tune d_coef instead of lr."
+        logger.warning(
+            f"[ProdigyPlus] Forcing lr=1.0 (got {lr}); "
+            f"Prodigy adapts step size internally via d."
         )
-        lr = 1.0
+    lr = 1.0
+
+    if isinstance(eps, (int, float)) and eps <= 0:
+        logger.warning(f"[ProdigyPlus] eps={eps} non-positive, falling back to None (Adam-atan2).")
+        eps = None
 
     # 上层 create_optimizer 默认 betas=(0.9, 0.999)（适合 AdamW），但 PPSF 推荐
     # (0.9, 0.99)。如果调用方没改默认，覆盖到 PPSF 推荐值。
     if tuple(betas) == (0.9, 0.999):
         betas = (0.9, 0.99)
 
-    print(
-        f"Creating ProdigyPlusScheduleFree optimizer "
-        f"(lr={lr}, betas={tuple(betas)}, weight_decay={weight_decay}, "
-        f"d_coef={d_coef}, prodigy_steps={prodigy_steps}, "
-        f"split_groups={split_groups}, use_speed={use_speed}, "
-        f"fused_back_pass={fused_back_pass})"
-    )
-
-    param_list = list(params)
-
-    optimizer = ProdigyPlusScheduleFree(
-        param_list,
+    candidate = dict(
         lr=lr,
         betas=tuple(betas),
         eps=eps,
@@ -394,9 +425,21 @@ def create_prodigy_plus_schedulefree(
         use_stableadamw=use_stableadamw,
         **kwargs,
     )
+    safe_kwargs = _filter_kwargs_by_signature(ProdigyPlusScheduleFree, candidate)
 
-    print("  [OK] ProdigyPlusScheduleFree optimizer created")
+    param_list = params if _is_param_groups(params) else list(params)
 
+    logger.info(
+        f"Creating ProdigyPlusScheduleFree "
+        f"(d_coef={d_coef}, betas={tuple(betas)}, wd={weight_decay}, "
+        f"eps={eps}, stableadamw={use_stableadamw})"
+    )
+    logger.info(f"[ProdigyPlus] Effective kwargs: {list(safe_kwargs.keys())}")
+
+    optimizer = ProdigyPlusScheduleFree(param_list, **safe_kwargs)
+
+    total = sum(p.numel() for g in optimizer.param_groups for p in g["params"] if p.requires_grad)
+    logger.info(f"[ProdigyPlus] Trainable params: {total:,}")
     return optimizer
 
 
