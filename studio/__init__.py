@@ -8,4 +8,4 @@
 
 版本规则：MAJOR.MINOR.PATCH（语义版本，但 0.x 阶段 MINOR 即视为破坏性升级）。
 """
-__version__ = "0.5.0"
+__version__ = "0.5.1"

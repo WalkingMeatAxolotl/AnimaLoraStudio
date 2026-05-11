@@ -8,6 +8,28 @@
 
 ---
 
+## [0.5.1] — 2026-05-10
+
+UI 体验小改进 + onnxruntime-gpu 跨平台修复（Windows / Linux 都踩到「装了 GPU 包但实际跑 CPU」）。
+
+### 改进
+
+- **打标 curation 工作流**（#27）
+  - 全屏 preview 取代弹窗预览
+  - 键盘 accept / remove 快捷键，过单张图更快
+  - tag 保存后明确的 CNB export 入口
+
+### 修复
+
+- **onnxruntime-gpu 静默降级 CPU**（#29 Windows / #30 Linux）
+  - 根因：onnxruntime 在 CUDA EP dlopen 失败时**不抛异常**，会内部 silently fallback 到 CPU；`ort.get_available_providers()` 仍报 CUDA 可用，UI 显示一切正常，用户只看到 CPU 占用飙升
+  - 加监控：`_create_session` 比对实际 `session.get_providers()`，请求过 CUDA 但实际不在 → 上报 `cuda_load_error` 让 UI 可见
+  - Windows：Python 3.8+ 废除 PATH 自动加载 DLL，新增 `os.add_dll_directory(torch/lib)` 让 onnxruntime 找得到 torch 自带的 `cublasLt64_12.dll` / `cudnn_*.dll`
+  - Linux：worker subprocess 顶层显式 `import onnxruntime_setup` 触发 preload；修 `_has_system_cuda_libs()` 误判（云镜像装 CUDA Toolkit 但没装 cuDNN → 之前被误判为完整系统 CUDA → 跳过 preload）
+  - 新增 `tools/diagnose_onnx_gpu.py` 诊断脚本
+
+---
+
 ## [0.5.0] — 2026-05-09
 
 累计 49 commits / 132 files (+17k / -1.6k)。集中在 4 块：测试出图、先验生成、Setup 重写、Settings 拆分 + 新 tagger（CLTagger）。
