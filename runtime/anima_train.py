@@ -2233,6 +2233,8 @@ def main():
             rank=args.lora_rank,
             alpha=args.lora_alpha,
             min_rank=int(getattr(args, "tlora_min_rank", 1) or 1),
+            alpha_rank_scale=float(getattr(args, "tlora_alpha_rank_scale", 1.0) or 1.0),
+            sig_type=str(getattr(args, "tlora_sig_type", "last") or "last"),
             reg_dims=getattr(args, "tlora_reg_dims", None) or None,
             reg_lrs=getattr(args, "tlora_reg_lrs", None) or None,
         )
@@ -2649,6 +2651,15 @@ def main():
                 cross = model.preprocess_text_embeds(qwen_emb, t5_ids)
                 if cross.shape[1] < 512:
                     cross = F.pad(cross, (0, 0, 0, 512 - cross.shape[1]))
+                # KV trim：把 padding 截到最近有效 token bucket（64/128/256/512）
+                # t5_attn=1 表示有效 token；取批次内最大实际长度再 round up
+                if getattr(args, "kv_trim", False):
+                    _actual = int(t5_attn.sum(dim=-1).max().item())
+                    for _b in (64, 128, 256, 512):
+                        if _b >= _actual:
+                            _bucket = _b
+                            break
+                    cross = cross[:, :_bucket, :].contiguous()
 
             # Flow Matching
             t = sample_t(
