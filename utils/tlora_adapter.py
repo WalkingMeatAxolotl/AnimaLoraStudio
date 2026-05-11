@@ -57,9 +57,20 @@ class TLoRALinearLayer(nn.Module):
     forward 时：output = original(x) + up(down(x) * mask) * scale
     mask 由外部 set_mask() 在每次 forward 前注入；
     mask=None 时等效于全秩（退化为普通 LoRA）。
+
+    sig_type 控制 down.weight 初始化方向：
+      "random" — 高斯初始化（默认，原始行为）
+      "last"   — W₀ 最小奇异值对应的右奇异向量（对预训练权重影响最小，推荐）
+      "first"  — W₀ 最大奇异值对应的右奇异向量（沿最主要方向学习）
     """
 
-    def __init__(self, original: nn.Linear, rank: int, alpha: float) -> None:
+    def __init__(
+        self,
+        original: nn.Linear,
+        rank: int,
+        alpha: float,
+        sig_type: str = "random",
+    ) -> None:
         super().__init__()
         in_f, out_f = original.in_features, original.out_features
         self.rank = rank
@@ -73,9 +84,22 @@ class TLoRALinearLayer(nn.Module):
         self.down = nn.Linear(in_f, rank, bias=False)
         self.up = nn.Linear(rank, out_f, bias=False)
 
-        # T-LoRA 初始化：down ~ N(0, 1/rank)，up = 0（训练开始时 delta=0）
-        nn.init.normal_(self.down.weight, std=1.0 / rank)
         nn.init.zeros_(self.up.weight)
+
+        if sig_type == "random":
+            nn.init.normal_(self.down.weight, std=1.0 / rank)
+        else:
+            # SVD 初始化：取 W₀ 的右奇异向量作为 down.weight 行
+            # "last"  → 影响最小的方向，从不干扰预训练知识的子空间出发
+            # "first" → 主要方向，沿模型最活跃的子空间出发
+            q = min(rank + 4, min(out_f, in_f))
+            W = original.weight.data.float()
+            _U, _S, V = torch.svd_lowrank(W, q=q, niter=2)  # V: (in_f, q)
+            if sig_type == "last":
+                vecs = V[:, -rank:].T.contiguous()   # (rank, in_f)，最小奇异向量
+            else:  # "first"
+                vecs = V[:, :rank].T.contiguous()    # (rank, in_f)，最大奇异向量
+            self.down.weight.data.copy_(vecs.to(self.down.weight.dtype))
 
         self.current_mask: Optional[torch.Tensor] = None  # [1, rank]
 
@@ -107,12 +131,16 @@ class AnimaTLoRAAdapter:
         rank: int = 16,
         alpha: float = 8.0,
         min_rank: int = 1,
+        alpha_rank_scale: float = 1.0,
+        sig_type: str = "random",
         reg_dims: Optional[dict[str, int]] = None,
         reg_lrs: Optional[dict[str, float]] = None,
     ) -> None:
         self.rank = rank
         self.alpha = alpha
         self.min_rank = max(1, min_rank)
+        self.alpha_rank_scale = max(0.1, float(alpha_rank_scale))
+        self.sig_type = sig_type
         # per-layer rank / lr：key 为正则表达式，匹配模块全名（如 blocks_0_self_attn_q_proj）
         self.reg_dims: dict[str, int] = dict(reg_dims) if reg_dims else {}
         self.reg_lrs: dict[str, float] = dict(reg_lrs) if reg_lrs else {}
@@ -177,7 +205,7 @@ class AnimaTLoRAAdapter:
                 mod_lr = self._get_reg_lr(key)
                 mod_alpha = float(mod_rank)  # alpha 跟随 rank，保持 scale 一致
 
-                tlora_layer = TLoRALinearLayer(original, mod_rank, mod_alpha)
+                tlora_layer = TLoRALinearLayer(original, mod_rank, mod_alpha, sig_type=self.sig_type)
 
                 if _device is not None:
                     tlora_layer.to(device=_device, dtype=_dtype)
@@ -209,8 +237,14 @@ class AnimaTLoRAAdapter:
 
         高噪（t→1）→ 低秩（min_rank），防过拟合；
         低噪（t→0）→ 高秩（max_rank），精细细节。
+
+        alpha_rank_scale 控制曲线形状（幂次调度）：
+          =1.0：线性衰减（默认）
+          >1.0：前期保持高 rank，后期陡降（风格细节保留更多）
+          <1.0：早期快速降到低 rank，后期平缓
         """
-        r = int((1.0 - t) * (self.rank - self.min_rank)) + self.min_rank
+        frac = (1.0 - t) ** self.alpha_rank_scale  # t=0→1.0，t=1→0.0
+        r = int(frac * (self.rank - self.min_rank)) + self.min_rank
         return max(self.min_rank, min(self.rank, r))
 
     def build_sigma_mask(self, t_batch: torch.Tensor, device: torch.device) -> torch.Tensor:
@@ -316,6 +350,8 @@ class AnimaTLoRAAdapter:
                 "rank": self.rank,
                 "min_rank": self.min_rank,
                 "alpha": self.alpha,
+                "alpha_rank_scale": self.alpha_rank_scale,
+                "sig_type": self.sig_type,
             }),
         }
         save_file(sd, str(path), metadata=meta)

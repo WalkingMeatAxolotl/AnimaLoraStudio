@@ -160,9 +160,9 @@ class TrainingConfig(BaseModel):
     )
 
     # ------------------------------------------------------------------- LoRA
-    lora_type: Literal["lora", "lokr", "loha", "tlora", "orthohydra"] = Field(
+    lora_type: Literal["lora", "lokr", "loha", "tlora", "orthohydra", "stylek"] = Field(
         "lokr",
-        description="适配器算法（lora/lokr/loha/tlora/orthohydra）",
+        description="适配器算法（lora/lokr/loha/tlora/orthohydra/stylek）",
         json_schema_extra=_meta("lora"),
     )
     lora_rank: int = Field(
@@ -205,6 +205,16 @@ class TrainingConfig(BaseModel):
         description="层级 stochastic depth（整层级别随机跳过）",
         json_schema_extra=_meta("lora"),
     )
+    tlora_alpha_rank_scale: float = Field(
+        1.0, ge=0.1, le=5.0,
+        description="T-LoRA rank 曲线幂次（1.0=线性；>1 前期高 rank 后期陡降；仅 lora_type=tlora）",
+        json_schema_extra=_meta("lora", show_when="lora_type==tlora"),
+    )
+    tlora_sig_type: Literal["random", "last", "first"] = Field(
+        "last",
+        description="T-LoRA down.weight 初始化方向（last=最小奇异向量/推荐；first=最大；random=高斯）",
+        json_schema_extra=_meta("lora", show_when="lora_type==tlora"),
+    )
     tlora_reg_dims: Optional[dict] = Field(
         None,
         description='T-LoRA 模块级 rank 覆盖，正则→rank，如 {".*blocks_0.*": 8}（仅 lora_type=tlora）',
@@ -234,6 +244,46 @@ class TrainingConfig(BaseModel):
         10.0, ge=1.0,
         description="Router 学习率倍数（相对于 adapter lr，仅 lora_type=orthohydra）",
         json_schema_extra=_meta("lora", show_when="lora_type==orthohydra"),
+    )
+    stylek_min_rank: int = Field(
+        4, ge=1,
+        description="StyleK 高噪声段最小 rank（仅 lora_type=stylek）",
+        json_schema_extra=_meta("lora", show_when="lora_type==stylek"),
+    )
+    stylek_alpha_rank_scale: float = Field(
+        2.0, ge=0.1, le=5.0,
+        description="StyleK rank 曲线幂次（>1 = 风格段保留更多容量；仅 lora_type=stylek）",
+        json_schema_extra=_meta("lora", show_when="lora_type==stylek"),
+    )
+    stylek_sig_type: Literal["random", "last", "first"] = Field(
+        "last",
+        description="StyleK up.weight SVD 初始化方向（last=最小奇异/推荐；first=最大；random=高斯；仅 lora_type=stylek）",
+        json_schema_extra=_meta("lora", show_when="lora_type==stylek"),
+    )
+    stylek_ortho_reg: float = Field(
+        0.01, ge=0.0,
+        description="StyleK B^T B ≈ I 正交正则权重（仅 lora_type=stylek）",
+        json_schema_extra=_meta("lora", show_when="lora_type==stylek"),
+    )
+    stylek_mag_reg: float = Field(
+        0.001, ge=0.0,
+        description="StyleK rank 幅值稀疏化强度（仅 lora_type=stylek）",
+        json_schema_extra=_meta("lora", show_when="lora_type==stylek"),
+    )
+    stylek_mag_amplify: float = Field(
+        2.0, ge=0.0,
+        description="StyleK 幅值双极化陡峭度（0=关闭；越大越接近 hard Top-K；仅 lora_type=stylek）",
+        json_schema_extra=_meta("lora", show_when="lora_type==stylek"),
+    )
+    stylek_aux_loss_weight: float = Field(
+        1.0, ge=0.0,
+        description="StyleK 辅助 loss 全局权重（仅 lora_type=stylek）",
+        json_schema_extra=_meta("lora", show_when="lora_type==stylek"),
+    )
+    stylek_aux_warmup_ratio: float = Field(
+        0.1, ge=0.0, le=1.0,
+        description="StyleK 辅助 loss 热身比例，前 X% 步不加（仅 lora_type=stylek）",
+        json_schema_extra=_meta("lora", show_when="lora_type==stylek"),
     )
 
     # ------------------------------------------------------------------ 训练
@@ -305,6 +355,11 @@ class TrainingConfig(BaseModel):
     weight_decay: float = Field(
         0.0, ge=0.0,
         description="权重衰减（0=禁用）",
+        json_schema_extra=_meta("training"),
+    )
+    kv_trim: bool = Field(
+        False,
+        description="Cross-attention KV trim：按实际 token 数裁到最近 bucket（64/128/256/512），减少 padding 计算量",
         json_schema_extra=_meta("training"),
     )
     noise_offset: float = Field(

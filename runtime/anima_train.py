@@ -2018,7 +2018,7 @@ def main():
         update_monitor(
             total_epochs=int(args.epochs or 0),
             config={
-                "model": {"lokr": "Anima LoKr", "tlora": "Anima T-LoRA", "orthohydra": "Anima Ortho-Hydra"}.get(args.lora_type, "Anima LoRA"),
+                "model": {"lokr": "Anima LoKr", "tlora": "Anima T-LoRA", "orthohydra": "Anima Ortho-Hydra", "stylek": "Anima StyleK-LoRA"}.get(args.lora_type, "Anima LoRA"),
                 "rank": args.lora_rank,
                 "alpha": args.lora_alpha,
                 "epochs": args.epochs,
@@ -2091,6 +2091,8 @@ def main():
             rank=args.lora_rank,
             alpha=args.lora_alpha,
             min_rank=int(getattr(args, "tlora_min_rank", 1) or 1),
+            alpha_rank_scale=float(getattr(args, "tlora_alpha_rank_scale", 1.0) or 1.0),
+            sig_type=str(getattr(args, "tlora_sig_type", "last") or "last"),
             reg_dims=getattr(args, "tlora_reg_dims", None) or None,
             reg_lrs=getattr(args, "tlora_reg_lrs", None) or None,
         )
@@ -2103,6 +2105,20 @@ def main():
             balance_loss_weight=float(getattr(args, "orthohydra_balance_loss_weight", 5e-7) or 5e-7),
             balance_warmup_ratio=float(getattr(args, "orthohydra_balance_warmup_ratio", 0.4) or 0.4),
             router_lr_scale=float(getattr(args, "orthohydra_router_lr_scale", 10.0) or 10.0),
+        )
+    elif args.lora_type == "stylek":
+        from utils.stylek_adapter import AnimaStyleKAdapter
+        injector = AnimaStyleKAdapter(
+            rank=args.lora_rank,
+            alpha=args.lora_alpha,
+            min_rank=int(getattr(args, "stylek_min_rank", 4) or 4),
+            alpha_rank_scale=float(getattr(args, "stylek_alpha_rank_scale", 2.0) or 2.0),
+            sig_type=str(getattr(args, "stylek_sig_type", "last") or "last"),
+            ortho_reg=float(getattr(args, "stylek_ortho_reg", 0.01) or 0.01),
+            mag_reg=float(getattr(args, "stylek_mag_reg", 0.001) or 0.001),
+            mag_amplify=float(getattr(args, "stylek_mag_amplify", 2.0) or 2.0),
+            aux_loss_weight=float(getattr(args, "stylek_aux_loss_weight", 1.0) or 1.0),
+            aux_warmup_ratio=float(getattr(args, "stylek_aux_warmup_ratio", 0.1) or 0.1),
         )
     else:
         from utils.lycoris_adapter import AnimaLycorisAdapter
@@ -2473,6 +2489,15 @@ def main():
                 cross = model.preprocess_text_embeds(qwen_emb, t5_ids)
                 if cross.shape[1] < 512:
                     cross = F.pad(cross, (0, 0, 0, 512 - cross.shape[1]))
+                # KV trim：把 padding 截到最近有效 token bucket（64/128/256/512）
+                # t5_attn=1 表示有效 token；取批次内最大实际长度再 round up
+                if getattr(args, "kv_trim", False):
+                    _actual = int(t5_attn.sum(dim=-1).max().item())
+                    for _b in (64, 128, 256, 512):
+                        if _b >= _actual:
+                            _bucket = _b
+                            break
+                    cross = cross[:, :_bucket, :].contiguous()
 
             # Flow Matching
             t = sample_t(
@@ -2484,6 +2509,8 @@ def main():
                 injector.set_mask(injector.build_sigma_mask(t, device))
             elif args.lora_type == "orthohydra":
                 injector.set_sigma(float(t.mean().item()))
+            elif args.lora_type == "stylek":
+                injector.set_mask(injector.build_sigma_mask(t, device))
             t_exp = t.view(-1, 1, 1, 1, 1)
             noise = make_noise(
                 latents,
@@ -2527,6 +2554,15 @@ def main():
                 if _warmup_done:
                     loss = loss + injector.balance_loss_weight * injector.get_balance_loss()
 
+            # StyleK-LoRA rank-component auxiliary loss (ortho + bimodal; outside autocast)
+            if args.lora_type == "stylek":
+                _warmup_done = (
+                    not total_steps
+                    or global_step >= int(total_steps * injector.aux_warmup_ratio)
+                )
+                if _warmup_done:
+                    loss = loss + injector.aux_loss_weight * injector.compute_aux_loss()
+
             # NaN 检测：forward 出 NaN 时跳过本 micro-batch
             if not torch.isfinite(loss):
                 logger.warning(f"step {global_step} micro-batch {batch_idx}: loss={loss.item():.4g}，跳过")
@@ -2558,7 +2594,7 @@ def main():
                             [(f"{k}.lora_down", lyr.down.weight) for k, lyr in injector._layer_keys.items()]
                             + [(f"{k}.lora_up", lyr.up.weight) for k, lyr in injector._layer_keys.items()]
                         )
-                    elif args.lora_type == "orthohydra":
+                    elif args.lora_type in ("orthohydra", "stylek"):
                         # lambda_layer is zero-init/magnitude-bearing; excluded by default keyword
                         _og_named = injector.named_trainable_params()
                     else:
