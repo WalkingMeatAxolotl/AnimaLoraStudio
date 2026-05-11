@@ -1226,7 +1226,9 @@ export const api = {
         add_model_tag?: boolean | null
         blacklist_tags?: string[] | null
       }
-      llm_overrides?: Omit<Partial<LLMTaggerConfig>, 'api_key' | 'model_ids' | 'prompt_presets'>
+      llm_overrides?:
+        & Omit<Partial<LLMTaggerConfig>, 'api_key' | 'model_ids' | 'prompt_presets'>
+        & { _output_format?: 'json' | 'text' }
     }
   ) =>
     req<Job>(`/api/projects/${pid}/versions/${vid}/tag`, {

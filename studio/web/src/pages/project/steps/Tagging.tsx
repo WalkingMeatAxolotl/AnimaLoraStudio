@@ -52,6 +52,9 @@ type LLMTaggerForm = {
   endpoint: LLMTaggerConfig['endpoint']
   prompt_preset: string
   custom_prompt: string
+  // 仅 prompt_preset === 'custom' 时生效；写入 llm_overrides._output_format。
+  // 非 custom 时由所选 preset 的 output_format 决定（后端读 LLMTaggerConfig.prompt_presets）。
+  custom_output_format: 'json' | 'text'
   temperature: number
   max_tokens: number
   timeout: number
@@ -92,6 +95,7 @@ function fromLLMTaggerConfig(cfg: LLMTaggerConfig): LLMTaggerForm {
     endpoint: cfg.endpoint,
     prompt_preset: cfg.prompt_preset,
     custom_prompt: cfg.custom_prompt,
+    custom_output_format: 'json',
     temperature: cfg.temperature,
     max_tokens: cfg.max_tokens,
     timeout: cfg.timeout,
@@ -240,10 +244,15 @@ export default function TaggingPage() {
     if (!llmForm || !llmDefaults) return undefined
     const out: Record<string, unknown> = {}
     for (const key of Object.keys(llmForm) as Array<keyof LLMTaggerForm>) {
+      // custom_output_format 不是 LLMTaggerConfig 字段，单独写到 _output_format 里
+      if (key === 'custom_output_format') continue
       const value = llmForm[key]
-      const base = llmDefaults[key]
+      const base = (llmDefaults as unknown as Record<string, unknown>)[key]
       if (value === '***') continue
       if (JSON.stringify(value) !== JSON.stringify(base)) out[key] = value
+    }
+    if (llmForm.prompt_preset === 'custom') {
+      out._output_format = llmForm.custom_output_format
     }
     return Object.keys(out).length ? out : undefined
   }
@@ -831,15 +840,29 @@ function LLMTaggerPanel({
       </div>
 
       {form.prompt_preset === 'custom' && (
-        <label className="grid grid-cols-[140px_1fr] items-start gap-2">
-          <span className="text-fg-tertiary font-mono text-xs pt-1">custom_prompt</span>
-          <textarea
-            value={form.custom_prompt}
-            onChange={(e) => onChange({ ...form, custom_prompt: e.target.value })}
-            disabled={disabled}
-            className={`input input-mono min-h-28 ${form.custom_prompt !== defaults.custom_prompt ? 'border-warn' : ''}`}
-          />
-        </label>
+        <>
+          <label className="grid grid-cols-[140px_1fr] items-center gap-2">
+            <span className="text-fg-tertiary font-mono text-xs">output_format</span>
+            <select
+              value={form.custom_output_format}
+              onChange={(e) => onChange({ ...form, custom_output_format: e.target.value as 'json' | 'text' })}
+              disabled={disabled}
+              className="input input-mono"
+            >
+              <option value="json">JSON caption（按字段标准化后写入 caption）</option>
+              <option value="text">Text caption（自然语言原文写入 .txt / .json.tags）</option>
+            </select>
+          </label>
+          <label className="grid grid-cols-[140px_1fr] items-start gap-2">
+            <span className="text-fg-tertiary font-mono text-xs pt-1">custom_prompt</span>
+            <textarea
+              value={form.custom_prompt}
+              onChange={(e) => onChange({ ...form, custom_prompt: e.target.value })}
+              disabled={disabled}
+              className={`input input-mono min-h-28 ${form.custom_prompt !== defaults.custom_prompt ? 'border-warn' : ''}`}
+            />
+          </label>
+        </>
       )}
 
       <div className="flex items-center gap-3 flex-wrap">
