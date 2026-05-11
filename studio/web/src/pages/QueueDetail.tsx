@@ -427,7 +427,35 @@ function OutputsTab({ taskId, taskName }: { taskId: number; taskName: string }) 
     return () => window.clearTimeout(t)
   }, [zipping, toast])
 
-  const sortedFiles = useMemo(() => data ? [...data.files].sort((a, b) => b.mtime - a.mtime) : [], [data])
+  // 列排序：默认按 mtime desc（最新的在上，和之前行为一致）。点表头同 key
+  // 切方向，换 key 切到该 key 的默认方向（name=asc / size,mtime=desc）。
+  type SortKey = 'name' | 'size' | 'mtime'
+  const [sortKey, setSortKey] = useState<SortKey>('mtime')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+
+  const sortedFiles = useMemo(() => {
+    if (!data) return []
+    const sign = sortDir === 'asc' ? 1 : -1
+    return [...data.files].sort((a, b) => {
+      if (sortKey === 'name') {
+        // numeric: true 让 ep_002 排在 ep_010 之前，避免字典序的 ep_10 < ep_2
+        return a.name.localeCompare(b.name, undefined, { numeric: true }) * sign
+      }
+      if (sortKey === 'size') return (a.size - b.size) * sign
+      return (a.mtime - b.mtime) * sign
+    })
+  }, [data, sortKey, sortDir])
+
+  const onHeaderClick = (key: SortKey) => {
+    if (key === sortKey) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortKey(key)
+      setSortDir(key === 'name' ? 'asc' : 'desc')
+    }
+  }
+  const sortArrow = (key: SortKey) =>
+    sortKey === key ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''
 
   // 刷新后剔除选中里已不存在的文件名（比如有人手动删了 ep_001.safetensors）
   useEffect(() => {
@@ -556,9 +584,18 @@ function OutputsTab({ taskId, taskName }: { taskId: number; taskName: string }) 
               className="grid gap-2 px-4 py-2 text-xs text-fg-tertiary border-b border-subtle font-mono"
               style={{ gridTemplateColumns: '1fr 100px 160px 80px' }}
             >
-              <span>文件</span>
-              <span className="text-right">大小</span>
-              <span className="text-right">修改时间</span>
+              <button
+                onClick={() => onHeaderClick('name')}
+                className="text-left bg-transparent border-0 p-0 text-xs font-mono text-fg-tertiary hover:text-fg-primary cursor-pointer"
+              >文件{sortArrow('name')}</button>
+              <button
+                onClick={() => onHeaderClick('size')}
+                className="text-right bg-transparent border-0 p-0 text-xs font-mono text-fg-tertiary hover:text-fg-primary cursor-pointer"
+              >大小{sortArrow('size')}</button>
+              <button
+                onClick={() => onHeaderClick('mtime')}
+                className="text-right bg-transparent border-0 p-0 text-xs font-mono text-fg-tertiary hover:text-fg-primary cursor-pointer"
+              >修改时间{sortArrow('mtime')}</button>
               <span className="text-right">
                 {selectMode ? (
                   <input
