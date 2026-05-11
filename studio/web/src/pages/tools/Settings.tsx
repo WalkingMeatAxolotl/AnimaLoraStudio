@@ -30,19 +30,22 @@ type Section =
   | 'download'
   | 'huggingface'
   | 'wandb'
+  | 'modelscope'
   | 'joycaption'
   | 'llm_tagger'
   | 'wd14'
   | 'cltagger'
   | 'models'
   | 'queue'
+  | 'generate'
 
-type Tab = 'dataset' | 'tagging' | 'training' | 'appearance'
+type Tab = 'dataset' | 'tagging' | 'training' | 'testing' | 'appearance'
 
 const TAB_LIST: { id: Tab; label: string }[] = [
   { id: 'dataset', label: '数据集' },
   { id: 'tagging', label: '打标' },
   { id: 'training', label: '训练' },
+  { id: 'testing', label: '测试' },
   { id: 'appearance', label: '页面' },
 ]
 
@@ -58,7 +61,7 @@ const DEFAULT_LLM_PROMPT_PRESETS: LLMPromptPreset[] = [
 function getStoredTab(): Tab {
   try {
     const v = localStorage.getItem(TAB_STORAGE_KEY)
-    if (v === 'dataset' || v === 'tagging' || v === 'training' || v === 'appearance') return v
+    if (v === 'dataset' || v === 'tagging' || v === 'training' || v === 'testing' || v === 'appearance') return v
   } catch {
     /* ignore localStorage errors */
   }
@@ -90,6 +93,8 @@ const EMPTY: Secrets = {
     mode: 'online',
     log_samples: true,
   },
+  modelscope: { token: '' },
+  download_source: 'huggingface',
   joycaption: {
     base_url: 'http://localhost:8000/v1',
     model: 'fancyfeast/llama-joycaption-beta-one-hf-llava',
@@ -135,6 +140,7 @@ const EMPTY: Secrets = {
   },
   models: { root: null, selected_anima: 'preview3-base' },
   queue: { allow_gpu_during_train: false },
+  generate: { preview_every_n_steps: 3, attention_backend: 'auto' },
 }
 
 const textInputClass = 'w-full px-2 py-1 outline-none rounded-sm bg-sunken border border-subtle text-sm text-fg-primary focus:border-accent'
@@ -218,6 +224,11 @@ export default function SettingsPage() {
       ...prev,
       [section]: { ...prev[section], [key]: value },
     }))
+  }
+
+  /** 更新 Secrets 顶层非对象字段（如 download_source）。 */
+  const updateTop = <K extends keyof Secrets>(key: K, value: Secrets[K]) => {
+    setDraft((prev) => ({ ...prev, [key]: value }))
   }
 
   const save = async () => {
@@ -787,6 +798,15 @@ export default function SettingsPage() {
       </>)}
 
       {tab === 'training' && (<>
+      <SettingsSection title="模型下载源">
+        <SettingsField label="下载源" desc="魔搭（ModelScope）对国内用户更快；无映射的模型自动回退 HuggingFace">
+          <DownloadSourceSelect
+            value={draft.download_source}
+            onChange={(v) => updateTop('download_source', v)}
+          />
+        </SettingsField>
+      </SettingsSection>
+
       <SettingsSection title="HuggingFace">
         <SettingsField label="token">
           <SensitiveInput
@@ -867,6 +887,19 @@ export default function SettingsPage() {
         </div>
       </SettingsSection>
 
+      <SettingsSection title="ModelScope（魔搭社区）">
+        <SettingsField label="token">
+          <SensitiveInput
+            value={draft.modelscope.token}
+            serverValue={server?.modelscope.token ?? ''}
+            onChange={(v) => update('modelscope', 'token', v)}
+          />
+        </SettingsField>
+        <p className="text-xs text-fg-tertiary px-1">
+          公开模型不用填；私有仓库或限速时需要。需先 <code>pip install modelscope</code> 安装命令行工具。
+        </p>
+      </SettingsSection>
+
       <SettingsSection title="队列调度">
         <SettingsField label="允许 GPU 任务与训练并行">
           <div className="flex items-center gap-3">
@@ -891,6 +924,13 @@ export default function SettingsPage() {
         reloadCatalog={reloadCatalog}
         catalogError={catalogError}
       />
+      </>)}
+
+      {tab === 'testing' && (<>
+        {/* attention 后端走全局 auto-detect，UI 不暴露切换；想强制覆盖
+            的高级用户改 secrets.json 的 generate.attention_backend
+            （flash_attn / xformers / none）。安装管理在『训练』tab。 */}
+        <TaeFluxSection draft={draft} update={update} />
       </>)}
 
       {tab === 'appearance' && (
@@ -1117,6 +1157,23 @@ function HFEndpointSelect({ value, onChange }: {
   )
 }
 
+// ── DownloadSourceSelect ────────────────────────────────────────────────────
+
+function DownloadSourceSelect({ value, onChange }: {
+  value: string; onChange: (v: string) => void
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className={`${textInputClass} max-w-xs`}
+    >
+      <option value="huggingface">HuggingFace（含 hf-mirror 等镜像）</option>
+      <option value="modelscope">ModelScope（魔搭社区，国内直连）</option>
+    </select>
+  )
+}
+
 // ── ModelIdsEditor ──────────────────────────────────────────────────────────
 
 function ModelIdsEditor({ ids, currentId, onChange }: {
@@ -1312,9 +1369,16 @@ function CLTaggerModelCard({
   )
 }
 
+// 顶层非 object 字段（string / number / bool），直接比较后塞入 patch。
+const TOP_LEVEL_SCALARS: (keyof Secrets)[] = ['download_source']
+
 function buildPatch(draft: Secrets, server: Secrets): SecretsPatch {
-  const out: Record<string, Record<string, unknown>> = {}
-  for (const key of Object.keys(draft) as Section[]) {
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(draft) as (keyof Secrets)[]) {
+    if (TOP_LEVEL_SCALARS.includes(key)) {
+      if (draft[key] !== server[key]) out[key] = draft[key]
+      continue
+    }
     const sub: Record<string, unknown> = {}
     const d = draft[key] as unknown as Record<string, unknown>
     const s = server[key] as unknown as Record<string, unknown>
@@ -2167,6 +2231,47 @@ function XformersSection() {
     </details>
   )
 }
+
+// ── 中间步预览（节流） ────────────────────────────────────────────────────
+//
+// TAEFlux 模型 server 启动时后台下载（lifespan startup）；UI 只暴露用户必须
+// 控制的「节流 N」一个输入，其他状态/下载/帮助文字全删（用户决策）。
+
+function TaeFluxSection({
+  draft, update,
+}: {
+  draft: Secrets
+  update: <S extends Section, K extends keyof Secrets[S]>(
+    section: S, key: K, value: Secrets[S][K],
+  ) => void
+}) {
+  const n = draft.generate.preview_every_n_steps
+  const enabled = n > 0
+  return (
+    <SettingsSection title="中间步预览">
+      <SettingsField
+        label="节流（每 N 步推一次预览）"
+        desc="0 = 关闭中间步预览；推荐 3-5。模型 server 启动时已后台下载，UI 不需要操作。"
+      >
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            min={0}
+            max={50}
+            value={n}
+            onChange={(e) => update('generate', 'preview_every_n_steps', Number(e.target.value) || 0)}
+            className="input"
+            style={{ width: 80 }}
+          />
+          <span className="text-2xs text-fg-tertiary">
+            {enabled ? `每 ${n} 步推一张 256px JPEG（~10KB/步）` : '不推预览（0）'}
+          </span>
+        </div>
+      </SettingsField>
+    </SettingsSection>
+  )
+}
+
 
 // ── Display Section ────────────────────────────────────────────────────────
 

@@ -62,6 +62,15 @@ T5_FILES = [
     "special_tokens_map.json",
 ]
 
+# TAEFlux：1.6MB 的 tiny autoencoder for Flux/Anima，daemon 预览中间步用。
+# 用 diffusers.AutoencoderTiny.from_pretrained 加载 → 需要同时拿 config.json
+# + safetensors 两个文件。
+TAEFLUX_REPO = "madebyollin/taef1"
+TAEFLUX_FILES = [
+    "diffusion_pytorch_model.safetensors",
+    "config.json",
+]
+
 # CLTagger 子目录布局：仓库内 cl_tagger_1_02/model.onnx 等。新版本（1.03 等）
 # 出现时往这里加一行；UI 自动作为 radio 选项暴露。
 # label → (model_path, tag_mapping_path)
@@ -119,6 +128,33 @@ def t5_tokenizer_dir(root: Path) -> Path:
     return root / "t5_tokenizer"
 
 
+def taeflux_dir(root: Optional[Path] = None) -> Path:
+    """TAEFlux 本地目录。daemon 用 AutoencoderTiny.from_pretrained 加载。"""
+    r = root or models_root()
+    return r / "taeflux"
+
+
+def taeflux_available(root: Optional[Path] = None) -> bool:
+    """两个文件都到位才算就绪。"""
+    d = taeflux_dir(root)
+    return all((d / f).exists() for f in TAEFLUX_FILES)
+
+
+def download_taeflux(
+    *, root: Optional[Path] = None,
+    on_log: Callable[[str], None] = print,
+) -> bool:
+    """同步下载 TAEFlux（config + weights）到本地。任意一个文件失败则返 False。"""
+    target_dir = taeflux_dir(root)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    ok = True
+    for f in TAEFLUX_FILES:
+        target = target_dir / f
+        if not download_flat(TAEFLUX_REPO, f, target, on_log=on_log):
+            ok = False
+    return ok
+
+
 def wd14_target_dir(root: Path, model_id: str) -> Path:
     """WD14 单个 model_id 的本地目录。同 wd14_tagger 的 _resolve_model_dir 路径布局。"""
     return root / "wd14" / safe_dir_name(model_id)
@@ -173,6 +209,30 @@ def default_paths_for_new_version() -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# ModelScope 镜像源映射
+# ---------------------------------------------------------------------------
+
+# ModelScope 镜像路径常量。
+# circlestone-labs 同步在 HF 和魔搭发布，repo ID 一致；
+# 魔搭里 Anima repo 将主模型 / VAE / 文本编码器全部打包在 split_files/ 下，
+# 文本编码器是单个 safetensors（而不是 HF 上 Qwen3 的散文件目录）。
+MS_ANIMA_TEXT_ENCODER_PATH = "split_files/text_encoders/qwen_3_06b_base.safetensors"
+# T5 tokenizer / TAEFlux / CLTagger 在魔搭暂无对应镜像，走 HF 回退。
+# WD14：fireicewolf 在魔搭镜像了 SmilingWolf 系列，repo 命名规则为
+#   SmilingWolf/{name} → fireicewolf/{name}
+_MS_WD14_OWNER = "fireicewolf"
+_HF_WD14_OWNER = "SmilingWolf"
+
+
+def _ms_wd14_repo_id(hf_repo_id: str) -> Optional[str]:
+    """把 SmilingWolf/wd-xxx 换成 fireicewolf/wd-xxx；其它 repo 返回 None。"""
+    if hf_repo_id.startswith(_HF_WD14_OWNER + "/"):
+        name = hf_repo_id[len(_HF_WD14_OWNER) + 1:]
+        return f"{_MS_WD14_OWNER}/{name}"
+    return None
+
+
+# ---------------------------------------------------------------------------
 # 同步下载 helper
 # ---------------------------------------------------------------------------
 
@@ -206,6 +266,92 @@ def _resolve_endpoint() -> Optional[str]:
     except Exception:  # noqa: BLE001  secrets 损坏不应阻断下载
         return None
     return endpoint or None
+
+
+def _get_download_source() -> str:
+    """返回当前配置的下载源（'huggingface' 或 'modelscope'）。
+
+    优先读 MODELSCOPE_SOURCE env var（CLI flag 用）；否则读 secrets。
+    """
+    env = os.environ.get("MODELSCOPE_SOURCE", "").strip()
+    if env:
+        return env
+    try:
+        return secrets.load().download_source or "huggingface"
+    except Exception:  # noqa: BLE001
+        return "huggingface"
+
+
+def _ms_token() -> Optional[str]:
+    """读 ModelScope token：环境变量优先，其次 secrets。"""
+    env = os.environ.get("MODELSCOPE_API_TOKEN", "").strip()
+    if env:
+        return env
+    try:
+        t = secrets.load().modelscope.token
+        return t or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def download_flat_ms(
+    ms_repo_id: str,
+    repo_subpath: str,
+    target: Path,
+    *,
+    on_log: Callable[[str], None] = print,
+) -> bool:
+    """用 modelscope Python API 下载单个文件到 target。
+
+    `model_file_download(local_dir=target.parent)` 会把文件落在
+    `target.parent / repo_subpath`（保留 repo 内路径结构），之后复用与
+    `download_flat` 完全相同的 rename + 清理空目录逻辑把文件移到 target。
+
+    需要 ``pip install modelscope``；未安装时返回 False 并打印提示。
+    token 优先读 MODELSCOPE_API_TOKEN env var，其次 secrets.modelscope.token。
+    """
+    if target.exists():
+        on_log(f"   ✓ {target.name} 已存在，跳过")
+        return True
+    try:
+        from modelscope.hub.file_download import model_file_download
+    except ImportError:
+        on_log("   ✗ 缺 modelscope（pip install modelscope）")
+        return False
+    target.parent.mkdir(parents=True, exist_ok=True)
+    token = _ms_token()
+    try:
+        kwargs: dict = dict(
+            model_id=ms_repo_id,
+            file_path=repo_subpath,
+            local_dir=str(target.parent),
+        )
+        if token:
+            kwargs["token"] = token
+        model_file_download(**kwargs)
+    except Exception as exc:
+        on_log(f"   ✗ {target.name} (ModelScope): {exc}")
+        return False
+    # model_file_download 保留 repo 内路径；与 download_flat 逻辑完全一致
+    src = target.parent / repo_subpath
+    if src != target:
+        try:
+            target.unlink(missing_ok=True)
+            src.rename(target)
+        except OSError as exc:
+            on_log(f"   ✗ rename 失败 {src} → {target}: {exc}")
+            return False
+        parent = src.parent
+        while parent != target.parent and parent.exists():
+            try:
+                if any(parent.iterdir()):
+                    break
+                parent.rmdir()
+            except OSError:
+                break
+            parent = parent.parent
+    on_log(f"   ✓ {target.name} (via ModelScope)")
+    return True
 
 
 def download_flat(
@@ -274,21 +420,50 @@ def download_anima_main(
         on_log(f"✗ 未知 variant {variant!r}")
         return False
     target = anima_main_target(root, variant)
+    subpath = ANIMA_VARIANTS[variant]
     on_log(f"\n📥 Anima 主模型 [{variant}] (~4 GB)")
-    return download_flat(ANIMA_REPO, ANIMA_VARIANTS[variant], target, on_log=on_log)
+    if _get_download_source() == "modelscope":
+        return download_flat_ms(ANIMA_REPO, subpath, target, on_log=on_log)
+    return download_flat(ANIMA_REPO, subpath, target, on_log=on_log)
 
 
 def download_anima_vae(root: Path, *, on_log: Callable[[str], None] = print) -> bool:
     target = anima_vae_target(root)
     on_log("\n📥 Anima VAE (~250 MB)")
+    if _get_download_source() == "modelscope":
+        return download_flat_ms(ANIMA_REPO, ANIMA_VAE_PATH, target, on_log=on_log)
     return download_flat(ANIMA_REPO, ANIMA_VAE_PATH, target, on_log=on_log)
 
 
 def download_qwen3(root: Path, *, on_log: Callable[[str], None] = print) -> bool:
+    """下载文本编码器（Qwen3）。
+
+    - HuggingFace 源：从 Qwen/Qwen3-0.6B-Base 下载完整目录所需的 6 个文件。
+    - ModelScope 源：从 circlestone-labs/Anima 下载权重文件，另外从
+      Qwen/Qwen3-0.6B-Base 补齐 tokenizer / config 文件，确保本地
+      text_encoders/ 是 transformers 可直接加载的完整目录。
+    """
     target_dir = qwen_dir(root)
-    on_log(f"\n📥 Qwen3-0.6B-Base (~1.2 GB) → {target_dir}")
     target_dir.mkdir(parents=True, exist_ok=True)
     ok = True
+
+    if _get_download_source() == "modelscope":
+        on_log(f"\n📥 Anima 文本编码器（ModelScope 权重 + HF tokenizer）→ {target_dir}")
+        # 魔搭 Anima repo 里只有权重；训练脚本仍要求完整 transformers 目录。
+        ok &= download_flat_ms(
+            ANIMA_REPO,
+            MS_ANIMA_TEXT_ENCODER_PATH,
+            target_dir / "model.safetensors",
+            on_log=on_log,
+        )
+        for f in QWEN_FILES:
+            if f == "model.safetensors":
+                continue
+            if not download_flat(QWEN_REPO, f, target_dir / f, on_log=on_log):
+                ok = False
+        return ok
+
+    on_log(f"\n📥 Qwen3-0.6B-Base (~1.2 GB) → {target_dir}")
     for f in QWEN_FILES:
         if not download_flat(QWEN_REPO, f, target_dir / f, on_log=on_log):
             ok = False
@@ -330,12 +505,26 @@ def download_wd14(
     *,
     on_log: Callable[[str], None] = print,
 ) -> bool:
-    """下载 WD14 单个 model_id 的两个文件到 `{models_root}/wd14/{safe_id}/`。"""
+    """下载 WD14 单个 model_id 的两个文件到 `{models_root}/wd14/{safe_id}/`。
+
+    ModelScope 源：SmilingWolf/* → fireicewolf/*（fireicewolf 在魔搭镜像了全套）。
+    没有 MS 映射（非 SmilingWolf 前缀）时自动回退 HF。
+    """
     r = root or models_root()
     target = wd14_target_dir(r, model_id)
-    on_log(f"\n📥 WD14 {model_id} → {target}")
     target.mkdir(parents=True, exist_ok=True)
     ok = True
+    if _get_download_source() == "modelscope":
+        ms_repo = _ms_wd14_repo_id(model_id)
+        if ms_repo:
+            on_log(f"\n📥 WD14 {model_id} → {target}（via ModelScope: {ms_repo}）")
+            for f in WD14_FILES:
+                if not download_flat_ms(ms_repo, f, target / f, on_log=on_log):
+                    ok = False
+            return ok
+        on_log(f"\n📥 WD14 {model_id}：无魔搭映射，回退 HuggingFace")
+    else:
+        on_log(f"\n📥 WD14 {model_id} → {target}")
     for f in WD14_FILES:
         if not download_flat(model_id, f, target / f, on_log=on_log):
             ok = False

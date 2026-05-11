@@ -42,6 +42,158 @@ def version_dir(project_id: int, slug: str, label: str) -> Path:
     return projects.project_dir(project_id, slug) / "versions" / label
 
 
+def _natural_key(s: str) -> list[Any]:
+    """自然序 key：字符串里的数字段当 int 比较，让 a_5 < a_60。
+
+    re.split(r'(\\d+)', 'a_60') -> ['a_', '60', '']
+    转换为 ['a_', 60, '']，与同样转换后的 'a_5' -> ['a_', 5, ''] 按位比较。
+    """
+    parts = re.split(r"(\d+)", s)
+    return [int(p) if p.isdigit() else p.lower() for p in parts]
+
+
+def list_lora_ckpts(vdir: Path) -> list[dict[str, Any]]:
+    """扫 versions/{label}/output/*.safetensors，列所有 LoRA ckpt 文件。
+
+    anima_train 输出命名约定（runtime/anima_train.py:2434, 2464）：
+      - {output_name}_step{N}.safetensors    （按 step 保存）
+      - {output_name}_epoch{N}.safetensors   （按 epoch 保存）
+      - {output_name}_final.safetensors      （训练完毕）
+
+    返回每个 ckpt 的 {kind, value, label, path, mtime}：
+      - kind: 'step' | 'epoch' | 'final' | 'other'
+      - value: int（step/epoch 数；final/other → 0）
+      - label: 显示用，"step 2476" / "epoch 5" / "final" / 文件名
+      - path: 绝对路径字符串
+      - mtime: 修改时间戳（前端按时间倒序展示）
+    排序：final 在前 → step 数字降序 → epoch 数字降序 → 其他按 label 自然序升序
+    （让 a_5 < a_60，避免 lex 序把 a_60 排到 a_9 前面或 mtime 序乱掉用户预期）。
+    """
+    output_dir = vdir / "output"
+    if not output_dir.exists():
+        return []
+    items: list[dict[str, Any]] = []
+    for f in output_dir.glob("*.safetensors"):
+        if not f.is_file():
+            continue
+        name = f.stem  # 去掉 .safetensors
+        kind = "other"
+        value = 0
+        label = name
+        # 匹配 *_step{N}
+        m = re.search(r"_step(\d+)$", name)
+        if m:
+            kind = "step"
+            value = int(m.group(1))
+            label = f"step {value}"
+        else:
+            m = re.search(r"_epoch(\d+)$", name)
+            if m:
+                kind = "epoch"
+                value = int(m.group(1))
+                label = f"epoch {value}"
+            elif name.endswith("_final"):
+                kind = "final"
+                label = "final"
+        try:
+            mtime = f.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        items.append({
+            "kind": kind, "value": value, "label": label,
+            "path": str(f), "mtime": mtime,
+        })
+
+    # 排序：final 顶部；step/epoch 按 value 降序；other 按 label 自然序升序
+    kind_order = {"final": 0, "step": 1, "epoch": 2, "other": 3}
+
+    def _sort_key(x: dict[str, Any]) -> tuple[Any, ...]:
+        ko = kind_order.get(x["kind"], 9)
+        if x["kind"] in ("step", "epoch"):
+            return (ko, -x["value"], [], -x["mtime"])
+        # final / other：value 都是 0，按 label 自然序升序（other 主要受益）
+        return (ko, 0, _natural_key(x["label"]), -x["mtime"])
+
+    items.sort(key=_sort_key)
+    return items
+
+
+def list_state_ckpts(vdir: Path) -> list[dict[str, Any]]:
+    """扫 versions/{label}/output/training_state_step*.pt，列所有断点续训状态文件。
+
+    anima_train 输出命名约定（runtime/anima_train.py:2218, 2441）：
+      - training_state_step{N}.pt   （optimizer / RNG / loss 历史的完整 state）
+
+    返回 [{step, label, path, mtime}]，按 step 降序（最新在前）。
+    给 Train 页的「从断点续训」picker 用。
+    """
+    output_dir = vdir / "output"
+    if not output_dir.exists():
+        return []
+    items: list[dict[str, Any]] = []
+    for f in output_dir.glob("training_state_step*.pt"):
+        if not f.is_file():
+            continue
+        m = re.search(r"training_state_step(\d+)\.pt$", f.name)
+        if not m:
+            continue
+        step = int(m.group(1))
+        try:
+            mtime = f.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        items.append({
+            "step": step,
+            "label": f"step {step}",
+            "path": str(f),
+            "mtime": mtime,
+        })
+    items.sort(key=lambda x: -x["step"])
+    return items
+
+
+def list_project_state_ckpts(
+    conn: sqlite3.Connection, project: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """列项目所有 versions 的 state.pt，按 version 分组（Train 页 resume_state picker 用）。
+
+    返回 [{version_id, label, items: [{step, label, path, mtime}, ...]}]，按 version
+    `created_at` 升序，items 按 step 降序。空 version（没产出 .pt）保留分组但 items 为空。
+    """
+    pid = int(project["id"])
+    slug = str(project["slug"])
+    groups: list[dict[str, Any]] = []
+    for v in list_versions(conn, pid):
+        vdir = version_dir(pid, slug, str(v["label"]))
+        groups.append({
+            "version_id": int(v["id"]),
+            "label": str(v["label"]),
+            "items": list_state_ckpts(vdir),
+        })
+    return groups
+
+
+def list_project_lora_ckpts(
+    conn: sqlite3.Connection, project: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """列项目所有 versions 的 LoRA ckpt（.safetensors），按 version 分组（resume_lora picker 用）。
+
+    返回 [{version_id, label, items: [{kind, value, label, path, mtime}, ...]}]，
+    按 version `created_at` 升序；items 按 list_lora_ckpts 内置排序（final → step desc → epoch desc → other）。
+    """
+    pid = int(project["id"])
+    slug = str(project["slug"])
+    groups: list[dict[str, Any]] = []
+    for v in list_versions(conn, pid):
+        vdir = version_dir(pid, slug, str(v["label"]))
+        groups.append({
+            "version_id": int(v["id"]),
+            "label": str(v["label"]),
+            "items": list_lora_ckpts(vdir),
+        })
+    return groups
+
+
 def _write_version_json(v: dict[str, Any], pdir_label_path: Path) -> None:
     pdir_label_path.mkdir(parents=True, exist_ok=True)
     (pdir_label_path / "version.json").write_text(

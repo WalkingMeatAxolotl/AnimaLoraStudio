@@ -19,11 +19,11 @@ import yaml
 
 @pytest.fixture(scope="module")
 def at():
-    """import anima_train 一次复用（PR-1 后搬到 scripts/）。"""
+    """import anima_train 一次复用。"""
     import importlib.util  # noqa: PLC0415
     repo_root = Path(__file__).resolve().parent.parent
     spec = importlib.util.spec_from_file_location(
-        "_anima_train_for_test", repo_root / "scripts" / "anima_train.py"
+        "_anima_train_for_test", repo_root / "runtime" / "anima_train.py"
     )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

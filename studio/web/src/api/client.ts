@@ -92,6 +92,11 @@ export interface WandBConfig {
   log_samples: boolean
 }
 
+export interface ModelScopeConfig {
+  /** 魔搭社区 token。公开模型可不填；私有 / 限速时需要。 */
+  token: string
+}
+
 export interface JoyCaptionConfig {
   base_url: string
   model: string
@@ -286,18 +291,33 @@ export interface QueueConfig {
   allow_gpu_during_train: boolean
 }
 
+/** Phase 2 commit 14 — 测试出图 daemon 行为。 */
+export interface GenerateSecretsConfig {
+  /** TAEFlux 中间步预览节流。0=关；>0 → daemon 每 N 步推 256px JPEG。
+   * 模型缺失时 daemon 静默回退（无预览不影响出图）。 */
+  preview_every_n_steps: number
+  /** 注意力后端默认值（design 决策：用户配置一次，不每次出图都改）。
+   * Generate 页 enqueue 自动注入；Settings 训练 tab 切换。 */
+  attention_backend: AttentionBackend
+}
+
 export interface Secrets {
   gelbooru: GelbooruConfig
   danbooru: DanbooruConfig
   download: DownloadGlobalConfig
   huggingface: HuggingFaceConfig
   wandb: WandBConfig
+  modelscope: ModelScopeConfig
+  /** 模型下载源：'huggingface'（默认）或 'modelscope'。
+   *  选 modelscope 时，有映射的模型走魔搭 CLI 下载；无映射的自动回退 HF。 */
+  download_source: string
   joycaption: JoyCaptionConfig
   llm_tagger: LLMTaggerConfig
   wd14: WD14Config
   cltagger: CLTaggerConfig
   models: ModelsConfig
   queue: QueueConfig
+  generate: GenerateSecretsConfig
 }
 
 /** PUT /api/secrets 的 body：嵌套的 partial dict；MASK ("***") 表示「保持不变」。 */
@@ -649,7 +669,10 @@ export interface RegBuildRequest {
 }
 
 /** Attention backend 三选一 — 替代原 xformers/flash_attn 双 bool。 */
-export type AttentionBackend = 'none' | 'xformers' | 'flash_attn'
+/** secrets.generate.attention_backend：'auto' = 按装了什么用（默认）；
+ *  显式值（flash_attn/xformers/none）则强制。GenerateRequest 也接此 type
+ *  作为 per-request 覆盖（前端不再发；server 自动从 secrets 读 + auto 解析）。 */
+export type AttentionBackend = 'auto' | 'none' | 'xformers' | 'flash_attn'
 
 /** PR-9 — 先验生成（base 模型反向出 reg 集，无 LoRA）。 */
 export interface RegAiRequest {
@@ -671,6 +694,31 @@ export interface RegAiRequest {
 export interface LoraEntry {
   path: string
   scale: number
+  /** 来自 picker 的项目 / 版本绑定；外部文件无 */
+  project_id?: number | null
+  version_id?: number | null
+}
+
+/** XY 矩阵：单 task 内循环全图，前端按 (yi, xi) 排成 grid。
+ *  设了 xy_matrix 时后端强制 prompts 单条 + count=1（避免排列爆炸）。
+ *  v1 不支持 lora_path 轴（缺 unhook 接口，留 v2）。 */
+export type XYAxisType =
+  | 'lora_scale'
+  | 'steps'
+  | 'cfg_scale'
+  | 'lora_ckpt'  // 同一 LoRA 的不同 step/epoch ckpt（找过拟合拐点）
+
+export interface XYAxisSpec {
+  axis: XYAxisType
+  /** 类型按 axis 派生：steps→int；lora_scale/cfg_scale→number；lora_ckpt→string(path) */
+  values: Array<number | string>
+  /** axis=lora_scale / lora_ckpt 时必填 —— 绑定到 lora_configs 哪一项 */
+  lora_index?: number | null
+}
+
+export interface XYMatrixSpec {
+  x: XYAxisSpec
+  y?: XYAxisSpec | null
 }
 
 export interface GenerateRequest {
@@ -687,6 +735,57 @@ export interface GenerateRequest {
   lora_configs?: LoraEntry[]
   mixed_precision?: string
   attention_backend?: AttentionBackend
+  /** 设值时 prompts 限单条 + count=1（schema 校验） */
+  xy_matrix?: XYMatrixSpec | null
+}
+
+/** version output/ 下扫到的 training_state_step*.pt（断点续训用）。 */
+export interface StateCkpt {
+  /** global_step 数 */
+  step: number
+  /** 显示用："step 2476" */
+  label: string
+  /** 绝对路径 */
+  path: string
+  /** 文件 mtime 时间戳 */
+  mtime: number
+}
+
+/** 项目级按 version 分组的 ckpt 列表（resume_state / resume_lora picker 用）。 */
+export interface VersionCkptGroup<T> {
+  version_id: number
+  /** version label，如 "baseline" / "high-lr" */
+  label: string
+  items: T[]
+}
+
+/** version output/ 下扫到的 LoRA ckpt 文件（GET .../lora_ckpts）。 */
+export interface LoraCkpt {
+  /** 'final' / 'step' / 'epoch' / 'other' */
+  kind: 'final' | 'step' | 'epoch' | 'other'
+  /** step / epoch 数；final / other 为 0 */
+  value: number
+  /** 显示用：'final' / 'step 2476' / 'epoch 5' / 文件名 */
+  label: string
+  /** 绝对路径 */
+  path: string
+  /** 文件 mtime 时间戳 */
+  mtime: number
+}
+
+/** Phase 2 commit 14 — TAEFlux 模型状态（GET /api/generate/taeflux/status）。 */
+export interface TaeFluxStatus {
+  available: boolean
+  dir: string
+  files: string[]
+}
+
+/** Phase 2 — Inference daemon 当前状态（GET /api/generate/daemon/status）。 */
+export interface DaemonStatus {
+  state: 'stopped' | 'starting' | 'idle' | 'busy' | 'unloading'
+  model_loaded: boolean
+  busy: boolean
+  alive: boolean
 }
 
 /** xformers 安装状态 / 安装结果（简化版，对照 FlashAttnStatus）。 */
@@ -743,7 +842,12 @@ export interface MonitorState {
   start_time?: number     // unix seconds
   losses?: Array<{ step: number; loss: number }>
   lr_history?: Array<{ step: number; lr: number }>
-  samples?: Array<{ path: string; step?: number }>
+  samples?: Array<{
+    path: string
+    step?: number
+    /** XY 模式时携带 cell 元数据（generate task 才有；训练 task 为空）。 */
+    xy?: { xi: number; yi: number; xv: number | string; yv: number | string | null }
+  }>
   config?: Record<string, string | number | boolean>
   vram_used_gb?: number
   vram_total_gb?: number
@@ -1208,14 +1312,41 @@ export const api = {
   getRegPriorTask: (pid: number, vid: number, taskId: number) =>
     req<Task>(`/api/projects/${pid}/versions/${vid}/reg/generate-prior/${taskId}`),
 
-  /** PR-9 — 启动测试出图 task。图写到 tempdir，task 结束清掉（不保存）。 */
+  /** 列出 version output/ 下所有 LoRA ckpt 文件（XY ckpt 轴 + 单图模式切 ckpt）。 */
+  listVersionLoraCkpts: (pid: number, vid: number) =>
+    req<{ items: LoraCkpt[] }>(`/api/projects/${pid}/versions/${vid}/lora_ckpts`)
+      .then((r) => r.items),
+
+  /** 列出项目所有 versions 的 state.pt，按 version 分组（Train 页 resume_state picker）。 */
+  listProjectStateCkpts: (pid: number) =>
+    req<{ groups: VersionCkptGroup<StateCkpt>[] }>(`/api/projects/${pid}/state_ckpts`)
+      .then((r) => r.groups),
+
+  /** 列出项目所有 versions 的 LoRA ckpt，按 version 分组（Train 页 resume_lora picker）。 */
+  listProjectLoraCkpts: (pid: number) =>
+    req<{ groups: VersionCkptGroup<LoraCkpt>[] }>(`/api/projects/${pid}/lora_ckpts`)
+      .then((r) => r.groups),
+
+  /** PR-9 — 启动测试出图 task。Phase 2 起：图走 server 内存 cache，关页面即丢。 */
   enqueueGenerate: (body: GenerateRequest) =>
     req<Task>('/api/generate', { method: 'POST', body: JSON.stringify(body) }),
   /** 查询测试 task 状态。 */
   getGenerateTask: (id: number) => req<Task>(`/api/generate/${id}`),
-  /** 测试出图单张 URL（task 跑中或刚完成时拉；清理后 404）。 */
+  /** 测试出图单张 URL（task 跑中或刚完成时拉；客户端断连 30s + LRU 后 404）。 */
   generateSampleUrl: (taskId: number, filename: string) =>
     `/api/generate/${taskId}/sample/${encodeURIComponent(filename)}`,
+  /** Phase 2 — daemon 状态查询（前端 DaemonControls）。 */
+  getDaemonStatus: () => req<DaemonStatus>('/api/generate/daemon/status'),
+  /** Phase 2 — 手动卸载 daemon 模型（busy 时 409）。 */
+  unloadDaemon: () => req<{ ok: boolean; noop?: boolean }>(
+    '/api/generate/daemon/unload', { method: 'POST' }
+  ),
+  /** Phase 2 commit 14 — TAEFlux 状态。 */
+  getTaeFluxStatus: () => req<TaeFluxStatus>('/api/generate/taeflux/status'),
+  /** Phase 2 commit 14 — 同步下载 TAEFlux（~1.6MB，秒级）。已存在 noop。 */
+  installTaeFlux: () => req<{ ok: boolean; noop?: boolean }>(
+    '/api/generate/taeflux/install', { method: 'POST' }
+  ),
 
   // Train config (PP6.2) -------------------------------------------------
   getVersionConfig: (pid: number, vid: number) =>

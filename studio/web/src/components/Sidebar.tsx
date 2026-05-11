@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import type { Version, VersionStage } from '../api/client'
+import { api, type Version, type VersionStage } from '../api/client'
 import { getStoredTheme, toggleTheme, type Theme } from '../lib/theme'
 
 /** Map version stage → 0-based index of the current active step.
@@ -55,6 +55,14 @@ const STAGE_DOT: Record<VersionStage, string> = {
 
 // ── logo ───────────────────────────────────────────────────────────────────
 function Logo({ collapsed }: { collapsed: boolean }) {
+  // 版本号从 /api/health 拉，single source of truth 在 studio/__init__.py:__version__。
+  // 拉不到时回退不显示版本号（安静降级，不写死防漂移）。
+  const [version, setVersion] = useState<string | null>(null)
+  useEffect(() => {
+    let alive = true
+    api.health().then((h) => { if (alive) setVersion(h.version) }).catch(() => {})
+    return () => { alive = false }
+  }, [])
   return (
     <div className="flex items-center gap-2.5">
       <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden>
@@ -65,7 +73,9 @@ function Logo({ collapsed }: { collapsed: boolean }) {
       {!collapsed && (
         <div className="flex flex-col leading-[1.1]">
           <span className="font-semibold text-md tracking-[-0.01em]">Anima</span>
-          <span className="text-xs text-fg-tertiary font-mono">lora studio · 0.4</span>
+          <span className="text-xs text-fg-tertiary font-mono">
+            lora studio{version ? ` · ${version}` : ''}
+          </span>
         </div>
       )}
     </div>
@@ -252,10 +262,13 @@ function ProjectStepperNav({ pid, activeVid, currentStep, version, collapsed }: 
             ? 'bg-accent-soft text-accent'
             : 'bg-overlay text-fg-tertiary'
 
+        // 收起态用户决策："步骤依然保留 12345，通过绿色来表示完成"——
+        // 数字始终显示，done 走绿色 badge（bg-ok-soft + text-ok）；
+        // 展开态保留 ✓ 图标（旁边有文字标签，icon 更简洁）
         const inner = (
           <>
             <span className={`w-5 h-5 rounded-full grid place-items-center text-[10px] font-bold font-mono shrink-0 ${badgeCls}`}>
-              {isDone ? I.check : s.idx}
+              {collapsed ? s.idx : (isDone ? I.check : s.idx)}
             </span>
             {!collapsed && <span className="flex-1 text-left">{s.label}</span>}
             {!collapsed && isActive && <span className="dot dot-running" />}

@@ -91,6 +91,9 @@ interface Ctx {
 }
 
 interface Preview {
+  side: 'left' | 'right'
+  name: string
+  folder?: string
   url: string
   caption: string
   list: string[]
@@ -330,15 +333,23 @@ export default function CurationPage() {
   }
 
   // ---------- copy / remove / folder ops ----------
-  const doCopy = async () => {
-    if (!rightFolder) return toast('请先在右侧 Train 选一个文件夹', 'error')
-    if (!FOLDER_PATTERN.test(rightFolder))
-      return toast('文件夹名非法', 'error')
-    if (leftSel.size === 0) return
+  const copyLeftFiles = async (
+    files: string[],
+    options: { clearSelection?: boolean } = {}
+  ) => {
+    if (!rightFolder) {
+      toast('请先在右侧 Train 选一个文件夹', 'error')
+      return false
+    }
+    if (!FOLDER_PATTERN.test(rightFolder)) {
+      toast('文件夹名非法', 'error')
+      return false
+    }
+    if (files.length === 0 || busy) return false
     setBusy(true)
     try {
       const r = await api.copyToTrain(project.id, activeVersion.id, {
-        files: Array.from(leftSel),
+        files,
         dest_folder: rightFolder,
       })
       toast(
@@ -347,34 +358,55 @@ export default function CurationPage() {
         }`,
         'success'
       )
-      setLeftSel(new Set())
+      if (options.clearSelection) setLeftSel(new Set())
       await refresh()
       await reload()
+      return true
     } catch (e) {
       toast(String(e), 'error')
+      return false
     } finally {
       setBusy(false)
     }
   }
 
-  const doRemove = async () => {
-    if (!rightFolder || rightSel.size === 0) return
-    if (!confirm(`从 ${rightFolder}/ 移除 ${rightSel.size} 张?`)) return
+  const removeRightFiles = async (
+    folder: string,
+    files: string[],
+    options: { clearSelection?: boolean; confirm?: boolean } = {}
+  ) => {
+    if (!folder || files.length === 0 || busy) return false
+    if (options.confirm && !confirm(`从 ${folder}/ 移除 ${files.length} 张?`)) {
+      return false
+    }
     setBusy(true)
     try {
       const r = await api.removeFromTrain(project.id, activeVersion.id, {
-        folder: rightFolder,
-        files: Array.from(rightSel),
+        folder,
+        files,
       })
       toast(`已移除 ${r.removed.length} 张`, 'success')
-      setRightSel(new Set())
+      if (options.clearSelection) setRightSel(new Set())
       await refresh()
       await reload()
+      return true
     } catch (e) {
       toast(String(e), 'error')
+      return false
     } finally {
       setBusy(false)
     }
+  }
+
+  const doCopy = async () => {
+    await copyLeftFiles(Array.from(leftSel), { clearSelection: true })
+  }
+
+  const doRemove = async () => {
+    await removeRightFiles(rightFolder, Array.from(rightSel), {
+      clearSelection: true,
+      confirm: true,
+    })
   }
 
   const doCreateFolder = async () => {
@@ -456,28 +488,35 @@ export default function CurationPage() {
   // ---------- modal preview ----------
   const openLeftPreview = (name: string) => {
     setPreview({
-      url: api.projectThumbUrl(project.id, name),
+      side: 'left',
+      name,
+      url: api.projectThumbUrl(project.id, name, 'download', 1600),
       caption: name,
       list: leftSortedNames,
       index: leftSortedNames.indexOf(name),
-      resolve: (n) => api.projectThumbUrl(project.id, n),
+      resolve: (n) => api.projectThumbUrl(project.id, n, 'download', 1600),
     })
   }
   const openRightPreview = (name: string) => {
     if (versionId == null) return
+    const folder = rightFolder
     setPreview({
+      side: 'right',
+      name,
+      folder,
       url: api.versionThumbUrl(
         project.id,
         versionId,
         'train',
         name,
-        rightFolder
+        folder,
+        1600
       ),
-      caption: `${rightFolder}/${name}`,
+      caption: `${folder}/${name}`,
       list: rightSortedNames,
       index: rightSortedNames.indexOf(name),
       resolve: (n) =>
-        api.versionThumbUrl(project.id, versionId, 'train', n, rightFolder),
+        api.versionThumbUrl(project.id, versionId, 'train', n, folder, 1600),
     })
   }
   const stepPreview = (delta: number) => {
@@ -487,10 +526,43 @@ export default function CurationPage() {
     const name = preview.list[idx]
     setPreview({
       ...preview,
+      name,
       url: preview.resolve(name),
-      caption: name,
+      caption: preview.side === 'right' && preview.folder ? `${preview.folder}/${name}` : name,
       index: idx,
     })
+  }
+
+  const advancePreviewAfterAction = (doneName: string) => {
+    if (!preview) return
+    const list = preview.list.filter((name) => name !== doneName)
+    if (list.length === 0) {
+      setPreview(null)
+      return
+    }
+    const index = Math.min(preview.index, list.length - 1)
+    const name = list[index]
+    setPreview({
+      ...preview,
+      name,
+      url: preview.resolve(name),
+      caption: preview.side === 'right' && preview.folder ? `${preview.folder}/${name}` : name,
+      list,
+      index,
+    })
+  }
+
+  const copyPreviewImage = async () => {
+    if (!preview || preview.side !== 'left' || busy) return
+    const name = preview.name
+    if (await copyLeftFiles([name])) advancePreviewAfterAction(name)
+  }
+
+  const removePreviewImage = async () => {
+    if (!preview || preview.side !== 'right' || !preview.folder || busy) return
+    const folder = preview.folder
+    const name = preview.name
+    if (await removeRightFiles(folder, [name])) advancePreviewAfterAction(name)
   }
 
   return (
@@ -554,9 +626,12 @@ export default function CurationPage() {
             <ImageGrid
               items={leftItems}
               selected={leftSel}
+              activeName={preview?.side === 'left' ? preview.name : undefined}
               onSelect={handleLeftClick}
               onHover={onLeftHover}
               onPreview={openLeftPreview}
+              onActivate={openLeftPreview}
+              clickMode="activate"
               ariaLabel="download-grid"
               emptyHint="download/ 已经全部用完，或还没下载"
             />
@@ -648,9 +723,12 @@ export default function CurationPage() {
             <ImageGrid
               items={rightItems}
               selected={rightSel}
+              activeName={preview?.side === 'right' ? preview.name : undefined}
               onSelect={handleRightClick}
               onHover={onRightHover}
               onPreview={openRightPreview}
+              onActivate={openRightPreview}
+              clickMode="activate"
               ariaLabel="train-grid"
               emptyHint={
                 rightFolder
@@ -675,6 +753,13 @@ export default function CurationPage() {
           onClose={() => setPreview(null)}
           onPrev={() => stepPreview(-1)}
           onNext={() => stepPreview(1)}
+          onAccept={preview.side === 'left' ? copyPreviewImage : undefined}
+          onDelete={preview.side === 'right' ? removePreviewImage : undefined}
+          shortcutHint={
+            preview.side === 'left'
+              ? '←/→ 浏览 · Enter/Space 复制到 Train'
+              : '←/→ 浏览 · Delete/Backspace 从 Train 移除'
+          }
         />
       )}
     </div>

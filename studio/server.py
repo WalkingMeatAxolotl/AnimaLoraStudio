@@ -22,6 +22,7 @@ import io
 import json
 import logging
 import os
+import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -40,6 +41,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, model_validator
 
 from . import (
+    __version__,
     browse,
     curation,
     datasets,
@@ -86,6 +88,7 @@ from .schema import (
     LoraEntry,
     RegAiConfig,
     TrainingConfig,
+    XYMatrixSpec,
     migrate_legacy_attention,
 )
 from .supervisor import Supervisor
@@ -101,19 +104,72 @@ async def _lifespan(app_: FastAPI) -> AsyncIterator[None]:
     """启动绑定 event bus 到当前 loop 并起 supervisor；关闭时停 supervisor。"""
     # 测试出图 tempdir 遗留清扫（防 supervisor crash 泄漏 anima_gen_* 目录）
     from .services.inference_core import cleanup_stale_generate_tempdirs
+    from .services import generate_cache, model_downloader as _md
     cleanup_stale_generate_tempdirs()
 
+    # TAEFlux（中间步预览）后台下载：跟 server 一起启动；下载失败不阻塞 server。
+    # 如果已下载则 noop；下载期间用户能正常用其他功能，预览功能等下载完才生效。
+    def _bg_download_taeflux() -> None:
+        try:
+            if _md.taeflux_available():
+                return
+            logger.info("background-downloading TAEFlux (~1.6MB)…")
+            ok = _md.download_taeflux(on_log=lambda m: logger.info("[taeflux] %s", m))
+            if not ok:
+                logger.warning("taeflux background download failed; preview disabled until manual install")
+        except Exception:
+            logger.exception("taeflux background download crashed")
+    threading.Thread(target=_bg_download_taeflux, name="taeflux-bg-download", daemon=True).start()
+
     bus.attach_loop(asyncio.get_running_loop())
+
+    # commit 11：SSE 客户端断连 + 30s 缓冲后清 generate cache。
+    # 防刷新/短抖动：用户重连（_on_first_subscribe）取消计时器。
+    _disconnect_timer: dict[str, Optional[threading.Timer]] = {"t": None}
+
+    def _on_last_unsubscribe() -> None:
+        # 已有 timer 不重置（多个客户端各自 unsubscribe 时，最后一个才是关键）
+        if _disconnect_timer["t"] is not None:
+            return
+        timer = threading.Timer(30.0, _flush_cache)
+        timer.daemon = True
+        _disconnect_timer["t"] = timer
+        timer.start()
+
+    def _on_first_subscribe() -> None:
+        timer = _disconnect_timer.get("t")
+        if timer is not None:
+            timer.cancel()
+            _disconnect_timer["t"] = None
+
+    def _flush_cache() -> None:
+        n = generate_cache.total_count()
+        if n:
+            generate_cache.clear_all()
+            logger.info("flushed generate cache (%d images) after SSE idle", n)
+        _disconnect_timer["t"] = None
+
+    bus.set_connection_callbacks(
+        on_first_subscribe=_on_first_subscribe,
+        on_last_unsubscribe=_on_last_unsubscribe,
+    )
+
     sup = Supervisor(on_event=bus.publish)
     sup.start()
     app_.state.supervisor = sup
     try:
         yield
     finally:
+        # 取消可能挂着的 disconnect timer，shutdown 阶段不需要再延迟
+        timer = _disconnect_timer.get("t")
+        if timer is not None:
+            timer.cancel()
         sup.stop()
+        # commit 11：lifespan shutdown 清掉所有图 cache（释放内存 + 干净退出）
+        generate_cache.clear_all()
 
 
-app = FastAPI(title="AnimaStudio", version="0.1.0", lifespan=_lifespan)
+app = FastAPI(title="AnimaStudio", version=__version__, lifespan=_lifespan)
 
 
 # ---------------------------------------------------------------------------
@@ -475,6 +531,41 @@ def list_versions_endpoint(pid: int) -> dict[str, Any]:
             {**v, "stats": versions.stats_for_version(p, v)} for v in vs
         ]
     }
+
+
+@app.get("/api/projects/{pid}/versions/{vid}/lora_ckpts")
+def list_version_lora_ckpts(pid: int, vid: int) -> dict[str, Any]:
+    """列出 version output/ 下所有 .safetensors（step / epoch / final），
+    用于 LoRA picker 第二层（XY ckpt 轴 + 单图模式切 ckpt）。"""
+    p, v, vdir = _version_dir_or_404(pid, vid)
+    return {"items": versions.list_lora_ckpts(vdir)}
+
+
+@app.get("/api/projects/{pid}/state_ckpts")
+def list_project_state_ckpts(pid: int) -> dict[str, Any]:
+    """列出项目所有 versions 的 training_state_step*.pt，按 version 分组。
+
+    给 Train 页 resume_state 字段的「浏览本项目」picker 用：用户看 version
+    分组的语义化文件列表，选中后前端把绝对路径写入字段。
+    """
+    with db.connection_for() as conn:
+        p = projects.get_project(conn, pid)
+        if not p:
+            raise HTTPException(404, f"项目不存在: id={pid}")
+        return {"groups": versions.list_project_state_ckpts(conn, p)}
+
+
+@app.get("/api/projects/{pid}/lora_ckpts")
+def list_project_lora_ckpts(pid: int) -> dict[str, Any]:
+    """列出项目所有 versions 的 LoRA ckpt（.safetensors），按 version 分组。
+
+    给 Train 页 resume_lora 字段的「浏览本项目」picker 用。
+    """
+    with db.connection_for() as conn:
+        p = projects.get_project(conn, pid)
+        if not p:
+            raise HTTPException(404, f"项目不存在: id={pid}")
+        return {"groups": versions.list_project_lora_ckpts(conn, p)}
 
 
 @app.post("/api/projects/{pid}/versions")
@@ -1856,8 +1947,12 @@ def get_reg_prior_task(pid: int, vid: int, task_id: int) -> dict[str, Any]:
 # /api/generate — 测试出图（独立工具页，多 LoRA + multi-prompt）
 # ---------------------------------------------------------------------------
 #
-# 用户决策："测试" 出图不保存：图写到 tempfile.gettempdir() / anima_gen_{task_id}/，
-# task 结束 supervisor 自动清；启动时扫清遗留。前端没有 history 列表 —— 看完即丢。
+# 用户决策："测试" 出图不持久化（commit 10 起完全去磁盘）：
+#   - daemon 把 PNG bytes base64 推回 server 入 generate_cache（内存 dict）
+#   - HTTP `/api/generate/{tid}/sample/{fn}` 从 cache 取
+#   - tempdir 仅装 config.json（小 JSON）；task 结束 supervisor 仍调
+#     cleanup_generate_tempdir 清掉空目录 + config.json
+#   - server 重启 → 内存 cache 自动没；强杀也不残留
 
 
 class GenerateRequest(BaseModel):
@@ -1873,7 +1968,11 @@ class GenerateRequest(BaseModel):
     seed: int = 0
     lora_configs: list[LoraEntry] = []
     mixed_precision: str = "bf16"
-    attention_backend: AttentionBackend = "flash_attn"
+    # commit C：attention_backend 默认从 secrets.generate.attention_backend 读，
+    # 前端 Generate 页不再发这个字段；保留 Optional 兼容老客户端 / 临时覆盖。
+    attention_backend: Optional[AttentionBackend] = None
+    # XY 矩阵：None=单图模式；设值时 schema 强制 prompts 单条 + count=1
+    xy_matrix: Optional[XYMatrixSpec] = None
 
     # 兼容老前端送 xformers / flash_attn 双 bool（自动映射成 attention_backend）
     @model_validator(mode="before")
@@ -1898,6 +1997,20 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
     tempdir = generate_tempdir(task_id)
     tempdir.mkdir(parents=True, exist_ok=True)
 
+    # attention_backend：secrets 读默认；body 给值则覆盖（兼容旧客户端）
+    # secrets 默认 'auto' → 调 detect_attention_backend 按"装了什么用什么"决定
+    try:
+        gen_cfg = secrets.load().generate
+        attn_default = gen_cfg.attention_backend
+        preview_n = int(gen_cfg.preview_every_n_steps or 0)
+    except Exception:
+        attn_default = "auto"
+        preview_n = 0
+    attn = body.attention_backend or attn_default
+    if attn == "auto":
+        from .services.xformers_setup import detect_attention_backend
+        attn = detect_attention_backend()
+
     cfg = GenerateConfig(
         **model_paths,
         output_dir=str(tempdir),
@@ -1913,11 +2026,16 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
         seed=body.seed,
         lora_configs=[lc.model_dump() for lc in body.lora_configs],
         mixed_precision=body.mixed_precision,
-        attention_backend=body.attention_backend,
+        attention_backend=attn,
+        xy_matrix=body.xy_matrix.model_dump() if body.xy_matrix else None,
     )
 
+    # commit 14：注入 daemon 端用的 preview 节流参数（settings 全局开关）
+    cfg_dict = cfg.model_dump()
+    cfg_dict["preview_every_n_steps"] = preview_n
+
     cfg_path = tempdir / "config.json"
-    cfg_path.write_text(cfg.model_dump_json(indent=2), encoding="utf-8")
+    cfg_path.write_text(json.dumps(cfg_dict, indent=2, ensure_ascii=False), encoding="utf-8")
 
     with db.connection_for() as conn:
         db.update_task(conn, task_id, config_path=str(cfg_path))
@@ -1937,17 +2055,83 @@ def get_generate_task(task_id: int) -> dict[str, Any]:
     return task
 
 
+# ---------------------------------------------------------------------------
+# /api/generate/daemon — 测试 daemon 状态查询 + 手动卸载（commit 13）
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/generate/taeflux/status")
+def get_taeflux_status() -> dict[str, Any]:
+    """commit 14：查询 TAEFlux 模型是否就绪（中间步预览依赖）。"""
+    from .services import model_downloader as _md
+    d = _md.taeflux_dir()
+    return {
+        "available": _md.taeflux_available(),
+        "dir": str(d),
+        "files": _md.TAEFLUX_FILES,
+    }
+
+
+@app.post("/api/generate/taeflux/install")
+def install_taeflux() -> dict[str, Any]:
+    """同步下载 TAEFlux（~1.6MB，秒级）。已存在直接返回 OK。"""
+    from .services import model_downloader as _md
+    if _md.taeflux_available():
+        return {"ok": True, "noop": True}
+    ok = _md.download_taeflux()
+    if not ok:
+        raise HTTPException(500, "download failed; check server log")
+    return {"ok": True}
+
+
+@app.get("/api/generate/daemon/status")
+def get_daemon_status() -> dict[str, Any]:
+    """查询 daemon 当前状态。前端 DaemonControls 用。"""
+    from .services.inference_daemon import get_daemon
+    daemon = get_daemon()
+    return {
+        "state": daemon.state,
+        "model_loaded": daemon.is_model_loaded,
+        "busy": daemon.is_busy,
+        "alive": daemon.is_alive,
+    }
+
+
+@app.post("/api/generate/daemon/unload")
+def unload_daemon() -> dict[str, Any]:
+    """手动卸载 daemon 模型（释放 VRAM）。busy 时拒绝（409）。
+
+    卸载完成后 supervisor 会推 daemon_state_changed SSE，前端按钮自动 disable。
+    下次用户点「开始生成」daemon 按需重 load。
+    """
+    from .services.inference_daemon import get_daemon
+    daemon = get_daemon()
+    if daemon.is_busy:
+        raise HTTPException(409, "daemon is busy, cannot unload")
+    if not daemon.is_model_loaded:
+        return {"ok": True, "noop": True}
+    daemon.request_unload()
+    return {"ok": True}
+
+
 @app.get("/api/generate/{task_id}/sample/{filename}")
 def get_generate_sample(task_id: int, filename: str) -> Any:
-    """读 generate task 的输出图（task 还在跑或刚结束时；清理后 404）。"""
+    """读 generate task 的输出图（commit 10：从 server 内存 cache 取，无磁盘）。
+
+    daemon 出图完成后把 PNG bytes 推回 server 入 generate_cache；HTTP 这里
+    直接返回 bytes。LRU / 客户端断连清理在 commit 11 加 —— 在那之前 cache
+    跟着 supervisor finalize 释放（一 task 一组 entry，task 终止时全清）。
+    """
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(400, "invalid filename")
-    from fastapi.responses import FileResponse
-    from .services.inference_core import generate_tempdir
-    img = generate_tempdir(task_id) / filename
-    if not img.exists() or img.suffix.lower() not in datasets.IMAGE_EXTS:
+    if not filename.lower().endswith(".png"):
+        raise HTTPException(400, "only .png supported")
+    from fastapi.responses import Response
+    from .services import generate_cache
+    data = generate_cache.get_image(task_id, filename)
+    if data is None:
         raise HTTPException(404)
-    return FileResponse(str(img))
+    return Response(content=data, media_type="image/png")
 
 
 @app.delete("/api/projects/{pid}/versions/{vid}/reg")
@@ -2228,11 +2412,22 @@ def import_queue(body: ImportRequest) -> dict[str, Any]:
 
 
 @app.get("/api/queue")
-def list_queue(status: Optional[str] = None) -> dict[str, Any]:
+def list_queue(
+    status: Optional[str] = None,
+    include_generate: bool = False,
+) -> dict[str, Any]:
+    """队列默认隐藏 generate 测试出图任务（commit 15 P0-2）。
+
+    generate task 走 daemon 不占 train slot，且生命周期短（出完图就结束），
+    出现在队列里只会让用户混淆"为什么队列卡住"。需要排查时加
+    `?include_generate=true` 兜底。
+    """
     if status and status not in db.VALID_STATUSES:
         raise HTTPException(400, f"unknown status: {status}")
     with db.connection_for() as conn:
         items = db.list_tasks(conn, status=status)
+    if not include_generate:
+        items = db.filter_out_task_types(items, ("generate",))
     return {"items": items}
 
 

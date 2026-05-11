@@ -80,6 +80,45 @@ describe('ImageGrid (PP3)', () => {
     )
   })
 
+  it('activate mode uses plain cell click for activation', async () => {
+    const onSelect = vi.fn()
+    const onActivate = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <ImageGrid
+        items={items}
+        selected={new Set()}
+        onSelect={onSelect}
+        onActivate={onActivate}
+        clickMode="activate"
+      />
+    )
+    await user.click(screen.getAllByRole('gridcell')[0])
+    expect(onActivate).toHaveBeenCalledWith('a.png')
+    expect(onSelect).not.toHaveBeenCalled()
+  })
+
+  it('activate mode keeps checkbox selection separate', async () => {
+    const onSelect = vi.fn()
+    const onActivate = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <ImageGrid
+        items={items}
+        selected={new Set()}
+        onSelect={onSelect}
+        onActivate={onActivate}
+        clickMode="activate"
+      />
+    )
+    await user.click(screen.getByRole('button', { name: '选择 a.png' }))
+    expect(onSelect).toHaveBeenCalledWith(
+      'a.png',
+      expect.objectContaining({ shiftKey: false })
+    )
+    expect(onActivate).not.toHaveBeenCalled()
+  })
+
   it('shows empty hint', () => {
     render(
       <ImageGrid items={[]} selected={new Set()} onSelect={() => {}} emptyHint="空空" />

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import {
   api,
+  downloadBlob,
   type CommitItem,
   type ProjectDetail,
   type Version,
@@ -49,6 +50,7 @@ export default function TagEditPage() {
   const [sel, setSel] = useState<Set<string>>(new Set())
   const [anchor, setAnchor] = useState<string | null>(null)
   const [filterTag, setFilterTag] = useState<string>('')
+  const [exporting, setExporting] = useState(false)
 
   const reloadCache = useCallback(async () => {
     if (versionId == null) return
@@ -199,6 +201,22 @@ export default function TagEditPage() {
 
   const onAfterRestore = async () => { await reloadCache(); await reload() }
 
+  const exportForCnb = async () => {
+    if (dirty) {
+      toast('先保存标签，再导出给 CNB', 'error')
+      return
+    }
+    setExporting(true)
+    try {
+      const filename = `${project.slug}-${activeVersion.label}.train.zip`
+      await downloadBlob(api.versionTrainZipUrl(project.id, activeVersion.id), filename)
+    } catch (e) {
+      toast(`导出失败: ${e}`, 'error')
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const stats = activeVersion.stats
   const trainTotal = stats?.train_image_count ?? 0
   const taggedTotal = stats?.tagged_image_count ?? 0
@@ -223,6 +241,14 @@ export default function TagEditPage() {
               {taggedTotal}/{trainTotal} 已打标
             </span>
           )}
+          <button
+            className="btn btn-primary btn-sm"
+            disabled={exporting || dirty || trainTotal === 0}
+            onClick={exportForCnb}
+            title={dirty ? '先保存标签再导出' : '导出当前版本训练集 zip，上传到 CNB 训练'}
+          >
+            {exporting ? '打包中…' : '导出给 CNB'}
+          </button>
           <SaveBar
             pid={project.id}
             vid={activeVersion.id}

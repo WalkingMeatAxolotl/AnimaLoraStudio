@@ -65,6 +65,101 @@ def test_is_cuda_inference_error_ignores_unrelated_failures(msg: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# _create_session — CUDA EP 静默降级检测
+# ---------------------------------------------------------------------------
+
+
+def _make_fake_session(providers: list[str]):
+    """构造一个 mock onnxruntime session：input/output name + 指定 providers。"""
+    sess = MagicMock()
+    sess.get_inputs.return_value = [MagicMock()]
+    sess.get_inputs.return_value[0].name = "x"
+    sess.get_outputs.return_value = [MagicMock()]
+    sess.get_outputs.return_value[0].name = "y"
+    sess.get_providers.return_value = list(providers)
+    return sess
+
+
+def test_create_session_records_error_on_silent_cuda_downgrade(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """onnxruntime 在 CUDA dlopen 失败时不抛而是 silently 降 CPU；
+    `_create_session` 必须比对实际 providers 并 stash 错误，否则 UI 看不到。"""
+    t = _StubTagger()
+
+    fake_session = _make_fake_session(["CPUExecutionProvider"])  # 装的是 GPU，但实际只剩 CPU
+    requested_providers: list[list[str]] = []
+
+    def fake_session_ctor(path, providers):
+        requested_providers.append(list(providers))
+        return fake_session
+
+    fake_ort = MagicMock(InferenceSession=fake_session_ctor)
+    fake_ort.get_available_providers.return_value = [
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+    monkeypatch.setitem(__import__("sys").modules, "onnxruntime", fake_ort)
+    # 起始无旧错记录
+    onnx_tagger_base.onnxruntime_setup.record_cuda_load_error(None)
+
+    try:
+        t._create_session(Path("/fake/model.onnx"))
+        # 用户请求过 CUDA
+        assert requested_providers and "CUDAExecutionProvider" in requested_providers[0]
+        # 但 onnxruntime 内部静默降 CPU → 必须有 cuda_load_error 让 UI 显示
+        err = onnx_tagger_base.onnxruntime_setup.get_cuda_load_error()
+        assert err is not None
+        assert "静默降级" in err or "silently" in err.lower()
+    finally:
+        onnx_tagger_base.onnxruntime_setup.record_cuda_load_error(None)
+
+
+def test_create_session_clears_error_when_cuda_actually_works(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """请求 CUDA 且实际 providers 含 CUDA → 清空旧错（成功路径）。"""
+    t = _StubTagger()
+    fake_session = _make_fake_session(
+        ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    )
+
+    fake_ort = MagicMock(InferenceSession=lambda _p, providers: fake_session)
+    fake_ort.get_available_providers.return_value = [
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+    monkeypatch.setitem(__import__("sys").modules, "onnxruntime", fake_ort)
+    # 预置一个旧错
+    onnx_tagger_base.onnxruntime_setup.record_cuda_load_error("old failure")
+
+    try:
+        t._create_session(Path("/fake/model.onnx"))
+        assert onnx_tagger_base.onnxruntime_setup.get_cuda_load_error() is None
+    finally:
+        onnx_tagger_base.onnxruntime_setup.record_cuda_load_error(None)
+
+
+def test_create_session_no_false_positive_when_cuda_not_requested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """机器没 GPU → 根本没请求 CUDA → providers 只有 CPU 是正常的，不应记错。"""
+    t = _StubTagger()
+    fake_session = _make_fake_session(["CPUExecutionProvider"])
+
+    fake_ort = MagicMock(InferenceSession=lambda _p, providers: fake_session)
+    fake_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
+    monkeypatch.setitem(__import__("sys").modules, "onnxruntime", fake_ort)
+    onnx_tagger_base.onnxruntime_setup.record_cuda_load_error(None)
+
+    try:
+        t._create_session(Path("/fake/model.onnx"))
+        assert onnx_tagger_base.onnxruntime_setup.get_cuda_load_error() is None
+    finally:
+        onnx_tagger_base.onnxruntime_setup.record_cuda_load_error(None)
+
+
+# ---------------------------------------------------------------------------
 # _fallback_to_cpu_session
 # ---------------------------------------------------------------------------
 

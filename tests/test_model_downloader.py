@@ -1,5 +1,6 @@
 """PR-6 — model_downloader._on_log per-line print。
 PR-S3 — _resolve_endpoint env > secrets > None 优先级。
+MS-1  — _get_download_source / download_flat_ms rename+cleanup 逻辑。
 """
 from __future__ import annotations
 
@@ -179,3 +180,135 @@ def test_on_log_does_not_hold_lock_during_print(
 
     can_finish_print.set()
     _wait_done("test-lock")
+
+
+# ---------------------------------------------------------------------------
+# MS-1 — ModelScope 下载源选择 + download_flat_ms rename/cleanup 逻辑
+# ---------------------------------------------------------------------------
+
+
+def test_get_download_source_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    """MODELSCOPE_SOURCE 环境变量优先于 secrets。"""
+    monkeypatch.setenv("MODELSCOPE_SOURCE", "modelscope")
+    from studio import secrets
+
+    monkeypatch.setattr(
+        secrets, "load",
+        lambda: secrets.Secrets(download_source="huggingface"),
+    )
+    assert model_downloader._get_download_source() == "modelscope"
+
+
+def test_get_download_source_falls_back_to_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """无 env 时读 secrets.download_source。"""
+    monkeypatch.delenv("MODELSCOPE_SOURCE", raising=False)
+    from studio import secrets
+
+    monkeypatch.setattr(
+        secrets, "load",
+        lambda: secrets.Secrets(download_source="modelscope"),
+    )
+    assert model_downloader._get_download_source() == "modelscope"
+
+
+def test_get_download_source_default_huggingface(monkeypatch: pytest.MonkeyPatch) -> None:
+    """secrets 空串时回退 'huggingface'。"""
+    monkeypatch.delenv("MODELSCOPE_SOURCE", raising=False)
+    from studio import secrets
+
+    monkeypatch.setattr(
+        secrets, "load",
+        lambda: secrets.Secrets(download_source=""),
+    )
+    assert model_downloader._get_download_source() == "huggingface"
+
+
+def test_download_flat_ms_skips_existing(tmp_path: "Path") -> None:
+    """target 已存在时跳过，不调 modelscope API。"""
+    target = tmp_path / "model.safetensors"
+    target.write_bytes(b"dummy")
+
+    logs: list[str] = []
+    ok = model_downloader.download_flat_ms(
+        "some/repo", "split_files/foo.safetensors", target, on_log=logs.append
+    )
+    assert ok
+    assert any("已存在" in l for l in logs)
+
+
+def test_download_flat_ms_rename_and_cleanup(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """download_flat_ms 把 model_file_download 落盘的深路径文件移到 target，
+    并清理掉空的中间目录。"""
+    target = tmp_path / "model.safetensors"
+    repo_subpath = "split_files/text_encoders/qwen_3_06b_base.safetensors"
+
+    def fake_download(model_id, file_path, local_dir, **kwargs):
+        # 模拟 modelscope 在 local_dir/repo_subpath 落盘
+        dest = tmp_path / file_path
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"weights")
+
+    import types
+    fake_mod = types.ModuleType("modelscope.hub.file_download")
+    fake_mod.model_file_download = fake_download  # type: ignore[attr-defined]
+
+    import sys
+    monkeypatch.setitem(sys.modules, "modelscope", types.ModuleType("modelscope"))
+    monkeypatch.setitem(sys.modules, "modelscope.hub", types.ModuleType("modelscope.hub"))
+    monkeypatch.setitem(sys.modules, "modelscope.hub.file_download", fake_mod)
+
+    logs: list[str] = []
+    ok = model_downloader.download_flat_ms(
+        "circlestone-labs/Anima", repo_subpath, target, on_log=logs.append
+    )
+    assert ok, logs
+    assert target.exists()
+    assert target.read_bytes() == b"weights"
+    # 中间目录应已被清理
+    assert not (tmp_path / "split_files").exists()
+
+
+def test_download_qwen3_modelscope_builds_complete_directory(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ModelScope 源下载权重后，仍会从 HF 补齐 tokenizer/config 文件，
+    使 text_encoders/ 成为 transformers 可直接加载的完整目录。"""
+    monkeypatch.setattr(model_downloader, "_get_download_source", lambda: "modelscope")
+
+    ms_calls: list[tuple[str, str, str]] = []
+    hf_calls: list[tuple[str, str, str]] = []
+
+    def fake_download_flat_ms(repo_id, repo_subpath, target, *, on_log=print):
+        ms_calls.append((repo_id, repo_subpath, str(target)))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"ms-weights")
+        return True
+
+    def fake_download_flat(repo_id, repo_subpath, target, *, on_log=print):
+        hf_calls.append((repo_id, repo_subpath, str(target)))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(repo_subpath, encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(model_downloader, "download_flat_ms", fake_download_flat_ms)
+    monkeypatch.setattr(model_downloader, "download_flat", fake_download_flat)
+
+    logs: list[str] = []
+    ok = model_downloader.download_qwen3(tmp_path, on_log=logs.append)
+
+    assert ok, logs
+    qwen_dir = tmp_path / "text_encoders"
+    assert (qwen_dir / "model.safetensors").read_bytes() == b"ms-weights"
+
+    assert ms_calls == [(
+        model_downloader.ANIMA_REPO,
+        model_downloader.MS_ANIMA_TEXT_ENCODER_PATH,
+        str(qwen_dir / "model.safetensors"),
+    )]
+
+    expected_hf_files = [f for f in model_downloader.QWEN_FILES if f != "model.safetensors"]
+    assert [repo_subpath for _, repo_subpath, _ in hf_calls] == expected_hf_files
+    for f in expected_hf_files:
+        assert (qwen_dir / f).read_text(encoding="utf-8") == f

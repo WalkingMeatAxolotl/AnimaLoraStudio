@@ -39,6 +39,11 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, OSError):
         pass
 
+# PP9.5 — 必须在任何 `import onnxruntime` 之前 import 本模块，触发顶层 preload。
+# auto_tag 路径会内联调 wd14_tagger（line ~105 `get_tagger("wd14")`），worker 是独立
+# subprocess，必须自己 import；否则 CUDA EP 静默降级到 CPU，用户看不到任何信号。
+from studio.services import onnxruntime_setup  # noqa: F401
+
 from studio import db, project_jobs, projects, secrets, versions
 from studio.datasets import IMAGE_EXTS
 from studio.services import reg_builder, reg_postprocess, tagedit

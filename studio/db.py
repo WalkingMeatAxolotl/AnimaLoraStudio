@@ -97,6 +97,16 @@ def get_task(conn: sqlite3.Connection, task_id: int) -> Optional[dict[str, Any]]
     return _row_to_dict(row)
 
 
+def filter_out_task_types(
+    items: list[dict[str, Any]], excluded: tuple[str, ...]
+) -> list[dict[str, Any]]:
+    """commit 15：从 task 列表里剔掉指定 task_type（默认 task_type='train' 兼容）。"""
+    return [
+        t for t in items
+        if (t.get("task_type") or "train") not in excluded
+    ]
+
+
 def list_tasks(
     conn: sqlite3.Connection, status: Optional[str] = None
 ) -> list[dict[str, Any]]:

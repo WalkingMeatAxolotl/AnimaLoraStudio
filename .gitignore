@@ -19,10 +19,6 @@ ENV/
 # Logs / local outputs
 output/
 monitor_data/
-scripts/stage3_smoke_output/
-scripts/stage5_resume_output/
-scripts/stage5_baseline_output/
-scripts/stage6_dora_output/
 config/autosave/
 *.log
 wandb/
@@ -62,6 +58,7 @@ Thumbs.db
 models/text_encoders/tokenizer.json
 models/text_encoders/vocab.json
 models/wd14/
+models/taeflux/
 
 # Dataset (training images)
 dataset/
@@ -76,3 +73,6 @@ CLAUDE.md
 
 # 工具生成的临时目录
 .spec-workflow/
+
+# 文档本地草稿（个人 TODO / 未定稿设计 / 临时笔记）
+docs/_local/

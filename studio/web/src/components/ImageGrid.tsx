@@ -16,6 +16,9 @@ interface Props {
   onHover?: (name: string) => void
   /** 全屏 modal 预览，由 cell 上的放大镜按钮触发（可选）。 */
   onPreview?: (name: string) => void
+  /** 主点击行为：默认选择；activate 模式下普通点击交给外部打开/激活。 */
+  onActivate?: (name: string) => void
+  clickMode?: 'select' | 'activate'
   /** 渲染上限；超出在末尾显示「显示前 N 张」。 */
   limit?: number
   emptyHint?: string
@@ -44,6 +47,8 @@ export default function ImageGrid({
   onSelect,
   onHover,
   onPreview,
+  onActivate,
+  clickMode = 'select',
   limit = 500,
   emptyHint = '没有图片',
   ariaLabel,
@@ -77,6 +82,8 @@ export default function ImageGrid({
             onSelect={onSelect}
             onHover={onHover}
             onPreview={onPreview}
+            onActivate={onActivate}
+            clickMode={clickMode}
           />
         )
       })}
@@ -103,6 +110,8 @@ const Cell = memo(function Cell({
   onSelect,
   onHover,
   onPreview,
+  onActivate,
+  clickMode,
 }: {
   item: ImageGridItem
   selected: boolean
@@ -110,13 +119,28 @@ const Cell = memo(function Cell({
   onSelect: (name: string, e: React.MouseEvent) => void
   onHover?: (name: string) => void
   onPreview?: (name: string) => void
+  onActivate?: (name: string) => void
+  clickMode: 'select' | 'activate'
 }) {
+  const handleCellClick = (e: React.MouseEvent) => {
+    if (clickMode === 'activate' && onActivate && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+      onActivate(item.name)
+      return
+    }
+    onSelect(item.name, e)
+  }
+
+  const handleSelectionClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    onSelect(item.name, e)
+  }
+
   return (
     <div
       role="gridcell"
       aria-selected={selected}
       onMouseEnter={onHover ? () => onHover(item.name) : undefined}
-      onClick={(e) => onSelect(item.name, e)}
+      onClick={handleCellClick}
       title={item.meta ? `${item.name}\n${item.meta}` : item.name}
       className={
         'group relative aspect-square overflow-hidden rounded border cursor-pointer select-none ' +
@@ -134,9 +158,10 @@ const Cell = memo(function Cell({
         draggable={false}
         className="w-full h-full object-cover pointer-events-none"
       />
-      {/* checkbox 视觉指示：选中显示实心 ✓，未选中悬停时显示空框 */}
-      <span
-        aria-hidden
+      <button
+        type="button"
+        onClick={handleSelectionClick}
+        aria-label={`${selected ? '取消选择' : '选择'} ${item.name}`}
         className={
           'absolute top-1 left-1 w-5 h-5 rounded-sm flex items-center justify-center text-[12px] font-bold transition-opacity ' +
           (selected
@@ -145,7 +170,7 @@ const Cell = memo(function Cell({
         }
       >
         ✓
-      </span>
+      </button>
       {/* 放大镜：悬停时出现，点击触发 modal 全屏预览（不影响选择状态） */}
       {onPreview && (
         <button

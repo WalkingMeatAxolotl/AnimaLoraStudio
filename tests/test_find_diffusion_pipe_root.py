@@ -1,8 +1,8 @@
-"""find_diffusion_pipe_root 路径解析回归 —— PR-1 搬目录漏修。
+"""find_diffusion_pipe_root 路径解析回归 —— anima_train 在 runtime/ 子目录下时也能找到 ../models/。
 
-anima_train.py 从 repo root 搬到 scripts/ 后，`Path(__file__).parent` 变成
-scripts/，原候选 `Path(__file__).parent / "models"` 找不到 repo_root/models/。
-线上首次跑训练立即 RuntimeError。
+anima_train.py 在仓库根的子目录（runtime/，历史上叫过 scripts/）下，
+`Path(__file__).parent` 变成 runtime/，原候选 `Path(__file__).parent / "models"`
+找不到 repo_root/models/。线上首次跑训练立即 RuntimeError。
 
 本测试用 AST 抽函数源码独立执行，避免 import 整个 anima_train（torch +
 anima 依赖太重），保持单测轻量稳定。
@@ -17,8 +17,8 @@ import pytest
 
 
 def _exec_fn() -> tuple[object, dict]:
-    """从 scripts/anima_train.py 抽 find_diffusion_pipe_root，独立编译。"""
-    src_path = Path(__file__).resolve().parent.parent / "scripts" / "anima_train.py"
+    """从 runtime/anima_train.py 抽 find_diffusion_pipe_root，独立编译。"""
+    src_path = Path(__file__).resolve().parent.parent / "runtime" / "anima_train.py"
     tree = ast.parse(src_path.read_text(encoding="utf-8"))
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name == "find_diffusion_pipe_root":
@@ -50,11 +50,11 @@ def _run(file_loc: Path, env_root: str | None = None) -> Path:
             os.environ.pop("DIFFUSION_PIPE_ROOT", None)
 
 
-def test_finds_repo_root_models_after_scripts_move(tmp_path: Path) -> None:
-    """PR-1 搬目录后的标准 layout：repo_root/scripts/anima_train.py + repo_root/models/anima_modeling.py。"""
-    scripts_dir = tmp_path / "scripts"
-    scripts_dir.mkdir()
-    fake_train = scripts_dir / "anima_train.py"
+def test_finds_repo_root_models_when_train_in_subdir(tmp_path: Path) -> None:
+    """标准 layout：repo_root/runtime/anima_train.py + repo_root/models/anima_modeling.py。"""
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    fake_train = runtime_dir / "anima_train.py"
     fake_train.write_text("# placeholder")
 
     models = tmp_path / "models"
@@ -80,7 +80,7 @@ def test_finds_script_sibling_models_directory(tmp_path: Path) -> None:
 
 def test_env_var_override_when_no_layout_match(tmp_path: Path) -> None:
     """DIFFUSION_PIPE_ROOT 直接指向 anima_modeling.py 所在目录。"""
-    fake_train = tmp_path / "scripts" / "anima_train.py"
+    fake_train = tmp_path / "runtime" / "anima_train.py"
     fake_train.parent.mkdir()
     fake_train.write_text("# placeholder")
 
@@ -94,7 +94,7 @@ def test_env_var_override_when_no_layout_match(tmp_path: Path) -> None:
 
 def test_raises_when_nothing_found(tmp_path: Path) -> None:
     """所有候选都没命中 → RuntimeError。"""
-    fake_train = tmp_path / "scripts" / "anima_train.py"
+    fake_train = tmp_path / "runtime" / "anima_train.py"
     fake_train.parent.mkdir()
     fake_train.write_text("# placeholder")
 

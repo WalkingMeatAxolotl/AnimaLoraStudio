@@ -131,7 +131,23 @@ class OnnxTaggerBase:
                 str(model_path), providers=["CPUExecutionProvider"]
             )
         else:
-            onnxruntime_setup.record_cuda_load_error(None)
+            # onnxruntime 在 CUDA EP dlopen 失败时**不抛异常** —— 内部 silently
+            # fallback 到下一个 EP（CPU）。光看 try/except 不够，必须比对实际
+            # session.get_providers()；不一致 → 用户实际跑 CPU，但 UI 看不到。
+            if cuda_attempt:
+                actual = list(self._session.get_providers())
+                if "CUDAExecutionProvider" not in actual:
+                    msg = (
+                        f"CUDA EP 静默降级到 CPU（InferenceSession 未抛异常，"
+                        f"但 get_providers={actual}）。常见原因：CUDA 驱动版本不够 / "
+                        f"runtime so/DLL 缺失 / cuDNN ABI 错位。"
+                    )
+                    logger.warning("%s %s", self.name, msg)
+                    onnxruntime_setup.record_cuda_load_error(msg)
+                else:
+                    onnxruntime_setup.record_cuda_load_error(None)
+            else:
+                onnxruntime_setup.record_cuda_load_error(None)
 
         self._input_name = self._session.get_inputs()[0].name
         self._output_names = [o.name for o in self._session.get_outputs()]

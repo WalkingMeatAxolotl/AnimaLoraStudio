@@ -1,9 +1,9 @@
 """推理核心 — 多 LoRA 加载 / 合并的统一实现。
 
 服务对象：
-  - tools/anima_generate.py（独立测试出图，多 LoRA 叠加）
-  - scripts/anima_train.py 训练期 sample（PR-9 commit 7 切过来）
-  - tools/anima_reg_ai.py（先验生成 — 不调 apply_loras，base 模型直出）
+  - runtime/anima_generate.py（独立测试出图，多 LoRA 叠加）
+  - runtime/anima_train.py 训练期 sample（PR-9 commit 7 切过来）
+  - runtime/anima_reg_ai.py（先验生成 — 不调 apply_loras，base 模型直出）
 
 PR #17 作者在 anima_generate.py / anima_reg_ai.py 各 copy 了一份 LoRA 加载，
 有两个 P0 bug：

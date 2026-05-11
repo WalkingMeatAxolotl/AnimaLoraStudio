@@ -2,7 +2,7 @@
 
 scope = {kind: 'all' | 'folder' | 'files', folder?, names?}
 所有读写都用 `read_caption` / `write_caption`，自动适配 `.txt`（逗号分隔）
-与 `.json`（参考 docs/json-caption-format.md，PP4 简化为 {"tags": [...]}）。
+与 `.json`（参考 docs/user-guide/caption-format.md，已简化为 {"tags": [...]}）。
 
 写时：
 - 如果该图已有 `.json` → 写 `.json`，更新 tags 字段

@@ -29,6 +29,12 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, OSError):
         pass
 
+# PP9.5 — 必须在任何 `import onnxruntime` 之前 import 本模块，触发顶层 preload
+# （Linux: RTLD_GLOBAL 加载 torch 自带 CUDA so；Windows: os.add_dll_directory）。
+# cli.py / server.py 已覆盖各自进程；worker 是独立 subprocess，靠 get_tagger
+# 懒加载链触发太晚（懒加载在 main() 里，某些路径下来不及）—— worker 顶层显式 import。
+from studio.services import onnxruntime_setup  # noqa: F401
+
 from studio import db, project_jobs, projects, versions
 from studio.datasets import IMAGE_EXTS
 from studio.services.caption_format import (

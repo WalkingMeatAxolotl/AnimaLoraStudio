@@ -31,7 +31,7 @@ _logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Flash Attention：可选加速；未装 / 不可用时无声 fallback 到 SDPA。
 # - `_USE_FLASH_ATTN` 默认 False —— 安装 flash_attn 后必须显式 set_flash_attn_enabled(True)
-# - cli.py / scripts/anima_train.py 启动期会调一次 enable，把状态打开（如果可用）
+# - cli.py / runtime/anima_train.py 启动期会调一次 enable，把状态打开（如果可用）
 # - 本模块是 anima_modeling.py 的 "owner"，那边 re-export 这套状态机
 # - **保留** RMSNorm 上的 `@torch.autocast('cuda', dtype=torch.float32)`：
 #   PR #17 删了它没给 loss 对照；数值稳定性约束不能拍脑袋丢

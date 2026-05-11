@@ -21,6 +21,7 @@ SENSITIVE_FIELDS: tuple[str, ...] = (
     "huggingface.token",
     "wandb.api_key",
     "llm_tagger.api_key",
+    "modelscope.token",
 )
 
 
@@ -67,6 +68,13 @@ class WandBConfig(BaseModel):
         if self.mode not in {"online", "offline", "disabled"}:
             self.mode = "online"
         return self
+
+
+class ModelScopeConfig(BaseModel):
+    token: str = ""
+    # 魔搭社区（modelscope.cn）下载 token。公开模型不填也能下，私有 / 限速时需要。
+    # 使用前需 pip install modelscope；下载时会优先找 MODELSCOPE_REPO_MAP 里的对应仓库，
+    # 没有映射的模型自动回退 HuggingFace。
 
 
 class DownloadConfig(BaseModel):
@@ -253,18 +261,37 @@ class ModelsConfig(BaseModel):
     selected_anima: str = "preview3-base"
 
 
+class GenerateConfig(BaseModel):
+    """测试出图 daemon 行为（PR Phase 2）。
+
+    - `preview_every_n_steps`：中间步预览节流。0=关；>0 → daemon 用 TAEFlux
+      decode 每 N 步推一张 256px JPEG 给前端。需要 TAEFlux 模型已下载
+      （settings 入口或 POST /api/generate/taeflux/install）。
+    - `attention_backend`：注意力后端选择。`'auto'`（默认）→ 装了什么用什么
+      （优先级 flash_attn > xformers > none/SDPA）；显式值（flash_attn/
+      xformers/none）则强制 —— 想 debug 或对比时手动指定。
+    """
+    preview_every_n_steps: int = 3
+    attention_backend: str = "auto"
+
+
 class Secrets(BaseModel):
     gelbooru: GelbooruConfig = Field(default_factory=GelbooruConfig)
     danbooru: DanbooruConfig = Field(default_factory=DanbooruConfig)
     download: DownloadConfig = Field(default_factory=DownloadConfig)
     huggingface: HuggingFaceConfig = Field(default_factory=HuggingFaceConfig)
     wandb: WandBConfig = Field(default_factory=WandBConfig)
+    modelscope: ModelScopeConfig = Field(default_factory=ModelScopeConfig)
+    # 模型下载源。"huggingface"（默认）走 HF + endpoint 配置；
+    # "modelscope" 走魔搭社区，没有对应映射的模型自动回退 HF。
+    download_source: str = "huggingface"
     joycaption: JoyCaptionConfig = Field(default_factory=JoyCaptionConfig)
     llm_tagger: LLMTaggerConfig = Field(default_factory=LLMTaggerConfig)
     wd14: WD14Config = Field(default_factory=WD14Config)
     cltagger: CLTaggerConfig = Field(default_factory=CLTaggerConfig)
     models: ModelsConfig = Field(default_factory=ModelsConfig)
     queue: QueueConfig = Field(default_factory=QueueConfig)
+    generate: GenerateConfig = Field(default_factory=GenerateConfig)
 
 
 # ---------------------------------------------------------------------------
