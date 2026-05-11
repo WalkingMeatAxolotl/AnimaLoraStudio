@@ -97,14 +97,50 @@ class DownloadConfig(BaseModel):
     cdn_rate_per_sec: float = 5.0
 
 
-class LLMPresetConfig(BaseModel):
-    """完整 LLM tagger 预设：每条 preset 承载一整套 endpoint + prompt + 生成参数。
+LLM_MESSAGE_ROLES: tuple[str, ...] = ("system", "user", "assistant")
+LLM_MESSAGE_TYPES: tuple[str, ...] = ("text", "image")
 
-    Refactor: 之前 LLMPromptPresetConfig 只含 {id/label/prompt/output_format}，
-    base_url / api_key / model / temperature 等都在 LLMTaggerConfig 顶层。
-    JoyCaption 卡片独立维护一份 base_url/model/prompt_template —— 用户面对
-    \"两条 LLM 链路\" 误判。新设计：preset 一票到底，JoyCaption 退化为 builtin
-    preset 的初始预填值。
+
+class LLMMessage(BaseModel):
+    """LLM payload 里的一条消息。
+
+    type=text：普通文本消息，需指定 role (system/user/assistant)；content 为 prompt 文本
+    type=image：图片占位 item，打标时后端把当前图片塞进这里
+        - content 字段被忽略
+        - role 固定为 "user"（OpenAI / Anthropic 都把 image 放在 user 侧）
+        - 每个 preset 必须恰好有一个 type=image item（validator 兜底）
+    """
+    type: str = "text"
+    role: str = "user"
+    content: str = ""
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "LLMMessage":
+        if self.type not in LLM_MESSAGE_TYPES:
+            self.type = "text"
+        if self.type == "image":
+            self.role = "user"
+            self.content = ""
+        else:
+            if self.role not in LLM_MESSAGE_ROLES:
+                self.role = "user"
+        return self
+
+
+def _default_messages_for(prompt: str) -> list["LLMMessage"]:
+    """老 prompt 字段一行迁移 → [{system, prompt}, {image}]。"""
+    msgs: list[LLMMessage] = []
+    if prompt:
+        msgs.append(LLMMessage(type="text", role="system", content=prompt))
+    msgs.append(LLMMessage(type="image"))
+    return msgs
+
+
+class LLMPresetConfig(BaseModel):
+    """完整 LLM tagger 预设：每条 preset 承载一整套 endpoint + messages + 生成参数。
+
+    messages 是 OpenAI chat-completions 风格的消息序列，外加一个特殊 type=image item
+    标记图片应当插入的位置。打标时后端按 messages 顺序铺开成 API payload。
 
     builtin: bool 仅标识 id 是否来自 builtin 列表（用于 UI 显示「重置为默认」）
     —— 不锁字段，用户改 builtin preset 的任何字段都会持久化。
@@ -118,8 +154,8 @@ class LLMPresetConfig(BaseModel):
     model: str = ""
     model_ids: list[str] = Field(default_factory=list)
     endpoint: str = "chat_completions"  # chat_completions | responses
-    # prompt
-    prompt: str = ""
+    # prompt 消息序列（含图片位置）
+    messages: list[LLMMessage] = Field(default_factory=lambda: _default_messages_for(""))
     output_format: str = "json"  # json | text
     # 生成参数
     temperature: float = 0.2
@@ -131,6 +167,19 @@ class LLMPresetConfig(BaseModel):
     # 重试 / 超时
     timeout: int = 60
     max_retries: int = 3
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_prompt(cls, data: Any) -> Any:
+        """兼容旧 schema 的 prompt: str → messages list。"""
+        if not isinstance(data, dict):
+            return data
+        if "messages" in data and data["messages"]:
+            return data
+        legacy_prompt = str(data.pop("prompt", "") or "").strip()
+        data["messages"] = [m.model_dump() if isinstance(m, LLMMessage) else m
+                            for m in _default_messages_for(legacy_prompt)]
+        return data
 
     @model_validator(mode="after")
     def _normalize_values(self) -> "LLMPresetConfig":
@@ -163,6 +212,24 @@ class LLMPresetConfig(BaseModel):
             seen.add(key)
             clean.append(text)
         self.model_ids = clean
+        # messages 兜底：必须恰好一个 type=image item；缺则补到末尾
+        if not self.messages:
+            self.messages = _default_messages_for("")
+        else:
+            has_image = any(m.type == "image" for m in self.messages)
+            if not has_image:
+                self.messages = [*self.messages, LLMMessage(type="image")]
+            else:
+                # 多个 image → 只保留第一个
+                kept: list[LLMMessage] = []
+                seen_image = False
+                for m in self.messages:
+                    if m.type == "image":
+                        if seen_image:
+                            continue
+                        seen_image = True
+                    kept.append(m)
+                self.messages = kept
         return self
 
 

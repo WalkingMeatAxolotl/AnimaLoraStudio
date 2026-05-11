@@ -344,20 +344,25 @@ class LLMTagger:
         data_url: str,
         image_path: Path,
     ) -> dict[str, Any]:
+        """按 preset.messages 顺序构造 chat-completions messages 数组。
+
+        text item → 单条 message；image item → 单条 `{role: user, content: [image_url]}`。
+        相邻同 role 不自动合并（OpenAI 完全 OK；Anthropic 兼容层会自动处理）。
+        """
+        messages: list[dict[str, Any]] = []
+        for item in cfg.messages:
+            if item.type == "image":
+                messages.append({
+                    "role": "user",
+                    "content": [{"type": "image_url", "image_url": {"url": data_url}}],
+                })
+            else:
+                messages.append({"role": item.role, "content": item.content})
         return {
             "model": cfg.model,
             "temperature": cfg.temperature,
             "max_tokens": cfg.max_tokens,
-            "messages": [
-                {"role": "system", "content": cfg.prompt},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": self._user_text(image_path, cfg)},
-                        {"type": "image_url", "image_url": {"url": data_url}},
-                    ],
-                },
-            ],
+            "messages": messages,
         }
 
     def _responses_payload(
@@ -366,31 +371,39 @@ class LLMTagger:
         data_url: str,
         image_path: Path,
     ) -> dict[str, Any]:
+        """Responses API 限制式适配：
+
+        - 所有 type=text + role=system 的 messages 合并进 instructions（用 \\n\\n 拼接）
+        - 取第一条 type=text + role=user 的 content 作为 user 文本（其他 user/assistant 忽略）
+        - 图片附加到 user content 数组里
+
+        OpenAI Responses 自身的 multi-turn input 支持不稳，第三方兼容也参差 ——
+        所以这里采用「单 system + 单 user + image」的保守映射。UI 会在选 responses
+        endpoint 时提示该限制。
+        """
+        system_texts: list[str] = []
+        user_text = ""
+        for item in cfg.messages:
+            if item.type != "text":
+                continue
+            if item.role == "system":
+                if item.content:
+                    system_texts.append(item.content)
+            elif item.role == "user" and not user_text:
+                user_text = item.content
+
+        user_content: list[dict[str, Any]] = []
+        if user_text:
+            user_content.append({"type": "input_text", "text": user_text})
+        user_content.append({"type": "input_image", "image_url": data_url})
+
         return {
             "model": cfg.model,
-            "instructions": cfg.prompt,
+            "instructions": "\n\n".join(system_texts),
             "temperature": cfg.temperature,
             "max_output_tokens": cfg.max_tokens,
-            "input": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "input_text", "text": self._user_text(image_path, cfg)},
-                        {"type": "input_image", "image_url": data_url},
-                    ],
-                },
-            ],
+            "input": [{"role": "user", "content": user_content}],
         }
-
-    def _user_text(self, image_path: Path, cfg: "secrets.LLMPresetConfig") -> str:
-        return json.dumps(
-            {
-                "file_name": image_path.name,
-                "target": "anima_lora_caption",
-                "return_json_only": cfg.output_format == "json",
-            },
-            ensure_ascii=False,
-        )
 
     @staticmethod
     def _extract_chat_text(payload: dict[str, Any]) -> str:

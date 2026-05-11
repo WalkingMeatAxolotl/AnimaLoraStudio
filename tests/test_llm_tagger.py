@@ -93,7 +93,8 @@ def test_chat_completions_tag_normalizes_json(isolated_secrets, tmp_path: Path) 
     assert body["model"] == "vision"
     assert "anime style LoRA" in body["messages"][0]["content"]
     assert kwargs["timeout"] == (10, 60)
-    assert body["messages"][1]["content"][1]["image_url"]["url"].startswith(
+    # messages[1] 是 image item，被铺开成 user/[image_url]
+    assert body["messages"][1]["content"][0]["image_url"]["url"].startswith(
         "data:image/jpeg;base64,"
     )
 
@@ -119,7 +120,10 @@ def test_uses_editable_prompt_preset(isolated_secrets, tmp_path: Path) -> None:
                     {
                         "id": "my_style",
                         "label": "My Style",
-                        "prompt": "MY PROMPT",
+                        "messages": [
+                            {"type": "text", "role": "system", "content": "MY PROMPT"},
+                            {"type": "image"},
+                        ],
                         "base_url": "http://x/v1",
                         "model": "vision",
                         "max_retries": 1,
@@ -155,10 +159,9 @@ def test_responses_endpoint_payload(isolated_secrets, tmp_path: Path) -> None:
     assert args[0] == "http://x/v1/responses"
     body = kwargs["json"]
     assert body["instructions"]
-    assert body["input"][0]["content"][1]["type"] == "input_image"
-    assert body["input"][0]["content"][1]["image_url"].startswith(
-        "data:image/jpeg;base64,"
-    )
+    # builtin style_json 只有 system message，无 user → input content 仅 input_image
+    image_part = next(c for c in body["input"][0]["content"] if c["type"] == "input_image")
+    assert image_part["image_url"].startswith("data:image/jpeg;base64,")
 
 
 def test_fetch_openai_compatible_models() -> None:

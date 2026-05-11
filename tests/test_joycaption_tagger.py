@@ -27,7 +27,10 @@ def isolated_secrets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
                         "id": "joycaption",
                         "base_url": "http://x/v1",
                         "model": "m",
-                        "prompt": "hi",
+                        "messages": [
+                            {"type": "text", "role": "system", "content": "hi"},
+                            {"type": "image"},
+                        ],
                         "max_retries": 1,
                     }
                 ]
@@ -96,8 +99,9 @@ def test_tag_emits_natural_caption(isolated_secrets, tmp_path: Path) -> None:
     body = kwargs["json"]
     assert body["model"] == "m"
     assert body["messages"][0]["content"] == "hi"
+    # messages[1] 是 image item，铺开成 user/[image_url]
     user_content = body["messages"][1]["content"]
-    assert user_content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    assert user_content[0]["image_url"]["url"].startswith("data:image/jpeg;base64,")
 
 
 def test_tag_retries_then_fails(isolated_secrets, tmp_path: Path, monkeypatch) -> None:

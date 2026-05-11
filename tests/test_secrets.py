@@ -298,7 +298,10 @@ def test_llm_tagger_legacy_schema_migration(secrets_file: Path) -> None:
     assert joy.model == "my-custom-joycaption"
     # 用户自定义 prompt_template 单独建一个 user_joycaption preset
     user_joy = next(p for p in s.llm_tagger.presets if p.id == "user_joycaption")
-    assert user_joy.prompt == "My custom prompt"
+    assert user_joy.messages[0].type == "text"
+    assert user_joy.messages[0].role == "system"
+    assert user_joy.messages[0].content == "My custom prompt"
+    assert user_joy.messages[-1].type == "image"
     assert user_joy.output_format == "text"
 
 
