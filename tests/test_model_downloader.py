@@ -268,3 +268,47 @@ def test_download_flat_ms_rename_and_cleanup(
     assert target.read_bytes() == b"weights"
     # 中间目录应已被清理
     assert not (tmp_path / "split_files").exists()
+
+
+def test_download_qwen3_modelscope_builds_complete_directory(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ModelScope 源下载权重后，仍会从 HF 补齐 tokenizer/config 文件，
+    使 text_encoders/ 成为 transformers 可直接加载的完整目录。"""
+    monkeypatch.setattr(model_downloader, "_get_download_source", lambda: "modelscope")
+
+    ms_calls: list[tuple[str, str, str]] = []
+    hf_calls: list[tuple[str, str, str]] = []
+
+    def fake_download_flat_ms(repo_id, repo_subpath, target, *, on_log=print):
+        ms_calls.append((repo_id, repo_subpath, str(target)))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"ms-weights")
+        return True
+
+    def fake_download_flat(repo_id, repo_subpath, target, *, on_log=print):
+        hf_calls.append((repo_id, repo_subpath, str(target)))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(repo_subpath, encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(model_downloader, "download_flat_ms", fake_download_flat_ms)
+    monkeypatch.setattr(model_downloader, "download_flat", fake_download_flat)
+
+    logs: list[str] = []
+    ok = model_downloader.download_qwen3(tmp_path, on_log=logs.append)
+
+    assert ok, logs
+    qwen_dir = tmp_path / "text_encoders"
+    assert (qwen_dir / "model.safetensors").read_bytes() == b"ms-weights"
+
+    assert ms_calls == [(
+        model_downloader.ANIMA_REPO,
+        model_downloader.MS_ANIMA_TEXT_ENCODER_PATH,
+        str(qwen_dir / "model.safetensors"),
+    )]
+
+    expected_hf_files = [f for f in model_downloader.QWEN_FILES if f != "model.safetensors"]
+    assert [repo_subpath for _, repo_subpath, _ in hf_calls] == expected_hf_files
+    for f in expected_hf_files:
+        assert (qwen_dir / f).read_text(encoding="utf-8") == f

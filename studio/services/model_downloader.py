@@ -438,23 +438,32 @@ def download_anima_vae(root: Path, *, on_log: Callable[[str], None] = print) -> 
 def download_qwen3(root: Path, *, on_log: Callable[[str], None] = print) -> bool:
     """下载文本编码器（Qwen3）。
 
-    - HuggingFace 源：从 Qwen/Qwen3-0.6B-Base 下载 6 个散文件到 text_encoders/ 目录。
-    - ModelScope 源：从 circlestone-labs/Anima 下载单文件
-      split_files/text_encoders/qwen_3_06b_base.safetensors，
-      落到 text_encoders/qwen_3_06b_base.safetensors。
-      （魔搭 Anima repo 已预先合并，无需单独拉 Qwen repo。）
+    - HuggingFace 源：从 Qwen/Qwen3-0.6B-Base 下载完整目录所需的 6 个文件。
+    - ModelScope 源：从 circlestone-labs/Anima 下载权重文件，另外从
+      Qwen/Qwen3-0.6B-Base 补齐 tokenizer / config 文件，确保本地
+      text_encoders/ 是 transformers 可直接加载的完整目录。
     """
     target_dir = qwen_dir(root)
-    if _get_download_source() == "modelscope":
-        on_log(f"\n📥 Anima 文本编码器（ModelScope 单文件）→ {target_dir}")
-        target_dir.mkdir(parents=True, exist_ok=True)
-        # 魔搭 Anima repo 里文件名是 qwen_3_06b_base.safetensors；
-        # 训练脚本按 HF 惯例找 model.safetensors，下载后重命名。
-        target = target_dir / "model.safetensors"
-        return download_flat_ms(ANIMA_REPO, MS_ANIMA_TEXT_ENCODER_PATH, target, on_log=on_log)
-    on_log(f"\n📥 Qwen3-0.6B-Base (~1.2 GB) → {target_dir}")
     target_dir.mkdir(parents=True, exist_ok=True)
     ok = True
+
+    if _get_download_source() == "modelscope":
+        on_log(f"\n📥 Anima 文本编码器（ModelScope 权重 + HF tokenizer）→ {target_dir}")
+        # 魔搭 Anima repo 里只有权重；训练脚本仍要求完整 transformers 目录。
+        ok &= download_flat_ms(
+            ANIMA_REPO,
+            MS_ANIMA_TEXT_ENCODER_PATH,
+            target_dir / "model.safetensors",
+            on_log=on_log,
+        )
+        for f in QWEN_FILES:
+            if f == "model.safetensors":
+                continue
+            if not download_flat(QWEN_REPO, f, target_dir / f, on_log=on_log):
+                ok = False
+        return ok
+
+    on_log(f"\n📥 Qwen3-0.6B-Base (~1.2 GB) → {target_dir}")
     for f in QWEN_FILES:
         if not download_flat(QWEN_REPO, f, target_dir / f, on_log=on_log):
             ok = False
