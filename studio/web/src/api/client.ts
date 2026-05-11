@@ -808,6 +808,9 @@ export interface TaskOutputs {
   /** 仅 loopback 请求为 true；云端永远 false。前端按此控制「打开文件夹」按钮可见性。 */
   supports_open_folder: boolean
   files: TaskOutputFile[]
+  /** "{slug}-{label}"，用作打包下载的 zip 文件名前缀（和 train.zip 命名风格一致）。
+   * 老任务没绑 project / version → null，调用方 fallback 到 task_{id}。 */
+  archive_basename: string | null
 }
 
 export interface DatasetFolder {

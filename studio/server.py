@@ -2435,6 +2435,24 @@ def _task_output_dir(task: dict[str, Any]) -> Optional[Path]:
     return versions.version_dir(int(pid), p["slug"], v["label"]) / "output"
 
 
+def _task_archive_basename(task: dict[str, Any]) -> Optional[str]:
+    """task 关联 project / version → "{slug}-{label}"，用作 outputs zip 文件名
+    前缀。和 train.zip 命名风格一致（PP7：{slug}-{label}.train.zip）。
+
+    没 project / version → None，调用方 fallback 到 task_{id}。
+    """
+    pid = task.get("project_id")
+    vid = task.get("version_id")
+    if not (pid and vid):
+        return None
+    with db.connection_for() as conn:
+        v = versions.get_version(conn, int(vid))
+        p = projects.get_project(conn, int(pid))
+    if not v or not p or v["project_id"] != pid:
+        return None
+    return f"{p['slug']}-{v['label']}"
+
+
 def _is_loopback(request: Request) -> bool:
     client = request.client
     return bool(client and client.host in _LOCALHOST_HOSTS)
@@ -2473,6 +2491,7 @@ def list_task_outputs(task_id: int, request: Request) -> dict[str, Any]:
         "exists": bool(out_dir and out_dir.exists()),
         "supports_open_folder": _is_loopback(request),
         "files": files,
+        "archive_basename": _task_archive_basename(task),
     }
 
 
@@ -2548,9 +2567,10 @@ def download_task_outputs_zip(
     bus.publish({"type": "task_outputs_zip_ready", "task_id": task_id})
     background.add_task(lambda: tmp_path.unlink(missing_ok=True))
 
+    basename = _task_archive_basename(task) or f"task_{task_id}"
     archive_name = (
-        f"task_{task_id}_outputs_selected.zip" if partial
-        else f"task_{task_id}_outputs.zip"
+        f"{basename}_outputs_selected.zip" if partial
+        else f"{basename}_outputs.zip"
     )
     return FileResponse(
         tmp_path,

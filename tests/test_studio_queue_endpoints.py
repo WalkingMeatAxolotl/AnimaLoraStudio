@@ -240,13 +240,38 @@ def test_download_outputs_zip(
     resp = client.get(f"/api/queue/{tid}/outputs.zip")
     assert resp.status_code == 200
     assert resp.headers.get("content-type") == "application/zip"
-    assert "task_%d_outputs.zip" % tid in resp.headers.get("content-disposition", "")
+    # 命名格式：{slug}-{label}_outputs.zip，和 train.zip 命名风格一致
+    expected_name = f"{p['slug']}-{v['label']}_outputs.zip"
+    assert expected_name in resp.headers.get("content-disposition", "")
 
     with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
         names = sorted(zf.namelist())
         assert names == ["lora_final.safetensors", "training_state_step100.pt"]
         assert zf.read("lora_final.safetensors") == b"AAA"
         assert zf.read("training_state_step100.pt") == b"BB"
+
+
+def test_list_task_outputs_returns_archive_basename(
+    client: TestClient, isolated, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """list_task_outputs 返回里带 archive_basename = "{slug}-{label}"，前端用作
+    打包下载的 zip 文件名前缀。老任务（无 project/version）→ null。"""
+    from studio import projects as projects_mod, versions as versions_mod
+    monkeypatch.setattr(projects_mod, "PROJECTS_DIR", isolated / "projects")
+    with db.connection_for() as conn:
+        p = projects_mod.create_project(conn, title="P")
+        v = versions_mod.create_version(conn, project_id=p["id"], label="v1")
+        bound = db.create_task(conn, name="t", config_name="good")
+        db.update_task(conn, bound, status="done", project_id=p["id"], version_id=v["id"])
+        legacy = db.create_task(conn, name="老", config_name="good")
+
+    resp = client.get(f"/api/queue/{bound}/outputs")
+    assert resp.status_code == 200
+    assert resp.json()["archive_basename"] == f"{p['slug']}-{v['label']}"
+
+    resp = client.get(f"/api/queue/{legacy}/outputs")
+    assert resp.status_code == 200
+    assert resp.json()["archive_basename"] is None
 
 
 def test_download_outputs_zip_partial(
@@ -272,9 +297,8 @@ def test_download_outputs_zip_partial(
         f"/api/queue/{tid}/outputs.zip?files=ep_001.safetensors,ep_003.safetensors"
     )
     assert resp.status_code == 200
-    assert "task_%d_outputs_selected.zip" % tid in resp.headers.get(
-        "content-disposition", ""
-    )
+    expected_name = f"{p['slug']}-{v['label']}_outputs_selected.zip"
+    assert expected_name in resp.headers.get("content-disposition", "")
     with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
         names = sorted(zf.namelist())
         assert names == ["ep_001.safetensors", "ep_003.safetensors"]

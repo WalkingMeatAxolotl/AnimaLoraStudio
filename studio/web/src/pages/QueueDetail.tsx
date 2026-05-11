@@ -234,7 +234,7 @@ export default function QueueDetailPage() {
         )}
         {tab === 'log' && <LogTab taskId={taskId} />}
         {tab === 'monitor' && <MonitorTab taskId={taskId} />}
-        {tab === 'outputs' && <OutputsTab taskId={taskId} taskName={task?.name ?? ''} />}
+        {tab === 'outputs' && <OutputsTab taskId={taskId} />}
       </div>
 
 
@@ -389,7 +389,7 @@ function MonitorTab({ taskId }: { taskId: number }) {
 
 // ── OutputsTab ──────────────────────────────────────────────────────────────
 
-function OutputsTab({ taskId, taskName }: { taskId: number; taskName: string }) {
+function OutputsTab({ taskId }: { taskId: number }) {
   const { toast } = useToast()
   const [data, setData] = useState<TaskOutputs | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -508,8 +508,10 @@ function OutputsTab({ taskId, taskName }: { taskId: number; taskName: string }) 
     const partial = selectMode && selected.size > 0
     if (selectMode && !partial) return  // 批量模式下没选任何文件，按钮应已 disabled
     setZipping(true)
-    const safe = taskName && /^[A-Za-z0-9_.-]+$/.test(taskName)
-    const baseName = safe ? taskName : `task_${taskId}`
+    // 优先用后端给的 archive_basename ({slug}-{label})，老任务没 project/version
+    // 时 fallback task_{id}。download 属性是兜底 —— 浏览器优先用响应头
+    // Content-Disposition.filename，所以最终下载名以后端为准。
+    const baseName = data?.archive_basename ?? `task_${taskId}`
     const zipName = partial ? `${baseName}_outputs_selected.zip` : `${baseName}_outputs.zip`
     const files = partial ? Array.from(selected) : undefined
     const a = document.createElement('a')
