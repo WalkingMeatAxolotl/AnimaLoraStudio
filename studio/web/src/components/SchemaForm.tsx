@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { SchemaResponse, ConfigData } from '../api/client'
 import { evalShowWhen } from '../lib/schema'
 import Field from './Field'
@@ -39,6 +39,26 @@ export default function SchemaForm({
 
   const props = schema.schema.properties
 
+  // disable_when 触发时把字段值强制回到 default。避免「切换 optimizer 到
+  // prodigy_plus_schedulefree 之后 lr_scheduler 还停在 cosine，保存时被 pydantic
+  // model_validator 拒绝」这种死锁 UX。
+  useEffect(() => {
+    let nextValues = values
+    let changed = false
+    for (const [name, prop] of Object.entries(props)) {
+      if (!prop.disable_when) continue
+      if (!evalShowWhen(prop.disable_when, values)) continue
+      const def = prop.default
+      if (def !== undefined && values[name] !== def) {
+        nextValues = { ...nextValues, [name]: def }
+        changed = true
+      }
+    }
+    if (changed) onChange(nextValues)
+    // 故意只监听 values；onChange / props 引用稳定，加进去会无限循环。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [values])
+
   // 按 group 分桶。hidden=true 的字段直接跳过：值仍由 ConfigData 透传（PUT 时不丢），
   // 只是不在 UI 上渲染。如果一个组所有字段都 hidden，下面 `fields.length === 0`
   // 会让整个 section 自动消失。
@@ -78,8 +98,18 @@ export default function SchemaForm({
                 {fields.map((name) => {
                   const prop = props[name]
                   if (!evalShowWhen(prop.show_when, values)) return null
-                  const isDisabled = disabledSet.has(name)
-                  const hint = isDisabled ? dHints[name] : aHints[name]
+                  // disable_when（schema 驱动条件 disable，如 PPSF → lr_scheduler）
+                  // 优先级低于全局 disabledFields（项目预填）。
+                  const conditionallyDisabled =
+                    !!prop.disable_when &&
+                    evalShowWhen(prop.disable_when, values)
+                  const isDisabled =
+                    disabledSet.has(name) || conditionallyDisabled
+                  const hint = disabledSet.has(name)
+                    ? dHints[name]
+                    : conditionallyDisabled
+                      ? prop.disable_hint
+                      : aHints[name]
                   return (
                     <Field
                       key={name}

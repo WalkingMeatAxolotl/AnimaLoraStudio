@@ -36,6 +36,12 @@ export interface SchemaProperty {
   control?: string
   cli_alias?: string
   show_when?: string
+  /** 当此表达式为真时字段在 UI 上 disabled（值由 SchemaForm 自动回退到 default）。
+   * 表达式语法与 show_when 一致：`key==value` / `key!=value`。
+   * 例：lr_scheduler 在 optimizer_type=prodigy_plus_schedulefree 时被 disable。 */
+  disable_when?: string
+  /** disable_when 触发时显示的提示徽章文本。 */
+  disable_hint?: string
   /** 后端打了 hidden=True 的字段：值仍随 ConfigData 透传 / 保存，但 SchemaForm
    * 不渲染。用于「该字段对当前用户群无意义但 schema 必须保留」的兜底场景。 */
   hidden?: boolean
