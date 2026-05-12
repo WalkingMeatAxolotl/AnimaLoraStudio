@@ -5,8 +5,11 @@ Optimizer Utils Module - 优化器创建
 1. 标准 AdamW - PyTorch 内置
 2. 8-bit AdamW (bitsandbytes) - 内存高效
 3. Prodigy (prodigyopt) - 无需调 lr 的自适应优化器
+4. ProdigyPlusScheduleFree (prodigy-plus-schedule-free) - Schedule-Free + Prodigy，
+   解决 Prodigy 在扩散 LoRA 训练中的 mutation ep / 风格突变问题。
 """
 
+from contextlib import contextmanager
 from typing import List, Dict, Any, Optional, Iterator
 
 import torch
@@ -84,10 +87,20 @@ def create_optimizer(
             **kwargs
         )
 
+    elif optimizer_type == "prodigy_plus_schedulefree":
+        return create_prodigy_plus_schedulefree(
+            params=params,
+            lr=learning_rate,
+            betas=betas,
+            weight_decay=weight_decay,
+            eps=eps,
+            **kwargs,
+        )
+
     else:
         raise ValueError(
             f"Unknown optimizer type: {optimizer_type}. "
-            f"Choose from: adamw, adamw8bit, prodigy"
+            f"Choose from: adamw, adamw8bit, prodigy, prodigy_plus_schedulefree"
         )
 
 
@@ -283,6 +296,140 @@ def create_prodigy(
     return optimizer
 
 
+def create_prodigy_plus_schedulefree(
+    params: Iterator[nn.Parameter],
+    lr: float,
+    betas: tuple = (0.9, 0.999),
+    weight_decay: float = 0.0,
+    eps: float = 1e-8,
+    d_coef: float = 1.0,
+    prodigy_steps: int = 0,
+    split_groups: bool = True,
+    split_groups_mean: bool = False,
+    use_speed: bool = False,
+    fused_back_pass: bool = False,
+    use_stableadamw: bool = True,
+    **kwargs,
+) -> Optimizer:
+    """
+    创建 ProdigyPlusScheduleFree 优化器
+    (https://github.com/LoganBooker/prodigy-plus-schedule-free)
+
+    Prodigy + Schedule-Free 的合体。相对普通 Prodigy 解决的核心问题：
+    - **Schedule-Free 的 averaged weights**: 维护训练权重 y 和 averaged 权重 x，
+      sample/save 用 x 出图 → 风格突变 ep 现象基本消失。
+      *使用要求*: sample/eval/save 前必须调 optimizer.eval()，事后 optimizer.train()。
+      用 optimizer_eval_mode(optimizer) context manager 包装最稳。
+    - **prodigy_steps 冻结 d**: 到某 step 后不再更新 d，避免后期跳档。
+    - **split_groups 细粒度估计**: 按 param group 分别估 d。
+
+    *学习率*: 必须固定为 1.0（如同普通 Prodigy）。Schedule-Free 不需要 scheduler，
+    调用方应强制 lr_scheduler=none 并在启动期校验。
+
+    *betas 默认*: PPSF 上游默认 (0.9, 0.99) 而非 PyTorch AdamW 的 (0.9, 0.999)。
+    本工厂检测到传入是 PyTorch 默认时自动覆盖到 PPSF 推荐值；如调用方显式传入则尊重。
+
+    Args:
+        params: 模型参数
+        lr: 学习率（PPSF 要求 1.0）
+        betas: Adam beta 参数（PPSF 推荐 (0.9, 0.99)）
+        weight_decay: 权重衰减
+        eps: epsilon
+        d_coef: d 的初始缩放系数（小数据集建议 0.5）
+        prodigy_steps: 在第 N 步后冻结 d（0 = 不冻结，整个训练继续更新）
+        split_groups: 按 param group 分别估 d
+        split_groups_mean: split_groups=True 时是否取各组 d 的均值
+            (PPSF 默认 False；SimpleTuner 改成 True 但理由是给 transformer-only 训练，
+             我们走 LoRA + LoKr 多 param group 不适合，保持 False)
+        use_speed: 启用加速模式（实验性）
+        fused_back_pass: 与 PyTorch fused-backward 路径集成（显存吃紧时开）
+        use_stableadamw: 用 stable AdamW 归一化策略
+
+    Returns:
+        ProdigyPlusScheduleFree: 优化器实例
+    """
+    try:
+        # pip 包名 `prodigy-plus-schedule-free`，import 名 `prodigyplus`
+        from prodigyplus import ProdigyPlusScheduleFree
+    except ImportError as e:
+        raise ImportError(
+            "prodigy-plus-schedule-free is required for ProdigyPlusScheduleFree "
+            "optimizer. Install with: pip install 'prodigy-plus-schedule-free>=2.0.0'"
+        ) from e
+
+    if abs(lr - 1.0) > 1e-9:
+        print(
+            f"[WARN] ProdigyPlusScheduleFree requires lr=1.0 (received {lr}); forcing lr=1.0. "
+            f"Tune d_coef instead of lr."
+        )
+        lr = 1.0
+
+    # 上层 create_optimizer 默认 betas=(0.9, 0.999)（适合 AdamW），但 PPSF 推荐
+    # (0.9, 0.99)。如果调用方没改默认，覆盖到 PPSF 推荐值。
+    if tuple(betas) == (0.9, 0.999):
+        betas = (0.9, 0.99)
+
+    print(
+        f"Creating ProdigyPlusScheduleFree optimizer "
+        f"(lr={lr}, betas={tuple(betas)}, weight_decay={weight_decay}, "
+        f"d_coef={d_coef}, prodigy_steps={prodigy_steps}, "
+        f"split_groups={split_groups}, use_speed={use_speed}, "
+        f"fused_back_pass={fused_back_pass})"
+    )
+
+    param_list = list(params)
+
+    optimizer = ProdigyPlusScheduleFree(
+        param_list,
+        lr=lr,
+        betas=tuple(betas),
+        eps=eps,
+        weight_decay=weight_decay,
+        d_coef=d_coef,
+        prodigy_steps=prodigy_steps,
+        split_groups=split_groups,
+        split_groups_mean=split_groups_mean,
+        use_speed=use_speed,
+        fused_back_pass=fused_back_pass,
+        use_stableadamw=use_stableadamw,
+        **kwargs,
+    )
+
+    print("  [OK] ProdigyPlusScheduleFree optimizer created")
+
+    return optimizer
+
+
+@contextmanager
+def optimizer_eval_mode(optimizer: Optimizer):
+    """切换 Schedule-Free 系优化器（PPSF 等）到 eval 模式的 context manager。
+
+    Schedule-Free 优化器在内部维护两套权重：训练权重 y 和 averaged 权重 x。
+    sample / validation / save 应该用 x（averaged），训练 step 用 y。
+    PPSF 的 optimizer.eval() / optimizer.train() 通过 p.lerp_() in-place 切换参数张量
+    指向哪一套；忘记切回 train() 会让训练继续用 averaged 权重，结果错乱。
+
+    用法:
+        with optimizer_eval_mode(optimizer):
+            model.eval()
+            img = sample_image(...)
+            model.train()
+
+    对非 Schedule-Free 优化器（AdamW / Prodigy 等）无 .train/.eval 方法 — 此 context
+    manager 静默 no-op，所以调用方不需要分支判断 optimizer_type。
+    """
+    has_eval = hasattr(optimizer, "eval") and callable(getattr(optimizer, "eval"))
+    has_train = hasattr(optimizer, "train") and callable(getattr(optimizer, "train"))
+    if has_eval and has_train:
+        optimizer.eval()
+        try:
+            yield
+        finally:
+            optimizer.train()
+    else:
+        yield
+
+
 def create_optimizer_grouped_parameters(
     model: nn.Module,
     weight_decay: float,
@@ -377,11 +524,17 @@ def get_optimizer_info(optimizer: Optimizer) -> Dict[str, Any]:
             total_params += p.numel()
     
     info["total_trainable_params"] = total_params
-    
-    # 添加优化器特定信息
-    if isinstance(optimizer, (AdamW,)) or (BITSANDBYTES_AVAILABLE and isinstance(optimizer, bnb.optim.AdamW8bit)):
-        info["betas"] = optimizer.param_groups[0].get("betas", (0.9, 0.999))
-        info["weight_decay"] = optimizer.param_groups[0].get("weight_decay", 0.0)
-        info["eps"] = optimizer.param_groups[0].get("eps", 1e-8)
-    
+
+    # 添加优化器特定信息（duck typing：AdamW / Prodigy / PPSF / bnb AdamW8bit 都有这些字段）
+    pg0 = optimizer.param_groups[0] if optimizer.param_groups else {}
+    if "betas" in pg0:
+        info["betas"] = pg0["betas"]
+    if "weight_decay" in pg0:
+        info["weight_decay"] = pg0["weight_decay"]
+    if "eps" in pg0:
+        info["eps"] = pg0["eps"]
+    # PPSF 内部 d 估计 — 调试时有用
+    if "d" in pg0:
+        info["d"] = pg0["d"]
+
     return info
