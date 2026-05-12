@@ -159,6 +159,17 @@ button { font-family: inherit; cursor: pointer; }
 a { color: inherit; text-decoration: none; }
 input, select, textarea { font-family: inherit; color: inherit; }
 
+/* Native <option> dropdown 在 Chrome/Edge 上即使 color-scheme: dark 也常常用
+ * 系统默认 light 配色（白底黑字）。强制用 token 颜色，跟主题保持一致。 */
+select option {
+  background-color: var(--bg-surface);
+  color: var(--fg-primary);
+}
+select option:checked {
+  background-color: var(--accent-soft);
+  color: var(--accent);
+}
+
 ::selection { background: var(--accent); color: var(--accent-fg); }
 
 /* scrollbars */
