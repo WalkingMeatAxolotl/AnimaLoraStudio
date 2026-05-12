@@ -98,7 +98,7 @@ class FakeBooru:
 
     def download_image(
         self, url, save_path, *, convert_to_png, remove_alpha_channel,
-        timeout=60.0, referer=None, session=None,
+        timeout=60.0, referer=None, session=None, username="",
     ):
         self._download_calls.append(url)
         # 真写一张小图（不 mock 文件系统）

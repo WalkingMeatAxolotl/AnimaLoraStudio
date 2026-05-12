@@ -37,7 +37,13 @@ class GelbooruConfig(BaseModel):
 
 
 class DanbooruConfig(BaseModel):
-    """Danbooru 用 HTTP Basic auth：username + api_key（可匿名跑，但有速率限制）。"""
+    """Danbooru HTTP Basic auth：username + api_key。
+
+    PR #38 起强制绑定（不再允许匿名）：
+    - Danbooru 挂了 Cloudflare 后，匿名 UA 已不可靠（CF 可能随时收紧）
+    - 强制账户让我们 UA 带 (by username)，CF 拦匿名时不会一锅端
+    - danbooru 端按账户配速率上限（标准 2 req/s，高于匿名）
+    """
     username: str = ""
     api_key: str = ""
     # 账户类型决定多 tag 搜索上限（free=2 / gold=6 / platinum=12）
@@ -674,6 +680,12 @@ def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def has_danbooru_credentials() -> bool:
+    """前端 / 端点判断是否已经配好 Danbooru auth。"""
+    d = load().danbooru
+    return bool(d.username and d.api_key)
+
+
 def has_gelbooru_credentials() -> bool:
     """便捷：用于前端 / 端点判断是否已经配好 Gelbooru。"""
     g = load().gelbooru
@@ -681,12 +693,12 @@ def has_gelbooru_credentials() -> bool:
 
 
 def has_credentials_for(api_source: str) -> bool:
-    """各下载渠道的「能不能跑」判定：
+    """各下载渠道的「能不能跑」判定（两个 source 都强制绑定，no anon）：
     - gelbooru: 必须有 user_id + api_key（API 强制要求）
-    - danbooru: 匿名也能跑（仅速率受限），所以始终 True
+    - danbooru: 必须有 username + api_key（PR #38 起，CF 收紧后强制）
     """
     if api_source == "gelbooru":
         return has_gelbooru_credentials()
     if api_source == "danbooru":
-        return True
+        return has_danbooru_credentials()
     return False

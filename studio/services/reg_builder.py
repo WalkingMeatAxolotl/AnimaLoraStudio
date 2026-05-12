@@ -760,6 +760,7 @@ def _build_for_subfolder(
                         convert_to_png=opts.convert_to_png,
                         remove_alpha_channel=opts.remove_alpha_channel,
                         referer=booru_api.default_base_url(opts.api_source) + "/",
+                        username=opts.username,
                     )
                 else:
                     final = booru_api.download_image(
@@ -768,6 +769,7 @@ def _build_for_subfolder(
                         convert_to_png=opts.convert_to_png,
                         remove_alpha_channel=opts.remove_alpha_channel,
                         referer=booru_api.default_base_url(opts.api_source) + "/",
+                        username=opts.username,
                     )
             except Exception as exc:
                 on_progress(f"    ✗ 下载失败: {pid} ({exc})")
@@ -860,6 +862,8 @@ def build(
         raise FileNotFoundError(f"train 目录不存在: {opts.train_dir}")
     if opts.api_source == "gelbooru" and not (opts.user_id and opts.api_key):
         raise ValueError("gelbooru 需要 user_id + api_key（去 Settings 配置 secrets.gelbooru）")
+    if opts.api_source == "danbooru" and not (opts.username and opts.api_key):
+        raise ValueError("danbooru 需要 username + api_key（去 Settings 配置 secrets.danbooru）")
 
     # PP9 — 没传 client 就建一个（按 secrets.download.* 调速），用完关掉
     owns_client = False

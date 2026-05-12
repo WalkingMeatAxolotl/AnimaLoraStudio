@@ -102,6 +102,13 @@ def download(
         raise ValueError(
             "gelbooru 需要 user_id + api_key（去 Settings 配置 secrets.gelbooru）"
         )
+    if opts.api_source == "danbooru" and not (opts.username and opts.api_key):
+        # hotfix: danbooru 挂 Cloudflare 后匿名 UA 已不可靠（即使我们带应用 UA，
+        # CF 仍可能随时收紧）；强制绑定账户让 UA 带 (by username)，CF 拦匿名
+        # 时不会一锅端，danbooru 端也按账户配速率限制（标准 2 req/s）。
+        raise ValueError(
+            "danbooru 需要 username + api_key（去 Settings 配置 secrets.danbooru）"
+        )
 
     # 没传 client 就建一个临时的（按 secrets.download.* 调速）；session 优先
     owns_client = False
@@ -212,6 +219,7 @@ def _download_with_client(
                         convert_to_png=opts.convert_to_png,
                         remove_alpha_channel=opts.remove_alpha_channel,
                         referer=referer,
+                        username=opts.username,
                     )
                     # 实时进度（worker 线程内）：每张拉完立即 emit，让 LogTailer
                     # 把 SSE 推到前端。否则 parallel_download 会一直阻塞，整段

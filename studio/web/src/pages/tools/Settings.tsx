@@ -524,7 +524,7 @@ export default function SettingsPage() {
             type="text"
             value={draft.danbooru.username}
             onChange={(e) => update('danbooru', 'username', e.target.value)}
-            placeholder="可选；匿名也能跑（仅速率受限）"
+            placeholder="必填 — danbooru 挂了 Cloudflare 后不再支持匿名"
             className={textInputClass}                                  />
         </SettingsField>
         <SettingsField label="api_key">

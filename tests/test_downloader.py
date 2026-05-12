@@ -66,6 +66,30 @@ def _opts(tag="x", count=3, src="gelbooru") -> downloader.DownloadOptions:
     )
 
 
+def test_download_images_requires_danbooru_auth(tmp_path: Path) -> None:
+    """PR #38：danbooru 强制 username + api_key（CF 收紧后匿名不再可靠）。"""
+    opts = downloader.DownloadOptions(
+        tag="1girl", count=1, api_source="danbooru",
+        username="", api_key="",  # 空 = 匿名 = 禁止
+        convert_to_png=False, remove_alpha_channel=False,
+    )
+    with pytest.raises(ValueError, match="danbooru 需要 username"):
+        downloader.download(opts, tmp_path)
+
+
+def test_download_images_accepts_danbooru_with_full_auth(tmp_path: Path) -> None:
+    """有完整 auth 时应进入实际 fetch 路径（这里 fake session 立刻空返回）。"""
+    opts = downloader.DownloadOptions(
+        tag="1girl", count=1, api_source="danbooru",
+        username="alice", api_key="secret",
+        convert_to_png=False, remove_alpha_channel=False,
+    )
+    sess = FakeSession(search_pages=[[]], image_bytes=b"")
+    # 不应抛 ValueError；空结果走完循环（saved=0）
+    saved = downloader.download(opts, tmp_path, session=sess)
+    assert saved == 0
+
+
 # ---------------------------------------------------------------------------
 # validation
 # ---------------------------------------------------------------------------

@@ -35,6 +35,25 @@ def test_search_posts_sends_app_user_agent_for_danbooru() -> None:
     assert headers.get("Accept") == "application/json"
 
 
+def test_search_posts_ua_includes_username_when_provided() -> None:
+    """搜索带 username 时 UA 应为 'AnimaLoraStudio/X (by username)' —
+    符合 danbooru TOS 推荐格式，让 CF 端能按账户白名单而不是匿名拦截。"""
+    sess = _fake_session([])
+    booru_api.search_posts("danbooru", "1girl", username="alice", session=sess)
+    ua = sess.get.call_args.kwargs["headers"]["User-Agent"]
+    assert "AnimaLoraStudio" in ua
+    assert "(by alice)" in ua
+
+
+def test_search_posts_ua_falls_back_when_no_username() -> None:
+    """没传 username 时 UA 不应带空括号。"""
+    sess = _fake_session([])
+    booru_api.search_posts("danbooru", "1girl", session=sess)
+    ua = sess.get.call_args.kwargs["headers"]["User-Agent"]
+    assert "(by" not in ua
+    assert "AnimaLoraStudio/" in ua
+
+
 def test_search_posts_sends_app_user_agent_for_gelbooru() -> None:
     """gelbooru 没那么严，但同样应带 UA 以符合礼貌使用。"""
     sess = _fake_session({"post": [{"id": 2}]})
@@ -42,6 +61,13 @@ def test_search_posts_sends_app_user_agent_for_gelbooru() -> None:
     _, kwargs = sess.get.call_args
     headers = kwargs.get("headers") or {}
     assert "AnimaLoraStudio" in headers["User-Agent"]
+
+
+def test_build_user_agent_strips_whitespace() -> None:
+    """username 含前后空格 / 全空格时不应生成 '(by   )' 这种空 UA 段。"""
+    assert "(by" not in booru_api._build_user_agent("   ")
+    assert booru_api._build_user_agent("  alice  ") == \
+        f"{booru_api._USER_AGENT_BASE} (by alice)"
 
 
 def test_search_posts_user_agent_does_not_impersonate_browser() -> None:
@@ -93,3 +119,29 @@ def test_search_posts_no_auth_when_username_missing() -> None:
     sess = _fake_session([])
     booru_api.search_posts("danbooru", "x", api_key="secret", session=sess)
     assert sess.get.call_args.kwargs["auth"] is None
+
+
+def test_download_image_ua_includes_username(tmp_path) -> None:
+    """download 路径也走 CF；UA 同样要带 username 让账户白名单生效。"""
+    from io import BytesIO
+    from PIL import Image as _PILImage
+    buf = BytesIO()
+    _PILImage.new("RGB", (4, 4), (255, 0, 0)).save(buf, "PNG")
+    png_bytes = buf.getvalue()
+
+    sess = MagicMock()
+    resp = MagicMock()
+    resp.content = png_bytes
+    resp.raise_for_status.return_value = None
+    sess.get.return_value = resp
+
+    booru_api.download_image(
+        "https://cdn.donmai.us/x.png",
+        tmp_path / "x.png",
+        convert_to_png=False,
+        remove_alpha_channel=False,
+        username="alice",
+        session=sess,
+    )
+    headers = sess.get.call_args.kwargs["headers"]
+    assert "(by alice)" in headers["User-Agent"]
