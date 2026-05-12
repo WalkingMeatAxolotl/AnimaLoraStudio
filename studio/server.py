@@ -78,6 +78,7 @@ from .paths import (
     LOGS_DIR,
     OUTPUT_DIR,
     REPO_ROOT,
+    STUDIO_DATA,
     STUDIO_DB,
     USER_PRESETS_DIR,
     WEB_DIST,
