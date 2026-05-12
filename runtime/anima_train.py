@@ -143,6 +143,11 @@ def apply_yaml_config(args, config):
     return merge_yaml_into_namespace(args, config, TrainingConfig)
 
 
+def _config_value(args, name: str, default):
+    value = getattr(args, name, None)
+    return default if value is None else value
+
+
 # Lazy imports after dependency check
 def _lazy_imports():
     global np, Image
@@ -2116,19 +2121,19 @@ def main():
         injector = AnimaLucidLoRAAdapter(
             rank=args.lora_rank,
             alpha=args.lora_alpha,
-            min_rank_ratio=float(getattr(args, "lucid_min_rank_ratio", 0.1) or 0.1),
-            qk_rank_ratio=float(getattr(args, "lucid_qk_rank_ratio", 0.25) or 0.25),
-            lora_plus_ratio=float(getattr(args, "lucid_lora_plus_ratio", 16.0) or 16.0),
-            alpha_rank_scale=float(getattr(args, "lucid_alpha_rank_scale", 2.0) or 2.0),
-            sig_type=str(getattr(args, "lucid_sig_type", "last") or "last"),
-            ortho_reg=float(getattr(args, "lucid_ortho_reg", 0.01) or 0.01),
-            mag_reg=float(getattr(args, "lucid_mag_reg", 0.001) or 0.001),
-            mag_amplify=float(getattr(args, "lucid_mag_amplify", 2.0) or 2.0),
-            aux_loss_weight=float(getattr(args, "lucid_aux_loss_weight", 1.0) or 1.0),
-            aux_warmup_ratio=float(getattr(args, "lucid_aux_warmup_ratio", 0.1) or 0.1),
-            export_mode=str(getattr(args, "lucid_export_mode", "lycoris_compat") or "lycoris_compat"),
-            use_lokr_ffn=bool(getattr(args, "lucid_use_lokr_ffn", False)),
-            lokr_factor=getattr(args, "lucid_lokr_factor", None),
+            min_rank_ratio=float(_config_value(args, "lucid_min_rank_ratio", 0.1)),
+            qk_rank_ratio=float(_config_value(args, "lucid_qk_rank_ratio", 0.25)),
+            lora_plus_ratio=float(_config_value(args, "lucid_lora_plus_ratio", 16.0)),
+            alpha_rank_scale=float(_config_value(args, "lucid_alpha_rank_scale", 2.0)),
+            sig_type=str(_config_value(args, "lucid_sig_type", "last")),
+            ortho_reg=float(_config_value(args, "lucid_ortho_reg", 0.01)),
+            mag_reg=float(_config_value(args, "lucid_mag_reg", 0.001)),
+            mag_amplify=float(_config_value(args, "lucid_mag_amplify", 2.0)),
+            aux_loss_weight=float(_config_value(args, "lucid_aux_loss_weight", 1.0)),
+            aux_warmup_ratio=float(_config_value(args, "lucid_aux_warmup_ratio", 0.1)),
+            export_mode=str(_config_value(args, "lucid_export_mode", "lycoris_compat")),
+            use_lokr_ffn=bool(_config_value(args, "lucid_use_lokr_ffn", False)),
+            lokr_factor=_config_value(args, "lucid_lokr_factor", None),
         )
     else:
         from utils.lycoris_adapter import AnimaLycorisAdapter
@@ -2246,7 +2251,7 @@ def main():
             if _g.pop("_is_router_group", False):
                 _g["lr"] = args.learning_rate * _router_lr_scale
     if args.lora_type == "lucid":
-        _lucid_lora_plus_ratio = float(getattr(args, "lucid_lora_plus_ratio", 16.0) or 16.0)
+        _lucid_lora_plus_ratio = float(_config_value(args, "lucid_lora_plus_ratio", 16.0))
         for _g in param_groups:
             if _g.pop("_lucid_lora_plus_group", False):
                 _g["lr"] = args.learning_rate * _lucid_lora_plus_ratio
