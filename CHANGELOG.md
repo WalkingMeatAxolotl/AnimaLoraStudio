@@ -10,17 +10,27 @@
 
 ## [0.6.0] — 2026-05-12
 
-10 PR / 累计两周。主线：**LLM tagger 落地 + Settings 页面体系重排 + 训练监控可观测性升级**。0.x 阶段 MINOR 按惯例视为破坏性升级：LLM tagger preset 协议彻底重做、Settings 路由 / 字段位置整体搬家。
+10 PR / 累计两周。主线：**LLM tagger 落地 + Settings 页面体系重排 + 训练监控可观测性升级**。本次 0.5.2 → 0.6.0 实际**无数据破坏 / 配置丢失 / API 不兼容**——只需重跑一次 pip/npm install 并适应 Settings 几处位置变动。
+
+### 升级须知
+
+升级后必须做一次：
+
+- `pip install -r requirements.txt` —— 新增 `nvidia-ml-py>=12.0`（Topbar GPU/VRAM pill 依赖）
+- `cd studio/web && npm install` —— 新增 `@dnd-kit/core / sortable / utilities`（LLM messages 拖拽依赖）
+
+`secrets.json` 的 LLM tagger 节启动时自动迁移（旧扁平字段下沉到 preset），无需手动改。
 
 ### 新增
 
 - **LLM tagger + WandB 监控**（#18）
   - 第二打标器：OpenAI 兼容 API（OpenRouter / vLLM / Ollama 都行），自然语言长 caption 补 booru tags 短描述
-  - 训练 WandB 集成：tracker_project / tracker_run_name / wandb_api_key 串到 sd-scripts，run url + 关键 metric 同步贴回项目页（#34 默认关）
-  - 后续 P0 修复见 §修复
-- **ModelScope 镜像 + 国内 pip/npm 加速**（#25）
-  - HF 拉不下来时切 ModelScope（魔搭）；Setup 页 mirror 下拉新增此选项
-  - pip / npm 镜像默认切腾讯云（国内带宽 + 不被墙）
+  - 训练 WandB 集成：tracker_project / tracker_run_name / wandb_api_key 串到 sd-scripts，run url + 关键 metric 同步贴回项目页
+  - opt-in：不配 endpoint 不用 LLM；wandb 默认关（#34 修复）
+- **ModelScope 镜像下载源**（#25）
+  - HF 拉不下来时切 ModelScope（魔搭社区）；Settings 加 `download_source` 选项
+  - 默认仍 `huggingface`，opt-in
+  - onnxruntime 安装失败时自动 fallback 到腾讯 pypi 镜像（**仅 fallback，不改默认源**）
 - **训练监控全套升级**（#37, #42）
   - Topbar 系统监控 pill：CPU / GPU / MEM / VRAM 4 个等宽 pill（96px min）+ 两端对齐；从 nvidia-ml-py（pynvml 已停维护）拉，5s 轮询
   - Monitor SSE 增量协议：步进式 delta 取代每秒 full snapshot，10k 步训练 payload 从 O(N) → O(1)
@@ -32,12 +42,14 @@
 - **LLM tagger preset 一票到底**（#35）
   - Preset 协议改为单一来源：preset.json 全权管模型 / endpoint / 多消息编排 / system prompt / 用户参数
   - 多消息编排支持：可在 preset 里写"先识别角色 → 再描述场景"之类多步链
-  - Settings UI 重做：LLM 配置从平铺改为 preset 选择 + 折叠的高级参数
-  - **破坏**：旧的扁平 LLM 字段（model / endpoint / system 等单字段）从 settings 移除，迁移到 preset
+  - Settings UI 重做：双栏 grid + 4 张 section 合并大 card + composer 高度撑满
+  - **配置自动迁移**：`_migrate_legacy_schema()` 把 PR #18 旧顶层字段（base_url / api_key / model / endpoint / temperature / max_tokens / custom_prompt / prompt_presets / JoyCaptionConfig）下沉到每个 preset，启动时一次性完成，用户原值全保留
 - **Settings 页面结构重排**（#36）
-  - PageHeader / Topbar 改造，工具页公共布局抽出
-  - 字段按使用频次重新分组；LLM 高级参数默认折叠
-  - **破坏**：Settings 内部锚点变更，旧书签失效
+  - 新增「监控」tab；WandB 从「训练」搬过去；HF / ModelScope 在「训练」合并成「模型下载源」section
+  - PageHeader 加 tabs slot；全局移除冗余 eyebrow；Topbar 面包屑可点击
+  - 右侧 sticky section index（IntersectionObserver 高亮 + 平滑滚动）
+  - LLM tagger 采样参数 + 图片预处理 合并成默认折叠的「高级参数」面板
+  - 不动 URL routing：`/tools/settings` 不变，tab 是 React state，旧浏览器书签照常工作
 
 ### 改进
 
@@ -48,7 +60,7 @@
 ### 修复
 
 - **PR #18 P0 followups**（#34）
-  - caption 重复（LLM 加上 booru tag 后字符串拼接没去重）
+  - caption 重复（`utils/caption_utils.py` 与 `services/caption_format.py` 双份 normalize 漂移 → 单源 re-export）
   - WandB 默认关（#18 默认开导致用户必装 wandb 才能跑 → 改 opt-in）
   - 采样图缩图（采样图原图 1024×1024 直塞前端 → 缩到 256 thumbnail）
   - 自定义 `output_format`（之前硬编码 PNG）
@@ -59,9 +71,21 @@
   - `reg_generate_prior` 写 cfg 用了 `STUDIO_DATA / "reg_ai_configs"`，但 server.py 顶部 import 漏掉 `STUDIO_DATA`，路由一调即崩
   - 一行 import 修复
 
+### 兼容性
+
+- ✅ `secrets.json` LLM tagger 节自动迁移（`_migrate_legacy_schema`），无需手动改
+- ✅ REST 端点 schema 不变（`/api/health` `/api/projects` `/api/state` 等）
+- ✅ Settings URL routing 不变（`/tools/settings`），浏览器书签不会失效
+- ✅ `download_source` 默认仍 `huggingface`，pip 腾讯镜像仅 fallback
+- ✅ Danbooru 0.5.2 hotfix 已并入
+- ⚠️ 罕见 edge case（普通用户遇不到）：
+  - 外部脚本订阅 `/api/events` SSE 解析 monitor 帧：协议从全量 snapshot 改为增量 delta
+  - 外部脚本调 `/api/state` 依赖默认降采样到 1000 点：现在默认 0（全量），显式传 `?max_points=1000` 回旧行为
+  - 外部脚本直读 `secrets.json` `llm_tagger` 节：结构从扁平字段变成 `{current_preset, presets[]}`
+
 ### 测试
 
-pytest 841 全绿，vitest 123 全绿，tsc 干净。LLM tagger / queue download / monitor protocol / GZip middleware 各加了配套用例。
+各 PR CI 通过，pytest / vitest / tsc 三栈全绿。LLM tagger / queue download / monitor protocol / GZip middleware 各加了配套用例（详见各自 PR）。
 
 ---
 
