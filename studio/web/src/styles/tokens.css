@@ -4,6 +4,11 @@
  */
 
 :root {
+  /* 让浏览器原生 widget（select/option dropdown、checkbox、scrollbar 等）
+   * 跟随主题渲染。light 默认；.theme-dark 下覆盖为 dark。
+   * 不加这个 select 的 option 在 dark 主题下会是白底黑字。 */
+  color-scheme: light;
+
   /* — palette: warm ivory (light) — */
   --bg-canvas:   #f6f5f1;   /* page bg */
   --bg-surface:  #ffffff;   /* card */
@@ -87,6 +92,7 @@
 
 /* — dark mode — */
 .theme-dark {
+  color-scheme: dark;
   --bg-canvas:   #15140f;
   --bg-surface:  #1d1c16;
   --bg-sunken:   #110f0b;
