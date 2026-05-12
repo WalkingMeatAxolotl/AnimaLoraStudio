@@ -17,6 +17,8 @@ from .optimizer_utils import (
     create_8bit_adamw,
     create_standard_adamw,
     create_prodigy,
+    create_prodigy_plus_schedulefree,
+    optimizer_eval_mode,
     get_optimizer_info,
 )
 from .checkpoint import CheckpointManager, save_final_model
@@ -43,6 +45,8 @@ __all__ = [
     "create_8bit_adamw",
     "create_standard_adamw",
     "create_prodigy",
+    "create_prodigy_plus_schedulefree",
+    "optimizer_eval_mode",
     "get_optimizer_info",
     # Checkpoint
     "CheckpointManager",
