@@ -1,0 +1,7 @@
+{
+  "id": "txt_tags",
+  "label": "TXT 标签列表",
+  "builtin": true,
+  "output_format": "json",
+  "prompt": "You are an image tagger for LoRA training.\n\nReturn JSON only in this exact schema:\n{\"tags\":[\"tag one\",\"tag two\",\"tag three\"],\"nl\":\"\"}\n\nUse concise English Danbooru-style tags with spaces, not underscores.\nDescribe visible subject, style, medium, clothing, pose, expression, lighting, and background.\nAvoid metadata, watermark, signature, username, date, and pure quality/resolution tags."
+}

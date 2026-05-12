@@ -34,7 +34,10 @@ def test_defaults_when_file_missing(secrets_file: Path) -> None:
     assert s.gelbooru.user_id == ""
     assert s.gelbooru.api_key == ""
     assert s.wd14.threshold_general == pytest.approx(0.35)
-    assert s.joycaption.base_url.startswith("http://")
+    # joycaption 已合并为 llm_tagger 的 builtin preset
+    joy = next(p for p in s.llm_tagger.presets if p.id == "joycaption")
+    assert joy.base_url.startswith("http://")
+    assert s.wandb.project == "AnimaLoraStudio"
 
 
 def test_load_corrupt_json_returns_defaults(secrets_file: Path) -> None:
@@ -56,6 +59,39 @@ def test_cltagger_defaults_use_1_02(secrets_file: Path) -> None:
     assert s.cltagger.model_path == "cl_tagger_1_02/model.onnx"
     assert s.cltagger.tag_mapping_path == "cl_tagger_1_02/tag_mapping.json"
     assert s.cltagger.threshold_character == pytest.approx(0.6)
+
+
+def test_llm_tagger_defaults(secrets_file: Path) -> None:
+    s = secrets.load()
+    assert s.llm_tagger.current_preset == "style_json"
+    assert [p.id for p in s.llm_tagger.presets] == [
+        "style_json",
+        "general_json",
+        "txt_tags",
+        "joycaption",
+    ]
+    assert all(p.builtin for p in s.llm_tagger.presets)
+    # joycaption builtin preset 预填了 vLLM 推荐配置
+    joy = next(p for p in s.llm_tagger.presets if p.id == "joycaption")
+    assert joy.base_url == "http://localhost:8000/v1"
+    assert joy.model.endswith("joycaption-beta-one-hf-llava")
+    assert joy.endpoint == "chat_completions"
+    assert joy.output_format == "text"
+    assert joy.temperature == pytest.approx(0.6)
+    assert joy.max_tokens == 300
+
+
+def test_llm_preset_keeps_model_in_model_ids(secrets_file: Path) -> None:
+    s = secrets.update(
+        {
+            "llm_tagger": {
+                "presets": [{"id": "joycaption", "model": "vision-a", "model_ids": []}]
+            }
+        }
+    )
+    joy = next(p for p in s.llm_tagger.presets if p.id == "joycaption")
+    assert joy.model == "vision-a"
+    assert joy.model_ids == ["vision-a"]
 
 
 def test_wd14_legacy_file_without_model_ids_gets_defaults(
@@ -193,12 +229,20 @@ def test_to_masked_dict_replaces_sensitive(secrets_file: Path) -> None:
         {
             "gelbooru": {"user_id": "alice", "api_key": "secret"},
             "huggingface": {"token": "hf_secret"},
+            "wandb": {"api_key": "wandb_secret"},
+            "llm_tagger": {
+                "presets": [{"id": "joycaption", "api_key": "llm_secret"}]
+            },
         }
     )
     masked = secrets.to_masked_dict(secrets.load())
     assert masked["gelbooru"]["user_id"] == "alice"  # 非敏感字段保留
     assert masked["gelbooru"]["api_key"] == secrets.MASK
     assert masked["huggingface"]["token"] == secrets.MASK
+    assert masked["wandb"]["api_key"] == secrets.MASK
+    # llm_tagger.presets.*.api_key 通配
+    joy_masked = next(p for p in masked["llm_tagger"]["presets"] if p["id"] == "joycaption")
+    assert joy_masked["api_key"] == secrets.MASK
 
 
 def test_to_masked_dict_keeps_empty_sensitive_empty(secrets_file: Path) -> None:
@@ -206,6 +250,59 @@ def test_to_masked_dict_keeps_empty_sensitive_empty(secrets_file: Path) -> None:
     masked = secrets.to_masked_dict(secrets.load())
     assert masked["gelbooru"]["api_key"] == ""
     assert masked["huggingface"]["token"] == ""
+    assert masked["wandb"]["api_key"] == ""
+    for preset in masked["llm_tagger"]["presets"]:
+        assert preset["api_key"] == ""
+
+
+def test_llm_tagger_legacy_schema_migration(secrets_file: Path) -> None:
+    """老 secrets.json (PR #18 schema) → preset-unified 自动迁移。"""
+    secrets_file.write_text(
+        json.dumps(
+            {
+                "joycaption": {
+                    "base_url": "http://my-vllm:9000/v1",
+                    "model": "my-custom-joycaption",
+                    "prompt_template": "My custom prompt",
+                },
+                "llm_tagger": {
+                    "base_url": "https://api.openai.com/v1",
+                    "api_key": "sk-xxx",
+                    "model": "gpt-4o-mini",
+                    "model_ids": ["gpt-4o-mini", "gpt-4o"],
+                    "endpoint": "chat_completions",
+                    "prompt_preset": "style_json",
+                    "prompt_presets": [
+                        {"id": "style_json", "label": "画风", "prompt": "P1", "builtin": True, "output_format": "json"},
+                    ],
+                    "custom_prompt": "",
+                    "temperature": 0.3,
+                    "max_tokens": 800,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    s = secrets.load()
+    # 顶层 endpoint+生成参数下沉到每个 preset
+    style = next(p for p in s.llm_tagger.presets if p.id == "style_json")
+    assert style.base_url == "https://api.openai.com/v1"
+    assert style.api_key == "sk-xxx"
+    assert style.model == "gpt-4o-mini"
+    assert style.endpoint == "chat_completions"
+    assert style.temperature == pytest.approx(0.3)
+    assert style.max_tokens == 800
+    # JoyCaption 卡片字段写到 joycaption preset
+    joy = next(p for p in s.llm_tagger.presets if p.id == "joycaption")
+    assert joy.base_url == "http://my-vllm:9000/v1"
+    assert joy.model == "my-custom-joycaption"
+    # 用户自定义 prompt_template 单独建一个 user_joycaption preset
+    user_joy = next(p for p in s.llm_tagger.presets if p.id == "user_joycaption")
+    assert user_joy.messages[0].type == "text"
+    assert user_joy.messages[0].role == "system"
+    assert user_joy.messages[0].content == "My custom prompt"
+    assert user_joy.messages[-1].type == "image"
+    assert user_joy.output_format == "text"
 
 
 # ---------------------------------------------------------------------------

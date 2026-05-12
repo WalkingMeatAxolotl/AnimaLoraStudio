@@ -36,6 +36,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, model_validator
@@ -65,6 +66,7 @@ from .services import (
     pending_install,
     torch_setup,
     reg_builder,
+    system_stats,
     tagedit,
     train_io,
     uploads as uploads_svc,
@@ -76,6 +78,7 @@ from .paths import (
     LOGS_DIR,
     OUTPUT_DIR,
     REPO_ROOT,
+    STUDIO_DATA,
     STUDIO_DB,
     USER_PRESETS_DIR,
     WEB_DIST,
@@ -157,6 +160,16 @@ async def _lifespan(app_: FastAPI) -> AsyncIterator[None]:
     sup = Supervisor(on_event=bus.publish)
     sup.start()
     app_.state.supervisor = sup
+
+    # PR #37: system stats SSE — 后台 sampler 每 2.5s 采集 + bus.publish。前端
+    # 只 mount 时 GET 一次冷启动，避免 cloud 部署被每客户端独立轮询污染。
+    def _publish_system_stats(payload: dict[str, Any]) -> None:
+        bus.publish({"type": "system_stats_updated", "payload": payload})
+
+    sys_sampler = system_stats.SystemStatsSampler(_publish_system_stats)
+    sys_sampler.start()
+    app_.state.system_stats_sampler = sys_sampler
+
     try:
         yield
     finally:
@@ -164,12 +177,40 @@ async def _lifespan(app_: FastAPI) -> AsyncIterator[None]:
         timer = _disconnect_timer.get("t")
         if timer is not None:
             timer.cancel()
+        sys_sampler.stop()
         sup.stop()
         # commit 11：lifespan shutdown 清掉所有图 cache（释放内存 + 干净退出）
         generate_cache.clear_all()
 
 
 app = FastAPI(title="AnimaStudio", version=__version__, lifespan=_lifespan)
+
+
+# ── gzip ────────────────────────────────────────────────────────────
+# 给 JSON / 文本响应自动 gzip 压缩。对 /api/state（10k 步训练 ~500KB → ~100KB）
+# 这种大数组高度可压；对小响应 (< 1000B) 跳过避免 framing overhead 反而变大。
+#
+# 显式排除两类路径：
+#   - /api/events：SSE 流。GZipMiddleware 会 buffer chunks 到 minimum_size
+#     才发，破坏 SSE 实时性 + 某些 EventSource 实现解析 gzip 流有兼容问题
+#   - /samples/*：图片字节（PNG/JPEG/WEBP 已经是压缩格式），gzip 再压净浪费
+#     CPU 且 size 略增
+_GZIP_SKIP_PREFIXES = ("/api/events", "/samples/")
+
+
+class _SelectiveGZipMiddleware(GZipMiddleware):
+    """GZipMiddleware 的子类，按 path 前缀绕过指定路由。"""
+
+    async def __call__(self, scope, receive, send):  # type: ignore[override]
+        if scope.get("type") == "http":
+            path = scope.get("path", "")
+            if any(path.startswith(p) for p in _GZIP_SKIP_PREFIXES):
+                await self.app(scope, receive, send)
+                return
+        await super().__call__(scope, receive, send)
+
+
+app.add_middleware(_SelectiveGZipMiddleware, minimum_size=1000)
 
 
 # ---------------------------------------------------------------------------
@@ -195,8 +236,14 @@ def health() -> dict[str, Any]:
     return {"status": "ok", "version": app.version}
 
 
+@app.get("/api/system/stats")
+def get_system_stats() -> dict[str, Any]:
+    """Topbar 系统资源小组件用 (CPU/RAM/GPU/VRAM)。前端按 2-3s 轮询。"""
+    return system_stats.stats_to_json(system_stats.collect_stats())
+
+
 @app.get("/api/state")
-def get_state(task_id: Optional[int] = None) -> JSONResponse:
+def get_state(task_id: Optional[int] = None, max_points: int = 0) -> JSONResponse:
     """读取训练监控 state.json（PP6.1 改造 — per-task）。
 
     `task_id` 给了 → 查 tasks.monitor_state_path 对应文件；没有 / 文件缺失 →
@@ -204,6 +251,11 @@ def get_state(task_id: Optional[int] = None) -> JSONResponse:
     `task_id` 没给 → 优先 running 的 task；没 running 时回退到**最近一次**
     （done / failed / canceled）带 monitor_state_path 的 task，让监控页结束
     后还能看到上一次训练的曲线。都没有再返回 EMPTY_STATE。
+
+    `max_points`（默认 0 = 不降采样）— PR #37 引入时默认 1000，PR (此处)
+    改成默认 0：cold start 是一次性 HTTP，10k+ 步训练用户经常碰到，宁可
+    payload 大一点也要给完整历史。想降采样的 caller 显式传 max_points=N
+    （留着给未来 thumbnail / 预览之类的轻量场景）。
 
     旧的全局 `monitor_data/state.json` 路径已退役（PP6.1）。
     """
@@ -240,6 +292,15 @@ def get_state(task_id: Optional[int] = None) -> JSONResponse:
         data = json.loads(target_path.read_text(encoding="utf-8"))
     except Exception as exc:
         raise HTTPException(500, f"failed to read state: {exc}")
+
+    # 服务端下采样 losses / lr_history（samples cap 50 已经在 train_monitor 端做了）
+    if max_points and max_points > 0:
+        from runtime.train_monitor import _downsample_uniform
+        if isinstance(data.get("losses"), list):
+            data["losses"] = _downsample_uniform(data["losses"], max_points)
+        if isinstance(data.get("lr_history"), list):
+            data["lr_history"] = _downsample_uniform(data["lr_history"], max_points)
+
     return JSONResponse(data)
 
 
@@ -1219,11 +1280,53 @@ class CLTaggerOverrides(BaseModel):
     blacklist_tags: Optional[list[str]] = None
 
 
+class LLMTaggerOverrides(BaseModel):
+    """打标页对 LLM tagger 设置的「本次任务覆盖」—— 仅在 worker 进程内生效。
+
+    - `current_preset`：切换 active preset id
+    - 其余字段：覆盖 active preset 的同名字段
+    - `api_key` 不允许 override（避免出现在 task params/日志）
+    """
+    current_preset: Optional[str] = None
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+    endpoint: Optional[str] = None
+    prompt: Optional[str] = None
+    output_format: Optional[str] = None
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    timeout: Optional[int] = None
+    max_retries: Optional[int] = None
+    max_side: Optional[int] = None
+    jpeg_quality: Optional[int] = None
+    max_image_mb: Optional[float] = None
+
+
 class TagJobRequest(BaseModel):
     tagger: str = "wd14"
     output_format: str = "txt"                # "txt" | "json"
     wd14_overrides: Optional[Wd14Overrides] = None
     cltagger_overrides: Optional[CLTaggerOverrides] = None
+    llm_overrides: Optional[LLMTaggerOverrides] = None
+
+
+class LLMModelsRefreshRequest(BaseModel):
+    # preset_id 指定要更新的 preset；不传则用当前 current_preset
+    preset_id: Optional[str] = None
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+    timeout: Optional[int] = None
+
+
+class LLMConnectionTestRequest(BaseModel):
+    preset_id: Optional[str] = None
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+    model: Optional[str] = None
+    endpoint: Optional[str] = None
+    timeout: Optional[int] = None
+    max_tokens: Optional[int] = None
+    temperature: Optional[float] = None
 
 
 class CaptionEdit(BaseModel):
@@ -1414,6 +1517,93 @@ def check_tagger(name: str) -> dict[str, Any]:
         "msg": msg,
         "requires_service": getattr(t, "requires_service", False),
     }
+
+
+def _select_preset(
+    tagger_cfg: "secrets.LLMTaggerConfig", preset_id: Optional[str]
+) -> "secrets.LLMPresetConfig":
+    pid = preset_id or tagger_cfg.current_preset
+    for preset in tagger_cfg.presets:
+        if preset.id == pid:
+            return preset
+    return tagger_cfg.active
+
+
+@app.post("/api/llm-tagger/models/refresh")
+def refresh_llm_tagger_models(body: LLMModelsRefreshRequest) -> dict[str, Any]:
+    """读取 OpenAI-compatible /models，并保存到指定 preset 的 model_ids。
+
+    `preset_id` 不传时用 current_preset。成功后才落 secrets，避免请求失败时写脏。
+    """
+    from .services import llm_tagger as llm_tagger_svc
+
+    tagger_cfg = secrets.load().llm_tagger
+    target = _select_preset(tagger_cfg, body.preset_id)
+    base_url = (body.base_url if body.base_url is not None else target.base_url).strip()
+    api_key = (
+        target.api_key
+        if body.api_key is None or body.api_key == secrets.MASK
+        else body.api_key.strip()
+    )
+    if not base_url:
+        raise HTTPException(400, "base_url is required")
+    try:
+        model_ids = llm_tagger_svc.fetch_openai_compatible_models(
+            base_url,
+            api_key,
+            timeout=body.timeout or target.timeout,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, str(exc)) from exc
+    selected = target.model if target.model in model_ids else (model_ids[0] if model_ids else target.model)
+    preset_patch: dict[str, Any] = {
+        "id": target.id,
+        "base_url": base_url,
+        "model_ids": model_ids,
+        "model": selected,
+    }
+    if body.api_key not in (None, secrets.MASK):
+        preset_patch["api_key"] = api_key
+    new = secrets.update({"llm_tagger": {"presets": [preset_patch]}})
+    return {
+        "items": model_ids,
+        "preset_id": target.id,
+        "secrets": secrets.to_masked_dict(new),
+    }
+
+
+@app.post("/api/llm-tagger/test")
+def test_llm_tagger_connection(body: LLMConnectionTestRequest) -> dict[str, Any]:
+    """Run a text-only LLM connectivity test without saving form values.
+
+    Defaults come from the target preset (preset_id or current); body fields
+    override on top.
+    """
+    from .services import llm_tagger as llm_tagger_svc
+
+    tagger_cfg = secrets.load().llm_tagger
+    target = _select_preset(tagger_cfg, body.preset_id)
+    merged = target.model_dump()
+    for key in ("base_url", "model", "endpoint", "timeout", "max_tokens", "temperature"):
+        value = getattr(body, key)
+        if value is not None:
+            merged[key] = value
+    if body.api_key is not None and body.api_key != secrets.MASK:
+        merged["api_key"] = body.api_key
+    cfg = secrets.LLMPresetConfig(**merged)
+    if not cfg.base_url.strip():
+        raise HTTPException(400, "base_url is required")
+    if not cfg.model.strip():
+        raise HTTPException(400, "model is required")
+    return llm_tagger_svc.test_openai_compatible_connection(
+        cfg.base_url,
+        cfg.api_key,
+        cfg.model,
+        endpoint=cfg.endpoint,
+        timeout=cfg.timeout,
+        max_tokens=cfg.max_tokens,
+        temperature=cfg.temperature,
+    )
 
 
 def _version_train_dir_or_404(pid: int, vid: int):
@@ -2435,6 +2625,24 @@ def _task_output_dir(task: dict[str, Any]) -> Optional[Path]:
     return versions.version_dir(int(pid), p["slug"], v["label"]) / "output"
 
 
+def _task_archive_basename(task: dict[str, Any]) -> Optional[str]:
+    """task 关联 project / version → "{slug}-{label}"，用作 outputs zip 文件名
+    前缀。和 train.zip 命名风格一致（PP7：{slug}-{label}.train.zip）。
+
+    没 project / version → None，调用方 fallback 到 task_{id}。
+    """
+    pid = task.get("project_id")
+    vid = task.get("version_id")
+    if not (pid and vid):
+        return None
+    with db.connection_for() as conn:
+        v = versions.get_version(conn, int(vid))
+        p = projects.get_project(conn, int(pid))
+    if not v or not p or v["project_id"] != pid:
+        return None
+    return f"{p['slug']}-{v['label']}"
+
+
 def _is_loopback(request: Request) -> bool:
     client = request.client
     return bool(client and client.host in _LOCALHOST_HOSTS)
@@ -2473,14 +2681,21 @@ def list_task_outputs(task_id: int, request: Request) -> dict[str, Any]:
         "exists": bool(out_dir and out_dir.exists()),
         "supports_open_folder": _is_loopback(request),
         "files": files,
+        "archive_basename": _task_archive_basename(task),
     }
 
 
 @app.get("/api/queue/{task_id}/outputs.zip")
 def download_task_outputs_zip(
-    task_id: int, background: BackgroundTasks
+    task_id: int,
+    background: BackgroundTasks,
+    files: Optional[str] = None,
 ) -> FileResponse:
-    """把 output 目录全部文件打包成 zip 一次性下载。
+    """把 output 目录里的文件打包成 zip 一次性下载。
+
+    没传 `files` → 全量打包（向后兼容）。
+    传了 `files`（逗号分隔的文件名）→ 仅打包这些，路径必须是 out_dir 下的直接
+    子文件，禁止 path traversal / 子目录。
 
     实现：写到临时文件再 FileResponse；响应发完后用 BackgroundTasks 清理。
     safetensors / pt 几乎都是已压缩二进制，用 ZIP_STORED（不再压缩，CPU 省一倍）。
@@ -2494,9 +2709,32 @@ def download_task_outputs_zip(
     out_dir = _task_output_dir(task)
     if not out_dir or not out_dir.exists():
         raise HTTPException(404, "no output dir")
-    files = [f for f in sorted(out_dir.iterdir()) if f.is_file()]
-    if not files:
+    all_files = [f for f in sorted(out_dir.iterdir()) if f.is_file()]
+    if not all_files:
         raise HTTPException(404, "empty output dir")
+
+    selected: list[Path]
+    partial = False
+    if files is None or files == "":
+        selected = all_files
+    else:
+        wanted = [n for n in files.split(",") if n]
+        if not wanted:
+            raise HTTPException(400, "empty files list")
+        by_name = {f.name: f for f in all_files}
+        missing: list[str] = []
+        selected = []
+        for name in wanted:
+            if "/" in name or "\\" in name or ".." in name:
+                raise HTTPException(400, f"invalid filename: {name}")
+            f = by_name.get(name)
+            if not f:
+                missing.append(name)
+                continue
+            selected.append(f)
+        if missing:
+            raise HTTPException(404, f"file(s) not found: {', '.join(missing)}")
+        partial = True
 
     tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
     tmp.close()
@@ -2505,15 +2743,25 @@ def download_task_outputs_zip(
         with zipfile.ZipFile(
             tmp_path, "w", compression=zipfile.ZIP_STORED, allowZip64=True
         ) as zf:
-            for f in files:
+            for f in selected:
                 zf.write(f, arcname=f.name)
-    except Exception:
+    except Exception as e:
         tmp_path.unlink(missing_ok=True)
+        bus.publish({
+            "type": "task_outputs_zip_failed",
+            "task_id": task_id,
+            "error": str(e),
+        })
         raise
 
+    bus.publish({"type": "task_outputs_zip_ready", "task_id": task_id})
     background.add_task(lambda: tmp_path.unlink(missing_ok=True))
 
-    archive_name = f"task_{task_id}_outputs.zip"
+    basename = _task_archive_basename(task) or f"task_{task_id}"
+    archive_name = (
+        f"{basename}_outputs_selected.zip" if partial
+        else f"{basename}_outputs.zip"
+    )
     return FileResponse(
         tmp_path,
         media_type="application/zip",

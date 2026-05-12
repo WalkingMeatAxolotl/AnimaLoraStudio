@@ -1,11 +1,12 @@
 /**
  * MonitorDashboard — native React training monitor
  * Replaces the monitor_smooth.html iframe.
- * Data source: GET /api/state?task_id=N  +  SSE monitor_state_updated
+ * Data source: GET /api/state?task_id=N 拉降采样快照 + SSE monitor_progress
+ * 走 useMonitorProgress hook 做 delta merge（PR #37 增量协议）。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api, type MonitorState } from '../api/client'
-import { useEventStream } from '../lib/useEventStream'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { api } from '../api/client'
+import { useMonitorProgress } from '../lib/useMonitorProgress'
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -255,44 +256,8 @@ function SampleViewer({ samples, taskId }: {
 // ── Main Component ─────────────────────────────────────────────────────────
 
 export default function MonitorDashboard({ taskId }: { taskId: number }) {
-  const [state, setState] = useState<MonitorState | null>(null)
-  const [connected, setConnected] = useState(false)
+  const { state, connected } = useMonitorProgress(taskId)
   const [emaAlpha, setEmaAlpha] = useState(0.02)
-  const lastUpdateRef = useRef(0)
-
-  const load = useCallback(async () => {
-    try {
-      const s = await api.getMonitorState(taskId)
-      setState(s)
-      setConnected(true)
-      lastUpdateRef.current = Date.now()
-    } catch {
-      if (Date.now() - lastUpdateRef.current > 5000) setConnected(false)
-    }
-  }, [taskId])
-
-  // mount 时拉一次冷启动；之后 SSE 推送（monitor_state_updated 带全量 state
-  // payload）。SSE 重连后 onOpen 也补一次冷启动防漏事件。删了原来的 5s 轮询
-  // fallback——SSE 通了就够用，断了 EventSource 自动重连 + onOpen 触发重 fetch。
-  useEffect(() => {
-    void load()
-  }, [load])
-
-  useEventStream(
-    (evt) => {
-      if (evt.type === 'monitor_state_updated' && String(evt.task_id) === String(taskId)) {
-        if (evt.state) {
-          setState(evt.state as MonitorState)
-          setConnected(true)
-          lastUpdateRef.current = Date.now()
-        } else {
-          // 兜底：极少数情况 SSE 不带 state（旧 backend 行为），退回 fetch
-          void load()
-        }
-      }
-    },
-    { onOpen: () => void load() },
-  )
 
   // Derived stats
   const losses = useMemo(() => state?.losses ?? [], [state?.losses])

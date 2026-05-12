@@ -7,15 +7,12 @@ interface Props {
   subtitle?: string
   actions?: ReactNode
   children: ReactNode
-  eyebrow?: string | false
 }
 
-export default function StepShell({ idx, title, subtitle, actions, children, eyebrow }: Props) {
-  const eb = eyebrow ?? (idx === -1 ? false : `第 ${idx} 步`)
+export default function StepShell({ title, subtitle, actions, children }: Props) {
   return (
     <div className="fade-in flex flex-col h-full">
       <PageHeader
-        eyebrow={eb || undefined}
         title={title}
         subtitle={subtitle}
         actions={actions}

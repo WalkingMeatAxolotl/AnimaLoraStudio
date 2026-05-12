@@ -37,6 +37,10 @@ from studio.services import onnxruntime_setup  # noqa: F401
 
 from studio import db, project_jobs, projects, versions
 from studio.datasets import IMAGE_EXTS
+from studio.services.caption_format import (
+    caption_json_to_text,
+    standard_to_documented_full,
+)
 from studio.services import tagedit
 from studio.services.tagger import get_tagger
 
@@ -114,7 +118,13 @@ def run(job_id: int) -> int:
                 progress(f"[err] {r['image'].name}: {r['error']}")
                 errs += 1
                 continue
-            _write_caption(r["image"], r.get("tags") or [], fmt)
+            _write_caption(
+                r["image"],
+                r.get("tags") or [],
+                fmt,
+                caption_text=r.get("caption"),
+                caption_json=r.get("caption_json"),
+            )
             ok += 1
         progress(f"[done] tagged {ok}/{len(images)} (errors={errs})")
         return 0 if ok > 0 or errs == 0 else 1
@@ -124,8 +134,31 @@ def run(job_id: int) -> int:
         return 1
 
 
-def _write_caption(image: Path, tags: list[str], fmt: str) -> None:
+def _write_caption(
+    image: Path,
+    tags: list[str],
+    fmt: str,
+    *,
+    caption_text: str | None = None,
+    caption_json: dict[str, Any] | None = None,
+) -> None:
     """fmt 仅决定「不存在 caption 时」用什么格式；已存在的 .json 仍走 .json。"""
+    if caption_json is not None:
+        if fmt == "json":
+            image.with_suffix(".json").write_text(
+                json.dumps(
+                    standard_to_documented_full(caption_json),
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            image.with_suffix(".txt").unlink(missing_ok=True)
+            return
+        text = caption_text if caption_text is not None else caption_json_to_text(caption_json)
+        image.with_suffix(".txt").write_text(text, encoding="utf-8")
+        image.with_suffix(".json").unlink(missing_ok=True)
+        return
     if fmt == "json" and not image.with_suffix(".txt").exists():
         # 强制写 json（即使没有现成 json 文件）
         data = {"tags": list(tags)}

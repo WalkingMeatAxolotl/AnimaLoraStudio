@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import {
   api,
   DEFAULT_WD14_MODELS,
   type CLTaggerVariantInfo,
+  type LLMPreset,
   type FlashAttnStatus,
   type XformersStatus,
   type ModelDownloadStatus,
@@ -11,8 +12,10 @@ import {
   type SecretsPatch,
   type TorchCuTag,
   type TorchStatus,
+  type WandBConfig,
   type WD14Runtime,
 } from '../../api/client'
+import LLMTaggerWorkspace from '../../components/LLMTaggerWorkspace'
 import PageHeader from '../../components/PageHeader'
 import { useToast } from '../../components/Toast'
 import { useEventStream } from '../../lib/useEventStream'
@@ -25,29 +28,109 @@ type Section =
   | 'danbooru'
   | 'download'
   | 'huggingface'
-  | 'joycaption'
+  | 'wandb'
+  | 'modelscope'
+  | 'llm_tagger'
   | 'wd14'
   | 'cltagger'
   | 'models'
   | 'queue'
   | 'generate'
 
-type Tab = 'dataset' | 'tagging' | 'training' | 'testing' | 'appearance'
+type Tab = 'dataset' | 'tagging' | 'training' | 'monitor' | 'testing' | 'appearance'
 
 const TAB_LIST: { id: Tab; label: string }[] = [
   { id: 'dataset', label: '数据集' },
   { id: 'tagging', label: '打标' },
   { id: 'training', label: '训练' },
+  { id: 'monitor', label: '监控' },
   { id: 'testing', label: '测试' },
   { id: 'appearance', label: '页面' },
 ]
 
+// 每个 tab 的 section index — 用于右侧 sticky 导航。id 与各 section 的 DOM id
+// 对应；label 在导航里直接显示。修改 section 顺序时记得同步这里。
+const TAB_SECTIONS: Record<Tab, { id: string; label: string }[]> = {
+  dataset: [
+    { id: 'gelbooru', label: 'Gelbooru' },
+    { id: 'danbooru', label: 'Danbooru' },
+    { id: 'download-global', label: '下载（全局）' },
+  ],
+  tagging: [
+    { id: 'llm-tagger', label: 'LLM Tagger' },
+    { id: 'wd14', label: 'WD14' },
+    { id: 'cltagger', label: 'CLTagger' },
+    { id: 'onnxruntime', label: 'ONNX Runtime' },
+  ],
+  training: [
+    { id: 'download-source', label: '模型下载源' },
+    { id: 'queue', label: '队列调度' },
+    { id: 'pytorch', label: 'PyTorch' },
+    { id: 'flash-attn', label: 'Flash Attention' },
+    { id: 'xformers', label: 'xformers' },
+    { id: 'models', label: '训练模型' },
+  ],
+  monitor: [
+    { id: 'wandb', label: 'Weights & Biases' },
+  ],
+  testing: [
+    { id: 'preview', label: '中间步预览' },
+  ],
+  appearance: [
+    { id: 'display', label: '显示' },
+  ],
+}
+
 const TAB_STORAGE_KEY = 'studio.settings.activeTab'
+
+// fallback 预设：仅在 GET /api/secrets 失败时充当占位，真实 prompt 由后端 builtin
+// json 文件提供。命中此 fallback 然后 PUT 回去不会破坏 builtin（后端 validator
+// 会再补全 builtin defaults）。
+function _makeFallbackPreset(id: string, label: string, output_format: 'json' | 'text', extra: Partial<LLMPreset> = {}): LLMPreset {
+  return {
+    id,
+    label,
+    builtin: true,
+    base_url: '',
+    api_key: '',
+    model: '',
+    model_ids: [],
+    endpoint: 'chat_completions',
+    messages: [
+      { type: 'text', role: 'system', content: '' },
+      { type: 'image', role: 'user', content: '' },
+    ],
+    output_format,
+    temperature: 0.2,
+    max_tokens: 700,
+    max_side: 1280,
+    jpeg_quality: 85,
+    max_image_mb: 5,
+    timeout: 60,
+    max_retries: 3,
+    ...extra,
+  }
+}
+
+const DEFAULT_LLM_PRESETS: LLMPreset[] = [
+  _makeFallbackPreset('style_json', '画风 LoRA JSON', 'json'),
+  _makeFallbackPreset('general_json', '通用 LoRA JSON', 'json'),
+  _makeFallbackPreset('txt_tags', 'TXT 标签列表', 'json'),
+  _makeFallbackPreset('joycaption', 'JoyCaption（vLLM 本地）', 'text', {
+    base_url: 'http://localhost:8000/v1',
+    model: 'fancyfeast/llama-joycaption-beta-one-hf-llava',
+    temperature: 0.6,
+    max_tokens: 300,
+  }),
+]
 
 function getStoredTab(): Tab {
   try {
     const v = localStorage.getItem(TAB_STORAGE_KEY)
-    if (v === 'dataset' || v === 'tagging' || v === 'training' || v === 'testing' || v === 'appearance') return v
+    if (
+      v === 'dataset' || v === 'tagging' || v === 'training'
+      || v === 'monitor' || v === 'testing' || v === 'appearance'
+    ) return v
   } catch {
     /* ignore localStorage errors */
   }
@@ -70,10 +153,22 @@ const EMPTY: Secrets = {
     cdn_rate_per_sec: 5,
   },
   huggingface: { token: '', endpoint: 'https://hf-mirror.com' },
-  joycaption: {
-    base_url: 'http://localhost:8000/v1',
-    model: 'fancyfeast/llama-joycaption-beta-one-hf-llava',
-    prompt_template: 'Descriptive Caption',
+  wandb: {
+    enabled: false,
+    api_key: '',
+    project: 'AnimaLoraStudio',
+    entity: '',
+    base_url: '',
+    mode: 'online',
+    log_samples: false,
+    sample_max_side: 512,
+    sample_every_n_steps: 0,
+  },
+  modelscope: { token: '' },
+  download_source: 'huggingface',
+  llm_tagger: {
+    current_preset: 'style_json',
+    presets: [...DEFAULT_LLM_PRESETS],
   },
   wd14: {
     model_id: 'SmilingWolf/wd-eva02-large-tagger-v3',
@@ -114,7 +209,11 @@ export default function SettingsPage() {
   const [catalog, setCatalog] = useState<ModelsCatalog | null>(null)
   const [catalogError, setCatalogError] = useState<string | null>(null)
   const [downloadBusy, setDownloadBusy] = useState<Set<string>>(new Set())
+  const [llmModelsBusy, setLlmModelsBusy] = useState(false)
+  const [llmTestBusy, setLlmTestBusy] = useState(false)
   const { toast } = useToast()
+  // 右侧 section index 用：sticky nav 的 IntersectionObserver root + 滚动平移容器
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
 
   const switchTab = (next: Tab) => {
     setTab(next)
@@ -181,6 +280,11 @@ export default function SettingsPage() {
     }))
   }
 
+  /** 更新 Secrets 顶层非对象字段（如 download_source）。 */
+  const updateTop = <K extends keyof Secrets>(key: K, value: Secrets[K]) => {
+    setDraft((prev) => ({ ...prev, [key]: value }))
+  }
+
   const save = async () => {
     if (!server) return
     const patch = buildPatch(draft, server)
@@ -201,6 +305,138 @@ export default function SettingsPage() {
     }
   }
 
+  // 找到当前 active preset；如果 current_preset 指向不存在的 id（理论上 validator
+  // 已保底），fallback 到第一个，避免空 crash。
+  const currentPreset: LLMPreset =
+    draft.llm_tagger.presets.find((p) => p.id === draft.llm_tagger.current_preset)
+    ?? draft.llm_tagger.presets[0]
+    ?? DEFAULT_LLM_PRESETS[0]
+
+  const serverCurrentPreset: LLMPreset | undefined =
+    server?.llm_tagger.presets.find((p) => p.id === currentPreset.id)
+
+  /** 改 active preset 的某个字段。 */
+  const updatePreset = <K extends keyof LLMPreset>(field: K, value: LLMPreset[K]) => {
+    const next = draft.llm_tagger.presets.map((p) =>
+      p.id === currentPreset.id ? { ...p, [field]: value } : p
+    )
+    update('llm_tagger', 'presets', next)
+  }
+
+  const addPreset = () => {
+    const used = new Set(draft.llm_tagger.presets.map((p) => p.id))
+    let idx = 1
+    let id = `preset_${idx}`
+    while (used.has(id)) {
+      idx += 1
+      id = `preset_${idx}`
+    }
+    const next: LLMPreset = _makeFallbackPreset(id, `新预设 ${idx}`, 'json')
+    next.builtin = false
+    update('llm_tagger', 'presets', [...draft.llm_tagger.presets, next])
+    update('llm_tagger', 'current_preset', id)
+  }
+
+  const deleteCurrentPreset = () => {
+    if (currentPreset.builtin || draft.llm_tagger.presets.length <= 1) return
+    const next = draft.llm_tagger.presets.filter((p) => p.id !== currentPreset.id)
+    update('llm_tagger', 'presets', next)
+    update('llm_tagger', 'current_preset', next[0]?.id ?? 'style_json')
+  }
+
+  const resetCurrentPresetToBuiltin = () => {
+    // 删除当前 builtin preset，让 backend validator 在 PUT 后从 defaults 补回
+    if (!currentPreset.builtin) return
+    const next = draft.llm_tagger.presets.filter((p) => p.id !== currentPreset.id)
+    update('llm_tagger', 'presets', next)
+    // current_preset 不变；validator 会重建 preset
+  }
+
+  const saveAsNewPreset = () => {
+    const label = window.prompt('新预设名称：', `${currentPreset.label} 副本`)
+    if (!label) return
+    const slug = label.toLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'preset'
+    const used = new Set(draft.llm_tagger.presets.map((p) => p.id))
+    let idx = 1
+    let id = slug
+    while (used.has(id)) {
+      idx += 1
+      id = `${slug}_${idx}`
+    }
+    const next: LLMPreset = {
+      ...currentPreset,
+      // deep-copy messages 避免共享引用
+      messages: currentPreset.messages.map((m) => ({ ...m })),
+      model_ids: [...currentPreset.model_ids],
+      id,
+      label,
+      builtin: false,
+    }
+    update('llm_tagger', 'presets', [...draft.llm_tagger.presets, next])
+    update('llm_tagger', 'current_preset', id)
+  }
+
+  const refreshLLMModels = async () => {
+    if (!server) return
+    setLlmModelsBusy(true)
+    setError(null)
+    try {
+      let source = draft
+      if (dirty) {
+        const saved = await api.updateSecrets(buildPatch(draft, server))
+        setServer(saved)
+        setDraft(saved)
+        source = saved
+      }
+      const sourcePreset = source.llm_tagger.presets.find((p) => p.id === currentPreset.id)
+        ?? source.llm_tagger.presets[0]
+      const result = await api.refreshLLMModels({
+        preset_id: sourcePreset.id,
+        base_url: sourcePreset.base_url,
+        api_key: sourcePreset.api_key,
+        timeout: sourcePreset.timeout,
+      })
+      setServer(result.secrets)
+      setDraft(result.secrets)
+      toast(`已读取 ${result.items.length} 个模型`, 'success')
+    } catch (e) {
+      setError(String(e))
+      toast(`读取模型列表失败：${e}`, 'error')
+    } finally {
+      setLlmModelsBusy(false)
+    }
+  }
+
+  const testLLMConnection = async () => {
+    setLlmTestBusy(true)
+    setError(null)
+    try {
+      const result = await api.testLLMConnection({
+        preset_id: currentPreset.id,
+        base_url: currentPreset.base_url,
+        api_key: currentPreset.api_key,
+        model: currentPreset.model,
+        endpoint: currentPreset.endpoint,
+        timeout: currentPreset.timeout,
+        max_tokens: Math.max(512, currentPreset.max_tokens),
+        temperature: currentPreset.temperature,
+      })
+      // 把延迟 / HTTP 状态 / 错误预览拼进 toast，避免移除 ConnBar 后用户拿不到详情。
+      const parts: string[] = [result.ok ? 'LLM 连接通过' : 'LLM 连接失败']
+      if (result.elapsed_ms > 0) parts.push(`${result.elapsed_ms} ms`)
+      if (result.status_code !== null) parts.push(`HTTP ${result.status_code}`)
+      if (!result.ok) {
+        const detail = result.error || result.response_preview
+        if (detail) parts.push(detail.slice(0, 120))
+      }
+      toast(parts.join(' · '), result.ok ? 'success' : 'error')
+    } catch (e) {
+      toast(`LLM 连接测试失败：${String(e)}`, 'error')
+    } finally {
+      setLlmTestBusy(false)
+    }
+  }
+
   if (error && !server) {
     return (
       <div className="text-err font-mono text-sm p-4 bg-err-soft rounded-md">
@@ -209,12 +445,30 @@ export default function SettingsPage() {
     )
   }
 
+  // Tab nav 抽出来传给 PageHeader 的 tabs prop（取代旧的 subtitle 位置）。
+  const tabNav = (
+    <nav className="flex gap-1 -mb-4">
+      {TAB_LIST.map((t) => (
+        <button
+          key={t.id}
+          onClick={() => switchTab(t.id)}
+          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+            tab === t.id
+              ? 'border-accent text-fg-primary'
+              : 'border-transparent text-fg-tertiary hover:text-fg-secondary'
+          }`}
+        >
+          {t.label}
+        </button>
+      ))}
+    </nav>
+  )
+
   return (
     <div className="flex flex-col h-full min-h-0">
       <PageHeader
-        eyebrow="全局 · settings"
         title="设置"
-        subtitle="API 密钥、路径、模型和队列行为。"
+        tabs={tabNav}
         sticky
         actions={
           <button
@@ -227,8 +481,9 @@ export default function SettingsPage() {
         }
       />
 
-      <div className="p-6 pb-12 flex-1 overflow-y-auto">
-      <div className="flex flex-col gap-8 max-w-[1200px]">
+      <div ref={scrollContainerRef} className="p-6 pb-12 flex-1 overflow-y-auto">
+      <div className="grid gap-10 max-w-[1400px]" style={{ gridTemplateColumns: 'minmax(0,1fr) 200px' }}>
+      <div className="flex flex-col gap-8 min-w-0">
 
       {error && (
         <div className="p-3 rounded-md bg-err-soft border border-err text-err text-sm font-mono">
@@ -236,24 +491,8 @@ export default function SettingsPage() {
         </div>
       )}
 
-      <nav className="flex gap-1 border-b border-subtle">
-        {TAB_LIST.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => switchTab(t.id)}
-            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
-              tab === t.id
-                ? 'border-accent text-fg-primary'
-                : 'border-transparent text-fg-tertiary hover:text-fg-secondary'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </nav>
-
       {tab === 'dataset' && (<>
-      <SettingsSection title="Gelbooru">
+      <SettingsSection id="gelbooru" title="Gelbooru">
         <SettingsField label="user_id">
           <input
             type="text"
@@ -279,7 +518,7 @@ export default function SettingsPage() {
         </SettingsField>
       </SettingsSection>
 
-      <SettingsSection title="Danbooru">
+      <SettingsSection id="danbooru" title="Danbooru">
         <SettingsField label="username">
           <input
             type="text"
@@ -307,7 +546,7 @@ export default function SettingsPage() {
         </SettingsField>
       </SettingsSection>
 
-      <SettingsSection title="下载（全局）">
+      <SettingsSection id="download-global" title="下载（全局）">
         <SettingsField
           label="exclude_tags"
           desc="逗号分隔；搜索时自动追加 -tag，Gelbooru / Danbooru 同样生效"
@@ -354,31 +593,29 @@ export default function SettingsPage() {
       </>)}
 
       {tab === 'tagging' && (<>
-      <SettingsSection title="JoyCaption (vLLM)">
-        <SettingsField label="base_url">
-          <input
-            type="text"
-            value={draft.joycaption.base_url}
-            onChange={(e) => update('joycaption', 'base_url', e.target.value)}
-            className={textInputClass}                                  />
-        </SettingsField>
-        <SettingsField label="model">
-          <input
-            type="text"
-            value={draft.joycaption.model}
-            onChange={(e) => update('joycaption', 'model', e.target.value)}
-            className={textInputClass}                                  />
-        </SettingsField>
-        <SettingsField label="prompt_template">
-          <input
-            type="text"
-            value={draft.joycaption.prompt_template}
-            onChange={(e) => update('joycaption', 'prompt_template', e.target.value)}
-            className={textInputClass}                                  />
-        </SettingsField>
-      </SettingsSection>
+      {/* LLMTaggerWorkspace 自带 card；title 渲染在 card 内最顶部跟 WD14/CLTagger 视觉对齐。
+       * 外层 div 只承担 id（给 section index 滚动定位用）+ scroll-mt-24 锚点偏移。 */}
+      <div id="llm-tagger" className="scroll-mt-24">
+        <LLMTaggerWorkspace
+          title="LLM Tagger"
+          currentPreset={currentPreset}
+          serverCurrentPreset={serverCurrentPreset}
+          presets={draft.llm_tagger.presets}
+          currentPresetId={draft.llm_tagger.current_preset}
+          onSelectPreset={(id) => update('llm_tagger', 'current_preset', id)}
+          onUpdatePreset={updatePreset}
+          onResetToBuiltin={resetCurrentPresetToBuiltin}
+          onSaveAs={saveAsNewPreset}
+          onAddPreset={addPreset}
+          onDeletePreset={deleteCurrentPreset}
+          llmModelsBusy={llmModelsBusy}
+          llmTestBusy={llmTestBusy}
+          onRefreshModels={() => void refreshLLMModels()}
+          onTestConnection={() => void testLLMConnection()}
+        />
+      </div>
 
-      <SettingsSection title="WD14">
+      <SettingsSection id="wd14" title="WD14">
         <WD14ModelCard
           catalog={catalog}
           busy={downloadBusy}
@@ -427,7 +664,7 @@ export default function SettingsPage() {
         </SettingsField>
       </SettingsSection>
 
-      <SettingsSection title="CLTagger">
+      <SettingsSection id="cltagger" title="CLTagger">
         <CLTaggerModelCard
           catalog={catalog}
           busy={downloadBusy}
@@ -492,27 +729,44 @@ export default function SettingsPage() {
       </>)}
 
       {tab === 'training' && (<>
-      <SettingsSection title="HuggingFace">
-        <SettingsField label="token">
-          <SensitiveInput
-            value={draft.huggingface.token}
-            serverValue={server?.huggingface.token ?? ''}
-            onChange={(v) => update('huggingface', 'token', v)}
+      <SettingsSection id="download-source" title="模型下载源">
+        <SettingsField label="下载源" desc="魔搭（ModelScope）对国内用户更快；无映射的模型自动回退 HuggingFace">
+          <DownloadSourceSelect
+            value={draft.download_source}
+            onChange={(v) => updateTop('download_source', v)}
           />
         </SettingsField>
-        <p className="text-xs text-fg-tertiary px-1">
-          用于 HF 私有 repo 鉴权；公开仓库（含 SmilingWolf WD14 / cella110n CLTagger）不用填。
-        </p>
 
-        <SettingsField label="endpoint" desc="模型下载端点。国内推荐 hf-mirror，海外推荐官方源">
-          <HFEndpointSelect
-            value={draft.huggingface.endpoint}
-            onChange={(v) => update('huggingface', 'endpoint', v)}
-          />
-        </SettingsField>
+        {/* 下方按当前下载源条件渲染对应凭证配置。HF/ModelScope token 都保留在
+         * secrets 里（即便切换源也不丢失），只是 UI 一次只露面一份。 */}
+        {draft.download_source === 'huggingface' ? (
+          <>
+            <SettingsField label="token" desc="用于 HF 私有 repo 鉴权；公开仓库（含 SmilingWolf WD14 / cella110n CLTagger）不用填">
+              <SensitiveInput
+                value={draft.huggingface.token}
+                serverValue={server?.huggingface.token ?? ''}
+                onChange={(v) => update('huggingface', 'token', v)}
+              />
+            </SettingsField>
+            <SettingsField label="endpoint" desc="模型下载端点。国内推荐 hf-mirror，海外推荐官方源">
+              <HFEndpointSelect
+                value={draft.huggingface.endpoint}
+                onChange={(v) => update('huggingface', 'endpoint', v)}
+              />
+            </SettingsField>
+          </>
+        ) : (
+          <SettingsField label="token" desc="公开模型不用填；私有仓库或限速时需要。需先 pip install modelscope 安装命令行工具。">
+            <SensitiveInput
+              value={draft.modelscope.token}
+              serverValue={server?.modelscope.token ?? ''}
+              onChange={(v) => update('modelscope', 'token', v)}
+            />
+          </SettingsField>
+        )}
       </SettingsSection>
 
-      <SettingsSection title="队列调度">
+      <SettingsSection id="queue" title="队列调度">
         <SettingsField label="允许 GPU 任务与训练并行">
           <div className="flex items-center gap-3">
             <Bool value={draft.queue.allow_gpu_during_train} onChange={(v) => update('queue', 'allow_gpu_during_train', v)} />
@@ -538,6 +792,92 @@ export default function SettingsPage() {
       />
       </>)}
 
+      {tab === 'monitor' && (<>
+      <SettingsSection id="wandb" title="Weights & Biases">
+        <SettingsField label="启用 WandB" desc="打开后所有训练任务都会写入 W&B；不再占用训练配置字段">
+          <div className="flex items-center gap-3">
+            <Bool value={draft.wandb.enabled} onChange={(v) => update('wandb', 'enabled', v)} />
+            <span className="text-xs text-fg-tertiary">
+              需要训练环境已安装 wandb 包
+            </span>
+          </div>
+        </SettingsField>
+        <SettingsField label="api_key">
+          <SensitiveInput
+            value={draft.wandb.api_key}
+            serverValue={server?.wandb.api_key ?? ''}
+            onChange={(v) => update('wandb', 'api_key', v)}
+          />
+        </SettingsField>
+        <SettingsField label="project">
+          <input
+            type="text"
+            value={draft.wandb.project}
+            onChange={(e) => update('wandb', 'project', e.target.value)}
+            placeholder="AnimaLoraStudio"
+            className={textInputClass}
+          />
+        </SettingsField>
+        <SettingsField label="entity" desc="可选；团队/用户名，留空使用 wandb 默认账号">
+          <input
+            type="text"
+            value={draft.wandb.entity}
+            onChange={(e) => update('wandb', 'entity', e.target.value)}
+            className={textInputClass}
+          />
+        </SettingsField>
+        <SettingsField label="base_url" desc="可选；私有 W&B/self-hosted 时填写">
+          <input
+            type="text"
+            value={draft.wandb.base_url}
+            onChange={(e) => update('wandb', 'base_url', e.target.value)}
+            placeholder="https://api.wandb.ai"
+            className={textInputClass}
+          />
+        </SettingsField>
+        <div className="grid grid-cols-2 gap-3">
+          <SettingsField label="mode">
+            <select
+              value={draft.wandb.mode}
+              onChange={(e) => update('wandb', 'mode', e.target.value as WandBConfig['mode'])}
+              className={textInputClass}
+            >
+              <option value="online">online</option>
+              <option value="offline">offline</option>
+              <option value="disabled">disabled</option>
+            </select>
+          </SettingsField>
+          <SettingsField label="记录采样图" desc="开启后训练采样图会上传到 wandb.ai 公网；私有 IP / NSFW 数据集请保持关闭">
+            <Bool value={draft.wandb.log_samples} onChange={(v) => update('wandb', 'log_samples', v)} />
+          </SettingsField>
+        </div>
+        {draft.wandb.log_samples && (
+          <div className="grid grid-cols-2 gap-3">
+            <SettingsField label="采样图最长边" desc="上传前缩到此像素，原图常 2K+，512 已够 wandb 浏览">
+              <input
+                type="number"
+                min={64}
+                step={64}
+                value={draft.wandb.sample_max_side}
+                onChange={(e) => update('wandb', 'sample_max_side', Math.max(64, parseInt(e.target.value) || 512))}
+                className={textInputClass}
+              />
+            </SettingsField>
+            <SettingsField label="step 节流" desc="0 = 不额外节流；>0 时只在 global_step % N == 0 上传，避免长训练上 GB 级图">
+              <input
+                type="number"
+                min={0}
+                step={50}
+                value={draft.wandb.sample_every_n_steps}
+                onChange={(e) => update('wandb', 'sample_every_n_steps', Math.max(0, parseInt(e.target.value) || 0))}
+                className={textInputClass}
+              />
+            </SettingsField>
+          </div>
+        )}
+      </SettingsSection>
+      </>)}
+
       {tab === 'testing' && (<>
         {/* attention 后端走全局 auto-detect，UI 不暴露切换；想强制覆盖
             的高级用户改 secrets.json 的 generate.attention_backend
@@ -549,6 +889,9 @@ export default function SettingsPage() {
         <DisplaySection />
       )}
     </div>
+
+    <SectionIndex sections={TAB_SECTIONS[tab]} scrollContainer={scrollContainerRef} />
+    </div>
     </div>
     </div>
   )
@@ -556,12 +899,90 @@ export default function SettingsPage() {
 
 // ── Section / Field ────────────────────────────────────────────────────────
 
-function SettingsSection({ title, children }: { title: string; children: React.ReactNode }) {
+function SettingsSection({ id, title, children }: { id?: string; title: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-md border border-subtle bg-surface p-4 flex flex-col gap-3">
+    <section id={id} className="rounded-md border border-subtle bg-surface p-4 flex flex-col gap-3 scroll-mt-24">
       <h2 className="text-sm font-semibold text-fg-primary mb-0.5">{title}</h2>
       {children}
     </section>
+  )
+}
+
+/**
+ * 右侧 sticky section 目录。基于 IntersectionObserver 在 scrollContainer 视口内
+ * 跟踪当前可见 section，并提供点击平滑滚动。
+ *
+ * rootMargin 调整为顶部 -20%、底部 -70%：让"当前可见"判定集中在视口偏上区域，
+ * 滚动时高亮跟随更自然（用户视线在 viewport 上 1/3 处）。
+ */
+function SectionIndex({
+  sections,
+  scrollContainer,
+}: {
+  sections: { id: string; label: string }[]
+  scrollContainer: RefObject<HTMLDivElement>
+}) {
+  const [active, setActive] = useState<string>(sections[0]?.id ?? '')
+
+  useEffect(() => {
+    // 切换 tab 后重置 active 到第一条
+    setActive(sections[0]?.id ?? '')
+  }, [sections])
+
+  useEffect(() => {
+    const root = scrollContainer.current
+    if (!root || sections.length === 0) return
+    // jsdom（vitest 环境）没有 IntersectionObserver；非浏览器环境直接跳过。
+    if (typeof IntersectionObserver === 'undefined') return
+    const observers: IntersectionObserver[] = []
+    // 收集 (id, top) 用来在 onIntersect 时挑当前最靠上的可见 section
+    const visible = new Set<string>()
+    const obs = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          if (e.isIntersecting) visible.add(e.target.id)
+          else visible.delete(e.target.id)
+        }
+        // 按 sections 顺序取第一个可见的作为 active
+        const next = sections.find((s) => visible.has(s.id))
+        if (next) setActive(next.id)
+      },
+      { root, rootMargin: '-20% 0px -70% 0px', threshold: 0 },
+    )
+    sections.forEach((s) => {
+      const el = document.getElementById(s.id)
+      if (el) obs.observe(el)
+    })
+    observers.push(obs)
+    return () => observers.forEach((o) => o.disconnect())
+  }, [sections, scrollContainer])
+
+  const onJump = (id: string) => {
+    const el = document.getElementById(id)
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    setActive(id)
+  }
+
+  return (
+    <aside className="hidden lg:block">
+      <nav className="sticky top-4 flex flex-col gap-0.5">
+        <div className="caption mb-2 px-2">本页索引</div>
+        {sections.map((s) => (
+          <button
+            key={s.id}
+            onClick={() => onJump(s.id)}
+            className={`text-left text-xs px-2 py-1.5 rounded-sm transition-colors border-l-2 ${
+              active === s.id
+                ? 'border-accent text-accent bg-accent-soft/40'
+                : 'border-transparent text-fg-tertiary hover:text-fg-secondary hover:bg-overlay/40'
+            }`}
+          >
+            {s.label}
+          </button>
+        ))}
+      </nav>
+    </aside>
   )
 }
 
@@ -660,6 +1081,23 @@ function HFEndpointSelect({ value, onChange }: {
         />
       )}
     </div>
+  )
+}
+
+// ── DownloadSourceSelect ────────────────────────────────────────────────────
+
+function DownloadSourceSelect({ value, onChange }: {
+  value: string; onChange: (v: string) => void
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className={`${textInputClass} max-w-xs`}
+    >
+      <option value="huggingface">HuggingFace（含 hf-mirror 等镜像）</option>
+      <option value="modelscope">ModelScope（魔搭社区，国内直连）</option>
+    </select>
   )
 }
 
@@ -858,9 +1296,16 @@ function CLTaggerModelCard({
   )
 }
 
+// 顶层非 object 字段（string / number / bool），直接比较后塞入 patch。
+const TOP_LEVEL_SCALARS: (keyof Secrets)[] = ['download_source']
+
 function buildPatch(draft: Secrets, server: Secrets): SecretsPatch {
-  const out: Record<string, Record<string, unknown>> = {}
-  for (const key of Object.keys(draft) as Section[]) {
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(draft) as (keyof Secrets)[]) {
+    if (TOP_LEVEL_SCALARS.includes(key)) {
+      if (draft[key] !== server[key]) out[key] = draft[key]
+      continue
+    }
     const sub: Record<string, unknown> = {}
     const d = draft[key] as unknown as Record<string, unknown>
     const s = server[key] as unknown as Record<string, unknown>
@@ -939,7 +1384,7 @@ function ModelsSection({ catalog, busy, start, reloadCatalog, catalogError }: {
   const error = catalogError
 
   return (
-    <SettingsSection title="训练模型（一键下载）">
+    <SettingsSection id="models" title="训练模型（一键下载）">
       <SettingsField label="模型根目录 (models_root)">
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <input
@@ -1170,7 +1615,7 @@ function ONNXRuntimeSection() {
   const statusOk = rt && !hasIssue
 
   return (
-    <details open={!!hasIssue} className="rounded-md border border-subtle bg-surface group">
+    <details id="onnxruntime" open={!!hasIssue} className="rounded-md border border-subtle bg-surface group scroll-mt-24">
       <summary className="cursor-pointer p-4 list-none flex items-center gap-2">
         <span className="text-fg-tertiary text-xs transition-transform group-open:rotate-90 inline-block w-3">▸</span>
         <h2 className="text-sm font-semibold text-fg-primary m-0">ONNX Runtime</h2>
@@ -1302,7 +1747,7 @@ function PyTorchSection() {
               : `CPU ${status.cuda_build}`
 
   return (
-    <details open={!!hasIssue} className="rounded-md border border-subtle bg-surface group">
+    <details id="pytorch" open={!!hasIssue} className="rounded-md border border-subtle bg-surface group scroll-mt-24">
       <summary className="cursor-pointer p-4 list-none flex items-center gap-2">
         <span className="text-fg-tertiary text-xs transition-transform group-open:rotate-90 inline-block w-3">▸</span>
         <h2 className="text-sm font-semibold text-fg-primary m-0">PyTorch</h2>
@@ -1483,7 +1928,7 @@ function FlashAttentionSection() {
   const statusOk = status?.installed && !error
 
   return (
-    <details open={!!hasIssue} className="rounded-md border border-subtle bg-surface group">
+    <details id="flash-attn" open={!!hasIssue} className="rounded-md border border-subtle bg-surface group scroll-mt-24">
       <summary className="cursor-pointer p-4 list-none flex items-center gap-2">
         <span className="text-fg-tertiary text-xs transition-transform group-open:rotate-90 inline-block w-3">▸</span>
         <h2 className="text-sm font-semibold text-fg-primary m-0">Flash Attention</h2>
@@ -1655,7 +2100,7 @@ function XformersSection() {
   const hasIssue = !!error
 
   return (
-    <details open={!!hasIssue} className="rounded-md border border-subtle bg-surface group">
+    <details id="xformers" open={!!hasIssue} className="rounded-md border border-subtle bg-surface group scroll-mt-24">
       <summary className="cursor-pointer p-4 list-none flex items-center gap-2">
         <span className="text-fg-tertiary text-xs transition-transform group-open:rotate-90 inline-block w-3">▸</span>
         <h2 className="text-sm font-semibold text-fg-primary m-0">xformers</h2>
@@ -1723,14 +2168,14 @@ function TaeFluxSection({
   draft, update,
 }: {
   draft: Secrets
-  update: <S extends keyof Secrets, K extends keyof Secrets[S]>(
+  update: <S extends Section, K extends keyof Secrets[S]>(
     section: S, key: K, value: Secrets[S][K],
   ) => void
 }) {
   const n = draft.generate.preview_every_n_steps
   const enabled = n > 0
   return (
-    <SettingsSection title="中间步预览">
+    <SettingsSection id="preview" title="中间步预览">
       <SettingsField
         label="节流（每 N 步推一次预览）"
         desc="0 = 关闭中间步预览；推荐 3-5。模型 server 启动时已后台下载，UI 不需要操作。"
@@ -1786,7 +2231,7 @@ function DisplaySection() {
   }
 
   return (
-    <SettingsSection title="显示">
+    <SettingsSection id="display" title="显示">
       <SettingsField label="主题">
         <div className="flex gap-1">
           {(['light', 'dark'] as Theme[]).map((t) => (

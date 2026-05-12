@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Iterable, Literal
 
 from ..datasets import IMAGE_EXTS
+from .caption_format import caption_json_to_tags
 
 ScopeKind = Literal["all", "folder", "files"]
 
@@ -49,6 +50,15 @@ def read_tags(image: Path) -> list[str]:
             return []
         if isinstance(data, dict):
             tags = data.get("tags")
+            if (
+                isinstance(tags, dict)
+                or "ai_output" in data
+                or "fixed" in data
+                or "appearance" in data
+                or "environment" in data
+                or "quality" in data
+            ):
+                return caption_json_to_tags(data)
             if isinstance(tags, list):
                 return [str(t) for t in tags]
         return []

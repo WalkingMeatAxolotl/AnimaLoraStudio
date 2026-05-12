@@ -27,6 +27,39 @@ class _FakeTagger:
             yield {"image": p, "tags": [f"tag_{p.stem}", "common"]}
 
 
+class _FakeLLMTagger:
+    name = "llm"
+    requires_service = True
+
+    def is_available(self):
+        return True, "ok"
+
+    def prepare(self):
+        pass
+
+    def tag(self, paths, on_progress=lambda d, t: None):
+        for i, p in enumerate(paths):
+            on_progress(i + 1, len(paths))
+            yield {
+                "image": p,
+                "tags": ["1girl", "watercolor", "blue background"],
+                "caption": "1girl, watercolor, blue background. Soft watercolor style.",
+                "caption_json": {
+                    "tags": {
+                        "quality": [],
+                        "count": "1girl",
+                        "character": "",
+                        "series": "",
+                        "artist": "",
+                        "appearance": ["watercolor"],
+                        "tags": ["soft shading"],
+                        "environment": ["blue background"],
+                        "nl": "Soft watercolor style.",
+                    }
+                },
+            }
+
+
 @pytest.fixture
 def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     dbfile = tmp_path / "studio.db"
@@ -137,6 +170,49 @@ def test_run_passes_cltagger_overrides_through(env, monkeypatch) -> None:
     assert rc == 0
     assert captured["name"] == "cltagger"
     assert captured["overrides"] == {"threshold_character": 0.55}
+
+
+def test_run_writes_llm_json_caption(env, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "studio.workers.tag_worker.get_tagger",
+        lambda name, overrides=None: _FakeLLMTagger(),
+    )
+    with db.connection_for(env["db"]) as conn:
+        conn.execute(
+            "UPDATE project_jobs SET params = json_set(params, "
+            "'$.tagger', 'llm', '$.output_format', 'json') WHERE id = ?",
+            (env["job_id"],),
+        )
+        conn.commit()
+
+    rc = tag_worker.run(env["job_id"])
+    assert rc == 0
+    data = json.loads((env["train"] / "a.json").read_text(encoding="utf-8"))
+    assert data["ai_output"]["count"] == "1girl"
+    assert data["ai_output"]["appearance"] == ["watercolor"]
+    assert data["ai_output"]["environment"] == ["blue background"]
+    assert data["ai_output"]["nl"] == "Soft watercolor style."
+    assert not (env["train"] / "a.txt").exists()
+
+
+def test_run_writes_llm_txt_caption(env, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "studio.workers.tag_worker.get_tagger",
+        lambda name, overrides=None: _FakeLLMTagger(),
+    )
+    with db.connection_for(env["db"]) as conn:
+        conn.execute(
+            "UPDATE project_jobs SET params = json_set(params, '$.tagger', 'llm') "
+            "WHERE id = ?",
+            (env["job_id"],),
+        )
+        conn.commit()
+
+    rc = tag_worker.run(env["job_id"])
+    assert rc == 0
+    assert (env["train"] / "a.txt").read_text(encoding="utf-8") == (
+        "1girl, watercolor, blue background. Soft watercolor style."
+    )
 
 
 def test_run_unknown_job(env) -> None:

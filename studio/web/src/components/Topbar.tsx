@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useProjectCtx } from '../context/ProjectContext'
-import { api, type MonitorState, type Task } from '../api/client'
+import { api, type Task } from '../api/client'
 import { useEventStream, type StudioEvent } from '../lib/useEventStream'
+import { useMonitorProgress } from '../lib/useMonitorProgress'
 import CommandPalette from './CommandPalette'
+import SystemStats from './SystemStats'
 
 const SearchIcon = (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -39,42 +41,47 @@ function formatElapsed(from: number): string {
 
 // ── breadcrumb ──────────────────────────────────────────────────────────────
 
-interface Crumb { label: string; mono?: boolean }
+interface Crumb { label: string; mono?: boolean; to?: string }
 
 function useBreadcrumbs(): Crumb[] {
   const { pathname } = useLocation()
   const ctx = useProjectCtx()
   const parts = pathname.split('/').filter(Boolean)
 
-  if (parts.length === 0) return [{ label: '项目' }]
+  if (parts.length === 0) return [{ label: '项目', to: '/' }]
 
   if (parts[0] === 'queue') {
-    if (parts.length === 1) return [{ label: '队列' }]
-    return [{ label: '队列' }, { label: `#${parts[1]}`, mono: true }]
+    if (parts.length === 1) return [{ label: '队列', to: '/queue' }]
+    return [{ label: '队列', to: '/queue' }, { label: `#${parts[1]}`, mono: true }]
   }
 
   if (parts[0] === 'tools') {
-    const labels: Record<string, string> = { presets: '预设', monitor: '监控', settings: '设置' }
+    const labels: Record<string, string> = { presets: '预设', monitor: '监控', settings: '设置', generate: '测试' }
     return [{ label: labels[parts[1]] ?? parts[1] }]
   }
 
   if (parts[0] === 'projects') {
-    const crumbs: Crumb[] = [{ label: '项目' }]
+    const crumbs: Crumb[] = [{ label: '项目', to: '/' }]
 
     const projectLabel = ctx?.project?.title ?? (parts[1] ? `#${parts[1]}` : null)
-    if (projectLabel) crumbs.push({ label: projectLabel })
+    const projectId = parts[1]
+    if (projectLabel) crumbs.push({ label: projectLabel, to: projectId ? `/projects/${projectId}` : undefined })
 
     const vIdx = parts.indexOf('v')
     if (vIdx !== -1 && parts[vIdx + 1]) {
       const versionLabel = ctx?.activeVersion?.label ?? `v${parts[vIdx + 1]}`
+      const vid = parts[vIdx + 1]
+      // version 节点没有独立页面，不可跳；step 才有路由。
       crumbs.push({ label: versionLabel, mono: true })
       const stepLabels: Record<string, string> = {
         curate: '筛选', tag: '打标', edit: '标签编辑', reg: '正则集', train: '训练',
       }
       const step = parts[vIdx + 2]
-      if (step && stepLabels[step]) crumbs.push({ label: stepLabels[step] })
+      if (step && stepLabels[step]) {
+        crumbs.push({ label: stepLabels[step], to: `/projects/${projectId}/v/${vid}/${step}` })
+      }
     } else if (parts[2] === 'download') {
-      crumbs.push({ label: '下载' })
+      crumbs.push({ label: '下载', to: `/projects/${projectId}/download` })
     }
     return crumbs
   }
@@ -94,7 +101,11 @@ export default function Topbar() {
   // 队列详细状态
   const [runningTask, setRunningTask] = useState<Task | null>(null)
   const [pendingCount, setPendingCount] = useState(0)
-  const [monitor, setMonitor] = useState<MonitorState | null>(null)
+
+  // monitor 状态走 useMonitorProgress hook (PR #37 增量协议)：自动管理
+  // /api/state 冷启动 + monitor_progress delta 合并 + 重连补拉，本组件只
+  // 关心结果的 step/total_steps/speed/start_time 几个 scalar 字段。
+  const { state: monitor } = useMonitorProgress(runningTask?.id ?? null)
 
   const refreshQueue = useCallback(async () => {
     try {
@@ -102,29 +113,16 @@ export default function Topbar() {
         api.listQueue('running'),
         api.listQueue('pending'),
       ])
-      const firstRunning = running.length > 0 ? running[0] : null
-      setRunningTask(firstRunning)
+      setRunningTask(running.length > 0 ? running[0] : null)
       setPendingCount(pending.length)
-
-      if (firstRunning) {
-        try {
-          const ms = await api.getMonitorState(firstRunning.id)
-          setMonitor(ms)
-        } catch {
-          setMonitor(null)
-        }
-      } else {
-        setMonitor(null)
-      }
     } catch {
       // 忽略
     }
   }, [])
 
-  // 队列状态走 SSE：mount 拉一次冷启动，之后只在 task_state_changed /
-  // monitor_state_updated 事件来时更新。SSE 重连后 onOpen 也补一次冷启动
-  // 防漏事件。不再轮询（之前 3-10s setInterval 在 1 个 running task 下会
-  // 攒成每秒 7+ 请求的死循环 bug，根因是 useEffect deps 用了 Task 对象）。
+  // 队列任务列表走 SSE task_state_changed；mount + 重连各拉一次冷启动。
+  // 之前 3-10s setInterval 在 1 个 running task 下会攒成每秒 7+ 请求的死
+  // 循环 bug，根因是 useEffect deps 用了 Task 对象。
   useEffect(() => {
     void refreshQueue()
   }, [refreshQueue])
@@ -133,14 +131,6 @@ export default function Topbar() {
     (evt: StudioEvent) => {
       if (evt.type === 'task_state_changed') {
         void refreshQueue()
-      } else if (
-        evt.type === 'monitor_state_updated' &&
-        runningTask &&
-        String(evt.task_id) === String(runningTask.id) &&
-        evt.state
-      ) {
-        // 后端 SSE 已经把 state 全量塞 payload 里，直接 setState，不再 fetch
-        setMonitor(evt.state as MonitorState)
       }
     },
     { onOpen: () => void refreshQueue() },
@@ -210,30 +200,40 @@ export default function Topbar() {
         className="flex items-center gap-3 border-b border-subtle bg-canvas shrink-0 px-5"
         style={{ height: 'var(--topbar-h)' }}
       >
-        {/* breadcrumb */}
+        {/* breadcrumb — 非最后一节且有 to 字段时渲染成 Link 可点击。 */}
         <div className="flex items-center gap-2 flex-1 min-w-0">
-          {crumbs.map((b, i) => (
-            <span key={i} className="flex items-center gap-2">
-              {i > 0 && <span className="text-fg-tertiary select-none">/</span>}
-              <span className={
-                `text-sm ${b.mono ? 'font-mono' : ''} ` +
-                (i === crumbs.length - 1 ? 'text-fg-primary font-semibold' : 'text-fg-secondary')
-              }>
-                {b.label}
+          {crumbs.map((b, i) => {
+            const isLast = i === crumbs.length - 1
+            const cls =
+              `text-sm ${b.mono ? 'font-mono' : ''} ` +
+              (isLast
+                ? 'text-fg-primary font-semibold'
+                : 'text-fg-secondary hover:text-fg-primary transition-colors')
+            return (
+              <span key={i} className="flex items-center gap-2">
+                {i > 0 && <span className="text-fg-tertiary select-none">/</span>}
+                {!isLast && b.to ? (
+                  <Link to={b.to} className={cls}>{b.label}</Link>
+                ) : (
+                  <span className={cls}>{b.label}</span>
+                )}
               </span>
-            </span>
-          ))}
+            )
+          })}
         </div>
 
-        {/* 搜索按钮 */}
+        {/* 实时系统监控 (CPU / RAM / GPU / VRAM)，每 ~2.5s 轮询；无 NVIDIA 时只显示 CPU/RAM。 */}
+        <SystemStats />
+
+        {/* 搜索按钮 — 缩成 icon-only，⌘K 仍可弹出完整 palette (含跨图标签搜索)。 */}
         <button
           ref={searchBtnRef}
           onClick={() => setPaletteOpen(true)}
-          className="flex items-center gap-2 text-fg-tertiary text-sm bg-surface border border-dim rounded-md cursor-pointer min-w-[200px] py-[5px] pl-3 pr-[10px] hover:border-bold transition-colors shrink-0"
+          title="搜索 (⌘K)"
+          aria-label="搜索"
+          className="flex items-center justify-center text-fg-tertiary bg-surface border border-dim rounded-md cursor-pointer w-8 h-8 hover:border-bold hover:text-fg-secondary transition-colors shrink-0"
         >
           {SearchIcon}
-          <span className="flex-1 text-left">跳转 / 搜索…</span>
-          <span className="kbd">⌘K</span>
         </button>
 
         {/* 运行中训练胶囊 */}

@@ -4,12 +4,16 @@ import {
   api,
   type Job,
   type CLTaggerConfig,
+  type LLMMessage,
+  type LLMPreset,
+  type LLMTaggerConfig,
   type ProjectDetail,
   type TaggerName,
   type TaggerStatus,
   type Version,
   type WD14Config,
 } from '../../../api/client'
+import LLMMessagesEditor from '../../../components/LLMMessagesEditor'
 import JobProgress from '../../../components/JobProgress'
 import StepShell from '../../../components/StepShell'
 import { useToast } from '../../../components/Toast'
@@ -45,6 +49,23 @@ type CLTaggerForm = {
   blacklist_tags: string[]
 }
 
+type LLMTaggerForm = {
+  /** 切换 active preset id；切换会重置其他字段为该 preset 默认值。 */
+  preset_id: string
+  base_url: string
+  model: string
+  endpoint: LLMPreset['endpoint']
+  messages: LLMMessage[]
+  output_format: LLMPreset['output_format']
+  temperature: number
+  max_tokens: number
+  timeout: number
+  max_retries: number
+  max_side: number
+  jpeg_quality: number
+  max_image_mb: number
+}
+
 function fromConfig(cfg: WD14Config): Wd14Form {
   return {
     threshold_general: cfg.threshold_general,
@@ -69,6 +90,28 @@ function fromCLTaggerConfig(cfg: CLTaggerConfig): CLTaggerForm {
   }
 }
 
+function activePresetOf(cfg: LLMTaggerConfig): LLMPreset | null {
+  return cfg.presets.find((p) => p.id === cfg.current_preset) ?? cfg.presets[0] ?? null
+}
+
+function fromLLMPreset(p: LLMPreset): LLMTaggerForm {
+  return {
+    preset_id: p.id,
+    base_url: p.base_url,
+    model: p.model,
+    endpoint: p.endpoint,
+    messages: p.messages.map((m) => ({ ...m })),
+    output_format: p.output_format,
+    temperature: p.temperature,
+    max_tokens: p.max_tokens,
+    timeout: p.timeout,
+    max_retries: p.max_retries,
+    max_side: p.max_side,
+    jpeg_quality: p.jpeg_quality,
+    max_image_mb: p.max_image_mb,
+  }
+}
+
 export default function TaggingPage() {
   const { project, activeVersion, reload } = useOutletContext<Ctx>()
   const { toast } = useToast()
@@ -81,6 +124,8 @@ export default function TaggingPage() {
   const [wd14Form, setWd14Form] = useState<Wd14Form | null>(null)
   const [cltaggerDefaults, setCltaggerDefaults] = useState<CLTaggerConfig | null>(null)
   const [cltaggerForm, setCltaggerForm] = useState<CLTaggerForm | null>(null)
+  const [llmDefaults, setLlmDefaults] = useState<LLMTaggerConfig | null>(null)
+  const [llmForm, setLlmForm] = useState<LLMTaggerForm | null>(null)
   const [advOpen, setAdvOpen] = useState(false)
 
   const [job, setJob] = useState<Job | null>(null)
@@ -97,6 +142,9 @@ export default function TaggingPage() {
         setWd14Form(fromConfig(s.wd14))
         setCltaggerDefaults(s.cltagger)
         setCltaggerForm(fromCLTaggerConfig(s.cltagger))
+        setLlmDefaults(s.llm_tagger)
+        const active = activePresetOf(s.llm_tagger)
+        if (active) setLlmForm(fromLLMPreset(active))
       })
       .catch((e) => toast(`读取 tagger 默认配置失败：${e}`, 'error'))
     // toast 函数引用稳定；只在 mount 时跑一次
@@ -199,6 +247,30 @@ export default function TaggingPage() {
     return Object.keys(out).length ? out : undefined
   }
 
+  const buildLLMOverrides = (): Record<string, unknown> | undefined => {
+    if (!llmForm || !llmDefaults) return undefined
+    const active = llmDefaults.presets.find((p) => p.id === llmForm.preset_id)
+      ?? llmDefaults.presets[0]
+    if (!active) return undefined
+    const out: Record<string, unknown> = {}
+    // 切了 preset：传 current_preset 让 worker 切换
+    if (llmForm.preset_id !== llmDefaults.current_preset) {
+      out.current_preset = llmForm.preset_id
+    }
+    // 其他字段：对比 active preset 的值，不同才进 overrides
+    const fields: ReadonlyArray<Exclude<keyof LLMTaggerForm, 'preset_id'>> = [
+      'base_url', 'model', 'endpoint', 'messages', 'output_format',
+      'temperature', 'max_tokens', 'timeout', 'max_retries',
+      'max_side', 'jpeg_quality', 'max_image_mb',
+    ]
+    for (const key of fields) {
+      const value = llmForm[key]
+      const base = active[key]
+      if (JSON.stringify(value) !== JSON.stringify(base)) out[key] = value
+    }
+    return Object.keys(out).length ? out : undefined
+  }
+
   const startTagging = async () => {
     if (!taggerStatus?.ok) {
       toast(`${tagger} 不可用：${taggerStatus?.msg ?? '未知'}`, 'error')
@@ -207,12 +279,14 @@ export default function TaggingPage() {
     try {
       const wd14_overrides = tagger === 'wd14' ? buildWd14Overrides() : undefined
       const cltagger_overrides = tagger === 'cltagger' ? buildCLTaggerOverrides() : undefined
-      const overrides = wd14_overrides ?? cltagger_overrides
+      const llm_overrides = tagger === 'llm' ? buildLLMOverrides() : undefined
+      const overrides = wd14_overrides ?? cltagger_overrides ?? llm_overrides
       const j = await api.startTag(project.id, activeVersion.id, {
         tagger,
         output_format: outputFormat,
         wd14_overrides,
         cltagger_overrides,
+        llm_overrides,
       })
       setJob(j)
       setLogs([])
@@ -229,7 +303,7 @@ export default function TaggingPage() {
     <StepShell
       idx={3}
       title="自动打标"
-      subtitle="WD14 本地推理 或 JoyCaption 远程 vLLM"
+      subtitle="WD14 / CLTagger 本地推理，或远程 LLM 视觉打标"
       actions={
         <button
           onClick={startTagging}
@@ -263,7 +337,7 @@ export default function TaggingPage() {
             >
               <option value="wd14">WD14（本地 ONNX）</option>
               <option value="cltagger">CLTagger（本地 ONNX）</option>
-              <option value="joycaption">JoyCaption（远程 vLLM）</option>
+              <option value="llm">LLM（OpenAI compatible，含 JoyCaption preset）</option>
             </select>
             <span
               className={
@@ -319,6 +393,17 @@ export default function TaggingPage() {
               form={cltaggerForm}
               defaults={cltaggerDefaults}
               onChange={setCltaggerForm}
+              advOpen={advOpen}
+              setAdvOpen={setAdvOpen}
+              disabled={isLive}
+            />
+          )}
+
+          {tagger === 'llm' && (
+            <LLMTaggerPanel
+              form={llmForm}
+              defaults={llmDefaults}
+              onChange={setLlmForm}
               advOpen={advOpen}
               setAdvOpen={setAdvOpen}
               disabled={isLive}
@@ -653,6 +738,277 @@ function CLTaggerPanel({
   )
 }
 
+function LLMTaggerPanel({
+  form,
+  defaults,
+  onChange,
+  advOpen,
+  setAdvOpen,
+  disabled,
+}: {
+  form: LLMTaggerForm | null
+  defaults: LLMTaggerConfig | null
+  onChange: (f: LLMTaggerForm) => void
+  advOpen: boolean
+  setAdvOpen: (b: boolean) => void
+  disabled: boolean
+}) {
+  if (!form || !defaults) {
+    return (
+      <section className="rounded-md border border-subtle bg-surface px-3 py-2 text-xs text-fg-tertiary shrink-0">
+        加载 LLM 默认参数...
+      </section>
+    )
+  }
+
+  const activePreset = defaults.presets.find((p) => p.id === form.preset_id) ?? defaults.presets[0]
+  if (!activePreset) {
+    return (
+      <section className="rounded-md border border-subtle bg-surface px-3 py-2 text-xs text-err shrink-0">
+        没有可用的 LLM preset。请到 Settings 配置。
+      </section>
+    )
+  }
+
+  // dirty：当前 form ≠ active preset 的某字段，或切换了 preset
+  const dirty =
+    form.preset_id !== defaults.current_preset ||
+    JSON.stringify(form) !== JSON.stringify(fromLLMPreset(activePreset))
+
+  const restore = () => {
+    const original = activePresetOf(defaults)
+    if (original) onChange(fromLLMPreset(original))
+  }
+
+  /** 切 preset：form 字段重置为目标 preset 的默认值（drop 本次 override）。 */
+  const switchPreset = (id: string) => {
+    const next = defaults.presets.find((p) => p.id === id)
+    if (next) onChange(fromLLMPreset(next))
+  }
+
+  return (
+    <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 flex flex-col gap-2 shrink-0 text-sm">
+      <div className="flex items-center gap-2 flex-wrap">
+        <PanelDot />
+        <span className="caption">LLM 参数</span>
+        <span className="text-xs text-fg-tertiary">
+          OpenAI compatible · 选 preset 切换整套配置
+        </span>
+        <span className="flex-1" />
+        {dirty && (
+          <>
+            <span className="badge badge-warn">已改</span>
+            <button
+              onClick={restore}
+              disabled={disabled}
+              className="btn btn-ghost btn-sm"
+              title="还原为全局当前 preset"
+            >
+              ↻ 还原
+            </button>
+          </>
+        )}
+      </div>
+
+      <label className="grid grid-cols-[140px_1fr] items-center gap-2">
+        <span className="text-fg-tertiary font-mono text-xs">preset</span>
+        <select
+          value={form.preset_id}
+          onChange={(e) => switchPreset(e.target.value)}
+          disabled={disabled}
+          className={`input input-mono ${form.preset_id !== defaults.current_preset ? 'border-warn' : ''}`}
+        >
+          {defaults.presets.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.label}{p.builtin ? '（内置）' : ''}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+        <LabeledInput
+          label="base_url"
+          value={form.base_url}
+          placeholder="http://localhost:8000/v1"
+          disabled={disabled}
+          onChange={(v) => onChange({ ...form, base_url: v })}
+          modified={form.base_url !== activePreset.base_url}
+        />
+        {activePreset.model_ids.length > 0 ? (
+          <label className="grid grid-cols-[140px_1fr] items-center gap-2">
+            <span className="text-fg-tertiary font-mono text-xs">model</span>
+            <select
+              value={form.model}
+              onChange={(e) => onChange({ ...form, model: e.target.value })}
+              disabled={disabled}
+              className={`input input-mono ${form.model !== activePreset.model ? 'border-warn' : ''}`}
+            >
+              {!activePreset.model_ids.includes(form.model) && form.model && (
+                <option value={form.model}>{form.model}</option>
+              )}
+              {activePreset.model_ids.map((m) => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          <LabeledInput
+            label="model"
+            value={form.model}
+            placeholder="模型名"
+            disabled={disabled}
+            onChange={(v) => onChange({ ...form, model: v })}
+            modified={form.model !== activePreset.model}
+          />
+        )}
+        <label className="grid grid-cols-[140px_1fr] items-center gap-2">
+          <span className="text-fg-tertiary font-mono text-xs">endpoint</span>
+          <select
+            value={form.endpoint}
+            onChange={(e) => onChange({ ...form, endpoint: e.target.value as LLMPreset['endpoint'] })}
+            disabled={disabled}
+            className={`input input-mono ${form.endpoint !== activePreset.endpoint ? 'border-warn' : ''}`}
+          >
+            <option value="chat_completions">Chat Completions</option>
+            <option value="responses">Responses</option>
+          </select>
+        </label>
+        <label className="grid grid-cols-[140px_1fr] items-center gap-2">
+          <span className="text-fg-tertiary font-mono text-xs">output_format</span>
+          <select
+            value={form.output_format}
+            onChange={(e) => onChange({ ...form, output_format: e.target.value as LLMPreset['output_format'] })}
+            disabled={disabled}
+            className={`input input-mono ${form.output_format !== activePreset.output_format ? 'border-warn' : ''}`}
+          >
+            <option value="json">JSON</option>
+            <option value="text">Text</option>
+          </select>
+        </label>
+      </div>
+
+      <div className="flex items-center gap-3 flex-wrap">
+        <LLMNumberInput label="temperature" value={form.temperature} base={activePreset.temperature} step={0.05} min={0} max={2} disabled={disabled} onChange={(v) => onChange({ ...form, temperature: v })} />
+        <LLMNumberInput label="max_tokens" value={form.max_tokens} base={activePreset.max_tokens} step={1} min={64} max={4096} disabled={disabled} onChange={(v) => onChange({ ...form, max_tokens: Math.round(v) })} />
+        <button
+          type="button"
+          onClick={() => setAdvOpen(!advOpen)}
+          className="btn btn-ghost btn-sm text-xs text-fg-tertiary"
+        >
+          {advOpen ? '▾' : '▸'} 高级
+        </button>
+      </div>
+
+      {advOpen && (
+        <>
+          <label className="grid grid-cols-[140px_1fr] items-start gap-2">
+            <span className="text-fg-tertiary font-mono text-xs pt-1">messages</span>
+            <div className="flex flex-col gap-1.5">
+              {form.endpoint === 'responses' && (
+                <div className="text-[10px] text-warn">
+                  ⚠️ Responses endpoint：只用 system + 第一条 user；其余 messages 忽略
+                </div>
+              )}
+              <LLMMessagesEditor
+                messages={form.messages}
+                onChange={(msgs) => onChange({ ...form, messages: msgs })}
+                disabled={disabled}
+              />
+            </div>
+          </label>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-1">
+            <LLMLabeledNumber label="timeout" value={form.timeout} base={activePreset.timeout} min={5} max={600} disabled={disabled} onChange={(v) => onChange({ ...form, timeout: Math.round(v) })} />
+            <LLMLabeledNumber label="max_retries" value={form.max_retries} base={activePreset.max_retries} min={1} max={10} disabled={disabled} onChange={(v) => onChange({ ...form, max_retries: Math.round(v) })} />
+            <LLMLabeledNumber label="max_side" value={form.max_side} base={activePreset.max_side} min={64} max={4096} disabled={disabled} onChange={(v) => onChange({ ...form, max_side: Math.round(v) })} />
+            <LLMLabeledNumber label="jpeg_quality" value={form.jpeg_quality} base={activePreset.jpeg_quality} min={1} max={100} disabled={disabled} onChange={(v) => onChange({ ...form, jpeg_quality: Math.round(v) })} />
+            <LLMLabeledNumber label="max_image_mb" value={form.max_image_mb} base={activePreset.max_image_mb} min={0.1} max={25} step={0.1} disabled={disabled} onChange={(v) => onChange({ ...form, max_image_mb: v })} />
+          </div>
+        </>
+      )}
+    </section>
+  )
+}
+
+function LLMNumberInput({
+  label,
+  value,
+  base,
+  min,
+  max,
+  step,
+  disabled,
+  onChange,
+}: {
+  label: string
+  value: number
+  base: number
+  min: number
+  max: number
+  step: number
+  disabled: boolean
+  onChange: (v: number) => void
+}) {
+  return (
+    <label className="flex items-center gap-1.5">
+      <span className="text-fg-tertiary font-mono text-xs">{label}</span>
+      <input
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => {
+          const n = Number(e.target.value)
+          if (!Number.isNaN(n)) onChange(Math.max(min, Math.min(max, n)))
+        }}
+        disabled={disabled}
+        className={`input input-mono ${value !== base ? 'border-warn' : ''}`}
+        style={{ width: 88 }}
+      />
+    </label>
+  )
+}
+
+function LLMLabeledNumber({
+  label,
+  value,
+  base,
+  min,
+  max,
+  step = 1,
+  disabled,
+  onChange,
+}: {
+  label: string
+  value: number
+  base: number
+  min: number
+  max: number
+  step?: number
+  disabled: boolean
+  onChange: (v: number) => void
+}) {
+  return (
+    <label className="grid grid-cols-[140px_1fr] items-center gap-2">
+      <span className="text-fg-tertiary font-mono text-xs">{label}</span>
+      <input
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => {
+          const n = Number(e.target.value)
+          if (!Number.isNaN(n)) onChange(Math.max(min, Math.min(max, n)))
+        }}
+        disabled={disabled}
+        className={`input input-mono ${value !== base ? 'border-warn' : ''}`}
+      />
+    </label>
+  )
+}
+
 function ThresholdInput({
   label,
   value,
@@ -813,7 +1169,9 @@ function TagPreviewPanel({
             ? 'WD14 ONNX 本地推理，无需网络'
             : tagger === 'cltagger'
               ? 'CLTagger ONNX 本地推理，支持角色阈值'
-              : 'JoyCaption 远程 vLLM，自然语言描述'}
+              : tagger === 'llm'
+                ? 'OpenAI compatible 视觉 LLM，支持 Responses / Chat Completions'
+                : 'JoyCaption 远程 vLLM，自然语言描述'}
         </div>
       </div>
 

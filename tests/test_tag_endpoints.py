@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from studio import db, project_jobs, projects, secrets, server, versions
+from studio.services import llm_tagger
 from studio.services import tagger as tagger_mod
 
 
@@ -159,6 +160,133 @@ def test_start_tag_with_cltagger_overrides(client: TestClient) -> None:
         "add_rating_tag": True,
         "blacklist_tags": ["signature"],
     }
+
+
+def test_start_tag_with_llm_overrides(client: TestClient) -> None:
+    """传 llm_overrides 时，端点应把它落进 params。`api_key` 不在 schema 里被忽略。"""
+    import json as _json
+    pid, vid = _make(client)
+    r = client.post(
+        f"/api/projects/{pid}/versions/{vid}/tag",
+        json={
+            "tagger": "llm",
+            "output_format": "json",
+            "llm_overrides": {
+                "current_preset": "joycaption",
+                "endpoint": "responses",
+                "model": "vision-model",
+                "temperature": 0.1,
+            },
+        },
+    )
+    assert r.status_code == 200, r.text
+    params = _json.loads(r.json()["params"])
+    assert params["llm_overrides"] == {
+        "current_preset": "joycaption",
+        "endpoint": "responses",
+        "model": "vision-model",
+        "temperature": 0.1,
+    }
+
+
+def test_refresh_llm_models_saves_masked_config(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict = {}
+
+    def _fake_fetch(base_url: str, api_key: str, *, timeout: int, session=None):
+        captured["base_url"] = base_url
+        captured["api_key"] = api_key
+        captured["timeout"] = timeout
+        return ["vision-a", "vision-b"]
+
+    monkeypatch.setattr(llm_tagger, "fetch_openai_compatible_models", _fake_fetch)
+    r = client.post(
+        "/api/llm-tagger/models/refresh",
+        json={
+            "preset_id": "style_json",
+            "base_url": "http://x/v1",
+            "api_key": "secret",
+            "timeout": 12,
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["items"] == ["vision-a", "vision-b"]
+    assert body["preset_id"] == "style_json"
+    style_masked = next(
+        p for p in body["secrets"]["llm_tagger"]["presets"] if p["id"] == "style_json"
+    )
+    assert style_masked["api_key"] == secrets.MASK
+    assert style_masked["model"] == "vision-a"
+    assert style_masked["model_ids"] == ["vision-a", "vision-b"]
+    assert captured == {
+        "base_url": "http://x/v1",
+        "api_key": "secret",
+        "timeout": 12,
+    }
+    style_loaded = next(p for p in secrets.load().llm_tagger.presets if p.id == "style_json")
+    assert style_loaded.api_key == "secret"
+
+
+def test_llm_connection_test_uses_masked_saved_key(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secrets.update(
+        {
+            "llm_tagger": {
+                "current_preset": "style_json",
+                "presets": [
+                    {
+                        "id": "style_json",
+                        "base_url": "http://saved/v1",
+                        "api_key": "saved-secret",
+                        "model": "saved-model",
+                        "endpoint": "chat_completions",
+                        "timeout": 22,
+                    }
+                ],
+            }
+        }
+    )
+    captured: dict = {}
+
+    def _fake_test(base_url: str, api_key: str, model: str, **kwargs):
+        captured.update(
+            {
+                "base_url": base_url,
+                "api_key": api_key,
+                "model": model,
+                **kwargs,
+            }
+        )
+        return {
+            "ok": True,
+            "endpoint": kwargs["endpoint"],
+            "endpoint_url": "http://saved/v1/chat/completions",
+            "model": model,
+            "elapsed_ms": 12,
+            "status_code": 200,
+            "response_preview": "ok",
+            "error": "",
+            "request_shape": "chat_completions_text",
+        }
+
+    monkeypatch.setattr(llm_tagger, "test_openai_compatible_connection", _fake_test)
+    r = client.post(
+        "/api/llm-tagger/test",
+        json={"api_key": secrets.MASK, "model": "draft-model", "timeout": 9},
+    )
+
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is True
+    assert captured["base_url"] == "http://saved/v1"
+    assert captured["api_key"] == "saved-secret"
+    assert captured["model"] == "draft-model"
+    assert captured["timeout"] == 9
+    # 测试只是 dry-run，不应改 secrets 里的 model
+    style_loaded = next(p for p in secrets.load().llm_tagger.presets if p.id == "style_json")
+    assert style_loaded.model == "saved-model"
 
 
 def test_start_tag_drops_empty_wd14_overrides(client: TestClient) -> None:

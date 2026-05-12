@@ -19,6 +19,8 @@ ProgressFn = Callable[[int, int], None]  # (done, total)
 class TagResult(TypedDict, total=False):
     image: Path
     tags: list[str]                # 排序好的（按概率降）
+    caption: str                   # 可选：渲染后的完整 caption 文本
+    caption_json: dict             # 可选：结构化 JSON caption
     raw_scores: dict[str, float]   # 可选：每 tag 的概率
     error: str                     # 失败时填
 
@@ -50,6 +52,7 @@ _TAGGER_SPEC: dict[str, tuple[str, str, bool]] = {
     "wd14": ("studio.services.wd14_tagger", "WD14Tagger", True),
     "cltagger": ("studio.services.cltagger_tagger", "CLTagger", True),
     "joycaption": ("studio.services.joycaption_tagger", "JoyCaptionTagger", False),
+    "llm": ("studio.services.llm_tagger", "LLMTagger", True),
 }
 
 

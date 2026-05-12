@@ -120,7 +120,6 @@ export default function ProjectsPage() {
   return (
     <div className="fade-in">
       <PageHeader
-        eyebrow="工作台 · projects"
         title="项目"
         subtitle="每个项目对应一个 LoRA 训练目标 — 角色、风格或概念。新建一个项目开始流水线。"
         actions={

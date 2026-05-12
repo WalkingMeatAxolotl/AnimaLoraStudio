@@ -3,7 +3,7 @@
 # Usage:
 #   ./studio.sh [--mirror] [--reinstall] [subcommand]
 #
-#   --mirror     Use Aliyun pip mirror during first-run setup.
+#   --mirror     Use Tencent pip mirror during first-run setup.
 #                Without this flag, official PyPI is tried first; the mirror is
 #                used as a fallback if the official source fails.
 #
@@ -40,20 +40,20 @@ for _arg in "$@"; do
     esac
 done
 
-_ALIYUN="https://mirrors.aliyun.com/pypi/simple/"
+_TENCENT="https://mirrors.cloud.tencent.com/pypi/simple/"
 _REQ_MARKER="venv/.studio-requirements.sha256"
 
 _pip_install() {
     # Usage: _pip_install [pip args...]
-    # Tries official PyPI first; falls back to Aliyun mirror on failure.
-    # With --mirror: goes straight to Aliyun mirror.
+    # Tries official PyPI first; falls back to Tencent mirror on failure.
+    # With --mirror: goes straight to Tencent mirror.
     if [ "$_USE_MIRROR" = "1" ]; then
-        echo "[studio] setup: using Aliyun mirror for pip"
-        "$PYTHON" -m pip install "$@" -i "$_ALIYUN"
+        echo "[studio] setup: using Tencent mirror for pip"
+        "$PYTHON" -m pip install "$@" -i "$_TENCENT"
     else
         "$PYTHON" -m pip install "$@" || {
-            echo "[studio] setup: pip failed, retrying via Aliyun mirror..."
-            "$PYTHON" -m pip install "$@" -i "$_ALIYUN"
+            echo "[studio] setup: pip failed, retrying via Tencent mirror..."
+            "$PYTHON" -m pip install "$@" -i "$_TENCENT"
         }
     fi
 }

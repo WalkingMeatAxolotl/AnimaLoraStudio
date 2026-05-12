@@ -555,15 +555,17 @@ class Supervisor:
         slot.tailer = LogTailer(log_path, _on_task_log)
         slot.tailer.start()
 
-        # PP6.4 — monitor_state.json 变化 → SSE（取代前端 1Hz 轮询 /api/state）
-        def _on_state(state: dict[str, Any]) -> None:
+        # PP6.4 → PR #37: monitor_state.json 变化 → SSE monitor_progress (增量协议)
+        # payload 是 delta（appended_losses/lr/samples + 最新 step/speed/...），
+        # 客户端首次 GET /api/state 拿快照后用这个增量持续 merge。
+        def _on_state_delta(delta: dict[str, Any]) -> None:
             self._on_event({
-                "type": "monitor_state_updated",
+                "type": "monitor_progress",
                 "task_id": tid,
-                "state": state,
+                "delta": delta,
             })
 
-        slot.state_poller = MonitorStatePoller(monitor_state_path, _on_state)
+        slot.state_poller = MonitorStatePoller(monitor_state_path, _on_state_delta)
         slot.state_poller.start()
 
         with db.connection_for(self._db_path) as conn:
@@ -687,15 +689,15 @@ class Supervisor:
             self._daemon_active_task_id = task_id
             self._daemon_cancel_pending = False
 
-        # poller：daemon 写 monitor_state.json → SSE monitor_state_updated
-        def _on_state(state: dict[str, Any]) -> None:
+        # poller：daemon 写 monitor_state.json → SSE monitor_progress (增量协议)
+        def _on_state_delta(delta: dict[str, Any]) -> None:
             self._on_event({
-                "type": "monitor_state_updated",
+                "type": "monitor_progress",
                 "task_id": task_id,
-                "state": state,
+                "delta": delta,
             })
 
-        self._daemon_state_poller = MonitorStatePoller(monitor_state_path, _on_state)
+        self._daemon_state_poller = MonitorStatePoller(monitor_state_path, _on_state_delta)
         self._daemon_state_poller.start()
 
         with db.connection_for(self._db_path) as conn:
@@ -892,6 +894,24 @@ class Supervisor:
         env.setdefault("TRANSFORMERS_VERBOSITY", "error")
         env.setdefault("DIFFUSERS_VERBOSITY", "error")
         env.setdefault("ACCELERATE_DISABLE_RICH", "1")
+        try:
+            wandb_cfg = _secrets.load().wandb
+            if wandb_cfg.enabled:
+                env.setdefault("WANDB_ENABLED", "1")
+                env.setdefault("WANDB_MODE", wandb_cfg.mode)
+                env.setdefault("WANDB_LOG_SAMPLES", "1" if wandb_cfg.log_samples else "0")
+                env.setdefault("WANDB_SAMPLE_MAX_SIDE", str(wandb_cfg.sample_max_side))
+                env.setdefault("WANDB_SAMPLE_EVERY_N_STEPS", str(wandb_cfg.sample_every_n_steps))
+                if wandb_cfg.api_key:
+                    env.setdefault("WANDB_API_KEY", wandb_cfg.api_key)
+                if wandb_cfg.project:
+                    env.setdefault("WANDB_PROJECT", wandb_cfg.project)
+                if wandb_cfg.entity:
+                    env.setdefault("WANDB_ENTITY", wandb_cfg.entity)
+                if wandb_cfg.base_url:
+                    env.setdefault("WANDB_BASE_URL", wandb_cfg.base_url)
+        except Exception:
+            logger.exception("failed to load wandb settings")
         return subprocess.Popen(
             cmd,
             stdout=log_fp,

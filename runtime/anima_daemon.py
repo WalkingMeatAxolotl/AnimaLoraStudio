@@ -354,7 +354,7 @@ def _apply_axis(
 def _setup_monitor(cfg: dict[str, Any]) -> Any:
     """初始化 train_monitor（每个 task 一份独立 monitor_state.json）。
 
-    前端通过 SSE monitor_state_updated 拿 samples + xy 元信息；图本身的
+    前端通过 SSE monitor_progress 拿 samples + xy 元信息；图本身的
     bytes 走协议 image_done 事件入 server 内存 cache（commit 10 起）。
     sample_path 字段写虚拟路径（前端只用 split+pop 拿 filename 来构建
     /api/generate/{tid}/sample/{fn} URL），磁盘上不会有这个文件。

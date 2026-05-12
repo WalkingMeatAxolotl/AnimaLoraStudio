@@ -1,6 +1,6 @@
 # AnimaLoraStudio
 
-[![Version](https://img.shields.io/badge/version-0.5.2-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.6.0-blue)](CHANGELOG.md)
 
 **端到端流水线**：从 Booru 抓图 → 筛选 → 打标 → 正则集 → 训练 → 出图测试，全流程在一个浏览器面板里推进。专为 [Anima](https://huggingface.co/circlestone-labs/Anima)（Cosmos DiT 二次元特调）训练优化。
 
@@ -27,7 +27,7 @@
 
 1. **下载** — Booru 抓取（Gelbooru / Danbooru，凭据进 Settings）+ 本地 jpg/png/zip 上传
 2. **筛选** — download / train 双面板，多选复制 / 移除，子文件夹管理
-3. **打标** — WD14 / **CLTagger**（v0.5 新，本地 ONNX）/ JoyCaption（远程 vLLM）三选；GPU EP 自动 fallback
+3. **打标** — WD14 / **CLTagger**（v0.5 新，本地 ONNX）/ LLM（OpenAI compatible，含 JoyCaption / OpenAI / Anthropic 等 preset）三选；GPU EP 自动 fallback
 4. **标签编辑** — 缓存模式 + 还原点，批量加 / 删 / 替换
 5. **正则集** — Booru 反向搜（自动 WD14 打标 + AR 聚类）/ **AI 先验生成**（v0.5 新，无 LoRA）
 6. **训练** — preset 双向流，入队即开始；config 编辑 600ms debounce 自动落盘
@@ -129,7 +129,7 @@ WD14 打标模型不在这里——首次进 ③ 打标时自动从 HF 拉到 `m
 1. 项目页「+ 新建项目」
 2. **① 下载**：Booru 抓图（先在设置填 Gelbooru / Danbooru 凭据）或本地上传 zip
 3. **② 筛选**：双 grid，选要训的图复制到 train/
-4. **③ 打标**：选 WD14 / CLTagger / JoyCaption + 阈值，一键自动打标
+4. **③ 打标**：选 WD14 / CLTagger / LLM（OpenAI compatible，含 JoyCaption preset）+ 阈值，一键自动打标
 5. **④ 标签编辑**：批量加 / 删 / 替换；单图修；自动还原点
 6. **⑤ 正则集**：两种生成方式可选 ——
    - **Booru 反向搜**：基于 tag 分布反向搜 booru，自动 WD14 打标 + 分辨率 AR 聚类
@@ -226,7 +226,7 @@ AnimaLoraStudio/
 
 ## 版本
 
-当前版本 **0.5.2**（见 [CHANGELOG.md](CHANGELOG.md)）。
+当前版本 **0.6.0**（见 [CHANGELOG.md](CHANGELOG.md)）。
 
 版本号唯一来源是 `studio/__init__.py:__version__`：
 

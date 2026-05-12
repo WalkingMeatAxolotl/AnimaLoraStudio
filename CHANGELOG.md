@@ -8,6 +8,91 @@
 
 ---
 
+## [0.6.0] — 2026-05-12
+
+累计 10 PR / 69 files (+6.9k / -540)。集中在 3 块：LLM tagger + WandB（#18 / #34 / #35）、训练监控可观测性（#37 / #42）、Settings 页面体系重排（#36）。顺便把 0.5.2 Danbooru hotfix 反向合回 dev（#40）+ 补 estimate 漏修（#41）。
+
+### 新增
+
+- **LLM tagger + WandB 监控**（#18）
+  - 第二打标器：OpenAI 兼容 API（OpenRouter / vLLM / Ollama），自然语言长 caption 补 booru tags 短描述
+  - 训练 WandB 集成：`tracker_project` / `tracker_run_name` / `wandb_api_key` 串到 sd-scripts，run url + 关键 metric 同步贴回项目页
+  - 默认 opt-in：不配 endpoint 不调 LLM；wandb 默认关（#34）
+- **训练监控全套升级**
+  - Topbar 系统监控 pill（#37）：CPU / GPU / MEM / VRAM 4 个等宽 pill（min-w 96px）+ 两端对齐；从 nvidia-ml-py（pynvml 已停维护）拉，backend `_StatsThread` 2.5s 间隔通过 SSE `system_stats_updated` 推到前端
+  - Monitor SSE 增量协议（#37）：步进式 delta 取代每秒 full snapshot，10k 步训练 payload O(N) → O(1)
+  - Cold-start 拉全量历史（#42）：`/api/state` 默认 `max_points=0` 不降采样；前端 `MAX_LOSSES / MAX_LR` 5000 → 50000 对齐 backend `train_monitor` cap
+  - `_SelectiveGZipMiddleware`（#42）：10k 步 `/api/state` ~500KB → ~100KB（5x 压缩），`/api/events` SSE + `/samples/*` 图片白名单跳过
+- **ModelScope 镜像下载源**（#25）
+  - HF 拉不下来时切 ModelScope（魔搭社区）；Settings 加 `download_source` 选项，默认仍 `huggingface`
+  - `_get_download_source()` 优先级：`MODELSCOPE_SOURCE` env > secrets > `'huggingface'`
+  - onnxruntime 安装失败时自动 fallback 到腾讯 pypi 镜像（仅 fallback，不改默认源）
+
+### 变更
+
+- **LLM tagger preset 一票到底**（#35）
+  - Preset 协议改单一来源：`preset.json` 全权管模型 / endpoint / messages 编排 / 生成参数
+  - Prompt → messages 序列：`LLMMessage` 类型 + dnd-kit 拖拽编辑，支持 multi-turn / few-shot
+  - JoyCaption 退化为 builtin preset；删 `JoyCaptionConfig`
+  - Settings UI 重做：双栏 grid + 4 张 section 合并大 card + composer 高度撑满
+  - `_migrate_legacy_schema()` 一次性把 PR #18 schema → 新 schema：顶层 `base_url` / `api_key` / `model` / `endpoint` / `temperature` / `max_tokens` 等下沉到每个 preset；`prompt_presets` 升级为完整 preset；`prompt_preset="custom" + custom_prompt` 建 `user_custom`；`JoyCaptionConfig` 字段写入 joycaption preset；删 `raw["joycaption"]`
+- **Settings 页面结构重排**（#36）
+  - 新增「监控」tab，WandB 从「训练」搬过去（预留扩展位）
+  - HF / ModelScope 在「训练」合并成「模型下载源」section，按 `download_source` 条件渲染
+  - PageHeader 加 `tabs` slot；全局移除 eyebrow（与 Topbar 面包屑功能重复）
+  - Topbar 面包屑改 React-Router `Link`，可点击跳转
+  - 右侧 sticky section index：`IntersectionObserver(rootMargin: -20% 0px -70% 0px)` 高亮 + 平滑滚动
+  - LLM tagger 采样参数 + 图片预处理合并成默认折叠的「高级参数」面板（summary `0.2 · 700t · 1280px · q85`）
+  - LLM 测试连接：删 ConnBar，内联到 Endpoint 行末尾 ChipButton + toast
+  - URL routing 不变（`/tools/settings`），tab 走 React state，旧浏览器书签照常工作
+- **依赖**
+  - `requirements.txt`：新增 `nvidia-ml-py>=12.0`（topbar 系统监控用，老 pynvml 已停维护）
+  - `studio/web/package.json`：新增 `@dnd-kit/core` / `@dnd-kit/sortable` / `@dnd-kit/utilities`（LLM messages 拖拽用）
+  - 升级后需各跑一次 `pip install -r requirements.txt` + `cd studio/web && npm install`
+
+### 改进
+
+- **队列输出页面下载体验**（#33）
+  - Queue 详情页：直链下载 + 批量 zip + 按 step / seed 排序 + 文件名命名对齐
+  - 之前必须从 `studio_data/projects/.../output/` 深挖
+
+### 修复
+
+- **caption 重复**（#34）
+  - `utils/caption_utils.py` 与 `studio/services/caption_format.py` 各有一份 `normalize_caption_json`，merge 逻辑微妙不同（lowercase 去重 vs 简单 extend）
+  - `utils/caption_utils.py` 改为单源 re-export，避免 schema 调整时双份漂移
+- **WandB 默认关**（#34）
+  - PR #18 默认 `log_with_wandb=True` 导致用户必装 wandb 才能跑；改 opt-in
+- **训练采样图缩图**（#34）
+  - 原 1024×1024 PNG 直塞前端 → 后端缩到 256 thumbnail
+- **自定义 `output_format`**（#34）
+  - 之前硬编码 PNG，加用户字段
+- **Danbooru estimate API 403**（#41）
+  - 0.5.2 当时只修了 search，estimate 走单独路径仍裸 UA；这次一并加上 `AnimaLoraStudio/<version>` UA + `Accept: application/json`
+  - 配套 `tests/test_downloader.py` 加 estimate 回归用例
+- **先验生成 500 (`NameError: STUDIO_DATA`)**（#42 内）
+  - `reg_generate_prior` 写 cfg 用 `STUDIO_DATA / "reg_ai_configs"`，但 `server.py` 顶部 `from .paths import (...)` 漏掉 `STUDIO_DATA`，路由一调即崩
+  - 一行 import 修复
+
+### 测试
+
+各 PR CI 通过：tsc / vitest / pytest 三栈全绿。新增覆盖：LLM tagger 迁移 schema / messages payload；queue 下载端点；monitor SSE 增量协议；GZip 中间件白名单；先验生成路径；Danbooru estimate UA 回归。
+
+### 子 PR（已合到 dev）
+
+- #18 LLM tagger + WandB monitoring（feat）
+- #25 ModelScope mirror（feat）
+- #33 队列输出下载体验改造（fix/UI）
+- #34 PR #18 P0 followups（fix）
+- #35 LLM preset 一票到底 + UI 重做（refactor）
+- #36 Settings 结构重排 + 面包屑（refactor）
+- #37 Topbar 系统监控 + monitor SSE 增量（feat）
+- #40 0.5.2 hotfix 反向合回 dev（merge）
+- #41 estimate API UA（fix）
+- #42 cold-start 全量 + GZip + SystemStats（feat）
+
+---
+
 ## [0.5.2] — 2026-05-12
 
 **Hotfix**：Danbooru 挂 Cloudflare 后 search API 全部 403 (`Just a moment...` 挑战页)。从 master 派生，目标 master + dev 双向合并。
@@ -45,7 +130,7 @@ UI 体验小改进 + onnxruntime-gpu 跨平台修复（Windows / Linux 都踩到
 
 ### 修复
 
-- **onnxruntime-gpu 静默降级 CPU**（#29 Windows / #30 Linux）
+- **onnxruntime-gpu 静默降级 CPU**(#29 Windows / #30 Linux)
   - 根因：onnxruntime 在 CUDA EP dlopen 失败时**不抛异常**，会内部 silently fallback 到 CPU；`ort.get_available_providers()` 仍报 CUDA 可用，UI 显示一切正常，用户只看到 CPU 占用飙升
   - 加监控：`_create_session` 比对实际 `session.get_providers()`，请求过 CUDA 但实际不在 → 上报 `cuda_load_error` 让 UI 可见
   - Windows：Python 3.8+ 废除 PATH 自动加载 DLL，新增 `os.add_dll_directory(torch/lib)` 让 onnxruntime 找得到 torch 自带的 `cublasLt64_12.dll` / `cudnn_*.dll`

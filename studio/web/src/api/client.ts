@@ -6,6 +6,23 @@ export interface HealthResponse {
   version: string
 }
 
+export interface GpuStats {
+  index: number
+  name: string
+  util_pct: number
+  vram_used_gb: number
+  vram_total_gb: number
+  temp_c: number | null
+}
+
+export interface SystemStats {
+  cpu_pct: number
+  ram_used_gb: number
+  ram_total_gb: number
+  /** null = NVML 不可用 (无 NVIDIA / 驱动缺失)；[] = NVML 可用但 0 卡。两种都不显示 GPU pill。 */
+  gpu: GpuStats[] | null
+}
+
 export interface SchemaProperty {
   type?: string | string[]
   default?: unknown
@@ -82,10 +99,73 @@ export interface HuggingFaceConfig {
   endpoint: string
 }
 
-export interface JoyCaptionConfig {
+export interface WandBConfig {
+  enabled: boolean
+  api_key: string
+  project: string
+  entity: string
   base_url: string
+  mode: 'online' | 'offline' | 'disabled'
+  log_samples: boolean
+  /** 上传前缩到最长边像素，默认 512 */
+  sample_max_side: number
+  /** step 节流：>0 时只在 global_step % N == 0 上传，0 = 不额外节流 */
+  sample_every_n_steps: number
+}
+
+export interface ModelScopeConfig {
+  /** 魔搭社区 token。公开模型可不填；私有 / 限速时需要。 */
+  token: string
+}
+
+/** Preset messages 序列里的单条 item。
+ *  - type='text'：普通文本，需指定 role；content 是 prompt 内容
+ *  - type='image'：图片占位 item，打标时后端塞入当前图片；UI 不可编辑 content，但可拖动位置
+ */
+export interface LLMMessage {
+  type: 'text' | 'image'
+  role: 'system' | 'user' | 'assistant'
+  content: string
+}
+
+/** 单个 LLM tagger preset = 一整套 endpoint + messages + 生成参数。
+ *  builtin 仅标识 id 在内置列表（用于 UI 显示 "重置为默认"），不锁字段。
+ */
+export interface LLMPreset {
+  id: string
+  label: string
+  builtin: boolean
+  base_url: string
+  api_key: string
   model: string
-  prompt_template: string
+  model_ids: string[]
+  endpoint: 'chat_completions' | 'responses'
+  messages: LLMMessage[]
+  output_format: 'json' | 'text'
+  temperature: number
+  max_tokens: number
+  max_side: number
+  jpeg_quality: number
+  max_image_mb: number
+  timeout: number
+  max_retries: number
+}
+
+export interface LLMTaggerConfig {
+  current_preset: string
+  presets: LLMPreset[]
+}
+
+export interface LLMConnectionTestResult {
+  ok: boolean
+  endpoint: LLMPreset['endpoint']
+  endpoint_url: string
+  model: string
+  elapsed_ms: number
+  status_code: number | null
+  response_preview: string
+  error: string
+  request_shape: string
 }
 
 export interface WD14Config {
@@ -253,7 +333,13 @@ export interface Secrets {
   danbooru: DanbooruConfig
   download: DownloadGlobalConfig
   huggingface: HuggingFaceConfig
-  joycaption: JoyCaptionConfig
+  wandb: WandBConfig
+  modelscope: ModelScopeConfig
+  /** 模型下载源：'huggingface'（默认）或 'modelscope'。
+   *  选 modelscope 时，有映射的模型走魔搭 CLI 下载；无映射的自动回退 HF。 */
+  download_source: string
+  // JoyCaption 已合并为 llm_tagger 的 builtin preset
+  llm_tagger: LLMTaggerConfig
   wd14: WD14Config
   cltagger: CLTaggerConfig
   models: ModelsConfig
@@ -482,7 +568,7 @@ export interface CopyResult {
 
 // ---- tagging (PP4) --------------------------------------------------------
 
-export type TaggerName = 'wd14' | 'cltagger' | 'joycaption'
+export type TaggerName = 'wd14' | 'cltagger' | 'joycaption' | 'llm'
 
 export interface TaggerStatus {
   name: TaggerName
@@ -808,6 +894,9 @@ export interface TaskOutputs {
   /** 仅 loopback 请求为 true；云端永远 false。前端按此控制「打开文件夹」按钮可见性。 */
   supports_open_folder: boolean
   files: TaskOutputFile[]
+  /** "{slug}-{label}"，用作打包下载的 zip 文件名前缀（和 train.zip 命名风格一致）。
+   * 老任务没绑 project / version → null，调用方 fallback 到 task_{id}。 */
+  archive_basename: string | null
 }
 
 export interface DatasetFolder {
@@ -903,6 +992,7 @@ export async function downloadBlob(url: string, filename: string): Promise<void>
 
 export const api = {
   health: () => req<HealthResponse>('/api/health'),
+  systemStats: () => req<SystemStats>('/api/system/stats'),
   state: () => req<Record<string, unknown>>('/api/state'),
 
   schema: () => req<SchemaResponse>('/api/schema'),
@@ -948,6 +1038,25 @@ export const api = {
   getModelsCatalog: () => req<ModelsCatalog>('/api/models/catalog'),
   startModelDownload: (body: { model_id: string; variant?: string }) =>
     req<{ key: string; status: string }>('/api/models/download', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  refreshLLMModels: (body: {
+    preset_id?: string
+    base_url?: string
+    api_key?: string
+    timeout?: number
+  }) =>
+    req<{ items: string[]; preset_id: string; secrets: Secrets }>('/api/llm-tagger/models/refresh', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  testLLMConnection: (
+    body:
+      & { preset_id?: string }
+      & Partial<Pick<LLMPreset, 'base_url' | 'api_key' | 'model' | 'endpoint' | 'timeout' | 'max_tokens' | 'temperature'>>,
+  ) =>
+    req<LLMConnectionTestResult>('/api/llm-tagger/test', {
       method: 'POST',
       body: JSON.stringify(body),
     }),
@@ -1150,6 +1259,12 @@ export const api = {
         add_model_tag?: boolean | null
         blacklist_tags?: string[] | null
       }
+      // current_preset 切换 active preset；其他字段覆盖 preset 同名字段。
+      // api_key / model_ids / id / label / builtin 不允许 override。
+      // PR #34 (P0-2) 的 `_output_format` 被本次重构吸收 — preset 自己有 output_format 字段。
+      llm_overrides?:
+        & { current_preset?: string }
+        & Partial<Omit<LLMPreset, 'id' | 'label' | 'builtin' | 'api_key' | 'model_ids'>>
     }
   ) =>
     req<Job>(`/api/projects/${pid}/versions/${vid}/tag`, {
@@ -1376,9 +1491,15 @@ export const api = {
   /** 下载单个 output 文件的直链，不发请求。<a href={...} download> 即可。 */
   taskOutputDownloadUrl: (id: number, filename: string) =>
     `/api/queue/${id}/output/${encodeURIComponent(filename)}`,
-  /** 把 output 目录全部文件打包成 zip 下载的直链。
-   * 推荐用 downloadBlob() 调它，能显示 loading（后端打 zip 要时间）。 */
-  taskOutputsZipUrl: (id: number) => `/api/queue/${id}/outputs.zip`,
+  /** output 目录打包 zip 下载直链。
+   * 不传 files → 全量；传文件名数组 → 仅打包这些（后端 whitelist 校验）。
+   * 配合 <a href download> 触发，浏览器原生接管下载条；后端 zip 写完会
+   * publish task_outputs_zip_ready / task_outputs_zip_failed 事件供前端清 loading。 */
+  taskOutputsZipUrl: (id: number, files?: ReadonlyArray<string>) => {
+    if (!files || files.length === 0) return `/api/queue/${id}/outputs.zip`
+    const q = files.map((n) => encodeURIComponent(n)).join(',')
+    return `/api/queue/${id}/outputs.zip?files=${q}`
+  },
 
   // PP8 — WD14 运行时 / GPU 装包 ------------------------------------------
   /** 当前 onnxruntime 状态：包名 / 版本 / providers / nvidia-smi 检测结果。 */
@@ -1460,8 +1581,15 @@ export const api = {
       body: JSON.stringify({ ordered_ids: orderedIds }),
     }),
   getLog: (id: number) => req<LogResponse>(`/api/logs/${id}`),
-  getMonitorState: (taskId: number, maxPoints = 1500) =>
-    req<MonitorState>(`/api/state?task_id=${taskId}&max_points=${maxPoints}&_=${Date.now()}`),
+  /** 默认拉全量历史（max_points=0，server 跳过降采样）；想要降采样预览
+   *  传具体数字。cold start 是一次性 HTTP，长训练（10k+ 步）下也只是 ~500KB
+   *  payload，不值得为视觉损耗换网络节省。 */
+  getMonitorState: (taskId: number, maxPoints?: number) =>
+    req<MonitorState>(
+      `/api/state?task_id=${taskId}` +
+      (maxPoints != null ? `&max_points=${maxPoints}` : '') +
+      `&_=${Date.now()}`,
+    ),
   sampleImageUrl: (filename: string, taskId: number, w?: number) =>
     `/samples/${filename}?task_id=${taskId}${w ? `&w=${w}` : ''}`,
 

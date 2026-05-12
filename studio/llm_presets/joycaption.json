@@ -1,0 +1,12 @@
+{
+  "id": "joycaption",
+  "label": "JoyCaption（vLLM 本地）",
+  "builtin": true,
+  "base_url": "http://localhost:8000/v1",
+  "model": "fancyfeast/llama-joycaption-beta-one-hf-llava",
+  "endpoint": "chat_completions",
+  "output_format": "text",
+  "temperature": 0.6,
+  "max_tokens": 300,
+  "prompt": "Descriptive Caption"
+}

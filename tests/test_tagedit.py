@@ -62,6 +62,34 @@ def test_json_takes_precedence(train_dir: Path) -> None:
     assert data["tags"] == ["new"]
 
 
+def test_read_documented_json_caption(train_dir: Path) -> None:
+    f = _img(train_dir / "5_a", "1.png")
+    f.with_suffix(".json").write_text(
+        json.dumps(
+            {
+                "fixed": {"quality": "", "series": "", "artist": ""},
+                "character": {"name": "", "variant": "", "full": ""},
+                "from_path": {},
+                "ai_output": {
+                    "count": "1girl",
+                    "appearance": ["long hair"],
+                    "tags": ["watercolor"],
+                    "environment": ["blue background"],
+                    "nl": "Soft style.",
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    assert tagedit.read_tags(f) == [
+        "1girl",
+        "long hair",
+        "watercolor",
+        "blue background",
+    ]
+
+
 def test_read_missing_returns_empty(train_dir: Path) -> None:
     f = _img(train_dir / "5_a", "noaption.png")
     assert tagedit.read_tags(f) == []

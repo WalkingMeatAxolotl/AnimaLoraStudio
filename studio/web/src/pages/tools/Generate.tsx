@@ -3,13 +3,13 @@ import {
   api,
   type GenerateRequest,
   type LoraEntry,
-  type MonitorState,
   type Task,
   type XYMatrixSpec,
 } from '../../api/client'
 import PageHeader from '../../components/PageHeader'
 import { useToast } from '../../components/Toast'
 import { useEventStream } from '../../lib/useEventStream'
+import { useMonitorProgress } from '../../lib/useMonitorProgress'
 import AspectChips, { aspectFromDimensions, type AspectName } from './generate/AspectChips'
 import DaemonControls from './generate/DaemonControls'
 import GenerateProgressBar, { type GenerateProgress } from './generate/GenerateProgress'
@@ -59,7 +59,10 @@ export default function GeneratePage() {
   // 没法重试也没法取消（status=failed 时 cancelable=false）
   const [submitting, setSubmitting] = useState(false)
   const [currentTask, setCurrentTask] = useState<Task | null>(null)
-  const [monitorState, setMonitorState] = useState<MonitorState | null>(null)
+  // monitor 走 useMonitorProgress hook (PR #37 增量协议)：currentTask 变 →
+  // hook 自动重拉快照 + 订阅 SSE delta 合并；本组件只用 samples 字段，其余
+  // 字段在这页生成场景下不需要。
+  const { state: monitorState } = useMonitorProgress(currentTask?.id ?? null)
   // commit 14：中间步预览（仅 single 模式有意义；XY/对比 cell 多预览意义小）
   const [previewStep, setPreviewStep] = useState<{ step: number; total: number; dataUrl: string } | null>(null)
   // 生成进度（image_started + preview_step 聚合）
@@ -123,12 +126,6 @@ export default function GeneratePage() {
           setProgress({ batchIdx: null, batchTotal: null, currentStep: null, totalSteps: null })
         }
       }).catch(() => { /* task 已清也走这里 */ })
-    } else if (
-      evt.type === 'monitor_state_updated'
-      && String(evt.task_id) === String(tid)
-      && evt.state
-    ) {
-      setMonitorState(evt.state as MonitorState)
     } else if (
       evt.type === 'generate_preview_step'
       && String(evt.task_id) === String(tid)
@@ -265,7 +262,7 @@ export default function GeneratePage() {
 
     setSubmitting(true)
     setCurrentTask(null)
-    setMonitorState(null)
+    // monitorState 由 useMonitorProgress hook 自动随 currentTask 切 null → 清空
     setSelectedIndices([])  // 新一轮生成 — 旧选择已失效
     setProgress({ batchIdx: null, batchTotal: null, currentStep: null, totalSteps: null })
     try {
@@ -320,7 +317,6 @@ export default function GeneratePage() {
   return (
     <div className="fade-in flex flex-col" style={{ height: '100%', overflow: 'hidden' }}>
       <PageHeader
-        eyebrow="工具"
         title="测试"
         subtitle="独立推理 · 单图 / XY 矩阵 / 双图对比（出图不保存，关页面即丢）"
         actions={<DaemonControls />}

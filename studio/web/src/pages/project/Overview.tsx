@@ -245,7 +245,6 @@ export default function ProjectOverview() {
   return (
     <div className="fade-in">
       <PageHeader
-        eyebrow={`项目 · ${project.slug}`}
         title={project.title}
         subtitle={project.note || `${project.download_image_count ?? 0} 张下载 · ${project.versions.length} 个版本`}
         actions={

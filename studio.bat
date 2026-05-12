@@ -95,7 +95,7 @@ if exist "venv\Scripts\python.exe" (
     echo [studio] No venv detected. Creating venv\ via `!BOOTSTRAP_PY!` -- first run may take a few minutes...
     !BOOTSTRAP_PY! -m venv venv || (echo studio.bat: failed to create venv 1>&2 & goto :fail)
     set PYTHON=venv\Scripts\python.exe
-    !PYTHON! -m pip install --upgrade pip -i https://mirrors.aliyun.com/pypi/simple/ || (echo studio.bat: failed to upgrade pip 1>&2 & goto :fail)
+    !PYTHON! -m pip install --upgrade pip -i https://mirrors.cloud.tencent.com/pypi/simple/ || (echo studio.bat: failed to upgrade pip 1>&2 & goto :fail)
 
     REM GPU-aware torch first install (PR-S1a). Without this, requirements.txt's
     REM bare `torch>=2.0.0` makes pip pull the CPU wheel. Installing CUDA torch
@@ -112,11 +112,11 @@ if exist "venv\Scripts\python.exe" (
     )
 
     if exist requirements.txt (
-        echo [studio] Installing Python dependencies -- will retry via Aliyun mirror if slow...
+        echo [studio] Installing Python dependencies -- will retry via Tencent mirror if slow...
         !PYTHON! -m pip install -r requirements.txt
         if errorlevel 1 (
-            echo [studio] pip install failed, retrying via Aliyun mirror...
-            !PYTHON! -m pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/ || (echo studio.bat: pip install failed 1>&2 & goto :fail)
+            echo [studio] pip install failed, retrying via Tencent mirror...
+            !PYTHON! -m pip install -r requirements.txt -i https://mirrors.cloud.tencent.com/pypi/simple/ || (echo studio.bat: pip install failed 1>&2 & goto :fail)
         )
     ) else (
         echo studio.bat: requirements.txt not found, skipping dependency install 1>&2

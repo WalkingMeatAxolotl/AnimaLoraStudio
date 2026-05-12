@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -96,29 +97,55 @@ class LogTailer:
 
 
 class MonitorStatePoller:
-    """轮询 monitor_state.json 的 mtime，变化时把解析后的 dict 推给 callback。
+    """轮询 monitor_state.json 的 mtime，变化时**构造增量 delta** 推给 callback。
 
-    设计取舍：
-    - 不用 watchdog/inotify：跨平台一致性 + 0 依赖；anima_train 写入频率 ~1Hz，
-      poll 0.5s 足够低延迟。
-    - 直接 publish 整个 state（含 losses 数组）：服务端读一次 → 所有 SSE
-      订阅者共享，比 N 个客户端各自 GET /api/state 便宜得多。
-    - mtime 没变就不读、不 publish；文件不存在静默跳过。
+    协议（PR #37 改造）：早期版本每次推全量 state（losses/lr 数组每步都全
+    量重传，2000 步训练单次推 ~200KB）。云部署跨公网时这是 O(N²) 浪费。
+
+    新设计：poller 维护 last_step / last_loss_count / last_lr_count /
+    last_sample_count，每次只把「自上次发布以来的新增」打成 delta：
+
+        {
+          "step": 234, "total_steps": 2000,
+          "epoch": 3, "total_epochs": 10,
+          "speed": 1.2, "start_time": 1234567890.0,
+          "appended_losses": [{step, loss, time}],   # 可能为空数组
+          "appended_lr":     [{step, lr}],
+          "appended_samples":[{path, step, time, xy?}],
+          "config": {...},        # 仅在变化时携带（首次推送 / config 改）
+        }
+
+    Throttle 规则（混合 step + 时间）：
+    - poll_interval 0.5s 探测 mtime
+    - min_publish_interval 1.0s 强制下界 — 即使训练每 100ms 一步，也不会推
+      超过 1Hz；累积的 loss 点会在下次推送里 batch 一起送
+    - 「step 没变 + 没新 sample + config 没变」时跳过推送，避免空 delta
+      （例如训练只更新了 speed 这种衍生指标）
     """
 
     def __init__(
         self,
         path: Path,
-        on_change: Callable[[dict[str, Any]], None],
+        on_delta: Callable[[dict[str, Any]], None],
         *,
         poll_interval: float = 0.5,
+        min_publish_interval: float = 1.0,
     ) -> None:
         self._path = path
-        self._on_change = on_change
+        self._on_delta = on_delta
         self._poll = poll_interval
+        self._min_pub = min_publish_interval
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._last_mtime: float = 0.0
+        self._last_publish_at: float = 0.0
+
+        # 增量追踪
+        self._last_step: int = -1
+        self._last_loss_count: int = 0
+        self._last_lr_count: int = 0
+        self._last_sample_count: int = 0
+        self._last_config: dict[str, Any] | None = None
 
     def start(self) -> None:
         if self._thread:
@@ -142,13 +169,13 @@ class MonitorStatePoller:
                 # IO/解析异常静默重试，避免拖死 supervisor
                 pass
             self._stop.wait(self._poll)
-        # 退出前再读一次，捕获结束瞬间的最终 state
+        # 退出前再读一次，捕获结束瞬间的最终 state；带 force=True 绕过 throttle
         try:
-            self._check_once()
+            self._check_once(force=True)
         except Exception:
             pass
 
-    def _check_once(self) -> None:
+    def _check_once(self, *, force: bool = False) -> None:
         if not self._path.exists():
             return
         mtime = self._path.stat().st_mtime
@@ -160,4 +187,54 @@ class MonitorStatePoller:
             # 写一半的 JSON / 临时锁住 → 下一轮再试
             return
         self._last_mtime = mtime
-        self._on_change(data)
+
+        # ── 节流：未到最小发布间隔时退出，下一轮再检查（含新累积的数据） ──
+        now = time.time()
+        if not force and (now - self._last_publish_at) < self._min_pub:
+            return
+
+        # ── 计算 delta ──
+        step = int(data.get("step", 0) or 0)
+        losses = data.get("losses") or []
+        lr_hist = data.get("lr_history") or []
+        samples = data.get("samples") or []
+        config = data.get("config") or {}
+
+        appended_losses = losses[self._last_loss_count:]
+        appended_lr = lr_hist[self._last_lr_count:]
+        appended_samples = samples[self._last_sample_count:]
+        config_changed = config != self._last_config
+
+        has_progress = (
+            step != self._last_step
+            or appended_losses
+            or appended_lr
+            or appended_samples
+            or config_changed
+        )
+        if not (force or has_progress):
+            return
+
+        delta: dict[str, Any] = {
+            "step": step,
+            "total_steps": int(data.get("total_steps", 0) or 0),
+            "epoch": int(data.get("epoch", 0) or 0),
+            "total_epochs": int(data.get("total_epochs", 0) or 0),
+            "speed": float(data.get("speed", 0.0) or 0.0),
+            "start_time": data.get("start_time"),
+            "appended_losses": appended_losses,
+            "appended_lr": appended_lr,
+            "appended_samples": appended_samples,
+        }
+        if config_changed:
+            delta["config"] = config
+
+        # 推送 + 更新游标
+        self._last_step = step
+        self._last_loss_count = len(losses)
+        self._last_lr_count = len(lr_hist)
+        self._last_sample_count = len(samples)
+        self._last_config = config
+        self._last_publish_at = now
+
+        self._on_delta(delta)

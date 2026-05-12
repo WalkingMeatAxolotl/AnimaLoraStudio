@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Job } from '../api/client'
 
 interface Props {
@@ -17,15 +17,22 @@ const STATUS_COLOR: Record<Job['status'], string> = {
 
 export default function JobProgress({ job, logs, onCancel }: Props) {
   const logRef = useRef<HTMLPreElement>(null)
+  const [, setTick] = useState(0)
   useEffect(() => {
     if (logRef.current) {
       logRef.current.scrollTop = logRef.current.scrollHeight
     }
   }, [logs])
 
+  const isLive = job.status === 'running' || job.status === 'pending'
+  useEffect(() => {
+    if (!isLive) return
+    const id = window.setInterval(() => setTick((n) => n + 1), 1000)
+    return () => window.clearInterval(id)
+  }, [isLive])
+
   const elapsed =
     job.started_at && (job.finished_at ?? Date.now() / 1000) - job.started_at
-  const isLive = job.status === 'running' || job.status === 'pending'
 
   return (
     <section className="rounded-lg border border-subtle bg-surface overflow-hidden">

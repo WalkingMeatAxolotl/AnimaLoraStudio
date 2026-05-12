@@ -47,6 +47,15 @@ def migrate_legacy_attention(data: Any) -> Any:
     """
     if not isinstance(data, dict):
         return data
+    for key in (
+        "wandb_enabled",
+        "wandb_project",
+        "wandb_entity",
+        "wandb_run_name",
+        "wandb_mode",
+        "wandb_log_samples",
+    ):
+        data.pop(key, None)
     if "attention_backend" in data:
         data.pop("xformers", None)
         data.pop("flash_attn", None)

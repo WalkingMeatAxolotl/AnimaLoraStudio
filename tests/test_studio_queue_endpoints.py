@@ -240,13 +240,110 @@ def test_download_outputs_zip(
     resp = client.get(f"/api/queue/{tid}/outputs.zip")
     assert resp.status_code == 200
     assert resp.headers.get("content-type") == "application/zip"
-    assert "task_%d_outputs.zip" % tid in resp.headers.get("content-disposition", "")
+    # 命名格式：{slug}-{label}_outputs.zip，和 train.zip 命名风格一致
+    expected_name = f"{p['slug']}-{v['label']}_outputs.zip"
+    assert expected_name in resp.headers.get("content-disposition", "")
 
     with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
         names = sorted(zf.namelist())
         assert names == ["lora_final.safetensors", "training_state_step100.pt"]
         assert zf.read("lora_final.safetensors") == b"AAA"
         assert zf.read("training_state_step100.pt") == b"BB"
+
+
+def test_list_task_outputs_returns_archive_basename(
+    client: TestClient, isolated, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """list_task_outputs 返回里带 archive_basename = "{slug}-{label}"，前端用作
+    打包下载的 zip 文件名前缀。老任务（无 project/version）→ null。"""
+    from studio import projects as projects_mod, versions as versions_mod
+    monkeypatch.setattr(projects_mod, "PROJECTS_DIR", isolated / "projects")
+    with db.connection_for() as conn:
+        p = projects_mod.create_project(conn, title="P")
+        v = versions_mod.create_version(conn, project_id=p["id"], label="v1")
+        bound = db.create_task(conn, name="t", config_name="good")
+        db.update_task(conn, bound, status="done", project_id=p["id"], version_id=v["id"])
+        legacy = db.create_task(conn, name="老", config_name="good")
+
+    resp = client.get(f"/api/queue/{bound}/outputs")
+    assert resp.status_code == 200
+    assert resp.json()["archive_basename"] == f"{p['slug']}-{v['label']}"
+
+    resp = client.get(f"/api/queue/{legacy}/outputs")
+    assert resp.status_code == 200
+    assert resp.json()["archive_basename"] is None
+
+
+def test_download_outputs_zip_partial(
+    client: TestClient, isolated, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """传 ?files=a,b 只打包指定文件，文件名带 _selected 后缀。"""
+    import io
+    import zipfile
+    from studio import projects as projects_mod, versions as versions_mod
+    monkeypatch.setattr(projects_mod, "PROJECTS_DIR", isolated / "projects")
+    with db.connection_for() as conn:
+        p = projects_mod.create_project(conn, title="P")
+        v = versions_mod.create_version(conn, project_id=p["id"], label="v1")
+        tid = db.create_task(conn, name="t", config_name="good")
+        db.update_task(conn, tid, status="done", project_id=p["id"], version_id=v["id"])
+    out_dir = versions_mod.version_dir(p["id"], p["slug"], v["label"]) / "output"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "ep_001.safetensors").write_bytes(b"E1")
+    (out_dir / "ep_002.safetensors").write_bytes(b"E2")
+    (out_dir / "ep_003.safetensors").write_bytes(b"E3")
+
+    resp = client.get(
+        f"/api/queue/{tid}/outputs.zip?files=ep_001.safetensors,ep_003.safetensors"
+    )
+    assert resp.status_code == 200
+    expected_name = f"{p['slug']}-{v['label']}_outputs_selected.zip"
+    assert expected_name in resp.headers.get("content-disposition", "")
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+        names = sorted(zf.namelist())
+        assert names == ["ep_001.safetensors", "ep_003.safetensors"]
+        assert zf.read("ep_001.safetensors") == b"E1"
+
+
+def test_download_outputs_zip_partial_missing_file_404(
+    client: TestClient, isolated, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """选中文件里有 output 目录不存在的 → 404。"""
+    from studio import projects as projects_mod, versions as versions_mod
+    monkeypatch.setattr(projects_mod, "PROJECTS_DIR", isolated / "projects")
+    with db.connection_for() as conn:
+        p = projects_mod.create_project(conn, title="P")
+        v = versions_mod.create_version(conn, project_id=p["id"], label="v1")
+        tid = db.create_task(conn, name="t", config_name="good")
+        db.update_task(conn, tid, status="done", project_id=p["id"], version_id=v["id"])
+    out_dir = versions_mod.version_dir(p["id"], p["slug"], v["label"]) / "output"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "a.safetensors").write_bytes(b"A")
+
+    resp = client.get(f"/api/queue/{tid}/outputs.zip?files=a.safetensors,ghost.safetensors")
+    assert resp.status_code == 404
+
+
+def test_download_outputs_zip_partial_blocks_traversal(
+    client: TestClient, isolated, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """?files= 里含路径分隔符 / .. → 400，防止读 output 目录之外的文件。"""
+    from studio import projects as projects_mod, versions as versions_mod
+    monkeypatch.setattr(projects_mod, "PROJECTS_DIR", isolated / "projects")
+    with db.connection_for() as conn:
+        p = projects_mod.create_project(conn, title="P")
+        v = versions_mod.create_version(conn, project_id=p["id"], label="v1")
+        tid = db.create_task(conn, name="t", config_name="good")
+        db.update_task(conn, tid, status="done", project_id=p["id"], version_id=v["id"])
+    out_dir = versions_mod.version_dir(p["id"], p["slug"], v["label"]) / "output"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "a.safetensors").write_bytes(b"A")
+
+    for bad in ("../secret", "..\\secret", "sub/x", "sub\\x"):
+        resp = client.get(
+            f"/api/queue/{tid}/outputs.zip", params={"files": bad}
+        )
+        assert resp.status_code == 400, f"{bad!r} should be 400, got {resp.status_code}"
 
 
 def test_download_outputs_zip_empty_dir_404(

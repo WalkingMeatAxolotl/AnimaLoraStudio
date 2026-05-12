@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from studio import db
+from studio import db, secrets
 from studio.supervisor import Supervisor
 
 
@@ -306,6 +306,43 @@ def test_default_cmd_builder_includes_monitor_flag() -> None:
     assert "--monitor-state-file" in cmd
     i = cmd.index("--monitor-state-file")
     assert cmd[i + 1] == "/tmp/x/state.json"
+
+
+def test_popen_injects_wandb_env(env, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = secrets.Secrets()
+    cfg.wandb.enabled = True
+    cfg.wandb.api_key = "wandb-key"
+    cfg.wandb.project = "anima"
+    cfg.wandb.entity = "team"
+    cfg.wandb.base_url = "https://wandb.example"
+    cfg.wandb.mode = "offline"
+    cfg.wandb.log_samples = False
+    monkeypatch.setattr("studio.supervisor._secrets.load", lambda: cfg)
+    captured: dict[str, Any] = {}
+
+    class FakePopen:
+        pid = 123
+
+    def fake_popen(cmd, **kwargs):  # noqa: ANN001
+        captured["cmd"] = cmd
+        captured["env"] = kwargs["env"]
+        return FakePopen()
+
+    monkeypatch.setattr("studio.supervisor.subprocess.Popen", fake_popen)
+    sup = Supervisor(
+        db_path=env["db"], logs_dir=env["logs"], configs_dir=env["configs"],
+    )
+    log_path = tmp_path / "x.log"
+    with log_path.open("wb") as fp:
+        sup._popen([sys.executable, "-c", "pass"], fp)
+
+    assert captured["env"]["WANDB_ENABLED"] == "1"
+    assert captured["env"]["WANDB_API_KEY"] == "wandb-key"
+    assert captured["env"]["WANDB_PROJECT"] == "anima"
+    assert captured["env"]["WANDB_ENTITY"] == "team"
+    assert captured["env"]["WANDB_BASE_URL"] == "https://wandb.example"
+    assert captured["env"]["WANDB_MODE"] == "offline"
+    assert captured["env"]["WANDB_LOG_SAMPLES"] == "0"
 
 
 def test_config_path_takes_priority(env, tmp_path) -> None:

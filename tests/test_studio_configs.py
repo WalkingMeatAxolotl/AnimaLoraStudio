@@ -40,6 +40,7 @@ def test_schema_is_complete() -> None:
         "sample_prompt", "sample_prompts", "no_monitor",
     ):
         assert name in fields, f"missing: {name}"
+    assert "wandb_enabled" not in fields
 
 
 def test_schema_endpoint_returns_groups(client: TestClient) -> None:
@@ -59,6 +60,7 @@ def test_schema_carries_ui_metadata(client: TestClient) -> None:
     assert props["transformer_path"]["group"] == "model"
     assert props["transformer_path"]["control"] == "path"
     assert "show_when" in props["prodigy_d_coef"]
+    assert "wandb_enabled" not in props
 
 
 def test_extra_fields_are_forbidden() -> None:
