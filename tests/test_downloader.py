@@ -110,6 +110,99 @@ def test_download_rejects_empty_tag(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# estimate — UA / auth 透传（v0.5.2 hotfix 漏修：estimate 走单独路径，绕过了
+# booru_api 加的 headers，danbooru 端 CF 一律 403 → 永远返回 -1）
+# ---------------------------------------------------------------------------
+
+
+def test_estimate_danbooru_sends_app_user_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """回归 v0.5.2 漏修：estimate 调 /counts/posts.json 必须带应用 UA，不能
+    用 requests 默认 UA（python-requests/X.Y.Z 会被 CF 直接 403）。"""
+    captured: dict = {}
+
+    def fake_get(url, **kw):
+        captured["url"] = url
+        captured["headers"] = kw.get("headers") or {}
+        captured["auth"] = kw.get("auth")
+        resp = MagicMock()
+        resp.json.return_value = {"counts": {"posts": 343}}
+        resp.raise_for_status.return_value = None
+        return resp
+
+    monkeypatch.setattr(downloader.requests, "get", fake_get)
+
+    opts = downloader.DownloadOptions(
+        tag="chen_bin", count=2, api_source="danbooru",
+        username="", api_key="",  # 匿名 estimate（PR 还允许：estimate 不强制 auth）
+    )
+    n = downloader.estimate(opts)
+    assert n == 343
+    assert "counts/posts.json" in captured["url"]
+    ua = captured["headers"].get("User-Agent", "")
+    assert "AnimaLoraStudio" in ua
+
+
+def test_estimate_danbooru_ua_includes_username_when_provided(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """有 username 时 UA 带 (by username)，与 search 路径一致。"""
+    captured: dict = {}
+
+    def fake_get(url, **kw):
+        captured["headers"] = kw.get("headers") or {}
+        captured["auth"] = kw.get("auth")
+        resp = MagicMock()
+        resp.json.return_value = {"counts": {"posts": 10}}
+        resp.raise_for_status.return_value = None
+        return resp
+
+    monkeypatch.setattr(downloader.requests, "get", fake_get)
+
+    opts = downloader.DownloadOptions(
+        tag="x", count=1, api_source="danbooru",
+        username="alice", api_key="secret",
+    )
+    downloader.estimate(opts)
+    assert "(by alice)" in captured["headers"]["User-Agent"]
+    # auth 也带上，danbooru 端按账户算 rate
+    assert captured["auth"] == ("alice", "secret")
+
+
+def test_estimate_gelbooru_sends_app_user_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """gelbooru 估算路径同样要带 UA（CF 行业趋势收紧，做一致兜底）。"""
+    captured: dict = {}
+
+    def fake_get(url, **kw):
+        captured["url"] = url
+        captured["headers"] = kw.get("headers") or {}
+        resp = MagicMock()
+        resp.json.return_value = {"@attributes": {"count": 100}}
+        resp.raise_for_status.return_value = None
+        return resp
+
+    monkeypatch.setattr(downloader.requests, "get", fake_get)
+
+    opts = downloader.DownloadOptions(
+        tag="x", count=1, api_source="gelbooru",
+        user_id="u", api_key="k",
+    )
+    n = downloader.estimate(opts)
+    assert n == 100
+    assert "/index.php" in captured["url"]
+    assert "AnimaLoraStudio" in captured["headers"]["User-Agent"]
+
+
+def test_estimate_returns_negative_one_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """语义保持：网络异常 / 解析失败时返回 -1（前端 UI 显示 '未知'）。"""
+    def fake_get(*a, **kw):
+        raise Exception("simulated network failure")
+    monkeypatch.setattr(downloader.requests, "get", fake_get)
+
+    opts = downloader.DownloadOptions(tag="x", count=1, api_source="danbooru")
+    assert downloader.estimate(opts) == -1
+
+
+# ---------------------------------------------------------------------------
 # happy path
 # ---------------------------------------------------------------------------
 

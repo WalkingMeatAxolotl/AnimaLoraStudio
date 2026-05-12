@@ -288,8 +288,16 @@ def _download_with_client(
 
 
 def estimate(opts: DownloadOptions) -> int:
-    """轻量调用 API 估算 tag（含 exclude）命中量；失败返回 -1（未知）。"""
+    """轻量调用 API 估算 tag（含 exclude）命中量；失败返回 -1（未知）。
+
+    v0.5.2 hotfix 漏修：search_posts 已经走 booru_api 的 UA / Accept 头过 CF，
+    但 estimate 这条单独的"轻量"路径仍是裸 requests.get（默认 UA
+    python-requests/X.Y.Z）→ danbooru 的 CF 把它当 bot 拦掉 → 抛异常 →
+    永远返回 -1（未知）。修：复用 booru_api._api_headers 同款 UA；danbooru
+    端有 basic auth 时一并带上让 rate limit 按账户算。
+    """
     query = opts.effective_tag_query()
+    headers = booru_api._api_headers(opts.username)
     if opts.api_source == "gelbooru":
         try:
             params: dict[str, Any] = {
@@ -305,7 +313,8 @@ def estimate(opts: DownloadOptions) -> int:
                 params["api_key"] = opts.api_key
                 params["user_id"] = opts.user_id
             r = requests.get(
-                f"{opts.base_url()}/index.php", params=params, timeout=15
+                f"{opts.base_url()}/index.php",
+                params=params, headers=headers, timeout=15,
             )
             r.raise_for_status()
             data = r.json()
@@ -315,10 +324,11 @@ def estimate(opts: DownloadOptions) -> int:
             return -1
         return -1
     try:
+        auth = (opts.username, opts.api_key) if opts.username and opts.api_key else None
         r = requests.get(
             f"{opts.base_url()}/counts/posts.json",
             params={"tags": query},
-            timeout=15,
+            headers=headers, auth=auth, timeout=15,
         )
         r.raise_for_status()
         return int(r.json().get("counts", {}).get("posts", -1))
