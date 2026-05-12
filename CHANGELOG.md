@@ -8,6 +8,63 @@
 
 ---
 
+## [0.6.0] — 2026-05-12
+
+10 PR / 累计两周。主线：**LLM tagger 落地 + Settings 页面体系重排 + 训练监控可观测性升级**。0.x 阶段 MINOR 按惯例视为破坏性升级：LLM tagger preset 协议彻底重做、Settings 路由 / 字段位置整体搬家。
+
+### 新增
+
+- **LLM tagger + WandB 监控**（#18）
+  - 第二打标器：OpenAI 兼容 API（OpenRouter / vLLM / Ollama 都行），自然语言长 caption 补 booru tags 短描述
+  - 训练 WandB 集成：tracker_project / tracker_run_name / wandb_api_key 串到 sd-scripts，run url + 关键 metric 同步贴回项目页（#34 默认关）
+  - 后续 P0 修复见 §修复
+- **ModelScope 镜像 + 国内 pip/npm 加速**（#25）
+  - HF 拉不下来时切 ModelScope（魔搭）；Setup 页 mirror 下拉新增此选项
+  - pip / npm 镜像默认切腾讯云（国内带宽 + 不被墙）
+- **训练监控全套升级**（#37, #42）
+  - Topbar 系统监控 pill：CPU / GPU / MEM / VRAM 4 个等宽 pill（96px min）+ 两端对齐；从 nvidia-ml-py（pynvml 已停维护）拉，5s 轮询
+  - Monitor SSE 增量协议：步进式 delta 取代每秒 full snapshot，10k 步训练 payload 从 O(N) → O(1)
+  - Cold-start 拉全量历史（`/api/state` 默认 `max_points=0` 不降采样）+ 前端 `MAX_LOSSES/MAX_LR` 5000 → 50000，对齐 backend train_monitor cap
+  - Server-side `_SelectiveGZipMiddleware`：10k 步 `/api/state` ~500KB → ~100KB（5x 压缩），SSE / 图片白名单跳过
+
+### 重构
+
+- **LLM tagger preset 一票到底**（#35）
+  - Preset 协议改为单一来源：preset.json 全权管模型 / endpoint / 多消息编排 / system prompt / 用户参数
+  - 多消息编排支持：可在 preset 里写"先识别角色 → 再描述场景"之类多步链
+  - Settings UI 重做：LLM 配置从平铺改为 preset 选择 + 折叠的高级参数
+  - **破坏**：旧的扁平 LLM 字段（model / endpoint / system 等单字段）从 settings 移除，迁移到 preset
+- **Settings 页面结构重排**（#36）
+  - PageHeader / Topbar 改造，工具页公共布局抽出
+  - 字段按使用频次重新分组；LLM 高级参数默认折叠
+  - **破坏**：Settings 内部锚点变更，旧书签失效
+
+### 改进
+
+- **队列输出页面下载体验**（#33）
+  - 直链下载 + 批量 zip + 按 step/seed 排序 + 文件名命名对齐
+  - 之前必须从 `studio_data/projects/.../output/` 深挖，现在 Queue 详情页一键
+
+### 修复
+
+- **PR #18 P0 followups**（#34）
+  - caption 重复（LLM 加上 booru tag 后字符串拼接没去重）
+  - WandB 默认关（#18 默认开导致用户必装 wandb 才能跑 → 改 opt-in）
+  - 采样图缩图（采样图原图 1024×1024 直塞前端 → 缩到 256 thumbnail）
+  - 自定义 `output_format`（之前硬编码 PNG）
+- **Danbooru 0.5.2 hotfix 漏修**（#40, #41）
+  - #40：把 master 的 0.5.2 hotfix 反向合回 dev（之前 dev 还在裸 UA）
+  - #41：estimate API 走单独路径，0.5.2 当时只修了 search，estimate 仍 403 — 这次一并加上应用 UA
+- **先验生成 500 (`NameError: STUDIO_DATA`)**（#42 内）
+  - `reg_generate_prior` 写 cfg 用了 `STUDIO_DATA / "reg_ai_configs"`，但 server.py 顶部 import 漏掉 `STUDIO_DATA`，路由一调即崩
+  - 一行 import 修复
+
+### 测试
+
+pytest 841 全绿，vitest 123 全绿，tsc 干净。LLM tagger / queue download / monitor protocol / GZip middleware 各加了配套用例。
+
+---
+
 ## [0.5.2] — 2026-05-12
 
 **Hotfix**：Danbooru 挂 Cloudflare 后 search API 全部 403 (`Just a moment...` 挑战页)。从 master 派生，目标 master + dev 双向合并。
