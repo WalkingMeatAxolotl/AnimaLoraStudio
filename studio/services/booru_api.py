@@ -20,12 +20,27 @@ from typing import Any, Optional
 import requests
 from PIL import Image
 
+from .. import __version__
 
+
+# 标识应用身份的 UA。背景（hotfix 0.5.x）：
+# - danbooru 现在挂 Cloudflare bot-protection；不带 UA / 默认 `python-requests/X.Y.Z`
+#   会被直接 403 → CF 挑战页（"Just a moment..."）；
+# - 套 Chrome 浏览器 UA 反而更可疑 ("浏览器但不跑 JS" 模式)，也照 403；
+# - 用应用名 UA 同时能过 CF 过滤 + 符合 danbooru TOS 里 "请使用描述性 User-Agent"
+#   的要求。gelbooru 没那么严但同样建议描述性 UA。
+USER_AGENT = f"AnimaLoraStudio/{__version__}"
+
+# 搜索类请求：API JSON，期望 Content-Type application/json。Accept 头让中间件
+# 更确定不是普通页面请求。
+API_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "application/json",
+}
+
+# 图片下载请求：不要求 JSON Accept，但需要同样的 UA 绕过 CF。
 DOWNLOAD_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": USER_AGENT,
 }
 
 
@@ -86,7 +101,7 @@ def search_posts(
         url = f"{url_base}/posts.json"
         auth = (username, api_key) if username and api_key else None
 
-    resp = sess.get(url, params=params, auth=auth, timeout=timeout)
+    resp = sess.get(url, params=params, auth=auth, headers=API_HEADERS, timeout=timeout)
     resp.raise_for_status()
     data = resp.json()
     if api_source == "gelbooru":
