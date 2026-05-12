@@ -59,6 +59,39 @@
 | LoRA | 简单稳定，兼容性好 | 表达力有限 | 单角色、简单画风 |
 | LoKr | 表达力强，参数高效 | 需要调参 | 多角色、复杂画风 |
 
+### 优化器选择
+
+| 优化器 | 何时用 | 关键参数 |
+|--------|--------|---------|
+| `adamw` | 默认。手调 lr 不嫌烦、想稳定可预期的训练 | `learning_rate` 1e-4 起步 |
+| `prodigy` | 不想调 lr。**注意**：扩散 LoRA 上易出"风格突变 ep" | `prodigy_d_coef` 小数据集设 0.5 |
+| `prodigy_plus_schedulefree` | **DiT LoRA 推荐**。在 Prodigy 基础上加 Schedule-Free averaged weights，sample/save 走 averaged 权重，**风格突变现象基本消失** | 见下方说明 |
+
+#### ProdigyPlusScheduleFree (PPSF) 使用要点
+
+Anima 是 Cosmos DiT + Flow Matching，跟 Flux/Qwen-Image 同型问题。这些社区已经把 PPSF
+作为 LoRA 训练事实默认，原因是 Prodigy 在 timestep 随机性 + 小数据集场景下 `d` 估计抖动，
+表现为某些 epoch 的 sample 风格突变。PPSF 通过维护 averaged weights 平滑了这个观感。
+
+- **学习率**：固定 `1.0`（PPSF 内部估计真实步长，外部 lr 只是缩放系数；UI 会强制）
+- **lr_scheduler**：**必须 `none`**（Schedule-Free 自带调度，叠 cosine 会破坏 averaged
+  weights 的收敛保证；UI 自动 disable，pydantic 也会拦下）
+- **ppsf_d_coef**：小数据集（<50 张）建议 `0.5`；正常 `1.0`；过拟合可试 `2.0`
+- **ppsf_prodigy_steps**：建议设为总步数的 1/4 到 1/2（如总 2000 步设 500-1000），后期
+  冻结 `d`、防跳档；不确定就留 `0`（不冻结）
+- **ppsf_fused_back_pass**：显存吃紧时开
+- **save / sample 行为**：训练代码自动在 sample 和 save 前调 `optimizer.eval()` 切到
+  averaged weights、事后切回。保存的 LoRA 是 averaged 状态，直接可用
+
+#### 怎么知道 Prodigy → PPSF 是不是真的能解决我的"突变 ep"问题
+
+切换后再训一遍同样的 dataset，对比相邻 ep 的 sample：
+- 之前：某些 ep 风格突然偏离，下一个 ep 又回来或漂到新位置
+- PPSF 后：sample 应该平滑过渡，没有"跳档"的视觉断层
+
+如果 PPSF 之后仍有跳档，多半是 `ppsf_d_coef` 过大或数据集本身太小 — 降到 `0.5` 或
+`0.3` 再试。
+
 ---
 
 ## 常见问题
