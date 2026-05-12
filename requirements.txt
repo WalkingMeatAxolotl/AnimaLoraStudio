@@ -37,7 +37,9 @@ pyyaml>=6.0.1
 psutil>=5.9.0
 # topbar 系统监控小组件用：拿 GPU/VRAM。非 NVIDIA / 无驱动时 services/system_stats.py
 # 会 try/except 兜底，前端只显示 CPU/RAM；安装本身在所有平台都能 succeed (纯 Python wrapper)。
-pynvml>=11.5.0
+# 用 nvidia-ml-py (NVIDIA 官方维护、新版 PyTorch 也是切到它) 而不是老的 pynvml；
+# 两者都导出 `import pynvml` 模块名，但老 pynvml 已 unmaintained 会打 deprecation 警告。
+nvidia-ml-py>=12.0
 rich>=13.7.0
 requests>=2.31.0
 

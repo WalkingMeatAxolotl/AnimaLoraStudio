@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useProjectCtx } from '../context/ProjectContext'
-import { api, type MonitorState, type Task } from '../api/client'
+import { api, type Task } from '../api/client'
 import { useEventStream, type StudioEvent } from '../lib/useEventStream'
+import { useMonitorProgress } from '../lib/useMonitorProgress'
 import CommandPalette from './CommandPalette'
 import SystemStats from './SystemStats'
 
@@ -100,7 +101,11 @@ export default function Topbar() {
   // 队列详细状态
   const [runningTask, setRunningTask] = useState<Task | null>(null)
   const [pendingCount, setPendingCount] = useState(0)
-  const [monitor, setMonitor] = useState<MonitorState | null>(null)
+
+  // monitor 状态走 useMonitorProgress hook (PR #37 增量协议)：自动管理
+  // /api/state 冷启动 + monitor_progress delta 合并 + 重连补拉，本组件只
+  // 关心结果的 step/total_steps/speed/start_time 几个 scalar 字段。
+  const { state: monitor } = useMonitorProgress(runningTask?.id ?? null)
 
   const refreshQueue = useCallback(async () => {
     try {
@@ -108,29 +113,16 @@ export default function Topbar() {
         api.listQueue('running'),
         api.listQueue('pending'),
       ])
-      const firstRunning = running.length > 0 ? running[0] : null
-      setRunningTask(firstRunning)
+      setRunningTask(running.length > 0 ? running[0] : null)
       setPendingCount(pending.length)
-
-      if (firstRunning) {
-        try {
-          const ms = await api.getMonitorState(firstRunning.id)
-          setMonitor(ms)
-        } catch {
-          setMonitor(null)
-        }
-      } else {
-        setMonitor(null)
-      }
     } catch {
       // 忽略
     }
   }, [])
 
-  // 队列状态走 SSE：mount 拉一次冷启动，之后只在 task_state_changed /
-  // monitor_state_updated 事件来时更新。SSE 重连后 onOpen 也补一次冷启动
-  // 防漏事件。不再轮询（之前 3-10s setInterval 在 1 个 running task 下会
-  // 攒成每秒 7+ 请求的死循环 bug，根因是 useEffect deps 用了 Task 对象）。
+  // 队列任务列表走 SSE task_state_changed；mount + 重连各拉一次冷启动。
+  // 之前 3-10s setInterval 在 1 个 running task 下会攒成每秒 7+ 请求的死
+  // 循环 bug，根因是 useEffect deps 用了 Task 对象。
   useEffect(() => {
     void refreshQueue()
   }, [refreshQueue])
@@ -139,14 +131,6 @@ export default function Topbar() {
     (evt: StudioEvent) => {
       if (evt.type === 'task_state_changed') {
         void refreshQueue()
-      } else if (
-        evt.type === 'monitor_state_updated' &&
-        runningTask &&
-        String(evt.task_id) === String(runningTask.id) &&
-        evt.state
-      ) {
-        // 后端 SSE 已经把 state 全量塞 payload 里，直接 setState，不再 fetch
-        setMonitor(evt.state as MonitorState)
       }
     },
     { onOpen: () => void refreshQueue() },

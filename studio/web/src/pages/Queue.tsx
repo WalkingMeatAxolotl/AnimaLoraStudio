@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { api, type MonitorState, type Task, type TaskStatus } from '../api/client'
+import { api, type Task, type TaskStatus } from '../api/client'
 import StepShell from '../components/StepShell'
 import { useToast } from '../components/Toast'
 import { useEventStream } from '../lib/useEventStream'
+import { useMonitorProgress } from '../lib/useMonitorProgress'
 
 async function downloadJson(filename: string, data: unknown) {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
@@ -91,12 +92,6 @@ export default function QueuePage() {
   const reloadTimer = useRef<number | null>(null)
   const { toast } = useToast()
   const navigate = useNavigate()
-  // 给「运行中」那一行的进度条用：拉当前 running task 的 monitor state，
-  // 用 step / total_steps 算实际百分比。Topbar 胶囊也用同一个数据源，俩地方
-  // 会显示一致。
-  const [monitor, setMonitor] = useState<MonitorState | null>(null)
-  const [monitorTaskId, setMonitorTaskId] = useState<number | null>(null)
-
   const reload = useCallback(async () => {
     try { setTasks(await api.listQueue()); setError(null) }
     catch (e) { setError(String(e)) }
@@ -110,10 +105,6 @@ export default function QueuePage() {
         reloadTimer.current = window.setTimeout(() => {
           reloadTimer.current = null; void reload()
         }, 100)
-      } else if (evt.type === 'monitor_state_updated' && evt.state) {
-        // SSE payload 里已带全量 state，直接 setState，不再 fetch。
-        setMonitor(evt.state as MonitorState)
-        setMonitorTaskId(Number(evt.task_id))
       }
     },
     { onOpen: () => void reload() },
@@ -135,14 +126,9 @@ export default function QueuePage() {
     () => tasks.find((t) => t.status === 'running')?.id ?? null,
     [tasks],
   )
-  // running task 切换时清掉 stale monitor state（避免进度条短暂显示上一个
-  // 任务的进度）；新任务的真实 monitor 数据由 SSE monitor_state_updated 推过来。
-  useEffect(() => {
-    if (!runningTaskId) {
-      setMonitor(null)
-      setMonitorTaskId(null)
-    }
-  }, [runningTaskId])
+  // monitor 进度走 useMonitorProgress hook (PR #37 增量协议)：runningTaskId
+  // 切换时 hook 自动清状态 + 重拉 /api/state 冷启动；不需要本组件再写清理逻辑。
+  const { state: monitor } = useMonitorProgress(runningTaskId)
 
   const clearDone = async () => {
     const done = tasks.filter((t) => t.status === 'done')
@@ -311,7 +297,7 @@ export default function QueuePage() {
                               // monitor 在这一行任务上有 step/total → 显示 step；
                               // 否则 fallback 时长（采样阶段或非训练任务）。
                               if (
-                                monitorTaskId === t.id &&
+                                t.id === runningTaskId &&
                                 monitor?.step != null &&
                                 monitor.total_steps != null &&
                                 monitor.total_steps > 0
@@ -324,7 +310,7 @@ export default function QueuePage() {
                           <div className="h-1 bg-overlay rounded-sm overflow-hidden">
                             {(() => {
                               const haveSteps =
-                                monitorTaskId === t.id &&
+                                t.id === runningTaskId &&
                                 monitor?.step != null &&
                                 monitor.total_steps != null &&
                                 monitor.total_steps > 0

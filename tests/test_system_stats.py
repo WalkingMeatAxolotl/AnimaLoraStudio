@@ -1,7 +1,9 @@
-"""services/system_stats.py — 采集 + NVML 优雅降级。"""
+"""services/system_stats.py — 采集 + NVML 优雅降级 + SSE sampler 线程。"""
 from __future__ import annotations
 
 import sys
+import threading
+import time
 import types
 
 import pytest
@@ -107,6 +109,57 @@ def test_nvml_one_fake_gpu(monkeypatch: pytest.MonkeyPatch):
     assert g.vram_used_gb == 4.0
     assert g.vram_total_gb == 24.0
     assert g.temp_c == 50
+
+
+def test_sampler_emits_payloads(monkeypatch: pytest.MonkeyPatch):
+    """SystemStatsSampler 启动后会定期 callback；stop() 干净退出。"""
+    samples: list[dict] = []
+    event = threading.Event()
+
+    def on_sample(payload: dict) -> None:
+        samples.append(payload)
+        if len(samples) >= 2:
+            event.set()
+
+    sampler = system_stats.SystemStatsSampler(on_sample, interval=0.05)
+    sampler.start()
+    try:
+        assert event.wait(timeout=2.0), f"only got {len(samples)} samples"
+    finally:
+        sampler.stop()
+
+    assert len(samples) >= 2
+    for p in samples:
+        assert set(p.keys()) == {"cpu_pct", "ram_used_gb", "ram_total_gb", "gpu"}
+
+
+def test_sampler_swallows_collection_errors(monkeypatch: pytest.MonkeyPatch):
+    """采集抛错时 sampler 不应崩溃，继续下一轮。"""
+    fail_count = [0]
+    samples: list[dict] = []
+
+    real_collect = system_stats.collect_stats
+
+    def flaky_collect() -> system_stats.SystemStats:
+        fail_count[0] += 1
+        if fail_count[0] == 1:
+            raise RuntimeError("simulated transient failure")
+        return real_collect()
+
+    monkeypatch.setattr(system_stats, "collect_stats", flaky_collect)
+
+    sampler = system_stats.SystemStatsSampler(samples.append, interval=0.05)
+    sampler.start()
+    try:
+        deadline = time.time() + 2.0
+        while len(samples) < 1 and time.time() < deadline:
+            time.sleep(0.05)
+    finally:
+        sampler.stop()
+
+    # 第一次 collect 抛错被吞，第二次成功 → samples >= 1
+    assert fail_count[0] >= 2
+    assert len(samples) >= 1
 
 
 def test_nvml_temp_failure_keeps_other_fields(monkeypatch: pytest.MonkeyPatch):

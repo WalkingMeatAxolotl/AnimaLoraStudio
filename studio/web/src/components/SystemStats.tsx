@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, type SystemStats as SystemStatsData } from '../api/client'
-
-const POLL_MS = 2500
+import { useEventStream } from '../lib/useEventStream'
 
 function toneClasses(pct: number): { text: string; bg: string } {
   if (pct >= 90) return { text: 'text-err', bg: 'bg-err-soft' }
@@ -44,31 +43,30 @@ function Pill({ label, value, pct, tooltip }: PillProps) {
 export default function SystemStats() {
   const [stats, setStats] = useState<SystemStatsData | null>(null)
 
+  // mount 时拉一次冷启动 (避免空白等 2.5s 首个 SSE 事件)，之后纯靠后端
+  // sampler 通过 SSE 推送。SSE 重连时 onOpen 也补一次冷启动，防漏。
   useEffect(() => {
     let cancelled = false
-    let firstFetchDone = false
-
-    const tick = async () => {
-      try {
-        const s = await api.systemStats()
-        if (!cancelled) {
-          setStats(s)
-          firstFetchDone = true
-        }
-      } catch {
-        // 单次失败保留上次的数据；后端临时挂掉时 topbar 不闪烁
-        if (!firstFetchDone && !cancelled) {
-          // 首次拉就失败：组件保持不可见，避免空白 pill 占位
-        }
-      }
-    }
-    void tick()
-    const id = setInterval(tick, POLL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
+    api.systemStats().then((s) => {
+      if (!cancelled) setStats(s)
+    }).catch(() => {/* 首次失败：等 SSE 第一帧就行 */})
+    return () => { cancelled = true }
   }, [])
+
+  useEventStream(
+    (evt) => {
+      if (evt.type !== 'system_stats_updated') return
+      const payload = evt.payload as SystemStatsData | undefined
+      if (payload) setStats(payload)
+    },
+    {
+      onOpen: () => {
+        // SSE 重连：补一次冷启动；服务端 sampler 仍在跑，下次 tick 会自然推
+        // 上来，但这一次显式 GET 让 UI 立刻刷新
+        api.systemStats().then((s) => setStats(s)).catch(() => {})
+      },
+    },
+  )
 
   if (!stats) return null
 

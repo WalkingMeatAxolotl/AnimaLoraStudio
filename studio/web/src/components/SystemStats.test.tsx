@@ -1,7 +1,11 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import SystemStats from './SystemStats'
 import { api, type SystemStats as Stats } from '../api/client'
+
+// useEventStream 在 jsdom 下不会真起 EventSource (源码有 typeof 守卫)，所以
+// 这里测的主要是：mount 时 GET 一次冷启动 + 各种 stats 形态下的渲染。SSE
+// delta 的合并行为另测（手动验证或 e2e）。
 
 function makeStats(overrides: Partial<Stats> = {}): Stats {
   return {
@@ -24,7 +28,6 @@ function makeStats(overrides: Partial<Stats> = {}): Stats {
 
 describe('SystemStats', () => {
   afterEach(() => {
-    vi.useRealTimers()
     vi.restoreAllMocks()
   })
 
@@ -34,7 +37,7 @@ describe('SystemStats', () => {
     expect(container.firstChild).toBeNull()
   })
 
-  it('shows CPU / MEM / GPU / VRAM pills with values', async () => {
+  it('shows CPU / MEM / GPU / VRAM pills with values after mount fetch', async () => {
     vi.spyOn(api, 'systemStats').mockResolvedValue(makeStats())
     render(<SystemStats />)
     await waitFor(() => expect(screen.getByText('CPU')).toBeInTheDocument())
@@ -70,28 +73,12 @@ describe('SystemStats', () => {
     expect(el.className).toContain('text-err')
   })
 
-  it('keeps last value when polling fails', async () => {
-    const spy = vi
-      .spyOn(api, 'systemStats')
-      .mockResolvedValueOnce(makeStats({ cpu_pct: 5.0 }))
-      .mockRejectedValueOnce(new Error('network'))
-    vi.useFakeTimers({ shouldAdvanceTime: true })
-    render(<SystemStats />)
-    await waitFor(() => expect(screen.getByText('5%')).toBeInTheDocument())
-    await vi.advanceTimersByTimeAsync(3000)
-    // 第二次轮询失败：仍然显示上次的 5%
-    expect(screen.getByText('5%')).toBeInTheDocument()
-    expect(spy).toHaveBeenCalledTimes(2)
-  })
-
-  it('polls on interval', async () => {
+  it('only fetches once on mount (SSE 化后无轮询)', async () => {
     const spy = vi.spyOn(api, 'systemStats').mockResolvedValue(makeStats())
-    vi.useFakeTimers({ shouldAdvanceTime: true })
     render(<SystemStats />)
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(1))
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
-    expect(spy).toHaveBeenCalledTimes(2)
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
-    expect(spy).toHaveBeenCalledTimes(3)
+    // 等一段实际时间让任何潜在的轮询有机会触发
+    await new Promise((r) => setTimeout(r, 200))
+    expect(spy).toHaveBeenCalledTimes(1)
   })
 })

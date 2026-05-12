@@ -313,6 +313,47 @@ def test_state_running_task_used_when_no_task_id(
     assert resp.json()["step"] == 7
 
 
+def test_state_max_points_downsamples_losses(
+    client: TestClient, isolated_paths: dict[str, Path]
+) -> None:
+    """PR #37：/api/state 兑现 max_points，losses/lr 长度超过时均匀降采样。"""
+    losses = [{"step": i, "loss": 1.0 / (i + 1), "time": float(i)} for i in range(5000)]
+    lr_history = [{"step": i, "lr": 1e-4} for i in range(5000)]
+    payload = {
+        "losses": losses, "lr_history": lr_history, "epoch": 0, "step": 4999,
+        "total_steps": 5000, "speed": 0.0, "samples": [],
+        "start_time": None, "config": {},
+    }
+    tid = _make_task_with_state(isolated_paths, payload)
+
+    # max_points=500 → 都被压到 500
+    resp = client.get(f"/api/state?task_id={tid}&max_points=500")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["losses"]) == 500
+    assert len(body["lr_history"]) == 500
+    # 首尾保留
+    assert body["losses"][0]["step"] == 0
+    assert body["losses"][-1]["step"] == 4999
+    # 其他字段透传
+    assert body["step"] == 4999
+    assert body["total_steps"] == 5000
+
+
+def test_state_max_points_zero_disables_downsample(
+    client: TestClient, isolated_paths: dict[str, Path]
+) -> None:
+    """max_points=0 (无穷) → 不降采样，原样返回。"""
+    losses = [{"step": i, "loss": 0.0} for i in range(100)]
+    payload = {"losses": losses, "lr_history": [], "epoch": 0, "step": 99,
+               "total_steps": 100, "speed": 0.0, "samples": [],
+               "start_time": None, "config": {}}
+    tid = _make_task_with_state(isolated_paths, payload)
+    resp = client.get(f"/api/state?task_id={tid}&max_points=0")
+    assert resp.status_code == 200
+    assert len(resp.json()["losses"]) == 100
+
+
 # ---------------------------------------------------------------------------
 # /samples/{filename}
 # ---------------------------------------------------------------------------

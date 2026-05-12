@@ -158,6 +158,16 @@ async def _lifespan(app_: FastAPI) -> AsyncIterator[None]:
     sup = Supervisor(on_event=bus.publish)
     sup.start()
     app_.state.supervisor = sup
+
+    # PR #37: system stats SSE — 后台 sampler 每 2.5s 采集 + bus.publish。前端
+    # 只 mount 时 GET 一次冷启动，避免 cloud 部署被每客户端独立轮询污染。
+    def _publish_system_stats(payload: dict[str, Any]) -> None:
+        bus.publish({"type": "system_stats_updated", "payload": payload})
+
+    sys_sampler = system_stats.SystemStatsSampler(_publish_system_stats)
+    sys_sampler.start()
+    app_.state.system_stats_sampler = sys_sampler
+
     try:
         yield
     finally:
@@ -165,6 +175,7 @@ async def _lifespan(app_: FastAPI) -> AsyncIterator[None]:
         timer = _disconnect_timer.get("t")
         if timer is not None:
             timer.cancel()
+        sys_sampler.stop()
         sup.stop()
         # commit 11：lifespan shutdown 清掉所有图 cache（释放内存 + 干净退出）
         generate_cache.clear_all()
@@ -203,7 +214,7 @@ def get_system_stats() -> dict[str, Any]:
 
 
 @app.get("/api/state")
-def get_state(task_id: Optional[int] = None) -> JSONResponse:
+def get_state(task_id: Optional[int] = None, max_points: int = 1000) -> JSONResponse:
     """读取训练监控 state.json（PP6.1 改造 — per-task）。
 
     `task_id` 给了 → 查 tasks.monitor_state_path 对应文件；没有 / 文件缺失 →
@@ -211,6 +222,10 @@ def get_state(task_id: Optional[int] = None) -> JSONResponse:
     `task_id` 没给 → 优先 running 的 task；没 running 时回退到**最近一次**
     （done / failed / canceled）带 monitor_state_path 的 task，让监控页结束
     后还能看到上一次训练的曲线。都没有再返回 EMPTY_STATE。
+
+    `max_points` (PR #37) — losses / lr_history 超过此点数时均匀降采样。前端
+    chart 内部还会再 downsample 到 600，所以服务端给到 1000 已经够。这一步
+    把跨公网冷启动 payload 从 O(N) 降到 O(1)。
 
     旧的全局 `monitor_data/state.json` 路径已退役（PP6.1）。
     """
@@ -247,6 +262,15 @@ def get_state(task_id: Optional[int] = None) -> JSONResponse:
         data = json.loads(target_path.read_text(encoding="utf-8"))
     except Exception as exc:
         raise HTTPException(500, f"failed to read state: {exc}")
+
+    # 服务端下采样 losses / lr_history（samples cap 50 已经在 train_monitor 端做了）
+    if max_points and max_points > 0:
+        from runtime.train_monitor import _downsample_uniform
+        if isinstance(data.get("losses"), list):
+            data["losses"] = _downsample_uniform(data["losses"], max_points)
+        if isinstance(data.get("lr_history"), list):
+            data["lr_history"] = _downsample_uniform(data["lr_history"], max_points)
+
     return JSONResponse(data)
 
 

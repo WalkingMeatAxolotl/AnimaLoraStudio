@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import asdict, dataclass
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import psutil
 
@@ -130,3 +130,47 @@ def stats_to_json(s: SystemStats) -> dict[str, Any]:
         "ram_total_gb": s.ram_total_gb,
         "gpu": [asdict(g) for g in s.gpu] if s.gpu is not None else None,
     }
+
+
+# ── SSE sampler ──────────────────────────────────────────────────────
+class SystemStatsSampler:
+    """后台线程：周期性采集系统资源 → callback (通常是 bus.publish)。
+
+    取代每个客户端独立轮询 /api/system/stats — 云部署场景下避免污染
+    server access log、DevTools Network 面板、跨公网 RTT 开销。前端只在
+    mount 时 GET 一次冷启动，之后走 SSE 持续接收。
+    """
+
+    def __init__(
+        self,
+        on_sample: Callable[[dict[str, Any]], None],
+        *,
+        interval: float = 2.5,
+    ) -> None:
+        self._on_sample = on_sample
+        self._interval = interval
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        if self._thread:
+            return
+        self._thread = threading.Thread(
+            target=self._run, name="system-stats-sampler", daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self, timeout: float = 2.0) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=timeout)
+            self._thread = None
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                payload = stats_to_json(collect_stats())
+                self._on_sample(payload)
+            except Exception:
+                logger.exception("system stats sampler tick failed")
+            self._stop.wait(self._interval)
