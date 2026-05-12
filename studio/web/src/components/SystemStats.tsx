@@ -3,10 +3,10 @@ import { api, type SystemStats as SystemStatsData } from '../api/client'
 
 const POLL_MS = 2500
 
-function toneClass(pct: number): string {
-  if (pct >= 90) return 'text-err'
-  if (pct >= 70) return 'text-warn'
-  return 'text-fg-primary'
+function toneClasses(pct: number): { text: string; bg: string } {
+  if (pct >= 90) return { text: 'text-err', bg: 'bg-err-soft' }
+  if (pct >= 70) return { text: 'text-warn', bg: 'bg-warn-soft' }
+  return { text: 'text-fg-primary', bg: 'bg-accent-soft' }
 }
 
 function fmtGb(used: number, total: number): string {
@@ -16,16 +16,28 @@ function fmtGb(used: number, total: number): string {
 interface PillProps {
   label: string
   value: string
-  toneCls: string
+  pct: number
   tooltip: string
 }
 
-function Pill({ label, value, toneCls, tooltip }: PillProps) {
+/** 进度条胶囊 — 整个 pill 背景按占用百分比填色 (>=70% warn, >=90% err)，
+ *  高度与 topbar 上其他元素 (搜索 icon 32px) 一致。 */
+function Pill({ label, value, pct, tooltip }: PillProps) {
+  const tone = toneClasses(pct)
+  const clamped = Math.min(100, Math.max(0, pct))
   return (
-    <span className="flex items-baseline gap-1.5" title={tooltip}>
-      <span className="text-2xs uppercase tracking-wider text-fg-tertiary">{label}</span>
-      <span className={`font-mono text-xs tabular-nums ${toneCls}`}>{value}</span>
-    </span>
+    <div
+      className="relative flex items-center gap-1.5 h-8 px-2 rounded-md border border-dim bg-surface overflow-hidden shrink-0"
+      title={tooltip}
+    >
+      <div
+        aria-hidden
+        className={`absolute inset-y-0 left-0 ${tone.bg} transition-[width] duration-500 ease-out`}
+        style={{ width: `${clamped}%` }}
+      />
+      <span className="relative z-10 text-2xs uppercase tracking-wider text-fg-tertiary">{label}</span>
+      <span className={`relative z-10 font-mono text-xs tabular-nums ${tone.text}`}>{value}</span>
+    </div>
   )
 }
 
@@ -71,17 +83,17 @@ export default function SystemStats() {
   const gpuLabel = gpu0 ? `${gpu0.name}${gpuTempText}${gpuExtra}` : ''
 
   return (
-    <div className="hidden md:flex items-center gap-4 shrink-0">
+    <div className="hidden md:flex items-center gap-2 shrink-0">
       <Pill
         label="CPU"
         value={`${stats.cpu_pct.toFixed(0)}%`}
-        toneCls={toneClass(stats.cpu_pct)}
+        pct={stats.cpu_pct}
         tooltip={`CPU 占用 ${stats.cpu_pct.toFixed(1)}%`}
       />
       <Pill
         label="MEM"
         value={fmtGb(stats.ram_used_gb, stats.ram_total_gb)}
-        toneCls={toneClass(ramPct)}
+        pct={ramPct}
         tooltip={`内存 ${stats.ram_used_gb.toFixed(1)} / ${stats.ram_total_gb.toFixed(1)} GB (${ramPct.toFixed(0)}%)`}
       />
       {gpu0 && (
@@ -89,13 +101,13 @@ export default function SystemStats() {
           <Pill
             label="GPU"
             value={`${gpu0.util_pct}%`}
-            toneCls={toneClass(gpu0.util_pct)}
+            pct={gpu0.util_pct}
             tooltip={`GPU 利用率 · ${gpuLabel}`}
           />
           <Pill
             label="VRAM"
             value={fmtGb(gpu0.vram_used_gb, gpu0.vram_total_gb)}
-            toneCls={toneClass(vramPct)}
+            pct={vramPct}
             tooltip={`显存 ${gpu0.vram_used_gb.toFixed(1)} / ${gpu0.vram_total_gb.toFixed(1)} GB (${vramPct.toFixed(0)}%) · ${gpuLabel}`}
           />
         </>
