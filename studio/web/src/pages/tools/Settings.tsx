@@ -2394,6 +2394,8 @@ function VersionSection() {
   const [logModal, setLogModal] = useState<{ open: boolean; content: string; loading: boolean }>(
     { open: false, content: '', loading: false },
   )
+  // chunk 2 重做：release notes 详细内容 modal（含 detail markdown）
+  const [detailModalOpen, setDetailModalOpen] = useState(false)
 
   useEffect(() => {
     void api.getSystemVersion().then(setVersion).catch(() => { /* silent */ })
@@ -2648,6 +2650,7 @@ function VersionSection() {
             hasRollback={hasRollback}
             statusBadFailed={statusBadFailed}
             releaseNotes={releaseNotes}
+            onShowReleaseNotesDetail={() => setDetailModalOpen(true)}
             checking={checking}
             busy={busy}
             cardState={masterState}
@@ -2741,6 +2744,13 @@ function VersionSection() {
           onClose={() => setLogModal({ open: false, content: '', loading: false })}
         />
       )}
+
+      {detailModalOpen && releaseNotes?.found && (
+        <ReleaseNotesDetailModal
+          notes={releaseNotes}
+          onClose={() => setDetailModalOpen(false)}
+        />
+      )}
     </SettingsSection>
   )
 }
@@ -2790,6 +2800,7 @@ type MasterCardProps = {
   hasRollback: boolean
   statusBadFailed: boolean
   releaseNotes: ReleaseNotes | null
+  onShowReleaseNotesDetail: () => void
   checking: boolean
   busy: boolean
   cardState: CardState
@@ -2924,7 +2935,9 @@ function ProgressPane({ fromLabel, toLabel }: { fromLabel: string; toLabel: stri
   )
 }
 
-function MasterReleaseNotes({ notes }: { notes: ReleaseNotes | null }) {
+function MasterReleaseNotes({
+  notes, onShowDetail,
+}: { notes: ReleaseNotes | null; onShowDetail: () => void }) {
   const entries = notes?.found ? notes.entries : []
   const total = entries.length
   if (total === 0) {
@@ -2943,6 +2956,9 @@ function MasterReleaseNotes({ notes }: { notes: ReleaseNotes | null }) {
   }
   const shown = entries.slice(0, RN_MAX_ITEMS)
   const overflow = total - shown.length
+  // 任意 entry 有 detail → 即使全部顶层 entries 都显示，"详细内容" 入口仍有意义
+  const anyDetail = entries.some((e) => !!e.detail)
+  const showDetailLink = overflow > 0 || anyDetail
   return (
     <ul className="vs-change-list">
       {shown.map((e, i) => (
@@ -2957,11 +2973,19 @@ function MasterReleaseNotes({ notes }: { notes: ReleaseNotes | null }) {
           <span className="vs-txt">{e.summary}</span>
         </li>
       ))}
-      {overflow > 0 && (
+      {showDetailLink && (
         <li>
           <span className="vs-glyph">·</span>
           <span className="vs-txt" style={{ color: 'var(--fg-tertiary)' }}>
-            还有 {overflow} 项 · 详见 <code>CHANGELOG.md</code>
+            {overflow > 0 && <>还有 {overflow} 项 · </>}
+            <button
+              type="button"
+              onClick={onShowDetail}
+              className="vs-lnk"
+              style={{ display: 'inline' }}
+            >
+              详细内容 ↗
+            </button>
           </span>
         </li>
       )}
@@ -2993,7 +3017,7 @@ function MasterCard(p: MasterCardProps) {
           details={
             <div className="vs-change-block">
               <div className="vs-h">{p.pendingTarget.label} · 更新内容</div>
-              <MasterReleaseNotes notes={p.releaseNotes} />
+              <MasterReleaseNotes notes={p.releaseNotes} onShowDetail={p.onShowReleaseNotesDetail} />
             </div>
           }
           preflight={p.preflight}
@@ -3107,7 +3131,7 @@ function MasterCard(p: MasterCardProps) {
           <div className="vs-h">
             {p.hasUpdate ? `${targetTag} · 更新内容` : `${currentTag} · 此版本`}
           </div>
-          <MasterReleaseNotes notes={p.releaseNotes} />
+          <MasterReleaseNotes notes={p.releaseNotes} onShowDetail={p.onShowReleaseNotesDetail} />
         </div>
       </div>
 
@@ -3323,9 +3347,9 @@ function DevCard(p: DevCardProps) {
 
       {p.selectedSha && selectedCommit ? (
         <div className="vs-selection-foot">
-          <div className="vs-info">
+          <div className="vs-info" title={selectedCommit.msg}>
             <VersionIcon name="rollback" />
-            将切到 <b>{selectedCommit.short_sha}</b> · {selectedCommit.msg.slice(0, 32)}
+            <span>将切到 <b>{selectedCommit.short_sha}</b></span>
           </div>
           <div className="vs-actions">
             <button onClick={() => p.setSelectedSha(null)} disabled={p.busy} className="btn btn-sm btn-ghost">
@@ -3402,6 +3426,87 @@ function UpdateLogModal({
               {content}
             </pre>
           )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// chunk 2 重做 — release notes 全量详细内容 modal。结构：
+//   header: tag · date · block summary
+//   body: 每条 entry 一块（kind 徽章 + summary + PR refs 链接 + detail 文本）
+// detail 字段是 markdown 但这里不渲染 markdown 库（依赖最少），直接
+// whitespace-pre-wrap 显示原文，code/`` /列表用户能读懂；未来想真渲染 markdown
+// 再加 marked / react-markdown 依赖。
+function ReleaseNotesDetailModal({
+  notes, onClose,
+}: { notes: ReleaseNotes; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      onClick={onClose}
+    >
+      <div
+        className="bg-surface border border-subtle rounded-md shadow-lg max-w-3xl w-[92vw] max-h-[85vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-subtle px-5 py-3">
+          <div className="flex flex-col gap-0.5">
+            <h3 className="text-base font-semibold text-fg-primary font-mono">
+              {notes.tag}
+              {notes.date && <span className="text-fg-tertiary font-normal text-sm font-sans"> · {notes.date}</span>}
+            </h3>
+            {notes.summary && (
+              <span className="text-xs text-fg-secondary">{notes.summary}</span>
+            )}
+          </div>
+          <button
+            onClick={onClose}
+            className="text-fg-dim hover:text-fg-primary text-xl leading-none px-1"
+            aria-label="关闭"
+          >×</button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-4">
+          {notes.entries.map((e, i) => (
+            <div key={i} className="flex flex-col gap-1.5">
+              <div className="flex items-start gap-2 flex-wrap">
+                <span
+                  className={`vs-pill ${KIND_PILL_CLASS[e.kind] || 'vs-pill-info'}`}
+                  style={{ flexShrink: 0, marginTop: 2 }}
+                >
+                  {KIND_LABEL[e.kind] || e.kind}
+                </span>
+                <span className="text-sm text-fg-primary font-medium leading-snug">
+                  {e.summary}
+                </span>
+              </div>
+              {e.pr_refs.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 ml-1 mt-0.5">
+                  {e.pr_refs.map((pr) => (
+                    <a
+                      key={pr}
+                      href={`https://github.com/WalkingMeatAxolotl/AnimaLoraStudio/pull/${pr}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-2xs font-mono text-fg-tertiary hover:text-accent underline-offset-2 hover:underline"
+                    >
+                      #{pr}
+                    </a>
+                  ))}
+                </div>
+              )}
+              {e.detail && (
+                <pre className="text-xs font-mono text-fg-secondary whitespace-pre-wrap break-words bg-sunken border border-subtle rounded p-3 mt-1 leading-relaxed">
+                  {e.detail.trimEnd()}
+                </pre>
+              )}
+            </div>
+          ))}
         </div>
       </div>
     </div>

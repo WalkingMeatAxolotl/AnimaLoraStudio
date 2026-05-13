@@ -522,7 +522,9 @@
 }
 .vs-commits-load-more:hover { color: var(--accent); }
 
-/* selected commit action bar（替代 chan-foot） */
+/* selected commit action bar（替代 chan-foot）。
+ * actions 永远固定在右侧（flex-shrink:0）；info 长内容截断 ellipsis，
+ * 不会把按钮挤换行（之前 flex-wrap 会让按钮新起一行）。 */
 .vs-selection-foot {
   display: flex;
   align-items: center;
@@ -532,7 +534,6 @@
   border: 1px solid var(--accent);
   border-radius: 6px;
   gap: 10px;
-  flex-wrap: wrap;
 }
 .vs-selection-foot .vs-info {
   font-size: 12px;
@@ -540,7 +541,10 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .vs-selection-foot .vs-info b {
   font-family: var(--font-mono);
@@ -549,6 +553,7 @@
 .vs-selection-foot .vs-actions {
   display: flex;
   gap: 6px;
+  flex-shrink: 0;
 }
 
 /* ==================== preview / progress states（chunk 4） ==================== */
