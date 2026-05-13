@@ -58,6 +58,7 @@ from . import (
 from .event_bus import bus
 from .services import (
     caption_snapshot,
+    changelog,
     downloader,
     presets as preset_flow,
     model_downloader,
@@ -3232,6 +3233,23 @@ def system_update_status() -> dict[str, Any]:
 def system_update_log() -> dict[str, Any]:
     """完整 .update_log 文本内容（PR-C 失败时 UI 弹 modal 用）。"""
     return {"content": updater.read_update_log()}
+
+
+@app.get("/api/system/release_notes")
+def system_release_notes(tag: str) -> dict[str, Any]:
+    """解析 CHANGELOG.md，返回指定 tag 的 release notes（chunk 2）。
+
+    VersionSection master 卡片用此填进 change-block；CHANGELOG 缺该条目
+    时 found=false，UI 退化到链接占位。tag 接受 `v0.6.0` 或 `0.6.0` 两种。
+    """
+    from dataclasses import asdict
+    result = changelog.parse(tag)
+    return {
+        "tag": result.tag,
+        "found": result.found,
+        "date": result.date,
+        "sections": [asdict(s) for s in result.sections],
+    }
 
 
 @app.get("/", response_model=None)

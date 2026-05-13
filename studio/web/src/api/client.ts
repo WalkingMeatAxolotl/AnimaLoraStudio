@@ -1691,6 +1691,11 @@ export const api = {
 
   // 完整 .update_log 文本（PR-C，失败时 UI 弹 modal 用）。
   getSystemUpdateLog: () => req<{ content: string }>('/api/system/update_log'),
+
+  // chunk 2 — 解析 CHANGELOG.md，返回指定 tag 的 release notes
+  // （MasterCard 用此填进 change-block；缺失时 found=false 优雅退化）
+  getReleaseNotes: (tag: string) =>
+    req<ReleaseNotes>(`/api/system/release_notes?tag=${encodeURIComponent(tag)}`),
 }
 
 export interface SystemVersion {
@@ -1731,6 +1736,18 @@ export interface SystemUpdateStatus {
   deps_changed?: boolean
   log_excerpt?: string
   rollback_target?: string | null
+}
+
+/** chunk 2 — CHANGELOG.md 解析结果。`found=false` 时 sections 为空（UI 退化到链接占位）。 */
+export interface ReleaseNotesSection {
+  title: string         // "新增" / "变更" / "修复" 等 H3
+  items: string[]       // 顶层 bullet 文本（**bold** 已脱掉，保留 PR 号）
+}
+export interface ReleaseNotes {
+  tag: string           // caller 传入的 tag（v 前缀保留）
+  found: boolean
+  date: string | null   // ISO YYYY-MM-DD
+  sections: ReleaseNotesSection[]
 }
 
 export interface BrowseEntry {

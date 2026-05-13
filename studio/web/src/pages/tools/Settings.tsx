@@ -10,6 +10,7 @@ import {
   type ModelsCatalog,
   type Secrets,
   type SecretsPatch,
+  type ReleaseNotes,
   type SystemPrefsConfig,
   type SystemUpdateCheck,
   type SystemUpdateStatus,
@@ -2372,6 +2373,8 @@ function VersionSection() {
   const [status, setStatus] = useState<SystemUpdateStatus | null>(null)
   const [prefs, setPrefs] = useState<SystemPrefsConfig | null>(null)
   const [devCheck, setDevCheck] = useState<SystemUpdateCheck | null>(null)
+  // chunk 2 — 当前显示的 release notes（hasUpdate 时为 target tag，否则 current tag）
+  const [releaseNotes, setReleaseNotes] = useState<ReleaseNotes | null>(null)
   const [checking, setChecking] = useState(false)
   const [checkingDev, setCheckingDev] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -2573,6 +2576,26 @@ function VersionSection() {
   // 上次 update 失败 banner（aborted / failed / partial 时显示红色提示）
   const statusBadFailed = !!status && (status.status === 'failed' || status.status === 'aborted' || status.status === 'partial')
 
+  // chunk 2 — 当展示的 tag 变化时拉对应 release notes。展示 tag = hasUpdate
+  // 时为目标 tag（"v0.6.1 · 更新内容"），否则当前 tag（"v0.6.0 · 此版本"）。
+  // CHANGELOG.md 没条目时 found=false，UI 自然 fallback 到占位链接。
+  const displayedTag = hasUpdate
+    ? (check?.latest_tag ?? null)
+    : (version?.tag ?? (version ? `v${version.version}` : null))
+  useEffect(() => {
+    if (!displayedTag) {
+      setReleaseNotes(null)
+      return
+    }
+    let cancelled = false
+    void api.getReleaseNotes(displayedTag).then((r) => {
+      if (!cancelled) setReleaseNotes(r)
+    }).catch(() => {
+      if (!cancelled) setReleaseNotes(null)
+    })
+    return () => { cancelled = true }
+  }, [displayedTag])
+
   return (
     <SettingsSection id="version" title="版本">
       <p className="text-xs text-fg-tertiary mb-3 leading-relaxed">
@@ -2590,6 +2613,7 @@ function VersionSection() {
             hasUpdate={hasUpdate}
             hasRollback={hasRollback}
             statusBadFailed={statusBadFailed}
+            releaseNotes={releaseNotes}
             checking={checking}
             busy={busy}
             onCheck={handleCheck}
@@ -2705,6 +2729,7 @@ type MasterCardProps = {
   hasUpdate: boolean
   hasRollback: boolean
   statusBadFailed: boolean
+  releaseNotes: ReleaseNotes | null
   checking: boolean
   busy: boolean
   onCheck: () => void
@@ -2712,6 +2737,58 @@ type MasterCardProps = {
   onSwitchToMaster: () => void
   onRollback: () => void
   onViewLog: () => void
+}
+
+// chunk 2 — release notes 渲染上限。超过的话只展示前 RN_MAX 条，给条
+// "+ 还有 N 项" 引导用户去 CHANGELOG。设计稿 mockup 每版本 3-4 条；
+// 真实仓库 CHANGELOG.md 顶层 bullet 一次 8-12 条，不限制会撑爆卡片。
+const RN_MAX_ITEMS = 5
+
+function flattenReleaseNotes(rn: ReleaseNotes | null): { items: { section: string; text: string }[]; total: number } {
+  if (!rn?.found) return { items: [], total: 0 }
+  const flat = rn.sections.flatMap((s) => s.items.map((text) => ({ section: s.title, text })))
+  return { items: flat, total: flat.length }
+}
+
+function MasterReleaseNotes({ notes }: { notes: ReleaseNotes | null }) {
+  const { items, total } = flattenReleaseNotes(notes)
+  if (total === 0) {
+    return (
+      <ul className="vs-change-list">
+        <li>
+          <span className="vs-glyph">▸</span>
+          <span className="vs-txt">
+            {notes && !notes.found
+              ? <>本 tag 在 <code>CHANGELOG.md</code> 没有条目</>
+              : <>完整变更见 <code>CHANGELOG.md</code></>}
+          </span>
+        </li>
+      </ul>
+    )
+  }
+  const shown = items.slice(0, RN_MAX_ITEMS)
+  const overflow = total - shown.length
+  return (
+    <ul className="vs-change-list">
+      {shown.map((it, i) => (
+        <li key={i}>
+          <span className="vs-glyph">▸</span>
+          <span className="vs-txt">
+            <span style={{ color: 'var(--fg-tertiary)', marginRight: 6 }}>{it.section}</span>
+            {it.text}
+          </span>
+        </li>
+      ))}
+      {overflow > 0 && (
+        <li>
+          <span className="vs-glyph">·</span>
+          <span className="vs-txt" style={{ color: 'var(--fg-tertiary)' }}>
+            还有 {overflow} 项 · 详见 <code>CHANGELOG.md</code>
+          </span>
+        </li>
+      )}
+    </ul>
+  )
 }
 
 function MasterCard(p: MasterCardProps) {
@@ -2806,15 +2883,7 @@ function MasterCard(p: MasterCardProps) {
           <div className="vs-h">
             {p.hasUpdate ? `${targetTag} · 更新内容` : `${currentTag} · 此版本`}
           </div>
-          {/* Chunk 2 会从后端拉 release notes 填进来；现阶段占位 */}
-          <ul className="vs-change-list">
-            <li>
-              <span className="vs-glyph">▸</span>
-              <span className="vs-txt">
-                完整变更见 <code>CHANGELOG.md</code>（chunk 2 会把此版本条目自动拉进来）
-              </span>
-            </li>
-          </ul>
+          <MasterReleaseNotes notes={p.releaseNotes} />
         </div>
       </div>
 
