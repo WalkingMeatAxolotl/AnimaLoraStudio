@@ -3029,6 +3029,59 @@ if WEB_DIST.exists():
     )
 
 
+# ---------------------------------------------------------------------------
+# /api/system — 进程生命周期（重启 / 更新 / 回滚）
+# ---------------------------------------------------------------------------
+#
+# 重启协议（参见 docs/adr/0002-webui-self-update.md）：
+#   1. server 写 REPO_ROOT/tmp/restart 标志
+#   2. server 通过 BackgroundTask 在响应发出后给自己发 SIGINT
+#   3. uvicorn 捕获 SIGINT 走 graceful shutdown（lifespan teardown + 在飞请求收尾）
+#   4. 进程退出 → cli.py 的 subprocess.call 返回
+#   5. cli.py 检测到 tmp/restart 存在 → 删除标志 → loop 回去重新 bootstrap + 起 server
+#
+# 跨平台 SIGINT：用 signal.raise_signal(SIGINT)（Python 3.8+），它在 Windows /
+# POSIX 都把当前进程置为收到 SIGINT，uvicorn 的内置 handler 会按 graceful
+# 路径处理。os.kill(getpid, SIGINT) 在 Windows 上不工作。
+#
+# PR-A 仅实现 /restart（不带 git pull / 不检查 running task）。PR-B / PR-C
+# 在此基础上叠加 update / rollback / 任务保护。
+
+
+_RESTART_FLAG = REPO_ROOT / "tmp" / "restart"
+
+
+def _raise_sigint_after_response() -> None:
+    """在响应已经发完后给自己发 SIGINT，触发 uvicorn graceful shutdown。
+
+    BackgroundTask 在 starlette 路径上是 response 完成后调度的；这里再 sleep
+    一点点保险（防止某些代理 / keep-alive 情况下还有数据没冲走）。
+    """
+    import signal
+    time.sleep(0.3)
+    try:
+        signal.raise_signal(signal.SIGINT)
+    except Exception:
+        # 兜底：硬退（不应该走到）
+        os._exit(0)
+
+
+@app.post("/api/system/restart")
+def system_restart(background: BackgroundTasks) -> dict[str, Any]:
+    """重启 server（不 pull 代码）。
+
+    流程：写 tmp/restart 标志 → 响应 200 → BackgroundTask 发 SIGINT 触发
+    uvicorn graceful shutdown → cli.py loop 拾起 → 重新起新 server。
+
+    PR-A 范围：不检查 running task（用户自己判断）。PR-B 会加 has_running_task
+    强制约束（训练任务进行中拒绝重启）。
+    """
+    _RESTART_FLAG.parent.mkdir(parents=True, exist_ok=True)
+    _RESTART_FLAG.touch()
+    background.add_task(_raise_sigint_after_response)
+    return {"ok": True, "message": "restart scheduled"}
+
+
 @app.get("/", response_model=None)
 def root() -> RedirectResponse | JSONResponse:
     """根路径 302 跳转到 React 应用 `/studio/`。

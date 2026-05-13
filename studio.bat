@@ -141,8 +141,19 @@ if "!STALE!"=="stale" (
     )
 )
 
+REM Restart loop (PR-A): if cli.py exits but tmp\restart still present, loop
+REM back. cli.py's own inner loop handles the common case (server requests
+REM restart); this outer loop is the safety net for PR-D's installer self-update
+REM path. See docs\adr\0002-webui-self-update.md.
+:run_loop
 !PYTHON! -m studio %PASSTHROUGH%
 set STUDIO_ERR=%ERRORLEVEL%
+if exist tmp\restart (
+    echo [studio] restart requested ^(wrapper loop^)
+    del /q tmp\restart 2>nul
+    goto run_loop
+)
+
 if %STUDIO_ERR% NEQ 0 (
     echo.
     echo [studio] Exit code %STUDIO_ERR%. Press any key to close...

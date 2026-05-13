@@ -148,8 +148,22 @@ if [ "$_STALE" = "stale" ]; then
 fi
 
 echo "studio.sh: using $PYTHON"
-"$PYTHON" -m studio "${_PASSTHROUGH[@]}"
-EXIT_CODE=$?
+
+# Restart loop (PR-A): if cli.py exits but tmp/restart is still present, loop
+# back and re-run. cli.py's own inner loop handles the common case (server
+# requests restart from /api/system/restart); this outer loop is the safety net
+# for PR-D's installer self-update path where cli.py itself was just replaced.
+# See docs/adr/0002-webui-self-update.md.
+while true; do
+    "$PYTHON" -m studio "${_PASSTHROUGH[@]}"
+    EXIT_CODE=$?
+    if [ ! -f tmp/restart ]; then
+        break
+    fi
+    echo "[studio] restart requested (wrapper loop)"
+    rm -f tmp/restart
+done
+
 if [ $EXIT_CODE -ne 0 ]; then
     echo ""
     echo "[studio] Exit code $EXIT_CODE, see error messages above."

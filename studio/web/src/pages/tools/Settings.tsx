@@ -38,7 +38,7 @@ type Section =
   | 'queue'
   | 'generate'
 
-type Tab = 'dataset' | 'tagging' | 'training' | 'monitor' | 'testing' | 'appearance'
+type Tab = 'dataset' | 'tagging' | 'training' | 'monitor' | 'testing' | 'appearance' | 'system'
 
 const TAB_LIST: { id: Tab; label: string }[] = [
   { id: 'dataset', label: '数据集' },
@@ -47,6 +47,7 @@ const TAB_LIST: { id: Tab; label: string }[] = [
   { id: 'monitor', label: '监控' },
   { id: 'testing', label: '测试' },
   { id: 'appearance', label: '页面' },
+  { id: 'system', label: '系统' },
 ]
 
 // 每个 tab 的 section index — 用于右侧 sticky 导航。id 与各 section 的 DOM id
@@ -79,6 +80,9 @@ const TAB_SECTIONS: Record<Tab, { id: string; label: string }[]> = {
   ],
   appearance: [
     { id: 'display', label: '显示' },
+  ],
+  system: [
+    { id: 'service', label: '服务' },
   ],
 }
 
@@ -131,6 +135,7 @@ function getStoredTab(): Tab {
     if (
       v === 'dataset' || v === 'tagging' || v === 'training'
       || v === 'monitor' || v === 'testing' || v === 'appearance'
+      || v === 'system'
     ) return v
   } catch {
     /* ignore localStorage errors */
@@ -893,6 +898,10 @@ export default function SettingsPage() {
 
       {tab === 'appearance' && (
         <DisplaySection />
+      )}
+
+      {tab === 'system' && (
+        <SystemSection />
       )}
     </div>
 
@@ -2278,6 +2287,88 @@ function DisplaySection() {
           </div>
           <p className="text-xs text-fg-tertiary m-0">
             {densityDesc(density)}
+          </p>
+        </div>
+      </SettingsField>
+    </SettingsSection>
+  )
+}
+
+// ── System Section（系统 tab）─────────────────────────────────────────────
+//
+// PR-A：仅"重启 server"按钮。PR-B 会在此 Section 上方加版本显示 / 检查更新 /
+// 立即更新 / 回滚 等。
+//
+// 重启流程：
+//   1. confirm 弹窗（强调 webui 会断开 ~5-10s）
+//   2. POST /api/system/restart → 后端写 tmp/restart + 发 SIGINT
+//   3. 进入"重启中"状态卡片：每 500ms 轮询 /api/health
+//   4. health 200 → toast "已重启" + reload 当前页面（前端重新挂载，SSE 重连）
+//   5. 30s 超时 → toast "重启超时，请检查终端" + 保留状态卡片让用户手动刷新
+function SystemSection() {
+  const { toast } = useToast()
+  const dialog = useDialog()
+  const [busy, setBusy] = useState(false)
+
+  const handleRestart = async () => {
+    const ok = await dialog.confirm(
+      '将关闭并重新启动 Studio 后端服务。webui 会断开 5-10 秒，期间无法访问。\n\n' +
+      '注意（PR-A 暂未做任务保护）：当前若有训练 / 打标任务在跑，将被强制取消，丢失未保存进度。',
+      { tone: 'warn', okText: '重启' },
+    )
+    if (!ok) return
+
+    setBusy(true)
+    try {
+      await api.restartServer()
+    } catch (e) {
+      toast(`触发重启失败: ${e}`, 'error')
+      setBusy(false)
+      return
+    }
+
+    // 轮询 /api/health 等服务回来
+    const deadline = Date.now() + 30_000
+    const pollInterval = 500
+    const poll = async () => {
+      // 间隔后开始轮询：给 server 时间真正退出，避免命中还没死的旧进程
+      await new Promise((r) => setTimeout(r, 1500))
+      while (Date.now() < deadline) {
+        try {
+          await api.health()
+          toast('Studio 已重启，正在刷新页面...', 'success')
+          // 给 toast 一点显示时间再刷
+          setTimeout(() => window.location.reload(), 800)
+          return
+        } catch {
+          // server 还没回来，继续轮询
+        }
+        await new Promise((r) => setTimeout(r, pollInterval))
+      }
+      toast('重启超时（30s），请检查终端输出后手动刷新页面', 'error')
+      setBusy(false)
+    }
+    void poll()
+  }
+
+  return (
+    <SettingsSection id="service" title="服务">
+      <SettingsField label="重启 Studio">
+        <div className="flex flex-col gap-1.5">
+          <button
+            onClick={() => void handleRestart()}
+            disabled={busy}
+            className="btn btn-secondary btn-sm self-start"
+          >
+            {busy ? '重启中...' : '重启 server'}
+          </button>
+          <p className="text-2xs text-fg-dim leading-snug">
+            关闭并重新启动后端进程。常用场景：修改 secrets.json 后强制刷新、
+            装完新 onnxruntime / PyTorch 让 EP 生效。
+            <br />
+            <span className="text-warn">
+              当前未做运行中任务保护（PR-B 会加），有训练 / 打标在跑时不要点。
+            </span>
           </p>
         </div>
       </SettingsField>

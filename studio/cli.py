@@ -511,32 +511,61 @@ def _web_dist_is_stale() -> bool:
     return False
 
 
+_RESTART_FLAG = REPO_ROOT / "tmp" / "restart"
+
+
 def cmd_run(args: argparse.Namespace) -> int:
-    rc = _ensure_python_deps()
-    if rc != 0:
-        return rc
-    if not args.no_build:
-        if not WEB_DIST.exists():
-            print("[studio] studio/web/dist 不存在，先构建前端...")
-            rc = cmd_build(args)
-            if rc != 0:
-                return rc
-        elif _web_dist_is_stale():
-            print("[studio] studio/web/dist 比 src 旧（git pull 后未重建？），重新构建前端...")
-            rc = cmd_build(args)
-            if rc != 0:
-                return rc
-    _apply_pending_install()
-    _check_torch_cuda()
-    _try_enable_flash_attn()
-    _bootstrap_onnxruntime()
-    url = f"http://{args.host}:{args.port}/studio/"
-    print(f"[studio] 启动后端 → {url}")
-    if not args.no_browser:
-        _spawn_browser_opener(url)
-    return subprocess.call(
-        [find_python(), "-m", "studio.server", "--host", args.host, "--port", str(args.port)]
-    )
+    """`run` 主循环。
+
+    内层 loop：每次 server 退出后检查 `tmp/restart` 标志（由 server 端
+    `/api/system/restart` 写）。存在则删除标志 + 重走 bootstrap + 重起 server；
+    不存在则跳出，正常退出。
+
+    重启协议详见 `docs/adr/0002-webui-self-update.md`。外层 shell wrapper
+    (`studio.sh` / `studio.bat`) 也有同样的 loop 兜底（cli.py 异常退出但
+    flag 还在的场景，主要给后续 PR-D 的 installer 自更新用）。
+
+    冷启动只打开一次浏览器；重启时复用已存在的 webui 标签页（前端轮询
+    `/api/health` 自动 reconnect），不重复弹新窗口。
+    """
+    opened_browser = False
+    while True:
+        rc = _ensure_python_deps()
+        if rc != 0:
+            return rc
+        if not args.no_build:
+            if not WEB_DIST.exists():
+                print("[studio] studio/web/dist 不存在，先构建前端...")
+                rc = cmd_build(args)
+                if rc != 0:
+                    return rc
+            elif _web_dist_is_stale():
+                print("[studio] studio/web/dist 比 src 旧（git pull 后未重建？），重新构建前端...")
+                rc = cmd_build(args)
+                if rc != 0:
+                    return rc
+        _apply_pending_install()
+        _check_torch_cuda()
+        _try_enable_flash_attn()
+        _bootstrap_onnxruntime()
+        url = f"http://{args.host}:{args.port}/studio/"
+        print(f"[studio] 启动后端 → {url}")
+        if not args.no_browser and not opened_browser:
+            _spawn_browser_opener(url)
+            opened_browser = True
+        rc = subprocess.call(
+            [find_python(), "-m", "studio.server", "--host", args.host, "--port", str(args.port)]
+        )
+
+        if not _RESTART_FLAG.exists():
+            return rc
+
+        # 收到重启请求：删除标志 + loop 回去重新 bootstrap
+        try:
+            _RESTART_FLAG.unlink()
+        except OSError:
+            pass
+        print("[studio] 收到重启请求，重新启动...")
 
 
 def cmd_dev(args: argparse.Namespace) -> int:

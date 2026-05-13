@@ -1623,6 +1623,15 @@ export const api = {
     const qs = path ? `?path=${encodeURIComponent(path)}` : ''
     return req<BrowseResult>(`/api/browse${qs}`)
   },
+
+  // System lifecycle (ADR 0002) ----------------------------------------
+  // 重启 server。后端写 tmp/restart + 给自己发 SIGINT 触发 uvicorn graceful
+  // shutdown；cli.py 的 loop 拾起并重启。前端调完后应进入"重启中"等待状态，
+  // 轮询 /api/health 直到服务回来。
+  restartServer: () =>
+    req<{ ok: boolean; message: string }>('/api/system/restart', {
+      method: 'POST',
+    }),
 }
 
 export interface BrowseEntry {

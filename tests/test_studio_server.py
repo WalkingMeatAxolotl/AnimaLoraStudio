@@ -467,3 +467,40 @@ def test_root_fallback_when_no_dist(
     assert resp.status_code == 200
     body = resp.json()
     assert "AnimaStudio" in body["message"]
+
+
+# ---------------------------------------------------------------------------
+# /api/system/restart (ADR 0002 / PR-A)
+# ---------------------------------------------------------------------------
+
+def test_system_restart_writes_flag_and_schedules_shutdown(
+    client: TestClient,
+    isolated_paths: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /api/system/restart 应该：
+    1. 写 tmp/restart 标志文件
+    2. 触发 BackgroundTask 走 _raise_sigint_after_response（实际发 SIGINT 会杀
+       测试进程，所以这里 monkeypatch 成 no-op + 记录是否被调用）
+    3. 返回 200 + {"ok": true}
+    """
+    # 把 SIGINT helper 替换为记录器，避免真发信号杀测试
+    called: dict[str, bool] = {"ran": False}
+    def _stub_shutdown() -> None:
+        called["ran"] = True
+    monkeypatch.setattr(server, "_raise_sigint_after_response", _stub_shutdown)
+
+    # 把 flag 路径指向 tmp，避免污染仓库 tmp/
+    flag = isolated_paths["tmp"] / "restart"
+    monkeypatch.setattr(server, "_RESTART_FLAG", flag)
+
+    assert not flag.exists()
+    resp = client.post("/api/system/restart")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert flag.exists(), "tmp/restart flag 应被写入"
+    # BackgroundTask 在 starlette TestClient 上是同步执行的（response 走完后），
+    # 所以这里 stub 一定被调用过
+    assert called["ran"], "_raise_sigint_after_response BackgroundTask 应被调度"
