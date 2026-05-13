@@ -504,3 +504,173 @@ def test_system_restart_writes_flag_and_schedules_shutdown(
     # BackgroundTask 在 starlette TestClient 上是同步执行的（response 走完后），
     # 所以这里 stub 一定被调用过
     assert called["ran"], "_raise_sigint_after_response BackgroundTask 应被调度"
+
+
+# ---------------------------------------------------------------------------
+# /api/system/version (ADR 0002 / PR-B)
+# ---------------------------------------------------------------------------
+
+def test_system_version_returns_fields(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET /api/system/version 应返回 VersionInfo dataclass 的所有字段。"""
+    from studio.services import updater
+
+    fake = updater.VersionInfo(
+        version="0.6.0", commit="abc123", commit_short="abc123",
+        commit_time_iso="2026-05-13T10:00:00+00:00", branch="master",
+        tag="v0.6.0", is_dirty=False,
+    )
+    monkeypatch.setattr(updater, "current_version", lambda: fake)
+
+    resp = client.get("/api/system/version")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["version"] == "0.6.0"
+    assert body["branch"] == "master"
+    assert body["tag"] == "v0.6.0"
+    assert body["is_dirty"] is False
+
+
+# ---------------------------------------------------------------------------
+# /api/system/update_check (ADR 0002 / PR-B)
+# ---------------------------------------------------------------------------
+
+def test_system_update_check_master_default(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """默认 channel=master，返回 UpdateCheckResult 字段。"""
+    from studio.services import updater
+
+    fake = updater.UpdateCheckResult(
+        channel="master", current_commit="abc", latest_commit="def",
+        commits_ahead=2, has_update=True, latest_tag="v0.6.1",
+        checked_at=1234567890.0,
+    )
+    captured: dict = {}
+    def _fake_check(channel="master", use_cache=True):
+        captured["channel"] = channel
+        captured["use_cache"] = use_cache
+        return fake
+    monkeypatch.setattr(updater, "check_update", _fake_check)
+
+    resp = client.get("/api/system/update_check")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["channel"] == "master"
+    assert body["has_update"] is True
+    assert body["latest_tag"] == "v0.6.1"
+    assert captured == {"channel": "master", "use_cache": True}
+
+
+def test_system_update_check_force_skips_cache(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """force=true 应传 use_cache=False 给 updater.check_update。"""
+    from studio.services import updater
+
+    captured: dict = {}
+    def _fake_check(channel="master", use_cache=True):
+        captured["use_cache"] = use_cache
+        return updater.UpdateCheckResult(
+            channel=channel, current_commit="", latest_commit="",
+            commits_ahead=0, has_update=False, latest_tag=None,
+            checked_at=0.0,
+        )
+    monkeypatch.setattr(updater, "check_update", _fake_check)
+
+    client.get("/api/system/update_check?force=true")
+    assert captured["use_cache"] is False
+
+
+def test_system_update_check_invalid_channel(client: TestClient) -> None:
+    resp = client.get("/api/system/update_check?channel=feature%2Fwhatever")
+    assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# /api/system/update (ADR 0002 / PR-B)
+# ---------------------------------------------------------------------------
+
+def test_system_update_rejects_when_running_task(
+    client: TestClient,
+    isolated_paths: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """有 status='running' 任务时 update 应返 422 + 任务列表。"""
+    from studio import db
+    with db.connection_for(isolated_paths["db"]) as conn:
+        tid = db.create_task(conn, name="炼丹中", config_name="train", priority=0)
+        db.update_task(conn, tid, status="running", task_type="train")
+
+    resp = client.post("/api/system/update", json={"target": "origin/master"})
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["detail"]["error"] == "running_tasks_present"
+    assert len(body["detail"]["tasks"]) == 1
+    assert body["detail"]["tasks"][0]["id"] == tid
+
+
+def test_system_update_rejects_when_dirty(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """working tree dirty 时 update 应返 422。"""
+    from studio.services import updater
+    dirty = updater.VersionInfo(
+        version="0.6.0", commit="abc", commit_short="abc", commit_time_iso="",
+        branch="master", tag=None, is_dirty=True,
+    )
+    monkeypatch.setattr(updater, "current_version", lambda: dirty)
+
+    resp = client.post("/api/system/update", json={"target": "origin/master"})
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["detail"]["error"] == "dirty_working_tree"
+
+
+def test_system_update_writes_pending_and_restart_flag(
+    client: TestClient,
+    isolated_paths: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """正常路径：写 .update_pending（含 target）+ tmp/restart + 调度 SIGINT。"""
+    from studio.services import updater
+
+    # 干净 working tree
+    clean = updater.VersionInfo(
+        version="0.6.0", commit="abc", commit_short="abc", commit_time_iso="",
+        branch="master", tag=None, is_dirty=False,
+    )
+    monkeypatch.setattr(updater, "current_version", lambda: clean)
+
+    # 重定向 flag 路径到隔离 tmp
+    pending = tmp_path / ".update_pending"
+    restart_flag = tmp_path / "tmp" / "restart"
+    monkeypatch.setattr(updater, "UPDATE_PENDING", pending)
+    monkeypatch.setattr(updater, "RESTART_FLAG", restart_flag)
+
+    # 拦截 SIGINT
+    monkeypatch.setattr(server, "_raise_sigint_after_response", lambda: None)
+
+    resp = client.post("/api/system/update", json={"target": "origin/dev"})
+    assert resp.status_code == 200
+    assert pending.exists()
+    assert pending.read_text(encoding="utf-8") == "origin/dev"
+    assert restart_flag.exists()
+
+
+def test_system_restart_rejects_when_running_task(
+    client: TestClient,
+    isolated_paths: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PR-B 新加：restart 也要查 running task。"""
+    from studio import db
+    with db.connection_for(isolated_paths["db"]) as conn:
+        tid = db.create_task(conn, name="跑数据", config_name="tag", priority=0)
+        db.update_task(conn, tid, status="running", task_type="tag")
+
+    resp = client.post("/api/system/restart")
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error"] == "running_tasks_present"

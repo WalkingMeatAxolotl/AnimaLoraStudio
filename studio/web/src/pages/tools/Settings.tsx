@@ -10,6 +10,8 @@ import {
   type ModelsCatalog,
   type Secrets,
   type SecretsPatch,
+  type SystemUpdateCheck,
+  type SystemVersion,
   type TorchCuTag,
   type TorchStatus,
   type WandBConfig,
@@ -82,6 +84,7 @@ const TAB_SECTIONS: Record<Tab, { id: string; label: string }[]> = {
     { id: 'display', label: '显示' },
   ],
   system: [
+    { id: 'version', label: '版本' },
     { id: 'service', label: '服务' },
   ],
 }
@@ -2296,21 +2299,196 @@ function DisplaySection() {
 
 // ── System Section（系统 tab）─────────────────────────────────────────────
 //
-// PR-A：仅"重启 server"按钮。PR-B 会在此 Section 上方加版本显示 / 检查更新 /
-// 立即更新 / 回滚 等。
+// PR-B 起拆成两个 sub-section：
+//   - VersionSection：当前版本 / 检查更新 / 立即更新（master 通道）
+//   - ServiceSection：重启 server
 //
-// 重启流程：
-//   1. confirm 弹窗（说明断开时间）
-//   2. POST /api/system/restart → 后端写 tmp/restart + 发 SIGINT
-//   3. 进入"重启中"状态卡片：每 500ms 轮询 /api/health
-//   4. health 200 → toast "已重启" + reload 当前页面（前端重新挂载，SSE 重连）
-//   5. 5 分钟超时 → toast "重启超时，请检查终端" + 保留状态卡片让用户手动刷新
-//
-// 实测耗时（单 GPU、本地 SSD）：~1 分钟。瓶颈在 cli.py 主循环每轮重跑的
-// bootstrap：前端 dist stale 检测 / torch / onnxruntime cold import / uvicorn
-// 起 lifespan。所以 timeout 设 5 分钟兜底慢盘 / 慢解释器 / pending_install
-// 真有 pip 装包要跑的场景。
+// 共用流程"触发后端退出 → 轮询 /api/health 等回来 → 刷新页面"由
+// `pollHealthThenReload` 抽出。restart 超时 5 分钟，update 超时 10 分钟
+// （要多跑 git pull + 可能 pip install / npm install 的时间）。
 function SystemSection() {
+  return (
+    <>
+      <VersionSection />
+      <ServiceSection />
+    </>
+  )
+}
+
+// ── 公共：触发后端退出后轮询 health 并刷新 ─────────────────────────────
+//
+// 调用者负责在 await 之前已经成功触发了 server 退出（POST /restart 或 /update
+// 已经 200 回来）。这里只管"等服务回来 + 刷页面 + 失败提示"。
+type ToastFn = (msg: string, kind?: 'info' | 'success' | 'error') => void
+
+async function pollHealthThenReload(
+  toast: ToastFn,
+  timeoutMs: number,
+  label: string,
+  onTimeout: () => void,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  const pollInterval = 500
+  // 间隔后开始轮询：给 server 时间真正退出，避免命中还没死的旧进程
+  await new Promise((r) => setTimeout(r, 1500))
+  while (Date.now() < deadline) {
+    try {
+      await api.health()
+      toast(`${label}完成，正在刷新页面...`, 'success')
+      setTimeout(() => window.location.reload(), 800)
+      return
+    } catch {
+      // server 还没回来，继续轮询
+    }
+    await new Promise((r) => setTimeout(r, pollInterval))
+  }
+  const mins = Math.round(timeoutMs / 60_000)
+  toast(`${label}超时（${mins} 分钟），请检查终端输出后手动刷新页面`, 'error')
+  onTimeout()
+}
+
+// ── 版本 Section ────────────────────────────────────────────────────────
+//
+// 加载时自动 fetch /api/system/version + /api/system/update_check（master 通道，
+// 走 cache）。"检查更新"按钮 force=true 强制重 fetch。"立即更新"按钮仅在
+// has_update=true 时显示，点击走 POST /api/system/update 流程（precondition
+// 422 时拿 e.detail 区分提示）。
+function VersionSection() {
+  const { toast } = useToast()
+  const dialog = useDialog()
+  const [version, setVersion] = useState<SystemVersion | null>(null)
+  const [check, setCheck] = useState<SystemUpdateCheck | null>(null)
+  const [checking, setChecking] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    void api.getSystemVersion().then(setVersion).catch(() => { /* silent */ })
+    void api.checkSystemUpdate('master').then(setCheck).catch(() => { /* silent */ })
+  }, [])
+
+  const handleCheck = async () => {
+    setChecking(true)
+    try {
+      const r = await api.checkSystemUpdate('master', true)
+      setCheck(r)
+      if (r.error) {
+        toast(`检查失败: ${r.error}`, 'error')
+      } else if (r.has_update) {
+        toast(`有新版本：${r.latest_tag ?? r.latest_commit.slice(0, 8)}（${r.commits_ahead} commits）`, 'info')
+      } else {
+        toast('已是最新版本', 'success')
+      }
+    } catch (e) {
+      toast(`检查更新失败: ${e}`, 'error')
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  const handleUpdate = async () => {
+    if (!check?.has_update) return
+    const targetLabel = check.latest_tag ?? check.latest_commit.slice(0, 8)
+    const ok = await dialog.confirm(
+      `将更新到 ${targetLabel}（${check.commits_ahead} commits）。\n\n` +
+      'Studio 会关闭后台 server，pull 新代码，按需 pip / npm install，再重启。\n' +
+      '预计 1-5 分钟（首次或依赖大改时更久），期间 webui 无法访问，页面会自动等待并刷新。\n\n' +
+      '若有训练 / 打标任务正在运行将被拒绝；本地有未提交修改也会被拒绝。',
+      { tone: 'warn', okText: '更新' },
+    )
+    if (!ok) return
+
+    setBusy(true)
+    try {
+      await api.performSystemUpdate('origin/master')
+    } catch (e) {
+      const err = e as Error & { status?: number; detail?: { error?: string; tasks?: { name: string }[] } }
+      if (err.status === 422 && err.detail?.error === 'running_tasks_present') {
+        const names = (err.detail.tasks ?? []).map((t) => t.name || `task#${(t as { id?: number }).id ?? '?'}`).join(', ')
+        toast(`有任务在跑，请先取消：${names}`, 'error')
+      } else if (err.status === 422 && err.detail?.error === 'dirty_working_tree') {
+        toast('本地有未提交修改，请先 commit 或 stash 后再更新', 'error')
+      } else {
+        toast(`触发更新失败: ${err.message ?? e}`, 'error')
+      }
+      setBusy(false)
+      return
+    }
+
+    void pollHealthThenReload(toast, 10 * 60_000, '更新', () => setBusy(false))
+  }
+
+  const headDescr = version
+    ? `${version.tag ?? `v${version.version}`} · ${version.commit_short} · ${version.branch}${version.is_dirty ? ' · 本地有改动' : ''}`
+    : '加载中...'
+
+  return (
+    <SettingsSection id="version" title="版本">
+      <SettingsField label="当前">
+        <div className="flex flex-col gap-0.5 text-fg-primary text-sm font-mono">
+          <span>{headDescr}</span>
+          {version?.commit_time_iso && (
+            <span className="text-2xs text-fg-dim">
+              {new Date(version.commit_time_iso).toLocaleString()}
+            </span>
+          )}
+        </div>
+      </SettingsField>
+
+      {check && (
+        <SettingsField label="远端 (master)">
+          {check.error ? (
+            <span className="text-err text-sm">{check.error}</span>
+          ) : check.has_update ? (
+            <div className="flex flex-col gap-0.5 text-fg-primary text-sm font-mono">
+              <span>
+                {check.latest_tag ?? check.latest_commit.slice(0, 8)} · ↑ {check.commits_ahead} commits
+              </span>
+              <span className="text-2xs text-fg-dim">
+                上次检查 {new Date(check.checked_at * 1000).toLocaleString()}
+              </span>
+            </div>
+          ) : (
+            <span className="text-fg-dim text-sm">已是最新版本</span>
+          )}
+        </SettingsField>
+      )}
+
+      <SettingsField label="操作">
+        <div className="flex flex-col gap-1.5">
+          <div className="flex gap-2 flex-wrap">
+            <button
+              onClick={() => void handleCheck()}
+              disabled={checking || busy}
+              className="btn btn-secondary btn-sm"
+            >
+              {checking ? '检查中...' : '检查更新'}
+            </button>
+            {check?.has_update && (
+              <button
+                onClick={() => void handleUpdate()}
+                disabled={busy || checking}
+                className="btn btn-primary btn-sm"
+              >
+                {busy ? '更新中...' : `立即更新 → ${check.latest_tag ?? check.latest_commit.slice(0, 8)}`}
+              </button>
+            )}
+          </div>
+          <p className="text-2xs text-fg-dim leading-snug">
+            自动检查每 24 小时一次（master 通道，关闭 webui 不影响）。
+            更新会执行 <code>git reset --hard origin/master</code> + 必要时 pip / npm install。
+            <br />
+            <span className="text-warn">
+              当前有训练 / 打标任务运行时不允许更新；本地未提交的改动也会被拒绝。
+            </span>
+          </p>
+        </div>
+      </SettingsField>
+    </SettingsSection>
+  )
+}
+
+// ── 服务 Section（重启 server）─────────────────────────────────────────
+function ServiceSection() {
   const { toast } = useToast()
   const dialog = useDialog()
   const [busy, setBusy] = useState(false)
@@ -2319,7 +2497,7 @@ function SystemSection() {
     const ok = await dialog.confirm(
       '将关闭并重新启动 Studio 后端服务。\n\n' +
       '通常 30 秒到 1 分钟，期间 webui 无法访问（页面会自动等待并刷新）。\n\n' +
-      '注意（PR-A 暂未做任务保护）：当前若有训练 / 打标任务在跑，将被强制取消，丢失未保存进度。',
+      '若有训练 / 打标任务在跑会被拒绝（PR-B 起加保护）。',
       { tone: 'warn', okText: '重启' },
     )
     if (!ok) return
@@ -2328,34 +2506,18 @@ function SystemSection() {
     try {
       await api.restartServer()
     } catch (e) {
-      toast(`触发重启失败: ${e}`, 'error')
+      const err = e as Error & { status?: number; detail?: { error?: string; tasks?: { name: string; id?: number }[] } }
+      if (err.status === 422 && err.detail?.error === 'running_tasks_present') {
+        const names = (err.detail.tasks ?? []).map((t) => t.name || `task#${t.id ?? '?'}`).join(', ')
+        toast(`有任务在跑，请先取消：${names}`, 'error')
+      } else {
+        toast(`触发重启失败: ${err.message ?? e}`, 'error')
+      }
       setBusy(false)
       return
     }
 
-    // 轮询 /api/health 等服务回来。5 分钟超时兜底慢盘 / cold torch import。
-    const TIMEOUT_MS = 5 * 60_000
-    const deadline = Date.now() + TIMEOUT_MS
-    const pollInterval = 500
-    const poll = async () => {
-      // 间隔后开始轮询：给 server 时间真正退出，避免命中还没死的旧进程
-      await new Promise((r) => setTimeout(r, 1500))
-      while (Date.now() < deadline) {
-        try {
-          await api.health()
-          toast('Studio 已重启，正在刷新页面...', 'success')
-          // 给 toast 一点显示时间再刷
-          setTimeout(() => window.location.reload(), 800)
-          return
-        } catch {
-          // server 还没回来，继续轮询
-        }
-        await new Promise((r) => setTimeout(r, pollInterval))
-      }
-      toast('重启超时（5 分钟），请检查终端输出后手动刷新页面', 'error')
-      setBusy(false)
-    }
-    void poll()
+    void pollHealthThenReload(toast, 5 * 60_000, '重启', () => setBusy(false))
   }
 
   return (
@@ -2372,10 +2534,6 @@ function SystemSection() {
           <p className="text-2xs text-fg-dim leading-snug">
             关闭并重新启动后端进程。常用场景：修改 secrets.json 后强制刷新、
             装完新 onnxruntime / PyTorch 让 EP 生效。
-            <br />
-            <span className="text-warn">
-              当前未做运行中任务保护（PR-B 会加），有训练 / 打标在跑时不要点。
-            </span>
           </p>
         </div>
       </SettingsField>

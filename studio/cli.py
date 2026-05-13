@@ -514,6 +514,33 @@ def _web_dist_is_stale() -> bool:
 _RESTART_FLAG = REPO_ROOT / "tmp" / "restart"
 
 
+def _apply_update_pending() -> None:
+    """启动期处理 webui 触发的 update 请求（ADR 0002 / PR-B）。
+
+    server 端 POST /api/system/update 写 studio_data/.update_pending 后通过
+    SIGINT 退出。我们在 cli.py 主循环里下一轮 bootstrap 之前调这个函数完成：
+
+    1. git fetch + git reset --hard {target}
+    2. requirements.txt 变了 → pip install -r（增量）
+    3. studio/web/package.json 变了 → npm install
+    4. 清 update cache 让下次 check_update 重 fetch
+
+    失败不抛 —— `apply_pending` 内部把错误写到 studio_data/.update_log，
+    让 cli.py 继续走后面的 bootstrap 把 server 至少起回来（用户能在 UI
+    看到"上次 update 失败"提示）。
+    """
+    try:
+        from studio.services import updater  # noqa: PLC0415
+        if not updater.has_pending():
+            return
+        updater.apply_pending(emit=print)
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"[studio] 警告：apply update pending 时异常（{exc}），跳过",
+            file=sys.stderr,
+        )
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     """`run` 主循环。
 
@@ -533,6 +560,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         rc = _ensure_python_deps()
         if rc != 0:
             return rc
+
+        # 检测 update pending（ADR 0002 / PR-B）：上一轮 server 写了
+        # studio_data/.update_pending 并请求重启，这里在重新 bootstrap 之前
+        # 先 git pull + 必要时 pip install / npm install，确保后续的 stale
+        # 检查 / native module 加载用的都是新版代码 / 新版依赖。
+        _apply_update_pending()
+
         if not args.no_build:
             if not WEB_DIST.exists():
                 print("[studio] studio/web/dist 不存在，先构建前端...")

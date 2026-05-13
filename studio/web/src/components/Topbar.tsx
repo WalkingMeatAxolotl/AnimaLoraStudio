@@ -102,6 +102,21 @@ export default function Topbar() {
   const [runningTask, setRunningTask] = useState<Task | null>(null)
   const [pendingCount, setPendingCount] = useState(0)
 
+  // 升级可用 badge（ADR 0002 / PR-B）。Topbar mount 时调一次 /api/system/update_check
+  // （master 通道，走 24h cache），有更新就显示红点。dev 通道永不亮 badge
+  // （PR-D 加 toggle 后只在 Settings 系统 tab 暴露手动检查入口）。
+  const [updateInfo, setUpdateInfo] = useState<{ has_update: boolean; latest_tag: string | null; latest_commit: string } | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    void api.checkSystemUpdate('master').then((r) => {
+      if (cancelled) return
+      if (r.has_update) {
+        setUpdateInfo({ has_update: true, latest_tag: r.latest_tag, latest_commit: r.latest_commit })
+      }
+    }).catch(() => { /* silent — 没网 / git fetch 失败时不打扰用户 */ })
+    return () => { cancelled = true }
+  }, [])
+
   // monitor 状态走 useMonitorProgress hook (PR #37 增量协议)：自动管理
   // /api/state 冷启动 + monitor_progress delta 合并 + 重连补拉，本组件只
   // 关心结果的 step/total_steps/speed/start_time 几个 scalar 字段。
@@ -224,6 +239,22 @@ export default function Topbar() {
 
         {/* 实时系统监控 (CPU / RAM / GPU / VRAM)，每 ~2.5s 轮询；无 NVIDIA 时只显示 CPU/RAM。 */}
         <SystemStats />
+
+        {/* 升级可用 badge：仅 master 有新版时显示，点击跳 Settings 系统 tab。 */}
+        {updateInfo?.has_update && (
+          <button
+            onClick={() => {
+              // Settings 用 localStorage 持久化 tab，提前切到 system 让进入即看到
+              try { localStorage.setItem('studio.settings.activeTab', 'system') } catch { /* ignore */ }
+              navigate('/tools/settings')
+            }}
+            title={`新版本 ${updateInfo.latest_tag ?? updateInfo.latest_commit.slice(0, 8)} 可用`}
+            className="flex items-center gap-1.5 px-2 py-[5px] rounded-md text-xs font-mono text-accent bg-accent-soft border border-accent cursor-pointer hover:bg-accent/10 transition-colors shrink-0"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-accent" />
+            <span>{updateInfo.latest_tag ?? '新版本'}</span>
+          </button>
+        )}
 
         {/* 运行中训练胶囊 */}
         {runningTask && (

@@ -940,6 +940,17 @@ export interface ImportResult {
   renamed: Record<string, string>
 }
 
+/**
+ * API 错误：除了 `message`（用于直接 toast 的字符串），额外保留 `status` 和
+ * `detail`（FastAPI 端 raise HTTPException(status, detail=dict(...)) 时
+ * detail 是结构化对象，调用方可以 `e.detail.error` 区分类型）。
+ *
+ * 用 Error 而非自定义 class 是因为不少现有 callsite 是 `catch (e) { toast(String(e)) }`
+ * 这种通用写法；保留 `Error.prototype.toString()` 行为不破坏它们。需要结构化
+ * 处理的新 callsite 强制 cast：`(e as ApiError).detail`。
+ */
+export type ApiError = Error & { status?: number; detail?: unknown }
+
 async function req<T>(
   path: string,
   init?: RequestInit
@@ -953,13 +964,23 @@ async function req<T>(
   })
   if (!resp.ok) {
     let detail = `${resp.status} ${resp.statusText}`
+    let rawDetail: unknown = null
     try {
       const body = await resp.json()
-      if (body?.detail) detail = body.detail
+      if (typeof body?.detail === 'string') {
+        detail = body.detail
+      } else if (body?.detail && typeof body.detail === 'object') {
+        rawDetail = body.detail
+        // 结构化 detail：取 .message 作为可读字符串；callsite 想拿完整结构走 e.detail
+        detail = (body.detail as { message?: string }).message ?? JSON.stringify(body.detail)
+      }
     } catch {
-      // ignore
+      // body 不是 JSON / 解析失败：保持 statusText 默认
     }
-    throw new Error(detail)
+    const err = new Error(detail) as ApiError
+    err.status = resp.status
+    err.detail = rawDetail
+    throw err
   }
   if (resp.status === 204) return undefined as T
   return (await resp.json()) as T
@@ -1632,6 +1653,45 @@ export const api = {
     req<{ ok: boolean; message: string }>('/api/system/restart', {
       method: 'POST',
     }),
+
+  // 当前仓库 git 状态：__version__ / commit / tag / branch / dirty
+  getSystemVersion: () => req<SystemVersion>('/api/system/version'),
+
+  // git fetch + 比对。master 通道 24h cache；force=true 强制重 fetch。
+  // dev 通道（PR-D）每次都 fetch，不缓存。
+  checkSystemUpdate: (channel: 'master' | 'dev' = 'master', force = false) => {
+    const qs = new URLSearchParams({ channel, force: String(force) })
+    return req<SystemUpdateCheck>(`/api/system/update_check?${qs.toString()}`)
+  },
+
+  // 请求 update：写 .update_pending + 触发 SIGINT 重启。
+  // 422 = running task 或 dirty working tree。
+  performSystemUpdate: (target: string = 'origin/master') =>
+    req<{ ok: boolean; message: string }>('/api/system/update', {
+      method: 'POST',
+      body: JSON.stringify({ target }),
+    }),
+}
+
+export interface SystemVersion {
+  version: string
+  commit: string
+  commit_short: string
+  commit_time_iso: string
+  branch: string
+  tag: string | null
+  is_dirty: boolean
+}
+
+export interface SystemUpdateCheck {
+  channel: 'master' | 'dev'
+  current_commit: string
+  latest_commit: string
+  commits_ahead: number
+  has_update: boolean
+  latest_tag: string | null
+  checked_at: number
+  error: string | null
 }
 
 export interface BrowseEntry {

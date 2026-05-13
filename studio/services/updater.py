@@ -1,0 +1,372 @@
+"""Webui 内自更新机制（ADR 0002）— git pull + 重启 + apply pending deps。
+
+详见 [`docs/adr/0002-webui-self-update.md`](../../docs/adr/0002-webui-self-update.md)。
+
+模块职责：
+- 查询当前 git 状态（HEAD / branch / tag / dirty）
+- 检查远端是否有新版本（git fetch + rev-list 比对，TTL 24h 缓存）
+- 写 `studio_data/.update_pending` + `tmp/restart` 让 cli.py 启动期接管
+- cli.py 启动期 `apply_pending()` 执行 git pull + 增量 pip install / npm install
+
+关键 flag / 文件协议：
+
+| 路径 | 含义 | 作者 → 读者 |
+| --- | --- | --- |
+| `tmp/restart` | 需要重启 | server → cli.py / wrapper |
+| `studio_data/.update_pending` | 启动期要 git pull，内容是 target ref | server → cli.py |
+| `studio_data/.update_cache` | 自动检查结果缓存（TTL 24h） | check_update() 自管 |
+| `studio_data/.last_version` | 上一版 commit（rollback 用，PR-C 启用） | apply_pending |
+| `studio_data/.update_log` | 最近一次 update 的日志（PR-C 展示） | apply_pending |
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import shutil
+import subprocess
+import sys
+import time
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Optional
+
+from .. import __version__
+from ..paths import REPO_ROOT, STUDIO_DATA
+
+logger = logging.getLogger(__name__)
+
+# ----- Flag / 缓存文件路径 ------------------------------------------------
+RESTART_FLAG = REPO_ROOT / "tmp" / "restart"
+UPDATE_PENDING = STUDIO_DATA / ".update_pending"
+UPDATE_CACHE = STUDIO_DATA / ".update_cache"
+LAST_VERSION = STUDIO_DATA / ".last_version"
+UPDATE_LOG = STUDIO_DATA / ".update_log"
+
+UPDATE_CACHE_TTL_SECONDS = 24 * 3600
+GIT_FETCH_TIMEOUT = 30.0
+GIT_PULL_TIMEOUT = 120.0
+
+
+# ----- 数据类型 -----------------------------------------------------------
+@dataclass
+class VersionInfo:
+    """当前仓库 git 状态。"""
+    version: str               # studio.__version__ (0.6.0)
+    commit: str                # 完整 sha
+    commit_short: str          # 前 8 位
+    commit_time_iso: str       # ISO8601
+    branch: str                # master / dev / detached
+    tag: Optional[str]         # HEAD 上的 tag（仅 exact match），无则 None
+    is_dirty: bool             # working tree 有未提交改动
+
+
+@dataclass
+class UpdateCheckResult:
+    """git fetch + 比对结果。"""
+    channel: str               # master / dev
+    current_commit: str
+    latest_commit: str
+    commits_ahead: int         # local 落后 remote 多少 commit
+    has_update: bool
+    latest_tag: Optional[str]  # remote 最新 tag（仅 master 通道有）
+    checked_at: float          # epoch
+    error: Optional[str] = None  # fetch 失败时填
+
+
+# ----- Git 调用 helper ----------------------------------------------------
+def _git(*args: str, timeout: float = 15.0) -> tuple[int, str, str]:
+    """跑 git 命令，返回 (rc, stdout, stderr)。"""
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+    except FileNotFoundError:
+        return 1, "", "git not found on PATH"
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return 1, "", str(exc)
+
+
+# ----- 公开 API -----------------------------------------------------------
+def current_version() -> VersionInfo:
+    """读当前仓库状态。git 不可用时返回占位值（不抛）。"""
+    rc, head, _ = _git("rev-parse", "HEAD")
+    commit = head if rc == 0 else "unknown"
+    short = commit[:8] if commit != "unknown" else "?"
+
+    rc, branch, _ = _git("rev-parse", "--abbrev-ref", "HEAD")
+    if rc != 0 or branch == "HEAD":
+        branch = "detached"
+
+    rc, ctime, _ = _git("log", "-1", "--format=%cI", "HEAD")
+    ctime_iso = ctime if rc == 0 else ""
+
+    rc, tag, _ = _git("describe", "--tags", "--exact-match", "HEAD")
+    exact_tag = tag if rc == 0 else None
+
+    rc, status, _ = _git("status", "--porcelain")
+    is_dirty = rc == 0 and bool(status)
+
+    return VersionInfo(
+        version=__version__,
+        commit=commit,
+        commit_short=short,
+        commit_time_iso=ctime_iso,
+        branch=branch,
+        tag=exact_tag,
+        is_dirty=is_dirty,
+    )
+
+
+def check_update(channel: str = "master", use_cache: bool = True) -> UpdateCheckResult:
+    """`git fetch origin {channel}` + 比对本地 HEAD 与 `origin/{channel}`。
+
+    channel 仅接受 'master' / 'dev'。Master 走 24h 缓存（cache 写到磁盘）；
+    dev 不写缓存（开发者主动检查，避免污染 master 的"有更新"信号）。
+    """
+    if channel not in ("master", "dev"):
+        raise ValueError(f"invalid channel: {channel}")
+
+    if channel == "master" and use_cache:
+        cached = _read_cache()
+        if cached is not None:
+            return cached
+
+    cur = current_version()
+
+    rc, _, stderr = _git("fetch", "origin", channel, timeout=GIT_FETCH_TIMEOUT)
+    if rc != 0:
+        return UpdateCheckResult(
+            channel=channel, current_commit=cur.commit, latest_commit="",
+            commits_ahead=0, has_update=False, latest_tag=None,
+            checked_at=time.time(), error=f"git fetch failed: {stderr[:200]}",
+        )
+
+    rc, latest, _ = _git("rev-parse", f"origin/{channel}")
+    if rc != 0:
+        return UpdateCheckResult(
+            channel=channel, current_commit=cur.commit, latest_commit="",
+            commits_ahead=0, has_update=False, latest_tag=None,
+            checked_at=time.time(), error=f"git rev-parse origin/{channel} failed",
+        )
+
+    rc, ahead_str, _ = _git("rev-list", "--count", f"HEAD..origin/{channel}")
+    commits_ahead = int(ahead_str) if rc == 0 and ahead_str.isdigit() else 0
+    has_update = commits_ahead > 0 and cur.commit != latest
+
+    latest_tag: Optional[str] = None
+    if channel == "master" and has_update:
+        rc, tag, _ = _git("describe", "--tags", "--abbrev=0", latest)
+        if rc == 0:
+            latest_tag = tag
+
+    result = UpdateCheckResult(
+        channel=channel,
+        current_commit=cur.commit,
+        latest_commit=latest,
+        commits_ahead=commits_ahead,
+        has_update=has_update,
+        latest_tag=latest_tag,
+        checked_at=time.time(),
+    )
+
+    if channel == "master":
+        _write_cache(result)
+
+    return result
+
+
+def request_update(target: str = "origin/master") -> None:
+    """server 端调：写 .update_pending + tmp/restart 让 cli.py 启动期接管。"""
+    UPDATE_PENDING.parent.mkdir(parents=True, exist_ok=True)
+    UPDATE_PENDING.write_text(target, encoding="utf-8")
+    RESTART_FLAG.parent.mkdir(parents=True, exist_ok=True)
+    RESTART_FLAG.touch()
+
+
+def has_pending() -> bool:
+    return UPDATE_PENDING.exists()
+
+
+def apply_pending(emit: Callable[[str], None] = print) -> bool:
+    """cli.py 启动期调。返回 True = 走过 pull 路径；False = 无 pending 跳过。
+
+    流程：
+    1. 读 .update_pending 拿 target ref
+    2. 写 .last_version（rollback 用，PR-C 启用）
+    3. precondition：working tree 必须干净（理论上 server 已查过，这里再保一层）
+    4. `git fetch origin` + `git reset --hard {target}`（避免 merge 冲突）
+    5. requirements.txt sha256 marker 比对 → 改了就 `pip install -r`
+    6. studio/web/package.json mtime > node_modules/.package-lock.json → `npm install`
+    7. 清 cache（让下次 check_update 重 fetch）+ 清 .update_pending
+
+    失败的每一步都写 .update_log（PR-C UI 展示），但不抛异常 — 让 cli.py
+    继续走后面的 bootstrap，server 至少能起来（可能起来后用户看到的是
+    "上次 update 失败"提示）。
+    """
+    if not has_pending():
+        return False
+
+    target = UPDATE_PENDING.read_text(encoding="utf-8").strip() or "origin/master"
+    emit(f"[updater] applying pending update → {target}")
+
+    cur = current_version()
+    log_lines: list[str] = [
+        f"=== {time.strftime('%Y-%m-%d %H:%M:%S')} update {cur.commit_short} → {target} ===",
+        f"branch={cur.branch} tag={cur.tag or '-'} dirty={cur.is_dirty}",
+    ]
+
+    # 保存上一版本（PR-C rollback 用）
+    try:
+        LAST_VERSION.parent.mkdir(parents=True, exist_ok=True)
+        LAST_VERSION.write_text(cur.commit, encoding="utf-8")
+    except OSError as e:
+        log_lines.append(f"[warn] failed to write .last_version: {e}")
+
+    # 1. precondition：working tree 干净
+    if cur.is_dirty:
+        log_lines.append("[abort] working tree dirty")
+        emit("[updater] working tree dirty, aborting update")
+        _finalize(log_lines)
+        return True
+
+    # 2. git fetch
+    log_lines.append("[git] fetch origin")
+    rc, _, stderr = _git("fetch", "origin", timeout=GIT_FETCH_TIMEOUT)
+    if rc != 0:
+        log_lines.append(f"[git fetch] FAILED rc={rc} stderr={stderr}")
+        emit(f"[updater] git fetch failed: {stderr[:200]}")
+        _finalize(log_lines)
+        return True
+
+    # 3. git reset --hard target（避免 merge conflict；working tree 干净已验过）
+    log_lines.append(f"[git] reset --hard {target}")
+    rc, _, stderr = _git("reset", "--hard", target, timeout=GIT_PULL_TIMEOUT)
+    if rc != 0:
+        log_lines.append(f"[git reset] FAILED rc={rc} stderr={stderr}")
+        emit(f"[updater] git reset failed: {stderr[:200]}")
+        _finalize(log_lines)
+        return True
+
+    new = current_version()
+    log_lines.append(f"[ok] now at {new.commit_short} ({new.tag or new.branch})")
+    emit(f"[updater] git updated → {new.commit_short}")
+
+    # 4. requirements.txt 改了 → 增量 pip install（不 --upgrade，仅补缺）
+    if _requirements_marker_stale():
+        log_lines.append("[pip] requirements.txt changed; pip install -r")
+        emit("[updater] requirements.txt changed, pip install (may take a few minutes)...")
+        rc = subprocess.call(
+            [sys.executable, "-m", "pip", "install", "-r", str(REPO_ROOT / "requirements.txt")]
+        )
+        log_lines.append(f"[pip] exit code {rc}")
+        if rc == 0:
+            # 更新 sha256 marker
+            marker = REPO_ROOT / "venv" / ".studio-requirements.sha256"
+            tool = REPO_ROOT / "tools" / "check_requirements_changed.py"
+            if tool.exists():
+                subprocess.call([
+                    sys.executable, str(tool),
+                    "--marker", str(marker), "--update-marker",
+                ])
+
+    # 5. package.json 改了 → npm install
+    if _package_json_changed():
+        log_lines.append("[npm] package.json changed; npm install")
+        emit("[updater] studio/web/package.json changed, npm install...")
+        npm = shutil.which("npm") or shutil.which("npm.cmd")
+        if npm:
+            rc = subprocess.call([npm, "install"], cwd=str(REPO_ROOT / "studio" / "web"))
+            log_lines.append(f"[npm] exit code {rc}")
+        else:
+            log_lines.append("[npm] not found on PATH, skipping (cli.py bootstrap will retry)")
+
+    log_lines.append("[done]")
+    _finalize(log_lines)
+
+    # 清 update cache，让下次 check_update 重 fetch（不依赖 24h TTL）
+    try:
+        if UPDATE_CACHE.exists():
+            UPDATE_CACHE.unlink()
+    except OSError:
+        pass
+
+    return True
+
+
+# ----- 内部 helpers ------------------------------------------------------
+def _read_cache() -> Optional[UpdateCheckResult]:
+    if not UPDATE_CACHE.exists():
+        return None
+    try:
+        data = json.loads(UPDATE_CACHE.read_text(encoding="utf-8"))
+        age = time.time() - float(data.get("checked_at", 0))
+        if age > UPDATE_CACHE_TTL_SECONDS or age < 0:
+            return None
+        return UpdateCheckResult(**data)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+
+
+def _write_cache(result: UpdateCheckResult) -> None:
+    """原子写：先写 .tmp 再 rename，避免并发读 corrupt。"""
+    try:
+        UPDATE_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = UPDATE_CACHE.with_suffix(UPDATE_CACHE.suffix + ".tmp")
+        tmp.write_text(json.dumps(asdict(result), indent=2), encoding="utf-8")
+        tmp.replace(UPDATE_CACHE)
+    except OSError as e:
+        logger.warning("failed to write update cache: %s", e)
+
+
+def _finalize(log_lines: list[str]) -> None:
+    """写 update.log + 清 .update_pending 标志。"""
+    try:
+        UPDATE_LOG.parent.mkdir(parents=True, exist_ok=True)
+        UPDATE_LOG.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+    try:
+        if UPDATE_PENDING.exists():
+            UPDATE_PENDING.unlink()
+    except OSError:
+        pass
+
+
+def _requirements_marker_stale() -> bool:
+    """requirements.txt sha256 vs venv/.studio-requirements.sha256 marker。
+
+    复用 studio.sh / studio.bat 已用的 marker（兼容 cold-start bootstrap）。
+    """
+    req = REPO_ROOT / "requirements.txt"
+    marker = REPO_ROOT / "venv" / ".studio-requirements.sha256"
+    if not req.exists():
+        return False
+    digest = hashlib.sha256(req.read_bytes()).hexdigest()
+    if not marker.exists():
+        return True  # 没 marker：可能从未装过，安全起见按 stale
+    try:
+        return marker.read_text(encoding="utf-8").strip() != digest
+    except OSError:
+        return True
+
+
+def _package_json_changed() -> bool:
+    """package.json mtime > node_modules/.package-lock.json mtime 即视为改了。
+
+    npm install 后会刷新 .package-lock.json mtime，这是 npm 自带行为。
+    没 node_modules / 没 lock 文件返回 False（cli.py 的 npm_install_if_missing 会兜底）。
+    """
+    pkg = REPO_ROOT / "studio" / "web" / "package.json"
+    lock = REPO_ROOT / "studio" / "web" / "node_modules" / ".package-lock.json"
+    if not pkg.exists() or not lock.exists():
+        return False
+    try:
+        return pkg.stat().st_mtime > lock.stat().st_mtime
+    except OSError:
+        return False

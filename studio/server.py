@@ -69,6 +69,7 @@ from .services import (
     system_stats,
     tagedit,
     train_io,
+    updater,
     uploads as uploads_svc,
     version_config,
     xformers_setup,
@@ -3066,6 +3067,31 @@ def _raise_sigint_after_response() -> None:
         os._exit(0)
 
 
+def _check_no_running_tasks() -> None:
+    """重启 / 更新前置：所有 task 必须 done / failed / canceled / pending。
+
+    有 running 直接 422 + task 列表，让前端给用户友好的提示（"先暂停以下任务"）。
+    """
+    with db.connection_for() as conn:
+        running = db.list_tasks(conn, status="running")
+    if running:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "running_tasks_present",
+                "message": "有任务正在运行，请先取消 / 等待完成",
+                "tasks": [
+                    {
+                        "id": t["id"],
+                        "name": t.get("name", ""),
+                        "task_type": t.get("task_type", "train"),
+                    }
+                    for t in running
+                ],
+            },
+        )
+
+
 @app.post("/api/system/restart")
 def system_restart(background: BackgroundTasks) -> dict[str, Any]:
     """重启 server（不 pull 代码）。
@@ -3073,13 +3099,59 @@ def system_restart(background: BackgroundTasks) -> dict[str, Any]:
     流程：写 tmp/restart 标志 → 响应 200 → BackgroundTask 发 SIGINT 触发
     uvicorn graceful shutdown → cli.py loop 拾起 → 重新起新 server。
 
-    PR-A 范围：不检查 running task（用户自己判断）。PR-B 会加 has_running_task
-    强制约束（训练任务进行中拒绝重启）。
+    PR-B 起加 running task 强制约束。
     """
+    _check_no_running_tasks()
     _RESTART_FLAG.parent.mkdir(parents=True, exist_ok=True)
     _RESTART_FLAG.touch()
     background.add_task(_raise_sigint_after_response)
     return {"ok": True, "message": "restart scheduled"}
+
+
+@app.get("/api/system/version")
+def system_version() -> dict[str, Any]:
+    """当前仓库状态：__version__ / commit / tag / branch / dirty。"""
+    from dataclasses import asdict
+    return asdict(updater.current_version())
+
+
+@app.get("/api/system/update_check")
+def system_update_check(channel: str = "master", force: bool = False) -> dict[str, Any]:
+    """git fetch + 比对。master 通道用 24h cache（force=true 强制重 fetch）；
+    dev 通道每次都 fetch，不缓存（开发者主动触发，避免污染 master 信号）。
+    """
+    from dataclasses import asdict
+    if channel not in ("master", "dev"):
+        raise HTTPException(400, f"invalid channel: {channel}")
+    return asdict(updater.check_update(channel=channel, use_cache=not force))
+
+
+class UpdateRequest(BaseModel):
+    target: str = "origin/master"  # ref / commit sha / origin/branch
+
+
+@app.post("/api/system/update")
+def system_update(body: UpdateRequest, background: BackgroundTasks) -> dict[str, Any]:
+    """请求 update：precondition 校验 + 写 .update_pending + 触发重启。
+
+    实际 git pull 在 cli.py 启动期 updater.apply_pending() 完成（避免在 server
+    进程里跑 git pull，规避 native module 已锁的问题）。
+    """
+    _check_no_running_tasks()
+
+    cur = updater.current_version()
+    if cur.is_dirty:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "dirty_working_tree",
+                "message": "本地有未提交的修改，请先 commit / stash",
+            },
+        )
+
+    updater.request_update(body.target)
+    background.add_task(_raise_sigint_after_response)
+    return {"ok": True, "message": f"update scheduled → {body.target}"}
 
 
 @app.get("/", response_model=None)
