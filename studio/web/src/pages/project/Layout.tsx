@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Outlet, useNavigate, useParams } from 'react-router-dom'
 import { api, downloadBlob, type ProjectDetail } from '../../api/client'
 import { useProjectCtxSetter } from '../../context/ProjectContext'
+import { useDialog } from '../../components/Dialog'
 import { useToast } from '../../components/Toast'
 import { useEventStream } from '../../lib/useEventStream'
 
@@ -10,6 +11,7 @@ export default function ProjectLayout() {
   const projectId = pid ? Number(pid) : NaN
   const navigate = useNavigate()
   const { toast } = useToast()
+  const { confirm } = useDialog()
   const setCtx = useProjectCtxSetter()
   const [project, setProject] = useState<ProjectDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -81,7 +83,7 @@ export default function ProjectLayout() {
     if (!projectRef.current) return
     const v = projectRef.current.versions.find((x) => x.id === vid)
     if (!v) return
-    if (!confirm(`删除版本 ${v.label}？目录将移到回收站。`)) return
+    if (!(await confirm(`删除版本 ${v.label}？目录将移到回收站。`, { tone: 'warn', okText: '删版本' }))) return
     const pid = projectRef.current.id
     try {
       await api.deleteVersion(pid, vid)
@@ -91,7 +93,7 @@ export default function ProjectLayout() {
     } catch (e) {
       toast(String(e), 'error')
     }
-  }, [reload, toast, navigate])
+  }, [reload, toast, navigate, confirm])
 
   const handleCreateVersion = useCallback(async (label: string, forkFromVersionId: number | null) => {
     if (!projectRef.current || creatingBusy) return

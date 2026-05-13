@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { api, type ProjectStage, type ProjectSummary } from '../api/client'
 import PageHeader from '../components/PageHeader'
 import StageBadge from '../components/StageBadge'
+import { useDialog } from '../components/Dialog'
 import { useToast } from '../components/Toast'
 import { useEventStream } from '../lib/useEventStream'
 
@@ -35,6 +36,7 @@ export default function ProjectsPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const navigate = useNavigate()
   const { toast } = useToast()
+  const { confirm } = useDialog()
 
   const refresh = async () => {
     try {
@@ -75,7 +77,7 @@ export default function ProjectsPage() {
   const handleDelete = async (p: ProjectSummary, e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    if (!confirm(`移到回收站？\n${p.title} (${p.slug})`)) return
+    if (!(await confirm(`移到回收站？\n${p.title} (${p.slug})`, { tone: 'warn', okText: '移到回收站' }))) return
     try {
       await api.deleteProject(p.id)
       toast(`已移到回收站: ${p.title}`, 'success')
@@ -104,7 +106,7 @@ export default function ProjectsPage() {
   }
 
   const handleEmptyTrash = async () => {
-    if (!confirm('物理删除所有回收站项目？此操作不可恢复。')) return
+    if (!(await confirm('物理删除所有回收站项目？此操作不可恢复。', { tone: 'danger', okText: '清空回收站' }))) return
     try {
       const r = await api.emptyTrash()
       toast(`清空了 ${r.removed} 个项目`, 'success')

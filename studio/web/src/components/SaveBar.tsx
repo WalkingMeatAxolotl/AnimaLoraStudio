@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, type CaptionSnapshot } from '../api/client'
+import { useDialog } from './Dialog'
 import { useToast } from './Toast'
 
 interface Props {
@@ -28,6 +29,7 @@ export default function SaveBar({
   pid, vid, dirtyCount, onSave, onAfterRestore,
 }: Props) {
   const { toast } = useToast()
+  const { confirm } = useDialog()
   const [open, setOpen] = useState(false)
   const [items, setItems] = useState<CaptionSnapshot[]>([])
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -55,7 +57,7 @@ export default function SaveBar({
   }
 
   const restore = async (sid: string) => {
-    if (!confirm('还原会覆盖当前所有 caption（含未保存的本地改动）。确定？')) return
+    if (!(await confirm('还原会覆盖当前所有 caption（含未保存的本地改动）。确定？', { tone: 'warn', okText: '还原' }))) return
     setBusyId(sid)
     try {
       const r = await api.restoreCaptionSnapshot(pid, vid, sid)
@@ -66,7 +68,7 @@ export default function SaveBar({
   }
 
   const del = async (sid: string) => {
-    if (!confirm(`删除还原点 ${sid}？此操作不可撤销。`)) return
+    if (!(await confirm(`删除还原点 ${sid}？此操作不可撤销。`, { tone: 'danger', okText: '删除' }))) return
     setBusyId(sid)
     try { await api.deleteCaptionSnapshot(pid, vid, sid); await refresh() }
     catch (e) { toast(String(e), 'error') }

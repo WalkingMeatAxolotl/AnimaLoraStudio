@@ -16,6 +16,7 @@ import ImageGrid from '../../../components/ImageGrid'
 import ImagePreviewModal from '../../../components/ImagePreviewModal'
 import JobProgress from '../../../components/JobProgress'
 import StepShell from '../../../components/StepShell'
+import { useDialog } from '../../../components/Dialog'
 import { useToast } from '../../../components/Toast'
 import { useEventStream } from '../../../lib/useEventStream'
 
@@ -48,6 +49,7 @@ const ADVANCED_DEFAULTS: AdvancedParams = {
 export default function RegularizationPage() {
   const { project, activeVersion, reload } = useOutletContext<Ctx>()
   const { toast } = useToast()
+  const { confirm } = useDialog()
 
   const [reg, setReg] = useState<RegStatus | null>(null)
   const [trainTags, setTrainTags] = useState<RegTagCount[]>([])
@@ -251,7 +253,7 @@ export default function RegularizationPage() {
 
   const onDelete = async () => {
     if (!vid) return
-    if (!confirm('删除当前 reg 集？这是不可恢复的（meta + 所有图片都会清掉）。')) return
+    if (!(await confirm('删除当前 reg 集？这是不可恢复的（meta + 所有图片都会清掉）。', { tone: 'danger', okText: '删除' }))) return
     try {
       await api.deleteReg(project.id, vid)
       toast('已删除', 'success')

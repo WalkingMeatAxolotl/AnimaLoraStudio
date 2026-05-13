@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api, type Task, type TaskStatus } from '../api/client'
 import StepShell from '../components/StepShell'
+import { useDialog } from '../components/Dialog'
 import { useToast } from '../components/Toast'
 import { useEventStream } from '../lib/useEventStream'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
@@ -15,14 +16,14 @@ async function downloadJson(filename: string, data: unknown) {
 }
 
 async function pickJsonFile(): Promise<unknown | null> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const input = document.createElement('input')
     input.type = 'file'; input.accept = '.json,application/json'
     input.onchange = async () => {
       const f = input.files?.[0]
       if (!f) { resolve(null); return }
       try { resolve(JSON.parse(await f.text())) }
-      catch { alert('JSON 解析失败'); resolve(null) }
+      catch { reject(new Error('JSON 解析失败')) }
     }
     input.click()
   })
@@ -91,6 +92,7 @@ export default function QueuePage() {
   const [busy, setBusy] = useState(false)
   const reloadTimer = useRef<number | null>(null)
   const { toast } = useToast()
+  const { confirm } = useDialog()
   const navigate = useNavigate()
   const reload = useCallback(async () => {
     try { setTasks(await api.listQueue()); setError(null) }
@@ -133,7 +135,7 @@ export default function QueuePage() {
   const clearDone = async () => {
     const done = tasks.filter((t) => t.status === 'done')
     if (done.length === 0) { toast('没有已完成的任务', 'success'); return }
-    if (!confirm(`删除 ${done.length} 个已完成任务？`)) return
+    if (!(await confirm(`删除 ${done.length} 个已完成任务？`, { tone: 'danger', okText: '删除' }))) return
     setBusy(true)
     try {
       for (const t of done) await api.deleteTask(t.id)
@@ -186,7 +188,9 @@ export default function QueuePage() {
           <button
             disabled={busy}
             onClick={async () => {
-              const payload = await pickJsonFile()
+              let payload: unknown
+              try { payload = await pickJsonFile() }
+              catch (e) { toast(String(e), 'error'); return }
               if (!payload) return
               setBusy(true)
               try {

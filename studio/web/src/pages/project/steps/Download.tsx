@@ -10,6 +10,7 @@ import {
 } from '../../../api/client'
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import StepShell from '../../../components/StepShell'
+import { useDialog } from '../../../components/Dialog'
 import { useToast } from '../../../components/Toast'
 import { useEventStream } from '../../../lib/useEventStream'
 
@@ -43,6 +44,7 @@ const STATUS_COLOR: Record<Job['status'], string> = {
 export default function DownloadPage() {
   const { project, reload } = useOutletContext<Ctx>()
   const { toast } = useToast()
+  const { confirm } = useDialog()
   const [job, setJob] = useState<Job | null>(null)
   const [logs, setLogs] = useState<string[]>([])
   const [files, setFiles] = useState<DownloadFile[]>([])
@@ -252,12 +254,10 @@ export default function DownloadPage() {
             }}
             onDelete={async () => {
               if (selected.size === 0) return
-              if (
-                !window.confirm(
-                  `从 download/ 删除 ${selected.size} 张图片（含同名 caption metadata）？\n操作不可恢复。`
-                )
-              )
-                return
+              if (!(await confirm(
+                `从 download/ 删除 ${selected.size} 张图片（含同名 caption metadata）？\n操作不可恢复。`,
+                { tone: 'danger', okText: '删除' },
+              ))) return
               setDeleting(true)
               try {
                 const r = await api.deleteProjectFiles(

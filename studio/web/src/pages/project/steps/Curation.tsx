@@ -10,6 +10,7 @@ import {
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import ImagePreviewModal from '../../../components/ImagePreviewModal'
 import StepShell from '../../../components/StepShell'
+import { useDialog } from '../../../components/Dialog'
 import { useToast } from '../../../components/Toast'
 import { useEventStream } from '../../../lib/useEventStream'
 
@@ -114,6 +115,8 @@ const SCROLL_BOX = 'flex-1 min-h-0 overflow-y-auto pr-1'
 export default function CurationPage() {
   const { project, activeVersion, reload } = useOutletContext<Ctx>()
   const { toast } = useToast()
+  // Curation 有 `options.confirm: boolean` 字段,跟 useDialog().confirm 同名 — 不解构,用 dialog.confirm。
+  const dialog = useDialog()
   const [view, setView] = useState<CurationView | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -376,7 +379,8 @@ export default function CurationPage() {
     options: { clearSelection?: boolean; confirm?: boolean } = {}
   ) => {
     if (!folder || files.length === 0 || busy) return false
-    if (options.confirm && !confirm(`从 ${folder}/ 移除 ${files.length} 张?`)) {
+    if (options.confirm &&
+        !(await dialog.confirm(`从 ${folder}/ 移除 ${files.length} 张?`, { tone: 'warn', okText: '移除' }))) {
       return false
     }
     setBusy(true)
@@ -463,12 +467,10 @@ export default function CurationPage() {
 
   const doDeleteFolder = async (name: string) => {
     const cnt = view.right[name]?.length ?? 0
-    if (
-      !confirm(
-        `删除文件夹 ${name}? 将清掉 ${cnt} 张训练副本（download/ 不动）`
-      )
-    )
-      return
+    if (!(await dialog.confirm(
+      `删除文件夹 ${name}? 将清掉 ${cnt} 张训练副本（download/ 不动）`,
+      { tone: 'warn', okText: '删文件夹' },
+    ))) return
     setBusy(true)
     try {
       await api.folderOp(project.id, activeVersion.id, {

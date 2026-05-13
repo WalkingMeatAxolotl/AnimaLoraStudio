@@ -5,6 +5,7 @@ import {
   type PresetSummary,
   type SchemaResponse,
 } from '../../api/client'
+import { useDialog } from '../../components/Dialog'
 import SchemaForm from '../../components/SchemaForm'
 import { useToast } from '../../components/Toast'
 import {
@@ -49,6 +50,7 @@ interface DraftSeed {
 
 export default function PresetsPage() {
   const { toast } = useToast()
+  const { confirm } = useDialog()
 
   // ── backend state ──
   const [schema, setSchema] = useState<SchemaResponse | null>(null)
@@ -241,9 +243,9 @@ export default function PresetsPage() {
     setPickerOpen(false)
   }
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (!selected) return
-    if (!window.confirm(`删除预设 ${selected}？`)) return
+    if (!(await confirm(`删除预设 ${selected}？`, { tone: 'danger', okText: '删除' }))) return
     setBusy(true)
     api.deletePreset(selected).then(() => {
       const { [selected]: _, ...rest } = descriptions
