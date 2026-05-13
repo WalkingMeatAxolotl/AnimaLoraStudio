@@ -3191,21 +3191,25 @@ def system_rollback(background: BackgroundTasks) -> dict[str, Any]:
 
 @app.get("/api/system/update_status")
 def system_update_status() -> dict[str, Any]:
-    """最近一次 update 的结构化结果（PR-C）。
+    """最近一次 update 的结构化结果 + rollback target（PR-C）。
+
+    rollback_target 与 status 解耦：即使从未走过 update（.update_status 不存在），
+    只要 .last_version 指向的 commit 还在仓库里，回滚按钮就应当能用（user 手动
+    git reset 后想"还原到上一版"也是合法场景）。
 
     UI 上：
-    - 文件不存在 / null：没有 update 历史，不展示 banner
+    - status=null：没有 update 历史，不展示 banner / 不展示"查看上次日志"按钮
     - status='ok'：可选展示"已更新到 X，X 秒前"
-    - status='aborted' / 'failed' / 'partial'：红色 banner + 原因 + 跳到日志
+    - status='aborted' / 'failed' / 'partial'：红色 banner + reason + 跳日志
+    - rollback_target 非 null（不依赖 status）：显示"切换到 sha"按钮
     """
     from dataclasses import asdict
+    rollback_to = updater.rollback_target()
     st = updater.last_status()
     if st is None:
-        return {"status": None}
-    rollback_to = updater.rollback_target()
+        return {"status": None, "rollback_target": rollback_to}
     return {
         **asdict(st),
-        # 顺带把 rollback target 也带回去，UI 用这个判断"是否显示回滚按钮"
         "rollback_target": rollback_to,
     }
 

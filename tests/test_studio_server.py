@@ -683,7 +683,8 @@ def test_system_restart_rejects_when_running_task(
 def test_system_update_status_null_when_no_history(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """没有 update 历史时返 {status: null}。"""
+    """没有 update 历史时返 {status: null, rollback_target: null}。
+    rollback_target 必须存在（即便 null），前端用它判断按钮显隐。"""
     from studio.services import updater
     monkeypatch.setattr(updater, "UPDATE_STATUS", tmp_path / ".update_status")
     monkeypatch.setattr(updater, "LAST_VERSION", tmp_path / ".last_version")
@@ -691,6 +692,24 @@ def test_system_update_status_null_when_no_history(
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] is None
+    assert "rollback_target" in body
+    assert body["rollback_target"] is None
+
+
+def test_system_update_status_rollback_without_status(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """.update_status 不存在但 .last_version 存在（用户手动 git reset 后的场景）：
+    应当返 status=null 但 rollback_target=sha，让 UI 显示回滚按钮。"""
+    from studio.services import updater
+    monkeypatch.setattr(updater, "last_status", lambda: None)
+    monkeypatch.setattr(updater, "rollback_target", lambda: "cafebabe" * 5)
+
+    resp = client.get("/api/system/update_status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] is None
+    assert body["rollback_target"] == "cafebabe" * 5
 
 
 def test_system_update_status_returns_recorded(
