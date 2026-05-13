@@ -132,6 +132,11 @@ dev 攒到一组改动后，**看最重的改动**决定 bump 哪一位：
 >
 > 「feature 少」很正常——大多数 release 是 PATCH，攒到一个 feat 时再 bump MINOR。
 
+**对应 release_notes.yaml 的 `kind`**：本周期 entries 全是 `fixed` / `improved` /
+`removed` / `deprecated` → PATCH；含任一 `added` / `changed` → MINOR；纯
+`security` hotfix → PATCH（紧急 patch 即使含 `changed` 也走 PATCH，让用户
+敢升）。
+
 Pre-release 用 `-rc1` / `-beta1` 后缀（v0.6.0-rc1）。
 
 ### 2. 在 `dev` 上准备 release
@@ -141,27 +146,74 @@ git checkout dev
 git pull origin dev
 ```
 
-**bump version 四处必须同步**：
+**写 release notes（结构化 yaml，agent 友好）**
+
+source of truth 是 [`release_notes.yaml`](release_notes.yaml)；`CHANGELOG.md`
+由工具从 yaml 派生，**不要手改** CHANGELOG（下次 render 会被覆盖）。
+
+按 [`docs/release-notes-spec.md`](docs/release-notes-spec.md) 在 yaml 顶部
+插入新版本 block，每个 user-facing PR 一条 entry（纯 chore / docs / 内部
+refactor PR 跳过）：
+
+```yaml
+- version: "0.X.0"
+  date: "YYYY-MM-DD"
+  summary: "一句话总览"
+  entries:
+    - kind: added            # added/changed/improved/fixed/removed/deprecated/security
+      summary: "user-facing 一行，≤ 80 字符，结尾带 PR 号（#NN）"
+      pr_refs: [NN]
+      detail: |              # 可选，markdown 多行
+        markdown 多行细节
+```
+
+拉本周期所有 merge 的 PR（命令样例）：
+
+```bash
+gh pr list --state merged --base dev \
+  --search 'merged:>=<上次 release 日期>' \
+  --json number,title,body,labels,author,mergedAt --limit 100
+```
+
+详细 do/don't / kind 分类规则 / good vs bad 例子见 release-notes-spec.md。
+
+**`bump_version.py` 一键同步版本号 + 重写 CHANGELOG.md**
+
+```bash
+python tools/bump_version.py validate                 # 先校验 yaml schema
+python tools/bump_version.py bump --version 0.X.0     # 同步版本号 + 重写 CHANGELOG.md
+```
+
+工具自动改：
 
 1. `studio/__init__.py` — `__version__ = "0.X.0"`
 2. `studio/web/package.json` — `"version": "0.X.0"`
-3. `CHANGELOG.md` 顶部加新段（参考已有格式）
-4. `README.md` — 顶部 shields.io badge URL + 「## 版本」段「当前版本 **0.X.0**」（GitHub 主页直接展示，漏改用户看到的就是旧版本）
+3. `CHANGELOG.md` — 从 yaml 派生
 
-> 前端 Sidebar 的版本号是从 `/api/health` 拉的，**不要去 Sidebar.tsx 硬编码**。
+`bump` 跑前自动跑 `validate`，schema 错（kind 不在白名单 / summary > 80 字 /
+版本顺序错 / pr_refs 不是 int / etc.）会直接拒。
 
-bump 完跑一遍 grep 兜底，确认没漏掉别处展示版本号（如架构文档里的 Sidebar 示意图）：
+**还需要手动改一处**：`README.md` 顶部 shields.io badge URL + 「## 版本」
+段「当前版本 **0.X.0**」（README 风格用户偏好强，工具暂不动）。
+
+> 前端 Sidebar 的版本号从 `/api/health` 拉，**不要去 Sidebar.tsx 硬编码**。
+
+跑 grep 兜底找漏（架构文档示意图、ADR 引用等）：
 
 ```bash
-grep -rn "<旧版本号，例 0.5.0>" --include="*.md" --include="*.json" --include="*.py"
+grep -rn "<旧版本号，例 0.5.0>" --include="*.md" --include="*.json" \
+  --include="*.py" --exclude-dir=node_modules --exclude-dir=venv
 ```
 
-输出里属于「历史记录」的保留不动（CHANGELOG 历史段、ADR 引用上次发版的事实）；属于「当前展示」的更新到新版本（README badge / docs 示意图 / 任何描述「当前版本」的句子）。
+输出里属于「历史记录」的保留不动（CHANGELOG 历史段、ADR 引用上次发版
+的事实、release_notes.yaml 历史 entries）；属于「当前展示」的更新到新版本
+（README badge / docs 示意图 / 任何描述「当前版本」的句子）。
 
 提一个 commit：
 
 ```bash
-git add studio/__init__.py studio/web/package.json CHANGELOG.md README.md
+git add release_notes.yaml CHANGELOG.md \
+        studio/__init__.py studio/web/package.json README.md
 git commit -m "chore(release): v0.X.0"
 git push origin dev
 ```
