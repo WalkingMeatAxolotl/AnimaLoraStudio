@@ -2350,15 +2350,20 @@ async function pollHealthThenReload(
   onTimeout()
 }
 
-// ── 版本 Section ────────────────────────────────────────────────────────
+// ── 版本 Section（双通道重设计 — Chunk 1）─────────────────────────────
 //
-// 加载时自动 fetch /api/system/version + /api/system/update_check（master 通道，
-// 走 cache）+ /api/system/update_status（PR-C：上次 update 结果）+ /api/secrets
-// （读 system.show_dev_channel，PR-D：dev 通道 toggle）。
-// 操作按钮：检查更新 / 立即更新 / 切换到上一版本（rollback，仅在 .last_version
-// 存在时显示）/ 查看上次日志（仅在失败时主动暴露）。
-// 高级折叠：显示开发版更新 toggle；开启后暴露 dev 通道按钮（手动检查 / 更新到 dev）。
-//          自动检查仍只 fetch master，Topbar badge 也仅 master 触发（设计文档明确）。
+// 布局：master / dev 两张通道卡并排（dev 隐藏时 master solo）。toggle 行
+// 下移到卡片之后（demoted），不是建议操作；当前在 dev 时强制开 + 锁定。
+//
+// 加载时 fetch /api/system/version + /api/system/update_check（master,
+// 走 cache）+ /api/system/update_status + /api/secrets.system。
+//
+// 自动检查 + Topbar 红点仍然只看 master（ADR 0002 决策）。
+//
+// 状态（chunk 1）：synced / has-update / failed（用现有 .update_status 数据）；
+// 操作按钮"更新到 X" / "切到 X" 仍走现有 dialog 模态。preview / progress /
+// inline-failed 状态机留给 chunk 4。release notes 留给 chunk 2，dev commits
+// 列表留给 chunk 3。
 function VersionSection() {
   const { toast } = useToast()
   const dialog = useDialog()
@@ -2559,223 +2564,100 @@ function VersionSection() {
     void pollHealthThenReload(toast, 10 * 60_000, '更新', () => setBusy(false))
   }
 
-  // 不再把 branch 塞 headDescr —— 单独显示成 channel pill 让用户一眼看出
-  // 自己在哪个通道（master = 稳定 / dev = 开发版 / 其它 = 自定义分支）。
-  const headDescr = version
-    ? `${version.tag ?? `v${version.version}`} · ${version.commit_short}${version.is_dirty ? ' · 本地有改动' : ''}`
-    : '加载中...'
-
-  // 上次 update 失败 banner（aborted / failed / partial 时显示红色提示）
-  const statusBadFailed = status && (status.status === 'failed' || status.status === 'aborted' || status.status === 'partial')
-
-  // PR-D — 通道判定。on dev + toggle 开启时把主按钮从"立即更新 master"
-  // 改成"切回稳定 master"（文案 + dialog 明确方向）；同时主按钮独立于
-  // has_update（dev 上想随时切回 stable 是合法操作）。
+  // 通道判定 + 派生状态
   const onDev = version?.branch === 'dev'
-  const showSwitchToStable = onDev && !!prefs?.show_dev_channel
+  // dev 卡显示条件：toggle 开了，或者当前已经在 dev（强制可见）
+  const devVisible = onDev || !!prefs?.show_dev_channel
+  const hasUpdate = !!check?.has_update
+  const hasRollback = !!status?.rollback_target
+  // 上次 update 失败 banner（aborted / failed / partial 时显示红色提示）
+  const statusBadFailed = !!status && (status.status === 'failed' || status.status === 'aborted' || status.status === 'partial')
 
   return (
     <SettingsSection id="version" title="版本">
-      {statusBadFailed && (
-        <div className="flex flex-col gap-1.5 rounded-md border border-err bg-err-soft p-3">
-          <div className="flex items-center gap-2 text-sm font-semibold text-err">
-            <span>上次更新{status?.status === 'aborted' ? '中止' : status?.status === 'partial' ? '部分成功' : '失败'}</span>
-            {status?.finished_at && (
-              <span className="text-2xs text-fg-dim font-normal font-mono">
-                {new Date(status.finished_at * 1000).toLocaleString()}
-              </span>
-            )}
-          </div>
-          <div className="text-xs text-fg-secondary">
-            {status?.reason || '原因未知'}
-            {status?.target && <span className="text-fg-dim"> · target = {status.target}</span>}
-          </div>
-          <button
-            onClick={() => void handleViewLog()}
-            className="btn btn-secondary btn-xs self-start"
-          >
-            查看完整日志
-          </button>
-        </div>
-      )}
+      <p className="text-xs text-fg-tertiary mb-3 leading-relaxed">
+        master = 稳定通道（自动每 24h 检查）；dev = 开发版，需要时手动启用。
+      </p>
 
-      <SettingsField label="当前">
-        <div className="flex flex-col gap-0.5 text-fg-primary text-sm font-mono">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span>{headDescr}</span>
-            {version && <ChannelPill branch={version.branch} />}
-          </div>
-          {version?.commit_time_iso && (
-            <span className="text-2xs text-fg-dim">
-              {new Date(version.commit_time_iso).toLocaleString()}
-            </span>
+      <div className="vs-sec-card">
+        <div className={`vs-channels${devVisible ? ' both' : ''}`}>
+          <MasterCard
+            on={!onDev}
+            solo={!devVisible}
+            version={version}
+            check={check}
+            status={status}
+            hasUpdate={hasUpdate}
+            hasRollback={hasRollback}
+            statusBadFailed={statusBadFailed}
+            checking={checking}
+            busy={busy}
+            onCheck={handleCheck}
+            onUpdate={handleUpdate}
+            onSwitchToMaster={handleSwitchToMaster}
+            onRollback={handleRollback}
+            onViewLog={handleViewLog}
+          />
+          {devVisible && (
+            <DevCard
+              on={onDev}
+              check={devCheck}
+              checking={checkingDev}
+              busy={busy}
+              onCheck={handleCheckDev}
+              onSwitchToDev={handleUpdateDev}
+            />
           )}
         </div>
-      </SettingsField>
+      </div>
 
-      {check && (
-        <SettingsField label="远端 (master)">
-          {check.error ? (
-            <span className="text-err text-sm">{check.error}</span>
-          ) : check.has_update ? (
-            <div className="flex flex-col gap-0.5 text-fg-primary text-sm font-mono">
-              <span>
-                {check.latest_tag ?? check.latest_commit.slice(0, 8)} · ↑ {check.commits_ahead} commits
-              </span>
-              <span className="text-2xs text-fg-dim">
-                上次检查 {new Date(check.checked_at * 1000).toLocaleString()}
-              </span>
-            </div>
-          ) : onDev ? (
-            // dev 用户看到 has_update=false 说明 dev 已含 master 所有 commit；
-            // 此时给个 master HEAD 提示而不是误导的"已是最新版本"。
-            <div className="flex flex-col gap-0.5 text-fg-primary text-sm font-mono">
-              <span className="text-fg-dim">
-                master HEAD: {check.latest_commit.slice(0, 8)}（你领先 / 持平）
-              </span>
-              <span className="text-2xs text-fg-dim">
-                上次检查 {new Date(check.checked_at * 1000).toLocaleString()}
-              </span>
-            </div>
-          ) : (
-            <span className="text-fg-dim text-sm">已是最新版本</span>
-          )}
-        </SettingsField>
-      )}
-
-      <SettingsField label="操作">
-        <div className="flex flex-col gap-1.5">
-          <div className="flex gap-2 flex-wrap">
-            <button
-              onClick={() => void handleCheck()}
-              disabled={checking || busy}
-              className="btn btn-secondary btn-sm"
-            >
-              {checking ? '检查中...' : '检查更新'}
-            </button>
-            {showSwitchToStable ? (
-              // dev 上的用户：主按钮永远显示"切回稳定"（不依赖 has_update）。
-              // 跟踪 dev 新提交走高级折叠里的 [更新到 dev]；主区是 stable 出口。
-              <button
-                onClick={() => void handleSwitchToMaster()}
-                disabled={busy || checking}
-                className="btn btn-primary btn-sm"
-              >
-                {busy ? '切回稳定中...' : '切回稳定通道 → master'}
-              </button>
-            ) : check?.has_update && (
-              <button
-                onClick={() => void handleUpdate()}
-                disabled={busy || checking}
-                className="btn btn-primary btn-sm"
-              >
-                {busy
-                  ? '更新中...'
-                  : `立即更新 → ${check.latest_tag ?? check.latest_commit.slice(0, 8)}`
-                    + (prefs?.show_dev_channel ? '（稳定）' : '')}
-              </button>
-            )}
-            {status?.rollback_target && (
-              <button
-                onClick={() => void handleRollback()}
-                disabled={busy || checking}
-                className="btn btn-secondary btn-sm"
-                title={`切换到 ${status.rollback_target}`}
-              >
-                {busy ? '切换中...' : `切换到 ${status.rollback_target.slice(0, 8)}`}
-              </button>
-            )}
-            {status?.status && (
-              <button
-                onClick={() => void handleViewLog()}
-                disabled={busy}
-                className="btn btn-ghost btn-sm"
-              >
-                查看上次日志
-              </button>
-            )}
-          </div>
-          <p className="text-2xs text-fg-dim leading-snug">
-            自动检查每 24 小时一次（master 通道，关闭 webui 不影响）。
-            更新 / 回滚都执行 <code>git reset --hard &lt;target&gt;</code> + 必要时 pip / npm install。
-            <br />
-            <span className="text-warn">
-              当前有训练 / 打标任务运行时不允许更新；本地未提交的改动也会被拒绝。
-            </span>
-          </p>
-        </div>
-      </SettingsField>
-
-      {/* PR-D — 高级设置：dev 通道 toggle + 手动操作。默认折叠；勾选 toggle
-          会持久化到 secrets.json (system.show_dev_channel)。Topbar badge /
-          自动检查仍然只看 master —— dev 必须显式手动触发，避免开发者被
-          dev commit 持续骚扰（设计文档明确）。 */}
-      <details className="border-t border-subtle pt-2 mt-1 group">
-        <summary className="cursor-pointer text-sm text-fg-secondary hover:text-fg-primary select-none list-none flex items-center gap-1.5 py-1">
-          <span className="inline-block transition-transform group-open:rotate-90">▸</span>
-          <span>高级设置</span>
-        </summary>
-        <div className="pt-2 pl-4 flex flex-col gap-3">
-          <SettingsField label="显示开发版更新">
-            <div className="flex items-center gap-2">
-              <Bool
-                value={!!prefs?.show_dev_channel}
-                onChange={(v) => void handleToggleDevChannel(v)}
-              />
-              <span className="text-2xs text-fg-dim leading-snug">
-                开启后下方暴露 dev 通道操作（手动检查 / 更新到 dev）。
-                自动检查 + Topbar 红点仍然只看 master。
-              </span>
-            </div>
-          </SettingsField>
-
-          {prefs?.show_dev_channel && (
-            <div className="rounded-md border border-subtle bg-surface-alt p-3 flex flex-col gap-2">
-              <div className="text-xs font-semibold text-fg-primary">
-                dev 通道（开发版）
-              </div>
-              {devCheck && (
-                devCheck.error ? (
-                  <span className="text-err text-xs">{devCheck.error}</span>
-                ) : devCheck.has_update ? (
-                  <div className="text-xs text-fg-primary font-mono flex flex-col gap-0.5">
-                    <span>
-                      {devCheck.latest_commit.slice(0, 8)} · ↑ {devCheck.commits_ahead} commits
-                    </span>
-                    <span className="text-2xs text-fg-dim">
-                      检查于 {new Date(devCheck.checked_at * 1000).toLocaleString()}
-                    </span>
-                  </div>
-                ) : (
-                  <span className="text-fg-dim text-xs">dev 通道与当前一致</span>
-                )
+      {/* dev toggle 行 —— 下移到卡片之后，不是建议操作。当前在 dev 时
+          强制为开 + 锁定（切回稳定走 master 卡片"切到 master"按钮）。 */}
+      <div className={`vs-dev-toggle-row${devVisible ? ' open' : ''}${onDev ? ' locked' : ''}`}>
+        <div className="vs-lhs">
+          <div
+            className={`vs-sw${devVisible ? ' on' : ''}${onDev ? ' locked' : ''}`}
+            onClick={() => { if (!onDev) void handleToggleDevChannel(!devVisible) }}
+            role="switch"
+            aria-checked={devVisible}
+            aria-disabled={onDev}
+          />
+          <div>
+            <div className="vs-t" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span>查看 dev 通道（开发版）</span>
+              {onDev && (
+                <span className="vs-lock-pill">
+                  <VersionIcon name="lock" />当前在 dev · 不可关闭
+                </span>
               )}
-              <div className="flex gap-2 flex-wrap">
-                <button
-                  onClick={() => void handleCheckDev()}
-                  disabled={checkingDev || busy}
-                  className="btn btn-secondary btn-sm"
-                >
-                  {checkingDev ? '检查中...' : '手动检查 dev'}
-                </button>
-                {devCheck?.has_update && (
-                  <button
-                    onClick={() => void handleUpdateDev()}
-                    disabled={busy || checkingDev}
-                    className="btn btn-danger btn-sm"
-                  >
-                    {busy ? '更新中...' : `更新到 dev (${devCheck.latest_commit.slice(0, 8)})`}
-                  </button>
-                )}
-              </div>
-              <p className="text-2xs text-warn leading-snug">
-                ⚠ dev 通道未经发布验证，可能引入崩溃 / 训练异常 / schema 不兼容。
-                更新后用主区"切换到 ..."按钮可回到当前 commit。
-              </p>
             </div>
-          )}
+            <div className="vs-d">
+              {onDev
+                ? '你正运行 dev 通道；切回稳定请用上方 master 卡片的"切到 master"。'
+                : '只在主动跟踪未发布功能时打开。Topbar 红点 + 自动检查永远只看 master。'}
+            </div>
+          </div>
         </div>
-      </details>
+      </div>
+
+      <div className="vs-meta-foot">
+        <span>autocheck · 每 24h · 仅 master</span>
+        <span className="vs-dot" />
+        <span>
+          更新 / 切换 = <span style={{ color: 'var(--fg-secondary)' }}>git reset --hard &lt;target&gt;</span>
+          {' '}+ 必要时 pip / npm install
+        </span>
+        <span className="vs-dot" />
+        <span className="vs-warn-line">有运行任务 · 工作树脏 → 操作会被拒绝</span>
+        {!!status?.status && (
+          <>
+            <span className="vs-dot" />
+            <button className="vs-lnk" onClick={() => void handleViewLog()}>
+              查看上次日志 ↗
+            </button>
+          </>
+        )}
+      </div>
 
       {logModal.open && (
         <UpdateLogModal
@@ -2788,24 +2670,267 @@ function VersionSection() {
   )
 }
 
-// PR-D — 通道指示徽章。master = 稳定（绿）/ dev = 开发版（橙）/ 其它 = 自定义
-// 分支（灰）。用现有 .badge-ok / .badge-warn / .badge-info 复用站内统一色板。
-function ChannelPill({ branch }: { branch: string }) {
-  const meta = branch === 'master'
-    ? { cls: 'badge-ok', label: '稳定' }
-    : branch === 'dev'
-      ? { cls: 'badge-warn', label: '开发版' }
-      : branch === 'detached'
-        ? { cls: 'badge-info', label: '游离 HEAD' }
-        : { cls: 'badge-info', label: '自定义分支' }
+// ── 子组件：图标 / Master 卡 / Dev 卡 ─────────────────────────────────
+//
+// 双卡布局拆成独立函数组件方便 chunk 2/3/4 各自扩展：
+//   - chunk 2 把 release notes 填进 MasterCard.change-block
+//   - chunk 3 给 DevCard 加 commits 列表 + 选中状态
+//   - chunk 4 给两卡都加 preview / progress 状态机
+
+const VERSION_ICON_PATHS: Record<string, React.ReactNode> = {
+  refresh:  <><path d="M14 8a6 6 0 1 1-1.76-4.24" /><path d="M14 3v3.4h-3.4" /></>,
+  log:      <><rect x="3" y="2.5" width="10" height="11" rx="1.5" /><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3" /></>,
+  rollback: <><path d="M3 8h7a3 3 0 1 1 0 6h-1" /><path d="M5.5 5.5L3 8l2.5 2.5" /></>,
+  note:     <><path d="M4 3.5h6l2 2v7a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1z" /><path d="M5.5 7h5M5.5 9.5h5M5.5 12h3" /></>,
+  lock:     <><rect x="3.5" y="7" width="9" height="6.5" rx="1" /><path d="M5.5 7v-2a2.5 2.5 0 0 1 5 0v2" /></>,
+}
+
+function VersionIcon({ name }: { name: keyof typeof VERSION_ICON_PATHS | string }) {
+  const path = VERSION_ICON_PATHS[name]
+  if (!path) return null
   return (
-    <span
-      className={`${meta.cls} inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm text-2xs font-sans font-medium`}
-      title={`当前分支：${branch}`}
-    >
-      <span>{meta.label}</span>
-      <span className="font-mono opacity-70">{branch}</span>
-    </span>
+    <svg width={12} height={12} viewBox="0 0 16 16" fill="none" stroke="currentColor"
+      strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
+      {path}
+    </svg>
+  )
+}
+
+type MasterCardProps = {
+  on: boolean
+  solo: boolean
+  version: SystemVersion | null
+  check: SystemUpdateCheck | null
+  status: SystemUpdateStatus | null
+  hasUpdate: boolean
+  hasRollback: boolean
+  statusBadFailed: boolean
+  checking: boolean
+  busy: boolean
+  onCheck: () => void
+  onUpdate: () => void
+  onSwitchToMaster: () => void
+  onRollback: () => void
+  onViewLog: () => void
+}
+
+function MasterCard(p: MasterCardProps) {
+  const currentTag = p.version?.tag ?? (p.version ? `v${p.version.version}` : '加载中…')
+  const targetTag = p.check?.latest_tag ?? p.check?.latest_commit?.slice(0, 8) ?? ''
+  const checkedAt = p.check?.checked_at
+    ? new Date(p.check.checked_at * 1000).toLocaleString()
+    : '未检查'
+  const releasedAt = p.version?.commit_time_iso
+    ? new Date(p.version.commit_time_iso).toLocaleDateString()
+    : null
+
+  return (
+    <div className={`vs-chan${p.on ? ' here' : ''}`}>
+      <div className="vs-chan-head">
+        <div className="vs-lhs">
+          <span className="vs-name">master</span>
+          <span className="vs-pill vs-pill-stable"><span className="vs-dot" />稳定</span>
+          {p.on && <span className="vs-pill vs-pill-here">● 你在这里</span>}
+        </div>
+        <div className={`vs-meta${p.hasUpdate ? ' attn' : ''}`}>
+          {p.hasUpdate ? `↑ 落后 ${p.check?.commits_ahead ?? 0} commits` : '已是最新'}
+        </div>
+      </div>
+
+      {p.statusBadFailed && p.status && (
+        <div className="vs-fail-banner">
+          <div className="vs-h">
+            <span>
+              上次更新
+              {p.status.status === 'aborted' ? '中止'
+                : p.status.status === 'partial' ? '部分成功'
+                : '失败'}
+            </span>
+            {!!p.status.finished_at && (
+              <span className="vs-when">
+                {new Date(p.status.finished_at * 1000).toLocaleString()}
+              </span>
+            )}
+          </div>
+          <div className="vs-d">
+            {p.status.reason || '原因未知'}
+            {p.status.target && <> · target = <code>{p.status.target}</code></>}
+          </div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {p.hasUpdate && (
+              <button className="btn btn-primary btn-sm" onClick={p.onUpdate} disabled={p.busy}>
+                重试更新到 {targetTag}
+              </button>
+            )}
+            <button className="btn btn-sm" onClick={p.onViewLog} disabled={p.busy}>
+              <VersionIcon name="log" />查看完整日志
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className={`vs-chan-body ${p.solo ? 'solo' : 'split'}`}>
+        <div className="vs-ver-block" style={{ flex: p.solo ? '0 0 220px' : 1 }}>
+          <div className="vs-ver-tag">
+            {p.hasUpdate && targetTag ? (
+              <>
+                <span className="vs-dim">{currentTag}</span>
+                <span className="vs-arrow">→</span>
+                <span className="vs-target">{targetTag}</span>
+              </>
+            ) : currentTag}
+          </div>
+          <div className="vs-ver-meta">
+            {releasedAt && <>
+              <span>发布于 <b>{releasedAt}</b></span>
+              <span className="vs-sep">·</span>
+            </>}
+            {p.hasUpdate
+              ? <span>↑ {p.check?.commits_ahead ?? 0} commits</span>
+              : <span>{p.version?.commit_short ?? ''}</span>}
+            {p.version?.is_dirty && (
+              <>
+                <span className="vs-sep">·</span>
+                <span style={{ color: 'var(--warn)' }}>本地有改动</span>
+              </>
+            )}
+          </div>
+          {!p.hasUpdate && p.solo && (
+            <div className="vs-ver-tagline">Topbar 红点 + 自动检查仅看此通道。</div>
+          )}
+        </div>
+
+        {p.solo && <div className="vs-v-rule" />}
+
+        <div className="vs-change-block">
+          <div className="vs-h">
+            {p.hasUpdate ? `${targetTag} · 更新内容` : `${currentTag} · 此版本`}
+          </div>
+          {/* Chunk 2 会从后端拉 release notes 填进来；现阶段占位 */}
+          <ul className="vs-change-list">
+            <li>
+              <span className="vs-glyph">▸</span>
+              <span className="vs-txt">
+                完整变更见 <code>CHANGELOG.md</code>（chunk 2 会把此版本条目自动拉进来）
+              </span>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <div className="vs-chan-foot">
+        <div className="vs-info">
+          {p.check?.error ? (
+            <><span style={{ color: 'var(--err)' }}>●</span> {p.check.error}</>
+          ) : p.hasUpdate ? (
+            <><span className="vs-attn">●</span> {p.check?.commits_ahead ?? 0} commits behind · 上次检查 {checkedAt}</>
+          ) : (
+            <><span className="vs-ok">●</span> up to date · 上次检查 {checkedAt}</>
+          )}
+        </div>
+        <div className="vs-actions">
+          <button onClick={p.onCheck} disabled={p.checking || p.busy} className="btn btn-sm">
+            <VersionIcon name="refresh" />{p.checking ? '检查中…' : '检查更新'}
+          </button>
+          {p.hasUpdate && p.on && (
+            <button onClick={p.onUpdate} disabled={p.busy || p.checking} className="btn btn-sm btn-primary">
+              {p.busy ? '更新中…' : `更新到 ${targetTag}…`}
+            </button>
+          )}
+          {!p.on && (
+            <button onClick={p.onSwitchToMaster} disabled={p.busy || p.checking} className="btn btn-sm btn-primary">
+              {p.busy ? '切换中…' : '切到 master'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {p.hasRollback && p.status?.rollback_target && (
+        <div className="vs-rollback-inline-row">
+          <div className="vs-lhs">
+            <span className="vs-ico"><VersionIcon name="rollback" /></span>
+            <span>上一版本</span>
+            <b>{p.status.rollback_target.slice(0, 8)}</b>
+            <span className="vs-when">（一键切回）</span>
+          </div>
+          <button onClick={p.onRollback} disabled={p.busy || p.checking} className="btn btn-sm">
+            切回 {p.status.rollback_target.slice(0, 8)}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+type DevCardProps = {
+  on: boolean
+  check: SystemUpdateCheck | null
+  checking: boolean
+  busy: boolean
+  onCheck: () => void
+  onSwitchToDev: () => void
+}
+
+function DevCard(p: DevCardProps) {
+  const head = p.check?.latest_commit?.slice(0, 8)
+  const ahead = p.check?.commits_ahead ?? 0
+  return (
+    <div className={`vs-chan${p.on ? ' here' : ''}`}>
+      <div className="vs-chan-head">
+        <div className="vs-lhs">
+          <span className="vs-name">dev</span>
+          <span className="vs-pill vs-pill-dev"><span className="vs-dot" />开发版</span>
+          {p.on && <span className="vs-pill vs-pill-here">● 你在这里</span>}
+        </div>
+        <div className="vs-meta">
+          {p.check?.error ? (
+            <span style={{ color: 'var(--err)' }}>{p.check.error}</span>
+          ) : head ? (
+            <>
+              HEAD <b style={{ color: 'var(--fg-secondary)', fontWeight: 500 }}>{head}</b>
+              {' · '}
+              {ahead === 0 ? '与 master 持平' : `↑ ${ahead}`}
+            </>
+          ) : (
+            <span>未抓取</span>
+          )}
+        </div>
+      </div>
+
+      <div className="vs-change-block" style={{ paddingTop: 4, paddingBottom: 4 }}>
+        <div className="vs-h">最近提交</div>
+        {/* Chunk 3 会从后端拉真实 commit 列表；现阶段占位 */}
+        <ul className="vs-change-list">
+          {!p.check ? (
+            <li><span className="vs-glyph">·</span><span className="vs-txt">点 [抓取 dev] 查看最近提交。</span></li>
+          ) : (
+            <li><span className="vs-glyph">·</span><span className="vs-txt">commit 列表 + 任意切换将在 chunk 3 接入。</span></li>
+          )}
+        </ul>
+      </div>
+
+      <div className="vs-chan-foot">
+        <div className="vs-info">
+          <span style={{ color: 'var(--warn)' }}>●</span> 开发版 · 未发布
+        </div>
+        <div className="vs-actions">
+          <button onClick={p.onCheck} disabled={p.checking || p.busy} className="btn btn-sm">
+            <VersionIcon name="refresh" />{p.checking ? '抓取中…' : '抓取 dev'}
+          </button>
+          {p.on ? (
+            <button disabled className="btn btn-sm">已在 dev HEAD</button>
+          ) : p.check?.has_update ? (
+            <button onClick={p.onSwitchToDev} disabled={p.busy || p.checking} className="btn btn-sm btn-warn">
+              {p.busy ? '切换中…' : `切到 dev${head ? ` (${head})` : ''}`}
+            </button>
+          ) : p.check ? (
+            <button onClick={p.onSwitchToDev} disabled={p.busy || p.checking} className="btn btn-sm btn-warn">
+              切到 dev (HEAD)
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </div>
   )
 }
 
