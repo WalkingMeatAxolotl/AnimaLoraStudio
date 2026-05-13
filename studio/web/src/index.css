@@ -1,4 +1,5 @@
 @import './styles/tokens.css';
+@import './styles/info-button.css';
 @import './styles/version-section.css';
 @tailwind base;
 @tailwind components;

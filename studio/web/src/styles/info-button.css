@@ -1,0 +1,88 @@
+/* InfoButton —— click-toggle ⓘ 弹层。给字段名 / section title / 卡片角
+ * 加帮助说明用。组件实现在 components/InfoButton.tsx。
+ *
+ * 之前同样功能的样式以 .vs-info-* 前缀放在 version-section.css 里
+ * （只给版本卡用）；抽组件后改 .info-btn-* 中性前缀。
+ */
+
+.info-btn-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.info-btn-trigger {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--fg-tertiary);
+  font-size: 14px;
+  padding: 2px 4px;
+  line-height: 1;
+  border-radius: 4px;
+  font-family: inherit;
+}
+.info-btn-trigger:hover {
+  color: var(--fg-primary);
+  background: var(--bg-overlay);
+}
+.info-btn-trigger[aria-expanded="true"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.info-btn-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 20;
+  width: 380px;
+  max-width: calc(100vw - 32px);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  box-shadow: var(--sh-md);
+  padding: 12px 14px;
+  font-size: 12px;
+  color: var(--fg-secondary);
+  line-height: 1.6;
+}
+
+.info-btn-panel p {
+  margin: 0 0 6px 0;
+}
+.info-btn-panel p:last-child {
+  margin-bottom: 0;
+}
+
+.info-btn-panel ul {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.info-btn-panel li {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.info-btn-panel li::before {
+  content: '·';
+  color: var(--fg-disabled);
+  flex-shrink: 0;
+  margin-top: -1px;
+}
+
+.info-btn-panel strong {
+  color: var(--fg-primary);
+  font-weight: 500;
+}
+
+.info-btn-panel code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--bg-sunken);
+  padding: 0 4px;
+  border-radius: 3px;
+}

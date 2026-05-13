@@ -1747,6 +1747,10 @@ export interface SystemUpdateStatus {
   deps_changed?: boolean
   log_excerpt?: string
   rollback_target?: string | null
+  /** rollback target commit 的 exact tag（如 v0.6.0）。后端 git describe
+   *  --tags --exact-match 拿；commit 没打 tag → null。UI 优先显示 tag，
+   *  fallback 到 sha 前 8 位 */
+  rollback_target_tag?: string | null
 }
 
 /** chunk 2 重做 — release_notes.yaml 派生的 release notes。

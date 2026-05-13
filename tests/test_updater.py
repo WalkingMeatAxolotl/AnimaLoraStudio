@@ -434,6 +434,33 @@ def test_target_has_self_update_false_on_git_error(monkeypatch: pytest.MonkeyPat
 
 
 # ---------------------------------------------------------------------------
+# exact_tag_for (rollback UI 显示 tag 而非 sha 用)
+# ---------------------------------------------------------------------------
+
+
+def test_exact_tag_for_returns_tag_when_commit_tagged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """git describe --tags --exact-match 命中 → 返回 tag 字符串。"""
+    monkeypatch.setattr(updater, "_git",
+                       lambda *args, **_k: (0, "v0.6.0", "") if args[0] == "describe" else (1, "", ""))
+    assert updater.exact_tag_for("deadbeef" * 5) == "v0.6.0"
+
+
+def test_exact_tag_for_none_when_no_tag(monkeypatch: pytest.MonkeyPatch) -> None:
+    """commit 上没打精确 tag → describe 返非 0 → None（caller fallback 到 sha[:8]）。"""
+    monkeypatch.setattr(updater, "_git",
+                       lambda *args, **_k: (128, "", "fatal: no exact match"))
+    assert updater.exact_tag_for("deadbeef" * 5) is None
+
+
+def test_exact_tag_for_empty_sha_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """空 sha 早退；不调 git。"""
+    called = []
+    monkeypatch.setattr(updater, "_git", lambda *a, **_k: (called.append(a), (0, "v", ""))[1])
+    assert updater.exact_tag_for("") is None
+    assert called == []
+
+
+# ---------------------------------------------------------------------------
 # dev_commits (chunk 3)
 # ---------------------------------------------------------------------------
 

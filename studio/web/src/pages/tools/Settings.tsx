@@ -24,6 +24,7 @@ import {
   type WD14Runtime,
 } from '../../api/client'
 import { useDialog } from '../../components/Dialog'
+import { InfoButton } from '../../components/InfoButton'
 import LLMTaggerWorkspace from '../../components/LLMTaggerWorkspace'
 import PageHeader from '../../components/PageHeader'
 import { useToast } from '../../components/Toast'
@@ -570,7 +571,8 @@ export default function SettingsPage() {
       <SettingsSection id="download-global" title="下载（全局）">
         <SettingsField
           label="exclude_tags"
-          desc="逗号分隔；搜索时自动追加 -tag，Gelbooru / Danbooru 同样生效"
+          desc="逗号分隔"
+          helpTooltip={<p>搜索时自动追加 <code>-tag</code>，Gelbooru / Danbooru 同样生效。</p>}
         >
           <input
             type="text"
@@ -751,7 +753,12 @@ export default function SettingsPage() {
 
       {tab === 'training' && (<>
       <SettingsSection id="download-source" title="模型下载源">
-        <SettingsField label="下载源" desc="魔搭（ModelScope）对国内用户更快；无映射的模型自动回退 HuggingFace">
+        <SettingsField
+          label="下载源"
+          helpTooltip={
+            <p>魔搭（ModelScope）对国内用户更快；无映射的模型自动回退 HuggingFace。</p>
+          }
+        >
           <DownloadSourceSelect
             value={draft.download_source}
             onChange={(v) => updateTop('download_source', v)}
@@ -762,14 +769,22 @@ export default function SettingsPage() {
          * secrets 里（即便切换源也不丢失），只是 UI 一次只露面一份。 */}
         {draft.download_source === 'huggingface' ? (
           <>
-            <SettingsField label="token" desc="用于 HF 私有 repo 鉴权；公开仓库（含 SmilingWolf WD14 / cella110n CLTagger）不用填">
+            <SettingsField
+              label="token"
+              helpTooltip={
+                <p>用于 HF 私有 repo 鉴权。公开仓库（含 SmilingWolf WD14 / cella110n CLTagger）不用填。</p>
+              }
+            >
               <SensitiveInput
                 value={draft.huggingface.token}
                 serverValue={server?.huggingface.token ?? ''}
                 onChange={(v) => update('huggingface', 'token', v)}
               />
             </SettingsField>
-            <SettingsField label="endpoint" desc="模型下载端点。国内推荐 hf-mirror，海外推荐官方源">
+            <SettingsField
+              label="endpoint"
+              helpTooltip={<p>模型下载端点。国内推荐 hf-mirror，海外推荐官方源。</p>}
+            >
               <HFEndpointSelect
                 value={draft.huggingface.endpoint}
                 onChange={(v) => update('huggingface', 'endpoint', v)}
@@ -777,7 +792,15 @@ export default function SettingsPage() {
             </SettingsField>
           </>
         ) : (
-          <SettingsField label="token" desc="公开模型不用填；私有仓库或限速时需要。需先 pip install modelscope 安装命令行工具。">
+          <SettingsField
+            label="token"
+            helpTooltip={
+              <>
+                <p>公开模型不用填；私有仓库或限速时需要。</p>
+                <p>使用前请先 <code>pip install modelscope</code> 安装命令行工具。</p>
+              </>
+            }
+          >
             <SensitiveInput
               value={draft.modelscope.token}
               serverValue={server?.modelscope.token ?? ''}
@@ -816,12 +839,7 @@ export default function SettingsPage() {
       {tab === 'monitor' && (<>
       <SettingsSection id="wandb" title="Weights & Biases">
         <SettingsField label="启用 WandB" desc="打开后所有训练任务都会写入 W&B；不再占用训练配置字段">
-          <div className="flex items-center gap-3">
-            <Bool value={draft.wandb.enabled} onChange={(v) => update('wandb', 'enabled', v)} />
-            <span className="text-xs text-fg-tertiary">
-              需要训练环境已安装 wandb 包
-            </span>
-          </div>
+          <Bool value={draft.wandb.enabled} onChange={(v) => update('wandb', 'enabled', v)} />
         </SettingsField>
         <SettingsField label="api_key">
           <SensitiveInput
@@ -868,13 +886,21 @@ export default function SettingsPage() {
               <option value="disabled">disabled</option>
             </select>
           </SettingsField>
-          <SettingsField label="记录采样图" desc="开启后训练采样图会上传到 wandb.ai 公网；私有 IP / NSFW 数据集请保持关闭">
+          <SettingsField
+            label="记录采样图"
+            helpTooltip={
+              <p>开启后训练采样图会上传到 <code>wandb.ai</code> 公网；私有 IP / NSFW 数据集请保持关闭。</p>
+            }
+          >
             <Bool value={draft.wandb.log_samples} onChange={(v) => update('wandb', 'log_samples', v)} />
           </SettingsField>
         </div>
         {draft.wandb.log_samples && (
           <div className="grid grid-cols-2 gap-3">
-            <SettingsField label="采样图最长边" desc="上传前缩到此像素，原图常 2K+，512 已够 wandb 浏览">
+            <SettingsField
+              label="采样图最长边"
+              helpTooltip={<p>上传前缩到此像素。原图常 2K+，512 已够 wandb 浏览。</p>}
+            >
               <input
                 type="number"
                 min={64}
@@ -884,7 +910,12 @@ export default function SettingsPage() {
                 className={textInputClass}
               />
             </SettingsField>
-            <SettingsField label="step 节流" desc="0 = 不额外节流；>0 时只在 global_step % N == 0 上传，避免长训练上 GB 级图">
+            <SettingsField
+              label="step 节流"
+              helpTooltip={
+                <p>0 = 不额外节流。&gt; 0 时只在 <code>global_step % N == 0</code> 上传，避免长训练上 GB 级图。</p>
+              }
+            >
               <input
                 type="number"
                 min={0}
@@ -1026,15 +1057,21 @@ function SectionIndex({
   )
 }
 
-function SettingsField({ label, desc, children }: {
+function SettingsField({ label, desc, helpTooltip, children }: {
   label: string
   desc?: string
+  /** 可选 ⓘ tooltip slot，渲染在 label 旁边。中长说明（≥20 字 / 详细用法）
+   *  适合放这里，避免 inline desc 把字段名行撑得过长。一般和 desc 二选一。 */
+  helpTooltip?: React.ReactNode
   children: React.ReactNode
 }) {
   return (
     <div className="grid grid-cols-[240px_1fr] gap-3 items-start">
       <div className="flex flex-col gap-0.5 pt-1.5">
-        <label className="text-xs text-fg-secondary font-mono leading-none">{label}</label>
+        <div className="flex items-center gap-0.5 min-w-0">
+          <label className="text-xs text-fg-secondary font-mono leading-none">{label}</label>
+          {helpTooltip && <InfoButton>{helpTooltip}</InfoButton>}
+        </div>
         {desc && <p className="text-[10px] text-fg-tertiary m-0 leading-snug">{desc}</p>}
       </div>
       <div className="min-w-0">{children}</div>
@@ -1215,10 +1252,12 @@ function WD14ModelCard({
     return <p className="text-fg-tertiary text-xs">加载模型清单...</p>
   }
   return (
-    <ModelGroupCard title={wd14.name + '（候选模型）'}>
-      <p className="text-xs text-fg-tertiary m-0">
-        {wd14.description} · 选中作为当前 model_id；下载缺的版本。
-      </p>
+    <ModelGroupCard
+      title={wd14.name + '（候选模型）'}
+      helpTooltip={
+        <p>{wd14.description}。选中作为当前 <code>model_id</code>；下载缺的版本。</p>
+      }
+    >
       <ul className="list-none m-0 p-0 flex flex-col gap-1">
         {wd14.variants.map((v) => {
           const key = `wd14:${v.model_id}`
@@ -1282,10 +1321,12 @@ function CLTaggerModelCard({
     return <p className="text-fg-tertiary text-xs">加载模型清单...</p>
   }
   return (
-    <ModelGroupCard title={cl.name + '（版本）'}>
-      <p className="text-xs text-fg-tertiary m-0">
-        {cl.description} · <code>{cl.repo}</code>
-      </p>
+    <ModelGroupCard
+      title={cl.name + '（版本）'}
+      helpTooltip={
+        <p>{cl.description}。仓库：<code>{cl.repo}</code></p>
+      }
+    >
       <ul className="list-none m-0 p-0 flex flex-col gap-1">
         {cl.variants.map((v) => {
           const key = `cltagger:${v.label}`
@@ -1450,11 +1491,15 @@ function ModelsSection({ catalog, busy, start, reloadCatalog, catalogError }: {
       ) : (
         <div className="flex flex-col gap-2">
           {/* Anima 主模型 */}
-          <ModelGroupCard title={catalog.anima_main.name}>
-            <p className="text-xs text-fg-tertiary m-0">
-              {catalog.anima_main.description} · <code>{catalog.anima_main.repo}</code>
-              <br />选中的版本会作为<strong className="text-fg-primary">新建 version</strong>的默认 transformer。
-            </p>
+          <ModelGroupCard
+            title={catalog.anima_main.name}
+            helpTooltip={
+              <>
+                <p>{catalog.anima_main.description}。仓库：<code>{catalog.anima_main.repo}</code></p>
+                <p>选中的版本会作为<strong>新建 version</strong> 的默认 transformer。</p>
+              </>
+            }
+          >
             <ul className="list-none m-0 p-0 flex flex-col gap-1">
               {catalog.anima_main.variants.map((v) => {
                 const key = `anima_main:${v.variant}`
@@ -1537,10 +1582,19 @@ function ModelsSection({ catalog, busy, start, reloadCatalog, catalogError }: {
   )
 }
 
-function ModelGroupCard({ title, children }: { title: string; children: React.ReactNode }) {
+function ModelGroupCard({
+  title, helpTooltip, children,
+}: {
+  title: string
+  helpTooltip?: React.ReactNode
+  children: React.ReactNode
+}) {
   return (
     <div className="rounded-sm border border-subtle bg-sunken p-2.5">
-      <h4 className="text-xs font-semibold text-fg-primary mb-1.5">{title}</h4>
+      <h4 className="text-xs font-semibold text-fg-primary mb-1.5 flex items-center gap-0.5">
+        <span>{title}</span>
+        {helpTooltip && <InfoButton>{helpTooltip}</InfoButton>}
+      </h4>
       {children}
     </div>
   )
@@ -2156,6 +2210,18 @@ function XformersSection() {
         <span className="text-fg-tertiary text-xs transition-transform group-open:rotate-90 inline-block w-3">▸</span>
         <h2 className="text-sm font-semibold text-fg-primary m-0">xformers</h2>
         <span className="text-xs text-fg-tertiary">attention 加速（与 Flash Attention 二选一）</span>
+        <InfoButton>
+          <p>
+            xformers 与 Flash Attention <strong>互斥</strong>，每个训练 / 出图任务的{' '}
+            <code>attention_backend</code> 字段三选一（无 / xformers / flash_attn）。
+          </p>
+          <p>xformers 泛用性更广（支持 sm_70+），flash_attn 性能更高（sm_80+ Ampere 起）。</p>
+          <p>
+            装失败多数是上游 PyPI / PyTorch index 没出对应 torch+cu 组合的 wheel
+            （5090 / 新 GPU 常见）。失败时按钮 toast 会显示 stderr 末尾，可根据提示
+            降 torch 版本或等上游覆盖。
+          </p>
+        </InfoButton>
         <span className={`ml-auto text-xs font-mono ${statusOk ? 'text-ok' : 'text-warn'}`}>{statusLabel}</span>
       </summary>
 
@@ -2171,13 +2237,6 @@ function XformersSection() {
             </code>
             {status.installed && <StatusLabel bg="bg-ok-soft" fg="text-ok" text="已安装" />}
           </div>
-
-          <p className="text-2xs text-fg-tertiary m-0 leading-relaxed">
-            xformers 与 Flash Attention <strong>互斥</strong>，每个训练/出图任务的{' '}
-            <code className="font-mono">attention_backend</code>{' '}
-            字段三选一（无 / xformers / flash_attn）。xformers 泛用性更广（支持
-            sm_70+），flash_attn 性能更高（sm_80+ Ampere 起）。
-          </p>
 
           <div className="flex gap-2">
             <button
@@ -2198,12 +2257,6 @@ function XformersSection() {
               title="刷新状态"
             >↻</button>
           </div>
-
-          <p className="text-2xs text-fg-tertiary m-0">
-            装失败多数是上游 PyPI / PyTorch index 没出对应 torch+cu 组合的 wheel
-            （5090 / 新 GPU 常见）。失败时按钮 toast 会显示 stderr 末尾，可
-            根据提示降 torch 版本或等上游覆盖。
-          </p>
         </>)}
       </div>
     </details>
@@ -2229,7 +2282,10 @@ function TaeFluxSection({
     <SettingsSection id="preview" title="中间步预览">
       <SettingsField
         label="节流（每 N 步推一次预览）"
-        desc="0 = 关闭中间步预览；推荐 3-5。模型 server 启动时已后台下载，UI 不需要操作。"
+        desc="0 = 关闭中间步预览；推荐 3-5"
+        helpTooltip={
+          <p>TAEFlux 解码模型 server 启动时已后台下载，UI 不需要单独操作。<code>0</code> 关闭中间步预览；推荐 <code>3-5</code>。</p>
+        }
       >
         <div className="flex items-center gap-2">
           <input
@@ -2769,44 +2825,6 @@ const VERSION_ICON_PATHS: Record<string, React.ReactNode> = {
   lock:     <><rect x="3.5" y="7" width="9" height="6.5" rx="1" /><path d="M5.5 7v-2a2.5 2.5 0 0 1 5 0v2" /></>,
 }
 
-// click-toggle 弹层。原 meta-foot 一整行（autocheck 周期 / git reset 实现细节 /
-// 拒绝条件）对普通用户都是 noise，搬到这里隐式可见；外部 click 自动关闭。
-function InfoButton({ children, label = 'ⓘ' }: { children: React.ReactNode; label?: string }) {
-  const [open, setOpen] = useState(false)
-  const wrapRef = useRef<HTMLSpanElement>(null)
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [open])
-  return (
-    <span ref={wrapRef} className="vs-info-wrap">
-      <button
-        type="button"
-        className="vs-info-trigger"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        aria-label="更多信息"
-      >
-        {label}
-      </button>
-      {open && (
-        <div className="vs-info-panel" role="dialog">
-          {children}
-        </div>
-      )}
-    </span>
-  )
-}
-
 function VersionIcon({ name }: { name: keyof typeof VERSION_ICON_PATHS | string }) {
   const path = VERSION_ICON_PATHS[name]
   if (!path) return null
@@ -3195,27 +3213,34 @@ function MasterCard(p: MasterCardProps) {
         </div>
       </div>
 
-      {p.hasRollback && p.status?.rollback_target && (
-        // 回滚是潜在破坏性操作（reset --hard 丢失当前 commit 上的本地未
-        // commit 改动 / GC 后 reflog 也可能消失），UI 默认折叠成小字提示
-        // 让用户主动确认才展开按钮，降低误触概率。
-        <details className="vs-rollback-collapse">
-          <summary className="vs-rollback-summary">
-            <span className="vs-caret">▸</span>
-            历史版本可切回（{p.status.rollback_target.slice(0, 8)}）
-          </summary>
-          <div className="vs-rollback-inline-row">
-            <div className="vs-lhs">
-              <span className="vs-ico"><VersionIcon name="rollback" /></span>
-              <span>上一版本</span>
-              <b>{p.status.rollback_target.slice(0, 8)}</b>
+      {p.hasRollback && p.status?.rollback_target && (() => {
+        // rollback 显示优先 tag（"v0.6.0"），否则 sha 前 8 位
+        const sha = p.status.rollback_target
+        const tag = p.status.rollback_target_tag
+        const label = tag || sha.slice(0, 8)
+        return (
+          // 回滚是潜在破坏性操作（reset --hard 丢失当前 commit 上的本地未
+          // commit 改动 / GC 后 reflog 也可能消失），UI 默认折叠成小字提示
+          // 让用户主动确认才展开按钮，降低误触概率。
+          <details className="vs-rollback-collapse">
+            <summary className="vs-rollback-summary">
+              <span className="vs-caret">▸</span>
+              历史版本可切回（{label}）
+            </summary>
+            <div className="vs-rollback-inline-row">
+              <div className="vs-lhs">
+                <span className="vs-ico"><VersionIcon name="rollback" /></span>
+                <span>上一版本</span>
+                <b>{label}</b>
+                {tag && <span className="vs-when">{sha.slice(0, 8)}</span>}
+              </div>
+              <button onClick={p.onRollback} disabled={p.busy || p.checking} className="btn btn-sm">
+                切回 {label}
+              </button>
             </div>
-            <button onClick={p.onRollback} disabled={p.busy || p.checking} className="btn btn-sm">
-              切回 {p.status.rollback_target.slice(0, 8)}
-            </button>
-          </div>
-        </details>
-      )}
+          </details>
+        )
+      })()}
     </div>
   )
 }
@@ -3600,20 +3625,22 @@ function ServiceSection() {
 
   return (
     <SettingsSection id="service" title="服务">
-      <SettingsField label="重启 Studio">
-        <div className="flex flex-col gap-1.5">
-          <button
-            onClick={() => void handleRestart()}
-            disabled={busy}
-            className="btn btn-secondary btn-sm self-start"
-          >
-            {busy ? '重启中...' : '重启 server'}
-          </button>
-          <p className="text-2xs text-fg-dim leading-snug">
-            关闭并重新启动后端进程。常用场景：修改 secrets.json 后强制刷新、
-            装完新 onnxruntime / PyTorch 让 EP 生效。
-          </p>
-        </div>
+      <SettingsField
+        label="重启 Studio"
+        helpTooltip={
+          <>
+            <p>关闭并重新启动后端进程。</p>
+            <p>常用场景：修改 <code>secrets.json</code> 后强制刷新、装完新 onnxruntime / PyTorch 让 EP 生效。</p>
+          </>
+        }
+      >
+        <button
+          onClick={() => void handleRestart()}
+          disabled={busy}
+          className="btn btn-secondary btn-sm self-start"
+        >
+          {busy ? '重启中...' : '重启 server'}
+        </button>
       </SettingsField>
     </SettingsSection>
   )

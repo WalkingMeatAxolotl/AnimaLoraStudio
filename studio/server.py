@@ -3220,12 +3220,18 @@ def system_update_status() -> dict[str, Any]:
     """
     from dataclasses import asdict
     rollback_to = updater.rollback_target()
+    rollback_tag = updater.exact_tag_for(rollback_to) if rollback_to else None
     st = updater.last_status()
     if st is None:
-        return {"status": None, "rollback_target": rollback_to}
+        return {
+            "status": None,
+            "rollback_target": rollback_to,
+            "rollback_target_tag": rollback_tag,
+        }
     return {
         **asdict(st),
         "rollback_target": rollback_to,
+        "rollback_target_tag": rollback_tag,
     }
 
 

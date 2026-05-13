@@ -380,70 +380,9 @@
   opacity: 0.7;
 }
 
-/* ==================== InfoButton（title 旁 ⓘ click 开关 tooltip） ==================== */
-/* 之前的 meta-foot 一整行（autocheck 周期 / git reset 实现细节 / 拒绝
-   条件 / 上次日志链接）对普通用户都是 noise；移进此 click-toggle 弹层 */
-.vs-info-wrap {
-  position: relative;
-  display: inline-flex;
-}
-.vs-info-trigger {
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-  color: var(--fg-tertiary);
-  font-size: 14px;
-  padding: 2px 4px;
-  line-height: 1;
-  border-radius: 4px;
-}
-.vs-info-trigger:hover { color: var(--fg-primary); background: var(--bg-overlay); }
-.vs-info-trigger[aria-expanded="true"] {
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-.vs-info-panel {
-  position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
-  z-index: 20;
-  width: 380px;
-  max-width: calc(100vw - 32px);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-default);
-  border-radius: 8px;
-  box-shadow: var(--sh-md);
-  padding: 12px 14px;
-  font-size: 12px;
-  color: var(--fg-secondary);
-  line-height: 1.6;
-}
-.vs-info-panel ul {
-  padding: 0;
-  margin: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.vs-info-panel li {
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
-}
-.vs-info-panel li::before {
-  content: '·';
-  color: var(--fg-disabled);
-  flex-shrink: 0;
-  margin-top: -1px;
-}
-.vs-info-panel code {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  background: var(--bg-sunken);
-  padding: 1px 5px;
-  border-radius: 3px;
-}
+/* InfoButton ⓘ 弹层（之前的 .vs-info-* 类）已抽到
+   components/InfoButton.tsx + styles/info-button.css，所有 .info-btn-*
+   类供全 Settings 页面复用，本文件不再持有相关样式。 */
 
 /* ==================== meta foot 行 ==================== */
 .vs-meta-foot {

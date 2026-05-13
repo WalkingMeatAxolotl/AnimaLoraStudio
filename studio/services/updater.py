@@ -224,6 +224,17 @@ def resolve_ref(ref: str) -> Optional[str]:
     return out if rc == 0 else None
 
 
+def exact_tag_for(sha: str) -> Optional[str]:
+    """`git describe --tags --exact-match <sha>` → tag 字符串；commit 上没打
+    tag → None。给 UI 用：rollback 按钮文案优先显示 tag（v0.6.0）而非
+    裸 sha；没 tag 时 caller fallback 到 sha[:8]。
+    """
+    if not sha:
+        return None
+    rc, out, _ = _git("describe", "--tags", "--exact-match", sha)
+    return out if rc == 0 and out else None
+
+
 # Self-update feature 引入的 marker 文件。target 上不存在 → 切过去就丢失
 # webui 升级能力（只能 CLI git pull 救援）。preflight() err 级别阻断。
 _SELF_UPDATE_MARKER = "studio/services/updater.py"
