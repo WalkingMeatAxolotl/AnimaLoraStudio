@@ -1691,6 +1691,22 @@ export const api = {
 
   // 完整 .update_log 文本（PR-C，失败时 UI 弹 modal 用）。
   getSystemUpdateLog: () => req<{ content: string }>('/api/system/update_log'),
+
+  // chunk 2 — 解析 CHANGELOG.md，返回指定 tag 的 release notes
+  // （MasterCard 用此填进 change-block；缺失时 found=false 优雅退化）
+  getReleaseNotes: (tag: string) =>
+    req<ReleaseNotes>(`/api/system/release_notes?tag=${encodeURIComponent(tag)}`),
+
+  // chunk 3 — git fetch + log origin/dev，返回最近 N 个 commit
+  // （DevCard 时间线 + 任意 commit 切换用）。limit 默认 10，clamp 1-50。
+  getDevCommits: (limit = 10) =>
+    req<DevCommitsResult>(`/api/system/dev_commits?limit=${limit}`),
+
+  // chunk 4 — 更新前置检查。VersionSection preview 状态展开时拉取，渲染
+  // pre-flight 行；任一 level=err → blocking=true 禁用确认按钮。
+  // target 接受任意 git ref（tag / branch / commit sha）。
+  getPreflight: (target: string) =>
+    req<PreflightResult>(`/api/system/preflight?target=${encodeURIComponent(target)}`),
 }
 
 export interface SystemVersion {
@@ -1731,6 +1747,60 @@ export interface SystemUpdateStatus {
   deps_changed?: boolean
   log_excerpt?: string
   rollback_target?: string | null
+}
+
+/** chunk 2 重做 — release_notes.yaml 派生的 release notes。
+ *  schema + 编写规范见 docs/release-notes-spec.md。`found=false` → UI 退化到 CHANGELOG 链接。 */
+export type ReleaseNotesKind =
+  | 'added' | 'changed' | 'improved' | 'fixed' | 'removed' | 'deprecated' | 'security'
+
+export interface ReleaseNotesEntry {
+  kind: ReleaseNotesKind
+  summary: string         // ≤ 80 chars, plain text, user-facing
+  pr_refs: number[]       // 关联 PR 号；空 list 表示无关联 PR
+  detail: string | null   // optional markdown 多行说明
+}
+
+export interface ReleaseNotes {
+  tag: string             // caller 传入的 tag（v 前缀保留）
+  found: boolean
+  date: string | null     // ISO YYYY-MM-DD
+  summary: string | null  // 整版本一句话总览（block-level summary）
+  entries: ReleaseNotesEntry[]
+}
+
+/** chunk 3 — dev 通道最近 commit 摘要。fetched=false 时表示 git fetch 失败
+ *  （离线 / 网络问题），commits 是本地 origin/dev 缓存。error 文案给 UI 提示。 */
+export interface DevCommit {
+  sha: string           // full sha，作为 performSystemUpdate target
+  short_sha: string     // 前 8 位
+  msg: string           // commit subject
+  time_iso: string      // ISO8601
+  author: string
+}
+export interface DevCommitsResult {
+  commits: DevCommit[]
+  fetched: boolean
+  error: string | null
+}
+
+/** chunk 4 — 更新前置检查。任一 level=err → blocking=true 禁用确认按钮。 */
+export interface PreflightCheck {
+  key: 'dirty' | 'running_tasks' | 'requirements_diff' | 'last_version'
+  level: 'ok' | 'warn' | 'err'
+  label: string
+}
+export interface PreflightRequirementsDiff {
+  added: string[]
+  removed: string[]
+  changed: { name: string; from: string; to: string }[]
+}
+export interface PreflightResult {
+  target: string
+  target_resolved: string | null
+  checks: PreflightCheck[]
+  blocking: boolean
+  requirements_diff: PreflightRequirementsDiff
 }
 
 export interface BrowseEntry {

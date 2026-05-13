@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import shutil
 import subprocess
 import sys
@@ -73,6 +74,24 @@ class UpdateCheckResult:
     latest_tag: Optional[str]  # remote 最新 tag（仅 master 通道有）
     checked_at: float          # epoch
     error: Optional[str] = None  # fetch 失败时填
+
+
+@dataclass
+class DevCommit:
+    """dev 通道一条 commit 摘要（chunk 3 — VersionSection dev 卡时间线用）。"""
+    sha: str            # 完整 sha，作为 performSystemUpdate(target=...) 的 ref
+    short_sha: str      # 前 8 位用于展示
+    msg: str            # commit subject line
+    time_iso: str       # author commit time, ISO8601
+    author: str         # author name
+
+
+@dataclass
+class DevCommitsResult:
+    """`git log origin/dev` 结果。fetched=False 时 commits 用本地缓存（如有）。"""
+    commits: list[DevCommit] = field(default_factory=list)
+    fetched: bool = False
+    error: Optional[str] = None
 
 
 @dataclass
@@ -197,6 +216,132 @@ def check_update(channel: str = "master", use_cache: bool = True) -> UpdateCheck
         _write_cache(result)
 
     return result
+
+
+def resolve_ref(ref: str) -> Optional[str]:
+    """`git rev-parse <ref>` → 完整 sha；ref 不存在 → None。"""
+    rc, out, _ = _git("rev-parse", ref)
+    return out if rc == 0 else None
+
+
+# Self-update feature 引入的 marker 文件。target 上不存在 → 切过去就丢失
+# webui 升级能力（只能 CLI git pull 救援）。preflight() err 级别阻断。
+_SELF_UPDATE_MARKER = "studio/services/updater.py"
+
+
+def target_has_self_update(target_ref: str) -> bool:
+    """目标 ref 上是否带 webui 自更新 feature。
+
+    用 `git cat-file -e <ref>:<path>` 测文件存在性（不读内容，效率比 git
+    show 高且无 stdout 输出污染）。失败 / ref 无效 → False（保守）。
+    """
+    rc, _, _ = _git("cat-file", "-e", f"{target_ref}:{_SELF_UPDATE_MARKER}")
+    return rc == 0
+
+
+_REQ_NAME_RE = re.compile(r"^([A-Za-z0-9_\-\.\[\]]+)")
+
+
+def _parse_requirements(text: str) -> dict[str, str]:
+    """`requirements.txt` 内容 → {pkg_name_lowercased: full_spec_line}。
+
+    跳过注释 / 空行 / `-r ...` / `-e ...` 引用。识别包名 = 行首字母数字下划线
+    点连字符 + 可选 extras `[...]`；不解析 marker / hash —— 这里只用来粗略
+    diff 提示用户"有变化"，准确版本控制走 pip 自己的解析。
+    """
+    out: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line or line.startswith("-"):
+            continue
+        m = _REQ_NAME_RE.match(line)
+        if not m:
+            continue
+        out[m.group(1).lower()] = line
+    return out
+
+
+@dataclass
+class RequirementsDiff:
+    added: list[str] = field(default_factory=list)    # 新增的包名（target 有，current 没）
+    removed: list[str] = field(default_factory=list)  # 移除的包名（current 有，target 没）
+    changed: list[dict[str, str]] = field(default_factory=list)
+    # changed item: {"name": "...", "from": "pkg==1.0", "to": "pkg==2.0"}
+
+
+def requirements_diff(target_ref: str) -> RequirementsDiff:
+    """Diff `requirements.txt` 在 HEAD 与 target_ref 之间。
+
+    git show 失败（target ref 不解析 / 文件在 target 上不存在）→ 空 diff，
+    UI 当作"无变化"处理。current requirements.txt 缺失同样空 diff。
+    """
+    target_resolved = resolve_ref(target_ref)
+    if target_resolved is None:
+        return RequirementsDiff()
+    rc, target_text, _ = _git("show", f"{target_resolved}:requirements.txt")
+    if rc != 0:
+        return RequirementsDiff()
+
+    cur_path = REPO_ROOT / "requirements.txt"
+    if not cur_path.exists():
+        return RequirementsDiff()
+    try:
+        cur_text = cur_path.read_text(encoding="utf-8-sig")
+    except OSError:
+        return RequirementsDiff()
+
+    cur = _parse_requirements(cur_text)
+    tgt = _parse_requirements(target_text)
+    added = sorted(set(tgt.keys()) - set(cur.keys()))
+    removed = sorted(set(cur.keys()) - set(tgt.keys()))
+    changed: list[dict[str, str]] = []
+    for name in sorted(set(tgt.keys()) & set(cur.keys())):
+        if cur[name] != tgt[name]:
+            changed.append({"name": name, "from": cur[name], "to": tgt[name]})
+    return RequirementsDiff(added=added, removed=removed, changed=changed)
+
+
+def dev_commits(limit: int = 10) -> DevCommitsResult:
+    """`git fetch origin dev` + `git log origin/dev -<limit>`，返回最近 commits。
+
+    Chunk 3 — VersionSection dev 卡时间线 + 任意 commit 切换用。
+
+    - fetch 失败仍尝试读本地 origin/dev 缓存（用户离线或网络问题时，至少
+      能看到上次 fetch 的状态而不是白屏）
+    - 解析失败 / 仓库没 origin/dev → commits=[] + error 文案
+    - limit clamp 到 1-50 之间
+    """
+    limit = max(1, min(50, int(limit)))
+
+    rc_fetch, _, fetch_err = _git("fetch", "origin", "dev", timeout=GIT_FETCH_TIMEOUT)
+    fetched = rc_fetch == 0
+    fetch_error_msg: Optional[str] = None if fetched else f"git fetch dev: {fetch_err[:200]}"
+
+    # NUL-separated 字段格式：%H sha · %h short · %s subject · %cI iso time · %an author
+    fmt = "%H%x00%h%x00%s%x00%cI%x00%an"
+    rc, out, log_err = _git("log", f"-{limit}", f"--format={fmt}", "origin/dev")
+    if rc != 0:
+        # 没 origin/dev ref（首次 clone 未跟 dev / 远端被删等）
+        return DevCommitsResult(
+            commits=[],
+            fetched=fetched,
+            error=fetch_error_msg or f"git log origin/dev: {log_err[:200]}",
+        )
+
+    commits: list[DevCommit] = []
+    for line in out.splitlines():
+        parts = line.split("\x00")
+        if len(parts) < 5:
+            continue
+        commits.append(DevCommit(
+            sha=parts[0],
+            short_sha=parts[1],
+            msg=parts[2],
+            time_iso=parts[3],
+            author=parts[4],
+        ))
+
+    return DevCommitsResult(commits=commits, fetched=fetched, error=fetch_error_msg)
 
 
 def request_update(target: str = "origin/master") -> None:

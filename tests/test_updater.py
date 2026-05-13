@@ -407,3 +407,123 @@ def test_rollback_target_tolerates_utf8_bom(
     updater.LAST_VERSION.write_text(BOM + sha, encoding="utf-8")
     monkeypatch.setattr(updater, "_git", lambda *a, **k: (0, "", ""))
     assert updater.rollback_target() == sha
+
+
+# ---------------------------------------------------------------------------
+# target_has_self_update (chunk 4 safety net)
+# ---------------------------------------------------------------------------
+
+
+def test_target_has_self_update_true_when_marker_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+    """git cat-file -e <ref>:studio/services/updater.py 返 0 → True。"""
+    monkeypatch.setattr(updater, "_git",
+                       lambda *args, **_k: (0, "", "") if args[0] == "cat-file" else (1, "", ""))
+    assert updater.target_has_self_update("any-ref") is True
+
+
+def test_target_has_self_update_false_when_marker_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """marker 文件不存在（pre-self-update commit）→ False。"""
+    monkeypatch.setattr(updater, "_git", lambda *args, **_k: (1, "", "does not exist"))
+    assert updater.target_has_self_update("ancient-commit") is False
+
+
+def test_target_has_self_update_false_on_git_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """git 失败（ref 无效 / 仓库损坏）→ 保守返 False，让 preflight 阻断。"""
+    monkeypatch.setattr(updater, "_git", lambda *args, **_k: (128, "", "fatal: invalid object"))
+    assert updater.target_has_self_update("garbage") is False
+
+
+# ---------------------------------------------------------------------------
+# dev_commits (chunk 3)
+# ---------------------------------------------------------------------------
+
+
+def _fake_git_factory(plans: dict[tuple[str, ...], tuple[int, str, str]]):
+    """构造 _git 假实现：根据传入的 args tuple 匹配 plans 返回（rc, out, err）。
+    未命中 → (1, '', 'no plan')。
+    """
+    def fake(*args: str, **_kw):
+        return plans.get(args, (1, "", "no plan for: " + " ".join(args)))
+    return fake
+
+
+def test_dev_commits_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """fetch + log 都成功 → 解析出 commits 列表，fetched=True 无 error。"""
+    log_out = "\x00".join(["a" * 40, "aaaaaaaa", "first msg", "2026-05-13T11:00:00+00:00", "alice"]) + "\n" \
+            + "\x00".join(["b" * 40, "bbbbbbbb", "second msg", "2026-05-12T22:00:00+00:00", "bob"])
+    plans = {
+        ("fetch", "origin", "dev"): (0, "", ""),
+        ("log", "-10", "--format=%H%x00%h%x00%s%x00%cI%x00%an", "origin/dev"): (0, log_out, ""),
+    }
+    monkeypatch.setattr(updater, "_git", _fake_git_factory(plans))
+    r = updater.dev_commits(limit=10)
+    assert r.fetched is True
+    assert r.error is None
+    assert len(r.commits) == 2
+    assert r.commits[0].sha == "a" * 40
+    assert r.commits[0].short_sha == "aaaaaaaa"
+    assert r.commits[0].msg == "first msg"
+    assert r.commits[0].author == "alice"
+    assert r.commits[1].sha == "b" * 40
+
+
+def test_dev_commits_limit_clamped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """limit < 1 or > 50 → clamp 到 [1, 50]。"""
+    captured: list[tuple[str, ...]] = []
+    def fake(*args: str, **_kw):
+        captured.append(args)
+        if args[0] == "fetch":
+            return (0, "", "")
+        return (0, "", "")
+    monkeypatch.setattr(updater, "_git", fake)
+    updater.dev_commits(limit=999)
+    log_call = next(a for a in captured if a[0] == "log")
+    assert "-50" in log_call
+    captured.clear()
+    updater.dev_commits(limit=0)
+    log_call = next(a for a in captured if a[0] == "log")
+    assert "-1" in log_call
+
+
+def test_dev_commits_fetch_fails_but_log_works(monkeypatch: pytest.MonkeyPatch) -> None:
+    """git fetch 失败（离线）但本地 origin/dev 缓存还有 → commits 仍返回，
+    fetched=False + error 文案给 UI 提示陈旧。"""
+    log_out = "\x00".join(["c" * 40, "cccccccc", "cached msg", "2026-05-01T00:00:00+00:00", "you"])
+    plans = {
+        ("fetch", "origin", "dev"): (1, "", "Could not resolve host: github.com"),
+        ("log", "-10", "--format=%H%x00%h%x00%s%x00%cI%x00%an", "origin/dev"): (0, log_out, ""),
+    }
+    monkeypatch.setattr(updater, "_git", _fake_git_factory(plans))
+    r = updater.dev_commits(limit=10)
+    assert r.fetched is False
+    assert r.error is not None and "Could not resolve" in r.error
+    assert len(r.commits) == 1
+    assert r.commits[0].short_sha == "cccccccc"
+
+
+def test_dev_commits_no_origin_dev_ref(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`origin/dev` 不存在（首次 clone 没跟，或远端删了）→ commits=[]，
+    带 error 给 UI 显示。"""
+    plans = {
+        ("fetch", "origin", "dev"): (1, "", "fatal: couldn't find remote ref dev"),
+        ("log", "-10", "--format=%H%x00%h%x00%s%x00%cI%x00%an", "origin/dev"): (128, "", "fatal: ambiguous argument 'origin/dev'"),
+    }
+    monkeypatch.setattr(updater, "_git", _fake_git_factory(plans))
+    r = updater.dev_commits(limit=10)
+    assert r.fetched is False
+    assert r.commits == []
+    assert r.error is not None
+
+
+def test_dev_commits_malformed_log_lines_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """字段不够 5 个的行（比如 commit msg 含 NUL 字符这种异常情况）跳过，不抛。"""
+    log_out = "broken_line_without_nul\n" + \
+              "\x00".join(["d" * 40, "dddddddd", "ok msg", "2026-05-13T00:00:00+00:00", "alice"])
+    plans = {
+        ("fetch", "origin", "dev"): (0, "", ""),
+        ("log", "-10", "--format=%H%x00%h%x00%s%x00%cI%x00%an", "origin/dev"): (0, log_out, ""),
+    }
+    monkeypatch.setattr(updater, "_git", _fake_git_factory(plans))
+    r = updater.dev_commits(limit=10)
+    assert len(r.commits) == 1
+    assert r.commits[0].short_sha == "dddddddd"

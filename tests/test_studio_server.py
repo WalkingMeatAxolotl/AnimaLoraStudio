@@ -827,3 +827,182 @@ def test_system_rollback_success_writes_flag(
     assert body["ok"] is True
     assert body["target"] == "feedbeef" * 5
     assert captured["called"]
+
+
+# ---------------------------------------------------------------------------
+# /api/system/preflight (chunk 4)
+# ---------------------------------------------------------------------------
+
+
+def test_preflight_clean_no_running_no_diff(
+    client: TestClient,
+    isolated_paths: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """工作树干净 + 无运行任务 + requirements 无变化 → 3 ok + 1 ok（last_version 预览），blocking=False。"""
+    from studio.services import updater
+    monkeypatch.setattr(updater, "current_version", lambda: updater.VersionInfo(
+        version="0.6.0", commit="abc123def456", commit_short="abc123de", commit_time_iso="",
+        branch="master", tag="v0.6.0", is_dirty=False,
+    ))
+    monkeypatch.setattr(updater, "resolve_ref", lambda _ref: "deadbeef" * 5)
+    monkeypatch.setattr(updater, "requirements_diff", lambda _ref: updater.RequirementsDiff())
+    monkeypatch.setattr(updater, "target_has_self_update", lambda _ref: True)
+
+    resp = client.get("/api/system/preflight?target=origin/master")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["blocking"] is False
+    assert body["target_resolved"] == "deadbeef" * 5
+    levels = [c["level"] for c in body["checks"]]
+    assert "err" not in levels
+    keys = [c["key"] for c in body["checks"]]
+    assert keys == ["dirty", "running_tasks", "requirements_diff", "last_version"]
+
+
+def test_preflight_dirty_blocks(
+    client: TestClient,
+    isolated_paths: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """is_dirty=True → dirty check level=err，blocking=True。"""
+    from studio.services import updater
+    monkeypatch.setattr(updater, "current_version", lambda: updater.VersionInfo(
+        version="0.6.0", commit="x", commit_short="x", commit_time_iso="",
+        branch="master", tag=None, is_dirty=True,
+    ))
+    monkeypatch.setattr(updater, "resolve_ref", lambda _ref: "x")
+    monkeypatch.setattr(updater, "requirements_diff", lambda _ref: updater.RequirementsDiff())
+    monkeypatch.setattr(updater, "target_has_self_update", lambda _ref: True)
+
+    body = client.get("/api/system/preflight?target=origin/master").json()
+    assert body["blocking"] is True
+    dirty_check = next(c for c in body["checks"] if c["key"] == "dirty")
+    assert dirty_check["level"] == "err"
+
+
+def test_preflight_running_tasks_block(
+    client: TestClient,
+    isolated_paths: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """有 running task → running_tasks check level=err，blocking=True，label 含任务名。"""
+    from studio import db
+    from studio.services import updater
+    monkeypatch.setattr(updater, "current_version", lambda: updater.VersionInfo(
+        version="0.6.0", commit="x", commit_short="x", commit_time_iso="",
+        branch="master", tag=None, is_dirty=False,
+    ))
+    monkeypatch.setattr(updater, "resolve_ref", lambda _ref: "x")
+    monkeypatch.setattr(updater, "requirements_diff", lambda _ref: updater.RequirementsDiff())
+    monkeypatch.setattr(updater, "target_has_self_update", lambda _ref: True)
+
+    # 写一条 running task（含所有 NOT NULL 字段）
+    import time as _time
+    with db.connection_for() as conn:
+        conn.execute(
+            "INSERT INTO tasks (name, config_name, status, task_type, created_at) VALUES (?, ?, ?, ?, ?)",
+            ("training-XL-v3", "fake-config", "running", "train", int(_time.time())),
+        )
+        conn.commit()
+
+    body = client.get("/api/system/preflight?target=origin/master").json()
+    assert body["blocking"] is True
+    rt = next(c for c in body["checks"] if c["key"] == "running_tasks")
+    assert rt["level"] == "err"
+    assert "training-XL-v3" in rt["label"]
+
+
+def test_preflight_requirements_diff_warn(
+    client: TestClient,
+    isolated_paths: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """requirements diff 非空 → warn 级别，blocking 不受影响。label 含 +N/-N/~N 计数。"""
+    from studio.services import updater
+    monkeypatch.setattr(updater, "current_version", lambda: updater.VersionInfo(
+        version="0.6.0", commit="x", commit_short="x", commit_time_iso="",
+        branch="master", tag=None, is_dirty=False,
+    ))
+    monkeypatch.setattr(updater, "resolve_ref", lambda _ref: "x")
+    monkeypatch.setattr(updater, "requirements_diff",
+                       lambda _ref: updater.RequirementsDiff(
+                           added=["newpkg1", "newpkg2"],
+                           removed=["oldpkg"],
+                           changed=[{"name": "torch", "from": "torch==2.0", "to": "torch==2.4"}],
+                       ))
+    monkeypatch.setattr(updater, "target_has_self_update", lambda _ref: True)
+
+    body = client.get("/api/system/preflight?target=origin/master").json()
+    assert body["blocking"] is False
+    req = next(c for c in body["checks"] if c["key"] == "requirements_diff")
+    assert req["level"] == "warn"
+    assert "+2" in req["label"]
+    assert "-1" in req["label"]
+    assert "~1" in req["label"]
+    assert body["requirements_diff"]["added"] == ["newpkg1", "newpkg2"]
+
+
+def test_preflight_unresolved_target(
+    client: TestClient,
+    isolated_paths: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """resolve_ref 返回 None（target ref 不存在）→ requirements 项 err，blocking。"""
+    from studio.services import updater
+    monkeypatch.setattr(updater, "current_version", lambda: updater.VersionInfo(
+        version="0.6.0", commit="x", commit_short="x", commit_time_iso="",
+        branch="master", tag=None, is_dirty=False,
+    ))
+    monkeypatch.setattr(updater, "resolve_ref", lambda _ref: None)
+
+    body = client.get("/api/system/preflight?target=invalid").json()
+    assert body["blocking"] is True
+    assert body["target_resolved"] is None
+    req = next(c for c in body["checks"] if c["key"] == "requirements_diff")
+    assert req["level"] == "err"
+    assert "invalid" in req["label"]
+
+
+def test_preflight_target_missing_self_update_blocks(
+    client: TestClient,
+    isolated_paths: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """目标 ref 早于 self-update feature → 加 err 行 + blocking=True；
+    前端 confirm 按钮 disable，防止用户切到无 webui 救援能力的版本。"""
+    from studio.services import updater
+    monkeypatch.setattr(updater, "current_version", lambda: updater.VersionInfo(
+        version="0.6.0", commit="x", commit_short="x", commit_time_iso="",
+        branch="master", tag=None, is_dirty=False,
+    ))
+    monkeypatch.setattr(updater, "resolve_ref", lambda _ref: "deadbeef" * 5)
+    monkeypatch.setattr(updater, "requirements_diff", lambda _ref: updater.RequirementsDiff())
+    monkeypatch.setattr(updater, "target_has_self_update", lambda _ref: False)
+
+    body = client.get("/api/system/preflight?target=ancient-commit").json()
+    assert body["blocking"] is True
+    compat = next(c for c in body["checks"] if c["key"] == "self_update_compat")
+    assert compat["level"] == "err"
+    assert "自更新" in compat["label"]
+
+
+def test_preflight_target_with_self_update_passes(
+    client: TestClient,
+    isolated_paths: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """目标 ref 带 self-update feature → 不加 self_update_compat 行，不影响 blocking。"""
+    from studio.services import updater
+    monkeypatch.setattr(updater, "current_version", lambda: updater.VersionInfo(
+        version="0.6.0", commit="x", commit_short="x", commit_time_iso="",
+        branch="master", tag=None, is_dirty=False,
+    ))
+    monkeypatch.setattr(updater, "resolve_ref", lambda _ref: "deadbeef" * 5)
+    monkeypatch.setattr(updater, "requirements_diff", lambda _ref: updater.RequirementsDiff())
+    monkeypatch.setattr(updater, "target_has_self_update", lambda _ref: True)
+
+    body = client.get("/api/system/preflight?target=origin/master").json()
+    assert body["blocking"] is False
+    keys = [c["key"] for c in body["checks"]]
+    assert "self_update_compat" not in keys

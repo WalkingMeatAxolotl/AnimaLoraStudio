@@ -1,0 +1,685 @@
+/* VersionSection 双通道升级面板（ADR 0002 / PR-D 重设计）
+ *
+ * 所有 class 用 vs- 前缀避免与全局 / Tailwind utility 碰撞。
+ * 全部走 tokens.css 现有 CSS variable，自动适配 light/dark。
+ * 容器宽度响应：container query (sec-card → vs-channels)。
+ */
+
+/* ==================== 双卡 grid ==================== */
+.vs-channels {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+}
+.vs-channels.both {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+.vs-sec-card {
+  container-type: inline-size;
+}
+@container (max-width: 760px) {
+  .vs-channels.both { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ==================== 单卡片 ==================== */
+.vs-chan {
+  background: var(--bg-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 16px 18px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  transition: border 120ms, background 120ms;
+}
+.vs-chan.here {
+  border-color: var(--accent);
+  background: linear-gradient(180deg,
+    color-mix(in oklch, var(--accent-soft) 50%, var(--bg-sunken)) 0%,
+    var(--bg-sunken) 60%);
+}
+
+.vs-chan-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.vs-chan-head .vs-lhs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.vs-chan-head .vs-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-primary);
+  font-weight: 600;
+}
+.vs-chan-head .vs-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-tertiary);
+}
+.vs-chan-head .vs-meta.attn {
+  color: var(--warn);
+}
+
+/* master 卡 body：solo 左右分栏 / split 上下堆叠 */
+.vs-chan-body {
+  display: flex;
+  gap: 22px;
+  flex: 1;
+  min-width: 0;
+  align-items: stretch;
+}
+.vs-chan-body.solo { flex-direction: row; }
+.vs-chan-body.split { flex-direction: column; gap: 12px; }
+@container (max-width: 1000px) {
+  .vs-chan-body.solo { flex-direction: column; gap: 12px; }
+  .vs-chan-body.solo .vs-v-rule { display: none; }
+}
+
+.vs-v-rule {
+  width: 1px;
+  background: var(--border-subtle);
+  flex-shrink: 0;
+}
+
+/* ==================== 版本块 ==================== */
+.vs-ver-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.vs-ver-tag {
+  font-family: var(--font-mono);
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--fg-primary);
+  line-height: 1.05;
+  word-break: break-all;
+}
+.vs-ver-tag .vs-arrow {
+  color: var(--fg-tertiary);
+  margin: 0 6px;
+  font-weight: 500;
+}
+.vs-ver-tag .vs-target {
+  color: var(--accent);
+}
+.vs-ver-tag .vs-dim {
+  color: var(--fg-tertiary);
+}
+.vs-ver-meta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-tertiary);
+  margin-top: 4px;
+}
+.vs-ver-meta .vs-sep { color: var(--fg-disabled); }
+.vs-ver-meta b { color: var(--fg-secondary); font-weight: 500; }
+.vs-ver-tagline {
+  font-size: 12.5px;
+  color: var(--fg-secondary);
+  margin-top: 6px;
+  line-height: 1.55;
+}
+
+/* ==================== 更新内容（release notes block） ==================== */
+.vs-change-block {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.vs-change-block .vs-h {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-tertiary);
+}
+.vs-change-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.vs-change-list li {
+  font-size: 12.5px;
+  color: var(--fg-secondary);
+  display: flex;
+  gap: 8px;
+  line-height: 1.55;
+  min-width: 0;
+}
+.vs-change-list .vs-glyph {
+  color: var(--fg-disabled);
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+.vs-change-list .vs-txt {
+  min-width: 0;
+  word-break: break-word;
+}
+
+/* ==================== 卡底操作 ==================== */
+.vs-chan-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+  flex-wrap: wrap;
+}
+.vs-chan-foot .vs-info {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-tertiary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.vs-chan-foot .vs-info .vs-ok { color: var(--ok); }
+.vs-chan-foot .vs-info .vs-attn { color: var(--warn); }
+.vs-chan-foot .vs-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* ==================== Pill ==================== */
+.vs-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  letter-spacing: 0.04em;
+  font-weight: 500;
+}
+.vs-pill .vs-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.vs-pill-stable { background: var(--ok-soft);     color: var(--ok); }
+.vs-pill-dev    { background: var(--warn-soft);   color: var(--warn); }
+.vs-pill-here   { background: var(--accent-soft); color: var(--accent); }
+.vs-pill-info   { background: var(--info-soft);   color: var(--info); }
+
+/* ==================== inline rollback affordance（master 卡底） ==================== */
+.vs-rollback-inline-row {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.vs-rollback-inline-row .vs-lhs {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--fg-tertiary);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.vs-rollback-inline-row .vs-lhs .vs-ico { color: var(--fg-tertiary); }
+.vs-rollback-inline-row .vs-lhs b {
+  color: var(--fg-secondary);
+  font-weight: 500;
+  font-family: var(--font-mono);
+}
+.vs-rollback-inline-row .vs-lhs .vs-when {
+  color: var(--fg-disabled);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+/* ==================== dev toggle 行（卡片下方，demoted） ==================== */
+.vs-dev-toggle-row {
+  margin-top: 14px;
+  padding: 11px 14px;
+  background: transparent;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.vs-dev-toggle-row.open {
+  background: var(--bg-sunken);
+  border-style: solid;
+}
+.vs-dev-toggle-row.locked {
+  background: var(--bg-sunken);
+  border-style: solid;
+  border-color: var(--border-subtle);
+}
+.vs-dev-toggle-row .vs-lhs {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.vs-dev-toggle-row .vs-t {
+  font-size: 12.5px;
+  color: var(--fg-secondary);
+}
+.vs-dev-toggle-row .vs-d {
+  font-size: 11.5px;
+  color: var(--fg-tertiary);
+  margin-top: 2px;
+  max-width: 720px;
+  line-height: 1.5;
+}
+.vs-lock-pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ==================== switch ==================== */
+.vs-sw {
+  width: 32px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border-default);
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.vs-sw::after {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--fg-tertiary);
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: 140ms;
+}
+.vs-sw.on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.vs-sw.on::after {
+  background: var(--accent);
+  transform: translateX(14px);
+}
+.vs-sw.locked {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+/* ==================== meta foot 行 ==================== */
+.vs-meta-foot {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-tertiary);
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.vs-meta-foot .vs-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--fg-disabled);
+  flex-shrink: 0;
+}
+.vs-meta-foot .vs-lnk {
+  color: var(--fg-tertiary);
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+}
+.vs-meta-foot .vs-lnk:hover { color: var(--accent); }
+.vs-meta-foot .vs-warn-line { color: var(--warn); }
+
+/* ==================== 失败 banner（卡内顶部） ==================== */
+.vs-fail-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: color-mix(in oklch, var(--err-soft) 50%, transparent);
+  border: 1px solid color-mix(in oklch, var(--err) 30%, var(--border-subtle));
+  border-left: 3px solid var(--err);
+  border-radius: 6px;
+}
+.vs-fail-banner .vs-h {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--err);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.vs-fail-banner .vs-h .vs-when {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-tertiary);
+  font-weight: 400;
+}
+.vs-fail-banner .vs-d {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  line-height: 1.55;
+}
+.vs-fail-banner .vs-d code {
+  font-family: var(--font-mono);
+  color: var(--err);
+  background: var(--err-soft);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+/* ==================== dev card commits 时间线（chunk 3） ==================== */
+.vs-commits {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.vs-commits::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 6px;
+  bottom: 6px;
+  width: 1px;
+  background: var(--border-subtle);
+}
+.vs-commit {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: 5px 8px;
+  margin: 0 -8px;
+  align-items: baseline;
+  position: relative;
+  min-width: 0;
+  transition: background 100ms;
+  border-radius: 5px;
+}
+.vs-commit .vs-glyph {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--bg-sunken);
+  border: 1.5px solid var(--border-default);
+  margin-top: 4px;
+  z-index: 1;
+}
+.vs-commit.head .vs-glyph {
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.vs-commit .vs-msg {
+  font-size: 12.5px;
+  color: var(--fg-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vs-commit.head .vs-msg { font-weight: 500; }
+.vs-commit .vs-sha {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg-tertiary);
+  white-space: nowrap;
+}
+.vs-commit.clickable { cursor: pointer; }
+.vs-commit.clickable:hover { background: var(--bg-surface); }
+.vs-commit.selected {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.vs-commit.selected .vs-msg { color: var(--accent); font-weight: 500; }
+.vs-commit.selected .vs-sha { color: var(--accent); }
+.vs-commit .vs-switch-hint {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-disabled);
+  opacity: 0;
+  transition: opacity 100ms;
+  margin-left: 6px;
+}
+.vs-commit.clickable:hover .vs-switch-hint { opacity: 1; }
+.vs-commit.selected .vs-switch-hint { opacity: 1; color: var(--accent); }
+.vs-commit .vs-head-pill {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  padding: 1px 6px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 999px;
+  letter-spacing: 0.04em;
+  margin-left: 6px;
+}
+
+.vs-commits-load-more {
+  text-align: center;
+  padding: 8px 0 2px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-tertiary);
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  width: 100%;
+}
+.vs-commits-load-more:hover { color: var(--accent); }
+
+/* selected commit action bar（替代 chan-foot） */
+.vs-selection-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.vs-selection-foot .vs-info {
+  font-size: 12px;
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.vs-selection-foot .vs-info b {
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+.vs-selection-foot .vs-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* ==================== preview / progress states（chunk 4） ==================== */
+.vs-preview-pane,
+.vs-progress-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.vs-preview-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.vs-preview-head .vs-from {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--fg-tertiary);
+}
+.vs-preview-head .vs-arr { color: var(--fg-tertiary); }
+.vs-preview-head .vs-to {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  color: var(--accent);
+  font-weight: 600;
+}
+.vs-preview-head .vs-badge {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  letter-spacing: 0.04em;
+}
+
+.vs-preflight {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+}
+.vs-preflight .vs-h {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-tertiary);
+  margin-bottom: 4px;
+}
+.vs-preflight .vs-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--fg-secondary);
+  line-height: 1.5;
+}
+.vs-preflight .vs-row .vs-glyph {
+  width: 14px;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+}
+.vs-preflight .vs-row.ok    { color: var(--fg-secondary); }
+.vs-preflight .vs-row.ok .vs-glyph    { color: var(--ok); }
+.vs-preflight .vs-row.warn  { color: var(--warn); }
+.vs-preflight .vs-row.warn .vs-glyph  { color: var(--warn); }
+.vs-preflight .vs-row.err   { color: var(--err); }
+.vs-preflight .vs-row.err .vs-glyph   { color: var(--err); }
+.vs-preflight .vs-row b {
+  color: var(--fg-primary);
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+
+.vs-progress-bar {
+  height: 6px;
+  background: var(--bg-surface);
+  border-radius: 999px;
+  overflow: hidden;
+  position: relative;
+}
+.vs-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 200ms;
+  position: relative;
+  overflow: hidden;
+}
+.vs-progress-fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.2) 50%, transparent 100%);
+  animation: vs-shimmer 1.6s linear infinite;
+}
+@keyframes vs-shimmer {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(100%); }
+}
+.vs-progress-step {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--fg-secondary);
+}
+.vs-progress-step b { color: var(--fg-primary); font-weight: 500; }
+
+.vs-log-tail {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-tertiary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 8px 10px;
+  max-height: 96px;
+  overflow-y: auto;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.vs-log-tail .vs-line { display: block; }
+.vs-log-tail .vs-line .vs-t {
+  color: var(--fg-disabled);
+  margin-right: 8px;
+}
+.vs-log-tail .vs-line.ok { color: var(--ok); }
