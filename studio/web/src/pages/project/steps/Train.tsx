@@ -10,6 +10,7 @@ import {
   type Version,
   type VersionConfigResponse,
 } from '../../../api/client'
+import { useDialog } from '../../../components/Dialog'
 import SchemaForm from '../../../components/SchemaForm'
 import StepShell from '../../../components/StepShell'
 import { useToast } from '../../../components/Toast'
@@ -37,6 +38,7 @@ interface Ctx {
 export default function TrainPage() {
   const { project, activeVersion, reload } = useOutletContext<Ctx>()
   const { toast } = useToast()
+  const { confirm, prompt } = useDialog()
   const navigate = useNavigate()
 
   const [schema, setSchema] = useState<SchemaResponse | null>(null)
@@ -254,13 +256,12 @@ export default function TrainPage() {
 
   const onForkPreset = async (name: string) => {
     if (!name) return
-    if (
-      configResp?.has_config &&
-      !window.confirm(
-        `换预设会覆盖当前 version 的配置（已保存的内容会丢失）。继续？`
+    if (configResp?.has_config) {
+      const ok = await confirm(
+        '换预设会覆盖当前 version 的配置（已保存的内容会丢失）。继续？',
+        { tone: 'warn', okText: '换预设' },
       )
-    ) {
-      return
+      if (!ok) return
     }
     setBusy(true)
     try {
@@ -275,26 +276,36 @@ export default function TrainPage() {
   }
 
   const onSaveAsPreset = async () => {
-    const name = window.prompt(
-      '保存为新预设。预设名（字母 / 数字 / _ / -，会清掉项目特定字段）：',
-      ''
-    )
+    const name = await prompt('预设名（会自动清掉项目特定字段如 data_dir）', {
+      placeholder: 'my-preset',
+      validate: (v) => {
+        const t = v.trim()
+        if (!t) return '不能为空'
+        if (!PRESET_NAME_RE.test(t)) return '仅允许字母 / 数字 / _ / -'
+        return null
+      },
+    })
     if (!name) return
+    const trimmed = name.trim()
     setBusy(true)
     try {
-      await api.saveVersionConfigAsPreset(project.id, vid, name, false)
+      await api.saveVersionConfigAsPreset(project.id, vid, trimmed, false)
       const list = await api.listPresets()
       setPresets(list)
-      toast(`已保存为预设 ${name}`, 'success')
+      toast(`已保存为预设 ${trimmed}`, 'success')
     } catch (e) {
       const msg = String(e)
       if (msg.includes('已存在')) {
-        if (window.confirm(`预设 ${name} 已存在，覆盖？`)) {
+        const overwrite = await confirm(`预设 ${trimmed} 已存在，覆盖？`, {
+          tone: 'danger',
+          okText: '覆盖',
+        })
+        if (overwrite) {
           try {
-            await api.saveVersionConfigAsPreset(project.id, vid, name, true)
+            await api.saveVersionConfigAsPreset(project.id, vid, trimmed, true)
             const list = await api.listPresets()
             setPresets(list)
-            toast(`已覆盖预设 ${name}`, 'success')
+            toast(`已覆盖预设 ${trimmed}`, 'success')
           } catch (e2) {
             toast(String(e2), 'error')
           }
@@ -338,7 +349,11 @@ export default function TrainPage() {
     }
     if (!newPresetConfig || !vid) return
     if (presets.some((p) => p.name === name)) {
-      if (!window.confirm(`预设 ${name} 已存在，覆盖？`)) return
+      const overwrite = await confirm(`预设 ${name} 已存在，覆盖？`, {
+        tone: 'danger',
+        okText: '覆盖',
+      })
+      if (!overwrite) return
     }
     setBusy(true)
     try {

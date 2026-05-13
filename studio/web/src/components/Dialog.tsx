@@ -42,6 +42,8 @@ export interface PromptOptions {
   okText?: string
   cancelText?: string
   title?: string
+  /** 跟 ConfirmOptions 对齐 — 用于「输入后会做危险操作」的场景。 */
+  tone?: DialogTone
 }
 
 export interface AlertOptions {
