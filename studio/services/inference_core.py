@@ -58,6 +58,8 @@ class LoRAMeta:
     alpha: float
     algo: str
     factor: int
+    lucid_algo: str = ""
+    args: dict[str, Any] | None = None
 
 
 def read_lora_meta(path: str) -> LoRAMeta:
@@ -76,7 +78,7 @@ def read_lora_meta(path: str) -> LoRAMeta:
             meta = f.metadata() or {}
     except Exception as e:
         logger.warning(f"读 LoRA metadata 失败 {path}: {e}; 用默认参数")
-        return LoRAMeta(_DEFAULT_RANK, _DEFAULT_ALPHA, _DEFAULT_ALGO, _DEFAULT_FACTOR)
+        return LoRAMeta(_DEFAULT_RANK, _DEFAULT_ALPHA, _DEFAULT_ALGO, _DEFAULT_FACTOR, args={})
 
     try:
         ss_args = json.loads(meta.get("ss_network_args", "{}"))
@@ -108,7 +110,8 @@ def read_lora_meta(path: str) -> LoRAMeta:
         except (ValueError, TypeError):
             pass
 
-    return LoRAMeta(rank=rank, alpha=alpha, algo=algo, factor=factor)
+    lucid_algo = str(ss_args.get("lucid_algo", ""))
+    return LoRAMeta(rank=rank, alpha=alpha, algo=algo, factor=factor, lucid_algo=lucid_algo, args=ss_args)
 
 
 def apply_loras(
@@ -139,15 +142,40 @@ def apply_loras(
             continue
 
         meta = read_lora_meta(path)
-        adapter = AnimaLycorisAdapter(
-            algo=meta.algo,
-            rank=meta.rank,
-            alpha=meta.alpha,
-            factor=meta.factor,
-        )
+        if meta.lucid_algo == "lucid":
+            from utils.lucid_lora import AnimaLucidLoRAAdapter
+
+            ss_args = meta.args or {}
+            adapter = AnimaLucidLoRAAdapter(
+                rank=meta.rank,
+                alpha=float(ss_args.get("training_alpha", ss_args.get("alpha", meta.alpha))),
+                min_rank=int(ss_args["min_rank"]) if ss_args.get("min_rank") is not None else None,
+                min_rank_ratio=float(ss_args.get("min_rank_ratio", 0.1)),
+                qk_rank_ratio=float(ss_args.get("qk_rank_ratio", 0.25)),
+                lora_plus_ratio=float(ss_args.get("lora_plus_ratio", 16.0)),
+                alpha_rank_scale=float(ss_args.get("alpha_rank_scale", 2.0)),
+                sig_type=str(ss_args.get("sig_type", "random")),
+                ortho_reg=float(ss_args.get("ortho_reg", 0.0)),
+                mag_reg=float(ss_args.get("mag_reg", 0.0)),
+                mag_amplify=float(ss_args.get("mag_amplify", 2.0)),
+                aux_loss_weight=float(ss_args.get("aux_loss_weight", 0.0)),
+                aux_warmup_ratio=float(ss_args.get("aux_warmup_ratio", 0.0)),
+                export_mode="native",
+                use_lokr_ffn=bool(ss_args.get("use_lokr_ffn", False)),
+                lokr_factor=ss_args.get("lokr_factor", None),
+            )
+        else:
+            adapter = AnimaLycorisAdapter(
+                algo=meta.algo,
+                rank=meta.rank,
+                alpha=meta.alpha,
+                factor=meta.factor,
+            )
         adapter.inject(model)
 
-        if adapter.network is not None:
+        if hasattr(adapter, "multiplier"):
+            adapter.multiplier = float(spec.scale)
+        if getattr(adapter, "network", None) is not None:
             adapter.network.multiplier = float(spec.scale)
             for lora in getattr(adapter.network, "loras", []):
                 if hasattr(lora, "multiplier"):

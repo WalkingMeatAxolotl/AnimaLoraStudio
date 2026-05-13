@@ -105,6 +105,23 @@ def test_lucid_mask_scales_to_layer_rank() -> None:
     assert int(v_mask.sum().item()) == 4
 
 
+def test_lucid_multiplier_scales_delta() -> None:
+    model = _Model()
+    adapter = AnimaLucidLoRAAdapter(rank=8, qk_rank_ratio=0.25, sig_type="random")
+    adapter.inject(model)
+    layer = model.blocks[0].self_attn.v_proj
+    assert isinstance(layer, LucidLoRALinear)
+    layer.down.weight.data.fill_(1.0)
+    layer.up.weight.data.fill_(1.0)
+
+    x = torch.ones(1, 8)
+    original = layer.original(x)
+    adapter.multiplier = 0.5
+    adapter.set_mask(torch.ones(1, 8))
+
+    assert torch.allclose(layer(x) - original, torch.full_like(original, 16.0))
+
+
 def test_lucid_load_crops_legacy_full_rank_qk_weights() -> None:
     model = _Model()
     adapter = AnimaLucidLoRAAdapter(rank=8, qk_rank_ratio=0.25, sig_type="random")

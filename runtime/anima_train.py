@@ -1547,6 +1547,7 @@ def sample_image(
     device="cuda",
     dtype=torch.bfloat16,
     step_callback=None,
+    lora_adapters=None,
 ):
     """训练时采样预览（尽量对齐 ComfyUI KSampler）
     
@@ -1617,6 +1618,12 @@ def sample_image(
     def denoise_fn(x_in: torch.Tensor, sigma_in: torch.Tensor) -> torch.Tensor:
         if not torch.is_tensor(sigma_in):
             sigma_in = torch.tensor(float(sigma_in), device=x_in.device, dtype=torch.float32)
+        sigma_scalar = sigma_in.reshape(-1)[0].to(device=x_in.device, dtype=torch.float32)
+        for adapter in lora_adapters or []:
+            build_mask = getattr(adapter, "build_sigma_mask", None)
+            set_mask = getattr(adapter, "set_mask", None)
+            if callable(build_mask) and callable(set_mask):
+                set_mask(build_mask(sigma_scalar.view(1), x_in.device))
         sigma_b = sigma_in.view(1, 1).to(device=x_in.device, dtype=dtype)
         sigma_5d = sigma_in.view(1, 1, 1, 1, 1).to(device=x_in.device, dtype=torch.float32)
 
@@ -2461,7 +2468,7 @@ def main():
                 negative_prompt=(s_neg or None),
                 sampler_name=s_sampler,
                 scheduler=s_sched,
-                device=device, dtype=dtype
+                device=device, dtype=dtype, lora_adapters=[injector]
             )
             sample_path = sample_dir / f"step_0_baseline_{i}.png"
             img.save(sample_path)
@@ -2686,7 +2693,7 @@ def main():
                         negative_prompt=(s_neg or None),
                         sampler_name=s_sampler,
                         scheduler=s_sched,
-                        device=device, dtype=dtype
+                        device=device, dtype=dtype, lora_adapters=[injector]
                     )
                     sample_path = sample_dir / f"step_{global_step}.png"
                     img.save(sample_path)
@@ -2758,7 +2765,7 @@ def main():
                     negative_prompt=(s_neg or None),
                     sampler_name=s_sampler,
                     scheduler=s_sched,
-                    device=device, dtype=dtype
+                    device=device, dtype=dtype, lora_adapters=[injector]
                 )
                 sample_path = sample_dir / f"epoch_{current_epoch}.png"
                 img.save(sample_path)

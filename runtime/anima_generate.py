@@ -200,6 +200,7 @@ def main() -> None:
                     scheduler=scheduler,
                     device=device,
                     dtype=dtype,
+                    lora_adapters=_adapters,
                 )
                 fname = f"gen_{img_idx:04d}_p{pi}_c{ci}_s{seed}.png"
                 out_path = output_dir / fname
@@ -353,6 +354,7 @@ def _run_xy_matrix(
                     scheduler=scheduler,
                     device=device,
                     dtype=dtype,
+                    lora_adapters=adapters,
                 )
                 fname = f"xy_x{xi:02d}_y{yi:02d}_s{cur_seed}.png"
                 out_path = output_dir / fname

@@ -68,6 +68,27 @@ def test_read_lora_meta_from_ss_network_dim_alpha(tmp_path: Path) -> None:
     assert meta.factor == 16
 
 
+def test_read_lora_meta_preserves_lucid_args(tmp_path: Path) -> None:
+    p = tmp_path / "lucid.safetensors"
+    save_file({"x": torch.zeros(1)}, str(p), metadata={
+        "ss_network_dim": "32",
+        "ss_network_alpha": "32.0",
+        "ss_network_module": "lycoris.kohya",
+        "ss_network_args": json.dumps({
+            "algo": "lora",
+            "lucid_algo": "lucid",
+            "training_alpha": 16.0,
+            "qk_rank_ratio": 0.25,
+        }),
+    })
+
+    meta = read_lora_meta(str(p))
+    assert meta.lucid_algo == "lucid"
+    assert meta.args is not None
+    assert meta.args["training_alpha"] == 16.0
+    assert meta.args["qk_rank_ratio"] == 0.25
+
+
 def test_read_lora_meta_unusual_dim(tmp_path: Path) -> None:
     """rank=8 训练的 LoRA 必须读到 8，不能 fallback 到 32（旧 bug 核心场景）。"""
     p = tmp_path / "lora_dim8.safetensors"

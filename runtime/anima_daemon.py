@@ -540,6 +540,7 @@ def _run_generate(req_id: str, task_id: int, cfg: dict[str, Any], output_dir: Pa
                     scheduler=scheduler,
                     device=CACHE.device,
                     dtype=CACHE.dtype,
+                    lora_adapters=adapters,
                     step_callback=preview_callback,
                 )
                 fname = f"gen_{img_idx:04d}_p{pi}_c{ci}_s{seed}.png"
@@ -661,6 +662,7 @@ def _run_xy(
                     scheduler=scheduler,
                     device=CACHE.device,
                     dtype=CACHE.dtype,
+                    lora_adapters=adapters,
                 )
                 fname = f"xy_x{xi:02d}_y{yi:02d}_s{cur_seed}.png"
                 vpath = _virtual_path(task_id, fname)

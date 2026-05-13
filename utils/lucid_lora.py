@@ -61,6 +61,7 @@ class LucidLoRALinear(nn.Module):
             self.up.weight.data.copy_(vecs.to(self.up.weight.dtype))
 
         self.current_mask: Optional[torch.Tensor] = None
+        self.multiplier = 1.0
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         orig_out = self.original(x)
@@ -73,7 +74,7 @@ class LucidLoRALinear(nn.Module):
             F.linear(x, self.down.weight) * mask,
             self.up.weight,
         ) * self.scale
-        return orig_out + delta
+        return orig_out + delta * self.multiplier
 
     @torch.enable_grad()
     def aux_loss(
@@ -123,6 +124,7 @@ class LucidLoKrLinear(nn.Module):
         self.lokr_w2_b = nn.Parameter(torch.empty(self.out_inner, self.in_inner))
         nn.init.normal_(self.lokr_w1, std=0.1)
         nn.init.zeros_(self.lokr_w2_b)
+        self.multiplier = 1.0
 
     def _choose_factor(self, dim: int, target: int) -> int:
         target = min(target, dim)
@@ -133,7 +135,7 @@ class LucidLoKrLinear(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         delta_weight = torch.kron(self.lokr_w1, self.lokr_w2_b).to(dtype=x.dtype) * self.scale
-        return self.original(x) + F.linear(x, delta_weight)
+        return self.original(x) + F.linear(x, delta_weight) * self.multiplier
 
 
 class AnimaLucidLoRAAdapter:
@@ -181,6 +183,7 @@ class AnimaLucidLoRAAdapter:
 
         self.algo = "lucid"
         self.use_lokr = self.use_lokr_ffn
+        self.multiplier = 1.0
 
         self._lucid_layers: list[LucidLoRALinear] = []
         self._lokr_layers: list[LucidLoKrLinear] = []
@@ -264,6 +267,9 @@ class AnimaLucidLoRAAdapter:
             mask = torch.zeros(1, layer.rank, device=sigma_mask.device, dtype=sigma_mask.dtype)
             mask[:, :active_rank] = 1.0
             layer.current_mask = mask
+            layer.multiplier = self.multiplier
+        for layer in self._lokr_layers:
+            layer.multiplier = self.multiplier
 
     def get_rank_by_t(self, t: float, rank: int | None = None) -> int:
         layer_rank = int(rank or self.rank)
