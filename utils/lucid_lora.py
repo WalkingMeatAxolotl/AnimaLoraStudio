@@ -455,9 +455,11 @@ class AnimaLucidLoRAAdapter:
             "compat": compat_mode,
             "preset": "lucid_role_split",
         }
+        export_alpha = self.alpha if compat_mode == "native" else float(self.rank)
+        args["training_alpha"] = self.alpha
         return {
             "ss_network_dim": str(self.rank),
-            "ss_network_alpha": str(self.alpha),
+            "ss_network_alpha": str(export_alpha),
             "ss_network_module": "lucid" if compat_mode == "native" else "lycoris.kohya",
             "ss_network_args": json.dumps(args),
         }

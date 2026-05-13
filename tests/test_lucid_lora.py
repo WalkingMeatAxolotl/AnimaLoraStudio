@@ -137,8 +137,10 @@ def test_lucid_save_writes_compat_metadata(tmp_path) -> None:
     with safe_open(str(path), framework="pt", device="cpu") as f:
         meta = f.metadata()
     assert meta["ss_network_module"] == "lycoris.kohya"
+    assert meta["ss_network_alpha"] == "8.0"
     args = json.loads(meta["ss_network_args"])
     assert args["algo"] == "lora"
+    assert args["training_alpha"] == 16.0
     assert args["lucid_algo"] == "lucid"
     assert "base" not in args
     assert args["compat"] == "lycoris_compat"
