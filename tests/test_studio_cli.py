@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -381,3 +382,144 @@ def test_cmd_build_no_npm_prints_install_hint(
     err = capsys.readouterr().err
     assert "winget" in err
     assert "Node.js 18+" in err
+
+
+# ---------------------------------------------------------------------------
+# PR-D — installer 自检（sha256 + exit 42）
+# ---------------------------------------------------------------------------
+
+
+def test_installer_hashes_sha256_per_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """三个 installer 文件存在 → sha256；缺失 → None。键是文件名。"""
+    cli_py = tmp_path / "cli.py"
+    sh = tmp_path / "studio.sh"
+    bat = tmp_path / "studio.bat"   # 故意不创建，模拟跨平台一边没有
+    cli_py.write_bytes(b"print('hello')\n")
+    sh.write_bytes(b"#!/bin/sh\n")
+    monkeypatch.setattr(cli, "_INSTALLER_FILES", (cli_py, sh, bat))
+    h = cli._installer_hashes()
+    assert h == {
+        "cli.py": hashlib.sha256(b"print('hello')\n").hexdigest(),
+        "studio.sh": hashlib.sha256(b"#!/bin/sh\n").hexdigest(),
+        "studio.bat": None,
+    }
+
+
+def test_installer_hashes_changes_when_content_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    p = tmp_path / "cli.py"
+    p.write_bytes(b"v1")
+    monkeypatch.setattr(cli, "_INSTALLER_FILES", (p,))
+    before = cli._installer_hashes()
+    p.write_bytes(b"v2")
+    assert cli._installer_hashes() != before
+
+
+def _stub_run_bootstrap(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Path:
+    """共享 fixture：把 cmd_run 的所有 bootstrap helper 短路，返回伪 dist 目录。
+
+    cmd_run 在每轮 loop 里调一堆 helper（_ensure_python_deps / _apply_*
+    / _check_torch_cuda / etc）；本身这些都已经在别处测过，PR-D 的测试
+    只关心 server 退出后的 dispatch 逻辑。"""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<html/>")
+    monkeypatch.setattr(cli, "WEB_DIST", dist)
+    monkeypatch.setattr(cli, "_web_dist_is_stale", lambda: False)
+    monkeypatch.setattr(cli, "_ensure_python_deps", lambda: 0)
+    monkeypatch.setattr(cli, "_apply_update_pending", lambda: None)
+    monkeypatch.setattr(cli, "_apply_pending_install", lambda: None)
+    monkeypatch.setattr(cli, "_check_torch_cuda", lambda: None)
+    monkeypatch.setattr(cli, "_try_enable_flash_attn", lambda: None)
+    monkeypatch.setattr(cli, "_bootstrap_onnxruntime", lambda: None)
+    monkeypatch.setattr(cli, "_spawn_browser_opener", lambda *a, **k: None)
+    return dist
+
+
+def test_cmd_run_returns_42_when_installer_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """server 退出 + restart flag 在 + installer hash 变了 → return 42, flag 保留。
+
+    保留 flag 是关键：studio.sh / studio.bat wrapper 看到 (exit_code==42 且
+    tmp/restart 存在) 才会触发 exec self；只剩 flag 而 exit!=42 走普通 restart。
+    """
+    _stub_run_bootstrap(monkeypatch, tmp_path)
+
+    fake_flag = tmp_path / "restart"
+    fake_flag.touch()
+    monkeypatch.setattr(cli, "_RESTART_FLAG", fake_flag)
+
+    # 第一次 (startup snapshot) 返 A；第二次 (server 退出后) 返 B
+    call_count = [0]
+    def fake_hashes() -> dict[str, str]:
+        call_count[0] += 1
+        return {"cli.py": "B"} if call_count[0] > 1 else {"cli.py": "A"}
+    monkeypatch.setattr(cli, "_installer_hashes", fake_hashes)
+
+    # subprocess.call 直接返 0（不真起 server）
+    monkeypatch.setattr(cli.subprocess, "call", lambda *a, **k: 0)
+
+    rc = cli.main(["run", "--no-browser"])
+    assert rc == cli._INSTALLER_RELOAD_EXIT_CODE == 42
+    assert fake_flag.exists(), "flag 必须保留给 wrapper 走 exec-self 路径"
+    assert "launcher 文件更新" in capsys.readouterr().out
+
+
+def test_cmd_run_normal_restart_when_installer_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """server 退出 + restart flag 在 + installer hash 没变 → 删 flag, 重新 loop。"""
+    _stub_run_bootstrap(monkeypatch, tmp_path)
+
+    fake_flag = tmp_path / "restart"
+    monkeypatch.setattr(cli, "_RESTART_FLAG", fake_flag)
+    monkeypatch.setattr(cli, "_installer_hashes", lambda: {"cli.py": "stable"})
+
+    # 第一轮 server 退出时写 flag（模拟 /api/system/restart），第二轮不写
+    server_calls = [0]
+    def fake(cmd, **_: Any) -> int:
+        if "studio.server" in " ".join(cmd):
+            if server_calls[0] == 0:
+                fake_flag.touch()
+            server_calls[0] += 1
+        return 0
+    monkeypatch.setattr(cli.subprocess, "call", fake)
+
+    rc = cli.main(["run", "--no-browser"])
+    assert rc == 0
+    assert not fake_flag.exists(), "normal restart 走完后 flag 应被删"
+    assert server_calls[0] == 2, "正常 restart 应当 loop 两次"
+
+
+def test_cmd_run_no_flag_no_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """server 退出但 tmp/restart 不存在 → 直接 return rc，不查 installer hash。
+
+    这条保证 PR-D 的 dispatch 不会拦截"用户 Ctrl+C 退出 server"这种正常下班路径。
+    """
+    _stub_run_bootstrap(monkeypatch, tmp_path)
+
+    fake_flag = tmp_path / "restart"  # 不 touch
+    monkeypatch.setattr(cli, "_RESTART_FLAG", fake_flag)
+
+    # 如果 dispatch 看了 installer hash，这里会因为返回值变化导致 rc==42；
+    # 测试期望根本不查
+    hash_calls = [0]
+    def fake_hashes() -> dict[str, str]:
+        hash_calls[0] += 1
+        return {"cli.py": "v"} if hash_calls[0] == 1 else {"cli.py": "v-changed"}
+    monkeypatch.setattr(cli, "_installer_hashes", fake_hashes)
+
+    monkeypatch.setattr(cli.subprocess, "call", lambda *a, **k: 7)
+
+    rc = cli.main(["run", "--no-browser"])
+    assert rc == 7  # 直接 return server 退出码
+    # startup 时调过一次；server 退出后 flag 不在，不应再调
+    assert hash_calls[0] == 1

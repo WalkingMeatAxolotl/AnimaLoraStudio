@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import shutil
 import signal
@@ -513,6 +514,35 @@ def _web_dist_is_stale() -> bool:
 
 _RESTART_FLAG = REPO_ROOT / "tmp" / "restart"
 
+# PR-D — installer 自检（ADR 0002）。cmd_run 入口快照这三个文件的 sha256；
+# 每次 server 退出 + 收到 restart 请求时再算一次，任一变化 → 返回退出码 42
+# 让 wrapper（studio.sh / studio.bat）整体 exec 自己。原因：
+#
+# - cli.py 本身变更 → 旧 python 进程加载的是旧 cli.py，next-iteration 的 inner
+#   loop 仍走老逻辑；只有让 wrapper 重新拉 `python -m studio` 才能拿到新 cli.py。
+# - studio.sh / studio.bat 变更 → bash 已把 loop 体加载进内存，cmd.exe 也可能
+#   缓存 .bat 解析结果；必须让 shell 进程 exec 自己拿到新 wrapper。
+#
+# 三个文件中任一变化都走同一协议（最简单 / 最稳）。
+_INSTALLER_FILES: tuple[Path, ...] = (
+    REPO_ROOT / "studio" / "cli.py",
+    REPO_ROOT / "studio.sh",
+    REPO_ROOT / "studio.bat",
+)
+_INSTALLER_RELOAD_EXIT_CODE = 42
+
+
+def _installer_hashes() -> dict[str, Optional[str]]:
+    """快照 installer 文件 sha256。文件不存在 → 值为 None（跨平台：Linux 上
+    studio.bat 不存在，Windows 上 studio.sh 不存在；存在性也算入比对）。"""
+    result: dict[str, Optional[str]] = {}
+    for p in _INSTALLER_FILES:
+        try:
+            result[p.name] = hashlib.sha256(p.read_bytes()).hexdigest()
+        except OSError:
+            result[p.name] = None
+    return result
+
 
 def _apply_update_pending() -> None:
     """启动期处理 webui 触发的 update 请求（ADR 0002 / PR-B）。
@@ -550,12 +580,17 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     重启协议详见 `docs/adr/0002-webui-self-update.md`。外层 shell wrapper
     (`studio.sh` / `studio.bat`) 也有同样的 loop 兜底（cli.py 异常退出但
-    flag 还在的场景，主要给后续 PR-D 的 installer 自更新用）。
+    flag 还在的场景），并且响应退出码 42 把自己 exec 一遍（PR-D installer
+    自检：当 cli.py / studio.sh / studio.bat 本身被 update 修改后，需要从
+    磁盘重新加载 wrapper + Python 解释器）。
 
     冷启动只打开一次浏览器；重启时复用已存在的 webui 标签页（前端轮询
     `/api/health` 自动 reconnect），不重复弹新窗口。
     """
     opened_browser = False
+    # PR-D：快照启动期 installer 文件 sha256；server 退出后重算，变化则
+    # 退出码 42 让 wrapper 整体 exec 自己。
+    startup_installer = _installer_hashes()
     while True:
         rc = _ensure_python_deps()
         if rc != 0:
@@ -593,6 +628,15 @@ def cmd_run(args: argparse.Namespace) -> int:
 
         if not _RESTART_FLAG.exists():
             return rc
+
+        # PR-D：installer 自检。restart flag 存在的前提下，若 cli.py /
+        # studio.sh / studio.bat 任一变化，**保留** flag 并返回 42，让 wrapper
+        # 走 exec self 路径。flag 保留是关键 —— wrapper 检测到 (exit==42 &&
+        # flag exists) 才会 re-exec；只剩 flag 而 exit!=42 则走普通 restart。
+        if _installer_hashes() != startup_installer:
+            print("[studio] 检测到 launcher 文件更新（cli.py / studio.sh / studio.bat），"
+                  "退出码 42 让 wrapper 重新加载...")
+            return _INSTALLER_RELOAD_EXIT_CODE
 
         # 收到重启请求：删除标志 + loop 回去重新 bootstrap
         try:

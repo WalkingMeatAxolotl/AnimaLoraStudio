@@ -143,12 +143,24 @@ if "!STALE!"=="stale" (
 
 REM Restart loop (PR-A): if cli.py exits but tmp\restart still present, loop
 REM back. cli.py's own inner loop handles the common case (server requests
-REM restart); this outer loop is the safety net for PR-D's installer self-update
-REM path. See docs\adr\0002-webui-self-update.md.
+REM restart); this outer loop is the safety net.
+REM
+REM Special exit code 42 (PR-D, installer self-update): cli.py detected that
+REM cli.py / studio.sh / studio.bat itself was just replaced. cmd.exe has the
+REM .bat parsed in memory; if we keep looping, we risk running stale wrapper
+REM logic. So we `start` a fresh copy of ourselves and exit. Unlike POSIX
+REM `exec`, this spawns a new process (different PID) -- /b keeps the same
+REM console window, so the user-visible effect is the same. See ADR 0002.
 :run_loop
 !PYTHON! -m studio %PASSTHROUGH%
 set STUDIO_ERR=%ERRORLEVEL%
 if exist tmp\restart (
+    if !STUDIO_ERR! EQU 42 (
+        echo [studio] launcher updated, re-exec wrapper
+        del /q tmp\restart 2>nul
+        start "" /b "%~f0" %PASSTHROUGH%
+        exit /b 0
+    )
     echo [studio] restart requested ^(wrapper loop^)
     del /q tmp\restart 2>nul
     goto run_loop

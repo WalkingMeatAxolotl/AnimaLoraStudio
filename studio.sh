@@ -151,14 +151,25 @@ echo "studio.sh: using $PYTHON"
 
 # Restart loop (PR-A): if cli.py exits but tmp/restart is still present, loop
 # back and re-run. cli.py's own inner loop handles the common case (server
-# requests restart from /api/system/restart); this outer loop is the safety net
-# for PR-D's installer self-update path where cli.py itself was just replaced.
-# See docs/adr/0002-webui-self-update.md.
+# requests restart from /api/system/restart); this outer loop is the safety net.
+#
+# Special exit code 42 (PR-D, installer self-update): cli.py detected that
+# cli.py / studio.sh / studio.bat itself was just replaced by `git reset`, and
+# kept tmp/restart so we'd see it. We `exec` ourselves so the new wrapper code
+# is loaded from disk (bash has the old loop body in memory; the new wrapper
+# might have different bootstrap / dep-install logic). See ADR 0002.
+# We exec with _PASSTHROUGH only (not original "$@") so --reinstall does not
+# get re-triggered.
 while true; do
     "$PYTHON" -m studio "${_PASSTHROUGH[@]}"
     EXIT_CODE=$?
     if [ ! -f tmp/restart ]; then
         break
+    fi
+    if [ "$EXIT_CODE" -eq 42 ]; then
+        echo "[studio] launcher updated, re-exec wrapper"
+        rm -f tmp/restart
+        exec "$0" "${_PASSTHROUGH[@]}"
     fi
     echo "[studio] restart requested (wrapper loop)"
     rm -f tmp/restart
