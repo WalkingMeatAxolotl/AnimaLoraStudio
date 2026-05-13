@@ -224,6 +224,21 @@ def resolve_ref(ref: str) -> Optional[str]:
     return out if rc == 0 else None
 
 
+# Self-update feature 引入的 marker 文件。target 上不存在 → 切过去就丢失
+# webui 升级能力（只能 CLI git pull 救援）。preflight() err 级别阻断。
+_SELF_UPDATE_MARKER = "studio/services/updater.py"
+
+
+def target_has_self_update(target_ref: str) -> bool:
+    """目标 ref 上是否带 webui 自更新 feature。
+
+    用 `git cat-file -e <ref>:<path>` 测文件存在性（不读内容，效率比 git
+    show 高且无 stdout 输出污染）。失败 / ref 无效 → False（保守）。
+    """
+    rc, _, _ = _git("cat-file", "-e", f"{target_ref}:{_SELF_UPDATE_MARKER}")
+    return rc == 0
+
+
 _REQ_NAME_RE = re.compile(r"^([A-Za-z0-9_\-\.\[\]]+)")
 
 

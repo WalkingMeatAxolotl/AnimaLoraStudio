@@ -847,6 +847,7 @@ def test_preflight_clean_no_running_no_diff(
     ))
     monkeypatch.setattr(updater, "resolve_ref", lambda _ref: "deadbeef" * 5)
     monkeypatch.setattr(updater, "requirements_diff", lambda _ref: updater.RequirementsDiff())
+    monkeypatch.setattr(updater, "target_has_self_update", lambda _ref: True)
 
     resp = client.get("/api/system/preflight?target=origin/master")
     assert resp.status_code == 200
@@ -872,6 +873,7 @@ def test_preflight_dirty_blocks(
     ))
     monkeypatch.setattr(updater, "resolve_ref", lambda _ref: "x")
     monkeypatch.setattr(updater, "requirements_diff", lambda _ref: updater.RequirementsDiff())
+    monkeypatch.setattr(updater, "target_has_self_update", lambda _ref: True)
 
     body = client.get("/api/system/preflight?target=origin/master").json()
     assert body["blocking"] is True
@@ -893,6 +895,7 @@ def test_preflight_running_tasks_block(
     ))
     monkeypatch.setattr(updater, "resolve_ref", lambda _ref: "x")
     monkeypatch.setattr(updater, "requirements_diff", lambda _ref: updater.RequirementsDiff())
+    monkeypatch.setattr(updater, "target_has_self_update", lambda _ref: True)
 
     # 写一条 running task（含所有 NOT NULL 字段）
     import time as _time
@@ -928,6 +931,7 @@ def test_preflight_requirements_diff_warn(
                            removed=["oldpkg"],
                            changed=[{"name": "torch", "from": "torch==2.0", "to": "torch==2.4"}],
                        ))
+    monkeypatch.setattr(updater, "target_has_self_update", lambda _ref: True)
 
     body = client.get("/api/system/preflight?target=origin/master").json()
     assert body["blocking"] is False
@@ -958,3 +962,47 @@ def test_preflight_unresolved_target(
     req = next(c for c in body["checks"] if c["key"] == "requirements_diff")
     assert req["level"] == "err"
     assert "invalid" in req["label"]
+
+
+def test_preflight_target_missing_self_update_blocks(
+    client: TestClient,
+    isolated_paths: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """目标 ref 早于 self-update feature → 加 err 行 + blocking=True；
+    前端 confirm 按钮 disable，防止用户切到无 webui 救援能力的版本。"""
+    from studio.services import updater
+    monkeypatch.setattr(updater, "current_version", lambda: updater.VersionInfo(
+        version="0.6.0", commit="x", commit_short="x", commit_time_iso="",
+        branch="master", tag=None, is_dirty=False,
+    ))
+    monkeypatch.setattr(updater, "resolve_ref", lambda _ref: "deadbeef" * 5)
+    monkeypatch.setattr(updater, "requirements_diff", lambda _ref: updater.RequirementsDiff())
+    monkeypatch.setattr(updater, "target_has_self_update", lambda _ref: False)
+
+    body = client.get("/api/system/preflight?target=ancient-commit").json()
+    assert body["blocking"] is True
+    compat = next(c for c in body["checks"] if c["key"] == "self_update_compat")
+    assert compat["level"] == "err"
+    assert "自更新" in compat["label"]
+
+
+def test_preflight_target_with_self_update_passes(
+    client: TestClient,
+    isolated_paths: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """目标 ref 带 self-update feature → 不加 self_update_compat 行，不影响 blocking。"""
+    from studio.services import updater
+    monkeypatch.setattr(updater, "current_version", lambda: updater.VersionInfo(
+        version="0.6.0", commit="x", commit_short="x", commit_time_iso="",
+        branch="master", tag=None, is_dirty=False,
+    ))
+    monkeypatch.setattr(updater, "resolve_ref", lambda _ref: "deadbeef" * 5)
+    monkeypatch.setattr(updater, "requirements_diff", lambda _ref: updater.RequirementsDiff())
+    monkeypatch.setattr(updater, "target_has_self_update", lambda _ref: True)
+
+    body = client.get("/api/system/preflight?target=origin/master").json()
+    assert body["blocking"] is False
+    keys = [c["key"] for c in body["checks"]]
+    assert "self_update_compat" not in keys

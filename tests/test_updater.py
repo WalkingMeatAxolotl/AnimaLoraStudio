@@ -410,6 +410,30 @@ def test_rollback_target_tolerates_utf8_bom(
 
 
 # ---------------------------------------------------------------------------
+# target_has_self_update (chunk 4 safety net)
+# ---------------------------------------------------------------------------
+
+
+def test_target_has_self_update_true_when_marker_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+    """git cat-file -e <ref>:studio/services/updater.py 返 0 → True。"""
+    monkeypatch.setattr(updater, "_git",
+                       lambda *args, **_k: (0, "", "") if args[0] == "cat-file" else (1, "", ""))
+    assert updater.target_has_self_update("any-ref") is True
+
+
+def test_target_has_self_update_false_when_marker_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """marker 文件不存在（pre-self-update commit）→ False。"""
+    monkeypatch.setattr(updater, "_git", lambda *args, **_k: (1, "", "does not exist"))
+    assert updater.target_has_self_update("ancient-commit") is False
+
+
+def test_target_has_self_update_false_on_git_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """git 失败（ref 无效 / 仓库损坏）→ 保守返 False，让 preflight 阻断。"""
+    monkeypatch.setattr(updater, "_git", lambda *args, **_k: (128, "", "fatal: invalid object"))
+    assert updater.target_has_self_update("garbage") is False
+
+
+# ---------------------------------------------------------------------------
 # dev_commits (chunk 3)
 # ---------------------------------------------------------------------------
 

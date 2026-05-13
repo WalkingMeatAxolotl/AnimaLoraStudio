@@ -3287,6 +3287,12 @@ def system_preflight(target: str = "origin/master") -> dict[str, Any]:
     checks.append({"key": "last_version", "level": "ok",
                    "label": f"更新后 .last_version = {cur.commit_short}（可一键切回）"})
 
+    # Safety net：目标 ref 早于 self-update feature 引入 → 切过去就丢失 webui
+    # 升级能力（只能 CLI git pull 救援）。err 级别阻断，前端 confirm 自动 disable。
+    if target_resolved and not updater.target_has_self_update(target):
+        checks.append({"key": "self_update_compat", "level": "err",
+                       "label": "目标版本早于 webui 自更新 feature — 切过去后只能 CLI / shell 升级（webui 无救援能力）"})
+
     blocking = any(c["level"] == "err" for c in checks)
 
     return {
