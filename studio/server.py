@@ -3235,6 +3235,22 @@ def system_update_log() -> dict[str, Any]:
     return {"content": updater.read_update_log()}
 
 
+@app.get("/api/system/dev_commits")
+def system_dev_commits(limit: int = 10) -> dict[str, Any]:
+    """`git log origin/dev -N` 摘要（chunk 3）— VersionSection dev 卡时间线用。
+
+    每次拉 git fetch + log；fetch 失败仍尝试用本地 origin/dev 缓存（带
+    error 文案）。limit clamp 1-50。
+    """
+    from dataclasses import asdict
+    result = updater.dev_commits(limit=limit)
+    return {
+        "commits": [asdict(c) for c in result.commits],
+        "fetched": result.fetched,
+        "error": result.error,
+    }
+
+
 @app.get("/api/system/release_notes")
 def system_release_notes(tag: str) -> dict[str, Any]:
     """解析 CHANGELOG.md，返回指定 tag 的 release notes（chunk 2）。

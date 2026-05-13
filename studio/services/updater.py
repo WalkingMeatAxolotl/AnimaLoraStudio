@@ -76,6 +76,24 @@ class UpdateCheckResult:
 
 
 @dataclass
+class DevCommit:
+    """dev 通道一条 commit 摘要（chunk 3 — VersionSection dev 卡时间线用）。"""
+    sha: str            # 完整 sha，作为 performSystemUpdate(target=...) 的 ref
+    short_sha: str      # 前 8 位用于展示
+    msg: str            # commit subject line
+    time_iso: str       # author commit time, ISO8601
+    author: str         # author name
+
+
+@dataclass
+class DevCommitsResult:
+    """`git log origin/dev` 结果。fetched=False 时 commits 用本地缓存（如有）。"""
+    commits: list[DevCommit] = field(default_factory=list)
+    fetched: bool = False
+    error: Optional[str] = None
+
+
+@dataclass
 class UpdateStatus:
     """最近一次 update 的结构化结果（PR-C）。apply_pending 完成时写到磁盘，
     UI 用来判断"上次更新成功 / 失败 / 中止"，失败时展示原因。"""
@@ -197,6 +215,49 @@ def check_update(channel: str = "master", use_cache: bool = True) -> UpdateCheck
         _write_cache(result)
 
     return result
+
+
+def dev_commits(limit: int = 10) -> DevCommitsResult:
+    """`git fetch origin dev` + `git log origin/dev -<limit>`，返回最近 commits。
+
+    Chunk 3 — VersionSection dev 卡时间线 + 任意 commit 切换用。
+
+    - fetch 失败仍尝试读本地 origin/dev 缓存（用户离线或网络问题时，至少
+      能看到上次 fetch 的状态而不是白屏）
+    - 解析失败 / 仓库没 origin/dev → commits=[] + error 文案
+    - limit clamp 到 1-50 之间
+    """
+    limit = max(1, min(50, int(limit)))
+
+    rc_fetch, _, fetch_err = _git("fetch", "origin", "dev", timeout=GIT_FETCH_TIMEOUT)
+    fetched = rc_fetch == 0
+    fetch_error_msg: Optional[str] = None if fetched else f"git fetch dev: {fetch_err[:200]}"
+
+    # NUL-separated 字段格式：%H sha · %h short · %s subject · %cI iso time · %an author
+    fmt = "%H%x00%h%x00%s%x00%cI%x00%an"
+    rc, out, log_err = _git("log", f"-{limit}", f"--format={fmt}", "origin/dev")
+    if rc != 0:
+        # 没 origin/dev ref（首次 clone 未跟 dev / 远端被删等）
+        return DevCommitsResult(
+            commits=[],
+            fetched=fetched,
+            error=fetch_error_msg or f"git log origin/dev: {log_err[:200]}",
+        )
+
+    commits: list[DevCommit] = []
+    for line in out.splitlines():
+        parts = line.split("\x00")
+        if len(parts) < 5:
+            continue
+        commits.append(DevCommit(
+            sha=parts[0],
+            short_sha=parts[1],
+            msg=parts[2],
+            time_iso=parts[3],
+            author=parts[4],
+        ))
+
+    return DevCommitsResult(commits=commits, fetched=fetched, error=fetch_error_msg)
 
 
 def request_update(target: str = "origin/master") -> None:

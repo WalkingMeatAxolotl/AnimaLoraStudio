@@ -10,6 +10,8 @@ import {
   type ModelsCatalog,
   type Secrets,
   type SecretsPatch,
+  type DevCommit,
+  type DevCommitsResult,
   type ReleaseNotes,
   type SystemPrefsConfig,
   type SystemUpdateCheck,
@@ -2375,6 +2377,9 @@ function VersionSection() {
   const [devCheck, setDevCheck] = useState<SystemUpdateCheck | null>(null)
   // chunk 2 — 当前显示的 release notes（hasUpdate 时为 target tag，否则 current tag）
   const [releaseNotes, setReleaseNotes] = useState<ReleaseNotes | null>(null)
+  // chunk 3 — dev 通道最近 commit 列表 + 选中状态（用户点 commit 准备切换）
+  const [devCommits, setDevCommits] = useState<DevCommitsResult | null>(null)
+  const [selectedSha, setSelectedSha] = useState<string | null>(null)
   const [checking, setChecking] = useState(false)
   const [checkingDev, setCheckingDev] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -2388,6 +2393,19 @@ function VersionSection() {
     void api.getSystemUpdateStatus().then(setStatus).catch(() => { /* silent */ })
     void api.getSecrets().then((s) => setPrefs(s.system)).catch(() => { /* silent */ })
   }, [])
+
+  // chunk 3 — devVisible 第一次转 true 时自动拉一遍 dev_commits + check（用户
+  // 不用先手动按 [抓取 dev] 才看到时间线）。后续 [抓取 dev] 按钮再做刷新。
+  const devVisibleNow = (version?.branch === 'dev') || !!prefs?.show_dev_channel
+  useEffect(() => {
+    if (!devVisibleNow || devCommits !== null) return
+    let cancelled = false
+    void api.getDevCommits(10).then((r) => { if (!cancelled) setDevCommits(r) }).catch(() => { /* silent */ })
+    if (devCheck === null) {
+      void api.checkSystemUpdate('dev', true).then((r) => { if (!cancelled) setDevCheck(r) }).catch(() => { /* silent */ })
+    }
+    return () => { cancelled = true }
+  }, [devVisibleNow, devCommits, devCheck])
 
   const handleCheck = async () => {
     setChecking(true)
@@ -2526,12 +2544,19 @@ function VersionSection() {
   const handleCheckDev = async () => {
     setCheckingDev(true)
     try {
-      const r = await api.checkSystemUpdate('dev', true)
-      setDevCheck(r)
-      if (r.error) {
-        toast(`dev 检查失败: ${r.error}`, 'error')
-      } else if (r.has_update) {
-        toast(`dev 通道有 ${r.commits_ahead} commits 新提交`, 'info')
+      // chunk 3：同时拉 update_check（HEAD 比对）和 dev_commits（commit 时间线）
+      const [check, commits] = await Promise.all([
+        api.checkSystemUpdate('dev', true),
+        api.getDevCommits(10),
+      ])
+      setDevCheck(check)
+      setDevCommits(commits)
+      if (check.error) {
+        toast(`dev 检查失败: ${check.error}`, 'error')
+      } else if (commits.error && !commits.fetched) {
+        toast(`dev 抓取部分失败: ${commits.error}`, 'error')
+      } else if (check.has_update) {
+        toast(`dev 通道有 ${check.commits_ahead} commits 新提交`, 'info')
       } else {
         toast('dev 通道与当前一致', 'success')
       }
@@ -2540,6 +2565,32 @@ function VersionSection() {
     } finally {
       setCheckingDev(false)
     }
+  }
+
+  // chunk 3 — 点击任意 commit 后确认切换（与 handleUpdateDev 同 backend 路径，
+  // target=commit sha 而不是 'origin/dev'）。dialog 明确告知会进入"游离 HEAD"。
+  const handleSwitchToCommit = async (commit: DevCommit) => {
+    const ok = await dialog.confirm(
+      `将切到 commit ${commit.short_sha}\n\n` +
+      `${commit.msg}\n— ${commit.author}\n\n` +
+      `git reset --hard ${commit.sha}\n` +
+      '保存当前 commit 到 .last_version 便于一键切回；按需补 pip / npm install；重启。\n\n' +
+      '⚠ 切到非 HEAD commit 会跳出 dev 跟踪 → "游离 HEAD" 状态；下一次 [抓取 dev] 仍能看到 dev 时间线。\n\n' +
+      '有运行任务 / 工作树脏 → 操作会被拒绝。',
+      { tone: 'warn', okText: `切到 ${commit.short_sha}` },
+    )
+    if (!ok) return
+
+    setBusy(true)
+    try {
+      await api.performSystemUpdate(commit.sha)
+    } catch (e) {
+      toast(_formatActionError(e, '切换'), 'error')
+      setBusy(false)
+      return
+    }
+    setSelectedSha(null)
+    void pollHealthThenReload(toast, 10 * 60_000, '切换', () => setBusy(false))
   }
 
   const handleUpdateDev = async () => {
@@ -2626,10 +2677,15 @@ function VersionSection() {
             <DevCard
               on={onDev}
               check={devCheck}
+              commits={devCommits}
+              currentSha={version?.commit ?? ''}
+              selectedSha={selectedSha}
+              setSelectedSha={setSelectedSha}
               checking={checkingDev}
               busy={busy}
               onCheck={handleCheckDev}
               onSwitchToDev={handleUpdateDev}
+              onSwitchToCommit={handleSwitchToCommit}
             />
           )}
         </div>
@@ -2934,15 +2990,24 @@ function MasterCard(p: MasterCardProps) {
 type DevCardProps = {
   on: boolean
   check: SystemUpdateCheck | null
+  commits: DevCommitsResult | null
+  currentSha: string
+  selectedSha: string | null
+  setSelectedSha: (sha: string | null) => void
   checking: boolean
   busy: boolean
   onCheck: () => void
   onSwitchToDev: () => void
+  onSwitchToCommit: (commit: DevCommit) => void
 }
 
 function DevCard(p: DevCardProps) {
-  const head = p.check?.latest_commit?.slice(0, 8)
+  const commits = p.commits?.commits ?? []
+  const head = commits[0]?.short_sha ?? p.check?.latest_commit?.slice(0, 8)
   const ahead = p.check?.commits_ahead ?? 0
+  const selectedCommit = p.selectedSha ? commits.find((c) => c.sha === p.selectedSha) ?? null : null
+  const fetchError = p.commits?.error ?? p.check?.error
+
   return (
     <div className={`vs-chan${p.on ? ' here' : ''}`}>
       <div className="vs-chan-head">
@@ -2952,13 +3017,12 @@ function DevCard(p: DevCardProps) {
           {p.on && <span className="vs-pill vs-pill-here">● 你在这里</span>}
         </div>
         <div className="vs-meta">
-          {p.check?.error ? (
-            <span style={{ color: 'var(--err)' }}>{p.check.error}</span>
+          {fetchError && !head ? (
+            <span style={{ color: 'var(--err)' }}>{fetchError}</span>
           ) : head ? (
             <>
               HEAD <b style={{ color: 'var(--fg-secondary)', fontWeight: 500 }}>{head}</b>
-              {' · '}
-              {ahead === 0 ? '与 master 持平' : `↑ ${ahead}`}
+              {p.check && (<>{' · '}{ahead === 0 ? '与 master 持平' : `↑ ${ahead}`}</>)}
             </>
           ) : (
             <span>未抓取</span>
@@ -2968,37 +3032,101 @@ function DevCard(p: DevCardProps) {
 
       <div className="vs-change-block" style={{ paddingTop: 4, paddingBottom: 4 }}>
         <div className="vs-h">最近提交</div>
-        {/* Chunk 3 会从后端拉真实 commit 列表；现阶段占位 */}
-        <ul className="vs-change-list">
-          {!p.check ? (
-            <li><span className="vs-glyph">·</span><span className="vs-txt">点 [抓取 dev] 查看最近提交。</span></li>
-          ) : (
-            <li><span className="vs-glyph">·</span><span className="vs-txt">commit 列表 + 任意切换将在 chunk 3 接入。</span></li>
-          )}
-        </ul>
+        {commits.length === 0 ? (
+          <ul className="vs-change-list">
+            <li>
+              <span className="vs-glyph">·</span>
+              <span className="vs-txt">
+                {fetchError
+                  ? <span style={{ color: 'var(--err)' }}>{fetchError}</span>
+                  : '点 [抓取 dev] 查看最近提交。'}
+              </span>
+            </li>
+          </ul>
+        ) : (
+          <>
+            <ul className="vs-commits">
+              {commits.map((c, i) => {
+                const isHead = i === 0
+                const isCurrent = !!p.currentSha && c.sha === p.currentSha
+                const isSelected = c.sha === p.selectedSha
+                const clickable = !isCurrent
+                return (
+                  <li
+                    key={c.sha}
+                    className={`vs-commit${isHead ? ' head' : ''}${clickable ? ' clickable' : ''}${isSelected ? ' selected' : ''}`}
+                    onClick={() => clickable && p.setSelectedSha(isSelected ? null : c.sha)}
+                    title={c.msg}
+                  >
+                    <span className="vs-glyph" />
+                    <span className="vs-msg">{c.msg}</span>
+                    <span className="vs-sha">
+                      {c.short_sha}
+                      {isCurrent ? (
+                        <span className="vs-head-pill">● 当前</span>
+                      ) : isHead ? (
+                        <span className="vs-head-pill">HEAD</span>
+                      ) : isSelected ? (
+                        <span className="vs-switch-hint">已选 ✓</span>
+                      ) : (
+                        <span className="vs-switch-hint">切到此 →</span>
+                      )}
+                    </span>
+                  </li>
+                )
+              })}
+            </ul>
+            {p.commits && !p.commits.fetched && p.commits.error && (
+              <p className="vs-d" style={{ color: 'var(--warn)', marginTop: 6 }}>
+                ⚠ fetch 失败（{p.commits.error}）；列表是本地 origin/dev 缓存
+              </p>
+            )}
+          </>
+        )}
       </div>
 
-      <div className="vs-chan-foot">
-        <div className="vs-info">
-          <span style={{ color: 'var(--warn)' }}>●</span> 开发版 · 未发布
-        </div>
-        <div className="vs-actions">
-          <button onClick={p.onCheck} disabled={p.checking || p.busy} className="btn btn-sm">
-            <VersionIcon name="refresh" />{p.checking ? '抓取中…' : '抓取 dev'}
-          </button>
-          {p.on ? (
-            <button disabled className="btn btn-sm">已在 dev HEAD</button>
-          ) : p.check?.has_update ? (
-            <button onClick={p.onSwitchToDev} disabled={p.busy || p.checking} className="btn btn-sm btn-warn">
-              {p.busy ? '切换中…' : `切到 dev${head ? ` (${head})` : ''}`}
+      {p.selectedSha && selectedCommit ? (
+        <div className="vs-selection-foot">
+          <div className="vs-info">
+            <VersionIcon name="rollback" />
+            将切到 <b>{selectedCommit.short_sha}</b> · {selectedCommit.msg.slice(0, 32)}
+          </div>
+          <div className="vs-actions">
+            <button onClick={() => p.setSelectedSha(null)} disabled={p.busy} className="btn btn-sm btn-ghost">
+              取消
             </button>
-          ) : p.check ? (
-            <button onClick={p.onSwitchToDev} disabled={p.busy || p.checking} className="btn btn-sm btn-warn">
-              切到 dev (HEAD)
+            <button
+              onClick={() => p.onSwitchToCommit(selectedCommit)}
+              disabled={p.busy || p.checking}
+              className="btn btn-sm btn-warn"
+            >
+              {p.busy ? '切换中…' : `切到 ${selectedCommit.short_sha}…`}
             </button>
-          ) : null}
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="vs-chan-foot">
+          <div className="vs-info">
+            <span style={{ color: 'var(--warn)' }}>●</span> 开发版 · 未发布
+          </div>
+          <div className="vs-actions">
+            <button onClick={p.onCheck} disabled={p.checking || p.busy} className="btn btn-sm">
+              <VersionIcon name="refresh" />{p.checking ? '抓取中…' : '抓取 dev'}
+            </button>
+            {p.on ? (
+              <button disabled className="btn btn-sm">已在 dev HEAD</button>
+            ) : commits.length > 0 ? (
+              <button
+                onClick={p.onSwitchToDev}
+                disabled={p.busy || p.checking}
+                className="btn btn-sm btn-warn"
+              >
+                {p.busy ? '切换中…' : `切到 dev${head ? ` (${head})` : ''}`}
+              </button>
+            ) : null}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

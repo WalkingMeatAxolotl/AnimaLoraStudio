@@ -1696,6 +1696,11 @@ export const api = {
   // （MasterCard 用此填进 change-block；缺失时 found=false 优雅退化）
   getReleaseNotes: (tag: string) =>
     req<ReleaseNotes>(`/api/system/release_notes?tag=${encodeURIComponent(tag)}`),
+
+  // chunk 3 — git fetch + log origin/dev，返回最近 N 个 commit
+  // （DevCard 时间线 + 任意 commit 切换用）。limit 默认 10，clamp 1-50。
+  getDevCommits: (limit = 10) =>
+    req<DevCommitsResult>(`/api/system/dev_commits?limit=${limit}`),
 }
 
 export interface SystemVersion {
@@ -1748,6 +1753,21 @@ export interface ReleaseNotes {
   found: boolean
   date: string | null   // ISO YYYY-MM-DD
   sections: ReleaseNotesSection[]
+}
+
+/** chunk 3 — dev 通道最近 commit 摘要。fetched=false 时表示 git fetch 失败
+ *  （离线 / 网络问题），commits 是本地 origin/dev 缓存。error 文案给 UI 提示。 */
+export interface DevCommit {
+  sha: string           // full sha，作为 performSystemUpdate target
+  short_sha: string     // 前 8 位
+  msg: string           // commit subject
+  time_iso: string      // ISO8601
+  author: string
+}
+export interface DevCommitsResult {
+  commits: DevCommit[]
+  fetched: boolean
+  error: string | null
 }
 
 export interface BrowseEntry {
