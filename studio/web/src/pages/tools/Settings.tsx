@@ -3163,17 +3163,25 @@ function MasterCard(p: MasterCardProps) {
       </div>
 
       {p.hasRollback && p.status?.rollback_target && (
-        <div className="vs-rollback-inline-row">
-          <div className="vs-lhs">
-            <span className="vs-ico"><VersionIcon name="rollback" /></span>
-            <span>上一版本</span>
-            <b>{p.status.rollback_target.slice(0, 8)}</b>
-            <span className="vs-when">（一键切回）</span>
+        // 回滚是潜在破坏性操作（reset --hard 丢失当前 commit 上的本地未
+        // commit 改动 / GC 后 reflog 也可能消失），UI 默认折叠成小字提示
+        // 让用户主动确认才展开按钮，降低误触概率。
+        <details className="vs-rollback-collapse">
+          <summary className="vs-rollback-summary">
+            <span className="vs-caret">▸</span>
+            历史版本可切回（{p.status.rollback_target.slice(0, 8)}）
+          </summary>
+          <div className="vs-rollback-inline-row">
+            <div className="vs-lhs">
+              <span className="vs-ico"><VersionIcon name="rollback" /></span>
+              <span>上一版本</span>
+              <b>{p.status.rollback_target.slice(0, 8)}</b>
+            </div>
+            <button onClick={p.onRollback} disabled={p.busy || p.checking} className="btn btn-sm">
+              切回 {p.status.rollback_target.slice(0, 8)}
+            </button>
           </div>
-          <button onClick={p.onRollback} disabled={p.busy || p.checking} className="btn btn-sm">
-            切回 {p.status.rollback_target.slice(0, 8)}
-          </button>
-        </div>
+        </details>
       )}
     </div>
   )
@@ -3311,17 +3319,25 @@ function DevCard(p: DevCardProps) {
                 const isCurrent = !!p.currentSha && c.sha === p.currentSha
                 const isSelected = c.sha === p.selectedSha
                 const clickable = !isCurrent
+                // 行 class 同时跟 isHead / isCurrent / clickable / selected。
+                // accent glyph 走 .current（"你在这里"）；HEAD 只在 pill 里
+                // 用文字标记（不抢 glyph）。
+                const classes = ['vs-commit']
+                if (isHead) classes.push('head')
+                if (isCurrent) classes.push('current')
+                if (clickable) classes.push('clickable')
+                if (isSelected) classes.push('selected')
                 return (
                   <li
                     key={c.sha}
-                    className={`vs-commit${isHead ? ' head' : ''}${clickable ? ' clickable' : ''}${isSelected ? ' selected' : ''}`}
+                    className={classes.join(' ')}
                     onClick={() => clickable && p.setSelectedSha(isSelected ? null : c.sha)}
                     title={c.msg}
                   >
                     <span className="vs-glyph" />
                     <span className="vs-msg">{c.msg}</span>
-                    <span className="vs-sha">
-                      {c.short_sha}
+                    <span className="vs-sha">{c.short_sha}</span>
+                    <span className="vs-pill-slot">
                       {isCurrent ? (
                         <span className="vs-head-pill">● 当前</span>
                       ) : isHead ? (
@@ -3346,11 +3362,12 @@ function DevCard(p: DevCardProps) {
       </div>
 
       {p.selectedSha && selectedCommit ? (
+        // 选中确认条：仅 sha + 取消/确认 按钮。commit 信息上方 list 已可见，
+        // 这里只是 action 收尾，info 段去掉避免长 message 挤换行。
         <div className="vs-selection-foot">
-          <div className="vs-info" title={selectedCommit.msg}>
-            <VersionIcon name="rollback" />
-            <span>将切到 <b>{selectedCommit.short_sha}</b></span>
-          </div>
+          <span className="vs-info" title={selectedCommit.msg}>
+            <b>{selectedCommit.short_sha}</b>
+          </span>
           <div className="vs-actions">
             <button onClick={() => p.setSelectedSha(null)} disabled={p.busy} className="btn btn-sm btn-ghost">
               取消

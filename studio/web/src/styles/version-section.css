@@ -229,6 +229,41 @@
 .vs-pill-here   { background: var(--accent-soft); color: var(--accent); }
 .vs-pill-info   { background: var(--info-soft);   color: var(--info); }
 
+/* 折叠包装：master 卡底"上一版本可切回"默认仅小字提示，点开才显示
+   完整 sha + 切回按钮。回滚是潜在危险操作，UI 不应过于显眼。 */
+.vs-rollback-collapse {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border-subtle);
+}
+.vs-rollback-collapse .vs-rollback-summary {
+  cursor: pointer;
+  color: var(--fg-tertiary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  list-style: none;
+  user-select: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.vs-rollback-collapse .vs-rollback-summary::-webkit-details-marker { display: none; }
+.vs-rollback-collapse .vs-rollback-summary:hover { color: var(--fg-secondary); }
+.vs-rollback-collapse .vs-rollback-summary .vs-caret {
+  display: inline-block;
+  transition: transform 120ms;
+}
+.vs-rollback-collapse[open] .vs-rollback-summary .vs-caret {
+  transform: rotate(90deg);
+}
+.vs-rollback-collapse[open] .vs-rollback-summary { margin-bottom: 10px; }
+/* 折叠包装下原 inline-row 的 margin/border 由 collapse 提供，去掉避免双重 */
+.vs-rollback-collapse .vs-rollback-inline-row {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
 /* ==================== inline rollback affordance（master 卡底） ==================== */
 .vs-rollback-inline-row {
   margin-top: 10px;
@@ -441,7 +476,9 @@
 }
 .vs-commit {
   display: grid;
-  grid-template-columns: 14px minmax(0, 1fr) auto;
+  /* glyph / msg / sha / pill-slot 四列。pill-slot 固定宽度让 sha 列在
+     不同 HEAD/当前/已选/切到此 label 下都对齐，不被 pill 长度挤动。 */
+  grid-template-columns: 14px minmax(0, 1fr) auto 60px;
   gap: 10px;
   padding: 5px 8px;
   margin: 0 -8px;
@@ -460,7 +497,10 @@
   margin-top: 4px;
   z-index: 1;
 }
-.vs-commit.head .vs-glyph {
+/* accent glyph 给 "current"（用户实际在的 commit），不给 dev HEAD —
+   语义是"你在这里"，对得上卡片头 "你在这里" pill。HEAD 仅在右侧 pill
+   slot 用文字 "HEAD" 标记，不动 glyph。 */
+.vs-commit.current .vs-glyph {
   background: var(--accent);
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
@@ -473,12 +513,20 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.vs-commit.head .vs-msg { font-weight: 500; }
+.vs-commit.current .vs-msg { font-weight: 500; }
 .vs-commit .vs-sha {
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--fg-tertiary);
   white-space: nowrap;
+  text-align: right;
+}
+/* pill-slot 是第 4 列，固定宽度让 sha 列在不同 row 对齐。
+   HEAD / 当前 / 已选 / 切到此 不同 label 都放这儿。 */
+.vs-commit .vs-pill-slot {
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 10px;
 }
 .vs-commit.clickable { cursor: pointer; }
 .vs-commit.clickable:hover { background: var(--bg-surface); }
@@ -494,7 +542,6 @@
   color: var(--fg-disabled);
   opacity: 0;
   transition: opacity 100ms;
-  margin-left: 6px;
 }
 .vs-commit.clickable:hover .vs-switch-hint { opacity: 1; }
 .vs-commit.selected .vs-switch-hint { opacity: 1; color: var(--accent); }
@@ -506,7 +553,6 @@
   color: var(--accent);
   border-radius: 999px;
   letter-spacing: 0.04em;
-  margin-left: 6px;
 }
 
 .vs-commits-load-more {
