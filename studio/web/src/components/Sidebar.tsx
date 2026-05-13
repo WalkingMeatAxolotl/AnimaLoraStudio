@@ -348,7 +348,10 @@ export default function Sidebar() {
     } catch { return null }
   })
 
-  const expanded = expandedOverride ?? !inProject
+  // 默认始终展开（用户手动折叠后 sessionStorage 持久,此后保持折叠）。
+  // 旧逻辑 `?? !inProject` 让进项目时自动折叠 — 用户反馈这会突然遮 sidebar
+  // 信息,违反「点项目 = 进入工作流」的预期。
+  const expanded = expandedOverride ?? true
   const collapsed = !expanded
 
   const toggle = () => {
