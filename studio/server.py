@@ -1972,7 +1972,7 @@ def _resolve_anima_model_paths() -> dict[str, str]:
     from .services.model_downloader import models_root
     root = models_root()
     return {
-        "transformer_path": str(root / "diffusion_models" / "anima-preview3-base.safetensors"),
+        "transformer_path": str(root / "diffusion_models" / "anima-base-v1.0.safetensors"),
         "vae_path": str(root / "vae" / "qwen_image_vae.safetensors"),
         "text_encoder_path": str(root / "text_encoders"),
         "t5_tokenizer_path": str(root / "t5_tokenizer"),

@@ -207,7 +207,7 @@ const EMPTY: Secrets = {
     blacklist_tags: [],
     batch_size: 8,
   },
-  models: { root: null, selected_anima: 'preview3-base' },
+  models: { root: null, selected_anima: '1.0' },
   queue: { allow_gpu_during_train: false },
   generate: { preview_every_n_steps: 3, attention_backend: 'auto' },
   system: { show_dev_channel: false },
@@ -1421,7 +1421,7 @@ function ModelsSection({ catalog, busy, start, reloadCatalog, catalogError }: {
   const [rootDraft, setRootDraft] = useState<string>('')
   const [serverRoot, setServerRoot] = useState<string | null>(null)
   const [savingRoot, setSavingRoot] = useState(false)
-  const [selectedAnima, setSelectedAnima] = useState<string>('preview3-base')
+  const [selectedAnima, setSelectedAnima] = useState<string>('1.0')
 
   // 一次性拉一份 secrets 取 models.root + selected_anima（这两项走独立 PUT，
   // 不进 SettingsPage 的全局 dirty 流程）。catalog 由父级注入。
@@ -1429,7 +1429,7 @@ function ModelsSection({ catalog, busy, start, reloadCatalog, catalogError }: {
     void api.getSecrets().then((sec) => {
       setServerRoot(sec.models?.root ?? null)
       setRootDraft(sec.models?.root ?? '')
-      setSelectedAnima(sec.models?.selected_anima ?? 'preview3-base')
+      setSelectedAnima(sec.models?.selected_anima ?? '1.0')
     }).catch(() => {})
   }, [])
 

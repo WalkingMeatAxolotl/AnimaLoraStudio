@@ -105,7 +105,7 @@ python -m studio test         # pytest + vitest
 
 | 项 | 来源 | 路径 | 大小 |
 |---|---|---|---|
-| Anima 主模型（latest = preview3-base）| [circlestone-labs/Anima](https://huggingface.co/circlestone-labs/Anima) | `models/diffusion_models/` | ~4 GB |
+| Anima 主模型（latest = 1.0）| [circlestone-labs/Anima](https://huggingface.co/circlestone-labs/Anima) | `models/diffusion_models/` | ~4 GB |
 | Anima VAE | 同上 | `models/vae/` | ~250 MB |
 | Qwen3-0.6B-Base 文本编码器 | [Qwen/Qwen3-0.6B-Base](https://huggingface.co/Qwen/Qwen3-0.6B-Base) | `models/text_encoders/` | ~1.2 GB |
 | T5 tokenizer（仅 3 文件，不下权重）| [google/t5-v1_1-xxl](https://huggingface.co/google/t5-v1_1-xxl) | `models/t5_tokenizer/` | <1 MB |
@@ -115,7 +115,7 @@ python -m studio test         # pytest + vitest
 ```bash
 python tools/download_models.py                   # 全量下
 python tools/download_models.py --no-mirror       # 走 HF 官方源
-python tools/download_models.py --variant preview2
+python tools/download_models.py --variant preview3-base
 python tools/download_models.py --skip-main --skip-vae
 python tools/download_models.py --output /data/anima
 ```

@@ -35,12 +35,16 @@ from .onnx_tagger_base import safe_dir_name
 # ---------------------------------------------------------------------------
 
 ANIMA_REPO = "circlestone-labs/Anima"
+# 顺序：最新在前。`find_anima_main` 的 fallback 查找按本 dict 序遍历，
+# `build_catalog` 给 UI 的 variants 列表也直接复用本顺序——所以新版本
+# 加在最前，老版本往下排。
 ANIMA_VARIANTS: dict[str, str] = {
-    "preview":       "split_files/diffusion_models/anima-preview.safetensors",
-    "preview2":      "split_files/diffusion_models/anima-preview2.safetensors",
+    "1.0":           "split_files/diffusion_models/anima-base-v1.0.safetensors",
     "preview3-base": "split_files/diffusion_models/anima-preview3-base.safetensors",
+    "preview2":      "split_files/diffusion_models/anima-preview2.safetensors",
+    "preview":       "split_files/diffusion_models/anima-preview.safetensors",
 }
-LATEST_ANIMA = "preview3-base"
+LATEST_ANIMA = "1.0"
 ANIMA_VAE_PATH = "split_files/vae/qwen_image_vae.safetensors"
 
 QWEN_REPO = "Qwen/Qwen3-0.6B-Base"

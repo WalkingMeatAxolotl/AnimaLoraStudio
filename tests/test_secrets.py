@@ -175,10 +175,16 @@ def test_find_anima_main_picks_latest(secrets_file: Path, tmp_path: Path) -> Non
     (dm / "anima-preview2.safetensors").write_bytes(b"x")
     assert model_downloader.find_anima_main().name == "anima-preview2.safetensors"
 
-    # preview3-base 装上 → latest 优先返回 preview3-base
+    # preview3-base 装上 → latest 优先返回 preview3-base（preview3-base 在 1.0 缺席时是次新）
     (dm / "anima-preview3-base.safetensors").write_bytes(b"y")
     assert (
         model_downloader.find_anima_main().name == "anima-preview3-base.safetensors"
+    )
+
+    # 1.0 装上 → latest 优先返回 1.0
+    (dm / "anima-base-v1.0.safetensors").write_bytes(b"z")
+    assert (
+        model_downloader.find_anima_main().name == "anima-base-v1.0.safetensors"
     )
 
 

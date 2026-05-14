@@ -5,14 +5,14 @@
 
 最终落地结构（默认 ./anima/，与 anima_train._guess_default_paths 一致）：
     anima/
-      diffusion_models/anima-preview3-base.safetensors
+      diffusion_models/anima-base-v1.0.safetensors
       vae/qwen_image_vae.safetensors
       text_encoders/                # Qwen3 模型 + tokenizer
       t5_tokenizer/                 # T5 仅 tokenizer，不要权重
 
 用法:
     python tools/download_models.py
-    python tools/download_models.py --variant preview2
+    python tools/download_models.py --variant preview3-base
     python tools/download_models.py --no-mirror
     python tools/download_models.py --skip-main --skip-vae
     python tools/download_models.py --output /data/anima

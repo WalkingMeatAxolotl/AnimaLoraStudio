@@ -89,7 +89,7 @@ class TrainingConfig(BaseModel):
     # 这里的默认值仅 fallback：裸 CLI 跑训练 + yaml 完全没填时，按 repo
     # 相对路径解析（与历史行为一致）。
     transformer_path: str = Field(
-        "models/diffusion_models/anima-preview3-base.safetensors",
+        "models/diffusion_models/anima-base-v1.0.safetensors",
         description="主 transformer 权重 (.safetensors)",
         json_schema_extra=_meta("model", "path", cli_alias="--transformer"),
     )
@@ -669,7 +669,7 @@ class GenerateConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # 模型路径（服务端从 secrets 填充）
-    transformer_path: str = Field("models/diffusion_models/anima-preview3-base.safetensors")
+    transformer_path: str = Field("models/diffusion_models/anima-base-v1.0.safetensors")
     vae_path: str = Field("models/vae/qwen_image_vae.safetensors")
     text_encoder_path: str = Field("models/text_encoders")
     t5_tokenizer_path: str = Field("models/t5_tokenizer")

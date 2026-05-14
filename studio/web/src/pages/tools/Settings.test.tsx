@@ -101,7 +101,7 @@ const initialServerState = {
     blacklist_tags: [],
     batch_size: 8,
   },
-  models: { root: null, selected_anima: 'preview3-base' },
+  models: { root: null, selected_anima: '1.0' },
   queue: { allow_gpu_during_train: false },
 }
 

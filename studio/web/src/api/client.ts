@@ -312,7 +312,7 @@ export const DEFAULT_WD14_MODELS: readonly string[] = [
 export interface ModelsConfig {
   /** 训练模型根目录；null/空 → 回退 REPO_ROOT/models/（云端机改这里） */
   root: string | null
-  /** 当前默认主模型 variant（preview3-base / preview2 / preview）。
+  /** 当前默认主模型 variant（1.0 / preview3-base / preview2 / preview）。
    * Studio 创建新 version 时把它展开成绝对路径写到 yaml.transformer_path；
    * 已存在 version 不动（保证训练重现性）。 */
   selected_anima: string

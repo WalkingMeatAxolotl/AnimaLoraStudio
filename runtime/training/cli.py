@@ -97,7 +97,7 @@ def _guess_default_paths():
     根目录：优先 `secrets.models.root`（Studio 设置页配置），否则 `REPO_ROOT/models/`
     （与 schema.py 默认 + WD14 已用的 `models/wd14/` 对齐）。
 
-    Transformer：用户可能装多个 Anima 版本（preview / preview2 / preview3-base），
+    Transformer：用户可能装多个 Anima 版本（preview / preview2 / preview3-base / 1.0），
     按 ANIMA_VARIANTS 顺序找第一个存在的（latest 优先）。
     """
     # 注：原 runtime/anima_train.py 用 Path(__file__).resolve().parent 拿 runtime/；
@@ -118,7 +118,7 @@ def _guess_default_paths():
         base = repo_root / "models"
     if not transformer_path:
         # services 不可用 / 都没下载 → 给最新版默认名作为提示，方便用户填路径
-        candidate = base / "diffusion_models" / "anima-preview3-base.safetensors"
+        candidate = base / "diffusion_models" / "anima-base-v1.0.safetensors"
         transformer_path = str(candidate) if candidate.exists() else ""
 
     vae = base / "vae" / "qwen_image_vae.safetensors"

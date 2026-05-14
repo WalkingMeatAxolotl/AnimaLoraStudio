@@ -373,7 +373,7 @@ class ModelsConfig(BaseModel):
       （保证训练重现性）。
     """
     root: Optional[str] = None
-    selected_anima: str = "preview3-base"
+    selected_anima: str = "1.0"
 
 
 class GenerateConfig(BaseModel):
