@@ -124,7 +124,8 @@ def test_install_runtime_runs_uninstall_then_install(
 def test_install_runtime_install_failure_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_pip(args):
+    # 注：_pip 支持 mirror= kwarg（官方源失败时切镜像重试），mock 必须接受同签名
+    def fake_pip(args, mirror=None):
         if args[0] == "install":
             return 1, "ERROR: no matching distribution"
         return 0, ""
@@ -500,7 +501,7 @@ def test_install_cuda_runtime_wheels_rolls_back_on_failure(
     monkeypatch.setattr(ors, "_is_dist_installed", lambda _p: False)
     pip_calls: list[list[str]] = []
 
-    def fake_pip(args):
+    def fake_pip(args, mirror=None):
         pip_calls.append(args)
         if args[0] == "install":
             return 1, "ERROR: pip 解析依赖失败"

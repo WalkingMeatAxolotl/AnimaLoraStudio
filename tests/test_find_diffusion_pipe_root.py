@@ -1,11 +1,8 @@
-"""find_diffusion_pipe_root 路径解析回归 —— anima_train 在 runtime/ 子目录下时也能找到 ../models/。
+"""find_diffusion_pipe_root 路径解析回归 —— 训练模块在 runtime/training/ 子目录下时也能找到 ../models/。
 
-anima_train.py 在仓库根的子目录（runtime/，历史上叫过 scripts/）下，
-`Path(__file__).parent` 变成 runtime/，原候选 `Path(__file__).parent / "models"`
-找不到 repo_root/models/。线上首次跑训练立即 RuntimeError。
-
-本测试用 AST 抽函数源码独立执行，避免 import 整个 anima_train（torch +
-anima 依赖太重），保持单测轻量稳定。
+函数位于 `runtime/training/model_loading.py`（ADR 0003 PR-A 从 anima_train.py 搬入）。
+本测试用 AST 抽函数源码独立执行，避免 import 整个 model_loading（torch + anima
+依赖太重），保持单测轻量稳定。
 """
 from __future__ import annotations
 
@@ -16,20 +13,27 @@ from pathlib import Path
 import pytest
 
 
+SRC_REL = Path("runtime") / "training" / "model_loading.py"
+
+
 def _exec_fn() -> tuple[object, dict]:
-    """从 runtime/anima_train.py 抽 find_diffusion_pipe_root，独立编译。"""
-    src_path = Path(__file__).resolve().parent.parent / "runtime" / "anima_train.py"
+    """从 runtime/training/model_loading.py 抽 find_diffusion_pipe_root，独立编译。"""
+    src_path = Path(__file__).resolve().parent.parent / SRC_REL
     tree = ast.parse(src_path.read_text(encoding="utf-8"))
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name == "find_diffusion_pipe_root":
             mod = ast.Module(body=[node], type_ignores=[])
             ns: dict = {"Path": Path, "os": os}
             return mod, ns
-    raise RuntimeError("find_diffusion_pipe_root not found in anima_train.py")
+    raise RuntimeError(f"find_diffusion_pipe_root not found in {SRC_REL}")
 
 
 def _run(file_loc: Path, env_root: str | None = None) -> Path:
-    """在 ns 里执行函数，返回 find_diffusion_pipe_root() 的结果。"""
+    """在 ns 里执行函数，返回 find_diffusion_pipe_root() 的结果。
+
+    file_loc 应当是 fake 的 runtime/training/model_loading.py 路径——
+    函数内部按 __file__.parent.parent.parent 反推 repo_root。
+    """
     mod, ns = _exec_fn()
     ns["__file__"] = str(file_loc)
     if env_root is None:
@@ -50,53 +54,54 @@ def _run(file_loc: Path, env_root: str | None = None) -> Path:
             os.environ.pop("DIFFUSION_PIPE_ROOT", None)
 
 
+def _make_fake_module(tmp_path: Path) -> Path:
+    """造一个 tmp_path/runtime/training/model_loading.py 占位文件。"""
+    training_dir = tmp_path / "runtime" / "training"
+    training_dir.mkdir(parents=True)
+    fake = training_dir / "model_loading.py"
+    fake.write_text("# placeholder")
+    return fake
+
+
 def test_finds_repo_root_models_when_train_in_subdir(tmp_path: Path) -> None:
-    """标准 layout：repo_root/runtime/anima_train.py + repo_root/models/anima_modeling.py。"""
-    runtime_dir = tmp_path / "runtime"
-    runtime_dir.mkdir()
-    fake_train = runtime_dir / "anima_train.py"
-    fake_train.write_text("# placeholder")
+    """标准 layout：repo_root/runtime/training/model_loading.py + repo_root/models/anima_modeling.py。"""
+    fake_module = _make_fake_module(tmp_path)
 
     models = tmp_path / "models"
     models.mkdir()
     (models / "anima_modeling.py").write_text("")
 
-    found = _run(fake_train)
+    found = _run(fake_module)
     assert found == models, f"expected {models}, got {found}"
 
 
-def test_finds_script_sibling_models_directory(tmp_path: Path) -> None:
-    """脚本同目录的 models/（CLI 用户把脚本和模型代码放一起，候选 1）。"""
-    fake_train = tmp_path / "anima_train.py"
-    fake_train.write_text("# placeholder")
+def test_finds_runtime_sibling_models_directory(tmp_path: Path) -> None:
+    """runtime/ 同级的 models/（候选 2：runtime_dir / 'models'）。"""
+    fake_module = _make_fake_module(tmp_path)
 
-    sibling_models = tmp_path / "models"
-    sibling_models.mkdir()
-    (sibling_models / "anima_modeling.py").write_text("")
+    runtime_models = tmp_path / "runtime" / "models"
+    runtime_models.mkdir()
+    (runtime_models / "anima_modeling.py").write_text("")
 
-    found = _run(fake_train)
-    assert found == sibling_models
+    found = _run(fake_module)
+    assert found == runtime_models
 
 
 def test_env_var_override_when_no_layout_match(tmp_path: Path) -> None:
     """DIFFUSION_PIPE_ROOT 直接指向 anima_modeling.py 所在目录。"""
-    fake_train = tmp_path / "runtime" / "anima_train.py"
-    fake_train.parent.mkdir()
-    fake_train.write_text("# placeholder")
+    fake_module = _make_fake_module(tmp_path)
 
     custom = tmp_path / "custom_pipe"
     custom.mkdir()
     (custom / "anima_modeling.py").write_text("")
 
-    found = _run(fake_train, env_root=str(custom))
+    found = _run(fake_module, env_root=str(custom))
     assert found == custom
 
 
 def test_raises_when_nothing_found(tmp_path: Path) -> None:
     """所有候选都没命中 → RuntimeError。"""
-    fake_train = tmp_path / "runtime" / "anima_train.py"
-    fake_train.parent.mkdir()
-    fake_train.write_text("# placeholder")
+    fake_module = _make_fake_module(tmp_path)
 
     with pytest.raises(RuntimeError, match="anima_modeling.py"):
-        _run(fake_train)
+        _run(fake_module)
