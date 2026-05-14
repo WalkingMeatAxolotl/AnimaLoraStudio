@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import sys
 from pathlib import Path
 
@@ -24,24 +23,12 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(RUNTIME_DIR))
 
 
-# ---------------------------------------------------------------------------
-# Helper：绕过 utils/__init__.py 直接 import AnimaLycorisAdapter
-# （utils/__init__ 会触发 utils.dataset 链式 import torchvision，本测试不需要）
-# ---------------------------------------------------------------------------
-
 @pytest.fixture(scope="module")
 def AnimaLycorisAdapter():
-    # AnimaLycorisAdapter 模块链最终触发 utils.dataset → torchvision import；
-    # 本地 dev 环境无 torchvision 时跳过这一族测试（CI / 训练环境正常跑）。
-    pytest.importorskip("torchvision")
+    """AnimaLycorisAdapter 类（lycoris-lora 后端可用时跑，否则 skip）。"""
     pytest.importorskip("lycoris")
-    spec = importlib.util.spec_from_file_location(
-        "_lycoris_adapter_for_test",
-        REPO_ROOT / "utils" / "lycoris_adapter.py",
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.AnimaLycorisAdapter
+    from utils.lycoris_adapter import AnimaLycorisAdapter as cls
+    return cls
 
 
 # ---------------------------------------------------------------------------
