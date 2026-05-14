@@ -82,20 +82,11 @@ def run(ctx: TrainingContext) -> None:
         args.text_encoder_path, args.t5_tokenizer_path, ctx.device, ctx.dtype,
     )
 
-    # 注入 LoRA
+    # 注入 LoRA — PR-C 通过 adapters/ plugin registry 派发，加新变体见
+    # training/adapters/__init__.py docstring
     logger.info(f"注入 {args.lora_type.upper()}...")
-    from utils.lycoris_adapter import AnimaLycorisAdapter
-    ctx.injector = AnimaLycorisAdapter(
-        algo=args.lora_type,
-        rank=args.lora_rank,
-        alpha=args.lora_alpha,
-        factor=args.lokr_factor,
-        dropout=float(getattr(args, "lora_dropout", 0.0) or 0.0),
-        rank_dropout=float(getattr(args, "lora_rank_dropout", 0.0) or 0.0),
-        module_dropout=float(getattr(args, "lora_module_dropout", 0.0) or 0.0),
-        weight_decompose=bool(getattr(args, "lora_dora", False)),
-        rs_lora=bool(getattr(args, "lora_rs", False)),
-    )
+    from training.adapters import build_adapter
+    ctx.injector = build_adapter(args)
     ctx.injector.inject(ctx.model)
 
     # 从已有 LoRA 继续训练

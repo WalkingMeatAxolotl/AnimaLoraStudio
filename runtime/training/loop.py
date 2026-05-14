@@ -90,6 +90,19 @@ def run(ctx: TrainingContext) -> None:
                 mode=str(getattr(args, "timestep_sampling", "logit_normal") or "logit_normal"),
                 shift=float(getattr(args, "timestep_shift", 3.0) or 3.0),
             )
+
+            # PR-C：adapter hook — 允许变体按 sigma_t / step 调整运行时结构
+            # （T-LoRA / AdaLoRA / B-LoRA 等）。LyCORIS 走默认 no-op。
+            from training.adapters.protocol import StepContext
+            step_ctx = StepContext(
+                global_step=ctx.global_step,
+                total_steps=ctx.total_steps,
+                epoch=epoch,
+                sigma_t=t,
+                args=args,
+            )
+            ctx.injector.on_step_begin(step_ctx)
+
             t_exp = t.view(-1, 1, 1, 1, 1)
             noise = make_noise(
                 latents,
@@ -123,6 +136,12 @@ def run(ctx: TrainingContext) -> None:
                     ).to(device=ctx.device, dtype=torch.float32)
                     loss_per_sample = loss_per_sample * lw.view(-1, *([1] * (loss_per_sample.dim() - 1)))
                 loss = loss_per_sample.mean()
+
+                # PR-C：adapter hook — 变体可加正则项（OFT orth penalty /
+                # Ortho-Hydra balance loss 等）。LyCORIS 返回 None，noop。
+                reg = ctx.injector.regularization_loss(step_ctx)
+                if reg is not None:
+                    loss = loss + reg
 
             # NaN 检测：forward 出 NaN 时跳过本 micro-batch
             if not torch.isfinite(loss):

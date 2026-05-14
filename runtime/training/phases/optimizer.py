@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import logging
 
-import torch
-
 from training.context import TrainingContext
 
 
@@ -20,52 +18,22 @@ logger = logging.getLogger(__name__)
 
 def run(ctx: TrainingContext) -> None:
     """
-    - injector.get_param_groups + optimizer kwargs 派发 + create_optimizer
+    - injector.get_param_groups + build_optimizer(args, ...) via training.optimizers
+    - validate_optimizer 启动期约束检查（如 PPSF lr_scheduler=none）
     - grad_clip / trainable_params
     - 计算 total_steps（min(by_epochs, by_max_steps)）
-    - lr_scheduler 派发（cosine / cosine_with_restart / none）
+    - build_scheduler(args, optimizer, total_steps) via training.schedulers
     """
     args = ctx.args
 
-    # 优化器
+    # 优化器：PR-C 通过 optimizers/ plugin registry 派发
     ctx.weight_decay = float(getattr(args, "weight_decay", 0.01) or 0.0)
     param_groups = ctx.injector.get_param_groups(ctx.weight_decay)
     ctx.optimizer_type = (getattr(args, "optimizer_type", "adamw") or "adamw").lower()
-    from utils.optimizer_utils import create_optimizer
-    optimizer_extra: dict = {}
-    optimizer_overrides: dict = {}
-    if ctx.optimizer_type == "prodigy":
-        optimizer_extra["d_coef"] = float(getattr(args, "prodigy_d_coef", 1.0))
-        optimizer_extra["safeguard_warmup"] = bool(getattr(args, "prodigy_safeguard_warmup", True))
-    elif ctx.optimizer_type == "prodigy_plus_schedulefree":
-        # Schedule-Free 不需要 scheduler，启动期强校验
-        lr_sched_cfg = (getattr(args, "lr_scheduler", "none") or "none").lower()
-        if lr_sched_cfg != "none":
-            raise SystemExit(
-                f"ProdigyPlusScheduleFree requires lr_scheduler=none "
-                f"(Schedule-Free is scheduler-free by construction); got "
-                f"lr_scheduler={lr_sched_cfg!r}. Set lr_scheduler=none or pick a "
-                f"different optimizer."
-            )
-        optimizer_extra["d_coef"] = float(getattr(args, "ppsf_d_coef", 1.0))
-        optimizer_extra["prodigy_steps"] = int(getattr(args, "ppsf_prodigy_steps", 0))
-        optimizer_extra["split_groups"] = bool(getattr(args, "ppsf_split_groups", True))
-        optimizer_extra["split_groups_mean"] = bool(getattr(args, "ppsf_split_groups_mean", False))
-        optimizer_extra["use_speed"] = bool(getattr(args, "ppsf_use_speed", False))
-        optimizer_extra["fused_back_pass"] = bool(getattr(args, "ppsf_fused_back_pass", False))
-        optimizer_extra["use_stableadamw"] = bool(getattr(args, "ppsf_use_stableadamw", True))
-        optimizer_overrides["betas"] = (
-            float(getattr(args, "ppsf_beta1", 0.9)),
-            float(getattr(args, "ppsf_beta2", 0.99)),
-        )
-    ctx.optimizer = create_optimizer(
-        optimizer_type=ctx.optimizer_type,
-        params=param_groups,
-        learning_rate=args.learning_rate,
-        weight_decay=ctx.weight_decay,
-        **optimizer_overrides,
-        **optimizer_extra,
-    )
+
+    from training.optimizers import build_optimizer, validate_optimizer
+    validate_optimizer(args)  # PPSF 检查 lr_scheduler=none 等启动期约束
+    ctx.optimizer = build_optimizer(args, param_groups, args.learning_rate, ctx.weight_decay)
     if ctx.weight_decay > 0:
         wd_info = f"{ctx.optimizer_type} weight_decay={ctx.weight_decay}"
         if ctx.injector.use_lokr:
@@ -101,23 +69,6 @@ def run(ctx: TrainingContext) -> None:
         f"总步数: {ctx.total_steps} (by_epochs={by_epochs}, by_max_steps={by_max_steps})"
     )
 
-    # 学习率调度器
-    ctx.scheduler = None
-    lr_sched = getattr(args, "lr_scheduler", "none") or "none"
-    if lr_sched == "cosine":
-        eta_min = float(getattr(args, "lr_scheduler_eta_min", 0.0) or 0.0)
-        if ctx.total_steps is None:
-            logger.warning("cosine 调度器需要已知 total_steps，回退到 none")
-        else:
-            ctx.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                ctx.optimizer, T_max=ctx.total_steps, eta_min=eta_min
-            )
-            logger.info(f"学习率调度: cosine (T_max={ctx.total_steps}, eta_min={eta_min})")
-    elif lr_sched == "cosine_with_restart":
-        t0 = int(getattr(args, "lr_scheduler_t0", 500) or 500)
-        t_mult = int(getattr(args, "lr_scheduler_t_mult", 2) or 2)
-        eta_min = float(getattr(args, "lr_scheduler_eta_min", 0.0) or 0.0)
-        ctx.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-            ctx.optimizer, T_0=t0, T_mult=t_mult, eta_min=eta_min
-        )
-        logger.info(f"学习率调度: cosine_with_restart (T_0={t0}, T_mult={t_mult}, eta_min={eta_min})")
+    # 学习率调度器：PR-C 通过 schedulers/ plugin registry 派发；"none" 自动返回 None
+    from training.schedulers import build_scheduler
+    ctx.scheduler = build_scheduler(args, ctx.optimizer, ctx.total_steps)
