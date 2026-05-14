@@ -1,34 +1,27 @@
 #!/usr/bin/env python
-"""
-Anima LoRA Trainer v2 - 支持 LyCORIS + 训练时推理
-基于 trainerV1.01 重构，轻量单文件
+"""Anima LoRA Trainer v2 — main() 编排入口。
 
-特性：
-- 标准 LoRA 和 LyCORIS LoKr 双模式
-- 训练时推理出图
-- Flow Matching 训练
-- ARB 分桶
-- 依赖自动检测与安装
-- Rich 进度条 + ASCII Loss 曲线
-- 梯度检查点支持
-- Caption 预处理 (shuffle/keep_tokens)
+本模块的实现层已按 ADR 0003 PR-A 拆到 runtime/training/ 子包：
+  bootstrap / cli / observability / model_loading / models / text_encoding /
+  state / dataset / sampling / timestep_sampling / noise / loss_weighting
+
+顶部的 re-export 段保留 anima_train.X 访问路径，给 sister script
+（anima_daemon / anima_generate / anima_reg_ai）和 tests/ 不变。新代码请
+直接 `from training.X import Y`。
+
+LoRA / LoKr 实现：见 utils.lycoris_adapter.AnimaLycorisAdapter（ADR 0001）。
 """
 
-import argparse
 import logging
-import math
 import os
 import random
-import subprocess
 import sys
 import time
-import types
 from pathlib import Path
-from typing import Optional
 
 # 脚本在 runtime/ 下按裸脚本启动（`python runtime/anima_train.py`）。
-# 把仓库根 + runtime/ 注入 sys.path，让 `import utils.*` / `import train_monitor` 等
-# 不需要改成包导入。
+# 把仓库根 + runtime/ 注入 sys.path，让 `import utils.*` / `import train_monitor` /
+# `import training.*` 等不需要改成包导入。
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 for _p in (_REPO_ROOT, _REPO_ROOT / "runtime"):
     _ps = str(_p)
@@ -47,14 +40,16 @@ for _stream in (sys.stdout, sys.stderr):
 
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
-# ADR 0003 PR-A：模块化拆分。下面这一段从 training.* re-export，给 sister script /
-# test 维持 `anima_train.X` 的访问路径。新代码请直接 import 子模块。
+# ─── Re-exports for sister script / tests (ADR 0003 PR-A) ────────────────────
+# 这些名字被 anima_daemon / anima_generate / anima_reg_ai (`import anima_train as _T`
+# 然后 _T.X) 以及 tests/test_anima_train_migration.py 等直接读取。新代码请
+# 直接 import 子模块，不要再依赖 anima_train 顶层。
 from training.bootstrap import (  # noqa: E402
     apply_yaml_config,
     ensure_dependencies,
@@ -109,22 +104,6 @@ from training.cli import (  # noqa: E402
 from training.timestep_sampling import sample_t  # noqa: E402
 from training.noise import make_noise  # noqa: E402
 from training.loss_weighting import compute_loss_weight  # noqa: E402
-
-
-# 模型加载（load_anima_model / load_vae / load_text_encoders / ensure_models_namespace）
-# 已搬到 training.models（公开，sister script 用）。
-# 采样调度 sigma 工具 + sample_image 已搬到 training.sampling（ADR 0003 PR-A）。
-
-# LoRA / LoKr 实现：见 utils.lycoris_adapter.AnimaLycorisAdapter
-# （历史自实现版本于 Stage 3c 删除，使用 lycoris-lora 包替代）
-
-# 训练状态保存/恢复（save_training_state / load_training_state）已搬到
-# training.state；caption / tokenize 已搬到 training.text_encoding。
-
-
-
-
-# 训练时推理 sample_image 已搬到 training.sampling（ADR 0003 PR-A）。
 
 
 # ============================================================================
