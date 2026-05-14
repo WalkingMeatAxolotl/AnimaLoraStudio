@@ -1,6 +1,6 @@
 # AnimaLoraStudio
 
-[![Version](https://img.shields.io/badge/version-0.6.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.7.0-blue)](CHANGELOG.md)
 
 **端到端流水线**：从 Booru 抓图 → 筛选 → 打标 → 正则集 → 训练 → 出图测试，全流程在一个浏览器面板里推进。专为 [Anima](https://huggingface.co/circlestone-labs/Anima)（Cosmos DiT 二次元特调）训练优化。
 
@@ -13,6 +13,8 @@
 - **🛠️ 环境自愈系统** — venv stale 检测 / `--reinstall` 救命 flag / 首装 GPU-aware torch / Windows 锁文件 defer / ONNX CUDA 失败自动降 CPU；少有同类工具做这一层
 - **🚀 一键加速后端切换**（v0.5 新）— Settings 里一键装 xformers / flash_attn wheel，三选一切 attention backend，训练 / 出图共用
 - **🔁 Preset 双向流** — version 私有 config 和全局 preset 池可 fork / save_as_preset，参数实验不污染基线
+- **🔄 webui 一键自更新**（v0.7 新）— Settings → 系统 → 版本卡片里 git pull + 重启 + 回滚全套，不用回命令行；master / dev 双通道并排，CHANGELOG 嵌入 + 4 项 pre-flight 检查（详见 [ADR 0002](docs/adr/0002-webui-self-update.md)）
+- **🧩 训练栈可扩展**（v0.7 新）— `runtime/training/` 子包 + 4 个 plugin registry（adapters / optimizers / schedulers / inference_samplers）+ `AdapterProtocol` hook（on_step_begin / regularization_loss / excludes_weight_decay）；加新变体走 3 步（写 build 函数 + 字典加行 + schema Literal）不动 phases / loop（详见 [ADR 0003](docs/adr/0003-anima-train-refactor.md) + [`runtime/training/README.md`](runtime/training/README.md)）
 
 ![Studio 训练页](docs/images/studio-train.png)
 
@@ -36,7 +38,8 @@
 通用组件：
 - 队列 / 任务详情（日志 / 监控 / 输出下载 / 全量 zip）
 - 监控页（React 原生 loss / lr 曲线 + 采样图条按 step 切换）
-- Settings 4 tab（数据集 / 打标 / 训练 / 页面）：凭据 / 模型一键下载 / PyTorch 一键重装 CUDA 版 / xformers / flash_attn 一键装 / HF 镜像切换
+- **Topbar 系统资源 pill**（v0.6 新）— CPU / GPU / MEM / VRAM 等宽 4 项实时刷新（pynvml → nvidia-ml-py，SSE 2.5s 增量推送）
+- Settings 7 tab（数据集 / 打标 / 训练 / 监控 / 测试 / 页面 / 系统）：凭据 / 模型一键下载 / PyTorch 一键重装 CUDA 版 / xformers / flash_attn 一键装 / HF / ModelScope 双源 / WandB / **webui 一键自更新**（v0.7 新）
 - 暗色 / 日间模式 + 字号密度切换
 
 ---
@@ -148,7 +151,13 @@ WD14 打标模型不在这里——首次进 ③ 打标时自动从 HF 拉到 `m
 ```
 AnimaLoraStudio/
 ├── runtime/                       # Anima 运行时核心（独立进程；Studio 通过 subprocess 拉起，也可单独 CLI 跑）
-│   ├── anima_train.py             # 训练核心
+│   ├── anima_train.py             # 训练入口（128 行 thin entry，编排 6 phase）
+│   ├── training/                  # 训练栈子包（ADR 0003）：context / phases / loop / sample_runner
+│   │   ├── adapters/              # plugin: lokr / loha / lora（AdapterProtocol 接入点）
+│   │   ├── optimizers/            # plugin: adamw / prodigy / prodigy_plus_schedulefree
+│   │   ├── schedulers/            # plugin: cosine / cosine_with_restart / none
+│   │   ├── inference_samplers/    # plugin: er_sde（未注册名走 Euler 兜底）
+│   │   └── phases/                # bootstrap / models / dataset / optimizer / resume / finalize
 │   ├── anima_generate.py          # 出图：单图 / XY 矩阵
 │   ├── anima_daemon.py            # 推理 daemon：常驻 GPU 加载 LoRA 和底模
 │   ├── anima_reg_ai.py            # AI 先验生成：无 LoRA 直接用底模出 reg 集
@@ -226,15 +235,15 @@ AnimaLoraStudio/
 
 ## 版本
 
-当前版本 **0.6.0**（见 [CHANGELOG.md](CHANGELOG.md)）。
+当前版本 **0.7.0**（见 [CHANGELOG.md](CHANGELOG.md)）。
 
 版本号唯一来源是 `studio/__init__.py:__version__`：
 
 - 后端：FastAPI app `version=__version__`，`/api/health` 返回
 - 前端：Sidebar 通过 `/api/health` 拉取，不再硬编码
-- `studio/web/package.json` 的 `version` 字段需同步保持一致
+- `studio/web/package.json` 的 `version` 字段由发版工具同步
 
-发布新版本时改这三处 + 在 `CHANGELOG.md` 加一段。
+发布新版本的 source of truth 是 [`release_notes.yaml`](release_notes.yaml)（不是 `CHANGELOG.md`，后者由工具派生）。流程：改 yaml → 跑 `python tools/bump_version.py bump --version X.Y.Z` 一键同步 `__init__.py` / `package.json` / `CHANGELOG.md` → 改 README badge + 当前版本句 → release PR。完整步骤见 [CONTRIBUTING.md](CONTRIBUTING.md) 的「Release 流程（Maintainer）」段。
 
 ---
 

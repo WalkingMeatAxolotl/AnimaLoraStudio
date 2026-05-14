@@ -277,7 +277,7 @@ grad_accum: 2
 resolution: 1024
 grad_checkpoint: true
 mixed_precision: "bf16"
-xformers: false  # 用 PyTorch SDPA
+attention_backend: "none"  # 用 PyTorch SDPA（也可选 "xformers" / "flash_attn"）
 cache_latents: true
 ```
 

@@ -6,6 +6,172 @@
 
 ---
 
+## [0.7.0] — 2026-05-14
+
+webui 一键自更新 + 训练栈解构（ADR 0002 / 0003）
+
+### 新增
+
+- **支持 Anima 1.0 主模型（latest 默认指向 1.0）（#61）**
+  上游 `circlestone-labs/Anima` 发布正式 1.0 版本
+  (`split_files/diffusion_models/anima-base-v1.0.safetensors`)。
+
+  - `ANIMA_VARIANTS` 加 `"1.0"` 条目；`LATEST_ANIMA` 切到 `"1.0"`
+  - dict 顺序调整为「latest 在前」——保证 `find_anima_main` fallback +
+    `build_catalog` 给 UI 的 variants 列表顺序符合「最新优先」直觉
+    （之前 [LATEST] + [dict 插入序] 在 LATEST 不在磁盘时会先命中
+    最老变体）
+  - `schema` / `secrets` / `server` / `runtime/training/cli` / 前端
+    Settings 的默认值同步切到 1.0 —— **只影响新装用户 + 未写过
+    secrets.json 的**；已存 version 的 yaml 里 `transformer_path` 是
+    绝对路径不动，保证训练重现性
+
+- **webui 一键自更新：双通道升级面板 + 回滚 + dev 通道（ADR 0002）（#51, #52, #53）**
+  实现 ADR 0002：Settings → 系统 → 版本卡片里完成 git pull / 重启 / 回滚
+  全流程，不用再回命令行。
+
+  - **流派 A**（flag + shell wrapper loop，学 A1111 / SwarmUI）：
+    `tmp/restart` flag + `cli.py` inner loop + `studio.sh / studio.bat`
+    wrapper loop + `POST /api/system/restart`。强制约束：running task 时
+    拒绝 update / restart / rollback
+  - **主路径**：`studio/services/updater.py` + 4 个端点（`/version`
+    `/update_check` `/update` `/preflight`）+ 启动期 `apply_pending()` git
+    reset + 增量 pip / npm install + Topbar update badge
+  - **双通道升级面板**（#52 重设计）：master / dev 并排双卡 + container
+    query 响应式 + 通道徽章（稳定/绿 · 开发版/橙）+ inline preview 面板
+    取代所有 dialog 模态；CHANGELOG.md 解析嵌入卡片；dev 卡 commit
+    timeline 可点击任意 commit 切换
+  - **Pre-flight 4 项检查**：dirty working tree / running tasks /
+    requirements.txt diff / `.last_version` 预览；任一 err → 确认按钮
+    disabled
+  - **回滚 + 失败 banner**：`.update_status` / `.last_version` /
+    `.update_log` + `/api/system/rollback` + master 卡内红色失败 banner +
+    查看完整日志 modal
+  - **dev 通道 toggle**：`SystemConfig.show_dev_channel` 持久化；自动检查
+    只看 master（避免开发者被 dev 高频 commit 持续骚扰 badge），dev 必须
+    手动触发
+  - **installer 自检（exit 42 协议）**：`cli.py` / `studio.sh` /
+    `studio.bat` sha256 比对，任一变化 → cli.py 保留 flag + exit 42，
+    wrapper 看到 exit 42 + tmp/restart 走 exec self
+  - **历史版本显示 tag**（#54 内）：`updater.exact_tag_for(sha)` 用
+    `git describe --tags --exact-match`，命中 → 回滚按钮显示 `v0.6.0`，
+    未命中 fallback 到 sha[:8]
+
+- **训练栈解构 + plugin registry（ADR 0003）（#56, #57, #58）**
+  实现 ADR 0003 全套：`runtime/anima_train.py` 从 2901 行 mega-script 拆到
+  `runtime/training/` 子包（25 个文件，128 行 thin entry）+ 4 个 plugin
+  registry + `AdapterProtocol` hook。**训练行为字节级等价**——LyCORIS 路径
+  所有 hook 都是 no-op；optimizer / scheduler 走同一份 kwargs 经 build
+  wrapper。
+
+  - **PR-A（#56）模块拆分**：bootstrap / observability / model_loading /
+    models / text_encoding / state / dataset / sampling / cli /
+    timestep_sampling / noise / loss_weighting 12 个模块。sister script
+    (anima_daemon / anima_generate / anima_reg_ai) 通过 re-export 契约
+    0 改动继续工作
+  - **PR-B（#57）main() 拆 phase**：793 行 main() → 6 个 phase function
+    (bootstrap / models / dataset / optimizer / resume / finalize) + 1 个
+    train_loop，靠 `TrainingContext` dataclass（43 字段 + 3 方法）串引用。
+    消掉 main() 里 3 处近 75 行重复的 sample 块到 `run_sample` helper
+  - **PR-C（#58）plugin registry + AdapterProtocol**：4 个 plugin 子包
+    (adapters / optimizers / schedulers / inference_samplers) + 显式
+    BUILDERS 字典；3 处 if-elif dispatch 替换成 registry 调用。
+    AdapterProtocol 含 3 个可选 hook（on_step_begin / regularization_loss
+    / excludes_weight_decay）给未来 T-LoRA / OFT / AdaLoRA 留位
+  - **schema↔registry 一致性自动校验**：3 个 plugin 子包暴露
+    `validate_schema_consistency()`，bootstrap_phase 启动期跑一次；漏注册
+    / 漏 schema 早 fail
+  - **加新变体步骤**（详见 [`runtime/training/README.md`](runtime/training/README.md)
+    + ADR 0003 Case 3-6）：写 `training/{plugin}/{variant}.py` 含 build
+    函数 + BUILDERS 字典加一行 + schema Literal 加值，phases / loop / main
+    0 改动
+
+- **训练稳定性：NaN skip + 噪声/loss/timestep 采样 + cross-attn KV trim（#55）**
+  Cherry-pick 自 PR #49（saltysalrua），三方 review 后保留 5 个低风险高价值
+  commit + 4 项我们的加固。**T-LoRA / Ortho-Hydra adapter / 手动 OrthoGrad
+  不进主仓**，放 `experimental/pr49-adapters` 长期 parking lot。
+
+  - **ProdigyPlus 上游 version-compat filter** + `eps=None` 支持 +
+    StableAdamW（修上游 API 飘移 TypeError）
+  - **NaN detection**：loss / grad 非有限时跳过 step；bf16 + Prodigy 偶发
+    spike 不再炸整训练
+  - **时间步相关 loss weighting**：`min_snr` / `detail_inv_t` / `cosmap` +
+    `weight_cap_ratio`
+  - **可配置 timestep sampling**：`logit_normal` / `uniform` /
+    `logit_normal_low` / `mode` + shift
+  - **noise_offset + pyramid_noise** 噪声增强
+  - **cross-attn KV trim**：手术拆 `c5e81c2`，只挑 kv_trim 部分（丢弃
+    T-LoRA 改动）；附带修 `_bucket = 512` 兜底（原代码 `_actual > 512` 时
+    NameError）
+  - **死 T-LoRA dispatch 清理**：原 commit 顺带泄漏的隐性 ImportError 雷
+  - **9 个新字段 description 加簇前缀**：【噪声增强】/【时间步采样】/
+    【损失加权】/【性能】tooltip 看得出归属
+  - **`_filter_kwargs_by_signature` 加白名单**：schema 暴露的 ppsf_* 字段
+    被上游 drop 时显式 raise 而非 silent log（避免 8 小时训练后才发现
+    用户勾选悄悄失效）
+
+- **ProdigyPlusScheduleFree 优化器：解 Prodigy mutation ep 问题（#46）**
+  Prodigy 内部 `d` 估计在 Flow Matching timestep 随机性 + 小数据集 + LoRA
+  低参数量三重噪声下会"跳档"——`d` 是不下降的累积量，一旦异常 batch 推上
+  档，后续整段训练就用更大有效步长。社区调研结论：Flux / Qwen-Image /
+  HiDream / 视频 DiT LoRA 已把 PPSF 作为事实默认（ai-toolkit / SimpleTuner
+  / sd-scripts 三家都接入）。
+
+  - **命名**：`prodigy_plus_schedulefree`（snake_case 全名，避免和未来 vanilla
+    Prodigy 撞名）
+  - **eval/train 切换**：context manager `optimizer_eval_mode()`，比
+    helper pair 更难漏掉一边；所有 `injector.save` 都在 ctx 内 →
+    保存的 .safetensors 是 averaged weights x，直接可用
+  - **scheduler 互斥三层防御**：(a) 前端 disable + 自动 reset → (b)
+    pydantic model_validator → (c) anima_train CLI 启动期 SystemExit
+  - **依赖 pin >=2.0.0**：PPSF v1.9.2 ↔ v2.0.0 state_dict 不兼容
+  - **新 schema 元数据 `disable_when`**：复用 `show_when` 表达式语法；
+    SchemaForm 实现 disabled + hint + force value to default
+
+### 变更
+
+- **Settings 减法：ⓘ tooltip 抽 InfoButton + help text 精简 + 历史显示 tag（#54）**
+  - **`InfoButton` 组件**：click-toggle ⓘ 弹层，外部 click / Esc 关；
+    button stopPropagation 防止放在 `<summary>` 里触发外层 toggle；新
+    `styles/info-button.css` 中性 `.info-btn-*` 前缀
+  - **应用 tooltip 化**：ServiceSection 重启说明 / WD14 / CLTagger /
+    anima_main 模型卡 description / xformers 互斥说明 / Layer 1 长 desc
+    7 项（hf endpoint / wandb 节流等）全部从 inline `<p>` / `desc=` 移到
+    label / title 旁的 ⓘ
+  - **`SettingsField` / `ModelGroupCard` 加 `helpTooltip` slot**；
+    `SettingsSection` 已有 `headerExtras` slot（PR #53）
+  - **删冗余**：wandb「需要训练环境已安装 wandb 包」提示删除（错误位置，
+    该提示应在 wandb 实际报错时显示）
+
+### 改进
+
+- **训练页：内联新建预设 + tag chip 拖拽排序 + CNB→「下载训练集」（#47）**
+  4 个独立小 polish 合一 PR：
+
+  - **内联新建预设**：训练页 picker grid 加「+ 新建预设」虚线卡片，
+    点击切到 SchemaForm 内联表单（名字默认 `<slug>_<label>`，描述存
+    localStorage）。之前用户只能跳走 `/tools/presets` 创建再跳回来
+  - **tag chip 拖拽重排**：dnd-kit PointerSensor + 6px 启动距离 → 拖拽
+    不跟「点 × 删除」冲突；`addTag` 改加到末尾（跟拖拽心智一致）
+  - **「导出给 CNB」→「下载训练集」**：按钮文字 / toast / title / 函数名
+    (`exportForCnb` → `downloadTrainZip`) 全部去 CNB 绑定
+  - **optimizer description 清理**：删「需 pip install prodigyopt」字样
+    （两个包都已在 requirements.txt）
+
+- **应用风格 dialog 替换 22 处 window.confirm/prompt/alert + topbar/sidebar polish（#48）**
+  - **`useDialog()` hook**：`src/components/Dialog.tsx` 命令式 confirm /
+    prompt / alert，promise-based；tone (default / danger / warn) 控制
+    确认按钮颜色；ESC + 点遮罩 = 取消；prompt 含同步 validate
+  - **22 处替换**：Train / Settings / Queue / Projects / Layout / Presets
+    / SaveBar / Regularization / Curation / Download；危险操作（不可逆
+    删除）走 danger，大动作（装包等系统级）走 warn
+  - **topbar 搜索 icon 移最右**：有训练任务时不再被胶囊推得左右跳
+  - **sidebar 进项目不再自动折叠**：手动折叠走 sessionStorage 持久
+  - **overview 选版本跳 download + 复用 NewVersionDialog**：
+    删 `window.prompt`，支持 fork from + 自动 activate
+
+---
+
 ## [0.6.0] — 2026-05-12
 
 LLM tagger + 训练监控可观测性 + Settings 页面体系重排
