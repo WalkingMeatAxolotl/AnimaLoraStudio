@@ -1,7 +1,127 @@
-"""dataset_phase：占位，PR-B commit 4 填实现。"""
+"""dataset_phase：build datasets + dataloader + VAE roundtrip 自检。
+
+抽自 main() L257-342（ADR 0003 PR-B）。
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from pathlib import Path
+
+import torch
+from torch.utils.data import DataLoader
 
 from training.context import TrainingContext
+from training.dataset import (
+    BucketBatchSampler,
+    BucketManager,
+    CachedLatentDataset,
+    ImageDataset,
+    MergedDataset,
+    collate_fn,
+    collate_fn_cached,
+)
+
+
+logger = logging.getLogger(__name__)
 
 
 def run(ctx: TrainingContext) -> None:
-    raise NotImplementedError("dataset_phase 尚未实现（PR-B commit 4）")
+    """
+    - 主数据集 / 正则数据集 + per-folder repeat
+    - cache_latents 包 CachedLatentDataset
+    - MergedDataset 串联主集 + 正则集
+    - Windows num_workers > 0 兜底为 0（多进程 spawn 易崩）
+    - BucketBatchSampler / DataLoader
+    - VAE encode-decode 循环自检（vae_roundtrip.png）
+    """
+    args = ctx.args
+
+    # 数据集
+    ctx.bucket_mgr = BucketManager(args.resolution)
+    ctx.base_dataset = ImageDataset(
+        args.data_dir, args.resolution, ctx.bucket_mgr,
+        shuffle_caption=args.shuffle_caption,
+        keep_tokens=args.keep_tokens,
+        flip_augment=args.flip_augment,
+        tag_dropout=args.tag_dropout,
+        prefer_json=args.prefer_json,
+    )
+    ctx.dataset = ctx.base_dataset
+
+    # 正则数据集（Kohya 风格，防过拟合）
+    reg_data_dir = getattr(args, "reg_data_dir", "") or ""
+    ctx.reg_dataset = None
+    if reg_data_dir:
+        if not Path(reg_data_dir).exists():
+            logger.warning(f"正则数据集路径不存在，已跳过: {reg_data_dir}")
+        elif len(ctx.base_dataset) == 0:
+            logger.warning("主数据集为空，正则集已跳过")
+        else:
+            reg_caption = (getattr(args, "reg_caption", "") or "").strip()
+            reg_base = ImageDataset(
+                reg_data_dir, args.resolution, ctx.bucket_mgr,
+                shuffle_caption=args.shuffle_caption,
+                keep_tokens=args.keep_tokens,
+                flip_augment=args.flip_augment,
+                tag_dropout=0.0,  # 正则集通常不用 dropout
+                prefer_json=args.prefer_json,
+                caption_override=reg_caption if reg_caption else None,
+            )
+            ctx.reg_dataset = reg_base
+            reg_weight = float(getattr(args, "reg_weight", 1.0) or 1.0)
+            cap_preview = f", caption=\"{reg_caption[:50]}{'...' if len(reg_caption) > 50 else ''}\"" if reg_caption else ""
+            weight_info = f", weight={reg_weight}" if reg_weight != 1.0 else ""
+            logger.info(f"正则数据集: {reg_data_dir} ({len(reg_base)} 样本, per-folder repeat{weight_info}){cap_preview}")
+
+    # 缓存 VAE latents（在 repeat 之前）
+    ctx.use_cached = getattr(args, "cache_latents", False)
+    if ctx.use_cached:
+        ctx.dataset = CachedLatentDataset(ctx.dataset, ctx.vae, ctx.device, ctx.dtype)
+    if ctx.reg_dataset is not None and ctx.use_cached:
+        ctx.reg_dataset = CachedLatentDataset(ctx.reg_dataset, ctx.vae, ctx.device, ctx.dtype)
+
+    # repeat: 主数据集和正则数据集均通过文件夹名 Kohya 风格 repeat（如 5_concept），无需全局 repeat
+    if ctx.reg_dataset is not None:
+        reg_weight = float(getattr(args, "reg_weight", 1.0) or 1.0)
+        ctx.dataset = MergedDataset(ctx.dataset, ctx.reg_dataset, reg_weight=reg_weight)
+
+    if args.num_workers > 0 and os.name == "nt":
+        logger.warning("num_workers > 0 在 Windows 上容易崩溃：已强制设为 0（避免多进程 spawn 问题）")
+        args.num_workers = 0
+
+    if ctx.use_cached:
+        batch_sampler = BucketBatchSampler(
+            ctx.dataset, batch_size=args.batch_size,
+            drop_last=True, shuffle=True,
+            seed=getattr(args, "seed", 42),
+        )
+        ctx.dataloader = DataLoader(
+            ctx.dataset, batch_sampler=batch_sampler,
+            collate_fn=collate_fn_cached,
+            num_workers=args.num_workers,
+        )
+    else:
+        ctx.dataloader = DataLoader(
+            ctx.dataset, batch_size=args.batch_size,
+            shuffle=True,
+            collate_fn=collate_fn,
+            num_workers=args.num_workers,
+        )
+
+    # 训练前自检：VAE encode->decode 循环（快速排除 VAE/scale/shape 问题）
+    try:
+        if len(ctx.base_dataset) > 0:
+            from PIL import Image
+            item0 = ctx.base_dataset[0]
+            pixels0 = item0["pixel_values"].unsqueeze(0).to(ctx.device, dtype=ctx.dtype)  # [1,3,H,W]
+            with torch.no_grad():
+                z0 = ctx.vae.model.encode(pixels0.unsqueeze(2), ctx.vae.scale)   # [1,16,1,h,w]
+                recon0 = ctx.vae.model.decode(z0, ctx.vae.scale).squeeze(2)      # [1,3,H,W]
+                recon0 = (recon0.clamp(-1, 1) + 1) / 2
+            arr0 = (recon0[0].permute(1, 2, 0).detach().cpu().float().numpy() * 255).clip(0, 255).astype("uint8")
+            Image.fromarray(arr0).save(ctx.sample_dir / "vae_roundtrip.png")
+            logger.info("VAE roundtrip 自检已保存: samples/vae_roundtrip.png")
+    except Exception as e:
+        logger.warning(f"VAE roundtrip 自检失败（若 sample 仍是噪点，请优先修这个）: {e}")
