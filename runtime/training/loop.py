@@ -27,7 +27,6 @@ from training.text_encoding import (
     encode_qwen,
     tokenize_t5_weighted,
 )
-from training.timestep_sampling import sample_t
 from utils.optimizer_utils import optimizer_eval_mode
 
 
@@ -87,15 +86,9 @@ def run(ctx: TrainingContext) -> None:
                             break
                     cross = cross[:, :_bucket, :].contiguous()
 
-            # Flow Matching
-            if ctx.info_noise is not None:
-                t = ctx.info_noise.sample(bs, ctx.device)
-            else:
-                t = sample_t(
-                    bs, ctx.device,
-                    mode=str(getattr(args, "timestep_sampling", "logit_normal") or "logit_normal"),
-                    shift=float(getattr(args, "timestep_shift", 3.0) or 3.0),
-                )
+            # Flow Matching：统一通过 timestep_sampler plugin 接口采样
+            # （baseline = 4 种 mode；adaptive = InfoNoise 等；接口在 ADR 0003 plugin registry）
+            t = ctx.timestep_sampler.sample(bs, ctx.device)
 
             # PR-C：adapter hook — 允许变体按 sigma_t / step 调整运行时结构
             # （T-LoRA / AdaLoRA / B-LoRA 等）。LyCORIS 走默认 no-op。
@@ -127,12 +120,12 @@ def run(ctx: TrainingContext) -> None:
                     use_checkpoint=args.grad_checkpoint,
                 )
                 loss_per_sample = F.mse_loss(pred.float(), target.float(), reduction="none")
-                # InfoNoise：记录原始 per-sample MSE（加权前）
-                if ctx.info_noise is not None:
-                    _raw_mse = loss_per_sample.detach().mean(
-                        dim=list(range(1, loss_per_sample.dim()))
-                    )
-                    ctx.info_noise.record(t.detach(), _raw_mse)
+                # 自适应采样器（如 InfoNoise）记录原始 per-sample MSE（加权前）；
+                # baseline 采样器是 no-op，无需 if 守卫。
+                _raw_mse = loss_per_sample.detach().mean(
+                    dim=list(range(1, loss_per_sample.dim()))
+                )
+                ctx.timestep_sampler.record(t.detach(), _raw_mse)
                 # 按样本加权（正则集可降低权重）
                 if "loss_weight" in batch:
                     w = batch["loss_weight"].to(ctx.device).view(-1, *([1] * (loss_per_sample.dim() - 1)))
@@ -184,9 +177,8 @@ def run(ctx: TrainingContext) -> None:
                 ctx.optimizer.zero_grad()
                 ctx.global_step += 1
 
-                # InfoNoise：刷新采样分布
-                if ctx.info_noise is not None:
-                    ctx.info_noise.maybe_refresh(ctx.global_step)
+                # 自适应采样器：刷新采样分布；baseline 是 no-op
+                ctx.timestep_sampler.maybe_refresh(ctx.global_step)
 
                 # 记录 loss 历史
                 loss_val = float(loss.item() * args.grad_accum)
@@ -219,9 +211,12 @@ def run(ctx: TrainingContext) -> None:
                     "train/lr": float(lr),
                     "train/speed_it_s": float(ctx.speed_ema or 0),
                 }
-                # InfoNoise 可观测性（P1-1）：CDF 是否就绪 + 退化次数
-                if ctx.info_noise is not None and ctx.global_step % args.log_every == 0:
-                    status = ctx.info_noise.status()
+                # 自适应采样器可观测性（P1-1）：CDF 是否就绪 + 退化次数
+                if (
+                    ctx.global_step % args.log_every == 0
+                    and ctx.timestep_sampler.status().get("kind") == "infonoise"
+                ):
+                    status = ctx.timestep_sampler.status()
                     log_payload["infonoise/cdf_ready"] = float(status["cdf_ready"])
                     log_payload["infonoise/refresh_degraded_count"] = status["refresh_degraded_count"]
                 ctx.wandb_monitor.log(log_payload, step=ctx.global_step)

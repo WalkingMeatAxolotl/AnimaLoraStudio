@@ -61,7 +61,7 @@ class TrainingContext:
     steps_per_epoch: Optional[int] = None
     total_steps: Optional[int] = None
     scheduler: Any = None
-    info_noise: Any = None          # training.infonoise.InfoNoiseScheduler | None
+    timestep_sampler: Any = None    # training.timestep_samplers.TimestepSamplerProtocol
 
     # ─── resume_phase 填充 ───
     global_step: int = 0

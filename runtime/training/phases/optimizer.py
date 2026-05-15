@@ -73,6 +73,6 @@ def run(ctx: TrainingContext) -> None:
     from training.schedulers import build_scheduler
     ctx.scheduler = build_scheduler(args, ctx.optimizer, ctx.total_steps)
 
-    # InfoNoise 自适应调度器（total_steps 确定后才能算 N_warm）
-    from training.infonoise import build_info_noise
-    ctx.info_noise = build_info_noise(args, ctx.total_steps)
+    # Timestep 采样器（baseline 或 InfoNoise；total_steps 确定后才能算 N_warm）
+    from training.timestep_samplers import build_timestep_sampler
+    ctx.timestep_sampler = build_timestep_sampler(args, ctx.total_steps)

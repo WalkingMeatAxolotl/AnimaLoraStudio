@@ -19,7 +19,9 @@ import numpy as np
 import pytest
 import torch
 
-from training.infonoise import InfoNoiseScheduler, build_info_noise
+from training.timestep_samplers import build_timestep_sampler
+from training.timestep_samplers.infonoise import InfoNoiseScheduler
+from training.timestep_samplers.infonoise import build as build_info_noise
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +151,7 @@ def test_cold_start_warning_emits_once(caplog):
             s._n_count[k] = 2
     s._internal_step = 100  # 装作已过 warmup
 
-    with caplog.at_level(logging.WARNING, logger="training.infonoise"):
+    with caplog.at_level(logging.WARNING, logger="training.timestep_samplers.infonoise"):
         s.maybe_refresh(global_step=1)
         s.maybe_refresh(global_step=2)
         s.maybe_refresh(global_step=3)
@@ -163,12 +165,14 @@ def test_status_dict_shape():
     s = InfoNoiseScheduler(K=4, N_warm=10, M=5, B=2, N_min=1)
     status = s.status()
     assert set(status.keys()) == {
+        "kind",
         "cdf_ready",
         "last_refresh_status",
         "refresh_attempts",
         "refresh_degraded_count",
         "internal_step",
     }
+    assert status["kind"] == "infonoise"
     assert status["cdf_ready"] is False
     assert status["last_refresh_status"] == "not_refreshed_yet"
 
@@ -184,9 +188,16 @@ class _FakeArgs:
             setattr(self, k, v)
 
 
-def test_build_info_noise_disabled_returns_none():
-    args = _FakeArgs(infonoise_enabled=False)
-    assert build_info_noise(args, total_steps=1000) is None
+def test_build_timestep_sampler_disabled_returns_baseline():
+    """P2-1 plugin registry：未启用 InfoNoise 时统一走 baseline（非 None）。"""
+    args = _FakeArgs(
+        infonoise_enabled=False,
+        timestep_sampling="logit_normal",
+        timestep_shift=3.0,
+    )
+    sampler = build_timestep_sampler(args, total_steps=1000)
+    assert sampler is not None
+    assert sampler.status()["kind"] == "baseline"
 
 
 def test_build_info_noise_n_warm_auto_20_pct():

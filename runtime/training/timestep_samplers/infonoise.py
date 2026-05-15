@@ -135,6 +135,7 @@ class InfoNoiseScheduler:
     def status(self) -> dict:
         """暴露当前 scheduler 状态（给 wandb 监控 / debug 用）。"""
         return {
+            "kind": "infonoise",
             "cdf_ready": self._cdf_values is not None,
             "last_refresh_status": self._last_refresh_status,
             "refresh_attempts": self._refresh_attempts,
@@ -194,11 +195,12 @@ class InfoNoiseScheduler:
         self._last_refresh_status = "ok"
 
 
-def build_info_noise(args, total_steps: Optional[int]) -> Optional[InfoNoiseScheduler]:
-    """按 args 构建 InfoNoiseScheduler；未启用时返回 None。"""
-    if not getattr(args, "infonoise_enabled", False):
-        return None
+def build(args, total_steps: Optional[int]) -> InfoNoiseScheduler:
+    """按 args 构建 InfoNoiseScheduler。
 
+    调用方应已经判定 args.infonoise_enabled == True；这里不再重复判（让
+    timestep_samplers.__init__.build_timestep_sampler 统一做派发判定）。
+    """
     n_warm_cfg = int(getattr(args, "infonoise_N_warm", 0) or 0)
     if n_warm_cfg <= 0:
         n_warm_cfg = max(200, int((total_steps or 5000) * 0.2))
