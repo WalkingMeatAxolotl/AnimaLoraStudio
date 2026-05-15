@@ -363,8 +363,8 @@ class TrainingConfig(BaseModel):
         description="【时间步采样】分布（logit_normal 为 SD3/Anima 默认）",
         json_schema_extra=_meta(
             "noise_schedule",
-            disable_when="infonoise_enabled==true",
-            disable_hint="InfoNoise 接管采样",
+            alt_description="【时间步采样】分布；InfoNoise 启用时作为热身期 baseline，正式阶段由自适应 CDF 接管",
+            alt_description_when="infonoise_enabled==true",
             advanced=True,
         ),
     )
