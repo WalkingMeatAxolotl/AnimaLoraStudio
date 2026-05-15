@@ -10,6 +10,7 @@ import {
   type Version,
 } from '../../../api/client'
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
+import ImagePreviewModal from '../../../components/ImagePreviewModal'
 import StepShell from '../../../components/StepShell'
 import { useDialog } from '../../../components/Dialog'
 import { useToast } from '../../../components/Toast'
@@ -81,6 +82,8 @@ export default function PreprocessPage() {
   const [pendingAnchor, setPendingAnchor] = useState<string | null>(null)
   const [processedSel, setProcessedSel] = useState<Set<string>>(new Set())
   const [processedAnchor, setProcessedAnchor] = useState<string | null>(null)
+  // 大图预览：bucket + index 引用 processedNames / pendingNames
+  const [preview, setPreview] = useState<{ bucket: 'processed' | 'pending'; idx: number } | null>(null)
 
   // 模型权重就绪状态（catalog 取一次，下载完成后用户手动刷新或 SSE 更新）
   const [allUpscalers, setAllUpscalers] = useState<UpscalerVariant[]>([])
@@ -368,6 +371,10 @@ export default function PreprocessPage() {
                 setProcessedSel(r.next)
                 setProcessedAnchor(r.anchor)
               }}
+              onPreview={(name) => {
+                const i = processedNames.indexOf(name)
+                if (i >= 0) setPreview({ bucket: 'processed', idx: i })
+              }}
               onSelectAll={() => setProcessedSel(new Set(processedNames))}
               onClear={() => {
                 setProcessedSel(new Set())
@@ -384,6 +391,10 @@ export default function PreprocessPage() {
                 const r = applySelection(pendingSel, name, e, pendingNames, pendingAnchor)
                 setPendingSel(r.next)
                 setPendingAnchor(r.anchor)
+              }}
+              onPreview={(name) => {
+                const i = pendingNames.indexOf(name)
+                if (i >= 0) setPreview({ bucket: 'pending', idx: i })
               }}
               onSelectAll={() => setPendingSel(new Set(pendingNames))}
               onClear={() => {
@@ -404,6 +415,32 @@ export default function PreprocessPage() {
           />
         </div>
       </div>
+
+      {preview && (() => {
+        const names = preview.bucket === 'processed' ? processedNames : pendingNames
+        const name = names[preview.idx]
+        if (!name) return null
+        const src =
+          preview.bucket === 'processed'
+            ? api.preprocessThumbUrl(project.id, name, 1600)
+            : api.projectThumbUrl(project.id, name, 'download', 1600)
+        return (
+          <ImagePreviewModal
+            src={src}
+            caption={name}
+            hasPrev={preview.idx > 0}
+            hasNext={preview.idx < names.length - 1}
+            onClose={() => setPreview(null)}
+            onPrev={() =>
+              preview.idx > 0 && setPreview({ ...preview, idx: preview.idx - 1 })
+            }
+            onNext={() =>
+              preview.idx < names.length - 1 &&
+              setPreview({ ...preview, idx: preview.idx + 1 })
+            }
+          />
+        )
+      })()}
     </StepShell>
   )
 }
@@ -639,6 +676,7 @@ function ProcessedSection({
   items,
   selected,
   onSelect,
+  onPreview,
   onSelectAll,
   onClear,
   onDelete,
@@ -646,6 +684,7 @@ function ProcessedSection({
   items: { name: string; thumbUrl: string; meta?: string }[]
   selected: Set<string>
   onSelect: (name: string, e: React.MouseEvent) => void
+  onPreview: (name: string) => void
   onSelectAll: () => void
   onClear: () => void
   onDelete: () => void
@@ -681,6 +720,9 @@ function ProcessedSection({
           items={items}
           selected={selected}
           onSelect={onSelect}
+          onActivate={onPreview}
+          onPreview={onPreview}
+          clickMode="activate"
           ariaLabel="preprocess-processed-grid"
           emptyHint="还没有产物 — 点击上方「放大全部 N」"
         />
@@ -693,12 +735,14 @@ function PendingSection({
   items,
   selected,
   onSelect,
+  onPreview,
   onSelectAll,
   onClear,
 }: {
   items: { name: string; thumbUrl: string }[]
   selected: Set<string>
   onSelect: (name: string, e: React.MouseEvent) => void
+  onPreview: (name: string) => void
   onSelectAll: () => void
   onClear: () => void
 }) {
@@ -727,6 +771,9 @@ function PendingSection({
           items={items}
           selected={selected}
           onSelect={onSelect}
+          onActivate={onPreview}
+          onPreview={onPreview}
+          clickMode="activate"
           ariaLabel="preprocess-pending-grid"
           emptyHint="所有图都已预处理 ✓"
         />
