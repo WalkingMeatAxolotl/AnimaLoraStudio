@@ -96,9 +96,31 @@ def _list_image_entries(d: Path) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+def _active_left_dir(pdir: Path) -> tuple[Path, str]:
+    """决定 curate 左侧用哪个源目录。
+
+    `preprocess/` 非空（>=1 张图）→ 用 preprocess/，否则用 download/。
+    这样下载完没跑预处理时行为不变；跑完预处理后左侧自动切到产物。
+    """
+    pre = pdir / "preprocess"
+    if pre.exists():
+        for f in pre.iterdir():
+            if f.is_file() and f.suffix.lower() in IMAGE_EXTS:
+                return pre, "preprocess"
+    return pdir / "download", "download"
+
+
 def list_download(conn, project_id: int) -> list[dict[str, Any]]:
+    """[兼容] 始终返回 download/ 列表（preprocess 后引入了 list_left_source）。"""
     p, pdir = _project_dir(conn, project_id)
     return _list_image_entries(pdir / "download")
+
+
+def list_left_source(conn, project_id: int) -> tuple[list[dict[str, Any]], str]:
+    """返回 (列表, 源标签)：预处理产物存在时优先 preprocess/，否则 download/。"""
+    p, pdir = _project_dir(conn, project_id)
+    src, label = _active_left_dir(pdir)
+    return _list_image_entries(src), label
 
 
 def list_train(
@@ -116,19 +138,24 @@ def list_train(
 
 
 def curation_view(conn, project_id: int, version_id: int) -> dict[str, Any]:
-    """前端用：left = download − train，right = train 按 folder 分组。
+    """前端用：left = active_source − train，right = train 按 folder 分组。
 
-    每个文件返回 `{name, mtime}`；前端用 mtime 提供「按下载时间」排序。
+    active_source = preprocess/ 若已有产物，否则 download/。`left_source` 字段
+    告诉前端缩略图要走哪个 endpoint。
+
+    每个文件返回 `{name, mtime}`；前端用 mtime 提供「按时间」排序。
     """
-    download = list_download(conn, project_id)
+    left, left_source = list_left_source(conn, project_id)
     train = list_train(conn, project_id, version_id)
     used: set[str] = set()
     for files in train.values():
         used.update(e["name"] for e in files)
     return {
-        "left": [e for e in download if e["name"] not in used],
+        "left": [e for e in left if e["name"] not in used],
         "right": train,
-        "download_total": len(download),
+        "left_source": left_source,
+        # download_total 保留语义：左侧候选总数（与历史 API 兼容）
+        "download_total": len(left),
         "train_total": sum(len(v) for v in train.values()),
         "folders": list(train.keys()),
     }
@@ -156,7 +183,9 @@ def copy_to_train(
     """
     _validate_folder(dest_folder)
     p, _, train = _version_train_dir(conn, project_id, version_id)
-    src_dir = projects.project_dir(p["id"], p["slug"]) / "download"
+    pdir = projects.project_dir(p["id"], p["slug"])
+    # 与 curation_view 的左侧源保持一致：preprocess/ 有产物时从那拷，否则 download/。
+    src_dir, _label = _active_left_dir(pdir)
     dst_dir = train / dest_folder
     dst_dir.mkdir(parents=True, exist_ok=True)
 

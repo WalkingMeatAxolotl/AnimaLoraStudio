@@ -371,9 +371,13 @@ class ModelsConfig(BaseModel):
     - `selected_anima`：当前默认主模型 variant。Studio 创建新 version 时根据
       此字段把 `transformer_path` 写成绝对路径到 yaml；已存在 version 不动
       （保证训练重现性）。
+    - `selected_upscaler`：预处理默认放大器。可为预设 label（如 "4x-AnimeSharp"）
+      或自定义/上传的文件名（如 "my-anime-model.pth"）。空串/None → 用
+      DEFAULT_UPSCALER 兜底。
     """
     root: Optional[str] = None
     selected_anima: str = "1.0"
+    selected_upscaler: str = "4x-AnimeSharp"
 
 
 class GenerateConfig(BaseModel):

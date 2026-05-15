@@ -23,7 +23,7 @@ PROJECTS_DIR = STUDIO_DATA / "projects"
 TRASH_DIR = STUDIO_DATA / "_trash" / "projects"
 
 VALID_STAGES: frozenset[str] = frozenset({
-    "created", "downloading", "curating", "tagging",
+    "created", "downloading", "preprocessing", "curating", "tagging",
     "regularizing", "configured", "training", "done",
 })
 
@@ -107,6 +107,7 @@ def create_project(
     pid = int(cur.lastrowid)
     pdir = project_dir(pid, final_slug)
     (pdir / "download").mkdir(parents=True, exist_ok=True)
+    (pdir / "preprocess").mkdir(parents=True, exist_ok=True)
     (pdir / "versions").mkdir(parents=True, exist_ok=True)
     p = _must_get(conn, pid)
     _write_project_json(p)
@@ -213,18 +214,23 @@ def advance_stage(
 
 
 def stats_for_project(p: dict[str, Any]) -> dict[str, Any]:
-    """轻量统计：download/ 下的图片数量。version 级统计在 versions.py。"""
+    """轻量统计：download/ 与 preprocess/ 下的图片数量。version 级统计在 versions.py。"""
     from .datasets import IMAGE_EXTS  # 复用既有扩展名集
 
     pdir = project_dir(p["id"], p["slug"])
-    download = pdir / "download"
-    if not download.exists():
-        return {"download_image_count": 0}
-    cnt = sum(
-        1 for f in download.iterdir()
-        if f.is_file() and f.suffix.lower() in IMAGE_EXTS
-    )
-    return {"download_image_count": cnt}
+
+    def _count(d: Path) -> int:
+        if not d.exists():
+            return 0
+        return sum(
+            1 for f in d.iterdir()
+            if f.is_file() and f.suffix.lower() in IMAGE_EXTS
+        )
+
+    return {
+        "download_image_count": _count(pdir / "download"),
+        "preprocess_image_count": _count(pdir / "preprocess"),
+    }
 
 
 def projects_with_stats(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:

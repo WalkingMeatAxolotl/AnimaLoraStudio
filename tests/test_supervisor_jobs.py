@@ -272,3 +272,52 @@ def test_cancel_pending_job(isolated) -> None:
     with db.connection_for(isolated["db"]) as conn:
         got = project_jobs.get_job(conn, job["id"])
     assert got["status"] == "canceled"
+
+
+def test_worker_event_marker_lines_publish_typed_events(isolated) -> None:
+    """Worker 写 `__EVENT__:type:json` → supervisor 解析后 publish typed SSE 事件，
+    并且不让标记行进入 job_log。给前端"无轮询的实时进度"用。"""
+    p = _setup_project(isolated)
+    events: list[dict] = []
+    # worker 模拟：先打一条普通日志，再打两条事件标记，再退出
+    cmd = [
+        sys.executable, "-c",
+        'import json; print("hello"); '
+        'print("__EVENT__:preprocess_progress:" + json.dumps({"idx":1,"total":3,"status":"done"})); '
+        'print("__EVENT__:preprocess_progress:" + json.dumps({"idx":2,"total":3,"status":"done"}))',
+    ]
+    sup = Supervisor(
+        on_event=events.append,
+        job_cmd_builder=lambda _j: cmd,
+        db_path=isolated["db"],
+        logs_dir=isolated["logs"],
+        poll_interval=0.05,
+        terminate_grace=2.0,
+    )
+    with db.connection_for(isolated["db"]) as conn:
+        job = project_jobs.create_job(
+            conn, project_id=p["id"], kind="download", params={}
+        )
+    sup.start()
+    try:
+        assert _wait_until(
+            lambda: any(
+                e.get("type") == "job_state_changed" and e.get("status") == "done"
+                for e in events
+            )
+        )
+    finally:
+        sup.stop(timeout=5.0)
+
+    progress = [e for e in events if e.get("type") == "preprocess_progress"]
+    assert len(progress) == 2
+    assert progress[0]["idx"] == 1 and progress[0]["total"] == 3
+    assert progress[1]["idx"] == 2
+    # job_id / project_id 由 supervisor 自动注入，不依赖 worker 传
+    assert progress[0]["job_id"] == job["id"]
+    assert progress[0]["project_id"] == p["id"]
+
+    # 标记行不进 job_log；只有"hello"应该出现
+    log_texts = [e.get("text", "") for e in events if e.get("type") == "job_log_appended"]
+    assert any("hello" in t for t in log_texts)
+    assert not any("__EVENT__" in t for t in log_texts)

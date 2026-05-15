@@ -47,10 +47,11 @@ type Section =
   | 'queue'
   | 'generate'
 
-type Tab = 'dataset' | 'tagging' | 'training' | 'monitor' | 'testing' | 'appearance' | 'system'
+type Tab = 'dataset' | 'tagging' | 'preprocess' | 'training' | 'monitor' | 'testing' | 'appearance' | 'system'
 
 const TAB_LIST: { id: Tab; label: string }[] = [
   { id: 'dataset', label: '数据集' },
+  { id: 'preprocess', label: '预处理' },
   { id: 'tagging', label: '打标' },
   { id: 'training', label: '训练' },
   { id: 'monitor', label: '监控' },
@@ -66,6 +67,9 @@ const TAB_SECTIONS: Record<Tab, { id: string; label: string }[]> = {
     { id: 'gelbooru', label: 'Gelbooru' },
     { id: 'danbooru', label: 'Danbooru' },
     { id: 'download-global', label: '下载（全局）' },
+  ],
+  preprocess: [
+    { id: 'upscalers', label: '放大器' },
   ],
   tagging: [
     { id: 'llm-tagger', label: 'LLM Tagger' },
@@ -143,7 +147,7 @@ function getStoredTab(): Tab {
   try {
     const v = localStorage.getItem(TAB_STORAGE_KEY)
     if (
-      v === 'dataset' || v === 'tagging' || v === 'training'
+      v === 'dataset' || v === 'tagging' || v === 'preprocess' || v === 'training'
       || v === 'monitor' || v === 'testing' || v === 'appearance'
       || v === 'system'
     ) return v
@@ -207,7 +211,7 @@ const EMPTY: Secrets = {
     blacklist_tags: [],
     batch_size: 8,
   },
-  models: { root: null, selected_anima: '1.0' },
+  models: { root: null, selected_anima: '1.0', selected_upscaler: '4x-AnimeSharp' },
   queue: { allow_gpu_during_train: false },
   generate: { preview_every_n_steps: 3, attention_backend: 'auto' },
   system: { show_dev_channel: false },
@@ -930,6 +934,15 @@ export default function SettingsPage() {
       </SettingsSection>
       </>)}
 
+      {tab === 'preprocess' && (
+        <UpscalerSection
+          catalog={catalog}
+          busy={downloadBusy}
+          start={startDownload}
+          reloadCatalog={reloadCatalog}
+        />
+      )}
+
       {tab === 'testing' && (<>
         {/* attention 后端走全局 auto-detect，UI 不暴露切换；想强制覆盖
             的高级用户改 secrets.json 的 generate.attention_backend
@@ -1562,6 +1575,201 @@ function ModelsSection({ catalog, busy, start, reloadCatalog, catalogError }: {
               </summary>
               <div className="mt-1 flex flex-col gap-2">
                 {Object.values(catalog.downloads).map((d) => (
+                  <div key={d.key} className="rounded-sm border border-subtle bg-sunken p-2">
+                    <div className="flex items-center gap-2 mb-1">
+                      <code className="font-mono text-fg-secondary">{d.key}</code>
+                      <ModelStatusBadge exists={d.status === 'done'} size={0} status={d.status} />
+                      {d.message && <span className="text-err overflow-hidden text-ellipsis whitespace-nowrap">{d.message}</span>}
+                    </div>
+                    <pre className="text-xs font-mono text-fg-tertiary max-h-32 overflow-auto whitespace-pre-wrap m-0">
+                      {d.log_tail.join('\n') || '(等待日志...)'}
+                    </pre>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+        </div>
+      )}
+    </SettingsSection>
+  )
+}
+
+function UpscalerSection({
+  catalog, busy, start, reloadCatalog,
+}: {
+  catalog: ModelsCatalog | null
+  busy: Set<string>
+  start: (model_id: string, variant?: string) => Promise<void>
+  reloadCatalog: () => Promise<void>
+}) {
+  const { toast } = useToast()
+  const [customSource, setCustomSource] = useState<'hf' | 'ms'>('hf')
+  const [customRepo, setCustomRepo] = useState('')
+  const [customFile, setCustomFile] = useState('')
+  const [customBusy, setCustomBusy] = useState(false)
+
+  const pickUpscaler = async (label: string) => {
+    try {
+      await api.selectUpscaler(label)
+      toast(`默认放大器: ${label}`, 'success')
+      await reloadCatalog()
+    } catch (e) {
+      toast(String(e), 'error')
+    }
+  }
+
+  const submitCustom = async () => {
+    const repo = customRepo.trim()
+    const file = customFile.trim()
+    if (!repo || !file) {
+      toast('仓库 / 文件名都要填', 'error')
+      return
+    }
+    setCustomBusy(true)
+    try {
+      await api.startUpscalerCustomDownload({
+        source: customSource, repo_id: repo, filename: file,
+      })
+      toast(`开始下载 ${file}`, 'success')
+      setCustomRepo('')
+      setCustomFile('')
+      // SSE 推 model_download_changed 会刷 catalog；这里兜底
+      setTimeout(() => void reloadCatalog(), 1500)
+    } catch (e) {
+      toast(String(e), 'error')
+    } finally {
+      setCustomBusy(false)
+    }
+  }
+
+  const variants = catalog?.upscalers?.variants ?? []
+  const current = catalog?.upscalers?.current ?? ''
+
+  return (
+    <SettingsSection id="upscalers" title="放大器（预处理）">
+      {!catalog ? (
+        <p className="text-fg-tertiary text-xs">加载中...</p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          <ModelGroupCard
+            title="可用放大器"
+            helpTooltip={
+              <>
+                <p>预处理阶段对小图做超分。文件落在 <code>{catalog.upscalers?.target_dir}</code>。</p>
+                <p>单选选中的就是预处理页默认用的模型。custom 是从下面表单或之前自定义下载来的。</p>
+              </>
+            }
+          >
+            <ul className="list-none m-0 p-0 flex flex-col gap-1">
+              {variants.map((v) => {
+                const key = v.kind === 'custom'
+                  ? `upscaler:custom:${v.filename}`
+                  : `upscaler:${v.label}`
+                const dl = catalog.downloads[key]
+                const isSel = v.label === current
+                const canSelect = v.exists && dl?.status !== 'running'
+                return (
+                  <li key={v.label} className={`flex items-center gap-2 text-xs px-1.5 py-1 rounded-sm ${
+                    isSel ? 'bg-accent-soft border border-accent' : 'bg-transparent border border-transparent'
+                  }`}>
+                    <input
+                      type="radio"
+                      name="selected_upscaler"
+                      checked={isSel}
+                      disabled={!canSelect}
+                      onChange={() => void pickUpscaler(v.label)}
+                      className="shrink-0"
+                      style={{ accentColor: 'var(--accent)' }}
+                      title={canSelect ? '选作预处理默认' : v.exists ? '下载中...' : '未下载'}
+                    />
+                    <div className="flex flex-col min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <code className="font-mono text-fg-primary truncate">{v.label}</code>
+                        {v.kind === 'custom' && (
+                          <span className="text-[10px] px-1 py-0 rounded-sm bg-sunken text-fg-tertiary">custom</span>
+                        )}
+                      </div>
+                      <span className="text-fg-tertiary text-[11px] truncate">
+                        {v.description}
+                        {v.hf_repo && <> · HF <code>{v.hf_repo}</code></>}
+                        {v.ms_repo && <> · MS <code>{v.ms_repo}</code></>}
+                        {v.size_mb != null && <> · ~{v.size_mb} MB</>}
+                      </span>
+                    </div>
+                    <ModelStatusBadge exists={v.exists} size={v.size} status={dl?.status} />
+                    {v.kind === 'preset' && (
+                      <DownloadButton
+                        exists={v.exists}
+                        status={dl?.status}
+                        busy={busy.has(`upscaler:${v.label}`)}
+                        onClick={() => void start('upscaler', v.label)}
+                      />
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
+          </ModelGroupCard>
+
+          <ModelGroupCard
+            title="自定义下载"
+            helpTooltip={
+              <>
+                <p>从 HuggingFace 或 ModelScope 拉任意 <code>.pth</code> / <code>.safetensors</code> 放大器。</p>
+                <p>常见来源：<code>Kim2091/*</code>、<code>libfishopen/upscaler</code>、<code>licyks/sd-upscaler-models</code> 等。</p>
+                <p>下完会出现在上面列表里（标记 custom），单选即可启用。</p>
+              </>
+            }
+          >
+            <div className="flex flex-col gap-2 text-xs">
+              <SettingsField label="源">
+                <select
+                  value={customSource}
+                  onChange={(e) => setCustomSource(e.target.value as 'hf' | 'ms')}
+                  className="input text-xs"
+                  style={{ width: 'auto' }}
+                >
+                  <option value="hf">HuggingFace</option>
+                  <option value="ms">ModelScope</option>
+                </select>
+              </SettingsField>
+              <SettingsField label="仓库 ID">
+                <input
+                  type="text"
+                  value={customRepo}
+                  onChange={(e) => setCustomRepo(e.target.value)}
+                  placeholder={customSource === 'hf' ? 'Kim2091/UltraSharp' : 'libfishopen/upscaler'}
+                  className={`${textInputClass} flex-1 font-mono`}
+                />
+              </SettingsField>
+              <SettingsField label="文件名">
+                <input
+                  type="text"
+                  value={customFile}
+                  onChange={(e) => setCustomFile(e.target.value)}
+                  placeholder="4x-UltraSharp.pth"
+                  className={`${textInputClass} flex-1 font-mono`}
+                />
+              </SettingsField>
+              <div className="flex justify-end">
+                <button
+                  onClick={() => void submitCustom()}
+                  disabled={customBusy || !customRepo.trim() || !customFile.trim()}
+                  className="btn btn-primary btn-sm"
+                >
+                  {customBusy ? '下载中...' : '下载'}
+                </button>
+              </div>
+            </div>
+          </ModelGroupCard>
+
+          {/* 下载日志 */}
+          {Object.values(catalog.downloads).filter((d) => d.key.startsWith('upscaler') && (d.status === 'running' || d.status === 'failed')).length > 0 && (
+            <details className="text-xs">
+              <summary className="cursor-pointer text-fg-tertiary">放大器下载日志</summary>
+              <div className="mt-1 flex flex-col gap-2">
+                {Object.values(catalog.downloads).filter((d) => d.key.startsWith('upscaler')).map((d) => (
                   <div key={d.key} className="rounded-sm border border-subtle bg-sunken p-2">
                     <div className="flex items-center gap-2 mb-1">
                       <code className="font-mono text-fg-secondary">{d.key}</code>

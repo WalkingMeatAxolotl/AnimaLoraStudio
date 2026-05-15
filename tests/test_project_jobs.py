@@ -43,6 +43,19 @@ def test_create_rejects_unknown_kind(isolated) -> None:
             )
 
 
+def test_create_accepts_preprocess_kind(isolated) -> None:
+    """preprocess 加入 VALID_KINDS（放大 / 裁剪 / 涂抹的统一 job kind）。"""
+    with db.connection_for(isolated["db"]) as conn:
+        job = project_jobs.create_job(
+            conn,
+            project_id=isolated["project_id"],
+            kind="preprocess",
+            params={"mode": "all", "model": "4x-AnimeSharp"},
+        )
+    assert job["status"] == "pending"
+    assert job["kind"] == "preprocess"
+
+
 def test_status_transitions(isolated) -> None:
     with db.connection_for(isolated["db"]) as conn:
         job = project_jobs.create_job(

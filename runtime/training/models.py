@@ -92,7 +92,7 @@ def load_anima_model(transformer_path, device, dtype, repo_root, *, flash_attn: 
         raise RuntimeError(f"未知的 model_channels={model_channels}")
 
     config = dict(
-        max_img_h=240, max_img_w=240, max_frames=128,
+        max_img_h=1024, max_img_w=1024, max_frames=128,
         in_channels=in_channels, out_channels=16,
         patch_spatial=2, patch_temporal=1,
         concat_padding_mask=True,

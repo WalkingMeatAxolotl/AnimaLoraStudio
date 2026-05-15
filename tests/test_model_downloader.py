@@ -312,3 +312,245 @@ def test_download_qwen3_modelscope_builds_complete_directory(
     assert [repo_subpath for _, repo_subpath, _ in hf_calls] == expected_hf_files
     for f in expected_hf_files:
         assert (qwen_dir / f).read_text(encoding="utf-8") == f
+
+
+# ---------------------------------------------------------------------------
+# 预处理放大器
+# ---------------------------------------------------------------------------
+
+
+def test_upscaler_path_helpers(tmp_path: "Path") -> None:
+    """upscaler_dir / upscaler_target / find_upscaler 路径布局与存在性判断。"""
+    assert model_downloader.upscaler_dir(tmp_path) == tmp_path / "upscalers"
+
+    target = model_downloader.upscaler_target("4x-AnimeSharp", tmp_path)
+    assert target == tmp_path / "upscalers" / "4x-AnimeSharp.pth"
+
+    # 未下载
+    assert model_downloader.find_upscaler("4x-AnimeSharp", tmp_path) is None
+
+    # 已下载
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"weights")
+    assert model_downloader.find_upscaler("4x-AnimeSharp", tmp_path) == target
+
+
+def test_upscaler_target_unknown_label() -> None:
+    """非法 label 抛 ValueError，避免拼错落到错误路径。"""
+    with pytest.raises(ValueError, match="unknown upscaler"):
+        model_downloader.upscaler_target("4x-RealNotALabel")
+
+
+def test_download_upscaler_unknown_label_returns_false() -> None:
+    logs: list[str] = []
+    ok = model_downloader.download_upscaler("nope", on_log=logs.append)
+    assert not ok
+    assert any("未知放大器" in l for l in logs)
+
+
+def test_download_upscaler_delegates_to_download_flat(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """download_upscaler 应走 HF download_flat，参数从 UPSCALER_VARIANTS 取。"""
+    calls: list[tuple] = []
+
+    def fake_download_flat(repo_id, repo_subpath, target, *, on_log=print):
+        calls.append((repo_id, repo_subpath, str(target)))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"esrgan")
+        return True
+
+    monkeypatch.setattr(model_downloader, "download_flat", fake_download_flat)
+
+    ok = model_downloader.download_upscaler("4x-AnimeSharp", tmp_path, on_log=lambda _l: None)
+    assert ok
+    assert calls == [(
+        "Kim2091/AnimeSharp",
+        "4x-AnimeSharp.pth",
+        str(tmp_path / "upscalers" / "4x-AnimeSharp.pth"),
+    )]
+
+
+def test_build_catalog_includes_upscalers(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """build_catalog 把 upscalers 段加上；未下载 exists=False；新 schema 字段齐。"""
+    from studio import secrets
+
+    monkeypatch.setattr(secrets, "load", lambda: secrets.Secrets())
+    cat = model_downloader.build_catalog(tmp_path)
+    assert "upscalers" in cat
+    section = cat["upscalers"]
+    assert section["default"] == "4x-AnimeSharp"
+    assert section["current"] == "4x-AnimeSharp"  # 默认从 selected_upscaler 来
+    labels = [v["label"] for v in section["variants"]]
+    assert "4x-AnimeSharp" in labels
+    # 新预设也要在
+    assert "R-ESRGAN_4x+Anime6B" in labels
+    sharp = next(v for v in section["variants"] if v["label"] == "4x-AnimeSharp")
+    assert sharp["exists"] is False
+    assert sharp["kind"] == "preset"
+    assert sharp["hf_repo"] == "Kim2091/AnimeSharp"
+    assert sharp["ms_repo"] == "libfishopen/upscaler"
+    assert sharp["size_mb"] == 64
+    assert sharp["filename"] == "4x-AnimeSharp.pth"
+    assert sharp["target_path"].endswith("4x-AnimeSharp.pth")
+
+
+def test_build_catalog_picks_up_custom_upscaler(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """upscalers/ 下不在预设里的 .pth 文件被列为 kind='custom'。"""
+    from studio import secrets
+
+    monkeypatch.setattr(secrets, "load", lambda: secrets.Secrets())
+    (tmp_path / "upscalers").mkdir()
+    (tmp_path / "upscalers" / "my-custom.pth").write_bytes(b"x" * 1024)
+
+    cat = model_downloader.build_catalog(tmp_path)
+    variants = cat["upscalers"]["variants"]
+    custom = next(v for v in variants if v["label"] == "my-custom.pth")
+    assert custom["kind"] == "custom"
+    assert custom["filename"] == "my-custom.pth"
+    assert custom["exists"] is True
+    assert custom["size"] == 1024
+    assert custom["hf_repo"] is None
+    assert custom["ms_repo"] is None
+
+
+def test_download_upscaler_uses_modelscope_when_configured(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """secrets.download_source='modelscope' → download_upscaler 走 download_flat_ms。"""
+    monkeypatch.setattr(
+        model_downloader, "_get_download_source", lambda: "modelscope"
+    )
+    ms_calls: list[tuple] = []
+    hf_calls: list[tuple] = []
+
+    def fake_ms(repo_id, subpath, target, *, on_log=print):
+        ms_calls.append((repo_id, subpath, str(target)))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"ms")
+        return True
+
+    def fake_hf(repo_id, subpath, target, *, on_log=print):
+        hf_calls.append((repo_id, subpath, str(target)))
+        return True
+
+    monkeypatch.setattr(model_downloader, "download_flat_ms", fake_ms)
+    monkeypatch.setattr(model_downloader, "download_flat", fake_hf)
+
+    ok = model_downloader.download_upscaler("4x-AnimeSharp", tmp_path, on_log=lambda _l: None)
+    assert ok
+    assert ms_calls == [(
+        "libfishopen/upscaler",
+        "4x-AnimeSharp.pth",
+        str(tmp_path / "upscalers" / "4x-AnimeSharp.pth"),
+    )]
+    assert hf_calls == []
+
+
+def test_download_upscaler_fallback_to_ms_when_hf_missing(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R-ESRGAN_4x+Anime6B 没 HF 镜像；source=hf 时也应回退到 MS。"""
+    monkeypatch.setattr(
+        model_downloader, "_get_download_source", lambda: "huggingface"
+    )
+    ms_calls: list[tuple] = []
+
+    def fake_ms(repo_id, subpath, target, *, on_log=print):
+        ms_calls.append((repo_id, subpath))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"ms")
+        return True
+
+    monkeypatch.setattr(model_downloader, "download_flat_ms", fake_ms)
+    monkeypatch.setattr(
+        model_downloader, "download_flat",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("HF not expected"))
+    )
+
+    ok = model_downloader.download_upscaler(
+        "R-ESRGAN_4x+Anime6B", tmp_path, on_log=lambda _l: None
+    )
+    assert ok
+    assert ms_calls and ms_calls[0][0] == "libfishopen/upscaler"
+
+
+def test_download_upscaler_custom_hf(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """自定义 HF 下载落到 upscalers/{filename}。"""
+    calls: list[tuple] = []
+
+    def fake_hf(repo_id, subpath, target, *, on_log=print):
+        calls.append((repo_id, subpath, str(target)))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"x")
+        return True
+
+    monkeypatch.setattr(model_downloader, "download_flat", fake_hf)
+
+    ok = model_downloader.download_upscaler_custom(
+        "hf", "Kim2091/UltraSharp", "4x-UltraSharp.pth",
+        tmp_path, on_log=lambda _l: None,
+    )
+    assert ok
+    assert calls == [(
+        "Kim2091/UltraSharp",
+        "4x-UltraSharp.pth",
+        str(tmp_path / "upscalers" / "4x-UltraSharp.pth"),
+    )]
+
+
+def test_download_upscaler_custom_rejects_bad_ext(
+    tmp_path: "Path",
+) -> None:
+    """非 .pth/.safetensors 扩展名直接拒绝（防穿越 / 误传）。"""
+    logs: list[str] = []
+    ok = model_downloader.download_upscaler_custom(
+        "hf", "foo/bar", "evil.sh", tmp_path, on_log=logs.append
+    )
+    assert not ok
+    assert any("扩展名" in l for l in logs)
+
+
+def test_download_upscaler_custom_rejects_bad_source(
+    tmp_path: "Path",
+) -> None:
+    logs: list[str] = []
+    ok = model_downloader.download_upscaler_custom(
+        "ftp", "foo/bar", "a.pth", tmp_path, on_log=logs.append
+    )
+    assert not ok
+    assert any("未知下载源" in l for l in logs)
+
+
+def test_upscaler_target_accepts_custom_filename(tmp_path: "Path") -> None:
+    """非预设但合法扩展名的 label 视作 custom 文件名。"""
+    target = model_downloader.upscaler_target("my-custom.pth", tmp_path)
+    assert target == tmp_path / "upscalers" / "my-custom.pth"
+
+
+def test_upscaler_target_blocks_path_traversal() -> None:
+    for bad in ("../foo.pth", "a/b.pth", "..\\x.pth"):
+        with pytest.raises(ValueError):
+            model_downloader.upscaler_target(bad)
+
+
+def test_selected_upscaler_falls_back_to_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """selected_upscaler 字段值为空 / 非法 / 不存在文件时回退 DEFAULT_UPSCALER。"""
+    from studio import secrets
+
+    class Fake:
+        class models:
+            selected_upscaler = ""
+    monkeypatch.setattr(secrets, "load", lambda: Fake())
+    assert model_downloader.selected_upscaler() == model_downloader.DEFAULT_UPSCALER
+
+    Fake.models.selected_upscaler = "totally-not-a-preset.pth"  # 不存在文件
+    assert model_downloader.selected_upscaler() == model_downloader.DEFAULT_UPSCALER

@@ -54,10 +54,35 @@ def test_create_creates_directory_layout(isolated) -> None:
     pdir = projects.project_dir(p["id"], p["slug"])
     assert pdir.exists()
     assert (pdir / "download").is_dir()
+    assert (pdir / "preprocess").is_dir()  # 预处理阶段产物目录
     assert (pdir / "versions").is_dir()
     assert (pdir / "project.json").exists()
     assert p["stage"] == "created"
     assert p["note"] == "abc"
+
+
+def test_stats_counts_download_and_preprocess(isolated) -> None:
+    """stats_for_project 同时返回 download / preprocess 图片数。"""
+    with db.connection_for(isolated["db"]) as conn:
+        p = projects.create_project(conn, title="StatTest")
+    pdir = projects.project_dir(p["id"], p["slug"])
+
+    (pdir / "download" / "a.png").write_bytes(b"x")
+    (pdir / "download" / "b.jpg").write_bytes(b"x")
+    (pdir / "download" / "ignore.txt").write_bytes(b"x")  # 非图
+    (pdir / "preprocess" / "a.png").write_bytes(b"x")
+
+    s = projects.stats_for_project(p)
+    assert s["download_image_count"] == 2
+    assert s["preprocess_image_count"] == 1
+
+
+def test_preprocessing_stage_is_valid(isolated) -> None:
+    """update_project 接受 stage='preprocessing'，介于 downloading 和 curating 之间。"""
+    with db.connection_for(isolated["db"]) as conn:
+        p = projects.create_project(conn, title="StageTest")
+        p2 = projects.update_project(conn, p["id"], stage="preprocessing")
+    assert p2["stage"] == "preprocessing"
 
 
 def test_create_rejects_empty_title(isolated) -> None:

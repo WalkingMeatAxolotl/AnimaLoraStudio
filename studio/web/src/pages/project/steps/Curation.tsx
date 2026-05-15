@@ -242,13 +242,23 @@ export default function CurationPage() {
     [trainEntries, sortMode]
   )
 
+  // left_source 由后端决定：preprocess/ 有产物 → 'preprocess'，否则 'download'。
+  // 缩略图 URL 必须跟实际源对齐，否则上了预处理后左侧会全 404。
+  const leftSource = view?.left_source ?? 'download'
+  const leftThumbUrl = useCallback(
+    (n: string) =>
+      leftSource === 'preprocess'
+        ? api.preprocessThumbUrl(project.id, n)
+        : api.projectThumbUrl(project.id, n),
+    [leftSource, project.id]
+  )
   const leftItems = useMemo(
     () =>
       leftSortedNames.map((n) => ({
         name: n,
-        thumbUrl: api.projectThumbUrl(project.id, n),
+        thumbUrl: leftThumbUrl(n),
       })),
-    [leftSortedNames, project.id]
+    [leftSortedNames, leftThumbUrl]
   )
   const rightItems = useMemo(
     () =>
@@ -275,9 +285,12 @@ export default function CurationPage() {
       setFocus({
         side: 'left',
         name,
-        url: api.projectThumbUrl(project.id, name, 'download', 768),
+        url:
+          leftSource === 'preprocess'
+            ? api.preprocessThumbUrl(project.id, name, 768)
+            : api.projectThumbUrl(project.id, name, 'download', 768),
       }),
-    [project.id]
+    [project.id, leftSource]
   )
 
   const onRightHover = useCallback(

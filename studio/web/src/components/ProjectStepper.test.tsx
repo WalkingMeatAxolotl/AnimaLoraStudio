@@ -16,6 +16,7 @@ function project(stage: ProjectDetail['stage']): ProjectDetail {
     note: null,
     versions: [],
     download_image_count: 0,
+    preprocess_image_count: 0,
   }
 }
 
@@ -53,7 +54,8 @@ describe('ProjectStepper (PP1)', () => {
     const list = screen.getByRole('list', { name: 'pipeline-stepper' })
     const items = within(list).getAllByRole('listitem')
     expect(items[0].textContent).toMatch(/✓.*下载/)
-    expect(items[1].textContent).toMatch(/●.*筛选/)
+    // [1] = 预处理（可选；preprocess_image_count=0 → 保持 pending，不阻塞）
+    expect(items[2].textContent).toMatch(/●.*筛选/)
   })
 
   it('marks all version steps pending without an active version', () => {
@@ -67,13 +69,30 @@ describe('ProjectStepper (PP1)', () => {
     expect(linkCount).toBeLessThan(items.length)
   })
 
-  it('exposes 6 steps including the split tag/edit pair', () => {
+  it('exposes 7 steps including preprocess + split tag/edit pair', () => {
     renderStepper(project('curating'), version('curating'))
     const list = screen.getByRole('list', { name: 'pipeline-stepper' })
     const items = within(list).getAllByRole('listitem')
-    expect(items).toHaveLength(6)
-    expect(items[2].textContent).toMatch(/打标/)
-    expect(items[3].textContent).toMatch(/标签编辑/)
+    expect(items).toHaveLength(7)
+    expect(items[1].textContent).toMatch(/预处理/)
+    expect(items[3].textContent).toMatch(/打标/)
+    expect(items[4].textContent).toMatch(/标签编辑/)
+  })
+
+  it('marks preprocess done when project has preprocess products', () => {
+    const p = project('curating')
+    p.preprocess_image_count = 5
+    renderStepper(p, version('curating'))
+    const list = screen.getByRole('list', { name: 'pipeline-stepper' })
+    const items = within(list).getAllByRole('listitem')
+    expect(items[1].textContent).toMatch(/✓.*预处理/)
+  })
+
+  it('leaves preprocess pending when no products (optional stage)', () => {
+    renderStepper(project('curating'), version('curating'))
+    const list = screen.getByRole('list', { name: 'pipeline-stepper' })
+    const items = within(list).getAllByRole('listitem')
+    expect(items[1].textContent).toMatch(/○.*预处理/)
   })
 
   it('marks tag/edit done when all train images have captions', () => {
@@ -91,8 +110,8 @@ describe('ProjectStepper (PP1)', () => {
     renderStepper(project('tagging'), v)
     const list = screen.getByRole('list', { name: 'pipeline-stepper' })
     const items = within(list).getAllByRole('listitem')
-    expect(items[2].textContent).toMatch(/✓.*打标/)
-    expect(items[3].textContent).toMatch(/✓.*标签编辑/)
+    expect(items[3].textContent).toMatch(/✓.*打标/)
+    expect(items[4].textContent).toMatch(/✓.*标签编辑/)
   })
 
   it('keeps tag active while some images lack captions', () => {
@@ -110,7 +129,7 @@ describe('ProjectStepper (PP1)', () => {
     renderStepper(project('tagging'), v)
     const list = screen.getByRole('list', { name: 'pipeline-stepper' })
     const items = within(list).getAllByRole('listitem')
-    expect(items[2].textContent).toMatch(/●.*打标/)
+    expect(items[3].textContent).toMatch(/●.*打标/)
   })
 
   it('marks reg done when reg meta exists and images present', () => {
@@ -128,6 +147,6 @@ describe('ProjectStepper (PP1)', () => {
     renderStepper(project('tagging'), v)
     const list = screen.getByRole('list', { name: 'pipeline-stepper' })
     const items = within(list).getAllByRole('listitem')
-    expect(items[4].textContent).toMatch(/✓.*正则集/)
+    expect(items[5].textContent).toMatch(/✓.*正则集/)
   })
 })

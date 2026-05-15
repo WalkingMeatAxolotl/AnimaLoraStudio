@@ -66,7 +66,7 @@ interface PipelineStep {
 
 function deriveTimeline(project: ProjectDetail, activeVersion: Version | null): PipelineStep[] {
   const stage = activeVersion?.stage ?? project.stage
-  const stageOrder = ['downloading', 'curating', 'tagging', 'regularizing', 'configured', 'training', 'done']
+  const stageOrder = ['downloading', 'preprocessing', 'curating', 'tagging', 'regularizing', 'configured', 'training', 'done']
   const stageIdx = stageOrder.indexOf(stage)
 
   const steps: Array<{ label: string; stages: string[]; meta: () => string }> = [
@@ -74,6 +74,14 @@ function deriveTimeline(project: ProjectDetail, activeVersion: Version | null): 
       label: '下载',
       stages: ['downloading'],
       meta: () => `${project.download_image_count ?? 0} 张`,
+    },
+    {
+      label: '预处理',
+      stages: ['preprocessing'],
+      meta: () => {
+        const n = project.preprocess_image_count ?? 0
+        return n > 0 ? `${n} 张` : '—'
+      },
     },
     {
       label: '筛选',

@@ -47,6 +47,9 @@ def run_sample(
     args = ctx.args
     s_w = int(getattr(args, "sample_width", 0) or 0) or int(args.resolution)
     s_h = int(getattr(args, "sample_height", 0) or 0) or int(args.resolution)
+    # 必须 16 的倍数（VAE 8 × patch_spatial 2），否则 cosmos_predict2 spatial_patch 断言失败
+    s_w = max(16, (s_w // 16) * 16)
+    s_h = max(16, (s_h // 16) * 16)
     s_cfg = float(getattr(args, "sample_cfg_scale", 4.0) or 4.0)
     s_neg = str(getattr(args, "sample_negative_prompt", "") or "")
     s_seed = int(getattr(args, "sample_seed", 0) or 0)

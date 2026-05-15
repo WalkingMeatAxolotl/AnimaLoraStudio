@@ -10,6 +10,7 @@ import ProjectLayout from './pages/project/Layout'
 import ProjectOverview from './pages/project/Overview'
 import CurationPage from './pages/project/steps/Curation'
 import DownloadPage from './pages/project/steps/Download'
+import PreprocessPage from './pages/project/steps/Preprocess'
 import RegularizationPage from './pages/project/steps/Regularization'
 import TagEditPage from './pages/project/steps/TagEdit'
 import TaggingPage from './pages/project/steps/Tagging'
@@ -66,6 +67,7 @@ export default function App() {
             <Route path="/projects/:pid" element={<ProjectLayout />}>
               <Route index element={<ProjectOverview />} />
               <Route path="download" element={<DownloadPage />} />
+              <Route path="preprocess" element={<PreprocessPage />} />
               <Route path="v/:vid">
                 <Route path="curate" element={<CurationPage />} />
                 <Route path="tag" element={<TaggingPage />} />

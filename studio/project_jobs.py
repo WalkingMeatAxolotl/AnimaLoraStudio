@@ -19,7 +19,7 @@ from .paths import STUDIO_DATA
 
 JOB_LOGS_DIR = STUDIO_DATA / "jobs"
 
-VALID_KINDS: frozenset[str] = frozenset({"download", "tag", "reg_build"})
+VALID_KINDS: frozenset[str] = frozenset({"download", "preprocess", "tag", "reg_build"})
 VALID_STATUSES: frozenset[str] = frozenset({
     "pending", "running", "done", "failed", "canceled"
 })

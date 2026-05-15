@@ -9,11 +9,12 @@ interface Step {
 
 const STEPS: Step[] = [
   { key: 'download', label: '① 下载', scope: 'project' },
-  { key: 'curate', label: '② 筛选', scope: 'version' },
-  { key: 'tag', label: '③ 打标', scope: 'version' },
-  { key: 'edit', label: '④ 标签编辑', scope: 'version' },
-  { key: 'reg', label: '⑤ 正则集', scope: 'version' },
-  { key: 'train', label: '⑥ 训练', scope: 'version' },
+  { key: 'preprocess', label: '② 预处理', scope: 'project' },
+  { key: 'curate', label: '③ 筛选', scope: 'version' },
+  { key: 'tag', label: '④ 打标', scope: 'version' },
+  { key: 'edit', label: '⑤ 标签编辑', scope: 'version' },
+  { key: 'reg', label: '⑥ 正则集', scope: 'version' },
+  { key: 'train', label: '⑦ 训练', scope: 'version' },
 ]
 
 /** 根据 project.stage 推断各步状态：✓ 完成 / ● 当前 / ○ 未开始 */
@@ -24,14 +25,16 @@ function statusFor(
 ): 'done' | 'active' | 'pending' {
   // 极简：项目 stage > 该步对应 stage 阈值 → done；等于 → active；小于 → pending
   // tag / edit 都映射到后端 stage "tagging"（编辑只是 tagging 阶段的子步骤）
-  const order = ['created', 'downloading', 'curating', 'tagging', 'regularizing', 'configured', 'training', 'done']
+  // preprocess 是可选阶段：用户没启动也不卡 curate（派生覆盖见下）。
+  const order = ['created', 'downloading', 'preprocessing', 'curating', 'tagging', 'regularizing', 'configured', 'training', 'done']
   const stepIdx: Record<string, number> = {
     download: 1, // downloading
-    curate: 2,
-    tag: 3,
-    edit: 3,
-    reg: 4,
-    train: 6, // configured/training
+    preprocess: 2, // preprocessing（可选）
+    curate: 3,
+    tag: 4,
+    edit: 4,
+    reg: 5,
+    train: 7, // configured/training
   }
   const projIdx = order.indexOf(project.stage)
   const target = stepIdx[step.key] ?? 0
@@ -39,7 +42,15 @@ function statusFor(
   if (projIdx > target) status = 'done'
   else if (projIdx === target) status = 'active'
 
-  // version 级 stage 也参考（active version 进入 tagging 时 step3 标 done）
+  // preprocess 是可选阶段，状态完全派生自 preprocess_image_count：
+  //   >0 → done（确实做了）； =0 → pending（即使用户已经走到 curating 之后）。
+  // 这样跳过预处理的项目不会被误标 ✓，回头还能进来跑增量。
+  if (step.key === 'preprocess') {
+    const cnt = (project as ProjectDetail & { preprocess_image_count?: number }).preprocess_image_count ?? 0
+    return cnt > 0 ? 'done' : 'pending'
+  }
+
+  // version 级 stage 也参考（active version 进入 tagging 时 tag step 标 done）
   if (status !== 'done' && step.scope === 'version' && version) {
     const vorder = ['curating', 'tagging', 'regularizing', 'ready', 'training', 'done']
     const vstepIdx: Record<string, number> = {

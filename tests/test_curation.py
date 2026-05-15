@@ -75,6 +75,55 @@ def test_curation_view_left_minus_right(env) -> None:
     assert view["download_total"] == 3
     assert view["train_total"] == 1
     assert set(view["folders"]) == {"1_data", "5_concept"}
+    # preprocess/ 为空时左侧源 = download
+    assert view["left_source"] == "download"
+
+
+def _seed_preprocess(env, names: list[str]) -> Path:
+    pdir = projects.project_dir(env["p"]["id"], env["p"]["slug"])
+    pre = pdir / "preprocess"
+    pre.mkdir(parents=True, exist_ok=True)
+    for n in names:
+        (pre / n).write_bytes(b"upscaled")
+    return pre
+
+
+def test_curation_view_switches_to_preprocess_when_available(env) -> None:
+    """preprocess/ 一旦有产物，左侧源切到 preprocess/。"""
+    _dl(env, "1.png")  # 原图，被预处理覆盖
+    _dl(env, "2.png")  # 原图，也已预处理
+    _seed_preprocess(env, ["1.png", "2.png"])
+
+    with db.connection_for(env["db"]) as conn:
+        view = curation.curation_view(conn, env["p"]["id"], env["v"]["id"])
+    assert view["left_source"] == "preprocess"
+    assert _names(view["left"]) == ["1.png", "2.png"]
+
+
+def test_copy_to_train_reads_from_preprocess_when_active(env) -> None:
+    """preprocess/ 有产物时，复制操作从 preprocess/ 拷（不是 download/）。"""
+    _dl(env, "1.png", blob=b"original-low-res")
+    _seed_preprocess(env, ["1.png"])
+    # 用不同字节区分两个目录的同名文件
+    pdir = projects.project_dir(env["p"]["id"], env["p"]["slug"])
+    (pdir / "preprocess" / "1.png").write_bytes(b"upscaled-hi-res")
+
+    with db.connection_for(env["db"]) as conn:
+        curation.copy_to_train(
+            conn, env["p"]["id"], env["v"]["id"], ["1.png"], "5_concept"
+        )
+    copied = _train_dir(env, "5_concept") / "1.png"
+    assert copied.read_bytes() == b"upscaled-hi-res"
+
+
+def test_curation_view_falls_back_when_preprocess_empty(env) -> None:
+    """preprocess/ 目录存在但无图（早期 create_project 创建的空目录）→ 走 download。"""
+    _dl(env, "1.png")
+    # 目录已经在 create_project 时建好，但里面没图
+    with db.connection_for(env["db"]) as conn:
+        view = curation.curation_view(conn, env["p"]["id"], env["v"]["id"])
+    assert view["left_source"] == "download"
+    assert _names(view["left"]) == ["1.png"]
 
 
 # ---------------------------------------------------------------------------

@@ -1,22 +1,26 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { api, type Version, type VersionStage } from '../api/client'
+import { api, type ProjectDetail, type Version, type VersionStage } from '../api/client'
 import { getStoredTheme, toggleTheme, type Theme } from '../lib/theme'
 
-/** Map version stage → 0-based index of the current active step.
+/** Map version stage → 0-based index of the current active step（STEPS 数组里）。
  *
- * 注意：后端 stage 集合是 {curating, tagging, regularizing, ready, training,
- * done}，**没有 editing 这个值**——打标完成后到正则启动前，stage 一直停在
- * "tagging"。所以单看 stage，tag(2) 和 edit(3) 都不会变 done 状态。下方
- * `isStepDone` 用 version.stats 派生覆盖，做到打完标 → tag/edit 立刻打勾。
+ * 注意：
+ * - 后端 version stage 集合是 {curating, tagging, regularizing, ready, training,
+ *   done}，**没有 editing**——打标完成后到正则启动前，stage 一直停在 "tagging"，
+ *   单看 stage tag/edit 都不会自动变 done。`isStepDone` 用 stats 派生覆盖。
+ * - preprocess 是 project-scope 的可选阶段，version stage 不感知它；status 完全
+ *   靠 `preprocess_image_count > 0` 派生（同样在 `isStepDone` 里）。
+ *
+ * STEPS 顺序：0 download / 1 preprocess / 2 curate / 3 tag / 4 edit / 5 reg / 6 train
  */
 const STAGE_TO_STEP_IDX: Record<VersionStage, number> = {
-  curating: 1,     // download done, curate active
-  tagging: 2,      // download+curate done, tag active
-  regularizing: 4, // download+curate+tag+edit done, reg active
-  ready: 5,        // download+curate+tag+edit+reg done, train active
-  training: 5,     // same, train running
-  done: 6,         // all 6 steps done
+  curating: 2,     // download+preprocess done?, curate active
+  tagging: 3,      // ...curate done, tag active
+  regularizing: 5, // ...tag+edit done, reg active
+  ready: 6,        // ...reg done, train active
+  training: 6,     // same, train running
+  done: 7,         // all steps done
 }
 import { useProjectCtx } from '../context/ProjectContext'
 
@@ -32,6 +36,8 @@ const I = {
   chevL:   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M15 6l-6 6 6 6"/></svg>,
   chevR:   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M9 6l6 6-6 6"/></svg>,
   download:<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4v12m0 0-4-4m4 4 4-4M4 20h16"/></svg>,
+  // upscale / 预处理：左下小方块 + 向右上的箭头表示放大
+  upscale: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="13" width="8" height="8" rx="1"/><path d="M14 10V4h-6"/><path d="M21 3 14 10"/></svg>,
   filter:  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 5h18l-7 9v6l-4-2v-4z"/></svg>,
   tag:     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20 12 12 20l-9-9V3h8z"/><circle cx="7" cy="7" r="1.5" fill="currentColor"/></svg>,
   edit:    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 21h4l11-11-4-4L3 17z"/><path d="m14 5 4 4"/></svg>,
@@ -187,18 +193,20 @@ function VersionPanel({ collapsed }: { collapsed: boolean }) {
 
 // ── project stepper nav ────────────────────────────────────────────────────
 const STEPS = [
-  { key: 'download', label: '下载',     idx: '1', icon: I.download },
-  { key: 'curate',   label: '筛选',     idx: '2', icon: I.filter },
-  { key: 'tag',      label: '打标',     idx: '3', icon: I.tag },
-  { key: 'edit',     label: '标签编辑', idx: '4', icon: I.edit },
-  { key: 'reg',      label: '正则集',   idx: '5', icon: I.reg },
-  { key: 'train',    label: '训练',     idx: '6', icon: I.train },
+  { key: 'download',   label: '下载',     idx: '1', icon: I.download, scope: 'project' as const },
+  { key: 'preprocess', label: '预处理',   idx: '2', icon: I.upscale,  scope: 'project' as const },
+  { key: 'curate',     label: '筛选',     idx: '3', icon: I.filter,   scope: 'version' as const },
+  { key: 'tag',        label: '打标',     idx: '4', icon: I.tag,      scope: 'version' as const },
+  { key: 'edit',       label: '标签编辑', idx: '5', icon: I.edit,     scope: 'version' as const },
+  { key: 'reg',        label: '正则集',   idx: '6', icon: I.reg,      scope: 'version' as const },
+  { key: 'train',      label: '训练',     idx: '7', icon: I.train,    scope: 'version' as const },
 ]
 
-function ProjectStepperNav({ pid, activeVid, currentStep, version, collapsed }: {
+function ProjectStepperNav({ pid, activeVid, currentStep, project, version, collapsed }: {
   pid: string
   activeVid: string | null
   currentStep: string | null
+  project: ProjectDetail | null
   version: Version | null
   collapsed: boolean
 }) {
@@ -206,11 +214,13 @@ function ProjectStepperNav({ pid, activeVid, currentStep, version, collapsed }: 
   const stage: VersionStage = version?.stage ?? 'curating'
   const stageStepIdx = STAGE_TO_STEP_IDX[stage] ?? 0
   const stats = version?.stats
+  const preprocessCount = project?.preprocess_image_count ?? 0
 
-  // 派生覆盖（stats / output_lora_path）：打完标 → tag+edit 立即 done；
-  // 正则集生成 → reg 立即 done；output_lora_path 存在 → train done。
-  // 这样不依赖后端 stage 跳转就能让侧边的勾勾跟上数据真相。
+  // 派生覆盖（stats / output_lora_path / preprocess_image_count）：让侧边
+  // 的勾勾跟数据真相走，不依赖后端 stage 跳转。
   const isStepDone = (key: string, idx: number): boolean => {
+    // preprocess 是可选阶段，状态完全靠产物数派生 — 跳过不误标 ✓。
+    if (key === 'preprocess') return preprocessCount > 0
     if (idx < stageStepIdx) return true
     if (
       (key === 'tag' || key === 'edit') &&
@@ -252,8 +262,8 @@ function ProjectStepperNav({ pid, activeVid, currentStep, version, collapsed }: 
         const isActive = s.key === currentStep
         const isDone = isStepDone(s.key, i)
 
-        const href = s.key === 'download'
-          ? `/projects/${pid}/download`
+        const href = s.scope === 'project'
+          ? `/projects/${pid}/${s.key}`
           : activeVid ? `/projects/${pid}/v/${activeVid}/${s.key}` : null
 
         const badgeCls = isDone
@@ -334,7 +344,10 @@ export default function Sidebar() {
   const pid = location.pathname.match(/^\/projects\/([^/]+)/)?.[1] ?? null
   const urlVid = location.pathname.match(/\/v\/([^/]+)/)?.[1] ?? null
   const stepMatch = location.pathname.match(/\/v\/[^/]+\/([^/]+)$/)
-  const currentStep = stepMatch?.[1] ?? (location.pathname.endsWith('/download') ? 'download' : null)
+  // project-scope steps（download / preprocess）在 /projects/:pid/<key>，
+  // version-scope 在 /projects/:pid/v/:vid/<key>。
+  const projectScopeStep = location.pathname.match(/^\/projects\/[^/]+\/(download|preprocess)$/)?.[1] ?? null
+  const currentStep = stepMatch?.[1] ?? projectScopeStep
 
   // Prefer active version from context; fall back to URL vid (handles page reload)
   const activeVid = ctx?.activeVersion?.id?.toString() ?? urlVid
@@ -389,7 +402,7 @@ export default function Sidebar() {
             {/* Version selector + export with project name embedded */}
             <VersionPanel collapsed={collapsed} />
 
-            <ProjectStepperNav pid={pid} activeVid={activeVid} currentStep={currentStep} version={ctx?.activeVersion ?? null} collapsed={collapsed} />
+            <ProjectStepperNav pid={pid} activeVid={activeVid} currentStep={currentStep} project={ctx?.project ?? null} version={ctx?.activeVersion ?? null} collapsed={collapsed} />
           </div>
         )}
       </nav>
