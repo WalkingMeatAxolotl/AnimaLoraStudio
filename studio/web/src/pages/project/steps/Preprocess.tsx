@@ -150,6 +150,17 @@ export default function PreprocessPage() {
   }
   const modelReady = !!upscaler?.exists
 
+  // job 跑的中途 worker 不发"每张图完成"事件 — 只有日志在涨。
+  // 用固定间隔轮询 files 端点把进度 / 盘占 / grid 推进度。停了就清。
+  // 端点本身很轻（一次 readdir + 少量 sidecar 读），3s 一次开销可忽略。
+  useEffect(() => {
+    if (!isLive) return
+    const t = window.setInterval(() => {
+      void refreshFiles()
+    }, 3000)
+    return () => window.clearInterval(t)
+  }, [isLive, refreshFiles])
+
   // ----- 操作 ---------------------------------------------------------------
   const downloadModel = async () => {
     if (downloadingModel) return
