@@ -27,7 +27,9 @@ export const AXIS_LABELS: Record<XYAxisType, string> = {
   lora_ckpt: 'LoRA',
 }
 
-export const REQUIRES_LORA_INDEX: Set<XYAxisType> = new Set(['lora_scale', 'lora_ckpt'])
+/** 仅 lora_ckpt 需要 loraIndex（指 cell 内 mutate 哪条 LoRA 的 path）。
+ *  lora_scale 改成全局轴（所有 LoRA 共用 cell 值），不再绑特定 LoRA。 */
+export const REQUIRES_LORA_INDEX: Set<XYAxisType> = new Set(['lora_ckpt'])
 
 /** 解析逗号分隔的 raw 字符串成 axis values。失败抛 string error。 */
 export function parseAxisValues(axis: XYAxisType, raw: string): Array<number | string> {

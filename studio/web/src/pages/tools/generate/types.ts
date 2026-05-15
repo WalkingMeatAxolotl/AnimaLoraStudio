@@ -2,7 +2,7 @@
 
 import type { VersionStage } from '../../../api/client'
 
-/** 训练好的 LoRA 视图（InlineLoraPicker / LoraCard 共用）。 */
+/** 训练好的 LoRA 视图（InlineLoraPicker / SidebarLoras 共用）。 */
 export interface ProjectLora {
   projectId: number
   projectTitle: string

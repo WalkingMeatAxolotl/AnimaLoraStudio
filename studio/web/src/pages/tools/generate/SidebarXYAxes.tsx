@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { api, type LoraCkpt, type LoraEntry, type XYAxisType } from '../../../api/client'
+import { useState } from 'react'
+import type { LoraEntry, XYAxisType } from '../../../api/client'
 import PathPicker from '../../../components/PathPicker'
 import InlineLoraPicker from './InlineLoraPicker'
 import NumberListInput from './NumberListInput'
@@ -14,189 +14,98 @@ function placeholderFor(axis: XYAxisType): string {
   return '0.6, 0.8, 1.0'
 }
 
-function parsePathList(raw: string): string[] {
-  return raw.split(',').map((s) => s.trim()).filter(Boolean)
-}
-
-/** axis=lora_ckpt 时绑定的 LoRA 在该 axis 内显示 + ckpt 多选区。 */
-function CkptMultiPicker({
-  versionId, projectId, raw, onChange,
+/** lora_ckpt 轴的内嵌 picker：多选 ckpt + 自动 push / 更新 loras[] + 设 axis.raw + axis.loraIndex。
+ *
+ * 流程：用户点 picker chip 多选 → 确认 → 取所有 picks 的 (pid, vid) —— 多选始
+ * 终在同一 (pid, vid) 下（picker 切 pid/vid 会清 picked）；在 loras[] 找匹配的
+ * (project_id, version_id)；没有就 push 一条（path 用 picks[0]，scale=1.0）；
+ * axis.loraIndex 指向那个槽；axis.raw 是 picks.map(path).join(', ')。
+ */
+function AxisLoraCkptPicker({
+  draft, onDraftChange, loras, onLorasChange, projectLoras,
 }: {
-  versionId: number
-  projectId: number
-  raw: string
-  onChange: (raw: string) => void
-}) {
-  const [ckpts, setCkpts] = useState<LoraCkpt[]>([])
-  const [loaded, setLoaded] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  useEffect(() => {
-    let cancelled = false
-    setLoaded(false)
-    setError(null)
-    void api.listVersionLoraCkpts(projectId, versionId)
-      .then((items) => { if (!cancelled) { setCkpts(items); setLoaded(true) } })
-      .catch((e) => {
-        if (cancelled) return
-        const msg = e instanceof Error ? e.message : String(e)
-        console.error('listVersionLoraCkpts failed', { projectId, versionId, error: msg })
-        setCkpts([])
-        setError(msg)
-        setLoaded(true)
-      })
-    return () => { cancelled = true }
-  }, [projectId, versionId])
-
-  const selected = new Set(parsePathList(raw))
-  const toggle = (p: string) => {
-    const next = new Set(selected)
-    if (next.has(p)) next.delete(p); else next.add(p)
-    // 按 ckpts 列表顺序输出（server 已 final → step desc → epoch desc → 自然序）
-    // 而非 set 插入序，让 XY 网格列顺序与可选列表一致，避免点击次序污染。
-    const ordered = ckpts.map((c) => c.path).filter((path) => next.has(path))
-    onChange(ordered.join(', '))
-  }
-
-  if (!loaded) {
-    return (
-      <div className="text-2xs text-fg-tertiary font-mono">
-        加载 ckpt…（{projectId}/{versionId}）
-      </div>
-    )
-  }
-  if (error) {
-    return <div className="text-2xs text-err font-mono">加载 ckpt 失败：{error}</div>
-  }
-  if (ckpts.length === 0) {
-    return <div className="text-2xs text-fg-tertiary">该 LoRA 没扫到 ckpt 文件（output/ 下需 *.safetensors）</div>
-  }
-  return (
-    <div className="flex flex-wrap gap-1">
-      {ckpts.map((c) => {
-        const on = selected.has(c.path)
-        return (
-          <button
-            key={c.path}
-            type="button"
-            onClick={() => toggle(c.path)}
-            className="font-mono"
-            style={{
-              fontSize: 11, padding: '3px 9px', borderRadius: 999,
-              border: on ? '1px solid transparent' : '1px solid var(--border-subtle)',
-              background: on ? 'var(--accent-soft)' : 'var(--bg-sunken)',
-              color: on ? 'var(--accent)' : 'var(--fg-secondary)',
-              cursor: 'pointer',
-            }}
-            title={c.path}
-          >
-            {on ? '✓ ' : '+ '}{c.label}
-          </button>
-        )
-      })}
-    </div>
-  )
-}
-
-/** Axis 内嵌 LoRA picker：选完一个 LoRA 后加进 loras + 设 axis.lora_index。 */
-function AxisLoraPicker({
-  loras, onLorasChange, projectLoras,
-  loraIndex, onLoraIndexChange,
-}: {
+  draft: XYAxisDraft
+  onDraftChange: (d: XYAxisDraft) => void
   loras: LoraEntry[]
   onLorasChange: (l: LoraEntry[]) => void
   projectLoras: ProjectLora[]
-  loraIndex: number | null
-  onLoraIndexChange: (i: number | null) => void
 }) {
-  const [pickerOpen, setPickerOpen] = useState(false)
   const [externalOpen, setExternalOpen] = useState(false)
-  const selectedPaths = useMemo(() => new Set(loras.map((l) => l.path)), [loras])
 
-  const addAndBind = (path: string, projectId: number | null, versionId: number | null) => {
-    const idx = loras.findIndex((l) => l.path === path)
-    if (idx >= 0) {
-      onLoraIndexChange(idx)
-    } else {
-      onLorasChange([
-        ...loras,
-        { path, scale: 1.0, project_id: projectId, version_id: versionId },
-      ])
-      onLoraIndexChange(loras.length)
-    }
-    setPickerOpen(false)
-    setExternalOpen(false)
-  }
-
-  // 已绑 LoRA：show summary + 「换 LoRA」按钮
-  const bound = loraIndex !== null && loraIndex < loras.length ? loras[loraIndex] : null
-  if (bound && !pickerOpen) {
-    const matched = projectLoras.find((p) => p.versionId === bound.version_id)
-    const label = matched
-      ? `${matched.projectTitle} / ${matched.versionLabel}`
-      : ckptStemFromPath(bound.path)
-    return (
-      <div
-        className="flex items-center gap-2 text-xs"
-        style={{
-          padding: '6px 10px',
-          borderRadius: 'var(--r-md)',
-          border: '1px solid var(--border-subtle)',
-          background: 'var(--bg-elevated)',
-        }}
-      >
-        <span className="text-fg-tertiary shrink-0">绑定:</span>
-        <span className="font-medium truncate flex-1" title={bound.path}>{label}</span>
-        <button
-          type="button"
-          onClick={() => setPickerOpen(true)}
-          className="btn btn-ghost btn-sm font-mono text-2xs shrink-0"
-          style={{ padding: '2px 8px' }}
-        >
-          换 LoRA
-        </button>
-      </div>
+  const commitPicks = (picks: { path: string; projectId: number | null; versionId: number | null }[]) => {
+    if (picks.length === 0) return
+    const pid = picks[0].projectId
+    const vid = picks[0].versionId
+    // 在 loras[] 里找已绑过这个 (pid, vid) 的槽
+    let idx = loras.findIndex(
+      (l) => l.project_id === pid && l.version_id === vid && pid !== null && vid !== null
     )
+    let nextLoras = loras
+    if (idx < 0) {
+      // 没绑过 → push 一条作 anchor（path 用 picks[0]，cell 内 backend 会 mutate path）
+      const newEntry: LoraEntry = {
+        path: picks[0].path,
+        scale: 1.0,
+        project_id: pid,
+        version_id: vid,
+      }
+      nextLoras = [...loras, newEntry]
+      idx = loras.length
+      onLorasChange(nextLoras)
+    }
+    onDraftChange({
+      ...draft,
+      loraIndex: idx,
+      raw: picks.map((p) => p.path).join(', '),
+    })
   }
+
+  // 显示已绑的 LoRA 摘要（如果 raw 非空 + loraIndex 有效）
+  const bound = draft.loraIndex !== null && draft.loraIndex < loras.length
+    ? loras[draft.loraIndex]
+    : null
+  const matched = bound ? projectLoras.find((p) => p.versionId === bound.version_id) : null
+  const pickedCount = draft.raw.trim() ? draft.raw.split(',').filter((s) => s.trim()).length : 0
 
   return (
-    <>
-      {!pickerOpen ? (
-        <button
-          type="button"
-          onClick={() => setPickerOpen(true)}
-          className="font-mono inline-flex items-center gap-1.5 self-start"
+    <div className="flex flex-col gap-1.5">
+      {bound && pickedCount > 0 && (
+        <div
+          className="flex items-center gap-2 text-2xs"
           style={{
-            border: '1px solid var(--border-subtle)',
+            padding: '4px 8px',
+            borderRadius: 'var(--r-sm)',
             background: 'var(--bg-sunken)',
-            borderRadius: 'var(--r-md)',
-            padding: '6px 10px',
-            fontSize: 12,
             color: 'var(--fg-tertiary)',
-            cursor: 'pointer',
           }}
         >
-          + 添加 LoRA
-        </button>
-      ) : (
-        <InlineLoraPicker
-          projectLoras={projectLoras}
-          selectedPaths={selectedPaths}
-          onPick={(path) => {
-            const matched = projectLoras.find((p) => p.path === path)
-            addAndBind(path, matched?.projectId ?? null, matched?.versionId ?? null)
-          }}
-          onClose={() => setPickerOpen(false)}
-          onPickExternal={() => setExternalOpen(true)}
-        />
+          <span>扫:</span>
+          <span className="font-medium" style={{ color: 'var(--fg-secondary)' }}>
+            {matched ? `${matched.projectTitle} / ${matched.versionLabel}` : ckptStemFromPath(bound.path)}
+          </span>
+          <span className="font-mono">· {pickedCount} 个 ckpt</span>
+        </div>
       )}
+      <InlineLoraPicker
+        mode="multi"
+        projectLoras={projectLoras}
+        existingPaths={new Set()}
+        showWeight={false}
+        onPick={commitPicks}
+        onClose={() => { /* 多选 commit 后 picker 自动 close —— 但这里是常驻在 axis card 里，nothing to close */ }}
+        onPickExternal={() => setExternalOpen(true)}
+      />
       {externalOpen && (
         <PathPicker
           dirOnly={false}
-          onPick={(p) => addAndBind(p, null, null)}
+          onPick={(p) => {
+            commitPicks([{ path: p, projectId: null, versionId: null }])
+            setExternalOpen(false)
+          }}
           onClose={() => setExternalOpen(false)}
         />
       )}
-    </>
+    </div>
   )
 }
 
@@ -211,12 +120,7 @@ function AxisCard({
   onLorasChange: (l: LoraEntry[]) => void
   projectLoras: ProjectLora[]
 }) {
-  const needsLora = REQUIRES_LORA_INDEX.has(draft.axis)
   const isCkpt = draft.axis === 'lora_ckpt'
-  const bound =
-    draft.loraIndex !== null && draft.loraIndex < loras.length
-      ? loras[draft.loraIndex]
-      : null
 
   return (
     <div className="bg-sunken border border-subtle rounded-md px-2.5 py-2 flex flex-col gap-2">
@@ -253,38 +157,25 @@ function AxisCard({
         )}
       </div>
 
-      {/* 需绑 LoRA 的轴：内嵌 LoRA picker 选 / 切 */}
-      {needsLora && (
-        <AxisLoraPicker
+      {/* axis=lora_ckpt：多选 chip picker 直接产出 raw + loraIndex；
+          axis=lora_scale：纯数字（chip 列表），不再绑 LoRA；
+          axis=steps/cfg：文本输入。 */}
+      {isCkpt ? (
+        <AxisLoraCkptPicker
+          draft={draft}
+          onDraftChange={onChange}
           loras={loras}
           onLorasChange={onLorasChange}
           projectLoras={projectLoras}
-          loraIndex={draft.loraIndex}
-          onLoraIndexChange={(i) => onChange({ ...draft, loraIndex: i })}
         />
-      )}
-
-      {/* axis=lora_ckpt：ckpt 多选 chip；axis=lora_scale：+ 添加 数字 chip；
-          其他数值轴（steps/cfg）：text input（范围广用逗号分隔够直观）。 */}
-      {isCkpt ? (
-        bound && bound.version_id && bound.project_id ? (
-          <CkptMultiPicker
-            projectId={bound.project_id}
-            versionId={bound.version_id}
-            raw={draft.raw}
-            onChange={(raw) => onChange({ ...draft, raw })}
-          />
-        ) : bound ? (
-          <div className="text-2xs text-fg-tertiary">外部文件 LoRA 没法列 ckpt（要 picker 选项目里的）</div>
-        ) : null
       ) : draft.axis === 'lora_scale' ? (
         <NumberListInput
           raw={draft.raw}
           onChange={(raw) => onChange({ ...draft, raw })}
           min={0}
-          max={1}
+          max={1.5}
           step={0.05}
-          placeholder="0.85"
+          placeholder="0.6, 0.8, 1.0"
         />
       ) : (
         <input
@@ -301,10 +192,10 @@ function AxisCard({
 
 /** Sidebar 的 XY 轴配置区（仅 mode=xy 时渲染）。
  *
- * mode=xy 下整页 LoRA 选择都收纳在这里，无独立 LoRA 卡片：
- *   - axis 选项：LoRA / 权重 / CFG / 步数（前两个最常用）
- *   - axis=LoRA / 权重 时，轴卡片内嵌 LoRA picker（+ 添加 LoRA）
- *   - 添加完会 mutate Generate.tsx 的 loras state（共用 lora_configs）
+ * 4 个 axis 类型：
+ *   - LoRA（lora_ckpt）：picker 多选 ckpt 作格点，cell 内 mutate path 重 inject
+ *   - 权重（lora_scale）：纯数字轴，全局 cell 内覆盖所有 LoRA 的 multiplier
+ *   - CFG / 步数：文本输入数字列表
  */
 export default function SidebarXYAxes({
   xDraft, yDraft, onXChange, onYChange,
@@ -339,8 +230,8 @@ export default function SidebarXYAxes({
           <button
             onClick={() => onYChange({
               axis: 'lora_scale',
-              raw: '1',  // 默认就一个值，用户自己 + 添加；不再带 3,4,5 误导
-              loraIndex: loras.length > 0 ? 0 : null,
+              raw: '1',  // 一个值起步，用户自己 + 添加
+              loraIndex: null,
             })}
             className="btn btn-ghost btn-sm self-start text-xs text-fg-tertiary"
           >

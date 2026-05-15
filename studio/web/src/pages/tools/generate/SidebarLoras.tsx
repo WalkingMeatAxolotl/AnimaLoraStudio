@@ -1,13 +1,18 @@
 import { useMemo, useState } from 'react'
 import type { LoraEntry } from '../../../api/client'
 import PathPicker from '../../../components/PathPicker'
-import InlineLoraPicker from './InlineLoraPicker'
-import LoraCard from './LoraCard'
+import InlineLoraPicker, { type PickedLora } from './InlineLoraPicker'
 import type { ProjectLora } from './types'
 
-/** Sidebar 的 LoRA 区：已添加卡片列表 + 「+ 选 LoRA」inline 展开 picker。
+/** Sidebar 的 LoRA 区：每个 LoRA = 一个常驻 picker 槽（项目下拉 + ckpt chip + 权重 + ×）。
  *
- * 替换原 LoraList（text input + 浏览图标 + 「最近」浮层）。 */
+ * 数据模型统一：所有 picker 槽都用 loras[] 表示，path='' 表示「空槽」（用户
+ * 点了 + 添加 LoRA 但还没挑 ckpt）。这样：
+ *   - 「+ 添加 LoRA」push 一条空 entry → 新增一个 picker（key 稳定，不会闪）
+ *   - 反选 (点已选 chip) = 槽 path 设回 ''，picker 自己仍渲染 → 跟初次打开一样
+ *   - × = 真正把 entry 从数组里删掉
+ * Generate.tsx handleGenerate 在送 backend 前会 `loras.filter((l) => l.path.trim())`
+ * 过滤空槽，不影响 enqueue。 */
 export default function SidebarLoras({
   loras, onChange, projectLoras,
 }: {
@@ -15,101 +20,106 @@ export default function SidebarLoras({
   onChange: (l: LoraEntry[]) => void
   projectLoras: ProjectLora[]
 }) {
-  const [pickerOpen, setPickerOpen] = useState(false)
-  const [pathPickerOpen, setPathPickerOpen] = useState(false)
+  const [externalForIdx, setExternalForIdx] = useState<number | null>(null)
 
-  // version_id → "项目 / 版本" label 反查（picker 选过的有；切 step ckpt 后
-  // path 会变，所以不能用 path 反查）
-  const labelOf = useMemo(() => {
-    const map = new Map<number, string>()
-    for (const l of projectLoras) {
-      map.set(l.versionId, `${l.projectTitle} / ${l.versionLabel}`)
-    }
-    return (entry: LoraEntry): string =>
-      entry.version_id != null ? (map.get(entry.version_id) ?? '') : ''
-  }, [projectLoras])
+  // 已选 path（互相 disable，避免重复添加）—— 排除空槽
+  const existingPaths = useMemo(
+    () => new Set(loras.filter((l) => l.path).map((l) => l.path)),
+    [loras],
+  )
 
-  // version_id → stage 反查（训练中卡片要描边 accent）
-  const stageOf = useMemo(() => {
-    const map = new Map<number, string>()
-    for (const l of projectLoras) map.set(l.versionId, l.stage)
-    return (entry: LoraEntry): string | undefined =>
-      entry.version_id != null ? map.get(entry.version_id) : undefined
-  }, [projectLoras])
-
-  const selectedPaths = useMemo(() => new Set(loras.map((l) => l.path)), [loras])
-
-  const addLora = (path: string) => {
-    if (!path || selectedPaths.has(path)) return
-    // 找 picker 里这个 path 对应的 project/version，绑定到 LoraEntry
-    const matched = projectLoras.find((l) => l.path === path)
-    onChange([...loras, {
-      path,
-      scale: 1.0,
-      project_id: matched?.projectId ?? null,
-      version_id: matched?.versionId ?? null,
-    }])
+  const handleSlotChange = (i: number, picked: PickedLora | null, weight: number) => {
+    const entry: LoraEntry = picked
+      ? {
+          path: picked.path,
+          scale: weight,
+          project_id: picked.projectId,
+          version_id: picked.versionId,
+        }
+      : {
+          // 反选：槽保留但 path 清空，picker 仍渲染（视觉等同初次打开的空槽）
+          path: '',
+          scale: weight,
+          project_id: null,
+          version_id: null,
+        }
+    onChange(loras.map((l, idx) => (idx === i ? entry : l)))
   }
-  const removeAt = (i: number) => onChange(loras.filter((_, idx) => idx !== i))
-  const replaceAt = (i: number, next: LoraEntry) =>
-    onChange(loras.map((l, idx) => (idx === i ? next : l)))
+
+  const handleSlotRemove = (i: number) => {
+    onChange(loras.filter((_, idx) => idx !== i))
+    if (externalForIdx === i) setExternalForIdx(null)
+  }
+
+  const handleAddSlot = () => {
+    onChange([
+      ...loras,
+      { path: '', scale: 1.0, project_id: null, version_id: null },
+    ])
+  }
 
   return (
     <div className="flex flex-col gap-2">
-      {loras.map((l, i) => (
-        <LoraCard
-          key={`${l.version_id ?? 'ext'}-${i}`}
-          lora={l}
-          label={labelOf(l)}
-          stage={stageOf(l)}
-          onChange={(next) => replaceAt(i, next)}
-          onRemove={() => removeAt(i)}
-        />
-      ))}
+      {loras.map((l, i) => {
+        const hasCkpt = !!l.path
+        return (
+          <InlineLoraPicker
+            // key 只用 index：避免 ckpt 切换 / 反选时整个 picker remount
+            key={`lora-${i}`}
+            mode="single"
+            projectLoras={projectLoras}
+            value={
+              hasCkpt
+                ? { path: l.path, projectId: l.project_id ?? null, versionId: l.version_id ?? null }
+                : null
+            }
+            weight={l.scale}
+            onChange={(p, w) => handleSlotChange(i, p, w)}
+            onClose={() => handleSlotRemove(i)}
+            onPickExternal={() => setExternalForIdx(i)}
+          />
+        )
+      })}
 
-      {!pickerOpen ? (
-        <button
-          onClick={() => setPickerOpen(true)}
-          className="font-mono inline-flex items-center gap-1.5 self-start"
-          style={{
-            border: '1px solid var(--border-subtle)',
-            background: 'var(--bg-sunken)',
-            borderRadius: 'var(--r-md)',
-            padding: '6px 10px',
-            fontSize: 12,
-            color: 'var(--fg-tertiary)',
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.color = 'var(--fg-primary)'
-            e.currentTarget.style.borderColor = 'var(--border-default)'
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.color = 'var(--fg-tertiary)'
-            e.currentTarget.style.borderColor = 'var(--border-subtle)'
-          }}
-        >
-          + 从项目添加 LoRA
-        </button>
-      ) : (
-        <InlineLoraPicker
-          projectLoras={projectLoras}
-          selectedPaths={selectedPaths}
-          onPick={(path) => addLora(path)}
-          onRemove={(path) => onChange(loras.filter((l) => l.path !== path))}
-          onClearAll={() => onChange([])}
-          onClose={() => setPickerOpen(false)}
-          onPickExternal={() => setPathPickerOpen(true)}
-        />
-      )}
+      <button
+        onClick={handleAddSlot}
+        className="font-mono inline-flex items-center gap-1.5 self-start"
+        style={{
+          border: '1px solid var(--border-subtle)',
+          background: 'var(--bg-sunken)',
+          borderRadius: 'var(--r-md)',
+          padding: '6px 10px',
+          fontSize: 12,
+          color: 'var(--fg-tertiary)',
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.color = 'var(--fg-primary)'
+          e.currentTarget.style.borderColor = 'var(--border-default)'
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.color = 'var(--fg-tertiary)'
+          e.currentTarget.style.borderColor = 'var(--border-subtle)'
+        }}
+      >
+        + 添加 LoRA
+      </button>
 
-      {pathPickerOpen && (
+      {externalForIdx !== null && (
         <PathPicker
           dirOnly={false}
           onPick={(p) => {
-            addLora(p)
-            setPathPickerOpen(false)
+            const entry: LoraEntry = {
+              path: p,
+              scale: 1.0,
+              project_id: null,
+              version_id: null,
+            }
+            // 覆盖目标槽的内容；existingPaths 已排除空 path，外部文件可叠加
+            void existingPaths
+            onChange(loras.map((l, idx) => (idx === externalForIdx ? entry : l)))
+            setExternalForIdx(null)
           }}
-          onClose={() => setPathPickerOpen(false)}
+          onClose={() => setExternalForIdx(null)}
         />
       )}
     </div>

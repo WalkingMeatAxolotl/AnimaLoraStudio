@@ -10,6 +10,7 @@ import {
   type Version,
 } from '../../../api/client'
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
+import ImagePreviewModal from '../../../components/ImagePreviewModal'
 import StepShell from '../../../components/StepShell'
 import { useDialog } from '../../../components/Dialog'
 import { useToast } from '../../../components/Toast'
@@ -99,6 +100,8 @@ export default function PreprocessPage() {
   const [filter, setFilter] = useState<FilterMode>('all')
   const [sel, setSel] = useState<Set<string>>(new Set())
   const [selAnchor, setSelAnchor] = useState<string | null>(null)
+  // 大图预览：index 引用 visibleRows[]（filter 当前的可见 ImageRow 列表）
+  const [previewIdx, setPreviewIdx] = useState<number | null>(null)
 
   // 模型权重就绪状态（catalog 取一次，下载完成后用户手动刷新或 SSE 更新）
   const [allUpscalers, setAllUpscalers] = useState<UpscalerVariant[]>([])
@@ -417,6 +420,7 @@ export default function PreprocessPage() {
                 setFilter(f)
                 setSel(new Set())
                 setSelAnchor(null)
+                setPreviewIdx(null)
               }}
               items={gridItems}
               selected={sel}
@@ -426,6 +430,10 @@ export default function PreprocessPage() {
                 const r = applySelection(sel, name, e, visibleNames, selAnchor)
                 setSel(r.next)
                 setSelAnchor(r.anchor)
+              }}
+              onPreview={(name) => {
+                const i = visibleNames.indexOf(name)
+                if (i >= 0) setPreviewIdx(i)
               }}
               onSelectAll={() => setSel(new Set(visibleNames))}
               onClear={() => {
@@ -447,6 +455,20 @@ export default function PreprocessPage() {
           />
         </div>
       </div>
+
+      {previewIdx !== null && visibleRows[previewIdx] && (
+        <ImagePreviewModal
+          src={api.projectThumbUrl(project.id, visibleRows[previewIdx].name, 'download', 1600)}
+          caption={`${visibleRows[previewIdx].name} · ${
+            visibleRows[previewIdx].status === 'processed' ? '✓ 已处理' : '⊘ 未处理'
+          }`}
+          hasPrev={previewIdx > 0}
+          hasNext={previewIdx < visibleRows.length - 1}
+          onClose={() => setPreviewIdx(null)}
+          onPrev={() => previewIdx > 0 && setPreviewIdx(previewIdx - 1)}
+          onNext={() => previewIdx < visibleRows.length - 1 && setPreviewIdx(previewIdx + 1)}
+        />
+      )}
     </StepShell>
   )
 }
@@ -687,6 +709,7 @@ function ImagesPanel({
   selPendingCount,
   selProcessedCount,
   onSelect,
+  onPreview,
   onSelectAll,
   onClear,
   onRestore,
@@ -699,6 +722,7 @@ function ImagesPanel({
   selPendingCount: number
   selProcessedCount: number
   onSelect: (name: string, e: React.MouseEvent) => void
+  onPreview: (name: string) => void
   onSelectAll: () => void
   onClear: () => void
   onRestore: () => void
@@ -760,6 +784,9 @@ function ImagesPanel({
           items={items}
           selected={selected}
           onSelect={onSelect}
+          onActivate={onPreview}
+          onPreview={onPreview}
+          clickMode="activate"
           ariaLabel="preprocess-grid"
           emptyHint={
             filter === 'pending'

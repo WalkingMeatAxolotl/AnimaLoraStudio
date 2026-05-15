@@ -16,7 +16,7 @@ import GenerateProgressBar, { type GenerateProgress } from './generate/GenerateP
 import NumField from './generate/NumField'
 import PreviewCompare from './generate/PreviewCompare'
 import PreviewHistoryRail from './generate/PreviewHistoryRail'
-import PromptFromDatasetPicker from './generate/PromptFromDatasetPicker'
+import PromptFromDatasetPicker, { type DatasetPick } from './generate/PromptFromDatasetPicker'
 import { makeThumbnail, useGenerateHistory, type HistoryEntry } from './generate/useGenerateHistory'
 import PreviewXYGrid from './generate/PreviewXYGrid'
 import PromptList from './generate/PromptList'
@@ -70,6 +70,9 @@ export default function GeneratePage() {
     batchIdx: null, batchTotal: null, currentStep: null, totalSteps: null,
   })
   const [datasetPickerOpen, setDatasetPickerOpen] = useState(false)
+  // dataset picker 选中状态：picker 关掉再开都保留；不写进 prompts 数组，
+  // 而是在 handleGenerate 里把 tags 拼到每条 prompt 末尾再 enqueue。
+  const [datasetPick, setDatasetPick] = useState<DatasetPick | null>(null)
   // commit 16：图片历史栏。点击历史项 → 主预览替换为该项封面
   const history = useGenerateHistory()
   const [historyOverride, setHistoryOverride] = useState<HistoryEntry | null>(null)
@@ -236,8 +239,12 @@ export default function GeneratePage() {
   }
 
   const handleGenerate = async () => {
-    if (!prompts.some((p) => p.trim())) {
-      toast('请输入至少一条提示词', 'error')
+    // dataset picker 选了 caption 也算"有 prompt 源"；与「正向」textarea 任一非空都允许
+    const datasetSuffix = datasetPick && datasetPick.tags.length > 0
+      ? datasetPick.tags.join(', ')
+      : ''
+    if (!prompts.some((p) => p.trim()) && !datasetSuffix) {
+      toast('请输入至少一条提示词（或从训练集选一条 caption）', 'error')
       return
     }
 
@@ -266,8 +273,15 @@ export default function GeneratePage() {
     setSelectedIndices([])  // 新一轮生成 — 旧选择已失效
     setProgress({ batchIdx: null, batchTotal: null, currentStep: null, totalSteps: null })
     try {
+      // 拼接顺序：手写正向在前，dataset tags 在后（与产品约定一致）
+      const baseTrimmed = prompts.map((p) => p.trim()).filter((p) => p)
+      const mergedPrompts = datasetSuffix
+        ? (baseTrimmed.length > 0
+            ? baseTrimmed.map((p) => `${p}, ${datasetSuffix}`)
+            : [datasetSuffix])
+        : baseTrimmed
       const body: GenerateRequest = {
-        prompts: prompts.filter((p) => p.trim()),
+        prompts: mergedPrompts,
         negative_prompt: negPrompt,
         width, height, steps,
         count: mode === 'xy' ? 1 : count,
@@ -368,12 +382,8 @@ export default function GeneratePage() {
               {datasetPickerOpen && (
                 <div className="mb-3">
                   <PromptFromDatasetPicker
-                    onAppend={(tags) => {
-                      const cur = (prompts[0] ?? '').trim()
-                      const next = cur ? `${cur}, ${tags.join(', ')}` : tags.join(', ')
-                      setPrompts([next])
-                    }}
-                    onReplace={(tags) => setPrompts([tags.join(', ')])}
+                    value={datasetPick}
+                    onChange={setDatasetPick}
                     onClose={() => setDatasetPickerOpen(false)}
                   />
                 </div>

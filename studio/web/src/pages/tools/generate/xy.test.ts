@@ -48,21 +48,30 @@ describe('draftToSpec', () => {
     expect(s.lora_index).toBeUndefined()
   })
 
-  it('builds spec for lora_scale axis with valid lora_index', () => {
-    const d: XYAxisDraft = { axis: 'lora_scale', raw: '0.5, 1.0', loraIndex: 1 }
+  it('lora_scale 改为全局轴：不再要求 lora_index（透传 spec.lora_index=undefined）', () => {
+    const d: XYAxisDraft = { axis: 'lora_scale', raw: '0.5, 1.0', loraIndex: null }
     const s = draftToSpec(d, loras)
     expect(s.axis).toBe('lora_scale')
-    expect(s.lora_index).toBe(1)
+    expect(s.values).toEqual([0.5, 1.0])
+    expect(s.lora_index).toBeUndefined()
   })
 
-  it('throws when lora_scale axis has null lora_index', () => {
-    const d: XYAxisDraft = { axis: 'lora_scale', raw: '0.5', loraIndex: null }
+  it('lora_ckpt axis 仍要求 loraIndex（指向 caller 自己 push 的 anchor 槽）', () => {
+    const d: XYAxisDraft = { axis: 'lora_ckpt', raw: '/x/step.safetensors', loraIndex: null }
     expect(() => draftToSpec(d, loras)).toThrow(/必须绑定一个 LoRA/)
   })
 
-  it('throws when lora_index is out of range', () => {
-    const d: XYAxisDraft = { axis: 'lora_scale', raw: '0.5', loraIndex: 5 }
+  it('lora_ckpt axis lora_index 越界 → throw', () => {
+    const d: XYAxisDraft = { axis: 'lora_ckpt', raw: '/x/step.safetensors', loraIndex: 5 }
     expect(() => draftToSpec(d, loras)).toThrow(/不存在/)
+  })
+
+  it('lora_ckpt axis with valid lora_index → spec.lora_index 填入', () => {
+    const d: XYAxisDraft = { axis: 'lora_ckpt', raw: '/x/step.safetensors', loraIndex: 1 }
+    const s = draftToSpec(d, loras)
+    expect(s.axis).toBe('lora_ckpt')
+    expect(s.lora_index).toBe(1)
+    expect(s.values).toEqual(['/x/step.safetensors'])
   })
 })
 
