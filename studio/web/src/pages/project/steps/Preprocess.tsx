@@ -121,13 +121,18 @@ export default function PreprocessPage() {
     void refreshUpscaler()
   }, [refreshFiles, refreshStatus, refreshUpscaler])
 
-  // SSE：job 状态变化 → 刷 status + files；model download 完成 → 刷 catalog
+  // SSE：日志 / job 状态 / 每图完成 / 模型下载 完成都即时反映。
+  // 不轮询 — worker 每张图后通过 stdout 标记行 → supervisor publish
+  // `preprocess_progress` 事件，前端收到后刷新 files。
   const jobIdRef = useRef<number | null>(null)
   jobIdRef.current = status?.job?.id ?? null
   useEventStream((evt) => {
     const jid = jobIdRef.current
     if (evt.type === 'job_log_appended' && jid && evt.job_id === jid) {
       setLogs((prev) => [...prev, String(evt.text ?? '')])
+    } else if (evt.type === 'preprocess_progress' && jid && evt.job_id === jid) {
+      // 每张图完成都刷一下 files —— grid / 进度条 / 盘占用 全部跟着动
+      void refreshFiles()
     } else if (evt.type === 'job_state_changed' && jid && evt.job_id === jid) {
       void refreshStatus()
       if (evt.status === 'done' || evt.status === 'failed' || evt.status === 'canceled') {
@@ -149,17 +154,6 @@ export default function PreprocessPage() {
     pending_count: 0,
   }
   const modelReady = !!upscaler?.exists
-
-  // job 跑的中途 worker 不发"每张图完成"事件 — 只有日志在涨。
-  // 用固定间隔轮询 files 端点把进度 / 盘占 / grid 推进度。停了就清。
-  // 端点本身很轻（一次 readdir + 少量 sidecar 读），3s 一次开销可忽略。
-  useEffect(() => {
-    if (!isLive) return
-    const t = window.setInterval(() => {
-      void refreshFiles()
-    }, 3000)
-    return () => window.clearInterval(t)
-  }, [isLive, refreshFiles])
 
   // ----- 操作 ---------------------------------------------------------------
   const downloadModel = async () => {

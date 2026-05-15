@@ -15,6 +15,7 @@ log 文件，避免 LogTailer 读两次。
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import signal
 import sys
@@ -55,6 +56,14 @@ def run(job_id: int) -> int:  # noqa: PLR0912, PLR0915 - 主流程线性可读
 
     def log(line: str) -> None:
         print(line, flush=True)
+
+    def emit_event(evt_type: str, **payload) -> None:
+        """通过 stdout 标记行 → supervisor 解析 → SSE。供前端实时更新用，
+        不会进 job 日志。supervisor 端常量见 `studio/supervisor.py:_EVENT_MARKER`。"""
+        try:
+            print(f"__EVENT__:{evt_type}:{json.dumps(payload, ensure_ascii=False)}", flush=True)
+        except Exception:  # noqa: BLE001 — 推事件失败不影响主流程
+            pass
 
     try:
         with db.connection_for() as conn:
@@ -137,15 +146,25 @@ def run(job_id: int) -> int:  # noqa: PLR0912, PLR0915 - 主流程线性可读
             if not src_path.exists():
                 log(f"[skip] ({idx}/{total}) {src_name}: 源已不存在")
                 skipped += 1
+                emit_event(
+                    "preprocess_progress",
+                    idx=idx, total=total, name=src_name, status="skip",
+                    succeeded=succeeded, failed=failed, skipped=skipped,
+                )
                 continue
             dst_path = preprocess.product_path_for(preprocess_dir, src_name)
             # 'all' 是增量（已 resolve 过），'all_force' / 'selected' 可能已存在
             if dst_path.exists() and mode == "all":
                 skipped += 1
+                emit_event(
+                    "preprocess_progress",
+                    idx=idx, total=total, name=src_name, status="skip",
+                    succeeded=succeeded, failed=failed, skipped=skipped,
+                )
                 continue
             log(f"[upscale] ({idx}/{total}) {src_name} → {dst_path.name}")
             try:
-                upscaler.upscale_file(
+                meta = upscaler.upscale_file(
                     src_path,
                     dst_path,
                     model_path=model_path,
@@ -160,9 +179,21 @@ def run(job_id: int) -> int:  # noqa: PLR0912, PLR0915 - 主流程线性可读
                     prewarm_thumb_sizes=[256, 768],
                 )
                 succeeded += 1
+                emit_event(
+                    "preprocess_progress",
+                    idx=idx, total=total, name=src_name, status="done",
+                    action=meta.get("action"),
+                    succeeded=succeeded, failed=failed, skipped=skipped,
+                )
             except Exception as exc:  # noqa: BLE001 — 单张失败不影响其他
                 log(f"[fail] {src_name}: {exc}")
                 failed += 1
+                emit_event(
+                    "preprocess_progress",
+                    idx=idx, total=total, name=src_name, status="fail",
+                    error=str(exc)[:200],
+                    succeeded=succeeded, failed=failed, skipped=skipped,
+                )
 
         log(
             f"[done] succeeded={succeeded} failed={failed} skipped={skipped}"

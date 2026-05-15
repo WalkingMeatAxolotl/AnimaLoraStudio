@@ -42,6 +42,12 @@ logger = logging.getLogger(__name__)
 # preprocess 走 spandrel super-resolution，加载权重到 GPU 推理。
 GPU_BOUND_JOB_KINDS: frozenset[str] = frozenset({"preprocess", "tag", "reg_build"})
 
+# Worker → supervisor 的结构化事件标记。worker 写
+#   __EVENT__:my_event_type:{"foo":1,"bar":"x"}
+# 到 stdout，supervisor 在 _on_line 里识别并 publish 成 typed SSE 事件
+# （job_id / project_id 自动注入），不会进 job_log。比专门搭 IPC 轻。
+_EVENT_MARKER = "__EVENT__:"
+
 # 槽位名常量
 SLOT_TRAIN = "train"
 SLOT_DATA = "data"
@@ -614,6 +620,27 @@ class Supervisor:
         kind = job["kind"]
 
         def _on_line(line: str) -> None:
+            # 结构化事件标记：worker 写 `__EVENT__:type:json_payload` 让 supervisor
+            # publish 成 typed SSE 事件（不进 job log）。比专门搭 IPC 通道轻，比
+            # 让前端按文本 grep 日志靠谱。job_id / project_id 由 supervisor 注入。
+            if line.startswith(_EVENT_MARKER):
+                try:
+                    rest = line[len(_EVENT_MARKER):]
+                    evt_type, payload_str = rest.split(":", 1)
+                    import json as _json
+                    payload = _json.loads(payload_str) if payload_str else {}
+                    self._on_event({
+                        "type": evt_type,
+                        "job_id": jid,
+                        "project_id": pid_,
+                        "version_id": vid,
+                        "kind": kind,
+                        **payload,
+                    })
+                except Exception:
+                    logger.exception("malformed event marker: %r", line[:200])
+                return  # 不当成日志推
+
             self._on_event({
                 "type": "job_log_appended",
                 "job_id": jid,
