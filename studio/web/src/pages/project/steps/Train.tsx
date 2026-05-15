@@ -14,6 +14,7 @@ import { useDialog } from '../../../components/Dialog'
 import SchemaForm from '../../../components/SchemaForm'
 import StepShell from '../../../components/StepShell'
 import { useToast } from '../../../components/Toast'
+import { useAdvancedMode } from '../../../lib/useAdvancedMode'
 import {
   PRESET_NAME_RE,
   defaultsFromSchema,
@@ -65,16 +66,7 @@ export default function TrainPage() {
   // 预设 picker（dropdown 模式，与 Presets 页一致）
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerSearch, setPickerSearch] = useState('')
-  const [advancedMode, setAdvancedMode] = useState(() =>
-    localStorage.getItem('advanced_mode') === 'true'
-  )
-  const toggleAdvancedMode = () => {
-    setAdvancedMode(v => {
-      const next = !v
-      localStorage.setItem('advanced_mode', String(next))
-      return next
-    })
-  }
+  const [advancedMode, toggleAdvancedMode] = useAdvancedMode()
   const pickerAnchorRef = useRef<HTMLButtonElement | null>(null)
   const pickerPopRef = useRef<HTMLDivElement | null>(null)
 
