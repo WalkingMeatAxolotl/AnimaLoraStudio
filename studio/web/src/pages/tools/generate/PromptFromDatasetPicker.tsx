@@ -1,28 +1,39 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, type CaptionEntry, type ProjectSummary } from '../../../api/client'
 
-/** 从训练集 caption 里选一条，把 tags 拿到生成 prompt 里。
+export interface DatasetPick {
+  projectId: number
+  versionId: number
+  /** caption 文件名（含目录，例如 "5_concept/0001.txt"） */
+  name: string
+  /** caption 文本拆出的 tag 列表，按训练集原始顺序 */
+  tags: string[]
+}
+
+/** 从训练集 caption 里选一条作为生成时的 prompt 后缀（不写入 sidebar 「正向」textarea）。
  *
- * 流程：选项目 → 选版本 → 列 captions → 单选 → 「追加」/「替换」。
- * 保留 inline 展开（不弹 modal），跟 LoRA picker 一致。
+ * 受控单选 + 常驻：
+ * - 父组件控 open / close（× 触发 onClose；不会因为「生成」自动关）
+ * - 选中状态 (DatasetPick) 由父组件持有，picker 关掉再开，状态还在
+ * - 点 list 行：未选 → 激活；已选同一行 → 取消（反选）
+ * - 选中 caption 的 tags 在底部只读 textarea 展示，不写进上层 prompt 框
  */
 export default function PromptFromDatasetPicker({
-  onAppend, onReplace, onClose,
+  value, onChange, onClose,
 }: {
-  /** 把选中 caption 的 tags 追加到当前 prompt 末尾 */
-  onAppend: (tags: string[]) => void
-  /** 用 tags 替换整个 prompt */
-  onReplace: (tags: string[]) => void
+  /** 当前选中 caption（null = 未选） */
+  value: DatasetPick | null
+  onChange: (next: DatasetPick | null) => void
   onClose: () => void
 }) {
   const [projects, setProjects] = useState<ProjectSummary[]>([])
-  const [pid, setPid] = useState<number | null>(null)
-  const [vid, setVid] = useState<number | null>(null)
+  /** 浏览中的 project（与 value.projectId 解耦：用户可以保持选中、切别的项目继续看） */
+  const [pid, setPid] = useState<number | null>(value?.projectId ?? null)
+  const [vid, setVid] = useState<number | null>(value?.versionId ?? null)
   const [versions, setVersions] = useState<Array<{ id: number; label: string }>>([])
   const [captions, setCaptions] = useState<CaptionEntry[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [search, setSearch] = useState('')
 
   // 1. 拉项目列表
@@ -39,8 +50,12 @@ export default function PromptFromDatasetPicker({
       .then((p) => {
         const vs = p.versions.map((v) => ({ id: v.id, label: v.label }))
         setVersions(vs)
-        if (vs.length > 0) setVid(vs[0].id)
-        else setVid(null)
+        if (vs.length > 0) {
+          // 如果当前 vid 在新项目里没有，落到第一个；否则保留
+          setVid((cur) => (cur && vs.some((v) => v.id === cur) ? cur : vs[0].id))
+        } else {
+          setVid(null)
+        }
       })
       .catch((e) => setError(String(e)))
   }, [pid])
@@ -64,7 +79,33 @@ export default function PromptFromDatasetPicker({
     )
   }, [captions, search])
 
-  const selected = filtered.find((c) => `${c.folder}/${c.name}` === selectedKey)
+  // 当前 list 中匹配选中 caption 的 key（仅当浏览中的 pid/vid 与 value 一致才高亮）
+  const selectedKeyInList = useMemo(() => {
+    if (!value || value.projectId !== pid || value.versionId !== vid) return null
+    return value.name
+  }, [value, pid, vid])
+
+  const tagsText = value ? value.tags.join(', ') : ''
+
+  const handleRowClick = (c: CaptionEntry) => {
+    if (
+      value
+      && value.projectId === pid
+      && value.versionId === vid
+      && value.name === c.name
+    ) {
+      // 反选
+      onChange(null)
+      return
+    }
+    if (!pid || !vid) return
+    onChange({
+      projectId: pid,
+      versionId: vid,
+      name: c.name,
+      tags: c.tags,
+    })
+  }
 
   return (
     <div
@@ -75,10 +116,19 @@ export default function PromptFromDatasetPicker({
       <div className="flex items-center gap-2">
         <span className="text-xs font-semibold text-fg-secondary shrink-0">从训练集选 prompt</span>
         <span className="flex-1" />
+        {value && (
+          <button
+            onClick={() => onChange(null)}
+            className="btn btn-ghost btn-sm text-2xs text-fg-tertiary"
+            title="清除已选 caption（× 只关闭面板）"
+          >
+            清空
+          </button>
+        )}
         <button
           onClick={onClose}
           className="btn btn-ghost btn-sm text-fg-tertiary px-1.5"
-          title="关闭"
+          title="关闭面板（保留已选）"
           aria-label="关闭"
         >
           ×
@@ -91,6 +141,7 @@ export default function PromptFromDatasetPicker({
           className="input text-xs flex-1"
           value={pid ?? ''}
           onChange={(e) => setPid(e.target.value ? Number(e.target.value) : null)}
+          aria-label="选项目"
         >
           <option value="">选项目…</option>
           {projects.map((p) => (
@@ -102,6 +153,7 @@ export default function PromptFromDatasetPicker({
           value={vid ?? ''}
           onChange={(e) => setVid(e.target.value ? Number(e.target.value) : null)}
           disabled={versions.length === 0}
+          aria-label="选版本"
         >
           <option value="">选版本…</option>
           {versions.map((v) => (
@@ -123,18 +175,18 @@ export default function PromptFromDatasetPicker({
       {error && <div className="text-2xs text-err">{error}</div>}
 
       {/* caption 列表 */}
-      <div className="flex flex-col gap-px overflow-y-auto" style={{ maxHeight: 280 }}>
+      <div className="flex flex-col gap-px overflow-y-auto" style={{ maxHeight: 240 }}>
         {loading && <div className="text-2xs text-fg-tertiary">加载中…</div>}
-        {!loading && pid && vid && captions.length === 0 && (
+        {!loading && pid && vid && captions.length === 0 && !error && (
           <div className="text-2xs text-fg-tertiary">该版本没有 caption</div>
         )}
         {!loading && filtered.map((c) => {
           const k = `${c.folder}/${c.name}`
-          const active = selectedKey === k
+          const active = selectedKeyInList === c.name
           return (
             <button
               key={k}
-              onClick={() => setSelectedKey(active ? null : k)}
+              onClick={() => handleRowClick(c)}
               className="flex items-center gap-2 px-2 py-1.5 rounded text-xs text-left border-none transition-colors"
               style={{
                 background: active ? 'var(--accent-soft)' : 'transparent',
@@ -154,31 +206,17 @@ export default function PromptFromDatasetPicker({
         })}
       </div>
 
-      {/* 选中预览 + 操作 */}
-      {selected && (
-        <>
-          <div
-            className="rounded-sm border border-subtle bg-sunken px-2 py-1.5 text-xs font-mono whitespace-pre-wrap"
-            style={{ maxHeight: 100, overflowY: 'auto' }}
-          >
-            {selected.tags.join(', ')}
-          </div>
-          <div className="flex gap-2 justify-end">
-            <button
-              onClick={() => { onReplace(selected.tags); onClose() }}
-              className="btn btn-ghost btn-sm text-xs"
-            >
-              替换 prompt
-            </button>
-            <button
-              onClick={() => { onAppend(selected.tags); onClose() }}
-              className="btn btn-primary btn-sm text-xs"
-            >
-              追加到末尾
-            </button>
-          </div>
-        </>
-      )}
+      {/* 已选 tags 只读区：永远渲染，方便用户看出当前 picker 处于「无选」还是「有选」状态。
+       *  独立于上方「正向」textarea，生成时由 caller 把 tags 接到 prompt 末尾。 */}
+      <label className="caption block mt-1">已选 tags（点「生成」时接在正向之后）</label>
+      <textarea
+        className="input w-full font-mono text-xs resize-y"
+        rows={3}
+        value={tagsText}
+        readOnly
+        placeholder="还没选 caption — 点上方列表里的一行激活"
+        aria-label="已选 caption 的 tags（只读）"
+      />
     </div>
   )
 }

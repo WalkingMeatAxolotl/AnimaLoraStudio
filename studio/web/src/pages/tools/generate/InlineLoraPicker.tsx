@@ -1,156 +1,388 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { api, type LoraCkpt } from '../../../api/client'
 import type { ProjectLora } from './types'
-import { ckptStemFromPath } from './xy'
 
-/** 项目缩写图标（2 字符 uppercase，从 title 提字母数字派生）。 */
+/** 项目缩写图标（2 字符 uppercase）。SidebarLoras / 历史代码引用。 */
 export function projectAbbr(title: string): string {
   const cleaned = title.replace(/[^a-zA-Z0-9]/g, '')
   return (cleaned.slice(0, 2) || '??').toUpperCase()
 }
 
-function ProjectIcon({ title }: { title: string }) {
-  return (
-    <div className="shrink-0 w-7 h-7 rounded bg-sunken text-fg-tertiary text-2xs font-mono flex items-center justify-center border border-subtle">
-      {projectAbbr(title)}
-    </div>
-  )
+export interface PickedLora {
+  path: string
+  projectId: number | null
+  versionId: number | null
 }
 
-/** 内嵌 LoRA 多选挑选器：扁平列表 + 搜索 + 一键清空 + 短名显示。
- *
- * 列表每行：[项目 icon] [项目 / 版本] [训练中 pill] [短名] [✓ / +]
- * 不再按 project 分组（用户反馈分组冗余）；显示 stem 名（去 .safetensors）。
- *
- * onRemove 可选：传了就支持点击已添加项取消勾选（多选 toggle）。
- * onClearAll 可选：传了就显示一键清空按钮。
- */
-export default function InlineLoraPicker({
-  projectLoras, selectedPaths,
-  onPick, onRemove, onClearAll,
-  onClose, onPickExternal,
-}: {
+interface CommonProps {
   projectLoras: ProjectLora[]
-  selectedPaths: Set<string>
-  onPick: (path: string) => void
-  onRemove?: (path: string) => void
-  onClearAll?: () => void
+  /** × 按钮回调：单选模式 = 删整个槽；多选模式 = 关 inline 面板 */
   onClose: () => void
-  onPickExternal: () => void
-}) {
-  const [search, setSearch] = useState('')
+  onPickExternal?: () => void
+}
 
+interface SingleModeProps extends CommonProps {
+  mode: 'single'
+  /** 当前槽绑的 ckpt（null = 槽空着）。受控。 */
+  value: PickedLora | null
+  /** 当前权重。受控。 */
+  weight: number
+  /** value/weight 任一变更都走这个回调。 */
+  onChange: (next: PickedLora | null, weight: number) => void
+  /** showWeight 强制为 true（单选模式 = 一个 LoRA 槽，必有权重）。 */
+  showWeight?: never
+  existingPaths?: never
+}
+
+interface MultiModeProps extends CommonProps {
+  mode?: 'multi'
+  /** 已被 caller 选过的 path（其他 LoRA 槽 / 其他 axis 占用），在 list 标 ✓ 禁用 */
+  existingPaths?: Set<string>
+  /** 「添加 N 个」commit 回调；之后 onClose 由 picker 自动触发 */
+  onPick: (picks: PickedLora[], weight: number) => void
+  /** XY 轴绑定下应 hide 权重（轴卡片自己有 lora_scale 控制） */
+  showWeight?: boolean
+  defaultWeight?: number
+  value?: never
+  weight?: never
+  onChange?: never
+}
+
+type Props = SingleModeProps | MultiModeProps
+
+/** 内嵌 LoRA 选择器：项目 + 版本下拉 → ckpt chip 列表 → 单选 / 多选 + 权重。
+ *
+ * **single 模式**（受控）：一个 picker = 一个 LoRA 槽。点 chip = 切换当前槽 ckpt；
+ *   再点同 chip = 取消（槽空）。weight slider 改 = 立即 onChange。× = 删槽。
+ *
+ * **multi 模式**（XY 轴 / bulk add）：toggle 多选 + 底部 weight + 「添加 N 个」按钮
+ *   一次性 commit；commit 后 onClose 自动触发；× = 取消 inline 面板。XY 场景下
+ *   传 `showWeight=false` 隐藏权重栏。
+ */
+export default function InlineLoraPicker(props: Props) {
+  const { projectLoras, onClose, onPickExternal } = props
+  const isSingle = props.mode === 'single'
+  const showWeight = isSingle ? true : (props.showWeight ?? true)
+  const existingPaths = isSingle ? new Set<string>() : (props.existingPaths ?? new Set<string>())
+
+  // 项目下拉：projectLoras 去重 by projectId
+  const projects = useMemo(() => {
+    const map = new Map<number, { id: number; title: string }>()
+    for (const l of projectLoras) {
+      if (!map.has(l.projectId)) map.set(l.projectId, { id: l.projectId, title: l.projectTitle })
+    }
+    return Array.from(map.values())
+  }, [projectLoras])
+
+  // 初始 pid/vid：single 模式优先用 value 的；否则取第一个项目
+  const initialPid = isSingle ? (props.value?.projectId ?? projects[0]?.id ?? null) : (projects[0]?.id ?? null)
+  const initialVid = isSingle
+    ? (props.value?.versionId ?? null)
+    : (projectLoras.find((l) => l.projectId === projects[0]?.id)?.versionId ?? null)
+
+  const [pid, setPid] = useState<number | null>(initialPid)
+
+  const versions = useMemo(() => {
+    if (pid === null) return []
+    return projectLoras
+      .filter((l) => l.projectId === pid)
+      .map((l) => ({ id: l.versionId, label: l.versionLabel, stage: l.stage }))
+  }, [projectLoras, pid])
+
+  const [vid, setVid] = useState<number | null>(initialVid)
+  useEffect(() => {
+    if (versions.length === 0) {
+      setVid(null)
+    } else if (!versions.some((v) => v.id === vid)) {
+      setVid(versions[0].id)
+    }
+  }, [versions, vid])
+
+  // 拉 ckpt
+  const [ckpts, setCkpts] = useState<LoraCkpt[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (pid === null || vid === null) {
+      setCkpts([])
+      return
+    }
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    void api.listVersionLoraCkpts(pid, vid)
+      .then((items) => {
+        if (cancelled) return
+        setCkpts(items)
+        setLoading(false)
+      })
+      .catch((e) => {
+        if (cancelled) return
+        setError(e instanceof Error ? e.message : String(e))
+        setCkpts([])
+        setLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [pid, vid])
+
+  // 搜索过滤
+  const [search, setSearch] = useState('')
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
-    if (!q) return projectLoras
-    return projectLoras.filter(
-      (l) =>
-        l.projectTitle.toLowerCase().includes(q) ||
-        l.versionLabel.toLowerCase().includes(q) ||
-        ckptStemFromPath(l.path).toLowerCase().includes(q)
+    if (!q) return ckpts
+    return ckpts.filter((c) =>
+      c.label.toLowerCase().includes(q) || c.path.toLowerCase().includes(q)
     )
-  }, [projectLoras, search])
+  }, [ckpts, search])
 
-  const selectedCount = selectedPaths.size
+  // multi 模式的当前会话选中（single 模式不用，受控走 props.value）
+  const [picked, setPicked] = useState<Set<string>>(new Set())
+  useEffect(() => {
+    if (!isSingle) setPicked(new Set())  // pid/vid 切换时清空
+  }, [pid, vid, isSingle])
+
+  // 权重：single 模式受控；multi 模式内部状态
+  const [internalWeight, setInternalWeight] = useState<number>(
+    isSingle ? props.weight : (props.mode === 'multi' ? props.defaultWeight ?? 1.0 : 1.0)
+  )
+  // single 模式 weight 跟着 props 走
+  useEffect(() => {
+    if (isSingle) setInternalWeight(props.weight)
+  }, [isSingle, isSingle ? props.weight : 0])
+
+  const currentVersion = versions.find((v) => v.id === vid)
+
+  // chip 点击
+  const onChipClick = (c: LoraCkpt) => {
+    if (existingPaths.has(c.path)) return
+    if (isSingle) {
+      const { value } = props
+      const isCurrent = value && value.path === c.path
+      if (isCurrent) {
+        // 反选：槽内 ckpt 清空（视觉等同初次打开的空槽）；SidebarLoras 收到
+        // null 不会删整个槽，只把 path 置空（× 才删槽）。
+        props.onChange(null, internalWeight)
+        return
+      }
+      props.onChange(
+        { path: c.path, projectId: pid, versionId: vid },
+        internalWeight,
+      )
+      return
+    }
+    setPicked((s) => {
+      const next = new Set(s)
+      if (next.has(c.path)) next.delete(c.path); else next.add(c.path)
+      return next
+    })
+  }
+
+  const onWeightChange = (w: number) => {
+    if (isSingle) {
+      props.onChange(props.value, w)
+    } else {
+      setInternalWeight(w)
+    }
+  }
+
+  const commitMulti = () => {
+    if (isSingle) return
+    if (picked.size === 0) return
+    const picks: PickedLora[] = Array.from(picked).map((path) => ({
+      path,
+      projectId: pid,
+      versionId: vid,
+    }))
+    props.onPick(picks, internalWeight)
+    onClose()
+  }
+
+  // single 模式：选中的 ckpt path（用于 chip 高亮）
+  const selectedPath = isSingle ? props.value?.path ?? null : null
 
   return (
     <div
       className="rounded-md border border-subtle bg-overlay p-2.5 flex flex-col gap-2"
       data-testid="inline-lora-picker"
     >
-      {/* header: 搜索 + 计数 + 一键清空 + 外部文件 + 关闭 */}
+      {/* header */}
       <div className="flex items-center gap-2">
-        <input
-          type="text"
-          className="input flex-1 text-xs"
-          placeholder="搜索项目 / 版本 / 文件名…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          autoFocus
-        />
-        <span className="text-2xs text-fg-tertiary whitespace-nowrap">
-          已选 {selectedCount} / {filtered.length}
-        </span>
-        {onClearAll && selectedCount > 0 && (
+        <span className="text-xs font-semibold text-fg-secondary shrink-0">选 LoRA</span>
+        <span className="flex-1" />
+        {onPickExternal && (
           <button
-            onClick={onClearAll}
+            onClick={onPickExternal}
             className="btn btn-ghost btn-sm text-2xs text-fg-tertiary"
-            title="清空所有已选 LoRA"
+            title="选系统中任意 .safetensors 文件"
           >
-            一键清空
+            外部文件
           </button>
         )}
         <button
-          onClick={onPickExternal}
-          className="btn btn-ghost btn-sm text-2xs text-fg-tertiary"
-          title="选系统中任意 .safetensors 文件"
-        >
-          外部文件
-        </button>
-        <button
           onClick={onClose}
           className="btn btn-ghost btn-sm text-fg-tertiary px-1.5"
-          title="关闭"
-          aria-label="关闭挑选区"
+          title={isSingle ? '移除这个 LoRA 槽' : '关闭面板'}
+          aria-label={isSingle ? '移除 LoRA' : '关闭挑选区'}
         >
           ×
         </button>
       </div>
 
-      {/* 列表：扁平，每行一个 LoRA */}
-      <div className="flex flex-col gap-px overflow-y-auto" style={{ maxHeight: 360 }}>
-        {filtered.map((l) => {
-          const added = selectedPaths.has(l.path)
-          const stem = ckptStemFromPath(l.path)
-          const handleClick = () => {
-            if (added) {
-              if (onRemove) onRemove(l.path)
-            } else {
-              onPick(l.path)
-            }
-          }
+      {/* project / version 下拉 */}
+      <div className="flex gap-2">
+        <select
+          className="input text-xs flex-1"
+          value={pid ?? ''}
+          onChange={(e) => setPid(e.target.value ? Number(e.target.value) : null)}
+          aria-label="选项目"
+        >
+          <option value="">选项目…</option>
+          {projects.map((p) => (
+            <option key={p.id} value={p.id}>{p.title}</option>
+          ))}
+        </select>
+        <select
+          className="input text-xs flex-1"
+          value={vid ?? ''}
+          onChange={(e) => setVid(e.target.value ? Number(e.target.value) : null)}
+          disabled={versions.length === 0}
+          aria-label="选版本"
+        >
+          <option value="">选版本…</option>
+          {versions.map((v) => (
+            <option key={v.id} value={v.id}>
+              {v.label}{v.stage === 'training' ? '（训练中）' : ''}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* search */}
+      <input
+        type="text"
+        className="input text-xs"
+        placeholder="搜索 ckpt 文件名…"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        disabled={!pid || !vid || ckpts.length === 0}
+      />
+
+      {error && <div className="text-2xs text-err">{error}</div>}
+      {currentVersion?.stage === 'training' && (
+        <div className="text-2xs text-fg-tertiary">
+          <span className="badge badge-info" style={{ fontSize: 10, marginRight: 4 }}>训练中</span>
+          ckpt 列表会随训练进度刷新
+        </div>
+      )}
+
+      {/* ckpt chip 列表 */}
+      <div className="flex flex-wrap gap-1.5 overflow-y-auto" style={{ maxHeight: 280, padding: 2 }}>
+        {loading && <div className="text-2xs text-fg-tertiary px-1 py-2">加载中…</div>}
+        {!loading && projects.length === 0 && (
+          <div className="text-fg-tertiary text-xs px-1 py-4 text-center w-full">
+            还没有训练好的 LoRA —— 先去训练一个{onPickExternal ? '，或用「外部文件」' : ''}
+          </div>
+        )}
+        {!loading && projects.length > 0 && pid !== null && vid !== null && ckpts.length === 0 && !error && (
+          <div className="text-2xs text-fg-tertiary px-1 py-4 text-center w-full">
+            该版本没扫到 ckpt 文件
+          </div>
+        )}
+        {!loading && filtered.map((c) => {
+          const isExisting = existingPaths.has(c.path)
+          const isPicked = isSingle ? c.path === selectedPath : picked.has(c.path)
+          const marker = isExisting ? '✓' : (isPicked ? '✓' : '+')
           return (
             <button
-              key={`${l.projectId}-${l.versionId}`}
-              onClick={handleClick}
-              disabled={added && !onRemove}
-              className={`flex items-center gap-2 px-2 py-1.5 rounded text-xs text-left border-none transition-colors ${
-                added
-                  ? (onRemove
-                      ? 'bg-accent-soft text-accent cursor-pointer hover:opacity-80'
-                      : 'bg-sunken text-fg-tertiary cursor-not-allowed')
-                  : 'bg-transparent hover:bg-surface text-fg-secondary cursor-pointer'
-              }`}
+              key={c.path}
+              type="button"
+              onClick={() => onChipClick(c)}
+              disabled={isExisting}
+              className="font-mono inline-flex items-center gap-1"
               style={{
-                background: added
-                  ? 'var(--accent-soft)'
-                  : undefined,
+                fontSize: 11,
+                padding: '3px 10px',
+                borderRadius: 999,
+                border: isPicked
+                  ? '1px solid transparent'
+                  : (isExisting ? '1px dashed var(--border-default)' : '1px solid var(--border-subtle)'),
+                background: isExisting
+                  ? 'var(--bg-sunken)'
+                  : (isPicked ? 'var(--accent-soft)' : 'var(--bg-sunken)'),
+                color: isExisting
+                  ? 'var(--fg-tertiary)'
+                  : (isPicked ? 'var(--accent)' : 'var(--fg-secondary)'),
+                cursor: isExisting ? 'not-allowed' : 'pointer',
+                whiteSpace: 'nowrap',
               }}
+              title={c.path}
             >
-              <ProjectIcon title={l.projectTitle} />
-              <div className="flex-1 min-w-0 flex flex-col gap-px">
-                <div className="font-medium truncate flex items-center gap-1.5">
-                  <span>{l.projectTitle} / {l.versionLabel}</span>
-                  {l.stage === 'training' && (
-                    <span className="badge badge-info" style={{ fontSize: 10 }}>训练中</span>
-                  )}
-                </div>
-                <div className="text-2xs text-fg-tertiary font-mono truncate" title={l.path}>
-                  {stem}
-                </div>
-              </div>
-              <span className="font-mono text-2xs shrink-0" style={{ minWidth: 16, textAlign: 'right' }}>
-                {added ? '✓' : '+'}
-              </span>
+              <span>{marker}</span>
+              <span>{c.label}</span>
             </button>
           )
         })}
-
-        {filtered.length === 0 && (
-          <div className="text-fg-tertiary text-xs px-2 py-4 text-center">
-            {search ? '没有匹配的 LoRA' : '还没有训练好的 LoRA —— 先去训练一个，或用「外部文件」'}
-          </div>
+        {!loading && ckpts.length > 0 && filtered.length === 0 && (
+          <div className="text-fg-tertiary text-xs px-1 py-4 text-center w-full">没有匹配的 ckpt</div>
         )}
       </div>
+
+      {/* 权重 slider —— single 模式恒显；multi 模式按 showWeight + 有选时显 */}
+      {showWeight && (isSingle || picked.size > 0) && (
+        <div
+          className="flex items-center gap-2 pt-1"
+          style={{ borderTop: '1px solid var(--border-subtle)' }}
+        >
+          <span
+            className="font-mono text-fg-tertiary shrink-0"
+            style={{ fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase' }}
+          >
+            权重
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={1.5}
+            step={0.05}
+            value={internalWeight}
+            onChange={(e) => onWeightChange(Number(e.target.value))}
+            className="flex-1"
+            aria-label="LoRA 权重"
+            style={{ accentColor: 'var(--accent)' }}
+          />
+          <input
+            type="number"
+            min={0}
+            max={1.5}
+            step={0.05}
+            value={internalWeight}
+            onChange={(e) => onWeightChange(Number(e.target.value))}
+            className="input font-mono text-center"
+            style={{ width: 54, padding: '3px 6px', fontSize: 12 }}
+            aria-label="LoRA 权重数值"
+          />
+        </div>
+      )}
+
+      {/* multi 模式：commit footer */}
+      {!isSingle && picked.size > 0 && (
+        <div className="flex items-center gap-2 justify-end">
+          <span className="text-2xs text-fg-tertiary mr-auto">已选 {picked.size}</span>
+          <button
+            onClick={() => setPicked(new Set())}
+            className="btn btn-ghost btn-sm text-xs"
+          >
+            取消
+          </button>
+          <button
+            onClick={commitMulti}
+            className="btn btn-primary btn-sm text-xs"
+          >
+            添加 {picked.size} 个
+          </button>
+        </div>
+      )}
     </div>
   )
 }

@@ -242,7 +242,10 @@ def _apply_axis(
     cur_steps: int, cur_cfg_scale: float, cur_seed: int, cur_sampler: str,
     base_specs, adapters,
 ) -> tuple[int, float, int, str]:
-    """对 axis_type 派生的字段做更新；lora_scale 直接 mutate adapter。
+    """对 axis_type 派生的字段做更新；lora_scale 直接 mutate 所有 adapter。
+
+    lora_ckpt 不在这里 —— 它要 reinject，由 _run_xy_matrix 单独走
+    apply_loras 重新加载路径。
 
     返回 (steps, cfg_scale, seed, sampler) 4 元组（不变量直接透传）。
     """
@@ -256,9 +259,9 @@ def _apply_axis(
     elif axis_type == "sampler_name":
         cur_sampler = str(value)
     elif axis_type == "lora_scale":
-        idx = int(axis.get("lora_index") or 0)
-        if idx < len(adapters):
-            _set_lora_multiplier(adapters[idx], float(value))
+        # 全局轴：所有 LoRA 的 multiplier 都设成同一个 cell 值
+        for ad in adapters:
+            _set_lora_multiplier(ad, float(value))
     return cur_steps, cur_cfg_scale, cur_seed, cur_sampler
 
 
@@ -297,6 +300,15 @@ def _run_xy_matrix(
     y_spec = xy_matrix.get("y")
     x_values = x_spec["values"]
     y_values = y_spec["values"] if y_spec else [None]
+
+    # lora_ckpt 轴需要 cell 间 detach + reinject LoRA，CLI runner 不接入
+    # CACHE.apply_loras 那套（daemon 才有），所以这里直接拒绝。生产路径走
+    # runtime/anima_daemon.py:_run_xy 已支持。
+    if x_spec.get("axis") == "lora_ckpt" or (y_spec and y_spec.get("axis") == "lora_ckpt"):
+        raise NotImplementedError(
+            "lora_ckpt 轴需走 daemon path (runtime/anima_daemon.py)；"
+            "CLI runner anima_generate.py 不支持热切换 LoRA 文件"
+        )
 
     if base_seed == 0:
         base_seed = random.randint(0, 2**31 - 1)
