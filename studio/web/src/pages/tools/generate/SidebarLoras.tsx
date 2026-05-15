@@ -26,8 +26,9 @@ export default function SidebarLoras({
 
   const handleSlotChange = (i: number, picked: PickedLora | null, weight: number) => {
     if (picked === null) {
-      // 槽被「反选」清空 —— 整槽删除（picker × 也走 onRemove，这里是 ckpt 被点掉）
-      onChange(loras.filter((_, idx) => idx !== i))
+      // picker 内单选模式不会再发 null（点同 chip = no-op）；这里保留兜底
+      // 但不删槽 —— 只更新 weight，path 保持原样
+      onChange(loras.map((l, idx) => (idx === i ? { ...l, scale: weight } : l)))
       return
     }
     const entry: LoraEntry = {
@@ -72,7 +73,9 @@ export default function SidebarLoras({
       {/* 已具象的 LoRA 槽 */}
       {loras.map((l, i) => (
         <InlineLoraPicker
-          key={`lora-${i}-${l.path}`}
+          // key 只用 index：避免 ckpt 切换 (path 变) 时整个 picker remount，
+          // 否则会重新拉 ckpt 列表 + 内部 state 重置 → 视觉闪烁
+          key={`lora-${i}`}
           mode="single"
           projectLoras={projectLoras}
           value={{ path: l.path, projectId: l.project_id ?? null, versionId: l.version_id ?? null }}

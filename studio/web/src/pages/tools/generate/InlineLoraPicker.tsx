@@ -160,13 +160,15 @@ export default function InlineLoraPicker(props: Props) {
       const { value } = props
       const isCurrent = value && value.path === c.path
       if (isCurrent) {
-        props.onChange(null, internalWeight)
-      } else {
-        props.onChange(
-          { path: c.path, projectId: pid, versionId: vid },
-          internalWeight,
-        )
+        // 单选模式下点击已选中 chip = no-op（槽内必有 ckpt；想清空走 × 删槽）。
+        // 旧实现这里 onChange(null) 会触发 SidebarLoras 把整槽从 loras[] 删掉，
+        // 导致 picker 闪退；改为 no-op 后只有 × 删槽，更符合直觉。
+        return
       }
+      props.onChange(
+        { path: c.path, projectId: pid, versionId: vid },
+        internalWeight,
+      )
       return
     }
     setPicked((s) => {

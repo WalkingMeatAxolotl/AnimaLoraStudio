@@ -229,9 +229,9 @@ describe('InlineLoraPicker — single mode (controlled slot)', () => {
     expect(onClose).not.toHaveBeenCalled()
   })
 
-  it('click currently-selected chip → onChange(null, weight) (反选)', async () => {
+  it('click currently-selected chip → no-op（单选不允许反选，× 才删槽）', async () => {
     const user = userEvent.setup()
-    const { onChange } = renderSingle({
+    const { onChange, onClose } = renderSingle({
       value: {
         path: '/loras/cute_chibi/v3/step_2000.safetensors',
         projectId: 1, versionId: 11,
@@ -239,7 +239,8 @@ describe('InlineLoraPicker — single mode (controlled slot)', () => {
     })
     await waitFor(() => expect(screen.getByText('step 2000')).toBeInTheDocument())
     await user.click(screen.getByText('step 2000').closest('button')!)
-    expect(onChange).toHaveBeenCalledWith(null, 1.0)
+    expect(onChange).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
   })
 
   it('weight slider change → onChange(value, new_weight)', async () => {
