@@ -758,6 +758,19 @@ function PreprocessSidebar({
     return stats
   }, [processed])
 
+  // 产物总盘占 — 云端硬盘费才是真该警惕的
+  const processedBytes = useMemo(
+    () => processed.reduce((s, it) => s + (it.size ?? 0), 0),
+    [processed],
+  )
+  const avgBytes = processed.length > 0 ? processedBytes / processed.length : 0
+  const fmtBytes = (b: number) =>
+    b >= 1024 * 1024 * 1024
+      ? `${(b / 1024 / 1024 / 1024).toFixed(2)} GB`
+      : b >= 1024 * 1024
+        ? `${(b / 1024 / 1024).toFixed(1)} MB`
+        : `${(b / 1024).toFixed(0)} KB`
+
   return (
     <div className="flex flex-col gap-3 min-w-0">
       <div className="rounded-md border border-subtle bg-surface px-3 py-2.5">
@@ -803,25 +816,41 @@ function PreprocessSidebar({
         </div>
       )}
 
+      {/* 盘占用 — 云端关注的真指标 */}
       <div className="rounded-md border border-subtle bg-surface px-3 py-2.5">
         <h3 className="caption flex items-center gap-1.5">
           <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-ok" />
-          模型
+          盘占用
+        </h3>
+        <StatRow
+          label="产物总大小"
+          value={processed.length > 0 ? fmtBytes(processedBytes) : '—'}
+          accent={processedBytes > 5 * 1024 ** 3 ? 'warn' : undefined}
+        />
+        {processed.length > 0 && (
+          <StatRow label="均值 / 张" value={fmtBytes(avgBytes)} />
+        )}
+        <p className="text-[11px] text-fg-tertiary mt-1.5 leading-snug">
+          {targetEdge === null
+            ? '关闭目标模式：每张 4× PNG 巨大，盘费高。'
+            : '智能模式：缩到目标面积后单张 PNG 通常 1-3 MB。'}
+        </p>
+      </div>
+
+      {/* 设备 / 模型就绪 */}
+      <div className="rounded-md border border-subtle bg-surface px-3 py-2.5">
+        <h3 className="caption flex items-center gap-1.5">
+          <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-accent opacity-60" />
+          设备 / 模型
         </h3>
         <StatRow
           label={DEFAULT_MODEL}
           value={upscaler?.exists ? '已就绪' : '未下载'}
           accent={upscaler?.exists ? 'ok' : 'warn'}
         />
-        {upscaler?.exists && (
-          <StatRow
-            label="大小"
-            value={`${(upscaler.size / 1024 / 1024).toFixed(1)} MB`}
-          />
-        )}
         <StatRow label="估算 VRAM 峰值" value={`~${estVramMB} MB`} />
         <p className="text-[11px] text-fg-tertiary mt-1.5 leading-snug">
-          tile 越大显存占用越高；显存吃紧时降到 128/192。
+          tile 越大显存占用越高；OOM 时降到 128/192。
         </p>
       </div>
 
