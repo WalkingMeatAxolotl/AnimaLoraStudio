@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import InlineLoraPicker, { projectAbbr } from './InlineLoraPicker'
@@ -38,6 +38,8 @@ describe('projectAbbr', () => {
 })
 
 describe('InlineLoraPicker', () => {
+  const rows = () => within(screen.getByTestId('inline-lora-list'))
+
   function renderPicker(overrides: Partial<{
     projectLoras: ProjectLora[]
     selectedPaths: Set<string>
@@ -63,13 +65,26 @@ describe('InlineLoraPicker', () => {
     expect(screen.getByText(/已选 0 \/ 3/)).toBeInTheDocument()
   })
 
-  it('groups versions by project title', () => {
+  it('shows project and version labels in each row', () => {
     renderPicker()
-    // 项目名作为 caption uppercase 显示（出现 2 次：组头 + cute_chibi 的 2 行 + noir 的 1 行）
-    // 用更稳的断言：每个 version 都渲染了
-    expect(screen.getByText(/cute_chibi \/ v3/)).toBeInTheDocument()
-    expect(screen.getByText(/cute_chibi \/ v2/)).toBeInTheDocument()
-    expect(screen.getByText(/noir_portrait \/ v1/)).toBeInTheDocument()
+    expect(rows().getByText(/cute_chibi \/ v3/)).toBeInTheDocument()
+    expect(rows().getByText(/cute_chibi \/ v2/)).toBeInTheDocument()
+    expect(rows().getByText(/noir_portrait \/ v1/)).toBeInTheDocument()
+  })
+
+  it('filters with separate project and version dropdowns', async () => {
+    const user = userEvent.setup()
+    renderPicker()
+
+    await user.selectOptions(screen.getByLabelText('筛选项目'), '1')
+    expect(rows().getByText(/cute_chibi \/ v3/)).toBeInTheDocument()
+    expect(rows().getByText(/cute_chibi \/ v2/)).toBeInTheDocument()
+    expect(rows().queryByText(/noir_portrait \/ v1/)).not.toBeInTheDocument()
+
+    await user.selectOptions(screen.getByLabelText('筛选版本'), '1:12')
+    expect(rows().queryByText(/cute_chibi \/ v3/)).not.toBeInTheDocument()
+    expect(rows().getByText(/cute_chibi \/ v2/)).toBeInTheDocument()
+    expect(screen.getByText(/已选 0 \/ 1/)).toBeInTheDocument()
   })
 
   it('shows 训练中 badge for training-stage versions', () => {
@@ -81,7 +96,7 @@ describe('InlineLoraPicker', () => {
     renderPicker({
       selectedPaths: new Set(['/loras/cute_chibi/v3.safetensors']),
     })
-    const addedBtn = screen.getByText(/cute_chibi \/ v3/).closest('button')!
+    const addedBtn = rows().getByText(/cute_chibi \/ v3/).closest('button')!
     // 没传 onRemove → multi-select off → button disabled
     expect(addedBtn).toBeDisabled()
     expect(addedBtn.textContent).toContain('✓')
@@ -90,7 +105,7 @@ describe('InlineLoraPicker', () => {
   it('calls onPick with path when a version is clicked', async () => {
     const user = userEvent.setup()
     const { onPick } = renderPicker()
-    const btn = screen.getByText(/noir_portrait \/ v1/).closest('button')!
+    const btn = rows().getByText(/noir_portrait \/ v1/).closest('button')!
     await user.click(btn)
     expect(onPick).toHaveBeenCalledWith('/loras/noir/v1.safetensors')
   })
@@ -100,7 +115,7 @@ describe('InlineLoraPicker', () => {
     const { onPick } = renderPicker({
       selectedPaths: new Set(['/loras/cute_chibi/v3.safetensors']),
     })
-    const btn = screen.getByText(/cute_chibi \/ v3/).closest('button')!
+    const btn = rows().getByText(/cute_chibi \/ v3/).closest('button')!
     await user.click(btn)
     expect(onPick).not.toHaveBeenCalled()
   })
@@ -111,8 +126,8 @@ describe('InlineLoraPicker', () => {
     const search = screen.getByPlaceholderText('搜索项目 / 版本 / 文件名…')
     await user.type(search, 'noir')
     // cute_chibi 的版本应该消失
-    expect(screen.queryByText(/cute_chibi \/ v3/)).not.toBeInTheDocument()
-    expect(screen.getByText(/noir_portrait \/ v1/)).toBeInTheDocument()
+    expect(rows().queryByText(/cute_chibi \/ v3/)).not.toBeInTheDocument()
+    expect(rows().getByText(/noir_portrait \/ v1/)).toBeInTheDocument()
     // count 更新（改成 已选 0/总）
     expect(screen.getByText(/已选 0 \/ 1/)).toBeInTheDocument()
   })
@@ -122,9 +137,9 @@ describe('InlineLoraPicker', () => {
     renderPicker()
     const search = screen.getByPlaceholderText('搜索项目 / 版本 / 文件名…')
     await user.type(search, 'v3')
-    expect(screen.getByText(/cute_chibi \/ v3/)).toBeInTheDocument()
-    expect(screen.queryByText(/cute_chibi \/ v2/)).not.toBeInTheDocument()
-    expect(screen.queryByText(/noir_portrait \/ v1/)).not.toBeInTheDocument()
+    expect(rows().getByText(/cute_chibi \/ v3/)).toBeInTheDocument()
+    expect(rows().queryByText(/cute_chibi \/ v2/)).not.toBeInTheDocument()
+    expect(rows().queryByText(/noir_portrait \/ v1/)).not.toBeInTheDocument()
   })
 
   it('shows empty hint when no matches', async () => {

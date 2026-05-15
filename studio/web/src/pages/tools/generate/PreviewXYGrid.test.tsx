@@ -113,4 +113,26 @@ describe('PreviewXYGrid', () => {
     expect(buttons[0]?.className).toContain('border-accent')
     expect(buttons[1]?.className).not.toContain('border-accent')
   })
+
+  it('navigates fullscreen cells with arrow keys', async () => {
+    const user = userEvent.setup()
+    const samples: Sample[] = [
+      makeSample(0, 0, 20, 3.0),
+      makeSample(1, 0, 25, 3.0),
+      makeSample(0, 1, 20, 5.0),
+      makeSample(1, 1, 25, 5.0),
+    ]
+    render(
+      <PreviewXYGrid samples={samples} taskId={99} xDraft={xDraft} yDraft={yDraft} />
+    )
+
+    await user.dblClick(screen.getAllByRole('img')[0])
+    expect(screen.getByText(/步数=20 .* CFG Scale=3/)).toBeInTheDocument()
+
+    await user.keyboard('{ArrowRight}')
+    expect(screen.getByText(/步数=25 .* CFG Scale=3/)).toBeInTheDocument()
+
+    await user.keyboard('{ArrowDown}')
+    expect(screen.getByText(/步数=25 .* CFG Scale=5/)).toBeInTheDocument()
+  })
 })

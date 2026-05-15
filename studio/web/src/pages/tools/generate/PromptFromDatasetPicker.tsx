@@ -1,6 +1,17 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, type CaptionEntry, type ProjectSummary } from '../../../api/client'
 
+const LAST_PROJECT_KEY = 'anima.generate.promptDataset.projectId'
+const LAST_VERSION_KEY = 'anima.generate.promptDataset.versionId'
+
+function readStoredNumber(key: string): number | null {
+  if (typeof window === 'undefined') return null
+  const raw = window.localStorage.getItem(key)
+  if (!raw) return null
+  const n = Number(raw)
+  return Number.isFinite(n) ? n : null
+}
+
 /** 从训练集 caption 里选一条，把 tags 拿到生成 prompt 里。
  *
  * 流程：选项目 → 选版本 → 列 captions → 单选 → 「追加」/「替换」。
@@ -28,7 +39,13 @@ export default function PromptFromDatasetPicker({
   // 1. 拉项目列表
   useEffect(() => {
     void api.listProjects()
-      .then(setProjects)
+      .then((items) => {
+        setProjects(items)
+        const storedPid = readStoredNumber(LAST_PROJECT_KEY)
+        if (storedPid != null && items.some((p) => p.id === storedPid)) {
+          setPid(storedPid)
+        }
+      })
       .catch((e) => setError(String(e)))
   }, [])
 
@@ -39,11 +56,23 @@ export default function PromptFromDatasetPicker({
       .then((p) => {
         const vs = p.versions.map((v) => ({ id: v.id, label: v.label }))
         setVersions(vs)
-        if (vs.length > 0) setVid(vs[0].id)
+        const storedVid = readStoredNumber(LAST_VERSION_KEY)
+        if (storedVid != null && vs.some((v) => v.id === storedVid)) setVid(storedVid)
+        else if (vs.length > 0) setVid(vs[0].id)
         else setVid(null)
       })
       .catch((e) => setError(String(e)))
   }, [pid])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (pid != null) window.localStorage.setItem(LAST_PROJECT_KEY, String(pid))
+  }, [pid])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (vid != null) window.localStorage.setItem(LAST_VERSION_KEY, String(vid))
+  }, [vid])
 
   // 3. 选版本后拉 captions
   useEffect(() => {
@@ -168,13 +197,13 @@ export default function PromptFromDatasetPicker({
               onClick={() => { onReplace(selected.tags); onClose() }}
               className="btn btn-ghost btn-sm text-xs"
             >
-              替换 prompt
+              替换当前提示词
             </button>
             <button
               onClick={() => { onAppend(selected.tags); onClose() }}
               className="btn btn-primary btn-sm text-xs"
             >
-              追加到末尾
+              追加到当前提示词
             </button>
           </div>
         </>

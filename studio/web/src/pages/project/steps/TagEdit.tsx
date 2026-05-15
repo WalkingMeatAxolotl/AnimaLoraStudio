@@ -158,7 +158,6 @@ export default function TagEditPage() {
   }
 
   const handleClick = (key: string, e: React.MouseEvent) => {
-    if (e.altKey) { setActiveKey(key); return }
     const r = applySelection(sel, key, e, filteredKeys, anchor)
     setSel(r.next); setAnchor(r.anchor)
   }
@@ -199,7 +198,13 @@ export default function TagEditPage() {
     } catch (e) { toast(String(e), 'error') }
   }
 
-  const onAfterRestore = async () => { await reloadCache(); await reload() }
+  const onAfterRestore = async () => {
+    await reloadCache()
+    setActiveKey('')
+    setSel(new Set())
+    setAnchor(null)
+    await reload()
+  }
 
   const downloadTrainZip = async () => {
     if (dirty) {
@@ -283,6 +288,8 @@ export default function TagEditPage() {
               selected={sel}
               activeName={activeKey || undefined}
               onSelect={handleClick}
+              onActivate={setActiveKey}
+              clickMode="activate"
               ariaLabel="tag-edit-grid"
               emptyHint={filterTag ? `没有图含「${filterTag}」` : '还没有图。请先在筛选和打标步骤完成操作。'}
             />

@@ -598,7 +598,7 @@ export default function PresetsPage() {
 function SkeletonGroups() {
   const rows = [5, 6, 4, 5]
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-3 animate-pulse" role="status" aria-label="加载预设配置中">
       {rows.map((r, gi) => (
         <div key={gi} className="flex flex-col gap-2">
           <div className="h-3 w-24 rounded-sm bg-sunken opacity-60" />
@@ -612,6 +612,7 @@ function SkeletonGroups() {
           </div>
         </div>
       ))}
+      <span className="sr-only">加载预设配置中...</span>
     </div>
   )
 }

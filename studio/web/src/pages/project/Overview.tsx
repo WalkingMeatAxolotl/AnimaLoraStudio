@@ -1,5 +1,6 @@
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useOutletContext } from 'react-router-dom'
-import { api, type ProjectDetail, type Version } from '../../api/client'
+import { api, type ProjectDetail, type Task, type Version } from '../../api/client'
 import PageHeader from '../../components/PageHeader'
 import StageBadge from '../../components/StageBadge'
 import { useToast } from '../../components/Toast'
@@ -178,6 +179,20 @@ export default function ProjectOverview() {
   const { project, activeVersion, reload, onCreateVersion, creatingVersionBusy } = useOutletContext<Ctx>()
   const navigate = useNavigate()
   const { toast } = useToast()
+  const [relatedTasks, setRelatedTasks] = useState<Task[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    void api.listQueue()
+      .then((items) => {
+        if (cancelled) return
+        setRelatedTasks(items.filter((t) => t.project_id === project.id))
+      })
+      .catch(() => {
+        if (!cancelled) setRelatedTasks([])
+      })
+    return () => { cancelled = true }
+  }, [project.id])
 
   const handleActivate = async (v: Version) => {
     try {
@@ -223,6 +238,15 @@ export default function ProjectOverview() {
   ]
 
   const steps = deriveTimeline(project, activeVersion)
+
+  const latestOutputTaskByVersion = useMemo(() => {
+    const out = new Map<number, Task>()
+    for (const task of [...relatedTasks].sort((a, b) => b.id - a.id)) {
+      if (task.status !== 'done' || task.version_id == null) continue
+      if (!out.has(task.version_id)) out.set(task.version_id, task)
+    }
+    return out
+  }, [relatedTasks])
 
   const nextStep = steps.find(s => s.status === 'active')
   const nextStepPaths: Record<string, string> = {
@@ -321,6 +345,15 @@ export default function ProjectOverview() {
                     >
                       {isActive ? '打开' : '激活并打开'}
                     </button>
+                    {latestOutputTaskByVersion.has(v.id) && (
+                      <button
+                        className="btn btn-ghost btn-sm ml-2"
+                        onClick={() => navigate(`/queue/${latestOutputTaskByVersion.get(v.id)!.id}#outputs`)}
+                        title="打开该版本最近一次完成任务的 output"
+                      >
+                        查看输出
+                      </button>
+                    )}
                   </div>
                 </div>
               )

@@ -2254,7 +2254,11 @@ def get_generate_sample(task_id: int, filename: str) -> Any:
     data = generate_cache.get_image(task_id, filename)
     if data is None:
         raise HTTPException(404)
-    return Response(content=data, media_type="image/png")
+    return Response(
+        content=data,
+        media_type="image/png",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.delete("/api/projects/{pid}/versions/{vid}/reg")

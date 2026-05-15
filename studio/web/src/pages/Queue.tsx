@@ -124,10 +124,11 @@ export default function QueuePage() {
   }, [tasks])
 
   // 当前 running 任务的 id，给 monitor 进度条 / 状态卡片用。
-  const runningTaskId = useMemo(
-    () => tasks.find((t) => t.status === 'running')?.id ?? null,
+  const runningTask = useMemo(
+    () => tasks.find((t) => t.status === 'running') ?? null,
     [tasks],
   )
+  const runningTaskId = runningTask?.id ?? null
   // monitor 进度走 useMonitorProgress hook (PR #37 增量协议)：runningTaskId
   // 切换时 hook 自动清状态 + 重拉 /api/state 冷启动；不需要本组件再写清理逻辑。
   const { state: monitor } = useMonitorProgress(runningTaskId)
@@ -164,6 +165,25 @@ export default function QueuePage() {
 
   const hasRunning = useMemo(() => tasks.some(t => t.status === 'running'), [tasks])
 
+  const pauseRunning = async () => {
+    if (!runningTask) return
+    const ok = await confirm(
+      `暂停当前任务 #${runningTask.id}？会向后台发送取消信号，任务会在安全点停止。`,
+      { tone: 'warn', okText: '暂停任务' },
+    )
+    if (!ok) return
+    setBusy(true)
+    try {
+      await api.cancelTask(runningTask.id)
+      toast('已发送暂停信号', 'success')
+      await reload()
+    } catch (e) {
+      toast(String(e), 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <StepShell
       idx={-1}
@@ -173,8 +193,13 @@ export default function QueuePage() {
         <>
           <button onClick={clearDone} disabled={busy} className="btn btn-ghost btn-sm">清理已完成</button>
           {hasRunning && (
-            <button className="btn btn-secondary btn-sm text-warn border-warn">
-              暂停队列
+            <button
+              onClick={() => void pauseRunning()}
+              disabled={busy || !runningTask}
+              className="btn btn-secondary btn-sm text-warn border-warn"
+              title="发送取消信号，让当前运行任务停止"
+            >
+              暂停当前任务
             </button>
           )}
           <button

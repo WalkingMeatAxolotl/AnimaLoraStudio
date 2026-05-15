@@ -177,7 +177,7 @@ export default function BulkActionBar({
 
       {/* Hint row */}
       <div className="text-fg-tertiary text-[11px]">
-        alt+点击 = 查看大图并编辑 · 普通点击 = 多选
+        点击图片 = 查看大图并编辑 · 勾选 = 多选 · Shift/Ctrl+点击 = 快速多选
       </div>
 
       {/* Popover row */}

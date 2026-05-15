@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ProjectLora } from './types'
 import { ckptStemFromPath } from './xy'
 
@@ -38,17 +38,45 @@ export default function InlineLoraPicker({
   onPickExternal: () => void
 }) {
   const [search, setSearch] = useState('')
+  const [projectId, setProjectId] = useState<string>('all')
+  const [versionKey, setVersionKey] = useState<string>('all')
+
+  const projects = useMemo(() => {
+    const seen = new Map<number, string>()
+    for (const l of projectLoras) {
+      if (!seen.has(l.projectId)) seen.set(l.projectId, l.projectTitle)
+    }
+    return Array.from(seen.entries()).map(([id, title]) => ({ id, title }))
+  }, [projectLoras])
+
+  const versions = useMemo(() => {
+    const seen = new Map<string, ProjectLora>()
+    for (const l of projectLoras) {
+      if (projectId !== 'all' && l.projectId !== Number(projectId)) continue
+      const key = `${l.projectId}:${l.versionId}`
+      if (!seen.has(key)) seen.set(key, l)
+    }
+    return Array.from(seen.entries()).map(([key, l]) => ({ key, item: l }))
+  }, [projectId, projectLoras])
+
+  useEffect(() => {
+    if (versionKey === 'all') return
+    if (!versions.some((v) => v.key === versionKey)) setVersionKey('all')
+  }, [versionKey, versions])
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
-    if (!q) return projectLoras
-    return projectLoras.filter(
-      (l) =>
+    return projectLoras.filter((l) => {
+      if (projectId !== 'all' && l.projectId !== Number(projectId)) return false
+      if (versionKey !== 'all' && `${l.projectId}:${l.versionId}` !== versionKey) return false
+      if (!q) return true
+      return (
         l.projectTitle.toLowerCase().includes(q) ||
         l.versionLabel.toLowerCase().includes(q) ||
         ckptStemFromPath(l.path).toLowerCase().includes(q)
-    )
-  }, [projectLoras, search])
+      )
+    })
+  }, [projectId, projectLoras, search, versionKey])
 
   const selectedCount = selectedPaths.size
 
@@ -57,11 +85,43 @@ export default function InlineLoraPicker({
       className="rounded-md border border-subtle bg-overlay p-2.5 flex flex-col gap-2"
       data-testid="inline-lora-picker"
     >
-      {/* header: 搜索 + 计数 + 一键清空 + 外部文件 + 关闭 */}
-      <div className="flex items-center gap-2">
+      {/* header: project/version filters + search + actions */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <select
+          className="input text-xs"
+          value={projectId}
+          onChange={(e) => {
+            setProjectId(e.target.value)
+            setVersionKey('all')
+          }}
+          aria-label="筛选项目"
+          style={{ width: 132 }}
+        >
+          <option value="all">全部项目</option>
+          {projects.map((p) => (
+            <option key={p.id} value={p.id}>{p.title}</option>
+          ))}
+        </select>
+        <select
+          className="input text-xs"
+          value={versionKey}
+          onChange={(e) => setVersionKey(e.target.value)}
+          aria-label="筛选版本"
+          disabled={versions.length === 0}
+          style={{ width: 150 }}
+        >
+          <option value="all">全部版本</option>
+          {versions.map(({ key, item }) => (
+            <option key={key} value={key}>
+              {projectId === 'all'
+                ? `${item.projectTitle} / ${item.versionLabel}`
+                : item.versionLabel}
+            </option>
+          ))}
+        </select>
         <input
           type="text"
-          className="input flex-1 text-xs"
+          className="input flex-1 text-xs min-w-[160px]"
           placeholder="搜索项目 / 版本 / 文件名…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -97,7 +157,11 @@ export default function InlineLoraPicker({
       </div>
 
       {/* 列表：扁平，每行一个 LoRA */}
-      <div className="flex flex-col gap-px overflow-y-auto" style={{ maxHeight: 360 }}>
+      <div
+        className="flex flex-col gap-px overflow-y-auto"
+        style={{ maxHeight: 360 }}
+        data-testid="inline-lora-list"
+      >
         {filtered.map((l) => {
           const added = selectedPaths.has(l.path)
           const stem = ckptStemFromPath(l.path)

@@ -56,6 +56,20 @@ def test_health_returns_ok(client: TestClient) -> None:
     assert body["version"] == server.app.version
 
 
+def test_generate_sample_response_is_not_browser_cached(client: TestClient) -> None:
+    from studio.services import generate_cache
+
+    generate_cache.clear_all()
+    try:
+        generate_cache.cache_image(7, "sample.png", b"PNG")
+        resp = client.get("/api/generate/7/sample/sample.png")
+        assert resp.status_code == 200
+        assert resp.content == b"PNG"
+        assert resp.headers["cache-control"] == "no-store"
+    finally:
+        generate_cache.clear_all()
+
+
 # ---------------------------------------------------------------------------
 # /api/state
 # ---------------------------------------------------------------------------
