@@ -31,8 +31,10 @@ def test_axis_steps_int_values_ok() -> None:
 
 
 def test_axis_lora_scale_float_values_ok() -> None:
-    a = XYAxisSpec(axis="lora_scale", values=[0.6, 0.8, 1.0], lora_index=0)
-    assert a.lora_index == 0
+    """lora_scale 改为全局轴：不再要求 lora_index（None 为合法）。"""
+    a = XYAxisSpec(axis="lora_scale", values=[0.6, 0.8, 1.0])
+    assert a.values == [0.6, 0.8, 1.0]
+    assert a.lora_index is None
 
 
 def test_axis_lora_ckpt_string_values_ok() -> None:
@@ -151,30 +153,42 @@ def test_generate_xy_with_count_gt_1_rejected() -> None:
         )
 
 
-def test_generate_xy_lora_scale_requires_lora_index() -> None:
-    """axis=lora_scale 没填 lora_index → 报错。"""
-    with pytest.raises(ValidationError, match="必须指定 lora_index"):
+def test_generate_xy_lora_scale_no_longer_takes_lora_index() -> None:
+    """lora_scale 改为全局轴：传 lora_index 反而被 _check_axis_values 拒绝。"""
+    with pytest.raises(ValidationError, match="不允许设 lora_index"):
         _gen(
             lora_configs=[LoraEntry(path="/a.safetensors", scale=1.0)],
             xy_matrix=XYMatrixSpec(
-                x=XYAxisSpec(axis="lora_scale", values=[0.5, 1.0]),
+                x=XYAxisSpec(axis="lora_scale", values=[0.5, 1.0], lora_index=0),
             ),
         )
 
 
+def test_generate_xy_lora_scale_without_lora_index_ok() -> None:
+    """新行为：lora_scale 不带 lora_index 合法。"""
+    g = _gen(
+        lora_configs=[LoraEntry(path="/a.safetensors", scale=1.0)],
+        xy_matrix=XYMatrixSpec(
+            x=XYAxisSpec(axis="lora_scale", values=[0.5, 1.0]),
+        ),
+    )
+    assert g.xy_matrix is not None
+    assert g.xy_matrix.x.lora_index is None
+
+
 def test_generate_xy_lora_index_out_of_range() -> None:
-    """lora_index=2 但只有 1 个 lora_configs → 报错。"""
+    """lora_index=2 但只有 1 个 lora_configs → 报错（用 lora_ckpt 轴触发越界检查）。"""
     with pytest.raises(ValidationError, match="lora_index=2 越界"):
         _gen(
             lora_configs=[LoraEntry(path="/a.safetensors", scale=1.0)],
             xy_matrix=XYMatrixSpec(
-                x=XYAxisSpec(axis="lora_scale", values=[0.5, 1.0], lora_index=2),
+                x=XYAxisSpec(axis="lora_ckpt", values=["/a/step.safetensors"], lora_index=2),
             ),
         )
 
 
 def test_generate_xy_non_lora_axis_with_lora_index_rejected() -> None:
-    """axis=steps 不允许设 lora_index。"""
+    """axis=steps / lora_scale 都不允许设 lora_index（仅 lora_ckpt 可设）。"""
     with pytest.raises(ValidationError, match="不允许设 lora_index"):
         _gen(
             xy_matrix=XYMatrixSpec(
@@ -200,12 +214,13 @@ def test_generate_xy_axis_value_type_mismatch() -> None:
 
 
 def test_generate_xy_y_axis_validated_too() -> None:
-    """y 轴的 lora_index 越界也要被检测到。"""
+    """y 轴的 lora_index 越界也要被检测到（用 lora_ckpt 触发）。"""
     with pytest.raises(ValidationError, match="越界"):
         _gen(
+            lora_configs=[LoraEntry(path="/a.safetensors", scale=1.0)],
             xy_matrix=XYMatrixSpec(
                 x=XYAxisSpec(axis="steps", values=[20]),
-                y=XYAxisSpec(axis="lora_scale", values=[0.5], lora_index=5),
+                y=XYAxisSpec(axis="lora_ckpt", values=["/a/step.safetensors"], lora_index=5),
             ),
         )
 
@@ -230,7 +245,7 @@ def test_generate_xy_serialize_round_trip() -> None:
     g = _gen(
         lora_configs=[LoraEntry(path="/a.safetensors", scale=1.0)],
         xy_matrix=XYMatrixSpec(
-            x=XYAxisSpec(axis="lora_scale", values=[0.5, 0.8, 1.0], lora_index=0),
+            x=XYAxisSpec(axis="lora_scale", values=[0.5, 0.8, 1.0]),
             y=XYAxisSpec(axis="steps", values=[20, 25]),
         ),
     )
@@ -238,6 +253,6 @@ def test_generate_xy_serialize_round_trip() -> None:
     g2 = GenerateConfig.model_validate(dumped)
     assert g2.xy_matrix is not None
     assert g2.xy_matrix.x.axis == "lora_scale"
-    assert g2.xy_matrix.x.lora_index == 0
+    assert g2.xy_matrix.x.lora_index is None  # lora_scale 全局轴：不绑 LoRA
     assert g2.xy_matrix.y is not None
     assert g2.xy_matrix.y.values == [20, 25]
