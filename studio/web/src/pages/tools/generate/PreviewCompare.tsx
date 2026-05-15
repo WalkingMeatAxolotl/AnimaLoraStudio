@@ -32,7 +32,8 @@ export default function PreviewCompare({
   const [aIdx, bIdx] = selectedIndices
   const sampleA = samples[aIdx]
   const sampleB = samples[bIdx]
-  const [fullscreenSrc, setFullscreenSrc] = useState<{ url: string; caption: string } | null>(null)
+  // P1-G：全屏时按 side 记，让 ←/→ 在 A 和 B 之间切换（不只是被动看一张）
+  const [fullscreenSide, setFullscreenSide] = useState<'A' | 'B' | null>(null)
 
   if (!sampleA || !sampleB) {
     return (
@@ -78,7 +79,7 @@ export default function PreviewCompare({
               <span className="font-mono text-fg-tertiary truncate">{caption}</span>
             </div>
             <button
-              onDoubleClick={() => setFullscreenSrc({ url, caption })}
+              onDoubleClick={() => setFullscreenSide(side)}
               className="flex-1 min-h-0 flex items-center justify-center bg-sunken rounded-md border border-subtle p-0 cursor-zoom-in"
               title="双击全屏"
             >
@@ -92,11 +93,17 @@ export default function PreviewCompare({
           </div>
         ))}
       </div>
-      {fullscreenSrc && (
+      {fullscreenSide && (
         <FullscreenViewer
-          src={fullscreenSrc.url}
-          caption={fullscreenSrc.caption}
-          onClose={() => setFullscreenSrc(null)}
+          src={fullscreenSide === 'A' ? urlA : urlB}
+          caption={fullscreenSide === 'A' ? captionA : captionB}
+          onClose={() => setFullscreenSide(null)}
+          // A 和 B 都存在（早退分支已保证）→ ←/→ 都可走
+          hasPrev
+          hasNext
+          onPrev={() => setFullscreenSide((s) => (s === 'B' ? 'A' : 'B'))}
+          onNext={() => setFullscreenSide((s) => (s === 'A' ? 'B' : 'A'))}
+          shortcutHint={`← / → 切换 ${fullscreenSide === 'A' ? 'A→B' : 'B→A'} · ESC 关闭`}
         />
       )}
     </div>

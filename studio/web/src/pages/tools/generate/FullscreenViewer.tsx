@@ -1,10 +1,12 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 
 /** 全屏图片 modal：双击 grid cell / cell action 触发。
  *
  * - 背景半透明遮罩，居中显示原图（object-contain）
  * - ESC / 点击遮罩关闭
  * - 不开新窗口（之前是 window.open，频繁评测时切换 tab 麻烦）
+ * - 方向键 + 屏上箭头切换邻居（PR #64 + P1-G）：caller 喂 hasX / onX；
+ *   shortcutHint 不传时按当前可用方向动态拼接（避免在单行 / 单列 / 角落格上撒谎）
  */
 export default function FullscreenViewer({
   src, alt, caption, onClose,
@@ -28,6 +30,13 @@ export default function FullscreenViewer({
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // P3：方向键在 input / textarea / contenteditable 内不抢焦点，
+      // 当前组件不带这些元素，纯防御性（未来加 caption 编辑时也安全）
+      const t = e.target as HTMLElement | null
+      if (t) {
+        const tag = t.tagName
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || t.isContentEditable) return
+      }
       if (e.key === 'Escape') {
         e.preventDefault()
         onClose()
@@ -49,6 +58,17 @@ export default function FullscreenViewer({
     return () => document.removeEventListener('keydown', onKey)
   }, [hasDown, hasNext, hasPrev, hasUp, onClose, onDown, onNext, onPrev, onUp])
 
+  const computedHint = useMemo(() => {
+    if (shortcutHint) return shortcutHint
+    const dirs: string[] = []
+    if (hasPrev) dirs.push('←')
+    if (hasNext) dirs.push('→')
+    if (hasUp) dirs.push('↑')
+    if (hasDown) dirs.push('↓')
+    const nav = dirs.length > 0 ? `${dirs.join(' / ')} 切换 · ` : ''
+    return `${nav}ESC / 点击遮罩关闭`
+  }, [shortcutHint, hasPrev, hasNext, hasUp, hasDown])
+
   return (
     <div
       onClick={onClose}
@@ -67,8 +87,8 @@ export default function FullscreenViewer({
             type="button"
             onClick={onUp}
             className="absolute top-4 left-1/2 -translate-x-1/2 z-10 rounded bg-black/45 px-4 py-2 text-slate-300 hover:text-white hover:bg-black/65 text-2xl"
-            aria-label="上一行"
-            title="上一行"
+            aria-label="上一格"
+            title="上一格"
           >
             ↑
           </button>
@@ -100,8 +120,8 @@ export default function FullscreenViewer({
             type="button"
             onClick={onDown}
             className="absolute bottom-12 left-1/2 -translate-x-1/2 z-10 rounded bg-black/45 px-4 py-2 text-slate-300 hover:text-white hover:bg-black/65 text-2xl"
-            aria-label="下一行"
-            title="下一行"
+            aria-label="下一格"
+            title="下一格"
           >
             ↓
           </button>
@@ -122,7 +142,7 @@ export default function FullscreenViewer({
           </div>
         )}
         <div className="text-2xs text-fg-tertiary">
-          {shortcutHint ?? 'ESC / 点击遮罩关闭 · 在新窗口打开请按右键'}
+          {computedHint}
         </div>
       </div>
     </div>

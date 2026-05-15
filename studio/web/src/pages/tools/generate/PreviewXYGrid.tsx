@@ -295,7 +295,8 @@ export default function PreviewXYGrid({
             onDown={() => {
               if (fullscreenNeighbors?.down != null) setFullscreenIdx(fullscreenNeighbors.down)
             }}
-            shortcutHint="←/→/↑/↓ 切换单元格 · ESC / 点击遮罩关闭"
+            // shortcutHint 不传 → FullscreenViewer 按 hasX 动态拼接（单行 /
+            // 单列 / 角落格上不显示无效方向）
           />
         )
       })()}
