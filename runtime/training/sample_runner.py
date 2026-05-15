@@ -68,7 +68,7 @@ def run_sample(
         )
         img.save(sample_path)
         ctx.emit(f"采样保存: {sample_path.name}")
-        if wandb_key and ctx.wandb_monitor.log_samples:
+        if wandb_key:
             ctx.wandb_monitor.log_image(
                 wandb_key,
                 sample_path,

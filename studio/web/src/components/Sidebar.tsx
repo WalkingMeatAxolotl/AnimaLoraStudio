@@ -91,7 +91,7 @@ function NavItem({ to, label, icon, active, collapsed }: {
       to={to}
       title={collapsed ? label : undefined}
       className={[
-        'flex items-center gap-2.5 rounded-md text-sm no-underline transition-colors relative',
+        'flex w-full items-center gap-2.5 rounded-md text-sm no-underline transition-colors relative',
         collapsed ? 'py-[9px] px-0 justify-center' : 'py-2 px-3 justify-start',
         active
           ? 'bg-surface text-fg-primary font-semibold shadow-sm'
@@ -230,7 +230,7 @@ function ProjectStepperNav({ pid, activeVid, currentStep, version, collapsed }: 
 
   const linkCls = (active: boolean) => [
     'flex items-center gap-2.5 rounded-md text-sm no-underline transition-colors',
-    collapsed ? 'py-[7px] px-0 justify-center' : 'py-[7px] px-3 justify-start',
+    collapsed ? 'py-2 px-0 justify-center' : 'py-2 px-3 justify-start',
     active ? 'bg-surface text-fg-primary font-semibold shadow-sm' : 'text-fg-secondary font-normal hover:bg-overlay',
   ].join(' ')
 
@@ -379,7 +379,7 @@ export default function Sidebar() {
       </div>
 
       {/* main nav */}
-      <nav className={`flex-1 flex flex-col gap-0.5 overflow-y-auto ${collapsed ? 'px-1.5 py-2.5' : 'px-2.5 py-3.5'}`}>
+      <nav className={`flex-1 flex flex-col gap-0.5 overflow-hidden ${collapsed ? 'px-2 py-2.5' : 'px-2 py-3.5'}`}>
         <NavItem to="/" label="项目" icon={I.folder} active={!inProject && location.pathname === '/'} collapsed={collapsed} />
         <NavItem to="/queue" label="队列" icon={I.queue} active={isMain('/queue')} collapsed={collapsed} />
         <NavItem to="/tools/generate" label="测试" icon={I.image} active={isMain('/tools/generate')} collapsed={collapsed} />

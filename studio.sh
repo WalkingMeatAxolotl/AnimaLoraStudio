@@ -3,15 +3,35 @@
 # Usage:
 #   ./studio.sh [--mirror] [--reinstall] [subcommand]
 #
-#   --mirror     Use Tencent pip mirror during first-run setup.
-#                Without this flag, official PyPI is tried first; the mirror is
-#                used as a fallback if the official source fails.
+#   --mirror          Use Tencent pip mirror during first-run setup.
+#                     Without this flag, official PyPI is tried first; the mirror is
+#                     used as a fallback if the official source fails.
 #
-#   --reinstall  DELETE venv/ and rebuild from scratch (studio_data/ kept).
-#                Use when venv is broken beyond repair (dep conflict / corrupt
-#                wheels / etc). Asks for confirmation.
+#   --reinstall       DELETE venv/ and rebuild from scratch (studio_data/ kept).
+#                     Use when venv is broken beyond repair (dep conflict / corrupt
+#                     wheels / etc). Asks for confirmation.
+#
+#   --torch=<tag>     Force a specific PyTorch CUDA wheel on first-run venv setup
+#                     AND (via Python cli) reinstall if the current torch differs.
+#                     Tags: cu128 cu126 cu124 cu118 cpu
+#                     Use this on CPU-only rentals when you want GPU torch pre-installed
+#                     for a later GPU machine.  Example: ./studio.sh --torch=cu128
 #
 #   subcommand: run (default) | dev | build | test
+#
+#   run subcommand flags:
+#     --port <N>      backend uvicorn port (default 8765)
+#     --host <H>      bind host (default 127.0.0.1)
+#     --no-browser    do not auto-open browser
+#     --no-build      skip frontend rebuild check
+#     --torch <tag>   force torch CUDA tag (cu128/cu126/cu124/cu118/cpu)
+#
+#   dev subcommand flags:
+#     --port <N>      backend uvicorn port (default 8765)
+#     --fe-port <N>   frontend Vite dev server port (default 5173)
+#     --host <H>      bind host (default 127.0.0.1)
+#     --no-browser    do not auto-open browser
+#     --torch <tag>   force torch CUDA tag (cu128/cu126/cu124/cu118/cpu)
 #
 # Safe to run with either ./studio.sh or `bash studio.sh`.
 # Avoid `source studio.sh` -- not needed (we call venv python directly).
@@ -31,11 +51,14 @@ export PYTHONIOENCODING=utf-8
 # Parse our flags; collect remaining args to forward to Python.
 _USE_MIRROR=0
 _REINSTALL=0
+_TORCH_TAG=""
 _PASSTHROUGH=()
 for _arg in "$@"; do
     case "$_arg" in
         --mirror)    _USE_MIRROR=1 ;;
         --reinstall) _REINSTALL=1 ;;
+        --torch=*)   _TORCH_TAG="${_arg#--torch=}"
+                     _PASSTHROUGH+=("--torch" "$_TORCH_TAG") ;;
         *)           _PASSTHROUGH+=("$_arg") ;;
     esac
 done
@@ -113,12 +136,21 @@ else
     # bare `torch>=2.0.0` makes pip pull the CPU wheel from PyPI default. By
     # installing torch from PyTorch's CUDA index FIRST, the requirements.txt
     # constraint is already satisfied and pip won't replace it.
-    _TORCH_INDEX="$("$PYTHON" tools/select_torch_index.py 2>/dev/null || true)"
-    if [ -n "$_TORCH_INDEX" ]; then
-        echo "[studio] setup: NVIDIA GPU detected; installing torch from $_TORCH_INDEX"
-        if ! "$PYTHON" -m pip install torch torchvision --index-url "$_TORCH_INDEX"; then
-            echo "[studio] setup: CUDA torch install failed; will fall back to PyPI default in requirements.txt"
-            echo "[studio] setup: you can fix manually later via Studio Settings > PyTorch > Reinstall"
+    # --torch=<tag> overrides auto-detection (useful on CPU-only rentals).
+    if [ -n "$_TORCH_TAG" ]; then
+        _TORCH_INDEX="https://download.pytorch.org/whl/$_TORCH_TAG"
+        echo "[studio] setup: --torch=$_TORCH_TAG specified; installing torch from $_TORCH_INDEX"
+        if ! _pip_install torch torchvision --index-url "$_TORCH_INDEX"; then
+            echo "[studio] setup: forced torch install failed; will fall back to PyPI default in requirements.txt"
+        fi
+    else
+        _TORCH_INDEX="$("$PYTHON" tools/select_torch_index.py 2>/dev/null || true)"
+        if [ -n "$_TORCH_INDEX" ]; then
+            echo "[studio] setup: NVIDIA GPU detected; installing torch from $_TORCH_INDEX"
+            if ! "$PYTHON" -m pip install torch torchvision --index-url "$_TORCH_INDEX"; then
+                echo "[studio] setup: CUDA torch install failed; will fall back to PyPI default in requirements.txt"
+                echo "[studio] setup: you can fix manually later via Studio Settings > PyTorch > Reinstall"
+            fi
         fi
     fi
 

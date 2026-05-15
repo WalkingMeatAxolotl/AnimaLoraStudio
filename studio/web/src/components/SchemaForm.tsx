@@ -14,6 +14,8 @@ interface Props {
   /** 字段不 disabled 但要挂个徽章（如「自动 · 项目设置」表示项目预填了，
    * 但仍允许用户修改）。优先级：disabledHints > autoHints。 */
   autoHints?: Record<string, string>
+  /** false（默认）= 简单模式，隐藏 advanced=true 的字段。 */
+  advancedMode?: boolean
 }
 
 /**
@@ -21,7 +23,7 @@ interface Props {
  * show_when 用 evalShowWhen 做条件显示，依赖当前 values。
  */
 export default function SchemaForm({
-  schema, values, onChange, disabledFields, disabledHints, autoHints,
+  schema, values, onChange, disabledFields, disabledHints, autoHints, advancedMode = false,
 }: Props) {
   const disabledSet = new Set(disabledFields ?? [])
   const dHints = disabledHints ?? {}
@@ -65,6 +67,7 @@ export default function SchemaForm({
   const buckets = new Map<string, string[]>()
   for (const [name, prop] of Object.entries(props)) {
     if (prop.hidden) continue
+    if (prop.advanced && !advancedMode) continue
     const g = prop.group ?? 'misc'
     if (!buckets.has(g)) buckets.set(g, [])
     buckets.get(g)!.push(name)
@@ -110,6 +113,12 @@ export default function SchemaForm({
                     : conditionallyDisabled
                       ? prop.disable_hint
                       : aHints[name]
+                  const descriptionOverride =
+                    prop.alt_description_when &&
+                    prop.alt_description &&
+                    evalShowWhen(prop.alt_description_when, values)
+                      ? prop.alt_description
+                      : undefined
                   return (
                     <Field
                       key={name}
@@ -119,6 +128,7 @@ export default function SchemaForm({
                       onChange={(v) => setField(name, v)}
                       disabled={isDisabled}
                       hint={hint}
+                      descriptionOverride={descriptionOverride}
                     />
                   )
                 })}

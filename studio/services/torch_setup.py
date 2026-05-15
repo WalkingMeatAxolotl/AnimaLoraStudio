@@ -158,14 +158,19 @@ def current_status() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _pip(args: list[str], timeout: int = 1800) -> tuple[int, str]:
+def _pip(args: list[str], timeout: int = 1800, stream: bool = False) -> tuple[int, str]:
     """跑 `<sys.executable> -m pip <args>`；返回 (rc, combined_output)。
 
     timeout 默认 30 分钟 —— torch + cuda 依赖打包后 ~3 GB，慢网下一小时也可能。
+    stream=True：输出直接透传到终端（launch 场景用），不捕获，返回空字符串。
+    stream=False（默认）：捕获并返回文本（API 端点 / 日志用）。
     """
     cmd = [sys.executable, "-m", "pip", *args]
     logger.info("[torch_setup] %s", " ".join(cmd))
     try:
+        if stream:
+            rc = subprocess.call(cmd, timeout=timeout)
+            return rc, ""
         out = subprocess.run(
             cmd,
             capture_output=True,
@@ -224,7 +229,7 @@ def _cleanup_zombie_dirs() -> list[str]:
     return cleaned
 
 
-def reinstall(target: str = "auto") -> dict[str, Any]:
+def reinstall(target: str = "auto", stream: bool = False) -> dict[str, Any]:
     """卸装 torch + torchvision，按 target 重装。
 
     target: "auto" | "cu128" | "cu126" | "cu124" | "cu118" | "cpu"
@@ -248,7 +253,7 @@ def reinstall(target: str = "auto") -> dict[str, Any]:
 
     # 第二步：卸装 torch + torchvision（user-installed flash_attn / xformers 等不动，
     # 跟 torch ABI 强绑定，但卸装 torch 不会自动卸它们 —— 用户重启后再 enable / 重装）
-    rc1, log1 = _pip(["uninstall", "-y", "torch", "torchvision"])
+    rc1, log1 = _pip(["uninstall", "-y", "torch", "torchvision"], stream=stream)
 
     # 卸装后再清一次僵尸目录（pip 卸装失败也可能留 `~`-prefix 残留）
     cleaned += _cleanup_zombie_dirs()
@@ -257,7 +262,7 @@ def reinstall(target: str = "auto") -> dict[str, Any]:
     install_args = ["install", "torch", "torchvision"]
     if index_url:
         install_args += ["--index-url", index_url]
-    rc2, log2 = _pip(install_args)
+    rc2, log2 = _pip(install_args, stream=stream)
     if rc2 != 0:
         raise RuntimeError(f"安装 torch ({tag}) 失败（rc={rc2}）:\n{log2}")
 

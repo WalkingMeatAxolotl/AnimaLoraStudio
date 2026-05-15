@@ -89,7 +89,7 @@ def list_snapshots(version_dir: Path) -> list[dict[str, Any]]:
 
 
 def _resolve_snapshot(version_dir: Path, sid: str) -> Path:
-    if "/" in sid or "\\" in sid or ".." in sid or not sid:
+    if "/" in sid or "\\" in sid or not sid:
         raise SnapshotError(f"非法 id: {sid}")
     p = snapshot_root(version_dir) / f"{sid}.zip"
     if not p.exists():

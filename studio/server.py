@@ -1092,7 +1092,7 @@ def project_thumb(
     """
     if bucket != "download":
         raise HTTPException(400, "PP2 仅支持 bucket=download")
-    if "/" in name or "\\" in name or ".." in name or not name:
+    if "/" in name or "\\" in name or not name:
         raise HTTPException(400, "invalid name")
     with db.connection_for() as conn:
         p = projects.get_project(conn, pid)
@@ -1710,9 +1710,9 @@ def list_captions_endpoint(
 def get_caption_endpoint(
     pid: int, vid: int, folder: str, filename: str
 ) -> dict[str, Any]:
-    if "/" in filename or "\\" in filename or ".." in filename:
+    if "/" in filename or "\\" in filename:
         raise HTTPException(400, "invalid filename")
-    if "/" in folder or "\\" in folder or ".." in folder:
+    if "/" in folder or "\\" in folder:
         raise HTTPException(400, "invalid folder")
     _, _, train = _version_train_dir_or_404(pid, vid)
     try:
@@ -1725,9 +1725,9 @@ def get_caption_endpoint(
 def put_caption_endpoint(
     pid: int, vid: int, folder: str, filename: str, body: CaptionEdit
 ) -> dict[str, Any]:
-    if "/" in filename or "\\" in filename or ".." in filename:
+    if "/" in filename or "\\" in filename:
         raise HTTPException(400, "invalid filename")
-    if "/" in folder or "\\" in folder or ".." in folder:
+    if "/" in folder or "\\" in folder:
         raise HTTPException(400, "invalid folder")
     _, _, train = _version_train_dir_or_404(pid, vid)
     try:
@@ -2245,7 +2245,7 @@ def get_generate_sample(task_id: int, filename: str) -> Any:
     直接返回 bytes。LRU / 客户端断连清理在 commit 11 加 —— 在那之前 cache
     跟着 supervisor finalize 释放（一 task 一组 entry，task 终止时全清）。
     """
-    if "/" in filename or "\\" in filename or ".." in filename:
+    if "/" in filename or "\\" in filename:
         raise HTTPException(400, "invalid filename")
     if not filename.lower().endswith(".png"):
         raise HTTPException(400, "only .png supported")
@@ -2461,7 +2461,7 @@ def version_thumb(
 ) -> FileResponse:
     if bucket not in {"train", "reg", "samples"}:
         raise HTTPException(400, f"非法 bucket: {bucket}")
-    if "/" in name or "\\" in name or ".." in name or not name:
+    if "/" in name or "\\" in name or not name:
         raise HTTPException(400, "invalid name")
     with db.connection_for() as conn:
         v = versions.get_version(conn, vid)
@@ -2808,7 +2808,7 @@ def download_task_outputs_zip(
 def download_task_output(task_id: int, filename: str) -> FileResponse:
     """下载 output 目录下的指定文件。`Content-Disposition: attachment` 让
     浏览器走「保存」对话框而不是 inline 渲染。"""
-    if "/" in filename or "\\" in filename or ".." in filename or not filename:
+    if "/" in filename or "\\" in filename or not filename:
         raise HTTPException(400, "invalid filename")
     with db.connection_for() as conn:
         task = db.get_task(conn, task_id)
@@ -2908,7 +2908,7 @@ def browse_dir(path: str = "") -> dict[str, Any]:
 @app.get("/api/datasets/thumbnail")
 def get_dataset_thumbnail(folder: str, name: str) -> FileResponse:
     """返回 dataset 缩略图（实际是原图，前端用 CSS 缩放）。"""
-    if ".." in folder or ".." in name or "\\" in name or "/" in name:
+    if "\\" in name or "/" in name:
         raise HTTPException(400, "invalid path component")
     p = (Path(folder) / name).resolve()
     # 保证落在 repo 内（防止任意磁盘读取）
@@ -2980,7 +2980,7 @@ def get_sample(
     不给 → 返回原图。两种都走 _thumb_response 的弱 etag + no-cache，浏览器
     304 命中即可，避免「重启窗口期失败响应被永久缓存」问题。
     """
-    if "/" in filename or "\\" in filename or ".." in filename:
+    if "/" in filename or "\\" in filename:
         raise HTTPException(400, "invalid filename")
 
     resolved: Optional[Path] = None

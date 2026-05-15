@@ -176,8 +176,7 @@ const EMPTY: Secrets = {
     entity: '',
     base_url: '',
     mode: 'online',
-    log_samples: false,
-    sample_max_side: 512,
+    sample_max_side: 1216,
     sample_every_n_steps: 0,
   },
   modelscope: { token: '' },
@@ -886,27 +885,18 @@ export default function SettingsPage() {
               <option value="disabled">disabled</option>
             </select>
           </SettingsField>
-          <SettingsField
-            label="记录采样图"
-            helpTooltip={
-              <p>开启后训练采样图会上传到 <code>wandb.ai</code> 公网；私有 IP / NSFW 数据集请保持关闭。</p>
-            }
-          >
-            <Bool value={draft.wandb.log_samples} onChange={(v) => update('wandb', 'log_samples', v)} />
-          </SettingsField>
         </div>
-        {draft.wandb.log_samples && (
-          <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-2 gap-3">
             <SettingsField
               label="采样图最长边"
-              helpTooltip={<p>上传前缩到此像素。原图常 2K+，512 已够 wandb 浏览。</p>}
+              helpTooltip={<p>上传前缩到此像素。原图常 2K+，1216 已够 wandb 浏览。</p>}
             >
               <input
                 type="number"
                 min={64}
                 step={64}
                 value={draft.wandb.sample_max_side}
-                onChange={(e) => update('wandb', 'sample_max_side', Math.max(64, parseInt(e.target.value) || 512))}
+                onChange={(e) => update('wandb', 'sample_max_side', Math.max(64, parseInt(e.target.value) || 1216))}
                 className={textInputClass}
               />
             </SettingsField>
@@ -926,7 +916,6 @@ export default function SettingsPage() {
               />
             </SettingsField>
           </div>
-        )}
       </SettingsSection>
       </>)}
 

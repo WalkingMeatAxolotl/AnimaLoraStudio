@@ -79,6 +79,16 @@ export default function PresetsPage() {
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerSearch, setPickerSearch] = useState('')
   const [tomlOpen, setTomlOpen] = useState(false)
+  const [advancedMode, setAdvancedMode] = useState(() =>
+    localStorage.getItem('advanced_mode') === 'true'
+  )
+  const toggleAdvancedMode = () => {
+    setAdvancedMode(v => {
+      const next = !v
+      localStorage.setItem('advanced_mode', String(next))
+      return next
+    })
+  }
   const pickerAnchorRef = useRef<HTMLButtonElement | null>(null)
   const pickerPopRef = useRef<HTMLDivElement | null>(null)
   const newNameInputRef = useRef<HTMLInputElement | null>(null)
@@ -544,11 +554,29 @@ export default function PresetsPage() {
               <div className="flex items-center gap-2 mb-2.5">
                 <span className="inline-block w-1.5 h-1.5 rounded-full bg-fg-tertiary shrink-0" />
                 <span className="caption uppercase tracking-[0.06em] text-xs">训练参数</span>
+                <span className="flex-1" />
+                <div className="inline-flex rounded-md border border-subtle overflow-hidden text-xs">
+                  <button
+                    type="button"
+                    onClick={() => advancedMode && toggleAdvancedMode()}
+                    className={`px-3 py-1 transition-colors ${!advancedMode ? 'bg-accent text-white' : 'bg-surface text-fg-secondary hover:bg-subtle'}`}
+                  >
+                    简单
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => !advancedMode && toggleAdvancedMode()}
+                    className={`px-3 py-1 transition-colors ${advancedMode ? 'bg-accent text-white' : 'bg-surface text-fg-secondary hover:bg-subtle'}`}
+                  >
+                    高级
+                  </button>
+                </div>
               </div>
               <SchemaForm
                 schema={schema}
                 values={config}
                 onChange={setConfig}
+                advancedMode={advancedMode}
               />
             </section>
           )}

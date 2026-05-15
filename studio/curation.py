@@ -45,7 +45,7 @@ def _validate_folder(name: str) -> None:
 
 
 def _validate_filename(name: str) -> None:
-    if not _FILE_PATTERN.fullmatch(name) or ".." in name:
+    if not _FILE_PATTERN.fullmatch(name):
         raise CurationError(f"非法文件名: {name!r}")
 
 

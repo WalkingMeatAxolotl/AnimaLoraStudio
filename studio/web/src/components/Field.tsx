@@ -16,6 +16,8 @@ interface Props {
    * 与 disabled 解耦：可以让字段保持可编辑只挂个徽章作信息提示，也可以
    * 配合 disabled 来表达「这字段被自动填且不让你改」。 */
   hint?: string
+  /** 覆盖 prop.description 的说明文字（用于条件上下文描述）。 */
+  descriptionOverride?: string
 }
 
 // input 覆盖 .input 默认值（更紧凑；背景用 canvas 而不是 surface）
@@ -32,11 +34,11 @@ const FieldHint = ({ text }: { text: string }) => (
 
 /** 单个表单字段，按 control kind 分发渲染。 */
 export default function Field({
-  name, prop, value, onChange, disabled = false, hint,
+  name, prop, value, onChange, disabled = false, hint, descriptionOverride,
 }: Props) {
   const kind = controlKind(prop)
   const label = fieldLabel(name)
-  const help = prop.description
+  const help = descriptionOverride ?? prop.description
   const hintText = hint ?? (disabled ? '自动 · 项目控制' : null)
   const hintNode = hintText ? <FieldHint text={hintText} /> : null
   void name

@@ -28,8 +28,7 @@ const initialServerState = {
     entity: '',
     base_url: '',
     mode: 'online',
-    log_samples: false,
-    sample_max_side: 512,
+    sample_max_side: 1216,
     sample_every_n_steps: 0,
   },
   llm_tagger: {

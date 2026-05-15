@@ -42,6 +42,12 @@ export interface SchemaProperty {
   disable_when?: string
   /** disable_when 触发时显示的提示徽章文本。 */
   disable_hint?: string
+  /** 条件说明文字：当 alt_description_when 表达式为真时，替换 description 显示。 */
+  alt_description?: string
+  /** 触发 alt_description 的条件表达式，语法同 show_when。 */
+  alt_description_when?: string
+  /** 高级模式专属字段，简单模式下隐藏。 */
+  advanced?: boolean
   /** 后端打了 hidden=True 的字段：值仍随 ConfigData 透传 / 保存，但 SchemaForm
    * 不渲染。用于「该字段对当前用户群无意义但 schema 必须保留」的兜底场景。 */
   hidden?: boolean
@@ -112,7 +118,6 @@ export interface WandBConfig {
   entity: string
   base_url: string
   mode: 'online' | 'offline' | 'disabled'
-  log_samples: boolean
   /** 上传前缩到最长边像素，默认 512 */
   sample_max_side: number
   /** step 节流：>0 时只在 global_step % N == 0 上传，0 = 不额外节流 */

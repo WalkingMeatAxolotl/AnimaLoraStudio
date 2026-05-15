@@ -41,6 +41,8 @@ def run(ctx: TrainingContext) -> None:
 
     for epoch in range(ctx.start_epoch, args.epochs):
         ctx.current_epoch = epoch
+        epoch_loss_sum = 0.0
+        epoch_step_count = 0
         if ctx.use_cached and hasattr(ctx.dataloader, "batch_sampler") and hasattr(ctx.dataloader.batch_sampler, "set_epoch"):
             ctx.dataloader.batch_sampler.set_epoch(epoch)
         for batch_idx, batch in enumerate(ctx.dataloader):
@@ -85,11 +87,14 @@ def run(ctx: TrainingContext) -> None:
                     cross = cross[:, :_bucket, :].contiguous()
 
             # Flow Matching
-            t = sample_t(
-                bs, ctx.device,
-                mode=str(getattr(args, "timestep_sampling", "logit_normal") or "logit_normal"),
-                shift=float(getattr(args, "timestep_shift", 3.0) or 3.0),
-            )
+            if ctx.info_noise is not None:
+                t = ctx.info_noise.sample(bs, ctx.device)
+            else:
+                t = sample_t(
+                    bs, ctx.device,
+                    mode=str(getattr(args, "timestep_sampling", "logit_normal") or "logit_normal"),
+                    shift=float(getattr(args, "timestep_shift", 3.0) or 3.0),
+                )
 
             # PR-C：adapter hook — 允许变体按 sigma_t / step 调整运行时结构
             # （T-LoRA / AdaLoRA / B-LoRA 等）。LyCORIS 走默认 no-op。
@@ -121,6 +126,12 @@ def run(ctx: TrainingContext) -> None:
                     use_checkpoint=args.grad_checkpoint,
                 )
                 loss_per_sample = F.mse_loss(pred.float(), target.float(), reduction="none")
+                # InfoNoise：记录原始 per-sample MSE（加权前）
+                if ctx.info_noise is not None:
+                    _raw_mse = loss_per_sample.detach().mean(
+                        dim=list(range(1, loss_per_sample.dim()))
+                    )
+                    ctx.info_noise.record(t.detach(), _raw_mse)
                 # 按样本加权（正则集可降低权重）
                 if "loss_weight" in batch:
                     w = batch["loss_weight"].to(ctx.device).view(-1, *([1] * (loss_per_sample.dim() - 1)))
@@ -172,8 +183,14 @@ def run(ctx: TrainingContext) -> None:
                 ctx.optimizer.zero_grad()
                 ctx.global_step += 1
 
+                # InfoNoise：刷新采样分布
+                if ctx.info_noise is not None:
+                    ctx.info_noise.maybe_refresh(ctx.global_step)
+
                 # 记录 loss 历史
                 loss_val = float(loss.item() * args.grad_accum)
+                epoch_loss_sum += loss_val
+                epoch_step_count += 1
                 if args.loss_curve_steps and len(ctx.loss_history) < args.loss_curve_steps:
                     ctx.loss_history.append(loss_val)
 
@@ -200,7 +217,6 @@ def run(ctx: TrainingContext) -> None:
                     {
                         "train/loss": loss_val,
                         "train/lr": float(lr),
-                        "train/epoch": epoch + 1,
                         "train/speed_it_s": float(ctx.speed_ema or 0),
                     },
                     step=ctx.global_step,
@@ -273,6 +289,14 @@ def run(ctx: TrainingContext) -> None:
 
         # epoch 结束后的操作
         ctx.current_epoch = epoch + 1
+        if epoch_step_count > 0:
+            ctx.wandb_monitor.log(
+                {
+                    "train/loss_epoch": epoch_loss_sum / epoch_step_count,
+                    "train/epoch": ctx.current_epoch,
+                },
+                step=ctx.global_step,
+            )
         if not args.max_steps or ctx.global_step < args.max_steps:
             # 保存 checkpoint
             if args.save_every > 0 and ctx.current_epoch % args.save_every == 0:
@@ -295,6 +319,27 @@ def run(ctx: TrainingContext) -> None:
                     wandb_caption=f"epoch {ctx.current_epoch}: {prompt}",
                     wandb_step=ctx.global_step,
                 )
+
+            # 定期保存训练状态（epoch 版）
+            save_state_every_epochs = int(getattr(args, "save_state_every_epochs", 0) or 0)
+            if save_state_every_epochs > 0 and ctx.current_epoch % save_state_every_epochs == 0:
+                state_path = ctx.output_dir / f"training_state_epoch{ctx.current_epoch}.pt"
+                monitor_data = None
+                if ctx.monitor_server:
+                    try:
+                        from train_monitor import get_state
+                        monitor_data = get_state()
+                    except Exception:
+                        pass
+                with optimizer_eval_mode(ctx.optimizer):
+                    save_training_state(
+                        state_path, ctx.injector, ctx.optimizer, epoch, ctx.global_step,
+                        ctx.loss_history, monitor_state=monitor_data, scheduler=ctx.scheduler,
+                    )
+                    lora_path = ctx.output_dir / f"{args.output_name}_epoch{ctx.current_epoch}.safetensors"
+                    if not lora_path.exists():
+                        ctx.injector.save(lora_path)
+                ctx.emit(f"Saved training state: training_state_epoch{ctx.current_epoch}.pt")
 
         # 检查 max_steps
         if args.max_steps and ctx.global_step >= args.max_steps:

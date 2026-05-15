@@ -65,6 +65,16 @@ export default function TrainPage() {
   // 预设 picker（dropdown 模式，与 Presets 页一致）
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerSearch, setPickerSearch] = useState('')
+  const [advancedMode, setAdvancedMode] = useState(() =>
+    localStorage.getItem('advanced_mode') === 'true'
+  )
+  const toggleAdvancedMode = () => {
+    setAdvancedMode(v => {
+      const next = !v
+      localStorage.setItem('advanced_mode', String(next))
+      return next
+    })
+  }
   const pickerAnchorRef = useRef<HTMLButtonElement | null>(null)
   const pickerPopRef = useRef<HTMLDivElement | null>(null)
 
@@ -630,6 +640,24 @@ export default function TrainPage() {
               </div>
             ) : config ? (
               <section className="flex-1 min-h-0 overflow-y-auto pr-1">
+                <div className="flex justify-end mb-2">
+                  <div className="inline-flex rounded-md border border-subtle overflow-hidden text-xs">
+                    <button
+                      type="button"
+                      onClick={() => !advancedMode || toggleAdvancedMode()}
+                      className={`px-3 py-1 transition-colors ${!advancedMode ? 'bg-accent text-white' : 'bg-surface text-fg-secondary hover:bg-subtle'}`}
+                    >
+                      简单
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => advancedMode || toggleAdvancedMode()}
+                      className={`px-3 py-1 transition-colors ${advancedMode ? 'bg-accent text-white' : 'bg-surface text-fg-secondary hover:bg-subtle'}`}
+                    >
+                      高级
+                    </button>
+                  </div>
+                </div>
                 <SchemaForm
                   schema={schema}
                   values={config}
@@ -637,6 +665,7 @@ export default function TrainPage() {
                   disabledFields={disabledFields}
                   disabledHints={disabledHints}
                   autoHints={autoHints}
+                  advancedMode={advancedMode}
                 />
               </section>
             ) : (

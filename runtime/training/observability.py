@@ -67,7 +67,7 @@ class WandBMonitor:
         run,
         *,
         log_samples: bool = False,
-        sample_max_side: int = 512,
+        sample_max_side: int = 1216,
         sample_every_n_steps: int = 0,
     ) -> None:
         self._wandb = wandb_module
@@ -164,7 +164,7 @@ def init_wandb_monitor(args, output_dir: Path, config_path: Optional[Path]) -> W
         "0", "false", "no", "off",
     }
     try:
-        sample_max_side = int(os.environ.get("WANDB_SAMPLE_MAX_SIDE", "512") or 512)
+        sample_max_side = int(os.environ.get("WANDB_SAMPLE_MAX_SIDE", "1216") or 1216)
     except ValueError:
         sample_max_side = 512
     try:
