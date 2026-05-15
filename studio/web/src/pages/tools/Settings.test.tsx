@@ -28,7 +28,6 @@ const initialServerState = {
     entity: '',
     base_url: '',
     mode: 'online',
-    log_samples: false,
     sample_max_side: 512,
     sample_every_n_steps: 0,
   },
