@@ -107,6 +107,56 @@ def get_or_make_thumb(src: Path, size: int) -> Path:
     return out
 
 
+def prewarm_from_image(
+    src: Path, image: Image.Image, sizes: list[int]
+) -> list[Path]:
+    """用已在内存的 PIL Image 直接写多档缩略图到缓存，省掉首次浏览时的解码。
+
+    主要给 upscaler 用：放大后的 PIL Image 还在内存里，与其等用户首次访问时
+    再读 PNG + decode + resize（一张几 MB 的 4× PNG 在 CPU 上 1-3s），不如
+    在 worker 阶段一次性把 256 / 768 都生成好。
+
+    `src` 决定缓存键 —— 必须是放大产物文件的真实路径（同 get_or_make_thumb
+    的 hash 计算）。`image` 应该是 RGB；其它模式会自动转换。
+    """
+    THUMB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    base = image
+    if base.mode != "RGB":
+        base = base.convert("RGB")
+    for size in sizes:
+        if size <= 0:
+            continue
+        key = _key_for(src, size)
+        if key is None:
+            continue
+        out = THUMB_CACHE_DIR / f"{key}.jpg"
+        if out.exists():
+            written.append(out)
+            continue
+        lock = _key_lock(key)
+        with lock:
+            if out.exists():
+                written.append(out)
+                continue
+            tmp = out.with_suffix(out.suffix + ".tmp")
+            try:
+                thumb = base.copy()
+                thumb.thumbnail((size, size), _RESAMPLE)
+                thumb.save(tmp, "JPEG", quality=80, optimize=True)
+                os.replace(tmp, out)
+                written.append(out)
+            except Exception as exc:
+                logger.warning(
+                    "thumb prewarm failed for %s (size=%d): %s", src, size, exc
+                )
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
+    return written
+
+
 def clear_cache() -> int:
     """删除缓存目录下所有 .jpg；返回删除数量。"""
     if not THUMB_CACHE_DIR.exists():

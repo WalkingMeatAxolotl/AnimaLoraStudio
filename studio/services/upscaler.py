@@ -200,6 +200,7 @@ def upscale_file(
     device: str = "auto",
     on_log: Callable[[str], None] = lambda _l: None,
     write_sidecar: bool = True,
+    prewarm_thumb_sizes: Optional[list[int]] = None,
 ) -> dict[str, Any]:
     """读 src 图 → 模型放大 → 写 dst（PNG）。返回元数据 dict。
 
@@ -229,6 +230,17 @@ def upscale_file(
     out_img = _tensor_to_img(out)
     dst.parent.mkdir(parents=True, exist_ok=True)
     out_img.save(dst, format="PNG", optimize=False)
+
+    # 趁内存里还有 PIL Image，把缩略图预生成进缓存。
+    # 不预热的话用户首次浏览 grid 时会逐张解码 4× PNG（一张 1-3s, 200 张要等几分钟），
+    # 而 worker 这里已经付过解码代价了，多花零点几秒生成 thumb 摊到批处理里几乎无感。
+    if prewarm_thumb_sizes:
+        try:
+            from .. import thumb_cache
+            thumb_cache.prewarm_from_image(dst, out_img, prewarm_thumb_sizes)
+        except Exception as exc:  # noqa: BLE001 — 缩略图预热失败不影响放大本体
+            on_log(f"   ⚠ thumb prewarm failed: {exc}")
+
     elapsed = time.monotonic() - t_start
 
     meta = {

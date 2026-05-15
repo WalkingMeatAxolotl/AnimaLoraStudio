@@ -188,6 +188,36 @@ def test_upscale_file_writes_png_and_sidecar(
     assert any("in.png" in line for line in logs)
 
 
+def test_upscale_file_prewarms_thumbnails(
+    tmp_path: Path, stub_model: StubDescriptor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """prewarm_thumb_sizes 应该让 thumb_cache 直接拿到预生成的缩略图。"""
+    from studio import thumb_cache
+
+    monkeypatch.setattr(thumb_cache, "THUMB_CACHE_DIR", tmp_path / "thumbs")
+
+    src = tmp_path / "in.png"
+    dst = tmp_path / "out.png"
+    _write_test_image(src, size=(32, 32))
+
+    upscaler.upscale_file(
+        src,
+        dst,
+        model_path=tmp_path / "dummy.pth",
+        device="cpu",
+        tile_size=16,
+        prewarm_thumb_sizes=[64, 128],
+    )
+
+    # 两档缓存都应该存在 — 后续 get_or_make_thumb 直接返回，不重新解码
+    for sz in (64, 128):
+        cached = thumb_cache.get_or_make_thumb(dst, sz)
+        assert cached.exists()
+        assert cached.parent == thumb_cache.THUMB_CACHE_DIR
+        # JPEG 头校验，确保是真生成了缩略图
+        assert cached.read_bytes()[:2] == b"\xff\xd8"
+
+
 def test_upscale_file_no_sidecar(
     tmp_path: Path, stub_model: StubDescriptor
 ) -> None:

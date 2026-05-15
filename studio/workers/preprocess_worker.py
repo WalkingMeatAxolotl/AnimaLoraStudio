@@ -128,6 +128,9 @@ def run(job_id: int) -> int:  # noqa: PLR0912, PLR0915 - 主流程线性可读
                     tile_pad=tile_pad,
                     device=device,
                     on_log=log,
+                    # 256 给 grid，768 给 curate alt-hover 大图。worker 阶段付一次
+                    # decode 代价，前端首次浏览就秒开。
+                    prewarm_thumb_sizes=[256, 768],
                 )
                 succeeded += 1
             except Exception as exc:  # noqa: BLE001 — 单张失败不影响其他
