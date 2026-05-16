@@ -334,6 +334,7 @@ export default function TagEditPage() {
             onClearSelection={() => setSel(new Set())}
             filterTag={filterTag}
             onFilterTagChange={setFilterTag}
+            filteredKeys={filteredKeys}
             totalCount={keys.length}
             filteredCount={filteredKeys.length}
             onSelectAll={() => setSel(new Set(filteredKeys))}
