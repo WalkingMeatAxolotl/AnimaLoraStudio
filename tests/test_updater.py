@@ -90,6 +90,8 @@ def test_apply_pending_dirty_tree_aborts(
     fake_version = updater.VersionInfo(
         version="0.0.0", commit="abc", commit_short="abc",
         commit_time_iso="", branch="master", tag=None, is_dirty=True,
+        installed_kind="custom", installed_label="自定义（master @ abc）",
+        stable_version=None,
     )
     monkeypatch.setattr(updater, "current_version", lambda: fake_version)
 
@@ -119,6 +121,8 @@ def test_apply_pending_records_last_version(
     fake_version = updater.VersionInfo(
         version="0.0.0", commit="deadbeef" * 5, commit_short="deadbeef",
         commit_time_iso="", branch="master", tag=None, is_dirty=True,
+        installed_kind="custom", installed_label="自定义（master @ deadbeef）",
+        stable_version=None,
     )
     monkeypatch.setattr(updater, "current_version", lambda: fake_version)
     monkeypatch.setattr(updater, "_git", lambda *a, **k: (0, "", ""))
@@ -212,6 +216,8 @@ def test_check_update_force_skips_cache(
         lambda: updater.VersionInfo(
             version="0.7.0", commit="local_sha", commit_short="local_sh",
             commit_time_iso="", branch="master", tag=None, is_dirty=False,
+            installed_kind="stable", installed_label="v0.7.0",
+            stable_version="v0.7.0",
         ),
     )
 
@@ -281,6 +287,8 @@ def test_apply_pending_writes_aborted_status(
     fake = updater.VersionInfo(
         version="0.0.0", commit="abc", commit_short="abc",
         commit_time_iso="", branch="master", tag=None, is_dirty=True,
+        installed_kind="custom", installed_label="自定义（master @ abc）",
+        stable_version=None,
     )
     monkeypatch.setattr(updater, "current_version", lambda: fake)
     monkeypatch.setattr(updater, "_git", lambda *a, **k: (0, "", ""))
@@ -302,6 +310,8 @@ def test_apply_pending_writes_failed_status_on_fetch_error(
     fake = updater.VersionInfo(
         version="0.0.0", commit="abc", commit_short="abc",
         commit_time_iso="", branch="master", tag=None, is_dirty=False,
+        installed_kind="custom", installed_label="自定义（master @ abc）",
+        stable_version=None,
     )
     monkeypatch.setattr(updater, "current_version", lambda: fake)
     def _fake_git(*args, **kwargs):
@@ -554,3 +564,299 @@ def test_dev_commits_malformed_log_lines_skipped(monkeypatch: pytest.MonkeyPatch
     r = updater.dev_commits(limit=10)
     assert len(r.commits) == 1
     assert r.commits[0].short_sha == "dddddddd"
+
+
+# ---------------------------------------------------------------------------
+# ADR 0005：installed_kind / installed_label 分类
+# ---------------------------------------------------------------------------
+
+
+def test_classify_install_stable_via_exact_tag() -> None:
+    """HEAD 命中 vX.Y.Z release tag → stable + label = tag。"""
+    kind, label, ver = updater._classify_install(
+        commit="a" * 40, exact_tag="v0.8.0", branch="master",
+        short="aaaaaaaa", commit_time_iso="2026-05-16T00:00:00Z",
+        is_dirty=False,
+    )
+    assert kind == "stable"
+    assert label == "v0.8.0"
+    assert ver == "v0.8.0"
+
+
+def test_classify_install_stable_with_dirty_suffix() -> None:
+    kind, label, ver = updater._classify_install(
+        commit="a" * 40, exact_tag="v0.8.0", branch="master",
+        short="aaaaaaaa", commit_time_iso="", is_dirty=True,
+    )
+    assert kind == "stable"
+    assert "未提交修改" in label
+    assert ver == "v0.8.0"
+
+
+def test_classify_install_stable_via_version_tree_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HEAD 没 tag，但 __version__ 匹 vX.Y.Z 且 tree 与 tag commit 一致 → stable。
+
+    覆盖 release 直后场景：本地 commit 是 release commit（在 dev 分支上），
+    tag 打在 master merge commit 上 —— exact_tag 不命中但 tree 一致。
+    """
+    monkeypatch.setattr(updater, "__version__", "0.8.0")
+    def _fake_git(*args, **_kw):
+        # rev-parse v0.8.0^{commit} → 返回 tag commit
+        if args[:2] == ("rev-parse", "v0.8.0^{commit}"):
+            return 0, "merge_commit_sha", ""
+        # diff --quiet release_commit merge_commit → 0 表示 tree 一致
+        if args[:2] == ("diff", "--quiet"):
+            return 0, "", ""
+        return 1, "", ""
+    monkeypatch.setattr(updater, "_git", _fake_git)
+
+    kind, label, ver = updater._classify_install(
+        commit="release_commit_sha", exact_tag=None, branch="master",
+        short="release_", commit_time_iso="", is_dirty=False,
+    )
+    assert kind == "stable"
+    assert ver == "v0.8.0"
+
+
+def test_classify_install_dev_when_commit_equals_origin_dev(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """commit == origin/dev HEAD → dev + label 含 sha + 时间。"""
+    monkeypatch.setattr(updater, "__version__", "0.0.0-noversion")  # 强制不匹 stable
+    def _fake_git(*args, **_kw):
+        if args[:2] == ("rev-parse", "v0.0.0-noversion^{commit}"):
+            return 1, "", ""
+        if args[:2] == ("rev-parse", "origin/dev"):
+            return 0, "dev_head_sha", ""
+        return 1, "", ""
+    monkeypatch.setattr(updater, "_git", _fake_git)
+
+    kind, label, ver = updater._classify_install(
+        commit="dev_head_sha", exact_tag=None, branch="anything",
+        short="dev_head", commit_time_iso="2026-05-16T19:50:00-05:00",
+        is_dirty=False,
+    )
+    assert kind == "dev"
+    assert "dev @ dev_head" in label
+    assert "2026-05-16 19:50" in label
+    assert ver is None
+
+
+def test_classify_install_custom_on_feature_branch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """既不命中 release tag 也不在 dev HEAD → custom + label 含 branch + sha。"""
+    monkeypatch.setattr(updater, "__version__", "0.0.0-noversion")
+    monkeypatch.setattr(updater, "_git",
+                        lambda *a, **_k: (1, "", "no plan"))
+
+    kind, label, ver = updater._classify_install(
+        commit="feature_commit", exact_tag=None, branch="feat/something",
+        short="feature_", commit_time_iso="", is_dirty=False,
+    )
+    assert kind == "custom"
+    assert "feat/something" in label
+    assert "feature_" in label
+    assert ver is None
+
+
+def test_classify_install_custom_detached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(updater, "__version__", "0.0.0-noversion")
+    monkeypatch.setattr(updater, "_git",
+                        lambda *a, **_k: (1, "", "no plan"))
+
+    kind, label, ver = updater._classify_install(
+        commit="random_commit", exact_tag=None, branch="detached",
+        short="random__", commit_time_iso="", is_dirty=False,
+    )
+    assert kind == "custom"
+    assert "random__" in label
+    assert "detached" not in label  # detached 时不暴露字面 "detached"，只显示 "（@ sha）"
+    assert ver is None
+
+
+# ---------------------------------------------------------------------------
+# ADR 0005：check_update state 状态机
+# ---------------------------------------------------------------------------
+
+
+def test_check_update_master_up_to_date_same_version(
+    _isolate_flags: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """master 通道：installed_version == latest_version → state=up_to_date。
+
+    即使 commit 不同（release 后本地是 release commit, 远端是 merge commit），
+    版本号相同就视为已是最新 —— 不再用 commit 词汇糊弄用户。
+    """
+    monkeypatch.setattr(
+        updater, "current_version",
+        lambda: updater.VersionInfo(
+            version="0.8.0", commit="release_commit", commit_short="release_",
+            commit_time_iso="", branch="master", tag=None, is_dirty=False,
+            installed_kind="stable", installed_label="v0.8.0",
+            stable_version="v0.8.0",
+        ),
+    )
+    def _fake_git(*args, **_kw):
+        if args[:2] == ("fetch", "origin"):
+            return 0, "", ""
+        if args[:2] == ("rev-parse", "origin/master"):
+            return 0, "merge_commit", ""
+        if args[:3] == ("rev-list", "--count", "HEAD..origin/master"):
+            return 0, "2", ""
+        if args[:3] == ("rev-list", "--count", "origin/master..HEAD"):
+            return 0, "0", ""
+        if args[0] == "describe":
+            return 0, "v0.8.0", ""
+        return 1, "", ""
+    monkeypatch.setattr(updater, "_git", _fake_git)
+
+    r = updater.check_update("master", use_cache=False)
+    assert r.state == "up_to_date"
+    assert r.installed_version == "v0.8.0"
+    assert r.latest_version == "v0.8.0"
+    assert r.has_update is False
+
+
+def test_check_update_master_update_available_diff_version(
+    _isolate_flags: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """master 通道：installed=v0.7.0, latest=v0.8.0 → state=update_available。"""
+    monkeypatch.setattr(
+        updater, "current_version",
+        lambda: updater.VersionInfo(
+            version="0.7.0", commit="v070_commit", commit_short="v070_com",
+            commit_time_iso="", branch="master", tag="v0.7.0", is_dirty=False,
+            installed_kind="stable", installed_label="v0.7.0",
+            stable_version="v0.7.0",
+        ),
+    )
+    def _fake_git(*args, **_kw):
+        if args[:2] == ("fetch", "origin"):
+            return 0, "", ""
+        if args[:2] == ("rev-parse", "origin/master"):
+            return 0, "v080_commit", ""
+        if args[:3] == ("rev-list", "--count", "HEAD..origin/master"):
+            return 0, "5", ""
+        if args[:3] == ("rev-list", "--count", "origin/master..HEAD"):
+            return 0, "0", ""
+        if args[0] == "describe":
+            return 0, "v0.8.0", ""
+        return 1, "", ""
+    monkeypatch.setattr(updater, "_git", _fake_git)
+
+    r = updater.check_update("master", use_cache=False)
+    assert r.state == "update_available"
+    assert r.installed_version == "v0.7.0"
+    assert r.latest_version == "v0.8.0"
+    assert r.has_update is True
+    assert r.behind_count == 5
+
+
+def test_check_update_dev_up_to_date_when_commit_matches(
+    _isolate_flags: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """dev 通道：当前 commit == origin/dev HEAD → state=up_to_date。"""
+    monkeypatch.setattr(
+        updater, "current_version",
+        lambda: updater.VersionInfo(
+            version="0.8.0", commit="dev_tip", commit_short="dev_tip_",
+            commit_time_iso="", branch="dev", tag=None, is_dirty=False,
+            installed_kind="dev", installed_label="dev @ dev_tip_",
+            stable_version=None,
+        ),
+    )
+    def _fake_git(*args, **_kw):
+        if args[:2] == ("fetch", "origin"):
+            return 0, "", ""
+        if args[:2] == ("rev-parse", "origin/dev"):
+            return 0, "dev_tip", ""
+        if args[:3] == ("rev-list", "--count", "HEAD..origin/dev"):
+            return 0, "0", ""
+        if args[:3] == ("rev-list", "--count", "origin/dev..HEAD"):
+            return 0, "0", ""
+        return 1, "", ""
+    monkeypatch.setattr(updater, "_git", _fake_git)
+
+    r = updater.check_update("dev", use_cache=False)
+    assert r.state == "up_to_date"
+    assert r.behind_count == 0
+
+
+def test_check_update_dev_update_available_when_behind(
+    _isolate_flags: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """dev 通道：本地落后 origin/dev N commit → state=update_available + behind_count=N。"""
+    monkeypatch.setattr(
+        updater, "current_version",
+        lambda: updater.VersionInfo(
+            version="0.8.0", commit="old_dev_commit", commit_short="old_dev_",
+            commit_time_iso="", branch="dev", tag=None, is_dirty=False,
+            installed_kind="custom", installed_label="自定义（dev @ old_dev_）",
+            stable_version=None,
+        ),
+    )
+    def _fake_git(*args, **_kw):
+        if args[:2] == ("fetch", "origin"):
+            return 0, "", ""
+        if args[:2] == ("rev-parse", "origin/dev"):
+            return 0, "new_dev_tip", ""
+        if args[:3] == ("rev-list", "--count", "HEAD..origin/dev"):
+            return 0, "3", ""
+        if args[:3] == ("rev-list", "--count", "origin/dev..HEAD"):
+            return 0, "0", ""
+        return 1, "", ""
+    monkeypatch.setattr(updater, "_git", _fake_git)
+
+    r = updater.check_update("dev", use_cache=False)
+    assert r.state == "update_available"
+    assert r.behind_count == 3
+    assert r.has_update is True
+
+
+def test_check_update_dev_ahead_when_local_leads(
+    _isolate_flags: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """dev 通道：本地 commit 领先 origin/dev（罕见，回滚或抢跑） → state=ahead。"""
+    monkeypatch.setattr(
+        updater, "current_version",
+        lambda: updater.VersionInfo(
+            version="0.8.0", commit="ahead_commit", commit_short="ahead_co",
+            commit_time_iso="", branch="dev", tag=None, is_dirty=False,
+            installed_kind="custom", installed_label="自定义",
+            stable_version=None,
+        ),
+    )
+    def _fake_git(*args, **_kw):
+        if args[:2] == ("fetch", "origin"):
+            return 0, "", ""
+        if args[:2] == ("rev-parse", "origin/dev"):
+            return 0, "old_remote_tip", ""
+        if args[:3] == ("rev-list", "--count", "HEAD..origin/dev"):
+            return 0, "0", ""
+        if args[:3] == ("rev-list", "--count", "origin/dev..HEAD"):
+            return 0, "2", ""
+        return 1, "", ""
+    monkeypatch.setattr(updater, "_git", _fake_git)
+
+    r = updater.check_update("dev", use_cache=False)
+    assert r.state == "ahead"
+
+
+def test_check_update_fetch_error_returns_detached(
+    _isolate_flags: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """fetch 失败 → state=detached + error 字段填，前端不该认为"有更新"。"""
+    def _fake_git(*args, **_kw):
+        if args[:2] == ("fetch", "origin"):
+            return 128, "", "fatal: network unreachable"
+        return 0, "", ""
+    monkeypatch.setattr(updater, "_git", _fake_git)
+
+    r = updater.check_update("master", use_cache=False)
+    assert r.state == "detached"
+    assert r.error is not None

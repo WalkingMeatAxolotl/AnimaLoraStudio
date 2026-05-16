@@ -369,38 +369,63 @@ def test_has_gelbooru_credentials(secrets_file: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# PR-D — system.show_dev_channel（dev 通道 toggle 持久化）
+# PR-D / ADR 0005 — system.update_channel（用户视图偏好持久化）
 # ---------------------------------------------------------------------------
 
 
-def test_system_defaults_show_dev_channel_false(secrets_file: Path) -> None:
-    """新装默认 toggle 关 —— 绝大多数用户看简化 UI，不暴露 dev 入口。"""
+def test_system_defaults_update_channel_stable(secrets_file: Path) -> None:
+    """新装默认通道偏好 = stable，绝大多数用户只看稳定版。"""
     s = secrets.load()
-    assert s.system.show_dev_channel is False
+    assert s.system.update_channel == "stable"
+    assert s.system.show_dev_channel is False  # legacy 字段默认也是 False
 
 
-def test_system_show_dev_channel_round_trip(secrets_file: Path) -> None:
-    """update + load 持久化（webui 勾选 toggle 后刷页应保留）。"""
-    secrets.update({"system": {"show_dev_channel": True}})
-    assert secrets.load().system.show_dev_channel is True
-    # 关掉也持久化
-    secrets.update({"system": {"show_dev_channel": False}})
-    assert secrets.load().system.show_dev_channel is False
+def test_system_update_channel_round_trip(secrets_file: Path) -> None:
+    """update + load 持久化（webui 切 toggle 后刷页应保留）。"""
+    secrets.update({"system": {"update_channel": "dev"}})
+    assert secrets.load().system.update_channel == "dev"
+    secrets.update({"system": {"update_channel": "stable"}})
+    assert secrets.load().system.update_channel == "stable"
 
 
 def test_system_legacy_file_without_system_field(secrets_file: Path) -> None:
-    """老 secrets.json 没有 system 字段时，加载用默认值（show_dev_channel=False）。"""
+    """老 secrets.json 没有 system 字段时，加载用默认值 stable。"""
     secrets_file.write_text(
         json.dumps({"gelbooru": {"user_id": "alice"}}),
         encoding="utf-8",
     )
     s = secrets.load()
-    assert s.system.show_dev_channel is False
+    assert s.system.update_channel == "stable"
     assert s.gelbooru.user_id == "alice"  # 其它字段不受影响
 
 
-def test_system_show_dev_channel_in_masked_dict(secrets_file: Path) -> None:
-    """show_dev_channel 不是敏感字段，掩码后应保留原值。"""
-    secrets.update({"system": {"show_dev_channel": True}})
+def test_system_update_channel_in_masked_dict(secrets_file: Path) -> None:
+    """update_channel 不是敏感字段，掩码后应保留原值。"""
+    secrets.update({"system": {"update_channel": "dev"}})
     masked = secrets.to_masked_dict(secrets.load())
-    assert masked["system"]["show_dev_channel"] is True
+    assert masked["system"]["update_channel"] == "dev"
+
+
+def test_system_show_dev_channel_migrated_to_update_channel(
+    secrets_file: Path,
+) -> None:
+    """ADR 0005：老 secrets.json 里 show_dev_channel=true 一次性迁移成
+    update_channel='dev'，让升级用户保留之前的 dev 视图偏好。"""
+    secrets_file.write_text(
+        json.dumps({"system": {"show_dev_channel": True}}),
+        encoding="utf-8",
+    )
+    s = secrets.load()
+    assert s.system.update_channel == "dev"
+
+
+def test_system_show_dev_channel_migration_does_not_overwrite_explicit_pref(
+    secrets_file: Path,
+) -> None:
+    """update_channel 已显式设过 → 迁移函数不覆盖（幂等）。"""
+    secrets_file.write_text(
+        json.dumps({"system": {"show_dev_channel": True, "update_channel": "stable"}}),
+        encoding="utf-8",
+    )
+    s = secrets.load()
+    assert s.system.update_channel == "stable"  # 显式设过不被 legacy 覆盖
