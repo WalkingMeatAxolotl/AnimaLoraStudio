@@ -344,9 +344,13 @@ export interface GenerateSecretsConfig {
   attention_backend: AttentionBackend
 }
 
-/** 系统级偏好（ADR 0002 / PR-D）。show_dev_channel 开启后 Settings 暴露 dev
- *  通道按钮（手动检查 / 更新到 dev）；自动检查 + Topbar badge 仍然只看 master。 */
+/** 系统级偏好（ADR 0002 / 0005）。update_channel 是用户视图偏好（"stable" /
+ *  "dev"），与 git 工作树状态解耦：toggle 切换不触发 git 操作，仅改 UI 展示
+ *  的通道；真正"切到 dev HEAD" / "更新到 vX.Y.Z" 是单独按钮。
+ *  show_dev_channel 是 deprecated 字段（pydantic 兼容），新代码用 update_channel。 */
 export interface SystemPrefsConfig {
+  update_channel: 'stable' | 'dev'
+  /** @deprecated use update_channel */
   show_dev_channel: boolean
 }
 
@@ -1859,20 +1863,45 @@ export interface SystemVersion {
   commit: string
   commit_short: string
   commit_time_iso: string
+  /** @deprecated UI 用 installed_kind / installed_label；branch 仅 debug */
   branch: string
   tag: string | null
   is_dirty: boolean
+  /** 产品视角的"装了什么"分类（ADR 0005）。
+   *  - stable：HEAD 命中 vX.Y.Z release tag，或 __version__ 匹某 release tag 且 tree 一致
+   *  - dev：commit == origin/dev HEAD
+   *  - custom：feature branch / detached / 未识别 commit */
+  installed_kind: 'stable' | 'dev' | 'custom'
+  /** 用户可读 label，如 "v0.8.0" / "dev @ f6f202b · 2026-05-16" / "自定义（feat/foo @ a1b2c3d）"。
+   *  dirty 时追加 "· 未提交修改" */
+  installed_label: string
+  /** "vX.Y.Z" 形式，仅 installed_kind=stable 时填；前端做版本号比对用 */
+  stable_version: string | null
 }
 
 export interface SystemUpdateCheck {
   channel: 'master' | 'dev'
   current_commit: string
   latest_commit: string
+  /** @deprecated 前端用 behind_count；commits_ahead 是 git 词汇 */
   commits_ahead: number
+  /** @deprecated 前端用 state；has_update = (state === 'update_available') */
   has_update: boolean
   latest_tag: string | null
   checked_at: number
   error: string | null
+  /** 状态机（ADR 0005）。
+   *  - up_to_date：已是最新（版本号 / commit 一致）
+   *  - update_available：远端有更新
+   *  - ahead：本地领先远端（罕见，常见于回滚后又抢跑）
+   *  - detached：当前 commit 不在 channel 历史上（feature branch / 离群） */
+  state: 'up_to_date' | 'update_available' | 'ahead' | 'detached'
+  /** 当前装的稳定版（master 通道）："vX.Y.Z" / null（没装 stable） */
+  installed_version: string | null
+  /** 远端最新稳定版（master 通道）："vX.Y.Z" / null（远端没 tag / dev 通道） */
+  latest_version: string | null
+  /** 前端文案"N 项更新"用（= commits_ahead，但语义更清楚） */
+  behind_count: number
 }
 
 /** PR-C — 最近一次 update 的结构化结果。

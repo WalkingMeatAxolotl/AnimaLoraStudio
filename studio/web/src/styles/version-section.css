@@ -1,24 +1,94 @@
-/* VersionSection 双通道升级面板（ADR 0002 / PR-D 重设计）
+/* VersionSection 单视图升级面板（ADR 0005 重设计）
  *
  * 所有 class 用 vs- 前缀避免与全局 / Tailwind utility 碰撞。
  * 全部走 tokens.css 现有 CSS variable，自动适配 light/dark。
- * 容器宽度响应：container query (sec-card → vs-channels)。
+ *
+ * 产品模型：单视图 + 通道偏好 radio（不再并排双卡，避免"两个通道纠结"问题）
+ * - vs-installed-row：顶部一行展示"装了什么"（installed_label）
+ * - vs-channel-toggle-row：通道偏好 radio（stable / dev，纯 UI 视图）
+ * - vs-channels：当前选中通道的卡片容器（永远单列）
  */
 
-/* ==================== 双卡 grid ==================== */
+/* ==================== 卡片容器（永远单卡） ==================== */
 .vs-channels {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 14px;
 }
-.vs-channels.both {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-}
 .vs-sec-card {
   container-type: inline-size;
 }
-@container (max-width: 760px) {
-  .vs-channels.both { grid-template-columns: minmax(0, 1fr); }
+
+/* ==================== 顶部：你装的是什么 ==================== */
+.vs-installed-row {
+  padding: 10px 12px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+.vs-installed-label {
+  color: var(--fg-tertiary);
+}
+.vs-installed-value {
+  font-family: var(--font-mono);
+  color: var(--fg-primary);
+  font-weight: 600;
+}
+.vs-installed-warn {
+  color: var(--warn);
+  font-size: 11.5px;
+}
+
+/* ==================== 通道偏好 radio ==================== */
+.vs-channel-toggle-row {
+  padding: 6px 12px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+}
+.vs-channel-toggle-label {
+  color: var(--fg-tertiary);
+}
+.vs-channel-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font-size: 12.5px;
+  transition: 120ms;
+}
+.vs-channel-radio:hover:not(.on) {
+  background: var(--bg-overlay);
+}
+.vs-channel-radio.on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.vs-channel-radio .vs-channel-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  background: transparent;
+}
+.vs-channel-radio.on .vs-channel-dot {
+  background: currentColor;
+}
+.vs-channel-hint {
+  margin-left: auto;
+  color: var(--fg-tertiary);
+  font-size: 11px;
+  font-style: italic;
 }
 
 /* ==================== 单卡片 ==================== */
@@ -296,89 +366,8 @@
   font-size: 10.5px;
 }
 
-/* ==================== dev toggle 行（title 下方独立一行） ==================== */
-/* 之前下方双卡之后用 dashed border 表达 "opt-in"；现在搬到 title 下方
-   主流位置，更紧凑、无边框，背景由 .open / .locked 状态决定 */
-.vs-dev-toggle-row {
-  padding: 8px 12px;
-  background: transparent;
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  justify-content: space-between;
-  flex-wrap: wrap;
-}
-.vs-dev-toggle-row.open {
-  background: var(--bg-sunken);
-}
-.vs-dev-toggle-row.locked {
-  background: var(--bg-sunken);
-}
-.vs-dev-toggle-row .vs-lhs {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-  flex-wrap: wrap;
-}
-.vs-dev-toggle-row .vs-t {
-  font-size: 12.5px;
-  color: var(--fg-secondary);
-}
-.vs-dev-toggle-row .vs-d {
-  font-size: 11.5px;
-  color: var(--fg-tertiary);
-  margin-top: 2px;
-  max-width: 720px;
-  line-height: 1.5;
-}
-.vs-lock-pill {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: var(--accent-soft);
-  color: var(--accent);
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-/* ==================== switch ==================== */
-.vs-sw {
-  width: 32px;
-  height: 18px;
-  border-radius: 999px;
-  background: var(--bg-overlay);
-  border: 1px solid var(--border-default);
-  position: relative;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-.vs-sw::after {
-  content: "";
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: var(--fg-tertiary);
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  transition: 140ms;
-}
-.vs-sw.on {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-}
-.vs-sw.on::after {
-  background: var(--accent);
-  transform: translateX(14px);
-}
-.vs-sw.locked {
-  cursor: not-allowed;
-  opacity: 0.7;
-}
+/* 旧 .vs-dev-toggle-row / .vs-sw / .vs-lock-pill 已删，由
+   .vs-channel-toggle-row + .vs-channel-radio 取代（ADR 0005）。 */
 
 /* InfoButton ⓘ 弹层（之前的 .vs-info-* 类）已抽到
    components/InfoButton.tsx + styles/info-button.css，所有 .info-btn-*
