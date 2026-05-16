@@ -596,7 +596,10 @@ export interface UploadResult {
 
 // ---- preprocess (放大第一阶段) ---------------------------------------------
 
-/** preprocess/ 目录下的已处理产物（含来源元数据，sidecar 缺失时多个字段为 null）。 */
+/** 已处理图：manifest 里 kind=processed 的 entry 拼上磁盘 stat。
+ *
+ *  ADR 0004 之后状态走 `preprocess/manifest.json` 单文件（无 per-image sidecar），
+ *  manifest 缺字段时 source/model/... 为 null（兼容迁移自老 sidecar 的旧 entry）。 */
 export interface PreprocessedItem {
   name: string
   mtime: number
@@ -604,17 +607,18 @@ export interface PreprocessedItem {
   source: string | null
   model: string | null
   scale: number | null
-  /** 'resize' | 'upscale' | 'upscale+resize'，sidecar 缺失或老数据时为 null。 */
+  /** 'resize' | 'upscale' | 'upscale+resize'，老 entry 可能为 null。 */
   action: string | null
   /** 目标像素面积；null = 关闭智能模式（老路径 4×）。 */
   target_area: number | null
   src_size: [number, number] | null
   dst_size: [number, number] | null
   elapsed_seconds: number | null
+  /** 源图（download/{source}）已被删 → orphan=true。 */
   orphan: boolean
 }
 
-/** download/ 里存在但 preprocess/ 还没产物的待处理图。 */
+/** 未处理图：download/ 存在、manifest 没记的图（隐式 original）。 */
 export interface PreprocessPendingItem {
   name: string
   mtime: number
@@ -634,11 +638,8 @@ export interface CurationItem {
 }
 
 export interface CurationView {
-  left: CurationItem[] // download − train，或 preprocess − train
+  left: CurationItem[] // download − train
   right: Record<string, CurationItem[]> // folder → items
-  /** 左侧实际源：preprocess/ 有产物时为 'preprocess'，否则 'download'。
-   *  老后端没这字段时前端按 'download' 处理。 */
-  left_source?: 'preprocess' | 'download'
   download_total: number
   train_total: number
   folders: string[]
@@ -1358,13 +1359,13 @@ export const api = {
       pending: PreprocessPendingItem[]
       summary: { download_count: number; processed_count: number; pending_count: number }
     }>(`/api/projects/${pid}/preprocess/files`),
-  deletePreprocessFiles: (pid: number, names: string[]) =>
-    req<{ deleted: string[]; missing: string[] }>(
-      `/api/projects/${pid}/preprocess/files/delete`,
+  /** 还原指定产物：删 manifest entry + 删 preprocess/{name} PNG。
+   *  还原后图回到「未处理」（隐式 original）。ADR 0004。 */
+  restorePreprocessFiles: (pid: number, names: string[]) =>
+    req<{ restored: string[]; missing: string[] }>(
+      `/api/projects/${pid}/preprocess/files/restore`,
       { method: 'POST', body: JSON.stringify({ names }) },
     ),
-  preprocessThumbUrl: (pid: number, name: string, size = 256) =>
-    `/api/projects/${pid}/preprocess/thumb?name=${encodeURIComponent(name)}&size=${size}`,
 
   getJob: (jid: number) => req<Job>(`/api/jobs/${jid}`),
   getJobLog: (jid: number, tail?: number) => {

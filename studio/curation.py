@@ -1,6 +1,9 @@
 """Curation 操作（PP3）：download / train 双面板的后端逻辑。
 
 - `download/` 永远是项目级全量备份，不删
+- 左侧候选 = download/ 列表（**每张图通过 `preprocess_manifest.resolve()` 拿
+  实际字节路径**，可能是 download/{name} 也可能是 preprocess/{name}.png——
+  对前端透明，见 ADR 0004）
 - 复制 / 移除只动 `versions/{label}/train/{folder}/` 的副本
 - 文件名做差集：left = download − all-train，right = train 按 folder 分组
 - 子文件夹遵 Kohya 风格 N_xxx（PP4 / PP6 训练时仍按 dataset.parse_repeat 解析）
@@ -21,7 +24,7 @@ from typing import Any
 
 from . import projects, versions
 from .datasets import IMAGE_EXTS
-from .paths import safe_join
+from .services import preprocess_manifest
 
 # Kohya: 可选 `N_` 前缀 + 字母（不允许纯数字 / `5_` 这种空 label）
 _FOLDER_PATTERN = re.compile(r"^([0-9]+_)?[A-Za-z][A-Za-z0-9_-]*$")
@@ -46,7 +49,7 @@ def _validate_folder(name: str) -> None:
 
 
 def _validate_filename(name: str) -> None:
-    if not _FILE_PATTERN.fullmatch(name):
+    if not _FILE_PATTERN.fullmatch(name) or ".." in name:
         raise CurationError(f"非法文件名: {name!r}")
 
 
@@ -96,31 +99,15 @@ def _list_image_entries(d: Path) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def _active_left_dir(pdir: Path) -> tuple[Path, str]:
-    """决定 curate 左侧用哪个源目录。
-
-    `preprocess/` 非空（>=1 张图）→ 用 preprocess/，否则用 download/。
-    这样下载完没跑预处理时行为不变；跑完预处理后左侧自动切到产物。
-    """
-    pre = pdir / "preprocess"
-    if pre.exists():
-        for f in pre.iterdir():
-            if f.is_file() and f.suffix.lower() in IMAGE_EXTS:
-                return pre, "preprocess"
-    return pdir / "download", "download"
-
-
 def list_download(conn, project_id: int) -> list[dict[str, Any]]:
-    """[兼容] 始终返回 download/ 列表（preprocess 后引入了 list_left_source）。"""
+    """download/ 里的所有图（按 download 文件名列出）。
+
+    ADR 0004：下游通过 `preprocess_manifest.resolve(project_dir, name)` 拿实际
+    字节路径——前端**不需要**知道有没有预处理；URL 永远是项目缩略图端点，
+    由后端统一解析。
+    """
     p, pdir = _project_dir(conn, project_id)
     return _list_image_entries(pdir / "download")
-
-
-def list_left_source(conn, project_id: int) -> tuple[list[dict[str, Any]], str]:
-    """返回 (列表, 源标签)：预处理产物存在时优先 preprocess/，否则 download/。"""
-    p, pdir = _project_dir(conn, project_id)
-    src, label = _active_left_dir(pdir)
-    return _list_image_entries(src), label
 
 
 def list_train(
@@ -138,14 +125,13 @@ def list_train(
 
 
 def curation_view(conn, project_id: int, version_id: int) -> dict[str, Any]:
-    """前端用：left = active_source − train，right = train 按 folder 分组。
-
-    active_source = preprocess/ 若已有产物，否则 download/。`left_source` 字段
-    告诉前端缩略图要走哪个 endpoint。
+    """前端用：left = download − train，right = train 按 folder 分组。
 
     每个文件返回 `{name, mtime}`；前端用 mtime 提供「按时间」排序。
+    左侧的实际字节路径由 resolver 决定（已处理走 preprocess/ 副本，未处理走原图），
+    前端通过项目缩略图端点拿，不感知差异。
     """
-    left, left_source = list_left_source(conn, project_id)
+    left = list_download(conn, project_id)
     train = list_train(conn, project_id, version_id)
     used: set[str] = set()
     for files in train.values():
@@ -153,7 +139,6 @@ def curation_view(conn, project_id: int, version_id: int) -> dict[str, Any]:
     return {
         "left": [e for e in left if e["name"] not in used],
         "right": train,
-        "left_source": left_source,
         # download_total 保留语义：左侧候选总数（与历史 API 兼容）
         "download_total": len(left),
         "train_total": sum(len(v) for v in train.values()),
@@ -178,14 +163,20 @@ def copy_to_train(
 ) -> dict[str, list[str]]:
     """从 download/ 复制选中文件到 train/{dest_folder}/，已存在跳过。
 
+    每个文件按 `preprocess_manifest` 解析实际源：
+    - 未处理 → 复制 download/{name}（原 bytes）
+    - 已处理 → 复制 preprocess/{stem}.png（升级后的 bytes），**但 train/ 下
+      仍保留原始 download 文件名**——下游 trainer / metadata 用同名匹配
+
     若目标文件夹不存在自动创建；同名 .txt / .json 一并复制（best-effort，
-    metadata 复制失败仅日志，不报错）。
+    metadata 复制失败仅日志，不报错）。metadata 始终从 download 目录拿
+    （标签文件不会被预处理改写）。
     """
     _validate_folder(dest_folder)
     p, _, train = _version_train_dir(conn, project_id, version_id)
     pdir = projects.project_dir(p["id"], p["slug"])
-    # 与 curation_view 的左侧源保持一致：preprocess/ 有产物时从那拷，否则 download/。
-    src_dir, _label = _active_left_dir(pdir)
+    download_dir = pdir / "download"
+    preprocess_manifest.ensure_manifest(pdir)
     dst_dir = train / dest_folder
     dst_dir.mkdir(parents=True, exist_ok=True)
 
@@ -194,20 +185,25 @@ def copy_to_train(
     missing: list[str] = []
     for name in files:
         _validate_filename(name)
-        try:
-            src = safe_join(src_dir, name)
-            dst = safe_join(dst_dir, name)
-        except ValueError as exc:
-            raise CurationError(f"非法文件名: {name!r} ({exc})") from exc
+        # 实际 bytes 路径：可能是 download/ 或 preprocess/{stem}.png
+        product_name = Path(name).stem + ".png"
+        entry = preprocess_manifest.get_entry(pdir, product_name)
+        if entry and entry.get("kind") == "processed":
+            src = pdir / "preprocess" / product_name
+        else:
+            src = download_dir / name
         if not src.exists():
             missing.append(name)
             continue
+        # train 下文件名 = download 名（即便实际 bytes 来自 preprocess/{stem}.png）
+        dst = dst_dir / name
         if dst.exists():
             skipped.append(name)
             continue
         shutil.copy2(src, dst)
+        # metadata 永远从 download/ 拿（标签不会被预处理改写）
         for ext in _META_EXTS:
-            sm = src.with_suffix(ext)
+            sm = (download_dir / name).with_suffix(ext)
             if sm.exists():
                 try:
                     shutil.copy2(sm, dst_dir / sm.name)
@@ -232,10 +228,7 @@ def remove_from_train(
     missing: list[str] = []
     for name in files:
         _validate_filename(name)
-        try:
-            p = safe_join(fdir, name)
-        except ValueError as exc:
-            raise CurationError(f"非法文件名: {name!r} ({exc})") from exc
+        p = fdir / name
         if not p.exists():
             missing.append(name)
             continue

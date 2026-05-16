@@ -82,9 +82,22 @@ def _has_ppsf() -> bool:
         return False
 
 
-@pytest.mark.skipif(_has_ppsf(), reason="PPSF 已安装，无法测 ImportError 路径")
-def test_create_ppsf_import_error_message() -> None:
-    """没装 PPSF 时报错信息要包含安装提示，而不是裸 ImportError。"""
+def test_create_ppsf_import_error_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    """没装 PPSF 时报错信息要包含安装提示，而不是裸 ImportError。
+
+    用 builtins.__import__ 强制让 `from prodigyplus import ...` 抛 ImportError，
+    不依赖运行环境是否真装了 PPSF（CI / dev / 本地 venv 都能跑）。
+    """
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "prodigyplus" or name.startswith("prodigyplus."):
+            raise ImportError("simulated: no prodigyplus")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.delitem(sys.modules, "prodigyplus", raising=False)
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
     model = nn.Linear(4, 4)
     with pytest.raises(ImportError, match="prodigy-plus-schedule-free"):
         create_prodigy_plus_schedulefree(model.parameters(), lr=1.0)

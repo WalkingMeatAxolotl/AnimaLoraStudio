@@ -33,6 +33,19 @@ interface FilesView {
   summary: Status['summary']
 }
 
+/** 单图视图：合并 pending + processed 成一份带状态的列表。
+ *
+ *  ADR 0004：用户视角只有一份图，「未处理 / 已处理」是图上的徽章而非分组。 */
+interface ImageRow {
+  name: string                  // download/ 下的原文件名（用作 selection key + thumb URL）
+  productName: string           // preprocess/ 下的产物名（{stem}.png），还原 API 用这个
+  status: 'pending' | 'processed'
+  processed?: PreprocessedItem  // status=processed 时有
+  size: number
+}
+
+type FilterMode = 'all' | 'pending' | 'processed'
+
 const STATUS_COLOR: Record<Job['status'], string> = {
   pending: 'badge badge-neutral',
   running: 'badge badge-warn',
@@ -63,6 +76,12 @@ const TARGET_PRESETS: TargetPreset[] = [
 ]
 const DEFAULT_TARGET_EDGE = 1024
 
+/** stem 工具（去扩展名）—— 前端 product name 拼装用。 */
+function fileStem(name: string): string {
+  const dot = name.lastIndexOf('.')
+  return dot < 0 ? name : name.slice(0, dot)
+}
+
 export default function PreprocessPage() {
   const { project, reload } = useOutletContext<Ctx>()
   const { toast } = useToast()
@@ -77,10 +96,9 @@ export default function PreprocessPage() {
   // targetEdge: 边长（像素），平方就是面积；null = 关闭智能；0 = 自定义中
   const [targetEdge, setTargetEdge] = useState<number | null>(DEFAULT_TARGET_EDGE)
   const [customEdge, setCustomEdge] = useState<string>(String(DEFAULT_TARGET_EDGE))
-  const [pendingSel, setPendingSel] = useState<Set<string>>(new Set())
-  const [pendingAnchor, setPendingAnchor] = useState<string | null>(null)
-  const [processedSel, setProcessedSel] = useState<Set<string>>(new Set())
-  const [processedAnchor, setProcessedAnchor] = useState<string | null>(null)
+  const [filter, setFilter] = useState<FilterMode>('all')
+  const [sel, setSel] = useState<Set<string>>(new Set())
+  const [selAnchor, setSelAnchor] = useState<string | null>(null)
 
   // 模型权重就绪状态（catalog 取一次，下载完成后用户手动刷新或 SSE 更新）
   const [allUpscalers, setAllUpscalers] = useState<UpscalerVariant[]>([])
@@ -175,6 +193,73 @@ export default function PreprocessPage() {
   }
   const modelReady = !!upscaler?.exists
 
+  // ADR 0004：合并 pending + processed 成单一带状态的列表。
+  // 用 download 文件名作为 row key（产物名跟 download 文件名仅扩展名差异）。
+  const rows = useMemo<ImageRow[]>(() => {
+    if (!files) return []
+    const out: ImageRow[] = []
+    // processed 项以 productName 索引；用它的 source 字段（缺失时退回 productName 的 stem.png）找回 download 名
+    const processedByStem = new Map<string, PreprocessedItem>()
+    for (const p of files.processed) {
+      processedByStem.set(fileStem(p.name), p)
+    }
+    // pending 是 download 文件名，能直接用
+    for (const it of files.pending) {
+      out.push({
+        name: it.name, productName: `${fileStem(it.name)}.png`,
+        status: 'pending', size: it.size,
+      })
+    }
+    // 已处理的图：用 source 字段拿原 download 名（迁移自老 sidecar 的可能没 source，
+    // 退回 productName 当作"近似" download 名 —— 不会精准命中 .webp 之类，但这就是
+    // 数据丢失，不是逻辑错误）
+    for (const p of files.processed) {
+      const downloadName = p.source ?? p.name
+      out.push({
+        name: downloadName, productName: p.name,
+        status: 'processed', processed: p, size: p.size,
+      })
+    }
+    out.sort((a, b) => a.name.localeCompare(b.name))
+    return out
+  }, [files])
+
+  const visibleRows = useMemo(
+    () => rows.filter((r) => filter === 'all' || r.status === filter),
+    [rows, filter],
+  )
+  const visibleNames = useMemo(() => visibleRows.map((r) => r.name), [visibleRows])
+
+  // 行 → ImageGrid items，徽章走 meta 字段（ImageGrid 已支持 meta 显示）
+  const gridItems = useMemo(
+    () =>
+      visibleRows.map((r) => ({
+        name: r.name,
+        thumbUrl: api.projectThumbUrl(project.id, r.name),
+        meta:
+          r.status === 'processed'
+            ? `✓ ${r.processed?.action ?? 'upscale'}`
+            : '⊘ 未处理',
+      })),
+    [visibleRows, project.id],
+  )
+
+  // 选中里 pending / processed 的拆分 —— 行动按钮按此启用
+  const { selPending, selProcessed } = useMemo(() => {
+    const byName = new Map(rows.map((r) => [r.name, r]))
+    let p = 0, q = 0
+    const pNames: string[] = []
+    const qProductNames: string[] = []
+    for (const n of sel) {
+      const r = byName.get(n)
+      if (!r) continue
+      if (r.status === 'pending') { p++; pNames.push(r.name) }
+      else { q++; qProductNames.push(r.productName) }
+    }
+    return { selPending: { count: p, names: pNames },
+             selProcessed: { count: q, productNames: qProductNames } }
+  }, [sel, rows])
+
   // ----- 操作 ---------------------------------------------------------------
   const downloadModel = async () => {
     if (downloadingModel) return
@@ -236,10 +321,8 @@ export default function PreprocessPage() {
         summary: prev?.summary ?? summary,
       }))
       toast(`开始预处理 #${j.id}`, 'success')
-      setPendingSel(new Set())
-      setPendingAnchor(null)
-      setProcessedSel(new Set())
-      setProcessedAnchor(null)
+      setSel(new Set())
+      setSelAnchor(null)
     } catch (e) {
       toast(String(e), 'error')
     } finally {
@@ -257,59 +340,26 @@ export default function PreprocessPage() {
     }
   }
 
-  const deleteProcessed = async () => {
-    if (processedSel.size === 0) return
+  const restoreSelected = async () => {
+    if (selProcessed.count === 0) return
     if (!(await confirm(
-      `从 preprocess/ 删除 ${processedSel.size} 张产物（这些图会回到「待处理」列表）？`,
-      { tone: 'danger', okText: '删除' },
+      `还原 ${selProcessed.count} 张已处理图（删 preprocess/ 副本，回到「未处理」状态）？`,
+      { tone: 'danger', okText: '还原' },
     ))) return
     try {
-      const r = await api.deletePreprocessFiles(project.id, Array.from(processedSel))
+      const r = await api.restorePreprocessFiles(project.id, selProcessed.productNames)
       toast(
-        `已删除 ${r.deleted.length} 张${r.missing.length ? ` · 跳过 ${r.missing.length}` : ''}`,
+        `已还原 ${r.restored.length} 张${r.missing.length ? ` · 跳过 ${r.missing.length}` : ''}`,
         'success',
       )
-      setProcessedSel(new Set())
-      setProcessedAnchor(null)
+      setSel(new Set())
+      setSelAnchor(null)
       await refreshFiles()
       void reload()
     } catch (e) {
       toast(String(e), 'error')
     }
   }
-
-  // ----- grids --------------------------------------------------------------
-  const pendingNames = useMemo(
-    () => (files?.pending ?? []).map((it) => it.name),
-    [files],
-  )
-  const processedNames = useMemo(
-    () => (files?.processed ?? []).map((it) => it.name),
-    [files],
-  )
-
-  const pendingItems = useMemo(
-    () =>
-      pendingNames.map((n) => ({
-        name: n,
-        thumbUrl: api.projectThumbUrl(project.id, n),
-      })),
-    [pendingNames, project.id],
-  )
-  const processedItems = useMemo(
-    () =>
-      (files?.processed ?? []).map((it) => ({
-        name: it.name,
-        thumbUrl: api.preprocessThumbUrl(project.id, it.name),
-        meta: it.dst_size
-          ? [
-              it.action ?? 'upscale',
-              `${it.src_size?.join('×') ?? '?'} → ${it.dst_size.join('×')}`,
-            ].join('  ')
-          : undefined,
-      })),
-    [files, project.id],
-  )
 
   return (
     <StepShell
@@ -343,11 +393,11 @@ export default function PreprocessPage() {
               selectedModel={selectedModel}
               onSelectedModelChange={(label) => void changeSelectedModel(label)}
               pendingCount={summary.pending_count}
-              pendingSelCount={pendingSel.size}
+              pendingSelCount={selPending.count}
               busy={busy || isLive}
               onStartAll={() => void startPreprocess('all')}
               onStartSelected={() =>
-                void startPreprocess('selected', Array.from(pendingSel))
+                void startPreprocess('selected', selPending.names)
               }
             />
 
@@ -359,37 +409,30 @@ export default function PreprocessPage() {
               />
             )}
 
-            {/* 已处理 grid */}
-            <ProcessedSection
-              items={processedItems}
-              selected={processedSel}
+            {/* 单图 grid + 状态徽章 + filter chips */}
+            <ImagesPanel
+              summary={summary}
+              filter={filter}
+              setFilter={(f) => {
+                setFilter(f)
+                setSel(new Set())
+                setSelAnchor(null)
+              }}
+              items={gridItems}
+              selected={sel}
+              selPendingCount={selPending.count}
+              selProcessedCount={selProcessed.count}
               onSelect={(name, e) => {
-                const r = applySelection(processedSel, name, e, processedNames, processedAnchor)
-                setProcessedSel(r.next)
-                setProcessedAnchor(r.anchor)
+                const r = applySelection(sel, name, e, visibleNames, selAnchor)
+                setSel(r.next)
+                setSelAnchor(r.anchor)
               }}
-              onSelectAll={() => setProcessedSel(new Set(processedNames))}
+              onSelectAll={() => setSel(new Set(visibleNames))}
               onClear={() => {
-                setProcessedSel(new Set())
-                setProcessedAnchor(null)
+                setSel(new Set())
+                setSelAnchor(null)
               }}
-              onDelete={() => void deleteProcessed()}
-            />
-
-            {/* 待处理 grid */}
-            <PendingSection
-              items={pendingItems}
-              selected={pendingSel}
-              onSelect={(name, e) => {
-                const r = applySelection(pendingSel, name, e, pendingNames, pendingAnchor)
-                setPendingSel(r.next)
-                setPendingAnchor(r.anchor)
-              }}
-              onSelectAll={() => setPendingSel(new Set(pendingNames))}
-              onClear={() => {
-                setPendingSel(new Set())
-                setPendingAnchor(null)
-              }}
+              onRestore={() => void restoreSelected()}
             />
           </div>
 
@@ -595,7 +638,7 @@ function OperationPanel({
           onClick={onStartSelected}
           disabled={busy || !modelReady || pendingSelCount === 0}
           className="btn btn-secondary btn-sm"
-          title={pendingSelCount === 0 ? '在「待处理」里选图后启用' : ''}
+          title={pendingSelCount === 0 ? '在列表中选择"未处理"的图才启用' : ''}
         >
           {`放大选中 ${pendingSelCount}`}
         </button>
@@ -632,84 +675,61 @@ function OperationPanel({
 }
 
 // ---------------------------------------------------------------------------
-// 已处理 / 待处理 sections
+// 单 grid + 状态徽章 + filter chips（ADR 0004）
 // ---------------------------------------------------------------------------
 
-function ProcessedSection({
+function ImagesPanel({
+  summary,
+  filter,
+  setFilter,
   items,
   selected,
+  selPendingCount,
+  selProcessedCount,
   onSelect,
   onSelectAll,
   onClear,
-  onDelete,
+  onRestore,
 }: {
+  summary: Status['summary']
+  filter: FilterMode
+  setFilter: (f: FilterMode) => void
   items: { name: string; thumbUrl: string; meta?: string }[]
   selected: Set<string>
+  selPendingCount: number
+  selProcessedCount: number
   onSelect: (name: string, e: React.MouseEvent) => void
   onSelectAll: () => void
   onClear: () => void
-  onDelete: () => void
+  onRestore: () => void
 }) {
-  return (
-    <section className="flex flex-col flex-1 min-h-0 rounded-md border border-subtle bg-surface overflow-hidden">
-      <header className="flex items-center gap-2 shrink-0 px-2.5 py-1.5 border-b border-subtle text-sm">
-        <h3 className="font-semibold">已处理</h3>
-        <span className="text-fg-tertiary">{items.length} 张</span>
-        {selected.size > 0 && (
-          <span className="text-accent">· 已选 {selected.size}</span>
-        )}
-        <span className="flex-1" />
-        <button
-          onClick={onSelectAll}
-          disabled={items.length === 0}
-          className="btn btn-ghost btn-sm"
-        >全选</button>
-        <button
-          onClick={onClear}
-          disabled={selected.size === 0}
-          className="btn btn-ghost btn-sm"
-        >清空</button>
-        <button
-          onClick={onDelete}
-          disabled={selected.size === 0}
-          className="btn btn-sm bg-err-soft text-err"
-          title="删除选中产物（源会重新出现在「待处理」）"
-        >🗑 删除 {selected.size}</button>
-      </header>
-      <div className="flex-1 min-h-0 overflow-y-auto p-2">
-        <ImageGrid
-          items={items}
-          selected={selected}
-          onSelect={onSelect}
-          ariaLabel="preprocess-processed-grid"
-          emptyHint="还没有产物 — 点击上方「放大全部 N」"
-        />
-      </div>
-    </section>
+  const chip = (key: FilterMode, label: string, count: number) => (
+    <button
+      onClick={() => setFilter(key)}
+      className={
+        'px-2 py-0.5 rounded-full text-xs font-medium transition-colors ' +
+        (filter === key
+          ? 'bg-accent text-white'
+          : 'bg-overlay text-fg-secondary hover:bg-accent-soft')
+      }
+    >
+      {label} {count}
+    </button>
   )
-}
-
-function PendingSection({
-  items,
-  selected,
-  onSelect,
-  onSelectAll,
-  onClear,
-}: {
-  items: { name: string; thumbUrl: string }[]
-  selected: Set<string>
-  onSelect: (name: string, e: React.MouseEvent) => void
-  onSelectAll: () => void
-  onClear: () => void
-}) {
   return (
     <section className="flex flex-col flex-1 min-h-0 rounded-md border border-subtle bg-surface overflow-hidden">
-      <header className="flex items-center gap-2 shrink-0 px-2.5 py-1.5 border-b border-subtle text-sm">
-        <h3 className="font-semibold">待处理</h3>
-        <span className="text-fg-tertiary">{items.length} 张</span>
+      <header className="flex items-center gap-2 shrink-0 px-2.5 py-1.5 border-b border-subtle text-sm flex-wrap">
+        <h3 className="font-semibold">图片</h3>
+        <span className="text-fg-tertiary">共 {summary.download_count} 张</span>
         {selected.size > 0 && (
           <span className="text-accent">· 已选 {selected.size}</span>
         )}
+        <span className="mx-1 text-dim">·</span>
+        <div className="flex items-center gap-1">
+          {chip('all',       '全部',   summary.download_count)}
+          {chip('pending',   '未处理', summary.pending_count)}
+          {chip('processed', '已处理', summary.processed_count)}
+        </div>
         <span className="flex-1" />
         <button
           onClick={onSelectAll}
@@ -721,14 +741,33 @@ function PendingSection({
           disabled={selected.size === 0}
           className="btn btn-ghost btn-sm"
         >清空</button>
+        <button
+          onClick={onRestore}
+          disabled={selProcessedCount === 0}
+          className="btn btn-sm bg-err-soft text-err"
+          title={selProcessedCount === 0
+            ? '选中含已处理图时启用——还原 = 删 preprocess 副本，回到「未处理」'
+            : `还原 ${selProcessedCount} 张（删 preprocess 副本回到未处理）`}
+        >⟲ 还原 {selProcessedCount}</button>
       </header>
+      {selected.size > 0 && selPendingCount > 0 && selProcessedCount > 0 && (
+        <div className="px-2.5 py-1 bg-warn-soft text-warn text-xs">
+          选中包含 {selPendingCount} 未处理 + {selProcessedCount} 已处理；行动按钮各自只作用于对应状态。
+        </div>
+      )}
       <div className="flex-1 min-h-0 overflow-y-auto p-2">
         <ImageGrid
           items={items}
           selected={selected}
           onSelect={onSelect}
-          ariaLabel="preprocess-pending-grid"
-          emptyHint="所有图都已预处理 ✓"
+          ariaLabel="preprocess-grid"
+          emptyHint={
+            filter === 'pending'
+              ? '没有待处理图（全部已处理 ✓）'
+              : filter === 'processed'
+                ? '还没有产物 — 点上面「放大全部」'
+                : '没有图（先到「下载」拉一些图）'
+          }
         />
       </div>
     </section>
@@ -921,8 +960,8 @@ function PreprocessSidebar({
           下一步
         </h3>
         <p className="text-xs text-fg-secondary leading-snug">
-          预处理产物存在时，<strong className="text-accent">筛选</strong>页左侧自动切到 preprocess/。
-          预处理是可选阶段 — 跳过也能直接进筛选。
+          预处理是可选阶段——跳过的图筛选页会用原图，已处理的图自动用预处理副本。
+          ADR 0004：用户只看到一份图。
         </p>
       </div>
     </div>

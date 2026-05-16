@@ -6,7 +6,8 @@
 - `tiled_inference(model, img, *, scale, tile_size, tile_pad)`：分块前向 +
   overlap 拼接，保证 VRAM 上界跟 tile_size 线性相关
 - `upscale_file(src, dst, *, model_path, ...)`：完整文件级 API，自动处理
-  Pillow 解码、设备选择、产物写盘 + 元数据 sidecar
+  Pillow 解码、设备选择、产物写盘；**返回元数据 dict，不写 sidecar**
+  （状态由 preprocess_manifest 在 worker 入口统一记录，见 ADR 0004）
 
 设计：
 - 模型只在第一次调用 load_model 时实例化；二次调相同 path 直接复用缓存
@@ -21,7 +22,6 @@
 """
 from __future__ import annotations
 
-import json
 import logging
 import math
 import time
@@ -256,7 +256,6 @@ def upscale_file(
     precision: str = "auto",
     target_area: Optional[int] = None,
     on_log: Callable[[str], None] = lambda _l: None,
-    write_sidecar: bool = True,
     prewarm_thumb_sizes: Optional[list[int]] = None,
 ) -> dict[str, Any]:
     """读 src → 智能放大 → 写 dst（PNG）。返回元数据 dict。
@@ -269,7 +268,7 @@ def upscale_file(
     跳过模型那一路是"大图直接缩"，几百毫秒；走模型那一路才是几十秒的开销。
     大部分训练集图片像素都够 1024²/1536²，预处理实际只对少数小图调模型。
 
-    元数据 sidecar（写到 `{dst}.preprocess.json` 当 write_sidecar=True）：
+    返回元数据（worker 拿去写 manifest，见 ADR 0004）：
         {source, model, scale, action, target_area, tile_size, tile_pad,
          device, dtype, src_size, dst_size, elapsed_seconds, mtime}
     action: 'resize' | 'upscale' | 'upscale+resize'
@@ -349,11 +348,6 @@ def upscale_file(
         "elapsed_seconds": round(elapsed, 3),
         "mtime": time.time(),
     }
-    if write_sidecar:
-        sidecar = dst.with_suffix(dst.suffix + ".preprocess.json")
-        sidecar.write_text(
-            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
     on_log(
         f"   ✓ [{action}] {src.name} → {dst.name}  "
         f"{src_size[0]}×{src_size[1]} → {out_img.size[0]}×{out_img.size[1]}  "

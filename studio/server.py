@@ -65,6 +65,7 @@ from .services import (
     flash_attention_setup,
     onnxruntime_setup,
     pending_install,
+    preprocess_manifest,
     release_notes as release_notes_svc,
     torch_setup,
     reg_builder,
@@ -1079,8 +1080,17 @@ class PreprocessStartRequest(BaseModel):
     target_area: Optional[int] = preprocess_svc.DEFAULT_TARGET_AREA
 
 
-class PreprocessDeleteRequest(BaseModel):
+class PreprocessRestoreRequest(BaseModel):
+    """还原已处理图：删 manifest entry + 删 preprocess/{name} PNG。
+
+    还原后该图回到「隐式 original」状态——下游 resolver 重新指向 download/。
+    见 ADR 0004。
+    """
     names: list[str]
+
+
+# 旧字段名兼容（前端切换期间，PreprocessDeleteRequest = PreprocessRestoreRequest）
+PreprocessDeleteRequest = PreprocessRestoreRequest
 
 
 @app.post("/api/projects/{pid}/preprocess/start")
@@ -1179,22 +1189,26 @@ def list_preprocess_files(pid: int) -> dict[str, Any]:
     }
 
 
-@app.post("/api/projects/{pid}/preprocess/files/delete")
-def delete_preprocess_files(
-    pid: int, body: PreprocessDeleteRequest
+@app.post("/api/projects/{pid}/preprocess/files/restore")
+def restore_preprocess_files(
+    pid: int, body: PreprocessRestoreRequest
 ) -> dict[str, Any]:
-    """删除指定产物（含 sidecar），让源回到 pending 状态可重跑。"""
+    """还原指定产物：删 manifest entry + 删 preprocess/{name} PNG。
+
+    还原后图回到「未处理」（隐式 original）状态。下游 resolver 重新指向
+    download/{原名}。见 ADR 0004。
+    """
     if not body.names:
-        return {"deleted": [], "missing": []}
+        return {"restored": [], "missing": []}
     with db.connection_for() as conn:
         p = projects.get_project(conn, pid)
     if not p:
         raise HTTPException(404, f"项目不存在: id={pid}")
     try:
-        res = preprocess_svc.delete_products(p, body.names)
+        res = preprocess_svc.restore_products(p, body.names)
     except preprocess_svc.PreprocessError as exc:
         raise HTTPException(400, str(exc)) from exc
-    if res["deleted"]:
+    if res["restored"]:
         _publish_project_state(p)
     return res
 
@@ -1203,7 +1217,12 @@ def delete_preprocess_files(
 def preprocess_thumb(
     pid: int, name: str = "", size: int = 256
 ) -> FileResponse:
-    """preprocess/ 目录的缩略图（结构同 project_thumb）。"""
+    """[Deprecated] preprocess/ 目录的缩略图。
+
+    ADR 0004 之后 `/api/projects/{pid}/thumb?bucket=download&name=<original>`
+    自带 manifest resolve，前端走那个就够；此端点保留只为兼容旧 URL（仍按
+    传入的 preprocess/{name} 直读，不绕 manifest）。
+    """
     if "/" in name or "\\" in name or ".." in name or not name:
         raise HTTPException(400, "invalid name")
     with db.connection_for() as conn:
@@ -1322,11 +1341,15 @@ def project_thumb(
 ) -> FileResponse:
     """缩略图：默认 256px JPEG（缓存）；size=0 → 原图。
 
+    `name` 是 download/ 下的**原始文件名**。后端通过
+    `preprocess_manifest.resolve()` 决定实际字节路径（见 ADR 0004）：
+      - 未处理 → download/{name}
+      - 已处理 → preprocess/{stem}.png（用户看到的是"升级后"的图，但 URL 不变）
+
+    前端**不需要**知道有没有预处理过——这个端点已经吃下了差异。
+
     缓存路径：`studio_data/thumb_cache/{sha1(src+mtime+size)}.jpg`。
     源文件 mtime 变化会自动 invalidate（hash 变）。
-
-    Cache 策略见 `_thumb_response` —— 不让浏览器长缓存，避免重启过渡期失败响应
-    把图片锁死 24h。
     """
     if bucket != "download":
         raise HTTPException(400, "PP2 仅支持 bucket=download")
@@ -1334,8 +1357,17 @@ def project_thumb(
         p = projects.get_project(conn, pid)
     if not p:
         raise HTTPException(404, f"项目不存在: id={pid}")
-    download_dir = projects.project_dir(p["id"], p["slug"]) / "download"
-    f = _safe_join_or_400(download_dir, name)
+    pdir = projects.project_dir(p["id"], p["slug"])
+    # path traversal 校验（safe_join 对 download 路径，校验文件名安全性）
+    _safe_join_or_400(pdir / "download", name)
+    # ADR 0004：resolve 决定真路径
+    preprocess_manifest.ensure_manifest(pdir)
+    product_name = Path(name).stem + ".png"
+    entry = preprocess_manifest.get_entry(pdir, product_name)
+    if entry and entry.get("kind") == "processed":
+        f = pdir / "preprocess" / product_name
+    else:
+        f = pdir / "download" / name
     if not f.exists() or f.suffix.lower() not in datasets.IMAGE_EXTS:
         logger.info("thumb 404: pid=%s bucket=%s name=%s -> %s", pid, bucket, name, f)
         raise HTTPException(404)

@@ -23,7 +23,7 @@ import traceback
 from pathlib import Path
 
 from studio import db, preprocess, project_jobs, projects
-from studio.services import model_downloader, upscaler
+from studio.services import model_downloader, preprocess_manifest, upscaler
 
 
 _stop_requested = False
@@ -153,8 +153,11 @@ def run(job_id: int) -> int:  # noqa: PLR0912, PLR0915 - 主流程线性可读
                 )
                 continue
             dst_path = preprocess.product_path_for(preprocess_dir, src_name)
-            # 'all' 是增量（已 resolve 过），'all_force' / 'selected' 可能已存在
-            if dst_path.exists() and mode == "all":
+            # 'all' 是增量（已 resolve 过）；这里再过一遍 manifest，防止两个 worker
+            # 同时被调起（罕见但便宜）。'all_force' / 'selected' 走重跑路径。
+            if mode == "all" and preprocess_manifest.get_entry(
+                projects.project_dir(project["id"], project["slug"]), dst_path.name
+            ):
                 skipped += 1
                 emit_event(
                     "preprocess_progress",
@@ -177,6 +180,12 @@ def run(job_id: int) -> int:  # noqa: PLR0912, PLR0915 - 主流程线性可读
                     # 256 给 grid，768 给 curate alt-hover 大图。worker 阶段付一次
                     # decode 代价，前端首次浏览就秒开。
                     prewarm_thumb_sizes=[256, 768],
+                )
+                # 写 manifest：ADR 0004 — 状态唯一真理，downstream resolve 用
+                preprocess_manifest.add_processed(
+                    projects.project_dir(project["id"], project["slug"]),
+                    dst_path.name,
+                    meta,
                 )
                 succeeded += 1
                 emit_event(

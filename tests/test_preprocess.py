@@ -1,16 +1,17 @@
 """preprocess 业务层：list_pending / list_processed / resolve_targets /
-start_job / delete_products。
+start_job / restore_products。
 
+ADR 0004：状态走 manifest，list_processed 不再从 sidecar 读。
 不跑真 upscaler — worker 的端到端走 test_supervisor_jobs / 手测。
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 
 from studio import db, preprocess, project_jobs, projects
+from studio.services import preprocess_manifest
 
 
 @pytest.fixture
@@ -26,31 +27,28 @@ def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     return {"db": dbfile, "project": p}
 
 
-def _drop(d: Path, name: str, content: bytes = b"x") -> Path:
-    d.mkdir(parents=True, exist_ok=True)
-    f = d / name
-    f.write_bytes(content)
-    return f
-
-
 def _seed_download(project: dict, names: list[str]) -> Path:
     download, _ = preprocess.project_paths(project)
     download.mkdir(parents=True, exist_ok=True)
     for n in names:
-        _drop(download, n)
+        (download / n).write_bytes(b"src")
     return download
 
 
 def _seed_processed(project: dict, source_to_meta: dict[str, dict]) -> Path:
-    """source_to_meta: {source_name: {scale, model, ...}} → 写产物 + sidecar。"""
+    """source_to_meta: {source_name: meta} → 写 PNG 副本 + manifest entry。
+
+    产物按约定固定 `.png`（取 source 的 stem）。
+    """
+    pdir = projects.project_dir(project["id"], project["slug"])
     _, pre = preprocess.project_paths(project)
     pre.mkdir(parents=True, exist_ok=True)
     for src, meta in source_to_meta.items():
-        product = preprocess.product_path_for(pre, src)
-        product.write_bytes(b"upscaled-bytes")
-        side = preprocess.sidecar_for(product)
-        full_meta = {"source": src, **meta}
-        side.write_text(json.dumps(full_meta), encoding="utf-8")
+        product_name = Path(src).stem + ".png"
+        (pre / product_name).write_bytes(b"upscaled")
+        preprocess_manifest.add_processed(
+            pdir, product_name, {"source": src, **meta},
+        )
     return pre
 
 
@@ -73,7 +71,7 @@ def test_list_pending_excludes_processed(isolated) -> None:
     assert all("mtime" in it and "size" in it for it in pending)
 
 
-def test_list_processed_reads_sidecar(isolated) -> None:
+def test_list_processed_reads_manifest(isolated) -> None:
     p = isolated["project"]
     _seed_download(p, ["a.png"])
     _seed_processed(
@@ -96,7 +94,7 @@ def test_list_processed_reads_sidecar(isolated) -> None:
 
 
 def test_list_processed_marks_orphans(isolated) -> None:
-    """源已删的产物 orphan=True。"""
+    """源已删的产物 orphan=True（按 manifest entry 的 source 字段比对）。"""
     p = isolated["project"]
     _seed_download(p, ["alive.png"])
     _seed_processed(
@@ -107,23 +105,9 @@ def test_list_processed_marks_orphans(isolated) -> None:
         },
     )
     items = {it["name"]: it for it in preprocess.list_processed(p)}
-    # 注意产物文件名都是 .png（产物固定 png）
+    # 产物文件名都是 .png（{stem}.png）
     assert items["alive.png"]["orphan"] is False
     assert items["deleted.png"]["orphan"] is True
-
-
-def test_list_processed_handles_missing_sidecar(isolated) -> None:
-    """产物存在但 sidecar 丢了：source/model 为 None，依旧返回。"""
-    p = isolated["project"]
-    _seed_download(p, ["foo.png"])
-    _, pre = preprocess.project_paths(p)
-    pre.mkdir(parents=True, exist_ok=True)
-    (pre / "foo.png").write_bytes(b"x")
-    items = preprocess.list_processed(p)
-    assert len(items) == 1
-    assert items[0]["name"] == "foo.png"
-    assert items[0]["source"] is None
-    assert items[0]["scale"] is None
 
 
 def test_summary_counts(isolated) -> None:
@@ -231,25 +215,26 @@ def test_start_job_missing_project(isolated) -> None:
 
 
 # ---------------------------------------------------------------------------
-# delete_products
+# restore_products
 # ---------------------------------------------------------------------------
 
 
-def test_delete_products_removes_image_and_sidecar(isolated) -> None:
+def test_restore_products_removes_image_and_entry(isolated) -> None:
     p = isolated["project"]
+    pdir = projects.project_dir(p["id"], p["slug"])
     _seed_download(p, ["a.png"])
     _seed_processed(p, {"a.png": {"scale": 4}})
 
     _, pre = preprocess.project_paths(p)
     assert (pre / "a.png").exists()
-    assert preprocess.sidecar_for(pre / "a.png").exists()
+    assert preprocess_manifest.get_entry(pdir, "a.png") is not None
 
-    res = preprocess.delete_products(p, ["a.png", "ghost.png"])
-    assert res == {"deleted": ["a.png"], "missing": ["ghost.png"]}
+    res = preprocess.restore_products(p, ["a.png", "ghost.png"])
+    assert res == {"restored": ["a.png"], "missing": ["ghost.png"]}
     assert not (pre / "a.png").exists()
-    assert not preprocess.sidecar_for(pre / "a.png").exists()
+    assert preprocess_manifest.get_entry(pdir, "a.png") is None
 
 
-def test_delete_products_rejects_traversal(isolated) -> None:
+def test_restore_products_rejects_traversal(isolated) -> None:
     with pytest.raises(preprocess.PreprocessError, match="非法文件名"):
-        preprocess.delete_products(isolated["project"], ["..\\foo"])
+        preprocess.restore_products(isolated["project"], ["..\\foo"])

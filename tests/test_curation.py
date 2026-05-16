@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from studio import curation, db, projects, versions
+from studio.services import preprocess_manifest
 
 
 @pytest.fixture
@@ -75,38 +76,36 @@ def test_curation_view_left_minus_right(env) -> None:
     assert view["download_total"] == 3
     assert view["train_total"] == 1
     assert set(view["folders"]) == {"1_data", "5_concept"}
-    # preprocess/ 为空时左侧源 = download
-    assert view["left_source"] == "download"
+    # ADR 0004：left_source 字段已删（前端通过 projectThumbUrl 拿，后端 resolve 透明）
+    assert "left_source" not in view
 
 
-def _seed_preprocess(env, names: list[str]) -> Path:
+def _seed_processed(env, source: str, *, content: bytes = b"upscaled") -> Path:
+    """模拟一张已处理：写 preprocess/{stem}.png + manifest entry。"""
     pdir = projects.project_dir(env["p"]["id"], env["p"]["slug"])
     pre = pdir / "preprocess"
     pre.mkdir(parents=True, exist_ok=True)
-    for n in names:
-        (pre / n).write_bytes(b"upscaled")
-    return pre
+    product_name = Path(source).stem + ".png"
+    (pre / product_name).write_bytes(content)
+    preprocess_manifest.add_processed(pdir, product_name, {"source": source})
+    return pre / product_name
 
 
-def test_curation_view_switches_to_preprocess_when_available(env) -> None:
-    """preprocess/ 一旦有产物，左侧源切到 preprocess/。"""
-    _dl(env, "1.png")  # 原图，被预处理覆盖
-    _dl(env, "2.png")  # 原图，也已预处理
-    _seed_preprocess(env, ["1.png", "2.png"])
+def test_curation_view_lists_download_names_always(env) -> None:
+    """ADR 0004：left 永远列 download 文件名（即便部分图已处理）。"""
+    _dl(env, "1.png")
+    _dl(env, "2.png")
+    _seed_processed(env, "1.png")  # 1.png 已处理
 
     with db.connection_for(env["db"]) as conn:
         view = curation.curation_view(conn, env["p"]["id"], env["v"]["id"])
-    assert view["left_source"] == "preprocess"
     assert _names(view["left"]) == ["1.png", "2.png"]
 
 
-def test_copy_to_train_reads_from_preprocess_when_active(env) -> None:
-    """preprocess/ 有产物时，复制操作从 preprocess/ 拷（不是 download/）。"""
+def test_copy_to_train_uses_processed_bytes_when_available(env) -> None:
+    """已处理图 → 从 preprocess/ 拷字节，但 train/ 下保留 download 文件名。"""
     _dl(env, "1.png", blob=b"original-low-res")
-    _seed_preprocess(env, ["1.png"])
-    # 用不同字节区分两个目录的同名文件
-    pdir = projects.project_dir(env["p"]["id"], env["p"]["slug"])
-    (pdir / "preprocess" / "1.png").write_bytes(b"upscaled-hi-res")
+    _seed_processed(env, "1.png", content=b"upscaled-hi-res")
 
     with db.connection_for(env["db"]) as conn:
         curation.copy_to_train(
@@ -116,14 +115,31 @@ def test_copy_to_train_reads_from_preprocess_when_active(env) -> None:
     assert copied.read_bytes() == b"upscaled-hi-res"
 
 
-def test_curation_view_falls_back_when_preprocess_empty(env) -> None:
-    """preprocess/ 目录存在但无图（早期 create_project 创建的空目录）→ 走 download。"""
-    _dl(env, "1.png")
-    # 目录已经在 create_project 时建好，但里面没图
+def test_copy_to_train_uses_original_when_unprocessed(env) -> None:
+    """未处理图 → 直接从 download/ 拷原字节。"""
+    _dl(env, "1.png", blob=b"original-bytes")
+
     with db.connection_for(env["db"]) as conn:
-        view = curation.curation_view(conn, env["p"]["id"], env["v"]["id"])
-    assert view["left_source"] == "download"
-    assert _names(view["left"]) == ["1.png"]
+        curation.copy_to_train(
+            conn, env["p"]["id"], env["v"]["id"], ["1.png"], "5_concept"
+        )
+    copied = _train_dir(env, "5_concept") / "1.png"
+    assert copied.read_bytes() == b"original-bytes"
+
+
+def test_copy_to_train_handles_mixed_processed_unprocessed(env) -> None:
+    """同批 copy：1.png 已处理 → 用 preprocess；2.png 未处理 → 用 download。"""
+    _dl(env, "1.png", blob=b"orig-1")
+    _dl(env, "2.png", blob=b"orig-2")
+    _seed_processed(env, "1.png", content=b"upscaled-1")
+
+    with db.connection_for(env["db"]) as conn:
+        curation.copy_to_train(
+            conn, env["p"]["id"], env["v"]["id"], ["1.png", "2.png"], "5_concept"
+        )
+    folder = _train_dir(env, "5_concept")
+    assert (folder / "1.png").read_bytes() == b"upscaled-1"
+    assert (folder / "2.png").read_bytes() == b"orig-2"
 
 
 # ---------------------------------------------------------------------------

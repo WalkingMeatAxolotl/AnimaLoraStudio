@@ -1,4 +1,7 @@
-"""/api/projects/{pid}/preprocess/* — start / status / files / delete / thumb。"""
+"""/api/projects/{pid}/preprocess/* — start / status / files / restore / thumb。
+
+ADR 0004：状态走 manifest，restore 替代 delete 语义。
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from studio import db, preprocess as preprocess_svc, project_jobs, projects, secrets, server
-from studio.services import model_downloader
+from studio.services import model_downloader, preprocess_manifest
 
 
 @pytest.fixture
@@ -55,6 +58,16 @@ def _seed_download_image(p: dict, name: str = "a.png") -> Path:
     f = pdir / name
     f.write_bytes(b"fake-image-bytes")
     return f
+
+
+def _seed_processed(p: dict, product_name: str, meta: dict) -> Path:
+    """造一张产物：preprocess/{product_name} + manifest entry。"""
+    pdir = projects.project_dir(p["id"], p["slug"])
+    pre = pdir / "preprocess"
+    pre.mkdir(parents=True, exist_ok=True)
+    (pre / product_name).write_bytes(b"upscaled")
+    preprocess_manifest.add_processed(pdir, product_name, meta)
+    return pre / product_name
 
 
 # ---------------------------------------------------------------------------
@@ -147,13 +160,10 @@ def test_list_files_returns_processed_and_pending(client: TestClient) -> None:
     p = _make_project(client)
     _seed_download_image(p, "a.png")
     _seed_download_image(p, "b.png")
-    # 模拟一张已处理：preprocess/a.png 存在 + sidecar
-    _, pre = preprocess_svc.project_paths(p)
-    pre.mkdir(parents=True, exist_ok=True)
-    (pre / "a.png").write_bytes(b"upscaled")
-    preprocess_svc.sidecar_for(pre / "a.png").write_text(
-        '{"source":"a.png","scale":4,"model":"4x-AnimeSharp"}', encoding="utf-8"
-    )
+    # 模拟一张已处理：preprocess/a.png 存在 + manifest entry
+    _seed_processed(p, "a.png", {
+        "source": "a.png", "scale": 4, "model": "4x-AnimeSharp",
+    })
 
     resp = client.get(f"/api/projects/{p['id']}/preprocess/files")
     assert resp.status_code == 200
@@ -164,31 +174,66 @@ def test_list_files_returns_processed_and_pending(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# delete
+# restore
 # ---------------------------------------------------------------------------
 
 
-def test_delete_preprocess_files_removes_product(client: TestClient) -> None:
+def test_restore_preprocess_files_removes_product(client: TestClient) -> None:
     p = _make_project(client)
     _seed_download_image(p, "a.png")
-    _, pre = preprocess_svc.project_paths(p)
-    pre.mkdir(parents=True, exist_ok=True)
-    (pre / "a.png").write_bytes(b"x")
-    preprocess_svc.sidecar_for(pre / "a.png").write_text("{}", encoding="utf-8")
+    png = _seed_processed(p, "a.png", {"source": "a.png", "model": "X"})
 
     resp = client.post(
-        f"/api/projects/{p['id']}/preprocess/files/delete",
+        f"/api/projects/{p['id']}/preprocess/files/restore",
         json={"names": ["a.png", "ghost.png"]},
     )
     assert resp.status_code == 200
-    assert resp.json() == {"deleted": ["a.png"], "missing": ["ghost.png"]}
-    assert not (pre / "a.png").exists()
+    assert resp.json() == {"restored": ["a.png"], "missing": ["ghost.png"]}
+    assert not png.exists()
 
 
-def test_delete_preprocess_rejects_traversal(client: TestClient) -> None:
+def test_restore_preprocess_rejects_traversal(client: TestClient) -> None:
     p = _make_project(client)
     resp = client.post(
-        f"/api/projects/{p['id']}/preprocess/files/delete",
+        f"/api/projects/{p['id']}/preprocess/files/restore",
         json={"names": ["../etc/passwd"]},
     )
     assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# thumb 端点：ADR 0004 自动 resolve（已处理 → preprocess/，未处理 → download/）
+# ---------------------------------------------------------------------------
+
+
+def test_thumb_resolves_to_download_for_unprocessed(client: TestClient) -> None:
+    """没在 manifest 里 → 走 download/{name}。"""
+    p = _make_project(client)
+    # 写一个 PNG 内容（Pillow 能读的最小 PNG）
+    from PIL import Image
+    download_dir = projects.project_dir(p["id"], p["slug"]) / "download"
+    download_dir.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (8, 8), (255, 0, 0)).save(download_dir / "a.png")
+
+    resp = client.get(f"/api/projects/{p['id']}/thumb?name=a.png&size=8")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("image/")
+
+
+def test_thumb_resolves_to_preprocess_when_processed(client: TestClient) -> None:
+    """manifest kind=processed → 走 preprocess/{stem}.png（即使 URL 给的是 .jpg）。"""
+    p = _make_project(client)
+    from PIL import Image
+    pdir = projects.project_dir(p["id"], p["slug"])
+    download_dir = pdir / "download"
+    download_dir.mkdir(parents=True, exist_ok=True)
+    # download 给 jpg，preprocess 给 png（产物固定 png）
+    Image.new("RGB", (8, 8), (255, 0, 0)).save(download_dir / "a.jpg")
+    pre_dir = pdir / "preprocess"
+    pre_dir.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (16, 16), (0, 255, 0)).save(pre_dir / "a.png")
+    preprocess_manifest.add_processed(pdir, "a.png", {"source": "a.jpg"})
+
+    # 前端按原 download 名 a.jpg 请求 —— 后端应 resolve 到 preprocess/a.png
+    resp = client.get(f"/api/projects/{p['id']}/thumb?name=a.jpg&size=8")
+    assert resp.status_code == 200
