@@ -358,9 +358,16 @@ class TrainingConfig(BaseModel):
         description="【噪声增强】金字塔每层衰减系数（仅 pyramid_noise_iters > 0）",
         json_schema_extra=_meta("noise_schedule", show_when="pyramid_noise_iters!=0", advanced=True),
     )
-    timestep_sampling: Literal["logit_normal", "uniform", "logit_normal_low", "mode"] = Field(
+    timestep_sampling: Literal[
         "logit_normal",
-        description="【时间步采样】分布（logit_normal 为 SD3/Anima 默认）",
+        "uniform",
+        "logit_normal_low",
+        "mode",
+        "mixed_uniform_low",
+        "mixed_uniform_logit",
+    ] = Field(
+        "logit_normal",
+        description="【时间步采样】分布（logit_normal 为 SD3/Anima 默认；mixed_* 模式混合 uniform 与偏置端，按 timestep_mix_low_prob 控制比例）",
         json_schema_extra=_meta(
             "noise_schedule",
             alt_description="【时间步采样】分布；InfoNoise 启用时作为热身期 baseline，正式阶段由自适应 CDF 接管",
@@ -375,6 +382,27 @@ class TrainingConfig(BaseModel):
             "noise_schedule",
             show_when="timestep_sampling!=uniform",
             alt_description="【InfoNoise 热身期】InfoNoise 开启时作为热身阶段的 baseline shift，正式阶段由自适应 CDF 接管",
+            alt_description_when="infonoise_enabled==true",
+            advanced=True,
+        ),
+    )
+    timestep_mix_low_prob: float = Field(
+        0.0, ge=0.0, le=1.0,
+        description="【时间步采样】mixed_* 模式下走偏置端的样本比例（0 = 全 uniform；典型 0.15-0.30）",
+        json_schema_extra=_meta(
+            "noise_schedule",
+            show_when="timestep_sampling!=uniform",
+            alt_description="【InfoNoise 热身期】InfoNoise 开启 + mixed_* baseline 时，热身阶段混合比例；正式阶段由自适应 CDF 接管",
+            alt_description_when="infonoise_enabled==true",
+            advanced=True,
+        ),
+    )
+    schedule_shift: float = Field(
+        1.0, ge=0.1, le=10.0,
+        description="【时间步采样】采样后对 t 做的额外 σ schedule 偏移（1.0 = 无偏移；与 timestep_shift 不同：后者作用于 logit-normal 内部，前者作用于最终 t）",
+        json_schema_extra=_meta(
+            "noise_schedule",
+            alt_description="【InfoNoise 热身期】InfoNoise 开启时仅热身期生效；正式阶段由自适应 CDF 接管",
             alt_description_when="infonoise_enabled==true",
             advanced=True,
         ),
