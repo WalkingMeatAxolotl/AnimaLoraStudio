@@ -33,11 +33,13 @@ def run(ctx: TrainingContext) -> None:
 
     # PR-C：启动期校验所有 plugin 子包 schema 一致性，避免运行半天才发现配错
     from training.adapters import validate_schema_consistency as _validate_adapters
+    from training.losses import validate_schema_consistency as _validate_losses
     from training.optimizers import validate_schema_consistency as _validate_optimizers
     from training.schedulers import validate_schema_consistency as _validate_schedulers
     _validate_adapters()
     _validate_optimizers()
     _validate_schedulers()
+    _validate_losses()
 
     # 加载 YAML 配置文件
     if args.config:

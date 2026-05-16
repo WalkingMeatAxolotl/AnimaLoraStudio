@@ -119,11 +119,14 @@ def run(ctx: TrainingContext) -> None:
                     ctx.model, noisy, t.view(-1, 1), cross, pad_mask,
                     use_checkpoint=args.grad_checkpoint,
                 )
-                loss_per_sample = F.mse_loss(pred.float(), target.float(), reduction="none")
-                # 自适应采样器（如 InfoNoise）记录原始 per-sample MSE（加权前）；
+                # 训练 loss 通过 losses/ plugin registry 派发（mse / huber / ...）
+                loss_per_sample = ctx.loss_fn.compute(pred.float(), target.float(), t)
+                # 自适应采样器（如 InfoNoise）记录原始 per-sample MSE（不受 huber/loss_weighting 等
+                # 加工影响）；跟训练 loss 解耦保证 InfoNoise 论文一致性。
                 # baseline 采样器是 no-op，无需 if 守卫。
-                _raw_mse = loss_per_sample.detach().mean(
-                    dim=list(range(1, loss_per_sample.dim()))
+                _raw_mse_per_sample = F.mse_loss(pred.float(), target.float(), reduction="none").detach()
+                _raw_mse = _raw_mse_per_sample.mean(
+                    dim=list(range(1, _raw_mse_per_sample.dim()))
                 )
                 ctx.timestep_sampler.record(t.detach(), _raw_mse)
                 # 按样本加权（正则集可降低权重）

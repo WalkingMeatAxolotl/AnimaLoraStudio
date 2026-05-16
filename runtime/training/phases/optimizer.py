@@ -76,3 +76,7 @@ def run(ctx: TrainingContext) -> None:
     # Timestep 采样器（baseline 或 InfoNoise；total_steps 确定后才能算 N_warm）
     from training.timestep_samplers import build_timestep_sampler
     ctx.timestep_sampler = build_timestep_sampler(args, ctx.total_steps)
+
+    # Loss 函数（mse / huber；通过 losses/ plugin registry 派发）
+    from training.losses import build_loss
+    ctx.loss_fn = build_loss(args)

@@ -59,6 +59,11 @@ def test_inference_sampler_builders_has_er_sde() -> None:
     assert "er_sde" in BUILDERS
 
 
+def test_loss_builders_dict_has_mse_huber() -> None:
+    from training.losses import BUILDERS
+    assert set(BUILDERS) == {"mse", "huber"}
+
+
 def test_build_adapter_raises_on_unknown_lora_type() -> None:
     from training.adapters import build_adapter
     args = argparse.Namespace(lora_type="bogus_xyz")
@@ -90,6 +95,11 @@ def test_optimizer_schema_consistency_passes_on_clean_dev() -> None:
 
 def test_scheduler_schema_consistency_passes_on_clean_dev() -> None:
     from training.schedulers import validate_schema_consistency
+    validate_schema_consistency()
+
+
+def test_loss_schema_consistency_passes_on_clean_dev() -> None:
+    from training.losses import validate_schema_consistency
     validate_schema_consistency()
 
 

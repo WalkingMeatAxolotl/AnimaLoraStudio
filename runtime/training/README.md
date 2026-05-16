@@ -37,18 +37,21 @@ runtime/training/
 ├── timestep_sampling.py    ← 训练 step 用 sample_t（logit_normal / uniform / mode）；
 │                            被 timestep_samplers/baseline.py 复用
 ├── noise.py                ← make_noise（offset + pyramid）
-├── loss_weighting.py       ← compute_loss_weight（min_snr / cosmap / detail_inv_t）
+├── loss_weighting.py       ← compute_loss_weight（min_snr / cosmap / detail_inv_t）；
+│                            注意：是 *loss 权重*（Flow Matching 步级缩放系数），
+│                            跟 *loss 类型*（mse / huber，见 losses/）正交
 │
 ├── phases/                 ← main() 的 6 个 phase；每个 run(ctx) in-place mutate
-│   ├── bootstrap.py        ← yaml + 交互 + seed + device + wandb + monitor_state writer
+│   ├── bootstrap.py        ← yaml + 交互 + seed + device + wandb + monitor_state writer +
+│   │                          调 6 个 plugin 子包的 validate_schema_consistency
 │   ├── models.py           ← path resolve + 加载 transformer/vae/text encoders + LoRA inject
 │   ├── dataset.py          ← build 主集 + 正则集 + dataloader + VAE roundtrip 自检
 │   ├── optimizer.py        ← build_optimizer + validate + scheduler + total_steps +
-│   │                          build_timestep_sampler（N_warm 依赖 total_steps）
+│   │                          build_timestep_sampler + build_loss
 │   ├── resume.py           ← init_progress + state recovery + SIGINT + sample prompts + baseline
 │   └── finalize.py         ← 最终 LoRA save + 清理 progress + 最终 loss curve + wandb finish
 │
-└── ── 5 个 plugin 子包 ──（加变体本地化的关键）
+└── ── 6 个 plugin 子包 ──（加变体本地化的关键）
     ├── adapters/           ← LoRA 变体
     │   ├── protocol.py     ← AdapterProtocol + StepContext
     │   ├── lycoris.py      ← build_adapter for lokr/loha/lora
@@ -66,11 +69,17 @@ runtime/training/
     │   ├── er_sde.py
     │   └── __init__.py     ← BUILDERS + build_inference_sampler
     │
-    └── timestep_samplers/  ← 训练 timestep 采样器（PR #66 引入）
-        ├── protocol.py     ← TimestepSamplerProtocol（1 必需 + 3 可选 hook）
-        ├── baseline.py     ← sample_t 4 mode 的 thin wrapper（非自适应）
-        ├── infonoise.py    ← InfoNoise I-MMSE 自适应采样器（arxiv 2602.18647）
-        └── __init__.py     ← BUILDERS + build_timestep_sampler（bool 派发，非 Literal）
+    ├── timestep_samplers/  ← 训练 timestep 采样器（PR #66 引入）
+    │   ├── protocol.py     ← TimestepSamplerProtocol（1 必需 + 3 可选 hook）
+    │   ├── baseline.py     ← sample_t 4 mode 的 thin wrapper（非自适应）
+    │   ├── infonoise.py    ← InfoNoise I-MMSE 自适应采样器（arxiv 2602.18647）
+    │   └── __init__.py     ← BUILDERS + build_timestep_sampler（bool 派发，非 Literal）
+    │
+    └── losses/             ← 训练 loss 类型（mse / huber / ...）
+        ├── protocol.py     ← LossProtocol（compute(pred, target, t) → Tensor）
+        ├── mse.py          ← F.mse_loss 包装（默认）
+        ├── huber.py        ← Huber loss with constant/snr/sigma delta schedule
+        └── __init__.py     ← BUILDERS + build_loss + validate_schema_consistency
 ```
 
 ## 数据流
@@ -202,16 +211,17 @@ utils/lokr_preset.py                    ← DiT 层选择规则
 
 ## Schema↔registry 一致性
 
-`phases/bootstrap.run()` 在最早期就调 3 个 `validate_schema_consistency()`：
+`phases/bootstrap.run()` 在最早期就调 4 个 `validate_schema_consistency()`：
 
 ```python
 from training.adapters import validate_schema_consistency as _va
 from training.optimizers import validate_schema_consistency as _vo
 from training.schedulers import validate_schema_consistency as _vs
-_va(); _vo(); _vs()
+from training.losses import validate_schema_consistency as _vl
+_va(); _vo(); _vs(); _vl()
 ```
 
-逻辑：取 `TrainingConfig.{lora_type, optimizer_type, lr_scheduler}` 的 `Literal[...]` 集合，跟对应 `BUILDERS` keys 集合对比。失配 raise，启动期早 fail，避免训练跑半天才发现配错。
+逻辑：取 `TrainingConfig.{lora_type, optimizer_type, lr_scheduler, loss_type}` 的 `Literal[...]` 集合，跟对应 `BUILDERS` keys 集合对比。失配 raise，启动期早 fail，避免训练跑半天才发现配错。
 
 `schedulers/` 特殊：`"none"` 是 schema-only 不在 BUILDERS（`build_scheduler` 显式返回 None）；`SCHEMA_ONLY_OPTIONS = {"none"}` 跳过校验。
 
