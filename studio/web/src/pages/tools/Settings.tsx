@@ -29,6 +29,12 @@ import LLMTaggerWorkspace from '../../components/LLMTaggerWorkspace'
 import PageHeader from '../../components/PageHeader'
 import { useToast } from '../../components/Toast'
 import { useEventStream } from '../../lib/useEventStream'
+import {
+  formatMasterStateText,
+  formatDevStateText,
+  shouldShowMasterUpdateButton,
+  isDevSwitchButtonDisabled,
+} from '../../lib/versionPanel'
 import { applyDensity, applyTheme, getStoredDensity, getStoredTheme, setStoredDensity, setStoredTheme, type Density, type Theme } from '../../lib/theme'
 
 const MASK = '***'
@@ -214,7 +220,7 @@ const EMPTY: Secrets = {
   models: { root: null, selected_anima: '1.0', selected_upscaler: '4x-AnimeSharp' },
   queue: { allow_gpu_during_train: false },
   generate: { preview_every_n_steps: 3, attention_backend: 'auto' },
-  system: { show_dev_channel: false },
+  system: { update_channel: 'stable', show_dev_channel: false },
 }
 
 const textInputClass = 'w-full px-2 py-1 outline-none rounded-sm bg-sunken border border-subtle text-sm text-fg-primary focus:border-accent'
@@ -2625,20 +2631,23 @@ async function pollHealthThenReload(
   onTimeout()
 }
 
-// ── 版本 Section（双通道重设计 — Chunk 1）─────────────────────────────
+// ── 版本 Section（ADR 0005 重设计 — 单视图 + 通道偏好）───────────────
 //
-// 布局：master / dev 两张通道卡并排（dev 隐藏时 master solo）。toggle 行
-// 下移到卡片之后（demoted），不是建议操作；当前在 dev 时强制开 + 锁定。
+// 产品模型：
+// - 通道（channel）是**用户视图偏好**：你想订阅哪条更新轨道（稳定 / 开发）
+// - 与 git 工作树状态**解耦**：切 toggle 不动 git；真正"切到 dev HEAD" /
+//   "更新到 vX.Y.Z" 是单独按钮
+// - 同屏只显示当前选中通道的卡片（不并排）—— 通道是互斥视图，并排会让
+//   用户陷入"我究竟在哪里"的矛盾
+// - 文案语言只有"版本号"+"状态"，绝不出现"commits"/"sha"等 git 词汇
 //
-// 加载时 fetch /api/system/version + /api/system/update_check（master,
-// 走 cache）+ /api/system/update_status + /api/secrets.system。
+// 数据：
+// - version.installed_kind (stable / dev / custom) + installed_label：装了什么
+// - check.state (up_to_date / update_available / ahead / detached)：相对所选
+//   通道的状态
+// - prefs.update_channel：用户偏好（"stable" / "dev"）
 //
 // 自动检查 + Topbar 红点仍然只看 master（ADR 0002 决策）。
-//
-// 状态（chunk 1）：synced / has-update / failed（用现有 .update_status 数据）；
-// 操作按钮"更新到 X" / "切到 X" 仍走现有 dialog 模态。preview / progress /
-// inline-failed 状态机留给 chunk 4。release notes 留给 chunk 2，dev commits
-// 列表留给 chunk 3。
 function VersionSection() {
   const { toast } = useToast()
   // chunk 4：dialog 模态被 inline preview 面板取代，VersionSection 不再用 dialog
@@ -2675,18 +2684,19 @@ function VersionSection() {
     void api.getSecrets().then((s) => setPrefs(s.system)).catch(() => { /* silent */ })
   }, [])
 
-  // chunk 3 — devVisible 第一次转 true 时自动拉一遍 dev_commits + check（用户
-  // 不用先手动按 [抓取 dev] 才看到时间线）。后续 [抓取 dev] 按钮再做刷新。
-  const devVisibleNow = (version?.branch === 'dev') || !!prefs?.show_dev_channel
+  // 选中 dev 通道时自动拉 dev_commits + dev check（用户不用先手动按 [抓取 dev]）。
+  // 即便装的是 stable，用户切到 dev 通道偏好时也要能立刻看到 dev HEAD 信息。
+  const channelPref: 'stable' | 'dev' = prefs?.update_channel ?? 'stable'
+  const showDevView = channelPref === 'dev'
   useEffect(() => {
-    if (!devVisibleNow || devCommits !== null) return
+    if (!showDevView || devCommits !== null) return
     let cancelled = false
     void api.getDevCommits(10).then((r) => { if (!cancelled) setDevCommits(r) }).catch(() => { /* silent */ })
     if (devCheck === null) {
       void api.checkSystemUpdate('dev', true).then((r) => { if (!cancelled) setDevCheck(r) }).catch(() => { /* silent */ })
     }
     return () => { cancelled = true }
-  }, [devVisibleNow, devCommits, devCheck])
+  }, [showDevView, devCommits, devCheck])
 
   const handleCheck = async () => {
     setChecking(true)
@@ -2695,10 +2705,13 @@ function VersionSection() {
       setCheck(r)
       if (r.error) {
         toast(`检查失败: ${r.error}`, 'error')
-      } else if (r.has_update) {
-        toast(`有新版本：${r.latest_tag ?? r.latest_commit.slice(0, 8)}（${r.commits_ahead} commits）`, 'info')
+      } else if (r.state === 'update_available') {
+        const target = r.latest_version ?? r.latest_tag ?? r.latest_commit.slice(0, 8)
+        toast(`有新稳定版：${target}`, 'info')
+      } else if (r.state === 'ahead') {
+        toast('本地领先稳定版（可能由回滚 / 抢跑造成）', 'info')
       } else {
-        toast('已是最新版本', 'success')
+        toast(`已是最新${r.latest_version ? '稳定版 ' + r.latest_version : ''}`, 'success')
       }
     } catch (e) {
       toast(`检查更新失败: ${e}`, 'error')
@@ -2806,17 +2819,23 @@ function VersionSection() {
     }
   }
 
-  // PR-D — dev 通道 toggle 持久化到 secrets.json。乐观更新 + 失败回滚。
-  const handleToggleDevChannel = async (next: boolean) => {
+  // ADR 0005 — 通道偏好持久化到 secrets.json。**不触发任何 git 操作**，
+  // 只是切换 UI 视图。乐观更新 + 失败回滚。
+  const handleSwitchChannel = async (next: 'stable' | 'dev') => {
     const prev = prefs
-    setPrefs((p) => p ? { ...p, show_dev_channel: next } : { show_dev_channel: next })
-    if (!next) setDevCheck(null)        // 关掉时清掉缓存的 dev 检查结果
+    setPrefs((p) => p
+      ? { ...p, update_channel: next }
+      : { update_channel: next, show_dev_channel: next === 'dev' })
+    if (next === 'stable') setDevCheck(null)  // 切回稳定版时清掉 dev 缓存
     try {
-      const updated = await api.updateSecrets({ system: { show_dev_channel: next } })
+      // 同步写 show_dev_channel 字段，保留对老版本回滚兼容
+      const updated = await api.updateSecrets({
+        system: { update_channel: next, show_dev_channel: next === 'dev' },
+      })
       setPrefs(updated.system)
     } catch (e) {
-      setPrefs(prev)                    // 失败回滚 UI
-      toast(`保存失败: ${(e as Error).message ?? e}`, 'error')
+      setPrefs(prev)
+      toast(`保存通道偏好失败: ${(e as Error).message ?? e}`, 'error')
     }
   }
 
@@ -2834,10 +2853,12 @@ function VersionSection() {
         toast(`dev 检查失败: ${check.error}`, 'error')
       } else if (commits.error && !commits.fetched) {
         toast(`dev 抓取部分失败: ${commits.error}`, 'error')
-      } else if (check.has_update) {
-        toast(`dev 通道有 ${check.commits_ahead} commits 新提交`, 'info')
+      } else if (check.state === 'update_available') {
+        toast(`dev 通道有 ${check.behind_count} 项新更新`, 'info')
+      } else if (check.state === 'ahead') {
+        toast('本地领先 dev HEAD（罕见，可能是抢跑）', 'info')
       } else {
-        toast('dev 通道与当前一致', 'success')
+        toast('已与 dev HEAD 一致', 'success')
       }
     } catch (e) {
       toast(`dev 检查失败: ${e}`, 'error')
@@ -2874,21 +2895,20 @@ function VersionSection() {
     })
   }
 
-  // 通道判定 + 派生状态
-  const onDev = version?.branch === 'dev'
-  // dev 卡显示条件：toggle 开了，或者当前已经在 dev（强制可见）
-  const devVisible = onDev || !!prefs?.show_dev_channel
-  const hasUpdate = !!check?.has_update
+  // 派生状态（ADR 0005）：installed_kind / state 取代 branch / has_update
+  const installedIsDevHead = version?.installed_kind === 'dev'
+  const masterHasUpdate = check?.state === 'update_available'
   const hasRollback = !!status?.rollback_target
   // 上次 update 失败 banner（aborted / failed / partial 时显示红色提示）
   const statusBadFailed = !!status && (status.status === 'failed' || status.status === 'aborted' || status.status === 'partial')
 
-  // chunk 2 — 当展示的 tag 变化时拉对应 release notes。展示 tag = hasUpdate
-  // 时为目标 tag（"v0.6.1 · 更新内容"），否则当前 tag（"v0.6.0 · 此版本"）。
-  // CHANGELOG.md 没条目时 found=false，UI 自然 fallback 到占位链接。
-  const displayedTag = hasUpdate
-    ? (check?.latest_tag ?? null)
-    : (version?.tag ?? (version ? `v${version.version}` : null))
+  // release notes 拉对应 tag：stable 通道有更新时展示目标版本，否则展示当前
+  // 已装版本；dev 通道不展示 release notes（dev 是滚动的，没有版本号语义）
+  const displayedTag = showDevView
+    ? null
+    : masterHasUpdate
+      ? (check?.latest_version ?? check?.latest_tag ?? null)
+      : (version?.stable_version ?? version?.tag ?? (version ? `v${version.version}` : null))
   useEffect(() => {
     if (!displayedTag) {
       setReleaseNotes(null)
@@ -2910,67 +2930,78 @@ function VersionSection() {
       headerExtras={
         <InfoButton>
           <ul>
-            <li>自动检查每 24 小时，仅看 master 通道；dev 必须主动触发，不进 Topbar 红点</li>
+            <li>切换通道是改 UI 视图偏好（不动 git）；真正"切到 dev HEAD" / "更新到 vX.Y.Z" 是单独按钮</li>
+            <li>自动检查每 24 小时，仅看稳定版通道；切到开发版通道不进 Topbar 红点</li>
             <li>更新 / 切换底层走 git reset --hard，需要时跑 pip / npm install</li>
             <li>有运行中任务 / 本地工作树脏 → 操作会被 pre-flight 拒绝</li>
-            <li>master 显示 release tag；dev 显示 commit 时间线，可点任意 commit 切换</li>
           </ul>
         </InfoButton>
       }
     >
-      {/* dev toggle 行：搬到 title 下面（独立一行），不再下方"附庸" */}
-      <div className={`vs-dev-toggle-row${devVisible ? ' open' : ''}${onDev ? ' locked' : ''}`}>
-        <div className="vs-lhs">
-          <div
-            className={`vs-sw${devVisible ? ' on' : ''}${onDev ? ' locked' : ''}`}
-            onClick={() => { if (!onDev) void handleToggleDevChannel(!devVisible) }}
-            role="switch"
-            aria-checked={devVisible}
-            aria-disabled={onDev}
-          />
-          <div>
-            <div className="vs-t" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span>查看 dev 通道（开发版）</span>
-              {onDev && (
-                <span className="vs-lock-pill">
-                  <VersionIcon name="lock" />当前在 dev · 不可关闭
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
+      {/* 顶部：你装的是什么（一行事实状态，与通道偏好解耦） */}
+      <div className="vs-installed-row">
+        <span className="vs-installed-label">你装的：</span>
+        <b className="vs-installed-value">{version?.installed_label ?? '加载中…'}</b>
+        {version?.is_dirty && !version.installed_label.includes('未提交修改') && (
+          <span className="vs-installed-warn">· 本地有改动</span>
+        )}
+      </div>
+
+      {/* 通道偏好：radio toggle（不触发 git） */}
+      <div className="vs-channel-toggle-row">
+        <span className="vs-channel-toggle-label">更新通道：</span>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={channelPref === 'stable'}
+          className={`vs-channel-radio${channelPref === 'stable' ? ' on' : ''}`}
+          onClick={() => { if (channelPref !== 'stable') void handleSwitchChannel('stable') }}
+        >
+          <span className="vs-channel-dot" />稳定版
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={channelPref === 'dev'}
+          className={`vs-channel-radio${channelPref === 'dev' ? ' on' : ''}`}
+          onClick={() => { if (channelPref !== 'dev') void handleSwitchChannel('dev') }}
+        >
+          <span className="vs-channel-dot" />开发版
+        </button>
+        <span className="vs-channel-hint">仅切 UI 视图，不动 git</span>
       </div>
 
       <div className="vs-sec-card">
-        <div className={`vs-channels${devVisible ? ' both' : ''}`}>
-          <MasterCard
-            on={!onDev}
-            solo={!devVisible}
-            version={version}
-            check={check}
-            status={status}
-            hasUpdate={hasUpdate}
-            hasRollback={hasRollback}
-            statusBadFailed={statusBadFailed}
-            releaseNotes={releaseNotes}
-            onShowReleaseNotesDetail={() => setDetailModalOpen(true)}
-            checking={checking}
-            busy={busy}
-            cardState={masterState}
-            pendingTarget={pendingTarget}
-            preflight={preflight}
-            preflightLoading={preflightLoading}
-            onCancelPreview={cancelPreview}
-            onConfirmPreview={confirmPreview}
-            onCheck={handleCheck}
-            onUpdate={handleUpdate}
-            onSwitchToMaster={handleSwitchToMaster}
-            onRollback={handleRollback}
-            onViewLog={handleViewLog}
-          />
-          {devVisible && (
+        <div className="vs-channels">
+          {!showDevView ? (
+            <MasterCard
+              on={true}
+              solo={true}
+              version={version}
+              check={check}
+              status={status}
+              hasUpdate={masterHasUpdate}
+              hasRollback={hasRollback}
+              statusBadFailed={statusBadFailed}
+              releaseNotes={releaseNotes}
+              onShowReleaseNotesDetail={() => setDetailModalOpen(true)}
+              checking={checking}
+              busy={busy}
+              cardState={masterState}
+              pendingTarget={pendingTarget}
+              preflight={preflight}
+              preflightLoading={preflightLoading}
+              onCancelPreview={cancelPreview}
+              onConfirmPreview={confirmPreview}
+              onCheck={handleCheck}
+              onUpdate={handleUpdate}
+              onSwitchToMaster={handleSwitchToMaster}
+              onRollback={handleRollback}
+              onViewLog={handleViewLog}
+            />
+          ) : (
             <DevCard
-              on={onDev}
+              on={installedIsDevHead}
               check={devCheck}
               commits={devCommits}
               currentSha={version?.commit ?? ''}
@@ -3249,15 +3280,20 @@ function MasterReleaseNotes({
 }
 
 function MasterCard(p: MasterCardProps) {
-  const currentTag = p.version?.tag ?? (p.version ? `v${p.version.version}` : '加载中…')
-  const targetTag = p.check?.latest_tag ?? p.check?.latest_commit?.slice(0, 8) ?? ''
-  // chunk 4 — preview / progress 状态优先渲染（替代 chan-body + chan-foot）
+  // 当前装的版本号优先用 stable_version（精确），fallback 到 __version__
+  const currentTag = p.version?.stable_version
+    ?? p.version?.tag
+    ?? (p.version ? `v${p.version.version}` : '加载中…')
+  // 远端最新稳定版（state=update_available 时显示）
+  const targetTag = p.check?.latest_version ?? p.check?.latest_tag ?? ''
+  const stateText = formatMasterStateText(p.check)
+  const showUpdateButton = shouldShowMasterUpdateButton(p.check)
   if (p.cardState === 'preview' && p.pendingTarget && p.pendingTarget.kind === 'master') {
     return (
-      <div className={`vs-chan${p.on ? ' here' : ''}`}>
+      <div className="vs-chan">
         <div className="vs-chan-head">
           <div className="vs-lhs">
-            <span className="vs-name">master · 确认更新</span>
+            <span className="vs-name">稳定版 · 确认更新</span>
             <span className="vs-pill vs-pill-stable"><span className="vs-dot" />稳定</span>
           </div>
           <button className="btn btn-sm btn-ghost" onClick={p.onCancelPreview} disabled={p.busy}>
@@ -3268,7 +3304,6 @@ function MasterCard(p: MasterCardProps) {
           channel="master"
           fromLabel={currentTag}
           toLabel={p.pendingTarget.label}
-          badge={p.check?.has_update ? `+${p.check.commits_ahead} commits` : undefined}
           details={
             <div className="vs-change-block">
               <div className="vs-h">{p.pendingTarget.label} · 更新内容</div>
@@ -3286,10 +3321,10 @@ function MasterCard(p: MasterCardProps) {
   }
   if (p.cardState === 'progress' && p.pendingTarget && p.pendingTarget.kind === 'master') {
     return (
-      <div className={`vs-chan${p.on ? ' here' : ''}`}>
+      <div className="vs-chan">
         <div className="vs-chan-head">
           <div className="vs-lhs">
-            <span className="vs-name">master · 更新中</span>
+            <span className="vs-name">稳定版 · 更新中</span>
             <span className="vs-pill vs-pill-stable"><span className="vs-dot" />稳定</span>
           </div>
         </div>
@@ -3305,16 +3340,13 @@ function MasterCard(p: MasterCardProps) {
     : null
 
   return (
-    <div className={`vs-chan${p.on ? ' here' : ''}`}>
+    <div className="vs-chan">
       <div className="vs-chan-head">
         <div className="vs-lhs">
-          <span className="vs-name">master</span>
+          <span className="vs-name">稳定版</span>
           <span className="vs-pill vs-pill-stable"><span className="vs-dot" />稳定</span>
-          {p.on && <span className="vs-pill vs-pill-here">● 你在这里</span>}
         </div>
-        <div className={`vs-meta${p.hasUpdate ? ' attn' : ''}`}>
-          {p.hasUpdate ? `↑ 落后 ${p.check?.commits_ahead ?? 0} commits` : '已是最新'}
-        </div>
+        <div className={`vs-meta${p.hasUpdate ? ' attn' : ''}`}>{stateText}</div>
       </div>
 
       {p.statusBadFailed && p.status && (
@@ -3362,18 +3394,6 @@ function MasterCard(p: MasterCardProps) {
           </div>
           <div className="vs-ver-meta">
             {releasedAt && <span>发布于 <b>{releasedAt}</b></span>}
-            {p.hasUpdate && (
-              <>
-                {releasedAt && <span className="vs-sep">·</span>}
-                <span>↑ {p.check?.commits_ahead ?? 0} commits</span>
-              </>
-            )}
-            {p.version?.is_dirty && (
-              <>
-                {(releasedAt || p.hasUpdate) && <span className="vs-sep">·</span>}
-                <span style={{ color: 'var(--warn)' }}>本地有改动</span>
-              </>
-            )}
           </div>
           {!p.hasUpdate && p.solo && (
             <div className="vs-ver-tagline">Topbar 红点 + 自动检查仅看此通道。</div>
@@ -3400,14 +3420,17 @@ function MasterCard(p: MasterCardProps) {
           <button onClick={p.onCheck} disabled={p.checking || p.busy} className="btn btn-sm">
             <VersionIcon name="refresh" />{p.checking ? '检查中…' : '检查更新'}
           </button>
-          {p.hasUpdate && p.on && (
+          {/* state=update_available 才显示更新按钮；up_to_date / ahead / detached 不显示
+              （上面 vs-meta 已经把"已是最新 / 本地领先 / 当前不在历史上"说清楚了）*/}
+          {showUpdateButton && (
             <button onClick={p.onUpdate} disabled={p.busy || p.checking} className="btn btn-sm btn-primary">
               {p.busy ? '更新中…' : `更新到 ${targetTag}…`}
             </button>
           )}
-          {!p.on && (
+          {/* 装在非稳定版（dev / custom）时显示"切到最新稳定版"按钮 */}
+          {p.version && p.version.installed_kind !== 'stable' && p.check?.latest_version && (
             <button onClick={p.onSwitchToMaster} disabled={p.busy || p.checking} className="btn btn-sm btn-primary">
-              {p.busy ? '切换中…' : '切到 master'}
+              {p.busy ? '切换中…' : `切到稳定版 ${p.check.latest_version}…`}
             </button>
           )}
         </div>
@@ -3468,18 +3491,18 @@ type DevCardProps = {
 function DevCard(p: DevCardProps) {
   const commits = p.commits?.commits ?? []
   const head = commits[0]?.short_sha ?? p.check?.latest_commit?.slice(0, 8)
-  const ahead = p.check?.commits_ahead ?? 0
   const selectedCommit = p.selectedSha ? commits.find((c) => c.sha === p.selectedSha) ?? null : null
   const fetchError = p.commits?.error ?? p.check?.error
   const currentShortSha = p.currentSha ? p.currentSha.slice(0, 8) : '当前'
-  // chunk 4 — preview / progress 状态优先渲染
+  const stateText = formatDevStateText(p.check)
+  const devSwitchDisabled = isDevSwitchButtonDisabled(p.check)
   if (p.cardState === 'preview' && p.pendingTarget && p.pendingTarget.kind === 'dev') {
     const t = p.pendingTarget
     return (
-      <div className={`vs-chan${p.on ? ' here' : ''}`}>
+      <div className="vs-chan">
         <div className="vs-chan-head">
           <div className="vs-lhs">
-            <span className="vs-name">dev · 确认切换</span>
+            <span className="vs-name">开发版 · 确认切换</span>
             <span className="vs-pill vs-pill-dev"><span className="vs-dot" />开发版</span>
           </div>
           <button className="btn btn-sm btn-ghost" onClick={p.onCancelPreview} disabled={p.busy}>
@@ -3506,7 +3529,7 @@ function DevCard(p: DevCardProps) {
                 </>
               ) : (
                 <div style={{ fontSize: 13, color: 'var(--fg-tertiary)', marginTop: 4 }}>
-                  切到 dev HEAD（git reset --hard origin/dev）
+                  切到 dev HEAD
                 </div>
               )}
             </div>
@@ -3522,10 +3545,10 @@ function DevCard(p: DevCardProps) {
   }
   if (p.cardState === 'progress' && p.pendingTarget && p.pendingTarget.kind === 'dev') {
     return (
-      <div className={`vs-chan${p.on ? ' here' : ''}`}>
+      <div className="vs-chan">
         <div className="vs-chan-head">
           <div className="vs-lhs">
-            <span className="vs-name">dev · 切换中</span>
+            <span className="vs-name">开发版 · 切换中</span>
             <span className="vs-pill vs-pill-dev"><span className="vs-dot" />开发版</span>
           </div>
         </div>
@@ -3535,20 +3558,19 @@ function DevCard(p: DevCardProps) {
   }
 
   return (
-    <div className={`vs-chan${p.on ? ' here' : ''}`}>
+    <div className="vs-chan">
       <div className="vs-chan-head">
         <div className="vs-lhs">
-          <span className="vs-name">dev</span>
+          <span className="vs-name">开发版</span>
           <span className="vs-pill vs-pill-dev"><span className="vs-dot" />开发版</span>
-          {p.on && <span className="vs-pill vs-pill-here">● 你在这里</span>}
         </div>
-        <div className="vs-meta">
+        <div className={`vs-meta${p.check?.state === 'update_available' ? ' attn' : ''}`}>
           {fetchError && !head ? (
             <span style={{ color: 'var(--err)' }}>{fetchError}</span>
           ) : head ? (
             <>
-              HEAD <b style={{ color: 'var(--fg-secondary)', fontWeight: 500 }}>{head}</b>
-              {p.check && (<>{' · '}{ahead === 0 ? '与 master 持平' : `↑ ${ahead}`}</>)}
+              dev HEAD <b style={{ color: 'var(--fg-secondary)', fontWeight: 500 }}>{head}</b>
+              {p.check && <>{' · '}{stateText}</>}
             </>
           ) : (
             <span>未抓取</span>
@@ -3650,15 +3672,18 @@ function DevCard(p: DevCardProps) {
             <button onClick={p.onCheck} disabled={p.checking || p.busy} className="btn btn-sm">
               <VersionIcon name="refresh" />{p.checking ? '抓取中…' : '抓取 dev'}
             </button>
-            {p.on ? (
-              <button disabled className="btn btn-sm">已在 dev HEAD</button>
+            {/* 切按钮 disabled 条件改用 commit 比较（state=up_to_date），不再
+                看 branch / installed_kind —— 因为 release 直后存在"装的是 stable
+                但 commit 恰好等于 dev HEAD"的边界，此时切操作是 no-op */}
+            {devSwitchDisabled ? (
+              <button disabled className="btn btn-sm">已与 dev HEAD 同步</button>
             ) : commits.length > 0 ? (
               <button
                 onClick={p.onSwitchToDev}
                 disabled={p.busy || p.checking}
                 className="btn btn-sm btn-warn"
               >
-                {p.busy ? '切换中…' : `切到 dev${head ? ` (${head})` : ''}`}
+                {p.busy ? '切换中…' : `切到 dev HEAD${head ? ` (${head})` : ''}`}
               </button>
             ) : null}
           </div>
