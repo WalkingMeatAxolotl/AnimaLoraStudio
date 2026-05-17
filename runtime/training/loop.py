@@ -138,6 +138,8 @@ def run(ctx: TrainingContext) -> None:
                         scheme=lw_scheme,
                         min_snr_gamma=float(getattr(args, "min_snr_gamma", 5.0) or 5.0),
                         weight_cap_ratio=float(getattr(args, "weight_cap_ratio", 0.0) or 0.0),
+                        detail_inv_t_min=float(getattr(args, "detail_inv_t_min", 1.0) or 1.0),
+                        detail_inv_t_max=float(getattr(args, "detail_inv_t_max", 5.0) or 5.0),
                     ).to(device=ctx.device, dtype=torch.float32)
                     loss_per_sample = loss_per_sample * lw.view(-1, *([1] * (loss_per_sample.dim() - 1)))
                 loss = loss_per_sample.mean()

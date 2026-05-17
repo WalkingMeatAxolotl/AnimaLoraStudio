@@ -429,6 +429,16 @@ class TrainingConfig(BaseModel):
         description="【损失加权】Batch 内权重 max/min 比上限（0=禁用；小 batch+Prodigy 建议 5）",
         json_schema_extra=_meta("noise_schedule", show_when="loss_weighting!=none", advanced=True),
     )
+    detail_inv_t_min: float = Field(
+        1.0, ge=0.1, le=20.0,
+        description="【损失加权】detail_inv_t 权重下限（默认 1.0；升至 1.5 可让高 t 步也被略微加权）",
+        json_schema_extra=_meta("noise_schedule", show_when="loss_weighting==detail_inv_t", advanced=True),
+    )
+    detail_inv_t_max: float = Field(
+        5.0, ge=0.1, le=50.0,
+        description="【损失加权】detail_inv_t 权重上限（默认 5.0；雾蒙蒙画风建议降到 3，激进细节可升到 8）",
+        json_schema_extra=_meta("noise_schedule", show_when="loss_weighting==detail_inv_t", advanced=True),
+    )
     grad_clip_max_norm: float = Field(
         0.0, ge=0.0,
         description="梯度裁剪最大范数（0=禁用）",
