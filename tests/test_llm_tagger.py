@@ -105,6 +105,7 @@ def test_chat_completions_tag_normalizes_json(isolated_secrets, tmp_path: Path) 
     body = kwargs["json"]
     assert body["model"] == "vision"
     assert "anime style LoRA" in body["messages"][0]["content"]
+    assert body["stream"] is False
     assert kwargs["timeout"] == (10, 60)
     # messages[1] 是 image item，被铺开成 user/[image_url]
     assert body["messages"][1]["content"][0]["image_url"]["url"].startswith(
@@ -189,6 +190,7 @@ def test_responses_endpoint_payload(isolated_secrets, tmp_path: Path) -> None:
     assert args[0] == "http://x/v1/responses"
     body = kwargs["json"]
     assert body["instructions"]
+    assert body["stream"] is False
     # builtin style_json 只有 system message，无 user → input content 仅 input_image
     image_part = next(c for c in body["input"][0]["content"] if c["type"] == "input_image")
     assert image_part["image_url"].startswith("data:image/jpeg;base64,")
@@ -247,6 +249,7 @@ def test_text_connectivity_uses_chat_shape() -> None:
     assert args[0] == "http://x/v1/chat/completions"
     assert kwargs["headers"]["Authorization"] == "Bearer secret"
     assert kwargs["json"]["max_tokens"] == 512
+    assert kwargs["json"]["stream"] is False
     assert kwargs["json"]["messages"][1]["role"] == "user"
 
 
@@ -316,6 +319,7 @@ def test_text_connectivity_uses_responses_shape() -> None:
     args, kwargs = sess.post.call_args
     assert args[0] == "http://x/v1/responses"
     assert kwargs["json"]["instructions"]
+    assert kwargs["json"]["stream"] is False
     assert isinstance(kwargs["json"]["input"], str)
 
 

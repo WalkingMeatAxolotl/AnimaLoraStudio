@@ -294,12 +294,14 @@ def test_openai_compatible_connection(
             "input": _CONNECTIVITY_USER_PROMPT,
             "temperature": temperature,
             "max_output_tokens": token_budget,
+            "stream": False,
         }
     else:
         body = {
             "model": model,
             "temperature": temperature,
             "max_tokens": token_budget,
+            "stream": False,
             "messages": [
                 {"role": "system", "content": _CONNECTIVITY_SYSTEM_PROMPT},
                 {"role": "user", "content": _CONNECTIVITY_USER_PROMPT},
@@ -517,6 +519,7 @@ class LLMTagger:
             "model": cfg.model,
             "temperature": cfg.temperature,
             "max_tokens": cfg.max_tokens,
+            "stream": False,
             "messages": messages,
         }
 
@@ -557,6 +560,7 @@ class LLMTagger:
             "instructions": "\n\n".join(system_texts),
             "temperature": cfg.temperature,
             "max_output_tokens": cfg.max_tokens,
+            "stream": False,
             "input": [{"role": "user", "content": user_content}],
         }
 
