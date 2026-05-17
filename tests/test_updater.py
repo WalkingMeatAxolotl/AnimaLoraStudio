@@ -542,7 +542,7 @@ def test_bootstrap_full_sequence_uses_version_tag_anchor(
     bootstrap 把 HEAD anchor 在 vX.Y.Z tag 上（让 working tree 看起来"干净"）。
 
     验证调用序列：init → symbolic-ref master → remote add origin → fetch
-    --tags → rev-parse tag（成功）→ reset --mixed tag → rev-parse anchor。"""
+    --tags → rev-parse tag（成功）→ reset --hard tag → rev-parse anchor。"""
     calls: list[tuple] = []
     def _fake_git(*args, **_):
         calls.append(args)
@@ -577,8 +577,12 @@ def test_bootstrap_full_sequence_uses_version_tag_anchor(
         "应当调 git remote add origin"
     # fetch origin master --tags
     assert any(c[:3] == ("fetch", "origin", "master") for c in calls)
-    # reset --mixed 到 anchor（v{__version__}）
-    assert any(c[0] == "reset" and "--mixed" in c for c in calls)
+    # reset --hard 到 anchor（v{__version__}）—— 强制对齐 working tree，
+    # 避免 npm install 等启动期修改导致 init 完就 dirty
+    assert any(c[0] == "reset" and "--hard" in c for c in calls)
+    # 反向断言：绝不能用 --mixed（会保留 working tree，撞 v0.8.1 实测 bug）
+    assert not any(c[0] == "reset" and "--mixed" in c for c in calls), \
+        "bootstrap 必须用 --hard 强制对齐 working tree（v0.8.1 用 --mixed 撞过 dirty bug）"
 
 
 def test_bootstrap_fallbacks_to_master_head_when_no_version_tag(
@@ -635,6 +639,86 @@ def test_bootstrap_fetch_failure_propagates_error(
     assert "fetch" in r.error.lower() or "github" in r.error.lower()
     # reset 不应被调（fetch 失败就中止）
     assert not any(c[0] == "reset" for c in calls)
+
+
+def test_bootstrap_happy_path_leaves_clean_working_tree(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """端到端回归：真起 file:// 本地 origin + 模拟 zip 解压目录（含 npm
+    自动改过的文件），bootstrap 完后 `git status --porcelain` 应当为空。
+
+    v0.8.1 撞过的 bug：bootstrap 用 `--mixed`，npm install 改过 package-lock.json
+    后 init 完就 dirty → pre-flight 卡更新。换 `--hard` 后 working tree 强制
+    对齐到 anchor，npm 改动被覆盖，状态干净。
+
+    没装 git 直接 skip（CI 上一般有 git；个别隔离环境可能没）。"""
+    import shutil
+    import subprocess
+
+    if not shutil.which("git"):
+        pytest.skip("git binary 不在 PATH，跳过端到端 bootstrap 测试")
+
+    def _run(*args: str, cwd: Path) -> None:
+        """在 cwd 下跑 git，失败抛 AssertionError 带 stderr。"""
+        proc = subprocess.run(
+            ["git", *args], cwd=str(cwd), capture_output=True, text=True, timeout=30,
+        )
+        assert proc.returncode == 0, f"git {' '.join(args)} 失败:\n{proc.stderr}"
+
+    # ---- 1. 起一个本地 bare repo 作为 origin ----
+    origin_dir = tmp_path / "origin.git"
+    origin_dir.mkdir()
+    _run("init", "--bare", "--initial-branch=master", ".", cwd=origin_dir)
+
+    # ---- 2. 起一个 working repo，commit + tag v9.9.9，push 到 origin ----
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    _run("init", "--initial-branch=master", ".", cwd=src_dir)
+    _run("config", "user.email", "test@example.com", cwd=src_dir)
+    _run("config", "user.name", "Test", cwd=src_dir)
+    # commit 一些"上游"文件
+    (src_dir / "README.md").write_text("upstream readme\n", encoding="utf-8")
+    (src_dir / "package-lock.json").write_text('{"upstream": true}\n', encoding="utf-8")
+    _run("add", "-A", cwd=src_dir)
+    _run("commit", "-m", "release v9.9.9", cwd=src_dir)
+    _run("tag", "v9.9.9", cwd=src_dir)
+    _run("remote", "add", "origin", str(origin_dir), cwd=src_dir)
+    _run("push", "origin", "master", "--tags", cwd=src_dir)
+
+    # ---- 3. 模拟 zip 解压：把 src/ 内容（不含 .git/）拷到 zip_dir ----
+    zip_dir = tmp_path / "zip"
+    zip_dir.mkdir()
+    for f in src_dir.iterdir():
+        if f.name == ".git":
+            continue
+        shutil.copy(f, zip_dir / f.name)
+
+    # ---- 4. 模拟 npm install 改过 package-lock.json（v0.8.1 bug 触发点）----
+    (zip_dir / "package-lock.json").write_text(
+        '{"upstream": true, "npm_local_modification": "different"}\n',
+        encoding="utf-8",
+    )
+
+    # ---- 5. monkeypatch updater 指向这个模拟环境，跑 bootstrap ----
+    monkeypatch.setattr(updater, "REPO_ROOT", zip_dir)
+    monkeypatch.setattr(updater, "ORIGIN_URL", str(origin_dir))
+    monkeypatch.setattr(updater, "__version__", "9.9.9")  # 匹配 tag
+
+    result = updater.bootstrap_git_repo()
+    assert result.ok is True, f"bootstrap 失败: {result.error}"
+    assert result.anchor_kind == "version_tag", "应当 anchor 在 v9.9.9 tag"
+
+    # ---- 6. 关键断言：working tree 完全干净（不含 untracked）----
+    proc = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=str(zip_dir), capture_output=True, text=True, timeout=10,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == "", \
+        f"bootstrap 完应当 clean，实际 status:\n{proc.stdout}"
+
+    # ---- 7. package-lock.json 被强制覆盖回上游版本（npm 改动丢了）----
+    assert (zip_dir / "package-lock.json").read_text(encoding="utf-8") == '{"upstream": true}\n'
 
 
 def test_bootstrap_honors_env_origin_url_override(

@@ -3001,8 +3001,10 @@ function VersionSection() {
               <div className="vs-zip-banner-title">启用自动更新</div>
               <div className="vs-zip-banner-body">
                 检测到你是 zip 解压安装。要使用版本面板的一键更新 / 切换通道功能，
-                需要在本地初始化 git 仓库（首次约 30–60 MB 下载，仅下载历史元数据，
-                <b>不会覆盖你的文件</b>）。
+                需要在本地初始化 git 仓库（首次约 30–60 MB 下载历史元数据）。
+                本地源码会同步到上游 <b>v{version.stable_version?.replace(/^v/, '') ?? version.version}</b>
+                ，<b>你在 zip 目录里的本地修改会被覆盖</b>
+                （npm 自动生成的 lockfile / 自定义配置等都会重置到上游版本）。
               </div>
               <div className="vs-zip-banner-actions">
                 <button

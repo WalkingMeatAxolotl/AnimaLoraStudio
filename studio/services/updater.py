@@ -211,13 +211,22 @@ def bootstrap_git_repo() -> BootstrapResult:
     4. `git fetch origin master --tags`（拉完整 master 历史 + 全部 tag；
        不带 --depth 保证 dev 通道时间线 / 回滚到任意 commit 可用）
     5. 找 `v{__version__}` tag：存在则用作 anchor（让 HEAD 指向用户当前装
-       的版本对应的 tag commit，working tree 看上去就"干净"）；不存在则
-       fallback 到 FETCH_HEAD（master HEAD）
-    6. `git reset --mixed {anchor}` —— 更新 HEAD + index，**不动 working
-       tree**。zip 解压的源文件保留原样，不覆盖用户可能的本地修改
+       的版本对应的 tag commit，working tree 完全对齐）；不存在则 fallback
+       到 FETCH_HEAD（master HEAD）
+    6. `git reset --hard {anchor}` —— 同时更新 HEAD / index / working tree，
+       强制对齐到 anchor 的 tree。注意**会覆盖用户在 zip 目录里的所有修改**
+       （npm install 自动改的 package-lock.json、用户手动 tweak 的配置等）。
 
-    bootstrap 后 _classify_install 大概率回 "stable"（zip 用户的 __version__
-    匹 release tag 且 tree 一致），版本面板正常显示「v0.8.0」+「检查更新」可用。
+    为什么 `--hard` 不是 `--mixed`：
+    - 早期版本用 `--mixed` 想保留用户文件，但 Windows 上 `studio.bat run`
+      启动期会跑 npm install 改 package-lock.json，导致 init 完就 dirty →
+      pre-flight 卡更新 → 用户无法触发自更新（v0.8.1 实测撞到）
+    - zip 用户场景下，"启用自动更新"的潜台词就是"对齐到上游稳定版"，强制
+      覆盖比保留本地随机改动更符合期望
+    - banner 文案对此显式提示
+
+    bootstrap 后 _classify_install 回 "stable"（HEAD == v{__version__} tag
+    commit），版本面板正常显示「v0.8.0」+「检查更新」可用 + working tree clean。
 
     不在范围：fetch dev / 拉 dev_commits。用户切到 dev 通道时由 check_update
     / dev_commits 自己触发首次 fetch dev（多等几秒，可接受）。
@@ -267,8 +276,10 @@ def bootstrap_git_repo() -> BootstrapResult:
         anchor_ref = "FETCH_HEAD"
         anchor_kind = "master_head"
 
-    # 5. reset --mixed：更新 HEAD + index，不动 working tree（保留用户文件）
-    rc, _, err = _git("reset", "--mixed", anchor_ref, timeout=GIT_PULL_TIMEOUT)
+    # 5. reset --hard：HEAD + index + working tree 全部对齐到 anchor。
+    # 会覆盖 zip 目录里 npm install 改过的 lockfile / 用户手动的本地 tweak；
+    # 这是 zip 用户"启用自动更新"的预期行为（banner 文案显式提示）。
+    rc, _, err = _git("reset", "--hard", anchor_ref, timeout=GIT_PULL_TIMEOUT)
     if rc != 0:
         return BootstrapResult(ok=False, error=f"git reset 失败: {err[:200]}")
 
