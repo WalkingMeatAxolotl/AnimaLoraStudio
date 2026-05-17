@@ -68,16 +68,34 @@ def _npm_call(npm: str, args: list[str], cwd: str, timeout: int = 180) -> int:
         return 1
 
 
+def _frontend_package_files_changed_since_install() -> bool:
+    marker = NODE_MODULES / ".package-lock.json"
+    if not marker.exists():
+        return False
+    try:
+        marker_mtime = marker.stat().st_mtime
+        for f in (WEB_DIR / "package.json", WEB_DIR / "package-lock.json"):
+            if f.exists() and f.stat().st_mtime > marker_mtime:
+                return True
+    except OSError:
+        return False
+    return False
+
+
 def npm_install_if_missing(npm: str) -> int:
-    # 检查关键 bin 而不只是目录，避免安装不完整时跳过重装
     _bin = "eslint.cmd" if os.name == "nt" else "eslint"
-    if NODE_MODULES.exists() and (NODE_MODULES / ".bin" / _bin).exists():
+    deps_complete = NODE_MODULES.exists() and (NODE_MODULES / ".bin" / _bin).exists()
+    package_files_changed = deps_complete and _frontend_package_files_changed_since_install()
+    if deps_complete and not package_files_changed:
         return 0
     try:
         rel = NODE_MODULES.relative_to(REPO_ROOT)
     except ValueError:
         rel = NODE_MODULES
-    print(f"[studio] {rel} 不完整或不存在，运行 npm install（3 分钟超时）...")
+    if package_files_changed:
+        print("[studio] studio/web/package.json 或 package-lock.json 比 node_modules 新，运行 npm install...")
+    else:
+        print(f"[studio] {rel} 不完整或不存在，运行 npm install（3 分钟超时）...")
     rc = _npm_call(npm, ["install"], str(WEB_DIR), timeout=180)
     if rc != 0:
         print(f"[studio] npm install 失败或超时，切换国内源 ({_NPM_MIRROR}) 重试...")

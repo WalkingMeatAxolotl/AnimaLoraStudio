@@ -319,7 +319,7 @@
       "prefer_json": "Prefer JSON tag files (recommended; supports category shuffle)",
       "cache_latents": "Cache VAE latents to speed up training",
       "lora_type": "Adapter algorithm",
-      "lora_rank": "Rank (recommended 8/16/32/64)",
+      "lora_rank": "Rank (recommended 8/16/32/64; LoKr can use a sufficiently large value to trigger full dimension)",
       "lora_alpha": "Alpha (usually same as rank; often √rank when rs_lora is enabled)",
       "lokr_factor": "LoKr decomposition factor (only when lora_type=lokr)",
       "lora_dora": "DoRA: direction/magnitude split training, generally considered more stable",

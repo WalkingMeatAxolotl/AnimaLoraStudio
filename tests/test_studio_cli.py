@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 from typing import Any
 
@@ -99,6 +100,62 @@ def test_build_installs_when_node_modules_missing(
     # _npm_call 用 subprocess.Popen 而不是 subprocess.call；fake_calls fixture
     # 只监 call，install 路径会真起 npm 子进程。本测试拦截 Popen——
     # 同时支持 subprocess.run（_write_build_marker 调 git 走 run，内部 with Popen）。
+    class FakePopen:
+        def __init__(self, cmd, **kwargs):
+            fake_calls.append(list(cmd))
+            self.args = cmd
+            self.returncode = 0
+            self.stdin = None
+            self.stdout = None
+            self.stderr = None
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+        def poll(self):
+            return 0
+
+        def communicate(self, input=None, timeout=None):
+            return ("", "")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(cli.subprocess, "Popen", FakePopen)
+
+    rc = cli.main(["build"])
+    assert rc == 0
+    assert any(c[:2] == ["fake-npm", "install"] for c in fake_calls)
+    assert any(c[:3] == ["fake-npm", "run", "build"] for c in fake_calls)
+
+
+def test_build_installs_when_package_file_newer_than_node_modules(
+    fake_calls, fake_npm, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    web_dir = tmp_path / "web"
+    node_modules = web_dir / "node_modules"
+    bin_dir = node_modules / ".bin"
+    bin_dir.mkdir(parents=True)
+    marker = node_modules / ".package-lock.json"
+    marker.write_text("{}", encoding="utf-8")
+    (bin_dir / ("eslint.cmd" if cli.os.name == "nt" else "eslint")).write_text("", encoding="utf-8")
+    package_json = web_dir / "package.json"
+    package_json.write_text('{"dependencies":{"i18next":"latest"}}', encoding="utf-8")
+    package_lock = web_dir / "package-lock.json"
+    package_lock.write_text("{}", encoding="utf-8")
+    os.utime(marker, (100, 100))
+    os.utime(package_json, (200, 200))
+    os.utime(package_lock, (100, 100))
+
+    monkeypatch.setattr(cli, "WEB_DIR", web_dir)
+    monkeypatch.setattr(cli, "NODE_MODULES", node_modules)
+
     class FakePopen:
         def __init__(self, cmd, **kwargs):
             fake_calls.append(list(cmd))

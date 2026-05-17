@@ -175,8 +175,8 @@ class TrainingConfig(BaseModel):
         json_schema_extra=_meta("lora"),
     )
     lora_rank: int = Field(
-        32, ge=4, le=256,
-        description="rank（推荐 8/16/32/64）",
+        32, ge=4,
+        description="rank（推荐 8/16/32/64；LoKr 可设足够大触发 full dimension）",
         json_schema_extra=_meta("lora"),
     )
     lora_alpha: float = Field(

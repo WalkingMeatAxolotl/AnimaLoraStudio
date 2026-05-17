@@ -51,6 +51,15 @@ def test_schema_is_complete() -> None:
     assert "prodigy_plus_schedulefree" in getattr(optimizer_annotation, "__args__", ())
 
 
+def test_lokr_rank_allows_full_dimension_trigger() -> None:
+    payload = TrainingConfig().model_dump(mode="python")
+    payload["lora_type"] = "lokr"
+    payload["lora_rank"] = 50000
+    cfg = TrainingConfig.model_validate(payload)
+    assert cfg.lora_rank == 50000
+    assert "maximum" not in TrainingConfig.model_json_schema()["properties"]["lora_rank"]
+
+
 def test_schema_endpoint_returns_groups(client: TestClient) -> None:
     resp = client.get("/api/schema")
     assert resp.status_code == 200

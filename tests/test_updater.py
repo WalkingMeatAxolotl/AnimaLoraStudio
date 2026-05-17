@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -274,6 +275,28 @@ def test_requirements_marker_stale_match(
     marker.write_text(hashlib.sha256(content).hexdigest(), encoding="utf-8")
     monkeypatch.setattr(updater, "REPO_ROOT", tmp_path)
     assert updater._requirements_marker_stale() is False
+
+
+def test_package_json_changed_when_lockfile_newer_than_node_modules(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path
+    web_dir = root / "studio" / "web"
+    node_modules = web_dir / "node_modules"
+    node_modules.mkdir(parents=True)
+    marker = node_modules / ".package-lock.json"
+    marker.write_text("{}", encoding="utf-8")
+    pkg = web_dir / "package.json"
+    pkg.write_text("{}", encoding="utf-8")
+    lock = web_dir / "package-lock.json"
+    lock.write_text("{}", encoding="utf-8")
+    os.utime(marker, (100, 100))
+    os.utime(pkg, (100, 100))
+    os.utime(lock, (200, 200))
+
+    monkeypatch.setattr(updater, "REPO_ROOT", root)
+
+    assert updater._package_json_changed() is True
 
 
 # ---------------------------------------------------------------------------

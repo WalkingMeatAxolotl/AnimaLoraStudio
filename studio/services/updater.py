@@ -941,16 +941,16 @@ def _requirements_marker_stale() -> bool:
 
 
 def _package_json_changed() -> bool:
-    """package.json mtime > node_modules/.package-lock.json mtime 即视为改了。
-
-    npm install 后会刷新 .package-lock.json mtime，这是 npm 自带行为。
-    没 node_modules / 没 lock 文件返回 False（cli.py 的 npm_install_if_missing 会兜底）。
-    """
-    pkg = REPO_ROOT / "studio" / "web" / "package.json"
-    lock = REPO_ROOT / "studio" / "web" / "node_modules" / ".package-lock.json"
-    if not pkg.exists() or not lock.exists():
+    """前端依赖声明比 node_modules 安装标记新时才视为需要 npm install。"""
+    web_dir = REPO_ROOT / "studio" / "web"
+    marker = web_dir / "node_modules" / ".package-lock.json"
+    if not marker.exists():
         return False
     try:
-        return pkg.stat().st_mtime > lock.stat().st_mtime
+        marker_mtime = marker.stat().st_mtime
+        for f in (web_dir / "package.json", web_dir / "package-lock.json"):
+            if f.exists() and f.stat().st_mtime > marker_mtime:
+                return True
     except OSError:
         return False
+    return False
