@@ -442,6 +442,21 @@ class TrainingConfig(BaseModel):
         description="【InfoNoise】触发刷新所需的每 bin 最小样本数",
         json_schema_extra=_meta("noise_schedule", show_when="infonoise_enabled==true", advanced=True),
     )
+    loss_type: Literal["mse", "huber"] = Field(
+        "mse",
+        description="【损失函数】训练 loss 类型（mse 默认；huber 对 outlier 鲁棒，配合 huber_schedule 平衡两端梯度尺度）",
+        json_schema_extra=_meta("noise_schedule", advanced=True),
+    )
+    huber_c: float = Field(
+        0.15, ge=0.01, le=5.0,
+        description="【Huber loss】基础 delta 系数（典型 0.1–0.3；与 huber_schedule 协同控制 quad/linear 转折点）",
+        json_schema_extra=_meta("noise_schedule", show_when="loss_type==huber", advanced=True),
+    )
+    huber_schedule: Literal["constant", "snr", "sigma"] = Field(
+        "constant",
+        description="【Huber loss】delta 随 t 变化策略（constant=不变；snr=低 t 大 δ 高 t 小 δ；sigma=反向）",
+        json_schema_extra=_meta("noise_schedule", show_when="loss_type==huber", advanced=True),
+    )
     loss_weighting: Literal["none", "min_snr", "detail_inv_t", "cosmap"] = Field(
         "none",
         description="【损失加权】方案（min_snr 推荐；detail_inv_t 细节强化；cosmap SD3 风格）",

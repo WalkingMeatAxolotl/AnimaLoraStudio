@@ -62,6 +62,7 @@ class TrainingContext:
     total_steps: Optional[int] = None
     scheduler: Any = None
     timestep_sampler: Any = None    # training.timestep_samplers.TimestepSamplerProtocol
+    loss_fn: Any = None             # training.losses.LossProtocol
 
     # ─── resume_phase 填充 ───
     global_step: int = 0
