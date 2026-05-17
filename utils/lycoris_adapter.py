@@ -130,6 +130,15 @@ class AnimaLycorisAdapter:
 
         n = len(self.network.loras)
         logger.info(f"注入 {self.algo.upper()} 到 {n} 层（lycoris-lora）")
+        if self.use_lokr:
+            full_matrix = [lora for lora in self.network.loras if getattr(lora, "use_w2", False)]
+            if full_matrix:
+                logger.info(
+                    "LoKr dim/rank=%s 触发 LyCORIS full dimension：%s/%s 层的第二块不再分解，alpha 将被忽略。",
+                    self.rank,
+                    len(full_matrix),
+                    n,
+                )
         return {lora.lora_name: lora for lora in self.network.loras}
 
     # --------------------------------------------------------------- detach
