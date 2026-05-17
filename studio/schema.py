@@ -397,7 +397,7 @@ class TrainingConfig(BaseModel):
             advanced=True,
         ),
     )
-    schedule_shift: float = Field(
+    timestep_schedule_shift: float = Field(
         1.0, ge=0.1, le=10.0,
         description="【时间步采样】采样后对 t 做的额外 σ schedule 偏移（1.0 = 无偏移；与 timestep_shift 不同：后者作用于 logit-normal 内部，前者作用于最终 t）",
         json_schema_extra=_meta(

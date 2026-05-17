@@ -44,7 +44,7 @@ class InfoNoiseScheduler:
         baseline_shift: float = 3.0,
         baseline_mode: str = "logit_normal",
         baseline_mix_low_prob: float = 0.0,
-        baseline_schedule_shift: float = 1.0,
+        baseline_timestep_schedule_shift: float = 1.0,
     ):
         self.K = K
         self.N_warm = N_warm
@@ -57,7 +57,7 @@ class InfoNoiseScheduler:
         self.baseline_shift = baseline_shift
         self.baseline_mode = baseline_mode
         self.baseline_mix_low_prob = baseline_mix_low_prob
-        self.baseline_schedule_shift = baseline_schedule_shift
+        self.baseline_timestep_schedule_shift = baseline_timestep_schedule_shift
         self._internal_step = 0
 
         sigma_min = t_min / (1.0 - t_min)
@@ -100,7 +100,7 @@ class InfoNoiseScheduler:
             mode=self.baseline_mode,
             shift=self.baseline_shift,
             mix_low_prob=self.baseline_mix_low_prob,
-            schedule_shift=self.baseline_schedule_shift,
+            timestep_schedule_shift=self.baseline_timestep_schedule_shift,
         )
 
     def record(self, t: torch.Tensor, raw_mse: torch.Tensor):
@@ -221,7 +221,7 @@ def build(args, total_steps: Optional[int]) -> InfoNoiseScheduler:
         baseline_shift=float(getattr(args, "timestep_shift", 3.0) or 3.0),
         baseline_mode=str(getattr(args, "timestep_sampling", "logit_normal") or "logit_normal"),
         baseline_mix_low_prob=float(getattr(args, "timestep_mix_low_prob", 0.0) or 0.0),
-        baseline_schedule_shift=float(getattr(args, "schedule_shift", 1.0) or 1.0),
+        baseline_timestep_schedule_shift=float(getattr(args, "timestep_schedule_shift", 1.0) or 1.0),
     )
     logger.info(
         f"InfoNoise 已启用：K={scheduler.K}, N_warm={scheduler.N_warm}, "

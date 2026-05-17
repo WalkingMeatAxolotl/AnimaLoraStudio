@@ -20,12 +20,12 @@ class BaselineTimestepSampler:
         mode: str = "logit_normal",
         shift: float = 3.0,
         mix_low_prob: float = 0.0,
-        schedule_shift: float = 1.0,
+        timestep_schedule_shift: float = 1.0,
     ):
         self.mode = mode
         self.shift = shift
         self.mix_low_prob = mix_low_prob
-        self.schedule_shift = schedule_shift
+        self.timestep_schedule_shift = timestep_schedule_shift
 
     def sample(self, bs: int, device) -> torch.Tensor:
         return sample_t(
@@ -34,7 +34,7 @@ class BaselineTimestepSampler:
             mode=self.mode,
             shift=self.shift,
             mix_low_prob=self.mix_low_prob,
-            schedule_shift=self.schedule_shift,
+            timestep_schedule_shift=self.timestep_schedule_shift,
         )
 
     def record(self, t: torch.Tensor, raw_mse: torch.Tensor) -> None:
@@ -49,7 +49,7 @@ class BaselineTimestepSampler:
             "mode": self.mode,
             "shift": self.shift,
             "mix_low_prob": self.mix_low_prob,
-            "schedule_shift": self.schedule_shift,
+            "timestep_schedule_shift": self.timestep_schedule_shift,
         }
 
 
@@ -59,5 +59,5 @@ def build(args, total_steps) -> BaselineTimestepSampler:
         mode=str(getattr(args, "timestep_sampling", "logit_normal") or "logit_normal"),
         shift=float(getattr(args, "timestep_shift", 3.0) or 3.0),
         mix_low_prob=float(getattr(args, "timestep_mix_low_prob", 0.0) or 0.0),
-        schedule_shift=float(getattr(args, "schedule_shift", 1.0) or 1.0),
+        timestep_schedule_shift=float(getattr(args, "timestep_schedule_shift", 1.0) or 1.0),
     )

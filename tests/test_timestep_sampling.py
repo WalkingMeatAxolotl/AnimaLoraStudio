@@ -1,9 +1,9 @@
 """timestep_sampling 单元测试。
 
 主要覆盖：
-- 4 个原 mode 在默认 mix_low_prob=0/schedule_shift=1.0 下行为不变（防回归）
+- 4 个原 mode 在默认 mix_low_prob=0/timestep_schedule_shift=1.0 下行为不变（防回归）
 - 2 个新 mode（mixed_uniform_low / mixed_uniform_logit）p=0/p=1/部分混合三种情形
-- schedule_shift 公式数学正确 + 1.0 时恒等 + >1 推高均值
+- timestep_schedule_shift 公式数学正确 + 1.0 时恒等 + >1 推高均值
 - BaselineTimestepSampler 接收+透传新参 + build() 读 args
 - InfoNoise build() 读新参 + baseline 走 sample_t 时透传
 
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import torch
 
-from training.timestep_sampling import _apply_schedule_shift, sample_t
+from training.timestep_sampling import _apply_timestep_schedule_shift, sample_t
 from training.timestep_samplers.baseline import BaselineTimestepSampler
 from training.timestep_samplers.baseline import build as build_baseline
 from training.timestep_samplers.infonoise import InfoNoiseScheduler
@@ -21,27 +21,27 @@ from training.timestep_samplers.infonoise import build as build_infonoise
 
 
 # ---------------------------------------------------------------------------
-# schedule_shift 数学
+# timestep_schedule_shift 数学
 # ---------------------------------------------------------------------------
 
 
-def test_schedule_shift_identity_when_one():
+def test_timestep_schedule_shift_identity_when_one():
     t = torch.tensor([0.1, 0.3, 0.5, 0.7, 0.9])
-    out = _apply_schedule_shift(t, 1.0)
+    out = _apply_timestep_schedule_shift(t, 1.0)
     torch.testing.assert_close(out, t)
 
 
-def test_schedule_shift_formula_matches_spec():
+def test_timestep_schedule_shift_formula_matches_spec():
     """t' = (t * s) / (1 + (s-1)*t); s=2, t=0.5 → 1/1.5 = 2/3"""
     t = torch.tensor([0.5])
-    out = _apply_schedule_shift(t, 2.0)
+    out = _apply_timestep_schedule_shift(t, 2.0)
     torch.testing.assert_close(out, torch.tensor([2.0 / 3.0]), rtol=1e-5, atol=1e-5)
 
 
-def test_schedule_shift_clamps_to_open_interval():
+def test_timestep_schedule_shift_clamps_to_open_interval():
     """t∈(0,1) 后经 shift 也应保持 (0, 1) 开区间（clamp 到 [eps, 1-eps]）。"""
     t = torch.tensor([1e-5, 0.5, 1 - 1e-5])
-    out = _apply_schedule_shift(t, 5.0)
+    out = _apply_timestep_schedule_shift(t, 5.0)
     assert (out > 0).all() and (out < 1).all()
 
 
@@ -135,24 +135,24 @@ def test_mixed_uniform_logit_partial_pulls_toward_high():
 
 
 # ---------------------------------------------------------------------------
-# schedule_shift 跟分布混合
+# timestep_schedule_shift 跟分布混合
 # ---------------------------------------------------------------------------
 
 
-def test_schedule_shift_high_value_raises_mean():
-    """schedule_shift > 1 推高 mean。"""
+def test_timestep_schedule_shift_high_value_raises_mean():
+    """timestep_schedule_shift > 1 推高 mean。"""
     torch.manual_seed(0)
-    t_base = sample_t(4096, "cpu", mode="uniform", schedule_shift=1.0)
+    t_base = sample_t(4096, "cpu", mode="uniform", timestep_schedule_shift=1.0)
     torch.manual_seed(0)
-    t_high = sample_t(4096, "cpu", mode="uniform", schedule_shift=3.0)
+    t_high = sample_t(4096, "cpu", mode="uniform", timestep_schedule_shift=3.0)
     assert t_high.mean().item() > t_base.mean().item() + 0.05
 
 
-def test_schedule_shift_applies_to_mixed_mode():
-    """mixed_uniform_low + schedule_shift=2 输出应推高（覆盖偏低端原本的均值）。"""
+def test_timestep_schedule_shift_applies_to_mixed_mode():
+    """mixed_uniform_low + timestep_schedule_shift=2 输出应推高（覆盖偏低端原本的均值）。"""
     torch.manual_seed(0)
-    t = sample_t(4096, "cpu", mode="mixed_uniform_low", shift=3.0, mix_low_prob=1.0, schedule_shift=3.0)
-    # 即使是 mixed_uniform_low (本应偏低)，schedule_shift=3 也应把均值推回 > 0.4
+    t = sample_t(4096, "cpu", mode="mixed_uniform_low", shift=3.0, mix_low_prob=1.0, timestep_schedule_shift=3.0)
+    # 即使是 mixed_uniform_low (本应偏低)，timestep_schedule_shift=3 也应把均值推回 > 0.4
     assert t.mean().item() > 0.4
 
 
@@ -166,7 +166,7 @@ def test_baseline_sampler_accepts_new_params():
         mode="mixed_uniform_low",
         shift=3.0,
         mix_low_prob=0.5,
-        schedule_shift=1.5,
+        timestep_schedule_shift=1.5,
     )
     t = s.sample(64, "cpu")
     assert t.shape == (64,)
@@ -174,7 +174,7 @@ def test_baseline_sampler_accepts_new_params():
     status = s.status()
     assert status["mode"] == "mixed_uniform_low"
     assert status["mix_low_prob"] == 0.5
-    assert status["schedule_shift"] == 1.5
+    assert status["timestep_schedule_shift"] == 1.5
 
 
 def test_baseline_build_reads_new_args():
@@ -183,12 +183,12 @@ def test_baseline_build_reads_new_args():
         timestep_sampling = "mixed_uniform_low"
         timestep_shift = 2.0
         timestep_mix_low_prob = 0.25
-        schedule_shift = 1.12
+        timestep_schedule_shift = 1.12
 
     s = build_baseline(Args(), total_steps=1000)
     assert s.mode == "mixed_uniform_low"
     assert s.mix_low_prob == 0.25
-    assert s.schedule_shift == 1.12
+    assert s.timestep_schedule_shift == 1.12
 
 
 def test_baseline_build_backward_compatible_with_missing_new_args():
@@ -196,18 +196,18 @@ def test_baseline_build_backward_compatible_with_missing_new_args():
     class OldArgs:
         timestep_sampling = "logit_normal"
         timestep_shift = 3.0
-        # 缺 timestep_mix_low_prob / schedule_shift
+        # 缺 timestep_mix_low_prob / timestep_schedule_shift
 
     s = build_baseline(OldArgs(), total_steps=1000)
     assert s.mix_low_prob == 0.0
-    assert s.schedule_shift == 1.0
+    assert s.timestep_schedule_shift == 1.0
 
 
 def test_baseline_sampler_default_args_unchanged():
-    """无显式传参时跟历史 BaselineTimestepSampler() 行为等价（mix_low_prob=0, schedule_shift=1）。"""
+    """无显式传参时跟历史 BaselineTimestepSampler() 行为等价（mix_low_prob=0, timestep_schedule_shift=1）。"""
     s = BaselineTimestepSampler()
     assert s.mix_low_prob == 0.0
-    assert s.schedule_shift == 1.0
+    assert s.timestep_schedule_shift == 1.0
     t = s.sample(128, "cpu")
     # 默认 mode=logit_normal shift=3 → mean > 0.5
     assert t.mean().item() > 0.5
@@ -223,7 +223,7 @@ def test_infonoise_build_reads_new_args():
         timestep_sampling = "mixed_uniform_low"
         timestep_shift = 3.0
         timestep_mix_low_prob = 0.2
-        schedule_shift = 1.5
+        timestep_schedule_shift = 1.5
         infonoise_K = 32
         infonoise_N_warm = 0  # auto
         infonoise_M = 50
@@ -234,7 +234,7 @@ def test_infonoise_build_reads_new_args():
     s = build_infonoise(Args(), total_steps=500)
     assert s.baseline_mode == "mixed_uniform_low"
     assert s.baseline_mix_low_prob == 0.2
-    assert s.baseline_schedule_shift == 1.5
+    assert s.baseline_timestep_schedule_shift == 1.5
 
 
 def test_infonoise_warmup_sample_uses_new_params():
@@ -244,7 +244,7 @@ def test_infonoise_warmup_sample_uses_new_params():
         baseline_mode="mixed_uniform_low",
         baseline_shift=3.0,
         baseline_mix_low_prob=0.5,
-        baseline_schedule_shift=1.0,
+        baseline_timestep_schedule_shift=1.0,
     )
     assert s._cdf_values is None
     t = s.sample(128, "cpu")
@@ -253,7 +253,7 @@ def test_infonoise_warmup_sample_uses_new_params():
 
 
 def test_infonoise_default_baseline_params_unchanged():
-    """InfoNoiseScheduler 无显式 baseline_mix_low_prob/schedule_shift 时回落到默认。"""
+    """InfoNoiseScheduler 无显式 baseline_mix_low_prob/timestep_schedule_shift 时回落到默认。"""
     s = InfoNoiseScheduler(K=32, N_warm=100, M=10, B=10, N_min=1)
     assert s.baseline_mix_low_prob == 0.0
-    assert s.baseline_schedule_shift == 1.0
+    assert s.baseline_timestep_schedule_shift == 1.0
