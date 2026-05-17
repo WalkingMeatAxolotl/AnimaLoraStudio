@@ -2,7 +2,7 @@
 
 `build_loss(args) -> LossProtocol` 按 args.loss_type 派发到具体 loss：
 - mse    — F.mse_loss 包装（默认，与历史行为字节级一致）
-- huber  — Huber loss with constant/snr/sigma delta schedule
+- huber  — Huber loss with constant delta（EDM/Karras 标准做法）
 
 加新 loss 步骤：
 1. 写 training/losses/{name}.py 含 `build(args) -> LossProtocol`

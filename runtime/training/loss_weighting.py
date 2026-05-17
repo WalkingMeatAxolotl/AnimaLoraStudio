@@ -2,9 +2,10 @@
 
 抽自原 runtime/anima_train.py L1898-1937（ADR 0003 PR-A）。
 
-各 scheme 共享同一签名 (t, gamma, cap) -> (B,)，不引入 schema 字段（用
-schema.loss_weighting: str），所以一文件多 if 分支即可，不需要 plugin
-subfolder。
+各 scheme 共享 compute_loss_weight 入口；scheme-specific 参数（如
+detail_inv_t_min/max）通过 keyword arg 透传。当前 scheme 总数较少仍用
+单文件多 if 分支；若未来 scheme 数量增长 / scheme-specific 字段进一步
+扩张，应迁移到 plugin 模式（参考 runtime/training/losses/）。
 """
 
 from __future__ import annotations

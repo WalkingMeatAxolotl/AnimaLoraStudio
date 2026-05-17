@@ -2,7 +2,7 @@
 
 覆盖：
 - MseLoss：跟 F.mse_loss(reduction='none') bit-for-bit 一致 + 不依赖 t + Protocol 合规
-- HuberLoss：quad / linear / 边界 三段公式正确 + constant/snr/sigma 三种 schedule 的 delta 行为
+- HuberLoss：quad / linear / 边界 三段公式正确（constant delta）
 - plugin registry：BUILDERS / build_loss / validate_schema_consistency 三件套
 - 集成：所有 loss 在 (B, C, H, W) latent shape 上输出形状正确、有限值
 """
@@ -60,23 +60,23 @@ def test_mse_build_returns_instance():
 # ---------------------------------------------------------------------------
 
 
-def test_huber_constant_inside_quadratic_region():
+def test_huber_inside_quadratic_region():
     """|x| < delta 时 Huber = 0.5 * x^2。"""
     pred = torch.tensor([[0.05]])
     target = torch.tensor([[0.0]])
     t = torch.tensor([0.5])
-    huber = HuberLoss(c=0.15, schedule="constant")
+    huber = HuberLoss(c=0.15)
     expected = torch.tensor([[0.5 * 0.05 * 0.05]])
     actual = huber.compute(pred, target, t)
     torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-5)
 
 
-def test_huber_constant_outside_linear_region():
+def test_huber_outside_linear_region():
     """|x| > delta 时 Huber = delta * (|x| - 0.5*delta)。"""
     pred = torch.tensor([[1.0]])
     target = torch.tensor([[0.0]])
     t = torch.tensor([0.5])
-    huber = HuberLoss(c=0.15, schedule="constant")
+    huber = HuberLoss(c=0.15)
     expected = torch.tensor([[0.15 * (1.0 - 0.5 * 0.15)]])  # 0.13875
     actual = huber.compute(pred, target, t)
     torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-5)
@@ -88,7 +88,7 @@ def test_huber_continuous_at_boundary():
     pred = torch.tensor([[delta]])
     target = torch.tensor([[0.0]])
     t = torch.tensor([0.5])
-    huber = HuberLoss(c=delta, schedule="constant")
+    huber = HuberLoss(c=delta)
     # torch.where(|x| < delta) 严格小于，|x|=delta 走 lin 分支
     expected = torch.tensor([[delta * (delta - 0.5 * delta)]])  # 0.5 * delta^2
     actual = huber.compute(pred, target, t)
@@ -101,65 +101,34 @@ def test_huber_smaller_than_mse_for_large_diff():
     target = torch.tensor([[0.0]])
     t = torch.tensor([0.5])
     mse_val = MseLoss().compute(pred, target, t)
-    huber_val = HuberLoss(c=0.15, schedule="constant").compute(pred, target, t)
+    huber_val = HuberLoss(c=0.15).compute(pred, target, t)
     assert huber_val.item() < mse_val.item()  # 12.5 vs 0.74
 
 
-# ---------------------------------------------------------------------------
-# HuberLoss schedule
-# ---------------------------------------------------------------------------
-
-
-def test_huber_constant_delta_is_t_independent():
-    """constant schedule 下 delta 跟 t 无关。"""
-    huber = HuberLoss(c=0.15, schedule="constant")
-    d_low = huber._compute_delta(torch.tensor([0.1]))
-    d_high = huber._compute_delta(torch.tensor([0.9]))
-    torch.testing.assert_close(d_low, d_high)
-    torch.testing.assert_close(d_low, torch.tensor([0.15]))
-
-
-def test_huber_snr_delta_decreases_with_t():
-    """snr schedule：delta = c * sqrt((1-t)/t)，低 t 大 delta，t=0.5 时 delta=c。"""
-    huber = HuberLoss(c=0.15, schedule="snr")
-    delta_low = huber._compute_delta(torch.tensor([0.1]))
-    delta_mid = huber._compute_delta(torch.tensor([0.5]))
-    delta_high = huber._compute_delta(torch.tensor([0.9]))
-    assert delta_low.item() > delta_mid.item() > delta_high.item()
-    torch.testing.assert_close(delta_mid, torch.tensor([0.15]), rtol=1e-5, atol=1e-5)
-
-
-def test_huber_sigma_delta_increases_with_t():
-    """sigma schedule：delta = c * t/(1-t)，低 t 小 delta，跟 snr 反向。"""
-    huber = HuberLoss(c=0.15, schedule="sigma")
-    delta_low = huber._compute_delta(torch.tensor([0.1]))
-    delta_mid = huber._compute_delta(torch.tensor([0.5]))
-    delta_high = huber._compute_delta(torch.tensor([0.9]))
-    assert delta_low.item() < delta_mid.item() < delta_high.item()
-    torch.testing.assert_close(delta_mid, torch.tensor([0.15]), rtol=1e-5, atol=1e-5)
-
-
-def test_huber_unknown_schedule_raises():
-    with pytest.raises(ValueError, match="huber_schedule"):
-        HuberLoss(c=0.15, schedule="nonexistent")
+def test_huber_t_independent():
+    """constant delta 下 huber 输出与 t 无关。"""
+    huber = HuberLoss(c=0.15)
+    torch.manual_seed(0)
+    pred = torch.randn(2, 3, 4, 4)
+    target = torch.randn(2, 3, 4, 4)
+    out1 = huber.compute(pred, target, torch.tensor([0.1, 0.5]))
+    out2 = huber.compute(pred, target, torch.tensor([0.9, 0.99]))
+    torch.testing.assert_close(out1, out2)
 
 
 def test_huber_build_reads_args():
     class Args:
         huber_c = 0.3
-        huber_schedule = "snr"
     h = build_huber(Args())
     assert h.c == 0.3
-    assert h.schedule == "snr"
 
 
 def test_huber_build_defaults_when_args_missing():
-    """旧 args 没新字段时回落到默认 c=0.15 / schedule=constant。"""
+    """旧 args 没新字段时回落到默认 c=0.15。"""
     class OldArgs:
         pass
     h = build_huber(OldArgs())
     assert h.c == 0.15
-    assert h.schedule == "constant"
 
 
 # ---------------------------------------------------------------------------
@@ -182,11 +151,9 @@ def test_build_loss_dispatches_huber():
     class Args:
         loss_type = "huber"
         huber_c = 0.2
-        huber_schedule = "snr"
     loss = build_loss(Args())
     assert isinstance(loss, HuberLoss)
     assert loss.c == 0.2
-    assert loss.schedule == "snr"
 
 
 def test_build_loss_unknown_type_raises():
@@ -229,9 +196,7 @@ def test_huber_satisfies_loss_protocol():
 
 @pytest.mark.parametrize("loss", [
     MseLoss(),
-    HuberLoss(c=0.15, schedule="constant"),
-    HuberLoss(c=0.15, schedule="snr"),
-    HuberLoss(c=0.15, schedule="sigma"),
+    HuberLoss(c=0.15),
 ])
 def test_compute_shape_and_finite_on_latent_like_input(loss):
     """所有 loss 在 latent-like (B, C, H, W) 输入上输出形状对齐 + 数值合法。"""
@@ -243,3 +208,51 @@ def test_compute_shape_and_finite_on_latent_like_input(loss):
     assert out.shape == pred.shape
     assert torch.isfinite(out).all()
     assert (out >= 0).all()  # huber/mse 都是非负
+
+
+# ---------------------------------------------------------------------------
+# InfoNoise × loss_type 解耦集成测试
+# ---------------------------------------------------------------------------
+
+
+def test_infonoise_raw_mse_decoupled_from_loss_type():
+    """codify PR #75 loop.py:122-131 的核心解耦：启用 huber 时 InfoNoise 仍收到纯 MSE。
+
+    防止未来重构 loop.py 把 _raw_mse 复用 ctx.loss_fn.compute 抢算力，从而违反
+    InfoNoise paper 的 I-MMSE 假设。参考 [[feedback_verify_paper_before_fixing_algo]]
+    （P0-2 EMA 翻转事故同根：对外部算法的"小聪明"必须先 verify 论文）。
+    """
+    from training.timestep_samplers.infonoise import InfoNoiseScheduler
+
+    torch.manual_seed(0)
+    pred = torch.randn(4, 4, 8, 8)
+    target = torch.randn(4, 4, 8, 8)
+    t = torch.rand(4).clamp(1e-3, 1 - 1e-3)
+
+    # 复现 loop.py:122-131 的两路计算：
+    # (1) 训练 loss 走 loss_fn（这里取 huber，跟 MSE 数值必然不同）
+    huber = HuberLoss(c=0.15)
+    loss_per_sample = huber.compute(pred.float(), target.float(), t)
+    huber_per_sample = loss_per_sample.mean(dim=list(range(1, loss_per_sample.dim())))
+
+    # (2) raw_mse 给 InfoNoise — 必须用 F.mse_loss 而不是 loss_fn
+    raw_mse_per_sample = F.mse_loss(pred.float(), target.float(), reduction="none").detach()
+    raw_mse = raw_mse_per_sample.mean(dim=list(range(1, raw_mse_per_sample.dim())))
+
+    # 预检：huber 跟 MSE 数值在这组随机输入上必然不同（差异大于 1e-3）
+    assert not torch.allclose(raw_mse, huber_per_sample, rtol=1e-2), (
+        "测试无效：huber 输出跟 MSE 太接近，重写测试或换更极端 c。"
+    )
+
+    # 核心断言：raw_mse 路径输出 == MseLoss 输出（即与 loss_fn 类型无关）
+    mse_reference = MseLoss().compute(pred.float(), target.float(), t)
+    mse_per_sample = mse_reference.mean(dim=list(range(1, mse_reference.dim())))
+    torch.testing.assert_close(raw_mse, mse_per_sample)
+
+    # 用真正 InfoNoiseScheduler 验证 record() 接受这个 raw_mse 不崩
+    scheduler = InfoNoiseScheduler(K=16, N_warm=10, M=5, B=10, N_min=1)
+    scheduler.record(t.detach(), raw_mse)
+    assert scheduler._internal_step == 1
+    # 验证记录到的总样本数 == batch size（每个 bin 之和）
+    total_recorded = sum(len(buf) for buf in scheduler._fifo)
+    assert total_recorded == 4

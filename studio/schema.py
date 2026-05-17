@@ -444,17 +444,12 @@ class TrainingConfig(BaseModel):
     )
     loss_type: Literal["mse", "huber"] = Field(
         "mse",
-        description="【损失函数】训练 loss 类型（mse 默认；huber 对 outlier 鲁棒，配合 huber_schedule 平衡两端梯度尺度）",
-        json_schema_extra=_meta("noise_schedule", advanced=True),
+        description="【损失函数】训练 loss 类型（mse 默认；huber 对 outlier 鲁棒）",
+        json_schema_extra=_meta("noise_schedule"),
     )
     huber_c: float = Field(
         0.15, ge=0.01, le=5.0,
-        description="【Huber loss】基础 delta 系数（典型 0.1–0.3；与 huber_schedule 协同控制 quad/linear 转折点）",
-        json_schema_extra=_meta("noise_schedule", show_when="loss_type==huber", advanced=True),
-    )
-    huber_schedule: Literal["constant", "snr", "sigma"] = Field(
-        "constant",
-        description="【Huber loss】delta 随 t 变化策略（constant=不变；snr=低 t 大 δ 高 t 小 δ；sigma=反向）",
+        description="【Huber loss】delta 系数（典型 0.1–0.3；控制 quad/linear 转折点，|x|<δ 走二次，|x|≥δ 走线性）",
         json_schema_extra=_meta("noise_schedule", show_when="loss_type==huber", advanced=True),
     )
     loss_weighting: Literal["none", "min_snr", "detail_inv_t", "cosmap"] = Field(
@@ -473,8 +468,8 @@ class TrainingConfig(BaseModel):
         json_schema_extra=_meta("noise_schedule", show_when="loss_weighting!=none", advanced=True),
     )
     detail_inv_t_min: float = Field(
-        1.0, ge=0.1, le=20.0,
-        description="【损失加权】detail_inv_t 权重下限（默认 1.0；升至 1.5 可让高 t 步也被略微加权）",
+        1.0, ge=1.0, le=20.0,
+        description="【损失加权】detail_inv_t 权重下限（默认 1.0；升至 1.5 可让高 t 步也被略微加权；<1.0 因 1/t>1 恒成立故无效）",
         json_schema_extra=_meta("noise_schedule", show_when="loss_weighting==detail_inv_t", advanced=True),
     )
     detail_inv_t_max: float = Field(
