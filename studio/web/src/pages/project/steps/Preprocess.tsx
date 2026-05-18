@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link, useOutletContext } from 'react-router-dom'
+import { useOutletContext } from 'react-router-dom'
 import {
   api,
   type Job,
@@ -336,11 +336,6 @@ export default function PreprocessPage() {
       idx={2}
       title={t('steps.preprocess.title')}
       subtitle={t('steps.preprocess.subtitle')}
-      actions={
-        <Link to="/tools/settings" className="btn btn-ghost btn-sm">
-          {t('nav.settings')}
-        </Link>
-      }
     >
       <div className="flex flex-col h-full gap-3 min-h-0">
         <div className="grid gap-3 flex-1 min-h-0" style={{ gridTemplateColumns: '1fr 260px' }}>

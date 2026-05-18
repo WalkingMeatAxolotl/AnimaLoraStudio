@@ -113,10 +113,8 @@ export default function PresetsPage() {
   // ── 选 preset 切换 ──
   // 新建模式（selected=null）：优先用 draftSeed（来自「复制副本」/「导入」），
   // 没种子就用 schema 默认值。draftSeed 是一次性的，消费后清空。
-  // modelPathDefaults 加进 deps：进程启动时 useEffect 可能先于 fetch 跑（用 schema
-  // 相对默认初始化），fetch 完成后 modelPathDefaults 到达，重跑一次覆盖成绝对。
-  // 只在 selected===null（新建模式）且没有 draftSeed 时生效；用户编辑过的 config
-  // 不会被此 effect 覆盖，因为 draftSeed 已消费。
+  // modelPathDefaults 在此处只读初值快照、不进 deps：异步晚到的情况由下面那个
+  // 带「用户没改过」guard 的 useEffect 覆盖，避免重入这里把用户编辑清掉。
   useEffect(() => {
     if (!selected) {
       const seed = draftSeedRef.current
@@ -157,6 +155,8 @@ export default function PresetsPage() {
       toast(t('presets.loadFailed', { error: e }), 'error')
       setSelected(null)
     })
+    // modelPathDefaults 故意排除：late-arrival 由下一个 useEffect 处理
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, schema, descriptions, t, toast])
 
   // modelPathDefaults 异步拉取，可能晚于主 init useEffect 到达。新建模式下

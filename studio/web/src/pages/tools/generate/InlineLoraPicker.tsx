@@ -38,11 +38,18 @@ interface MultiModeProps extends CommonProps {
   mode?: 'multi'
   /** 已被 caller 选过的 path（其他 LoRA 槽 / 其他 axis 占用），在 list 标 ✓ 禁用 */
   existingPaths?: Set<string>
-  /** 「添加 N 个」commit 回调；之后 onClose 由 picker 自动触发 */
+  /** chip 切换 / 权重 / pid-vid 变更回调。
+   *
+   * - 普通 multi 模式：用户点「添加 N 个」commit 时触发，picker 自动 onClose
+   * - live 模式：每次 chip toggle / 权重变 / pid-vid 切都立即触发（不依赖 commit 按钮）
+   */
   onPick: (picks: PickedLora[], weight: number) => void
   /** XY 轴绑定下应 hide 权重（轴卡片自己有 lora_scale 控制） */
   showWeight?: boolean
   defaultWeight?: number
+  /** 即时生效：每次 chip toggle 都 onPick，不再渲染「添加 N 个」commit footer。
+   *  用于 XY 轴卡片这种「picker 常驻、用户期望所见即所得」的场景。 */
+  live?: boolean
   value?: never
   weight?: never
   onChange?: never
@@ -136,12 +143,6 @@ export default function InlineLoraPicker(props: Props) {
     )
   }, [ckpts, search])
 
-  // multi 模式的当前会话选中（single 模式不用，受控走 props.value）
-  const [picked, setPicked] = useState<Set<string>>(new Set())
-  useEffect(() => {
-    if (!isSingle) setPicked(new Set())  // pid/vid 切换时清空
-  }, [pid, vid, isSingle])
-
   // 权重：single 模式受控；multi 模式内部状态
   const [internalWeight, setInternalWeight] = useState<number>(
     isSingle ? props.weight : (props.mode === 'multi' ? props.defaultWeight ?? 1.0 : 1.0)
@@ -151,6 +152,20 @@ export default function InlineLoraPicker(props: Props) {
   useEffect(() => {
     if (isSingle) setInternalWeight(singleWeight)
   }, [isSingle, singleWeight])
+
+  // multi 模式的当前会话选中（single 模式不用，受控走 props.value）
+  const [picked, setPicked] = useState<Set<string>>(new Set())
+  const isLive = !isSingle && (props as MultiModeProps).live === true
+  useEffect(() => {
+    if (isSingle) return
+    setPicked(new Set())  // pid/vid 切换时清空 UI 选中
+    // live 模式：pid/vid 切了把 axis 也清掉（新版本下旧 path 已无意义）；
+    // 初始 mount 也会跑一次，但此时 draft.raw 通常已是空，commit 空集合即 no-op。
+    if (isLive) {
+      (props as MultiModeProps).onPick([], internalWeight)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pid, vid, isSingle])
 
   const currentVersion = versions.find((v) => v.id === vid)
 
@@ -175,6 +190,13 @@ export default function InlineLoraPicker(props: Props) {
     setPicked((s) => {
       const next = new Set(s)
       if (next.has(c.path)) next.delete(c.path); else next.add(c.path)
+      // live 模式：每次 chip toggle 都即时 commit，不等用户点「添加 N 个」
+      if (isLive && pid !== null && vid !== null) {
+        const picks: PickedLora[] = Array.from(next).map((path) => ({
+          path, projectId: pid, versionId: vid,
+        }))
+        ;(props as MultiModeProps).onPick(picks, internalWeight)
+      }
       return next
     })
   }
@@ -184,6 +206,12 @@ export default function InlineLoraPicker(props: Props) {
       props.onChange(props.value, w)
     } else {
       setInternalWeight(w)
+      if (isLive && pid !== null && vid !== null && picked.size > 0) {
+        const picks: PickedLora[] = Array.from(picked).map((path) => ({
+          path, projectId: pid, versionId: vid,
+        }))
+        ;(props as MultiModeProps).onPick(picks, w)
+      }
     }
   }
 
@@ -366,8 +394,8 @@ export default function InlineLoraPicker(props: Props) {
         </div>
       )}
 
-      {/* multi 模式：commit footer */}
-      {!isSingle && picked.size > 0 && (
+      {/* multi 模式：commit footer（live 模式下不渲染，chip 即所见即所得） */}
+      {!isSingle && !isLive && picked.size > 0 && (
         <div className="flex items-center gap-2 justify-end">
           <span className="text-2xs text-fg-tertiary mr-auto">已选 {picked.size}</span>
           <button

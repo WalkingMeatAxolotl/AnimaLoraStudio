@@ -558,7 +558,7 @@ export default function SettingsPage() {
           <button
             onClick={save}
             disabled={!dirty || saving}
-            className="btn btn-primary btn-sm"
+            className={dirty ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
           >
             {saving ? t('common.saving') : t('common.save')}
           </button>
@@ -582,6 +582,10 @@ export default function SettingsPage() {
             type="text"
             value={draft.gelbooru.user_id}
             onChange={(e) => update('gelbooru', 'user_id', e.target.value)}
+            autoComplete="off"
+            data-lpignore="true"
+            data-1p-ignore
+            data-form-type="other"
             className={textInputClass}                                  />
         </SettingsField>
         <SettingsField label="api_key">
@@ -609,6 +613,10 @@ export default function SettingsPage() {
             value={draft.danbooru.username}
             onChange={(e) => update('danbooru', 'username', e.target.value)}
             placeholder={t('settings.danbooruUsernamePlaceholder')}
+            autoComplete="off"
+            data-lpignore="true"
+            data-1p-ignore
+            data-form-type="other"
             className={textInputClass}                                  />
         </SettingsField>
         <SettingsField label="api_key">
@@ -1178,6 +1186,10 @@ function SensitiveInput({ value, serverValue, onChange }: {
       value={masked ? '' : value}
       placeholder={serverValue === MASK ? t('settings.sensitiveSavedPlaceholder') : ''}
       onChange={(e) => onChange(e.target.value || MASK)}
+      autoComplete="new-password"
+      data-lpignore="true"
+      data-1p-ignore
+      data-form-type="other"
       className={textInputClass}                />
   )
 }

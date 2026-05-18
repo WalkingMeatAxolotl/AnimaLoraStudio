@@ -33,7 +33,12 @@ function AxisLoraCkptPicker({
   const [externalOpen, setExternalOpen] = useState(false)
 
   const commitPicks = (picks: { path: string; projectId: number | null; versionId: number | null }[]) => {
-    if (picks.length === 0) return
+    if (picks.length === 0) {
+      // live 模式下，picker 把所有 chip 反选 / 切换 pid/vid 都会送空集合过来 →
+      // 清掉 axis 绑定。loras[] 里之前那条 entry 不动（picker 可能复用它）。
+      onDraftChange({ ...draft, loraIndex: null, raw: '' })
+      return
+    }
     const pid = picks[0].projectId
     const vid = picks[0].versionId
     // 在 loras[] 里找已绑过这个 (pid, vid) 的槽
@@ -88,11 +93,12 @@ function AxisLoraCkptPicker({
       )}
       <InlineLoraPicker
         mode="multi"
+        live
         projectLoras={projectLoras}
         existingPaths={new Set()}
         showWeight={false}
         onPick={commitPicks}
-        onClose={() => { /* 多选 commit 后 picker 自动 close —— 但这里是常驻在 axis card 里，nothing to close */ }}
+        onClose={() => { /* 常驻在 axis card 里，nothing to close */ }}
         onPickExternal={() => setExternalOpen(true)}
       />
       {externalOpen && (

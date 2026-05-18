@@ -956,6 +956,10 @@ function SensitiveInput({ value, serverValue, onChange }: {
       value={masked ? '' : value}
       placeholder={serverValue === MASK ? t('llmWorkspace.secretSavedPlaceholder') : ''}
       onChange={(e) => onChange(e.target.value || MASK)}
+      autoComplete="new-password"
+      data-lpignore="true"
+      data-1p-ignore
+      data-form-type="other"
       style={inputStyle}
     />
   )

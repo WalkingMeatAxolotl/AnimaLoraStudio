@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link, useOutletContext } from 'react-router-dom'
+import { useOutletContext } from 'react-router-dom'
 import {
   api,
   type DownloadFile,
@@ -174,11 +174,6 @@ export default function DownloadPage() {
       idx={1}
       title={t('steps.download.title')}
       subtitle={t('steps.download.subtitle')}
-      actions={
-        <Link to="/tools/settings" className="btn btn-ghost btn-sm">
-          {t('nav.settings')}
-        </Link>
-      }
     >
     <div className="flex flex-col h-full gap-3 min-h-0">
 
