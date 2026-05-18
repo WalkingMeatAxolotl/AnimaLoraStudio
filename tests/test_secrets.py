@@ -79,6 +79,30 @@ def test_llm_tagger_defaults(secrets_file: Path) -> None:
     assert joy.output_format == "text"
     assert joy.temperature == pytest.approx(0.6)
     assert joy.max_tokens == 300
+    assert joy.concurrency == 1
+    assert joy.requests_per_second == pytest.approx(0.0)
+    assert joy.max_requests_per_minute == 0
+
+
+def test_llm_preset_normalizes_request_pool_settings(secrets_file: Path) -> None:
+    s = secrets.update(
+        {
+            "llm_tagger": {
+                "presets": [
+                    {
+                        "id": "style_json",
+                        "concurrency": 99,
+                        "requests_per_second": -5,
+                        "max_requests_per_minute": 9999,
+                    }
+                ]
+            }
+        }
+    )
+    style = next(p for p in s.llm_tagger.presets if p.id == "style_json")
+    assert style.concurrency == 8
+    assert style.requests_per_second == pytest.approx(0.0)
+    assert style.max_requests_per_minute == 3600
 
 
 def test_llm_preset_keeps_model_in_model_ids(secrets_file: Path) -> None:
@@ -298,6 +322,9 @@ def test_llm_tagger_legacy_schema_migration(secrets_file: Path) -> None:
     assert style.endpoint == "chat_completions"
     assert style.temperature == pytest.approx(0.3)
     assert style.max_tokens == 800
+    assert style.concurrency == 1
+    assert style.requests_per_second == pytest.approx(0.0)
+    assert style.max_requests_per_minute == 0
     # JoyCaption 卡片字段写到 joycaption preset
     joy = next(p for p in s.llm_tagger.presets if p.id == "joycaption")
     assert joy.base_url == "http://my-vllm:9000/v1"

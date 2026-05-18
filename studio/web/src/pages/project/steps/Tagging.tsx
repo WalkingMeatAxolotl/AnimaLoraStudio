@@ -57,6 +57,9 @@ type LLMTaggerForm = {
   max_tokens: number
   timeout: number
   max_retries: number
+  concurrency: number
+  requests_per_second: number
+  max_requests_per_minute: number
   max_side: number
   jpeg_quality: number
   max_image_mb: number
@@ -102,6 +105,9 @@ function fromLLMPreset(p: LLMPreset): LLMTaggerForm {
     max_tokens: p.max_tokens,
     timeout: p.timeout,
     max_retries: p.max_retries,
+    concurrency: p.concurrency,
+    requests_per_second: p.requests_per_second,
+    max_requests_per_minute: p.max_requests_per_minute,
     max_side: p.max_side,
     jpeg_quality: p.jpeg_quality,
     max_image_mb: p.max_image_mb,
@@ -233,6 +239,7 @@ export default function TaggingPage() {
     const fields: ReadonlyArray<Exclude<keyof LLMTaggerForm, 'preset_id'>> = [
       'base_url', 'model', 'endpoint', 'messages', 'output_format',
       'temperature', 'max_tokens', 'timeout', 'max_retries',
+      'concurrency', 'requests_per_second', 'max_requests_per_minute',
       'max_side', 'jpeg_quality', 'max_image_mb',
     ]
     for (const key of fields) {
@@ -708,6 +715,7 @@ function LLMTaggerPanel({
       <div className="flex items-center gap-3 flex-wrap">
         <LLMNumberInput label="temperature" value={form.temperature} base={activePreset.temperature} step={0.05} min={0} max={2} disabled={disabled} onChange={(v) => onChange({ ...form, temperature: v })} />
         <LLMNumberInput label="max_tokens" value={form.max_tokens} base={activePreset.max_tokens} step={1} min={64} max={4096} disabled={disabled} onChange={(v) => onChange({ ...form, max_tokens: Math.round(v) })} />
+        <LLMNumberInput label="concurrency" value={form.concurrency} base={activePreset.concurrency} step={1} min={1} max={8} disabled={disabled} onChange={(v) => onChange({ ...form, concurrency: Math.round(v) })} />
         <button type="button" onClick={() => setAdvOpen(!advOpen)} className="btn btn-ghost btn-sm text-xs text-fg-tertiary">
           {advOpen ? '▾' : '▸'} {t('tag.advanced')}
         </button>
@@ -731,6 +739,8 @@ function LLMTaggerPanel({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-1">
             <LLMLabeledNumber label="timeout" value={form.timeout} base={activePreset.timeout} min={5} max={600} disabled={disabled} onChange={(v) => onChange({ ...form, timeout: Math.round(v) })} />
             <LLMLabeledNumber label="max_retries" value={form.max_retries} base={activePreset.max_retries} min={1} max={10} disabled={disabled} onChange={(v) => onChange({ ...form, max_retries: Math.round(v) })} />
+            <LLMLabeledNumber label="requests_per_second" value={form.requests_per_second} base={activePreset.requests_per_second} min={0} max={60} step={0.1} disabled={disabled} onChange={(v) => onChange({ ...form, requests_per_second: v })} />
+            <LLMLabeledNumber label="max_requests_per_minute" value={form.max_requests_per_minute} base={activePreset.max_requests_per_minute} min={0} max={3600} disabled={disabled} onChange={(v) => onChange({ ...form, max_requests_per_minute: Math.round(v) })} />
             <LLMLabeledNumber label="max_side" value={form.max_side} base={activePreset.max_side} min={64} max={4096} disabled={disabled} onChange={(v) => onChange({ ...form, max_side: Math.round(v) })} />
             <LLMLabeledNumber label="jpeg_quality" value={form.jpeg_quality} base={activePreset.jpeg_quality} min={1} max={100} disabled={disabled} onChange={(v) => onChange({ ...form, jpeg_quality: Math.round(v) })} />
             <LLMLabeledNumber label="max_image_mb" value={form.max_image_mb} base={activePreset.max_image_mb} min={0.1} max={25} step={0.1} disabled={disabled} onChange={(v) => onChange({ ...form, max_image_mb: v })} />

@@ -176,6 +176,10 @@ class LLMPresetConfig(BaseModel):
     # 重试 / 超时
     timeout: int = 60
     max_retries: int = 3
+    # 请求池 / 节流
+    concurrency: int = 1
+    requests_per_second: float = 0.0
+    max_requests_per_minute: int = 0
 
     @model_validator(mode="before")
     @classmethod
@@ -205,6 +209,15 @@ class LLMPresetConfig(BaseModel):
         self.max_tokens = max(64, int(self.max_tokens or 700))
         self.timeout = max(5, int(self.timeout or 60))
         self.max_retries = max(1, int(self.max_retries or 3))
+        self.concurrency = max(1, min(8, int(self.concurrency or 1)))
+        self.requests_per_second = max(
+            0.0,
+            min(60.0, float(self.requests_per_second or 0.0)),
+        )
+        self.max_requests_per_minute = max(
+            0,
+            min(3600, int(self.max_requests_per_minute or 0)),
+        )
         self.max_side = max(64, int(self.max_side or 1280))
         self.jpeg_quality = max(1, min(100, int(self.jpeg_quality or 85)))
         self.max_image_mb = max(0.1, float(self.max_image_mb or 5.0))
@@ -563,6 +576,9 @@ def _migrate_legacy_schema(raw: dict[str, Any]) -> dict[str, Any]:
     old_max_tokens = _get("max_tokens", 700)
     old_timeout = _get("timeout", 60)
     old_max_retries = _get("max_retries", 3)
+    old_concurrency = _get("concurrency", 1)
+    old_requests_per_second = _get("requests_per_second", 0.0)
+    old_max_requests_per_minute = _get("max_requests_per_minute", 0)
     old_max_side = _get("max_side", 1280)
     old_jpeg_quality = _get("jpeg_quality", 85)
     old_max_image_mb = _get("max_image_mb", 5.0)
@@ -588,6 +604,9 @@ def _migrate_legacy_schema(raw: dict[str, Any]) -> dict[str, Any]:
             "max_image_mb": old_max_image_mb,
             "timeout": old_timeout,
             "max_retries": old_max_retries,
+            "concurrency": old_concurrency,
+            "requests_per_second": old_requests_per_second,
+            "max_requests_per_minute": old_max_requests_per_minute,
         }
 
     new_presets: list[dict[str, Any]] = []
@@ -662,6 +681,9 @@ def _migrate_legacy_schema(raw: dict[str, Any]) -> dict[str, Any]:
             "max_image_mb": 5.0,
             "timeout": 60,
             "max_retries": 3,
+            "concurrency": 1,
+            "requests_per_second": 0.0,
+            "max_requests_per_minute": 0,
             "id": "user_joycaption",
             "label": "JoyCaption（自定义 prompt）",
             "builtin": False,

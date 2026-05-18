@@ -7,16 +7,19 @@ caption files or rendered TXT captions.
 from __future__ import annotations
 
 import base64
+import concurrent.futures
 import io
 import json
 import logging
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Any, Iterator, Optional
 from urllib.parse import urlparse
 
 import requests
+from requests.adapters import HTTPAdapter
 from PIL import Image, ImageOps
 
 from .. import secrets
@@ -56,6 +59,49 @@ short English words in the summary and keep every item as a complete phrase.
 """
 
 
+class _RequestRateLimiter:
+    def __init__(
+        self,
+        requests_per_second: float,
+        *,
+        max_requests_per_minute: int = 0,
+    ) -> None:
+        self._interval = 0.0
+        if requests_per_second > 0:
+            self._interval = 1.0 / requests_per_second
+        self._max_per_minute = max(0, int(max_requests_per_minute or 0))
+        self._window_seconds = 60.0
+        self._lock = threading.Lock()
+        self._next_at = 0.0
+        self._request_times: list[float] = []
+
+    def wait(self) -> None:
+        if self._interval <= 0 and self._max_per_minute <= 0:
+            return
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                sleep_for = max(0.0, self._next_at - now)
+                if self._max_per_minute > 0:
+                    cutoff = now - self._window_seconds
+                    self._request_times = [
+                        ts for ts in self._request_times if ts > cutoff
+                    ]
+                    if len(self._request_times) >= self._max_per_minute:
+                        sleep_for = max(
+                            sleep_for,
+                            self._request_times[0] + self._window_seconds - now,
+                        )
+                if sleep_for <= 0:
+                    base = max(now, self._next_at)
+                    if self._interval > 0:
+                        self._next_at = base + self._interval
+                    if self._max_per_minute > 0:
+                        self._request_times.append(now)
+                    return
+            time.sleep(min(sleep_for, 1.0))
+
+
 def _openai_compatible_endpoint(base_url: str, *, kind: str) -> str:
     base = str(base_url or "").strip().rstrip("/")
     if not base:
@@ -72,6 +118,171 @@ def _openai_compatible_endpoint(base_url: str, *, kind: str) -> str:
     if path:
         return f"{base}/v1/{kind}"
     return f"{base}/v1/{kind}"
+
+
+def _response_text(resp: requests.Response) -> str:
+    text = getattr(resp, "text", "")
+    return text if isinstance(text, str) else ""
+
+
+def _response_content_type(resp: requests.Response) -> str:
+    headers = getattr(resp, "headers", {}) or {}
+    getter = getattr(headers, "get", None)
+    if not callable(getter):
+        return ""
+    value = getter("content-type")
+    if not isinstance(value, str):
+        value = getter("Content-Type")
+    return value.lower() if isinstance(value, str) else ""
+
+
+def _is_sse_response(resp: requests.Response, raw: str) -> bool:
+    return "text/event-stream" in _response_content_type(resp) or raw.lstrip().startswith("data:")
+
+
+def _iter_sse_payloads(raw: str) -> Iterator[dict[str, Any]]:
+    data_lines: list[str] = []
+
+    def flush() -> Iterator[dict[str, Any]]:
+        if not data_lines:
+            return
+        data = "\n".join(data_lines).strip()
+        data_lines.clear()
+        if not data or data == "[DONE]":
+            return
+        try:
+            payload = json.loads(data)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"LLM SSE 返回不是合法 JSON: {data[:200]}") from exc
+        if isinstance(payload, dict):
+            yield payload
+
+    for line in raw.splitlines():
+        line = line.rstrip("\r")
+        if not line:
+            yield from flush()
+            continue
+        if line.startswith(":"):
+            continue
+        if line.startswith("data:"):
+            data = line[5:]
+            if data.startswith(" "):
+                data = data[1:]
+            data_lines.append(data)
+    yield from flush()
+
+
+def _format_llm_error(error: Any) -> str:
+    if isinstance(error, dict):
+        parts = [
+            error.get("type"),
+            error.get("code") or error.get("status") or error.get("status_code"),
+            error.get("message") or error.get("detail") or error.get("error"),
+        ]
+        text = " ".join(str(part) for part in parts if part not in (None, ""))
+        return text or json.dumps(error, ensure_ascii=False)
+    return str(error or "").strip()
+
+
+def _extract_openai_error(payload: dict[str, Any]) -> str:
+    error = payload.get("error")
+    if error:
+        return _format_llm_error(error)
+    response = payload.get("response")
+    if isinstance(response, dict):
+        nested = _extract_openai_error(response)
+        if nested:
+            return nested
+    last_error = payload.get("last_error")
+    if last_error:
+        return _format_llm_error(last_error)
+    event_type = str(payload.get("type") or "")
+    if event_type == "error" or event_type.endswith(".error"):
+        return _format_llm_error(
+            payload.get("message") or payload.get("detail") or payload
+        )
+    if str(payload.get("status") or "").lower() in {"failed", "error"}:
+        return _format_llm_error(payload.get("message") or payload)
+    return ""
+
+
+def _content_to_text(content: Any) -> str:
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                if item.get("type") in {"text", "output_text"}:
+                    parts.append(str(item.get("text") or ""))
+            elif isinstance(item, str):
+                parts.append(item)
+        return "".join(parts)
+    return str(content or "")
+
+
+def _extract_openai_stream_delta(payload: dict[str, Any]) -> str:
+    event_type = str(payload.get("type") or "")
+    if event_type in {"response.output_text.delta", "response.refusal.delta"}:
+        return str(payload.get("delta") or "")
+    choices = payload.get("choices") or []
+    if not isinstance(choices, list) or not choices:
+        return ""
+    choice = choices[0] if isinstance(choices[0], dict) else {}
+    delta = choice.get("delta") or {}
+    if isinstance(delta, dict):
+        return _content_to_text(delta.get("content") or delta.get("text"))
+    return ""
+
+
+def _extract_openai_final_text(payload: dict[str, Any], *, endpoint: str) -> str:
+    response = payload.get("response")
+    if isinstance(response, dict):
+        try:
+            return LLMTagger._extract_responses_text(response)
+        except Exception:  # noqa: BLE001
+            return ""
+    try:
+        if endpoint == "responses" or "output_text" in payload or "output" in payload:
+            return LLMTagger._extract_responses_text(payload)
+        if "choices" in payload:
+            return LLMTagger._extract_chat_text(payload)
+    except Exception:  # noqa: BLE001
+        return ""
+    return ""
+
+
+def _extract_sse_response_text(raw: str, *, endpoint: str) -> str:
+    parts: list[str] = []
+    final_text = ""
+    seen_payload = False
+    for payload in _iter_sse_payloads(raw):
+        seen_payload = True
+        error = _extract_openai_error(payload)
+        if error:
+            raise RuntimeError(f"LLM SSE error: {error}")
+        delta = _extract_openai_stream_delta(payload)
+        if delta:
+            parts.append(delta)
+        final = _extract_openai_final_text(payload, endpoint=endpoint)
+        if final:
+            final_text = final
+    if not seen_payload:
+        raise RuntimeError("LLM SSE 返回为空")
+    return ("".join(parts) if parts else final_text).strip()
+
+
+def _extract_llm_response_text(resp: requests.Response, *, endpoint: str) -> str:
+    raw = _response_text(resp)
+    if _is_sse_response(resp, raw):
+        return _extract_sse_response_text(raw, endpoint=endpoint)
+    payload = resp.json()
+    error = _extract_openai_error(payload)
+    if error:
+        raise RuntimeError(f"LLM error: {error}")
+    return (
+        LLMTagger._extract_responses_text(payload)
+        if endpoint == "responses"
+        else LLMTagger._extract_chat_text(payload)
+    )
 
 
 def fetch_openai_compatible_models(
@@ -129,12 +340,14 @@ def test_openai_compatible_connection(
             "input": _CONNECTIVITY_USER_PROMPT,
             "temperature": temperature,
             "max_output_tokens": token_budget,
+            "stream": False,
         }
     else:
         body = {
             "model": model,
             "temperature": temperature,
             "max_tokens": token_budget,
+            "stream": False,
             "messages": [
                 {"role": "system", "content": _CONNECTIVITY_SYSTEM_PROMPT},
                 {"role": "user", "content": _CONNECTIVITY_USER_PROMPT},
@@ -166,17 +379,12 @@ def test_openai_compatible_connection(
         )
         result["elapsed_ms"] = int((time.monotonic() - started) * 1000)
         result["status_code"] = resp.status_code
-        raw_preview = (resp.text or "")[:1000]
+        raw_preview = _response_text(resp)[:1000]
         result["response_preview"] = raw_preview
         if resp.status_code >= 400:
             result["error"] = f"HTTP {resp.status_code}: {raw_preview[:500]}"
             return result
-        payload = resp.json()
-        text = (
-            LLMTagger._extract_responses_text(payload)
-            if endpoint == "responses"
-            else LLMTagger._extract_chat_text(payload)
-        )
+        text = _extract_llm_response_text(resp, endpoint=endpoint)
         result["response_preview"] = text[:1000]
         result["ok"] = bool(text.strip())
         if not result["ok"]:
@@ -208,6 +416,7 @@ class LLMTagger:
             for k, v in (overrides or {}).items()
             if v is not None and k != "api_key"
         }
+        self._external_session = session is not None
         self._session = session or requests.Session()
 
     def _cfg(self) -> "secrets.LLMPresetConfig":
@@ -247,33 +456,81 @@ class LLMTagger:
     ) -> Iterator[TagResult]:
         cfg = self._cfg()
         total = len(image_paths)
-        for i, p in enumerate(image_paths):
-            try:
-                on_progress(i, total)
-                data_url = self._image_to_data_url(
-                    p,
-                    max_side=cfg.max_side,
-                    quality=cfg.jpeg_quality,
-                    max_image_mb=cfg.max_image_mb,
-                )
-                content = self._call_with_retry(cfg, data_url, p)
-                if cfg.output_format == "text":
-                    text = content.strip()
-                    if not text:
-                        raise RuntimeError("LLM 返回空内容")
-                    yield {"image": p, "tags": [text], "caption": text}
-                else:
-                    parsed = self._parse_json_text(content)
-                    caption_json = self._normalize_llm_payload(parsed)
-                    yield {
-                        "image": p,
-                        "tags": caption_json_to_tags(caption_json),
-                        "caption": caption_json_to_text(caption_json),
-                        "caption_json": caption_json,
-                    }
-            except Exception as exc:  # noqa: BLE001
-                yield {"image": p, "tags": [], "error": str(exc)}
-            on_progress(i + 1, total)
+        on_progress(0, total)
+        workers = min(max(1, int(cfg.concurrency or 1)), max(1, total))
+        if workers <= 1 or total <= 1:
+            done = 0
+            rate_limiter = _RequestRateLimiter(cfg.requests_per_second)
+            for p in image_paths:
+                yield self._tag_one(cfg, p, rate_limiter=rate_limiter)
+                done += 1
+                on_progress(done, total)
+            return
+
+        self._ensure_session_pool(workers)
+        rate_limiter = _RequestRateLimiter(
+            cfg.requests_per_second,
+            max_requests_per_minute=cfg.max_requests_per_minute,
+        )
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(self._tag_one, cfg, p, rate_limiter=rate_limiter): p
+                for p in image_paths
+            }
+            done = 0
+            for future in concurrent.futures.as_completed(futures):
+                p = futures[future]
+                try:
+                    result = future.result()
+                except Exception as exc:  # noqa: BLE001
+                    result = {"image": p, "tags": [], "error": str(exc)}
+                yield result
+                done += 1
+                on_progress(done, total)
+
+    def _tag_one(
+        self,
+        cfg: "secrets.LLMPresetConfig",
+        image_path: Path,
+        *,
+        rate_limiter: _RequestRateLimiter,
+    ) -> TagResult:
+        try:
+            data_url = self._image_to_data_url(
+                image_path,
+                max_side=cfg.max_side,
+                quality=cfg.jpeg_quality,
+                max_image_mb=cfg.max_image_mb,
+            )
+            content = self._call_with_retry(
+                cfg,
+                data_url,
+                image_path,
+                rate_limiter=rate_limiter,
+            )
+            if cfg.output_format == "text":
+                text = content.strip()
+                if not text:
+                    raise RuntimeError("LLM 返回空内容")
+                return {"image": image_path, "tags": [text], "caption": text}
+            parsed = self._parse_json_text(content)
+            caption_json = self._normalize_llm_payload(parsed)
+            return {
+                "image": image_path,
+                "tags": caption_json_to_tags(caption_json),
+                "caption": caption_json_to_text(caption_json),
+                "caption_json": caption_json,
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {"image": image_path, "tags": [], "error": str(exc)}
+
+    def _ensure_session_pool(self, workers: int) -> None:
+        if self._external_session:
+            return
+        pool_size = max(1, int(workers))
+        adapter = HTTPAdapter(pool_connections=pool_size, pool_maxsize=pool_size)
+        self._session.mount("http://", adapter)
+        self._session.mount("https://", adapter)
 
     def _headers(self, cfg: "secrets.LLMPresetConfig") -> dict[str, str]:
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
@@ -286,6 +543,8 @@ class LLMTagger:
         cfg: "secrets.LLMPresetConfig",
         data_url: str,
         image_path: Path,
+        *,
+        rate_limiter: _RequestRateLimiter | None = None,
     ) -> str:
         last_exc: Optional[Exception] = None
         for attempt in range(1, cfg.max_retries + 1):
@@ -298,6 +557,8 @@ class LLMTagger:
                         cfg.base_url, kind="chat/completions"
                     )
                     body = self._chat_payload(cfg, data_url, image_path)
+                if rate_limiter is not None:
+                    rate_limiter.wait()
                 started = time.monotonic()
                 logger.info(
                     "LLM tagger POST %s model=%s endpoint=%s image=%s timeout=%ss",
@@ -318,12 +579,7 @@ class LLMTagger:
                     raise RuntimeError(
                         f"HTTP {resp.status_code} after {elapsed_ms}ms at {endpoint}: {resp.text[:300]}"
                     )
-                payload = resp.json()
-                content = (
-                    self._extract_responses_text(payload)
-                    if cfg.endpoint == "responses"
-                    else self._extract_chat_text(payload)
-                )
+                content = _extract_llm_response_text(resp, endpoint=cfg.endpoint)
                 logger.info(
                     "LLM tagger OK %s model=%s image=%s elapsed=%sms",
                     endpoint,
@@ -362,6 +618,7 @@ class LLMTagger:
             "model": cfg.model,
             "temperature": cfg.temperature,
             "max_tokens": cfg.max_tokens,
+            "stream": False,
             "messages": messages,
         }
 
@@ -402,6 +659,7 @@ class LLMTagger:
             "instructions": "\n\n".join(system_texts),
             "temperature": cfg.temperature,
             "max_output_tokens": cfg.max_tokens,
+            "stream": False,
             "input": [{"role": "user", "content": user_content}],
         }
 
