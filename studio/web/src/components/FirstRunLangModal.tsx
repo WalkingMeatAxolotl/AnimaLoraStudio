@@ -45,11 +45,11 @@ export function FirstRunLangModal() {
       aria-modal="true"
       aria-labelledby="first-run-lang-title"
       // 不可绕过：不监听 Esc，不监听点击遮罩。这是 onboarding 不是 Dialog。
-      // 用 bg-canvas 全不透明遮罩，给「splash」感而非「弹窗叠在内容上」。
-      className="fixed inset-0 z-50 flex items-center justify-center bg-canvas"
+      // 暗色半透明幕布 + 高斯模糊，把底层 App 推到背景；window 仍是普通尺寸卡片。
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-md"
       data-testid="first-run-lang-modal"
     >
-      <div className="w-[90%] max-w-[520px] flex flex-col gap-6 p-8">
+      <div className="w-[90%] max-w-[480px] flex flex-col gap-6 p-8 bg-elevated border border-dim rounded-lg shadow-xl">
         <h1
           id="first-run-lang-title"
           className="m-0 text-center text-2xl font-semibold text-fg-primary"
