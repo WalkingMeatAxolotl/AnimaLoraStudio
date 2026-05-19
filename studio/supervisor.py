@@ -71,6 +71,19 @@ class _Slot:
     tailer: Optional[LogTailer] = None
     state_poller: Optional[MonitorStatePoller] = None
     cancel_pending: bool = False
+    # ADR 0006 PR-2 pause/resume backend ----------------------------------
+    pause_pending: bool = False
+    # `__EVENT__:pause_state` payload — handle_interrupt 写好 .pt + snapshot 后
+    # 子进程通过 stdout emit；_on_line 抓到后填这三个字段，_finish_slot 据此
+    # 把 task 标 paused。pause_pending=True 但缺这几个字段 → 子进程退出前
+    # 没来得及 emit → 视为 cancel 兜底（ADR §4.3 modal "强制取消保存进度"）。
+    pause_state_path: Optional[str] = None
+    pause_config_path: Optional[str] = None
+    pause_step: Optional[int] = None
+    # ADR §8.1 is_pausable 信号 — resume phase emit `train_loop_started` 后才
+    # 允许暂停。UI 端 SSE 用这个解锁暂停按钮，API 端 defense-in-depth 拒绝
+    # 过早 pause 请求。
+    train_loop_started: bool = False
 
     @property
     def busy(self) -> bool:
@@ -84,6 +97,11 @@ class _Slot:
         self.tailer = None
         self.state_poller = None
         self.cancel_pending = False
+        self.pause_pending = False
+        self.pause_state_path = None
+        self.pause_config_path = None
+        self.pause_step = None
+        self.train_loop_started = False
 
 EventCallback = Callable[[dict[str, Any]], None]
 CmdBuilder = Callable[[dict[str, Any], Path], list[str]]
@@ -268,6 +286,9 @@ class Supervisor:
     def cancel(self, task_id: int) -> bool:
         """取消 task：pending → status=canceled；running → 异步发信号立即返回。
 
+        ADR 0006 PR-2：paused task 也可被取消（"彻底放弃这个 task"），状态从
+        paused 直接改 canceled，并清理对应的 pause 文件对（已不需要了）。
+
         异步路径关键：**不阻塞 web 请求线程**。supervisor 主循环会自然 poll
         proc.poll() 拿到退出码并走 `_finish_slot` 流程，把 status 写为
         canceled。后台 grace timer 在 30s 后还没退就强杀整棵进程树。
@@ -279,6 +300,29 @@ class Supervisor:
             if task["status"] == "pending":
                 db.update_task(
                     conn, task_id, status="canceled", finished_at=time.time()
+                )
+                self._on_event(
+                    {"type": "task_state_changed", "task_id": task_id, "status": "canceled"}
+                )
+                return True
+            if task["status"] == "paused":
+                # 进程已退出，无需发信号 — 直接改 db 状态 + 清 pause 文件对
+                # （ADR §5.5: 离开 paused 状态时一律删 pause 文件）。
+                for col in ("paused_state_path", "paused_config_path"):
+                    p = task.get(col)
+                    if p:
+                        try:
+                            Path(p).unlink(missing_ok=True)
+                        except Exception:
+                            logger.exception("failed to remove pause file %s", p)
+                db.update_task(
+                    conn, task_id,
+                    status="canceled",
+                    finished_at=time.time(),
+                    paused_state_path=None,
+                    paused_config_path=None,
+                    paused_step=None,
+                    paused_at=None,
                 )
                 self._on_event(
                     {"type": "task_state_changed", "task_id": task_id, "status": "canceled"}
@@ -300,6 +344,37 @@ class Supervisor:
                 logger.exception("failed to stop daemon for cancel")
             return True
         return False
+
+    def pause(self, task_id: int) -> tuple[bool, str]:
+        """暂停 running task：发软信号让 handle_interrupt 保 state 后退出。
+
+        返回 (success, reason_if_failed)。
+
+        ADR §8.1 defense-in-depth：API 端调本方法时，UI 应已用 SSE
+        `is_pausable` 字段隐藏暂停按钮；本方法服务端再校验 train_loop_started
+        信号，未就绪 / 状态非 running / task 不存在 → 拒绝。
+
+        非阻塞：调 `_signal_pause_async` 立刻返回。子进程 emit 事件 →
+        `_on_task_log` 更新 slot → 子进程退出 → `_finish_slot` 标 paused。
+        UI 端 modal 订阅 SSE 看进度（ADR §4.3）。
+        """
+        with db.connection_for(self._db_path) as conn:
+            task = db.get_task(conn, task_id)
+        if not task:
+            return False, "task not found"
+        if task["status"] != "running":
+            return False, f"task status is {task['status']!r}, not running"
+        slot = self._find_slot(kind="task", id=task_id)
+        if slot is None:
+            return False, "task not on a slot (generate-on-daemon not supported)"
+        if not slot.train_loop_started:
+            return False, "train loop not started yet, retry after a few seconds"
+        if slot.pause_pending:
+            return False, "pause already pending"
+        if slot.cancel_pending:
+            return False, "task is being canceled"
+        self._signal_pause_async(slot)
+        return True, ""
 
     def cancel_job(self, job_id: int) -> bool:
         """取消 project_job：pending → canceled；running → 异步发信号立即返回。"""
@@ -355,6 +430,9 @@ class Supervisor:
             self._stop.wait(self._poll)
 
     def _reconcile_orphans(self) -> None:
+        # ADR 0006 PR-2 兼容性 note：此处 list_tasks(status="running") 精确按
+        # status 过滤，paused task（status='paused'）天然不进 this loop —
+        # 跨 supervisor 重启的 paused task 保持状态不变（ADR §8.4）。
         with db.connection_for(self._db_path) as conn:
             for t in db.list_tasks(conn, status="running"):
                 logger.info("orphan running task %d → failed", t["id"])
@@ -416,7 +494,12 @@ class Supervisor:
         commit 12：派活前先要求 daemon 让位（unload 释放 VRAM），除非
         secrets.queue.allow_gpu_during_train=true。daemon 在跑 generate
         时不强中断，等下次 tick 它跑完再卸载。
+
+        ADR 0006 PR-2：queue_held=True 时跳过本次派发（ADR §3.2）。已 running
+        的 task 不受影响（继续跑到自然结束/暂停/取消）。
         """
+        if self._queue_held():
+            return
         task = self._next_pending_task_in(("train", "reg_ai"))
         if task is None:
             return
@@ -425,7 +508,13 @@ class Supervisor:
         self._spawn_task(slot, task)
 
     def _dispatch_generate(self) -> None:
-        """commit 9：把 generate pending task 提交给 daemon，daemon idle 时执行。"""
+        """commit 9：把 generate pending task 提交给 daemon，daemon idle 时执行。
+
+        ADR 0006 PR-2：queue_held=True 时跳过（hold 语义全队列覆盖，不区分
+        task type）。
+        """
+        if self._queue_held():
+            return
         with self._daemon_lock:
             if self._daemon_active_task_id is not None:
                 return
@@ -433,6 +522,15 @@ class Supervisor:
         if task is None:
             return
         self._submit_to_daemon(task)
+
+    def _queue_held(self) -> bool:
+        """ADR §3.2 queue hold 开关，跨 supervisor 重启保留（db kv）。"""
+        try:
+            with db.connection_for(self._db_path) as conn:
+                return db.get_queue_held(conn)
+        except Exception:
+            logger.exception("failed to read queue_held")
+            return False  # 读失败默认放行，安全降级
 
     def _maybe_yield_daemon(self) -> bool:
         """commit 12：daemon 占着 GPU 且不许并行 → 触发 unload，调用方应跳过这次派发。
@@ -466,7 +564,12 @@ class Supervisor:
             * 训练正在跑且未开 `allow_gpu_during_train` → 跳过
             * daemon 占着 VRAM 且未开 `allow_gpu_during_train` → 触发 daemon
               让位（_maybe_yield_daemon），跳过等下次 tick
+
+        ADR 0006 PR-2：queue_held=True 时跳过本次派发，包含 download。语义上
+        hold 是"全队列暂停新派活"，不区分 GPU vs IO。
         """
+        if self._queue_held():
+            return
         train_busy = self._train_busy()
         allow_gpu = self._allow_gpu_during_train()
         with db.connection_for(self._db_path) as conn:
@@ -554,6 +657,36 @@ class Supervisor:
         tid = task["id"]
 
         def _on_task_log(line: str) -> None:
+            # ADR 0006 PR-2：训练 worker 通过 __EVENT__: 协议跟 supervisor 通信
+            # （pause_state / train_loop_started / resume_state_loaded）。跟
+            # jobs 的 _on_line 路径对齐 — 之前 task 这条 path 不识别 event marker，
+            # 现在补上。
+            if line.startswith(_EVENT_MARKER):
+                try:
+                    rest = line[len(_EVENT_MARKER):]
+                    evt_type, payload_str = rest.split(":", 1)
+                    import json as _json
+                    payload = _json.loads(payload_str) if payload_str else {}
+                except Exception:
+                    logger.exception("malformed event marker: %r", line[:200])
+                    return  # 不当 log 推
+                # 状态机镜像（ADR §8.1 / §`_on_line`）
+                if evt_type == "pause_state":
+                    slot.pause_state_path = str(payload.get("state_path") or "")
+                    slot.pause_config_path = str(payload.get("config_path") or "")
+                    slot.pause_step = payload.get("step")
+                elif evt_type == "train_loop_started":
+                    slot.train_loop_started = True
+                elif evt_type == "resume_state_loaded":
+                    # PR-3 cmd_builder 接入后用此事件清理上次 pause 文件对。
+                    # PR-2 仅记录，不做副作用。
+                    pass
+                self._on_event({
+                    "type": evt_type,
+                    "task_id": tid,
+                    **payload,
+                })
+                return
             self._on_event({
                 "type": "task_log_appended",
                 "task_id": tid,
@@ -978,7 +1111,14 @@ class Supervisor:
             except Exception:
                 pass
 
-        if slot.cancel_pending:
+        # ADR 0006 PR-2 三元分流（原来是二元 canceled vs done/failed）。
+        # paused 优先级最高 — pause_pending=True 且子进程 emit 了 pause_state
+        # （state_path / config_path 都到位）= 真正成功暂停。
+        # 缺 pause_state_path = 子进程退出前没来得及 emit（IO 慢 / 异常 /
+        # 强 kill）→ 降级 canceled（ADR §4.3 modal "强制取消保存进度" 兜底）。
+        if slot.pause_pending and slot.pause_state_path:
+            status = "paused"
+        elif slot.cancel_pending:
             status = "canceled"
         elif rc == 0:
             status = "done"
@@ -995,6 +1135,11 @@ class Supervisor:
                 }
                 if status == "failed":
                     fields["error_msg"] = f"exit code {rc}"
+                elif status == "paused":
+                    fields["paused_state_path"] = slot.pause_state_path
+                    fields["paused_config_path"] = slot.pause_config_path
+                    fields["paused_step"] = slot.pause_step
+                    fields["paused_at"] = time.time()
                 db.update_task(conn, cid, **fields)
                 # PP6.3：训练成功时回填 version.output_lora_path + 推 stage=done
                 if status == "done":
@@ -1088,13 +1233,53 @@ class Supervisor:
 
     @staticmethod
     def _send_terminate_signal(proc: subprocess.Popen) -> None:
+        """Cancel 软终止信号。
+
+        ADR 0006 PR-2：Windows 不再发 CTRL_BREAK_EVENT — 跟 pause 信号撞
+        （pause 占用 CTRL_BREAK_EVENT），cancel 的语义本来就是硬中断，
+        直接走 taskkill /T /F。POSIX 没这个冲突，继续 SIGTERM。
+
+        `_signal_terminate_async` 后续仍有 grace timer，Windows 上 proc 早就
+        被 taskkill 杀掉了、grace 第一次 poll 就 return；不浪费时间。
+        """
         try:
             if os.name == "nt":
-                proc.send_signal(signal.CTRL_BREAK_EVENT)
+                _kill_process_tree(proc.pid)
             else:
                 proc.terminate()
         except Exception:
             logger.exception("send terminate signal failed")
+
+    @staticmethod
+    def _send_pause_signal(proc: subprocess.Popen) -> None:
+        """Pause 软信号 — 子进程 handle_interrupt 接住保 state。
+
+        Windows：`CTRL_BREAK_EVENT` 送达 CREATE_NEW_PROCESS_GROUP 子进程组，
+        Python 端映射成 SIGBREAK（sig=21），由 resume phase 注册的 handler 捕获。
+        POSIX：`SIGINT` — 跟 SIGTERM 分流，cancel 走 SIGTERM 不撞。
+
+        Spike 报告 docs/design/queue-pause-spike-report.md 验证过链路通。
+        """
+        try:
+            if os.name == "nt":
+                proc.send_signal(signal.CTRL_BREAK_EVENT)  # type: ignore[attr-defined]
+            else:
+                proc.send_signal(signal.SIGINT)
+        except Exception:
+            logger.exception("send pause signal failed")
+
+    def _signal_pause_async(self, slot: _Slot) -> None:
+        """非阻塞：发暂停信号，不带 grace 强杀。
+
+        跟 `_signal_terminate_async` 的关键差别：暂停**不超时降级**。
+        ADR §4.3：30s 阈值由 UI 端 modal 决定下一步（再等 30s / 强制取消
+        保存进度 / 终止任务），supervisor 不主动 kill 进程 — kill 决策由
+        cancel API（用户从 modal 上选择后再调）下达。
+        """
+        if not slot.proc:
+            return
+        slot.pause_pending = True
+        self._send_pause_signal(slot.proc)
 
 
 def _kill_process_tree(pid: int) -> None:

@@ -33,7 +33,8 @@ CREATE INDEX IF NOT EXISTS idx_tasks_queue
     ON tasks(status, priority DESC, created_at ASC);
 """
 
-VALID_STATUSES = {"pending", "running", "done", "failed", "canceled"}
+VALID_STATUSES = {"pending", "running", "done", "failed", "canceled", "paused"}
+# `paused` 不进 terminal —— task 已暂停但可被 resume，不算结束态。
 TERMINAL_STATUSES = {"done", "failed", "canceled"}
 
 
@@ -157,4 +158,31 @@ def reorder(
             "UPDATE tasks SET priority = ? WHERE id = ? AND status = 'pending'",
             (base - i, tid),
         )
+    conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# queue_settings —— kv 表，跨重启保留。ADR 0006 PR-2 引入。
+# ---------------------------------------------------------------------------
+
+_QUEUE_HELD_KEY = "queue.held"
+
+
+def get_queue_held(conn: sqlite3.Connection) -> bool:
+    """队列挂起开关（ADR §3.2）。默认 False（未挂起）。"""
+    row = conn.execute(
+        "SELECT value FROM queue_settings WHERE key = ?", (_QUEUE_HELD_KEY,)
+    ).fetchone()
+    if row is None:
+        return False
+    return str(row[0]).lower() == "true"
+
+
+def set_queue_held(conn: sqlite3.Connection, held: bool) -> None:
+    """写挂起开关。值序列化成字面量 "true" / "false"。"""
+    conn.execute(
+        "INSERT INTO queue_settings(key, value) VALUES(?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (_QUEUE_HELD_KEY, "true" if held else "false"),
+    )
     conn.commit()

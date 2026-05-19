@@ -124,12 +124,28 @@ class TrainingContext:
         return prompt
 
     def handle_interrupt(self, sig, frame) -> None:
-        """Ctrl+C 信号处理：保存 state + LoRA + finish wandb，然后退出。
+        """Pause / Ctrl+C 信号处理：保存 state + config snapshot + LoRA + emit event。
 
-        重复触发（已 interrupted 状态再来一次 Ctrl+C）= 强退。
+        信号来源：
+          - CLI Ctrl+C：POSIX SIGINT / Windows SIGBREAK（由 resume phase 注册）
+          - Supervisor pause：Windows CTRL_BREAK_EVENT / POSIX SIGINT（ADR §`_send_pause_signal`）
+
+        两条入口共用本 handler，触发同一条保 state 链路：
+          1. 写 pause_step_<N>.pt（state_dir 由 PR-1 决定 per-task 子目录）
+          2. 写 pause_step_<N>.config.json（ADR §5.7 config snapshot）
+          3. emit __EVENT__:pause_state（supervisor 识别 → 标 paused）
+          4. sys.exit(0)
+
+        重复触发（已 interrupted 状态再来一次）= 强退。
         """
         # 延迟 import 避免循环依赖（state.py / observability.py 间接 import 本模块）
         from training.state import save_training_state
+        from training.snapshot import (
+            build_pause_config_path,
+            build_pause_state_path,
+            emit_event,
+            write_config_snapshot,
+        )
         from train_monitor import get_state
         from utils.optimizer_utils import optimizer_eval_mode
 
@@ -137,14 +153,20 @@ class TrainingContext:
             self.emit("强制退出...")
             sys.exit(1)
         self.interrupted = True
-        self.emit("\n检测到 Ctrl+C，正在保存训练状态...")
-        state_path = self.state_dir() / f"training_state_step{self.global_step}.pt"
+        self.emit("\n检测到暂停信号，正在保存训练状态...")
+        state_dir = self.state_dir()
+        state_path = build_pause_state_path(state_dir, self.global_step)
+        config_path = build_pause_config_path(state_dir, self.global_step)
         monitor_data = None
         if self.monitor_server:
             try:
                 monitor_data = get_state()
             except Exception:
                 pass
+        # Config snapshot 先写 — 体积小、失败概率低；后面 .pt save 万一失败，
+        # supervisor 能从落盘的 config snapshot 判断"开始保存了"，不至于完全
+        # 状态丢失（cancel 兜底走的也是 supervisor 端时序判断）。
+        write_config_snapshot(config_path, self.args, self.sample_prompts)
         # Schedule-Free 系优化器（PPSF）保存前切到 averaged weights — 否则存的是
         # 训练用的 y 而不是真正应该被使用的 x。非 SF 优化器此 ctx 静默 no-op。
         with optimizer_eval_mode(self.optimizer):
@@ -156,5 +178,11 @@ class TrainingContext:
             lora_path = self.output_dir / f"{self.args.output_name}_interrupted_step{self.global_step}.safetensors"
             self.injector.save(lora_path)
         self.wandb_monitor.finish()
-        self.emit(f"已保存！下次使用 --resume-state \"{state_path}\" 继续训练")
+        # emit 在 wandb finish 后 — 让 supervisor 读到事件时一切 IO 已完成。
+        emit_event("pause_state", {
+            "state_path": str(state_path),
+            "config_path": str(config_path),
+            "step": self.global_step,
+        })
+        self.emit(f"已暂停！state 文件: {state_path}")
         sys.exit(0)

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import signal
 import time
 from pathlib import Path
@@ -14,6 +15,7 @@ from training.bootstrap import init_progress
 from training.context import TrainingContext
 from training.observability import render_curve_panel
 from training.sample_runner import run_sample
+from training.snapshot import emit_event
 from training.state import load_training_state
 
 
@@ -78,8 +80,18 @@ def run(ctx: TrainingContext) -> None:
             except Exception as e:
                 ctx.emit(f"监控数据恢复失败: {e}")
 
-    # Ctrl+C 信号处理：handle_interrupt 由 TrainingContext 自带
+        # ADR §`_on_line` 识别此事件后清理上次 pause 文件对（PR-3 cmd_builder 接入）。
+        emit_event("resume_state_loaded", {"path": str(args.resume_state)})
+
+    # 信号处理：handle_interrupt 由 TrainingContext 自带，跨平台双绑
+    # （ADR §`runtime/training/phases/resume.py`）：
+    #   POSIX：SIGINT（CLI Ctrl+C / supervisor `os.kill(pid, SIGINT)`）
+    #   Windows：SIGINT 留给 CLI Ctrl+C，SIGBREAK 接 supervisor 发的
+    #     CTRL_BREAK_EVENT（CREATE_NEW_PROCESS_GROUP 子进程组收不到 CTRL_C_EVENT）
     signal.signal(signal.SIGINT, ctx.handle_interrupt)
+    if os.name == "nt":
+        # SIGBREAK 在 POSIX 上不存在；只 Windows 注册
+        signal.signal(signal.SIGBREAK, ctx.handle_interrupt)  # type: ignore[attr-defined]
 
     ctx.current_epoch = ctx.start_epoch
     ctx.model.train()
@@ -111,3 +123,8 @@ def run(ctx: TrainingContext) -> None:
             )
     elif ctx.global_step > 0 and sampling_enabled:
         ctx.emit(f"跳过启动基线采样（从 step {ctx.global_step} 恢复，非 step 0）")
+
+    # ADR §8.1 is_pausable 信号：resume phase 全部跑完 → 训练进入主循环 →
+    # 允许用户暂停。supervisor `_on_line` 收到此事件后 slot.train_loop_started = True
+    # → 通过 SSE 派发 is_pausable=True 解锁 UI 暂停按钮。
+    emit_event("train_loop_started", {"global_step": ctx.global_step})
