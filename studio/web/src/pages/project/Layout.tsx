@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Outlet, useNavigate, useParams } from 'react-router-dom'
-import { api, downloadBlob, type ProjectDetail } from '../../api/client'
+import { api, type ProjectDetail } from '../../api/client'
 import { useProjectCtxSetter } from '../../context/ProjectContext'
 import { useDialog } from '../../components/Dialog'
 import { useToast } from '../../components/Toast'
@@ -44,8 +44,26 @@ export default function ProjectLayout() {
       (evt.type === 'version_state_changed' && evt.project_id === projectId)
     ) {
       void reload()
+    } else if (
+      // train.zip 打包完成 / 失败 —— 后端 publish 后清 app-side "打包中..."
+      // 状态。<a> 直链已经把传输交给浏览器原生下载条；这里只管 prep 阶段反馈。
+      (evt.type === 'version_train_zip_ready' || evt.type === 'version_train_zip_failed') &&
+      evt.project_id === projectId
+    ) {
+      setExporting(false)
+      if (evt.type === 'version_train_zip_failed') {
+        const err = typeof evt.error === 'string' ? evt.error : '?'
+        toast(t('layout.exportFailed', { error: err }), 'error')
+      }
     }
   })
+
+  // 兜底：SSE 事件丢失 / 后端进程挂了的时候,60s 后强制清 exporting 不让按钮卡死。
+  useEffect(() => {
+    if (!exporting) return
+    const tid = window.setTimeout(() => setExporting(false), 60_000)
+    return () => window.clearTimeout(tid)
+  }, [exporting])
 
   const activeVersion = useMemo(() => {
     if (!project) return null
@@ -64,22 +82,24 @@ export default function ProjectLayout() {
     }
   }, [toast])
 
-  const handleExportTrain = useCallback(async () => {
+  const handleExportTrain = useCallback(() => {
     if (!projectRef.current || exporting) return
     const av = projectRef.current.versions.find(
       (v) => v.id === projectRef.current!.active_version_id
     ) ?? projectRef.current.versions[0] ?? null
     if (!av) return
     setExporting(true)
-    try {
-      const filename = `${projectRef.current.slug}-${av.label}.train.zip`
-      await downloadBlob(api.versionTrainZipUrl(projectRef.current.id, av.id), filename)
-    } catch (e) {
-      toast(t('layout.exportFailed', { error: e }), 'error')
-    } finally {
-      setExporting(false)
-    }
-  }, [exporting, toast, t])
+    // <a download> 直链 —— 浏览器原生接管下载（进度条 / 暂停 / 切 tab 不中断）。
+    // app-side "打包中..." 由 version_train_zip_ready/_failed SSE 清。
+    // download 属性是兜底,后端 Content-Disposition.filename 优先。
+    const filename = `${projectRef.current.slug}-${av.label}.train.zip`
+    const a = document.createElement('a')
+    a.href = api.versionTrainZipUrl(projectRef.current.id, av.id)
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+  }, [exporting])
 
   const handleDeleteVersion = useCallback(async (vid: number) => {
     if (!projectRef.current) return

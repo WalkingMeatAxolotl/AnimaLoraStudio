@@ -1044,17 +1044,6 @@ export interface DatasetScan {
   weighted_steps_per_epoch?: number
 }
 
-export interface QueueExport {
-  version: number
-  exported_at: number
-  tasks: Array<{
-    name: string
-    config_name: string
-    priority: number
-    config: Record<string, unknown> | null
-  }>
-}
-
 export interface ImportResult {
   imported_count: number
   task_ids: number[]
@@ -1107,37 +1096,6 @@ async function req<T>(
   return (await resp.json()) as T
 }
 
-/**
- * 下载二进制为浏览器附件。fetch + blob，让调用方能用 setLoading 包起来显示进度。
- *
- * 用 `<a href download>` 直链虽然简单但点击瞬间就让浏览器接管，前端无法
- * 显示「打 zip 中...」之类的 loading 状态 —— 训练集 / output 几百 MB 时
- * 后端打 zip 要几秒到几十秒，loading 反馈很有必要。
- */
-export async function downloadBlob(url: string, filename: string): Promise<void> {
-  const resp = await fetch(url, { headers: { Accept: 'application/zip,application/octet-stream' } })
-  if (!resp.ok) {
-    let detail = `${resp.status} ${resp.statusText}`
-    try {
-      const body = await resp.json()
-      if (body?.detail) detail = body.detail
-    } catch {
-      // ignore
-    }
-    throw new Error(detail)
-  }
-  const blob = await resp.blob()
-  const objectUrl = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = objectUrl
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  // 让浏览器有机会发起下载后再 revoke
-  setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
-}
-
 export const api = {
   health: () => req<HealthResponse>('/api/health'),
   systemStats: () => req<SystemStats>('/api/system/stats'),
@@ -1161,22 +1119,35 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ new_name: newName }),
     }),
-  /** 端到端文件上传：把 .yaml/.yml/.json 文件给后端 yaml + pydantic 校验，
-   *  返回 config + suggested_name，前端走 draftSeed flow 让用户改名 + 编辑后保存。
-   *  绕过 req() 的 JSON header，让浏览器自加 multipart boundary。 */
-  importPreset: async (file: File): Promise<{ config: ConfigData; suggested_name: string }> => {
+  /** 端到端文件上传：把 .yaml/.yml/.json 文件给后端解析 + schema 校验 + 直接落盘,
+   *  返回 {name, path}。前端拿到 name 直接 refreshList + setSelected(name) 即可。
+   *
+   *  冲突(同名 preset 已存在)→ 抛 ApiError(status=409),err.detail =
+   *  {message, config, suggested_name},call site 据此弹 ImportConflictDialog
+   *  让用户选覆盖 / 另存为,再走 PUT /api/presets/{name}。
+   *  绕过 req() 的 JSON header,让浏览器自加 multipart boundary。 */
+  importPreset: async (file: File): Promise<{ name: string; path: string }> => {
     const fd = new FormData()
     fd.append('file', file, file.name)
     const resp = await fetch('/api/presets/import', { method: 'POST', body: fd })
     if (!resp.ok) {
-      let detail = `${resp.status} ${resp.statusText}`
+      let message = `${resp.status} ${resp.statusText}`
+      let rawDetail: unknown = null
       try {
         const body = await resp.json()
-        if (body?.detail) detail = body.detail
-      } catch { /* ignore */ }
-      throw new Error(detail)
+        if (typeof body?.detail === 'string') {
+          message = body.detail
+        } else if (body?.detail && typeof body.detail === 'object') {
+          rawDetail = body.detail
+          message = (body.detail as { message?: string }).message ?? JSON.stringify(body.detail)
+        }
+      } catch { /* body 非 JSON,保留 statusText */ }
+      const err = new Error(message) as ApiError
+      err.status = resp.status
+      err.detail = rawDetail
+      throw err
     }
-    return (await resp.json()) as { config: ConfigData; suggested_name: string }
+    return (await resp.json()) as { name: string; path: string }
   },
 
   // 兼容别名：PP0 之前叫 listConfigs / getConfig / ...。保留一段时间。
@@ -1792,7 +1763,8 @@ export const api = {
     req<XformersInstallResult>('/api/xformers/install', { method: 'POST' }),
 
   // PP7 — 训练集导出 / 导入 -----------------------------------------------
-  /** 当前 version 的 train/ 打包 zip 直链。用 downloadBlob() 调它显示 loading。 */
+  /** 当前 version 的 train/ 打包 zip 直链。<a href download> 触发即可,
+   * 后端 publish version_train_zip_ready/_failed SSE 供前端清 "打包中..." 状态。 */
   versionTrainZipUrl: (pid: number, vid: number) =>
     `/api/projects/${pid}/versions/${vid}/train.zip`,
   /** 上传训练集 zip → 新建 project + v1，返回新项目。 */
@@ -1840,9 +1812,12 @@ export const api = {
     `/samples/${filename}?task_id=${taskId}${w ? `&w=${w}` : ''}`,
 
   // Queue import / export ---------------------------------------------
-  exportQueue: (ids?: number[]) => {
+  /** 队列导出直链。响应带 Content-Disposition: attachment,<a href download>
+   * 触发就走浏览器原生下载。后端 publish queue_export_ready/_failed SSE
+   * 供前端清 app-side "导出中..." 状态。 */
+  queueExportUrl: (ids?: ReadonlyArray<number>) => {
     const qs = ids && ids.length ? `?ids=${ids.join(',')}` : ''
-    return req<QueueExport>(`/api/queue/export${qs}`)
+    return `/api/queue/export${qs}`
   },
   importQueue: (payload: unknown) =>
     req<ImportResult>('/api/queue/import', {

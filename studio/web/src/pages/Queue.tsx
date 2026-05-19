@@ -10,14 +10,6 @@ import { useToast } from '../components/Toast'
 import { useEventStream } from '../lib/useEventStream'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
 
-async function downloadJson(filename: string, data: unknown) {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url; a.download = filename; a.click()
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
-}
-
 async function pickJsonFile(jsonErrorMsg: string): Promise<unknown | null> {
   return new Promise((resolve, reject) => {
     const input = document.createElement('input')
@@ -83,6 +75,7 @@ export default function QueuePage() {
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const reloadTimer = useRef<number | null>(null)
   const { toast } = useToast()
   const { confirm } = useDialog()
@@ -138,10 +131,25 @@ export default function QueuePage() {
         reloadTimer.current = window.setTimeout(() => {
           reloadTimer.current = null; void reload()
         }, 100)
+      } else if (evt.type === 'queue_export_ready' || evt.type === 'queue_export_failed') {
+        // <a> 直链发完后端 publish 这对事件,这里清 app-side "导出中..." 状态 +
+        // 失败弹 toast。和 train.zip / outputs.zip 一套范式。
+        setExporting(false)
+        if (evt.type === 'queue_export_failed') {
+          const err = typeof evt.error === 'string' ? evt.error : '?'
+          setError(t('queue.exportFailed', { error: err }))
+        }
       }
     },
     { onOpen: () => { void reload(); void reloadHold() } },
   )
+
+  // 兜底：SSE 事件丢失时 60s 强制清 exporting 状态。
+  useEffect(() => {
+    if (!exporting) return
+    const tid = window.setTimeout(() => setExporting(false), 60_000)
+    return () => window.clearTimeout(tid)
+  }, [exporting])
 
   useEffect(() => { void reload(); void reloadHold() }, [reload, reloadHold])
   // 2s 时钟 tick：仅触发 re-render 让「23m ago」「elapsed 40m」之类的相对时间
@@ -326,13 +334,22 @@ export default function QueuePage() {
             </button>
           )}
           <button
-            disabled={busy || tasks.length === 0}
-            onClick={async () => {
-              try { await downloadJson(`queue_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`, await api.exportQueue()) }
-              catch (e) { setError(String(e)) }
+            disabled={busy || exporting || tasks.length === 0}
+            onClick={() => {
+              if (exporting) return
+              setExporting(true)
+              // <a download> 直链 —— 浏览器原生接管下载。文件名以后端响应头
+              // Content-Disposition.filename 为准（带服务端时间戳）,download
+              // 属性是兜底。app-side "导出中..." 由 queue_export_ready/_failed SSE 清。
+              const a = document.createElement('a')
+              a.href = api.queueExportUrl()
+              a.download = `queue_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`
+              document.body.appendChild(a)
+              a.click()
+              document.body.removeChild(a)
             }}
             className="btn btn-ghost btn-sm"
-          >{t('common.export')}</button>
+          >{exporting ? t('queue.exporting') : t('common.export')}</button>
           <button
             disabled={busy}
             onClick={async () => {

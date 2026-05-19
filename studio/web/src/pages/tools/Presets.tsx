@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
 import {
   api,
+  type ApiError,
   type ConfigData,
   type PresetSummary,
   type SchemaResponse,
@@ -46,11 +47,17 @@ function generateToml(config: ConfigData): string {
 // 预设名校验 / 描述存储 / schema 默认值 抽到 lib/preset-helpers.ts，
 // 跟 Train 页面「新建预设」内联表单共享，避免两份维护。
 
-interface DraftSeed {
+// 上传冲突时,后端 409 body 透传到这里;用户决定覆盖 / 另存为 / 取消。
+interface ConflictState {
   config: ConfigData
   desc: string
-  name: string
+  suggestedName: string
 }
+
+type ConflictChoice =
+  | { kind: 'overwrite' }
+  | { kind: 'saveAs'; name: string }
+  | { kind: 'cancel' }
 
 export default function PresetsPage() {
   const { t } = useTranslation()
@@ -80,8 +87,22 @@ export default function PresetsPage() {
   const [newNameError, setNewNameError] = useState('')
   const isNew = selected === null
 
-  // ── 进入新建模式时的「种子」（一次性）：复制副本 / 导入 用 ──
-  const draftSeedRef = useRef<DraftSeed | null>(null)
+  // ── 上传冲突 dialog 状态 + 命令式 resolver ──
+  // handleImportFile await 一个 Promise 直到用户在 dialog 里选了"覆盖/另存为/取消"。
+  // resolver 是个 ref 函数,dialog 的 3 个按钮各调一次 → resolve Promise + 清状态。
+  const [conflict, setConflict] = useState<ConflictState | null>(null)
+  const conflictResolveRef = useRef<((c: ConflictChoice) => void) | null>(null)
+  const askConflict = (state: ConflictState): Promise<ConflictChoice> =>
+    new Promise((resolve) => {
+      conflictResolveRef.current = resolve
+      setConflict(state)
+    })
+  const resolveConflict = (choice: ConflictChoice) => {
+    setConflict(null)
+    const r = conflictResolveRef.current
+    conflictResolveRef.current = null
+    r?.(choice)
+  }
 
   // ── UI 状态 ──
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -111,23 +132,14 @@ export default function PresetsPage() {
   }
 
   // ── 选 preset 切换 ──
-  // 新建模式（selected=null）：优先用 draftSeed（来自「复制副本」/「导入」），
-  // 没种子就用 schema 默认值。draftSeed 是一次性的，消费后清空。
+  // 新建模式（selected=null）：用 schema 默认值预填表单,用户输名字 + 编辑后点保存。
+  // 导入 / 复制副本 现在都走"一键落盘 + 自动选中"路径,不再走"切到新建模式预填表单"
+  // 的中间态,所以这里不再有 draftSeed 分支。
   // modelPathDefaults 在此处只读初值快照、不进 deps：异步晚到的情况由下面那个
   // 带「用户没改过」guard 的 useEffect 覆盖，避免重入这里把用户编辑清掉。
   useEffect(() => {
     if (!selected) {
-      const seed = draftSeedRef.current
-      draftSeedRef.current = null
-      if (seed) {
-        setConfig(seed.config)
-        savedJsonRef.current = JSON.stringify(seed.config)
-        setNewName(seed.name)
-        setDescDraft(seed.desc)
-        setDescDirty(false)
-        // 让用户输名字
-        requestAnimationFrame(() => newNameInputRef.current?.focus())
-      } else if (schema) {
+      if (schema) {
         // 用 modelPathDefaults 覆盖 schema 里 4 字段的相对默认值，保证新建预设
         // 表单里看到的是当前 Settings 算出的绝对路径，跟 fork 后实际落盘一致。
         const defaults = { ...defaultsFromSchema(schema), ...modelPathDefaults }
@@ -186,7 +198,7 @@ export default function PresetsPage() {
   const autoSelectedRef = useRef(false)
   useEffect(() => {
     if (autoSelectedRef.current) return
-    if (presets.length > 0 && selected === null && draftSeedRef.current === null) {
+    if (presets.length > 0 && selected === null) {
       autoSelectedRef.current = true
       setSelected(presets[0].name)
     } else if (presets.length === 0 && schema) {
@@ -316,25 +328,34 @@ export default function PresetsPage() {
     finally { setBusy(false) }
   }
 
-  const handleDuplicate = () => {
-    if (!config) return
+  // "复制副本":Save-As 语义 —— 把当前内存里的 config(含未保存编辑)写到新名字下,
+  // refresh + 自动选中。原 preset 的 on-disk 内容不动;原 preset 的内存里"未保存编辑"
+  // 仍属未保存状态(用户切回原 preset 时按现有 dirty 检查处理)。
+  const handleDuplicate = async () => {
+    if (!config || busy) return
     const baseName = selected ?? 'preset'
     let candidate = `${baseName}-copy`
     let i = 2
     while (presets.find((p) => p.name === candidate)) {
       candidate = `${baseName}-copy-${i++}`
     }
-    draftSeedRef.current = {
-      config: JSON.parse(JSON.stringify(config)) as ConfigData,
-      desc: descDraft,
-      name: candidate,
-    }
-    setSelected(null)
+    setBusy(true)
     setPickerOpen(false)
+    try {
+      await api.savePreset(candidate, config)
+      // 同步描述(描述字段当前是本地存的,不走后端)
+      if (descDraft) {
+        const next = { ...descriptions, [candidate]: descDraft }
+        setDescriptions(next); savePresetDescriptions(next)
+      }
+      refreshList()
+      setSelected(candidate)
+      toast(t('presets.duplicated', { name: candidate }), 'success')
+    } catch (e) { toast(String(e), 'error') }
+    finally { setBusy(false) }
   }
 
   const handleNew = () => {
-    draftSeedRef.current = null
     setSelected(null)
     setPickerOpen(false)
   }
@@ -362,15 +383,41 @@ export default function PresetsPage() {
     a.click()
   }
 
-  // 「导入」：上传文件给后端做 yaml + pydantic 校验，拿回 config + suggested_name；
-  // 切到新建模式预填，让用户在表单里改 + 输名字 + 看 schema 确认。
+  // 「导入」：上传 → 后端 yaml + pydantic 校验 + 直接落盘 + 返回 name。
+  // 不冲突 → refresh + setSelected(name),一步到位出现在 picker 并选中。
+  // 冲突(409)→ 弹 ImportConflictDialog 让用户选覆盖 / 另存为 / 取消;选定后
+  // PUT /api/presets/{name} 落盘,refresh + setSelected。
+  // 解析 / schema 校验失败 → toast。
   const handleImportFile = async (f: File) => {
+    let imported: { name: string }
     try {
-      const { config: data, suggested_name } = await api.importPreset(f)
-      draftSeedRef.current = { config: data, desc: '', name: suggested_name }
-      setSelected(null)
-      toast(t('presets.importLoaded'), 'success')
-    } catch (e) { toast(String(e), 'error') }
+      imported = await api.importPreset(f)
+    } catch (e) {
+      const err = e as ApiError
+      if (err.status === 409 && err.detail && typeof err.detail === 'object') {
+        const d = err.detail as { config?: ConfigData; suggested_name?: string }
+        if (!d.config || !d.suggested_name) { toast(String(e), 'error'); return }
+        const choice = await askConflict({
+          config: d.config, desc: '', suggestedName: d.suggested_name,
+        })
+        if (choice.kind === 'cancel') return
+        const target = choice.kind === 'overwrite' ? d.suggested_name : choice.name
+        setBusy(true)
+        try {
+          await api.savePreset(target, d.config)
+          refreshList()
+          setSelected(target)
+          toast(t('presets.imported', { name: target }), 'success')
+        } catch (saveErr) { toast(String(saveErr), 'error') }
+        finally { setBusy(false) }
+        return
+      }
+      toast(String(e), 'error')
+      return
+    }
+    refreshList()
+    setSelected(imported.name)
+    toast(t('presets.imported', { name: imported.name }), 'success')
   }
 
   const onImportClick = () => fileInputRef.current?.click()
@@ -697,6 +744,112 @@ export default function PresetsPage() {
           )}
         </div>
       </div>
+
+      {conflict && (
+        <ImportConflictDialog
+          suggestedName={conflict.suggestedName}
+          existingNames={presets.map((p) => p.name)}
+          onDecide={resolveConflict}
+        />
+      )}
+    </div>
+  )
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// ImportConflictDialog —— 上传 preset 名字撞库时弹三选一
+//
+// 沿用 NewVersionDialog (Layout.tsx) 的内联声明式风格 —— Dialog.tsx 的 confirm/
+// prompt/alert 三件套不够装 "3 个动作 + 一个 input" 这种形态。命令式 await 走
+// 父组件的 askConflict / resolveConflict resolver pattern,call site 仍是
+// `const choice = await askConflict(...)`。
+function ImportConflictDialog({
+  suggestedName,
+  existingNames,
+  onDecide,
+}: {
+  suggestedName: string
+  existingNames: string[]
+  onDecide: (c: ConflictChoice) => void
+}) {
+  const { t } = useTranslation()
+  const [newName, setNewName] = useState(() => {
+    // 默认 `{suggested}-2`,如果还撞继续 -3 / -4…
+    let i = 2
+    let cand = `${suggestedName}-${i}`
+    while (existingNames.includes(cand)) cand = `${suggestedName}-${++i}`
+    return cand
+  })
+  const [error, setError] = useState('')
+  const inputRef = useRef<HTMLInputElement | null>(null)
+  useEffect(() => {
+    requestAnimationFrame(() => { inputRef.current?.focus(); inputRef.current?.select() })
+  }, [])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); onDecide({ kind: 'cancel' }) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onDecide])
+
+  const submitSaveAs = (e?: React.FormEvent) => {
+    e?.preventDefault()
+    const v = newName.trim()
+    if (!v) { setError(t('presets.nameRequired')); return }
+    if (!PRESET_NAME_RE.test(v)) { setError(t('presets.nameInvalid')); return }
+    if (existingNames.includes(v)) { setError(t('presets.nameExists')); return }
+    onDecide({ kind: 'saveAs', name: v })
+  }
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/50"
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onDecide({ kind: 'cancel' }) }}
+    >
+      <form
+        onSubmit={submitSaveAs}
+        className="bg-elevated border border-dim rounded-lg w-[90%] max-w-[480px] p-6 flex flex-col gap-4 shadow-xl"
+      >
+        <h2 className="m-0 text-lg font-semibold text-fg-primary">
+          {t('presets.importConflictTitle', { name: suggestedName })}
+        </h2>
+        <p className="m-0 text-sm text-fg-secondary">
+          {t('presets.importConflictBody')}
+        </p>
+        <label className="flex flex-col gap-1.5">
+          <span className="text-sm text-fg-secondary">{t('presets.importSaveAsLabel')}</span>
+          <input
+            ref={inputRef}
+            className="input input-mono font-mono"
+            value={newName}
+            onChange={(e) => { setNewName(e.target.value); if (error) setError('') }}
+          />
+          {error && <span className="text-xs text-err">{error}</span>}
+        </label>
+        <div className="flex gap-2 justify-end mt-1">
+          <button
+            type="button"
+            onClick={() => onDecide({ kind: 'cancel' })}
+            className="btn btn-secondary"
+          >
+            {t('common.cancel')}
+          </button>
+          <button
+            type="button"
+            onClick={() => onDecide({ kind: 'overwrite' })}
+            className="btn btn-warn"
+            title={t('presets.importOverwriteTitle', { name: suggestedName })}
+          >
+            {t('presets.importOverwrite')}
+          </button>
+          <button type="submit" className="btn btn-primary">
+            {t('presets.importSaveAs')}
+          </button>
+        </div>
+      </form>
     </div>
   )
 }

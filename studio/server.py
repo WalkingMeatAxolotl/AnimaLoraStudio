@@ -37,7 +37,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, model_validator
 
@@ -433,17 +433,33 @@ def download_preset(name: str) -> FileResponse:
 
 @app.post("/api/presets/import")
 async def import_preset(file: UploadFile = File(...)) -> dict[str, Any]:
-    """接 .yaml/.yml/.json 上传 → 解析 + schema 校验 → 返回 config + suggested_name。
+    """接 .yaml/.yml/.json 上传 → 解析 + schema 校验 → 落盘到 `suggested_name`。
 
-    不写盘 —— 让前端 draftSeed flow 拿 config + suggested 进新建模式，
-    用户确认名字 + 编辑后再走 PUT /api/presets/{name}。
+    无冲突 → write_preset 直接写,返回 200 `{name, path}`。
+    冲突(`suggested_name.yaml` 已存在)→ 409 + 结构化 detail
+    `{message, config, suggested_name}`,前端 ImportConflictDialog 让用户选
+    覆盖 / 另存为 / 取消,选定后走 PUT /api/presets/{name} 完成落盘。
+    解析/校验失败 → 400/422。
     """
     raw = await file.read()
     try:
         config, suggested = presets_io.parse_preset_bytes(raw, file.filename or "")
     except presets_io.PresetError as exc:
         raise HTTPException(status_code=_err_code(exc), detail=str(exc)) from exc
-    return {"config": config, "suggested_name": suggested}
+    if presets_io.preset_path(suggested).exists():
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": f"预设已存在: {suggested}",
+                "config": config,
+                "suggested_name": suggested,
+            },
+        )
+    try:
+        path = presets_io.write_preset(suggested, config)
+    except presets_io.PresetError as exc:
+        raise HTTPException(status_code=_err_code(exc), detail=str(exc)) from exc
+    return {"name": suggested, "path": str(path)}
 
 
 def _err_code(exc: presets_io.PresetError) -> int:
@@ -867,6 +883,10 @@ def export_version_train_zip(
 
     实现：写到临时文件再 FileResponse；响应发完后 BackgroundTasks 清理。
     与 outputs.zip 一致用 ZIP_STORED（PNG/jpg 已压缩，再压只是浪费 CPU）。
+
+    打包完成 / 失败 publish version_train_zip_ready / _failed —— 前端用 <a>
+    直链触发下载（浏览器原生进度条），SSE 事件用于清 app-side "打包中..." 状态
+    + 失败时弹 toast。和 outputs.zip 一套范式。
     """
     import tempfile
 
@@ -884,11 +904,28 @@ def export_version_train_zip(
             train_io.export_train(conn, vid, tmp_path)
         except train_io.TrainIOError as exc:
             tmp_path.unlink(missing_ok=True)
+            bus.publish({
+                "type": "version_train_zip_failed",
+                "project_id": pid,
+                "version_id": vid,
+                "error": str(exc),
+            })
             raise HTTPException(400, str(exc)) from exc
-        except Exception:
+        except Exception as exc:
             tmp_path.unlink(missing_ok=True)
+            bus.publish({
+                "type": "version_train_zip_failed",
+                "project_id": pid,
+                "version_id": vid,
+                "error": str(exc),
+            })
             raise
 
+    bus.publish({
+        "type": "version_train_zip_ready",
+        "project_id": pid,
+        "version_id": vid,
+    })
     background.add_task(lambda: tmp_path.unlink(missing_ok=True))
     archive_name = f"{p['slug']}-{v['label']}.train.zip"
     return FileResponse(
@@ -2826,8 +2863,16 @@ class ImportRequest(BaseModel):
 
 
 @app.get("/api/queue/export")
-def export_queue(ids: str = "") -> dict[str, Any]:
-    """`?ids=1,2,3` 指定导出的任务，缺省导出全部。"""
+def export_queue(ids: str = "") -> Response:
+    """`?ids=1,2,3` 指定导出的任务，缺省导出全部。
+
+    响应带 `Content-Disposition: attachment` —— 前端 <a download> 直链就能触发
+    浏览器原生下载（和 train.zip / outputs.zip 一套范式）。导出/失败 publish
+    queue_export_ready / _failed SSE，前端用来清 app-side spinner + 弹 toast。
+    body 仍是合法 JSON，tests / 程序化调用方拿 resp.json() 不受影响。
+    """
+    import json as _json
+
     if ids.strip():
         try:
             id_list = [int(x) for x in ids.split(",") if x.strip()]
@@ -2836,7 +2881,20 @@ def export_queue(ids: str = "") -> dict[str, Any]:
     else:
         with db.connection_for() as conn:
             id_list = [t["id"] for t in db.list_tasks(conn)]
-    return queue_io.export_tasks(id_list)
+    try:
+        payload = queue_io.export_tasks(id_list)
+    except Exception as exc:
+        bus.publish({"type": "queue_export_failed", "error": str(exc)})
+        raise
+
+    body = _json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+    filename = f"queue_{time.strftime('%Y-%m-%d_%H-%M-%S')}.json"
+    bus.publish({"type": "queue_export_ready"})
+    return Response(
+        content=body,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.post("/api/queue/import")
