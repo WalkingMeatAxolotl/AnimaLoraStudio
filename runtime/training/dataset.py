@@ -380,10 +380,27 @@ class BucketBatchSampler:
         self.epoch = int(epoch)
 
     def __len__(self):
-        n = len(self.dataset)
-        if self.drop_last:
-            return n // self.batch_size
-        return (n + self.batch_size - 1) // self.batch_size
+        # ARB 下实际 batch 数 = Σ_bucket f(n_b, bs)；用全局 n 会偏（每桶各自有零头）。
+        # 没有桶信息时退回到全局公式（线性 DataLoader 行为）。
+        if self._cached_dataset is None:
+            n = len(self.dataset)
+            if self.drop_last:
+                return n // self.batch_size
+            return (n + self.batch_size - 1) // self.batch_size
+        counts = {}
+        for idx in range(len(self.dataset)):
+            base_idx = idx % self._base_len
+            bucket = self._cached_dataset.bucket_for_index[base_idx]
+            if bucket is None:
+                bucket = (0, 0)
+            counts[bucket] = counts.get(bucket, 0) + 1
+        total = 0
+        for n in counts.values():
+            if self.drop_last:
+                total += n // self.batch_size
+            else:
+                total += (n + self.batch_size - 1) // self.batch_size
+        return total
 
     def __iter__(self):
         rng = random.Random(self.seed + self.epoch)

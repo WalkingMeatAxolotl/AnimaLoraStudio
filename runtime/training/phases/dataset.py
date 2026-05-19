@@ -92,9 +92,12 @@ def run(ctx: TrainingContext) -> None:
         args.num_workers = 0
 
     if ctx.use_cached:
+        # drop_last=False：桶尾不足 batch_size 出短 batch 而非丢图。
+        # 对齐 kohya sd-scripts / ostris ai-toolkit；diffusion 用 LayerNorm/GroupNorm，
+        # 对动态 batch 不敏感，loop.py 也按 latents.shape[0] 动态读 bs。
         batch_sampler = BucketBatchSampler(
             ctx.dataset, batch_size=args.batch_size,
-            drop_last=True, shuffle=True,
+            drop_last=False, shuffle=True,
             seed=getattr(args, "seed", 42),
         )
         ctx.dataloader = DataLoader(
