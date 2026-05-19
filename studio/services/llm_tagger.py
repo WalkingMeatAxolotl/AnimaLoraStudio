@@ -460,7 +460,10 @@ class LLMTagger:
         workers = min(max(1, int(cfg.concurrency or 1)), max(1, total))
         if workers <= 1 or total <= 1:
             done = 0
-            rate_limiter = _RequestRateLimiter(cfg.requests_per_second)
+            rate_limiter = _RequestRateLimiter(
+                cfg.requests_per_second,
+                max_requests_per_minute=cfg.max_requests_per_minute,
+            )
             for p in image_paths:
                 yield self._tag_one(cfg, p, rate_limiter=rate_limiter)
                 done += 1

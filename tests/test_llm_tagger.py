@@ -186,7 +186,7 @@ def test_tag_uses_configured_concurrency(
     assert progress[-1] == (4, 4)
 
 
-def test_minute_limit_applies_only_with_concurrency(
+def test_minute_limit_applies_in_concurrent_and_serial_modes(
     isolated_secrets, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     waits: list[tuple[float, int]] = []
@@ -242,7 +242,7 @@ def test_minute_limit_applies_only_with_concurrency(
     tagger = llm_tagger.LLMTagger(session=_SlowSession(delay=0.01))
     list(tagger.tag([_png(tmp_path / "serial.png")]))
 
-    assert waits == [(0.0, 0)]
+    assert waits == [(0.0, 12)]
 
 
 def test_rate_limiter_uses_rolling_minute_window(monkeypatch: pytest.MonkeyPatch) -> None:
