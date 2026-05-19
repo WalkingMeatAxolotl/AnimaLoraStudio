@@ -343,6 +343,22 @@ class Supervisor:
             return True
         return False
 
+    def is_task_pausable(self, task_id: int) -> bool:
+        """ADR §8.1: UI is_pausable 信号。
+
+        条件：task 在 slot 上 running、`train_loop_started` 事件已收到、
+        没有 pause / cancel pending。任一不满足 → UI 应隐藏暂停按钮。
+        """
+        slot = self._find_slot(kind="task", id=task_id)
+        if slot is None:
+            return False
+        return (
+            slot.proc is not None
+            and slot.train_loop_started
+            and not slot.pause_pending
+            and not slot.cancel_pending
+        )
+
     def pause(self, task_id: int) -> tuple[bool, str]:
         """暂停 running task：发软信号让 handle_interrupt 保 state 后退出。
 

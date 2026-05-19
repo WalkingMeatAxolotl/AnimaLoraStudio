@@ -7,6 +7,7 @@ import {
   type TaskOutputs,
   type TaskStatus,
 } from '../api/client'
+import { PauseProgressModal } from '../components/PauseProgressModal'
 import { useToast } from '../components/Toast'
 import { useEventStream } from '../lib/useEventStream'
 import MonitorDashboard from '../components/MonitorDashboard'
@@ -19,6 +20,7 @@ const STATUS_BADGE: Record<TaskStatus, string> = {
   done: 'badge badge-ok',
   failed: 'badge badge-err',
   canceled: 'badge badge-neutral',
+  paused: 'badge badge-warn',
 }
 
 const TERMINAL: ReadonlyArray<TaskStatus> = ['done', 'failed', 'canceled']
@@ -93,6 +95,7 @@ export default function QueueDetailPage() {
     return (['overview', 'log', 'monitor', 'outputs'] as const).includes(v as Tab) ? (v as Tab) : 'overview'
   })
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [pauseModalOpen, setPauseModalOpen] = useState(false)
 
   // tab → hash 写回（点 tab 按钮时同步 URL，replaceState 不触发 router 重渲）
   useEffect(() => {
@@ -160,12 +163,44 @@ export default function QueueDetailPage() {
     catch (e) { toast(String(e), 'error'); setBusy(false); setConfirmDelete(false) }
   }
 
+  // ADR 0006 PR-4: 暂停 / 恢复 / 取消 paused 三连。
+  const pauseRunning = async () => {
+    if (!task) return
+    setPauseModalOpen(true)
+    try {
+      await api.pauseTask(task.id)
+      toast(t('queue.pauseSent'), 'success')
+    } catch (e) {
+      const msg = String(e)
+      if (msg.includes('503')) toast(t('queue.featureDisabled'), 'error')
+      else toast(t('queue.pauseFailed', { reason: msg }), 'error')
+      setPauseModalOpen(false)
+    }
+  }
+
+  const resumePaused = async () => {
+    if (!task) return
+    setBusy(true)
+    try {
+      await api.resumeTask(task.id)
+      toast(t('queue.resumeSent', { id: task.id }), 'success')
+      void reload()
+    } catch (e) {
+      const msg = String(e)
+      if (msg.toLowerCase().includes('missing')) toast(t('queue.resumeFailedMissing'), 'error')
+      else toast(t('queue.resumeFailed', { reason: msg }), 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const STATUS_LABEL: Record<TaskStatus, string> = {
     pending: t('status.pending'),
     running: t('status.running'),
     done: t('status.done'),
     failed: t('status.failed'),
     canceled: t('status.canceled'),
+    paused: t('status.paused'),
   }
 
   const tabs: Array<{ key: Tab; label: string }> = [
@@ -199,9 +234,27 @@ export default function QueueDetailPage() {
             </span>
           )}
           <span className="flex-1" />
+          {isLive && status === 'running' && task?.is_pausable && (
+            <button onClick={pauseRunning} disabled={busy || pauseModalOpen} className="btn btn-sm"
+              data-testid="detail-pause-btn"
+              title={t('queue.pauseHint')}
+            >{t('queue.pause')}</button>
+          )}
           {isLive && (
             <button onClick={cancel} disabled={busy} className="btn btn-sm bg-warn-soft border border-warn text-warn"
             >{t('queueDetail.cancelTask')}</button>
+          )}
+          {status === 'paused' && (
+            <>
+              <button onClick={resumePaused} disabled={busy} className="btn btn-primary btn-sm"
+                data-testid="detail-resume-btn"
+                title={t('queue.resumeHint')}
+              >{t('queue.resume')}</button>
+              <button onClick={cancel} disabled={busy}
+                className="btn btn-sm bg-err-soft border border-err text-err"
+                title={t('queue.cancelPausedHint')}
+              >{t('queue.cancelPaused')}</button>
+            </>
           )}
           {isTerminal && (
             <>
@@ -277,6 +330,15 @@ export default function QueueDetailPage() {
           busy={busy}
         />
       )}
+
+      {/* ADR §4.3 暂停过程 modal — 跟 Queue.tsx 同组件，UI 锁屏让用户看进度。 */}
+      {pauseModalOpen && task && (
+        <PauseProgressModal
+          taskId={task.id}
+          taskName={task.name}
+          onClose={() => setPauseModalOpen(false)}
+        />
+      )}
     </div>
   )
 }
@@ -287,7 +349,7 @@ function OverviewTab({ task }: { task: Task }) {
   const { t } = useTranslation()
   const statusLabel: Record<string, string> = {
     pending: t('status.pending'), running: t('status.running'), done: t('status.done'),
-    failed: t('status.failed'), canceled: t('status.canceled'),
+    failed: t('status.failed'), canceled: t('status.canceled'), paused: t('status.paused'),
   }
   const items: Array<{ label: string; value: React.ReactNode; mono?: boolean }> = [
     { label: 'ID',     value: <code className="font-mono">{task.id}</code> },

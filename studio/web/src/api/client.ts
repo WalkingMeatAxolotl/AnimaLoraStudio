@@ -928,7 +928,13 @@ export interface XformersInstallResult {
   restart_required: boolean
 }
 
-export type TaskStatus = 'pending' | 'running' | 'done' | 'failed' | 'canceled'
+export type TaskStatus = 'pending' | 'running' | 'done' | 'failed' | 'canceled' | 'paused'
+
+/** Terminal task statuses — UI 一般禁用这些上的操作按钮（cancel / pause 等）。
+ *  `paused` **不**进 terminal — 它可被 resume 复活。 */
+export const TERMINAL_TASK_STATUSES: ReadonlyArray<TaskStatus> = [
+  'done', 'failed', 'canceled',
+]
 
 export interface Task {
   id: number
@@ -951,6 +957,24 @@ export interface Task {
   config_path?: string | null
   /** PP6.1 — per-task monitor state.json 路径。 */
   monitor_state_path?: string | null
+  /** ADR 0006 PR-2 — paused task 的 .pt 文件路径（pause_step_<N>.pt）。 */
+  paused_state_path?: string | null
+  /** ADR 0006 PR-2 — paused task 的 config snapshot 路径（pause_step_<N>.config.json）。 */
+  paused_config_path?: string | null
+  /** ADR 0006 PR-2 — paused 时的 global_step（UI "在 step N 暂停于 …" 显示）。 */
+  paused_step?: number | null
+  /** ADR 0006 PR-2 — paused 时间（unix 秒）。 */
+  paused_at?: number | null
+  /** ADR 0006 PR-4 — is_pausable 信号（§8.1）：UI 用来决定是否显示暂停
+   *  按钮。supervisor 跑得起来时由 server enrich；空载默认 false。 */
+  is_pausable?: boolean
+}
+
+/** ADR 0006 PR-2 — GET /api/queue/hold 返回。`held=true` 时 UI 顶部
+ *  banner sticky 显示；`pending_waiting` 是当前 pending 队列长度（提示用）。 */
+export interface QueueHoldState {
+  held: boolean
+  pending_waiting: number
 }
 
 export interface LogResponse {
@@ -1678,6 +1702,28 @@ export const api = {
     }),
   retryTask: (id: number) =>
     req<Task>(`/api/queue/${id}/retry`, { method: 'POST' }),
+  /** ADR 0006 PR-2 — 暂停 running task。返回时 task 还在 running，需订阅 SSE
+   *  task_state_changed 看 status 转 paused。flag off / 状态不对时抛 409/503。 */
+  pauseTask: (id: number) =>
+    req<{ task_id: number; pause_pending: boolean }>(
+      `/api/queue/${id}/pause`,
+      { method: 'POST' },
+    ),
+  /** ADR 0006 PR-3 — 恢复 paused task。pause 文件缺失返 409 引导走
+   *  ResumeFieldPicker 起新 task。 */
+  resumeTask: (id: number) =>
+    req<{ task_id: number; status: string }>(
+      `/api/queue/${id}/resume`,
+      { method: 'POST' },
+    ),
+  /** ADR 0006 PR-2 — 查队列挂起状态 + 等待恢复调度的 pending 数。 */
+  getQueueHold: () => req<QueueHoldState>('/api/queue/hold'),
+  /** 挂起队列：dispatcher 不拉新 task，已 running 的不受影响。 */
+  holdQueue: () =>
+    req<{ held: boolean }>('/api/queue/hold', { method: 'POST' }),
+  /** 恢复调度：dispatcher 重新按优先级拉 pending。 */
+  releaseQueue: () =>
+    req<{ held: boolean }>('/api/queue/release', { method: 'POST' }),
   deleteTask: (id: number) =>
     req<{ deleted: number }>(`/api/queue/${id}`, { method: 'DELETE' }),
   /** 列 task 关联的 output 目录里所有文件（含 size/mtime/是否 lora）。

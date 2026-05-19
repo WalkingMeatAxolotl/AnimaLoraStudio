@@ -2861,6 +2861,14 @@ def list_queue(
         items = db.list_tasks(conn, status=status)
     if not include_generate:
         items = db.filter_out_task_types(items, ("generate",))
+    # ADR 0006 PR-4 — is_pausable 信号每行注入（§8.1 / 上面 get_queue_item 注释）
+    try:
+        sup = _supervisor()
+        for it in items:
+            it["is_pausable"] = sup.is_task_pausable(int(it["id"]))
+    except HTTPException:
+        for it in items:
+            it["is_pausable"] = False
     return {"items": items}
 
 
@@ -2887,6 +2895,12 @@ def get_queue_item(task_id: int) -> dict[str, Any]:
         task = db.get_task(conn, task_id)
     if not task:
         raise HTTPException(404)
+    # ADR 0006 PR-4 — is_pausable 信号让 UI 决定是否显示暂停按钮（§8.1）。
+    # 仅 supervisor 跑得起来时计算；空载（test / 启动期）默认 False。
+    try:
+        task["is_pausable"] = _supervisor().is_task_pausable(task_id)
+    except HTTPException:
+        task["is_pausable"] = False
     return task
 
 

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useNavigate } from 'react-router-dom'
-import { api, type Task, type TaskStatus } from '../api/client'
+import { api, type QueueHoldState, type Task, type TaskStatus } from '../api/client'
+import { HoldQueueModal, type HoldDecision } from '../components/HoldQueueModal'
+import { PauseProgressModal } from '../components/PauseProgressModal'
 import StepShell from '../components/StepShell'
 import { useDialog } from '../components/Dialog'
 import { useToast } from '../components/Toast'
@@ -38,6 +40,7 @@ const STATUS_TONE: Record<TaskStatus, string> = {
   done:      'ok',
   failed:    'err',
   canceled:  'neutral',
+  paused:    'warn',
 }
 
 function inferKind(task: Task): TaskKind {
@@ -91,7 +94,27 @@ export default function QueuePage() {
     done:      t('status.done'),
     failed:    t('status.failed'),
     canceled:  t('status.canceled'),
+    paused:    t('status.paused'),
   }
+
+  // ADR 0006 PR-4：feature flag 探测（首次 fetch /api/queue/hold 503 → flag off
+  // → 不显示 hold/pause UI）；探测成功后保留状态用作 banner + holdModal。
+  const [holdState, setHoldState] = useState<QueueHoldState | null>(null)
+  const [featureEnabled, setFeatureEnabled] = useState<boolean | null>(null)
+  const [holdModalOpen, setHoldModalOpen] = useState(false)
+  const [pausingTaskId, setPausingTaskId] = useState<number | null>(null)
+
+  const reloadHold = useCallback(async () => {
+    try {
+      const s = await api.getQueueHold()
+      setHoldState(s)
+      setFeatureEnabled(true)
+    } catch {
+      // 503 / 网络错 → 视作 flag off。state 留 null 让 UI 隐藏控件。
+      setFeatureEnabled(false)
+      setHoldState(null)
+    }
+  }, [])
 
   const KIND_LABEL: Record<TaskKind, string> = {
     train: t('nav.train'), tag: t('nav.tag'), reg: t('nav.reg'),
@@ -105,17 +128,26 @@ export default function QueuePage() {
 
   useEventStream(
     (evt) => {
-      if (evt.type === 'task_state_changed') {
+      // ADR 0006 PR-4 — train_loop_started 不改 task.status 但要让 UI 看到
+      // is_pausable=true（解锁暂停按钮）；queue_hold_changed 要刷 banner。
+      if (
+        evt.type === 'task_state_changed' ||
+        evt.type === 'train_loop_started' ||
+        evt.type === 'queue_hold_changed'
+      ) {
+        if (evt.type === 'queue_hold_changed') {
+          void reloadHold()
+        }
         if (reloadTimer.current) return
         reloadTimer.current = window.setTimeout(() => {
           reloadTimer.current = null; void reload()
         }, 100)
       }
     },
-    { onOpen: () => void reload() },
+    { onOpen: () => { void reload(); void reloadHold() } },
   )
 
-  useEffect(() => { void reload() }, [reload])
+  useEffect(() => { void reload(); void reloadHold() }, [reload, reloadHold])
   // 2s 时钟 tick：仅触发 re-render 让「23m ago」「elapsed 40m」之类的相对时间
   // 字段更新；不发任何 API。spread tasks 触发组件 re-render，下游 derived 状态
   // 跟着更新。
@@ -156,11 +188,84 @@ export default function QueuePage() {
   // 用 runningTask 派生比 tasks.some 再扫一遍便宜（runningTask 已经 memo 过）
   const hasRunning = runningTask !== null
 
-  // 后端只有 per-task cancel，没有 queue-level pause。"暂停" 语义会让用户误以为
-  // 可以恢复，但 cancelTask 是 terminal cancel（task 进 canceled 状态，重启从 0
-  // 开始）；用 "取消" 语义对齐 QueueDetail 的 cancel 按钮。
-  // 复用 CLI Ctrl+C 那套 save state / --resume-state 链路的 "真暂停" 是独立 feature
-  // （见 memory/queue_pause_resume_via_sigint.md）。
+  // ADR 0006 — "真暂停" 已在 PR-2/3 上线（feature_flag off 时仍走原 cancel 语义）。
+  // 暂停按钮只在 task.is_pausable=true 时出现（train_loop 进入后），UI 锁屏 modal
+  // 全程引导（PauseProgressModal）。
+  const pauseTask = async (task: Task) => {
+    setPausingTaskId(task.id)
+    try {
+      await api.pauseTask(task.id)
+      toast(t('queue.pauseSent'), 'success')
+    } catch (e) {
+      const msg = String(e)
+      // 503 = feature flag off
+      if (msg.includes('503')) {
+        toast(t('queue.featureDisabled'), 'error')
+      } else {
+        toast(t('queue.pauseFailed', { reason: msg }), 'error')
+      }
+      setPausingTaskId(null)
+    }
+  }
+
+  const resumeTask = async (task: Task) => {
+    try {
+      await api.resumeTask(task.id)
+      toast(t('queue.resumeSent', { id: task.id }), 'success')
+      await reload()
+    } catch (e) {
+      const msg = String(e)
+      if (msg.toLowerCase().includes('missing')) {
+        toast(t('queue.resumeFailedMissing'), 'error')
+      } else {
+        toast(t('queue.resumeFailed', { reason: msg }), 'error')
+      }
+    }
+  }
+
+  const cancelPaused = async (task: Task) => {
+    const ok = await confirm(
+      `${t('queue.cancelPaused')} #${task.id}？${t('queue.cancelPausedHint')}`,
+      { tone: 'warn', okText: t('queue.cancelPaused') },
+    )
+    if (!ok) return
+    try {
+      await api.cancelTask(task.id)
+      toast(t('queueDetail.cancelSent'), 'success')
+      await reload()
+    } catch (e) {
+      toast(String(e), 'error')
+    }
+  }
+
+  // ADR §4.4 hold 队列：弹 confirmation modal，根据 modal 内决策调 hold + 可选 pause
+  const onHoldConfirm = async (decision: HoldDecision) => {
+    setHoldModalOpen(false)
+    try {
+      await api.holdQueue()
+      toast(t('queue.holdSet'), 'success')
+    } catch (e) {
+      toast(String(e), 'error')
+      return
+    }
+    if (decision.kind === 'hold-and-pause') {
+      await pauseTask({ id: decision.taskId } as Task)
+    }
+    await reloadHold()
+    await reload()
+  }
+
+  const releaseQueue = async () => {
+    try {
+      await api.releaseQueue()
+      toast(t('queue.holdReleased'), 'success')
+      await reloadHold()
+      await reload()
+    } catch (e) {
+      toast(String(e), 'error')
+    }
+  }
+
   const cancelRunning = async () => {
     if (!runningTask) return
     const ok = await confirm(
@@ -187,6 +292,19 @@ export default function QueuePage() {
       subtitle={t('queue.description')}
       actions={
         <>
+          {/* ADR 0006 PR-4: 顶部 pause 按钮 — 仅 is_pausable=true 时显示（§8.1）。
+              isPausable 来自 server enrich 的 task 字段（supervisor slot.train_loop_started 派生）。 */}
+          {featureEnabled && runningTask?.is_pausable && (
+            <button
+              onClick={() => void pauseTask(runningTask)}
+              disabled={busy || pausingTaskId !== null}
+              className="btn btn-secondary btn-sm"
+              title={t('queue.pauseHint')}
+              data-testid="queue-pause-btn"
+            >
+              {t('queue.pause')}
+            </button>
+          )}
           {hasRunning && (
             <button
               onClick={() => void cancelRunning()}
@@ -195,6 +313,26 @@ export default function QueuePage() {
               title={t('queue.cancelHint')}
             >
               {t('queue.cancelCurrent')}
+            </button>
+          )}
+          {featureEnabled && holdState && !holdState.held && (
+            <button
+              onClick={() => setHoldModalOpen(true)}
+              disabled={busy}
+              className="btn btn-ghost btn-sm"
+              data-testid="queue-hold-btn"
+            >
+              {t('queue.holdQueue')}
+            </button>
+          )}
+          {featureEnabled && holdState && holdState.held && (
+            <button
+              onClick={() => void releaseQueue()}
+              disabled={busy}
+              className="btn btn-secondary btn-sm"
+              data-testid="queue-release-btn"
+            >
+              {t('queue.releaseQueue')}
             </button>
           )}
           <button
@@ -228,6 +366,21 @@ export default function QueuePage() {
       }
     >
       <div className="flex flex-col gap-2.5">
+        {/* ADR §4.1 队列挂起 banner — 仅 held=true 时显示，sticky 顶部。 */}
+        {featureEnabled && holdState?.held && (
+          <div
+            className="sticky top-0 z-10 px-3.5 py-2.5 rounded-md bg-warn-soft border border-warn text-warn text-xs flex items-center justify-between"
+            data-testid="queue-hold-banner"
+          >
+            <span>{t('queue.heldBanner')}</span>
+            <button
+              onClick={() => void releaseQueue()}
+              className="btn btn-ghost btn-xs text-warn"
+            >
+              {t('queue.releaseQueue')}
+            </button>
+          </div>
+        )}
         {error && (
           <div className="px-3.5 py-2.5 rounded-md bg-err-soft border border-err text-err text-xs font-mono">
             {error}
@@ -266,8 +419,10 @@ export default function QueuePage() {
           <div className="flex flex-col gap-2">
             {sorted.map((task) => {
               const isRunning = task.status === 'running'
+              const isPaused = task.status === 'paused'
               const isTerminal = ['done', 'failed', 'canceled'].includes(task.status)
               const hasProject = !!(task.project_id && task.version_id)
+              const isWaitingForRelease = task.status === 'pending' && holdState?.held === true
               const kind = inferKind(task)
               const eta = estimateEta(task)
               const tone = STATUS_TONE[task.status]
@@ -348,6 +503,13 @@ export default function QueuePage() {
                         <span className="text-err overflow-hidden text-ellipsis whitespace-nowrap block text-xs">
                           {task.error_msg}
                         </span>
+                      ) : isPaused ? (
+                        <span className="text-xs text-warn">
+                          {t('queue.pausedAtStep', {
+                            step: task.paused_step ?? 0,
+                            time: task.paused_at ? fmtAgo(task.paused_at) : '',
+                          })}
+                        </span>
                       ) : isTerminal ? (
                         <span className="font-mono text-fg-tertiary text-xs">
                           {t('queue.duration', { time: fmtDuration(task.started_at, task.finished_at) })}
@@ -364,6 +526,31 @@ export default function QueuePage() {
                           {eta && <br />}
                           <span className="text-xs">{fmtAgo(task.started_at!)} 开始</span>
                         </>
+                      ) : isPaused ? (
+                        <span className="flex flex-col items-end gap-1">
+                          <span className="flex gap-1.5">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); void resumeTask(task) }}
+                              className="btn btn-secondary btn-xs"
+                              title={t('queue.resumeHint')}
+                              data-testid={`resume-btn-${task.id}`}
+                            >
+                              {t('queue.resume')}
+                            </button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); void cancelPaused(task) }}
+                              className="btn btn-ghost btn-xs text-err"
+                              title={t('queue.cancelPausedHint')}
+                            >
+                              {t('queue.cancelPaused')}
+                            </button>
+                          </span>
+                          {isWaitingForRelease && (
+                            <span className="text-xs text-fg-tertiary">
+                              {t('queue.waitingForRelease')}
+                            </span>
+                          )}
+                        </span>
                       ) : task.finished_at ? (
                         <>
                           <span>{fmtAgo(task.finished_at)}</span>
@@ -371,7 +558,14 @@ export default function QueuePage() {
                           <span className="text-xs text-fg-tertiary">{t('status.done')}</span>
                         </>
                       ) : (
-                        <span>{t('queue.ahead', { n: prevCount(task.id) })}</span>
+                        <span className="flex flex-col items-end gap-0.5">
+                          <span>{t('queue.ahead', { n: prevCount(task.id) })}</span>
+                          {isWaitingForRelease && (
+                            <span className="text-xs text-warn">
+                              {t('queue.waitingForRelease')}
+                            </span>
+                          )}
+                        </span>
                       )}
                     </span>
                   </div>
@@ -381,6 +575,25 @@ export default function QueuePage() {
           </div>
         )}
       </div>
+
+      {/* ADR §4.3 暂停过程 modal — pausingTaskId 非 null 时全程锁屏。
+          modal 自己监听 pause_state / task_state_changed 切换 phase。 */}
+      {pausingTaskId !== null && (
+        <PauseProgressModal
+          taskId={pausingTaskId}
+          taskName={tasks.find((t) => t.id === pausingTaskId)?.name}
+          onClose={() => setPausingTaskId(null)}
+        />
+      )}
+
+      {/* ADR §4.4 挂起 confirmation modal */}
+      {holdModalOpen && (
+        <HoldQueueModal
+          runningTask={runningTask}
+          onCancel={() => setHoldModalOpen(false)}
+          onConfirm={onHoldConfirm}
+        />
+      )}
     </StepShell>
   )
 }
