@@ -564,8 +564,7 @@
     },
     "resumeFailedMissing": "暂停文件已丢失，无法恢复。请通过 ResumeFieldPicker 新建任务从其他 .pt 起。",
     "resumeFailed": "恢复失败：{{reason}}",
-    "pauseFailed": "暂停失败：{{reason}}",
-    "featureDisabled": "暂停 / 队列挂起功能未启用（需 server 环境 ENABLE_PAUSE_RESUME=1）"
+    "pauseFailed": "暂停失败：{{reason}}"
   },
   "queueDetail": {
     "invalidId": "无效任务 ID",

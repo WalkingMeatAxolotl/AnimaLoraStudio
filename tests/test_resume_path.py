@@ -268,10 +268,7 @@ def test_clear_pause_artifacts_missing_files_robust(env) -> None:
 @pytest.fixture
 def server_env(env, monkeypatch):
     """初始化 db.STUDIO_DB monkeypatch 让 server module 用 isolated db。"""
-    # Ensure feature flag is on for tests
-    monkeypatch.setenv("ENABLE_PAUSE_RESUME", "1")
-    # 重导入 server 让 _ENABLE_PAUSE_RESUME 重读 env
-    import importlib
+    # ADR 0006 PR-5 删 feature flag 后这里无需注入 env，直接 monkeypatch db 路径
     if "studio.server" in sys.modules:
         del sys.modules["studio.server"]
     # 触发 server 不要起 supervisor / FastAPI client：只 import module
@@ -294,7 +291,7 @@ def _create_paused_task(env, state_pt: Path, cfg_json: Path) -> int:
 
 
 def _import_server_module():
-    """每次干净 import server module — 让 _ENABLE_PAUSE_RESUME 读最新 env。"""
+    """每次干净 import server module — 测试 isolation 用。"""
     import importlib
     if "studio.server" in sys.modules:
         del sys.modules["studio.server"]
@@ -303,20 +300,6 @@ def _import_server_module():
         return _s
     except ImportError:
         pytest.skip("fastapi not installed; cannot import studio.server")
-
-
-def test_resume_endpoint_rejects_when_feature_flag_off(server_env, monkeypatch) -> None:
-    monkeypatch.delenv("ENABLE_PAUSE_RESUME", raising=False)
-    server = _import_server_module()
-    state_pt = server_env["root"] / "pause_step_100.pt"
-    cfg_json = server_env["root"] / "pause_step_100.config.json"
-    state_pt.write_bytes(b"")
-    cfg_json.write_text("{}", encoding="utf-8")
-    tid = _create_paused_task(server_env, state_pt, cfg_json)
-
-    with pytest.raises(server.HTTPException) as exc:
-        server.resume_task(tid)
-    assert exc.value.status_code == 503
 
 
 def test_resume_endpoint_rejects_unknown_task(server_env) -> None:

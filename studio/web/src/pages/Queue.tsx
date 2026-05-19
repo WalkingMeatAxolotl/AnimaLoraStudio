@@ -97,10 +97,8 @@ export default function QueuePage() {
     paused:    t('status.paused'),
   }
 
-  // ADR 0006 PR-4：feature flag 探测（首次 fetch /api/queue/hold 503 → flag off
-  // → 不显示 hold/pause UI）；探测成功后保留状态用作 banner + holdModal。
+  // ADR 0006：队列挂起状态，banner + holdModal 用。
   const [holdState, setHoldState] = useState<QueueHoldState | null>(null)
-  const [featureEnabled, setFeatureEnabled] = useState<boolean | null>(null)
   const [holdModalOpen, setHoldModalOpen] = useState(false)
   const [pausingTaskId, setPausingTaskId] = useState<number | null>(null)
 
@@ -108,10 +106,8 @@ export default function QueuePage() {
     try {
       const s = await api.getQueueHold()
       setHoldState(s)
-      setFeatureEnabled(true)
     } catch {
-      // 503 / 网络错 → 视作 flag off。state 留 null 让 UI 隐藏控件。
-      setFeatureEnabled(false)
+      // 网络错 / 启动期 supervisor 未就绪 → 静默；下一轮 SSE 触发重试。
       setHoldState(null)
     }
   }, [])
@@ -197,13 +193,7 @@ export default function QueuePage() {
       await api.pauseTask(task.id)
       toast(t('queue.pauseSent'), 'success')
     } catch (e) {
-      const msg = String(e)
-      // 503 = feature flag off
-      if (msg.includes('503')) {
-        toast(t('queue.featureDisabled'), 'error')
-      } else {
-        toast(t('queue.pauseFailed', { reason: msg }), 'error')
-      }
+      toast(t('queue.pauseFailed', { reason: String(e) }), 'error')
       setPausingTaskId(null)
     }
   }
@@ -292,9 +282,9 @@ export default function QueuePage() {
       subtitle={t('queue.description')}
       actions={
         <>
-          {/* ADR 0006 PR-4: 顶部 pause 按钮 — 仅 is_pausable=true 时显示（§8.1）。
+          {/* ADR 0006: 顶部 pause 按钮 — 仅 is_pausable=true 时显示（§8.1）。
               isPausable 来自 server enrich 的 task 字段（supervisor slot.train_loop_started 派生）。 */}
-          {featureEnabled && runningTask?.is_pausable && (
+          {runningTask?.is_pausable && (
             <button
               onClick={() => void pauseTask(runningTask)}
               disabled={busy || pausingTaskId !== null}
@@ -315,7 +305,7 @@ export default function QueuePage() {
               {t('queue.cancelCurrent')}
             </button>
           )}
-          {featureEnabled && holdState && !holdState.held && (
+          {holdState && !holdState.held && (
             <button
               onClick={() => setHoldModalOpen(true)}
               disabled={busy}
@@ -325,7 +315,7 @@ export default function QueuePage() {
               {t('queue.holdQueue')}
             </button>
           )}
-          {featureEnabled && holdState && holdState.held && (
+          {holdState && holdState.held && (
             <button
               onClick={() => void releaseQueue()}
               disabled={busy}
@@ -367,7 +357,7 @@ export default function QueuePage() {
     >
       <div className="flex flex-col gap-2.5">
         {/* ADR §4.1 队列挂起 banner — 仅 held=true 时显示，sticky 顶部。 */}
-        {featureEnabled && holdState?.held && (
+        {holdState?.held && (
           <div
             className="sticky top-0 z-10 px-3.5 py-2.5 rounded-md bg-warn-soft border border-warn text-warn text-xs flex items-center justify-between"
             data-testid="queue-hold-banner"

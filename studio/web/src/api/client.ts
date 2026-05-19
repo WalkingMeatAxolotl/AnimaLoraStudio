@@ -1702,8 +1702,9 @@ export const api = {
     }),
   retryTask: (id: number) =>
     req<Task>(`/api/queue/${id}/retry`, { method: 'POST' }),
-  /** ADR 0006 PR-2 — 暂停 running task。返回时 task 还在 running，需订阅 SSE
-   *  task_state_changed 看 status 转 paused。flag off / 状态不对时抛 409/503。 */
+  /** ADR 0006 — 暂停 running task。返回时 task 还在 running，需订阅 SSE
+   *  task_state_changed 看 status 转 paused。状态不对（非 running / train_loop
+   *  未启动）抛 409。 */
   pauseTask: (id: number) =>
     req<{ task_id: number; pause_pending: boolean }>(
       `/api/queue/${id}/pause`,

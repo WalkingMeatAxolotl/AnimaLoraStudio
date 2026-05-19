@@ -5,6 +5,84 @@
 #
 # 顺序：最新版本在 list 顶。
 
+- version: "0.9.0"
+  date: "2026-05-18"
+  summary: "queue 暂停 / 恢复 + 队列挂起（ADR 0006 一整套）"
+  entries:
+    - kind: added
+      summary: "UI 暂停 / 恢复训练 + 队列挂起调度（ADR 0006，#97 #98 #99 #100）"
+      pr_refs: [97, 98, 99, 100]
+      detail: |
+        Queue / QueueDetail 页加 4 个新交互（详见
+        [ADR 0006](docs/adr/0006-queue-pause-resume.md) 全文 + design doc
+        三轮 review）：
+
+        - **任务暂停**：running task 点暂停 → 保 state（optimizer + RNG +
+          step + monitor + LoRA "interrupted" + wandb finish）+ config
+          snapshot freeze 当前 args → 子进程 exit 0 → task 标 paused。点暂停
+          立刻锁屏 progress modal 全程引导（保存中 / 30s 超时三选一 /
+          失败兜底）
+        - **任务恢复**：paused 行点恢复 → status 回 pending → supervisor
+          下次 dispatch 用 `--resume-state` 拉起，bootstrap_phase 读 sibling
+          config snapshot 覆盖 args（snapshot 是 frozen 真相，跟用户后续改
+          version / preset / yaml 完全解耦） → load_training_state 成功
+          emit `resume_state_loaded` → supervisor 清 pause 文件对
+        - **队列挂起 / 恢复调度**：banner sticky 顶部；挂起 confirmation
+          modal 检测 running task 多问一句 "让它跑完" / "同时暂停"，
+          主按钮文案随 radio 联动
+        - **取消 paused task**：paused 行有 "彻底取消"，删 pause 文件 + 清 db 字段
+
+        信号链路（PR-0 spike 验证过）：supervisor `CTRL_BREAK_EVENT` /
+        POSIX `SIGINT` → 子进程 SIGBREAK / SIGINT handler → handle_interrupt
+        保 state + emit `__EVENT__:pause_state` → supervisor `_finish_slot`
+        三元分流（paused / canceled / done / failed）。
+
+    - kind: changed
+      summary: "周期 save state 文件按 task_id 隔离到 state/task_<TID>/ 子目录（#97）"
+      pr_refs: [97]
+      detail: |
+        `save_state_every` / `save_state_every_epochs` / `handle_interrupt`
+        全部改写到 `output_dir/state/task_<TID>/` 下，不再写 output_dir
+        顶层。同一 version 下连跑多个 task 时再也不会互相覆盖 state 文件
+        （pre-PR-1 的 latent bug）。
+
+        - supervisor 启动 training 时通过 env `LORA_TASK_ID` 注入 task id
+        - CLI 直接跑（无 env）fallback 到 `state/task_unknown/` 子目录
+        - `list_state_ckpts`（ResumeFieldPicker 后端）同时扫旧顶层 + 新
+          子目录，**老用户的现存 .pt 不丢**
+        - 顺手修了 `list_state_ckpts` 之前只扫 step 不扫 epoch 的小 bug
+
+    - kind: changed
+      summary: "cancel 在 Windows 改 taskkill /T /F 硬杀，让 CTRL_BREAK_EVENT 独占 pause（#98）"
+      pr_refs: [98]
+      detail: |
+        cancel 的语义本来就是硬中断（30s grace 几乎都触发强杀），
+        Windows 上 `proc.send_signal(CTRL_BREAK_EVENT)` 那一步实质无用
+        且跟 pause 信号撞。改为直接 `taskkill /T /F`：CTRL_BREAK_EVENT
+        专门留给 pause，信号意图清晰。POSIX 没这个冲突，cancel 继续
+        SIGTERM、pause 走 SIGINT，互不撞。
+
+    - kind: added
+      summary: "task 状态机加 'paused'，paused task 跨 supervisor 重启保留（#98）"
+      pr_refs: [98]
+      detail: |
+        `paused` 不进 TERMINAL_STATUSES — 可被 resume 复活。supervisor
+        启动 reconcile orphan 时按 status='running' 精确过滤，paused 自然
+        不受影响。db migration v6 加 4 个 NULLABLE 列（paused_state_path /
+        paused_config_path / paused_step / paused_at）+ 新 queue_settings
+        kv 表（持久化 queue.held 开关）。老库零 backfill 直接升上来。
+
+    - kind: added
+      summary: "tools/spike/ 信号链路验证脚本（#96）"
+      pr_refs: [96]
+      detail: |
+        合 ADR 之前先验证 Windows 信号链路通：parent.py 模拟 supervisor
+        发 `CTRL_BREAK_EVENT`、child.py 模拟训练子进程注册 SIGBREAK
+        handler。两次连跑 6 项 PASS（发信号 → 子进程退出 0.62s）。
+        报告写在
+        [docs/design/queue-pause-spike-report.md](docs/design/queue-pause-spike-report.md)；
+        ADR 全套合入并稳定后 cleanup PR 删 spike 脚本（报告留存）。
+
 - version: "0.8.2"
   date: "2026-05-17"
   summary: "hotfix：预设系统脱钩 redesign + hf-mirror 暂不可用 + 新建预设预览补齐项目路径"

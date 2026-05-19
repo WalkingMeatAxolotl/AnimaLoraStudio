@@ -1,6 +1,6 @@
 # 0006 — Queue 任务暂停 / 恢复 + 队列挂起 / 恢复调度
 
-**状态**：Proposed
+**状态**：Accepted（PR-1 #97 / PR-2 #98 / PR-3 #99 / PR-4 #100 全部合入 dev；PR-5 删 feature flag 默认开启）
 **日期**：2026-05-18
 **决策者**：@WalkingMeatAxolotl
 

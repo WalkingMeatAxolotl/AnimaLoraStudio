@@ -17,6 +17,7 @@
 - **🧩 训练栈可扩展**（v0.7 新）— `runtime/training/` 子包 + 4 个 plugin registry（adapters / optimizers / schedulers / inference_samplers）+ `AdapterProtocol` hook（on_step_begin / regularization_loss / excludes_weight_decay）；加新变体走 3 步（写 build 函数 + 字典加行 + schema Literal）不动 phases / loop（详见 [ADR 0003](docs/adr/0003-anima-train-refactor.md) + [`runtime/training/README.md`](runtime/training/README.md)）
 - **🖼️ 图片预处理流水线**（v0.8 新）— 流水线插入「② 预处理」step：ESRGAN / Real-ESRGAN 等多放大器预设 + ModelScope/HF 双源、智能流水（大图直接 resize 跳过放大模型）、SSE 实时进度。单 manifest 单 grid + 状态徽章（详见 [ADR 0004](docs/adr/0004-preprocess-manifest.md)）
 - **🎲 InfoNoise 自适应训练**（v0.8 新）— 基于 I-MMSE 等价的反 CDF 时间步采样器，把抽样集中在信息量大的噪声窗口；走 `timestep_samplers/` plugin registry，默认关，存量训练零侵入
+- **⏸️ 暂停 / 恢复训练 + 队列挂起**（v0.9 新）— UI 上一键暂停 running task（保 optimizer / step / monitor state + config snapshot），日后点恢复从同一步接续训练；队列挂起开关让 dispatcher 不拉新 pending，过夜 / 维护场景顺手用（详见 [ADR 0006](docs/adr/0006-queue-pause-resume.md)）
 
 ![Studio 训练页](docs/images/studio-train.png)
 

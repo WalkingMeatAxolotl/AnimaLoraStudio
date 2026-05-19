@@ -171,9 +171,7 @@ export default function QueueDetailPage() {
       await api.pauseTask(task.id)
       toast(t('queue.pauseSent'), 'success')
     } catch (e) {
-      const msg = String(e)
-      if (msg.includes('503')) toast(t('queue.featureDisabled'), 'error')
-      else toast(t('queue.pauseFailed', { reason: msg }), 'error')
+      toast(t('queue.pauseFailed', { reason: String(e) }), 'error')
       setPauseModalOpen(false)
     }
   }

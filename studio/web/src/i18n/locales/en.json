@@ -564,8 +564,7 @@
     },
     "resumeFailedMissing": "Pause file is missing — cannot resume. Start a fresh task from another .pt via ResumeFieldPicker.",
     "resumeFailed": "Resume failed: {{reason}}",
-    "pauseFailed": "Pause failed: {{reason}}",
-    "featureDisabled": "Pause / queue-hold not enabled (set ENABLE_PAUSE_RESUME=1 in server env)"
+    "pauseFailed": "Pause failed: {{reason}}"
   },
   "queueDetail": {
     "invalidId": "Invalid task ID",

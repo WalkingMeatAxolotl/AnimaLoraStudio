@@ -2919,21 +2919,8 @@ def cancel_task(task_id: int) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# ADR 0006 PR-2 — pause / hold endpoints。Feature flag 默认 off，灰度由 env
-# ENABLE_PAUSE_RESUME=1 打开。Resume endpoint 留 PR-3（cmd_builder 接入后）。
+# ADR 0006 — pause / resume / hold endpoints。
 # ---------------------------------------------------------------------------
-
-_ENABLE_PAUSE_RESUME = os.environ.get("ENABLE_PAUSE_RESUME", "").lower() in (
-    "1", "true", "yes", "on",
-)
-
-
-def _require_pause_resume_enabled() -> None:
-    if not _ENABLE_PAUSE_RESUME:
-        raise HTTPException(
-            503,
-            "pause/resume feature not enabled (set env ENABLE_PAUSE_RESUME=1)",
-        )
 
 
 @app.post("/api/queue/{task_id}/pause")
@@ -2943,7 +2930,6 @@ def pause_task(task_id: int) -> dict[str, Any]:
     异步：立即返回；UI 端 modal 订阅 SSE 看保存进度。supervisor 收到子进程
     `__EVENT__:pause_state` 后把 status 写为 paused 并 publish task_state_changed。
     """
-    _require_pause_resume_enabled()
     ok, reason = _supervisor().pause(task_id)
     if not ok:
         # 区分客户端错误（404/409）vs 状态机不允许（409）
@@ -2958,7 +2944,6 @@ def pause_task(task_id: int) -> dict[str, Any]:
 @app.get("/api/queue/hold")
 def get_queue_hold() -> dict[str, Any]:
     """查看当前队列挂起状态 + 等待恢复调度的 pending task 数（UI banner 用）。"""
-    _require_pause_resume_enabled()
     with db.connection_for() as conn:
         held = db.get_queue_held(conn)
         pending = db.list_tasks(conn, status="pending")
@@ -2972,7 +2957,6 @@ def hold_queue() -> dict[str, Any]:
     "同时暂停 running task" 由前端 modal 拆成两步：先调本 endpoint，再
     单独调 `/api/queue/{id}/pause`。后端不做合一操作。
     """
-    _require_pause_resume_enabled()
     with db.connection_for() as conn:
         db.set_queue_held(conn, True)
     bus.publish({"type": "queue_hold_changed", "held": True})
@@ -2982,7 +2966,6 @@ def hold_queue() -> dict[str, Any]:
 @app.post("/api/queue/release")
 def release_queue() -> dict[str, Any]:
     """恢复调度：dispatcher 重新按 priority + created_at 拉 pending。"""
-    _require_pause_resume_enabled()
     with db.connection_for() as conn:
         db.set_queue_held(conn, False)
     bus.publish({"type": "queue_hold_changed", "held": False})
@@ -2991,7 +2974,7 @@ def release_queue() -> dict[str, Any]:
 
 @app.post("/api/queue/{task_id}/resume")
 def resume_task(task_id: int) -> dict[str, Any]:
-    """恢复 paused task（ADR 0006 PR-3 / §6 路径 A）。
+    """恢复 paused task（ADR 0006 §6 路径 A）。
 
     流程：
       1. 校验 status == 'paused' + paused_state_path 文件存在
@@ -3003,7 +2986,6 @@ def resume_task(task_id: int) -> dict[str, Any]:
 
     文件丢失 → 409（ADR §5.5：引导用户走 ResumeFieldPicker 起新 task）。
     """
-    _require_pause_resume_enabled()
     with db.connection_for() as conn:
         task = db.get_task(conn, task_id)
         if not task:
