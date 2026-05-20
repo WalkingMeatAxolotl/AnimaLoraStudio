@@ -86,6 +86,13 @@ class TrainingContext:
     sample_prompt_idx: int = 0
     interrupted: bool = False
 
+    # ─── loop.py epoch backup（ADR 0006 Addendum 1 方案 Δ）───
+    # 每 epoch 末尾覆盖式写 auto_epoch_state.pt 后填充这两个字段。
+    # handle_interrupt 读它们 emit pause_state event；None 表示首 epoch 还没结束
+    # → supervisor 标 canceled 而非 paused（无可恢复进度）。
+    last_auto_epoch_state_path: Optional[Path] = None
+    last_auto_epoch_config_path: Optional[Path] = None
+
     # ─── 共用方法 ───
 
     def state_dir(self) -> Path:
@@ -124,66 +131,49 @@ class TrainingContext:
         return prompt
 
     def handle_interrupt(self, sig, frame) -> None:
-        """Pause / Ctrl+C 信号处理：保存 state + config snapshot + LoRA + emit event。
+        """Pause / Ctrl+C 信号处理（ADR 0006 Addendum 1 方案 Δ）：Pause = Cancel + 立即释放 GPU。
 
         信号来源：
           - CLI Ctrl+C：POSIX SIGINT / Windows SIGBREAK（由 resume phase 注册）
-          - Supervisor pause：Windows CTRL_BREAK_EVENT / POSIX SIGINT（ADR §`_send_pause_signal`）
+          - Supervisor pause：Windows CTRL_BREAK_EVENT / POSIX SIGINT
 
-        两条入口共用本 handler，触发同一条保 state 链路：
-          1. 写 pause_step_<N>.pt（state_dir 由 PR-1 决定 per-task 子目录）
-          2. 写 pause_step_<N>.config.json（ADR §5.7 config snapshot）
-          3. emit __EVENT__:pause_state（supervisor 识别 → 标 paused）
+        新流程（不再 mid-epoch save）：
+          1. wandb finish（让 supervisor 读到事件时一切 IO 已完成）
+          2. emit __EVENT__:pause_state，state_path 指向**最近一次 epoch 末** auto_epoch_state.pt
+             （由 loop.py 每 epoch 末尾覆盖式写盘，ctx.last_auto_epoch_state_path 字段维护）
+          3. 首 epoch 内（last_auto_epoch_state_path is None）→ emit state_path=None，
+             supervisor 据此走 cancel 分支（ADR 0006 Addendum 1 决策第 3 条）
           4. sys.exit(0)
+
+        放弃 mid-epoch save 的理由（详见 ADR Addendum 1 三方 audit）：
+          - grad_accum 周期未守 → partial backward grad 悬挂
+          - dataloader 进度不存 → resume 5% double-train（Prodigy d 估计偏）
+          - current_epoch 语义二义性（mid-epoch 路径保 epoch / epoch-end 路径保 epoch+1）
+          - InfoNoise / cosine restart T_cur 漂移
+          - 真正符合"暂停 = 立即释放 GPU"产品语义
 
         重复触发（已 interrupted 状态再来一次）= 强退。
         """
-        # 延迟 import 避免循环依赖（state.py / observability.py 间接 import 本模块）
-        from training.state import save_training_state
-        from training.snapshot import (
-            build_pause_config_path,
-            build_pause_state_path,
-            emit_event,
-            write_config_snapshot,
-        )
-        from train_monitor import get_state
-        from utils.optimizer_utils import optimizer_eval_mode
+        # 延迟 import 避免循环依赖
+        from training.snapshot import emit_event
 
         if self.interrupted:
             self.emit("强制退出...")
             sys.exit(1)
         self.interrupted = True
-        self.emit("\n检测到暂停信号，正在保存训练状态...")
-        state_dir = self.state_dir()
-        state_path = build_pause_state_path(state_dir, self.global_step)
-        config_path = build_pause_config_path(state_dir, self.global_step)
-        monitor_data = None
-        if self.monitor_server:
-            try:
-                monitor_data = get_state()
-            except Exception:
-                pass
-        # Config snapshot 先写 — 体积小、失败概率低；后面 .pt save 万一失败，
-        # supervisor 能从落盘的 config snapshot 判断"开始保存了"，不至于完全
-        # 状态丢失（cancel 兜底走的也是 supervisor 端时序判断）。
-        write_config_snapshot(config_path, self.args, self.sample_prompts)
-        # Schedule-Free 系优化器（PPSF）保存前切到 averaged weights — 否则存的是
-        # 训练用的 y 而不是真正应该被使用的 x。非 SF 优化器此 ctx 静默 no-op。
-        with optimizer_eval_mode(self.optimizer):
-            save_training_state(
-                state_path, self.injector, self.optimizer,
-                self.current_epoch, self.global_step, self.loss_history,
-                monitor_state=monitor_data, scheduler=self.scheduler,
-                timestep_sampler=self.timestep_sampler,
-            )
-            lora_path = self.output_dir / f"{self.args.output_name}_interrupted_step{self.global_step}.safetensors"
-            self.injector.save(lora_path)
-        self.wandb_monitor.finish()
+        self.emit("\n检测到暂停信号，正在退出（保留最近一次 epoch 备份用于 resume）...")
+        try:
+            self.wandb_monitor.finish()
+        except Exception:
+            pass
         # emit 在 wandb finish 后 — 让 supervisor 读到事件时一切 IO 已完成。
         emit_event("pause_state", {
-            "state_path": str(state_path),
-            "config_path": str(config_path),
+            "state_path": str(self.last_auto_epoch_state_path) if self.last_auto_epoch_state_path else None,
+            "config_path": str(self.last_auto_epoch_config_path) if self.last_auto_epoch_config_path else None,
             "step": self.global_step,
         })
-        self.emit(f"已暂停！state 文件: {state_path}")
+        if self.last_auto_epoch_state_path:
+            self.emit(f"已暂停！恢复点: {self.last_auto_epoch_state_path}")
+        else:
+            self.emit("首个 epoch 未完成，无 auto 备份可恢复 → 任务将标 canceled。")
         sys.exit(0)

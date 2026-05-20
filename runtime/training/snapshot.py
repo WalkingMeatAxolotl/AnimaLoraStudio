@@ -38,6 +38,26 @@ def build_pause_config_path(state_dir: Path, step: int) -> Path:
     return state_dir / f"pause_step_{step}.config.json"
 
 
+# ADR 0006 Addendum 1：epoch 自动备份用的覆盖式单文件路径。
+# 名字不带 step / epoch N 后缀 —— **覆盖式**，新 epoch 写盘前会覆盖旧的。
+# 跟 user-opt `save_state_every_epochs` 写出的 training_state_epoch{N}.pt（多份历史归档）
+# 完全独立，三类文件共存于 <state_dir>/task_<TID>/。
+
+def build_auto_epoch_state_path(state_dir: Path) -> Path:
+    """Auto epoch backup state 文件路径（覆盖式单文件）。
+
+    ADR 0006 Addendum 1 方案 Δ：每个 epoch 末尾**强制**写一份覆盖式 state
+    用作 pause 后盾。pause 信号触发 `handle_interrupt` 只 emit + exit，
+    不自己写盘 —— resume 用这份 auto backup。
+    """
+    return state_dir / "auto_epoch_state.pt"
+
+
+def build_auto_epoch_config_path(state_dir: Path) -> Path:
+    """Auto epoch backup config snapshot 路径（与 state `.pt` 同前缀，`.config.json` 后缀）。"""
+    return state_dir / "auto_epoch_state.config.json"
+
+
 def _jsonify(value: Any) -> Any:
     """把 args / sample_prompts 里的对象转成可 json.dump 的形式。
 

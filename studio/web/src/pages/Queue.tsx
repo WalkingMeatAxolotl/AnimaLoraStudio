@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Link, useNavigate } from 'react-router-dom'
 import { api, type QueueHoldState, type Task, type TaskStatus } from '../api/client'
 import { HoldQueueModal, type HoldDecision } from '../components/HoldQueueModal'
+import { PauseConfirmModal } from '../components/PauseConfirmModal'
 import { PauseProgressModal } from '../components/PauseProgressModal'
 import StepShell from '../components/StepShell'
 import { useDialog } from '../components/Dialog'
@@ -94,6 +95,10 @@ export default function QueuePage() {
   const [holdState, setHoldState] = useState<QueueHoldState | null>(null)
   const [holdModalOpen, setHoldModalOpen] = useState(false)
   const [pausingTaskId, setPausingTaskId] = useState<number | null>(null)
+  // ADR 0006 Addendum 1 §UI：确认 modal 先于 PauseProgressModal，告知"暂停可能影响
+  // 实验性参数 / 丢失当前轮进度"。pauseConfirmTaskId 非 null 时显示 PauseConfirmModal；
+  // 用户点确认 → 调 api + setPausingTaskId 进 PauseProgressModal；用户取消 → 清空。
+  const [pauseConfirmTaskId, setPauseConfirmTaskId] = useState<number | null>(null)
 
   const reloadHold = useCallback(async () => {
     try {
@@ -192,9 +197,28 @@ export default function QueuePage() {
   // 用 runningTask 派生比 tasks.some 再扫一遍便宜（runningTask 已经 memo 过）
   const hasRunning = runningTask !== null
 
-  // ADR 0006 — "真暂停" 已在 PR-2/3 上线（feature_flag off 时仍走原 cancel 语义）。
-  // 暂停按钮只在 task.is_pausable=true 时出现（train_loop 进入后），UI 锁屏 modal
-  // 全程引导（PauseProgressModal）。
+  // ADR 0006 + Addendum 1 — "真暂停" 已在 PR-2/3 上线，Addendum 1 翻盘后 Pause = Cancel
+  // + 立即释放 GPU，恢复点是最近 epoch 末 auto_epoch_state.pt。
+  // 暂停按钮只在 task.is_pausable=true 时出现（train_loop 进入后 + 首个 epoch backup
+  // 完成）；点按钮 → 先弹 PauseConfirmModal 告知用户语义 → 确认才调 api → 进
+  // PauseProgressModal 锁屏全程引导。
+  const requestPause = (task: Task) => {
+    setPauseConfirmTaskId(task.id)
+  }
+  const confirmPause = async () => {
+    const taskId = pauseConfirmTaskId
+    if (taskId === null) return
+    setPauseConfirmTaskId(null)
+    setPausingTaskId(taskId)
+    try {
+      await api.pauseTask(taskId)
+      toast(t('queue.pauseSent'), 'success')
+    } catch (e) {
+      toast(t('queue.pauseFailed', { reason: String(e) }), 'error')
+      setPausingTaskId(null)
+    }
+  }
+  // hold-and-pause 走的快速路径（HoldQueueModal 内已 confirmed，跳过 PauseConfirmModal）
   const pauseTask = async (task: Task) => {
     setPausingTaskId(task.id)
     try {
@@ -294,8 +318,8 @@ export default function QueuePage() {
               isPausable 来自 server enrich 的 task 字段（supervisor slot.train_loop_started 派生）。 */}
           {runningTask?.is_pausable && (
             <button
-              onClick={() => void pauseTask(runningTask)}
-              disabled={busy || pausingTaskId !== null}
+              onClick={() => requestPause(runningTask)}
+              disabled={busy || pausingTaskId !== null || pauseConfirmTaskId !== null}
               className="btn btn-secondary btn-sm"
               title={t('queue.pauseHint')}
               data-testid="queue-pause-btn"
@@ -582,6 +606,14 @@ export default function QueuePage() {
           </div>
         )}
       </div>
+
+      {/* ADR Addendum 1 §UI：暂停 confirm modal — 告知用户语义后才调 api。 */}
+      {pauseConfirmTaskId !== null && (
+        <PauseConfirmModal
+          onCancel={() => setPauseConfirmTaskId(null)}
+          onConfirm={() => void confirmPause()}
+        />
+      )}
 
       {/* ADR §4.3 暂停过程 modal — pausingTaskId 非 null 时全程锁屏。
           modal 自己监听 pause_state / task_state_changed 切换 phase。 */}

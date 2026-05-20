@@ -111,6 +111,19 @@ def load_training_state(path, injector, optimizer, scheduler=None, timestep_samp
         except Exception as e:
             logger.warning(f"timestep_sampler 状态恢复失败（冷启动重 warmup）: {e}")
 
+    # ADR 0006 Addendum 1 第 7 条：Schedule-Free 系优化器（PPSF 等）resume 守护。
+    # PPSF 内部维护 group['train_mode'] flag + Polyak averaged x/y/z 三组权重；
+    # load_state_dict 把 train_mode 恢复到 save 那刻的值（save 在 `optimizer_eval_mode`
+    # 内 = train_mode False） → resume 后第一步 step() 抛 "Not in train mode!"。
+    # 显式调一次 .train()：set_train_mode(True) lerp p.data 从 averaged x 反推回 y
+    # 并设 train_mode=True，跟 dev 训练循环起始状态对齐。Spike 验证 2000 步 bit-exact
+    # 跟 ground truth 一致（不漂移）。AdamW / Prodigy 无 .train 方法走 hasattr 静默跳过。
+    if hasattr(optimizer, "train") and callable(getattr(optimizer, "train")):
+        try:
+            optimizer.train()
+        except Exception as e:
+            logger.warning(f"optimizer.train() 调用失败（PPSF 可能 broken）: {e}")
+
     epoch = state.get("epoch", 0)
     global_step = state.get("global_step", 0)
     loss_history = state.get("loss_history", [])

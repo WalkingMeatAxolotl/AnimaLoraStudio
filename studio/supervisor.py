@@ -84,6 +84,11 @@ class _Slot:
     # 允许暂停。UI 端 SSE 用这个解锁暂停按钮，API 端 defense-in-depth 拒绝
     # 过早 pause 请求。
     train_loop_started: bool = False
+    # ADR 0006 Addendum 1：epoch 末尾 auto backup 完成后填这两个字段。
+    # is_pausable 升级条件要求 `last_auto_epoch_state_path is not None` —— 首 epoch
+    # 未结束时按钮完全隐藏，避免用户暂停后无可恢复 state。
+    last_auto_epoch_state_path: Optional[str] = None
+    last_auto_epoch_config_path: Optional[str] = None
 
     @property
     def busy(self) -> bool:
@@ -102,6 +107,8 @@ class _Slot:
         self.pause_config_path = None
         self.pause_step = None
         self.train_loop_started = False
+        self.last_auto_epoch_state_path = None
+        self.last_auto_epoch_config_path = None
 
 EventCallback = Callable[[dict[str, Any]], None]
 CmdBuilder = Callable[[dict[str, Any], Path], list[str]]
@@ -344,10 +351,15 @@ class Supervisor:
         return False
 
     def is_task_pausable(self, task_id: int) -> bool:
-        """ADR §8.1: UI is_pausable 信号。
+        """ADR §8.1 + Addendum 1: UI is_pausable 信号。
 
         条件：task 在 slot 上 running、`train_loop_started` 事件已收到、
+        **`last_auto_epoch_state_path` 已设置**（即首个 epoch 已写完 auto backup）、
         没有 pause / cancel pending。任一不满足 → UI 应隐藏暂停按钮。
+
+        ADR 0006 Addendum 1：首 epoch 未结束时禁用 pause 是关键防护 —— 没有
+        auto_epoch_state.pt 时按 pause 会让 supervisor 走 cancel 兜底，无可恢复进度，
+        UI 端直接隐藏按钮避免误操作。
         """
         slot = self._find_slot(kind="task", id=task_id)
         if slot is None:
@@ -355,6 +367,7 @@ class Supervisor:
         return (
             slot.proc is not None
             and slot.train_loop_started
+            and slot.last_auto_epoch_state_path is not None
             and not slot.pause_pending
             and not slot.cancel_pending
         )
@@ -684,13 +697,20 @@ class Supervisor:
                 except Exception:
                     logger.exception("malformed event marker: %r", line[:200])
                     return  # 不当 log 推
-                # 状态机镜像（ADR §8.1 / §`_on_line`）
+                # 状态机镜像（ADR §8.1 / §`_on_line` / Addendum 1 §supervisor）
                 if evt_type == "pause_state":
+                    # ADR Addendum 1 方案 Δ：state_path 为 None / 空 = 首 epoch 内暂停
+                    # → 走 _finish_slot 的 cancel 分支（pause_state_path 空 → 降级 canceled）。
                     slot.pause_state_path = str(payload.get("state_path") or "")
                     slot.pause_config_path = str(payload.get("config_path") or "")
                     slot.pause_step = payload.get("step")
                 elif evt_type == "train_loop_started":
                     slot.train_loop_started = True
+                elif evt_type == "auto_epoch_backup_written":
+                    # ADR 0006 Addendum 1：每 epoch 末 loop.py emit 一次 → 标记 slot
+                    # 字段 → is_pausable 升级条件满足 → SSE 解锁 UI 暂停按钮。
+                    slot.last_auto_epoch_state_path = str(payload.get("state_path") or "") or None
+                    slot.last_auto_epoch_config_path = str(payload.get("config_path") or "") or None
                 elif evt_type == "resume_state_loaded":
                     # ADR §5.5 / PR-3：训练子进程 load_training_state 成功 →
                     # 旧 pause 文件对已被消费完，删盘 + 清 db 字段，避免下次
@@ -1126,14 +1146,15 @@ class Supervisor:
             except Exception:
                 pass
 
-        # ADR 0006 PR-2 三元分流（原来是二元 canceled vs done/failed）。
+        # ADR 0006 PR-2 + Addendum 1 三元分流（原来二元 canceled vs done/failed）。
         # paused 优先级最高 — pause_pending=True 且子进程 emit 了 pause_state
         # （state_path / config_path 都到位）= 真正成功暂停。
-        # 缺 pause_state_path = 子进程退出前没来得及 emit（IO 慢 / 异常 /
-        # 强 kill）→ 降级 canceled（ADR §4.3 modal "强制取消保存进度" 兜底）。
+        # ADR Addendum 1 方案 Δ：pause_pending=True 但 pause_state_path 空 = 首 epoch
+        # 内暂停或子进程退出前没来得及 emit（IO 慢 / 异常 / 强 kill）→ 降级 canceled
+        # （ADR §4.3 modal "强制取消保存进度" 兜底）。
         if slot.pause_pending and slot.pause_state_path:
             status = "paused"
-        elif slot.cancel_pending:
+        elif slot.pause_pending or slot.cancel_pending:
             status = "canceled"
         elif rc == 0:
             status = "done"

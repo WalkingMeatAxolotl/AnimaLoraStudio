@@ -564,6 +564,13 @@
       "confirmPauseToo": "Hold & pause task #{{id}}",
       "confirmSimple": "Confirm hold"
     },
+    "pauseConfirm": {
+      "title": "Pause training?",
+      "adaptiveWarning": "Some experimental parameters (InfoNoise adaptive sampler, Prodigy-family adaptive optimisers, cosine LR scheduler) may show quality fluctuation after pause/resume.",
+      "epochLoss": "Resume will continue from the end of the previous epoch; progress in the current epoch will be discarded.",
+      "cancel": "Cancel",
+      "confirm": "Confirm pause"
+    },
     "resumeFailedMissing": "Pause file is missing — cannot resume. Start a fresh task from another .pt via ResumeFieldPicker.",
     "resumeFailed": "Resume failed: {{reason}}",
     "pauseFailed": "Pause failed: {{reason}}"

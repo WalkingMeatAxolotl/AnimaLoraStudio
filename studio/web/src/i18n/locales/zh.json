@@ -564,6 +564,13 @@
       "confirmPauseToo": "确认挂起 + 暂停 task #{{id}}",
       "confirmSimple": "确认挂起"
     },
+    "pauseConfirm": {
+      "title": "暂停训练？",
+      "adaptiveWarning": "部分实验性参数（如 InfoNoise 自适应采样器、Prodigy 类自适应优化器、cosine 学习率调度）在暂停 / 恢复后可能出现质量波动。",
+      "epochLoss": "恢复时将从上一轮 epoch 结束位置继续，当前轮进度将被丢弃。",
+      "cancel": "取消",
+      "confirm": "确认暂停"
+    },
     "resumeFailedMissing": "暂停文件已丢失，无法恢复。请通过 ResumeFieldPicker 新建任务从其他 .pt 起。",
     "resumeFailed": "恢复失败：{{reason}}",
     "pauseFailed": "暂停失败：{{reason}}"
