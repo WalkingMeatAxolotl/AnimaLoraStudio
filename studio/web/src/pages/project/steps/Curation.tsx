@@ -5,6 +5,10 @@ import {
   api,
   type CurationItem,
   type CurationView,
+  type DuplicateGroup,
+  type DuplicateItem,
+  type DuplicateScanOptions,
+  type DuplicateScanResult,
   type ProjectDetail,
   type Version,
 } from '../../../api/client'
@@ -73,7 +77,7 @@ interface Ctx {
 }
 
 interface Preview {
-  side: 'left' | 'right'
+  side: 'left' | 'right' | 'duplicate'
   name: string
   folder?: string
   url: string
@@ -90,6 +94,20 @@ type Focus =
 const FOLDER_PATTERN = /^([0-9]+_)?[A-Za-z][A-Za-z0-9_-]*$/
 
 const SCROLL_BOX = 'flex-1 min-h-0 overflow-y-auto pr-1'
+
+const DEFAULT_DUPLICATE_OPTIONS: DuplicateScanOptions = {
+  target: 'unused',
+  match_scope: 'both',
+  hash_size: 768,
+  hash_workers: 4,
+  tile_grids: [4, 6],
+  structure_threshold: 6,
+  variant_score: 72,
+  aspect_tolerance: 0.045,
+  min_close_tiles: 0.48,
+  tile_median: 14,
+  min_gray_close: 0.42,
+}
 
 export default function CurationPage() {
   const { t } = useTranslation()
@@ -145,6 +163,10 @@ export default function CurationPage() {
   const [newFolder, setNewFolder] = useState<string>('')
   const [renaming, setRenaming] = useState<{ target: string; value: string } | null>(null)
   const [preview, setPreview] = useState<Preview | null>(null)
+  const [dupOptions, setDupOptions] = useState<DuplicateScanOptions>(DEFAULT_DUPLICATE_OPTIONS)
+  const [dupResult, setDupResult] = useState<DuplicateScanResult | null>(null)
+  const [dupSel, setDupSel] = useState<Set<string>>(new Set())
+  const [dupBusy, setDupBusy] = useState(false)
 
   const [sortMode, setSortMode] = useState<SortMode>(() => {
     if (typeof window === 'undefined') return DEFAULT_SORT
@@ -219,6 +241,24 @@ export default function CurationPage() {
             thumbUrl: api.versionThumbUrl(project.id, versionId, 'train', n, rightFolder),
           })),
     [rightSortedNames, project.id, versionId, rightFolder]
+  )
+
+  const duplicateSuggested = useMemo(
+    () =>
+      dupResult
+        ? dupResult.groups.flatMap((group) =>
+            group.items.filter((item) => !item.keep).map((item) => item.name)
+          )
+        : [],
+    [dupResult]
+  )
+
+  const duplicatePreviewNames = useMemo(
+    () =>
+      dupResult
+        ? dupResult.groups.flatMap((group) => group.items.map((item) => item.name))
+        : [],
+    [dupResult]
   )
 
   const onLeftHover = useCallback(
@@ -448,6 +488,71 @@ export default function CurationPage() {
     if (await removeRightFiles(folder, [name])) advancePreviewAfterAction(name)
   }
 
+  const scanDuplicates = async () => {
+    if (versionId == null || dupBusy) return
+    setDupBusy(true)
+    try {
+      const result = await api.scanDuplicates(project.id, versionId, dupOptions)
+      setDupResult(result)
+      setDupSel(new Set(
+        result.groups.flatMap((group) =>
+          group.items.filter((item) => !item.keep).map((item) => item.name)
+        )
+      ))
+      toast(t('curate.dupScanDone', { groups: result.group_count, candidates: result.candidate_count }), 'success')
+    } catch (e) {
+      toast(String(e), 'error')
+    } finally {
+      setDupBusy(false)
+    }
+  }
+
+  const openDuplicatePreview = (name: string) => {
+    const list = duplicatePreviewNames.length ? duplicatePreviewNames : [name]
+    setPreview({
+      side: 'duplicate', name,
+      url: api.projectThumbUrl(project.id, name, 'download', 1600),
+      caption: name,
+      list,
+      index: Math.max(0, list.indexOf(name)),
+      resolve: (n) => api.projectThumbUrl(project.id, n, 'download', 1600),
+    })
+  }
+
+  const applyDuplicateAction = async (action: 'move' | 'delete') => {
+    if (versionId == null || dupBusy || dupSel.size === 0) return
+    const names = Array.from(dupSel)
+    const ok = await dialog.confirm(
+      action === 'move'
+        ? t('curate.dupConfirmMove', { n: names.length })
+        : t('curate.dupConfirmDelete', { n: names.length }),
+      {
+        tone: action === 'delete' ? 'danger' : 'warn',
+        okText: action === 'move' ? t('curate.dupMoveOk') : t('curate.dupDeleteOk'),
+      },
+    )
+    if (!ok) return
+    setDupBusy(true)
+    try {
+      const result = await api.applyDuplicateAction(project.id, versionId, { action, names })
+      const changed = action === 'move' ? result.moved.length : result.deleted.length
+      toast(
+        action === 'move'
+          ? t('curate.dupMovedToast', { n: changed })
+          : t('curate.dupDeletedToast', { n: changed }),
+        'success',
+      )
+      setDupSel(new Set())
+      setDupResult(null)
+      await refresh()
+      await reload()
+    } catch (e) {
+      toast(String(e), 'error')
+    } finally {
+      setDupBusy(false)
+    }
+  }
+
   return (
     <StepShell
       idx={2}
@@ -470,6 +575,20 @@ export default function CurationPage() {
       }
     >
     <div className="flex flex-col h-full gap-3">
+      <DuplicateReviewPanel
+        projectId={project.id}
+        options={dupOptions}
+        result={dupResult}
+        selected={dupSel}
+        busy={dupBusy}
+        suggested={duplicateSuggested}
+        onOptionsChange={setDupOptions}
+        onScan={scanDuplicates}
+        onSelect={setDupSel}
+        onMove={() => applyDuplicateAction('move')}
+        onDelete={() => applyDuplicateAction('delete')}
+        onPreview={openDuplicatePreview}
+      />
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 items-stretch flex-1 min-h-0">
         <PanelCard
@@ -620,7 +739,9 @@ export default function CurationPage() {
           shortcutHint={
             preview.side === 'left'
               ? t('curate.previewHintLeft')
-              : t('curate.previewHintRight')
+              : preview.side === 'right'
+                ? t('curate.previewHintRight')
+                : t('curate.previewHintDuplicate')
           }
         />
       )}
@@ -632,6 +753,371 @@ export default function CurationPage() {
 // ---------------------------------------------------------------------------
 // 子组件
 // ---------------------------------------------------------------------------
+
+function DuplicateReviewPanel({
+  projectId,
+  options,
+  result,
+  selected,
+  busy,
+  suggested,
+  onOptionsChange,
+  onScan,
+  onSelect,
+  onMove,
+  onDelete,
+  onPreview,
+}: {
+  projectId: number
+  options: DuplicateScanOptions
+  result: DuplicateScanResult | null
+  selected: Set<string>
+  busy: boolean
+  suggested: string[]
+  onOptionsChange: (next: DuplicateScanOptions) => void
+  onScan: () => void
+  onSelect: (next: Set<string>) => void
+  onMove: () => void
+  onDelete: () => void
+  onPreview: (name: string) => void
+}) {
+  const { t } = useTranslation()
+  const patch = <K extends keyof DuplicateScanOptions>(key: K, value: DuplicateScanOptions[K]) => {
+    onOptionsChange({ ...options, [key]: value })
+  }
+  const toggleName = (name: string) => {
+    const next = new Set(selected)
+    if (next.has(name)) next.delete(name)
+    else next.add(name)
+    onSelect(next)
+  }
+  return (
+    <section className="rounded-md border border-subtle bg-surface overflow-hidden shrink-0">
+      <div className="h-0.5 bg-warn" />
+      <header className="flex flex-wrap items-center gap-2 px-2.5 py-1.5 border-b border-subtle text-sm">
+        <h3 className="font-semibold">{t('curate.dupTitle')}</h3>
+        <span className="text-xs text-fg-tertiary">
+          {result
+            ? t('curate.dupSummary', {
+                groups: result.group_count,
+                candidates: result.candidate_count,
+                total: result.total_images,
+              })
+            : t('curate.dupSubtitle')}
+        </span>
+        <span className="flex-1" />
+        <BtnSecondary
+          onClick={() => onSelect(new Set(suggested))}
+          disabled={busy || suggested.length === 0}
+        >
+          {t('curate.dupSelectSuggested')}
+        </BtnSecondary>
+        <BtnSecondary
+          onClick={() => onSelect(new Set())}
+          disabled={busy || selected.size === 0}
+        >
+          {t('curate.deselect')}
+        </BtnSecondary>
+        <BtnSecondary onClick={onMove} disabled={busy || selected.size === 0}>
+          {t('curate.dupMoveBtn', { n: selected.size })}
+        </BtnSecondary>
+        <BtnDanger onClick={onDelete} disabled={busy || selected.size === 0}>
+          {t('curate.dupDeleteBtn', { n: selected.size })}
+        </BtnDanger>
+      </header>
+
+      <div className="grid grid-cols-1 2xl:grid-cols-[360px,1fr] gap-3 p-2">
+        <div className="flex flex-col gap-2 text-sm">
+          <div className="grid grid-cols-2 gap-2">
+            <label className="flex flex-col gap-1">
+              <span className="text-xs text-fg-tertiary">{t('curate.dupTarget')}</span>
+              <select
+                className="input px-2 py-1 text-sm"
+                value={options.target}
+                onChange={(e) => patch('target', e.target.value as DuplicateScanOptions['target'])}
+                disabled={busy}
+              >
+                <option value="unused">{t('curate.dupTargetUnused')}</option>
+                <option value="download">{t('curate.dupTargetDownload')}</option>
+              </select>
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs text-fg-tertiary">{t('curate.dupScope')}</span>
+              <select
+                className="input px-2 py-1 text-sm"
+                value={options.match_scope}
+                onChange={(e) => patch('match_scope', e.target.value as DuplicateScanOptions['match_scope'])}
+                disabled={busy}
+              >
+                <option value="strict">{t('curate.dupScopeStrict')}</option>
+                <option value="both">{t('curate.dupScopeBoth')}</option>
+              </select>
+            </label>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 2xl:grid-cols-2 gap-2">
+            <NumOption
+              label={t('curate.dupHashSize')}
+              value={options.hash_size}
+              min={0}
+              max={2048}
+              step={64}
+              disabled={busy}
+              onChange={(value) => patch('hash_size', value)}
+            />
+            <NumOption
+              label={t('curate.dupWorkers')}
+              value={options.hash_workers}
+              min={1}
+              max={32}
+              step={1}
+              disabled={busy}
+              onChange={(value) => patch('hash_workers', value)}
+            />
+            <NumOption
+              label={t('curate.dupStructure')}
+              value={options.structure_threshold}
+              min={0}
+              max={24}
+              step={1}
+              disabled={busy}
+              onChange={(value) => patch('structure_threshold', value)}
+            />
+            <NumOption
+              label={t('curate.dupVariantScore')}
+              value={options.variant_score}
+              min={40}
+              max={98}
+              step={1}
+              disabled={busy}
+              onChange={(value) => patch('variant_score', value)}
+            />
+            <NumOption
+              label={t('curate.dupAspect')}
+              value={options.aspect_tolerance}
+              min={0.005}
+              max={0.2}
+              step={0.005}
+              disabled={busy}
+              onChange={(value) => patch('aspect_tolerance', value)}
+            />
+            <NumOption
+              label={t('curate.dupCloseTiles')}
+              value={options.min_close_tiles}
+              min={0}
+              max={1}
+              step={0.01}
+              disabled={busy}
+              onChange={(value) => patch('min_close_tiles', value)}
+            />
+            <NumOption
+              label={t('curate.dupTileMedian')}
+              value={options.tile_median}
+              min={0}
+              max={40}
+              step={1}
+              disabled={busy}
+              onChange={(value) => patch('tile_median', value)}
+            />
+            <NumOption
+              label={t('curate.dupGrayClose')}
+              value={options.min_gray_close}
+              min={0}
+              max={1}
+              step={0.01}
+              disabled={busy}
+              onChange={(value) => patch('min_gray_close', value)}
+            />
+          </div>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-fg-tertiary">{t('curate.dupTileGrids')}</span>
+            <input
+              className="input input-mono px-2 py-1 text-sm"
+              value={options.tile_grids.join(',')}
+              disabled={busy}
+              onChange={(e) => {
+                const grids = e.target.value
+                  .split(',')
+                  .map((part) => Number(part.trim()))
+                  .filter((value) => Number.isFinite(value))
+                patch('tile_grids', grids.length ? grids : options.tile_grids)
+              }}
+            />
+          </label>
+          <BtnPrimary onClick={onScan} disabled={busy}>
+            {busy ? t('curate.dupScanning') : t('curate.dupScanBtn')}
+          </BtnPrimary>
+        </div>
+
+        <div className="min-h-[160px] max-h-[38vh] overflow-y-auto pr-1">
+          {!result ? (
+            <p className="text-sm text-fg-tertiary py-2">{t('curate.dupEmpty')}</p>
+          ) : result.groups.length === 0 ? (
+            <p className="text-sm text-fg-tertiary py-2">
+              {t('curate.dupNoGroups', { total: result.total_images })}
+            </p>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {result.groups.map((group) => (
+                <DuplicateGroupCard
+                  key={group.group_id}
+                  projectId={projectId}
+                  group={group}
+                  selected={selected}
+                  onToggle={toggleName}
+                  onPreview={onPreview}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function NumOption({
+  label,
+  value,
+  min,
+  max,
+  step,
+  disabled,
+  onChange,
+}: {
+  label: string
+  value: number
+  min: number
+  max: number
+  step: number
+  disabled: boolean
+  onChange: (value: number) => void
+}) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs text-fg-tertiary">{label}</span>
+      <input
+        type="number"
+        className="input input-mono px-2 py-1 text-sm"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(Number(e.target.value))}
+      />
+    </label>
+  )
+}
+
+function DuplicateGroupCard({
+  projectId,
+  group,
+  selected,
+  onToggle,
+  onPreview,
+}: {
+  projectId: number
+  group: DuplicateGroup
+  selected: Set<string>
+  onToggle: (name: string) => void
+  onPreview: (name: string) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <article className="rounded-md border border-subtle bg-sunken p-2">
+      <div className="flex flex-wrap items-center gap-2 mb-2 text-xs">
+        <span className="badge badge-neutral">#{group.group_id}</span>
+        <span className="text-fg-secondary">
+          {t('curate.dupKeepSuggested')} <code className="mono">{group.keep}</code>
+        </span>
+        {group.best && (
+          <span className="badge badge-warn">
+            {group.best.match_type} · {group.best.score}
+          </span>
+        )}
+      </div>
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(112px,1fr))] gap-1.5">
+        {group.items.map((item) => (
+          <DuplicateItemCell
+            key={item.name}
+            projectId={projectId}
+            item={item}
+            selected={selected.has(item.name)}
+            onToggle={() => onToggle(item.name)}
+            onPreview={() => onPreview(item.name)}
+          />
+        ))}
+      </div>
+    </article>
+  )
+}
+
+function DuplicateItemCell({
+  projectId,
+  item,
+  selected,
+  onToggle,
+  onPreview,
+}: {
+  projectId: number
+  item: DuplicateItem
+  selected: boolean
+  onToggle: () => void
+  onPreview: () => void
+}) {
+  const { t } = useTranslation()
+  const metrics = item.metrics
+  return (
+    <div
+      className={
+        'group relative rounded-md border overflow-hidden bg-surface ' +
+        (item.keep ? 'border-ok' : selected ? 'border-warn ring-2 ring-warn-soft' : 'border-subtle')
+      }
+    >
+      <button
+        type="button"
+        onClick={onPreview}
+        className="block w-full aspect-square bg-sunken"
+        title={item.name}
+      >
+        <img
+          src={api.projectThumbUrl(projectId, item.name, 'download', 256)}
+          alt={item.name}
+          loading="lazy"
+          decoding="async"
+          className="w-full h-full object-cover"
+        />
+      </button>
+      <div className="p-1.5 flex flex-col gap-1 text-[11px]">
+        <div className="flex items-center gap-1 min-w-0">
+          {item.keep ? (
+            <span className="badge badge-ok shrink-0">{t('curate.dupKeep')}</span>
+          ) : (
+            <button
+              type="button"
+              onClick={onToggle}
+              className={`shrink-0 w-5 h-5 rounded-sm border text-[12px] font-bold ${
+                selected ? 'bg-warn text-white border-warn' : 'bg-surface border-dim text-transparent'
+              }`}
+              aria-label={`${selected ? t('common.deselect') : t('common.select')} ${item.name}`}
+            >
+              ✓
+            </button>
+          )}
+          <code className="mono truncate min-w-0">{item.name}</code>
+        </div>
+        <div className="text-fg-tertiary">
+          {item.width}x{item.height} · {item.filesize_kb}KB
+        </div>
+        {metrics && (
+          <div className="text-fg-tertiary truncate" title={metrics.note}>
+            {metrics.match_type} · {metrics.score}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
 
 function FolderSummary({
   folders, counts, activeFolder, busy, onSwitch, onRename, onDelete,

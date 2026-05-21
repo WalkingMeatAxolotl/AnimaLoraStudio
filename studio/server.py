@@ -63,6 +63,7 @@ from .event_bus import bus
 from .services import (
     caption_snapshot,
     downloader,
+    duplicate_finder,
     presets as preset_flow,
     model_downloader,
     flash_attention_setup,
@@ -2024,6 +2025,25 @@ class FolderOp(BaseModel):
     new_name: Optional[str] = None
 
 
+class DuplicateScanRequest(BaseModel):
+    target: str = "unused"
+    match_scope: str = "both"
+    hash_size: int = duplicate_finder.DEFAULT_HASH_SIZE
+    hash_workers: int = duplicate_finder.DEFAULT_HASH_WORKERS
+    tile_grids: list[int] = list(duplicate_finder.DEFAULT_TILE_GRIDS)
+    structure_threshold: int = duplicate_finder.DEFAULT_STRUCTURE_THRESHOLD
+    variant_score: float = duplicate_finder.DEFAULT_VARIANT_SCORE
+    aspect_tolerance: float = duplicate_finder.DEFAULT_ASPECT_TOLERANCE
+    min_close_tiles: float = duplicate_finder.DEFAULT_MIN_CLOSE_TILES
+    tile_median: float = duplicate_finder.DEFAULT_TILE_MEDIAN
+    min_gray_close: float = duplicate_finder.DEFAULT_MIN_GRAY_CLOSE
+
+
+class DuplicateApplyRequest(BaseModel):
+    action: str  # "move" | "delete"
+    names: list[str]
+
+
 def _curation_err_code(exc: curation.CurationError) -> int:
     msg = str(exc)
     if "不存在" in msg:
@@ -2040,6 +2060,51 @@ def get_curation(pid: int, vid: int) -> dict[str, Any]:
             return curation.curation_view(conn, pid, vid)
         except curation.CurationError as exc:
             raise HTTPException(_curation_err_code(exc), str(exc)) from exc
+
+
+def _duplicate_err_code(exc: duplicate_finder.DuplicateFinderError) -> int:
+    msg = str(exc)
+    if "not found" in msg or "不存在" in msg:
+        return 404
+    if "invalid" in msg or "非法" in msg:
+        return 400
+    if "not installed" in msg:
+        return 422
+    return 422
+
+
+@app.post("/api/projects/{pid}/versions/{vid}/curation/duplicates/scan")
+def scan_curation_duplicates(
+    pid: int, vid: int, body: DuplicateScanRequest
+) -> dict[str, Any]:
+    with db.connection_for() as conn:
+        try:
+            options = duplicate_finder.options_from_payload(body.model_dump())
+            return duplicate_finder.scan_project_duplicates(conn, pid, vid, options)
+        except curation.CurationError as exc:
+            raise HTTPException(_curation_err_code(exc), str(exc)) from exc
+        except duplicate_finder.DuplicateFinderError as exc:
+            raise HTTPException(_duplicate_err_code(exc), str(exc)) from exc
+
+
+@app.post("/api/projects/{pid}/versions/{vid}/curation/duplicates/apply")
+def apply_curation_duplicates(
+    pid: int, vid: int, body: DuplicateApplyRequest
+) -> dict[str, Any]:
+    with db.connection_for() as conn:
+        try:
+            result = duplicate_finder.apply_duplicate_action(
+                conn,
+                pid,
+                vid,
+                action=body.action,  # type: ignore[arg-type]
+                names=body.names,
+            )
+        except curation.CurationError as exc:
+            raise HTTPException(_curation_err_code(exc), str(exc)) from exc
+        except duplicate_finder.DuplicateFinderError as exc:
+            raise HTTPException(_duplicate_err_code(exc), str(exc)) from exc
+    return result
 
 
 @app.post("/api/projects/{pid}/versions/{vid}/curation/copy")

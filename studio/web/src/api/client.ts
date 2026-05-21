@@ -731,6 +731,81 @@ export interface CopyResult {
   missing: string[]
 }
 
+export interface DuplicateScanOptions {
+  target: 'unused' | 'download'
+  match_scope: 'strict' | 'both'
+  hash_size: number
+  hash_workers: number
+  tile_grids: number[]
+  structure_threshold: number
+  variant_score: number
+  aspect_tolerance: number
+  min_close_tiles: number
+  tile_median: number
+  min_gray_close: number
+}
+
+export interface DuplicateMetrics {
+  score: number
+  match_type: 'keep' | 'strict-duplicate' | 'same-scene-variant' | 'linked-indirectly' | string
+  structure_diff: number
+  phash_diff: number
+  soft_phash_diff: number
+  dhash_diff: number
+  ahash_diff: number
+  edge_diff: number
+  color_diff: number
+  tile_median: number
+  tile_mean: number
+  tile_close_ratio: number
+  gray_diff: number
+  gray_close_ratio: number
+  aspect_delta: number
+  note: string
+}
+
+export interface DuplicateItem {
+  name: string
+  keep: boolean
+  width: number
+  height: number
+  filesize_kb: number
+  metrics: DuplicateMetrics | null
+}
+
+export interface DuplicateGroup {
+  group_id: number
+  keep: string
+  items: DuplicateItem[]
+  best: DuplicateMetrics | null
+}
+
+export interface DuplicateScanResult {
+  target: DuplicateScanOptions['target']
+  match_scope: DuplicateScanOptions['match_scope']
+  total_images: number
+  readable_images: number
+  group_count: number
+  candidate_count: number
+  elapsed_seconds: number
+  options: DuplicateScanOptions
+  stats: {
+    total_pairs: number
+    aspect_skipped_pairs: number
+    prefiltered_pairs: number
+    compared_pairs: number
+  }
+  groups: DuplicateGroup[]
+}
+
+export interface DuplicateApplyResult {
+  action: 'move' | 'delete'
+  moved: string[]
+  deleted: string[]
+  missing: string[]
+  quarantine_folder: string | null
+}
+
 // ---- tagging (PP4) --------------------------------------------------------
 
 export type TaggerName = 'wd14' | 'cltagger' | 'joycaption' | 'llm'
@@ -1768,6 +1843,24 @@ export const api = {
   ) =>
     req<Record<string, unknown>>(
       `/api/projects/${pid}/versions/${vid}/curation/folder`,
+      { method: 'POST', body: JSON.stringify(body) }
+    ),
+  scanDuplicates: (
+    pid: number,
+    vid: number,
+    body: DuplicateScanOptions
+  ) =>
+    req<DuplicateScanResult>(
+      `/api/projects/${pid}/versions/${vid}/curation/duplicates/scan`,
+      { method: 'POST', body: JSON.stringify(body) }
+    ),
+  applyDuplicateAction: (
+    pid: number,
+    vid: number,
+    body: { action: 'move' | 'delete'; names: string[] }
+  ) =>
+    req<DuplicateApplyResult>(
+      `/api/projects/${pid}/versions/${vid}/curation/duplicates/apply`,
       { method: 'POST', body: JSON.stringify(body) }
     ),
   versionThumbUrl: (

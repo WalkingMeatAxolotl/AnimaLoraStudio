@@ -4,8 +4,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from PIL import Image, ImageDraw
 
 from studio import curation, db, projects, versions
+from studio.services import duplicate_finder
 from studio.services import preprocess_manifest
 
 
@@ -27,6 +29,25 @@ def _dl(env, name: str, blob: bytes = b"img") -> Path:
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_bytes(blob)
     return f
+
+
+def _png(env, name: str, color: str = "#d8dde6") -> Path:
+    p = _dl(env, name, blob=b"")
+    img = Image.new("RGB", (96, 96), color)
+    draw = ImageDraw.Draw(img)
+    draw.rectangle((12, 16, 84, 80), outline="#111111", width=4)
+    draw.ellipse((34, 30, 62, 58), fill="#f0c4a0", outline="#111111", width=2)
+    img.save(p)
+    return p
+
+
+def _different_png(env, name: str) -> Path:
+    p = _dl(env, name, blob=b"")
+    img = Image.new("RGB", (96, 96), "#90c8ff")
+    draw = ImageDraw.Draw(img)
+    draw.polygon([(16, 82), (48, 12), (82, 82)], fill="#62aa55", outline="#111111")
+    img.save(p)
+    return p
 
 
 def _meta(env, name: str, ext: str, content: str) -> Path:
@@ -343,3 +364,55 @@ def test_has_train_images_false_then_true(env) -> None:
             conn, env["p"]["id"], env["v"]["id"], ["1.png"], "5_concept"
         )
         assert curation.has_train_images(conn, env["p"]["id"], env["v"]["id"]) is True
+
+
+# ---------------------------------------------------------------------------
+# duplicate review
+# ---------------------------------------------------------------------------
+
+
+def test_duplicate_scan_returns_review_groups(env) -> None:
+    _png(env, "1.png")
+    _png(env, "2.png")
+    _different_png(env, "3.png")
+
+    with db.connection_for(env["db"]) as conn:
+        result = duplicate_finder.scan_project_duplicates(
+            conn,
+            env["p"]["id"],
+            env["v"]["id"],
+            duplicate_finder.DuplicateOptions(
+                target="unused",
+                match_scope="strict",
+                hash_workers=1,
+            ),
+        )
+
+    assert result["total_images"] == 3
+    assert result["group_count"] == 1
+    group = result["groups"][0]
+    assert group["keep"] in {"1.png", "2.png"}
+    assert {item["name"] for item in group["items"]} == {"1.png", "2.png"}
+    assert group["best"]["match_type"] == "strict-duplicate"
+
+
+def test_duplicate_apply_move_only_confirmed_names(env) -> None:
+    _png(env, "1.png")
+    _png(env, "2.png")
+    _meta(env, "2.png", ".txt", "tag")
+
+    with db.connection_for(env["db"]) as conn:
+        result = duplicate_finder.apply_duplicate_action(
+            conn,
+            env["p"]["id"],
+            env["v"]["id"],
+            action="move",
+            names=["2.png"],
+        )
+
+    pdir = projects.project_dir(env["p"]["id"], env["p"]["slug"])
+    assert result["moved"] == ["2.png"]
+    assert (pdir / "download" / "1.png").exists()
+    assert not (pdir / "download" / "2.png").exists()
+    assert (pdir / "download" / "_Duplicates_Found" / "2.png").exists()
+    assert (pdir / "download" / "_Duplicates_Found" / "2.txt").exists()

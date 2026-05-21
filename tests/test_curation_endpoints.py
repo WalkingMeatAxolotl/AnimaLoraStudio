@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image, ImageDraw
 
 from studio import db, projects, server, versions
 
@@ -37,6 +38,25 @@ def _drop(client, pid: int, name: str = "1.png") -> Path:
     pdir.mkdir(parents=True, exist_ok=True)
     f = pdir / name
     f.write_bytes(b"\x89PNG fake")
+    return f
+
+
+def _drop_png(client, pid: int, name: str = "1.png", color: str = "#d8dde6") -> Path:
+    f = _drop(client, pid, name)
+    img = Image.new("RGB", (96, 96), color)
+    draw = ImageDraw.Draw(img)
+    draw.rectangle((12, 16, 84, 80), outline="#111111", width=4)
+    draw.ellipse((34, 30, 62, 58), fill="#f0c4a0", outline="#111111", width=2)
+    img.save(f)
+    return f
+
+
+def _drop_different_png(client, pid: int, name: str = "3.png") -> Path:
+    f = _drop(client, pid, name)
+    img = Image.new("RGB", (96, 96), "#90c8ff")
+    draw = ImageDraw.Draw(img)
+    draw.polygon([(16, 82), (48, 12), (82, 82)], fill="#62aa55", outline="#111111")
+    img.save(f)
     return f
 
 
@@ -190,3 +210,38 @@ def test_version_thumb_rejects_traversal(client: TestClient) -> None:
         "?bucket=train&folder=../etc&name=passwd"
     )
     assert r.status_code == 400
+
+
+def test_duplicate_scan_and_apply_requires_explicit_names(client: TestClient) -> None:
+    pid, vid = _make(client)
+    _drop_png(client, pid, "1.png")
+    _drop_png(client, pid, "2.png")
+    _drop_different_png(client, pid, "3.png")
+
+    scan = client.post(
+        f"/api/projects/{pid}/versions/{vid}/curation/duplicates/scan",
+        json={
+            "target": "unused",
+            "match_scope": "strict",
+            "hash_workers": 1,
+        },
+    )
+    assert scan.status_code == 200
+    body = scan.json()
+    assert body["group_count"] == 1
+    group_names = {item["name"] for item in body["groups"][0]["items"]}
+    assert group_names == {"1.png", "2.png"}
+
+    apply = client.post(
+        f"/api/projects/{pid}/versions/{vid}/curation/duplicates/apply",
+        json={"action": "move", "names": ["2.png"]},
+    )
+    assert apply.status_code == 200
+    assert apply.json()["moved"] == ["2.png"]
+
+    with db.connection_for() as conn:
+        proj = projects.get_project(conn, pid)
+    pdir = projects.project_dir(proj["id"], proj["slug"]) / "download"
+    assert (pdir / "1.png").exists()
+    assert not (pdir / "2.png").exists()
+    assert (pdir / "_Duplicates_Found" / "2.png").exists()
