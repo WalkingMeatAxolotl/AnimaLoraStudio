@@ -38,6 +38,10 @@ from .services import preprocess_manifest
 
 
 PREPROCESS_KIND = "preprocess"
+# 同一个 kind 下用 params['stage'] 分发到不同 worker 分支。默认 'upscale' 兼容
+# 历史 job（params 缺 stage 时按放大处理）。
+STAGE_UPSCALE = "upscale"
+STAGE_CROP = "crop"
 DEFAULT_MODEL = "4x-AnimeSharp"
 DEFAULT_TILE_SIZE = 256
 DEFAULT_TILE_PAD = 16
@@ -47,6 +51,8 @@ DEFAULT_DEVICE = "auto"
 DEFAULT_TARGET_AREA = 1024 * 1024
 
 PRODUCT_SUFFIX = ".png"
+# 裁剪框最小归一化边长，画布上小于这个的不算有效（避免误触出零像素图）
+MIN_CROP_NORM = 0.02
 
 
 class PreprocessError(Exception):
@@ -91,18 +97,26 @@ def _download_images(download: Path) -> list[Path]:
 
 
 def list_pending(p: dict[str, Any]) -> list[dict[str, Any]]:
-    """download/ 里存在、但 manifest 没记的图（= 隐式 original = 未处理）。
+    """download/ 里存在、但 manifest 没追溯到的图（= 隐式 original = 未处理）。
 
-    返回 `[{name, mtime, size}]`，按 name 字典序。"""
+    一张 download/X.jpg 是否"已处理"按 manifest entry 的 origin 字段判定：只要
+    有任一 entry 的 origin == "X.jpg"（含 multi-crop 派生的 X_c0.png/X_c1.png），
+    就视为已处理，不出现在 pending 列表里。
+
+    返回 `[{name, mtime, size}]`，按 name 字典序。
+    """
     download, _ = project_paths(p)
     pdir = project_root(p)
     preprocess_manifest.ensure_manifest(pdir)  # 老项目首次访问触发迁移
-    processed_names = set(preprocess_manifest.all_processed(pdir).keys())
+    processed = preprocess_manifest.all_processed(pdir)
+    processed_origins = {
+        preprocess_manifest.entry_origin(entry, name)
+        for name, entry in processed.items()
+    }
 
     items: list[dict[str, Any]] = []
     for f in _download_images(download):
-        product_name = product_path_for(Path(), f.name).name  # `{stem}.png`
-        if product_name in processed_names:
+        if f.name in processed_origins:
             continue
         st = f.stat()
         items.append({"name": f.name, "mtime": st.st_mtime, "size": st.st_size})
@@ -132,13 +146,17 @@ def list_processed(p: dict[str, Any]) -> list[dict[str, Any]]:
         except OSError:
             # 产物 PNG 不存在（manifest entry 残留）—— 仍报告，UI 知道异常
             mtime, size = entry.get("mtime", 0.0), 0
-        source_name = entry.get("source") or name
-        src_stem = Path(source_name).stem
+        # 新 schema 用 origin；老 schema 回退到 source；都没就拿 name 自己
+        origin_name = preprocess_manifest.entry_origin(entry, name)
+        src_stem = Path(origin_name).stem
         items.append({
             "name": name,
             "mtime": mtime,
             "size": size,
-            "source": entry.get("source"),
+            # source 兼容老前端字段名；origin 是新字段名。两个都填 origin_name。
+            "source": origin_name,
+            "origin": origin_name,
+            # 以下字段老 schema 才有，新 entry 一律 None；前端 sidebar 容忍 null。
             "model": entry.get("model"),
             "scale": entry.get("scale"),
             "action": entry.get("action"),
@@ -152,16 +170,26 @@ def list_processed(p: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def summary(p: dict[str, Any]) -> dict[str, Any]:
-    """给 status 端点用的简短统计。"""
+    """给 status 端点用的简短统计。
+
+    `pending_count`：按 origin 判定 download 是否已处理。一张 download/X.jpg
+    只要 manifest 里有任一 entry 的 origin 指向它（含 multi-crop 派生），就不
+    再计入 pending。
+    `processed_count`：manifest 里所有已处理 entry 的数量（multi-crop 后会
+    > download_count）。
+    """
     download, _ = project_paths(p)
     pdir = project_root(p)
     preprocess_manifest.ensure_manifest(pdir)
     n_download = len(_download_images(download))
-    n_processed = len(preprocess_manifest.all_processed(pdir))
-    # pending = download 里没在 processed 集合的（按 stem 匹配）
-    processed_stems = {Path(n).stem for n in preprocess_manifest.all_processed(pdir)}
+    processed = preprocess_manifest.all_processed(pdir)
+    n_processed = len(processed)
+    processed_origins = {
+        preprocess_manifest.entry_origin(entry, name)
+        for name, entry in processed.items()
+    }
     n_pending = sum(
-        1 for f in _download_images(download) if f.stem not in processed_stems
+        1 for f in _download_images(download) if f.name not in processed_origins
     )
     return {
         "download_count": n_download,
@@ -245,6 +273,7 @@ def start_job(
             _validate_name(n)
 
     params: dict[str, Any] = {
+        "stage": STAGE_UPSCALE,
         "mode": mode,
         "model": model,
         "tile_size": int(tile_size),
@@ -255,6 +284,144 @@ def start_job(
     if names:
         params["names"] = list(names)
 
+    return project_jobs.create_job(
+        conn,
+        project_id=project_id,
+        kind=PREPROCESS_KIND,
+        params=params,
+    )
+
+
+def list_crop_workspace(p: dict[str, Any]) -> list[dict[str, Any]]:
+    """裁剪页的工作集：所有可被裁剪的图（来自 preprocess/ + 未处理的 download/）。
+
+    每项含像素尺寸，因为前端聚类 / AR 显示需要。读图头不解码（PIL lazy load
+    `.size`），单图 < 1ms。返回 [{name, source, w, h, mtime, size, processed}]。
+
+    source 字段：当前 preprocess 项的 origin（指 download/{...}），下游可以反查
+    `download/` 拿原图。
+    """
+    from PIL import Image
+
+    download, preprocess = project_paths(p)
+    pdir = project_root(p)
+    preprocess_manifest.ensure_manifest(pdir)
+    processed = preprocess_manifest.all_processed(pdir)
+
+    items: list[dict[str, Any]] = []
+    seen_origins: set[str] = set()
+
+    # 已处理（manifest 里登记的）
+    for name in sorted(processed.keys()):
+        entry = processed[name]
+        png = preprocess / name
+        if not png.is_file():
+            continue
+        try:
+            with Image.open(png) as im:
+                w, h = im.size
+        except OSError:
+            continue
+        st = png.stat()
+        origin = preprocess_manifest.entry_origin(entry, name)
+        items.append({
+            "name": name,
+            "source": origin,
+            "w": w,
+            "h": h,
+            "mtime": st.st_mtime,
+            "size": st.st_size,
+            "processed": True,
+        })
+        seen_origins.add(origin)
+
+    # 未处理（download/ 里没在 manifest 中追溯到的）
+    if download.exists():
+        for f in sorted(_download_images(download)):
+            if f.name in seen_origins:
+                continue
+            try:
+                with Image.open(f) as im:
+                    w, h = im.size
+            except OSError:
+                continue
+            st = f.stat()
+            items.append({
+                "name": f.name,
+                "source": f.name,
+                "w": w,
+                "h": h,
+                "mtime": st.st_mtime,
+                "size": st.st_size,
+                "processed": False,
+            })
+    return items
+
+
+def _validate_rect(rect: dict[str, Any]) -> dict[str, float]:
+    """归一化 + clamp 一条裁剪 rect。非法 → 抛 PreprocessError。"""
+    try:
+        x = float(rect["x"])
+        y = float(rect["y"])
+        w = float(rect["w"])
+        h = float(rect["h"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise PreprocessError(f"裁剪 rect 缺字段或类型错: {rect!r}") from exc
+    # clamp 到 [0,1]，但保留 w/h 下限校验
+    x = max(0.0, min(1.0, x))
+    y = max(0.0, min(1.0, y))
+    w = max(0.0, min(1.0 - x, w))
+    h = max(0.0, min(1.0 - y, h))
+    if w < MIN_CROP_NORM or h < MIN_CROP_NORM:
+        raise PreprocessError(
+            f"裁剪框过小（最小 {MIN_CROP_NORM}）: {rect!r}"
+        )
+    return {"x": x, "y": y, "w": w, "h": h}
+
+
+def start_crop_job(
+    conn,
+    *,
+    project_id: int,
+    crops: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    """创建裁剪 job。
+
+    `crops`：`{源文件名: [{x, y, w, h, label?}, ...]}`，每条 rect 归一化 [0,1]。
+    源文件名为 preprocess/ 下当前文件名；不存在时 worker 兜底到 download/。
+
+    worker 端逻辑：对每个 source，
+      - N=1 → 写 `preprocess/{stem}.png`（覆盖源）
+      - N>1 → 写 `preprocess/{stem}_c{n}.png` × N，并删除原 `preprocess/{stem}.png`
+      - manifest 用 `replace_with_crops()` 原子替换 entry
+
+    本函数只做参数校验 + 入库；磁盘操作走 worker。
+    """
+    p = projects.get_project(conn, project_id)
+    if not p:
+        raise PreprocessError(f"项目不存在: id={project_id}")
+    if not isinstance(crops, dict) or not crops:
+        raise PreprocessError("crops 不能为空")
+    # 校验：名字合法 + 至少一个 rect + 每条 rect 在 [0,1]
+    sanitized: dict[str, list[dict[str, Any]]] = {}
+    for name, rects in crops.items():
+        _validate_name(name)
+        if not isinstance(rects, list) or not rects:
+            raise PreprocessError(f"{name!r} 的 rects 为空")
+        out_rects: list[dict[str, Any]] = []
+        for r in rects:
+            if not isinstance(r, dict):
+                raise PreprocessError(f"{name!r} 含非法 rect: {r!r}")
+            clean = _validate_rect(r)
+            label = r.get("label")
+            if label is not None:
+                # 限制 label 长度防止 manifest 膨胀；label 当下其实不持久化，仅
+                # worker 日志会带；保留字段方便未来扩展。
+                clean["label"] = str(label)[:64]
+            out_rects.append(clean)
+        sanitized[name] = out_rects
+
+    params = {"stage": STAGE_CROP, "crops": sanitized}
     return project_jobs.create_job(
         conn,
         project_id=project_id,

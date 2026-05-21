@@ -11,6 +11,7 @@ import ProjectOverview from './pages/project/Overview'
 import CurationPage from './pages/project/steps/Curation'
 import DownloadPage from './pages/project/steps/Download'
 import PreprocessPage from './pages/project/steps/Preprocess'
+import PreprocessCropPage from './pages/project/steps/PreprocessCrop'
 import RegularizationPage from './pages/project/steps/Regularization'
 import TagEditPage from './pages/project/steps/TagEdit'
 import TaggingPage from './pages/project/steps/Tagging'
@@ -68,6 +69,7 @@ export default function App() {
               <Route index element={<ProjectOverview />} />
               <Route path="download" element={<DownloadPage />} />
               <Route path="preprocess" element={<PreprocessPage />} />
+              <Route path="preprocess/crop" element={<PreprocessCropPage />} />
               <Route path="v/:vid">
                 <Route path="curate" element={<CurationPage />} />
                 <Route path="tag" element={<TaggingPage />} />

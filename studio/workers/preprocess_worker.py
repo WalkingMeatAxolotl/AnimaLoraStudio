@@ -1,9 +1,10 @@
-"""预处理 worker 子进程入口（放大第一阶段）。
+"""预处理 worker 子进程入口（放大 + 裁剪）。
 
 由 supervisor 启动：`python -m studio.workers.preprocess_worker --job-id N`。
 
-读 project_jobs 行 → 解析 params → 串行调
-`studio.services.upscaler.upscale_file()` → 写日志 → 退出码反映成败。
+读 project_jobs 行 → 按 `params['stage']` 分发：
+  - stage='upscale' (默认)：串行调 `studio.services.upscaler.upscale_file()`
+  - stage='crop'：用 PIL 把 preprocess/ 下的图按归一化 rect 切成 N 张产物
 
 日志规范：只走 stdout（supervisor 重定向到 log 文件），不要再 open 同一个
 log 文件，避免 LogTailer 读两次。
@@ -19,8 +20,12 @@ import json
 import math
 import signal
 import sys
+import time
 import traceback
 from pathlib import Path
+from typing import Any, Callable
+
+from PIL import Image
 
 from studio import db, preprocess, project_jobs, projects
 from studio.services import model_downloader, preprocess_manifest, upscaler
@@ -53,6 +58,8 @@ def run(job_id: int) -> int:  # noqa: PLR0912, PLR0915 - 主流程线性可读
         return 1
 
     params = job.get("params_decoded") or {}
+    # 缺 stage 字段视为老 upscale job（向后兼容）
+    stage = params.get("stage", preprocess.STAGE_UPSCALE)
 
     def log(line: str) -> None:
         print(line, flush=True)
@@ -70,6 +77,12 @@ def run(job_id: int) -> int:  # noqa: PLR0912, PLR0915 - 主流程线性可读
             project = projects.get_project(conn, job["project_id"])
         if not project:
             log(f"[error] project {job['project_id']} missing")
+            return 1
+
+        if stage == preprocess.STAGE_CROP:
+            return _run_crop(project, params, log, emit_event)
+        if stage != preprocess.STAGE_UPSCALE:
+            log(f"[error] 未知 stage: {stage!r}")
             return 1
 
         mode = params.get("mode", "all")
@@ -214,6 +227,178 @@ def run(job_id: int) -> int:  # noqa: PLR0912, PLR0915 - 主流程线性可读
         log(f"[error] {exc}")
         print(traceback.format_exc(), flush=True)
         return 1
+
+
+def _resolve_crop_source(
+    project_dir: Path,
+    download_dir: Path,
+    preprocess_dir: Path,
+    name: str,
+) -> tuple[Path | None, str]:
+    """裁剪源文件解析：
+       - manifest 有 entry → preprocess/{name}，origin 取自 entry
+       - 没 entry，preprocess/{name} 存在 → 直接用，origin = name
+       - 没 entry，preprocess/{name} 不存在，download/{name} 存在 → 兜底 download，origin = name
+       - 都不存在 → (None, name)
+
+    返回 (磁盘路径 or None, 该图的 origin)。
+    """
+    entry = preprocess_manifest.get_entry(project_dir, name)
+    if entry is not None:
+        origin = preprocess_manifest.entry_origin(entry, name)
+        return preprocess_dir / name, origin
+    pp = preprocess_dir / name
+    if pp.is_file():
+        return pp, name
+    dl = download_dir / name
+    if dl.is_file():
+        return dl, name
+    return None, name
+
+
+def _run_crop(
+    project: dict[str, Any],
+    params: dict[str, Any],
+    log: Callable[[str], None],
+    emit_event: Callable[..., None],
+) -> int:
+    """裁剪 stage：每张源图按 N 个归一化 rect 切成 N 个 PNG 产物。"""
+    download_dir, preprocess_dir = preprocess.project_paths(project)
+    preprocess_dir.mkdir(parents=True, exist_ok=True)
+    project_dir = projects.project_dir(project["id"], project["slug"])
+
+    crops_param = params.get("crops") or {}
+    if not crops_param:
+        log("[done] crops 为空，无事可做")
+        return 0
+    # 排序保证日志稳定
+    sources = sorted(crops_param.keys())
+    total = len(sources)
+    log(f"[start] stage=crop total={total}")
+
+    succeeded = 0
+    failed = 0
+    skipped = 0
+
+    for idx, src_name in enumerate(sources, start=1):
+        if _stop_requested:
+            log(f"[cancel] 收到取消信号，已处理 {idx - 1}/{total}")
+            break
+        try:
+            preprocess._validate_name(src_name)
+        except preprocess.PreprocessError as exc:
+            log(f"[skip] {src_name}: {exc}")
+            skipped += 1
+            emit_event(
+                "crop_progress", idx=idx, total=total, name=src_name, status="skip",
+                succeeded=succeeded, failed=failed, skipped=skipped,
+            )
+            continue
+
+        rects = crops_param[src_name]
+        src_path, origin = _resolve_crop_source(
+            project_dir, download_dir, preprocess_dir, src_name
+        )
+        if src_path is None or not src_path.is_file():
+            log(f"[skip] ({idx}/{total}) {src_name}: 源不存在")
+            skipped += 1
+            emit_event(
+                "crop_progress", idx=idx, total=total, name=src_name, status="skip",
+                succeeded=succeeded, failed=failed, skipped=skipped,
+            )
+            continue
+
+        n = len(rects)
+        src_stem = Path(src_name).stem
+        out_names = (
+            [f"{src_stem}.png"] if n == 1
+            else [f"{src_stem}_c{i}.png" for i in range(n)]
+        )
+
+        log(f"[crop] ({idx}/{total}) {src_name} → {n} 个产物")
+        try:
+            t0 = time.monotonic()
+            with Image.open(src_path) as raw:
+                raw.load()
+                src_img = raw.convert("RGB") if raw.mode != "RGB" else raw.copy()
+            sw, sh = src_img.size
+            outputs: list[dict[str, Any]] = []
+            for r, out_name in zip(rects, out_names):
+                left = int(round(r["x"] * sw))
+                top = int(round(r["y"] * sh))
+                right = int(round((r["x"] + r["w"]) * sw))
+                bottom = int(round((r["y"] + r["h"]) * sh))
+                # 至少 1 px
+                right = max(left + 1, right)
+                bottom = max(top + 1, bottom)
+                piece = src_img.crop((left, top, right, bottom))
+                out_path = preprocess_dir / out_name
+                # 写盘前先写到临时文件再 rename，防止半写覆盖原文件被读
+                tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
+                piece.save(tmp_path, format="PNG", optimize=False)
+                # tmp 与目标同目录 → os.replace 跨平台原子
+                import os as _os
+                _os.replace(tmp_path, out_path)
+                try:
+                    st = out_path.stat()
+                    sz, mt = st.st_size, st.st_mtime
+                except OSError:
+                    sz, mt = 0, time.time()
+                outputs.append({
+                    "name": out_name,
+                    "origin": origin,
+                    "size": sz,
+                    "mtime": mt,
+                })
+
+            # N>1 的多裁剪：原同名 stem.png 应当删（如果它不在 outputs 列表里）
+            if n > 1:
+                stale = preprocess_dir / f"{src_stem}.png"
+                if stale.is_file() and stale.name not in out_names:
+                    try:
+                        stale.unlink()
+                    except OSError as exc:
+                        log(f"   ⚠ 删旧 {stale.name} 失败: {exc}")
+
+            preprocess_manifest.replace_with_crops(
+                project_dir,
+                source_name=src_name,
+                outputs=outputs,
+            )
+            # 给前端 grid 预热缩略图
+            try:
+                from studio import thumb_cache
+                for out_name in out_names:
+                    out_path = preprocess_dir / out_name
+                    with Image.open(out_path) as piece:
+                        piece.load()
+                        thumb_cache.prewarm_from_image(out_path, piece, [256, 768])
+            except Exception as exc:  # noqa: BLE001 — 缩略图失败不影响主流程
+                log(f"   ⚠ thumb prewarm failed: {exc}")
+
+            elapsed = time.monotonic() - t0
+            succeeded += 1
+            log(
+                f"   ✓ {src_name} → {', '.join(out_names)}  "
+                f"({sw}×{sh} → {n} 块, {elapsed:.2f}s)"
+            )
+            emit_event(
+                "crop_progress",
+                idx=idx, total=total, name=src_name, status="done",
+                n_out=n, outputs=out_names,
+                succeeded=succeeded, failed=failed, skipped=skipped,
+            )
+        except Exception as exc:  # noqa: BLE001 — 单张失败不影响其他
+            log(f"[fail] {src_name}: {exc}")
+            failed += 1
+            emit_event(
+                "crop_progress", idx=idx, total=total, name=src_name, status="fail",
+                error=str(exc)[:200],
+                succeeded=succeeded, failed=failed, skipped=skipped,
+            )
+
+    log(f"[done] succeeded={succeeded} failed={failed} skipped={skipped}")
+    return 0
 
 
 def main() -> None:

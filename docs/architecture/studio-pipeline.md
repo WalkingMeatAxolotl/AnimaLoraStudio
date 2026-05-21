@@ -33,9 +33,11 @@ studio_data/
 │   ├── download/                         project 级共享，全量备份
 │   │   ├── 12345.png
 │   │   └── 12345.json                    Gelbooru 元数据，可选
-│   ├── preprocess/                       项目级可选放大产物（v0.8 / ADR 0004）
-│   │   ├── manifest.json                 状态唯一真理：{images:{name:{kind,model,scale,...}}}
-│   │   └── 12345.png                     放大后产物（与 download/ 同名匹配 metadata）
+│   ├── preprocess/                       项目级共享工作集（v0.8 / ADR 0004 + Addendum 1）
+│   │   ├── manifest.json                 状态唯一真理：{images:{name:{origin,mtime,size}}}
+│   │   ├── 12345.png                     单产物：origin=12345.png（1:1 同名）
+│   │   ├── 67890_c0.png                  多裁剪派生：origin=67890.png
+│   │   └── 67890_c1.png                  同 origin，另一裁剪框（multi-crop fan-out）
 │   └── versions/
 │       └── {label}/                      ★ label 用户填："baseline" / "high-lr"
 │           ├── version.json              config_name / stage / note

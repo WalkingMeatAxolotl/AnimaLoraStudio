@@ -185,31 +185,42 @@ def copy_to_train(
     missing: list[str] = []
     for name in files:
         _validate_filename(name)
-        # 实际 bytes 路径：可能是 download/ 或 preprocess/{stem}.png
-        product_name = Path(name).stem + ".png"
-        entry = preprocess_manifest.get_entry(pdir, product_name)
-        if entry and entry.get("kind") == "processed":
-            src = pdir / "preprocess" / product_name
-        else:
-            src = download_dir / name
-        if not src.exists():
+        # 实际 bytes 路径解析（含 multi-crop fan-out）：
+        # - download/{name} 在 manifest 里有 N 条 origin 匹配的派生 → 复制 N 张
+        # - 没派生 → 退回 download/{name}（隐式 original）
+        candidates = preprocess_manifest.resolve_origin(pdir, name)
+        any_existed = False
+        any_copied = False
+        for src in candidates:
+            if not src.exists():
+                continue
+            any_existed = True
+            # train 下文件名：
+            #   - 若 src 来自 preprocess/ → 用 preprocess 实际文件名（含 _c0/_c1 等派生后缀）
+            #   - 若 src 来自 download/ → 用原 name
+            dst_name = src.name if src.parent.name == "preprocess" else name
+            dst = dst_dir / dst_name
+            if dst.exists():
+                # 该 crop 已存在 → 算 skipped（同 stem 的其他 crop 不影响）
+                continue
+            shutil.copy2(src, dst)
+            # metadata（.txt/.json）按原 download 名拿，但复制到目标的 stem 上
+            # （多 crop 共享同一份 metadata，trainer 按 stem 匹配 caption）
+            for ext in _META_EXTS:
+                sm = (download_dir / name).with_suffix(ext)
+                if sm.exists():
+                    try:
+                        target_meta = dst_dir / (Path(dst_name).stem + ext)
+                        shutil.copy2(sm, target_meta)
+                    except OSError:
+                        pass
+            any_copied = True
+        if not any_existed:
             missing.append(name)
-            continue
-        # train 下文件名 = download 名（即便实际 bytes 来自 preprocess/{stem}.png）
-        dst = dst_dir / name
-        if dst.exists():
+        elif not any_copied:
             skipped.append(name)
-            continue
-        shutil.copy2(src, dst)
-        # metadata 永远从 download/ 拿（标签不会被预处理改写）
-        for ext in _META_EXTS:
-            sm = (download_dir / name).with_suffix(ext)
-            if sm.exists():
-                try:
-                    shutil.copy2(sm, dst_dir / sm.name)
-                except OSError:
-                    pass
-        copied.append(name)
+        else:
+            copied.append(name)
     return {"copied": copied, "skipped": skipped, "missing": missing}
 
 

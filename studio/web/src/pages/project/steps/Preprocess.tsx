@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useOutletContext } from 'react-router-dom'
+import { Link, useOutletContext } from 'react-router-dom'
 import {
   api,
   type Job,
@@ -659,10 +659,11 @@ function OperationPanel({
         <span className="px-1.5 py-0.5 rounded bg-accent-soft text-accent text-xs font-medium">
           {t('preprocess.stageUpscale')}
         </span>
-        <span
-          className="px-1.5 py-0.5 rounded bg-overlay opacity-50 cursor-not-allowed"
-          title={t('preprocess.stageCropTitle')}
-        >{t('preprocess.stageCrop')}</span>
+        <Link
+          to="crop"
+          className="px-1.5 py-0.5 rounded bg-overlay text-fg-secondary hover:bg-accent-soft hover:text-accent transition-colors"
+          title={t('preprocess.stageCropGoTo')}
+        >{t('preprocess.stageCrop')}</Link>
         <span
           className="px-1.5 py-0.5 rounded bg-overlay opacity-50 cursor-not-allowed"
           title={t('preprocess.stageInpaintTitle')}

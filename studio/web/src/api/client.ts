@@ -619,17 +619,22 @@ export interface PreprocessedItem {
   name: string
   mtime: number
   size: number
+  /** 派生根：download/ 下原始文件名。multi-crop 同一 origin 出 N 张 entry。
+   *  老 schema 字段叫 `source`，后端两个都填同样的值，前端优先读 origin。 */
+  origin: string | null
+  /** @deprecated 兼容 0.9.x 字段名；新代码读 origin。后端两个字段值相同。 */
   source: string | null
+  /** 以下字段都仅老 schema entry 才有，新 schema entry 一律 null。 */
   model: string | null
   scale: number | null
-  /** 'resize' | 'upscale' | 'upscale+resize'，老 entry 可能为 null。 */
+  /** 'resize' | 'upscale' | 'upscale+resize'，新 entry 为 null。 */
   action: string | null
-  /** 目标像素面积；null = 关闭智能模式（老路径 4×）。 */
+  /** 目标像素面积；null = 关闭智能模式（老路径 4×）或新 schema。 */
   target_area: number | null
   src_size: [number, number] | null
   dst_size: [number, number] | null
   elapsed_seconds: number | null
-  /** 源图（download/{source}）已被删 → orphan=true。 */
+  /** 源图（download/{origin}）已被删 → orphan=true。 */
   orphan: boolean
 }
 
@@ -638,6 +643,18 @@ export interface PreprocessPendingItem {
   name: string
   mtime: number
   size: number
+}
+
+/** 裁剪页工作集一项：preprocess/ 当前文件名 + 像素尺寸 + 是否已处理。 */
+export interface CropWorkspaceItem {
+  name: string
+  /** download/ 下原图名（origin）；下游还原走这个名。 */
+  source: string
+  w: number
+  h: number
+  mtime: number
+  size: number
+  processed: boolean
 }
 
 // ---- curation (PP3) -------------------------------------------------------
@@ -1398,6 +1415,23 @@ export const api = {
       `/api/projects/${pid}/preprocess/files/restore`,
       { method: 'POST', body: JSON.stringify({ names }) },
     ),
+  /** 裁剪页工作集：所有可裁剪的图 + 像素尺寸（来自 PIL 读头）。
+   *  preprocess/ 里已处理 + download/ 里未处理的合并列表。 */
+  listCropWorkspace: (pid: number) =>
+    req<{ images: CropWorkspaceItem[] }>(
+      `/api/projects/${pid}/preprocess/crop/workspace`,
+    ),
+  /** 开始裁剪 job。`crops` 为 `{源文件名: [{x,y,w,h,label?}]}`，归一化 [0..1]。
+   *  N=1 覆盖 stem.png；N>1 输出 stem_c{0..N-1}.png 并删原 stem.png。
+   *  详见 docs/design/preprocess-crop-design.md。 */
+  startPreprocessCrop: (
+    pid: number,
+    crops: Record<string, { x: number; y: number; w: number; h: number; label?: string }[]>,
+  ) =>
+    req<Job>(`/api/projects/${pid}/preprocess/crop`, {
+      method: 'POST',
+      body: JSON.stringify({ crops }),
+    }),
 
   getJob: (jid: number) => req<Job>(`/api/jobs/${jid}`),
   getJobLog: (jid: number, tail?: number) => {

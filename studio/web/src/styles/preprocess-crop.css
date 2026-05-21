@@ -1,0 +1,184 @@
+/* Preprocess · 裁剪 page — interactive canvas, rect handles, filmstrip overlays.
+ * Tailwind utilities cover most layout; this file holds the positioned /
+ * absolutely-placed bits that don't compose well as utilities.
+ */
+
+.cropper-canvas {
+  position: relative;
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: crosshair;
+  background-color: var(--bg-sunken);
+  border: 1px solid var(--border-subtle);
+  user-select: none;
+}
+
+.cropper-dim {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.cropper-dim > .dim-piece {
+  position: absolute;
+  background: rgba(15, 12, 8, 0.55);
+}
+
+.crop-rect {
+  position: absolute;
+  border: 1.5px solid var(--accent);
+  cursor: move;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+.crop-rect.from-cluster::after {
+  content: "✦";
+  position: absolute;
+  top: -2px;
+  right: 4px;
+  font-size: 11px;
+  color: var(--accent);
+  text-shadow: 0 0 6px rgba(0, 0, 0, 0.6);
+}
+.crop-rect.is-hover:not(.is-selected) {
+  border-color: color-mix(in oklch, var(--accent) 70%, var(--fg-inverse));
+}
+.crop-rect:not(.is-selected):not(.is-draft) {
+  border-color: rgba(216, 84, 29, 0.75);
+  border-style: dashed;
+}
+.crop-rect.is-selected {
+  border-width: 2px;
+}
+.crop-rect.is-draft {
+  border-style: dashed;
+  background: rgba(216, 84, 29, 0.06);
+  pointer-events: none;
+}
+
+.crop-rect-label {
+  position: absolute;
+  top: -22px;
+  left: 0;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 10.5px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  white-space: nowrap;
+}
+.crop-rect-label .num {
+  font-family: var(--font-mono, ui-monospace, "JetBrains Mono", monospace);
+  font-weight: 600;
+  opacity: 0.85;
+}
+.crop-rect-label .ar {
+  opacity: 0.75;
+  padding-left: 4px;
+  border-left: 1px solid color-mix(in oklch, var(--accent-fg) 30%, transparent);
+}
+.crop-rect-info {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  font-size: 10px;
+  padding: 1px 6px;
+  background: rgba(15, 12, 8, 0.85);
+  color: var(--fg-inverse);
+  border-radius: 3px;
+}
+
+.grid-v,
+.grid-h {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.18);
+  pointer-events: none;
+}
+.grid-v {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+.grid-h {
+  left: 0;
+  right: 0;
+  height: 1px;
+}
+
+/* 8 handles */
+.handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: var(--accent-fg);
+  border: 1.5px solid var(--accent);
+  border-radius: 2px;
+}
+.handle-nw { top: -6px; left: -6px; cursor: nwse-resize; }
+.handle-n  { top: -6px; left: 50%; transform: translateX(-50%); cursor: ns-resize; }
+.handle-ne { top: -6px; right: -6px; cursor: nesw-resize; }
+.handle-e  { top: 50%; right: -6px; transform: translateY(-50%); cursor: ew-resize; }
+.handle-se { bottom: -6px; right: -6px; cursor: nwse-resize; }
+.handle-s  { bottom: -6px; left: 50%; transform: translateX(-50%); cursor: ns-resize; }
+.handle-sw { bottom: -6px; left: -6px; cursor: nesw-resize; }
+.handle-w  { top: 50%; left: -6px; transform: translateY(-50%); cursor: ew-resize; }
+
+/* Filmstrip thumbs */
+.fs-thumb {
+  flex-shrink: 0;
+  position: relative;
+  height: 78px;
+  width: auto;
+  min-width: 50px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  cursor: pointer;
+  background-size: cover;
+  background-position: center;
+  padding: 0;
+  transition: 120ms;
+  overflow: hidden;
+}
+.fs-thumb:hover {
+  border-color: var(--border-default);
+  transform: translateY(-2px);
+}
+.fs-thumb.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent),
+    0 0 12px color-mix(in oklch, var(--accent) 30%, transparent);
+}
+.fs-overlay {
+  position: absolute;
+  border: 1.5px solid var(--accent);
+  background: color-mix(in oklch, var(--accent-soft) 30%, transparent);
+  pointer-events: none;
+}
+.fs-overlay.is-multi {
+  background: transparent;
+  border: 1px solid var(--accent);
+}
+.fs-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  font-size: 9px;
+  padding: 0 4px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-radius: 2px;
+  font-weight: 600;
+}
+
+/* Right rail aspect-ratio histogram bar */
+.ar-bar {
+  height: 4px;
+  background: var(--bg-sunken);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.ar-bar-fill {
+  height: 100%;
+  background: color-mix(in oklch, var(--accent) 70%, var(--bg-overlay));
+}

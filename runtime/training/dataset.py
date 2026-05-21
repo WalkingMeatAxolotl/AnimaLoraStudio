@@ -22,12 +22,32 @@ logger = logging.getLogger(__name__)
 
 
 class BucketManager:
-    """ARB 分桶管理"""
+    """ARB 分桶管理.
+
+    SYNC WITH ``studio/web/src/lib/trainBuckets.ts``. The crop page on the web
+    UI predicts trainer buckets to pre-align cluster crops so the trainer
+    doesn't re-resize them — that prediction depends on a TS port of this
+    class. Any change to the algorithm or to the default parameters
+    (``base_reso``, ``min_reso``, ``max_reso``, ``step``, the 0.1 area
+    tolerance, the 2.0 AR cap) MUST land in both files in the same commit,
+    or the frontend's predicted bucket ≠ trainer's actual bucket and crops
+    will silently degrade.
+
+    See ``docs/design/preprocess-crop-design.md`` §7 for the UX policy and
+    rationale.
+    """
     def __init__(self, base_reso=1024, min_reso=512, max_reso=2048, step=64):
         self.base_reso = base_reso
         self.buckets = self._generate(min_reso, max_reso, step, base_reso)
 
     def _generate(self, min_r, max_r, step, base):
+        # Keep algorithm identical to trainBuckets.generateBuckets() in TS:
+        #   - double loop over (w, h) in [min_r, max_r] step `step`
+        #   - area within ±10% of base² (the 0.1 below)
+        #   - max AR ratio ≤ 2.0 (the 2.0 below)
+        # Default-param consumers should see exactly the same 37 buckets on
+        # both sides — covered by `studio/web/src/lib/trainBuckets.test.ts`
+        # asserting count == 37.
         buckets = []
         base_area = base * base
         for w in range(min_r, max_r + 1, step):
@@ -40,6 +60,8 @@ class BucketManager:
         return buckets
 
     def get_bucket(self, w, h):
+        # Snap by ABSOLUTE AR distance — not relative. The TS port
+        # `trainBuckets.snapToBucket()` mirrors this exactly.
         aspect = w / h
         best = (self.base_reso, self.base_reso)
         best_diff = float("inf")

@@ -1164,6 +1164,25 @@ class PreprocessRestoreRequest(BaseModel):
 PreprocessDeleteRequest = PreprocessRestoreRequest
 
 
+class CropRect(BaseModel):
+    """归一化裁剪矩形 [0..1]^4。x/y = 左上角，w/h = 宽高。"""
+    x: float
+    y: float
+    w: float
+    h: float
+    label: Optional[str] = None
+
+
+class PreprocessCropRequest(BaseModel):
+    """裁剪 job 输入：源文件名 → 一个或多个归一化矩形。
+
+    源文件名为 preprocess/ 下当前文件名（或 download/ 文件名兜底，若 preprocess/
+    没对应）。每个矩形产出一张 PNG：N=1 覆盖 stem.png；N>1 输出 stem_c0.png /
+    stem_c1.png / ... 并删除原 stem.png。
+    """
+    crops: dict[str, list[CropRect]]
+
+
 @app.post("/api/projects/{pid}/preprocess/start")
 def start_preprocess(pid: int, body: PreprocessStartRequest) -> dict[str, Any]:
     """开始预处理 job（当前只放大）。
@@ -1258,6 +1277,57 @@ def list_preprocess_files(pid: int) -> dict[str, Any]:
         "pending": preprocess_svc.list_pending(p),
         "summary": preprocess_svc.summary(p),
     }
+
+
+@app.get("/api/projects/{pid}/preprocess/crop/workspace")
+def list_crop_workspace(pid: int) -> dict[str, Any]:
+    """裁剪页工作集：返回所有可裁剪的图 + 像素尺寸。
+
+    包含两类：
+    - preprocess/ 里已处理的图（origin 指 download/ 原图）
+    - download/ 里未处理的图（裁剪页把"未放大"图当 1× pass-through）
+
+    返回 `{images: [{name, source, w, h, mtime, size, processed}, ...]}`。
+    """
+    with db.connection_for() as conn:
+        p = projects.get_project(conn, pid)
+    if not p:
+        raise HTTPException(404, f"项目不存在: id={pid}")
+    return {"images": preprocess_svc.list_crop_workspace(p)}
+
+
+@app.post("/api/projects/{pid}/preprocess/crop")
+def start_preprocess_crop(
+    pid: int, body: PreprocessCropRequest
+) -> dict[str, Any]:
+    """开始裁剪 job。
+
+    `crops`: `{源文件名: [{x,y,w,h,label?}], ...}`，每条 rect 归一化 [0..1]。
+    源文件名为 preprocess/ 下当前文件名（worker 兜底 download/）。
+
+    返回新建的 job 行。worker 切 PNG + 更新 manifest（多裁剪走 fan-out 命名
+    `{stem}_c{n}.png` 并删原 `{stem}.png`）。详见 docs/design/preprocess-crop-design.md。
+    """
+    if not body.crops:
+        raise HTTPException(400, "crops 不能为空")
+    with db.connection_for() as conn:
+        if not projects.get_project(conn, pid):
+            raise HTTPException(404, f"项目不存在: id={pid}")
+        # Pydantic 模型转成 dict 喂业务层（业务层会再做一次校验 + clamp）
+        crops_payload: dict[str, list[dict[str, Any]]] = {
+            name: [r.model_dump() for r in rects]
+            for name, rects in body.crops.items()
+        }
+        try:
+            job = preprocess_svc.start_crop_job(
+                conn, project_id=pid, crops=crops_payload
+            )
+        except preprocess_svc.PreprocessError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        p = projects.advance_stage(conn, pid, "preprocessing")
+    _publish_job_state(job)
+    _publish_project_state(p)
+    return job
 
 
 @app.post("/api/projects/{pid}/preprocess/files/restore")
@@ -1431,14 +1501,12 @@ def project_thumb(
     pdir = projects.project_dir(p["id"], p["slug"])
     # path traversal 校验（safe_join 对 download 路径，校验文件名安全性）
     _safe_join_or_400(pdir / "download", name)
-    # ADR 0004：resolve 决定真路径
+    # ADR 0004：resolve 决定真路径。Multi-crop 之后一个 download 可能对应 N 张
+    # preprocess 文件 — thumb 端点取第一张展示（按字典序），后续可改用 _c{n}
+    # 寻址。kind 字段在新 schema 没有，所以这里也容忍 entry 没 kind。
     preprocess_manifest.ensure_manifest(pdir)
-    product_name = Path(name).stem + ".png"
-    entry = preprocess_manifest.get_entry(pdir, product_name)
-    if entry and entry.get("kind") == "processed":
-        f = pdir / "preprocess" / product_name
-    else:
-        f = pdir / "download" / name
+    candidates = preprocess_manifest.resolve_origin(pdir, name)
+    f = candidates[0] if candidates else (pdir / "download" / name)
     if not f.exists() or f.suffix.lower() not in datasets.IMAGE_EXTS:
         logger.info("thumb 404: pid=%s bucket=%s name=%s -> %s", pid, bucket, name, f)
         raise HTTPException(404)
