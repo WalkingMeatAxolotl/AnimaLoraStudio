@@ -867,30 +867,38 @@ function RightRail({
   const { t } = useTranslation()
   const pct = totalImages > 0 ? Math.round((configuredImages / totalImages) * 100) : 0
 
-  // AR histogram: if any crops exist, show crop AR; otherwise source AR.
-  // Bins snap to common LoRA AR (1:1 / 2:3 / 3:2 / 16:9 / etc.) within ±5%;
-  // others fall into `其他 X.XX`. Sorted wide → tall to match visual intuition.
+  // AR histogram covers the whole dataset, always. Per image: if it has
+  // crops, count each crop's AR; otherwise count the source AR. A single
+  // crop on the current image must NOT collapse the histogram to a single
+  // entry — the user is mid-edit and still needs to see how the rest of
+  // their 264 images distribute.
+  //
+  // `crops` mode kicks in once ALL images have at least one crop (the user
+  // has fully configured the dataset and now wants to see post-crop AR).
   const arHist = useMemo(() => {
     const m = new Map<string, { n: number; sortKey: number }>()
-    const cropARs: number[] = []
-    for (const [name, rects] of Object.entries(cropsByImage)) {
-      const im = images.find((x) => x.name === name)
-      if (!im) continue
-      for (const r of rects) {
-        cropARs.push((r.w * im.w) / (r.h * im.h))
+    const allCovered = images.length > 0
+      && images.every((im) => (cropsByImage[im.name] ?? []).length > 0)
+    for (const im of images) {
+      const rects = cropsByImage[im.name] ?? []
+      if (rects.length > 0) {
+        for (const r of rects) {
+          const v = (r.w * im.w) / (r.h * im.h)
+          const { label, sortKey } = arBucket(v)
+          const prev = m.get(label)
+          m.set(label, { n: (prev?.n ?? 0) + 1, sortKey })
+        }
+      } else {
+        const v = im.w / im.h
+        const { label, sortKey } = arBucket(v)
+        const prev = m.get(label)
+        m.set(label, { n: (prev?.n ?? 0) + 1, sortKey })
       }
-    }
-    const fromSource = cropARs.length === 0
-    const values = fromSource ? images.map((im) => im.w / im.h) : cropARs
-    for (const v of values) {
-      const { label, sortKey } = arBucket(v)
-      const prev = m.get(label)
-      m.set(label, { n: (prev?.n ?? 0) + 1, sortKey })
     }
     const bins = Array.from(m.entries())
       .map(([label, { n, sortKey }]) => ({ label, n, sortKey }))
       .sort((a, b) => b.sortKey - a.sortKey) // wide first, tall last
-    return { bins, fromSource }
+    return { bins, fromSource: !allCovered }
   }, [cropsByImage, images])
   const maxBin = Math.max(1, ...arHist.bins.map((b) => b.n))
 
