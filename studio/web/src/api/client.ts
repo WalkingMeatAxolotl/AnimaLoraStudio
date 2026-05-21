@@ -732,7 +732,6 @@ export interface CopyResult {
 }
 
 export interface DuplicateScanOptions {
-  target: 'unused' | 'download'
   match_scope: 'strict' | 'both'
   hash_size: number
   hash_workers: number
@@ -781,7 +780,7 @@ export interface DuplicateGroup {
 }
 
 export interface DuplicateScanResult {
-  target: DuplicateScanOptions['target']
+  target: 'download'
   match_scope: DuplicateScanOptions['match_scope']
   total_images: number
   readable_images: number
@@ -1845,22 +1844,17 @@ export const api = {
       `/api/projects/${pid}/versions/${vid}/curation/folder`,
       { method: 'POST', body: JSON.stringify(body) }
     ),
-  scanDuplicates: (
-    pid: number,
-    vid: number,
-    body: DuplicateScanOptions
-  ) =>
+  scanDuplicates: (pid: number, body: DuplicateScanOptions) =>
     req<DuplicateScanResult>(
-      `/api/projects/${pid}/versions/${vid}/curation/duplicates/scan`,
+      `/api/projects/${pid}/duplicates/scan`,
       { method: 'POST', body: JSON.stringify(body) }
     ),
   applyDuplicateAction: (
     pid: number,
-    vid: number,
     body: { action: 'move' | 'delete'; names: string[] }
   ) =>
     req<DuplicateApplyResult>(
-      `/api/projects/${pid}/versions/${vid}/curation/duplicates/apply`,
+      `/api/projects/${pid}/duplicates/apply`,
       { method: 'POST', body: JSON.stringify(body) }
     ),
   versionThumbUrl: (

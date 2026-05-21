@@ -2026,7 +2026,6 @@ class FolderOp(BaseModel):
 
 
 class DuplicateScanRequest(BaseModel):
-    target: str = "unused"
     match_scope: str = "both"
     hash_size: int = duplicate_finder.DEFAULT_HASH_SIZE
     hash_workers: int = duplicate_finder.DEFAULT_HASH_WORKERS
@@ -2073,37 +2072,39 @@ def _duplicate_err_code(exc: duplicate_finder.DuplicateFinderError) -> int:
     return 422
 
 
-@app.post("/api/projects/{pid}/versions/{vid}/curation/duplicates/scan")
-def scan_curation_duplicates(
-    pid: int, vid: int, body: DuplicateScanRequest
+@app.post("/api/projects/{pid}/duplicates/scan")
+def scan_project_duplicates(
+    pid: int, body: DuplicateScanRequest
 ) -> dict[str, Any]:
     with db.connection_for() as conn:
         try:
             options = duplicate_finder.options_from_payload(body.model_dump())
-            return duplicate_finder.scan_project_duplicates(conn, pid, vid, options)
+            return duplicate_finder.scan_project_duplicates(conn, pid, options)
         except curation.CurationError as exc:
             raise HTTPException(_curation_err_code(exc), str(exc)) from exc
         except duplicate_finder.DuplicateFinderError as exc:
             raise HTTPException(_duplicate_err_code(exc), str(exc)) from exc
 
 
-@app.post("/api/projects/{pid}/versions/{vid}/curation/duplicates/apply")
-def apply_curation_duplicates(
-    pid: int, vid: int, body: DuplicateApplyRequest
+@app.post("/api/projects/{pid}/duplicates/apply")
+def apply_project_duplicates(
+    pid: int, body: DuplicateApplyRequest
 ) -> dict[str, Any]:
     with db.connection_for() as conn:
         try:
             result = duplicate_finder.apply_duplicate_action(
                 conn,
                 pid,
-                vid,
                 action=body.action,  # type: ignore[arg-type]
                 names=body.names,
             )
+            project = projects.get_project(conn, pid)
         except curation.CurationError as exc:
             raise HTTPException(_curation_err_code(exc), str(exc)) from exc
         except duplicate_finder.DuplicateFinderError as exc:
             raise HTTPException(_duplicate_err_code(exc), str(exc)) from exc
+    if project:
+        _publish_project_state(project)
     return result
 
 

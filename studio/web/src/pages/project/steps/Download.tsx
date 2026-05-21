@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { useOutletContext } from 'react-router-dom'
 import {
   api,
+  type DuplicateScanOptions,
+  type DuplicateScanResult,
   type DownloadFile,
   type Job,
   type ProjectDetail,
@@ -13,6 +15,9 @@ import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import ImagePreviewModal from '../../../components/ImagePreviewModal'
 import PathPicker from '../../../components/PathPicker'
 import StepShell from '../../../components/StepShell'
+import DuplicateReviewPanel, {
+  DEFAULT_DUPLICATE_OPTIONS,
+} from '../../../components/DuplicateReviewPanel'
 import { useDialog } from '../../../components/Dialog'
 import { useToast } from '../../../components/Toast'
 import { useEventStream } from '../../../lib/useEventStream'
@@ -64,6 +69,11 @@ export default function DownloadPage() {
   const [count, setCount] = useState<number>(20)
   const [busy, setBusy] = useState(false)
   const [lastUpload, setLastUpload] = useState<UploadResult | null>(null)
+  const [dupOptions, setDupOptions] = useState<DuplicateScanOptions>(DEFAULT_DUPLICATE_OPTIONS)
+  const [dupResult, setDupResult] = useState<DuplicateScanResult | null>(null)
+  const [dupSel, setDupSel] = useState<Set<string>>(new Set())
+  const [dupBusy, setDupBusy] = useState(false)
+  const [dupPreviewIdx, setDupPreviewIdx] = useState<number | null>(null)
 
   const refreshFiles = useCallback(async () => {
     try {
@@ -169,6 +179,72 @@ export default function DownloadPage() {
 
   const isLive = job?.status === 'running' || job?.status === 'pending'
   const maxCount = estimate && estimate.count > 0 ? estimate.count : 5000
+  const duplicatePreviewNames = useMemo(
+    () =>
+      dupResult
+        ? dupResult.groups.flatMap((group) => group.items.map((item) => item.name))
+        : [],
+    [dupResult]
+  )
+
+  const scanDuplicates = async () => {
+    if (dupBusy) return
+    setDupBusy(true)
+    try {
+      const result = await api.scanDuplicates(project.id, dupOptions)
+      setDupResult(result)
+      setDupSel(new Set(
+        result.groups.flatMap((group) =>
+          group.items.filter((item) => !item.keep).map((item) => item.name)
+        )
+      ))
+      toast(t('duplicates.scanDone', { groups: result.group_count, candidates: result.candidate_count }), 'success')
+    } catch (e) {
+      toast(String(e), 'error')
+    } finally {
+      setDupBusy(false)
+    }
+  }
+
+  const openDuplicatePreview = (name: string) => {
+    const list = duplicatePreviewNames.length ? duplicatePreviewNames : [name]
+    setDupPreviewIdx(Math.max(0, list.indexOf(name)))
+  }
+
+  const applyDuplicateAction = async (action: 'move' | 'delete') => {
+    if (dupBusy || dupSel.size === 0) return
+    const names = Array.from(dupSel)
+    const ok = await confirm(
+      action === 'move'
+        ? t('duplicates.confirmMove', { n: names.length })
+        : t('duplicates.confirmDelete', { n: names.length }),
+      {
+        tone: action === 'delete' ? 'danger' : 'warn',
+        okText: action === 'move' ? t('duplicates.moveOk') : t('duplicates.deleteOk'),
+      },
+    )
+    if (!ok) return
+    setDupBusy(true)
+    try {
+      const result = await api.applyDuplicateAction(project.id, { action, names })
+      const changed = action === 'move' ? result.moved.length : result.deleted.length
+      toast(
+        action === 'move'
+          ? t('duplicates.movedToast', { n: changed })
+          : t('duplicates.deletedToast', { n: changed }),
+        'success',
+      )
+      setDupSel(new Set())
+      setDupResult(null)
+      setDupPreviewIdx(null)
+      await refreshFiles()
+      void reload()
+    } catch (e) {
+      toast(String(e), 'error')
+    } finally {
+      setDupBusy(false)
+    }
+  }
 
   return (
     <StepShell
@@ -228,6 +304,20 @@ export default function DownloadPage() {
               )}
             </div>
           )}
+
+          <DuplicateReviewPanel
+            projectId={project.id}
+            options={dupOptions}
+            result={dupResult}
+            selected={dupSel}
+            busy={dupBusy}
+            onOptionsChange={setDupOptions}
+            onScan={scanDuplicates}
+            onSelect={setDupSel}
+            onMove={() => applyDuplicateAction('move')}
+            onDelete={() => applyDuplicateAction('delete')}
+            onPreview={openDuplicatePreview}
+          />
 
           {/* 已下载 grid — 占满剩余高度，支持多选 + 删除 + 大图预览 */}
           <DownloadedGrid
@@ -300,6 +390,20 @@ export default function DownloadPage() {
         onClose={() => setPreviewIdx(null)}
         onPrev={() => previewIdx > 0 && setPreviewIdx(previewIdx - 1)}
         onNext={() => previewIdx < files.length - 1 && setPreviewIdx(previewIdx + 1)}
+      />
+    )}
+    {dupPreviewIdx !== null && duplicatePreviewNames[dupPreviewIdx] && (
+      <ImagePreviewModal
+        src={api.projectThumbUrl(project.id, duplicatePreviewNames[dupPreviewIdx], 'download', 1600)}
+        caption={duplicatePreviewNames[dupPreviewIdx]}
+        hasPrev={dupPreviewIdx > 0}
+        hasNext={dupPreviewIdx < duplicatePreviewNames.length - 1}
+        onClose={() => setDupPreviewIdx(null)}
+        onPrev={() => dupPreviewIdx > 0 && setDupPreviewIdx(dupPreviewIdx - 1)}
+        onNext={() =>
+          dupPreviewIdx < duplicatePreviewNames.length - 1 && setDupPreviewIdx(dupPreviewIdx + 1)
+        }
+        shortcutHint={t('duplicates.previewHint')}
       />
     )}
     </StepShell>

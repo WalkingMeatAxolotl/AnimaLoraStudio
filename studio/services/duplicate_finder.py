@@ -19,7 +19,7 @@ from typing import Any, Literal
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 
-from .. import curation, projects, versions
+from .. import curation, projects
 from ..datasets import IMAGE_EXTS
 from . import preprocess_manifest
 
@@ -53,7 +53,6 @@ DEFAULT_PREFILTER_AHASH = 22
 DEFAULT_COLOR_ALERT = 14
 
 
-DuplicateTarget = Literal["unused", "download"]
 DuplicateAction = Literal["move", "delete"]
 MatchScope = Literal["strict", "both"]
 
@@ -64,7 +63,6 @@ class DuplicateFinderError(Exception):
 
 @dataclass(frozen=True)
 class DuplicateOptions:
-    target: DuplicateTarget = "unused"
     match_scope: MatchScope = "both"
     hash_size: int = DEFAULT_HASH_SIZE
     hash_workers: int = DEFAULT_HASH_WORKERS
@@ -174,14 +172,10 @@ def parse_tile_grids(value: str | list[int] | tuple[int, ...]) -> tuple[int, ...
 
 
 def options_from_payload(payload: dict[str, Any]) -> DuplicateOptions:
-    target = payload.get("target", "unused")
-    if target not in ("unused", "download"):
-        raise DuplicateFinderError(f"invalid duplicate target: {target!r}")
     match_scope = payload.get("match_scope", "both")
     if match_scope not in ("strict", "both"):
         raise DuplicateFinderError(f"invalid match scope: {match_scope!r}")
     return DuplicateOptions(
-        target=target,
         match_scope=match_scope,
         hash_size=max(0, int(payload.get("hash_size", DEFAULT_HASH_SIZE))),
         hash_workers=max(1, min(32, int(payload.get("hash_workers", DEFAULT_HASH_WORKERS)))),
@@ -198,23 +192,18 @@ def options_from_payload(payload: dict[str, Any]) -> DuplicateOptions:
 def scan_project_duplicates(
     conn,
     project_id: int,
-    version_id: int,
     options: DuplicateOptions,
 ) -> dict[str, Any]:
     _require_imagehash()
     project, project_dir = curation._project_dir(conn, project_id)  # noqa: SLF001
-    version = versions.get_version(conn, version_id)
-    if not version or version["project_id"] != project_id:
-        raise DuplicateFinderError(f"version not found: id={version_id}")
-
-    sources = _resolve_sources(conn, project_id, version_id, project_dir, options.target)
+    sources = _resolve_download_sources(conn, project_id, project_dir)
     started = time.monotonic()
     infos = build_all_image_infos(sources, options)
     groups, pair_metrics, stats = group_similar_images(infos, options)
     elapsed = time.monotonic() - started
 
     return {
-        "target": options.target,
+        "target": "download",
         "match_scope": options.match_scope,
         "total_images": len(sources),
         "readable_images": len(infos),
@@ -233,7 +222,6 @@ def scan_project_duplicates(
 def apply_duplicate_action(
     conn,
     project_id: int,
-    version_id: int,
     *,
     action: DuplicateAction,
     names: list[str],
@@ -243,9 +231,6 @@ def apply_duplicate_action(
     project = projects.get_project(conn, project_id)
     if not project:
         raise DuplicateFinderError(f"project not found: id={project_id}")
-    version = versions.get_version(conn, version_id)
-    if not version or version["project_id"] != project_id:
-        raise DuplicateFinderError(f"version not found: id={version_id}")
 
     project_dir = projects.project_dir(project["id"], project["slug"])
     download_dir = project_dir / "download"
@@ -280,7 +265,6 @@ def apply_duplicate_action(
 
 def options_to_json(options: DuplicateOptions) -> dict[str, Any]:
     return {
-        "target": options.target,
         "match_scope": options.match_scope,
         "hash_size": options.hash_size,
         "hash_workers": options.hash_workers,
@@ -294,31 +278,19 @@ def options_to_json(options: DuplicateOptions) -> dict[str, Any]:
     }
 
 
-def _resolve_sources(
+def _resolve_download_sources(
     conn,
     project_id: int,
-    version_id: int,
     project_dir: Path,
-    target: DuplicateTarget,
 ) -> list[tuple[str, Path]]:
-    preprocess_manifest.ensure_manifest(project_dir)
-    if target == "unused":
-        view = curation.curation_view(conn, project_id, version_id)
-        names = [item["name"] for item in view["left"]]
-    else:
-        names = [item["name"] for item in curation.list_download(conn, project_id)]
+    names = [item["name"] for item in curation.list_download(conn, project_id)]
 
     sources: list[tuple[str, Path]] = []
     for name in names:
         curation._validate_filename(name)  # noqa: SLF001
         if Path(name).suffix.lower() not in IMAGE_EXTS:
             continue
-        product_name = Path(name).stem + ".png"
-        entry = preprocess_manifest.get_entry(project_dir, product_name)
-        if entry and entry.get("kind") == "processed":
-            path = project_dir / "preprocess" / product_name
-        else:
-            path = project_dir / "download" / name
+        path = project_dir / "download" / name
         if path.is_file():
             sources.append((name, path))
     return sorted(sources, key=lambda item: item[0].lower())

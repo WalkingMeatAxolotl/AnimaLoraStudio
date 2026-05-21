@@ -380,9 +380,7 @@ def test_duplicate_scan_returns_review_groups(env) -> None:
         result = duplicate_finder.scan_project_duplicates(
             conn,
             env["p"]["id"],
-            env["v"]["id"],
             duplicate_finder.DuplicateOptions(
-                target="unused",
                 match_scope="strict",
                 hash_workers=1,
             ),
@@ -405,7 +403,6 @@ def test_duplicate_apply_move_only_confirmed_names(env) -> None:
         result = duplicate_finder.apply_duplicate_action(
             conn,
             env["p"]["id"],
-            env["v"]["id"],
             action="move",
             names=["2.png"],
         )

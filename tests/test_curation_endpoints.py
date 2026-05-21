@@ -213,15 +213,14 @@ def test_version_thumb_rejects_traversal(client: TestClient) -> None:
 
 
 def test_duplicate_scan_and_apply_requires_explicit_names(client: TestClient) -> None:
-    pid, vid = _make(client)
+    pid, _vid = _make(client)
     _drop_png(client, pid, "1.png")
     _drop_png(client, pid, "2.png")
     _drop_different_png(client, pid, "3.png")
 
     scan = client.post(
-        f"/api/projects/{pid}/versions/{vid}/curation/duplicates/scan",
+        f"/api/projects/{pid}/duplicates/scan",
         json={
-            "target": "unused",
             "match_scope": "strict",
             "hash_workers": 1,
         },
@@ -233,7 +232,7 @@ def test_duplicate_scan_and_apply_requires_explicit_names(client: TestClient) ->
     assert group_names == {"1.png", "2.png"}
 
     apply = client.post(
-        f"/api/projects/{pid}/versions/{vid}/curation/duplicates/apply",
+        f"/api/projects/{pid}/duplicates/apply",
         json={"action": "move", "names": ["2.png"]},
     )
     assert apply.status_code == 200
