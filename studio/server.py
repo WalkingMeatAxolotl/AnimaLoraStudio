@@ -1330,6 +1330,23 @@ def start_preprocess_crop(
     return job
 
 
+@app.post("/api/projects/{pid}/preprocess/files/reset")
+def reset_preprocess_files(pid: int) -> dict[str, Any]:
+    """整项目预处理状态归零：删 manifest 所有 entry + 删 preprocess/ 所有 PNG。
+
+    工具栏「总览」tab 的「撤销全部」走这个；下游 resolver 回看 download/ 原图。
+    `preprocess_manifest.clear_all` 已存在；这里只是 HTTP 入口 + 项目存在校验。
+    """
+    with db.connection_for() as conn:
+        p = projects.get_project(conn, pid)
+    if not p:
+        raise HTTPException(404, f"项目不存在: id={pid}")
+    pdir = projects.project_dir(p["id"], p["slug"])
+    preprocess_manifest.clear_all(pdir)
+    _publish_project_state(p)
+    return {"ok": True}
+
+
 @app.post("/api/projects/{pid}/preprocess/files/restore")
 def restore_preprocess_files(
     pid: int, body: PreprocessRestoreRequest
@@ -1482,31 +1499,48 @@ def project_thumb(
 ) -> FileResponse:
     """缩略图：默认 256px JPEG（缓存）；size=0 → 原图。
 
-    `name` 是 download/ 下的**原始文件名**。后端通过
-    `preprocess_manifest.resolve()` 决定实际字节路径（见 ADR 0004）：
-      - 未处理 → download/{name}
-      - 已处理 → preprocess/{stem}.png（用户看到的是"升级后"的图，但 URL 不变）
-
-    前端**不需要**知道有没有预处理过——这个端点已经吃下了差异。
+    两种 bucket：
+      - `bucket=download`（默认）：`name` 是 download/ 下的原始文件名。
+        后端通过 `preprocess_manifest.resolve_origin()` 决定实际字节路径：
+        未处理 → download/{name}，已处理 → preprocess/ 下第一个 origin 匹配
+        的派生。前端"按 download 名"调用时不需要感知预处理。
+      - `bucket=preprocess`：`name` 是 preprocess/ 下的**实际产物文件名**
+        （含 multi-crop 派生的 _c0 / _c1 后缀）。直接按文件名取，**不走**
+        resolve_origin —— multi-crop 后多个产物共享同一 origin，按 origin
+        永远落到 [0] 是 bug。裁剪 / 总览页应该走这条来精确寻址。
 
     缓存路径：`studio_data/thumb_cache/{sha1(src+mtime+size)}.jpg`。
     源文件 mtime 变化会自动 invalidate（hash 变）。
     """
-    if bucket != "download":
-        raise HTTPException(400, "PP2 仅支持 bucket=download")
+    if bucket not in ("download", "preprocess"):
+        raise HTTPException(400, f"unknown bucket: {bucket}")
     with db.connection_for() as conn:
         p = projects.get_project(conn, pid)
     if not p:
         raise HTTPException(404, f"项目不存在: id={pid}")
     pdir = projects.project_dir(p["id"], p["slug"])
-    # path traversal 校验（safe_join 对 download 路径，校验文件名安全性）
-    _safe_join_or_400(pdir / "download", name)
-    # ADR 0004：resolve 决定真路径。Multi-crop 之后一个 download 可能对应 N 张
-    # preprocess 文件 — thumb 端点取第一张展示（按字典序），后续可改用 _c{n}
-    # 寻址。kind 字段在新 schema 没有，所以这里也容忍 entry 没 kind。
     preprocess_manifest.ensure_manifest(pdir)
-    candidates = preprocess_manifest.resolve_origin(pdir, name)
-    f = candidates[0] if candidates else (pdir / "download" / name)
+
+    if bucket == "preprocess":
+        # Direct addressing — no resolve. Path traversal guard against the
+        # actual preprocess/ dir (any filename including _c0/_c1 derivatives).
+        _safe_join_or_400(pdir / "preprocess", name)
+        f = pdir / "preprocess" / name
+    else:
+        # bucket=download — historical behavior: address by download name,
+        # resolve to first preprocess product if any (1:1 / multi-crop cases).
+        _safe_join_or_400(pdir / "download", name)
+        candidates = preprocess_manifest.resolve_origin(pdir, name)
+        f = candidates[0] if candidates else (pdir / "download" / name)
+        # Curation passes multi-crop derivative names (X_c0.png) through this
+        # endpoint with bucket=download. resolve_origin only matches by origin,
+        # not by entry key, so derivatives miss → f points at a non-existent
+        # download/X_c0.png. Fall back: if the name IS a preprocess entry key,
+        # serve preprocess/{name} directly. Filename was already safety-checked
+        # against download/, same validation applies to preprocess/.
+        if not f.exists() and preprocess_manifest.get_entry(pdir, name) is not None:
+            f = pdir / "preprocess" / name
+
     if not f.exists() or f.suffix.lower() not in datasets.IMAGE_EXTS:
         logger.info("thumb 404: pid=%s bucket=%s name=%s -> %s", pid, bucket, name, f)
         raise HTTPException(404)

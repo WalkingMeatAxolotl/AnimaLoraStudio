@@ -314,3 +314,24 @@ def test_thumb_resolves_to_preprocess_when_processed(client: TestClient) -> None
     # 前端按原 download 名 a.jpg 请求 —— 后端应 resolve 到 preprocess/a.png
     resp = client.get(f"/api/projects/{p['id']}/thumb?name=a.jpg&size=8")
     assert resp.status_code == 200
+
+
+def test_thumb_handles_multi_crop_derivative_name_via_download_bucket(client: TestClient) -> None:
+    """筛选页 list_download 展开 multi-crop 派生（X_c0.png）后，缩略图请求经
+    bucket=download 走过来。原 resolve_origin 按 origin 找不到（origin 是
+    X.png），endpoint 兜底到 preprocess/{name} 直读。"""
+    from PIL import Image
+    p = _make_project(client)
+    pdir = projects.project_dir(p["id"], p["slug"])
+    (pdir / "preprocess").mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (8, 8), (0, 0, 255)).save(pdir / "preprocess" / "X_c0.png")
+    preprocess_manifest.replace_with_crops(
+        pdir,
+        source_name="X.png",
+        outputs=[
+            {"name": "X_c0.png", "origin": "X.png", "size": 1, "mtime": 1.0},
+        ],
+    )
+    # 用 bucket=download 默认 + 派生名直接请求；endpoint 应兜底 preprocess
+    resp = client.get(f"/api/projects/{p['id']}/thumb?name=X_c0.png&size=8")
+    assert resp.status_code == 200, resp.text

@@ -103,8 +103,12 @@ def list_pending(p: dict[str, Any]) -> list[dict[str, Any]]:
     有任一 entry 的 origin == "X.jpg"（含 multi-crop 派生的 X_c0.png/X_c1.png），
     就视为已处理，不出现在 pending 列表里。
 
-    返回 `[{name, mtime, size}]`，按 name 字典序。
+    返回 `[{name, mtime, size, w, h}]`，按 name 字典序。w/h 由 PIL 读图头取得
+    （未解码 raster，~1ms/图）；前端的像素分布 histogram 需要把 pending 一并
+    算上（用户的 200+ 张里只有几张被放大也要看到全局分布）。
     """
+    from PIL import Image
+
     download, _ = project_paths(p)
     pdir = project_root(p)
     preprocess_manifest.ensure_manifest(pdir)  # 老项目首次访问触发迁移
@@ -119,16 +123,35 @@ def list_pending(p: dict[str, Any]) -> list[dict[str, Any]]:
         if f.name in processed_origins:
             continue
         st = f.stat()
-        items.append({"name": f.name, "mtime": st.st_mtime, "size": st.st_size})
+        w: Optional[int] = None
+        h: Optional[int] = None
+        try:
+            with Image.open(f) as im:
+                w, h = im.size
+        except (OSError, ValueError):
+            pass
+        items.append({
+            "name": f.name,
+            "mtime": st.st_mtime,
+            "size": st.st_size,
+            "w": w,
+            "h": h,
+        })
     return items
 
 
 def list_processed(p: dict[str, Any]) -> list[dict[str, Any]]:
     """manifest 里 kind=processed 的图，按 name 字典序。
 
-    返回 `[{name, mtime, size, source, model, scale, src_size, dst_size,
+    返回 `[{name, mtime, size, w, h, source, model, scale, src_size, dst_size,
              action, target_area, elapsed_seconds, orphan}]`。
-    `orphan=True`：manifest 有 entry 但源图（download/{source}）已被删。"""
+    `orphan=True`：manifest 有 entry 但源图（download/{source}）已被删。
+
+    `w, h` 从 PIL 读图头（不解码 raster，~1ms / 图）；新 schema 不再 persist
+    dst_size，所以靠现读拿到当前实际像素尺寸供前端 histogram 使用。
+    """
+    from PIL import Image  # local: PIL 在测试 + worker 环境都有
+
     download, preprocess = project_paths(p)
     pdir = project_root(p)
     preprocess_manifest.ensure_manifest(pdir)
@@ -146,6 +169,15 @@ def list_processed(p: dict[str, Any]) -> list[dict[str, Any]]:
         except OSError:
             # 产物 PNG 不存在（manifest entry 残留）—— 仍报告，UI 知道异常
             mtime, size = entry.get("mtime", 0.0), 0
+        # 现读像素尺寸（PIL lazy load 只解头部）
+        w: Optional[int] = None
+        h: Optional[int] = None
+        try:
+            with Image.open(png) as im:
+                w, h = im.size
+        except (OSError, ValueError):
+            # 文件不存在 / 不是图像 / 损坏 — w/h 留 None，前端容忍
+            pass
         # 新 schema 用 origin；老 schema 回退到 source；都没就拿 name 自己
         origin_name = preprocess_manifest.entry_origin(entry, name)
         src_stem = Path(origin_name).stem
@@ -153,6 +185,9 @@ def list_processed(p: dict[str, Any]) -> list[dict[str, Any]]:
             "name": name,
             "mtime": mtime,
             "size": size,
+            # 实际像素尺寸（前端 pixel histogram 用）
+            "w": w,
+            "h": h,
             # source 兼容老前端字段名；origin 是新字段名。两个都填 origin_name。
             "source": origin_name,
             "origin": origin_name,

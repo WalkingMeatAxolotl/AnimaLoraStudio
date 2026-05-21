@@ -262,7 +262,13 @@ def _run_crop(
     log: Callable[[str], None],
     emit_event: Callable[..., None],
 ) -> int:
-    """裁剪 stage：每张源图按 N 个归一化 rect 切成 N 个 PNG 产物。"""
+    """裁剪 stage：每张源图按 N 个归一化 rect 切成 N 个 PNG 产物。
+
+    SSE 节流：crop 速度比 upscale 快（单图 0.3–0.7s），264 张数据集会刷 ~500
+    个事件给前端。节流到 ≥1s 间隔 + 始终发首末事件（idx=1 / idx=total / 失败 /
+    跳过），保留进度可见性同时不淹没事件流。前端 useEventStream 见到节流后的
+    速率即可（不再依赖前端 throttle）。
+    """
     download_dir, preprocess_dir = preprocess.project_paths(project)
     preprocess_dir.mkdir(parents=True, exist_ok=True)
     project_dir = projects.project_dir(project["id"], project["slug"])
@@ -273,6 +279,19 @@ def _run_crop(
         return 0
     # 排序保证日志稳定
     sources = sorted(crops_param.keys())
+
+    # SSE throttle state — closure over emit_event so call sites stay uniform
+    _last_emit_at = [0.0]
+
+    def emit_throttled(*, force: bool, **payload) -> None:
+        """Throttle progress emits to ≥1Hz. `force=True` always emits (first /
+        last / non-success status — those carry information you don't want
+        coalesced)."""
+        now = time.monotonic()
+        if not force and (now - _last_emit_at[0]) < 1.0:
+            return
+        _last_emit_at[0] = now
+        emit_event("crop_progress", **payload)
     total = len(sources)
     log(f"[start] stage=crop total={total}")
 
@@ -284,13 +303,16 @@ def _run_crop(
         if _stop_requested:
             log(f"[cancel] 收到取消信号，已处理 {idx - 1}/{total}")
             break
+        is_last = idx == total
         try:
             preprocess._validate_name(src_name)
         except preprocess.PreprocessError as exc:
             log(f"[skip] {src_name}: {exc}")
             skipped += 1
-            emit_event(
-                "crop_progress", idx=idx, total=total, name=src_name, status="skip",
+            # skip/fail are info-bearing → always force emit, don't coalesce
+            emit_throttled(
+                force=True,
+                idx=idx, total=total, name=src_name, status="skip",
                 succeeded=succeeded, failed=failed, skipped=skipped,
             )
             continue
@@ -302,8 +324,9 @@ def _run_crop(
         if src_path is None or not src_path.is_file():
             log(f"[skip] ({idx}/{total}) {src_name}: 源不存在")
             skipped += 1
-            emit_event(
-                "crop_progress", idx=idx, total=total, name=src_name, status="skip",
+            emit_throttled(
+                force=True,
+                idx=idx, total=total, name=src_name, status="skip",
                 succeeded=succeeded, failed=failed, skipped=skipped,
             )
             continue
@@ -382,8 +405,9 @@ def _run_crop(
                 f"   ✓ {src_name} → {', '.join(out_names)}  "
                 f"({sw}×{sh} → {n} 块, {elapsed:.2f}s)"
             )
-            emit_event(
-                "crop_progress",
+            # done events get throttled (high volume); force first/last for UI
+            emit_throttled(
+                force=(idx == 1 or is_last),
                 idx=idx, total=total, name=src_name, status="done",
                 n_out=n, outputs=out_names,
                 succeeded=succeeded, failed=failed, skipped=skipped,
@@ -391,8 +415,9 @@ def _run_crop(
         except Exception as exc:  # noqa: BLE001 — 单张失败不影响其他
             log(f"[fail] {src_name}: {exc}")
             failed += 1
-            emit_event(
-                "crop_progress", idx=idx, total=total, name=src_name, status="fail",
+            emit_throttled(
+                force=True,
+                idx=idx, total=total, name=src_name, status="fail",
                 error=str(exc)[:200],
                 succeeded=succeeded, failed=failed, skipped=skipped,
             )

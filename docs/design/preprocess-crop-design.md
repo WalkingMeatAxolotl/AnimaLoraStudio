@@ -1,6 +1,8 @@
 # 预处理 · 裁剪 — 功能设计
 
 > 临时设计文档，整理**逻辑模型 + 用户场景 + 数据契约**。实现细节看后续 PR。
+>
+> 落地后做了多轮 UI 迭代，详见 [§9 Addendum 1](#addendum-1--ui-演进2026-05-21)。
 
 ## 0. 目的与非目的
 
@@ -76,9 +78,13 @@ ADR 0004 的 `{kind, model, scale, action, target_area, src_size, dst_size, elap
 
 ---
 
-## 3. 模式
+## 3. 功能
 
-### A. 手动裁剪
+> **版本注**：v1 设计稿把"手动 / 聚类"做成 segmented tab，落地后迭代去掉
+> 了 tab —— 裁剪只有一个概念，"智能聚类"是个**可选预填工具**而非独立模式。
+> 详见 §9 Addendum 1。
+
+### 主裁剪能力
 
 **AR 下拉**：`自由(不锁)` / `1:1` / `4:3` / `3:2` / `16:9` / `3:4` / `2:3` / `9:16` / `4:5` / `自定义…`
 
@@ -89,29 +95,30 @@ ADR 0004 的 `{kind, model, scale, action, target_area, src_size, dst_size, elap
 
 **画布交互**：8 handle（4 角 + 4 边） + 三分网格 + 暗色 dim 框外 + live 像素尺寸 / AR readout。
 
-**右侧 rect list**：缩略 + 可编辑 label + 输出像素 + 复制 / 删除。
+**右侧 rect list**：缩略 + 可编辑 label + 输出像素 + 复制 / 删除（选中时 header 出 icon）。
 
-**filter chips**：全部 / 待裁剪 / 已裁剪（按 manifest entry 数量过滤）。
+**filter chips**：全部 / 待裁剪 / 已裁剪（按本 session 内 `cropsByImage` 状态过滤）。
 
-**主操作**：`裁剪选中(n)` / `▶ 裁剪全部(N)`。
+**主操作**：`裁剪当前图` / `▶ 裁剪全部(N)`。
 
-### B. 智能聚类
+### 智能聚类（可选预填）
+
+OperationPanel 下方独立 section，**默认折叠**；点 `▸ 智能聚类` 展开。
 
 **参数**：`max_crop ∈ [0, 0.30]`（最大允许裁面积比）、`k_min ∈ [1, 10]`、`k_max ∈ [2, 15]`。
 
 **算法（前端 JS）**：
 
 1. 对 `preprocess/` 所有图算 AR = w/h
-2. 1-D k-means 在 `[k_min, k_max]` 区间，用 elbow / silhouette 挑 k
-3. 每 cluster 取一个 target AR（cluster 中位 + 贴近常用桶 1:1 / 4:3 / 3:2 / 16:9 等）
-4. 每张成员按 target AR 居中裁剪到最大可填矩形
-5. `max_crop` 约束：裁掉面积比 > max_crop 则不加框（用户可手动处理）
+2. 1-D k-means 在 `[k_min, k_max]` 区间，用 elbow 挑 k
+3. 每 cluster 中心 → snap 到训练桶网格（见 §7 ARB 对齐）
+4. 显示 label 取最近常用 pretty AR；rect 用训练桶 AR 算
+5. 每张成员按 target AR 居中裁剪到最大可填矩形
+6. `max_crop` 约束：裁掉面积比 > max_crop 则不加框（用户可手动处理）
 
-**结果**：写入 cropsByImage（每图 1 个 ✦ 标记的 cluster 来源框）。
+**结果**：写入 cropsByImage（每图 1 个 ✦ 标记的 cluster 来源框）。聚类后用户可任意微调 / 删 / 加（用同一个主画布）。
 
-**后续**：自动切回手动编辑器，用户可任意微调 / 删 / 加。
-
-**主操作**：`▶ 开始聚类` / `裁剪全部(N)`。
+**主操作**：`▶ 开始聚类` — section 内独立按钮，**不是** 提交到磁盘。提交还走外层 `裁剪全部`。
 
 ---
 
@@ -122,7 +129,6 @@ ADR 0004 的 `{kind, model, scale, action, target_area, src_size, dst_size, elap
 ```
 POST /api/projects/:id/preprocess/crop
 body: {
-  mode: 'all' | 'selected',
   crops: {
     "IMG_2741.png": [
       { x: 0.10, y: 0.05, w: 0.55, h: 0.45, label: "头像" },
@@ -132,6 +138,14 @@ body: {
   }
 } → Job
 ```
+
+辅助 endpoint：
+
+- `GET /api/projects/:id/preprocess/crop/workspace` —— 列出所有可裁剪的图
+  （preprocess/ 已处理 + download/ 未处理合并），含 PIL 读图头返回的 w/h；
+  前端裁剪页 filmstrip 用
+- `POST /api/projects/:id/preprocess/files/reset` —— 总览 tab 的"撤销全部"
+  调用，清空 manifest + 删 preprocess/ 所有 PNG
 
 ### Worker 逻辑
 
@@ -145,38 +159,54 @@ body: {
 
 ### SSE 事件
 
-- `crop_progress`：单图完成推一次（per image）
+- `crop_progress`：单图完成推一次，但 worker 端**节流 ≥ 1Hz**（首末 / skip / fail 强发，其余 done 跨 ≥ 1s 才 emit）。避免 264 张数据集刷 ~500 个事件淹没事件流。
 - `job_state_changed`：状态变化
 
 ---
 
 ## 5. 前端结构
 
+> **版本注**：v1 设计稿是 `/preprocess/crop` 子路由 + 横向 filmstrip + stage
+> pills 内嵌 OperationPanel。落地后改成 query string `?tool=crop` + 共享工具栏
+> + 竖向 filmstrip，详见 §9 Addendum 1。
+
 ### 路由
 
-- `/projects/:id/preprocess` → 现有放大页（status quo）
-- `/projects/:id/preprocess/crop` → 新增裁剪页
+预处理工具共用 `/projects/:pid/preprocess` 单路由 + `?tool=` query：
+
+- `/preprocess` （默认）/ `?tool=upscale` → 放大工具
+- `?tool=overview` → 总览（多选 + 撤销）
+- `?tool=crop` → 裁剪工具
+- `?tool=inpaint` → 占位（未实现）
+
+入口由 `PreprocessHub.tsx` 调度。query 切换不卸载父路由，工具切换更顺；侧栏 `/preprocess` 匹配也不被打断。
 
 ### 入口
 
-放大页的 OperationPanel stage pills `[放大 ✓] [裁剪 ●] [涂抹]`：现在 `裁剪` 是 disabled placeholder。改为 link 跳 `/preprocess/crop`。反之裁剪页 stage pills 的 `放大` 可点回去。
+页面顶部独立**工具栏**（`PreprocessToolsBar.tsx`）三个 / 四个 pill，左侧首位是「总览」，pill 即工具，点了变 `<Link to="?tool=...">`。**没有完成 ✓ 徽章** —— 工具不是 pipeline 节点。
 
-### 页面布局（沿用放大页同模式）
+### 页面布局（共享框架）
 
 ```
-StepShell (title / subtitle / stepper)
+StepShell (title / subtitle)
 └─ grid 1fr / 260px
    ├─ 左
-   │  ├─ OperationPanel (compact)
-   │  │  ├─ [手动][聚类] segmented + 主操作
-   │  │  ├─ AR 下拉 (或 3 sliders)
-   │  │  └─ stage pills
-   │  └─ WorkArea
+   │  ├─ PreprocessToolsBar  [总览][放大][裁剪][涂抹]
+   │  ├─ OperationPanel (工具专属配置)
+   │  │  ├─ AR 下拉 + 主操作按钮
+   │  │  └─ 智能聚类 section（默认折叠）
+   │  ├─ PreprocessJobStrip （job 在跑 / 有 logs 时才显示）
+   │  └─ WorkArea (裁剪)
    │     ├─ filter chips · 当前图 meta · 清空本图
-   │     ├─ canvas + rect list (260px)
-   │     └─ filmstrip
+   │     └─ grid: filmstrip 220px / canvas 1fr / rect list 260px
    └─ 右 RightRail (裁剪进度 / 预估产物 / AR 分布 / 盘占用)
 ```
+
+WorkArea 内部三列：filmstrip 竖排（3 col 正方 cover thumbs）/ canvas 容器测量自适应 / rect list 选中时 header 出 ⎘ ✕ icon。
+
+### 总览 tab（overview）
+
+独立页 `PreprocessOverview.tsx`：所有 preprocess workspace 图 grid + 单击预览 modal + ctrl/shift 多选 + `撤销选中` + `↶ 撤销全部`。撤销逻辑从放大页移到这里，所有工具都不再单独处理撤销，UX 心智模型统一。
 
 ---
 
@@ -268,3 +298,94 @@ base_reso 可调当 follow-up 处理（如果出现项目级痛点）。
 - **暴露 ARB 底层（base_reso / step / 桶数 / 桶 (w,h)）给用户**：无（见 §7.2，UX 原则）
 - **base_reso 项目级可调**：无（硬编码 1024，见 §7.5）
 - **手动模式 AR 下拉换成训练桶**：无（保 pretty AR，UX 优先）
+
+---
+
+## 9. Addendum 1 — UI 演进（2026-05-21）
+
+设计稿落地后多轮 UI 迭代，记录主要偏离原稿的决策：
+
+### 9.1 去掉「手动 / 智能聚类」segmented tabs
+
+v1 把这两个做成 segmented tab 互斥切换。用户反馈"它们不是互斥关系"：聚类后生成的框可以手动改，根本就是同一个裁剪能力。
+
+落地：
+- 删 mode tabs
+- 主裁剪能力（AR 下拉 + 画布 + 主操作）始终可见
+- "智能聚类"降级为 OperationPanel 下方独立 section，默认折叠 `▸ 智能聚类`，点开看 sliders + `开始聚类` 按钮
+- 状态保留：聚类完成后 section 顶上挂 `✓ k=N` 徽章
+
+### 9.2 URL 从 `/preprocess/crop` 切到 `/preprocess?tool=crop`
+
+子路径模型有两个问题：(1) 侧栏 `/preprocess` 路径匹配被 `/crop` 后缀打断，高亮丢失；(2) 工具切换导致父路由卸载，状态全丢。
+
+落地：
+- 单一路由 `/projects/:pid/preprocess`
+- query string `?tool=overview|upscale|crop|inpaint` 调度
+- 新建 `PreprocessHub.tsx` 调度器
+- 工具切换不卸载父路由
+
+### 9.3 "阶段" 改 "工具"，去掉 ✓ 完成态
+
+stage pills 暗示 pipeline 时序，但放大 / 裁剪 / 涂抹都不是 stage，是任意顺序可用、可重复用的工具。
+
+落地：
+- 文案 "阶段" → "工具"
+- 共享组件 `PreprocessToolsBar.tsx` 放在每个工具页顶部
+- pill 没有完成徽章
+
+### 9.4 总览 tab — 撤销统一入口
+
+放大页本来有"还原 N 张"按钮。但裁剪等其他工具也需要撤销，每个工具各自加是冗余。
+
+落地：
+- 新建 `PreprocessOverview.tsx` 总览页
+- 工具栏左侧 `[总览]` pill
+- ImageGrid + shift/ctrl 多选 + 单图 preview modal
+- "撤销选中 N" + "↶ 撤销全部" + confirm modal
+- 放大页移除还原控件，image grid 保留
+- 后端新增 `POST /preprocess/files/reset` 路由到 `preprocess_manifest.clear_all()`
+
+### 9.5 Filmstrip 从底部横排改左侧竖排
+
+264 张图横排会挤成 5px 一条根本看不见。改竖排 3-col 正方 cover thumb，给画布让出更多上下空间。
+
+CSS 注意：`<button>` 直接挂 `aspect-ratio: 1` 在 grid 里会塌缩（Chromium/WebKit anonymous flow-root 影响 `::before` padding-top）。包一层 div 做 padding-top trick 才稳。
+
+### 9.6 画布按容器测量自适应
+
+固定 maxWidth/maxHeight 在不同视口要么浪费要么溢出。改 ResizeObserver 测父容器，maxWidth/maxHeight 退为兜底上限。
+
+### 9.7 AR-lock resize 两个坑
+
+- **缩塌成全图**：超出画布时独立 clamp w/h 会破 AR（1:1 锁定的 rect 在 2:3 源图上变全图 = 2:3）。修：按锚定角缩比例，永远保 AR
+- **磁吸感**：拖出后反方向拉要先消化累计 dxN/dyN 才动。修：每帧重锚定，delta 始终是上一帧到现在的增量
+
+### 9.8 Multi-crop 缩略图寻址
+
+`bucket=download` + `resolve_origin` 取 `[0]` 在 multi-crop 后多个派生共享 origin 时永远落到同一张缩略图。
+
+落地：
+- thumb endpoint 加 `bucket=preprocess`，直接按 preprocess 文件名寻址
+- 兜底：`bucket=download` 找不到文件且 name 是 manifest entry key 时也走 preprocess/
+- 裁剪页 / 总览页 / 放大页都按"已处理走 preprocess bucket + im.name，未处理走 download" 寻址
+
+### 9.9 SSE 节流
+
+crop 速度比 upscale 快（单图 300-700ms），264 张 ~500 个事件淹没 EventSource。
+
+落地：worker 内 `emit_throttled(force=...)`：done 事件 ≥1s 间隔；首末 / skip / fail 强发。
+
+### 9.10 像素分布 + 训练桶对齐
+
+右栏统计原本只是裁剪的 AR 分布。放大页移植了像素面积 histogram（6 bin），跟 sd-scripts ARB 训练桶语义对齐（见 §7 ARB 对齐）。
+
+放大页 filter chips 也从 `全部 / 未处理 / 已处理` 改成 `全部 + 像素 bins`（同 sidebar histogram），UX 上「未处理 / 已处理」对放大无意义。
+
+### 9.11 JobStrip 不持久化日志
+
+刷新页面后 status endpoint 还在返回历史 job + log_tail，结果空 JobStrip 蹲在页面上没意义。
+
+落地：
+- 不再从 `status.log_tail` 初始化 logs，logs 仅本 session SSE 累积
+- JobStrip 渲染条件加 `(isLive || logs.length > 0)`，无活跃 job + 无 session log 时整块隐藏

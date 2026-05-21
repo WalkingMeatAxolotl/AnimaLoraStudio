@@ -36,8 +36,6 @@ export interface FreeCropEditorProps {
   onSelect: (id: string | null) => void
   onChange: (id: string, rect: CropRect) => void
   onCreate: (rect: Omit<CropRect, 'id' | 'label'>) => void
-  onDelete: (id: string) => void
-  onDuplicate: (id: string) => void
 }
 
 const HANDLES: readonly ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'] = [
@@ -150,25 +148,48 @@ export default function FreeCropEditor({
   crops,
   selectedId,
   arLock,
-  maxWidth = 720,
-  maxHeight = 620,
+  maxWidth = 1600,
+  maxHeight = 1200,
   onSelect,
   onChange,
   onCreate,
-  onDelete,
-  onDuplicate,
 }: FreeCropEditorProps) {
   const canvasRef = useRef<HTMLDivElement | null>(null)
+  const containerRef = useRef<HTMLDivElement | null>(null)
   const dragRef = useRef<DragState | null>(null)
   const [hoverId, setHoverId] = useState<string | null>(null)
   const [draft, setDraft] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
+  // Container-driven sizing — measure the wrapper and fit the canvas inside.
+  // Fixed maxWidth/maxHeight props would either waste vertical space on tall
+  // viewports or overflow on short ones. ResizeObserver lets the canvas
+  // breathe with the layout. Fallback to maxWidth/maxHeight pre-measurement
+  // (e.g. first render or in jsdom where RO doesn't fire) so tests still work.
+  const [containerSize, setContainerSize] = useState<{ w: number; h: number }>({
+    w: maxWidth, h: maxHeight,
+  })
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect
+        if (width > 0 && height > 0) {
+          setContainerSize({ w: width, h: height })
+        }
+      }
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
 
-  // Render dims that preserve image AR within maxWidth × maxHeight
+  // Render dims that preserve image AR within the container box (capped by props)
   const ar = image.w / image.h
-  let renderW = maxWidth
+  const boxW = Math.max(50, Math.min(containerSize.w, maxWidth))
+  const boxH = Math.max(50, Math.min(containerSize.h, maxHeight))
+  let renderW = boxW
   let renderH = renderW / ar
-  if (renderH > maxHeight) {
-    renderH = maxHeight
+  if (renderH > boxH) {
+    renderH = boxH
     renderW = renderH * ar
   }
 
@@ -294,7 +315,7 @@ export default function FreeCropEditor({
   const selectedRect = selectedId ? crops.find((c) => c.id === selectedId) : null
 
   return (
-    <div className="flex flex-col gap-2 w-fit max-w-full">
+    <div ref={containerRef} className="flex items-center justify-center w-full h-full overflow-hidden">
       <div
         ref={canvasRef}
         className="cropper-canvas"
@@ -393,27 +414,6 @@ export default function FreeCropEditor({
         )}
       </div>
 
-      {/* tools row */}
-      <div className="flex items-center gap-3 px-1">
-        <div className="flex items-center gap-2 text-xs">
-          <span className="caption">画布</span>
-          <span className="font-mono text-fg-tertiary">
-            {image.name} · {image.w}×{image.h} · {arLabel(image.w, image.h)}
-          </span>
-        </div>
-        <div className="ml-auto flex gap-1">
-          <button
-            className="btn btn-ghost btn-sm"
-            disabled={!selectedId}
-            onClick={() => selectedId && onDuplicate(selectedId)}
-          >复制选中</button>
-          <button
-            className="btn btn-ghost btn-sm text-err"
-            disabled={!selectedId}
-            onClick={() => selectedId && onDelete(selectedId)}
-          >删除选中</button>
-        </div>
-      </div>
     </div>
   )
 }

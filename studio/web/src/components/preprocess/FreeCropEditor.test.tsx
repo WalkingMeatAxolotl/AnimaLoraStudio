@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import FreeCropEditor, { applyResize, type CropRect } from './FreeCropEditor'
 
 const baseImage = {
@@ -14,7 +14,7 @@ const noop = () => {}
 
 describe('FreeCropEditor', () => {
   it('renders without crops (canvas only)', () => {
-    render(
+    const { container } = render(
       <FreeCropEditor
         image={baseImage}
         crops={[]}
@@ -23,13 +23,11 @@ describe('FreeCropEditor', () => {
         onSelect={noop}
         onChange={noop}
         onCreate={noop}
-        onDelete={noop}
-        onDuplicate={noop}
       />,
     )
-    // Image filename + dim shown in tools row
-    expect(screen.getByText(/X\.png/)).toBeInTheDocument()
-    expect(screen.getByText(/1024×1536/)).toBeInTheDocument()
+    // Canvas div is rendered; no crop rects yet
+    expect(container.querySelector('.cropper-canvas')).toBeInTheDocument()
+    expect(container.querySelectorAll('.crop-rect').length).toBe(0)
   })
 
   it('renders rect with label + output pixel size', () => {
@@ -45,35 +43,11 @@ describe('FreeCropEditor', () => {
         onSelect={noop}
         onChange={noop}
         onCreate={noop}
-        onDelete={noop}
-        onDuplicate={noop}
       />,
     )
     expect(screen.getByText('head')).toBeInTheDocument()
     // 1024*0.5 = 512, 1536*0.5 = 768
     expect(screen.getByText(/512×768/)).toBeInTheDocument()
-  })
-
-  it('disables action buttons when nothing is selected', () => {
-    const onDelete = vi.fn()
-    const onDuplicate = vi.fn()
-    render(
-      <FreeCropEditor
-        image={baseImage}
-        crops={[]}
-        selectedId={null}
-        arLock={null}
-        onSelect={noop}
-        onChange={noop}
-        onCreate={noop}
-        onDelete={onDelete}
-        onDuplicate={onDuplicate}
-      />,
-    )
-    const dup = screen.getByText('复制选中').closest('button')
-    const del = screen.getByText('删除选中').closest('button')
-    expect(dup).toBeDisabled()
-    expect(del).toBeDisabled()
   })
 
   /** AR is preserved across any out-of-bounds drag.
@@ -161,8 +135,6 @@ describe('FreeCropEditor', () => {
         onSelect={noop}
         onChange={noop}
         onCreate={noop}
-        onDelete={noop}
-        onDuplicate={noop}
       />,
     )
     const handles = container.querySelectorAll('.handle')

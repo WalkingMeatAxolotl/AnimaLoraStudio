@@ -48,7 +48,7 @@
 流水线 8 步 + 工具页：
 
 1. **下载** — Booru 抓取 / 本地 jpg / png / zip 上传
-2. **预处理**（可选）— 图片放大流水线：ESRGAN / Real-ESRGAN 等多放大器预设，支持 ModelScope / HF 双源
+2. **预处理**（可选）— 多工具流水线：放大（ESRGAN / Real-ESRGAN 等多预设，ModelScope / HF 双源）+ 裁剪（手动框选 + 智能 AR 聚类预填，跟 sd-scripts 训练桶对齐）+ 总览（多选 + 一键撤销）
 3. **筛选** — download / train 双面板，多选复制 / 移除，子文件夹管理
 4. **打标** — WD14 / CLTagger / LLM 三选，GPU EP 自动 fallback；顶部 trigger_word 输入
 5. **标签编辑** — 缓存模式 + 还原点，批量加 / 删 / 替换

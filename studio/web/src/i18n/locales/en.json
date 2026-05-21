@@ -1295,12 +1295,14 @@
     "upscaleSelected": "Upscale selected {{n}}",
     "upscaleAll": "Upscale all {{n}}",
     "noPending": "No pending",
-    "stageLabel": "Stage",
-    "stageUpscale": "Upscale",
-    "stageCrop": "Crop",
-    "stageCropTitle": "Future stage: interactive crop",
-    "stageInpaint": "Inpaint",
-    "stageInpaintTitle": "Future stage: brush inpaint",
+    "toolsLabel": "Tools",
+    "tools": {
+      "overview": "Overview",
+      "upscale": "Upscale",
+      "crop": "Crop",
+      "inpaint": "Inpaint",
+      "inpaintTitle": "Coming soon: brush inpaint (palette + Gaussian)"
+    },
     "smartHint": "Smart: if pixels sufficient → skip model, use LANCZOS",
     "imagesTitle": "Images",
     "totalCount": "{{n}} total",
@@ -1308,6 +1310,7 @@
     "filterAll": "All",
     "filterPending": "Pending",
     "filterProcessed": "Processed",
+    "emptyForBin": "No images in this resolution bin.",
     "restoreHintDisabled": "Select processed images to enable — restore = delete preprocess copy",
     "restoreHint": "Restore {{n}} (delete preprocess copy)",
     "restoreBtn": "⟲ Restore {{n}}",
@@ -1321,6 +1324,7 @@
     "sidebarNImages": "{{n}} images",
     "sidebarProcessed": "Processed",
     "sidebarPending": "Pending",
+    "sidebarPxDist": "Pixel distribution",
     "sidebarActionDist": "Action distribution",
     "actionResize": "Direct resize (large)",
     "actionUpscaleResize": "Upscale + resize",
@@ -1339,35 +1343,48 @@
     "vramEst": "Est. VRAM peak",
     "vramNote": "Larger tile = more VRAM; reduce to 128/192 if OOM.",
     "sidebarNext": "Next step",
-    "nextNote": "Preprocess is optional — skipped images use originals, processed images use the preprocess copy. ADR 0004: user sees one image set.",
-    "stageCropGoTo": "Go to «Crop»"
+    "nextNote": "Preprocess is optional — skipped images use originals, processed images use the preprocess copy. ADR 0004: user sees one image set."
+  },
+  "preprocessOverview": {
+    "subtitle": "Upscale / crop / inpaint — Overview (preview + undo)",
+    "title": "Processed images",
+    "totalCount": "{{n}} total",
+    "selectedCount": "· {{n}} selected",
+    "empty": "Nothing processed yet. Go to «Upscale» or «Crop» to start.",
+    "restoreSelected": "↶ Undo selected ({{n}})",
+    "restoreSelectedTitle": "Delete preprocess copies; downstream uses download/ originals",
+    "resetAll": "Undo all",
+    "resetAllTitle": "Delete every preprocess product and revert to download/ originals",
+    "confirmRestore": "Undo {{n}} processed images? Preprocess copies are deleted; downstream reverts to download/ originals. Irreversible.",
+    "confirmRestoreOk": "Undo",
+    "confirmResetAll": "Undo all {{n}} images? All preprocess copies (upscale / crop / ...) deleted; everything reverts to download/. Irreversible.",
+    "confirmResetAllOk": "Undo all",
+    "restoredToast": "{{n}} undone",
+    "resetAllToast": "All undone"
   },
   "preprocessCrop": {
-    "subtitle": "Upscale / crop / inpaint — Phase 2: Crop",
+    "subtitle": "Upscale / crop / inpaint — Crop tool",
     "panelTitle": "Crop",
-    "mode": {
-      "manual": "Manual crop",
-      "auto": "Smart cluster"
-    },
-    "modeSub": {
-      "manual": "Drag to draw · multi-crop OK",
-      "auto": "K-cluster by AR · unify"
-    },
     "aspectRatio": "Aspect ratio",
     "hintFree": "Drag on canvas to draw a free-AR crop",
     "hintLocked": "New crops locked to {{ar}}; resize keeps AR",
-    "summaryManual": "{{rects}} rects · {{configured}} / {{total}} images",
+    "summary": "{{rects}} rects · {{configured}} / {{total}} images",
     "cropActive": "Crop current",
     "cropAll": "Crop all ({{n}})",
+    "clusterSectionTitle": "Smart cluster",
+    "clusterSectionDesc": "Auto-group by aspect ratio and pre-fill one crop per image (tweak by hand after)",
     "runCluster": "Run cluster",
     "clusterDone": "Cluster done",
     "clusterUsed": "· using k = {{k}}",
-    "clusterHint": "Tune params then ▶ Run cluster; algorithm will pre-fill a crop per image.",
-    "stageNote": "Phase 2. Crops slice upscaled outputs; each PNG 1-3 MB, no re-encode.",
     "filter": {
       "all": "All",
       "pending": "Pending",
       "cropped": "Cropped"
+    },
+    "filmstripEmpty": {
+      "all": "Workspace is empty.",
+      "pending": "All images have been cropped.",
+      "cropped": "No images cropped yet."
     },
     "clearActive": "Clear current",
     "loading": "Loading workspace...",
@@ -1389,8 +1406,7 @@
     "rrOutputFiles": "Output files",
     "rrConfiguredImages": "Configured images",
     "rrSource": "Source",
-    "rrNoteManual": "Multi-crop: each rect = 1 PNG. N=1 overwrites stem.png; N>1 writes stem_c{n}.png.",
-    "rrNoteAuto": "Cluster k-means by AR; each bucket center-crops to target AR. Tune individually in editor.",
+    "rrNote": "Each rect = 1 PNG. N=1 overwrites the source; N>1 derives _c0 / _c1 ... copies. Cluster is just a prefill — rects stay editable.",
     "rrArDist": "AR distribution",
     "rrFromSource": "source AR",
     "rrFromCrops": "crop AR",
@@ -1400,7 +1416,7 @@
   "steps": {
     "download": { "title": "Download images", "subtitle": "Booru scraping + local upload" },
     "curate": { "title": "Curation", "subtitle": "download → train" },
-    "preprocess": { "title": "Preprocess", "subtitle": "Upscale / crop / inpaint — Phase 1: Upscale" },
+    "preprocess": { "title": "Preprocess", "subtitle": "Upscale / crop / inpaint — Upscale tool" },
     "tag": { "title": "Auto tagging", "subtitle": "WD14 / CLTagger local inference, or remote LLM vision tagging" },
     "reg": { "title": "Regularization", "subtitle": "Pull reg images from train tags, mirror structure to reg/" },
     "train": { "title": "Train", "subtitle": "Pick preset → Edit config → Queue training" }

@@ -5,7 +5,8 @@
 
 .cropper-canvas {
   position: relative;
-  border-radius: 6px;
+  /* No border-radius — round corners would clip the source image's edge
+     pixels, hiding content that the user is trying to crop. */
   overflow: hidden;
   cursor: crosshair;
   background-color: var(--bg-sunken);
@@ -124,7 +125,40 @@
 .handle-sw { bottom: -6px; left: -6px; cursor: nesw-resize; }
 .handle-w  { top: 50%; left: -6px; transform: translateY(-50%); cursor: ew-resize; }
 
-/* Filmstrip thumbs */
+/* Square filmstrip thumbs — used in the vertical 3-col grid layout (crop page).
+   Cover-cropped so 264 mixed-AR images tile cleanly.
+   The padding-top: 100% trick goes on an OUTER div (not the button), because
+   Chromium/WebKit wraps button children in an anonymous flow-root which makes
+   `::before { padding-top: 100% }` on the button itself silently fail to
+   contribute to height. Outer div padding + inner absolute-positioned button
+   sidesteps the quirk. */
+.fs-thumb-sq-cell {
+  position: relative;
+  width: 100%;
+  padding-top: 100%;   /* AR 1:1 — height computed from cell width */
+}
+.fs-thumb-sq {
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  cursor: pointer;
+  background-size: cover;
+  background-position: center;
+  padding: 0;
+  transition: 120ms;
+  overflow: hidden;
+}
+.fs-thumb-sq:hover {
+  border-color: var(--border-default);
+}
+.fs-thumb-sq.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* Legacy horizontal filmstrip — kept for any caller still using natural-AR
+   thumbs in a row. Crop page no longer uses this. */
 .fs-thumb {
   flex-shrink: 0;
   position: relative;

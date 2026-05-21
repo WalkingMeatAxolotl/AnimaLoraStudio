@@ -1295,12 +1295,14 @@
     "upscaleSelected": "放大选中 {{n}}",
     "upscaleAll": "放大全部 {{n}}",
     "noPending": "没有待处理",
-    "stageLabel": "阶段",
-    "stageUpscale": "放大",
-    "stageCrop": "裁剪",
-    "stageCropTitle": "未来阶段：交互式裁剪",
-    "stageInpaint": "涂抹",
-    "stageInpaintTitle": "未来阶段：画笔涂抹（取色 + 高斯）",
+    "toolsLabel": "工具",
+    "tools": {
+      "overview": "总览",
+      "upscale": "放大",
+      "crop": "裁剪",
+      "inpaint": "涂抹",
+      "inpaintTitle": "即将上线：画笔涂抹（取色 + 高斯）"
+    },
     "smartHint": "智能：像素够 → 跳过模型直接 LANCZOS 缩",
     "imagesTitle": "图片",
     "totalCount": "共 {{n}} 张",
@@ -1308,6 +1310,7 @@
     "filterAll": "全部",
     "filterPending": "未处理",
     "filterProcessed": "已处理",
+    "emptyForBin": "这个分辨率区间没有图。",
     "restoreHintDisabled": "选中含已处理图时启用——还原 = 删 preprocess 副本，回到「未处理」",
     "restoreHint": "还原 {{n}} 张（删 preprocess 副本回到未处理）",
     "restoreBtn": "⟲ 还原 {{n}}",
@@ -1321,6 +1324,7 @@
     "sidebarNImages": "{{n}} 张",
     "sidebarProcessed": "已处理",
     "sidebarPending": "待处理",
+    "sidebarPxDist": "像素分布",
     "sidebarActionDist": "处理方式分布",
     "actionResize": "直接缩 (大图)",
     "actionUpscaleResize": "放大 + 缩",
@@ -1339,35 +1343,48 @@
     "vramEst": "估算 VRAM 峰值",
     "vramNote": "tile 越大显存占用越高；OOM 时降到 128/192。",
     "sidebarNext": "下一步",
-    "nextNote": "预处理是可选阶段——跳过的图筛选页会用原图，已处理的图自动用预处理副本。ADR 0004：用户只看到一份图。",
-    "stageCropGoTo": "跳到「裁剪」"
+    "nextNote": "预处理是可选阶段——跳过的图筛选页会用原图，已处理的图自动用预处理副本。ADR 0004：用户只看到一份图。"
+  },
+  "preprocessOverview": {
+    "subtitle": "放大 / 裁剪 / 涂抹 — 总览（预览 + 撤销）",
+    "title": "已处理图片",
+    "totalCount": "共 {{n}} 张",
+    "selectedCount": "· 已选 {{n}}",
+    "empty": "还没有任何处理过的图片。回到「放大」或「裁剪」开始处理。",
+    "restoreSelected": "↶ 撤销选中 ({{n}})",
+    "restoreSelectedTitle": "删 preprocess 副本，回到 download 原图",
+    "resetAll": "撤销全部",
+    "resetAllTitle": "把所有放大 / 裁剪产物全部删除，回到 download 原图",
+    "confirmRestore": "撤销 {{n}} 张已处理图？将删除 preprocess 副本，下游回看 download 原图。不可恢复。",
+    "confirmRestoreOk": "撤销",
+    "confirmResetAll": "撤销全部 {{n}} 张？将删除 preprocess 所有副本（放大 / 裁剪 / ...），所有图回到 download 原图。不可恢复。",
+    "confirmResetAllOk": "全部撤销",
+    "restoredToast": "已撤销 {{n}} 张",
+    "resetAllToast": "已撤销全部"
   },
   "preprocessCrop": {
-    "subtitle": "放大 / 裁剪 / 涂抹 — 第二阶段：裁剪",
+    "subtitle": "放大 / 裁剪 / 涂抹 — 裁剪工具",
     "panelTitle": "裁剪",
-    "mode": {
-      "manual": "手动裁剪",
-      "auto": "智能聚类"
-    },
-    "modeSub": {
-      "manual": "拖动框选 · 可一图多裁",
-      "auto": "按 AR k-cluster · 自动统一"
-    },
     "aspectRatio": "长宽比",
     "hintFree": "画布上拖鼠标新建框，框可任意长宽比",
     "hintLocked": "新框锁定为 {{ar}}，仅改大小位置",
-    "summaryManual": "{{rects}} 个框 · 跨 {{configured}} / {{total}} 张图",
+    "summary": "{{rects}} 个框 · 跨 {{configured}} / {{total}} 张图",
     "cropActive": "裁剪当前图",
     "cropAll": "裁剪全部 ({{n}})",
+    "clusterSectionTitle": "智能聚类",
+    "clusterSectionDesc": "按长宽比自动分组，给每张图预填一个裁剪框（之后可手动微调）",
     "runCluster": "开始聚类",
     "clusterDone": "聚类完成",
     "clusterUsed": "· 采用 k = {{k}}",
-    "clusterHint": "设好参数后点 ▶ 开始聚类，算法会给每张图自动加裁剪框。",
-    "stageNote": "第二阶段。裁剪在放大产物上切片，PNG 单张 1-3 MB，不重新编码。",
     "filter": {
       "all": "全部",
       "pending": "待裁剪",
       "cropped": "已裁剪"
+    },
+    "filmstripEmpty": {
+      "all": "工作集是空的。",
+      "pending": "所有图都已经裁剪过了。",
+      "cropped": "还没有裁剪过任何图。"
     },
     "clearActive": "清空本图",
     "loading": "加载工作集...",
@@ -1389,8 +1406,7 @@
     "rrOutputFiles": "输出文件",
     "rrConfiguredImages": "已配置源图",
     "rrSource": "来源",
-    "rrNoteManual": "一图多裁：每个裁剪框 = 一个产物 PNG。N=1 覆盖 stem.png；N>1 输出 stem_c{n}.png。",
-    "rrNoteAuto": "聚类按 AR k-cluster，每桶居中裁剪到统一 AR。可在编辑器单独微调。",
+    "rrNote": "每个裁剪框 = 一张产物 PNG。N=1 覆盖原文件；N>1 派生为 _c0 / _c1 ... 多张。聚类只是预填，框可手动微调。",
     "rrArDist": "长宽比分布",
     "rrFromSource": "源图 AR",
     "rrFromCrops": "裁剪框 AR",
@@ -1400,7 +1416,7 @@
   "steps": {
     "download": { "title": "下载图片", "subtitle": "Booru 抓取 + 本地上传" },
     "curate": { "title": "筛选图片", "subtitle": "download → train" },
-    "preprocess": { "title": "预处理", "subtitle": "放大 / 裁剪 / 涂抹 — 第一阶段：放大" },
+    "preprocess": { "title": "预处理", "subtitle": "放大 / 裁剪 / 涂抹 — 放大工具" },
     "tag": { "title": "自动打标", "subtitle": "WD14 / CLTagger 本地推理，或远程 LLM 视觉打标" },
     "reg": { "title": "正则集", "subtitle": "基于 train tag 拉正则图，镜像结构到 reg/" },
     "train": { "title": "训练", "subtitle": "选预设 → 编辑 config → 入队训练" }

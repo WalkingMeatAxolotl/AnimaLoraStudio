@@ -126,6 +126,60 @@ def test_copy_to_train_uses_original_when_unprocessed(env) -> None:
     assert copied.read_bytes() == b"original-bytes"
 
 
+def test_curation_view_expands_multi_crop_derivatives(env) -> None:
+    """Multi-crop fan-out: download/X.png 派生 X_c0.png / X_c1.png，
+    筛选 left 展开为 N 行可单独勾选，原 X.png 不再单独出现。"""
+    _dl(env, "X.png", blob=b"orig")
+    _dl(env, "Y.png", blob=b"orig")
+    pdir = projects.project_dir(env["p"]["id"], env["p"]["slug"])
+    # 模拟 multi-crop fan-out 写盘 + manifest
+    (pdir / "preprocess").mkdir(parents=True, exist_ok=True)
+    (pdir / "preprocess" / "X_c0.png").write_bytes(b"head")
+    (pdir / "preprocess" / "X_c1.png").write_bytes(b"body")
+    preprocess_manifest.replace_with_crops(
+        pdir,
+        source_name="X.png",
+        outputs=[
+            {"name": "X_c0.png", "origin": "X.png", "size": 4, "mtime": 1.0},
+            {"name": "X_c1.png", "origin": "X.png", "size": 4, "mtime": 1.0},
+        ],
+    )
+    with db.connection_for(env["db"]) as conn:
+        view = curation.curation_view(conn, env["p"]["id"], env["v"]["id"])
+    # X 派生为 c0 / c1；Y 未处理保持原名；X.png 自身不在 left
+    assert set(_names(view["left"])) == {"X_c0.png", "X_c1.png", "Y.png"}
+
+
+def test_copy_to_train_accepts_preprocess_derivative_name(env) -> None:
+    """筛选 left 给的派生名（如 X_c0.png）应能直接 copy 到 train，
+    bytes 来自 preprocess/，metadata 从 download/{origin} 跟着复制。"""
+    _dl(env, "X.png")
+    _meta(env, "X.png", ".txt", "tag for X")
+    pdir = projects.project_dir(env["p"]["id"], env["p"]["slug"])
+    (pdir / "preprocess").mkdir(parents=True, exist_ok=True)
+    (pdir / "preprocess" / "X_c0.png").write_bytes(b"crop-0-bytes")
+    (pdir / "preprocess" / "X_c1.png").write_bytes(b"crop-1-bytes")
+    preprocess_manifest.replace_with_crops(
+        pdir,
+        source_name="X.png",
+        outputs=[
+            {"name": "X_c0.png", "origin": "X.png", "size": 4, "mtime": 1.0},
+            {"name": "X_c1.png", "origin": "X.png", "size": 4, "mtime": 1.0},
+        ],
+    )
+    with db.connection_for(env["db"]) as conn:
+        curation.copy_to_train(
+            conn, env["p"]["id"], env["v"]["id"],
+            ["X_c0.png", "X_c1.png"], "5_concept",
+        )
+    folder = _train_dir(env, "5_concept")
+    assert (folder / "X_c0.png").read_bytes() == b"crop-0-bytes"
+    assert (folder / "X_c1.png").read_bytes() == b"crop-1-bytes"
+    # metadata 共享原图 caption，复制到各 stem
+    assert (folder / "X_c0.txt").read_text(encoding="utf-8") == "tag for X"
+    assert (folder / "X_c1.txt").read_text(encoding="utf-8") == "tag for X"
+
+
 def test_copy_to_train_handles_mixed_processed_unprocessed(env) -> None:
     """同批 copy：1.png 已处理 → 用 preprocess；2.png 未处理 → 用 download。"""
     _dl(env, "1.png", blob=b"orig-1")

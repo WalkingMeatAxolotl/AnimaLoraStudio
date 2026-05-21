@@ -48,7 +48,7 @@
 8-step pipeline + tool pages:
 
 1. **Download** — Booru scraping / local jpg / png / zip upload
-2. **Preprocess** (optional) — image upscaling pipeline: ESRGAN / Real-ESRGAN and other presets, supports both ModelScope and HF sources
+2. **Preprocess** (optional) — multi-tool pipeline: upscale (ESRGAN / Real-ESRGAN presets via ModelScope / HF), crop (manual rect drawing + smart AR-clustered prefill aligned with sd-scripts training buckets), and an overview tab (multi-select + one-click undo)
 3. **Curate** — dual download / train panels with multi-select copy / remove and subfolder management
 4. **Tag** — choose from WD14 / CLTagger / LLM with automatic GPU EP fallback; trigger_word input at the top
 5. **Tag editor** — cached mode with restore points, bulk add / delete / replace
