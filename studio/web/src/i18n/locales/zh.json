@@ -171,8 +171,7 @@
     "empty": "还没有图片"
   },
   "imageGrid": {
-    "noImages": "没有图片",
-    "truncated": "仅显示前 {{n}} 张（共 {{total}} 张）"
+    "noImages": "没有图片"
   },
   "infoButton": {
     "label": "更多信息"

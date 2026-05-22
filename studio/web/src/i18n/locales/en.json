@@ -171,8 +171,7 @@
     "empty": "No images yet"
   },
   "imageGrid": {
-    "noImages": "No images",
-    "truncated": "Showing first {{n}} of {{total}}"
+    "noImages": "No images"
   },
   "infoButton": {
     "label": "More info"
