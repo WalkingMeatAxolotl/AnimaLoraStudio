@@ -50,9 +50,7 @@ export default function TagEditPage() {
   const [activeKey, setActiveKey] = useState<string>('')
   const [sel, setSel] = useState<Set<string>>(new Set())
   const [anchor, setAnchor] = useState<string | null>(null)
-  const [filterTag, setFilterTag] = useState<string>('')
-  // '' = 全部；否则限定到该 folder（1_data / 2_data ...）。跟 filterTag 是
-  // AND 关系：folder 切视图，filterTag 在视图内再筛 tag。命名特意区分于下面
+  // '' = 全部；否则限定到该 folder（1_data / 2_data ...）。命名特意区分于下面
   // editing 时用的 `activeFolder`（那个是当前编辑图所在 folder，纯展示）。
   const [folderFilter, setFolderFilter] = useState<string>('')
   const [exporting, setExporting] = useState(false)
@@ -145,16 +143,9 @@ export default function TagEditPage() {
   }, [meta])
 
   const filteredKeys = useMemo(() => {
-    let ks = keys
-    if (folderFilter) {
-      ks = ks.filter((k) => meta.get(k)?.folder === folderFilter)
-    }
-    const f = filterTag.trim()
-    if (f) {
-      ks = ks.filter((k) => (cache.get(k) ?? []).includes(f))
-    }
-    return ks
-  }, [keys, meta, cache, filterTag, folderFilter])
+    if (!folderFilter) return keys
+    return keys.filter((k) => meta.get(k)?.folder === folderFilter)
+  }, [keys, meta, folderFilter])
 
   const captionItems = useMemo(
     () =>
@@ -229,6 +220,42 @@ export default function TagEditPage() {
     })
   }
 
+  // 标签分布行内 × 触发：从当前选中图删除该 tag。toast 主要是反馈"动作生效"
+  // —— 因为 UI 上 tag 行马上消失/数字下降已经是可视反馈，这里只补一句简短的。
+  const removeTagFromSelected = (tag: string) => {
+    if (selectedKeys.length === 0) return
+    const updates = new Map<string, string[]>()
+    for (const k of selectedKeys) {
+      const cur = cache.get(k) ?? []
+      if (!cur.includes(tag)) continue
+      updates.set(k, cur.filter((tt) => tt !== tag))
+    }
+    if (updates.size === 0) return
+    applyBulkUpdates(updates)
+    toast(t('tagEdit.removedFromN', { tag, n: updates.size }), 'success')
+  }
+
+  // 标签分布行内 ✎ inline edit 提交：把选中图里的 oldTag 替换成 newTag，去重。
+  const replaceTagInSelected = (oldTag: string, newTag: string) => {
+    if (selectedKeys.length === 0 || !newTag || newTag === oldTag) return
+    const updates = new Map<string, string[]>()
+    for (const k of selectedKeys) {
+      const cur = cache.get(k) ?? []
+      if (!cur.includes(oldTag)) continue
+      const next: string[] = []
+      const seen = new Set<string>()
+      for (const tt of cur) {
+        const out = tt === oldTag ? newTag : tt
+        if (seen.has(out)) continue
+        seen.add(out); next.push(out)
+      }
+      updates.set(k, next)
+    }
+    if (updates.size === 0) return
+    applyBulkUpdates(updates)
+    toast(t('tagEdit.replacedInN', { from: oldTag, to: newTag, n: updates.size }), 'success')
+  }
+
   const onSave = async () => {
     if (!dirty || versionId == null) return
     const items: CommitItem[] = dirtyKeys.map((k) => {
@@ -248,7 +275,7 @@ export default function TagEditPage() {
     setActiveKey('')
     setSel(new Set())
     setAnchor(null)
-    setFilterTag('')
+    setFolderFilter('')
     await reload()
   }
 
@@ -357,7 +384,11 @@ export default function TagEditPage() {
               onActivate={setActiveKey}
               clickMode="activate"
               ariaLabel="tag-edit-grid"
-              emptyHint={filterTag ? t('tagEdit.noImagesWithTag', { tag: filterTag }) : t('tagEdit.noImagesHint')}
+              emptyHint={
+                folderFilter
+                  ? t('tagEdit.noImagesInFolder', { folder: folderFilter })
+                  : t('tagEdit.noImagesHint')
+              }
             />
           </div>
         </section>
@@ -382,29 +413,11 @@ export default function TagEditPage() {
           </section>
         )}
 
-        <div className="flex flex-col gap-2.5 min-w-0" style={{ flex: '0 0 32%' }}>
-          {/* editing 时（用户聚焦单图编辑）右侧栏整体让位给 TagEditor —— bulk
-           * 操作（add/remove/replace/dedupe）+ filter + 全选 都和"调一张图的
-           * 单条标签"无关，留着只会挤压编辑区。退出 editing 后 BulkActionBar
-           * 自动回来，filterTag / sel 等 state 保留（隐藏的是 UI 不是状态）。 */}
-          {!isEditing && (
-            <BulkActionBar
-              cache={cache}
-              selectedKeys={selectedKeys}
-              onApply={applyBulkUpdates}
-              tagSuggestions={tagSuggestions}
-              defaultScope="selected"
-              onClearSelection={() => setSel(new Set())}
-              filterTag={filterTag}
-              onFilterTagChange={setFilterTag}
-              filteredKeys={filteredKeys}
-              totalCount={keys.length}
-              filteredCount={filteredKeys.length}
-              onSelectAll={() => setSel(new Set(filteredKeys))}
-            />
-          )}
-
+        <div className="flex flex-col gap-2.5 min-w-0 flex-1 min-h-0" style={{ flex: '0 0 32%' }}>
           {isEditing ? (
+            // editing 时：bulk + 标签分布 都和"调单图标签"无关，整个侧栏让位给
+            // TagEditor。退出 editing 后自动回来，sel / folderFilter 等 state
+            // 保留（隐藏的是 UI 不是状态）。
             <section className="flex-1 rounded-md border border-subtle bg-surface p-2.5 flex flex-col gap-2 min-h-0 overflow-hidden">
               <div className="flex items-center gap-1.5 shrink-0">
                 <button onClick={() => navActive(-1)} disabled={navKeys.length === 0} aria-label={t('tagEdit.prevImage')} className="btn btn-secondary btn-sm">◀</button>
@@ -417,11 +430,27 @@ export default function TagEditPage() {
               <TagEditor tags={activeTags} onChange={updateActiveTags} />
             </section>
           ) : (
-            <TagStatsPanel
-              cache={cache}
-              selectedKeys={selectedKeys}
-              onPickTag={handlePickTag}
-            />
+            // BulkActionBar + TagStatsPanel 合到同一个外框 section（"标签编辑
+            // 工作区"），视觉上是一个面板：上半是 batch 输入区，下半是标签分布
+            // 兼快捷单 tag 操作区。两者共享"操作 = 给当前选中图做"的语义。
+            <section className="flex-1 min-h-0 rounded-md border border-subtle bg-surface flex flex-col overflow-hidden">
+              <BulkActionBar
+                cache={cache}
+                selectedKeys={selectedKeys}
+                onApply={applyBulkUpdates}
+                tagSuggestions={tagSuggestions}
+                onClearSelection={() => setSel(new Set())}
+                onSelectAll={() => setSel(new Set(filteredKeys))}
+                totalCount={filteredKeys.length}
+              />
+              <TagStatsPanel
+                cache={cache}
+                selectedKeys={selectedKeys}
+                onPickTag={handlePickTag}
+                onRemoveTag={removeTagFromSelected}
+                onReplaceTag={replaceTagInSelected}
+              />
+            </section>
           )}
         </div>
       </div>
