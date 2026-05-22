@@ -23,29 +23,19 @@ export const DEFAULT_DUPLICATE_OPTIONS: DuplicateScanOptions = {
 
 interface Props {
   projectId: number
-  options: DuplicateScanOptions
   result: DuplicateScanResult | null
   selected: Set<string>
   busy: boolean
-  onOptionsChange: (next: DuplicateScanOptions) => void
-  onScan: () => void
   onSelect: (next: Set<string>) => void
-  onMove: () => void
-  onDelete: () => void
   onPreview: (name: string) => void
 }
 
 export default function DuplicateReviewPanel({
   projectId,
-  options,
   result,
   selected,
   busy,
-  onOptionsChange,
-  onScan,
   onSelect,
-  onMove,
-  onDelete,
   onPreview,
 }: Props) {
   const { t } = useTranslation()
@@ -58,20 +48,30 @@ export default function DuplicateReviewPanel({
         : [],
     [result]
   )
-  const patch = <K extends keyof DuplicateScanOptions>(key: K, value: DuplicateScanOptions[K]) => {
-    onOptionsChange({ ...options, [key]: value })
-  }
-  const toggleName = (name: string) => {
+  const toggleName = (group: DuplicateGroup, name: string) => {
     const next = new Set(selected)
-    if (next.has(name)) next.delete(name)
-    else next.add(name)
+    if (next.has(name)) {
+      next.delete(name)
+    } else {
+      const selectedInGroup = group.items.filter((item) => next.has(item.name)).length
+      if (selectedInGroup >= group.items.length - 1) return
+      next.add(name)
+    }
+    onSelect(next)
+  }
+  const chooseKeep = (group: DuplicateGroup, name: string) => {
+    const next = new Set(selected)
+    for (const item of group.items) {
+      if (item.name === name) next.delete(item.name)
+      else next.add(item.name)
+    }
     onSelect(next)
   }
   return (
-    <section className="rounded-md border border-subtle bg-surface overflow-hidden shrink-0">
+    <section className="flex flex-col flex-1 min-h-0 rounded-md border border-subtle bg-surface overflow-hidden">
       <div className="h-0.5 bg-warn" />
       <header className="flex flex-wrap items-center gap-2 px-2.5 py-1.5 border-b border-subtle text-sm">
-        <h3 className="font-semibold">{t('duplicates.title')}</h3>
+        <h3 className="font-semibold">{t('duplicates.reviewTitle')}</h3>
         <span className="text-xs text-fg-tertiary">
           {result
             ? t('duplicates.summary', {
@@ -79,10 +79,11 @@ export default function DuplicateReviewPanel({
                 candidates: result.candidate_count,
                 total: result.total_images,
               })
-            : t('duplicates.subtitle')}
+            : t('duplicates.empty')}
         </span>
         <span className="flex-1" />
         <button
+          type="button"
           onClick={() => onSelect(new Set(suggested))}
           disabled={busy || suggested.length === 0}
           className="btn btn-secondary btn-sm"
@@ -90,122 +91,43 @@ export default function DuplicateReviewPanel({
           {t('duplicates.selectSuggested')}
         </button>
         <button
+          type="button"
           onClick={() => onSelect(new Set())}
           disabled={busy || selected.size === 0}
           className="btn btn-secondary btn-sm"
         >
           {t('common.deselect')}
         </button>
-        <button onClick={onMove} disabled={busy || selected.size === 0} className="btn btn-secondary btn-sm">
-          {t('duplicates.moveBtn', { n: selected.size })}
-        </button>
-        <button onClick={onDelete} disabled={busy || selected.size === 0} className="btn btn-sm bg-err-soft text-err border-err">
-          {t('duplicates.deleteBtn', { n: selected.size })}
-        </button>
       </header>
 
-      <div className="grid grid-cols-1 2xl:grid-cols-[360px,1fr] gap-3 p-2">
-        <div className="flex flex-col gap-2 text-sm">
-          <label className="flex flex-col gap-1">
-            <span className="text-xs text-fg-tertiary">{t('duplicates.scope')}</span>
-            <select
-              className="input px-2 py-1 text-sm"
-              value={options.match_scope}
-              onChange={(e) => patch('match_scope', e.target.value as DuplicateScanOptions['match_scope'])}
-              disabled={busy}
-            >
-              <option value="strict">{t('duplicates.scopeStrict')}</option>
-              <option value="both">{t('duplicates.scopeBoth')}</option>
-            </select>
-          </label>
-          <div className="grid grid-cols-2 md:grid-cols-4 2xl:grid-cols-2 gap-2">
-            <NumOption label={t('duplicates.hashSize')} value={options.hash_size} min={0} max={2048} step={64} disabled={busy} onChange={(value) => patch('hash_size', value)} />
-            <NumOption label={t('duplicates.workers')} value={options.hash_workers} min={1} max={32} step={1} disabled={busy} onChange={(value) => patch('hash_workers', value)} />
-            <NumOption label={t('duplicates.structure')} value={options.structure_threshold} min={0} max={24} step={1} disabled={busy} onChange={(value) => patch('structure_threshold', value)} />
-            <NumOption label={t('duplicates.variantScore')} value={options.variant_score} min={40} max={98} step={1} disabled={busy} onChange={(value) => patch('variant_score', value)} />
-            <NumOption label={t('duplicates.aspect')} value={options.aspect_tolerance} min={0.005} max={0.2} step={0.005} disabled={busy} onChange={(value) => patch('aspect_tolerance', value)} />
-            <NumOption label={t('duplicates.closeTiles')} value={options.min_close_tiles} min={0} max={1} step={0.01} disabled={busy} onChange={(value) => patch('min_close_tiles', value)} />
-            <NumOption label={t('duplicates.tileMedian')} value={options.tile_median} min={0} max={40} step={1} disabled={busy} onChange={(value) => patch('tile_median', value)} />
-            <NumOption label={t('duplicates.grayClose')} value={options.min_gray_close} min={0} max={1} step={0.01} disabled={busy} onChange={(value) => patch('min_gray_close', value)} />
+      <div className="flex-1 min-h-0 overflow-y-auto p-2">
+        {!result ? (
+          <div className="min-h-[180px] h-full flex flex-col items-center justify-center text-center px-6 py-10">
+            <div className="text-sm font-medium text-fg-secondary">{t('duplicates.emptyTitle')}</div>
+            <p className="text-sm text-fg-tertiary mt-1 max-w-[52ch]">{t('duplicates.empty')}</p>
           </div>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs text-fg-tertiary">{t('duplicates.tileGrids')}</span>
-            <input
-              className="input input-mono px-2 py-1 text-sm"
-              value={options.tile_grids.join(',')}
-              disabled={busy}
-              onChange={(e) => {
-                const grids = e.target.value
-                  .split(',')
-                  .map((part) => Number(part.trim()))
-                  .filter((value) => Number.isFinite(value))
-                patch('tile_grids', grids.length ? grids : options.tile_grids)
-              }}
-            />
-          </label>
-          <button onClick={onScan} disabled={busy} className="btn btn-primary btn-sm">
-            {busy ? t('duplicates.scanning') : t('duplicates.scanBtn')}
-          </button>
-        </div>
-
-        <div className="min-h-[160px] max-h-[34vh] overflow-y-auto pr-1">
-          {!result ? (
-            <p className="text-sm text-fg-tertiary py-2">{t('duplicates.empty')}</p>
-          ) : result.groups.length === 0 ? (
-            <p className="text-sm text-fg-tertiary py-2">
-              {t('duplicates.noGroups', { total: result.total_images })}
-            </p>
-          ) : (
-            <div className="flex flex-col gap-2">
-              {result.groups.map((group) => (
-                <DuplicateGroupCard
-                  key={group.group_id}
-                  projectId={projectId}
-                  group={group}
-                  selected={selected}
-                  onToggle={toggleName}
-                  onPreview={onPreview}
-                />
-              ))}
-            </div>
-          )}
-        </div>
+        ) : result.groups.length === 0 ? (
+          <div className="min-h-[180px] h-full flex items-center justify-center text-sm text-fg-tertiary px-6 text-center">
+            {t('duplicates.noGroups', { total: result.total_images })}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {result.groups.map((group) => (
+              <DuplicateGroupCard
+                key={group.group_id}
+                projectId={projectId}
+                group={group}
+                selected={selected}
+                busy={busy}
+                onToggle={toggleName}
+                onChooseKeep={chooseKeep}
+                onPreview={onPreview}
+              />
+            ))}
+          </div>
+        )}
       </div>
     </section>
-  )
-}
-
-function NumOption({
-  label,
-  value,
-  min,
-  max,
-  step,
-  disabled,
-  onChange,
-}: {
-  label: string
-  value: number
-  min: number
-  max: number
-  step: number
-  disabled: boolean
-  onChange: (value: number) => void
-}) {
-  return (
-    <label className="flex flex-col gap-1">
-      <span className="text-xs text-fg-tertiary">{label}</span>
-      <input
-        type="number"
-        className="input input-mono px-2 py-1 text-sm"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        disabled={disabled}
-        onChange={(e) => onChange(Number(e.target.value))}
-      />
-    </label>
   )
 }
 
@@ -213,37 +135,49 @@ function DuplicateGroupCard({
   projectId,
   group,
   selected,
+  busy,
   onToggle,
+  onChooseKeep,
   onPreview,
 }: {
   projectId: number
   group: DuplicateGroup
   selected: Set<string>
-  onToggle: (name: string) => void
+  busy: boolean
+  onToggle: (group: DuplicateGroup, name: string) => void
+  onChooseKeep: (group: DuplicateGroup, name: string) => void
   onPreview: (name: string) => void
 }) {
   const { t } = useTranslation()
+  const keptItems = group.items.filter((item) => !selected.has(item.name))
+  const currentKeep = keptItems[0]?.name ?? group.keep
   return (
     <article className="rounded-md border border-subtle bg-sunken p-2">
       <div className="flex flex-wrap items-center gap-2 mb-2 text-xs">
         <span className="badge badge-neutral">#{group.group_id}</span>
         <span className="text-fg-secondary">
-          {t('duplicates.keepSuggested')} <code className="mono">{group.keep}</code>
+          {t('duplicates.groupKeep')} <code className="mono">{currentKeep}</code>
         </span>
+        <span className="badge badge-neutral">{t('duplicates.groupCandidates', { n: group.items.length })}</span>
         {group.best && (
           <span className="badge badge-warn">
             {group.best.match_type} · {group.best.score}
           </span>
         )}
       </div>
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(112px,1fr))] gap-1.5">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(136px,1fr))] gap-1.5">
         {group.items.map((item) => (
           <DuplicateItemCell
             key={item.name}
             projectId={projectId}
             item={item}
             selected={selected.has(item.name)}
-            onToggle={() => onToggle(item.name)}
+            currentKeep={item.name === currentKeep && !selected.has(item.name)}
+            suggestedKeep={item.keep}
+            canToggleRemove={selected.has(item.name) || keptItems.length > 1}
+            busy={busy}
+            onToggle={() => onToggle(group, item.name)}
+            onChooseKeep={() => onChooseKeep(group, item.name)}
             onPreview={() => onPreview(item.name)}
           />
         ))}
@@ -256,13 +190,23 @@ function DuplicateItemCell({
   projectId,
   item,
   selected,
+  currentKeep,
+  suggestedKeep,
+  canToggleRemove,
+  busy,
   onToggle,
+  onChooseKeep,
   onPreview,
 }: {
   projectId: number
   item: DuplicateItem
   selected: boolean
+  currentKeep: boolean
+  suggestedKeep: boolean
+  canToggleRemove: boolean
+  busy: boolean
   onToggle: () => void
+  onChooseKeep: () => void
   onPreview: () => void
 }) {
   const { t } = useTranslation()
@@ -271,7 +215,7 @@ function DuplicateItemCell({
     <div
       className={
         'group relative rounded-md border overflow-hidden bg-surface ' +
-        (item.keep ? 'border-ok' : selected ? 'border-warn ring-2 ring-warn-soft' : 'border-subtle')
+        (currentKeep ? 'border-ok ring-1 ring-ok-soft' : selected ? 'border-warn ring-2 ring-warn-soft' : 'border-subtle')
       }
     >
       <button type="button" onClick={onPreview} className="block w-full aspect-square bg-sunken" title={item.name}>
@@ -284,23 +228,36 @@ function DuplicateItemCell({
         />
       </button>
       <div className="p-1.5 flex flex-col gap-1 text-[11px]">
-        <div className="flex items-center gap-1 min-w-0">
-          {item.keep ? (
-            <span className="badge badge-ok shrink-0">{t('duplicates.keep')}</span>
-          ) : (
-            <button
-              type="button"
-              onClick={onToggle}
-              className={`shrink-0 w-5 h-5 rounded-sm border text-[12px] font-bold ${
-                selected ? 'bg-warn text-white border-warn' : 'bg-surface border-dim text-transparent'
-              }`}
-              aria-label={`${selected ? t('common.deselect') : t('common.select')} ${item.name}`}
-            >
-              ✓
-            </button>
+        <div className="flex items-center gap-1 min-w-0 flex-wrap">
+          <button
+            type="button"
+            onClick={onToggle}
+            disabled={busy || !canToggleRemove}
+            title={!canToggleRemove ? t('duplicates.chooseAnotherFirst') : undefined}
+            className={`shrink-0 px-1.5 py-0.5 rounded-sm border text-[11px] font-medium ${
+              selected
+                ? 'bg-warn text-white border-warn'
+                : currentKeep
+                  ? 'bg-ok-soft text-ok border-ok'
+                  : 'bg-surface border-dim text-fg-tertiary hover:border-warn'
+            } disabled:opacity-60 disabled:cursor-not-allowed`}
+            aria-label={`${selected ? t('duplicates.restoreCandidate') : t('duplicates.removeCandidate')} ${item.name}`}
+          >
+            {selected ? t('duplicates.selectedRemove') : t('duplicates.keep')}
+          </button>
+          {suggestedKeep && (
+            <span className="badge badge-neutral shrink-0">{t('duplicates.suggestedBadge')}</span>
           )}
           <code className="mono truncate min-w-0">{item.name}</code>
         </div>
+        <button
+          type="button"
+          onClick={onChooseKeep}
+          disabled={busy || currentKeep}
+          className="btn btn-secondary btn-sm justify-center !py-0.5 text-[11px]"
+        >
+          {currentKeep ? t('duplicates.currentKeep') : t('duplicates.chooseKeep')}
+        </button>
         <div className="text-fg-tertiary">
           {item.width}x{item.height} · {item.filesize_kb}KB
         </div>

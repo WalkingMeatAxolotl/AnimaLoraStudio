@@ -1,20 +1,19 @@
 """Duplicate and same-scene variant review for project curation.
 
-This module adapts the standalone duplicate finder into a service shape:
-scan first, return explicit review groups, and only move/delete files when the
-caller sends an audited list of filenames.
+This module adapts the standalone duplicate finder into a preprocess review
+tool: scan first, return explicit review groups, and only mark audited images
+as skipped in the preprocess manifest after confirmation.
 """
 from __future__ import annotations
 
 import math
 import os
-import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean, median
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps
@@ -53,7 +52,6 @@ DEFAULT_PREFILTER_AHASH = 22
 DEFAULT_COLOR_ALERT = 14
 
 
-DuplicateAction = Literal["move", "delete"]
 MatchScope = Literal["strict", "both"]
 
 
@@ -193,17 +191,37 @@ def scan_project_duplicates(
     conn,
     project_id: int,
     options: DuplicateOptions,
+    on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     _require_imagehash()
     project, project_dir = curation._project_dir(conn, project_id)  # noqa: SLF001
     sources = _resolve_download_sources(conn, project_id, project_dir)
+    if on_progress:
+        on_progress({
+            "stage": "hashing",
+            "idx": 0,
+            "total": len(sources),
+            "text": f"Preparing hashes for {len(sources)} images...",
+        })
     started = time.monotonic()
-    infos = build_all_image_infos(sources, options)
-    groups, pair_metrics, stats = group_similar_images(infos, options)
+    infos = build_all_image_infos(sources, options, on_progress=on_progress)
+    if on_progress:
+        total_pairs = len(infos) * (len(infos) - 1) // 2
+        on_progress({
+            "stage": "comparing",
+            "idx": 0,
+            "total": total_pairs,
+            "text": f"Comparing {total_pairs} image pairs...",
+        })
+    groups, pair_metrics, stats = group_similar_images(
+        infos,
+        options,
+        on_progress=on_progress,
+    )
     elapsed = time.monotonic() - started
 
     return {
-        "target": "download",
+        "target": "preprocess",
         "match_scope": options.match_scope,
         "total_images": len(sources),
         "readable_images": len(infos),
@@ -219,48 +237,20 @@ def scan_project_duplicates(
     }
 
 
-def apply_duplicate_action(
+def apply_duplicate_removals(
     conn,
     project_id: int,
     *,
-    action: DuplicateAction,
     names: list[str],
 ) -> dict[str, Any]:
-    if action not in ("move", "delete"):
-        raise DuplicateFinderError(f"invalid duplicate action: {action!r}")
     project = projects.get_project(conn, project_id)
     if not project:
         raise DuplicateFinderError(f"project not found: id={project_id}")
 
     project_dir = projects.project_dir(project["id"], project["slug"])
-    download_dir = project_dir / "download"
-    quarantine_dir = download_dir / "_Duplicates_Found"
-    if action == "move":
-        quarantine_dir.mkdir(parents=True, exist_ok=True)
-
-    moved: list[str] = []
-    deleted: list[str] = []
-    missing: list[str] = []
     for raw_name in names:
         curation._validate_filename(raw_name)  # noqa: SLF001
-        src = download_dir / raw_name
-        if not src.is_file():
-            missing.append(raw_name)
-            continue
-        if action == "move":
-            _move_related_files(project_dir, src, quarantine_dir)
-            moved.append(raw_name)
-        else:
-            _delete_related_files(project_dir, src)
-            deleted.append(raw_name)
-
-    return {
-        "action": action,
-        "moved": moved,
-        "deleted": deleted,
-        "missing": missing,
-        "quarantine_folder": str(quarantine_dir) if action == "move" else None,
-    }
+    return preprocess_manifest.mark_duplicate_removed(project_dir, names)
 
 
 def options_to_json(options: DuplicateOptions) -> dict[str, Any]:
@@ -290,60 +280,16 @@ def _resolve_download_sources(
         curation._validate_filename(name)  # noqa: SLF001
         if Path(name).suffix.lower() not in IMAGE_EXTS:
             continue
-        path = project_dir / "download" / name
+        entry = preprocess_manifest.get_entry(project_dir, name)
+        if preprocess_manifest.is_duplicate_removed_entry(entry):
+            continue
+        if entry is not None:
+            path = project_dir / "preprocess" / name
+        else:
+            path = project_dir / "download" / name
         if path.is_file():
             sources.append((name, path))
     return sorted(sources, key=lambda item: item[0].lower())
-
-
-def _move_related_files(project_dir: Path, image_path: Path, quarantine_dir: Path) -> None:
-    dst = _unique_destination(quarantine_dir / image_path.name)
-    shutil.move(str(image_path), str(dst))
-    for meta in _metadata_paths(image_path):
-        if meta.is_file():
-            shutil.move(str(meta), str(_unique_destination(quarantine_dir / meta.name)))
-    _remove_processed_product(project_dir, image_path.name)
-
-
-def _delete_related_files(project_dir: Path, image_path: Path) -> None:
-    try:
-        image_path.unlink()
-    except OSError as exc:
-        raise DuplicateFinderError(f"delete failed: {image_path.name}: {exc}") from exc
-    for meta in _metadata_paths(image_path):
-        if meta.is_file():
-            try:
-                meta.unlink()
-            except OSError:
-                pass
-    _remove_processed_product(project_dir, image_path.name)
-
-
-def _metadata_paths(image_path: Path) -> list[Path]:
-    stem = image_path.stem
-    return [
-        image_path.with_suffix(".txt"),
-        image_path.with_suffix(".json"),
-        image_path.with_name(f"{stem}.booru.txt"),
-    ]
-
-
-def _remove_processed_product(project_dir: Path, original_name: str) -> None:
-    product_name = Path(original_name).stem + ".png"
-    preprocess_manifest.restore(project_dir, [product_name])
-
-
-def _unique_destination(dst: Path) -> Path:
-    if not dst.exists():
-        return dst
-    base = dst.stem
-    suffix = dst.suffix
-    index = 1
-    while True:
-        candidate = dst.with_name(f"{base}_dup{index}{suffix}")
-        if not candidate.exists():
-            return candidate
-        index += 1
 
 
 def oriented_size(img: Image.Image) -> tuple[int, int]:
@@ -399,22 +345,42 @@ def build_image_info(source: tuple[str, Path], options: DuplicateOptions) -> Ima
 def build_all_image_infos(
     sources: list[tuple[str, Path]],
     options: DuplicateOptions,
+    *,
+    on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[ImageInfo]:
     workers = max(1, int(options.hash_workers or 1))
     images: list[ImageInfo] = []
+    total = len(sources)
     if workers == 1:
-        for source in sources:
+        for idx, source in enumerate(sources, start=1):
             info = build_image_info(source, options)
             if info:
                 images.append(info)
+            if on_progress:
+                on_progress({
+                    "stage": "hashing",
+                    "idx": idx,
+                    "total": total,
+                    "name": source[0],
+                    "text": f"Hashed {idx}/{total}: {source[0]}",
+                })
         return images
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {executor.submit(build_image_info, source, options): source for source in sources}
-        for future in as_completed(futures):
+        for idx, future in enumerate(as_completed(futures), start=1):
+            source = futures[future]
             info = future.result()
             if info:
                 images.append(info)
+            if on_progress:
+                on_progress({
+                    "stage": "hashing",
+                    "idx": idx,
+                    "total": total,
+                    "name": source[0],
+                    "text": f"Hashed {idx}/{total}: {source[0]}",
+                })
     return sorted(images, key=lambda item: item.name.lower())
 
 
@@ -589,6 +555,8 @@ def match_in_scope(metrics: PairMetrics, match_scope: MatchScope) -> bool:
 def group_similar_images(
     images: list[ImageInfo],
     options: DuplicateOptions,
+    *,
+    on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[list[list[ImageInfo]], dict[tuple[str, str], PairMetrics], dict[str, int]]:
     uf = UnionFind([img.name for img in images])
     pair_metrics: dict[tuple[str, str], PairMetrics] = {}
@@ -596,18 +564,27 @@ def group_similar_images(
     skipped_pairs = 0
     prefiltered_pairs = 0
 
+    compared_so_far = 0
     for i, img_a in enumerate(images):
         for img_b in images[i + 1 :]:
+            compared_so_far += 1
             if aspect_delta(img_a, img_b) > max(options.aspect_tolerance * 3.33, 0.15):
                 skipped_pairs += 1
-                continue
-            if not should_do_expensive_compare(img_a, img_b, options):
+            elif not should_do_expensive_compare(img_a, img_b, options):
                 prefiltered_pairs += 1
-                continue
-            metrics = compare_images(img_a, img_b, options)
-            if match_in_scope(metrics, options.match_scope):
-                uf.union(img_a.name, img_b.name)
-                pair_metrics[(img_a.name, img_b.name)] = metrics
+            else:
+                metrics = compare_images(img_a, img_b, options)
+                if match_in_scope(metrics, options.match_scope):
+                    uf.union(img_a.name, img_b.name)
+                    pair_metrics[(img_a.name, img_b.name)] = metrics
+        if on_progress:
+            on_progress({
+                "stage": "comparing",
+                "idx": compared_so_far,
+                "total": total_pairs,
+                "name": img_a.name,
+                "text": f"Compared {compared_so_far}/{total_pairs} pairs...",
+            })
 
     grouped: dict[str, list[ImageInfo]] = {}
     for img in images:

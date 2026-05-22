@@ -780,7 +780,7 @@ export interface DuplicateGroup {
 }
 
 export interface DuplicateScanResult {
-  target: 'download'
+  target: 'preprocess' | 'download'
   match_scope: DuplicateScanOptions['match_scope']
   total_images: number
   readable_images: number
@@ -798,11 +798,9 @@ export interface DuplicateScanResult {
 }
 
 export interface DuplicateApplyResult {
-  action: 'move' | 'delete'
-  moved: string[]
-  deleted: string[]
+  removed: string[]
   missing: string[]
-  quarantine_folder: string | null
+  skipped: string[]
 }
 
 // ---- tagging (PP4) --------------------------------------------------------
@@ -1846,15 +1844,12 @@ export const api = {
     ),
   scanDuplicates: (pid: number, body: DuplicateScanOptions) =>
     req<DuplicateScanResult>(
-      `/api/projects/${pid}/duplicates/scan`,
+      `/api/projects/${pid}/preprocess/duplicates/scan`,
       { method: 'POST', body: JSON.stringify(body) }
     ),
-  applyDuplicateAction: (
-    pid: number,
-    body: { action: 'move' | 'delete'; names: string[] }
-  ) =>
+  applyDuplicateAction: (pid: number, body: { names: string[] }) =>
     req<DuplicateApplyResult>(
-      `/api/projects/${pid}/duplicates/apply`,
+      `/api/projects/${pid}/preprocess/duplicates/apply`,
       { method: 'POST', body: JSON.stringify(body) }
     ),
   versionThumbUrl: (

@@ -173,6 +173,20 @@ def test_all_processed_skips_non_processed_kind(project_dir: Path) -> None:
     assert set(out.keys()) == {"a.png"}
 
 
+def test_mark_duplicate_removed_skips_downstream_without_deleting(project_dir: Path) -> None:
+    (project_dir / "download" / "a.png").write_bytes(b"raw")
+
+    result = pm.mark_duplicate_removed(project_dir, ["a.png"])
+
+    assert result == {"removed": ["a.png"], "missing": [], "skipped": []}
+    assert (project_dir / "download" / "a.png").exists()
+    entry = pm.get_entry(project_dir, "a.png")
+    assert pm.is_duplicate_removed_entry(entry)
+    assert pm.all_processed(project_dir) == {}
+    assert pm.duplicate_removed_origins(project_dir) == {"a.png"}
+    assert pm.resolve_origin(project_dir, "a.png") == []
+
+
 # ---------------------------------------------------------------------------
 # 新增：replace_with_crops 多裁剪 fan-out
 # ---------------------------------------------------------------------------

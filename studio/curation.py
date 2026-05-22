@@ -121,6 +121,7 @@ def list_download(conn, project_id: int) -> list[dict[str, Any]]:
     download_dir = pdir / "download"
     preprocess_manifest.ensure_manifest(pdir)
     processed = preprocess_manifest.all_processed(pdir)
+    removed_origins = preprocess_manifest.duplicate_removed_origins(pdir)
 
     # origin → [preprocess names...]
     by_origin: dict[str, list[str]] = {}
@@ -144,6 +145,8 @@ def list_download(conn, project_id: int) -> list[dict[str, Any]]:
                         continue
                     entries.append({"name": pname, "mtime": mtime})
             else:
+                if f.name in removed_origins:
+                    continue
                 try:
                     mtime = f.stat().st_mtime
                 except OSError:
@@ -230,6 +233,9 @@ def copy_to_train(
     for name in files:
         _validate_filename(name)
         entry = preprocess_manifest.get_entry(pdir, name)
+        if preprocess_manifest.is_duplicate_removed_entry(entry):
+            skipped.append(name)
+            continue
         if entry is not None:
             # preprocess 派生：bytes 在 preprocess/，metadata 在 download/{origin}.txt
             src = pdir / "preprocess" / name

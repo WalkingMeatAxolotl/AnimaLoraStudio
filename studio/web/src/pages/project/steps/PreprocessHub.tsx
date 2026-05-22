@@ -1,13 +1,15 @@
 import { useSearchParams } from 'react-router-dom'
 import PreprocessUpscalePage from './Preprocess'
 import PreprocessCropPage from './PreprocessCrop'
+import PreprocessDuplicatesPage from './PreprocessDuplicates'
 import PreprocessOverviewPage from './PreprocessOverview'
 
 /** Route entry for `/projects/:pid/preprocess`.
  *
  *  Dispatches by `?tool=` query param to the corresponding tool's page:
- *    - (default) / `?tool=upscale` → Upscale page
  *    - `?tool=overview` → Overview page (gallery + multi-select + undo)
+ *    - `?tool=dedupe` → Duplicate / variant review
+ *    - (default) / `?tool=upscale` → Upscale page
  *    - `?tool=crop` → Crop page
  *    - `?tool=inpaint` → not yet implemented; falls back to default
  *
@@ -20,6 +22,7 @@ export default function PreprocessHub() {
   const [params] = useSearchParams()
   const tool = params.get('tool') ?? 'upscale'
   if (tool === 'overview') return <PreprocessOverviewPage />
+  if (tool === 'dedupe') return <PreprocessDuplicatesPage />
   if (tool === 'crop') return <PreprocessCropPage />
   return <PreprocessUpscalePage />
 }

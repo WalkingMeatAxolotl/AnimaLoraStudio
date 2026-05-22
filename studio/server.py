@@ -1913,6 +1913,8 @@ def project_thumb(
         # resolve to first preprocess product if any (1:1 / multi-crop cases).
         _safe_join_or_400(pdir / "download", name)
         candidates = preprocess_manifest.resolve_origin(pdir, name)
+        if not candidates and preprocess_manifest.is_origin_duplicate_removed(pdir, name):
+            raise HTTPException(404)
         f = candidates[0] if candidates else (pdir / "download" / name)
         # Curation passes multi-crop derivative names (X_c0.png) through this
         # endpoint with bucket=download. resolve_origin only matches by origin,
@@ -2039,7 +2041,6 @@ class DuplicateScanRequest(BaseModel):
 
 
 class DuplicateApplyRequest(BaseModel):
-    action: str  # "move" | "delete"
     names: list[str]
 
 
@@ -2072,30 +2073,82 @@ def _duplicate_err_code(exc: duplicate_finder.DuplicateFinderError) -> int:
     return 422
 
 
-@app.post("/api/projects/{pid}/duplicates/scan")
-def scan_project_duplicates(
+@app.post("/api/projects/{pid}/preprocess/duplicates/scan")
+def scan_preprocess_duplicates(
     pid: int, body: DuplicateScanRequest
 ) -> dict[str, Any]:
     with db.connection_for() as conn:
         try:
             options = duplicate_finder.options_from_payload(body.model_dump())
-            return duplicate_finder.scan_project_duplicates(conn, pid, options)
+            last_progress_at = 0.0
+
+            def publish_progress(payload: dict[str, Any]) -> None:
+                nonlocal last_progress_at
+                now = time.monotonic()
+                if now - last_progress_at < 1.0:
+                    return
+                last_progress_at = now
+                bus.publish({
+                    "type": "duplicate_scan_progress",
+                    "project_id": pid,
+                    "status": "running",
+                    **payload,
+                })
+
+            bus.publish({
+                "type": "duplicate_scan_progress",
+                "project_id": pid,
+                "status": "running",
+                "text": "Scanning duplicate candidates...",
+            })
+            result = duplicate_finder.scan_project_duplicates(
+                conn,
+                pid,
+                options,
+                on_progress=publish_progress,
+            )
+            bus.publish({
+                "type": "duplicate_scan_progress",
+                "project_id": pid,
+                "status": "done",
+                "total_images": result["total_images"],
+                "group_count": result["group_count"],
+                "candidate_count": result["candidate_count"],
+                "elapsed_seconds": result["elapsed_seconds"],
+                "text": (
+                    f"Scanned {result['total_images']} images; "
+                    f"found {result['group_count']} groups / "
+                    f"{result['candidate_count']} candidates."
+                ),
+            })
+            return result
         except curation.CurationError as exc:
+            bus.publish({
+                "type": "duplicate_scan_progress",
+                "project_id": pid,
+                "status": "failed",
+                "text": str(exc),
+            })
             raise HTTPException(_curation_err_code(exc), str(exc)) from exc
         except duplicate_finder.DuplicateFinderError as exc:
+            bus.publish({
+                "type": "duplicate_scan_progress",
+                "project_id": pid,
+                "status": "failed",
+                "text": str(exc),
+            })
             raise HTTPException(_duplicate_err_code(exc), str(exc)) from exc
 
 
-@app.post("/api/projects/{pid}/duplicates/apply")
-def apply_project_duplicates(
+@app.post("/api/projects/{pid}/preprocess/duplicates/apply")
+def apply_preprocess_duplicates(
     pid: int, body: DuplicateApplyRequest
 ) -> dict[str, Any]:
     with db.connection_for() as conn:
         try:
-            result = duplicate_finder.apply_duplicate_action(
+            result = duplicate_finder.apply_duplicate_removals(
                 conn,
                 pid,
-                action=body.action,  # type: ignore[arg-type]
                 names=body.names,
             )
             project = projects.get_project(conn, pid)
@@ -2106,6 +2159,22 @@ def apply_project_duplicates(
     if project:
         _publish_project_state(project)
     return result
+
+
+@app.post("/api/projects/{pid}/duplicates/scan")
+def scan_project_duplicates(
+    pid: int, body: DuplicateScanRequest
+) -> dict[str, Any]:
+    """Backward-compatible alias; UI uses /preprocess/duplicates/scan."""
+    return scan_preprocess_duplicates(pid, body)
+
+
+@app.post("/api/projects/{pid}/duplicates/apply")
+def apply_project_duplicates(
+    pid: int, body: DuplicateApplyRequest
+) -> dict[str, Any]:
+    """Backward-compatible alias; now marks manifest duplicate_removed."""
+    return apply_preprocess_duplicates(pid, body)
 
 
 @app.post("/api/projects/{pid}/versions/{vid}/curation/copy")

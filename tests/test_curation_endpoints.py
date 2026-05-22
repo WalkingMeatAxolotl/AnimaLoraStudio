@@ -219,7 +219,7 @@ def test_duplicate_scan_and_apply_requires_explicit_names(client: TestClient) ->
     _drop_different_png(client, pid, "3.png")
 
     scan = client.post(
-        f"/api/projects/{pid}/duplicates/scan",
+        f"/api/projects/{pid}/preprocess/duplicates/scan",
         json={
             "match_scope": "strict",
             "hash_workers": 1,
@@ -232,15 +232,19 @@ def test_duplicate_scan_and_apply_requires_explicit_names(client: TestClient) ->
     assert group_names == {"1.png", "2.png"}
 
     apply = client.post(
-        f"/api/projects/{pid}/duplicates/apply",
-        json={"action": "move", "names": ["2.png"]},
+        f"/api/projects/{pid}/preprocess/duplicates/apply",
+        json={"names": ["2.png"]},
     )
     assert apply.status_code == 200
-    assert apply.json()["moved"] == ["2.png"]
+    assert apply.json()["removed"] == ["2.png"]
 
     with db.connection_for() as conn:
         proj = projects.get_project(conn, pid)
-    pdir = projects.project_dir(proj["id"], proj["slug"]) / "download"
-    assert (pdir / "1.png").exists()
-    assert not (pdir / "2.png").exists()
-    assert (pdir / "_Duplicates_Found" / "2.png").exists()
+    pdir = projects.project_dir(proj["id"], proj["slug"])
+    assert (pdir / "download" / "1.png").exists()
+    assert (pdir / "download" / "2.png").exists()
+    assert not (pdir / "download" / "_Duplicates_Found").exists()
+
+    view = client.get(f"/api/projects/{pid}/versions/{_vid}/curation")
+    assert view.status_code == 200
+    assert {item["name"] for item in view.json()["left"]} == {"1.png", "3.png"}

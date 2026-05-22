@@ -470,6 +470,7 @@ export default function CurationPage() {
       }
     >
     <div className="flex flex-col h-full gap-3">
+
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 items-stretch flex-1 min-h-0">
         <PanelCard
           accent="emerald"
@@ -627,6 +628,10 @@ export default function CurationPage() {
     </StepShell>
   )
 }
+
+// ---------------------------------------------------------------------------
+// 子组件
+// ---------------------------------------------------------------------------
 
 function FolderSummary({
   folders, counts, activeFolder, busy, onSwitch, onRename, onDelete,

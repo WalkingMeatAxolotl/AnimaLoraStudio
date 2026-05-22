@@ -394,22 +394,23 @@ def test_duplicate_scan_returns_review_groups(env) -> None:
     assert group["best"]["match_type"] == "strict-duplicate"
 
 
-def test_duplicate_apply_move_only_confirmed_names(env) -> None:
+def test_duplicate_apply_marks_confirmed_names_without_touching_download(env) -> None:
     _png(env, "1.png")
     _png(env, "2.png")
     _meta(env, "2.png", ".txt", "tag")
 
     with db.connection_for(env["db"]) as conn:
-        result = duplicate_finder.apply_duplicate_action(
+        result = duplicate_finder.apply_duplicate_removals(
             conn,
             env["p"]["id"],
-            action="move",
             names=["2.png"],
         )
+        left = curation.list_download(conn, env["p"]["id"])
 
     pdir = projects.project_dir(env["p"]["id"], env["p"]["slug"])
-    assert result["moved"] == ["2.png"]
+    assert result["removed"] == ["2.png"]
     assert (pdir / "download" / "1.png").exists()
-    assert not (pdir / "download" / "2.png").exists()
-    assert (pdir / "download" / "_Duplicates_Found" / "2.png").exists()
-    assert (pdir / "download" / "_Duplicates_Found" / "2.txt").exists()
+    assert (pdir / "download" / "2.png").exists()
+    assert (pdir / "download" / "2.txt").exists()
+    assert not (pdir / "download" / "_Duplicates_Found").exists()
+    assert {item["name"] for item in left} == {"1.png"}

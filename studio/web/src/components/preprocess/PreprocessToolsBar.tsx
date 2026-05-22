@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
 
-export type PreprocessTool = 'overview' | 'upscale' | 'crop' | 'inpaint'
+export type PreprocessTool = 'overview' | 'dedupe' | 'upscale' | 'crop' | 'inpaint'
 
 interface ToolDef {
   id: PreprocessTool
@@ -15,6 +15,7 @@ interface ToolDef {
  *  governs the dataset, not a transform like upscale/crop/inpaint. */
 const TOOLS: ReadonlyArray<ToolDef> = [
   { id: 'overview', i18nKey: 'overview' },
+  { id: 'dedupe',   i18nKey: 'dedupe' },
   { id: 'upscale',  i18nKey: 'upscale' },
   { id: 'crop',     i18nKey: 'crop' },
   { id: 'inpaint',  i18nKey: 'inpaint', disabled: true },

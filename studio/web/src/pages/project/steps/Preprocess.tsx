@@ -29,7 +29,7 @@ interface Ctx {
 interface Status {
   job: Job | null
   log_tail: string
-  summary: { download_count: number; processed_count: number; pending_count: number }
+  summary: { download_count: number; processed_count: number; pending_count: number; removed_count?: number }
 }
 
 interface FilesView {
