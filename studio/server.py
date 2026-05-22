@@ -3644,17 +3644,17 @@ def _select_task_output_files(task_id: int, files: Optional[list[str]] = None) -
     out_dir = _task_output_dir(task)
     if not out_dir or not out_dir.exists():
         raise HTTPException(404, "no output dir")
-    all_files = [f for f in sorted(out_dir.iterdir()) if f.is_file()]
+    all_files = _iter_task_output_files(out_dir)
     if not all_files:
         raise HTTPException(404, "empty output dir")
     if not files:
         return task, all_files, False
-    by_name = {f.name: f for f in all_files}
+    by_path = {_task_output_relpath(out_dir, f): f for f in all_files}
     selected: list[Path] = []
     missing: list[str] = []
     for name in files:
-        _validate_component_or_400(name)
-        f = by_name.get(name)
+        _safe_output_relpath_or_400(out_dir, name)
+        f = by_path.get(name)
         if f:
             selected.append(f)
         else:
@@ -3666,10 +3666,10 @@ def _select_task_output_files(task_id: int, files: Optional[list[str]] = None) -
     return task, selected, True
 
 
-def _write_outputs_zip(dest: Path, selected: list[Path]) -> None:
+def _write_outputs_zip(dest: Path, out_dir: Path, selected: list[Path]) -> None:
     with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as zf:
         for f in selected:
-            zf.write(f, arcname=f.name)
+            zf.write(f, arcname=_task_output_relpath(out_dir, f))
 
 
 def _task_archive_basename(task: dict[str, Any]) -> Optional[str]:
@@ -3695,13 +3695,40 @@ def _is_loopback(request: Request) -> bool:
     return bool(client and client.host in _LOCALHOST_HOSTS)
 
 
+def _task_output_kind(path: Path) -> str:
+    name = path.name
+    suffix = path.suffix.lower()
+    if name.startswith("training_state_") and suffix == ".pt":
+        return "training_state"
+    if name.startswith("pause_step_") and suffix == ".pt":
+        return "pause_state"
+    if name == "auto_epoch_state.pt":
+        return "auto_epoch_state"
+    if suffix in _LORA_EXTS and not name.startswith("training_state_"):
+        return "lora"
+    return "other"
+
+
+def _task_output_relpath(out_dir: Path, path: Path) -> str:
+    return path.relative_to(out_dir).as_posix()
+
+
+def _iter_task_output_files(out_dir: Path) -> list[Path]:
+    return sorted((p for p in out_dir.rglob("*") if p.is_file()), key=lambda p: _task_output_relpath(out_dir, p))
+
+
+def _safe_output_relpath_or_400(base: Path, relpath: str) -> Path:
+    if not relpath or relpath.startswith(("/", "\\")):
+        raise HTTPException(400, "invalid path")
+    parts = Path(relpath.replace("\\", "/")).parts
+    if any(part in ("", ".", "..") for part in parts):
+        raise HTTPException(400, "invalid path")
+    return _safe_join_or_400(base, *parts)
+
+
 @app.get("/api/queue/{task_id}/outputs")
 def list_task_outputs(task_id: int, request: Request) -> dict[str, Any]:
-    """列出 task 关联 version 的 output 目录里所有文件。
-
-    `supports_open_folder` 仅在请求来自 loopback（同机浏览器）时为 True；
-    云端部署时永远为 False，避免前端显示一个无意义按钮。
-    """
+    """列出 task 关联 version 的 output 目录里所有文件。"""
     with db.connection_for() as conn:
         task = db.get_task(conn, task_id)
     if not task:
@@ -3709,18 +3736,20 @@ def list_task_outputs(task_id: int, request: Request) -> dict[str, Any]:
     out_dir = _task_output_dir(task)
     files: list[dict[str, Any]] = []
     if out_dir and out_dir.exists():
-        for f in sorted(out_dir.iterdir(), key=lambda p: p.name):
-            if not f.is_file():
-                continue
+        for f in _iter_task_output_files(out_dir):
+            relpath = _task_output_relpath(out_dir, f)
             try:
                 st = f.stat()
             except OSError:
                 continue
+            kind = _task_output_kind(f)
             files.append({
                 "name": f.name,
+                "path": relpath,
                 "size": st.st_size,
                 "mtime": st.st_mtime,
-                "is_lora": f.suffix.lower() in _LORA_EXTS,
+                "kind": kind,
+                "is_lora": kind == "lora",
             })
     return {
         "task_id": task_id,
@@ -3738,24 +3767,20 @@ def download_task_outputs_zip(
     background: BackgroundTasks,
     files: Optional[str] = None,
 ) -> FileResponse:
-    """把 output 目录里的文件打包成 zip 一次性下载。
-
-    没传 `files` → 全量打包（向后兼容）。
-    传了 `files`（逗号分隔的文件名）→ 仅打包这些，路径必须是 out_dir 下的直接
-    子文件，禁止 path traversal / 子目录。
-
-    实现：写到临时文件再 FileResponse；响应发完后用 BackgroundTasks 清理。
-    safetensors / pt 几乎都是已压缩二进制，用 ZIP_STORED（不再压缩，CPU 省一倍）。
-    """
+    """把 output 目录里的文件打包成 zip 一次性下载。"""
     import tempfile
     wanted = [n for n in files.split(",") if n] if files else None
+    if files is not None and not wanted:
+        raise HTTPException(400, "empty files list")
     task, selected, partial = _select_task_output_files(task_id, wanted)
+    out_dir = _task_output_dir(task)
+    assert out_dir is not None  # _select_task_output_files 已经校验
 
     tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
     tmp.close()
     tmp_path = Path(tmp.name)
     try:
-        _write_outputs_zip(tmp_path, selected)
+        _write_outputs_zip(tmp_path, out_dir, selected)
     except Exception as e:
         tmp_path.unlink(missing_ok=True)
         bus.publish({
@@ -3792,8 +3817,10 @@ def export_task_outputs_to_data_exports(
     basename = _task_archive_basename(task) or f"task_{task_id}"
     archive_name = f"{basename}_outputs_selected.zip" if partial else f"{basename}_outputs.zip"
     dest = _unique_data_export_path(archive_name)
+    out_dir = _task_output_dir(task)
+    assert out_dir is not None
     try:
-        _write_outputs_zip(dest, selected)
+        _write_outputs_zip(dest, out_dir, selected)
     except Exception as e:
         dest.unlink(missing_ok=True)
         bus.publish({"type": "task_outputs_zip_failed", "task_id": task_id, "error": str(e)})
@@ -3802,10 +3829,9 @@ def export_task_outputs_to_data_exports(
     return _export_result(dest)
 
 
-@app.get("/api/queue/{task_id}/output/{filename}")
+@app.get("/api/queue/{task_id}/output/{filename:path}")
 def download_task_output(task_id: int, filename: str) -> FileResponse:
-    """下载 output 目录下的指定文件。`Content-Disposition: attachment` 让
-    浏览器走「保存」对话框而不是 inline 渲染。"""
+    """下载 output 目录下的指定文件。"""
     with db.connection_for() as conn:
         task = db.get_task(conn, task_id)
     if not task:
@@ -3813,13 +3839,13 @@ def download_task_output(task_id: int, filename: str) -> FileResponse:
     out_dir = _task_output_dir(task)
     if not out_dir or not out_dir.exists():
         raise HTTPException(404, "no output dir")
-    f = _safe_join_or_400(out_dir, filename)
+    f = _safe_output_relpath_or_400(out_dir, filename)
     if not f.exists() or not f.is_file():
         raise HTTPException(404, "file not found")
     return FileResponse(
         f,
         media_type="application/octet-stream",
-        filename=filename,  # 让 starlette 自动加 Content-Disposition
+        filename=f.name,
     )
 
 

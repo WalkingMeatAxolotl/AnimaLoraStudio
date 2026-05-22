@@ -526,8 +526,8 @@ export function OutputsTab({ taskId }: { taskId: number }) {
     const sign = sortDir === 'asc' ? 1 : -1
     return [...data.files].sort((a, b) => {
       if (sortKey === 'name') {
-        // numeric: true 让 ep_002 排在 ep_010 之前，避免字典序的 ep_10 < ep_2
-        return a.name.localeCompare(b.name, undefined, { numeric: true }) * sign
+        // numeric 让 ep_002 排在 ep_010 之前，避免字典序的 ep_10 < ep_2
+        return (a.path || a.name).localeCompare(b.path || b.name, undefined, { numeric: true }) * sign
       }
       if (sortKey === 'size') return (a.size - b.size) * sign
       return (a.mtime - b.mtime) * sign
@@ -545,10 +545,10 @@ export function OutputsTab({ taskId }: { taskId: number }) {
   const sortArrow = (key: SortKey) =>
     sortKey === key ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''
 
-  // 刷新后剔除选中里已不存在的文件名（比如有人手动删了 ep_001.safetensors）
+  // 刷新后剔除选中里已不存在的文件路径
   useEffect(() => {
     if (selected.size === 0) return
-    const names = new Set(sortedFiles.map((f) => f.name))
+    const names = new Set(sortedFiles.map((f) => f.path))
     let dropped = false
     const next = new Set<string>()
     for (const n of selected) {
@@ -559,7 +559,7 @@ export function OutputsTab({ taskId }: { taskId: number }) {
 
   const selectedSize = useMemo(() => {
     let total = 0
-    for (const f of sortedFiles) if (selected.has(f.name)) total += f.size
+    for (const f of sortedFiles) if (selected.has(f.path)) total += f.size
     return total
   }, [sortedFiles, selected])
 
@@ -568,7 +568,7 @@ export function OutputsTab({ taskId }: { taskId: number }) {
   const partialSelected = !allSelected && !noneSelected
 
   const toggleSelectAll = () => {
-    setSelected(allSelected ? new Set() : new Set(sortedFiles.map((f) => f.name)))
+    setSelected(allSelected ? new Set() : new Set(sortedFiles.map((f) => f.path)))
   }
   const toggleOne = (name: string) => {
     setSelected((prev) => {
@@ -731,17 +731,20 @@ export function OutputsTab({ taskId }: { taskId: number }) {
               </span>
             </div>
             {sortedFiles.map((f) => {
-              const isSel = selected.has(f.name)
+              const isSel = selected.has(f.path)
               return (
               <div
-                key={f.name}
-                onClick={selectMode ? () => toggleOne(f.name) : undefined}
+                key={f.path}
+                onClick={selectMode ? () => toggleOne(f.path) : undefined}
                 className={`grid gap-2 px-4 py-2 items-center border-b border-subtle text-xs transition-colors ${selectMode ? `cursor-pointer ${isSel ? 'bg-accent-soft' : 'hover:bg-overlay'}` : 'hover:bg-overlay'}`}
                 style={{ gridTemplateColumns: '1fr 100px 160px 80px' }}
               >
                 <div className="flex items-center gap-1.5 min-w-0">
-                  <code className="font-mono text-fg-primary overflow-hidden text-ellipsis whitespace-nowrap">{f.name}</code>
+                  <code className="font-mono text-fg-primary overflow-hidden text-ellipsis whitespace-nowrap">{f.path || f.name}</code>
                   {f.is_lora && <span className="badge badge-ok">LoRA</span>}
+                  {f.kind === 'training_state' && <span className="badge badge-warn">State</span>}
+                  {f.kind === 'pause_state' && <span className="badge badge-warn">Pause</span>}
+                  {f.kind === 'auto_epoch_state' && <span className="badge badge-warn">Auto</span>}
                 </div>
                 <span className="text-right font-mono text-fg-tertiary">{fmtBytes(f.size)}</span>
                 <span className="text-right font-mono text-fg-tertiary">{fmtTime(f.mtime)}</span>
@@ -750,13 +753,13 @@ export function OutputsTab({ taskId }: { taskId: number }) {
                     <input
                       type="checkbox"
                       checked={isSel}
-                      onChange={() => toggleOne(f.name)}
+                      onChange={() => toggleOne(f.path)}
                       onClick={(e) => e.stopPropagation()}
                       style={{ width: 14, height: 14, accentColor: 'var(--accent)', cursor: 'pointer' }}
-                      aria-label={`${t('common.select')} ${f.name}`}
+                      aria-label={`${t('common.select')} ${f.path || f.name}`}
                     />
                   ) : (
-                    <a href={api.taskOutputDownloadUrl(taskId, f.name)} download={f.name}
+                    <a href={api.taskOutputDownloadUrl(taskId, f.path)} download={f.name}
                       className="text-accent no-underline hover:underline text-xs"
                     >{t('queueDetail.downloadFile')}</a>
                   )}

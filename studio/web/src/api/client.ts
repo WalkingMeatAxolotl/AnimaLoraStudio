@@ -1076,8 +1076,10 @@ export interface MonitorState {
 
 export interface TaskOutputFile {
   name: string
+  path: string
   size: number
   mtime: number
+  kind: 'lora' | 'training_state' | 'pause_state' | 'auto_epoch_state' | 'other'
   is_lora: boolean
 }
 
@@ -1839,10 +1841,10 @@ export const api = {
   getTaskOutputs: (id: number) =>
     req<TaskOutputs>(`/api/queue/${id}/outputs`),
   /** 下载单个 output 文件的直链，不发请求。<a href={...} download> 即可。 */
-  taskOutputDownloadUrl: (id: number, filename: string) =>
-    `/api/queue/${id}/output/${encodeURIComponent(filename)}`,
+  taskOutputDownloadUrl: (id: number, path: string) =>
+    `/api/queue/${id}/output/${path.split('/').map(encodeURIComponent).join('/')}`,
   /** output 目录打包 zip 下载直链。
-   * 不传 files → 全量；传文件名数组 → 仅打包这些（后端 whitelist 校验）。
+   * 不传 files → 全量；传相对路径数组 → 仅打包这些（后端 whitelist 校验）。
    * 配合 <a href download> 触发，浏览器原生接管下载条；后端 zip 写完会
    * publish task_outputs_zip_ready / task_outputs_zip_failed 事件供前端清 loading。 */
   taskOutputsZipUrl: (id: number, files?: ReadonlyArray<string>) => {

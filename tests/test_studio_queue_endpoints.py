@@ -175,17 +175,30 @@ def test_outputs_list_with_files(
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "lora_final.safetensors").write_bytes(b"x" * 100)
     (out_dir / "training_state_step100.pt").write_bytes(b"y" * 50)
+    state_dir = out_dir / "state" / f"task_{tid}"
+    state_dir.mkdir(parents=True)
+    (state_dir / "training_state_epoch2.pt").write_bytes(b"z" * 25)
 
     resp = client.get(f"/api/queue/{tid}/outputs")
     assert resp.status_code == 200
     body = resp.json()
     assert body["task_id"] == tid
     assert body["exists"] is True
-    names = sorted(f["name"] for f in body["files"])
-    assert names == ["lora_final.safetensors", "training_state_step100.pt"]
-    by_name = {f["name"]: f for f in body["files"]}
-    assert by_name["lora_final.safetensors"]["is_lora"] is True
-    assert by_name["lora_final.safetensors"]["size"] == 100
+    paths = sorted(f["path"] for f in body["files"])
+    assert paths == [
+        "lora_final.safetensors",
+        "state/task_%d/training_state_epoch2.pt" % tid,
+        "training_state_step100.pt",
+    ]
+    by_path = {f["path"]: f for f in body["files"]}
+    assert by_path["lora_final.safetensors"]["is_lora"] is True
+    assert by_path["lora_final.safetensors"]["kind"] == "lora"
+    assert by_path["lora_final.safetensors"]["size"] == 100
+    assert by_path["training_state_step100.pt"]["is_lora"] is False
+    assert by_path["training_state_step100.pt"]["kind"] == "training_state"
+    nested_state = by_path["state/task_%d/training_state_epoch2.pt" % tid]
+    assert nested_state["name"] == "training_state_epoch2.pt"
+    assert nested_state["kind"] == "training_state"
     # TestClient 默认 client.host 是 "testclient" 不在 loopback 集合里 → False
     assert body["supports_open_folder"] is False
 
@@ -214,10 +227,17 @@ def test_download_output_file(
     out_dir = versions_mod.version_dir(p["id"], p["slug"], v["label"]) / "output"
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "lora_final.safetensors").write_bytes(b"BLOB")
+    state_dir = out_dir / "state" / f"task_{tid}"
+    state_dir.mkdir(parents=True)
+    (state_dir / "training_state_epoch2.pt").write_bytes(b"STATE")
 
     resp = client.get(f"/api/queue/{tid}/output/lora_final.safetensors")
     assert resp.status_code == 200
     assert resp.content == b"BLOB"
+
+    resp = client.get(f"/api/queue/{tid}/output/state/task_{tid}/training_state_epoch2.pt")
+    assert resp.status_code == 200
+    assert resp.content == b"STATE"
     # FileResponse(filename=...) 自动加 Content-Disposition: attachment
     assert "attachment" in resp.headers.get("content-disposition", "").lower()
 
@@ -239,6 +259,9 @@ def test_download_outputs_zip(
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "lora_final.safetensors").write_bytes(b"AAA")
     (out_dir / "training_state_step100.pt").write_bytes(b"BB")
+    state_dir = out_dir / "state" / f"task_{tid}"
+    state_dir.mkdir(parents=True)
+    (state_dir / "training_state_epoch2.pt").write_bytes(b"CC")
 
     resp = client.get(f"/api/queue/{tid}/outputs.zip")
     assert resp.status_code == 200
@@ -249,9 +272,14 @@ def test_download_outputs_zip(
 
     with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
         names = sorted(zf.namelist())
-        assert names == ["lora_final.safetensors", "training_state_step100.pt"]
+        assert names == [
+            "lora_final.safetensors",
+            "state/task_%d/training_state_epoch2.pt" % tid,
+            "training_state_step100.pt",
+        ]
         assert zf.read("lora_final.safetensors") == b"AAA"
         assert zf.read("training_state_step100.pt") == b"BB"
+        assert zf.read("state/task_%d/training_state_epoch2.pt" % tid) == b"CC"
 
 
 def test_list_task_outputs_returns_archive_basename(
@@ -295,17 +323,22 @@ def test_download_outputs_zip_partial(
     (out_dir / "ep_001.safetensors").write_bytes(b"E1")
     (out_dir / "ep_002.safetensors").write_bytes(b"E2")
     (out_dir / "ep_003.safetensors").write_bytes(b"E3")
+    state_dir = out_dir / "state" / f"task_{tid}"
+    state_dir.mkdir(parents=True)
+    (state_dir / "training_state_epoch2.pt").write_bytes(b"S2")
 
     resp = client.get(
-        f"/api/queue/{tid}/outputs.zip?files=ep_001.safetensors,ep_003.safetensors"
+        f"/api/queue/{tid}/outputs.zip?files=ep_001.safetensors,state/task_{tid}/training_state_epoch2.pt"
     )
     assert resp.status_code == 200
     expected_name = f"{p['slug']}-{v['label']}_outputs_selected.zip"
     assert expected_name in resp.headers.get("content-disposition", "")
     with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
         names = sorted(zf.namelist())
-        assert names == ["ep_001.safetensors", "ep_003.safetensors"]
+        nested = f"state/task_{tid}/training_state_epoch2.pt"
+        assert names == ["ep_001.safetensors", nested]
         assert zf.read("ep_001.safetensors") == b"E1"
+        assert zf.read(nested) == b"S2"
 
 
 def test_download_outputs_zip_partial_missing_file_404(
@@ -330,7 +363,7 @@ def test_download_outputs_zip_partial_missing_file_404(
 def test_download_outputs_zip_partial_blocks_traversal(
     client: TestClient, isolated, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """?files= 里含路径分隔符 / .. → 400，防止读 output 目录之外的文件。"""
+    """?files= 允许安全相对路径，但禁止 path traversal / 绝对路径。"""
     from studio import projects as projects_mod, versions as versions_mod
     monkeypatch.setattr(projects_mod, "PROJECTS_DIR", isolated / "projects")
     with db.connection_for() as conn:
@@ -341,12 +374,18 @@ def test_download_outputs_zip_partial_blocks_traversal(
     out_dir = versions_mod.version_dir(p["id"], p["slug"], v["label"]) / "output"
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "a.safetensors").write_bytes(b"A")
+    nested_dir = out_dir / "state" / f"task_{tid}"
+    nested_dir.mkdir(parents=True)
+    (nested_dir / "training_state_epoch2.pt").write_bytes(b"S2")
 
-    for bad in ("../secret", "..\\secret", "sub/x", "sub\\x"):
-        resp = client.get(
-            f"/api/queue/{tid}/outputs.zip", params={"files": bad}
-        )
+    safe = f"state/task_{tid}/training_state_epoch2.pt"
+    resp = client.get(f"/api/queue/{tid}/outputs.zip", params={"files": safe})
+    assert resp.status_code == 200
+
+    for bad in ("../secret", "..\\secret", "/abs", "state/../secret"):
+        resp = client.get(f"/api/queue/{tid}/outputs.zip", params={"files": bad})
         assert resp.status_code == 400, f"{bad!r} should be 400, got {resp.status_code}"
+
 
 
 def test_download_outputs_zip_empty_dir_404(
