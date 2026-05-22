@@ -10,6 +10,7 @@ export type ControlKind =
   | 'string'
   | 'path'
   | 'textarea'
+  | 'code'
   | 'string-list'
 
 /**
@@ -21,6 +22,7 @@ export function controlKind(prop: SchemaProperty): ControlKind {
     if (
       prop.control === 'path' ||
       prop.control === 'textarea' ||
+      prop.control === 'code' ||
       prop.control === 'string-list'
     )
       return prop.control

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import re
 from pathlib import Path
 from typing import Any, Optional
 
@@ -48,6 +50,7 @@ class AnimaLycorisAdapter:
         module_dropout: float = 0.0,
         weight_decompose: bool = False,
         rs_lora: bool = False,
+        lora_reg_dims: Optional[dict[str, int]] = None,
     ):
         self.algo = algo
         self.rank = rank
@@ -58,6 +61,8 @@ class AnimaLycorisAdapter:
         self.module_dropout = module_dropout
         self.weight_decompose = weight_decompose
         self.rs_lora = rs_lora
+        # 分层 rank：正则表达式 → rank 的字典，用 re.fullmatch 对 lora_name 匹配
+        self.lora_reg_dims: Optional[dict[str, int]] = lora_reg_dims or None
 
         # use_lokr 是原 LoRAInjector 的字段，anima_train.py 多处用它做分支判断；
         # 保留此字段以避免改动太多调用点。
@@ -101,6 +106,9 @@ class AnimaLycorisAdapter:
             **extra,
         )
         self.network.apply_to()
+
+        if self.lora_reg_dims:
+            _apply_reg_dims_(self.network, self.lora_reg_dims)
 
         # lycoris 默认在 CPU 创建模块；model 多半已在 CUDA — 必须显式同步 device/dtype，
         # 否则首次 forward 报 "tensors on cuda:0 and cpu"。从模型首个 parameter 推断。
@@ -297,3 +305,74 @@ class AnimaLycorisAdapter:
         部 caller（如 phase log 决策）调。
         """
         return self.use_lokr and "lokr_w1" in param_name
+
+
+def _apply_reg_dims_(network: nn.Module, lora_reg_dims: dict[str, int]) -> None:
+    """分层 rank：对 lora_name 正则全匹配的模块重新分配 rank。
+
+    支持 LoRA/LoCoN（lora_A / lora_B）和 LoKr 非全矩阵分支（lokr_w2_a / lokr_w2_b）。
+    LoKr 全矩阵分支（lokr_w2，use_w2=True）的 rank 不适用分层覆盖，跳过并 warn。
+
+    re-init 策略与 lycoris 原始初始化一致：
+      - A/w2_a：kaiming_uniform_(a=√5)（如同 nn.Linear weight init）
+      - B/w2_b：zeros（确保初始 ΔW=0）
+    """
+    patterns = list(lora_reg_dims.items())
+    changed = 0
+    skipped = 0
+
+    loras = getattr(network, "loras", None) or []
+    for lora_mod in loras:
+        name: str = getattr(lora_mod, "lora_name", "") or ""
+        new_dim: Optional[int] = None
+        for pat, dim in patterns:
+            if re.fullmatch(pat, name):
+                new_dim = int(dim)
+                break
+        if new_dim is None:
+            continue
+
+        old_dim = getattr(lora_mod, "lora_dim", None)
+        if old_dim == new_dim:
+            continue
+
+        # ── LoRA / LoCoN ─────────────────────────────────────────────────────
+        if hasattr(lora_mod, "lora_A") and hasattr(lora_mod, "lora_B"):
+            in_f = lora_mod.lora_A.shape[1]
+            out_f = lora_mod.lora_B.shape[0]
+            dev, dt = lora_mod.lora_A.device, lora_mod.lora_A.dtype
+            new_A = torch.empty(new_dim, in_f, device=dev, dtype=dt)
+            nn.init.kaiming_uniform_(new_A, a=math.sqrt(5))
+            lora_mod.lora_A = nn.Parameter(new_A)
+            lora_mod.lora_B = nn.Parameter(torch.zeros(out_f, new_dim, device=dev, dtype=dt))
+            lora_mod.lora_dim = new_dim
+            changed += 1
+
+        # ── LoKr 低秩分支（use_w2=False）：w2_a [d_out//f, dim], w2_b [dim, d_in//f] ──
+        elif hasattr(lora_mod, "lokr_w2_a") and hasattr(lora_mod, "lokr_w2_b"):
+            d0 = lora_mod.lokr_w2_a.shape[0]   # d_out // factor
+            d1 = lora_mod.lokr_w2_b.shape[1]   # d_in  // factor
+            dev, dt = lora_mod.lokr_w2_a.device, lora_mod.lokr_w2_a.dtype
+            new_w2a = torch.empty(d0, new_dim, device=dev, dtype=dt)
+            nn.init.kaiming_uniform_(new_w2a, a=math.sqrt(5))
+            lora_mod.lokr_w2_a = nn.Parameter(new_w2a)
+            lora_mod.lokr_w2_b = nn.Parameter(torch.zeros(new_dim, d1, device=dev, dtype=dt))
+            lora_mod.lora_dim = new_dim
+            changed += 1
+
+        # ── LoKr 全矩阵分支（use_w2=True）：rank 概念不适用，跳过 ──────────
+        elif hasattr(lora_mod, "lokr_w2"):
+            logger.warning(
+                "[lora_reg_dims] %s: full-matrix LoKr branch (use_w2=True) — "
+                "rank override not applicable, skipped",
+                name,
+            )
+            skipped += 1
+
+        else:
+            skipped += 1
+
+    if changed:
+        logger.info("[lora_reg_dims] applied rank overrides to %d modules", changed)
+    if skipped:
+        logger.info("[lora_reg_dims] skipped %d modules (full-matrix or unsupported)", skipped)

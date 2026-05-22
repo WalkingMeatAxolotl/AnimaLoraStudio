@@ -141,6 +141,20 @@ export default function Field({
     )
   }
 
+  // code ----------------------------------------------------------------
+  if (kind === 'code') {
+    return (
+      <JsonCodeField
+        label={label}
+        help={help}
+        value={value}
+        onChange={onChange}
+        disabled={disabled}
+        hintNode={hintNode}
+      />
+    )
+  }
+
   // int / float ---------------------------------------------------------
   if (kind === 'int' || kind === 'float') {
     return (
@@ -172,6 +186,80 @@ export default function Field({
       hintNode={hintNode}
       suffix={suffix}
     />
+  )
+}
+
+interface JsonCodeFieldProps {
+  label: string
+  help: string | undefined
+  value: unknown
+  onChange: (v: unknown) => void
+  disabled?: boolean
+  hintNode?: React.ReactNode
+}
+
+function formatJsonCode(v: unknown): string {
+  if (v === null || v === undefined || v === '') return ''
+  if (typeof v === 'string') return v
+  return JSON.stringify(v, null, 2)
+}
+
+function JsonCodeField({
+  label, help, value, onChange, disabled = false, hintNode,
+}: JsonCodeFieldProps) {
+  const [raw, setRaw] = useState<string>(() => formatJsonCode(value))
+  const [error, setError] = useState<string | null>(null)
+  const inputRef = useRef<HTMLTextAreaElement | null>(null)
+
+  useEffect(() => {
+    if (document.activeElement !== inputRef.current) {
+      setRaw(formatJsonCode(value))
+      setError(null)
+    }
+  }, [value])
+
+  const commit = () => {
+    const text = raw.trim()
+    if (text === '') {
+      onChange(null)
+      setError(null)
+      return
+    }
+    try {
+      const parsed = JSON.parse(text) as unknown
+      if (parsed === null || typeof parsed !== 'object') {
+        setError('JSON must be an object or array')
+        return
+      }
+      onChange(parsed)
+      setRaw(JSON.stringify(parsed, null, 2))
+      setError(null)
+    } catch {
+      setError('Invalid JSON')
+    }
+  }
+
+  return (
+    <div className="py-1.5">
+      <div className="text-sm font-medium text-fg-secondary mb-1">
+        {label}{hintNode}
+      </div>
+      <textarea
+        ref={inputRef}
+        rows={Math.max(3, raw.split('\n').length + 1)}
+        value={raw}
+        onChange={(e) => {
+          setRaw(e.target.value)
+          setError(null)
+        }}
+        onBlur={commit}
+        disabled={disabled}
+        className="input input-mono"
+        style={inputStyle}
+      />
+      {error && <div className="text-xs text-err mt-1">{error}</div>}
+      {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
+    </div>
   )
 }
 

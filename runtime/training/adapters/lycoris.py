@@ -29,4 +29,5 @@ def build(args) -> AdapterProtocol:
         module_dropout=float(getattr(args, "lora_module_dropout", 0.0) or 0.0),
         weight_decompose=bool(getattr(args, "lora_dora", False)),
         rs_lora=bool(getattr(args, "lora_rs", False)),
+        lora_reg_dims=getattr(args, "lora_reg_dims", None) or None,
     )

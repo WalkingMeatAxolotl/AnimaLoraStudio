@@ -22,8 +22,10 @@ import io
 import json
 import logging
 import os
+import shutil
 import threading
 import time
+import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
@@ -79,6 +81,7 @@ from .services import (
 )
 from .services.tagger import VALID_TAGGER_NAMES, get_tagger
 from .paths import (
+    DATA_EXPORTS,
     LOGS_DIR,
     OUTPUT_DIR,
     REPO_ROOT,
@@ -122,6 +125,33 @@ def _validate_component_or_400(name: str) -> None:
         validate_path_component(name)
     except ValueError as exc:
         raise HTTPException(400, f"invalid path: {exc}") from exc
+
+
+def _data_export_path(filename: str, suffixes: tuple[str, ...] = (".zip",)) -> Path:
+    path = _safe_join_or_400(DATA_EXPORTS, filename)
+    allowed = tuple(s.lower() for s in suffixes)
+    if allowed and path.suffix.lower() not in allowed:
+        label = " / ".join(allowed)
+        raise HTTPException(400, f"请选择 {label} 文件")
+    return path
+
+
+def _unique_data_export_path(filename: str, suffixes: tuple[str, ...] = (".zip",)) -> Path:
+    base = _data_export_path(filename, suffixes)
+    if not base.exists():
+        return base
+    stem = base.stem
+    suffix = base.suffix
+    for i in range(2, 1000):
+        candidate = _data_export_path(f"{stem}-{i}{suffix}", suffixes)
+        if not candidate.exists():
+            return candidate
+    raise HTTPException(409, f"导出文件名冲突过多: {filename}")
+
+
+def _export_result(path: Path) -> dict[str, Any]:
+    st = path.stat()
+    return {"filename": path.name, "path": str(path), "size": st.st_size, "mtime": st.st_mtime}
 
 
 def _install_proactor_disconnect_filter(loop: asyncio.AbstractEventLoop) -> None:
@@ -367,6 +397,14 @@ class DuplicateRequest(BaseModel):
     new_name: str
 
 
+class _PresetExportBody(BaseModel):
+    config: dict[str, Any]
+
+
+class _PresetImportBody(BaseModel):
+    filename: str
+
+
 @app.get("/api/schema")
 def get_schema() -> dict[str, Any]:
     """返回 TrainingConfig 的 JSON Schema + 分组顺序，前端据此渲染表单。"""
@@ -429,6 +467,45 @@ def download_preset(name: str) -> FileResponse:
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"预设不存在: {name}")
     return FileResponse(path, media_type="application/yaml", filename=f"{name}.yaml")
+
+@app.post("/api/presets/{name}/export")
+def export_preset_to_data_exports(name: str, body: _PresetExportBody) -> dict[str, Any]:
+    """把当前预设表单完整参数校验后保存到 data_exports/。"""
+    DATA_EXPORTS.mkdir(parents=True, exist_ok=True)
+    try:
+        dest = _unique_data_export_path(f"{name}.yaml", (".yaml", ".yml"))
+        path = presets_io.write_preset(dest.stem, body.config, DATA_EXPORTS)
+    except presets_io.PresetError as exc:
+        raise HTTPException(status_code=_err_code(exc), detail=str(exc)) from exc
+    return _export_result(path)
+
+
+@app.post("/api/presets/import-from-data-exports")
+def import_preset_from_data_exports(body: _PresetImportBody) -> dict[str, Any]:
+    """从 data_exports/ 里的 yaml/json 预设导入到用户预设池。"""
+    src = _data_export_path(body.filename, (".yaml", ".yml", ".json"))
+    if not src.exists():
+        raise HTTPException(404, f"文件不存在: {body.filename}")
+    if not src.is_file():
+        raise HTTPException(400, "请选择文件")
+    try:
+        config, suggested = presets_io.parse_preset_bytes(src.read_bytes(), src.name)
+    except presets_io.PresetError as exc:
+        raise HTTPException(status_code=_err_code(exc), detail=str(exc)) from exc
+    if presets_io.preset_path(suggested).exists():
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": f"预设已存在: {suggested}",
+                "config": config,
+                "suggested_name": suggested,
+            },
+        )
+    try:
+        path = presets_io.write_preset(suggested, config)
+    except presets_io.PresetError as exc:
+        raise HTTPException(status_code=_err_code(exc), detail=str(exc)) from exc
+    return {"name": suggested, "path": str(path)}
 
 
 @app.post("/api/presets/import")
@@ -937,6 +1014,197 @@ def export_version_train_zip(
     )
 
 
+class _BundleOptionsBody(BaseModel):
+    train: bool = True
+    train_captions: bool = True
+    reg: bool = False
+    reg_captions: bool = False
+    include_config: bool = False
+
+    def to_options(self) -> train_io.BundleOptions:
+        return train_io.BundleOptions(
+            train=self.train,
+            train_captions=self.train_captions,
+            reg=self.reg,
+            reg_captions=self.reg_captions,
+            include_config=self.include_config,
+        )
+
+
+class _BundleImportBody(BaseModel):
+    path: Optional[str] = None
+    filename: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _exactly_one_source(self) -> "_BundleImportBody":
+        if sum(bool(v) for v in (self.path, self.filename)) != 1:
+            raise ValueError("exactly one of path or filename is required")
+        return self
+
+
+@app.get("/api/data-exports")
+def list_data_exports() -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    DATA_EXPORTS.mkdir(parents=True, exist_ok=True)
+    for path in sorted(DATA_EXPORTS.iterdir(), key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True):
+        if not path.is_file() or path.suffix.lower() not in {".zip", ".yaml", ".yml", ".json"}:
+            continue
+        try:
+            items.append(_export_result(path))
+        except OSError:
+            continue
+    return items
+
+
+@app.get("/api/projects/{pid}/versions/{vid}/bundle.zip")
+def export_version_bundle(
+    pid: int,
+    vid: int,
+    background: BackgroundTasks,
+    train: bool = True,
+    train_captions: bool = True,
+    reg: bool = False,
+    reg_captions: bool = False,
+    include_config: bool = False,
+) -> FileResponse:
+    """按选项临时打包 bundle.zip（schema_version 2）并交给浏览器下载。"""
+    import tempfile
+
+    opts = train_io.BundleOptions(
+        train=train,
+        train_captions=train_captions,
+        reg=reg,
+        reg_captions=reg_captions,
+        include_config=include_config,
+    )
+
+    with db.connection_for() as conn:
+        v = versions.get_version(conn, vid)
+        if not v or v["project_id"] != pid:
+            raise HTTPException(404, f"版本不存在: id={vid}")
+        p = projects.get_project(conn, pid)
+        assert p is not None
+
+        tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+        tmp.close()
+        tmp_path = Path(tmp.name)
+        try:
+            train_io.export_bundle(conn, vid, tmp_path, opts)
+        except train_io.TrainIOError as exc:
+            tmp_path.unlink(missing_ok=True)
+            bus.publish({"type": "version_bundle_zip_failed", "project_id": pid, "version_id": vid, "error": str(exc)})
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:
+            tmp_path.unlink(missing_ok=True)
+            bus.publish({"type": "version_bundle_zip_failed", "project_id": pid, "version_id": vid, "error": str(exc)})
+            raise
+
+    bus.publish({"type": "version_bundle_zip_ready", "project_id": pid, "version_id": vid})
+    background.add_task(lambda: tmp_path.unlink(missing_ok=True))
+    return FileResponse(
+        tmp_path,
+        media_type="application/zip",
+        filename=f"{p['slug']}-{v['label']}.bundle.zip",
+        background=background,
+    )
+
+
+@app.post("/api/projects/{pid}/versions/{vid}/export-bundle")
+def export_version_bundle_to_data_exports(
+    pid: int,
+    vid: int,
+    body: _BundleOptionsBody,
+) -> dict[str, Any]:
+    """按选项打包 bundle.zip 并保存到 data_exports/。"""
+    opts = body.to_options()
+    with db.connection_for() as conn:
+        v = versions.get_version(conn, vid)
+        if not v or v["project_id"] != pid:
+            raise HTTPException(404, f"版本不存在: id={vid}")
+        p = projects.get_project(conn, pid)
+        assert p is not None
+        DATA_EXPORTS.mkdir(parents=True, exist_ok=True)
+        dest = _unique_data_export_path(f"{p['slug']}-{v['label']}.bundle.zip")
+        try:
+            train_io.export_bundle(conn, vid, dest, opts)
+        except train_io.TrainIOError as exc:
+            dest.unlink(missing_ok=True)
+            bus.publish({"type": "version_bundle_zip_failed", "project_id": pid, "version_id": vid, "error": str(exc)})
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:
+            dest.unlink(missing_ok=True)
+            bus.publish({"type": "version_bundle_zip_failed", "project_id": pid, "version_id": vid, "error": str(exc)})
+            raise
+
+    bus.publish({"type": "version_bundle_zip_ready", "project_id": pid, "version_id": vid})
+    return _export_result(dest)
+
+
+def _bundle_import_payload(result: dict[str, Any]) -> dict[str, Any]:
+    p = result["project"]
+    _publish_project_state(p)
+    _publish_version_state(result["version"])
+    return {
+        "project": _project_payload(p),
+        "version": result["version"],
+        "stats": result["stats"],
+    }
+
+
+def _import_bundle_from_path(dest: Path, original: str) -> dict[str, Any]:
+    if not dest.exists():
+        raise HTTPException(404, f"文件不存在: {original}")
+    if not dest.is_file():
+        raise HTTPException(400, "请选择 zip 文件")
+    if dest.suffix.lower() != ".zip":
+        raise HTTPException(400, "请选择 .zip 文件")
+    with db.connection_for() as conn:
+        try:
+            result = train_io.import_bundle(conn, dest, USER_PRESETS_DIR)
+        except train_io.TrainIOError as exc:
+            raise HTTPException(400, str(exc)) from exc
+    return _bundle_import_payload(result)
+
+
+@app.post("/api/projects/import-bundle")
+def import_bundle_zip(body: _BundleImportBody) -> dict[str, Any]:
+    """从 PathPicker 路径或 data_exports 文件名导入 bundle（v1/v2 均支持）。"""
+    if body.filename:
+        return _import_bundle_from_path(_data_export_path(body.filename), body.filename)
+    assert body.path is not None
+    dest = Path(body.path)
+    if not dest.is_absolute():
+        dest = (REPO_ROOT / dest).resolve()
+    else:
+        dest = dest.resolve()
+    return _import_bundle_from_path(dest, body.path)
+
+
+@app.post("/api/projects/import-bundle/upload")
+async def import_bundle_upload(file: UploadFile = File(...)) -> dict[str, Any]:
+    """上传 bundle zip → 新建 project + version。"""
+    import tempfile
+
+    if not file.filename:
+        raise HTTPException(400, "缺少上传文件")
+    if Path(file.filename).suffix.lower() != ".zip":
+        raise HTTPException(400, "请选择 .zip 文件")
+    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    try:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            tmp.write(chunk)
+        tmp.close()
+        return _import_bundle_from_path(Path(tmp.name), file.filename)
+    finally:
+        try:
+            Path(tmp.name).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 @app.post("/api/projects/import-train")
 async def import_train_zip(file: UploadFile = File(...)) -> dict[str, Any]:
     """上传训练集 zip → 新建 project + v1（stage=tagging），返回新项目。"""
@@ -1083,6 +1351,14 @@ def start_download(pid: int, body: DownloadRequest) -> dict[str, Any]:
     return job
 
 
+def _apply_project_upload_result(pid: int, result: uploads_svc.UploadResult) -> dict[str, Any]:
+    if result.added:
+        with db.connection_for() as conn:
+            updated = projects.advance_stage(conn, pid, "downloading")
+        _publish_project_state(updated)
+    return result.as_dict()
+
+
 @app.post("/api/projects/{pid}/upload")
 async def upload_local_files(
     pid: int, files: list[UploadFile] = File(...)
@@ -1107,12 +1383,33 @@ async def upload_local_files(
         data = await f.read()
         pairs.append((f.filename or "", io.BytesIO(data)))
     result = uploads_svc.accept_many(pairs, pdir)
+    return _apply_project_upload_result(pid, result)
 
-    if result.added:
-        with db.connection_for() as conn:
-            updated = projects.advance_stage(conn, pid, "downloading")
-        _publish_project_state(updated)
-    return result.as_dict()
+
+class _UploadFromPathBody(BaseModel):
+    path: str
+
+
+@app.post("/api/projects/{pid}/upload-from-path")
+def upload_local_file_from_path(pid: int, body: _UploadFromPathBody) -> dict[str, Any]:
+    """从 server 可见路径导入单图或 zip → project 的 download/。"""
+    with db.connection_for() as conn:
+        p = projects.get_project(conn, pid)
+    if not p:
+        raise HTTPException(404, f"项目不存在: id={pid}")
+    src = Path(body.path)
+    if not src.is_absolute():
+        src = (REPO_ROOT / src).resolve()
+    else:
+        src = src.resolve()
+    if not src.exists():
+        raise HTTPException(404, f"文件不存在: {body.path}")
+    if not src.is_file():
+        raise HTTPException(400, "请选择文件")
+    pdir = projects.project_dir(p["id"], p["slug"]) / "download"
+    with src.open("rb") as fh:
+        result = uploads_svc.accept_many([(src.name, fh)], pdir)
+    return _apply_project_upload_result(pid, result)
 
 
 @app.get("/api/projects/{pid}/download/status")
@@ -3265,6 +3562,46 @@ def _task_output_dir(task: dict[str, Any]) -> Optional[Path]:
     return versions.version_dir(int(pid), p["slug"], v["label"]) / "output"
 
 
+class _ExportOutputsBody(BaseModel):
+    files: Optional[list[str]] = None
+
+
+def _select_task_output_files(task_id: int, files: Optional[list[str]] = None) -> tuple[dict[str, Any], list[Path], bool]:
+    with db.connection_for() as conn:
+        task = db.get_task(conn, task_id)
+    if not task:
+        raise HTTPException(404)
+    out_dir = _task_output_dir(task)
+    if not out_dir or not out_dir.exists():
+        raise HTTPException(404, "no output dir")
+    all_files = [f for f in sorted(out_dir.iterdir()) if f.is_file()]
+    if not all_files:
+        raise HTTPException(404, "empty output dir")
+    if not files:
+        return task, all_files, False
+    by_name = {f.name: f for f in all_files}
+    selected: list[Path] = []
+    missing: list[str] = []
+    for name in files:
+        _validate_component_or_400(name)
+        f = by_name.get(name)
+        if f:
+            selected.append(f)
+        else:
+            missing.append(name)
+    if missing:
+        raise HTTPException(404, f"file(s) not found: {', '.join(missing)}")
+    if not selected:
+        raise HTTPException(400, "empty files list")
+    return task, selected, True
+
+
+def _write_outputs_zip(dest: Path, selected: list[Path]) -> None:
+    with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as zf:
+        for f in selected:
+            zf.write(f, arcname=f.name)
+
+
 def _task_archive_basename(task: dict[str, Any]) -> Optional[str]:
     """task 关联 project / version → "{slug}-{label}"，用作 outputs zip 文件名
     前缀。和 train.zip 命名风格一致（PP7：{slug}-{label}.train.zip）。
@@ -3341,49 +3678,14 @@ def download_task_outputs_zip(
     safetensors / pt 几乎都是已压缩二进制，用 ZIP_STORED（不再压缩，CPU 省一倍）。
     """
     import tempfile
-    import zipfile
-    with db.connection_for() as conn:
-        task = db.get_task(conn, task_id)
-    if not task:
-        raise HTTPException(404)
-    out_dir = _task_output_dir(task)
-    if not out_dir or not out_dir.exists():
-        raise HTTPException(404, "no output dir")
-    all_files = [f for f in sorted(out_dir.iterdir()) if f.is_file()]
-    if not all_files:
-        raise HTTPException(404, "empty output dir")
-
-    selected: list[Path]
-    partial = False
-    if files is None or files == "":
-        selected = all_files
-    else:
-        wanted = [n for n in files.split(",") if n]
-        if not wanted:
-            raise HTTPException(400, "empty files list")
-        by_name = {f.name: f for f in all_files}
-        missing: list[str] = []
-        selected = []
-        for name in wanted:
-            _validate_component_or_400(name)
-            f = by_name.get(name)
-            if not f:
-                missing.append(name)
-                continue
-            selected.append(f)
-        if missing:
-            raise HTTPException(404, f"file(s) not found: {', '.join(missing)}")
-        partial = True
+    wanted = [n for n in files.split(",") if n] if files else None
+    task, selected, partial = _select_task_output_files(task_id, wanted)
 
     tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
     tmp.close()
     tmp_path = Path(tmp.name)
     try:
-        with zipfile.ZipFile(
-            tmp_path, "w", compression=zipfile.ZIP_STORED, allowZip64=True
-        ) as zf:
-            for f in selected:
-                zf.write(f, arcname=f.name)
+        _write_outputs_zip(tmp_path, selected)
     except Exception as e:
         tmp_path.unlink(missing_ok=True)
         bus.publish({
@@ -3407,6 +3709,27 @@ def download_task_outputs_zip(
         filename=archive_name,
         background=background,
     )
+
+
+@app.post("/api/queue/{task_id}/export-outputs")
+def export_task_outputs_to_data_exports(
+    task_id: int,
+    body: _ExportOutputsBody,
+) -> dict[str, Any]:
+    """把 output 文件打包保存到 data_exports/。"""
+    task, selected, partial = _select_task_output_files(task_id, body.files)
+    DATA_EXPORTS.mkdir(parents=True, exist_ok=True)
+    basename = _task_archive_basename(task) or f"task_{task_id}"
+    archive_name = f"{basename}_outputs_selected.zip" if partial else f"{basename}_outputs.zip"
+    dest = _unique_data_export_path(archive_name)
+    try:
+        _write_outputs_zip(dest, selected)
+    except Exception as e:
+        dest.unlink(missing_ok=True)
+        bus.publish({"type": "task_outputs_zip_failed", "task_id": task_id, "error": str(e)})
+        raise
+    bus.publish({"type": "task_outputs_zip_ready", "task_id": task_id})
+    return _export_result(dest)
 
 
 @app.get("/api/queue/{task_id}/output/{filename}")

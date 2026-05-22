@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { SchemaProperty } from '../api/client'
@@ -17,6 +17,17 @@ const intProp: SchemaProperty = {
   default: 1,
   group: 'misc',
   control: 'auto',
+  description: '',
+}
+
+const codeProp: SchemaProperty = {
+  anyOf: [
+    { type: 'object' },
+    { type: 'null' },
+  ],
+  default: null,
+  group: 'misc',
+  control: 'code',
   description: '',
 }
 
@@ -65,7 +76,7 @@ describe('Field number input (PP10.3)', () => {
 
     const input = screen.getByRole('textbox') as HTMLInputElement
     await user.clear(input)
-    await user.tab()
+    fireEvent.blur(input)
     expect(onChange).toHaveBeenCalledWith(0.5) // floatProp.default
     expect(input.value).toBe('0.5')
   })
@@ -78,7 +89,7 @@ describe('Field number input (PP10.3)', () => {
     const input = screen.getByRole('textbox') as HTMLInputElement
     await user.clear(input)
     await user.type(input, 'abc')
-    await user.tab()
+    fireEvent.blur(input)
     expect(onChange).not.toHaveBeenCalled()
     expect(input.value).toBe('0.5') // 回滚
   })
@@ -92,7 +103,7 @@ describe('Field number input (PP10.3)', () => {
     await user.clear(input)
     await user.type(input, '16')
     expect(onChange).not.toHaveBeenCalled()
-    await user.tab()
+    fireEvent.blur(input)
     expect(onChange).toHaveBeenCalledWith(16)
   })
 
@@ -135,7 +146,7 @@ describe('Field number input (PP10.3)', () => {
     const input = screen.getByRole('textbox') as HTMLInputElement
     await user.clear(input)
     await user.type(input, '-0.1')
-    await user.tab()
+    fireEvent.blur(input)
     expect(onChange).not.toHaveBeenCalled()
     expect(input.value).toBe('0.5')
   })
@@ -155,7 +166,7 @@ describe('Field number input (PP10.3)', () => {
     const input = screen.getByRole('textbox') as HTMLInputElement
     await user.clear(input)
     await user.type(input, '5')
-    await user.tab()
+    fireEvent.blur(input)
     expect(onChange).not.toHaveBeenCalled()
     expect(input.value).toBe('0.5')
   })
@@ -175,12 +186,12 @@ describe('Field number input (PP10.3)', () => {
     const input = screen.getByRole('textbox') as HTMLInputElement
     await user.clear(input)
     await user.type(input, '0')
-    await user.tab()
+    fireEvent.blur(input)
     expect(onChange).toHaveBeenLastCalledWith(0)
 
     await user.clear(input)
     await user.type(input, '1')
-    await user.tab()
+    fireEvent.blur(input)
     expect(onChange).toHaveBeenLastCalledWith(1)
   })
 
@@ -195,5 +206,44 @@ describe('Field number input (PP10.3)', () => {
       />,
     )
     expect(screen.getByRole('textbox')).toBeDisabled()
+  })
+})
+
+describe('Field code input', () => {
+  it('renders object values as formatted JSON and commits parsed objects on blur', () => {
+    const onChange = vi.fn()
+    render(
+      <Field
+        name="lora_reg_dims"
+        prop={codeProp}
+        value={{ 'lora_unet_.*double.*': 16 }}
+        onChange={onChange}
+      />,
+    )
+
+    const input = screen.getByRole('textbox') as HTMLTextAreaElement
+    expect(input.value).toContain('"lora_unet_.*double.*": 16')
+
+    fireEvent.change(input, { target: { value: '{"lora_unet_.*single.*": 8}' } })
+    fireEvent.blur(input)
+    expect(onChange).toHaveBeenCalledWith({ 'lora_unet_.*single.*': 8 })
+  })
+
+  it('rejects JSON string fragments instead of committing them as strings', () => {
+    const onChange = vi.fn()
+    render(
+      <Field
+        name="lora_reg_dims"
+        prop={codeProp}
+        value={null}
+        onChange={onChange}
+      />,
+    )
+
+    const input = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.change(input, { target: { value: '"lora_unet_.*double.*": 16' } })
+    fireEvent.blur(input)
+    expect(onChange).not.toHaveBeenCalled()
+    expect(screen.getByText('Invalid JSON')).toBeInTheDocument()
   })
 })

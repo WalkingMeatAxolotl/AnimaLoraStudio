@@ -5,6 +5,7 @@ import {
   api,
   type ApiError,
   type ConfigData,
+  type DataExportItem,
   type PresetSummary,
   type SchemaResponse,
 } from '../../api/client'
@@ -108,6 +109,10 @@ export default function PresetsPage() {
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerSearch, setPickerSearch] = useState('')
   const [tomlOpen, setTomlOpen] = useState(false)
+  const [exportDialogOpen, setExportDialogOpen] = useState(false)
+  const [importDataExportsOpen, setImportDataExportsOpen] = useState(false)
+  const [dataExports, setDataExports] = useState<DataExportItem[]>([])
+  const [dataExportsLoading, setDataExportsLoading] = useState(false)
   const [advancedMode, toggleAdvancedMode] = useAdvancedMode()
   const pickerAnchorRef = useRef<HTMLButtonElement | null>(null)
   const pickerPopRef = useRef<HTMLDivElement | null>(null)
@@ -373,14 +378,46 @@ export default function PresetsPage() {
     }).catch((e) => toast(String(e), 'error')).finally(() => setBusy(false))
   }
 
-  // 端到端文件 I/O：直接拿磁盘上的 `studio_data/presets/{name}.yaml` 流。
-  // 走 <a download> 而非 fetch + blob，让浏览器使用原生下载机制。
-  const handleExport = () => {
-    if (!selected) return
+  const currentExportName = () => (isNew ? newName.trim() : selected) || 'preset'
+
+  const downloadCurrentPreset = () => {
+    if (!config) return
+    const name = currentExportName()
+    const yaml = generateToml(config)
+    const blob = new Blob([yaml + '\n'], { type: 'application/yaml;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
-    a.href = `/api/presets/${encodeURIComponent(selected)}/download`
-    a.download = `${selected}.yaml`
+    a.href = url
+    a.download = `${name}.yaml`
+    document.body.appendChild(a)
     a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
+  const exportCurrentPresetToDataExports = async () => {
+    if (!config) return
+    setBusy(true)
+    try {
+      const result = await api.exportPresetToDataExports(currentExportName(), config)
+      toast(t('presets.exportedToDataExports', { filename: result.filename, path: result.path }), 'success')
+    } catch (e) {
+      toast(String(e), 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const refreshDataExports = async () => {
+    setDataExportsLoading(true)
+    try {
+      const items = await api.listDataExports()
+      setDataExports(items.filter((item) => /\.(ya?ml|json)$/i.test(item.filename)))
+    } catch (e) {
+      toast(String(e), 'error')
+    } finally {
+      setDataExportsLoading(false)
+    }
   }
 
   // 「导入」：上传 → 后端 yaml + pydantic 校验 + 直接落盘 + 返回 name。
@@ -388,39 +425,65 @@ export default function PresetsPage() {
   // 冲突(409)→ 弹 ImportConflictDialog 让用户选覆盖 / 另存为 / 取消;选定后
   // PUT /api/presets/{name} 落盘,refresh + setSelected。
   // 解析 / schema 校验失败 → toast。
+  const handleImportedPreset = (name: string) => {
+    refreshList()
+    setSelected(name)
+    toast(t('presets.imported', { name }), 'success')
+  }
+
+  const handleImportConflict = async (err: ApiError): Promise<boolean> => {
+    if (err.status === 409 && err.detail && typeof err.detail === 'object') {
+      const d = err.detail as { config?: ConfigData; suggested_name?: string }
+      if (!d.config || !d.suggested_name) { toast(String(err), 'error'); return true }
+      const choice = await askConflict({
+        config: d.config, desc: '', suggestedName: d.suggested_name,
+      })
+      if (choice.kind === 'cancel') return true
+      const target = choice.kind === 'overwrite' ? d.suggested_name : choice.name
+      setBusy(true)
+      try {
+        await api.savePreset(target, d.config)
+        handleImportedPreset(target)
+      } catch (saveErr) { toast(String(saveErr), 'error') }
+      finally { setBusy(false) }
+      return true
+    }
+    return false
+  }
+
   const handleImportFile = async (f: File) => {
     let imported: { name: string }
     try {
       imported = await api.importPreset(f)
     } catch (e) {
       const err = e as ApiError
-      if (err.status === 409 && err.detail && typeof err.detail === 'object') {
-        const d = err.detail as { config?: ConfigData; suggested_name?: string }
-        if (!d.config || !d.suggested_name) { toast(String(e), 'error'); return }
-        const choice = await askConflict({
-          config: d.config, desc: '', suggestedName: d.suggested_name,
-        })
-        if (choice.kind === 'cancel') return
-        const target = choice.kind === 'overwrite' ? d.suggested_name : choice.name
-        setBusy(true)
-        try {
-          await api.savePreset(target, d.config)
-          refreshList()
-          setSelected(target)
-          toast(t('presets.imported', { name: target }), 'success')
-        } catch (saveErr) { toast(String(saveErr), 'error') }
-        finally { setBusy(false) }
-        return
-      }
+      if (await handleImportConflict(err)) return
       toast(String(e), 'error')
       return
     }
-    refreshList()
-    setSelected(imported.name)
-    toast(t('presets.imported', { name: imported.name }), 'success')
+    handleImportedPreset(imported.name)
+  }
+
+  const handleImportDataExport = async (filename: string) => {
+    setImportDataExportsOpen(false)
+    setBusy(true)
+    try {
+      const imported = await api.importPresetFromDataExports(filename)
+      handleImportedPreset(imported.name)
+    } catch (e) {
+      const err = e as ApiError
+      if (await handleImportConflict(err)) return
+      toast(String(e), 'error')
+    } finally {
+      setBusy(false)
+    }
   }
 
   const onImportClick = () => fileInputRef.current?.click()
+  const openImportDataExports = () => {
+    setImportDataExportsOpen(true)
+    void refreshDataExports()
+  }
 
   const saveDisabled =
     busy
@@ -486,7 +549,10 @@ export default function PresetsPage() {
           }}
         />
         <button onClick={onImportClick} disabled={busy} className="btn btn-ghost btn-sm">
-          {t('common.import')}
+          {t('presets.importUpload')}
+        </button>
+        <button onClick={openImportDataExports} disabled={busy} className="btn btn-ghost btn-sm">
+          {t('presets.importDataExports')}
         </button>
 
         {/* 编辑模式下的预设级动作 */}
@@ -496,8 +562,8 @@ export default function PresetsPage() {
             <button onClick={handleDuplicate} disabled={busy || !config} className="btn btn-ghost btn-sm">
               {t('presets.duplicate')}
             </button>
-            <button onClick={handleExport} disabled={busy || !config} className="btn btn-ghost btn-sm">
-{t('presets.exportYaml')}
+            <button onClick={() => setExportDialogOpen(true)} disabled={busy || !config} className="btn btn-ghost btn-sm">
+              {t('presets.exportYaml')}
             </button>
             <button onClick={handleDelete} disabled={busy} className="btn btn-ghost btn-sm" style={{ color: 'var(--err)' }}>
               {t('common.delete')}
@@ -745,6 +811,31 @@ export default function PresetsPage() {
         </div>
       </div>
 
+      {exportDialogOpen && (
+        <PresetExportDialog
+          onDownload={() => {
+            setExportDialogOpen(false)
+            downloadCurrentPreset()
+          }}
+          onDataExports={() => {
+            setExportDialogOpen(false)
+            void exportCurrentPresetToDataExports()
+          }}
+          onCancel={() => setExportDialogOpen(false)}
+        />
+      )}
+
+      {importDataExportsOpen && (
+        <PresetDataExportsDialog
+          items={dataExports}
+          loading={dataExportsLoading}
+          busy={busy}
+          onRefresh={refreshDataExports}
+          onImport={(filename) => { void handleImportDataExport(filename) }}
+          onCancel={() => setImportDataExportsOpen(false)}
+        />
+      )}
+
       {conflict && (
         <ImportConflictDialog
           suggestedName={conflict.suggestedName}
@@ -752,6 +843,107 @@ export default function PresetsPage() {
           onDecide={resolveConflict}
         />
       )}
+    </div>
+  )
+}
+
+function PresetExportDialog({
+  onDownload,
+  onDataExports,
+  onCancel,
+}: {
+  onDownload: () => void
+  onDataExports: () => void
+  onCancel: () => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/50"
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel() }}
+    >
+      <div className="bg-elevated border border-dim rounded-lg w-[90%] max-w-[420px] p-6 flex flex-col gap-4 shadow-xl">
+        <div>
+          <h2 className="m-0 text-lg font-semibold text-fg-primary">{t('presets.exportPresetTitle')}</h2>
+          <p className="mt-1 mb-0 text-sm text-fg-secondary">{t('presets.exportPresetHint')}</p>
+        </div>
+        <button type="button" className="card p-4 text-left hover:border-dim" onClick={onDownload}>
+          <div className="font-medium text-fg-primary mb-1">{t('presets.exportDownload')}</div>
+          <div className="text-xs text-fg-tertiary">{t('presets.exportDownloadHint')}</div>
+        </button>
+        <button type="button" className="card p-4 text-left hover:border-dim" onClick={onDataExports}>
+          <div className="font-medium text-fg-primary mb-1">{t('presets.exportDataExports')}</div>
+          <div className="text-xs text-fg-tertiary">{t('presets.exportDataExportsHint')}</div>
+        </button>
+        <div className="flex justify-end">
+          <button type="button" className="btn btn-secondary" onClick={onCancel}>{t('common.cancel')}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PresetDataExportsDialog({
+  items,
+  loading,
+  busy,
+  onRefresh,
+  onImport,
+  onCancel,
+}: {
+  items: DataExportItem[]
+  loading: boolean
+  busy: boolean
+  onRefresh: () => void
+  onImport: (filename: string) => void
+  onCancel: () => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/50"
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel() }}
+    >
+      <div className="bg-elevated border border-dim rounded-lg w-[90%] max-w-[520px] p-6 flex flex-col gap-4 shadow-xl">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="m-0 text-lg font-semibold text-fg-primary">{t('presets.importDataExportsTitle')}</h2>
+            <p className="mt-1 mb-0 text-sm text-fg-secondary">{t('presets.importDataExportsHint')}</p>
+          </div>
+          <button type="button" className="btn btn-secondary btn-sm" disabled={loading || busy} onClick={onRefresh}>
+            {loading ? t('common.loading') : t('common.refresh')}
+          </button>
+        </div>
+        {items.length === 0 ? (
+          <div className="text-sm text-fg-tertiary py-4">
+            {loading ? t('common.loading') : t('presets.noPresetDataExports')}
+          </div>
+        ) : (
+          <div className="max-h-72 overflow-auto flex flex-col gap-1">
+            {items.map((item) => (
+              <button
+                key={item.filename}
+                type="button"
+                className="flex items-center justify-between gap-3 px-2 py-1.5 rounded hover:bg-overlay text-left disabled:opacity-60"
+                disabled={busy}
+                onClick={() => onImport(item.filename)}
+              >
+                <span className="font-mono text-xs text-fg-primary truncate">{item.filename}</span>
+                <span className="text-[11px] text-fg-tertiary shrink-0">
+                  {(item.size / 1024).toFixed(1)} KB
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="flex justify-end">
+          <button type="button" className="btn btn-secondary" onClick={onCancel} disabled={busy}>{t('common.cancel')}</button>
+        </div>
+      </div>
     </div>
   )
 }

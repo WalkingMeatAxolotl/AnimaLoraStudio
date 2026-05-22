@@ -480,6 +480,7 @@ function OutputsTab({ taskId }: { taskId: number }) {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [zipping, setZipping] = useState(false)
+  const [exportingOutputs, setExportingOutputs] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
@@ -588,23 +589,43 @@ function OutputsTab({ taskId }: { taskId: number }) {
     finally { setBusy(false) }
   }
 
+  const outputSelection = () => {
+    const partial = selectMode && selected.size > 0
+    if (selectMode && !partial) return null
+    return partial ? Array.from(selected) : undefined
+  }
+
   const handleDownloadZip = () => {
     if (zipping) return
-    const partial = selectMode && selected.size > 0
-    if (selectMode && !partial) return  // 批量模式下没选任何文件，按钮应已 disabled
+    const files = outputSelection()
+    if (selectMode && files === null) return
     setZipping(true)
     // 优先用后端给的 archive_basename ({slug}-{label})，老任务没 project/version
     // 时 fallback task_{id}。download 属性是兜底 —— 浏览器优先用响应头
     // Content-Disposition.filename，所以最终下载名以后端为准。
     const baseName = data?.archive_basename ?? `task_${taskId}`
-    const zipName = partial ? `${baseName}_outputs_selected.zip` : `${baseName}_outputs.zip`
-    const files = partial ? Array.from(selected) : undefined
+    const zipName = files ? `${baseName}_outputs_selected.zip` : `${baseName}_outputs.zip`
     const a = document.createElement('a')
-    a.href = api.taskOutputsZipUrl(taskId, files)
+    a.href = api.taskOutputsZipUrl(taskId, files ?? undefined)
     a.download = zipName
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
+  }
+
+  const handleExportOutputs = async () => {
+    if (exportingOutputs) return
+    const files = outputSelection()
+    if (selectMode && files === null) return
+    setExportingOutputs(true)
+    try {
+      const result = await api.exportTaskOutputs(taskId, files ?? undefined)
+      toast(t('queueDetail.exportedToDataExports', { filename: result.filename, path: result.path }), 'success')
+    } catch (e) {
+      toast(String(e), 'error')
+    } finally {
+      setExportingOutputs(false)
+    }
   }
 
   const copyPath = async () => {
@@ -646,6 +667,17 @@ function OutputsTab({ taskId }: { taskId: number }) {
                   : selectMode
                     ? (noneSelected ? t('queueDetail.downloadSelectedEmpty') : t('queueDetail.downloadSelected', { n: selected.size, size: fmtBytes(selectedSize) }))
                     : t('queueDetail.downloadAll')}
+              </button>
+              <button
+                onClick={handleExportOutputs}
+                disabled={exportingOutputs || (selectMode && noneSelected)}
+                className="btn btn-secondary btn-sm"
+              >
+                {exportingOutputs
+                  ? t('queueDetail.exportingOutputs')
+                  : selectMode
+                    ? (noneSelected ? t('queueDetail.exportSelectedEmpty') : t('queueDetail.exportSelected', { n: selected.size }))
+                    : t('queueDetail.exportAllOutputs')}
               </button>
             </>
           )}

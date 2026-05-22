@@ -11,6 +11,7 @@ import {
 } from '../../../api/client'
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import ImagePreviewModal from '../../../components/ImagePreviewModal'
+import PathPicker from '../../../components/PathPicker'
 import StepShell from '../../../components/StepShell'
 import { useDialog } from '../../../components/Dialog'
 import { useToast } from '../../../components/Toast'
@@ -540,6 +541,7 @@ function UploadPanel({
   const [picked, setPicked] = useState<File[]>([])
   const [uploading, setUploading] = useState(false)
   const [dragging, setDragging] = useState(false)
+  const [showPathPicker, setShowPathPicker] = useState(false)
 
   const choose = (fl: FileList | null) => {
     if (!fl || fl.length === 0) return
@@ -549,19 +551,33 @@ function UploadPanel({
     setPicked([])
     if (inputRef.current) inputRef.current.value = ''
   }
+  const applyUploadResult = (r: UploadResult) => {
+    const skipped = r.skipped.length
+    toast(
+      t('download.uploadAdded', { n: r.added.length }) +
+        (skipped ? t('download.uploadSkippedSuffix', { skipped }) : ''),
+      r.added.length > 0 ? 'success' : 'error'
+    )
+    onUploaded(r)
+  }
   const submit = async () => {
     if (picked.length === 0) return
     setUploading(true)
     try {
       const r = await api.uploadProjectFiles(pid, picked)
-      const skipped = r.skipped.length
-      toast(
-        t('download.uploadAdded', { n: r.added.length }) +
-          (skipped ? t('download.uploadSkippedSuffix', { skipped }) : ''),
-        r.added.length > 0 ? 'success' : 'error'
-      )
+      applyUploadResult(r)
       reset()
-      onUploaded(r)
+    } catch (e) {
+      toast(String(e), 'error')
+    } finally {
+      setUploading(false)
+    }
+  }
+  const importFromPath = async (path: string) => {
+    setShowPathPicker(false)
+    setUploading(true)
+    try {
+      applyUploadResult(await api.uploadProjectFileFromPath(pid, path))
     } catch (e) {
       toast(String(e), 'error')
     } finally {
@@ -610,6 +626,17 @@ function UploadPanel({
           </span>
         )}
       </label>
+      <div className="flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={() => setShowPathPicker(true)}
+          disabled={uploading}
+          className="btn btn-secondary btn-sm"
+        >
+          {t('download.uploadFromPath')}
+        </button>
+        <span className="text-xs text-fg-tertiary">{t('download.uploadFromPathHint')}</span>
+      </div>
       {picked.length > 0 && (
         <div className="flex items-center gap-1.5">
           <button
@@ -633,6 +660,13 @@ function UploadPanel({
             {fileNames}
           </span>
         </div>
+      )}
+      {showPathPicker && (
+        <PathPicker
+          dirOnly={false}
+          onClose={() => setShowPathPicker(false)}
+          onPick={(path) => { void importFromPath(path) }}
+        />
       )}
     </section>
   )

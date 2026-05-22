@@ -609,6 +609,24 @@ export interface UploadResult {
   skipped: { name: string; reason: string }[]
 }
 
+export interface DataExportItem {
+  filename: string
+  path: string
+  size: number
+  mtime: number
+}
+
+export interface BundleImportResult {
+  project: ProjectDetail
+  version: Version
+  stats: {
+    train_image_count: number
+    train_tagged_count: number
+    reg_image_count: number
+    preset_count: number
+  }
+}
+
 // ---- preprocess (放大第一阶段) ---------------------------------------------
 
 /** 已处理图：manifest 里 kind=processed 的 entry 拼上磁盘 stat。
@@ -1146,6 +1164,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ new_name: newName }),
     }),
+  exportPresetToDataExports: (name: string, config: ConfigData) =>
+    req<DataExportItem>(`/api/presets/${encodeURIComponent(name)}/export`, {
+      method: 'POST',
+      body: JSON.stringify({ config }),
+    }),
+  importPresetFromDataExports: (filename: string) =>
+    req<{ name: string; path: string }>('/api/presets/import-from-data-exports', {
+      method: 'POST',
+      body: JSON.stringify({ filename }),
+    }),
   /** 端到端文件上传：把 .yaml/.yml/.json 文件给后端解析 + schema 校验 + 直接落盘,
    *  返回 {name, path}。前端拿到 name 直接 refreshList + setSelected(name) 即可。
    *
@@ -1370,6 +1398,11 @@ export const api = {
     }
     return (await resp.json()) as UploadResult
   },
+  uploadProjectFileFromPath: (pid: number, path: string) =>
+    req<UploadResult>(`/api/projects/${pid}/upload-from-path`, {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
   listFiles: (pid: number, bucket = 'download') =>
     req<{ items: DownloadFile[]; count: number }>(
       `/api/projects/${pid}/files?bucket=${encodeURIComponent(bucket)}`
@@ -1772,6 +1805,11 @@ export const api = {
     const q = files.map((n) => encodeURIComponent(n)).join(',')
     return `/api/queue/${id}/outputs.zip?files=${q}`
   },
+  exportTaskOutputs: (id: number, files?: ReadonlyArray<string>) =>
+    req<DataExportItem>(`/api/queue/${id}/export-outputs`, {
+      method: 'POST',
+      body: JSON.stringify({ files: files && files.length > 0 ? Array.from(files) : null }),
+    }),
 
   // PP8 — WD14 运行时 / GPU 装包 ------------------------------------------
   /** 当前 onnxruntime 状态：包名 / 版本 / providers / nvidia-smi 检测结果。 */
@@ -1822,6 +1860,77 @@ export const api = {
    * 后端 publish version_train_zip_ready/_failed SSE 供前端清 "打包中..." 状态。 */
   versionTrainZipUrl: (pid: number, vid: number) =>
     `/api/projects/${pid}/versions/${vid}/train.zip`,
+
+  /** 当前 version 的 bundle.zip 直链。<a href download> 触发浏览器下载。 */
+  versionBundleZipUrl: (
+    pid: number,
+    vid: number,
+    opts: {
+      train?: boolean
+      trainCaptions?: boolean
+      reg?: boolean
+      regCaptions?: boolean
+      includeConfig?: boolean
+    },
+  ): string => {
+    const p = new URLSearchParams()
+    p.set('train', opts.train !== false ? '1' : '0')
+    p.set('train_captions', opts.trainCaptions !== false ? '1' : '0')
+    p.set('reg', opts.reg ? '1' : '0')
+    p.set('reg_captions', opts.regCaptions ? '1' : '0')
+    p.set('include_config', opts.includeConfig ? '1' : '0')
+    return `/api/projects/${pid}/versions/${vid}/bundle.zip?${p.toString()}`
+  },
+  exportBundleToDataExports: (
+    pid: number,
+    vid: number,
+    opts: {
+      train?: boolean
+      trainCaptions?: boolean
+      reg?: boolean
+      regCaptions?: boolean
+      includeConfig?: boolean
+    },
+  ) =>
+    req<DataExportItem>(`/api/projects/${pid}/versions/${vid}/export-bundle`, {
+      method: 'POST',
+      body: JSON.stringify({
+        train: opts.train !== false,
+        train_captions: opts.trainCaptions !== false,
+        reg: opts.reg === true,
+        reg_captions: opts.regCaptions === true,
+        include_config: opts.includeConfig === true,
+      }),
+    }),
+  listDataExports: () => req<DataExportItem[]>('/api/data-exports'),
+
+  /** 从 PathPicker 选中的 zip 路径导入 bundle（v1/v2 均支持）→ 新建 project + v1。 */
+  importBundleFromPath: (path: string) =>
+    req<BundleImportResult>('/api/projects/import-bundle', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
+  importBundleFromDataExports: (filename: string) =>
+    req<BundleImportResult>('/api/projects/import-bundle', {
+      method: 'POST',
+      body: JSON.stringify({ filename }),
+    }),
+  importBundleUpload: async (file: File): Promise<BundleImportResult> => {
+    const fd = new FormData()
+    fd.append('file', file, file.name)
+    const resp = await fetch('/api/projects/import-bundle/upload', { method: 'POST', body: fd })
+    if (!resp.ok) {
+      let detail = `${resp.status} ${resp.statusText}`
+      try {
+        const body = await resp.json()
+        if (body?.detail) detail = body.detail
+      } catch {
+        // ignore
+      }
+      throw new Error(detail)
+    }
+    return resp.json()
+  },
   /** 上传训练集 zip → 新建 project + v1，返回新项目。 */
   importTrainProject: async (file: File): Promise<{
     project: ProjectDetail

@@ -10,6 +10,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # PP6.1 后全局 `monitor_data/` 已退役（监控状态走 per-task），不再保留常量 / 创建目录。
 OUTPUT_DIR = REPO_ROOT / "output"
 
+# 用户显式选择「导出到本机目录」时的落地目录。
+DATA_EXPORTS = REPO_ROOT / "data_exports"
+
+
 # Studio 持久化（SQLite + 用户保存的 preset + 任务日志）
 STUDIO_DATA = REPO_ROOT / "studio_data"
 STUDIO_DB = STUDIO_DATA / "studio.db"
@@ -35,7 +39,7 @@ def ensure_dirs() -> None:
     """首次运行时创建必要目录。"""
     STUDIO_DATA.mkdir(parents=True, exist_ok=True)
     migrate_configs_to_presets()
-    for d in (USER_PRESETS_DIR, LOGS_DIR):
+    for d in (USER_PRESETS_DIR, LOGS_DIR, DATA_EXPORTS):
         d.mkdir(parents=True, exist_ok=True)
 
 

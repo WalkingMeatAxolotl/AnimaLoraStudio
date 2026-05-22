@@ -214,6 +214,12 @@ class TrainingConfig(BaseModel):
         description="层级 stochastic depth（整层级别随机跳过）",
         json_schema_extra=_meta("lora", advanced=True),
     )
+    lora_reg_dims: Optional[dict[str, int]] = Field(
+        None,
+        description="分层 rank：正则表达式 → rank 的字典，按模块名正则全匹配覆盖默认 rank（如 {\"lora_unet_.*double.*\": 16}）",
+        examples=[{"lora_unet_.*double.*": 16}],
+        json_schema_extra=_meta("lora", "code", advanced=True),
+    )
 
     # ------------------------------------------------------------------ 训练
     epochs: int = Field(
@@ -493,6 +499,7 @@ class TrainingConfig(BaseModel):
         description="梯度裁剪最大范数（0=禁用）",
         json_schema_extra=_meta("training", advanced=True),
     )
+
     mixed_precision: Literal["bf16", "fp16", "no"] = Field(
         "bf16",
         description="混合精度",
