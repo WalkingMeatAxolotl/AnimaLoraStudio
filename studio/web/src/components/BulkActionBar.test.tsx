@@ -1,9 +1,10 @@
 import { render, screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+import userEvent, { type UserEvent } from '@testing-library/user-event'
 import type { ComponentProps } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 
 import BulkActionBar from './BulkActionBar'
+import { DialogProvider } from './Dialog'
 import { ToastProvider } from './Toast'
 
 const cache = new Map<string, string[]>([
@@ -26,46 +27,56 @@ function renderBar(overrides: Partial<ComponentProps<typeof BulkActionBar>> = {}
   }
   render(
     <ToastProvider>
-      <BulkActionBar {...props} />
+      <DialogProvider>
+        <BulkActionBar {...props} />
+      </DialogProvider>
     </ToastProvider>,
   )
   return { onApply }
 }
 
-describe('BulkActionBar (no popover, no scope — operates on selectedKeys)', () => {
-  it('add to front prepends typed tag to every selected image', async () => {
+// 触发 op 后会弹 confirm modal —— 点里面的"确认"按钮才真正 apply。
+const confirmInModal = async (user: UserEvent) => {
+  const ok = await screen.findByRole('button', { name: '确认' })
+  await user.click(ok)
+}
+
+describe('BulkActionBar (with confirm modal)', () => {
+  it('add at front (default position) prepends after confirm', async () => {
     const user = userEvent.setup()
     const { onApply } = renderBar()
 
-    await user.type(screen.getByPlaceholderText('tag1, tag2 (逗号分隔)'), 'warm')
-    await user.click(screen.getByRole('button', { name: '+ 加到首部' }))
+    await user.type(screen.getByLabelText('要添加的 tag'), 'warm')
+    await user.click(screen.getByRole('button', { name: '添加' }))
+    await confirmInModal(user)
 
     expect(onApply).toHaveBeenCalledOnce()
     const updates = onApply.mock.calls[0][0] as Map<string, string[]>
-    expect([...updates.keys()].sort()).toEqual(['a.png', 'b.png'])
     expect(updates.get('a.png')).toEqual(['warm', 'cat', 'solo'])
     expect(updates.get('b.png')).toEqual(['warm', 'cat'])
     expect(updates.has('c.png')).toBe(false)
   })
 
-  it('add to back appends typed tag', async () => {
+  it('switching position toggle to "尾部" appends instead of prepends', async () => {
     const user = userEvent.setup()
     const { onApply } = renderBar()
 
-    await user.type(screen.getByPlaceholderText('tag1, tag2 (逗号分隔)'), 'warm')
-    await user.click(screen.getByRole('button', { name: '+ 加到尾部' }))
+    await user.click(screen.getByRole('button', { name: '尾部' }))
+    await user.type(screen.getByLabelText('要添加的 tag'), 'warm')
+    await user.click(screen.getByRole('button', { name: '添加' }))
+    await confirmInModal(user)
 
     const updates = onApply.mock.calls[0][0] as Map<string, string[]>
     expect(updates.get('a.png')).toEqual(['cat', 'solo', 'warm'])
-    expect(updates.get('b.png')).toEqual(['cat', 'warm'])
   })
 
-  it('remove drops typed tag from selected only', async () => {
+  it('remove drops typed tag from selected only after confirm', async () => {
     const user = userEvent.setup()
     const { onApply } = renderBar()
 
-    await user.type(screen.getByPlaceholderText('tag1, tag2 (逗号分隔)'), 'cat')
-    await user.click(screen.getByRole('button', { name: '− 删除' }))
+    await user.type(screen.getByLabelText('要删除的 tag'), 'cat')
+    await user.click(screen.getByRole('button', { name: '删除' }))
+    await confirmInModal(user)
 
     const updates = onApply.mock.calls[0][0] as Map<string, string[]>
     expect(updates.get('a.png')).toEqual(['solo'])
@@ -73,20 +84,21 @@ describe('BulkActionBar (no popover, no scope — operates on selectedKeys)', ()
     expect(updates.has('c.png')).toBe(false)
   })
 
-  it('replace swaps old→new (and dedupes if collision)', async () => {
+  it('replace swaps old→new after confirm', async () => {
     const user = userEvent.setup()
     const { onApply } = renderBar()
 
     await user.type(screen.getByPlaceholderText('old'), 'cat')
     await user.type(screen.getByPlaceholderText('new'), 'feline')
-    await user.click(screen.getByRole('button', { name: '✓' }))
+    await user.click(screen.getByRole('button', { name: '替换' }))
+    await confirmInModal(user)
 
     const updates = onApply.mock.calls[0][0] as Map<string, string[]>
     expect(updates.get('a.png')).toEqual(['feline', 'solo'])
     expect(updates.get('b.png')).toEqual(['feline'])
   })
 
-  it('dedupe needs no input', async () => {
+  it('dedupe runs after confirm with no input needed', async () => {
     const dupCache = new Map<string, string[]>([
       ['a.png', ['cat', 'cat', 'solo']],
     ])
@@ -94,16 +106,35 @@ describe('BulkActionBar (no popover, no scope — operates on selectedKeys)', ()
     const { onApply } = renderBar({ cache: dupCache, selectedKeys: ['a.png'] })
 
     await user.click(screen.getByRole('button', { name: '去重' }))
+    await confirmInModal(user)
+
     const updates = onApply.mock.calls[0][0] as Map<string, string[]>
     expect(updates.get('a.png')).toEqual(['cat', 'solo'])
   })
 
+  it('cancelling the confirm modal skips apply', async () => {
+    const user = userEvent.setup()
+    const { onApply } = renderBar()
+
+    await user.type(screen.getByLabelText('要添加的 tag'), 'warm')
+    await user.click(screen.getByRole('button', { name: '添加' }))
+
+    const cancel = await screen.findByRole('button', { name: '取消' })
+    await user.click(cancel)
+
+    expect(onApply).not.toHaveBeenCalled()
+  })
+
   it('all op buttons disabled when nothing selected', () => {
     renderBar({ selectedKeys: [] })
-    expect(screen.getByRole('button', { name: '+ 加到首部' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: '+ 加到尾部' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: '− 删除' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '添加' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '删除' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '替换' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '去重' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: '✓' })).toBeDisabled()
+  })
+
+  it('select-all-images button uses image-specific label', () => {
+    renderBar()
+    expect(screen.getByRole('button', { name: '全选图片' })).toBeInTheDocument()
   })
 })

@@ -84,6 +84,13 @@ export default function TagStatsPanel({
     cancelEdit()
   }
 
+  // 表头点击：在同列内切换方向；跨列默认进 desc（数字默认从多到少看，名字
+  // 默认 A→Z）。两列各自记忆方向，跟 Excel / Numbers 等表格软件的直觉一致。
+  const toggleNameSort = () => setSort(sort === 'name_asc' ? 'name_desc' : 'name_asc')
+  const toggleCountSort = () => setSort(sort === 'count_desc' ? 'count_asc' : 'count_desc')
+  const nameArrow = sort === 'name_asc' ? ' ↑' : sort === 'name_desc' ? ' ↓' : ''
+  const countArrow = sort === 'count_desc' ? ' ↓' : sort === 'count_asc' ? ' ↑' : ''
+
   return (
     <section className="flex flex-col min-h-0 flex-1 min-w-0 overflow-hidden">
       <div className="px-2.5 py-1.5 border-b border-subtle flex items-center gap-2 text-xs shrink-0 flex-wrap">
@@ -98,28 +105,41 @@ export default function TagStatsPanel({
         )}
         <span className="flex-1" />
         {usingSelection && (
-          <>
-            <select
-              value={sort}
-              onChange={(e) => setSort(e.target.value as Sort)}
-              className="input"
-              style={{ fontSize: 'var(--t-xs)', padding: '1px 6px' }}
-            >
-              <option value="count_desc">{t('tagStats.sortCountDesc')}</option>
-              <option value="count_asc">{t('tagStats.sortCountAsc')}</option>
-              <option value="name_asc">{t('tagStats.sortNameAZ')}</option>
-              <option value="name_desc">{t('tagStats.sortNameZA')}</option>
-            </select>
-            <input
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              placeholder={t('common.filter')}
-              className="input"
-              style={{ fontSize: 'var(--t-xs)', padding: '1px 8px', width: 100 }}
-            />
-          </>
+          <input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder={t('common.filter')}
+            className="input"
+            style={{ fontSize: 'var(--t-xs)', padding: '1px 8px', width: 120 }}
+          />
         )}
       </div>
+
+      {/* table header：仅选中时显示。点击 header 切换该列排序方向 —— 类比
+       * 表格软件「同列切方向 / 跨列默认 desc」直觉。活跃列旁带 ↑/↓ 指示
+       * 当前方向，非活跃列不显示箭头避免视觉噪声。 */}
+      {usingSelection && filtered.length > 0 && (
+        <div className="px-2 py-1 border-b border-subtle flex items-center text-[10px] font-medium text-fg-tertiary shrink-0 gap-2">
+          <button
+            type="button"
+            onClick={toggleNameSort}
+            className="flex-1 min-w-0 text-left bg-transparent border-none cursor-pointer p-0 hover:text-fg-primary"
+          >
+            {t('tagStats.headerTag')}{nameArrow}
+          </button>
+          <button
+            type="button"
+            onClick={toggleCountSort}
+            className="shrink-0 bg-transparent border-none cursor-pointer p-0 hover:text-fg-primary"
+          >
+            {t('tagStats.headerCount')}{countArrow}
+          </button>
+          {/* 占位给 ✎ × 按钮列，让 header 跟下面行的列对齐（即使按钮 hover 才显示） */}
+          {(onReplaceTag || onRemoveTag) && (
+            <span className="shrink-0" style={{ width: (onReplaceTag ? 16 : 0) + (onRemoveTag ? 16 : 0) }} />
+          )}
+        </div>
+      )}
 
       <div className="flex-1 min-h-0 overflow-y-auto">
         {!usingSelection ? (

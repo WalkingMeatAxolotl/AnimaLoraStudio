@@ -8,6 +8,7 @@ import {
   type Version,
 } from '../../../api/client'
 import BulkActionBar from '../../../components/BulkActionBar'
+import { useDialog } from '../../../components/Dialog'
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import SaveBar from '../../../components/SaveBar'
 import StepShell from '../../../components/StepShell'
@@ -40,6 +41,7 @@ export default function TagEditPage() {
   const { t } = useTranslation()
   const { project, activeVersion, reload } = useOutletContext<Ctx>()
   const { toast } = useToast()
+  const { confirm } = useDialog()
   const versionId = activeVersion?.id ?? null
 
   const [cache, setCache] = useState<Map<string, string[]>>(new Map())
@@ -220,9 +222,9 @@ export default function TagEditPage() {
     })
   }
 
-  // 标签分布行内 × 触发：从当前选中图删除该 tag。toast 主要是反馈"动作生效"
-  // —— 因为 UI 上 tag 行马上消失/数字下降已经是可视反馈，这里只补一句简短的。
-  const removeTagFromSelected = (tag: string) => {
+  // 标签分布行内 × 触发：从当前选中图删除该 tag。pre-compute updates 拿真实
+  // 影响数 → confirm modal 显示精确张数 → 用户点确认后才 apply。
+  const removeTagFromSelected = async (tag: string) => {
     if (selectedKeys.length === 0) return
     const updates = new Map<string, string[]>()
     for (const k of selectedKeys) {
@@ -231,12 +233,20 @@ export default function TagEditPage() {
       updates.set(k, cur.filter((tt) => tt !== tag))
     }
     if (updates.size === 0) return
+    const ok = await confirm(
+      t('bulkAction.confirmMessage', {
+        op: t('bulkAction.opLabelRemove', { tags: tag }),
+        n: updates.size,
+      }),
+      { tone: 'danger', title: t('bulkAction.confirmTitle') },
+    )
+    if (!ok) return
     applyBulkUpdates(updates)
     toast(t('tagEdit.removedFromN', { tag, n: updates.size }), 'success')
   }
 
   // 标签分布行内 ✎ inline edit 提交：把选中图里的 oldTag 替换成 newTag，去重。
-  const replaceTagInSelected = (oldTag: string, newTag: string) => {
+  const replaceTagInSelected = async (oldTag: string, newTag: string) => {
     if (selectedKeys.length === 0 || !newTag || newTag === oldTag) return
     const updates = new Map<string, string[]>()
     for (const k of selectedKeys) {
@@ -252,6 +262,14 @@ export default function TagEditPage() {
       updates.set(k, next)
     }
     if (updates.size === 0) return
+    const ok = await confirm(
+      t('bulkAction.confirmMessage', {
+        op: t('bulkAction.opLabelReplace', { from: oldTag, to: newTag }),
+        n: updates.size,
+      }),
+      { tone: 'danger', title: t('bulkAction.confirmTitle') },
+    )
+    if (!ok) return
     applyBulkUpdates(updates)
     toast(t('tagEdit.replacedInN', { from: oldTag, to: newTag, n: updates.size }), 'success')
   }
