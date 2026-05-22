@@ -44,7 +44,7 @@ for _p in (_THIS_DIR, _REPO_ROOT):
 import anima_train as _T  # noqa: E402
 
 from studio.schema import migrate_legacy_attention  # noqa: E402
-from studio.services.inference_core import LoRASpec, apply_loras  # noqa: E402
+from studio.services.inference_core import LoRAMeta, LoRASpec, apply_loras, read_lora_meta  # noqa: E402
 
 # 日志走 stderr，stdout 留给协议
 logging.basicConfig(
@@ -80,6 +80,33 @@ def _emit_for(req_id: str, kind: str, **extra: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _lora_topology(meta: LoRAMeta) -> tuple[int, float, str, int]:
+    return (meta.rank, meta.alpha, meta.algo, meta.factor)
+
+
+def _load_lora_state_dict(path: str, device: str, dtype: Any) -> dict[str, Any]:
+    from safetensors import safe_open
+
+    sd: dict[str, Any] = {}
+    with safe_open(str(path), framework="pt", device="cpu") as f:
+        for k in f.keys():
+            sd[k] = f.get_tensor(k).to(device=device, dtype=dtype)
+    return sd
+
+
+def _reload_adapter_weights(adapter: Any, spec: LoRASpec, device: str, dtype: Any) -> None:
+    _set_lora_multiplier(adapter, spec.scale)
+    result = adapter.load_state_dict(
+        _load_lora_state_dict(spec.path, device, dtype),
+        strict=False,
+    )
+    missing = len(getattr(result, "missing_keys", []) or [])
+    unexpected = len(getattr(result, "unexpected_keys", []) or [])
+    logger.info(
+        f"已热换 LoRA 权重: {Path(spec.path).name} "
+        f"(scale={spec.scale}; missing={missing}, unexpected={unexpected})"
+    )
+
 class ModelCache:
     """缓存已加载的模型 / adapters。
 
@@ -107,6 +134,7 @@ class ModelCache:
         # adapters 必须保持引用，否则 forward hook 失效（lycoris closure）
         self.adapters: list[Any] = []
         self.last_lora_specs: list[LoRASpec] = []
+        self.last_lora_metas: list[LoRAMeta] = []
         # commit 14：TAEFlux for preview
         self.taeflux: Any = None
         self.taeflux_attempted: bool = False  # 失败后不再重试
@@ -234,17 +262,10 @@ class ModelCache:
         self.dtype = dtype
         self.adapters = []
         self.last_lora_specs = []
+        self.last_lora_metas = []
 
     def apply_loras(self, lora_configs: list[dict[str, Any]]) -> list[Any]:
-        """按 lora_configs (重新) inject adapters。
-
-        commit 20：先 detach 旧 adapters（撤销 lycoris hook + 还原 model.train
-        劫持），再 inject 新的。失败 fallback 到模型整体 reload（粗暴但安全 ——
-        旧版 lycoris 没 restore 接口时走这条）。具体路径：
-          - specs 不变且已 inject → 直接复用
-          - specs 变了 → adapter.detach() 全部成功 → inject 新的（快路径，<2s）
-          - detach 失败（hook 残留）→ unload+_load 重 load 整个 transformer（30-60s）
-        """
+        """按 lora_configs inject adapters；同结构 checkpoint 切换时只热换权重。"""
         specs = [
             LoRASpec(path=str(lc.get("path", "")), scale=float(lc.get("scale", 1.0)))
             for lc in lora_configs
@@ -252,7 +273,37 @@ class ModelCache:
         if specs == self.last_lora_specs and self.adapters:
             return self.adapters
 
-        # 撤销旧 adapters（commit 20 快路径）
+        current_metas: list[LoRAMeta] = []
+        if specs:
+            try:
+                for spec in specs:
+                    if not spec.path or not Path(spec.path).exists():
+                        current_metas = []
+                        break
+                    current_metas.append(read_lora_meta(spec.path))
+            except Exception:
+                logger.exception("read LoRA metadata failed")
+                current_metas = []
+
+        can_hot_reload = (
+            bool(self.adapters)
+            and bool(self.last_lora_specs)
+            and len(specs) == len(self.adapters) == len(self.last_lora_metas) == len(current_metas)
+            and [_lora_topology(m) for m in current_metas]
+            == [_lora_topology(m) for m in self.last_lora_metas]
+        )
+        if can_hot_reload:
+            try:
+                for adapter, spec in zip(self.adapters, specs):
+                    _reload_adapter_weights(adapter, spec, self.device, self.dtype)
+            except Exception:
+                logger.exception("LoRA hot reload failed; reinjecting adapters")
+            else:
+                self.last_lora_specs = specs
+                self.last_lora_metas = current_metas
+                self.model.eval()
+                return self.adapters
+
         all_detached = True
         for adapter in self.adapters:
             try:
@@ -263,7 +314,6 @@ class ModelCache:
                 all_detached = False
         self.adapters = []
 
-        # detach 不彻底 → fallback 到 model reload（保证 inference 干净）
         if not all_detached and self.last_lora_specs:
             logger.warning("detach failed, reloading model to ensure clean state")
             saved_paths = (
@@ -282,10 +332,11 @@ class ModelCache:
             )
             _emit_evt("loaded")
         self.last_lora_specs = []
+        self.last_lora_metas = []
 
-        # inject 新的
         self.adapters = apply_loras(self.model, specs, self.device, self.dtype)
         self.last_lora_specs = specs
+        self.last_lora_metas = current_metas
         self.model.eval()
         return self.adapters
 
@@ -300,6 +351,7 @@ class ModelCache:
         self.t5_tok = None
         self.adapters = []
         self.last_lora_specs = []
+        self.last_lora_metas = []
         # taeflux 也卸（占很小但保持一致）
         self.taeflux = None
         self.taeflux_attempted = False

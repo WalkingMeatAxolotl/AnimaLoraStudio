@@ -179,6 +179,76 @@ def test_apply_loras_empty_specs() -> None:
     assert apply_loras(model, [], device="cpu", dtype=torch.float32) == []
 
 
+def test_model_cache_hot_reloads_same_topology_lora_ckpt(tmp_path: Path) -> None:
+    """XY lora_ckpt 切同结构 checkpoint 时只换权重，不 detach/reinject。"""
+    p1 = tmp_path / "a.safetensors"
+    p2 = tmp_path / "b.safetensors"
+    _write_lora_safetensors(p1, rank=16, alpha=8.0, algo="lokr", factor=8)
+    _write_lora_safetensors(p2, rank=16, alpha=8.0, algo="lokr", factor=8)
+
+    created: list[MagicMock] = []
+
+    def _fake_adapter(*args: object, **kwargs: object) -> MagicMock:
+        m = MagicMock()
+        m.network = MagicMock()
+        m.network.loras = []
+        m.load_state_dict.return_value = MagicMock(missing_keys=[], unexpected_keys=[])
+        created.append(m)
+        return m
+
+    from runtime.anima_daemon import ModelCache
+
+    cache = ModelCache()
+    cache.model = MagicMock()
+    cache.device = "cpu"
+    cache.dtype = torch.float32
+
+    with _patched_adapter(_fake_adapter):
+        first = cache.apply_loras([{"path": str(p1), "scale": 1.0}])
+        second = cache.apply_loras([{"path": str(p2), "scale": 0.5}])
+
+    assert first is second
+    assert len(created) == 1
+    created[0].detach.assert_not_called()
+    assert created[0].inject.call_count == 1
+    assert created[0].load_state_dict.call_count == 2
+    assert created[0].network.multiplier == 0.5
+    assert cache.last_lora_specs == [LoRASpec(path=str(p2), scale=0.5)]
+
+
+def test_model_cache_reinjects_when_lora_topology_changes(tmp_path: Path) -> None:
+    p1 = tmp_path / "rank16.safetensors"
+    p2 = tmp_path / "rank8.safetensors"
+    _write_lora_safetensors(p1, rank=16, alpha=8.0, algo="lokr", factor=8)
+    _write_lora_safetensors(p2, rank=8, alpha=4.0, algo="lokr", factor=8)
+
+    created: list[MagicMock] = []
+
+    def _fake_adapter(*args: object, **kwargs: object) -> MagicMock:
+        m = MagicMock()
+        m.network = MagicMock()
+        m.network.loras = []
+        m.detach.return_value = True
+        m.load_state_dict.return_value = MagicMock(missing_keys=[], unexpected_keys=[])
+        created.append(m)
+        return m
+
+    from runtime.anima_daemon import ModelCache
+
+    cache = ModelCache()
+    cache.model = MagicMock()
+    cache.device = "cpu"
+    cache.dtype = torch.float32
+
+    with _patched_adapter(_fake_adapter):
+        cache.apply_loras([{"path": str(p1), "scale": 1.0}])
+        cache.apply_loras([{"path": str(p2), "scale": 1.0}])
+
+    assert len(created) == 2
+    created[0].detach.assert_called_once()
+    created[1].inject.assert_called_once_with(cache.model)
+
+
 # ---------------------------------------------------------------------------
 # generate tempdir helpers
 # ---------------------------------------------------------------------------
