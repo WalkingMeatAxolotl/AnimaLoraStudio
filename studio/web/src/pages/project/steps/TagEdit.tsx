@@ -51,6 +51,10 @@ export default function TagEditPage() {
   const [sel, setSel] = useState<Set<string>>(new Set())
   const [anchor, setAnchor] = useState<string | null>(null)
   const [filterTag, setFilterTag] = useState<string>('')
+  // '' = 全部；否则限定到该 folder（1_data / 2_data ...）。跟 filterTag 是
+  // AND 关系：folder 切视图，filterTag 在视图内再筛 tag。命名特意区分于下面
+  // editing 时用的 `activeFolder`（那个是当前编辑图所在 folder，纯展示）。
+  const [folderFilter, setFolderFilter] = useState<string>('')
   const [exporting, setExporting] = useState(false)
 
   const reloadCache = useCallback(async () => {
@@ -127,11 +131,30 @@ export default function TagEditPage() {
     return () => window.removeEventListener('beforeunload', handler)
   }, [dirty])
 
+  // folder 列表 + 每个 folder 的原始张数（不受 filterTag 影响，让 tab 数字稳定
+  // 不抖动 — 同 Preprocess chip 风格）。单 folder 项目时 UI 不显示 tabs。
+  const folderNames = useMemo(() => {
+    const set = new Set<string>()
+    for (const m of meta.values()) set.add(m.folder)
+    return Array.from(set).sort()
+  }, [meta])
+  const folderCounts = useMemo(() => {
+    const c = new Map<string, number>()
+    for (const m of meta.values()) c.set(m.folder, (c.get(m.folder) ?? 0) + 1)
+    return c
+  }, [meta])
+
   const filteredKeys = useMemo(() => {
+    let ks = keys
+    if (folderFilter) {
+      ks = ks.filter((k) => meta.get(k)?.folder === folderFilter)
+    }
     const f = filterTag.trim()
-    if (!f) return keys
-    return keys.filter((k) => (cache.get(k) ?? []).includes(f))
-  }, [keys, cache, filterTag])
+    if (f) {
+      ks = ks.filter((k) => (cache.get(k) ?? []).includes(f))
+    }
+    return ks
+  }, [keys, meta, cache, filterTag, folderFilter])
 
   const captionItems = useMemo(
     () =>
@@ -301,6 +324,30 @@ export default function TagEditPage() {
           className="rounded-md border border-subtle bg-surface flex flex-col min-w-0 overflow-hidden"
           style={{ flex: isEditing ? 1.5 : 1 }}
         >
+          {folderNames.length > 1 && (
+            <div className="px-2 pt-2 pb-1.5 flex items-center gap-1 flex-wrap shrink-0 border-b border-subtle">
+              {['', ...folderNames].map((f) => {
+                const isActive = f === folderFilter
+                const label = f || t('common.all')
+                const count = f ? folderCounts.get(f) ?? 0 : keys.length
+                return (
+                  <button
+                    key={f || '__all__'}
+                    type="button"
+                    onClick={() => setFolderFilter(f)}
+                    className={
+                      'px-2 py-0.5 rounded-full text-xs font-medium transition-colors ' +
+                      (isActive
+                        ? 'bg-accent text-white'
+                        : 'bg-overlay text-fg-secondary hover:bg-accent-soft')
+                    }
+                  >
+                    {label} {count}
+                  </button>
+                )
+              })}
+            </div>
+          )}
           <div className="flex-1 overflow-y-auto p-2">
             <ImageGrid
               items={captionItems}
@@ -336,20 +383,26 @@ export default function TagEditPage() {
         )}
 
         <div className="flex flex-col gap-2.5 min-w-0" style={{ flex: '0 0 32%' }}>
-          <BulkActionBar
-            cache={cache}
-            selectedKeys={selectedKeys}
-            onApply={applyBulkUpdates}
-            tagSuggestions={tagSuggestions}
-            defaultScope="selected"
-            onClearSelection={() => setSel(new Set())}
-            filterTag={filterTag}
-            onFilterTagChange={setFilterTag}
-            filteredKeys={filteredKeys}
-            totalCount={keys.length}
-            filteredCount={filteredKeys.length}
-            onSelectAll={() => setSel(new Set(filteredKeys))}
-          />
+          {/* editing 时（用户聚焦单图编辑）右侧栏整体让位给 TagEditor —— bulk
+           * 操作（add/remove/replace/dedupe）+ filter + 全选 都和"调一张图的
+           * 单条标签"无关，留着只会挤压编辑区。退出 editing 后 BulkActionBar
+           * 自动回来，filterTag / sel 等 state 保留（隐藏的是 UI 不是状态）。 */}
+          {!isEditing && (
+            <BulkActionBar
+              cache={cache}
+              selectedKeys={selectedKeys}
+              onApply={applyBulkUpdates}
+              tagSuggestions={tagSuggestions}
+              defaultScope="selected"
+              onClearSelection={() => setSel(new Set())}
+              filterTag={filterTag}
+              onFilterTagChange={setFilterTag}
+              filteredKeys={filteredKeys}
+              totalCount={keys.length}
+              filteredCount={filteredKeys.length}
+              onSelectAll={() => setSel(new Set(filteredKeys))}
+            />
+          )}
 
           {isEditing ? (
             <section className="flex-1 rounded-md border border-subtle bg-surface p-2.5 flex flex-col gap-2 min-h-0 overflow-hidden">
