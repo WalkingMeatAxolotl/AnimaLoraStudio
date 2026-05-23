@@ -20,6 +20,7 @@ from ._v4_task_config_path import migrate as _migrate_v4
 from ._v5_task_type import migrate as _migrate_v5
 from ._v6_pause_resume import migrate as _migrate_v6
 from ._v7_version_trigger_word import migrate as _migrate_v7
+from ._v8_version_status_phase import migrate as _migrate_v8
 
 Migration = Callable[[sqlite3.Connection], None]
 
@@ -31,6 +32,7 @@ MIGRATIONS: list[Migration] = [
     _migrate_v5,  # v5: tasks.task_type（PR-9 区分 train / reg_ai / generate）
     _migrate_v6,  # v6: tasks.paused_* 列 + queue_settings 表（ADR 0006 PR-2）
     _migrate_v7,  # v7: versions.trigger_word（触发词字段）
+    _migrate_v8,  # v8: versions.status / phase / last_failure_reason（ADR-0007）
 ]
 
 

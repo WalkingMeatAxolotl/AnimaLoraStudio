@@ -25,6 +25,53 @@ VALID_STAGES: frozenset[str] = frozenset({
     "ready", "training", "done",
 })
 
+# ADR-0007 §11.3-B：versions.stage 被拆成 status + phase 两个正交字段。
+# 本节加 enum + readonly accessor；写入路径由 PR-3 双写过渡，v9 删 stage 同步清理。
+
+
+class VersionStatus:
+    """版本运行态状态机（5 enum，ADR-0007 §11.3-B）。"""
+
+    PREPARING = "preparing"
+    TRAINING = "training"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELED = "canceled"
+
+    VALUES: frozenset[str] = frozenset({
+        PREPARING, TRAINING, COMPLETED, FAILED, CANCELED,
+    })
+
+
+class VersionPhase:
+    """版本准备 cursor，仅 status=preparing 时有业务语义（ADR-0007 §11.3-B / §11.5-A）。
+
+    顺序：curating → tagging → editing → regularizing → ready。
+    regularizing 可跳过（SKIPPABLE），其余必经。
+    """
+
+    CURATING = "curating"
+    TAGGING = "tagging"
+    EDITING = "editing"
+    REGULARIZING = "regularizing"
+    READY = "ready"
+
+    ORDER: tuple[str, ...] = (
+        CURATING, TAGGING, EDITING, REGULARIZING, READY,
+    )
+    VALUES: frozenset[str] = frozenset(ORDER)
+    SKIPPABLE: frozenset[str] = frozenset({REGULARIZING})
+
+
+def get_status(v: dict[str, Any]) -> str:
+    """读 version.status；None / 缺字段 fallback → preparing。"""
+    return str(v.get("status") or VersionStatus.PREPARING)
+
+
+def get_phase(v: dict[str, Any]) -> str:
+    """读 version.phase；None / 缺字段 fallback → curating。"""
+    return str(v.get("phase") or VersionPhase.CURATING)
+
 # label 必须是路径安全的：字母 / 数字 / 下划线 / 连字符 / 点
 _VALID_LABEL = re.compile(r"^[A-Za-z0-9_.-]+$")
 
