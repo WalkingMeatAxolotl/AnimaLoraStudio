@@ -442,7 +442,11 @@ def _copytree(src: Path, dst: Path) -> None:
             shutil.copy2(sub, target)
 
 
-_UPDATABLE = {"note", "stage", "config_name", "output_lora_path", "trigger_word"}
+_UPDATABLE = {
+    "note", "stage", "config_name", "output_lora_path", "trigger_word",
+    # ADR-0007 §11.3-B 新字段（PR-3 起允许写入；v9 删 stage 后 stage 离开此集合）
+    "status", "phase", "last_failure_reason",
+}
 
 
 def update_version(
@@ -452,6 +456,10 @@ def update_version(
     keep = {k: val for k, val in fields.items() if k in _UPDATABLE}
     if "stage" in keep and keep["stage"] not in VALID_STAGES:
         raise VersionError(f"非法 stage: {keep['stage']!r}")
+    if "status" in keep and keep["status"] not in VersionStatus.VALUES:
+        raise VersionError(f"非法 status: {keep['status']!r}")
+    if "phase" in keep and keep["phase"] not in VersionPhase.VALUES:
+        raise VersionError(f"非法 phase: {keep['phase']!r}")
     if not keep:
         return v
     cols = ", ".join(f"{k} = ?" for k in keep)
