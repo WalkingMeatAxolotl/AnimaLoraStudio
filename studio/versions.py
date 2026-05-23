@@ -72,6 +72,82 @@ def get_phase(v: dict[str, Any]) -> str:
     """读 version.phase；None / 缺字段 fallback → curating。"""
     return str(v.get("phase") or VersionPhase.CURATING)
 
+
+# ---------------------------------------------------------------------------
+# ADR-0007 §11.3-C / §6.9: version.status 派生 + 一致性校验
+# ---------------------------------------------------------------------------
+
+
+_TASK_TO_VERSION_STATUS: dict[str, str] = {
+    "done":     VersionStatus.COMPLETED,
+    "failed":   VersionStatus.FAILED,
+    "canceled": VersionStatus.CANCELED,
+}
+
+
+def derive_status_from_tasks(
+    conn: sqlite3.Connection, version_id: int
+) -> str:
+    """按 ADR §11.3-C 派生 version.status：
+
+    - 有 active task（pending / running / paused）→ training
+    - 无 active 看最近终态 task → completed / failed / canceled
+    - 从未有 task → preparing
+    """
+    row = conn.execute(
+        "SELECT 1 FROM tasks "
+        "WHERE version_id = ? AND status IN ('pending', 'running', 'paused') "
+        "LIMIT 1",
+        (version_id,),
+    ).fetchone()
+    if row:
+        return VersionStatus.TRAINING
+
+    row = conn.execute(
+        "SELECT status FROM tasks "
+        "WHERE version_id = ? AND status IN ('done', 'failed', 'canceled') "
+        "ORDER BY created_at DESC LIMIT 1",
+        (version_id,),
+    ).fetchone()
+    if row:
+        return _TASK_TO_VERSION_STATUS.get(str(row[0]), VersionStatus.PREPARING)
+
+    return VersionStatus.PREPARING
+
+
+def reconcile_version_status(
+    conn: sqlite3.Connection, version_id: int
+) -> tuple[Optional[dict[str, Any]], bool]:
+    """读 version + 校正 status 不一致；返回 (version, was_corrected)。
+
+    ADR §6.9 安全网：双写过渡期 supervisor 偶尔漏写时，此函数能让
+    任意 read 路径自愈。
+    - 计算 derive_status_from_tasks
+    - 与存储值不一致 → log warning + UPDATE + 返回 corrected version + True
+    - 一致 → 直接返回 (version, False)
+    - version 不存在 → (None, False)
+
+    本函数不发 SSE（保持纯 db 操作），调用方根据 was_corrected 决定要不要 publish。
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    v = get_version(conn, version_id)
+    if not v:
+        return None, False
+
+    derived = derive_status_from_tasks(conn, version_id)
+    stored = get_status(v)
+    if stored == derived:
+        return v, False
+
+    logger.warning(
+        "version %d status mismatch: stored=%r derived=%r → correcting",
+        version_id, stored, derived,
+    )
+    update_version(conn, version_id, status=derived)
+    return get_version(conn, version_id), True
+
 # label 必须是路径安全的：字母 / 数字 / 下划线 / 连字符 / 点
 _VALID_LABEL = re.compile(r"^[A-Za-z0-9_.-]+$")
 
