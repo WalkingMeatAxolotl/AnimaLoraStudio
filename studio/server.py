@@ -57,6 +57,7 @@ from . import (
     secrets,
     thumb_cache,
     versions,
+    versions_phase,
 )
 from .event_bus import bus
 from .services import (
@@ -980,6 +981,56 @@ def activate_version_endpoint(pid: int, vid: int) -> dict[str, Any]:
     assert p is not None
     _publish_project_state(p)
     return _project_payload(p)
+
+
+# ---------------------------------------------------------------------------
+# Phase cursor 推进 / 跳过 — ADR-0007 §11.5-A / §11.5-B
+# ---------------------------------------------------------------------------
+
+
+def _phase_advance_payload(
+    advanced: bool, result: versions_phase.CheckResult,
+    new_phase: Optional[str], version: Optional[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "advanced": advanced,
+        "ok": result.ok,
+        "reason": result.reason,
+        "new_phase": new_phase,
+        "version": version,
+    }
+
+
+@app.post("/api/projects/{pid}/versions/{vid}/advance-phase")
+def advance_phase_endpoint(pid: int, vid: int) -> dict[str, Any]:
+    """phase cursor 推进 —— "下一步" 按钮调用（ADR-0007 §11.5-A）。
+
+    成功 → cursor++ + 返回新 phase + publish version_state_changed。
+    失败 → ok=False + reason（前端 toast），cursor 不动。
+    """
+    with db.connection_for() as conn:
+        v = versions.get_version(conn, vid)
+        if not v or v["project_id"] != pid:
+            raise HTTPException(404, f"版本不存在: id={vid}")
+        advanced, result, new_phase = versions_phase.advance_phase(conn, vid)
+        v_after = versions.get_version(conn, vid)
+    if advanced and v_after is not None:
+        _publish_version_state(v_after)
+    return _phase_advance_payload(advanced, result, new_phase, v_after)
+
+
+@app.post("/api/projects/{pid}/versions/{vid}/skip-phase")
+def skip_phase_endpoint(pid: int, vid: int) -> dict[str, Any]:
+    """跳过可跳过的 phase（当前仅 regularizing；ADR-0007 §11.5-A）。"""
+    with db.connection_for() as conn:
+        v = versions.get_version(conn, vid)
+        if not v or v["project_id"] != pid:
+            raise HTTPException(404, f"版本不存在: id={vid}")
+        advanced, result, new_phase = versions_phase.skip_phase(conn, vid)
+        v_after = versions.get_version(conn, vid)
+    if advanced and v_after is not None:
+        _publish_version_state(v_after)
+    return _phase_advance_payload(advanced, result, new_phase, v_after)
 
 
 # Train export / import (PP7) -----------------------------------------------
