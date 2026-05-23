@@ -1199,6 +1199,11 @@
     "stepReg": "Regularization",
     "stepTrain": "Train"
   },
+  "phaseNav": {
+    "prevTitle": "Previous step:",
+    "nextTitle": "Next step:",
+    "advanceFailed": "Unable to advance to the next step"
+  },
   "layout": {
     "loading": "Loading project...",
     "exportFailed": "Export failed: {{error}}",

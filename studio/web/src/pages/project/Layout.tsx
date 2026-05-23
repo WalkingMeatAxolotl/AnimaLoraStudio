@@ -7,6 +7,7 @@ import { useDialog } from '../../components/Dialog'
 import { useToast } from '../../components/Toast'
 import { useEventStream } from '../../lib/useEventStream'
 import ExportBundleDialog, { type BundleExportOpts } from '../../components/ExportBundleDialog'
+import PhaseHeaderNav from '../../components/PhaseHeaderNav'
 
 export default function ProjectLayout() {
   const { t } = useTranslation()
@@ -197,6 +198,7 @@ export default function ProjectLayout() {
 
   return (
     <div className="flex flex-col h-full">
+      <PhaseHeaderNav />
       <Outlet context={{
         project,
         activeVersion,

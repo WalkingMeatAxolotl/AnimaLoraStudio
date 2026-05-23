@@ -559,6 +559,15 @@ export const PHASE_ORDER: VersionPhase[] = [
 
 export const PHASE_SKIPPABLE: VersionPhase[] = ['regularizing']
 
+/** ADR-0007 §11.5-A: advance / skip phase endpoint response。 */
+export interface PhaseAdvanceResult {
+  advanced: boolean
+  ok: boolean
+  reason: string
+  new_phase: VersionPhase | null
+  version: Version | null
+}
+
 export interface VersionStats {
   train_image_count: number
   tagged_image_count: number
@@ -1370,6 +1379,25 @@ export const api = {
     req<ProjectDetail>(
       `/api/projects/${pid}/versions/${vid}/activate`,
       { method: 'POST' }
+    ),
+
+  // Phase cursor 推进 / 跳过 (ADR-0007 §11.5-A) --------------------------
+  advanceVersionPhase: (pid: number, vid: number) =>
+    req<PhaseAdvanceResult>(
+      `/api/projects/${pid}/versions/${vid}/advance-phase`,
+      { method: 'POST' }
+    ),
+
+  skipVersionPhase: (pid: number, vid: number) =>
+    req<PhaseAdvanceResult>(
+      `/api/projects/${pid}/versions/${vid}/skip-phase`,
+      { method: 'POST' }
+    ),
+
+  // Task config snapshot (ADR-0007 §11.7) --------------------------------
+  getTaskSnapshotConfig: (taskId: number) =>
+    req<{ yaml: string; config: Record<string, unknown> }>(
+      `/api/queue/${taskId}/snapshot/config`
     ),
 
   // Download / jobs (PP2) ------------------------------------------------

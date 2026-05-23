@@ -1199,6 +1199,11 @@
     "stepReg": "正则集",
     "stepTrain": "训练"
   },
+  "phaseNav": {
+    "prevTitle": "上一步：",
+    "nextTitle": "下一步：",
+    "advanceFailed": "无法推进到下一步"
+  },
   "layout": {
     "loading": "加载项目...",
     "exportFailed": "导出失败: {{error}}",
