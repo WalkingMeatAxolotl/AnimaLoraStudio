@@ -683,6 +683,17 @@ class Supervisor:
             )
             return
 
+        # ADR-0007 §11.7 / PR-3 commit 4：task 启动 → 冻结当时的 config
+        # 到 studio_data/tasks/{tid}/snapshot/config.yaml。失败不阻 task
+        # 启动（snapshot 是 forensics 不是必需）。
+        try:
+            from . import task_snapshot
+            task_snapshot.freeze_config(int(task["id"]), cfg_path)
+        except Exception:
+            logger.exception(
+                "task %s config snapshot freeze failed (non-fatal)", task["id"]
+            )
+
         # PP6.1 — 计算 per-task monitor 状态文件路径
         # 有 version_id：versions/{label}/monitor_state.json
         # 没有：studio_data/monitors/task_{id}/state.json（兜底）

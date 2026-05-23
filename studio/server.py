@@ -3082,6 +3082,24 @@ def get_queue_item(task_id: int) -> dict[str, Any]:
     return task
 
 
+@app.get("/api/queue/{task_id}/snapshot/config")
+def get_task_snapshot_config(task_id: int) -> dict[str, Any]:
+    """ADR-0007 §11.7：返回 task 启动时冻结的 config。
+
+    返回 ``{"yaml": str, "config": dict}``。task 不存在 / 无 snapshot → 404。
+    UI [关联配置] tab 用此 + 触发 "套用此配置" 路由跳转到 ⑦ 训练 phase + prefill。
+    """
+    from . import task_snapshot
+    with db.connection_for() as conn:
+        task = db.get_task(conn, task_id)
+    if not task:
+        raise HTTPException(404, "task not found")
+    data = task_snapshot.read_snapshot_config(task_id)
+    if data is None:
+        raise HTTPException(404, "snapshot not found")
+    return data
+
+
 @app.post("/api/queue/{task_id}/cancel")
 def cancel_task(task_id: int) -> dict[str, Any]:
     if not _supervisor().cancel(task_id):
