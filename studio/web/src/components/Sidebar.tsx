@@ -1,27 +1,25 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useLocation } from 'react-router-dom'
-import { api, type ProjectDetail, type Version, type VersionStage } from '../api/client'
+import { api, PHASE_ORDER, type ProjectDetail, type Version, type VersionPhase, type VersionStage } from '../api/client'
 import { getStoredTheme, toggleTheme, type Theme } from '../lib/theme'
 
-/** Map version stage → 0-based index of the current active step（STEPS 数组里）。
- *
- * 注意：
- * - 后端 version stage 集合是 {curating, tagging, regularizing, ready, training,
- *   done}，**没有 editing**——打标完成后到正则启动前，stage 一直停在 "tagging"，
- *   单看 stage tag/edit 都不会自动变 done。`isStepDone` 用 stats 派生覆盖。
- * - preprocess 是 project-scope 的可选阶段，version stage 不感知它；status 完全
- *   靠 `preprocess_image_count > 0` 派生（同样在 `isStepDone` 里）。
+/** ADR-0007 §11.2 / §11.5-A: 把 STEPS 的 version-scope step key 映射到 phase enum。
  *
  * STEPS 顺序：0 download / 1 preprocess / 2 curate / 3 tag / 4 edit / 5 reg / 6 train
+ * phase enum: curating → tagging → editing → regularizing → ready（PR-3 加）
+ *
+ * 完成判定（§11.5）：step 的 phase index < version.phase 的 cursor index → 已完成。
+ * cursor 之后 disabled（§11.5-A）；cursor 当前 = active；cursor 之前 = done。
+ *
+ * preprocess 是项目级（§6.1），不进 version phase；用 preprocess_image_count > 0 派生。
  */
-const STAGE_TO_STEP_IDX: Record<VersionStage, number> = {
-  curating: 2,
-  tagging: 3,
-  regularizing: 5,
-  ready: 6,
-  training: 6,
-  done: 7,
+const STEP_KEY_TO_PHASE: Record<string, VersionPhase> = {
+  curate: 'curating',
+  tag:    'tagging',
+  edit:   'editing',
+  reg:    'regularizing',
+  train:  'ready',
 }
 import { useProjectCtx } from '../context/ProjectContext'
 
@@ -205,28 +203,19 @@ function ProjectStepperNav({ pid, activeVid, currentStep, project, version, coll
   ]
 
   const overviewActive = currentStep === null
-  const stage: VersionStage = version?.stage ?? 'curating'
-  const stageStepIdx = STAGE_TO_STEP_IDX[stage] ?? 0
-  const stats = version?.stats
+  const downloadCount = project?.download_image_count ?? 0
   const preprocessCount = project?.preprocess_image_count ?? 0
 
-  const isStepDone = (key: string, idx: number): boolean => {
+  // ADR-0007 §11.2 派生：cursor 之前的 phase = done
+  const cursorPhase: VersionPhase = (version?.phase as VersionPhase | undefined) ?? 'curating'
+  const cursorIdx = PHASE_ORDER.indexOf(cursorPhase)
+
+  const isStepDone = (key: string): boolean => {
+    if (key === 'download') return downloadCount > 0
     if (key === 'preprocess') return preprocessCount > 0
-    if (idx < stageStepIdx) return true
-    if (
-      (key === 'tag' || key === 'edit') &&
-      stats &&
-      stats.train_image_count > 0 &&
-      stats.tagged_image_count >= stats.train_image_count
-    ) return true
-    if (
-      key === 'reg' &&
-      stats &&
-      stats.reg_meta_exists &&
-      stats.reg_image_count > 0
-    ) return true
-    if (key === 'train' && version?.output_lora_path) return true
-    return false
+    const phase = STEP_KEY_TO_PHASE[key]
+    if (!phase) return false
+    return PHASE_ORDER.indexOf(phase) < cursorIdx
   }
 
   const linkCls = (active: boolean) => [
@@ -248,27 +237,32 @@ function ProjectStepperNav({ pid, activeVid, currentStep, project, version, coll
         {!collapsed && <span className="flex-1">{t('nav.overview')}</span>}
       </Link>
 
-      {STEPS.map((s, i) => {
+      {STEPS.map((s) => {
         const label = t(s.labelKey)
         const isActive = s.key === currentStep
-        const isDone = isStepDone(s.key, i)
+        const isDone = isStepDone(s.key)
+        // ADR-0007 §11.2: 数字本身变绿 = phase 已完成；当前页 = active 整行高亮。
+        const numColorCls = isDone
+          ? 'text-ok'
+          : isActive
+            ? 'text-accent'
+            : 'text-fg-tertiary'
 
         const href = s.scope === 'project'
           ? `/projects/${pid}/${s.key}`
           : activeVid ? `/projects/${pid}/v/${activeVid}/${s.key}` : null
 
-        const badgeCls = isDone
-          ? 'bg-ok-soft text-ok'
-          : isActive
-            ? 'bg-accent-soft text-accent'
-            : 'bg-overlay text-fg-tertiary'
+        // 项目级 ①② 文案带 (N) 文件数；version 级保持纯 label
+        let labelText = label
+        if (s.key === 'download') labelText = `${label} (${downloadCount})`
+        else if (s.key === 'preprocess') labelText = `${label} (${preprocessCount})`
 
         const inner = (
           <>
-            <span className={`w-5 h-5 rounded-full grid place-items-center text-[10px] font-bold font-mono shrink-0 ${badgeCls}`}>
-              {collapsed ? s.idx : (isDone ? I.check : s.idx)}
+            <span className={`w-5 h-5 grid place-items-center text-[13px] font-bold font-mono shrink-0 ${numColorCls}`}>
+              {s.idx}
             </span>
-            {!collapsed && <span className="flex-1 text-left">{label}</span>}
+            {!collapsed && <span className="flex-1 text-left">{labelText}</span>}
             {!collapsed && isActive && <span className="dot dot-running" />}
           </>
         )

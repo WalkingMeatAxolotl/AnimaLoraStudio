@@ -536,6 +536,29 @@ export type VersionStage =
   | 'training'
   | 'done'
 
+/** ADR-0007 §11.3-B 新模型：version 运行态状态机（5 enum）。 */
+export type VersionStatus =
+  | 'preparing'
+  | 'training'
+  | 'completed'
+  | 'failed'
+  | 'canceled'
+
+/** ADR-0007 §11.3-B 新模型：version 准备 cursor（仅 status=preparing 时有意义）。
+ *  按 PHASE_ORDER 顺序：curating → tagging → editing → regularizing → ready。 */
+export type VersionPhase =
+  | 'curating'
+  | 'tagging'
+  | 'editing'
+  | 'regularizing'
+  | 'ready'
+
+export const PHASE_ORDER: VersionPhase[] = [
+  'curating', 'tagging', 'editing', 'regularizing', 'ready',
+]
+
+export const PHASE_SKIPPABLE: VersionPhase[] = ['regularizing']
+
 export interface VersionStats {
   train_image_count: number
   tagged_image_count: number
@@ -551,6 +574,10 @@ export interface Version {
   label: string
   config_name: string | null
   stage: VersionStage
+  /** ADR-0007 §11.3-B 新字段；与 stage 双写过渡（v9 前老 frontend 仍可用 stage）。 */
+  status: VersionStatus
+  phase: VersionPhase
+  last_failure_reason: string | null
   created_at: number
   output_lora_path: string | null
   note: string | null
