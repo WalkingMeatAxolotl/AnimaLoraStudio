@@ -1202,7 +1202,36 @@
     "tabTasks": "Tasks",
     "tabOutput": "Output",
     "tasksPlaceholder": "本项目的训练任务列表（待实现）",
-    "outputPlaceholder": "本项目下产出的 LoRA 模型列表（待实现）"
+    "outputPlaceholder": "本项目下产出的 LoRA 模型列表（待实现）",
+    "tasksEmpty": "本项目还没有训练任务",
+    "tasksTable": {
+      "name": "任务",
+      "status": "状态",
+      "started": "开始",
+      "finished": "完成"
+    },
+    "outputEmpty": "本项目还没有产出 LoRA 模型",
+    "outputOpenTrain": "打开训练页",
+    "detail": {
+      "folders": "训练文件夹（repeat × concept）",
+      "foldersTotal": "共 {{n}} 张",
+      "tagDist": "标签分布",
+      "tagCoverage": "{{tagged}} / {{total}} 已打标",
+      "resolutionDist": "分辨率分布",
+      "aspectDist": "长宽比分布",
+      "regSet": "正则集",
+      "regCount": "{{n}} 张",
+      "emptyCurate": "请先在 ③ 筛选中选择训练图",
+      "emptyTag": "请先在 ④ 打标中生成 caption",
+      "emptyResolution": "在 ② 预处理 → 放大页查看详细分布",
+      "emptyAspect": "在 ② 预处理 → 裁剪页查看分桶统计",
+      "emptyReg": "在 ⑥ 正则集生成或显式跳过",
+      "goCurate": "去筛选",
+      "goEdit": "去编辑",
+      "goUpscale": "去放大",
+      "goCrop": "去裁剪",
+      "goReg": "去正则"
+    }
   },
   "versionStatus": {
     "preparing": "准备中",

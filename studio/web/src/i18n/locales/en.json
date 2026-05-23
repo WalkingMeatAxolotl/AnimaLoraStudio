@@ -1202,7 +1202,36 @@
     "tabTasks": "Tasks",
     "tabOutput": "Output",
     "tasksPlaceholder": "Training tasks for this project (to be implemented)",
-    "outputPlaceholder": "LoRA artifacts produced by this project (to be implemented)"
+    "outputPlaceholder": "LoRA artifacts produced by this project (to be implemented)",
+    "tasksEmpty": "No training tasks for this project yet",
+    "tasksTable": {
+      "name": "Task",
+      "status": "Status",
+      "started": "Started",
+      "finished": "Finished"
+    },
+    "outputEmpty": "No LoRA artifacts produced yet",
+    "outputOpenTrain": "Open train page",
+    "detail": {
+      "folders": "Train folders (repeat × concept)",
+      "foldersTotal": "{{n}} images total",
+      "tagDist": "Tag distribution",
+      "tagCoverage": "{{tagged}} / {{total}} tagged",
+      "resolutionDist": "Resolution distribution",
+      "aspectDist": "Aspect ratio distribution",
+      "regSet": "Regularization set",
+      "regCount": "{{n}} images",
+      "emptyCurate": "Pick training images in ③ Curate first",
+      "emptyTag": "Generate captions in ④ Tag first",
+      "emptyResolution": "See details in ② Preprocess → Upscale",
+      "emptyAspect": "See bucket stats in ② Preprocess → Crop",
+      "emptyReg": "Generate reg set or explicitly skip in ⑥ Reg",
+      "goCurate": "Curate",
+      "goEdit": "Edit",
+      "goUpscale": "Upscale",
+      "goCrop": "Crop",
+      "goReg": "Reg"
+    }
   },
   "versionStatus": {
     "preparing": "Preparing",
