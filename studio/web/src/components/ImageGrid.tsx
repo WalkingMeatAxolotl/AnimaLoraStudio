@@ -1,5 +1,6 @@
-import { memo } from 'react'
+import { memo, useState, type SyntheticEvent } from 'react'
 import { useTranslation } from 'react-i18next'
+import { VirtuosoGrid } from 'react-virtuoso'
 
 export interface ImageGridItem {
   name: string
@@ -20,8 +21,6 @@ interface Props {
   /** 主点击行为：默认选择；activate 模式下普通点击交给外部打开/激活。 */
   onActivate?: (name: string) => void
   clickMode?: 'select' | 'activate'
-  /** 渲染上限；超出在末尾显示「显示前 N 张」。 */
-  limit?: number
   emptyHint?: string
   /** 测试 / 长列表场景下传入用于 grid 标识的 aria-label。 */
   ariaLabel?: string
@@ -42,6 +41,47 @@ interface Props {
 // 容器越宽列越多，无需断点切换。
 const DEFAULT_COLUMNS = 'grid-cols-[repeat(auto-fill,minmax(120px,1fr))]'
 
+// 虚拟滚动 buffer：约 5-6 行 cell。暗主题 cell 底色是 #110f0b（接近纯黑），
+// 滚动时新 mount 的 cell 在 img decode 完成前会闪一下黑色；overscan 足够大
+// 才能让 buffer 区图提前 decode 好，进入视口直接显示而非"先黑后图"。代价是
+// DOM 多 ~50 个节点 — 缩略图轻量，可接受。
+const OVERSCAN_PX = 600
+
+// 主导色 placeholder cache：thumbUrl → '#RRGGBB'。
+//
+// 模块级 Map（不是 React state）— 跨 ImageGrid 实例、跨 cell unmount/mount 都
+// 保留。Cell 第一次 mount 时 lookup 拿不到色 → 显示默认 bg-sunken（黑）；img
+// onLoad 后用 canvas 取色入 map + setState；之后用户滚出再滚回时 cell 重 mount
+// → lookup 命中 → 立即用主导色填底，img 还在 decode 时用户看到的是色块而非黑
+// 块，"滚动闪黑"消失。
+//
+// 缺点：首次浏览（cache 冷）还是黑 → 图；但常规浏览（滚来滚去）从第二次起就
+// 有色。不持久化到 sessionStorage —— 每次刷页面 cache 重建几秒内就满，开销
+// 可忽略；持久化反而要处理 mtime invalidation 之类。
+const colorCache = new Map<string, string>()
+
+// 复用单个 1×1 canvas：drawImage(img, 0, 0, 1, 1) 让浏览器内部做完整缩放求平均
+// （比手动遍历 ImageData 快 1-2 个数量级）；getImageData 拿这一个像素 ≈ 平均色。
+let _colorCanvas: HTMLCanvasElement | null = null
+function extractAvgColor(img: HTMLImageElement): string | null {
+  try {
+    if (!_colorCanvas) {
+      _colorCanvas = document.createElement('canvas')
+      _colorCanvas.width = 1
+      _colorCanvas.height = 1
+    }
+    const ctx = _colorCanvas.getContext('2d', { willReadFrequently: true })
+    if (!ctx) return null
+    ctx.drawImage(img, 0, 0, 1, 1)
+    const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data
+    return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`
+  } catch {
+    // canvas tainted（跨域）/ jsdom 无真实 canvas / 其它失败 — 静默 fallback
+    // 到默认 bg-sunken。生产环境 thumb 同源不会 tainted。
+    return null
+  }
+}
+
 export default function ImageGrid({
   items,
   selected,
@@ -50,7 +90,6 @@ export default function ImageGrid({
   onPreview,
   onActivate,
   clickMode = 'select',
-  limit = 500,
   emptyHint,
   ariaLabel,
   columnsClass = DEFAULT_COLUMNS,
@@ -60,40 +99,39 @@ export default function ImageGrid({
   if (items.length === 0) {
     return <p className="text-fg-tertiary text-sm py-2">{emptyHint ?? t('imageGrid.noImages')}</p>
   }
-  const shown = items.slice(0, limit)
-  const overflow = items.length - shown.length
   const decoupled = activeName !== undefined
 
+  // role="grid" + aria-label 放在外层 wrapper：VirtuosoGrid 内部 List/Item 包多
+  // 层 div（scroller/list/item），role 直接挂内层会被 Virtuoso 改写 className/
+  // style；外层 wrapper 是稳定的。getAllByRole('gridcell') 会穿透中间 div 找到
+  // Cell 上的 role="gridcell"，AT / 测试都不受影响。
   return (
-    <div
-      role="grid"
-      aria-label={ariaLabel}
-      className={`grid ${columnsClass} gap-1`}
-    >
-      {shown.map((it) => {
-        const isSel = selected.has(it.name)
-        const isActive = decoupled && it.name === activeName
-        // border = 旧行为时跟 selected 走；解耦时跟 activeName 走
-        const borderHighlight = decoupled ? isActive : isSel
-        return (
-          <Cell
-            key={it.name}
-            item={it}
-            selected={isSel}
-            borderHighlight={borderHighlight}
-            onSelect={onSelect}
-            onHover={onHover}
-            onPreview={onPreview}
-            onActivate={onActivate}
-            clickMode={clickMode}
-          />
-        )
-      })}
-      {overflow > 0 && (
-        <p className="col-span-full text-xs text-fg-tertiary mt-1">
-          {t('imageGrid.truncated', { n: limit, total: items.length })}
-        </p>
-      )}
+    <div role="grid" aria-label={ariaLabel} className="h-full">
+      <VirtuosoGrid
+        style={{ height: '100%' }}
+        totalCount={items.length}
+        overscan={OVERSCAN_PX}
+        listClassName={`grid ${columnsClass} gap-1`}
+        itemContent={(index) => {
+          const it = items[index]
+          const isSel = selected.has(it.name)
+          const isActive = decoupled && it.name === activeName
+          // border = 旧行为时跟 selected 走；解耦时跟 activeName 走
+          const borderHighlight = decoupled ? isActive : isSel
+          return (
+            <Cell
+              item={it}
+              selected={isSel}
+              borderHighlight={borderHighlight}
+              onSelect={onSelect}
+              onHover={onHover}
+              onPreview={onPreview}
+              onActivate={onActivate}
+              clickMode={clickMode}
+            />
+          )
+        }}
+      />
     </div>
   )
 }
@@ -125,6 +163,14 @@ const Cell = memo(function Cell({
   clickMode: 'select' | 'activate'
 }) {
   const { t } = useTranslation()
+  // mount 时同步从 cache lookup —— 命中就立刻用主导色填底（避免黑闪），
+  // miss 就 undefined → 类名里的 bg-sunken 兜底。lazy init 保证只查一次。
+  const [bg, setBg] = useState<string | undefined>(() => colorCache.get(item.thumbUrl))
+  // img 是否已 load —— 默认 false（opacity-0），onLoad 后 true（opacity-100）。
+  // 配合 transition-opacity 让"色块 → 图"是 150ms 淡入而非突变，进一步柔化
+  // cache 命中场景下的视觉跳变；cache miss 场景也从"黑 → 啪一下出图"变成
+  // "黑 → 图淡入"。
+  const [loaded, setLoaded] = useState(false)
   const handleCellClick = (e: React.MouseEvent) => {
     if (clickMode === 'activate' && onActivate && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
       onActivate(item.name)
@@ -138,6 +184,18 @@ const Cell = memo(function Cell({
     onSelect(item.name, e)
   }
 
+  // img 加载完成：(1) 取色入 cache（如果还没有）；(2) 标记 loaded → 触发淡入。
+  const handleImgLoad = (e: SyntheticEvent<HTMLImageElement>) => {
+    if (!colorCache.has(item.thumbUrl)) {
+      const color = extractAvgColor(e.currentTarget)
+      if (color) {
+        colorCache.set(item.thumbUrl, color)
+        setBg(color)
+      }
+    }
+    setLoaded(true)
+  }
+
   return (
     <div
       role="gridcell"
@@ -145,6 +203,7 @@ const Cell = memo(function Cell({
       onMouseEnter={onHover ? () => onHover(item.name) : undefined}
       onClick={handleCellClick}
       title={item.meta ? `${item.name}\n${item.meta}` : item.name}
+      style={bg ? { background: bg } : undefined}
       className={
         'group relative aspect-square overflow-hidden rounded border cursor-pointer select-none ' +
         (borderHighlight
@@ -153,13 +212,20 @@ const Cell = memo(function Cell({
         ' bg-sunken'
       }
     >
+      {/* 虚拟化场景不能用 loading="lazy"：cell 进入 DOM（包括 overscan 区）
+       * 时浏览器不主动 load，要等真正进入视口才 fetch，overscan 的预热效果
+       * 全废。这里改 eager（默认）让 Virtuoso 一 mount cell 浏览器就开 fetch
+       * + decode，配合大 overscan 几乎看不到滚动闪。 */}
       <img
         src={item.thumbUrl}
         alt={item.name}
-        loading="lazy"
         decoding="async"
         draggable={false}
-        className="w-full h-full object-cover pointer-events-none"
+        onLoad={handleImgLoad}
+        className={
+          'w-full h-full object-cover pointer-events-none transition-opacity duration-150 ' +
+          (loaded ? 'opacity-100' : 'opacity-0')
+        }
       />
       <button
         type="button"

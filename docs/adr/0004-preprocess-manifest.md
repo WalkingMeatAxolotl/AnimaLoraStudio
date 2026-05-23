@@ -1,6 +1,6 @@
 # 0004 — 预处理状态用单 manifest 替代「双 bucket + per-image sidecar」
 
-**状态**：Accepted
+**状态**：Accepted（amended 2026-05-21 — 见 Addendum 1）
 **日期**：2026-05-15
 **决策者**：@WalkingMeatAxolotl
 
@@ -279,3 +279,116 @@ Migration 是幂等的：manifest 存在就直接返回，不再尝试。
 - 影响的代码：`studio/curation.py` `_active_left_dir`、`studio/preprocess.py` `list_processed`、
   `studio/services/upscaler.py:353` sidecar 写入、`studio/web/src/pages/project/steps/Preprocess.tsx` 双 grid
 - 设计讨论：本 session 2026-05-15
+
+---
+
+## Addendum 1 — 裁剪 stage 引入 + manifest schema 简化（2026-05-21）
+
+**触发**：PR 引入预处理第二阶段「裁剪」（一图可多裁，需要 `X.png → X_c0.png / X_c1.png`
+fan-out 派生），原 schema 的"产物名 → 处理过程 meta"模型不够用：派生项不是直接 1:1
+对应一张 download 原图，需要更明确的 origin 追溯。详见
+[`docs/design/preprocess-crop-design.md`](../design/preprocess-crop-design.md)。
+
+讨论中用户明确表态过度设计：rect 坐标 / target AR / action 分类 / VRAM 估算这类
+"过程信息"一旦写盘就丢，不应该 persist。最终选了极简 schema 起手，老字段读时兼容、
+写时丢弃，几个 minor 版本后逐步 deprecate。
+
+### Schema 演进（v0 → v1，read-compat 双跑）
+
+**v1（新写）**：entry 只剩三个字段。
+
+```json
+{
+  "images": {
+    "X.png":     { "origin": "X.png",  "mtime": 1731000000, "size": 1234567 },
+    "Y_c0.png":  { "origin": "Y.png",  "mtime": ...,         "size": ... },
+    "Y_c1.png":  { "origin": "Y.png",  "mtime": ...,         "size": ... }
+  }
+}
+```
+
+- `origin` = download/ 下原图名。**Multi-crop 派生**的 entry 多个共享同一 origin
+- `kind` 字段**不再写入**。entry 存在即"已处理"（v0 里 kind 一直只有 `processed` 一种，
+  本来就是死字段；将来真有"未来状态"再加 `state` 字段，不要复活 `kind`）
+- 老的 `source / model / scale / action / target_area / src_size / dst_size /
+  elapsed_seconds` 字段**全部不再写**——属于过程信息，写盘后应该丢
+
+**v0（老读）**：保留 read-compat 至少 3 个 minor 版本。
+
+- 缺 `origin` → 用 `source` 字段顶上（语义相同，只是更名）
+- 缺 `source` → 用 entry key 兜底（= 1:1 同名场景）
+- `kind` 字段如果存在且 ≠ `"processed"`，仍按 v0 规则视为未来扩展，resolver 返 None
+- 老的 model/scale/... 字段读到就透传给前端（sidebar 还能显示），但下次任何 mutation
+  会把 entry 重写成 v1 schema，老字段丢失
+
+旧 sidecar `*.preprocess.json` 的迁移逻辑（`ensure_manifest`）保留不动——已经聚合成
+manifest entry 的老格式仍在 read-compat 覆盖范围内。
+
+### 新增 API
+
+`studio/services/preprocess_manifest.py` 加三个：
+
+| 函数 | 作用 |
+|---|---|
+| `entry_origin(entry, fallback)` | 从 entry 提取 origin，处理 v0/v1 schema 兼容 |
+| `resolve_origin(project_dir, download_name)` | 反向 resolve：给 download/X，返回 preprocess/ 里所有 origin 匹配的派生（multi-crop 一对多）；无匹配则回退 download |
+| `replace_with_crops(project_dir, source_name, outputs)` | 原子替换：把 source_name 自身 + 所有 origin 指向 source_name 的 entry 整批删，写入 N 个新 entry。供裁剪 worker 在 fan-out 时调用 |
+
+`resolve(name)` 接口本身不变。
+
+### 下游消费者改动
+
+- `studio/preprocess.py:list_pending` —— 按 origin 集合比对（不再按 stem），handle
+  multi-crop fan-out 的"已处理"判定（任一 entry origin == download/X.jpg → 不算 pending）
+- `studio/preprocess.py:summary` —— 同 origin 集合判定
+- `studio/curation.py:copy_to_train` —— 用 `resolve_origin()` fan-out 复制多裁剪产物
+  到 train/{folder}，文件名按 preprocess 实际产物名（含 `_c0`/`_c1` 后缀），metadata
+  按 stem 匹配
+- `studio/server.py` thumbnail endpoint —— 同样 `resolve_origin()`，multi-crop 时取第一个
+  preprocess 派生展示
+
+### 文件命名约定（fan-out）
+
+- N=1 裁剪 → 覆盖 `preprocess/{stem}.png`（同名覆盖，origin 不变）
+- N>1 裁剪 → 写 `preprocess/{stem}_c0.png` / `{stem}_c1.png` ...，删原 `{stem}.png`
+- `{stem}_c0.png` 再多裁 → `{stem}_c0_c0.png` / `{stem}_c0_c1.png`（链式后缀；origin
+  始终指向最初的 download 原图）
+
+### 还原（restore）语义不变
+
+`restore(names)` 仍是删 entry + 删对应 preprocess/ 文件。multi-crop 派生的 entry 各自
+独立可还原（删 `Y_c0.png` 不影响 `Y_c1.png`）。整图回退到 download 原图 = 删该图所有
+origin 派生的 entry。
+
+### Stage 不强制时序
+
+「放大 → 裁剪 → 放大 → 裁剪」是合法链路：每个 stage 都是对 `preprocess/` 当前状态的
+覆盖，没有 partial undo。原 ADR §「未来扩展」里假设的 `kind: cropped` / `kind: masked`
+分类**不采用**——所有产物 entry 是同一类 (`origin + mtime + size`)，stage 信息只在
+worker 运行时存在，不进 manifest。
+
+### 跟训练 ARB 桶的对齐
+
+裁剪聚类的 target AR 内部 snap 到训练桶（`runtime/training/dataset.py:BucketManager`
+的前端 TS 镜像 `studio/web/src/lib/trainBuckets.ts`），但 UI 标签仍显示 pretty AR。
+这个跟 manifest schema 无关，纯前端逻辑，仅在此点一笔。详见
+[`preprocess-crop-design.md §7`](../design/preprocess-crop-design.md)。
+
+### 防漂移
+
+backend Python `BucketManager` 和 frontend TS `trainBuckets.ts` 必须保持算法 + 默认
+参数同步。两边代码顶部互引注释 + TS 单测断言桶数严格 == 37（默认参数下 Python 输出
+也是 37）。改一边漏改另一边 → CI 红。
+
+### 老 schema 读支持的退役时间
+
+`origin` v1 schema 在 dev 跑通后 dev → master 合并发版即可观测。Read-compat for v0：
+
+- v1 schema 引入后 3 个 minor 版本仍读 v0 字段（兜底兼容 0.7-0.9 时期写的老 entry）
+- 老用户首次访问 preprocess 数据触发 `ensure_manifest` 迁移；之后任何 mutation 把
+  老 entry 重写成 v1
+- 之后版本（约 1.0+）可清理 `entry_origin()` 里的 `source` 兜底分支 + 删
+  `_scan_legacy_sidecars()`
+
+不写明确的 deprecation timeline 在代码里，避免用户被"必须升级"压力。等到要清的那天
+看实际使用数据决定。

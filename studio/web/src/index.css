@@ -1,6 +1,7 @@
 @import './styles/tokens.css';
 @import './styles/info-button.css';
 @import './styles/version-section.css';
+@import './styles/preprocess-crop.css';
 @tailwind base;
 @tailwind components;
 @tailwind utilities;

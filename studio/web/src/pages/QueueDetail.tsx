@@ -384,7 +384,7 @@ function OverviewTab({ task }: { task: Task }) {
   }
 
   return (
-    <div className="overflow-y-auto p-5">
+    <div className="flex-1 min-h-0 overflow-y-auto p-5">
       <div className="card overflow-hidden p-0" style={{ maxWidth: 720 }}>
         {items.map((row, i) => (
           <div

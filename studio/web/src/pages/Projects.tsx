@@ -195,7 +195,7 @@ export default function ProjectsPage() {
             <div className="text-sm">{t('projects.noProjectsHint')}</div>
           </div>
         ) : (
-          <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))' }}>
+          <div className="grid gap-4 auto-rows-fr" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))' }}>
             {items.map((p) => (
               <ProjectCard
                 key={p.id}

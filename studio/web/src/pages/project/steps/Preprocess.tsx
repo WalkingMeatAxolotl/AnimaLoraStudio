@@ -12,8 +12,9 @@ import {
 } from '../../../api/client'
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import ImagePreviewModal from '../../../components/ImagePreviewModal'
+import PreprocessJobStrip from '../../../components/preprocess/PreprocessJobStrip'
+import PreprocessToolsBar from '../../../components/preprocess/PreprocessToolsBar'
 import StepShell from '../../../components/StepShell'
-import { useDialog } from '../../../components/Dialog'
 import { useToast } from '../../../components/Toast'
 import { useEventStream } from '../../../lib/useEventStream'
 
@@ -44,16 +45,32 @@ interface ImageRow {
   status: 'pending' | 'processed'
   processed?: PreprocessedItem  // status=processed 时有
   size: number
+  /** 实际像素尺寸（pending 取 download/，processed 取 preprocess/）。filter 用。 */
+  w: number | null
+  h: number | null
 }
 
-type FilterMode = 'all' | 'pending' | 'processed'
+/** Pixel-area histogram bins — shared between the sidebar histogram and the
+ *  grid filter chips. Order matters: contiguous ascending so `pxBinFor` can
+ *  walk and pick the first match. Sidebar / filter labels translate via i18n
+ *  key `preprocess.pxBin.<id>` (Sidebar uses `b.label` directly though). */
+const PX_BINS = [
+  { id: 'lt-512',   label: '< 512²',        lo: 0,           hi: 512 * 512,   sortKey: 0 },
+  { id: '512-768',  label: '512² – 768²',   lo: 512 * 512,   hi: 768 * 768,   sortKey: 512 * 512 },
+  { id: '768-1024', label: '768² – 1024²',  lo: 768 * 768,   hi: 1024 * 1024, sortKey: 768 * 768 },
+  { id: '1024-1536',label: '1024² – 1536²', lo: 1024 * 1024, hi: 1536 * 1536, sortKey: 1024 * 1024 },
+  { id: '1536-2048',label: '1536² – 2048²', lo: 1536 * 1536, hi: 2048 * 2048, sortKey: 1536 * 1536 },
+  { id: 'gt-2048',  label: '> 2048²',       lo: 2048 * 2048, hi: Infinity,    sortKey: 2048 * 2048 },
+] as const
 
-const STATUS_COLOR: Record<Job['status'], string> = {
-  pending: 'badge badge-neutral',
-  running: 'badge badge-warn',
-  done: 'badge badge-ok',
-  failed: 'badge badge-err',
-  canceled: 'badge badge-neutral',
+type PxBinId = (typeof PX_BINS)[number]['id']
+type FilterMode = 'all' | PxBinId
+
+function pxBinFor(w: number | null, h: number | null): PxBinId | null {
+  if (w == null || h == null) return null
+  const area = w * h
+  const bin = PX_BINS.find((b) => area >= b.lo && area < b.hi)
+  return bin?.id ?? PX_BINS[PX_BINS.length - 1].id
 }
 
 const FALLBACK_MODEL = '4x-AnimeSharp'
@@ -74,7 +91,6 @@ export default function PreprocessPage() {
   const { t } = useTranslation()
   const { project, reload } = useOutletContext<Ctx>()
   const { toast } = useToast()
-  const { confirm } = useDialog()
 
   const [files, setFiles] = useState<FilesView | null>(null)
   const [status, setStatus] = useState<Status | null>(null)
@@ -114,7 +130,10 @@ export default function PreprocessPage() {
     try {
       const r = await api.getPreprocessStatus(project.id)
       setStatus(r)
-      setLogs(r.log_tail ? r.log_tail.split('\n') : [])
+      // Logs are ephemeral per-session — don't hydrate from log_tail. After
+      // refresh the user only sees a fresh, empty log; SSE appends as the
+      // current job emits. Matches the crop tool's behavior so the two pages
+      // are consistent.
     } catch {
       /* ignore */
     }
@@ -186,6 +205,7 @@ export default function PreprocessPage() {
       out.push({
         name: it.name, productName: `${fileStem(it.name)}.png`,
         status: 'pending', size: it.size,
+        w: it.w, h: it.h,
       })
     }
     for (const p of files.processed) {
@@ -193,23 +213,57 @@ export default function PreprocessPage() {
       out.push({
         name: downloadName, productName: p.name,
         status: 'processed', processed: p, size: p.size,
+        w: p.w, h: p.h,
       })
     }
     out.sort((a, b) => a.name.localeCompare(b.name))
     return out
   }, [files])
 
+  // Per-bin counts — drives both filter chip labels and the "hide empty bins"
+  // logic so users only see chips for bins they actually have images in.
+  const binCounts = useMemo(() => {
+    const m = new Map<PxBinId, number>()
+    for (const r of rows) {
+      const id = pxBinFor(r.w, r.h)
+      if (id) m.set(id, (m.get(id) ?? 0) + 1)
+    }
+    return m
+  }, [rows])
+
   const visibleRows = useMemo(
-    () => rows.filter((r) => filter === 'all' || r.status === filter),
+    () =>
+      rows.filter((r) => {
+        if (filter === 'all') return true
+        return pxBinFor(r.w, r.h) === filter
+      }),
     [rows, filter],
   )
-  const visibleNames = useMemo(() => visibleRows.map((r) => r.name), [visibleRows])
+  // visibleNames must match gridItems' unique keys (see gridItems below) so
+  // shift-range selection stays consistent — multi-crop fan-out produces
+  // processed rows sharing one download `name`, productName disambiguates.
+  const visibleNames = useMemo(
+    () =>
+      visibleRows.map((r) =>
+        r.status === 'processed' ? r.productName : r.name,
+      ),
+    [visibleRows],
+  )
 
   const gridItems = useMemo(
     () =>
       visibleRows.map((r) => ({
-        name: r.name,
-        thumbUrl: api.projectThumbUrl(project.id, r.name),
+        // Grid key — must be unique per row. Multi-crop fan-out produces
+        // multiple processed rows that share the same download `name`; use
+        // productName (= preprocess filename, including _c0/_c1 suffixes) to
+        // disambiguate. Pending rows have unique download names.
+        name: r.status === 'processed' ? r.productName : r.name,
+        // For processed rows, address by preprocess product name (handles
+        // multi-crop fan-out where multiple products share one origin). For
+        // pending rows, still address by download name.
+        thumbUrl: r.status === 'processed'
+          ? api.projectThumbUrl(project.id, r.productName, 'preprocess')
+          : api.projectThumbUrl(project.id, r.name),
         meta:
           r.status === 'processed'
             ? `✓ ${r.processed?.action ?? 'upscale'}`
@@ -218,19 +272,15 @@ export default function PreprocessPage() {
     [visibleRows, project.id, t],
   )
 
-  const { selPending, selProcessed } = useMemo(() => {
+  const selPending = useMemo(() => {
     const byName = new Map(rows.map((r) => [r.name, r]))
-    let p = 0, q = 0
+    let p = 0
     const pNames: string[] = []
-    const qProductNames: string[] = []
     for (const n of sel) {
       const r = byName.get(n)
-      if (!r) continue
-      if (r.status === 'pending') { p++; pNames.push(r.name) }
-      else { q++; qProductNames.push(r.productName) }
+      if (r && r.status === 'pending') { p++; pNames.push(r.name) }
     }
-    return { selPending: { count: p, names: pNames },
-             selProcessed: { count: q, productNames: qProductNames } }
+    return { count: p, names: pNames }
   }, [sel, rows])
 
   // ----- 操作 ---------------------------------------------------------------
@@ -309,27 +359,8 @@ export default function PreprocessPage() {
     }
   }
 
-  const restoreSelected = async () => {
-    if (selProcessed.count === 0) return
-    if (!(await confirm(
-      t('preprocess.confirmRestore', { n: selProcessed.count }),
-      { tone: 'danger', okText: t('preprocess.confirmRestoreOk') },
-    ))) return
-    try {
-      const r = await api.restorePreprocessFiles(project.id, selProcessed.productNames)
-      toast(
-        t('preprocess.restoredToast', { restored: r.restored.length }) +
-          (r.missing.length ? t('preprocess.restoredSkipped', { skipped: r.missing.length }) : ''),
-        'success',
-      )
-      setSel(new Set())
-      setSelAnchor(null)
-      await refreshFiles()
-      void reload()
-    } catch (e) {
-      toast(String(e), 'error')
-    }
-  }
+  // 撤销 (restore) 流程已迁移到「总览」tab (PreprocessOverview)，作为
+  // 跨工具统一入口，避免每个工具页都有自己的撤销按钮。
 
   return (
     <StepShell
@@ -341,6 +372,7 @@ export default function PreprocessPage() {
         <div className="grid gap-3 flex-1 min-h-0" style={{ gridTemplateColumns: '1fr 260px' }}>
           {/* 左栏 */}
           <div className="flex flex-col gap-2 min-h-0 min-w-0">
+            <PreprocessToolsBar current="upscale" projectId={project.id} />
             <OperationPanel
               tileSize={tileSize}
               setTileSize={setTileSize}
@@ -366,8 +398,13 @@ export default function PreprocessPage() {
               }
             />
 
-            {job && (
-              <JobStrip
+            {/* Show JobStrip only when there's a live job OR session has
+                accumulated logs. After a page refresh the historic job may
+                still be present in `status.job` but logs are reset (ephemeral
+                per session) — rendering an empty JobStrip for a stale
+                terminal job is just clutter. */}
+            {job && (isLive || logs.length > 0) && (
+              <PreprocessJobStrip
                 job={job}
                 logs={logs}
                 onCancel={isLive ? cancel : undefined}
@@ -383,10 +420,9 @@ export default function PreprocessPage() {
                 setSelAnchor(null)
                 setPreviewIdx(null)
               }}
+              binCounts={binCounts}
               items={gridItems}
               selected={sel}
-              selPendingCount={selPending.count}
-              selProcessedCount={selProcessed.count}
               onSelect={(name, e) => {
                 const r = applySelection(sel, name, e, visibleNames, selAnchor)
                 setSel(r.next)
@@ -401,8 +437,6 @@ export default function PreprocessPage() {
                 setSel(new Set())
                 setSelAnchor(null)
               }}
-              onRestore={() => void restoreSelected()}
-              filterMode={filter}
             />
           </div>
 
@@ -413,6 +447,7 @@ export default function PreprocessPage() {
             selectedModel={selectedModel}
             tileSize={tileSize}
             processed={files?.processed ?? []}
+            pending={files?.pending ?? []}
             targetEdge={targetEdge}
           />
         </div>
@@ -420,7 +455,9 @@ export default function PreprocessPage() {
 
       {previewIdx !== null && visibleRows[previewIdx] && (
         <ImagePreviewModal
-          src={api.projectThumbUrl(project.id, visibleRows[previewIdx].name, 'download', 1600)}
+          src={visibleRows[previewIdx].status === 'processed'
+            ? api.projectThumbUrl(project.id, visibleRows[previewIdx].productName, 'preprocess', 1600)
+            : api.projectThumbUrl(project.id, visibleRows[previewIdx].name, 'download', 1600)}
           caption={`${visibleRows[previewIdx].name} · ${
             visibleRows[previewIdx].status === 'processed' ? '✓ 已处理' : '⊘ 未处理'
           }`}
@@ -653,27 +690,12 @@ function OperationPanel({
         </button>
       </div>
 
-      {/* 智能流水说明 + 未来 tabs 占位 */}
-      <div className="flex items-center gap-2 mt-1 text-xs text-fg-tertiary flex-wrap">
-        <span className="font-medium text-fg-secondary">{t('preprocess.stageLabel')}</span>
-        <span className="px-1.5 py-0.5 rounded bg-accent-soft text-accent text-xs font-medium">
-          {t('preprocess.stageUpscale')}
-        </span>
-        <span
-          className="px-1.5 py-0.5 rounded bg-overlay opacity-50 cursor-not-allowed"
-          title={t('preprocess.stageCropTitle')}
-        >{t('preprocess.stageCrop')}</span>
-        <span
-          className="px-1.5 py-0.5 rounded bg-overlay opacity-50 cursor-not-allowed"
-          title={t('preprocess.stageInpaintTitle')}
-        >{t('preprocess.stageInpaint')}</span>
-        <span className="flex-1" />
-        {targetEdge !== null && (
-          <span title={t('preprocess.smartHint')}>
-            {t('preprocess.smartHint')}
-          </span>
-        )}
-      </div>
+      {/* 智能流水提示（tools 切换已移到页面顶部 PreprocessToolsBar） */}
+      {targetEdge !== null && (
+        <div className="flex items-center gap-2 mt-1 text-xs text-fg-tertiary">
+          <span title={t('preprocess.smartHint')}>{t('preprocess.smartHint')}</span>
+        </div>
+      )}
     </section>
   )
 }
@@ -686,32 +708,32 @@ function ImagesPanel({
   summary,
   filter,
   setFilter,
+  binCounts,
   items,
   selected,
-  selPendingCount,
-  selProcessedCount,
   onSelect,
   onPreview,
   onSelectAll,
   onClear,
-  onRestore,
-  filterMode,
 }: {
   summary: Status['summary']
   filter: FilterMode
   setFilter: (f: FilterMode) => void
+  binCounts: Map<PxBinId, number>
   items: { name: string; thumbUrl: string; meta?: string }[]
   selected: Set<string>
-  selPendingCount: number
-  selProcessedCount: number
   onSelect: (name: string, e: React.MouseEvent) => void
   onPreview: (name: string) => void
   onSelectAll: () => void
   onClear: () => void
-  onRestore: () => void
-  filterMode: FilterMode
 }) {
   const { t } = useTranslation()
+  // Pixel-bin chips replace the old 全部 / 未处理 / 已处理 filter.
+  // 「未处理 / 已处理」was a workspace concept that doesn't apply to upscale —
+  // unlike crop, upscale has no session state to remember; the meaningful
+  // axis users want to filter by is resolution (which images need upscaling
+  // and which are already large enough). Pixel bins double as a visual link
+  // to the sidebar histogram so users see the same buckets on both sides.
   const chip = (key: FilterMode, label: string, count: number) => (
     <button
       onClick={() => setFilter(key)}
@@ -725,13 +747,9 @@ function ImagesPanel({
       {label} {count}
     </button>
   )
-
-  const emptyHint =
-    filterMode === 'pending'
-      ? t('preprocess.emptyPending')
-      : filterMode === 'processed'
-        ? t('preprocess.emptyProcessed')
-        : t('preprocess.emptyAll')
+  // Only show bin chips that have at least one image — keeps the chip row
+  // tight on small datasets (a 10-image set isn't going to occupy all 6 bins).
+  const nonEmptyBins = PX_BINS.filter((b) => (binCounts.get(b.id) ?? 0) > 0)
 
   return (
     <section className="flex flex-col flex-1 min-h-0 rounded-md border border-subtle bg-surface overflow-hidden">
@@ -742,10 +760,11 @@ function ImagesPanel({
           <span className="text-accent">{t('preprocess.selectedCount', { n: selected.size })}</span>
         )}
         <span className="mx-1 text-dim">·</span>
-        <div className="flex items-center gap-1">
-          {chip('all',       t('preprocess.filterAll'),       summary.download_count)}
-          {chip('pending',   t('preprocess.filterPending'),   summary.pending_count)}
-          {chip('processed', t('preprocess.filterProcessed'), summary.processed_count)}
+        <div className="flex items-center gap-1 flex-wrap">
+          {chip('all', t('preprocess.filterAll'), summary.download_count)}
+          {nonEmptyBins.map((b) =>
+            chip(b.id, b.label, binCounts.get(b.id) ?? 0),
+          )}
         </div>
         <span className="flex-1" />
         <button
@@ -758,20 +777,7 @@ function ImagesPanel({
           disabled={selected.size === 0}
           className="btn btn-ghost btn-sm"
         >{t('common.deselect')}</button>
-        <button
-          onClick={onRestore}
-          disabled={selProcessedCount === 0}
-          className="btn btn-sm bg-err-soft text-err"
-          title={selProcessedCount === 0
-            ? t('preprocess.restoreHintDisabled')
-            : t('preprocess.restoreHint', { n: selProcessedCount })}
-        >{t('preprocess.restoreBtn', { n: selProcessedCount })}</button>
       </header>
-      {selected.size > 0 && selPendingCount > 0 && selProcessedCount > 0 && (
-        <div className="px-2.5 py-1 bg-warn-soft text-warn text-xs">
-          {t('preprocess.mixedSelectionWarning', { pending: selPendingCount, processed: selProcessedCount })}
-        </div>
-      )}
       <div className="flex-1 min-h-0 overflow-y-auto p-2">
         <ImageGrid
           items={items}
@@ -781,60 +787,10 @@ function ImagesPanel({
           onPreview={onPreview}
           clickMode="activate"
           ariaLabel="preprocess-grid"
-          emptyHint={emptyHint}
+          emptyHint={t('preprocess.emptyForBin')}
         />
       </div>
     </section>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// JobStrip
-// ---------------------------------------------------------------------------
-
-function JobStrip({
-  job,
-  logs,
-  onCancel,
-}: {
-  job: Job
-  logs: string[]
-  onCancel?: () => void
-}) {
-  const { t } = useTranslation()
-  const elapsed =
-    job.started_at && (job.finished_at ?? Date.now() / 1000) - job.started_at
-  const isLive = job.status === 'running' || job.status === 'pending'
-  const lastLine = logs[logs.length - 1] ?? ''
-  return (
-    <details
-      open={isLive}
-      className="group rounded-md border border-subtle bg-surface overflow-hidden shrink-0"
-    >
-      <summary className="cursor-pointer flex items-center gap-2 list-none px-2.5 py-1.5 text-sm select-none">
-        <span className="inline-block transition-transform group-open:rotate-90 text-fg-tertiary w-3">▸</span>
-        <span className={STATUS_COLOR[job.status]}>{job.status}</span>
-        <span className="mono text-fg-secondary">job #{job.id}</span>
-        {elapsed && elapsed > 0 && (
-          <span className="text-fg-tertiary">· {Math.round(elapsed)}s</span>
-        )}
-        <span className="mono truncate flex-1 min-w-0 text-fg-secondary text-xs">
-          {lastLine}
-        </span>
-        {isLive && onCancel && (
-          <button
-            onClick={(e) => {
-              e.preventDefault()
-              onCancel()
-            }}
-            className="btn btn-ghost btn-sm text-err"
-          >{t('common.cancel')}</button>
-        )}
-      </summary>
-      <pre className="px-3 py-2 text-xs font-mono text-fg-secondary bg-sunken max-h-[224px] overflow-auto whitespace-pre-wrap border-t border-subtle m-0">
-        {logs.length === 0 ? t('jobProgress.waitingLogs') : logs.slice(-1000).join('\n')}
-      </pre>
-    </details>
   )
 }
 
@@ -848,6 +804,7 @@ function PreprocessSidebar({
   selectedModel,
   tileSize,
   processed,
+  pending,
   targetEdge,
 }: {
   summary: Status['summary']
@@ -855,6 +812,7 @@ function PreprocessSidebar({
   selectedModel: string
   tileSize: number
   processed: PreprocessedItem[]
+  pending: PreprocessPendingItem[]
   targetEdge: number | null
 }) {
   const { t } = useTranslation()
@@ -862,15 +820,24 @@ function PreprocessSidebar({
   const pct = download_count > 0 ? Math.round((processed_count / download_count) * 100) : 0
   const estVramMB = Math.round((tileSize * tileSize * 16 * 2 * 7) / (1024 * 1024))
 
-  const actionStats = useMemo(() => {
-    const stats = { resize: 0, upscale: 0, 'upscale+resize': 0, unknown: 0 }
-    for (const it of processed) {
-      const a = it.action ?? 'unknown'
-      if (a in stats) (stats as Record<string, number>)[a]++
-      else stats.unknown++
+  // PX_BINS / pxBinFor are defined at module level so the grid filter chips
+  // (above) and this histogram share the exact same bin definitions.
+  //
+  // Histogram counts BOTH processed and pending — global view of the
+  // dataset's resolution distribution, not just the slice already upscaled
+  // (200 images with 6 upscaled would otherwise show a histogram of 6).
+  const pixelHist = useMemo(() => {
+    const counts = new Map<PxBinId, number>(PX_BINS.map((b) => [b.id, 0]))
+    const visit = (w: number | null, h: number | null) => {
+      const id = pxBinFor(w, h)
+      if (id) counts.set(id, (counts.get(id) ?? 0) + 1)
     }
-    return stats
-  }, [processed])
+    for (const it of processed) visit(it.w, it.h)
+    for (const it of pending) visit(it.w, it.h)
+    return PX_BINS.map((b) => ({ ...b, n: counts.get(b.id) ?? 0 }))
+      .filter((b) => b.n > 0)
+  }, [processed, pending])
+  const pixelHistMax = Math.max(1, ...pixelHist.map((b) => b.n))
 
   const processedBytes = useMemo(
     () => processed.reduce((s, it) => s + (it.size ?? 0), 0),
@@ -902,31 +869,6 @@ function PreprocessSidebar({
         </div>
         <p className="text-xs text-fg-tertiary mt-1 text-right">{pct}%</p>
       </div>
-
-      {processed.length > 0 && (
-        <div className="rounded-md border border-subtle bg-surface px-3 py-2.5">
-          <h3 className="caption flex items-center gap-1.5">
-            <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-accent" />
-            {t('preprocess.sidebarActionDist')}
-          </h3>
-          {actionStats.resize > 0 && (
-            <StatRow label={t('preprocess.actionResize')} value={t('preprocess.sidebarNImages', { n: actionStats.resize })} accent="ok" />
-          )}
-          {actionStats['upscale+resize'] > 0 && (
-            <StatRow label={t('preprocess.actionUpscaleResize')} value={t('preprocess.sidebarNImages', { n: actionStats['upscale+resize'] })} accent="warn" />
-          )}
-          {actionStats.upscale > 0 && (
-            <StatRow label={t('preprocess.actionUpscale')} value={t('preprocess.sidebarNImages', { n: actionStats.upscale })} />
-          )}
-          {actionStats.unknown > 0 && (
-            <StatRow label={t('preprocess.actionUnknown')} value={t('preprocess.sidebarNImages', { n: actionStats.unknown })} />
-          )}
-          <p className="text-[11px] text-fg-tertiary mt-1.5 leading-snug">
-            {t('preprocess.actionNote')}
-            {targetEdge === null && t('preprocess.actionNoteOff')}
-          </p>
-        </div>
-      )}
 
       <div className="rounded-md border border-subtle bg-surface px-3 py-2.5">
         <h3 className="caption flex items-center gap-1.5">
@@ -961,6 +903,26 @@ function PreprocessSidebar({
           {t('preprocess.vramNote')}
         </p>
       </div>
+
+      {/* 像素分布 — 按总像素面积分桶映射到常见 LoRA 训练分辨率，方便看
+          预处理后的数据集分布是否落在目标训练分辨率上。 */}
+      {pixelHist.length > 0 && (
+        <div className="rounded-md border border-subtle bg-surface px-3 py-2.5">
+          <h3 className="caption flex items-center gap-1.5">
+            <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-accent" />
+            {t('preprocess.sidebarPxDist')}
+          </h3>
+          <div className="flex flex-col gap-1 mt-1.5">
+            {pixelHist.map((b) => (
+              <div key={b.id} className="grid items-center gap-1.5 text-[11px]" style={{ gridTemplateColumns: '96px 1fr 30px' }}>
+                <span className="text-fg-tertiary font-mono">{b.label}</span>
+                <div className="ar-bar"><div className="ar-bar-fill" style={{ width: `${(b.n / pixelHistMax) * 100}%` }} /></div>
+                <span className="font-mono text-right text-fg-secondary">{b.n}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -9,7 +9,7 @@
 | 0001 | [LoKr 适配器走 lycoris-lora 而不切 sd-scripts](0001-lokr-via-lycoris-lora.md) | Accepted | 2025 |
 | 0002 | [Webui 内自更新（flag + shell wrapper loop）](0002-webui-self-update.md) | Proposed | 2026-05-12 |
 | 0003 | [anima_train.py 模块化重构（plugin 边界 + adapter hook protocol）](0003-anima-train-refactor.md) | Proposed | 2026-05-14 |
-| 0004 | [预处理状态用单 manifest 替代「双 bucket + per-image sidecar」](0004-preprocess-manifest.md) | Accepted | 2026-05-15 |
+| 0004 | [预处理状态用单 manifest 替代「双 bucket + per-image sidecar」](0004-preprocess-manifest.md) | Accepted (amended 2026-05-21) | 2026-05-15 |
 | 0005 | [更新通道作为用户视图偏好，与 git 工作树状态解耦](0005-update-channel-as-preference.md) | Accepted | 2026-05-16 |
 | 0006 | [Queue 任务暂停 / 恢复 + 队列挂起 / 恢复调度](0006-queue-pause-resume.md) | Accepted | 2026-05-18 |
 

@@ -8,12 +8,14 @@ import {
   type Version,
 } from '../../../api/client'
 import BulkActionBar from '../../../components/BulkActionBar'
+import { useDialog } from '../../../components/Dialog'
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import SaveBar from '../../../components/SaveBar'
 import StepShell from '../../../components/StepShell'
 import TagEditor from '../../../components/TagEditor'
 import TagStatsPanel from '../../../components/TagStatsPanel'
 import { useToast } from '../../../components/Toast'
+import { useEventStream } from '../../../lib/useEventStream'
 
 interface Ctx {
   project: ProjectDetail
@@ -39,6 +41,7 @@ export default function TagEditPage() {
   const { t } = useTranslation()
   const { project, activeVersion, reload } = useOutletContext<Ctx>()
   const { toast } = useToast()
+  const { confirm } = useDialog()
   const versionId = activeVersion?.id ?? null
 
   const [cache, setCache] = useState<Map<string, string[]>>(new Map())
@@ -49,7 +52,10 @@ export default function TagEditPage() {
   const [activeKey, setActiveKey] = useState<string>('')
   const [sel, setSel] = useState<Set<string>>(new Set())
   const [anchor, setAnchor] = useState<string | null>(null)
-  const [filterTag, setFilterTag] = useState<string>('')
+  // '' = 全部；否则限定到该 folder（1_data / 2_data ...）。命名特意区分于下面
+  // editing 时用的 `activeFolder`（那个是当前编辑图所在 folder，纯展示）。
+  const [folderFilter, setFolderFilter] = useState<string>('')
+  const [exporting, setExporting] = useState(false)
 
   const reloadCache = useCallback(async () => {
     if (versionId == null) return
@@ -70,6 +76,43 @@ export default function TagEditPage() {
 
   useEffect(() => { void reloadCache() }, [reloadCache])
 
+  useEventStream((evt) => {
+    if (
+      evt.type === 'version_state_changed' &&
+      versionId != null &&
+      evt.version_id === versionId
+    ) {
+      void reloadCache(); void reload()
+    } else if (
+      evt.type === 'job_state_changed' &&
+      evt.project_id === project.id &&
+      (evt.status === 'done' || evt.status === 'failed')
+    ) {
+      void reloadCache(); void reload()
+    } else if (
+      // train.zip 打包结果 SSE —— <a> 直链发完后端 publish ready/_failed,这里清
+      // app-side "打包中..." 状态 + 失败弹 toast。和 Layout.tsx 的导出共用同一对事件,
+      // 两个页面同时打开时各自只响应 project_id+version_id 匹配的那一条。
+      (evt.type === 'version_train_zip_ready' || evt.type === 'version_train_zip_failed') &&
+      evt.project_id === project.id &&
+      versionId != null &&
+      evt.version_id === versionId
+    ) {
+      setExporting(false)
+      if (evt.type === 'version_train_zip_failed') {
+        const err = typeof evt.error === 'string' ? evt.error : '?'
+        toast(t('tagEdit.downloadFailed', { error: err }), 'error')
+      }
+    }
+  })
+
+  // 兜底：SSE 事件丢失时 60s 强制清 exporting,不让按钮卡死。
+  useEffect(() => {
+    if (!exporting) return
+    const tid = window.setTimeout(() => setExporting(false), 60_000)
+    return () => window.clearTimeout(tid)
+  }, [exporting])
+
   const dirtyKeys = useMemo(() => {
     const out: string[] = []
     for (const k of keys) {
@@ -88,11 +131,23 @@ export default function TagEditPage() {
     return () => window.removeEventListener('beforeunload', handler)
   }, [dirty])
 
+  // folder 列表 + 每个 folder 的原始张数（不受 filterTag 影响，让 tab 数字稳定
+  // 不抖动 — 同 Preprocess chip 风格）。单 folder 项目时 UI 不显示 tabs。
+  const folderNames = useMemo(() => {
+    const set = new Set<string>()
+    for (const m of meta.values()) set.add(m.folder)
+    return Array.from(set).sort()
+  }, [meta])
+  const folderCounts = useMemo(() => {
+    const c = new Map<string, number>()
+    for (const m of meta.values()) c.set(m.folder, (c.get(m.folder) ?? 0) + 1)
+    return c
+  }, [meta])
+
   const filteredKeys = useMemo(() => {
-    const f = filterTag.trim()
-    if (!f) return keys
-    return keys.filter((k) => (cache.get(k) ?? []).includes(f))
-  }, [keys, cache, filterTag])
+    if (!folderFilter) return keys
+    return keys.filter((k) => meta.get(k)?.folder === folderFilter)
+  }, [keys, meta, folderFilter])
 
   const captionItems = useMemo(
     () =>
@@ -167,6 +222,58 @@ export default function TagEditPage() {
     })
   }
 
+  // 标签分布行内 × 触发：从当前选中图删除该 tag。pre-compute updates 拿真实
+  // 影响数 → confirm modal 显示精确张数 → 用户点确认后才 apply。
+  const removeTagFromSelected = async (tag: string) => {
+    if (selectedKeys.length === 0) return
+    const updates = new Map<string, string[]>()
+    for (const k of selectedKeys) {
+      const cur = cache.get(k) ?? []
+      if (!cur.includes(tag)) continue
+      updates.set(k, cur.filter((tt) => tt !== tag))
+    }
+    if (updates.size === 0) return
+    const ok = await confirm(
+      t('bulkAction.confirmMessage', {
+        op: t('bulkAction.opLabelRemove', { tags: tag }),
+        n: updates.size,
+      }),
+      { tone: 'danger', title: t('bulkAction.confirmTitle') },
+    )
+    if (!ok) return
+    applyBulkUpdates(updates)
+    toast(t('tagEdit.removedFromN', { tag, n: updates.size }), 'success')
+  }
+
+  // 标签分布行内 ✎ inline edit 提交：把选中图里的 oldTag 替换成 newTag，去重。
+  const replaceTagInSelected = async (oldTag: string, newTag: string) => {
+    if (selectedKeys.length === 0 || !newTag || newTag === oldTag) return
+    const updates = new Map<string, string[]>()
+    for (const k of selectedKeys) {
+      const cur = cache.get(k) ?? []
+      if (!cur.includes(oldTag)) continue
+      const next: string[] = []
+      const seen = new Set<string>()
+      for (const tt of cur) {
+        const out = tt === oldTag ? newTag : tt
+        if (seen.has(out)) continue
+        seen.add(out); next.push(out)
+      }
+      updates.set(k, next)
+    }
+    if (updates.size === 0) return
+    const ok = await confirm(
+      t('bulkAction.confirmMessage', {
+        op: t('bulkAction.opLabelReplace', { from: oldTag, to: newTag }),
+        n: updates.size,
+      }),
+      { tone: 'danger', title: t('bulkAction.confirmTitle') },
+    )
+    if (!ok) return
+    applyBulkUpdates(updates)
+    toast(t('tagEdit.replacedInN', { from: oldTag, to: newTag, n: updates.size }), 'success')
+  }
+
   const onSave = async () => {
     if (!dirty || versionId == null) return
     const items: CommitItem[] = dirtyKeys.map((k) => {
@@ -186,8 +293,26 @@ export default function TagEditPage() {
     setActiveKey('')
     setSel(new Set())
     setAnchor(null)
-    setFilterTag('')
+    setFolderFilter('')
     await reload()
+  }
+
+  const downloadTrainZip = () => {
+    if (dirty) {
+      toast(t('tagEdit.saveThenDownloadToast'), 'error')
+      return
+    }
+    if (exporting) return
+    setExporting(true)
+    // <a download> 直链 —— 浏览器原生接管下载（进度条 / 暂停 / 切 tab 不中断）。
+    // app-side "打包中..." 由 version_train_zip_ready/_failed SSE 清。
+    const filename = `${project.slug}-${activeVersion.label}.train.zip`
+    const a = document.createElement('a')
+    a.href = api.versionTrainZipUrl(project.id, activeVersion.id)
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
   }
 
   const stats = activeVersion.stats
@@ -220,6 +345,14 @@ export default function TagEditPage() {
               {t('tagEdit.taggedBadge', { tagged: taggedTotal, total: trainTotal })}
             </span>
           )}
+          <button
+            className="btn btn-primary btn-sm"
+            disabled={exporting || dirty || trainTotal === 0}
+            onClick={downloadTrainZip}
+            title={dirty ? t('tagEdit.saveThenDownload') : t('tagEdit.downloadTitle')}
+          >
+            {exporting ? t('tagEdit.zipping') : t('tagEdit.downloadZip')}
+          </button>
           <SaveBar
             pid={project.id}
             vid={activeVersion.id}
@@ -236,6 +369,30 @@ export default function TagEditPage() {
           className="rounded-md border border-subtle bg-surface flex flex-col min-w-0 overflow-hidden"
           style={{ flex: isEditing ? 1.5 : 1 }}
         >
+          {folderNames.length > 1 && (
+            <div className="px-2 pt-2 pb-1.5 flex items-center gap-1 flex-wrap shrink-0 border-b border-subtle">
+              {['', ...folderNames].map((f) => {
+                const isActive = f === folderFilter
+                const label = f || t('common.all')
+                const count = f ? folderCounts.get(f) ?? 0 : keys.length
+                return (
+                  <button
+                    key={f || '__all__'}
+                    type="button"
+                    onClick={() => setFolderFilter(f)}
+                    className={
+                      'px-2 py-0.5 rounded-full text-xs font-medium transition-colors ' +
+                      (isActive
+                        ? 'bg-accent text-white'
+                        : 'bg-overlay text-fg-secondary hover:bg-accent-soft')
+                    }
+                  >
+                    {label} {count}
+                  </button>
+                )
+              })}
+            </div>
+          )}
           <div className="flex-1 overflow-y-auto p-2">
             <ImageGrid
               items={captionItems}
@@ -245,7 +402,11 @@ export default function TagEditPage() {
               onActivate={setActiveKey}
               clickMode="activate"
               ariaLabel="tag-edit-grid"
-              emptyHint={filterTag ? t('tagEdit.noImagesWithTag', { tag: filterTag }) : t('tagEdit.noImagesHint')}
+              emptyHint={
+                folderFilter
+                  ? t('tagEdit.noImagesInFolder', { folder: folderFilter })
+                  : t('tagEdit.noImagesHint')
+              }
             />
           </div>
         </section>
@@ -270,23 +431,11 @@ export default function TagEditPage() {
           </section>
         )}
 
-        <div className="flex flex-col gap-2.5 min-w-0" style={{ flex: '0 0 32%' }}>
-          <BulkActionBar
-            cache={cache}
-            selectedKeys={selectedKeys}
-            onApply={applyBulkUpdates}
-            tagSuggestions={tagSuggestions}
-            defaultScope="selected"
-            onClearSelection={() => setSel(new Set())}
-            filterTag={filterTag}
-            onFilterTagChange={setFilterTag}
-            filteredKeys={filteredKeys}
-            totalCount={keys.length}
-            filteredCount={filteredKeys.length}
-            onSelectAll={() => setSel(new Set(filteredKeys))}
-          />
-
+        <div className="flex flex-col gap-2.5 min-w-0 flex-1 min-h-0" style={{ flex: '0 0 32%' }}>
           {isEditing ? (
+            // editing 时：bulk + 标签分布 都和"调单图标签"无关，整个侧栏让位给
+            // TagEditor。退出 editing 后自动回来，sel / folderFilter 等 state
+            // 保留（隐藏的是 UI 不是状态）。
             <section className="flex-1 rounded-md border border-subtle bg-surface p-2.5 flex flex-col gap-2 min-h-0 overflow-hidden">
               <div className="flex items-center gap-1.5 shrink-0">
                 <button onClick={() => navActive(-1)} disabled={navKeys.length === 0} aria-label={t('tagEdit.prevImage')} className="btn btn-secondary btn-sm">◀</button>
@@ -299,11 +448,27 @@ export default function TagEditPage() {
               <TagEditor tags={activeTags} onChange={updateActiveTags} />
             </section>
           ) : (
-            <TagStatsPanel
-              cache={cache}
-              selectedKeys={selectedKeys}
-              onPickTag={handlePickTag}
-            />
+            // BulkActionBar + TagStatsPanel 合到同一个外框 section（"标签编辑
+            // 工作区"），视觉上是一个面板：上半是 batch 输入区，下半是标签分布
+            // 兼快捷单 tag 操作区。两者共享"操作 = 给当前选中图做"的语义。
+            <section className="flex-1 min-h-0 rounded-md border border-subtle bg-surface flex flex-col overflow-hidden">
+              <BulkActionBar
+                cache={cache}
+                selectedKeys={selectedKeys}
+                onApply={applyBulkUpdates}
+                tagSuggestions={tagSuggestions}
+                onClearSelection={() => setSel(new Set())}
+                onSelectAll={() => setSel(new Set(filteredKeys))}
+                totalCount={filteredKeys.length}
+              />
+              <TagStatsPanel
+                cache={cache}
+                selectedKeys={selectedKeys}
+                onPickTag={handlePickTag}
+                onRemoveTag={removeTagFromSelected}
+                onReplaceTag={replaceTagInSelected}
+              />
+            </section>
           )}
         </div>
       </div>

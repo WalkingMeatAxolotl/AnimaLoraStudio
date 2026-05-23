@@ -313,7 +313,7 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
   const lrSparkline = lrHistory.slice(-60).map((l) => l.lr)
 
   return (
-    <div className="flex flex-col gap-3.5 p-4 overflow-y-auto">
+    <div className="flex flex-col gap-3.5 p-4 h-full overflow-y-auto">
       {/* Connection status + progress */}
       <div className="flex items-center gap-2.5 text-xs text-fg-tertiary font-mono shrink-0">
         <span className={`w-[7px] h-[7px] rounded-full inline-block shrink-0 ${connected ? 'bg-ok animate-pulse' : 'bg-err'}`} />

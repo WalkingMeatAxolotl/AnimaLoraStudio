@@ -1461,6 +1461,25 @@ class PreprocessRestoreRequest(BaseModel):
 PreprocessDeleteRequest = PreprocessRestoreRequest
 
 
+class CropRect(BaseModel):
+    """归一化裁剪矩形 [0..1]^4。x/y = 左上角，w/h = 宽高。"""
+    x: float
+    y: float
+    w: float
+    h: float
+    label: Optional[str] = None
+
+
+class PreprocessCropRequest(BaseModel):
+    """裁剪 job 输入：源文件名 → 一个或多个归一化矩形。
+
+    源文件名为 preprocess/ 下当前文件名（或 download/ 文件名兜底，若 preprocess/
+    没对应）。每个矩形产出一张 PNG：N=1 覆盖 stem.png；N>1 输出 stem_c0.png /
+    stem_c1.png / ... 并删除原 stem.png。
+    """
+    crops: dict[str, list[CropRect]]
+
+
 @app.post("/api/projects/{pid}/preprocess/start")
 def start_preprocess(pid: int, body: PreprocessStartRequest) -> dict[str, Any]:
     """开始预处理 job（当前只放大）。
@@ -1555,6 +1574,74 @@ def list_preprocess_files(pid: int) -> dict[str, Any]:
         "pending": preprocess_svc.list_pending(p),
         "summary": preprocess_svc.summary(p),
     }
+
+
+@app.get("/api/projects/{pid}/preprocess/crop/workspace")
+def list_crop_workspace(pid: int) -> dict[str, Any]:
+    """裁剪页工作集：返回所有可裁剪的图 + 像素尺寸。
+
+    包含两类：
+    - preprocess/ 里已处理的图（origin 指 download/ 原图）
+    - download/ 里未处理的图（裁剪页把"未放大"图当 1× pass-through）
+
+    返回 `{images: [{name, source, w, h, mtime, size, processed}, ...]}`。
+    """
+    with db.connection_for() as conn:
+        p = projects.get_project(conn, pid)
+    if not p:
+        raise HTTPException(404, f"项目不存在: id={pid}")
+    return {"images": preprocess_svc.list_crop_workspace(p)}
+
+
+@app.post("/api/projects/{pid}/preprocess/crop")
+def start_preprocess_crop(
+    pid: int, body: PreprocessCropRequest
+) -> dict[str, Any]:
+    """开始裁剪 job。
+
+    `crops`: `{源文件名: [{x,y,w,h,label?}], ...}`，每条 rect 归一化 [0..1]。
+    源文件名为 preprocess/ 下当前文件名（worker 兜底 download/）。
+
+    返回新建的 job 行。worker 切 PNG + 更新 manifest（多裁剪走 fan-out 命名
+    `{stem}_c{n}.png` 并删原 `{stem}.png`）。详见 docs/design/preprocess-crop-design.md。
+    """
+    if not body.crops:
+        raise HTTPException(400, "crops 不能为空")
+    with db.connection_for() as conn:
+        if not projects.get_project(conn, pid):
+            raise HTTPException(404, f"项目不存在: id={pid}")
+        # Pydantic 模型转成 dict 喂业务层（业务层会再做一次校验 + clamp）
+        crops_payload: dict[str, list[dict[str, Any]]] = {
+            name: [r.model_dump() for r in rects]
+            for name, rects in body.crops.items()
+        }
+        try:
+            job = preprocess_svc.start_crop_job(
+                conn, project_id=pid, crops=crops_payload
+            )
+        except preprocess_svc.PreprocessError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        p = projects.advance_stage(conn, pid, "preprocessing")
+    _publish_job_state(job)
+    _publish_project_state(p)
+    return job
+
+
+@app.post("/api/projects/{pid}/preprocess/files/reset")
+def reset_preprocess_files(pid: int) -> dict[str, Any]:
+    """整项目预处理状态归零：删 manifest 所有 entry + 删 preprocess/ 所有 PNG。
+
+    工具栏「总览」tab 的「撤销全部」走这个；下游 resolver 回看 download/ 原图。
+    `preprocess_manifest.clear_all` 已存在；这里只是 HTTP 入口 + 项目存在校验。
+    """
+    with db.connection_for() as conn:
+        p = projects.get_project(conn, pid)
+    if not p:
+        raise HTTPException(404, f"项目不存在: id={pid}")
+    pdir = projects.project_dir(p["id"], p["slug"])
+    preprocess_manifest.clear_all(pdir)
+    _publish_project_state(p)
+    return {"ok": True}
 
 
 @app.post("/api/projects/{pid}/preprocess/files/restore")
@@ -1709,33 +1796,48 @@ def project_thumb(
 ) -> FileResponse:
     """缩略图：默认 256px JPEG（缓存）；size=0 → 原图。
 
-    `name` 是 download/ 下的**原始文件名**。后端通过
-    `preprocess_manifest.resolve()` 决定实际字节路径（见 ADR 0004）：
-      - 未处理 → download/{name}
-      - 已处理 → preprocess/{stem}.png（用户看到的是"升级后"的图，但 URL 不变）
-
-    前端**不需要**知道有没有预处理过——这个端点已经吃下了差异。
+    两种 bucket：
+      - `bucket=download`（默认）：`name` 是 download/ 下的原始文件名。
+        后端通过 `preprocess_manifest.resolve_origin()` 决定实际字节路径：
+        未处理 → download/{name}，已处理 → preprocess/ 下第一个 origin 匹配
+        的派生。前端"按 download 名"调用时不需要感知预处理。
+      - `bucket=preprocess`：`name` 是 preprocess/ 下的**实际产物文件名**
+        （含 multi-crop 派生的 _c0 / _c1 后缀）。直接按文件名取，**不走**
+        resolve_origin —— multi-crop 后多个产物共享同一 origin，按 origin
+        永远落到 [0] 是 bug。裁剪 / 总览页应该走这条来精确寻址。
 
     缓存路径：`studio_data/thumb_cache/{sha1(src+mtime+size)}.jpg`。
     源文件 mtime 变化会自动 invalidate（hash 变）。
     """
-    if bucket != "download":
-        raise HTTPException(400, "PP2 仅支持 bucket=download")
+    if bucket not in ("download", "preprocess"):
+        raise HTTPException(400, f"unknown bucket: {bucket}")
     with db.connection_for() as conn:
         p = projects.get_project(conn, pid)
     if not p:
         raise HTTPException(404, f"项目不存在: id={pid}")
     pdir = projects.project_dir(p["id"], p["slug"])
-    # path traversal 校验（safe_join 对 download 路径，校验文件名安全性）
-    _safe_join_or_400(pdir / "download", name)
-    # ADR 0004：resolve 决定真路径
     preprocess_manifest.ensure_manifest(pdir)
-    product_name = Path(name).stem + ".png"
-    entry = preprocess_manifest.get_entry(pdir, product_name)
-    if entry and entry.get("kind") == "processed":
-        f = pdir / "preprocess" / product_name
+
+    if bucket == "preprocess":
+        # Direct addressing — no resolve. Path traversal guard against the
+        # actual preprocess/ dir (any filename including _c0/_c1 derivatives).
+        _safe_join_or_400(pdir / "preprocess", name)
+        f = pdir / "preprocess" / name
     else:
-        f = pdir / "download" / name
+        # bucket=download — historical behavior: address by download name,
+        # resolve to first preprocess product if any (1:1 / multi-crop cases).
+        _safe_join_or_400(pdir / "download", name)
+        candidates = preprocess_manifest.resolve_origin(pdir, name)
+        f = candidates[0] if candidates else (pdir / "download" / name)
+        # Curation passes multi-crop derivative names (X_c0.png) through this
+        # endpoint with bucket=download. resolve_origin only matches by origin,
+        # not by entry key, so derivatives miss → f points at a non-existent
+        # download/X_c0.png. Fall back: if the name IS a preprocess entry key,
+        # serve preprocess/{name} directly. Filename was already safety-checked
+        # against download/, same validation applies to preprocess/.
+        if not f.exists() and preprocess_manifest.get_entry(pdir, name) is not None:
+            f = pdir / "preprocess" / name
+
     if not f.exists() or f.suffix.lower() not in datasets.IMAGE_EXTS:
         logger.info("thumb 404: pid=%s bucket=%s name=%s -> %s", pid, bucket, name, f)
         raise HTTPException(404)

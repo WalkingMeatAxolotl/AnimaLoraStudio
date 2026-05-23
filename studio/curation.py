@@ -100,14 +100,57 @@ def _list_image_entries(d: Path) -> list[dict[str, Any]]:
 
 
 def list_download(conn, project_id: int) -> list[dict[str, Any]]:
-    """download/ 里的所有图（按 download 文件名列出）。
+    """筛选页左侧候选列表 = 预处理后可独立勾选的所有图。
 
-    ADR 0004：下游通过 `preprocess_manifest.resolve(project_dir, name)` 拿实际
-    字节路径——前端**不需要**知道有没有预处理；URL 永远是项目缩略图端点，
-    由后端统一解析。
+    历史上这就是 `download/` 的 ls，每张原图一行；ADR 0004 之后引入了"已处理 →
+    preprocess/{stem}.png"的隐式映射，但仍维持 1:1 行（前端不感知差异）。
+
+    Multi-crop fan-out（一张原图 → N 张 `X_c0.png` / `X_c1.png` ...）打破了 1:1
+    —— 用户期望在筛选里看到 N 行可单独勾选 / 单独丢弃，所以这里**展开派生**：
+
+      - download/X.jpg 在 manifest 里有 origin=X.jpg 的 entries → 列出这些
+        preprocess 派生文件名（含 _c0/_c1 等后缀），mtime 取 preprocess/ 副本
+      - download/X.jpg 没 entries → 列出 X.jpg 自身（隐式 original）
+      - manifest 里有 origin 但 download 原图已被删 → orphan，不列出（curation
+        阶段无法重抓，UI 不该展示死链）
+
+    返回的 name 字段对 derived 行是 preprocess 产物名，对 original 行是 download
+    文件名。`copy_to_train` 同样接受两种 name；resolve 在那一侧处理。
     """
     p, pdir = _project_dir(conn, project_id)
-    return _list_image_entries(pdir / "download")
+    download_dir = pdir / "download"
+    preprocess_manifest.ensure_manifest(pdir)
+    processed = preprocess_manifest.all_processed(pdir)
+
+    # origin → [preprocess names...]
+    by_origin: dict[str, list[str]] = {}
+    for name, entry in processed.items():
+        origin = preprocess_manifest.entry_origin(entry, name)
+        by_origin.setdefault(origin, []).append(name)
+
+    entries: list[dict[str, Any]] = []
+    if download_dir.exists():
+        for f in sorted(download_dir.iterdir()):
+            if not f.is_file() or f.suffix.lower() not in IMAGE_EXTS:
+                continue
+            derivatives = by_origin.get(f.name)
+            if derivatives:
+                # Expand each preprocess derivative as its own row
+                for pname in sorted(derivatives):
+                    pp = pdir / "preprocess" / pname
+                    try:
+                        mtime = pp.stat().st_mtime
+                    except OSError:
+                        continue
+                    entries.append({"name": pname, "mtime": mtime})
+            else:
+                try:
+                    mtime = f.stat().st_mtime
+                except OSError:
+                    continue
+                entries.append({"name": f.name, "mtime": mtime})
+    entries.sort(key=lambda e: e["name"])
+    return entries
 
 
 def list_train(
@@ -161,16 +204,17 @@ def copy_to_train(
     files: list[str],
     dest_folder: str,
 ) -> dict[str, list[str]]:
-    """从 download/ 复制选中文件到 train/{dest_folder}/，已存在跳过。
+    """从工作集复制选中文件到 train/{dest_folder}/，已存在跳过。
 
-    每个文件按 `preprocess_manifest` 解析实际源：
-    - 未处理 → 复制 download/{name}（原 bytes）
-    - 已处理 → 复制 preprocess/{stem}.png（升级后的 bytes），**但 train/ 下
-      仍保留原始 download 文件名**——下游 trainer / metadata 用同名匹配
+    `files` 里每个 name 可能是两种：
+      1. **preprocess 派生名**（如 `X.png` 单 crop 或 `X_c0.png` multi-crop）—
+         前端 `list_download` 把派生展开过的行选中后传过来。manifest 有 entry
+         → 直接复制 `preprocess/{name}` 到 `train/{name}`。
+      2. **download 原图名**（如 `Y.jpg`）— 未处理的图。manifest 无 entry →
+         复制 `download/{name}` 到 `train/{name}`。
 
-    若目标文件夹不存在自动创建；同名 .txt / .json 一并复制（best-effort，
-    metadata 复制失败仅日志，不报错）。metadata 始终从 download 目录拿
-    （标签文件不会被预处理改写）。
+    metadata（`.txt` / `.json`）始终从 download 目录拿（标签不会被预处理改写）：
+    多 crop 派生共享同一份原图 caption，复制到 train 下目标文件的 stem 上。
     """
     _validate_folder(dest_folder)
     p, _, train = _version_train_dir(conn, project_id, version_id)
@@ -185,28 +229,33 @@ def copy_to_train(
     missing: list[str] = []
     for name in files:
         _validate_filename(name)
-        # 实际 bytes 路径：可能是 download/ 或 preprocess/{stem}.png
-        product_name = Path(name).stem + ".png"
-        entry = preprocess_manifest.get_entry(pdir, product_name)
-        if entry and entry.get("kind") == "processed":
-            src = pdir / "preprocess" / product_name
+        entry = preprocess_manifest.get_entry(pdir, name)
+        if entry is not None:
+            # preprocess 派生：bytes 在 preprocess/，metadata 在 download/{origin}.txt
+            src = pdir / "preprocess" / name
+            meta_stem = Path(
+                preprocess_manifest.entry_origin(entry, name)
+            ).stem
         else:
+            # 未处理：bytes + metadata 都在 download/
             src = download_dir / name
+            meta_stem = Path(name).stem
+
         if not src.exists():
             missing.append(name)
             continue
-        # train 下文件名 = download 名（即便实际 bytes 来自 preprocess/{stem}.png）
         dst = dst_dir / name
         if dst.exists():
             skipped.append(name)
             continue
         shutil.copy2(src, dst)
-        # metadata 永远从 download/ 拿（标签不会被预处理改写）
+        # metadata 按 download/{meta_stem}.{ext} 找，复制到 train/{dst.stem}.{ext}
+        dst_stem = Path(name).stem
         for ext in _META_EXTS:
-            sm = (download_dir / name).with_suffix(ext)
+            sm = download_dir / f"{meta_stem}{ext}"
             if sm.exists():
                 try:
-                    shutil.copy2(sm, dst_dir / sm.name)
+                    shutil.copy2(sm, dst_dir / f"{dst_stem}{ext}")
                 except OSError:
                     pass
         copied.append(name)

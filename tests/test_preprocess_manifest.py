@@ -42,11 +42,10 @@ def test_load_invalid_shape_returns_empty(project_dir: Path) -> None:
 
 
 def test_atomic_write_overwrites(project_dir: Path) -> None:
-    pm.add_processed(project_dir, "a.png", {"model": "X", "scale": 4})
-    pm.add_processed(project_dir, "b.png", {"model": "Y", "scale": 2})
+    pm.add_processed(project_dir, "a.png", {"source": "a.png"})
+    pm.add_processed(project_dir, "b.png", {"source": "b.png"})
     m = pm.load(project_dir)
     assert set(m["images"].keys()) == {"a.png", "b.png"}
-    assert m["images"]["a.png"]["model"] == "X"
 
 
 # ---------------------------------------------------------------------------
@@ -79,21 +78,37 @@ def test_resolve_unknown_kind_returns_none(project_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_add_processed_auto_mtime(project_dir: Path) -> None:
-    pm.add_processed(project_dir, "a.png", {"model": "X"})
+def test_add_processed_writes_new_schema_only(project_dir: Path) -> None:
+    """新 schema 只写 {origin, mtime, size}，丢弃所有过程信息（model/scale/...）。
+
+    历史 schema 字段（kind/model/scale/action/...）虽然 worker 可能透传给 meta，
+    add_processed 不再持久化它们；下游 sidebar 容忍 None。
+    """
+    (project_dir / "preprocess" / "a.png").write_bytes(b"xxx")
+    pm.add_processed(
+        project_dir,
+        "a.png",
+        {"source": "a.jpg", "model": "4x-AnimeSharp", "scale": 4,
+         "action": "upscale", "target_area": 1048576},
+    )
     entry = pm.get_entry(project_dir, "a.png")
     assert entry is not None
-    assert entry["kind"] == "processed"
-    assert entry["model"] == "X"
+    assert entry["origin"] == "a.jpg"
     assert "mtime" in entry
+    assert entry["size"] == 3
+    # 老字段不再写入
+    assert "model" not in entry
+    assert "scale" not in entry
+    assert "kind" not in entry
 
 
 def test_add_processed_overwrites(project_dir: Path) -> None:
-    pm.add_processed(project_dir, "a.png", {"model": "X", "scale": 4})
-    pm.add_processed(project_dir, "a.png", {"model": "Y", "scale": 2})
+    pm.add_processed(project_dir, "a.png", {"source": "a.jpg", "size": 1})
+    pm.add_processed(project_dir, "a.png", {"source": "a.png", "size": 2})
     entry = pm.get_entry(project_dir, "a.png")
     assert entry is not None
-    assert entry["model"] == "Y"
+    assert entry["origin"] == "a.png"
+    assert entry["size"] == 2
 
 
 def test_restore_removes_entry_and_png(project_dir: Path) -> None:
@@ -126,11 +141,25 @@ def test_restore_self_heals_orphan_png(project_dir: Path) -> None:
 
 
 def test_all_processed_returns_dict(project_dir: Path) -> None:
-    pm.add_processed(project_dir, "a.png", {"model": "X"})
-    pm.add_processed(project_dir, "b.png", {"model": "Y"})
+    pm.add_processed(project_dir, "a.png", {"source": "a.jpg"})
+    pm.add_processed(project_dir, "b.png", {"source": "b.png"})
     out = pm.all_processed(project_dir)
     assert set(out.keys()) == {"a.png", "b.png"}
-    assert out["a.png"]["model"] == "X"
+    assert out["a.png"]["origin"] == "a.jpg"
+
+
+def test_all_processed_includes_legacy_entries(project_dir: Path) -> None:
+    """老 schema entry（有 kind=processed + model 等字段）依然算已处理。
+    新 schema entry（无 kind）也算已处理。只有显式 kind != processed 才跳过。"""
+    pm.manifest_path(project_dir).write_text(json.dumps({
+        "images": {
+            "legacy.png": {"kind": "processed", "model": "X", "source": "legacy.jpg"},
+            "new.png":    {"origin": "new.png",  "mtime": 1.0, "size": 5},
+            "future.png": {"kind": "future_state"},
+        },
+    }))
+    out = pm.all_processed(project_dir)
+    assert set(out.keys()) == {"legacy.png", "new.png"}
 
 
 def test_all_processed_skips_non_processed_kind(project_dir: Path) -> None:
@@ -142,6 +171,96 @@ def test_all_processed_skips_non_processed_kind(project_dir: Path) -> None:
     }))
     out = pm.all_processed(project_dir)
     assert set(out.keys()) == {"a.png"}
+
+
+# ---------------------------------------------------------------------------
+# 新增：replace_with_crops 多裁剪 fan-out
+# ---------------------------------------------------------------------------
+
+
+def test_entry_origin_prefers_origin_then_source_then_name(project_dir: Path) -> None:
+    assert pm.entry_origin({"origin": "a.jpg", "source": "ignored"}, "x") == "a.jpg"
+    assert pm.entry_origin({"source": "b.jpg"}, "x") == "b.jpg"
+    assert pm.entry_origin({}, "fallback.png") == "fallback.png"
+
+
+def test_replace_with_crops_replaces_single_entry(project_dir: Path) -> None:
+    """N=1 覆盖：source 同名 entry 被替换。"""
+    pm.add_processed(project_dir, "X.png", {"source": "X.png", "size": 100})
+    pm.replace_with_crops(
+        project_dir,
+        source_name="X.png",
+        outputs=[
+            {"name": "X.png", "origin": "X.png", "size": 50, "mtime": 1.0},
+        ],
+    )
+    entry = pm.get_entry(project_dir, "X.png")
+    assert entry is not None
+    assert entry["origin"] == "X.png"
+    assert entry["size"] == 50
+
+
+def test_replace_with_crops_fans_out(project_dir: Path) -> None:
+    """N>1：原 entry 被 N 个 _c{n} entry 替换，origin 都指 root。"""
+    pm.add_processed(project_dir, "X.png", {"source": "X.jpg", "size": 100})
+    pm.replace_with_crops(
+        project_dir,
+        source_name="X.png",
+        outputs=[
+            {"name": "X_c0.png", "origin": "X.jpg", "size": 30, "mtime": 1.0},
+            {"name": "X_c1.png", "origin": "X.jpg", "size": 40, "mtime": 1.0},
+        ],
+    )
+    m = pm.load(project_dir)
+    assert "X.png" not in m["images"]
+    assert m["images"]["X_c0.png"]["origin"] == "X.jpg"
+    assert m["images"]["X_c1.png"]["origin"] == "X.jpg"
+
+
+def test_replace_with_crops_cleans_old_siblings(project_dir: Path) -> None:
+    """再裁剪：之前由同一 source 派生的 entry 应当一并清除（防止幽灵残留）。"""
+    # 第一次 fan-out 出 X_c0/X_c1
+    pm.replace_with_crops(
+        project_dir,
+        source_name="X.png",
+        outputs=[
+            {"name": "X_c0.png", "origin": "X.jpg", "size": 1, "mtime": 1.0},
+            {"name": "X_c1.png", "origin": "X.jpg", "size": 2, "mtime": 1.0},
+        ],
+    )
+    # 现在用户对 X_c0.png 再做一次多裁剪
+    pm.replace_with_crops(
+        project_dir,
+        source_name="X_c0.png",
+        outputs=[
+            {"name": "X_c0_c0.png", "origin": "X.jpg", "size": 1, "mtime": 2.0},
+            {"name": "X_c0_c1.png", "origin": "X.jpg", "size": 2, "mtime": 2.0},
+        ],
+    )
+    m = pm.load(project_dir)
+    # X_c0.png 自身应被删；X_c1.png 应保留（它的 origin 不是 X_c0.png）；
+    # 新两个 entry 写入
+    assert "X_c0.png" not in m["images"]
+    assert "X_c1.png" in m["images"]
+    assert "X_c0_c0.png" in m["images"]
+    assert "X_c0_c1.png" in m["images"]
+
+
+def test_resolve_origin_returns_derivatives(project_dir: Path) -> None:
+    """resolve_origin: 给 download/X.jpg → 返回 manifest 里 origin 匹配的所有产物。"""
+    pm.replace_with_crops(
+        project_dir,
+        source_name="X.png",
+        outputs=[
+            {"name": "X_c0.png", "origin": "X.jpg", "size": 1, "mtime": 1.0},
+            {"name": "X_c1.png", "origin": "X.jpg", "size": 2, "mtime": 1.0},
+        ],
+    )
+    paths = pm.resolve_origin(project_dir, "X.jpg")
+    assert sorted(p.name for p in paths) == ["X_c0.png", "X_c1.png"]
+    # 不在 manifest 的 origin → 回退 download
+    fallback = pm.resolve_origin(project_dir, "ghost.jpg")
+    assert fallback == [project_dir / "download" / "ghost.jpg"]
 
 
 # ---------------------------------------------------------------------------

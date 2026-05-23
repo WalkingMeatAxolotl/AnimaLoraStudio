@@ -35,19 +35,42 @@ def _seed_download(project: dict, names: list[str]) -> Path:
 
 
 def _seed_processed(project: dict, source_to_meta: dict[str, dict]) -> Path:
-    """source_to_meta: {source_name: meta} → 写 PNG 副本 + manifest entry。
+    """source_to_meta: {source_name: meta} → 写 PNG 副本 + 老 schema manifest entry。
 
-    产物按约定固定 `.png`（取 source 的 stem）。
+    产物按约定固定 `.png`（取 source 的 stem）。直接写 manifest.json 而非走
+    `add_processed`，因为 0.9.x 后 `add_processed` 只写新 schema（origin/mtime/size），
+    fixture 想保留老 schema 字段（kind/model/scale/...）来覆盖读兼容路径。
+    新 schema 的写入路径有独立单测。
     """
+    import json
+    import time
     pdir = projects.project_dir(project["id"], project["slug"])
     _, pre = preprocess.project_paths(project)
     pre.mkdir(parents=True, exist_ok=True)
+    manifest_p = preprocess_manifest.manifest_path(pdir)
+    manifest_p.parent.mkdir(parents=True, exist_ok=True)
+    images: dict[str, dict] = {}
+    if manifest_p.exists():
+        try:
+            existing = json.loads(manifest_p.read_text(encoding="utf-8"))
+            if isinstance(existing.get("images"), dict):
+                images = existing["images"]
+        except Exception:
+            pass
     for src, meta in source_to_meta.items():
         product_name = Path(src).stem + ".png"
         (pre / product_name).write_bytes(b"upscaled")
-        preprocess_manifest.add_processed(
-            pdir, product_name, {"source": src, **meta},
-        )
+        # 老 schema：kind + source + 任意 meta
+        images[product_name] = {
+            "kind": "processed",
+            "source": src,
+            "mtime": time.time(),
+            **meta,
+        }
+    manifest_p.write_text(
+        json.dumps({"images": images}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     return pre
 
 
@@ -205,6 +228,97 @@ def test_start_job_validates_names(isolated) -> None:
             preprocess.start_job(
                 conn, project_id=p["id"], mode="selected", names=["a/b"]
             )
+
+
+def test_start_job_records_stage_upscale(isolated) -> None:
+    """放大 job 的 params 现在带 stage=upscale，方便 worker 分发。"""
+    p = isolated["project"]
+    with db.connection_for(isolated["db"]) as conn:
+        job = preprocess.start_job(conn, project_id=p["id"], mode="all")
+    assert job["params_decoded"]["stage"] == preprocess.STAGE_UPSCALE
+
+
+# ---------------------------------------------------------------------------
+# start_crop_job
+# ---------------------------------------------------------------------------
+
+
+def test_start_crop_job_creates_pending(isolated) -> None:
+    """裁剪 job 走 preprocess kind + stage=crop，params 带归一化 rects。"""
+    p = isolated["project"]
+    with db.connection_for(isolated["db"]) as conn:
+        job = preprocess.start_crop_job(
+            conn,
+            project_id=p["id"],
+            crops={
+                "a.png": [{"x": 0.1, "y": 0.1, "w": 0.5, "h": 0.5, "label": "头像"}],
+                "b.png": [
+                    {"x": 0.0, "y": 0.0, "w": 0.4, "h": 0.4},
+                    {"x": 0.5, "y": 0.5, "w": 0.4, "h": 0.4},
+                ],
+            },
+        )
+    assert job["status"] == "pending"
+    assert job["kind"] == "preprocess"
+    decoded = job["params_decoded"]
+    assert decoded["stage"] == preprocess.STAGE_CROP
+    assert set(decoded["crops"].keys()) == {"a.png", "b.png"}
+    # label 保留；rect 字段齐
+    assert decoded["crops"]["a.png"][0]["label"] == "头像"
+    assert decoded["crops"]["a.png"][0]["x"] == 0.1
+    assert len(decoded["crops"]["b.png"]) == 2
+
+
+def test_start_crop_job_requires_non_empty(isolated) -> None:
+    p = isolated["project"]
+    with db.connection_for(isolated["db"]) as conn:
+        with pytest.raises(preprocess.PreprocessError, match="crops"):
+            preprocess.start_crop_job(conn, project_id=p["id"], crops={})
+
+
+def test_start_crop_job_rejects_empty_rects(isolated) -> None:
+    p = isolated["project"]
+    with db.connection_for(isolated["db"]) as conn:
+        with pytest.raises(preprocess.PreprocessError, match="rects"):
+            preprocess.start_crop_job(
+                conn, project_id=p["id"], crops={"a.png": []}
+            )
+
+
+def test_start_crop_job_rejects_tiny_rect(isolated) -> None:
+    p = isolated["project"]
+    with db.connection_for(isolated["db"]) as conn:
+        with pytest.raises(preprocess.PreprocessError, match="过小"):
+            preprocess.start_crop_job(
+                conn,
+                project_id=p["id"],
+                crops={"a.png": [{"x": 0.5, "y": 0.5, "w": 0.001, "h": 0.001}]},
+            )
+
+
+def test_start_crop_job_rejects_path_traversal(isolated) -> None:
+    p = isolated["project"]
+    with db.connection_for(isolated["db"]) as conn:
+        with pytest.raises(preprocess.PreprocessError, match="非法文件名"):
+            preprocess.start_crop_job(
+                conn,
+                project_id=p["id"],
+                crops={"../etc/passwd": [{"x": 0, "y": 0, "w": 0.5, "h": 0.5}]},
+            )
+
+
+def test_start_crop_job_clamps_out_of_bounds(isolated) -> None:
+    """超出 [0,1] 的 rect 自动 clamp（不抛错；用户 UI bug 不该让 job 失败）。"""
+    p = isolated["project"]
+    with db.connection_for(isolated["db"]) as conn:
+        job = preprocess.start_crop_job(
+            conn,
+            project_id=p["id"],
+            crops={"a.png": [{"x": -0.1, "y": -0.1, "w": 2.0, "h": 2.0}]},
+        )
+    r = job["params_decoded"]["crops"]["a.png"][0]
+    assert r["x"] == 0.0 and r["y"] == 0.0
+    assert r["w"] == 1.0 and r["h"] == 1.0
 
 
 def test_start_job_missing_project(isolated) -> None:
