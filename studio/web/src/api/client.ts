@@ -1169,10 +1169,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ config }),
     }),
-  importPresetFromDataExports: (filename: string) =>
-    req<{ name: string; path: string }>('/api/presets/import-from-data-exports', {
+  importPresetFromPath: (path: string) =>
+    req<{ name: string; path: string }>('/api/presets/import-from-path', {
       method: 'POST',
-      body: JSON.stringify({ filename }),
+      body: JSON.stringify({ path }),
     }),
   /** 端到端文件上传：把 .yaml/.yml/.json 文件给后端解析 + schema 校验 + 直接落盘,
    *  返回 {name, path}。前端拿到 name 直接 refreshList + setSelected(name) 即可。

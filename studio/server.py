@@ -405,6 +405,10 @@ class _PresetImportBody(BaseModel):
     filename: str
 
 
+class _PresetImportFromPathBody(BaseModel):
+    path: str
+
+
 @app.get("/api/schema")
 def get_schema() -> dict[str, Any]:
     """返回 TrainingConfig 的 JSON Schema + 分组顺序，前端据此渲染表单。"""
@@ -488,6 +492,34 @@ def import_preset_from_data_exports(body: _PresetImportBody) -> dict[str, Any]:
         raise HTTPException(404, f"文件不存在: {body.filename}")
     if not src.is_file():
         raise HTTPException(400, "请选择文件")
+    try:
+        config, suggested = presets_io.parse_preset_bytes(src.read_bytes(), src.name)
+    except presets_io.PresetError as exc:
+        raise HTTPException(status_code=_err_code(exc), detail=str(exc)) from exc
+    if presets_io.preset_path(suggested).exists():
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": f"预设已存在: {suggested}",
+                "config": config,
+                "suggested_name": suggested,
+            },
+        )
+    try:
+        path = presets_io.write_preset(suggested, config)
+    except presets_io.PresetError as exc:
+        raise HTTPException(status_code=_err_code(exc), detail=str(exc)) from exc
+    return {"name": suggested, "path": str(path)}
+
+
+@app.post("/api/presets/import-from-path")
+def import_preset_from_path(body: _PresetImportFromPathBody) -> dict[str, Any]:
+    """从服务器绝对路径导入预设（yaml/yml/json）。"""
+    src = Path(body.path)
+    if not src.is_file():
+        raise HTTPException(400, f"文件不存在或不可读: {body.path}")
+    if src.suffix.lower() not in (".yaml", ".yml", ".json"):
+        raise HTTPException(400, "请选择 .yaml / .yml / .json 文件")
     try:
         config, suggested = presets_io.parse_preset_bytes(src.read_bytes(), src.name)
     except presets_io.PresetError as exc:

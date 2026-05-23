@@ -5,12 +5,12 @@ import {
   api,
   type ApiError,
   type ConfigData,
-  type DataExportItem,
   type PresetSummary,
   type SchemaResponse,
 } from '../../api/client'
 import ConfigSkeleton from '../../components/ConfigSkeleton'
 import { useDialog } from '../../components/Dialog'
+import PathPicker from '../../components/PathPicker'
 import SchemaForm from '../../components/SchemaForm'
 import { useToast } from '../../components/Toast'
 import { useAdvancedMode } from '../../lib/useAdvancedMode'
@@ -110,9 +110,7 @@ export default function PresetsPage() {
   const [pickerSearch, setPickerSearch] = useState('')
   const [tomlOpen, setTomlOpen] = useState(false)
   const [exportDialogOpen, setExportDialogOpen] = useState(false)
-  const [importDataExportsOpen, setImportDataExportsOpen] = useState(false)
-  const [dataExports, setDataExports] = useState<DataExportItem[]>([])
-  const [dataExportsLoading, setDataExportsLoading] = useState(false)
+  const [showImportPathPicker, setShowImportPathPicker] = useState(false)
   const [advancedMode, toggleAdvancedMode] = useAdvancedMode()
   const pickerAnchorRef = useRef<HTMLButtonElement | null>(null)
   const pickerPopRef = useRef<HTMLDivElement | null>(null)
@@ -408,18 +406,6 @@ export default function PresetsPage() {
     }
   }
 
-  const refreshDataExports = async () => {
-    setDataExportsLoading(true)
-    try {
-      const items = await api.listDataExports()
-      setDataExports(items.filter((item) => /\.(ya?ml|json)$/i.test(item.filename)))
-    } catch (e) {
-      toast(String(e), 'error')
-    } finally {
-      setDataExportsLoading(false)
-    }
-  }
-
   // 「导入」：上传 → 后端 yaml + pydantic 校验 + 直接落盘 + 返回 name。
   // 不冲突 → refresh + setSelected(name),一步到位出现在 picker 并选中。
   // 冲突(409)→ 弹 ImportConflictDialog 让用户选覆盖 / 另存为 / 取消;选定后
@@ -464,11 +450,11 @@ export default function PresetsPage() {
     handleImportedPreset(imported.name)
   }
 
-  const handleImportDataExport = async (filename: string) => {
-    setImportDataExportsOpen(false)
+  const handleImportFromPath = async (path: string) => {
+    setShowImportPathPicker(false)
     setBusy(true)
     try {
-      const imported = await api.importPresetFromDataExports(filename)
+      const imported = await api.importPresetFromPath(path)
       handleImportedPreset(imported.name)
     } catch (e) {
       const err = e as ApiError
@@ -480,10 +466,6 @@ export default function PresetsPage() {
   }
 
   const onImportClick = () => fileInputRef.current?.click()
-  const openImportDataExports = () => {
-    setImportDataExportsOpen(true)
-    void refreshDataExports()
-  }
 
   const saveDisabled =
     busy
@@ -551,8 +533,8 @@ export default function PresetsPage() {
         <button onClick={onImportClick} disabled={busy} className="btn btn-ghost btn-sm">
           {t('presets.importUpload')}
         </button>
-        <button onClick={openImportDataExports} disabled={busy} className="btn btn-ghost btn-sm">
-          {t('presets.importDataExports')}
+        <button onClick={() => setShowImportPathPicker(true)} disabled={busy} className="btn btn-ghost btn-sm">
+          {t('presets.importPath')}
         </button>
 
         {/* 编辑模式下的预设级动作 */}
@@ -825,14 +807,11 @@ export default function PresetsPage() {
         />
       )}
 
-      {importDataExportsOpen && (
-        <PresetDataExportsDialog
-          items={dataExports}
-          loading={dataExportsLoading}
-          busy={busy}
-          onRefresh={refreshDataExports}
-          onImport={(filename) => { void handleImportDataExport(filename) }}
-          onCancel={() => setImportDataExportsOpen(false)}
+      {showImportPathPicker && (
+        <PathPicker
+          dirOnly={false}
+          onClose={() => setShowImportPathPicker(false)}
+          onPick={(path) => { void handleImportFromPath(path) }}
         />
       )}
 
@@ -879,69 +858,6 @@ function PresetExportDialog({
         </button>
         <div className="flex justify-end">
           <button type="button" className="btn btn-secondary" onClick={onCancel}>{t('common.cancel')}</button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function PresetDataExportsDialog({
-  items,
-  loading,
-  busy,
-  onRefresh,
-  onImport,
-  onCancel,
-}: {
-  items: DataExportItem[]
-  loading: boolean
-  busy: boolean
-  onRefresh: () => void
-  onImport: (filename: string) => void
-  onCancel: () => void
-}) {
-  const { t } = useTranslation()
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/50"
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel() }}
-    >
-      <div className="bg-elevated border border-dim rounded-lg w-[90%] max-w-[520px] p-6 flex flex-col gap-4 shadow-xl">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h2 className="m-0 text-lg font-semibold text-fg-primary">{t('presets.importDataExportsTitle')}</h2>
-            <p className="mt-1 mb-0 text-sm text-fg-secondary">{t('presets.importDataExportsHint')}</p>
-          </div>
-          <button type="button" className="btn btn-secondary btn-sm" disabled={loading || busy} onClick={onRefresh}>
-            {loading ? t('common.loading') : t('common.refresh')}
-          </button>
-        </div>
-        {items.length === 0 ? (
-          <div className="text-sm text-fg-tertiary py-4">
-            {loading ? t('common.loading') : t('presets.noPresetDataExports')}
-          </div>
-        ) : (
-          <div className="max-h-72 overflow-auto flex flex-col gap-1">
-            {items.map((item) => (
-              <button
-                key={item.filename}
-                type="button"
-                className="flex items-center justify-between gap-3 px-2 py-1.5 rounded hover:bg-overlay text-left disabled:opacity-60"
-                disabled={busy}
-                onClick={() => onImport(item.filename)}
-              >
-                <span className="font-mono text-xs text-fg-primary truncate">{item.filename}</span>
-                <span className="text-[11px] text-fg-tertiary shrink-0">
-                  {(item.size / 1024).toFixed(1)} KB
-                </span>
-              </button>
-            ))}
-          </div>
-        )}
-        <div className="flex justify-end">
-          <button type="button" className="btn btn-secondary" onClick={onCancel} disabled={busy}>{t('common.cancel')}</button>
         </div>
       </div>
     </div>
