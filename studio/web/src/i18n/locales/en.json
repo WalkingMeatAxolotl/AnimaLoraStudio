@@ -1197,7 +1197,19 @@
     "stepTag": "Tag",
     "stepTagEdit": "Tag edit",
     "stepReg": "Regularization",
-    "stepTrain": "Train"
+    "stepTrain": "Train",
+    "tabDetails": "Details",
+    "tabTasks": "Tasks",
+    "tabOutput": "Output",
+    "tasksPlaceholder": "Training tasks for this project (to be implemented)",
+    "outputPlaceholder": "LoRA artifacts produced by this project (to be implemented)"
+  },
+  "versionStatus": {
+    "preparing": "Preparing",
+    "training": "Training",
+    "completed": "Completed",
+    "failed": "Failed",
+    "canceled": "Canceled"
   },
   "phaseNav": {
     "prevTitle": "Previous step:",

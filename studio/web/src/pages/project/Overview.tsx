@@ -4,7 +4,10 @@ import { useNavigate, useOutletContext } from 'react-router-dom'
 import { api, type ProjectDetail, type Task, type Version } from '../../api/client'
 import PageHeader from '../../components/PageHeader'
 import StageBadge from '../../components/StageBadge'
+import VersionStatusBadge from '../../components/VersionStatusBadge'
 import { useToast } from '../../components/Toast'
+
+type OverviewTab = 'details' | 'tasks' | 'output'
 
 interface Ctx {
   project: ProjectDetail
@@ -182,6 +185,9 @@ export default function ProjectOverview() {
   const navigate = useNavigate()
   const { toast } = useToast()
   const [relatedTasks, setRelatedTasks] = useState<Task[]>([])
+  // ADR-0007 §11.8-C: 三 tab 框架。后续 commit 把 details 改成 grid 布局 +
+  // 实装 tasks / output 面板内容。
+  const [activeTab, setActiveTab] = useState<OverviewTab>('details')
 
   useEffect(() => {
     let cancelled = false
@@ -259,26 +265,68 @@ export default function ProjectOverview() {
   }
   const nextPath = nextStep ? nextStepPaths[nextStep.label] : undefined
 
+  // ADR-0007 §11.8-C 右上角 = 当前 version 的 status badge
+  const headerActions = (
+    <div className="flex items-center gap-3">
+      {activeVersion && (
+        <VersionStatusBadge status={activeVersion.status} />
+      )}
+      {nextPath ? (
+        <button
+          className="btn btn-primary"
+          onClick={() => navigate(`/projects/${project.id}/${nextPath}`)}
+        >
+          {t('overview.continueStep', { label: nextStep?.label })}
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <path d="M5 12h14M12 5l7 7-7 7" />
+          </svg>
+        </button>
+      ) : null}
+    </div>
+  )
+
+  const tabBtnCls = (tab: OverviewTab) => [
+    'px-4 py-2 text-sm border-none bg-transparent cursor-pointer border-b-2 transition-colors',
+    activeTab === tab
+      ? 'text-fg-primary font-semibold border-accent'
+      : 'text-fg-secondary border-transparent hover:text-fg-primary',
+  ].join(' ')
+
   return (
     <div className="fade-in">
       <PageHeader
-        title={project.title}
+        title={`${project.title}${activeVersion ? ` / ${activeVersion.label}` : ''}`}
         subtitle={project.note || t('overview.subtitle', { n: project.download_image_count ?? 0, v: project.versions.length })}
-        actions={
-          nextPath ? (
-            <button
-              className="btn btn-primary"
-              onClick={() => navigate(`/projects/${project.id}/${nextPath}`)}
-            >
-              {t('overview.continueStep', { label: nextStep?.label })}
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                <path d="M5 12h14M12 5l7 7-7 7" />
-              </svg>
-            </button>
-          ) : undefined
-        }
+        actions={headerActions}
       />
 
+      <div className="border-b border-subtle px-6">
+        <div className="flex gap-1">
+          <button className={tabBtnCls('details')} onClick={() => setActiveTab('details')}>
+            {t('overview.tabDetails')}
+          </button>
+          <button className={tabBtnCls('tasks')} onClick={() => setActiveTab('tasks')}>
+            {t('overview.tabTasks')}
+          </button>
+          <button className={tabBtnCls('output')} onClick={() => setActiveTab('output')}>
+            {t('overview.tabOutput')}
+          </button>
+        </div>
+      </div>
+
+      {activeTab === 'tasks' && (
+        <div className="p-6 text-fg-tertiary text-sm">
+          {t('overview.tasksPlaceholder')}
+        </div>
+      )}
+
+      {activeTab === 'output' && (
+        <div className="p-6 text-fg-tertiary text-sm">
+          {t('overview.outputPlaceholder')}
+        </div>
+      )}
+
+      {activeTab === 'details' && (
       <div className="p-6 flex flex-col gap-5">
         <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
           {stats.map((s, i) => (
@@ -358,6 +406,7 @@ export default function ProjectOverview() {
           </div>
         </div>
       </div>
+      )}
     </div>
   )
 }
