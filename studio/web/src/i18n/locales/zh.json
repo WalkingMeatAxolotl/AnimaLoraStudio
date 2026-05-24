@@ -134,6 +134,8 @@
     "expandVersions": "展开版本列表",
     "collapseVersions": "收起版本列表",
     "trainingVersionPrefix": "训练",
+    "advanceToTitle": "推进到下一步：{{label}}",
+    "advanceFailed": "无法推进到下一步",
     "themeLight": "日间模式",
     "themeDark": "暗色模式",
     "switchToLight": "切到日间模式",
@@ -1260,11 +1262,6 @@
     "completed": "已完成",
     "failed": "失败",
     "canceled": "已取消"
-  },
-  "phaseNav": {
-    "prevTitle": "上一步：",
-    "nextTitle": "下一步：",
-    "advanceFailed": "无法推进到下一步"
   },
   "snapshot": {
     "title": "训练配置记录",

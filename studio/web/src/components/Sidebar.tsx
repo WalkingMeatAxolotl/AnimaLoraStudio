@@ -1,8 +1,9 @@
 import { Fragment, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link, useLocation } from 'react-router-dom'
-import { api, PHASE_ORDER, type Version, type VersionPhase, type VersionStatus } from '../api/client'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { api, PHASE_ORDER, PHASE_SKIPPABLE, type Version, type VersionPhase, type VersionStatus } from '../api/client'
 import { getStoredTheme, toggleTheme, type Theme } from '../lib/theme'
+import { useToast } from './Toast'
 
 /** ADR-0007 §11.2 / §11.5: cursor 派生 step 完成态。
  *
@@ -16,6 +17,14 @@ const STEP_KEY_TO_PHASE: Record<string, VersionPhase> = {
   edit:   'editing',
   reg:    'regularizing',
   train:  'ready',
+}
+
+const PHASE_TO_STEP_KEY: Record<VersionPhase, string> = {
+  curating:     'curate',
+  tagging:      'tag',
+  editing:      'edit',
+  regularizing: 'reg',
+  ready:        'train',
 }
 import { useProjectCtx } from '../context/ProjectContext'
 
@@ -223,6 +232,8 @@ function ProjectStepperNav({ pid, activeVid, currentStep, version, collapsed }: 
   collapsed: boolean
 }) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
+  const { toast } = useToast()
 
   // 项目级 ①② 跟"概览"同款：圆盘里放 icon、无序号、无完成绿色态。
   // version 级 phase 重编号 1-5（每个 version 自己一段流水线）。
@@ -246,6 +257,28 @@ function ProjectStepperNav({ pid, activeVid, currentStep, version, collapsed }: 
     const phase = STEP_KEY_TO_PHASE[key]
     if (!phase) return false
     return PHASE_ORDER.indexOf(phase) < cursorIdx
+  }
+
+  // ADR-0007 §11.5-A: 推进 cursor 的唯一入口 —— 点击 cursor+1 那一行触发。
+  // skippable 调 skip，必经调 advance；校验失败给 warning toast。
+  const handleAdvanceToNext = async () => {
+    if (!activeVid) return
+    const nextIdx = cursorIdx + 1
+    if (nextIdx >= PHASE_ORDER.length) return
+    const nextPhase = PHASE_ORDER[nextIdx]
+    const isSkippable = PHASE_SKIPPABLE.includes(cursorPhase)
+    try {
+      const res = isSkippable
+        ? await api.skipVersionPhase(Number(pid), Number(activeVid))
+        : await api.advanceVersionPhase(Number(pid), Number(activeVid))
+      if (!res.ok) {
+        toast(res.reason || t('sidebar.advanceFailed'), 'error')
+        return
+      }
+      navigate(`/projects/${pid}/v/${activeVid}/${PHASE_TO_STEP_KEY[nextPhase]}`)
+    } catch (e) {
+      toast(String(e), 'error')
+    }
   }
 
   const linkCls = (active: boolean, indent = false) => [
@@ -275,21 +308,38 @@ function ProjectStepperNav({ pid, activeVid, currentStep, version, collapsed }: 
         const label = t(s.labelKey)
         const isActive = s.key === currentStep
         const isProject = s.scope === 'project'
+        const phase = STEP_KEY_TO_PHASE[s.key]
+        const phaseIdx = phase != null ? PHASE_ORDER.indexOf(phase) : -1
+        // ADR-0007 §11.5-A: sidebar 是 cursor 推进主通道。
+        // - phase_idx < cursorIdx  → done (绿数字，Link)
+        // - phase_idx == cursorIdx → 当前 cursor (Link)
+        // - phase_idx == cursorIdx+1 → "下一步"，呼吸 button，点击触发 advance/skip
+        // - phase_idx > cursorIdx+1 → disabled
+        const isCursorCurrent = !isProject && phaseIdx === cursorIdx
+        const isNextStep = !isProject && phaseIdx === cursorIdx + 1
+        const isFuturePhase = !isProject && phaseIdx > cursorIdx + 1
         const isDone = isProject ? false : isStepDone(s.key)
 
-        const href = isProject
-          ? `/projects/${pid}/${s.key}`
-          : activeVid ? `/projects/${pid}/v/${activeVid}/${s.key}` : null
+        const href = (isFuturePhase || isNextStep)
+          ? null
+          : isProject
+            ? `/projects/${pid}/${s.key}`
+            : activeVid ? `/projects/${pid}/v/${activeVid}/${s.key}` : null
 
+        // 视觉强度：cursor 当前（实心 accent）> cursor+1（弱底 + 静态 ring）> 已完成（绿）> 默认
+        // 注：之前 cursor+1 用 animate-pulse 反而盖过 cursor 当前，去掉动画；改用 ring 静态提示。
         const badgeCls = isDone
           ? 'bg-ok-soft text-ok'
-          : isActive
-            ? 'bg-accent-soft text-accent'
-            : 'bg-overlay text-fg-tertiary'
+          : isCursorCurrent
+            ? 'bg-accent text-accent-fg'
+            : isNextStep
+              ? 'bg-overlay text-fg-secondary ring-1 ring-accent'
+              : isActive
+                ? 'bg-accent-soft text-accent'
+                : 'bg-overlay text-fg-tertiary'
 
         // 项目级 ①② badge 内放 icon（跟"概览" ≡ 同款），不要数字 / 不要绿色态。
-        // version 级 badge 始终放数字；完成时数字变绿（badgeCls = bg-ok-soft text-ok）。
-        // ADR-0007 §11.2：不用 ✓ 图标，数字变绿即完成的 UI 表达。
+        // version 级 badge 始终放数字；完成时数字变绿；cursor+1 时背景 accent + 呼吸。
         const badgeContent = isProject ? s.icon : s.idx
 
         const inner = (
@@ -305,21 +355,39 @@ function ProjectStepperNav({ pid, activeVid, currentStep, version, collapsed }: 
         // version 级 step（筛选→训练）整体再缩进一层，表达从属于上方的 version 选择器。
         const indent = s.scope === 'version'
 
-        const stepNode = !href ? (
-          <span key={s.key} title={collapsed ? (s.idx ? `${s.idx}. ${label}` : label) : undefined}
-            className={linkCls(false, indent) + ' opacity-40 cursor-default'}>
-            {inner}
-          </span>
-        ) : (
-          <Link
-            key={s.key}
-            to={href}
-            title={collapsed ? (s.idx ? `${s.idx}. ${label}` : label) : undefined}
-            className={linkCls(isActive, indent)}
-          >
-            {inner}
-          </Link>
-        )
+        let stepNode: React.ReactNode
+        if (isNextStep) {
+          // 推进入口：button + onClick
+          stepNode = (
+            <button
+              key={s.key}
+              type="button"
+              onClick={() => void handleAdvanceToNext()}
+              title={collapsed ? `→ ${label}` : t('sidebar.advanceToTitle', { label })}
+              className={linkCls(false, indent) + ' cursor-pointer text-fg-primary font-medium'}
+            >
+              {inner}
+            </button>
+          )
+        } else if (!href) {
+          stepNode = (
+            <span key={s.key} title={collapsed ? (s.idx ? `${s.idx}. ${label}` : label) : undefined}
+              className={linkCls(false, indent) + ' opacity-40 cursor-default'}>
+              {inner}
+            </span>
+          )
+        } else {
+          stepNode = (
+            <Link
+              key={s.key}
+              to={href}
+              title={collapsed ? (s.idx ? `${s.idx}. ${label}` : label) : undefined}
+              className={linkCls(isActive, indent)}
+            >
+              {inner}
+            </Link>
+          )
+        }
 
         // 在 scope 从 project 切到 version 的边界（"预处理"和"筛选"之间）
         // 插入 VersionPickerBlock —— 版本选择紧靠 version 级 phase 上方。

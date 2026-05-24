@@ -134,6 +134,8 @@
     "expandVersions": "Expand versions",
     "collapseVersions": "Collapse versions",
     "trainingVersionPrefix": "Training",
+    "advanceToTitle": "Advance to: {{label}}",
+    "advanceFailed": "Cannot advance to next phase",
     "themeLight": "Light mode",
     "themeDark": "Dark mode",
     "switchToLight": "Switch to light mode",
@@ -1260,11 +1262,6 @@
     "completed": "Completed",
     "failed": "Failed",
     "canceled": "Canceled"
-  },
-  "phaseNav": {
-    "prevTitle": "Previous step:",
-    "nextTitle": "Next step:",
-    "advanceFailed": "Unable to advance to the next step"
   },
   "snapshot": {
     "title": "Training config snapshot",

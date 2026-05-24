@@ -6,16 +6,18 @@ interface Props {
   title: string
   subtitle?: string
   actions?: ReactNode
+  topRight?: ReactNode
   children: ReactNode
 }
 
-export default function StepShell({ title, subtitle, actions, children }: Props) {
+export default function StepShell({ title, subtitle, actions, topRight, children }: Props) {
   return (
     <div className="fade-in flex flex-col h-full">
       <PageHeader
         title={title}
         subtitle={subtitle}
         actions={actions}
+        topRight={topRight}
         sticky
       />
       {/* flex column container: overflow:hidden stops page scroll; children use flex:1 to fill */}
