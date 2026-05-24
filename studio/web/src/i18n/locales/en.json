@@ -597,6 +597,7 @@
     "tabLogs": "Logs",
     "tabMonitor": "Monitor",
     "tabOutputs": "Outputs",
+    "tabSnapshot": "Snapshot config",
     "deleteRecord": "Delete record",
     "deleteTitle": "Delete task record",
     "deleteDesc": "Will permanently delete task",
@@ -1244,6 +1245,16 @@
     "prevTitle": "Previous step:",
     "nextTitle": "Next step:",
     "advanceFailed": "Unable to advance to the next step"
+  },
+  "snapshot": {
+    "title": "Training config snapshot",
+    "subtitle": "Config frozen when this task started. Captions / images are not part of the snapshot.",
+    "applyBtn": "Apply this config",
+    "applyConfirmTitle": "Apply this config",
+    "applyConfirmDesc": "Write this config back to the current version's training config (overwrites the existing one), then jump to the train page to edit / start training.",
+    "empty": "No config snapshot for this task",
+    "notFoundHint": "May be an old task from before v8 schema; snapshot was not created.",
+    "noVersionLink": "This task is not linked to a version; cannot apply"
   },
   "layout": {
     "loading": "Loading project...",

@@ -12,7 +12,7 @@ import { useToast } from '../components/Toast'
 import { useEventStream } from '../lib/useEventStream'
 import MonitorDashboard from '../components/MonitorDashboard'
 
-type Tab = 'overview' | 'log' | 'monitor' | 'outputs'
+type Tab = 'overview' | 'log' | 'monitor' | 'outputs' | 'snapshot'
 
 const STATUS_BADGE: Record<TaskStatus, string> = {
   pending: 'badge badge-neutral',
@@ -92,7 +92,7 @@ export default function QueueDetailPage() {
   const [tab, setTab] = useState<Tab>(() => {
     if (typeof window === 'undefined') return 'overview'
     const v = window.location.hash.replace(/^#/, '')
-    return (['overview', 'log', 'monitor', 'outputs'] as const).includes(v as Tab) ? (v as Tab) : 'overview'
+    return (['overview', 'log', 'monitor', 'outputs', 'snapshot'] as const).includes(v as Tab) ? (v as Tab) : 'overview'
   })
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [pauseModalOpen, setPauseModalOpen] = useState(false)
@@ -111,7 +111,7 @@ export default function QueueDetailPage() {
   // 写回不会更新 router state，所以两条 effect 不会 ping-pong。
   useEffect(() => {
     const v = location.hash.replace(/^#/, '')
-    if ((['overview', 'log', 'monitor', 'outputs'] as const).includes(v as Tab)) {
+    if ((['overview', 'log', 'monitor', 'outputs', 'snapshot'] as const).includes(v as Tab)) {
       setTab((prev) => (prev === v ? prev : (v as Tab)))
     }
   }, [location.hash])
@@ -206,6 +206,7 @@ export default function QueueDetailPage() {
     { key: 'log',      label: t('queueDetail.tabLogs') },
     { key: 'monitor',  label: t('queueDetail.tabMonitor') },
     { key: 'outputs',  label: t('queueDetail.tabOutputs') },
+    { key: 'snapshot', label: t('queueDetail.tabSnapshot') },
   ]
 
   return (
@@ -305,6 +306,7 @@ export default function QueueDetailPage() {
         {tab === 'log' && <LogTab taskId={taskId} />}
         {tab === 'monitor' && <MonitorTab taskId={taskId} />}
         {tab === 'outputs' && <OutputsTab taskId={taskId} />}
+        {tab === 'snapshot' && <SnapshotConfigTab task={task} />}
       </div>
 
 
@@ -765,6 +767,99 @@ function OutputsTab({ taskId }: { taskId: number }) {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// ── SnapshotConfigTab (ADR-0007 §11.7 / §11.8-D) ──────────────────────────
+
+/** task 启动时冻结的 training config 只读展示 + "套用此配置" 流程。
+ *
+ *  心智分离（§11.7 设计）：snapshot 是历史，不点 task 跳 version config 编辑页；
+ *  按钮 "套用此配置" → confirm → PUT version config → navigate train phase 页。
+ *  user 在 train 页可编辑后点 "开始训练" → 创建新 task（同 version 多 task）。
+ */
+function SnapshotConfigTab({ task }: { task: Task | null }) {
+  const { t } = useTranslation()
+  const navigate = useNavigate()
+  const { toast } = useToast()
+  const [data, setData] = useState<{ yaml: string; config: Record<string, unknown> } | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [applying, setApplying] = useState(false)
+  const [confirmApply, setConfirmApply] = useState(false)
+
+  useEffect(() => {
+    if (!task) { setLoading(false); return }
+    let cancelled = false
+    setLoading(true)
+    void api.getTaskSnapshotConfig(task.id)
+      .then((r) => { if (!cancelled) { setData(r); setError(null) } })
+      .catch((e) => { if (!cancelled) setError(String(e)) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [task])
+
+  const apply = async () => {
+    if (!task || !data) return
+    const pid = task.project_id, vid = task.version_id
+    if (!pid || !vid) {
+      toast(t('snapshot.noVersionLink'), 'error')
+      return
+    }
+    setApplying(true)
+    try {
+      await api.putVersionConfig(pid, vid, data.config as Parameters<typeof api.putVersionConfig>[2])
+      setConfirmApply(false)
+      navigate(`/projects/${pid}/v/${vid}/train`)
+    } catch (e) {
+      toast(String(e), 'error')
+    } finally {
+      setApplying(false)
+    }
+  }
+
+  if (loading) return <div className="p-6 text-fg-tertiary text-sm">{t('common.loading')}</div>
+  if (error) {
+    return (
+      <div className="p-6">
+        <p className="m-0 text-sm text-err">{error}</p>
+        <p className="m-0 text-xs text-fg-tertiary mt-2">{t('snapshot.notFoundHint')}</p>
+      </div>
+    )
+  }
+  if (!data) return <div className="p-6 text-fg-tertiary text-sm italic">{t('snapshot.empty')}</div>
+
+  const canApply = !!(task?.project_id && task?.version_id)
+
+  return (
+    <div className="p-6 flex flex-col gap-4">
+      <div className="flex items-start gap-3">
+        <div className="flex-1">
+          <h3 className="m-0 text-md font-semibold">{t('snapshot.title')}</h3>
+          <p className="m-0 mt-1 text-xs text-fg-tertiary">{t('snapshot.subtitle')}</p>
+        </div>
+        <button
+          className="btn btn-primary btn-sm"
+          onClick={() => setConfirmApply(true)}
+          disabled={!canApply || applying}
+          title={canApply ? undefined : t('snapshot.noVersionLink')}
+        >
+          {t('snapshot.applyBtn')}
+        </button>
+      </div>
+      <pre className="m-0 p-4 rounded-md border border-subtle bg-sunken text-xs font-mono overflow-auto whitespace-pre">{data.yaml}</pre>
+
+      {confirmApply && (
+        <ConfirmDialog
+          title={t('snapshot.applyConfirmTitle')}
+          message={t('snapshot.applyConfirmDesc')}
+          confirmLabel={t('snapshot.applyBtn')}
+          onConfirm={apply}
+          onCancel={() => { if (!applying) setConfirmApply(false) }}
+          busy={applying}
+        />
+      )}
     </div>
   )
 }

@@ -597,6 +597,7 @@
     "tabLogs": "日志",
     "tabMonitor": "监控",
     "tabOutputs": "输出",
+    "tabSnapshot": "关联配置",
     "deleteRecord": "删除记录",
     "deleteTitle": "删除任务记录",
     "deleteDesc": "将永久删除任务",
@@ -1244,6 +1245,16 @@
     "prevTitle": "上一步：",
     "nextTitle": "下一步：",
     "advanceFailed": "无法推进到下一步"
+  },
+  "snapshot": {
+    "title": "训练配置记录",
+    "subtitle": "task 启动时冻结的 config。caption / 图等非配置数据不在此快照内。",
+    "applyBtn": "套用此配置",
+    "applyConfirmTitle": "套用此配置",
+    "applyConfirmDesc": "把此 config 写回当前版本的训练配置（覆盖现有），然后跳到训练页编辑 / 开始训练。",
+    "empty": "本 task 无 config snapshot",
+    "notFoundHint": "可能是 v8 schema 之前创建的老 task，snapshot 未生成。",
+    "noVersionLink": "此 task 未挂在 version 上，无法套用"
   },
   "layout": {
     "loading": "加载项目...",
