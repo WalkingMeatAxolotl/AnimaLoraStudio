@@ -482,6 +482,7 @@
   "projects": {
     "title": "项目",
     "description": "每个项目对应一个 LoRA 训练目标 — 角色、风格或概念。新建一个项目开始流水线。",
+    "noActiveVersion": "（无活跃版本）",
     "emptyTrash": "清空回收站",
     "importZipHint": "上传浏览器本机文件或选择服务器路径导入 bundle zip",
     "importZip": "导入 bundle",

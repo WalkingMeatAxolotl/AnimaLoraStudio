@@ -1,32 +1,13 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
-import { api, type BundleImportResult, type ProjectStage, type ProjectSummary } from '../api/client'
+import { api, type BundleImportResult, type ProjectSummary } from '../api/client'
 import PageHeader from '../components/PageHeader'
 import PathPicker from '../components/PathPicker'
-import StageBadge from '../components/StageBadge'
+import VersionStatusBadge from '../components/VersionStatusBadge'
 import { useDialog } from '../components/Dialog'
 import { useToast } from '../components/Toast'
 import { useEventStream } from '../lib/useEventStream'
-
-function relativeTime(ts: number): string {
-  const diff = Date.now() / 1000 - ts
-  if (diff < 60) return '刚刚'
-  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`
-  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`
-  if (diff < 604800) return `${Math.floor(diff / 86400)} 天前`
-  return new Date(ts * 1000).toLocaleDateString('zh-CN')
-}
-
-// stage → step path for quick-open nav
-const STAGE_STEP: Partial<Record<ProjectStage, string>> = {
-  downloading:  'download',
-  curating:     'curate',
-  tagging:      'tag',
-  regularizing: 'reg',
-  configured:   'train',
-  training:     'train',
-}
 
 export default function ProjectsPage() {
   const { t } = useTranslation()
@@ -299,8 +280,6 @@ function ProjectCard({
   const { t } = useTranslation()
   const [hovered, setHovered] = useState(false)
 
-  const stepPath = p.stage in STAGE_STEP ? STAGE_STEP[p.stage] : undefined
-
   return (
     <button
       onClick={onClick}
@@ -309,6 +288,7 @@ function ProjectCard({
       className={`p-[18px] text-left rounded-lg cursor-pointer flex flex-col gap-3.5 relative w-full ${hovered ? 'border-dim shadow-sm bg-surface' : 'border border-subtle bg-surface'}`}
       style={{ transition: 'border-color 0.15s, box-shadow 0.15s' }}
     >
+      {/* ADR-0007 §11.8-E: 右上角 = active version status；去 stage badge / 时间 / 产物 */}
       <div className="flex justify-between items-start gap-2">
         <div className="flex-1 min-w-0">
           <div className="text-md font-semibold overflow-hidden text-ellipsis whitespace-nowrap" style={{ letterSpacing: '-0.01em' }}>
@@ -318,7 +298,7 @@ function ProjectCard({
             {p.slug}
           </div>
         </div>
-        <StageBadge stage={p.stage} />
+        <VersionStatusBadge status={p.active_version_status} />
       </div>
 
       {p.note && (
@@ -328,16 +308,13 @@ function ProjectCard({
       )}
 
       <div className="flex gap-4 text-sm text-fg-secondary mt-auto items-center">
-        <StatPair label={t('nav.download')} value={p.download_image_count ?? 0} />
-        <span className="flex-1" />
-        {stepPath && (
-          <span className="text-xs text-accent font-mono">
-            {t('projects.continueBtn')}
-          </span>
+        {/* active version 名（直接版本，无前缀文本） */}
+        {p.active_version_label ? (
+          <span className="font-mono text-fg-primary">{p.active_version_label}</span>
+        ) : (
+          <span className="text-fg-tertiary italic text-xs">{t('projects.noActiveVersion')}</span>
         )}
-        <span className="text-fg-tertiary text-xs">
-          {relativeTime(p.updated_at)}
-        </span>
+        <span className="flex-1" />
         <button
           onClick={onDelete}
           className="bg-transparent border-none px-1.5 py-0.5 rounded-sm text-fg-tertiary text-xs cursor-pointer"
@@ -347,15 +324,6 @@ function ProjectCard({
         </button>
       </div>
     </button>
-  )
-}
-
-function StatPair({ label, value }: { label: string; value: number }) {
-  return (
-    <span className="inline-flex gap-1.5 items-baseline">
-      <span className="font-mono font-semibold text-fg-primary">{value}</span>
-      <span className="text-xs text-fg-tertiary uppercase tracking-wider">{label}</span>
-    </span>
   )
 }
 

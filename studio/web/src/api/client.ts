@@ -601,6 +601,9 @@ export interface ProjectSummary {
   title: string
   stage: ProjectStage
   active_version_id: number | null
+  /** ADR-0007 §11.8-E: 项目卡片右上角 status badge / 卡片显 version 名（list 端点 enrich）。 */
+  active_version_label: string | null
+  active_version_status: VersionStatus | null
   created_at: number
   updated_at: number
   note: string | null

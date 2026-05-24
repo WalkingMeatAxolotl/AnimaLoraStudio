@@ -11,6 +11,8 @@ function project(stage: ProjectDetail['stage']): ProjectDetail {
     title: 'P',
     stage,
     active_version_id: null,
+    active_version_label: null,
+    active_version_status: null,
     created_at: 0,
     updated_at: 0,
     note: null,

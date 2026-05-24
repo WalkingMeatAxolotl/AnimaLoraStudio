@@ -480,6 +480,7 @@
     "placeholderAssistant": "assistant expected output (few-shot answer)"
   },
   "projects": {
+    "noActiveVersion": "(no active version)",
     "title": "Projects",
     "description": "Each project targets one LoRA training goal — character, style, or concept. Create a project to start the pipeline.",
     "emptyTrash": "Empty trash",

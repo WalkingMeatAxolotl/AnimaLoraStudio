@@ -801,9 +801,21 @@ def _project_err_code(exc: Exception) -> int:
 
 @app.get("/api/projects")
 def list_projects_endpoint() -> dict[str, Any]:
+    """ADR-0007 §11.8-E：enrich active version label + status，卡片右上角 badge 用。"""
     with db.connection_for() as conn:
         rows = projects.list_projects(conn)
-    return {"items": projects.projects_with_stats(rows)}
+        enriched: list[dict[str, Any]] = []
+        for r in projects.projects_with_stats(rows):
+            r["active_version_label"] = None
+            r["active_version_status"] = None
+            avid = r.get("active_version_id")
+            if avid:
+                av = versions.get_version(conn, int(avid))
+                if av:
+                    r["active_version_label"] = av["label"]
+                    r["active_version_status"] = versions.get_status(av)
+            enriched.append(r)
+    return {"items": enriched}
 
 
 @app.post("/api/projects")
