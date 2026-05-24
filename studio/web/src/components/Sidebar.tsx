@@ -203,7 +203,7 @@ function VersionPickerBlock({ collapsed }: { collapsed: boolean }) {
 
       <div className="flex gap-1 mt-0.5">
         <button
-          onClick={onCreateVersion}
+          onClick={() => onCreateVersion()}
           className="flex-1 flex items-center justify-center gap-1 py-1 px-1.5 text-xs text-fg-secondary bg-transparent border border-dashed border-dim rounded-sm cursor-pointer hover:bg-surface hover:text-accent transition-colors"
         >
           {I.plus} {t('sidebar.newVersion')}

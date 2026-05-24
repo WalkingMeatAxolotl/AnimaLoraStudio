@@ -12,6 +12,7 @@ import FreeCropEditor, { type CropRect } from '../../../components/preprocess/Fr
 import PreprocessJobStrip from '../../../components/preprocess/PreprocessJobStrip'
 import PreprocessToolsBar from '../../../components/preprocess/PreprocessToolsBar'
 import StepShell from '../../../components/StepShell'
+import BarHistogram from '../../../components/BarHistogram'
 import { useToast } from '../../../components/Toast'
 import { useEventStream } from '../../../lib/useEventStream'
 import { arBucket, arLabel } from '../../../lib/aspectRatio'
@@ -900,7 +901,6 @@ function RightRail({
       .sort((a, b) => b.sortKey - a.sortKey) // wide first, tall last
     return { bins, fromSource: !allCovered }
   }, [cropsByImage, images])
-  const maxBin = Math.max(1, ...arHist.bins.map((b) => b.n))
 
   return (
     <div className="flex flex-col gap-3 min-w-0">
@@ -941,15 +941,7 @@ function RightRail({
         <div className="text-[10px] text-fg-tertiary mt-1 mb-1 font-mono">
           {arHist.fromSource ? `· ${t('preprocessCrop.rrFromSource')}` : `· ${t('preprocessCrop.rrFromCrops')}`}
         </div>
-        <div className="flex flex-col gap-1">
-          {arHist.bins.map((b) => (
-            <div key={b.label} className="grid items-center gap-1.5 text-[11px]" style={{ gridTemplateColumns: '96px 1fr 30px' }}>
-              <span className="text-fg-tertiary font-mono">{b.label}</span>
-              <div className="ar-bar"><div className="ar-bar-fill" style={{ width: `${(b.n / maxBin) * 100}%` }} /></div>
-              <span className="font-mono text-right text-fg-secondary">{b.n}</span>
-            </div>
-          ))}
-        </div>
+        <BarHistogram bins={arHist.bins} />
       </div>
     </div>
   )

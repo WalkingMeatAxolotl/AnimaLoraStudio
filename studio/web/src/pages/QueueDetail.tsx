@@ -369,7 +369,7 @@ function OverviewTab({ task }: { task: Task }) {
     items.push({
       label: t('queueDetail.source'),
       value: task.project_id && task.version_id ? (
-        <Link to={`/projects/${task.project_id}/v/${task.version_id}/train`}
+        <Link to={`/projects/${task.project_id}?version=${task.version_id}`}
           className="text-accent font-mono text-sm"
         >{t('queueDetail.sourceLink', { projectId: task.project_id, versionId: task.version_id })}</Link>
       ) : '—',
@@ -475,7 +475,7 @@ function MonitorTab({ taskId }: { taskId: number }) {
 
 // ── OutputsTab ──────────────────────────────────────────────────────────────
 
-function OutputsTab({ taskId }: { taskId: number }) {
+export function OutputsTab({ taskId }: { taskId: number }) {
   const { t } = useTranslation()
   const { toast } = useToast()
   const [data, setData] = useState<TaskOutputs | null>(null)

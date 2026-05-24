@@ -18,7 +18,7 @@ export default function ProjectLayout() {
   const setCtx = useProjectCtxSetter()
   const [project, setProject] = useState<ProjectDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [creating, setCreating] = useState(false)
+  const [creating, setCreating] = useState<{ forkFrom: number | null } | null>(null)
   const [creatingBusy, setCreatingBusy] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [showExportDialog, setShowExportDialog] = useState(false)
@@ -151,7 +151,7 @@ export default function ProjectLayout() {
       const v = await api.createVersion(projectRef.current.id, body)
       await api.activateVersion(projectRef.current.id, v.id)
       await reload()
-      setCreating(false)
+      setCreating(null)
       toast(
         forkFromVersionId !== null
           ? t('layout.versionCreatedFromFork', { label })
@@ -172,7 +172,7 @@ export default function ProjectLayout() {
       activeVersion,
       reload,
       onSelectVersion: handleSelectVersion,
-      onCreateVersion: () => setCreating(true),
+      onCreateVersion: (forkFromVid?: number) => setCreating({ forkFrom: forkFromVid ?? null }),
       onExportTrain: handleExportTrain,
       onDeleteVersion: handleDeleteVersion,
       exporting,
@@ -201,15 +201,16 @@ export default function ProjectLayout() {
         project,
         activeVersion,
         reload,
-        onCreateVersion: () => setCreating(true),
+        onCreateVersion: (forkFromVid?: number) => setCreating({ forkFrom: forkFromVid ?? null }),
         creatingVersionBusy: creatingBusy,
       }} />
       {creating && (
         <NewVersionDialog
           existingLabels={project.versions.map((v) => v.label)}
           existingVersions={project.versions.map((v) => ({ id: v.id, label: v.label }))}
+          initialForkFrom={creating.forkFrom}
           busy={creatingBusy}
-          onCancel={() => { if (creatingBusy) return; setCreating(false) }}
+          onCancel={() => { if (creatingBusy) return; setCreating(null) }}
           onSubmit={handleCreateVersion}
         />
       )}
@@ -226,19 +227,22 @@ export default function ProjectLayout() {
 export function NewVersionDialog({
   existingLabels,
   existingVersions,
+  initialForkFrom = null,
   busy = false,
   onCancel,
   onSubmit,
 }: {
   existingLabels: string[]
   existingVersions: { id: number; label: string }[]
+  /** 打开对话框时预填的 forkFrom version id（null = 不预填，user 自己选）。 */
+  initialForkFrom?: number | null
   busy?: boolean
   onCancel: () => void
   onSubmit: (label: string, forkFromVersionId: number | null) => void
 }) {
   const { t } = useTranslation()
   const [label, setLabel] = useState('')
-  const [forkFrom, setForkFrom] = useState<string>('')
+  const [forkFrom, setForkFrom] = useState<string>(initialForkFrom != null ? String(initialForkFrom) : '')
   const [err, setErr] = useState<string | null>(null)
 
   const submit = (e: React.FormEvent) => {

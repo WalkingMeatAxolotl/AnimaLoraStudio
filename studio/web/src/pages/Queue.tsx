@@ -481,7 +481,7 @@ export default function QueuePage() {
                         <span>{task.config_name}</span>
                         {hasProject && (
                           <Link
-                            to={`/projects/${task.project_id}/v/${task.version_id}/train`}
+                            to={`/projects/${task.project_id}?version=${task.version_id}`}
                             onClick={(e) => e.stopPropagation()}
                             className="text-accent text-xs no-underline hover:underline shrink-0"
                           >

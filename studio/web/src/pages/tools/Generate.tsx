@@ -45,6 +45,32 @@ export default function GeneratePage() {
   const [count, setCount] = useState(1)
   const [seed, setSeed] = useState(0)
   const [loras, setLoras] = useState<LoraEntry[]>([])
+
+  // LoRA 预填 via URL query (?lora=<path>&projectId=N&versionId=N)
+  // Overview StatusBanner "在测试中加载" CTA 跳进来时，把 LoRA 直接塞入 loras。
+  // 用 history.replaceState 清掉 query 避免刷新时重复触发。
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search)
+    const lora = sp.get('lora')
+    if (!lora) return
+    const projectId = sp.get('projectId')
+    const versionId = sp.get('versionId')
+    setLoras((prev) => {
+      if (prev.some((l) => l.path === lora)) return prev
+      return [...prev, {
+        path: lora,
+        scale: 1.0,
+        project_id: projectId ? Number(projectId) : null,
+        version_id: versionId ? Number(versionId) : null,
+      }]
+    })
+    const url = new URL(window.location.href)
+    url.searchParams.delete('lora')
+    url.searchParams.delete('projectId')
+    url.searchParams.delete('versionId')
+    window.history.replaceState({}, '', url.toString())
+  }, [])
+
   // commit C: attention backend 已从 Generate 页移到 Settings；server 端
   // enqueue_generate 会自动从 secrets.generate.attention_backend 注入。
 

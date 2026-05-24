@@ -7,7 +7,7 @@
     "settings": "Settings",
     "generate": "Generate",
     "download": "Dataset",
-    "curate": "Curate",
+    "curate": "Train Set Curation",
     "tag": "Tag",
     "tagEdit": "Tag Edit",
     "reg": "Regularization",
@@ -133,7 +133,7 @@
     "versionsLabel": "Version",
     "expandVersions": "Expand versions",
     "collapseVersions": "Collapse versions",
-    "trainingVersionPrefix": "Training",
+    "trainingVersionPrefix": "Training version",
     "advanceToTitle": "Advance to: {{label}}",
     "advanceFailed": "Cannot advance to next phase",
     "themeLight": "Light mode",
@@ -1209,7 +1209,7 @@
     "stepTrain": "Train",
     "tabDetails": "Details",
     "tabTasks": "Tasks",
-    "tabOutput": "Output",
+    "tabOutput": "LoRA files",
     "tasksPlaceholder": "Training tasks for this project (to be implemented)",
     "outputPlaceholder": "LoRA artifacts produced by this project (to be implemented)",
     "tasksEmpty": "No training tasks for this project yet",
@@ -1222,7 +1222,7 @@
     "outputEmpty": "No LoRA artifacts produced yet",
     "outputOpenTrain": "Open train page",
     "detail": {
-      "folders": "Train folders (repeat × concept)",
+      "folders": "Train set",
       "foldersTotal": "{{n}} images total",
       "tagDist": "Tag distribution",
       "tagCoverage": "{{tagged}} / {{total}} tagged",
@@ -1239,20 +1239,66 @@
       "goEdit": "Edit",
       "goUpscale": "Upscale",
       "goCrop": "Crop",
-      "goReg": "Reg"
+      "goReg": "Reg",
+      "imagesSuffix": "images",
+      "uniqueSuffix": "unique · {{shown}} shown",
+      "reorganize": "Reorganize",
+      "regEmptyHint": "Not generated · skip phase in ⑥",
+      "allFolders": "All"
+    },
+    "identity": {
+      "datasetSuffix": "images in dataset",
+      "versionSuffix": "versions",
+      "createdLabel": "Created"
+    },
+    "rail": {
+      "label": "VERSION"
+    },
+    "banner": {
+      "skippableHint": "skippable",
+      "canceledReasonDefault": "Canceled by user",
+      "failedReasonDefault": "Unknown error",
+      "failedTitle": "Training failed",
+      "metaTime": "Time",
+      "metaStarted": "Started",
+      "metaFinished": "Finished",
+      "metaTaskId": "Task",
+      "metaLoraCount": "LoRA files",
+      "metaPausable": "Pausable",
+      "metaTagged": "Tagged",
+      "metaCurrentPhase": "Current phase",
+      "viewLog": "View log",
+      "deleteVersion": "Delete this version",
+      "forkConfigNew": "Fork config to new version",
+      "smallerBatchRetry": "Fork config · smaller batch",
+      "startedAt": "Started at",
+      "pause": "Pause",
+      "cancelTraining": "Cancel training",
+      "openMonitor": "Open Monitor",
+      "yes": "Yes",
+      "copyAsNew": "Copy as new version",
+      "loadInTest": "Load in test",
+      "downloadLora": "Download",
+      "continueLabel": "Continue",
+      "preparingSub": "Dataset preparation · training can start once finished",
+      "smallerBatchHint": "Opened new version · adjust batch_size in ⑦ Train then retrain",
+      "noArtifact": "No artifact file yet, cannot proceed"
     },
     "header": {
       "slug": "slug: {{slug}}",
-      "created": "Created {{date}}",
+      "created": "Created",
       "dataset": "Dataset",
-      "downloadCount": "① Download {{n}}",
-      "preprocessCount": "② Preprocess {{n}}",
-      "manage": "Manage",
-      "versions": "Versions"
+      "downloadCount": "{{n}}",
+      "versions": "Version count"
     },
     "versionSelector": {
       "label": "Version",
-      "empty": "(no version)"
+      "empty": "(no version)",
+      "expand": "Expand version actions",
+      "collapse": "Collapse version actions",
+      "delete": "Delete",
+      "newVersion": "New version",
+      "activeTag": "active"
     },
     "outputEmptyVersion": "This version has no LoRA artifact yet"
   },
@@ -1526,7 +1572,7 @@
   },
   "steps": {
     "download": { "title": "Dataset", "subtitle": "Booru scraping + local upload" },
-    "curate": { "title": "Curation", "subtitle": "Dataset → Train set" },
+    "curate": { "title": "Train Set Curation", "subtitle": "Dataset → Train set" },
     "preprocess": { "title": "Preprocess Tools", "subtitle": "Upscale / crop / inpaint — Upscale tool" },
     "tag": { "title": "Auto tagging", "subtitle": "WD14 / CLTagger local inference, or remote LLM vision tagging" },
     "reg": { "title": "Regularization", "subtitle": "Pull reg images from train tags, mirror structure to reg/" },

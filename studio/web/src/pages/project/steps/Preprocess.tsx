@@ -15,6 +15,8 @@ import ImagePreviewModal from '../../../components/ImagePreviewModal'
 import PreprocessJobStrip from '../../../components/preprocess/PreprocessJobStrip'
 import PreprocessToolsBar from '../../../components/preprocess/PreprocessToolsBar'
 import StepShell from '../../../components/StepShell'
+import BarHistogram from '../../../components/BarHistogram'
+import { PX_BINS, pxBinFor, computePixelHist, type PxBinId } from '../../../lib/pixelBins'
 import { useToast } from '../../../components/Toast'
 import { useEventStream } from '../../../lib/useEventStream'
 
@@ -50,28 +52,9 @@ interface ImageRow {
   h: number | null
 }
 
-/** Pixel-area histogram bins — shared between the sidebar histogram and the
- *  grid filter chips. Order matters: contiguous ascending so `pxBinFor` can
- *  walk and pick the first match. Sidebar / filter labels translate via i18n
- *  key `preprocess.pxBin.<id>` (Sidebar uses `b.label` directly though). */
-const PX_BINS = [
-  { id: 'lt-512',   label: '< 512²',        lo: 0,           hi: 512 * 512,   sortKey: 0 },
-  { id: '512-768',  label: '512² – 768²',   lo: 512 * 512,   hi: 768 * 768,   sortKey: 512 * 512 },
-  { id: '768-1024', label: '768² – 1024²',  lo: 768 * 768,   hi: 1024 * 1024, sortKey: 768 * 768 },
-  { id: '1024-1536',label: '1024² – 1536²', lo: 1024 * 1024, hi: 1536 * 1536, sortKey: 1024 * 1024 },
-  { id: '1536-2048',label: '1536² – 2048²', lo: 1536 * 1536, hi: 2048 * 2048, sortKey: 1536 * 1536 },
-  { id: 'gt-2048',  label: '> 2048²',       lo: 2048 * 2048, hi: Infinity,    sortKey: 2048 * 2048 },
-] as const
-
-type PxBinId = (typeof PX_BINS)[number]['id']
+/** Pixel-area histogram bins — 共享于 sidebar histogram + grid filter chips +
+ *  Overview 详情 tab。定义/逻辑移到 lib/pixelBins.ts。 */
 type FilterMode = 'all' | PxBinId
-
-function pxBinFor(w: number | null, h: number | null): PxBinId | null {
-  if (w == null || h == null) return null
-  const area = w * h
-  const bin = PX_BINS.find((b) => area >= b.lo && area < b.hi)
-  return bin?.id ?? PX_BINS[PX_BINS.length - 1].id
-}
 
 const FALLBACK_MODEL = '4x-AnimeSharp'
 const TILE_OPTIONS = [128, 192, 256, 384, 512] as const
@@ -820,24 +803,13 @@ function PreprocessSidebar({
   const pct = download_count > 0 ? Math.round((processed_count / download_count) * 100) : 0
   const estVramMB = Math.round((tileSize * tileSize * 16 * 2 * 7) / (1024 * 1024))
 
-  // PX_BINS / pxBinFor are defined at module level so the grid filter chips
-  // (above) and this histogram share the exact same bin definitions.
-  //
   // Histogram counts BOTH processed and pending — global view of the
   // dataset's resolution distribution, not just the slice already upscaled
   // (200 images with 6 upscaled would otherwise show a histogram of 6).
-  const pixelHist = useMemo(() => {
-    const counts = new Map<PxBinId, number>(PX_BINS.map((b) => [b.id, 0]))
-    const visit = (w: number | null, h: number | null) => {
-      const id = pxBinFor(w, h)
-      if (id) counts.set(id, (counts.get(id) ?? 0) + 1)
-    }
-    for (const it of processed) visit(it.w, it.h)
-    for (const it of pending) visit(it.w, it.h)
-    return PX_BINS.map((b) => ({ ...b, n: counts.get(b.id) ?? 0 }))
-      .filter((b) => b.n > 0)
-  }, [processed, pending])
-  const pixelHistMax = Math.max(1, ...pixelHist.map((b) => b.n))
+  const pixelHist = useMemo(
+    () => computePixelHist([...processed, ...pending]),
+    [processed, pending],
+  )
 
   const processedBytes = useMemo(
     () => processed.reduce((s, it) => s + (it.size ?? 0), 0),
@@ -912,14 +884,8 @@ function PreprocessSidebar({
             <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-accent" />
             {t('preprocess.sidebarPxDist')}
           </h3>
-          <div className="flex flex-col gap-1 mt-1.5">
-            {pixelHist.map((b) => (
-              <div key={b.id} className="grid items-center gap-1.5 text-[11px]" style={{ gridTemplateColumns: '96px 1fr 30px' }}>
-                <span className="text-fg-tertiary font-mono">{b.label}</span>
-                <div className="ar-bar"><div className="ar-bar-fill" style={{ width: `${(b.n / pixelHistMax) * 100}%` }} /></div>
-                <span className="font-mono text-right text-fg-secondary">{b.n}</span>
-              </div>
-            ))}
+          <div className="mt-1.5">
+            <BarHistogram bins={pixelHist.map((b) => ({ key: b.id, label: b.label, n: b.n }))} />
           </div>
         </div>
       )}
