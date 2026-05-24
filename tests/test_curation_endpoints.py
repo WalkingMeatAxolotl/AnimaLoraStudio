@@ -87,10 +87,9 @@ def test_copy_advances_stage(client: TestClient) -> None:
         f"/api/projects/{pid}/versions/{vid}/curation/copy",
         json={"files": ["1.png"], "dest_folder": "5_x"},
     )
+    # ADR-0007 PR-5: copy 不再自动推 stage；phase cursor 由用户 PhaseHeaderNav 推进。
     proj = client.get(f"/api/projects/{pid}").json()
-    assert proj["stage"] == "tagging"
-    v = next(v for v in proj["versions"] if v["id"] == vid)
-    assert v["stage"] == "tagging"
+    assert any(v["id"] == vid for v in proj["versions"])
 
 
 def test_remove_only_deletes_train(client: TestClient) -> None:

@@ -68,13 +68,13 @@ def _create_versioned_task(env, name: str = "t1") -> int:
 # ---------------------------------------------------------------------------
 
 
-def test_finalize_done_sets_completed_and_stage_done(env) -> None:
+def test_finalize_done_sets_completed(env) -> None:
+    """ADR-0007 PR-5: 老 stage 不再写；仅 version.status='completed'。"""
     tid = _create_versioned_task(env)
     with db.connection_for(env["db"]) as conn:
         _maybe_finalize_version(conn, tid, "done")
         v = versions.get_version(conn, env["version"]["id"])
     assert v["status"] == "completed"
-    assert v["stage"] == "done"  # 老字段双写
 
 
 def test_finalize_failed_sets_failed_and_writes_reason(env) -> None:

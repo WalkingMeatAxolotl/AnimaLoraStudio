@@ -88,9 +88,8 @@ def test_export_round_trip(isolated, tmp_path: Path) -> None:
         imported = train_io.import_train(conn, new_zip)
 
     assert imported["project"]["id"] != p["id"]
-    assert imported["project"]["stage"] == "tagging"
     assert imported["version"]["label"] == "v1"
-    assert imported["version"]["stage"] == "tagging"
+    # ADR-0007 PR-5: import 不再推 stage
     assert imported["stats"]["image_count"] == 3
     assert imported["stats"]["tagged_count"] == 2
 

@@ -77,12 +77,11 @@ def test_get_404(client: TestClient) -> None:
 def test_patch_updates_note_and_stage(client: TestClient) -> None:
     p = client.post("/api/projects", json={"title": "X"}).json()
     resp = client.patch(
-        f"/api/projects/{p['id']}", json={"note": "edited", "stage": "curating"}
+        f"/api/projects/{p['id']}", json={"note": "edited"}
     )
     assert resp.status_code == 200
     body = resp.json()
     assert body["note"] == "edited"
-    assert body["stage"] == "curating"
 
 
 def test_delete_removes_dir(client: TestClient) -> None:
@@ -190,7 +189,7 @@ def test_train_zip_export_then_import(client: TestClient) -> None:
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["project"]["id"] != pid
-    assert body["project"]["stage"] == "tagging"
+    # ADR-0007 PR-5: import-train 不再推 stage
     assert body["stats"]["image_count"] == 2
     assert body["stats"]["tagged_count"] == 1
 

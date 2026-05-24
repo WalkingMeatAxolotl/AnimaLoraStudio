@@ -65,9 +65,7 @@ def test_start_download_creates_job_and_advances_stage(
     job = resp.json()
     assert job["status"] == "pending"
     assert job["kind"] == "download"
-    # project stage 推到 downloading
-    p2 = client.get(f"/api/projects/{p['id']}").json()
-    assert p2["stage"] == "downloading"
+    # ADR-0007 PR-5: project 无 stage 字段；download 状态由 job + UI 实时扫派生
 
 
 def test_start_download_rejects_empty_tag(client: TestClient) -> None:
@@ -326,9 +324,7 @@ def test_upload_single_image(client: TestClient) -> None:
     assert body["skipped"] == []
     pdir = projects.project_dir(p["id"], p["slug"]) / "download"
     assert (pdir / "a.jpg").read_bytes() == b"\xff\xd8jpgdata"
-    # 推进 stage → downloading（与 booru 下载一致）
-    p2 = client.get(f"/api/projects/{p['id']}").json()
-    assert p2["stage"] == "downloading"
+    # ADR-0007 PR-5: upload 不再推 stage；download_image_count 派生即可
 
 
 def test_upload_zip_extracts_images(client: TestClient) -> None:
@@ -352,9 +348,7 @@ def test_upload_rejects_unsupported_format(client: TestClient) -> None:
     body = r.json()
     assert body["added"] == []
     assert len(body["skipped"]) == 1
-    # 没有任何文件落盘 → stage 不应被推到 downloading
-    p2 = client.get(f"/api/projects/{p['id']}").json()
-    assert p2["stage"] == "created"
+    # ADR-0007 PR-5: project 已无 stage；没添加文件即不动 download_image_count
 
 
 def test_upload_skip_existing(client: TestClient) -> None:

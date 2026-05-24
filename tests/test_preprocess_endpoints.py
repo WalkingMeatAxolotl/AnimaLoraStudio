@@ -86,10 +86,7 @@ def test_start_preprocess_creates_pending_job(client: TestClient) -> None:
     job = resp.json()
     assert job["kind"] == "preprocess"
     assert job["status"] == "pending"
-
-    # stage 推到 preprocessing
-    p2 = client.get(f"/api/projects/{p['id']}").json()
-    assert p2["stage"] == "preprocessing"
+    # ADR-0007 PR-5: project 无 stage；preprocess 状态由 job 派生
 
 
 def test_start_preprocess_rejects_unknown_mode(client: TestClient) -> None:
@@ -218,9 +215,7 @@ def test_start_crop_creates_pending_job(client: TestClient) -> None:
     assert job["kind"] == "preprocess"
     assert job["status"] == "pending"
     assert job["params_decoded"]["stage"] == "crop"
-    # 项目 stage 推进到 preprocessing
-    p2 = client.get(f"/api/projects/{p['id']}").json()
-    assert p2["stage"] == "preprocessing"
+    # ADR-0007 PR-5: project 无 stage（params.stage="crop" 是 job 内部字段，无关）
 
 
 def test_start_crop_rejects_empty(client: TestClient) -> None:

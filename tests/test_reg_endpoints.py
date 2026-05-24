@@ -160,9 +160,7 @@ def test_start_reg_build_creates_job(client: TestClient) -> None:
     # 默认进阶参数也透传
     assert p_dict["skip_similar"] is True
     assert p_dict["postprocess_method"] == "smart"
-    # version stage 推到 regularizing
-    v = client.get(f"/api/projects/{pid}/versions/{vid}").json()
-    assert v["stage"] == "regularizing"
+    # ADR-0007 PR-5: reg job 不再自动推 stage；phase cursor 由用户推进
 
 
 def test_start_reg_build_passes_through_advanced_params(client: TestClient) -> None:

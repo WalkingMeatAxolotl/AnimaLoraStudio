@@ -152,47 +152,19 @@ def test_fork_full_copy_includes_reg_config_unlocked(isolated, monkeypatch) -> N
 
 def test_fork_stage_done_resets_to_ready(isolated) -> None:
     """源 stage=done → 新 version 落 ready（重新进入待训练态）。"""
+    # ADR-0007 PR-5: fork 不再继承 stage / phase；新 version 始终 preparing/curating。
     p = _new_project(isolated)
     with db.connection_for(isolated["db"]) as conn:
         src = versions.create_version(conn, project_id=p["id"], label="baseline")
-        versions.update_version(conn, src["id"], stage="done")
+        versions.update_version(conn, src["id"], status="completed")
         v2 = versions.create_version(
             conn,
             project_id=p["id"],
             label="forked",
             fork_from_version_id=src["id"],
         )
-    assert v2["stage"] == "ready"
-
-
-def test_fork_stage_training_resets_to_ready(isolated) -> None:
-    """源 stage=training → 新 version 也落 ready。"""
-    p = _new_project(isolated)
-    with db.connection_for(isolated["db"]) as conn:
-        src = versions.create_version(conn, project_id=p["id"], label="baseline")
-        versions.update_version(conn, src["id"], stage="training")
-        v2 = versions.create_version(
-            conn,
-            project_id=p["id"],
-            label="forked",
-            fork_from_version_id=src["id"],
-        )
-    assert v2["stage"] == "ready"
-
-
-def test_fork_stage_intermediate_passthrough(isolated) -> None:
-    """源 stage 是中间态（tagging）→ 新 version 直接 copy。"""
-    p = _new_project(isolated)
-    with db.connection_for(isolated["db"]) as conn:
-        src = versions.create_version(conn, project_id=p["id"], label="baseline")
-        versions.update_version(conn, src["id"], stage="tagging")
-        v2 = versions.create_version(
-            conn,
-            project_id=p["id"],
-            label="forked",
-            fork_from_version_id=src["id"],
-        )
-    assert v2["stage"] == "tagging"
+    assert v2["status"] == "preparing"
+    assert v2["phase"] == "curating"
 
 
 def test_fork_rejects_alien_source(isolated) -> None:

@@ -88,9 +88,7 @@ def test_start_tag_creates_job(client: TestClient) -> None:
     import json as _json
     p_dict = _json.loads(job["params"])
     assert "folders" not in p_dict
-    # 推 stage
-    p = client.get(f"/api/projects/{pid}").json()
-    assert p["stage"] == "tagging"
+    # ADR-0007 PR-5: tag job 不再自动推 stage；phase cursor 由用户推进
 
 
 def test_start_tag_unknown_tagger_400(client: TestClient) -> None:

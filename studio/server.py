@@ -1439,18 +1439,12 @@ def start_download(pid: int, body: DownloadRequest) -> dict[str, Any]:
                 "api_source": body.api_source,
             },
         )
-        # 推进项目 stage → downloading
-        p = projects.advance_stage(conn, pid, "downloading")
     _publish_job_state(job)
-    _publish_project_state(p)
     return job
 
 
 def _apply_project_upload_result(pid: int, result: uploads_svc.UploadResult) -> dict[str, Any]:
-    if result.added:
-        with db.connection_for() as conn:
-            updated = projects.advance_stage(conn, pid, "downloading")
-        _publish_project_state(updated)
+    # ADR-0007 PR-5: project 无 stage 字段；upload 完成由前端实时扫 download/ 派生数字
     return result.as_dict()
 
 
@@ -1624,10 +1618,7 @@ def start_preprocess(pid: int, body: PreprocessStartRequest) -> dict[str, Any]:
             )
         except preprocess_svc.PreprocessError as exc:
             raise HTTPException(400, str(exc)) from exc
-        # 推进 stage（不阻塞 curate；stepper 自己派生 done/active）
-        p = projects.advance_stage(conn, pid, "preprocessing")
     _publish_job_state(job)
-    _publish_project_state(p)
     return job
 
 
@@ -1716,9 +1707,7 @@ def start_preprocess_crop(
             )
         except preprocess_svc.PreprocessError as exc:
             raise HTTPException(400, str(exc)) from exc
-        p = projects.advance_stage(conn, pid, "preprocessing")
     _publish_job_state(job)
-    _publish_project_state(p)
     return job
 
 
@@ -2044,19 +2033,6 @@ def _curation_err_code(exc: curation.CurationError) -> int:
     return 422
 
 
-def _maybe_advance_after_train_change(conn, pid: int, vid: int) -> None:
-    """copy/remove 后视情况推进 stage：train 有图 → curating → tagging 提示位。"""
-    if curation.has_train_images(conn, pid, vid):
-        v = versions.get_version(conn, vid)
-        if v and v["stage"] == "curating":
-            updated = versions.advance_stage(conn, vid, "tagging")
-            _publish_version_state(updated)
-        p = projects.get_project(conn, pid)
-        if p and p["stage"] in ("created", "downloading", "curating"):
-            updated_p = projects.advance_stage(conn, pid, "tagging")
-            _publish_project_state(updated_p)
-
-
 @app.get("/api/projects/{pid}/versions/{vid}/curation")
 def get_curation(pid: int, vid: int) -> dict[str, Any]:
     with db.connection_for() as conn:
@@ -2077,7 +2053,6 @@ def copy_to_train(
             )
         except curation.CurationError as exc:
             raise HTTPException(_curation_err_code(exc), str(exc)) from exc
-        _maybe_advance_after_train_change(conn, pid, vid)
     return result
 
 
@@ -2530,14 +2505,6 @@ def start_tag(pid: int, vid: int, body: TagJobRequest) -> dict[str, Any]:
             kind="tag",
             params=params,
         )
-        # 推 stage：tagging
-        if v["stage"] in ("curating",):
-            updated = versions.advance_stage(conn, vid, "tagging")
-            _publish_version_state(updated)
-        p = projects.get_project(conn, pid)
-        if p and p["stage"] in ("created", "downloading", "curating"):
-            up = projects.advance_stage(conn, pid, "tagging")
-            _publish_project_state(up)
     _publish_job_state(job)
     return job
 
@@ -2781,9 +2748,6 @@ def start_reg_build(pid: int, vid: int, body: RegBuildRequest) -> dict[str, Any]
                 "postprocess_max_crop_ratio": float(body.postprocess_max_crop_ratio),
             },
         )
-        if v["stage"] in ("curating", "tagging"):
-            updated = versions.advance_stage(conn, vid, "regularizing")
-            _publish_version_state(updated)
     _publish_job_state(job)
     return job
 
@@ -3292,15 +3256,8 @@ def enqueue_version_training(pid: int, vid: int) -> dict[str, Any]:
         )
         tid = int(cur.lastrowid)
         conn.commit()
-
-        # 推 stage：configured → training（task 启动后由 supervisor 推 done）
-        if ver["stage"] in ("ready", "configured", "regularizing", "tagging", "curating"):
-            updated = versions.advance_stage(conn, vid, "training")
-            _publish_version_state(updated)
-        if project["stage"] in ("created", "downloading", "curating", "tagging", "regularizing"):
-            up = projects.advance_stage(conn, pid, "training")
-            _publish_project_state(up)
-
+        # ADR-0007 PR-5: version.status 由 supervisor 在 _spawn_task 推到 training；
+        # project 无 stage；这里不再 advance。
         task = db.get_task(conn, tid)
     bus.publish({
         "type": "task_state_changed",

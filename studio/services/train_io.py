@@ -279,10 +279,7 @@ def import_train(
                         if f.with_suffix(".txt").exists():
                             tagged_count += 1
 
-            # stage 推到 tagging（用户可能还想继续打标 / 或直接编辑）
-            versions.advance_stage(conn, v["id"], "tagging")
-            projects.advance_stage(conn, p["id"], "tagging")
-
+            # ADR-0007 PR-5: 不再推 stage；phase cursor 由用户 PhaseHeaderNav 显式推
             v = versions.get_version(conn, v["id"])
             p = projects.get_project(conn, p["id"])
             assert v is not None and p is not None
@@ -577,8 +574,7 @@ def import_bundle(
                         _copy_chunks(src, dst)
 
                 img_cnt, tag_cnt = _count_train(train_dir, seen_folders)
-                versions.advance_stage(conn, v["id"], "tagging")
-                projects.advance_stage(conn, p["id"], "tagging")
+                # ADR-0007 PR-5: 不再推 stage
                 v = versions.get_version(conn, v["id"])
                 p = projects.get_project(conn, p["id"])
                 assert v is not None and p is not None
@@ -701,9 +697,7 @@ def import_bundle(
 
             img_cnt, tag_cnt = _count_train(vdir / "train", seen_train) if train_entries else (0, 0)
 
-            final_stage = "tagging" if train_entries else "curating"
-            versions.advance_stage(conn, v["id"], final_stage)
-            projects.advance_stage(conn, p["id"], final_stage)
+            # ADR-0007 PR-5: 不再推 stage
             v = versions.get_version(conn, v["id"])
             p = projects.get_project(conn, p["id"])
             assert v is not None and p is not None

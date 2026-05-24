@@ -414,10 +414,10 @@ def test_finalize_version_writes_output_lora_path(env, tmp_path, monkeypatch) ->
     finally:
         sup.stop()
 
-    # version 已推到 done + output_lora_path 回填
+    # ADR-0007 PR-5: 老 stage 不再写；version.status='completed' + output_lora_path 回填
     with db.connection_for(env["db"]) as conn:
         v_after = versions.get_version(conn, v["id"])
-    assert v_after["stage"] == "done"
+    assert v_after["status"] == "completed"
     assert v_after["output_lora_path"] == str(out_lora)
 
 

@@ -311,9 +311,7 @@ def test_enqueue_creates_task_with_ids_and_config_path(
     assert task["project_id"] == pid
     assert task["version_id"] == vid
     assert task["config_path"] and task["config_path"].endswith("config.yaml")
-    # version stage 推到 training
-    v = client.get(f"/api/projects/{pid}/versions/{vid}").json()
-    assert v["stage"] == "training"
+    # ADR-0007 PR-5: version.status 由 supervisor 在 spawn 时推 training；enqueue 时仍 preparing
 
 
 def test_enqueue_rejects_active_task(client: TestClient, env) -> None:

@@ -154,17 +154,16 @@ def _default_cmd_builder(task: dict[str, Any], config_path: Path) -> list[str]:
 def _maybe_finalize_version(
     conn: Any, task_id: int, task_status: str = "done"
 ) -> None:
-    """task 终态 → 推 version.status（ADR-0007 §11.3-B）+ 维护老 stage 双写。
+    """task 终态 → 推 version.status（ADR-0007 §11.3-B）。
 
-    task_status 映射到 version.status（task 终态 → version 终态）：
-    - done → completed（含 output_lora_path 回填 + 老 stage='done' 双写）
-    - failed → failed（含 last_failure_reason 写入）
+    task_status 映射：
+    - done → completed（+ output_lora_path 回填）
+    - failed → failed（+ last_failure_reason 写入 task.error_msg）
     - canceled → canceled
 
     paused 不进此函数（§11.3-A：task=paused 时 version 仍 training，UI 派生显示）。
-    PR-5 v9 删 stage 时同步移除老 stage / project.advance_stage 调用。
     """
-    from . import projects as _projects, versions as _versions
+    from . import versions as _versions
     task_row = db.get_task(conn, task_id)
     if not task_row:
         return
@@ -173,8 +172,11 @@ def _maybe_finalize_version(
     if not (vid and pid):
         return
     v = _versions.get_version(conn, int(vid))
+    if not v:
+        return
+    from . import projects as _projects
     p = _projects.get_project(conn, int(pid))
-    if not v or not p:
+    if not p:
         return
 
     # ADR-0007 §11.3-B：task 终态独立映射，不撒谎
@@ -190,11 +192,9 @@ def _maybe_finalize_version(
     fields: dict[str, Any] = {"status": new_status}
 
     if task_status == "done":
-        # 走完整 finalize：双写老 stage + LoRA 路径
         output_name = f"{p['slug']}_{v['label']}"
         vdir = _versions.version_dir(int(pid), p["slug"], v["label"])
         candidate = vdir / "output" / f"{output_name}_final.safetensors"
-        fields["stage"] = "done"
         if candidate.exists():
             fields["output_lora_path"] = str(candidate)
     elif task_status == "failed":
@@ -203,10 +203,6 @@ def _maybe_finalize_version(
             fields["last_failure_reason"] = str(err)
 
     _versions.update_version(conn, int(vid), **fields)
-
-    # 项目老 stage 双写（done 时；PR-5 删此行）
-    if task_status == "done" and p.get("stage") in ("training", "configured"):
-        _projects.advance_stage(conn, int(pid), "done")
 
 
 def _resolve_monitor_state_path(task: dict[str, Any]) -> Path:
