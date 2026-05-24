@@ -1717,7 +1717,8 @@
     "tomlReadable": "sd-scripts 可读的配置文件",
     "tomlCollapsed": "展开查看 / 复制",
     "copied": "已复制到剪贴板",
-    "copyFailed": "复制失败"
+    "copyFailed": "复制失败",
+    "saveBeforeDownload": "请先保存预设，再触发下载（服务端直发磁盘上的原 yaml）"
   },
   "train": {
     "loadConfigFailed": "加载训练配置失败: {{error}}",

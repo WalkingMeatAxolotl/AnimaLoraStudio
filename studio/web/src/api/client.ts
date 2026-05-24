@@ -1191,6 +1191,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ config }),
     }),
+  /** 端到端 yaml 文件下载直链，server FileResponse 已设 Content-Disposition。
+   *  <a href={...} download> 触发即可，不发 fetch。 */
+  presetDownloadUrl: (name: string) =>
+    `/api/presets/${encodeURIComponent(name)}/download`,
   importPresetFromPath: (path: string) =>
     req<{ name: string; path: string }>('/api/presets/import-from-path', {
       method: 'POST',

@@ -357,3 +357,14 @@ python -m studio test    # pytest + vitest
 | 单 GPU | 训练循环未实现 DDP/FSDP；多 GPU 需切训练后端（详见 [ADR 0001](../adr/0001-lokr-via-lycoris-lora.md)） |
 | JoyCaption 需用户自起 vLLM | Studio 不在 Win 下管 vLLM 进程，只通过 base_url 调用 |
 | 用户手动改磁盘 | 每次进 step 重扫，以磁盘为准（不维护 stale 缓存） |
+
+---
+
+## 11. 前端样式约定
+
+**现阶段不做全局响应式**，布局以桌面端宽屏为主。单个页面 / 组件如有窄屏拥挤，可加简单单点适配，但必须遵守下述约定，方便未来做全局响应式时统一升级：
+
+- 所有媒体查询集中在 `studio/web/src/styles/responsive.css`，不要散落到组件里
+- 断点统一 `max-width: 1280px`（< laptop 中屏阈值），不要自创新断点
+- 单点适配只动 padding / 尺寸 / 显隐 label，**不改布局结构**（结构性改造留给未来的全局响应式）
+- 给目标元素加专属 className（如 `.banner-shell` / `.phase-timeline-label`），CSS 用 className 命中，不写到全局选择器

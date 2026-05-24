@@ -1717,7 +1717,8 @@
     "tomlReadable": "sd-scripts-readable config file",
     "tomlCollapsed": "Expand to view / copy",
     "copied": "Copied to clipboard",
-    "copyFailed": "Copy failed"
+    "copyFailed": "Copy failed",
+    "saveBeforeDownload": "Save the preset first; download streams the on-disk yaml from the server."
   },
   "train": {
     "loadConfigFailed": "Failed to load training config: {{error}}",
