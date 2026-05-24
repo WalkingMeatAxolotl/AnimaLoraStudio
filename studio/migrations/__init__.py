@@ -7,7 +7,9 @@
 约定：
 - 任何 ALTER TABLE 必须容忍「列已存在」（IF NOT EXISTS 不适用于 ADD COLUMN，
   所以用 try/except 兜一下）；这样老 DB 升上来不会因为重复 ADD 而失败。
-- 不允许向后改写已有列；只能加列 / 加表 / 加索引。
+- 通常不允许向后改写已有列；只能加列 / 加表 / 加索引。
+- **v9 例外**：ADR-0007 PR-5 destructive 删 stage 列（recreate-table 模式），
+  在 ADR-0007 §后果 显式记录。
 """
 from __future__ import annotations
 
@@ -21,6 +23,7 @@ from ._v5_task_type import migrate as _migrate_v5
 from ._v6_pause_resume import migrate as _migrate_v6
 from ._v7_version_trigger_word import migrate as _migrate_v7
 from ._v8_version_status_phase import migrate as _migrate_v8
+from ._v9_drop_legacy_stage import migrate as _migrate_v9
 
 Migration = Callable[[sqlite3.Connection], None]
 
@@ -33,6 +36,7 @@ MIGRATIONS: list[Migration] = [
     _migrate_v6,  # v6: tasks.paused_* 列 + queue_settings 表（ADR 0006 PR-2）
     _migrate_v7,  # v7: versions.trigger_word（触发词字段）
     _migrate_v8,  # v8: versions.status / phase / last_failure_reason（ADR-0007）
+    _migrate_v9,  # v9: 删 projects.stage + versions.stage（ADR-0007 PR-5 destructive）
 ]
 
 

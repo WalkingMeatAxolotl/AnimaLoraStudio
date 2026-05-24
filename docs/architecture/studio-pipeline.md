@@ -76,8 +76,6 @@ CREATE TABLE projects (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     slug                TEXT UNIQUE NOT NULL,
     title               TEXT NOT NULL,
-    stage               TEXT NOT NULL DEFAULT 'created',
-                        -- created | downloading | preprocessing | curating | tagging | regularizing | configured | training | done
     active_version_id   INTEGER REFERENCES versions(id) ON DELETE SET NULL,
     created_at          REAL NOT NULL,
     updated_at          REAL NOT NULL,
@@ -86,15 +84,21 @@ CREATE TABLE projects (
 CREATE INDEX idx_projects_slug ON projects(slug);
 
 CREATE TABLE versions (
-    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id          INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    label               TEXT NOT NULL,             -- 用户填：baseline / high-lr / ...
-    config_name         TEXT,                       -- 引用 presets/{config_name}.yaml
-    stage               TEXT NOT NULL DEFAULT 'curating',
-                        -- curating | tagging | regularizing | ready | training | done
-    created_at          REAL NOT NULL,
-    output_lora_path    TEXT,                       -- 训练完回填主产物
-    note                TEXT,
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id           INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    label                TEXT NOT NULL,             -- baseline / high-lr / ...
+    config_name          TEXT,                       -- 引用 presets/{config_name}.yaml
+    -- ADR-0007: status + phase 双正交字段（v8 加；v9 删 stage）
+    status               TEXT NOT NULL DEFAULT 'preparing',
+                         -- preparing | training | completed | failed | canceled
+    phase                TEXT NOT NULL DEFAULT 'curating',
+                         -- curating | tagging | editing | regularizing | ready
+                         -- 仅 status=preparing 时有业务意义
+    last_failure_reason  TEXT,                       -- task=failed 时来自 task.error_msg
+    trigger_word         TEXT NOT NULL DEFAULT '',
+    created_at           REAL NOT NULL,
+    output_lora_path     TEXT,                       -- 训练完回填主产物
+    note                 TEXT,
     UNIQUE(project_id, label)
 );
 CREATE INDEX idx_versions_project ON versions(project_id);
@@ -103,7 +107,7 @@ CREATE TABLE project_jobs (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id          INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     version_id          INTEGER REFERENCES versions(id) ON DELETE CASCADE,
-                        -- NULL = project 级（download）
+                        -- NULL = project 级（download / preprocess）
                         -- 非 NULL = version 级（tag, reg_build, generate）
     kind                TEXT NOT NULL,             -- download | preprocess | tag | reg_build | generate
     params              TEXT NOT NULL,             -- JSON 序列化的输入参数
@@ -120,20 +124,16 @@ CREATE INDEX idx_jobs_status ON project_jobs(status);
 -- tasks 表（训练任务），含 project_id / version_id 外键
 ```
 
-**Stage 推进规则**（前端只读，后端权威；写在 `studio/projects.py:advance_stage()` 里）：
+**Version 状态推进规则**（ADR-0007 §11.3-B / §11.5-A）：
 
-| 当前 stage | 触发条件 | 下一个 stage |
+| 维度 | 谁推 | 何时 |
 |---|---|---|
-| `created` | download job 启动 | `downloading` |
-| `downloading` | download job 完成 | `curating`（或 `preprocessing`，如用户启用预处理） |
-| `preprocessing` | preprocess job 完成 / 用户跳过 | `curating` |
-| `curating` | version 的 train/ 有图 | `tagging` (active version) |
-| `tagging` | tag job 完成 | `regularizing`（如果用户跳过则进 `configured`） |
-| `regularizing` | reg job 完成 / 用户跳过 | `configured` |
-| `configured` | task 入队 | `training` |
-| `training` | task done | `done` |
+| `status` (5 enum) | supervisor | task 启动 / 终态：`pending/running/paused → training`；`done → completed`；`failed → failed`；`canceled → canceled` |
+| `phase` (5 enum, 仅 preparing) | 用户按 PhaseHeaderNav 的 "下一步" | 校验通过（详 ADR §11.5-B 每 phase 完成判定）→ cursor 前进 |
+| `phase` 跳过 | 用户按 "下一步"（仅 `regularizing` 可跳） | 无 reg job running → cursor 直接跳到下一个 |
+| **不主动回退** | — | user 删数据后下次 next 校验失败时提示，由 user redo（§11.5-C） |
 
-stage 只是「展示性」字段——前端 Stepper 高亮用，跳步骤不强制。
+**Project 无 stage**：ADR-0007 PR-5 删除。项目级数据集状态（download / preprocess 文件数）由 UI 实时扫派生（§6.10）。
 
 ---
 
