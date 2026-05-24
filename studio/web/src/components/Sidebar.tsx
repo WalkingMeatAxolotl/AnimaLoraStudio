@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useLocation } from 'react-router-dom'
-import { api, PHASE_ORDER, type ProjectDetail, type Version, type VersionPhase, type VersionStage } from '../api/client'
+import { api, PHASE_ORDER, type ProjectDetail, type Version, type VersionPhase, type VersionStatus } from '../api/client'
 import { getStoredTheme, toggleTheme, type Theme } from '../lib/theme'
 
 /** ADR-0007 §11.2 / §11.5-A: 把 STEPS 的 version-scope step key 映射到 phase enum。
@@ -47,14 +47,13 @@ const I = {
   moon:    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>,
 }
 
-// ── version stage dot ──────────────────────────────────────────────────────
-const STAGE_DOT: Record<VersionStage, string> = {
-  curating:     'dot dot-warn',
-  tagging:      'dot dot-warn',
-  regularizing: 'dot dot-warn',
-  ready:        'dot dot-ok',
-  training:     'dot dot-running',
-  done:         'dot dot-ok',
+// ── version status dot (ADR-0007 §11.3-B) ─────────────────────────────────
+const STATUS_DOT: Record<VersionStatus, string> = {
+  preparing: 'dot dot-warn',
+  training:  'dot dot-running',
+  completed: 'dot dot-ok',
+  failed:    'dot dot-err',
+  canceled:  'dot dot-neutral',
 }
 
 // ── logo ───────────────────────────────────────────────────────────────────
@@ -143,7 +142,7 @@ function VersionPanel({ collapsed }: { collapsed: boolean }) {
                     : 'text-fg-secondary font-normal bg-transparent hover:bg-surface',
                 ].join(' ')}
               >
-                <span className={STAGE_DOT[v.stage]} />
+                <span className={STATUS_DOT[v.status] ?? 'dot dot-neutral'} />
                 <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{v.label}</span>
               </button>
               {isActive && project.versions.length > 1 && (

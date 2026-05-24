@@ -93,7 +93,7 @@ export default function InlineLoraPicker(props: Props) {
     if (pid === null) return []
     return projectLoras
       .filter((l) => l.projectId === pid)
-      .map((l) => ({ id: l.versionId, label: l.versionLabel, stage: l.stage }))
+      .map((l) => ({ id: l.versionId, label: l.versionLabel, status: l.status }))
   }, [projectLoras, pid])
 
   const [vid, setVid] = useState<number | null>(initialVid)
@@ -281,7 +281,7 @@ export default function InlineLoraPicker(props: Props) {
           <option value="">选版本…</option>
           {versions.map((v) => (
             <option key={v.id} value={v.id}>
-              {v.label}{v.stage === 'training' ? '（训练中）' : ''}
+              {v.label}{v.status === 'training' ? '（训练中）' : ''}
             </option>
           ))}
         </select>
@@ -298,7 +298,7 @@ export default function InlineLoraPicker(props: Props) {
       />
 
       {error && <div className="text-2xs text-err">{error}</div>}
-      {currentVersion?.stage === 'training' && (
+      {currentVersion?.status === 'training' && (
         <div className="text-2xs text-fg-tertiary">
           <span className="badge badge-info" style={{ fontSize: 10, marginRight: 4 }}>训练中</span>
           ckpt 列表会随训练进度刷新

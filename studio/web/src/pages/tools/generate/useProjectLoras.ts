@@ -40,7 +40,7 @@ export function useProjectLoras(): ProjectLora[] {
                 projectTitle: d.title,
                 versionId: v.id,
                 versionLabel: v.label,
-                stage: v.stage,
+                status: v.status,
                 path: v.output_lora_path,
                 createdAt: v.created_at,
               })
@@ -53,7 +53,7 @@ export function useProjectLoras(): ProjectLora[] {
                   projectTitle: d.title,
                   versionId: v.id,
                   versionLabel: v.label,
-                  stage: v.stage,
+                  status: v.status,
                   path: '',  // 由 fallback 填
                   createdAt: v.created_at,
                 },

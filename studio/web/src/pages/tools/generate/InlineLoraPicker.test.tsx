@@ -8,17 +8,17 @@ import type { ProjectLora } from './types'
 const sample: ProjectLora[] = [
   {
     projectId: 1, projectTitle: 'cute_chibi',
-    versionId: 11, versionLabel: 'v3', stage: 'training',
+    versionId: 11, versionLabel: 'v3', status: 'training',
     path: '/loras/cute_chibi/v3.safetensors', createdAt: 300,
   },
   {
     projectId: 1, projectTitle: 'cute_chibi',
-    versionId: 12, versionLabel: 'v2', stage: 'done',
+    versionId: 12, versionLabel: 'v2', status: 'completed',
     path: '/loras/cute_chibi/v2.safetensors', createdAt: 200,
   },
   {
     projectId: 2, projectTitle: 'noir_portrait',
-    versionId: 21, versionLabel: 'v1', stage: 'done',
+    versionId: 21, versionLabel: 'v1', status: 'completed',
     path: '/loras/noir/v1.safetensors', createdAt: 100,
   },
 ]

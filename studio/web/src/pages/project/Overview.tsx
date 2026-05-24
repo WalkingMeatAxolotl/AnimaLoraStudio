@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import { api, type ProjectDetail, type Task, type Version } from '../../api/client'
 import PageHeader from '../../components/PageHeader'
-import StageBadge from '../../components/StageBadge'
 import VersionStatusBadge from '../../components/VersionStatusBadge'
 import { useToast } from '../../components/Toast'
 
@@ -46,133 +45,6 @@ function StatCard({
         style={{ fontWeight: 600, letterSpacing: '-0.02em', lineHeight: 1.05 }}
       >{value}</div>
       {sub && <div className="mt-1.5 text-sm text-fg-tertiary">{sub}</div>}
-    </div>
-  )
-}
-
-// ── PipelineTimeline ─────────────────────────────────────────────
-
-type StepStatus = 'done' | 'active' | 'pending'
-
-interface PipelineStep {
-  idx: number
-  label: string
-  status: StepStatus
-  meta: string
-}
-
-function deriveTimeline(
-  project: ProjectDetail,
-  activeVersion: Version | null,
-  t: (k: string, o?: Record<string, unknown>) => string,
-): PipelineStep[] {
-  const stage = activeVersion?.stage ?? project.stage
-  const stageOrder = ['downloading', 'preprocessing', 'curating', 'tagging', 'regularizing', 'configured', 'training', 'done']
-  const stageIdx = stageOrder.indexOf(stage)
-
-  const steps: Array<{ label: string; stages: string[]; meta: () => string }> = [
-    {
-      label: t('overview.stepDownload'),
-      stages: ['downloading'],
-      meta: () => t('overview.nImages', { n: project.download_image_count ?? 0 }),
-    },
-    {
-      label: t('overview.stepPreprocess'),
-      stages: ['preprocessing'],
-      meta: () => {
-        const n = project.preprocess_image_count ?? 0
-        return n > 0 ? t('overview.nImages', { n }) : '—'
-      },
-    },
-    {
-      label: t('overview.stepCurate'),
-      stages: ['curating'],
-      meta: () => {
-        const n = activeVersion?.stats?.train_image_count ?? 0
-        return n > 0 ? t('overview.nImages', { n }) : '—'
-      },
-    },
-    {
-      label: t('overview.stepTag'),
-      stages: ['tagging'],
-      meta: () => {
-        const n = activeVersion?.stats?.train_image_count ?? 0
-        return n > 0 ? t('overview.nImages', { n }) : '—'
-      },
-    },
-    {
-      label: t('overview.stepTagEdit'),
-      stages: ['regularizing'],
-      meta: () => '—',
-    },
-    {
-      label: t('overview.stepReg'),
-      stages: ['configured'],
-      meta: () => {
-        const n = activeVersion?.stats?.reg_image_count ?? 0
-        return n > 0 ? t('overview.nImages', { n }) : '—'
-      },
-    },
-    {
-      label: t('overview.stepTrain'),
-      stages: ['training', 'done'],
-      meta: () => activeVersion?.stats?.has_output ? t('overview.hasOutput') : '—',
-    },
-  ]
-
-  return steps.map((s, i) => {
-    const stepFirstStageIdx = stageOrder.indexOf(s.stages[0])
-    let status: StepStatus = 'pending'
-    if (stage === 'done' || s.stages.some(st => st === 'done')) {
-      status = stage === 'done' ? 'done' : 'pending'
-    }
-    if (stageIdx > stepFirstStageIdx) status = 'done'
-    else if (s.stages.includes(stage)) status = 'active'
-
-    return { idx: i + 1, label: s.label, status, meta: s.meta() }
-  })
-}
-
-function PipelineTimeline({ steps }: { steps: PipelineStep[] }) {
-  return (
-    <div className="grid" style={{ gridTemplateColumns: `repeat(${steps.length}, 1fr)` }}>
-      {steps.map((s, i) => (
-        <div key={i} className="relative px-1 min-w-0">
-          {i > 0 && (
-            <div
-              className={`absolute top-[15px] left-0 h-0.5 ${s.status !== 'pending' ? 'bg-ok' : 'bg-border-subtle'}`}
-              style={{ width: 'calc(50% - 15px)' }}
-            />
-          )}
-          {i < steps.length - 1 && (
-            <div
-              className={`absolute top-[15px] right-0 h-0.5 ${s.status === 'done' ? 'bg-ok' : 'bg-border-subtle'}`}
-              style={{ width: 'calc(50% - 15px)' }}
-            />
-          )}
-          <div className="flex flex-col items-center text-center relative min-w-0">
-            <div
-              className={`w-[30px] h-[30px] rounded-full grid place-items-center font-mono font-bold text-xs shrink-0 ${
-                s.status === 'done'   ? 'bg-ok text-fg-inverse'
-                : s.status === 'active' ? 'bg-accent text-fg-inverse ring-[3px] ring-accent-soft'
-                : 'bg-overlay text-fg-tertiary'
-              }`}
-            >
-              {s.status === 'done' ? '✓' : s.idx}
-            </div>
-            <div className={`mt-2 text-sm font-medium leading-tight max-w-full overflow-hidden text-ellipsis whitespace-nowrap ${
-              s.status === 'pending' ? 'text-fg-tertiary' : 'text-fg-primary'
-            }`}>
-              {s.label}
-            </div>
-            <div className={`text-xs mt-0.5 max-w-full overflow-hidden text-ellipsis whitespace-nowrap ${
-              s.meta === '—' ? 'text-fg-disabled' : 'text-fg-tertiary'
-            }`}>
-              {s.meta}
-            </div>
-          </div>
-        </div>
-      ))}
     </div>
   )
 }
@@ -447,8 +319,6 @@ export default function ProjectOverview() {
     },
   ]
 
-  const steps = deriveTimeline(project, activeVersion, t)
-
   const latestOutputTaskByVersion = useMemo(() => {
     const out = new Map<number, Task>()
     const byFinished = [...relatedTasks].sort(
@@ -461,36 +331,13 @@ export default function ProjectOverview() {
     return out
   }, [relatedTasks])
 
-  const nextStep = steps.find(s => s.status === 'active')
-  const nextStepPaths: Record<string, string> = {
-    [t('overview.stepDownload')]:  'download',
-    [t('overview.stepCurate')]:    `v/${activeVersion?.id}/curate`,
-    [t('overview.stepTag')]:       `v/${activeVersion?.id}/tag`,
-    [t('overview.stepTagEdit')]:   `v/${activeVersion?.id}/edit`,
-    [t('overview.stepReg')]:       `v/${activeVersion?.id}/reg`,
-    [t('overview.stepTrain')]:     `v/${activeVersion?.id}/train`,
-  }
-  const nextPath = nextStep ? nextStepPaths[nextStep.label] : undefined
-
-  // ADR-0007 §11.8-C 右上角 = 当前 version 的 status badge
-  const headerActions = (
+  // ADR-0007 §11.8-C 右上角 = 当前 version 的 status badge（"继续" CTA 已由侧栏 +
+  // PhaseHeaderNav 接管）
+  const headerActions = activeVersion ? (
     <div className="flex items-center gap-3">
-      {activeVersion && (
-        <VersionStatusBadge status={activeVersion.status} />
-      )}
-      {nextPath ? (
-        <button
-          className="btn btn-primary"
-          onClick={() => navigate(`/projects/${project.id}/${nextPath}`)}
-        >
-          {t('overview.continueStep', { label: nextStep?.label })}
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <path d="M5 12h14M12 5l7 7-7 7" />
-          </svg>
-        </button>
-      ) : null}
+      <VersionStatusBadge status={activeVersion.status} />
     </div>
-  )
+  ) : null
 
   const tabBtnCls = (tab: OverviewTab) => [
     'px-4 py-2 text-sm border-none bg-transparent cursor-pointer border-b-2 transition-colors',
@@ -542,16 +389,6 @@ export default function ProjectOverview() {
 
         <div className="card" style={{ padding: 18 }}>
           <div className="flex items-center mb-3.5">
-            <h2 className="text-md font-semibold flex-1" style={{ margin: 0 }}>{t('overview.pipelineProgress')}</h2>
-            <span className="caption">{t('overview.stages')}</span>
-          </div>
-          <div>
-            <PipelineTimeline steps={steps} />
-          </div>
-        </div>
-
-        <div className="card" style={{ padding: 18 }}>
-          <div className="flex items-center mb-3.5">
             <h2 className="text-md font-semibold flex-1" style={{ margin: 0 }}>{t('overview.versions')}</h2>
             <button
               className="btn btn-ghost btn-sm border border-dashed border-dim"
@@ -577,7 +414,7 @@ export default function ProjectOverview() {
                 >
                   <div className="flex justify-between items-center">
                     <span className="font-mono font-semibold">{v.label}</span>
-                    <StageBadge stage={v.stage} />
+                    <VersionStatusBadge status={v.status} />
                   </div>
                   <div className="mt-1.5 flex gap-3.5 text-sm text-fg-secondary">
                     <span>{t('overview.trainImages', { n: v.stats?.train_image_count ?? 0 })}</span>

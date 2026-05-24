@@ -1,6 +1,6 @@
 /** 测试页面（Generate）共用本地类型 + 常量。 */
 
-import type { VersionStage } from '../../../api/client'
+import type { VersionStatus } from '../../../api/client'
 
 /** 训练好的 LoRA 视图（InlineLoraPicker / SidebarLoras 共用）。 */
 export interface ProjectLora {
@@ -8,7 +8,7 @@ export interface ProjectLora {
   projectTitle: string
   versionId: number
   versionLabel: string
-  stage: VersionStage
+  status: VersionStatus
   /** output_lora_path —— 必有值（hook 侧已过滤 null） */
   path: string
   createdAt: number

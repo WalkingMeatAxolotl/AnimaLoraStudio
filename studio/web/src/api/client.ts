@@ -517,24 +517,8 @@ export interface ModelsCatalog {
 
 // ---- projects / versions (PP1) -------------------------------------------
 
-export type ProjectStage =
-  | 'created'
-  | 'downloading'
-  | 'preprocessing'
-  | 'curating'
-  | 'tagging'
-  | 'regularizing'
-  | 'configured'
-  | 'training'
-  | 'done'
-
-export type VersionStage =
-  | 'curating'
-  | 'tagging'
-  | 'regularizing'
-  | 'ready'
-  | 'training'
-  | 'done'
+// ADR-0007 PR-5: 老 ProjectStage / VersionStage 已删（DB 列也由 v9 destructive 删）。
+// 用 VersionStatus + VersionPhase 替代。
 
 /** ADR-0007 §11.3-B 新模型：version 运行态状态机（5 enum）。 */
 export type VersionStatus =
@@ -582,9 +566,9 @@ export interface Version {
   project_id: number
   label: string
   config_name: string | null
-  stage: VersionStage
-  /** ADR-0007 §11.3-B 新字段；与 stage 双写过渡（v9 前老 frontend 仍可用 stage）。 */
+  /** ADR-0007 §11.3-B: 运行态主状态机（5 enum）。 */
   status: VersionStatus
+  /** ADR-0007 §11.3-B: phase cursor，仅 status=preparing 时有意义。 */
   phase: VersionPhase
   last_failure_reason: string | null
   created_at: number
@@ -599,7 +583,6 @@ export interface ProjectSummary {
   id: number
   slug: string
   title: string
-  stage: ProjectStage
   active_version_id: number | null
   /** ADR-0007 §11.8-E: 项目卡片右上角 status badge / 卡片显 version 名（list 端点 enrich）。 */
   active_version_label: string | null
@@ -1332,7 +1315,6 @@ export const api = {
     body: Partial<{
       title: string
       note: string
-      stage: ProjectStage
       active_version_id: number | null
     }>
   ) =>
@@ -1366,7 +1348,8 @@ export const api = {
     vid: number,
     body: Partial<{
       note: string
-      stage: VersionStage
+      status: VersionStatus
+      phase: VersionPhase
       config_name: string | null
     }>
   ) =>
