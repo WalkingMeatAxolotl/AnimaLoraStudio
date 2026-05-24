@@ -82,20 +82,13 @@ def test_create_rejects_empty_title(isolated) -> None:
 
 
 def test_update_writes_project_json(isolated) -> None:
+    """ADR-0007 PR-5: stage 已删；只剩 note / title / active_version_id 可 PATCH。"""
     with db.connection_for(isolated["db"]) as conn:
         p = projects.create_project(conn, title="X")
-        projects.update_project(conn, p["id"], note="updated", stage="curating")
+        projects.update_project(conn, p["id"], note="updated")
     pdir = projects.project_dir(p["id"], p["slug"])
     text = (pdir / "project.json").read_text(encoding="utf-8")
     assert "updated" in text
-    assert "curating" in text
-
-
-def test_update_rejects_invalid_stage(isolated) -> None:
-    with db.connection_for(isolated["db"]) as conn:
-        p = projects.create_project(conn, title="X")
-        with pytest.raises(projects.ProjectError, match="stage"):
-            projects.update_project(conn, p["id"], stage="bogus")
 
 
 # ---------------------------------------------------------------------------

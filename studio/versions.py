@@ -20,13 +20,8 @@ from typing import Any, Optional
 from . import projects
 from .datasets import IMAGE_EXTS
 
-VALID_STAGES: frozenset[str] = frozenset({
-    "curating", "tagging", "regularizing",
-    "ready", "training", "done",
-})
-
-# ADR-0007 §11.3-B：versions.stage 被拆成 status + phase 两个正交字段。
-# 本节加 enum + readonly accessor；写入路径由 PR-3 双写过渡，v9 删 stage 同步清理。
+# ADR-0007 §11.3-B：versions 状态机用 status + phase 两个正交字段。
+# 老 stage 已在 PR-5 移除（PR-5 commit 2 删 VALID_STAGES / advance_stage）。
 
 
 class VersionStatus:
@@ -402,13 +397,6 @@ def list_versions(
     ]
 
 
-# PP10.1 — fork 时源 stage 落到新 version 的映射。
-# done / training 的 version 已经训完或在训，新 version 重新进入待训练态；
-# 其他 stage（curating / tagging / regularizing / ready）原样跟随，让用户从
-# 副本所处的同一 step 接着干。
-_FORK_STAGE_RESET: frozenset[str] = frozenset({"done", "training"})
-
-
 def create_version(
     conn: sqlite3.Connection,
     *,
@@ -424,7 +412,9 @@ def create_version(
     输出类（output/、samples/、monitor_state.json）一律不复制。
     复制 config.yaml 后立即重写一次，把 data_dir / reg_data_dir / output_dir /
     output_name 强制刷成新 version 的路径。
-    stage 跟随源（done/training → ready；其他原样）。
+
+    ADR-0007 PR-5: fork 不再继承 stage / status / phase；新 version 始终从
+    preparing / curating 默认值开始。用户 fork 后从筛选 phase 接着干。
     """
     p = projects.get_project(conn, project_id)
     if not p:
@@ -441,7 +431,6 @@ def create_version(
         raise VersionError(f"label 已存在: {label!r}")
 
     src_config_name: Optional[str] = None
-    src_stage: str = "curating"
     if fork_from_version_id is not None:
         src = get_version(conn, fork_from_version_id)
         if not src or src["project_id"] != project_id:
@@ -449,13 +438,12 @@ def create_version(
                 f"fork 源不存在或不属于当前项目: id={fork_from_version_id}"
             )
         src_config_name = src["config_name"]
-        src_stage = "ready" if src["stage"] in _FORK_STAGE_RESET else src["stage"]
 
     now = time.time()
     cur = conn.execute(
-        "INSERT INTO versions(project_id, label, config_name, stage, created_at, note) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (project_id, label, src_config_name, src_stage, now, note),
+        "INSERT INTO versions(project_id, label, config_name, created_at, note) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (project_id, label, src_config_name, now, note),
     )
     conn.commit()
     vid = int(cur.lastrowid)
@@ -519,8 +507,7 @@ def _copytree(src: Path, dst: Path) -> None:
 
 
 _UPDATABLE = {
-    "note", "stage", "config_name", "output_lora_path", "trigger_word",
-    # ADR-0007 §11.3-B 新字段（PR-3 起允许写入；v9 删 stage 后 stage 离开此集合）
+    "note", "config_name", "output_lora_path", "trigger_word",
     "status", "phase", "last_failure_reason",
 }
 
@@ -530,8 +517,6 @@ def update_version(
 ) -> dict[str, Any]:
     v = _must_get(conn, version_id)
     keep = {k: val for k, val in fields.items() if k in _UPDATABLE}
-    if "stage" in keep and keep["stage"] not in VALID_STAGES:
-        raise VersionError(f"非法 stage: {keep['stage']!r}")
     if "status" in keep and keep["status"] not in VersionStatus.VALUES:
         raise VersionError(f"非法 status: {keep['status']!r}")
     if "phase" in keep and keep["phase"] not in VersionPhase.VALUES:
@@ -581,14 +566,6 @@ def activate_version(
     v = _must_get(conn, version_id)
     projects.update_project(conn, v["project_id"], active_version_id=version_id)
     return v
-
-
-def advance_stage(
-    conn: sqlite3.Connection, version_id: int, target: str
-) -> dict[str, Any]:
-    if target not in VALID_STAGES:
-        raise VersionError(f"非法 stage: {target!r}")
-    return update_version(conn, version_id, stage=target)
 
 
 # ---------------------------------------------------------------------------

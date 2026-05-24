@@ -777,7 +777,6 @@ def _publish_project_state(p: dict[str, Any]) -> None:
     bus.publish({
         "type": "project_state_changed",
         "project_id": p["id"],
-        "stage": p["stage"],
     })
 
 
@@ -786,7 +785,8 @@ def _publish_version_state(v: dict[str, Any]) -> None:
         "type": "version_state_changed",
         "project_id": v["project_id"],
         "version_id": v["id"],
-        "stage": v["stage"],
+        "status": versions.get_status(v),
+        "phase": versions.get_phase(v),
     })
 
 

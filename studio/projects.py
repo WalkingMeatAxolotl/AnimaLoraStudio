@@ -1,4 +1,4 @@
-"""Project 数据模型 + 物理目录 + stage 推进。
+"""Project 数据模型 + 物理目录 (ADR-0007: project 极简，无过程状态)。
 
 Project 是 Pipeline 的最外层容器：每次 LoRA 训练对应一个 project，
 包含 download/ 和若干 versions/。slug 一旦生成就不可改（路径锚点）；
@@ -20,12 +20,6 @@ from typing import Any, Iterable, Optional
 from .paths import STUDIO_DATA
 
 PROJECTS_DIR = STUDIO_DATA / "projects"
-
-VALID_STAGES: frozenset[str] = frozenset({
-    "created", "downloading", "preprocessing", "curating", "tagging",
-    "regularizing", "configured", "training", "done",
-})
-
 
 class ProjectError(Exception):
     """Project 业务错误（不存在 / 名字非法 / 冲突）。"""
@@ -66,7 +60,7 @@ def project_dir(project_id: int, slug: str) -> Path:
 
 
 def _write_project_json(p: dict[str, Any]) -> None:
-    """同步 project.json 到磁盘。stage / active_version_id 等字段冗余存。"""
+    """同步 project.json 到磁盘。active_version_id 等字段冗余存。"""
     pdir = project_dir(p["id"], p["slug"])
     pdir.mkdir(parents=True, exist_ok=True)
     (pdir / "project.json").write_text(
@@ -98,8 +92,8 @@ def create_project(
     final_slug = _unique_slug(conn, base_slug)
     now = time.time()
     cur = conn.execute(
-        "INSERT INTO projects(slug, title, stage, created_at, updated_at, note) "
-        "VALUES (?, ?, 'created', ?, ?, ?)",
+        "INSERT INTO projects(slug, title, created_at, updated_at, note) "
+        "VALUES (?, ?, ?, ?, ?)",
         (final_slug, title, now, now, note),
     )
     conn.commit()
@@ -138,7 +132,7 @@ def list_projects(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     ]
 
 
-_UPDATABLE = {"title", "note", "stage", "active_version_id"}
+_UPDATABLE = {"title", "note", "active_version_id"}
 
 
 def update_project(
@@ -146,8 +140,6 @@ def update_project(
 ) -> dict[str, Any]:
     p = _must_get(conn, project_id)
     keep = {k: v for k, v in fields.items() if k in _UPDATABLE}
-    if "stage" in keep and keep["stage"] not in VALID_STAGES:
-        raise ProjectError(f"非法 stage: {keep['stage']!r}")
     if not keep:
         return p
     cols = ", ".join(f"{k} = ?" for k in keep)
@@ -170,22 +162,6 @@ def delete_project(conn: sqlite3.Connection, project_id: int) -> None:
         shutil.rmtree(src, ignore_errors=True)
     conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
     conn.commit()
-
-
-# ---------------------------------------------------------------------------
-# stage
-# ---------------------------------------------------------------------------
-
-
-def advance_stage(
-    conn: sqlite3.Connection,
-    project_id: int,
-    target: str,
-) -> dict[str, Any]:
-    """显式设 stage（PP1 不强制顺序，由调用方决定何时推进）。"""
-    if target not in VALID_STAGES:
-        raise ProjectError(f"非法 stage: {target!r}")
-    return update_project(conn, project_id, stage=target)
 
 
 # ---------------------------------------------------------------------------
