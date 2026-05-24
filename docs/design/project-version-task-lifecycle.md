@@ -834,13 +834,22 @@ status (主状态机，5 态)
 
 #### C. 项目详情页（侧栏点"概览"进入）
 
-三个 tab：**[详情] [Tasks] [Output]**，右上角 = 当前 version 的 status badge。
+**两层结构**：上半 = 项目级信息（Project 字段全展示，除 pipeline —— Project 本来就无 pipeline §6.3），下半 = version scope（dropdown 选 version + 3 个 tab）。
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│ Cosmic Kaguya / test                    [● preparing]   │ ← 右上角 = test 的 status
+│ 【项目级 — 不随 dropdown 变】                            │
+│ keta                                                    │ ← project.title
+│ slug: keta · created 2026-05-01                         │ ← slug + 时间
+│ {project.note}                                          │ ← 项目 note（无 note 不显示）
 ├─────────────────────────────────────────────────────────┤
-│ Tabs: [详情] [Tasks] [Output]                           │
+│ 数据集: ① 264 张 · ② 247 张        [管理]                │ ← 项目级数据集（实时扫）
+│ 2 个版本                                                │ ← 版本数
+├─────────────────────────────────────────────────────────┤
+│ 【version 选择 — 独立于 sidebar active】                 │
+│ Version: [v1.1 ▼]                  [● 已完成]            │ ← dropdown + 选中 version status
+├─────────────────────────────────────────────────────────┤
+│ Tabs: [详情] [Tasks] [Output]                           │ ← 全部 version scope
 ├─────────────────────────────────────────────────────────┤
 │ [详情 tab — grid 布局，非上下排]                          │
 │                                                         │
@@ -859,12 +868,20 @@ status (主状态机，5 态)
 │  未完成的格子 → 各自 empty state（参考关联 phase 页面）  │
 │                                                         │
 ├─────────────────────────────────────────────────────────┤
-│ [Tasks tab]  = 现有 /queue 页面同款                      │
-│               点 task → 跳 task 详情页（D 块）           │
+│ [Tasks tab]  = 列**本 version** 的 task（不是项目下所有）│
+│               表格风格同 /queue；点 task → task 详情页   │
 ├─────────────────────────────────────────────────────────┤
-│ [Output tab] = 现有 task output 页面同款                 │
+│ [Output tab] = **本 version** 的 LoRA artifact           │
+│               output_lora_path + step/epoch ckpts        │
 └─────────────────────────────────────────────────────────┘
 ```
+
+**Dropdown 独立性**（关键决策）：
+- 概览页有 local-only `selectedVersionId`，初值 = `project.active_version_id`
+- dropdown 改它**只影响概览页 3 个 tab 的数据源**，**不动 sidebar active 也不发 API**
+- sidebar Version list 仍然走 active version（点 sidebar version = activate）
+- 用途：用户想快速对比两个 version 的数据集/task/output，不必反复 activate
+- 概览页的"项目级"上半（title/slug/数据集/版本数）**不随 dropdown 变化** —— 它本来就是项目级
 
 #### D. Task 详情页
 

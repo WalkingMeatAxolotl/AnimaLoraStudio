@@ -694,7 +694,9 @@ function FolderSummary({
 
 function AltHoverPreview({ focus }: { focus: Focus }) {
   const { t } = useTranslation()
-  const sourceLabel = focus.side === 'left' ? 'download' : `train / ${focus.folder}`
+  const sourceLabel = focus.side === 'left'
+    ? t('curate.sourceLabelDownload')
+    : t('curate.sourceLabelTrain', { folder: focus.folder })
   return (
     <div
       aria-hidden

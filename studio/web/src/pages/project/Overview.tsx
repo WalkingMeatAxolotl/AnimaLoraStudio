@@ -1,10 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import { api, type ProjectDetail, type Task, type Version } from '../../api/client'
-import PageHeader from '../../components/PageHeader'
 import VersionStatusBadge from '../../components/VersionStatusBadge'
-import { useToast } from '../../components/Toast'
 
 type OverviewTab = 'details' | 'tasks' | 'output'
 
@@ -16,53 +14,20 @@ interface Ctx {
   creatingVersionBusy: boolean
 }
 
-// ── StatCard ────────────────────────────────────────────────────
-
-function StatCard({
-  label,
-  value,
-  sub,
-  tone,
-  mono = true,
-}: {
-  label: string
-  value: string | number
-  sub?: string
-  tone?: 'ok' | 'warn' | 'err' | 'accent'
-  mono?: boolean
-}) {
-  const colorCls =
-    tone === 'ok'     ? 'text-ok'
-    : tone === 'warn' ? 'text-warn'
-    : tone === 'err'  ? 'text-err'
-    : tone === 'accent' ? 'text-accent'
-    : 'text-fg-primary'
-  return (
-    <div className="card" style={{ padding: 18 }}>
-      <div className="caption mb-2.5">{label}</div>
-      <div
-        className={`text-2xl ${colorCls} ${mono ? 'font-mono' : ''}`}
-        style={{ fontWeight: 600, letterSpacing: '-0.02em', lineHeight: 1.05 }}
-      >{value}</div>
-      {sub && <div className="mt-1.5 text-sm text-fg-tertiary">{sub}</div>}
-    </div>
-  )
-}
-
-// ── DatasetDetailGrid (ADR-0007 §11.8-C) ─────────────────────────
+// ── DatasetDetailGrid (ADR-0007 §11.8-C [详情] tab) ───────────────────
 
 /** 数据集统计 5 格 grid card：每格 empty state 链向关联 phase 页面。 */
 function DatasetDetailGrid({
-  project, activeVersion,
-}: { project: ProjectDetail; activeVersion: Version | null }) {
+  project, version,
+}: { project: ProjectDetail; version: Version | null }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const stats = activeVersion?.stats
+  const stats = version?.stats
   const trainCount = stats?.train_image_count ?? 0
   const taggedCount = stats?.tagged_image_count ?? 0
   const regCount = stats?.reg_image_count ?? 0
   const folders = stats?.train_folders ?? []
-  const vid = activeVersion?.id
+  const vid = version?.id
   const goPhase = (key: string) => () => vid && navigate(`/projects/${project.id}/v/${vid}/${key}`)
 
   const CardShell = ({ title, children, action }: { title: string; children: React.ReactNode; action?: { label: string; onClick: () => void } }) => (
@@ -83,7 +48,6 @@ function DatasetDetailGrid({
 
   return (
     <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
-      {/* 1. 文件夹/repeat */}
       <CardShell
         title={t('overview.detail.folders')}
         action={vid ? { label: t('overview.detail.goCurate'), onClick: goPhase('curate') } : undefined}
@@ -104,7 +68,6 @@ function DatasetDetailGrid({
         )}
       </CardShell>
 
-      {/* 2. tag 分布 — 暂置 placeholder + 链到 ⑤ 编辑页 */}
       <CardShell
         title={t('overview.detail.tagDist')}
         action={vid ? { label: t('overview.detail.goEdit'), onClick: goPhase('edit') } : undefined}
@@ -118,7 +81,6 @@ function DatasetDetailGrid({
         )}
       </CardShell>
 
-      {/* 3. 分辨率分布 — 链到 ② 放大页 */}
       <CardShell
         title={t('overview.detail.resolutionDist')}
         action={{ label: t('overview.detail.goUpscale'), onClick: () => navigate(`/projects/${project.id}/preprocess?tool=upscale`) }}
@@ -126,7 +88,6 @@ function DatasetDetailGrid({
         <EmptyHint k="overview.detail.emptyResolution" />
       </CardShell>
 
-      {/* 4. 长宽比分布 — 链到 ② 裁剪页 */}
       <CardShell
         title={t('overview.detail.aspectDist')}
         action={{ label: t('overview.detail.goCrop'), onClick: () => navigate(`/projects/${project.id}/preprocess?tool=crop`) }}
@@ -134,7 +95,6 @@ function DatasetDetailGrid({
         <EmptyHint k="overview.detail.emptyAspect" />
       </CardShell>
 
-      {/* 5. 正则集 */}
       <CardShell
         title={t('overview.detail.regSet')}
         action={vid ? { label: t('overview.detail.goReg'), onClick: goPhase('reg') } : undefined}
@@ -149,10 +109,9 @@ function DatasetDetailGrid({
   )
 }
 
-// ── ProjectTasksPanel (ADR-0007 §11.8-C) ─────────────────────────
+// ── VersionTasksPanel (ADR-0007 §11.8-C [Tasks] tab — version scope) ──
 
-/** [Tasks] tab：列本项目的训练任务（按 created_at 倒序）。点行跳 /queue/:tid。 */
-function ProjectTasksPanel({ projectId }: { projectId: number }) {
+function VersionTasksPanel({ projectId, versionId }: { projectId: number; versionId: number | null }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const [tasks, setTasks] = useState<Task[]>([])
@@ -165,14 +124,14 @@ function ProjectTasksPanel({ projectId }: { projectId: number }) {
       .then((items) => {
         if (cancelled) return
         const filtered = items
-          .filter((t) => t.project_id === projectId)
+          .filter((tk) => tk.project_id === projectId && (versionId == null || tk.version_id === versionId))
           .sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0))
         setTasks(filtered)
       })
       .catch(() => { if (!cancelled) setTasks([]) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [projectId])
+  }, [projectId, versionId])
 
   if (loading) {
     return <div className="p-6 text-fg-tertiary text-sm">{t('common.loading')}</div>
@@ -219,125 +178,64 @@ const TASK_STATUS_BADGE: Record<string, string> = {
   done: 'ok', failed: 'err', canceled: 'neutral',
 }
 
-// ── ProjectOutputPanel (ADR-0007 §11.8-C) ────────────────────────
+// ── VersionOutputPanel (ADR-0007 §11.8-C [Output] tab — 单 version) ─────
 
-/** [Output] tab：按 version 列出主 LoRA artifact + 链 /queue/:tid#outputs 看 step/epoch ckpts。 */
-function ProjectOutputPanel({ project }: { project: ProjectDetail }) {
+function VersionOutputPanel({ projectId, version }: { projectId: number; version: Version | null }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
 
-  const withOutput = project.versions.filter((v) => v.output_lora_path || v.stats?.has_output)
-  if (withOutput.length === 0) {
+  if (!version) {
     return <div className="p-6 text-fg-tertiary text-sm italic">{t('overview.outputEmpty')}</div>
+  }
+  if (!version.output_lora_path && !version.stats?.has_output) {
+    return <div className="p-6 text-fg-tertiary text-sm italic">{t('overview.outputEmptyVersion')}</div>
   }
 
   return (
     <div className="p-6 flex flex-col gap-3">
-      {withOutput.map((v) => (
-        <div key={v.id} className="card" style={{ padding: 16 }}>
-          <div className="flex items-center mb-2">
-            <span className="font-mono font-semibold flex-1">{v.label}</span>
-            <VersionStatusBadge status={v.status} />
-          </div>
-          {v.output_lora_path && (
-            <p className="m-0 text-xs text-fg-tertiary font-mono break-all">{v.output_lora_path}</p>
-          )}
-          <div className="mt-2 flex gap-2">
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={() => navigate(`/projects/${project.id}/v/${v.id}/train`)}
-            >
-              {t('overview.outputOpenTrain')}
-            </button>
-          </div>
+      <div className="card" style={{ padding: 16 }}>
+        <div className="flex items-center mb-2">
+          <span className="font-mono font-semibold flex-1">{version.label}</span>
+          <VersionStatusBadge status={version.status} />
         </div>
-      ))}
+        {version.output_lora_path && (
+          <p className="m-0 text-xs text-fg-tertiary font-mono break-all">{version.output_lora_path}</p>
+        )}
+        <div className="mt-2 flex gap-2">
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => navigate(`/projects/${projectId}/v/${version.id}/train`)}
+          >
+            {t('overview.outputOpenTrain')}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
 
-// ── Overview ─────────────────────────────────────────────────────
+// ── Overview (ADR-0007 §11.8-C 重排：项目级上半 + version-select + 3 tab) ──
 
 export default function ProjectOverview() {
   const { t } = useTranslation()
-  const { project, activeVersion, reload, onCreateVersion, creatingVersionBusy } = useOutletContext<Ctx>()
+  const { project, activeVersion } = useOutletContext<Ctx>()
   const navigate = useNavigate()
-  const { toast } = useToast()
-  const [relatedTasks, setRelatedTasks] = useState<Task[]>([])
-  // ADR-0007 §11.8-C: 三 tab 框架。后续 commit 把 details 改成 grid 布局 +
-  // 实装 tasks / output 面板内容。
-  const [activeTab, setActiveTab] = useState<OverviewTab>('details')
 
+  // dropdown 独立 selection：初值 = active_version_id，改它不动 sidebar active。
+  // 切 sidebar active version 重渲染会触发 project 重读，此时若 selected 还是合法
+  // 就保留；非法或不存在则回退到新的 active_version_id。
+  const [selectedVid, setSelectedVid] = useState<number | null>(
+    project.active_version_id ?? activeVersion?.id ?? null,
+  )
   useEffect(() => {
-    let cancelled = false
-    void api.listQueue('done', { includeGenerate: true })
-      .then((items) => {
-        if (cancelled) return
-        setRelatedTasks(items.filter(
-          (t) => t.project_id === project.id && t.config_name === 'generate',
-        ))
-      })
-      .catch(() => {
-        if (!cancelled) setRelatedTasks([])
-      })
-    return () => { cancelled = true }
-  }, [project.id])
+    const stillExists = project.versions.some((v) => v.id === selectedVid)
+    if (!stillExists) setSelectedVid(project.active_version_id ?? null)
+  }, [project.versions, project.active_version_id, selectedVid])
 
-  const handleActivate = async (v: Version) => {
-    try {
-      await api.activateVersion(project.id, v.id)
-      await reload()
-      navigate(`/projects/${project.id}/download`)
-    } catch (e) {
-      toast(String(e), 'error')
-    }
-  }
+  const selectedVersion: Version | null =
+    project.versions.find((v) => v.id === selectedVid) ?? null
 
-  const stats = [
-    {
-      label: 'download images',
-      value: project.download_image_count ?? 0,
-      sub: t('overview.totalDownload'),
-    },
-    {
-      label: 'train images',
-      value: activeVersion?.stats?.train_image_count ?? 0,
-      sub: t('overview.currentVersion', { label: activeVersion?.label ?? '—' }),
-    },
-    {
-      label: 'reg images',
-      value: activeVersion?.stats?.reg_image_count ?? 0,
-      sub: activeVersion?.stats?.has_output ? t('overview.hasCkpt') : t('overview.noTrained'),
-      tone: activeVersion?.stats?.has_output ? 'ok' as const : undefined,
-    },
-    {
-      label: t('overview.versionCount'),
-      value: project.versions.length,
-      sub: t('overview.activeVersion', { label: activeVersion?.label ?? '—' }),
-      tone: 'accent' as const,
-      mono: false,
-    },
-  ]
-
-  const latestOutputTaskByVersion = useMemo(() => {
-    const out = new Map<number, Task>()
-    const byFinished = [...relatedTasks].sort(
-      (a, b) => (b.finished_at ?? 0) - (a.finished_at ?? 0),
-    )
-    for (const task of byFinished) {
-      if (task.version_id == null) continue
-      if (!out.has(task.version_id)) out.set(task.version_id, task)
-    }
-    return out
-  }, [relatedTasks])
-
-  // ADR-0007 §11.8-C 右上角 = 当前 version 的 status badge（"继续" CTA 已由侧栏 +
-  // PhaseHeaderNav 接管）
-  const headerActions = activeVersion ? (
-    <div className="flex items-center gap-3">
-      <VersionStatusBadge status={activeVersion.status} />
-    </div>
-  ) : null
+  const [activeTab, setActiveTab] = useState<OverviewTab>('details')
 
   const tabBtnCls = (tab: OverviewTab) => [
     'px-4 py-2 text-sm border-none bg-transparent cursor-pointer border-b-2 transition-colors',
@@ -346,14 +244,77 @@ export default function ProjectOverview() {
       : 'text-fg-secondary border-transparent hover:text-fg-primary',
   ].join(' ')
 
+  const created = project.created_at
+    ? new Date(project.created_at * 1000).toLocaleDateString()
+    : '—'
+
   return (
     <div className="fade-in">
-      <PageHeader
-        title={`${project.title}${activeVersion ? ` / ${activeVersion.label}` : ''}`}
-        subtitle={project.note || t('overview.subtitle', { n: project.download_image_count ?? 0, v: project.versions.length })}
-        actions={headerActions}
-      />
+      {/* ── 项目级 header — 不随 dropdown 变 ────────────────────────── */}
+      <div className="px-6 pt-5 pb-4 bg-canvas border-b border-subtle">
+        <h1 className="m-0 text-2xl font-semibold tracking-tight leading-[1.15]">{project.title}</h1>
+        <p className="mt-1.5 m-0 text-xs text-fg-tertiary font-mono">
+          {t('overview.header.slug', { slug: project.slug })}
+          <span className="mx-2">·</span>
+          {t('overview.header.created', { date: created })}
+        </p>
+        {project.note && (
+          <p className="mt-2 mb-0 text-sm text-fg-secondary max-w-[720px]">{project.note}</p>
+        )}
+      </div>
 
+      {/* ── 项目级 meta bar：数据集 + 版本数 ───────────────────────── */}
+      <div className="px-6 py-3 bg-sunken border-b border-subtle flex items-center gap-6 flex-wrap text-sm">
+        <div className="flex items-center gap-2">
+          <span className="text-fg-tertiary">{t('overview.header.dataset')}:</span>
+          <span className="font-mono">
+            {t('overview.header.downloadCount', { n: project.download_image_count ?? 0 })}
+          </span>
+          <span className="text-fg-tertiary">·</span>
+          <span className="font-mono">
+            {t('overview.header.preprocessCount', { n: project.preprocess_image_count ?? 0 })}
+          </span>
+          <button
+            className="btn btn-ghost btn-xs ml-1"
+            onClick={() => navigate(`/projects/${project.id}/download`)}
+          >
+            {t('overview.header.manage')}
+          </button>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-fg-tertiary">{t('overview.header.versions')}:</span>
+          <span className="font-mono">{project.versions.length}</span>
+        </div>
+      </div>
+
+      {/* ── version 选择 — 独立于 sidebar active ─────────────────────── */}
+      <div className="px-6 py-3 bg-canvas border-b border-subtle flex items-center gap-3 flex-wrap">
+        <label htmlFor="version-select" className="text-sm text-fg-secondary">
+          {t('overview.versionSelector.label')}:
+        </label>
+        <select
+          id="version-select"
+          className="input input-mono"
+          style={{ width: 'auto', minWidth: 160 }}
+          value={selectedVid ?? ''}
+          onChange={(e) => setSelectedVid(e.target.value ? Number(e.target.value) : null)}
+        >
+          {project.versions.length === 0 ? (
+            <option value="">{t('overview.versionSelector.empty')}</option>
+          ) : (
+            project.versions.map((v) => (
+              <option key={v.id} value={v.id}>{v.label}</option>
+            ))
+          )}
+        </select>
+        {selectedVersion && (
+          <div className="ml-auto">
+            <VersionStatusBadge status={selectedVersion.status} />
+          </div>
+        )}
+      </div>
+
+      {/* ── version scope tabs ────────────────────────────────────── */}
       <div className="border-b border-subtle px-6">
         <div className="flex gap-1">
           <button className={tabBtnCls('details')} onClick={() => setActiveTab('details')}>
@@ -368,87 +329,18 @@ export default function ProjectOverview() {
         </div>
       </div>
 
+      {activeTab === 'details' && (
+        <div className="p-6">
+          <DatasetDetailGrid project={project} version={selectedVersion} />
+        </div>
+      )}
+
       {activeTab === 'tasks' && (
-        <ProjectTasksPanel projectId={project.id} />
+        <VersionTasksPanel projectId={project.id} versionId={selectedVid} />
       )}
 
       {activeTab === 'output' && (
-        <ProjectOutputPanel project={project} />
-      )}
-
-      {activeTab === 'details' && (
-      <div className="p-6 flex flex-col gap-5">
-        {/* ADR-0007 §11.8-C [详情] tab grid 布局：5 个 card 复用关联 phase 页面的统计风格 */}
-        <DatasetDetailGrid project={project} activeVersion={activeVersion} />
-
-        <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
-          {stats.map((s, i) => (
-            <StatCard key={i} {...s} />
-          ))}
-        </div>
-
-        <div className="card" style={{ padding: 18 }}>
-          <div className="flex items-center mb-3.5">
-            <h2 className="text-md font-semibold flex-1" style={{ margin: 0 }}>{t('overview.versions')}</h2>
-            <button
-              className="btn btn-ghost btn-sm border border-dashed border-dim"
-              onClick={onCreateVersion}
-              disabled={creatingVersionBusy}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                <path d="M12 5v14M5 12h14" />
-              </svg>
-              {creatingVersionBusy ? t('overview.creating') : t('overview.newVersion')}
-            </button>
-          </div>
-
-          <div className="flex flex-col gap-2">
-            {project.versions.map((v) => {
-              const isActive = v.id === project.active_version_id
-              return (
-                <div
-                  key={v.id}
-                  className={`p-3.5 rounded-md ${
-                    isActive ? 'border border-accent bg-accent-soft' : 'border border-subtle'
-                  }`}
-                >
-                  <div className="flex justify-between items-center">
-                    <span className="font-mono font-semibold">{v.label}</span>
-                    <VersionStatusBadge status={v.status} />
-                  </div>
-                  <div className="mt-1.5 flex gap-3.5 text-sm text-fg-secondary">
-                    <span>{t('overview.trainImages', { n: v.stats?.train_image_count ?? 0 })}</span>
-                    <span>{t('overview.regImages', { n: v.stats?.reg_image_count ?? 0 })}</span>
-                    {v.stats?.has_output && (
-                      <span className="text-ok">{t('overview.trained')}</span>
-                    )}
-                  </div>
-                  {v.note && (
-                    <p className="mt-1.5 text-sm text-fg-secondary">{v.note}</p>
-                  )}
-                  <div className="mt-2.5">
-                    <button
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => handleActivate(v)}
-                    >
-                      {isActive ? t('overview.open') : t('overview.activateAndOpen')}
-                    </button>
-                    {latestOutputTaskByVersion.has(v.id) && (
-                      <button
-                        className="btn btn-ghost btn-sm ml-2"
-                        onClick={() => navigate(`/queue/${latestOutputTaskByVersion.get(v.id)!.id}#outputs`)}
-                        title={t('overview.viewOutput')}
-                      >
-                        {t('overview.viewOutput')}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      </div>
+        <VersionOutputPanel projectId={project.id} version={selectedVersion} />
       )}
     </div>
   )

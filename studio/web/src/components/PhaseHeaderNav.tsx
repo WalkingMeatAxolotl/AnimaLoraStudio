@@ -35,13 +35,13 @@ const PHASE_TO_STEP_KEY: Record<VersionPhase, string> = {
   ready:        'train',
 }
 
-/** phase enum → 全局编号（保持 master STEPS 心智，③–⑦）。 */
+/** phase enum → 编号（与 sidebar version-scope STEPS 对齐，1-5）。 */
 const PHASE_TO_IDX: Record<VersionPhase, string> = {
-  curating:     '③',
-  tagging:      '④',
-  editing:      '⑤',
-  regularizing: '⑥',
-  ready:        '⑦',
+  curating:     '1',
+  tagging:      '2',
+  editing:      '3',
+  regularizing: '4',
+  ready:        '5',
 }
 
 const PHASE_TO_LABEL_KEY: Record<VersionPhase, string> = {

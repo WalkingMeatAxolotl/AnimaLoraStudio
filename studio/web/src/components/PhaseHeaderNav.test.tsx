@@ -50,22 +50,21 @@ describe('PhaseHeaderNav (ADR-0007 §11.5-A / §11.8-B)', () => {
 
   it('renders next button only on curating (no prev)', () => {
     renderAt('/projects/1/v/2/curate')
-    // next 按钮含 ④ 打标
-    expect(screen.getByText(/④/)).toBeInTheDocument()
-    // 不应有 ③（前一步不存在）
-    expect(screen.queryByText(/③/)).not.toBeInTheDocument()
+    // next 按钮含 "2 打标"
+    expect(screen.getByText(/2 打标/)).toBeInTheDocument()
+    // 不应有 "← 0" 等前一步标记（前一步不存在）
+    expect(screen.queryByText(/← /)).not.toBeInTheDocument()
   })
 
   it('renders both prev and next on tagging', () => {
     renderAt('/projects/1/v/2/tag')
-    expect(screen.getByText(/③/)).toBeInTheDocument()  // prev = curating
-    expect(screen.getByText(/⑤/)).toBeInTheDocument()  // next = editing
+    expect(screen.getByText(/1 筛选/)).toBeInTheDocument()   // prev = curating
+    expect(screen.getByText(/3 标签编辑/)).toBeInTheDocument() // next = editing
   })
 
   it('renders prev only on ready (last phase, no next)', () => {
     renderAt('/projects/1/v/2/train')
-    expect(screen.getByText(/⑥/)).toBeInTheDocument()  // prev = regularizing
+    expect(screen.getByText(/4 正则集/)).toBeInTheDocument() // prev = regularizing
     // ready 是最后一个，next 按钮被 hidden
-    // 不应出现 ⑧ 之类的下一步标记
   })
 })
