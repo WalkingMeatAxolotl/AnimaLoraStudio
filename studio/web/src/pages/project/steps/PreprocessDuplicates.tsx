@@ -40,11 +40,14 @@ export default function PreprocessDuplicatesPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
   const [logs, setLogs] = useState<DuplicateLog[]>([])
+  const [scanLogVisible, setScanLogVisible] = useState(false)
   const [previewIdx, setPreviewIdx] = useState<number | null>(null)
   const lastLogAtRef = useRef(0)
 
   useEffect(() => {
     lastLogAtRef.current = 0
+    setLogs([])
+    setScanLogVisible(false)
   }, [project.id])
 
   useEventStream((evt) => {
@@ -73,6 +76,7 @@ export default function PreprocessDuplicatesPage() {
     setBusy(true)
     setResult(null)
     setSelected(new Set())
+    setScanLogVisible(true)
     setLogs([{ ts: Date.now(), status: 'running', text: t('duplicates.logStarted') }])
     try {
       const next = await api.scanDuplicates(project.id, options)
@@ -143,6 +147,7 @@ export default function PreprocessDuplicatesPage() {
               onScan={scan}
               onApply={apply}
             />
+            {scanLogVisible && <DuplicateLogStrip logs={logs} busy={busy} />}
             <DuplicateReviewPanel
               projectId={project.id}
               result={result}
@@ -151,7 +156,6 @@ export default function PreprocessDuplicatesPage() {
               onSelect={setSelected}
               onPreview={openPreview}
             />
-            {(busy || logs.length > 0) && <DuplicateLogStrip logs={logs} busy={busy} />}
           </div>
           <DuplicateStatsSidebar
             result={result}
