@@ -2,6 +2,12 @@ import { useEffect } from 'react'
 
 interface Props {
   src: string
+  /** 对比图：传了就改成左右 split 布局（左 src + 右 compareSrc）。窄屏时垂直堆叠。 */
+  compareSrc?: string
+  /** Split 布局时左侧图顶部的小 label（如 "原图"）。 */
+  srcLabel?: string
+  /** Split 布局时右侧图顶部的小 label（如 "处理后"）。 */
+  compareLabel?: string
   caption?: string
   hasPrev?: boolean
   hasNext?: boolean
@@ -15,6 +21,9 @@ interface Props {
 
 export default function ImagePreviewModal({
   src,
+  compareSrc,
+  srcLabel,
+  compareLabel,
   caption,
   hasPrev,
   hasNext,
@@ -88,12 +97,22 @@ export default function ImagePreviewModal({
             ›
           </button>
         )}
-        <img
-          src={src}
-          alt={caption ?? 'preview'}
-          onClick={(e) => e.stopPropagation()}
-          className="max-w-full max-h-full object-contain"
-        />
+        {compareSrc ? (
+          <div
+            className="w-full h-full flex flex-col md:flex-row items-stretch justify-center gap-2 md:gap-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <SplitPane src={src} label={srcLabel} altFallback={caption} />
+            <SplitPane src={compareSrc} label={compareLabel} altFallback={caption} />
+          </div>
+        ) : (
+          <img
+            src={src}
+            alt={caption ?? 'preview'}
+            onClick={(e) => e.stopPropagation()}
+            className="max-w-full max-h-full object-contain"
+          />
+        )}
       </div>
       {(caption || shortcutHint) && (
         <div className="shrink-0 border-t border-white/10 bg-black px-4 py-2 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-slate-400">
@@ -101,6 +120,27 @@ export default function ImagePreviewModal({
           {shortcutHint && <div>{shortcutHint}</div>}
         </div>
       )}
+    </div>
+  )
+}
+
+function SplitPane({
+  src,
+  label,
+  altFallback,
+}: { src: string; label?: string; altFallback?: string }) {
+  return (
+    <div className="flex-1 min-h-0 min-w-0 flex flex-col items-center justify-center gap-1.5 overflow-hidden">
+      {label && (
+        <div className="shrink-0 text-[11px] font-mono uppercase tracking-wider text-slate-400">
+          {label}
+        </div>
+      )}
+      <img
+        src={src}
+        alt={label ?? altFallback ?? 'preview'}
+        className="max-w-full max-h-full object-contain"
+      />
     </div>
   )
 }

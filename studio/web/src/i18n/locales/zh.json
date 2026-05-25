@@ -1502,6 +1502,8 @@
     "tabAll": "所有图片",
     "tabProcessed": "经过处理",
     "tabRemoved": "已删除",
+    "compareOriginal": "原图",
+    "compareProcessed": "处理后",
     "totalCount": "共 {{n}} 张",
     "selectedCount": "· 已选 {{n}}",
     "empty": "还没有任何处理过的图片。回到「放大」或「裁剪」开始处理。",

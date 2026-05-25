@@ -96,6 +96,8 @@ export default function PreprocessOverviewPage() {
     name: string
     thumbUrl: string
     previewUrl: string
+    /** processed tab：右侧对比图（preprocess 派生产物）。设了 modal 切 split 布局。 */
+    compareSrc?: string
     caption: string
   }
 
@@ -120,10 +122,14 @@ export default function PreprocessOverviewPage() {
     () => processed.map((im) => ({
       name: im.name,
       thumbUrl: wsThumb(im, 256),
-      previewUrl: wsThumb(im, 1600),
+      // 预览采用 split 布局：左 = download 原图，右 = preprocess 派生产物。
+      // multi-crop 派生（X_c0.png）的 source 仍指向 download/X 原图，左 pane
+      // 就是原图，右 pane 是这块裁出的产物 —— 便于对比。
+      previewUrl: api.projectThumbUrl(project.id, im.source, 'download', 1600, im.mtime),
+      compareSrc: api.projectThumbUrl(project.id, im.name, 'preprocess', 1600, im.mtime),
       caption: `${im.name} · ${im.w}×${im.h}`,
     })),
-    [processed, wsThumb],
+    [processed, wsThumb, project.id],
   )
   const removedItems = useMemo<GridItem[]>(
     () => removed.map((im) => ({
@@ -293,6 +299,9 @@ export default function PreprocessOverviewPage() {
       {previewItem && (
         <ImagePreviewModal
           src={previewItem.previewUrl}
+          compareSrc={previewItem.compareSrc}
+          srcLabel={previewItem.compareSrc ? t('preprocessOverview.compareOriginal') : undefined}
+          compareLabel={previewItem.compareSrc ? t('preprocessOverview.compareProcessed') : undefined}
           caption={previewItem.caption}
           hasPrev={previewIdx! > 0}
           hasNext={previewIdx! < items.length - 1}

@@ -1502,6 +1502,8 @@
     "tabAll": "All images",
     "tabProcessed": "Processed",
     "tabRemoved": "Removed",
+    "compareOriginal": "Original",
+    "compareProcessed": "Processed",
     "totalCount": "{{n}} total",
     "selectedCount": "· {{n}} selected",
     "empty": "Nothing processed yet. Go to «Upscale» or «Crop» to start.",
