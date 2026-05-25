@@ -33,14 +33,15 @@ export interface DatasetPick {
 
 /** 从训练集 caption 里选一条作为生成时的 prompt 后缀（不写入 sidebar 「正向」textarea）。
  *
- * 受控单选 + 常驻：
- * - 父组件控 open / close（× 触发 onClose；不会因为「生成」自动关）
- * - 选中状态 (DatasetPick) 由父组件持有，picker 关掉再开，状态还在
+ * 受控单选：
+ * - 父组件控 open / close（× 触发 onClose）；生成不自动关
+ * - 选中状态 (DatasetPick) 由父组件持有；**关闭 picker 时父组件应同时清空 value**，
+ *   否则 datasetPick.tags 会继续被 handleGenerate 拼到 prompt，用户以为没选还在生效
  * - 点 list 行：未选 → 激活；已选同一行 → 取消（反选）
  * - 选中 caption 的 tags 在底部只读 textarea 展示，不写进上层 prompt 框
  *
- * pid/vid 是「浏览中」的状态，跟 value 解耦 —— 用户能保持已选 caption 同时切别的
- * project/version 看；用 localStorage 持久化跨 session 记忆。
+ * pid/vid 是「浏览中」的状态，跟 value 解耦 —— 浏览时切别的 project/version 看
+ * 不影响 value；用 localStorage 持久化跨 session 记忆浏览位置。
  */
 export default function PromptFromDatasetPicker({
   value, onChange, onClose,

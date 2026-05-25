@@ -434,7 +434,10 @@ export default function GeneratePage() {
                   <PromptFromDatasetPicker
                     value={datasetPick}
                     onChange={setDatasetPick}
-                    onClose={() => setDatasetPickerOpen(false)}
+                    onClose={() => {
+                      setDatasetPick(null)
+                      setDatasetPickerOpen(false)
+                    }}
                   />
                 </div>
               )}
