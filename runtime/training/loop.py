@@ -274,8 +274,8 @@ def run(ctx: TrainingContext) -> None:
                     ctx.emit(f"Saved LoRA: {lora_path}")
 
                 # 定期保存训练状态（断点续训）
-                save_state_every = getattr(args, "save_state_every", 0)
-                if save_state_every > 0 and ctx.global_step % save_state_every == 0:
+                save_state_every_steps = getattr(args, "save_state_every_steps", 0)
+                if save_state_every_steps > 0 and ctx.global_step % save_state_every_steps == 0:
                     state_path = ctx.state_dir() / f"training_state_step{ctx.global_step}.pt"
                     # 获取监控面板数据用于恢复 loss 曲线
                     monitor_data = None
@@ -313,7 +313,7 @@ def run(ctx: TrainingContext) -> None:
             )
         if not args.max_steps or ctx.global_step < args.max_steps:
             # 保存 checkpoint
-            if args.save_every > 0 and ctx.current_epoch % args.save_every == 0:
+            if args.save_every_epochs > 0 and ctx.current_epoch % args.save_every_epochs == 0:
                 save_path = ctx.output_dir / f"{args.output_name}_epoch{ctx.current_epoch}.safetensors"
                 # PPSF：保存 averaged weights 的 LoRA
                 with optimizer_eval_mode(ctx.optimizer):
@@ -360,7 +360,7 @@ def run(ctx: TrainingContext) -> None:
                 ctx.emit(f"Saved training state (epoch {ctx.current_epoch}): {state_path.name}")
 
             # ADR 0006 Addendum 1 方案 Δ：每 epoch 末尾**强制**写 auto_epoch_state.pt（覆盖式）。
-            # 跟用户主动开的 save_state_every_epochs（多份历史归档）独立，无 args gate ——
+            # 跟用户主动开的 save_state_every_epochs / save_state_every_steps（多份历史归档）独立，无 args gate ——
             # 这是系统级 pause 后盾，给 handle_interrupt 暂停时引用。
             # 时机：放在 user-opt epoch save 之后，确保即使 user-opt 没开也有 backup。
             auto_state_path = build_auto_epoch_state_path(ctx.state_dir())

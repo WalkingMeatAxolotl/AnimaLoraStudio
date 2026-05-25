@@ -220,15 +220,16 @@ EDM/Karras 论文里 δ=0.15 是常用经验值。
 
 | 字段 | 旧默认 | 新默认 | 影响 |
 |------|--------|--------|------|
-| `save_every` | 0 | **2** | 每 2 epoch 保存 LoRA |
+| `save_every_epochs` | 0 | **2** | 每 2 epoch 保存 LoRA |
 | `save_every_steps` | 500 | **0** | step-based save 默认关 |
-| `save_state_every` | 1000 | **0** | step-based state save 默认关 |
+| `save_state_every_steps` | 1000 | **0** | step-based state save 默认关 |
 | `sample_every` | 5 | **2** | epoch 采样频率翻倍 |
 | `sample_max_side` | 1024 | **1216** | 采样图分辨率提升 |
 
-`save_every` 和 `save_state_every`（epoch 版）/ `save_every_steps` 和 `save_state_every_epochs`
-是双轨设计：step 版写 `..._step{N}.{ext}`，epoch 版写 `..._epoch{N}.{ext}`，文件名互不
-覆盖，可同时启用。
+`save_every_epochs` / `save_state_every_epochs`（epoch 版）和 `save_every_steps` /
+`save_state_every_steps`（step 版）是双轨设计：step 版写 `..._step{N}.{ext}`，
+epoch 版写 `..._epoch{N}.{ext}`，文件名互不覆盖，可同时启用。老 yaml 用 `save_every` /
+`save_state_every` 仍能加载（schema 自动迁移到新名）。
 
 ---
 
@@ -363,7 +364,7 @@ EDM/Karras 论文里 δ=0.15 是常用经验值。
 
 3. ✅ 小批量测试
    ```bash
-   python runtime/anima_train.py --config config.yaml --epochs 3 --save_every 1
+   python runtime/anima_train.py --config config.yaml --epochs 3 --save-every-epochs 1
    ```
 
 ### 训练中

@@ -74,6 +74,27 @@ def migrate_legacy_attention(data: Any) -> Any:
     return data
 
 
+def migrate_legacy_save_keys(data: Any) -> Any:
+    """把老 cfg 的 save_every / save_state_every 改名带单位后缀。
+
+    save_every       → save_every_epochs   (epoch-based)
+    save_state_every → save_state_every_steps (step-based)
+
+    Idempotent；新名已存在则丢弃同义旧名。和 migrate_legacy_attention 一样
+    在两处调用：schema model_validator(mode='before') + runtime apply_yaml_config。
+    """
+    if not isinstance(data, dict):
+        return data
+    for legacy, new in (("save_every", "save_every_epochs"),
+                         ("save_state_every", "save_state_every_steps")):
+        if legacy in data:
+            if new in data:
+                data.pop(legacy)
+            else:
+                data[new] = data.pop(legacy)
+    return data
+
+
 class TrainingConfig(BaseModel):
     """与 config/train_template.yaml 对齐的完整训练参数。
 
@@ -522,6 +543,11 @@ class TrainingConfig(BaseModel):
     def _migrate_attention(cls, data: Any) -> Any:
         return migrate_legacy_attention(data)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_save_keys(cls, data: Any) -> Any:
+        return migrate_legacy_save_keys(data)
+
     @model_validator(mode="after")
     def _validate_prodigy_scheduler(self) -> "TrainingConfig":
         """Prodigy 系列固定使用常数学习率，外部 scheduler 统一拦截。"""
@@ -553,7 +579,7 @@ class TrainingConfig(BaseModel):
         description="输出文件名前缀",
         json_schema_extra=_meta("output"),
     )
-    save_every: int = Field(
+    save_every_epochs: int = Field(
         2, ge=0,
         description="每 N epoch 保存（0=禁用）",
         json_schema_extra=_meta("output"),
@@ -563,14 +589,14 @@ class TrainingConfig(BaseModel):
         description="每 N step 保存（0=禁用）",
         json_schema_extra=_meta("output"),
     )
-    save_state_every: int = Field(
+    save_state_every_steps: int = Field(
         0, ge=0,
         description="每 N step 保存完整训练状态（断点续训，0=禁用）",
         json_schema_extra=_meta("output"),
     )
     save_state_every_epochs: int = Field(
         0, ge=0,
-        description="每 N epoch 保存完整训练状态（断点续训，0=禁用；与 save_state_every 取先到者）",
+        description="每 N epoch 保存完整训练状态（断点续训，0=禁用）",
         json_schema_extra=_meta("output"),
     )
     seed: int = Field(

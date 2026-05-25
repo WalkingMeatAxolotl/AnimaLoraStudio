@@ -85,7 +85,7 @@ export default function ResumeFieldPicker({
       ) : totalItems === 0 ? (
         <div className="px-3 py-2 text-fg-tertiary italic">
           项目还没产出{kind === 'state' ? ' training_state_step*.pt' : ' LoRA ckpt'} —
-          {kind === 'state' ? '先按 save_every 跑一轮训练' : '先训出至少一个 ckpt'}
+          {kind === 'state' ? '先按 save_state_every_steps / save_state_every_epochs 跑一轮训练' : '先训出至少一个 ckpt'}
         </div>
       ) : (
         // 只渲染有 items 的 version；空 version 跳过减少噪音
