@@ -280,6 +280,10 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
   // Derived stats
   const losses = useMemo(() => state?.losses ?? [], [state?.losses])
   const lrHistory = useMemo(() => state?.lr_history ?? [], [state?.lr_history])
+  const optimizerMetricsHistory = useMemo(
+    () => state?.optimizer_metrics_history ?? [],
+    [state?.optimizer_metrics_history],
+  )
   const samples = useMemo(() => state?.samples ?? [], [state?.samples])
   const step = state?.step ?? 0
   const totalSteps = state?.total_steps ?? 0
@@ -310,9 +314,20 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
 
   // Current LR
   const lastLr = lrHistory.length ? lrHistory[lrHistory.length - 1].lr : null
+  const lastOptimizerMetrics = optimizerMetricsHistory.length
+    ? optimizerMetricsHistory[optimizerMetricsHistory.length - 1]
+    : null
+  const lastD = lastOptimizerMetrics?.d ?? null
+  const lastBaseLr = lastOptimizerMetrics?.base_lr ?? null
+  const lastEffectiveLr = lastOptimizerMetrics?.effective_lr ?? null
   const fmtLr = (v: number | null) => {
     if (v === null) return '--'
     if (v < 0.0001) return v.toExponential(1)
+    return v.toFixed(5).replace(/0+$/, '').replace(/\.$/, '')
+  }
+  const fmtMetric = (v: number | null) => {
+    if (v === null) return '--'
+    if (Math.abs(v) < 0.0001 || Math.abs(v) >= 10000) return v.toExponential(2)
     return v.toFixed(5).replace(/0+$/, '').replace(/\.$/, '')
   }
 
@@ -329,6 +344,10 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
   }
 
   const lrSparkline = lrHistory.slice(-60).map((l) => l.lr)
+  const dSparkline = optimizerMetricsHistory
+    .slice(-60)
+    .map((m) => m.d)
+    .filter((v): v is number => typeof v === 'number')
 
   return (
     <div className="flex flex-col gap-3.5 p-4 h-full overflow-y-auto">
@@ -383,7 +402,7 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
         <StatCard label="avg loss" value={avgLoss != null ? avgLoss.toFixed(4) : '--'}
           sub={losses.length ? `${losses.length} pts raw mean` : 'awaiting'} />
         <StatCard label="lr" value={fmtLr(lastLr)}
-          sub={lrHistory.length ? 'learning rate' : undefined} />
+          sub={lastD != null ? `actual · d ${fmtMetric(lastD)}` : lrHistory.length ? 'learning rate' : undefined} />
         <StatCard
           label={vram ? 'vram' : 'speed'}
           value={vram ? `${vram.toFixed(1)} GB` : speed ? `${speed.toFixed(2)} it/s` : '--'}
@@ -430,7 +449,20 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
             <div className="text-2xl font-semibold font-mono tabular-nums text-warn">
               {fmtLr(lastLr)}
             </div>
+            {lastD != null && (
+              <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-xs text-fg-tertiary font-mono">
+                <span>d {fmtMetric(lastD)}</span>
+                {lastBaseLr != null && <span>base {fmtMetric(lastBaseLr)}</span>}
+                {lastEffectiveLr != null && <span>eff {fmtMetric(lastEffectiveLr)}</span>}
+              </div>
+            )}
             <Sparkline values={lrSparkline} color="var(--warn)" />
+            {dSparkline.length >= 2 && (
+              <div className="mt-2">
+                <div className="text-xs text-fg-tertiary font-mono">d value</div>
+                <Sparkline values={dSparkline} color="var(--accent)" />
+              </div>
+            )}
           </div>
         </div>
       </div>

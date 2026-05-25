@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -75,6 +76,71 @@ def test_build_scheduler_returns_none_when_lr_scheduler_is_none() -> None:
     from training.schedulers import build_scheduler
     args = argparse.Namespace(lr_scheduler="none")
     assert build_scheduler(args, optimizer=None, total_steps=None) is None
+
+
+def test_ppsf_auto_prodigy_steps_uses_total_steps_quarter(monkeypatch) -> None:
+    """ppsf_prodigy_steps=0 means auto-freeze d after 25% of total training."""
+    from training.optimizers import prodigy_plus_schedulefree as ppsf
+
+    captured = {}
+
+    def fake_create_optimizer(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "utils.optimizer_utils",
+        types.SimpleNamespace(create_optimizer=fake_create_optimizer),
+    )
+    args = argparse.Namespace(
+        ppsf_beta1=0.9,
+        ppsf_beta2=0.99,
+        ppsf_d_coef=1.0,
+        ppsf_prodigy_steps=0,
+        ppsf_split_groups=True,
+        ppsf_split_groups_mean=False,
+        ppsf_use_speed=False,
+        ppsf_fused_back_pass=False,
+        ppsf_use_stableadamw=True,
+        _runtime_total_steps=4000,
+    )
+
+    ppsf.build(args, params=[], lr=1.0, weight_decay=0.0)
+
+    assert captured["prodigy_steps"] == 1000
+
+
+def test_ppsf_explicit_prodigy_steps_is_preserved(monkeypatch) -> None:
+    from training.optimizers import prodigy_plus_schedulefree as ppsf
+
+    captured = {}
+
+    def fake_create_optimizer(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "utils.optimizer_utils",
+        types.SimpleNamespace(create_optimizer=fake_create_optimizer),
+    )
+    args = argparse.Namespace(
+        ppsf_beta1=0.9,
+        ppsf_beta2=0.99,
+        ppsf_d_coef=1.0,
+        ppsf_prodigy_steps=750,
+        ppsf_split_groups=True,
+        ppsf_split_groups_mean=False,
+        ppsf_use_speed=False,
+        ppsf_fused_back_pass=False,
+        ppsf_use_stableadamw=True,
+        _runtime_total_steps=4000,
+    )
+
+    ppsf.build(args, params=[], lr=1.0, weight_decay=0.0)
+
+    assert captured["prodigy_steps"] == 750
 
 
 # ---------------------------------------------------------------------------

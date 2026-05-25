@@ -359,7 +359,7 @@
       "prodigy_d_coef": "Prodigy d 缩放系数（小数据集 0.5，过拟合 2.0）",
       "prodigy_safeguard_warmup": "Prodigy warmup 期间保护 d 增长",
       "ppsf_d_coef": "PPSF d 缩放系数（小数据集 0.5，过拟合 2.0）",
-      "ppsf_prodigy_steps": "PPSF 在第 N 步后冻结 d（0=训练全程不冻结，建议为总步数 1/4 到 1/2）",
+      "ppsf_prodigy_steps": "PPSF 在第 N 步后冻结 d（0=自动取总步数 1/4；手动建议总步数 1/4 到 1/2）",
       "ppsf_beta1": "PPSF Adam β1（PPSF 默认 0.9）",
       "ppsf_beta2": "PPSF Adam β2（PPSF 默认 0.99，比 AdamW 默认 0.999 更适合小 epoch）",
       "ppsf_split_groups": "PPSF 按 param group 分别估计 d（推荐开启）",

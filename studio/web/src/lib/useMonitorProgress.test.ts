@@ -7,12 +7,15 @@ describe('mergeDelta (PR #37 增量协议)', () => {
       step: 5, total_steps: 100, epoch: 1,
       appended_losses: [{ step: 1, loss: 0.5 }, { step: 5, loss: 0.3 }],
       appended_lr: [{ step: 1, lr: 1e-4 }],
+      appended_optimizer_metrics: [{ step: 1, actual_lr: 1e-4, d: 1e-4 }],
       appended_samples: [{ path: '/a.png', step: 5 }],
       config: { model: 'X' },
     })
     expect(out.step).toBe(5)
     expect(out.losses).toHaveLength(2)
     expect(out.lr_history).toHaveLength(1)
+    expect(out.optimizer_metrics_history).toHaveLength(1)
+    expect(out.optimizer_metrics_history?.[0].d).toBe(1e-4)
     expect(out.samples).toHaveLength(1)
     expect(out.config).toEqual({ model: 'X' })
   })
@@ -57,6 +60,31 @@ describe('mergeDelta (PR #37 增量协议)', () => {
     // 只保留 > 3 的，即 step 4
     expect(out.losses).toHaveLength(4)
     expect(out.losses?.map((l) => l.step)).toEqual([1, 2, 3, 4])
+  })
+
+  it('appends and dedups optimizer metrics by step', () => {
+    const out = mergeDelta(
+      {
+        step: 2,
+        losses: [],
+        lr_history: [],
+        optimizer_metrics_history: [
+          { step: 1, actual_lr: 1e-4, d: 1e-4 },
+          { step: 2, actual_lr: 2e-4, d: 2e-4 },
+        ],
+        samples: [],
+      },
+      {
+        step: 3,
+        appended_optimizer_metrics: [
+          { step: 2, actual_lr: 2e-4, d: 2e-4 },
+          { step: 3, actual_lr: 3e-4, d: 3e-4 },
+        ],
+      },
+    )
+    expect(out.optimizer_metrics_history).toHaveLength(3)
+    expect(out.optimizer_metrics_history?.map((m) => m.step)).toEqual([1, 2, 3])
+    expect(out.optimizer_metrics_history?.[2].d).toBe(3e-4)
   })
 
   it('dedups samples by (step, path) tuple', () => {

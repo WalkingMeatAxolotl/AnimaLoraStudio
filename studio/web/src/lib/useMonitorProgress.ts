@@ -25,6 +25,7 @@ interface MonitorProgressDelta {
   start_time?: number | null
   appended_losses?: Array<{ step: number; loss: number; time?: number }>
   appended_lr?: Array<{ step: number; lr: number }>
+  appended_optimizer_metrics?: NonNullable<MonitorState['optimizer_metrics_history']>
   appended_samples?: NonNullable<MonitorState['samples']>
   config?: Record<string, string | number | boolean>
 }
@@ -43,19 +44,28 @@ function mergeDelta(prev: MonitorState | null, delta: MonitorProgressDelta): Mon
   // dedup cursors — 由 prev 末尾推断，避免重连时 snapshot 与下条 delta 重叠
   const losses = base.losses ?? []
   const lrHistory = base.lr_history ?? []
+  const optimizerMetricsHistory = base.optimizer_metrics_history ?? []
   const samples = base.samples ?? []
   const lastLossStep = losses.length ? losses[losses.length - 1].step : -1
   const lastLrStep = lrHistory.length ? lrHistory[lrHistory.length - 1].step : -1
+  const lastOptimizerMetricsStep = optimizerMetricsHistory.length
+    ? optimizerMetricsHistory[optimizerMetricsHistory.length - 1].step
+    : -1
   const knownSamples = new Set(samples.map((s) => `${s.step ?? ''}|${s.path}`))
 
   const newLosses = (delta.appended_losses ?? []).filter((l) => l.step > lastLossStep)
   const newLr = (delta.appended_lr ?? []).filter((l) => l.step > lastLrStep)
+  const newOptimizerMetrics = (delta.appended_optimizer_metrics ?? [])
+    .filter((l) => l.step > lastOptimizerMetricsStep)
   const newSamples = (delta.appended_samples ?? []).filter(
     (s) => !knownSamples.has(`${s.step ?? ''}|${s.path}`),
   )
 
   const mergedLosses = newLosses.length ? [...losses, ...newLosses] : losses
   const mergedLr = newLr.length ? [...lrHistory, ...newLr] : lrHistory
+  const mergedOptimizerMetrics = newOptimizerMetrics.length
+    ? [...optimizerMetricsHistory, ...newOptimizerMetrics]
+    : optimizerMetricsHistory
   const mergedSamples = newSamples.length ? [...samples, ...newSamples] : samples
 
   return {
@@ -68,6 +78,9 @@ function mergeDelta(prev: MonitorState | null, delta: MonitorProgressDelta): Mon
     start_time: delta.start_time ?? base.start_time,
     losses: mergedLosses.length > MAX_LOSSES ? mergedLosses.slice(-MAX_LOSSES) : mergedLosses,
     lr_history: mergedLr.length > MAX_LR ? mergedLr.slice(-MAX_LR) : mergedLr,
+    optimizer_metrics_history: mergedOptimizerMetrics.length > MAX_LR
+      ? mergedOptimizerMetrics.slice(-MAX_LR)
+      : mergedOptimizerMetrics,
     samples: mergedSamples.length > MAX_SAMPLES ? mergedSamples.slice(-MAX_SAMPLES) : mergedSamples,
     config: delta.config ?? base.config,
   }

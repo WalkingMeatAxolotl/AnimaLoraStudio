@@ -33,7 +33,7 @@ from training.text_encoding import (
     encode_qwen,
     tokenize_t5_weighted,
 )
-from utils.optimizer_utils import optimizer_eval_mode
+from utils.optimizer_utils import get_optimizer_monitor_metrics, optimizer_eval_mode
 
 
 logger = logging.getLogger(__name__)
@@ -202,7 +202,8 @@ def run(ctx: TrainingContext) -> None:
 
                 # 更新进度显示
                 now = time.perf_counter()
-                lr = ctx.optimizer.param_groups[0]["lr"] if ctx.optimizer.param_groups else 0.0
+                optimizer_metrics = get_optimizer_monitor_metrics(ctx.optimizer)
+                lr = optimizer_metrics["lr"]
 
                 # 更新训练监控面板
                 if ctx.monitor_server:
@@ -213,6 +214,7 @@ def run(ctx: TrainingContext) -> None:
                             total_epochs=int(args.epochs or 0),
                             step=ctx.global_step,
                             total_steps=ctx.total_steps, speed=ctx.speed_ema or 0,
+                            optimizer_metrics=optimizer_metrics,
                         )
                     except Exception:
                         pass
@@ -224,6 +226,12 @@ def run(ctx: TrainingContext) -> None:
                     "train/lr": float(lr),
                     "train/speed_it_s": float(ctx.speed_ema or 0),
                 }
+                if "d" in optimizer_metrics:
+                    log_payload["train/optimizer_d"] = float(optimizer_metrics["d"])
+                if "base_lr" in optimizer_metrics:
+                    log_payload["train/base_lr"] = float(optimizer_metrics["base_lr"])
+                if "effective_lr" in optimizer_metrics:
+                    log_payload["train/effective_lr"] = float(optimizer_metrics["effective_lr"])
                 # 自适应采样器可观测性（P1-1）：CDF 是否就绪 + 退化次数
                 if (
                     ctx.global_step % args.log_every == 0

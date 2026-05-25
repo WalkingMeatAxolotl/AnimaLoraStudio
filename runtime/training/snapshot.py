@@ -100,7 +100,7 @@ def write_config_snapshot(
 
     payload = {
         "version": 1,  # 给 future schema migration 留触点
-        "args": {k: _jsonify(v) for k, v in args_dict.items()},
+        "args": {k: _jsonify(v) for k, v in args_dict.items() if not str(k).startswith("_")},
         "sample_prompts": list(sample_prompts) if sample_prompts else [],
     }
     path.parent.mkdir(parents=True, exist_ok=True)

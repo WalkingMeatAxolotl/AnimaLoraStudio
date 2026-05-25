@@ -17,6 +17,7 @@ from torch import nn
 
 from utils.optimizer_utils import (
     create_prodigy_plus_schedulefree,
+    get_optimizer_monitor_metrics,
     optimizer_eval_mode,
 )
 
@@ -67,6 +68,64 @@ def test_eval_mode_skips_if_only_partial_methods() -> None:
     with optimizer_eval_mode(fake_opt):
         pass
     fake_opt.eval.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# get_optimizer_monitor_metrics
+# ---------------------------------------------------------------------------
+
+
+def test_monitor_metrics_uses_plain_lr_for_adamw() -> None:
+    """AdamW-style optimizers keep the historical monitor lr unchanged."""
+    model = nn.Linear(4, 4)
+    optim = torch.optim.AdamW(model.parameters(), lr=1e-4)
+
+    assert get_optimizer_monitor_metrics(optim) == {"lr": 1e-4}
+
+
+def test_monitor_metrics_reports_prodigy_effective_lr_from_d() -> None:
+    """Prodigy/PPSF expose base lr=1; monitor should show d-adjusted LR."""
+    model = nn.Linear(4, 4)
+    optim = torch.optim.AdamW(model.parameters(), lr=1.0)
+    optim.param_groups[0]["d"] = 2e-4
+
+    metrics = get_optimizer_monitor_metrics(optim)
+
+    assert metrics["lr"] == 2e-4
+    assert metrics["actual_lr"] == 2e-4
+    assert metrics["base_lr"] == 1.0
+    assert metrics["d"] == 2e-4
+
+
+def test_monitor_metrics_uses_ppsf_effective_lr_multiplier() -> None:
+    """PPSF v2 recommends logging d * effective_lr."""
+    model = nn.Linear(4, 4)
+    optim = torch.optim.AdamW(model.parameters(), lr=1.0)
+    optim.param_groups[0]["d"] = 2e-4
+    optim.param_groups[0]["effective_lr"] = 0.25
+
+    metrics = get_optimizer_monitor_metrics(optim)
+
+    assert metrics["lr"] == 5e-5
+    assert metrics["actual_lr"] == 5e-5
+    assert metrics["base_lr"] == 1.0
+    assert metrics["effective_lr"] == 0.25
+
+
+def test_monitor_metrics_uses_ppsf_shared_d_when_split_groups_mean() -> None:
+    """PPSF split_groups_mean uses shared_d for the dynamic learning rate."""
+    model = nn.Linear(4, 4)
+    optim = torch.optim.AdamW(model.parameters(), lr=1.0)
+    optim.param_groups[0]["d"] = 2e-4
+    optim.param_groups[0]["shared_d"] = 5e-5
+    optim.param_groups[0]["split_groups"] = True
+    optim.param_groups[0]["split_groups_mean"] = True
+
+    metrics = get_optimizer_monitor_metrics(optim)
+
+    assert metrics["lr"] == 5e-5
+    assert metrics["actual_lr"] == 5e-5
+    assert metrics["d"] == 5e-5
 
 
 # ---------------------------------------------------------------------------

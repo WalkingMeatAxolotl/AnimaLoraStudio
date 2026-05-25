@@ -103,7 +103,7 @@ class MonitorStatePoller:
     量重传，2000 步训练单次推 ~200KB）。云部署跨公网时这是 O(N²) 浪费。
 
     新设计：poller 维护 last_step / last_loss_count / last_lr_count /
-    last_sample_count，每次只把「自上次发布以来的新增」打成 delta：
+    last_optimizer_metrics_count / last_sample_count，每次只把「自上次发布以来的新增」打成 delta：
 
         {
           "step": 234, "total_steps": 2000,
@@ -111,6 +111,7 @@ class MonitorStatePoller:
           "speed": 1.2, "start_time": 1234567890.0,
           "appended_losses": [{step, loss, time}],   # 可能为空数组
           "appended_lr":     [{step, lr}],
+          "appended_optimizer_metrics": [{step, actual_lr, d, ...}],
           "appended_samples":[{path, step, time, xy?}],
           "config": {...},        # 仅在变化时携带（首次推送 / config 改）
         }
@@ -144,6 +145,7 @@ class MonitorStatePoller:
         self._last_step: int = -1
         self._last_loss_count: int = 0
         self._last_lr_count: int = 0
+        self._last_optimizer_metrics_count: int = 0
         self._last_sample_count: int = 0
         self._last_config: dict[str, Any] | None = None
 
@@ -197,11 +199,13 @@ class MonitorStatePoller:
         step = int(data.get("step", 0) or 0)
         losses = data.get("losses") or []
         lr_hist = data.get("lr_history") or []
+        optimizer_metrics = data.get("optimizer_metrics_history") or []
         samples = data.get("samples") or []
         config = data.get("config") or {}
 
         appended_losses = losses[self._last_loss_count:]
         appended_lr = lr_hist[self._last_lr_count:]
+        appended_optimizer_metrics = optimizer_metrics[self._last_optimizer_metrics_count:]
         appended_samples = samples[self._last_sample_count:]
         config_changed = config != self._last_config
 
@@ -209,6 +213,7 @@ class MonitorStatePoller:
             step != self._last_step
             or appended_losses
             or appended_lr
+            or appended_optimizer_metrics
             or appended_samples
             or config_changed
         )
@@ -224,6 +229,7 @@ class MonitorStatePoller:
             "start_time": data.get("start_time"),
             "appended_losses": appended_losses,
             "appended_lr": appended_lr,
+            "appended_optimizer_metrics": appended_optimizer_metrics,
             "appended_samples": appended_samples,
         }
         if config_changed:
@@ -233,6 +239,7 @@ class MonitorStatePoller:
         self._last_step = step
         self._last_loss_count = len(losses)
         self._last_lr_count = len(lr_hist)
+        self._last_optimizer_metrics_count = len(optimizer_metrics)
         self._last_sample_count = len(samples)
         self._last_config = config
         self._last_publish_at = now

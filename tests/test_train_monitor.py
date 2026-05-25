@@ -33,12 +33,20 @@ def test_save_state_silent_when_no_file_set(tmp_path: Path) -> None:
 def test_update_monitor_writes_state_to_file(tmp_path: Path) -> None:
     target = tmp_path / "state.json"
     train_monitor.set_state_file(target)
-    train_monitor.update_monitor(loss=0.5, lr=1e-4, step=10, total_steps=100)
+    train_monitor.update_monitor(
+        loss=0.5,
+        lr=1e-4,
+        step=10,
+        total_steps=100,
+        optimizer_metrics={"actual_lr": 1e-4, "d": 1e-4, "base_lr": 1.0},
+    )
     assert target.exists()
     data = json.loads(target.read_text(encoding="utf-8"))
     assert data["step"] == 10
     assert data["losses"][0]["loss"] == 0.5
     assert data["lr_history"][0]["lr"] == 1e-4
+    assert data["optimizer_metrics_history"][0]["actual_lr"] == 1e-4
+    assert data["optimizer_metrics_history"][0]["d"] == 1e-4
     assert data["start_time"] is not None  # 自动设
 
 
@@ -58,6 +66,7 @@ def test_restore_monitor_state(tmp_path: Path) -> None:
     train_monitor.restore_monitor_state(
         losses=[{"step": 1, "loss": 0.5, "time": 100.0}],
         lr_history=[{"step": 1, "lr": 1e-4}],
+        optimizer_metrics_history=[{"step": 1, "actual_lr": 1e-4, "d": 1e-4}],
         epoch=5, step=100, total_steps=1000, start_time=1700000000.0,
         config={"lora_rank": 64},
     )
@@ -65,6 +74,7 @@ def test_restore_monitor_state(tmp_path: Path) -> None:
     assert data["epoch"] == 5
     assert data["step"] == 100
     assert data["config"]["lora_rank"] == 64
+    assert data["optimizer_metrics_history"][0]["d"] == 1e-4
 
 
 def test_get_state_returns_copy() -> None:

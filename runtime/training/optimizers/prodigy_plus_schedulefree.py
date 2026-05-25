@@ -22,6 +22,13 @@ def validate(args) -> None:
 def build(args, params, lr: float, weight_decay: float):
     """实例化 PPSF，读 7 个 ppsf_* 参数 + betas override。"""
     from utils.optimizer_utils import create_optimizer
+
+    prodigy_steps = int(getattr(args, "ppsf_prodigy_steps", 0) or 0)
+    if prodigy_steps == 0:
+        total_steps = int(getattr(args, "_runtime_total_steps", 0) or 0)
+        if total_steps > 0:
+            prodigy_steps = max(1, total_steps // 4)
+
     return create_optimizer(
         optimizer_type="prodigy_plus_schedulefree",
         params=params,
@@ -32,7 +39,7 @@ def build(args, params, lr: float, weight_decay: float):
             float(getattr(args, "ppsf_beta2", 0.99)),
         ),
         d_coef=float(getattr(args, "ppsf_d_coef", 1.0)),
-        prodigy_steps=int(getattr(args, "ppsf_prodigy_steps", 0)),
+        prodigy_steps=prodigy_steps,
         split_groups=bool(getattr(args, "ppsf_split_groups", True)),
         split_groups_mean=bool(getattr(args, "ppsf_split_groups_mean", False)),
         use_speed=bool(getattr(args, "ppsf_use_speed", False)),

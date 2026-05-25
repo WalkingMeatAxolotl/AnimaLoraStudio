@@ -90,5 +90,7 @@ def get_state(task_id: Optional[int] = None, max_points: int = 0) -> JSONRespons
             data["losses"] = _downsample_uniform(data["losses"], max_points)
         if isinstance(data.get("lr_history"), list):
             data["lr_history"] = _downsample_uniform(data["lr_history"], max_points)
+        if isinstance(data.get("optimizer_metrics_history"), list):
+            data["optimizer_metrics_history"] = _downsample_uniform(data["optimizer_metrics_history"], max_points)
 
     return JSONResponse(data)

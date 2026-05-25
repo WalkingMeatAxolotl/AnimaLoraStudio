@@ -359,7 +359,7 @@
       "prodigy_d_coef": "Prodigy d scaling coefficient (0.5 for small datasets, 2.0 for overfitting)",
       "prodigy_safeguard_warmup": "Protect d growth during Prodigy warmup",
       "ppsf_d_coef": "PPSF d scaling coefficient (0.5 for small datasets, 2.0 for overfitting)",
-      "ppsf_prodigy_steps": "Freeze d after N PPSF steps (0 = never freeze; recommended 1/4 to 1/2 of total steps)",
+      "ppsf_prodigy_steps": "Freeze d after N PPSF steps (0 = auto 1/4 of total steps; manual recommendation 1/4 to 1/2 of total steps)",
       "ppsf_beta1": "PPSF Adam β1 (PPSF default 0.9)",
       "ppsf_beta2": "PPSF Adam β2 (PPSF default 0.99, better for small epochs than AdamW's 0.999)",
       "ppsf_split_groups": "Estimate d per param group in PPSF (recommended)",

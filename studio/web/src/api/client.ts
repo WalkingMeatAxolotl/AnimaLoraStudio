@@ -1207,6 +1207,18 @@ export interface MonitorState {
   start_time?: number     // unix seconds
   losses?: Array<{ step: number; loss: number }>
   lr_history?: Array<{ step: number; lr: number }>
+  optimizer_metrics_history?: Array<{
+    step: number
+    lr?: number
+    actual_lr?: number
+    base_lr?: number
+    effective_lr?: number
+    d?: number
+    d_min?: number
+    d_max?: number
+    actual_lr_min?: number
+    actual_lr_max?: number
+  }>
   samples?: Array<{
     path: string
     step?: number

@@ -73,6 +73,7 @@ def run(ctx: TrainingContext) -> None:
                 restore_monitor_state(
                     losses=saved_monitor_state.get("losses"),
                     lr_history=saved_monitor_state.get("lr_history"),
+                    optimizer_metrics_history=saved_monitor_state.get("optimizer_metrics_history"),
                     epoch=ctx.start_epoch,
                     step=ctx.global_step,
                     total_steps=ctx.total_steps,

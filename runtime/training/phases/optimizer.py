@@ -26,25 +26,8 @@ def run(ctx: TrainingContext) -> None:
     """
     args = ctx.args
 
-    # 优化器：PR-C 通过 optimizers/ plugin registry 派发
-    ctx.weight_decay = float(getattr(args, "weight_decay", 0.01) or 0.0)
-    param_groups = ctx.injector.get_param_groups(ctx.weight_decay)
-    ctx.optimizer_type = (getattr(args, "optimizer_type", "adamw") or "adamw").lower()
-
-    from training.optimizers import build_optimizer, validate_optimizer
-    validate_optimizer(args)  # PPSF 检查 lr_scheduler=none 等启动期约束
-    ctx.optimizer = build_optimizer(args, param_groups, args.learning_rate, ctx.weight_decay)
-    if ctx.weight_decay > 0:
-        wd_info = f"{ctx.optimizer_type} weight_decay={ctx.weight_decay}"
-        if ctx.injector.use_lokr:
-            wd_info += "（w1 排除 weight_decay）"
-        logger.info(wd_info)
-    ctx.grad_clip = float(getattr(args, "grad_clip_max_norm", 0) or 0)
-    if ctx.grad_clip > 0:
-        logger.info(f"梯度裁剪 max_norm={ctx.grad_clip}")
-    ctx.trainable_params = [p for group in ctx.optimizer.param_groups for p in group["params"]]
-
-    # 计算总步数
+    # 计算总步数。PPSF 的 prodigy_steps 默认值需要 total_steps，所以必须在
+    # optimizer builder 之前完成。
     try:
         ctx.steps_per_epoch = len(ctx.dataloader) // args.grad_accum
     except Exception:
@@ -63,6 +46,25 @@ def run(ctx: TrainingContext) -> None:
     )
     candidates = [c for c in (by_epochs, by_max_steps) if c is not None and c > 0]
     ctx.total_steps = min(candidates) if candidates else None
+    setattr(args, "_runtime_total_steps", ctx.total_steps or 0)
+
+    # 优化器：PR-C 通过 optimizers/ plugin registry 派发
+    ctx.weight_decay = float(getattr(args, "weight_decay", 0.01) or 0.0)
+    param_groups = ctx.injector.get_param_groups(ctx.weight_decay)
+    ctx.optimizer_type = (getattr(args, "optimizer_type", "adamw") or "adamw").lower()
+
+    from training.optimizers import build_optimizer, validate_optimizer
+    validate_optimizer(args)  # PPSF 检查 lr_scheduler=none 等启动期约束
+    ctx.optimizer = build_optimizer(args, param_groups, args.learning_rate, ctx.weight_decay)
+    if ctx.weight_decay > 0:
+        wd_info = f"{ctx.optimizer_type} weight_decay={ctx.weight_decay}"
+        if ctx.injector.use_lokr:
+            wd_info += "（w1 排除 weight_decay）"
+        logger.info(wd_info)
+    ctx.grad_clip = float(getattr(args, "grad_clip_max_norm", 0) or 0)
+    if ctx.grad_clip > 0:
+        logger.info(f"梯度裁剪 max_norm={ctx.grad_clip}")
+    ctx.trainable_params = [p for group in ctx.optimizer.param_groups for p in group["params"]]
 
     logger.info(
         f"数据集大小: {len(ctx.dataset)}, 每 epoch 步数: {ctx.steps_per_epoch}, "
