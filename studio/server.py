@@ -1663,6 +1663,22 @@ def list_preprocess_files(pid: int) -> dict[str, Any]:
     }
 
 
+@app.get("/api/projects/{pid}/preprocess/duplicates/removed")
+def list_duplicate_removed(pid: int) -> dict[str, Any]:
+    """总览页「已删除」tab：列出被去重审核标记的 manifest entries。
+
+    返回 `{images: [{name, source, w, h, mtime, size}, ...]}`。物理图仍在
+    `download/{source}`，缩略图按 download bucket + source 取。恢复走
+    `POST /api/projects/{pid}/preprocess/files/restore`（restore() 对
+    duplicate_removed entry 也 work：删 entry，没 PNG 时静默跳过）。
+    """
+    with db.connection_for() as conn:
+        p = projects.get_project(conn, pid)
+    if not p:
+        raise HTTPException(404, f"项目不存在: id={pid}")
+    return {"images": preprocess_svc.list_duplicate_removed_workspace(p)}
+
+
 @app.get("/api/projects/{pid}/preprocess/crop/workspace")
 def list_crop_workspace(pid: int) -> dict[str, Any]:
     """裁剪页工作集：返回所有可裁剪的图 + 像素尺寸。
@@ -1911,10 +1927,12 @@ def project_thumb(
     else:
         # bucket=download — historical behavior: address by download name,
         # resolve to first preprocess product if any (1:1 / multi-crop cases).
+        # duplicate_removed origins: resolve_origin returns [] but the original
+        # file in download/ still exists; the Download page must keep showing
+        # it (软删除 ≠ 不可见). Fall back to download/{name} like any other
+        # un-resolved origin.
         _safe_join_or_400(pdir / "download", name)
         candidates = preprocess_manifest.resolve_origin(pdir, name)
-        if not candidates and preprocess_manifest.is_origin_duplicate_removed(pdir, name):
-            raise HTTPException(404)
         f = candidates[0] if candidates else (pdir / "download" / name)
         # Curation passes multi-crop derivative names (X_c0.png) through this
         # endpoint with bucket=download. resolve_origin only matches by origin,

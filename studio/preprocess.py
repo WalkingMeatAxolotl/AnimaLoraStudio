@@ -410,6 +410,55 @@ def list_crop_workspace(p: dict[str, Any]) -> list[dict[str, Any]]:
     return items
 
 
+def list_duplicate_removed_workspace(p: dict[str, Any]) -> list[dict[str, Any]]:
+    """已软删除的图（被去重审核标记 kind=duplicate_removed），按 name 字典序。
+
+    展示在总览页「已删除」tab：物理图仍在 `download/{origin}`，缩略图按
+    download bucket + origin 名取（thumb 端点已不再对 duplicate_removed
+    返 404）。返回 `[{name, source, w, h, mtime, size}]`，source = origin
+    = download/ 下原图名。
+    """
+    from PIL import Image
+
+    download, _ = project_paths(p)
+    pdir = project_root(p)
+    preprocess_manifest.ensure_manifest(pdir)
+    removed = preprocess_manifest.duplicate_removed(pdir)
+
+    items: list[dict[str, Any]] = []
+    for name in sorted(removed.keys()):
+        entry = removed[name]
+        origin = preprocess_manifest.entry_origin(entry, name)
+        src = download / origin
+        if not src.is_file():
+            # origin 文件已被外部删除：仍展示一条 stale entry 方便用户恢复 entry
+            # 自身（thumb 会 404，UI 容忍）；w/h 留 None。
+            items.append({
+                "name": name,
+                "source": origin,
+                "w": None,
+                "h": None,
+                "mtime": float(entry.get("mtime", 0.0) or 0.0),
+                "size": int(entry.get("size", 0) or 0),
+            })
+            continue
+        try:
+            with Image.open(src) as im:
+                w, h = im.size
+        except (OSError, ValueError):
+            w, h = None, None
+        st = src.stat()
+        items.append({
+            "name": name,
+            "source": origin,
+            "w": w,
+            "h": h,
+            "mtime": st.st_mtime,
+            "size": st.st_size,
+        })
+    return items
+
+
 def _validate_rect(rect: dict[str, Any]) -> dict[str, float]:
     """归一化 + clamp 一条裁剪 rect。非法 → 抛 PreprocessError。"""
     try:

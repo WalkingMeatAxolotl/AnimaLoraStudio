@@ -4,6 +4,7 @@ import { useOutletContext } from 'react-router-dom'
 import {
   api,
   type CropWorkspaceItem,
+  type DuplicateRemovedItem,
   type ProjectDetail,
   type Version,
 } from '../../../api/client'
@@ -21,19 +22,21 @@ interface Ctx {
   reload: () => Promise<void>
 }
 
-/** Preprocess overview — the gallery for everything that's been processed.
+type Tab = 'all' | 'processed' | 'removed'
+
+/** Preprocess overview — 三 tab 视图：
  *
- *  Lives at `?tool=overview`. Responsibilities:
- *  - Show all preprocess/ workspace files (post-upscale / crop / etc.)
- *  - Multi-select via shift-click region and ctrl-click toggle (standard
- *    behavior provided by `applySelection`)
- *  - Click → preview enlarged image in a modal (parity with the Download page
- *    review flow), separate from any selection state
- *  - Undo selected / undo all → calls `restorePreprocessFiles` / `resetPreprocessFiles`
+ *  - **all**：当前数据集真实状态。list_crop_workspace 合并了 download 未派生 +
+ *    preprocess 派生产物（已 filter duplicate_removed）。每张图按各自来源
+ *    取缩略图：processed → bucket=preprocess + name；否则 bucket=download + source。
+ *    只读视图，点击放大。
+ *  - **processed**：已处理产物子集。可选中恢复（撤销处理回 download/ 原图）
+ *    或全部撤销。
+ *  - **removed**：被去重审核标记的 entry。物理图仍在 download/{source}，
+ *    缩略图按 download bucket 取。可选中恢复（删 manifest entry）。
  *
- *  Per-tool pages (upscale, crop) no longer carry undo controls — undo is
- *  always done here so users have one place to manage state. See
- *  docs/design/preprocess-crop-design.md (preprocess overview section).
+ *  恢复都走 restorePreprocessFiles —— restore() 对 duplicate_removed entry 也
+ *  work（删 entry，对应 PNG 不存在静默跳过）。
  */
 export default function PreprocessOverviewPage() {
   const { t } = useTranslation()
@@ -41,7 +44,9 @@ export default function PreprocessOverviewPage() {
   const { toast } = useToast()
   const { confirm } = useDialog()
 
-  const [images, setImages] = useState<CropWorkspaceItem[]>([])
+  const [tab, setTab] = useState<Tab>('all')
+  const [workspace, setWorkspace] = useState<CropWorkspaceItem[]>([])
+  const [removed, setRemoved] = useState<DuplicateRemovedItem[]>([])
   const [loading, setLoading] = useState(true)
   const [sel, setSel] = useState<Set<string>>(new Set())
   const [selAnchor, setSelAnchor] = useState<string | null>(null)
@@ -49,8 +54,12 @@ export default function PreprocessOverviewPage() {
 
   const refresh = useCallback(async () => {
     try {
-      const r = await api.listCropWorkspace(project.id)
-      setImages(r.images)
+      const [ws, rm] = await Promise.all([
+        api.listCropWorkspace(project.id),
+        api.listPreprocessDuplicatesRemoved(project.id),
+      ])
+      setWorkspace(ws.images)
+      setRemoved(rm.images)
     } catch {
       /* ignore */
     } finally {
@@ -59,43 +68,79 @@ export default function PreprocessOverviewPage() {
   }, [project.id])
   useEffect(() => { void refresh() }, [refresh])
 
-  // Live-update on any preprocess SSE — upscale / crop / restore all change the
-  // workspace; cheap to refetch (PIL header read for each file).
+  // Live-update on preprocess SSE — upscale / crop / restore / duplicate apply
+  // all mutate manifest; cheap to refetch.
   useEventStream((evt) => {
     if (
-      evt.type === 'project_state_changed' && evt.project_id === project.id ||
-      evt.type === 'preprocess_progress' && evt.project_id === project.id ||
-      evt.type === 'crop_progress' && evt.project_id === project.id
+      (evt.type === 'project_state_changed' && evt.project_id === project.id) ||
+      (evt.type === 'preprocess_progress' && evt.project_id === project.id) ||
+      (evt.type === 'crop_progress' && evt.project_id === project.id)
     ) {
       void refresh()
     }
   })
 
-  // Filter: show only "processed" (= manifest-tracked) images so this tab is
-  // exactly the set the user might want to undo. Originals (download/) are
-  // shown in the Download tool, not here.
+  // Tab 切换重置选择和预览
+  useEffect(() => {
+    setSel(new Set())
+    setSelAnchor(null)
+    setPreviewIdx(null)
+  }, [tab])
+
   const processed = useMemo(
-    () => images.filter((im) => im.processed),
-    [images],
+    () => workspace.filter((im) => im.processed),
+    [workspace],
   )
 
-  const items = useMemo(
-    () =>
-      processed.map((im) => ({
-        name: im.name,
-        // Address by preprocess filename, not by origin/source — multi-crop
-        // fan-out (X_c0.png / X_c1.png both with origin X.png) would otherwise
-        // all show the same thumbnail (the [0] of resolve_origin).
-        thumbUrl: api.projectThumbUrl(project.id, im.name, 'preprocess', 256, im.mtime),
-        meta: `${im.w}×${im.h}`,
-      })),
-    [processed, project.id],
+  type GridItem = {
+    name: string
+    thumbUrl: string
+    previewUrl: string
+    caption: string
+  }
+
+  const wsThumb = useCallback(
+    (im: CropWorkspaceItem, size: number) =>
+      im.processed
+        ? api.projectThumbUrl(project.id, im.name, 'preprocess', size, im.mtime)
+        : api.projectThumbUrl(project.id, im.source, 'download', size, im.mtime),
+    [project.id],
   )
+
+  const allItems = useMemo<GridItem[]>(
+    () => workspace.map((im) => ({
+      name: im.name,
+      thumbUrl: wsThumb(im, 256),
+      previewUrl: wsThumb(im, 1600),
+      caption: `${im.name} · ${im.w}×${im.h}`,
+    })),
+    [workspace, wsThumb],
+  )
+  const processedItems = useMemo<GridItem[]>(
+    () => processed.map((im) => ({
+      name: im.name,
+      thumbUrl: wsThumb(im, 256),
+      previewUrl: wsThumb(im, 1600),
+      caption: `${im.name} · ${im.w}×${im.h}`,
+    })),
+    [processed, wsThumb],
+  )
+  const removedItems = useMemo<GridItem[]>(
+    () => removed.map((im) => ({
+      name: im.name,
+      thumbUrl: api.projectThumbUrl(project.id, im.source, 'download', 256, im.mtime),
+      previewUrl: api.projectThumbUrl(project.id, im.source, 'download', 1600, im.mtime),
+      caption: im.w && im.h ? `${im.source} · ${im.w}×${im.h}` : im.source,
+    })),
+    [removed, project.id],
+  )
+
+  const items =
+    tab === 'all' ? allItems
+    : tab === 'processed' ? processedItems
+    : removedItems
   const visibleNames = useMemo(() => items.map((i) => i.name), [items])
-
-  // The preview modal uses image source name (so the thumbnail endpoint
-  // resolves through the manifest and picks the actual preprocess output).
-  const previewItem = previewIdx !== null ? processed[previewIdx] : null
+  const previewItem = previewIdx !== null ? items[previewIdx] : null
 
   const restoreNames = useCallback(async (names: string[]) => {
     if (names.length === 0) return
@@ -136,6 +181,19 @@ export default function PreprocessOverviewPage() {
     }
   }, [confirm, processed.length, project.id, t, toast, refresh, reload])
 
+  const tabDefs: { id: Tab; label: string; count: number }[] = [
+    { id: 'all', label: t('preprocessOverview.tabAll'), count: workspace.length },
+    { id: 'processed', label: t('preprocessOverview.tabProcessed'), count: processed.length },
+    { id: 'removed', label: t('preprocessOverview.tabRemoved'), count: removed.length },
+  ]
+
+  const emptyHint =
+    tab === 'all' ? t('preprocessOverview.emptyAll')
+    : tab === 'processed' ? t('preprocessOverview.empty')
+    : t('preprocessOverview.emptyRemoved')
+
+  const canMutate = tab === 'processed' || tab === 'removed'
+
   return (
     <StepShell
       idx={2}
@@ -147,58 +205,74 @@ export default function PreprocessOverviewPage() {
 
         <section className="flex flex-col flex-1 min-h-0 rounded-md border border-subtle bg-surface overflow-hidden">
           <header className="flex items-center gap-2 shrink-0 px-3 py-2 border-b border-subtle text-sm flex-wrap">
-            <h3 className="font-semibold">{t('preprocessOverview.title')}</h3>
-            <span className="text-fg-tertiary text-xs">
-              {t('preprocessOverview.totalCount', { n: processed.length })}
-            </span>
+            <div className="flex items-center gap-1">
+              {tabDefs.map((td) => (
+                <button
+                  key={td.id}
+                  onClick={() => setTab(td.id)}
+                  className={`px-2.5 py-1 rounded-md text-sm font-medium ${
+                    tab === td.id
+                      ? 'bg-overlay text-fg-primary'
+                      : 'text-fg-secondary hover:bg-overlay/50'
+                  }`}
+                >
+                  {td.label}
+                  <span className="ml-1 text-fg-tertiary text-xs">{td.count}</span>
+                </button>
+              ))}
+            </div>
             {sel.size > 0 && (
               <span className="text-accent text-xs">
                 {t('preprocessOverview.selectedCount', { n: sel.size })}
               </span>
             )}
             <span className="flex-1" />
-            <button
-              onClick={() => setSel(new Set(visibleNames))}
-              disabled={items.length === 0}
-              className="btn btn-ghost btn-sm"
-            >{t('common.selectAll')}</button>
-            <button
-              onClick={() => { setSel(new Set()); setSelAnchor(null) }}
-              disabled={sel.size === 0}
-              className="btn btn-ghost btn-sm"
-            >{t('common.deselect')}</button>
-            <button
-              onClick={() => void restoreNames(Array.from(sel))}
-              disabled={sel.size === 0}
-              className="btn btn-sm bg-err-soft text-err"
-              title={t('preprocessOverview.restoreSelectedTitle')}
-            >{t('preprocessOverview.restoreSelected', { n: sel.size })}</button>
-            <button
-              onClick={() => void resetAll()}
-              disabled={processed.length === 0}
-              className="btn btn-sm btn-secondary"
-              title={t('preprocessOverview.resetAllTitle')}
-            >↶ {t('preprocessOverview.resetAll')}</button>
+            {canMutate && (
+              <>
+                <button
+                  onClick={() => setSel(new Set(visibleNames))}
+                  disabled={items.length === 0}
+                  className="btn btn-ghost btn-sm"
+                >{t('common.selectAll')}</button>
+                <button
+                  onClick={() => { setSel(new Set()); setSelAnchor(null) }}
+                  disabled={sel.size === 0}
+                  className="btn btn-ghost btn-sm"
+                >{t('common.deselect')}</button>
+                <button
+                  onClick={() => void restoreNames(Array.from(sel))}
+                  disabled={sel.size === 0}
+                  className="btn btn-sm bg-err-soft text-err"
+                  title={t('preprocessOverview.restoreSelectedTitle')}
+                >{t('preprocessOverview.restoreSelected', { n: sel.size })}</button>
+                {tab === 'processed' && (
+                  <button
+                    onClick={() => void resetAll()}
+                    disabled={processed.length === 0}
+                    className="btn btn-sm btn-secondary"
+                    title={t('preprocessOverview.resetAllTitle')}
+                  >↶ {t('preprocessOverview.resetAll')}</button>
+                )}
+              </>
+            )}
           </header>
 
           <div className="flex-1 min-h-0 overflow-y-auto p-3">
             {loading && (
               <p className="text-fg-tertiary text-sm">{t('common.loading')}</p>
             )}
-            {!loading && processed.length === 0 && (
-              <p className="text-fg-tertiary text-sm">
-                {t('preprocessOverview.empty')}
-              </p>
+            {!loading && items.length === 0 && (
+              <p className="text-fg-tertiary text-sm">{emptyHint}</p>
             )}
-            {processed.length > 0 && (
+            {items.length > 0 && (
               <ImageGrid
                 items={items}
                 selected={sel}
-                onSelect={(name, e) => {
+                onSelect={canMutate ? (name, e) => {
                   const r = applySelection(sel, name, e, visibleNames, selAnchor)
                   setSel(r.next)
                   setSelAnchor(r.anchor)
-                }}
+                } : () => {}}
                 onActivate={(name) => {
                   const i = visibleNames.indexOf(name)
                   if (i >= 0) setPreviewIdx(i)
@@ -208,8 +282,8 @@ export default function PreprocessOverviewPage() {
                   if (i >= 0) setPreviewIdx(i)
                 }}
                 clickMode="activate"
-                ariaLabel="preprocess-overview-grid"
-                emptyHint={t('preprocessOverview.empty')}
+                ariaLabel={`preprocess-overview-grid-${tab}`}
+                emptyHint={emptyHint}
               />
             )}
           </div>
@@ -218,13 +292,13 @@ export default function PreprocessOverviewPage() {
 
       {previewItem && (
         <ImagePreviewModal
-          src={api.projectThumbUrl(project.id, previewItem.name, 'preprocess', 1600, previewItem.mtime)}
-          caption={`${previewItem.name} · ${previewItem.w}×${previewItem.h}`}
+          src={previewItem.previewUrl}
+          caption={previewItem.caption}
           hasPrev={previewIdx! > 0}
-          hasNext={previewIdx! < processed.length - 1}
+          hasNext={previewIdx! < items.length - 1}
           onClose={() => setPreviewIdx(null)}
           onPrev={() => previewIdx! > 0 && setPreviewIdx(previewIdx! - 1)}
-          onNext={() => previewIdx! < processed.length - 1 && setPreviewIdx(previewIdx! + 1)}
+          onNext={() => previewIdx! < items.length - 1 && setPreviewIdx(previewIdx! + 1)}
         />
       )}
     </StepShell>

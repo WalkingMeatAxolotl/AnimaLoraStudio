@@ -705,6 +705,19 @@ export interface CropWorkspaceItem {
   processed: boolean
 }
 
+/** 总览页「已删除」tab 一项：被去重审核标记的 entry。物理图仍在 download/{source}。 */
+export interface DuplicateRemovedItem {
+  /** manifest entry 的 key（一般 == source）。restore 时按这个名传。 */
+  name: string
+  /** download/ 下原图名（origin）。缩略图按 source + bucket=download 取。 */
+  source: string
+  /** 像素尺寸 — origin 文件不存在时 null。 */
+  w: number | null
+  h: number | null
+  mtime: number
+  size: number
+}
+
 // ---- curation (PP3) -------------------------------------------------------
 
 /**
@@ -1592,6 +1605,12 @@ export const api = {
   listCropWorkspace: (pid: number) =>
     req<{ images: CropWorkspaceItem[] }>(
       `/api/projects/${pid}/preprocess/crop/workspace`,
+    ),
+  /** 总览页「已删除」tab：被去重审核标记 (kind=duplicate_removed) 的 entry 列表。
+   *  恢复走 restorePreprocessFiles（restore 对 duplicate_removed entry 也 work）。 */
+  listPreprocessDuplicatesRemoved: (pid: number) =>
+    req<{ images: DuplicateRemovedItem[] }>(
+      `/api/projects/${pid}/preprocess/duplicates/removed`,
     ),
   /** 开始裁剪 job。`crops` 为 `{源文件名: [{x,y,w,h,label?}]}`，归一化 [0..1]。
    *  N=1 覆盖 stem.png；N>1 输出 stem_c{0..N-1}.png 并删原 stem.png。
