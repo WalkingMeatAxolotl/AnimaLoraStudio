@@ -387,7 +387,7 @@
       "loss_weighting": "[Loss weighting] Scheme (min_snr recommended; detail_inv_t enhances details; cosmap follows SD3 style)",
       "min_snr_gamma": "[Loss weighting] Min-SNR gamma (only when loss_weighting=min_snr)",
       "weight_cap_ratio": "[Loss weighting] Batch max/min weight cap (0 disables; 5 recommended for small batch + Prodigy)",
-      "grad_clip_max_norm": "Maximum gradient clipping norm (0 disables)",
+      "grad_clip_max_norm": "Max gradient norm: when the step's total gradient norm exceeds this value, rescale it down to this value to prevent a single outlier step from blowing up the model. Default 1.0 fits most cases; lower to 0.5 if bf16+DoRA/LoKr is unstable; 0 disables.",
       "mixed_precision": "Mixed precision",
       "attention_backend": "Attention backend: none (PyTorch SDPA) / xformers / Flash Attention (flash_attn recommended for 5090)",
       "num_workers": "Data loader workers (must be 0 on Windows)",

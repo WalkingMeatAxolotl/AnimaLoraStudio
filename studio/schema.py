@@ -495,8 +495,8 @@ class TrainingConfig(BaseModel):
         json_schema_extra=_meta("noise_schedule", show_when="loss_weighting==detail_inv_t", advanced=True),
     )
     grad_clip_max_norm: float = Field(
-        0.0, ge=0.0,
-        description="梯度裁剪最大范数（0=禁用）",
+        1.0, ge=0.0,
+        description="梯度裁剪最大范数：当本步所有可训练参数的梯度全局范数超过该值时按比例缩到该值，防止单步极端梯度把模型推飞；默认 1.0 适合绝大多数场景，bf16+DoRA/LoKr 不稳可降到 0.5，0=禁用",
         json_schema_extra=_meta("training", advanced=True),
     )
 
