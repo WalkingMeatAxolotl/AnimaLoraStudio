@@ -863,8 +863,8 @@ function SnapshotConfigTab({ task }: { task: Task | null }) {
   const canApply = !!(task?.project_id && task?.version_id)
 
   return (
-    <div className="p-6 flex flex-col gap-4">
-      <div className="flex items-start gap-3">
+    <div className="p-6 flex flex-col gap-4 flex-1 min-h-0">
+      <div className="flex items-start gap-3 shrink-0">
         <div className="flex-1">
           <h3 className="m-0 text-md font-semibold">{t('snapshot.title')}</h3>
           <p className="m-0 mt-1 text-xs text-fg-tertiary">{t('snapshot.subtitle')}</p>
@@ -878,7 +878,7 @@ function SnapshotConfigTab({ task }: { task: Task | null }) {
           {t('snapshot.applyBtn')}
         </button>
       </div>
-      <pre className="m-0 p-4 rounded-md border border-subtle bg-sunken text-xs font-mono overflow-auto whitespace-pre">{data.yaml}</pre>
+      <pre className="m-0 p-4 rounded-md border border-subtle bg-sunken text-xs font-mono overflow-auto whitespace-pre flex-1 min-h-0">{data.yaml}</pre>
 
       {confirmApply && (
         <ConfirmDialog
