@@ -146,12 +146,6 @@
 - **训练集图像网格虚拟滚动 + 主导色占位淡入（#113）**
   ImageGrid 改虚拟滚动，大数据集（数百~数千张）上下滑动不再卡。缩略图未到位前用图像主导色块占位，到位后淡入。
 
-- **项目概览页 UI 细节修正 + 窄屏单点适配（#122）**
-  - `DetailGrid` 外层从 flex column 改 grid `1.4fr 1fr`，empty version 时两行不再塌缩。
-  - `PhaseTimeline` 当前 phase 去掉 accent-soft 背景 + accent border，只保留红色编号，视觉更干净。
-  - `StatusBanner` / `PhaseTimeline` 窄屏（< 1280px）适配：收紧 padding / icon 尺寸 / 隐藏 phase label。
-  - 新建 `styles/responsive.css` 集中所有媒体查询，方便未来全局响应式落地时统一升级。
-
 - **推理 daemon 启动预热避免文本编码器加载卡数分钟（#128）**
   用户报告推理 daemon 启动时卡 6+ 分钟在 `loading text encoders`。py-spy 抓到调用链 `transformers.generation.candidate_generator → sklearn → scipy.special.__init__` —— scipy cold import 在 Windows + Python 3.13 + 已加载 GB 级模型（system RAM 紧张）时要几分钟。
 
@@ -176,9 +170,6 @@
 
   以及项目主页卡片 grid 缺 `auto-rows-fr`，带 note 的卡片把同行其它卡片撑成不齐。
 
-- **项目概览继续按钮显示当前阶段（之前误显示下一阶段）（#126）**
-  `StatusBanner` 的「继续 X →」按钮原本按 `nextPhase = PHASE_ORDER_TIMELINE[ci + 1]` 渲染，当 version.phase = curating 且 train_image_count = 0 时按钮显示「继续 ② 打标」，让用户误以为当前阶段已完成。改为 `continueTarget = currentPhase`，按钮显示「继续 ① 训练集筛选 →」并跳 curate 页。cursor 推进的唯一入口仍在 Sidebar。
-
 - **队列挂起 / 释放 / 重排接口偶发 422 错误（#114）**
   FastAPI 路由顺序问题：`/api/queue/hold` / `/api/queue/release` / `/api/queue/reorder` 等静态路径被 `/api/queue/{task_id}` 参数路由抢匹配，返回 422 unprocessable entity。重排路由顺序修复。
 
@@ -191,26 +182,8 @@
   - 预生成日志移到 version config tab 内（之前散落在主队列日志里）。
   - attention backend 不再要求用户手动选择，会根据安装的库自动检测。
 
-- **裁剪页 N=1 同名覆盖后缩略图错位 + 含括号文件名加载失败（#114, #124）**
-  - **N=1 同名覆盖**：单框裁剪后画布 + filmstrip 缩略图显示的图与裁剪框对应区域不一致（明显大很多），刷新页面后正常。根因是 React state 决定画布尺寸 + CSS `background-image cover` 拉伸的设计模式 state stale 时图被拉伸。改为 wrapper `aspect-ratio` 来自 `img.naturalSize`、img `object-fit:contain`，显示永远等于文件内容。
-  - **含括号文件名**：CSS `url()` 加引号，文件名含 `(` `)` 的图正常加载。
-
 - **队列页只显示当前任务训练状态 + 嵌套训练输出正确渲染（#114）**
   队列页主行不再混入历史任务的训练 metric；任务下方的嵌套输出（每 epoch 采样图 / 中间状态）按所属任务正确分组渲染，不再串行错位。
-
-- **预设导出修复并改走 server 直发 yaml + 提供一次性迁移工具（#122）**
-  2026-05-21 ~ 24 约 3 天窗口期：前端 `downloadCurrentPreset` 调 `generateToml` 生成手写 TOML 但标 `.yaml` 后缀 + `application/yaml` MIME，导致再上传被拒（"顶层不是 mapping"）。
-
-  - 改走 server `GET /api/presets/{name}/download`（FileResponse 直发磁盘原 yaml）。
-  - 加 `isNew / hasAnyChange` 校验，未保存或有改动时点下载先弹 toast「请先保存」。
-  - `generateToml` 保留给 TOML 预览（sd-scripts 兼容格式）。
-  - 一次性迁移工具 `tools/preset_toml_to_yaml.py` 救活窗口期内已破损的文件（处理多行 `{...}` → inline / drop 空值 key / tomllib 解析 + TrainingConfig 校验 → yaml 落盘）。
-
-- **任务详情「关联配置」tab 长 yaml 无法滚动到底（#128）**
-  `SnapshotConfigTab` 父级 flex 链没传 `min-h-0`，长 yaml 被裁剪。给外层加 `flex-1 min-h-0`、header `shrink-0`、pre `flex-1 min-h-0 overflow-auto`。
-
-- **项目概览标签分布卡硬截断 11 条 + bar 高度被 flex 压扁（#128）**
-  删 `setTags(arr.slice(0, 11))` 硬截断显示全部标签；inner 容器加 `flex-1 min-h-0` 让 `overflowY:auto` 生效；每条 bar 加 `minHeight:22` + `flexShrink:0`，1000+ 条标签不会被 flex 平分压扁。header 文案从「唯一 · X 显示」改「标签」。
 
 - **测试页数据集 prompt 选择器关闭时未清空已选 tag（#128）**
   Generate 测试页数据集 prompt picker 之前 `×` 关闭只关 UI 不动 `datasetPick` 状态，已选 caption.tags 仍被 `handleGenerate` 拼到 prompt，用户以为没选还在生效。改成 `onClose` 同时 `setDatasetPick(null)`。
