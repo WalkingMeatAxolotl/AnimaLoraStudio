@@ -1499,8 +1499,8 @@
   "preprocessOverview": {
     "subtitle": "Upscale / crop / inpaint — Overview (preview + undo)",
     "title": "Processed images",
-    "tabAll": "All images",
-    "tabProcessed": "Processed",
+    "tabAll": "Processed dataset",
+    "tabProcessed": "Before / after",
     "tabRemoved": "Removed",
     "compareOriginal": "Original",
     "compareProcessed": "Processed",

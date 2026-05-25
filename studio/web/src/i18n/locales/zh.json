@@ -1499,8 +1499,8 @@
   "preprocessOverview": {
     "subtitle": "放大 / 裁剪 / 涂抹 — 总览（预览 + 撤销）",
     "title": "已处理图片",
-    "tabAll": "所有图片",
-    "tabProcessed": "经过处理",
+    "tabAll": "处理后数据集",
+    "tabProcessed": "前后对比",
     "tabRemoved": "已删除",
     "compareOriginal": "原图",
     "compareProcessed": "处理后",
