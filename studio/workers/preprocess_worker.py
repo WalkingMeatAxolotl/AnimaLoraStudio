@@ -97,6 +97,7 @@ def run(job_id: int) -> int:  # noqa: PLR0912, PLR0915 - 主流程线性可读
 
         download_dir, preprocess_dir = preprocess.project_paths(project)
         preprocess_dir.mkdir(parents=True, exist_ok=True)
+        project_dir = projects.project_dir(project["id"], project["slug"])
 
         # 模型权重必须先下载（UI 在开始按钮前会引导用户下载）
         model_path = model_downloader.upscaler_target(model_label)
@@ -155,8 +156,10 @@ def run(job_id: int) -> int:  # noqa: PLR0912, PLR0915 - 主流程线性可读
             if _stop_requested:
                 log(f"[cancel] 收到取消信号，已处理 {idx - 1}/{total}")
                 break
-            src_path = download_dir / src_name
-            if not src_path.exists():
+            # ADR 0004 §149 resolver 单点：manifest 有 entry → preprocess/{name}；
+            # 否则 → download/{name}（隐式 original）。worker 不自己决定源在哪。
+            src_path = preprocess_manifest.resolve(project_dir, src_name)
+            if src_path is None or not src_path.exists():
                 log(f"[skip] ({idx}/{total}) {src_name}: 源已不存在")
                 skipped += 1
                 emit_event(
@@ -165,19 +168,18 @@ def run(job_id: int) -> int:  # noqa: PLR0912, PLR0915 - 主流程线性可读
                     succeeded=succeeded, failed=failed, skipped=skipped,
                 )
                 continue
+            # origin 沿用 manifest 里已有的（含 multi-crop 的根 origin），没就用 name 本身。
+            existing_entry = preprocess_manifest.get_entry(project_dir, src_name)
+            origin_name = (
+                preprocess_manifest.entry_origin(existing_entry, src_name)
+                if existing_entry is not None
+                else src_name
+            )
             dst_path = preprocess.product_path_for(preprocess_dir, src_name)
-            # 'all' 是增量（已 resolve 过）；这里再过一遍 manifest，防止两个 worker
-            # 同时被调起（罕见但便宜）。'all_force' / 'selected' 走重跑路径。
-            if mode == "all" and preprocess_manifest.get_entry(
-                projects.project_dir(project["id"], project["slug"]), dst_path.name
-            ):
-                skipped += 1
-                emit_event(
-                    "preprocess_progress",
-                    idx=idx, total=total, name=src_name, status="skip",
-                    succeeded=succeeded, failed=failed, skipped=skipped,
-                )
-                continue
+            # ADR 0004 Addendum 1 §「Stage 不强制时序」—— 不按 manifest 是否有
+            # entry 判断该不该跑。是否真的"动盘 + 跑模型"由 upscaler 内部
+            # `SKIP_MODEL_RATIO` 决定（src 面积 ≥ 0.95×target 走 LANCZOS，否则
+            # 模型 + LANCZOS）。这样"裁剪后→放大"/"放大后→放大"都是合法链路。
             log(f"[upscale] ({idx}/{total}) {src_name} → {dst_path.name}")
             try:
                 meta = upscaler.upscale_file(
@@ -195,8 +197,9 @@ def run(job_id: int) -> int:  # noqa: PLR0912, PLR0915 - 主流程线性可读
                     prewarm_thumb_sizes=[256, 768],
                 )
                 # 写 manifest：ADR 0004 — 状态唯一真理，downstream resolve 用
+                meta["origin"] = origin_name
                 preprocess_manifest.add_processed(
-                    projects.project_dir(project["id"], project["slug"]),
+                    project_dir,
                     dst_path.name,
                     meta,
                 )

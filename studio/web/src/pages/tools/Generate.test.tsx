@@ -11,6 +11,7 @@ let lastEnqueueBody: Record<string, unknown> | null = null
 
 beforeEach(() => {
   lastEnqueueBody = null
+  window.localStorage.clear()
   vi.stubGlobal('fetch', fetchMock)
   fetchMock.mockReset()
   fetchMock.mockImplementation((url: string, init?: RequestInit) => {
@@ -129,5 +130,25 @@ describe('GeneratePage 端到端 smoke', () => {
     await user.click(screen.getByRole('button', { name: '单图' }))
 
     expect(promptArea).toHaveValue('my custom prompt')
+  })
+
+  it('刷新后恢复左侧生成参数，但不恢复当前生成结果', async () => {
+    const user = userEvent.setup()
+    const first = setup()
+    await waitForInitialLorasLoad()
+
+    const promptArea = screen.getAllByPlaceholderText('输入正向提示词…')[0]
+    await user.clear(promptArea)
+    await user.type(promptArea, 'persist me')
+    await user.click(screen.getByRole('button', { name: 'XY 矩阵' }))
+
+    first.unmount()
+    setup()
+    await waitForInitialLorasLoad()
+
+    expect(screen.getAllByPlaceholderText('输入正向提示词…')[0]).toHaveValue('persist me')
+    expect(screen.getByRole('button', { name: /开始生成 · 3 张/ })).toBeInTheDocument()
+    expect(screen.queryByText('#1')).toBeNull()
+    expect(screen.getByText('填写参数后点击「开始生成」')).toBeInTheDocument()
   })
 })

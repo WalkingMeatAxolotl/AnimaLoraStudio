@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { arLabel } from '../../lib/aspectRatio'
 
 /** A normalized [0..1] crop rectangle on an image. */
@@ -140,8 +140,28 @@ export function applyResize(
 
 /** Interactive crop editor: drag-create, click-select, 8-handle resize, AR lock.
  *
- *  Normalized coords let the same data outlive canvas resizes; pixel sizes are
- *  computed on the fly from image.w/h.
+ *  Sizing model — img.naturalSize is the source of truth.
+ *
+ *  History: v1 computed `renderW/H` from `image.w/h` (React state) and used
+ *  `background-image + background-size: cover`. After an in-place crop output
+ *  overwrote `preprocess/X.png`, the new small image got `cover`-stretched
+ *  into a canvas sized from stale state — what the user saw was bigger than
+ *  the source rect even though the file on disk was correct.
+ *
+ *  v2 tried `<img maxWidth=min(100%, Npx) maxHeight=min(100%, Npx)>` with
+ *  width:auto/height:auto, letting the browser pick intrinsic size. But
+ *  `max-height: 100%` on inline-block inside flex containers doesn't reliably
+ *  bound the image height — tall images overflowed and the flex parent's
+ *  overflow-hidden cropped the bottom.
+ *
+ *  v3 (current): wrapper has `aspect-ratio: W/H` driven by `img.naturalSize`
+ *  (filled in `onLoad`); `max-width/max-height: min(100%, props)` give upper
+ *  bounds; img fills the wrapper (`width: 100%; height: 100%; object-fit:
+ *  contain`). Since wrapper AR matches img AR, contain == fill — no letterbox
+ *  — and the wrapper rect aligns 1:1 with what the browser drew. mouse math
+ *  reads `canvasRef.getBoundingClientRect()` live. `image.w/h` is only used
+ *  as a pre-load AR hint (avoid 0-size flash) and for the rect's px label
+ *  ("400×600 px" = norm × source). Display = bytes, always.
  */
 export default function FreeCropEditor({
   image,
@@ -155,48 +175,16 @@ export default function FreeCropEditor({
   onCreate,
 }: FreeCropEditorProps) {
   const canvasRef = useRef<HTMLDivElement | null>(null)
-  const containerRef = useRef<HTMLDivElement | null>(null)
   const dragRef = useRef<DragState | null>(null)
   const [hoverId, setHoverId] = useState<string | null>(null)
   const [draft, setDraft] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
-  // Container-driven sizing — measure the wrapper and fit the canvas inside.
-  // Fixed maxWidth/maxHeight props would either waste vertical space on tall
-  // viewports or overflow on short ones. ResizeObserver lets the canvas
-  // breathe with the layout. Fallback to maxWidth/maxHeight pre-measurement
-  // (e.g. first render or in jsdom where RO doesn't fire) so tests still work.
-  const [containerSize, setContainerSize] = useState<{ w: number; h: number }>({
-    w: maxWidth, h: maxHeight,
-  })
-  useEffect(() => {
-    const el = containerRef.current
-    if (!el || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const { width, height } = entry.contentRect
-        if (width > 0 && height > 0) {
-          setContainerSize({ w: width, h: height })
-        }
-      }
-    })
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [])
-
-  // Render dims that preserve image AR within the container box (capped by props)
-  const ar = image.w / image.h
-  const boxW = Math.max(50, Math.min(containerSize.w, maxWidth))
-  const boxH = Math.max(50, Math.min(containerSize.h, maxHeight))
-  let renderW = boxW
-  let renderH = renderW / ar
-  if (renderH > boxH) {
-    renderH = boxH
-    renderW = renderH * ar
-  }
-
-  const pxToN = useCallback(
-    (dx: number, dy: number) => ({ dxN: dx / renderW, dyN: dy / renderH }),
-    [renderW, renderH],
-  )
+  // Browser-reported intrinsic size from <img> onLoad. Authoritative once set
+  // — supersedes the (potentially stale) image.w/h prop. Reset when thumbUrl
+  // changes (user picks a different image, or in-place overwrite invalidates
+  // via mtime cache-buster), so a tall->wide switch doesn't briefly render at
+  // the old AR.
+  const [natural, setNatural] = useState<{ w: number; h: number } | null>(null)
+  useEffect(() => { setNatural(null) }, [image.thumbUrl])
 
   const onPointerDown = (
     e: React.MouseEvent,
@@ -207,14 +195,14 @@ export default function FreeCropEditor({
     e.preventDefault()
     e.stopPropagation()
     const cv = canvasRef.current?.getBoundingClientRect()
-    if (!cv) return
+    if (!cv || cv.width === 0 || cv.height === 0) return
     dragRef.current = {
       mode,
       startX: e.clientX,
       startY: e.clientY,
       anchorN: {
-        x: clamp((e.clientX - cv.left) / renderW, 0, 1),
-        y: clamp((e.clientY - cv.top) / renderH, 0, 1),
+        x: clamp((e.clientX - cv.left) / cv.width, 0, 1),
+        y: clamp((e.clientY - cv.top) / cv.height, 0, 1),
       },
       origRect: rect ? { ...rect } : null,
       handle: handle || null,
@@ -230,9 +218,12 @@ export default function FreeCropEditor({
     const onMove = (e: MouseEvent) => {
       const d = dragRef.current
       if (!d) return
+      const cv = canvasRef.current?.getBoundingClientRect()
+      if (!cv || cv.width === 0 || cv.height === 0) return
       const dx = e.clientX - d.startX
       const dy = e.clientY - d.startY
-      const { dxN, dyN } = pxToN(dx, dy)
+      const dxN = dx / cv.width
+      const dyN = dy / cv.height
       if (d.mode === 'move' && d.origRect) {
         const r = d.origRect
         const next: CropRect = {
@@ -259,11 +250,9 @@ export default function FreeCropEditor({
         d.startX = e.clientX
         d.startY = e.clientY
       } else if (d.mode === 'create') {
-        const cv = canvasRef.current?.getBoundingClientRect()
-        if (!cv) return
         const a = d.anchorN
-        const curX = clamp((e.clientX - cv.left) / renderW, 0, 1)
-        const curY = clamp((e.clientY - cv.top) / renderH, 0, 1)
+        const curX = clamp((e.clientX - cv.left) / cv.width, 0, 1)
+        const curY = clamp((e.clientY - cv.top) / cv.height, 0, 1)
         let dw = Math.abs(curX - a.x)
         let dh = Math.abs(curY - a.y)
         // AR-lock: link dw and dh, then cap by the room available from the
@@ -310,29 +299,63 @@ export default function FreeCropEditor({
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [draft, onChange, onCreate, pxToN, renderW, renderH, arLock, image.w, image.h])
+  }, [draft, onChange, onCreate, arLock, image.w, image.h])
 
   const selectedRect = selectedId ? crops.find((c) => c.id === selectedId) : null
 
+  // Wrapper AR — prefer browser-reported intrinsic, fall back to prop hint
+  // pre-load. The fallback only matters for the first paint of each new image;
+  // once onLoad fires, naturalWidth/Height takes over.
+  const arSrc = natural ?? { w: image.w, h: image.h }
+  const arCss = `${arSrc.w} / ${arSrc.h}`
+
   return (
-    <div ref={containerRef} className="flex items-center justify-center w-full h-full overflow-hidden">
+    <div className="flex items-center justify-center w-full h-full overflow-hidden min-w-0 min-h-0">
       <div
         ref={canvasRef}
         className="cropper-canvas"
         style={{
-          width: renderW,
-          height: renderH,
-          backgroundImage: `url(${image.thumbUrl})`,
-          backgroundSize: 'cover',
-          backgroundPosition: 'center',
+          position: 'relative',
+          // aspect-ratio + max-w/max-h: browser sizes the wrapper to fit the
+          // container while preserving AR, no JS measurement needed. Wrapper
+          // ends up exactly the size the <img> renders at, so rect overlays
+          // (positioned in %) align 1:1 with image pixels.
+          aspectRatio: arCss,
+          maxWidth: `min(100%, ${maxWidth}px)`,
+          maxHeight: `min(100%, ${maxHeight}px)`,
         }}
         onMouseDown={(e) => {
-          if (e.target === canvasRef.current) {
+          // create on blank-canvas click. img has pointer-events:none so click
+          // lands here; rect children stopPropagation in their own handlers.
+          if (e.target === canvasRef.current || (e.target as HTMLElement).tagName === 'IMG') {
             onSelect(null)
             onPointerDown(e, 'create', null, null)
           }
         }}
       >
+        <img
+          src={image.thumbUrl}
+          alt=""
+          draggable={false}
+          onLoad={(e) => {
+            const t = e.currentTarget
+            if (t.naturalWidth > 0 && t.naturalHeight > 0) {
+              setNatural({ w: t.naturalWidth, h: t.naturalHeight })
+            }
+          }}
+          style={{
+            display: 'block',
+            width: '100%',
+            height: '100%',
+            // Wrapper AR matches img AR (once loaded) → contain == fill, no
+            // letterbox. The brief moment before onLoad uses the prop-hint AR,
+            // which may differ slightly from the actual file; contain keeps
+            // the image undistorted during that flash.
+            objectFit: 'contain',
+            userSelect: 'none',
+            pointerEvents: 'none',
+          }}
+        />
         {/* dim outside selected rect */}
         {selectedRect && (
           <div className="cropper-dim">

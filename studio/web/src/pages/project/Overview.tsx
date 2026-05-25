@@ -256,21 +256,20 @@ function BannerShell({
   }
   const tCfg = tintMap[tint]
   return (
-    <div style={{
-      padding: '16px 18px',
+    <div className="banner-shell" style={{
       background: tCfg.bg,
       border: '1px solid ' + tCfg.border,
       borderRadius: 'var(--r-lg)',
       display: 'flex', flexDirection: 'column', gap: 4,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <span style={{
-          width: 32, height: 32, flexShrink: 0,
+        <span className="banner-shell-icon" style={{
+          flexShrink: 0,
           borderRadius: '50%',
           background: 'var(--bg-surface)',
           border: '1px solid ' + tCfg.border,
           display: 'grid', placeItems: 'center',
-          color: iconColor, fontSize: 16, fontWeight: 700,
+          color: iconColor, fontWeight: 700,
           animation: iconPulse ? 'pulse 1.6s infinite' : 'none',
         }}>{iconChar}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -350,8 +349,8 @@ function PhaseTimeline({
                 display: 'flex', alignItems: 'center', gap: 6,
                 padding: '4px 10px',
                 borderRadius: 'var(--r-md)',
-                background: here ? 'var(--accent-soft)' : 'transparent',
-                border: here ? '1px solid var(--accent)' : '1px solid transparent',
+                background: 'transparent',
+                border: '1px solid transparent',
                 cursor: disabled ? 'not-allowed' : clickable ? 'pointer' : 'default',
                 opacity: disabled ? 0.4 : 1,
                 font: 'inherit',
@@ -361,7 +360,7 @@ function PhaseTimeline({
                 fontFamily: 'var(--font-mono)', fontSize: 'var(--t-sm)', fontWeight: 600,
                 color: done ? 'var(--ok)' : here ? 'var(--accent)' : 'var(--fg-disabled)',
               }}>{p.n}</span>
-              <span style={{
+              <span className="phase-timeline-label" style={{
                 fontSize: 'var(--t-xs)',
                 color: done ? 'var(--fg-secondary)' : here ? 'var(--fg-primary)' : 'var(--fg-tertiary)',
                 fontWeight: here ? 600 : 400,
@@ -1088,7 +1087,7 @@ function DetailGrid({ project, version }: { project: ProjectDetail; version: Ver
   const regCount = version?.stats?.reg_image_count ?? 0
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, height: '100%', minHeight: 0 }}>
+    <div style={{ display: 'grid', gridTemplateRows: '1.4fr 1fr', gap: 12, height: '100%', minHeight: 0 }}>
       <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 12, minHeight: 0 }}>
         <TrainSetCard project={project} version={version} />
         <TagDistCard project={project} version={version} />

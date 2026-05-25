@@ -1,0 +1,13 @@
+/* 单点窄屏优化 —— 项目当前不做系统级响应式（见
+ * docs/architecture/studio-pipeline.md §11），需要时再单独加 className + 媒体查询。
+ * 断点取 viewport 1280px（< laptop "中屏" 阈值），不用 container query。
+ */
+
+.banner-shell { padding: 16px 18px; }
+.banner-shell-icon { width: 32px; height: 32px; font-size: 16px; }
+
+@media (max-width: 1280px) {
+  .banner-shell { padding: 10px 14px; }
+  .banner-shell-icon { width: 26px; height: 26px; font-size: 13px; }
+  .phase-timeline-label { display: none; }
+}

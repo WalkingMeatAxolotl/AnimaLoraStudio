@@ -956,7 +956,6 @@ export interface RegAiRequest {
   seed?: number
   incremental?: boolean
   mixed_precision?: string
-  attention_backend?: AttentionBackend
 }
 
 /** PR-9 — 测试出图（独立工具页，多 LoRA + multi-prompt）。 */
@@ -1148,8 +1147,10 @@ export interface MonitorState {
 
 export interface TaskOutputFile {
   name: string
+  path: string
   size: number
   mtime: number
+  kind: 'lora' | 'training_state' | 'pause_state' | 'auto_epoch_state' | 'other'
   is_lora: boolean
 }
 
@@ -1263,6 +1264,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ config }),
     }),
+  /** 端到端 yaml 文件下载直链，server FileResponse 已设 Content-Disposition。
+   *  <a href={...} download> 触发即可，不发 fetch。 */
+  presetDownloadUrl: (name: string) =>
+    `/api/presets/${encodeURIComponent(name)}/download`,
   importPresetFromPath: (path: string) =>
     req<{ name: string; path: string }>('/api/presets/import-from-path', {
       method: 'POST',
@@ -1529,8 +1534,15 @@ export const api = {
         body: JSON.stringify({ names }),
       }
     ),
-  projectThumbUrl: (pid: number, name: string, bucket = 'download', size = 256) =>
-    `/api/projects/${pid}/thumb?bucket=${encodeURIComponent(bucket)}&name=${encodeURIComponent(name)}&size=${size}`,
+  /** `v`：文件 mtime（unix s），仅用作浏览器端 cache-buster。**服务端忽略**该参数
+   *  （后端 cache key 仍按 src+mtime+size 计算）；目的是让 in-place 覆盖后的图
+   *  （裁剪 / 放大同名输出）URL 变化，浏览器不再命中 memory image cache 复用旧
+   *  decoded 像素。`Cache-Control: no-cache` 对 disk cache 强制 revalidate，
+   *  但 CSS `background-image` 的 in-memory decoded image 不受其约束，必须
+   *  靠 URL 唯一性来失效 — 见 PreprocessCrop bug 修复。 */
+  projectThumbUrl: (pid: number, name: string, bucket = 'download', size = 256, v?: number) =>
+    `/api/projects/${pid}/thumb?bucket=${encodeURIComponent(bucket)}&name=${encodeURIComponent(name)}&size=${size}`
+    + (v ? `&v=${v}` : ''),
 
   // Preprocess (放大 / 裁剪 / 涂抹) ----------------------------------------
   startPreprocess: (
@@ -1554,13 +1566,13 @@ export const api = {
     req<{
       job: Job | null
       log_tail: string
-      summary: { download_count: number; processed_count: number; pending_count: number }
+      summary: { image_count: number }
     }>(`/api/projects/${pid}/preprocess/status`),
   listPreprocessFiles: (pid: number) =>
     req<{
       processed: PreprocessedItem[]
       pending: PreprocessPendingItem[]
-      summary: { download_count: number; processed_count: number; pending_count: number }
+      summary: { image_count: number }
     }>(`/api/projects/${pid}/preprocess/files`),
   /** 还原指定产物：删 manifest entry + 删 preprocess/{name} PNG。
    *  还原后图回到「未处理」（隐式 original）。ADR 0004。 */
@@ -1917,10 +1929,10 @@ export const api = {
   getTaskOutputs: (id: number) =>
     req<TaskOutputs>(`/api/queue/${id}/outputs`),
   /** 下载单个 output 文件的直链，不发请求。<a href={...} download> 即可。 */
-  taskOutputDownloadUrl: (id: number, filename: string) =>
-    `/api/queue/${id}/output/${encodeURIComponent(filename)}`,
+  taskOutputDownloadUrl: (id: number, path: string) =>
+    `/api/queue/${id}/output/${path.split('/').map(encodeURIComponent).join('/')}`,
   /** output 目录打包 zip 下载直链。
-   * 不传 files → 全量；传文件名数组 → 仅打包这些（后端 whitelist 校验）。
+   * 不传 files → 全量；传相对路径数组 → 仅打包这些（后端 whitelist 校验）。
    * 配合 <a href download> 触发，浏览器原生接管下载条；后端 zip 写完会
    * publish task_outputs_zip_ready / task_outputs_zip_failed 事件供前端清 loading。 */
   taskOutputsZipUrl: (id: number, files?: ReadonlyArray<string>) => {

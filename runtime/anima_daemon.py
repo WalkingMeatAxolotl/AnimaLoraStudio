@@ -27,6 +27,7 @@ import json
 import logging
 import random
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
@@ -44,7 +45,7 @@ for _p in (_THIS_DIR, _REPO_ROOT):
 import anima_train as _T  # noqa: E402
 
 from studio.schema import migrate_legacy_attention  # noqa: E402
-from studio.services.inference_core import LoRASpec, apply_loras  # noqa: E402
+from studio.services.inference_core import LoRAMeta, LoRASpec, apply_loras, read_lora_meta  # noqa: E402
 
 # 日志走 stderr，stdout 留给协议
 logging.basicConfig(
@@ -80,6 +81,68 @@ def _emit_for(req_id: str, kind: str, **extra: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _lora_topology(meta: LoRAMeta) -> tuple[int, float, str, int]:
+    return (meta.rank, meta.alpha, meta.algo, meta.factor)
+
+
+def _load_lora_state_dict(path: str, device: str, dtype: Any) -> dict[str, Any]:
+    from safetensors import safe_open
+
+    sd: dict[str, Any] = {}
+    with safe_open(str(path), framework="pt", device="cpu") as f:
+        for k in f.keys():
+            sd[k] = f.get_tensor(k).to(device=device, dtype=dtype)
+    return sd
+
+
+def _reload_adapter_weights(adapter: Any, spec: LoRASpec, device: str, dtype: Any) -> None:
+    _set_lora_multiplier(adapter, spec.scale)
+    result = adapter.load_state_dict(
+        _load_lora_state_dict(spec.path, device, dtype),
+        strict=False,
+    )
+    missing = len(getattr(result, "missing_keys", []) or [])
+    unexpected = len(getattr(result, "unexpected_keys", []) or [])
+    logger.info(
+        f"已热换 LoRA 权重: {Path(spec.path).name} "
+        f"(scale={spec.scale}; missing={missing}, unexpected={unexpected})"
+    )
+class GenerationCanceled(Exception):
+    pass
+
+
+_CANCEL_EVENTS: dict[str, threading.Event] = {}
+_CANCEL_LOCK = threading.Lock()
+_ACTIVE_WORKER: threading.Thread | None = None
+_ACTIVE_WORKER_LOCK = threading.Lock()
+
+
+def _register_cancel(req_id: str) -> threading.Event:
+    event = threading.Event()
+    with _CANCEL_LOCK:
+        _CANCEL_EVENTS[req_id] = event
+    return event
+
+
+def _pop_cancel(req_id: str) -> None:
+    with _CANCEL_LOCK:
+        _CANCEL_EVENTS.pop(req_id, None)
+
+
+def _request_cancel(req_id: str) -> bool:
+    with _CANCEL_LOCK:
+        event = _CANCEL_EVENTS.get(req_id)
+    if event is None:
+        return False
+    event.set()
+    return True
+
+
+def _raise_if_canceled(cancel_event: threading.Event | None) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise GenerationCanceled()
+
+
 class ModelCache:
     """缓存已加载的模型 / adapters。
 
@@ -107,6 +170,7 @@ class ModelCache:
         # adapters 必须保持引用，否则 forward hook 失效（lycoris closure）
         self.adapters: list[Any] = []
         self.last_lora_specs: list[LoRASpec] = []
+        self.last_lora_metas: list[LoRAMeta] = []
         # commit 14：TAEFlux for preview
         self.taeflux: Any = None
         self.taeflux_attempted: bool = False  # 失败后不再重试
@@ -234,17 +298,10 @@ class ModelCache:
         self.dtype = dtype
         self.adapters = []
         self.last_lora_specs = []
+        self.last_lora_metas = []
 
     def apply_loras(self, lora_configs: list[dict[str, Any]]) -> list[Any]:
-        """按 lora_configs (重新) inject adapters。
-
-        commit 20：先 detach 旧 adapters（撤销 lycoris hook + 还原 model.train
-        劫持），再 inject 新的。失败 fallback 到模型整体 reload（粗暴但安全 ——
-        旧版 lycoris 没 restore 接口时走这条）。具体路径：
-          - specs 不变且已 inject → 直接复用
-          - specs 变了 → adapter.detach() 全部成功 → inject 新的（快路径，<2s）
-          - detach 失败（hook 残留）→ unload+_load 重 load 整个 transformer（30-60s）
-        """
+        """按 lora_configs inject adapters；同结构 checkpoint 切换时只热换权重。"""
         specs = [
             LoRASpec(path=str(lc.get("path", "")), scale=float(lc.get("scale", 1.0)))
             for lc in lora_configs
@@ -252,7 +309,37 @@ class ModelCache:
         if specs == self.last_lora_specs and self.adapters:
             return self.adapters
 
-        # 撤销旧 adapters（commit 20 快路径）
+        current_metas: list[LoRAMeta] = []
+        if specs:
+            try:
+                for spec in specs:
+                    if not spec.path or not Path(spec.path).exists():
+                        current_metas = []
+                        break
+                    current_metas.append(read_lora_meta(spec.path))
+            except Exception:
+                logger.exception("read LoRA metadata failed")
+                current_metas = []
+
+        can_hot_reload = (
+            bool(self.adapters)
+            and bool(self.last_lora_specs)
+            and len(specs) == len(self.adapters) == len(self.last_lora_metas) == len(current_metas)
+            and [_lora_topology(m) for m in current_metas]
+            == [_lora_topology(m) for m in self.last_lora_metas]
+        )
+        if can_hot_reload:
+            try:
+                for adapter, spec in zip(self.adapters, specs):
+                    _reload_adapter_weights(adapter, spec, self.device, self.dtype)
+            except Exception:
+                logger.exception("LoRA hot reload failed; reinjecting adapters")
+            else:
+                self.last_lora_specs = specs
+                self.last_lora_metas = current_metas
+                self.model.eval()
+                return self.adapters
+
         all_detached = True
         for adapter in self.adapters:
             try:
@@ -263,7 +350,6 @@ class ModelCache:
                 all_detached = False
         self.adapters = []
 
-        # detach 不彻底 → fallback 到 model reload（保证 inference 干净）
         if not all_detached and self.last_lora_specs:
             logger.warning("detach failed, reloading model to ensure clean state")
             saved_paths = (
@@ -282,10 +368,11 @@ class ModelCache:
             )
             _emit_evt("loaded")
         self.last_lora_specs = []
+        self.last_lora_metas = []
 
-        # inject 新的
         self.adapters = apply_loras(self.model, specs, self.device, self.dtype)
         self.last_lora_specs = specs
+        self.last_lora_metas = current_metas
         self.model.eval()
         return self.adapters
 
@@ -300,6 +387,7 @@ class ModelCache:
         self.t5_tok = None
         self.adapters = []
         self.last_lora_specs = []
+        self.last_lora_metas = []
         # taeflux 也卸（占很小但保持一致）
         self.taeflux = None
         self.taeflux_attempted = False
@@ -402,7 +490,11 @@ def _encode_jpeg(img: Any, quality: int = 80) -> tuple[str, int]:
     return base64.b64encode(raw).decode("ascii"), len(raw)
 
 
-def _build_preview_callback(req_id: str, every_n: int) -> Any:
+def _build_preview_callback(
+    req_id: str,
+    every_n: int,
+    cancel_event: threading.Event | None = None,
+) -> Any:
     """每步推 preview_step 事件；TAEFlux 可用 + 节流命中时附 image_b64。
 
     用户反馈：进度条始终要可见（"当前在做什么，第几步"），预览图按需。
@@ -411,8 +503,11 @@ def _build_preview_callback(req_id: str, every_n: int) -> Any:
       - every_n>0 且步命中（含末步）+ TAEFlux 加载 OK → 附 image_b64
     callback 在 daemon 主线程同步执行；空逻辑 ~微秒级，TAEFlux decode +
     JPEG 编码 ~10-20ms。
+
+    cancel_event 注入后每步检查，取消延迟从"整张图"降到"一步"。
     """
     def _cb(step: int, total: int, latent: Any) -> None:
+        _raise_if_canceled(cancel_event)
         # 是否带预览图：preview_every_n_steps>0 + 节流命中 + TAEFlux 可用
         with_image = False
         b64: Optional[str] = None
@@ -466,7 +561,13 @@ def _virtual_path(task_id: int, filename: str) -> str:
     return f"/anima_gen_{task_id}/{filename}"
 
 
-def _run_generate(req_id: str, task_id: int, cfg: dict[str, Any], output_dir: Path) -> None:
+def _run_generate(
+    req_id: str,
+    task_id: int,
+    cfg: dict[str, Any],
+    output_dir: Path,
+    cancel_event: threading.Event | None = None,
+) -> None:
     """跑一次完整 generate（含可选 XY）。
 
     commit 10 起：PNG bytes base64 推 stdout（image_done 事件）→ server
@@ -479,13 +580,14 @@ def _run_generate(req_id: str, task_id: int, cfg: dict[str, Any], output_dir: Pa
     """
     update_monitor = _setup_monitor(cfg)
 
+    _raise_if_canceled(cancel_event)
     CACHE.ensure_loaded(cfg)
     adapters = CACHE.apply_loras(cfg.get("lora_configs", []))
 
     # 进度推送：永远建 callback 推 preview_step（含 step/total）；
     # preview_every_n_steps>0 时附 image_b64 中间预览图（commit 14）。
     preview_every = int(cfg.get("preview_every_n_steps", 0) or 0)
-    preview_callback = _build_preview_callback(req_id, preview_every)
+    preview_callback = _build_preview_callback(req_id, preview_every, cancel_event)
 
     prompts: list[str] = cfg.get("prompts") or [
         "newest, safe, 1girl, masterpiece, best quality"
@@ -511,6 +613,7 @@ def _run_generate(req_id: str, task_id: int, cfg: dict[str, Any], output_dir: Pa
             height=height, width=width,
             update_monitor=update_monitor,
             preview_callback=preview_callback,
+            cancel_event=cancel_event,
         )
         return
 
@@ -520,6 +623,7 @@ def _run_generate(req_id: str, task_id: int, cfg: dict[str, Any], output_dir: Pa
     img_idx = 0
     for pi, prompt in enumerate(prompts):
         for ci in range(count):
+            _raise_if_canceled(cancel_event)
             seed = (
                 (base_seed + img_idx) if base_seed != 0
                 else random.randint(0, 2**31 - 1)
@@ -557,6 +661,8 @@ def _run_generate(req_id: str, task_id: int, cfg: dict[str, Any], output_dir: Pa
                     step=img_idx + 1, total=total,
                     image_b64=b64, byte_size=byte_size,
                 )
+            except GenerationCanceled:
+                raise
             except Exception as e:
                 logger.exception("generate failed")
                 _emit_for(req_id, "image_error", step=img_idx + 1, message=str(e))
@@ -582,6 +688,7 @@ def _run_xy(
     width: int,
     update_monitor: Any,
     preview_callback: Any = None,
+    cancel_event: threading.Event | None = None,
 ) -> None:
     x_spec = xy_matrix["x"]
     y_spec = xy_matrix.get("y")
@@ -608,6 +715,7 @@ def _run_xy(
     img_idx = 0
     for yi, yv in enumerate(y_values):
         for xi, xv in enumerate(x_values):
+            _raise_if_canceled(cancel_event)
             # lora_ckpt 切换：mutate cfg.lora_configs 的 path 然后调
             # CACHE.apply_loras —— commit 20 detach 路径会快速 reinject。
             x_is_ckpt = x_spec.get("axis") == "lora_ckpt"
@@ -682,6 +790,8 @@ def _run_xy(
                     xy={"xi": xi, "yi": yi, "xv": xv, "yv": yv},
                     image_b64=b64, byte_size=byte_size,
                 )
+            except GenerationCanceled:
+                raise
             except Exception as e:
                 logger.exception("XY [%d,%d] failed", xi, yi)
                 _emit_for(
@@ -690,6 +800,46 @@ def _run_xy(
                     xy={"xi": xi, "yi": yi, "xv": xv, "yv": yv},
                 )
             img_idx += 1
+
+
+def _run_generate_worker(
+    req_id: str,
+    task_id: int,
+    cfg: dict[str, Any],
+    output_dir: Path,
+    cancel_event: threading.Event,
+) -> None:
+    try:
+        _run_generate(req_id, task_id, cfg, output_dir, cancel_event)
+        _emit_for(req_id, "done", task_id=task_id)
+    except GenerationCanceled:
+        logger.info("generate canceled: task_id=%s", task_id)
+        _emit_for(req_id, "canceled", task_id=task_id)
+    except Exception as e:
+        logger.exception("generate failed")
+        _emit_for(req_id, "error", task_id=task_id, message=str(e))
+    finally:
+        _pop_cancel(req_id)
+        with _ACTIVE_WORKER_LOCK:
+            global _ACTIVE_WORKER
+            _ACTIVE_WORKER = None
+
+
+def _start_generate_worker(req_id: str, task_id: int, cfg: dict[str, Any], output_dir: Path) -> bool:
+    global _ACTIVE_WORKER
+    with _ACTIVE_WORKER_LOCK:
+        if _ACTIVE_WORKER is not None and _ACTIVE_WORKER.is_alive():
+            return False
+        cancel_event = _register_cancel(req_id)
+        worker = threading.Thread(
+            target=_run_generate_worker,
+            args=(req_id, task_id, cfg, output_dir, cancel_event),
+            daemon=False,
+            name=f"generate-{task_id}",
+        )
+        _ACTIVE_WORKER = worker
+        worker.start()
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -710,16 +860,19 @@ def _handle_message(msg: dict[str, Any]) -> None:
         _emit_evt("unloaded")
         return
 
+    if action == "cancel":
+        if _request_cancel(str(msg.get("target_id") or req_id)):
+            _emit_for(req_id, "cancel_ack")
+        else:
+            _emit_for(req_id, "cancel_missed")
+        return
+
     if action == "generate":
         task_id = int(msg.get("task_id", 0))
         cfg = msg.get("config") or {}
         output_dir = Path(msg.get("output_dir") or ".")
-        try:
-            _run_generate(req_id, task_id, cfg, output_dir)
-            _emit_for(req_id, "done", task_id=task_id)
-        except Exception as e:
-            logger.exception("generate failed")
-            _emit_for(req_id, "error", task_id=task_id, message=str(e))
+        if not _start_generate_worker(req_id, task_id, cfg, output_dir):
+            _emit_for(req_id, "error", task_id=task_id, message="daemon is already running a task")
         return
 
     logger.warning("unknown action: %r", action)
@@ -746,6 +899,10 @@ def main() -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        with _ACTIVE_WORKER_LOCK:
+            worker = _ACTIVE_WORKER
+        if worker is not None:
+            worker.join()
         CACHE.unload()
     return 0
 

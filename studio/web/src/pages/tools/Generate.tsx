@@ -11,6 +11,7 @@ import PageHeader from '../../components/PageHeader'
 import { useToast } from '../../components/Toast'
 import { useEventStream } from '../../lib/useEventStream'
 import { useMonitorProgress } from '../../lib/useMonitorProgress'
+import { useLocalStorageState } from '../../lib/useLocalStorageState'
 import AspectChips, { aspectFromDimensions, type AspectName } from './generate/AspectChips'
 import DaemonControls from './generate/DaemonControls'
 import GenerateProgressBar, { type GenerateProgress } from './generate/GenerateProgress'
@@ -30,21 +31,42 @@ import { DEFAULT_NEG } from './generate/types'
 import { useProjectLoras } from './generate/useProjectLoras'
 import { cellCount, draftToSpec, parseAxisValues, type XYAxisDraft } from './generate/xy'
 
+const GENERATE_PREFS_KEY = 'studio:generate:params:v1'
+
+const DEFAULT_GENERATE_PREFS = {
+  mode: 'single' as ViewMode,
+  prompts: ['newest, safe, 1girl, masterpiece, best quality'],
+  negPrompt: DEFAULT_NEG,
+  aspect: '1:1' as AspectName,
+  width: 1024,
+  height: 1024,
+  steps: 25,
+  cfgScale: 4.0,
+  count: 1,
+  seed: 0,
+  loras: [] as LoraEntry[],
+  xDraft: { axis: 'steps', raw: '20, 25, 30', loraIndex: null } as XYAxisDraft,
+  yDraft: null as XYAxisDraft | null,
+  datasetPick: null as DatasetPick | null,
+}
+
 export default function GeneratePage() {
   const { t } = useTranslation()
   const { toast } = useToast()
 
-  const [mode, setMode] = useState<ViewMode>('single')
-  const [prompts, setPrompts] = useState<string[]>(['newest, safe, 1girl, masterpiece, best quality'])
-  const [negPrompt, setNegPrompt] = useState(DEFAULT_NEG)
-  const [aspect, setAspect] = useState<AspectName>('1:1')
-  const [width, setWidth] = useState(1024)
-  const [height, setHeight] = useState(1024)
-  const [steps, setSteps] = useState(25)
-  const [cfgScale, setCfgScale] = useState(4.0)
-  const [count, setCount] = useState(1)
-  const [seed, setSeed] = useState(0)
-  const [loras, setLoras] = useState<LoraEntry[]>([])
+  const [prefs, setPrefs] = useLocalStorageState(GENERATE_PREFS_KEY, DEFAULT_GENERATE_PREFS)
+  const { mode, prompts, negPrompt, aspect, width, height, steps, cfgScale, count, seed, loras, xDraft, yDraft, datasetPick } = prefs
+  const setMode = (mode: ViewMode) => setPrefs((p) => ({ ...p, mode }))
+  const setPrompts = (prompts: string[]) => setPrefs((p) => ({ ...p, prompts }))
+  const setNegPrompt = (negPrompt: string) => setPrefs((p) => ({ ...p, negPrompt }))
+  const setAspect = (aspect: AspectName) => setPrefs((p) => ({ ...p, aspect }))
+  const setWidth = (width: number) => setPrefs((p) => ({ ...p, width }))
+  const setHeight = (height: number) => setPrefs((p) => ({ ...p, height }))
+  const setSteps = (steps: number) => setPrefs((p) => ({ ...p, steps }))
+  const setCfgScale = (cfgScale: number) => setPrefs((p) => ({ ...p, cfgScale }))
+  const setCount = (count: number) => setPrefs((p) => ({ ...p, count }))
+  const setSeed = (seed: number) => setPrefs((p) => ({ ...p, seed }))
+  const setLoras = (loras: LoraEntry[]) => setPrefs((p) => ({ ...p, loras }))
 
   // LoRA 预填 via URL query (?lora=<path>&projectId=N&versionId=N)
   // Overview StatusBanner "在测试中加载" CTA 跳进来时，把 LoRA 直接塞入 loras。
@@ -55,14 +77,17 @@ export default function GeneratePage() {
     if (!lora) return
     const projectId = sp.get('projectId')
     const versionId = sp.get('versionId')
-    setLoras((prev) => {
-      if (prev.some((l) => l.path === lora)) return prev
-      return [...prev, {
-        path: lora,
-        scale: 1.0,
-        project_id: projectId ? Number(projectId) : null,
-        version_id: versionId ? Number(versionId) : null,
-      }]
+    setPrefs((p) => {
+      if (p.loras.some((l) => l.path === lora)) return p
+      return {
+        ...p,
+        loras: [...p.loras, {
+          path: lora,
+          scale: 1.0,
+          project_id: projectId ? Number(projectId) : null,
+          version_id: versionId ? Number(versionId) : null,
+        }],
+      }
     })
     const url = new URL(window.location.href)
     url.searchParams.delete('lora')
@@ -70,13 +95,12 @@ export default function GeneratePage() {
     url.searchParams.delete('versionId')
     window.history.replaceState({}, '', url.toString())
   }, [])
-
   // commit C: attention backend 已从 Generate 页移到 Settings；server 端
   // enqueue_generate 会自动从 secrets.generate.attention_backend 注入。
 
-  // XY 模式 state（mode='single' 时不参与 enqueue）
-  const [xDraft, setXDraft] = useState<XYAxisDraft>({ axis: 'steps', raw: '20, 25, 30', loraIndex: null })
-  const [yDraft, setYDraft] = useState<XYAxisDraft | null>(null)
+  const setXDraft = (xDraft: XYAxisDraft) => setPrefs((p) => ({ ...p, xDraft }))
+  const setYDraft = (yDraft: XYAxisDraft | null) => setPrefs((p) => ({ ...p, yDraft }))
+  const setDatasetPick = (datasetPick: DatasetPick | null) => setPrefs((p) => ({ ...p, datasetPick }))
 
   // 双图对比：选中的 2 个 sample 索引（从 PreviewXYGrid cell click 收集）
   const [selectedIndices, setSelectedIndices] = useState<number[]>([])
@@ -98,9 +122,6 @@ export default function GeneratePage() {
     batchIdx: null, batchTotal: null, currentStep: null, totalSteps: null,
   })
   const [datasetPickerOpen, setDatasetPickerOpen] = useState(false)
-  // dataset picker 选中状态：picker 关掉再开都保留；不写进 prompts 数组，
-  // 而是在 handleGenerate 里把 tags 拼到每条 prompt 末尾再 enqueue。
-  const [datasetPick, setDatasetPick] = useState<DatasetPick | null>(null)
   // commit 16：图片历史栏。点击历史项 → 主预览替换为该项封面
   const history = useGenerateHistory()
   const [historyOverride, setHistoryOverride] = useState<HistoryEntry | null>(null)

@@ -360,15 +360,14 @@ class Supervisor:
             if slot is not None:
                 self._signal_terminate_async(slot)
                 return True
-            # daemon 上跑的 generate task：kill daemon 进程让它带着丢 cache 退出，
-            # 下次 generate task 再 lazy spawn。粗暴但可接受（用户主动取消低频）。
             with self._daemon_lock:
-                if self._daemon_active_task_id == task_id:
+                is_daemon_task = self._daemon_active_task_id == task_id
+                if is_daemon_task:
                     self._daemon_cancel_pending = True
-            try:
-                get_daemon().stop(timeout=3.0)
-            except Exception:
-                logger.exception("failed to stop daemon for cancel")
+            if is_daemon_task:
+                if get_daemon().cancel_active_task(task_id):
+                    return True
+                logger.warning("daemon cancel request missed; task_id=%s", task_id)
             return True
         return False
 
@@ -1008,6 +1007,9 @@ class Supervisor:
             return
         if kind == "done":
             self._finalize_daemon_task(tid, status="done")
+            self._emit_daemon_state()
+        elif kind == "canceled":
+            self._finalize_daemon_task(tid, status="canceled")
             self._emit_daemon_state()
         elif kind == "error":
             self._finalize_daemon_task(

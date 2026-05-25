@@ -132,16 +132,37 @@ def test_list_processed_marks_orphans(isolated) -> None:
     assert items["deleted.png"]["orphan"] is True
 
 
-def test_summary_counts(isolated) -> None:
+def test_summary_image_count(isolated) -> None:
+    """summary 只返回 image_count = grid 当前总图数（ADR 0004 Addendum 1
+    §「Stage 不强制时序」，不再分 pending / processed）。"""
     p = isolated["project"]
     _seed_download(p, ["a.png", "b.png", "c.png"])
     _seed_processed(p, {"a.png": {"scale": 4}})
     s = preprocess.summary(p)
-    assert s == {
-        "download_count": 3,
-        "processed_count": 1,
-        "pending_count": 2,
-    }
+    # a.png 走派生路径（manifest entry）+ b.png, c.png 走 download 原图路径 = 3 张
+    assert s == {"image_count": 3}
+
+
+def test_summary_counts_multicrop_fanout(isolated) -> None:
+    """multi-crop 派生让一张 download 原图对应多个 entry → image_count 反映 grid 实际看到的行数。"""
+    p = isolated["project"]
+    _seed_download(p, ["a.png", "b.png"])
+    # 模拟 a.png 被多裁剪成 a_c0.png / a_c1.png（两 entry 共享 origin=a.png）
+    import json
+    import time
+    pdir = projects.project_dir(p["id"], p["slug"])
+    _, pre = preprocess.project_paths(p)
+    pre.mkdir(parents=True, exist_ok=True)
+    (pre / "a_c0.png").write_bytes(b"crop0")
+    (pre / "a_c1.png").write_bytes(b"crop1")
+    manifest_p = preprocess_manifest.manifest_path(pdir)
+    manifest_p.parent.mkdir(parents=True, exist_ok=True)
+    manifest_p.write_text(json.dumps({"images": {
+        "a_c0.png": {"origin": "a.png", "mtime": time.time(), "size": 1},
+        "a_c1.png": {"origin": "a.png", "mtime": time.time(), "size": 1},
+    }}), encoding="utf-8")
+    # a.png 派生覆盖 → 不走原图路径；b.png 仍走原图。grid 看到 a_c0/a_c1/b = 3
+    assert preprocess.summary(p) == {"image_count": 3}
 
 
 # ---------------------------------------------------------------------------
@@ -149,14 +170,18 @@ def test_summary_counts(isolated) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_all_returns_pending_only(isolated) -> None:
+def test_resolve_all_returns_all_current_images(isolated) -> None:
+    """ADR 0004 Addendum 1 §「Stage 不强制时序」：mode='all' = grid 全部当前图，
+    包括 manifest 已有派生（裁剪 / 上次放大产物），让"裁剪后→放大"/"再放大"链路可走。"""
     p = isolated["project"]
     _seed_download(p, ["a.png", "b.png"])
     _seed_processed(p, {"a.png": {"scale": 4}})
-    assert preprocess.resolve_targets(p, mode="all") == ["b.png"]
+    # a.png 派生（manifest entry）+ b.png 原图 → 两个都该被处理
+    assert preprocess.resolve_targets(p, mode="all") == ["a.png", "b.png"]
 
 
-def test_resolve_all_force_returns_everything(isolated) -> None:
+def test_resolve_all_force_alias_of_all(isolated) -> None:
+    """all_force 跟 all 语义已统一（ADR 0004 Addendum 1）；保留别名兼容老前端。"""
     p = isolated["project"]
     _seed_download(p, ["a.png", "b.png"])
     _seed_processed(p, {"a.png": {"scale": 4}})

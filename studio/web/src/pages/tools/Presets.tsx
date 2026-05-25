@@ -380,17 +380,17 @@ export default function PresetsPage() {
 
   const downloadCurrentPreset = () => {
     if (!config) return
-    const name = currentExportName()
-    const yaml = generateToml(config)
-    const blob = new Blob([yaml + '\n'], { type: 'application/yaml;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
+    if (isNew || !selected || hasAnyChange) {
+      toast(t('presets.saveBeforeDownload'), 'info')
+      return
+    }
+    // server FileResponse 直发磁盘上的原 yaml，已设 Content-Disposition。
     const a = document.createElement('a')
-    a.href = url
-    a.download = `${name}.yaml`
+    a.href = api.presetDownloadUrl(selected)
+    a.download = `${selected}.yaml`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
-    URL.revokeObjectURL(url)
   }
 
   const exportCurrentPresetToDataExports = async () => {

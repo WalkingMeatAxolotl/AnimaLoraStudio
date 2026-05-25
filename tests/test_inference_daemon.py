@@ -55,10 +55,16 @@ _MOCK_DAEMON = textwrap.dedent(
             tid = msg.get("task_id", 0)
             sys.stdout.write(json.dumps({"id":rid,"kind":"started","task_id":tid}) + "\\n")
             sys.stdout.flush()
+            if msg.get("config", {}).get("wait_for_cancel"):
+                continue
             # 出 1 张图：bytes 走协议 b64 字段（commit 10），不写磁盘
             sys.stdout.write(json.dumps({"id":rid,"kind":"image_done","task_id":tid,"filename":"fake.png","path":"/anima_gen_%d/fake.png" % tid,"step":1,"total":1,"image_b64":fake_b64,"byte_size":8}) + "\\n")
             sys.stdout.flush()
             sys.stdout.write(json.dumps({"id":rid,"kind":"done","task_id":tid}) + "\\n")
+            sys.stdout.flush()
+        elif action == "cancel":
+            target = msg.get("target_id") or rid
+            sys.stdout.write(json.dumps({"id":target,"kind":"canceled","task_id":0}) + "\\n")
             sys.stdout.flush()
         elif action == "unload":
             sys.stdout.write(json.dumps({"id":"_evt","kind":"unloaded"}) + "\\n")
@@ -280,6 +286,37 @@ def test_supervisor_cancel_pending_generate(env, mock_daemon_script, monkeypatch
     # 不 start sup —— pending 直接 cancel
     assert sup.cancel(tid) is True
     assert _task_status(env["db"], tid) == "canceled"
+
+
+def test_supervisor_cancel_running_generate_keeps_daemon_alive(env, mock_daemon_script, monkeypatch):
+    from studio.supervisor import Supervisor
+
+    d = InferenceDaemon(script_path=mock_daemon_script)
+    _patch_singleton(d, monkeypatch)
+    events: list[dict[str, Any]] = []
+    sup = Supervisor(
+        on_event=events.append,
+        db_path=env["db"], logs_dir=env["logs"], configs_dir=env["configs"],
+        poll_interval=0.05,
+    )
+    tid = _make_generate_task(env, cfg_overrides={"wait_for_cancel": True})
+
+    sup.start()
+    try:
+        assert _wait_for(lambda: _task_status(env["db"], tid) == "running", timeout=5)
+        assert d.is_alive
+        assert d.state == STATE_BUSY
+
+        assert sup.cancel(tid) is True
+        assert _wait_for(lambda: _task_status(env["db"], tid) == "canceled", timeout=5)
+        assert d.is_alive
+        assert d.state == STATE_IDLE
+    finally:
+        sup.stop()
+
+    daemon_evts = [e for e in events if e.get("type") == "daemon_state_changed"]
+    assert daemon_evts
+    assert any(e.get("busy") is False for e in daemon_evts)
 
 
 def test_supervisor_train_dispatch_skips_generate(env, monkeypatch):

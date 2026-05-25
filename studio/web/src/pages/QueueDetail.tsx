@@ -526,13 +526,21 @@ export function OutputsTab({ taskId }: { taskId: number }) {
     const sign = sortDir === 'asc' ? 1 : -1
     return [...data.files].sort((a, b) => {
       if (sortKey === 'name') {
-        // numeric: true 让 ep_002 排在 ep_010 之前，避免字典序的 ep_10 < ep_2
-        return a.name.localeCompare(b.name, undefined, { numeric: true }) * sign
+        // numeric 让 ep_002 排在 ep_010 之前，避免字典序的 ep_10 < ep_2
+        return (a.path || a.name).localeCompare(b.path || b.name, undefined, { numeric: true }) * sign
       }
       if (sortKey === 'size') return (a.size - b.size) * sign
       return (a.mtime - b.mtime) * sign
     })
   }, [data, sortKey, sortDir])
+  const stateFiles = useMemo(
+    () => sortedFiles.filter((f) => f.kind === 'training_state' || f.kind === 'pause_state' || f.kind === 'auto_epoch_state'),
+    [sortedFiles]
+  )
+  const regularFiles = useMemo(
+    () => sortedFiles.filter((f) => f.kind !== 'training_state' && f.kind !== 'pause_state' && f.kind !== 'auto_epoch_state'),
+    [sortedFiles]
+  )
 
   const onHeaderClick = (key: SortKey) => {
     if (key === sortKey) {
@@ -545,10 +553,10 @@ export function OutputsTab({ taskId }: { taskId: number }) {
   const sortArrow = (key: SortKey) =>
     sortKey === key ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''
 
-  // 刷新后剔除选中里已不存在的文件名（比如有人手动删了 ep_001.safetensors）
+  // 刷新后剔除选中里已不存在的文件路径
   useEffect(() => {
     if (selected.size === 0) return
-    const names = new Set(sortedFiles.map((f) => f.name))
+    const names = new Set(sortedFiles.map((f) => f.path))
     let dropped = false
     const next = new Set<string>()
     for (const n of selected) {
@@ -559,7 +567,7 @@ export function OutputsTab({ taskId }: { taskId: number }) {
 
   const selectedSize = useMemo(() => {
     let total = 0
-    for (const f of sortedFiles) if (selected.has(f.name)) total += f.size
+    for (const f of sortedFiles) if (selected.has(f.path)) total += f.size
     return total
   }, [sortedFiles, selected])
 
@@ -568,7 +576,7 @@ export function OutputsTab({ taskId }: { taskId: number }) {
   const partialSelected = !allSelected && !noneSelected
 
   const toggleSelectAll = () => {
-    setSelected(allSelected ? new Set() : new Set(sortedFiles.map((f) => f.name)))
+    setSelected(allSelected ? new Set() : new Set(sortedFiles.map((f) => f.path)))
   }
   const toggleOne = (name: string) => {
     setSelected((prev) => {
@@ -636,6 +644,79 @@ export function OutputsTab({ taskId }: { taskId: number }) {
     catch { toast(t('queueDetail.copyFailed'), 'error') }
   }
 
+  const renderFileRows = (files: typeof sortedFiles) => files.map((f) => {
+    const isSel = selected.has(f.path)
+    return (
+      <div
+        key={f.path}
+        onClick={selectMode ? () => toggleOne(f.path) : undefined}
+        className={`grid gap-2 px-4 py-2 items-center border-b border-subtle text-xs transition-colors ${selectMode ? `cursor-pointer ${isSel ? 'bg-accent-soft' : 'hover:bg-overlay'}` : 'hover:bg-overlay'}`}
+        style={{ gridTemplateColumns: '1fr 100px 160px 80px' }}
+      >
+        <div className="flex items-center gap-1.5 min-w-0">
+          <code className="font-mono text-fg-primary overflow-hidden text-ellipsis whitespace-nowrap">{f.path || f.name}</code>
+          {f.is_lora && <span className="badge badge-ok">LoRA</span>}
+          {f.kind === 'training_state' && <span className="badge badge-warn">State</span>}
+          {f.kind === 'pause_state' && <span className="badge badge-warn">Pause</span>}
+          {f.kind === 'auto_epoch_state' && <span className="badge badge-warn">Auto</span>}
+        </div>
+        <span className="text-right font-mono text-fg-tertiary">{fmtBytes(f.size)}</span>
+        <span className="text-right font-mono text-fg-tertiary">{fmtTime(f.mtime)}</span>
+        <span className="text-right">
+          {selectMode ? (
+            <input
+              type="checkbox"
+              checked={isSel}
+              onChange={() => toggleOne(f.path)}
+              onClick={(e) => e.stopPropagation()}
+              style={{ width: 14, height: 14, accentColor: 'var(--accent)', cursor: 'pointer' }}
+              aria-label={`${t('common.select')} ${f.path || f.name}`}
+            />
+          ) : (
+            <a href={api.taskOutputDownloadUrl(taskId, f.path)} download={f.name}
+              className="text-accent no-underline hover:underline text-xs"
+            >{t('queueDetail.downloadFile')}</a>
+          )}
+        </span>
+      </div>
+    )
+  })
+
+  const renderFileTable = (files: typeof sortedFiles) => (
+    <div className="card overflow-hidden p-0">
+      <div
+        className="grid gap-2 px-4 py-2 text-xs text-fg-tertiary border-b border-subtle font-mono"
+        style={{ gridTemplateColumns: '1fr 100px 160px 80px' }}
+      >
+        <button
+          onClick={() => onHeaderClick('name')}
+          className="text-left bg-transparent border-0 p-0 text-xs font-mono text-fg-tertiary hover:text-fg-primary cursor-pointer"
+        >{t('common.file')}{sortArrow('name')}</button>
+        <button
+          onClick={() => onHeaderClick('size')}
+          className="text-right bg-transparent border-0 p-0 text-xs font-mono text-fg-tertiary hover:text-fg-primary cursor-pointer"
+        >{t('common.size')}{sortArrow('size')}</button>
+        <button
+          onClick={() => onHeaderClick('mtime')}
+          className="text-right bg-transparent border-0 p-0 text-xs font-mono text-fg-tertiary hover:text-fg-primary cursor-pointer"
+        >{t('queueDetail.modifiedTime')}{sortArrow('mtime')}</button>
+        <span className="text-right">
+          {selectMode ? (
+            <input
+              type="checkbox"
+              checked={allSelected}
+              ref={(el) => { if (el) el.indeterminate = partialSelected }}
+              onChange={toggleSelectAll}
+              style={{ width: 14, height: 14, accentColor: 'var(--accent)', cursor: 'pointer' }}
+              aria-label={t('common.selectAll')}
+            />
+          ) : null}
+        </span>
+      </div>
+      {renderFileRows(files)}
+    </div>
+  )
+
   return (
     <div className="flex flex-col flex-1 min-h-0 p-4 gap-2.5">
       {data?.output_dir ? (
@@ -700,70 +781,19 @@ export function OutputsTab({ taskId }: { taskId: number }) {
         ) : sortedFiles.length === 0 ? (
           <div className="text-fg-tertiary text-sm text-center p-5">{t('queueDetail.dirEmpty')}</div>
         ) : (
-          <div className="card overflow-hidden p-0">
-            <div
-              className="grid gap-2 px-4 py-2 text-xs text-fg-tertiary border-b border-subtle font-mono"
-              style={{ gridTemplateColumns: '1fr 100px 160px 80px' }}
-            >
-              <button
-                onClick={() => onHeaderClick('name')}
-                className="text-left bg-transparent border-0 p-0 text-xs font-mono text-fg-tertiary hover:text-fg-primary cursor-pointer"
-              >{t('common.file')}{sortArrow('name')}</button>
-              <button
-                onClick={() => onHeaderClick('size')}
-                className="text-right bg-transparent border-0 p-0 text-xs font-mono text-fg-tertiary hover:text-fg-primary cursor-pointer"
-              >{t('common.size')}{sortArrow('size')}</button>
-              <button
-                onClick={() => onHeaderClick('mtime')}
-                className="text-right bg-transparent border-0 p-0 text-xs font-mono text-fg-tertiary hover:text-fg-primary cursor-pointer"
-              >{t('queueDetail.modifiedTime')}{sortArrow('mtime')}</button>
-              <span className="text-right">
-                {selectMode ? (
-                  <input
-                    type="checkbox"
-                    checked={allSelected}
-                    ref={(el) => { if (el) el.indeterminate = partialSelected }}
-                    onChange={toggleSelectAll}
-                    style={{ width: 14, height: 14, accentColor: 'var(--accent)', cursor: 'pointer' }}
-                    aria-label={t('common.selectAll')}
-                  />
-                ) : null}
-              </span>
-            </div>
-            {sortedFiles.map((f) => {
-              const isSel = selected.has(f.name)
-              return (
-              <div
-                key={f.name}
-                onClick={selectMode ? () => toggleOne(f.name) : undefined}
-                className={`grid gap-2 px-4 py-2 items-center border-b border-subtle text-xs transition-colors ${selectMode ? `cursor-pointer ${isSel ? 'bg-accent-soft' : 'hover:bg-overlay'}` : 'hover:bg-overlay'}`}
-                style={{ gridTemplateColumns: '1fr 100px 160px 80px' }}
-              >
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <code className="font-mono text-fg-primary overflow-hidden text-ellipsis whitespace-nowrap">{f.name}</code>
-                  {f.is_lora && <span className="badge badge-ok">LoRA</span>}
-                </div>
-                <span className="text-right font-mono text-fg-tertiary">{fmtBytes(f.size)}</span>
-                <span className="text-right font-mono text-fg-tertiary">{fmtTime(f.mtime)}</span>
-                <span className="text-right">
-                  {selectMode ? (
-                    <input
-                      type="checkbox"
-                      checked={isSel}
-                      onChange={() => toggleOne(f.name)}
-                      onClick={(e) => e.stopPropagation()}
-                      style={{ width: 14, height: 14, accentColor: 'var(--accent)', cursor: 'pointer' }}
-                      aria-label={`${t('common.select')} ${f.name}`}
-                    />
-                  ) : (
-                    <a href={api.taskOutputDownloadUrl(taskId, f.name)} download={f.name}
-                      className="text-accent no-underline hover:underline text-xs"
-                    >{t('queueDetail.downloadFile')}</a>
-                  )}
-                </span>
-              </div>
-              )
-            })}
+          <div className="flex flex-col gap-3">
+            {regularFiles.length > 0 && (
+              <section className="flex flex-col gap-1.5">
+                <div className="px-1 text-xs font-semibold text-fg-secondary">输出文件</div>
+                {renderFileTable(regularFiles)}
+              </section>
+            )}
+            {stateFiles.length > 0 && (
+              <section className="flex flex-col gap-1.5">
+                <div className="px-1 text-xs font-semibold text-warn">训练状态</div>
+                {renderFileTable(stateFiles)}
+              </section>
+            )}
           </div>
         )}
       </div>

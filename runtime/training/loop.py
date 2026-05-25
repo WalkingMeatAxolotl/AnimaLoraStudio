@@ -295,6 +295,7 @@ def run(ctx: TrainingContext) -> None:
                         # 同时保存 LoRA 权重
                         lora_path = ctx.output_dir / f"{args.output_name}_step{ctx.global_step}.safetensors"
                         ctx.injector.save(lora_path)
+                    ctx.emit(f"Saved training state (step {ctx.global_step}): {state_path.name}")
 
                 # 检查 max_steps
                 if args.max_steps and ctx.global_step >= args.max_steps:
@@ -356,7 +357,7 @@ def run(ctx: TrainingContext) -> None:
                     lora_path = ctx.output_dir / f"{args.output_name}_epoch{ctx.current_epoch}.safetensors"
                     if not lora_path.exists():
                         ctx.injector.save(lora_path)
-                ctx.emit(f"Saved training state: training_state_epoch{ctx.current_epoch}.pt")
+                ctx.emit(f"Saved training state (epoch {ctx.current_epoch}): {state_path.name}")
 
             # ADR 0006 Addendum 1 方案 Δ：每 epoch 末尾**强制**写 auto_epoch_state.pt（覆盖式）。
             # 跟用户主动开的 save_state_every_epochs（多份历史归档）独立，无 args gate ——

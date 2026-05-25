@@ -262,6 +262,28 @@ class InferenceDaemon:
             raise RuntimeError(f"daemon write failed: {e}") from e
         return req_id
 
+    def cancel_active_task(self, task_id: int) -> bool:
+        """请求取消当前 generate task；daemon 保持常驻，模型缓存不卸载。"""
+        with self._lock:
+            active = self._active
+            if self._state != STATE_BUSY or active is None or active.task_id != task_id:
+                return False
+            assert self._proc is not None and self._proc.stdin is not None
+            stdin = self._proc.stdin
+            req_id = active.request_id
+
+        try:
+            stdin.write(json.dumps({
+                "id": f"cancel-{task_id}",
+                "action": "cancel",
+                "target_id": req_id,
+            }) + "\n")
+            stdin.flush()
+        except Exception:
+            logger.exception("failed to send cancel")
+            return False
+        return True
+
     def request_unload(self) -> None:
         """通知 daemon 卸载模型（释放 VRAM）。daemon 处理完会推 unloaded 事件。
 
@@ -357,9 +379,9 @@ class InferenceDaemon:
                 logger.exception("cache_image failed for %s", filename)
             forward_msg = {k: v for k, v in msg.items() if k != "image_b64"}
 
-        # done/error 先切状态，再回调 —— 让 callback 内查询 is_busy/state 时
+        # done/error/canceled 先切状态，再回调 —— 让 callback 内查询 is_busy/state 时
         # 看到准确的 IDLE 状态（commit 13 daemon_state_changed 依赖这个顺序）
-        if kind in ("done", "error"):
+        if kind in ("done", "error", "canceled"):
             with self._lock:
                 self._active = None
                 self._state = STATE_IDLE

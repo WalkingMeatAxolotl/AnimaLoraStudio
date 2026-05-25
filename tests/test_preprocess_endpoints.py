@@ -147,9 +147,7 @@ def test_status_no_job_returns_empty(client: TestClient) -> None:
     body = resp.json()
     assert body["job"] is None
     assert body["log_tail"] == ""
-    assert body["summary"] == {
-        "download_count": 0, "processed_count": 0, "pending_count": 0,
-    }
+    assert body["summary"] == {"image_count": 0}
 
 
 def test_list_files_returns_processed_and_pending(client: TestClient) -> None:
@@ -166,7 +164,7 @@ def test_list_files_returns_processed_and_pending(client: TestClient) -> None:
     body = resp.json()
     assert {it["name"] for it in body["processed"]} == {"a.png"}
     assert {it["name"] for it in body["pending"]} == {"b.png"}
-    assert body["summary"]["pending_count"] == 1
+    assert body["summary"]["image_count"] == 2
 
 
 # ---------------------------------------------------------------------------

@@ -86,7 +86,7 @@ export default function PreprocessOverviewPage() {
         // Address by preprocess filename, not by origin/source — multi-crop
         // fan-out (X_c0.png / X_c1.png both with origin X.png) would otherwise
         // all show the same thumbnail (the [0] of resolve_origin).
-        thumbUrl: api.projectThumbUrl(project.id, im.name, 'preprocess', 256),
+        thumbUrl: api.projectThumbUrl(project.id, im.name, 'preprocess', 256, im.mtime),
         meta: `${im.w}×${im.h}`,
       })),
     [processed, project.id],
@@ -218,7 +218,7 @@ export default function PreprocessOverviewPage() {
 
       {previewItem && (
         <ImagePreviewModal
-          src={api.projectThumbUrl(project.id, previewItem.name, 'preprocess', 1600)}
+          src={api.projectThumbUrl(project.id, previewItem.name, 'preprocess', 1600, previewItem.mtime)}
           caption={`${previewItem.name} · ${previewItem.w}×${previewItem.h}`}
           hasPrev={previewIdx! > 0}
           hasNext={previewIdx! < processed.length - 1}

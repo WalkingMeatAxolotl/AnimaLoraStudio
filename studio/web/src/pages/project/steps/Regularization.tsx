@@ -4,7 +4,6 @@ import { Trans, useTranslation } from 'react-i18next'
 import { useOutletContext } from 'react-router-dom'
 import {
   api,
-  type AttentionBackend,
   type Job,
   type ProjectDetail,
   type RegAiRequest,
@@ -84,8 +83,8 @@ export default function RegularizationPage() {
   const [aiCfg, setAiCfg] = useState(4.0)
   const [aiSeed, setAiSeed] = useState(0)
   const [aiIncremental, setAiIncremental] = useState(false)
-  const [aiBackend, setAiBackend] = useState<AttentionBackend>('flash_attn')
   const [aiTask, setAiTask] = useState<Task | null>(null)
+  const [aiLogs, setAiLogs] = useState<string[]>([])
   const [aiBusy, setAiBusy] = useState(false)
   const aiTaskIdRef = useRef<number | null>(null)
   aiTaskIdRef.current = aiTask?.id ?? null
@@ -177,6 +176,8 @@ export default function RegularizationPage() {
         // job 成功完成 → 自动切到图片 tab，让用户看成果
         if (evt.status === 'done') setActiveTab('images')
       }
+    } else if (evt.type === 'task_log_appended' && tid && evt.task_id === tid) {
+      setAiLogs((prev) => [...prev, String(evt.text ?? '')])
     } else if (evt.type === 'task_state_changed' && tid && evt.task_id === tid) {
       void api.getRegPriorTask(project.id, vid!, tid).then((t) => {
         setAiTask(t)
@@ -210,6 +211,7 @@ export default function RegularizationPage() {
     }
     setAiBusy(true)
     setAiTask(null)
+    setAiLogs([])
     try {
       const body: RegAiRequest = {
         excluded_tags: Array.from(excluded),
@@ -220,7 +222,6 @@ export default function RegularizationPage() {
         cfg_scale: aiCfg,
         seed: aiSeed,
         incremental: aiIncremental,
-        attention_backend: aiBackend,
       }
       const task = await api.enqueueRegPrior(project.id, vid, body)
       setAiTask(task)
@@ -359,7 +360,6 @@ export default function RegularizationPage() {
           cfg={aiCfg} onCfgChange={setAiCfg}
           seed={aiSeed} onSeedChange={setAiSeed}
           incremental={aiIncremental} onIncrementalChange={setAiIncremental}
-          backend={aiBackend} onBackendChange={setAiBackend}
           task={aiTask}
           trainImageCount={trainImageCount}
         />
@@ -424,6 +424,10 @@ export default function RegularizationPage() {
                 }
               }}
             />
+          )}
+
+          {aiTask && (
+            <AiTaskLogSection task={aiTask} logs={aiLogs} />
           )}
         </div>
       ) : (
@@ -839,6 +843,28 @@ function AiTaskStatus({ task }: { task: Task | null }) {
   )
 }
 
+function AiTaskLogSection({ task, logs }: { task: Task; logs: string[] }) {
+  const { t } = useTranslation()
+  const logEndRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [logs.length])
+  return (
+    <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 flex flex-col gap-2 shrink-0">
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-medium text-fg-secondary">{t('reg.aiLogTitle')}</span>
+        <AiTaskStatus task={task} />
+      </div>
+      {logs.length > 0 && (
+        <pre className="m-0 p-2.5 bg-sunken rounded-sm font-mono text-2xs text-fg-secondary leading-relaxed whitespace-pre-wrap break-words max-h-48 overflow-auto">
+          {logs.join('\n')}
+          <div ref={logEndRef} />
+        </pre>
+      )}
+    </section>
+  )
+}
+
 function AiGenPanel({
   trainTags,
   excluded, onToggle,
@@ -849,7 +875,6 @@ function AiGenPanel({
   cfg, onCfgChange,
   seed, onSeedChange,
   incremental, onIncrementalChange,
-  backend, onBackendChange,
   task,
   trainImageCount,
 }: {
@@ -862,7 +887,6 @@ function AiGenPanel({
   cfg: number; onCfgChange: (v: number) => void
   seed: number; onSeedChange: (v: number) => void
   incremental: boolean; onIncrementalChange: (v: boolean) => void
-  backend: AttentionBackend; onBackendChange: (v: AttentionBackend) => void
   task: Task | null
   trainImageCount: number
 }) {
@@ -903,28 +927,14 @@ function AiGenPanel({
         </div>
         <AiNumField label={t('reg.seedLabel')} value={seed} onChange={onSeedChange} min={0} />
 
-        <div className="flex flex-wrap gap-3 items-end">
-          <label className="flex items-center gap-1.5 cursor-pointer text-xs">
-            <input
-              type="checkbox"
-              checked={incremental}
-              onChange={(e) => onIncrementalChange(e.target.checked)}
-            />
-            <span className="text-fg-secondary">{t('reg.incrementalLabel')}</span>
-          </label>
-          <div className="flex flex-col gap-1">
-            <label className="caption text-2xs">{t('reg.backendLabel')}</label>
-            <select
-              className="input text-xs py-1"
-              value={backend}
-              onChange={(e) => onBackendChange(e.target.value as AttentionBackend)}
-            >
-              <option value="flash_attn">Flash Attention</option>
-              <option value="xformers">xformers</option>
-              <option value="none">{t('reg.backendNone')}</option>
-            </select>
-          </div>
-        </div>
+        <label className="flex items-center gap-1.5 cursor-pointer text-xs">
+          <input
+            type="checkbox"
+            checked={incremental}
+            onChange={(e) => onIncrementalChange(e.target.checked)}
+          />
+          <span className="text-fg-secondary">{t('reg.incrementalLabel')}</span>
+        </label>
 
         <AiTaskStatus task={task} />
       </section>
