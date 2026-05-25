@@ -47,6 +47,16 @@ import anima_train as _T  # noqa: E402
 from studio.schema import migrate_legacy_attention  # noqa: E402
 from studio.services.inference_core import LoRAMeta, LoRASpec, apply_loras, read_lora_meta  # noqa: E402
 
+# 预热 transformers.generation → sklearn → scipy.special import 链。
+# transformers 5.x 的 AutoModelForCausalLM.from_pretrained 在 load text encoder
+# 时间接 import 这一串；scipy.special cold import 在 Windows + Python 3.13 + 已
+# 加载 GB 级模型（system RAM 紧张）的环境下可能要几分钟（py-spy 实测）。挪到
+# daemon import 阶段，趁 RAM 还宽松时一次性付掉。
+try:
+    import transformers.generation.candidate_generator  # noqa: F401
+except Exception:
+    pass
+
 # 日志走 stderr，stdout 留给协议
 logging.basicConfig(
     level=logging.INFO,
