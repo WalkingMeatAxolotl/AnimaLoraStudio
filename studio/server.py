@@ -1894,6 +1894,7 @@ def project_thumb(
     bucket: str = "download",
     name: str = "",
     size: int = 256,
+    raw: int = 0,
 ) -> FileResponse:
     """缩略图：默认 256px JPEG（缓存）；size=0 → 原图。
 
@@ -1906,6 +1907,10 @@ def project_thumb(
         （含 multi-crop 派生的 _c0 / _c1 后缀）。直接按文件名取，**不走**
         resolve_origin —— multi-crop 后多个产物共享同一 origin，按 origin
         永远落到 [0] 是 bug。裁剪 / 总览页应该走这条来精确寻址。
+
+    `raw=1`（仅 bucket=download）：跳过 resolve_origin，强制读 download/{name}
+    原始字节。给「对比预览」场景用：左 pane 永远要 download 原图，不能被
+    preprocess 派生 hijack。
 
     缓存路径：`studio_data/thumb_cache/{sha1(src+mtime+size)}.jpg`。
     源文件 mtime 变化会自动 invalidate（hash 变）。
@@ -1924,6 +1929,12 @@ def project_thumb(
         # actual preprocess/ dir (any filename including _c0/_c1 derivatives).
         _safe_join_or_400(pdir / "preprocess", name)
         f = pdir / "preprocess" / name
+    elif raw:
+        # bucket=download + raw=1: bypass resolve_origin, hand back the
+        # untouched download/{name} bytes. Used by the processed-tab compare
+        # preview left pane (need the original, not the derivative).
+        _safe_join_or_400(pdir / "download", name)
+        f = pdir / "download" / name
     else:
         # bucket=download — historical behavior: address by download name,
         # resolve to first preprocess product if any (1:1 / multi-crop cases).

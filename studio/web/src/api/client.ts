@@ -1553,9 +1553,19 @@ export const api = {
    *  decoded 像素。`Cache-Control: no-cache` 对 disk cache 强制 revalidate，
    *  但 CSS `background-image` 的 in-memory decoded image 不受其约束，必须
    *  靠 URL 唯一性来失效 — 见 PreprocessCrop bug 修复。 */
-  projectThumbUrl: (pid: number, name: string, bucket = 'download', size = 256, v?: number) =>
+  projectThumbUrl: (
+    pid: number,
+    name: string,
+    bucket = 'download',
+    size = 256,
+    v?: number,
+    /** raw=true（仅 bucket=download 有效）：跳过 resolve_origin，强制 download/{name}
+     *  原始字节。给「对比预览」左 pane 用 —— 不能被 preprocess 派生 hijack。 */
+    raw?: boolean,
+  ) =>
     `/api/projects/${pid}/thumb?bucket=${encodeURIComponent(bucket)}&name=${encodeURIComponent(name)}&size=${size}`
-    + (v ? `&v=${v}` : ''),
+    + (v ? `&v=${v}` : '')
+    + (raw ? '&raw=1' : ''),
 
   // Preprocess (放大 / 裁剪 / 涂抹) ----------------------------------------
   startPreprocess: (

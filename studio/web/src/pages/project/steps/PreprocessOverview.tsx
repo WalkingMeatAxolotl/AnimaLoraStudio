@@ -124,8 +124,9 @@ export default function PreprocessOverviewPage() {
       thumbUrl: wsThumb(im, 256),
       // 预览采用 split 布局：左 = download 原图，右 = preprocess 派生产物。
       // multi-crop 派生（X_c0.png）的 source 仍指向 download/X 原图，左 pane
-      // 就是原图，右 pane 是这块裁出的产物 —— 便于对比。
-      previewUrl: api.projectThumbUrl(project.id, im.source, 'download', 1600, im.mtime),
+      // 就是原图，右 pane 是这块裁出的产物 —— 便于对比。raw=true 跳过
+      // resolve_origin，不然 bucket=download + source 名会被 hijack 回派生产物。
+      previewUrl: api.projectThumbUrl(project.id, im.source, 'download', 1600, im.mtime, true),
       compareSrc: api.projectThumbUrl(project.id, im.name, 'preprocess', 1600, im.mtime),
       caption: `${im.name} · ${im.w}×${im.h}`,
     })),
