@@ -1462,8 +1462,15 @@ export const api = {
         body: JSON.stringify({ names }),
       }
     ),
-  projectThumbUrl: (pid: number, name: string, bucket = 'download', size = 256) =>
-    `/api/projects/${pid}/thumb?bucket=${encodeURIComponent(bucket)}&name=${encodeURIComponent(name)}&size=${size}`,
+  /** `v`：文件 mtime（unix s），仅用作浏览器端 cache-buster。**服务端忽略**该参数
+   *  （后端 cache key 仍按 src+mtime+size 计算）；目的是让 in-place 覆盖后的图
+   *  （裁剪 / 放大同名输出）URL 变化，浏览器不再命中 memory image cache 复用旧
+   *  decoded 像素。`Cache-Control: no-cache` 对 disk cache 强制 revalidate，
+   *  但 CSS `background-image` 的 in-memory decoded image 不受其约束，必须
+   *  靠 URL 唯一性来失效 — 见 PreprocessCrop bug 修复。 */
+  projectThumbUrl: (pid: number, name: string, bucket = 'download', size = 256, v?: number) =>
+    `/api/projects/${pid}/thumb?bucket=${encodeURIComponent(bucket)}&name=${encodeURIComponent(name)}&size=${size}`
+    + (v ? `&v=${v}` : ''),
 
   // Preprocess (放大 / 裁剪 / 涂抹) ----------------------------------------
   startPreprocess: (
@@ -1487,13 +1494,13 @@ export const api = {
     req<{
       job: Job | null
       log_tail: string
-      summary: { download_count: number; processed_count: number; pending_count: number }
+      summary: { image_count: number }
     }>(`/api/projects/${pid}/preprocess/status`),
   listPreprocessFiles: (pid: number) =>
     req<{
       processed: PreprocessedItem[]
       pending: PreprocessPendingItem[]
-      summary: { download_count: number; processed_count: number; pending_count: number }
+      summary: { image_count: number }
     }>(`/api/projects/${pid}/preprocess/files`),
   /** 还原指定产物：删 manifest entry + 删 preprocess/{name} PNG。
    *  还原后图回到「未处理」（隐式 original）。ADR 0004。 */

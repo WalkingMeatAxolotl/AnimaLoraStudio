@@ -418,6 +418,7 @@ export default function PreprocessCropPage() {
                         im.name,
                         im.processed ? 'preprocess' : 'download',
                         256,
+                        im.mtime,
                       )}
                       emptyHint={t(`preprocessCrop.filmstripEmpty.${filter}`)}
                     />
@@ -434,6 +435,7 @@ export default function PreprocessCropPage() {
                             activeImage.name,
                             activeImage.processed ? 'preprocess' : 'download',
                             1024,
+                            activeImage.mtime,
                           ),
                         }}
                         crops={activeCrops}
@@ -821,9 +823,27 @@ function Filmstrip({
             <button
               onClick={() => onSelect(im.name)}
               className={'fs-thumb-sq ' + (isActive ? 'is-active' : '')}
-              style={{ backgroundImage: `url("${thumbUrl(im)}")` }}
               title={im.name}
             >
+              {/* <img> instead of background-image: browsers honour Cache-Control
+                  + ETag for <img src> reliably; CSS background-image hits the
+                  in-memory decoded-image cache and can keep showing stale bytes
+                  after an in-place crop output. object-fit: cover preserves the
+                  original squared-thumbnail look. */}
+              <img
+                src={thumbUrl(im)}
+                alt=""
+                draggable={false}
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'cover',
+                  objectPosition: 'center',
+                  pointerEvents: 'none',
+                }}
+              />
               {crops.length > 0 && crops.map((c, i) => (
                 <div
                   key={c.id}

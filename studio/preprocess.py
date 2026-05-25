@@ -97,15 +97,18 @@ def _download_images(download: Path) -> list[Path]:
 
 
 def list_pending(p: dict[str, Any]) -> list[dict[str, Any]]:
-    """download/ 里存在、但 manifest 没追溯到的图（= 隐式 original = 未处理）。
+    """grid 中走「download 原图」路径的图：download/ 里有 + manifest 未派生到。
 
-    一张 download/X.jpg 是否"已处理"按 manifest entry 的 origin 字段判定：只要
-    有任一 entry 的 origin == "X.jpg"（含 multi-crop 派生的 X_c0.png/X_c1.png），
-    就视为已处理，不出现在 pending 列表里。
+    ADR 0004 Addendum 1 §「Stage 不强制时序」：不存在"未处理 vs 已处理"概念，
+    只有"当前态从哪儿读"。这里返回的是当前态从 download/ 直接读的那部分，
+    跟 `list_processed`（从 preprocess/ 读的派生）合起来覆盖整个 grid。
+
+    一张 download/X.jpg 有任一 manifest entry 的 origin 指向它（含 multi-crop
+    派生 X_c0.png / X_c1.png）→ 派生路径已覆盖，不再走 download 原图路径。
 
     返回 `[{name, mtime, size, w, h}]`，按 name 字典序。w/h 由 PIL 读图头取得
-    （未解码 raster，~1ms/图）；前端的像素分布 histogram 需要把 pending 一并
-    算上（用户的 200+ 张里只有几张被放大也要看到全局分布）。
+    （未解码 raster，~1ms/图）；前端的像素分布 histogram 需要把这部分一并
+    算上（覆盖整个 grid 的分辨率分布）。
     """
     from PIL import Image
 
@@ -141,10 +144,14 @@ def list_pending(p: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def list_processed(p: dict[str, Any]) -> list[dict[str, Any]]:
-    """manifest 里 kind=processed 的图，按 name 字典序。
+    """grid 中走「preprocess/ 派生产物」路径的图：manifest 里所有 entry。
+
+    ADR 0004 Addendum 1 §「Stage 不强制时序」：entry 存在不代表"已处理完毕、
+    不要再动"，只代表"当前态从 preprocess/{name}.png 读"。下一次放大 / 裁剪
+    会按当前态作为输入再生成新产物，覆盖 entry。
 
     返回 `[{name, mtime, size, w, h, source, model, scale, src_size, dst_size,
-             action, target_area, elapsed_seconds, orphan}]`。
+             action, target_area, elapsed_seconds, orphan}]`，按 name 字典序。
     `orphan=True`：manifest 有 entry 但源图（download/{source}）已被删。
 
     `w, h` 从 PIL 读图头（不解码 raster，~1ms / 图）；新 schema 不再 persist
@@ -206,18 +213,17 @@ def list_processed(p: dict[str, Any]) -> list[dict[str, Any]]:
 def summary(p: dict[str, Any]) -> dict[str, Any]:
     """给 status 端点用的简短统计。
 
-    `pending_count`：按 origin 判定 download 是否已处理。一张 download/X.jpg
-    只要 manifest 里有任一 entry 的 origin 指向它（含 multi-crop 派生），就不
-    再计入 pending。
-    `processed_count`：manifest 里所有已处理 entry 的数量（multi-crop 后会
-    > download_count）。
+    `image_count`：grid 当前展示的图总数 = 走 download 原图路径的 +
+    走 preprocess 派生路径的（含 multi-crop fan-out 后的多份）。
+
+    ADR 0004 Addendum 1 §「Stage 不强制时序」—— 不返回 "pending / processed"
+    分项，那是把 stage 概念硬塞回了 manifest（早被这条约束否决）。前端要分
+    grid 来源，直接看 `pending` / `processed` 两个数组就行。
     """
     download, _ = project_paths(p)
     pdir = project_root(p)
     preprocess_manifest.ensure_manifest(pdir)
-    n_download = len(_download_images(download))
     processed = preprocess_manifest.all_processed(pdir)
-    n_processed = len(processed)
     processed_origins = {
         preprocess_manifest.entry_origin(entry, name)
         for name, entry in processed.items()
@@ -225,11 +231,7 @@ def summary(p: dict[str, Any]) -> dict[str, Any]:
     n_pending = sum(
         1 for f in _download_images(download) if f.name not in processed_origins
     )
-    return {
-        "download_count": n_download,
-        "processed_count": n_processed,
-        "pending_count": n_pending,
-    }
+    return {"image_count": n_pending + len(processed)}
 
 
 # ---------------------------------------------------------------------------
@@ -248,29 +250,35 @@ def _validate_name(name: str) -> None:
 def resolve_targets(
     p: dict[str, Any], *, mode: str, names: Optional[Iterable[str]] = None
 ) -> list[str]:
-    """根据 mode + names 返回需要处理的源文件名列表（已校验、已去重）。
+    """根据 mode + names 返回当前 grid 中要处理的图名列表（已校验、已去重）。
 
-    mode='all'      → 所有 download/ 里、manifest 还没记 processed 的图（增量）
-    mode='selected' → 名单与 download/ 实际存在的图取交集
-    mode='all_force' → 所有 download/ 图（manifest 已有 entry 也重跑）
+    ADR 0004 Addendum 1 §「Stage 不强制时序」—— 每个 stage 操作的对象是
+    "preprocess/ 当前态的全部图"，不是"manifest 里没记的 download 原图"。所以
+    mode='all' 含义 = grid 当前所有图（download 原图未派生 ∪ manifest 派生产物），
+    worker 端用 resolver 拿实际源，upscaler 内部 `SKIP_MODEL_RATIO` 决定是否跑
+    模型 —— 重复跑放大 / 在裁剪产物上再放大都合法。
+
+    mode='all'       → grid 全部当前图
+    mode='selected'  → 名单与 (download 实存 ∪ manifest entry 名) 取交集
+    mode='all_force' → 同 'all'（保留别名，语义跟 'all' 已对齐；老前端兼容）
     """
     download, _ = project_paths(p)
-    if not download.exists():
+    if not download.exists() and mode != "selected":
         return []
-    existing = {f.name for f in download.iterdir() if _is_image(f)}
+    existing = {f.name for f in download.iterdir() if _is_image(f)} if download.exists() else set()
+    pdir = project_root(p)
+    manifest_names = set(preprocess_manifest.all_processed(pdir).keys())
 
-    if mode == "all":
-        return sorted(it["name"] for it in list_pending(p))
-    if mode == "all_force":
-        return sorted(existing)
+    if mode in ("all", "all_force"):
+        # grid 全部当前图 = list_pending names (download 未派生) ∪ list_processed names
+        pending_names = {it["name"] for it in list_pending(p)}
+        return sorted(pending_names | manifest_names)
     if mode == "selected":
         if not names:
             raise PreprocessError("mode=selected 时 names 不能为空")
         # selected 允许 download/ 原图 + manifest 里已有 entry 的产物名 ——
         # 后者覆盖"重新上调 / 在裁剪产物上再 upscale"的链路（ADR 0004 Addendum 1
         # §「Stage 不强制时序」）。worker 端用 resolve() 找实际源。
-        pdir = project_root(p)
-        manifest_names = set(preprocess_manifest.all_processed(pdir).keys())
         selectable = existing | manifest_names
         chosen = []
         for n in names:

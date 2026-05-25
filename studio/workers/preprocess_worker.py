@@ -176,17 +176,10 @@ def run(job_id: int) -> int:  # noqa: PLR0912, PLR0915 - 主流程线性可读
                 else src_name
             )
             dst_path = preprocess.product_path_for(preprocess_dir, src_name)
-            # 'all' 增量去重：dst 已有 entry 跳过；race guard 也走这里。
-            # ADR 0004 Addendum 1 §「Stage 不强制时序」—— 不按 stage 判断该不该跑，
-            # 用户在 selected / all_force 明确表态时一律放行。
-            if mode == "all" and preprocess_manifest.get_entry(project_dir, dst_path.name) is not None:
-                skipped += 1
-                emit_event(
-                    "preprocess_progress",
-                    idx=idx, total=total, name=src_name, status="skip",
-                    succeeded=succeeded, failed=failed, skipped=skipped,
-                )
-                continue
+            # ADR 0004 Addendum 1 §「Stage 不强制时序」—— 不按 manifest 是否有
+            # entry 判断该不该跑。是否真的"动盘 + 跑模型"由 upscaler 内部
+            # `SKIP_MODEL_RATIO` 决定（src 面积 ≥ 0.95×target 走 LANCZOS，否则
+            # 模型 + LANCZOS）。这样"裁剪后→放大"/"放大后→放大"都是合法链路。
             log(f"[upscale] ({idx}/{total}) {src_name} → {dst_path.name}")
             try:
                 meta = upscaler.upscale_file(
