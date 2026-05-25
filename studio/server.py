@@ -3182,6 +3182,16 @@ def get_daemon_status() -> dict[str, Any]:
     }
 
 
+@app.get("/api/generate/daemon/logs")
+def get_daemon_logs(since_seq: int = 0, limit: int = 2000) -> dict[str, Any]:
+    """读 daemon stderr ring buffer。前端日志抽屉打开时拉历史；增量靠 SSE。
+
+    since_seq>0 时只返新于该 seq 的行。
+    """
+    from .services.inference_daemon import get_daemon
+    return get_daemon().read_logs(since_seq=since_seq, limit=limit)
+
+
 @app.post("/api/generate/daemon/unload")
 def unload_daemon() -> dict[str, Any]:
     """手动卸载 daemon 模型（释放 VRAM）。busy 时拒绝（409）。
@@ -4631,14 +4641,6 @@ def main() -> None:
         "--reload", action="store_true", help="dev mode (auto-reload on edit)"
     )
     args = parser.parse_args()
-
-    # root logger 默认 WARNING 会吞掉 supervisor / inference_daemon /
-    # anima_daemon 的 INFO（"spawning inference daemon" / "loading transformer"
-    # 等加载进度），冷启动时用户看不到反馈以为挂了。提到 INFO 让关键路径可见。
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
 
     # 真正给用户看的入口是 /studio/（前端 SPA），裸根路径只是兼容旧 monitor。
     print(f"[AnimaStudio] http://{args.host}:{args.port}/studio/")

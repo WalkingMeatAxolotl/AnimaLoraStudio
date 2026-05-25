@@ -1817,6 +1817,11 @@ export const api = {
   unloadDaemon: () => req<{ ok: boolean; noop?: boolean }>(
     '/api/generate/daemon/unload', { method: 'POST' }
   ),
+  /** daemon stderr ring buffer。since_seq>0 时只返增量。 */
+  getDaemonLogs: (sinceSeq = 0, limit = 2000) =>
+    req<{ entries: Array<{ ts: number; seq: number; line: string }>; next_seq: number }>(
+      `/api/generate/daemon/logs?since_seq=${sinceSeq}&limit=${limit}`,
+    ),
   /** Phase 2 commit 14 — TAEFlux 状态。 */
   getTaeFluxStatus: () => req<TaeFluxStatus>('/api/generate/taeflux/status'),
   /** Phase 2 commit 14 — 同步下载 TAEFlux（~1.6MB，秒级）。已存在 noop。 */

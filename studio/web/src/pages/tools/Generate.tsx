@@ -14,6 +14,7 @@ import { useMonitorProgress } from '../../lib/useMonitorProgress'
 import { useLocalStorageState } from '../../lib/useLocalStorageState'
 import AspectChips, { aspectFromDimensions, type AspectName } from './generate/AspectChips'
 import DaemonControls from './generate/DaemonControls'
+import DaemonLogDrawer from './generate/DaemonLogDrawer'
 import GenerateProgressBar, { type GenerateProgress } from './generate/GenerateProgress'
 import NumField from './generate/NumField'
 import PreviewCompare from './generate/PreviewCompare'
@@ -122,6 +123,7 @@ export default function GeneratePage() {
     batchIdx: null, batchTotal: null, currentStep: null, totalSteps: null,
   })
   const [datasetPickerOpen, setDatasetPickerOpen] = useState(false)
+  const [logOpen, setLogOpen] = useState(false)
   // commit 16：图片历史栏。点击历史项 → 主预览替换为该项封面
   const history = useGenerateHistory()
   const [historyOverride, setHistoryOverride] = useState<HistoryEntry | null>(null)
@@ -381,7 +383,7 @@ export default function GeneratePage() {
       <PageHeader
         title={t('generate.title')}
         subtitle={t('generate.subtitle')}
-        actions={<DaemonControls />}
+        actions={<DaemonControls onToggleLog={() => setLogOpen((v) => !v)} />}
       />
 
       {/* 三列各自独立滚动，整页固定高度 = viewport */}
@@ -716,6 +718,9 @@ export default function GeneratePage() {
             onPruneStale={history.pruneStale}
           />
       </div>
+
+      {/* daemon log 抽屉（fixed 定位 + translateY，隐藏时完全不可见，不占 layout） */}
+      <DaemonLogDrawer open={logOpen} onClose={() => setLogOpen(false)} />
     </div>
   )
 }

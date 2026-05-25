@@ -927,6 +927,7 @@ class Supervisor:
 
         if not self._daemon_listener_registered:
             daemon.add_global_listener(self._on_daemon_global_event)
+            daemon.add_log_listener(self._on_daemon_log_line)
             self._daemon_listener_registered = True
 
         with self._daemon_lock:
@@ -1016,6 +1017,15 @@ class Supervisor:
                 tid, status="failed", error_msg=str(event.get("message") or "daemon error"),
             )
             self._emit_daemon_state()
+
+    def _on_daemon_log_line(self, entry: dict[str, Any]) -> None:
+        """daemon stderr 增量行 → SSE daemon_log_line（前端日志抽屉用）。"""
+        self._on_event({
+            "type": "daemon_log_line",
+            "ts": entry.get("ts"),
+            "seq": entry.get("seq"),
+            "line": entry.get("line"),
+        })
 
     def _on_daemon_global_event(self, event: dict[str, Any]) -> None:
         """daemon 进程级事件（loaded / unloaded / stopped）。"""
