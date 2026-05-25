@@ -4632,6 +4632,14 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # root logger 默认 WARNING 会吞掉 supervisor / inference_daemon /
+    # anima_daemon 的 INFO（"spawning inference daemon" / "loading transformer"
+    # 等加载进度），冷启动时用户看不到反馈以为挂了。提到 INFO 让关键路径可见。
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
     # 真正给用户看的入口是 /studio/（前端 SPA），裸根路径只是兼容旧 monitor。
     print(f"[AnimaStudio] http://{args.host}:{args.port}/studio/")
     uvicorn.run(

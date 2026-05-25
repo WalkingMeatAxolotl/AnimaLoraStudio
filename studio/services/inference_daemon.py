@@ -138,7 +138,7 @@ class InferenceDaemon:
             creationflags = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
 
         cmd = [sys.executable, str(self._script)]
-        logger.info("spawning inference daemon: %s", " ".join(cmd))
+        logger.warning("spawning inference daemon: %s", " ".join(cmd))
 
         try:
             proc = subprocess.Popen(
@@ -325,13 +325,19 @@ class InferenceDaemon:
             self._handle_proc_exit(proc)
 
     def _read_stderr_loop(self, proc: subprocess.Popen) -> None:
-        """daemon stderr → 本进程 logger.info（保留原日志层级前缀）。"""
+        """daemon stderr → 本进程 logger.warning。
+
+        用 WARNING 级别（不是 INFO）：default Python root logger 是 WARNING，
+        INFO 会被吞。daemon 的 "loading transformer/vae/text encoders" 这些
+        cold load 进度提示是 user-visible 关键信息（首次 30-60s 没反馈用户
+        会以为挂了），必须默认能看到。
+        """
         assert proc.stderr is not None
         try:
             for raw_line in proc.stderr:
                 line = raw_line.rstrip()
                 if line:
-                    logger.info("[daemon] %s", line)
+                    logger.warning("[daemon] %s", line)
         except Exception:
             logger.exception("daemon stderr reader crashed")
 
