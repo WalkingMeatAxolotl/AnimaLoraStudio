@@ -54,8 +54,8 @@ export default function PreprocessToolsBar({ current, projectId }: Props) {
             >{label}</span>
           )
         }
-        // upscale is the default tool (no ?tool= query); everyone else needs a tool param
-        const href = tool.id === 'upscale' ? base : `${base}?tool=${tool.id}`
+        // overview is the default tool (no ?tool= query); everyone else needs a tool param
+        const href = tool.id === 'overview' ? base : `${base}?tool=${tool.id}`
         if (isActive) {
           return (
             <span

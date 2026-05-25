@@ -7,11 +7,14 @@ import PreprocessOverviewPage from './PreprocessOverview'
 /** Route entry for `/projects/:pid/preprocess`.
  *
  *  Dispatches by `?tool=` query param to the corresponding tool's page:
- *    - `?tool=overview` → Overview page (gallery + multi-select + undo)
+ *    - (default) / `?tool=overview` → Overview page (gallery + multi-select + undo)
  *    - `?tool=dedupe` → Duplicate / variant review
- *    - (default) / `?tool=upscale` → Upscale page
+ *    - `?tool=upscale` → Upscale page
  *    - `?tool=crop` → Crop page
  *    - `?tool=inpaint` → not yet implemented; falls back to default
+ *
+ *  Overview is default because it's the gallery that governs the dataset
+ *  (peer to other navigable pages); upscale / crop / dedupe are transforms.
  *
  *  We use query string (not sub-path) so the sidebar's `/preprocess` matcher
  *  stays simple and the parent route doesn't unmount when switching tools.
@@ -20,9 +23,9 @@ import PreprocessOverviewPage from './PreprocessOverview'
  */
 export default function PreprocessHub() {
   const [params] = useSearchParams()
-  const tool = params.get('tool') ?? 'upscale'
-  if (tool === 'overview') return <PreprocessOverviewPage />
+  const tool = params.get('tool') ?? 'overview'
   if (tool === 'dedupe') return <PreprocessDuplicatesPage />
+  if (tool === 'upscale') return <PreprocessUpscalePage />
   if (tool === 'crop') return <PreprocessCropPage />
-  return <PreprocessUpscalePage />
+  return <PreprocessOverviewPage />
 }

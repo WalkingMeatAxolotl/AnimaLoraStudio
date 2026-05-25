@@ -385,7 +385,7 @@ export default function PreprocessCropPage() {
                 {!loading && images.length === 0 && (
                   <p className="text-fg-tertiary text-sm">
                     {t('preprocessCrop.emptyWorkspace')}{' '}
-                    <Link to={`/projects/${project.id}/preprocess`} className="text-accent hover:underline">
+                    <Link to={`/projects/${project.id}/preprocess?tool=upscale`} className="text-accent hover:underline">
                       {t('preprocessCrop.goToUpscale')}
                     </Link>
                   </p>
