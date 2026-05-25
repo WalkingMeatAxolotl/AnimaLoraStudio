@@ -98,10 +98,9 @@ export default function ImagePreviewModal({
           </button>
         )}
         {compareSrc ? (
-          <div
-            className="w-full h-full flex flex-col md:flex-row items-stretch justify-center gap-2 md:gap-4"
-            onClick={(e) => e.stopPropagation()}
-          >
+          // wrapper 不 stopPropagation — 让点击 pane 间 / pane 内空白透到 outer
+          // onClose；只 img 自己 stop（点图不关）。
+          <div className="w-full h-full flex flex-col md:flex-row items-stretch justify-center gap-2 md:gap-4">
             <SplitPane src={src} label={srcLabel} altFallback={caption} />
             <SplitPane src={compareSrc} label={compareLabel} altFallback={caption} />
           </div>
@@ -139,6 +138,7 @@ function SplitPane({
       <img
         src={src}
         alt={label ?? altFallback ?? 'preview'}
+        onClick={(e) => e.stopPropagation()}
         className="max-w-full max-h-full object-contain"
       />
     </div>
