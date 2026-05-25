@@ -486,6 +486,7 @@ export function OutputsTab({ taskId }: { taskId: number }) {
   const [refreshKey, setRefreshKey] = useState(0)
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
+  const [downloadDialog, setDownloadDialog] = useState<null | { destination: 'download' | 'data_exports' }>(null)
 
   useEffect(() => {
     let alive = true
@@ -741,26 +742,17 @@ export function OutputsTab({ taskId }: { taskId: number }) {
                 {selectMode ? t('queueDetail.exitBatchMode') : t('queueDetail.batchMode')}
               </button>
               <button
-                onClick={handleDownloadZip}
-                disabled={zipping || (selectMode && noneSelected)}
+                onClick={() => setDownloadDialog({ destination: 'download' })}
+                disabled={zipping || exportingOutputs || (selectMode && noneSelected)}
                 className="btn btn-primary btn-sm"
               >
                 {zipping
                   ? t('queueDetail.compressing')
-                  : selectMode
-                    ? (noneSelected ? t('queueDetail.downloadSelectedEmpty') : t('queueDetail.downloadSelected', { n: selected.size, size: fmtBytes(selectedSize) }))
-                    : t('queueDetail.downloadAll')}
-              </button>
-              <button
-                onClick={handleExportOutputs}
-                disabled={exportingOutputs || (selectMode && noneSelected)}
-                className="btn btn-secondary btn-sm"
-              >
-                {exportingOutputs
-                  ? t('queueDetail.exportingOutputs')
-                  : selectMode
-                    ? (noneSelected ? t('queueDetail.exportSelectedEmpty') : t('queueDetail.exportSelected', { n: selected.size }))
-                    : t('queueDetail.exportAllOutputs')}
+                  : exportingOutputs
+                    ? t('queueDetail.exportingOutputs')
+                    : selectMode
+                      ? (noneSelected ? t('queueDetail.downloadSelectedEmpty') : t('queueDetail.downloadSelected', { n: selected.size, size: fmtBytes(selectedSize) }))
+                      : t('queueDetail.downloadAll')}
               </button>
             </>
           )}
@@ -796,6 +788,78 @@ export function OutputsTab({ taskId }: { taskId: number }) {
             )}
           </div>
         )}
+      </div>
+
+      {downloadDialog && (
+        <OutputsDownloadDialog
+          destination={downloadDialog.destination}
+          onDestinationChange={(d) => setDownloadDialog({ destination: d })}
+          busy={zipping || exportingOutputs}
+          onCancel={() => setDownloadDialog(null)}
+          onConfirm={() => {
+            const dest = downloadDialog.destination
+            setDownloadDialog(null)
+            if (dest === 'download') handleDownloadZip()
+            else void handleExportOutputs()
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+// ── OutputsDownloadDialog ───────────────────────────────────────────────────
+
+function OutputsDownloadDialog({
+  destination, onDestinationChange, busy, onConfirm, onCancel,
+}: {
+  destination: 'download' | 'data_exports'
+  onDestinationChange: (d: 'download' | 'data_exports') => void
+  busy: boolean
+  onConfirm: () => void
+  onCancel: () => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onCancel() }}
+    >
+      <div className="bg-elevated border border-subtle rounded-lg shadow-lg w-full max-w-[420px]">
+        <header className="px-[18px] py-3.5 border-b border-subtle">
+          <h3 className="m-0 text-md font-semibold text-fg-primary">{t('queueDetail.downloadDialogTitle')}</h3>
+        </header>
+        <div className="px-[18px] py-3.5 flex flex-col gap-2">
+          <div className="text-sm text-fg-secondary">{t('queueDetail.downloadDialogHint')}</div>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="radio"
+              name="outputs-download-destination"
+              checked={destination === 'download'}
+              onChange={() => onDestinationChange('download')}
+              disabled={busy}
+            />
+            <span className="text-sm text-fg-primary">{t('queueDetail.downloadDestinationLocal')}</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="radio"
+              name="outputs-download-destination"
+              checked={destination === 'data_exports'}
+              onChange={() => onDestinationChange('data_exports')}
+              disabled={busy}
+            />
+            <span className="text-sm text-fg-primary">{t('queueDetail.downloadDestinationDataExports')}</span>
+          </label>
+        </div>
+        <footer className="px-[18px] py-3 border-t border-subtle flex items-center gap-2 justify-end">
+          <button onClick={onCancel} disabled={busy} className="btn btn-ghost btn-sm">{t('common.cancel')}</button>
+          <button onClick={onConfirm} disabled={busy} className="btn btn-primary btn-sm">
+            {busy ? '...' : t('common.confirm')}
+          </button>
+        </footer>
       </div>
     </div>
   )
