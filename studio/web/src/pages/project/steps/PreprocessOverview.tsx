@@ -22,17 +22,16 @@ interface Ctx {
   reload: () => Promise<void>
 }
 
-type Tab = 'all' | 'processed' | 'removed'
+type Tab = 'all' | 'removed'
 
-/** Preprocess overview — 三 tab 视图：
+/** Preprocess overview — 两 tab 视图：
  *
- *  - **all**：当前数据集真实状态。list_crop_workspace 合并了 download 未派生 +
- *    preprocess 派生产物（已 filter duplicate_removed）。每张图按各自来源
- *    取缩略图：processed → bucket=preprocess + name；否则 bucket=download + source。
- *    只读视图，点击放大。
- *  - **processed**：已处理产物子集。可选中恢复（撤销处理回 download/ 原图）
- *    或全部撤销。
- *  - **removed**：被去重审核标记的 entry。物理图仍在 download/{source}，
+ *  - **all**：当前数据集真实状态（处理后数据集）。list_crop_workspace 合并
+ *    了 download 未派生 + preprocess 派生产物（已 filter duplicate_removed）。
+ *    每张图按各自来源取缩略图；processed 项右下角带「已处理」badge，点击放大
+ *    走 split 布局（左 download 原图 + 右 preprocess 派生）；未处理项点击单图。
+ *    可选中已处理项恢复（撤销处理回 download/ 原图）或全部撤销。
+ *  - **removed**：被去重审核标记的 entry（已删除）。物理图仍在 download/{source}，
  *    缩略图按 download bucket 取。可选中恢复（删 manifest entry）。
  *
  *  恢复都走 restorePreprocessFiles —— restore() 对 duplicate_removed entry 也
@@ -91,46 +90,46 @@ export default function PreprocessOverviewPage() {
     () => workspace.filter((im) => im.processed),
     [workspace],
   )
+  const processedNames = useMemo(
+    () => new Set(processed.map((p) => p.name)),
+    [processed],
+  )
 
   type GridItem = {
     name: string
     thumbUrl: string
     previewUrl: string
-    /** processed tab：右侧对比图（preprocess 派生产物）。设了 modal 切 split 布局。 */
+    /** 右侧对比图（preprocess 派生）。设了 modal 切 split 布局。仅 processed 项有。 */
     compareSrc?: string
+    /** cell 右下角常显小角标。仅 processed 项有「已处理」徽章。 */
+    badge?: string
     caption: string
   }
 
-  const wsThumb = useCallback(
-    (im: CropWorkspaceItem, size: number) =>
-      im.processed
-        ? api.projectThumbUrl(project.id, im.name, 'preprocess', size, im.mtime)
-        : api.projectThumbUrl(project.id, im.source, 'download', size, im.mtime),
-    [project.id],
-  )
-
   const allItems = useMemo<GridItem[]>(
-    () => workspace.map((im) => ({
-      name: im.name,
-      thumbUrl: wsThumb(im, 256),
-      previewUrl: wsThumb(im, 1600),
-      caption: `${im.name} · ${im.w}×${im.h}`,
-    })),
-    [workspace, wsThumb],
-  )
-  const processedItems = useMemo<GridItem[]>(
-    () => processed.map((im) => ({
-      name: im.name,
-      thumbUrl: wsThumb(im, 256),
-      // 预览采用 split 布局：左 = download 原图，右 = preprocess 派生产物。
-      // multi-crop 派生（X_c0.png）的 source 仍指向 download/X 原图，左 pane
-      // 就是原图，右 pane 是这块裁出的产物 —— 便于对比。raw=true 跳过
-      // resolve_origin，不然 bucket=download + source 名会被 hijack 回派生产物。
-      previewUrl: api.projectThumbUrl(project.id, im.source, 'download', 1600, im.mtime, true),
-      compareSrc: api.projectThumbUrl(project.id, im.name, 'preprocess', 1600, im.mtime),
-      caption: `${im.name} · ${im.w}×${im.h}`,
-    })),
-    [processed, wsThumb, project.id],
+    () => workspace.map((im) => {
+      if (im.processed) {
+        return {
+          name: im.name,
+          // 缩略图也走 preprocess 派生（看到处理后的样子）
+          thumbUrl: api.projectThumbUrl(project.id, im.name, 'preprocess', 256, im.mtime),
+          // split 预览：左 = download 原图（raw=1 跳过 resolve_origin，否则会被
+          // hijack 回派生产物），右 = preprocess 派生
+          previewUrl: api.projectThumbUrl(project.id, im.source, 'download', 1600, im.mtime, true),
+          compareSrc: api.projectThumbUrl(project.id, im.name, 'preprocess', 1600, im.mtime),
+          badge: t('preprocessOverview.badgeProcessed'),
+          caption: `${im.name} · ${im.w}×${im.h}`,
+        }
+      }
+      // 未处理：原图视图
+      return {
+        name: im.name,
+        thumbUrl: api.projectThumbUrl(project.id, im.source, 'download', 256, im.mtime),
+        previewUrl: api.projectThumbUrl(project.id, im.source, 'download', 1600, im.mtime),
+        caption: `${im.name} · ${im.w}×${im.h}`,
+      }
+    }),
+    [workspace, project.id, t],
   )
   const removedItems = useMemo<GridItem[]>(
     () => removed.map((im) => ({
@@ -142,10 +141,7 @@ export default function PreprocessOverviewPage() {
     [removed, project.id],
   )
 
-  const items =
-    tab === 'all' ? allItems
-    : tab === 'processed' ? processedItems
-    : removedItems
+  const items = tab === 'all' ? allItems : removedItems
   const visibleNames = useMemo(() => items.map((i) => i.name), [items])
   const previewItem = previewIdx !== null ? items[previewIdx] : null
 
@@ -188,18 +184,23 @@ export default function PreprocessOverviewPage() {
     }
   }, [confirm, processed.length, project.id, t, toast, refresh, reload])
 
+  // all tab 里 select all 只选「已处理」项 —— 未处理的 download 原图没什么
+  // 可恢复（没有 manifest entry），加进选中会浪费一次 confirm。
+  const selectableNames = useMemo(
+    () => tab === 'all'
+      ? visibleNames.filter((n) => processedNames.has(n))
+      : visibleNames,
+    [tab, visibleNames, processedNames],
+  )
+
   const tabDefs: { id: Tab; label: string; count: number }[] = [
     { id: 'all', label: t('preprocessOverview.tabAll'), count: workspace.length },
-    { id: 'processed', label: t('preprocessOverview.tabProcessed'), count: processed.length },
     { id: 'removed', label: t('preprocessOverview.tabRemoved'), count: removed.length },
   ]
 
   const emptyHint =
     tab === 'all' ? t('preprocessOverview.emptyAll')
-    : tab === 'processed' ? t('preprocessOverview.empty')
     : t('preprocessOverview.emptyRemoved')
-
-  const canMutate = tab === 'processed' || tab === 'removed'
 
   return (
     <StepShell
@@ -234,33 +235,29 @@ export default function PreprocessOverviewPage() {
               </span>
             )}
             <span className="flex-1" />
-            {canMutate && (
-              <>
-                <button
-                  onClick={() => setSel(new Set(visibleNames))}
-                  disabled={items.length === 0}
-                  className="btn btn-ghost btn-sm"
-                >{t('common.selectAll')}</button>
-                <button
-                  onClick={() => { setSel(new Set()); setSelAnchor(null) }}
-                  disabled={sel.size === 0}
-                  className="btn btn-ghost btn-sm"
-                >{t('common.deselect')}</button>
-                <button
-                  onClick={() => void restoreNames(Array.from(sel))}
-                  disabled={sel.size === 0}
-                  className="btn btn-sm bg-err-soft text-err"
-                  title={t('preprocessOverview.restoreSelectedTitle')}
-                >{t('preprocessOverview.restoreSelected', { n: sel.size })}</button>
-                {tab === 'processed' && (
-                  <button
-                    onClick={() => void resetAll()}
-                    disabled={processed.length === 0}
-                    className="btn btn-sm btn-secondary"
-                    title={t('preprocessOverview.resetAllTitle')}
-                  >↶ {t('preprocessOverview.resetAll')}</button>
-                )}
-              </>
+            <button
+              onClick={() => setSel(new Set(selectableNames))}
+              disabled={selectableNames.length === 0}
+              className="btn btn-ghost btn-sm"
+            >{t('common.selectAll')}</button>
+            <button
+              onClick={() => { setSel(new Set()); setSelAnchor(null) }}
+              disabled={sel.size === 0}
+              className="btn btn-ghost btn-sm"
+            >{t('common.deselect')}</button>
+            <button
+              onClick={() => void restoreNames(Array.from(sel))}
+              disabled={sel.size === 0}
+              className="btn btn-sm bg-err-soft text-err"
+              title={t('preprocessOverview.restoreSelectedTitle')}
+            >{t('preprocessOverview.restoreSelected', { n: sel.size })}</button>
+            {tab === 'all' && (
+              <button
+                onClick={() => void resetAll()}
+                disabled={processed.length === 0}
+                className="btn btn-sm btn-secondary"
+                title={t('preprocessOverview.resetAllTitle')}
+              >↶ {t('preprocessOverview.resetAll')}</button>
             )}
           </header>
 
@@ -275,11 +272,14 @@ export default function PreprocessOverviewPage() {
               <ImageGrid
                 items={items}
                 selected={sel}
-                onSelect={canMutate ? (name, e) => {
-                  const r = applySelection(sel, name, e, visibleNames, selAnchor)
+                onSelect={(name, e) => {
+                  // all tab 里只有 processed 项可选；未处理 cell 点击直接 noop
+                  // （保留 activate 单击放大）
+                  if (tab === 'all' && !processedNames.has(name)) return
+                  const r = applySelection(sel, name, e, selectableNames, selAnchor)
                   setSel(r.next)
                   setSelAnchor(r.anchor)
-                } : () => {}}
+                }}
                 onActivate={(name) => {
                   const i = visibleNames.indexOf(name)
                   if (i >= 0) setPreviewIdx(i)

@@ -7,6 +7,8 @@ export interface ImageGridItem {
   thumbUrl: string
   /** 鼠标悬停时显示在角标的小字（可选）：例如标签预览。 */
   meta?: string
+  /** 常显小角标，cell 右下角（可选）。例如 "已处理"，用于在合并视图里区分状态。 */
+  badge?: string
 }
 
 interface Props {
@@ -253,6 +255,11 @@ const Cell = memo(function Cell({
         >
           ⤢
         </button>
+      )}
+      {item.badge && (
+        <div className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded-sm bg-accent text-accent-fg text-[10px] font-medium pointer-events-none">
+          {item.badge}
+        </div>
       )}
     </div>
   )
