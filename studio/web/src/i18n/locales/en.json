@@ -1242,7 +1242,7 @@
       "goCrop": "Crop",
       "goReg": "Reg",
       "imagesSuffix": "images",
-      "uniqueSuffix": "unique · {{shown}} shown",
+      "tagSuffix": "tags",
       "reorganize": "Reorganize",
       "regEmptyHint": "Not generated · skip phase in ⑥",
       "allFolders": "All"

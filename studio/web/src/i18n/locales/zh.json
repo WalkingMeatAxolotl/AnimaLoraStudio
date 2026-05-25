@@ -1242,7 +1242,7 @@
       "goCrop": "去裁剪",
       "goReg": "去正则",
       "imagesSuffix": "张",
-      "uniqueSuffix": "唯一 · {{shown}} 显示",
+      "tagSuffix": "标签",
       "reorganize": "重组",
       "regEmptyHint": "未生成 · 可在 ⑥ 跳过该 phase",
       "allFolders": "全部"

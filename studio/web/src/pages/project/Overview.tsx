@@ -875,7 +875,7 @@ function TagDistCard({ project, version }: { project: ProjectDetail; version: Ve
           .map(([tag, n]) => ({ tag, n }))
           .sort((a, b) => b.n - a.n || a.tag.localeCompare(b.tag))
         setUniqueTotal(arr.length)
-        setTags(arr.slice(0, 11))
+        setTags(arr)
       })
       .catch(() => {
         if (cancelled) return
@@ -890,7 +890,7 @@ function TagDistCard({ project, version }: { project: ProjectDetail; version: Ve
     <HeroCard
       title={t('overview.detail.tagDist')}
       count={uniqueTotal}
-      countSub={t('overview.detail.uniqueSuffix', { shown: tags.length })}
+      countSub={t('overview.detail.tagSuffix')}
       action={version ? {
         label: `⑤ ${t('nav.tagEdit')}`,
         onClick: () => navigate(`/projects/${project.id}/v/${version.id}/edit`),
@@ -903,7 +903,7 @@ function TagDistCard({ project, version }: { project: ProjectDetail; version: Ve
           {t('overview.detail.emptyTag')}
         </p>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 3, fontFamily: 'var(--font-mono)', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 3, fontFamily: 'var(--font-mono)', overflowY: 'auto', flex: 1, minHeight: 0 }}>
           {tags.map((row) => {
             const pct = row.n / max
             const isTrigger = !!triggerWord && row.tag === triggerWord
@@ -912,6 +912,7 @@ function TagDistCard({ project, version }: { project: ProjectDetail; version: Ve
                 display: 'grid', gridTemplateColumns: '1fr 36px',
                 alignItems: 'center', gap: 8,
                 padding: '4px 8px',
+                minHeight: 22, flexShrink: 0,
                 borderRadius: 'var(--r-sm)',
                 background: isTrigger ? 'var(--accent-soft)' : 'transparent',
                 position: 'relative', overflow: 'hidden',
