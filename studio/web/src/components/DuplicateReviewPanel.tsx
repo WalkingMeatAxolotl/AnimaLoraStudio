@@ -48,23 +48,12 @@ export default function DuplicateReviewPanel({
         : [],
     [result]
   )
-  const toggleName = (group: DuplicateGroup, name: string) => {
+  // 二态：selected = 去除（黄），unselected = 留存（绿）。每张图独立选择，
+  // 无 "每组至少留一张" 校验，也无 "设为保留 → 反选其他" 联动。
+  const toggleName = (name: string) => {
     const next = new Set(selected)
-    if (next.has(name)) {
-      next.delete(name)
-    } else {
-      const selectedInGroup = group.items.filter((item) => next.has(item.name)).length
-      if (selectedInGroup >= group.items.length - 1) return
-      next.add(name)
-    }
-    onSelect(next)
-  }
-  const chooseKeep = (group: DuplicateGroup, name: string) => {
-    const next = new Set(selected)
-    for (const item of group.items) {
-      if (item.name === name) next.delete(item.name)
-      else next.add(item.name)
-    }
+    if (next.has(name)) next.delete(name)
+    else next.add(name)
     onSelect(next)
   }
   return (
@@ -120,7 +109,6 @@ export default function DuplicateReviewPanel({
                 selected={selected}
                 busy={busy}
                 onToggle={toggleName}
-                onChooseKeep={chooseKeep}
                 onPreview={onPreview}
               />
             ))}
@@ -137,27 +125,20 @@ function DuplicateGroupCard({
   selected,
   busy,
   onToggle,
-  onChooseKeep,
   onPreview,
 }: {
   projectId: number
   group: DuplicateGroup
   selected: Set<string>
   busy: boolean
-  onToggle: (group: DuplicateGroup, name: string) => void
-  onChooseKeep: (group: DuplicateGroup, name: string) => void
+  onToggle: (name: string) => void
   onPreview: (name: string) => void
 }) {
   const { t } = useTranslation()
-  const keptItems = group.items.filter((item) => !selected.has(item.name))
-  const currentKeep = keptItems[0]?.name ?? group.keep
   return (
     <article className="rounded-md border border-subtle bg-sunken p-2">
       <div className="flex flex-wrap items-center gap-2 mb-2 text-xs">
         <span className="badge badge-neutral">#{group.group_id}</span>
-        <span className="text-fg-secondary">
-          {t('duplicates.groupKeep')} <code className="mono">{currentKeep}</code>
-        </span>
         <span className="badge badge-neutral">{t('duplicates.groupCandidates', { n: group.items.length })}</span>
         {group.best && (
           <span className="badge badge-warn">
@@ -172,12 +153,9 @@ function DuplicateGroupCard({
             projectId={projectId}
             item={item}
             selected={selected.has(item.name)}
-            currentKeep={item.name === currentKeep && !selected.has(item.name)}
             suggestedKeep={item.keep}
-            canToggleRemove={selected.has(item.name) || keptItems.length > 1}
             busy={busy}
-            onToggle={() => onToggle(group, item.name)}
-            onChooseKeep={() => onChooseKeep(group, item.name)}
+            onToggle={() => onToggle(item.name)}
             onPreview={() => onPreview(item.name)}
           />
         ))}
@@ -190,23 +168,17 @@ function DuplicateItemCell({
   projectId,
   item,
   selected,
-  currentKeep,
   suggestedKeep,
-  canToggleRemove,
   busy,
   onToggle,
-  onChooseKeep,
   onPreview,
 }: {
   projectId: number
   item: DuplicateItem
   selected: boolean
-  currentKeep: boolean
   suggestedKeep: boolean
-  canToggleRemove: boolean
   busy: boolean
   onToggle: () => void
-  onChooseKeep: () => void
   onPreview: () => void
 }) {
   const { t } = useTranslation()
@@ -215,7 +187,7 @@ function DuplicateItemCell({
     <div
       className={
         'group relative rounded-md border overflow-hidden bg-surface ' +
-        (currentKeep ? 'border-ok ring-1 ring-ok-soft' : selected ? 'border-warn ring-2 ring-warn-soft' : 'border-subtle')
+        (selected ? 'border-warn ring-2 ring-warn-soft' : 'border-ok ring-1 ring-ok-soft')
       }
     >
       <button type="button" onClick={onPreview} className="block w-full aspect-square bg-sunken" title={item.name}>
@@ -232,14 +204,11 @@ function DuplicateItemCell({
           <button
             type="button"
             onClick={onToggle}
-            disabled={busy || !canToggleRemove}
-            title={!canToggleRemove ? t('duplicates.chooseAnotherFirst') : undefined}
+            disabled={busy}
             className={`shrink-0 px-1.5 py-0.5 rounded-sm border text-[11px] font-medium ${
               selected
                 ? 'bg-warn text-white border-warn'
-                : currentKeep
-                  ? 'bg-ok-soft text-ok border-ok'
-                  : 'bg-surface border-dim text-fg-tertiary hover:border-warn'
+                : 'bg-ok-soft text-ok border-ok'
             } disabled:opacity-60 disabled:cursor-not-allowed`}
             aria-label={`${selected ? t('duplicates.restoreCandidate') : t('duplicates.removeCandidate')} ${item.name}`}
           >
@@ -250,14 +219,6 @@ function DuplicateItemCell({
           )}
           <code className="mono truncate min-w-0">{item.name}</code>
         </div>
-        <button
-          type="button"
-          onClick={onChooseKeep}
-          disabled={busy || currentKeep}
-          className="btn btn-secondary btn-sm justify-center !py-0.5 text-[11px]"
-        >
-          {currentKeep ? t('duplicates.currentKeep') : t('duplicates.chooseKeep')}
-        </button>
         <div className="text-fg-tertiary">
           {item.width}x{item.height} · {item.filesize_kb}KB
         </div>

@@ -15,7 +15,6 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import {
   api,
-  PHASE_SKIPPABLE,
   type CurationView,
   type ProjectDetail,
   type Task,
@@ -551,32 +550,15 @@ function StatusBanner({
 
   // preparing
   const phase = version.phase
-  const ci = PHASE_ORDER_TIMELINE.findIndex((p) => p.id === phase)
-  const nextPhase = PHASE_ORDER_TIMELINE[ci + 1] ?? null
-  // ready 是最后 phase（无 nextPhase）—— 仍要显示 "继续 ⑤ 训练 →" 跳 /train 页
-  // （让 user 在 train 页配 config 后点开始训练）。
-  const continueTarget = nextPhase ?? PHASE_ORDER_TIMELINE[ci] ?? null
+  // banner 按钮始终反映 current phase，让用户去当前阶段页面做事。
+  // cursor advance 走 Sidebar 的 "cursor+1" 行入口（见 Sidebar.handleAdvanceToNext），
+  // banner 不再自己调 advance/skip — 之前的 next-phase 文案会让用户误以为
+  // 当前阶段已完成（如 curating 0/0 时显示「继续 ② 打标」）。
+  const continueTarget = PHASE_ORDER_TIMELINE.find((p) => p.id === phase) ?? null
 
-  const handleContinue = async () => {
-    if (!nextPhase) {
-      // 在 ready phase：纯导航到 train，不调 advance API
-      goPhase('train')
-      return
-    }
-    // 普通推进：调 advance / skip API，失败 toast 校验原因
-    const isSkippable = PHASE_SKIPPABLE.includes(phase)
-    try {
-      const res = isSkippable
-        ? await api.skipVersionPhase(projectId, version.id)
-        : await api.advanceVersionPhase(projectId, version.id)
-      if (!res.ok) {
-        toast(res.reason || t('sidebar.advanceFailed'), 'error')
-        return
-      }
-      goPhase(PHASE_TO_STEP_LOCAL[nextPhase.id])
-    } catch (e) {
-      toast(String(e), 'error')
-    }
+  const handleContinue = () => {
+    const step = continueTarget ? PHASE_TO_STEP_LOCAL[continueTarget.id] : null
+    if (step) goPhase(step)
   }
 
   return (
