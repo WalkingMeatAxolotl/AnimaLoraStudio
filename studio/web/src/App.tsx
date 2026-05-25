@@ -1,5 +1,10 @@
 import { useState } from 'react'
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import {
+  createBrowserRouter,
+  Navigate,
+  Outlet,
+  RouterProvider,
+} from 'react-router-dom'
 import Sidebar from './components/Sidebar'
 import Topbar from './components/Topbar'
 import { ProjectContext, ProjectSetterContext, type ProjectCtxValue } from './context/ProjectContext'
@@ -33,72 +38,77 @@ function QueueDetailRedirect({ tab }: { tab: 'log' | 'monitor' }) {
   )
 }
 
+/** Sidebar + Topbar 外壳；所有路由 element 渲染进 <Outlet />。 */
+function RootLayout() {
+  return (
+    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
+      <Sidebar />
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+        <Topbar />
+        <main style={{ flex: 1, overflow: 'auto', background: 'var(--bg-canvas)' }}>
+          <Outlet />
+        </main>
+      </div>
+    </div>
+  )
+}
+
+// DataRouter 单例：从经典 BrowserRouter 迁过来是为了让 react-router v6 的
+// useBlocker 可用（BrowserRouter 不支持），TagEdit 等页面的"未保存切页"
+// 提示需要它。结构跟原来一致 —— RootLayout 包 Sidebar/Topbar，业务路由
+// 作为 children 渲染进 <Outlet />。
+const router = createBrowserRouter(
+  [
+    {
+      element: <RootLayout />,
+      children: [
+        { path: '/', element: <ProjectsPage /> },
+        { path: '/queue', element: <QueuePage /> },
+        { path: '/queue/:id', element: <QueueDetailPage /> },
+        { path: '/queue/:id/log', element: <QueueDetailRedirect tab="log" /> },
+        { path: '/queue/:id/monitor', element: <QueueDetailRedirect tab="monitor" /> },
+        {
+          path: '/projects/:pid',
+          element: <ProjectLayout />,
+          children: [
+            { index: true, element: <ProjectOverview /> },
+            { path: 'download', element: <DownloadPage /> },
+            { path: 'preprocess', element: <PreprocessHub /> },
+            {
+              path: 'v/:vid',
+              children: [
+                { path: 'curate', element: <CurationPage /> },
+                { path: 'tag', element: <TaggingPage /> },
+                { path: 'edit', element: <TagEditPage /> },
+                { path: 'reg', element: <RegularizationPage /> },
+                { path: 'train', element: <TrainPage /> },
+              ],
+            },
+          ],
+        },
+        { path: '/tools/presets', element: <PresetsPage /> },
+        { path: '/tools/monitor', element: <MonitorPage /> },
+        { path: '/tools/settings', element: <SettingsPage /> },
+        { path: '/tools/generate', element: <GeneratePage /> },
+        { path: '/configs', element: <Navigate to="/tools/presets" replace /> },
+        { path: '/monitor', element: <Navigate to="/tools/monitor" replace /> },
+        { path: '/datasets', element: <Navigate to="/" replace /> },
+      ],
+    },
+  ],
+  {
+    basename: '/studio',
+    future: { v7_relativeSplatPath: true },
+  },
+)
+
 export default function App() {
   const [projectCtx, setProjectCtx] = useState<ProjectCtxValue | null>(null)
 
   return (
     <ProjectContext.Provider value={projectCtx}>
       <ProjectSetterContext.Provider value={setProjectCtx}>
-    <BrowserRouter
-      basename="/studio"
-      future={{ v7_relativeSplatPath: true, v7_startTransition: true }}
-    >
-      <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
-        <Sidebar />
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        <Topbar />
-        <main style={{ flex: 1, overflow: 'auto', background: 'var(--bg-canvas)' }}>
-          <Routes>
-            <Route path="/" element={<ProjectsPage />} />
-            <Route path="/queue" element={<QueuePage />} />
-            <Route path="/queue/:id" element={<QueueDetailPage />} />
-            {/* 旧 → 新（合并日志/监控/输出到一个 detail 页 with tabs）。
-             * 默认 tab 用 hash 切换：#log / #monitor / #outputs / #overview。 */}
-            <Route
-              path="/queue/:id/log"
-              element={<QueueDetailRedirect tab="log" />}
-            />
-            <Route
-              path="/queue/:id/monitor"
-              element={<QueueDetailRedirect tab="monitor" />}
-            />
-
-            {/* PP1: project layout + stepper + version tabs */}
-            <Route path="/projects/:pid" element={<ProjectLayout />}>
-              <Route index element={<ProjectOverview />} />
-              <Route path="download" element={<DownloadPage />} />
-              {/* Preprocess: single route + ?tool= query string for sub-tools.
-                  See pages/project/steps/PreprocessHub.tsx. */}
-              <Route path="preprocess" element={<PreprocessHub />} />
-              <Route path="v/:vid">
-                <Route path="curate" element={<CurationPage />} />
-                <Route path="tag" element={<TaggingPage />} />
-                <Route path="edit" element={<TagEditPage />} />
-                <Route path="reg" element={<RegularizationPage />} />
-                <Route path="train" element={<TrainPage />} />
-              </Route>
-            </Route>
-
-            <Route path="/tools/presets" element={<PresetsPage />} />
-            <Route path="/tools/monitor" element={<MonitorPage />} />
-            <Route path="/tools/settings" element={<SettingsPage />} />
-            <Route path="/tools/generate" element={<GeneratePage />} />
-
-            {/* 旧 → 新 路由兼容（PP0 重构）。下个 minor 版本删除。 */}
-            <Route
-              path="/configs"
-              element={<Navigate to="/tools/presets" replace />}
-            />
-            <Route
-              path="/monitor"
-              element={<Navigate to="/tools/monitor" replace />}
-            />
-            <Route path="/datasets" element={<Navigate to="/" replace />} />
-            </Routes>
-          </main>
-        </div>
-      </div>
-    </BrowserRouter>
+        <RouterProvider router={router} />
       </ProjectSetterContext.Provider>
     </ProjectContext.Provider>
   )

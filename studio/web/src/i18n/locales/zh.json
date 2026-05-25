@@ -1382,7 +1382,11 @@
     "triggerWordHint": "Step 4 打标时已写入每张 caption 第一位。要改，回 Step 4 改触发词并重新打标。",
     "noImagesInFolder": "「{{folder}}」中没有图片",
     "removedFromN": "已删除「{{tag}}」（{{n}} 张）",
-    "replacedInN": "已替换 {{from}} → {{to}}（{{n}} 张）"
+    "replacedInN": "已替换 {{from}} → {{to}}（{{n}} 张）",
+    "unsavedConfirmTitle": "有未保存的标签修改",
+    "unsavedConfirmMessage": "你还有 {{n}} 张图的标签未保存。切换页面会丢失这些修改，确定要离开吗？",
+    "unsavedConfirmDiscard": "放弃修改并离开",
+    "unsavedConfirmStay": "留在本页"
   },
   "download": {
     "tagEmpty": "tag 不能为空",

@@ -1382,7 +1382,11 @@
     "triggerWordHint": "Already written as the first token of every caption during Step 4 (Tagging). To change it, go back to Step 4, update the trigger word, and re-tag.",
     "noImagesInFolder": "No images in folder «{{folder}}»",
     "removedFromN": "Removed «{{tag}}» from {{n}} image(s)",
-    "replacedInN": "Replaced {{from}} → {{to}} in {{n}} image(s)"
+    "replacedInN": "Replaced {{from}} → {{to}} in {{n}} image(s)",
+    "unsavedConfirmTitle": "Unsaved tag edits",
+    "unsavedConfirmMessage": "You have unsaved tag changes on {{n}} image(s). Navigating away will discard them. Leave anyway?",
+    "unsavedConfirmDiscard": "Discard and leave",
+    "unsavedConfirmStay": "Stay on this page"
   },
   "download": {
     "tagEmpty": "Tag cannot be empty",

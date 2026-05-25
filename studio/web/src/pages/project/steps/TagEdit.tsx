@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useOutletContext } from 'react-router-dom'
+import { useBlocker, useOutletContext } from 'react-router-dom'
 import {
   api,
   type CommitItem,
@@ -108,6 +108,29 @@ export default function TagEditPage() {
     window.addEventListener('beforeunload', handler)
     return () => window.removeEventListener('beforeunload', handler)
   }, [dirty])
+
+  // 应用内 React-Router 导航不触发 beforeunload，得靠 useBlocker（v6.4+）。
+  // dirty=false 时 blocker 自动放行；dirty=true 时拦下导航 → confirm 弹窗
+  // → 用户选"放弃"调 proceed()、"留下"调 reset()。
+  const blocker = useBlocker(dirty)
+  useEffect(() => {
+    if (blocker.state !== 'blocked') return
+    let cancelled = false
+    void confirm(
+      t('tagEdit.unsavedConfirmMessage', { n: dirtyKeys.length }),
+      {
+        tone: 'danger',
+        title: t('tagEdit.unsavedConfirmTitle'),
+        okText: t('tagEdit.unsavedConfirmDiscard'),
+        cancelText: t('tagEdit.unsavedConfirmStay'),
+      },
+    ).then((ok) => {
+      if (cancelled) return
+      if (ok) blocker.proceed?.()
+      else blocker.reset?.()
+    })
+    return () => { cancelled = true }
+  }, [blocker, confirm, t, dirtyKeys.length])
 
   // folder 列表 + 每个 folder 的原始张数（不受 filterTag 影响，让 tab 数字稳定
   // 不抖动 — 同 Preprocess chip 风格）。单 folder 项目时 UI 不显示 tabs。
