@@ -9,7 +9,9 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import re
 import sys
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Iterator, Optional
@@ -28,27 +30,58 @@ def safe_dir_name(model_id: str) -> str:
 
 
 @contextlib.contextmanager
-def silenced_fd_stderr():
-    """临时把 fd 2 重定向到 devnull，吞掉 C++ 库直写到 fd 2 的输出。
+def captured_fd_stderr():
+    """临时把 fd 2 重定向到 tempfile，context 退出后把 bytes append 到 yield 的 list。
 
-    onnxruntime 在 CUDA dlopen 失败（缺 cublasLt64_12.dll / libcurand 等）时，
-    会把彩色 ANSI + Windows 下额外的 NUL 字节直接吐到 fd 2，绕过 Python
-    sys.stderr —— 我们已经接住 InferenceSession 的 Python 异常并回填到
-    Settings UI 的 cuda_load_error，这些原始字节只会污染 worker 日志。
+    onnxruntime 在 CUDA dlopen 失败（缺 libcublasLt.so.12 / cublasLt64_12.dll
+    / libcurand 等）时，把关键报错直写到 fd 2（C 层 fprintf(stderr) /
+    spdlog），不走 Python sys.stderr —— `try/except str(exc)` 看不到。
+    **静默降级**路径（InferenceSession 不抛但 get_providers 没 CUDA）更要靠
+    这条 fd 2 输出诊断，否则用户看到的只有「降级了」+ 没原因。
+
+    旧版 silenced_fd_stderr 把它丢 /dev/null：日志干净但出问题完全瞎；
+    现在改成 capture，让 _create_session 在错误信息里把它转发出来给 UI 显示。
     """
     try:
         sys.stderr.flush()
     except Exception:  # noqa: BLE001
         pass
     saved = os.dup(2)
-    devnull = open(os.devnull, "wb")
+    tmp = tempfile.TemporaryFile(mode="w+b")
+    captured: list[bytes] = []
     try:
-        os.dup2(devnull.fileno(), 2)
-        yield
+        os.dup2(tmp.fileno(), 2)
+        yield captured
     finally:
         os.dup2(saved, 2)
         os.close(saved)
-        devnull.close()
+        try:
+            tmp.seek(0)
+            captured.append(tmp.read())
+        finally:
+            tmp.close()
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _decode_captured(buf: list[bytes]) -> str:
+    """captured_fd_stderr 收到的 bytes → 干净文本（去 ANSI 色码 / NUL 字节）。"""
+    raw = b"".join(buf)
+    if not raw:
+        return ""
+    text = raw.decode("utf-8", errors="replace")
+    text = _ANSI_RE.sub("", text)
+    text = text.replace("\x00", "")
+    return text.strip()
+
+
+def _augment_with_capture(base: str, captured: list[bytes]) -> str:
+    """如果 fd 2 捕到 ORT C 层报错，拼到 base 后面；空就原样返回。"""
+    c_err = _decode_captured(captured)
+    if not c_err:
+        return base
+    return f"{base}\nORT 原始报错:\n{c_err}"
 
 
 class OnnxTaggerBase:
@@ -110,19 +143,25 @@ class OnnxTaggerBase:
         if "CUDAExecutionProvider" in avail:
             providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
         # PP9.5 — get_available_providers() 报 CUDA 可用 ≠ 真能 dlopen。
-        # 缺系统 CUDA runtime 时挂在 InferenceSession 创建。fd-level stderr 静默
-        # 吞掉 C 层污染日志，Python 异常已经能完整拿到原因；CPU fallback 不静默。
+        # 缺 CUDA runtime 时挂在 InferenceSession 创建（抛异常）或静默降 CPU
+        # （不抛但 get_providers 没 CUDA）。两条路径 ORT 都把关键报错直写 fd 2，
+        # 不走 Python sys.stderr —— 必须 capture 才能告诉用户根因。
         cuda_attempt = "CUDAExecutionProvider" in providers
-        ctx = silenced_fd_stderr() if cuda_attempt else contextlib.nullcontext()
+        captured_stderr: list[bytes] = []
         try:
-            with ctx:
+            if cuda_attempt:
+                with captured_fd_stderr() as captured_stderr:
+                    self._session = ort.InferenceSession(
+                        str(model_path), providers=providers
+                    )
+            else:
                 self._session = ort.InferenceSession(
                     str(model_path), providers=providers
                 )
         except Exception as exc:  # noqa: BLE001
             if not cuda_attempt:
                 raise
-            err = str(exc)
+            err = _augment_with_capture(str(exc), captured_stderr)
             logger.warning(
                 "%s CUDA session 创建失败，降级 CPU 重试: %s", self.name, err
             )
@@ -137,11 +176,18 @@ class OnnxTaggerBase:
             if cuda_attempt:
                 actual = list(self._session.get_providers())
                 if "CUDAExecutionProvider" not in actual:
-                    msg = (
+                    base = (
                         f"CUDA EP 静默降级到 CPU（InferenceSession 未抛异常，"
-                        f"但 get_providers={actual}）。常见原因：CUDA 驱动版本不够 / "
-                        f"runtime so/DLL 缺失 / cuDNN ABI 错位。"
+                        f"但 get_providers={actual}）。"
                     )
+                    captured_msg = _decode_captured(captured_stderr)
+                    if captured_msg:
+                        msg = f"{base}\nORT 原始报错:\n{captured_msg}"
+                    else:
+                        msg = (
+                            base
+                            + "常见原因：CUDA 驱动版本不够 / runtime so/DLL 缺失 / cuDNN ABI 错位。"
+                        )
                     logger.warning("%s %s", self.name, msg)
                     onnxruntime_setup.record_cuda_load_error(msg)
                 else:

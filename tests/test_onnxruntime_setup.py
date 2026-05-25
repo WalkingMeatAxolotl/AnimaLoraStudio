@@ -374,6 +374,8 @@ def test_preload_noop_when_no_torch_nvidia_packages(
 ) -> None:
     """venv 里没 torch CUDA wheel → preload 不报错、candidates=0、preloaded 空。"""
     monkeypatch.setattr(ors.sys, "platform", "linux")
+    # pin 掉系统 CUDA 检测：CI 机器装没装 cuBLAS 不影响这条单测走 preload 分支
+    monkeypatch.setattr(ors, "_has_system_cuda_libs", lambda: False)
 
     def _no_pkg(_name: str):
         raise ImportError("not installed")
@@ -391,6 +393,7 @@ def test_preload_loads_present_libs(
     """模拟一个 nvidia.curand 包：mod.__path__ 下有 lib/libcurand.so.10 →
     应被 ctypes.CDLL 加载到，且 RTLD_GLOBAL 模式。"""
     monkeypatch.setattr(ors.sys, "platform", "linux")
+    monkeypatch.setattr(ors, "_has_system_cuda_libs", lambda: False)
 
     # 仿造 nvidia.curand 的 __path__ + lib/libcurand.so.10 文件
     pkg_root = tmp_path / "nvidia_curand_pkg"
@@ -595,77 +598,54 @@ def test_current_runtime_exposes_cuda_load_error(
 # ---------------------------------------------------------------------------
 
 
-def test_has_system_cuda_libs_via_cuda_home(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
+def test_has_system_cuda_libs_true_when_both_dlopen_succeed(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """CUDA_HOME + 系统也有 cuDNN → True。"""
-    fake_root = tmp_path / "fake-cuda"
-    (fake_root / "lib64").mkdir(parents=True)
-    monkeypatch.setenv("CUDA_HOME", str(fake_root))
-    monkeypatch.delenv("CUDA_PATH", raising=False)
-    monkeypatch.setattr(ors.os.path, "isdir", lambda p: p.endswith(str(fake_root / "lib64")))
-    import ctypes.util as _cu  # noqa: PLC0415
-    # cuDNN 在系统 ld 里
-    monkeypatch.setattr(_cu, "find_library", lambda name: "libcudnn.so.9" if name == "cudnn" else None)
+    """两个 ORT 关键 so 都能 dlopen → True（系统装了 CUDA 12 + cuDNN 9）。"""
+    monkeypatch.setattr(ors.ctypes, "CDLL", lambda *_a, **_k: MagicMock())
     assert ors._has_system_cuda_libs() is True
 
 
-def test_has_system_cuda_libs_via_default_path(
+def test_has_system_cuda_libs_false_when_cublaslt_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """/usr/local/cuda/lib64 + 系统 cuDNN → True。"""
-    monkeypatch.delenv("CUDA_HOME", raising=False)
-    monkeypatch.delenv("CUDA_PATH", raising=False)
-    monkeypatch.setattr(
-        ors.os.path,
-        "isdir",
-        lambda p: p == "/usr/local/cuda/lib64",
-    )
-    import ctypes.util as _cu  # noqa: PLC0415
-    monkeypatch.setattr(_cu, "find_library", lambda name: "libcudnn.so.9" if name == "cudnn" else None)
-    assert ors._has_system_cuda_libs() is True
+    """回归用户实测踩坑（2026-05-25）：云镜像装 CUDA 13，ld 路径里是
+    libcublasLt.so.13，ORT 需的 .so.12 dlopen 不到 → 必须返回 False，
+    让 torch wheel preload 补 .so.12。否则 ORT 静默降 CPU。"""
 
+    def _selective(name, *_a, **_k):
+        if "libcublasLt.so.12" in name:
+            raise OSError("libcublasLt.so.12: cannot open shared object file")
+        return MagicMock()
 
-def test_has_system_cuda_libs_returns_false_when_no_signals(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("CUDA_HOME", raising=False)
-    monkeypatch.delenv("CUDA_PATH", raising=False)
-    monkeypatch.setattr(ors.os.path, "isdir", lambda _p: False)
-    import ctypes.util as _cu  # noqa: PLC0415
-    monkeypatch.setattr(_cu, "find_library", lambda _name: None)
+    monkeypatch.setattr(ors.ctypes, "CDLL", _selective)
     assert ors._has_system_cuda_libs() is False
 
 
-def test_has_system_cuda_libs_returns_false_when_cudnn_missing(
+def test_has_system_cuda_libs_false_when_cudnn_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """关键修复回归：系统有 CUDA Toolkit（cuBLAS 在 /usr/local/cuda）但**没装 cuDNN** —
-    必须返回 False，让 torch wheel preload 兜底补 cuDNN。否则 onnxruntime
-    dlopen libcudnn.so.9 失败 → 静默降 CPU（用户在云上实测踩到）。"""
-    monkeypatch.delenv("CUDA_HOME", raising=False)
-    monkeypatch.delenv("CUDA_PATH", raising=False)
-    monkeypatch.setattr(
-        ors.os.path,
-        "isdir",
-        lambda p: p == "/usr/local/cuda/lib64",
-    )
-    import ctypes.util as _cu  # noqa: PLC0415
-    # cuBLAS 在系统里，cuDNN 不在
-    monkeypatch.setattr(_cu, "find_library", lambda name: "libcublas.so.12" if name == "cublas" else None)
+    """系统装了 CUDA 12 但没装 cuDNN 9 → False，让 torch wheel preload 补 cuDNN。
+    cuDNN 要 NVIDIA Developer 账号单独下，云镜像不带是常见的。"""
+
+    def _selective(name, *_a, **_k):
+        if "libcudnn.so.9" in name:
+            raise OSError("libcudnn.so.9: cannot open shared object file")
+        return MagicMock()
+
+    monkeypatch.setattr(ors.ctypes, "CDLL", _selective)
     assert ors._has_system_cuda_libs() is False
 
 
-def test_has_system_cuda_libs_returns_false_when_only_cublas_in_ld(
+def test_has_system_cuda_libs_false_when_both_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """没 CUDA_HOME、没 /usr/local/cuda，只有 ld 路径里的 cuBLAS（apt 装的）+
-    没 cuDNN → False（同上：部分系统 CUDA 也算不完整）。"""
-    monkeypatch.delenv("CUDA_HOME", raising=False)
-    monkeypatch.delenv("CUDA_PATH", raising=False)
-    monkeypatch.setattr(ors.os.path, "isdir", lambda _p: False)
-    import ctypes.util as _cu  # noqa: PLC0415
-    monkeypatch.setattr(_cu, "find_library", lambda name: "libcublas.so.12" if name == "cublas" else None)
+    """完全没装 CUDA → False，preload 兜底走 torch wheel。"""
+
+    def _none(*_a, **_k):
+        raise OSError("not found")
+
+    monkeypatch.setattr(ors.ctypes, "CDLL", _none)
     assert ors._has_system_cuda_libs() is False
 
 

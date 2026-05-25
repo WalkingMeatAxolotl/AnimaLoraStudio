@@ -28,6 +28,13 @@ def main() -> None:
     print("platform:", sys.platform)
     print("executable:", sys.executable)
 
+    # `python tools/diagnose_onnx_gpu.py` 让 Python 只把 tools/ 加到 sys.path，
+    # cwd 不在里面 → import studio 失败。从 repo 根跑时手动补一下，省得用户
+    # 还得记着 PYTHONPATH=. 前缀。
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+
     section("onnxruntime_setup.current_runtime()")
     try:
         from studio.services import onnxruntime_setup as o

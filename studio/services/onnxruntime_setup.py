@@ -91,45 +91,49 @@ _PRELOAD_RESULT: Optional[dict[str, Any]] = None
 _CUDA_LOAD_ERROR: Optional[str] = None
 
 
-def _has_system_cuda_libs() -> bool:
-    """Linux 系统是否自带**完整** CUDA 运行时（cuBLAS + cuDNN 都在 ld 路径）。
+# onnxruntime-gpu 1.20+ 的 CUDA EP 按 CUDA 12.x 编译，dlopen 时找的是带版本号
+# 的 soname。检测系统能否直接 dlopen 这些精确 soname，比 find_library("cublas")
+# 严格 —— 后者匹配任意版本 cuBLAS，无法分辨 12 vs 13。
+#
+# 用户实测踩坑（2026-05-25）：云镜像装的是 CUDA 13（ld 路径里 libcublas.so.13），
+# 旧版 find_library 返回 True → 跳过 torch wheel preload → ORT dlopen
+# libcublasLt.so.12 失败 → 静默降 CPU。现在两个 soname 都必须能 dlopen 才认。
+_ORT_REQUIRED_LINUX_SONAMES: tuple[str, ...] = (
+    "libcublasLt.so.12",
+    "libcudnn.so.9",
+)
 
-    有**完整**系统 CUDA 时跳过 PP9.5 preload —— torch wheel 自带的 CUDA so
-    （cu128 → cuBLAS 12.8）与 onnxruntime-gpu wheel 编译目标的 CUDA so
-    （typically 12.x 某子版本）ABI 不匹配；RTLD_GLOBAL 把 torch 的强行塞进
-    全局符号表后，onnxruntime 后续 dlopen cuBLAS 解到错位版本 → 推理时
-    CUBLAS_STATUS_INVALID_VALUE。系统 CUDA 完整时让 onnxruntime 直接 dlopen
-    系统版本反而是对的。
 
-    **关键**：必须 cuBLAS + cuDNN 都在系统里才算完整。云镜像装 CUDA Toolkit
-    （带 cuBLAS）但**没装** cuDNN 极常见（cuDNN 要 NVIDIA Developer 账号单独
-    下）；只检测 cuBLAS 会误判 → preload 跳过 → onnxruntime dlopen
-    libcudnn.so.9 失败 → 静默降 CPU。这种「部分系统 CUDA」场景必须让 torch
-    wheel preload 兜底补 cuDNN（torch GPU build 自带 cuDNN 9.x 在
-    nvidia.cudnn 子包里）。
-
-    检测分两步，都满足才返回 True：
-    1. CUDA Toolkit：CUDA_HOME / CUDA_PATH 指向带 lib64 / 默认 /usr/local/cuda
-       存在 / ld 路径里有 libcublas —— 任一命中
-    2. cuDNN：ld 路径里有 libcudnn —— 必须命中
-    """
-    import ctypes.util  # noqa: PLC0415  仅 Linux 路径用，避免顶层 import 副作用
-    cuda_home = os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH") or ""
-    has_toolkit = False
-    if cuda_home and os.path.isdir(os.path.join(cuda_home, "lib64")):
-        has_toolkit = True
-    elif os.path.isdir("/usr/local/cuda/lib64"):
-        has_toolkit = True
-    elif ctypes.util.find_library("cublas"):
-        has_toolkit = True
-    if not has_toolkit:
+def _can_dlopen(soname: str) -> bool:
+    # ctypes.RTLD_LAZY 仅 POSIX 有；Windows 上 ctypes 没这常量。本函数只在
+    # Linux preload 路径里被实际调用，但跨平台导入 / 单测时不能 AttributeError。
+    mode = getattr(ctypes, "RTLD_LAZY", 0)
+    try:
+        ctypes.CDLL(soname, mode=mode)
+        return True
+    except OSError:
         return False
-    # 关键：cuDNN 同样必须在系统 ld 路径里。云镜像装 CUDA Toolkit（含 cuBLAS）
-    # 但没装 cuDNN 是非常常见的场景；只检测 cuBLAS 会误判 → preload 被跳过 →
-    # onnxruntime dlopen libcudnn.so.9 失败 → 静默降 CPU。这种部分系统 CUDA
-    # 场景下让 torch wheel preload 兜底补 cuDNN（torch GPU build 在
-    # nvidia.cudnn 子包里自带 cuDNN 9.x）。
-    return bool(ctypes.util.find_library("cudnn"))
+
+
+def _has_system_cuda_libs() -> bool:
+    """系统能否直接 dlopen ORT CUDA EP 需要的精确 soname。
+
+    返回 True → 跳过 PP9.5 preload，让 onnxruntime 用系统的 CUDA so
+    （避免 torch wheel cu128 与 ORT 编译目标 cu12.x 子版本错位塞进
+    RTLD_GLOBAL 导致 CUBLAS_STATUS_INVALID_VALUE）。返回 False → 走
+    preload，torch GPU build 自带的 nvidia-*-cu12 wheels 兜底补齐。
+
+    必须两个关键 so 都能 dlopen 才算系统完整：
+    - libcublasLt.so.12：ORT 12.x CUDA EP 直接 dlopen 这个 soname；系统是
+      CUDA 13 时只有 .so.13 → 返回 False，触发 preload
+    - libcudnn.so.9：cuDNN 跨 CUDA 12/13 同 soname；云镜像装 CUDA Toolkit
+      但没装 cuDNN 是非常常见的场景，缺它必须让 torch wheel 补
+
+    副作用：成功的 dlopen 把 so 加载进进程地址空间。这是预期的 ——
+    跳过 preload 路径下 ORT 也会立即 dlopen 同一 so（同一 handle 被复用），
+    等同于提前热身一次。
+    """
+    return all(_can_dlopen(s) for s in _ORT_REQUIRED_LINUX_SONAMES)
 
 
 def _add_torch_dll_dirs_windows() -> dict[str, Any]:
