@@ -62,20 +62,20 @@ function QueueDetailRedirect({ tab }: { tab: 'log' | 'monitor' }) {
 }
 
 /** Sidebar + Topbar 外壳；所有路由 element 渲染进 <Outlet />。
- *  SettingsDrawer 也挂在这层 —— 它是个 fixed 定位的全局抽屉，永远在 RouterProvider 内
- *  这样可以共用 react-router context（虽然抽屉本身不依赖路由，但内部的 SettingsPage 用到
- *  useLocation 等 hook，需要 router 上下文）。 */
+ *  SettingsDrawer 挂在主内容列内（含 Topbar），用 absolute 定位铺满该列 —— 这样
+ *  backdrop 自然不会盖到左侧 Sidebar，sidebar 上的导航 / 主题切换照常可用。
+ *  列父级 position:relative 给 drawer 的 absolute inset-0 做锚点。 */
 function RootLayout() {
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
       <Sidebar />
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, position: 'relative' }}>
         <Topbar />
         <main style={{ flex: 1, overflow: 'auto', background: 'var(--bg-canvas)' }}>
           <Outlet />
         </main>
+        <SettingsDrawer />
       </div>
-      <SettingsDrawer />
     </div>
   )
 }
