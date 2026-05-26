@@ -17,11 +17,13 @@ import { useSettingsDrawer } from '../lib/SettingsDrawer'
 const SettingsPageLazy = lazy(() => import('../pages/tools/Settings'))
 
 // 响应式宽度：
-//   < 1600 viewport（笔记本 / 小桌面）：80vw —— 1280屏≈1024，1440屏≈1152，1600屏≈1280
-//   1600–2559（含 1k FHD）：1280px 上限，避免大屏吞太多
-//   ≥ 2560（2k QHD 及以上）：1960px —— 大屏给到接近 80% 可视宽
-// 用 Tailwind arbitrary breakpoint 表达。
-const DRAWER_WIDTH_CLASS = 'w-[min(1280px,80vw)] min-[2560px]:w-[1960px]'
+//   < 2200 viewport：min(1280px, 80vw) —— 笔记本走 80vw，1k FHD（1920）/ 缩放后的
+//     2k（~1707）都吃满 1280 上限
+//   ≥ 2200 viewport：1960px —— 含 Win 110/125% 缩放的物理 2k（实际 viewport
+//     2300+）和原生 2560 屏；1960 在 2320 viewport 上 ≈ 84%
+// 注意：物理"2k 屏"的 viewport 受 DPI 缩放影响，不是 2560。这里断点按 CSS
+// viewport 取值，不是物理分辨率。
+const DRAWER_WIDTH_CLASS = 'w-[min(1280px,80vw)] min-[2200px]:w-[1960px]'
 const ANIM_MS = 220
 
 export default function SettingsDrawer() {
