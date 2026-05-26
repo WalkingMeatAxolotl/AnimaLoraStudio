@@ -528,7 +528,13 @@ export default function Sidebar() {
       <div className={`border-t border-subtle flex flex-col gap-0.5 shrink-0 ${collapsed ? 'px-1.5 py-2' : 'p-2.5'}`}>
         <NavItem to="/tools/presets" label={t('nav.presets')} icon={I.preset} active={isMain('/tools/presets')} collapsed={collapsed} />
         <NavItem to="/tools/monitor" label={t('nav.monitor')} icon={I.monitor} active={isMain('/tools/monitor')} collapsed={collapsed} />
-        <NavButton onClick={() => settingsDrawer.open()} label={t('nav.settings')} icon={I.cog} active={settingsDrawer.isOpen} collapsed={collapsed} />
+        <NavButton
+          onClick={() => settingsDrawer.isOpen ? void settingsDrawer.close() : settingsDrawer.open()}
+          label={t('nav.settings')}
+          icon={I.cog}
+          active={false}
+          collapsed={collapsed}
+        />
         <ThemeToggle collapsed={collapsed} />
         <button
           onClick={toggle}
