@@ -1,6 +1,8 @@
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
+import { SettingsDrawerProvider } from '../lib/SettingsDrawer'
+import { DialogProvider } from './Dialog'
 import Sidebar from './Sidebar'
 
 function renderAt(path: string) {
@@ -9,7 +11,11 @@ function renderAt(path: string) {
       initialEntries={[path]}
       future={{ v7_relativeSplatPath: true, v7_startTransition: true }}
     >
-      <Sidebar />
+      <DialogProvider>
+        <SettingsDrawerProvider>
+          <Sidebar />
+        </SettingsDrawerProvider>
+      </DialogProvider>
     </MemoryRouter>
   )
 }
@@ -26,8 +32,7 @@ describe('Sidebar (PP0)', () => {
       'href',
       '/queue'
     )
-    // 工具区（重设计后没有 "工具" 分组 label，只是用 border-top 分隔；
-    // 这里只验证三个链接到位即可）
+    // 工具区（重设计后没有 "工具" 分组 label，只是用 border-top 分隔）
     expect(screen.getByRole('link', { name: /预设/ })).toHaveAttribute(
       'href',
       '/tools/presets'
@@ -36,10 +41,9 @@ describe('Sidebar (PP0)', () => {
       'href',
       '/tools/monitor'
     )
-    expect(screen.getByRole('link', { name: /设置/ })).toHaveAttribute(
-      'href',
-      '/tools/settings'
-    )
+    // 设置不再是路由 link，而是打开右侧抽屉的 button；没有 href
+    expect(screen.getByRole('button', { name: /设置/ })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /设置/ })).toBeNull()
   })
 
   it('marks the active route', () => {

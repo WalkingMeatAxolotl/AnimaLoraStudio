@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import type { TFunction } from 'i18next'
 import { Trans, useTranslation } from 'react-i18next'
-import { useLocation } from 'react-router-dom'
 import {
   api,
   DEFAULT_WD14_MODELS,
@@ -31,7 +30,8 @@ import { InfoButton } from '../../components/InfoButton'
 import LLMTaggerWorkspace from '../../components/LLMTaggerWorkspace'
 import PageHeader from '../../components/PageHeader'
 import { useToast } from '../../components/Toast'
-import { useEventStream } from '../../lib/useEventStream'
+import { useSettingsData } from '../../lib/SettingsData'
+import { useSettingsDrawer } from '../../lib/SettingsDrawer'
 import {
   formatMasterStateText,
   formatDevStateText,
@@ -65,6 +65,8 @@ type Tab = 'dataset' | 'tagging' | 'preprocess' | 'training' | 'monitor' | 'test
 const SECTION_TO_TAB: Record<string, Tab> = {
   'models': 'training',
   'download-source': 'training',
+  'version': 'system',
+  'service': 'system',
 }
 
 const TAB_LIST: { id: Tab; labelKey: string }[] = [
@@ -263,22 +265,42 @@ function translatedCatalogText(keys: Record<string, string>, id: string, fallbac
 
 export default function SettingsPage() {
   const { t } = useTranslation()
-  const [server, setServer] = useState<Secrets | null>(null)
+  // 共享数据层（SettingsDataProvider）：secrets / catalog / SSE / downloadBusy 都在根级常驻，
+  // 本组件 mount/unmount（抽屉开关）不再触发重拉。`server` 别名保留是为了让下方
+  // 大段表单代码改动最小。
+  const {
+    secrets: server,
+    secretsError,
+    setSecrets: setServer,
+    catalog,
+    catalogError,
+    reloadCatalog,
+    downloadBusy,
+    startDownload,
+  } = useSettingsData()
   const [draft, setDraft] = useState<Secrets>(EMPTY)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [tab, setTab] = useState<Tab>(getStoredTab)
-  // Models catalog hoisted here so 打标 tab 的 WD14/CLTagger 卡片和 训练 tab
-  // 的 ModelsSection 共用一份数据 + 一个 SSE 订阅。
-  const [catalog, setCatalog] = useState<ModelsCatalog | null>(null)
-  const [catalogError, setCatalogError] = useState<string | null>(null)
-  const [downloadBusy, setDownloadBusy] = useState<Set<string>>(new Set())
   const [llmModelsBusy, setLlmModelsBusy] = useState(false)
   const [llmTestBusy, setLlmTestBusy] = useState(false)
   const { toast } = useToast()
   const { prompt } = useDialog()
+  const drawer = useSettingsDrawer()
   // 右侧 section index 用：sticky nav 的 IntersectionObserver root + 滚动平移容器
   const scrollContainerRef = useRef<HTMLDivElement>(null)
+
+  // 第一次拿到 secrets 时把 draft 同步过来；之后 server 变化（save 后）不再
+  // 覆盖 draft，避免抹掉用户的未保存编辑（save 里会自己 setDraft(next)）。
+  const draftInitRef = useRef(false)
+  useEffect(() => {
+    if (server && !draftInitRef.current) {
+      setDraft(server)
+      draftInitRef.current = true
+    }
+  }, [server])
+  // 数据层 fetch secrets 失败时把错误透出到本组件 error 状态，复用底部错误条。
+  useEffect(() => { if (secretsError) setError(secretsError) }, [secretsError])
 
   const switchTab = (next: Tab) => {
     setTab(next)
@@ -289,68 +311,34 @@ export default function SettingsPage() {
     }
   }
 
-  // 外部页面通过 `/tools/settings?section=models` 跳进来时，先切到对应 tab，
-  // 等 section 渲染完再 scrollIntoView。不写 localStorage，避免覆盖用户平常
-  // 偏好的 tab。
-  const location = useLocation()
+  const dirty = useMemo(
+    () => server !== null && JSON.stringify(server) !== JSON.stringify(draft),
+    [server, draft]
+  )
+
+  // 抽屉关闭前用这个 ref 询问"是否 dirty"；ref 每次 render 刷新，
+  // 注册的函数只挂载一次，避免 effect churn。
+  const dirtyRef = useRef(false)
+  dirtyRef.current = dirty
   useEffect(() => {
-    const params = new URLSearchParams(location.search)
-    const section = params.get('section')
-    if (!section) return
+    drawer.registerDirtyGuard(() => dirtyRef.current)
+    return () => drawer.registerDirtyGuard(null)
+  }, [drawer])
+
+  // 抽屉以 open({ section }) 打开时跳到对应 section（取代旧的 ?section= URL 参数）。
+  // sectionRequest 带 nonce，相同 section 重复 open 也会触发 effect 重跑。
+  const drawerSectionReq = drawer.sectionRequest
+  useEffect(() => {
+    if (!drawerSectionReq) return
+    const section = drawerSectionReq.section
     const targetTab = SECTION_TO_TAB[section]
     if (targetTab) setTab(targetTab)
-    // tab 切换 → section 重新渲染，需要等 DOM 更新后再 scroll
     const t1 = setTimeout(() => {
       const el = document.getElementById(section)
       el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }, 50)
     return () => clearTimeout(t1)
-  }, [location.search])
-
-  const reloadCatalog = useCallback(async () => {
-    try {
-      const c = await api.getModelsCatalog()
-      setCatalog(c)
-      setCatalogError(null)
-    } catch (e) {
-      setCatalogError(String(e))
-    }
-  }, [])
-
-  useEffect(() => { void reloadCatalog() }, [reloadCatalog])
-
-  useEventStream((evt) => {
-    if (evt.type === 'model_download_changed') { void reloadCatalog() }
-  })
-
-  const startDownload = useCallback(async (model_id: string, variant?: string) => {
-    const key = variant ? `${model_id}:${variant}` : model_id
-    setDownloadBusy((s) => new Set(s).add(key))
-    try {
-      await api.startModelDownload({ model_id, variant })
-      toast(t('settings.downloadStarted', { name: key }), 'success')
-      await reloadCatalog()
-    } catch (e) {
-      toast(String(e), 'error')
-    } finally {
-      setDownloadBusy((s) => { const n = new Set(s); n.delete(key); return n })
-    }
-  }, [reloadCatalog, t, toast])
-
-  useEffect(() => {
-    api
-      .getSecrets()
-      .then((s) => {
-        setServer(s)
-        setDraft(s)
-      })
-      .catch((e) => setError(String(e)))
-  }, [])
-
-  const dirty = useMemo(
-    () => server !== null && JSON.stringify(server) !== JSON.stringify(draft),
-    [server, draft]
-  )
+  }, [drawerSectionReq])
 
   const update = <S extends Section, K extends keyof Secrets[S]>(
     section: S,
@@ -557,6 +545,18 @@ export default function SettingsPage() {
         title={t('settings.title')}
         tabs={tabNav}
         sticky
+        topRight={drawer.isOpen ? (
+          <button
+            onClick={() => void drawer.close()}
+            title={t('settings.drawerClose')}
+            aria-label={t('settings.drawerClose')}
+            className="w-7 h-7 grid place-items-center text-fg-tertiary bg-transparent border-none rounded-sm cursor-pointer hover:bg-overlay hover:text-fg-primary transition-colors"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M6 6l12 12M18 6l-12 12" />
+            </svg>
+          </button>
+        ) : undefined}
         actions={
           <button
             onClick={save}

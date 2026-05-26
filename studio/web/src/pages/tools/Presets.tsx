@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link } from 'react-router-dom'
 import {
   api,
   type ApiError,
@@ -13,6 +12,7 @@ import { useDialog } from '../../components/Dialog'
 import PathPicker from '../../components/PathPicker'
 import SchemaForm from '../../components/SchemaForm'
 import { useToast } from '../../components/Toast'
+import { useSettingsDrawer } from '../../lib/SettingsDrawer'
 import { useAdvancedMode } from '../../lib/useAdvancedMode'
 import {
   PRESET_NAME_RE,
@@ -64,6 +64,7 @@ export default function PresetsPage() {
   const { t } = useTranslation()
   const { toast } = useToast()
   const { confirm } = useDialog()
+  const settingsDrawer = useSettingsDrawer()
 
   // ── backend state ──
   const [schema, setSchema] = useState<SchemaResponse | null>(null)
@@ -231,18 +232,19 @@ export default function PresetsPage() {
       const node = (
         <>
           {t('train.globalAutoLockedPrefix')} ·{' '}
-          <Link
-            to="/tools/settings?section=models"
-            className="underline text-warn hover:opacity-80"
+          <button
+            type="button"
+            onClick={() => settingsDrawer.open({ section: 'models' })}
+            className="bg-transparent border-none p-0 underline text-warn hover:opacity-80 cursor-pointer"
           >
             {t('train.globalAutoLockedLink')}
-          </Link>
+          </button>
         </>
       )
       for (const f of MODEL_PATH_FIELDS) h[f] = node
     }
     return h
-  }, [t, autoSyncPaths, MODEL_PATH_FIELDS])
+  }, [t, autoSyncPaths, MODEL_PATH_FIELDS, settingsDrawer])
   const autoHints = useMemo(() => {
     const h: Record<string, string> = {}
     if (!autoSyncPaths) {

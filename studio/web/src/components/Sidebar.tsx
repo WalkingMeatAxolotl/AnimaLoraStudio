@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { api, PHASE_ORDER, PHASE_SKIPPABLE, type Version, type VersionPhase, type VersionStatus } from '../api/client'
+import { useSettingsDrawer } from '../lib/SettingsDrawer'
 import { getStoredTheme, toggleTheme, type Theme } from '../lib/theme'
 import { useToast } from './Toast'
 
@@ -89,6 +90,19 @@ function Logo({ collapsed }: { collapsed: boolean }) {
 }
 
 // ── nav item ───────────────────────────────────────────────────────────────
+function navItemClass(active: boolean, collapsed: boolean, prominent: boolean): string {
+  return [
+    'flex w-full items-center gap-2.5 rounded-md no-underline transition-colors relative bg-transparent border-none cursor-pointer',
+    prominent ? 'text-md' : 'text-sm',
+    collapsed
+      ? 'py-[9px] px-0 justify-center'
+      : prominent ? 'py-2.5 px-3 justify-start' : 'py-2 px-3 justify-start',
+    active
+      ? 'bg-surface text-fg-primary font-semibold shadow-sm'
+      : 'text-fg-secondary font-medium hover:bg-overlay',
+  ].join(' ')
+}
+
 function NavItem({ to, label, icon, active, collapsed, prominent = false }: {
   to: string; label: string; icon: React.ReactNode; active: boolean; collapsed: boolean
   /** 顶级 tab 用更大字号 + 更大 padding，跟项目下属 sub-nav 区分。 */
@@ -98,16 +112,7 @@ function NavItem({ to, label, icon, active, collapsed, prominent = false }: {
     <Link
       to={to}
       title={collapsed ? label : undefined}
-      className={[
-        'flex w-full items-center gap-2.5 rounded-md no-underline transition-colors relative',
-        prominent ? 'text-md' : 'text-sm',
-        collapsed
-          ? 'py-[9px] px-0 justify-center'
-          : prominent ? 'py-2.5 px-3 justify-start' : 'py-2 px-3 justify-start',
-        active
-          ? 'bg-surface text-fg-primary font-semibold shadow-sm'
-          : 'text-fg-secondary font-medium hover:bg-overlay',
-      ].join(' ')}
+      className={navItemClass(active, collapsed, prominent)}
     >
       {active && !collapsed && (
         <span className="absolute left-0 top-2 bottom-2 w-[3px] bg-accent rounded-[2px]" />
@@ -115,6 +120,27 @@ function NavItem({ to, label, icon, active, collapsed, prominent = false }: {
       {icon}
       {!collapsed && <span className="flex-1">{label}</span>}
     </Link>
+  )
+}
+
+/** NavItem 的 button 变体 —— 给设置抽屉用，不走路由。 */
+function NavButton({ onClick, label, icon, active, collapsed, prominent = false }: {
+  onClick: () => void; label: string; icon: React.ReactNode; active: boolean; collapsed: boolean
+  prominent?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={collapsed ? label : undefined}
+      className={navItemClass(active, collapsed, prominent) + ' text-left'}
+    >
+      {active && !collapsed && (
+        <span className="absolute left-0 top-2 bottom-2 w-[3px] bg-accent rounded-[2px]" />
+      )}
+      {icon}
+      {!collapsed && <span className="flex-1">{label}</span>}
+    </button>
   )
 }
 
@@ -438,6 +464,7 @@ export default function Sidebar() {
   const { t } = useTranslation()
   const location = useLocation()
   const ctx = useProjectCtx()
+  const settingsDrawer = useSettingsDrawer()
 
   const pid = location.pathname.match(/^\/projects\/([^/]+)/)?.[1] ?? null
   const urlVid = location.pathname.match(/\/v\/([^/]+)/)?.[1] ?? null
@@ -501,7 +528,13 @@ export default function Sidebar() {
       <div className={`border-t border-subtle flex flex-col gap-0.5 shrink-0 ${collapsed ? 'px-1.5 py-2' : 'p-2.5'}`}>
         <NavItem to="/tools/presets" label={t('nav.presets')} icon={I.preset} active={isMain('/tools/presets')} collapsed={collapsed} />
         <NavItem to="/tools/monitor" label={t('nav.monitor')} icon={I.monitor} active={isMain('/tools/monitor')} collapsed={collapsed} />
-        <NavItem to="/tools/settings" label={t('nav.settings')} icon={I.cog} active={isMain('/tools/settings')} collapsed={collapsed} />
+        <NavButton
+          onClick={() => settingsDrawer.isOpen ? void settingsDrawer.close() : settingsDrawer.open()}
+          label={t('nav.settings')}
+          icon={I.cog}
+          active={false}
+          collapsed={collapsed}
+        />
         <ThemeToggle collapsed={collapsed} />
         <button
           onClick={toggle}

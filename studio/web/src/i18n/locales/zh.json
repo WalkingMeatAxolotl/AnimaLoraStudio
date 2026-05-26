@@ -654,6 +654,12 @@
     "sourceLink": "项目 #{{projectId}} / v#{{versionId}}"
   },
   "settings": {
+    "drawerTitle": "设置",
+    "drawerClose": "关闭设置",
+    "drawerLoading": "加载中…",
+    "closeDirtyTitle": "未保存的改动",
+    "closeDirtyConfirm": "关闭抽屉会丢弃未保存的改动，确认关闭？",
+    "closeDirtyOk": "丢弃并关闭",
     "tabDataset": "数据集",
     "tabPreprocess": "预处理",
     "tabTagging": "打标",

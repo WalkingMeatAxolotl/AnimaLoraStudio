@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link, useNavigate, useOutletContext } from 'react-router-dom'
+import { useNavigate, useOutletContext } from 'react-router-dom'
 import {
   api,
   type ConfigData,
@@ -16,6 +16,7 @@ import { useDialog } from '../../../components/Dialog'
 import SchemaForm from '../../../components/SchemaForm'
 import StepShell from '../../../components/StepShell'
 import { useToast } from '../../../components/Toast'
+import { useSettingsDrawer } from '../../../lib/SettingsDrawer'
 import { useAdvancedMode } from '../../../lib/useAdvancedMode'
 import {
   PRESET_NAME_RE,
@@ -44,6 +45,7 @@ export default function TrainPage() {
   const { toast } = useToast()
   const { confirm, prompt } = useDialog()
   const navigate = useNavigate()
+  const settingsDrawer = useSettingsDrawer()
 
   const [schema, setSchema] = useState<SchemaResponse | null>(null)
   const [presets, setPresets] = useState<PresetSummary[]>([])
@@ -131,18 +133,19 @@ export default function TrainPage() {
       const node = (
         <>
           {t('train.globalAutoLockedPrefix')} ·{' '}
-          <Link
-            to="/tools/settings?section=models"
-            className="underline text-warn hover:opacity-80"
+          <button
+            type="button"
+            onClick={() => settingsDrawer.open({ section: 'models' })}
+            className="bg-transparent border-none p-0 underline text-warn hover:opacity-80 cursor-pointer"
           >
             {t('train.globalAutoLockedLink')}
-          </Link>
+          </button>
         </>
       )
       for (const f of GLOBAL_MODEL_FIELDS) h[f] = node
     }
     return h
-  }, [t, autoSyncPaths])
+  }, [t, autoSyncPaths, settingsDrawer])
   // 项目特定字段（data_dir / reg_data_dir / output_dir 等）：值由项目预填，但
   // 不锁定，挂「自动 · 项目设置」徽章让用户知道这是预填的，不是预设里来的。
   // toggle OFF 时全局模型字段也挂 hint「默认来自 Settings · 可改」。
