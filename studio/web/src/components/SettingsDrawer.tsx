@@ -19,9 +19,9 @@ const SettingsPageLazy = lazy(() => import('../pages/tools/Settings'))
 // 响应式宽度：
 //   < 1600 viewport（笔记本 / 小桌面）：80vw —— 1280屏≈1024，1440屏≈1152，1600屏≈1280
 //   1600–2559（含 1k FHD）：1280px 上限，避免大屏吞太多
-//   ≥ 2560（2k QHD 及以上）：1440px
+//   ≥ 2560（2k QHD 及以上）：1960px —— 大屏给到接近 80% 可视宽
 // 用 Tailwind arbitrary breakpoint 表达。
-const DRAWER_WIDTH_CLASS = 'w-[min(1280px,80vw)] min-[2560px]:w-[1440px]'
+const DRAWER_WIDTH_CLASS = 'w-[min(1280px,80vw)] min-[2560px]:w-[1960px]'
 const ANIM_MS = 220
 
 export default function SettingsDrawer() {
