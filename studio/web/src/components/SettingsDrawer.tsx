@@ -16,7 +16,12 @@ import { useSettingsDrawer } from '../lib/SettingsDrawer'
 
 const SettingsPageLazy = lazy(() => import('../pages/tools/Settings'))
 
-const DRAWER_WIDTH = 'min(960px, 75vw)'
+// 响应式宽度：
+//   < 1600 viewport（笔记本 / 小桌面）：80vw —— 1280屏≈1024，1440屏≈1152，1600屏≈1280
+//   1600–2559（含 1k FHD）：1280px 上限，避免大屏吞太多
+//   ≥ 2560（2k QHD 及以上）：1440px
+// 用 Tailwind arbitrary breakpoint 表达。
+const DRAWER_WIDTH_CLASS = 'w-[min(1280px,80vw)] min-[2560px]:w-[1440px]'
 const ANIM_MS = 220
 
 export default function SettingsDrawer() {
@@ -53,10 +58,10 @@ export default function SettingsDrawer() {
       <aside
         role="dialog"
         aria-modal="true"
-        className={`absolute top-0 right-0 bottom-0 flex flex-col bg-canvas border-l border-subtle shadow-2xl transition-transform ease-out ${
+        className={`absolute top-0 right-0 bottom-0 flex flex-col bg-canvas border-l border-subtle shadow-2xl transition-transform ease-out ${DRAWER_WIDTH_CLASS} ${
           isOpen ? 'translate-x-0' : 'translate-x-full'
         }`}
-        style={{ width: DRAWER_WIDTH, transitionDuration: `${ANIM_MS}ms` }}
+        style={{ transitionDuration: `${ANIM_MS}ms` }}
       >
         {contentReady && isOpen ? (
           <Suspense fallback={<DrawerSkeleton />}>
