@@ -873,7 +873,7 @@ function OutputsDownloadDialog({
  *  按钮 "套用此配置" → confirm → PUT version config → navigate train phase 页。
  *  user 在 train 页可编辑后点 "开始训练" → 创建新 task（同 version 多 task）。
  */
-function SnapshotConfigTab({ task }: { task: Task | null }) {
+export function SnapshotConfigTab({ task }: { task: Task | null }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const { toast } = useToast()
@@ -883,16 +883,22 @@ function SnapshotConfigTab({ task }: { task: Task | null }) {
   const [applying, setApplying] = useState(false)
   const [confirmApply, setConfirmApply] = useState(false)
 
+  // 父组件每 2s 浅 clone task 让 elapsed time 走表（QueueDetailPage:133），
+  // 用 [task] 作 deps 会让 snapshot config 也跟着 2s 重拉，浏览器闪烁卡顿。
+  // snapshot 是 task 启动时冻结的不可变数据 —— 只在 id 变 / pending→running
+  // 时拉一次即可（started_at null→number 那一刻 snapshot 才落盘）。
+  const taskId = task?.id ?? null
+  const startedAt = task?.started_at ?? null
   useEffect(() => {
-    if (!task) { setLoading(false); return }
+    if (taskId == null) { setLoading(false); return }
     let cancelled = false
     setLoading(true)
-    void api.getTaskSnapshotConfig(task.id)
+    void api.getTaskSnapshotConfig(taskId)
       .then((r) => { if (!cancelled) { setData(r); setError(null) } })
       .catch((e) => { if (!cancelled) setError(String(e)) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [task])
+  }, [taskId, startedAt])
 
   const apply = async () => {
     if (!task || !data) return
