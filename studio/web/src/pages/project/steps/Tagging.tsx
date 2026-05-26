@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link, useOutletContext } from 'react-router-dom'
+import { useOutletContext } from 'react-router-dom'
 import {
   api,
   type Job,
@@ -18,6 +18,7 @@ import LLMMessagesEditor from '../../../components/LLMMessagesEditor'
 import JobProgress from '../../../components/JobProgress'
 import StepShell from '../../../components/StepShell'
 import { useToast } from '../../../components/Toast'
+import { useSettingsDrawer } from '../../../lib/SettingsDrawer'
 import { useEventStream } from '../../../lib/useEventStream'
 
 interface Ctx {
@@ -118,6 +119,7 @@ export default function TaggingPage() {
   const { t } = useTranslation()
   const { project, activeVersion, reload } = useOutletContext<Ctx>()
   const { toast } = useToast()
+  const settingsDrawer = useSettingsDrawer()
 
   const [tagger, setTagger] = useState<TaggerName>('wd14')
   const [taggerStatus, setTaggerStatus] = useState<TaggerStatus | null>(null)
@@ -336,9 +338,14 @@ export default function TaggingPage() {
                 : t('tag.statusChecking')}
             </span>
             {taggerStatus && !taggerStatus.ok && taggerStatus.msg.includes('需下载模型') && (
-              <Link to="/tools/settings" className="text-xs text-accent underline" title={t('tag.goDownload')}>
+              <button
+                type="button"
+                onClick={() => settingsDrawer.open({ section: tagger === 'cltagger' ? 'cltagger' : 'wd14' })}
+                className="text-xs text-accent underline bg-transparent border-none p-0 cursor-pointer"
+                title={t('tag.goDownload')}
+              >
                 {t('tag.goDownload')}
-              </Link>
+              </button>
             )}
 
             <span className="text-dim">|</span>
@@ -450,6 +457,7 @@ function Wd14Panel({
   disabled: boolean
 }) {
   const { t } = useTranslation()
+  const settingsDrawer = useSettingsDrawer()
   if (!form || !defaults) {
     return (
       <section className="rounded-md border border-subtle bg-surface px-3 py-2 text-xs text-fg-tertiary shrink-0">
@@ -474,9 +482,14 @@ function Wd14Panel({
         <span className="caption">{t('tag.wd14Params')}</span>
         <span className="text-xs text-fg-tertiary">
           {t('tag.prefilledFrom')}{' '}
-          <Link to="/tools/settings" className="text-accent" title={t('tag.globalSettings')}>
+          <button
+            type="button"
+            onClick={() => settingsDrawer.open({ section: 'wd14' })}
+            className="bg-transparent border-none p-0 text-accent cursor-pointer"
+            title={t('tag.globalSettings')}
+          >
             {t('tag.globalSettings')}
-          </Link>
+          </button>
           {' · '}{t('tag.effectiveThisRun')}
         </span>
         <span className="flex-1" />
@@ -542,6 +555,7 @@ function CLTaggerPanel({
   disabled: boolean
 }) {
   const { t } = useTranslation()
+  const settingsDrawer = useSettingsDrawer()
   if (!form || !defaults) {
     return (
       <section className="rounded-md border border-subtle bg-surface px-3 py-2 text-xs text-fg-tertiary shrink-0">
@@ -570,9 +584,14 @@ function CLTaggerPanel({
         <span className="caption">{t('tag.cltaggerParams')}</span>
         <span className="text-xs text-fg-tertiary">
           {t('tag.prefilledFrom')}{' '}
-          <Link to="/tools/settings" className="text-accent" title={t('tag.globalSettings')}>
+          <button
+            type="button"
+            onClick={() => settingsDrawer.open({ section: 'cltagger' })}
+            className="bg-transparent border-none p-0 text-accent cursor-pointer"
+            title={t('tag.globalSettings')}
+          >
             {t('tag.globalSettings')}
-          </Link>
+          </button>
           {' · '}{t('tag.effectiveThisRun')}
         </span>
         <span className="flex-1" />
@@ -860,6 +879,7 @@ function LabeledModelSelect({ label, value, options, disabled, onChange, modifie
   onChange: (v: string) => void; modified?: boolean
 }) {
   const { t } = useTranslation()
+  const settingsDrawer = useSettingsDrawer()
   const opts = options.includes(value) ? options : [value, ...options]
   return (
     <label className="grid grid-cols-[140px_1fr] items-center gap-2">
@@ -873,9 +893,14 @@ function LabeledModelSelect({ label, value, options, disabled, onChange, modifie
         >
           {opts.map((m) => <option key={m} value={m}>{m}</option>)}
         </select>
-        <Link to="/tools/settings" className="text-xs text-fg-tertiary shrink-0" title={t('tag.globalSettings')}>
+        <button
+          type="button"
+          onClick={() => settingsDrawer.open()}
+          className="text-xs text-fg-tertiary shrink-0 bg-transparent border-none p-0 cursor-pointer"
+          title={t('tag.globalSettings')}
+        >
           +
-        </Link>
+        </button>
       </div>
     </label>
   )

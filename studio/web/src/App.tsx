@@ -1,14 +1,17 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   createBrowserRouter,
   Navigate,
   Outlet,
   RouterProvider,
+  useLocation,
+  useNavigate,
 } from 'react-router-dom'
 import SettingsDrawer from './components/SettingsDrawer'
 import Sidebar from './components/Sidebar'
 import Topbar from './components/Topbar'
 import { ProjectContext, ProjectSetterContext, type ProjectCtxValue } from './context/ProjectContext'
+import { useSettingsDrawer } from './lib/SettingsDrawer'
 import ProjectsPage from './pages/Projects'
 import QueuePage from './pages/Queue'
 import QueueDetailPage from './pages/QueueDetail'
@@ -24,7 +27,26 @@ import TrainPage from './pages/project/steps/Train'
 import GeneratePage from './pages/tools/Generate'
 import MonitorPage from './pages/tools/Monitor'
 import PresetsPage from './pages/tools/Presets'
-import SettingsPage from './pages/tools/Settings'
+
+/**
+ * 老路径 `/tools/settings?section=…` 的兼容跳转：跳首页同时把抽屉打开（保留
+ * section 参数）。Settings 不再有自己的 URL；旧书签 / Topbar 通知按钮链接进
+ * 来时不会 404，但落地是抽屉而非整页。
+ */
+function SettingsRedirect() {
+  const drawer = useSettingsDrawer()
+  const navigate = useNavigate()
+  const location = useLocation()
+  useEffect(() => {
+    const section = new URLSearchParams(location.search).get('section')
+    drawer.open(section ? { section } : undefined)
+    navigate('/', { replace: true })
+    // 只在 mount 时执行一次；deps 留空是有意的 —— 后续 location.search 变化是
+    // navigate('/') 自己引起的，不要重复触发 open。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  return null
+}
 
 /**
  * 老路径 `/queue/:id/log` 和 `/queue/:id/monitor` 的兼容跳转：保留 URL 不删，
@@ -93,7 +115,7 @@ const router = createBrowserRouter(
         },
         { path: '/tools/presets', element: <PresetsPage /> },
         { path: '/tools/monitor', element: <MonitorPage /> },
-        { path: '/tools/settings', element: <SettingsPage /> },
+        { path: '/tools/settings', element: <SettingsRedirect /> },
         { path: '/tools/generate', element: <GeneratePage /> },
         { path: '/configs', element: <Navigate to="/tools/presets" replace /> },
         { path: '/monitor', element: <Navigate to="/tools/monitor" replace /> },

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import type { TFunction } from 'i18next'
 import { Trans, useTranslation } from 'react-i18next'
-import { useLocation } from 'react-router-dom'
 import {
   api,
   DEFAULT_WD14_MODELS,
@@ -66,6 +65,8 @@ type Tab = 'dataset' | 'tagging' | 'preprocess' | 'training' | 'monitor' | 'test
 const SECTION_TO_TAB: Record<string, Tab> = {
   'models': 'training',
   'download-source': 'training',
+  'version': 'system',
+  'service': 'system',
 }
 
 const TAB_LIST: { id: Tab; labelKey: string }[] = [
@@ -309,24 +310,6 @@ export default function SettingsPage() {
       /* ignore localStorage errors */
     }
   }
-
-  // 外部页面通过 `/tools/settings?section=models` 跳进来时，先切到对应 tab，
-  // 等 section 渲染完再 scrollIntoView。不写 localStorage，避免覆盖用户平常
-  // 偏好的 tab。
-  const location = useLocation()
-  useEffect(() => {
-    const params = new URLSearchParams(location.search)
-    const section = params.get('section')
-    if (!section) return
-    const targetTab = SECTION_TO_TAB[section]
-    if (targetTab) setTab(targetTab)
-    // tab 切换 → section 重新渲染，需要等 DOM 更新后再 scroll
-    const t1 = setTimeout(() => {
-      const el = document.getElementById(section)
-      el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }, 50)
-    return () => clearTimeout(t1)
-  }, [location.search])
 
   const dirty = useMemo(
     () => server !== null && JSON.stringify(server) !== JSON.stringify(draft),

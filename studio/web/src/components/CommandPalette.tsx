@@ -3,13 +3,17 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { api, type CaptionEntry, type PresetSummary, type ProjectSummary } from '../api/client'
 import { useProjectCtx } from '../context/ProjectContext'
+import { useSettingsDrawer } from '../lib/SettingsDrawer'
 
 interface Item {
   id: string
   label: string
   sub?: string
   group: string
-  path: string
+  /** 路由跳转。跟 action 二选一。 */
+  path?: string
+  /** 自定义动作（如打开抽屉）。优先于 path。 */
+  action?: () => void
 }
 
 const SEARCH_ICON = (
@@ -42,6 +46,7 @@ export default function CommandPalette({ open, onClose, anchorEl }: Props) {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const ctx = useProjectCtx()
+  const settingsDrawer = useSettingsDrawer()
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const [query, setQuery] = useState('')
@@ -139,7 +144,7 @@ export default function CommandPalette({ open, onClose, anchorEl }: Props) {
     items.push({ id: 'queue',    label: t('nav.queue'),               sub: t('commandPalette.queueSub'),    group: t('commandPalette.pages'), path: '/queue' })
     items.push({ id: 'presets',  label: t('nav.presets'),             sub: t('commandPalette.presetsSub'), group: t('commandPalette.pages'), path: '/tools/presets' })
     items.push({ id: 'monitor',  label: t('nav.monitor'),             sub: t('commandPalette.monitorSub'), group: t('commandPalette.pages'), path: '/tools/monitor' })
-    items.push({ id: 'settings', label: t('nav.settings'),            sub: t('commandPalette.settingsSub'), group: t('commandPalette.pages'), path: '/tools/settings' })
+    items.push({ id: 'settings', label: t('nav.settings'),            sub: t('commandPalette.settingsSub'), group: t('commandPalette.pages'), action: () => settingsDrawer.open() })
 
     for (const p of presets) {
       items.push({
@@ -178,7 +183,7 @@ export default function CommandPalette({ open, onClose, anchorEl }: Props) {
     }
 
     return items
-  }, [projects, presets, ctx, t])
+  }, [projects, presets, ctx, t, settingsDrawer])
 
   const filteredNav = useMemo(() => {
     if (!query.trim()) return allItems
@@ -236,7 +241,11 @@ export default function CommandPalette({ open, onClose, anchorEl }: Props) {
   }, [grouped])
 
   const select = useCallback(
-    (item: Item) => { navigate(item.path); onClose() },
+    (item: Item) => {
+      if (item.action) item.action()
+      else if (item.path) navigate(item.path)
+      onClose()
+    },
     [navigate, onClose],
   )
 
