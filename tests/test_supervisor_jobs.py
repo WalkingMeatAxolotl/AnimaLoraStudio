@@ -273,6 +273,61 @@ def test_cancel_pending_job(isolated) -> None:
     assert got["status"] == "canceled"
 
 
+def test_cancel_running_job_uses_job_cancel_signal(
+    isolated, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Running project jobs should get the cooperative job-cancel signal path."""
+    p = _setup_project(isolated)
+    events: list[dict] = []
+    sent: list[int] = []
+
+    cmd = [sys.executable, "-c", "import time; time.sleep(30)"]
+    sup = Supervisor(
+        on_event=events.append,
+        job_cmd_builder=lambda _j: cmd,
+        db_path=isolated["db"],
+        logs_dir=isolated["logs"],
+        poll_interval=0.05,
+        terminate_grace=0.2,
+    )
+
+    def fake_job_cancel(proc) -> None:  # noqa: ANN001
+        sent.append(proc.pid)
+        proc.terminate()
+
+    def fail_task_cancel(_proc) -> None:  # noqa: ANN001
+        raise AssertionError("job cancel must not use task hard-cancel path")
+
+    monkeypatch.setattr(Supervisor, "_send_job_cancel_signal", staticmethod(fake_job_cancel))
+    monkeypatch.setattr(Supervisor, "_send_task_cancel_signal", staticmethod(fail_task_cancel))
+
+    with db.connection_for(isolated["db"]) as conn:
+        job = project_jobs.create_job(
+            conn, project_id=p["id"], kind="download", params={}
+        )
+
+    sup.start()
+    try:
+        assert _wait_until(lambda: sup.current_job_id == job["id"], timeout=5.0)
+        assert sup.cancel_job(job["id"]) is True
+        assert sent, "job cancel signal was not sent"
+        assert _wait_until(
+            lambda: any(
+                e.get("type") == "job_state_changed"
+                and e.get("job_id") == job["id"]
+                and e.get("status") == "canceled"
+                for e in events
+            ),
+            timeout=5.0,
+        )
+    finally:
+        sup.stop(timeout=5.0)
+
+    with db.connection_for(isolated["db"]) as conn:
+        got = project_jobs.get_job(conn, job["id"])
+    assert got["status"] == "canceled"
+
+
 def test_worker_event_marker_lines_publish_typed_events(isolated) -> None:
     """Worker 写 `__EVENT__:type:json` → supervisor 解析后 publish typed SSE 事件，
     并且不让标记行进入 job_log。给前端"无轮询的实时进度"用。"""

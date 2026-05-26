@@ -1278,7 +1278,10 @@ class Supervisor:
             return
         slot.cancel_pending = True
         proc = slot.proc
-        self._send_terminate_signal(proc)
+        if slot.kind == "job":
+            self._send_job_cancel_signal(proc)
+        else:
+            self._send_task_cancel_signal(proc)
         try:
             proc.wait(timeout=self._grace)
         except subprocess.TimeoutExpired:
@@ -1303,7 +1306,10 @@ class Supervisor:
             return
         slot.cancel_pending = True
         proc = slot.proc
-        self._send_terminate_signal(proc)
+        if slot.kind == "job":
+            self._send_job_cancel_signal(proc)
+        else:
+            self._send_task_cancel_signal(proc)
 
         grace = self._grace
 
@@ -1329,7 +1335,12 @@ class Supervisor:
 
     @staticmethod
     def _send_terminate_signal(proc: subprocess.Popen) -> None:
-        """Cancel 软终止信号。
+        """兼容旧调用点；task cancel 仍走硬取消语义。"""
+        Supervisor._send_task_cancel_signal(proc)
+
+    @staticmethod
+    def _send_task_cancel_signal(proc: subprocess.Popen) -> None:
+        """训练 task 的 cancel 信号。
 
         ADR 0006 PR-2：Windows 不再发 CTRL_BREAK_EVENT — 跟 pause 信号撞
         （pause 占用 CTRL_BREAK_EVENT），cancel 的语义本来就是硬中断，
@@ -1345,6 +1356,21 @@ class Supervisor:
                 proc.terminate()
         except Exception:
             logger.exception("send terminate signal failed")
+
+    @staticmethod
+    def _send_job_cancel_signal(proc: subprocess.Popen) -> None:
+        """project job 的 cancel 信号。
+
+        download / preprocess workers 会把 Windows CTRL_BREAK_EVENT 映射成
+        cancel_event，先自行收尾；grace 期后仍未退出才由 caller 强杀进程树。
+        """
+        try:
+            if os.name == "nt":
+                proc.send_signal(signal.CTRL_BREAK_EVENT)  # type: ignore[attr-defined]
+            else:
+                proc.terminate()
+        except Exception:
+            logger.exception("send job cancel signal failed")
 
     @staticmethod
     def _send_pause_signal(proc: subprocess.Popen) -> None:
