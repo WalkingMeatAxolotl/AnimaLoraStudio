@@ -5,6 +5,7 @@ import {
   Outlet,
   RouterProvider,
 } from 'react-router-dom'
+import SettingsDrawer from './components/SettingsDrawer'
 import Sidebar from './components/Sidebar'
 import Topbar from './components/Topbar'
 import { ProjectContext, ProjectSetterContext, type ProjectCtxValue } from './context/ProjectContext'
@@ -38,7 +39,10 @@ function QueueDetailRedirect({ tab }: { tab: 'log' | 'monitor' }) {
   )
 }
 
-/** Sidebar + Topbar 外壳；所有路由 element 渲染进 <Outlet />。 */
+/** Sidebar + Topbar 外壳；所有路由 element 渲染进 <Outlet />。
+ *  SettingsDrawer 也挂在这层 —— 它是个 fixed 定位的全局抽屉，永远在 RouterProvider 内
+ *  这样可以共用 react-router context（虽然抽屉本身不依赖路由，但内部的 SettingsPage 用到
+ *  useLocation 等 hook，需要 router 上下文）。 */
 function RootLayout() {
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
@@ -49,6 +53,7 @@ function RootLayout() {
           <Outlet />
         </main>
       </div>
+      <SettingsDrawer />
     </div>
   )
 }

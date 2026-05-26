@@ -6,6 +6,7 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { FirstRunLangModal } from './components/FirstRunLangModal'
 import { ToastProvider } from './components/Toast'
 import { SettingsDataProvider } from './lib/SettingsData'
+import { SettingsDrawerProvider } from './lib/SettingsDrawer'
 import { initTheme } from './lib/theme'
 import './i18n'
 import './index.css'
@@ -18,8 +19,10 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <ToastProvider>
         <DialogProvider>
           <SettingsDataProvider>
-            <FirstRunLangModal />
-            <App />
+            <SettingsDrawerProvider>
+              <FirstRunLangModal />
+              <App />
+            </SettingsDrawerProvider>
           </SettingsDataProvider>
         </DialogProvider>
       </ToastProvider>

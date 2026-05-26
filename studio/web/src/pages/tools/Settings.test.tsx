@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { DialogProvider } from '../../components/Dialog'
 import { ToastProvider } from '../../components/Toast'
 import { SettingsDataProvider } from '../../lib/SettingsData'
+import { SettingsDrawerProvider } from '../../lib/SettingsDrawer'
 import SettingsPage from './Settings'
 
 const initialServerState = {
@@ -234,7 +235,9 @@ function renderPage() {
       <ToastProvider>
         <DialogProvider>
           <SettingsDataProvider>
-            <SettingsPage />
+            <SettingsDrawerProvider>
+              <SettingsPage />
+            </SettingsDrawerProvider>
           </SettingsDataProvider>
         </DialogProvider>
       </ToastProvider>

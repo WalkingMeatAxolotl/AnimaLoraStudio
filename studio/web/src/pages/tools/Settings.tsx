@@ -32,6 +32,7 @@ import LLMTaggerWorkspace from '../../components/LLMTaggerWorkspace'
 import PageHeader from '../../components/PageHeader'
 import { useToast } from '../../components/Toast'
 import { useSettingsData } from '../../lib/SettingsData'
+import { useSettingsDrawer } from '../../lib/SettingsDrawer'
 import {
   formatMasterStateText,
   formatDevStateText,
@@ -284,6 +285,7 @@ export default function SettingsPage() {
   const [llmTestBusy, setLlmTestBusy] = useState(false)
   const { toast } = useToast()
   const { prompt } = useDialog()
+  const drawer = useSettingsDrawer()
   // 右侧 section index 用：sticky nav 的 IntersectionObserver root + 滚动平移容器
   const scrollContainerRef = useRef<HTMLDivElement>(null)
 
@@ -330,6 +332,30 @@ export default function SettingsPage() {
     () => server !== null && JSON.stringify(server) !== JSON.stringify(draft),
     [server, draft]
   )
+
+  // 抽屉关闭前用这个 ref 询问"是否 dirty"；ref 每次 render 刷新，
+  // 注册的函数只挂载一次，避免 effect churn。
+  const dirtyRef = useRef(false)
+  dirtyRef.current = dirty
+  useEffect(() => {
+    drawer.registerDirtyGuard(() => dirtyRef.current)
+    return () => drawer.registerDirtyGuard(null)
+  }, [drawer])
+
+  // 抽屉以 open({ section }) 打开时跳到对应 section（取代旧的 ?section= URL 参数）。
+  // sectionRequest 带 nonce，相同 section 重复 open 也会触发 effect 重跑。
+  const drawerSectionReq = drawer.sectionRequest
+  useEffect(() => {
+    if (!drawerSectionReq) return
+    const section = drawerSectionReq.section
+    const targetTab = SECTION_TO_TAB[section]
+    if (targetTab) setTab(targetTab)
+    const t1 = setTimeout(() => {
+      const el = document.getElementById(section)
+      el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 50)
+    return () => clearTimeout(t1)
+  }, [drawerSectionReq])
 
   const update = <S extends Section, K extends keyof Secrets[S]>(
     section: S,
@@ -536,6 +562,18 @@ export default function SettingsPage() {
         title={t('settings.title')}
         tabs={tabNav}
         sticky
+        topRight={drawer.isOpen ? (
+          <button
+            onClick={() => void drawer.close()}
+            title={t('settings.drawerClose')}
+            aria-label={t('settings.drawerClose')}
+            className="w-7 h-7 grid place-items-center text-fg-tertiary bg-transparent border-none rounded-sm cursor-pointer hover:bg-overlay hover:text-fg-primary transition-colors"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M6 6l12 12M18 6l-12 12" />
+            </svg>
+          </button>
+        ) : undefined}
         actions={
           <button
             onClick={save}
