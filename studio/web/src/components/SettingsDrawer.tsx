@@ -37,12 +37,14 @@ export default function SettingsDrawer() {
   return (
     <div
       aria-hidden={!isOpen}
-      className={`fixed inset-0 z-30 flex ${isOpen ? '' : 'pointer-events-none'}`}
+      className={`fixed inset-0 z-30 ${isOpen ? '' : 'pointer-events-none'}`}
     >
-      {/* backdrop：透明 + 轻模糊；过渡覆盖 backdrop-filter 让模糊也是渐变的 */}
+      {/* backdrop：absolute 铺满 viewport，让 panel slide-in 中途不会从右边露出底页。
+       *  之前用 flex + flex-1 时 backdrop 只占 panel 左边那条，panel 滑动期间右侧
+       *  panel 槽位无人覆盖 → 看见底层页面 / 出现黑白闪屏。 */}
       <div
         onClick={() => void close()}
-        className={`flex-1 transition-[background-color,backdrop-filter,-webkit-backdrop-filter] ease-out ${
+        className={`absolute inset-0 transition-[background-color,backdrop-filter,-webkit-backdrop-filter] ease-out ${
           isOpen ? 'bg-black/25 backdrop-blur-sm' : 'bg-black/0 backdrop-blur-0'
         }`}
         style={{ transitionDuration: `${ANIM_MS}ms` }}
@@ -51,7 +53,7 @@ export default function SettingsDrawer() {
       <aside
         role="dialog"
         aria-modal="true"
-        className={`relative flex flex-col h-full bg-canvas border-l border-subtle shadow-2xl transition-transform ease-out ${
+        className={`absolute top-0 right-0 bottom-0 flex flex-col bg-canvas border-l border-subtle shadow-2xl transition-transform ease-out ${
           isOpen ? 'translate-x-0' : 'translate-x-full'
         }`}
         style={{ width: DRAWER_WIDTH, transitionDuration: `${ANIM_MS}ms` }}
