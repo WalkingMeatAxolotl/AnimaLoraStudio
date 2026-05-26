@@ -31,7 +31,7 @@ import { InfoButton } from '../../components/InfoButton'
 import LLMTaggerWorkspace from '../../components/LLMTaggerWorkspace'
 import PageHeader from '../../components/PageHeader'
 import { useToast } from '../../components/Toast'
-import { useEventStream } from '../../lib/useEventStream'
+import { useSettingsData } from '../../lib/SettingsData'
 import {
   formatMasterStateText,
   formatDevStateText,
@@ -263,22 +263,41 @@ function translatedCatalogText(keys: Record<string, string>, id: string, fallbac
 
 export default function SettingsPage() {
   const { t } = useTranslation()
-  const [server, setServer] = useState<Secrets | null>(null)
+  // 共享数据层（SettingsDataProvider）：secrets / catalog / SSE / downloadBusy 都在根级常驻，
+  // 本组件 mount/unmount（抽屉开关）不再触发重拉。`server` 别名保留是为了让下方
+  // 大段表单代码改动最小。
+  const {
+    secrets: server,
+    secretsError,
+    setSecrets: setServer,
+    catalog,
+    catalogError,
+    reloadCatalog,
+    downloadBusy,
+    startDownload,
+  } = useSettingsData()
   const [draft, setDraft] = useState<Secrets>(EMPTY)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [tab, setTab] = useState<Tab>(getStoredTab)
-  // Models catalog hoisted here so 打标 tab 的 WD14/CLTagger 卡片和 训练 tab
-  // 的 ModelsSection 共用一份数据 + 一个 SSE 订阅。
-  const [catalog, setCatalog] = useState<ModelsCatalog | null>(null)
-  const [catalogError, setCatalogError] = useState<string | null>(null)
-  const [downloadBusy, setDownloadBusy] = useState<Set<string>>(new Set())
   const [llmModelsBusy, setLlmModelsBusy] = useState(false)
   const [llmTestBusy, setLlmTestBusy] = useState(false)
   const { toast } = useToast()
   const { prompt } = useDialog()
   // 右侧 section index 用：sticky nav 的 IntersectionObserver root + 滚动平移容器
   const scrollContainerRef = useRef<HTMLDivElement>(null)
+
+  // 第一次拿到 secrets 时把 draft 同步过来；之后 server 变化（save 后）不再
+  // 覆盖 draft，避免抹掉用户的未保存编辑（save 里会自己 setDraft(next)）。
+  const draftInitRef = useRef(false)
+  useEffect(() => {
+    if (server && !draftInitRef.current) {
+      setDraft(server)
+      draftInitRef.current = true
+    }
+  }, [server])
+  // 数据层 fetch secrets 失败时把错误透出到本组件 error 状态，复用底部错误条。
+  useEffect(() => { if (secretsError) setError(secretsError) }, [secretsError])
 
   const switchTab = (next: Tab) => {
     setTab(next)
@@ -306,46 +325,6 @@ export default function SettingsPage() {
     }, 50)
     return () => clearTimeout(t1)
   }, [location.search])
-
-  const reloadCatalog = useCallback(async () => {
-    try {
-      const c = await api.getModelsCatalog()
-      setCatalog(c)
-      setCatalogError(null)
-    } catch (e) {
-      setCatalogError(String(e))
-    }
-  }, [])
-
-  useEffect(() => { void reloadCatalog() }, [reloadCatalog])
-
-  useEventStream((evt) => {
-    if (evt.type === 'model_download_changed') { void reloadCatalog() }
-  })
-
-  const startDownload = useCallback(async (model_id: string, variant?: string) => {
-    const key = variant ? `${model_id}:${variant}` : model_id
-    setDownloadBusy((s) => new Set(s).add(key))
-    try {
-      await api.startModelDownload({ model_id, variant })
-      toast(t('settings.downloadStarted', { name: key }), 'success')
-      await reloadCatalog()
-    } catch (e) {
-      toast(String(e), 'error')
-    } finally {
-      setDownloadBusy((s) => { const n = new Set(s); n.delete(key); return n })
-    }
-  }, [reloadCatalog, t, toast])
-
-  useEffect(() => {
-    api
-      .getSecrets()
-      .then((s) => {
-        setServer(s)
-        setDraft(s)
-      })
-      .catch((e) => setError(String(e)))
-  }, [])
 
   const dirty = useMemo(
     () => server !== null && JSON.stringify(server) !== JSON.stringify(draft),

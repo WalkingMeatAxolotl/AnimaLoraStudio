@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import { DialogProvider } from '../../components/Dialog'
 import { ToastProvider } from '../../components/Toast'
+import { SettingsDataProvider } from '../../lib/SettingsData'
 import SettingsPage from './Settings'
 
 const initialServerState = {
@@ -232,7 +233,9 @@ function renderPage() {
     <MemoryRouter>
       <ToastProvider>
         <DialogProvider>
-          <SettingsPage />
+          <SettingsDataProvider>
+            <SettingsPage />
+          </SettingsDataProvider>
         </DialogProvider>
       </ToastProvider>
     </MemoryRouter>
