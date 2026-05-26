@@ -49,6 +49,20 @@ def test_cached_latent_invalidates_when_resolution_bucket_changes(tmp_path: Path
     assert cached._is_cache_valid(img_path, npz_path) is True
 
 
+def test_image_dataset_loads_caption_utils_when_prefer_json(tmp_path: Path) -> None:
+    """Regression: dataset.py 算 caption_utils.py 路径时少回溯一层 parent 会让
+    JSON caption 模式静默 fallback 到 TXT（utils/ 在仓库根，不在 runtime/utils/）。"""
+    pytest.importorskip("torch")
+    from runtime.training.dataset import ImageDataset
+
+    dataset = ImageDataset(tmp_path, prefer_json=True)
+    assert dataset.caption_utils is not None, (
+        "prefer_json=True 应启用 JSON caption 模式 — None 说明 caption_utils.py 路径解析失败"
+    )
+    for key in ("load_and_build", "load_json", "normalize", "build"):
+        assert key in dataset.caption_utils
+
+
 def test_parse_repeat_kohya_prefix() -> None:
     assert datasets.parse_repeat("5_concept") == (5, "concept")
     assert datasets.parse_repeat("12_a_long_name") == (12, "a_long_name")

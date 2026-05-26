@@ -105,8 +105,10 @@ class ImageDataset(Dataset):
                 import importlib.util
                 import sys
                 
-                # 直接加载 caption_utils.py
-                utils_path = Path(__file__).parent.parent / "utils" / "caption_utils.py"  # noqa: E501 — 等价原 runtime/utils/...，见 ADR 0003 PR-A
+                # 直接加载 caption_utils.py（ADR 0003 PR-A 后 utils/ 在仓库根，
+                # 不在 runtime/utils/；__file__ 是 runtime/training/dataset.py，
+                # 因此要回溯三层 parent 到仓库根。）
+                utils_path = Path(__file__).parent.parent.parent / "utils" / "caption_utils.py"
                 if utils_path.exists():
                     spec = importlib.util.spec_from_file_location("caption_utils", utils_path)
                     caption_module = importlib.util.module_from_spec(spec)
