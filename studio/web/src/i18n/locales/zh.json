@@ -1065,6 +1065,8 @@
     "swapSizeTitle": "交换宽高（横版 ↔ 竖版）",
     "cancelCurrentTitle": "取消当前任务",
     "sharedGpu": "与训练共享 GPU",
+    "blockedByActiveTask": "队列任务 #{{id}} 正在占用 GPU — 等它完成或取消后再生成（同时跑会撞 VRAM）",
+    "blockedByActiveTaskHint": "等队列 #{{id}} 完成",
     "results": "生成结果",
     "originalReleasedCoverOnly": "原图已释放，仅封面缩略可见",
     "originalReleasedThumbOnly": "原图已释放，仅缩略图可见",

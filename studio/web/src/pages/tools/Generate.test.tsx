@@ -24,6 +24,15 @@ beforeEach(() => {
         headers: new Headers({ 'content-type': 'application/json' }),
       } as Response)
     }
+    // listQueue('running') — 默认无运行中任务（个别 case 内通过 mockImplementationOnce 覆盖）
+    if (url.startsWith('/api/queue') && (init?.method ?? 'GET') === 'GET') {
+      return Promise.resolve({
+        ok: true, status: 200,
+        json: async () => ({ items: [] }),
+        text: async () => '{"items":[]}',
+        headers: new Headers({ 'content-type': 'application/json' }),
+      } as Response)
+    }
     // enqueueGenerate
     if (url.endsWith('/api/generate') && init?.method === 'POST') {
       lastEnqueueBody = JSON.parse(String(init.body))
@@ -130,6 +139,39 @@ describe('GeneratePage 端到端 smoke', () => {
     await user.click(screen.getByRole('button', { name: '单图' }))
 
     expect(promptArea).toHaveValue('my custom prompt')
+  })
+
+  it('训练 / reg-ai 等任务在跑时，禁用生成按钮 + 鼠标 hover tooltip 说明原因', async () => {
+    // listQueue('running') 默认返 [] —— 覆盖这次返回 1 个 running task。
+    // /api/queue 默认排除 generate task（client.ts:1918），所以这里返的就是
+    // train / reg-ai 等抢 GPU 的任务。
+    const previousImpl = fetchMock.getMockImplementation()
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url.startsWith('/api/queue') && (init?.method ?? 'GET') === 'GET') {
+        const running = {
+          id: 42, name: 'train', config_name: 'train', status: 'running',
+          priority: 0, created_at: 0, started_at: 0, finished_at: null,
+          pid: 1234, exit_code: null, output_dir: null, error_msg: null,
+        }
+        return Promise.resolve({
+          ok: true, status: 200,
+          json: async () => ({ items: [running] }),
+          text: async () => `{"items":[${JSON.stringify(running)}]}`,
+          headers: new Headers({ 'content-type': 'application/json' }),
+        } as Response)
+      }
+      return previousImpl ? previousImpl(url, init) : Promise.resolve({
+        ok: false, status: 404, json: async () => null, text: async () => '',
+        headers: new Headers(),
+      } as Response)
+    })
+
+    setup()
+
+    const btn = await screen.findByRole('button', { name: /开始生成/ })
+    await waitFor(() => expect(btn).toBeDisabled())
+    expect(btn).toHaveAttribute('title', expect.stringContaining('#42'))
+    expect(screen.getByText(/等队列 #42 完成/)).toBeInTheDocument()
   })
 
   it('刷新后恢复左侧生成参数，但不恢复当前生成结果', async () => {

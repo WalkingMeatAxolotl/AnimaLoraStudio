@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   api,
@@ -124,6 +124,10 @@ export default function GeneratePage() {
   })
   const [datasetPickerOpen, setDatasetPickerOpen] = useState(false)
   const [logOpen, setLogOpen] = useState(false)
+  // 训练 / reg-ai / 打标等 GPU 任务在跑时，禁用生成防 VRAM 竞争（driver 抢
+  // 3D / Copy engine 触发图像渲染卡顿，甚至训练进程 OOM）。listQueue 默认
+  // 不含 generate 任务自身，所以自己生成时不会自锁。
+  const [activeBlockingTask, setActiveBlockingTask] = useState<Task | null>(null)
   // commit 16：图片历史栏。点击历史项 → 主预览替换为该项封面
   const history = useGenerateHistory()
   const [historyOverride, setHistoryOverride] = useState<HistoryEntry | null>(null)
@@ -168,8 +172,22 @@ export default function GeneratePage() {
     }
   }, [mode, xDraft, yDraft])
 
+  const refreshBlockingTask = useCallback(async () => {
+    try {
+      const running = await api.listQueue('running')
+      setActiveBlockingTask(running.length > 0 ? running[0] : null)
+    } catch {
+      // 拉队列失败时不阻塞生成 — bug 修保守，宁愿放过也别误锁。
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshBlockingTask()
+  }, [refreshBlockingTask])
+
   // SSE：task_state_changed 触发 task refresh；monitor_state_updated 推 sample 列表。
   useEventStream((evt) => {
+    if (evt.type === 'task_state_changed') void refreshBlockingTask()
     const tid = taskIdRef.current
     if (tid == null) return
     if (evt.type === 'task_state_changed' && evt.task_id === tid) {
@@ -532,7 +550,12 @@ export default function GeneratePage() {
                 className="btn btn-primary flex-1"
                 style={{ padding: 12, fontWeight: 600, justifyContent: 'center' }}
                 onClick={handleGenerate}
-                disabled={busy}
+                disabled={busy || activeBlockingTask !== null}
+                title={
+                  activeBlockingTask
+                    ? t('generate.blockedByActiveTask', { id: activeBlockingTask.id })
+                    : undefined
+                }
               >
                 {generateLabel}
               </button>
@@ -544,7 +567,13 @@ export default function GeneratePage() {
               {!cancelable && (
                 <div className="font-mono text-xs text-fg-tertiary text-right" style={{ lineHeight: 1.3 }}>
                   <div>{width}×{height}</div>
-                  <div>{busy ? t('generate.generating') : t('generate.sharedGpu')}</div>
+                  <div>
+                    {busy
+                      ? t('generate.generating')
+                      : activeBlockingTask
+                        ? t('generate.blockedByActiveTaskHint', { id: activeBlockingTask.id })
+                        : t('generate.sharedGpu')}
+                  </div>
                 </div>
               )}
             </div>

@@ -1065,6 +1065,8 @@
     "swapSizeTitle": "Swap width and height (landscape ↔ portrait)",
     "cancelCurrentTitle": "Cancel current task",
     "sharedGpu": "Shares GPU with training",
+    "blockedByActiveTask": "Queue task #{{id}} is using the GPU — wait for it to finish or cancel before generating (running both will fight for VRAM)",
+    "blockedByActiveTaskHint": "Waiting for queue #{{id}}",
     "results": "Results",
     "originalReleasedCoverOnly": "Original image was released; only the cover thumbnail is available",
     "originalReleasedThumbOnly": "Original image was released; only the thumbnail is available",
