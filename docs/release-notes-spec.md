@@ -4,6 +4,33 @@
 **不需要任何额外问问题**就能：(1) 知道改哪个文件、(2) 从哪儿拿内容、
 (3) 用什么结构 / 风格 / 语气写、(4) 跑哪个工具校验。
 
+> **核心原则 —— 三 surface 共享文本，全部 user-facing**
+>
+> `release_notes.yaml` 的 `summary` + `detail` 文本会被同时渲染到三个用户
+> 可见 surface：
+>
+> 1. **Studio Web UI** Settings → 系统 → 版本卡片：summary 一行展示 + 点开
+>    detail modal
+> 2. **`CHANGELOG.md`** 仓库根 + GitHub repo 主页可达；`render-changelog` 从
+>    yaml 派生，summary + detail 都进
+> 3. **GitHub Release body**（`/releases` 每个 tag 一页）；maintainer 手动从
+>    CHANGELOG 复制对应段
+>
+> 三处共享同一份 yaml，**summary 和 detail 都得 user 视角写**。旧说法
+> 「summary 给用户，detail 给开发者技术词随便用」错了 —— detail 在 CHANGELOG
+> 和 Release body 两个用户表面同样可见。技术 ref（实现路径 / 内部符号名 /
+> 重构理由 / 设计权衡 / 替代方案对比）属于 **commit message + PR
+> description**，不进 yaml。
+>
+> 4 层 archeology 分工：
+>
+> | 层 | 受众 | 内容 |
+> |---|---|---|
+> | Commit message | git blame / 工程师 | atomic 改动的根因 / 修法 |
+> | PR description | reviewer / 历史考古 | 设计权衡、替代方案、scope |
+> | CHANGELOG / Release body | 升级的用户 | 「升上去看到什么变化」 |
+> | ADR | 架构决策回溯 | 「为啥选这条路不选另一条」 |
+
 ## 1. 单一来源：`release_notes.yaml`
 
 **永远改 `release_notes.yaml`；永远不要手改 `CHANGELOG.md`。**
@@ -138,6 +165,9 @@ python tools/bump_version.py bump --version 0.6.1 --date 2026-05-13
 - **末尾带 `（#N）`**：链接 PR；多 PR 就 `（#N, #M）`，最多 3 个
 - **specific 而不是 generic**：「修复 Danbooru 403」比「修复一些 bug」好
 - **避开技术术语**（除非用户必须知道）：「训练监控加 GPU 占用」比「`_StatsThread` 推 SSE event」好
+- **三 surface 一致 user 视角**：写完想象这条 entry 同时出现在 Studio 版本
+  卡片、CHANGELOG、GitHub Release body —— 都是给升级用户看的，不是给
+  reviewer 或 git blame 来的人。技术 ref 进 commit / PR，不进这里
 
 ### Don't
 
@@ -172,8 +202,13 @@ python tools/bump_version.py bump --version 0.6.1 --date 2026-05-13
 ### Don't
 
 - ❌ 重复 summary 已经说的话
-- ❌ 把 commit message 原样 paste 进来
+- ❌ 把 commit message 原样 paste 进来 —— detail 也是 user-facing surface
+  （CHANGELOG / Release body 都展示它）
 - ❌ 写实现细节而不写用户能感知的部分（"`_StatsThread` 用 nvidia-ml-py 而不是 pynvml" → 用户不在乎，跳过）
+- ❌ 写「实现路径」/「内部类名」/「重构理由」/「替代方案对比」/「设计权衡」
+  —— 这些属于 commit message 或 PR description，不进 yaml。例如
+  「`useEffect` deps 用 `[task]` 对象引用，React 浅 clone 触发重拉」就是
+  典型踩线 —— 用户不知道 `useEffect` 是什么
 - ❌ 单行 detail（一行能写完的内容直接进 summary）
 
 ### 例
@@ -305,6 +340,8 @@ next: review changes, then:
 | `pr_refs: ["18", "34"]` | 必须是 int 不是 str | `pr_refs: [18, 34]` |
 | `kind: refactor` | 不在白名单；refactor 通常用户不感知 | 跳过这条 PR，或者用 `changed` / `improved` |
 | `summary: "新增 LLM tagger（#18）。修复 Danbooru 403（#41）。"` | 两个独立改动塞一行 | 拆成两条 entry |
+| `detail: "useEffect deps 用 [task] 对象引用，React 浅 clone 触发重拉..."` | detail 是用户 surface（CHANGELOG / Release body），不应露 React 内部实现 | `detail: "关联配置 tab 训练运行期间每 2 秒重拉，浏览器卡顿..."` |
+| `detail: "ADR 0003 PR-A 把 utils/ 搬到根后 Path(__file__).parent.parent 少回溯一层..."` | 实现路径细节属于 commit message / PR | `detail: "v0.10.0 引入的路径错算让训练找不到 JSON caption 工具文件..."` |
 | 写完 yaml 后直接 commit | 没跑 `bump_version.py validate` | 先校验，错了 CI 也会拒 |
 
 ## 10. 维护这份文档
