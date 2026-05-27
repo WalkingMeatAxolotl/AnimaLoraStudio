@@ -40,8 +40,15 @@ NODE_MODULES = WEB_DIR / "node_modules"
 
 
 def find_npm() -> Optional[str]:
-    """Windows 上 npm 是 .cmd / .ps1，需要找全名。"""
-    for candidate in ("npm", "npm.cmd", "npm.ps1"):
+    """Windows 优先 .cmd（CreateProcess 可直接跑），.ps1 兜底；Linux/Mac 走裸名。
+
+    注意不要把裸 ``npm`` 放在 Windows 候选首位：Node.js 官方安装包在
+    ``C:\\Program Files\\nodejs\\`` 同时铺了 ``npm`` (Git Bash 用的 bash 脚本)
+    / ``npm.cmd`` / ``npm.ps1`` 三份，``shutil.which("npm")`` 在 Windows 上
+    会先吃裸名那份，subprocess 直接报 WinError 193（不是有效 Win32 应用）。
+    """
+    candidates = ("npm.cmd", "npm.ps1", "npm") if os.name == "nt" else ("npm",)
+    for candidate in candidates:
         path = shutil.which(candidate)
         if path:
             return path
@@ -57,9 +64,20 @@ _NPM_MIRROR = "https://mirrors.cloud.tencent.com/npm/"
 _PIP_MIRROR = "https://mirrors.cloud.tencent.com/pypi/simple/"
 
 
+def _npm_argv(npm: str, args: list[str]) -> list[str]:
+    """拼出真正可被 subprocess 执行的 argv。
+
+    ``.ps1`` 无法被 ``CreateProcess`` 直接拉起，必须包 ``powershell.exe -File``；
+    ``.cmd`` 和裸名（Linux）直接拼即可。
+    """
+    if npm.lower().endswith(".ps1"):
+        return ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", npm, *args]
+    return [npm, *args]
+
+
 def _npm_call(npm: str, args: list[str], cwd: str, timeout: int = 180) -> int:
     """运行 npm 命令；超时则 kill 并返回 1。"""
-    proc = subprocess.Popen([npm] + args, cwd=cwd)
+    proc = subprocess.Popen(_npm_argv(npm, args), cwd=cwd)
     try:
         return proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -100,7 +118,7 @@ def npm_install_if_missing(npm: str) -> int:
     if rc != 0:
         print(f"[studio] npm install 失败或超时，切换国内源 ({_NPM_MIRROR}) 重试...")
         rc = subprocess.call(
-            [npm, "install", "--registry", _NPM_MIRROR],
+            _npm_argv(npm, ["install", "--registry", _NPM_MIRROR]),
             cwd=str(WEB_DIR),
         )
     return rc
@@ -135,7 +153,7 @@ def _ensure_python_deps() -> int:
 
 def npm_build(npm: str) -> int:
     print("[studio] 构建前端 (npm run build)...")
-    return subprocess.call([npm, "run", "build"], cwd=str(WEB_DIR))
+    return subprocess.call(_npm_argv(npm, ["run", "build"]), cwd=str(WEB_DIR))
 
 
 # ---------------------------------------------------------------------------
@@ -717,7 +735,7 @@ def cmd_dev(args: argparse.Namespace) -> int:
 
     pg = ProcGroup()
     try:
-        pg.spawn("frontend", [npm, "run", "dev", "--", "--port", str(args.fe_port)], cwd=WEB_DIR)
+        pg.spawn("frontend", _npm_argv(npm, ["run", "dev", "--", "--port", str(args.fe_port)]), cwd=WEB_DIR)
         pg.spawn(
             "backend",
             [
@@ -757,7 +775,7 @@ def cmd_test(_args: argparse.Namespace) -> int:
         print("[studio] 跳过 vitest (node_modules 缺失，先 npm install)")
         return 0
     print("[studio] vitest...")
-    return subprocess.call([npm, "run", "test"], cwd=str(WEB_DIR))
+    return subprocess.call(_npm_argv(npm, ["run", "test"]), cwd=str(WEB_DIR))
 
 
 # ---------------------------------------------------------------------------
