@@ -85,11 +85,20 @@ def add_argument_for(parser: argparse.ArgumentParser, name: str, field: FieldInf
 
     # bool ----------------------------------------------------------------
     if annotation is bool:
+        # Optional[bool] 的默认值保留 None —— 表示「未指定」。
+        # 非 Optional 的 bool 则 fallback 到 False。
+        # 关键：merge_yaml_into_namespace 靠 `current == default` 判断
+        # CLI 有没有显式设值；如果这里把 None 转成 False，merge 会
+        # 误以为 CLI 显式传了 --no-xxx，YAML 值就永远合不进去。
+        if is_optional:
+            actual_default = default  # keep None
+        else:
+            actual_default = bool(default) if default is not None else False
         parser.add_argument(
             flag,
             dest=name,
             action=argparse.BooleanOptionalAction,
-            default=bool(default) if default is not None else False,
+            default=actual_default,
             help=help_text or None,
         )
         return
