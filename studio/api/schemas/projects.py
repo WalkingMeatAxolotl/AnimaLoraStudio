@@ -1,7 +1,7 @@
 """/api/projects + versions CRUD 请求 BaseModel（PR-6.5 commit 1 从 server.py 抽出）。"""
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel
 
@@ -31,3 +31,7 @@ class VersionUpdate(BaseModel):
     stage: Optional[str] = None
     config_name: Optional[str] = None
     trigger_word: Optional[str] = None
+
+
+class EvalManifestPut(BaseModel):
+    manifest: dict[str, Any]
