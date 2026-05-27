@@ -1107,7 +1107,7 @@ export default function SettingsPage() {
                 {draft.wandb.upload_model && (
                   <select
                     value={draft.wandb.upload_model_policy}
-                    onChange={(e) => update('wandb', 'upload_model_policy', e.target.value)}
+                    onChange={(e) => update('wandb', 'upload_model_policy', e.target.value as 'all' | 'last')}
                     className={textInputClass + ' w-auto'}
                   >
                     <option value="last">{t('settings.policyLast')}</option>
@@ -1125,7 +1125,7 @@ export default function SettingsPage() {
                 {draft.wandb.upload_state_manual && (
                   <select
                     value={draft.wandb.upload_state_manual_policy}
-                    onChange={(e) => update('wandb', 'upload_state_manual_policy', e.target.value)}
+                    onChange={(e) => update('wandb', 'upload_state_manual_policy', e.target.value as 'all' | 'last')}
                     className={textInputClass + ' w-auto'}
                   >
                     <option value="last">{t('settings.policyLast')}</option>
@@ -1143,7 +1143,7 @@ export default function SettingsPage() {
                 {draft.wandb.upload_state_auto && (
                   <select
                     value={draft.wandb.upload_state_auto_policy}
-                    onChange={(e) => update('wandb', 'upload_state_auto_policy', e.target.value)}
+                    onChange={(e) => update('wandb', 'upload_state_auto_policy', e.target.value as 'all' | 'last')}
                     className={textInputClass + ' w-auto'}
                   >
                     <option value="last">{t('settings.policyLast')}</option>
