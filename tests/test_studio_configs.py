@@ -45,7 +45,7 @@ def test_schema_is_complete() -> None:
         "sample_prompt", "sample_prompts", "no_monitor",
     ):
         assert name in fields, f"missing: {name}"
-    assert "wandb_enabled" not in fields
+    assert "wandb_enabled" in fields
     # optimizer_type Literal 包含 PPSF
     optimizer_annotation = fields["optimizer_type"].annotation
     # Literal 的 __args__ 包含所有合法值
@@ -78,7 +78,7 @@ def test_schema_carries_ui_metadata(client: TestClient) -> None:
     assert props["transformer_path"]["group"] == "model"
     assert props["transformer_path"]["control"] == "path"
     assert "show_when" in props["prodigy_d_coef"]
-    assert "wandb_enabled" not in props
+    assert props["wandb_enabled"]["group"] == "wandb"
     # PPSF 字段都按 optimizer_type==prodigy_plus_schedulefree 显示
     for ppsf_field in (
         "ppsf_d_coef", "ppsf_prodigy_steps", "ppsf_beta1", "ppsf_beta2",

@@ -192,11 +192,33 @@ class WandBMonitor:
             logger.warning(f"W&B finish 失败: {exc}")
 
 
+def _preset_str(args, attr: str) -> str:
+    """预设字符串覆盖：非空字符串时使用预设值。"""
+    val = getattr(args, attr, None)
+    return str(val) if val and str(val).strip() else ""
+
+
+def _preset_bool(args, attr: str) -> Optional[bool]:
+    """预设布尔覆盖：None 表示未设置（回退全局）。"""
+    val = getattr(args, attr, None)
+    if val is None:
+        return None
+    return bool(val)
+
+
 def init_wandb_monitor(args, output_dir: Path, config_path: Optional[Path]) -> WandBMonitor:
-    enabled = str(os.environ.get("WANDB_ENABLED", "")).strip().lower()
-    if enabled not in {"1", "true", "yes", "on"}:
+    # ---- 预设覆盖优先级：args.wandb_* (非空) > 环境变量 (全局 Settings) ----
+    preset_enabled = _preset_bool(args, "wandb_enabled")
+    if preset_enabled is not None:
+        enabled = preset_enabled
+    else:
+        enabled = str(os.environ.get("WANDB_ENABLED", "")).strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+    if not enabled:
         return WandBMonitor(None, None)
-    mode = str(os.environ.get("WANDB_MODE", "online") or "online")
+
+    mode = _preset_str(args, "wandb_mode") or str(os.environ.get("WANDB_MODE", "online") or "online")
     if mode == "disabled":
         return WandBMonitor(None, None)
     try:
@@ -207,30 +229,67 @@ def init_wandb_monitor(args, output_dir: Path, config_path: Optional[Path]) -> W
             "请先在训练环境安装：pip install wandb，或在 Settings 关闭 WandB。"
         ) from exc
 
-    project = os.environ.get("WANDB_PROJECT") or "AnimaLoraStudio"
-    entity = os.environ.get("WANDB_ENTITY") or None
+    # 预设覆盖 API key：写进 env 让 wandb.init() 识别
+    preset_api_key = _preset_str(args, "wandb_api_key")
+    if preset_api_key:
+        os.environ["WANDB_API_KEY"] = preset_api_key
+
+    project = _preset_str(args, "wandb_project") or os.environ.get("WANDB_PROJECT") or "AnimaLoraStudio"
+    entity = _preset_str(args, "wandb_entity") or os.environ.get("WANDB_ENTITY") or None
     run_name = os.environ.get("WANDB_RUN_NAME") or str(args.output_name)
-    # 默认开 — supervisor 已经按 secrets.wandb.log_samples 设过 env；env 缺省（直接跑
-    # runtime 没经 supervisor 的情况）也跟 secrets 默认对齐保持开启。
-    log_samples = str(os.environ.get("WANDB_LOG_SAMPLES", "1")).strip().lower() not in {
-        "0", "false", "no", "off",
-    }
-    try:
-        sample_max_side = int(os.environ.get("WANDB_SAMPLE_MAX_SIDE", "1216") or 1216)
-    except ValueError:
-        sample_max_side = 512
-    try:
-        sample_every_n_steps = int(os.environ.get("WANDB_SAMPLE_EVERY_N_STEPS", "0") or 0)
-    except ValueError:
-        sample_every_n_steps = 0
+
+    preset_base_url = _preset_str(args, "wandb_base_url")
+    if preset_base_url:
+        os.environ["WANDB_BASE_URL"] = preset_base_url
+
+    # log_samples
+    preset_log_samples = _preset_bool(args, "wandb_log_samples")
+    if preset_log_samples is not None:
+        log_samples = preset_log_samples
+    else:
+        log_samples = str(os.environ.get("WANDB_LOG_SAMPLES", "1")).strip().lower() not in {
+            "0", "false", "no", "off",
+        }
+
+    # sample_max_side: preset 0 = 使用全局
+    preset_max_side = int(getattr(args, "wandb_sample_max_side", 0) or 0)
+    if preset_max_side > 0:
+        sample_max_side = preset_max_side
+    else:
+        try:
+            sample_max_side = int(os.environ.get("WANDB_SAMPLE_MAX_SIDE", "1216") or 1216)
+        except ValueError:
+            sample_max_side = 512
+
+    # sample_every_n_steps: preset -1 = 使用全局
+    preset_every_n = int(getattr(args, "wandb_sample_every_n_steps", -1) if getattr(args, "wandb_sample_every_n_steps", -1) is not None else -1)
+    if preset_every_n >= 0:
+        sample_every_n_steps = preset_every_n
+    else:
+        try:
+            sample_every_n_steps = int(os.environ.get("WANDB_SAMPLE_EVERY_N_STEPS", "0") or 0)
+        except ValueError:
+            sample_every_n_steps = 0
+
+    # artifact 上传
     _env_bool = lambda key, default="0": str(os.environ.get(key, default)).strip().lower() in {"1", "true", "yes", "on"}
     _env_policy = lambda key: "all" if str(os.environ.get(key, "last")).strip().lower() == "all" else "last"
-    upload_model = _env_bool("WANDB_UPLOAD_MODEL")
-    upload_model_policy = _env_policy("WANDB_UPLOAD_MODEL_POLICY")
-    upload_state_manual = _env_bool("WANDB_UPLOAD_STATE_MANUAL")
-    upload_state_manual_policy = _env_policy("WANDB_UPLOAD_STATE_MANUAL_POLICY")
-    upload_state_auto = _env_bool("WANDB_UPLOAD_STATE_AUTO")
-    upload_state_auto_policy = _env_policy("WANDB_UPLOAD_STATE_AUTO_POLICY")
+
+    def _resolve_bool(attr: str, env_key: str) -> bool:
+        p = _preset_bool(args, attr)
+        return p if p is not None else _env_bool(env_key)
+
+    def _resolve_policy(attr: str, env_key: str) -> str:
+        p = _preset_str(args, attr)
+        return p if p in {"all", "last"} else _env_policy(env_key)
+
+    upload_model = _resolve_bool("wandb_upload_model", "WANDB_UPLOAD_MODEL")
+    upload_model_policy = _resolve_policy("wandb_upload_model_policy", "WANDB_UPLOAD_MODEL_POLICY")
+    upload_state_manual = _resolve_bool("wandb_upload_state_manual", "WANDB_UPLOAD_STATE_MANUAL")
+    upload_state_manual_policy = _resolve_policy("wandb_upload_state_manual_policy", "WANDB_UPLOAD_STATE_MANUAL_POLICY")
+    upload_state_auto = _resolve_bool("wandb_upload_state_auto", "WANDB_UPLOAD_STATE_AUTO")
+    upload_state_auto_policy = _resolve_policy("wandb_upload_state_auto_policy", "WANDB_UPLOAD_STATE_AUTO_POLICY")
+
     wandb_dir = output_dir / "wandb"
     wandb_dir.mkdir(parents=True, exist_ok=True)
     cfg = {

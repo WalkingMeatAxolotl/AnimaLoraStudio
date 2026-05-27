@@ -624,6 +624,88 @@ class TrainingConfig(BaseModel):
         json_schema_extra=_meta("sample", hidden=True),
     )
 
+    # --------------------------------------------------------------- WandB 预设覆盖
+    wandb_notice: str = Field(
+        "",
+        description="⚠️ 如果你不知道自己在做什么，请不要填写这里的设置。此处的值会覆盖全局 Settings 页的 WandB 配置，留空则使用全局设置。",
+        json_schema_extra=_meta("wandb", "notice", advanced=True),
+    )
+    wandb_enabled: Optional[bool] = Field(
+        None,
+        description="启用 WandB（留空使用全局设置）",
+        json_schema_extra=_meta("wandb", advanced=True),
+    )
+    wandb_api_key: str = Field(
+        "",
+        description="API Key（留空使用全局设置）",
+        json_schema_extra=_meta("wandb", advanced=True),
+    )
+    wandb_project: str = Field(
+        "",
+        description="项目名（留空使用全局设置）",
+        json_schema_extra=_meta("wandb", advanced=True),
+    )
+    wandb_entity: str = Field(
+        "",
+        description="Entity / Team（留空使用全局设置）",
+        json_schema_extra=_meta("wandb", advanced=True),
+    )
+    wandb_base_url: str = Field(
+        "",
+        description="自定义 WandB 服务地址（留空使用全局设置）",
+        json_schema_extra=_meta("wandb", advanced=True),
+    )
+    wandb_mode: str = Field(
+        "",
+        description="运行模式 online/offline/disabled（留空使用全局设置）",
+        json_schema_extra=_meta("wandb", advanced=True),
+    )
+    wandb_log_samples: Optional[bool] = Field(
+        None,
+        description="上传采样图到 WandB（留空使用全局设置）",
+        json_schema_extra=_meta("wandb", advanced=True),
+    )
+    wandb_sample_max_side: int = Field(
+        0, ge=0,
+        description="采样图缩放最长边像素（0=使用全局设置）",
+        json_schema_extra=_meta("wandb", advanced=True),
+    )
+    wandb_sample_every_n_steps: int = Field(
+        -1, ge=-1,
+        description="采样图上传节流步数（-1=使用全局设置，0=不节流）",
+        json_schema_extra=_meta("wandb", advanced=True),
+    )
+    wandb_upload_model: Optional[bool] = Field(
+        None,
+        description="上传模型 artifact（留空使用全局设置）",
+        json_schema_extra=_meta("wandb", advanced=True),
+    )
+    wandb_upload_model_policy: str = Field(
+        "",
+        description="模型保留策略 all/last（留空使用全局设置）",
+        json_schema_extra=_meta("wandb", advanced=True),
+    )
+    wandb_upload_state_manual: Optional[bool] = Field(
+        None,
+        description="上传手动保存的训练状态 artifact（留空使用全局设置）",
+        json_schema_extra=_meta("wandb", advanced=True),
+    )
+    wandb_upload_state_manual_policy: str = Field(
+        "",
+        description="手动状态保留策略 all/last（留空使用全局设置）",
+        json_schema_extra=_meta("wandb", advanced=True),
+    )
+    wandb_upload_state_auto: Optional[bool] = Field(
+        None,
+        description="上传自动保存的训练状态 artifact（留空使用全局设置）",
+        json_schema_extra=_meta("wandb", advanced=True),
+    )
+    wandb_upload_state_auto_policy: str = Field(
+        "",
+        description="自动状态保留策略 all/last（留空使用全局设置）",
+        json_schema_extra=_meta("wandb", advanced=True),
+    )
+
     # ---------------------------------------------------------------- 监控/进度
     # 这一组对 Studio 用户全部隐藏（hidden=True）—— Studio 跑训练用 subprocess 把
     # stdout 重定向到 task log（非 tty），这些「终端体验」字段对 web 用户没意义；
