@@ -1,0 +1,1295 @@
+{
+  "version": 1,
+  "generated_from": "studio.server.app",
+  "count": 160,
+  "routes": [
+    {
+      "path": "/",
+      "methods": [
+        "GET"
+      ],
+      "name": "root",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/browse",
+      "methods": [
+        "GET"
+      ],
+      "name": "browse_dir",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/configs",
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST",
+        "PUT"
+      ],
+      "name": "_configs_root_redirect",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/configs/{rest:path}",
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST",
+        "PUT"
+      ],
+      "name": "_configs_redirect",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/data-exports",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_data_exports",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/datasets",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_datasets",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/datasets/thumbnail",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_dataset_thumbnail",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/events",
+      "methods": [
+        "GET"
+      ],
+      "name": "events",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/flash-attention/install",
+      "methods": [
+        "POST"
+      ],
+      "name": "flash_attn_install",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/flash-attention/status",
+      "methods": [
+        "GET"
+      ],
+      "name": "flash_attn_status",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate",
+      "methods": [
+        "POST"
+      ],
+      "name": "enqueue_generate",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/daemon/logs",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_daemon_logs",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/daemon/status",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_daemon_status",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/daemon/unload",
+      "methods": [
+        "POST"
+      ],
+      "name": "unload_daemon",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/taeflux/install",
+      "methods": [
+        "POST"
+      ],
+      "name": "install_taeflux",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/taeflux/status",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_taeflux_status",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/{task_id}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_generate_task",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/{task_id}/sample/{filename}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_generate_sample",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/health",
+      "methods": [
+        "GET"
+      ],
+      "name": "health",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/jobs/{jid}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_job_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/jobs/{jid}/cancel",
+      "methods": [
+        "POST"
+      ],
+      "name": "cancel_job_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/jobs/{jid}/log",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_job_log",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/llm-tagger/models/refresh",
+      "methods": [
+        "POST"
+      ],
+      "name": "refresh_llm_tagger_models",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/llm-tagger/test",
+      "methods": [
+        "POST"
+      ],
+      "name": "test_llm_tagger_connection",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/logs/{task_id}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_log",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/models/catalog",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_models_catalog",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/models/download",
+      "methods": [
+        "POST"
+      ],
+      "name": "start_model_download",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/models/path-defaults",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_models_path_defaults",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/presets",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_presets_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/presets/import",
+      "methods": [
+        "POST"
+      ],
+      "name": "import_preset",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/presets/import-from-data-exports",
+      "methods": [
+        "POST"
+      ],
+      "name": "import_preset_from_data_exports",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/presets/import-from-path",
+      "methods": [
+        "POST"
+      ],
+      "name": "import_preset_from_path",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/presets/{name}",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_preset_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/presets/{name}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_preset",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/presets/{name}",
+      "methods": [
+        "PUT"
+      ],
+      "name": "put_preset",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/presets/{name}/download",
+      "methods": [
+        "GET"
+      ],
+      "name": "download_preset",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/presets/{name}/duplicate",
+      "methods": [
+        "POST"
+      ],
+      "name": "duplicate_preset_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/presets/{name}/export",
+      "methods": [
+        "POST"
+      ],
+      "name": "export_preset_to_data_exports",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_projects_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_project_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/import-bundle",
+      "methods": [
+        "POST"
+      ],
+      "name": "import_bundle_zip",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/import-bundle/upload",
+      "methods": [
+        "POST"
+      ],
+      "name": "import_bundle_upload",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/import-train",
+      "methods": [
+        "POST"
+      ],
+      "name": "import_train_zip",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_project_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_project_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}",
+      "methods": [
+        "PATCH"
+      ],
+      "name": "patch_project_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/download",
+      "methods": [
+        "POST"
+      ],
+      "name": "start_download",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/download/estimate",
+      "methods": [
+        "POST"
+      ],
+      "name": "estimate_download",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/download/status",
+      "methods": [
+        "GET"
+      ],
+      "name": "download_status",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/duplicates/apply",
+      "methods": [
+        "POST"
+      ],
+      "name": "apply_project_duplicates",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/duplicates/scan",
+      "methods": [
+        "POST"
+      ],
+      "name": "scan_project_duplicates",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/files",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_files",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/files/delete",
+      "methods": [
+        "POST"
+      ],
+      "name": "delete_project_files",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/lora_ckpts",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_project_lora_ckpts",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/preprocess/crop",
+      "methods": [
+        "POST"
+      ],
+      "name": "start_preprocess_crop",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/preprocess/crop/workspace",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_crop_workspace",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/preprocess/duplicates/apply",
+      "methods": [
+        "POST"
+      ],
+      "name": "apply_preprocess_duplicates",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/preprocess/duplicates/removed",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_duplicate_removed",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/preprocess/duplicates/scan",
+      "methods": [
+        "POST"
+      ],
+      "name": "scan_preprocess_duplicates",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/preprocess/files",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_preprocess_files",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/preprocess/files/reset",
+      "methods": [
+        "POST"
+      ],
+      "name": "reset_preprocess_files",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/preprocess/files/restore",
+      "methods": [
+        "POST"
+      ],
+      "name": "restore_preprocess_files",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/preprocess/start",
+      "methods": [
+        "POST"
+      ],
+      "name": "start_preprocess",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/preprocess/status",
+      "methods": [
+        "GET"
+      ],
+      "name": "preprocess_status",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/preprocess/thumb",
+      "methods": [
+        "GET"
+      ],
+      "name": "preprocess_thumb",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/state_ckpts",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_project_state_ckpts",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/thumb",
+      "methods": [
+        "GET"
+      ],
+      "name": "project_thumb",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/upload",
+      "methods": [
+        "POST"
+      ],
+      "name": "upload_local_files",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/upload-from-path",
+      "methods": [
+        "POST"
+      ],
+      "name": "upload_local_file_from_path",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_versions_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_version_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_version_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_version_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}",
+      "methods": [
+        "PATCH"
+      ],
+      "name": "patch_version_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/activate",
+      "methods": [
+        "POST"
+      ],
+      "name": "activate_version_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/advance-phase",
+      "methods": [
+        "POST"
+      ],
+      "name": "advance_phase_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/bundle.zip",
+      "methods": [
+        "GET"
+      ],
+      "name": "export_version_bundle",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/captions",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_captions_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/captions/batch",
+      "methods": [
+        "POST"
+      ],
+      "name": "batch_caption_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/captions/commit",
+      "methods": [
+        "POST"
+      ],
+      "name": "commit_captions",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/captions/snapshot",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_caption_snapshot",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/captions/snapshots",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_caption_snapshots",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/captions/snapshots/{sid}",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_caption_snapshot",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/captions/snapshots/{sid}/restore",
+      "methods": [
+        "POST"
+      ],
+      "name": "restore_caption_snapshot",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/captions/{folder}/{filename}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_caption_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/captions/{folder}/{filename}",
+      "methods": [
+        "PUT"
+      ],
+      "name": "put_caption_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/config",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_version_config_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/config",
+      "methods": [
+        "PUT"
+      ],
+      "name": "put_version_config_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/config/from_preset",
+      "methods": [
+        "POST"
+      ],
+      "name": "fork_preset_for_version_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/config/save_as_preset",
+      "methods": [
+        "POST"
+      ],
+      "name": "save_version_config_as_preset_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/curation",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_curation",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/curation/copy",
+      "methods": [
+        "POST"
+      ],
+      "name": "copy_to_train",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/curation/folder",
+      "methods": [
+        "POST"
+      ],
+      "name": "folder_op",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/curation/remove",
+      "methods": [
+        "POST"
+      ],
+      "name": "remove_from_train",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/export-bundle",
+      "methods": [
+        "POST"
+      ],
+      "name": "export_version_bundle_to_data_exports",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/jobs/latest",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_latest_version_job",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/lora_ckpts",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_version_lora_ckpts",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/queue",
+      "methods": [
+        "POST"
+      ],
+      "name": "enqueue_version_training",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/reg",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_reg",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/reg",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_reg_status",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/reg/build",
+      "methods": [
+        "POST"
+      ],
+      "name": "start_reg_build",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/reg/caption",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_reg_caption",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/reg/generate-prior",
+      "methods": [
+        "POST"
+      ],
+      "name": "reg_generate_prior",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/reg/generate-prior/{task_id}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_reg_prior_task",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/reg/preview-tags",
+      "methods": [
+        "GET"
+      ],
+      "name": "reg_preview_tags",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/skip-phase",
+      "methods": [
+        "POST"
+      ],
+      "name": "skip_phase_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/tag",
+      "methods": [
+        "POST"
+      ],
+      "name": "start_tag",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/thumb",
+      "methods": [
+        "GET"
+      ],
+      "name": "version_thumb",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/train.zip",
+      "methods": [
+        "GET"
+      ],
+      "name": "export_version_train_zip",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/queue",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_queue",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/queue",
+      "methods": [
+        "POST"
+      ],
+      "name": "enqueue",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/queue/export",
+      "methods": [
+        "GET"
+      ],
+      "name": "export_queue",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/queue/hold",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_queue_hold",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/queue/hold",
+      "methods": [
+        "POST"
+      ],
+      "name": "hold_queue",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/queue/import",
+      "methods": [
+        "POST"
+      ],
+      "name": "import_queue",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/queue/release",
+      "methods": [
+        "POST"
+      ],
+      "name": "release_queue",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/queue/reorder",
+      "methods": [
+        "POST"
+      ],
+      "name": "reorder_queue",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/queue/{task_id}",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_queue_item",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/queue/{task_id}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_queue_item",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/queue/{task_id}/cancel",
+      "methods": [
+        "POST"
+      ],
+      "name": "cancel_task",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/queue/{task_id}/export-outputs",
+      "methods": [
+        "POST"
+      ],
+      "name": "export_task_outputs_to_data_exports",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/queue/{task_id}/open-folder",
+      "methods": [
+        "POST"
+      ],
+      "name": "open_task_folder",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/queue/{task_id}/output/{filename:path}",
+      "methods": [
+        "GET"
+      ],
+      "name": "download_task_output",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/queue/{task_id}/outputs",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_task_outputs",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/queue/{task_id}/outputs.zip",
+      "methods": [
+        "GET"
+      ],
+      "name": "download_task_outputs_zip",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/queue/{task_id}/pause",
+      "methods": [
+        "POST"
+      ],
+      "name": "pause_task",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/queue/{task_id}/resume",
+      "methods": [
+        "POST"
+      ],
+      "name": "resume_task",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/queue/{task_id}/retry",
+      "methods": [
+        "POST"
+      ],
+      "name": "retry_task",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/queue/{task_id}/snapshot/config",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_task_snapshot_config",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/schema",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_schema",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/secrets",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_secrets",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/secrets",
+      "methods": [
+        "PUT"
+      ],
+      "name": "put_secrets",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/state",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_state",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/system/dev_commits",
+      "methods": [
+        "GET"
+      ],
+      "name": "system_dev_commits",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/system/init_git",
+      "methods": [
+        "POST"
+      ],
+      "name": "system_init_git",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/system/preflight",
+      "methods": [
+        "GET"
+      ],
+      "name": "system_preflight",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/system/release_notes",
+      "methods": [
+        "GET"
+      ],
+      "name": "system_release_notes",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/system/restart",
+      "methods": [
+        "POST"
+      ],
+      "name": "system_restart",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/system/rollback",
+      "methods": [
+        "POST"
+      ],
+      "name": "system_rollback",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/system/stats",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_system_stats",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/system/update",
+      "methods": [
+        "POST"
+      ],
+      "name": "system_update",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/system/update_check",
+      "methods": [
+        "GET"
+      ],
+      "name": "system_update_check",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/system/update_log",
+      "methods": [
+        "GET"
+      ],
+      "name": "system_update_log",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/system/update_status",
+      "methods": [
+        "GET"
+      ],
+      "name": "system_update_status",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/system/version",
+      "methods": [
+        "GET"
+      ],
+      "name": "system_version",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/tagger/{name}/check",
+      "methods": [
+        "GET"
+      ],
+      "name": "check_tagger",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/torch/reinstall",
+      "methods": [
+        "POST"
+      ],
+      "name": "torch_reinstall",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/torch/status",
+      "methods": [
+        "GET"
+      ],
+      "name": "torch_status",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/upscalers/download_custom",
+      "methods": [
+        "POST"
+      ],
+      "name": "start_upscaler_custom_download",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/upscalers/select",
+      "methods": [
+        "POST"
+      ],
+      "name": "select_upscaler",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/wd14/install",
+      "methods": [
+        "POST"
+      ],
+      "name": "wd14_install",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/wd14/runtime",
+      "methods": [
+        "GET"
+      ],
+      "name": "wd14_runtime",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/xformers/install",
+      "methods": [
+        "POST"
+      ],
+      "name": "xformers_install",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/xformers/status",
+      "methods": [
+        "GET"
+      ],
+      "name": "xformers_status",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/docs",
+      "methods": [
+        "GET",
+        "HEAD"
+      ],
+      "name": "swagger_ui_html",
+      "type": "Route"
+    },
+    {
+      "path": "/docs/oauth2-redirect",
+      "methods": [
+        "GET",
+        "HEAD"
+      ],
+      "name": "swagger_ui_redirect",
+      "type": "Route"
+    },
+    {
+      "path": "/openapi.json",
+      "methods": [
+        "GET",
+        "HEAD"
+      ],
+      "name": "openapi",
+      "type": "Route"
+    },
+    {
+      "path": "/redoc",
+      "methods": [
+        "GET",
+        "HEAD"
+      ],
+      "name": "redoc_html",
+      "type": "Route"
+    },
+    {
+      "path": "/samples/{filename}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_sample",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/studio",
+      "methods": [],
+      "name": "studio",
+      "type": "Mount"
+    }
+  ]
+}
