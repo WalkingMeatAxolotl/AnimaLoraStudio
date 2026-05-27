@@ -1249,6 +1249,69 @@ async function req<T>(
   return (await resp.json()) as T
 }
 
+/** 上传进度事件 — 与 XMLHttpRequestEventTarget#progress 字段一一对应。 */
+export interface UploadProgressEvent {
+  loaded: number
+  total: number
+  /** total === 0 时为 false（服务端没回 Content-Length 或 chunked），ETA 无法计算。 */
+  lengthComputable: boolean
+}
+
+/**
+ * XHR-based multipart upload；fetch() 没有 request body progress 事件，所以
+ * 上传进度必须走 XHR。错误格式跟 `req` 对齐（ApiError + 解析 detail）。
+ */
+async function xhrUpload<T>(
+  url: string,
+  body: FormData,
+  onProgress?: (e: UploadProgressEvent) => void,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', url, true)
+    xhr.responseType = 'text'
+    if (onProgress) {
+      xhr.upload.onprogress = (e) => {
+        onProgress({
+          loaded: e.loaded,
+          total: e.total,
+          lengthComputable: e.lengthComputable,
+        })
+      }
+    }
+    xhr.onload = () => {
+      const text = xhr.responseText
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(text ? (JSON.parse(text) as T) : (undefined as T))
+        } catch {
+          reject(new Error('invalid JSON response'))
+        }
+        return
+      }
+      let detail = `${xhr.status} ${xhr.statusText}`
+      let rawDetail: unknown = null
+      try {
+        const j = JSON.parse(text)
+        if (typeof j?.detail === 'string') {
+          detail = j.detail
+        } else if (j?.detail && typeof j.detail === 'object') {
+          rawDetail = j.detail
+          detail = (j.detail as { message?: string }).message ?? JSON.stringify(j.detail)
+        }
+      } catch {
+        /* body 不是 JSON：保持 statusText */
+      }
+      const err = new Error(detail) as ApiError
+      err.status = xhr.status
+      err.detail = rawDetail
+      reject(err)
+    }
+    xhr.onerror = () => reject(new Error('network error'))
+    xhr.send(body)
+  })
+}
+
 export const api = {
   health: () => req<HealthResponse>('/api/health'),
   systemStats: () => req<SystemStats>('/api/system/stats'),
@@ -1504,30 +1567,18 @@ export const api = {
       `/api/projects/${pid}/download/status`
     ),
   /**
-   * 本地上传：单图（jpg/png）或 zip 包。绕过 `req` 的 JSON header，
-   * 让浏览器自己加 multipart boundary。后端同步处理并返回结果。
+   * 本地上传：单图（jpg/png）或 zip 包。走 XHR 以拿到 upload progress 事件
+   * （fetch 没有 request body progress）。后端同步解 zip / 落盘，所以
+   * progress 到 100% 后还有一段 server processing 时间。
    */
-  uploadProjectFiles: async (
+  uploadProjectFiles: (
     pid: number,
-    files: File[]
+    files: File[],
+    onProgress?: (e: UploadProgressEvent) => void,
   ): Promise<UploadResult> => {
     const fd = new FormData()
     for (const f of files) fd.append('files', f, f.name)
-    const resp = await fetch(`/api/projects/${pid}/upload`, {
-      method: 'POST',
-      body: fd,
-    })
-    if (!resp.ok) {
-      let detail = `${resp.status} ${resp.statusText}`
-      try {
-        const body = await resp.json()
-        if (body?.detail) detail = body.detail
-      } catch {
-        /* ignore */
-      }
-      throw new Error(detail)
-    }
-    return (await resp.json()) as UploadResult
+    return xhrUpload<UploadResult>(`/api/projects/${pid}/upload`, fd, onProgress)
   },
   uploadProjectFileFromPath: (pid: number, path: string) =>
     req<UploadResult>(`/api/projects/${pid}/upload-from-path`, {
@@ -2084,42 +2135,26 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ filename }),
     }),
-  importBundleUpload: async (file: File): Promise<BundleImportResult> => {
+  importBundleUpload: (
+    file: File,
+    onProgress?: (e: UploadProgressEvent) => void,
+  ): Promise<BundleImportResult> => {
     const fd = new FormData()
     fd.append('file', file, file.name)
-    const resp = await fetch('/api/projects/import-bundle/upload', { method: 'POST', body: fd })
-    if (!resp.ok) {
-      let detail = `${resp.status} ${resp.statusText}`
-      try {
-        const body = await resp.json()
-        if (body?.detail) detail = body.detail
-      } catch {
-        // ignore
-      }
-      throw new Error(detail)
-    }
-    return resp.json()
+    return xhrUpload<BundleImportResult>('/api/projects/import-bundle/upload', fd, onProgress)
   },
   /** 上传训练集 zip → 新建 project + v1，返回新项目。 */
-  importTrainProject: async (file: File): Promise<{
+  importTrainProject: (
+    file: File,
+    onProgress?: (e: UploadProgressEvent) => void,
+  ): Promise<{
     project: ProjectDetail
     version: Version
     stats: { image_count: number; tagged_count: number; untagged_count: number; concepts: string[] }
   }> => {
     const fd = new FormData()
     fd.append('file', file)
-    const resp = await fetch('/api/projects/import-train', { method: 'POST', body: fd })
-    if (!resp.ok) {
-      let detail = `${resp.status} ${resp.statusText}`
-      try {
-        const body = await resp.json()
-        if (body?.detail) detail = body.detail
-      } catch {
-        // ignore
-      }
-      throw new Error(detail)
-    }
-    return resp.json()
+    return xhrUpload('/api/projects/import-train', fd, onProgress)
   },
   /** 在 server 主机的 OS 文件管理器里打开 output 目录（仅 loopback 可用）。 */
   openTaskFolder: (id: number) =>

@@ -1950,5 +1950,10 @@
     "agoMinutes": "{{n}} min ago",
     "agoHours": "{{n}} hr ago",
     "agoDays": "{{n}} days ago"
+  },
+  "upload": {
+    "processing": "Server processing…",
+    "failed": "Failed",
+    "etaPrefix": "ETA"
   }
 }
