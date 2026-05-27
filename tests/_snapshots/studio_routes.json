@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 173,
+  "count": 177,
   "routes": [
     {
       "path": "/",
@@ -730,6 +730,30 @@
       "type": "APIRoute"
     },
     {
+      "path": "/api/projects/{pid}/versions/{vid}/eval/manifest",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_eval_manifest_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/eval/manifest",
+      "methods": [
+        "PUT"
+      ],
+      "name": "put_eval_manifest_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/eval/manifest/default",
+      "methods": [
+        "POST"
+      ],
+      "name": "create_default_eval_manifest_endpoint",
+      "type": "APIRoute"
+    },
+    {
       "path": "/api/projects/{pid}/versions/{vid}/export-bundle",
       "methods": [
         "POST"
@@ -895,6 +919,14 @@
         "POST"
       ],
       "name": "reg_generate_prior",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/reg/generate-prior/latest",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_latest_reg_prior_task",
       "type": "APIRoute"
     },
     {
