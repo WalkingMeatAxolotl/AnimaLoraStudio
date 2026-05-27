@@ -6,6 +6,20 @@
 
 ---
 
+## [0.10.2] — 2026-05-26
+
+Hotfix — 测试页从项目跳转的 LoRA 缓存污染 + 跨机器 bundle 模型路径
+
+### 修复
+
+- **从项目页「在测试中加载」跳转到测试页时残留旧 LoRA、submit 抛 axisLoraMissing（#137）**
+  项目详情完成态 banner 的「在测试中加载」按钮跳到测试页时，会把跳转的 LoRA 追加到本地缓存的 LoRA 列表末尾，而不是替换。结果：单图模式同时显示新 LoRA + 旧/已删 LoRA；左侧 LoRA picker 下拉和 chip 列表仍卡在缓存的项目；如果缓存里的 XY 轴选了「LoRA 路径」并绑了一个不存在的 LoRA 索引，点「开始生成」会抛错「LoRA 绑定的 LoRA #N 不存在」。修复后跳转视为明确的「测这条」意图，覆盖缓存列表为 URL 指定的那条，picker 重新挂载用新项目和版本初始化下拉，越界的 XY 轴 LoRA 索引收敛到第 1 条。
+
+- **跨机器 bundle 导入：源机器绝对模型路径被错拼成本机仓库下的子路径（#137）**
+  本地（Windows）导出 bundle 含训练配置时，4 个全局模型路径（transformer / vae / text_encoder / t5_tokenizer）会原样写进 bundle；云端（Linux）导入时这些 Windows 盘符路径被识别为相对路径，拼到本机 repo 根目录下变成 `<repo>/G:/models/...`，训练启动时找不到 ckpt。修复后对齐预设 fork 行为：设置里「自动同步模型路径」开（默认）时用本机全局值覆盖 4 字段；关时尊重 bundle 内容，不再静默改写跨平台路径。
+
+---
+
 ## [0.10.1] — 2026-05-26
 
 Hotfix — 修 v0.10.0 引入的三处 silent regression
