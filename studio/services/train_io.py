@@ -674,6 +674,17 @@ def import_bundle(
                             except Exception:
                                 raw = {}
                         if isinstance(raw, dict):
+                            # 4 全局模型路径字段不在 PROJECT_SPECIFIC_FIELDS 里，
+                            # bundle 里带的源机器绝对路径（如 `G:/models/...`）会
+                            # 原样落盘，跨机器导入时被 `_absolutize_model_paths`
+                            # 拼成 `<repo>/G:/...`。对齐 fork_preset_for_version：
+                            # auto_sync_paths=ON 时用本机全局值覆盖 4 字段；OFF
+                            # 时尊重 bundle 内容（盘符识别已在
+                            # _absolutize_model_paths 修过，POSIX 下不再误拼前缀）。
+                            from . import presets as _presets_svc
+                            from . import model_downloader as _md
+                            if _presets_svc._auto_sync_paths():
+                                raw.update(_md.default_paths_for_new_version())
                             try:
                                 _vc.write_version_config(p, v, raw, force_project_overrides=True)
                                 config_imported = True

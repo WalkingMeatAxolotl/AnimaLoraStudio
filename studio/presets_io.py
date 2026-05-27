@@ -35,6 +35,9 @@ class PresetError(Exception):
     """预设 I/O 错误。"""
 
 
+_WIN_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
+
+
 def _absolutize_model_paths(data: dict[str, Any]) -> dict[str, Any]:
     """规范化 4 个模型字段：相对路径 → REPO_ROOT 绝对；分隔符统一 POSIX `/`。
 
@@ -43,11 +46,18 @@ def _absolutize_model_paths(data: dict[str, Any]) -> dict[str, Any]:
     - Windows 上 `str(Path)` 给反斜杠（`G:\\foo`），PathPicker 给 POSIX
       （`G:/foo`），混存会让同一字段在不同来源下视觉不一致；统一 `as_posix()`
       让 yaml 落盘 + UI 显示一律 `/`
+    - 跨平台 bundle import：Windows 盘符路径（`G:/...`）在 POSIX 上
+      `Path.is_absolute()` 返 False，会被误当相对路径拼到 REPO_ROOT 下变成
+      `<repo>/G:/...`。这里额外用正则识别盘符前缀视作绝对，避免静默 mangle。
+      （路径在异机器上仍然不可解析，但保持原样让 UI/日志能定位到原始来源。）
     不动 yaml 文件；下次保存自然落规范化后的形式。
     """
     for f in _MODEL_PATH_FIELDS:
         v = data.get(f)
         if isinstance(v, str) and v:
+            if _WIN_DRIVE_RE.match(v):
+                data[f] = v.replace("\\", "/")
+                continue
             p = Path(v)
             if not p.is_absolute():
                 p = (REPO_ROOT / p).resolve()

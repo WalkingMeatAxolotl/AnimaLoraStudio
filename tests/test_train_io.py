@@ -241,3 +241,93 @@ def test_import_bad_zip(isolated, tmp_path: Path) -> None:
     bad.write_bytes(b"not a zip file at all")
     with db.connection_for(isolated["db"]) as conn, pytest.raises(train_io.TrainIOError):
         train_io.import_train(conn, bad)
+
+
+# ---------------------------------------------------------------------------
+# bundle import: 4 全局模型路径字段跨机器处理
+# ---------------------------------------------------------------------------
+
+
+def _build_bundle_with_config(
+    tmp_path: Path,
+    *,
+    transformer_path: str,
+) -> Path:
+    """构造一个最小 v2 bundle.zip：1 张训练图 + presets/config.yaml。
+
+    transformer_path 用来塞 "源机器" 的绝对路径，模拟跨机器导入场景。
+    """
+    import yaml
+    from studio.schema import TrainingConfig
+
+    cfg = TrainingConfig().model_dump(mode="python")
+    cfg["transformer_path"] = transformer_path
+
+    bundle = tmp_path / "in.bundle.zip"
+    with zipfile.ZipFile(bundle, "w", compression=zipfile.ZIP_STORED) as zf:
+        zf.writestr(
+            "manifest.json",
+            json.dumps({
+                "schema_version": 2,
+                "source": {"title": "Imported", "slug": "imported", "version_label": "v1"},
+                "includes": {"train": True, "config": True},
+            }),
+        )
+        zf.writestr("train/1_data/a.png", b"fake")
+        zf.writestr(
+            "presets/config.yaml",
+            yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False),
+        )
+    return bundle
+
+
+def test_import_bundle_config_with_auto_sync_on_overrides_model_paths(
+    isolated, tmp_path: Path, monkeypatch
+) -> None:
+    """auto_sync_paths=ON（默认）：bundle 内 4 全局模型字段被本机 globals 覆盖。
+
+    源机器（Windows）导出的 `G:/models/foo.safetensors` 在异机器不可解析；
+    fork_preset_for_version 走的就是这个语义，bundle import 必须一致。
+    """
+    from studio.services import model_downloader, presets as preset_flow
+
+    monkeypatch.setattr(preset_flow, "_auto_sync_paths", lambda: True)
+    src_path = "G:/source-machine/anima.safetensors"
+    bundle = _build_bundle_with_config(tmp_path, transformer_path=src_path)
+
+    with db.connection_for(isolated["db"]) as conn:
+        result = train_io.import_bundle(conn, bundle, presets_base=tmp_path / "presets")
+
+    assert result["stats"]["config_imported"] is True
+    p = result["project"]
+    v = result["version"]
+    from studio.services import version_config
+    cfg = version_config.read_version_config(p, v)
+    expected = model_downloader.default_paths_for_new_version()["transformer_path"]
+    assert cfg["transformer_path"] == Path(expected).as_posix()
+    # 源路径已被覆盖，不残留
+    assert cfg["transformer_path"] != src_path
+
+
+def test_import_bundle_config_with_auto_sync_off_preserves_windows_path(
+    isolated, tmp_path: Path, monkeypatch
+) -> None:
+    """auto_sync_paths=OFF：尊重 bundle 内的绝对路径；POSIX 上 Windows 盘符
+    不被 REPO_ROOT 误拼成 `<repo>/G:/...`（盘符识别在 _absolutize_model_paths 里）。"""
+    from studio.services import presets as preset_flow
+
+    monkeypatch.setattr(preset_flow, "_auto_sync_paths", lambda: False)
+    src_path = "G:/source-machine/anima.safetensors"
+    bundle = _build_bundle_with_config(tmp_path, transformer_path=src_path)
+
+    with db.connection_for(isolated["db"]) as conn:
+        result = train_io.import_bundle(conn, bundle, presets_base=tmp_path / "presets")
+
+    assert result["stats"]["config_imported"] is True
+    p = result["project"]
+    v = result["version"]
+    from studio.services import version_config
+    cfg = version_config.read_version_config(p, v)
+    # 路径原样保留（POSIX 形式）；关键点是不会出现 REPO_ROOT 前缀
+    assert cfg["transformer_path"] == src_path
+    assert "G:/" in cfg["transformer_path"]

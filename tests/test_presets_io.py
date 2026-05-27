@@ -203,3 +203,27 @@ def test_write_preset_absolutizes_relative_paths(presets_dir: Path) -> None:
     raw = yaml.safe_load((presets_dir / "alpha.yaml").read_text(encoding="utf-8"))
     assert Path(raw["transformer_path"]).is_absolute()
     assert "\\" not in raw["transformer_path"]
+
+
+def test_absolutize_preserves_windows_drive_letter_on_posix(monkeypatch) -> None:
+    """跨平台 bundle import：Windows 盘符 (`G:/...`) 在 POSIX 上
+    `Path.is_absolute()` 返回 False，会被误拼到 REPO_ROOT 下变成
+    `<repo>/G:/...`。盘符前缀必须被识别为绝对，原样保留（含反斜杠归一为 `/`）。
+
+    monkeypatch 强制 Path.is_absolute 返回 False，模拟 Linux 处理 Windows 盘符的
+    行为 —— 否则在 Windows 上跑 `Path("G:/foo").is_absolute()` 本来就是 True，
+    没法 catch 修前的 bug。"""
+    from studio import presets_io
+    from studio.presets_io import _absolutize_model_paths
+
+    monkeypatch.setattr(
+        presets_io.Path, "is_absolute", lambda self: False
+    )
+
+    data = {
+        "transformer_path": "G:/models/diffusion_models/anima.safetensors",
+        "vae_path": "D:\\anima\\vae.safetensors",
+    }
+    out = _absolutize_model_paths(data)
+    assert out["transformer_path"] == "G:/models/diffusion_models/anima.safetensors"
+    assert out["vae_path"] == "D:/anima/vae.safetensors"
