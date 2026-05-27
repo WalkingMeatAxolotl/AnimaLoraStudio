@@ -174,6 +174,54 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(screen.getByText(/等队列 #42 完成/)).toBeInTheDocument()
   })
 
+  it('URL ?lora= 进入时 replace 缓存 LoRA list + clamp xDraft.loraIndex', async () => {
+    // 用户场景：localStorage 缓存里有旧 LoRA + xDraft 指 loraIndex=1（lora_ckpt 轴
+    // 绑第 2 条 LoRA）；从项目页 "在测试中加载" 跳过来，URL 带新 LoRA。
+    // 修前：append → loras=[旧, 新]（视觉拥挤）+ loraIndex=1 偶然合法；如果用户
+    //   之前没第 2 条 LoRA 但 loraIndex=1（脏 state）→ axisLoraMissing。
+    // 修后：replace → loras=[新]，loraIndex 越界 → clamp 到 0。
+    window.localStorage.setItem(
+      'studio:generate:params:v1',
+      JSON.stringify({
+        mode: 'single',
+        prompts: ['persist'],
+        negPrompt: '',
+        aspect: '1:1',
+        width: 1024, height: 1024,
+        steps: 25, cfgScale: 4, count: 1, seed: 0,
+        loras: [
+          { path: 'G:/old/cached.safetensors', scale: 1, project_id: 1, version_id: 1 },
+        ],
+        xDraft: { axis: 'lora_ckpt', raw: 'a, b', loraIndex: 5 },
+        yDraft: { axis: 'lora_scale', raw: '0.5, 1.0', loraIndex: 3 },
+        datasetPick: null,
+      })
+    )
+
+    const newLoraPath = 'G:/new/from_project.safetensors'
+    const search = `?lora=${encodeURIComponent(newLoraPath)}&projectId=2&versionId=3`
+    window.history.replaceState({}, '', `/tools/generate${search}`)
+
+    const user = userEvent.setup()
+    setup()
+    await waitForInitialLorasLoad()
+
+    // submit single，看 enqueue payload 里的 loras 只剩 URL 来的那条
+    await user.click(await screen.findByRole('button', { name: /开始生成/ }))
+    await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
+    const body = lastEnqueueBody!
+    expect(body.lora_configs).toEqual([
+      { path: newLoraPath, scale: 1.0, project_id: 2, version_id: 3 },
+    ])
+
+    // localStorage 里 xDraft/yDraft.loraIndex 应被 clamp（5/3 都越界）
+    const stored = JSON.parse(window.localStorage.getItem('studio:generate:params:v1')!)
+    expect(stored.xDraft.loraIndex).toBe(0)
+    expect(stored.yDraft.loraIndex).toBe(0)
+    // URL query 已被 replaceState 清掉
+    expect(window.location.search).toBe('')
+  })
+
   it('刷新后恢复左侧生成参数，但不恢复当前生成结果', async () => {
     const user = userEvent.setup()
     const first = setup()

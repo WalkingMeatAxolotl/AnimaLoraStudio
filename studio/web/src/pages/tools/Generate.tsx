@@ -70,7 +70,10 @@ export default function GeneratePage() {
   const setLoras = (loras: LoraEntry[]) => setPrefs((p) => ({ ...p, loras }))
 
   // LoRA 预填 via URL query (?lora=<path>&projectId=N&versionId=N)
-  // Overview StatusBanner "在测试中加载" CTA 跳进来时，把 LoRA 直接塞入 loras。
+  // Overview StatusBanner "在测试中加载" CTA 跳进来时，URL 是显式 "测这条 LoRA"
+  // 意图——丢掉缓存 list 直接 replace 成 [urlLora]，避免旧/已删 LoRA 与新条目
+  // 并排出现（旧 append 行为会让 xDraft.loraIndex 指向脏 slot，submit 抛
+  // axisLoraMissing）。同时 clamp xDraft/yDraft.loraIndex 到合法范围。
   // 用 history.replaceState 清掉 query 避免刷新时重复触发。
   useEffect(() => {
     const sp = new URLSearchParams(window.location.search)
@@ -79,15 +82,22 @@ export default function GeneratePage() {
     const projectId = sp.get('projectId')
     const versionId = sp.get('versionId')
     setPrefs((p) => {
-      if (p.loras.some((l) => l.path === lora)) return p
+      const newLoras: LoraEntry[] = [{
+        path: lora,
+        scale: 1.0,
+        project_id: projectId ? Number(projectId) : null,
+        version_id: versionId ? Number(versionId) : null,
+      }]
+      const clamp = (d: XYAxisDraft | null): XYAxisDraft | null => {
+        if (!d || d.loraIndex == null) return d
+        if (d.loraIndex < newLoras.length) return d
+        return { ...d, loraIndex: 0 }
+      }
       return {
         ...p,
-        loras: [...p.loras, {
-          path: lora,
-          scale: 1.0,
-          project_id: projectId ? Number(projectId) : null,
-          version_id: versionId ? Number(versionId) : null,
-        }],
+        loras: newLoras,
+        xDraft: clamp(p.xDraft) ?? p.xDraft,
+        yDraft: clamp(p.yDraft),
       }
     })
     const url = new URL(window.location.href)
