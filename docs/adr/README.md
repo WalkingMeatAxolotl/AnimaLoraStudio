@@ -14,8 +14,8 @@
 | 0006 | [Queue 任务暂停 / 恢复 + 队列挂起 / 恢复调度](0006-queue-pause-resume.md) | Accepted | 2026-05-18 |
 | 0007 | [Project / Version / Task 生命周期重构](0007-project-version-lifecycle-refactor.md) | Proposed | 2026-05-23 |
 | 0008 | [studio/ 4 层重构（0.11.0）](0008-studio-restructure-0.11.0.md) | Accepted | 2026-05-28 |
-| 0009 | [统一日志 + 错误体系（0.12.0）](0009-logging-error-system.md) | Accepted | 2026-05-28 |
 | 0010 | [preprocess scope 从项目级 download 下沉到 version 级 train](0010-preprocess-train-scope.md) | Accepted | 2026-06-03 |
+| 0011 | [LoRA 评估指标体系与可审查 PR 拆分](0011-lora-eval-metrics.md) | Proposed | 2026-05-27 |
 
 ## 状态值
 

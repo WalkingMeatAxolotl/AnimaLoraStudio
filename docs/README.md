@@ -36,6 +36,7 @@
 | ADR | 状态 | 内容 |
 |---|---|---|
 | [0001-lokr-via-lycoris-lora.md](adr/0001-lokr-via-lycoris-lora.md) | Accepted（2025） | LoKr 改走官方 lycoris-lora 库，而不是切到 sd-scripts |
+| [0011-lora-eval-metrics.md](adr/0011-lora-eval-metrics.md) | Proposed | LoRA 评估指标体系、异步 eval job 边界与可审查 PR 拆分 |
 
 详见 [adr/README.md](adr/README.md)。
 
