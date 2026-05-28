@@ -23,24 +23,19 @@ import json
 import logging
 import os
 import shutil
-import threading
 import time
 import zipfile
-from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
 from fastapi import (
     BackgroundTasks,
-    FastAPI,
     File,
     HTTPException,
     Request,
     UploadFile,
 )
-from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, model_validator
 
 from . import (
@@ -59,6 +54,16 @@ from . import (
     versions,
     versions_phase,
 )
+from .api.app import app
+from .api.errors import (
+    _data_export_path,
+    _export_result,
+    _safe_join_or_400,
+    _unique_data_export_path,
+    _validate_component_or_400,
+)
+from .api.responses import EMPTY_STATE
+from .api.static import SPAStaticFiles
 from .event_bus import bus
 from .services import (
     caption_snapshot,
@@ -91,9 +96,6 @@ from .paths import (
     STUDIO_DB,
     USER_PRESETS_DIR,
     WEB_DIST,
-    ensure_dirs,
-    safe_join,
-    validate_path_component,
 )
 from .schema import (
     GROUP_ORDER,
@@ -107,214 +109,7 @@ from .schema import (
 )
 from .supervisor import Supervisor
 
-ensure_dirs()
-db.init_db()
-
 logger = logging.getLogger(__name__)
-
-
-def _safe_join_or_400(base: Path, *parts: str) -> Path:
-    """safe_join 的 HTTPException 版本。把 ValueError 包成 400。"""
-    try:
-        return safe_join(base, *parts)
-    except ValueError as exc:
-        raise HTTPException(400, f"invalid path: {exc}") from exc
-
-
-def _validate_component_or_400(name: str) -> None:
-    """validate_path_component 的 HTTPException 版本（用于不需要 join 的纯名校验）。"""
-    try:
-        validate_path_component(name)
-    except ValueError as exc:
-        raise HTTPException(400, f"invalid path: {exc}") from exc
-
-
-def _data_export_path(filename: str, suffixes: tuple[str, ...] = (".zip",)) -> Path:
-    path = _safe_join_or_400(DATA_EXPORTS, filename)
-    allowed = tuple(s.lower() for s in suffixes)
-    if allowed and path.suffix.lower() not in allowed:
-        label = " / ".join(allowed)
-        raise HTTPException(400, f"请选择 {label} 文件")
-    return path
-
-
-def _unique_data_export_path(filename: str, suffixes: tuple[str, ...] = (".zip",)) -> Path:
-    base = _data_export_path(filename, suffixes)
-    if not base.exists():
-        return base
-    stem = base.stem
-    suffix = base.suffix
-    for i in range(2, 1000):
-        candidate = _data_export_path(f"{stem}-{i}{suffix}", suffixes)
-        if not candidate.exists():
-            return candidate
-    raise HTTPException(409, f"导出文件名冲突过多: {filename}")
-
-
-def _export_result(path: Path) -> dict[str, Any]:
-    st = path.stat()
-    return {"filename": path.name, "path": str(path), "size": st.st_size, "mtime": st.st_mtime}
-
-
-def _install_proactor_disconnect_filter(loop: asyncio.AbstractEventLoop) -> None:
-    """吞 Windows + asyncio Proactor 的 cosmetic ConnectionResetError 噪声。
-
-    Python asyncio 在 Windows 上有 [bpo-44291](https://github.com/python/cpython/issues/87691) 类问题：
-    远端 TCP 强制断开（用户关 tab / 刷新 / SSE 重连，WinError 10054 / 10053）
-    时 `_ProactorBasePipeTransport._call_connection_lost` 走 `socket.shutdown()`
-    抛 `ConnectionResetError` / `ConnectionAbortedError`，但 callback 内部
-    没 catch 这两个 expected error，asyncio 默认 handler 打 traceback 到
-    stderr。server 完全没事，只是日志被刷一行无意义 stack。
-
-    精确过滤：只在 exception 是 ConnectionResetError / ConnectionAbortedError
-    且 handle repr 含 `_call_connection_lost` 时静默吞掉；其它 asyncio
-    异常仍交给 default handler。仅 Windows 装；其它平台用 SelectorEventLoop
-    没这个 bug。
-    """
-    if os.name != "nt":
-        return
-
-    def _filter(loop_: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
-        exc = context.get("exception")
-        if isinstance(exc, (ConnectionResetError, ConnectionAbortedError)):
-            handle = context.get("handle")
-            if handle and "_call_connection_lost" in repr(handle):
-                return
-        loop_.default_exception_handler(context)
-
-    loop.set_exception_handler(_filter)
-
-
-@asynccontextmanager
-async def _lifespan(app_: FastAPI) -> AsyncIterator[None]:
-    """启动绑定 event bus 到当前 loop 并起 supervisor；关闭时停 supervisor。"""
-    # 装 Windows ProactorEventLoop 的 ConnectionResetError 过滤器（详见 helper docstring）
-    _install_proactor_disconnect_filter(asyncio.get_running_loop())
-
-    # 测试出图 tempdir 遗留清扫（防 supervisor crash 泄漏 anima_gen_* 目录）
-    from .services.inference_core import cleanup_stale_generate_tempdirs
-    from .services import generate_cache, model_downloader as _md
-    cleanup_stale_generate_tempdirs()
-
-    # TAEFlux（中间步预览）后台下载：跟 server 一起启动；下载失败不阻塞 server。
-    # 如果已下载则 noop；下载期间用户能正常用其他功能，预览功能等下载完才生效。
-    def _bg_download_taeflux() -> None:
-        try:
-            if _md.taeflux_available():
-                return
-            logger.info("background-downloading TAEFlux (~1.6MB)…")
-            ok = _md.download_taeflux(on_log=lambda m: logger.info("[taeflux] %s", m))
-            if not ok:
-                logger.warning("taeflux background download failed; preview disabled until manual install")
-        except Exception:
-            logger.exception("taeflux background download crashed")
-    threading.Thread(target=_bg_download_taeflux, name="taeflux-bg-download", daemon=True).start()
-
-    bus.attach_loop(asyncio.get_running_loop())
-
-    # commit 11：SSE 客户端断连 + 30s 缓冲后清 generate cache。
-    # 防刷新/短抖动：用户重连（_on_first_subscribe）取消计时器。
-    _disconnect_timer: dict[str, Optional[threading.Timer]] = {"t": None}
-
-    def _on_last_unsubscribe() -> None:
-        # 已有 timer 不重置（多个客户端各自 unsubscribe 时，最后一个才是关键）
-        if _disconnect_timer["t"] is not None:
-            return
-        timer = threading.Timer(30.0, _flush_cache)
-        timer.daemon = True
-        _disconnect_timer["t"] = timer
-        timer.start()
-
-    def _on_first_subscribe() -> None:
-        timer = _disconnect_timer.get("t")
-        if timer is not None:
-            timer.cancel()
-            _disconnect_timer["t"] = None
-
-    def _flush_cache() -> None:
-        n = generate_cache.total_count()
-        if n:
-            generate_cache.clear_all()
-            logger.info("flushed generate cache (%d images) after SSE idle", n)
-        _disconnect_timer["t"] = None
-
-    bus.set_connection_callbacks(
-        on_first_subscribe=_on_first_subscribe,
-        on_last_unsubscribe=_on_last_unsubscribe,
-    )
-
-    sup = Supervisor(on_event=bus.publish)
-    sup.start()
-    app_.state.supervisor = sup
-
-    # PR #37: system stats SSE — 后台 sampler 每 2.5s 采集 + bus.publish。前端
-    # 只 mount 时 GET 一次冷启动，避免 cloud 部署被每客户端独立轮询污染。
-    def _publish_system_stats(payload: dict[str, Any]) -> None:
-        bus.publish({"type": "system_stats_updated", "payload": payload})
-
-    sys_sampler = system_stats.SystemStatsSampler(_publish_system_stats)
-    sys_sampler.start()
-    app_.state.system_stats_sampler = sys_sampler
-
-    try:
-        yield
-    finally:
-        # 取消可能挂着的 disconnect timer，shutdown 阶段不需要再延迟
-        timer = _disconnect_timer.get("t")
-        if timer is not None:
-            timer.cancel()
-        sys_sampler.stop()
-        sup.stop()
-        # commit 11：lifespan shutdown 清掉所有图 cache（释放内存 + 干净退出）
-        generate_cache.clear_all()
-
-
-app = FastAPI(title="AnimaStudio", version=__version__, lifespan=_lifespan)
-
-
-# ── gzip ────────────────────────────────────────────────────────────
-# 给 JSON / 文本响应自动 gzip 压缩。对 /api/state（10k 步训练 ~500KB → ~100KB）
-# 这种大数组高度可压；对小响应 (< 1000B) 跳过避免 framing overhead 反而变大。
-#
-# 显式排除两类路径：
-#   - /api/events：SSE 流。GZipMiddleware 会 buffer chunks 到 minimum_size
-#     才发，破坏 SSE 实时性 + 某些 EventSource 实现解析 gzip 流有兼容问题
-#   - /samples/*：图片字节（PNG/JPEG/WEBP 已经是压缩格式），gzip 再压净浪费
-#     CPU 且 size 略增
-_GZIP_SKIP_PREFIXES = ("/api/events", "/samples/")
-
-
-class _SelectiveGZipMiddleware(GZipMiddleware):
-    """GZipMiddleware 的子类，按 path 前缀绕过指定路由。"""
-
-    async def __call__(self, scope, receive, send):  # type: ignore[override]
-        if scope.get("type") == "http":
-            path = scope.get("path", "")
-            if any(path.startswith(p) for p in _GZIP_SKIP_PREFIXES):
-                await self.app(scope, receive, send)
-                return
-        await super().__call__(scope, receive, send)
-
-
-app.add_middleware(_SelectiveGZipMiddleware, minimum_size=1000)
-
-
-# ---------------------------------------------------------------------------
-# API
-# ---------------------------------------------------------------------------
-
-EMPTY_STATE: dict[str, Any] = {
-    "losses": [],
-    "lr_history": [],
-    "epoch": 0,
-    "total_epochs": 0,
-    "step": 0,
-    "total_steps": 0,
-    "speed": 0.0,
-    "samples": [],
-    "start_time": None,
-    "config": {},
-}
 
 
 @app.get("/api/health")
@@ -4236,30 +4031,8 @@ def get_sample(
 # ---------------------------------------------------------------------------
 
 
-class SPAStaticFiles(StaticFiles):
-    """SPA 路由兜底：未命中实际文件且不像静态资产时，返回 index.html。
-
-    这样直接刷新 `/studio/projects/1/v/1/curate` 这种 react-router 路由
-    也能拿到 index.html，让 BrowserRouter 在前端解析路径。
-    带文件扩展名的请求（.js/.css/.png 等）保持原 404 行为，避免把缺失的
-    资源吞成 200 误导浏览器。
-    """
-
-    async def get_response(self, path, scope):  # type: ignore[override]
-        from starlette.exceptions import HTTPException as StarletteHTTPException
-        try:
-            return await super().get_response(path, scope)
-        except StarletteHTTPException as exc:
-            if exc.status_code != 404:
-                raise
-            # 末段含 "." → 视为静态资产请求，不兜底
-            last = path.rsplit("/", 1)[-1]
-            if "." in last:
-                raise
-            return FileResponse(Path(self.directory) / "index.html")
-
-
 # React 应用：构建后通过 /studio 访问。开发期请用 `npm run dev` 起 5173。
+# `SPAStaticFiles` 已 PR-5 抽到 studio/api/static.py。
 if WEB_DIST.exists():
     app.mount(
         "/studio",
@@ -4630,27 +4403,7 @@ def root() -> RedirectResponse | JSONResponse:
 # CLI
 # ---------------------------------------------------------------------------
 
-def main() -> None:
-    import argparse
-    import uvicorn
-
-    parser = argparse.ArgumentParser(description="AnimaStudio daemon")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument(
-        "--reload", action="store_true", help="dev mode (auto-reload on edit)"
-    )
-    args = parser.parse_args()
-
-    # 真正给用户看的入口是 /studio/（前端 SPA），裸根路径只是兼容旧 monitor。
-    print(f"[AnimaStudio] http://{args.host}:{args.port}/studio/")
-    uvicorn.run(
-        "studio.server:app",
-        host=args.host,
-        port=args.port,
-        reload=args.reload,
-        log_level="info",
-    )
+from .api.main import main  # noqa: E402  # PR-5 抽到 api.main，re-export 保 `from studio.server import main` 兼容
 
 
 if __name__ == "__main__":
