@@ -64,7 +64,9 @@ def test_check_wd14(client: TestClient, env, monkeypatch: pytest.MonkeyPatch) ->
     fake.requires_service = False
     # server 内部 import 是 from .services.tagger import get_tagger，
     # 模块级 binding 在 server 命名空间，需要在那打补丁。
-    monkeypatch.setattr(server, "get_tagger", lambda name: fake)
+    # PR-6 commit 1：/api/tagger/{name}/check 搬到 api/routers/tagger.py
+    from studio.api.routers import tagger as _tagger_router
+    monkeypatch.setattr(_tagger_router, "get_tagger", lambda name: fake)
     r = client.get("/api/tagger/wd14/check").json()
     assert r == {"name": "wd14", "ok": True, "msg": "ready", "requires_service": False}
 
@@ -319,7 +321,9 @@ def test_start_tag_ignores_overrides_for_joycaption(
     fake = MagicMock()
     fake.is_available.return_value = (True, "ok")
     fake.requires_service = True
-    monkeypatch.setattr(server, "get_tagger", lambda name: fake)
+    # PR-6 commit 1：/api/tagger/{name}/check 搬到 api/routers/tagger.py
+    from studio.api.routers import tagger as _tagger_router
+    monkeypatch.setattr(_tagger_router, "get_tagger", lambda name: fake)
     pid, vid = _make(client)
     r = client.post(
         f"/api/projects/{pid}/versions/{vid}/tag",

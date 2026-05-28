@@ -16,7 +16,14 @@ from studio import db, server
 
 @pytest.fixture
 def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """隔离 db / presets / logs 到 tmp_path。"""
+    """隔离 db / presets / logs 到 tmp_path。
+
+    PR-6 commit 6 后 queue / logs handler 搬到 api/routers/，monkeypatch
+    必须同时打到新位置（PR-5 的 lesson）。
+    """
+    from studio.api.routers import logs as _logs_router
+    from studio.api.routers.queue import lifecycle as _queue_lifecycle
+
     dbfile = tmp_path / "studio.db"
     db.init_db(dbfile)
     presets = tmp_path / "presets"
@@ -30,6 +37,10 @@ def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(server, "USER_PRESETS_DIR", presets)
     monkeypatch.setattr(server, "LOGS_DIR", logs)
     monkeypatch.setattr(server.db, "STUDIO_DB", dbfile)  # connect() 默认路径
+    # PR-6 commit 6：queue lifecycle 用自己 import 的 USER_PRESETS_DIR
+    monkeypatch.setattr(_queue_lifecycle, "USER_PRESETS_DIR", presets)
+    # PR-6 commit 1：logs router 用自己 import 的 LOGS_DIR
+    monkeypatch.setattr(_logs_router, "LOGS_DIR", logs)
     return tmp_path
 
 

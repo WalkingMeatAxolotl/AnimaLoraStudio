@@ -370,12 +370,21 @@ def _create_paused_task(env, state_pt: Path, cfg_json: Path) -> int:
 
 
 def _import_server_module():
-    """每次干净 import server module — 测试 isolation 用。"""
-    import importlib
+    """每次干净 import server module + 暴露 PR-6 抽出的 resume_task / HTTPException 兼容入口。
+
+    PR-6 commit 6：`resume_task` 搬到 api/routers/queue/lifecycle.py，原 server.py
+    内的 entry 没了。本 helper 返一个轻量壳，转发到新位置 + 留 HTTPException
+    名字给 tests `pytest.raises(server.HTTPException)` 用。
+    """
     if "studio.server" in sys.modules:
         del sys.modules["studio.server"]
     try:
         import studio.server as _s  # type: ignore[import-not-found]
+        from fastapi import HTTPException
+        from studio.api.routers.queue.lifecycle import resume_task as _resume_task
+        # 单测访问 server.HTTPException / server.resume_task —— attach 一下
+        _s.HTTPException = HTTPException
+        _s.resume_task = _resume_task
         return _s
     except ImportError:
         pytest.skip("fastapi not installed; cannot import studio.server")
