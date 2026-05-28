@@ -145,9 +145,15 @@ def test_scan_missing_root(tmp_path: Path) -> None:
 
 @pytest.fixture
 def client_with_dataset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """为端点测试构造一个临时 dataset，并把 server 的 REPO_ROOT 指过去。"""
+    """为端点测试构造一个临时 dataset，并把 server 的 REPO_ROOT 指过去。
+
+    PR-5：/api/datasets/* + /api/browse 已搬到 studio.api.routers.browse，
+    handler 内引的是 `browse.REPO_ROOT` 不是 `server.REPO_ROOT`。两边一起 patch
+    防 thumbnail 403 outside-repo。
+    """
     from fastapi.testclient import TestClient
     from studio import server
+    from studio.api.routers import browse as _browse_router
 
     fake_root = tmp_path / "repo"
     fake_root.mkdir()
@@ -156,6 +162,7 @@ def client_with_dataset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     _touch_image(ds / "5_concept", "b.png")
 
     monkeypatch.setattr(server, "REPO_ROOT", fake_root)
+    monkeypatch.setattr(_browse_router, "REPO_ROOT", fake_root)
     return TestClient(server.app), fake_root
 
 

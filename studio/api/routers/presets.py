@@ -23,6 +23,7 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 
 from .. import errors as _errors
+from ..errors import _preset_err_code as _err_code
 from ..schemas.presets import (
     DuplicateRequest,
     PresetExportBody,
@@ -34,16 +35,6 @@ from ...paths import DATA_EXPORTS
 from ...schema import GROUP_ORDER, TrainingConfig
 
 router = APIRouter()
-
-
-def _err_code(exc: presets_io.PresetError) -> int:
-    """PresetError → HTTP 状态码：'不存在' → 404，名字非法/已存在 → 400，其它 → 422。"""
-    msg = str(exc)
-    if "不存在" in msg:
-        return 404
-    if "非法预设名" in msg or "已存在" in msg:
-        return 400
-    return 422
 
 
 @router.get("/api/schema")

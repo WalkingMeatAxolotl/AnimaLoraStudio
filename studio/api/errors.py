@@ -10,6 +10,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from .. import presets_io
 from ..paths import DATA_EXPORTS, safe_join, validate_path_component
 
 
@@ -61,3 +62,16 @@ def _export_result(path: Path) -> dict[str, Any]:
         "size": st.st_size,
         "mtime": st.st_mtime,
     }
+
+
+def _preset_err_code(exc: presets_io.PresetError) -> int:
+    """PresetError → HTTP 状态码：'不存在' → 404，名字非法/已存在 → 400，其它 → 422。
+
+    被 api/routers/presets.py 和 server.py 内的 preset fork / save-as 端点共用。
+    """
+    msg = str(exc)
+    if "不存在" in msg:
+        return 404
+    if "非法预设名" in msg or "已存在" in msg:
+        return 400
+    return 422
