@@ -30,7 +30,7 @@ reconfigure_console_utf8()
 from studio.services import onnxruntime_setup  # noqa: F401
 
 from studio import db, project_jobs, projects, versions
-from studio.datasets import IMAGE_EXTS
+from studio.services.dataset.scan import IMAGE_EXTS
 from studio.services.caption_format import (
     caption_json_to_text,
     standard_to_documented_full,

@@ -391,7 +391,7 @@ def _run_crop(
             )
             # 给前端 grid 预热缩略图
             try:
-                from studio import thumb_cache
+                from studio.services.dataset import thumb_cache
                 for out_name in out_names:
                     out_path = preprocess_dir / out_name
                     with Image.open(out_path) as piece:

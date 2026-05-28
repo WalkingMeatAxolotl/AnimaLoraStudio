@@ -18,8 +18,9 @@ from typing import Any, Callable, Literal
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 
-from ... import curation, projects
-from ...datasets import IMAGE_EXTS
+from ... import projects
+from ...services.dataset import curation
+from ...services.dataset.scan import IMAGE_EXTS
 from . import manifest as preprocess_manifest
 
 try:  # pragma: no cover - exercised by dependency checks in integration tests

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import projects
-from ...datasets import IMAGE_EXTS
+from ...services.dataset.scan import IMAGE_EXTS
 
 # ADR-0007 §11.3-B：versions 状态机用 status + phase 两个正交字段。
 # 老 stage 已在 PR-5 移除（PR-5 commit 2 删 VALID_STAGES / advance_stage）。

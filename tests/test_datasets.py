@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from studio import datasets
+from studio.services.dataset import scan as datasets
 
 
 def _touch_image(folder: Path, name: str, size: int = 8) -> Path:

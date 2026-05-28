@@ -43,7 +43,8 @@ from ...schemas.ingestion import (
     UploadFromPathBody,
 )
 from ._shared import _publish_job_state, _publish_project_state
-from .... import datasets, db, project_jobs, projects, secrets
+from .... import db, project_jobs, projects, secrets
+from ....services.dataset import scan as datasets
 from ....paths import REPO_ROOT
 from .... import preprocess as preprocess_svc
 from ....services import (

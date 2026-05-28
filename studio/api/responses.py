@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi.responses import FileResponse
 
-from .. import thumb_cache
+from ..services.dataset import thumb_cache
 
 # /api/state 在 task_id 不存在 / 没 task / state.json 缺失时返回的空 state，
 # 保持前端 monitor 页能稳定渲染（不报错也不显示 "loading"）。

@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from ... import project_jobs, projects
-from ...datasets import IMAGE_EXTS
+from ...services.dataset.scan import IMAGE_EXTS
 from . import manifest as preprocess_manifest
 
 

@@ -326,7 +326,7 @@ def upscale_file(
     # 而 worker 这里已经付过解码代价了，多花零点几秒生成 thumb 摊到批处理里几乎无感。
     if prewarm_thumb_sizes:
         try:
-            from .. import thumb_cache
+            from ..dataset import thumb_cache
             thumb_cache.prewarm_from_image(dst, out_img, prewarm_thumb_sizes)
         except Exception as exc:  # noqa: BLE001 — 缩略图预热失败不影响放大本体
             on_log(f"   ⚠ thumb prewarm failed: {exc}")

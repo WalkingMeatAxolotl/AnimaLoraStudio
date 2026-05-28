@@ -171,7 +171,7 @@ def delete_project(conn: sqlite3.Connection, project_id: int) -> None:
 
 def stats_for_project(p: dict[str, Any]) -> dict[str, Any]:
     """轻量统计：download/ 与 preprocess/ 下的图片数量。version 级统计在 versions.py。"""
-    from ...datasets import IMAGE_EXTS  # 复用既有扩展名集
+    from ...services.dataset.scan import IMAGE_EXTS  # 复用既有扩展名集
 
     pdir = project_dir(p["id"], p["slug"])
 

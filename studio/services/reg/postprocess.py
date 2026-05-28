@@ -43,7 +43,7 @@ import numpy as np
 from PIL import Image
 from sklearn.cluster import KMeans
 
-from ...datasets import IMAGE_EXTS
+from ...services.dataset.scan import IMAGE_EXTS
 
 ProgressFn = Callable[[str], None]
 

@@ -33,7 +33,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from ...datasets import IMAGE_EXTS
+from ...services.dataset.scan import IMAGE_EXTS
 from ..booru import api as booru_api, pool as booru_pool
 from .analysis import (
     _IMAGE_EXT_NODOT,

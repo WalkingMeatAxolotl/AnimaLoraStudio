@@ -295,7 +295,7 @@ def test_upscale_file_prewarms_thumbnails(
     tmp_path: Path, stub_model: StubDescriptor, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """prewarm_thumb_sizes 应该让 thumb_cache 直接拿到预生成的缩略图。"""
-    from studio import thumb_cache
+    from studio.services.dataset import thumb_cache
 
     monkeypatch.setattr(thumb_cache, "THUMB_CACHE_DIR", tmp_path / "thumbs")
 

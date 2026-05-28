@@ -59,7 +59,8 @@ from ._shared import (
     _version_dir_or_404,
     _version_train_dir_or_404,
 )
-from .... import datasets, db, presets_io, project_jobs, projects, versions
+from .... import db, presets_io, project_jobs, projects, versions
+from ....services.dataset import scan as datasets
 from ....domain import RegAiConfig
 from ....event_bus import bus
 from ....paths import STUDIO_DATA, safe_join
