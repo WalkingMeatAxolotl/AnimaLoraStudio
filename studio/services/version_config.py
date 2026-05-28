@@ -16,7 +16,7 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
-from ..presets_io import _absolutize_model_paths
+from .presets.io import _absolutize_model_paths
 from ..schema import TrainingConfig
 from ..versions import version_dir
 from .. import projects as _projects

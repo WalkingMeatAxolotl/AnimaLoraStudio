@@ -17,7 +17,7 @@ import numpy as np
 from PIL import Image, ImageOps
 
 from ... import secrets
-from .. import model_downloader
+from ..models import downloader as model_downloader
 from .onnx_base import OnnxTaggerBase
 
 
