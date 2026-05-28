@@ -682,7 +682,7 @@ def import_bundle(
                             # 时尊重 bundle 内容（盘符识别已在
                             # _absolutize_model_paths 修过，POSIX 下不再误拼前缀）。
                             from .. import presets as _presets_svc
-                            from ..models import downloader as _md
+                            from .. import models as _md
                             if _presets_svc._auto_sync_paths():
                                 raw.update(_md.default_paths_for_new_version())
                             try:

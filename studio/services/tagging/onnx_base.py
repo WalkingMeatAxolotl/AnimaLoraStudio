@@ -18,13 +18,10 @@ import numpy as np
 from PIL import Image
 
 from .. import onnxruntime_setup
+from ..models.paths import safe_dir_name  # noqa: F401  (re-exported for shim consumers)
 from .base import ProgressFn, TagResult
 
 logger = logging.getLogger(__name__)
-
-
-def safe_dir_name(model_id: str) -> str:
-    return model_id.replace("/", "_").replace("\\", "_")
 
 
 @contextlib.contextmanager

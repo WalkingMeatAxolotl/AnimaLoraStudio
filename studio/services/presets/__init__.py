@@ -14,7 +14,7 @@ from typing import Any
 from . import io as presets_io
 from ... import secrets
 from ...schema import TrainingConfig
-from ..models import downloader as model_downloader
+from .. import models as model_downloader
 from .. import version_config
 
 
