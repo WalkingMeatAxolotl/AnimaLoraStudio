@@ -7,7 +7,8 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
-from studio import db, project_jobs, projects, secrets, server, versions
+from studio import db, secrets, server
+from studio.services.projects import jobs as project_jobs, projects, versions
 from studio.services import llm_tagger
 from studio.services import tagger as tagger_mod
 

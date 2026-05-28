@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from studio import db, project_jobs, projects, versions
+from studio import db
+from studio.services.projects import jobs as project_jobs, projects, versions
 from studio.services import tagger as tagger_mod
 from studio.workers import tag_worker
 

@@ -9,7 +9,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from studio import db, preprocess as preprocess_svc, project_jobs, projects, secrets, server
+from studio import db, preprocess as preprocess_svc, secrets, server
+from studio.services.projects import jobs as project_jobs, projects
 from studio.services import model_downloader, preprocess_manifest
 
 

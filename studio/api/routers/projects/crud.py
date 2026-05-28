@@ -37,7 +37,8 @@ from ._shared import (
     _publish_version_state,
     _version_dir_or_404,
 )
-from .... import db, projects, versions, versions_phase
+from .... import db
+from ....services.projects import projects, versions, phase as versions_phase
 
 router = APIRouter()
 

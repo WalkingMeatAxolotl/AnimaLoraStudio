@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from studio import db, projects, server, versions
+from studio import db, server
+from studio.services.projects import projects, versions
 
 
 @pytest.fixture

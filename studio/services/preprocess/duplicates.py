@@ -18,7 +18,7 @@ from typing import Any, Callable, Literal
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 
-from ... import projects
+from ...services.projects import projects
 from ...services.dataset import curation
 from ...services.dataset.scan import IMAGE_EXTS
 from . import manifest as preprocess_manifest

@@ -23,7 +23,7 @@ def _maybe_finalize_version(
 
     paused 不进此函数（§11.3-A：task=paused 时 version 仍 training，UI 派生显示）。
     """
-    from .. import versions as _versions
+    from ..services.projects import versions as _versions
     task_row = db.get_task(conn, task_id)
     if not task_row:
         return
@@ -34,7 +34,7 @@ def _maybe_finalize_version(
     v = _versions.get_version(conn, int(vid))
     if not v:
         return
-    from .. import projects as _projects
+    from ..services.projects import projects as _projects
     p = _projects.get_project(conn, int(pid))
     if not p:
         return

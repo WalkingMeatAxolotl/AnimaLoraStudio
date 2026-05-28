@@ -31,7 +31,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from .. import db, project_jobs, secrets as _secrets
+from .. import db, secrets as _secrets
+from ..services.projects import jobs as project_jobs
 from ..log_tail import LogTailer, MonitorStatePoller
 from ..paths import LOGS_DIR, REPO_ROOT, STUDIO_DATA, STUDIO_DB, USER_PRESETS_DIR
 from ..services.inference_daemon import (
@@ -651,7 +652,7 @@ class Supervisor:
             vid = task.get("version_id")
             if vid:
                 try:
-                    from .. import versions as _versions
+                    from ..services.projects import versions as _versions
                     _versions.update_version(
                         conn, int(vid),
                         status=_versions.VersionStatus.TRAINING,

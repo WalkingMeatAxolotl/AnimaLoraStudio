@@ -39,7 +39,8 @@ reconfigure_console_utf8()
 # subprocess，必须自己 import；否则 CUDA EP 静默降级到 CPU，用户看不到任何信号。
 from studio.services import onnxruntime_setup  # noqa: F401
 
-from studio import db, project_jobs, projects, secrets, versions
+from studio import db, secrets
+from studio.services.projects import jobs as project_jobs, projects, versions
 from studio.services.dataset.scan import IMAGE_EXTS
 from studio.services import reg_builder, reg_postprocess, tagedit
 

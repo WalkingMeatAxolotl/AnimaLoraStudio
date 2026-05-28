@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from studio import db, preprocess, project_jobs, projects
+from studio import db, preprocess
+from studio.services.projects import jobs as project_jobs, projects
 from studio.services import preprocess_manifest
 
 

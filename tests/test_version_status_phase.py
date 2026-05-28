@@ -11,7 +11,8 @@ import sqlite3
 import time
 from pathlib import Path
 
-from studio import db, versions
+from studio import db
+from studio.services.projects import versions
 from studio.migrations import MIGRATIONS, current_version
 
 

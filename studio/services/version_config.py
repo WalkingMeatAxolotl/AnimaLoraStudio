@@ -18,8 +18,8 @@ from pydantic import ValidationError
 
 from .presets.io import _absolutize_model_paths
 from ..schema import TrainingConfig
-from ..versions import version_dir
-from .. import projects as _projects
+from .projects.versions import version_dir
+from .projects import projects as _projects
 
 
 class VersionConfigError(Exception):
@@ -163,7 +163,7 @@ def get_project_and_version(
     conn, project_id: int, version_id: int
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """便捷：从 db 读 project + version；版本不属当前项目时抛 VersionConfigError。"""
-    from .. import versions as _versions
+    from ..services.projects import versions as _versions
     p = _projects.get_project(conn, project_id)
     if not p:
         raise VersionConfigError(f"项目不存在: id={project_id}")

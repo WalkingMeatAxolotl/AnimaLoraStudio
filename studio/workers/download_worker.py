@@ -15,7 +15,8 @@ from __future__ import annotations
 import threading
 import traceback
 
-from studio import db, project_jobs, projects, secrets
+from studio import db, secrets
+from studio.services.projects import jobs as project_jobs, projects
 from studio.services import downloader
 
 

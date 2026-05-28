@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from ... import projects, versions
+from ...services.projects import projects, versions
 from ..dataset.scan import IMAGE_EXTS
 from ...paths import safe_join
 

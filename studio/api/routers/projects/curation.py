@@ -35,7 +35,8 @@ from ...schemas.curation import (
     RemoveRequest,
 )
 from ._shared import _publish_project_state
-from .... import db, project_jobs, projects
+from .... import db
+from ....services.projects import jobs as project_jobs, projects
 from ....services.dataset import curation, scan as datasets
 from ....event_bus import bus
 from ....services import duplicate_finder, preprocess_manifest

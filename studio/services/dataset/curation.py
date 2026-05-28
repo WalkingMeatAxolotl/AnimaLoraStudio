@@ -22,7 +22,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from ... import projects, versions
+from ..projects import projects, versions
 from .scan import IMAGE_EXTS
 from ..preprocess import manifest as preprocess_manifest
 

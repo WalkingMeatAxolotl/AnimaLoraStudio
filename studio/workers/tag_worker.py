@@ -29,7 +29,8 @@ reconfigure_console_utf8()
 # 懒加载链触发太晚（懒加载在 main() 里，某些路径下来不及）—— worker 顶层显式 import。
 from studio.services import onnxruntime_setup  # noqa: F401
 
-from studio import db, project_jobs, projects, versions
+from studio import db
+from studio.services.projects import jobs as project_jobs, projects, versions
 from studio.services.dataset.scan import IMAGE_EXTS
 from studio.services.caption_format import (
     caption_json_to_text,

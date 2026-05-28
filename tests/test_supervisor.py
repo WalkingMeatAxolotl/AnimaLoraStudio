@@ -381,7 +381,7 @@ def test_config_path_takes_priority(env, tmp_path) -> None:
 
 def test_finalize_version_writes_output_lora_path(env, tmp_path, monkeypatch) -> None:
     """PP6.3：训练 task 完成 → 推 version.output_lora_path + stage=done。"""
-    from studio import projects, versions
+    from studio.services.projects import projects, versions
 
     monkeypatch.setattr(projects, "PROJECTS_DIR", tmp_path / "projects")
 

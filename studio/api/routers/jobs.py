@@ -16,7 +16,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from ..deps import _supervisor
-from ... import db, project_jobs
+from ... import db
+from ...services.projects import jobs as project_jobs
 
 router = APIRouter()
 

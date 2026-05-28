@@ -9,7 +9,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from studio import db, project_jobs
+from studio import db
+from studio.services.projects import jobs as project_jobs
 from studio.services import inference_daemon as _daemon_mod
 from studio.supervisor import Supervisor
 
@@ -58,7 +59,7 @@ def _make_train_task(env: dict) -> int:
 def _make_tag_job(env: dict, *, slug: str = "p") -> int:
     """造一个 tag job pending。"""
     with db.connection_for(env["db"]) as conn:
-        from studio import projects, versions
+        from studio.services.projects import projects, versions
         p = projects.create_project(conn, title="P", slug=slug)
         v = versions.create_version(conn, project_id=p["id"], label="v1")
         job = project_jobs.create_job(
@@ -200,7 +201,7 @@ def test_dispatch_data_download_not_blocked_by_daemon(env, fake_daemon, fake_sec
 
     # 造 download job
     with db.connection_for(env["db"]) as conn:
-        from studio import projects, versions
+        from studio.services.projects import projects, versions
         p = projects.create_project(conn, title="P2", slug="p2")
         v = versions.create_version(conn, project_id=p["id"], label="v1")
         project_jobs.create_job(

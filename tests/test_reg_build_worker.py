@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from studio import db, project_jobs, projects, secrets, versions
+from studio import db, secrets
+from studio.services.projects import jobs as project_jobs, projects, versions
 from studio.services import reg_builder
 from studio.workers import reg_build_worker
 

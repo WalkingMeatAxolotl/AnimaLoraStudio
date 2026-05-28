@@ -173,7 +173,7 @@ def test_outputs_list_with_files(
     client: TestClient, isolated, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """task 关联 project+version 时，端点返回 output 目录里所有文件 + meta。"""
-    from studio import projects as projects_mod, versions as versions_mod
+    from studio.services.projects import projects as projects_mod, versions as versions_mod
     monkeypatch.setattr(projects_mod, "PROJECTS_DIR", isolated / "projects")
     with db.connection_for() as conn:
         p = projects_mod.create_project(conn, title="P")
@@ -238,7 +238,7 @@ def test_outputs_list_no_version(client: TestClient) -> None:
 def test_download_output_file(
     client: TestClient, isolated, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from studio import projects as projects_mod, versions as versions_mod
+    from studio.services.projects import projects as projects_mod, versions as versions_mod
     monkeypatch.setattr(projects_mod, "PROJECTS_DIR", isolated / "projects")
     with db.connection_for() as conn:
         p = projects_mod.create_project(conn, title="P")
@@ -269,7 +269,7 @@ def test_download_outputs_zip(
     """全量 zip 端点应把 output 目录所有文件打包返回。"""
     import io
     import zipfile
-    from studio import projects as projects_mod, versions as versions_mod
+    from studio.services.projects import projects as projects_mod, versions as versions_mod
     monkeypatch.setattr(projects_mod, "PROJECTS_DIR", isolated / "projects")
     with db.connection_for() as conn:
         p = projects_mod.create_project(conn, title="P")
@@ -314,7 +314,7 @@ def test_list_task_outputs_returns_archive_basename(
 ) -> None:
     """list_task_outputs 返回里带 archive_basename = "{slug}-{label}"，前端用作
     打包下载的 zip 文件名前缀。老任务（无 project/version）→ null。"""
-    from studio import projects as projects_mod, versions as versions_mod
+    from studio.services.projects import projects as projects_mod, versions as versions_mod
     monkeypatch.setattr(projects_mod, "PROJECTS_DIR", isolated / "projects")
     with db.connection_for() as conn:
         p = projects_mod.create_project(conn, title="P")
@@ -338,7 +338,7 @@ def test_download_outputs_zip_partial(
     """传 ?files=a,b 只打包指定文件，文件名带 _selected 后缀。"""
     import io
     import zipfile
-    from studio import projects as projects_mod, versions as versions_mod
+    from studio.services.projects import projects as projects_mod, versions as versions_mod
     monkeypatch.setattr(projects_mod, "PROJECTS_DIR", isolated / "projects")
     with db.connection_for() as conn:
         p = projects_mod.create_project(conn, title="P")
@@ -372,7 +372,7 @@ def test_download_outputs_zip_partial_missing_file_404(
     client: TestClient, isolated, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """选中文件里有 output 目录不存在的 → 404。"""
-    from studio import projects as projects_mod, versions as versions_mod
+    from studio.services.projects import projects as projects_mod, versions as versions_mod
     monkeypatch.setattr(projects_mod, "PROJECTS_DIR", isolated / "projects")
     with db.connection_for() as conn:
         p = projects_mod.create_project(conn, title="P")
@@ -391,7 +391,7 @@ def test_download_outputs_zip_partial_blocks_traversal(
     client: TestClient, isolated, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """?files= 允许安全相对路径，但禁止 path traversal / 绝对路径。"""
-    from studio import projects as projects_mod, versions as versions_mod
+    from studio.services.projects import projects as projects_mod, versions as versions_mod
     monkeypatch.setattr(projects_mod, "PROJECTS_DIR", isolated / "projects")
     with db.connection_for() as conn:
         p = projects_mod.create_project(conn, title="P")
@@ -419,7 +419,7 @@ def test_download_outputs_zip_empty_dir_404(
     client: TestClient, isolated, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """目录存在但空 → 404 而不是返回空 zip。"""
-    from studio import projects as projects_mod, versions as versions_mod
+    from studio.services.projects import projects as projects_mod, versions as versions_mod
     monkeypatch.setattr(projects_mod, "PROJECTS_DIR", isolated / "projects")
     with db.connection_for() as conn:
         p = projects_mod.create_project(conn, title="P")

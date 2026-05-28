@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from studio import db, projects, versions
+from studio import db
+from studio.services.projects import projects, versions
 from studio.services import presets as preset_flow, version_config
 
 
