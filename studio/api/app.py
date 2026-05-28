@@ -16,6 +16,14 @@ from fastapi import FastAPI
 from .. import __version__
 from .lifespan import lifespan
 from .middleware import _SelectiveGZipMiddleware
+from .routers import browse, events_sse, health, presets
 
 app = FastAPI(title="AnimaStudio", version=__version__, lifespan=lifespan)
 app.add_middleware(_SelectiveGZipMiddleware, minimum_size=1000)
+
+# 第一批 router（PR-5 commit 2）。后续 router 逐批从 server.py 抽到
+# api/routers/<name>.py 后在此 include。
+app.include_router(health.router)
+app.include_router(presets.router)
+app.include_router(browse.router)
+app.include_router(events_sse.router)
