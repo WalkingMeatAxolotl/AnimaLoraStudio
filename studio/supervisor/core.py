@@ -29,7 +29,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from .. import db, project_jobs, secrets as _secrets
 from ..log_tail import LogTailer, MonitorStatePoller
@@ -459,47 +459,12 @@ class Supervisor:
 
     # -------------------------------------------------------------- 子进程
     def _spawn_task(self, slot: _Slot, task: dict[str, Any]) -> None:
-        # PP6.3：优先用 task.config_path（version 私有 config 绝对路径）；
-        # 没有时降级到老路径 _configs_dir / {config_name}.yaml。
-        explicit_cfg = task.get("config_path")
-        if explicit_cfg:
-            cfg_path = Path(explicit_cfg)
-        else:
-            cfg_path = self._configs_dir / f"{task['config_name']}.yaml"
+        cfg_path = self._resolve_task_config_path(task)
         if not cfg_path.exists():
-            with db.connection_for(self._db_path) as conn:
-                now = time.time()
-                db.update_task(
-                    conn,
-                    task["id"],
-                    status="failed",
-                    started_at=now,
-                    finished_at=now,
-                    error_msg=(
-                        f"config not found: {cfg_path}"
-                        if explicit_cfg
-                        else f"preset not found: {task['config_name']}"
-                    ),
-                )
-            self._on_event(
-                {
-                    "type": "task_state_changed",
-                    "task_id": task["id"],
-                    "status": "failed",
-                }
-            )
+            self._fail_task_config_missing(task, cfg_path)
             return
 
-        # ADR-0007 §11.7 / PR-3 commit 4：task 启动 → 冻结当时的 config
-        # 到 studio_data/tasks/{tid}/snapshot/config.yaml。失败不阻 task
-        # 启动（snapshot 是 forensics 不是必需）。
-        try:
-            from .. import task_snapshot
-            task_snapshot.freeze_config(int(task["id"]), cfg_path)
-        except Exception:
-            logger.exception(
-                "task %s config snapshot freeze failed (non-fatal)", task["id"]
-            )
+        self._freeze_task_snapshot(int(task["id"]), cfg_path)
 
         # PP6.1 — 计算 per-task monitor 状态文件路径
         # 有 version_id：versions/{label}/monitor_state.json
@@ -524,14 +489,91 @@ class Supervisor:
         slot.log_fp = log_fp
         slot.cancel_pending = False
 
-        # PP6.4 — log tail → SSE（取代前端 2s 轮询 /api/logs/{id}）
         tid = task["id"]
 
+        # PP6.4 — log tail → SSE（取代前端 2s 轮询 /api/logs/{id}）
+        slot.tailer = LogTailer(log_path, self._make_task_log_callback(slot, tid))
+        slot.tailer.start()
+
+        # PP6.4 → PR #37: monitor_state.json 变化 → SSE monitor_progress (增量协议)
+        slot.state_poller = MonitorStatePoller(
+            monitor_state_path, self._make_monitor_callback(tid)
+        )
+        slot.state_poller.start()
+
+        self._write_task_running_to_db(task, proc.pid, monitor_state_path)
+
+        self._on_event(
+            {
+                "type": "task_state_changed",
+                "task_id": task["id"],
+                "status": "running",
+            }
+        )
+        logger.info(
+            "started task %d on slot=%s (pid=%d)", task["id"], slot.name, proc.pid
+        )
+
+    def _resolve_task_config_path(self, task: dict[str, Any]) -> Path:
+        """PP6.3：优先用 task.config_path（version 私有 config 绝对路径）；
+        没有时降级到老路径 _configs_dir / {config_name}.yaml。
+        """
+        explicit_cfg = task.get("config_path")
+        if explicit_cfg:
+            return Path(explicit_cfg)
+        return self._configs_dir / f"{task['config_name']}.yaml"
+
+    def _fail_task_config_missing(
+        self, task: dict[str, Any], cfg_path: Path
+    ) -> None:
+        """config 不存在时把 task 标 failed 并 publish 事件。"""
+        explicit_cfg = task.get("config_path")
+        with db.connection_for(self._db_path) as conn:
+            now = time.time()
+            db.update_task(
+                conn,
+                task["id"],
+                status="failed",
+                started_at=now,
+                finished_at=now,
+                error_msg=(
+                    f"config not found: {cfg_path}"
+                    if explicit_cfg
+                    else f"preset not found: {task['config_name']}"
+                ),
+            )
+        self._on_event(
+            {
+                "type": "task_state_changed",
+                "task_id": task["id"],
+                "status": "failed",
+            }
+        )
+
+    def _freeze_task_snapshot(self, task_id: int, cfg_path: Path) -> None:
+        """ADR-0007 §11.7 / PR-3 commit 4：task 启动 → 冻结当时的 config
+        到 studio_data/tasks/{tid}/snapshot/config.yaml。失败不阻 task
+        启动（snapshot 是 forensics 不是必需）。
+        """
+        try:
+            from .. import task_snapshot
+            task_snapshot.freeze_config(task_id, cfg_path)
+        except Exception:
+            logger.exception(
+                "task %s config snapshot freeze failed (non-fatal)", task_id
+            )
+
+    def _make_task_log_callback(
+        self, slot: _Slot, tid: int
+    ) -> Callable[[str], None]:
+        """LogTailer 回调：识别 __EVENT__: 协议 → 镜像状态到 slot + publish SSE；
+        普通行 → task_log_appended。
+
+        ADR 0006 PR-2：训练 worker 通过 __EVENT__: 协议跟 supervisor 通信
+        （pause_state / train_loop_started / auto_epoch_backup_written /
+        resume_state_loaded）。跟 jobs 的 _on_line 路径对齐。
+        """
         def _on_task_log(line: str) -> None:
-            # ADR 0006 PR-2：训练 worker 通过 __EVENT__: 协议跟 supervisor 通信
-            # （pause_state / train_loop_started / resume_state_loaded）。跟
-            # jobs 的 _on_line 路径对齐 — 之前 task 这条 path 不识别 event marker，
-            # 现在补上。
             if line.startswith(_EVENT_MARKER):
                 try:
                     rest = line[len(_EVENT_MARKER):]
@@ -572,33 +614,40 @@ class Supervisor:
                 "text": line,
                 "seq": next(self._log_seq),
             })
+        return _on_task_log
 
-        slot.tailer = LogTailer(log_path, _on_task_log)
-        slot.tailer.start()
+    def _make_monitor_callback(
+        self, tid: int
+    ) -> Callable[[dict[str, Any]], None]:
+        """MonitorStatePoller 回调：把 monitor_state.json 的 delta publish 成
+        SSE monitor_progress（PR #37 增量协议）。
 
-        # PP6.4 → PR #37: monitor_state.json 变化 → SSE monitor_progress (增量协议)
-        # payload 是 delta（appended_losses/lr/samples + 最新 step/speed/...），
-        # 客户端首次 GET /api/state 拿快照后用这个增量持续 merge。
+        payload 是 delta（appended_losses/lr/samples + 最新 step/speed/...），
+        客户端首次 GET /api/state 拿快照后用这个增量持续 merge。
+        """
         def _on_state_delta(delta: dict[str, Any]) -> None:
             self._on_event({
                 "type": "monitor_progress",
                 "task_id": tid,
                 "delta": delta,
             })
+        return _on_state_delta
 
-        slot.state_poller = MonitorStatePoller(monitor_state_path, _on_state_delta)
-        slot.state_poller.start()
-
+    def _write_task_running_to_db(
+        self, task: dict[str, Any], pid: int, monitor_state_path: Path
+    ) -> None:
+        """task spawn 后的 db 写入：task.status=running + version.status=training
+        （ADR-0007 §11.3-B 双写）。
+        """
         with db.connection_for(self._db_path) as conn:
             db.update_task(
                 conn,
                 task["id"],
                 status="running",
                 started_at=time.time(),
-                pid=proc.pid,
+                pid=pid,
                 monitor_state_path=str(monitor_state_path),
             )
-            # ADR-0007 §11.3-B 双写：task 启动 → version.status = training
             vid = task.get("version_id")
             if vid:
                 try:
@@ -612,16 +661,6 @@ class Supervisor:
                         "version.status=training write failed for task %s",
                         task["id"],
                     )
-        self._on_event(
-            {
-                "type": "task_state_changed",
-                "task_id": task["id"],
-                "status": "running",
-            }
-        )
-        logger.info(
-            "started task %d on slot=%s (pid=%d)", task["id"], slot.name, proc.pid
-        )
 
     def _spawn_job(self, slot: _Slot, job: dict[str, Any]) -> None:
         log_path = Path(job.get("log_path") or project_jobs.log_path_for(job["id"]))
@@ -641,16 +680,44 @@ class Supervisor:
         slot.log_fp = log_fp
         slot.cancel_pending = False
 
-        # tail 增量 → SSE
         jid = job["id"]
         pid_ = job["project_id"]
         vid = job.get("version_id")
         kind = job["kind"]
 
+        slot.tailer = LogTailer(
+            log_path, self._make_job_log_callback(jid, pid_, vid, kind)
+        )
+        slot.tailer.start()
+
+        self._on_event({
+            "type": "job_state_changed",
+            "job_id": jid,
+            "project_id": pid_,
+            "version_id": vid,
+            "kind": kind,
+            "status": "running",
+        })
+        logger.info(
+            "started job %d on slot=%s (kind=%s, pid=%d)",
+            jid, slot.name, kind, proc.pid,
+        )
+
+    def _make_job_log_callback(
+        self,
+        jid: int,
+        pid_: Optional[int],
+        vid: Optional[int],
+        kind: str,
+    ) -> Callable[[str], None]:
+        """LogTailer 回调：识别 __EVENT__: 协议 publish typed SSE；普通行
+        → job_log_appended。
+
+        结构化事件标记：worker 写 `__EVENT__:type:json_payload` 让 supervisor
+        publish 成 typed SSE 事件（不进 job log）。比专门搭 IPC 通道轻，比
+        让前端按文本 grep 日志靠谱。job_id / project_id 由 supervisor 注入。
+        """
         def _on_line(line: str) -> None:
-            # 结构化事件标记：worker 写 `__EVENT__:type:json_payload` 让 supervisor
-            # publish 成 typed SSE 事件（不进 job log）。比专门搭 IPC 通道轻，比
-            # 让前端按文本 grep 日志靠谱。job_id / project_id 由 supervisor 注入。
             if line.startswith(_EVENT_MARKER):
                 try:
                     rest = line[len(_EVENT_MARKER):]
@@ -678,22 +745,7 @@ class Supervisor:
                 "text": line,
                 "seq": next(self._log_seq),
             })
-
-        slot.tailer = LogTailer(log_path, _on_line)
-        slot.tailer.start()
-
-        self._on_event({
-            "type": "job_state_changed",
-            "job_id": jid,
-            "project_id": pid_,
-            "version_id": vid,
-            "kind": kind,
-            "status": "running",
-        })
-        logger.info(
-            "started job %d on slot=%s (kind=%s, pid=%d)",
-            jid, slot.name, kind, proc.pid,
-        )
+        return _on_line
 
     # ----------------------------------------------- daemon 路径 (commit 9)
     def _submit_to_daemon(self, task: dict[str, Any]) -> None:
