@@ -12,7 +12,7 @@ import pytest
 from PIL import Image
 
 from studio.services.projects import projects
-from studio.services import preprocess_manifest as pm
+from studio.services.preprocess import manifest as pm
 from studio.workers import preprocess_worker as worker
 
 

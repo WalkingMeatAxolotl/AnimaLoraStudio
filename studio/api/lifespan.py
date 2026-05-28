@@ -79,8 +79,9 @@ async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
     db.init_db()
 
     # 测试出图 tempdir 遗留清扫（防 supervisor crash 泄漏 anima_gen_* 目录）
-    from ..services.inference_core import cleanup_stale_generate_tempdirs
-    from ..services import generate_cache, model_downloader as _md
+    from ..services.inference.core import cleanup_stale_generate_tempdirs
+    from ..services.inference import cache as generate_cache
+    from ..services import models as _md
     from ..services import system_stats
     cleanup_stale_generate_tempdirs()
 

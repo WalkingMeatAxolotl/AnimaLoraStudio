@@ -9,7 +9,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from ...services.tagger import VALID_TAGGER_NAMES, get_tagger
+from ...services.tagging.base import VALID_TAGGER_NAMES, get_tagger
 
 router = APIRouter()
 

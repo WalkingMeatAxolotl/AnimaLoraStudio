@@ -11,7 +11,7 @@ import pytest
 
 from studio import db
 from studio.services.projects import jobs as project_jobs
-from studio.services import inference_daemon as _daemon_mod
+from studio.services.inference import daemon as _daemon_mod
 from studio.supervisor import Supervisor
 
 

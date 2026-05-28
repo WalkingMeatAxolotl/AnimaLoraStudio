@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from studio.services import pending_install
+from studio.services.runtime import pending_install
 
 
 @pytest.fixture
@@ -59,7 +59,7 @@ def test_apply_pending_no_marker_is_noop(
     isolated_marker: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """没 pending → 不应触发 torch_setup.reinstall。"""
-    from studio.services import torch_setup
+    from studio.services.runtime import torch as torch_setup
     called: list[str] = []
     monkeypatch.setattr(torch_setup, "reinstall", lambda t: called.append(t))
     pending_install.apply_pending()
@@ -71,7 +71,7 @@ def test_apply_pending_runs_torch_reinstall_and_clears(
 ) -> None:
     """有 pending=torch → 调 reinstall + 清 marker。"""
     pending_install.register_torch_reinstall("cu128")
-    from studio.services import torch_setup
+    from studio.services.runtime import torch as torch_setup
     captured: list[str] = []
 
     def fake_reinstall(target, *, stream=False):
@@ -97,7 +97,7 @@ def test_apply_pending_keeps_marker_on_failure(
 ) -> None:
     """reinstall 抛 RuntimeError → marker 保留，下次启动重试。"""
     pending_install.register_torch_reinstall("cu128")
-    from studio.services import torch_setup
+    from studio.services.runtime import torch as torch_setup
 
     def fake_reinstall(_t, *, stream=False):
         raise RuntimeError("network failed")

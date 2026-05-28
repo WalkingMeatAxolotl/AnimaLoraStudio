@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from studio.services import caption_snapshot
+from studio.services.tagging import caption_snapshot
 
 
 def _seed_train(version_dir: Path, content: dict[str, dict[str, str]]) -> None:

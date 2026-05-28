@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 from PIL import Image
 
-from studio.services import reg_builder
+from studio.services.reg import builder as reg_builder
 
 
 # ---------------------------------------------------------------------------

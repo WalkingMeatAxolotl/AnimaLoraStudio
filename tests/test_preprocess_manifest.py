@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from studio.services import preprocess_manifest as pm
+from studio.services.preprocess import manifest as pm
 
 
 @pytest.fixture

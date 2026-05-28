@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock
 
-from studio.services import booru_api
+from studio.services.booru import api as booru_api
 
 
 def _fake_session(json_payload: Any = None) -> MagicMock:

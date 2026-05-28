@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from studio.services import tagedit
+from studio.services.dataset import tagedit
 
 
 @pytest.fixture

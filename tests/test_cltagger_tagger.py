@@ -10,7 +10,7 @@ import pytest
 from PIL import Image
 
 from studio import secrets
-from studio.services import cltagger_tagger
+from studio.services.tagging import cltagger as cltagger_tagger
 
 
 @pytest.fixture

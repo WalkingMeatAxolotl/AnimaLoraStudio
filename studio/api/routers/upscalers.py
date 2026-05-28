@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException
 
 from ..schemas.models import UpscalerCustomDownloadRequest, UpscalerSelectRequest
 from ... import secrets
-from ...services import model_downloader
+from ...services import models as model_downloader
 
 router = APIRouter()
 

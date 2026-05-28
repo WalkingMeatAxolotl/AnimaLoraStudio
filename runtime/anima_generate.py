@@ -42,7 +42,7 @@ for _p in (_THIS_DIR, _REPO_ROOT):
 
 import anima_train as _T  # noqa: E402
 
-from studio.services.inference_core import LoRASpec, apply_loras  # noqa: E402
+from studio.services.inference.core import LoRASpec, apply_loras  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,

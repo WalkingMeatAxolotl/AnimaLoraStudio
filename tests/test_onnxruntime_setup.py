@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from studio.services import onnxruntime_setup as ors
+from studio.services.runtime import onnxruntime as ors
 
 
 # ---------------------------------------------------------------------------

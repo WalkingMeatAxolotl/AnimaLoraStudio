@@ -34,12 +34,12 @@ from ..schemas.installs import (
     WD14InstallRequest,
 )
 from ... import secrets
-from ...services import (
-    flash_attention_setup,
-    onnxruntime_setup,
+from ...services.runtime import (
+    flash_attention as flash_attention_setup,
+    onnxruntime as onnxruntime_setup,
     pending_install,
-    torch_setup,
-    xformers_setup,
+    torch as torch_setup,
+    xformers as xformers_setup,
 )
 
 router = APIRouter()
@@ -201,7 +201,7 @@ def refresh_llm_tagger_models(body: LLMModelsRefreshRequest) -> dict[str, Any]:
 
     `preset_id` 不传时用 current_preset。成功后才落 secrets，避免请求失败时写脏。
     """
-    from ...services import llm_tagger as llm_tagger_svc
+    from ...services.tagging import llm as llm_tagger_svc
 
     tagger_cfg = secrets.load().llm_tagger
     target = _select_preset(tagger_cfg, body.preset_id)
@@ -245,7 +245,7 @@ def test_llm_tagger_connection(body: LLMConnectionTestRequest) -> dict[str, Any]
     Defaults come from the target preset (preset_id or current); body fields
     override on top.
     """
-    from ...services import llm_tagger as llm_tagger_svc
+    from ...services.tagging import llm as llm_tagger_svc
 
     tagger_cfg = secrets.load().llm_tagger
     target = _select_preset(tagger_cfg, body.preset_id)

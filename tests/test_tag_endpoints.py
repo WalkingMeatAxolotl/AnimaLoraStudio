@@ -9,8 +9,8 @@ from fastapi.testclient import TestClient
 
 from studio import db, secrets, server
 from studio.services.projects import jobs as project_jobs, projects, versions
-from studio.services import llm_tagger
-from studio.services import tagger as tagger_mod
+from studio.services.tagging import llm as llm_tagger
+from studio.services.tagging import base as tagger_mod
 
 
 @pytest.fixture
@@ -63,7 +63,7 @@ def test_check_wd14(client: TestClient, env, monkeypatch: pytest.MonkeyPatch) ->
     fake = MagicMock()
     fake.is_available.return_value = (True, "ready")
     fake.requires_service = False
-    # server 内部 import 是 from .services.tagger import get_tagger，
+    # server 内部 import 是 from .services.tagging.base import get_tagger，
     # 模块级 binding 在 server 命名空间，需要在那打补丁。
     # PR-6 commit 1：/api/tagger/{name}/check 搬到 api/routers/tagger.py
     from studio.api.routers import tagger as _tagger_router

@@ -21,7 +21,7 @@ pytest.importorskip("safetensors")
 
 from safetensors.torch import save_file
 
-from studio.services.inference_core import LoRASpec, apply_loras, read_lora_meta
+from studio.services.inference.core import LoRASpec, apply_loras, read_lora_meta
 
 
 @contextmanager
@@ -257,7 +257,7 @@ def test_model_cache_reinjects_when_lora_topology_changes(tmp_path: Path) -> Non
 def test_generate_tempdir_path() -> None:
     """tempdir 路径基于 task_id，落在系统 tempdir 下。"""
     import tempfile
-    from studio.services.inference_core import (
+    from studio.services.inference.core import (
         GENERATE_TEMP_PREFIX,
         generate_tempdir,
     )
@@ -268,7 +268,7 @@ def test_generate_tempdir_path() -> None:
 
 def test_cleanup_generate_tempdir_removes_dir() -> None:
     """cleanup_generate_tempdir 清掉对应 task 的目录。"""
-    from studio.services.inference_core import (
+    from studio.services.inference.core import (
         cleanup_generate_tempdir,
         generate_tempdir,
     )
@@ -283,7 +283,7 @@ def test_cleanup_generate_tempdir_removes_dir() -> None:
 
 def test_cleanup_generate_tempdir_noop_when_missing() -> None:
     """目录不存在时调 cleanup 是 noop（非 generate task 也安全）。"""
-    from studio.services.inference_core import (
+    from studio.services.inference.core import (
         cleanup_generate_tempdir,
         generate_tempdir,
     )
@@ -298,7 +298,7 @@ def test_cleanup_stale_generate_tempdirs(tmp_path: Path, monkeypatch: pytest.Mon
     """启动扫清：把所有 anima_gen_* 目录全清。"""
     import tempfile
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
-    from studio.services.inference_core import (
+    from studio.services.inference.core import (
         GENERATE_TEMP_PREFIX,
         cleanup_stale_generate_tempdirs,
     )

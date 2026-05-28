@@ -107,7 +107,7 @@ def _guess_default_paths():
     base: Optional[Path] = None
     transformer_path: str = ""
     try:
-        from studio.services.model_downloader import find_anima_main, models_root
+        from studio.services.models import find_anima_main, models_root
         base = models_root()
         existing = find_anima_main(base)
         if existing:

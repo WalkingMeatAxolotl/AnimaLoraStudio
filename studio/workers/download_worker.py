@@ -17,7 +17,7 @@ import traceback
 
 from studio import db, secrets
 from studio.services.projects import jobs as project_jobs, projects
-from studio.services import downloader
+from studio.services.booru import downloader
 
 
 def run(job_id: int) -> int:

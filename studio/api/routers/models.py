@@ -12,7 +12,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from ..schemas.models import ModelDownloadRequest
-from ...services import model_downloader
+from ...services import models as model_downloader
 
 router = APIRouter()
 

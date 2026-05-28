@@ -28,7 +28,9 @@ from PIL import Image
 from studio import db
 from studio.services.preprocess import core as preprocess
 from studio.services.projects import jobs as project_jobs, projects
-from studio.services import model_downloader, preprocess_manifest, upscaler
+from studio.services import models as model_downloader
+from studio.services.preprocess import manifest as preprocess_manifest
+from studio.services.inference import upscaler
 
 
 _stop_requested = False

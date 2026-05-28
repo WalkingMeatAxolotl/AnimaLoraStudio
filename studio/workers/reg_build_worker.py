@@ -37,12 +37,13 @@ reconfigure_console_utf8()
 # PP9.5 — 必须在任何 `import onnxruntime` 之前 import 本模块，触发顶层 preload。
 # auto_tag 路径会内联调 wd14_tagger（line ~105 `get_tagger("wd14")`），worker 是独立
 # subprocess，必须自己 import；否则 CUDA EP 静默降级到 CPU，用户看不到任何信号。
-from studio.services import onnxruntime_setup  # noqa: F401
+from studio.services.runtime import onnxruntime as onnxruntime_setup  # noqa: F401
 
 from studio import db, secrets
 from studio.services.projects import jobs as project_jobs, projects, versions
 from studio.services.dataset.scan import IMAGE_EXTS
-from studio.services import reg_builder, reg_postprocess, tagedit
+from studio.services.reg import builder as reg_builder, postprocess as reg_postprocess
+from studio.services.dataset import tagedit
 
 
 def _collect_reg_images(reg_dir: Path) -> list[Path]:
@@ -102,7 +103,7 @@ def _run_auto_tag(reg_dir: Path, progress) -> bool:
         return False
     progress(f"[auto-tag] 启动 WD14，{len(images)} 张图")
     try:
-        from studio.services.tagger import get_tagger
+        from studio.services.tagging.base import get_tagger
         tagger = get_tagger("wd14")
         tagger.prepare()
         progress("[auto-tag] WD14 模型就绪")

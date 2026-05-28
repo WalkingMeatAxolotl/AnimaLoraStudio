@@ -35,7 +35,7 @@ from .. import db, secrets as _secrets
 from ..services.projects import jobs as project_jobs
 from ..infrastructure.log_tail import LogTailer, MonitorStatePoller
 from ..paths import LOGS_DIR, REPO_ROOT, STUDIO_DATA, STUDIO_DB, USER_PRESETS_DIR
-from ..services.inference_daemon import (
+from ..services.inference.daemon import (
     InferenceDaemon,
     STATE_STOPPED as _DAEMON_STOPPED,
     get_daemon,
@@ -966,7 +966,7 @@ class Supervisor:
             db.update_task(conn, task_id, **fields)
 
         try:
-            from ..services.inference_core import cleanup_generate_tempdir
+            from ..services.inference.core import cleanup_generate_tempdir
             cleanup_generate_tempdir(task_id)
         except Exception as e:
             logger.warning("cleanup generate tempdir failed: %s", e)

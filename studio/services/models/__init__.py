@@ -7,7 +7,7 @@
 
 re-export 完整公共名供 `from studio.services.models import X` 使用。
 原 `studio.services.model_downloader` 通过 shim 文件 sys.modules 别名到 **本包**
-（不是 downloader 子模块），原 `from studio.services.model_downloader import X` 仍工作。
+（不是 downloader 子模块），原 `from studio.services.models import X` 仍工作。
 """
 from .catalog import build_catalog
 from .downloader import (

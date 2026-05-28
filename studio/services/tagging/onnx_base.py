@@ -17,7 +17,7 @@ from typing import Iterator, Optional
 import numpy as np
 from PIL import Image
 
-from .. import onnxruntime_setup
+from ..runtime import onnxruntime as onnxruntime_setup
 from ..models.paths import safe_dir_name  # noqa: F401  (re-exported for shim consumers)
 from .base import ProgressFn, TagResult
 

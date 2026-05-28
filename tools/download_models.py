@@ -33,7 +33,7 @@ for _stream in (sys.stdout, sys.stderr):
 # 让 `python tools/download_models.py` 也能 import studio package
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from studio.services.model_downloader import (  # noqa: E402
+from studio.services.models import (  # noqa: E402
     ANIMA_VARIANTS,
     LATEST_ANIMA,
     download_anima_main,
@@ -99,7 +99,7 @@ Anima 主模型版本（--variant）:
             os.environ["HF_ENDPOINT"] = args.endpoint
         elif args.no_mirror:
             os.environ["HF_ENDPOINT"] = "https://huggingface.co"
-        from studio.services.model_downloader import _resolve_endpoint  # noqa: PLC0415
+        from studio.services.models import _resolve_endpoint  # noqa: PLC0415
         active = _resolve_endpoint() or "https://huggingface.co (HF 默认)"
         print(f"使用下载源: HuggingFace  endpoint: {active}")
 

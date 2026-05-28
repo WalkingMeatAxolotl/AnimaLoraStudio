@@ -337,7 +337,7 @@ def _apply_pending_install() -> None:
     失败不抛 —— pending_install.apply_pending 内部已打印错误，让 launcher 继续起。
     """
     try:
-        from studio.services import pending_install  # noqa: PLC0415
+        from studio.services.runtime import pending_install  # noqa: PLC0415
         pending_install.apply_pending()
     except Exception as exc:  # noqa: BLE001
         print(
@@ -353,7 +353,7 @@ def _try_enable_flash_attn() -> None:
     动态 import 避免拖慢 cli import 时间（cosmos_predict2_modeling 加载触发 torch import）。
     """
     try:
-        from studio.services import flash_attention_setup  # noqa: PLC0415
+        from studio.services.runtime import flash_attention as flash_attention_setup  # noqa: PLC0415
         if not flash_attention_setup.current_status()["installed"]:
             return
         from models.cosmos_predict2_modeling import set_flash_attn_enabled  # noqa: PLC0415
@@ -404,7 +404,7 @@ def _check_torch_cuda() -> None:
     if cuda_build is None:
         # CPU-only wheel：进一步判断本机是否其实有 NVIDIA GPU（误装）
         try:
-            from studio.services import onnxruntime_setup  # noqa: PLC0415
+            from studio.services.runtime import onnxruntime as onnxruntime_setup  # noqa: PLC0415
             has_gpu = bool(onnxruntime_setup.detect_cuda().get("available"))
         except Exception:  # noqa: BLE001
             has_gpu = False
@@ -447,7 +447,7 @@ def _bootstrap_onnxruntime() -> None:
     - 委托 onnxruntime_setup.bootstrap()（仅做 GPU/EP 匹配警告，不重装）
     """
     try:
-        from studio.services import onnxruntime_setup
+        from studio.services.runtime import onnxruntime as onnxruntime_setup
 
         # ── 步骤 1：检查是否已安装（不 import .pyd，只读 dist-info）────────
         rt = onnxruntime_setup.current_runtime()
@@ -596,7 +596,7 @@ def _apply_update_pending() -> None:
     看到"上次 update 失败"提示）。
     """
     try:
-        from studio.services import updater  # noqa: PLC0415
+        from studio.services.runtime import updater  # noqa: PLC0415
         if not updater.has_pending():
             return
         updater.apply_pending(emit=print)
@@ -613,7 +613,7 @@ def _maybe_force_torch(args: argparse.Namespace) -> int:
     tag = getattr(args, 'torch', None)
     if not tag:
         return 0
-    from studio.services import torch_setup  # noqa: PLC0415
+    from studio.services.runtime import torch as torch_setup  # noqa: PLC0415
     current = torch_setup.detect_torch()
     current_build = current.get('cuda_build') or ('未安装' if not current.get('installed') else 'unknown')
     if current.get('installed') and current.get('cuda_build') == tag:

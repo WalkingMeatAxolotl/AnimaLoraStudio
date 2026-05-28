@@ -48,12 +48,10 @@ from ....services.projects import jobs as project_jobs, projects
 from ....services.dataset import scan as datasets
 from ....paths import REPO_ROOT
 from ....services.preprocess import core as preprocess_svc
-from ....services import (
-    downloader,
-    model_downloader,
-    preprocess_manifest,
-    uploads as uploads_svc,
-)
+from ....services import model_downloader
+from ....services.booru import downloader
+from ....services.preprocess import manifest as preprocess_manifest
+from ....services.dataset import uploads as uploads_svc
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

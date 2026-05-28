@@ -21,7 +21,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 # normalize_caption_json 的权威实现集中在 studio.services.caption_format —— PR #18
 # review 发现两份实现微妙不同（去重 / appearance 合并策略），改回单一源。
-from studio.services.caption_format import normalize_caption_json  # noqa: E402, F401
+from studio.services.tagging.caption_format import normalize_caption_json  # noqa: E402, F401
 
 
 def load_caption_json(json_path: Path) -> dict | None:

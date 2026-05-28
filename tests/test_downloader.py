@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 from PIL import Image
 
-from studio.services import downloader
+from studio.services.booru import downloader
 
 
 def _png_bytes(color: tuple[int, int, int] = (255, 0, 0)) -> bytes:

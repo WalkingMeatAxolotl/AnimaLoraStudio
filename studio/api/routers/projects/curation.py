@@ -39,7 +39,7 @@ from .... import db
 from ....services.projects import jobs as project_jobs, projects
 from ....services.dataset import curation, scan as datasets
 from ....infrastructure.event_bus import bus
-from ....services import duplicate_finder, preprocess_manifest
+from ....services.preprocess import duplicates as duplicate_finder, manifest as preprocess_manifest
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

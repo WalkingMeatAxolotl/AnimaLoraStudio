@@ -225,7 +225,7 @@ def step3_studio_client(urls: list[str]) -> None:
     log.info("③ Studio BooruClient (PP9 真实代码路径)")
     log.info("=" * 70)
     try:
-        from studio.services.booru_pool import BooruClient, BooruPoolConfig
+        from studio.services.booru.pool import BooruClient, BooruPoolConfig
     except Exception as exc:  # noqa: BLE001
         log.error("import studio.services.booru_pool 失败：%s", exc)
         return

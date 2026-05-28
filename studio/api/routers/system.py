@@ -37,7 +37,7 @@ from ..schemas.system import UpdateRequest
 from ... import db
 from ...paths import REPO_ROOT
 from ...services import release_notes as release_notes_svc
-from ...services import updater
+from ...services.runtime import updater
 
 router = APIRouter()
 

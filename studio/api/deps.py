@@ -33,7 +33,7 @@ def _resolve_anima_model_paths() -> dict[str, str]:
     与 version_config 的 model 字段对齐。用户用别的 base 模型时，
     在 Settings → 模型 里改 selected_anima 影响这里的 anima 主权重路径。
     """
-    from ..services.model_downloader import models_root
+    from ..services.models import models_root
     root = models_root()
     return {
         "transformer_path": str(root / "diffusion_models" / "anima-base-v1.0.safetensors"),

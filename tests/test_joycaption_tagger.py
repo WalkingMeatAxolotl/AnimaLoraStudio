@@ -12,7 +12,7 @@ import pytest
 from PIL import Image
 
 from studio import secrets
-from studio.services import joycaption_tagger, llm_tagger
+from studio.services.tagging import joycaption as joycaption_tagger, llm as llm_tagger
 
 
 @pytest.fixture

@@ -20,7 +20,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
 
-from studio.services import upscaler
+from studio.services.inference import upscaler
 
 
 # ---------------------------------------------------------------------------

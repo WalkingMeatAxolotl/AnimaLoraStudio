@@ -5,7 +5,7 @@ from typing import Optional
 
 from pydantic import BaseModel, model_validator
 
-from ...services import train_io
+from ...services.data_io import train_io
 
 
 class BundleOptionsBody(BaseModel):

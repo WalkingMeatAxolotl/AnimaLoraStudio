@@ -8,7 +8,7 @@ import pytest
 
 from studio import db
 from studio.services.projects import jobs as project_jobs, projects, versions
-from studio.services import tagger as tagger_mod
+from studio.services.tagging import base as tagger_mod
 from studio.workers import tag_worker
 
 
@@ -376,12 +376,12 @@ def test_worker_imports_onnxruntime_setup_at_module_level() -> None:
     import re
     import sys
     src = Path(tag_worker.__file__).read_text(encoding="utf-8")
-    assert "from studio.services import onnxruntime_setup" in src, (
-        "tag_worker.py 顶层必须 import onnxruntime_setup 触发 preload；"
-        "见 onnxruntime_setup.py 顶部 PP9.5 注释。"
+    assert "from studio.services.runtime import onnxruntime" in src, (
+        "tag_worker.py 顶层必须 import onnxruntime 触发 preload；"
+        "见 onnxruntime.py 顶部 PP9.5 注释。"
     )
     # worker 文件本身不应出现 `^import onnxruntime` / `^from onnxruntime`（行首真 import）
     bad = re.findall(r"^\s*(?:import onnxruntime|from onnxruntime\b)", src, re.MULTILINE)
     assert not bad, f"worker 不应直接 import onnxruntime；命中: {bad}"
     # 模块加载本身把 onnxruntime_setup 拉进 sys.modules
-    assert "studio.services.onnxruntime_setup" in sys.modules
+    assert "studio.services.runtime.onnxruntime" in sys.modules

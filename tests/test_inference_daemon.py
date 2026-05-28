@@ -20,8 +20,8 @@ from typing import Any
 import pytest
 
 from studio import db
-from studio.services import inference_daemon as _daemon_mod
-from studio.services.inference_daemon import (
+from studio.services.inference import daemon as _daemon_mod
+from studio.services.inference.daemon import (
     InferenceDaemon,
     STATE_BUSY,
     STATE_IDLE,
@@ -114,7 +114,7 @@ def test_daemon_starts_and_reaches_idle(mock_daemon_script: Path) -> None:
 
 
 def test_submit_task_runs_to_done(mock_daemon_script: Path) -> None:
-    from studio.services import generate_cache
+    from studio.services.inference import cache as generate_cache
 
     generate_cache.clear_all()
     d = InferenceDaemon(script_path=mock_daemon_script)
@@ -161,7 +161,7 @@ def test_daemon_crash_emits_error(mock_daemon_script: Path) -> None:
         with d._lock:  # type: ignore[attr-defined]
             d._req_seq += 1
             req_id = "task-99-x"
-            from studio.services.inference_daemon import _ActiveTask
+            from studio.services.inference.daemon import _ActiveTask
             d._active = _ActiveTask(
                 task_id=99, request_id=req_id, on_event=events.append,
             )

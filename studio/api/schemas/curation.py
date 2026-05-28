@@ -5,7 +5,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from ...services import duplicate_finder
+from ...services.preprocess import duplicates as duplicate_finder
 
 
 class DeleteFilesRequest(BaseModel):

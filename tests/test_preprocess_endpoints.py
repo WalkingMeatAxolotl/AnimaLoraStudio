@@ -12,7 +12,8 @@ from fastapi.testclient import TestClient
 from studio import db, secrets, server
 from studio.services.preprocess import core as preprocess_svc
 from studio.services.projects import jobs as project_jobs, projects
-from studio.services import model_downloader, preprocess_manifest
+from studio.services import models as model_downloader
+from studio.services.preprocess import manifest as preprocess_manifest
 
 
 @pytest.fixture

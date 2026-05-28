@@ -36,7 +36,7 @@ router = APIRouter()
 @router.post("/api/generate")
 def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
     """启动测试出图 task。"""
-    from ...services.inference_core import generate_tempdir
+    from ...services.inference.core import generate_tempdir
 
     model_paths = _resolve_anima_model_paths()
 
@@ -60,7 +60,7 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
         preview_n = 0
     attn = body.attention_backend or attn_default
     if attn == "auto":
-        from ...services.xformers_setup import detect_attention_backend
+        from ...services.runtime.xformers import detect_attention_backend
         attn = detect_attention_backend()
 
     cfg = GenerateConfig(
@@ -115,7 +115,7 @@ def get_generate_task(task_id: int) -> dict[str, Any]:
 @router.get("/api/generate/taeflux/status")
 def get_taeflux_status() -> dict[str, Any]:
     """commit 14：查询 TAEFlux 模型是否就绪（中间步预览依赖）。"""
-    from ...services import model_downloader as _md
+    from ...services import models as _md
     d = _md.taeflux_dir()
     return {
         "available": _md.taeflux_available(),
@@ -127,7 +127,7 @@ def get_taeflux_status() -> dict[str, Any]:
 @router.post("/api/generate/taeflux/install")
 def install_taeflux() -> dict[str, Any]:
     """同步下载 TAEFlux（~1.6MB，秒级）。已存在直接返回 OK。"""
-    from ...services import model_downloader as _md
+    from ...services import models as _md
     if _md.taeflux_available():
         return {"ok": True, "noop": True}
     ok = _md.download_taeflux()
@@ -139,7 +139,7 @@ def install_taeflux() -> dict[str, Any]:
 @router.get("/api/generate/daemon/status")
 def get_daemon_status() -> dict[str, Any]:
     """查询 daemon 当前状态。前端 DaemonControls 用。"""
-    from ...services.inference_daemon import get_daemon
+    from ...services.inference.daemon import get_daemon
     daemon = get_daemon()
     return {
         "state": daemon.state,
@@ -155,7 +155,7 @@ def get_daemon_logs(since_seq: int = 0, limit: int = 2000) -> dict[str, Any]:
 
     since_seq>0 时只返新于该 seq 的行。
     """
-    from ...services.inference_daemon import get_daemon
+    from ...services.inference.daemon import get_daemon
     return get_daemon().read_logs(since_seq=since_seq, limit=limit)
 
 
@@ -166,7 +166,7 @@ def unload_daemon() -> dict[str, Any]:
     卸载完成后 supervisor 会推 daemon_state_changed SSE，前端按钮自动 disable。
     下次用户点「开始生成」daemon 按需重 load。
     """
-    from ...services.inference_daemon import get_daemon
+    from ...services.inference.daemon import get_daemon
     daemon = get_daemon()
     if daemon.is_busy:
         raise HTTPException(409, "daemon is busy, cannot unload")
@@ -187,7 +187,7 @@ def get_generate_sample(task_id: int, filename: str) -> Any:
     _validate_component_or_400(filename)
     if not filename.lower().endswith(".png"):
         raise HTTPException(400, "only .png supported")
-    from ...services import generate_cache
+    from ...services.inference import cache as generate_cache
     data = generate_cache.get_image(task_id, filename)
     if data is None:
         raise HTTPException(404)

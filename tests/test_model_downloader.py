@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from studio.services import model_downloader
+from studio.services import models as model_downloader
 
 
 @pytest.fixture

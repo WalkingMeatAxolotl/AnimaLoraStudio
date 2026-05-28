@@ -213,7 +213,7 @@ def _normalize_default(path_str: str) -> str:
 
 def test_fork_with_toggle_on_overrides_model_paths(env, monkeypatch) -> None:
     """toggle ON：预设里的 4 模型字段 fork 时被 default_paths_for_new_version 覆盖。"""
-    from studio.services import model_downloader
+    from studio.services import models as model_downloader
     monkeypatch.setattr(preset_flow, "_auto_sync_paths", lambda: True)
     p, v = _make_pv(env)
     custom = _custom_path()
@@ -236,7 +236,7 @@ def test_fork_with_toggle_off_respects_preset(env, monkeypatch) -> None:
 
 def test_save_as_preset_toggle_on_clears_model_paths(env, monkeypatch) -> None:
     """toggle ON：保存预设时 4 模型字段清回 default_paths（不带本机自定义出去）。"""
-    from studio.services import model_downloader
+    from studio.services import models as model_downloader
     # fork 时用 toggle OFF 保留用户自定义路径
     monkeypatch.setattr(preset_flow, "_auto_sync_paths", lambda: False)
     p, v = _make_pv(env)

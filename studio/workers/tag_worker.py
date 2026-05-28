@@ -27,17 +27,17 @@ reconfigure_console_utf8()
 # （Linux: RTLD_GLOBAL 加载 torch 自带 CUDA so；Windows: os.add_dll_directory）。
 # cli.py / server.py 已覆盖各自进程；worker 是独立 subprocess，靠 get_tagger
 # 懒加载链触发太晚（懒加载在 main() 里，某些路径下来不及）—— worker 顶层显式 import。
-from studio.services import onnxruntime_setup  # noqa: F401
+from studio.services.runtime import onnxruntime as onnxruntime_setup  # noqa: F401
 
 from studio import db
 from studio.services.projects import jobs as project_jobs, projects, versions
 from studio.services.dataset.scan import IMAGE_EXTS
-from studio.services.caption_format import (
+from studio.services.tagging.caption_format import (
     caption_json_to_text,
     standard_to_documented_full,
 )
-from studio.services import tagedit
-from studio.services.tagger import get_tagger
+from studio.services.dataset import tagedit
+from studio.services.tagging.base import get_tagger
 
 
 def _collect_images(train_dir: Path) -> list[Path]:

@@ -66,7 +66,7 @@ def test_health_returns_ok(client: TestClient) -> None:
 
 
 def test_generate_sample_response_is_not_browser_cached(client: TestClient) -> None:
-    from studio.services import generate_cache
+    from studio.services.inference import cache as generate_cache
 
     generate_cache.clear_all()
     try:
@@ -87,7 +87,7 @@ def test_torch_status_proxies_service(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """GET /api/torch/status 把 torch_setup.current_status() 透传给前端。"""
-    from studio.services import torch_setup
+    from studio.services.runtime import torch as torch_setup
     monkeypatch.setattr(torch_setup, "current_status", lambda: {
         "installed": True,
         "version": "2.5.0+cpu",
@@ -110,7 +110,7 @@ def test_torch_reinstall_registers_marker_returns_pending(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """POST /api/torch/reinstall 不真装，写 marker 返回 pending。"""
-    from studio.services import pending_install, torch_setup
+    from studio.services.runtime import pending_install, torch as torch_setup
     monkeypatch.setattr(pending_install, "STUDIO_DATA", tmp_path)
     monkeypatch.setattr(pending_install, "PENDING_MARKER", tmp_path / ".pending-pip-install.json")
     monkeypatch.setattr(torch_setup, "_decide_target_tag", lambda _t: "cu128")
@@ -129,7 +129,7 @@ def test_torch_reinstall_registers_marker_returns_pending(
 def test_torch_reinstall_invalid_target_returns_400(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from studio.services import torch_setup
+    from studio.services.runtime import torch as torch_setup
     monkeypatch.setattr(
         torch_setup, "_decide_target_tag",
         lambda t: (_ for _ in ()).throw(ValueError(f"非法 target: {t!r}")),
@@ -143,7 +143,7 @@ def test_flash_attention_status_returns_env_and_candidates(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """GET /api/flash-attention/status 应返回 status + env + slim candidates + fetch_error。"""
-    from studio.services import flash_attention_setup
+    from studio.services.runtime import flash_attention as flash_attention_setup
     monkeypatch.setattr(flash_attention_setup, "current_status", lambda: {
         "installed": True, "version": "2.8.3"
     })
@@ -179,7 +179,7 @@ def test_flash_attention_status_passes_fetch_error_through(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """GitHub 限流 / 网络异常时 fetch_error 透传给 UI。"""
-    from studio.services import flash_attention_setup
+    from studio.services.runtime import flash_attention as flash_attention_setup
     monkeypatch.setattr(flash_attention_setup, "current_status", lambda: {
         "installed": False, "version": None,
     })
@@ -201,7 +201,7 @@ def test_flash_attention_status_passes_fetch_error_through(
 def test_flash_attention_install_success(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from studio.services import flash_attention_setup
+    from studio.services.runtime import flash_attention as flash_attention_setup
     captured: dict = {}
 
     def fake_install(url):
@@ -226,7 +226,7 @@ def test_flash_attention_install_url_null_uses_auto(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """前端不传 url（或显式 null）→ service 收到 None，走自动匹配。"""
-    from studio.services import flash_attention_setup
+    from studio.services.runtime import flash_attention as flash_attention_setup
     captured: dict = {}
 
     def fake_install(url):
@@ -243,7 +243,7 @@ def test_flash_attention_install_url_null_uses_auto(
 def test_flash_attention_install_failure_returns_500(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from studio.services import flash_attention_setup
+    from studio.services.runtime import flash_attention as flash_attention_setup
 
     def boom(_url):
         raise RuntimeError("pip install 失败:\nERROR: bad wheel")
@@ -541,7 +541,7 @@ def test_system_version_returns_fields(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """GET /api/system/version 应返回 VersionInfo dataclass 的所有字段。"""
-    from studio.services import updater
+    from studio.services.runtime import updater
 
     fake = updater.VersionInfo(
         version="0.6.0", commit="abc123", commit_short="abc123",
@@ -567,7 +567,7 @@ def test_system_update_check_master_default(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """默认 channel=master，返回 UpdateCheckResult 字段。"""
-    from studio.services import updater
+    from studio.services.runtime import updater
 
     fake = updater.UpdateCheckResult(
         channel="master", current_commit="abc", latest_commit="def",
@@ -594,7 +594,7 @@ def test_system_update_check_force_skips_cache(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """force=true 应传 use_cache=False 给 updater.check_update。"""
-    from studio.services import updater
+    from studio.services.runtime import updater
 
     captured: dict = {}
     def _fake_check(channel="master", use_cache=True):
@@ -642,7 +642,7 @@ def test_system_update_rejects_when_dirty(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """working tree dirty 时 update 应返 422。"""
-    from studio.services import updater
+    from studio.services.runtime import updater
     dirty = updater.VersionInfo(
         version="0.6.0", commit="abc", commit_short="abc", commit_time_iso="",
         branch="master", tag=None, is_dirty=True,
@@ -662,7 +662,7 @@ def test_system_update_writes_pending_and_restart_flag(
     tmp_path: Path,
 ) -> None:
     """正常路径：写 .update_pending（含 target）+ tmp/restart + 调度 SIGINT。"""
-    from studio.services import updater
+    from studio.services.runtime import updater
 
     # 干净 working tree
     clean = updater.VersionInfo(
@@ -712,7 +712,7 @@ def test_system_update_status_null_when_no_history(
 ) -> None:
     """没有 update 历史时返 {status: null, rollback_target: null}。
     rollback_target 必须存在（即便 null），前端用它判断按钮显隐。"""
-    from studio.services import updater
+    from studio.services.runtime import updater
     monkeypatch.setattr(updater, "UPDATE_STATUS", tmp_path / ".update_status")
     monkeypatch.setattr(updater, "LAST_VERSION", tmp_path / ".last_version")
     resp = client.get("/api/system/update_status")
@@ -728,7 +728,7 @@ def test_system_update_status_rollback_without_status(
 ) -> None:
     """.update_status 不存在但 .last_version 存在（用户手动 git reset 后的场景）：
     应当返 status=null 但 rollback_target=sha，让 UI 显示回滚按钮。"""
-    from studio.services import updater
+    from studio.services.runtime import updater
     monkeypatch.setattr(updater, "last_status", lambda: None)
     monkeypatch.setattr(updater, "rollback_target", lambda: "cafebabe" * 5)
 
@@ -743,7 +743,7 @@ def test_system_update_status_returns_recorded(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """update_status 把 last_status() + rollback_target() 合并返回。"""
-    from studio.services import updater
+    from studio.services.runtime import updater
     fake = updater.UpdateStatus(
         status="failed", reason="git fetch: timeout", target="origin/master",
         from_commit="abc", to_commit="abc", started_at=1000.0, finished_at=1010.0,
@@ -763,7 +763,7 @@ def test_system_update_status_returns_recorded(
 def test_system_update_log_empty(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from studio.services import updater
+    from studio.services.runtime import updater
     monkeypatch.setattr(updater, "read_update_log", lambda: "")
     resp = client.get("/api/system/update_log")
     assert resp.status_code == 200
@@ -773,7 +773,7 @@ def test_system_update_log_empty(
 def test_system_update_log_with_content(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from studio.services import updater
+    from studio.services.runtime import updater
     monkeypatch.setattr(updater, "read_update_log", lambda: "=== run ===\n[ok]\n")
     resp = client.get("/api/system/update_log")
     assert resp.json()["content"].startswith("=== run ===")
@@ -785,7 +785,7 @@ def test_system_rollback_409_when_no_target(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """没 .last_version 或 commit 不在仓库时返 409。"""
-    from studio.services import updater
+    from studio.services.runtime import updater
     monkeypatch.setattr(updater, "current_version", lambda: updater.VersionInfo(
         version="0.0.0", commit="abc", commit_short="abc", commit_time_iso="",
         branch="master", tag=None, is_dirty=False,
@@ -803,7 +803,7 @@ def test_system_rollback_rejects_dirty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """rollback 共用 update 的 dirty precondition。"""
-    from studio.services import updater
+    from studio.services.runtime import updater
     monkeypatch.setattr(updater, "current_version", lambda: updater.VersionInfo(
         version="0.0.0", commit="abc", commit_short="abc", commit_time_iso="",
         branch="master", tag=None, is_dirty=True,
@@ -836,7 +836,7 @@ def test_system_rollback_success_writes_flag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """正常路径：reads .last_version → request_update(target=<sha>) → 200。"""
-    from studio.services import updater
+    from studio.services.runtime import updater
     monkeypatch.setattr(updater, "current_version", lambda: updater.VersionInfo(
         version="0.0.0", commit="abc", commit_short="abc", commit_time_iso="",
         branch="master", tag=None, is_dirty=False,
@@ -867,7 +867,7 @@ def test_preflight_clean_no_running_no_diff(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """工作树干净 + 无运行任务 + requirements 无变化 → 3 ok + 1 ok（last_version 预览），blocking=False。"""
-    from studio.services import updater
+    from studio.services.runtime import updater
     monkeypatch.setattr(updater, "current_version", lambda: updater.VersionInfo(
         version="0.6.0", commit="abc123def456", commit_short="abc123de", commit_time_iso="",
         branch="master", tag="v0.6.0", is_dirty=False,
@@ -893,7 +893,7 @@ def test_preflight_dirty_blocks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """is_dirty=True → dirty check level=err，blocking=True。"""
-    from studio.services import updater
+    from studio.services.runtime import updater
     monkeypatch.setattr(updater, "current_version", lambda: updater.VersionInfo(
         version="0.6.0", commit="x", commit_short="x", commit_time_iso="",
         branch="master", tag=None, is_dirty=True,
@@ -915,7 +915,7 @@ def test_preflight_running_tasks_block(
 ) -> None:
     """有 running task → running_tasks check level=err，blocking=True，label 含任务名。"""
     from studio import db
-    from studio.services import updater
+    from studio.services.runtime import updater
     monkeypatch.setattr(updater, "current_version", lambda: updater.VersionInfo(
         version="0.6.0", commit="x", commit_short="x", commit_time_iso="",
         branch="master", tag=None, is_dirty=False,
@@ -946,7 +946,7 @@ def test_preflight_requirements_diff_warn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """requirements diff 非空 → warn 级别，blocking 不受影响。label 含 +N/-N/~N 计数。"""
-    from studio.services import updater
+    from studio.services.runtime import updater
     monkeypatch.setattr(updater, "current_version", lambda: updater.VersionInfo(
         version="0.6.0", commit="x", commit_short="x", commit_time_iso="",
         branch="master", tag=None, is_dirty=False,
@@ -976,7 +976,7 @@ def test_preflight_unresolved_target(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """resolve_ref 返回 None（target ref 不存在）→ requirements 项 err，blocking。"""
-    from studio.services import updater
+    from studio.services.runtime import updater
     monkeypatch.setattr(updater, "current_version", lambda: updater.VersionInfo(
         version="0.6.0", commit="x", commit_short="x", commit_time_iso="",
         branch="master", tag=None, is_dirty=False,
@@ -998,7 +998,7 @@ def test_preflight_target_missing_self_update_blocks(
 ) -> None:
     """目标 ref 早于 self-update feature → 加 err 行 + blocking=True；
     前端 confirm 按钮 disable，防止用户切到无 webui 救援能力的版本。"""
-    from studio.services import updater
+    from studio.services.runtime import updater
     monkeypatch.setattr(updater, "current_version", lambda: updater.VersionInfo(
         version="0.6.0", commit="x", commit_short="x", commit_time_iso="",
         branch="master", tag=None, is_dirty=False,
@@ -1020,7 +1020,7 @@ def test_preflight_target_with_self_update_passes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """目标 ref 带 self-update feature → 不加 self_update_compat 行，不影响 blocking。"""
-    from studio.services import updater
+    from studio.services.runtime import updater
     monkeypatch.setattr(updater, "current_version", lambda: updater.VersionInfo(
         version="0.6.0", commit="x", commit_short="x", commit_time_iso="",
         branch="master", tag=None, is_dirty=False,

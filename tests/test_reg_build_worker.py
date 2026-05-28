@@ -10,7 +10,7 @@ from PIL import Image
 
 from studio import db, secrets
 from studio.services.projects import jobs as project_jobs, projects, versions
-from studio.services import reg_builder
+from studio.services.reg import builder as reg_builder
 from studio.workers import reg_build_worker
 
 
@@ -72,7 +72,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     # auto_tag fake
     monkeypatch.setattr(
-        "studio.services.tagger.get_tagger", lambda name: _FakeAutoTagger()
+        "studio.services.tagging.base.get_tagger", lambda name: _FakeAutoTagger()
     )
 
     with db.connection_for(dbfile) as conn:
@@ -167,10 +167,10 @@ def test_worker_imports_onnxruntime_setup_at_module_level() -> None:
     import re
     import sys
     src = Path(reg_build_worker.__file__).read_text(encoding="utf-8")
-    assert "from studio.services import onnxruntime_setup" in src, (
-        "reg_build_worker.py 顶层必须 import onnxruntime_setup 触发 preload；"
-        "见 onnxruntime_setup.py 顶部 PP9.5 注释。"
+    assert "from studio.services.runtime import onnxruntime" in src, (
+        "reg_build_worker.py 顶层必须 import onnxruntime 触发 preload；"
+        "见 onnxruntime.py 顶部 PP9.5 注释。"
     )
     bad = re.findall(r"^\s*(?:import onnxruntime|from onnxruntime\b)", src, re.MULTILINE)
     assert not bad, f"worker 不应直接 import onnxruntime；命中: {bad}"
-    assert "studio.services.onnxruntime_setup" in sys.modules
+    assert "studio.services.runtime.onnxruntime" in sys.modules

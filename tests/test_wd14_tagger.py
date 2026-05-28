@@ -10,7 +10,7 @@ import pytest
 from PIL import Image
 
 from studio import secrets
-from studio.services import wd14_tagger
+from studio.services.tagging import wd14 as wd14_tagger
 
 
 @pytest.fixture

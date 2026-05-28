@@ -45,7 +45,7 @@ for _p in (_THIS_DIR, _REPO_ROOT):
 import anima_train as _T  # noqa: E402
 
 from studio.schema import migrate_legacy_attention  # noqa: E402
-from studio.services.inference_core import LoRAMeta, LoRASpec, apply_loras, read_lora_meta  # noqa: E402
+from studio.services.inference.core import LoRAMeta, LoRASpec, apply_loras, read_lora_meta  # noqa: E402
 
 # 预热 transformers.generation → sklearn → scipy.special import 链。
 # transformers 5.x 的 AutoModelForCausalLM.from_pretrained 在 load text encoder
@@ -196,7 +196,7 @@ class ModelCache:
             return self.taeflux
         self.taeflux_attempted = True
         try:
-            from studio.services import model_downloader as _md
+            from studio.services import models as _md
             if not _md.taeflux_available():
                 # 自动下载（1.6MB；用户配置的 HF mirror 自动生效）
                 logger.info("taeflux missing → auto-downloading (~1.6MB)…")
