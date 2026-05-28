@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ... import secrets
-from ...event_bus import bus
+from ...infrastructure.event_bus import bus
 from .paths import (
     ANIMA_REPO,
     ANIMA_VAE_PATH,

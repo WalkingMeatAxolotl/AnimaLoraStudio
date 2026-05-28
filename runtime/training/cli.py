@@ -20,7 +20,7 @@ def parse_args():
     CLI-only 开关（auto-install / interactive / no-live-curve / 已弃用的
     --repeats 和 --reg-repeats）。
     """
-    from studio.argparse_bridge import build_parser
+    from studio.infrastructure.argparse_bridge import build_parser
     from studio.schema import TrainingConfig
 
     p = build_parser(TrainingConfig, prog="anima_train", description="Anima LoRA Trainer v2")

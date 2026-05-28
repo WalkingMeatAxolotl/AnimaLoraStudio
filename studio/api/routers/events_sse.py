@@ -14,7 +14,7 @@ from typing import AsyncIterator
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
-from ...event_bus import bus
+from ...infrastructure.event_bus import bus
 
 router = APIRouter()
 

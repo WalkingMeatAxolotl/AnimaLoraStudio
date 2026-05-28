@@ -31,7 +31,7 @@ from typing import Any, AsyncIterator, Optional
 from fastapi import FastAPI
 
 from .. import db
-from ..event_bus import bus
+from ..infrastructure.event_bus import bus
 from ..paths import ensure_dirs
 from ..supervisor import Supervisor
 

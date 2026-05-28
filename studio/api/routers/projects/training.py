@@ -64,7 +64,7 @@ from ....services.presets import io as presets_io
 from ....services.projects import jobs as project_jobs, projects, versions
 from ....services.dataset import scan as datasets
 from ....domain import RegAiConfig
-from ....event_bus import bus
+from ....infrastructure.event_bus import bus
 from ....paths import STUDIO_DATA, safe_join
 from ....services import (
     caption_snapshot,

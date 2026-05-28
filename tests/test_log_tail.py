@@ -5,7 +5,7 @@ import json
 import time
 from pathlib import Path
 
-from studio.log_tail import LogTailer, MonitorStatePoller
+from studio.infrastructure.log_tail import LogTailer, MonitorStatePoller
 
 
 def _wait_lines(received: list[str], n: int, timeout: float = 2.0) -> None:

@@ -28,7 +28,7 @@ from ..errors import _validate_component_or_400
 from ..schemas.generate import GenerateRequest
 from ... import db, secrets
 from ...domain import GenerateConfig
-from ...event_bus import bus
+from ...infrastructure.event_bus import bus
 
 router = APIRouter()
 

@@ -24,7 +24,7 @@ from fastapi import APIRouter, HTTPException
 from ...deps import _supervisor
 from ...schemas.queue import EnqueueRequest, ReorderRequest
 from .... import db
-from ....event_bus import bus
+from ....infrastructure.event_bus import bus
 from ....paths import USER_PRESETS_DIR
 
 router = APIRouter()

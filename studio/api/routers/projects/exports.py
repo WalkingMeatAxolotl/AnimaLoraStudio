@@ -30,7 +30,7 @@ from ._shared import (
 )
 from .... import db
 from ....services.projects import projects, versions
-from ....event_bus import bus
+from ....infrastructure.event_bus import bus
 from ....paths import DATA_EXPORTS, REPO_ROOT, USER_PRESETS_DIR
 from ....services import train_io
 

@@ -38,7 +38,7 @@ from ._shared import _publish_project_state
 from .... import db
 from ....services.projects import jobs as project_jobs, projects
 from ....services.dataset import curation, scan as datasets
-from ....event_bus import bus
+from ....infrastructure.event_bus import bus
 from ....services import duplicate_finder, preprocess_manifest
 
 router = APIRouter()

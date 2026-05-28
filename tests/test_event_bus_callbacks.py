@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 
-from studio.event_bus import EventBus
+from studio.infrastructure.event_bus import EventBus
 
 
 def test_first_subscribe_callback_only_on_zero_to_one() -> None:

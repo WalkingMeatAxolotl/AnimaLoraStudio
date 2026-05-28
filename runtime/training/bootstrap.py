@@ -91,7 +91,7 @@ def apply_yaml_config(args, config):
     argparse_bridge 不走 pydantic validator，schema 层的迁移逻辑无法生效，
     所以这里显式做一次。
     """
-    from studio.argparse_bridge import merge_yaml_into_namespace
+    from studio.infrastructure.argparse_bridge import merge_yaml_into_namespace
     from studio.schema import TrainingConfig, migrate_legacy_attention, migrate_legacy_save_keys
     config = migrate_legacy_save_keys(migrate_legacy_attention(dict(config or {})))
     return merge_yaml_into_namespace(args, config, TrainingConfig)

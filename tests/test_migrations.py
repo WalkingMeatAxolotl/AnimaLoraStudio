@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from studio import db
-from studio.migrations import MIGRATIONS, apply_all, current_version
+from studio.infrastructure.migrations import MIGRATIONS, apply_all, current_version
 
 
 def _open(path: Path) -> sqlite3.Connection:

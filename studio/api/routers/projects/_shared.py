@@ -12,7 +12,7 @@ from fastapi import HTTPException
 
 from .... import db
 from ....services.projects import projects, versions
-from ....event_bus import bus
+from ....infrastructure.event_bus import bus
 from ....services import version_config
 
 

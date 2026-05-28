@@ -11,7 +11,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from ..log_tail import LogTailer, MonitorStatePoller
+from ..infrastructure.log_tail import LogTailer, MonitorStatePoller
 
 # 槽位名常量
 SLOT_TRAIN = "train"

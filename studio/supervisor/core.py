@@ -33,7 +33,7 @@ from typing import Any, Callable, Optional
 
 from .. import db, secrets as _secrets
 from ..services.projects import jobs as project_jobs
-from ..log_tail import LogTailer, MonitorStatePoller
+from ..infrastructure.log_tail import LogTailer, MonitorStatePoller
 from ..paths import LOGS_DIR, REPO_ROOT, STUDIO_DATA, STUDIO_DB, USER_PRESETS_DIR
 from ..services.inference_daemon import (
     InferenceDaemon,

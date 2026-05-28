@@ -13,7 +13,7 @@ from pathlib import Path
 
 from studio import db
 from studio.services.projects import versions
-from studio.migrations import MIGRATIONS, current_version
+from studio.infrastructure.migrations import MIGRATIONS, current_version
 
 
 def _open(path: Path) -> sqlite3.Connection:
