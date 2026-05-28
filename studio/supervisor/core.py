@@ -1,4 +1,4 @@
-"""任务调度守护线程：从 SQLite 拉 pending 任务，spawn 子进程。
+"""Supervisor 主类 — PR-4 从 supervisor.py 抽出（行为零变更）。
 
 设计要点：
     - 单进程串行（一次最多一个 worker，避开多任务抢 GPU 的复杂度）
@@ -11,6 +11,13 @@
     - 取消用 SIGTERM (Unix) / CTRL_BREAK_EVENT (Windows)，30 秒超时再 kill
     - 启动恢复：重启时把 status='running' 的孤儿 task / job 标 failed
     - 测试可注入 cmd_builder 替代真实 worker 调用
+
+主类**不拆**（保 1100 行单类）：37 个 method 全部 read/write 共享 self
+字段（`_slots / _daemon_* / _stop / _thread / _db_path`），状态耦合极高
+且缺乏清晰子域边界 — 拆 Mixin/helper class 反而增加未来扩展成本（详
+tmp/0.11.0_planning.md PR-4 决策日志）。叶子 helper（_Slot / 默认 cmd
+builder / _maybe_finalize_version / _kill_process_tree）已搬到 sibling
+模块，本文件仅保 Supervisor class 主体。
 """
 from __future__ import annotations
 
@@ -19,229 +26,34 @@ import logging
 import os
 import signal
 import subprocess
-import sys
 import threading
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
-from . import db, project_jobs, secrets as _secrets
-from .log_tail import LogTailer, MonitorStatePoller
-from .paths import LOGS_DIR, REPO_ROOT, STUDIO_DATA, STUDIO_DB, USER_PRESETS_DIR
-from .services.inference_daemon import (
+from .. import db, project_jobs, secrets as _secrets
+from ..log_tail import LogTailer, MonitorStatePoller
+from ..paths import LOGS_DIR, REPO_ROOT, STUDIO_DATA, STUDIO_DB, USER_PRESETS_DIR
+from ..services.inference_daemon import (
     InferenceDaemon,
     STATE_STOPPED as _DAEMON_STOPPED,
     get_daemon,
 )
+from .cmd_builder import (
+    _EVENT_MARKER,
+    GPU_BOUND_JOB_KINDS,
+    CmdBuilder,
+    EventCallback,
+    JobCmdBuilder,
+    _default_cmd_builder,
+    _default_job_cmd_builder,
+    _resolve_monitor_state_path,
+)
+from .finalizer import _maybe_finalize_version
+from .process import _kill_process_tree
+from .slot import SLOT_DATA, SLOT_TRAIN, _Slot
 
 logger = logging.getLogger(__name__)
-
-# PP10.2.b：哪些 job kind 吃 GPU。这些 kind 在训练运行中默认会被推迟，
-# 除非 secrets.queue.allow_gpu_during_train=True 显式允许并行。
-# preprocess 走 spandrel super-resolution，加载权重到 GPU 推理。
-GPU_BOUND_JOB_KINDS: frozenset[str] = frozenset({"preprocess", "tag", "reg_build"})
-
-# Worker → supervisor 的结构化事件标记。worker 写
-#   __EVENT__:my_event_type:{"foo":1,"bar":"x"}
-# 到 stdout，supervisor 在 _on_line 里识别并 publish 成 typed SSE 事件
-# （job_id / project_id 自动注入），不会进 job_log。比专门搭 IPC 轻。
-_EVENT_MARKER = "__EVENT__:"
-
-# 槽位名常量
-SLOT_TRAIN = "train"
-SLOT_DATA = "data"
-
-
-@dataclass
-class _Slot:
-    """Supervisor 内的一个执行槽位。每个槽位最多跑 1 个子进程。
-
-    PP10.2.a 起从「单 _current_* 字段」改成「list[_Slot]」；10.2.b 拆成
-    两个槽位：
-      - TRAIN 槽：只跑 training tasks（db.tasks 表）
-      - DATA  槽：只跑 project_jobs（download / tag / reg_build）
-    download 永远跟训练并行；tag / reg_build 看 settings 开关。
-    """
-    name: str = "main"
-    proc: Optional[subprocess.Popen] = None
-    kind: Optional[str] = None  # "task" | "job"
-    id: Optional[int] = None
-    log_fp: Optional[Any] = None
-    tailer: Optional[LogTailer] = None
-    state_poller: Optional[MonitorStatePoller] = None
-    cancel_pending: bool = False
-    # ADR 0006 PR-2 pause/resume backend ----------------------------------
-    pause_pending: bool = False
-    # `__EVENT__:pause_state` payload — handle_interrupt 写好 .pt + snapshot 后
-    # 子进程通过 stdout emit；_on_line 抓到后填这三个字段，_finish_slot 据此
-    # 把 task 标 paused。pause_pending=True 但缺这几个字段 → 子进程退出前
-    # 没来得及 emit → 视为 cancel 兜底（ADR §4.3 modal "强制取消保存进度"）。
-    pause_state_path: Optional[str] = None
-    pause_config_path: Optional[str] = None
-    pause_step: Optional[int] = None
-    # ADR §8.1 is_pausable 信号 — resume phase emit `train_loop_started` 后才
-    # 允许暂停。UI 端 SSE 用这个解锁暂停按钮，API 端 defense-in-depth 拒绝
-    # 过早 pause 请求。
-    train_loop_started: bool = False
-    # ADR 0006 Addendum 1：epoch 末尾 auto backup 完成后填这两个字段。
-    # is_pausable 升级条件要求 `last_auto_epoch_state_path is not None` —— 首 epoch
-    # 未结束时按钮完全隐藏，避免用户暂停后无可恢复 state。
-    last_auto_epoch_state_path: Optional[str] = None
-    last_auto_epoch_config_path: Optional[str] = None
-
-    @property
-    def busy(self) -> bool:
-        return self.proc is not None
-
-    def reset(self) -> None:
-        self.proc = None
-        self.kind = None
-        self.id = None
-        self.log_fp = None
-        self.tailer = None
-        self.state_poller = None
-        self.cancel_pending = False
-        self.pause_pending = False
-        self.pause_state_path = None
-        self.pause_config_path = None
-        self.pause_step = None
-        self.train_loop_started = False
-        self.last_auto_epoch_state_path = None
-        self.last_auto_epoch_config_path = None
-
-EventCallback = Callable[[dict[str, Any]], None]
-CmdBuilder = Callable[[dict[str, Any], Path], list[str]]
-JobCmdBuilder = Callable[[dict[str, Any]], list[str]]
-
-
-def _default_cmd_builder(task: dict[str, Any], config_path: Path) -> list[str]:
-    """根据 task_type 路由到对应脚本。
-
-    train (默认 / 老 task): runtime/anima_train.py
-    reg_ai: runtime/anima_reg_ai.py（先验生成）
-    generate: 走 inference_daemon，**不**经这个 cmd_builder，supervisor
-        在 _dispatch_generate 里直接派给 daemon。这里 fallback 到 anima_generate.py
-        只是为了某天测试可能注入 cmd_builder 时不爆 KeyError —— 实际跑
-        不到这条 path（_next_pending_task_in 在 dispatch_train 里只挑
-        train/reg_ai）。
-    """
-    task_type = task.get("task_type") or "train"
-    if task_type == "reg_ai":
-        script = REPO_ROOT / "runtime" / "anima_reg_ai.py"
-    elif task_type == "generate":
-        script = REPO_ROOT / "runtime" / "anima_generate.py"  # 兜底，正常路径不来这
-    else:
-        script = REPO_ROOT / "runtime" / "anima_train.py"
-    cmd = [
-        sys.executable,
-        str(script),
-        "--config",
-        str(config_path),
-    ]
-    msp = task.get("monitor_state_path")
-    if msp:
-        cmd.extend(["--monitor-state-file", str(msp)])
-    # ADR 0006 PR-3: paused task 复活 → 注入 --resume-state，让 anima_train
-    # 的 resume_phase 加载 state；旁边的 .config.json snapshot 由 bootstrap_phase
-    # 自动检测并 freeze args（ADR §5.7）。
-    paused_state = task.get("paused_state_path")
-    if paused_state:
-        cmd.extend(["--resume-state", str(paused_state)])
-    return cmd
-
-
-def _maybe_finalize_version(
-    conn: Any, task_id: int, task_status: str = "done"
-) -> None:
-    """task 终态 → 推 version.status（ADR-0007 §11.3-B）。
-
-    task_status 映射：
-    - done → completed（+ output_lora_path 回填）
-    - failed → failed（+ last_failure_reason 写入 task.error_msg）
-    - canceled → canceled
-
-    paused 不进此函数（§11.3-A：task=paused 时 version 仍 training，UI 派生显示）。
-    """
-    from . import versions as _versions
-    task_row = db.get_task(conn, task_id)
-    if not task_row:
-        return
-    vid = task_row.get("version_id")
-    pid = task_row.get("project_id")
-    if not (vid and pid):
-        return
-    v = _versions.get_version(conn, int(vid))
-    if not v:
-        return
-    from . import projects as _projects
-    p = _projects.get_project(conn, int(pid))
-    if not p:
-        return
-
-    # ADR-0007 §11.3-B：task 终态独立映射，不撒谎
-    new_status_map = {
-        "done":     _versions.VersionStatus.COMPLETED,
-        "failed":   _versions.VersionStatus.FAILED,
-        "canceled": _versions.VersionStatus.CANCELED,
-    }
-    new_status = new_status_map.get(task_status)
-    if new_status is None:
-        return  # 未知 task_status（如 paused / running）不动 version
-
-    fields: dict[str, Any] = {"status": new_status}
-
-    if task_status == "done":
-        output_name = f"{p['slug']}_{v['label']}"
-        vdir = _versions.version_dir(int(pid), p["slug"], v["label"])
-        candidate = vdir / "output" / f"{output_name}_final.safetensors"
-        if candidate.exists():
-            fields["output_lora_path"] = str(candidate)
-    elif task_status == "failed":
-        err = task_row.get("error_msg")
-        if err:
-            fields["last_failure_reason"] = str(err)
-
-    _versions.update_version(conn, int(vid), **fields)
-
-
-def _resolve_monitor_state_path(task: dict[str, Any]) -> Path:
-    """PP6.1 — 决定 task 的 monitor_state.json 落盘路径。
-
-    有 version_id：`versions/{label}/monitor_state.json`，与 train/output/samples
-    放一起；用户切 version 监控自然独立。
-    没有 version_id（PP1 之前的旧任务）：兜底到
-    `studio_data/monitors/task_{id}/state.json`，避免老任务无处可写。
-    """
-    vid = task.get("version_id")
-    pid = task.get("project_id")
-    if vid and pid:
-        # 不在这里 import projects/versions（避免循环）；直接通过 db 查
-        with db.connection_for() as conn:
-            row = conn.execute(
-                "SELECT projects.slug AS slug, versions.label AS label "
-                "FROM versions JOIN projects ON versions.project_id = projects.id "
-                "WHERE versions.id = ?",
-                (vid,),
-            ).fetchone()
-        if row:
-            return (
-                STUDIO_DATA / "projects" / f"{pid}-{row['slug']}"
-                / "versions" / row["label"] / "monitor_state.json"
-            )
-    return STUDIO_DATA / "monitors" / f"task_{task['id']}" / "state.json"
-
-
-def _default_job_cmd_builder(job: dict[str, Any]) -> list[str]:
-    """默认按 kind 选 worker 模块。"""
-    kind = job["kind"]
-    return [
-        sys.executable,
-        "-m",
-        f"studio.workers.{kind}_worker",
-        "--job-id",
-        str(job["id"]),
-    ]
 
 
 class Supervisor:
@@ -682,7 +494,7 @@ class Supervisor:
         # 到 studio_data/tasks/{tid}/snapshot/config.yaml。失败不阻 task
         # 启动（snapshot 是 forensics 不是必需）。
         try:
-            from . import task_snapshot
+            from .. import task_snapshot
             task_snapshot.freeze_config(int(task["id"]), cfg_path)
         except Exception:
             logger.exception(
@@ -790,7 +602,7 @@ class Supervisor:
             vid = task.get("version_id")
             if vid:
                 try:
-                    from . import versions as _versions
+                    from .. import versions as _versions
                     _versions.update_version(
                         conn, int(vid),
                         status=_versions.VersionStatus.TRAINING,
@@ -1101,7 +913,7 @@ class Supervisor:
             db.update_task(conn, task_id, **fields)
 
         try:
-            from .services.inference_core import cleanup_generate_tempdir
+            from ..services.inference_core import cleanup_generate_tempdir
             cleanup_generate_tempdir(task_id)
         except Exception as e:
             logger.warning("cleanup generate tempdir failed: %s", e)
@@ -1406,25 +1218,3 @@ class Supervisor:
                 paused_step=None,
                 paused_at=None,
             )
-
-
-def _kill_process_tree(pid: int) -> None:
-    """杀掉以 pid 为根的整棵进程树。
-
-    Windows 上 `proc.kill()` 只杀 immediate child，DataLoader workers /
-    accelerate 的 sub-subprocess 会留下来占着 GPU；用 `taskkill /T /F` 能
-    递归到整个进程树。POSIX 用 killpg。
-    """
-    if os.name == "nt":
-        try:
-            subprocess.run(
-                ["taskkill", "/T", "/F", "/PID", str(pid)],
-                check=False, capture_output=True, timeout=10,
-            )
-        except Exception:
-            logger.exception("taskkill /T /F failed for pid %d", pid)
-    else:
-        try:
-            os.killpg(os.getpgid(pid), signal.SIGKILL)
-        except Exception:
-            logger.exception("killpg failed for pid %d", pid)
