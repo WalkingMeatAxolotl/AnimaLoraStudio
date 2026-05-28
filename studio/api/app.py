@@ -21,6 +21,7 @@ from .routers import (
     data_exports,
     events_sse,
     health,
+    installs,
     jobs,
     logs,
     models,
@@ -53,3 +54,5 @@ app.include_router(jobs.router)
 app.include_router(secrets_router.router)
 app.include_router(models.router)
 app.include_router(upscalers.router)
+# PR-6 commit 3: installs router（10 routes: wd14/torch/flash-attn/xformers/llm-tagger admin）
+app.include_router(installs.router)
