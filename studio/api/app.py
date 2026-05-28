@@ -36,6 +36,7 @@ from .routers import (
 )
 from .routers.projects import crud as projects_crud
 from .routers.projects import exports as projects_exports
+from .routers.projects import curation as projects_curation
 from .routers.projects import ingestion as projects_ingestion
 from .routers.queue import io as queue_io_router
 from .routers.queue import lifecycle as queue_lifecycle
@@ -81,3 +82,5 @@ app.include_router(projects_crud.router)
 app.include_router(projects_exports.router)
 # PR-6.5 commit 3: download/upload + preprocess (14 routes)
 app.include_router(projects_ingestion.router)
+# PR-6.5 commit 4: files/thumb + curation + duplicates (12 routes)
+app.include_router(projects_curation.router)
