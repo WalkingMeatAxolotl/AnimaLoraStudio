@@ -16,14 +16,31 @@ from fastapi import FastAPI
 from .. import __version__
 from .lifespan import lifespan
 from .middleware import _SelectiveGZipMiddleware
-from .routers import browse, events_sse, health, presets
+from .routers import (
+    browse,
+    data_exports,
+    events_sse,
+    health,
+    logs,
+    presets,
+    root,
+    samples,
+    tagger,
+)
 
 app = FastAPI(title="AnimaStudio", version=__version__, lifespan=lifespan)
 app.add_middleware(_SelectiveGZipMiddleware, minimum_size=1000)
 
-# 第一批 router（PR-5 commit 2）。后续 router 逐批从 server.py 抽到
-# api/routers/<name>.py 后在此 include。
+# Router 注册顺序无所谓（FastAPI 按 path 精确匹配，include_router 先后只影响
+# include_in_schema=False 的 catch-all 顺序）。按 PR / 字母序排列方便审查。
+# PR-5 commit 2: health / presets / browse / events_sse
 app.include_router(health.router)
 app.include_router(presets.router)
 app.include_router(browse.router)
 app.include_router(events_sse.router)
+# PR-6 commit 1: 5 个小 router（root / samples / logs / data_exports / tagger）
+app.include_router(root.router)
+app.include_router(samples.router)
+app.include_router(logs.router)
+app.include_router(data_exports.router)
+app.include_router(tagger.router)

@@ -17,8 +17,15 @@ from studio import server
 
 @pytest.fixture
 def isolated_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
-    """把 server 模块里的路径全部指向 tmp_path 下的隔离目录。"""
+    """把 server 模块里的路径全部指向 tmp_path 下的隔离目录。
+
+    PR-6 commit 1：/samples / / 等 routes 搬到 api/routers/，监控 OUTPUT_DIR /
+    WEB_DIST 的真实绑名在新模块。新位置和 server.py 同时 patch，保 old
+    `server.OUTPUT_DIR` patch 不丢、新 handler 也能看到 fake 值。
+    """
     from studio import db
+    from studio.api.routers import root as _root_router
+    from studio.api.routers import samples as _samples_router
     output = tmp_path / "output"
     samples_dir = output / "samples"
     web_dist = tmp_path / "web_dist"  # 不创建即模拟未构建
@@ -30,6 +37,8 @@ def isolated_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str,
     monkeypatch.setattr(server.db, "STUDIO_DB", dbfile)
     monkeypatch.setattr(server, "OUTPUT_DIR", output)
     monkeypatch.setattr(server, "WEB_DIST", web_dist)
+    monkeypatch.setattr(_samples_router, "OUTPUT_DIR", output)
+    monkeypatch.setattr(_root_router, "WEB_DIST", web_dist)
     return {
         "tmp": tmp_path,
         "db": dbfile,

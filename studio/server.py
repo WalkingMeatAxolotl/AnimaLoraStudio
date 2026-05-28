@@ -35,7 +35,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, model_validator
 
 from . import (
@@ -63,7 +63,7 @@ from .api.errors import (
     _unique_data_export_path,
     _validate_component_or_400,
 )
-from .api.responses import EMPTY_STATE
+from .api.responses import EMPTY_STATE, _thumb_response
 from .api.static import SPAStaticFiles
 from .event_bus import bus
 from .services import (
@@ -87,11 +87,11 @@ from .services import (
     version_config,
     xformers_setup,
 )
-from .services.tagger import VALID_TAGGER_NAMES, get_tagger
+from .services.tagger import VALID_TAGGER_NAMES
 from .paths import (
     DATA_EXPORTS,
     LOGS_DIR,
-    OUTPUT_DIR,
+    OUTPUT_DIR,  # noqa: F401  test fixture monkeypatch path 兼容（samples router 用真位置）
     REPO_ROOT,
     STUDIO_DATA,
     STUDIO_DB,
@@ -653,18 +653,7 @@ class _BundleImportBody(BaseModel):
         return self
 
 
-@app.get("/api/data-exports")
-def list_data_exports() -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-    DATA_EXPORTS.mkdir(parents=True, exist_ok=True)
-    for path in sorted(DATA_EXPORTS.iterdir(), key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True):
-        if not path.is_file() or path.suffix.lower() not in {".zip", ".yaml", ".yml", ".json"}:
-            continue
-        try:
-            items.append(_export_result(path))
-        except OSError:
-            continue
-    return items
+# /api/data-exports 已 PR-6 commit 1 抽到 api/routers/data_exports.py。
 
 
 @app.get("/api/projects/{pid}/versions/{vid}/bundle.zip")
@@ -1381,26 +1370,7 @@ def list_files(pid: int, bucket: str = "download") -> dict[str, Any]:
     return {"items": items, "count": len(items)}
 
 
-def _thumb_response(src: Path, size: int) -> FileResponse:
-    """统一 thumb 响应：弱 etag（基于 src mtime+size）+ no-cache 强制重验。
-
-    早先用 `Cache-Control: public, max-age=86400` 会让浏览器记住所有响应 24h，
-    包括重启过渡期的失败响应；用户视角就是「重启后图片加载不了」。改用 etag +
-    no-cache 后，浏览器每次发条件请求，命中走 304 几 ms，错过响应不再阻塞。
-    """
-    out = thumb_cache.get_or_make_thumb(src, size)
-    try:
-        mtime_ns = out.stat().st_mtime_ns
-    except OSError:
-        mtime_ns = 0
-    etag = f'W/"{mtime_ns}-{size}"'
-    return FileResponse(
-        out,
-        headers={
-            "Cache-Control": "no-cache, must-revalidate",
-            "ETag": etag,
-        },
-    )
+# `_thumb_response` 已 PR-6 抽到 api/responses.py，project_thumb 走 import 复用。
 
 
 @app.get("/api/projects/{pid}/thumb")
@@ -2030,21 +2000,7 @@ def xformers_install() -> dict[str, Any]:
         raise HTTPException(500, str(exc)) from exc
 
 
-@app.get("/api/tagger/{name}/check")
-def check_tagger(name: str) -> dict[str, Any]:
-    if name not in VALID_TAGGER_NAMES:
-        raise HTTPException(400, f"unknown tagger: {name}")
-    try:
-        t = get_tagger(name)
-    except Exception as exc:  # noqa: BLE001
-        return {"name": name, "ok": False, "msg": str(exc)}
-    ok, msg = t.is_available()
-    return {
-        "name": name,
-        "ok": ok,
-        "msg": msg,
-        "requires_service": getattr(t, "requires_service", False),
-    }
+# /api/tagger/{name}/check 已 PR-6 commit 1 抽到 api/routers/tagger.py。
 
 
 def _select_preset(
@@ -3602,15 +3558,7 @@ def delete_queue_item(task_id: int) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-@app.get("/api/logs/{task_id}")
-def get_log(task_id: int) -> dict[str, Any]:
-    p = LOGS_DIR / f"{task_id}.log"
-    if not p.exists():
-        return {"task_id": task_id, "content": "", "size": 0}
-    raw = p.read_text(encoding="utf-8", errors="replace")
-    lines = [ln for ln in raw.splitlines(keepends=True) if not ln.startswith("__EVENT__:")]
-    text = "".join(lines)
-    return {"task_id": task_id, "content": text, "size": len(text.encode("utf-8"))}
+# /api/logs/{task_id} 已 PR-6 commit 1 抽到 api/routers/logs.py。
 
 
 # /api/events SSE 已 PR-5 commit 2 抽到 api/routers/events_sse.py。
@@ -3621,69 +3569,7 @@ def get_log(task_id: int) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-@app.get("/samples/{filename}")
-def get_sample(
-    filename: str,
-    task_id: Optional[int] = None,
-    w: Optional[int] = None,
-) -> FileResponse:
-    """采样图代理。
-
-    `?task_id=N` 给了 → 在该任务 monitor_state_path 周围按多个候选目录查找：
-    - `monitor_state.json` 同级 `samples/`（PP6.1 当初约定）
-    - `monitor_state.json` 同级 `output/samples/`（anima_train 实际写法 ——
-      sample_dir = output_dir/samples，output_dir 通常是 versions/{label}/output）
-    - 同级 `output/<任意子目录>/samples/`（兜底防 anima_train 用别的 output 名）
-
-    没给 task_id → 兜底全局 OUTPUT_DIR/samples/（旧训练直接命令行的兼容）。
-
-    `?w=N` 给了 → 走 thumb_cache 生成 N px 缩略图（用于监控页缩略图条）；
-    不给 → 返回原图。两种都走 _thumb_response 的弱 etag + no-cache，浏览器
-    304 命中即可，避免「重启窗口期失败响应被永久缓存」问题。
-    """
-    _validate_component_or_400(filename)
-
-    resolved: Optional[Path] = None
-    if task_id is not None:
-        with db.connection_for() as conn:
-            row = conn.execute(
-                "SELECT monitor_state_path FROM tasks WHERE id = ?",
-                (task_id,),
-            ).fetchone()
-        if not row or not row["monitor_state_path"]:
-            raise HTTPException(404)
-        monitor_dir = Path(row["monitor_state_path"]).parent
-        candidates = [
-            monitor_dir / "samples" / filename,
-            monitor_dir / "output" / "samples" / filename,
-        ]
-        # 再扫一层 output/<sub>/samples/ 兜底（用户改 output_dir 名字时仍能找到）
-        output_root = monitor_dir / "output"
-        if output_root.is_dir():
-            for sub in output_root.iterdir():
-                if sub.is_dir():
-                    candidates.append(sub / "samples" / filename)
-        for p in candidates:
-            if p.exists():
-                resolved = p
-                break
-        if resolved is None:
-            logger.info(
-                "sample 404: task_id=%s file=%s tried=%s",
-                task_id, filename, [str(p) for p in candidates],
-            )
-            raise HTTPException(404)
-    else:
-        path = OUTPUT_DIR / "samples" / filename
-        if not path.exists():
-            raise HTTPException(404)
-        resolved = path
-
-    # w 给了走缩略图；w<=0 或没给 → 原图。复用 thumb_cache，盘上落 .jpg；
-    # 浏览器走弱 etag + no-cache，304 命中很轻。
-    if w is not None and w > 0:
-        return _thumb_response(resolved, w)
-    return _thumb_response(resolved, 0)  # size=0 内部直接返回 src，不缩
+# /samples/{filename} 已 PR-6 commit 1 抽到 api/routers/samples.py。
 
 
 # ---------------------------------------------------------------------------
@@ -4044,19 +3930,7 @@ def system_release_notes(tag: str) -> dict[str, Any]:
     }
 
 
-@app.get("/", response_model=None)
-def root() -> RedirectResponse | JSONResponse:
-    """根路径 302 跳转到 React 应用 `/studio/`。
-
-    若前端尚未构建（dist 缺失），返回 JSON 提示。"""
-    if WEB_DIST.exists():
-        return RedirectResponse(url="/studio/", status_code=302)
-    return JSONResponse(
-        {
-            "message": "AnimaStudio is running. Build the React app at studio/web/ "
-            "(npm install && npm run build) to enable the new UI."
-        }
-    )
+# `/` 根路径 redirect 已 PR-6 commit 1 抽到 api/routers/root.py。
 
 
 # ---------------------------------------------------------------------------
