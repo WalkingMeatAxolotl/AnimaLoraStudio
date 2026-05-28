@@ -126,315 +126,27 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-class ProjectCreate(BaseModel):
-    title: str
-    slug: Optional[str] = None
-    note: Optional[str] = None
-    initial_version_label: Optional[str] = "v1"
+# ProjectCreate / ProjectUpdate / VersionCreate / VersionUpdate BaseModel 已
+# PR-6.5 commit 1 抽到 api/schemas/projects.py。
+#
+# _project_payload / _publish_project_state / _publish_version_state /
+# _project_err_code 已 PR-6.5 commit 1 抽到 api/routers/projects/_shared.py
+# （projects 子包内共用，避免跨域反向耦合）。剩余 server.py 内 projects-域
+# handler（commit 2-5 抽走）通过下方 import 复用。
+from .api.routers.projects._shared import (  # noqa: E402
+    _project_and_version_or_404,
+    _project_err_code,
+    _project_payload,
+    _publish_project_state,
+    _publish_version_state,
+    _reg_dir,
+    _version_dir_or_404,
+    _version_train_dir_or_404,
+)
 
 
-class ProjectUpdate(BaseModel):
-    title: Optional[str] = None
-    note: Optional[str] = None
-    stage: Optional[str] = None
-    active_version_id: Optional[int] = None
-
-
-class VersionCreate(BaseModel):
-    label: str
-    fork_from_version_id: Optional[int] = None
-    note: Optional[str] = None
-
-
-class VersionUpdate(BaseModel):
-    note: Optional[str] = None
-    stage: Optional[str] = None
-    config_name: Optional[str] = None
-    trigger_word: Optional[str] = None
-
-
-def _project_payload(p: dict[str, Any]) -> dict[str, Any]:
-    """对外详情 payload：项目本身 + versions[] 含 stats + download stats。"""
-    out = dict(p)
-    out.update(projects.stats_for_project(p))
-    with db.connection_for() as conn:
-        vs = versions.list_versions(conn, p["id"])
-    out["versions"] = [
-        {**v, "stats": versions.stats_for_version(p, v)} for v in vs
-    ]
-    return out
-
-
-def _publish_project_state(p: dict[str, Any]) -> None:
-    bus.publish({
-        "type": "project_state_changed",
-        "project_id": p["id"],
-    })
-
-
-def _publish_version_state(v: dict[str, Any]) -> None:
-    bus.publish({
-        "type": "version_state_changed",
-        "project_id": v["project_id"],
-        "version_id": v["id"],
-        "status": versions.get_status(v),
-        "phase": versions.get_phase(v),
-    })
-
-
-def _project_err_code(exc: Exception) -> int:
-    msg = str(exc)
-    if "不存在" in msg:
-        return 404
-    if "已存在" in msg or "非法" in msg or "不能为空" in msg:
-        return 400
-    return 422
-
-
-@app.get("/api/projects")
-def list_projects_endpoint() -> dict[str, Any]:
-    """ADR-0007 §11.8-E：enrich active version label + status，卡片右上角 badge 用。"""
-    with db.connection_for() as conn:
-        rows = projects.list_projects(conn)
-        enriched: list[dict[str, Any]] = []
-        for r in projects.projects_with_stats(rows):
-            r["active_version_label"] = None
-            r["active_version_status"] = None
-            avid = r.get("active_version_id")
-            if avid:
-                av = versions.get_version(conn, int(avid))
-                if av:
-                    r["active_version_label"] = av["label"]
-                    r["active_version_status"] = versions.get_status(av)
-            enriched.append(r)
-    return {"items": enriched}
-
-
-@app.post("/api/projects")
-def create_project_endpoint(body: ProjectCreate) -> dict[str, Any]:
-    with db.connection_for() as conn:
-        try:
-            p = projects.create_project(
-                conn, title=body.title, slug=body.slug, note=body.note
-            )
-        except projects.ProjectError as exc:
-            raise HTTPException(_project_err_code(exc), str(exc)) from exc
-        if body.initial_version_label:
-            try:
-                versions.create_version(
-                    conn, project_id=p["id"], label=body.initial_version_label
-                )
-            except versions.VersionError as exc:
-                # 项目已建好；版本失败给前端但保留项目
-                raise HTTPException(_project_err_code(exc), str(exc)) from exc
-        p = projects.get_project(conn, p["id"])
-    assert p is not None
-    _publish_project_state(p)
-    return _project_payload(p)
-
-
-@app.get("/api/projects/{pid}")
-def get_project_endpoint(pid: int) -> dict[str, Any]:
-    with db.connection_for() as conn:
-        p = projects.get_project(conn, pid)
-    if not p:
-        raise HTTPException(404, f"项目不存在: id={pid}")
-    return _project_payload(p)
-
-
-@app.patch("/api/projects/{pid}")
-def patch_project_endpoint(pid: int, body: ProjectUpdate) -> dict[str, Any]:
-    fields = body.model_dump(exclude_unset=True)
-    with db.connection_for() as conn:
-        try:
-            p = projects.update_project(conn, pid, **fields)
-        except projects.ProjectError as exc:
-            raise HTTPException(_project_err_code(exc), str(exc)) from exc
-    _publish_project_state(p)
-    return _project_payload(p)
-
-
-@app.delete("/api/projects/{pid}")
-def delete_project_endpoint(pid: int) -> dict[str, Any]:
-    with db.connection_for() as conn:
-        try:
-            projects.delete_project(conn, pid)
-        except projects.ProjectError as exc:
-            raise HTTPException(_project_err_code(exc), str(exc)) from exc
-    return {"deleted": pid}
-
-
-# Versions ------------------------------------------------------------------
-
-
-@app.get("/api/projects/{pid}/versions")
-def list_versions_endpoint(pid: int) -> dict[str, Any]:
-    with db.connection_for() as conn:
-        if not projects.get_project(conn, pid):
-            raise HTTPException(404, f"项目不存在: id={pid}")
-        vs = versions.list_versions(conn, pid)
-        p = projects.get_project(conn, pid)
-    assert p is not None
-    return {
-        "items": [
-            {**v, "stats": versions.stats_for_version(p, v)} for v in vs
-        ]
-    }
-
-
-@app.get("/api/projects/{pid}/versions/{vid}/lora_ckpts")
-def list_version_lora_ckpts(pid: int, vid: int) -> dict[str, Any]:
-    """列出 version output/ 下所有 .safetensors（step / epoch / final），
-    用于 LoRA picker 第二层（XY ckpt 轴 + 单图模式切 ckpt）。"""
-    p, v, vdir = _version_dir_or_404(pid, vid)
-    return {"items": versions.list_lora_ckpts(vdir)}
-
-
-@app.get("/api/projects/{pid}/state_ckpts")
-def list_project_state_ckpts(pid: int) -> dict[str, Any]:
-    """列出项目所有 versions 的 training_state_step*.pt，按 version 分组。
-
-    给 Train 页 resume_state 字段的「浏览本项目」picker 用：用户看 version
-    分组的语义化文件列表，选中后前端把绝对路径写入字段。
-    """
-    with db.connection_for() as conn:
-        p = projects.get_project(conn, pid)
-        if not p:
-            raise HTTPException(404, f"项目不存在: id={pid}")
-        return {"groups": versions.list_project_state_ckpts(conn, p)}
-
-
-@app.get("/api/projects/{pid}/lora_ckpts")
-def list_project_lora_ckpts(pid: int) -> dict[str, Any]:
-    """列出项目所有 versions 的 LoRA ckpt（.safetensors），按 version 分组。
-
-    给 Train 页 resume_lora 字段的「浏览本项目」picker 用。
-    """
-    with db.connection_for() as conn:
-        p = projects.get_project(conn, pid)
-        if not p:
-            raise HTTPException(404, f"项目不存在: id={pid}")
-        return {"groups": versions.list_project_lora_ckpts(conn, p)}
-
-
-@app.post("/api/projects/{pid}/versions")
-def create_version_endpoint(pid: int, body: VersionCreate) -> dict[str, Any]:
-    with db.connection_for() as conn:
-        if not projects.get_project(conn, pid):
-            raise HTTPException(404, f"项目不存在: id={pid}")
-        try:
-            v = versions.create_version(
-                conn,
-                project_id=pid,
-                label=body.label,
-                fork_from_version_id=body.fork_from_version_id,
-                note=body.note,
-            )
-        except versions.VersionError as exc:
-            raise HTTPException(_project_err_code(exc), str(exc)) from exc
-    _publish_version_state(v)
-    return v
-
-
-@app.get("/api/projects/{pid}/versions/{vid}")
-def get_version_endpoint(pid: int, vid: int) -> dict[str, Any]:
-    with db.connection_for() as conn:
-        v = versions.get_version(conn, vid)
-        p = projects.get_project(conn, pid)
-    if not v or v["project_id"] != pid:
-        raise HTTPException(404, f"版本不存在: id={vid}")
-    assert p is not None
-    return {**v, "stats": versions.stats_for_version(p, v)}
-
-
-@app.patch("/api/projects/{pid}/versions/{vid}")
-def patch_version_endpoint(
-    pid: int, vid: int, body: VersionUpdate
-) -> dict[str, Any]:
-    fields = body.model_dump(exclude_unset=True)
-    with db.connection_for() as conn:
-        v = versions.get_version(conn, vid)
-        if not v or v["project_id"] != pid:
-            raise HTTPException(404, f"版本不存在: id={vid}")
-        try:
-            v = versions.update_version(conn, vid, **fields)
-        except versions.VersionError as exc:
-            raise HTTPException(_project_err_code(exc), str(exc)) from exc
-    _publish_version_state(v)
-    return v
-
-
-@app.delete("/api/projects/{pid}/versions/{vid}")
-def delete_version_endpoint(pid: int, vid: int) -> dict[str, Any]:
-    with db.connection_for() as conn:
-        v = versions.get_version(conn, vid)
-        if not v or v["project_id"] != pid:
-            raise HTTPException(404, f"版本不存在: id={vid}")
-        versions.delete_version(conn, vid)
-    return {"deleted": vid}
-
-
-@app.post("/api/projects/{pid}/versions/{vid}/activate")
-def activate_version_endpoint(pid: int, vid: int) -> dict[str, Any]:
-    with db.connection_for() as conn:
-        v = versions.get_version(conn, vid)
-        if not v or v["project_id"] != pid:
-            raise HTTPException(404, f"版本不存在: id={vid}")
-        v = versions.activate_version(conn, vid)
-        p = projects.get_project(conn, pid)
-    assert p is not None
-    _publish_project_state(p)
-    return _project_payload(p)
-
-
-# ---------------------------------------------------------------------------
-# Phase cursor 推进 / 跳过 — ADR-0007 §11.5-A / §11.5-B
-# ---------------------------------------------------------------------------
-
-
-def _phase_advance_payload(
-    advanced: bool, result: versions_phase.CheckResult,
-    new_phase: Optional[str], version: Optional[dict[str, Any]],
-) -> dict[str, Any]:
-    return {
-        "advanced": advanced,
-        "ok": result.ok,
-        "reason": result.reason,
-        "new_phase": new_phase,
-        "version": version,
-    }
-
-
-@app.post("/api/projects/{pid}/versions/{vid}/advance-phase")
-def advance_phase_endpoint(pid: int, vid: int) -> dict[str, Any]:
-    """phase cursor 推进 —— "下一步" 按钮调用（ADR-0007 §11.5-A）。
-
-    成功 → cursor++ + 返回新 phase + publish version_state_changed。
-    失败 → ok=False + reason（前端 toast），cursor 不动。
-    """
-    with db.connection_for() as conn:
-        v = versions.get_version(conn, vid)
-        if not v or v["project_id"] != pid:
-            raise HTTPException(404, f"版本不存在: id={vid}")
-        advanced, result, new_phase = versions_phase.advance_phase(conn, vid)
-        v_after = versions.get_version(conn, vid)
-    if advanced and v_after is not None:
-        _publish_version_state(v_after)
-    return _phase_advance_payload(advanced, result, new_phase, v_after)
-
-
-@app.post("/api/projects/{pid}/versions/{vid}/skip-phase")
-def skip_phase_endpoint(pid: int, vid: int) -> dict[str, Any]:
-    """跳过可跳过的 phase（当前仅 regularizing；ADR-0007 §11.5-A）。"""
-    with db.connection_for() as conn:
-        v = versions.get_version(conn, vid)
-        if not v or v["project_id"] != pid:
-            raise HTTPException(404, f"版本不存在: id={vid}")
-        advanced, result, new_phase = versions_phase.skip_phase(conn, vid)
-        v_after = versions.get_version(conn, vid)
-    if advanced and v_after is not None:
-        _publish_version_state(v_after)
-    return _phase_advance_payload(advanced, result, new_phase, v_after)
+# /api/projects + versions CRUD + activate + advance/skip-phase + lora_ckpts /
+# state_ckpts （16 routes） 已 PR-6.5 commit 1 抽到 api/routers/projects/crud.py。
 
 
 # Train export / import (PP7) -----------------------------------------------
@@ -1679,14 +1391,8 @@ class BatchOp(BaseModel):
 # (/api/tagger/{name}/check 在 commit 1 抽到 api/routers/tagger.py。)
 
 
-def _version_train_dir_or_404(pid: int, vid: int):
-    with db.connection_for() as conn:
-        v = versions.get_version(conn, vid)
-        if not v or v["project_id"] != pid:
-            raise HTTPException(404, f"版本不存在: id={vid}")
-        p = projects.get_project(conn, pid)
-    assert p is not None
-    return p, v, versions.version_dir(p["id"], p["slug"], v["label"]) / "train"
+# `_version_train_dir_or_404` 已 PR-6.5 commit 1 抽到 api/routers/projects/_shared.py
+# （顶部 import 复用）。
 
 
 @app.post("/api/projects/{pid}/versions/{vid}/tag")
@@ -1776,14 +1482,7 @@ def put_caption_endpoint(
 # ---------------------------------------------------------------------------
 
 
-def _version_dir_or_404(pid: int, vid: int):
-    with db.connection_for() as conn:
-        v = versions.get_version(conn, vid)
-        if not v or v["project_id"] != pid:
-            raise HTTPException(404, f"版本不存在: id={vid}")
-        p = projects.get_project(conn, pid)
-    assert p is not None
-    return p, v, versions.version_dir(p["id"], p["slug"], v["label"])
+# `_version_dir_or_404` 已 PR-6.5 commit 1 抽到 api/routers/projects/_shared.py。
 
 
 @app.post("/api/projects/{pid}/versions/{vid}/captions/snapshot")
@@ -1889,9 +1588,7 @@ class RegBuildRequest(BaseModel):
     postprocess_max_crop_ratio: float = 0.1
 
 
-def _reg_dir(vdir: Path) -> Path:
-    """reg 根目录 — 子目录直接镜像 train 子文件夹（与源脚本一致，无 1_general 中间层）。"""
-    return vdir / "reg"
+# `_reg_dir` 已 PR-6.5 commit 1 抽到 api/routers/projects/_shared.py。
 
 
 @app.get("/api/projects/{pid}/versions/{vid}/reg/preview-tags")
@@ -2123,14 +1820,7 @@ class SaveAsPresetRequest(BaseModel):
     overwrite: bool = False
 
 
-def _project_and_version_or_404(
-    pid: int, vid: int
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    with db.connection_for() as conn:
-        try:
-            return version_config.get_project_and_version(conn, pid, vid)
-        except version_config.VersionConfigError as exc:
-            raise HTTPException(404, str(exc)) from exc
+# `_project_and_version_or_404` 已 PR-6.5 commit 1 抽到 api/routers/projects/_shared.py。
 
 
 @app.get("/api/projects/{pid}/versions/{vid}/config")
