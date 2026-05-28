@@ -54,6 +54,17 @@ def _publish_version_state(v: dict[str, Any]) -> None:
     })
 
 
+def _publish_job_state(job: dict[str, Any]) -> None:
+    bus.publish({
+        "type": "job_state_changed",
+        "job_id": job["id"],
+        "project_id": job["project_id"],
+        "version_id": job.get("version_id"),
+        "kind": job["kind"],
+        "status": job["status"],
+    })
+
+
 def _version_dir_or_404(pid: int, vid: int) -> tuple[dict[str, Any], dict[str, Any], Path]:
     """返回 (project, version, version_dir)。"""
     with db.connection_for() as conn:
