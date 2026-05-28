@@ -12,8 +12,6 @@ stderr=STDOUT)` 把整个子进程输出重定向到 task log 文件，worker �
 """
 from __future__ import annotations
 
-import argparse
-import sys
 import threading
 import traceback
 
@@ -85,12 +83,6 @@ def run(job_id: int) -> int:
         return 1
 
 
-def main() -> None:
-    p = argparse.ArgumentParser()
-    p.add_argument("--job-id", type=int, required=True)
-    args = p.parse_args()
-    sys.exit(run(args.job_id))
-
-
 if __name__ == "__main__":
-    main()
+    from ._base import worker_main
+    worker_main(run)

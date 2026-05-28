@@ -25,19 +25,14 @@
 """
 from __future__ import annotations
 
-import argparse
-import sys
 import threading
 import traceback
 from pathlib import Path
 from typing import Any
 
-# Windows console cp932/cp936 → 强制 UTF-8 + replace（同 tag_worker）
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, OSError):
-        pass
+from ._base import reconfigure_console_utf8
+
+reconfigure_console_utf8()
 
 # PP9.5 — 必须在任何 `import onnxruntime` 之前 import 本模块，触发顶层 preload。
 # auto_tag 路径会内联调 wd14_tagger（line ~105 `get_tagger("wd14")`），worker 是独立
@@ -240,12 +235,6 @@ def run(job_id: int) -> int:
         return 1
 
 
-def main() -> None:
-    p = argparse.ArgumentParser()
-    p.add_argument("--job-id", type=int, required=True)
-    args = p.parse_args()
-    sys.exit(run(args.job_id))
-
-
 if __name__ == "__main__":
-    main()
+    from ._base import worker_main
+    worker_main(run)

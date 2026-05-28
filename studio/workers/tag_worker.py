@@ -14,20 +14,14 @@
 """
 from __future__ import annotations
 
-import argparse
 import json
-import sys
 import traceback
 from pathlib import Path
 from typing import Any
 
-# Windows 控制台默认 cp932/cp936，写中文 / emoji 会 UnicodeEncodeError。
-# 强制 stdout/stderr 用 UTF-8 + 替换不可编码字符，让 progress 永远不抛。
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, OSError):
-        pass
+from ._base import reconfigure_console_utf8
+
+reconfigure_console_utf8()
 
 # PP9.5 — 必须在任何 `import onnxruntime` 之前 import 本模块，触发顶层 preload
 # （Linux: RTLD_GLOBAL 加载 torch 自带 CUDA so；Windows: os.add_dll_directory）。
@@ -230,12 +224,6 @@ def _write_caption(
         )
 
 
-def main() -> None:
-    p = argparse.ArgumentParser()
-    p.add_argument("--job-id", type=int, required=True)
-    args = p.parse_args()
-    sys.exit(run(args.job_id))
-
-
 if __name__ == "__main__":
-    main()
+    from ._base import worker_main
+    worker_main(run)
