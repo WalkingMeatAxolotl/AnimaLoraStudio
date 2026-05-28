@@ -511,11 +511,15 @@ def test_system_restart_writes_flag_and_schedules_shutdown(
     called: dict[str, bool] = {"ran": False}
     def _stub_shutdown() -> None:
         called["ran"] = True
-    monkeypatch.setattr(server, "_raise_sigint_after_response", _stub_shutdown)
+    # PR-6 commit 4：system router 从 server.py 抽到 api/routers/system.py，
+    # patch path 跟搬迁
+    monkeypatch.setattr(
+        "studio.api.routers.system._raise_sigint_after_response", _stub_shutdown
+    )
 
     # 把 flag 路径指向 tmp，避免污染仓库 tmp/
     flag = isolated_paths["tmp"] / "restart"
-    monkeypatch.setattr(server, "_RESTART_FLAG", flag)
+    monkeypatch.setattr("studio.api.routers.system._RESTART_FLAG", flag)
 
     assert not flag.exists()
     resp = client.post("/api/system/restart")
@@ -674,7 +678,7 @@ def test_system_update_writes_pending_and_restart_flag(
     monkeypatch.setattr(updater, "RESTART_FLAG", restart_flag)
 
     # 拦截 SIGINT
-    monkeypatch.setattr(server, "_raise_sigint_after_response", lambda: None)
+    monkeypatch.setattr("studio.api.routers.system._raise_sigint_after_response", lambda: None)
 
     resp = client.post("/api/system/update", json={"target": "origin/dev"})
     assert resp.status_code == 200
@@ -842,7 +846,7 @@ def test_system_rollback_success_writes_flag(
         captured["called"] = True
         return "feedbeef" * 5
     monkeypatch.setattr(updater, "request_rollback", _fake_rollback)
-    monkeypatch.setattr(server, "_raise_sigint_after_response", lambda: None)
+    monkeypatch.setattr("studio.api.routers.system._raise_sigint_after_response", lambda: None)
 
     resp = client.post("/api/system/rollback")
     assert resp.status_code == 200
