@@ -4,226 +4,205 @@
 **日期**：2026-05-28
 **决策者**：@WalkingMeatAxolotl
 
-## 背景
-
-0.10.x 末期 `studio/` 顶层是平铺的 25k 行单包，关键单文件大头：
-
-- `server.py` 4657 行 / 130 个 `@app.<verb>` 装饰器 + lifespan + middleware + helper 杂糅
-- `supervisor.py` 1431 行（`_spawn_task` 单 method 164 行）
-- `schema.py` 976 行（`TrainingConfig` 单类 643 行）
-- `services/` **平铺 36 个文件**，无分组
-- `cli.py` 841 行 / `secrets.py` 763 行 / `model_downloader.py` 1068 行 / `reg_builder.py` 1107 行
-
-具体痛点：
-
-- **`server.py` 是 monolith**：130 routes + 49 inline `BaseModel` + 4 套 `_err_code` helper 一文件装；新加 route 一定要碰它
-- **`services/` 平铺**：tagging / booru / inference / reg / preprocess 5+ 个不同主题混在同级；找代码要靠 grep
-- **`import-time 副作用`**：`server.py` 顶层直接 `ensure_dirs()` + `db.init_db()`，`from studio.server import app` 立即写盘 + sqlite init —— 单元测试 / 工具脚本 import 时被迫接受这个 side effect
-- **`schema.py` / `supervisor.py` / `model_downloader.py` 等单文件过大**：编辑器导航 / git blame / code review 都吃力
-
-需要一次系统性重构把 `studio/` 切成清晰的层和子包。
-
-## 候选方案
-
-两轮 review 后讨论了 3 个目标态：
-
-### A — 4 层完整架构（采纳）
-
-```
-api/             HTTP 表面（FastAPI app + router + schemas + deps）
-  ↓
-services/        业务服务（按主题分子包：tagging / booru / reg / inference / ...）
-  ↓
-domain/          pydantic 模型（TrainingConfig + LoRA / XY / Generate / RegAi + migrations）
-  ↓
-infrastructure/  路径常量 / 数据库 / event bus / secrets / 日志 / argparse 桥接
-```
-
-`supervisor/`（任务调度守护线程）和 `workers/`（4 个子进程入口）跨层使用，不归 4 层之一。
-
-### B — 折中方案（仅拆 server.py + services/ 分组）
-
-只动 `server.py` 抽 router + `services/` 平铺改 11 子包，不引入 `domain/` / `infrastructure/`。否决理由：
-
-- `domain/` 缺位 → `schema.py` 跟业务代码同层，无法把"数据形状"和"运算"分开
-- `infrastructure/` 缺位 → `paths.py` / `db.py` / `secrets.py` 等基础设施跟业务代码混居
-- 25k 行项目用 4 层架构不算过度（参考 Kubernetes / Django 项目都用类似分层）
-
-### C — 6 层 DDD 风格（domain / application / infrastructure / interfaces / adapters / shared）
-
-否决：项目规模不到 DDD 阈值，引入会让贡献者必须学 hexagonal architecture 词汇才能改代码。
-
 ## 决策
 
-采纳方案 A（4 层完整架构）。
+把 `studio/` 从 25k 行平铺单包重构为 4 层架构。`server.py` 4657 → 51 行，130 个 `@app` 装饰器分到 27 个 router 文件，全部 routes / models / 业务 / 基础设施按职责分包。
 
-11 PR 实施（PR-1..8 + 中途细切 PR-3.8/3.9 + 大型 PR-6.5 + PR-9 收尾）：
+本 ADR 主要用途：**告诉未来贡献者代码应该写在哪里**。
 
-| PR | 状态 | server.py | 关键产出 |
-|---|---|---:|---|
-| PR-1 #141 | merged | 4657 | 安全网（route snapshot + import smoke + invariants）|
-| PR-2 #142 | merged | 4657 | `schema.py` → `studio/domain/` 8 文件 |
-| PR-3 #143 | merged | 4657 | `services/` 11 子包（36 文件分组）|
-| PR-3.8 #144 | merged | 4657 | `model_downloader.py` 1068 → 4 文件 |
-| PR-3.9 #145 | merged | 4657 | `reg/builder.py` 1108 → `analysis.py` 抽 |
-| PR-4 #147 | merged | 4657 | `supervisor.py` 1431 → 6 文件 + `_spawn_task` 拆 helper |
-| PR-5 #148 | merged | 4068 | `api/` 骨架 + lifespan 迁移 + 4 router (20 routes) |
-| PR-6 #149 | merged | 2382 | 6 中小域 router (64 routes) + `queue/` 3 文件子包 |
-| PR-6.5 #150 | merged | 253 | `projects/` 域 71 routes (5 子文件) |
-| PR-7 #151 | merged | — | 顶层 8 文件搬 `infrastructure/` |
-| PR-8 #152 | merged | 51 | workers `_base` + server.py 终极 shim |
-| PR-9 #153 | merged | — | 45/49 shim 删除 + `__init__.py` docstring 加强 |
+---
 
-**核心成就**：
+## 当前结构（0.11.0 起）
 
-- **server.py: 4657 → 51 行 (−98.9%)**
-- **`@app` 装饰器: 130 → 0** in `server.py`
-- 全部 160 routes 分布在 27 个 `api/routers/` 文件
-- 4 层架构完整落地
-
-## 理由
-
-**为什么 4 层 > 折中 B**：
-
-- 0.11.0 之后会持续加 features（pause/resume PR-3、多 GPU 槽位、quota）。这些 feature 都涉及 service + persistence + api 三层。4 层架构让"加 feature = 加层叠加"，折中 B 会让 `services/` 同时混进业务和基础设施代码
-- `domain/` 独立的真正价值是**前端 schema 生成路径稳定**：`/api/schema` 端点 → `studio.domain.TrainingConfig.model_json_schema()`，前端表单字段顺序依赖 pydantic field declaration order，把 `TrainingConfig` 放在独立的 `domain/` 让前端契约文档化
-- `infrastructure/` 把"数据库 / 路径 / 配置"跟业务隔离，方便未来替换（SQLite → Postgres、本地 disk → S3）
-
-**为什么不一步到位用 DDD（方案 C）**：
-
-- DDD 词汇（aggregate root / value object / repository）对单人项目反而是负担
-- 4 层已经覆盖 80% 的好处（关注点分离 + 依赖方向单向），剩下 20% 的代价不值得
-
-**为什么 PR-3..7 各自单独 PR**：
-
-- 单 PR 改 25k 行无法 review；每 PR 限定单一主题 + full sweep gate
-- 实施期发现的偏差（每 PR 都有 1-3 个"偏离 planning"决策）写在 PR description，避免事后翻账
-
-## 实施期 lessons（8 条）
-
-逐 PR 累积。每条都跟 codify 进 ADR 而非散落在 commit message。
-
-### 1. `sys.modules` 别名 shim 模式（PR-3 起）
-
-包同名覆盖模块时（如 `services/presets.py` 被 `services/presets/` 子包覆盖），用 `_sys.modules[__name__] = _real` 让旧路径透明转发：
-
-```python
-import sys as _sys
-from .infrastructure import paths as _real
-_sys.modules[__name__] = _real
+```
+studio/
+├── api/                  HTTP 表面（FastAPI）
+│   ├── app.py            FastAPI 实例 + middleware + 全部 include_router
+│   ├── lifespan.py       startup/shutdown：ensure_dirs / db.init_db / supervisor 启停 / SSE
+│   ├── main.py           uvicorn 启动入口（main()）
+│   ├── middleware.py     _SelectiveGZipMiddleware
+│   ├── errors.py         4 个 HTTPException helper（_safe_join_or_400 / _preset_err_code / ...）
+│   ├── responses.py      EMPTY_STATE 常量 + _thumb_response
+│   ├── static.py         SPAStaticFiles（react-router 兜底）
+│   ├── deps.py           跨 router 共享 helper（_supervisor / _resolve_anima_model_paths）
+│   ├── schemas/          每 router 的 inline BaseModel 抽出
+│   │   ├── presets.py / models.py / installs.py / system.py / generate.py
+│   │   ├── queue.py / curation.py / ingestion.py / projects.py / exports.py / training.py
+│   └── routers/          27 个 router 文件
+│       ├── health.py / presets.py / browse.py / events_sse.py
+│       ├── root.py / samples.py / logs.py / data_exports.py / tagger.py
+│       ├── jobs.py / secrets.py / models.py / upscalers.py / installs.py / system.py / generate.py
+│       ├── queue/        子包：lifecycle (12) + io (3) + outputs (5)
+│       └── projects/     子包：crud (16) + exports (6) + ingestion (14) + curation (12) + training (23)
+│                         └── _shared.py（projects 域内共用 helper）
+│
+├── services/             业务服务（不依赖 db；db 调用在 caller 端）
+│   ├── booru/            api + pool + downloader
+│   ├── tagging/          wd14 / cltagger / llm / joycaption / caption_format / caption_snapshot
+│   │                     / onnx_base / base (tagger factory)
+│   ├── reg/              builder + analysis + postprocess
+│   ├── inference/        core (LoRA apply) + daemon + cache + upscaler
+│   ├── models/           catalog + paths + sources + downloader (PR-3.8 4-way 拆)
+│   ├── preprocess/       core + duplicates + manifest
+│   ├── projects/         projects + versions + jobs + phase + curation
+│   ├── dataset/          scan + browse + thumb_cache + tagedit + uploads
+│   ├── presets/          io + fork/save 流程
+│   ├── runtime/          onnxruntime / torch / flash_attention / xformers / pending_install / updater
+│   ├── data_io/          train_io（train.zip / bundle.zip 导入导出）
+│   ├── queue_io.py       queue 任务 import/export
+│   ├── task_snapshot.py  task 启动 freeze config
+│   ├── version_config.py per-version yaml config CRUD
+│   ├── release_notes.py  release_notes.yaml 解析
+│   └── system_stats.py   CPU/GPU 采样
+│
+├── domain/               pydantic 模型（前端 schema 契约源）
+│   ├── training.py       TrainingConfig（643 行单类，PR-2 决策不拆 mixin）
+│   ├── lora.py           LoraEntry
+│   ├── xy_matrix.py      XYAxisSpec / XYMatrixSpec
+│   ├── generate.py       GenerateConfig
+│   ├── reg.py            RegAiConfig
+│   ├── migrations.py     字段名 / 字段值历史迁移
+│   └── common.py         GROUP_ORDER / AttentionBackend
+│
+├── infrastructure/       路径 / DB / 配置 / 日志
+│   ├── paths.py          REPO_ROOT 等路径常量 + safe_join / validate_path_component
+│   ├── db.py             SQLite 连接 + tasks 表 CRUD
+│   ├── migrations/       _v2 ~ _v9 schema migration
+│   ├── secrets.py        secrets.yaml 全部 model + load/save + legacy migration
+│   ├── event_bus.py      进程内 SSE 总线
+│   ├── log_tail.py       per-task 日志增量读 + monitor state 轮询
+│   ├── argparse_bridge.py pydantic 模型 → argparse 参数派生
+│   └── llm_presets.py    builtin LLM caption preset 加载
+│
+├── supervisor/           任务调度守护线程（跨层使用）
+│   ├── core.py           Supervisor 主类（1100 行单类，PR-4 决策不拆 mixin）
+│   ├── slot.py           _Slot dataclass
+│   ├── cmd_builder.py    默认 cmd builder + monitor_state_path
+│   ├── finalizer.py      task 终态 → version.status 映射
+│   └── process.py        _kill_process_tree
+│
+├── workers/              4 个子进程入口（跨层使用）
+│   ├── _base.py          worker_main + reconfigure_console_utf8 公共模板
+│   ├── download_worker.py / tag_worker.py / preprocess_worker.py / reg_build_worker.py
+│
+├── api/__init__.py 等 4 个 docstring 加强  目录导航（详 PR-9）
+├── server.py             51 行 shim（FastAPI app + main + SPA mount + test fixture re-imports）
+├── db.py / paths.py / secrets.py  各 10 行 shim（test fixture monkeypatch 兼容）
+├── cli.py                841 行 launcher（python -m studio run/dev/build/test）— 未来 0.11.1 拆
+├── __init__.py           __version__ + 顶层架构 docstring
+├── __main__.py           python -m studio 入口
+├── llm_presets/*.json    builtin LLM caption preset 数据
+└── web/                  React 前端（Vite 构建）
 ```
 
-效果：旧 `from studio.paths import X` + tests 的 module-attr 访问 + monkeypatch 全部 work。这是物理搬迁时的 backward-compat 桥梁，不是"空文件"。
+**层依赖方向（严格单向，不允许反向）**：
 
-### 2. 包内跨子模块调用必须走 `module.func()`（PR-3.8）
-
-`from .sub import func; func()` 把 `func` bind 成本模块名。tests `monkeypatch.setattr("pkg.sub.func", X)` 改子模块 attribute 对调用方无效。
-
-解法：`from . import sub as _sub; _sub.func()` 让 lookup 走 module attribute lookup。
-
-**规则**：任何被 test patch 的函数，调用方必须用 `module.func()` 而非 `func()`。
-
-### 3. fixture monkeypatch path 必须跟 router/模块搬迁（PR-5/6 反复出现）
-
-handler 搬走后，老 `monkeypatch.setattr(server, X)` 看不到新位置。fixture 必须同步加新位置的 patch（或更新到直接访问新模块）。
-
-PR-6 发现 3 个子类：
-1. 老 `setattr(server, X)` patch 不到新 router
-2. 老 `server.X` 直接 import 现在不存在
-3. 老 `del sys.modules["studio.server"]` + 重 import 在共享 app 实例下污染（见 lesson 6）
-
-### 4. shim 一个 package（PR-7）
-
-搬走的 package（如 `studio/migrations/` → `studio/infrastructure/migrations/`）在老路径放 `.py` 文件做 sys.modules 别名：
-
-```python
-# studio/migrations.py
-import sys as _sys
-from .infrastructure import migrations as _real
-_sys.modules[__name__] = _real
+```
+api/  →  services/  →  domain/
+                ↓
+        infrastructure/
 ```
 
-这是 PR-3 同名包覆盖模式的**镜像**：那里是 package shim 一个 module；这里是 module shim 一个 package。子模块访问 `from studio.migrations._v2_projects import X` 经 sys.modules 转发也透明 work。
+`supervisor/` 和 `workers/` 是跨层使用者（不归 4 层之一）。
 
-### 5. file-relative `Path(__file__).parent` 搬深一层要补 `.parent`（PR-7）
+---
 
-`studio/paths.py` 搬到 `studio/infrastructure/paths.py` 后：
+## 未来开发指南
 
-```python
-# 老
-REPO_ROOT = Path(__file__).resolve().parent.parent
+### 加新的 HTTP route
 
-# 新（多一层）
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-```
+1. 找 `api/routers/<domain>.py` 或 `api/routers/<domain>/` 子包；没有就新建
+2. inline `BaseModel` 全部抽到 `api/schemas/<domain>.py`
+3. 路由 handler 不直接调 db / file system；通过 `services/` 调
+4. 在 `api/app.py` 加 `app.include_router(<domain>.router)`
+5. 跨 router 共用 helper → `api/deps.py`；单域内 helper → `api/routers/<domain>/_shared.py`
+6. 测试用 FastAPI TestClient，fixture monkeypatch 走 **新模块路径**（不是 `server.X`）
 
-**规则**：搬动模块时 grep `Path(__file__).resolve().parent` 检查，搬到深一层就补 `.parent`。同样适用 `PRESETS_DIR` 这种 data resource path。
+**路由顺序约束**：FastAPI 按 path 定义顺序匹配。`/api/queue/export` 必须在 `/api/queue/{task_id}` 之前 include（否则 "export" 被当 task_id 整数解析报 422）。已在 `api/app.py` 注释 codify。
 
-### 6. `del sys.modules + reimport` 在共享 app 实例下污染（PR-6）
+### 加新的业务功能
 
-PR-5 起 `server.py` 的 `@app` 装饰器跟 `api/app.py` 的 `app` 是同一 `FastAPI` 实例。tests `del sys.modules["studio.server"]` 删 server 但 `api.app` 仍 cached，重 import `server.py` 会让 `@app` 装饰器对**同一 app 重复注册** —— 每跑一次 routes 数翻倍（实测 160 → 320 → 480 ...）。
+在 `services/<domain>/` 下加 module。规则：
+- 纯函数 + dataclass，不依赖 fastapi / db connection（db connection 由 caller 传入）
+- 失败抛 domain-specific Exception（如 `CurationError`），让 api/routers 翻译成 HTTPException
+- 跨 service 共享 helper → 抽到 `services/<domain>/__init__.py` 或新建 `services/<domain>/_shared.py`
 
-解法：放弃重 import 模式，改返轻量壳暴露 tests 直接用的 2 个名字。
+### 加新的数据模型
 
-### 7. 状态耦合高的类**不**拆（PR-2 TrainingConfig / PR-4 Supervisor）
+加到 `domain/<name>.py` 作独立 pydantic BaseModel。如果是历史字段名 / 字段值迁移，加到 `domain/migrations.py`。
 
-行数痛点 < 状态耦合时，保单类不拆 mixin。具体：
+**注意**：`TrainingConfig` 643 行单类**不要拆 mixin**（PR-2 决策 — 影响 pydantic field declaration order，破坏前端 schema 字段顺序）。新字段直接加到 `domain/training.py` 现有字段组。
 
-- `TrainingConfig` 643 行 19 字段组：拆 mixin 会改变 pydantic field declaration order，影响 `model_dump()` / YAML 序列化 / `/api/schema` JSON 输出 —— 这是**行为变更**
-- `Supervisor` 1162 行 37 method：全部 read/write 共享 self 字段（`_slots / _daemon_*`），拆 mixin 反而让未来扩展跨文件改 self 状态
+### 加新的基础设施
 
-**规则**：行数大 ≠ 必须拆。共享状态多的对象拆出去会让未来 PR 更难写。
+如新增 path 常量 / db helper / event 类型，加到 `infrastructure/<相应模块>.py`。**不要在 studio/ 顶层加新文件**。
 
-### 8. shim 删除 ≠ shim 是 bug（PR-9）
+### 加新的子进程 worker
 
-shim 是物理搬迁的 backward-compat 桥梁，**承担了真实工作**（10 行 `sys.modules` 别名 + import system 路径转发）。删除 = 完成迁移闭环（callers 100% 跟随到 canonical path），不是 cleanup hygiene。
+1. 写 `studio/workers/<name>_worker.py`：定义 `run(job_id) -> int`
+2. 底部 `if __name__ == "__main__": from ._base import worker_main; worker_main(run)`
+3. 不直接读写 db connection；通过 `studio.infrastructure.db.connection_for()`
+4. 日志只走 stdout（supervisor 重定向到 log 文件）
+5. supervisor 通过 `python -m studio.workers.<name>_worker --job-id N` 启动
 
-策略：
-- **不用 `__getattr__` lazy 回退** — 隐藏 ImportError，fail late 难 debug
-- **每 caller 显式改 canonical path** — fail loud + fail early
-- **每 commit full sweep test gate** — baseline 不能降
-- **大批量用 Python 脚本** — sed-style 替换 + 逐文件审查 + 测试
+### 测试
 
-49 个 shim 删 45 个，保 4 个永久（`server.py` / `db.py` / `paths.py` / `secrets.py`，test fixture monkeypatch 大量使用，删除成本巨大）。
+- **不要** patch `server.X`（除非是永久 shim 的 X 之一：`db / paths / secrets / OUTPUT_DIR / WEB_DIST / STUDIO_DB / USER_PRESETS_DIR / LOGS_DIR / REPO_ROOT`）；直接 patch handler 内 import 的真实模块
+- 跨 router fixture 复用 → `conftest.py`
+- 涉及 supervisor 的 test 用 `_StubSupervisor` 注入 `app.state.supervisor`（参考 `tests/test_studio_queue_endpoints.py`）
 
-## 后果
+### 永久保留的 4 shim（**不要删**）
 
-### 好处
+- `studio/server.py` (51 行) — FastAPI `app` + `main` + SPA mount + `HTTPException` + 6 path 常量 + `db` re-import 给 test fixture
+- `studio/db.py` / `studio/paths.py` / `studio/secrets.py` (各 10 行) — test fixture `monkeypatch.setattr(server.db, ...)` 大量使用
 
-- **`server.py` 51 行**：编辑代码不再被它 dominate；新加 router 走 `api/routers/<name>.py` 模式
-- **`services/` 11 子包**：找代码先按主题进 subdir（tagging / booru / inference / ...）
-- **`domain/` 8 文件**：前端 schema 契约对应 1 个文件 = 1 个 BaseModel，定位精确
-- **`infrastructure/` 隔离**：路径 / 数据库 / 配置不混在业务代码里
-- **测试基线 1500+ → 1551**：重构期没掉测试覆盖率
-- **`@app` 装饰器集中 27 router 文件**：route 总览有索引（`api/routers/__init__.py` docstring）
+这 4 个是架构的一部分，删除 = 改 30+ 测试文件 + 高 ImportError 风险，ROI 不值。其它 45 个 PR-3/7 留下的 shim 已在 PR-9 全删完。
 
-### 新增约束
+### 命名 / 约定速查
 
-- **不要在 `studio/` 顶层加新文件**：除非是 shim；新代码进 `api/` / `services/` / `domain/` / `infrastructure/` 之一
-- **不要反向依赖**：`api/` 可以 import `services/`，反之不行；`services/` 可以 import `domain/` 和 `infrastructure/`，反之不行
-- **router 文件命名 `api/routers/<domain>.py`**：跟 `api/schemas/<domain>.py` 配对
-- **跨 router 共用 helper 进 `api/deps.py`**；某个域内的 helper 进 `api/routers/<domain>/_shared.py`（如 projects/_shared.py）
-- **新增的 router 必须 `app.include_router(...)` 在 `api/app.py`**，且 path 顺序约束要遵守（如 queue/io 必须在 queue/lifecycle 之前 include，避免 `/api/queue/export` 被 `/api/queue/{task_id}` 截胡）
+| 主题 | 约定 |
+|---|---|
+| 新 router 文件 | `api/routers/<domain>.py`，对应 `api/schemas/<domain>.py` |
+| 新业务 service | `services/<domain>/<feature>.py`，导出函数 + dataclass |
+| 新 pydantic 模型 | `domain/<name>.py` |
+| 新 path / db / config | `infrastructure/<topic>.py` |
+| 新 worker | `studio/workers/<kind>_worker.py` + `worker_main(run)` |
+| inline BaseModel | 抽到 `api/schemas/`，handler 文件不 inline |
+| 跨 router helper | `api/deps.py`（真正跨域）或 `api/routers/<domain>/_shared.py`（域内）|
+| Exception | 业务层抛 domain-specific（`CurationError`）；router 层翻 HTTPException |
+| 错误码 | `api/errors.py:_preset_err_code` 模板：消息字符串 → HTTP code |
 
-### 还的债（0.11.1+ follow-up）
+---
 
-| 项 | 原计划 PR | 推迟理由 |
-|---|---|---|
-| `cli.py` 841 → 7 文件拆 | PR-8 | launcher 入口单文件可读；独立 PR 隔离风险 |
-| `secrets.py` 763 → models/store/migrations 3 文件 | PR-7 | Pydantic v2 跨文件循环风险；3-way 收益主要是视觉隔离 |
-| `db.py` 188 → connection/tasks/settings 3 文件 | PR-7 | 同上 |
-| 统一 exception handler 替代 4 套 `err_code` helper | PR-6 | 4 套 helper → `BusinessError` + 单 `exception_handler` 是行为变更 |
-| `secrets.py` 170 行 legacy migration 加 deprecation log | PR-7 | 跟 3-way 拆一起做 |
+## 实施 lessons（PR-1..9 累积）
 
-### 永久保留的 4 个 shim
+代码 review 时按需引用。完整背景在 git log + PR description。
 
-- `studio/server.py` (51 行) — FastAPI `app` + `main` + SPA mount + `HTTPException` + 6 path 常量 + `db` re-import
-- `studio/db.py` / `studio/paths.py` / `studio/secrets.py` (各 10 行) — test fixture 大量 `monkeypatch.setattr(server.db, ...)` 使用，删除 = 改 30+ 测试文件 + 风险，ROI 不值
+1. **`sys.modules` 别名 shim 模式** — 包同名覆盖时 `_sys.modules[__name__] = _real` 让旧路径透明转发（PR-3）
+2. **跨子模块调用走 `module.func()`** — `from .sub import func` 把名 bind 成本模块名，test patch `sub.func` 失效；改 `from . import sub as _sub; _sub.func()`（PR-3.8）
+3. **fixture patch path 跟搬迁** — handler 搬走后老 `monkeypatch.setattr(server, X)` 看不到新位置；fixture 加新位置 patch（PR-5/6 反复）
+4. **package shim 也用 module 文件 + sys.modules** — `studio/migrations.py` 单文件代理 `studio.infrastructure.migrations` 整个 package，子模块访问透明（PR-7）
+5. **搬深一层补 `.parent`** — `Path(__file__).resolve().parent.parent` 搬到子目录后要加 `.parent`（PR-7）
+6. **`del sys.modules + reimport` 在共享 app 实例下污染** — 重 import server.py 让 `@app` 装饰器对同一 app 重复注册，routes 数翻倍（PR-6）
+7. **状态耦合高的类不拆** — `TrainingConfig` (pydantic order) / `Supervisor` (共享 self) 保单类，拆 mixin 增加未来扩展成本（PR-2/4）
+8. **删 shim：fail loud not lazy fallback** — 不用 `__getattr__` lazy 回退（隐藏 ImportError），每 caller 显式改 canonical path（PR-9）
 
-这 4 个 shim 是**架构的一部分**，不是删除候选。
+---
+
+## 还的债（0.11.1+）
+
+| 项 | 推迟理由 |
+|---|---|
+| `cli.py` 841 → 7 文件拆 | launcher 单文件可读；独立 PR 隔离风险 |
+| `secrets.py` 763 → models/store/migrations 3 文件 | Pydantic v2 跨文件循环风险；3-way 收益主要是视觉隔离 |
+| `db.py` 188 → connection/tasks/settings 3 文件 | 同上 |
+| 统一 exception handler 替代 4 套 `err_code` helper | 行为变更，独立 PR 安全 |
+| `secrets.py` 170 行 legacy migration 加 deprecation log | 跟 3-way 拆一起 |
+
+---
 
 ## 参考
 
 - 11 个 PR：#141 #142 #143 #144 #145 #147 #148 #149 #150 #151 #152 #153
-- 实施日志 + 三方 agent 报告：`tmp/0.11.0_planning.md` + `tmp/0.11.0_agent_{a,b,c}_*.md`（gitignored，本地保留）
-- 关联 ADR：[#0003 anima_train.py 模块化重构](0003-anima-train-refactor.md)（同性质的 runtime 端拆分，2026-05 已落）
+- 关联 ADR：[#0003 anima_train.py 模块化重构](0003-anima-train-refactor.md)（同性质 runtime 端拆分）
+- 关键文件 / 索引：`studio/__init__.py` / `studio/services/__init__.py` / `studio/api/routers/__init__.py` 三个 docstring 是顶层导航
