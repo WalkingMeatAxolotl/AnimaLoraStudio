@@ -25,7 +25,8 @@ from typing import Any, Callable
 
 from PIL import Image
 
-from studio import db, preprocess
+from studio import db
+from studio.services.preprocess import core as preprocess
 from studio.services.projects import jobs as project_jobs, projects
 from studio.services import model_downloader, preprocess_manifest, upscaler
 

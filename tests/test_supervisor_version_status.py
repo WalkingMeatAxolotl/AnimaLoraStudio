@@ -8,7 +8,8 @@ from typing import Any
 
 import pytest
 
-from studio import db, task_snapshot
+from studio import db
+from studio.services import task_snapshot
 from studio.services.projects import projects, versions
 from studio.supervisor import Supervisor, _maybe_finalize_version
 

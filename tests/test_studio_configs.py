@@ -10,7 +10,8 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
-from studio import presets_io, server
+from studio import server
+from studio.services.presets import io as presets_io
 from studio.schema import TrainingConfig
 
 

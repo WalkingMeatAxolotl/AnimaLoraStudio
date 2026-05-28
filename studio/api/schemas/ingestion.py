@@ -5,7 +5,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from ... import preprocess as preprocess_svc
+from ...services.preprocess import core as preprocess_svc
 
 
 class DownloadRequest(BaseModel):

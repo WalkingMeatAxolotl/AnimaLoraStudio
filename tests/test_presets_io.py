@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from studio import presets_io
+from studio.services.presets import io as presets_io
 from studio.schema import TrainingConfig
 
 
@@ -213,8 +213,8 @@ def test_absolutize_preserves_windows_drive_letter_on_posix(monkeypatch) -> None
     monkeypatch 强制 Path.is_absolute 返回 False，模拟 Linux 处理 Windows 盘符的
     行为 —— 否则在 Windows 上跑 `Path("G:/foo").is_absolute()` 本来就是 True，
     没法 catch 修前的 bug。"""
-    from studio import presets_io
-    from studio.presets_io import _absolutize_model_paths
+    from studio.services.presets import io as presets_io
+    from studio.services.presets.io import _absolutize_model_paths
 
     monkeypatch.setattr(
         presets_io.Path, "is_absolute", lambda self: False

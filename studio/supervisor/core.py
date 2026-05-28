@@ -557,7 +557,7 @@ class Supervisor:
         启动（snapshot 是 forensics 不是必需）。
         """
         try:
-            from .. import task_snapshot
+            from ..services import task_snapshot
             task_snapshot.freeze_config(task_id, cfg_path)
         except Exception:
             logger.exception(

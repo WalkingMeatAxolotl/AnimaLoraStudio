@@ -30,7 +30,7 @@ from ..schemas.presets import (
     PresetImportBody,
     PresetImportFromPathBody,
 )
-from ... import presets_io
+from ...services.presets import io as presets_io
 from ...paths import DATA_EXPORTS
 from ...schema import GROUP_ORDER, TrainingConfig
 

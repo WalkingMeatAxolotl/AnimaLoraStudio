@@ -6,7 +6,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from studio import db, presets_io, queue_io, server
+from studio import db, server
+from studio.services.presets import io as presets_io
+from studio.services import queue_io
 from studio.schema import TrainingConfig
 
 

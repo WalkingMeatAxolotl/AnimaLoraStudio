@@ -47,7 +47,7 @@ from .... import db, secrets
 from ....services.projects import jobs as project_jobs, projects
 from ....services.dataset import scan as datasets
 from ....paths import REPO_ROOT
-from .... import preprocess as preprocess_svc
+from ....services.preprocess import core as preprocess_svc
 from ....services import (
     downloader,
     model_downloader,

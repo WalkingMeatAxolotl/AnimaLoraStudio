@@ -20,7 +20,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # 全局 preset 池
     presets_dir = tmp_path / "presets"
     presets_dir.mkdir()
-    from studio import presets_io
+    from studio.services.presets import io as presets_io
     monkeypatch.setattr(presets_io, "USER_PRESETS_DIR", presets_dir)
     return {"db": dbfile, "presets": presets_dir}
 
@@ -119,7 +119,7 @@ def test_delete_version_config(env) -> None:
 
 
 def _seed_preset(env, name: str, **overrides) -> None:
-    from studio import presets_io
+    from studio.services.presets import io as presets_io
     presets_io.write_preset(name, _minimal_config(**overrides))
 
 
@@ -145,7 +145,7 @@ def test_fork_then_modify_does_not_change_preset(env) -> None:
     cfg["lora_rank"] = 128
     version_config.write_version_config(p, v, cfg)
     # 全局 preset 不受影响
-    from studio import presets_io
+    from studio.services.presets import io as presets_io
     preset_now = presets_io.read_preset("tpl")
     assert preset_now["lora_rank"] == 32
 
@@ -172,7 +172,7 @@ def test_save_version_config_as_preset_clears_project_fields(env) -> None:
 
 
 def test_save_as_preset_rejects_existing_without_overwrite(env) -> None:
-    from studio import presets_io
+    from studio.services.presets import io as presets_io
     p, v = _make_pv(env)
     _seed_preset(env, "tpl", lora_rank=64)
     preset_flow.fork_preset_for_version("tpl", p, v)
@@ -184,7 +184,7 @@ def test_save_as_preset_rejects_existing_without_overwrite(env) -> None:
 
 
 def test_save_as_preset_rejects_invalid_name(env) -> None:
-    from studio import presets_io
+    from studio.services.presets import io as presets_io
     p, v = _make_pv(env)
     _seed_preset(env, "tpl")
     preset_flow.fork_preset_for_version("tpl", p, v)

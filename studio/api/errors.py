@@ -10,7 +10,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from .. import presets_io
+from ..services.presets import io as presets_io
 from ..paths import DATA_EXPORTS, safe_join, validate_path_component
 
 

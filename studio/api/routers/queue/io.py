@@ -19,7 +19,9 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
 from ...schemas.queue import ImportRequest
-from .... import db, presets_io, queue_io, task_snapshot
+from .... import db
+from ....services.presets import io as presets_io
+from ....services import queue_io, task_snapshot
 from ....event_bus import bus
 
 router = APIRouter()
