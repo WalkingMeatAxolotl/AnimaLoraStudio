@@ -1,42 +1,13 @@
-"""JoyCaption backward-compat shim.
+"""Re-export shim — PR-3 真实模块 studio.services.tagging.joycaption。
 
-JoyCaption 已合并为 LLM tagger 的 builtin preset。本 wrapper 仅为旧调用方
-(`get_tagger("joycaption")`) 兜底 —— 新代码请直接 `get_tagger("llm",
-overrides={"current_preset": "joycaption"})` 或不传 overrides 由全局
-`current_preset` 决定。
+本文件用 sys.modules 别名让 `studio.services.joycaption_tagger` 直接指向
+真实子模块对象。任何 monkeypatch / 属性访问（含私有 _xxx 和 import 进来
+的依赖模块）都直接落到真实模块，与未拆分前行为一致。
+
+新代码请直接 `from studio.services.tagging.joycaption import X`。
 """
-from __future__ import annotations
+import sys as _sys
 
-from pathlib import Path
-from typing import Iterator, Optional
+from .tagging import joycaption as _real
 
-import requests
-
-from .llm_tagger import LLMTagger
-from .tagger import ProgressFn, TagResult
-
-
-class JoyCaptionTagger:
-    name = "joycaption"
-    requires_service = True
-
-    def __init__(self, *, session: Optional[requests.Session] = None) -> None:
-        self._session = session or requests.Session()
-
-    def _llm(self) -> LLMTagger:
-        # 强制切到 joycaption preset（其字段由 builtin defaults + 用户在 Settings
-        # 里改过的覆盖共同决定）。
-        return LLMTagger(overrides={"current_preset": "joycaption"}, session=self._session)
-
-    def is_available(self) -> tuple[bool, str]:
-        return self._llm().is_available()
-
-    def prepare(self) -> None:
-        self._llm().prepare()
-
-    def tag(
-        self,
-        image_paths: list[Path],
-        on_progress: ProgressFn = lambda d, t: None,
-    ) -> Iterator[TagResult]:
-        yield from self._llm().tag(image_paths, on_progress=on_progress)
+_sys.modules[__name__] = _real
