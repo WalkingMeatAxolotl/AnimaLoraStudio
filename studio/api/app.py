@@ -35,6 +35,7 @@ from .routers import (
     upscalers,
 )
 from .routers.projects import crud as projects_crud
+from .routers.projects import exports as projects_exports
 from .routers.queue import io as queue_io_router
 from .routers.queue import lifecycle as queue_lifecycle
 from .routers.queue import outputs as queue_outputs
@@ -74,3 +75,6 @@ app.include_router(queue_lifecycle.router)
 app.include_router(queue_outputs.router)
 # PR-6.5 commit 1: projects/versions CRUD 子包第一刀（16 routes）
 app.include_router(projects_crud.router)
+# PR-6.5 commit 2: train.zip / bundle.zip / export-bundle / import-bundle (path/upload) /
+# import-train（6 routes）
+app.include_router(projects_exports.router)
