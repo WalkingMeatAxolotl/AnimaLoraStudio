@@ -21,11 +21,15 @@ from .routers import (
     data_exports,
     events_sse,
     health,
+    jobs,
     logs,
+    models,
     presets,
     root,
     samples,
+    secrets as secrets_router,
     tagger,
+    upscalers,
 )
 
 app = FastAPI(title="AnimaStudio", version=__version__, lifespan=lifespan)
@@ -44,3 +48,8 @@ app.include_router(samples.router)
 app.include_router(logs.router)
 app.include_router(data_exports.router)
 app.include_router(tagger.router)
+# PR-6 commit 2: 4 个 admin router（jobs / secrets / models / upscalers）
+app.include_router(jobs.router)
+app.include_router(secrets_router.router)
+app.include_router(models.router)
+app.include_router(upscalers.router)

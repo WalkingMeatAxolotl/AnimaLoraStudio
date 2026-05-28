@@ -125,124 +125,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-@app.get("/api/secrets")
-def get_secrets() -> dict[str, Any]:
-    return secrets.to_masked_dict(secrets.load())
-
-
-@app.put("/api/secrets")
-def put_secrets(body: dict[str, Any]) -> dict[str, Any]:
-    new = secrets.update(body)
-    return secrets.to_masked_dict(new)
-
-
-# ---------------------------------------------------------------------------
-# /api/models — 下载训练所需主模型 / VAE / tokenizer（PP7 第一刀）
-# ---------------------------------------------------------------------------
-
-
-class ModelDownloadRequest(BaseModel):
-    model_id: str           # "anima_main" | "anima_vae" | "qwen3" | "t5_tokenizer"
-    variant: Optional[str] = None  # 仅 anima_main 用，其他忽略
-
-
-@app.get("/api/models/catalog")
-def get_models_catalog() -> dict[str, Any]:
-    """前端设置页 Models 区块用：列已知模型 + 各自磁盘状态 + 当前下载状态。"""
-    return model_downloader.build_catalog()
-
-
-@app.get("/api/models/path-defaults")
-def get_models_path_defaults() -> dict[str, str]:
-    """当前 Settings 算出的 4 个模型字段绝对路径。
-
-    给预设页 reset 按钮和「新建预设」初始填充用——这两个场景没有 project
-    上下文，拿不到 /api/projects/{pid}/versions/{vid}/config 里的
-    project_specific_defaults，所以单独开一个端点。
-    """
-    return model_downloader.default_paths_for_new_version()
-
-
-@app.post("/api/models/download")
-def start_model_download(body: ModelDownloadRequest) -> dict[str, Any]:
-    """启动后台下载，立即返回 status key；前端通过 SSE
-    (`model_download_changed`) 或轮询 catalog 看进度。"""
-    try:
-        key = model_downloader.trigger(body.model_id, body.variant)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    snap = model_downloader.get_status_snapshot()
-    return {"key": key, "status": snap.get(key, {}).get("status", "running")}
-
-
-class UpscalerSelectRequest(BaseModel):
-    label: str   # 预设 key 或 custom 文件名
-
-
-@app.post("/api/upscalers/select")
-def select_upscaler(body: UpscalerSelectRequest) -> dict[str, Any]:
-    """切换默认放大器。写入 secrets.models.selected_upscaler。
-
-    接受预设 label 或本地已有的 custom 文件名；非法值（既不在预设也不在
-    upscalers/ 目录）返回 400。
-    """
-    label = body.label.strip()
-    if not label:
-        raise HTTPException(400, "label 不能为空")
-    valid = label in model_downloader.UPSCALER_VARIANTS
-    if not valid:
-        # custom 文件名：必须已经在磁盘上
-        try:
-            target = model_downloader.upscaler_target(label)
-        except ValueError as exc:
-            raise HTTPException(400, str(exc)) from exc
-        if not target.exists():
-            raise HTTPException(
-                404, f"放大器不存在: {label}（既非预设也未在 upscalers/ 找到）"
-            )
-    cur = secrets.load()
-    new_models = cur.models.model_copy(update={"selected_upscaler": label})
-    new = cur.model_copy(update={"models": new_models})
-    secrets.save(new)
-    return {"selected": label}
-
-
-class UpscalerCustomDownloadRequest(BaseModel):
-    source: str   # "hf" | "ms"
-    repo_id: str  # 例 "Kim2091/UltraSharp" 或 ModelScope 同形式
-    filename: str  # 例 "4x-UltraSharp.pth"
-
-
-@app.post("/api/upscalers/download_custom")
-def start_upscaler_custom_download(
-    body: UpscalerCustomDownloadRequest,
-) -> dict[str, Any]:
-    """自定义放大器下载：用户填 HF/MS repo + 文件名，落到 `{upscalers}/{filename}`。
-
-    复用通用 start_download_async；key 形如 `upscaler:custom:foo.pth` 便于前端 SSE
-    过滤 + catalog 状态匹配。
-    """
-    from pathlib import Path as _Path
-
-    if body.source not in ("hf", "ms"):
-        raise HTTPException(400, f"未知下载源: {body.source}")
-    if not body.repo_id.strip() or not body.filename.strip():
-        raise HTTPException(400, "repo_id / filename 不能为空")
-    save_name = _Path(body.filename).name
-    if not save_name.lower().endswith(model_downloader.UPSCALER_EXTS):
-        raise HTTPException(
-            400,
-            f"仅支持 {model_downloader.UPSCALER_EXTS} 扩展名",
-        )
-    key = f"upscaler:custom:{save_name}"
-    model_downloader.start_download_async(
-        key,
-        lambda log: model_downloader.download_upscaler_custom(
-            body.source, body.repo_id, body.filename, on_log=log
-        ),
-    )
-    snap = model_downloader.get_status_snapshot()
-    return {"key": key, "status": snap.get(key, {}).get("status", "running")}
+# /api/secrets, /api/models/*, /api/upscalers/* 已 PR-6 commit 2 抽到
+# api/routers/{secrets,models,upscalers}.py + api/schemas/models.py。
 
 
 # ---------------------------------------------------------------------------
@@ -1445,16 +1329,8 @@ def project_thumb(
     return _thumb_response(f, size)
 
 
-# /api/jobs/* —————————————————————————————————————————————————————————
-
-
-@app.get("/api/jobs/{jid}")
-def get_job_endpoint(jid: int) -> dict[str, Any]:
-    with db.connection_for() as conn:
-        job = project_jobs.get_job(conn, jid)
-    if not job:
-        raise HTTPException(404, f"job 不存在: id={jid}")
-    return job
+# /api/jobs/{jid} / log / cancel 已 PR-6 commit 2 抽到 api/routers/jobs.py。
+# /api/projects/{pid}/versions/{vid}/jobs/latest 仍在本文件下（projects 域）。
 
 
 _HYDRATABLE_JOB_KINDS = {"download", "tag", "reg_build"}
@@ -1486,38 +1362,7 @@ def get_latest_version_job(pid: int, vid: int, kind: str) -> dict[str, Any]:
     return {"job": job, "log": log}
 
 
-@app.get("/api/jobs/{jid}/log")
-def get_job_log(jid: int, tail: int = 0) -> dict[str, Any]:
-    with db.connection_for() as conn:
-        job = project_jobs.get_job(conn, jid)
-    if not job:
-        raise HTTPException(404, f"job 不存在: id={jid}")
-    log_path = Path(job.get("log_path") or "")
-    if not log_path.exists():
-        return {"job_id": jid, "content": "", "size": 0}
-    text = log_path.read_text(encoding="utf-8", errors="replace")
-    if tail and tail > 0:
-        text = "\n".join(text.splitlines()[-tail:])
-    return {
-        "job_id": jid,
-        "content": text,
-        "size": len(text.encode("utf-8")),
-    }
-
-
-@app.post("/api/jobs/{jid}/cancel")
-def cancel_job_endpoint(jid: int) -> dict[str, Any]:
-    sup = _supervisor()
-    ok = sup.cancel_job(jid)
-    if not ok:
-        with db.connection_for() as conn:
-            job = project_jobs.get_job(conn, jid)
-        if not job:
-            raise HTTPException(404, f"job 不存在: id={jid}")
-        if job["status"] in project_jobs.TERMINAL_STATUSES:
-            raise HTTPException(400, f"job 已 {job['status']}")
-        raise HTTPException(409, "cancel rejected (state mismatch)")
-    return {"job_id": jid, "canceled": True}
+# jobs log / cancel 已搬到 api/routers/jobs.py
 
 
 # ---------------------------------------------------------------------------
@@ -2954,11 +2799,8 @@ class ReorderRequest(BaseModel):
     ordered_ids: list[int]
 
 
-def _supervisor() -> Supervisor:
-    sup: Optional[Supervisor] = getattr(app.state, "supervisor", None)
-    if sup is None:
-        raise HTTPException(503, "supervisor not running")
-    return sup
+# `_supervisor()` 已 PR-6 commit 2 抽到 api/deps.py，server.py 内剩余 handler 复用同函数
+from .api.deps import _supervisor  # noqa: E402
 
 
 # 导入 / 导出必须放在 /api/queue/{task_id} 之前，否则 "export" / "import" 会
