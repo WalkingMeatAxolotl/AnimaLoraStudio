@@ -34,6 +34,9 @@ from .routers import (
     tagger,
     upscalers,
 )
+from .routers.queue import io as queue_io_router
+from .routers.queue import lifecycle as queue_lifecycle
+from .routers.queue import outputs as queue_outputs
 
 app = FastAPI(title="AnimaStudio", version=__version__, lifespan=lifespan)
 app.add_middleware(_SelectiveGZipMiddleware, minimum_size=1000)
@@ -62,3 +65,9 @@ app.include_router(installs.router)
 app.include_router(system.router)
 # PR-6 commit 5: generate router（8 routes: 出图 + daemon 状态 + TAEFlux）
 app.include_router(generate.router)
+# PR-6 commit 6: queue 子包 3 文件（lifecycle 12 + io 3 + outputs 5 = 20 routes）
+# 注册顺序：io 必须在 lifecycle 之前（FastAPI 按定义顺序匹配 path，"export" /
+# "import" 字符串否则会被 `/api/queue/{task_id}` 的整数解析截胡 422）
+app.include_router(queue_io_router.router)
+app.include_router(queue_lifecycle.router)
+app.include_router(queue_outputs.router)

@@ -36,10 +36,10 @@ def test_decorator_count_matches_api_routes() -> None:
             flags=re.MULTILINE,
         )
     )
-    # api/routers/*.py 里 `@router.<verb>(...)` 装饰器
+    # api/routers/**/*.py 里 `@router.<verb>(...)` 装饰器（递归覆盖 queue/ 等子包）
     router_decorator_count = 0
     if API_ROUTERS_DIR.is_dir():
-        for py in sorted(API_ROUTERS_DIR.glob("*.py")):
+        for py in sorted(API_ROUTERS_DIR.rglob("*.py")):
             if py.name == "__init__.py":
                 continue
             router_src = py.read_text(encoding="utf-8")
