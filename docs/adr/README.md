@@ -14,6 +14,7 @@
 | 0006 | [Queue 任务暂停 / 恢复 + 队列挂起 / 恢复调度](0006-queue-pause-resume.md) | Accepted | 2026-05-18 |
 | 0007 | [Project / Version / Task 生命周期重构](0007-project-version-lifecycle-refactor.md) | Proposed | 2026-05-23 |
 | 0008 | [studio/ 4 层重构（0.11.0）](0008-studio-restructure-0.11.0.md) | Accepted | 2026-05-28 |
+| 0009 | [统一日志 + 错误体系（0.12.0）](0009-logging-error-system.md) | Proposed | 2026-05-28 |
 
 ## 状态值
 
