@@ -14,8 +14,8 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
 from .. import errors as _errors
-from ... import browse, datasets
-from ...paths import REPO_ROOT
+from ...services.dataset import browse, scan as datasets
+from ...infrastructure.paths import REPO_ROOT
 
 router = APIRouter()
 

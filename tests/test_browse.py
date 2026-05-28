@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from studio import browse, server
+from studio import server
+from studio.services.dataset import browse
 
 
 def _setup_tree(root: Path) -> None:
