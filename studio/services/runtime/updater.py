@@ -548,19 +548,32 @@ def exact_tag_for(sha: str) -> Optional[str]:
     return out if rc == 0 and out else None
 
 
-# Self-update feature 引入的 marker 文件。target 上不存在 → 切过去就丢失
-# webui 升级能力（只能 CLI git pull 救援）。preflight() err 级别阻断。
-_SELF_UPDATE_MARKER = "studio/services/updater.py"
+# Self-update feature 引入的 marker 文件。target 上一个都不存在 → 切过去就
+# 丢失 webui 升级能力（只能 CLI git pull 救援）。preflight() err 级别阻断。
+#
+# 多路径：0.11.0 (PR #143 / ADR 0008) services/ 重构把 updater.py 从
+# studio/services/ 搬到 studio/services/runtime/。老 commit 用旧路径、重构后
+# 的 commit 用新路径——任一存在即视为带自更新能力。**文件再搬时务必往这里
+# 追加新路径**，否则所有新 commit 会被误判为"早于自更新 feature"而被 preflight
+# 阻断（test_self_update_markers_track_real_file 守这条不变量）。
+_SELF_UPDATE_MARKERS = (
+    "studio/services/runtime/updater.py",  # 0.11.0+ 重构后
+    "studio/services/updater.py",          # 0.11.0 之前（ADR 0002 初版）
+)
 
 
 def target_has_self_update(target_ref: str) -> bool:
     """目标 ref 上是否带 webui 自更新 feature。
 
     用 `git cat-file -e <ref>:<path>` 测文件存在性（不读内容，效率比 git
-    show 高且无 stdout 输出污染）。失败 / ref 无效 → False（保守）。
+    show 高且无 stdout 输出污染）。任一候选路径存在即 True；全部失败 / ref
+    无效 → False（保守，让 preflight 阻断）。
     """
-    rc, _, _ = _git("cat-file", "-e", f"{target_ref}:{_SELF_UPDATE_MARKER}")
-    return rc == 0
+    for path in _SELF_UPDATE_MARKERS:
+        rc, _, _ = _git("cat-file", "-e", f"{target_ref}:{path}")
+        if rc == 0:
+            return True
+    return False
 
 
 _REQ_NAME_RE = re.compile(r"^([A-Za-z0-9_\-\.\[\]]+)")

@@ -781,14 +781,14 @@ def test_bootstrap_honors_env_origin_url_override(
 
 
 def test_target_has_self_update_true_when_marker_exists(monkeypatch: pytest.MonkeyPatch) -> None:
-    """git cat-file -e <ref>:studio/services/updater.py 返 0 → True。"""
+    """任一候选路径 git cat-file -e <ref>:<path> 返 0 → True。"""
     monkeypatch.setattr(updater, "_git",
                        lambda *args, **_k: (0, "", "") if args[0] == "cat-file" else (1, "", ""))
     assert updater.target_has_self_update("any-ref") is True
 
 
 def test_target_has_self_update_false_when_marker_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """marker 文件不存在（pre-self-update commit）→ False。"""
+    """所有候选路径都不存在（pre-self-update commit）→ False。"""
     monkeypatch.setattr(updater, "_git", lambda *args, **_k: (1, "", "does not exist"))
     assert updater.target_has_self_update("ancient-commit") is False
 
@@ -797,6 +797,22 @@ def test_target_has_self_update_false_on_git_error(monkeypatch: pytest.MonkeyPat
     """git 失败（ref 无效 / 仓库损坏）→ 保守返 False，让 preflight 阻断。"""
     monkeypatch.setattr(updater, "_git", lambda *args, **_k: (128, "", "fatal: invalid object"))
     assert updater.target_has_self_update("garbage") is False
+
+
+def test_self_update_markers_track_real_file() -> None:
+    """marker 路径必须跟着 updater.py 的真实位置走。
+
+    回归守卫：0.11.0 (PR #143) services/ 重构把 updater.py 从
+    studio/services/ 搬到 studio/services/runtime/，但 _SELF_UPDATE_MARKER
+    没跟着改，导致所有重构后的 commit 都没有旧路径文件 → target_has_self_update
+    恒返 False → preflight 把每个新版本误判为"早于自更新 feature"并阻断切换。
+    断言至少一个候选路径在当前工作树真实存在，搬文件忘改 marker 时直接挂。
+    """
+    from studio.paths import REPO_ROOT
+    assert any((REPO_ROOT / p).exists() for p in updater._SELF_UPDATE_MARKERS), (
+        f"_SELF_UPDATE_MARKERS 没有一个指向真实文件：{updater._SELF_UPDATE_MARKERS}"
+        "——updater.py 搬家后忘了更新 marker 路径？"
+    )
 
 
 # ---------------------------------------------------------------------------
