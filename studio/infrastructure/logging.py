@@ -23,6 +23,7 @@ import datetime as _dt
 import json
 import logging
 import logging.handlers
+import os
 import sys
 import traceback as _traceback
 from pathlib import Path
@@ -174,6 +175,7 @@ def setup_logging(
     log_dir: Path | None = None,
     level: str = "INFO",
     console: str | bool = "auto",
+    file: bool = True,
     extra_handlers: list[logging.Handler] | None = None,
 ) -> None:
     """安装全局 logging 配置。每个进程入口调一次（webui / cli / worker）。
@@ -183,7 +185,7 @@ def setup_logging(
     行为：
       1. reconfigure_console_utf8（Windows 编码兜底）
       2. 清 root logger 现有 handler（防累加）
-      3. 装 RotatingFileHandler 到 {log_dir}/studio.log（JSON line, 50MB×5）
+      3. （可选）装 RotatingFileHandler 到 {log_dir}/studio.log（JSON line, 50MB×5）
       4. 装 console handler（auto/json/bool 三态，详 below）
       5. 装 extra_handlers（worker 用来塞 jobs/<id>.log handler）
       6. 静音第三方库（asyncio/urllib3/PIL/...）→ WARNING
@@ -193,12 +195,20 @@ def setup_logging(
 
     Args:
         process: 进程标识（"webui" / "cli:run" / "worker:tag/42" / ...）
-        log_dir: studio.log 落盘目录；默认 paths.LOGS_DIR
+        log_dir: studio.log 落盘目录；默认读 env ANIMA_LOG_DIR，否则 paths.LOGS_DIR
         level: root logger level（"DEBUG" / "INFO" / "WARNING" / "ERROR"）
         console: "auto" = stderr isatty → Human, 否则 JSON；
                  "json" 强制 JSON；True 强制 Human；False 不装 console
+        file: 是否装 file handler 到 studio.log；webui 默认 True；
+              worker / cli 应传 False（worker 走 stdout 进 supervisor 重定向单写；
+              CLI 5s 短命周期落盘价值低）。0.13.x ADR-0009 §还的债"演进双写"后 worker 改 True
         extra_handlers: 额外装到 root 的 handler（worker 用来塞 jobs/<id>.log）
     """
+    # pytest 全局 fixture 设 ANIMA_LOGGING_NO_BOOTSTRAP=1 让业务代码 bootstrap
+    # 调用全部 noop，避免污染 caplog / 反复装 handler；测 setup_logging 本身的
+    # tests/test_logging_setup.py 自己 monkeypatch.delenv 解除。
+    if os.environ.get("ANIMA_LOGGING_NO_BOOTSTRAP"):
+        return
     if process in _CONFIGURED_PROCESSES:
         return
     _CONFIGURED_PROCESSES.add(process)
@@ -211,8 +221,10 @@ def setup_logging(
         root.removeHandler(h)
     root.setLevel(getattr(logging, level.upper(), logging.INFO))
 
-    # 1. 文件 handler — JSON line 到 studio.log
-    root.addHandler(make_studio_log_handler(log_dir=log_dir, process=process))
+    # 1. 文件 handler — JSON line 到 studio.log（worker / cli 不装）
+    if file:
+        effective_log_dir = log_dir or _resolve_log_dir()
+        root.addHandler(make_studio_log_handler(log_dir=effective_log_dir, process=process))
 
     # 2. console handler
     console_handler = _build_console_handler(console, process)
@@ -236,6 +248,17 @@ def setup_logging(
 
     # 6. 未捕获异常路由进 logger
     _install_excepthooks()
+
+
+def _resolve_log_dir() -> Path:
+    """优先 ANIMA_LOG_DIR env，否则 paths.LOGS_DIR。
+
+    pytest conftest 设 ANIMA_LOG_DIR=tmp_path_factory 隔离测试不写 repo studio_data/。
+    """
+    env = os.environ.get("ANIMA_LOG_DIR", "").strip()
+    if env:
+        return Path(env)
+    return LOGS_DIR
 
 
 def _build_console_handler(console: str | bool, process: str) -> logging.Handler | None:

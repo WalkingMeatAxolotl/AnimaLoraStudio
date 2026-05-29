@@ -834,6 +834,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     if _first_pos not in _subcmds:
         args_list = ['run'] + args_list
     args = parser.parse_args(args_list)
+    # PR-1 C4: 统一日志体系 (ADR-0009)。file=False — CLI 是 5s 短命周期，
+    # 启动信息不进 studio.log（用户决定 — round 2 §1.3）。console=True 让
+    # logger.x 调用走人读 stderr；现有 48 处 print() 不动（PR-3 _say() wrapper
+    # 收编）。env ANIMA_LOGGING_NO_BOOTSTRAP=1 时 noop（测试态）。
+    from .infrastructure.logging import setup_logging
+    setup_logging(f"cli:{args.cmd}", file=False, console=True)
     return args.func(args)
 
 

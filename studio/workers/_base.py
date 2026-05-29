@@ -26,11 +26,32 @@ def worker_main(run_fn: Callable[[int], int]) -> None:
         if __name__ == "__main__":
             from ._base import worker_main
             worker_main(run)
+
+    PR-1 C4: 装 setup_logging (ADR-0009)。file=False — worker 走 stdout 进
+    supervisor 重定向 jobs/<id>.log 单写（C round2 §1.2 决策；0.13.x ADR-0009
+    §还的债"演进双写"后改 True）。process 名格式 "worker:<module>/<job_id>"，
+    便于 jq 按 process 过滤；module 取 sys.argv[0] basename（download_worker.py
+    → download_worker → 去掉 _worker 后缀 = download）。
     """
+    import os
+    from ..infrastructure.logging import setup_logging
     p = argparse.ArgumentParser()
     p.add_argument("--job-id", type=int, required=True)
     args = p.parse_args()
+    kind = _worker_kind_from_argv()
+    # PROCESS_ENV 由 supervisor C6 后设置；环境无则按 argv 推断
+    process = os.environ.get("ANIMA_PROCESS_NAME") or f"worker:{kind}/{args.job_id}"
+    setup_logging(process, file=False, console=True)
     sys.exit(run_fn(args.job_id))
+
+
+def _worker_kind_from_argv() -> str:
+    """sys.argv[0] basename → kind（download_worker.py → download）。"""
+    from pathlib import Path as _Path
+    name = _Path(sys.argv[0]).stem
+    if name.endswith("_worker"):
+        name = name[: -len("_worker")]
+    return name or "unknown"
 
 
 def reconfigure_console_utf8() -> None:

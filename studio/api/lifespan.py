@@ -32,6 +32,7 @@ from fastapi import FastAPI
 
 from .. import db
 from ..infrastructure.event_bus import bus
+from ..infrastructure.logging import setup_logging
 from ..paths import ensure_dirs
 from ..supervisor import Supervisor
 
@@ -70,6 +71,11 @@ def _install_proactor_disconnect_filter(loop: asyncio.AbstractEventLoop) -> None
 @asynccontextmanager
 async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
     """启动绑定 event bus 到当前 loop 并起 supervisor；关闭时停 supervisor。"""
+    # PR-1 C4: 统一日志体系入口 (ADR-0009)。第一行调，让 ensure_dirs / db.init_db
+    # 自己 emit 的 log 也能进 studio.log。setup_logging 自身 mkdir LOGS_DIR
+    # 不需要等 ensure_dirs。env ANIMA_LOGGING_NO_BOOTSTRAP=1 时 noop（测试态）。
+    setup_logging("webui", level=os.environ.get("ANIMA_LOG_LEVEL", "INFO"))
+
     # 装 Windows ProactorEventLoop 的 ConnectionResetError 过滤器（详见 helper docstring）
     _install_proactor_disconnect_filter(asyncio.get_running_loop())
 

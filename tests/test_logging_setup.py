@@ -30,8 +30,13 @@ from studio.infrastructure.logging import (
 
 
 @pytest.fixture(autouse=True)
-def reset_logging():
-    """每个测试前后 reset，防 sentinel 累加 + 防污染。"""
+def reset_logging(monkeypatch: pytest.MonkeyPatch):
+    """每个测试前后 reset，防 sentinel 累加 + 防污染。
+
+    conftest session fixture 设 ANIMA_LOGGING_NO_BOOTSTRAP=1 让业务代码
+    setup_logging 全部 noop。本文件直接测 setup_logging 行为，必须 unset。
+    """
+    monkeypatch.delenv("ANIMA_LOGGING_NO_BOOTSTRAP", raising=False)
     _reset_for_tests()
     saved_handlers = list(logging.getLogger().handlers)
     saved_level = logging.getLogger().level
