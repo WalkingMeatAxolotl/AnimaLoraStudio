@@ -1,6 +1,11 @@
 // 与 FastAPI 守护进程交互的薄封装。
 // 开发时由 Vite proxy 转发到 127.0.0.1:8765；生产部署时与 API 同源。
 
+// ADR-0009 PR-3 C3: 把后端回的 X-Trace-Id 写到 atom，给 ErrorBoundary /
+// window.onerror 上报时带上（让开发者在 server log 能 join "前端崩前最后一次
+// API 失败" 跟 "用户实际看到的 toast"）。
+import { setLastApiTraceId } from '../lib/errors/report'
+
 export interface HealthResponse {
   status: string
   version: string
@@ -1211,8 +1216,31 @@ export interface ImportResult {
  * 用 Error 而非自定义 class 是因为不少现有 callsite 是 `catch (e) { toast(String(e)) }`
  * 这种通用写法；保留 `Error.prototype.toString()` 行为不破坏它们。需要结构化
  * 处理的新 callsite 强制 cast：`(e as ApiError).detail`。
+ *
+ * ADR-0009 PR-3 C3: 新加 `traceId` 字段 — 后端 dual-write envelope 的
+ * `body.error.trace_id` 或 X-Trace-Id response header。toast 显示 "trace ab12cd34"
+ * 后缀让用户截图给开发；ErrorBoundary 上报时也带，串起前端崩前最后一次失败。
  */
-export type ApiError = Error & { status?: number; detail?: unknown }
+export type ApiError = Error & {
+  status?: number
+  detail?: unknown
+  traceId?: string
+}
+
+/**
+ * ADR-0009 PR-3 C3: 把 ApiError.traceId 末 8 字符格式化成 toast 后缀。
+ *
+ * 用户报问题时把 toast 截图给开发；开发拿这 8 字符 `jq 'select(.trace_id |
+ * endswith("..."))' studio.log` 一行还原完整链路。
+ *
+ * 调用模式（callsite 自愿用，不强制 — 现有 toast(e.message,'error') 不破）：
+ *     toast(`${e.message}${formatErrorTraceSuffix(e)}`, 'error')
+ */
+export function formatErrorTraceSuffix(err: unknown): string {
+  const traceId = (err as ApiError | undefined)?.traceId
+  if (!traceId) return ''
+  return `  ·  trace ${traceId.slice(-8)}`
+}
 
 async function req<T>(
   path: string,
@@ -1228,6 +1256,7 @@ async function req<T>(
   if (!resp.ok) {
     let detail = `${resp.status} ${resp.statusText}`
     let rawDetail: unknown = null
+    let traceId: string | undefined
     try {
       const body = await resp.json()
       if (typeof body?.detail === 'string') {
@@ -1237,12 +1266,26 @@ async function req<T>(
         // 结构化 detail：取 .message 作为可读字符串；callsite 想拿完整结构走 e.detail
         detail = (body.detail as { message?: string }).message ?? JSON.stringify(body.detail)
       }
+      // ADR-0009 dual-write envelope: body.error.trace_id 优先
+      const errStruct = (body as { error?: { trace_id?: string } } | undefined)?.error
+      if (errStruct?.trace_id) {
+        traceId = errStruct.trace_id
+      }
     } catch {
       // body 不是 JSON / 解析失败：保持 statusText 默认
+    }
+    // header 兜底（DomainError dual-write 路径或 HTTPException 路径都有）
+    if (!traceId) {
+      traceId = resp.headers.get('X-Trace-Id') ?? undefined
+    }
+    if (traceId) {
+      // 写入 atom 给 ErrorBoundary / window.onerror 上报时附带
+      setLastApiTraceId(traceId)
     }
     const err = new Error(detail) as ApiError
     err.status = resp.status
     err.detail = rawDetail
+    err.traceId = traceId
     throw err
   }
   if (resp.status === 204) return undefined as T
@@ -1291,6 +1334,7 @@ async function xhrUpload<T>(
       }
       let detail = `${xhr.status} ${xhr.statusText}`
       let rawDetail: unknown = null
+      let traceId: string | undefined
       try {
         const j = JSON.parse(text)
         if (typeof j?.detail === 'string') {
@@ -1299,12 +1343,21 @@ async function xhrUpload<T>(
           rawDetail = j.detail
           detail = (j.detail as { message?: string }).message ?? JSON.stringify(j.detail)
         }
+        // ADR-0009 PR-3 C3: dual-write envelope body.error.trace_id
+        const errStruct = (j as { error?: { trace_id?: string } })?.error
+        if (errStruct?.trace_id) traceId = errStruct.trace_id
       } catch {
         /* body 不是 JSON：保持 statusText */
       }
+      // header 兜底
+      if (!traceId) {
+        traceId = xhr.getResponseHeader('X-Trace-Id') ?? undefined
+      }
+      if (traceId) setLastApiTraceId(traceId)
       const err = new Error(detail) as ApiError
       err.status = xhr.status
       err.detail = rawDetail
+      err.traceId = traceId
       reject(err)
     }
     xhr.onerror = () => reject(new Error('network error'))
