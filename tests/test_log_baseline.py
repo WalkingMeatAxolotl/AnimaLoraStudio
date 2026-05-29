@@ -85,6 +85,11 @@ def test_logger_getlogger_name_uses_dunder_name() -> None:
                 # 允许 logging.getLogger("uvicorn") / logging.getLogger("uvicorn.access") 给第三方 logger silence 用
                 if arg.startswith('"uvicorn') or arg.startswith("'uvicorn"):
                     continue
+                # 允许 logging.getLogger("studio.client") — ADR-0009 PR-3 C1 前端
+                # 上报 logger 故意跟 module 名（studio.api.routers.client_errors）
+                # 分开，便于 jq 'select(.logger | startswith("studio.client"))' 过滤
+                if arg.startswith('"studio.client') or arg.startswith("'studio.client"):
+                    continue
                 bad.append(f"{py.relative_to(studio_root)}: getLogger({arg})")
     assert not bad, (
         "studio/ 内 getLogger 应该统一用 __name__；下列违反必须修或加 silence list 注释:\n"

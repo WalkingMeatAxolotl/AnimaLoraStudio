@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 160,
+  "count": 161,
   "routes": [
     {
       "path": "/",
@@ -17,6 +17,14 @@
         "GET"
       ],
       "name": "browse_dir",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/client-errors",
+      "methods": [
+        "POST"
+      ],
+      "name": "report_client_error",
       "type": "APIRoute"
     },
     {
