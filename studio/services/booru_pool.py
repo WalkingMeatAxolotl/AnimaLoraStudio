@@ -28,6 +28,7 @@ from urllib.parse import urlparse
 import requests
 
 from . import booru_api
+from .proxy_manager import patch_requests_session
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +127,8 @@ class BooruClient:
     ) -> None:
         self.cfg = cfg or BooruPoolConfig()
         self._session = session or requests.Session()
+        patch_requests_session(self._session)
+        logger.info(f"BooruClient session proxies: {self._session.proxies}")
         self._owns_session = session is None
         self._api_bucket = TokenBucket(self.cfg.api_rate_per_sec)
         self._cdn_bucket = TokenBucket(self.cfg.cdn_rate_per_sec)

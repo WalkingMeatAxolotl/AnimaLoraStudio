@@ -431,6 +431,14 @@ class SystemConfig(BaseModel):
     show_dev_channel: bool = False  # deprecated, 仅作迁移源
 
 
+class ProxyConfig(BaseModel):
+    """全局HTTP/HTTPS代理配置"""
+    enabled: bool = False
+    http_proxy: str = ""  # 例如: http://127.0.0.1:7890
+    https_proxy: str = ""
+    no_proxy: str = ""    # 例外地址，如 localhost,127.0.0.1
+
+
 class Secrets(BaseModel):
     gelbooru: GelbooruConfig = Field(default_factory=GelbooruConfig)
     danbooru: DanbooruConfig = Field(default_factory=DanbooruConfig)
@@ -450,6 +458,7 @@ class Secrets(BaseModel):
     queue: QueueConfig = Field(default_factory=QueueConfig)
     generate: GenerateConfig = Field(default_factory=GenerateConfig)
     system: SystemConfig = Field(default_factory=SystemConfig)
+    proxy: ProxyConfig = Field(default_factory=ProxyConfig)
 
 
 # ---------------------------------------------------------------------------

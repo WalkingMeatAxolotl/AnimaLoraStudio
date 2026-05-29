@@ -363,6 +363,13 @@ export interface SystemPrefsConfig {
   show_dev_channel: boolean
 }
 
+export interface ProxyConfig {
+    enabled: boolean;
+    http_proxy: string;
+    https_proxy: string;
+    no_proxy: string;
+}
+
 export interface Secrets {
   gelbooru: GelbooruConfig
   danbooru: DanbooruConfig
@@ -381,6 +388,7 @@ export interface Secrets {
   queue: QueueConfig
   generate: GenerateSecretsConfig
   system: SystemPrefsConfig
+  proxy: ProxyConfig
 }
 
 /** PUT /api/secrets 的 body：嵌套的 partial dict；MASK ("***") 表示「保持不变」。 */
