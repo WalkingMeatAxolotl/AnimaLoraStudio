@@ -19,6 +19,7 @@ C6：跨进程 env / db.tasks.request_trace_id（待加）
 """
 from __future__ import annotations
 
+import contextvars
 import datetime as _dt
 import json
 import logging
@@ -26,8 +27,9 @@ import logging.handlers
 import os
 import sys
 import traceback as _traceback
+import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from .paths import LOGS_DIR
 
@@ -39,6 +41,23 @@ except ImportError:
 STUDIO_LOG_NAME = "studio.log"
 STUDIO_LOG_MAX_BYTES = 50 * 1024 * 1024
 STUDIO_LOG_BACKUP_COUNT = 5
+
+# trace_id 跨进程 / 跨 surface 名约定 (ADR-0009 §3.1)
+TRACE_HEADER = "X-Trace-Id"           # HTTP 双向 header
+TRACE_ENV = "ANIMA_TRACE_ID"          # 子进程 env (C6 supervisor 注入)
+PROCESS_ENV = "ANIMA_PROCESS_NAME"    # 子进程预设 process 名
+
+# ContextVar — 同进程跨 async/thread 自动传播 (C5)
+# C6 / C7 后会用 job_id / task_id
+_trace_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "studio_trace_id", default=None
+)
+_job_id_var: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
+    "studio_job_id", default=None
+)
+_task_id_var: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
+    "studio_task_id", default=None
+)
 
 # 第三方库 logger 静音 list — root level=INFO 时这些库会大量出 INFO 噪音。
 # silence list 必须显式，避免漏一条让 stderr 爆 10×（B audit N.1 / A round2 §5.2）。
@@ -54,6 +73,80 @@ _NOISY_LOGGERS = (
     "huggingface_hub",
     "filelock",
 )
+
+# ── trace_id 公开 API ────────────────────────────────────────────────────
+
+
+def new_trace_id() -> str:
+    """生成 24 字符 hex trace_id（uuid4 hex[:24]）。
+
+    24 字符：(a) 用户截图末 8 字符易复制；(b) 跟 supervisor 后台 spawn 的
+    `bg-{new_trace_id()}` (28 字符) 区分清晰；(c) 比 ULID 26 简单不引依赖。
+    """
+    return uuid.uuid4().hex[:24]
+
+
+def bind_trace_id(trace_id: str) -> contextvars.Token:
+    """设当前 ContextVar trace_id，返 token 用于 reset。
+
+    用法（middleware / worker bootstrap）：
+        token = bind_trace_id(tid)
+        try:
+            ...do work...
+        finally:
+            reset_trace_id(token)
+    """
+    return _trace_id_var.set(trace_id)
+
+
+def reset_trace_id(token: contextvars.Token) -> None:
+    _trace_id_var.reset(token)
+
+
+def get_trace_id() -> Optional[str]:
+    """当前 ContextVar trace_id；未 bind 返 None。"""
+    return _trace_id_var.get()
+
+
+def bind_job_id(job_id: int) -> contextvars.Token:
+    return _job_id_var.set(job_id)
+
+
+def bind_task_id(task_id: int) -> contextvars.Token:
+    return _task_id_var.set(task_id)
+
+
+def get_job_id() -> Optional[int]:
+    return _job_id_var.get()
+
+
+def get_task_id() -> Optional[int]:
+    return _task_id_var.get()
+
+
+# ── ContextFilter ────────────────────────────────────────────────────────
+
+
+class ContextFilter(logging.Filter):
+    """读 ContextVar 注入到 LogRecord，让 JsonLineFormatter 直接拿。
+
+    用 Filter 不用 LogRecord factory：factory 改全局，filter 装到 root 就行，
+    回滚干净（C5 PR 撤掉 filter 即恢复，不动 LogRecord 类）。
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not hasattr(record, "trace_id"):
+            record.trace_id = _trace_id_var.get()
+        if not hasattr(record, "job_id"):
+            jid = _job_id_var.get()
+            if jid is not None:
+                record.job_id = jid
+        if not hasattr(record, "task_id"):
+            tid = _task_id_var.get()
+            if tid is not None:
+                record.task_id = tid
+        return True
+
 
 # 模块级 sentinel — 同一 process 名重复调 setup_logging 不重复装 handler。
 # supervisor 重启 / 测试 reload / worker 进程入口被双调时受益。
@@ -231,8 +324,17 @@ def setup_logging(
     if console_handler is not None:
         root.addHandler(console_handler)
 
-    # 3. extra handlers（worker job log 等）
+    # ContextFilter — 装到每个 handler 而非 logger。
+    # stdlib Logger.filter 只在 Logger.handle 顶层调一次；子 logger propagate
+    # 到 root 后**不**调 root.filter，只调 root.handlers[*].emit。所以 filter
+    # 必须装 handler 上，确保所有 record 经过 handler 时都有 ContextVar 注入。
+    _ctx_filter = ContextFilter()
+    for h in root.handlers:
+        h.addFilter(_ctx_filter)
+
+    # 3. extra handlers（worker job log 等）— 同样装 ContextFilter
     for h in extra_handlers or ():
+        h.addFilter(ContextFilter())
         root.addHandler(h)
 
     # 4. 第三方库静音（防 root=INFO 后 stderr 噪音爆 10×）
@@ -317,7 +419,7 @@ def _install_excepthooks() -> None:
 
 
 def _reset_for_tests() -> None:
-    """测试钩子：清 sentinel 让多个测试可独立 setup_logging。
+    """测试钩子：清 sentinel + 清 ContextVar，让多个测试可独立 setup_logging。
 
     生产代码不应该调。fixture 用：
         from studio.infrastructure.logging import _reset_for_tests
@@ -326,13 +428,20 @@ def _reset_for_tests() -> None:
     global _EXCEPTHOOKS_INSTALLED
     _CONFIGURED_PROCESSES.clear()
     _EXCEPTHOOKS_INSTALLED = False
+    # ContextVar 在测试间 leaky（同 thread / async ctx），显式清掉
+    _trace_id_var.set(None)
+    _job_id_var.set(None)
+    _task_id_var.set(None)
     # 不还原 sys.excepthook（测试间也不应该依赖那个）
 
 
 # 编码兜底是无条件常量，导出给 workers/_base.py 旧 import 兼容
 __all__ = [
     "STUDIO_LOG_NAME", "STUDIO_LOG_MAX_BYTES", "STUDIO_LOG_BACKUP_COUNT",
-    "JsonLineFormatter", "HumanConsoleFormatter",
+    "TRACE_HEADER", "TRACE_ENV", "PROCESS_ENV",
+    "JsonLineFormatter", "HumanConsoleFormatter", "ContextFilter",
     "make_studio_log_handler", "setup_logging", "reconfigure_console_utf8",
+    "new_trace_id", "bind_trace_id", "reset_trace_id", "get_trace_id",
+    "bind_job_id", "bind_task_id", "get_job_id", "get_task_id",
     "_reset_for_tests",
 ]

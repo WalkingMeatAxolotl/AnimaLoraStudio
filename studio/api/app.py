@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from .. import __version__
 from .lifespan import lifespan
 from .middleware import _SelectiveGZipMiddleware
+from .trace_middleware import TraceIdMiddleware
 from .routers import (
     browse,
     data_exports,
@@ -44,7 +45,11 @@ from .routers.queue import lifecycle as queue_lifecycle
 from .routers.queue import outputs as queue_outputs
 
 app = FastAPI(title="AnimaStudio", version=__version__, lifespan=lifespan)
+# Middleware 注册顺序：starlette 后注册的 middleware 在 stack 外层。
+# TraceIdMiddleware 最先注册 → 实际包在 GZip 外层 → trace_id 在 GZip
+# 之前 bind，gzip handler 内 logger.x 也能拿到。
 app.add_middleware(_SelectiveGZipMiddleware, minimum_size=1000)
+app.add_middleware(TraceIdMiddleware)
 
 # Router 注册顺序无所谓（FastAPI 按 path 精确匹配，include_router 先后只影响
 # include_in_schema=False 的 catch-all 顺序）。按 PR / 字母序排列方便审查。
