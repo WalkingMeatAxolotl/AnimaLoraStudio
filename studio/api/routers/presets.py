@@ -59,7 +59,7 @@ def get_preset(name: str) -> dict[str, Any]:
     try:
         return presets_io.read_preset(name)
     except presets_io.PresetError as exc:
-        raise HTTPException(status_code=_err_code(exc), detail=str(exc)) from exc
+        _err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
 
 
 @router.put("/api/presets/{name}")
@@ -67,7 +67,7 @@ def put_preset(name: str, body: dict[str, Any]) -> dict[str, str]:
     try:
         path = presets_io.write_preset(name, body)
     except presets_io.PresetError as exc:
-        raise HTTPException(status_code=_err_code(exc), detail=str(exc)) from exc
+        _err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
     return {"name": name, "path": str(path)}
 
 
@@ -76,7 +76,7 @@ def delete_preset_endpoint(name: str) -> dict[str, str]:
     try:
         presets_io.delete_preset(name)
     except presets_io.PresetError as exc:
-        raise HTTPException(status_code=_err_code(exc), detail=str(exc)) from exc
+        _err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
     return {"deleted": name}
 
 
@@ -85,7 +85,7 @@ def duplicate_preset_endpoint(name: str, body: DuplicateRequest) -> dict[str, st
     try:
         path = presets_io.duplicate_preset(name, body.new_name)
     except presets_io.PresetError as exc:
-        raise HTTPException(status_code=_err_code(exc), detail=str(exc)) from exc
+        _err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
     return {"name": body.new_name, "path": str(path)}
 
 
@@ -95,7 +95,7 @@ def download_preset(name: str) -> FileResponse:
     try:
         path = presets_io.preset_path(name)
     except presets_io.PresetError as exc:
-        raise HTTPException(status_code=_err_code(exc), detail=str(exc)) from exc
+        _err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"预设不存在: {name}")
     return FileResponse(path, media_type="application/yaml", filename=f"{name}.yaml")
@@ -109,7 +109,7 @@ def export_preset_to_data_exports(name: str, body: PresetExportBody) -> dict[str
         dest = _errors._unique_data_export_path(f"{name}.yaml", (".yaml", ".yml"))
         path = presets_io.write_preset(dest.stem, body.config, DATA_EXPORTS)
     except presets_io.PresetError as exc:
-        raise HTTPException(status_code=_err_code(exc), detail=str(exc)) from exc
+        _err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
     return _errors._export_result(path)
 
 
@@ -124,7 +124,7 @@ def import_preset_from_data_exports(body: PresetImportBody) -> dict[str, Any]:
     try:
         config, suggested = presets_io.parse_preset_bytes(src.read_bytes(), src.name)
     except presets_io.PresetError as exc:
-        raise HTTPException(status_code=_err_code(exc), detail=str(exc)) from exc
+        _err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
     if presets_io.preset_path(suggested).exists():
         raise HTTPException(
             status_code=409,
@@ -137,7 +137,7 @@ def import_preset_from_data_exports(body: PresetImportBody) -> dict[str, Any]:
     try:
         path = presets_io.write_preset(suggested, config)
     except presets_io.PresetError as exc:
-        raise HTTPException(status_code=_err_code(exc), detail=str(exc)) from exc
+        _err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
     return {"name": suggested, "path": str(path)}
 
 
@@ -153,7 +153,7 @@ def import_preset_from_path(body: PresetImportFromPathBody) -> dict[str, Any]:
     try:
         config, suggested = presets_io.parse_preset_bytes(src.read_bytes(), src.name)
     except presets_io.PresetError as exc:
-        raise HTTPException(status_code=_err_code(exc), detail=str(exc)) from exc
+        _err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
     if presets_io.preset_path(suggested).exists():
         raise HTTPException(
             status_code=409,
@@ -166,7 +166,7 @@ def import_preset_from_path(body: PresetImportFromPathBody) -> dict[str, Any]:
     try:
         path = presets_io.write_preset(suggested, config)
     except presets_io.PresetError as exc:
-        raise HTTPException(status_code=_err_code(exc), detail=str(exc)) from exc
+        _err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
     return {"name": suggested, "path": str(path)}
 
 
@@ -184,7 +184,7 @@ async def import_preset(file: UploadFile = File(...)) -> dict[str, Any]:
     try:
         config, suggested = presets_io.parse_preset_bytes(raw, file.filename or "")
     except presets_io.PresetError as exc:
-        raise HTTPException(status_code=_err_code(exc), detail=str(exc)) from exc
+        _err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
     if presets_io.preset_path(suggested).exists():
         raise HTTPException(
             status_code=409,
@@ -197,7 +197,7 @@ async def import_preset(file: UploadFile = File(...)) -> dict[str, Any]:
     try:
         path = presets_io.write_preset(suggested, config)
     except presets_io.PresetError as exc:
-        raise HTTPException(status_code=_err_code(exc), detail=str(exc)) from exc
+        _err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
     return {"name": suggested, "path": str(path)}
 
 

@@ -64,14 +64,27 @@ def _export_result(path: Path) -> dict[str, Any]:
     }
 
 
-def _preset_err_code(exc: presets_io.PresetError) -> int:
-    """PresetError → HTTP 状态码：'不存在' → 404，名字非法/已存在 → 400，其它 → 422。
+def _preset_err_code(exc: presets_io.PresetError) -> None:
+    """PR-2 C4: 把 PresetError 的 message 字符串匹配映射写到 exc.http_status + exc.code，
+    让 DomainError handler 翻 dual-write envelope。
 
-    被 api/routers/presets.py 和 server.py 内的 preset fork / save-as 端点共用。
+    callsite 模式：
+        except PresetError as exc:
+            _preset_err_code(exc)  # mutate exc.http_status + exc.code
+            raise  # handler 翻 envelope（自带 trace_id）
+
+    PR-2 C5 / 0.13.x 的目标：service 内 raise PresetError(msg, http_status=N,
+    code="preset.xxx") 直接带这些属性，router 不再需要这个 helper + try/except。
     """
     msg = str(exc)
     if "不存在" in msg:
-        return 404
-    if "非法预设名" in msg or "已存在" in msg:
-        return 400
-    return 422
+        exc.http_status = 404
+        exc.code = "preset.not_found"
+    elif "非法预设名" in msg:
+        exc.http_status = 400
+        exc.code = "preset.name_invalid"
+    elif "已存在" in msg:
+        exc.http_status = 400
+        exc.code = "preset.exists"
+    else:
+        exc.http_status = 422

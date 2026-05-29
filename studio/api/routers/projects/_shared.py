@@ -16,14 +16,26 @@ from ....infrastructure.event_bus import bus
 from ....services import version_config
 
 
-def _project_err_code(exc: Exception) -> int:
-    """ProjectError / VersionError → HTTP 状态码。"""
+def _project_err_code(exc: Exception) -> None:
+    """PR-2 C4: mutate ProjectError/VersionError exc.http_status + exc.code，
+    让 DomainError handler 翻 dual-write envelope。
+
+    callsite 模式：
+        except (ProjectError, VersionError) as exc:
+            _project_err_code(exc); raise
+    """
     msg = str(exc)
     if "不存在" in msg:
-        return 404
-    if "已存在" in msg or "非法" in msg or "不能为空" in msg:
-        return 400
-    return 422
+        exc.http_status = 404
+        exc.code = "project.not_found"
+    elif "已存在" in msg:
+        exc.http_status = 400
+        exc.code = "project.exists"
+    elif "非法" in msg or "不能为空" in msg:
+        exc.http_status = 400
+        exc.code = "project.invalid"
+    else:
+        exc.http_status = 422
 
 
 def _project_payload(p: dict[str, Any]) -> dict[str, Any]:

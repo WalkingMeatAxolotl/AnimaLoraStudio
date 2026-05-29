@@ -70,7 +70,7 @@ def create_project_endpoint(body: ProjectCreate) -> dict[str, Any]:
                 conn, title=body.title, slug=body.slug, note=body.note
             )
         except projects.ProjectError as exc:
-            raise HTTPException(_project_err_code(exc), str(exc)) from exc
+            _project_err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
         if body.initial_version_label:
             try:
                 versions.create_version(
@@ -78,7 +78,7 @@ def create_project_endpoint(body: ProjectCreate) -> dict[str, Any]:
                 )
             except versions.VersionError as exc:
                 # 项目已建好；版本失败给前端但保留项目
-                raise HTTPException(_project_err_code(exc), str(exc)) from exc
+                _project_err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
         p = projects.get_project(conn, p["id"])
     assert p is not None
     _publish_project_state(p)
@@ -101,7 +101,7 @@ def patch_project_endpoint(pid: int, body: ProjectUpdate) -> dict[str, Any]:
         try:
             p = projects.update_project(conn, pid, **fields)
         except projects.ProjectError as exc:
-            raise HTTPException(_project_err_code(exc), str(exc)) from exc
+            _project_err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
     _publish_project_state(p)
     return _project_payload(p)
 
@@ -112,7 +112,7 @@ def delete_project_endpoint(pid: int) -> dict[str, Any]:
         try:
             projects.delete_project(conn, pid)
         except projects.ProjectError as exc:
-            raise HTTPException(_project_err_code(exc), str(exc)) from exc
+            _project_err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
     return {"deleted": pid}
 
 
@@ -183,7 +183,7 @@ def create_version_endpoint(pid: int, body: VersionCreate) -> dict[str, Any]:
                 note=body.note,
             )
         except versions.VersionError as exc:
-            raise HTTPException(_project_err_code(exc), str(exc)) from exc
+            _project_err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
     _publish_version_state(v)
     return v
 
@@ -211,7 +211,7 @@ def patch_version_endpoint(
         try:
             v = versions.update_version(conn, vid, **fields)
         except versions.VersionError as exc:
-            raise HTTPException(_project_err_code(exc), str(exc)) from exc
+            _project_err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
     _publish_version_state(v)
     return v
 

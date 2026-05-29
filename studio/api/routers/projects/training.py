@@ -518,7 +518,7 @@ def fork_preset_for_version_endpoint(
     try:
         cfg = preset_flow.fork_preset_for_version(body.name, project, ver)
     except presets_io.PresetError as exc:
-        raise HTTPException(_err_code(exc), str(exc)) from exc
+        _err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
     except version_config.VersionConfigError as exc:
         raise HTTPException(400, str(exc)) from exc
     # 同步 versions.config_name = 来源 preset 名（informational only）
@@ -538,7 +538,7 @@ def save_version_config_as_preset_endpoint(
             project, ver, body.name, overwrite=body.overwrite,
         )
     except presets_io.PresetError as exc:
-        raise HTTPException(_err_code(exc), str(exc)) from exc
+        _err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
     except version_config.VersionConfigError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"saved_preset": body.name, "config": cfg}
