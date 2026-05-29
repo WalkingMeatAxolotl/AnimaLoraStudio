@@ -309,11 +309,15 @@ def scan_preprocess_duplicates(
                 "total_images": result["total_images"],
                 "group_count": result["group_count"],
                 "candidate_count": result["candidate_count"],
+                "blur_candidate_count": result.get("blur_candidate_count", 0),
+                "crop_relation_count": result.get("crop_relation_count", 0),
                 "elapsed_seconds": result["elapsed_seconds"],
                 "text": (
                     f"Scanned {result['total_images']} images; "
                     f"found {result['group_count']} groups / "
-                    f"{result['candidate_count']} candidates."
+                    f"{result['candidate_count']} candidates, "
+                    f"{result.get('blur_candidate_count', 0)} blur candidates, "
+                    f"{result.get('crop_relation_count', 0)} crop relations."
                 ),
             })
             return result

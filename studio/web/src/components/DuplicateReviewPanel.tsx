@@ -19,6 +19,13 @@ export const DEFAULT_DUPLICATE_OPTIONS: DuplicateScanOptions = {
   min_close_tiles: 0.48,
   tile_median: 14,
   min_gray_close: 0.42,
+  detect_blur: false,
+  blur_score_threshold: 80,
+  blur_local_ratio: 0.06,
+  detect_crops: false,
+  crop_score: 0.74,
+  crop_hash_threshold: 30,
+  crop_max_side: 384,
 }
 
 interface Props {

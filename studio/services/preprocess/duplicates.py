@@ -52,6 +52,26 @@ DEFAULT_PREFILTER_DHASH = 20
 DEFAULT_PREFILTER_AHASH = 22
 DEFAULT_COLOR_ALERT = 14
 
+DEFAULT_DETECT_BLUR = False
+DEFAULT_BLUR_SCORE_THRESHOLD = 80.0
+DEFAULT_BLUR_LOCAL_RATIO = 0.06
+DEFAULT_BLUR_GRID = 12
+DEFAULT_BLUR_TILE_LAPLACIAN = 45.0
+DEFAULT_BLUR_TILE_STD = 30.0
+DEFAULT_BLUR_BACKGROUND_VALUE = 245.0
+DEFAULT_BLUR_BACKGROUND_SATURATION = 18.0
+
+DEFAULT_DETECT_CROPS = False
+DEFAULT_CROP_SCORE = 0.74
+DEFAULT_CROP_HASH_THRESHOLD = 30
+DEFAULT_CROP_MAX_SIDE = 384
+DEFAULT_CROP_PREFILTER_SEGMENTS = 1
+DEFAULT_CROP_PREFILTER_BIT_ERROR_RATE = 0.25
+DEFAULT_CROP_MIN_WINDOW_RATIO = 0.12
+DEFAULT_CROP_MAX_WINDOW_RATIO = 0.92
+DEFAULT_CROP_SCAN_DIVISIONS = 14
+DEFAULT_CROP_SCALES = (0.35, 0.45, 0.55, 0.60, 0.65, 0.75, 0.85, 0.92)
+
 
 MatchScope = Literal["strict", "both"]
 
@@ -79,6 +99,13 @@ class DuplicateOptions:
     min_close_tiles: float = DEFAULT_MIN_CLOSE_TILES
     tile_median: float = DEFAULT_TILE_MEDIAN
     min_gray_close: float = DEFAULT_MIN_GRAY_CLOSE
+    detect_blur: bool = DEFAULT_DETECT_BLUR
+    blur_score_threshold: float = DEFAULT_BLUR_SCORE_THRESHOLD
+    blur_local_ratio: float = DEFAULT_BLUR_LOCAL_RATIO
+    detect_crops: bool = DEFAULT_DETECT_CROPS
+    crop_score: float = DEFAULT_CROP_SCORE
+    crop_hash_threshold: int = DEFAULT_CROP_HASH_THRESHOLD
+    crop_max_side: int = DEFAULT_CROP_MAX_SIDE
 
 
 @dataclass
@@ -94,6 +121,10 @@ class ImageInfo:
     ahash: Any
     colorhash: Any
     grayprint: np.ndarray
+    blur_score: float = 0.0
+    local_blur_ratio: float = 0.0
+    largest_blur_region_ratio: float = 0.0
+    crop_hash: Any | None = None
     edgehash: Any | None = None
     tilehashes: list[Any] | None = None
 
@@ -128,6 +159,24 @@ class PairMetrics:
     @property
     def is_match(self) -> bool:
         return self.match_type != "different"
+
+
+@dataclass
+class BlurCandidate:
+    image: ImageInfo
+    reason: str
+
+
+@dataclass
+class CropRelation:
+    source: ImageInfo
+    crop: ImageInfo
+    score: float
+    source_window: tuple[int, int, int, int]
+    window_ratio: float
+    segment_matches: int
+    segment_coverage: float
+    note: str
 
 
 class UnionFind:
@@ -192,6 +241,13 @@ def options_from_payload(payload: dict[str, Any]) -> DuplicateOptions:
         min_close_tiles=max(0.0, min(1.0, float(payload.get("min_close_tiles", DEFAULT_MIN_CLOSE_TILES)))),
         tile_median=max(0.0, float(payload.get("tile_median", DEFAULT_TILE_MEDIAN))),
         min_gray_close=max(0.0, min(1.0, float(payload.get("min_gray_close", DEFAULT_MIN_GRAY_CLOSE)))),
+        detect_blur=bool(payload.get("detect_blur", DEFAULT_DETECT_BLUR)),
+        blur_score_threshold=max(0.0, float(payload.get("blur_score_threshold", DEFAULT_BLUR_SCORE_THRESHOLD))),
+        blur_local_ratio=max(0.0, min(1.0, float(payload.get("blur_local_ratio", DEFAULT_BLUR_LOCAL_RATIO)))),
+        detect_crops=bool(payload.get("detect_crops", DEFAULT_DETECT_CROPS)),
+        crop_score=max(0.0, min(1.0, float(payload.get("crop_score", DEFAULT_CROP_SCORE)))),
+        crop_hash_threshold=max(0, int(payload.get("crop_hash_threshold", DEFAULT_CROP_HASH_THRESHOLD))),
+        crop_max_side=max(64, int(payload.get("crop_max_side", DEFAULT_CROP_MAX_SIDE))),
     )
 
 
@@ -226,6 +282,18 @@ def scan_project_duplicates(
         options,
         on_progress=on_progress,
     )
+    blur_candidates = find_blur_candidates(infos, options) if options.detect_blur else []
+    crop_relations: list[CropRelation] = []
+    if options.detect_crops:
+        if on_progress:
+            total_pairs = len(infos) * (len(infos) - 1) // 2
+            on_progress({
+                "stage": "crop_relations",
+                "idx": 0,
+                "total": total_pairs,
+                "text": f"Checking {total_pairs} crop/scale relation pairs...",
+            })
+        crop_relations = find_crop_relations(infos, options, on_progress=on_progress)
     elapsed = time.monotonic() - started
 
     return {
@@ -235,12 +303,22 @@ def scan_project_duplicates(
         "readable_images": len(infos),
         "group_count": len(groups),
         "candidate_count": sum(max(0, len(g) - 1) for g in groups),
+        "blur_candidate_count": len(blur_candidates),
+        "crop_relation_count": len(crop_relations),
         "elapsed_seconds": round(elapsed, 3),
         "options": options_to_json(options),
         "stats": stats,
         "groups": [
             _group_to_json(index, group, pair_metrics)
             for index, group in enumerate(groups, start=1)
+        ],
+        "blur_candidates": [
+            _blur_candidate_to_json(candidate)
+            for candidate in blur_candidates
+        ],
+        "crop_relations": [
+            _crop_relation_to_json(relation)
+            for relation in crop_relations
         ],
     }
 
@@ -273,6 +351,13 @@ def options_to_json(options: DuplicateOptions) -> dict[str, Any]:
         "min_close_tiles": options.min_close_tiles,
         "tile_median": options.tile_median,
         "min_gray_close": options.min_gray_close,
+        "detect_blur": options.detect_blur,
+        "blur_score_threshold": options.blur_score_threshold,
+        "blur_local_ratio": options.blur_local_ratio,
+        "detect_crops": options.detect_crops,
+        "crop_score": options.crop_score,
+        "crop_hash_threshold": options.crop_hash_threshold,
+        "crop_max_side": options.crop_max_side,
     }
 
 
@@ -331,6 +416,10 @@ def build_image_info(source: tuple[str, Path], options: DuplicateOptions) -> Ima
         rgb, width, height = load_hash_image(path, options.hash_size)
         gray = rgb.convert("L")
         soft_gray = gray.filter(ImageFilter.GaussianBlur(radius=2))
+        if options.detect_blur:
+            blur_score_value, local_blur_ratio_value, largest_blur_region_ratio = blur_metrics(rgb, gray)
+        else:
+            blur_score_value, local_blur_ratio_value, largest_blur_region_ratio = 0.0, 0.0, 0.0
         return ImageInfo(
             name=name,
             path=path,
@@ -343,6 +432,10 @@ def build_image_info(source: tuple[str, Path], options: DuplicateOptions) -> Ima
             ahash=imagehash.average_hash(soft_gray),
             colorhash=imagehash.colorhash(rgb),
             grayprint=build_grayprint(gray),
+            blur_score=blur_score_value,
+            local_blur_ratio=local_blur_ratio_value,
+            largest_blur_region_ratio=largest_blur_region_ratio,
+            crop_hash=build_crop_hash(rgb) if options.detect_crops else None,
             edgehash=build_edge_hash(gray),
             tilehashes=build_tile_hashes(soft_gray, options.tile_grids),
         )
@@ -401,6 +494,91 @@ def build_edge_hash(gray: Image.Image) -> Any:
 def build_grayprint(gray: Image.Image) -> np.ndarray:
     small = gray.resize((DEFAULT_GRAYPRINT_SIZE, DEFAULT_GRAYPRINT_SIZE), RESAMPLE_FILTER)
     return np.asarray(small, dtype=np.int16).reshape(-1)
+
+
+def build_laplacian(gray: Image.Image) -> np.ndarray:
+    arr = np.asarray(gray, dtype=np.float32)
+    lap = -4 * arr
+    lap[:-1, :] += arr[1:, :]
+    lap[1:, :] += arr[:-1, :]
+    lap[:, :-1] += arr[:, 1:]
+    lap[:, 1:] += arr[:, :-1]
+    return lap
+
+
+def largest_connected_region(cells: set[tuple[int, int]]) -> int:
+    seen: set[tuple[int, int]] = set()
+    largest = 0
+    for cell in cells:
+        if cell in seen:
+            continue
+        stack = [cell]
+        seen.add(cell)
+        size = 0
+        while stack:
+            x, y = stack.pop()
+            size += 1
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                neighbor = (x + dx, y + dy)
+                if neighbor in cells and neighbor not in seen:
+                    seen.add(neighbor)
+                    stack.append(neighbor)
+        largest = max(largest, size)
+    return largest
+
+
+def blur_metrics(rgb: Image.Image, gray: Image.Image) -> tuple[float, float, float]:
+    laplacian = build_laplacian(gray)
+    score = float(laplacian.var())
+    gray_arr = np.asarray(gray, dtype=np.float32)
+    hsv = rgb.convert("HSV")
+    saturation = np.asarray(hsv.split()[1], dtype=np.float32)
+    value = np.asarray(hsv.split()[2], dtype=np.float32)
+
+    width, height = gray.size
+    flagged: set[tuple[int, int]] = set()
+    grid = DEFAULT_BLUR_GRID
+    for tile_y in range(grid):
+        for tile_x in range(grid):
+            left = tile_x * width // grid
+            right = (tile_x + 1) * width // grid
+            upper = tile_y * height // grid
+            lower = (tile_y + 1) * height // grid
+            tile_laplacian = laplacian[upper:lower, left:right]
+            tile_gray = gray_arr[upper:lower, left:right]
+            tile_saturation = saturation[upper:lower, left:right]
+            tile_value = value[upper:lower, left:right]
+            if tile_laplacian.size == 0:
+                continue
+
+            low_detail = (
+                float(tile_laplacian.var()) <= DEFAULT_BLUR_TILE_LAPLACIAN
+                and float(tile_gray.std()) <= DEFAULT_BLUR_TILE_STD
+            )
+            not_plain_light_background = (
+                float(tile_value.mean()) < DEFAULT_BLUR_BACKGROUND_VALUE
+                or float(tile_saturation.mean()) > DEFAULT_BLUR_BACKGROUND_SATURATION
+            )
+            if low_detail and not_plain_light_background:
+                flagged.add((tile_x, tile_y))
+
+    total_tiles = max(1, grid * grid)
+    local_ratio = len(flagged) / total_tiles
+    largest_ratio = largest_connected_region(flagged) / total_tiles
+    return round(score, 3), round(local_ratio, 4), round(largest_ratio, 4)
+
+
+def build_crop_hash(rgb: Image.Image) -> Any | None:
+    if not hasattr(imagehash, "crop_resistant_hash"):
+        return None
+    try:
+        return imagehash.crop_resistant_hash(
+            rgb,
+            segmentation_image_size=300,
+            min_segment_size=500,
+        )
+    except Exception:
+        return None
 
 
 def build_tile_hashes(gray: Image.Image, grids: tuple[int, ...]) -> list[Any]:
@@ -699,3 +877,328 @@ def best_link_to_group(
         if item.name in (a, b) and (best is None or metrics.score > best.score):
             best = metrics
     return best
+
+
+def find_blur_candidates(images: list[ImageInfo], options: DuplicateOptions) -> list[BlurCandidate]:
+    candidates: list[BlurCandidate] = []
+    for image in images:
+        reasons: list[str] = []
+        if image.blur_score <= options.blur_score_threshold:
+            reasons.append(f"global blur score {image.blur_score:.1f}")
+        if image.largest_blur_region_ratio >= options.blur_local_ratio:
+            reasons.append(f"connected low-detail region {image.largest_blur_region_ratio:.1%}")
+        elif image.local_blur_ratio >= options.blur_local_ratio * 1.8:
+            reasons.append(f"total low-detail area {image.local_blur_ratio:.1%}")
+        if reasons:
+            candidates.append(BlurCandidate(image=image, reason="; ".join(reasons)))
+    candidates.sort(
+        key=lambda item: (
+            -item.image.largest_blur_region_ratio,
+            -item.image.local_blur_ratio,
+            item.image.blur_score,
+            item.image.name.lower(),
+        )
+    )
+    return candidates
+
+
+def crop_hash_summary(a: ImageInfo, b: ImageInfo) -> tuple[int, float, str]:
+    best_matches = 0
+    best_coverage = 0.0
+    notes: list[str] = []
+    for left, right, label in ((a, b, f"{a.name}->segments"), (b, a, f"{b.name}->segments")):
+        if left.crop_hash is None or right.crop_hash is None:
+            continue
+        segment_hashes = getattr(left.crop_hash, "segment_hashes", [])
+        if not segment_hashes:
+            continue
+        matches, total_distance = left.crop_hash.hash_diff(
+            right.crop_hash,
+            bit_error_rate=DEFAULT_CROP_PREFILTER_BIT_ERROR_RATE,
+        )
+        coverage = matches / max(1, len(segment_hashes))
+        notes.append(f"{label}: matches={matches}, coverage={coverage:.2f}, distance={total_distance}")
+        if matches > best_matches or (matches == best_matches and coverage > best_coverage):
+            best_matches = matches
+            best_coverage = coverage
+    return best_matches, best_coverage, "; ".join(notes)
+
+
+def should_check_crop_relation(a: ImageInfo, b: ImageInfo, options: DuplicateOptions) -> tuple[bool, int, float, str]:
+    phash_diff, soft_phash_diff, dhash_diff, ahash_diff, structure_diff, ratio_delta = prefilter_metrics(a, b)
+    if structure_diff <= options.structure_threshold and ratio_delta <= options.aspect_tolerance:
+        return False, 0, 0.0, "whole-image duplicate handled by review groups"
+
+    segment_matches, segment_coverage, hash_note = crop_hash_summary(a, b)
+    hash_close = min(phash_diff, soft_phash_diff, dhash_diff, ahash_diff) <= options.crop_hash_threshold
+    if segment_matches >= DEFAULT_CROP_PREFILTER_SEGMENTS or hash_close:
+        note_parts = [
+            f"hash_diff={structure_diff}",
+            f"phash={phash_diff}",
+            f"dhash={dhash_diff}",
+            f"ahash={ahash_diff}",
+        ]
+        if hash_note:
+            note_parts.append(hash_note)
+        return True, segment_matches, segment_coverage, "; ".join(note_parts)
+    return False, segment_matches, segment_coverage, hash_note or "crop prefilter not close"
+
+
+def normalized_correlation(a: np.ndarray, b: np.ndarray) -> float:
+    if a.shape != b.shape or a.size == 0:
+        return 0.0
+    arr_a = a - float(a.mean())
+    arr_b = b - float(b.mean())
+    denom = math.sqrt(float(np.sum(arr_a * arr_a)) * float(np.sum(arr_b * arr_b)))
+    if denom <= 1e-6:
+        return 0.0
+    return float(np.sum(arr_a * arr_b) / denom)
+
+
+def resize_array(arr: np.ndarray, size: tuple[int, int]) -> np.ndarray:
+    width, height = size
+    img = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), mode="L")
+    return np.asarray(img.resize((width, height), RESAMPLE_FILTER), dtype=np.float32)
+
+
+def crop_match_arrays(
+    info: ImageInfo,
+    options: DuplicateOptions,
+    cache: dict[str, tuple[np.ndarray, np.ndarray]],
+) -> tuple[np.ndarray, np.ndarray]:
+    cached = cache.get(info.name)
+    if cached is not None:
+        return cached
+
+    rgb, _, _ = load_hash_image(info.path, options.crop_max_side)
+    gray = ImageOps.autocontrast(rgb.convert("L"))
+    edges = ImageOps.autocontrast(gray.filter(ImageFilter.FIND_EDGES))
+    arrays = (
+        np.asarray(gray, dtype=np.float32),
+        np.asarray(edges, dtype=np.float32),
+    )
+    cache[info.name] = arrays
+    return arrays
+
+
+def crop_window_score(
+    source_gray: np.ndarray,
+    source_edges: np.ndarray,
+    crop_gray: np.ndarray,
+    crop_edges: np.ndarray,
+) -> tuple[float, tuple[int, int, int, int], float]:
+    source_height, source_width = source_gray.shape
+    crop_height, crop_width = crop_gray.shape
+    if source_width <= 0 or source_height <= 0 or crop_width <= 0 or crop_height <= 0:
+        return 0.0, (0, 0, 0, 0), 0.0
+
+    crop_aspect = crop_width / max(1, crop_height)
+    best_score = 0.0
+    best_box = (0, 0, 0, 0)
+    best_ratio = 0.0
+
+    for scale in DEFAULT_CROP_SCALES:
+        if crop_aspect >= source_width / max(1, source_height):
+            window_width = int(source_width * scale)
+            window_height = int(window_width / crop_aspect)
+        else:
+            window_height = int(source_height * scale)
+            window_width = int(window_height * crop_aspect)
+
+        if window_width <= 16 or window_height <= 16:
+            continue
+        if window_width > source_width or window_height > source_height:
+            continue
+
+        window_ratio = (window_width * window_height) / max(1, source_width * source_height)
+        if window_ratio < DEFAULT_CROP_MIN_WINDOW_RATIO or window_ratio > DEFAULT_CROP_MAX_WINDOW_RATIO:
+            continue
+
+        target_gray = resize_array(crop_gray, (window_width, window_height))
+        target_edges = resize_array(crop_edges, (window_width, window_height))
+        step = max(4, min(window_width, window_height) // max(1, DEFAULT_CROP_SCAN_DIVISIONS))
+        x_values = list(range(0, max(1, source_width - window_width + 1), step))
+        y_values = list(range(0, max(1, source_height - window_height + 1), step))
+        if not x_values or x_values[-1] != source_width - window_width:
+            x_values.append(source_width - window_width)
+        if not y_values or y_values[-1] != source_height - window_height:
+            y_values.append(source_height - window_height)
+
+        scale_best_score = 0.0
+        scale_best_xy = (0, 0)
+        for y in y_values:
+            for x in x_values:
+                score = crop_similarity_at(
+                    source_gray,
+                    source_edges,
+                    target_gray,
+                    target_edges,
+                    x,
+                    y,
+                    window_width,
+                    window_height,
+                )
+                if score > scale_best_score:
+                    scale_best_score = score
+                    scale_best_xy = (x, y)
+
+        refine_radius = max(1, step)
+        refine_step = max(1, step // 4)
+        refine_x0 = max(0, scale_best_xy[0] - refine_radius)
+        refine_x1 = min(source_width - window_width, scale_best_xy[0] + refine_radius)
+        refine_y0 = max(0, scale_best_xy[1] - refine_radius)
+        refine_y1 = min(source_height - window_height, scale_best_xy[1] + refine_radius)
+        for y in range(refine_y0, refine_y1 + 1, refine_step):
+            for x in range(refine_x0, refine_x1 + 1, refine_step):
+                score = crop_similarity_at(
+                    source_gray,
+                    source_edges,
+                    target_gray,
+                    target_edges,
+                    x,
+                    y,
+                    window_width,
+                    window_height,
+                )
+                if score > best_score:
+                    best_score = score
+                    best_box = (x, y, window_width, window_height)
+                    best_ratio = window_ratio
+
+    return best_score, best_box, best_ratio
+
+
+def crop_similarity_at(
+    source_gray: np.ndarray,
+    source_edges: np.ndarray,
+    target_gray: np.ndarray,
+    target_edges: np.ndarray,
+    x: int,
+    y: int,
+    window_width: int,
+    window_height: int,
+) -> float:
+    source_window_gray = source_gray[y : y + window_height, x : x + window_width]
+    source_window_edges = source_edges[y : y + window_height, x : x + window_width]
+    gray_score = normalized_correlation(source_window_gray, target_gray)
+    edge_score = normalized_correlation(source_window_edges, target_edges)
+    return min(1.0, max(0.0, gray_score) + 0.05 * max(0.0, edge_score))
+
+
+def scale_box_to_original(
+    box: tuple[int, int, int, int],
+    working_shape: tuple[int, int],
+    image: ImageInfo,
+) -> tuple[int, int, int, int]:
+    working_height, working_width = working_shape
+    x, y, width, height = box
+    scale_x = image.width / max(1, working_width)
+    scale_y = image.height / max(1, working_height)
+    return (
+        int(round(x * scale_x)),
+        int(round(y * scale_y)),
+        int(round(width * scale_x)),
+        int(round(height * scale_y)),
+    )
+
+
+def build_crop_relation(
+    source: ImageInfo,
+    crop: ImageInfo,
+    options: DuplicateOptions,
+    segment_matches: int,
+    segment_coverage: float,
+    note: str,
+    cache: dict[str, tuple[np.ndarray, np.ndarray]],
+) -> CropRelation:
+    source_gray, source_edges = crop_match_arrays(source, options, cache)
+    crop_gray, crop_edges = crop_match_arrays(crop, options, cache)
+    score, box, window_ratio = crop_window_score(source_gray, source_edges, crop_gray, crop_edges)
+    original_box = scale_box_to_original(box, source_gray.shape, source)
+    return CropRelation(
+        source=source,
+        crop=crop,
+        score=round(score, 4),
+        source_window=original_box,
+        window_ratio=round(window_ratio, 4),
+        segment_matches=segment_matches,
+        segment_coverage=round(segment_coverage, 4),
+        note=note,
+    )
+
+
+def find_crop_relations(
+    images: list[ImageInfo],
+    options: DuplicateOptions,
+    *,
+    on_progress: Callable[[dict[str, Any]], None] | None = None,
+) -> list[CropRelation]:
+    relations: list[CropRelation] = []
+    cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    total_pairs = len(images) * (len(images) - 1) // 2
+    checked_pairs = 0
+    prefiltered_pairs = 0
+
+    for i, img_a in enumerate(images):
+        for img_b in images[i + 1 :]:
+            checked_pairs += 1
+            should_check, segment_matches, segment_coverage, note = should_check_crop_relation(img_a, img_b, options)
+            if not should_check:
+                prefiltered_pairs += 1
+                continue
+
+            relation_ab = build_crop_relation(img_a, img_b, options, segment_matches, segment_coverage, note, cache)
+            relation_ba = build_crop_relation(img_b, img_a, options, segment_matches, segment_coverage, note, cache)
+            relation = relation_ab if relation_ab.score >= relation_ba.score else relation_ba
+            if relation.score >= options.crop_score:
+                relations.append(relation)
+        if on_progress:
+            on_progress({
+                "stage": "crop_relations",
+                "idx": checked_pairs,
+                "total": total_pairs,
+                "name": img_a.name,
+                "text": f"Checked {checked_pairs}/{total_pairs} crop/scale pairs...",
+            })
+
+    relations.sort(key=lambda item: (-item.score, item.source.name.lower(), item.crop.name.lower()))
+    if on_progress and prefiltered_pairs:
+        on_progress({
+            "stage": "crop_relations",
+            "idx": total_pairs,
+            "total": total_pairs,
+            "text": f"Crop prefilter skipped {prefiltered_pairs}/{total_pairs} pairs.",
+        })
+    return relations
+
+
+def _blur_candidate_to_json(candidate: BlurCandidate) -> dict[str, Any]:
+    image = candidate.image
+    return {
+        "name": image.name,
+        "width": image.width,
+        "height": image.height,
+        "filesize_kb": image.size // 1024,
+        "blur_score": image.blur_score,
+        "local_blur_ratio": image.local_blur_ratio,
+        "largest_blur_region_ratio": image.largest_blur_region_ratio,
+        "reason": candidate.reason,
+    }
+
+
+def _crop_relation_to_json(relation: CropRelation) -> dict[str, Any]:
+    x, y, width, height = relation.source_window
+    return {
+        "source": relation.source.name,
+        "crop_candidate": relation.crop.name,
+        "score": relation.score,
+        "source_width": relation.source.width,
+        "source_height": relation.source.height,
+        "crop_width": relation.crop.width,
+        "crop_height": relation.crop.height,
+        "source_window": {"x": x, "y": y, "width": width, "height": height},
+        "window_ratio": relation.window_ratio,
+        "segment_matches": relation.segment_matches,
+        "segment_coverage": relation.segment_coverage,
+        "note": relation.note,
+    }

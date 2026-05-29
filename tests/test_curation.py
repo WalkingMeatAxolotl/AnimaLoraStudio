@@ -52,6 +52,37 @@ def _different_png(env, name: str) -> Path:
     return p
 
 
+def _locally_blurred_png(env, name: str) -> Path:
+    p = _dl(env, name, blob=b"")
+    img = Image.new("RGB", (160, 160), "#f3f0eb")
+    draw = ImageDraw.Draw(img)
+    draw.rectangle((12, 12, 148, 148), outline="#1f2933", width=3)
+    draw.line((20, 28, 140, 132), fill="#1f2933", width=3)
+    draw.ellipse((44, 44, 116, 116), fill="#ecc2a1", outline="#1f2933", width=2)
+    draw.rounded_rectangle((72, 72, 148, 148), radius=12, fill="#454b56")
+    img.save(p)
+    return p
+
+
+def _crop_pair(env) -> None:
+    pdir = projects.project_dir(env["p"]["id"], env["p"]["slug"])
+    download = pdir / "download"
+    download.mkdir(parents=True, exist_ok=True)
+    src = Image.new("RGB", (192, 192), "#f1eee8")
+    draw = ImageDraw.Draw(src)
+    draw.rectangle((16, 16, 176, 176), outline="#1f2933", width=4)
+    draw.ellipse((48, 42, 114, 108), fill="#eabf96", outline="#1f2933", width=3)
+    draw.polygon([(120, 140), (170, 42), (184, 152)], fill="#5ca35c", outline="#1f2933")
+    draw.line((30, 150, 160, 30), fill="#334155", width=5)
+    for x in range(32, 168, 16):
+        draw.line((x, 24, x - 20, 168), fill="#64748b", width=1)
+    for y in range(36, 164, 18):
+        draw.arc((36, y - 24, 156, y + 48), 20, 155, fill="#7c3aed", width=2)
+    src.save(download / "crop_source.png")
+    crop = src.crop((38, 38, 154, 154)).resize((192, 192), Image.Resampling.LANCZOS)
+    crop.save(download / "crop_zoom.png")
+
+
 def _meta(env, name: str, ext: str, content: str) -> Path:
     pdir = projects.project_dir(env["p"]["id"], env["p"]["slug"])
     f = (pdir / "download" / name).with_suffix(ext)
@@ -390,10 +421,44 @@ def test_duplicate_scan_returns_review_groups(env) -> None:
 
     assert result["total_images"] == 3
     assert result["group_count"] == 1
+    assert result["blur_candidate_count"] == 0
+    assert result["crop_relation_count"] == 0
+    assert result["blur_candidates"] == []
+    assert result["crop_relations"] == []
     group = result["groups"][0]
     assert group["keep"] in {"1.png", "2.png"}
     assert {item["name"] for item in group["items"]} == {"1.png", "2.png"}
     assert group["best"]["match_type"] == "strict-duplicate"
+
+
+def test_duplicate_scan_can_report_blur_and_crop_candidates(env) -> None:
+    _locally_blurred_png(env, "blur.png")
+    _crop_pair(env)
+    _different_png(env, "other.png")
+
+    with db.connection_for(env["db"]) as conn:
+        result = duplicate_finder.scan_project_duplicates(
+            conn,
+            env["p"]["id"],
+            duplicate_finder.DuplicateOptions(
+                match_scope="strict",
+                hash_workers=1,
+                detect_blur=True,
+                blur_local_ratio=0.04,
+                detect_crops=True,
+                crop_score=0.7,
+                crop_max_side=256,
+            ),
+        )
+
+    assert result["blur_candidate_count"] >= 1
+    assert any(item["name"] == "blur.png" for item in result["blur_candidates"])
+    assert result["crop_relation_count"] >= 1
+    pairs = {
+        (item["source"], item["crop_candidate"])
+        for item in result["crop_relations"]
+    }
+    assert ("crop_source.png", "crop_zoom.png") in pairs
 
 
 def test_duplicate_apply_marks_confirmed_names_without_touching_download(env) -> None:
