@@ -370,6 +370,11 @@ function DuplicateOperationPanel({
             <NumberOption label={t('duplicates.cropScore')} value={options.crop_score} min={0.3} max={0.98} step={0.01} disabled={busy || !options.detect_crops} onChange={(value) => patch('crop_score', value)} width={66} />
             <NumberOption label={t('duplicates.cropHash')} value={options.crop_hash_threshold} min={0} max={64} step={1} disabled={busy || !options.detect_crops} onChange={(value) => patch('crop_hash_threshold', value)} width={58} />
             <NumberOption label={t('duplicates.cropSide')} value={options.crop_max_side} min={128} max={768} step={32} disabled={busy || !options.detect_crops} onChange={(value) => patch('crop_max_side', value)} width={66} />
+            <NumberOption label={t('duplicates.cropWorkers')} value={options.crop_workers} min={1} max={32} step={1} disabled={busy || !options.detect_crops} onChange={(value) => patch('crop_workers', value)} width={56} />
+            <NumberOption label={t('duplicates.cropSegments')} value={options.crop_prefilter_min_segments} min={1} max={8} step={1} disabled={busy || !options.detect_crops} onChange={(value) => patch('crop_prefilter_min_segments', value)} width={54} />
+            <NumberOption label={t('duplicates.cropCoverage')} value={options.crop_prefilter_min_coverage} min={0} max={1} step={0.01} disabled={busy || !options.detect_crops} onChange={(value) => patch('crop_prefilter_min_coverage', value)} width={66} />
+            <NumberOption label={t('duplicates.cropAspectPrefilter')} value={options.crop_prefilter_aspect_tolerance} min={0} max={1.5} step={0.01} disabled={busy || !options.detect_crops} onChange={(value) => patch('crop_prefilter_aspect_tolerance', value)} width={66} />
+            <NumberOption label={t('duplicates.cropCandidateCap')} value={options.crop_max_candidates_per_image} min={0} max={100} step={1} disabled={busy || !options.detect_crops} onChange={(value) => patch('crop_max_candidates_per_image', value)} width={58} />
             <label className="flex items-center gap-1.5">
               <span className="text-fg-tertiary">{t('duplicates.tileGrids')}</span>
               <input

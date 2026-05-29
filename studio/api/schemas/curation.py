@@ -46,6 +46,11 @@ class DuplicateScanRequest(BaseModel):
     crop_score: float = duplicate_finder.DEFAULT_CROP_SCORE
     crop_hash_threshold: int = duplicate_finder.DEFAULT_CROP_HASH_THRESHOLD
     crop_max_side: int = duplicate_finder.DEFAULT_CROP_MAX_SIDE
+    crop_workers: int = duplicate_finder.DEFAULT_CROP_WORKERS
+    crop_prefilter_min_segments: int = duplicate_finder.DEFAULT_CROP_PREFILTER_SEGMENTS
+    crop_prefilter_min_coverage: float = duplicate_finder.DEFAULT_CROP_PREFILTER_COVERAGE
+    crop_prefilter_aspect_tolerance: float = duplicate_finder.DEFAULT_CROP_PREFILTER_ASPECT_TOLERANCE
+    crop_max_candidates_per_image: int = duplicate_finder.DEFAULT_CROP_MAX_CANDIDATES_PER_IMAGE
 
 
 class DuplicateApplyRequest(BaseModel):

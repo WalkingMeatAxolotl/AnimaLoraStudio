@@ -31,6 +31,11 @@ except Exception as exc:  # noqa: BLE001
 else:
     _IMAGEHASH_IMPORT_ERROR = None
 
+try:
+    from scipy import signal as scipy_signal
+except Exception:  # pragma: no cover - scipy is a declared dependency; fallback keeps imports robust
+    scipy_signal = None
+
 
 RESAMPLE_FILTER = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
 
@@ -64,13 +69,18 @@ DEFAULT_BLUR_BACKGROUND_SATURATION = 18.0
 DEFAULT_DETECT_CROPS = False
 DEFAULT_CROP_SCORE = 0.74
 DEFAULT_CROP_HASH_THRESHOLD = 30
-DEFAULT_CROP_MAX_SIDE = 384
-DEFAULT_CROP_PREFILTER_SEGMENTS = 1
+DEFAULT_CROP_MAX_SIDE = 256
+DEFAULT_CROP_WORKERS = max(2, min(8, (os.cpu_count() or 8) // 2))
+DEFAULT_CROP_PREFILTER_SEGMENTS = 2
+DEFAULT_CROP_PREFILTER_COVERAGE = 0.18
+DEFAULT_CROP_PREFILTER_ASPECT_TOLERANCE = 0.45
 DEFAULT_CROP_PREFILTER_BIT_ERROR_RATE = 0.25
 DEFAULT_CROP_MIN_WINDOW_RATIO = 0.12
 DEFAULT_CROP_MAX_WINDOW_RATIO = 0.92
 DEFAULT_CROP_SCAN_DIVISIONS = 14
-DEFAULT_CROP_SCALES = (0.35, 0.45, 0.55, 0.60, 0.65, 0.75, 0.85, 0.92)
+DEFAULT_CROP_SCALES = (0.35, 0.45, 0.55, 0.60, 0.65, 0.72, 0.76, 0.85)
+DEFAULT_CROP_MAX_CANDIDATES_PER_IMAGE = 10
+DEFAULT_CROP_EARLY_ACCEPT_SCORE = 0.88
 
 
 MatchScope = Literal["strict", "both"]
@@ -106,6 +116,11 @@ class DuplicateOptions:
     crop_score: float = DEFAULT_CROP_SCORE
     crop_hash_threshold: int = DEFAULT_CROP_HASH_THRESHOLD
     crop_max_side: int = DEFAULT_CROP_MAX_SIDE
+    crop_workers: int = DEFAULT_CROP_WORKERS
+    crop_prefilter_min_segments: int = DEFAULT_CROP_PREFILTER_SEGMENTS
+    crop_prefilter_min_coverage: float = DEFAULT_CROP_PREFILTER_COVERAGE
+    crop_prefilter_aspect_tolerance: float = DEFAULT_CROP_PREFILTER_ASPECT_TOLERANCE
+    crop_max_candidates_per_image: int = DEFAULT_CROP_MAX_CANDIDATES_PER_IMAGE
 
 
 @dataclass
@@ -209,6 +224,17 @@ class CropRelation:
         return "crop_same_area"
 
 
+@dataclass
+class CropCandidate:
+    a: ImageInfo
+    b: ImageInfo
+    segment_matches: int
+    segment_coverage: float
+    hash_distance: int
+    aspect_delta: float
+    note: str
+
+
 class UnionFind:
     def __init__(self, items: list[str]) -> None:
         self.parent = {item: item for item in items}
@@ -278,6 +304,11 @@ def options_from_payload(payload: dict[str, Any]) -> DuplicateOptions:
         crop_score=max(0.0, min(1.0, float(payload.get("crop_score", DEFAULT_CROP_SCORE)))),
         crop_hash_threshold=max(0, int(payload.get("crop_hash_threshold", DEFAULT_CROP_HASH_THRESHOLD))),
         crop_max_side=max(64, int(payload.get("crop_max_side", DEFAULT_CROP_MAX_SIDE))),
+        crop_workers=max(1, min(32, int(payload.get("crop_workers", DEFAULT_CROP_WORKERS)))),
+        crop_prefilter_min_segments=max(1, int(payload.get("crop_prefilter_min_segments", DEFAULT_CROP_PREFILTER_SEGMENTS))),
+        crop_prefilter_min_coverage=max(0.0, min(1.0, float(payload.get("crop_prefilter_min_coverage", DEFAULT_CROP_PREFILTER_COVERAGE)))),
+        crop_prefilter_aspect_tolerance=max(0.0, float(payload.get("crop_prefilter_aspect_tolerance", DEFAULT_CROP_PREFILTER_ASPECT_TOLERANCE))),
+        crop_max_candidates_per_image=max(0, int(payload.get("crop_max_candidates_per_image", DEFAULT_CROP_MAX_CANDIDATES_PER_IMAGE))),
     )
 
 
@@ -388,6 +419,11 @@ def options_to_json(options: DuplicateOptions) -> dict[str, Any]:
         "crop_score": options.crop_score,
         "crop_hash_threshold": options.crop_hash_threshold,
         "crop_max_side": options.crop_max_side,
+        "crop_workers": options.crop_workers,
+        "crop_prefilter_min_segments": options.crop_prefilter_min_segments,
+        "crop_prefilter_min_coverage": options.crop_prefilter_min_coverage,
+        "crop_prefilter_aspect_tolerance": options.crop_prefilter_aspect_tolerance,
+        "crop_max_candidates_per_image": options.crop_max_candidates_per_image,
     }
 
 
@@ -954,24 +990,31 @@ def crop_hash_summary(a: ImageInfo, b: ImageInfo) -> tuple[int, float, str]:
     return best_matches, best_coverage, "; ".join(notes)
 
 
-def should_check_crop_relation(a: ImageInfo, b: ImageInfo, options: DuplicateOptions) -> tuple[bool, int, float, str]:
+def should_check_crop_relation(a: ImageInfo, b: ImageInfo, options: DuplicateOptions) -> tuple[bool, int, float, int, float, str]:
     phash_diff, soft_phash_diff, dhash_diff, ahash_diff, structure_diff, ratio_delta = prefilter_metrics(a, b)
     if structure_diff <= options.structure_threshold and ratio_delta <= options.aspect_tolerance:
-        return False, 0, 0.0, "whole-image duplicate handled by review groups"
+        return False, 0, 0.0, structure_diff, ratio_delta, "whole-image duplicate handled by review groups"
 
     segment_matches, segment_coverage, hash_note = crop_hash_summary(a, b)
     hash_close = min(phash_diff, soft_phash_diff, dhash_diff, ahash_diff) <= options.crop_hash_threshold
-    if segment_matches >= DEFAULT_CROP_PREFILTER_SEGMENTS or hash_close:
+    segment_hit = (
+        segment_matches >= options.crop_prefilter_min_segments
+        and segment_coverage >= options.crop_prefilter_min_coverage
+    )
+    hash_hit = hash_close and ratio_delta <= options.crop_prefilter_aspect_tolerance
+    if segment_hit or hash_hit:
         note_parts = [
             f"hash_diff={structure_diff}",
             f"phash={phash_diff}",
             f"dhash={dhash_diff}",
             f"ahash={ahash_diff}",
+            f"segment_matches={segment_matches}",
+            f"segment_coverage={segment_coverage:.2f}",
         ]
         if hash_note:
             note_parts.append(hash_note)
-        return True, segment_matches, segment_coverage, "; ".join(note_parts)
-    return False, segment_matches, segment_coverage, hash_note or "crop prefilter not close"
+        return True, segment_matches, segment_coverage, structure_diff, ratio_delta, "; ".join(note_parts)
+    return False, segment_matches, segment_coverage, structure_diff, ratio_delta, hash_note or "crop prefilter not close"
 
 
 def normalized_correlation(a: np.ndarray, b: np.ndarray) -> float:
@@ -985,10 +1028,65 @@ def normalized_correlation(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.sum(arr_a * arr_b) / denom)
 
 
+def integral_image(arr: np.ndarray) -> np.ndarray:
+    integral = arr.cumsum(axis=0).cumsum(axis=1)
+    return np.pad(integral, ((1, 0), (1, 0)), mode="constant", constant_values=0)
+
+
+def window_sum_from_integral(integral: np.ndarray, width: int, height: int) -> np.ndarray:
+    return (
+        integral[height:, width:]
+        - integral[:-height, width:]
+        - integral[height:, :-width]
+        + integral[:-height, :-width]
+    )
+
+
+def sliding_normalized_correlation(source: np.ndarray, target: np.ndarray) -> tuple[float, tuple[int, int]]:
+    if scipy_signal is None:
+        return 0.0, (0, 0)
+    if source.ndim != 2 or target.ndim != 2 or source.size == 0 or target.size == 0:
+        return 0.0, (0, 0)
+    source_height, source_width = source.shape
+    target_height, target_width = target.shape
+    if target_width > source_width or target_height > source_height:
+        return 0.0, (0, 0)
+
+    source_float = source.astype(np.float32, copy=False)
+    target_float = target.astype(np.float32, copy=False)
+    target_centered = target_float - float(target_float.mean())
+    target_norm = math.sqrt(float(np.sum(target_centered * target_centered)))
+    if target_norm <= 1e-6:
+        return 0.0, (0, 0)
+
+    window_area = float(target_width * target_height)
+    source_integral = integral_image(source_float)
+    source_sq_integral = integral_image(source_float * source_float)
+    window_sum = window_sum_from_integral(source_integral, target_width, target_height)
+    window_sum_sq = window_sum_from_integral(source_sq_integral, target_width, target_height)
+    numerator = scipy_signal.fftconvolve(source_float, target_centered[::-1, ::-1], mode="valid")
+    variance = np.maximum(window_sum_sq - (window_sum * window_sum / window_area), 0.0)
+    denom = np.sqrt(variance) * target_norm
+    scores = np.divide(numerator, denom, out=np.zeros_like(numerator, dtype=np.float32), where=denom > 1e-6)
+    if scores.size == 0:
+        return 0.0, (0, 0)
+    best_index = int(np.nanargmax(scores))
+    y, x = np.unravel_index(best_index, scores.shape)
+    best_score = max(0.0, min(1.0, float(scores[y, x])))
+    return best_score, (int(x), int(y))
+
+
 def resize_array(arr: np.ndarray, size: tuple[int, int]) -> np.ndarray:
     width, height = size
     img = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), mode="L")
     return np.asarray(img.resize((width, height), RESAMPLE_FILTER), dtype=np.float32)
+
+
+def build_crop_match_arrays(info: ImageInfo, options: DuplicateOptions) -> tuple[np.ndarray, np.ndarray]:
+    rgb, _, _ = load_hash_image(info.path, options.crop_max_side)
+    gray = ImageOps.autocontrast(rgb.convert("L"))
+    edges = ImageOps.autocontrast(gray.filter(ImageFilter.FIND_EDGES))
+    return np.asarray(gray, dtype=np.float32), np.asarray(edges, dtype=np.float32)
 
 
 def crop_match_arrays(
@@ -1000,13 +1098,7 @@ def crop_match_arrays(
     if cached is not None:
         return cached
 
-    rgb, _, _ = load_hash_image(info.path, options.crop_max_side)
-    gray = ImageOps.autocontrast(rgb.convert("L"))
-    edges = ImageOps.autocontrast(gray.filter(ImageFilter.FIND_EDGES))
-    arrays = (
-        np.asarray(gray, dtype=np.float32),
-        np.asarray(edges, dtype=np.float32),
-    )
+    arrays = build_crop_match_arrays(info, options)
     cache[info.name] = arrays
     return arrays
 
@@ -1098,6 +1190,58 @@ def crop_window_score(
     return best_score, best_box, best_ratio
 
 
+def crop_window_score_fast(
+    source_gray: np.ndarray,
+    source_edges: np.ndarray,
+    crop_gray: np.ndarray,
+    crop_edges: np.ndarray,
+) -> tuple[float, tuple[int, int, int, int], float]:
+    source_height, source_width = source_gray.shape
+    crop_height, crop_width = crop_gray.shape
+    if source_width <= 0 or source_height <= 0 or crop_width <= 0 or crop_height <= 0:
+        return 0.0, (0, 0, 0, 0), 0.0
+    if scipy_signal is None:
+        return crop_window_score(source_gray, source_edges, crop_gray, crop_edges)
+
+    crop_aspect = crop_width / max(1, crop_height)
+    source_aspect = source_width / max(1, source_height)
+    best_score = 0.0
+    best_box = (0, 0, 0, 0)
+    best_ratio = 0.0
+
+    for scale in DEFAULT_CROP_SCALES:
+        if crop_aspect >= source_aspect:
+            window_width = int(source_width * scale)
+            window_height = int(window_width / crop_aspect)
+        else:
+            window_height = int(source_height * scale)
+            window_width = int(window_height * crop_aspect)
+
+        if window_width <= 16 or window_height <= 16:
+            continue
+        if window_width > source_width or window_height > source_height:
+            continue
+
+        window_ratio = (window_width * window_height) / max(1, source_width * source_height)
+        if window_ratio < DEFAULT_CROP_MIN_WINDOW_RATIO or window_ratio > DEFAULT_CROP_MAX_WINDOW_RATIO:
+            continue
+
+        target_gray = resize_array(crop_gray, (window_width, window_height))
+        target_edges = resize_array(crop_edges, (window_width, window_height))
+        gray_score, (x, y) = sliding_normalized_correlation(source_gray, target_gray)
+        edge_window = source_edges[y : y + window_height, x : x + window_width]
+        edge_score = normalized_correlation(edge_window, target_edges)
+        score = min(1.0, max(0.0, gray_score) + 0.05 * max(0.0, edge_score))
+        if score > best_score:
+            best_score = score
+            best_box = (x, y, window_width, window_height)
+            best_ratio = window_ratio
+            if best_score >= DEFAULT_CROP_EARLY_ACCEPT_SCORE:
+                break
+
+    return best_score, best_box, best_ratio
+
+
 def crop_similarity_at(
     source_gray: np.ndarray,
     source_edges: np.ndarray,
@@ -1143,7 +1287,7 @@ def build_crop_relation(
 ) -> CropRelation:
     source_gray, source_edges = crop_match_arrays(source, options, cache)
     crop_gray, crop_edges = crop_match_arrays(crop, options, cache)
-    score, box, window_ratio = crop_window_score(source_gray, source_edges, crop_gray, crop_edges)
+    score, box, window_ratio = crop_window_score_fast(source_gray, source_edges, crop_gray, crop_edges)
     original_box = scale_box_to_original(box, source_gray.shape, source)
     return CropRelation(
         source=source,
@@ -1157,6 +1301,107 @@ def build_crop_relation(
     )
 
 
+def build_crop_array_cache(
+    candidates: list[CropCandidate],
+    options: DuplicateOptions,
+    *,
+    on_progress: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    unique_images: dict[str, ImageInfo] = {}
+    for candidate in candidates:
+        unique_images.setdefault(candidate.a.name, candidate.a)
+        unique_images.setdefault(candidate.b.name, candidate.b)
+
+    cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    infos = list(unique_images.values())
+    workers = max(1, int(options.crop_workers or 1))
+
+    if workers == 1:
+        for idx, info in enumerate(infos, start=1):
+            cache[info.name] = build_crop_match_arrays(info, options)
+            if on_progress:
+                on_progress({
+                    "stage": "crop_cache",
+                    "idx": idx,
+                    "total": len(infos),
+                    "name": info.name,
+                    "text": f"Prepared crop match arrays {idx}/{len(infos)}...",
+                })
+        return cache
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(build_crop_match_arrays, info, options): info for info in infos}
+        for idx, future in enumerate(as_completed(futures), start=1):
+            info = futures[future]
+            cache[info.name] = future.result()
+            if on_progress:
+                on_progress({
+                    "stage": "crop_cache",
+                    "idx": idx,
+                    "total": len(infos),
+                    "name": info.name,
+                    "text": f"Prepared crop match arrays {idx}/{len(infos)}...",
+                })
+    return cache
+
+
+def verify_crop_candidate(
+    candidate: CropCandidate,
+    options: DuplicateOptions,
+    cache: dict[str, tuple[np.ndarray, np.ndarray]],
+) -> CropRelation | None:
+    relation_ab = build_crop_relation(
+        candidate.a,
+        candidate.b,
+        options,
+        candidate.segment_matches,
+        candidate.segment_coverage,
+        candidate.note,
+        cache,
+    )
+    relation_ba = build_crop_relation(
+        candidate.b,
+        candidate.a,
+        options,
+        candidate.segment_matches,
+        candidate.segment_coverage,
+        candidate.note,
+        cache,
+    )
+    relation = relation_ab if relation_ab.score >= relation_ba.score else relation_ba
+    if relation.score >= options.crop_score:
+        return relation
+    return None
+
+
+def crop_candidate_sort_key(candidate: CropCandidate) -> tuple[int, float, int, float, str, str]:
+    return (
+        -candidate.segment_matches,
+        -candidate.segment_coverage,
+        candidate.hash_distance,
+        candidate.aspect_delta,
+        candidate.a.name.lower(),
+        candidate.b.name.lower(),
+    )
+
+
+def limit_crop_candidates(candidates: list[CropCandidate], max_per_image: int) -> tuple[list[CropCandidate], int]:
+    if max_per_image <= 0 or not candidates:
+        return candidates, 0
+
+    selected: list[CropCandidate] = []
+    counts: dict[str, int] = {}
+    for candidate in sorted(candidates, key=crop_candidate_sort_key):
+        count_a = counts.get(candidate.a.name, 0)
+        count_b = counts.get(candidate.b.name, 0)
+        if count_a >= max_per_image or count_b >= max_per_image:
+            continue
+        selected.append(candidate)
+        counts[candidate.a.name] = count_a + 1
+        counts[candidate.b.name] = count_b + 1
+    return selected, len(candidates) - len(selected)
+
+
 def find_crop_relations(
     images: list[ImageInfo],
     options: DuplicateOptions,
@@ -1164,7 +1409,7 @@ def find_crop_relations(
     on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[CropRelation]:
     relations: list[CropRelation] = []
-    cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    candidates: list[CropCandidate] = []
     total_pairs = len(images) * (len(images) - 1) // 2
     checked_pairs = 0
     prefiltered_pairs = 0
@@ -1172,33 +1417,88 @@ def find_crop_relations(
     for i, img_a in enumerate(images):
         for img_b in images[i + 1 :]:
             checked_pairs += 1
-            should_check, segment_matches, segment_coverage, note = should_check_crop_relation(img_a, img_b, options)
+            should_check, segment_matches, segment_coverage, hash_distance_value, aspect_delta_value, note = should_check_crop_relation(img_a, img_b, options)
             if not should_check:
                 prefiltered_pairs += 1
                 continue
 
-            relation_ab = build_crop_relation(img_a, img_b, options, segment_matches, segment_coverage, note, cache)
-            relation_ba = build_crop_relation(img_b, img_a, options, segment_matches, segment_coverage, note, cache)
-            relation = relation_ab if relation_ab.score >= relation_ba.score else relation_ba
-            if relation.score >= options.crop_score:
-                relations.append(relation)
+            candidates.append(
+                CropCandidate(
+                    img_a,
+                    img_b,
+                    segment_matches,
+                    segment_coverage,
+                    hash_distance_value,
+                    aspect_delta_value,
+                    note,
+                )
+            )
         if on_progress:
             on_progress({
                 "stage": "crop_relations",
                 "idx": checked_pairs,
                 "total": total_pairs,
                 "name": img_a.name,
-                "text": f"Checked {checked_pairs}/{total_pairs} crop/scale pairs...",
+                "text": f"Prefiltered {checked_pairs}/{total_pairs} crop/scale pairs...",
             })
 
-    relations.sort(key=lambda item: (-item.score, item.source.name.lower(), item.crop.name.lower()))
-    if on_progress and prefiltered_pairs:
+    if on_progress:
         on_progress({
             "stage": "crop_relations",
             "idx": total_pairs,
             "total": total_pairs,
-            "text": f"Crop prefilter skipped {prefiltered_pairs}/{total_pairs} pairs.",
+            "text": f"Crop prefilter skipped {prefiltered_pairs}/{total_pairs}; {len(candidates)} pairs need verification.",
         })
+
+    candidates, capped_pairs = limit_crop_candidates(candidates, options.crop_max_candidates_per_image)
+    if on_progress and capped_pairs:
+        on_progress({
+            "stage": "crop_relations",
+            "idx": total_pairs,
+            "total": total_pairs,
+            "text": (
+                f"Crop candidate cap skipped {capped_pairs} pairs; "
+                f"verifying {len(candidates)} pairs."
+            ),
+        })
+    if not candidates:
+        return relations
+
+    candidates.sort(key=crop_candidate_sort_key)
+    cache = build_crop_array_cache(candidates, options, on_progress=on_progress)
+    verify_total = len(candidates)
+    workers = max(1, int(options.crop_workers or 1))
+    if workers == 1 or verify_total == 1:
+        for idx, candidate in enumerate(candidates, start=1):
+            relation = verify_crop_candidate(candidate, options, cache)
+            if relation is not None:
+                relations.append(relation)
+            if on_progress:
+                on_progress({
+                    "stage": "crop_verify",
+                    "idx": idx,
+                    "total": verify_total,
+                    "name": candidate.a.name,
+                    "text": f"Verified {idx}/{verify_total} crop/scale candidates...",
+                })
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(verify_crop_candidate, candidate, options, cache): candidate for candidate in candidates}
+            for idx, future in enumerate(as_completed(futures), start=1):
+                relation = future.result()
+                if relation is not None:
+                    relations.append(relation)
+                if on_progress:
+                    candidate = futures[future]
+                    on_progress({
+                        "stage": "crop_verify",
+                        "idx": idx,
+                        "total": verify_total,
+                        "name": candidate.a.name,
+                        "text": f"Verified {idx}/{verify_total} crop/scale candidates...",
+                    })
+
+    relations.sort(key=lambda item: (-item.score, item.source.name.lower(), item.crop.name.lower()))
     return relations
 
 

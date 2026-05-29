@@ -767,6 +767,11 @@ export interface DuplicateScanOptions {
   crop_score: number
   crop_hash_threshold: number
   crop_max_side: number
+  crop_workers: number
+  crop_prefilter_min_segments: number
+  crop_prefilter_min_coverage: number
+  crop_prefilter_aspect_tolerance: number
+  crop_max_candidates_per_image: number
 }
 
 export interface DuplicateMetrics {

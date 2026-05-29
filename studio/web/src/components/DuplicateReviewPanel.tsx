@@ -25,7 +25,12 @@ export const DEFAULT_DUPLICATE_OPTIONS: DuplicateScanOptions = {
   detect_crops: false,
   crop_score: 0.74,
   crop_hash_threshold: 30,
-  crop_max_side: 384,
+  crop_max_side: 256,
+  crop_workers: 8,
+  crop_prefilter_min_segments: 2,
+  crop_prefilter_min_coverage: 0.18,
+  crop_prefilter_aspect_tolerance: 0.45,
+  crop_max_candidates_per_image: 10,
 }
 
 interface Props {

@@ -448,6 +448,8 @@ def test_duplicate_scan_can_report_blur_and_crop_candidates(env) -> None:
                 detect_crops=True,
                 crop_score=0.7,
                 crop_max_side=256,
+                crop_workers=2,
+                crop_max_candidates_per_image=20,
             ),
         )
 
@@ -476,6 +478,8 @@ def test_duplicate_scan_can_report_blur_and_crop_candidates(env) -> None:
         "crop_upscaled",
         "crop_same_area",
     }
+    assert result["options"]["crop_workers"] == 2
+    assert result["options"]["crop_max_candidates_per_image"] == 20
 
 
 def test_duplicate_apply_marks_confirmed_names_without_touching_download(env) -> None:
