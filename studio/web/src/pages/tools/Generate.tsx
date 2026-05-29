@@ -45,18 +45,77 @@ const DEFAULT_GENERATE_PREFS = {
   cfgScale: 4.0,
   count: 1,
   seed: 0,
-  loras: [] as LoraEntry[],
+  // single / xy 的 LoRA 列表完全独立（用户决策 2026-05-29）：切 mode 互不影响。
+  // compare 是 xy 的子视图，跟 xy 共用 xyLoras。
+  singleLoras: [] as LoraEntry[],
+  xyLoras: [] as LoraEntry[],
   xDraft: { axis: 'steps', raw: '20, 25, 30', loraIndex: null } as XYAxisDraft,
   yDraft: null as XYAxisDraft | null,
   datasetPick: null as DatasetPick | null,
+}
+
+type GeneratePrefs = typeof DEFAULT_GENERATE_PREFS
+
+/** 归一化 / 迁移持久化 prefs（readPersisted 不 merge default，必须自己补齐）：
+ *  - 老版本只有共享 `loras`（single/xy 共用，正是被修的 bug）→ 拆成
+ *    singleLoras/xyLoras 各复制一份，迁移不丢任何已选 LoRA；迁移后两边独立。
+ *  - 补齐缺失字段（老 shape / 跨版本新增字段）。
+ *  - clamp xDraft/yDraft.loraIndex 到 xyLoras 合法范围（xy 轴 loraIndex 指向
+ *    xyLoras；越界会让 submit 抛 axisLoraMissing）。
+ */
+function normalizePrefs(p: GeneratePrefs): GeneratePrefs {
+  const anyP = p as Partial<GeneratePrefs> & { loras?: LoraEntry[] }
+  const legacy = Array.isArray(anyP.loras) ? anyP.loras : []
+  const singleLoras = Array.isArray(anyP.singleLoras) ? anyP.singleLoras : legacy
+  const xyLoras = Array.isArray(anyP.xyLoras) ? anyP.xyLoras : legacy
+  const clampIdx = (d: XYAxisDraft | null): XYAxisDraft | null => {
+    if (!d || d.loraIndex == null || d.loraIndex < xyLoras.length) return d
+    return { ...d, loraIndex: xyLoras.length > 0 ? 0 : null }
+  }
+  const { loras: _legacy, ...rest } = anyP
+  return {
+    ...DEFAULT_GENERATE_PREFS,
+    ...rest,
+    singleLoras,
+    xyLoras,
+    xDraft: clampIdx(rest.xDraft ?? DEFAULT_GENERATE_PREFS.xDraft) ?? DEFAULT_GENERATE_PREFS.xDraft,
+    yDraft: clampIdx(rest.yDraft ?? null),
+  }
 }
 
 export default function GeneratePage() {
   const { t } = useTranslation()
   const { toast } = useToast()
 
-  const [prefs, setPrefs] = useLocalStorageState(GENERATE_PREFS_KEY, DEFAULT_GENERATE_PREFS)
-  const { mode, prompts, negPrompt, aspect, width, height, steps, cfgScale, count, seed, loras, xDraft, yDraft, datasetPick } = prefs
+  const [rawPrefs, setRawPrefs] = useLocalStorageState(GENERATE_PREFS_KEY, DEFAULT_GENERATE_PREFS)
+  const prefs = useMemo(() => normalizePrefs(rawPrefs), [rawPrefs])
+  // 所有 setPrefs 更新都先把 prev 归一化（迁移老 shape + clamp），保证 updater
+  // 收到的永远是新 shape（含 singleLoras/xyLoras，无遗留 loras）。
+  const setPrefs = useCallback(
+    (next: GeneratePrefs | ((p: GeneratePrefs) => GeneratePrefs)) =>
+      setRawPrefs((prev) => {
+        const norm = normalizePrefs(prev)
+        return typeof next === 'function' ? next(norm) : next
+      }),
+    [setRawPrefs],
+  )
+  // 一次性把老 shape（共享 loras）迁移落库，避免 storage 长期残留遗留字段；
+  // 之后读到的就是干净的 singleLoras/xyLoras 双桶 shape。
+  useEffect(() => {
+    const raw = rawPrefs as Partial<GeneratePrefs> & { loras?: unknown }
+    if ('loras' in raw || !('singleLoras' in raw) || !('xyLoras' in raw)) {
+      setRawPrefs(normalizePrefs(rawPrefs))
+    }
+    // 仅 mount 跑一次：迁移是幂等的，rawPrefs 后续变化不需要重跑
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const { mode, prompts, negPrompt, aspect, width, height, steps, cfgScale, count, seed, xDraft, yDraft, datasetPick } = prefs
+  // LoRA 列表按 mode 完全独立：single 用 singleLoras，xy（含 compare 子视图）用
+  // xyLoras。读写都按当前 mode 路由，切 mode 互不影响。
+  const loras = mode === 'single' ? prefs.singleLoras : prefs.xyLoras
+  const setLoras = (loras: LoraEntry[]) =>
+    setPrefs((p) => (p.mode === 'single' ? { ...p, singleLoras: loras } : { ...p, xyLoras: loras }))
   const setMode = (mode: ViewMode) => setPrefs((p) => ({ ...p, mode }))
   const setPrompts = (prompts: string[]) => setPrefs((p) => ({ ...p, prompts }))
   const setNegPrompt = (negPrompt: string) => setPrefs((p) => ({ ...p, negPrompt }))
@@ -67,13 +126,11 @@ export default function GeneratePage() {
   const setCfgScale = (cfgScale: number) => setPrefs((p) => ({ ...p, cfgScale }))
   const setCount = (count: number) => setPrefs((p) => ({ ...p, count }))
   const setSeed = (seed: number) => setPrefs((p) => ({ ...p, seed }))
-  const setLoras = (loras: LoraEntry[]) => setPrefs((p) => ({ ...p, loras }))
 
   // LoRA 预填 via URL query (?lora=<path>&projectId=N&versionId=N)
   // Overview StatusBanner "在测试中加载" CTA 跳进来时，URL 是显式 "测这条 LoRA"
-  // 意图——丢掉缓存 list 直接 replace 成 [urlLora]，避免旧/已删 LoRA 与新条目
-  // 并排出现（旧 append 行为会让 xDraft.loraIndex 指向脏 slot，submit 抛
-  // axisLoraMissing）。同时 clamp xDraft/yDraft.loraIndex 到合法范围。
+  // 意图 = 测这一条 → 落到 single 模式的列表（replace 成 [urlLora]）并切到 single；
+  // xy 列表独立、不受影响（xy 轴 loraIndex 已由 normalizePrefs clamp 到 xyLoras）。
   // 用 history.replaceState 清掉 query 避免刷新时重复触发。
   useEffect(() => {
     const sp = new URLSearchParams(window.location.search)
@@ -88,17 +145,7 @@ export default function GeneratePage() {
         project_id: projectId ? Number(projectId) : null,
         version_id: versionId ? Number(versionId) : null,
       }]
-      const clamp = (d: XYAxisDraft | null): XYAxisDraft | null => {
-        if (!d || d.loraIndex == null) return d
-        if (d.loraIndex < newLoras.length) return d
-        return { ...d, loraIndex: 0 }
-      }
-      return {
-        ...p,
-        loras: newLoras,
-        xDraft: clamp(p.xDraft) ?? p.xDraft,
-        yDraft: clamp(p.yDraft),
-      }
+      return { ...p, mode: 'single', singleLoras: newLoras }
     })
     setUrlConsumedKey((k) => k + 1)
     const url = new URL(window.location.href)
