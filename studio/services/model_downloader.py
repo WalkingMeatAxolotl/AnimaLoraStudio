@@ -28,7 +28,7 @@ from .. import secrets
 from ..event_bus import bus
 from ..paths import REPO_ROOT
 from .onnx_tagger_base import safe_dir_name
-
+from .proxy_manager import get_proxy_dict
 
 # ---------------------------------------------------------------------------
 # 模型清单常量（新版本发布时改这里）

@@ -27,6 +27,7 @@ from typing import Callable, Optional
 import requests
 
 from . import booru_api, booru_pool
+from .proxy_manager import get_proxy_dict
 
 ProgressFn = Callable[[str], None]
 ImageSavedFn = Callable[[Path], None]
@@ -297,6 +298,7 @@ def estimate(opts: DownloadOptions) -> int:
     端有 basic auth 时一并带上让 rate limit 按账户算。
     """
     query = opts.effective_tag_query()
+    proxies = get_proxy_dict()
     headers = booru_api._api_headers(opts.username)
     if opts.api_source == "gelbooru":
         try:
@@ -314,7 +316,7 @@ def estimate(opts: DownloadOptions) -> int:
                 params["user_id"] = opts.user_id
             r = requests.get(
                 f"{opts.base_url()}/index.php",
-                params=params, headers=headers, timeout=15,
+                params=params, headers=headers, timeout=15, proxies=proxies
             )
             r.raise_for_status()
             data = r.json()
@@ -328,7 +330,7 @@ def estimate(opts: DownloadOptions) -> int:
         r = requests.get(
             f"{opts.base_url()}/counts/posts.json",
             params={"tags": query},
-            headers=headers, auth=auth, timeout=15,
+            headers=headers, auth=auth, timeout=15, proxies=proxies
         )
         r.raise_for_status()
         return int(r.json().get("counts", {}).get("posts", -1))
