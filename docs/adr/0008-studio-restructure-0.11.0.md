@@ -196,7 +196,7 @@ api/  →  services/  →  domain/
 | `cli.py` 841 → 7 文件拆 | launcher 单文件可读；独立 PR 隔离风险 |
 | `secrets.py` 763 → models/store/migrations 3 文件 | Pydantic v2 跨文件循环风险；3-way 收益主要是视觉隔离 |
 | `db.py` 188 → connection/tasks/settings 3 文件 | 同上 |
-| 统一 exception handler 替代 4 套 `err_code` helper | 行为变更，独立 PR 安全 |
+| ~~统一 exception handler 替代 4 套 `err_code` helper~~ | **已并入 [ADR-0009](0009-logging-error-system.md)**（dual-write envelope + DomainError 体系，0.12.0） |
 | `secrets.py` 170 行 legacy migration 加 deprecation log | 跟 3-way 拆一起 |
 
 ---
