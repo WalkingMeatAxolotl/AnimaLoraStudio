@@ -68,7 +68,12 @@ def test_logger_getlogger_name_uses_dunder_name() -> None:
     bad = []
     pattern = re.compile(r"logging\.getLogger\(([^)]+)\)")
     for py in studio_root.rglob("*.py"):
-        if "web/" in str(py).replace("\\", "/"):
+        rel = str(py.relative_to(studio_root)).replace("\\", "/")
+        if rel.startswith("web/"):
+            continue
+        # logging.py 自身实现第三方库 silence + studio.unhandled 兜底；它的 getLogger
+        # 用 string / loop variable 是设计意图，不算违规
+        if rel == "infrastructure/logging.py":
             continue
         try:
             text = py.read_text(encoding="utf-8")

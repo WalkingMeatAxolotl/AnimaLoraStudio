@@ -25,6 +25,12 @@ def test_import_logging_module_does_not_touch_root(tmp_path: Path) -> None:
 
 
 def test_make_studio_log_handler_creates_file_on_first_emit(tmp_path: Path) -> None:
+    """default formatter 是 JsonLineFormatter（C3 升级，C2 简单 Formatter）。
+
+    锁：文件 delay 创建、format 是 JSON line（含 process / level / logger / msg）、
+    常量值（STUDIO_LOG_NAME / MAX_BYTES / BACKUP_COUNT）不变。
+    """
+    import json
     from studio.infrastructure.logging import (
         STUDIO_LOG_BACKUP_COUNT,
         STUDIO_LOG_MAX_BYTES,
@@ -32,7 +38,7 @@ def test_make_studio_log_handler_creates_file_on_first_emit(tmp_path: Path) -> N
         make_studio_log_handler,
     )
 
-    h = make_studio_log_handler(log_dir=tmp_path)
+    h = make_studio_log_handler(log_dir=tmp_path, process="test-c2")
     try:
         log_file = tmp_path / STUDIO_LOG_NAME
         # delay=True：文件首次 emit 才创建
@@ -48,10 +54,12 @@ def test_make_studio_log_handler_creates_file_on_first_emit(tmp_path: Path) -> N
             lg.removeHandler(h)
 
         assert log_file.exists()
-        content = log_file.read_text(encoding="utf-8")
-        assert "[INFO] studio.test_pr1_c2: c2 skeleton smoke" in content, (
-            f"format 应含 level + logger name + msg；实际: {content!r}"
-        )
+        line = log_file.read_text(encoding="utf-8").strip()
+        out = json.loads(line)
+        assert out["process"] == "test-c2"
+        assert out["level"] == "INFO"
+        assert out["logger"] == "studio.test_pr1_c2"
+        assert out["msg"] == "c2 skeleton smoke"
 
         # 锁默认配置常量值（C3 不能随意调）
         assert STUDIO_LOG_NAME == "studio.log"
