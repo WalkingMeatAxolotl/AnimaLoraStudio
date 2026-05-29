@@ -64,8 +64,15 @@ class BundleOptions:
     include_config: bool = False
 
 
-class TrainIOError(Exception):
-    """导出 / 导入过程的业务错误。"""
+from studio.domain.errors import DomainError
+
+
+class TrainIOError(DomainError):
+    """导出 / 导入过程的业务错误。
+
+    PR-2 C3 加 DomainError base — handler 自动翻 dual-write envelope。
+    """
+    default_code = "train_io.error"
 
 
 # ---------------------------------------------------------------------------

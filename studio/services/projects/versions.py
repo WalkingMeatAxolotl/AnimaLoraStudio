@@ -147,8 +147,15 @@ def reconcile_version_status(
 _VALID_LABEL = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
-class VersionError(Exception):
-    """Version 业务错误。"""
+from studio.domain.errors import DomainError
+
+
+class VersionError(DomainError):
+    """Version 业务错误。
+
+    PR-2 C3 加 DomainError base — handler 自动翻 dual-write envelope。
+    """
+    default_code = "version.error"
 
 
 # ---------------------------------------------------------------------------

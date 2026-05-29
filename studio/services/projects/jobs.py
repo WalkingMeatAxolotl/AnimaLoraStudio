@@ -26,8 +26,15 @@ VALID_STATUSES: frozenset[str] = frozenset({
 TERMINAL_STATUSES: frozenset[str] = frozenset({"done", "failed", "canceled"})
 
 
-class JobError(Exception):
-    """project_jobs 业务错误。"""
+from studio.domain.errors import DomainError
+
+
+class JobError(DomainError):
+    """project_jobs 业务错误。
+
+    PR-2 C3 加 DomainError base — handler 自动翻 dual-write envelope。
+    """
+    default_code = "job.error"
 
 
 def log_path_for(job_id: int) -> Path:

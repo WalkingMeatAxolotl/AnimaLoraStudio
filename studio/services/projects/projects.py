@@ -21,8 +21,15 @@ from ...paths import STUDIO_DATA
 
 PROJECTS_DIR = STUDIO_DATA / "projects"
 
-class ProjectError(Exception):
-    """Project 业务错误（不存在 / 名字非法 / 冲突）。"""
+from studio.domain.errors import DomainError
+
+
+class ProjectError(DomainError):
+    """Project 业务错误（不存在 / 名字非法 / 冲突）。
+
+    PR-2 C3 加 DomainError base — handler 自动翻 dual-write envelope。
+    """
+    default_code = "project.error"
 
 
 # ---------------------------------------------------------------------------

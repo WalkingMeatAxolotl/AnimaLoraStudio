@@ -31,8 +31,17 @@ _MODEL_PATH_FIELDS = (
 )
 
 
-class PresetError(Exception):
-    """预设 I/O 错误。"""
+from studio.domain.errors import DomainError
+
+
+class PresetError(DomainError):
+    """预设 I/O 错误。
+
+    PR-2 C3 加 DomainError base — handler 自动翻 dual-write envelope。
+    现有 raise PresetError("xxx") 形态不变；http_status / code 由 router 或
+    C4/C5 精细化时按情况覆盖（now 用 default = 400 / preset.error）。
+    """
+    default_code = "preset.error"
 
 
 _WIN_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")

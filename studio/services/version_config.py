@@ -22,8 +22,15 @@ from .projects.versions import version_dir
 from .projects import projects as _projects
 
 
-class VersionConfigError(Exception):
-    """version 私有 config I/O 错误。"""
+from studio.domain.errors import DomainError
+
+
+class VersionConfigError(DomainError):
+    """version 私有 config I/O 错误。
+
+    PR-2 C3 加 DomainError base — handler 自动翻 dual-write envelope。
+    """
+    default_code = "version_config.error"
 
 
 CONFIG_FILENAME = "config.yaml"

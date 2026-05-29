@@ -11,8 +11,12 @@ from typing import Any
 from ...paths import REPO_ROOT
 
 
-class BrowseError(Exception):
-    pass
+from studio.domain.errors import DomainError
+
+
+class BrowseError(DomainError):
+    """PR-2 C3 加 DomainError base — handler 自动翻 dual-write envelope。"""
+    default_code = "browse.error"
 
 
 def list_dir(target: Path, *, allow_outside_repo: bool = False) -> dict[str, Any]:

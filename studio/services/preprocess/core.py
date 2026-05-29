@@ -55,8 +55,15 @@ PRODUCT_SUFFIX = ".png"
 MIN_CROP_NORM = 0.02
 
 
-class PreprocessError(Exception):
-    """预处理业务错误（项目不存在 / 参数非法 / 文件名非法）。"""
+from studio.domain.errors import DomainError
+
+
+class PreprocessError(DomainError):
+    """预处理业务错误（项目不存在 / 参数非法 / 文件名非法）。
+
+    PR-2 C3 加 DomainError base — handler 自动翻 dual-write envelope。
+    """
+    default_code = "preprocess.error"
 
 
 # ---------------------------------------------------------------------------

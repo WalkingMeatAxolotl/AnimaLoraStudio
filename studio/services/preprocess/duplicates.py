@@ -56,8 +56,15 @@ DEFAULT_COLOR_ALERT = 14
 MatchScope = Literal["strict", "both"]
 
 
-class DuplicateFinderError(Exception):
-    """Duplicate finder business error."""
+from studio.domain.errors import DomainError
+
+
+class DuplicateFinderError(DomainError):
+    """Duplicate finder business error.
+
+    PR-2 C3 加 DomainError base — handler 自动翻 dual-write envelope。
+    """
+    default_code = "duplicate.error"
 
 
 @dataclass(frozen=True)

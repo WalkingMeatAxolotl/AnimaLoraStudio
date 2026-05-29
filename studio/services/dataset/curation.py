@@ -32,8 +32,15 @@ _FOLDER_PATTERN = re.compile(r"^([0-9]+_)?[A-Za-z][A-Za-z0-9_-]*$")
 _FILE_PATTERN = re.compile(r"^[^\\/]+$")
 
 
-class CurationError(Exception):
-    """Curation 业务错误（路径非法 / 不存在 / 冲突）。"""
+from studio.domain.errors import DomainError
+
+
+class CurationError(DomainError):
+    """Curation 业务错误（路径非法 / 不存在 / 冲突）。
+
+    PR-2 C3 加 DomainError base — handler 自动翻 dual-write envelope。
+    """
+    default_code = "curation.error"
 
 
 # ---------------------------------------------------------------------------

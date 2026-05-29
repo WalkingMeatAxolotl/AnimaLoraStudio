@@ -19,8 +19,15 @@ CAPTION_EXTS = (".txt", ".json")
 SNAPSHOT_DIRNAME = "caption_snapshots"
 
 
-class SnapshotError(Exception):
-    """Snapshot 业务错误。"""
+from studio.domain.errors import DomainError
+
+
+class SnapshotError(DomainError):
+    """Snapshot 业务错误。
+
+    PR-2 C3 加 DomainError base — handler 自动翻 dual-write envelope。
+    """
+    default_code = "snapshot.error"
 
 
 def snapshot_root(version_dir: Path) -> Path:
