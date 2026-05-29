@@ -49,10 +49,10 @@ class Tagger(Protocol):
 # 加新 tagger 在这里加一行；server.py 的 TagJobRequest 同步加 `<name>_overrides`
 # 字段（如果支持本次任务覆盖）即可。worker 走通用 `params.get(f"{name}_overrides")`。
 _TAGGER_SPEC: dict[str, tuple[str, str, bool]] = {
-    "wd14": ("studio.services.wd14_tagger", "WD14Tagger", True),
-    "cltagger": ("studio.services.cltagger_tagger", "CLTagger", True),
-    "joycaption": ("studio.services.joycaption_tagger", "JoyCaptionTagger", False),
-    "llm": ("studio.services.llm_tagger", "LLMTagger", True),
+    "wd14": ("studio.services.tagging.wd14", "WD14Tagger", True),
+    "cltagger": ("studio.services.tagging.cltagger", "CLTagger", True),
+    "joycaption": ("studio.services.tagging.joycaption", "JoyCaptionTagger", False),
+    "llm": ("studio.services.tagging.llm", "LLMTagger", True),
 }
 
 

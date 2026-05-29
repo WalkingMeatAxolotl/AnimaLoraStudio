@@ -21,7 +21,8 @@
 
 ## shim 兼容（PR-3 起）
 
-为保 `from studio.services.X import Y` 老路径兼容，老平铺位置留 sys.modules
-别名 shim：`studio.services.wd14_tagger` → `studio.services.tagging.wd14_tagger`
-等。0.11.1+ 会按子包逐批删 shim（详 0.11.0 ADR-0008 follow-ups）。
+部分老平铺路径留 sys.modules 别名 shim（如 `model_downloader` → `models` 包），
+保 `from studio.services.X import Y` 兼容。tagger 家族不留 shim —— 新代码直接
+`from studio.services.tagging import X`，factory 也按子包路径加载。
+0.11.1+ 会按子包逐批删剩余 shim（详 0.11.0 ADR-0008 follow-ups）。
 """
