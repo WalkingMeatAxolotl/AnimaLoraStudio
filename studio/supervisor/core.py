@@ -412,6 +412,12 @@ class Supervisor:
         task = self._next_pending_task_in(("generate",))
         if task is None:
             return
+        # enqueue_generate 先 create_task(pending, task_type=generate) 再写 config.json
+        # 落 config_path —— 两步之间（含 detect_attention_backend 等耗时）这条 task 已
+        # 是 pending+generate 但 config_path 还是 NULL。此时别提交（否则 daemon 报
+        # "config not found: <none>"），等下个 tick config_path 落库后再派。
+        if not task.get("config_path"):
+            return
         self._submit_to_daemon(task)
 
     def _queue_held(self) -> bool:

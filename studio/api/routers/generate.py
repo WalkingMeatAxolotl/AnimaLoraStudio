@@ -46,48 +46,66 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
         )
         db.update_task(conn, task_id, task_type="generate")
 
-    tempdir = generate_tempdir(task_id)
-    tempdir.mkdir(parents=True, exist_ok=True)
-
-    # attention_backend：secrets 读默认；body 给值则覆盖（兼容旧客户端）
-    # secrets 默认 'auto' → 调 detect_attention_backend 按"装了什么用什么"决定
+    # create_task 已把 task 落成 pending+generate，但 config_path 还没写；supervisor
+    # _dispatch_generate 会跳过 config_path=NULL 的 generate task（视为还在入队），等
+    # 下面 config.json 落库后再派。这里任一步失败必须把 task 标 failed，否则它会以
+    # config_path=NULL 永远 pending（dispatcher 永远跳过）。
     try:
-        gen_cfg = secrets.load().generate
-        attn_default = gen_cfg.attention_backend
-        preview_n = int(gen_cfg.preview_every_n_steps or 0)
-    except Exception:
-        attn_default = "auto"
-        preview_n = 0
-    attn = body.attention_backend or attn_default
-    if attn == "auto":
-        from ...services.runtime.xformers import detect_attention_backend
-        attn = detect_attention_backend()
+        tempdir = generate_tempdir(task_id)
+        tempdir.mkdir(parents=True, exist_ok=True)
 
-    cfg = GenerateConfig(
-        **model_paths,
-        output_dir=str(tempdir),
-        prompts=body.prompts,
-        negative_prompt=body.negative_prompt,
-        width=body.width,
-        height=body.height,
-        steps=body.steps,
-        cfg_scale=body.cfg_scale,
-        sampler_name=body.sampler_name,
-        scheduler=body.scheduler,
-        count=body.count,
-        seed=body.seed,
-        lora_configs=[lc.model_dump() for lc in body.lora_configs],
-        mixed_precision=body.mixed_precision,
-        attention_backend=attn,
-        xy_matrix=body.xy_matrix.model_dump() if body.xy_matrix else None,
-    )
+        # attention_backend：secrets 读默认；body 给值则覆盖（兼容旧客户端）
+        # secrets 默认 'auto' → 调 detect_attention_backend 按"装了什么用什么"决定
+        try:
+            gen_cfg = secrets.load().generate
+            attn_default = gen_cfg.attention_backend
+            preview_n = int(gen_cfg.preview_every_n_steps or 0)
+        except Exception:
+            attn_default = "auto"
+            preview_n = 0
+        attn = body.attention_backend or attn_default
+        if attn == "auto":
+            from ...services.runtime.xformers import detect_attention_backend
+            attn = detect_attention_backend()
 
-    # commit 14：注入 daemon 端用的 preview 节流参数（settings 全局开关）
-    cfg_dict = cfg.model_dump()
-    cfg_dict["preview_every_n_steps"] = preview_n
+        cfg = GenerateConfig(
+            **model_paths,
+            output_dir=str(tempdir),
+            prompts=body.prompts,
+            negative_prompt=body.negative_prompt,
+            width=body.width,
+            height=body.height,
+            steps=body.steps,
+            cfg_scale=body.cfg_scale,
+            sampler_name=body.sampler_name,
+            scheduler=body.scheduler,
+            count=body.count,
+            seed=body.seed,
+            lora_configs=[lc.model_dump() for lc in body.lora_configs],
+            mixed_precision=body.mixed_precision,
+            attention_backend=attn,
+            xy_matrix=body.xy_matrix.model_dump() if body.xy_matrix else None,
+        )
 
-    cfg_path = tempdir / "config.json"
-    cfg_path.write_text(json.dumps(cfg_dict, indent=2, ensure_ascii=False), encoding="utf-8")
+        # commit 14：注入 daemon 端用的 preview 节流参数（settings 全局开关）
+        cfg_dict = cfg.model_dump()
+        cfg_dict["preview_every_n_steps"] = preview_n
+
+        cfg_path = tempdir / "config.json"
+        cfg_path.write_text(
+            json.dumps(cfg_dict, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+    except Exception as e:
+        import time as _time
+        with db.connection_for() as conn:
+            now = _time.time()
+            db.update_task(
+                conn, task_id, status="failed",
+                started_at=now, finished_at=now,
+                error_msg=f"enqueue failed: {e}",
+            )
+        bus.publish({"type": "task_state_changed", "task_id": task_id, "status": "failed"})
+        raise HTTPException(500, f"failed to enqueue generate task: {e}")
 
     with db.connection_for() as conn:
         db.update_task(conn, task_id, config_path=str(cfg_path))
