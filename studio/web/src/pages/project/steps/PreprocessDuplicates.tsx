@@ -175,6 +175,11 @@ export default function PreprocessDuplicatesPage() {
               result={result}
               selected={selected}
               busy={busy}
+              onSelectNames={(names) => {
+                const next = new Set(selected)
+                names.forEach((name) => next.add(name))
+                setSelected(next)
+              }}
               onToggle={(name) => {
                 const next = new Set(selected)
                 if (next.has(name)) next.delete(name)
@@ -444,6 +449,7 @@ function QualityReviewPanel({
   result,
   selected,
   busy,
+  onSelectNames,
   onToggle,
   onPreview,
 }: {
@@ -451,12 +457,29 @@ function QualityReviewPanel({
   result: DuplicateScanResult | null
   selected: Set<string>
   busy: boolean
+  onSelectNames: (names: string[]) => void
   onToggle: (name: string) => void
   onPreview: (name: string) => void
 }) {
   const { t } = useTranslation()
   const blurCandidates = result?.blur_candidates ?? []
   const cropRelations = result?.crop_relations ?? []
+  const blurNames = useMemo(
+    () => Array.from(new Set((result?.blur_candidates ?? []).map((item) => item.name))),
+    [result],
+  )
+  const cropCandidateNames = useMemo(
+    () => Array.from(new Set((result?.crop_relations ?? []).map((item) => item.crop_candidate))),
+    [result],
+  )
+  const cropSourceNames = useMemo(
+    () => Array.from(new Set((result?.crop_relations ?? []).map((item) => item.source))),
+    [result],
+  )
+  const cropBothNames = useMemo(
+    () => Array.from(new Set((result?.crop_relations ?? []).flatMap((item) => [item.source, item.crop_candidate]))),
+    [result],
+  )
   if (!result || (blurCandidates.length === 0 && cropRelations.length === 0)) return null
   return (
     <section className="flex flex-col rounded-md border border-subtle bg-surface overflow-hidden shrink-0">
@@ -469,6 +492,40 @@ function QualityReviewPanel({
         <span className="text-xs text-fg-tertiary min-w-full">
           {t('duplicates.qualityHint')}
         </span>
+        <div className="flex flex-wrap items-center gap-1.5 min-w-full">
+          <button
+            type="button"
+            disabled={busy || blurNames.length === 0}
+            onClick={() => onSelectNames(blurNames)}
+            className="btn btn-secondary btn-sm !py-0.5 text-[11px]"
+          >
+            {t('duplicates.selectBlur')}
+          </button>
+          <button
+            type="button"
+            disabled={busy || cropCandidateNames.length === 0}
+            onClick={() => onSelectNames(cropCandidateNames)}
+            className="btn btn-secondary btn-sm !py-0.5 text-[11px]"
+          >
+            {t('duplicates.selectCropCandidates')}
+          </button>
+          <button
+            type="button"
+            disabled={busy || cropSourceNames.length === 0}
+            onClick={() => onSelectNames(cropSourceNames)}
+            className="btn btn-secondary btn-sm !py-0.5 text-[11px]"
+          >
+            {t('duplicates.selectCropSources')}
+          </button>
+          <button
+            type="button"
+            disabled={busy || cropBothNames.length === 0}
+            onClick={() => onSelectNames(cropBothNames)}
+            className="btn btn-secondary btn-sm !py-0.5 text-[11px]"
+          >
+            {t('duplicates.selectCropBoth')}
+          </button>
+        </div>
       </header>
       <div className="grid gap-2 p-2 lg:grid-cols-2">
         <QualitySection
