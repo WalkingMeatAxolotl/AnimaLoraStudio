@@ -823,6 +823,11 @@ export interface CropRelation {
   source_height: number
   crop_width: number
   crop_height: number
+  source_area: number
+  crop_area: number
+  larger_image: string
+  area_ratio: number
+  relation_kind: 'crop_smaller' | 'crop_upscaled' | 'crop_same_area' | string
   source_window: { x: number; y: number; width: number; height: number }
   window_ratio: number
   segment_matches: number

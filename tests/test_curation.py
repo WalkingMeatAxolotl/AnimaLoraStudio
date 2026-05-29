@@ -459,6 +459,23 @@ def test_duplicate_scan_can_report_blur_and_crop_candidates(env) -> None:
         for item in result["crop_relations"]
     }
     assert ("crop_source.png", "crop_zoom.png") in pairs
+    relation = next(
+        item for item in result["crop_relations"]
+        if (item["source"], item["crop_candidate"]) == ("crop_source.png", "crop_zoom.png")
+    )
+    assert relation["source_area"] == relation["source_width"] * relation["source_height"]
+    assert relation["crop_area"] == relation["crop_width"] * relation["crop_height"]
+    assert relation["larger_image"] in {
+        relation["source"],
+        relation["crop_candidate"],
+        "same_area",
+    }
+    assert relation["area_ratio"] >= 1
+    assert relation["relation_kind"] in {
+        "crop_smaller",
+        "crop_upscaled",
+        "crop_same_area",
+    }
 
 
 def test_duplicate_apply_marks_confirmed_names_without_touching_download(env) -> None:

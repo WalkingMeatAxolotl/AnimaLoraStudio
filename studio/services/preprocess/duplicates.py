@@ -178,6 +178,36 @@ class CropRelation:
     segment_coverage: float
     note: str
 
+    @property
+    def source_area(self) -> int:
+        return self.source.width * self.source.height
+
+    @property
+    def crop_area(self) -> int:
+        return self.crop.width * self.crop.height
+
+    @property
+    def area_ratio(self) -> float:
+        smaller = max(1, min(self.source_area, self.crop_area))
+        larger = max(self.source_area, self.crop_area)
+        return round(larger / smaller, 4)
+
+    @property
+    def larger_image(self) -> str:
+        if self.source_area > self.crop_area:
+            return self.source.name
+        if self.crop_area > self.source_area:
+            return self.crop.name
+        return "same_area"
+
+    @property
+    def relation_kind(self) -> str:
+        if self.crop_area > self.source_area:
+            return "crop_upscaled"
+        if self.crop_area < self.source_area:
+            return "crop_smaller"
+        return "crop_same_area"
+
 
 class UnionFind:
     def __init__(self, items: list[str]) -> None:
@@ -1196,6 +1226,11 @@ def _crop_relation_to_json(relation: CropRelation) -> dict[str, Any]:
         "source_height": relation.source.height,
         "crop_width": relation.crop.width,
         "crop_height": relation.crop.height,
+        "source_area": relation.source_area,
+        "crop_area": relation.crop_area,
+        "larger_image": relation.larger_image,
+        "area_ratio": relation.area_ratio,
+        "relation_kind": relation.relation_kind,
         "source_window": {"x": x, "y": y, "width": width, "height": height},
         "window_ratio": relation.window_ratio,
         "segment_matches": relation.segment_matches,

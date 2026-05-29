@@ -480,6 +480,16 @@ function QualityReviewPanel({
     () => Array.from(new Set((result?.crop_relations ?? []).flatMap((item) => [item.source, item.crop_candidate]))),
     [result],
   )
+  const cropRelationKindLabel = (kind: string) => {
+    if (kind === 'crop_upscaled') return t('duplicates.cropKindUpscaled')
+    if (kind === 'crop_same_area') return t('duplicates.cropKindSameArea')
+    return t('duplicates.cropKindSmaller')
+  }
+  const cropLargerLabel = (name: string) => (
+    name === 'same_area'
+      ? t('duplicates.cropLargerSameArea')
+      : t('duplicates.cropLarger', { name })
+  )
   if (!result || (blurCandidates.length === 0 && cropRelations.length === 0)) return null
   return (
     <section className="flex flex-col rounded-md border border-subtle bg-surface overflow-hidden shrink-0">
@@ -561,7 +571,13 @@ function QualityReviewPanel({
               score: Math.round(item.score * 100),
               area: Math.round(item.window_ratio * 100),
             }),
-            note: `${item.source_window.x},${item.source_window.y},${item.source_window.width},${item.source_window.height} · ${item.note}`,
+            note: [
+              cropRelationKindLabel(item.relation_kind),
+              cropLargerLabel(item.larger_image),
+              t('duplicates.cropAreaRatio', { ratio: item.area_ratio.toFixed(2) }),
+              `${item.source_window.x},${item.source_window.y},${item.source_window.width},${item.source_window.height}`,
+              item.note,
+            ].join(' · '),
           }))}
           projectId={projectId}
           selected={selected}
