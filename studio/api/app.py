@@ -14,6 +14,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from .. import __version__
+from .exception_handlers import register_exception_handlers
 from .lifespan import lifespan
 from .middleware import _SelectiveGZipMiddleware
 from .trace_middleware import TraceIdMiddleware
@@ -50,6 +51,10 @@ app = FastAPI(title="AnimaStudio", version=__version__, lifespan=lifespan)
 # 之前 bind，gzip handler 内 logger.x 也能拿到。
 app.add_middleware(_SelectiveGZipMiddleware, minimum_size=1000)
 app.add_middleware(TraceIdMiddleware)
+# ADR-0009 PR-2 C2: 装 3 个 exception handler（DomainError / RequestValidation /
+# Exception fallback）— dual-write envelope 保 detail contract + 加 error 结构化字段。
+# HTTPException 不注册，让 starlette 默认 handler 跑保现有 175 处 raise 形状不变。
+register_exception_handlers(app)
 
 # Router 注册顺序无所谓（FastAPI 按 path 精确匹配，include_router 先后只影响
 # include_in_schema=False 的 catch-all 顺序）。按 PR / 字母序排列方便审查。

@@ -51,6 +51,14 @@ class TraceIdMiddleware:
         if not trace_id:
             trace_id = new_trace_id()
 
+        # 把 trace_id 写到 scope["state"]，让 ServerErrorMiddleware 外层的
+        # fallback Exception handler 能拿到（contextvar 在 finally 里 reset，
+        # 外层 handler 跑时 contextvar 已空）。DomainError handler 在 ExceptionMiddleware
+        # 内层，靠 contextvar 仍可用；fallback 必须靠 scope state。
+        if "state" not in scope:
+            scope["state"] = {}
+        scope["state"]["trace_id"] = trace_id
+
         token = bind_trace_id(trace_id)
 
         async def send_wrapper(message):
