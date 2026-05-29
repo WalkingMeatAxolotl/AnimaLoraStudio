@@ -25,14 +25,14 @@
 """
 from __future__ import annotations
 
+import logging
 import threading
-import traceback
 from pathlib import Path
 from typing import Any
 
-from ._base import reconfigure_console_utf8
+# PR-1 C4: setup_logging 内已统一调 reconfigure_console_utf8。
 
-reconfigure_console_utf8()
+logger = logging.getLogger(__name__)
 
 # PP9.5 — 必须在任何 `import onnxruntime` 之前 import 本模块，触发顶层 preload。
 # auto_tag 路径会内联调 wd14_tagger（line ~105 `get_tagger("wd14")`），worker 是独立
@@ -232,8 +232,10 @@ def run(job_id: int) -> int:
 
         return 0 if meta.actual_count > 0 else 1
     except Exception as exc:
+        # PR-1 C7: 同 tag_worker — logger.exception 带 trace_id 进 stderr，
+        # progress 给人读短摘要。
+        logger.exception("reg_build worker crashed (job_id=%s)", job_id)
         progress(f"[error] {exc}")
-        print(traceback.format_exc(), flush=True)
         return 1
 
 

@@ -336,15 +336,44 @@ class InferenceDaemon:
 
         不打 terminal —— 通过 UI 抽屉查看（/api/generate/daemon/logs 拉历史，
         daemon_log_line SSE 推增量）。terminal 安静、需要时再开抽屉。
+
+        B-4.5: reader 崩溃后 daemon 仍活着但 stderr 不再被消费 → UI 抽屉永远空
+        + daemon OOM / 模型加载报错全看不到。改造：crash 后自动 restart 一次；
+        restart 也炸再标 STOPPED 并 emit warning event。proc 仍存活 + reader 死
+        → silent failure 是最严重的可观测性 hole。
         """
         assert proc.stderr is not None
-        try:
-            for raw_line in proc.stderr:
-                line = raw_line.rstrip()
-                if line:
-                    self._append_log(line)
-        except Exception:
-            logger.exception("daemon stderr reader crashed")
+        attempt = 0
+        while attempt < 2 and proc.poll() is None:
+            attempt += 1
+            try:
+                for raw_line in proc.stderr:
+                    line = raw_line.rstrip()
+                    if line:
+                        self._append_log(line)
+                # 正常 EOF（proc 退出 stderr 关闭）— 退出 loop
+                return
+            except Exception:
+                logger.exception(
+                    "daemon stderr reader crashed (attempt %d/2)", attempt
+                )
+                if attempt < 2 and proc.poll() is None:
+                    # 短暂 backoff 再 restart 本 loop
+                    time.sleep(0.5)
+                    continue
+        # 两次都 crash 且 proc 还活着 → daemon 处于不可观测状态
+        if proc.poll() is None:
+            logger.error(
+                "daemon stderr reader gave up after 2 attempts; daemon (pid=%d) "
+                "is still running but its stderr is unmonitored",
+                proc.pid,
+            )
+            for cb in list(self._log_listeners):
+                try:
+                    cb({"ts": time.time(), "seq": -1,
+                        "line": "[stderr reader stopped — daemon log no longer captured]"})
+                except Exception:
+                    logger.exception("daemon log listener failed during stderr-down emit")
 
     # ----------------------------------------------------------- log buffer
     def _append_log(self, line: str) -> None:

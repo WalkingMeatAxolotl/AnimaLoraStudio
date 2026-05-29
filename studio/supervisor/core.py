@@ -57,6 +57,36 @@ from .slot import SLOT_DATA, SLOT_TRAIN, _Slot
 logger = logging.getLogger(__name__)
 
 
+def _tail_log_for_error_msg(log_path: Path, max_lines: int = 12, max_chars: int = 800) -> str:
+    """B-1.6: 失败 task 的 db.error_msg 从 "exit code 1" 升级为 traceback 摘要。
+
+    策略：读 jobs/<id>.log 末 N 行；找到最后一处 'Traceback' 截取那一段；
+    没有则取末 N 行。截断到 max_chars 适配 UI 显示宽度。
+
+    失败兜底返 ""（caller 用 "exit code N" 默认值）。
+    """
+    try:
+        if not log_path.exists():
+            return ""
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+        lines = text.splitlines()
+        if not lines:
+            return ""
+        tb_start = None
+        for i in range(len(lines) - 1, -1, -1):
+            if lines[i].startswith("Traceback"):
+                tb_start = i
+                break
+        snippet_lines = lines[tb_start:] if tb_start is not None else lines[-max_lines:]
+        out = "\n".join(snippet_lines).strip()
+        if len(out) > max_chars:
+            out = "..." + out[-(max_chars - 3):]
+        return out
+    except Exception:
+        logger.exception("tail log %s failed", log_path)
+        return ""
+
+
 class Supervisor:
     POLL_INTERVAL = 1.0
     TERMINATE_GRACE = 30.0
@@ -603,7 +633,15 @@ class Supervisor:
                     import json as _json
                     payload = _json.loads(payload_str) if payload_str else {}
                 except Exception:
+                    # B-4.4: malformed event 静默丢导致 UI pause_state 永远收不到
+                    # → 暂停按钮永远灰。logger.exception 进 studio.log；
+                    # SSE event_malformed 让前端可见（不阻断 task）。
                     logger.exception("malformed event marker: %r", line[:200])
+                    self._on_event({
+                        "type": "event_malformed",
+                        "task_id": tid,
+                        "raw_preview": line[:200],
+                    })
                     return  # 不当 log 推
                 # 状态机镜像（ADR §8.1 / §`_on_line` / Addendum 1 §supervisor）
                 if evt_type == "pause_state":
@@ -1115,7 +1153,12 @@ class Supervisor:
                     "pid": None,
                 }
                 if status == "failed":
-                    fields["error_msg"] = f"exit code {rc}"
+                    # B-1.6: tail jobs/<id>.log 末 12 行（含 Traceback 优先）
+                    # 拼到 error_msg，UI Task 列表能直接看到根因，不必每次翻 trace
+                    tail = _tail_log_for_error_msg(self._logs_dir / f"{cid}.log")
+                    fields["error_msg"] = (
+                        f"exit code {rc}\n{tail}" if tail else f"exit code {rc}"
+                    )
                 elif status == "paused":
                     fields["paused_state_path"] = slot.pause_state_path
                     fields["paused_config_path"] = slot.pause_config_path
@@ -1140,7 +1183,10 @@ class Supervisor:
                 elif status == "canceled":
                     project_jobs.mark_canceled(conn, cid)
                 else:
-                    project_jobs.mark_failed(conn, cid, f"exit code {rc}")
+                    # B-1.6: 同 task — tail jobs log 拼 error_msg
+                    tail = _tail_log_for_error_msg(self._logs_dir / f"{cid}.log")
+                    err_msg = f"exit code {rc}\n{tail}" if tail else f"exit code {rc}"
+                    project_jobs.mark_failed(conn, cid, err_msg)
                 job = project_jobs.get_job(conn, cid)
             self._on_event({
                 "type": "job_state_changed",

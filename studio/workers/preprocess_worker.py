@@ -16,14 +16,16 @@ log 文件，避免 LogTailer 读两次。
 from __future__ import annotations
 
 import json
+import logging
 import math
 import signal
 import time
-import traceback
 from pathlib import Path
 from typing import Any, Callable
 
 from PIL import Image
+
+logger = logging.getLogger(__name__)
 
 from studio import db
 from studio.services.preprocess import core as preprocess
@@ -229,8 +231,10 @@ def run(job_id: int) -> int:  # noqa: PLR0912, PLR0915 - 主流程线性可读
         # 失败率高时用户重跑选中即可。
         return 0
     except Exception as exc:  # noqa: BLE001
+        # PR-1 C7: 同 tag_worker — logger.exception 带 trace_id 进 stderr，
+        # log 给人读短摘要。
+        logger.exception("preprocess worker crashed (job_id=%s)", job_id)
         log(f"[error] {exc}")
-        print(traceback.format_exc(), flush=True)
         return 1
 
 

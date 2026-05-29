@@ -15,13 +15,14 @@
 from __future__ import annotations
 
 import json
-import traceback
+import logging
 from pathlib import Path
 from typing import Any
 
-from ._base import reconfigure_console_utf8
+# PR-1 C4: setup_logging 内已统一调 reconfigure_console_utf8，
+# worker 顶层不再单独调（B-4.6: 之前只 2/4 worker 调）。
 
-reconfigure_console_utf8()
+logger = logging.getLogger(__name__)
 
 # PP9.5 — 必须在任何 `import onnxruntime` 之前 import 本模块，触发顶层 preload
 # （Linux: RTLD_GLOBAL 加载 torch 自带 CUDA so；Windows: os.add_dll_directory）。
@@ -129,8 +130,10 @@ def run(job_id: int) -> int:
         progress(f"[done] tagged {ok}/{len(images)} (errors={errs})")
         return 0 if ok > 0 or errs == 0 else 1
     except Exception as exc:  # noqa: BLE001
+        # PR-1 C7: logger.exception 进 stderr（supervisor 收 → jobs/<id>.log），
+        # 同时带 trace_id 进 studio.unhandled chain；progress 给人读短摘要。
+        logger.exception("tag worker crashed (job_id=%s)", job_id)
         progress(f"[error] {exc}")
-        print(traceback.format_exc(), flush=True)
         return 1
 
 

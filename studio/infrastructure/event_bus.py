@@ -18,8 +18,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 from typing import Any, Callable, Optional
+
+_drop_logger = logging.getLogger(__name__)
 
 
 class EventBus:
@@ -83,7 +86,13 @@ def _safe_put(q: asyncio.Queue[dict[str, Any]], event: dict[str, Any]) -> None:
     try:
         q.put_nowait(event)
     except asyncio.QueueFull:
-        pass  # 慢消费者：丢弃，不阻塞 publisher
+        # B-1.5: 慢消费者：丢弃，不阻塞 publisher；但必须 log（之前是静默丢
+        # → 前端 progress/task_state_changed 看似掉帧但后端日志干净到看不出问题）。
+        # 用 module logger 走 studio.log，自带 trace_id（如果 publisher 在 request ctx 内）。
+        _drop_logger.warning(
+            "event_bus slow consumer: queue full, dropped event type=%s",
+            event.get("type", "?"),
+        )
 
 
 # 进程内单例（server.py 用）
