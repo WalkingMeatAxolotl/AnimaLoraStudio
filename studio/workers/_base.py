@@ -32,16 +32,25 @@ def worker_main(run_fn: Callable[[int], int]) -> None:
     §还的债"演进双写"后改 True）。process 名格式 "worker:<module>/<job_id>"，
     便于 jq 按 process 过滤；module 取 sys.argv[0] basename（download_worker.py
     → download_worker → 去掉 _worker 后缀 = download）。
+
+    PR-1 C6: bind_trace_id 从 ANIMA_TRACE_ID env（supervisor _spawn_task 注入
+    自 task.request_trace_id — HTTP 请求那一刻的 trace_id 一路传下来）。无则
+    new_trace_id 兜底（独立测 worker / 手动 -m studio.workers.x_worker 跑）。
+    bind 不 reset — worker 进程整个生命周期都该带这个 trace_id。
     """
     import os
-    from ..infrastructure.logging import setup_logging
+    from ..infrastructure.logging import (
+        PROCESS_ENV, TRACE_ENV,
+        bind_job_id, bind_trace_id, new_trace_id, setup_logging,
+    )
     p = argparse.ArgumentParser()
     p.add_argument("--job-id", type=int, required=True)
     args = p.parse_args()
     kind = _worker_kind_from_argv()
-    # PROCESS_ENV 由 supervisor C6 后设置；环境无则按 argv 推断
-    process = os.environ.get("ANIMA_PROCESS_NAME") or f"worker:{kind}/{args.job_id}"
+    process = os.environ.get(PROCESS_ENV) or f"worker:{kind}/{args.job_id}"
     setup_logging(process, file=False, console=True)
+    bind_trace_id(os.environ.get(TRACE_ENV) or new_trace_id())
+    bind_job_id(args.job_id)
     sys.exit(run_fn(args.job_id))
 
 

@@ -460,60 +460,81 @@ class Supervisor:
 
     # -------------------------------------------------------------- 子进程
     def _spawn_task(self, slot: _Slot, task: dict[str, Any]) -> None:
-        cfg_path = self._resolve_task_config_path(task)
-        if not cfg_path.exists():
-            self._fail_task_config_missing(task, cfg_path)
-            return
-
-        self._freeze_task_snapshot(int(task["id"]), cfg_path)
-
-        # PP6.1 — 计算 per-task monitor 状态文件路径
-        # 有 version_id：versions/{label}/monitor_state.json
-        # 没有：studio_data/monitors/task_{id}/state.json（兜底）
-        monitor_state_path = _resolve_monitor_state_path(task)
-        # 提前注入到 task dict 供 cmd_builder 用，以及落库
-        task = dict(task)
-        task["monitor_state_path"] = str(monitor_state_path)
-
-        self._logs_dir.mkdir(parents=True, exist_ok=True)
-        log_path = self._logs_dir / f"{task['id']}.log"
-        log_fp = open(log_path, "wb")
-
-        cmd = self._cmd_builder(task, cfg_path)
-        # ADR 0006 PR-1：LORA_TASK_ID 注入让训练子进程把 state 文件写到
-        # output_dir/state/task_<TID>/ 子目录，避免同 version 多 task 互覆盖。
-        proc = self._popen(cmd, log_fp, extra_env={"LORA_TASK_ID": str(task["id"])})
-
-        slot.proc = proc
-        slot.kind = "task"
-        slot.id = task["id"]
-        slot.log_fp = log_fp
-        slot.cancel_pending = False
-
-        tid = task["id"]
-
-        # PP6.4 — log tail → SSE（取代前端 2s 轮询 /api/logs/{id}）
-        slot.tailer = LogTailer(log_path, self._make_task_log_callback(slot, tid))
-        slot.tailer.start()
-
-        # PP6.4 → PR #37: monitor_state.json 变化 → SSE monitor_progress (增量协议)
-        slot.state_poller = MonitorStatePoller(
-            monitor_state_path, self._make_monitor_callback(tid)
+        # ADR-0009 PR-1 C6 trace_id 跨进程贯穿：
+        #   1) task.request_trace_id 由 API endpoint 入 task 时存（HTTP 请求那一刻
+        #      TraceIdMiddleware bind 的 contextvar）；老 task / 没存的兜底 bg-{uuid}
+        #   2) bind 到 ContextVar 让 supervisor 整段 _spawn_task 内 logger.x 都带
+        #   3) 注入 ANIMA_TRACE_ID / ANIMA_PROCESS_NAME env 给 worker 子进程
+        from ..infrastructure.logging import (
+            PROCESS_ENV, TRACE_ENV,
+            bind_trace_id, new_trace_id, reset_trace_id,
         )
-        slot.state_poller.start()
+        trace_id = task.get("request_trace_id") or f"bg-{new_trace_id()}"
+        kind = task.get("task_type") or "train"
+        process_name = f"worker:{kind}/{task['id']}"
+        _trace_token = bind_trace_id(trace_id)
+        try:
+            cfg_path = self._resolve_task_config_path(task)
+            if not cfg_path.exists():
+                self._fail_task_config_missing(task, cfg_path)
+                return
 
-        self._write_task_running_to_db(task, proc.pid, monitor_state_path)
+            self._freeze_task_snapshot(int(task["id"]), cfg_path)
 
-        self._on_event(
-            {
-                "type": "task_state_changed",
-                "task_id": task["id"],
-                "status": "running",
-            }
-        )
-        logger.info(
-            "started task %d on slot=%s (pid=%d)", task["id"], slot.name, proc.pid
-        )
+            # PP6.1 — 计算 per-task monitor 状态文件路径
+            # 有 version_id：versions/{label}/monitor_state.json
+            # 没有：studio_data/monitors/task_{id}/state.json（兜底）
+            monitor_state_path = _resolve_monitor_state_path(task)
+            # 提前注入到 task dict 供 cmd_builder 用，以及落库
+            task = dict(task)
+            task["monitor_state_path"] = str(monitor_state_path)
+
+            self._logs_dir.mkdir(parents=True, exist_ok=True)
+            log_path = self._logs_dir / f"{task['id']}.log"
+            log_fp = open(log_path, "wb")
+
+            cmd = self._cmd_builder(task, cfg_path)
+            # ADR 0006 PR-1：LORA_TASK_ID 注入让训练子进程把 state 文件写到
+            # output_dir/state/task_<TID>/ 子目录，避免同 version 多 task 互覆盖。
+            # ADR-0009 PR-1 C6：TRACE_ENV + PROCESS_ENV 让 worker bootstrap 拿到。
+            proc = self._popen(cmd, log_fp, extra_env={
+                "LORA_TASK_ID": str(task["id"]),
+                TRACE_ENV: trace_id,
+                PROCESS_ENV: process_name,
+            })
+
+            slot.proc = proc
+            slot.kind = "task"
+            slot.id = task["id"]
+            slot.log_fp = log_fp
+            slot.cancel_pending = False
+
+            tid = task["id"]
+
+            # PP6.4 — log tail → SSE（取代前端 2s 轮询 /api/logs/{id}）
+            slot.tailer = LogTailer(log_path, self._make_task_log_callback(slot, tid))
+            slot.tailer.start()
+
+            # PP6.4 → PR #37: monitor_state.json 变化 → SSE monitor_progress (增量协议)
+            slot.state_poller = MonitorStatePoller(
+                monitor_state_path, self._make_monitor_callback(tid)
+            )
+            slot.state_poller.start()
+
+            self._write_task_running_to_db(task, proc.pid, monitor_state_path)
+
+            self._on_event(
+                {
+                    "type": "task_state_changed",
+                    "task_id": task["id"],
+                    "status": "running",
+                }
+            )
+            logger.info(
+                "started task %d on slot=%s (pid=%d)", task["id"], slot.name, proc.pid
+            )
+        finally:
+            reset_trace_id(_trace_token)
 
     def _resolve_task_config_path(self, task: dict[str, Any]) -> Path:
         """PP6.3：优先用 task.config_path（version 私有 config 绝对路径）；

@@ -84,10 +84,16 @@ def create_task(
     config_name: str,
     priority: int = 0,
 ) -> int:
+    # ADR-0009 PR-1 C6: 入 task 时存当前 ContextVar trace_id（HTTP 请求那一刻
+    # 由 TraceIdMiddleware 已 bind）。无则用 bg-{uuid} 标后台触发（CLI / 测试 /
+    # supervisor 直接拉起）。supervisor dispatcher 后续读这个列 → env 注入
+    # worker 子进程让 worker log 跟用户请求 trace_id 对得上。
+    from .logging import get_trace_id, new_trace_id
+    request_trace_id = get_trace_id() or f"bg-{new_trace_id()}"
     cur = conn.execute(
-        "INSERT INTO tasks(name, config_name, status, priority, created_at) "
-        "VALUES (?, ?, 'pending', ?, ?)",
-        (name, config_name, priority, time.time()),
+        "INSERT INTO tasks(name, config_name, status, priority, created_at, request_trace_id) "
+        "VALUES (?, ?, 'pending', ?, ?, ?)",
+        (name, config_name, priority, time.time(), request_trace_id),
     )
     conn.commit()
     return int(cur.lastrowid)

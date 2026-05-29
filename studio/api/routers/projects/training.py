@@ -579,11 +579,14 @@ def enqueue_version_training(pid: int, vid: int) -> dict[str, Any]:
         label = ver["label"]
         task_name = f"{slug}_{label}"
         config_name = ver["config_name"] or f"proj_{pid}_{label}"  # informational
+        # ADR-0009 PR-1 C6: 同 db.create_task — 存 ContextVar trace_id
+        from studio.infrastructure.logging import get_trace_id, new_trace_id
+        req_tid = get_trace_id() or f"bg-{new_trace_id()}"
         cur = conn.execute(
             "INSERT INTO tasks(name, config_name, status, priority, created_at, "
-            "project_id, version_id, config_path) "
-            "VALUES (?, ?, 'pending', 0, ?, ?, ?, ?)",
-            (task_name, config_name, time.time(), pid, vid, str(cfg_path)),
+            "project_id, version_id, config_path, request_trace_id) "
+            "VALUES (?, ?, 'pending', 0, ?, ?, ?, ?, ?)",
+            (task_name, config_name, time.time(), pid, vid, str(cfg_path), req_tid),
         )
         tid = int(cur.lastrowid)
         conn.commit()
