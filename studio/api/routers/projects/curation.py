@@ -226,13 +226,21 @@ def get_latest_version_job(pid: int, vid: int, kind: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _curation_err_code(exc: curation.CurationError) -> int:
+def _curation_err_code(exc: curation.CurationError) -> None:
+    """PR-2 C5: 同 _preset_err_code — mutate exc.http_status + exc.code 让
+    DomainError handler 翻 dual-write envelope。callsite: `_curation_err_code(exc); raise`."""
     msg = str(exc)
     if "不存在" in msg:
-        return 404
-    if "已存在" in msg or "非法" in msg:
-        return 400
-    return 422
+        exc.http_status = 404
+        exc.code = "curation.not_found"
+    elif "已存在" in msg:
+        exc.http_status = 400
+        exc.code = "curation.exists"
+    elif "非法" in msg:
+        exc.http_status = 400
+        exc.code = "curation.invalid"
+    else:
+        exc.http_status = 422
 
 
 @router.get("/api/projects/{pid}/versions/{vid}/curation")
@@ -241,18 +249,23 @@ def get_curation(pid: int, vid: int) -> dict[str, Any]:
         try:
             return curation.curation_view(conn, pid, vid)
         except curation.CurationError as exc:
-            raise HTTPException(_curation_err_code(exc), str(exc)) from exc
+            _curation_err_code(exc); raise  # PR-2 C5
 
 
-def _duplicate_err_code(exc: duplicate_finder.DuplicateFinderError) -> int:
+def _duplicate_err_code(exc: duplicate_finder.DuplicateFinderError) -> None:
+    """PR-2 C5: 同 _curation_err_code — mutate exc.http_status + exc.code。"""
     msg = str(exc)
     if "not found" in msg or "不存在" in msg:
-        return 404
-    if "invalid" in msg or "非法" in msg:
-        return 400
-    if "not installed" in msg:
-        return 422
-    return 422
+        exc.http_status = 404
+        exc.code = "duplicate.not_found"
+    elif "invalid" in msg or "非法" in msg:
+        exc.http_status = 400
+        exc.code = "duplicate.invalid"
+    elif "not installed" in msg:
+        exc.http_status = 422
+        exc.code = "duplicate.not_installed"
+    else:
+        exc.http_status = 422
 
 
 @router.post("/api/projects/{pid}/preprocess/duplicates/scan")
@@ -311,7 +324,7 @@ def scan_preprocess_duplicates(
                 "status": "failed",
                 "text": str(exc),
             })
-            raise HTTPException(_curation_err_code(exc), str(exc)) from exc
+            _curation_err_code(exc); raise  # PR-2 C5
         except duplicate_finder.DuplicateFinderError as exc:
             bus.publish({
                 "type": "duplicate_scan_progress",
@@ -319,7 +332,7 @@ def scan_preprocess_duplicates(
                 "status": "failed",
                 "text": str(exc),
             })
-            raise HTTPException(_duplicate_err_code(exc), str(exc)) from exc
+            _duplicate_err_code(exc); raise  # PR-2 C5
 
 
 @router.post("/api/projects/{pid}/preprocess/duplicates/apply")
@@ -335,9 +348,9 @@ def apply_preprocess_duplicates(
             )
             project = projects.get_project(conn, pid)
         except curation.CurationError as exc:
-            raise HTTPException(_curation_err_code(exc), str(exc)) from exc
+            _curation_err_code(exc); raise  # PR-2 C5
         except duplicate_finder.DuplicateFinderError as exc:
-            raise HTTPException(_duplicate_err_code(exc), str(exc)) from exc
+            _duplicate_err_code(exc); raise  # PR-2 C5
     if project:
         _publish_project_state(project)
     return result
@@ -369,7 +382,7 @@ def copy_to_train(
                 conn, pid, vid, body.files, body.dest_folder,
             )
         except curation.CurationError as exc:
-            raise HTTPException(_curation_err_code(exc), str(exc)) from exc
+            _curation_err_code(exc); raise  # PR-2 C5
     return result
 
 
@@ -383,7 +396,7 @@ def remove_from_train(
                 conn, pid, vid, body.folder, body.files,
             )
         except curation.CurationError as exc:
-            raise HTTPException(_curation_err_code(exc), str(exc)) from exc
+            _curation_err_code(exc); raise  # PR-2 C5
     return result
 
 
@@ -408,4 +421,4 @@ def folder_op(
                 return {"deleted": body.name}
             raise HTTPException(400, f"unknown op: {body.op}")
         except curation.CurationError as exc:
-            raise HTTPException(_curation_err_code(exc), str(exc)) from exc
+            _curation_err_code(exc); raise  # PR-2 C5
