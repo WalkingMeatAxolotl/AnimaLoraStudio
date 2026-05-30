@@ -285,6 +285,24 @@ def test_build_writes_meta_and_images(tmp_path: Path, fake_booru) -> None:
     assert any(p.suffix == ".png" for p in out.rglob("*.png") if p.parent == out / "5_concept")
 
 
+def test_build_save_tags_caption_is_space_form(tmp_path: Path, fake_booru) -> None:
+    """save_tags 路径写 reg caption 时把 booru 原生下划线 tag 转成空格 —— caption
+    一律空格形式（tag-form 约定：用户可见 / caption = 空格，下划线只在 booru 边界）。"""
+    train = _make_train(tmp_path / "train", {
+        "5_concept": [("100", ["1girl", "blue_hair"]), ("101", ["1girl", "blue_hair"])],
+    })
+    out = tmp_path / "reg"
+    fake_booru._search_results = [[_post(2002, "1girl long_hair blue_hair")]]
+    opts = _opts(train, out, target_count=1, batch_size=1, save_tags=True)
+    reg_builder.build(opts, on_progress=lambda _: None)
+
+    txts = list(out.rglob("*.txt"))
+    assert txts, "save_tags 应当写出 reg caption .txt"
+    content = "\n".join(p.read_text(encoding="utf-8") for p in txts)
+    assert "_" not in content, f"reg caption 不应残留下划线，实际：{content!r}"
+    assert "long hair" in content or "blue hair" in content  # 下划线已转空格
+
+
 def test_build_mirrors_train_subfolder_repeat_prefix(
     tmp_path: Path, fake_booru
 ) -> None:
