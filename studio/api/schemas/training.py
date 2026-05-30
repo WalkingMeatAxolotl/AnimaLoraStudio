@@ -90,7 +90,6 @@ class BatchOp(BaseModel):
 
 
 class RegBuildRequest(BaseModel):
-    # 目标数量永远 = train 总数（与源脚本一致），UI 不暴露
     excluded_tags: list[str] = []
     auto_tag: bool = True
     # A3：reg 集自动打标选 tagger。默认 wd14（保持向后兼容）；目前 UI 暴露 wd14/cltagger
@@ -104,7 +103,18 @@ class RegBuildRequest(BaseModel):
     # A4：build 完后自动跑 dedup + 不够 → incremental 补足循环（最多 N 轮）。
     # 默认开（用户决策 2026-05-30）。手动按钮 (RegPreview "自动去重") 独立保留。
     auto_dedup: bool = True
-    # PP5.5 进阶配置（默认值与源脚本一致）
+    # B1（PR-2）：构建模式
+    # - mirror：镜像 train 子文件夹结构（5_concept/、1_general/ ...），每个子文件夹
+    #   按 train 图数独立拉（旧行为）。target_count 此模式下被忽略。
+    # - flat：所有图进 `1_data/` 单桶；target_count 指定数量（None = train 总数）。
+    # 默认 flat（用户决策 2026-05-30）；mode 切换前提是 reg 集已清空（UI 拦截）。
+    build_mode: str = "flat"
+    # B1：flat 模式下的目标图数；None = train 总图数。mirror 下被忽略。
+    target_count: Optional[int] = None
+    # 注：来源（booru / AI 先验）由前端 SourcePicker 决定调哪个 endpoint
+    # （/reg/build vs /reg/generate-prior），不进本 schema。RegMeta.generation_method
+    # 在 ai 路径里独立写入。
+    # PP5.5 进阶配置（默认值与源脚本一致；仅 booru 模式生效）
     skip_similar: bool = True
     aspect_ratio_filter_enabled: bool = False
     min_aspect_ratio: float = 0.5

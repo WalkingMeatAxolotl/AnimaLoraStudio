@@ -66,6 +66,9 @@ export default function RegularizationPage() {
   // 两按钮（去掉补足，统一一个「开始生成」按钮按 mode 跑）。
   const [mode, setMode] = useState<'full' | 'incremental'>('incremental')
   const [autoDedup, setAutoDedup] = useState(true)
+  // B1（PR-2）— 构建模式 + 目标数（仅 flat 模式生效）。默认 flat，target 留空 = train 总数。
+  const [buildMode, setBuildMode] = useState<'mirror' | 'flat'>('flat')
+  const [targetCount, setTargetCount] = useState<string>('')  // input value (string for blank → null)
   const [apiSource, setApiSource] = useState<'gelbooru' | 'danbooru'>('gelbooru')
   const [advanced, setAdvanced] = useState<AdvancedParams>(ADVANCED_DEFAULTS)
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -75,8 +78,12 @@ export default function RegularizationPage() {
   const jobIdRef = useRef<number | null>(null)
   jobIdRef.current = job?.id ?? null
 
-  // Tab：设置&日志 / 图片预览 / 先验生成。job done 时自动切到图片，让用户看成果。
-  const [activeTab, setActiveTab] = useState<'config' | 'images' | 'ai'>('config')
+  // B2（PR-2）：「设置 & 日志」+「先验生成」合并成单 tab「生成」；顶部 source picker
+  // 决定渲染 Booru 配置面板还是 AI 配置面板。「开始生成」按钮按 source 调对应 endpoint。
+  const [activeTab, setActiveTab] = useState<'generate' | 'images'>('generate')
+  // 来源默认 AI 先验（#8 决策 2026-05-30）：对齐 DreamBooth 原论文 neutral prior。
+  // Booru 路径保留作"省时间"备选（不烧 GPU、更快出图）。
+  const [source, setSource] = useState<'booru' | 'ai'>('ai')
 
   // 先验生成 — base 模型对每张 train 图反向出对照图，无 LoRA 参数（DreamBooth prior preservation）。
   // excluded tag 复用主组件 `excluded` Set，与 booru tab 双向同步。
@@ -179,7 +186,6 @@ export default function RegularizationPage() {
       if (evt.status === 'done' || evt.status === 'failed' || evt.status === 'canceled') {
         void refreshReg()
         void reload()
-        // job 成功完成 → 自动切到图片 tab，让用户看成果
         if (evt.status === 'done') setActiveTab('images')
       }
     } else if (evt.type === 'task_log_appended' && tid && evt.task_id === tid) {
@@ -199,6 +205,32 @@ export default function RegularizationPage() {
   const trainImageCount = activeVersion?.stats?.train_image_count ?? 0
   // 任意一种生成跑着都视为 live —— 防止 booru / AI 并发同时写 reg/。
   const isLive = job?.status === 'running' || job?.status === 'pending' || aiBusy
+
+  // B1（PR-2）— 现有 reg 集结构推断：meta.build_mode 优先（新 meta 写入），
+  // 否则看 reg.files 路径前缀（仅 1_data/ → flat；含 N_xxx 多种 → mirror）。
+  // 空集 → null（mode 可自由切换）。
+  const existingMode = useMemo<'mirror' | 'flat' | null>(() => {
+    if (!reg || !reg.exists || reg.image_count === 0) return null
+    if (reg.meta?.build_mode === 'mirror' || reg.meta?.build_mode === 'flat') {
+      return reg.meta.build_mode
+    }
+    const prefixes = new Set<string>()
+    for (const rel of reg.files) {
+      const idx = rel.indexOf('/')
+      prefixes.add(idx >= 0 ? rel.slice(0, idx) : '')
+    }
+    if (prefixes.size === 1 && prefixes.has('1_data')) return 'flat'
+    return 'mirror'
+  }, [reg])
+  // mode 跟现有结构不一致时禁用切换（incremental 沿用会撞结构；用户必须先清空）
+  const modeLocked = existingMode !== null && existingMode !== buildMode
+
+  // 现有 reg 集存在时，把 buildMode 自动对齐它（避免切到 version 看到错的初始值）。
+  // 用户点 disabled 的下拉看到 tooltip 提示「先清空」。
+  useEffect(() => {
+    if (existingMode && existingMode !== buildMode) setBuildMode(existingMode)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [existingMode])
 
   const toggleTag = (tag: string) => {
     setExcluded((prev) => {
@@ -245,6 +277,7 @@ export default function RegularizationPage() {
       return
     }
     const incremental = mode === 'incremental'
+    const parsedTarget = targetCount.trim() === '' ? null : Number(targetCount)
     const body: RegBuildRequest = {
       excluded_tags: Array.from(excluded),
       auto_tag: autoTag,
@@ -252,6 +285,8 @@ export default function RegularizationPage() {
       api_source: apiSource,
       incremental,
       auto_dedup: autoDedup,
+      build_mode: buildMode,
+      target_count: parsedTarget,
       ...advanced,
     }
     try {
@@ -305,23 +340,20 @@ export default function RegularizationPage() {
       title={t('steps.reg.title')}
       subtitle={t('steps.reg.subtitle')}
       actions={
-        activeTab === 'ai' ? (
-          <button
-            onClick={() => void handleAiGenerate()}
-            disabled={isLive || trainImageCount <= 0}
-            className="btn btn-primary"
-          >
-            {isLive ? t('reg.generatingBtn') : t('reg.aiGenerateBtn')}
-          </button>
-        ) : (
-          <button
-            onClick={() => void startBuild()}
-            disabled={isLive || trainImageCount <= 0}
-            className="btn btn-primary"
-          >
-            {isLive ? t('reg.generatingBtn') : t('reg.startBuildBtn')}
-          </button>
-        )
+        <button
+          onClick={() => {
+            if (source === 'ai') void handleAiGenerate()
+            else void startBuild()
+          }}
+          disabled={isLive || trainImageCount <= 0}
+          className="btn btn-primary"
+        >
+          {isLive
+            ? t('reg.generatingBtn')
+            : source === 'ai'
+              ? t('reg.aiGenerateBtn')
+              : t('reg.startBuildBtn')}
+        </button>
       }
     >
     <div className="flex flex-col h-full gap-3 min-h-0">
@@ -334,12 +366,12 @@ export default function RegularizationPage() {
         disabled={isLive}
       />
 
-      {/* tab 条 */}
+      {/* tab 条（B2：合并到「生成 / 图片」两个） */}
       <div className="flex items-center gap-1 border-b border-subtle shrink-0">
         <TabButton
-          active={activeTab === 'config'}
-          onClick={() => setActiveTab('config')}
-          label={t('reg.tabConfig')}
+          active={activeTab === 'generate'}
+          onClick={() => setActiveTab('generate')}
+          label={t('reg.tabGenerate')}
           badge={isLive ? 'live' : undefined}
         />
         <TabButton
@@ -348,31 +380,56 @@ export default function RegularizationPage() {
           label={t('reg.tabImages')}
           badge={reg && reg.image_count > 0 ? String(reg.image_count) : undefined}
         />
-        <TabButton
-          active={activeTab === 'ai'}
-          onClick={() => setActiveTab('ai')}
-          label={t('reg.tabAi')}
-          badge={aiBusy ? 'live' : aiTask?.status === 'done' ? '✓' : undefined}
-        />
       </div>
 
       {/* tab 内容（占满剩余高度，全宽） */}
-      {activeTab === 'ai' ? (
-        <AiGenPanel
-          trainTags={trainTags}
-          excluded={excluded} onToggle={toggleTag}
-          neg={aiNeg} onNegChange={setAiNeg}
-          width={aiWidth} onWidthChange={setAiWidth}
-          height={aiHeight} onHeightChange={setAiHeight}
-          steps={aiSteps} onStepsChange={setAiSteps}
-          cfg={aiCfg} onCfgChange={setAiCfg}
-          seed={aiSeed} onSeedChange={setAiSeed}
-          incremental={aiIncremental} onIncrementalChange={setAiIncremental}
-          task={aiTask}
-          trainImageCount={trainImageCount}
-        />
-      ) : activeTab === 'config' ? (
+      {activeTab === 'generate' ? (
         <div className="flex flex-col gap-3 min-h-0 flex-1 overflow-y-auto">
+          {/* 来源 picker（B2，PR-2）：默认 AI 先验，可切 Booru */}
+          <section className="rounded-md border border-subtle bg-surface px-3.5 py-2 flex items-center gap-2 text-xs shrink-0">
+            <span className="text-fg-tertiary">{t('reg.sourcePickerLabel')}</span>
+            <label className="flex items-center gap-1 cursor-pointer">
+              <input
+                type="radio"
+                name="reg-source"
+                value="ai"
+                checked={source === 'ai'}
+                onChange={() => setSource('ai')}
+              />
+              <span className="text-fg-secondary">{t('reg.sourceAi')}</span>
+            </label>
+            <label className="flex items-center gap-1 cursor-pointer">
+              <input
+                type="radio"
+                name="reg-source"
+                value="booru"
+                checked={source === 'booru'}
+                onChange={() => setSource('booru')}
+              />
+              <span className="text-fg-secondary">{t('reg.sourceBooru')}</span>
+            </label>
+            <span className="flex-1" />
+            <span className="text-2xs text-fg-tertiary">
+              {source === 'ai' ? t('reg.sourceAiHint') : t('reg.sourceBooruHint')}
+            </span>
+          </section>
+
+          {source === 'ai' ? (
+            <AiGenPanel
+              trainTags={trainTags}
+              excluded={excluded} onToggle={toggleTag}
+              neg={aiNeg} onNegChange={setAiNeg}
+              width={aiWidth} onWidthChange={setAiWidth}
+              height={aiHeight} onHeightChange={setAiHeight}
+              steps={aiSteps} onStepsChange={setAiSteps}
+              cfg={aiCfg} onCfgChange={setAiCfg}
+              seed={aiSeed} onSeedChange={setAiSeed}
+              incremental={aiIncremental} onIncrementalChange={setAiIncremental}
+              task={aiTask}
+              trainImageCount={trainImageCount}
+            />
+          ) : (
+          <>
           <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 flex flex-col gap-2.5 shrink-0">
             <div className="flex flex-wrap items-center gap-2.5 text-xs">
               <span className="text-fg-tertiary">{t('reg.source')}</span>
@@ -385,11 +442,40 @@ export default function RegularizationPage() {
                 <option value="danbooru">Danbooru</option>
               </select>
               <span className="text-fg-tertiary">|</span>
-              <span className="text-fg-tertiary">
-                {t('reg.targetCount')}{' '}
-                <span className="font-mono text-fg-primary font-medium">{trainImageCount}</span>
-                <span className="text-fg-tertiary">{t('reg.mirrorTrain')}</span>
-              </span>
+              <span className="text-fg-tertiary">{t('reg.buildModeLabel')}</span>
+              <select
+                value={buildMode}
+                onChange={(e) => setBuildMode(e.target.value as 'mirror' | 'flat')}
+                disabled={modeLocked}
+                className="input px-2 py-0.5 text-sm"
+                title={modeLocked ? t('reg.buildModeLocked', { mode: existingMode }) : t('reg.buildModeTitle')}
+              >
+                <option value="flat">{t('reg.buildModeFlat')}</option>
+                <option value="mirror">{t('reg.buildModeMirror')}</option>
+              </select>
+              {buildMode === 'flat' ? (
+                <label
+                  className="flex items-center gap-1"
+                  title={t('reg.targetCountTitle', { fallback: trainImageCount })}
+                >
+                  <span className="text-fg-tertiary">{t('reg.targetCount')}</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={targetCount}
+                    onChange={(e) => setTargetCount(e.target.value)}
+                    placeholder={String(trainImageCount)}
+                    className="input input-mono px-1 py-px"
+                    style={{ width: 70 }}
+                  />
+                </label>
+              ) : (
+                <span className="text-fg-tertiary">
+                  {t('reg.targetCount')}{' '}
+                  <span className="font-mono text-fg-primary font-medium">{trainImageCount}</span>
+                  <span className="text-fg-tertiary">{t('reg.mirrorTrain')}</span>
+                </span>
+              )}
               <span className="text-fg-tertiary">|</span>
               <label className="flex items-center gap-1 cursor-pointer">
                 <input
@@ -466,7 +552,8 @@ export default function RegularizationPage() {
               }}
             />
           )}
-
+            </>
+          )}
           {aiTask && (
             <AiTaskLogSection task={aiTask} logs={aiLogs} />
           )}
@@ -1242,8 +1329,8 @@ function RegPreview({
 
   return (
     <section className="rounded-md border border-subtle bg-surface p-2 flex-1 min-h-0 flex flex-col gap-2">
-      {/* tab 条 + 选中数 + 删除按钮 */}
-      <div className="flex items-center gap-1 border-b border-subtle">
+      {/* tab 条（pill chip 风格，对齐 TagEdit）+ 选中数 + 删除按钮 */}
+      <div className="flex items-center gap-1 flex-wrap pb-1.5 border-b border-subtle">
         <RegFolderTab
           label={t('reg.folderAll')}
           count={allItems.length}
@@ -1313,18 +1400,20 @@ function RegFolderTab({
   active: boolean
   onClick: () => void
 }) {
+  // 跟 TagEdit / Preprocess 同款 pill chip 风格（rounded-full + bg-accent 主色填充）。
   return (
     <button
+      type="button"
       onClick={onClick}
-      className={`px-2.5 py-1 text-2xs border-b-2 bg-transparent cursor-pointer transition-colors duration-100 ${
-        active
-          ? 'border-accent text-fg-primary font-medium'
-          : 'border-transparent text-fg-secondary hover:text-fg-primary'
-      }`}
-      style={{ marginBottom: -1 }}
+      className={
+        'px-2 py-0.5 rounded-full text-xs font-medium transition-colors ' +
+        (active
+          ? 'bg-accent text-white'
+          : 'bg-overlay text-fg-secondary hover:bg-accent-soft')
+      }
     >
       <span className="font-mono">{label}</span>
-      <span className="ml-1.5 opacity-50">×{count}</span>
+      <span className="ml-1 opacity-70">{count}</span>
     </button>
   )
 }

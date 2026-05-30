@@ -965,6 +965,10 @@ export interface RegMeta {
    * null = 没跑 / 旧 meta 未带此字段。auto_tagged=true 但此字段为 null
    * 视作旧版本数据（未知 tagger）。 */
   auto_tag_kind?: string | null
+  /** B1（PR-2）—— 该 reg 集生成时的 build_mode；老 meta 无此字段 → 后端
+   * 默认填 'mirror'。前端 mode 切换拦截优先看这个；fallback 才靠 reg.files
+   * 路径前缀推断。 */
+  build_mode?: string
   incremental_runs: number
   // PP5.5 — 后处理摘要（postprocessed_at 为 null 表示未跑或 K 找不到）
   postprocessed_at: number | null
@@ -1013,6 +1017,13 @@ export interface RegBuildRequest {
   /** A4 v2 — build 完后 worker 自动跑 dedup + 不够 incremental 补足循环，
    * 最多 3 轮，在分辨率聚类前。默认 true。 */
   auto_dedup?: boolean
+  /** B1（PR-2）—— 构建模式：
+   * - mirror：镜像 train 子文件夹（5_concept/、1_general/ ...），target_count 忽略
+   * - flat：所有图进 1_data/ 单桶，target_count 决定总图数（null = train 总数）
+   * 默认 flat；切换前提是 reg 集已清空（前端拦截）。 */
+  build_mode?: 'mirror' | 'flat'
+  /** B1（PR-2）—— flat 模式下目标图数；null = 用 train 总图数。 */
+  target_count?: number | null
   // PP5.5 进阶
   skip_similar?: boolean
   aspect_ratio_filter_enabled?: boolean

@@ -317,6 +317,11 @@ def start_reg_build(pid: int, vid: int, body: RegBuildRequest) -> dict[str, Any]
             422,
             f"auto_tag_kind must be one of {sorted(_REG_TAGGER_ALLOWED)}",
         )
+    # B1 — build_mode + target_count 校验
+    if body.build_mode not in {"mirror", "flat"}:
+        raise HTTPException(422, "build_mode must be 'mirror' or 'flat'")
+    if body.target_count is not None and body.target_count <= 0:
+        raise HTTPException(422, "target_count must be > 0 or null")
     _, v, vdir = _version_dir_or_404(pid, vid)
     train = vdir / "train"
     has_image = train.exists() and any(
@@ -338,6 +343,8 @@ def start_reg_build(pid: int, vid: int, body: RegBuildRequest) -> dict[str, Any]
                 "auto_tag": bool(body.auto_tag),
                 "auto_tag_kind": body.auto_tag_kind,
                 "auto_dedup": bool(body.auto_dedup),
+                "build_mode": body.build_mode,
+                "target_count": body.target_count,
                 "api_source": body.api_source,
                 "incremental": bool(body.incremental),
                 "skip_similar": bool(body.skip_similar),

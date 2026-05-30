@@ -191,7 +191,7 @@ def run(job_id: int) -> int:
             user_id=user_id,
             api_key=api_key,
             username=username,
-            target_count=None,  # 永远镜像 train 总数（与源脚本一致）
+            target_count=params.get("target_count"),  # B1: None = 用 train 总数 / mirror 模式忽略
             max_search_tags=max_search_tags,
             # batch_size = 搜索循环内部「每批下多少张后重算缺失 tag」，
             # 与 train 子文件夹镜像无关；走源脚本默认 5，UI 不暴露
@@ -206,6 +206,7 @@ def run(job_id: int) -> int:
             auto_tag=bool(params.get("auto_tag", True)),
             auto_tag_kind=str(params.get("auto_tag_kind") or "wd14"),
             auto_dedup=bool(params.get("auto_dedup", True)),
+            build_mode=str(params.get("build_mode") or "flat"),
             based_on_version=v["label"],
             save_tags=sec.gelbooru.save_tags,
             convert_to_png=sec.gelbooru.convert_to_png,

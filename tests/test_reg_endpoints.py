@@ -154,8 +154,10 @@ def test_start_reg_build_creates_job(client: TestClient) -> None:
     assert job["kind"] == "reg_build"
     assert job["status"] == "pending"
     p_dict = json.loads(job["params"])
-    # 目标数量永远镜像 train 总数 — params 不再有 target_count
-    assert "target_count" not in p_dict
+    # B1（PR-2）：target_count 现在进 params，默认 None（沿用 train 总数）
+    assert p_dict["target_count"] is None
+    # B1：build_mode 默认 flat
+    assert p_dict["build_mode"] == "flat"
     assert p_dict["excluded_tags"] == ["character_x"]
     assert p_dict["auto_tag"] is False
     # 默认进阶参数也透传
@@ -472,6 +474,39 @@ def test_start_reg_build_accepts_cltagger(client: TestClient) -> None:
     with db.connection_for() as conn:
         job = project_jobs.get_job(conn, job_id)
     assert (job.get("params_decoded") or {}).get("auto_tag_kind") == "cltagger"
+
+
+def test_start_reg_build_rejects_invalid_build_mode(client: TestClient) -> None:
+    pid, vid = _make(client)
+    _seed_train(client, pid, vid, "5_concept", {"a.png": ["x"]})
+    r = client.post(
+        f"/api/projects/{pid}/versions/{vid}/reg/build",
+        json={"build_mode": "weird"},
+    )
+    assert r.status_code == 422
+
+
+def test_start_reg_build_rejects_zero_target_count(client: TestClient) -> None:
+    pid, vid = _make(client)
+    _seed_train(client, pid, vid, "5_concept", {"a.png": ["x"]})
+    r = client.post(
+        f"/api/projects/{pid}/versions/{vid}/reg/build",
+        json={"target_count": 0},
+    )
+    assert r.status_code == 422
+
+
+def test_start_reg_build_accepts_mirror_and_target_count(client: TestClient) -> None:
+    pid, vid = _make(client)
+    _seed_train(client, pid, vid, "5_concept", {"a.png": ["x"]})
+    r = client.post(
+        f"/api/projects/{pid}/versions/{vid}/reg/build",
+        json={"build_mode": "mirror", "target_count": 50},
+    )
+    assert r.status_code == 200
+    p_dict = json.loads(r.json()["params"])
+    assert p_dict["build_mode"] == "mirror"
+    assert p_dict["target_count"] == 50
 
 
 def test_start_reg_build_rejects_llm_auto_tag_kind(client: TestClient) -> None:

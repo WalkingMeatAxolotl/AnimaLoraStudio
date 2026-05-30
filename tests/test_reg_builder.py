@@ -135,6 +135,10 @@ def _opts(train: Path, out: Path, **overrides) -> reg_builder.RegBuildOptions:
         blacklist_tags=[],
         auto_tag=False,
         based_on_version="",
+        # B1（PR-2）：schema 默认改 flat 是 user-facing 决策；老 builder test 套件
+        # 仍假设 mirror（镜像 train 子文件夹结构），所以 helper 这里默认 mirror，
+        # flat 测试单独传 build_mode="flat"。
+        build_mode="mirror",
     )
     base.update(overrides)
     return reg_builder.RegBuildOptions(**base)
@@ -301,6 +305,58 @@ def test_build_save_tags_caption_is_space_form(tmp_path: Path, fake_booru) -> No
     content = "\n".join(p.read_text(encoding="utf-8") for p in txts)
     assert "_" not in content, f"reg caption 不应残留下划线，实际：{content!r}"
     assert "long hair" in content or "blue hair" in content  # 下划线已转空格
+
+
+def test_build_flat_mode_outputs_to_1_data_with_target_count(
+    tmp_path: Path, fake_booru
+) -> None:
+    """B1（PR-2）— flat 模式：所有图进 1_data/ 单桶，total_target 来自 opts.target_count，
+    跳过 train 子文件夹镜像。"""
+    train = _make_train(tmp_path / "train", {
+        "5_concept": [
+            ("100", ["1girl", "solo"]),
+            ("101", ["1girl"]),
+        ],
+        "1_general": [
+            ("200", ["solo", "indoors"]),
+        ],
+    })
+    out = tmp_path / "reg"
+    fake_booru._search_results = [
+        [_post(3001, "1girl solo"), _post(3002, "indoors 1girl")],
+    ]
+    opts = _opts(
+        train, out, target_count=2, batch_size=2, build_mode="flat",
+    )
+    meta = reg_builder.build(opts, on_progress=lambda _: None)
+    # 单桶 1_data/；不出 5_concept / 1_general
+    assert (out / "1_data").is_dir()
+    assert not (out / "5_concept").exists()
+    assert not (out / "1_general").exists()
+    # 总数 = 用户给的 target_count
+    assert meta.target_count == 2
+    assert meta.build_mode == "flat"
+
+
+def test_build_mirror_mode_keeps_subfolder_split(
+    tmp_path: Path, fake_booru
+) -> None:
+    """B1（PR-2）— mirror 模式：保持源脚本行为，按 train 子文件夹镜像。"""
+    train = _make_train(tmp_path / "train", {
+        "5_concept": [("100", ["1girl"])],
+        "1_general": [("200", ["solo"])],
+    })
+    out = tmp_path / "reg"
+    fake_booru._search_results = [
+        [_post(4001, "1girl")],
+        [_post(4002, "solo")],
+    ]
+    opts = _opts(train, out, batch_size=1, build_mode="mirror")
+    meta = reg_builder.build(opts, on_progress=lambda _: None)
+    assert (out / "5_concept").is_dir()
+    assert (out / "1_general").is_dir()
+    assert not (out / "1_data").exists()
+    assert meta.build_mode == "mirror"
 
 
 def test_build_mirrors_train_subfolder_repeat_prefix(

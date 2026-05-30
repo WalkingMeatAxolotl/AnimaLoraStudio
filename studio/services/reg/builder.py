@@ -104,6 +104,10 @@ class RegBuildOptions:
     auto_tag: bool = True  # 拉完 reg 后是否跑 tagger
     auto_tag_kind: str = "wd14"  # A3 — tagger 类型；约束在 VALID_TAGGER_NAMES，UI 目前暴露 wd14/cltagger
     auto_dedup: bool = True  # A4 — build 后自动 dedup + 不够补足循环
+    # B1（PR-2）：构建模式。
+    # - "mirror"：源脚本旧行为，按 train 子文件夹镜像，每个子文件夹独立按其图数拉。
+    # - "flat"：所有图进 `1_data/` 单桶；target_count 决定总图数。
+    build_mode: str = "flat"
     based_on_version: str = ""  # 仅用于 meta，不影响逻辑
 
 
@@ -124,6 +128,10 @@ class RegMeta:
     # None = 没跑或跑前 meta；老 meta（无此字段）按 None 解读。auto_tagged=True
     # 但 auto_tag_kind=None 视为「未知 tagger」（旧版本数据）。
     auto_tag_kind: Optional[str] = None
+    # B1（PR-2）：该 reg 集是按哪种 mode 生成的（mirror / flat）。
+    # 老 meta（无此字段）= mirror（PR-1 之前默认）。前端切 mode 用此推断当前结构，
+    # 不一致时拦截 + 提示先清空。
+    build_mode: str = "mirror"
     incremental_runs: int = 0         # 补足跑了多少次（PP5.1）
     # PP5.5 — 后处理摘要（postprocessed_at=None 表示没跑或失败）
     postprocessed_at: Optional[float] = None
@@ -587,10 +595,22 @@ def _build_inner(
         if opts.target_count and opts.target_count > 0
         else structure["total_images"]
     )
-    on_progress(
-        f"[reg] 目标 {total_target} 张（train 总 {structure['total_images']}），"
-        f"子文件夹 {len(structure['subfolders'])} 个"
-    )
+    # B1（PR-2）：build_mode 决定子文件夹分配
+    # - mirror：源脚本旧行为，按 train 子文件夹镜像，每个独立按图数拉
+    # - flat：所有图进 1_data/ 单桶，total_target 一次满足
+    if opts.build_mode == "flat":
+        subfolders_plan: dict[str, dict[str, Any]] = {
+            "1_data": {"image_count": total_target}
+        }
+        on_progress(
+            f"[reg] flat 模式：目标 {total_target} 张，单桶 1_data/"
+        )
+    else:
+        subfolders_plan = structure["subfolders"]
+        on_progress(
+            f"[reg] mirror 模式：目标 {total_target} 张（train 总 "
+            f"{structure['total_images']}），镜像 {len(subfolders_plan)} 个子文件夹"
+        )
 
     # 输出目录
     opts.output_dir.mkdir(parents=True, exist_ok=True)
@@ -620,7 +640,7 @@ def _build_inner(
 
     total_downloaded = 0
     success_subfolder_count = 0
-    for sub_name, sub_data in structure["subfolders"].items():
+    for sub_name, sub_data in subfolders_plan.items():
         try:
             ok, dled = _build_for_subfolder(
                 sub_name,
@@ -680,12 +700,13 @@ def _build_inner(
         train_tag_distribution=top_dist,
         auto_tagged=False,  # worker 在 auto_tag 完成后改写
         incremental_runs=runs,
+        build_mode=opts.build_mode,
     )
     write_meta(opts.output_dir, meta)
 
     on_progress(
         f"[reg] 完成: {total_downloaded}/{total_target}"
-        f" 张（{success_subfolder_count}/{len(structure['subfolders'])} "
+        f" 张（{success_subfolder_count}/{len(subfolders_plan)} "
         f"子文件夹达 80%）"
     )
     return meta
