@@ -200,6 +200,7 @@ def main() -> None:
                     scheduler=scheduler,
                     device=device,
                     dtype=dtype,
+                    seed=seed,
                 )
                 fname = f"gen_{img_idx:04d}_p{pi}_c{ci}_s{seed}.png"
                 out_path = output_dir / fname
@@ -365,6 +366,7 @@ def _run_xy_matrix(
                     scheduler=scheduler,
                     device=device,
                     dtype=dtype,
+                    seed=cur_seed,
                 )
                 fname = f"xy_x{xi:02d}_y{yi:02d}_s{cur_seed}.png"
                 out_path = output_dir / fname

@@ -661,6 +661,7 @@ def _run_generate(
                     device=CACHE.device,
                     dtype=CACHE.dtype,
                     step_callback=preview_callback,
+                    seed=seed,
                 )
                 fname = f"gen_{img_idx:04d}_p{pi}_c{ci}_s{seed}.png"
                 vpath = _virtual_path(task_id, fname)
@@ -785,6 +786,7 @@ def _run_xy(
                     scheduler=scheduler,
                     device=CACHE.device,
                     dtype=CACHE.dtype,
+                    seed=cur_seed,
                 )
                 fname = f"xy_x{xi:02d}_y{yi:02d}_s{cur_seed}.png"
                 vpath = _virtual_path(task_id, fname)

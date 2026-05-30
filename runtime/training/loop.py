@@ -78,7 +78,9 @@ def run(ctx: TrainingContext) -> None:
                 t5_ids = t5_ids.to(ctx.device)
                 t5_attn = t5_attn.to(ctx.device)
                 t5_w = t5_w.to(ctx.device, dtype=torch.float32)
-                cross = ctx.model.preprocess_text_embeds(qwen_emb, t5_ids)
+                # t5_w 透传到 preprocess_text_embeds 内乘到 LLMAdapter 输出上（与
+                # ComfyUI 原生 `comfy/ldm/anima/model.py:198-206` 对齐）。
+                cross = ctx.model.preprocess_text_embeds(qwen_emb, t5_ids, t5xxl_weights=t5_w)
                 if cross.shape[1] < 512:
                     cross = F.pad(cross, (0, 0, 0, 512 - cross.shape[1]))
                 # KV trim：把 padding 截到最近有效 token bucket（64/128/256/512）
