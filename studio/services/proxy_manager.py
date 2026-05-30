@@ -1,67 +1,57 @@
+"""全局 HTTP/HTTPS 代理 helpers。
+
+读 `secrets.proxy` 配置，组装 requests 库要的 proxies dict + 给现有
+`requests.Session` 注入 proxies。当前只覆盖 booru 下载链路；对
+`huggingface_hub` 的 transport-level 代理注入需要单独的 monkeypatch，
+不在本模块范围内（PR #162 原版本里的 `setup_global_httpx_client` 用了
+`huggingface_hub.set_client_factory` —— 该符号在 huggingface_hub 内不存在，
+import 时直接 ImportError；本 hotfix 一并删除该 dead 函数）。
+"""
 from typing import Dict, Optional
 import logging
-import os
-import httpx
-from huggingface_hub import set_client_factory
+
+from .. import secrets
 
 logger = logging.getLogger(__name__)
 
-# 导入Secrets模块，用于获取用户的代理配置
-from .. import secrets 
 
 def get_proxy_dict() -> Optional[Dict[str, str]]:
-    """
-    从secrets配置中读取代理设置，并返回requests库需要的字典格式。
-    如果代理未启用或配置无效，返回None。
-    """
+    """从 secrets 读代理设置，返回 requests 库要的字典格式；未启用返 None。"""
     try:
         cfg = secrets.load().proxy
         if not cfg.enabled:
             return None
-        
-        proxies = {}
-        # 直接使用用户填写的地址，requests库会自行处理
-        if cfg.http_proxy and cfg.http_proxy.startswith('socks5://'):
-            proxies['http'] = cfg.http_proxy
-            proxies['https'] = cfg.http_proxy
+
+        proxies: Dict[str, str] = {}
+        if cfg.http_proxy and cfg.http_proxy.startswith("socks5://"):
+            proxies["http"] = cfg.http_proxy
+            proxies["https"] = cfg.http_proxy
         else:
-            # 原有的HTTP代理逻辑
             if cfg.http_proxy:
-                proxies['http'] = cfg.http_proxy
+                proxies["http"] = cfg.http_proxy
             if cfg.https_proxy:
-                proxies['https'] = cfg.https_proxy
-        
+                proxies["https"] = cfg.https_proxy
+
         logger.info(f"Using proxies: {proxies}")
         return proxies if proxies else None
     except Exception as e:
         logger.error(f"Failed to get proxy: {e}")
         return None
 
-def setup_global_httpx_client():
-    """全局配置 huggingface_hub 的 HTTP 客户端以支持 SOCKS5"""
-    proxy_config = get_proxy_dict()
-    if not proxy_config:
-        return
-    proxy_url = proxy_config.get('http', proxy_config.get('https'))
-    if proxy_url and proxy_url.startswith('socks5://'):
-        # 为 httpx 客户端配置 SOCKS5 代理
-        client = httpx.Client(proxies=proxy_url, transport=httpx.HTTPTransport())
-    else:
-        # 为一般的 HTTP 代理配置
-        client = httpx.Client(proxies=proxy_url)
-    set_client_factory(lambda: client)
 
 def get_no_proxy_list() -> list[str]:
-    """获取不需要代理的地址列表"""
+    """`no_proxy` 字段拆成 host 列表。"""
     try:
-        proxy_cfg = secrets.get().proxy
+        proxy_cfg = secrets.load().proxy
         if not proxy_cfg.no_proxy:
             return []
-        return [host.strip() for host in proxy_cfg.no_proxy.split(',')]
+        return [host.strip() for host in proxy_cfg.no_proxy.split(",")]
     except Exception:
         return []
 
+
 def patch_requests_session(session):
+    """给已有 requests.Session 注入 proxies；未启用代理则原样返回。"""
     proxies = get_proxy_dict()
     if proxies:
         session.proxies.update(proxies)
