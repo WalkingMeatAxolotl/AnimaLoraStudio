@@ -342,8 +342,11 @@ def test_state_max_points_downsamples_losses(
     """PR #37：/api/state 兑现 max_points，losses/lr 长度超过时均匀降采样。"""
     losses = [{"step": i, "loss": 1.0 / (i + 1), "time": float(i)} for i in range(5000)]
     lr_history = [{"step": i, "lr": 1e-4} for i in range(5000)]
+    optimizer_metrics_history = [{"step": i, "actual_lr": 1e-4, "d": 1e-4} for i in range(5000)]
     payload = {
-        "losses": losses, "lr_history": lr_history, "epoch": 0, "step": 4999,
+        "losses": losses, "lr_history": lr_history,
+        "optimizer_metrics_history": optimizer_metrics_history,
+        "epoch": 0, "step": 4999,
         "total_steps": 5000, "speed": 0.0, "samples": [],
         "start_time": None, "config": {},
     }
@@ -355,6 +358,7 @@ def test_state_max_points_downsamples_losses(
     body = resp.json()
     assert len(body["losses"]) == 500
     assert len(body["lr_history"]) == 500
+    assert len(body["optimizer_metrics_history"]) == 500
     # 首尾保留
     assert body["losses"][0]["step"] == 0
     assert body["losses"][-1]["step"] == 4999
