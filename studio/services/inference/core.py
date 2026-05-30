@@ -53,21 +53,29 @@ class LoRASpec:
 
 @dataclass
 class LoRAMeta:
-    """从 safetensors metadata 解析出来的 LoRA 训练参数。"""
+    """从 safetensors metadata 解析出来的 LoRA 训练参数。
+
+    weight_decompose / rs_lora 必须忠实回放训练侧设置 —— 否则推理网络结构
+    与文件不匹配：DoRA 漏 dora_scale 张量（unexpected keys），RS-LoRA 把
+    effective alpha 从 α/√rank 错算成 α/rank，强度被砍 √rank 倍。
+    """
     rank: int
     alpha: float
     algo: str
     factor: int
+    weight_decompose: bool = False
+    rs_lora: bool = False
 
 
 def read_lora_meta(path: str) -> LoRAMeta:
     """从 safetensors 顶层 metadata 读 LoRA 训练参数。
 
-    AnimaLycorisAdapter.save() 写入约定（utils/lycoris_adapter.py:178）：
+    AnimaLycorisAdapter.save() 写入约定（utils/lycoris_adapter.py）：
       - 顶层 metadata: ss_network_dim (rank), ss_network_alpha (alpha)
-      - ss_network_args JSON 内: algo, factor, dropout, ...
+      - ss_network_args JSON 内: algo, factor, weight_decompose, rs_lora, ...
 
-    缺字段或解析失败时回退到默认值（rank=32, alpha=rank, algo=lokr, factor=8）。
+    缺字段或解析失败时回退到默认值（rank=32, alpha=rank, algo=lokr, factor=8,
+    weight_decompose=False, rs_lora=False）。
     """
     from safetensors import safe_open
 
@@ -108,7 +116,17 @@ def read_lora_meta(path: str) -> LoRAMeta:
         except (ValueError, TypeError):
             pass
 
-    return LoRAMeta(rank=rank, alpha=alpha, algo=algo, factor=factor)
+    weight_decompose = bool(ss_args.get("weight_decompose", False))
+    rs_lora = bool(ss_args.get("rs_lora", False))
+
+    return LoRAMeta(
+        rank=rank,
+        alpha=alpha,
+        algo=algo,
+        factor=factor,
+        weight_decompose=weight_decompose,
+        rs_lora=rs_lora,
+    )
 
 
 def apply_loras(
@@ -144,6 +162,8 @@ def apply_loras(
             rank=meta.rank,
             alpha=meta.alpha,
             factor=meta.factor,
+            weight_decompose=meta.weight_decompose,
+            rs_lora=meta.rs_lora,
         )
         adapter.inject(model)
 

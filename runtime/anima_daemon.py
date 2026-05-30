@@ -91,8 +91,10 @@ def _emit_for(req_id: str, kind: str, **extra: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _lora_topology(meta: LoRAMeta) -> tuple[int, float, str, int]:
-    return (meta.rank, meta.alpha, meta.algo, meta.factor)
+def _lora_topology(meta: LoRAMeta) -> tuple[int, float, str, int, bool, bool]:
+    # weight_decompose / rs_lora 改了网络结构（前者加 dora_scale 张量、后者改
+    # effective alpha 公式），不同设置不能走热换权重路径，必须重新 inject。
+    return (meta.rank, meta.alpha, meta.algo, meta.factor, meta.weight_decompose, meta.rs_lora)
 
 
 def _load_lora_state_dict(path: str, device: str, dtype: Any) -> dict[str, Any]:

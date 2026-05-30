@@ -40,7 +40,14 @@ def _patched_adapter(factory: object) -> Iterator[None]:
 
 
 def _write_lora_safetensors(
-    path: Path, *, rank: int, alpha: float, algo: str, factor: int,
+    path: Path,
+    *,
+    rank: int,
+    alpha: float,
+    algo: str,
+    factor: int,
+    weight_decompose: bool = False,
+    rs_lora: bool = False,
 ) -> None:
     """写一个伪 LoRA safetensors，带 ss_* metadata；tensor 内容空。"""
     sd = {"lora_unet_dummy.lokr_w1": torch.zeros(2, 2)}
@@ -52,6 +59,8 @@ def _write_lora_safetensors(
             "algo": algo,
             "factor": factor,
             "preset": "anima_full",
+            "weight_decompose": weight_decompose,
+            "rs_lora": rs_lora,
         }),
     }
     save_file(sd, str(path), metadata=meta)
@@ -101,6 +110,61 @@ def test_read_lora_meta_invalid_fields(tmp_path: Path) -> None:
     assert meta.rank == 32
     assert meta.alpha == 32.0  # alpha fallback to rank
     assert meta.algo == "lokr"
+
+
+def test_read_lora_meta_dora_and_rs_lora(tmp_path: Path) -> None:
+    """DoRA / RS-LoRA 训练标志必须从 ss_network_args 读回。
+
+    回归 bug：训练侧开 weight_decompose=True 写入文件 dora_scale 张量；
+    推理侧若漏读，构造的 LycorisNetwork 不带 DoRA → dora_scale 全部
+    unexpected、forward 缺归一化项 → LoRA 效果错位。
+    RS-LoRA 同理：α/√rank vs α/rank 强度差 √rank 倍。
+    """
+    p = tmp_path / "dora_rs.safetensors"
+    _write_lora_safetensors(
+        p, rank=64, alpha=8.0, algo="lokr", factor=4,
+        weight_decompose=True, rs_lora=True,
+    )
+    meta = read_lora_meta(str(p))
+    assert meta.weight_decompose is True
+    assert meta.rs_lora is True
+
+
+def test_read_lora_meta_defaults_without_dora_rs(tmp_path: Path) -> None:
+    """不显式设置时 weight_decompose / rs_lora 默认 False。"""
+    p = tmp_path / "plain.safetensors"
+    _write_lora_safetensors(p, rank=16, alpha=8.0, algo="lokr", factor=8)
+    meta = read_lora_meta(str(p))
+    assert meta.weight_decompose is False
+    assert meta.rs_lora is False
+
+
+def test_apply_loras_propagates_dora_and_rs_lora(tmp_path: Path) -> None:
+    """apply_loras 必须把 weight_decompose / rs_lora 透传到 AnimaLycorisAdapter，
+    否则 inject 出的网络结构与文件不匹配。"""
+    p = tmp_path / "dora.safetensors"
+    _write_lora_safetensors(
+        p, rank=64, alpha=8.0, algo="lokr", factor=4,
+        weight_decompose=True, rs_lora=True,
+    )
+
+    created: list[MagicMock] = []
+
+    def _fake_adapter(*args: object, **kwargs: object) -> MagicMock:
+        m = MagicMock()
+        m.init_kwargs = dict(kwargs)
+        m.network = MagicMock()
+        m.network.loras = []
+        m.load_state_dict.return_value = MagicMock(missing_keys=[], unexpected_keys=[])
+        created.append(m)
+        return m
+
+    model = MagicMock()
+    with _patched_adapter(_fake_adapter):
+        apply_loras(model, [LoRASpec(path=str(p), scale=1.0)], device="cpu", dtype=torch.float32)
+
+    assert created[0].init_kwargs["weight_decompose"] is True
+    assert created[0].init_kwargs["rs_lora"] is True
 
 
 def test_apply_loras_each_lora_injects_separately(tmp_path: Path) -> None:
