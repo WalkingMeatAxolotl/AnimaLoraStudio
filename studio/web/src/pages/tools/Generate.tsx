@@ -30,7 +30,7 @@ import StatusBadge from './generate/StatusBadge'
 import ViewModeTabs, { type ViewMode } from './generate/ViewModeTabs'
 import { DEFAULT_NEG } from './generate/types'
 import { useProjectLoras } from './generate/useProjectLoras'
-import { cellCount, draftToSpec, parseAxisValues, type XYAxisDraft } from './generate/xy'
+import { buildXYMatrix, cellCount, parseAxisValues, type XYAxisDraft } from './generate/xy'
 
 const GENERATE_PREFS_KEY = 'studio:generate:params:v1'
 
@@ -380,18 +380,20 @@ export default function GeneratePage() {
     }
 
     let xy_matrix: XYMatrixSpec | null = null
+    // single：base LoRA = singleLoras 全发。xy：只发被轴引用的 anchor（见
+    // buildXYMatrix —— xyLoras 会沉积 picker 切项目/版本/删轴遗留的孤儿 anchor，
+    // 整桶发出去会让孤儿叠到每个 cell，正是反复出现的「混进没选过的 LoRA」根因）。
+    let loraConfigs: LoraEntry[] = loras.filter((l) => l.path.trim())
     if (mode === 'xy') {
       // schema 强制 prompts 单条 + count=1
       if (prompts.filter((p) => p.trim()).length > 1) {
         toast(t('generate.xySinglePromptOnly'), 'error')
         return
       }
-      const filteredLoras = loras.filter((l) => l.path.trim())
       try {
-        xy_matrix = {
-          x: draftToSpec(xDraft, filteredLoras),
-          y: yDraft ? draftToSpec(yDraft, filteredLoras) : null,
-        }
+        const built = buildXYMatrix(xDraft, yDraft, loras)
+        xy_matrix = built.xy_matrix
+        loraConfigs = built.loraConfigs
       } catch (e) {
         toast(typeof e === 'string' ? e : String(e), 'error')
         return
@@ -418,7 +420,7 @@ export default function GeneratePage() {
         count: mode === 'xy' ? 1 : count,
         seed,
         cfg_scale: cfgScale,
-        lora_configs: loras.filter((l) => l.path.trim()),
+        lora_configs: loraConfigs,
         // attention_backend 不带：server 自动从 secrets.generate.attention_backend 读
         xy_matrix,
       }

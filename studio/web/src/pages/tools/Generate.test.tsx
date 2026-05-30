@@ -271,7 +271,13 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(lastEnqueueBody!.xy_matrix).toBeNull()
   })
 
-  it('xy 提交只用 xyLoras（不带 singleLoras）', async () => {
+  it('xy 提交不带 singleLoras，也不带未被轴引用的 xyLoras 孤儿', async () => {
+    // 默认 X 轴是 steps（不引用任何 LoRA）。singleLoras=[A] 不该泄漏到 xy；
+    // xyLoras=[B] 是没被轴引用的孤儿（picker 切项目残留），也不该当 base 发。
+    // 修前：xy 整桶发 xyLoras → lora_configs=[B]（B 叠到每个 cell）。
+    // 修后：steps 轴不引用 anchor → lora_configs=[]。
+    // （lora_ckpt 轴的引用/重映射逻辑由 xy.test.ts buildXYMatrix 单测覆盖，
+    //  这里不 seed lora_ckpt 轴 —— picker 在无 projects 的 mock 下 mount 即清空它。）
     seedPrefs({ mode: 'xy', singleLoras: [A], xyLoras: [B] })
     const user = userEvent.setup()
     setup()
@@ -279,7 +285,7 @@ describe('GeneratePage 端到端 smoke', () => {
 
     await user.click(await screen.findByRole('button', { name: /开始生成/ }))
     await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
-    expect(lastEnqueueBody!.lora_configs).toEqual([B])
+    expect(lastEnqueueBody!.lora_configs).toEqual([])
     expect(lastEnqueueBody!.xy_matrix).not.toBeNull()
   })
 
