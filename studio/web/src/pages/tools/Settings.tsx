@@ -28,6 +28,7 @@ import {
 import { useDialog } from '../../components/Dialog'
 import { InfoButton } from '../../components/InfoButton'
 import LLMTaggerWorkspace from '../../components/LLMTaggerWorkspace'
+import { TagListInput } from '../../components/TagsInput'
 import PageHeader from '../../components/PageHeader'
 import { useToast } from '../../components/Toast'
 import { useSettingsData } from '../../lib/SettingsData'
@@ -757,11 +758,11 @@ export default function SettingsPage() {
           </SettingsField>
         </div>
         <SettingsField label="blacklist_tags" desc={t('settings.commaSeparated')}>
-          <input
-            type="text"
-            value={draft.wd14.blacklist_tags.join(', ')}
-            onChange={(e) => update('wd14', 'blacklist_tags', e.target.value.split(',').map((t) => t.trim()).filter(Boolean))}
-            className={textInputClass}                                  />
+          <TagListInput
+            value={draft.wd14.blacklist_tags}
+            onChange={(tags) => update('wd14', 'blacklist_tags', tags)}
+            className={textInputClass}
+          />
         </SettingsField>
         <SettingsField label="batch_size" desc={t('settings.batchSizeHint')}>
           <input
@@ -819,11 +820,11 @@ export default function SettingsPage() {
           </SettingsField>
         </div>
         <SettingsField label="blacklist_tags" desc={t('settings.commaSeparated')}>
-          <input
-            type="text"
-            value={draft.cltagger.blacklist_tags.join(', ')}
-            onChange={(e) => update('cltagger', 'blacklist_tags', e.target.value.split(',').map((t) => t.trim()).filter(Boolean))}
-            className={textInputClass}                                  />
+          <TagListInput
+            value={draft.cltagger.blacklist_tags}
+            onChange={(tags) => update('cltagger', 'blacklist_tags', tags)}
+            className={textInputClass}
+          />
         </SettingsField>
         <SettingsField label="batch_size" desc={t('settings.batchSizeHint')}>
           <input
