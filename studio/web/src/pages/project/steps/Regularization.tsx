@@ -384,7 +384,7 @@ export default function RegularizationPage() {
       {/* tab 内容（占满剩余高度，全宽） */}
       {activeTab === 'generate' ? (
         <div className="flex-1 min-h-0 overflow-y-auto">
-          <div className="max-w-[920px] mx-auto py-2">
+          <div className="max-w-[1380px] py-2">
 
             {/* 来源 segmented control + hint */}
             <SourceSegmented
@@ -662,7 +662,7 @@ function SourceSegmented({
   return (
     <div className="mb-4">
       <div
-        className="inline-flex p-0.5 gap-0.5 rounded-md border border-default bg-sunken"
+        className="inline-flex p-0.5 gap-0.5 rounded-md border border-dim bg-sunken"
       >
         <SourceSegBtn
           active={source === 'ai'}
@@ -1296,10 +1296,14 @@ function TierGroup({
               className={
                 'inline-flex items-center gap-1.5 h-6 px-2.5 rounded-md font-mono text-xs cursor-pointer transition-colors border ' +
                 (on
-                  ? 'border-accent text-accent-hover'
-                  : 'border-default bg-sunken text-fg-secondary hover:text-fg-primary')
+                  ? 'text-accent-hover'
+                  : 'bg-sunken text-fg-secondary hover:text-fg-primary')
               }
-              style={on ? { background: 'var(--accent-soft)' } : undefined}
+              style={
+                on
+                  ? { background: 'var(--accent-soft)', borderColor: 'rgba(237,107,58,0.42)' }
+                  : { borderColor: 'var(--border-default)' }
+              }
               title={on ? '点击取消排除' : '点击加入排除'}
             >
               <span className={on ? 'text-accent' : 'text-fg-tertiary'}>
