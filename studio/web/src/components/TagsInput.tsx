@@ -1,19 +1,19 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 /** 逗号分隔字符串 → 规范化 tag 数组（去首尾空格 / 丢空段）。 */
 export function parseTags(s: string): string[] {
   return s.split(',').map((t) => t.trim()).filter(Boolean)
 }
 
-/** 逗号分隔 tag 列表的裸 <input>（不带 label）。focus 中显示原始文本（逗号 /
- * 空格随便打），onChange 实时解析数组，blur 时归整成 tags.join(', ')。
+/** 逗号分隔 tag 列表输入（不带 label）。两态：
  *
- * 受控的是**文本**而非数组——避免「每次按键把数组 join 回填到 value」把正在
- * 敲的逗号 / 尾随空格当场抹掉（直接绑 `arr.join(', ')` + 每键 split/trim/filter
- * 就是那个「打不了逗号和空格」的 bug）。规范化只在 blur 发生，不碰逐键输入。
+ * - **编辑态（focus）**：纯文本 `<input>`，逗号 / 空格随便打。受控的是文本而非
+ *   数组，避免「每键 join 回填」把正在敲的逗号 / 尾随空格当场抹掉。
+ * - **静止态（blur）**：把 tag 渲染成 chip 一眼可扫；点击 / 聚焦回到编辑态。
  *
- * 给自带外层 label 的场景（如 Settings 的 SettingsField）直接用这个；需要
- * 140px grid label 的用下面的 {@link TagsInput}。 */
+ * blur 时文本归整成 `tags.join(', ')`，再进编辑态看到的是规范形式。
+ * 给自带外层 label 的场景（Settings 的 SettingsField）直接用这个；要 140px
+ * grid label 的用下面的 {@link TagsInput}。 */
 export function TagListInput({ value, onChange, placeholder, disabled, className = '' }: {
   value: string[]
   onChange: (v: string[]) => void
@@ -22,22 +22,56 @@ export function TagListInput({ value, onChange, placeholder, disabled, className
   className?: string
 }) {
   const [text, setText] = useState(value.join(', '))
+  const [editing, setEditing] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+
   // 外部改 value（restore 默认 / 切表单）且与当前文本解析结果不一致 → 重新同步
   // 文本。自己打字触发的 value 变化进不来（那时 parseTags(text) 恒等 value）。
   useEffect(() => {
     if (JSON.stringify(parseTags(text)) !== JSON.stringify(value)) setText(value.join(', '))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value])
+
+  // 进入编辑态 → 把光标放进 input。
+  useEffect(() => {
+    if (editing) inputRef.current?.focus()
+  }, [editing])
+
+  if (editing && !disabled) {
+    return (
+      <input
+        ref={inputRef}
+        type="text"
+        value={text}
+        placeholder={placeholder}
+        onChange={(e) => { setText(e.target.value); onChange(parseTags(e.target.value)) }}
+        onBlur={() => { setText(value.join(', ')); setEditing(false) }}
+        disabled={disabled}
+        className={className}
+      />
+    )
+  }
+
+  // 静止态：chip 展示，点击 / 聚焦进入编辑。
   return (
-    <input
-      type="text"
-      value={text}
-      placeholder={placeholder}
-      onChange={(e) => { setText(e.target.value); onChange(parseTags(e.target.value)) }}
-      onBlur={() => setText(value.join(', '))}
-      disabled={disabled}
-      className={className}
-    />
+    <div
+      role="button"
+      tabIndex={disabled ? -1 : 0}
+      onClick={() => { if (!disabled) setEditing(true) }}
+      onFocus={() => { if (!disabled) setEditing(true) }}
+      className={`${className} flex flex-wrap items-center gap-1 ${disabled ? '' : 'cursor-text'}`}
+    >
+      {value.length === 0
+        ? <span className="text-fg-tertiary">{placeholder}</span>
+        : value.map((tag, i) => (
+            <span
+              key={`${tag}-${i}`}
+              className="inline-flex items-center px-2 py-0.5 rounded-full bg-overlay border border-subtle text-xs font-mono text-fg-primary"
+            >
+              {tag}
+            </span>
+          ))}
+    </div>
   )
 }
 
