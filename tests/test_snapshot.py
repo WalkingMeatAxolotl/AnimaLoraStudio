@@ -104,15 +104,6 @@ def test_write_config_snapshot_handles_dict_args(tmp_path: Path) -> None:
     assert data["sample_prompts"] == []
 
 
-def test_write_config_snapshot_skips_runtime_private_args(tmp_path: Path) -> None:
-    args = argparse.Namespace(lr=1.0, _runtime_total_steps=1000)
-    target = tmp_path / "snap.json"
-    write_config_snapshot(target, args, None)
-    data = json.loads(target.read_text(encoding="utf-8"))
-    assert data["args"]["lr"] == 1.0
-    assert "_runtime_total_steps" not in data["args"]
-
-
 def test_write_config_snapshot_creates_parent_dir(tmp_path: Path) -> None:
     target = tmp_path / "nested" / "deep" / "snap.json"
     args = argparse.Namespace(x=1)

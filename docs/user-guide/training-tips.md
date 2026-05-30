@@ -77,8 +77,8 @@ Anima 是 Cosmos DiT + Flow Matching，跟 Flux/Qwen-Image 同型问题。这些
 - **lr_scheduler**：**必须 `none`**（Schedule-Free 自带调度，叠 cosine 会破坏 averaged
   weights 的收敛保证；UI 自动 disable，pydantic 也会拦下）
 - **ppsf_d_coef**：小数据集（<50 张）建议 `0.5`；正常 `1.0`；过拟合可试 `2.0`
-- **ppsf_prodigy_steps**：`0` 会自动取总步数的 1/4；手动设置时建议总步数的 1/4 到
-  1/2（如总 2000 步设 500-1000），后期冻结 `d`、防跳档
+- **ppsf_prodigy_steps**：建议设为总步数的 1/4 到 1/2（如总 2000 步设
+  500-1000），后期冻结 `d`、防跳档；不确定就留 `0`（不冻结）
 - **ppsf_fused_back_pass**：显存吃紧时开
 - **save / sample 行为**：训练代码自动在 sample 和 save 前调 `optimizer.eval()` 切到
   averaged weights、事后切回。保存的 LoRA 是 averaged 状态，直接可用

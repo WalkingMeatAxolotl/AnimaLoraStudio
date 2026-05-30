@@ -310,11 +310,11 @@
   summary: "依赖修正 + 发布流水线 version 一致性校验"
   entries:
     - kind: improved
-      summary: "PPSF 监控显示实际学习率与 d 值，并自动设置 Prodigy Steps"
+      summary: "PPSF 监控显示实际学习率与 d 值，并明确 Prodigy Steps 语义"
       detail: |
         训练监控不再只显示 Prodigy/PPSF 固定的 base lr=1。训练循环会记录 optimizer 的实际步长指标：PPSF/Prodigy 显示 d 调整后的 actual lr，同时保留 d / base lr / effective lr 历史；监控面板的 learning rate 区块额外显示 d value 曲线，方便判断 d 是否在后期收缩或跳档。
 
-        `ppsf_prodigy_steps=0` 现在表示自动按总步数 1/4 冻结 d；用户手动填写时仍按原值传给 PPSF。Train schema、前端中英文字段说明和训练技巧文档同步更新，避免默认 0 被误解成全程不冻结。
+        `ppsf_prodigy_steps=0` 保持 PPSF 上游语义：不冻结 d。Train schema、前端中英文字段说明和训练技巧文档同步更新，明确手动设置时建议取总步数的 1/4 到 1/2。
 
     - kind: fixed
       summary: "modelscope 提为必装依赖，ModelScope 下载源不再需要运行时手动安装"
