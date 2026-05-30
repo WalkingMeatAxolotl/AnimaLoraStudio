@@ -60,6 +60,12 @@ export default function RegularizationPage() {
   // (project, version) 在 localStorage 恢复，不然用户加的自定义 tag 看着就丢了。
   const [excluded, setExcluded] = useState<Set<string>>(new Set())
   const [autoTag, setAutoTag] = useState(true)
+  // A3 — reg 自动打标的 tagger 选择。UI 暴露 wd14 / cltagger；后端 422 校验同。
+  const [autoTagKind, setAutoTagKind] = useState<'wd14' | 'cltagger'>('wd14')
+  // A4 v2 — build 模式 + 自动去重，默认增量 + 开。模式取代了原来的「开始 / 补足」
+  // 两按钮（去掉补足，统一一个「开始生成」按钮按 mode 跑）。
+  const [mode, setMode] = useState<'full' | 'incremental'>('incremental')
+  const [autoDedup, setAutoDedup] = useState(true)
   const [apiSource, setApiSource] = useState<'gelbooru' | 'danbooru'>('gelbooru')
   const [advanced, setAdvanced] = useState<AdvancedParams>(ADVANCED_DEFAULTS)
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -232,24 +238,27 @@ export default function RegularizationPage() {
     }
   }
 
-  const startBuild = async (incremental = false) => {
+  const startBuild = async () => {
     if (!vid) return
     if (trainImageCount <= 0) {
       toast(t('reg.noTrainForBuild'), 'error')
       return
     }
+    const incremental = mode === 'incremental'
     const body: RegBuildRequest = {
       excluded_tags: Array.from(excluded),
       auto_tag: autoTag,
+      auto_tag_kind: autoTagKind,
       api_source: apiSource,
       incremental,
+      auto_dedup: autoDedup,
       ...advanced,
     }
     try {
       const j = await api.startRegBuild(project.id, vid, body)
       setJob(j)
       setLogs([])
-      toast(t(incremental ? 'reg.enqueuedIncremental' : 'reg.enqueued', { id: j.id }), 'success')
+      toast(t('reg.enqueued', { id: j.id }), 'success')
     } catch (e) {
       toast(String(e), 'error')
     }
@@ -306,7 +315,7 @@ export default function RegularizationPage() {
           </button>
         ) : (
           <button
-            onClick={() => void startBuild(false)}
+            onClick={() => void startBuild()}
             disabled={isLive || trainImageCount <= 0}
             className="btn btn-primary"
           >
@@ -322,7 +331,6 @@ export default function RegularizationPage() {
       <RegStatusBar
         reg={reg}
         onDelete={onDelete}
-        onTopUp={() => void startBuild(true)}
         disabled={isLive}
       />
 
@@ -391,6 +399,39 @@ export default function RegularizationPage() {
                 />
                 <span className="text-fg-secondary">{t('reg.autoTagLabel')}</span>
               </label>
+              <select
+                value={autoTagKind}
+                onChange={(e) => setAutoTagKind(e.target.value as 'wd14' | 'cltagger')}
+                disabled={!autoTag}
+                className="input px-2 py-0.5 text-sm"
+                title={t('reg.autoTagKindTitle')}
+              >
+                <option value="wd14">WD14</option>
+                <option value="cltagger">CLTagger</option>
+              </select>
+              <span className="text-fg-tertiary">|</span>
+              <label
+                className="flex items-center gap-1 cursor-pointer"
+                title={t('reg.autoDedupTitle')}
+              >
+                <input
+                  type="checkbox"
+                  checked={autoDedup}
+                  onChange={(e) => setAutoDedup(e.target.checked)}
+                />
+                <span className="text-fg-secondary">{t('reg.autoDedupLabel')}</span>
+              </label>
+              <span className="text-fg-tertiary">|</span>
+              <span className="text-fg-tertiary">{t('reg.modeLabel')}</span>
+              <select
+                value={mode}
+                onChange={(e) => setMode(e.target.value as 'full' | 'incremental')}
+                className="input px-2 py-0.5 text-sm"
+                title={t('reg.modeTitle')}
+              >
+                <option value="incremental">{t('reg.modeIncremental')}</option>
+                <option value="full">{t('reg.modeFull')}</option>
+              </select>
               <button
                 onClick={() => setAdvancedOpen((v) => !v)}
                 className="text-fg-tertiary bg-transparent border-none cursor-pointer text-xs"
@@ -437,7 +478,12 @@ export default function RegularizationPage() {
             pid={project.id}
             vid={vid}
             reg={reg}
+            isLive={isLive}
             onPick={(idx) => void openPreview(idx)}
+            onDeleted={() => {
+              void refreshReg()
+              void reload()
+            }}
           />
         ) : (
           <section style={{
@@ -531,12 +577,10 @@ function TabButton({
 function RegStatusBar({
   reg,
   onDelete,
-  onTopUp,
   disabled,
 }: {
   reg: RegStatus | null
   onDelete: () => void
-  onTopUp: () => void
   disabled: boolean
 }) {
   const { t } = useTranslation()
@@ -556,8 +600,6 @@ function RegStatusBar({
   }
   const m = reg.meta
   const ago = m ? formatAgo(m.generated_at, t) : '?'
-  const shortfall = m ? m.target_count - m.actual_count : 0
-  const canTopUp = m !== null && shortfall > 0
   return (
     <section className="rounded-sm border border-subtle bg-surface px-3 py-2 flex flex-col gap-1 shrink-0">
       <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -600,16 +642,6 @@ function RegStatusBar({
           </>
         )}
         <span className="flex-1" />
-        {canTopUp && (
-          <button
-            onClick={onTopUp}
-            disabled={disabled}
-            className="btn btn-sm text-accent bg-accent-soft border-accent"
-            title={t('reg.topUpTitle', { actual: m!.actual_count, shortfall })}
-          >
-            {t('reg.topUpBtn', { n: shortfall })}
-          </button>
-        )}
         <button
           onClick={onDelete}
           disabled={disabled}
@@ -1068,16 +1100,22 @@ function RegPreview({
   pid,
   vid,
   reg,
+  isLive,
   onPick,
+  onDeleted,
 }: {
   pid: number
   vid: number
   reg: RegStatus
+  isLive: boolean
   onPick: (idx: number) => void
+  onDeleted: () => void
 }) {
   const { t } = useTranslation()
+  const { toast } = useToast()
+  const { confirm } = useDialog()
   // reg.files 是相对 reg/ 的路径（含子文件夹镜像 train，例如 "5_concept/2001.png"）
-  const items = useMemo(
+  const allItems = useMemo(
     () =>
       reg.files.map((rel) => {
         const idx = rel.lastIndexOf('/')
@@ -1085,43 +1123,209 @@ function RegPreview({
         const name = idx >= 0 ? rel.slice(idx + 1) : rel
         return {
           name: rel,
+          folder,
           thumbUrl: api.versionThumbUrl(pid, vid, 'reg', name, folder),
         }
       }),
     [reg.files, pid, vid]
   )
-  const names = useMemo(() => items.map((it) => it.name), [items])
-  const indexByName = useMemo(() => {
+  // A1 — 按子文件夹分 tab。"" 视作根（reg/ 直接子文件，无子目录的老 build 才有）。
+  // 排序：保留出现顺序（builder 按 train 子文件夹排），但根放最末（通常空）。
+  const folders = useMemo(() => {
+    const seen = new Set<string>()
+    const order: string[] = []
+    for (const it of allItems) {
+      if (!seen.has(it.folder)) {
+        seen.add(it.folder)
+        order.push(it.folder)
+      }
+    }
+    order.sort((a, b) => {
+      if (a === '' && b !== '') return 1
+      if (b === '' && a !== '') return -1
+      return a.localeCompare(b)
+    })
+    return order
+  }, [allItems])
+  const folderCounts = useMemo(() => {
     const m = new Map<string, number>()
-    items.forEach((it, i) => m.set(it.name, i))
+    for (const it of allItems) m.set(it.folder, (m.get(it.folder) ?? 0) + 1)
     return m
-  }, [items])
+  }, [allItems])
+  // null = 全部；否则限定到该 folder
+  const [activeFolder, setActiveFolder] = useState<string | null>(null)
+  const items = useMemo(
+    () =>
+      activeFolder === null
+        ? allItems
+        : allItems.filter((it) => it.folder === activeFolder),
+    [allItems, activeFolder]
+  )
+  const names = useMemo(() => items.map((it) => it.name), [items])
+  // indexByName 用 allItems 的全局索引：onPick 走的是主组件 reg.files 的下标
+  const allIndexByName = useMemo(() => {
+    const m = new Map<string, number>()
+    allItems.forEach((it, i) => m.set(it.name, i))
+    return m
+  }, [allItems])
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [anchor, setAnchor] = useState<string | null>(null)
+  // 切 tab：清空选择 + anchor。多选只在当前 tab 范围内生效。
+  useEffect(() => {
+    setSelected(new Set())
+    setAnchor(null)
+  }, [activeFolder])
+  // reg.files 变化（删除完 refreshReg 后）：把已不存在的 name 从 selected 清掉
+  useEffect(() => {
+    const fileSet = new Set(allItems.map((it) => it.name))
+    setSelected((prev) => {
+      let changed = false
+      const next = new Set<string>()
+      for (const n of prev) {
+        if (fileSet.has(n)) next.add(n)
+        else changed = true
+      }
+      return changed ? next : prev
+    })
+  }, [allItems])
+
   const openByName = (name: string) => {
-    const i = indexByName.get(name)
+    const i = allIndexByName.get(name)
     if (i !== undefined) onPick(i)
   }
+
+  const onDelete = async () => {
+    if (selected.size === 0) return
+    const ok = await confirm(
+      t('reg.confirmDeleteFiles', { n: selected.size }),
+      { tone: 'danger', okText: t('reg.deleteOkText') }
+    )
+    if (!ok) return
+    try {
+      const r = await api.deleteRegFiles(pid, vid, Array.from(selected))
+      toast(t('reg.deleteFilesDone', { n: r.count }), 'success')
+      setSelected(new Set())
+      setAnchor(null)
+      onDeleted()
+    } catch (e) {
+      toast(String(e), 'error')
+    }
+  }
+
+  // A4 — 自动去重：用默认参数扫，把每组里的"推荐删除"项直接删，没 review panel。
+  // reg 集 quality bar 比 train 低，不需要逐组人工选保留。
+  const [dedupBusy, setDedupBusy] = useState(false)
+  const onDedup = async () => {
+    if (dedupBusy || isLive) return
+    const ok = await confirm(t('reg.confirmDedup'), {
+      tone: 'danger', okText: t('reg.dedupOkText'),
+    })
+    if (!ok) return
+    setDedupBusy(true)
+    try {
+      const r = await api.dedupPurgeReg(pid, vid)
+      toast(
+        t('reg.dedupDone', {
+          scanned: r.scanned, groups: r.groups, deleted: r.count,
+        }),
+        'success'
+      )
+      setSelected(new Set())
+      setAnchor(null)
+      onDeleted()
+    } catch (e) {
+      toast(String(e), 'error')
+    } finally {
+      setDedupBusy(false)
+    }
+  }
+
   return (
-    <section className="rounded-md border border-subtle bg-surface p-2 flex-1 min-h-0 overflow-y-auto">
-      <p className="text-2xs text-fg-tertiary px-1 pb-1 m-0">
-        {t('reg.regPreviewTitle', { n: reg.image_count })}
-        {selected.size > 0 && <span className="text-accent">{t('reg.regPreviewSelected', { n: selected.size })}</span>}
-      </p>
-      <ImageGrid
-        items={items}
-        selected={selected}
-        onSelect={(name, e) => {
-          const r = applySelection(selected, name, e, names, anchor)
-          setSelected(r.next)
-          setAnchor(r.anchor)
-        }}
-        onActivate={openByName}
-        onPreview={openByName}
-        clickMode="activate"
-        ariaLabel="reg-preview"
-      />
+    <section className="rounded-md border border-subtle bg-surface p-2 flex-1 min-h-0 flex flex-col gap-2">
+      {/* tab 条 + 选中数 + 删除按钮 */}
+      <div className="flex items-center gap-1 border-b border-subtle">
+        <RegFolderTab
+          label={t('reg.folderAll')}
+          count={allItems.length}
+          active={activeFolder === null}
+          onClick={() => setActiveFolder(null)}
+        />
+        {folders.map((f) => (
+          <RegFolderTab
+            key={f || '__root__'}
+            label={f || t('reg.folderRoot')}
+            count={folderCounts.get(f) ?? 0}
+            active={activeFolder === f}
+            onClick={() => setActiveFolder(f)}
+          />
+        ))}
+        <span className="flex-1" />
+        {selected.size > 0 && (
+          <span className="text-2xs text-accent pr-2">
+            {t('reg.regPreviewSelected', { n: selected.size })}
+          </span>
+        )}
+        <button
+          onClick={() => void onDedup()}
+          disabled={dedupBusy || isLive}
+          className="btn btn-sm"
+          title={t('reg.dedupTitle')}
+        >
+          {dedupBusy ? t('reg.dedupRunning') : t('reg.dedupBtn')}
+        </button>
+        <button
+          onClick={() => void onDelete()}
+          disabled={selected.size === 0 || isLive || dedupBusy}
+          className="btn btn-sm bg-err-soft text-err border-err"
+          title={t('reg.deleteFilesTitle')}
+        >
+          {t('reg.deleteFilesBtn', { n: selected.size })}
+        </button>
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <p className="text-2xs text-fg-tertiary px-1 pb-1 m-0">
+          {t('reg.regPreviewTitle', { n: items.length })}
+        </p>
+        <ImageGrid
+          items={items}
+          selected={selected}
+          onSelect={(name, e) => {
+            const r = applySelection(selected, name, e, names, anchor)
+            setSelected(r.next)
+            setAnchor(r.anchor)
+          }}
+          onActivate={openByName}
+          onPreview={openByName}
+          clickMode="activate"
+          ariaLabel="reg-preview"
+        />
+      </div>
     </section>
+  )
+}
+
+function RegFolderTab({
+  label, count, active, onClick,
+}: {
+  label: string
+  count: number
+  active: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-2.5 py-1 text-2xs border-b-2 bg-transparent cursor-pointer transition-colors duration-100 ${
+        active
+          ? 'border-accent text-fg-primary font-medium'
+          : 'border-transparent text-fg-secondary hover:text-fg-primary'
+      }`}
+      style={{ marginBottom: -1 }}
+    >
+      <span className="font-mono">{label}</span>
+      <span className="ml-1.5 opacity-50">×{count}</span>
+    </button>
   )
 }
 

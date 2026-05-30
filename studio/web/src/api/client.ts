@@ -961,6 +961,10 @@ export interface RegMeta {
   failed_tags: string[]
   train_tag_distribution: Record<string, number>
   auto_tagged: boolean
+  /** A3 — 实际跑过 auto_tag 的 tagger 名（"wd14" / "cltagger" / ...）；
+   * null = 没跑 / 旧 meta 未带此字段。auto_tagged=true 但此字段为 null
+   * 视作旧版本数据（未知 tagger）。 */
+  auto_tag_kind?: string | null
   incremental_runs: number
   // PP5.5 — 后处理摘要（postprocessed_at 为 null 表示未跑或 K 找不到）
   postprocessed_at: number | null
@@ -999,8 +1003,16 @@ export interface VersionConfigResponse {
 export interface RegBuildRequest {
   excluded_tags?: string[]
   auto_tag?: boolean
+  /** A3 — auto-tag 用的 tagger。当前 UI 只暴露 wd14 / cltagger；
+   * 后端 422 校验同样收紧到这两个。 */
+  auto_tag_kind?: 'wd14' | 'cltagger'
   api_source?: 'gelbooru' | 'danbooru'
+  /** 默认 true（增量）—— 用户决策：避免开始生成时清掉昨天好不容易拉的图。
+   * false = full：worker 入口先清 reg/（含 .deleted_ids.json）。 */
   incremental?: boolean
+  /** A4 v2 — build 完后 worker 自动跑 dedup + 不够 incremental 补足循环，
+   * 最多 3 轮，在分辨率聚类前。默认 true。 */
+  auto_dedup?: boolean
   // PP5.5 进阶
   skip_similar?: boolean
   aspect_ratio_filter_enabled?: boolean
@@ -1932,6 +1944,23 @@ export const api = {
     req<{ deleted: boolean; reason?: string }>(
       `/api/projects/${pid}/versions/${vid}/reg`,
       { method: 'DELETE' }
+    ),
+  /** A1 — 批量删 reg 集中的指定图片（含同名 .txt）。
+   * `relative_paths` 是相对 reg/ 的路径列表，跨子文件夹可。
+   * 后端自动把删除的 booru ID 追加到 reg/.deleted_ids.json，
+   * 下次 incremental build 时自动排除。 */
+  deleteRegFiles: (pid: number, vid: number, relative_paths: string[]) =>
+    req<{ deleted: string[]; count: number }>(
+      `/api/projects/${pid}/versions/${vid}/reg/delete-files`,
+      { method: 'POST', body: JSON.stringify({ relative_paths }) }
+    ),
+  /** A4 — 用 preprocess dedup 默认参数扫一遍 reg 集，自动删除每组建议删除项
+   * （不弹 review panel，"推荐删除"直接删；reg 集 quality bar 比 train 低）。
+   * 同步返回 — 大集会慢；前端要 disable 按钮 + spinner。 */
+  dedupPurgeReg: (pid: number, vid: number) =>
+    req<{ scanned: number; groups: number; deleted: string[]; count: number }>(
+      `/api/projects/${pid}/versions/${vid}/reg/dedup-purge`,
+      { method: 'POST' }
     ),
   getRegCaption: (pid: number, vid: number, path: string) =>
     req<{ path: string; tags: string[] }>(

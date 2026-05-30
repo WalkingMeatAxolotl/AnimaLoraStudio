@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 161,
+  "count": 163,
   "routes": [
     {
       "path": "/",
@@ -831,6 +831,22 @@
         "GET"
       ],
       "name": "get_reg_caption",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/reg/dedup-purge",
+      "methods": [
+        "POST"
+      ],
+      "name": "dedup_purge_reg",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/reg/delete-files",
+      "methods": [
+        "POST"
+      ],
+      "name": "delete_reg_files",
       "type": "APIRoute"
     },
     {

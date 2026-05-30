@@ -101,7 +101,9 @@ class RegBuildOptions:
     remove_alpha_channel: bool = False
 
     # 后置
-    auto_tag: bool = True  # 拉完 reg 后是否跑 WD14
+    auto_tag: bool = True  # 拉完 reg 后是否跑 tagger
+    auto_tag_kind: str = "wd14"  # A3 — tagger 类型；约束在 VALID_TAGGER_NAMES，UI 目前暴露 wd14/cltagger
+    auto_dedup: bool = True  # A4 — build 后自动 dedup + 不够补足循环
     based_on_version: str = ""  # 仅用于 meta，不影响逻辑
 
 
@@ -118,6 +120,10 @@ class RegMeta:
     failed_tags: list[str]            # 搜索失败的 tag
     train_tag_distribution: dict[str, int]  # train tag 频率（top 50）
     auto_tagged: bool
+    # A3 — 实际跑过 auto_tag 的 tagger 名（"wd14" / "cltagger" / ...）。
+    # None = 没跑或跑前 meta；老 meta（无此字段）按 None 解读。auto_tagged=True
+    # 但 auto_tag_kind=None 视为「未知 tagger」（旧版本数据）。
+    auto_tag_kind: Optional[str] = None
     incremental_runs: int = 0         # 补足跑了多少次（PP5.1）
     # PP5.5 — 后处理摘要（postprocessed_at=None 表示没跑或失败）
     postprocessed_at: Optional[float] = None
@@ -157,6 +163,7 @@ def _build_for_subfolder(
     cancel_event: Optional[threading.Event],
     pre_existing: Optional[dict[str, Any]] = None,  # PP5.1
     client: Optional[booru_pool.BooruClient] = None,  # PP9
+    deleted_ids: Optional[set[str]] = None,  # A2 — 用户从 UI 删过的 booru ID
 ) -> tuple[bool, int]:
     """单子文件夹批量循环。返回 (success_80%达成, 实际下载数)。"""
     label = subfolder_name or "<root>"
@@ -181,6 +188,15 @@ def _build_for_subfolder(
     downloaded_ids: set[str] = set()
     skipped = 0
     failed = 0
+
+    # A2 — 用户从 UI 删过的 booru ID 并入 downloaded_ids；这样 search 阶段
+    # 的 `exclude_ids=downloaded_ids` 自动把它们排除掉，避免增量补足再拉回来。
+    # 不计入 downloaded_count，因为它们已经不在盘上了。
+    if deleted_ids:
+        downloaded_ids.update(deleted_ids)
+        on_progress(
+            f"  [a2] 排除已删 booru ID {len(deleted_ids)} 个（来自 reg/.deleted_ids.json）"
+        )
 
     # PP5.1 — incremental：把已有图作为「已下载」计入起点 + 累加 current_weights
     if pre_existing and pre_existing.get("count"):
@@ -591,6 +607,13 @@ def _build_inner(
             f"{len(pre_existing_per_sub)} 个子文件夹"
         )
 
+    # A2 — 用户从 UI 删除过的 booru ID（含跨子文件夹），无论 incremental 与否都
+    # 应排除：fresh build 时 .deleted_ids.json 已被 DELETE /reg 清掉；
+    # incremental 时这个集合才非空，避免补足把删除的图再拉回。
+    deleted_ids = read_deleted_ids(opts.output_dir)
+    if deleted_ids:
+        on_progress(f"[reg] 已删 booru ID 共 {len(deleted_ids)} 个（A2 排除）")
+
     target_resolution = structure.get("median_resolution")
     target_aspect_ratio = structure.get("median_aspect_ratio")
     resolution_std = structure.get("resolution_std")
@@ -618,6 +641,7 @@ def _build_inner(
                 cancel_event=cancel_event,
                 pre_existing=pre_existing_per_sub.get(sub_name),
                 client=client,
+                deleted_ids=deleted_ids,
             )
             if ok:
                 success_subfolder_count += 1
@@ -702,13 +726,87 @@ def read_meta(reg_dir: Path) -> Optional[RegMeta]:
         return None
 
 
-def update_meta_auto_tagged(reg_dir: Path, auto_tagged: bool) -> None:
-    """auto_tag 完成后改写 meta.auto_tagged。"""
+def update_meta_auto_tagged(
+    reg_dir: Path, auto_tagged: bool, kind: Optional[str] = None,
+) -> None:
+    """auto_tag 完成后改写 meta.auto_tagged，同时记录使用的 tagger 名。
+
+    `kind=None` 时只动 `auto_tagged`，不动 `auto_tag_kind`（兼容旧 caller）。
+    新 caller 应传 kind 一起写。
+    """
     m = read_meta(reg_dir)
     if m is None:
         return
     m.auto_tagged = auto_tagged
+    if kind is not None:
+        m.auto_tag_kind = kind if auto_tagged else None
     write_meta(reg_dir, m)
+
+
+# ---------------------------------------------------------------------------
+# A2 — 用户删除黑名单（reg/.deleted_ids.json）
+# ---------------------------------------------------------------------------
+
+
+DELETED_IDS_FILENAME = ".deleted_ids.json"
+
+
+def deleted_ids_path(reg_dir: Path) -> Path:
+    return reg_dir / DELETED_IDS_FILENAME
+
+
+def read_deleted_ids(reg_dir: Path) -> set[str]:
+    """读 reg/.deleted_ids.json；不存在 / 损坏返回空 set。"""
+    import json
+    p = deleted_ids_path(reg_dir)
+    if not p.exists():
+        return set()
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return {str(x) for x in data if x}
+    except Exception:
+        pass
+    return set()
+
+
+def clear_reg_dir(reg_dir: Path) -> None:
+    """清空 reg/ 内所有内容（图、子文件夹、meta、`.deleted_ids.json` 等），
+    保留空目录本身。
+
+    full-mode build 入口用：用户语义是「从零开始」，所以 `.deleted_ids.json`
+    也一起清掉（如果想保留 deleted 偏好，应该选 incremental mode）。
+
+    跟 `DELETE /api/projects/{pid}/versions/{vid}/reg` 端点行为一致 ——
+    那个端点也是 iterdir + rmtree/unlink children。
+    """
+    import shutil
+    if not reg_dir.exists():
+        return
+    for child in reg_dir.iterdir():
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+
+def append_deleted_ids(reg_dir: Path, new_ids: list[str]) -> None:
+    """把 new_ids（booru ID = 文件名 stem）追加到 reg/.deleted_ids.json，去重保序。
+
+    DELETE /reg 端点清 reg/ 时会一并清掉这个文件（按 rglob 通配删 children），
+    所以 fresh build 不会看到上轮的删除黑名单。
+    """
+    import json
+    if not new_ids:
+        return
+    p = deleted_ids_path(reg_dir)
+    existing = read_deleted_ids(reg_dir)
+    merged = sorted(existing | {str(x) for x in new_ids if x})
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(
+        json.dumps(merged, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def update_meta_postprocess(

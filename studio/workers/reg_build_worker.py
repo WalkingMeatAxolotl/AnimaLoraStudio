@@ -42,7 +42,11 @@ from studio.services.runtime import onnxruntime as onnxruntime_setup  # noqa: F4
 from studio import db, secrets
 from studio.services.projects import jobs as project_jobs, projects, versions
 from studio.services.dataset.scan import IMAGE_EXTS
-from studio.services.reg import builder as reg_builder, postprocess as reg_postprocess
+from studio.services.reg import (
+    builder as reg_builder,
+    dedup as reg_dedup,
+    postprocess as reg_postprocess,
+)
 from studio.services.dataset import tagedit
 
 
@@ -95,18 +99,23 @@ def _run_postprocess(
     )
 
 
-def _run_auto_tag(reg_dir: Path, progress) -> bool:
-    """内联跑 WD14 给 reg 集打标，失败返回 False。"""
+def _run_auto_tag(reg_dir: Path, progress, kind: str = "wd14") -> bool:
+    """内联跑 tagger 给 reg 集打标，失败返回 False。
+
+    A3 — `kind` 走 `studio.services.tagging.base.get_tagger`；目前 UI 暴露
+    wd14 / cltagger，但底层支持 VALID_TAGGER_NAMES 全集。LLM / JoyCaption 后续
+    PR 加，注意它们对 reg 图量（可能比 train 大）的体感是慢/贵。
+    """
     images = _collect_reg_images(reg_dir)
     if not images:
         progress("[auto-tag] 没有图，跳过")
         return False
-    progress(f"[auto-tag] 启动 WD14，{len(images)} 张图")
+    progress(f"[auto-tag] 启动 {kind}，{len(images)} 张图")
     try:
         from studio.services.tagging.base import get_tagger
-        tagger = get_tagger("wd14")
+        tagger = get_tagger(kind)
         tagger.prepare()
-        progress("[auto-tag] WD14 模型就绪")
+        progress(f"[auto-tag] {kind} 模型就绪")
         ok = 0
         errs = 0
         for r in tagger.tag(
@@ -195,19 +204,28 @@ def run(job_id: int) -> int:
             excluded_tags=list(params.get("excluded_tags") or []),
             blacklist_tags=list(sec.download.exclude_tags or []),
             auto_tag=bool(params.get("auto_tag", True)),
+            auto_tag_kind=str(params.get("auto_tag_kind") or "wd14"),
+            auto_dedup=bool(params.get("auto_dedup", True)),
             based_on_version=v["label"],
             save_tags=sec.gelbooru.save_tags,
             convert_to_png=sec.gelbooru.convert_to_png,
             remove_alpha_channel=sec.gelbooru.remove_alpha_channel,
         )
-        incremental = bool(params.get("incremental", False))
+        incremental = bool(params.get("incremental", True))
         pp_method = str(params.get("postprocess_method", "smart"))
         pp_max_crop = float(params.get("postprocess_max_crop_ratio", 0.1))
         progress(
             f"[start] version={v['label']} api={api_source} "
             f"max_tags={max_search_tags} auto_tag={opts.auto_tag} "
-            f"incremental={incremental} pp={pp_method}/{pp_max_crop}"
+            f"incremental={incremental} auto_dedup={opts.auto_dedup} "
+            f"pp={pp_method}/{pp_max_crop}"
         )
+
+        # full mode：先清掉 reg/（图、子文件夹、meta、.deleted_ids.json），
+        # 用户语义是「从零开始」。incremental mode 保留所有已有内容。
+        if not incremental and output_dir.exists():
+            progress("[start] full mode：清空 reg/ 已有内容")
+            reg_builder.clear_reg_dir(output_dir)
 
         meta = reg_builder.build(
             opts,
@@ -217,18 +235,56 @@ def run(job_id: int) -> int:
         )
         progress(f"[reg-done] actual={meta.actual_count}/{meta.target_count}")
 
-        # PP5.5 — 分辨率聚类后处理（auto_tag 之前，因为打标基于最终图）
+        # A4 — auto_dedup：build 后扫重复 → 每组留 1 张其余删 → 不够则
+        # incremental 补足。最多 MAX_DEDUP_ROUNDS 轮，每轮删数为 0 提前退出。
+        if opts.auto_dedup and meta.actual_count > 0:
+            MAX_DEDUP_ROUNDS = 3
+            for r in range(MAX_DEDUP_ROUNDS):
+                if cancel_event.is_set():
+                    progress("[dedup] 用户中止")
+                    break
+                progress(f"[dedup r{r + 1}/{MAX_DEDUP_ROUNDS}] 扫描重复…")
+                to_delete = reg_dedup.scan_for_dedup(output_dir)
+                if not to_delete:
+                    progress(f"[dedup r{r + 1}] 无可删项，结束")
+                    break
+                purged = reg_dedup.purge_paths(output_dir, to_delete)
+                progress(f"[dedup r{r + 1}] 删 {purged['count']} 张")
+                if purged["count"] == 0:
+                    break  # scan 给了但全部 unlink 失败 / 不存在 → 防死循环
+                meta = reg_builder.read_meta(output_dir) or meta
+                shortfall = meta.target_count - meta.actual_count
+                if shortfall <= 0:
+                    progress(f"[dedup r{r + 1}] 已达目标，结束")
+                    break
+                progress(
+                    f"[dedup r{r + 1}] 缺 {shortfall} 张，自动 incremental 补足"
+                )
+                meta = reg_builder.build(
+                    opts,
+                    on_progress=progress,
+                    cancel_event=cancel_event,
+                    incremental=True,
+                )
+                progress(
+                    f"[dedup r{r + 1}] 补足后 actual={meta.actual_count}/{meta.target_count}"
+                )
+
+        # PP5.5 — 分辨率聚类后处理（auto_tag 之前，因为打标基于最终图）。
+        # A4 顺序：必须在 dedup 之后 —— postprocess 会 resize 图，phash 会变。
         if meta.actual_count > 0:
             _run_postprocess(
                 output_dir, progress, cancel_event,
                 method=pp_method, max_crop_ratio=pp_max_crop,
             )
 
-        # auto_tag：拉完后内联跑 WD14
+        # auto_tag：拉完 + 后处理后内联跑选定 tagger
         auto_ok = False
         if opts.auto_tag and meta.actual_count > 0:
-            auto_ok = _run_auto_tag(output_dir, progress)
-            reg_builder.update_meta_auto_tagged(output_dir, auto_ok)
+            auto_ok = _run_auto_tag(output_dir, progress, kind=opts.auto_tag_kind)
+            reg_builder.update_meta_auto_tagged(
+                output_dir, auto_ok, kind=opts.auto_tag_kind,
+            )
 
         return 0 if meta.actual_count > 0 else 1
     except Exception as exc:

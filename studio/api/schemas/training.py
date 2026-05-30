@@ -93,8 +93,17 @@ class RegBuildRequest(BaseModel):
     # 目标数量永远 = train 总数（与源脚本一致），UI 不暴露
     excluded_tags: list[str] = []
     auto_tag: bool = True
+    # A3：reg 集自动打标选 tagger。默认 wd14（保持向后兼容）；目前 UI 暴露 wd14/cltagger
+    # 两个选项。LLM / JoyCaption 单独 PR 加，因 reg 图量大，慢/贵不适合默认路径。
+    auto_tag_kind: str = "wd14"
     api_source: str = "gelbooru"
-    incremental: bool = False  # PP5.1：补足 — 不清空已有图，只补缺口
+    # 默认增量（用户决策 2026-05-30）：reg 集很多时候希望沿用已有 + 只补缺，
+    # 不希望开始生成时把昨天好不容易拉到的图清掉。full mode 走 worker 内
+    # `clear_reg_dir` 把 reg/ 整个清零（含 .deleted_ids.json）。
+    incremental: bool = True
+    # A4：build 完后自动跑 dedup + 不够 → incremental 补足循环（最多 N 轮）。
+    # 默认开（用户决策 2026-05-30）。手动按钮 (RegPreview "自动去重") 独立保留。
+    auto_dedup: bool = True
     # PP5.5 进阶配置（默认值与源脚本一致）
     skip_similar: bool = True
     aspect_ratio_filter_enabled: bool = False
@@ -102,6 +111,16 @@ class RegBuildRequest(BaseModel):
     max_aspect_ratio: float = 2.0
     postprocess_method: str = "smart"  # smart | stretch | crop
     postprocess_max_crop_ratio: float = 0.1
+
+
+class RegDeleteFilesRequest(BaseModel):
+    """批量删除 reg 集中的指定图片（含同名 .txt caption）。
+
+    `relative_paths` 是相对 reg/ 的路径列表，支持跨子文件夹。
+    后端会把删除的 booru ID（= 文件名 stem）追加到 `reg/.deleted_ids.json`，
+    增量补足（incremental build）时自动从搜索结果里排除，防止再下回来。
+    """
+    relative_paths: list[str]
 
 
 class RegAiRequest(BaseModel):

@@ -48,6 +48,7 @@ from ...schemas.training import (
     FromPresetRequest,
     RegAiRequest,
     RegBuildRequest,
+    RegDeleteFilesRequest,
     SaveAsPresetRequest,
     TagJobRequest,
 )
@@ -69,7 +70,7 @@ from ....paths import STUDIO_DATA, safe_join
 from ....services import model_downloader, version_config
 from ....services import presets as preset_flow
 from ....services.tagging import caption_snapshot
-from ....services.reg import builder as reg_builder
+from ....services.reg import builder as reg_builder, dedup as reg_dedup
 from ....services.dataset import tagedit
 from ....services.tagging.base import VALID_TAGGER_NAMES
 
@@ -293,6 +294,12 @@ def get_reg_status(pid: int, vid: int) -> dict[str, Any]:
     }
 
 
+# A3 — reg auto-tag 本轮只在 UI 暴露 wd14 / cltagger。底层 VALID_TAGGER_NAMES
+# 含 LLM / JoyCaption，但它们对 reg 体积（>train）慢/贵，留单独 PR；422 校验
+# 兜底防 contributor 误传。
+_REG_TAGGER_ALLOWED = {"wd14", "cltagger"}
+
+
 @router.post("/api/projects/{pid}/versions/{vid}/reg/build")
 def start_reg_build(pid: int, vid: int, body: RegBuildRequest) -> dict[str, Any]:
     if body.api_source not in {"gelbooru", "danbooru"}:
@@ -305,6 +312,11 @@ def start_reg_build(pid: int, vid: int, body: RegBuildRequest) -> dict[str, Any]
         0.0 < body.min_aspect_ratio < body.max_aspect_ratio
     ):
         raise HTTPException(400, "min_aspect_ratio must be < max_aspect_ratio (both > 0)")
+    if body.auto_tag_kind not in _REG_TAGGER_ALLOWED:
+        raise HTTPException(
+            422,
+            f"auto_tag_kind must be one of {sorted(_REG_TAGGER_ALLOWED)}",
+        )
     _, v, vdir = _version_dir_or_404(pid, vid)
     train = vdir / "train"
     has_image = train.exists() and any(
@@ -324,6 +336,8 @@ def start_reg_build(pid: int, vid: int, body: RegBuildRequest) -> dict[str, Any]
                 "version_id": vid,
                 "excluded_tags": list(body.excluded_tags),
                 "auto_tag": bool(body.auto_tag),
+                "auto_tag_kind": body.auto_tag_kind,
+                "auto_dedup": bool(body.auto_dedup),
                 "api_source": body.api_source,
                 "incremental": bool(body.incremental),
                 "skip_similar": bool(body.skip_similar),
@@ -446,6 +460,76 @@ def delete_reg(pid: int, vid: int) -> dict[str, Any]:
     except OSError as exc:
         raise HTTPException(500, f"删除失败: {exc}") from exc
     return {"deleted": True}
+
+
+@router.post("/api/projects/{pid}/versions/{vid}/reg/delete-files")
+def delete_reg_files(
+    pid: int, vid: int, body: RegDeleteFilesRequest,
+) -> dict[str, Any]:
+    """按相对路径批量删 reg 集中的图（含同名 .txt caption），更新 meta.actual_count,
+    把删除的 booru ID（文件名 stem）追加到 reg/.deleted_ids.json。
+
+    增量补足时 builder 会读这个文件，把 ID 加进 search exclude，避免同一张
+    booru post 又被拉回来。
+
+    body.relative_paths 是相对 reg/ 的路径列表，跨子文件夹也可以；路径越界
+    走 _safe_join_or_400 抛 400。
+    """
+    if not body.relative_paths:
+        raise HTTPException(400, "relative_paths is empty")
+    _, _, vdir = _version_dir_or_404(pid, vid)
+    rdir = _reg_dir(vdir)
+    if not rdir.exists():
+        raise HTTPException(404, "reg dir not found")
+
+    # 端点入口：每条路径走 _safe_join_or_400 防 traversal；合法的转回 rdir
+    # 相对形式喂给 reg_dedup.purge_paths。worker 走 dedup.scan_for_dedup
+    # 拿到的路径必合法，所以 dedup 模块内部不再做 traversal 校验。
+    validated_rels: list[str] = []
+    for rel in body.relative_paths:
+        if not rel:
+            continue
+        parts = [p for p in rel.replace("\\", "/").split("/") if p]
+        if not parts:
+            continue
+        target = _safe_join_or_400(rdir, *parts)
+        validated_rels.append(target.relative_to(rdir).as_posix())
+
+    return reg_dedup.purge_paths(rdir, validated_rels)
+
+
+@router.post("/api/projects/{pid}/versions/{vid}/reg/dedup-purge")
+def dedup_purge_reg(pid: int, vid: int) -> dict[str, Any]:
+    """A4 — 用 preprocess dedup 默认参数扫 reg 集，自动删每组里"推荐删除"项
+    （每组保留 group[0]，其余删 + 写 .deleted_ids.json + meta 递减）。
+
+    用户手动入口；worker 在 auto_dedup=True 时 build 后会用同一套
+    reg_dedup 模块自动跑。reg 集 quality bar 比 train 低 → 不弹 review panel。
+
+    同步返回；图量大时慢（O(n^2)）。
+    """
+    _, _, vdir = _version_dir_or_404(pid, vid)
+    rdir = _reg_dir(vdir)
+    if not rdir.exists():
+        raise HTTPException(404, "reg dir not found")
+
+    to_delete = reg_dedup.scan_for_dedup(rdir)
+    scanned = sum(
+        1 for f in rdir.rglob("*")
+        if f.is_file() and f.suffix.lower() in datasets.IMAGE_EXTS
+    )
+    if not to_delete:
+        return {"scanned": scanned, "groups": 0, "deleted": [], "count": 0}
+
+    result = reg_dedup.purge_paths(rdir, to_delete)
+    return {
+        "scanned": scanned,
+        # groups 用「待删项数」近似（每组 >= 1 张被删）；scan_for_dedup 不
+        # 暴露 group 总数，用户也只关心删了多少。
+        "groups": len(to_delete),
+        "deleted": result["deleted"],
+        "count": result["count"],
+    }
 
 
 # ---------------------------------------------------------------------------

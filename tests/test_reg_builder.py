@@ -508,6 +508,102 @@ def test_build_incremental_no_op_when_target_already_met(
     assert {p.name for p in (out / "5_concept").glob("*.png")} == {"5000.png"}
 
 
+# ---------------------------------------------------------------------------
+# A2 — deleted_ids.json 排除
+# ---------------------------------------------------------------------------
+
+
+def test_deleted_ids_roundtrip(tmp_path: Path) -> None:
+    out = tmp_path / "reg"
+    out.mkdir()
+    assert reg_builder.read_deleted_ids(out) == set()
+    reg_builder.append_deleted_ids(out, ["42", "99"])
+    assert reg_builder.read_deleted_ids(out) == {"42", "99"}
+    # 追加 + 去重
+    reg_builder.append_deleted_ids(out, ["99", "100"])
+    assert reg_builder.read_deleted_ids(out) == {"42", "99", "100"}
+
+
+def test_deleted_ids_corrupt_file_returns_empty(tmp_path: Path) -> None:
+    out = tmp_path / "reg"
+    out.mkdir()
+    (out / ".deleted_ids.json").write_text("not json", encoding="utf-8")
+    assert reg_builder.read_deleted_ids(out) == set()
+
+
+def test_build_excludes_previously_deleted_ids(
+    tmp_path: Path, fake_booru,
+) -> None:
+    """A2：incremental 时已删 ID 进 downloaded_ids，search 自动 exclude；
+    候选只剩下未删的，不会被重新拉回。"""
+    train = _make_train(tmp_path / "train", {
+        "5_concept": [
+            ("100", ["1girl", "solo"]),
+            ("101", ["1girl"]),
+        ],
+    })
+    out = tmp_path / "reg"
+    out.mkdir(parents=True)
+    # 用户之前删过 booru ID=7777，写到 deleted_ids
+    reg_builder.append_deleted_ids(out, ["7777"])
+    # search 第一波同时返回 7777（被删过）和 8888（新的）
+    fake_booru._search_results = [
+        [_post(7777, "1girl solo"), _post(8888, "1girl solo")],
+    ]
+    opts = _opts(train, out, target_count=1, batch_size=1)
+    reg_builder.build(opts, on_progress=lambda _: None, incremental=False)
+    # 7777 不该被下载（exclude）；只能选 8888
+    downloaded = {p.stem for p in out.rglob("*.png")}
+    assert "7777" not in downloaded
+    assert "8888" in downloaded
+
+
+# ---------------------------------------------------------------------------
+# A3 — auto_tag_kind 字段
+# ---------------------------------------------------------------------------
+
+
+def test_reg_build_options_default_auto_tag_kind_is_wd14() -> None:
+    opts = reg_builder.RegBuildOptions(
+        train_dir=Path("/tmp"), output_dir=Path("/tmp/out"),
+    )
+    assert opts.auto_tag_kind == "wd14"
+
+
+def test_update_meta_auto_tagged_writes_kind(tmp_path: Path) -> None:
+    out = tmp_path / "reg"
+    out.mkdir()
+    m = reg_builder.RegMeta(
+        generated_at=1.0, based_on_version="x", api_source="gelbooru",
+        target_count=2, actual_count=2, source_tags=[],
+        excluded_tags=[], blacklist_tags=[], failed_tags=[],
+        train_tag_distribution={}, auto_tagged=False,
+    )
+    reg_builder.write_meta(out, m)
+    reg_builder.update_meta_auto_tagged(out, True, kind="cltagger")
+    m2 = reg_builder.read_meta(out)
+    assert m2.auto_tagged is True
+    assert m2.auto_tag_kind == "cltagger"
+
+
+def test_update_meta_auto_tagged_clears_kind_on_failure(tmp_path: Path) -> None:
+    """auto_tagged=False 时把 kind 重置为 None（未成功打过的 tagger 不应残留）。"""
+    out = tmp_path / "reg"
+    out.mkdir()
+    m = reg_builder.RegMeta(
+        generated_at=1.0, based_on_version="x", api_source="gelbooru",
+        target_count=2, actual_count=2, source_tags=[],
+        excluded_tags=[], blacklist_tags=[], failed_tags=[],
+        train_tag_distribution={}, auto_tagged=False,
+        auto_tag_kind="wd14",  # 上次成功过
+    )
+    reg_builder.write_meta(out, m)
+    reg_builder.update_meta_auto_tagged(out, False, kind="cltagger")
+    m2 = reg_builder.read_meta(out)
+    assert m2.auto_tagged is False
+    assert m2.auto_tag_kind is None
+
+
 def test_meta_roundtrip(tmp_path: Path) -> None:
     out = tmp_path / "reg"
     out.mkdir()
