@@ -45,7 +45,14 @@ export function TagListInput({ value, onChange, placeholder, disabled, className
         value={text}
         placeholder={placeholder}
         onChange={(e) => { setText(e.target.value); onChange(parseTags(e.target.value)) }}
-        onBlur={() => { setText(value.join(', ')); setEditing(false) }}
+        onBlur={() => {
+          // blur 归整：下划线→空格（跟训练 caption 同形，后端匹配也已 _/空格不敏感），
+          // chip 统一展示空格形式
+          const canon = value.map((t) => t.replace(/_/g, ' '))
+          if (JSON.stringify(canon) !== JSON.stringify(value)) onChange(canon)
+          setText(canon.join(', '))
+          setEditing(false)
+        }}
         disabled={disabled}
         className={className}
       />

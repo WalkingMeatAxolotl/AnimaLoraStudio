@@ -56,6 +56,18 @@ describe('TagsInput', () => {
     expect(input2).toHaveValue('x, y')
   })
 
+  it('blur 把下划线归一成空格（chip 统一空格形式）', async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+    const input = await enterEdit(user)
+    await user.type(input, 'cat_girl, blue_eyes')
+    expect(input).toHaveValue('cat_girl, blue_eyes')   // 编辑态原样
+    await user.tab()                                    // blur 归一
+    expect(screen.getByText('cat girl')).toBeInTheDocument()
+    expect(screen.getByText('blue eyes')).toBeInTheDocument()
+    expect(screen.getByTestId('tags')).toHaveTextContent('["cat girl","blue eyes"]')
+  })
+
   it('静止态把每个 tag 渲染成独立 chip', () => {
     render(<Harness initial={['monochrome', 'blue eyes']} />)
     expect(screen.queryByRole('textbox')).toBeNull()

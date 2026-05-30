@@ -95,6 +95,26 @@ def test_postprocess_uses_character_threshold_and_optional_categories(
     assert tags[:2] == ["explicit", "model tag"]
 
 
+def test_postprocess_blacklist_underscore_and_case_insensitive(isolated_secrets: Path) -> None:
+    """cltagger 的 tag 是下划线形式；blacklist 填空格 'cat girl' / 大写
+    'BLUE_EYES' 也能屏蔽（_/空格、大小写不敏感，与 wd14 一致）。"""
+    secrets.update({
+        "cltagger": {
+            "threshold_general": 0.1, "threshold_character": 0.1,
+            "add_rating_tag": False, "add_model_tag": False,
+            "blacklist_tags": ["cat girl", "BLUE_EYES"],
+        }
+    })
+    t = cltagger_tagger.CLTagger()
+    t._labels = cltagger_tagger._LabelData(
+        names=["cat_girl", "blue_eyes", "1girl"],
+        categories=["General", "General", "General"],
+    )
+    logits = np.array([4.0, 4.0, 4.0], dtype=np.float32)  # sigmoid≈0.98 > 0.1
+    tags, _ = t._postprocess_one(logits)
+    assert tags == ["1girl"]
+
+
 def test_tag_iterator_runs_onnx_batch(isolated_secrets: Path, tmp_path: Path) -> None:
     secrets.update({"cltagger": {"threshold_general": 0.1, "batch_size": 2}})
     t = cltagger_tagger.CLTagger()

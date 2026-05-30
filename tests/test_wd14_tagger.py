@@ -67,6 +67,23 @@ def test_postprocess_filters_by_threshold(isolated_secrets: Path) -> None:
     assert raw == {"1girl": pytest.approx(0.9)}
 
 
+def test_postprocess_blacklist_underscore_and_case_insensitive(isolated_secrets: Path) -> None:
+    """blacklist 比对 _/空格、大小写都不敏感：填 cat_girl / Blue Eyes 也能屏蔽
+    空格小写形式的 'cat girl' / 'blue eyes'。"""
+    secrets.update({
+        "wd14": {
+            "threshold_general": 0.1, "threshold_character": 0.1,
+            "blacklist_tags": ["cat_girl", "Blue Eyes"],
+        }
+    })
+    t = wd14_tagger.WD14Tagger()
+    t._tags = ["cat girl", "blue eyes", "1girl"]   # wd14 词表已是空格小写形式
+    t._tag_categories = [0, 0, 0]
+    scores = np.array([0.9, 0.9, 0.9])
+    tags, _ = t._postprocess_one(scores)
+    assert tags == ["1girl"]
+
+
 def test_postprocess_sorts_by_score_desc(isolated_secrets: Path) -> None:
     secrets.update({"wd14": {"threshold_general": 0.1, "threshold_character": 0.1}})
     t = wd14_tagger.WD14Tagger()
