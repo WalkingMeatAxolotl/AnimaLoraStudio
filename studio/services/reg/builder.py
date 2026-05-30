@@ -419,7 +419,14 @@ def _build_for_subfolder(
 
             post_tags = booru_api.post_tag_list(best_post, opts.api_source)
             if opts.save_tags and post_tags:
-                txt_path.write_text(", ".join(post_tags), encoding="utf-8")
+                # caption 一律空格形式（与 WD14/CLTagger 输出、训练集统一）。下划线
+                # 只是 booru 的线格式，仅在匹配 / 查询时用 —— post_tags 原值在下面
+                # current_weights 仍按下划线累加，不动。tag-form 约定：用户可见 /
+                # caption = 空格；underscore 只在 booru 边界。
+                txt_path.write_text(
+                    ", ".join(t.replace("_", " ") for t in post_tags),
+                    encoding="utf-8",
+                )
 
             for tag in post_tags:
                 current_weights[tag] += 1 / target_count

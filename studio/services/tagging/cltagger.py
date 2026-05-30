@@ -20,6 +20,11 @@ from .onnx_base import OnnxTaggerBase
 logger = logging.getLogger(__name__)
 
 
+def _blacklist_key(tag: str) -> str:
+    """blacklist 比对归一键：下划线↔空格、大小写、首尾空格都不敏感。"""
+    return tag.replace("_", " ").strip().lower()
+
+
 @dataclass
 class _LabelData:
     names: list[str | None]
@@ -203,12 +208,14 @@ class CLTagger(OnnxTaggerBase):
         assert self._labels is not None
         scores = self._sigmoid(logits)
         out: list[tuple[str, float]] = []
-        blacklist = set(cfg.blacklist_tags)
+        # blacklist 比对归一（与 wd14 一致）：下划线↔空格、大小写不敏感。
+        # 注意此处 tag 还是原始下划线形式（输出时才转空格），归一后比对。
+        blacklist = {_blacklist_key(b) for b in cfg.blacklist_tags}
         for i, p in enumerate(scores):
             if i >= len(self._labels.names):
                 break
             tag = self._labels.names[i]
-            if not tag or tag in blacklist:
+            if not tag or _blacklist_key(tag) in blacklist:
                 continue
             cat = self._labels.categories[i]
             if cat == "Rating" and not cfg.add_rating_tag:

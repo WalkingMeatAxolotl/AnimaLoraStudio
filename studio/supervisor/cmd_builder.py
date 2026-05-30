@@ -67,12 +67,22 @@ def _default_cmd_builder(task: dict[str, Any], config_path: Path) -> list[str]:
 
 
 def _resolve_monitor_state_path(task: dict[str, Any]) -> Path:
-    """PP6.1 — 决定 task 的 monitor_state.json 落盘路径。
+    """PP6.1 — 决定 task 的 monitor_state.json 落盘路径（按 task 隔离）。
 
-    有 version_id：`versions/{label}/monitor_state.json`，与 train/output/samples
-    放一起；用户切 version 监控自然独立。
+    每个 task 落到独立子目录，避免同一 version 下多个 task 互相覆盖监控曲线
+    与采样图。旧实现按 version 落 `versions/{label}/monitor_state.json`，同
+    version 第二个 task 一跑就盖掉第一个，监控页查 task1 看到的却是 task2。
+
+    有 version_id：`versions/{label}/monitor/task_{id}/state.json` —— 仍挂在
+    version 目录下（删 version 时一并清理），但按 task 分目录。采样图由 runtime
+    写到 state.json 同级 `samples/`（见 bootstrap.py），samples.py 按
+    `monitor_dir/samples` 解析，于是采样图也随之按 task 隔离。
     没有 version_id（PP1 之前的旧任务）：兜底到
-    `studio_data/monitors/task_{id}/state.json`，避免老任务无处可写。
+    `studio_data/monitors/task_{id}/state.json`。
+
+    兼容老任务：已跑过的老任务 monitor_state_path 早存进 DB（指向旧的 version
+    级文件），读取走存量值不受影响；samples.py 仍保留 `monitor_dir/output/samples`
+    候选，旧采样图照常可见。本改动只影响此后新启动的 task。
     """
     vid = task.get("version_id")
     pid = task.get("project_id")
@@ -88,7 +98,8 @@ def _resolve_monitor_state_path(task: dict[str, Any]) -> Path:
         if row:
             return (
                 STUDIO_DATA / "projects" / f"{pid}-{row['slug']}"
-                / "versions" / row["label"] / "monitor_state.json"
+                / "versions" / row["label"] / "monitor" / f"task_{task['id']}"
+                / "state.json"
             )
     return STUDIO_DATA / "monitors" / f"task_{task['id']}" / "state.json"
 

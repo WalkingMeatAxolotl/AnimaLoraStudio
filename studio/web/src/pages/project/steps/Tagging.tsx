@@ -15,6 +15,7 @@ import {
   type WD14Config,
 } from '../../../api/client'
 import LLMMessagesEditor from '../../../components/LLMMessagesEditor'
+import TagsInput from '../../../components/TagsInput'
 import JobProgress from '../../../components/JobProgress'
 import StepShell from '../../../components/StepShell'
 import { useToast } from '../../../components/Toast'
@@ -529,13 +530,13 @@ function Wd14Panel({
             onChange={(v) => onChange({ ...form, local_dir: v })}
             modified={(form.local_dir || null) !== (defaults.local_dir ?? null)}
           />
-          <LabeledInput
+          <TagsInput
             className="md:col-span-2"
             label={t('tag.blacklistLabel')}
-            value={form.blacklist_tags.join(', ')}
+            value={form.blacklist_tags}
             placeholder={t('tag.blacklistPlaceholder1')}
             disabled={disabled}
-            onChange={(v) => onChange({ ...form, blacklist_tags: v.split(',').map((s) => s.trim()).filter(Boolean) })}
+            onChange={(tags) => onChange({ ...form, blacklist_tags: tags })}
             modified={JSON.stringify(form.blacklist_tags) !== JSON.stringify(defaults.blacklist_tags)}
           />
         </div>
@@ -627,13 +628,13 @@ function CLTaggerPanel({
           <LabeledInput label="local_dir" value={form.local_dir} placeholder={t('tag.blankDir')} disabled={disabled} onChange={(v) => onChange({ ...form, local_dir: v })} modified={(form.local_dir || null) !== (defaults.local_dir ?? null)} />
           <LabeledInput label="model_path" value={form.model_path} disabled={disabled} onChange={(v) => onChange({ ...form, model_path: v })} modified={form.model_path !== defaults.model_path} />
           <LabeledInput label="tag_mapping_path" value={form.tag_mapping_path} disabled={disabled} onChange={(v) => onChange({ ...form, tag_mapping_path: v })} modified={form.tag_mapping_path !== defaults.tag_mapping_path} />
-          <LabeledInput
+          <TagsInput
             className="md:col-span-2"
             label={t('tag.blacklistLabel')}
-            value={form.blacklist_tags.join(', ')}
+            value={form.blacklist_tags}
             placeholder={t('tag.blacklistPlaceholder2')}
             disabled={disabled}
-            onChange={(v) => onChange({ ...form, blacklist_tags: v.split(',').map((s) => s.trim()).filter(Boolean) })}
+            onChange={(tags) => onChange({ ...form, blacklist_tags: tags })}
             modified={JSON.stringify(form.blacklist_tags) !== JSON.stringify(defaults.blacklist_tags)}
           />
         </div>

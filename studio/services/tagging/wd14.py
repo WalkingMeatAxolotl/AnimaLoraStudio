@@ -21,6 +21,11 @@ from .. import models as model_downloader
 from .onnx_base import OnnxTaggerBase
 
 
+def _blacklist_key(tag: str) -> str:
+    """blacklist 比对归一键：下划线↔空格、大小写、首尾空格都不敏感。"""
+    return tag.replace("_", " ").strip().lower()
+
+
 class WD14Tagger(OnnxTaggerBase):
     name = "wd14"
 
@@ -144,12 +149,14 @@ class WD14Tagger(OnnxTaggerBase):
         """单张图的概率向量 → (sorted_tags, raw_scores_dict)。"""
         cfg = self._cfg()
         out: list[tuple[str, float]] = []
-        blacklist = set(cfg.blacklist_tags)
+        # blacklist 比对归一：下划线↔空格、大小写、首尾空格都不敏感
+        # （cat girl / cat_girl / Cat_Girl 等价）。self._tags 已是空格小写形式。
+        blacklist = {_blacklist_key(b) for b in cfg.blacklist_tags}
         for i, p in enumerate(scores):
             if i >= len(self._tags):
                 break
             tag, cat = self._tags[i], self._tag_categories[i]
-            if tag in blacklist:
+            if _blacklist_key(tag) in blacklist:
                 continue
             # category: 9=rating（不参与阈值，丢弃）；4=character；其余按 general
             if cat == 9:

@@ -515,14 +515,14 @@ class TrainingConfig(BaseModel):
         description="每 N step 保存（0=禁用）",
         json_schema_extra=_meta("output"),
     )
-    save_state_every_steps: int = Field(
-        0, ge=0,
-        description="每 N step 保存完整训练状态（断点续训，0=禁用）",
-        json_schema_extra=_meta("output"),
-    )
     save_state_every_epochs: int = Field(
         0, ge=0,
         description="每 N epoch 保存完整训练状态（断点续训，0=禁用）",
+        json_schema_extra=_meta("output"),
+    )
+    save_state_every_steps: int = Field(
+        0, ge=0,
+        description="每 N step 保存完整训练状态（断点续训，0=禁用）",
         json_schema_extra=_meta("output"),
     )
     seed: int = Field(

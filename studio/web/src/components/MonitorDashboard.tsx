@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
+import ImagePreviewModal from './ImagePreviewModal'
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -153,6 +154,7 @@ function SampleViewer({ samples, taskId }: {
   // 几个相同 step 的项，下标重复，视觉上自己传达「同一步不同 prompt」。
   const list = samples
   const [active, setActive] = useState(list.length - 1)
+  const [zoomOpen, setZoomOpen] = useState(false)
   const stripRef = useRef<HTMLDivElement | null>(null)
 
   // 初次有图 / 新增 sample 时，仅当用户当前选中是「最末或之后」（即跟随末尾）
@@ -240,7 +242,8 @@ function SampleViewer({ samples, taskId }: {
           src={fullUrl}
           alt="sample preview"
           loading="lazy"
-          className="max-w-full max-h-[480px] object-contain block"
+          onClick={() => setZoomOpen(true)}
+          className="max-w-full max-h-[480px] object-contain block cursor-zoom-in"
         />
         {cur.step != null && (
           <div className="absolute bottom-2.5 left-1/2 -translate-x-1/2 border border-subtle rounded-sm px-2.5 py-0.5 text-xs font-mono text-fg-secondary bg-surface/85">
@@ -249,6 +252,21 @@ function SampleViewer({ samples, taskId }: {
           </div>
         )}
       </div>
+
+      {/* 点击大图放大（参考下载页 ImagePreviewModal）；← / → 在采样序列里前后切 */}
+      {zoomOpen && (
+        <ImagePreviewModal
+          src={fullUrl}
+          caption={cur.step != null
+            ? `step ${cur.step.toLocaleString()} · ${active + 1} / ${list.length} · ${filename}`
+            : `${filename} · ${active + 1} / ${list.length}`}
+          hasPrev={active > 0}
+          hasNext={active < list.length - 1}
+          onClose={() => setZoomOpen(false)}
+          onPrev={() => setActive((i) => Math.max(0, i - 1))}
+          onNext={() => setActive((i) => Math.min(list.length - 1, i + 1))}
+        />
+      )}
     </div>
   )
 }
