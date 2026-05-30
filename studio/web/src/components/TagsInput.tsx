@@ -62,7 +62,8 @@ export function TagListInput({ value, onChange, placeholder, disabled, className
       className={`${className} flex flex-wrap items-center gap-1 ${disabled ? '' : 'cursor-text'}`}
     >
       {value.length === 0
-        ? <span className="text-fg-tertiary">{placeholder}</span>
+        // nbsp 占位：撑住一行行高，空列表时容器不塌缩成一条线
+        ? <span className="text-fg-tertiary">{placeholder || ' '}</span>
         : value.map((tag, i) => (
             <span
               key={`${tag}-${i}`}
