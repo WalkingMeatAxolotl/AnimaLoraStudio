@@ -39,6 +39,18 @@ class DuplicateScanRequest(BaseModel):
     min_close_tiles: float = duplicate_finder.DEFAULT_MIN_CLOSE_TILES
     tile_median: float = duplicate_finder.DEFAULT_TILE_MEDIAN
     min_gray_close: float = duplicate_finder.DEFAULT_MIN_GRAY_CLOSE
+    detect_blur: bool = duplicate_finder.DEFAULT_DETECT_BLUR
+    blur_score_threshold: float = duplicate_finder.DEFAULT_BLUR_SCORE_THRESHOLD
+    blur_local_ratio: float = duplicate_finder.DEFAULT_BLUR_LOCAL_RATIO
+    detect_crops: bool = duplicate_finder.DEFAULT_DETECT_CROPS
+    crop_score: float = duplicate_finder.DEFAULT_CROP_SCORE
+    crop_hash_threshold: int = duplicate_finder.DEFAULT_CROP_HASH_THRESHOLD
+    crop_max_side: int = duplicate_finder.DEFAULT_CROP_MAX_SIDE
+    crop_workers: int = duplicate_finder.DEFAULT_CROP_WORKERS
+    crop_prefilter_min_segments: int = duplicate_finder.DEFAULT_CROP_PREFILTER_SEGMENTS
+    crop_prefilter_min_coverage: float = duplicate_finder.DEFAULT_CROP_PREFILTER_COVERAGE
+    crop_prefilter_aspect_tolerance: float = duplicate_finder.DEFAULT_CROP_PREFILTER_ASPECT_TOLERANCE
+    crop_max_candidates_per_image: int = duplicate_finder.DEFAULT_CROP_MAX_CANDIDATES_PER_IMAGE
 
 
 class DuplicateApplyRequest(BaseModel):

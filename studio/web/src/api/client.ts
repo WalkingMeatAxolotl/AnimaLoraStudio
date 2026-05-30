@@ -768,6 +768,18 @@ export interface DuplicateScanOptions {
   min_close_tiles: number
   tile_median: number
   min_gray_close: number
+  detect_blur: boolean
+  blur_score_threshold: number
+  blur_local_ratio: number
+  detect_crops: boolean
+  crop_score: number
+  crop_hash_threshold: number
+  crop_max_side: number
+  crop_workers: number
+  crop_prefilter_min_segments: number
+  crop_prefilter_min_coverage: number
+  crop_prefilter_aspect_tolerance: number
+  crop_max_candidates_per_image: number
 }
 
 export interface DuplicateMetrics {
@@ -805,6 +817,37 @@ export interface DuplicateGroup {
   best: DuplicateMetrics | null
 }
 
+export interface BlurCandidate {
+  name: string
+  width: number
+  height: number
+  filesize_kb: number
+  blur_score: number
+  local_blur_ratio: number
+  largest_blur_region_ratio: number
+  reason: string
+}
+
+export interface CropRelation {
+  source: string
+  crop_candidate: string
+  score: number
+  source_width: number
+  source_height: number
+  crop_width: number
+  crop_height: number
+  source_area: number
+  crop_area: number
+  larger_image: string
+  area_ratio: number
+  relation_kind: 'crop_smaller' | 'crop_upscaled' | 'crop_same_area' | string
+  source_window: { x: number; y: number; width: number; height: number }
+  window_ratio: number
+  segment_matches: number
+  segment_coverage: number
+  note: string
+}
+
 export interface DuplicateScanResult {
   target: 'preprocess' | 'download'
   match_scope: DuplicateScanOptions['match_scope']
@@ -812,6 +855,8 @@ export interface DuplicateScanResult {
   readable_images: number
   group_count: number
   candidate_count: number
+  blur_candidate_count: number
+  crop_relation_count: number
   elapsed_seconds: number
   options: DuplicateScanOptions
   stats: {
@@ -821,6 +866,8 @@ export interface DuplicateScanResult {
     compared_pairs: number
   }
   groups: DuplicateGroup[]
+  blur_candidates: BlurCandidate[]
+  crop_relations: CropRelation[]
 }
 
 export interface DuplicateApplyResult {
