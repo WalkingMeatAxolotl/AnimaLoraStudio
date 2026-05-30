@@ -83,6 +83,46 @@ def test_cmd_builder_resume_after_monitor_state_file(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# _resolve_monitor_state_path —— per-task 隔离（同 version 多 task 串台修复）
+# ---------------------------------------------------------------------------
+
+
+def test_monitor_state_path_isolated_per_task_same_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """同一 version 下两个 task 的 monitor_state_path 必须互不相同、各含自己的
+    task id。回归：旧实现按 version 落 monitor_state.json，第二个 task 跑起来
+    盖掉第一个的曲线 / 采样图 → 监控页查 task1 显示的是 task2。"""
+    from studio.services.projects import projects, versions
+    from studio.supervisor.cmd_builder import _resolve_monitor_state_path
+
+    dbfile = tmp_path / "studio.db"
+    db.init_db(dbfile)
+    monkeypatch.setattr(projects, "PROJECTS_DIR", tmp_path / "projects")
+    monkeypatch.setattr(db, "STUDIO_DB", dbfile)
+    with db.connection_for(dbfile) as conn:
+        p = projects.create_project(conn, title="P")
+        v = versions.create_version(conn, project_id=p["id"], label="baseline")
+
+    base = {"version_id": v["id"], "project_id": p["id"]}
+    p1 = _resolve_monitor_state_path({**base, "id": 1})
+    p2 = _resolve_monitor_state_path({**base, "id": 2})
+
+    assert p1 != p2
+    assert "task_1" in p1.parts and "task_2" in p2.parts
+    assert "baseline" in p1.parts        # 仍挂在 version 目录下（删 version 一并清）
+    assert p1.name == "state.json"
+
+
+def test_monitor_state_path_old_task_without_version_fallback() -> None:
+    """PP1 之前的老任务（无 version_id）兜底到 monitors/task_{id}/state.json。"""
+    from studio.supervisor.cmd_builder import _resolve_monitor_state_path
+
+    pth = _resolve_monitor_state_path({"id": 7})
+    assert pth.parts[-3:] == ("monitors", "task_7", "state.json")
+
+
+# ---------------------------------------------------------------------------
 # bootstrap_phase: _maybe_apply_pause_snapshot
 # ---------------------------------------------------------------------------
 

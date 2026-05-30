@@ -162,8 +162,12 @@ def run(ctx: TrainingContext) -> None:
     # 创建输出目录
     ctx.output_dir = Path(args.output_dir)
     ctx.output_dir.mkdir(parents=True, exist_ok=True)
-    ctx.sample_dir = ctx.output_dir / "samples"
-    ctx.sample_dir.mkdir(exist_ok=True)
+    # 采样图落到 monitor state 同级 samples/。监控 state file 由 supervisor 按
+    # task 注入（--monitor-state-file），采样图随之按 task 隔离；samples.py 优先
+    # 在 monitor_dir/samples 解析。没传（纯 CLI 训练）退回 output_dir/samples。
+    _msf = getattr(args, "monitor_state_file", None)
+    ctx.sample_dir = (Path(_msf).parent / "samples") if _msf else (ctx.output_dir / "samples")
+    ctx.sample_dir.mkdir(parents=True, exist_ok=True)
     # supervisor 启动训练时通过 env LORA_TASK_ID 注入 queue task id（ADR 0006）。
     # 用于 ctx.state_dir() 计算 per-task state 子目录；env 不存在时 fallback unknown。
     _env_tid = os.environ.get("LORA_TASK_ID")
