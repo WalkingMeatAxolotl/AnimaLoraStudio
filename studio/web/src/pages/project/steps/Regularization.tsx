@@ -587,7 +587,7 @@ function RegStatusBar({
             {m.failed_tags.length > 0 && (
               <span
                 className="text-warn"
-                title={t('reg.failedTagsTitle', { tags: m.failed_tags.join(', ') })}
+                title={t('reg.failedTagsTitle', { tags: m.failed_tags.map((x) => x.replace(/_/g, ' ')).join(', ') })}
               >
                 {t('reg.failedTags', { n: m.failed_tags.length })}
               </span>
@@ -1001,7 +1001,7 @@ function ExcludeTagsPicker({
                   }`}
                   title={on ? t('reg.excludeUnclick') : t('reg.excludeClick')}
                 >
-                  {on ? '✕' : '+'} {tagInfo.tag}{' '}
+                  {on ? '✕' : '+'} {tagInfo.tag.replace(/_/g, ' ')}{' '}
                   <span className="opacity-50">×{tagInfo.count}</span>
                 </button>
               )
@@ -1047,7 +1047,7 @@ function ExcludeTagsPicker({
                 className="inline-flex items-center gap-1 px-2 py-0.5 rounded-sm border border-warn bg-warn-soft text-warn text-2xs font-mono"
                 title={t('reg.excludeCustomRemoveTitle')}
               >
-                {tag}
+                {tag.replace(/_/g, ' ')}
                 <button
                   onClick={() => onToggle(tag)}
                   className="text-warn opacity-70 cursor-pointer bg-transparent border-none p-0 text-xs"
