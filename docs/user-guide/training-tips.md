@@ -23,6 +23,30 @@
 - 删除明显错误的标签
 - 保持标签风格一致（全小写，空格分隔）
 
+### Caption 策略与正则集配合
+
+想要训完的 LoRA 有「trigger off → 退回 base 默认 / trigger on → 出训练学的画风或角色」这种**开关式**控制效果，caption 必须把「要被 trigger 吸收的特征 tag」从 train caption 里删掉；正则集再去掉触发词，两边配合才能让 trigger 成为真正的 on/off 开关。
+
+#### 核心原则
+
+| LoRA 类型 | train caption 保留 | train caption 删掉 | 正则集排除 |
+|---|---|---|---|
+| **画风 LoRA** | 内容 tag（角色 / 场景 / 物体） | —（保持原样） | 触发词 + 画师名 |
+| **人物 LoRA** | 触发词（人物） + 环境（场景 / 动作） | 角色特征（发色 / 眼睛 / 体型 / 标志性服饰） | 触发词（角色名） |
+| **人物 + 衣服 LoRA** | 触发词（人物 + 衣服） + 环境 | 角色特征 + 衣服细节 | 触发词（角色名 + 衣服名） |
+
+#### 为什么这样配合
+
+- train 集 caption 删了特征 tag → 模型把这些特征**绑定到 trigger** 上
+- 正则集 caption 不含 trigger（builder 自动排除 `based_on_version`；正则集排除列表里再手动加触发词 / 角色名 / 衣服名）
+- 正则集图片来自 booru 自然分布或 base 模型自生成，发色 / 眼睛 / 衣服**随机分布**
+- 训练时正则集提供「trigger 不在时这组环境 tag 该长什么样」的监督信号
+- 结果：trigger off 时输出退向 base 模型的自然分布；trigger on 时才出训练学到的角色 / 画风
+
+#### 不遵守的后果
+
+如果 caption 里残留了本来应被吸收的特征 tag（如训角色没删 `silver_hair`），那 trigger off 时 prompt 写 `silver_hair` 仍会 leak 出训练集风格 —— trigger 不再是干净的 on/off 开关，更接近「加权融合」，且 LoRA 容易在「不写 silver_hair 反而劣化」上踩坑。
+
 ---
 
 ## 参数调优

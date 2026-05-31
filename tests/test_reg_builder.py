@@ -234,6 +234,40 @@ def test_check_aspect_ratio_enabled_filters() -> None:
     ) is False  # ar=3.0 > 2.0
 
 
+def test_find_best_match_new_formula_prefers_aspect_bucket_match() -> None:
+    """PR-3 Smell C 修法：res_score 在新公式下真能影响排序，对齐用户
+    「reg 集要跟 train 落同一个 ARB 桶」的诉求。
+
+    对比两个候选：
+    - A：tag 完美匹配 + aspect 差（4.0 vs target 1.0）
+    - B：tag 缺 1 个 + aspect 完美（1.0 = target 1.0）
+
+    旧公式 `tag + 0.1*res`：A 胜（res 加成不足以抵 tag 差距）。
+    新公式 `0.7*tag_norm + 0.3*res`：B 胜（aspect 完美抵过 tag 略差）。
+    """
+    target = {f"t{i}": 1.0 for i in range(5)}
+    posts = [
+        # A：5 tag 完美 + aspect 4.0（差）
+        {"@attributes": {
+            "id": "1", "file_url": "u", "tags": "t0 t1 t2 t3 t4",
+            "width": 1024, "height": 256,
+        }},
+        # B：缺 1 tag + aspect 1.0（完美匹配 ARB 桶）
+        {"@attributes": {
+            "id": "2", "file_url": "u", "tags": "t0 t1 t2 t3",
+            "width": 800, "height": 800,
+        }},
+    ]
+    best, _ = reg_builder.find_best_match(
+        posts, target, {}, target_count=5,
+        api_source="gelbooru", skip_similar=False,
+        target_resolution=(800, 800),
+        target_aspect_ratio=1.0,
+    )
+    assert best is not None
+    assert best["@attributes"]["id"] == "2"
+
+
 def test_find_best_match_skips_source_ids(tmp_path: Path) -> None:
     posts = [
         {"@attributes": {"id": "10", "file_url": "u", "tags": "1girl solo", "width": 512, "height": 512}},

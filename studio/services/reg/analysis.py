@@ -239,7 +239,25 @@ def calculate_tag_similarity(
     current_weights: dict[str, float],
     target_count: int,
 ) -> float:
-    """与源脚本一致：负 MSE。"""
+    """与源脚本一致：负 MSE。
+
+    `target_weights` 和 `current_weights` 都按 **文档频率**（doc frequency）测量：
+    某个 tag 出现在多少张图里 / 总图数 ∈ [0, 1]。`target_weights` 来自 train caption
+    分析；`current_weights` 来自 reg 集已下图，跟 `target_weights` 同公式（每图每
+    tag 累加 `1/target_count`）—— 拉够 `target_count` 张后，含某 tag 的 K 张图会让
+    `current_weights[tag]` 累加到 `K / target_count`，恰好等于该 tag 在 reg 集里的
+    doc frequency，跟 `target_weights` 的量级对称匹配。
+
+    这**不是** reverse-IDF：它跟 target 测的量级一致，所以累加没有非对称偏向。
+    副作用：密集打标的图（如 50-tag 的 booru post）单图贡献的 MSE 项更多，候选
+    选择会略偏向 tag 数多的图 —— 但这跟 train 的 doc frequency 分布一致，所以
+    没产生失配（target 也是按 doc frequency 算的）。
+
+    若改成「归一化分布匹配」（候选侧用 `1/(target_count * len(post_tags))`），
+    `target_weights` 也必须按同样方式重算 —— 否则会产生不对称的 IDF 偏置。
+    本 PR 不动 contract，仅文档化（见 `tmp/reg_algorithm_research.md` Smell D
+    + 用户讨论 2026-05-30）。
+    """
     new_weights = dict(current_weights)
     for tag in candidate_tags:
         new_weights[tag] = new_weights.get(tag, 0) + (1 / target_count)
@@ -309,6 +327,20 @@ def check_aspect_ratio(
     return min_ar <= ar <= max_ar
 
 
+# PR-3 (Smell C 修法)：tag_score 跟 res_score 归一到同量级再加权。
+# - tag_score = -MSE，量级 ~ [-len(target_weights), 0]
+# - res_score ∈ [0, 1]
+# 旧公式 `tag_score + res_score * 0.1` 让 tag 主导但又给 res 一个无依据
+# 0.1 系数 —— 实际行为：tag 差 0.001 即可被 res 反转，跟 docstring 的
+# "tie-breaker" 不一致。新公式把 tag_score / len(target_weights) 归一到
+# ~[-1, 0]，跟 res_score 同量级，按 0.7:0.3 加权。0.7 沿用 tag 主导，
+# 0.3 让 res 真能影响排序（用户在意 ARB 桶一致性）。
+# 见 `tmp/reg_algorithm_research.md` Smell C + 用户 caption-disentanglement
+# 讨论决策（2026-05-30）。
+TAG_SCORE_WEIGHT = 0.7
+RES_SCORE_WEIGHT = 0.3
+
+
 def find_best_match(
     posts: list[dict[str, Any]],
     target_weights: dict[str, float],
@@ -332,6 +364,11 @@ def find_best_match(
     best_post = None
     best_score = float("-inf")
 
+    # tag_score 归一化分母：参与 MSE 的 tag 集大小近似为 target_weights 的
+    # 大小（candidate_tags 在不重叠部分占小头）。除以它把 tag_score 归一到
+    # ~[-1, 0]，再跟 [0, 1] 的 res_score 加权。
+    tag_denom = max(1, len(target_weights))
+
     for post in candidates:
         post_id, _, _, _ = booru_api.post_fields(post, api_source)
         if post_id and post_id in source_image_ids:
@@ -348,12 +385,13 @@ def find_best_match(
         tag_score = calculate_tag_similarity(
             target_weights, post_tags, current_weights, target_count
         )
+        tag_norm = tag_score / tag_denom
         res_score = 0.0
         if target_resolution and target_aspect_ratio and pw and ph:
             res_score = calculate_resolution_similarity(
                 pw, ph, target_resolution, target_aspect_ratio, resolution_std
             )
-        final_score = tag_score + res_score * 0.1
+        final_score = TAG_SCORE_WEIGHT * tag_norm + RES_SCORE_WEIGHT * res_score
         if final_score > best_score:
             best_score = final_score
             best_post = post
