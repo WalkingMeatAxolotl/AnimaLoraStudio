@@ -211,6 +211,15 @@ class CLTagger(OnnxTaggerBase):
         # blacklist 比对归一（与 wd14 一致）：下划线↔空格、大小写不敏感。
         # 注意此处 tag 还是原始下划线形式（输出时才转空格），归一后比对。
         blacklist = {_blacklist_key(b) for b in cfg.blacklist_tags}
+        # CLTagger 7 category gate：General / Character 走阈值（不在此表里
+        # 始终参与），其余按 cfg 开关；未知 category 当 General 处理。
+        category_gates = {
+            "Copyright": cfg.add_copyright_tag,
+            "Meta": cfg.add_meta_tag,
+            "Model": cfg.add_model_tag,
+            "Rating": cfg.add_rating_tag,
+            "Quality": cfg.add_quality_tag,
+        }
         for i, p in enumerate(scores):
             if i >= len(self._labels.names):
                 break
@@ -218,9 +227,7 @@ class CLTagger(OnnxTaggerBase):
             if not tag or _blacklist_key(tag) in blacklist:
                 continue
             cat = self._labels.categories[i]
-            if cat == "Rating" and not cfg.add_rating_tag:
-                continue
-            if cat == "Model" and not cfg.add_model_tag:
+            if cat in category_gates and not category_gates[cat]:
                 continue
             thr = cfg.threshold_character if cat == "Character" else cfg.threshold_general
             p_f = float(p)

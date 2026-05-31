@@ -95,6 +95,44 @@ def test_postprocess_uses_character_threshold_and_optional_categories(
     assert tags[:2] == ["explicit", "model tag"]
 
 
+def test_postprocess_default_gates_copyright_on_meta_quality_off(
+    isolated_secrets: Path,
+) -> None:
+    """默认勾 General / Character / Copyright 三类；Meta / Quality / Model / Rating 默认关。
+    保证老 secrets 升级后用户能直接拿到"干净"的 caption。"""
+    secrets.update({"cltagger": {"threshold_general": 0.1, "threshold_character": 0.1}})
+    t = cltagger_tagger.CLTagger()
+    t._labels = cltagger_tagger._LabelData(
+        names=["1girl", "hero_name", "fate_series", "highres", "best_quality", "model_tag", "explicit"],
+        categories=["General", "Character", "Copyright", "Meta", "Quality", "Model", "Rating"],
+    )
+    logits = np.array([4.0] * 7, dtype=np.float32)  # sigmoid≈0.98，全部超阈值
+    tags, _ = t._postprocess_one(logits)
+    assert set(tags) == {"1girl", "hero name", "fate series"}
+
+
+def test_postprocess_meta_and_quality_gates_can_be_enabled(
+    isolated_secrets: Path,
+) -> None:
+    secrets.update({
+        "cltagger": {
+            "threshold_general": 0.1,
+            "threshold_character": 0.1,
+            "add_meta_tag": True,
+            "add_quality_tag": True,
+            "add_copyright_tag": False,
+        }
+    })
+    t = cltagger_tagger.CLTagger()
+    t._labels = cltagger_tagger._LabelData(
+        names=["1girl", "fate_series", "highres", "best_quality"],
+        categories=["General", "Copyright", "Meta", "Quality"],
+    )
+    logits = np.array([4.0] * 4, dtype=np.float32)
+    tags, _ = t._postprocess_one(logits)
+    assert set(tags) == {"1girl", "highres", "best quality"}
+
+
 def test_postprocess_blacklist_underscore_and_case_insensitive(isolated_secrets: Path) -> None:
     """cltagger 的 tag 是下划线形式；blacklist 填空格 'cat girl' / 大写
     'BLUE_EYES' 也能屏蔽（_/空格、大小写不敏感，与 wd14 一致）。"""

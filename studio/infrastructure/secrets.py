@@ -359,8 +359,15 @@ class CLTaggerConfig(BaseModel):
     local_dir: Optional[str] = None
     threshold_general: float = 0.35
     threshold_character: float = 0.6
-    add_rating_tag: bool = False
+    # CLTagger 模型输出 7 个 category：General / Character 走阈值过滤，其余 5 个
+    # 按 bool 开关 gate。默认勾上 General / Character / Copyright 三类——LoRA
+    # 训练标准 caption 形态；Meta / Model / Rating / Quality 默认关，避免污染
+    # caption（例如 "highres", "best quality", "explicit" 这类元信息）。
+    add_copyright_tag: bool = True
+    add_meta_tag: bool = False
     add_model_tag: bool = False
+    add_rating_tag: bool = False
+    add_quality_tag: bool = False
     blacklist_tags: list[str] = Field(default_factory=list)
     # 与 WD14 一致：只有 CUDA EP 时才真正 batch，CPU 自动降到 1。
     batch_size: int = 8

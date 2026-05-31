@@ -210,8 +210,11 @@ export interface CLTaggerConfig {
   local_dir: string | null
   threshold_general: number
   threshold_character: number
-  add_rating_tag: boolean
+  add_copyright_tag: boolean
+  add_meta_tag: boolean
   add_model_tag: boolean
+  add_rating_tag: boolean
+  add_quality_tag: boolean
   blacklist_tags: string[]
   batch_size: number
 }
@@ -1875,8 +1878,11 @@ export const api = {
         model_path?: string | null
         tag_mapping_path?: string | null
         local_dir?: string | null
-        add_rating_tag?: boolean | null
+        add_copyright_tag?: boolean | null
+        add_meta_tag?: boolean | null
         add_model_tag?: boolean | null
+        add_rating_tag?: boolean | null
+        add_quality_tag?: boolean | null
         blacklist_tags?: string[] | null
       }
       // current_preset 切换 active preset；其他字段覆盖 preset 同名字段。

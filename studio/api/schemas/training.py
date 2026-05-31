@@ -24,8 +24,11 @@ class CLTaggerOverrides(BaseModel):
     model_path: Optional[str] = None
     tag_mapping_path: Optional[str] = None
     local_dir: Optional[str] = None
-    add_rating_tag: Optional[bool] = None
+    add_copyright_tag: Optional[bool] = None
+    add_meta_tag: Optional[bool] = None
     add_model_tag: Optional[bool] = None
+    add_rating_tag: Optional[bool] = None
+    add_quality_tag: Optional[bool] = None
     blacklist_tags: Optional[list[str]] = None
 
 

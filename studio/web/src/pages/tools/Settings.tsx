@@ -235,8 +235,11 @@ const EMPTY: Secrets = {
     local_dir: null,
     threshold_general: 0.35,
     threshold_character: 0.6,
-    add_rating_tag: false,
+    add_copyright_tag: true,
+    add_meta_tag: false,
     add_model_tag: false,
+    add_rating_tag: false,
+    add_quality_tag: false,
     blacklist_tags: [],
     batch_size: 8,
   },
@@ -812,11 +815,20 @@ export default function SettingsPage() {
           </SettingsField>
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <SettingsField label="add_rating_tag">
-            <Bool value={draft.cltagger.add_rating_tag} onChange={(v) => update('cltagger', 'add_rating_tag', v)} />
+          <SettingsField label="add_copyright_tag">
+            <Bool value={draft.cltagger.add_copyright_tag} onChange={(v) => update('cltagger', 'add_copyright_tag', v)} />
+          </SettingsField>
+          <SettingsField label="add_meta_tag">
+            <Bool value={draft.cltagger.add_meta_tag} onChange={(v) => update('cltagger', 'add_meta_tag', v)} />
           </SettingsField>
           <SettingsField label="add_model_tag">
             <Bool value={draft.cltagger.add_model_tag} onChange={(v) => update('cltagger', 'add_model_tag', v)} />
+          </SettingsField>
+          <SettingsField label="add_rating_tag">
+            <Bool value={draft.cltagger.add_rating_tag} onChange={(v) => update('cltagger', 'add_rating_tag', v)} />
+          </SettingsField>
+          <SettingsField label="add_quality_tag">
+            <Bool value={draft.cltagger.add_quality_tag} onChange={(v) => update('cltagger', 'add_quality_tag', v)} />
           </SettingsField>
         </div>
         <SettingsField label="blacklist_tags" desc={t('settings.commaSeparated')}>

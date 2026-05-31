@@ -43,8 +43,11 @@ type CLTaggerForm = {
   model_path: string
   tag_mapping_path: string
   local_dir: string
-  add_rating_tag: boolean
+  add_copyright_tag: boolean
+  add_meta_tag: boolean
   add_model_tag: boolean
+  add_rating_tag: boolean
+  add_quality_tag: boolean
   blacklist_tags: string[]
 }
 
@@ -85,8 +88,11 @@ function fromCLTaggerConfig(cfg: CLTaggerConfig): CLTaggerForm {
     model_path: cfg.model_path,
     tag_mapping_path: cfg.tag_mapping_path,
     local_dir: cfg.local_dir ?? '',
-    add_rating_tag: cfg.add_rating_tag,
+    add_copyright_tag: cfg.add_copyright_tag,
+    add_meta_tag: cfg.add_meta_tag,
     add_model_tag: cfg.add_model_tag,
+    add_rating_tag: cfg.add_rating_tag,
+    add_quality_tag: cfg.add_quality_tag,
     blacklist_tags: cfg.blacklist_tags,
   }
 }
@@ -232,10 +238,16 @@ export default function TaggingPage() {
       out.tag_mapping_path = cltaggerForm.tag_mapping_path
     const localDirChanged = (cltaggerForm.local_dir || null) !== (cltaggerDefaults.local_dir ?? null)
     if (localDirChanged) out.local_dir = cltaggerForm.local_dir || null
-    if (cltaggerForm.add_rating_tag !== cltaggerDefaults.add_rating_tag)
-      out.add_rating_tag = cltaggerForm.add_rating_tag
+    if (cltaggerForm.add_copyright_tag !== cltaggerDefaults.add_copyright_tag)
+      out.add_copyright_tag = cltaggerForm.add_copyright_tag
+    if (cltaggerForm.add_meta_tag !== cltaggerDefaults.add_meta_tag)
+      out.add_meta_tag = cltaggerForm.add_meta_tag
     if (cltaggerForm.add_model_tag !== cltaggerDefaults.add_model_tag)
       out.add_model_tag = cltaggerForm.add_model_tag
+    if (cltaggerForm.add_rating_tag !== cltaggerDefaults.add_rating_tag)
+      out.add_rating_tag = cltaggerForm.add_rating_tag
+    if (cltaggerForm.add_quality_tag !== cltaggerDefaults.add_quality_tag)
+      out.add_quality_tag = cltaggerForm.add_quality_tag
     if (JSON.stringify(cltaggerForm.blacklist_tags) !== JSON.stringify(cltaggerDefaults.blacklist_tags))
       out.blacklist_tags = cltaggerForm.blacklist_tags
     return Object.keys(out).length ? out : undefined
@@ -572,8 +584,11 @@ function CLTaggerPanel({
     form.model_path !== defaults.model_path ||
     form.tag_mapping_path !== defaults.tag_mapping_path ||
     (form.local_dir || null) !== (defaults.local_dir ?? null) ||
-    form.add_rating_tag !== defaults.add_rating_tag ||
+    form.add_copyright_tag !== defaults.add_copyright_tag ||
+    form.add_meta_tag !== defaults.add_meta_tag ||
     form.add_model_tag !== defaults.add_model_tag ||
+    form.add_rating_tag !== defaults.add_rating_tag ||
+    form.add_quality_tag !== defaults.add_quality_tag ||
     JSON.stringify(form.blacklist_tags) !== JSON.stringify(defaults.blacklist_tags)
 
   const restore = () => onChange(fromCLTaggerConfig(defaults))
@@ -610,12 +625,24 @@ function CLTaggerPanel({
         <ThresholdInput label="general" value={form.threshold_general} base={defaults.threshold_general} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_general: v })} />
         <ThresholdInput label="character" value={form.threshold_character} base={defaults.threshold_character} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_character: v })} />
         <label className="flex items-center gap-1.5 text-xs text-fg-tertiary">
-          <input type="checkbox" checked={form.add_rating_tag} disabled={disabled} onChange={(e) => onChange({ ...form, add_rating_tag: e.target.checked })} />
-          rating
+          <input type="checkbox" checked={form.add_copyright_tag} disabled={disabled} onChange={(e) => onChange({ ...form, add_copyright_tag: e.target.checked })} />
+          copyright
+        </label>
+        <label className="flex items-center gap-1.5 text-xs text-fg-tertiary">
+          <input type="checkbox" checked={form.add_meta_tag} disabled={disabled} onChange={(e) => onChange({ ...form, add_meta_tag: e.target.checked })} />
+          meta
         </label>
         <label className="flex items-center gap-1.5 text-xs text-fg-tertiary">
           <input type="checkbox" checked={form.add_model_tag} disabled={disabled} onChange={(e) => onChange({ ...form, add_model_tag: e.target.checked })} />
           model
+        </label>
+        <label className="flex items-center gap-1.5 text-xs text-fg-tertiary">
+          <input type="checkbox" checked={form.add_rating_tag} disabled={disabled} onChange={(e) => onChange({ ...form, add_rating_tag: e.target.checked })} />
+          rating
+        </label>
+        <label className="flex items-center gap-1.5 text-xs text-fg-tertiary">
+          <input type="checkbox" checked={form.add_quality_tag} disabled={disabled} onChange={(e) => onChange({ ...form, add_quality_tag: e.target.checked })} />
+          quality
         </label>
         <button type="button" onClick={() => setAdvOpen(!advOpen)} className="btn btn-ghost btn-sm text-xs text-fg-tertiary">
           {advOpen ? '▾' : '▸'} {t('tag.advanced')}
