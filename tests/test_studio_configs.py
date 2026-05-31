@@ -86,6 +86,8 @@ def test_schema_carries_ui_metadata(client: TestClient) -> None:
     assert "show_when" in props["prodigy_d_coef"]
     assert props["lion_beta1"]["show_when"] == "optimizer_type==lion"
     assert props["lion_beta2"]["show_when"] == "optimizer_type==lion"
+    assert "automagic" not in props["learning_rate"]["disable_when"]
+    assert props["lr_scheduler"]["disable_when"] == "optimizer_type==automagic||optimizer_type==prodigy||optimizer_type==prodigy_plus_schedulefree"
     assert props["automagic_min_lr"]["show_when"] == "optimizer_type==automagic"
     assert props["automagic_max_lr"]["show_when"] == "optimizer_type==automagic"
     assert props["wandb_enabled"]["group"] == "wandb"

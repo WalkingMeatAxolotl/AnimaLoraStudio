@@ -196,13 +196,13 @@ class TrainingConfig(BaseModel):
     )
     learning_rate: float = Field(
         1e-4, gt=0.0,
-        description="学习率（Prodigy 必须为 1.0）",
+        description="学习率（Automagic 作为初始每参数学习率；Prodigy 必须为 1.0）",
         json_schema_extra=_meta(
             "training",
             cli_alias="--lr",
-            disable_when="optimizer_type==automagic||optimizer_type==prodigy||optimizer_type==prodigy_plus_schedulefree",
+            disable_when="optimizer_type==prodigy||optimizer_type==prodigy_plus_schedulefree",
             disable_value=1.0,
-            disable_hint="自适应优化器接管学习率",
+            disable_hint="Prodigy 接管学习率",
         ),
     )
     lr_scheduler: Literal["none", "cosine", "cosine_with_restart"] = Field(
