@@ -153,6 +153,8 @@ export default function GeneratePage() {
     url.searchParams.delete('projectId')
     url.searchParams.delete('versionId')
     window.history.replaceState({}, '', url.toString())
+    // 仅 mount 跑一次消费 URL ?lora=；setPrefs 经 useCallback 稳定，无需进依赖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   // commit C: attention backend 已从 Generate 页移到 Settings；server 端
   // enqueue_generate 会自动从 secrets.generate.attention_backend 注入。
