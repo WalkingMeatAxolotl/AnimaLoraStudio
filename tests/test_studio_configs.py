@@ -39,6 +39,8 @@ def test_schema_is_complete() -> None:
         "transformer_path", "data_dir", "lora_type", "lora_rank", "epochs",
         "optimizer_type", "prodigy_d_coef", "prodigy_safeguard_warmup",
         "lion_beta1", "lion_beta2",
+        "automagic_min_lr", "automagic_max_lr", "automagic_lr_bump",
+        "automagic_beta2", "automagic_eps", "automagic_clip_threshold",
         # ProdigyPlusScheduleFree 字段
         "ppsf_d_coef", "ppsf_prodigy_steps", "ppsf_beta1", "ppsf_beta2",
         "ppsf_split_groups", "ppsf_split_groups_mean", "ppsf_use_speed",
@@ -51,6 +53,7 @@ def test_schema_is_complete() -> None:
     optimizer_annotation = fields["optimizer_type"].annotation
     # Literal 的 __args__ 包含所有合法值
     optimizer_options = getattr(optimizer_annotation, "__args__", ())
+    assert "automagic" in optimizer_options
     assert "lion" in optimizer_options
     assert "prodigy_plus_schedulefree" in optimizer_options
 
@@ -83,6 +86,8 @@ def test_schema_carries_ui_metadata(client: TestClient) -> None:
     assert "show_when" in props["prodigy_d_coef"]
     assert props["lion_beta1"]["show_when"] == "optimizer_type==lion"
     assert props["lion_beta2"]["show_when"] == "optimizer_type==lion"
+    assert props["automagic_min_lr"]["show_when"] == "optimizer_type==automagic"
+    assert props["automagic_max_lr"]["show_when"] == "optimizer_type==automagic"
     assert props["wandb_enabled"]["group"] == "wandb"
     # PPSF 字段都按 optimizer_type==prodigy_plus_schedulefree 显示
     for ppsf_field in (
@@ -120,6 +125,14 @@ def test_prodigy_rejects_non_none_scheduler() -> None:
     """普通 Prodigy 也固定常数学习率，不允许外部 scheduler。"""
     payload = TrainingConfig().model_dump(mode="python")
     payload["optimizer_type"] = "prodigy"
+    payload["lr_scheduler"] = "cosine"
+    with pytest.raises(Exception):
+        TrainingConfig.model_validate(payload)
+
+
+def test_automagic_rejects_non_none_scheduler() -> None:
+    payload = TrainingConfig().model_dump(mode="python")
+    payload["optimizer_type"] = "automagic"
     payload["lr_scheduler"] = "cosine"
     with pytest.raises(Exception):
         TrainingConfig.model_validate(payload)

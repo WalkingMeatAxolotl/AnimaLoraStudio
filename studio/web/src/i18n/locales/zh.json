@@ -294,6 +294,7 @@
       },
       "optimizerType": {
         "adamw": "AdamW",
+        "automagic": "Automagic",
         "lion": "Lion",
         "prodigy": "Prodigy",
         "prodigyPlusSchedulefree": "Prodigy + Schedule-Free"
@@ -381,6 +382,12 @@
       "prodigy_safeguard_warmup": "Prodigy warmup 期间防止 d 被初期高梯度推高；默认开启更稳",
       "lion_beta1": "Lion β1（动量插值系数）",
       "lion_beta2": "Lion β2（动量累计系数）",
+      "automagic_min_lr": "Automagic 每参数学习率下限",
+      "automagic_max_lr": "Automagic 每参数学习率上限",
+      "automagic_lr_bump": "Automagic 学习率调整步幅",
+      "automagic_beta2": "Automagic 二阶矩 β2",
+      "automagic_eps": "Automagic 数值稳定项",
+      "automagic_clip_threshold": "Automagic update RMS 裁剪阈值",
       "ppsf_d_coef": "PPSF 估出的 d 整体缩放系数；越大有效 lr 越大。欠拟合时调高（2.0+），过拟合 / 小数据集时调低（0.5）",
       "ppsf_prodigy_steps": "PPSF 在第 N 步后冻结 d 估计；0 = 全程持续估计。建议总步数 1/4 ~ 1/2 让后期 lr 稳定",
       "ppsf_beta1": "PPSF 一阶动量衰减率 (β1)：默认 0.9；越大平滑越强、响应越慢",

@@ -42,11 +42,11 @@ def test_adapter_builders_dict_has_lokr_loha_lora() -> None:
     assert set(BUILDERS) == {"lokr", "loha", "lora"}
 
 
-def test_optimizer_builders_dict_has_4_variants() -> None:
+def test_optimizer_builders_dict_has_5_variants() -> None:
     from training.optimizers import BUILDERS, VALIDATORS
-    assert set(BUILDERS) == {"adamw", "lion", "prodigy", "prodigy_plus_schedulefree"}
-    # PPSF 有专属 validator，adamw / lion / prodigy 没有
-    assert set(VALIDATORS) == {"prodigy_plus_schedulefree"}
+    assert set(BUILDERS) == {"adamw", "automagic", "lion", "prodigy", "prodigy_plus_schedulefree"}
+    # Automagic / PPSF 有专属 validator，adamw / lion / prodigy 没有
+    assert set(VALIDATORS) == {"automagic", "prodigy_plus_schedulefree"}
 
 
 def test_scheduler_builders_dict_excludes_none() -> None:

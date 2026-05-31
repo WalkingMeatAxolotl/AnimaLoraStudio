@@ -8,6 +8,7 @@ Optimizer Utils Module - 优化器创建
 4. ProdigyPlusScheduleFree (prodigy-plus-schedule-free) - Schedule-Free + Prodigy，
    解决 Prodigy 在扩散 LoRA 训练中的 mutation ep / 风格突变问题。
 5. Lion - 符号动量优化器，优化器状态比 AdamW 少一半。
+6. Automagic - AI Toolkit 风格的 per-parameter adaptive learning-rate 优化器。
 """
 
 from __future__ import annotations
@@ -29,6 +30,11 @@ try:
     BITSANDBYTES_AVAILABLE = True
 except ImportError:
     BITSANDBYTES_AVAILABLE = False
+
+try:
+    from optimum.quanto import QBytesTensor
+except ImportError:
+    QBytesTensor = ()
 
 
 def _is_param_groups(params: Any) -> bool:
@@ -170,6 +176,14 @@ def create_optimizer(
             **kwargs,
         )
 
+    elif optimizer_type == "automagic":
+        return create_automagic(
+            params=params,
+            lr=learning_rate,
+            weight_decay=weight_decay,
+            **kwargs,
+        )
+
     elif optimizer_type == "prodigy_plus_schedulefree":
         return create_prodigy_plus_schedulefree(
             params=params,
@@ -183,7 +197,7 @@ def create_optimizer(
     else:
         raise ValueError(
             f"Unknown optimizer type: {optimizer_type}. "
-            f"Choose from: adamw, adamw8bit, lion, prodigy, prodigy_plus_schedulefree"
+            f"Choose from: adamw, adamw8bit, automagic, lion, prodigy, prodigy_plus_schedulefree"
         )
 
 
@@ -304,6 +318,309 @@ def create_standard_adamw(
     
     print("  [OK] AdamW optimizer created")
 
+    return optimizer
+
+
+class Auto8bitTensor:
+    def __init__(self, data: torch.Tensor | dict[str, Any]) -> None:
+        if isinstance(data, dict):
+            self.quantized = data["quantized"]
+            self.scale = data["scale"]
+            self.orig_dtype = data["orig_dtype"]
+            return
+        abs_max = data.abs().max().item()
+        self.scale = abs_max / 127.0 if abs_max > 0 else 1.0
+        self.quantized = (data / self.scale).round().clamp(-127, 127).to(torch.int8)
+        self.orig_dtype = data.dtype
+
+    def dequantize(self) -> torch.Tensor:
+        return self.quantized.to(dtype=torch.float32) * self.scale
+
+    def to(self, *args, **kwargs):
+        return self.dequantize().to(*args, **kwargs)
+
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "quantized": self.quantized,
+            "scale": self.scale,
+            "orig_dtype": self.orig_dtype,
+        }
+
+
+def _copy_stochastic_bf16(target: torch.Tensor, source: torch.Tensor) -> None:
+    result = torch.randint_like(source, dtype=torch.int32, low=0, high=(1 << 16))
+    result.add_(source.view(dtype=torch.int32))
+    result.bitwise_and_(-65536)
+    target.copy_(result.view(dtype=torch.float32))
+
+
+def _copy_stochastic(target: torch.Tensor, source: torch.Tensor) -> None:
+    if target.dtype == torch.float32:
+        target.copy_(source)
+        return
+    if target.dtype == torch.bfloat16:
+        _copy_stochastic_bf16(target, source)
+        return
+    target.copy_(source.to(target.dtype))
+
+
+def _stochastic_grad_accumulation(param: nn.Parameter) -> None:
+    if hasattr(param, "_accum_grad"):
+        grad_fp32 = param._accum_grad.clone().to(torch.float32)
+        grad_fp32.add_(param.grad.to(torch.float32))
+        _copy_stochastic(param._accum_grad, grad_fp32)
+        del grad_fp32
+        del param.grad
+    else:
+        param._accum_grad = param.grad.clone()
+        del param.grad
+
+
+class Automagic(Optimizer):
+    def __init__(
+        self,
+        params,
+        lr: float = 1e-6,
+        min_lr: float = 1e-7,
+        max_lr: float = 1e-3,
+        lr_bump: float = 1e-6,
+        eps: float = 1e-30,
+        clip_threshold: float = 1.0,
+        beta2: float = 0.999,
+        weight_decay: float = 0.0,
+    ) -> None:
+        if lr < 0.0:
+            raise ValueError(f"Invalid learning rate: {lr}")
+        if min_lr < 0.0:
+            raise ValueError(f"Invalid min_lr: {min_lr}")
+        if max_lr <= 0.0 or max_lr < min_lr:
+            raise ValueError(f"Invalid max_lr: {max_lr}")
+        if lr_bump < 0.0:
+            raise ValueError(f"Invalid lr_bump: {lr_bump}")
+        if not 0.0 <= beta2 < 1.0:
+            raise ValueError(f"Invalid beta2: {beta2}")
+        if clip_threshold <= 0.0:
+            raise ValueError(f"Invalid clip_threshold: {clip_threshold}")
+        if weight_decay < 0.0:
+            raise ValueError(f"Invalid weight_decay: {weight_decay}")
+
+        self.lr = min(lr, max_lr)
+        if lr > 1e-3:
+            logger.warning("Automagic start lr %s is high; clamping to 1e-6", lr)
+            self.lr = 1e-6
+        self.min_lr = min_lr
+        self.max_lr = max_lr
+        self.lr_bump = lr_bump
+        super().__init__(
+            params,
+            dict(
+                lr=self.lr,
+                eps=eps,
+                clip_threshold=clip_threshold,
+                beta2=beta2,
+                weight_decay=weight_decay,
+            ),
+        )
+        self.base_lrs = [self.lr for _ in self.param_groups]
+        self.is_stochastic_rounding_accumulation = False
+        for group in self.param_groups:
+            for param in group["params"]:
+                if param.requires_grad and param.dtype != torch.float32:
+                    self.is_stochastic_rounding_accumulation = True
+                    param.register_post_accumulate_grad_hook(_stochastic_grad_accumulation)
+
+    @staticmethod
+    def _rms(tensor: torch.Tensor) -> torch.Tensor:
+        return tensor.norm(2) / (tensor.numel() ** 0.5)
+
+    @staticmethod
+    def _approx_sq_grad(exp_avg_sq_row: torch.Tensor, exp_avg_sq_col: torch.Tensor) -> torch.Tensor:
+        r_factor = (exp_avg_sq_row / exp_avg_sq_row.mean(dim=-1, keepdim=True)).rsqrt_().unsqueeze(-1)
+        c_factor = exp_avg_sq_col.unsqueeze(-2).rsqrt()
+        return torch.mul(r_factor, c_factor)
+
+    @staticmethod
+    def _get_lr(param_state: dict[str, Any]) -> float:
+        avg_lr = param_state.get("avg_lr")
+        if avg_lr is None:
+            return 0.0
+        if isinstance(avg_lr, torch.Tensor):
+            return float(avg_lr.detach().float().item())
+        return float(avg_lr)
+
+    def _get_group_lr(self, group: dict[str, Any]) -> float:
+        lrs = [self._get_lr(self.state[p]) for p in group["params"] if p in self.state]
+        if not lrs:
+            return self.lr
+        return sum(lrs) / len(lrs)
+
+    def get_learning_rates(self) -> list[float]:
+        lrs = [self._get_group_lr(group) for group in self.param_groups]
+        return lrs or self.base_lrs
+
+    def get_avg_learning_rate(self) -> float:
+        lrs = self.get_learning_rates()
+        return sum(lrs) / len(lrs)
+
+    def step_hook(self) -> None:
+        if not self.is_stochastic_rounding_accumulation:
+            return
+        for group in self.param_groups:
+            for param in group["params"]:
+                if param.requires_grad and hasattr(param, "_accum_grad"):
+                    param.grad = param._accum_grad
+                    del param._accum_grad
+
+    def initialize_state(self, p: nn.Parameter) -> None:
+        state = self.state[p]
+        state["step"] = 0
+        if "lr_mask" not in state:
+            state["lr_mask"] = Auto8bitTensor(
+                torch.ones(p.shape, device=p.device, dtype=torch.float32) * self.lr
+            )
+        state["avg_lr"] = torch.mean(state["lr_mask"].to(torch.float32))
+        if "last_polarity" not in state:
+            state["last_polarity"] = torch.zeros(p.shape, dtype=torch.bool, device=p.device)
+        if len(p.shape) >= 2:
+            state["exp_avg_sq_row"] = torch.zeros(p.shape[:-1]).to(p)
+            state["exp_avg_sq_col"] = torch.zeros(p.shape[:-2] + p.shape[-1:]).to(p)
+        else:
+            state["exp_avg_sq"] = torch.zeros_like(p)
+        state["RMS"] = 0
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        self.step_hook()
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None or not p.requires_grad:
+                    continue
+                grad = p.grad
+                if grad.dtype != torch.float32:
+                    grad = grad.to(torch.float32)
+                if grad.is_sparse:
+                    raise RuntimeError("Automagic does not support sparse gradients")
+
+                state = self.state[p]
+                if len(state) == 0:
+                    self.initialize_state(p)
+                factored = len(grad.shape) >= 2
+                if factored:
+                    state.setdefault("exp_avg_sq_row", torch.zeros(p.shape[:-1]).to(grad))
+                    state.setdefault("exp_avg_sq_col", torch.zeros(p.shape[:-2] + p.shape[-1:]).to(grad))
+                    state["exp_avg_sq_row"] = state["exp_avg_sq_row"].to(grad)
+                    state["exp_avg_sq_col"] = state["exp_avg_sq_col"].to(grad)
+                else:
+                    state.setdefault("exp_avg_sq", torch.zeros_like(grad))
+                    state["exp_avg_sq"] = state["exp_avg_sq"].to(grad)
+
+                p_data_fp32 = p.dequantize() if QBytesTensor and isinstance(p, QBytesTensor) else p
+                if p.dtype != torch.float32:
+                    p_data_fp32 = p_data_fp32.clone().float()
+
+                state["step"] = state.get("step", 0) + 1
+                state["RMS"] = self._rms(p_data_fp32)
+                beta2 = group["beta2"]
+                eps = group["eps"]
+                update = (grad ** 2) + eps
+                if factored:
+                    exp_avg_sq_row = state["exp_avg_sq_row"]
+                    exp_avg_sq_col = state["exp_avg_sq_col"]
+                    exp_avg_sq_row.mul_(beta2).add_(update.mean(dim=-1), alpha=(1.0 - beta2))
+                    exp_avg_sq_col.mul_(beta2).add_(update.mean(dim=-2), alpha=(1.0 - beta2))
+                    update = self._approx_sq_grad(exp_avg_sq_row, exp_avg_sq_col)
+                    update.mul_(grad)
+                else:
+                    exp_avg_sq = state["exp_avg_sq"]
+                    exp_avg_sq.mul_(beta2).add_(update, alpha=(1.0 - beta2))
+                    update = exp_avg_sq.rsqrt().mul_(grad)
+
+                update.div_((self._rms(update) / group["clip_threshold"]).clamp_(min=1.0))
+
+                if "last_polarity" not in state or "lr_mask" not in state:
+                    self.initialize_state(p)
+                current_polarity = (update > 0).to(torch.bool)
+                sign_agreement = torch.where(state["last_polarity"] == current_polarity, 1, -1)
+                state["last_polarity"] = current_polarity
+                lr_mask = state["lr_mask"].to(torch.float32)
+                new_lr = torch.where(
+                    sign_agreement > 0,
+                    lr_mask + self.lr_bump,
+                    lr_mask - self.lr_bump,
+                )
+                new_lr = torch.clamp(new_lr, min=self.min_lr, max=self.max_lr)
+                update.mul_(new_lr)
+                state["lr_mask"] = Auto8bitTensor(new_lr)
+                state["avg_lr"] = torch.mean(new_lr)
+
+                if group["weight_decay"] != 0:
+                    p_data_fp32.add_(p_data_fp32 * (-group["weight_decay"]) * new_lr)
+                p_data_fp32.add_(-update)
+
+                if p.dtype != torch.float32:
+                    _copy_stochastic(p, p_data_fp32)
+
+        return loss
+
+    def state_dict(self, *args, **kwargs):
+        state_dict = super().state_dict(*args, **kwargs)
+        state_dict["state"] = {
+            p: {
+                **{k: v for k, v in state.items() if k != "lr_mask"},
+                **({"lr_mask": state["lr_mask"].state_dict()} if "lr_mask" in state else {}),
+            }
+            for p, state in state_dict["state"].items()
+        }
+        return state_dict
+
+    def load_state_dict(self, state_dict, strict: bool = True):
+        converted = {
+            "state": {},
+            "param_groups": state_dict.get("param_groups", []),
+        }
+        for param_id, state in state_dict.get("state", {}).items():
+            converted_state = dict(state)
+            if isinstance(converted_state.get("lr_mask"), dict):
+                converted_state["lr_mask"] = Auto8bitTensor(converted_state["lr_mask"])
+            converted["state"][param_id] = converted_state
+        return super().load_state_dict(converted)
+
+
+def create_automagic(
+    params: Iterator[nn.Parameter],
+    lr: float,
+    min_lr: float = 1e-7,
+    max_lr: float = 1e-3,
+    lr_bump: float = 1e-6,
+    eps: float = 1e-30,
+    clip_threshold: float = 1.0,
+    beta2: float = 0.999,
+    weight_decay: float = 0.0,
+    **kwargs,
+) -> Optimizer:
+    param_list = params if _is_param_groups(params) else list(params)
+    optimizer = Automagic(
+        param_list,
+        lr=lr,
+        min_lr=min_lr,
+        max_lr=max_lr,
+        lr_bump=lr_bump,
+        eps=eps,
+        clip_threshold=clip_threshold,
+        beta2=beta2,
+        weight_decay=weight_decay,
+        **kwargs,
+    )
+    print(
+        f"Creating Automagic optimizer (lr={lr}, min_lr={min_lr}, max_lr={max_lr}, "
+        f"lr_bump={lr_bump}, beta2={beta2}, weight_decay={weight_decay})"
+    )
+    print("  [OK] Automagic optimizer created")
     return optimizer
 
 
@@ -689,6 +1006,8 @@ def get_optimizer_info(optimizer: Optimizer) -> Dict[str, Any]:
     # PPSF 内部 d 估计 — 调试时有用
     if "d" in pg0:
         info["d"] = pg0["d"]
+    if hasattr(optimizer, "get_avg_learning_rate") and callable(getattr(optimizer, "get_avg_learning_rate")):
+        info["learning_rate"] = optimizer.get_avg_learning_rate()
 
     return info
 
@@ -702,6 +1021,11 @@ def get_optimizer_monitor_metrics(optimizer: Optimizer) -> Dict[str, float]:
     normalizes those shapes into one monitor point while preserving the raw
     ingredients for debugging.
     """
+    if hasattr(optimizer, "get_avg_learning_rate") and callable(getattr(optimizer, "get_avg_learning_rate")):
+        avg_lr = _as_float(optimizer.get_avg_learning_rate())
+        if avg_lr is not None:
+            return {"lr": avg_lr, "actual_lr": avg_lr}
+
     groups = list(getattr(optimizer, "param_groups", []) or [])
     if not groups:
         return {"lr": 0.0}

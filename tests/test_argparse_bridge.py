@@ -199,6 +199,24 @@ def test_training_config_cli_lion() -> None:
     assert ns.lion_beta2 == 0.98
 
 
+def test_training_config_cli_automagic() -> None:
+    parser = bridge.build_parser(TrainingConfig)
+    ns = parser.parse_args([
+        "--optimizer-type", "automagic",
+        "--automagic-min-lr", "1e-8",
+        "--automagic-max-lr", "0.001",
+        "--automagic-lr-bump", "2e-6",
+        "--automagic-beta2", "0.998",
+        "--automagic-clip-threshold", "0.8",
+    ])
+    assert ns.optimizer_type == "automagic"
+    assert ns.automagic_min_lr == 1e-8
+    assert ns.automagic_max_lr == 0.001
+    assert ns.automagic_lr_bump == 2e-6
+    assert ns.automagic_beta2 == 0.998
+    assert ns.automagic_clip_threshold == 0.8
+
+
 def test_training_config_yaml_round_trip() -> None:
     """走完 CLI → YAML 合并这一条路径，确认 yaml_dict 字段都能被读进 args。"""
     parser = bridge.build_parser(TrainingConfig)
