@@ -15,7 +15,12 @@ from ..paths import REPO_ROOT, task_monitor_state_path
 # PP10.2.b：哪些 job kind 吃 GPU。这些 kind 在训练运行中默认会被推迟，
 # 除非 secrets.queue.allow_gpu_during_train=True 显式允许并行。
 # preprocess 走 spandrel super-resolution，加载权重到 GPU 推理。
-GPU_BOUND_JOB_KINDS: frozenset[str] = frozenset({"preprocess", "tag", "reg_build"})
+GPU_BOUND_JOB_KINDS: frozenset[str] = frozenset({
+    "preprocess",
+    "tag",
+    "reg_build",
+    "eval_samples",
+})
 
 # Worker → supervisor 的结构化事件标记。worker 写
 #   __EVENT__:my_event_type:{"foo":1,"bar":"x"}

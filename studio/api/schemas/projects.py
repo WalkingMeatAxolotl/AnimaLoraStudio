@@ -35,3 +35,8 @@ class VersionUpdate(BaseModel):
 
 class EvalManifestPut(BaseModel):
     manifest: dict[str, Any]
+
+
+class EvalSamplesStart(BaseModel):
+    checkpoint_path: Optional[str] = None
+    max_items: Optional[int] = None
