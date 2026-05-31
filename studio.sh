@@ -43,6 +43,25 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR" || { echo "studio.sh: cannot cd to $SCRIPT_DIR" >&2; exit 1; }
 
+# Mirror studio.bat's `pause` on error: when launched from a file manager
+# (double-click) the terminal closes on exit and the user can't read the
+# error (e.g. missing Node.js / Python). EXIT trap covers every `exit N`
+# path (setup-time `exit 1`, main-loop non-zero rc) uniformly; only pause
+# when stdin is a TTY so CI / piped invocations don't hang.
+_pause_if_tty_on_error() {
+    local rc=$?
+    # 130 = SIGINT (Ctrl+C), 143 = SIGTERM — user wanted to kill, don't make
+    # them press Enter to dismiss.
+    if [ "$rc" -eq 0 ] || [ "$rc" -eq 130 ] || [ "$rc" -eq 143 ]; then
+        return
+    fi
+    if [ -t 0 ] && [ -t 1 ]; then
+        printf "[studio] Press Enter to close..." >&2
+        read -r _ || true
+    fi
+}
+trap _pause_if_tty_on_error EXIT
+
 # Force Python UTF-8 output so cli.py messages with non-ASCII characters are
 # not mangled on non-UTF-8 locales.
 export PYTHONUTF8=1
