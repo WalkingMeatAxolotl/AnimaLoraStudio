@@ -130,6 +130,16 @@ manifest 记录：
 | 9 | Diagnosis UI：汇总指标并提示拟合不足 / 过拟合 / 复制风险 | 不新增指标模型 | 4, 5, 6, 7, 8 |
 | 10 | Checkpoint ranking：基于已有指标给可追溯推荐理由 | 不改变训练默认流程 | 9 |
 
+PR2 的 sample runner 应先落地为一个可持久化、可重跑、可被后续指标读取的 eval sample run：
+
+- 输入：version eval manifest、`output/` 下的一个 LoRA checkpoint，以及 version 训练配置里的模型 / runtime 默认值；
+- 调度：通过现有 `project_jobs` 增加 `eval_samples` job kind，按 GPU-bound job 处理，避免在训练 step 内同步抢资源；
+- 输出：`versions/{label}/eval/samples/{run_id}/run.json` 与 `images/*.png`；
+- metadata：记录 manifest digest / snapshot、checkpoint 身份、prompt、seed、生成参数、每张图状态和 summary counts；
+- 明确不做：不计算 CLIP / DINO / SSCD / CMMD，不做 checkpoint ranking，不输出质量推荐。
+
+这样 PR2 能证明 manifest 已经成为真实跨任务契约，同时仍把指标依赖和诊断 UI 留给后续 PR。
+
 每个后续 PR body 固定包含：
 
 ```md

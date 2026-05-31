@@ -12,7 +12,6 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .dataset.scan import IMAGE_EXTS
-from .tagging.caption_format import caption_json_to_text
 
 SCHEMA_VERSION = 1
 EVAL_DIRNAME = "eval"
@@ -127,6 +126,7 @@ def _caption_prompt(caption_path: Path | None) -> str:
             data = json.loads(caption_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return ""
+        from .tagging.caption_format import caption_json_to_text
         return caption_json_to_text(data if isinstance(data, dict) else None)
     try:
         return caption_path.read_text(encoding="utf-8").strip()
