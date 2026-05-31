@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from training.optimizers import adamw, prodigy, prodigy_plus_schedulefree
+from training.optimizers import adamw, lion, prodigy, prodigy_plus_schedulefree
 
 __all__ = ["BUILDERS", "VALIDATORS", "build_optimizer", "validate_optimizer",
            "validate_schema_consistency"]
@@ -22,6 +22,7 @@ __all__ = ["BUILDERS", "VALIDATORS", "build_optimizer", "validate_optimizer",
 
 BUILDERS: dict[str, Callable] = {
     "adamw": adamw.build,
+    "lion": lion.build,
     "prodigy": prodigy.build,
     "prodigy_plus_schedulefree": prodigy_plus_schedulefree.build,
 }

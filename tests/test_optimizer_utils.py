@@ -16,6 +16,8 @@ import torch
 from torch import nn
 
 from utils.optimizer_utils import (
+    Lion,
+    create_optimizer,
     create_prodigy_plus_schedulefree,
     get_optimizer_monitor_metrics,
     optimizer_eval_mode,
@@ -73,6 +75,38 @@ def test_eval_mode_skips_if_only_partial_methods() -> None:
 # ---------------------------------------------------------------------------
 # get_optimizer_monitor_metrics
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Lion
+# ---------------------------------------------------------------------------
+
+
+def test_create_lion_optimizer_updates_parameters() -> None:
+    model = nn.Linear(2, 1, bias=False)
+    with torch.no_grad():
+        model.weight.fill_(1.0)
+    optim = create_optimizer(
+        "lion",
+        model.parameters(),
+        learning_rate=0.1,
+        betas=(0.9, 0.99),
+        weight_decay=0.0,
+    )
+
+    loss = model(torch.ones(1, 2)).sum()
+    loss.backward()
+    optim.step()
+
+    assert isinstance(optim, Lion)
+    assert torch.allclose(model.weight, torch.full_like(model.weight, 0.9))
+    assert "exp_avg" in optim.state[model.weight]
+
+
+def test_create_lion_rejects_invalid_betas() -> None:
+    model = nn.Linear(2, 1)
+    with pytest.raises(ValueError, match="Invalid beta1"):
+        create_optimizer("lion", model.parameters(), learning_rate=1e-4, betas=(1.0, 0.99))
 
 
 def test_monitor_metrics_uses_plain_lr_for_adamw() -> None:

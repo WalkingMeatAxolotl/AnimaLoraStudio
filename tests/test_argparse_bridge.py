@@ -187,6 +187,18 @@ def test_training_config_cli_smoke() -> None:
     assert ns.sample_prompts == ["p1", "p2"]
 
 
+def test_training_config_cli_lion() -> None:
+    parser = bridge.build_parser(TrainingConfig)
+    ns = parser.parse_args([
+        "--optimizer-type", "lion",
+        "--lion-beta1", "0.95",
+        "--lion-beta2", "0.98",
+    ])
+    assert ns.optimizer_type == "lion"
+    assert ns.lion_beta1 == 0.95
+    assert ns.lion_beta2 == 0.98
+
+
 def test_training_config_yaml_round_trip() -> None:
     """走完 CLI → YAML 合并这一条路径，确认 yaml_dict 字段都能被读进 args。"""
     parser = bridge.build_parser(TrainingConfig)

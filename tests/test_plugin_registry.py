@@ -42,10 +42,10 @@ def test_adapter_builders_dict_has_lokr_loha_lora() -> None:
     assert set(BUILDERS) == {"lokr", "loha", "lora"}
 
 
-def test_optimizer_builders_dict_has_3_variants() -> None:
+def test_optimizer_builders_dict_has_4_variants() -> None:
     from training.optimizers import BUILDERS, VALIDATORS
-    assert set(BUILDERS) == {"adamw", "prodigy", "prodigy_plus_schedulefree"}
-    # PPSF 有专属 validator，adamw / prodigy 没有
+    assert set(BUILDERS) == {"adamw", "lion", "prodigy", "prodigy_plus_schedulefree"}
+    # PPSF 有专属 validator，adamw / lion / prodigy 没有
     assert set(VALIDATORS) == {"prodigy_plus_schedulefree"}
 
 

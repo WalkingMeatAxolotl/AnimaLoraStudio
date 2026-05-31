@@ -7,6 +7,7 @@ Optimizer Utils Module - 优化器创建
 3. Prodigy (prodigyopt) - 无需调 lr 的自适应优化器
 4. ProdigyPlusScheduleFree (prodigy-plus-schedule-free) - Schedule-Free + Prodigy，
    解决 Prodigy 在扩散 LoRA 训练中的 mutation ep / 风格突变问题。
+5. Lion - 符号动量优化器，优化器状态比 AdamW 少一半。
 """
 
 from __future__ import annotations
@@ -160,6 +161,15 @@ def create_optimizer(
             **kwargs
         )
 
+    elif optimizer_type == "lion":
+        return create_lion(
+            params=params,
+            lr=learning_rate,
+            betas=betas,
+            weight_decay=weight_decay,
+            **kwargs,
+        )
+
     elif optimizer_type == "prodigy_plus_schedulefree":
         return create_prodigy_plus_schedulefree(
             params=params,
@@ -173,7 +183,7 @@ def create_optimizer(
     else:
         raise ValueError(
             f"Unknown optimizer type: {optimizer_type}. "
-            f"Choose from: adamw, adamw8bit, prodigy, prodigy_plus_schedulefree"
+            f"Choose from: adamw, adamw8bit, lion, prodigy, prodigy_plus_schedulefree"
         )
 
 
@@ -294,6 +304,71 @@ def create_standard_adamw(
     
     print("  [OK] AdamW optimizer created")
 
+    return optimizer
+
+
+class Lion(Optimizer):
+    def __init__(
+        self,
+        params,
+        lr: float = 1e-4,
+        betas: tuple[float, float] = (0.9, 0.99),
+        weight_decay: float = 0.0,
+    ) -> None:
+        if lr < 0.0:
+            raise ValueError(f"Invalid learning rate: {lr}")
+        if not 0.0 <= betas[0] < 1.0:
+            raise ValueError(f"Invalid beta1: {betas[0]}")
+        if not 0.0 <= betas[1] < 1.0:
+            raise ValueError(f"Invalid beta2: {betas[1]}")
+        if weight_decay < 0.0:
+            raise ValueError(f"Invalid weight_decay: {weight_decay}")
+        super().__init__(params, dict(lr=lr, betas=betas, weight_decay=weight_decay))
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        for group in self.param_groups:
+            lr = group["lr"]
+            beta1, beta2 = group["betas"]
+            weight_decay = group["weight_decay"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                grad = p.grad
+                if grad.is_sparse:
+                    raise RuntimeError("Lion does not support sparse gradients")
+
+                if weight_decay != 0.0:
+                    p.mul_(1 - lr * weight_decay)
+
+                state = self.state[p]
+                if len(state) == 0:
+                    state["exp_avg"] = torch.zeros_like(p)
+                exp_avg = state["exp_avg"]
+
+                update = exp_avg.mul(beta1).add(grad, alpha=1 - beta1)
+                p.add_(update.sign(), alpha=-lr)
+                exp_avg.mul_(beta2).add_(grad, alpha=1 - beta2)
+
+        return loss
+
+
+def create_lion(
+    params: Iterator[nn.Parameter],
+    lr: float,
+    betas: tuple = (0.9, 0.99),
+    weight_decay: float = 0.0,
+    **kwargs,
+) -> Optimizer:
+    param_list = params if _is_param_groups(params) else list(params)
+    optimizer = Lion(param_list, lr=lr, betas=betas, weight_decay=weight_decay, **kwargs)
+    print(f"Creating Lion optimizer (lr={lr}, betas={betas}, weight_decay={weight_decay})")
+    print("  [OK] Lion optimizer created")
     return optimizer
 
 

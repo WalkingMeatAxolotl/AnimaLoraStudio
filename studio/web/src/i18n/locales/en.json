@@ -294,6 +294,7 @@
       },
       "optimizerType": {
         "adamw": "AdamW",
+        "lion": "Lion",
         "prodigy": "Prodigy",
         "prodigyPlusSchedulefree": "Prodigy + Schedule-Free"
       },
@@ -375,9 +376,11 @@
       "lr_scheduler_t0": "First cosine_with_restart cycle length (unit: step)",
       "lr_scheduler_t_mult": "cosine_with_restart cycle-length multiplier relative to the previous cycle (>1 = lengthening cycles)",
       "lr_scheduler_eta_min": "LR decay floor for cosine schedules; should be much smaller than the initial lr (e.g. 1e-6 for an initial lr of 1e-4)",
-      "optimizer_type": "Optimizer. adamw requires manual lr tuning; prodigy / prodigy_plus_schedulefree self-estimate lr (fill 1.0 in the lr field)",
+      "optimizer_type": "Optimizer. adamw requires manual lr tuning; lion saves optimizer state memory; prodigy / prodigy_plus_schedulefree self-estimate lr (fill 1.0 in the lr field)",
       "prodigy_d_coef": "Overall scaling coefficient on Prodigy's estimated d; larger = larger effective lr. Raise (2.0+) when underfitting; lower (0.5) when overfitting or on small datasets",
       "prodigy_safeguard_warmup": "Prevent d from being inflated by early high gradients during Prodigy warmup; default on for stability",
+      "lion_beta1": "Lion β1 (momentum interpolation coefficient)",
+      "lion_beta2": "Lion β2 (momentum accumulation coefficient)",
       "ppsf_d_coef": "Overall scaling coefficient on PPSF's estimated d; larger = larger effective lr. Raise (2.0+) when underfitting; lower (0.5) when overfitting or on small datasets",
       "ppsf_prodigy_steps": "Freeze d estimation after N steps in PPSF; 0 = estimate throughout. Recommended 1/4 to 1/2 of total steps for late-stage stability",
       "ppsf_beta1": "PPSF first-moment decay rate (β1): default 0.9; larger = smoother, slower response",

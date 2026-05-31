@@ -294,6 +294,7 @@
       },
       "optimizerType": {
         "adamw": "AdamW",
+        "lion": "Lion",
         "prodigy": "Prodigy",
         "prodigyPlusSchedulefree": "Prodigy + Schedule-Free"
       },
@@ -375,9 +376,11 @@
       "lr_scheduler_t0": "cosine_with_restart 首次重启周期（单位：step）",
       "lr_scheduler_t_mult": "cosine_with_restart 每次重启后周期相对上轮的倍数（>1 周期递增）",
       "lr_scheduler_eta_min": "学习率衰减下限：cosine 调度到此值后不再下降；通常远小于初始 lr（如初始 1e-4 配 1e-6）",
-      "optimizer_type": "优化器。adamw 需手动调 lr；prodigy / prodigy_plus_schedulefree 自适应估计 lr（lr 字段填 1.0）",
+      "optimizer_type": "优化器。adamw 需手动调 lr；lion 状态更省显存；prodigy / prodigy_plus_schedulefree 自适应估计 lr（lr 字段填 1.0）",
       "prodigy_d_coef": "Prodigy 估出的 d 整体缩放系数；越大有效 lr 越大。欠拟合时调高（2.0+），过拟合 / 小数据集时调低（0.5）",
       "prodigy_safeguard_warmup": "Prodigy warmup 期间防止 d 被初期高梯度推高；默认开启更稳",
+      "lion_beta1": "Lion β1（动量插值系数）",
+      "lion_beta2": "Lion β2（动量累计系数）",
       "ppsf_d_coef": "PPSF 估出的 d 整体缩放系数；越大有效 lr 越大。欠拟合时调高（2.0+），过拟合 / 小数据集时调低（0.5）",
       "ppsf_prodigy_steps": "PPSF 在第 N 步后冻结 d 估计；0 = 全程持续估计。建议总步数 1/4 ~ 1/2 让后期 lr 稳定",
       "ppsf_beta1": "PPSF 一阶动量衰减率 (β1)：默认 0.9；越大平滑越强、响应越慢",
