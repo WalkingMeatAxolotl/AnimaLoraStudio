@@ -96,7 +96,7 @@ class TrainingConfig(BaseModel):
     )
     flip_augment: bool = Field(
         True,
-        description="水平翻转增强",
+        description="水平翻转增强（与 cache_latents 同开时 VAE 缓存自动存原图+镜像两份 latent，训练时随机取，编码时间和缓存大小 ×2）",
         json_schema_extra=_meta("caption"),
     )
     tag_dropout: float = Field(

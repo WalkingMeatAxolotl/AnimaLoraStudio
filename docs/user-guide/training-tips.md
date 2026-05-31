@@ -211,6 +211,17 @@ EDM/Karras 论文里 δ=0.15 是常用经验值。
 
 `pyramid_noise` 来自 Mistoline / Diffusion 社区实验，画风 LoRA 受益明显，角色 LoRA 一般。
 
+### Flip Augment + Cache Latents（双份缓存）
+
+`flip_augment` 与 `cache_latents` 同开时，Anima 按 kohya 上游 `latents` / `latents_flipped` 模式存**双份 latent**：
+
+- cache 阶段对每张图 encode 两次（原图 + 镜像），分别存到 npz 的 `latent` / `latent_flipped` 键
+- 训练时 `__getitem__` 50% 概率取 flipped 版本，跟非 cache 路径行为对齐
+- 代价：**编码时间和 cache 大小都 ×2**（小数据集无感知，大数据集要权衡）
+- 老 cache（只有 `latent`）+ `flip_augment=true` → 自动判失效，重 encode 补全；切回 `flip_augment=false` 不会反复重 encode（双份是单份的超集）
+
+历史 bug：旧版 0.11.x 之前同开两者会让 cache 阶段那一次随机翻转 baked 进 npz，**flip_augment 永久失效 + 50% 数据被永久镜像污染**。0.11.x 起按双份方案修复，已有的污染 cache 通过 `_is_cache_valid` 自动检测重 encode。
+
 ---
 
 ## Schema 简单/高级模式 与 字段位置（0.7.1 改动）

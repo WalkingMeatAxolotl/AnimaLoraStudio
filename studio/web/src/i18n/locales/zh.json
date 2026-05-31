@@ -332,7 +332,7 @@
       "reg_weight": "正则集 loss 权重",
       "shuffle_caption": "启用标签打乱（JSON 模式分类内打乱，TXT 模式全部打乱）",
       "keep_tokens": "保护前 N 个标签不打乱（仅 TXT 模式）",
-      "flip_augment": "水平翻转增强",
+      "flip_augment": "水平翻转增强（与 cache_latents 同开时 VAE 缓存自动存原图+镜像两份 latent，训练时随机取，编码时间和缓存大小 ×2）",
       "tag_dropout": "标签随机丢弃概率",
       "prefer_json": "优先使用 JSON 标签文件（推荐，支持分类 shuffle）",
       "cache_latents": "缓存 VAE latent 加速训练",

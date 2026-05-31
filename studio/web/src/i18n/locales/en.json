@@ -332,7 +332,7 @@
       "reg_weight": "Regularization loss weight",
       "shuffle_caption": "Shuffle tags (JSON mode shuffles within categories, TXT mode shuffles all tags)",
       "keep_tokens": "Protect the first N tags from shuffling (TXT mode only)",
-      "flip_augment": "Horizontal flip augmentation",
+      "flip_augment": "Horizontal flip augmentation (when combined with cache_latents, the VAE cache stores both original and flipped latents per image; encoding time and cache size both 2×)",
       "tag_dropout": "Random tag dropout probability",
       "prefer_json": "Prefer JSON tag files (recommended; supports category shuffle)",
       "cache_latents": "Cache VAE latents to speed up training",
