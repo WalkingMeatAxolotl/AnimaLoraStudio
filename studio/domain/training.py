@@ -18,7 +18,11 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .common import AttentionBackend, _meta
-from .migrations import migrate_legacy_attention, migrate_legacy_save_keys
+from .migrations import (
+    migrate_legacy_attention,
+    migrate_legacy_save_keys,
+    migrate_noise_enhancement_type,
+)
 
 
 class TrainingConfig(BaseModel):
@@ -303,20 +307,25 @@ class TrainingConfig(BaseModel):
         description="【性能】Cross-attention KV trim：按实际 token 数裁到最近 bucket（64/128/256/512），减少 padding 计算量",
         json_schema_extra=_meta("system", advanced=True),
     )
+    noise_enhancement_type: Literal["none", "offset", "pyramid"] = Field(
+        "none",
+        description="【噪声增强】二选一：offset 给噪声加常数低频偏移（亮暗对比）；pyramid 多尺度叠加低频（构图/光照）。kohya 上游同样禁止同开。",
+        json_schema_extra=_meta("noise_schedule", advanced=True),
+    )
     noise_offset: float = Field(
         0.0, ge=0.0, le=0.2,
-        description="【噪声增强】低频偏移强度，缓解亮度均值偏差（0=禁用，推荐 0.05-0.1）",
-        json_schema_extra=_meta("noise_schedule", advanced=True),
+        description="【噪声增强】低频偏移强度，缓解亮度均值偏差（推荐 0.05-0.1）",
+        json_schema_extra=_meta("noise_schedule", show_when="noise_enhancement_type==offset", advanced=True),
     )
     pyramid_noise_iters: int = Field(
         0, ge=0, le=6,
-        description="【噪声增强】多尺度噪声叠加层数（0=禁用；2-3 帮助全局光照构图学习）",
-        json_schema_extra=_meta("noise_schedule", advanced=True),
+        description="【噪声增强】多尺度噪声叠加层数（2-3 帮助全局光照构图学习）",
+        json_schema_extra=_meta("noise_schedule", show_when="noise_enhancement_type==pyramid", advanced=True),
     )
     pyramid_noise_discount: float = Field(
         0.35, ge=0.1, le=0.9,
-        description="【噪声增强】金字塔每层衰减系数（仅 pyramid_noise_iters > 0）",
-        json_schema_extra=_meta("noise_schedule", show_when="pyramid_noise_iters!=0", advanced=True),
+        description="【噪声增强】金字塔每层衰减系数",
+        json_schema_extra=_meta("noise_schedule", show_when="noise_enhancement_type==pyramid", advanced=True),
     )
     timestep_sampling: Literal[
         "logit_normal",
@@ -473,6 +482,11 @@ class TrainingConfig(BaseModel):
     @classmethod
     def _migrate_save_keys(cls, data: Any) -> Any:
         return migrate_legacy_save_keys(data)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_noise_enhancement(cls, data: Any) -> Any:
+        return migrate_noise_enhancement_type(data)
 
     @model_validator(mode="after")
     def _validate_prodigy_scheduler(self) -> "TrainingConfig":

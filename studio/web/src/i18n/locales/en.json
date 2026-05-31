@@ -312,6 +312,11 @@
         "none": "PyTorch SDPA",
         "xformers": "xFormers",
         "flashAttn": "Flash Attention"
+      },
+      "noiseEnhancementType": {
+        "none": "Disabled",
+        "offset": "Noise Offset",
+        "pyramid": "Pyramid noise"
       }
     },
     "disableHints": {
@@ -369,9 +374,10 @@
       "ppsf_use_stableadamw": "Use stable AdamW normalization in PPSF (recommended)",
       "weight_decay": "Weight decay (0 disables)",
       "kv_trim": "[Performance] Cross-attention KV trim: crop to nearest bucket (64/128/256/512) by actual token count to reduce padding compute",
-      "noise_offset": "[Noise augmentation] Low-frequency offset strength, helps brightness mean bias (0 disables, recommended 0.05-0.1)",
-      "pyramid_noise_iters": "[Noise augmentation] Multi-scale noise layers (0 disables; 2-3 helps global lighting/composition learning)",
-      "pyramid_noise_discount": "[Noise augmentation] Per-layer pyramid decay (only when pyramid_noise_iters > 0)",
+      "noise_enhancement_type": "[Noise augmentation] Pick one: offset injects a constant low-frequency bias (light/dark contrast); pyramid stacks multi-scale low-frequency noise (composition/lighting). Mutually exclusive — kohya enforces the same constraint.",
+      "noise_offset": "[Noise augmentation] Low-frequency offset strength, helps brightness mean bias (recommended 0.05-0.1)",
+      "pyramid_noise_iters": "[Noise augmentation] Multi-scale noise layers (2-3 helps global lighting/composition learning)",
+      "pyramid_noise_discount": "[Noise augmentation] Per-layer pyramid decay",
       "timestep_sampling": "[Timestep sampling] Distribution (logit_normal is the SD3/Anima default; mixed_* modes blend uniform with a biased end using timestep_mix_low_prob)",
       "timestep_shift": "[Timestep sampling] logit-normal / mode shift (>1 biases high-noise end, <1 biases detail end)",
       "timestep_mix_low_prob": "[Timestep sampling] Sample ratio sent to the biased end in mixed_* modes (0 = all uniform; typical 0.15-0.30)",

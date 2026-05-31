@@ -70,3 +70,54 @@ def migrate_legacy_save_keys(data: Any) -> Any:
             else:
                 data[new] = data.pop(legacy)
     return data
+
+
+def migrate_noise_enhancement_type(data: Any) -> Any:
+    """对齐 kohya: `noise_offset` 与金字塔噪声互斥；用单一 type 字段管控。
+
+    两步：
+      1. 老 yaml 没有 `noise_enhancement_type` 时按现状字段推导：
+            pyramid_noise_iters > 0   → "pyramid"
+            noise_offset > 0          → "offset"
+            都为 0                    → "none"
+         历史 bug 配置（两者都 > 0）：选 "pyramid"。理由：Anima 旧 `make_noise`
+         实现末尾 `noise = cur / cur.std().clamp(...)` 归一化会稀释 noise_offset
+         的常数偏移，实际生效的主要是 pyramid，所以推导到 pyramid 跟用户主观
+         观察最接近。
+      2. 反组字段强制清零 —— kohya_ss issue #2599 教训：序列化层就要互斥，
+         UI 隐藏字段不等于清值，否则 yaml 残值会进训练。
+         注意：argparse_bridge 路径绕开 pydantic validator，清零必须在
+         migration 里做（不能只在 schema validator 里做）。
+
+    Idempotent：已显式给了 `noise_enhancement_type` 就直接尊重。
+    """
+    if not isinstance(data, dict):
+        return data
+    if "noise_enhancement_type" not in data:
+        pyramid = _coerce_num(data.get("pyramid_noise_iters", 0))
+        offset = _coerce_num(data.get("noise_offset", 0.0))
+        if pyramid > 0:
+            data["noise_enhancement_type"] = "pyramid"
+        elif offset > 0:
+            data["noise_enhancement_type"] = "offset"
+        else:
+            data["noise_enhancement_type"] = "none"
+    t = data["noise_enhancement_type"]
+    if t == "offset":
+        data["pyramid_noise_iters"] = 0
+    elif t == "pyramid":
+        data["noise_offset"] = 0.0
+    elif t == "none":
+        data["noise_offset"] = 0.0
+        data["pyramid_noise_iters"] = 0
+    return data
+
+
+def _coerce_num(v: Any) -> float:
+    """yaml 可能把数字读成 str / None；为 type 推导宽容地转 float。"""
+    if v is None:
+        return 0.0
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0

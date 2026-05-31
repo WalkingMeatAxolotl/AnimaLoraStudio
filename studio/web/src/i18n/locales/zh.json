@@ -312,6 +312,11 @@
         "none": "PyTorch SDPA",
         "xformers": "xFormers",
         "flashAttn": "Flash Attention"
+      },
+      "noiseEnhancementType": {
+        "none": "不启用",
+        "offset": "Noise Offset",
+        "pyramid": "金字塔噪声"
       }
     },
     "disableHints": {
@@ -369,9 +374,10 @@
       "ppsf_use_stableadamw": "PPSF 用 stable AdamW 归一化（推荐开启）",
       "weight_decay": "权重衰减（0=禁用）",
       "kv_trim": "【性能】Cross-attention KV trim：按实际 token 数裁到最近 bucket（64/128/256/512），减少 padding 计算量",
-      "noise_offset": "【噪声增强】低频偏移强度，缓解亮度均值偏差（0=禁用，推荐 0.05-0.1）",
-      "pyramid_noise_iters": "【噪声增强】多尺度噪声叠加层数（0=禁用；2-3 帮助全局光照构图学习）",
-      "pyramid_noise_discount": "【噪声增强】金字塔每层衰减系数（仅 pyramid_noise_iters > 0）",
+      "noise_enhancement_type": "【噪声增强】二选一：offset 给噪声加常数低频偏移（亮暗对比）；pyramid 多尺度叠加低频（构图/光照）。kohya 上游同样禁止同开。",
+      "noise_offset": "【噪声增强】低频偏移强度，缓解亮度均值偏差（推荐 0.05-0.1）",
+      "pyramid_noise_iters": "【噪声增强】多尺度噪声叠加层数（2-3 帮助全局光照构图学习）",
+      "pyramid_noise_discount": "【噪声增强】金字塔每层衰减系数",
       "timestep_sampling": "【时间步采样】分布（logit_normal 为 SD3/Anima 默认；mixed_* 模式混合 uniform 与偏置端，按 timestep_mix_low_prob 控制比例）",
       "timestep_shift": "【时间步采样】logit-normal / mode shift（>1 偏向高噪声端，<1 偏向细节端）",
       "timestep_mix_low_prob": "【时间步采样】mixed_* 模式下走偏置端的样本比例（0 = 全 uniform；典型 0.15-0.30）",

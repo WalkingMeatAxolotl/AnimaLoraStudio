@@ -19,6 +19,7 @@ from .domain import (
     _meta,
     migrate_legacy_attention,
     migrate_legacy_save_keys,
+    migrate_noise_enhancement_type,
 )
 
 __all__ = [
@@ -35,4 +36,5 @@ __all__ = [
     "_meta",
     "migrate_legacy_attention",
     "migrate_legacy_save_keys",
+    "migrate_noise_enhancement_type",
 ]

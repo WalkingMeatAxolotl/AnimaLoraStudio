@@ -205,9 +205,12 @@ EDM/Karras 论文里 δ=0.15 是常用经验值。
 
 | 字段 | 默认 | 用途 |
 |------|------|------|
-| `noise_offset` | `0.0` | 给噪声加常数偏置；`0.05~0.1` 能改善超暗 / 超亮场景的对比度 |
-| `pyramid_noise_iters` | `0` | 金字塔噪声层数；`>0` 在多尺度叠加噪声，纹理多样性更好 |
-| `pyramid_noise_discount` | `0.35` | 金字塔每层衰减系数（仅 `pyramid_noise_iters>0` 用） |
+| `noise_enhancement_type` | `none` | `none` / `offset` / `pyramid` 三选一，互斥（见下） |
+| `noise_offset` | `0.0` | 给噪声加常数偏置；`0.05~0.1` 能改善超暗 / 超亮场景的对比度。仅 `type=offset` 生效 |
+| `pyramid_noise_iters` | `0` | 金字塔噪声层数；多尺度叠加噪声，纹理多样性更好。仅 `type=pyramid` 生效 |
+| `pyramid_noise_discount` | `0.35` | 金字塔每层衰减系数。仅 `type=pyramid` 生效 |
+
+**互斥约束**：`noise_offset` 与金字塔噪声**不能同时启用**。两者都在给噪声注入低频成分（pyramid 最低分辨率那层 ≈ `noise_offset` 等价物），叠加会让低频成分双倍灌入，训练目标失真。这跟 kohya 上游 [sd-scripts PR #477](https://github.com/kohya-ss/sd-scripts/pull/477) 的硬约束一致。Anima 的 schema 校验会强制清零反组字段，老 yaml 同开会按 `pyramid_noise_iters > 0` 优先映射到 pyramid。
 
 `pyramid_noise` 来自 Mistoline / Diffusion 社区实验，画风 LoRA 受益明显，角色 LoRA 一般。
 

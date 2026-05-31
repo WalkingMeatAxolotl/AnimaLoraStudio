@@ -126,6 +126,11 @@ export const SCHEMA_ENUM_LABEL_KEYS: Record<string, Record<string, string>> = {
     xformers: 'schema.enums.attentionBackend.xformers',
     flash_attn: 'schema.enums.attentionBackend.flashAttn',
   },
+  noise_enhancement_type: {
+    none: 'schema.enums.noiseEnhancementType.none',
+    offset: 'schema.enums.noiseEnhancementType.offset',
+    pyramid: 'schema.enums.noiseEnhancementType.pyramid',
+  },
 }
 
 export function schemaGroupLabel(key: string, fallback: string, t: TFunction): string {

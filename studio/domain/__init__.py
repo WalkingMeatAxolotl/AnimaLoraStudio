@@ -15,7 +15,11 @@
 from .common import AttentionBackend, GROUP_ORDER, _meta
 from .generate import GenerateConfig
 from .lora import LoraEntry
-from .migrations import migrate_legacy_attention, migrate_legacy_save_keys
+from .migrations import (
+    migrate_legacy_attention,
+    migrate_legacy_save_keys,
+    migrate_noise_enhancement_type,
+)
 from .reg import RegAiConfig
 from .training import TrainingConfig
 from .xy_matrix import XYAxisSpec, XYAxisType, XYMatrixSpec, _check_axis_values
@@ -34,4 +38,5 @@ __all__ = [
     "_meta",
     "migrate_legacy_attention",
     "migrate_legacy_save_keys",
+    "migrate_noise_enhancement_type",
 ]

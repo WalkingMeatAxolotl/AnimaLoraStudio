@@ -92,8 +92,15 @@ def apply_yaml_config(args, config):
     所以这里显式做一次。
     """
     from studio.infrastructure.argparse_bridge import merge_yaml_into_namespace
-    from studio.schema import TrainingConfig, migrate_legacy_attention, migrate_legacy_save_keys
-    config = migrate_legacy_save_keys(migrate_legacy_attention(dict(config or {})))
+    from studio.schema import (
+        TrainingConfig,
+        migrate_legacy_attention,
+        migrate_legacy_save_keys,
+        migrate_noise_enhancement_type,
+    )
+    config = migrate_noise_enhancement_type(
+        migrate_legacy_save_keys(migrate_legacy_attention(dict(config or {})))
+    )
     return merge_yaml_into_namespace(args, config, TrainingConfig)
 
 
