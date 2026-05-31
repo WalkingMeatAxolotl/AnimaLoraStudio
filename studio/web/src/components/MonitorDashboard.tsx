@@ -520,8 +520,10 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
               minHeight={50}
             />
             {dSeries.length >= 2 && (
-              <div className="mt-3 shrink-0">
-                <div className="flex items-center justify-between mb-1">
+              // d 块 flex:1 跟 LR 平分剩余高（不固定 height，否则 axes 在小视口
+              // 被 preserveAspectRatio="none" 压成不可读；minHeight 50 兜底同步 LR）
+              <div className="mt-3 flex flex-col" style={{ flex: 1, minHeight: 0 }}>
+                <div className="flex items-center justify-between mb-1 shrink-0">
                   <span className="text-xs text-fg-tertiary font-mono">d value</span>
                   <SmoothControl alpha={dAlpha} setAlpha={setDAlpha} min={0.005} max={1} step={0.005} />
                 </div>
@@ -531,7 +533,7 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
                   smoothColor="var(--accent)"
                   emaAlpha={dAlpha}
                   yFormat={fmtMetric}
-                  height={50}
+                  minHeight={50}
                 />
               </div>
             )}
