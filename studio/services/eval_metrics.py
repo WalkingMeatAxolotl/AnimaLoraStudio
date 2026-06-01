@@ -198,6 +198,8 @@ def _overall_status(states: dict[str, dict[str, Any]]) -> str:
         return "done"
     if summary.get("done"):
         return "partial"
+    if summary.get("unavailable"):
+        return "partial"
     return "empty"
 
 
@@ -330,18 +332,50 @@ def save_result(
     if run is None:
         raise EvalMetricsError(f"eval sample run not found: {run_id}")
     ts = time.time() if now is None else float(now)
-    payload = dict(result)
-    existing_created_at = None
     path = metrics_path(version_dir, run_id)
+    existing: dict[str, Any] = {}
     if path.exists():
         try:
-            existing = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(existing, dict):
-                existing_created_at = existing.get("created_at")
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing = loaded
         except (OSError, json.JSONDecodeError):
-            existing_created_at = None
+            existing = {}
+    payload = {
+        key: value for key, value in existing.items()
+        if key not in {"status", "summary", "updated_at"}
+    }
+    existing_metrics = (
+        existing.get("metrics") if isinstance(existing.get("metrics"), dict) else {}
+    )
+    incoming_metrics = (
+        result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+    )
+    if existing_metrics or incoming_metrics:
+        metrics = dict(existing_metrics)
+        for key, value in incoming_metrics.items():
+            if value is None:
+                metrics.pop(str(key), None)
+            else:
+                metrics[str(key)] = value
+        payload["metrics"] = metrics
+    existing_states = (
+        existing.get("metric_states")
+        if isinstance(existing.get("metric_states"), dict)
+        else {}
+    )
+    incoming_states = (
+        result.get("metric_states")
+        if isinstance(result.get("metric_states"), dict)
+        else {}
+    )
+    if existing_states or incoming_states:
+        payload["metric_states"] = {**existing_states, **incoming_states}
+    for key, value in result.items():
+        if key not in {"metrics", "metric_states"}:
+            payload[key] = value
     payload.setdefault("schema_version", SCHEMA_VERSION)
-    payload.setdefault("created_at", existing_created_at or ts)
+    payload.setdefault("created_at", existing.get("created_at") or ts)
     payload["updated_at"] = ts
     normalized = _normalize_result(version_dir, run, payload, has_metrics=True)
     to_write = {

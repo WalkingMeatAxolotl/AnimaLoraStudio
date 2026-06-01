@@ -20,6 +20,7 @@ GPU_BOUND_JOB_KINDS: frozenset[str] = frozenset({
     "tag",
     "reg_build",
     "eval_samples",
+    "eval_clip",
 })
 
 # Worker → supervisor 的结构化事件标记。worker 写

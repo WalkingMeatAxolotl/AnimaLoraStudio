@@ -5,8 +5,10 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from ._shared import _version_dir_or_404
-from ....services import eval_metrics, eval_samples
+from ...schemas.projects import EvalClipStart
+from ._shared import _publish_job_state, _version_dir_or_404
+from .... import db
+from ....services import eval_clip, eval_metrics, eval_samples
 
 router = APIRouter()
 
@@ -37,3 +39,28 @@ def get_eval_metric_result_endpoint(
     if result is None:
         raise HTTPException(404, f"eval sample run 不存在: {run_id}")
     return {"metric_specs": eval_metrics.metric_specs(), "result": result}
+
+
+@router.post("/api/projects/{pid}/versions/{vid}/eval/samples/{run_id}/metrics/clip")
+def start_eval_clip_metrics_endpoint(
+    pid: int, vid: int, run_id: str, body: EvalClipStart
+) -> dict[str, Any]:
+    p, v, vdir = _version_dir_or_404(pid, vid)
+    try:
+        with db.connection_for() as conn:
+            job, result = eval_clip.start_job(
+                conn,
+                p,
+                v,
+                vdir,
+                run_id,
+                model_name=body.model_name,
+            )
+    except (
+        eval_clip.EvalClipError,
+        eval_metrics.EvalMetricsError,
+        eval_samples.EvalSamplesError,
+    ) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    _publish_job_state(job)
+    return {"job": job, "result": result}

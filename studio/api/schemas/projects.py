@@ -40,3 +40,7 @@ class EvalManifestPut(BaseModel):
 class EvalSamplesStart(BaseModel):
     checkpoint_path: Optional[str] = None
     max_items: Optional[int] = None
+
+
+class EvalClipStart(BaseModel):
+    model_name: Optional[str] = None

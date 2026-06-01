@@ -124,7 +124,41 @@ def test_save_metric_result_normalizes_states_and_preserves_created_at(isolated)
     assert second["created_at"] == 3000.0
     assert second["updated_at"] == 4000.0
     assert second["status"] == "failed"
+    assert second["metrics"]["clip_t"]["value"] == 0.31
+    assert second["metrics"]["paired_cmmd2"] == 0.42
     assert second["metric_states"]["clip_t"]["error"] == "missing model"
+
+
+def test_save_metric_result_can_clear_stale_values(isolated) -> None:
+    project, version, vdir = _new_project(isolated)
+    run = _sample_run(project, version, vdir)
+    eval_metrics.save_result(
+        vdir,
+        run["run_id"],
+        {"metrics": {"clip_i": 0.5}},
+        now=3000.0,
+    )
+
+    result = eval_metrics.save_result(
+        vdir,
+        run["run_id"],
+        {
+            "metrics": {"clip_i": None},
+            "metric_states": {
+                "clip_i": {
+                    "status": "unavailable",
+                    "value": None,
+                    "reason": "no paired references",
+                }
+            },
+        },
+        now=4000.0,
+    )
+
+    assert "clip_i" not in result["metrics"]
+    assert result["status"] == "partial"
+    assert result["metric_states"]["clip_i"]["status"] == "unavailable"
+    assert result["metric_states"]["clip_i"]["value"] is None
 
 
 def test_eval_metrics_http_empty_list_and_single_run(client: TestClient) -> None:
