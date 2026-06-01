@@ -39,7 +39,7 @@ def AnimaLycorisAdapter():
 
 def test_adapter_builders_dict_has_lokr_loha_lora() -> None:
     from training.adapters import BUILDERS
-    assert set(BUILDERS) == {"lokr", "loha", "lora"}
+    assert set(BUILDERS) == {"lokr", "loha", "lora", "tlora"}
 
 
 def test_optimizer_builders_dict_has_5_variants() -> None:
@@ -51,7 +51,7 @@ def test_optimizer_builders_dict_has_5_variants() -> None:
 
 def test_scheduler_builders_dict_excludes_none() -> None:
     from training.schedulers import BUILDERS, SCHEMA_ONLY_OPTIONS
-    assert set(BUILDERS) == {"cosine", "cosine_with_restart"}
+    assert set(BUILDERS) == {"cosine", "cosine_with_restart", "cosine_with_warmup"}
     assert SCHEMA_ONLY_OPTIONS == {"none"}
 
 
@@ -76,6 +76,32 @@ def test_build_scheduler_returns_none_when_lr_scheduler_is_none() -> None:
     from training.schedulers import build_scheduler
     args = argparse.Namespace(lr_scheduler="none")
     assert build_scheduler(args, optimizer=None, total_steps=None) is None
+
+
+def test_cosine_with_warmup_scheduler_warms_then_decays() -> None:
+    torch = pytest.importorskip("torch")
+    from training.schedulers import build_scheduler
+
+    param = torch.nn.Parameter(torch.tensor([1.0]))
+    optimizer = torch.optim.SGD([param], lr=1.0)
+    args = argparse.Namespace(
+        lr_scheduler="cosine_with_warmup",
+        lr_scheduler_warmup_steps=2,
+        lr_scheduler_eta_min=0.1,
+    )
+    scheduler = build_scheduler(args, optimizer, total_steps=6)
+
+    lrs = []
+    for _ in range(6):
+        lrs.append(optimizer.param_groups[0]["lr"])
+        optimizer.step()
+        scheduler.step()
+
+    assert lrs[0] == pytest.approx(0.5)
+    assert lrs[1] == pytest.approx(1.0)
+    assert lrs[2] == pytest.approx(1.0)
+    assert lrs[-1] < lrs[2]
+    assert lrs[-1] >= 0.1
 
 
 def test_ppsf_zero_prodigy_steps_disables_freeze(monkeypatch) -> None:
@@ -171,8 +197,7 @@ def test_schema_consistency_raises_when_builder_missing(monkeypatch) -> None:
     """模拟漏注册：schema 加了 lora_type=tlora 但 BUILDERS 没注册时，校验
     必须 raise，而不是放行让训练跑半天才暴露。"""
     from training import adapters
-    monkeypatch.setitem(adapters.BUILDERS.copy(), "tlora", lambda args: None)
-    # 临时改 schema 的 Literal 表演成 "schema 有 tlora 但 registry 没有"
+    monkeypatch.delitem(adapters.BUILDERS, "tlora")
     from studio.schema import TrainingConfig
     field = TrainingConfig.model_fields["lora_type"]
     original = field.annotation
@@ -232,6 +257,19 @@ def test_animalycoris_non_lokr_does_not_exclude_weight_decay(AnimaLycorisAdapter
     assert adapter.excludes_weight_decay("lora_unet_xxx.lokr_w1") is False
     adapter = AnimaLycorisAdapter(algo="loha")
     assert adapter.excludes_weight_decay("lora_unet_xxx.lokr_w1") is False
+
+
+def test_tlora_mask_changes_with_sigma_and_is_not_saved(AnimaLycorisAdapter) -> None:
+    import torch
+    from training.adapters.protocol import StepContext
+
+    adapter = AnimaLycorisAdapter(algo="tlora", rank=8, tlora_min_rank=2, tlora_alpha_rank_scale=1.0)
+    adapter._tlora_modules = [types.SimpleNamespace()]
+    adapter.on_step_begin(StepContext(0, 10, 0, torch.tensor([0.0]), argparse.Namespace()))
+    assert adapter._tlora_mask.tolist() == [1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    adapter.on_step_begin(StepContext(1, 10, 0, torch.tensor([1.0]), argparse.Namespace()))
+    assert adapter._tlora_mask.tolist() == [1.0] * 8
+    assert adapter.state_dict() == {}
 
 
 # ---------------------------------------------------------------------------

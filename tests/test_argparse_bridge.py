@@ -187,6 +187,18 @@ def test_training_config_cli_smoke() -> None:
     assert ns.sample_prompts == ["p1", "p2"]
 
 
+def test_training_config_cli_tlora() -> None:
+    parser = bridge.build_parser(TrainingConfig)
+    ns = parser.parse_args([
+        "--lora-type", "tlora",
+        "--tlora-min-rank", "12",
+        "--tlora-alpha-rank-scale", "1.5",
+    ])
+    assert ns.lora_type == "tlora"
+    assert ns.tlora_min_rank == 12
+    assert ns.tlora_alpha_rank_scale == 1.5
+
+
 def test_training_config_cli_lion() -> None:
     parser = bridge.build_parser(TrainingConfig)
     ns = parser.parse_args([
@@ -215,6 +227,18 @@ def test_training_config_cli_automagic() -> None:
     assert ns.automagic_lr_bump == 2e-6
     assert ns.automagic_beta2 == 0.998
     assert ns.automagic_clip_threshold == 0.8
+
+
+def test_training_config_cli_cosine_with_warmup() -> None:
+    parser = bridge.build_parser(TrainingConfig)
+    ns = parser.parse_args([
+        "--lr-scheduler", "cosine_with_warmup",
+        "--lr-scheduler-warmup-steps", "25",
+        "--lr-scheduler-eta-min", "1e-7",
+    ])
+    assert ns.lr_scheduler == "cosine_with_warmup"
+    assert ns.lr_scheduler_warmup_steps == 25
+    assert ns.lr_scheduler_eta_min == 1e-7
 
 
 def test_training_config_yaml_round_trip() -> None:

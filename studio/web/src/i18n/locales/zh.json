@@ -285,12 +285,14 @@
       "loraType": {
         "lora": "LoRA",
         "lokr": "LoKr",
-        "loha": "LoHa"
+        "loha": "LoHa",
+        "tlora": "T-LoRA"
       },
       "lrScheduler": {
         "none": "常数",
         "cosine": "Cosine",
-        "cosineWithRestart": "Cosine 重启"
+        "cosineWithRestart": "Cosine 重启",
+        "cosineWithWarmup": "Cosine 预热"
       },
       "optimizerType": {
         "adamw": "AdamW",
@@ -358,10 +360,12 @@
       "tag_dropout": "训练时每个标签的随机丢弃概率（0 = 关闭）；非 0 帮助泛化、减弱单标签依赖",
       "prefer_json": "优先使用 JSON 标签文件（推荐，支持分类 shuffle）",
       "cache_latents": "缓存 VAE latent 加速训练",
-      "lora_type": "适配器算法。lokr Kronecker 分解参数最省（默认）；lora 经典低秩通用；loha Hadamard 积，表达力较高但参数较多",
+      "lora_type": "适配器算法。lokr Kronecker 分解参数最省（默认）；lora 经典低秩通用；loha Hadamard 积，表达力较高但参数较多；tlora 时间步自适应 rank",
       "lora_rank": "rank：越大表达力越强，参数量与显存上升、易过拟合；越小越省但易欠拟合。常用 8/16/32/64",
       "lora_alpha": "alpha：LoRA 缩放系数，越大 LoRA 效果越强。通常等于 rank；启用 rs_lora 时常设为 √rank",
       "lokr_factor": "LoKr 矩阵分解因子：越大压缩越强、参数越少；越小参数越多。默认 8 适合大多数场景",
+      "tlora_min_rank": "T-LoRA 低噪声时保留的最小 active rank",
+      "tlora_alpha_rank_scale": "T-LoRA timestep 到 active rank 的幂次缩放；越大越偏向高噪声才开高 rank",
       "lora_dora": "DoRA：分解权重为方向 + 幅度独立训练；收敛通常更稳，显存略增",
       "lora_rs": "rs-LoRA：scale=α/√r 而非 α/r，高 rank（>32）训练更稳",
       "lora_dropout": "LoRA 输入特征的随机丢弃概率：越大正则化越强、收敛越慢；0 = 关闭",
@@ -377,7 +381,8 @@
       "lr_scheduler_t0": "cosine_with_restart 首次重启周期（单位：step）",
       "lr_scheduler_t_mult": "cosine_with_restart 每次重启后周期相对上轮的倍数（>1 周期递增）",
       "lr_scheduler_eta_min": "学习率衰减下限：cosine 调度到此值后不再下降；通常远小于初始 lr（如初始 1e-4 配 1e-6）",
-      "optimizer_type": "优化器。adamw 需手动调 lr；lion 状态更省显存；prodigy / prodigy_plus_schedulefree 自适应估计 lr（lr 字段填 1.0）",
+      "lr_scheduler_warmup_steps": "cosine_with_warmup 预热步数",
+      "optimizer_type": "优化器。adamw 需手动调 lr；automagic / lion 状态更省显存；prodigy / prodigy_plus_schedulefree 自适应估计 lr（lr 字段填 1.0）",
       "prodigy_d_coef": "Prodigy 估出的 d 整体缩放系数；越大有效 lr 越大。欠拟合时调高（2.0+），过拟合 / 小数据集时调低（0.5）",
       "prodigy_safeguard_warmup": "Prodigy warmup 期间防止 d 被初期高梯度推高；默认开启更稳",
       "lion_beta1": "Lion β1（动量插值系数）",

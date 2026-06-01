@@ -100,11 +100,13 @@ export const SCHEMA_ENUM_LABEL_KEYS: Record<string, Record<string, string>> = {
     lora: 'schema.enums.loraType.lora',
     lokr: 'schema.enums.loraType.lokr',
     loha: 'schema.enums.loraType.loha',
+    tlora: 'schema.enums.loraType.tlora',
   },
   lr_scheduler: {
     none: 'schema.enums.lrScheduler.none',
     cosine: 'schema.enums.lrScheduler.cosine',
     cosine_with_restart: 'schema.enums.lrScheduler.cosineWithRestart',
+    cosine_with_warmup: 'schema.enums.lrScheduler.cosineWithWarmup',
   },
   optimizer_type: {
     adamw: 'schema.enums.optimizerType.adamw',

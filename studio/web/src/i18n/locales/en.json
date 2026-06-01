@@ -285,12 +285,14 @@
       "loraType": {
         "lora": "LoRA",
         "lokr": "LoKr",
-        "loha": "LoHa"
+        "loha": "LoHa",
+        "tlora": "T-LoRA"
       },
       "lrScheduler": {
         "none": "Constant",
         "cosine": "Cosine",
-        "cosineWithRestart": "Cosine with restart"
+        "cosineWithRestart": "Cosine with restart",
+        "cosineWithWarmup": "Cosine with warmup"
       },
       "optimizerType": {
         "adamw": "AdamW",
@@ -358,10 +360,12 @@
       "tag_dropout": "Per-tag random dropout probability during training (0 = off); non-zero values help generalization and reduce single-tag dependence",
       "prefer_json": "Prefer JSON tag files (recommended; supports category shuffle)",
       "cache_latents": "Cache VAE latents to speed up training",
-      "lora_type": "Adapter algorithm. lokr: Kronecker factorization, smallest parameter count (default); lora: classic low-rank, general purpose; loha: Hadamard product, higher expressiveness but more parameters",
+      "lora_type": "Adapter algorithm. lokr: Kronecker factorization, smallest parameter count (default); lora: classic low-rank, general purpose; loha: Hadamard product, higher expressiveness but more parameters; tlora: timestep-adaptive rank",
       "lora_rank": "Rank: larger = more capacity but higher parameter/VRAM cost and overfit risk; smaller = leaner but underfits more easily. Common 8/16/32/64",
       "lora_alpha": "Alpha: LoRA scaling factor; larger = stronger LoRA effect. Usually equal to rank; when rs_lora is enabled, often set to √rank",
       "lokr_factor": "LoKr factorization factor: larger = stronger compression, fewer parameters; smaller = more parameters. Default 8 suits most cases",
+      "tlora_min_rank": "T-LoRA minimum active rank at low-noise timesteps",
+      "tlora_alpha_rank_scale": "T-LoRA power scale from timestep to active rank; larger = more rank bias toward high-noise",
       "lora_dora": "DoRA: trains weight direction and magnitude separately; usually more stable convergence at slight VRAM cost",
       "lora_rs": "rs-LoRA: scale=α/√r instead of α/r, more stable at high rank (>32)",
       "lora_dropout": "Dropout on LoRA input features: larger = stronger regularization but slower convergence; 0 = disabled",
@@ -377,7 +381,8 @@
       "lr_scheduler_t0": "First cosine_with_restart cycle length (unit: step)",
       "lr_scheduler_t_mult": "cosine_with_restart cycle-length multiplier relative to the previous cycle (>1 = lengthening cycles)",
       "lr_scheduler_eta_min": "LR decay floor for cosine schedules; should be much smaller than the initial lr (e.g. 1e-6 for an initial lr of 1e-4)",
-      "optimizer_type": "Optimizer. adamw requires manual lr tuning; lion saves optimizer state memory; prodigy / prodigy_plus_schedulefree self-estimate lr (fill 1.0 in the lr field)",
+      "lr_scheduler_warmup_steps": "cosine_with_warmup warmup steps",
+      "optimizer_type": "Optimizer. adamw requires manual lr tuning; automagic / lion saves optimizer state memory; prodigy / prodigy_plus_schedulefree self-estimate lr (fill 1.0 in the lr field)",
       "prodigy_d_coef": "Overall scaling coefficient on Prodigy's estimated d; larger = larger effective lr. Raise (2.0+) when underfitting; lower (0.5) when overfitting or on small datasets",
       "prodigy_safeguard_warmup": "Prevent d from being inflated by early high gradients during Prodigy warmup; default on for stability",
       "lion_beta1": "Lion β1 (momentum interpolation coefficient)",

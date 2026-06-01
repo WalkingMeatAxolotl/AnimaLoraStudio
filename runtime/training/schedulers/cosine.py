@@ -5,8 +5,6 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-import torch
-
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +15,8 @@ def build(args, optimizer, total_steps: Optional[int]):
     if total_steps is None:
         logger.warning("cosine 调度器需要已知 total_steps，回退到 none")
         return None
+    import torch
+
     eta_min = float(getattr(args, "lr_scheduler_eta_min", 0.0) or 0.0)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=total_steps, eta_min=eta_min,

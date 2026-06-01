@@ -51,6 +51,8 @@ class AnimaLycorisAdapter:
         weight_decompose: bool = False,
         rs_lora: bool = False,
         lora_reg_dims: Optional[dict[str, int]] = None,
+        tlora_min_rank: int = 8,
+        tlora_alpha_rank_scale: float = 1.0,
     ):
         self.algo = algo
         self.rank = rank
@@ -63,6 +65,12 @@ class AnimaLycorisAdapter:
         self.rs_lora = rs_lora
         # 分层 rank：正则表达式 → rank 的字典，用 re.fullmatch 对 lora_name 匹配
         self.lora_reg_dims: Optional[dict[str, int]] = lora_reg_dims or None
+        self.use_timestep_mask = (algo == "tlora")
+        self.tlora_min_rank = max(1, min(int(tlora_min_rank), int(rank)))
+        self.tlora_alpha_rank_scale = max(0.0, float(tlora_alpha_rank_scale))
+        self._tlora_modules: list[nn.Module] = []
+        self._tlora_mask: Optional[torch.Tensor] = None
+        self._tlora_arange: Optional[torch.Tensor] = None
 
         # use_lokr 是原 LoRAInjector 的字段，anima_train.py 多处用它做分支判断；
         # 保留此字段以避免改动太多调用点。
@@ -80,9 +88,9 @@ class AnimaLycorisAdapter:
 
         apply_anima_preset(LycorisNetwork)
 
-        # algo 名映射：anima_train 用 'lora'，lycoris 用 'locon'（with conv 关闭即等价 lora）
+        # algo 名映射：anima_train 用 'lora'/'tlora'，lycoris 用 'locon'（with conv 关闭即等价 lora）
         net_module = self.algo
-        if net_module == "lora":
+        if net_module in {"lora", "tlora"}:
             net_module = "locon"
 
         # extra kwargs: 仅在该算法支持时传入对应字段
@@ -118,6 +126,8 @@ class AnimaLycorisAdapter:
 
         if self.lora_reg_dims:
             _apply_reg_dims_(self.network, self.lora_reg_dims)
+        if self.use_timestep_mask:
+            self._install_tlora_masks()
 
         # lycoris 默认在 CPU 创建模块；model 多半已在 CUDA — 必须显式同步 device/dtype，
         # 否则首次 forward 报 "tensors on cuda:0 and cpu"。从模型首个 parameter 推断。
@@ -158,6 +168,75 @@ class AnimaLycorisAdapter:
                     n,
                 )
         return {lora.lora_name: lora for lora in self.network.loras}
+
+    def _install_tlora_masks(self) -> None:
+        if self.network is None:
+            return
+        self._tlora_modules = [
+            lora for lora in self.network.loras
+            if hasattr(lora, "lora_down") and hasattr(lora, "lora_up") and callable(getattr(lora, "make_weight", None))
+        ]
+        for lora in self._tlora_modules:
+            if getattr(lora, "_anima_tlora_patched", False):
+                continue
+            original_make_weight = lora.make_weight
+
+            def _make_weight_with_tlora(device=None, *, _lora=lora, _original_make_weight=original_make_weight):
+                wa = _lora.lora_up.weight.to(device)
+                wb = _lora.lora_down.weight.to(device)
+                mask = getattr(_lora, "_anima_tlora_mask", None)
+                if mask is not None:
+                    mask = mask.to(device=device, dtype=wa.dtype)
+                    view_up = (1, -1) + (1,) * max(0, wa.dim() - 2)
+                    view_down = (-1, 1) + (1,) * max(0, wb.dim() - 2)
+                    wa = wa * mask.view(*view_up)
+                    wb = wb * mask.view(*view_down)
+                if getattr(_lora, "tucker", False):
+                    t = _lora.lora_mid.weight
+                    wa_t = wa.view(wa.size(0), -1).transpose(0, 1)
+                    wb_t = wb.view(wb.size(0), -1)
+                    from lycoris.modules.locon import rebuild_tucker
+                    weight = rebuild_tucker(t, wa_t, wb_t)
+                else:
+                    weight = wa.view(wa.size(0), -1) @ wb.view(wb.size(0), -1)
+                weight = weight.view(_lora.shape)
+                if _lora.training and _lora.rank_dropout:
+                    drop = (torch.rand(weight.size(0), device=device) > _lora.rank_dropout).to(weight.dtype)
+                    drop = drop.view(-1, *[1] * len(weight.shape[1:]))
+                    if _lora.rank_dropout_scale:
+                        drop /= drop.mean()
+                    weight *= drop
+                return weight * _lora.scalar.to(device)
+
+            lora._anima_original_make_weight = original_make_weight
+            lora.make_weight = _make_weight_with_tlora
+            lora._anima_tlora_patched = True
+        logger.info(
+            "T-LoRA timestep rank mask enabled on %s/%s LoRA layers (min_rank=%s, alpha_rank_scale=%s)",
+            len(self._tlora_modules),
+            len(self.network.loras),
+            self.tlora_min_rank,
+            self.tlora_alpha_rank_scale,
+        )
+
+    def _set_tlora_mask(self, sigma_t: torch.Tensor) -> None:
+        if not self._tlora_modules:
+            return
+        device = sigma_t.device
+        rank = self.rank
+        if self._tlora_mask is None or self._tlora_mask.device != device:
+            self._tlora_mask = torch.ones(rank, device=device)
+            self._tlora_arange = torch.arange(rank, device=device)
+            for lora in self._tlora_modules:
+                lora._anima_tlora_mask = self._tlora_mask
+        t = sigma_t.float().mean().clamp(min=0.0, max=1.0)
+        active_rank = t.pow(self.tlora_alpha_rank_scale) * (rank - self.tlora_min_rank) + self.tlora_min_rank
+        active_rank = active_rank.clamp(max=float(rank))
+        self._tlora_mask.copy_((self._tlora_arange < active_rank).to(self._tlora_mask.dtype))
+
+    def clear_timestep_mask(self) -> None:
+        if self._tlora_mask is not None:
+            self._tlora_mask.fill_(1)
 
     # --------------------------------------------------------------- detach
     def detach(self) -> bool:
@@ -300,7 +379,9 @@ class AnimaLycorisAdapter:
     # （T-LoRA / OFT / Ortho-Hydra）可在自己的 build wrapper 里 override。
 
     def on_step_begin(self, ctx) -> None:
-        """每 micro-batch 前向之前调用；LoKr/LoRA/LoHa 无运行时结构调整。"""
+        """每 micro-batch 前向之前调用；T-LoRA 按 sigma_t 更新 rank mask。"""
+        if self.use_timestep_mask:
+            self._set_tlora_mask(ctx.sigma_t)
         return None
 
     def regularization_loss(self, ctx):
