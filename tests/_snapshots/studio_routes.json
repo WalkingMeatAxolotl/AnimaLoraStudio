@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 189,
+  "count": 190,
   "routes": [
     {
       "path": "/",
@@ -871,6 +871,14 @@
         "GET"
       ],
       "name": "get_eval_metric_result_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/eval/samples/{run_id}/metrics/clip",
+      "methods": [
+        "POST"
+      ],
+      "name": "start_eval_clip_metrics_endpoint",
       "type": "APIRoute"
     },
     {
