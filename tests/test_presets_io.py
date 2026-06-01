@@ -106,13 +106,27 @@ def test_parse_json_works_via_yaml_superset() -> None:
     assert suggested == "old"
 
 
-def test_parse_rejects_unknown_field() -> None:
+def test_parse_drops_unknown_field() -> None:
     import yaml
     bad = _payload()
     bad["nonexistent_field"] = 123
     raw = yaml.safe_dump(bad).encode("utf-8")
-    with pytest.raises(presets_io.PresetError, match="校验失败"):
-        presets_io.parse_preset_bytes(raw, "bad.yaml")
+    cfg, suggested = presets_io.parse_preset_bytes(raw, "bad.yaml")
+    assert suggested == "bad"
+    assert "nonexistent_field" not in cfg
+
+
+def test_parse_migrates_legacy_attention_fields() -> None:
+    import yaml
+    legacy = _payload()
+    legacy.pop("attention_backend", None)
+    legacy["flash_attn"] = False
+    legacy["xformers"] = True
+    raw = yaml.safe_dump(legacy).encode("utf-8")
+    cfg, _ = presets_io.parse_preset_bytes(raw, "legacy.yaml")
+    assert cfg["attention_backend"] == "xformers"
+    assert "flash_attn" not in cfg
+    assert "xformers" not in cfg
 
 
 def test_parse_rejects_non_mapping() -> None:

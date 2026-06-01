@@ -129,9 +129,20 @@ def list_presets(base: Path | None = None) -> list[dict[str, Any]]:
 
 def _tolerant_validate(raw: dict[str, Any]) -> tuple[TrainingConfig, list[str], list[str]]:
     known = set(TrainingConfig.model_fields)
-    dropped = sorted(k for k in raw if k not in known)
+    data = dict(raw)
 
-    data = {k: v for k, v in raw.items() if k in known}
+    if "attention_backend" not in data:
+        if data.get("flash_attn") is True:
+            data["attention_backend"] = "flash_attn"
+        elif data.get("xformers") is True:
+            data["attention_backend"] = "xformers"
+        elif data.get("flash_attn") is False or data.get("xformers") is False:
+            data["attention_backend"] = "none"
+    data.pop("flash_attn", None)
+    data.pop("xformers", None)
+
+    dropped = sorted(k for k in data if k not in known)
+    data = {k: v for k, v in data.items() if k in known}
     try:
         return TrainingConfig.model_validate(data), dropped, []
     except ValidationError:
