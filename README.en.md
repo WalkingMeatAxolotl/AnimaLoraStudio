@@ -1,6 +1,6 @@
 # AnimaLoraStudio
 
-[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-lightgrey)](README.md) [![English](https://img.shields.io/badge/lang-English-blue)](README.en.md) [![Version](https://img.shields.io/badge/version-0.10.3-blue)](CHANGELOG.md)
+[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-lightgrey)](README.md) [![English](https://img.shields.io/badge/lang-English-blue)](README.en.md) [![Version](https://img.shields.io/badge/version-0.11.0-blue)](CHANGELOG.md)
 
 **End-to-end pipeline**: scrape from Booru → curate → tag → reg set → train → image testing, all driven from a single browser panel. Optimized for [Anima](https://huggingface.co/circlestone-labs/Anima) (Cosmos DiT, anime-tuned) training.
 
@@ -55,7 +55,7 @@
 3. **Curate** — dual download / train panels with multi-select copy / remove and subfolder management
 4. **Tag** — choose from WD14 / CLTagger / LLM with automatic GPU EP fallback; trigger_word input at the top
 5. **Tag editor** — cached mode with restore points, bulk add / delete / replace
-6. **Regularization set** (optional) — Booru reverse search / AI prior generation
+6. **Regularization set** (optional) — AI prior generation (default) / Booru reverse search; mirror + flat structures, editable with delete / auto-dedupe / dual-tagger choice
 7. **Train** — bidirectional preset flow, queues immediately on submit; config edits autosave; Simple / Advanced modes
 8. **Image testing** — single image / XY matrix / inference daemon
 
@@ -178,11 +178,15 @@ AnimaLoraStudio/
 │   ├── anima_daemon.py            # Inference daemon: keeps the base model and LoRA loaded in GPU
 │   ├── anima_reg_ai.py            # AI prior generation: no LoRA, base model produces reg set
 │   └── train_monitor.py           # Training state writer
-├── studio/                        # AnimaStudio Web workbench (FastAPI + React)
-│   ├── server.py                  # Daemon entry
-│   ├── services/                  # Business logic (uploads / tagging / reg set / inference_core /
-│   │                              #   torch_setup / xformers_setup / flash_attention_setup, etc.)
-│   ├── workers/                   # Background subprocesses (download / tag / reg_build)
+├── studio/                        # AnimaStudio Web workbench (FastAPI + React) — 4-layer architecture (ADR 0008)
+│   ├── api/                       # HTTP surface: FastAPI app + 27 routers + schemas + deps + exception_handlers
+│   ├── services/                  # Business services, 11 subpackages: tagging / booru / reg / inference / models /
+│   │                              #   preprocess / projects / dataset / presets / runtime / data_io
+│   ├── domain/                    # pydantic models: TrainingConfig / LoRA / XY / Generate / RegAi + migrations
+│   ├── infrastructure/            # paths / DB / event bus / secrets / logging / argparse bridge
+│   ├── supervisor/                # Task scheduler daemon thread
+│   ├── workers/                   # 4 background subprocess entries (download / tag / reg_build / preprocess)
+│   ├── server.py                  # 51-line compatibility shim, re-exports `app` / `main` (real entries: api/app.py / api/main.py)
 │   └── web/                       # React + Vite frontend
 ├── tools/                         # User CLI / launcher-time setup helpers
 │   ├── download_models.py         # One-click download of base model / VAE / Qwen3 / T5 tokenizer
@@ -206,9 +210,11 @@ AnimaLoraStudio/
 
 Runtime data (gitignored):
 
-- `studio_data/` — SQLite + user presets + task logs + per-task monitor state + samples
-- `models/diffusion_models/`, `models/vae/`, `models/wd14/` — large weight files
+- `studio_data/` — SQLite + user presets
+- `studio_data/tasks/{id}/` — Per-training-task config snapshot + monitor state + samples + run.log (history survives version deletion)
 - `studio_data/projects/{id}-{slug}/versions/{label}/output/` — trained LoRA artifacts
+- `studio_data/projects/{id}-{slug}/versions/{label}/reg/` — regularization set (shared by tasks under that version)
+- `models/diffusion_models/`, `models/vae/`, `models/wd14/` — large weight files
 
 ---
 
@@ -260,7 +266,7 @@ Documentation entry: [docs/README.md](docs/README.md). Three sections:
 
 ## Version
 
-Current version is **0.10.3**. See [CHANGELOG.md](CHANGELOG.md) for the full history. The Settings → System → version card inside Studio allows one-click upgrade to the latest version.
+Current version is **0.11.0**. See [CHANGELOG.md](CHANGELOG.md) for the full history. The Settings → System → version card inside Studio allows one-click upgrade to the latest version.
 
 ---
 
