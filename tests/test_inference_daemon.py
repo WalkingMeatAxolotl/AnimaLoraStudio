@@ -20,8 +20,8 @@ from typing import Any
 import pytest
 
 from studio import db
-from studio.services import inference_daemon as _daemon_mod
-from studio.services.inference_daemon import (
+from studio.services.inference import daemon as _daemon_mod
+from studio.services.inference.daemon import (
     InferenceDaemon,
     STATE_BUSY,
     STATE_IDLE,
@@ -114,7 +114,7 @@ def test_daemon_starts_and_reaches_idle(mock_daemon_script: Path) -> None:
 
 
 def test_submit_task_runs_to_done(mock_daemon_script: Path) -> None:
-    from studio.services import generate_cache
+    from studio.services.inference import cache as generate_cache
 
     generate_cache.clear_all()
     d = InferenceDaemon(script_path=mock_daemon_script)
@@ -161,7 +161,7 @@ def test_daemon_crash_emits_error(mock_daemon_script: Path) -> None:
         with d._lock:  # type: ignore[attr-defined]
             d._req_seq += 1
             req_id = "task-99-x"
-            from studio.services.inference_daemon import _ActiveTask
+            from studio.services.inference.daemon import _ActiveTask
             d._active = _ActiveTask(
                 task_id=99, request_id=req_id, on_event=events.append,
             )
@@ -221,14 +221,18 @@ def _patch_singleton(d: InferenceDaemon, monkeypatch) -> None:
 
 
 @pytest.fixture
-def env(tmp_path: Path):
+def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from studio.infrastructure import paths as _paths
     db_path = tmp_path / "studio.db"
     db.init_db(db_path)
     logs = tmp_path / "logs"
     configs = tmp_path / "configs"
+    tasks = tmp_path / "tasks"
     logs.mkdir()
     configs.mkdir()
-    return {"db": db_path, "logs": logs, "configs": configs}
+    monkeypatch.setattr(_paths, "TASKS_DIR", tasks)
+    monkeypatch.setattr(_paths, "LOGS_DIR", logs)
+    return {"db": db_path, "logs": logs, "configs": configs, "tasks": tasks}
 
 
 def _task_status(db_path: Path, task_id: int) -> str:
@@ -334,3 +338,32 @@ def test_supervisor_train_dispatch_skips_generate(env, monkeypatch):
     # 拉 generate 才能找到
     found = sup._next_pending_task_in(("generate",))
     assert found is not None and found["id"] == tid_gen
+
+
+def test_dispatch_generate_skips_task_without_config_path(env, monkeypatch):
+    """enqueue 竞态：task 已 pending+generate 但 config_path 还没落库时，
+    _dispatch_generate 必须跳过（不能 submit → daemon 报 config not found: <none>），
+    等 config_path 落库后下个 tick 才派。"""
+    from studio.supervisor import Supervisor
+
+    sup = Supervisor(
+        on_event=lambda _e: None,
+        db_path=env["db"], logs_dir=env["logs"], configs_dir=env["configs"],
+    )
+    submitted: list[int] = []
+    monkeypatch.setattr(sup, "_submit_to_daemon", lambda t: submitted.append(t["id"]))
+
+    # config_path 还是 NULL（模拟 create_task 刚落、config.json 还没写）
+    with db.connection_for(env["db"]) as conn:
+        tid = db.create_task(conn, name="g", config_name="gen", priority=0)
+        db.update_task(conn, tid, task_type="generate")
+
+    sup._dispatch_generate()
+    assert submitted == [], "config_path=NULL 的 generate task 不应被 submit"
+    assert _task_status(env["db"], tid) == "pending", "应保持 pending 等待，不该 failed"
+
+    # config_path 落库后应被派
+    with db.connection_for(env["db"]) as conn:
+        db.update_task(conn, tid, config_path=str(env["configs"] / "gen.json"))
+    sup._dispatch_generate()
+    assert submitted == [tid]

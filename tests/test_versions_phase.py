@@ -6,8 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from studio import db, projects, versions, versions_phase
-from studio.versions_phase import CheckResult
+from studio import db
+from studio.services.projects import projects, versions, phase as versions_phase
+from studio.services.projects.phase import CheckResult
 
 
 @pytest.fixture

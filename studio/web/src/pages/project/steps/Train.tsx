@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link, useNavigate, useOutletContext } from 'react-router-dom'
+import { useNavigate, useOutletContext } from 'react-router-dom'
 import {
   api,
   type ConfigData,
@@ -16,12 +16,12 @@ import { useDialog } from '../../../components/Dialog'
 import SchemaForm from '../../../components/SchemaForm'
 import StepShell from '../../../components/StepShell'
 import { useToast } from '../../../components/Toast'
+import { useSettingsDrawer } from '../../../lib/SettingsDrawer'
 import { useAdvancedMode } from '../../../lib/useAdvancedMode'
 import {
   PRESET_NAME_RE,
   defaultsFromSchema,
-  loadPresetDescriptions,
-  savePresetDescriptions,
+  generateUniquePresetName,
 } from '../../../lib/preset-helpers'
 
 // 全局模型字段来自全局设置，对版本维度只读
@@ -44,6 +44,7 @@ export default function TrainPage() {
   const { toast } = useToast()
   const { confirm, prompt } = useDialog()
   const navigate = useNavigate()
+  const settingsDrawer = useSettingsDrawer()
 
   const [schema, setSchema] = useState<SchemaResponse | null>(null)
   const [presets, setPresets] = useState<PresetSummary[]>([])
@@ -75,12 +76,9 @@ export default function TrainPage() {
   const pickerAnchorRef = useRef<HTMLButtonElement | null>(null)
   const pickerPopRef = useRef<HTMLDivElement | null>(null)
 
-  // 内联「新建预设」模式：避免用户跳转到 /tools/presets 创建后再回来选用
-  const [creatingPreset, setCreatingPreset] = useState(false)
-  const [newPresetName, setNewPresetName] = useState('')
-  const [newPresetDesc, setNewPresetDesc] = useState('')
-  const [newPresetConfig, setNewPresetConfig] = useState<ConfigData | null>(null)
-  const [newNameError, setNewNameError] = useState('')
+  // 「新建预设」=一键创建+套用：点 + 新建预设 卡片直接生成 <slug>_<label> 命名
+  // 的预设、写全局池、fork 到当前 version。不弹中间表单，避免用户点了 + 就以为
+  // "已创建"但实际什么都没存（state 不持久化，切页面回来又是空）。
 
   /** 包装 setConfig：先同步写 configRef（绕 React state flush 延迟），再调
    * setConfig 触发 React 渲染。 SchemaForm.onChange / 任何想改 config 的入口
@@ -131,18 +129,19 @@ export default function TrainPage() {
       const node = (
         <>
           {t('train.globalAutoLockedPrefix')} ·{' '}
-          <Link
-            to="/tools/settings?section=models"
-            className="underline text-warn hover:opacity-80"
+          <button
+            type="button"
+            onClick={() => settingsDrawer.open({ section: 'models' })}
+            className="bg-transparent border-none p-0 underline text-warn hover:opacity-80 cursor-pointer"
           >
             {t('train.globalAutoLockedLink')}
-          </Link>
+          </button>
         </>
       )
       for (const f of GLOBAL_MODEL_FIELDS) h[f] = node
     }
     return h
-  }, [t, autoSyncPaths])
+  }, [t, autoSyncPaths, settingsDrawer])
   // 项目特定字段（data_dir / reg_data_dir / output_dir 等）：值由项目预填，但
   // 不锁定，挂「自动 · 项目设置」徽章让用户知道这是预填的，不是预设里来的。
   // toggle OFF 时全局模型字段也挂 hint「默认来自 Settings · 可改」。
@@ -342,84 +341,57 @@ export default function TrainPage() {
     return `${project.slug}_v${activeVersion.id}`
   }
 
+  /** 一键新建预设 +套用到当前 version。
+   *
+   * 步骤：
+   *   1. version 已有 config → 弹覆盖确认（跟 onForkPreset 一致）
+   *   2. 拉最新 project_specific_defaults（用户常见路径是 fork 之后才跑 reg
+   *      build，缓存的 configResp 里 reg 状态过期）
+   *   3. 配置 = schema 默认 + 项目路径预填（仅 autoSyncPaths 开时）
+   *   4. 自动名 = `<slug>_<label>`（PRESET_NAME_RE 兼容），重名加 _1 _2 后缀
+   *   5. savePreset → forkPresetForVersion → 刷三处状态
+   */
   const startCreatePreset = async () => {
     setPickerOpen(false)
-    setNewPresetName(defaultPresetName())
-    setNewPresetDesc('')
-    // 重新拉 GET /config 拿最新 project_specific_defaults —— 用户常见路径
-    // 是 fork preset 之后才跑 reg build，缓存的 configResp 里 reg 状态过期。
-    // 拉不到就 fallback 到缓存值，不阻塞 UI。
-    const fresh = vid
-      ? await api.getVersionConfig(project.id, vid).catch(() => null)
-      : null
-    const psd =
-      fresh?.project_specific_defaults
-      ?? configResp?.project_specific_defaults
-      ?? {}
-    // 用项目预填值覆盖 schema 默认 —— fork 时后端会注入这些，预览要让用户
-    // 看到「保存后会得到的值」而不是误导性的相对路径默认值（reg 目录尤其
-    // 关键）。savePreset 时会清回 schema 默认，全局预设池不带项目数据。
-    setNewPresetConfig({
-      ...defaultsFromSchema(schema),
-      ...psd,
-    })
-    setNewNameError('')
-    setCreatingPreset(true)
-  }
+    if (!vid || !schema) return
 
-  const cancelCreatePreset = () => {
-    setCreatingPreset(false)
-    setNewNameError('')
-  }
+    if (configResp?.has_config) {
+      const ok = await confirm(
+        t('train.confirmReset', { name: t('train.newPresetAction') }),
+        { tone: 'warn', okText: t('train.resetOkText') },
+      )
+      if (!ok) return
+    }
 
-  const saveNewPreset = async () => {
-    const name = newPresetName.trim()
-    if (!name) { setNewNameError(t('train.nameEmpty')); return }
-    if (!PRESET_NAME_RE.test(name)) {
-      setNewNameError(t('train.nameInvalid')); return
-    }
-    if (!newPresetConfig || !vid) return
-    if (presets.some((p) => p.name === name)) {
-      const overwrite = await confirm(t('train.alreadyExists', { name }), {
-        tone: 'danger',
-        okText: t('train.overwriteOkText'),
-      })
-      if (!overwrite) return
-    }
     setBusy(true)
     try {
-      // 全局预设池不带项目数据：项目特定字段清回 schema 默认。
-      // 4 个模型字段：toggle ON 时清成当前 Settings 算的绝对路径（保持
-      // yaml 写盘统一绝对，且不带本机自定义路径出去）；toggle OFF 时原样
-      // 保留绝对路径（独立模型用户的主动设置）。
-      // 跟 services/presets.py:save_version_config_as_preset 的清理逻辑对齐。
-      const schemaDefaults = defaultsFromSchema(schema)
-      const cleaned: ConfigData = { ...newPresetConfig }
-      for (const f of configResp?.project_specific_fields ?? []) {
-        if (GLOBAL_MODEL_FIELDS.includes(f)) continue
-        cleaned[f] = schemaDefaults[f]
-      }
+      const fresh = await api.getVersionConfig(project.id, vid).catch(() => null)
+      const psd =
+        fresh?.project_specific_defaults
+        ?? configResp?.project_specific_defaults
+        ?? {}
+
+      // 全局预设池不带项目特定字段（数据集路径 / 输出名等）：schema 默认即可，
+      // fork 时后端再把项目预填注入到 version 私有 config。
+      // 4 个模型字段：autoSyncPaths ON 时用当前 Settings 算的绝对路径，OFF 时
+      // 维持 schema 默认（独立模型用户场景）。跟 services/presets.py:
+      // save_version_config_as_preset 的清理逻辑对齐。
+      const cleaned: ConfigData = { ...defaultsFromSchema(schema) }
       if (autoSyncPaths) {
-        const psd = configResp?.project_specific_defaults ?? {}
         for (const f of GLOBAL_MODEL_FIELDS) {
           if (typeof psd[f] === 'string' && psd[f]) cleaned[f] = psd[f]
         }
       }
+
+      const name = generateUniquePresetName(defaultPresetName(), presets)
       await api.savePreset(name, cleaned)
-      const desc = newPresetDesc.trim()
-      if (desc) {
-        const all = loadPresetDescriptions()
-        all[name] = desc
-        savePresetDescriptions(all)
-      }
+      await api.forkPresetForVersion(project.id, vid, name)
+
       const list = await api.listPresets()
       setPresets(list)
-      // 套用到当前 version —— 避免用户保存完还要再手动选一次
-      await api.forkPresetForVersion(project.id, vid, name)
-      // 跟 onForkPreset 一致：refreshConfig + reload 都要调，主表单才会
-      // 同步显示新预设的内容。
+      // refreshConfig 刷本页 config state；reload 刷父级 activeVersion，
+      // 主表单字段才会同步显示新预设的内容。
       await Promise.all([refreshConfig(), reload()])
-      setCreatingPreset(false)
       toast(t('train.createdPreset', { name }), 'success')
     } catch (e) {
       toast(String(e), 'error')
@@ -605,72 +577,7 @@ export default function TrainPage() {
             )}
           </section>
 
-            {creatingPreset && schema && newPresetConfig ? (
-              /* 新建预设内联表单 —— 跟 /tools/presets 新建模式视觉对齐 */
-              <section className="flex-1 min-h-0 overflow-y-auto pr-1">
-                <div className="flex flex-col gap-3">
-                  {/* 名称 + 描述 */}
-                  <div className="rounded-md border border-subtle bg-surface px-3.5 py-2.5">
-                    <div className="flex gap-2.5">
-                      <label className="flex-1 flex flex-col gap-1">
-                        <span className="text-sm font-medium text-fg-secondary">{t('train.presetName')}</span>
-                        <input
-                          autoFocus
-                          className="input input-mono font-mono"
-                          placeholder="my-training-preset"
-                          value={newPresetName}
-                          onChange={(e) => { setNewPresetName(e.target.value); setNewNameError('') }}
-                          disabled={busy}
-                        />
-                        {newNameError && (
-                          <span className="text-xs text-err">{newNameError}</span>
-                        )}
-                      </label>
-                      <label className="flex-[1.5] flex flex-col gap-1">
-                        <span className="text-sm font-medium text-fg-secondary">{t('train.presetDesc')}</span>
-                        <input
-                          className="input"
-                          placeholder={t('train.descPlaceholder')}
-                          value={newPresetDesc}
-                          onChange={(e) => setNewPresetDesc(e.target.value)}
-                          disabled={busy}
-                        />
-                      </label>
-                    </div>
-                  </div>
-                  {/* 参数表单 —— schema 默认 + 项目预填（fork 后会得到的值） */}
-                  <div className="rounded-md border border-subtle bg-surface px-3.5 py-2.5">
-                    <SchemaForm
-                      schema={schema}
-                      values={newPresetConfig}
-                      onChange={setNewPresetConfig}
-                      disabledFields={disabledFields}
-                      disabledHints={disabledHints}
-                      autoHints={autoHints}
-                      fieldSuffixes={makeResetSuffixes(newPresetConfig, setNewPresetConfig)}
-                      advancedMode={advancedMode}
-                    />
-                  </div>
-                  {/* 操作 */}
-                  <div className="flex gap-2 shrink-0">
-                    <button
-                      onClick={() => void saveNewPreset()}
-                      disabled={busy}
-                      className="btn btn-primary"
-                    >
-                      {busy ? t('train.savingBtn') : t('train.createAndApply')}
-                    </button>
-                    <button
-                      onClick={cancelCreatePreset}
-                      disabled={busy}
-                      className="btn btn-ghost"
-                    >
-                      {t('common.cancel')}
-                    </button>
-                  </div>
-                </div>
-              </section>
-            ) : configResp === null || !schema ? (
+            {configResp === null || !schema ? (
               <ConfigSkeleton label={t('train.loadingConfig')} />
             ) : !configResp.has_config ? (
               <div className="flex-1 flex items-center justify-center text-fg-tertiary text-sm rounded-md border border-dashed border-dim">

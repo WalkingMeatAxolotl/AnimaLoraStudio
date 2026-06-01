@@ -8,8 +8,9 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from studio import db, project_jobs, projects, secrets, versions
-from studio.services import reg_builder
+from studio import db, secrets
+from studio.services.projects import jobs as project_jobs, projects, versions
+from studio.services.reg import builder as reg_builder
 from studio.workers import reg_build_worker
 
 
@@ -71,7 +72,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     # auto_tag fake
     monkeypatch.setattr(
-        "studio.services.tagger.get_tagger", lambda name: _FakeAutoTagger()
+        "studio.services.tagging.base.get_tagger", lambda name: _FakeAutoTagger()
     )
 
     with db.connection_for(dbfile) as conn:
@@ -114,12 +115,136 @@ def test_worker_runs_and_writes_meta_and_images(env) -> None:
     assert meta["actual_count"] >= 1
     # auto_tag 跑过 → meta 改写为 True
     assert meta["auto_tagged"] is True
+    # A3 — 默认 kind=wd14 写回 meta
+    assert meta.get("auto_tag_kind") == "wd14"
     # reg 集图片落盘到 1_data 子文件夹（镜像 train）
     images = list((rdir / "1_data").glob("*.png"))
     assert len(images) >= 1
     # auto_tag 也落 .txt
     txts = list((rdir / "1_data").glob("*.txt"))
     assert len(txts) >= 1
+
+
+def test_worker_full_mode_clears_existing_reg(env) -> None:
+    """A4 v2 — incremental=False (full mode) 时 worker 应在 build 前清掉
+    reg/ 下所有内容（图、子文件夹、meta、.deleted_ids.json）。"""
+    rdir = env["vdir"] / "reg"
+    sub = rdir / "5_concept"
+    sub.mkdir(parents=True)
+    Image.new("RGB", (8, 8)).save(sub / "old.png", "PNG")
+    (rdir / "meta.json").write_text('{"foo":"bar"}', encoding="utf-8")
+    (rdir / ".deleted_ids.json").write_text('["stale"]', encoding="utf-8")
+    # set incremental=False
+    with db.connection_for(env["db"]) as conn:
+        conn.execute(
+            "UPDATE project_jobs "
+            "SET params = json_set(params, '$.incremental', 0, "
+            "                      '$.auto_dedup', 0) "
+            "WHERE id = ?",
+            (env["job_id"],),
+        )
+        conn.commit()
+    rc = reg_build_worker.run(env["job_id"])
+    assert rc == 0
+    # 旧图不见了；fresh 的图从 5_001 / 5_002 进来（fake_search 返回的）
+    assert not (sub / "old.png").exists()
+    # .deleted_ids.json 也被清掉
+    assert not (rdir / ".deleted_ids.json").exists()
+
+
+def test_worker_auto_dedup_loop_calls_scan_purge_then_rebuild(env, monkeypatch) -> None:
+    """A4 v2 — auto_dedup=True 时 worker build 后跑 scan → purge → 不够补足；
+    第二轮 scan 返回空 → 退出循环。"""
+    calls: dict[str, int] = {"scan": 0, "purge": 0, "rebuild": 0}
+
+    def fake_scan(reg_dir):
+        calls["scan"] += 1
+        if calls["scan"] == 1:
+            return ["1_data/5001.png"]
+        return []
+
+    def fake_purge(reg_dir, rels):
+        calls["purge"] += 1
+        for rel in rels:
+            t = reg_dir / rel
+            if t.exists():
+                t.unlink()
+            tx = t.with_suffix(".txt")
+            if tx.exists():
+                tx.unlink()
+        m = reg_builder.read_meta(reg_dir)
+        if m and rels:
+            m.actual_count = max(0, m.actual_count - len(rels))
+            reg_builder.write_meta(reg_dir, m)
+        return {"deleted": list(rels), "count": len(rels)}
+
+    # 记 build 调用：第一次 = 初次（incremental=None/True 都可），后续 = 补足
+    original_build = reg_builder.build
+    def spy_build(*args, **kwargs):
+        calls["rebuild"] += 1
+        return original_build(*args, **kwargs)
+
+    monkeypatch.setattr("studio.services.reg.dedup.scan_for_dedup", fake_scan)
+    monkeypatch.setattr("studio.services.reg.dedup.purge_paths", fake_purge)
+    monkeypatch.setattr("studio.services.reg.builder.build", spy_build)
+
+    rc = reg_build_worker.run(env["job_id"])
+    assert rc == 0
+    # 至少 2 轮 scan（第一轮删后第二轮 detect 无重复退出）
+    assert calls["scan"] >= 2
+    assert calls["purge"] == 1
+    # build 调了 2 次：初次 + 1 次补足
+    assert calls["rebuild"] == 2
+
+
+def test_worker_auto_dedup_disabled_skips_scan(env, monkeypatch) -> None:
+    """A4 v2 — auto_dedup=False 时 worker 不应触碰 dedup 模块。"""
+    calls = {"scan": 0}
+
+    def fake_scan(reg_dir):
+        calls["scan"] += 1
+        return []
+
+    monkeypatch.setattr("studio.services.reg.dedup.scan_for_dedup", fake_scan)
+    with db.connection_for(env["db"]) as conn:
+        conn.execute(
+            "UPDATE project_jobs SET params = "
+            "json_set(params, '$.auto_dedup', 0) WHERE id = ?",
+            (env["job_id"],),
+        )
+        conn.commit()
+    rc = reg_build_worker.run(env["job_id"])
+    assert rc == 0
+    assert calls["scan"] == 0
+
+
+def test_worker_routes_to_cltagger_when_kind_set(env, monkeypatch) -> None:
+    """A3 — params['auto_tag_kind']='cltagger' 必须传给 get_tagger，
+    meta 写回 kind=cltagger。"""
+    calls: list[str] = []
+
+    def spy_get_tagger(name: str):
+        calls.append(name)
+        return _FakeAutoTagger()
+
+    monkeypatch.setattr(
+        "studio.services.tagging.base.get_tagger", spy_get_tagger
+    )
+    with db.connection_for(env["db"]) as conn:
+        conn.execute(
+            "UPDATE project_jobs "
+            "SET params = json_set(params, '$.auto_tag_kind', 'cltagger') "
+            "WHERE id = ?",
+            (env["job_id"],),
+        )
+        conn.commit()
+    rc = reg_build_worker.run(env["job_id"])
+    assert rc == 0
+    assert "cltagger" in calls
+    meta = json.loads(
+        (env["vdir"] / "reg" / "meta.json").read_text(encoding="utf-8")
+    )
+    assert meta.get("auto_tag_kind") == "cltagger"
 
 
 def test_worker_unknown_job(env) -> None:
@@ -166,10 +291,10 @@ def test_worker_imports_onnxruntime_setup_at_module_level() -> None:
     import re
     import sys
     src = Path(reg_build_worker.__file__).read_text(encoding="utf-8")
-    assert "from studio.services import onnxruntime_setup" in src, (
-        "reg_build_worker.py 顶层必须 import onnxruntime_setup 触发 preload；"
-        "见 onnxruntime_setup.py 顶部 PP9.5 注释。"
+    assert "from studio.services.runtime import onnxruntime" in src, (
+        "reg_build_worker.py 顶层必须 import onnxruntime 触发 preload；"
+        "见 onnxruntime.py 顶部 PP9.5 注释。"
     )
     bad = re.findall(r"^\s*(?:import onnxruntime|from onnxruntime\b)", src, re.MULTILINE)
     assert not bad, f"worker 不应直接 import onnxruntime；命中: {bad}"
-    assert "studio.services.onnxruntime_setup" in sys.modules
+    assert "studio.services.runtime.onnxruntime" in sys.modules

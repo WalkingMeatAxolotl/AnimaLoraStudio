@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from studio.services import flash_attention_setup as fa
+from studio.services.runtime import flash_attention as fa
 
 
 # ---------------------------------------------------------------------------

@@ -15,20 +15,24 @@ log 文件，避免 LogTailer 读两次。
 """
 from __future__ import annotations
 
-import argparse
 import json
+import logging
 import math
 import signal
-import sys
 import time
-import traceback
 from pathlib import Path
 from typing import Any, Callable
 
 from PIL import Image
 
-from studio import db, preprocess, project_jobs, projects
-from studio.services import model_downloader, preprocess_manifest, upscaler
+logger = logging.getLogger(__name__)
+
+from studio import db
+from studio.services.preprocess import core as preprocess
+from studio.services.projects import jobs as project_jobs, projects
+from studio.services import models as model_downloader
+from studio.services.preprocess import manifest as preprocess_manifest
+from studio.services.inference import upscaler
 
 
 _stop_requested = False
@@ -227,8 +231,10 @@ def run(job_id: int) -> int:  # noqa: PLR0912, PLR0915 - 主流程线性可读
         # 失败率高时用户重跑选中即可。
         return 0
     except Exception as exc:  # noqa: BLE001
+        # PR-1 C7: 同 tag_worker — logger.exception 带 trace_id 进 stderr，
+        # log 给人读短摘要。
+        logger.exception("preprocess worker crashed (job_id=%s)", job_id)
         log(f"[error] {exc}")
-        print(traceback.format_exc(), flush=True)
         return 1
 
 
@@ -393,7 +399,7 @@ def _run_crop(
             )
             # 给前端 grid 预热缩略图
             try:
-                from studio import thumb_cache
+                from studio.services.dataset import thumb_cache
                 for out_name in out_names:
                     out_path = preprocess_dir / out_name
                     with Image.open(out_path) as piece:
@@ -429,12 +435,6 @@ def _run_crop(
     return 0
 
 
-def main() -> None:
-    p = argparse.ArgumentParser()
-    p.add_argument("--job-id", type=int, required=True)
-    args = p.parse_args()
-    sys.exit(run(args.job_id))
-
-
 if __name__ == "__main__":
-    main()
+    from ._base import worker_main
+    worker_main(run)

@@ -30,7 +30,7 @@ def main() -> None:
 
     section("onnxruntime_setup.current_runtime()")
     try:
-        from studio.services import onnxruntime_setup as o
+        from studio.services.runtime import onnxruntime as o
     except ImportError as exc:
         print("studio import 失败 — 是不是没在 studio 仓库根目录跑？")
         print("原因:", exc)

@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 from PIL import Image
 
-from studio.services import reg_builder
+from studio.services.reg import builder as reg_builder
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +135,10 @@ def _opts(train: Path, out: Path, **overrides) -> reg_builder.RegBuildOptions:
         blacklist_tags=[],
         auto_tag=False,
         based_on_version="",
+        # B1（PR-2）：schema 默认改 flat 是 user-facing 决策；老 builder test 套件
+        # 仍假设 mirror（镜像 train 子文件夹结构），所以 helper 这里默认 mirror，
+        # flat 测试单独传 build_mode="flat"。
+        build_mode="mirror",
     )
     base.update(overrides)
     return reg_builder.RegBuildOptions(**base)
@@ -230,6 +234,40 @@ def test_check_aspect_ratio_enabled_filters() -> None:
     ) is False  # ar=3.0 > 2.0
 
 
+def test_find_best_match_new_formula_prefers_aspect_bucket_match() -> None:
+    """PR-3 Smell C 修法：res_score 在新公式下真能影响排序，对齐用户
+    「reg 集要跟 train 落同一个 ARB 桶」的诉求。
+
+    对比两个候选：
+    - A：tag 完美匹配 + aspect 差（4.0 vs target 1.0）
+    - B：tag 缺 1 个 + aspect 完美（1.0 = target 1.0）
+
+    旧公式 `tag + 0.1*res`：A 胜（res 加成不足以抵 tag 差距）。
+    新公式 `0.7*tag_norm + 0.3*res`：B 胜（aspect 完美抵过 tag 略差）。
+    """
+    target = {f"t{i}": 1.0 for i in range(5)}
+    posts = [
+        # A：5 tag 完美 + aspect 4.0（差）
+        {"@attributes": {
+            "id": "1", "file_url": "u", "tags": "t0 t1 t2 t3 t4",
+            "width": 1024, "height": 256,
+        }},
+        # B：缺 1 tag + aspect 1.0（完美匹配 ARB 桶）
+        {"@attributes": {
+            "id": "2", "file_url": "u", "tags": "t0 t1 t2 t3",
+            "width": 800, "height": 800,
+        }},
+    ]
+    best, _ = reg_builder.find_best_match(
+        posts, target, {}, target_count=5,
+        api_source="gelbooru", skip_similar=False,
+        target_resolution=(800, 800),
+        target_aspect_ratio=1.0,
+    )
+    assert best is not None
+    assert best["@attributes"]["id"] == "2"
+
+
 def test_find_best_match_skips_source_ids(tmp_path: Path) -> None:
     posts = [
         {"@attributes": {"id": "10", "file_url": "u", "tags": "1girl solo", "width": 512, "height": 512}},
@@ -283,6 +321,76 @@ def test_build_writes_meta_and_images(tmp_path: Path, fake_booru) -> None:
     assert saved["target_count"] == 1
     # 至少下了一张
     assert any(p.suffix == ".png" for p in out.rglob("*.png") if p.parent == out / "5_concept")
+
+
+def test_build_save_tags_caption_is_space_form(tmp_path: Path, fake_booru) -> None:
+    """save_tags 路径写 reg caption 时把 booru 原生下划线 tag 转成空格 —— caption
+    一律空格形式（tag-form 约定：用户可见 / caption = 空格，下划线只在 booru 边界）。"""
+    train = _make_train(tmp_path / "train", {
+        "5_concept": [("100", ["1girl", "blue_hair"]), ("101", ["1girl", "blue_hair"])],
+    })
+    out = tmp_path / "reg"
+    fake_booru._search_results = [[_post(2002, "1girl long_hair blue_hair")]]
+    opts = _opts(train, out, target_count=1, batch_size=1, save_tags=True)
+    reg_builder.build(opts, on_progress=lambda _: None)
+
+    txts = list(out.rglob("*.txt"))
+    assert txts, "save_tags 应当写出 reg caption .txt"
+    content = "\n".join(p.read_text(encoding="utf-8") for p in txts)
+    assert "_" not in content, f"reg caption 不应残留下划线，实际：{content!r}"
+    assert "long hair" in content or "blue hair" in content  # 下划线已转空格
+
+
+def test_build_flat_mode_outputs_to_1_data_with_target_count(
+    tmp_path: Path, fake_booru
+) -> None:
+    """B1（PR-2）— flat 模式：所有图进 1_data/ 单桶，total_target 来自 opts.target_count，
+    跳过 train 子文件夹镜像。"""
+    train = _make_train(tmp_path / "train", {
+        "5_concept": [
+            ("100", ["1girl", "solo"]),
+            ("101", ["1girl"]),
+        ],
+        "1_general": [
+            ("200", ["solo", "indoors"]),
+        ],
+    })
+    out = tmp_path / "reg"
+    fake_booru._search_results = [
+        [_post(3001, "1girl solo"), _post(3002, "indoors 1girl")],
+    ]
+    opts = _opts(
+        train, out, target_count=2, batch_size=2, build_mode="flat",
+    )
+    meta = reg_builder.build(opts, on_progress=lambda _: None)
+    # 单桶 1_data/；不出 5_concept / 1_general
+    assert (out / "1_data").is_dir()
+    assert not (out / "5_concept").exists()
+    assert not (out / "1_general").exists()
+    # 总数 = 用户给的 target_count
+    assert meta.target_count == 2
+    assert meta.build_mode == "flat"
+
+
+def test_build_mirror_mode_keeps_subfolder_split(
+    tmp_path: Path, fake_booru
+) -> None:
+    """B1（PR-2）— mirror 模式：保持源脚本行为，按 train 子文件夹镜像。"""
+    train = _make_train(tmp_path / "train", {
+        "5_concept": [("100", ["1girl"])],
+        "1_general": [("200", ["solo"])],
+    })
+    out = tmp_path / "reg"
+    fake_booru._search_results = [
+        [_post(4001, "1girl")],
+        [_post(4002, "solo")],
+    ]
+    opts = _opts(train, out, batch_size=1, build_mode="mirror")
+    meta = reg_builder.build(opts, on_progress=lambda _: None)
+    assert (out / "5_concept").is_dir()
+    assert (out / "1_general").is_dir()
+    assert not (out / "1_data").exists()
+    assert meta.build_mode == "mirror"
 
 
 def test_build_mirrors_train_subfolder_repeat_prefix(
@@ -488,6 +596,102 @@ def test_build_incremental_no_op_when_target_already_met(
     assert meta.actual_count == 1
     # 没新增图
     assert {p.name for p in (out / "5_concept").glob("*.png")} == {"5000.png"}
+
+
+# ---------------------------------------------------------------------------
+# A2 — deleted_ids.json 排除
+# ---------------------------------------------------------------------------
+
+
+def test_deleted_ids_roundtrip(tmp_path: Path) -> None:
+    out = tmp_path / "reg"
+    out.mkdir()
+    assert reg_builder.read_deleted_ids(out) == set()
+    reg_builder.append_deleted_ids(out, ["42", "99"])
+    assert reg_builder.read_deleted_ids(out) == {"42", "99"}
+    # 追加 + 去重
+    reg_builder.append_deleted_ids(out, ["99", "100"])
+    assert reg_builder.read_deleted_ids(out) == {"42", "99", "100"}
+
+
+def test_deleted_ids_corrupt_file_returns_empty(tmp_path: Path) -> None:
+    out = tmp_path / "reg"
+    out.mkdir()
+    (out / ".deleted_ids.json").write_text("not json", encoding="utf-8")
+    assert reg_builder.read_deleted_ids(out) == set()
+
+
+def test_build_excludes_previously_deleted_ids(
+    tmp_path: Path, fake_booru,
+) -> None:
+    """A2：incremental 时已删 ID 进 downloaded_ids，search 自动 exclude；
+    候选只剩下未删的，不会被重新拉回。"""
+    train = _make_train(tmp_path / "train", {
+        "5_concept": [
+            ("100", ["1girl", "solo"]),
+            ("101", ["1girl"]),
+        ],
+    })
+    out = tmp_path / "reg"
+    out.mkdir(parents=True)
+    # 用户之前删过 booru ID=7777，写到 deleted_ids
+    reg_builder.append_deleted_ids(out, ["7777"])
+    # search 第一波同时返回 7777（被删过）和 8888（新的）
+    fake_booru._search_results = [
+        [_post(7777, "1girl solo"), _post(8888, "1girl solo")],
+    ]
+    opts = _opts(train, out, target_count=1, batch_size=1)
+    reg_builder.build(opts, on_progress=lambda _: None, incremental=False)
+    # 7777 不该被下载（exclude）；只能选 8888
+    downloaded = {p.stem for p in out.rglob("*.png")}
+    assert "7777" not in downloaded
+    assert "8888" in downloaded
+
+
+# ---------------------------------------------------------------------------
+# A3 — auto_tag_kind 字段
+# ---------------------------------------------------------------------------
+
+
+def test_reg_build_options_default_auto_tag_kind_is_wd14() -> None:
+    opts = reg_builder.RegBuildOptions(
+        train_dir=Path("/tmp"), output_dir=Path("/tmp/out"),
+    )
+    assert opts.auto_tag_kind == "wd14"
+
+
+def test_update_meta_auto_tagged_writes_kind(tmp_path: Path) -> None:
+    out = tmp_path / "reg"
+    out.mkdir()
+    m = reg_builder.RegMeta(
+        generated_at=1.0, based_on_version="x", api_source="gelbooru",
+        target_count=2, actual_count=2, source_tags=[],
+        excluded_tags=[], blacklist_tags=[], failed_tags=[],
+        train_tag_distribution={}, auto_tagged=False,
+    )
+    reg_builder.write_meta(out, m)
+    reg_builder.update_meta_auto_tagged(out, True, kind="cltagger")
+    m2 = reg_builder.read_meta(out)
+    assert m2.auto_tagged is True
+    assert m2.auto_tag_kind == "cltagger"
+
+
+def test_update_meta_auto_tagged_clears_kind_on_failure(tmp_path: Path) -> None:
+    """auto_tagged=False 时把 kind 重置为 None（未成功打过的 tagger 不应残留）。"""
+    out = tmp_path / "reg"
+    out.mkdir()
+    m = reg_builder.RegMeta(
+        generated_at=1.0, based_on_version="x", api_source="gelbooru",
+        target_count=2, actual_count=2, source_tags=[],
+        excluded_tags=[], blacklist_tags=[], failed_tags=[],
+        train_tag_distribution={}, auto_tagged=False,
+        auto_tag_kind="wd14",  # 上次成功过
+    )
+    reg_builder.write_meta(out, m)
+    reg_builder.update_meta_auto_tagged(out, False, kind="cltagger")
+    m2 = reg_builder.read_meta(out)
+    assert m2.auto_tagged is False
+    assert m2.auto_tag_kind is None
 
 
 def test_meta_roundtrip(tmp_path: Path) -> None:

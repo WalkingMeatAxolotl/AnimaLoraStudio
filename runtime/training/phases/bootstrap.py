@@ -62,6 +62,23 @@ def _maybe_apply_pause_snapshot(args, resume_state_path: Path) -> None:
         args.sample_prompts = sp
 
 
+def _resolve_sample_seed(args) -> None:
+    """sample_seed=0 → 训练开始时随机抽一次写回 args，并 log。
+
+    Why：sample_seed=0 走 sample_runner 时不调 torch.manual_seed，整批
+    采样跟着 global RNG 漂移，跨 epoch 同 prompt 出图不同 → 看不出是
+    模型收敛还是噪声变了。抽一次固定下来，整轮训练同 prompt 同 seed。
+
+    与 pause snapshot 协作：snapshot 写整份 args.dict()，resolved 值会
+    被 freeze；resume 经 _maybe_apply_pause_snapshot 灌回，跨 pause 仍
+    用同一 seed。用户重新起 task 时若 yaml 还是 0，启动重抽一次新随机。
+    """
+    if int(getattr(args, "sample_seed", 0) or 0):
+        return
+    args.sample_seed = random.randint(1, 2**31 - 1)
+    logger.info(f"sample_seed=0 → 训练用随机种子: {args.sample_seed}")
+
+
 def _prepend_trigger_to_sample_prompts(args) -> None:
     """trigger_word 非空 → prepend 到 sample_prompt / sample_prompts 每条。
 
@@ -156,14 +173,23 @@ def run(ctx: TrainingContext) -> None:
     random.seed(args.seed)
     np.random.seed(args.seed)
 
+    _resolve_sample_seed(args)
+
     ctx.device = "cuda" if torch.cuda.is_available() else "cpu"
     ctx.dtype = torch.bfloat16 if args.mixed_precision == "bf16" else torch.float32
 
     # 创建输出目录
     ctx.output_dir = Path(args.output_dir)
     ctx.output_dir.mkdir(parents=True, exist_ok=True)
-    ctx.sample_dir = ctx.output_dir / "samples"
-    ctx.sample_dir.mkdir(exist_ok=True)
+    # 采样图落到 task 档案根的 samples/。supervisor 按 task 注入
+    # `--monitor-state-file <studio_data>/tasks/<id>/monitor/state.json`，
+    # sample_dir 取其上跳一层的 `samples/` —— `tasks/<id>/samples/`，跟 monitor/
+    # 同级，整组（snapshot/ monitor/ samples/ run.log）就是 task 完整档案。
+    # 没传 --monitor-state-file（纯 CLI 训练 / 兼容老版本注入路径）退回
+    # output_dir/samples，samples.py 仍可在 monitor_dir 周围多候选搜回。
+    _msf = getattr(args, "monitor_state_file", None)
+    ctx.sample_dir = (Path(_msf).parent.parent / "samples") if _msf else (ctx.output_dir / "samples")
+    ctx.sample_dir.mkdir(parents=True, exist_ok=True)
     # supervisor 启动训练时通过 env LORA_TASK_ID 注入 queue task id（ADR 0006）。
     # 用于 ctx.state_dir() 计算 per-task state 子目录；env 不存在时 fallback unknown。
     _env_tid = os.environ.get("LORA_TASK_ID")

@@ -63,6 +63,7 @@ models/text_encoders/tokenizer.json
 models/text_encoders/vocab.json
 models/wd14/
 models/taeflux/
+models/cltagger/
 
 # Dataset (training images)
 dataset/

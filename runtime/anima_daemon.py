@@ -45,7 +45,7 @@ for _p in (_THIS_DIR, _REPO_ROOT):
 import anima_train as _T  # noqa: E402
 
 from studio.schema import migrate_legacy_attention  # noqa: E402
-from studio.services.inference_core import LoRAMeta, LoRASpec, apply_loras, read_lora_meta  # noqa: E402
+from studio.services.inference.core import LoRAMeta, LoRASpec, apply_loras, read_lora_meta  # noqa: E402
 
 # 预热 transformers.generation → sklearn → scipy.special import 链。
 # transformers 5.x 的 AutoModelForCausalLM.from_pretrained 在 load text encoder
@@ -91,8 +91,10 @@ def _emit_for(req_id: str, kind: str, **extra: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _lora_topology(meta: LoRAMeta) -> tuple[int, float, str, int]:
-    return (meta.rank, meta.alpha, meta.algo, meta.factor)
+def _lora_topology(meta: LoRAMeta) -> tuple[int, float, str, int, bool, bool]:
+    # weight_decompose / rs_lora 改了网络结构（前者加 dora_scale 张量、后者改
+    # effective alpha 公式），不同设置不能走热换权重路径，必须重新 inject。
+    return (meta.rank, meta.alpha, meta.algo, meta.factor, meta.weight_decompose, meta.rs_lora)
 
 
 def _load_lora_state_dict(path: str, device: str, dtype: Any) -> dict[str, Any]:
@@ -196,7 +198,7 @@ class ModelCache:
             return self.taeflux
         self.taeflux_attempted = True
         try:
-            from studio.services import model_downloader as _md
+            from studio.services import models as _md
             if not _md.taeflux_available():
                 # 自动下载（1.6MB；用户配置的 HF mirror 自动生效）
                 logger.info("taeflux missing → auto-downloading (~1.6MB)…")
@@ -659,6 +661,7 @@ def _run_generate(
                     device=CACHE.device,
                     dtype=CACHE.dtype,
                     step_callback=preview_callback,
+                    seed=seed,
                 )
                 fname = f"gen_{img_idx:04d}_p{pi}_c{ci}_s{seed}.png"
                 vpath = _virtual_path(task_id, fname)
@@ -783,6 +786,7 @@ def _run_xy(
                     scheduler=scheduler,
                     device=CACHE.device,
                     dtype=CACHE.dtype,
+                    seed=cur_seed,
                 )
                 fname = f"xy_x{xi:02d}_y{yi:02d}_s{cur_seed}.png"
                 vpath = _virtual_path(task_id, fname)

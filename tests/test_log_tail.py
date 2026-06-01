@@ -5,7 +5,7 @@ import json
 import time
 from pathlib import Path
 
-from studio.log_tail import LogTailer, MonitorStatePoller
+from studio.infrastructure.log_tail import LogTailer, MonitorStatePoller
 
 
 def _wait_lines(received: list[str], n: int, timeout: float = 2.0) -> None:
@@ -85,6 +85,7 @@ def test_poller_first_publish_is_full_delta(tmp_path: Path) -> None:
         "step": 3, "total_steps": 100,
         "losses": [{"step": 1, "loss": 0.5}, {"step": 2, "loss": 0.4}, {"step": 3, "loss": 0.3}],
         "lr_history": [{"step": 1, "lr": 1e-4}],
+        "optimizer_metrics_history": [{"step": 1, "actual_lr": 1e-4, "d": 1e-4}],
         "samples": [{"path": "/x/y.png", "step": 1}],
         "config": {"model": "X"},
     })
@@ -100,6 +101,8 @@ def test_poller_first_publish_is_full_delta(tmp_path: Path) -> None:
     assert d["step"] == 3
     assert len(d["appended_losses"]) == 3
     assert len(d["appended_lr"]) == 1
+    assert len(d["appended_optimizer_metrics"]) == 1
+    assert d["appended_optimizer_metrics"][0]["d"] == 1e-4
     assert len(d["appended_samples"]) == 1
     assert d.get("config") == {"model": "X"}
 
@@ -108,7 +111,8 @@ def test_poller_second_publish_only_new_entries(tmp_path: Path) -> None:
     """state 增量更新后，第二次 delta 只带新增的 loss/lr/sample。"""
     sf = tmp_path / "state.json"
     _write_state(sf, {
-        "step": 1, "losses": [{"step": 1, "loss": 0.5}], "lr_history": [], "samples": [],
+        "step": 1, "losses": [{"step": 1, "loss": 0.5}], "lr_history": [],
+        "optimizer_metrics_history": [], "samples": [],
     })
     deltas: list[dict] = []
     poller = MonitorStatePoller(sf, deltas.append, poll_interval=0.05, min_publish_interval=0.0)
@@ -120,6 +124,7 @@ def test_poller_second_publish_only_new_entries(tmp_path: Path) -> None:
             "step": 3,
             "losses": [{"step": 1, "loss": 0.5}, {"step": 2, "loss": 0.4}, {"step": 3, "loss": 0.3}],
             "lr_history": [{"step": 3, "lr": 1e-5}],
+            "optimizer_metrics_history": [{"step": 3, "actual_lr": 1e-5, "d": 1e-5}],
             "samples": [{"path": "/x/new.png", "step": 3}],
         })
         _wait_for(2, deltas)
@@ -131,6 +136,8 @@ def test_poller_second_publish_only_new_entries(tmp_path: Path) -> None:
     # 只带新增的 2 个 loss
     assert [l["step"] for l in d2["appended_losses"]] == [2, 3]
     assert len(d2["appended_lr"]) == 1
+    assert len(d2["appended_optimizer_metrics"]) == 1
+    assert d2["appended_optimizer_metrics"][0]["actual_lr"] == 1e-5
     assert len(d2["appended_samples"]) == 1
     # config 没变 → 不带
     assert "config" not in d2

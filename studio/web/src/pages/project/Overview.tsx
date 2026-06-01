@@ -1256,7 +1256,7 @@ export default function ProjectOverview() {
         <VersionRail
           versions={project.versions}
           currentVid={selectedVid}
-          onSelect={setSelectedVid}
+          onSelect={(vid) => { setSelectedVid(vid); ctx?.onSelectVersion(vid) }}
           onCreate={() => ctx && ctx.onCreateVersion()}
           onExport={() => ctx && ctx.onExportTrain()}
           exporting={ctx?.exporting ?? false}

@@ -23,6 +23,30 @@
 - 删除明显错误的标签
 - 保持标签风格一致（全小写，空格分隔）
 
+### Caption 策略与正则集配合
+
+想要训完的 LoRA 有「trigger off → 退回 base 默认 / trigger on → 出训练学的画风或角色」这种**开关式**控制效果，caption 必须把「要被 trigger 吸收的特征 tag」从 train caption 里删掉；正则集再去掉触发词，两边配合才能让 trigger 成为真正的 on/off 开关。
+
+#### 核心原则
+
+| LoRA 类型 | train caption 保留 | train caption 删掉 | 正则集排除 |
+|---|---|---|---|
+| **画风 LoRA** | 内容 tag（角色 / 场景 / 物体） | —（保持原样） | 触发词 + 画师名 |
+| **人物 LoRA** | 触发词（人物） + 环境（场景 / 动作） | 角色特征（发色 / 眼睛 / 体型 / 标志性服饰） | 触发词（角色名） |
+| **人物 + 衣服 LoRA** | 触发词（人物 + 衣服） + 环境 | 角色特征 + 衣服细节 | 触发词（角色名 + 衣服名） |
+
+#### 为什么这样配合
+
+- train 集 caption 删了特征 tag → 模型把这些特征**绑定到 trigger** 上
+- 正则集 caption 不含 trigger（builder 自动排除 `based_on_version`；正则集排除列表里再手动加触发词 / 角色名 / 衣服名）
+- 正则集图片来自 booru 自然分布或 base 模型自生成，发色 / 眼睛 / 衣服**随机分布**
+- 训练时正则集提供「trigger 不在时这组环境 tag 该长什么样」的监督信号
+- 结果：trigger off 时输出退向 base 模型的自然分布；trigger on 时才出训练学到的角色 / 画风
+
+#### 不遵守的后果
+
+如果 caption 里残留了本来应被吸收的特征 tag（如训角色没删 `silver_hair`），那 trigger off 时 prompt 写 `silver_hair` 仍会 leak 出训练集风格 —— trigger 不再是干净的 on/off 开关，更接近「加权融合」，且 LoRA 容易在「不写 silver_hair 反而劣化」上踩坑。
+
 ---
 
 ## 参数调优
@@ -77,8 +101,8 @@ Anima 是 Cosmos DiT + Flow Matching，跟 Flux/Qwen-Image 同型问题。这些
 - **lr_scheduler**：**必须 `none`**（Schedule-Free 自带调度，叠 cosine 会破坏 averaged
   weights 的收敛保证；UI 自动 disable，pydantic 也会拦下）
 - **ppsf_d_coef**：小数据集（<50 张）建议 `0.5`；正常 `1.0`；过拟合可试 `2.0`
-- **ppsf_prodigy_steps**：建议设为总步数的 1/4 到 1/2（如总 2000 步设 500-1000），后期
-  冻结 `d`、防跳档；不确定就留 `0`（不冻结）
+- **ppsf_prodigy_steps**：建议设为总步数的 1/4 到 1/2（如总 2000 步设
+  500-1000），后期冻结 `d`、防跳档；不确定就留 `0`（不冻结）
 - **ppsf_fused_back_pass**：显存吃紧时开
 - **save / sample 行为**：训练代码自动在 sample 和 save 前调 `optimizer.eval()` 切到
   averaged weights、事后切回。保存的 LoRA 是 averaged 状态，直接可用
@@ -181,11 +205,25 @@ EDM/Karras 论文里 δ=0.15 是常用经验值。
 
 | 字段 | 默认 | 用途 |
 |------|------|------|
-| `noise_offset` | `0.0` | 给噪声加常数偏置；`0.05~0.1` 能改善超暗 / 超亮场景的对比度 |
-| `pyramid_noise_iters` | `0` | 金字塔噪声层数；`>0` 在多尺度叠加噪声，纹理多样性更好 |
-| `pyramid_noise_discount` | `0.35` | 金字塔每层衰减系数（仅 `pyramid_noise_iters>0` 用） |
+| `noise_enhancement_type` | `none` | `none` / `offset` / `pyramid` 三选一，互斥（见下） |
+| `noise_offset` | `0.0` | 给噪声加常数偏置；`0.05~0.1` 能改善超暗 / 超亮场景的对比度。仅 `type=offset` 生效 |
+| `pyramid_noise_iters` | `0` | 金字塔噪声层数；多尺度叠加噪声，纹理多样性更好。仅 `type=pyramid` 生效 |
+| `pyramid_noise_discount` | `0.35` | 金字塔每层衰减系数。仅 `type=pyramid` 生效 |
+
+**互斥约束**：`noise_offset` 与金字塔噪声**不能同时启用**。两者都在给噪声注入低频成分（pyramid 最低分辨率那层 ≈ `noise_offset` 等价物），叠加会让低频成分双倍灌入，训练目标失真。这跟 kohya 上游 [sd-scripts PR #477](https://github.com/kohya-ss/sd-scripts/pull/477) 的硬约束一致。Anima 的 schema 校验会强制清零反组字段，老 yaml 同开会按 `pyramid_noise_iters > 0` 优先映射到 pyramid。
 
 `pyramid_noise` 来自 Mistoline / Diffusion 社区实验，画风 LoRA 受益明显，角色 LoRA 一般。
+
+### Flip Augment + Cache Latents（双份缓存）
+
+`flip_augment` 与 `cache_latents` 同开时，Anima 按 kohya 上游 `latents` / `latents_flipped` 模式存**双份 latent**：
+
+- cache 阶段对每张图 encode 两次（原图 + 镜像），分别存到 npz 的 `latent` / `latent_flipped` 键
+- 训练时 `__getitem__` 50% 概率取 flipped 版本，跟非 cache 路径行为对齐
+- 代价：**编码时间和 cache 大小都 ×2**（小数据集无感知，大数据集要权衡）
+- 老 cache（只有 `latent`）+ `flip_augment=true` → 自动判失效，重 encode 补全；切回 `flip_augment=false` 不会反复重 encode（双份是单份的超集）
+
+历史 bug：旧版 0.11.x 之前同开两者会让 cache 阶段那一次随机翻转 baked 进 npz，**flip_augment 永久失效 + 50% 数据被永久镜像污染**。0.11.x 起按双份方案修复，已有的污染 cache 通过 `_is_cache_valid` 自动检测重 encode。
 
 ---
 

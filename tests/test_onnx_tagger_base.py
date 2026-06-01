@@ -12,8 +12,8 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from studio.services import onnx_tagger_base
-from studio.services.onnx_tagger_base import OnnxTaggerBase
+from studio.services.tagging import onnx_base as onnx_tagger_base
+from studio.services.tagging.onnx_base import OnnxTaggerBase
 
 
 class _StubTagger(OnnxTaggerBase):

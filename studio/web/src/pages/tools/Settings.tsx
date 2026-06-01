@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import type { TFunction } from 'i18next'
 import { Trans, useTranslation } from 'react-i18next'
-import { useLocation } from 'react-router-dom'
 import {
   api,
   DEFAULT_WD14_MODELS,
@@ -29,9 +28,11 @@ import {
 import { useDialog } from '../../components/Dialog'
 import { InfoButton } from '../../components/InfoButton'
 import LLMTaggerWorkspace from '../../components/LLMTaggerWorkspace'
+import { TagListInput } from '../../components/TagsInput'
 import PageHeader from '../../components/PageHeader'
 import { useToast } from '../../components/Toast'
-import { useEventStream } from '../../lib/useEventStream'
+import { useSettingsData } from '../../lib/SettingsData'
+import { useSettingsDrawer } from '../../lib/SettingsDrawer'
 import {
   formatMasterStateText,
   formatDevStateText,
@@ -59,13 +60,15 @@ type Section =
   | 'generate'
   | 'proxy'
 
-type Tab = 'dataset' | 'tagging' | 'preprocess' | 'training' | 'monitor' | 'testing' | 'appearance' | 'system' | 'network'
+type Tab = 'dataset' | 'tagging' | 'preprocess' | 'training' | 'monitor' | 'testing' | 'appearance' | 'system'
 
 // 外部页面通过 `?section=<id>` 跳转到 SettingsPage 的特定 section 时，用这个
 // 反向映射决定要先切到哪个 tab。只列出能从外部链接到的 sections。
 const SECTION_TO_TAB: Record<string, Tab> = {
   'models': 'training',
   'download-source': 'training',
+  'version': 'system',
+  'service': 'system',
 }
 
 const TAB_LIST: { id: Tab; labelKey: string }[] = [
@@ -77,7 +80,6 @@ const TAB_LIST: { id: Tab; labelKey: string }[] = [
   { id: 'testing', labelKey: 'settings.tabGenerate' },
   { id: 'appearance', labelKey: 'settings.tabAppearance' },
   { id: 'system', labelKey: 'settings.tabSystem' },
-  { id: 'network', labelKey: 'settings.tabNetwork' },
 ]
 
 // 每个 tab 的 section index — 用于右侧 sticky 导航。id 与各 section 的 DOM id
@@ -87,6 +89,7 @@ const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
     { id: 'gelbooru', labelKey: 'settings.gelbooru' },
     { id: 'danbooru', labelKey: 'settings.danbooru' },
     { id: 'download-global', labelKey: 'settings.downloadGlobal' },
+    { id: 'proxy', labelKey: 'settings.proxy.sectionTitle' },
   ],
   preprocess: [
     { id: 'upscalers', labelKey: 'settings.upscalers' },
@@ -117,9 +120,6 @@ const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
   system: [
     { id: 'version', labelKey: 'settings.version' },
     { id: 'service', labelKey: 'settings.service' },
-  ],
-  network: [
-    { id: 'proxy', labelKey: 'settings.proxy.sectionTitle' },
   ],
 }
 
@@ -175,7 +175,7 @@ function getStoredTab(): Tab {
     if (
       v === 'dataset' || v === 'tagging' || v === 'preprocess' || v === 'training'
       || v === 'monitor' || v === 'testing' || v === 'appearance'
-      || v === 'system' || v === 'network'
+      || v === 'system'
     ) return v
   } catch {
     /* ignore localStorage errors */
@@ -232,8 +232,11 @@ const EMPTY: Secrets = {
     local_dir: null,
     threshold_general: 0.35,
     threshold_character: 0.6,
-    add_rating_tag: false,
+    add_copyright_tag: true,
+    add_meta_tag: false,
     add_model_tag: false,
+    add_rating_tag: false,
+    add_quality_tag: false,
     blacklist_tags: [],
     batch_size: 8,
   },
@@ -274,22 +277,42 @@ function translatedCatalogText(keys: Record<string, string>, id: string, fallbac
 
 export default function SettingsPage() {
   const { t } = useTranslation()
-  const [server, setServer] = useState<Secrets | null>(null)
+  // 共享数据层（SettingsDataProvider）：secrets / catalog / SSE / downloadBusy 都在根级常驻，
+  // 本组件 mount/unmount（抽屉开关）不再触发重拉。`server` 别名保留是为了让下方
+  // 大段表单代码改动最小。
+  const {
+    secrets: server,
+    secretsError,
+    setSecrets: setServer,
+    catalog,
+    catalogError,
+    reloadCatalog,
+    downloadBusy,
+    startDownload,
+  } = useSettingsData()
   const [draft, setDraft] = useState<Secrets>(EMPTY)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [tab, setTab] = useState<Tab>(getStoredTab)
-  // Models catalog hoisted here so 打标 tab 的 WD14/CLTagger 卡片和 训练 tab
-  // 的 ModelsSection 共用一份数据 + 一个 SSE 订阅。
-  const [catalog, setCatalog] = useState<ModelsCatalog | null>(null)
-  const [catalogError, setCatalogError] = useState<string | null>(null)
-  const [downloadBusy, setDownloadBusy] = useState<Set<string>>(new Set())
   const [llmModelsBusy, setLlmModelsBusy] = useState(false)
   const [llmTestBusy, setLlmTestBusy] = useState(false)
   const { toast } = useToast()
   const { prompt } = useDialog()
+  const drawer = useSettingsDrawer()
   // 右侧 section index 用：sticky nav 的 IntersectionObserver root + 滚动平移容器
   const scrollContainerRef = useRef<HTMLDivElement>(null)
+
+  // 第一次拿到 secrets 时把 draft 同步过来；之后 server 变化（save 后）不再
+  // 覆盖 draft，避免抹掉用户的未保存编辑（save 里会自己 setDraft(next)）。
+  const draftInitRef = useRef(false)
+  useEffect(() => {
+    if (server && !draftInitRef.current) {
+      setDraft(server)
+      draftInitRef.current = true
+    }
+  }, [server])
+  // 数据层 fetch secrets 失败时把错误透出到本组件 error 状态，复用底部错误条。
+  useEffect(() => { if (secretsError) setError(secretsError) }, [secretsError])
 
   const switchTab = (next: Tab) => {
     setTab(next)
@@ -300,68 +323,34 @@ export default function SettingsPage() {
     }
   }
 
-  // 外部页面通过 `/tools/settings?section=models` 跳进来时，先切到对应 tab，
-  // 等 section 渲染完再 scrollIntoView。不写 localStorage，避免覆盖用户平常
-  // 偏好的 tab。
-  const location = useLocation()
+  const dirty = useMemo(
+    () => server !== null && JSON.stringify(server) !== JSON.stringify(draft),
+    [server, draft]
+  )
+
+  // 抽屉关闭前用这个 ref 询问"是否 dirty"；ref 每次 render 刷新，
+  // 注册的函数只挂载一次，避免 effect churn。
+  const dirtyRef = useRef(false)
+  dirtyRef.current = dirty
   useEffect(() => {
-    const params = new URLSearchParams(location.search)
-    const section = params.get('section')
-    if (!section) return
+    drawer.registerDirtyGuard(() => dirtyRef.current)
+    return () => drawer.registerDirtyGuard(null)
+  }, [drawer])
+
+  // 抽屉以 open({ section }) 打开时跳到对应 section（取代旧的 ?section= URL 参数）。
+  // sectionRequest 带 nonce，相同 section 重复 open 也会触发 effect 重跑。
+  const drawerSectionReq = drawer.sectionRequest
+  useEffect(() => {
+    if (!drawerSectionReq) return
+    const section = drawerSectionReq.section
     const targetTab = SECTION_TO_TAB[section]
     if (targetTab) setTab(targetTab)
-    // tab 切换 → section 重新渲染，需要等 DOM 更新后再 scroll
     const t1 = setTimeout(() => {
       const el = document.getElementById(section)
       el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }, 50)
     return () => clearTimeout(t1)
-  }, [location.search])
-
-  const reloadCatalog = useCallback(async () => {
-    try {
-      const c = await api.getModelsCatalog()
-      setCatalog(c)
-      setCatalogError(null)
-    } catch (e) {
-      setCatalogError(String(e))
-    }
-  }, [])
-
-  useEffect(() => { void reloadCatalog() }, [reloadCatalog])
-
-  useEventStream((evt) => {
-    if (evt.type === 'model_download_changed') { void reloadCatalog() }
-  })
-
-  const startDownload = useCallback(async (model_id: string, variant?: string) => {
-    const key = variant ? `${model_id}:${variant}` : model_id
-    setDownloadBusy((s) => new Set(s).add(key))
-    try {
-      await api.startModelDownload({ model_id, variant })
-      toast(t('settings.downloadStarted', { name: key }), 'success')
-      await reloadCatalog()
-    } catch (e) {
-      toast(String(e), 'error')
-    } finally {
-      setDownloadBusy((s) => { const n = new Set(s); n.delete(key); return n })
-    }
-  }, [reloadCatalog, t, toast])
-
-  useEffect(() => {
-    api
-      .getSecrets()
-      .then((s) => {
-        setServer(s)
-        setDraft(s)
-      })
-      .catch((e) => setError(String(e)))
-  }, [])
-
-  const dirty = useMemo(
-    () => server !== null && JSON.stringify(server) !== JSON.stringify(draft),
-    [server, draft]
-  )
+  }, [drawerSectionReq])
 
   const update = <S extends Section, K extends keyof Secrets[S]>(
     section: S,
@@ -568,6 +557,18 @@ export default function SettingsPage() {
         title={t('settings.title')}
         tabs={tabNav}
         sticky
+        topRight={drawer.isOpen ? (
+          <button
+            onClick={() => void drawer.close()}
+            title={t('settings.drawerClose')}
+            aria-label={t('settings.drawerClose')}
+            className="w-7 h-7 grid place-items-center text-fg-tertiary bg-transparent border-none rounded-sm cursor-pointer hover:bg-overlay hover:text-fg-primary transition-colors"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M6 6l12 12M18 6l-12 12" />
+            </svg>
+          </button>
+        ) : undefined}
         actions={
           <button
             onClick={save}
@@ -697,6 +698,72 @@ export default function SettingsPage() {
           </div>
         </div>
       </SettingsSection>
+
+      <SettingsSection id="proxy" title={t('settings.proxy.sectionTitle')}>
+        <SettingsField label={t('settings.proxy.enableLabel')}>
+          <Bool
+            value={draft.proxy.enabled}
+            onChange={(v) => update('proxy', 'enabled', v)}
+          />
+          <p className="text-xs text-fg-tertiary mt-1">
+            {t('settings.proxy.enableDesc')}
+          </p>
+        </SettingsField>
+
+        <SettingsField
+          label={t('settings.proxy.httpLabel')}
+          desc={t('settings.proxy.httpDesc')}
+        >
+          <input
+            type="text"
+            value={draft.proxy.http_proxy}
+            onChange={(e) => update('proxy', 'http_proxy', e.target.value)}
+            placeholder="http://127.0.0.1:7890"
+            className={textInputClass}
+            disabled={!draft.proxy.enabled}
+          />
+        </SettingsField>
+
+        <SettingsField
+          label={t('settings.proxy.httpsLabel')}
+          desc={t('settings.proxy.httpsDesc')}
+        >
+          <input
+            type="text"
+            value={draft.proxy.https_proxy}
+            onChange={(e) => update('proxy', 'https_proxy', e.target.value)}
+            placeholder="http://127.0.0.1:7890"
+            className={textInputClass}
+            disabled={!draft.proxy.enabled}
+          />
+        </SettingsField>
+
+        <SettingsField
+          label={t('settings.proxy.noProxyLabel')}
+          desc={t('settings.proxy.noProxyDesc')}
+        >
+          <input
+            type="text"
+            value={draft.proxy.no_proxy}
+            onChange={(e) => update('proxy', 'no_proxy', e.target.value)}
+            placeholder="localhost,127.0.0.1"
+            className={textInputClass}
+            disabled={!draft.proxy.enabled}
+          />
+        </SettingsField>
+
+        <div className="text-xs text-fg-tertiary border-t border-subtle pt-3 mt-1">
+          <p className="m-0">{t('settings.proxy.tipsTitle')}</p>
+          <ul className="list-disc pl-4 m-0 mt-1 space-y-0.5">
+            <li>{t('settings.proxy.tips1')}</li>
+            <li>
+              {t('settings.proxy.tips2')}
+              <code className="text-fg-primary">http://user:pass@host:port</code>
+            </li>
+            <li>{t('settings.proxy.tips3')}</li>
+          </ul>
+        </div>
+      </SettingsSection>
       </>)}
 
       {tab === 'tagging' && (<>
@@ -757,11 +824,11 @@ export default function SettingsPage() {
           </SettingsField>
         </div>
         <SettingsField label="blacklist_tags" desc={t('settings.commaSeparated')}>
-          <input
-            type="text"
-            value={draft.wd14.blacklist_tags.join(', ')}
-            onChange={(e) => update('wd14', 'blacklist_tags', e.target.value.split(',').map((t) => t.trim()).filter(Boolean))}
-            className={textInputClass}                                  />
+          <TagListInput
+            value={draft.wd14.blacklist_tags}
+            onChange={(tags) => update('wd14', 'blacklist_tags', tags)}
+            className={textInputClass}
+          />
         </SettingsField>
         <SettingsField label="batch_size" desc={t('settings.batchSizeHint')}>
           <input
@@ -811,19 +878,28 @@ export default function SettingsPage() {
           </SettingsField>
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <SettingsField label="add_rating_tag">
-            <Bool value={draft.cltagger.add_rating_tag} onChange={(v) => update('cltagger', 'add_rating_tag', v)} />
+          <SettingsField label="add_copyright_tag">
+            <Bool value={draft.cltagger.add_copyright_tag} onChange={(v) => update('cltagger', 'add_copyright_tag', v)} />
+          </SettingsField>
+          <SettingsField label="add_meta_tag">
+            <Bool value={draft.cltagger.add_meta_tag} onChange={(v) => update('cltagger', 'add_meta_tag', v)} />
           </SettingsField>
           <SettingsField label="add_model_tag">
             <Bool value={draft.cltagger.add_model_tag} onChange={(v) => update('cltagger', 'add_model_tag', v)} />
           </SettingsField>
+          <SettingsField label="add_rating_tag">
+            <Bool value={draft.cltagger.add_rating_tag} onChange={(v) => update('cltagger', 'add_rating_tag', v)} />
+          </SettingsField>
+          <SettingsField label="add_quality_tag">
+            <Bool value={draft.cltagger.add_quality_tag} onChange={(v) => update('cltagger', 'add_quality_tag', v)} />
+          </SettingsField>
         </div>
         <SettingsField label="blacklist_tags" desc={t('settings.commaSeparated')}>
-          <input
-            type="text"
-            value={draft.cltagger.blacklist_tags.join(', ')}
-            onChange={(e) => update('cltagger', 'blacklist_tags', e.target.value.split(',').map((t) => t.trim()).filter(Boolean))}
-            className={textInputClass}                                  />
+          <TagListInput
+            value={draft.cltagger.blacklist_tags}
+            onChange={(tags) => update('cltagger', 'blacklist_tags', tags)}
+            className={textInputClass}
+          />
         </SettingsField>
         <SettingsField label="batch_size" desc={t('settings.batchSizeHint')}>
           <input
@@ -1042,73 +1118,6 @@ export default function SettingsPage() {
         <SystemSection />
       )}
 
-      {tab === 'network' && (
-        <SettingsSection title={t('settings.proxy.sectionTitle')}>
-          <SettingsField label={t('settings.proxy.enableLabel')}>
-            <Bool
-              value={draft.proxy.enabled}
-              onChange={(v) => update('proxy', 'enabled', v)}
-            />
-            <p className="text-xs text-fg-tertiary mt-1">
-              {t('settings.proxy.enableDesc')}
-            </p>
-          </SettingsField>
-      
-          <SettingsField
-            label={t('settings.proxy.httpLabel')}
-            desc={t('settings.proxy.httpDesc')}
-          >
-            <input
-              type="text"
-              value={draft.proxy.http_proxy}
-              onChange={(e) => update('proxy', 'http_proxy', e.target.value)}
-              placeholder="http://127.0.0.1:7890"
-              className={textInputClass}
-              disabled={!draft.proxy.enabled}
-            />
-          </SettingsField>
-      
-          <SettingsField
-            label={t('settings.proxy.httpsLabel')}
-            desc={t('settings.proxy.httpsDesc')}
-          >
-            <input
-              type="text"
-              value={draft.proxy.https_proxy}
-              onChange={(e) => update('proxy', 'https_proxy', e.target.value)}
-              placeholder="http://127.0.0.1:7890"
-              className={textInputClass}
-              disabled={!draft.proxy.enabled}
-            />
-          </SettingsField>
-      
-          <SettingsField
-            label={t('settings.proxy.noProxyLabel')}
-            desc={t('settings.proxy.noProxyDesc')}
-          >
-            <input
-              type="text"
-              value={draft.proxy.no_proxy}
-              onChange={(e) => update('proxy', 'no_proxy', e.target.value)}
-              placeholder="localhost,127.0.0.1"
-              className={textInputClass}
-              disabled={!draft.proxy.enabled}
-            />
-          </SettingsField>
-      
-          <div className="text-xs text-fg-tertiary border-t border-subtle pt-3 mt-1">
-            <p className="m-0">{t('settings.proxy.tipsTitle')}</p>
-            <ul className="list-disc pl-4 m-0 mt-1 space-y-0.5">
-              <li>{t('settings.proxy.tips1')}</li>
-              <li>
-                {t('settings.proxy.tips2')}
-                <code className="text-fg-primary">http://user:pass@host:port</code>
-              </li>
-              <li>{t('settings.proxy.tips3')}</li>
-            </ul>
-          </div>
-        </SettingsSection>
-      )}
     </div>
 
     <SectionIndex sections={TAB_SECTIONS[tab]} scrollContainer={scrollContainerRef} />

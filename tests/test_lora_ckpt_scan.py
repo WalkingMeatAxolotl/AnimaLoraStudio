@@ -5,8 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from studio import db, projects, versions as versions_mod
-from studio.versions import (
+from studio import db
+from studio.services.projects import projects, versions as versions_mod
+from studio.services.projects.versions import (
     list_lora_ckpts,
     list_project_lora_ckpts,
     list_project_state_ckpts,

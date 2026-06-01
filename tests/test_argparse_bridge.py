@@ -6,7 +6,7 @@ from typing import Literal, Optional
 import pytest
 from pydantic import BaseModel, Field
 
-from studio import argparse_bridge as bridge
+from studio.infrastructure import argparse_bridge as bridge
 from studio.schema import TrainingConfig
 
 

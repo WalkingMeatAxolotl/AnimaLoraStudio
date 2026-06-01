@@ -11,9 +11,9 @@ API：
 - `get_state()` — 读当前 state（拷贝，避免被外部修改）
 - `_downsample_uniform(points, n)` — 工具：均匀降采样，给前端展示用
 
-状态结构：losses / lr_history / samples / epoch / total_epochs / step /
-total_steps / speed / start_time / config（total_epochs 是 PP6.x 后期补的，
-老 state 缺失时前端按 0 兜底）。
+状态结构：losses / lr_history / optimizer_metrics_history / samples / epoch /
+total_epochs / step / total_steps / speed / start_time / config（total_epochs 是
+PP6.x 后期补的，老 state 缺失时前端按 0 兜底）。
 """
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ from typing import Any, Optional
 MONITOR_STATE: dict[str, Any] = {
     "losses": [],
     "lr_history": [],
+    "optimizer_metrics_history": [],
     "epoch": 0,
     "total_epochs": 0,
     "step": 0,
@@ -60,7 +61,7 @@ def reset_monitor() -> None:
     """清空 in-memory MONITOR_STATE。daemon 跨 task 复用进程时必调，
     否则上一 task 的 samples/step/loss 会残留到下一 task。"""
     MONITOR_STATE.update({
-        "losses": [], "lr_history": [],
+        "losses": [], "lr_history": [], "optimizer_metrics_history": [],
         "samples": [],
         "epoch": 0, "total_epochs": 0,
         "step": 0, "total_steps": 0,
@@ -84,7 +85,7 @@ def save_state() -> None:
 def update_monitor(
     loss=None, lr=None, epoch=None, total_epochs=None, step=None,
     total_steps=None, speed=None, sample_path=None, config=None,
-    xy=None,
+    xy=None, optimizer_metrics=None,
 ):
     """更新监控状态。先更新 step/epoch 等元信息，再追加 loss/lr 点位。
 
@@ -115,6 +116,17 @@ def update_monitor(
         if len(MONITOR_STATE["lr_history"]) > 50000:
             MONITOR_STATE["lr_history"] = MONITOR_STATE["lr_history"][-50000:]
 
+    if optimizer_metrics is not None:
+        point = {"step": MONITOR_STATE["step"]}
+        for key, value in dict(optimizer_metrics).items():
+            try:
+                point[key] = float(value)
+            except (TypeError, ValueError):
+                continue
+        MONITOR_STATE["optimizer_metrics_history"].append(point)
+        if len(MONITOR_STATE["optimizer_metrics_history"]) > 50000:
+            MONITOR_STATE["optimizer_metrics_history"] = MONITOR_STATE["optimizer_metrics_history"][-50000:]
+
     if sample_path is not None:
         sample = {
             "path": str(sample_path),
@@ -143,13 +155,15 @@ def get_state() -> dict[str, Any]:
 
 def restore_monitor_state(
     losses=None, lr_history=None, epoch=None, total_epochs=None, step=None,
-    total_steps=None, start_time=None, config=None,
+    total_steps=None, start_time=None, config=None, optimizer_metrics_history=None,
 ):
     """断点续训：把存档里的历史曲线灌回 in-memory state，再落盘。"""
     if losses is not None:
         MONITOR_STATE["losses"] = losses
     if lr_history is not None:
         MONITOR_STATE["lr_history"] = lr_history
+    if optimizer_metrics_history is not None:
+        MONITOR_STATE["optimizer_metrics_history"] = optimizer_metrics_history
     if epoch is not None:
         MONITOR_STATE["epoch"] = epoch
     if total_epochs is not None:
@@ -188,6 +202,7 @@ def reset_state() -> None:
     MONITOR_STATE.update({
         "losses": [],
         "lr_history": [],
+        "optimizer_metrics_history": [],
         "epoch": 0,
         "total_epochs": 0,
         "step": 0,

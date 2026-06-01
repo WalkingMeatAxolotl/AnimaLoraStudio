@@ -7,7 +7,8 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image, ImageDraw
 
-from studio import db, projects, server, versions
+from studio import db, server
+from studio.services.projects import projects, versions
 
 
 @pytest.fixture

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from studio.services import generate_cache
+from studio.services.inference import cache as generate_cache
 
 
 @pytest.fixture(autouse=True)

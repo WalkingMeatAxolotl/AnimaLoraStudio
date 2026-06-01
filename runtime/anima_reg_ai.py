@@ -43,7 +43,7 @@ for _p in (_THIS_DIR, _REPO_ROOT):
 import anima_train as _T  # noqa: E402
 
 # 复用 reg_builder.RegMeta（PR-9 commit 2 加了 generation_method 字段）
-from studio.services.reg_builder import RegMeta, read_meta, write_meta  # noqa: E402
+from studio.services.reg.builder import RegMeta, read_meta, write_meta  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,

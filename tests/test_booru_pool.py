@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 import pytest
 import requests
 
-from studio.services import booru_api, booru_pool
+from studio.services.booru import api as booru_api, pool as booru_pool
 
 
 # ---------------------------------------------------------------------------

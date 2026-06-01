@@ -25,16 +25,24 @@ def _wait_for(predicate, timeout=5.0, interval=0.05):
 
 
 @pytest.fixture
-def env(tmp_path: Path):
-    """初始化 db + 目录，并提供一个有效 config 文件。"""
+def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """初始化 db + 目录，并提供一个有效 config 文件。
+
+    task-scoped 档案（tasks/<id>/run.log + monitor/state.json + samples/）
+    会落到 STUDIO_DATA/tasks/，测试里 monkeypatch TASKS_DIR 到 tmp 隔离。
+    """
+    from studio.infrastructure import paths as _paths
     db_path = tmp_path / "studio.db"
     db.init_db(db_path)
     logs = tmp_path / "logs"
     configs = tmp_path / "configs"
+    tasks = tmp_path / "tasks"
     logs.mkdir()
     configs.mkdir()
+    monkeypatch.setattr(_paths, "TASKS_DIR", tasks)
+    monkeypatch.setattr(_paths, "LOGS_DIR", logs)
     (configs / "fake.yaml").write_text("epochs: 1\n", encoding="utf-8")
-    return {"db": db_path, "logs": logs, "configs": configs}
+    return {"db": db_path, "logs": logs, "configs": configs, "tasks": tasks}
 
 
 def _events_collector():
@@ -289,7 +297,9 @@ def test_monitor_state_path_passed_to_cmd_and_db(env, monkeypatch) -> None:
 
     # cmd_builder 收到的 task dict 含 monitor_state_path
     assert captured.get("cmd_msp"), "cmd_builder 没拿到 monitor_state_path"
-    assert "task_" in captured["cmd_msp"]  # 兜底路径含 task_{id}
+    # task-scoped 档案：tasks/<id>/monitor/state.json
+    msp_parts = Path(captured["cmd_msp"]).parts
+    assert msp_parts[-4:] == ("tasks", str(tid), "monitor", "state.json")
 
     # db 也写入了
     with db.connection_for(env["db"]) as conn:
@@ -381,7 +391,7 @@ def test_config_path_takes_priority(env, tmp_path) -> None:
 
 def test_finalize_version_writes_output_lora_path(env, tmp_path, monkeypatch) -> None:
     """PP6.3：训练 task 完成 → 推 version.output_lora_path + stage=done。"""
-    from studio import projects, versions
+    from studio.services.projects import projects, versions
 
     monkeypatch.setattr(projects, "PROJECTS_DIR", tmp_path / "projects")
 

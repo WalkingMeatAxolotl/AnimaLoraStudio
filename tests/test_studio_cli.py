@@ -365,7 +365,7 @@ def test_check_torch_cuda_warns_on_cpu_only_with_gpu(
         monkeypatch,
         _FakeTorch(available=False, cuda_build=None, version="2.5.0+cpu"),
     )
-    from studio.services import onnxruntime_setup
+    from studio.services.runtime import onnxruntime as onnxruntime_setup
     monkeypatch.setattr(
         onnxruntime_setup,
         "detect_cuda",
@@ -390,7 +390,7 @@ def test_check_torch_cuda_info_on_cpu_only_without_gpu(
         monkeypatch,
         _FakeTorch(available=False, cuda_build=None, version="2.5.0+cpu"),
     )
-    from studio.services import onnxruntime_setup
+    from studio.services.runtime import onnxruntime as onnxruntime_setup
     monkeypatch.setattr(
         onnxruntime_setup,
         "detect_cuda",

@@ -72,7 +72,7 @@ def report_environment() -> None:
     log.info("cpu count: %s", os.cpu_count())
 
     # PP9.5 — preload 在本模块 import 时已跑过；直接读结果
-    from studio.services import onnxruntime_setup as ors
+    from studio.services.runtime import onnxruntime as ors
 
     rt = ors.current_runtime()
     log.info(
@@ -214,7 +214,7 @@ def main() -> int:
         return 1
     log.info("images: %d 张，第一张 %s", len(paths), paths[0].name)
 
-    from studio.services.wd14_tagger import WD14Tagger
+    from studio.services.tagging.wd14 import WD14Tagger
 
     overrides = {"model_id": args.model} if args.model else {}
     tagger = WD14Tagger(overrides=overrides or None)

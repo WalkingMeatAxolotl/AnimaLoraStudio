@@ -8,8 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from studio import db, projects, versions
-from studio.services import train_io
+from studio import db
+from studio.services.projects import projects, versions
+from studio.services.data_io import train_io
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +290,8 @@ def test_import_bundle_config_with_auto_sync_on_overrides_model_paths(
     源机器（Windows）导出的 `G:/models/foo.safetensors` 在异机器不可解析；
     fork_preset_for_version 走的就是这个语义，bundle import 必须一致。
     """
-    from studio.services import model_downloader, presets as preset_flow
+    from studio.services import presets as preset_flow
+    from studio.services import models as model_downloader
 
     monkeypatch.setattr(preset_flow, "_auto_sync_paths", lambda: True)
     src_path = "G:/source-machine/anima.safetensors"

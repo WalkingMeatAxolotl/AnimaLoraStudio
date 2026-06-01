@@ -1,6 +1,11 @@
 // 与 FastAPI 守护进程交互的薄封装。
 // 开发时由 Vite proxy 转发到 127.0.0.1:8765；生产部署时与 API 同源。
 
+// ADR-0009 PR-3 C3: 把后端回的 X-Trace-Id 写到 atom，给 ErrorBoundary /
+// window.onerror 上报时带上（让开发者在 server log 能 join "前端崩前最后一次
+// API 失败" 跟 "用户实际看到的 toast"）。
+import { setLastApiTraceId } from '../lib/errors/report'
+
 export interface HealthResponse {
   status: string
   version: string
@@ -205,8 +210,11 @@ export interface CLTaggerConfig {
   local_dir: string | null
   threshold_general: number
   threshold_character: number
-  add_rating_tag: boolean
+  add_copyright_tag: boolean
+  add_meta_tag: boolean
   add_model_tag: boolean
+  add_rating_tag: boolean
+  add_quality_tag: boolean
   blacklist_tags: string[]
   batch_size: number
 }
@@ -763,6 +771,18 @@ export interface DuplicateScanOptions {
   min_close_tiles: number
   tile_median: number
   min_gray_close: number
+  detect_blur: boolean
+  blur_score_threshold: number
+  blur_local_ratio: number
+  detect_crops: boolean
+  crop_score: number
+  crop_hash_threshold: number
+  crop_max_side: number
+  crop_workers: number
+  crop_prefilter_min_segments: number
+  crop_prefilter_min_coverage: number
+  crop_prefilter_aspect_tolerance: number
+  crop_max_candidates_per_image: number
 }
 
 export interface DuplicateMetrics {
@@ -800,6 +820,37 @@ export interface DuplicateGroup {
   best: DuplicateMetrics | null
 }
 
+export interface BlurCandidate {
+  name: string
+  width: number
+  height: number
+  filesize_kb: number
+  blur_score: number
+  local_blur_ratio: number
+  largest_blur_region_ratio: number
+  reason: string
+}
+
+export interface CropRelation {
+  source: string
+  crop_candidate: string
+  score: number
+  source_width: number
+  source_height: number
+  crop_width: number
+  crop_height: number
+  source_area: number
+  crop_area: number
+  larger_image: string
+  area_ratio: number
+  relation_kind: 'crop_smaller' | 'crop_upscaled' | 'crop_same_area' | string
+  source_window: { x: number; y: number; width: number; height: number }
+  window_ratio: number
+  segment_matches: number
+  segment_coverage: number
+  note: string
+}
+
 export interface DuplicateScanResult {
   target: 'preprocess' | 'download'
   match_scope: DuplicateScanOptions['match_scope']
@@ -807,6 +858,8 @@ export interface DuplicateScanResult {
   readable_images: number
   group_count: number
   candidate_count: number
+  blur_candidate_count: number
+  crop_relation_count: number
   elapsed_seconds: number
   options: DuplicateScanOptions
   stats: {
@@ -816,6 +869,8 @@ export interface DuplicateScanResult {
     compared_pairs: number
   }
   groups: DuplicateGroup[]
+  blur_candidates: BlurCandidate[]
+  crop_relations: CropRelation[]
 }
 
 export interface DuplicateApplyResult {
@@ -909,6 +964,14 @@ export interface RegMeta {
   failed_tags: string[]
   train_tag_distribution: Record<string, number>
   auto_tagged: boolean
+  /** A3 — 实际跑过 auto_tag 的 tagger 名（"wd14" / "cltagger" / ...）；
+   * null = 没跑 / 旧 meta 未带此字段。auto_tagged=true 但此字段为 null
+   * 视作旧版本数据（未知 tagger）。 */
+  auto_tag_kind?: string | null
+  /** B1（PR-2）—— 该 reg 集生成时的 build_mode；老 meta 无此字段 → 后端
+   * 默认填 'mirror'。前端 mode 切换拦截优先看这个；fallback 才靠 reg.files
+   * 路径前缀推断。 */
+  build_mode?: string
   incremental_runs: number
   // PP5.5 — 后处理摘要（postprocessed_at 为 null 表示未跑或 K 找不到）
   postprocessed_at: number | null
@@ -947,8 +1010,23 @@ export interface VersionConfigResponse {
 export interface RegBuildRequest {
   excluded_tags?: string[]
   auto_tag?: boolean
+  /** A3 — auto-tag 用的 tagger。当前 UI 只暴露 wd14 / cltagger；
+   * 后端 422 校验同样收紧到这两个。 */
+  auto_tag_kind?: 'wd14' | 'cltagger'
   api_source?: 'gelbooru' | 'danbooru'
+  /** 默认 true（增量）—— 用户决策：避免开始生成时清掉昨天好不容易拉的图。
+   * false = full：worker 入口先清 reg/（含 .deleted_ids.json）。 */
   incremental?: boolean
+  /** A4 v2 — build 完后 worker 自动跑 dedup + 不够 incremental 补足循环，
+   * 最多 3 轮，在分辨率聚类前。默认 true。 */
+  auto_dedup?: boolean
+  /** B1（PR-2）—— 构建模式：
+   * - mirror：镜像 train 子文件夹（5_concept/、1_general/ ...），target_count 忽略
+   * - flat：所有图进 1_data/ 单桶，target_count 决定总图数（null = train 总数）
+   * 默认 flat；切换前提是 reg 集已清空（前端拦截）。 */
+  build_mode?: 'mirror' | 'flat'
+  /** B1（PR-2）—— flat 模式下目标图数；null = 用 train 总图数。 */
+  target_count?: number | null
   // PP5.5 进阶
   skip_similar?: boolean
   aspect_ratio_filter_enabled?: boolean
@@ -1155,6 +1233,18 @@ export interface MonitorState {
   start_time?: number     // unix seconds
   losses?: Array<{ step: number; loss: number }>
   lr_history?: Array<{ step: number; lr: number }>
+  optimizer_metrics_history?: Array<{
+    step: number
+    lr?: number
+    actual_lr?: number
+    base_lr?: number
+    effective_lr?: number
+    d?: number
+    d_min?: number
+    d_max?: number
+    actual_lr_min?: number
+    actual_lr_max?: number
+  }>
   samples?: Array<{
     path: string
     step?: number
@@ -1219,8 +1309,31 @@ export interface ImportResult {
  * 用 Error 而非自定义 class 是因为不少现有 callsite 是 `catch (e) { toast(String(e)) }`
  * 这种通用写法；保留 `Error.prototype.toString()` 行为不破坏它们。需要结构化
  * 处理的新 callsite 强制 cast：`(e as ApiError).detail`。
+ *
+ * ADR-0009 PR-3 C3: 新加 `traceId` 字段 — 后端 dual-write envelope 的
+ * `body.error.trace_id` 或 X-Trace-Id response header。toast 显示 "trace ab12cd34"
+ * 后缀让用户截图给开发；ErrorBoundary 上报时也带，串起前端崩前最后一次失败。
  */
-export type ApiError = Error & { status?: number; detail?: unknown }
+export type ApiError = Error & {
+  status?: number
+  detail?: unknown
+  traceId?: string
+}
+
+/**
+ * ADR-0009 PR-3 C3: 把 ApiError.traceId 末 8 字符格式化成 toast 后缀。
+ *
+ * 用户报问题时把 toast 截图给开发；开发拿这 8 字符 `jq 'select(.trace_id |
+ * endswith("..."))' studio.log` 一行还原完整链路。
+ *
+ * 调用模式（callsite 自愿用，不强制 — 现有 toast(e.message,'error') 不破）：
+ *     toast(`${e.message}${formatErrorTraceSuffix(e)}`, 'error')
+ */
+export function formatErrorTraceSuffix(err: unknown): string {
+  const traceId = (err as ApiError | undefined)?.traceId
+  if (!traceId) return ''
+  return `  ·  trace ${traceId.slice(-8)}`
+}
 
 async function req<T>(
   path: string,
@@ -1236,6 +1349,7 @@ async function req<T>(
   if (!resp.ok) {
     let detail = `${resp.status} ${resp.statusText}`
     let rawDetail: unknown = null
+    let traceId: string | undefined
     try {
       const body = await resp.json()
       if (typeof body?.detail === 'string') {
@@ -1245,16 +1359,103 @@ async function req<T>(
         // 结构化 detail：取 .message 作为可读字符串；callsite 想拿完整结构走 e.detail
         detail = (body.detail as { message?: string }).message ?? JSON.stringify(body.detail)
       }
+      // ADR-0009 dual-write envelope: body.error.trace_id 优先
+      const errStruct = (body as { error?: { trace_id?: string } } | undefined)?.error
+      if (errStruct?.trace_id) {
+        traceId = errStruct.trace_id
+      }
     } catch {
       // body 不是 JSON / 解析失败：保持 statusText 默认
+    }
+    // header 兜底（DomainError dual-write 路径或 HTTPException 路径都有）
+    if (!traceId) {
+      traceId = resp.headers.get('X-Trace-Id') ?? undefined
+    }
+    if (traceId) {
+      // 写入 atom 给 ErrorBoundary / window.onerror 上报时附带
+      setLastApiTraceId(traceId)
     }
     const err = new Error(detail) as ApiError
     err.status = resp.status
     err.detail = rawDetail
+    err.traceId = traceId
     throw err
   }
   if (resp.status === 204) return undefined as T
   return (await resp.json()) as T
+}
+
+/** 上传进度事件 — 与 XMLHttpRequestEventTarget#progress 字段一一对应。 */
+export interface UploadProgressEvent {
+  loaded: number
+  total: number
+  /** total === 0 时为 false（服务端没回 Content-Length 或 chunked），ETA 无法计算。 */
+  lengthComputable: boolean
+}
+
+/**
+ * XHR-based multipart upload；fetch() 没有 request body progress 事件，所以
+ * 上传进度必须走 XHR。错误格式跟 `req` 对齐（ApiError + 解析 detail）。
+ */
+async function xhrUpload<T>(
+  url: string,
+  body: FormData,
+  onProgress?: (e: UploadProgressEvent) => void,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', url, true)
+    xhr.responseType = 'text'
+    if (onProgress) {
+      xhr.upload.onprogress = (e) => {
+        onProgress({
+          loaded: e.loaded,
+          total: e.total,
+          lengthComputable: e.lengthComputable,
+        })
+      }
+    }
+    xhr.onload = () => {
+      const text = xhr.responseText
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(text ? (JSON.parse(text) as T) : (undefined as T))
+        } catch {
+          reject(new Error('invalid JSON response'))
+        }
+        return
+      }
+      let detail = `${xhr.status} ${xhr.statusText}`
+      let rawDetail: unknown = null
+      let traceId: string | undefined
+      try {
+        const j = JSON.parse(text)
+        if (typeof j?.detail === 'string') {
+          detail = j.detail
+        } else if (j?.detail && typeof j.detail === 'object') {
+          rawDetail = j.detail
+          detail = (j.detail as { message?: string }).message ?? JSON.stringify(j.detail)
+        }
+        // ADR-0009 PR-3 C3: dual-write envelope body.error.trace_id
+        const errStruct = (j as { error?: { trace_id?: string } })?.error
+        if (errStruct?.trace_id) traceId = errStruct.trace_id
+      } catch {
+        /* body 不是 JSON：保持 statusText */
+      }
+      // header 兜底
+      if (!traceId) {
+        traceId = xhr.getResponseHeader('X-Trace-Id') ?? undefined
+      }
+      if (traceId) setLastApiTraceId(traceId)
+      const err = new Error(detail) as ApiError
+      err.status = xhr.status
+      err.detail = rawDetail
+      err.traceId = traceId
+      reject(err)
+    }
+    xhr.onerror = () => reject(new Error('network error'))
+    xhr.send(body)
+  })
 }
 
 export const api = {
@@ -1512,30 +1713,18 @@ export const api = {
       `/api/projects/${pid}/download/status`
     ),
   /**
-   * 本地上传：单图（jpg/png）或 zip 包。绕过 `req` 的 JSON header，
-   * 让浏览器自己加 multipart boundary。后端同步处理并返回结果。
+   * 本地上传：单图（jpg/png）或 zip 包。走 XHR 以拿到 upload progress 事件
+   * （fetch 没有 request body progress）。后端同步解 zip / 落盘，所以
+   * progress 到 100% 后还有一段 server processing 时间。
    */
-  uploadProjectFiles: async (
+  uploadProjectFiles: (
     pid: number,
-    files: File[]
+    files: File[],
+    onProgress?: (e: UploadProgressEvent) => void,
   ): Promise<UploadResult> => {
     const fd = new FormData()
     for (const f of files) fd.append('files', f, f.name)
-    const resp = await fetch(`/api/projects/${pid}/upload`, {
-      method: 'POST',
-      body: fd,
-    })
-    if (!resp.ok) {
-      let detail = `${resp.status} ${resp.statusText}`
-      try {
-        const body = await resp.json()
-        if (body?.detail) detail = body.detail
-      } catch {
-        /* ignore */
-      }
-      throw new Error(detail)
-    }
-    return (await resp.json()) as UploadResult
+    return xhrUpload<UploadResult>(`/api/projects/${pid}/upload`, fd, onProgress)
   },
   uploadProjectFileFromPath: (pid: number, path: string) =>
     req<UploadResult>(`/api/projects/${pid}/upload-from-path`, {
@@ -1689,8 +1878,11 @@ export const api = {
         model_path?: string | null
         tag_mapping_path?: string | null
         local_dir?: string | null
-        add_rating_tag?: boolean | null
+        add_copyright_tag?: boolean | null
+        add_meta_tag?: boolean | null
         add_model_tag?: boolean | null
+        add_rating_tag?: boolean | null
+        add_quality_tag?: boolean | null
         blacklist_tags?: string[] | null
       }
       // current_preset 切换 active preset；其他字段覆盖 preset 同名字段。
@@ -1781,6 +1973,23 @@ export const api = {
     req<{ deleted: boolean; reason?: string }>(
       `/api/projects/${pid}/versions/${vid}/reg`,
       { method: 'DELETE' }
+    ),
+  /** A1 — 批量删 reg 集中的指定图片（含同名 .txt）。
+   * `relative_paths` 是相对 reg/ 的路径列表，跨子文件夹可。
+   * 后端自动把删除的 booru ID 追加到 reg/.deleted_ids.json，
+   * 下次 incremental build 时自动排除。 */
+  deleteRegFiles: (pid: number, vid: number, relative_paths: string[]) =>
+    req<{ deleted: string[]; count: number }>(
+      `/api/projects/${pid}/versions/${vid}/reg/delete-files`,
+      { method: 'POST', body: JSON.stringify({ relative_paths }) }
+    ),
+  /** A4 — 用 preprocess dedup 默认参数扫一遍 reg 集，自动删除每组建议删除项
+   * （不弹 review panel，"推荐删除"直接删；reg 集 quality bar 比 train 低）。
+   * 同步返回 — 大集会慢；前端要 disable 按钮 + spinner。 */
+  dedupPurgeReg: (pid: number, vid: number) =>
+    req<{ scanned: number; groups: number; deleted: string[]; count: number }>(
+      `/api/projects/${pid}/versions/${vid}/reg/dedup-purge`,
+      { method: 'POST' }
     ),
   getRegCaption: (pid: number, vid: number, path: string) =>
     req<{ path: string; tags: string[] }>(
@@ -2092,42 +2301,26 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ filename }),
     }),
-  importBundleUpload: async (file: File): Promise<BundleImportResult> => {
+  importBundleUpload: (
+    file: File,
+    onProgress?: (e: UploadProgressEvent) => void,
+  ): Promise<BundleImportResult> => {
     const fd = new FormData()
     fd.append('file', file, file.name)
-    const resp = await fetch('/api/projects/import-bundle/upload', { method: 'POST', body: fd })
-    if (!resp.ok) {
-      let detail = `${resp.status} ${resp.statusText}`
-      try {
-        const body = await resp.json()
-        if (body?.detail) detail = body.detail
-      } catch {
-        // ignore
-      }
-      throw new Error(detail)
-    }
-    return resp.json()
+    return xhrUpload<BundleImportResult>('/api/projects/import-bundle/upload', fd, onProgress)
   },
   /** 上传训练集 zip → 新建 project + v1，返回新项目。 */
-  importTrainProject: async (file: File): Promise<{
+  importTrainProject: (
+    file: File,
+    onProgress?: (e: UploadProgressEvent) => void,
+  ): Promise<{
     project: ProjectDetail
     version: Version
     stats: { image_count: number; tagged_count: number; untagged_count: number; concepts: string[] }
   }> => {
     const fd = new FormData()
     fd.append('file', file)
-    const resp = await fetch('/api/projects/import-train', { method: 'POST', body: fd })
-    if (!resp.ok) {
-      let detail = `${resp.status} ${resp.statusText}`
-      try {
-        const body = await resp.json()
-        if (body?.detail) detail = body.detail
-      } catch {
-        // ignore
-      }
-      throw new Error(detail)
-    }
-    return resp.json()
+    return xhrUpload('/api/projects/import-train', fd, onProgress)
   },
   /** 在 server 主机的 OS 文件管理器里打开 output 目录（仅 loopback 可用）。 */
   openTaskFolder: (id: number) =>

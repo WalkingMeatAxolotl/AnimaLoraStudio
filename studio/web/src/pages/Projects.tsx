@@ -4,10 +4,12 @@ import { useNavigate } from 'react-router-dom'
 import { api, type BundleImportResult, type ProjectSummary } from '../api/client'
 import PageHeader from '../components/PageHeader'
 import PathPicker from '../components/PathPicker'
+import UploadProgressBar from '../components/UploadProgressBar'
 import VersionStatusBadge from '../components/VersionStatusBadge'
 import { useDialog } from '../components/Dialog'
 import { useToast } from '../components/Toast'
 import { useEventStream } from '../lib/useEventStream'
+import { useUploadProgress } from '../lib/useUploadProgress'
 
 export default function ProjectsPage() {
   const { t } = useTranslation()
@@ -22,6 +24,7 @@ export default function ProjectsPage() {
   const navigate = useNavigate()
   const { toast } = useToast()
   const { confirm } = useDialog()
+  const uploadProgress = useUploadProgress()
 
   const refresh = async () => {
     try {
@@ -107,8 +110,21 @@ export default function ProjectsPage() {
 
   const handleImportUpload = async (file: File | null | undefined) => {
     if (!file) return
-    setShowImportDialog(false)
-    await runBundleImport(() => api.importBundleUpload(file))
+    // dialog 不立即关：进度条要显示在 dialog 里直到完成 / 失败
+    uploadProgress.start(file.size)
+    setImporting(true)
+    try {
+      const result = await api.importBundleUpload(file, uploadProgress.onProgress)
+      uploadProgress.finish()
+      setShowImportDialog(false)
+      uploadProgress.reset()
+      finishBundleImport(result)
+    } catch (e) {
+      uploadProgress.fail(e)
+      toast(t('projects.importFailed', { e }), 'error')
+    } finally {
+      setImporting(false)
+    }
   }
 
   const openProject = (p: ProjectSummary) => {
@@ -184,12 +200,16 @@ export default function ProjectsPage() {
       {showImportDialog && (
         <BundleImportDialog
           importing={importing}
+          uploadState={uploadProgress.state}
           onUpload={handleImportUpload}
           onPickPath={() => {
             setShowImportDialog(false)
             setShowImportPicker(true)
           }}
-          onCancel={() => setShowImportDialog(false)}
+          onCancel={() => {
+            setShowImportDialog(false)
+            uploadProgress.reset()
+          }}
         />
       )}
 
@@ -206,11 +226,13 @@ export default function ProjectsPage() {
 
 function BundleImportDialog({
   importing,
+  uploadState,
   onUpload,
   onPickPath,
   onCancel,
 }: {
   importing: boolean
+  uploadState: ReturnType<typeof useUploadProgress>['state']
   onUpload: (file: File | null | undefined) => void
   onPickPath: () => void
   onCancel: () => void
@@ -245,6 +267,9 @@ function BundleImportDialog({
               disabled={importing}
               onChange={(e) => onUpload(e.target.files?.[0])}
             />
+            {uploadState.phase !== 'idle' && (
+              <UploadProgressBar state={uploadState} className="mt-3" />
+            )}
           </label>
 
           <button

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from studio.services import uploads
+from studio.services.dataset import uploads
 
 
 def _zip_bytes(entries: dict[str, bytes]) -> bytes:

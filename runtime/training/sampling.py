@@ -72,6 +72,7 @@ def sample_image(
     device="cuda",
     dtype=torch.bfloat16,
     step_callback=None,
+    seed: int | None = None,
 ):
     """训练时采样预览（尽量对齐 ComfyUI KSampler）
 
@@ -92,9 +93,10 @@ def sample_image(
         logger.info(f"[Debug] VAE scale: mean_shape={m.shape}, std_inv_shape={s.shape}")
         logger.info(f"[Debug] VAE scale values: mean={m.mean().item():.4f}, std_inv={s.mean().item():.4f}")
 
-    # 默认负面提示词 (参考 Anima Prompt Guide)
+    # negative_prompt=None 时用空字符串（与 ComfyUI 一致：用户没填就是空）。
+    # 之前硬编码一长串默认负面会和 ComfyUI 出图对不上（CFG 锚点不同）。
     if negative_prompt is None:
-        negative_prompt = "worst quality, low quality, score_1, score_2, score_3, blurry, jpeg artifacts, bad anatomy, bad hands, bad feet, missing fingers, extra fingers, text, watermark, logo, signature, username, artist name, copyright name"
+        negative_prompt = ""
 
     # 文本编码
     try:
@@ -107,7 +109,9 @@ def sample_image(
         t5_ids = t5_ids.to(device)
         t5_attn = t5_attn.to(device)
         t5_w = t5_w.to(device, dtype=torch.float32)
-        cross_cond = model.preprocess_text_embeds(qwen_embeds, t5_ids)
+        # t5_w 透传到 preprocess_text_embeds 内乘到 LLMAdapter 输出上（与 ComfyUI 原生
+        # `comfy/ldm/anima/model.py:198-206` 对齐）。漏传 → `(tag:w)` 语法静默失效。
+        cross_cond = model.preprocess_text_embeds(qwen_embeds, t5_ids, t5xxl_weights=t5_w)
         if cross_cond.shape[1] < 512:
             cross_cond = F.pad(cross_cond, (0, 0, 0, 512 - cross_cond.shape[1]))
 
@@ -118,7 +122,7 @@ def sample_image(
         t5_ids_uncond = t5_ids_uncond.to(device)
         t5_attn_uncond = t5_attn_uncond.to(device)
         t5_w_uncond = t5_w_uncond.to(device, dtype=torch.float32)
-        cross_uncond = model.preprocess_text_embeds(qwen_embeds_uncond, t5_ids_uncond)
+        cross_uncond = model.preprocess_text_embeds(qwen_embeds_uncond, t5_ids_uncond, t5xxl_weights=t5_w_uncond)
         if cross_uncond.shape[1] < 512:
             cross_uncond = F.pad(cross_uncond, (0, 0, 0, 512 - cross_uncond.shape[1]))
 
@@ -133,7 +137,15 @@ def sample_image(
     sigmas = _flow_sigmas_simple(steps, shift=3.0, device=device)
 
     # 初始化噪声（ComfyUI CONST.noise_scaling: x = sigma*noise + (1-sigma)*latent_image；txt2img latent_image=0）
-    x = torch.randn(1, 16, 1, lat_h, lat_w, device=device, dtype=torch.float32) * float(sigmas[0])
+    # 与 ComfyUI `comfy/sample.prepare_noise` 对齐：CPU 上 torch.randn(generator=seed) 再 to(device)，
+    # 保证不同 GPU / CUDA 版本下同 seed 出同图（旧版 device=cuda 走 cuRAND，跨硬件不一致）。
+    noise_gen = None
+    if seed is not None:
+        noise_gen = torch.Generator(device="cpu").manual_seed(int(seed))
+    x = torch.randn(
+        1, 16, 1, lat_h, lat_w,
+        device="cpu", dtype=torch.float32, generator=noise_gen,
+    ).to(device) * float(sigmas[0])
     logger.info(f"[Debug] Latents init: {x.shape}, mean={x.mean().item():.4f}, std={x.std().item():.4f}")
 
     pad_mask = torch.zeros(1, 1, lat_h, lat_w, device=device, dtype=dtype)
@@ -165,7 +177,7 @@ def sample_image(
     if sampler_fn is not None:
         x = sampler_fn(
             denoise_fn, x, sigmas,
-            seed=None, s_noise=1.0, max_stage=3,
+            seed=seed, s_noise=1.0, max_stage=3,
             step_callback=step_callback,
         )
     else:

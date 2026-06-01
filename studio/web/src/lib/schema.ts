@@ -81,7 +81,9 @@ export const SCHEMA_GROUP_LABEL_KEYS: Record<string, string> = {
   caption: 'schema.groups.caption',
   lora: 'schema.groups.lora',
   training: 'schema.groups.training',
-  noise_schedule: 'schema.groups.noiseSchedule',
+  noise_augmentation: 'schema.groups.noiseAugmentation',
+  timestep_sampling: 'schema.groups.timestepSampling',
+  loss: 'schema.groups.loss',
   system: 'schema.groups.system',
   output: 'schema.groups.output',
   sample: 'schema.groups.sample',
@@ -125,6 +127,11 @@ export const SCHEMA_ENUM_LABEL_KEYS: Record<string, Record<string, string>> = {
     none: 'schema.enums.attentionBackend.none',
     xformers: 'schema.enums.attentionBackend.xformers',
     flash_attn: 'schema.enums.attentionBackend.flashAttn',
+  },
+  noise_enhancement_type: {
+    none: 'schema.enums.noiseEnhancementType.none',
+    offset: 'schema.enums.noiseEnhancementType.offset',
+    pyramid: 'schema.enums.noiseEnhancementType.pyramid',
   },
 }
 

@@ -50,6 +50,7 @@ describe('InlineLoraPicker — multi mode (default)', () => {
     existingPaths: Set<string>
     showWeight: boolean
     ckpts: LoraCkpt[]
+    live: boolean
   }> = {}) {
     vi.spyOn(api, 'listVersionLoraCkpts').mockResolvedValue(overrides.ckpts ?? ckptsV3)
     const onPick = vi.fn()
@@ -61,6 +62,7 @@ describe('InlineLoraPicker — multi mode (default)', () => {
         projectLoras={overrides.projectLoras ?? sample}
         existingPaths={overrides.existingPaths ?? new Set()}
         showWeight={overrides.showWeight ?? true}
+        live={overrides.live ?? false}
         onPick={onPick}
         onClose={onClose}
         onPickExternal={onPickExternal}
@@ -103,6 +105,40 @@ describe('InlineLoraPicker — multi mode (default)', () => {
     ])
     expect(weight).toBe(1.0)
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it('commits picks in ckpt display order, not click order (添加 N 个)', async () => {
+    const user = userEvent.setup()
+    const { onPick } = renderMulti()
+    await waitFor(() => expect(screen.getByText('step 2000')).toBeInTheDocument())
+    // 故意乱序点击：step 1000 → final → step 2000
+    await user.click(screen.getByText('step 1000').closest('button')!)
+    await user.click(screen.getByText('final').closest('button')!)
+    await user.click(screen.getByText('step 2000').closest('button')!)
+    await user.click(screen.getByText(/添加 3 个/))
+    const [picks] = onPick.mock.calls[0]
+    // 输出跟随 ckpts 展示序（final → step↓），与点击先后无关
+    expect(picks.map((p: PickedLora) => p.path)).toEqual([
+      '/loras/cute_chibi/v3/final.safetensors',
+      '/loras/cute_chibi/v3/step_2000.safetensors',
+      '/loras/cute_chibi/v3/step_1000.safetensors',
+    ])
+  })
+
+  it('live mode commits in display order on each toggle (XY ckpt 轴单调)', async () => {
+    const user = userEvent.setup()
+    const { onPick } = renderMulti({ live: true, showWeight: false })
+    await waitFor(() => expect(screen.getByText('step 2000')).toBeInTheDocument())
+    // 乱序点击；live 模式每次 toggle 即时 commit，取最后一次（三个都选中）
+    await user.click(screen.getByText('step 1000').closest('button')!)
+    await user.click(screen.getByText('step 2000').closest('button')!)
+    await user.click(screen.getByText('final').closest('button')!)
+    const lastPicks = onPick.mock.calls[onPick.mock.calls.length - 1][0]
+    expect(lastPicks.map((p: PickedLora) => p.path)).toEqual([
+      '/loras/cute_chibi/v3/final.safetensors',
+      '/loras/cute_chibi/v3/step_2000.safetensors',
+      '/loras/cute_chibi/v3/step_1000.safetensors',
+    ])
   })
 
   it('existingPaths disables the chip; click does not toggle', async () => {

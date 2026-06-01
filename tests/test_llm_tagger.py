@@ -11,7 +11,7 @@ import pytest
 from PIL import Image
 
 from studio import secrets
-from studio.services import llm_tagger
+from studio.services.tagging import llm as llm_tagger
 
 
 @pytest.fixture

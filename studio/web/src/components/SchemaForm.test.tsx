@@ -8,7 +8,7 @@ vi.mock('react-i18next', () => ({
     t: (key: string, opts?: { defaultValue?: string; n?: number }) => {
       const dict: Record<string, string> = {
         'schema.groups.training': 'Training',
-        'schema.groups.noiseSchedule': 'Noise Schedule',
+        'schema.groups.timestepSampling': 'Timestep Sampling',
         'schema.disableHints.learning_rate': 'Prodigy controls the learning rate',
         'schema.disableHints.lr_scheduler': 'Schedule-Free has its own scheduler',
         'schema.disableHints.timestep_sampling': 'InfoNoise controls timestep sampling',
@@ -30,7 +30,7 @@ vi.mock('react-i18next', () => ({
 const schema: SchemaResponse = {
   groups: [
     { key: 'training', label: '训练' },
-    { key: 'noise_schedule', label: '噪声' },
+    { key: 'timestep_sampling', label: '时间步采样' },
   ],
   schema: {
     properties: {
@@ -61,7 +61,7 @@ const schema: SchemaResponse = {
         type: 'string',
         enum: ['logit_normal', 'uniform'],
         default: 'logit_normal',
-        group: 'noise_schedule',
+        group: 'timestep_sampling',
         description: '后端普通说明',
         alt_description_when: 'infonoise_enabled==true',
         disable_when: 'infonoise_enabled==true',
@@ -70,7 +70,7 @@ const schema: SchemaResponse = {
       infonoise_enabled: {
         type: 'boolean',
         default: false,
-        group: 'noise_schedule',
+        group: 'timestep_sampling',
         description: 'InfoNoise',
         advanced: true,
       },

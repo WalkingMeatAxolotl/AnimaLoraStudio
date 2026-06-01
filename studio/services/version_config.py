@@ -16,14 +16,21 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
-from ..presets_io import _absolutize_model_paths
+from .presets.io import _absolutize_model_paths
 from ..schema import TrainingConfig
-from ..versions import version_dir
-from .. import projects as _projects
+from .projects.versions import version_dir
+from .projects import projects as _projects
 
 
-class VersionConfigError(Exception):
-    """version 私有 config I/O 错误。"""
+from studio.domain.errors import DomainError
+
+
+class VersionConfigError(DomainError):
+    """version 私有 config I/O 错误。
+
+    PR-2 C3 加 DomainError base — handler 自动翻 dual-write envelope。
+    """
+    default_code = "version_config.error"
 
 
 CONFIG_FILENAME = "config.yaml"
@@ -163,7 +170,7 @@ def get_project_and_version(
     conn, project_id: int, version_id: int
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """便捷：从 db 读 project + version；版本不属当前项目时抛 VersionConfigError。"""
-    from .. import versions as _versions
+    from ..services.projects import versions as _versions
     p = _projects.get_project(conn, project_id)
     if not p:
         raise VersionConfigError(f"项目不存在: id={project_id}")

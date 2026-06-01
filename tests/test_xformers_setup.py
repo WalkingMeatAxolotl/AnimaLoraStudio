@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from studio.services import xformers_setup as xs
+from studio.services.runtime import xformers as xs
 
 
 # ---------------------------------------------------------------------------

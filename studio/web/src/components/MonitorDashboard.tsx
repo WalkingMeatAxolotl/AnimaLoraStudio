@@ -4,9 +4,10 @@
  * Data source: GET /api/state?task_id=N 拉降采样快照 + SSE monitor_progress
  * 走 useMonitorProgress hook 做 delta merge（PR #37 增量协议）。
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
+import ImagePreviewModal from './ImagePreviewModal'
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -58,87 +59,201 @@ function StatCard({ label, value, sub, tone }: {
   )
 }
 
-// ── LossChart (pure SVG) ───────────────────────────────────────────────────
+// ── SmoothControl ──────────────────────────────────────────────────────────
+// EMA slider；alpha = 1 表示"不平滑"（SeriesChart 内部据此跳过 EMA）。
 
-function LossChart({ losses, emaAlpha }: {
-  losses: Array<{ step: number; loss: number }>
-  emaAlpha: number
+function SmoothControl({ alpha, setAlpha, min, max, step }: {
+  alpha: number
+  setAlpha: (v: number) => void
+  min: number
+  max: number
+  step: number
 }) {
-  if (!losses.length) return (
-    <div className="h-60 grid place-items-center text-fg-tertiary text-sm">
-      等待数据…
+  return (
+    <label className="flex items-center gap-1 cursor-pointer text-xs text-fg-tertiary">
+      smooth
+      <input
+        type="range" min={min} max={max} step={step} value={alpha}
+        onChange={(e) => setAlpha(parseFloat(e.target.value))}
+        style={{ width: 60, accentColor: 'var(--accent)' }}
+      />
+      <span className="font-mono w-[4ch] text-right">
+        {alpha >= 0.999 ? 'off' : alpha.toFixed(alpha < 0.1 ? 3 : 2)}
+      </span>
+    </label>
+  )
+}
+
+// ── SeriesChart (pure SVG) ─────────────────────────────────────────────────
+// 通用的 step×value 折线图：raw + EMA smooth 双线 + xy 轴 tick。
+// loss / lr / d 都复用：传 rawColor/smoothColor 自定义配色，传 yFormat 控制
+// y 轴数字格式（科学计数法 vs 定点）。
+
+function SeriesChart({ data, rawColor, smoothColor, fillColor, emaAlpha, yFormat, height, minHeight, axes = true }: {
+  data: Array<{ step: number; value: number }>
+  rawColor: string
+  smoothColor: string
+  fillColor?: string
+  emaAlpha: number
+  yFormat: (v: number) => string
+  /** 固定像素高度（用于次要图，e.g. d value） */
+  height?: number
+  /** flex 模式下的最低像素高度；视口足够高时随父高度自动拉伸（用于主图，e.g. loss / lr） */
+  minHeight?: number
+  /** 是否绘制坐标轴 + tick label + 网格线；false 时退化为纯 sparkline 适合小高度图（d value） */
+  axes?: boolean
+}) {
+  // ResizeObserver 测真实像素尺寸，viewBox 用真实尺寸 → SVG 1:1 渲染，
+  // 文本/线宽不会被 preserveAspectRatio 非等比缩放扭曲。
+  const wrapperRef = useRef<HTMLDivElement | null>(null)
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null)
+
+  useLayoutEffect(() => {
+    const el = wrapperRef.current
+    if (!el) return
+    const measure = (w: number, h: number) => {
+      if (w <= 0 || h <= 0) return
+      setSize((prev) =>
+        prev && Math.abs(prev.w - w) < 1 && Math.abs(prev.h - h) < 1 ? prev : { w, h },
+      )
+    }
+    const rect = el.getBoundingClientRect()
+    measure(rect.width, rect.height)
+    const ro = new ResizeObserver(([entry]) => {
+      const { width, height: h } = entry.contentRect
+      measure(width, h)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  const wrapperStyle: React.CSSProperties = height != null
+    ? { height, width: '100%' }
+    : { flex: 1, minHeight: minHeight ?? 0, width: '100%' }
+
+  return (
+    <div ref={wrapperRef} style={wrapperStyle}>
+      {!data.length ? (
+        <div className="grid place-items-center text-fg-tertiary text-sm h-full">
+          等待数据…
+        </div>
+      ) : size ? (
+        <ChartSvg
+          data={data}
+          W={size.w}
+          H={size.h}
+          rawColor={rawColor}
+          smoothColor={smoothColor}
+          fillColor={fillColor}
+          emaAlpha={emaAlpha}
+          yFormat={yFormat}
+          axes={axes}
+        />
+      ) : null}
     </div>
   )
+}
 
-  const pts = downsample(losses, 600)
-  const raw = pts.map((p) => p.loss)
-  const smooth = calcEMA(raw, emaAlpha)
+function ChartSvg({ data, W, H, rawColor, smoothColor, fillColor, emaAlpha, yFormat, axes }: {
+  data: Array<{ step: number; value: number }>
+  W: number
+  H: number
+  rawColor: string
+  smoothColor: string
+  fillColor?: string
+  emaAlpha: number
+  yFormat: (v: number) => string
+  axes: boolean
+}) {
+  const pts = downsample(data, 600)
+  const raw = pts.map((p) => p.value)
+  // alpha = 1 → 跳过 EMA，纯 raw（avoid 双重曲线视觉冗余）
+  const smooth = emaAlpha >= 0.999 ? raw : calcEMA(raw, emaAlpha)
   const steps = pts.map((p) => p.step)
 
-  const W = 760, H = 220, PX = 36, PY = 14
-  const minV = Math.min(...smooth), maxV = Math.max(...smooth)
-  const range = maxV - minV || 0.001
-  const x = (i: number) => PX + (i / (pts.length - 1)) * (W - PX - 8)
+  // sparkline 模式（axes=false）省掉 y label 左侧空间，path 填满；
+  // 带 axes 时 PX 留 48 给 y tick（13pt 字宽约 7-8px × "0.0796" 6字 ≈ 46）；
+  // PY 留 18 给 x tick（13pt 字高 ≈ 14，再留 4px 呼吸）。
+  const PX = axes ? 48 : 0
+  const PY = axes ? 18 : 2
+  const RX = axes ? 8 : 0  // 右侧留白
+  // y 范围按 smooth 算（无 smooth 时退化为 raw）—— raw 尖刺超出顶部会被裁掉，
+  // 这是有意的：换取 smooth 信号占满高度、趋势可读。原 LossChart 同款行为。
+  const refVals = emaAlpha >= 0.999 ? raw : smooth
+  const minV = Math.min(...refVals), maxV = Math.max(...refVals)
+  const range = maxV - minV || Math.max(Math.abs(maxV), 1e-9) * 1e-3 || 1e-9
+  const x = (i: number) => PX + (i / Math.max(1, pts.length - 1)) * (W - PX - RX)
   const y = (v: number) => PY + (1 - (v - minV) / range) * (H - PY - PY)
 
   const smoothPath = smooth.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join('')
-  const areaPath = smoothPath + ` L${x(smooth.length - 1).toFixed(1)},${H - PY} L${PX},${H - PY}Z`
+  const areaPath = fillColor
+    ? smoothPath + ` L${x(smooth.length - 1).toFixed(1)},${H - PY} L${PX},${H - PY}Z`
+    : null
   const rawPath = raw.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join('')
 
-  // y axis labels
   const yTicks = [minV, (minV + maxV) / 2, maxV].map((v) => ({
-    v, y: y(v), label: v.toFixed(4),
+    v, y: y(v), label: yFormat(v),
   }))
-  // x axis labels (5 evenly)
   const xTicks = [0, 0.25, 0.5, 0.75, 1].map((t) => {
-    const i = Math.round(t * (pts.length - 1))
+    const i = Math.round(t * Math.max(1, pts.length - 1))
     return { x: x(i), label: String(steps[i] ?? '') }
   })
 
   const lastY = y(smooth[smooth.length - 1])
+  const showSmoothLayer = emaAlpha < 0.999
 
+  // viewBox 与真实尺寸 1:1，省掉 preserveAspectRatio="none" 的非等比缩放——
+  // 文字/线宽在真实像素下渲染，不再被父容器宽高比扭曲。
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width: '100%', height: 240, display: 'block' }}>
-      {/* grid */}
-      {[0.25, 0.5, 0.75].map((t) => (
-        <line key={t} x1={PX} y1={PY + t * (H - 2 * PY)} x2={W - 8} y2={PY + t * (H - 2 * PY)}
-          stroke="var(--border-subtle)" strokeDasharray="3 3" />
-      ))}
-      {/* area */}
-      <path d={areaPath} fill="var(--accent-soft)" opacity="0.5" />
-      {/* raw (faint) */}
-      <path d={rawPath} stroke="rgba(74,71,64,0.18)" strokeWidth="1" fill="none" />
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: '100%', display: 'block' }}>
+      {axes && (
+        <>
+          {/* axis lines */}
+          <line x1={PX} y1={PY} x2={PX} y2={H - PY} stroke="var(--border-subtle)" />
+          <line x1={PX} y1={H - PY} x2={W - RX} y2={H - PY} stroke="var(--border-subtle)" />
+          {/* grid */}
+          {[0.25, 0.5, 0.75].map((t) => (
+            <line key={t} x1={PX} y1={PY + t * (H - 2 * PY)} x2={W - RX} y2={PY + t * (H - 2 * PY)}
+              stroke="var(--border-subtle)" strokeDasharray="3 3" />
+          ))}
+        </>
+      )}
+      {/* area (smooth fill, optional) */}
+      {areaPath && <path d={areaPath} fill={fillColor} opacity="0.5" />}
+      {/* raw —— smooth 模式下淡显，无 smooth 模式下当主线 */}
+      <path
+        d={rawPath}
+        stroke={showSmoothLayer ? rawColor : smoothColor}
+        strokeWidth={showSmoothLayer ? 1 : 2}
+        strokeOpacity={showSmoothLayer ? 0.45 : 1}
+        fill="none"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
       {/* smooth */}
-      <path d={smoothPath} stroke="var(--accent)" strokeWidth="2" fill="none" strokeLinejoin="round" strokeLinecap="round" />
+      {showSmoothLayer && (
+        <path d={smoothPath} stroke={smoothColor} strokeWidth="2" fill="none" strokeLinejoin="round" strokeLinecap="round" />
+      )}
       {/* last point */}
-      <circle cx={x(smooth.length - 1)} cy={lastY} r="4" fill="var(--accent)" stroke="var(--bg-surface)" strokeWidth="2" />
-      {/* y axis labels */}
-      {yTicks.map(({ v, y: yt, label }) => (
-        <text key={v} x={PX - 4} y={yt + 3.5} fontSize="9" fill="var(--fg-tertiary)"
-          fontFamily="var(--font-mono)" textAnchor="end">{label}</text>
-      ))}
-      {/* x axis labels */}
-      {xTicks.map(({ x: xt, label }) => (
-        <text key={label} x={xt} y={H - 2} fontSize="9" fill="var(--fg-tertiary)"
-          fontFamily="var(--font-mono)" textAnchor="middle">{label}</text>
-      ))}
-    </svg>
-  )
-}
-
-// ── Sparkline ─────────────────────────────────────────────────────────────
-
-function Sparkline({ values, color }: { values: number[]; color: string }) {
-  if (values.length < 2) return <div className="h-[50px]" />
-  const W = 200, H = 50
-  const min = Math.min(...values), max = Math.max(...values)
-  const range = max - min || 0.001
-  const x = (i: number) => (i / (values.length - 1)) * W
-  const y = (v: number) => H - ((v - min) / range) * H
-  const path = values.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join('')
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full mt-2 block" style={{ height: 50 }}>
-      <path d={path} stroke={color} strokeWidth="1.5" fill="none" />
+      <circle cx={x(smooth.length - 1)} cy={lastY} r="4" fill={smoothColor} stroke="var(--bg-surface)" strokeWidth="2" />
+      {axes && (
+        <>
+          {/* y axis labels —— y offset +4.5 = fontSize/2 + 准基线微调，把字垂直居中到 tick */}
+          {yTicks.map(({ v, y: yt, label }) => (
+            <text key={v} x={PX - 4} y={yt + 4.5} fontSize="13" fill="var(--fg-tertiary)"
+              fontFamily="var(--font-mono)" textAnchor="end">{label}</text>
+          ))}
+          {/* x axis labels —— 首/末两 tick 在 SVG 边缘上，middle 锚点会让一半字宽溢出被裁，
+              改 start/end 锚点把字往内推；中间 tick 维持 middle 居中。 */}
+          {xTicks.map(({ x: xt, label }, i, arr) => {
+            const anchor = i === 0 ? 'start' : i === arr.length - 1 ? 'end' : 'middle'
+            return (
+              <text key={label} x={xt} y={H - 3} fontSize="13" fill="var(--fg-tertiary)"
+                fontFamily="var(--font-mono)" textAnchor={anchor}>{label}</text>
+            )
+          })}
+        </>
+      )}
     </svg>
   )
 }
@@ -153,6 +268,7 @@ function SampleViewer({ samples, taskId }: {
   // 几个相同 step 的项，下标重复，视觉上自己传达「同一步不同 prompt」。
   const list = samples
   const [active, setActive] = useState(list.length - 1)
+  const [zoomOpen, setZoomOpen] = useState(false)
   const stripRef = useRef<HTMLDivElement | null>(null)
 
   // 初次有图 / 新增 sample 时，仅当用户当前选中是「最末或之后」（即跟随末尾）
@@ -191,7 +307,7 @@ function SampleViewer({ samples, taskId }: {
   const fullUrl = api.sampleImageUrl(filename, taskId)
 
   return (
-    <div className="flex flex-col gap-2.5 w-full">
+    <div className="flex flex-col gap-2.5 w-full flex-1">
       {/* 顶部缩略图条 —— 横向滚动，按数组原顺序铺 */}
       <div
         ref={stripRef}
@@ -230,17 +346,21 @@ function SampleViewer({ samples, taskId }: {
         })}
       </div>
 
-      {/* 大图 —— 当前选中 */}
+      {/* 大图 —— 当前选中
+          img 用 absolute inset-0 脱离 flow，避免 sample 图原始分辨率(1024×*)
+          顶起父容器 min-content；letterbox 由 object-contain 处理。
+          minHeight 220 是底线（letterbox 视觉勉强够），父 row 高度够时由 flex-1 撑满。 */}
       <div
-        className="bg-sunken rounded-sm overflow-hidden relative flex items-center justify-center flex-1 min-h-0"
-        style={{ minHeight: 320 }}
+        className="bg-sunken rounded-sm overflow-hidden relative flex-1 min-h-0"
+        style={{ minHeight: 220 }}
       >
         <img
           key={fullUrl}
           src={fullUrl}
           alt="sample preview"
           loading="lazy"
-          className="max-w-full max-h-[480px] object-contain block"
+          onClick={() => setZoomOpen(true)}
+          className="absolute inset-0 w-full h-full object-contain cursor-zoom-in"
         />
         {cur.step != null && (
           <div className="absolute bottom-2.5 left-1/2 -translate-x-1/2 border border-subtle rounded-sm px-2.5 py-0.5 text-xs font-mono text-fg-secondary bg-surface/85">
@@ -249,6 +369,21 @@ function SampleViewer({ samples, taskId }: {
           </div>
         )}
       </div>
+
+      {/* 点击大图放大（参考下载页 ImagePreviewModal）；← / → 在采样序列里前后切 */}
+      {zoomOpen && (
+        <ImagePreviewModal
+          src={fullUrl}
+          caption={cur.step != null
+            ? `step ${cur.step.toLocaleString()} · ${active + 1} / ${list.length} · ${filename}`
+            : `${filename} · ${active + 1} / ${list.length}`}
+          hasPrev={active > 0}
+          hasNext={active < list.length - 1}
+          onClose={() => setZoomOpen(false)}
+          onPrev={() => setActive((i) => Math.max(0, i - 1))}
+          onNext={() => setActive((i) => Math.min(list.length - 1, i + 1))}
+        />
+      )}
     </div>
   )
 }
@@ -258,10 +393,17 @@ function SampleViewer({ samples, taskId }: {
 export default function MonitorDashboard({ taskId }: { taskId: number }) {
   const { state, connected } = useMonitorProgress(taskId)
   const [emaAlpha, setEmaAlpha] = useState(0.02)
+  // LR / d 默认不做 EMA（数据本身已是 EMA 派生量），slider 拉到 < 1 才平滑
+  const [lrAlpha, setLrAlpha] = useState(1)
+  const [dAlpha, setDAlpha] = useState(1)
 
   // Derived stats
   const losses = useMemo(() => state?.losses ?? [], [state?.losses])
   const lrHistory = useMemo(() => state?.lr_history ?? [], [state?.lr_history])
+  const optimizerMetricsHistory = useMemo(
+    () => state?.optimizer_metrics_history ?? [],
+    [state?.optimizer_metrics_history],
+  )
   const samples = useMemo(() => state?.samples ?? [], [state?.samples])
   const step = state?.step ?? 0
   const totalSteps = state?.total_steps ?? 0
@@ -292,9 +434,18 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
 
   // Current LR
   const lastLr = lrHistory.length ? lrHistory[lrHistory.length - 1].lr : null
+  const lastOptimizerMetrics = optimizerMetricsHistory.length
+    ? optimizerMetricsHistory[optimizerMetricsHistory.length - 1]
+    : null
+  const lastD = lastOptimizerMetrics?.d ?? null
   const fmtLr = (v: number | null) => {
     if (v === null) return '--'
     if (v < 0.0001) return v.toExponential(1)
+    return v.toFixed(5).replace(/0+$/, '').replace(/\.$/, '')
+  }
+  const fmtMetric = (v: number | null) => {
+    if (v === null) return '--'
+    if (Math.abs(v) < 0.0001 || Math.abs(v) >= 10000) return v.toExponential(2)
     return v.toFixed(5).replace(/0+$/, '').replace(/\.$/, '')
   }
 
@@ -310,7 +461,12 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
     )
   }
 
-  const lrSparkline = lrHistory.slice(-60).map((l) => l.lr)
+  // 全量 raw series（不再 slice(-60)）— SeriesChart 内部会均匀降采样到 600 渲染
+  const lrSeries = lrHistory.map((l) => ({ step: l.step, value: l.lr }))
+  const dSeries = optimizerMetricsHistory
+    .map((m) => ({ step: m.step, d: m.d }))
+    .filter((m): m is { step: number; d: number } => typeof m.d === 'number')
+    .map((m) => ({ step: m.step, value: m.d }))
 
   return (
     <div className="flex flex-col gap-3.5 p-4 h-full overflow-y-auto">
@@ -365,7 +521,7 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
         <StatCard label="avg loss" value={avgLoss != null ? avgLoss.toFixed(4) : '--'}
           sub={losses.length ? `${losses.length} pts raw mean` : 'awaiting'} />
         <StatCard label="lr" value={fmtLr(lastLr)}
-          sub={lrHistory.length ? 'learning rate' : undefined} />
+          sub={lastD != null ? `actual · d ${fmtMetric(lastD)}` : lrHistory.length ? 'learning rate' : undefined} />
         <StatCard
           label={vram ? 'vram' : 'speed'}
           value={vram ? `${vram.toFixed(1)} GB` : speed ? `${speed.toFixed(2)} it/s` : '--'}
@@ -375,45 +531,83 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
         <StatCard label="eta" value={eta} sub={speed ? `${speed.toFixed(2)} it/s` : undefined} />
       </div>
 
-      {/* 左：采样图（竖） / 右：loss → LR */}
-      <div className="grid grid-cols-[1fr_1.5fr] gap-3.5">
-        {/* 左：采样图 — 撑满全高 */}
-        <div className="card p-0 overflow-hidden flex flex-col">
+      {/* 左：采样图（竖） / 右：loss → LR
+          gridTemplateRows: '1fr' → row 跟随 flex-1 撑满，避免 row 默认 auto 在大屏留空白；
+          右卡 minHeight 形成下界，flex-1 在 row 高度 > 3*min+gap 时均分扩展；
+          总 min 超视口时由外层 overflow-y-auto 滚 */}
+      <div
+        className="grid grid-cols-[1fr_1.5fr] gap-3.5 flex-1"
+        style={{ gridTemplateRows: '1fr' }}
+      >
+        {/* 左：采样图 */}
+        <div className="card p-0 overflow-hidden flex flex-col min-h-0">
           <div className="px-3.5 py-2.5 border-b border-subtle flex items-center justify-between shrink-0">
             <span className="text-sm font-semibold">采样</span>
             <span className="text-xs text-fg-tertiary font-mono">{samples.length} 张</span>
           </div>
-          <div className="flex-1 p-3 min-h-0 flex items-center justify-center">
+          <div className="flex-1 p-3 flex flex-col min-h-0">
             <SampleViewer samples={samples} taskId={taskId} />
           </div>
         </div>
 
-        {/* 右：loss + lr */}
-        <div className="flex flex-col gap-3.5">
-          <div className="card p-4">
-            <div className="flex items-center justify-between mb-2.5">
+        {/* 右：loss / lr / d 三卡（d 可选），flex-1 等高平分但夹在 [140, 300] 之间。
+            每张卡同结构：header 单行 + 占满 flex-1 的 chart。LR 不再夹带任何 d 信息
+            （avoid 之前 d-block 作为 LR 内 shrink-0 死成本顶起 LR card min 的问题）。
+            minHeight 140 = 可读下界（再小 chart 不易读，触发外层滚动条而非继续压缩）；
+            maxHeight 300 = 防止 4K / 大屏上卡片被拉到失衡的高度（剩余空间留给左列采样图）。 */}
+        <div className="flex flex-col gap-3.5 min-h-0">
+          <div className="card p-4 flex-1 flex flex-col" style={{ minHeight: 140, maxHeight: 300 }}>
+            <div className="flex items-center justify-between mb-2 shrink-0">
               <span className="text-sm font-semibold">loss</span>
-              <div className="flex items-center gap-2 text-xs text-fg-tertiary">
-                <label className="flex items-center gap-1 cursor-pointer">
-                  smooth
-                  <input type="range" min="0.001" max="0.3" step="0.001" value={emaAlpha}
-                    onChange={(e) => setEmaAlpha(parseFloat(e.target.value))}
-                    style={{ width: 60, accentColor: 'var(--accent)' }}
-                  />
-                  <span className="font-mono w-[3ch]">{emaAlpha.toFixed(2)}</span>
-                </label>
-              </div>
+              <SmoothControl alpha={emaAlpha} setAlpha={setEmaAlpha} min={0.001} max={0.3} step={0.001} />
             </div>
-            <LossChart losses={losses} emaAlpha={emaAlpha} />
+            <SeriesChart
+              data={losses.map((l) => ({ step: l.step, value: l.loss }))}
+              rawColor="rgba(74,71,64,0.35)"
+              smoothColor="var(--accent)"
+              fillColor="var(--accent-soft)"
+              emaAlpha={emaAlpha}
+              yFormat={(v) => v.toFixed(4)}
+              minHeight={60}
+            />
           </div>
 
-          <div className="card p-4">
-            <div className="text-sm font-semibold mb-1.5">learning rate</div>
-            <div className="text-2xl font-semibold font-mono tabular-nums text-warn">
-              {fmtLr(lastLr)}
+          <div className="card p-4 flex-1 flex flex-col" style={{ minHeight: 140, maxHeight: 300 }}>
+            <div className="flex items-center justify-between mb-2 shrink-0">
+              <span className="text-sm font-semibold">learning rate</span>
+              <SmoothControl alpha={lrAlpha} setAlpha={setLrAlpha} min={0.005} max={1} step={0.005} />
             </div>
-            <Sparkline values={lrSparkline} color="var(--warn)" />
+            <SeriesChart
+              data={lrSeries}
+              rawColor="rgba(224,162,58,0.35)"
+              smoothColor="var(--warn)"
+              emaAlpha={lrAlpha}
+              yFormat={fmtLr}
+              minHeight={60}
+            />
           </div>
+
+          {dSeries.length >= 2 && (
+            <div className="card p-4 flex-1 flex flex-col" style={{ minHeight: 140, maxHeight: 300 }}>
+              <div className="flex items-center justify-between mb-2 shrink-0">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-sm font-semibold">d</span>
+                  <span className="text-xs font-mono text-fg-tertiary tabular-nums">
+                    {fmtMetric(lastD)}
+                  </span>
+                </div>
+                <SmoothControl alpha={dAlpha} setAlpha={setDAlpha} min={0.005} max={1} step={0.005} />
+              </div>
+              <SeriesChart
+                data={dSeries}
+                rawColor="rgba(237,107,58,0.30)"
+                smoothColor="var(--accent)"
+                emaAlpha={dAlpha}
+                yFormat={fmtMetric}
+                minHeight={60}
+              />
+            </div>
+          )}
         </div>
       </div>
     </div>

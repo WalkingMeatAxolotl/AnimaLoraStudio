@@ -29,6 +29,19 @@ from typing import Any, Optional
 
 import yaml
 
+# Windows Python stdout 默认 cp932 / cp936（活动 code page），打中文校验
+# 信息直接 UnicodeEncodeError 挂掉。每次跑前 `set PYTHONIOENCODING=utf-8`
+# 容易忘 —— 工具自带正确编码，跨平台一致行为。
+# `reconfigure` 是 Py3.7+；3.9+ 一直支持。
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8")
+        except Exception:
+            # 罕见环境（如 IO 被替换成不支持 reconfigure 的对象）忽略，
+            # 让 caller 走原编码 —— 至少非中文 path 不会被这行打挂。
+            pass
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 YAML_PATH = REPO_ROOT / "release_notes.yaml"
 CHANGELOG_PATH = REPO_ROOT / "CHANGELOG.md"

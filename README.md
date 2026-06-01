@@ -1,6 +1,6 @@
 # AnimaLoraStudio
 
-[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-blue)](README.md) [![English](https://img.shields.io/badge/lang-English-lightgrey)](README.en.md) [![Version](https://img.shields.io/badge/version-0.10.3-blue)](CHANGELOG.md)
+[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-blue)](README.md) [![English](https://img.shields.io/badge/lang-English-lightgrey)](README.en.md) [![Version](https://img.shields.io/badge/version-0.11.0-blue)](CHANGELOG.md)
 
 **端到端流水线**：从 Booru 抓图 → 筛选 → 打标 → 正则集 → 训练 → 出图测试，全流程在一个浏览器面板里推进。专为 [Anima](https://huggingface.co/circlestone-labs/Anima)（Cosmos DiT 二次元特调）训练优化。
 
@@ -55,7 +55,7 @@
 3. **筛选** — download / train 双面板，多选复制 / 移除，子文件夹管理
 4. **打标** — WD14 / CLTagger / LLM 三选，GPU EP 自动 fallback；顶部 trigger_word 输入
 5. **标签编辑** — 缓存模式 + 还原点，批量加 / 删 / 替换
-6. **正则集**（可选）— Booru 反向搜 / AI 先验生成
+6. **正则集**（可选）— AI 先验生成（默认）/ Booru 反向搜；mirror + flat 结构，可编辑 / 删图 / 自动去重 / 双 tagger 可选
 7. **训练** — 预设双向流，入队即开始；config 编辑自动落盘；Simple / Advanced 模式
 8. **测试出图** — 单图 / XY 矩阵 / 推理 daemon
 
@@ -178,11 +178,15 @@ AnimaLoraStudio/
 │   ├── anima_daemon.py            # 推理 daemon：常驻 GPU 加载 LoRA 和底模
 │   ├── anima_reg_ai.py            # AI 先验生成：无 LoRA 直接用底模出 reg 集
 │   └── train_monitor.py           # 训练状态写入器
-├── studio/                        # AnimaStudio Web 工作台（FastAPI + React）
-│   ├── server.py                  # 守护进程入口
-│   ├── services/                  # 业务逻辑（uploads / 打标 / 正则集 / inference_core /
-│   │                              #   torch_setup / xformers_setup / flash_attention_setup 等）
-│   ├── workers/                   # 后台任务子进程（download / tag / reg_build）
+├── studio/                        # AnimaStudio Web 工作台（FastAPI + React）— 4 层架构（ADR 0008）
+│   ├── api/                       # HTTP 表面：FastAPI app + 27 router + schemas + deps + exception_handlers
+│   ├── services/                  # 业务服务 11 子包：tagging / booru / reg / inference / models /
+│   │                              #   preprocess / projects / dataset / presets / runtime / data_io
+│   ├── domain/                    # pydantic 模型：TrainingConfig / LoRA / XY / Generate / RegAi + migrations
+│   ├── infrastructure/            # 路径 / 数据库 / event bus / secrets / 日志 / argparse 桥接
+│   ├── supervisor/                # 任务调度守护线程
+│   ├── workers/                   # 4 个后台子进程入口（download / tag / reg_build / preprocess）
+│   ├── server.py                  # 51 行兼容 shim，re-export `app` / `main`（真实入口在 api/app.py / api/main.py）
 │   └── web/                       # React + Vite 前端
 ├── tools/                         # 用户 CLI / 启动期 setup helper
 │   ├── download_models.py         # 一键下载主模型 / VAE / Qwen3 / T5 tokenizer
@@ -205,9 +209,11 @@ AnimaLoraStudio/
 ```
 
 运行时数据（gitignored）:
-- `studio_data/` — SQLite + 用户 preset + 任务日志 + per-task monitor state + samples
-- `models/diffusion_models/`, `models/vae/`, `models/wd14/` — 大权重文件
+- `studio_data/` — SQLite + 用户 preset
+- `studio_data/tasks/{id}/` — 每个训练 task 的 config snapshot + monitor state + 采样图 + run.log（删 version 不丢历史）
 - `studio_data/projects/{id}-{slug}/versions/{label}/output/` — 训练产物 LoRA
+- `studio_data/projects/{id}-{slug}/versions/{label}/reg/` — 正则集（多 task 复用）
+- `models/diffusion_models/`, `models/vae/`, `models/wd14/` — 大权重文件
 
 ---
 
@@ -254,7 +260,7 @@ AnimaLoraStudio/
 
 ## 版本
 
-当前版本 **0.10.3**。完整变更历史见 [CHANGELOG.md](CHANGELOG.md)。Studio 内 Settings → 系统 → 版本卡片可一键升级到最新版本。
+当前版本 **0.11.0**。完整变更历史见 [CHANGELOG.md](CHANGELOG.md)。Studio 内 Settings → 系统 → 版本卡片可一键升级到最新版本。
 
 ---
 

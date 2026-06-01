@@ -241,6 +241,13 @@ git commit -m "chore(release): v0.X.0"
 git push origin dev
 ```
 
+**Release commit body 默认空 / 极简**。release commit 是机械的 version bump
++ render，不是 fix 真正发生的地方。fix 的根因 / 修法已经在原 fix commit 的
+message + PR description 里；CHANGELOG.md / GitHub Release body 承担用户视角
+描述。Release commit body 重复这些信息反而模糊 git log archeology 的层次
+（commit message 给工程师、release notes 给用户、各司其职）。例：v0.9.1 /
+v0.10.0 release commit body 都是空。
+
 ### 3. 开 Release PR：dev → master
 
 - **Base = master，compare = dev**
@@ -265,7 +272,8 @@ git push origin v0.X.0
 
 - 去 `https://github.com/WalkingMeatAxolotl/AnimaLoraStudio/releases`
 - 找到刚 push 的 tag → **Create release from tag**
-- **Title**：`v0.X.0 — <主题>`
+- **Title**：`vX.Y.Z`（纯版本号，**不**带主题 —— 仓库历史 release title 都是
+  这风格：v0.10.0 / v0.9.1 / v0.8.3 ...。tag 的 message 才带主题，见 §5）
 - **Body**：复制 [`CHANGELOG.md`](CHANGELOG.md) 对应段
 - 勾选 **Set as the latest release**
 - Publish

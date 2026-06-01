@@ -241,4 +241,68 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(screen.queryByText('#1')).toBeNull()
     expect(screen.getByText('填写参数后点击「开始生成」')).toBeInTheDocument()
   })
+
+  // ---- LoRA 列表 single / xy 完全独立（2026-05-29 修复跨 mode 串味 bug）----
+
+  const A = { path: 'G:/a.safetensors', scale: 1, project_id: null, version_id: null }
+  const B = { path: 'G:/b.safetensors', scale: 1, project_id: null, version_id: null }
+  const seedPrefs = (over: Record<string, unknown>) =>
+    window.localStorage.setItem(
+      'studio:generate:params:v1',
+      JSON.stringify({
+        mode: 'single', prompts: ['x'], negPrompt: '',
+        aspect: '1:1', width: 1024, height: 1024,
+        steps: 25, cfgScale: 4, count: 1, seed: 0,
+        xDraft: { axis: 'steps', raw: '20, 25, 30', loraIndex: null },
+        yDraft: null, datasetPick: null,
+        ...over,
+      })
+    )
+
+  it('single 提交只用 singleLoras（不带 xyLoras）', async () => {
+    seedPrefs({ mode: 'single', singleLoras: [A], xyLoras: [B] })
+    const user = userEvent.setup()
+    setup()
+    await waitForInitialLorasLoad()
+
+    await user.click(await screen.findByRole('button', { name: /开始生成/ }))
+    await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
+    expect(lastEnqueueBody!.lora_configs).toEqual([A])
+    expect(lastEnqueueBody!.xy_matrix).toBeNull()
+  })
+
+  it('xy 提交不带 singleLoras，也不带未被轴引用的 xyLoras 孤儿', async () => {
+    // 默认 X 轴是 steps（不引用任何 LoRA）。singleLoras=[A] 不该泄漏到 xy；
+    // xyLoras=[B] 是没被轴引用的孤儿（picker 切项目残留），也不该当 base 发。
+    // 修前：xy 整桶发 xyLoras → lora_configs=[B]（B 叠到每个 cell）。
+    // 修后：steps 轴不引用 anchor → lora_configs=[]。
+    // （lora_ckpt 轴的引用/重映射逻辑由 xy.test.ts buildXYMatrix 单测覆盖，
+    //  这里不 seed lora_ckpt 轴 —— picker 在无 projects 的 mock 下 mount 即清空它。）
+    seedPrefs({ mode: 'xy', singleLoras: [A], xyLoras: [B] })
+    const user = userEvent.setup()
+    setup()
+    await waitForInitialLorasLoad()
+
+    await user.click(await screen.findByRole('button', { name: /开始生成/ }))
+    await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
+    expect(lastEnqueueBody!.lora_configs).toEqual([])
+    expect(lastEnqueueBody!.xy_matrix).not.toBeNull()
+  })
+
+  it('老版本共享 loras 迁移：拆成 singleLoras/xyLoras 各一份，不丢已选 LoRA', async () => {
+    // 老 shape 只有共享 loras=[A]（无 singleLoras/xyLoras）
+    seedPrefs({ mode: 'single', loras: [A] })
+    const user = userEvent.setup()
+    setup()
+    await waitForInitialLorasLoad()
+
+    await user.click(await screen.findByRole('button', { name: /开始生成/ }))
+    await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
+    expect(lastEnqueueBody!.lora_configs).toEqual([A])
+
+    // 落库后 shape 已迁移：两边都拿到 A
+    const stored = JSON.parse(window.localStorage.getItem('studio:generate:params:v1')!)
+    expect(stored.singleLoras).toEqual([A])
+    expect(stored.xyLoras).toEqual([A])
+  })
 })

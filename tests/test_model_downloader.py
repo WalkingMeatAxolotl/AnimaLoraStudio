@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from studio.services import model_downloader
+from studio.services import models as model_downloader
 
 
 @pytest.fixture
@@ -275,7 +275,7 @@ def test_download_qwen3_modelscope_builds_complete_directory(
 ) -> None:
     """ModelScope 源下载权重后，仍会从 HF 补齐 tokenizer/config 文件，
     使 text_encoders/ 成为 transformers 可直接加载的完整目录。"""
-    monkeypatch.setattr(model_downloader, "_get_download_source", lambda: "modelscope")
+    monkeypatch.setattr("studio.services.models.sources._get_download_source", lambda: "modelscope")
 
     ms_calls: list[tuple[str, str, str]] = []
     hf_calls: list[tuple[str, str, str]] = []
@@ -292,8 +292,8 @@ def test_download_qwen3_modelscope_builds_complete_directory(
         target.write_text(repo_subpath, encoding="utf-8")
         return True
 
-    monkeypatch.setattr(model_downloader, "download_flat_ms", fake_download_flat_ms)
-    monkeypatch.setattr(model_downloader, "download_flat", fake_download_flat)
+    monkeypatch.setattr("studio.services.models.sources.download_flat_ms", fake_download_flat_ms)
+    monkeypatch.setattr("studio.services.models.sources.download_flat", fake_download_flat)
 
     logs: list[str] = []
     ok = model_downloader.download_qwen3(tmp_path, on_log=logs.append)
@@ -360,7 +360,7 @@ def test_download_upscaler_delegates_to_download_flat(
         target.write_bytes(b"esrgan")
         return True
 
-    monkeypatch.setattr(model_downloader, "download_flat", fake_download_flat)
+    monkeypatch.setattr("studio.services.models.sources.download_flat", fake_download_flat)
 
     ok = model_downloader.download_upscaler("4x-AnimeSharp", tmp_path, on_log=lambda _l: None)
     assert ok
@@ -423,7 +423,7 @@ def test_download_upscaler_uses_modelscope_when_configured(
 ) -> None:
     """secrets.download_source='modelscope' → download_upscaler 走 download_flat_ms。"""
     monkeypatch.setattr(
-        model_downloader, "_get_download_source", lambda: "modelscope"
+        "studio.services.models.sources._get_download_source", lambda: "modelscope"
     )
     ms_calls: list[tuple] = []
     hf_calls: list[tuple] = []
@@ -438,8 +438,8 @@ def test_download_upscaler_uses_modelscope_when_configured(
         hf_calls.append((repo_id, subpath, str(target)))
         return True
 
-    monkeypatch.setattr(model_downloader, "download_flat_ms", fake_ms)
-    monkeypatch.setattr(model_downloader, "download_flat", fake_hf)
+    monkeypatch.setattr("studio.services.models.sources.download_flat_ms", fake_ms)
+    monkeypatch.setattr("studio.services.models.sources.download_flat", fake_hf)
 
     ok = model_downloader.download_upscaler("4x-AnimeSharp", tmp_path, on_log=lambda _l: None)
     assert ok
@@ -456,7 +456,7 @@ def test_download_upscaler_fallback_to_ms_when_hf_missing(
 ) -> None:
     """R-ESRGAN_4x+Anime6B 没 HF 镜像；source=hf 时也应回退到 MS。"""
     monkeypatch.setattr(
-        model_downloader, "_get_download_source", lambda: "huggingface"
+        "studio.services.models.sources._get_download_source", lambda: "huggingface"
     )
     ms_calls: list[tuple] = []
 
@@ -466,9 +466,9 @@ def test_download_upscaler_fallback_to_ms_when_hf_missing(
         target.write_bytes(b"ms")
         return True
 
-    monkeypatch.setattr(model_downloader, "download_flat_ms", fake_ms)
+    monkeypatch.setattr("studio.services.models.sources.download_flat_ms", fake_ms)
     monkeypatch.setattr(
-        model_downloader, "download_flat",
+        "studio.services.models.sources.download_flat",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("HF not expected"))
     )
 
@@ -491,7 +491,7 @@ def test_download_upscaler_custom_hf(
         target.write_bytes(b"x")
         return True
 
-    monkeypatch.setattr(model_downloader, "download_flat", fake_hf)
+    monkeypatch.setattr("studio.services.models.sources.download_flat", fake_hf)
 
     ok = model_downloader.download_upscaler_custom(
         "hf", "Kim2091/UltraSharp", "4x-UltraSharp.pth",

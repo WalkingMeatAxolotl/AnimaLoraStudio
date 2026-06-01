@@ -13,9 +13,11 @@ import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import ImagePreviewModal from '../../../components/ImagePreviewModal'
 import PathPicker from '../../../components/PathPicker'
 import StepShell from '../../../components/StepShell'
+import UploadProgressBar from '../../../components/UploadProgressBar'
 import { useDialog } from '../../../components/Dialog'
 import { useToast } from '../../../components/Toast'
 import { useEventStream } from '../../../lib/useEventStream'
+import { useUploadProgress } from '../../../lib/useUploadProgress'
 
 // 跟 studio/datasets.py:IMAGE_EXTS 对齐 — 上传白名单 = 全链路图片白名单 + .zip。
 const UPLOAD_ACCEPT =
@@ -542,6 +544,7 @@ function UploadPanel({
   const [uploading, setUploading] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [showPathPicker, setShowPathPicker] = useState(false)
+  const uploadProgress = useUploadProgress()
 
   const choose = (fl: FileList | null) => {
     if (!fl || fl.length === 0) return
@@ -562,12 +565,18 @@ function UploadPanel({
   }
   const submit = async () => {
     if (picked.length === 0) return
+    const totalBytes = picked.reduce((s, f) => s + f.size, 0)
     setUploading(true)
+    uploadProgress.start(totalBytes)
     try {
-      const r = await api.uploadProjectFiles(pid, picked)
+      const r = await api.uploadProjectFiles(pid, picked, uploadProgress.onProgress)
+      uploadProgress.finish()
       applyUploadResult(r)
       reset()
+      // 短延迟后清掉进度条；让用户看清完成状态
+      window.setTimeout(() => uploadProgress.reset(), 800)
     } catch (e) {
+      uploadProgress.fail(e)
       toast(String(e), 'error')
     } finally {
       setUploading(false)
@@ -660,6 +669,9 @@ function UploadPanel({
             {fileNames}
           </span>
         </div>
+      )}
+      {uploadProgress.state.phase !== 'idle' && (
+        <UploadProgressBar state={uploadProgress.state} />
       )}
       {showPathPicker && (
         <PathPicker

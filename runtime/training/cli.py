@@ -20,7 +20,7 @@ def parse_args():
     CLI-only 开关（auto-install / interactive / no-live-curve / 已弃用的
     --repeats 和 --reg-repeats）。
     """
-    from studio.argparse_bridge import build_parser
+    from studio.infrastructure.argparse_bridge import build_parser
     from studio.schema import TrainingConfig
 
     p = build_parser(TrainingConfig, prog="anima_train", description="Anima LoRA Trainer v2")
@@ -107,7 +107,7 @@ def _guess_default_paths():
     base: Optional[Path] = None
     transformer_path: str = ""
     try:
-        from studio.services.model_downloader import find_anima_main, models_root
+        from studio.services.models import find_anima_main, models_root
         base = models_root()
         existing = find_anima_main(base)
         if existing:

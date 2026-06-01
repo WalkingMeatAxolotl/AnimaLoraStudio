@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from studio.services import torch_setup as ts
+from studio.services.runtime import torch as ts
 
 
 # ---------------------------------------------------------------------------

@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from studio import db, project_jobs, projects, secrets, server
+from studio import db, secrets, server
+from studio.services.projects import jobs as project_jobs, projects
 
 
 @pytest.fixture
@@ -113,7 +114,7 @@ def test_estimate_endpoint_returns_count(
     client: TestClient, isolated, monkeypatch
 ) -> None:
     """estimate 端点：通过 mock downloader.estimate 返回固定数量。"""
-    from studio.services import downloader as dl
+    from studio.services.booru import downloader as dl
     monkeypatch.setattr(dl, "estimate", lambda opts: 42)
     p = _make_project(client)
     resp = client.post(
@@ -130,7 +131,7 @@ def test_estimate_includes_exclude_tags(
     client: TestClient, isolated, monkeypatch
 ) -> None:
     secrets.update({"download": {"exclude_tags": ["comic", "monochrome"]}})
-    from studio.services import downloader as dl
+    from studio.services.booru import downloader as dl
     monkeypatch.setattr(dl, "estimate", lambda opts: 7)
     p = _make_project(client)
     resp = client.post(

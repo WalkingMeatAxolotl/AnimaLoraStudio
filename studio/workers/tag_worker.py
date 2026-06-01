@@ -14,35 +14,31 @@
 """
 from __future__ import annotations
 
-import argparse
 import json
-import sys
-import traceback
+import logging
 from pathlib import Path
 from typing import Any
 
-# Windows 控制台默认 cp932/cp936，写中文 / emoji 会 UnicodeEncodeError。
-# 强制 stdout/stderr 用 UTF-8 + 替换不可编码字符，让 progress 永远不抛。
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, OSError):
-        pass
+# PR-1 C4: setup_logging 内已统一调 reconfigure_console_utf8，
+# worker 顶层不再单独调（B-4.6: 之前只 2/4 worker 调）。
+
+logger = logging.getLogger(__name__)
 
 # PP9.5 — 必须在任何 `import onnxruntime` 之前 import 本模块，触发顶层 preload
 # （Linux: RTLD_GLOBAL 加载 torch 自带 CUDA so；Windows: os.add_dll_directory）。
 # cli.py / server.py 已覆盖各自进程；worker 是独立 subprocess，靠 get_tagger
 # 懒加载链触发太晚（懒加载在 main() 里，某些路径下来不及）—— worker 顶层显式 import。
-from studio.services import onnxruntime_setup  # noqa: F401
+from studio.services.runtime import onnxruntime as onnxruntime_setup  # noqa: F401
 
-from studio import db, project_jobs, projects, versions
-from studio.datasets import IMAGE_EXTS
-from studio.services.caption_format import (
+from studio import db
+from studio.services.projects import jobs as project_jobs, projects, versions
+from studio.services.dataset.scan import IMAGE_EXTS
+from studio.services.tagging.caption_format import (
     caption_json_to_text,
     standard_to_documented_full,
 )
-from studio.services import tagedit
-from studio.services.tagger import get_tagger
+from studio.services.dataset import tagedit
+from studio.services.tagging.base import get_tagger
 
 
 def _collect_images(train_dir: Path) -> list[Path]:
@@ -134,8 +130,10 @@ def run(job_id: int) -> int:
         progress(f"[done] tagged {ok}/{len(images)} (errors={errs})")
         return 0 if ok > 0 or errs == 0 else 1
     except Exception as exc:  # noqa: BLE001
+        # PR-1 C7: logger.exception 进 stderr（supervisor 收 → jobs/<id>.log），
+        # 同时带 trace_id 进 studio.unhandled chain；progress 给人读短摘要。
+        logger.exception("tag worker crashed (job_id=%s)", job_id)
         progress(f"[error] {exc}")
-        print(traceback.format_exc(), flush=True)
         return 1
 
 
@@ -230,12 +228,6 @@ def _write_caption(
         )
 
 
-def main() -> None:
-    p = argparse.ArgumentParser()
-    p.add_argument("--job-id", type=int, required=True)
-    args = p.parse_args()
-    sys.exit(run(args.job_id))
-
-
 if __name__ == "__main__":
-    main()
+    from ._base import worker_main
+    worker_main(run)

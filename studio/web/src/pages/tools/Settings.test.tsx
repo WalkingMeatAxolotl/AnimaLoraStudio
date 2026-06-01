@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import { DialogProvider } from '../../components/Dialog'
 import { ToastProvider } from '../../components/Toast'
+import { SettingsDataProvider } from '../../lib/SettingsData'
+import { SettingsDrawerProvider } from '../../lib/SettingsDrawer'
 import SettingsPage from './Settings'
 
 const initialServerState = {
@@ -113,8 +115,11 @@ const initialServerState = {
     local_dir: null,
     threshold_general: 0.35,
     threshold_character: 0.6,
-    add_rating_tag: false,
+    add_copyright_tag: true,
+    add_meta_tag: false,
     add_model_tag: false,
+    add_rating_tag: false,
+    add_quality_tag: false,
     blacklist_tags: [],
     batch_size: 8,
   },
@@ -232,7 +237,11 @@ function renderPage() {
     <MemoryRouter>
       <ToastProvider>
         <DialogProvider>
-          <SettingsPage />
+          <SettingsDataProvider>
+            <SettingsDrawerProvider>
+              <SettingsPage />
+            </SettingsDrawerProvider>
+          </SettingsDataProvider>
         </DialogProvider>
       </ToastProvider>
     </MemoryRouter>

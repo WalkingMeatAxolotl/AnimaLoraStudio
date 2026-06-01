@@ -9,8 +9,11 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from studio import db, preprocess as preprocess_svc, project_jobs, projects, secrets, server
-from studio.services import model_downloader, preprocess_manifest
+from studio import db, secrets, server
+from studio.services.preprocess import core as preprocess_svc
+from studio.services.projects import jobs as project_jobs, projects
+from studio.services import models as model_downloader
+from studio.services.preprocess import manifest as preprocess_manifest
 
 
 @pytest.fixture
@@ -23,9 +26,14 @@ def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(server.db, "STUDIO_DB", dbfile)
     monkeypatch.setattr(secrets, "SECRETS_FILE", tmp_path / "secrets.json")
 
-    # 让 upscaler_target 指到 tmp 内的"假权重"，避免端点检查 409
+    # 让 upscaler_target 指到 tmp 内的"假权重"，避免端点检查 409。
+    # 必须 patch `paths.models_root` 而不是 `model_downloader.models_root` —
+    # 后者只是 __init__ 的 re-export，而 upscaler_target 在 paths.py 内部用
+    # 本模块的 models_root 调用；patch re-export 不会改到调用点，会让 dummy
+    # 权重写到 REPO_ROOT/models/upscalers/ 把真模型干掉。
+    from studio.services.models import paths as _paths
     models_root = tmp_path / "models"
-    monkeypatch.setattr(model_downloader, "models_root", lambda: models_root)
+    monkeypatch.setattr(_paths, "models_root", lambda: models_root)
     weight = model_downloader.upscaler_target("4x-AnimeSharp")
     weight.parent.mkdir(parents=True, exist_ok=True)
     weight.write_bytes(b"dummy-weights")

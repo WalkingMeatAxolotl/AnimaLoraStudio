@@ -38,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    from studio.services import flash_attention_setup as fa  # noqa: PLC0415
+    from studio.services.runtime import flash_attention as fa  # noqa: PLC0415
 
     env = fa.detect_env()
     print("[env] python:   ", env.get("python_tag"))

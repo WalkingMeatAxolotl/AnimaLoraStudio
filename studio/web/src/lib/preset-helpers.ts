@@ -36,3 +36,23 @@ export function defaultsFromSchema(schema: SchemaResponse | null): ConfigData {
   }
   return out
 }
+
+/** `base` 不撞 `existing` 任何一个名字时直接返回 `base`；否则尝试 `base_1`、
+ * `base_2`…… 找到第一个未被占用的返回。
+ *
+ * 用在「项目页一键新建预设」自动命名上 —— base 形如 `<project_slug>_<version_label>`，
+ * 重名（用户之前为同 version 创建过）时加下划线后缀，PRESET_NAME_RE 兼容。
+ * 上限 999 兜底；999 个同名场景不现实，超过返回带 timestamp 后缀避免死循环。
+ */
+export function generateUniquePresetName(
+  base: string,
+  existing: ReadonlyArray<{ name: string }>,
+): string {
+  const taken = new Set(existing.map((p) => p.name))
+  if (!taken.has(base)) return base
+  for (let i = 1; i < 1000; i++) {
+    const candidate = `${base}_${i}`
+    if (!taken.has(candidate)) return candidate
+  }
+  return `${base}_${Date.now()}`
+}

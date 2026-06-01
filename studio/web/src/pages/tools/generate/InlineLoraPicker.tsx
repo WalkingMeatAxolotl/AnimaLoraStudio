@@ -169,6 +169,14 @@ export default function InlineLoraPicker(props: Props) {
 
   const currentVersion = versions.find((v) => v.id === vid)
 
+  // 选中集合 → picks：按 ckpts 展示顺序排（list_lora_ckpts 的 canonical sort：
+  // final → step↓ → epoch↓），而非用户点击顺序。XY ckpt 轴必须单调，否则
+  // 网格列/行随点击先后乱跳，读不出过拟合拐点（ep60 应恒在 ep80 / ep40 之间）。
+  const orderedPicks = (sel: Set<string>): PickedLora[] =>
+    ckpts
+      .filter((c) => sel.has(c.path))
+      .map((c) => ({ path: c.path, projectId: pid, versionId: vid }))
+
   // chip 点击
   const onChipClick = (c: LoraCkpt) => {
     if (existingPaths.has(c.path)) return
@@ -192,10 +200,7 @@ export default function InlineLoraPicker(props: Props) {
       if (next.has(c.path)) next.delete(c.path); else next.add(c.path)
       // live 模式：每次 chip toggle 都即时 commit，不等用户点「添加 N 个」
       if (isLive && pid !== null && vid !== null) {
-        const picks: PickedLora[] = Array.from(next).map((path) => ({
-          path, projectId: pid, versionId: vid,
-        }))
-        ;(props as MultiModeProps).onPick(picks, internalWeight)
+        ;(props as MultiModeProps).onPick(orderedPicks(next), internalWeight)
       }
       return next
     })
@@ -207,10 +212,7 @@ export default function InlineLoraPicker(props: Props) {
     } else {
       setInternalWeight(w)
       if (isLive && pid !== null && vid !== null && picked.size > 0) {
-        const picks: PickedLora[] = Array.from(picked).map((path) => ({
-          path, projectId: pid, versionId: vid,
-        }))
-        ;(props as MultiModeProps).onPick(picks, w)
+        ;(props as MultiModeProps).onPick(orderedPicks(picked), w)
       }
     }
   }
@@ -218,12 +220,7 @@ export default function InlineLoraPicker(props: Props) {
   const commitMulti = () => {
     if (isSingle) return
     if (picked.size === 0) return
-    const picks: PickedLora[] = Array.from(picked).map((path) => ({
-      path,
-      projectId: pid,
-      versionId: vid,
-    }))
-    props.onPick(picks, internalWeight)
+    props.onPick(orderedPicks(picked), internalWeight)
     onClose()
   }
 

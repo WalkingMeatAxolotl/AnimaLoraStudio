@@ -48,7 +48,13 @@ psutil>=5.9.0
 # 两者都导出 `import pynvml` 模块名，但老 pynvml 已 unmaintained 会打 deprecation 警告。
 nvidia-ml-py>=12.0
 rich>=13.7.0
-requests>=2.31.0
+# requests[socks] / httpx[socks]：SOCKS5 代理支持。
+# 用户在 Settings → 代理 配 socks5:// URL 时，requests 走 PySocks（booru/modelscope
+# 下载链），huggingface_hub 1.x 走 httpx + socksio（HF 下载链）。两个 extras 都不装
+# 时，下载报 `'socksio' package is not installed` / `Missing dependencies for SOCKS`，
+# 安装本身无 C 扩展、跨平台。
+requests[socks]>=2.31.0
+httpx[socks]>=0.27
 
 # PP4 — WD14 打标
 # onnxruntime 由 studio 启动期按 GPU 检测自动安装（services/onnxruntime_setup.py）：
@@ -64,6 +70,11 @@ scikit-learn>=1.3.0
 # services/model_downloader.py 的 download_flat_ms / Anima TE / WD14 / 放大器
 # 路径都依赖；不装就整套 ModelScope 下载源不可用。
 modelscope>=1.20.0
+
+# ADR-0009 / PR-LOG-1：跨进程写日志文件锁支持（Windows webui + worker 同写 studio.log）。
+# pure Python 无 C 扩展。如果未安装，studio/infrastructure/logging.py 会 fallback
+# stdlib RotatingFileHandler（单进程写无锁问题；C7 跨进程开始才真正用得到这个包）。
+concurrent-log-handler>=0.9.25
 
 # Dev / tests (optional)
 # pytest>=8.0

@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from studio import db, projects, server, versions
+from studio import db, server
+from studio.services.projects import projects, versions
 from studio.schema import TrainingConfig
 
 
@@ -19,7 +20,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(projects, "PROJECTS_DIR", tmp_path / "projects")
     presets_dir = tmp_path / "presets"
     presets_dir.mkdir()
-    from studio import presets_io
+    from studio.services.presets import io as presets_io
     monkeypatch.setattr(presets_io, "USER_PRESETS_DIR", presets_dir)
     return {"db": dbfile, "presets": presets_dir}
 
@@ -36,7 +37,7 @@ def _make(client: TestClient) -> tuple[int, int]:
 
 
 def _seed_preset(env, name: str, **overrides) -> None:
-    from studio import presets_io
+    from studio.services.presets import io as presets_io
     base = TrainingConfig().model_dump()
     base.update(overrides)
     presets_io.write_preset(name, base)
@@ -250,7 +251,7 @@ def test_save_as_preset_clears_project_fields(client: TestClient, env) -> None:
     assert saved["config"]["lora_rank"] == 128
 
     # 全局 preset 池里出现 my-tuned
-    from studio import presets_io
+    from studio.services.presets import io as presets_io
     presets = {p["name"] for p in presets_io.list_presets()}
     assert "my-tuned" in presets
 

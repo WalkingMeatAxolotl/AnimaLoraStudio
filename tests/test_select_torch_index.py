@@ -149,6 +149,6 @@ def test_main_outputs_nothing_when_driver_too_old(
 
 def test_mapping_matches_torch_setup_canonical(helper_module) -> None:
     """helper 里的 _DRIVER_TO_CU 必须与 torch_setup 的源一致（避免 drift）。"""
-    from studio.services.torch_setup import _DRIVER_TO_BEST_CU
+    from studio.services.runtime.torch import _DRIVER_TO_BEST_CU
     canonical = [(int(thresh), tag) for thresh, tag in _DRIVER_TO_BEST_CU]
     assert helper_module._DRIVER_TO_CU == canonical

@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from studio import db, project_jobs, projects
+from studio import db
+from studio.services.projects import jobs as project_jobs, projects
 
 
 @pytest.fixture

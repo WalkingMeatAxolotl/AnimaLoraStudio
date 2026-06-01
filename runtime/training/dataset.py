@@ -271,22 +271,35 @@ class ImageDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, idx):
+        # 默认 path：DataLoader 不能传额外参数，所以由 flip_augment 决定是否随机翻转。
+        # CachedLatentDataset 想显式控制 flip 时直接调 get_with_flip(idx, flip=...)，
+        # 在 cache 阶段对每张图各 encode 一次 flip=False / flip=True，避免随机性 baked
+        # 进 npz（kohya 风格双份 latent）。
+        flip = self.flip_augment and random.random() > 0.5
+        return self.get_with_flip(idx, flip=flip)
+
+    def get_with_flip(self, idx, *, flip: bool):
+        """带显式 flip 控制的 __getitem__。
+
+        flip=True/False：强制翻 / 不翻，调用方负责决策；用于 cache 双份编码。
+        flip 与 self.flip_augment 解耦，不读 self.flip_augment 也不掷随机数。
+        """
         import numpy as np
         from PIL import Image
         sample = self.samples[idx]
         img = Image.open(sample["image"]).convert("RGB")
-        
+
         # 获取 caption（正则集可用 caption_override 统一覆盖）
         caption = None
         if self.caption_override is not None:
             caption = self.caption_override
         elif sample.get("json_path"):
             caption = self._process_caption_json(sample["json_path"])
-        
+
         if caption is None and sample.get("txt_path"):
             caption = sample["txt_path"].read_text(encoding="utf-8").strip()
             caption = self._process_caption_txt(caption)
-        
+
         if caption is None:
             caption = ""
 
@@ -305,8 +318,7 @@ class ImageDataset(Dataset):
         top = (nh - th) // 2
         img = img.crop((left, top, left + tw, top + th))
 
-        # 水平翻转增强
-        if self.flip_augment and random.random() > 0.5:
+        if flip:
             img = img.transpose(Image.FLIP_LEFT_RIGHT)
 
         # 转 tensor [-1, 1]
@@ -462,7 +474,16 @@ class BucketBatchSampler:
 
 
 class CachedLatentDataset(Dataset):
-    """Kohya 风格 npz 文件缓存的数据集"""
+    """Kohya 风格 npz 文件缓存的数据集。
+
+    flip_augment + cache_latents 同开时按 kohya 双份 latent 模式：
+      - cache 阶段对每张图 encode 两次（flip=False / flip=True），分别存到
+        npz 的 `latent` / `latent_flipped` 键
+      - 训练时 __getitem__ 50% 概率取 flipped 版本
+    旧版本静默把"cache 阶段那次随机翻转"baked 进 npz，导致 flip 永久失效 +
+    50% 数据被永久镜像污染；新版通过 _is_cache_valid 检测缺 latent_flipped
+    键，自动重 encode 修复。
+    """
     def __init__(self, base_dataset, vae, device, dtype, cache_dir=None):
         import numpy as np
         self.base_dataset = base_dataset
@@ -472,6 +493,10 @@ class CachedLatentDataset(Dataset):
         self.samples = self._get_base_samples(base_dataset)
         self.cache_dir = Path(cache_dir) if cache_dir else None
         self.bucket_for_index = []
+        # cache 是否需要双份 latent —— 取决于底层 ImageDataset.flip_augment
+        self.flip_augment = bool(
+            getattr(self.base_image_dataset, "flip_augment", False)
+        )
         self._build_cache(vae, device, dtype)
 
     def _get_base_samples(self, dataset):
@@ -509,8 +534,15 @@ class CachedLatentDataset(Dataset):
         return img_path.with_suffix(".npz")
 
     def _is_cache_valid(self, img_path, npz_path):
-        """检查缓存是否有效（图像未修改，且格式含 latent 键）。
-        若为其他模型的不兼容缓存，则删除并返回 False。"""
+        """检查缓存是否有效（图像未修改，且格式兼容当前 flip_augment 设置）。
+
+        - 缺 `latent` 键 / 其他模型的不兼容缓存 → 删除重 encode
+        - flip_augment=True 且 npz 缺 `latent_flipped` 键 → 失效重 encode（旧
+          单份 cache 即"flip 永久 baked"的污染状态，必须重 encode 修复）
+        - flip_augment=False 且 npz 有 `latent_flipped` → 仍视为有效（双份
+          cache 是 flip 模式的超集，关 flip 后只读 latent 不浪费）
+        - bucket 尺寸不匹配 → 失效
+        """
         if not npz_path.exists():
             return False
         if npz_path.stat().st_mtime < img_path.stat().st_mtime:
@@ -520,6 +552,8 @@ class CachedLatentDataset(Dataset):
                 if "latent" not in data.files:
                     npz_path.unlink()
                     logger.debug(f"已删除不兼容缓存: {npz_path.name}")
+                    return False
+                if getattr(self, "flip_augment", False) and "latent_flipped" not in data.files:
                     return False
                 expected_bucket = self._expected_bucket_size(img_path)
                 if expected_bucket is not None:
@@ -571,18 +605,38 @@ class CachedLatentDataset(Dataset):
             self.bucket_for_index[i] = (int(h), int(w))
 
     def _encode_and_save(self, indices, vae, device, dtype):
-        """编码图像并保存为 npz"""
+        """编码图像并保存为 npz。
+
+        flip_augment=True 时对每张图编码两次（flip=False / flip=True）分别存到
+        `latent` / `latent_flipped` 键；训练时 __getitem__ 随机选其一。
+        flip_augment=False 时只编码一次，存 `latent`。
+        """
+        base_img = self.base_image_dataset
+        want_flip = self.flip_augment and base_img is not None
         for count, i in enumerate(indices):
-            item = self.base_dataset[i]
+            npz_kwargs = {}
+            if base_img is not None:
+                # 显式控制 flip，避免随机性 baked 进 npz
+                item = base_img.get_with_flip(i, flip=False)
+            else:
+                item = self.base_dataset[i]
             pixels = item["pixel_values"].unsqueeze(0).to(device, dtype=dtype)
             _, _, ph, pw = pixels.shape
             bucket_w, bucket_h = pw, ph
             with torch.no_grad():
                 pixels_5d = pixels.unsqueeze(2)
                 latent = vae.model.encode(pixels_5d, vae.scale)
-            latent_np = latent.squeeze(0).cpu().float().numpy()
+            npz_kwargs["latent"] = latent.squeeze(0).cpu().float().numpy()
+
+            if want_flip:
+                item_f = base_img.get_with_flip(i, flip=True)
+                pixels_f = item_f["pixel_values"].unsqueeze(0).to(device, dtype=dtype)
+                with torch.no_grad():
+                    latent_f = vae.model.encode(pixels_f.unsqueeze(2), vae.scale)
+                npz_kwargs["latent_flipped"] = latent_f.squeeze(0).cpu().float().numpy()
+
             npz_path = self._get_npz_path(self.samples[i]["image"])
-            self.np.savez(npz_path, latent=latent_np, bucket_w=bucket_w, bucket_h=bucket_h)
+            self.np.savez(npz_path, bucket_w=bucket_w, bucket_h=bucket_h, **npz_kwargs)
             if (count + 1) % 10 == 0 or count == len(indices) - 1:
                 logger.info(f"  编码进度: {count + 1}/{len(indices)}")
 
@@ -593,8 +647,17 @@ class CachedLatentDataset(Dataset):
         sample = self.samples[idx]
         npz_path = self._get_npz_path(sample["image"])
         data = self.np.load(npz_path)
-        latent = torch.from_numpy(data["latent"])
-        
+        # flip_augment=True 且 npz 有 latent_flipped 时 50% 概率取镜像版本，
+        # 跟非 cache 路径 ImageDataset.__getitem__ 的 flip 概率一致。
+        # 没有 latent_flipped 键（flip_augment=False 时的单份 cache）就只读 latent。
+        use_flip = (
+            self.flip_augment
+            and "latent_flipped" in data.files
+            and random.random() > 0.5
+        )
+        latent_key = "latent_flipped" if use_flip else "latent"
+        latent = torch.from_numpy(data[latent_key])
+
         # 获取 base_dataset 的引用（处理可能的嵌套）
         base = self.base_dataset
         while hasattr(base, "dataset"):

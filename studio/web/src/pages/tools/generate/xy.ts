@@ -3,7 +3,7 @@
  * 后端 schema 要求 values 类型按 axis 派生（int / float / string）；前端
  * 把用户输入的逗号字符串解析成正确类型，并在解析失败时给出错误信息。 */
 
-import type { LoraEntry, XYAxisSpec, XYAxisType } from '../../../api/client'
+import type { LoraEntry, XYAxisSpec, XYAxisType, XYMatrixSpec } from '../../../api/client'
 import i18n from '../../../i18n'
 
 /** UI 侧 axis 状态：raw 是用户输入的逗号字符串（不实时解析便于编辑）。 */
@@ -77,6 +77,39 @@ export function draftToSpec(
     spec.lora_index = draft.loraIndex
   }
   return spec
+}
+
+/** XY 提交时构建 xy_matrix + 实际要发的 lora_configs。
+ *
+ * **为什么不能直接整桶发 loras**：XY 模式下唯一能往 loras（xyLoras）加 anchor
+ * 的入口是 lora_ckpt 轴 picker，且它只 push 不 prune（SidebarXYAxes.commitPicks）
+ * —— 切项目/版本、切轴类型、删 Y 轴都会把旧 anchor 留下成「孤儿」。后端把
+ * lora_configs 全部当 base LoRA 叠到每个 cell（anima_daemon._run_xy），孤儿就会
+ * 混进每张图（「选 chenbin V3.4 却带上没选过的 v3.2 / 跨 mode 的 hoshi」的根因）。
+ *
+ * 这里只保留被当前 X/Y 轴 loraIndex 引用的 anchor，按出现顺序重映射索引，孤儿
+ * 一律丢弃。非 lora_ckpt 轴不贡献任何 anchor → lora_configs 为空。
+ * 校验失败（轴值缺失 / loraIndex 越界）沿用 draftToSpec 抛 string error。 */
+export function buildXYMatrix(
+  xDraft: XYAxisDraft,
+  yDraft: XYAxisDraft | null,
+  loras: LoraEntry[],
+): { xy_matrix: XYMatrixSpec; loraConfigs: LoraEntry[] } {
+  const remap = new Map<number, number>()
+  const loraConfigs: LoraEntry[] = []
+  const remapDraft = (d: XYAxisDraft): XYAxisDraft => {
+    if (d.axis !== 'lora_ckpt' || d.loraIndex == null) return d
+    const entry = loras[d.loraIndex]
+    if (!entry || !entry.path.trim()) return d // draftToSpec 会抛 axisLoraMissing
+    if (!remap.has(d.loraIndex)) {
+      remap.set(d.loraIndex, loraConfigs.length)
+      loraConfigs.push(entry)
+    }
+    return { ...d, loraIndex: remap.get(d.loraIndex) ?? null }
+  }
+  const x = draftToSpec(remapDraft(xDraft), loraConfigs)
+  const y = yDraft ? draftToSpec(remapDraft(yDraft), loraConfigs) : null
+  return { xy_matrix: { x, y }, loraConfigs }
 }
 
 /** 计算 cell 总数（y=null 时退化成 1×N）。 */

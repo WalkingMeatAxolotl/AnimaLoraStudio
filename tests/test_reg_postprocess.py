@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from studio.services import reg_postprocess
+from studio.services.reg import postprocess as reg_postprocess
 
 
 def _make_image(path: Path, size: tuple[int, int]) -> None:

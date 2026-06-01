@@ -36,6 +36,21 @@ def _is_param_groups(params: Any) -> bool:
     return False
 
 
+def _as_float(value: Any) -> Optional[float]:
+    try:
+        if isinstance(value, torch.Tensor):
+            if value.numel() == 0:
+                return None
+            return float(value.detach().float().mean().item())
+        return float(value)
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
+def _mean(values: list[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
 # 用户通过 schema (ppsf_* 字段) 显式配置的 kwarg。如果上游版本不接受这些，
 # silent drop 会让用户的勾选/数值悄悄失效，可能 8 小时后才发现训练效果不对——
 # 所以这些必须 fail loud，而不是只 log warning。
@@ -601,3 +616,68 @@ def get_optimizer_info(optimizer: Optimizer) -> Dict[str, Any]:
         info["d"] = pg0["d"]
 
     return info
+
+
+def get_optimizer_monitor_metrics(optimizer: Optimizer) -> Dict[str, float]:
+    """Return LR metrics suitable for train_monitor / logs.
+
+    AdamW-style optimizers expose a real `lr` in the param group. Prodigy-style
+    optimizers keep the UI-facing base lr at 1.0 and adapt the step size through
+    `d`; PPSF v2 additionally exposes `effective_lr` for logging. This helper
+    normalizes those shapes into one monitor point while preserving the raw
+    ingredients for debugging.
+    """
+    groups = list(getattr(optimizer, "param_groups", []) or [])
+    if not groups:
+        return {"lr": 0.0}
+
+    base_lrs: list[float] = []
+    d_values: list[float] = []
+    effective_lrs: list[float] = []
+    actual_lrs: list[float] = []
+
+    for group in groups:
+        base_lr = _as_float(group.get("lr"))
+        if base_lr is not None:
+            base_lrs.append(base_lr)
+
+        d_source = group.get("d")
+        if (
+            group.get("split_groups")
+            and group.get("split_groups_mean")
+            and group.get("shared_d") is not None
+        ):
+            d_source = group.get("shared_d")
+        d_value = _as_float(d_source)
+        if d_value is None:
+            continue
+        d_values.append(d_value)
+
+        # PPSF v2 recommends logging d * effective_lr. Older Prodigy/PPSF
+        # versions do not expose it, so fall back to the base group lr.
+        effective_lr = _as_float(group.get("effective_lr"))
+        if effective_lr is None:
+            effective_lr = base_lr
+        if effective_lr is None:
+            continue
+        effective_lrs.append(effective_lr)
+        actual_lrs.append(d_value * effective_lr)
+
+    if not actual_lrs:
+        return {"lr": base_lrs[0] if base_lrs else 0.0}
+
+    metrics: Dict[str, float] = {
+        "lr": _mean(actual_lrs),
+        "actual_lr": _mean(actual_lrs),
+        "base_lr": _mean(base_lrs),
+        "d": _mean(d_values),
+    }
+    if effective_lrs:
+        metrics["effective_lr"] = _mean(effective_lrs)
+    if len(d_values) > 1:
+        metrics["d_min"] = min(d_values)
+        metrics["d_max"] = max(d_values)
+    if len(actual_lrs) > 1:
+        metrics["actual_lr_min"] = min(actual_lrs)
+        metrics["actual_lr_max"] = max(actual_lrs)
+    return metrics

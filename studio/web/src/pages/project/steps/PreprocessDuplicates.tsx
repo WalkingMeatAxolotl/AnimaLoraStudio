@@ -67,7 +67,13 @@ export default function PreprocessDuplicatesPage() {
   })
 
   const previewNames = useMemo(
-    () => result ? result.groups.flatMap((group) => group.items.map((item) => item.name)) : [],
+    () => result
+      ? Array.from(new Set([
+          ...result.groups.flatMap((group) => group.items.map((item) => item.name)),
+          ...result.blur_candidates.map((item) => item.name),
+          ...result.crop_relations.flatMap((item) => [item.source, item.crop_candidate]),
+        ]))
+      : [],
     [result],
   )
 
@@ -86,7 +92,15 @@ export default function PreprocessDuplicatesPage() {
           group.items.filter((item) => !item.keep).map((item) => item.name),
         ),
       ))
-      toast(t('duplicates.scanDone', { groups: next.group_count, candidates: next.candidate_count }), 'success')
+      toast(
+        t('duplicates.scanDone', {
+          groups: next.group_count,
+          candidates: next.candidate_count,
+          blur: next.blur_candidate_count,
+          crops: next.crop_relation_count,
+        }),
+        'success',
+      )
     } catch (e) {
       toast(String(e), 'error')
     } finally {
@@ -154,6 +168,24 @@ export default function PreprocessDuplicatesPage() {
               selected={selected}
               busy={busy}
               onSelect={setSelected}
+              onPreview={openPreview}
+            />
+            <QualityReviewPanel
+              projectId={project.id}
+              result={result}
+              selected={selected}
+              busy={busy}
+              onSelectNames={(names) => {
+                const next = new Set(selected)
+                names.forEach((name) => next.add(name))
+                setSelected(next)
+              }}
+              onToggle={(name) => {
+                const next = new Set(selected)
+                if (next.has(name)) next.delete(name)
+                else next.add(name)
+                setSelected(next)
+              }}
               onPreview={openPreview}
             />
           </div>
@@ -233,6 +265,25 @@ function DuplicateOperationPanel({
       </h3>
 
       <div className="flex items-center gap-2 text-sm flex-wrap">
+        <label className="flex items-center gap-1.5">
+          <input
+            type="checkbox"
+            checked={options.detect_blur}
+            disabled={busy}
+            onChange={(e) => patch('detect_blur', e.target.checked)}
+          />
+          <span className="text-fg-tertiary">{t('duplicates.detectBlur')}</span>
+        </label>
+        <label className="flex items-center gap-1.5">
+          <input
+            type="checkbox"
+            checked={options.detect_crops}
+            disabled={busy}
+            onChange={(e) => patch('detect_crops', e.target.checked)}
+          />
+          <span className="text-fg-tertiary">{t('duplicates.detectCrops')}</span>
+        </label>
+        <span className="text-dim">·</span>
         <label className="flex items-center gap-1.5">
           <span className="text-fg-tertiary">{t('duplicates.scope')}</span>
           <select
@@ -314,6 +365,16 @@ function DuplicateOperationPanel({
             <NumberOption label={t('duplicates.closeTiles')} value={options.min_close_tiles} min={0} max={1} step={0.01} disabled={busy} onChange={(value) => patch('min_close_tiles', value)} width={66} />
             <NumberOption label={t('duplicates.tileMedian')} value={options.tile_median} min={0} max={40} step={1} disabled={busy} onChange={(value) => patch('tile_median', value)} width={58} />
             <NumberOption label={t('duplicates.grayClose')} value={options.min_gray_close} min={0} max={1} step={0.01} disabled={busy} onChange={(value) => patch('min_gray_close', value)} width={66} />
+            <NumberOption label={t('duplicates.blurScore')} value={options.blur_score_threshold} min={0} max={1000} step={5} disabled={busy || !options.detect_blur} onChange={(value) => patch('blur_score_threshold', value)} width={72} />
+            <NumberOption label={t('duplicates.blurLocal')} value={options.blur_local_ratio} min={0} max={0.5} step={0.005} disabled={busy || !options.detect_blur} onChange={(value) => patch('blur_local_ratio', value)} width={72} />
+            <NumberOption label={t('duplicates.cropScore')} value={options.crop_score} min={0.3} max={0.98} step={0.01} disabled={busy || !options.detect_crops} onChange={(value) => patch('crop_score', value)} width={66} />
+            <NumberOption label={t('duplicates.cropHash')} value={options.crop_hash_threshold} min={0} max={64} step={1} disabled={busy || !options.detect_crops} onChange={(value) => patch('crop_hash_threshold', value)} width={58} />
+            <NumberOption label={t('duplicates.cropSide')} value={options.crop_max_side} min={128} max={768} step={32} disabled={busy || !options.detect_crops} onChange={(value) => patch('crop_max_side', value)} width={66} />
+            <NumberOption label={t('duplicates.cropWorkers')} value={options.crop_workers} min={1} max={32} step={1} disabled={busy || !options.detect_crops} onChange={(value) => patch('crop_workers', value)} width={56} />
+            <NumberOption label={t('duplicates.cropSegments')} value={options.crop_prefilter_min_segments} min={1} max={8} step={1} disabled={busy || !options.detect_crops} onChange={(value) => patch('crop_prefilter_min_segments', value)} width={54} />
+            <NumberOption label={t('duplicates.cropCoverage')} value={options.crop_prefilter_min_coverage} min={0} max={1} step={0.01} disabled={busy || !options.detect_crops} onChange={(value) => patch('crop_prefilter_min_coverage', value)} width={66} />
+            <NumberOption label={t('duplicates.cropAspectPrefilter')} value={options.crop_prefilter_aspect_tolerance} min={0} max={1.5} step={0.01} disabled={busy || !options.detect_crops} onChange={(value) => patch('crop_prefilter_aspect_tolerance', value)} width={66} />
+            <NumberOption label={t('duplicates.cropCandidateCap')} value={options.crop_max_candidates_per_image} min={0} max={100} step={1} disabled={busy || !options.detect_crops} onChange={(value) => patch('crop_max_candidates_per_image', value)} width={58} />
             <label className="flex items-center gap-1.5">
               <span className="text-fg-tertiary">{t('duplicates.tileGrids')}</span>
               <input
@@ -388,6 +449,271 @@ function DuplicateLogStrip({ logs, busy }: { logs: DuplicateLog[]; busy: boolean
   )
 }
 
+function QualityReviewPanel({
+  projectId,
+  result,
+  selected,
+  busy,
+  onSelectNames,
+  onToggle,
+  onPreview,
+}: {
+  projectId: number
+  result: DuplicateScanResult | null
+  selected: Set<string>
+  busy: boolean
+  onSelectNames: (names: string[]) => void
+  onToggle: (name: string) => void
+  onPreview: (name: string) => void
+}) {
+  const { t } = useTranslation()
+  const blurCandidates = result?.blur_candidates ?? []
+  const cropRelations = result?.crop_relations ?? []
+  const blurNames = useMemo(
+    () => Array.from(new Set((result?.blur_candidates ?? []).map((item) => item.name))),
+    [result],
+  )
+  const cropCandidateNames = useMemo(
+    () => Array.from(new Set((result?.crop_relations ?? []).map((item) => item.crop_candidate))),
+    [result],
+  )
+  const cropSourceNames = useMemo(
+    () => Array.from(new Set((result?.crop_relations ?? []).map((item) => item.source))),
+    [result],
+  )
+  const cropBothNames = useMemo(
+    () => Array.from(new Set((result?.crop_relations ?? []).flatMap((item) => [item.source, item.crop_candidate]))),
+    [result],
+  )
+  const cropRelationKindLabel = (kind: string) => {
+    if (kind === 'crop_upscaled') return t('duplicates.cropKindUpscaled')
+    if (kind === 'crop_same_area') return t('duplicates.cropKindSameArea')
+    return t('duplicates.cropKindSmaller')
+  }
+  const cropLargerLabel = (name: string) => (
+    name === 'same_area'
+      ? t('duplicates.cropLargerSameArea')
+      : t('duplicates.cropLarger', { name })
+  )
+  if (!result || (blurCandidates.length === 0 && cropRelations.length === 0)) return null
+  return (
+    <section className="flex flex-col rounded-md border border-subtle bg-surface overflow-hidden shrink-0">
+      <div className="h-0.5 bg-accent" />
+      <header className="flex flex-wrap items-center gap-2 px-2.5 py-1.5 border-b border-subtle text-sm">
+        <h3 className="font-semibold">{t('duplicates.qualityTitle')}</h3>
+        <span className="text-xs text-fg-tertiary">
+          {t('duplicates.qualitySummary', { blur: blurCandidates.length, crops: cropRelations.length })}
+        </span>
+        <span className="text-xs text-fg-tertiary min-w-full">
+          {t('duplicates.qualityHint')}
+        </span>
+        <div className="flex flex-wrap items-center gap-1.5 min-w-full">
+          <button
+            type="button"
+            disabled={busy || blurNames.length === 0}
+            onClick={() => onSelectNames(blurNames)}
+            className="btn btn-secondary btn-sm !py-0.5 text-[11px]"
+          >
+            {t('duplicates.selectBlur')}
+          </button>
+          <button
+            type="button"
+            disabled={busy || cropCandidateNames.length === 0}
+            onClick={() => onSelectNames(cropCandidateNames)}
+            className="btn btn-secondary btn-sm !py-0.5 text-[11px]"
+          >
+            {t('duplicates.selectCropCandidates')}
+          </button>
+          <button
+            type="button"
+            disabled={busy || cropSourceNames.length === 0}
+            onClick={() => onSelectNames(cropSourceNames)}
+            className="btn btn-secondary btn-sm !py-0.5 text-[11px]"
+          >
+            {t('duplicates.selectCropSources')}
+          </button>
+          <button
+            type="button"
+            disabled={busy || cropBothNames.length === 0}
+            onClick={() => onSelectNames(cropBothNames)}
+            className="btn btn-secondary btn-sm !py-0.5 text-[11px]"
+          >
+            {t('duplicates.selectCropBoth')}
+          </button>
+        </div>
+      </header>
+      <div className="grid gap-2 p-2 lg:grid-cols-2">
+        <QualitySection
+          title={t('duplicates.blurTitle')}
+          empty={t('duplicates.blurEmpty')}
+          items={blurCandidates.map((item) => ({
+            key: item.name,
+            images: [{ name: item.name }],
+            meta: `${item.width}x${item.height} · ${item.filesize_kb}KB`,
+            score: t('duplicates.blurMetric', {
+              score: Math.round(item.blur_score),
+              local: Math.round(item.largest_blur_region_ratio * 100),
+            }),
+            note: item.reason,
+          }))}
+          projectId={projectId}
+          selected={selected}
+          busy={busy}
+          onToggle={onToggle}
+          onPreview={onPreview}
+        />
+        <QualitySection
+          title={t('duplicates.cropTitle')}
+          empty={t('duplicates.cropEmpty')}
+          items={cropRelations.map((item, index) => ({
+            key: `${item.source}:${item.crop_candidate}:${index}`,
+            images: [
+              { name: item.source, label: t('duplicates.cropSource') },
+              { name: item.crop_candidate, label: t('duplicates.cropCandidate') },
+            ],
+            meta: `${item.source_width}x${item.source_height} → ${item.crop_width}x${item.crop_height}`,
+            score: t('duplicates.cropMetric', {
+              score: Math.round(item.score * 100),
+              area: Math.round(item.window_ratio * 100),
+            }),
+            note: [
+              cropRelationKindLabel(item.relation_kind),
+              cropLargerLabel(item.larger_image),
+              t('duplicates.cropAreaRatio', { ratio: item.area_ratio.toFixed(2) }),
+              `${item.source_window.x},${item.source_window.y},${item.source_window.width},${item.source_window.height}`,
+              item.note,
+            ].join(' · '),
+          }))}
+          projectId={projectId}
+          selected={selected}
+          busy={busy}
+          onToggle={onToggle}
+          onPreview={onPreview}
+        />
+      </div>
+    </section>
+  )
+}
+
+function QualitySection({
+  title,
+  empty,
+  items,
+  projectId,
+  selected,
+  busy,
+  onToggle,
+  onPreview,
+}: {
+  title: string
+  empty: string
+  items: Array<{ key: string; images: Array<{ name: string; label?: string }>; meta: string; score: string; note: string }>
+  projectId: number
+  selected: Set<string>
+  busy: boolean
+  onToggle: (name: string) => void
+  onPreview: (name: string) => void
+}) {
+  return (
+    <div className="rounded-sm border border-subtle bg-sunken/40 overflow-hidden">
+      <div className="px-2 py-1.5 border-b border-subtle text-xs font-medium text-fg-secondary">{title}</div>
+      {items.length === 0 ? (
+        <div className="px-2 py-3 text-xs text-fg-tertiary">{empty}</div>
+      ) : (
+        <div className="max-h-[360px] overflow-y-auto p-2 flex flex-col gap-2">
+          {items.map((item) => (
+            <article key={item.key} className="rounded-sm border border-subtle bg-surface p-1.5">
+              <div className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${item.images.length}, minmax(0, 1fr))` }}>
+                {item.images.map((image) => (
+                  <QualityImageCell
+                    key={image.name}
+                    projectId={projectId}
+                    name={image.name}
+                    label={image.label}
+                    selected={selected.has(image.name)}
+                    busy={busy}
+                    onToggle={() => onToggle(image.name)}
+                    onPreview={() => onPreview(image.name)}
+                  />
+                ))}
+              </div>
+              <div className="mt-1.5 flex flex-col gap-0.5 text-[11px]">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="badge badge-neutral shrink-0">{item.score}</span>
+                  <span className="text-fg-tertiary truncate">{item.meta}</span>
+                </div>
+                <code className="mono text-fg-secondary truncate">{item.images.map((image) => image.name).join(' <-> ')}</code>
+                <div className="text-fg-tertiary truncate" title={item.note}>{item.note}</div>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function QualityImageCell({
+  projectId,
+  name,
+  label,
+  selected,
+  busy,
+  onToggle,
+  onPreview,
+}: {
+  projectId: number
+  name: string
+  label?: string
+  selected: boolean
+  busy: boolean
+  onToggle: () => void
+  onPreview: () => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <div
+      className={
+        'rounded-sm border overflow-hidden bg-surface ' +
+        (selected ? 'border-warn ring-2 ring-warn-soft' : 'border-subtle')
+      }
+    >
+      <button
+        type="button"
+        disabled={busy}
+        onClick={onPreview}
+        className="block w-full aspect-square bg-sunken disabled:opacity-70"
+        title={name}
+      >
+        <img
+          src={api.projectThumbUrl(projectId, name, 'download', 256)}
+          alt={name}
+          loading="lazy"
+          decoding="async"
+          className="w-full h-full object-cover"
+        />
+      </button>
+      <div className="px-1.5 py-1 flex items-center gap-1 min-w-0">
+        <button
+          type="button"
+          onClick={onToggle}
+          disabled={busy}
+          className={`shrink-0 px-1.5 py-0.5 rounded-sm border text-[11px] font-medium ${
+            selected
+              ? 'bg-warn text-white border-warn'
+              : 'bg-ok-soft text-ok border-ok'
+          } disabled:opacity-60 disabled:cursor-not-allowed`}
+          aria-label={`${selected ? t('duplicates.restoreCandidate') : t('duplicates.removeCandidate')} ${name}`}
+        >
+          {selected ? t('duplicates.selectedRemove') : t('duplicates.keep')}
+        </button>
+        {label && <span className="badge badge-neutral shrink-0">{label}</span>}
+        <code className="mono truncate min-w-0 text-[11px]">{name}</code>
+      </div>
+    </div>
+  )
+}
+
 function DuplicateStatsSidebar({
   result,
   selectedCount,
@@ -411,6 +737,8 @@ function DuplicateStatsSidebar({
         <StatRow label={t('duplicates.statsTotal')} value={total} />
         <StatRow label={t('duplicates.statsGroups')} value={result?.group_count ?? 0} accent={(result?.group_count ?? 0) > 0 ? 'warn' : undefined} />
         <StatRow label={t('duplicates.statsCandidates')} value={candidateCount} accent={candidateCount > 0 ? 'warn' : undefined} />
+        <StatRow label={t('duplicates.statsBlur')} value={result?.blur_candidate_count ?? 0} accent={(result?.blur_candidate_count ?? 0) > 0 ? 'warn' : undefined} />
+        <StatRow label={t('duplicates.statsCrops')} value={result?.crop_relation_count ?? 0} accent={(result?.crop_relation_count ?? 0) > 0 ? 'warn' : undefined} />
         <StatRow label={t('duplicates.statsSelected')} value={selectedCount} accent={selectedCount > 0 ? 'err' : undefined} />
         <StatRow label={t('duplicates.statsAfter')} value={remaining} accent="ok" />
       </div>

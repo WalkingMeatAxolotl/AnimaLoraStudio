@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link, useOutletContext } from 'react-router-dom'
+import { useOutletContext } from 'react-router-dom'
 import {
   api,
   type Job,
@@ -15,9 +15,11 @@ import {
   type WD14Config,
 } from '../../../api/client'
 import LLMMessagesEditor from '../../../components/LLMMessagesEditor'
+import TagsInput from '../../../components/TagsInput'
 import JobProgress from '../../../components/JobProgress'
 import StepShell from '../../../components/StepShell'
 import { useToast } from '../../../components/Toast'
+import { useSettingsDrawer } from '../../../lib/SettingsDrawer'
 import { useEventStream } from '../../../lib/useEventStream'
 
 interface Ctx {
@@ -41,8 +43,11 @@ type CLTaggerForm = {
   model_path: string
   tag_mapping_path: string
   local_dir: string
-  add_rating_tag: boolean
+  add_copyright_tag: boolean
+  add_meta_tag: boolean
   add_model_tag: boolean
+  add_rating_tag: boolean
+  add_quality_tag: boolean
   blacklist_tags: string[]
 }
 
@@ -83,8 +88,11 @@ function fromCLTaggerConfig(cfg: CLTaggerConfig): CLTaggerForm {
     model_path: cfg.model_path,
     tag_mapping_path: cfg.tag_mapping_path,
     local_dir: cfg.local_dir ?? '',
-    add_rating_tag: cfg.add_rating_tag,
+    add_copyright_tag: cfg.add_copyright_tag,
+    add_meta_tag: cfg.add_meta_tag,
     add_model_tag: cfg.add_model_tag,
+    add_rating_tag: cfg.add_rating_tag,
+    add_quality_tag: cfg.add_quality_tag,
     blacklist_tags: cfg.blacklist_tags,
   }
 }
@@ -118,6 +126,7 @@ export default function TaggingPage() {
   const { t } = useTranslation()
   const { project, activeVersion, reload } = useOutletContext<Ctx>()
   const { toast } = useToast()
+  const settingsDrawer = useSettingsDrawer()
 
   const [tagger, setTagger] = useState<TaggerName>('wd14')
   const [taggerStatus, setTaggerStatus] = useState<TaggerStatus | null>(null)
@@ -229,10 +238,16 @@ export default function TaggingPage() {
       out.tag_mapping_path = cltaggerForm.tag_mapping_path
     const localDirChanged = (cltaggerForm.local_dir || null) !== (cltaggerDefaults.local_dir ?? null)
     if (localDirChanged) out.local_dir = cltaggerForm.local_dir || null
-    if (cltaggerForm.add_rating_tag !== cltaggerDefaults.add_rating_tag)
-      out.add_rating_tag = cltaggerForm.add_rating_tag
+    if (cltaggerForm.add_copyright_tag !== cltaggerDefaults.add_copyright_tag)
+      out.add_copyright_tag = cltaggerForm.add_copyright_tag
+    if (cltaggerForm.add_meta_tag !== cltaggerDefaults.add_meta_tag)
+      out.add_meta_tag = cltaggerForm.add_meta_tag
     if (cltaggerForm.add_model_tag !== cltaggerDefaults.add_model_tag)
       out.add_model_tag = cltaggerForm.add_model_tag
+    if (cltaggerForm.add_rating_tag !== cltaggerDefaults.add_rating_tag)
+      out.add_rating_tag = cltaggerForm.add_rating_tag
+    if (cltaggerForm.add_quality_tag !== cltaggerDefaults.add_quality_tag)
+      out.add_quality_tag = cltaggerForm.add_quality_tag
     if (JSON.stringify(cltaggerForm.blacklist_tags) !== JSON.stringify(cltaggerDefaults.blacklist_tags))
       out.blacklist_tags = cltaggerForm.blacklist_tags
     return Object.keys(out).length ? out : undefined
@@ -336,9 +351,14 @@ export default function TaggingPage() {
                 : t('tag.statusChecking')}
             </span>
             {taggerStatus && !taggerStatus.ok && taggerStatus.msg.includes('需下载模型') && (
-              <Link to="/tools/settings" className="text-xs text-accent underline" title={t('tag.goDownload')}>
+              <button
+                type="button"
+                onClick={() => settingsDrawer.open({ section: tagger === 'cltagger' ? 'cltagger' : 'wd14' })}
+                className="text-xs text-accent underline bg-transparent border-none p-0 cursor-pointer"
+                title={t('tag.goDownload')}
+              >
                 {t('tag.goDownload')}
-              </Link>
+              </button>
             )}
 
             <span className="text-dim">|</span>
@@ -450,6 +470,7 @@ function Wd14Panel({
   disabled: boolean
 }) {
   const { t } = useTranslation()
+  const settingsDrawer = useSettingsDrawer()
   if (!form || !defaults) {
     return (
       <section className="rounded-md border border-subtle bg-surface px-3 py-2 text-xs text-fg-tertiary shrink-0">
@@ -474,9 +495,14 @@ function Wd14Panel({
         <span className="caption">{t('tag.wd14Params')}</span>
         <span className="text-xs text-fg-tertiary">
           {t('tag.prefilledFrom')}{' '}
-          <Link to="/tools/settings" className="text-accent" title={t('tag.globalSettings')}>
+          <button
+            type="button"
+            onClick={() => settingsDrawer.open({ section: 'wd14' })}
+            className="bg-transparent border-none p-0 text-accent cursor-pointer"
+            title={t('tag.globalSettings')}
+          >
             {t('tag.globalSettings')}
-          </Link>
+          </button>
           {' · '}{t('tag.effectiveThisRun')}
         </span>
         <span className="flex-1" />
@@ -516,13 +542,13 @@ function Wd14Panel({
             onChange={(v) => onChange({ ...form, local_dir: v })}
             modified={(form.local_dir || null) !== (defaults.local_dir ?? null)}
           />
-          <LabeledInput
+          <TagsInput
             className="md:col-span-2"
             label={t('tag.blacklistLabel')}
-            value={form.blacklist_tags.join(', ')}
+            value={form.blacklist_tags}
             placeholder={t('tag.blacklistPlaceholder1')}
             disabled={disabled}
-            onChange={(v) => onChange({ ...form, blacklist_tags: v.split(',').map((s) => s.trim()).filter(Boolean) })}
+            onChange={(tags) => onChange({ ...form, blacklist_tags: tags })}
             modified={JSON.stringify(form.blacklist_tags) !== JSON.stringify(defaults.blacklist_tags)}
           />
         </div>
@@ -542,6 +568,7 @@ function CLTaggerPanel({
   disabled: boolean
 }) {
   const { t } = useTranslation()
+  const settingsDrawer = useSettingsDrawer()
   if (!form || !defaults) {
     return (
       <section className="rounded-md border border-subtle bg-surface px-3 py-2 text-xs text-fg-tertiary shrink-0">
@@ -557,8 +584,11 @@ function CLTaggerPanel({
     form.model_path !== defaults.model_path ||
     form.tag_mapping_path !== defaults.tag_mapping_path ||
     (form.local_dir || null) !== (defaults.local_dir ?? null) ||
-    form.add_rating_tag !== defaults.add_rating_tag ||
+    form.add_copyright_tag !== defaults.add_copyright_tag ||
+    form.add_meta_tag !== defaults.add_meta_tag ||
     form.add_model_tag !== defaults.add_model_tag ||
+    form.add_rating_tag !== defaults.add_rating_tag ||
+    form.add_quality_tag !== defaults.add_quality_tag ||
     JSON.stringify(form.blacklist_tags) !== JSON.stringify(defaults.blacklist_tags)
 
   const restore = () => onChange(fromCLTaggerConfig(defaults))
@@ -570,9 +600,14 @@ function CLTaggerPanel({
         <span className="caption">{t('tag.cltaggerParams')}</span>
         <span className="text-xs text-fg-tertiary">
           {t('tag.prefilledFrom')}{' '}
-          <Link to="/tools/settings" className="text-accent" title={t('tag.globalSettings')}>
+          <button
+            type="button"
+            onClick={() => settingsDrawer.open({ section: 'cltagger' })}
+            className="bg-transparent border-none p-0 text-accent cursor-pointer"
+            title={t('tag.globalSettings')}
+          >
             {t('tag.globalSettings')}
-          </Link>
+          </button>
           {' · '}{t('tag.effectiveThisRun')}
         </span>
         <span className="flex-1" />
@@ -590,12 +625,24 @@ function CLTaggerPanel({
         <ThresholdInput label="general" value={form.threshold_general} base={defaults.threshold_general} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_general: v })} />
         <ThresholdInput label="character" value={form.threshold_character} base={defaults.threshold_character} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_character: v })} />
         <label className="flex items-center gap-1.5 text-xs text-fg-tertiary">
-          <input type="checkbox" checked={form.add_rating_tag} disabled={disabled} onChange={(e) => onChange({ ...form, add_rating_tag: e.target.checked })} />
-          rating
+          <input type="checkbox" checked={form.add_copyright_tag} disabled={disabled} onChange={(e) => onChange({ ...form, add_copyright_tag: e.target.checked })} />
+          copyright
+        </label>
+        <label className="flex items-center gap-1.5 text-xs text-fg-tertiary">
+          <input type="checkbox" checked={form.add_meta_tag} disabled={disabled} onChange={(e) => onChange({ ...form, add_meta_tag: e.target.checked })} />
+          meta
         </label>
         <label className="flex items-center gap-1.5 text-xs text-fg-tertiary">
           <input type="checkbox" checked={form.add_model_tag} disabled={disabled} onChange={(e) => onChange({ ...form, add_model_tag: e.target.checked })} />
           model
+        </label>
+        <label className="flex items-center gap-1.5 text-xs text-fg-tertiary">
+          <input type="checkbox" checked={form.add_rating_tag} disabled={disabled} onChange={(e) => onChange({ ...form, add_rating_tag: e.target.checked })} />
+          rating
+        </label>
+        <label className="flex items-center gap-1.5 text-xs text-fg-tertiary">
+          <input type="checkbox" checked={form.add_quality_tag} disabled={disabled} onChange={(e) => onChange({ ...form, add_quality_tag: e.target.checked })} />
+          quality
         </label>
         <button type="button" onClick={() => setAdvOpen(!advOpen)} className="btn btn-ghost btn-sm text-xs text-fg-tertiary">
           {advOpen ? '▾' : '▸'} {t('tag.advanced')}
@@ -608,13 +655,13 @@ function CLTaggerPanel({
           <LabeledInput label="local_dir" value={form.local_dir} placeholder={t('tag.blankDir')} disabled={disabled} onChange={(v) => onChange({ ...form, local_dir: v })} modified={(form.local_dir || null) !== (defaults.local_dir ?? null)} />
           <LabeledInput label="model_path" value={form.model_path} disabled={disabled} onChange={(v) => onChange({ ...form, model_path: v })} modified={form.model_path !== defaults.model_path} />
           <LabeledInput label="tag_mapping_path" value={form.tag_mapping_path} disabled={disabled} onChange={(v) => onChange({ ...form, tag_mapping_path: v })} modified={form.tag_mapping_path !== defaults.tag_mapping_path} />
-          <LabeledInput
+          <TagsInput
             className="md:col-span-2"
             label={t('tag.blacklistLabel')}
-            value={form.blacklist_tags.join(', ')}
+            value={form.blacklist_tags}
             placeholder={t('tag.blacklistPlaceholder2')}
             disabled={disabled}
-            onChange={(v) => onChange({ ...form, blacklist_tags: v.split(',').map((s) => s.trim()).filter(Boolean) })}
+            onChange={(tags) => onChange({ ...form, blacklist_tags: tags })}
             modified={JSON.stringify(form.blacklist_tags) !== JSON.stringify(defaults.blacklist_tags)}
           />
         </div>
@@ -860,6 +907,7 @@ function LabeledModelSelect({ label, value, options, disabled, onChange, modifie
   onChange: (v: string) => void; modified?: boolean
 }) {
   const { t } = useTranslation()
+  const settingsDrawer = useSettingsDrawer()
   const opts = options.includes(value) ? options : [value, ...options]
   return (
     <label className="grid grid-cols-[140px_1fr] items-center gap-2">
@@ -873,9 +921,14 @@ function LabeledModelSelect({ label, value, options, disabled, onChange, modifie
         >
           {opts.map((m) => <option key={m} value={m}>{m}</option>)}
         </select>
-        <Link to="/tools/settings" className="text-xs text-fg-tertiary shrink-0" title={t('tag.globalSettings')}>
+        <button
+          type="button"
+          onClick={() => settingsDrawer.open()}
+          className="text-xs text-fg-tertiary shrink-0 bg-transparent border-none p-0 cursor-pointer"
+          title={t('tag.globalSettings')}
+        >
           +
-        </Link>
+        </button>
       </div>
     </label>
   )

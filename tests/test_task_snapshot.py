@@ -7,18 +7,22 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from studio import db, projects, server, task_snapshot
+from studio import db, server
+from studio.services import task_snapshot
+from studio.services.projects import projects
 
 
 @pytest.fixture
 def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from studio.infrastructure import paths as _paths
     dbfile = tmp_path / "studio.db"
     db.init_db(dbfile)
     monkeypatch.setattr(projects, "PROJECTS_DIR", tmp_path / "projects")
     monkeypatch.setattr(db, "STUDIO_DB", dbfile)
     monkeypatch.setattr(server.db, "STUDIO_DB", dbfile)
-    # task_snapshot 用 STUDIO_DATA：mock 到 tmp_path / studio_data
-    monkeypatch.setattr(task_snapshot, "STUDIO_DATA", tmp_path / "studio_data")
+    # task_snapshot 走 paths.task_dir → 共享 paths.TASKS_DIR；
+    # 整组 task-scoped helper（snapshot / monitor / samples / log）一并隔离。
+    monkeypatch.setattr(_paths, "TASKS_DIR", tmp_path / "studio_data" / "tasks")
     return {"db": dbfile, "data": tmp_path / "studio_data"}
 
 
@@ -28,8 +32,7 @@ def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def test_snapshot_paths_under_studio_data(isolated) -> None:
-    root = task_snapshot.snapshot_root()
-    assert root == isolated["data"] / "tasks"
+    root = isolated["data"] / "tasks"
     assert task_snapshot.snapshot_dir(42) == root / "42" / "snapshot"
     assert task_snapshot.snapshot_config_path(42) == root / "42" / "snapshot" / "config.yaml"
 

@@ -11,8 +11,9 @@ import sqlite3
 import time
 from pathlib import Path
 
-from studio import db, versions
-from studio.migrations import MIGRATIONS, current_version
+from studio import db
+from studio.services.projects import versions
+from studio.infrastructure.migrations import MIGRATIONS, current_version
 
 
 def _open(path: Path) -> sqlite3.Connection:

@@ -174,7 +174,7 @@ def test_model_downloader_uses_secrets_root(
 
     （与 schema.py 默认 + WD14 已用的 `models/wd14/` 对齐）
     """
-    from studio.services import model_downloader
+    from studio.services import models as model_downloader
     # 未设
     secrets.update({"models": {"root": None}})
     fallback = model_downloader.models_root()
@@ -187,7 +187,7 @@ def test_model_downloader_uses_secrets_root(
 
 def test_find_anima_main_picks_latest(secrets_file: Path, tmp_path: Path) -> None:
     """多版本并存时按 ANIMA_VARIANTS 顺序（latest 优先）返回第一个存在的。"""
-    from studio.services import model_downloader
+    from studio.services import models as model_downloader
     secrets.update({"models": {"root": str(tmp_path)}})
     dm = tmp_path / "diffusion_models"
     dm.mkdir(parents=True)

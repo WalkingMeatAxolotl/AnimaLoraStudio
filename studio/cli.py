@@ -40,8 +40,15 @@ NODE_MODULES = WEB_DIR / "node_modules"
 
 
 def find_npm() -> Optional[str]:
-    """Windows 上 npm 是 .cmd / .ps1，需要找全名。"""
-    for candidate in ("npm", "npm.cmd", "npm.ps1"):
+    """Windows 优先 .cmd（CreateProcess 可直接跑），.ps1 兜底；Linux/Mac 走裸名。
+
+    注意不要把裸 ``npm`` 放在 Windows 候选首位：Node.js 官方安装包在
+    ``C:\\Program Files\\nodejs\\`` 同时铺了 ``npm`` (Git Bash 用的 bash 脚本)
+    / ``npm.cmd`` / ``npm.ps1`` 三份，``shutil.which("npm")`` 在 Windows 上
+    会先吃裸名那份，subprocess 直接报 WinError 193（不是有效 Win32 应用）。
+    """
+    candidates = ("npm.cmd", "npm.ps1", "npm") if os.name == "nt" else ("npm",)
+    for candidate in candidates:
         path = shutil.which(candidate)
         if path:
             return path
@@ -57,9 +64,36 @@ _NPM_MIRROR = "https://mirrors.cloud.tencent.com/npm/"
 _PIP_MIRROR = "https://mirrors.cloud.tencent.com/pypi/simple/"
 
 
+def _say(msg: str, level: str = "info") -> None:
+    """统一 CLI 用户输出入口（ADR-0009 PR-3 C4）。
+
+    保 print 路径（ADR-0009 round 2 §1.3 决策 — CLI 5s 短命周期落盘价值低；
+    用户终端看 `[studio] ...` 比 logger 默认 format 清爽；capsys 测试 UX 优先）。
+    本 wrapper 给未来加 verbose 控制 / 着色留单一入口；现在等价于带前缀的 print。
+
+    level:
+      - "info" / "success" → stdout，`[studio] ` 前缀
+      - "warning" / "error" → stderr，`[studio] ` 前缀
+    """
+    file = sys.stderr if level in ("warning", "error") else sys.stdout
+    # 注意：不能用 f"[studio] {msg}"，否则被批量 _say 替换正则误伤。
+    print("[studio] " + str(msg), file=file, flush=True)
+
+
+def _npm_argv(npm: str, args: list[str]) -> list[str]:
+    """拼出真正可被 subprocess 执行的 argv。
+
+    ``.ps1`` 无法被 ``CreateProcess`` 直接拉起，必须包 ``powershell.exe -File``；
+    ``.cmd`` 和裸名（Linux）直接拼即可。
+    """
+    if npm.lower().endswith(".ps1"):
+        return ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", npm, *args]
+    return [npm, *args]
+
+
 def _npm_call(npm: str, args: list[str], cwd: str, timeout: int = 180) -> int:
     """运行 npm 命令；超时则 kill 并返回 1。"""
-    proc = subprocess.Popen([npm] + args, cwd=cwd)
+    proc = subprocess.Popen(_npm_argv(npm, args), cwd=cwd)
     try:
         return proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -93,14 +127,14 @@ def npm_install_if_missing(npm: str) -> int:
     except ValueError:
         rel = NODE_MODULES
     if package_files_changed:
-        print("[studio] studio/web/package.json 或 package-lock.json 比 node_modules 新，运行 npm install...")
+        _say("studio/web/package.json 或 package-lock.json 比 node_modules 新，运行 npm install...")
     else:
-        print(f"[studio] {rel} 不完整或不存在，运行 npm install（3 分钟超时）...")
+        _say(f"{rel} 不完整或不存在，运行 npm install（3 分钟超时）...")
     rc = _npm_call(npm, ["install"], str(WEB_DIR), timeout=180)
     if rc != 0:
-        print(f"[studio] npm install 失败或超时，切换国内源 ({_NPM_MIRROR}) 重试...")
+        _say(f"npm install 失败或超时，切换国内源 ({_NPM_MIRROR}) 重试...")
         rc = subprocess.call(
-            [npm, "install", "--registry", _NPM_MIRROR],
+            _npm_argv(npm, ["install", "--registry", _NPM_MIRROR]),
             cwd=str(WEB_DIR),
         )
     return rc
@@ -110,7 +144,7 @@ def _pip_install(args: list[str]) -> int:
     """运行 pip install；失败时切换阿里云镜像重试。"""
     rc = subprocess.call([find_python(), "-m", "pip", "install"] + args)
     if rc != 0:
-        print(f"[studio] pip install 失败，切换国内源 ({_PIP_MIRROR}) 重试...")
+        _say(f"pip install 失败，切换国内源 ({_PIP_MIRROR}) 重试...")
         rc = subprocess.call(
             [find_python(), "-m", "pip", "install"] + args
             + ["-i", _PIP_MIRROR],
@@ -129,13 +163,13 @@ def _ensure_python_deps() -> int:
             return 0
     except Exception:
         pass
-    print("[studio] 检测到 fastapi 缺失，重新安装 Python 依赖（requirements.txt）...")
+    _say("检测到 fastapi 缺失，重新安装 Python 依赖（requirements.txt）...")
     return _pip_install(["-r", str(req)])
 
 
 def npm_build(npm: str) -> int:
-    print("[studio] 构建前端 (npm run build)...")
-    return subprocess.call([npm, "run", "build"], cwd=str(WEB_DIR))
+    _say("构建前端 (npm run build)...")
+    return subprocess.call(_npm_argv(npm, ["run", "build"]), cwd=str(WEB_DIR))
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +204,7 @@ class ProcGroup:
             creationflags=creationflags,
             preexec_fn=preexec_fn,
         )
-        print(f"[studio] {label} pid={proc.pid}: {' '.join(cmd)}")
+        _say(f"{label} pid={proc.pid}: {' '.join(cmd)}")
         self.procs.append((label, proc))
         return proc
 
@@ -180,7 +214,7 @@ class ProcGroup:
             for label, p in self.procs:
                 rc = p.poll()
                 if rc is not None:
-                    print(f"[studio] {label} 退出 (rc={rc})")
+                    _say(f"{label} 退出 (rc={rc})")
                     return rc
             try:
                 # 让 KeyboardInterrupt 有机会触发
@@ -195,7 +229,7 @@ class ProcGroup:
         for label, p in self.procs:
             if p.poll() is not None:
                 continue
-            print(f"[studio] 停止 {label}...")
+            _say(f"停止 {label}...")
             try:
                 if os.name == "nt":
                     p.send_signal(signal.CTRL_BREAK_EVENT)
@@ -207,7 +241,7 @@ class ProcGroup:
             try:
                 p.wait(timeout=grace)
             except subprocess.TimeoutExpired:
-                print(f"[studio] {label} 超时未退出，强杀")
+                _say(f"{label} 超时未退出，强杀")
                 p.kill()
 
 
@@ -221,7 +255,7 @@ def _print_npm_install_hint() -> None:
 
     放 stderr，与 `[studio] 错误：找不到 npm` 同流；root 环境去掉 sudo（直接 root 跑装包）。
     """
-    print("[studio] 错误：找不到 npm。请安装 Node.js 18+", file=sys.stderr)
+    _say("错误：找不到 npm。请安装 Node.js 18+", "error")
     if os.name == "nt":
         print(
             "  Windows：前往 https://nodejs.org 下载安装包，"
@@ -319,7 +353,7 @@ def _apply_pending_install() -> None:
     失败不抛 —— pending_install.apply_pending 内部已打印错误，让 launcher 继续起。
     """
     try:
-        from studio.services import pending_install  # noqa: PLC0415
+        from studio.services.runtime import pending_install  # noqa: PLC0415
         pending_install.apply_pending()
     except Exception as exc:  # noqa: BLE001
         print(
@@ -335,12 +369,12 @@ def _try_enable_flash_attn() -> None:
     动态 import 避免拖慢 cli import 时间（cosmos_predict2_modeling 加载触发 torch import）。
     """
     try:
-        from studio.services import flash_attention_setup  # noqa: PLC0415
+        from studio.services.runtime import flash_attention as flash_attention_setup  # noqa: PLC0415
         if not flash_attention_setup.current_status()["installed"]:
             return
         from models.cosmos_predict2_modeling import set_flash_attn_enabled  # noqa: PLC0415
         if set_flash_attn_enabled(True):
-            print("[studio] flash_attn 启用")
+            _say("flash_attn 启用")
         else:
             # 装了 flash_attn 但 set_flash_attn_enabled 拒绝（_FLASH_ATTN_AVAILABLE=False）
             # 通常意味着 import 时挂了（CUDA 版本不匹配等）；不噪声只 stderr 警告
@@ -379,14 +413,14 @@ def _check_torch_cuda() -> None:
             name = torch.cuda.get_device_name(0)
         except Exception:  # noqa: BLE001
             name = "?"
-        print(f"[studio] torch {torch.__version__}（GPU: {name}）")
+        _say(f"torch {torch.__version__}（GPU: {name}）")
         return
 
     cuda_build = getattr(torch.version, "cuda", None)
     if cuda_build is None:
         # CPU-only wheel：进一步判断本机是否其实有 NVIDIA GPU（误装）
         try:
-            from studio.services import onnxruntime_setup  # noqa: PLC0415
+            from studio.services.runtime import onnxruntime as onnxruntime_setup  # noqa: PLC0415
             has_gpu = bool(onnxruntime_setup.detect_cuda().get("available"))
         except Exception:  # noqa: BLE001
             has_gpu = False
@@ -429,7 +463,7 @@ def _bootstrap_onnxruntime() -> None:
     - 委托 onnxruntime_setup.bootstrap()（仅做 GPU/EP 匹配警告，不重装）
     """
     try:
-        from studio.services import onnxruntime_setup
+        from studio.services.runtime import onnxruntime as onnxruntime_setup
 
         # ── 步骤 1：检查是否已安装（不 import .pyd，只读 dist-info）────────
         rt = onnxruntime_setup.current_runtime()
@@ -442,8 +476,8 @@ def _bootstrap_onnxruntime() -> None:
             else:
                 pkg = f"{onnxruntime_setup.CPU_PACKAGE}{onnxruntime_setup.CPU_VERSION_SPEC}"
                 gpu_hint = "（未检测到 NVIDIA GPU，装 CPU 版）"
-            print(f"[studio] ONNX Runtime 未安装，正在安装 {pkg} {gpu_hint}")
-            print("[studio] 提示：首次下载可能需要几分钟，进度会实时显示在下方...")
+            _say(f"ONNX Runtime 未安装，正在安装 {pkg} {gpu_hint}")
+            _say("提示：首次下载可能需要几分钟，进度会实时显示在下方...")
             rc = _pip_install([pkg])
             if rc != 0:
                 print(
@@ -453,7 +487,7 @@ def _bootstrap_onnxruntime() -> None:
                     file=sys.stderr,
                 )
                 return
-            print(f"[studio] ONNX Runtime 安装完成：{pkg}")
+            _say(f"ONNX Runtime 安装完成：{pkg}")
             # 刷新状态（供后续 EP 检查）
             rt = onnxruntime_setup.current_runtime()
 
@@ -464,7 +498,7 @@ def _bootstrap_onnxruntime() -> None:
         cuda_available = rt.get("cuda_available", False)
 
         if cuda_available:
-            print(f"[studio] onnxruntime: {installed}=={ver}（CUDA EP 可用）")
+            _say(f"onnxruntime: {installed}=={ver}（CUDA EP 可用）")
         elif cuda.get("available"):
             print(
                 f"[studio] 警告：检测到 NVIDIA GPU 但 onnxruntime 只有 CPU EP "
@@ -473,10 +507,10 @@ def _bootstrap_onnxruntime() -> None:
                 file=sys.stderr,
             )
         else:
-            print(f"[studio] onnxruntime: {installed}=={ver}（CPU only，未检测到 NVIDIA GPU）")
+            _say(f"onnxruntime: {installed}=={ver}（CPU only，未检测到 NVIDIA GPU）")
 
     except Exception as exc:  # noqa: BLE001
-        print(f"[studio] onnxruntime bootstrap 异常（已忽略）: {exc}", file=sys.stderr)
+        _say(f"onnxruntime bootstrap 异常（已忽略）: {exc}", "error")
 
 
 WEB_SRC = WEB_DIR / "src"
@@ -578,7 +612,7 @@ def _apply_update_pending() -> None:
     看到"上次 update 失败"提示）。
     """
     try:
-        from studio.services import updater  # noqa: PLC0415
+        from studio.services.runtime import updater  # noqa: PLC0415
         if not updater.has_pending():
             return
         updater.apply_pending(emit=print)
@@ -595,23 +629,23 @@ def _maybe_force_torch(args: argparse.Namespace) -> int:
     tag = getattr(args, 'torch', None)
     if not tag:
         return 0
-    from studio.services import torch_setup  # noqa: PLC0415
+    from studio.services.runtime import torch as torch_setup  # noqa: PLC0415
     current = torch_setup.detect_torch()
     current_build = current.get('cuda_build') or ('未安装' if not current.get('installed') else 'unknown')
     if current.get('installed') and current.get('cuda_build') == tag:
-        print(f"[studio] torch 已是 {tag}，跳过重装")
+        _say(f"torch 已是 {tag}，跳过重装")
         return 0
-    print(f"[studio] --torch {tag} 指定（当前: {current_build}），开始重装...")
-    print("[studio] 提示：按 Ctrl+C 可跳过")
+    _say(f"--torch {tag} 指定（当前: {current_build}），开始重装...")
+    _say("提示：按 Ctrl+C 可跳过")
     try:
         res = torch_setup.reinstall(tag, stream=True)
-        print(f"[studio] torch 重装完成: {res.get('version')} ({res.get('tag')})")
+        _say(f"torch 重装完成: {res.get('version')} ({res.get('tag')})")
         return 0
     except KeyboardInterrupt:
         print("\n[studio] 用户中断，跳过 torch 重装", file=sys.stderr)
         return 0
     except RuntimeError as exc:
-        print(f"[studio] torch 重装失败: {exc}", file=sys.stderr)
+        _say(f"torch 重装失败: {exc}", "error")
         return 1
 
 
@@ -652,12 +686,12 @@ def cmd_run(args: argparse.Namespace) -> int:
 
         if not args.no_build:
             if not WEB_DIST.exists():
-                print("[studio] studio/web/dist 不存在，先构建前端...")
+                _say("studio/web/dist 不存在，先构建前端...")
                 rc = cmd_build(args)
                 if rc != 0:
                     return rc
             elif _web_dist_is_stale():
-                print("[studio] studio/web/dist 比 src 旧（git pull 后未重建？），重新构建前端...")
+                _say("studio/web/dist 比 src 旧（git pull 后未重建？），重新构建前端...")
                 rc = cmd_build(args)
                 if rc != 0:
                     return rc
@@ -667,7 +701,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         _try_enable_flash_attn()
         _bootstrap_onnxruntime()
         url = f"http://{args.host}:{args.port}/studio/"
-        print(f"[studio] 启动后端 → {url}")
+        _say(f"启动后端 → {url}")
         if not args.no_browser and not opened_browser:
             _spawn_browser_opener(url)
             opened_browser = True
@@ -683,7 +717,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         # 走 exec self 路径。flag 保留是关键 —— wrapper 检测到 (exit==42 &&
         # flag exists) 才会 re-exec；只剩 flag 而 exit!=42 则走普通 restart。
         if _installer_hashes() != startup_installer:
-            print("[studio] 检测到 launcher 文件更新（cli.py / studio.sh / studio.bat），"
+            _say("检测到 launcher 文件更新（cli.py / studio.sh / studio.bat），"
                   "退出码 42 让 wrapper 重新加载...")
             return _INSTALLER_RELOAD_EXIT_CODE
 
@@ -692,7 +726,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             _RESTART_FLAG.unlink()
         except OSError:
             pass
-        print("[studio] 收到重启请求，重新启动...")
+        _say("收到重启请求，重新启动...")
 
 
 def cmd_dev(args: argparse.Namespace) -> int:
@@ -717,7 +751,7 @@ def cmd_dev(args: argparse.Namespace) -> int:
 
     pg = ProcGroup()
     try:
-        pg.spawn("frontend", [npm, "run", "dev", "--", "--port", str(args.fe_port)], cwd=WEB_DIR)
+        pg.spawn("frontend", _npm_argv(npm, ["run", "dev", "--", "--port", str(args.fe_port)]), cwd=WEB_DIR)
         pg.spawn(
             "backend",
             [
@@ -745,19 +779,19 @@ def cmd_dev(args: argparse.Namespace) -> int:
 
 def cmd_test(_args: argparse.Namespace) -> int:
     """跑 pytest + vitest。任一失败 → 非零退出。"""
-    print("[studio] pytest...")
+    _say("pytest...")
     rc = subprocess.call([find_python(), "-m", "pytest", "tests/"], cwd=str(REPO_ROOT))
     if rc != 0:
         return rc
     npm = find_npm()
     if not npm:
-        print("[studio] 跳过 vitest (未安装 npm)")
+        _say("跳过 vitest (未安装 npm)")
         return 0
     if not NODE_MODULES.exists():
-        print("[studio] 跳过 vitest (node_modules 缺失，先 npm install)")
+        _say("跳过 vitest (node_modules 缺失，先 npm install)")
         return 0
-    print("[studio] vitest...")
-    return subprocess.call([npm, "run", "test"], cwd=str(WEB_DIR))
+    _say("vitest...")
+    return subprocess.call(_npm_argv(npm, ["run", "test"]), cwd=str(WEB_DIR))
 
 
 # ---------------------------------------------------------------------------
@@ -816,6 +850,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     if _first_pos not in _subcmds:
         args_list = ['run'] + args_list
     args = parser.parse_args(args_list)
+    # PR-1 C4: 统一日志体系 (ADR-0009)。file=False — CLI 是 5s 短命周期，
+    # 启动信息不进 studio.log（用户决定 — round 2 §1.3）。console=True 让
+    # logger.x 调用走人读 stderr；现有 48 处 print() 不动（PR-3 _say() wrapper
+    # 收编）。env ANIMA_LOGGING_NO_BOOTSTRAP=1 时 noop（测试态）。
+    from .infrastructure.logging import setup_logging
+    setup_logging(f"cli:{args.cmd}", file=False, console=True)
     return args.func(args)
 
 

@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from studio import browse, server
+from studio import server
+from studio.services.dataset import browse
 
 
 def _setup_tree(root: Path) -> None:
@@ -23,6 +24,9 @@ def fake_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     _setup_tree(fake)
     monkeypatch.setattr(server, "REPO_ROOT", fake)
     monkeypatch.setattr(browse, "REPO_ROOT", fake)
+    # PR-5 /api/browse 搬到 api/routers/browse.py，handler 用自己 import 的 REPO_ROOT
+    from studio.api.routers import browse as _browse_router
+    monkeypatch.setattr(_browse_router, "REPO_ROOT", fake)
     return fake
 
 
