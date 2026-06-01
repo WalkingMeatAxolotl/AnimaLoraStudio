@@ -674,11 +674,10 @@
     "tabGenerate": "测试",
     "tabAppearance": "页面",
     "tabSystem": "系统",
-    "tabNetwork": "网络",
     "proxy": {
-      "sectionTitle": "网络代理 (HTTP/HTTPS)",
+      "sectionTitle": "Booru 代理",
       "enableLabel": "启用代理",
-      "enableDesc": "开启后，部分后端网络请求（模型下载、Booru 抓图）将经过下方配置的代理。",
+      "enableDesc": "开启后，Booru 抓图请求将经过下方配置的代理。仅覆盖 Booru 下载链路，模型下载（HuggingFace / ModelScope）不走此代理。",
       "httpLabel": "HTTP 代理地址",
       "httpDesc": "例如 http://127.0.0.1:7890 或 http://proxy.example.com:8080",
       "httpsLabel": "HTTPS 代理地址",

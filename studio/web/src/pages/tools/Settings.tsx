@@ -60,7 +60,7 @@ type Section =
   | 'generate'
   | 'proxy'
 
-type Tab = 'dataset' | 'tagging' | 'preprocess' | 'training' | 'monitor' | 'testing' | 'appearance' | 'system' | 'network'
+type Tab = 'dataset' | 'tagging' | 'preprocess' | 'training' | 'monitor' | 'testing' | 'appearance' | 'system'
 
 // 外部页面通过 `?section=<id>` 跳转到 SettingsPage 的特定 section 时，用这个
 // 反向映射决定要先切到哪个 tab。只列出能从外部链接到的 sections。
@@ -80,7 +80,6 @@ const TAB_LIST: { id: Tab; labelKey: string }[] = [
   { id: 'testing', labelKey: 'settings.tabGenerate' },
   { id: 'appearance', labelKey: 'settings.tabAppearance' },
   { id: 'system', labelKey: 'settings.tabSystem' },
-  { id: 'network', labelKey: 'settings.tabNetwork' },
 ]
 
 // 每个 tab 的 section index — 用于右侧 sticky 导航。id 与各 section 的 DOM id
@@ -90,6 +89,7 @@ const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
     { id: 'gelbooru', labelKey: 'settings.gelbooru' },
     { id: 'danbooru', labelKey: 'settings.danbooru' },
     { id: 'download-global', labelKey: 'settings.downloadGlobal' },
+    { id: 'proxy', labelKey: 'settings.proxy.sectionTitle' },
   ],
   preprocess: [
     { id: 'upscalers', labelKey: 'settings.upscalers' },
@@ -120,9 +120,6 @@ const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
   system: [
     { id: 'version', labelKey: 'settings.version' },
     { id: 'service', labelKey: 'settings.service' },
-  ],
-  network: [
-    { id: 'proxy', labelKey: 'settings.proxy.sectionTitle' },
   ],
 }
 
@@ -178,7 +175,7 @@ function getStoredTab(): Tab {
     if (
       v === 'dataset' || v === 'tagging' || v === 'preprocess' || v === 'training'
       || v === 'monitor' || v === 'testing' || v === 'appearance'
-      || v === 'system' || v === 'network'
+      || v === 'system'
     ) return v
   } catch {
     /* ignore localStorage errors */
@@ -701,6 +698,72 @@ export default function SettingsPage() {
           </div>
         </div>
       </SettingsSection>
+
+      <SettingsSection id="proxy" title={t('settings.proxy.sectionTitle')}>
+        <SettingsField label={t('settings.proxy.enableLabel')}>
+          <Bool
+            value={draft.proxy.enabled}
+            onChange={(v) => update('proxy', 'enabled', v)}
+          />
+          <p className="text-xs text-fg-tertiary mt-1">
+            {t('settings.proxy.enableDesc')}
+          </p>
+        </SettingsField>
+
+        <SettingsField
+          label={t('settings.proxy.httpLabel')}
+          desc={t('settings.proxy.httpDesc')}
+        >
+          <input
+            type="text"
+            value={draft.proxy.http_proxy}
+            onChange={(e) => update('proxy', 'http_proxy', e.target.value)}
+            placeholder="http://127.0.0.1:7890"
+            className={textInputClass}
+            disabled={!draft.proxy.enabled}
+          />
+        </SettingsField>
+
+        <SettingsField
+          label={t('settings.proxy.httpsLabel')}
+          desc={t('settings.proxy.httpsDesc')}
+        >
+          <input
+            type="text"
+            value={draft.proxy.https_proxy}
+            onChange={(e) => update('proxy', 'https_proxy', e.target.value)}
+            placeholder="http://127.0.0.1:7890"
+            className={textInputClass}
+            disabled={!draft.proxy.enabled}
+          />
+        </SettingsField>
+
+        <SettingsField
+          label={t('settings.proxy.noProxyLabel')}
+          desc={t('settings.proxy.noProxyDesc')}
+        >
+          <input
+            type="text"
+            value={draft.proxy.no_proxy}
+            onChange={(e) => update('proxy', 'no_proxy', e.target.value)}
+            placeholder="localhost,127.0.0.1"
+            className={textInputClass}
+            disabled={!draft.proxy.enabled}
+          />
+        </SettingsField>
+
+        <div className="text-xs text-fg-tertiary border-t border-subtle pt-3 mt-1">
+          <p className="m-0">{t('settings.proxy.tipsTitle')}</p>
+          <ul className="list-disc pl-4 m-0 mt-1 space-y-0.5">
+            <li>{t('settings.proxy.tips1')}</li>
+            <li>
+              {t('settings.proxy.tips2')}
+              <code className="text-fg-primary">http://user:pass@host:port</code>
+            </li>
+            <li>{t('settings.proxy.tips3')}</li>
+          </ul>
+        </div>
+      </SettingsSection>
       </>)}
 
       {tab === 'tagging' && (<>
@@ -1055,73 +1118,6 @@ export default function SettingsPage() {
         <SystemSection />
       )}
 
-      {tab === 'network' && (
-        <SettingsSection title={t('settings.proxy.sectionTitle')}>
-          <SettingsField label={t('settings.proxy.enableLabel')}>
-            <Bool
-              value={draft.proxy.enabled}
-              onChange={(v) => update('proxy', 'enabled', v)}
-            />
-            <p className="text-xs text-fg-tertiary mt-1">
-              {t('settings.proxy.enableDesc')}
-            </p>
-          </SettingsField>
-      
-          <SettingsField
-            label={t('settings.proxy.httpLabel')}
-            desc={t('settings.proxy.httpDesc')}
-          >
-            <input
-              type="text"
-              value={draft.proxy.http_proxy}
-              onChange={(e) => update('proxy', 'http_proxy', e.target.value)}
-              placeholder="http://127.0.0.1:7890"
-              className={textInputClass}
-              disabled={!draft.proxy.enabled}
-            />
-          </SettingsField>
-      
-          <SettingsField
-            label={t('settings.proxy.httpsLabel')}
-            desc={t('settings.proxy.httpsDesc')}
-          >
-            <input
-              type="text"
-              value={draft.proxy.https_proxy}
-              onChange={(e) => update('proxy', 'https_proxy', e.target.value)}
-              placeholder="http://127.0.0.1:7890"
-              className={textInputClass}
-              disabled={!draft.proxy.enabled}
-            />
-          </SettingsField>
-      
-          <SettingsField
-            label={t('settings.proxy.noProxyLabel')}
-            desc={t('settings.proxy.noProxyDesc')}
-          >
-            <input
-              type="text"
-              value={draft.proxy.no_proxy}
-              onChange={(e) => update('proxy', 'no_proxy', e.target.value)}
-              placeholder="localhost,127.0.0.1"
-              className={textInputClass}
-              disabled={!draft.proxy.enabled}
-            />
-          </SettingsField>
-      
-          <div className="text-xs text-fg-tertiary border-t border-subtle pt-3 mt-1">
-            <p className="m-0">{t('settings.proxy.tipsTitle')}</p>
-            <ul className="list-disc pl-4 m-0 mt-1 space-y-0.5">
-              <li>{t('settings.proxy.tips1')}</li>
-              <li>
-                {t('settings.proxy.tips2')}
-                <code className="text-fg-primary">http://user:pass@host:port</code>
-              </li>
-              <li>{t('settings.proxy.tips3')}</li>
-            </ul>
-          </div>
-        </SettingsSection>
-      )}
     </div>
 
     <SectionIndex sections={TAB_SECTIONS[tab]} scrollContainer={scrollContainerRef} />

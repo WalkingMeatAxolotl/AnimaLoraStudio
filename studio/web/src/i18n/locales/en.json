@@ -674,11 +674,10 @@
     "tabGenerate": "Generate",
     "tabAppearance": "Appearance",
     "tabSystem": "System",
-    "tabNetwork": "Network",
     "proxy": {
-      "sectionTitle": "Network Proxy (HTTP/HTTPS)",
+      "sectionTitle": "Booru Proxy",
       "enableLabel": "Enable Proxy",
-      "enableDesc": "After enabling, some backend network requests (model downloads, Booru scraping) will go through the proxy  configured below.",
+      "enableDesc": "When enabled, Booru scraping requests go through the proxy configured below. Only covers the Booru download path; model downloads (HuggingFace / ModelScope) do not use this proxy.",
       "httpLabel": "HTTP Proxy Address",
       "httpDesc": "e.g. http://127.0.0.1:7890 or http://proxy.example.com:8080",
       "httpsLabel": "HTTPS Proxy Address",
