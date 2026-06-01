@@ -174,9 +174,6 @@ def main() -> None:
     base_seed: int = int(cfg.get("seed", 0))
     incremental: bool = bool(cfg.get("incremental", False))
     mixed_precision: str = cfg.get("mixed_precision", "bf16")
-    # 兼容老 cfg 的 xformers/flash_attn 双 bool（schema.RegAiConfig.attention_backend 默认 flash_attn）
-    from studio.schema import migrate_legacy_attention
-    cfg = migrate_legacy_attention(cfg)
     backend: str = cfg.get("attention_backend", "flash_attn")
     use_flash = (backend == "flash_attn")
     use_xformers = (backend == "xformers")

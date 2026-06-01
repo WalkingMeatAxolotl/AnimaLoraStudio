@@ -18,11 +18,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .common import AttentionBackend, _meta
-from .migrations import (
-    migrate_legacy_attention,
-    migrate_legacy_save_keys,
-    migrate_noise_enhancement_type,
-)
+from .migrations import migrate_legacy_save_keys, migrate_noise_enhancement_type
 
 
 class TrainingConfig(BaseModel):
@@ -472,11 +468,6 @@ class TrainingConfig(BaseModel):
         description="数据加载线程（Windows 必须 0）",
         json_schema_extra=_meta("system", advanced=True),
     )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _migrate_attention(cls, data: Any) -> Any:
-        return migrate_legacy_attention(data)
 
     @model_validator(mode="before")
     @classmethod

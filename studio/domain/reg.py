@@ -12,7 +12,6 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .common import AttentionBackend
-from .migrations import migrate_legacy_attention
 
 
 class RegAiConfig(BaseModel):
@@ -57,8 +56,3 @@ class RegAiConfig(BaseModel):
         "flash_attn",
         description="Attention backend：none（SDPA）/ xformers / flash_attn",
     )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _migrate_attention(cls, data: Any) -> Any:
-        return migrate_legacy_attention(data)

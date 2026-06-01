@@ -85,10 +85,6 @@ def main() -> None:
     base_seed: int = int(cfg.get("seed", 0))
     lora_configs: list[dict] = cfg.get("lora_configs", [])
     mixed_precision: str = cfg.get("mixed_precision", "bf16")
-    # 兼容老 cfg 的 xformers/flash_attn 双 bool（migrate_legacy_attention 默认值与
-    # schema.GenerateConfig.attention_backend 默认 "flash_attn" 一致）
-    from studio.schema import migrate_legacy_attention
-    cfg = migrate_legacy_attention(cfg)
     backend: str = cfg.get("attention_backend", "flash_attn")
     use_flash = (backend == "flash_attn")
     use_xformers = (backend == "xformers")

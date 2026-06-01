@@ -86,21 +86,16 @@ def apply_yaml_config(args, config):
     都从 studio.schema.TrainingConfig 这一份单一权威源派生，避免与 parse_args
     脱节。未在 schema 中的 YAML 键会被忽略（拼写错误一目了然）。
 
-    在 merge 前调用 migrate_legacy_attention / migrate_legacy_save_keys 兜底老 yaml
-    （xformers/flash_attn 双 bool、save_every / save_state_every 无单位名）——
-    argparse_bridge 不走 pydantic validator，schema 层的迁移逻辑无法生效，
-    所以这里显式做一次。
+    在 merge 前调用 save/noise 迁移兜底老 yaml；argparse_bridge 不走 pydantic validator，
+    schema 层的迁移逻辑无法生效，所以这里显式做一次。
     """
     from studio.infrastructure.argparse_bridge import merge_yaml_into_namespace
     from studio.schema import (
         TrainingConfig,
-        migrate_legacy_attention,
         migrate_legacy_save_keys,
         migrate_noise_enhancement_type,
     )
-    config = migrate_noise_enhancement_type(
-        migrate_legacy_save_keys(migrate_legacy_attention(dict(config or {})))
-    )
+    config = migrate_noise_enhancement_type(migrate_legacy_save_keys(dict(config or {})))
     return merge_yaml_into_namespace(args, config, TrainingConfig)
 
 

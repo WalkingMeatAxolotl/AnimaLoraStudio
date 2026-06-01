@@ -44,7 +44,6 @@ for _p in (_THIS_DIR, _REPO_ROOT):
 
 import anima_train as _T  # noqa: E402
 
-from studio.schema import migrate_legacy_attention  # noqa: E402
 from studio.services.inference.core import LoRAMeta, LoRASpec, apply_loras, read_lora_meta  # noqa: E402
 
 # 预热 transformers.generation → sklearn → scipy.special import 链。
@@ -224,7 +223,7 @@ class ModelCache:
 
     def ensure_loaded(self, cfg: dict[str, Any]) -> None:
         """按 cfg 决定是否需要 (重新) 加载。路径或后端变了 → 全重载。"""
-        cfg = migrate_legacy_attention(dict(cfg))
+        cfg = dict(cfg)
         backend = cfg.get("attention_backend", "flash_attn")
         precision = cfg.get("mixed_precision", "bf16")
         transformer_path = cfg["transformer_path"]

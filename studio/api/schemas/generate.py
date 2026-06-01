@@ -1,12 +1,11 @@
 """/api/generate 请求 BaseModel（PR-6 commit 5 从 server.py 抽出）。"""
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Optional
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel
 
 from ...domain import AttentionBackend, LoraEntry, XYMatrixSpec
-from ...domain.migrations import migrate_legacy_attention
 
 
 class GenerateRequest(BaseModel):
@@ -27,9 +26,3 @@ class GenerateRequest(BaseModel):
     attention_backend: Optional[AttentionBackend] = None
     # XY 矩阵：None=单图模式；设值时 schema 强制 prompts 单条 + count=1
     xy_matrix: Optional[XYMatrixSpec] = None
-
-    # 兼容老前端送 xformers / flash_attn 双 bool（自动映射成 attention_backend）
-    @model_validator(mode="before")
-    @classmethod
-    def _migrate_attention(cls, data: Any) -> Any:
-        return migrate_legacy_attention(data)

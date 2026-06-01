@@ -12,52 +12,6 @@
 from typing import Any
 
 
-def migrate_legacy_attention(data: Any) -> Any:
-    """把老 cfg 的 `xformers` / `flash_attn` 双 bool 映射成 `attention_backend`。
-
-    Idempotent：已有 attention_backend 就剥掉老字段；只有老字段时按下面规则映射；
-    都没有则保持空（让 schema default 生效）。
-
-    映射规则（与原代码 `use_flash = flash_attn and not xformers` 一致 — xformers 优先）：
-        xformers=true  → "xformers"
-        xformers=false, flash_attn=true → "flash_attn"
-        xformers=false, flash_attn=false → "none"
-    """
-    if not isinstance(data, dict):
-        return data
-    for key in (
-        "wandb_enabled",
-        "wandb_project",
-        "wandb_entity",
-        "wandb_run_name",
-        "wandb_mode",
-        "wandb_log_samples",
-        "wandb_upload_model",
-        "wandb_upload_model_policy",
-        "wandb_upload_state_manual",
-        "wandb_upload_state_manual_policy",
-        "wandb_upload_state_auto",
-        "wandb_upload_state_auto_policy",
-    ):
-        data.pop(key, None)
-    if "attention_backend" in data:
-        data.pop("xformers", None)
-        data.pop("flash_attn", None)
-        return data
-    has_legacy = "xformers" in data or "flash_attn" in data
-    if not has_legacy:
-        return data
-    xf = bool(data.pop("xformers", False))
-    fa = bool(data.pop("flash_attn", True))
-    if xf:
-        data["attention_backend"] = "xformers"
-    elif fa:
-        data["attention_backend"] = "flash_attn"
-    else:
-        data["attention_backend"] = "none"
-    return data
-
-
 def migrate_legacy_save_keys(data: Any) -> Any:
     """把老 cfg 的 save_every / save_state_every 改名带单位后缀。
 

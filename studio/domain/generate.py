@@ -12,7 +12,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .common import AttentionBackend
 from .lora import LoraEntry
-from .migrations import migrate_legacy_attention
 from .xy_matrix import XYMatrixSpec, _check_axis_values
 
 
@@ -65,11 +64,6 @@ class GenerateConfig(BaseModel):
         "flash_attn",
         description="Attention backend：none（SDPA）/ xformers / flash_attn",
     )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _migrate_attention(cls, data: Any) -> Any:
-        return migrate_legacy_attention(data)
 
     @model_validator(mode="after")
     def _validate_xy(self) -> "GenerateConfig":

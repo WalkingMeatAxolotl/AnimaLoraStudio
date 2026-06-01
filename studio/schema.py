@@ -17,7 +17,6 @@ from .domain import (
     XYMatrixSpec,
     _check_axis_values,
     _meta,
-    migrate_legacy_attention,
     migrate_legacy_save_keys,
     migrate_noise_enhancement_type,
 )
@@ -34,7 +33,6 @@ __all__ = [
     "XYMatrixSpec",
     "_check_axis_values",
     "_meta",
-    "migrate_legacy_attention",
     "migrate_legacy_save_keys",
     "migrate_noise_enhancement_type",
 ]
