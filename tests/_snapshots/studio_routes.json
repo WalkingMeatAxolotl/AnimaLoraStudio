@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 181,
+  "count": 183,
   "routes": [
     {
       "path": "/",
@@ -754,6 +754,14 @@
       "type": "APIRoute"
     },
     {
+      "path": "/api/projects/{pid}/versions/{vid}/eval/metrics",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_eval_metric_results_endpoint",
+      "type": "APIRoute"
+    },
+    {
       "path": "/api/projects/{pid}/versions/{vid}/eval/samples",
       "methods": [
         "GET"
@@ -783,6 +791,14 @@
         "GET"
       ],
       "name": "get_eval_sample_image_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/eval/samples/{run_id}/metrics",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_eval_metric_result_endpoint",
       "type": "APIRoute"
     },
     {
