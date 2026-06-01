@@ -21,19 +21,19 @@ from typing import Any, Optional
 
 import yaml
 
-from ..paths import STUDIO_DATA
+from ..paths import task_dir
 
 SNAPSHOT_CONFIG_FILENAME = "config.yaml"
 
 
-def snapshot_root() -> Path:
-    """所有 task snapshot 落到 ``studio_data/tasks/``。"""
-    return STUDIO_DATA / "tasks"
-
-
 def snapshot_dir(task_id: int) -> Path:
-    """``studio_data/tasks/{task_id}/snapshot/``。"""
-    return snapshot_root() / str(int(task_id)) / "snapshot"
+    """``studio_data/tasks/{task_id}/snapshot/``。
+
+    跟 monitor/ samples/ run.log sibling，整组是 task 完整档案。
+    路径由 `paths.task_dir` 派生，跟其他 task-scoped helper 同源；
+    测试只需 monkeypatch `paths.TASKS_DIR` 一次即可隔离全部。
+    """
+    return task_dir(task_id) / "snapshot"
 
 
 def snapshot_config_path(task_id: int) -> Path:

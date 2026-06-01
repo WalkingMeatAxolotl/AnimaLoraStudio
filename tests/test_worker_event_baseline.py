@@ -33,6 +33,12 @@ def test_event_marker_string_is_double_underscore_event_colon() -> None:
 def test_logs_router_filters_event_lines(tmp_path: Path,
                                           monkeypatch: pytest.MonkeyPatch) -> None:
     """logs router 必须去掉 `__EVENT__:` 行，只返人读日志。"""
+    # logs.py 先查 task_log_path(id)（task-scoped 新路径），不存在 fallback
+    # LOGS_DIR/<id>.log。本测试断老 task fallback 路径，需 patch 两边：
+    # TASKS_DIR 指 tmp（避开真实 studio_data/tasks/42 万一存在），
+    # LOGS_DIR 指 tmp/legacy 收老 log。
+    from studio.infrastructure import paths as _paths
+    monkeypatch.setattr(_paths, "TASKS_DIR", tmp_path / "tasks")
     monkeypatch.setattr(_logs_router, "LOGS_DIR", tmp_path)
 
     # 写一个混合 log：业务行 + EVENT 行 + 业务行
@@ -63,9 +69,47 @@ def test_logs_router_filters_event_lines(tmp_path: Path,
     assert "progress" not in content
 
 
+def test_logs_router_prefers_task_scoped_path(tmp_path: Path,
+                                               monkeypatch: pytest.MonkeyPatch) -> None:
+    """新路径 tasks/<id>/run.log 优先；老 LOGS_DIR/<id>.log 仅 fallback。"""
+    from studio.infrastructure import paths as _paths
+    monkeypatch.setattr(_paths, "TASKS_DIR", tmp_path / "tasks")
+    monkeypatch.setattr(_logs_router, "LOGS_DIR", tmp_path / "legacy_logs")
+
+    (tmp_path / "tasks" / "99" / "run.log").parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "tasks" / "99" / "run.log").write_text("NEW\n", encoding="utf-8")
+    (tmp_path / "legacy_logs").mkdir()
+    (tmp_path / "legacy_logs" / "99.log").write_text("OLD\n", encoding="utf-8")
+
+    monkeypatch.setattr(server.db, "STUDIO_DB", tmp_path / "studio.db")
+    db.init_db(tmp_path / "studio.db")
+    client = TestClient(server.app)
+    body = client.get("/api/logs/99").json()
+    assert body["content"] == "NEW\n"
+
+
+def test_logs_router_falls_back_to_legacy_logs_dir(tmp_path: Path,
+                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    """老 task 未迁移，DB 列也没 log 路径 —— 落 LOGS_DIR/<id>.log 仍然读得到。"""
+    from studio.infrastructure import paths as _paths
+    monkeypatch.setattr(_paths, "TASKS_DIR", tmp_path / "tasks")
+    monkeypatch.setattr(_logs_router, "LOGS_DIR", tmp_path / "legacy_logs")
+
+    (tmp_path / "legacy_logs").mkdir()
+    (tmp_path / "legacy_logs" / "55.log").write_text("OLD_ONLY\n", encoding="utf-8")
+
+    monkeypatch.setattr(server.db, "STUDIO_DB", tmp_path / "studio.db")
+    db.init_db(tmp_path / "studio.db")
+    client = TestClient(server.app)
+    body = client.get("/api/logs/55").json()
+    assert body["content"] == "OLD_ONLY\n"
+
+
 def test_event_marker_unused_task_returns_empty_not_error(tmp_path: Path,
                                                             monkeypatch: pytest.MonkeyPatch) -> None:
     """unknown task_id 返 200 empty，不是 404；前端 polling 依赖这个不抛错。"""
+    from studio.infrastructure import paths as _paths
+    monkeypatch.setattr(_paths, "TASKS_DIR", tmp_path / "tasks")
     monkeypatch.setattr(_logs_router, "LOGS_DIR", tmp_path)
     monkeypatch.setattr(server.db, "STUDIO_DB", tmp_path / "studio.db")
     db.init_db(tmp_path / "studio.db")

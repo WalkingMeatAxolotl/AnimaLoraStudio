@@ -16,14 +16,18 @@ from studio.supervisor import Supervisor
 
 
 @pytest.fixture
-def env(tmp_path: Path):
+def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from studio.infrastructure import paths as _paths
     db_path = tmp_path / "studio.db"
     db.init_db(db_path)
     logs = tmp_path / "logs"
     configs = tmp_path / "configs"
+    tasks = tmp_path / "tasks"
     logs.mkdir()
     configs.mkdir()
-    return {"db": db_path, "logs": logs, "configs": configs}
+    monkeypatch.setattr(_paths, "TASKS_DIR", tasks)
+    monkeypatch.setattr(_paths, "LOGS_DIR", logs)
+    return {"db": db_path, "logs": logs, "configs": configs, "tasks": tasks}
 
 
 @pytest.fixture

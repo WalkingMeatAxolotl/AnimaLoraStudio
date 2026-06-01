@@ -21,8 +21,20 @@ STUDIO_DATA = REPO_ROOT / "studio_data"
 STUDIO_DB = STUDIO_DATA / "studio.db"
 USER_PRESETS_DIR = STUDIO_DATA / "presets"
 USER_CONFIGS_DIR = USER_PRESETS_DIR  # 兼容别名（PP0 后将随 configs_io 一起移除）
+# LOGS_DIR：pre-task-scoped layout 时所有 task 日志的扁平目录。
+# 新 task 走 `tasks/<id>/run.log`（见 task_log_path）；这个目录仅保留给
+# 老 task 兼容读取（不写新）。
 LOGS_DIR = STUDIO_DATA / "logs"
 THUMB_CACHE_DIR = STUDIO_DATA / "thumb_cache"
+
+# Task-scoped 档案根目录。每个 task 独立子目录，跟 version 解耦，
+# 删 version 不会带走 task 历史（loss / 参数 / sample / 日志）。
+# 子目录约定（snapshot/ 已由 task_snapshot.py 引入 ADR-0007 §11.7）：
+#   tasks/<id>/snapshot/config.yaml   ← task 启动时 freeze 的 config
+#   tasks/<id>/monitor/state.json     ← 训练监控状态（loss/LR/sample 索引）
+#   tasks/<id>/samples/*.png          ← 训练采样图
+#   tasks/<id>/run.log                ← worker 子进程 stdout/stderr
+TASKS_DIR = STUDIO_DATA / "tasks"
 
 # React 前端
 WEB_DIR = REPO_ROOT / "studio" / "web"
@@ -43,6 +55,49 @@ def ensure_dirs() -> None:
     migrate_configs_to_presets()
     for d in (USER_PRESETS_DIR, LOGS_DIR, DATA_EXPORTS):
         d.mkdir(parents=True, exist_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Task-scoped 路径 helper
+# ---------------------------------------------------------------------------
+#
+# 所有 helper 都不 mkdir —— 调用方按需 mkdir(parents=True, exist_ok=True)。
+# 跟 task_snapshot.snapshot_dir 已有约定保持一致：snapshot_dir(id) 也是
+# `tasks/<id>/snapshot/` 一个子目录，本组 helper 提供 monitor/samples/log 三个
+# sibling，组合起来就是 task 完整档案。
+
+def task_dir(task_id: int) -> Path:
+    """`studio_data/tasks/<task_id>/` —— task 档案根。"""
+    return TASKS_DIR / str(int(task_id))
+
+
+def task_monitor_state_path(task_id: int) -> Path:
+    """`tasks/<task_id>/monitor/state.json` —— 训练监控状态文件。
+
+    取代旧路径：
+    - `versions/<v>/monitor/task_<id>/state.json`（PP6.1，v0.5.0+，仍兼容读）
+    - `versions/<v>/monitor_state.json`（pre-PP6.1，仍兼容读）
+    - `studio_data/monitors/task_<id>/state.json`（无 version_id 兜底，仍兼容读）
+    """
+    return task_dir(task_id) / "monitor" / "state.json"
+
+
+def task_samples_dir(task_id: int) -> Path:
+    """`tasks/<task_id>/samples/` —— 训练采样图。
+
+    runtime 写：`runtime/training/phases/bootstrap.py` 把 ctx.sample_dir 指向这里。
+    API 读：`studio/api/routers/samples.py` 候选首位。
+    """
+    return task_dir(task_id) / "samples"
+
+
+def task_log_path(task_id: int) -> Path:
+    """`tasks/<task_id>/run.log` —— worker 子进程 stdout/stderr。
+
+    取代旧路径 `studio_data/logs/<task_id>.log`（仍兼容读）。
+    `project_jobs` 的日志（`studio_data/jobs/<job_id>.log`）是另一套，不动。
+    """
+    return task_dir(task_id) / "run.log"
 
 
 # ---------------------------------------------------------------------------

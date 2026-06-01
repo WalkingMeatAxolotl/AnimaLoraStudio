@@ -26,12 +26,15 @@ def _wait_for(predicate, timeout: float = 8.0, interval: float = 0.05) -> bool:
 @pytest.fixture
 def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """初始化 db + 目录 + 项目 + version + valid config 文件。"""
+    from studio.infrastructure import paths as _paths
     db_path = tmp_path / "studio.db"
     db.init_db(db_path)
     monkeypatch.setattr(projects, "PROJECTS_DIR", tmp_path / "projects")
     monkeypatch.setattr(db, "STUDIO_DB", db_path)
-    # snapshot 落 tmp_path 避免污染真实 studio_data
-    monkeypatch.setattr(task_snapshot, "STUDIO_DATA", tmp_path / "studio_data")
+    # task-scoped 档案（snapshot / monitor / samples / log）共享 paths.TASKS_DIR；
+    # 一处 monkeypatch 整组落 tmp_path 避免污染真实 studio_data。
+    monkeypatch.setattr(_paths, "TASKS_DIR", tmp_path / "studio_data" / "tasks")
+    monkeypatch.setattr(_paths, "LOGS_DIR", tmp_path / "logs")
 
     logs = tmp_path / "logs"
     configs = tmp_path / "configs"

@@ -14,12 +14,15 @@ from studio.supervisor import Supervisor
 
 @pytest.fixture
 def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from studio.infrastructure import paths as _paths
     dbfile = tmp_path / "studio.db"
     db.init_db(dbfile)
     monkeypatch.setattr(db, "STUDIO_DB", dbfile)
     monkeypatch.setattr(projects, "PROJECTS_DIR", tmp_path / "projects")
     monkeypatch.setattr(project_jobs, "JOB_LOGS_DIR", tmp_path / "jobs")
-    return {"db": dbfile, "logs": tmp_path / "logs"}
+    monkeypatch.setattr(_paths, "TASKS_DIR", tmp_path / "tasks")
+    monkeypatch.setattr(_paths, "LOGS_DIR", tmp_path / "logs")
+    return {"db": dbfile, "logs": tmp_path / "logs", "tasks": tmp_path / "tasks"}
 
 
 def _wait_until(pred, timeout: float = 5.0, step: float = 0.05) -> bool:

@@ -25,7 +25,7 @@ from ...deps import _supervisor
 from ...schemas.queue import EnqueueRequest, ReorderRequest
 from .... import db
 from ....infrastructure.event_bus import bus
-from ....paths import USER_PRESETS_DIR
+from ....paths import USER_PRESETS_DIR, task_dir
 
 router = APIRouter()
 
@@ -257,4 +257,12 @@ def delete_queue_item(task_id: int) -> dict[str, Any]:
         if task["status"] not in db.TERMINAL_STATUSES:
             raise HTTPException(400, "only terminal tasks can be deleted")
         db.delete_task(conn, task_id)
+    # task-scoped 档案（snapshot/config.yaml / monitor/state.json / samples/ /
+    # run.log）跟 task DB 行同生命周期 —— 删 task 一并清。老 task 散在
+    # studio_data/logs/<id>.log / studio_data/monitors/task_<id>/ 的不动
+    # （不写迁移脚本，留作老版本兼容性测试数据）。
+    import shutil
+    tdir = task_dir(task_id)
+    if tdir.exists():
+        shutil.rmtree(tdir, ignore_errors=True)
     return {"deleted": task_id}

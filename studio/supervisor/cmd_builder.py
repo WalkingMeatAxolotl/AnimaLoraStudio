@@ -10,8 +10,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
-from .. import db
-from ..paths import REPO_ROOT, STUDIO_DATA
+from ..paths import REPO_ROOT, task_monitor_state_path
 
 # PP10.2.b：哪些 job kind 吃 GPU。这些 kind 在训练运行中默认会被推迟，
 # 除非 secrets.queue.allow_gpu_during_train=True 显式允许并行。
@@ -67,41 +66,19 @@ def _default_cmd_builder(task: dict[str, Any], config_path: Path) -> list[str]:
 
 
 def _resolve_monitor_state_path(task: dict[str, Any]) -> Path:
-    """PP6.1 — 决定 task 的 monitor_state.json 落盘路径（按 task 隔离）。
+    """决定 task 的 monitor_state.json 落盘路径。
 
-    每个 task 落到独立子目录，避免同一 version 下多个 task 互相覆盖监控曲线
-    与采样图。旧实现按 version 落 `versions/{label}/monitor_state.json`，同
-    version 第二个 task 一跑就盖掉第一个，监控页查 task1 看到的却是 task2。
+    一律落 `studio_data/tasks/<id>/monitor/state.json`，跟 version 解耦：
+    - 删 version 不再带走 task 历史（loss 曲线 / 采样图）
+    - 同一 version 多次跑的 task 各自独立档案，用户可以拉出来对比
 
-    有 version_id：`versions/{label}/monitor/task_{id}/state.json` —— 仍挂在
-    version 目录下（删 version 时一并清理），但按 task 分目录。采样图由 runtime
-    写到 state.json 同级 `samples/`（见 bootstrap.py），samples.py 按
-    `monitor_dir/samples` 解析，于是采样图也随之按 task 隔离。
-    没有 version_id（PP1 之前的旧任务）：兜底到
-    `studio_data/monitors/task_{id}/state.json`。
-
-    兼容老任务：已跑过的老任务 monitor_state_path 早存进 DB（指向旧的 version
-    级文件），读取走存量值不受影响；samples.py 仍保留 `monitor_dir/output/samples`
-    候选，旧采样图照常可见。本改动只影响此后新启动的 task。
+    历史路径仅保留**读**兼容（老 task DB monitor_state_path 列保留旧值，
+    读端按值取，新 task 不再写这些路径）：
+    - `versions/<label>/monitor/task_<id>/state.json` —— PP6.1（v0.5.0+）
+    - `versions/<label>/monitor_state.json` —— pre-PP6.1
+    - `studio_data/monitors/task_<id>/state.json` —— 无 version_id 兜底
     """
-    vid = task.get("version_id")
-    pid = task.get("project_id")
-    if vid and pid:
-        # 不在这里 import projects/versions（避免循环）；直接通过 db 查
-        with db.connection_for() as conn:
-            row = conn.execute(
-                "SELECT projects.slug AS slug, versions.label AS label "
-                "FROM versions JOIN projects ON versions.project_id = projects.id "
-                "WHERE versions.id = ?",
-                (vid,),
-            ).fetchone()
-        if row:
-            return (
-                STUDIO_DATA / "projects" / f"{pid}-{row['slug']}"
-                / "versions" / row["label"] / "monitor" / f"task_{task['id']}"
-                / "state.json"
-            )
-    return STUDIO_DATA / "monitors" / f"task_{task['id']}" / "state.json"
+    return task_monitor_state_path(task["id"])
 
 
 def _default_job_cmd_builder(job: dict[str, Any]) -> list[str]:

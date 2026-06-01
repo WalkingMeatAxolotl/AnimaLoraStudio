@@ -139,6 +139,9 @@ def test_spawn_task_injects_trace_env_to_subprocess(tmp_path: Path,
                         lambda *a, **kw: MagicMock(start=lambda: None))
     monkeypatch.setattr("studio.supervisor.core._resolve_monitor_state_path",
                         lambda t: tmp_path / "monitor.json")
+    # task_log_path 走 paths.TASKS_DIR；改到 tmp 不污染 studio_data/
+    from studio.infrastructure import paths as _paths
+    monkeypatch.setattr(_paths, "TASKS_DIR", tmp_path / "tasks")
 
     # 假 config 文件存在
     (tmp_path / "cfg.yaml").write_text("dummy", encoding="utf-8")
@@ -190,6 +193,9 @@ def test_spawn_task_generates_bg_trace_when_task_has_none(
                         lambda *a, **kw: MagicMock(start=lambda: None))
     monkeypatch.setattr("studio.supervisor.core._resolve_monitor_state_path",
                         lambda t: tmp_path / "monitor.json")
+    # task_log_path 走 paths.TASKS_DIR；改到 tmp 不污染 studio_data/
+    from studio.infrastructure import paths as _paths
+    monkeypatch.setattr(_paths, "TASKS_DIR", tmp_path / "tasks")
     (tmp_path / "cfg.yaml").write_text("dummy", encoding="utf-8")
 
     sup = Supervisor(on_event=lambda evt: None)

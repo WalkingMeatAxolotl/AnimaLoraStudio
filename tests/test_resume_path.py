@@ -83,43 +83,61 @@ def test_cmd_builder_resume_after_monitor_state_file(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# _resolve_monitor_state_path —— per-task 隔离（同 version 多 task 串台修复）
+# _resolve_monitor_state_path —— task-scoped 档案（跟 version 解耦）
 # ---------------------------------------------------------------------------
 
 
 def test_monitor_state_path_isolated_per_task_same_version(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """同一 version 下两个 task 的 monitor_state_path 必须互不相同、各含自己的
-    task id。回归：旧实现按 version 落 monitor_state.json，第二个 task 跑起来
-    盖掉第一个的曲线 / 采样图 → 监控页查 task1 显示的是 task2。"""
-    from studio.services.projects import projects, versions
+    """同 version 下两个 task 的 monitor_state_path 互不相同、各含自己的
+    task id；都落 tasks/<id>/monitor/state.json，跟 version 标签无关。
+    回归 1：旧 pre-PP6.1 实现按 version 落 monitor_state.json，第二个 task
+    覆盖第一个 → 监控页 task1 看到 task2。
+    回归 2：PP6.1 (v0.5.0+) 仍把 task 子目录挂在 versions/<v>/monitor/ 下，
+    删 version 一并丢历史，task 之间无法对比 → 现在搬出 version 子树。"""
     from studio.supervisor.cmd_builder import _resolve_monitor_state_path
 
-    dbfile = tmp_path / "studio.db"
-    db.init_db(dbfile)
-    monkeypatch.setattr(projects, "PROJECTS_DIR", tmp_path / "projects")
-    monkeypatch.setattr(db, "STUDIO_DB", dbfile)
-    with db.connection_for(dbfile) as conn:
-        p = projects.create_project(conn, title="P")
-        v = versions.create_version(conn, project_id=p["id"], label="baseline")
-
-    base = {"version_id": v["id"], "project_id": p["id"]}
+    # version_id / project_id 现在不再参与路径计算（task-scoped）
+    base = {"version_id": 999, "project_id": 1}
     p1 = _resolve_monitor_state_path({**base, "id": 1})
     p2 = _resolve_monitor_state_path({**base, "id": 2})
 
     assert p1 != p2
-    assert "task_1" in p1.parts and "task_2" in p2.parts
-    assert "baseline" in p1.parts        # 仍挂在 version 目录下（删 version 一并清）
-    assert p1.name == "state.json"
+    assert p1.parts[-4:] == ("tasks", "1", "monitor", "state.json")
+    assert p2.parts[-4:] == ("tasks", "2", "monitor", "state.json")
 
 
-def test_monitor_state_path_old_task_without_version_fallback() -> None:
-    """PP1 之前的老任务（无 version_id）兜底到 monitors/task_{id}/state.json。"""
+def test_monitor_state_path_no_version_still_task_scoped() -> None:
+    """没 version_id 也走 tasks/<id>/monitor/state.json（之前是兜底
+    monitors/task_<id>/state.json，老 task DB 列保留旧值由读端兼容）。"""
     from studio.supervisor.cmd_builder import _resolve_monitor_state_path
 
     pth = _resolve_monitor_state_path({"id": 7})
-    assert pth.parts[-3:] == ("monitors", "task_7", "state.json")
+    assert pth.parts[-4:] == ("tasks", "7", "monitor", "state.json")
+
+
+def test_task_paths_helpers_form_a_consistent_archive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """task_monitor_state_path / task_samples_dir / task_log_path 必须落同一个
+    tasks/<id>/ 根 —— 调用方依赖这点（监控页 SSE / 删除清理）。"""
+    from studio.infrastructure import paths as _paths
+    monkeypatch.setattr(_paths, "TASKS_DIR", tmp_path / "tasks")
+
+    msp = _paths.task_monitor_state_path(42)
+    samples = _paths.task_samples_dir(42)
+    log = _paths.task_log_path(42)
+    snapshot = _paths.task_dir(42) / "snapshot" / "config.yaml"
+
+    root = tmp_path / "tasks" / "42"
+    assert msp == root / "monitor" / "state.json"
+    assert samples == root / "samples"
+    assert log == root / "run.log"
+    # 跟 task_snapshot.snapshot_dir 拼出来的路径完全一致，确保 task 档案
+    # 不被 snapshot/ 单独的 helper 拉到别处。
+    from studio.services.task_snapshot import snapshot_dir
+    assert snapshot_dir(42) == root / "snapshot"
 
 
 # ---------------------------------------------------------------------------

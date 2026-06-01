@@ -34,7 +34,15 @@ from typing import Any, Callable, Optional
 from .. import db, secrets as _secrets
 from ..services.projects import jobs as project_jobs
 from ..infrastructure.log_tail import LogTailer, MonitorStatePoller
-from ..paths import LOGS_DIR, REPO_ROOT, STUDIO_DATA, STUDIO_DB, USER_PRESETS_DIR
+from ..paths import (
+    LOGS_DIR,
+    REPO_ROOT,
+    STUDIO_DATA,
+    STUDIO_DB,
+    USER_PRESETS_DIR,
+    task_dir,
+    task_log_path,
+)
 from ..services.inference.daemon import (
     InferenceDaemon,
     STATE_STOPPED as _DAEMON_STOPPED,
@@ -517,16 +525,19 @@ class Supervisor:
 
             self._freeze_task_snapshot(int(task["id"]), cfg_path)
 
-            # PP6.1 — 计算 per-task monitor 状态文件路径
-            # 有 version_id：versions/{label}/monitor_state.json
-            # 没有：studio_data/monitors/task_{id}/state.json（兜底）
+            # task-scoped 档案：monitor state 一律落 tasks/<id>/monitor/state.json，
+            # 跟 version 解耦（之前在 versions/<label>/monitor/task_<id>/state.json，
+            # 删 version 会一并丢掉 task 历史）
             monitor_state_path = _resolve_monitor_state_path(task)
             # 提前注入到 task dict 供 cmd_builder 用，以及落库
             task = dict(task)
             task["monitor_state_path"] = str(monitor_state_path)
 
-            self._logs_dir.mkdir(parents=True, exist_ok=True)
-            log_path = self._logs_dir / f"{task['id']}.log"
+            # task-scoped 档案：日志落 tasks/<id>/run.log，跟 monitor / samples /
+            # snapshot 同根。老 task 跑过的 studio_data/logs/<id>.log 由 logs.py
+            # fallback 读，不再写新文件到那。
+            log_path = task_log_path(task["id"])
+            log_path.parent.mkdir(parents=True, exist_ok=True)
             log_fp = open(log_path, "wb")
 
             cmd = self._cmd_builder(task, cfg_path)
@@ -1159,9 +1170,12 @@ class Supervisor:
                     "pid": None,
                 }
                 if status == "failed":
-                    # B-1.6: tail jobs/<id>.log 末 12 行（含 Traceback 优先）
-                    # 拼到 error_msg，UI Task 列表能直接看到根因，不必每次翻 trace
-                    tail = _tail_log_for_error_msg(self._logs_dir / f"{cid}.log")
+                    # B-1.6: tail task run.log 末 12 行（含 Traceback 优先）
+                    # 拼到 error_msg，UI Task 列表能直接看到根因，不必每次翻 trace。
+                    # 新 task 走 tasks/<id>/run.log；老 task fallback 到旧 logs/<id>.log。
+                    new_log = task_log_path(cid)
+                    tail_src = new_log if new_log.exists() else self._logs_dir / f"{cid}.log"
+                    tail = _tail_log_for_error_msg(tail_src)
                     fields["error_msg"] = (
                         f"exit code {rc}\n{tail}" if tail else f"exit code {rc}"
                     )

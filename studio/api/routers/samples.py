@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse
 from .. import errors as _errors
 from ..responses import _thumb_response
 from ... import db
-from ...paths import OUTPUT_DIR
+from ...paths import OUTPUT_DIR, task_samples_dir
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -30,9 +30,11 @@ def get_sample(
 ) -> FileResponse:
     """采样图代理。
 
-    `?task_id=N` 给了 → 在该任务 monitor_state_path 周围按多个候选目录查找：
-    - `monitor_state.json` 同级 `samples/`（PP6.1 当初约定）
-    - `monitor_state.json` 同级 `output/samples/`（anima_train 实际写法 ——
+    `?task_id=N` 给了 → 按多个候选目录查找：
+    - **新（task-scoped）** `studio_data/tasks/<task_id>/samples/`
+    - `monitor_state.json` 同级 `samples/`（PP6.1 v0.5.0+ 老 task 兼容；
+      state file 在 versions/<v>/monitor/task_<id>/ 时，samples 也在那）
+    - `monitor_state.json` 同级 `output/samples/`（pre-PP6.1 老 task；
       sample_dir = output_dir/samples，output_dir 通常是 versions/{label}/output）
     - 同级 `output/<任意子目录>/samples/`（兜底防 anima_train 用别的 output 名）
 
@@ -55,7 +57,12 @@ def get_sample(
             raise HTTPException(404)
         monitor_dir = Path(row["monitor_state_path"]).parent
         candidates = [
+            # task-scoped 档案 —— 新 task 写在这（migration 之后唯一目标）
+            task_samples_dir(task_id) / filename,
+            # 老 task 兼容：state.json 同级 samples/（PP6.1 v0.5.0+ +
+            # c3961d9 unreleased dev 期间的过渡布局）
             monitor_dir / "samples" / filename,
+            # 老 task 兼容：output/samples/（pre-PP6.1）
             monitor_dir / "output" / "samples" / filename,
         ]
         # 再扫一层 output/<sub>/samples/ 兜底（用户改 output_dir 名字时仍能找到）

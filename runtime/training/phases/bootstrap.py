@@ -162,11 +162,14 @@ def run(ctx: TrainingContext) -> None:
     # 创建输出目录
     ctx.output_dir = Path(args.output_dir)
     ctx.output_dir.mkdir(parents=True, exist_ok=True)
-    # 采样图落到 monitor state 同级 samples/。监控 state file 由 supervisor 按
-    # task 注入（--monitor-state-file），采样图随之按 task 隔离；samples.py 优先
-    # 在 monitor_dir/samples 解析。没传（纯 CLI 训练）退回 output_dir/samples。
+    # 采样图落到 task 档案根的 samples/。supervisor 按 task 注入
+    # `--monitor-state-file <studio_data>/tasks/<id>/monitor/state.json`，
+    # sample_dir 取其上跳一层的 `samples/` —— `tasks/<id>/samples/`，跟 monitor/
+    # 同级，整组（snapshot/ monitor/ samples/ run.log）就是 task 完整档案。
+    # 没传 --monitor-state-file（纯 CLI 训练 / 兼容老版本注入路径）退回
+    # output_dir/samples，samples.py 仍可在 monitor_dir 周围多候选搜回。
     _msf = getattr(args, "monitor_state_file", None)
-    ctx.sample_dir = (Path(_msf).parent / "samples") if _msf else (ctx.output_dir / "samples")
+    ctx.sample_dir = (Path(_msf).parent.parent / "samples") if _msf else (ctx.output_dir / "samples")
     ctx.sample_dir.mkdir(parents=True, exist_ok=True)
     # supervisor 启动训练时通过 env LORA_TASK_ID 注入 queue task id（ADR 0006）。
     # 用于 ctx.state_dir() 计算 per-task state 子目录；env 不存在时 fallback unknown。
