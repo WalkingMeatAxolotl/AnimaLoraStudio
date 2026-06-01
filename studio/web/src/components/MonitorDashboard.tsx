@@ -4,7 +4,7 @@
  * Data source: GET /api/state?task_id=N 拉降采样快照 + SSE monitor_progress
  * 走 useMonitorProgress hook 做 delta merge（PR #37 增量协议）。
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
 import ImagePreviewModal from './ImagePreviewModal'
@@ -89,7 +89,7 @@ function SmoothControl({ alpha, setAlpha, min, max, step }: {
 // loss / lr / d 都复用：传 rawColor/smoothColor 自定义配色，传 yFormat 控制
 // y 轴数字格式（科学计数法 vs 定点）。
 
-function SeriesChart({ data, rawColor, smoothColor, fillColor, emaAlpha, yFormat, height, minHeight }: {
+function SeriesChart({ data, rawColor, smoothColor, fillColor, emaAlpha, yFormat, height, minHeight, axes = true }: {
   data: Array<{ step: number; value: number }>
   rawColor: string
   smoothColor: string
@@ -100,31 +100,89 @@ function SeriesChart({ data, rawColor, smoothColor, fillColor, emaAlpha, yFormat
   height?: number
   /** flex 模式下的最低像素高度；视口足够高时随父高度自动拉伸（用于主图，e.g. loss / lr） */
   minHeight?: number
+  /** 是否绘制坐标轴 + tick label + 网格线；false 时退化为纯 sparkline 适合小高度图（d value） */
+  axes?: boolean
 }) {
-  // 内部 viewBox 高度恒为 220；SVG 自身高度由 wrapper 决定（preserveAspectRatio="none" 拉伸适配）
-  const VH = 220
+  // ResizeObserver 测真实像素尺寸，viewBox 用真实尺寸 → SVG 1:1 渲染，
+  // 文本/线宽不会被 preserveAspectRatio 非等比缩放扭曲。
+  const wrapperRef = useRef<HTMLDivElement | null>(null)
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null)
+
+  useLayoutEffect(() => {
+    const el = wrapperRef.current
+    if (!el) return
+    const measure = (w: number, h: number) => {
+      if (w <= 0 || h <= 0) return
+      setSize((prev) =>
+        prev && Math.abs(prev.w - w) < 1 && Math.abs(prev.h - h) < 1 ? prev : { w, h },
+      )
+    }
+    const rect = el.getBoundingClientRect()
+    measure(rect.width, rect.height)
+    const ro = new ResizeObserver(([entry]) => {
+      const { width, height: h } = entry.contentRect
+      measure(width, h)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
   const wrapperStyle: React.CSSProperties = height != null
     ? { height, width: '100%' }
     : { flex: 1, minHeight: minHeight ?? 0, width: '100%' }
-  if (!data.length) return (
-    <div className="grid place-items-center text-fg-tertiary text-sm" style={wrapperStyle}>
-      等待数据…
+
+  return (
+    <div ref={wrapperRef} style={wrapperStyle}>
+      {!data.length ? (
+        <div className="grid place-items-center text-fg-tertiary text-sm h-full">
+          等待数据…
+        </div>
+      ) : size ? (
+        <ChartSvg
+          data={data}
+          W={size.w}
+          H={size.h}
+          rawColor={rawColor}
+          smoothColor={smoothColor}
+          fillColor={fillColor}
+          emaAlpha={emaAlpha}
+          yFormat={yFormat}
+          axes={axes}
+        />
+      ) : null}
     </div>
   )
+}
 
+function ChartSvg({ data, W, H, rawColor, smoothColor, fillColor, emaAlpha, yFormat, axes }: {
+  data: Array<{ step: number; value: number }>
+  W: number
+  H: number
+  rawColor: string
+  smoothColor: string
+  fillColor?: string
+  emaAlpha: number
+  yFormat: (v: number) => string
+  axes: boolean
+}) {
   const pts = downsample(data, 600)
   const raw = pts.map((p) => p.value)
   // alpha = 1 → 跳过 EMA，纯 raw（avoid 双重曲线视觉冗余）
   const smooth = emaAlpha >= 0.999 ? raw : calcEMA(raw, emaAlpha)
   const steps = pts.map((p) => p.step)
 
-  const W = 760, H = VH, PX = 36, PY = 14
+  // sparkline 模式（axes=false）省掉 y label 左侧空间，path 填满；
+  // 带 axes 时 PX 留 48 给 y tick（13pt 字宽约 7-8px × "0.0796" 6字 ≈ 46）；
+  // PY 留 18 给 x tick（13pt 字高 ≈ 14，再留 4px 呼吸）。
+  const PX = axes ? 48 : 0
+  const PY = axes ? 18 : 2
+  const RX = axes ? 8 : 0  // 右侧留白
   // y 范围按 smooth 算（无 smooth 时退化为 raw）—— raw 尖刺超出顶部会被裁掉，
   // 这是有意的：换取 smooth 信号占满高度、趋势可读。原 LossChart 同款行为。
   const refVals = emaAlpha >= 0.999 ? raw : smooth
   const minV = Math.min(...refVals), maxV = Math.max(...refVals)
   const range = maxV - minV || Math.max(Math.abs(maxV), 1e-9) * 1e-3 || 1e-9
-  const x = (i: number) => PX + (i / Math.max(1, pts.length - 1)) * (W - PX - 8)
+  const x = (i: number) => PX + (i / Math.max(1, pts.length - 1)) * (W - PX - RX)
   const y = (v: number) => PY + (1 - (v - minV) / range) * (H - PY - PY)
 
   const smoothPath = smooth.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join('')
@@ -144,17 +202,22 @@ function SeriesChart({ data, rawColor, smoothColor, fillColor, emaAlpha, yFormat
   const lastY = y(smooth[smooth.length - 1])
   const showSmoothLayer = emaAlpha < 0.999
 
+  // viewBox 与真实尺寸 1:1，省掉 preserveAspectRatio="none" 的非等比缩放——
+  // 文字/线宽在真实像素下渲染，不再被父容器宽高比扭曲。
   return (
-    <div style={wrapperStyle}>
-    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width: '100%', height: '100%', display: 'block' }}>
-      {/* axis lines */}
-      <line x1={PX} y1={PY} x2={PX} y2={H - PY} stroke="var(--border-subtle)" />
-      <line x1={PX} y1={H - PY} x2={W - 8} y2={H - PY} stroke="var(--border-subtle)" />
-      {/* grid */}
-      {[0.25, 0.5, 0.75].map((t) => (
-        <line key={t} x1={PX} y1={PY + t * (H - 2 * PY)} x2={W - 8} y2={PY + t * (H - 2 * PY)}
-          stroke="var(--border-subtle)" strokeDasharray="3 3" />
-      ))}
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: '100%', display: 'block' }}>
+      {axes && (
+        <>
+          {/* axis lines */}
+          <line x1={PX} y1={PY} x2={PX} y2={H - PY} stroke="var(--border-subtle)" />
+          <line x1={PX} y1={H - PY} x2={W - RX} y2={H - PY} stroke="var(--border-subtle)" />
+          {/* grid */}
+          {[0.25, 0.5, 0.75].map((t) => (
+            <line key={t} x1={PX} y1={PY + t * (H - 2 * PY)} x2={W - RX} y2={PY + t * (H - 2 * PY)}
+              stroke="var(--border-subtle)" strokeDasharray="3 3" />
+          ))}
+        </>
+      )}
       {/* area (smooth fill, optional) */}
       {areaPath && <path d={areaPath} fill={fillColor} opacity="0.5" />}
       {/* raw —— smooth 模式下淡显，无 smooth 模式下当主线 */}
@@ -173,18 +236,25 @@ function SeriesChart({ data, rawColor, smoothColor, fillColor, emaAlpha, yFormat
       )}
       {/* last point */}
       <circle cx={x(smooth.length - 1)} cy={lastY} r="4" fill={smoothColor} stroke="var(--bg-surface)" strokeWidth="2" />
-      {/* y axis labels */}
-      {yTicks.map(({ v, y: yt, label }) => (
-        <text key={v} x={PX - 4} y={yt + 3.5} fontSize="9" fill="var(--fg-tertiary)"
-          fontFamily="var(--font-mono)" textAnchor="end">{label}</text>
-      ))}
-      {/* x axis labels */}
-      {xTicks.map(({ x: xt, label }) => (
-        <text key={label} x={xt} y={H - 2} fontSize="9" fill="var(--fg-tertiary)"
-          fontFamily="var(--font-mono)" textAnchor="middle">{label}</text>
-      ))}
+      {axes && (
+        <>
+          {/* y axis labels —— y offset +4.5 = fontSize/2 + 准基线微调，把字垂直居中到 tick */}
+          {yTicks.map(({ v, y: yt, label }) => (
+            <text key={v} x={PX - 4} y={yt + 4.5} fontSize="13" fill="var(--fg-tertiary)"
+              fontFamily="var(--font-mono)" textAnchor="end">{label}</text>
+          ))}
+          {/* x axis labels —— 首/末两 tick 在 SVG 边缘上，middle 锚点会让一半字宽溢出被裁，
+              改 start/end 锚点把字往内推；中间 tick 维持 middle 居中。 */}
+          {xTicks.map(({ x: xt, label }, i, arr) => {
+            const anchor = i === 0 ? 'start' : i === arr.length - 1 ? 'end' : 'middle'
+            return (
+              <text key={label} x={xt} y={H - 3} fontSize="13" fill="var(--fg-tertiary)"
+                fontFamily="var(--font-mono)" textAnchor={anchor}>{label}</text>
+            )
+          })}
+        </>
+      )}
     </svg>
-    </div>
   )
 }
 
@@ -278,10 +348,11 @@ function SampleViewer({ samples, taskId }: {
 
       {/* 大图 —— 当前选中
           img 用 absolute inset-0 脱离 flow，避免 sample 图原始分辨率(1024×*)
-          顶起父容器 min-content；letterbox 由 object-contain 处理 */}
+          顶起父容器 min-content；letterbox 由 object-contain 处理。
+          minHeight 220 是底线（letterbox 视觉勉强够），父 row 高度够时由 flex-1 撑满。 */}
       <div
         className="bg-sunken rounded-sm overflow-hidden relative flex-1 min-h-0"
-        style={{ minHeight: 320 }}
+        style={{ minHeight: 220 }}
       >
         <img
           key={fullUrl}
@@ -367,8 +438,6 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
     ? optimizerMetricsHistory[optimizerMetricsHistory.length - 1]
     : null
   const lastD = lastOptimizerMetrics?.d ?? null
-  const lastBaseLr = lastOptimizerMetrics?.base_lr ?? null
-  const lastEffectiveLr = lastOptimizerMetrics?.effective_lr ?? null
   const fmtLr = (v: number | null) => {
     if (v === null) return '--'
     if (v < 0.0001) return v.toExponential(1)
@@ -463,23 +532,32 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
       </div>
 
       {/* 左：采样图（竖） / 右：loss → LR
-          grid flex-1 撑满剩余高；不加 min-h-0 → 内部 minHeight 累计超过视口时由外层 overflow-y-auto 滚 */}
-      <div className="grid grid-cols-[1fr_1.5fr] gap-3.5 flex-1">
+          gridTemplateRows: '1fr' → row 跟随 flex-1 撑满，避免 row 默认 auto 在大屏留空白；
+          右卡 minHeight 形成下界，flex-1 在 row 高度 > 3*min+gap 时均分扩展；
+          总 min 超视口时由外层 overflow-y-auto 滚 */}
+      <div
+        className="grid grid-cols-[1fr_1.5fr] gap-3.5 flex-1"
+        style={{ gridTemplateRows: '1fr' }}
+      >
         {/* 左：采样图 */}
-        <div className="card p-0 overflow-hidden flex flex-col">
+        <div className="card p-0 overflow-hidden flex flex-col min-h-0">
           <div className="px-3.5 py-2.5 border-b border-subtle flex items-center justify-between shrink-0">
             <span className="text-sm font-semibold">采样</span>
             <span className="text-xs text-fg-tertiary font-mono">{samples.length} 张</span>
           </div>
-          <div className="flex-1 p-3 flex flex-col">
+          <div className="flex-1 p-3 flex flex-col min-h-0">
             <SampleViewer samples={samples} taskId={taskId} />
           </div>
         </div>
 
-        {/* 右：loss + lr，两卡 flex-1 平分剩余高（minHeight 数值兜底） */}
-        <div className="flex flex-col gap-3.5">
-          <div className="card p-4 flex-1 flex flex-col">
-            <div className="flex items-center justify-between mb-2.5 shrink-0">
+        {/* 右：loss / lr / d 三卡（d 可选），flex-1 等高平分但夹在 [140, 300] 之间。
+            每张卡同结构：header 单行 + 占满 flex-1 的 chart。LR 不再夹带任何 d 信息
+            （avoid 之前 d-block 作为 LR 内 shrink-0 死成本顶起 LR card min 的问题）。
+            minHeight 140 = 可读下界（再小 chart 不易读，触发外层滚动条而非继续压缩）；
+            maxHeight 300 = 防止 4K / 大屏上卡片被拉到失衡的高度（剩余空间留给左列采样图）。 */}
+        <div className="flex flex-col gap-3.5 min-h-0">
+          <div className="card p-4 flex-1 flex flex-col" style={{ minHeight: 140, maxHeight: 300 }}>
+            <div className="flex items-center justify-between mb-2 shrink-0">
               <span className="text-sm font-semibold">loss</span>
               <SmoothControl alpha={emaAlpha} setAlpha={setEmaAlpha} min={0.001} max={0.3} step={0.001} />
             </div>
@@ -490,26 +568,14 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
               fillColor="var(--accent-soft)"
               emaAlpha={emaAlpha}
               yFormat={(v) => v.toFixed(4)}
-              minHeight={240}
+              minHeight={60}
             />
           </div>
 
-          <div className="card p-4 flex-1 flex flex-col">
-            <div className="shrink-0">
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-sm font-semibold">learning rate</span>
-                <SmoothControl alpha={lrAlpha} setAlpha={setLrAlpha} min={0.005} max={1} step={0.005} />
-              </div>
-              <div className="text-2xl font-semibold font-mono tabular-nums text-warn">
-                {fmtLr(lastLr)}
-              </div>
-              {lastD != null && (
-                <div className="mt-1.5 mb-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-fg-tertiary font-mono">
-                  <span>d {fmtMetric(lastD)}</span>
-                  {lastBaseLr != null && <span>base {fmtMetric(lastBaseLr)}</span>}
-                  {lastEffectiveLr != null && <span>eff {fmtMetric(lastEffectiveLr)}</span>}
-                </div>
-              )}
+          <div className="card p-4 flex-1 flex flex-col" style={{ minHeight: 140, maxHeight: 300 }}>
+            <div className="flex items-center justify-between mb-2 shrink-0">
+              <span className="text-sm font-semibold">learning rate</span>
+              <SmoothControl alpha={lrAlpha} setAlpha={setLrAlpha} min={0.005} max={1} step={0.005} />
             </div>
             <SeriesChart
               data={lrSeries}
@@ -517,27 +583,31 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
               smoothColor="var(--warn)"
               emaAlpha={lrAlpha}
               yFormat={fmtLr}
-              minHeight={50}
+              minHeight={60}
             />
-            {dSeries.length >= 2 && (
-              // d 块 flex:1 跟 LR 平分剩余高（不固定 height，否则 axes 在小视口
-              // 被 preserveAspectRatio="none" 压成不可读；minHeight 50 兜底同步 LR）
-              <div className="mt-3 flex flex-col" style={{ flex: 1, minHeight: 0 }}>
-                <div className="flex items-center justify-between mb-1 shrink-0">
-                  <span className="text-xs text-fg-tertiary font-mono">d value</span>
-                  <SmoothControl alpha={dAlpha} setAlpha={setDAlpha} min={0.005} max={1} step={0.005} />
-                </div>
-                <SeriesChart
-                  data={dSeries}
-                  rawColor="rgba(237,107,58,0.30)"
-                  smoothColor="var(--accent)"
-                  emaAlpha={dAlpha}
-                  yFormat={fmtMetric}
-                  minHeight={50}
-                />
-              </div>
-            )}
           </div>
+
+          {dSeries.length >= 2 && (
+            <div className="card p-4 flex-1 flex flex-col" style={{ minHeight: 140, maxHeight: 300 }}>
+              <div className="flex items-center justify-between mb-2 shrink-0">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-sm font-semibold">d</span>
+                  <span className="text-xs font-mono text-fg-tertiary tabular-nums">
+                    {fmtMetric(lastD)}
+                  </span>
+                </div>
+                <SmoothControl alpha={dAlpha} setAlpha={setDAlpha} min={0.005} max={1} step={0.005} />
+              </div>
+              <SeriesChart
+                data={dSeries}
+                rawColor="rgba(237,107,58,0.30)"
+                smoothColor="var(--accent)"
+                emaAlpha={dAlpha}
+                yFormat={fmtMetric}
+                minHeight={60}
+              />
+            </div>
+          )}
         </div>
       </div>
     </div>
