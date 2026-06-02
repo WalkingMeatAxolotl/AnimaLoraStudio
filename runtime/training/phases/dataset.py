@@ -76,24 +76,32 @@ def run(ctx: TrainingContext) -> None:
             logger.info(f"正则数据集: {reg_data_dir} ({len(reg_base)} 样本, per-folder repeat{weight_info}){cap_preview}")
 
     # 缓存 VAE latents（在 repeat 之前）
-    # 为节省显存：编码 VAE latent 时把 Transformer 暂时移到 CPU，
-    # 避免 8GB 小显存上模型 + VAE 同时占用导致 OOM。
+    # cpu_offload: 编码 VAE latent 时把 Transformer 暂时移到 CPU，
+    # 避免小显存上模型 + VAE 同时占用导致 OOM。
     ctx.use_cached = getattr(args, "cache_latents", False)
+    ctx.use_cpu_offload = getattr(args, "cpu_offload", False)
+    if ctx.use_cpu_offload:
+        ctx.model._cpu_offload = True  # signal for sampling.py VAE decode
     if ctx.use_cached:
-        _model_was_on = ctx.model
-        try:
-            import gc
-            ctx.model = ctx.model.cpu()
-            torch.cuda.empty_cache()
-            gc.collect()
-            logger.info("已将 Transformer 移至 CPU 以释放显存用于 VAE 编码")
+        if ctx.use_cpu_offload:
+            _model_was_on = ctx.model
+            try:
+                import gc
+                ctx.model = ctx.model.cpu()
+                torch.cuda.empty_cache()
+                gc.collect()
+                logger.info("已将 Transformer 移至 CPU 以释放显存用于 VAE 编码")
+                ctx.dataset = CachedLatentDataset(ctx.dataset, ctx.vae, ctx.device, ctx.dtype)
+                if ctx.reg_dataset is not None:
+                    ctx.reg_dataset = CachedLatentDataset(ctx.reg_dataset, ctx.vae, ctx.device, ctx.dtype)
+            finally:
+                ctx.model = _model_was_on.to(ctx.device, dtype=ctx.dtype)
+                torch.cuda.empty_cache()
+                logger.info("Transformer 已移回 GPU")
+        else:
             ctx.dataset = CachedLatentDataset(ctx.dataset, ctx.vae, ctx.device, ctx.dtype)
             if ctx.reg_dataset is not None:
                 ctx.reg_dataset = CachedLatentDataset(ctx.reg_dataset, ctx.vae, ctx.device, ctx.dtype)
-        finally:
-            ctx.model = _model_was_on.to(ctx.device, dtype=ctx.dtype)
-            torch.cuda.empty_cache()
-            logger.info("Transformer 已移回 GPU")
 
     # repeat: 主数据集和正则数据集均通过文件夹名 Kohya 风格 repeat（如 5_concept），无需全局 repeat
     if ctx.reg_dataset is not None:
@@ -127,14 +135,14 @@ def run(ctx: TrainingContext) -> None:
         )
 
     # 训练前自检：VAE encode->decode 循环（快速排除 VAE/scale/shape 问题）
-    # 小显存设备：roundtrip 前把 Transformer 移到 CPU 释放显存
     try:
         if len(ctx.base_dataset) > 0:
             from PIL import Image
             _model_saved = ctx.model
-            ctx.model = ctx.model.cpu()
-            torch.cuda.empty_cache()
-            gc.collect()
+            if ctx.use_cpu_offload:
+                ctx.model = ctx.model.cpu()
+                torch.cuda.empty_cache()
+                gc.collect()
             try:
                 item0 = ctx.base_dataset[0]
                 pixels0 = item0["pixel_values"].unsqueeze(0).to(ctx.device, dtype=ctx.dtype)  # [1,3,H,W]

@@ -207,14 +207,16 @@ def sample_image(
     )
 
     # VAE 解码
-    # 小显存设备：VAE decode 前把 Transformer 移到 CPU 释放显存
+    # cpu_offload: VAE decode 前把 Transformer 移到 CPU 释放显存
     latents = x.to(device=device, dtype=dtype)
     try:
-        model_device = next(model.parameters()).device
-        model = model.cpu()
-        torch.cuda.empty_cache()
-        import gc as _gc
-        _gc.collect()
+        _do_offload = getattr(model, "_cpu_offload", False)
+        if _do_offload:
+            model_device = next(model.parameters()).device
+            model = model.cpu()
+            torch.cuda.empty_cache()
+            import gc as _gc
+            _gc.collect()
         images = vae.model.decode(latents, vae.scale)
         images = images.squeeze(2)  # [B,C,H,W]
         images = (images.clamp(-1, 1) + 1) / 2
@@ -224,8 +226,9 @@ def sample_image(
         img = (img * 255).clip(0, 255).astype(np.uint8)
 
         # 恢复 model 到 GPU
-        model = model.to(model_device, dtype=dtype)
-        torch.cuda.empty_cache()
+        if _do_offload:
+            model = model.to(model_device, dtype=dtype)
+            torch.cuda.empty_cache()
         model.train()
         return Image.fromarray(img)
     except Exception as e:
