@@ -48,6 +48,40 @@ def test_bool_uses_paired_flag() -> None:
     assert parser.parse_args(["--enabled"]).enabled is True
 
 
+def test_bool_field_named_no_x_uses_paired_store_actions() -> None:
+    """字段名以 no_ 开头时退化成两个互斥 store_true/store_false flag。
+
+    py3.13+ argparse 拒绝把 --no-X 塞给 BooleanOptionalAction（issue #170）。
+    本用例 codify 退化路径：默认值保留 / --no-X 设 True / --X 设 False。
+    """
+    from studio.schema import TrainingConfig
+
+    parser = bridge.build_parser(TrainingConfig, add_config_arg=False)
+    # 默认 True（schema 里 no_progress 默认 True）
+    assert parser.parse_args([]).no_progress is True
+    # --no-progress 显式打开（向后兼容旧 CLI 习惯）
+    assert parser.parse_args(["--no-progress"]).no_progress is True
+    # --progress 关闭 → no_progress=False
+    assert parser.parse_args(["--progress"]).no_progress is False
+
+
+def test_help_tolerates_percent_in_description() -> None:
+    """description 含裸 `%` 时 format_help 不应崩，且输出仍是单个 `%`。
+
+    argparse 把 description 当 printf 模板做 `% params` 展开，未 escape 的
+    `%` 会触发 ValueError。Schema description 同时供 Web UI / i18n 使用，
+    不应被 argparse 语义污染 —— bridge 一层兜底转义。
+    """
+    class _PctSample(BaseModel):
+        ratio: float = Field(0.5, description="新值占 90%；越大响应越快")
+
+    parser = bridge.build_parser(_PctSample, add_config_arg=False)
+    text = parser.format_help()  # 修复前在 py3.10+ 直接 ValueError
+    # 用户看到的仍是单个 %（不是 %%）
+    assert "占 90%；" in text
+    assert "%%" not in text
+
+
 def test_literal_emits_choices() -> None:
     parser = bridge.build_parser(_Sample, add_config_arg=False)
     assert parser.parse_args(["--mode", "b"]).mode == "b"

@@ -81,7 +81,12 @@ def add_argument_for(parser: argparse.ArgumentParser, name: str, field: FieldInf
     flag = _flag_for(name, field)
     annotation, is_optional = _unwrap_optional(field.annotation)
     default = _default_value(field)
-    help_text = (field.description or "").strip()
+    # argparse format_help 把 description 当 printf 模板做 `% params` 展开，
+    # description 里裸 `%`（如 "占 90%"）会让 --help 直接 ValueError。
+    # 项目里 schema description 同时给 Web UI / i18n 用，不应被 argparse 语义污染，
+    # 因此在 bridge 一层把所有裸 `%` 转义 —— 全项目无人使用 %(default)s 这类
+    # argparse named substitution，escape 不会破坏既有用法。
+    help_text = (field.description or "").strip().replace("%", "%%")
 
     # bool ----------------------------------------------------------------
     if annotation is bool:
@@ -94,13 +99,29 @@ def add_argument_for(parser: argparse.ArgumentParser, name: str, field: FieldInf
             actual_default = default  # keep None
         else:
             actual_default = bool(default) if default is not None else False
-        parser.add_argument(
-            flag,
-            dest=name,
-            action=argparse.BooleanOptionalAction,
-            default=actual_default,
-            help=help_text or None,
-        )
+        # Python 3.13+ 的 argparse 拒绝把 --no-X 形式的 flag 传给
+        # BooleanOptionalAction（会自动衍生 --no-no-X 与字段重名）。
+        # 字段名以 no_ 开头时退化为一对互斥 store_true/store_false：
+        #   --no-X    → store_true  (no_X = True)
+        #   --X       → store_false (no_X = False)
+        if name.startswith("no_") and len(name) > 3:
+            positive = "--" + name[3:].replace("_", "-")
+            parser.add_argument(
+                flag,
+                dest=name,
+                action="store_true",
+                default=actual_default,
+                help=help_text or None,
+            )
+            parser.add_argument(positive, dest=name, action="store_false", help=None)
+        else:
+            parser.add_argument(
+                flag,
+                dest=name,
+                action=argparse.BooleanOptionalAction,
+                default=actual_default,
+                help=help_text or None,
+            )
         return
 
     # Literal -------------------------------------------------------------
