@@ -94,6 +94,15 @@ class AnimaLycorisAdapter:
         if self.rs_lora:
             extra["rs_lora"] = True
 
+        # algo='lora' (LoCon) 默认走 bypass_mode：lycoris LoConModule 默认 forward 会
+        # rebuild ΔW=up@down (out,in) 再多跑一次 F.linear，等于每层 ~2× FLOPs。
+        # bypass_mode=True 走 bypass_forward_diff = org_forward(x) + lora_up(lora_down(x))，
+        # 是 LoRA 论文 + sd-scripts + PEFT 的标准 forward；对外行为完全等价但 ~2× 快。
+        # DoRA(weight_decompose) 路径数学上必须 rebuild —— lycoris bypass forward 不走 wd
+        # 分支，会让 DoRA 静默失效；这里 guard。参考 lycoris docs/Network-Args.md "Bypass Mode"。
+        if self.algo == "lora" and not self.weight_decompose:
+            extra["bypass_mode"] = True
+
         self.network = LycorisNetwork(
             model,
             multiplier=1.0,
@@ -137,7 +146,8 @@ class AnimaLycorisAdapter:
         self._injected_model = model
 
         n = len(self.network.loras)
-        logger.info(f"注入 {self.algo.upper()} 到 {n} 层（lycoris-lora）")
+        forward_path = "bypass (low-rank)" if extra.get("bypass_mode") else "rebuild (ΔW)"
+        logger.info(f"注入 {self.algo.upper()} 到 {n} 层（lycoris-lora, forward={forward_path}）")
         if self.use_lokr:
             full_matrix = [lora for lora in self.network.loras if getattr(lora, "use_w2", False)]
             if full_matrix:
