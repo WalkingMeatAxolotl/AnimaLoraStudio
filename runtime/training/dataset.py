@@ -570,20 +570,32 @@ class CachedLatentDataset(Dataset):
         return True
 
     def _build_cache(self, vae, device, dtype):
-        """构建/加载 npz 缓存"""
+        """构建/加载 npz 缓存。
+
+        per-folder repeat（5_concept 前缀）让 ImageDataset.samples 里同一张图重复 N 次，
+        但 npz 落点是 img_path.with_suffix(".npz") — 每张唯一图只对应一个 npz。
+        按 npz_path 去重，每张图最多 encode 一次；否则同 npz 会被反复覆盖写 N 次
+        （flip_augment 模式下再乘 2），首次构建 cache 时 80% 的 VAE encode 都是浪费。
+        """
         logger.info("检查 VAE latent 缓存...")
         to_encode = []
+        seen_npz = set()
+        unique_total = 0
         for i, sample in enumerate(self.samples):
             img_path = sample["image"]
             npz_path = self._get_npz_path(img_path)
+            if npz_path in seen_npz:
+                continue
+            seen_npz.add(npz_path)
+            unique_total += 1
             if not self._is_cache_valid(img_path, npz_path):
                 to_encode.append(i)
 
         if to_encode:
-            logger.info(f"需要编码 {len(to_encode)}/{len(self.samples)} 张图像...")
+            logger.info(f"需要编码 {len(to_encode)}/{unique_total} 张图像...")
             self._encode_and_save(to_encode, vae, device, dtype)
         else:
-            logger.info(f"所有 {len(self.samples)} 张图像已缓存")
+            logger.info(f"所有 {unique_total} 张图像已缓存")
 
         self._fill_bucket_for_index()
 

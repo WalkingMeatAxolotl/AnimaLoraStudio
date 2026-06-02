@@ -315,6 +315,51 @@ def test_trigger_skips_empty_prompt_strings() -> None:
 
 
 # ---------------------------------------------------------------------------
+# bootstrap_phase: _resolve_sample_seed
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_sample_seed_zero_is_replaced_with_random_positive() -> None:
+    """sample_seed=0 → 抽一个 [1, 2**31-1] 范围的具体 seed 写回 args。"""
+    from runtime.training.phases.bootstrap import _resolve_sample_seed
+
+    args = argparse.Namespace(sample_seed=0)
+    _resolve_sample_seed(args)
+    assert isinstance(args.sample_seed, int)
+    assert 1 <= args.sample_seed <= 2**31 - 1
+
+
+def test_resolve_sample_seed_explicit_value_kept() -> None:
+    """用户显式给的非 0 seed → 不动，保证 reproducibility。"""
+    from runtime.training.phases.bootstrap import _resolve_sample_seed
+
+    args = argparse.Namespace(sample_seed=42)
+    _resolve_sample_seed(args)
+    assert args.sample_seed == 42
+
+
+def test_resolve_sample_seed_idempotent_after_resolve() -> None:
+    """二次调用不再覆盖已 resolved 的 seed（pause/resume 路径关键）。"""
+    from runtime.training.phases.bootstrap import _resolve_sample_seed
+
+    args = argparse.Namespace(sample_seed=0)
+    _resolve_sample_seed(args)
+    first = args.sample_seed
+    _resolve_sample_seed(args)
+    assert args.sample_seed == first
+
+
+def test_resolve_sample_seed_missing_attr_treated_as_zero() -> None:
+    """args 没有 sample_seed 字段 → 当成 0 抽一个具体值塞进去。"""
+    from runtime.training.phases.bootstrap import _resolve_sample_seed
+
+    args = argparse.Namespace()
+    _resolve_sample_seed(args)
+    assert isinstance(args.sample_seed, int)
+    assert args.sample_seed > 0
+
+
+# ---------------------------------------------------------------------------
 # supervisor._clear_pause_artifacts
 # ---------------------------------------------------------------------------
 
