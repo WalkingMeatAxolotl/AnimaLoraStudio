@@ -58,6 +58,13 @@ def run_sample(
     s_sched = str(getattr(args, "sample_scheduler", "simple") or "simple")
 
     with optimizer_eval_mode(ctx.optimizer):
+        # ── 小显存：确保 model 和 qwen_model 在 GPU 上 ──
+        if next(ctx.model.parameters()).device.type != "cuda":
+            ctx.model = ctx.model.to(ctx.device, dtype=ctx.dtype)
+        if next(ctx.qwen_model.parameters()).device.type != "cuda":
+            ctx.qwen_model = ctx.qwen_model.to(ctx.device, dtype=ctx.dtype)
+            torch.cuda.empty_cache()
+
         ctx.model.eval()
         if s_seed:
             torch.manual_seed(s_seed + seed_offset)
