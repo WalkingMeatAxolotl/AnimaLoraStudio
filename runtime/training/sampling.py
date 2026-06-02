@@ -63,8 +63,8 @@ def _flow_sigmas_simple(steps: int, *, shift: float = 3.0, timesteps: int = 1000
 
 
 @torch.no_grad()
-def sample_image(
-    model, vae, qwen_model, qwen_tokenizer, t5_tokenizer,
+def sample_latents(
+    model, qwen_model, qwen_tokenizer, t5_tokenizer,
     prompt, height=1024, width=1024, steps=25, cfg_scale=4.0,
     negative_prompt=None,
     sampler_name: str = "er_sde",
@@ -74,27 +74,21 @@ def sample_image(
     step_callback=None,
     seed: int | None = None,
 ):
-    """训练时采样预览（尽量对齐 ComfyUI KSampler）
+    """采样生成 latent（不含 VAE decode）。
 
-    Args:
-        negative_prompt: 负面提示词，默认使用标准负面提示词
-        sampler_name: 采样器（推荐：er_sde）
-        scheduler: 调度器（推荐：simple）
+    与 sample_image 的区别：只跑到采样结束，返回 latent tensor，
+    VAE decode 由调用方自行处理。适合两阶段场景：
+      1. model 在 GPU → 采样所有 latent → 存到内存
+      2. model offload 到 CPU → 批量 VAE decode
+
+    Returns:
+        latents tensor on `device`, dtype=torch.float32
     """
-    import numpy as np
-    from PIL import Image
     model.eval()
 
     logger.info(f"[Debug] Sampling start. Prompt: {prompt[:50]}...")
 
-    # Check VAE scale
-    if isinstance(vae.scale, list) and len(vae.scale) == 2:
-        m, s = vae.scale
-        logger.info(f"[Debug] VAE scale: mean_shape={m.shape}, std_inv_shape={s.shape}")
-        logger.info(f"[Debug] VAE scale values: mean={m.mean().item():.4f}, std_inv={s.mean().item():.4f}")
-
-    # negative_prompt=None 时用空字符串（与 ComfyUI 一致：用户没填就是空）。
-    # 之前硬编码一长串默认负面会和 ComfyUI 出图对不上（CFG 锚点不同）。
+    # negative_prompt=None 时用空字符串（与 ComfyUI 一致：用户没填就是空）
     if negative_prompt is None:
         negative_prompt = ""
 
@@ -109,8 +103,6 @@ def sample_image(
         t5_ids = t5_ids.to(device)
         t5_attn = t5_attn.to(device)
         t5_w = t5_w.to(device, dtype=torch.float32)
-        # t5_w 透传到 preprocess_text_embeds 内乘到 LLMAdapter 输出上（与 ComfyUI 原生
-        # `comfy/ldm/anima/model.py:198-206` 对齐）。漏传 → `(tag:w)` 语法静默失效。
         cross_cond = model.preprocess_text_embeds(qwen_embeds, t5_ids, t5xxl_weights=t5_w)
         if cross_cond.shape[1] < 512:
             cross_cond = F.pad(cross_cond, (0, 0, 0, 512 - cross_cond.shape[1]))
@@ -122,7 +114,7 @@ def sample_image(
         t5_ids_uncond = t5_ids_uncond.to(device)
         t5_attn_uncond = t5_attn_uncond.to(device)
         t5_w_uncond = t5_w_uncond.to(device, dtype=torch.float32)
-        cross_uncond = model.preprocess_text_embeds(qwen_embeds_uncond, t5_ids_uncond, t5xxl_weights=t5_w_uncond)
+        cross_uncond = model.preprocess_text_embeds(qwen_embeds_uncond, t5_ids_uncond)
         if cross_uncond.shape[1] < 512:
             cross_uncond = F.pad(cross_uncond, (0, 0, 0, 512 - cross_uncond.shape[1]))
 
@@ -137,15 +129,7 @@ def sample_image(
     sigmas = _flow_sigmas_simple(steps, shift=3.0, device=device)
 
     # 初始化噪声（ComfyUI CONST.noise_scaling: x = sigma*noise + (1-sigma)*latent_image；txt2img latent_image=0）
-    # 与 ComfyUI `comfy/sample.prepare_noise` 对齐：CPU 上 torch.randn(generator=seed) 再 to(device)，
-    # 保证不同 GPU / CUDA 版本下同 seed 出同图（旧版 device=cuda 走 cuRAND，跨硬件不一致）。
-    noise_gen = None
-    if seed is not None:
-        noise_gen = torch.Generator(device="cpu").manual_seed(int(seed))
-    x = torch.randn(
-        1, 16, 1, lat_h, lat_w,
-        device="cpu", dtype=torch.float32, generator=noise_gen,
-    ).to(device) * float(sigmas[0])
+    x = torch.randn(1, 16, 1, lat_h, lat_w, device=device, dtype=torch.float32) * float(sigmas[0])
     logger.info(f"[Debug] Latents init: {x.shape}, mean={x.mean().item():.4f}, std={x.std().item():.4f}")
 
     pad_mask = torch.zeros(1, 1, lat_h, lat_w, device=device, dtype=dtype)
@@ -177,7 +161,7 @@ def sample_image(
     if sampler_fn is not None:
         x = sampler_fn(
             denoise_fn, x, sigmas,
-            seed=seed, s_noise=1.0, max_stage=3,
+            seed=None, s_noise=1.0, max_stage=3,
             step_callback=step_callback,
         )
     else:
@@ -195,18 +179,56 @@ def sample_image(
             d = (x - denoised) / max(sigma, 1e-6)
             x = x + d * (sigma_next - sigma)
 
+    logger.info(f"[Debug] Final latents: mean={x.mean().item():.4f}, std={x.std().item():.4f}")
+    return x
+
+
+@torch.no_grad()
+def sample_image(
+    model, vae, qwen_model, qwen_tokenizer, t5_tokenizer,
+    prompt, height=1024, width=1024, steps=25, cfg_scale=4.0,
+    negative_prompt=None,
+    sampler_name: str = "er_sde",
+    scheduler: str = "simple",
+    device="cuda",
+    dtype=torch.bfloat16,
+    step_callback=None,
+):
+    """训练时采样预览（尽量对齐 ComfyUI KSampler）—— 便捷封装，内部调 sample_latents + VAE decode。"""
+    import numpy as np
+    from PIL import Image
+
+    x = sample_latents(
+        model, qwen_model, qwen_tokenizer, t5_tokenizer,
+        prompt=prompt, height=height, width=width, steps=steps,
+        cfg_scale=cfg_scale, negative_prompt=negative_prompt,
+        sampler_name=sampler_name, scheduler=scheduler,
+        device=device, dtype=dtype, step_callback=step_callback,
+    )
+
     # VAE 解码
+    # cpu_offload: VAE decode 前把 Transformer 移到 CPU 释放显存
     latents = x.to(device=device, dtype=dtype)
-    logger.info(f"[Debug] Final latents: mean={latents.mean().item():.4f}, std={latents.std().item():.4f}")
     try:
+        _do_offload = getattr(model, "_cpu_offload", False)
+        if _do_offload:
+            model_device = next(model.parameters()).device
+            model = model.cpu()
+            torch.cuda.empty_cache()
+            import gc as _gc
+            _gc.collect()
         images = vae.model.decode(latents, vae.scale)
         images = images.squeeze(2)  # [B,C,H,W]
         images = (images.clamp(-1, 1) + 1) / 2
 
-        # 转 PIL
+        # 转 PIL（在 CPU 上完成，不依赖 model）
         img = images[0].permute(1, 2, 0).cpu().float().numpy()
         img = (img * 255).clip(0, 255).astype(np.uint8)
 
+        # 恢复 model 到 GPU
+        if _do_offload:
+            model = model.to(model_device, dtype=dtype)
+            torch.cuda.empty_cache()
         model.train()
         return Image.fromarray(img)
     except Exception as e:

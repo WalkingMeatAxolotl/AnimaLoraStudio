@@ -73,6 +73,10 @@ def run(ctx: TrainingContext) -> None:
             with torch.no_grad():
                 # 参考指南/ComfyUI：Qwen 通道不传权重；T5 通道提供 token 权重
                 qwen_texts = [_build_qwen_text_from_prompt(c) for c in captions]
+                # cpu_offload: 确保 qwen_model 在 GPU（上一步可能已移到 CPU）
+                if getattr(args, "cpu_offload", False):
+                    if next(ctx.qwen_model.parameters()).device.type != "cuda":
+                        ctx.qwen_model = ctx.qwen_model.to(ctx.device, dtype=ctx.dtype)
                 qwen_emb, qwen_attn = encode_qwen(ctx.qwen_model, ctx.qwen_tok, qwen_texts, ctx.device)
                 t5_ids, t5_attn, t5_w = tokenize_t5_weighted(ctx.t5_tok, captions, max_length=512)
                 t5_ids = t5_ids.to(ctx.device)
@@ -93,6 +97,10 @@ def run(ctx: TrainingContext) -> None:
                             _bucket = _b
                             break
                     cross = cross[:, :_bucket, :].contiguous()
+
+            # cpu_offload: 文本编码完成，移走 qwen_model 释放显存给 forward/backward
+            if getattr(args, "cpu_offload", False):
+                ctx.qwen_model = ctx.qwen_model.cpu()
 
             # Flow Matching：统一通过 timestep_sampler plugin 接口采样
             # （baseline = 4 种 mode；adaptive = InfoNoise 等；接口在 ADR 0003 plugin registry）

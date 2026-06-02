@@ -114,6 +114,11 @@ class TrainingConfig(BaseModel):
         description="缓存 VAE latent 加速训练",
         json_schema_extra=_meta("system"),
     )
+    cpu_offload: bool = Field(
+        False,
+        description="小显存优化：VAE/文本编码时将模型移至 CPU 释放显存（8GB 显卡建议开启，大显存无需）",
+        json_schema_extra=_meta("system"),
+    )
 
     # ------------------------------------------------------------------- LoRA
     lora_type: Literal["lora", "lokr", "loha"] = Field(

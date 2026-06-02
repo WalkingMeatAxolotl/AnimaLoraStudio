@@ -76,11 +76,32 @@ def run(ctx: TrainingContext) -> None:
             logger.info(f"正则数据集: {reg_data_dir} ({len(reg_base)} 样本, per-folder repeat{weight_info}){cap_preview}")
 
     # 缓存 VAE latents（在 repeat 之前）
+    # cpu_offload: 编码 VAE latent 时把 Transformer 暂时移到 CPU，
+    # 避免小显存上模型 + VAE 同时占用导致 OOM。
     ctx.use_cached = getattr(args, "cache_latents", False)
+    ctx.use_cpu_offload = getattr(args, "cpu_offload", False)
+    if ctx.use_cpu_offload:
+        ctx.model._cpu_offload = True  # signal for sampling.py VAE decode
     if ctx.use_cached:
-        ctx.dataset = CachedLatentDataset(ctx.dataset, ctx.vae, ctx.device, ctx.dtype)
-    if ctx.reg_dataset is not None and ctx.use_cached:
-        ctx.reg_dataset = CachedLatentDataset(ctx.reg_dataset, ctx.vae, ctx.device, ctx.dtype)
+        if ctx.use_cpu_offload:
+            _model_was_on = ctx.model
+            try:
+                import gc
+                ctx.model = ctx.model.cpu()
+                torch.cuda.empty_cache()
+                gc.collect()
+                logger.info("已将 Transformer 移至 CPU 以释放显存用于 VAE 编码")
+                ctx.dataset = CachedLatentDataset(ctx.dataset, ctx.vae, ctx.device, ctx.dtype)
+                if ctx.reg_dataset is not None:
+                    ctx.reg_dataset = CachedLatentDataset(ctx.reg_dataset, ctx.vae, ctx.device, ctx.dtype)
+            finally:
+                ctx.model = _model_was_on.to(ctx.device, dtype=ctx.dtype)
+                torch.cuda.empty_cache()
+                logger.info("Transformer 已移回 GPU")
+        else:
+            ctx.dataset = CachedLatentDataset(ctx.dataset, ctx.vae, ctx.device, ctx.dtype)
+            if ctx.reg_dataset is not None:
+                ctx.reg_dataset = CachedLatentDataset(ctx.reg_dataset, ctx.vae, ctx.device, ctx.dtype)
 
     # repeat: 主数据集和正则数据集均通过文件夹名 Kohya 风格 repeat（如 5_concept），无需全局 repeat
     if ctx.reg_dataset is not None:
@@ -117,14 +138,23 @@ def run(ctx: TrainingContext) -> None:
     try:
         if len(ctx.base_dataset) > 0:
             from PIL import Image
-            item0 = ctx.base_dataset[0]
-            pixels0 = item0["pixel_values"].unsqueeze(0).to(ctx.device, dtype=ctx.dtype)  # [1,3,H,W]
-            with torch.no_grad():
-                z0 = ctx.vae.model.encode(pixels0.unsqueeze(2), ctx.vae.scale)   # [1,16,1,h,w]
-                recon0 = ctx.vae.model.decode(z0, ctx.vae.scale).squeeze(2)      # [1,3,H,W]
-                recon0 = (recon0.clamp(-1, 1) + 1) / 2
-            arr0 = (recon0[0].permute(1, 2, 0).detach().cpu().float().numpy() * 255).clip(0, 255).astype("uint8")
-            Image.fromarray(arr0).save(ctx.sample_dir / "vae_roundtrip.png")
-            logger.info("VAE roundtrip 自检已保存: samples/vae_roundtrip.png")
+            _model_saved = ctx.model
+            if ctx.use_cpu_offload:
+                ctx.model = ctx.model.cpu()
+                torch.cuda.empty_cache()
+                gc.collect()
+            try:
+                item0 = ctx.base_dataset[0]
+                pixels0 = item0["pixel_values"].unsqueeze(0).to(ctx.device, dtype=ctx.dtype)  # [1,3,H,W]
+                with torch.no_grad():
+                    z0 = ctx.vae.model.encode(pixels0.unsqueeze(2), ctx.vae.scale)   # [1,16,1,h,w]
+                    recon0 = ctx.vae.model.decode(z0, ctx.vae.scale).squeeze(2)      # [1,3,H,W]
+                    recon0 = (recon0.clamp(-1, 1) + 1) / 2
+                arr0 = (recon0[0].permute(1, 2, 0).detach().cpu().float().numpy() * 255).clip(0, 255).astype("uint8")
+                Image.fromarray(arr0).save(ctx.sample_dir / "vae_roundtrip.png")
+                logger.info("VAE roundtrip 自检已保存: samples/vae_roundtrip.png")
+            finally:
+                ctx.model = _model_saved.to(ctx.device, dtype=ctx.dtype)
+                torch.cuda.empty_cache()
     except Exception as e:
         logger.warning(f"VAE roundtrip 自检失败（若 sample 仍是噪点，请优先修这个）: {e}")
