@@ -441,7 +441,12 @@ def check_update(channel: str = "master", use_cache: bool = True) -> UpdateCheck
     cur = current_version()
     checked_at = time.time()
 
-    rc, _, stderr = _git("fetch", "origin", channel, timeout=GIT_FETCH_TIMEOUT)
+    # `--tags` 必须显式：git 在带显式 refspec 时关闭"auto follow tags"，
+    # 导致新 release tag（如 v0.11.0）永远不进 refs/tags/。下面 describe
+    # --exact-match 会失败，--abbrev=0 fallback 返回上一个 release tag，
+    # 被错当成 latest_version → installed_version == latest_version →
+    # 状态机误报 up_to_date（0.10.2 用户实测撞到，删 .git 重 bootstrap 才好）。
+    rc, _, stderr = _git("fetch", "origin", channel, "--tags", timeout=GIT_FETCH_TIMEOUT)
     if rc != 0:
         return UpdateCheckResult(
             channel=channel, current_commit=cur.commit, latest_commit="",
@@ -475,12 +480,14 @@ def check_update(channel: str = "master", use_cache: bool = True) -> UpdateCheck
         if _RELEASE_TAG_RE.match(tag_at_remote):
             latest_version = tag_at_remote
     if not latest_tag:
-        # describe 精确匹配失败 → fallback：取最近 reachable tag（保留兼容）
+        # describe 精确匹配失败 → fallback：取最近 reachable tag 仅用于 UI 显示。
+        # **不要**赋给 latest_version：「最近 reachable tag」≠「远端最新 release」。
+        # 远端 master 在两个 release 之间时（HEAD 比上次 tag 多几个 commit）
+        # --abbrev=0 仍返回上次 release tag，赋给 latest_version 会让状态机错判
+        # installed_version == latest_version → up_to_date，丢掉中间的更新提示。
         rc, tag_near, _ = _git("describe", "--tags", "--abbrev=0", latest)
         if rc == 0:
             latest_tag = tag_near
-            if channel == "master" and _RELEASE_TAG_RE.match(tag_near):
-                latest_version = tag_near
 
     installed_version = cur.stable_version
 

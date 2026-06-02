@@ -248,6 +248,124 @@ def test_check_update_invalid_channel_raises() -> None:
         updater.check_update(channel="weird-branch")
 
 
+def test_check_update_master_fetch_uses_tags(
+    _isolate_flags: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """git fetch 必须带 --tags：显式 refspec 关闭 auto-follow-tags，缺 --tags
+    会让新 release tag 进不来，下游 describe fallback 错把旧 tag 当 latest。
+    （0.10.2 用户报"已是最新"实测撞到的根因）"""
+    git_calls: list[tuple] = []
+    def _fake_git(*args, **kwargs):
+        git_calls.append(args)
+        if args[:2] == ("fetch", "origin"):
+            return 0, "", ""
+        if args[:2] == ("rev-parse", "origin/master"):
+            return 0, "remote_sha", ""
+        if args[0] == "rev-list":
+            return 0, "0", ""
+        if args[:2] == ("rev-parse", "HEAD"):
+            return 0, "remote_sha", ""
+        if args[0] == "describe":
+            return 1, "", ""
+        return 0, "", ""
+    monkeypatch.setattr(updater, "_git", _fake_git)
+    monkeypatch.setattr(
+        updater, "current_version",
+        lambda: updater.VersionInfo(
+            version="0.10.2", commit="remote_sha", commit_short="remote_s",
+            commit_time_iso="", branch="master", tag=None, is_dirty=False,
+            installed_kind="stable", installed_label="v0.10.2",
+            stable_version="v0.10.2",
+        ),
+    )
+
+    updater.check_update(channel="master", use_cache=False)
+    fetch_calls = [c for c in git_calls if c[:2] == ("fetch", "origin")]
+    assert fetch_calls, "应当调 git fetch"
+    assert any("--tags" in c for c in fetch_calls), \
+        "git fetch 必须带 --tags 才能拉新 release tag"
+
+
+def test_check_update_returns_update_available_when_new_release_tag(
+    _isolate_flags: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0.10.2 用户，远端发了 v0.11.0：fetch 带 --tags 后 describe --exact-match
+    成功，latest_version=v0.11.0，状态机正确报 update_available。"""
+    def _fake_git(*args, **kwargs):
+        if args[:2] == ("fetch", "origin"):
+            return 0, "", ""
+        if args[:2] == ("rev-parse", "origin/master"):
+            return 0, "v0_11_0_sha", ""
+        if args[:3] == ("rev-list", "--count", "HEAD..origin/master"):
+            return 0, "37", ""
+        if args[:3] == ("rev-list", "--count", "origin/master..HEAD"):
+            return 0, "0", ""
+        if args[:2] == ("rev-parse", "HEAD"):
+            return 0, "v0_10_2_sha", ""
+        if args[:3] == ("describe", "--tags", "--exact-match"):
+            return 0, "v0.11.0", ""
+        return 0, "", ""
+    monkeypatch.setattr(updater, "_git", _fake_git)
+    monkeypatch.setattr(
+        updater, "current_version",
+        lambda: updater.VersionInfo(
+            version="0.10.2", commit="v0_10_2_sha", commit_short="v0_10_2_",
+            commit_time_iso="", branch="master", tag="v0.10.2", is_dirty=False,
+            installed_kind="stable", installed_label="v0.10.2",
+            stable_version="v0.10.2",
+        ),
+    )
+
+    result = updater.check_update(channel="master", use_cache=False)
+    assert result.state == "update_available"
+    assert result.installed_version == "v0.10.2"
+    assert result.latest_version == "v0.11.0"
+    assert result.behind_count == 37
+
+
+def test_check_update_does_not_use_abbrev0_tag_as_latest_version(
+    _isolate_flags: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """defense in depth：远端 master 处于「上次 release 之后、下次 release 之前」
+    时（HEAD 没打 tag，--exact-match 失败），--abbrev=0 fallback 返回上次 release
+    tag。这个 tag 只能用于 UI 显示（latest_tag），**不能**赋给 latest_version —
+    否则状态机会把 installed_version == latest_version 误判成 up_to_date，
+    丢掉 release 后 dev 合到 master 的中间更新。"""
+    def _fake_git(*args, **kwargs):
+        if args[:2] == ("fetch", "origin"):
+            return 0, "", ""
+        if args[:2] == ("rev-parse", "origin/master"):
+            return 0, "mid_release_sha", ""
+        if args[:3] == ("rev-list", "--count", "HEAD..origin/master"):
+            return 0, "5", ""
+        if args[:3] == ("rev-list", "--count", "origin/master..HEAD"):
+            return 0, "0", ""
+        if args[:2] == ("rev-parse", "HEAD"):
+            return 0, "v0_10_2_sha", ""
+        if args[:3] == ("describe", "--tags", "--exact-match"):
+            return 1, "", "fatal: no exact match"
+        if args[:3] == ("describe", "--tags", "--abbrev=0"):
+            return 0, "v0.10.2", ""
+        return 0, "", ""
+    monkeypatch.setattr(updater, "_git", _fake_git)
+    monkeypatch.setattr(
+        updater, "current_version",
+        lambda: updater.VersionInfo(
+            version="0.10.2", commit="v0_10_2_sha", commit_short="v0_10_2_",
+            commit_time_iso="", branch="master", tag="v0.10.2", is_dirty=False,
+            installed_kind="stable", installed_label="v0.10.2",
+            stable_version="v0.10.2",
+        ),
+    )
+
+    result = updater.check_update(channel="master", use_cache=False)
+    assert result.latest_tag == "v0.10.2"
+    assert result.latest_version is None, \
+        "--abbrev=0 fallback 不应赋给 latest_version，避免误报 up_to_date"
+    assert result.state == "update_available"
+    assert result.behind_count == 5
+
+
 # ---------------------------------------------------------------------------
 # requirements / package.json stale 检测
 # ---------------------------------------------------------------------------
@@ -813,6 +931,33 @@ def test_self_update_markers_track_real_file() -> None:
         f"_SELF_UPDATE_MARKERS 没有一个指向真实文件：{updater._SELF_UPDATE_MARKERS}"
         "——updater.py 搬家后忘了更新 marker 路径？"
     )
+
+
+def test_legacy_updater_shim_present_for_0_10_2_clients() -> None:
+    """studio/services/updater.py 兼容 shim 必须保留。
+
+    0.10.2 及更早的 client 在 preflight 里只检查这一条单路径 marker
+    （`_SELF_UPDATE_MARKER = "studio/services/updater.py"`）。v0.11.0 (PR #143)
+    services/ 重构把文件搬到 `runtime/` 之后，旧路径如果**真的**被删，
+    v0.10.2 client 升到 origin/master 会被 preflight 误判"目标版本早于
+    webui 自更新 feature"并阻断按钮。shim 文件本身存在性就够（git cat-file
+    只检查 blob 存在），但必须可正常 import 防止外部脚本误用。
+
+    删除条件：grep 历史所有发布版的 `_SELF_UPDATE_MARKER*` 值，确认每个有人
+    可能装的旧版本都已识别新路径 `studio/services/runtime/updater.py`。
+    """
+    from studio.paths import REPO_ROOT
+    shim = REPO_ROOT / "studio" / "services" / "updater.py"
+    assert shim.exists(), (
+        f"backward-compat shim {shim} 缺失！"
+        "0.10.2- client 的 target_has_self_update 检查这条单路径，"
+        "删了会让旧用户没法通过 webui 升级。"
+    )
+    # 能 import 且暴露关键符号（让外部脚本 from studio.services.updater import 不挂）
+    from studio.services import updater as legacy
+    assert hasattr(legacy, "check_update")
+    assert hasattr(legacy, "current_version")
+    assert hasattr(legacy, "target_has_self_update")
 
 
 # ---------------------------------------------------------------------------
