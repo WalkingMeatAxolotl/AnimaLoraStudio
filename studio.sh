@@ -48,6 +48,9 @@ cd "$SCRIPT_DIR" || { echo "studio.sh: cannot cd to $SCRIPT_DIR" >&2; exit 1; }
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
 
+# 减少 CUDA 显存碎片，解决 VAE decode OOM
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
 # Parse our flags; collect remaining args to forward to Python.
 _USE_MIRROR=0
 _REINSTALL=0

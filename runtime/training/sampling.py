@@ -63,8 +63,8 @@ def _flow_sigmas_simple(steps: int, *, shift: float = 3.0, timesteps: int = 1000
 
 
 @torch.no_grad()
-def sample_image(
-    model, vae, qwen_model, qwen_tokenizer, t5_tokenizer,
+def sample_latents(
+    model, qwen_model, qwen_tokenizer, t5_tokenizer,
     prompt, height=1024, width=1024, steps=25, cfg_scale=4.0,
     negative_prompt=None,
     sampler_name: str = "er_sde",
@@ -73,24 +73,19 @@ def sample_image(
     dtype=torch.bfloat16,
     step_callback=None,
 ):
-    """训练时采样预览（尽量对齐 ComfyUI KSampler）
+    """采样生成 latent（不含 VAE decode）。
 
-    Args:
-        negative_prompt: 负面提示词，默认使用标准负面提示词
-        sampler_name: 采样器（推荐：er_sde）
-        scheduler: 调度器（推荐：simple）
+    与 sample_image 的区别：只跑到采样结束，返回 latent tensor，
+    VAE decode 由调用方自行处理。适合两阶段场景：
+      1. model 在 GPU → 采样所有 latent → 存到内存
+      2. model offload 到 CPU → 批量 VAE decode
+
+    Returns:
+        latents tensor on `device`, dtype=torch.float32
     """
-    import numpy as np
-    from PIL import Image
     model.eval()
 
     logger.info(f"[Debug] Sampling start. Prompt: {prompt[:50]}...")
-
-    # Check VAE scale
-    if isinstance(vae.scale, list) and len(vae.scale) == 2:
-        m, s = vae.scale
-        logger.info(f"[Debug] VAE scale: mean_shape={m.shape}, std_inv_shape={s.shape}")
-        logger.info(f"[Debug] VAE scale values: mean={m.mean().item():.4f}, std_inv={s.mean().item():.4f}")
 
     # 默认负面提示词 (参考 Anima Prompt Guide)
     if negative_prompt is None:
@@ -183,18 +178,53 @@ def sample_image(
             d = (x - denoised) / max(sigma, 1e-6)
             x = x + d * (sigma_next - sigma)
 
+    logger.info(f"[Debug] Final latents: mean={x.mean().item():.4f}, std={x.std().item():.4f}")
+    return x
+
+
+@torch.no_grad()
+def sample_image(
+    model, vae, qwen_model, qwen_tokenizer, t5_tokenizer,
+    prompt, height=1024, width=1024, steps=25, cfg_scale=4.0,
+    negative_prompt=None,
+    sampler_name: str = "er_sde",
+    scheduler: str = "simple",
+    device="cuda",
+    dtype=torch.bfloat16,
+    step_callback=None,
+):
+    """训练时采样预览（尽量对齐 ComfyUI KSampler）—— 便捷封装，内部调 sample_latents + VAE decode。"""
+    import numpy as np
+    from PIL import Image
+
+    x = sample_latents(
+        model, qwen_model, qwen_tokenizer, t5_tokenizer,
+        prompt=prompt, height=height, width=width, steps=steps,
+        cfg_scale=cfg_scale, negative_prompt=negative_prompt,
+        sampler_name=sampler_name, scheduler=scheduler,
+        device=device, dtype=dtype, step_callback=step_callback,
+    )
+
     # VAE 解码
+    # 小显存设备：VAE decode 前把 Transformer 移到 CPU 释放显存
     latents = x.to(device=device, dtype=dtype)
-    logger.info(f"[Debug] Final latents: mean={latents.mean().item():.4f}, std={latents.std().item():.4f}")
     try:
+        model_device = next(model.parameters()).device
+        model = model.cpu()
+        torch.cuda.empty_cache()
+        import gc as _gc
+        _gc.collect()
         images = vae.model.decode(latents, vae.scale)
         images = images.squeeze(2)  # [B,C,H,W]
         images = (images.clamp(-1, 1) + 1) / 2
 
-        # 转 PIL
+        # 转 PIL（在 CPU 上完成，不依赖 model）
         img = images[0].permute(1, 2, 0).cpu().float().numpy()
         img = (img * 255).clip(0, 255).astype(np.uint8)
 
+        # 恢复 model 到 GPU
+        model = model.to(model_device, dtype=dtype)
+        torch.cuda.empty_cache()
         model.train()
         return Image.fromarray(img)
     except Exception as e:

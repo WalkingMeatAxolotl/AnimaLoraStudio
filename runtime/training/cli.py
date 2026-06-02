@@ -20,17 +20,56 @@ def parse_args():
     CLI-only 开关（auto-install / interactive / no-live-curve / 已弃用的
     --repeats 和 --reg-repeats）。
     """
+    import sys
     from studio.argparse_bridge import build_parser
     from studio.schema import TrainingConfig
 
+    # ================= 【Python 3.14 完美防爆补丁】 =================
+    if sys.version_info >= (3, 14):
+        _orig_init = argparse.BooleanOptionalAction.__init__
+        
+        def _safe_init(self, option_strings, dest, default=None, type=None, choices=None, required=False, help=None, metavar=None):
+            # 1. 检查是否存在命名的低级冲突（已经带了 --no-）
+            has_no_prefix = any(opt.startswith('--no-') for opt in option_strings)
+            
+            if has_no_prefix:
+                # 针对异端命名：直接降级为最原始的无参 Action，模拟 store_true
+                argparse.Action.__init__(
+                    self, 
+                    option_strings=option_strings, 
+                    dest=dest, 
+                    nargs=0, 
+                    const=True, 
+                    default=default, 
+                    required=required, 
+                    help=help, 
+                    metavar=metavar
+                )
+            else:
+                # 2. 针对正常布尔：3.14 的 BooleanOptionalAction.__init__ 绝对不接受 type 参数
+                # 我们在调用原版前，必须把底层误传进来的 type 剥离掉
+                _orig_init(
+                    self, 
+                    option_strings, 
+                    dest, 
+                    default=default, 
+                    choices=choices, 
+                    required=required, 
+                    help=help, 
+                    metavar=metavar
+                )
+
+        argparse.BooleanOptionalAction.__init__ = _safe_init
+    # ==============================================================
+
     p = build_parser(TrainingConfig, prog="anima_train", description="Anima LoRA Trainer v2")
+    
     # schema 之外的 CLI-only 开关
     p.add_argument("--auto-install", action="store_true", help="自动安装缺失依赖")
     p.add_argument("--interactive", action="store_true", help="交互模式，提示输入缺失参数")
     p.add_argument("--no-live-curve", action="store_true", help="禁用实时 Loss 曲线刷新")
+    
     # PP6.1 — 监控状态文件路径；不传则默认写到 output_dir/monitor_state.json
-    # 注：--no-monitor / --monitor-host / --monitor-port / --no-browser 由 schema
-    # 自动从 TrainingConfig 字段生成（保留只为兼容旧 yaml，运行时忽略）。
     p.add_argument(
         "--monitor-state-file",
         type=str,
@@ -41,7 +80,6 @@ def parse_args():
     p.add_argument("--repeats", type=int, default=1, help=argparse.SUPPRESS)
     p.add_argument("--reg-repeats", type=int, default=1, help=argparse.SUPPRESS)
     return p.parse_args()
-
 
 # ============================================================================
 # 交互模式辅助函数

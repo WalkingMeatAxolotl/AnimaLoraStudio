@@ -12,6 +12,10 @@
 LoRA / LoKr 实现：见 utils.lycoris_adapter.AnimaLycorisAdapter（ADR 0001）。
 """
 
+# ─── 小显存优化：必须在 torch 导入前设置，减少 CUDA 显存碎片 ───
+import os as __os
+__os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 import logging
 import sys
 from pathlib import Path
@@ -79,7 +83,7 @@ from training.models import (  # noqa: E402
     load_text_encoders,
     load_vae,
 )
-from training.sampling import sample_image  # noqa: E402
+from training.sampling import sample_image, sample_latents  # noqa: E402
 from training.dataset import (  # noqa: E402
     BucketBatchSampler,
     BucketManager,

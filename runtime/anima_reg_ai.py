@@ -252,9 +252,12 @@ def main() -> None:
 
     model.eval()
 
-    # 生成循环
+    # ── Phase 1: 采样所有 latent（model/encoder 保持 GPU）──
+    import numpy as np
+    from PIL import Image
+
     total = len(to_generate)
-    actual_count = 0
+    latents_batch: list[dict] = []
 
     for idx, entry in enumerate(to_generate):
         tags = [_normalize(t) for t in entry["tags"]]
@@ -280,8 +283,8 @@ def main() -> None:
         logger.info(f"  prompt: {prompt[:80]}")
 
         try:
-            img = _T.sample_image(
-                model, vae, qwen_model, qwen_tok, t5_tok,
+            latents = _T.sample_latents(
+                model, qwen_model, qwen_tok, t5_tok,
                 prompt=prompt,
                 height=height,
                 width=width,
@@ -293,14 +296,49 @@ def main() -> None:
                 device=device,
                 dtype=dtype,
             )
-            img.save(out_path)
-            out_path.with_suffix(".txt").write_text(prompt, encoding="utf-8")
-            actual_count += 1
-            logger.info(f"  已保存: {out_path}")
+            latents_batch.append({
+                "latents_cpu": latents.cpu(),
+                "out_path": out_path,
+                "prompt": prompt,
+                "idx": idx,
+            })
             if _update_monitor:
                 _update_monitor(sample_path=str(out_path), step=idx + 1)
         except Exception as e:
-            logger.error(f"  生成失败: {e}")
+            logger.error(f"  采样失败: {e}")
+
+    if not latents_batch:
+        logger.warning("没有成功采样的 latent，跳过 decode")
+        _write_meta_final(reg_dir, entries, excluded_tags, incremental, 0)
+        return
+
+    # ── Phase 2: offload Transformer + encoder 到内存，批量 VAE decode ──
+    logger.info("offload Transformer / encoder → CPU，释放显存给 VAE decode")
+    model.to("cpu")
+    qwen_model.to("cpu")
+    import gc
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    actual_count = 0
+    for item in latents_batch:
+        try:
+            latents = item["latents_cpu"].to(device=device, dtype=dtype)
+            images = vae.model.decode(latents, vae.scale)
+            images = images.squeeze(2)  # [B,C,H,W]
+            images = (images.clamp(-1, 1) + 1) / 2
+
+            img = images[0].permute(1, 2, 0).cpu().float().numpy()
+            img = (img * 255).clip(0, 255).astype(np.uint8)
+            img = Image.fromarray(img)
+
+            img.save(item["out_path"])
+            item["out_path"].with_suffix(".txt").write_text(item["prompt"], encoding="utf-8")
+            actual_count += 1
+            logger.info(f"  已保存: {item['out_path']}")
+        except Exception as e:
+            logger.error(f"  VAE decode 失败: {e}")
 
     _write_meta_final(reg_dir, entries, excluded_tags, incremental, actual_count)
     logger.info(f"完成: {actual_count}/{total} 张")
