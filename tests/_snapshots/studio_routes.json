@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 163,
+  "count": 173,
   "routes": [
     {
       "path": "/",
@@ -791,6 +791,86 @@
         "GET"
       ],
       "name": "list_version_lora_ckpts",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/preprocess/crop",
+      "methods": [
+        "POST"
+      ],
+      "name": "start_preprocess_crop_train",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/preprocess/crop/workspace",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_crop_workspace_train_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/preprocess/duplicates/apply",
+      "methods": [
+        "POST"
+      ],
+      "name": "apply_preprocess_duplicates_train",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/preprocess/duplicates/removed",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_duplicate_removed_train",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/preprocess/duplicates/scan",
+      "methods": [
+        "POST"
+      ],
+      "name": "scan_preprocess_duplicates_train",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/preprocess/files",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_preprocess_files_train",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/preprocess/files/reset",
+      "methods": [
+        "POST"
+      ],
+      "name": "reset_preprocess_files_train",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/preprocess/files/restore",
+      "methods": [
+        "POST"
+      ],
+      "name": "restore_preprocess_files_train",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/preprocess/start",
+      "methods": [
+        "POST"
+      ],
+      "name": "start_preprocess_train",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/preprocess/status",
+      "methods": [
+        "GET"
+      ],
+      "name": "preprocess_status_train",
       "type": "APIRoute"
     },
     {
