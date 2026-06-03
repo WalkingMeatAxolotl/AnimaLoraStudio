@@ -193,6 +193,29 @@ def test_run_clip_job_clears_stale_clip_value_when_unavailable(isolated) -> None
     assert result["metric_states"]["clip_i"]["value"] is None
 
 
+def test_feature_tensor_accepts_model_output_pooler() -> None:
+    class FakeTensor:
+        projected = False
+
+        def float(self):
+            return self
+
+    class FakeOutput:
+        def __init__(self):
+            self.pooler_output = FakeTensor()
+
+    output = FakeOutput()
+
+    def projection(tensor):
+        tensor.projected = True
+        return tensor
+
+    got = eval_clip._feature_tensor(output, projection=projection)
+
+    assert got is output.pooler_output
+    assert got.projected is True
+
+
 def test_eval_clip_http_start_queues_job(client: TestClient) -> None:
     pid, vid = _make(client)
     project, version, vdir = _vdir_for(pid, vid)
