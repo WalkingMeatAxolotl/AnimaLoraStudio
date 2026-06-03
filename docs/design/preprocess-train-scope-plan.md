@@ -84,9 +84,9 @@ projects/{id}-{slug}/
 {
   "version": 2,
   "images": {
-    "X.png":    { "origin": "X.jpg", "mtime": 1731000000, "size": 1234567 },
-    "Y_c0.png": { "origin": "Y.jpg", "mtime": 1731000000, "size": 800000 },
-    "Y_c1.png": { "origin": "Y.jpg", "mtime": 1731000000, "size": 850000 }
+    "1_data/X.png":    { "origin": "X.jpg", "mtime": 1731000000, "size": 1234567 },
+    "1_data/Y_c0.png": { "origin": "Y.jpg", "mtime": 1731000000, "size": 800000 },
+    "1_data/Y_c1.png": { "origin": "Y.jpg", "mtime": 1731000000, "size": 850000 }
   }
 }
 ```
@@ -94,10 +94,16 @@ projects/{id}-{slug}/
 **字段语义**：
 
 - `version` (int): schema 版本，当前固定 `2`。未来再变 schema 用这个判断
-- `images` (map): key = train 内**实际文件名**（含扩展名），value = entry
-- `entry.origin` (string): `download/` 下对应原图的**文件名**（含扩展名）。用于 restore 反查
+- `images` (map): key = **POSIX 相对路径** `"{N_label}/{image}"`（LoRA repeat
+  folder：`train/1_data/X.png` → entry key `"1_data/X.png"`），value = entry
+- `entry.origin` (string): `download/` 下对应原图的**平铺文件名**（download/
+  无 sub-folder 结构）。用于 restore 反查
 - `entry.mtime` (number): 产物文件 mtime（秒级 Unix timestamp）。差异可推断"用户在外部改过"
 - `entry.size` (number): 产物文件大小（字节）
+
+**为什么 rel path 而不是平铺**：LoRA dataset config 把 `train/{N_label}/` 当
+repeat folder，同名图可在多个 folder 出现（罕见但合法）。`train/` 根目录直接
+放的图被忽略；`core.py:_validate_rel_name` 强制 `folder/image` 两段防 path traversal。
 
 **状态从字段差异隐含推断**：
 
