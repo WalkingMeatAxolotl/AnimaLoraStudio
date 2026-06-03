@@ -12,13 +12,21 @@
 LoRA / LoKr 实现：见 utils.lycoris_adapter.AnimaLycorisAdapter（ADR 0001）。
 """
 
-# ─── 小显存优化：必须在 torch 导入前设置，减少 CUDA 显存碎片 ───
-import os as __os
-__os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
-
 import logging
+import os
 import sys
 from pathlib import Path
+
+# 小显存优化：减少 CUDA 显存碎片，缓解 8GB 卡 LoKr full-matrix OOM。
+# - 必须在 torch 链式 import 之前设置：torch 在 import 阶段就读 PYTORCH_CUDA_ALLOC_CONF
+#   并缓存，之后再改无效。
+# - expandable_segments 的 CUDA backend 实现需要 PYTORCH_C10_DRIVER_API_SUPPORTED 宏，
+#   PyTorch 的 c10/cuda/CMakeLists.txt 把该宏 gate 在 `if(NOT WIN32)`，因此 Windows wheel
+#   不包含该 backend，运行时会 emit `TORCH_WARN_ONCE("expandable_segments not supported
+#   on this platform")` 并强制 disable。为避免 Windows 用户看无用 warning，只在 Linux 设。
+# - setdefault 不覆盖用户已显式设置的值。
+if sys.platform.startswith("linux"):
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 # 脚本在 runtime/ 下按裸脚本启动（`python runtime/anima_train.py`）。
 # 把仓库根 + runtime/ 注入 sys.path，让 `import utils.*` / `import train_monitor` /
@@ -83,7 +91,7 @@ from training.models import (  # noqa: E402
     load_text_encoders,
     load_vae,
 )
-from training.sampling import sample_image, sample_latents  # noqa: E402
+from training.sampling import sample_image  # noqa: E402
 from training.dataset import (  # noqa: E402
     BucketBatchSampler,
     BucketManager,
