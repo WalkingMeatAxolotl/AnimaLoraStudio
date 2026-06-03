@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import sys
 from pathlib import Path
 
@@ -27,6 +28,121 @@ from training.model_loading import (
 
 
 logger = logging.getLogger(__name__)
+
+
+class VAEWrapper:
+    """WAN VAE + 归一化参数 + 整图 decode OOM 自动回退到 tiled decode。
+
+    Issue #200：8GB 类小显存跑 1024×1024 reg 生成时 transformer/Qwen/T5 常驻
+    GPU 后剩 ~1GB，整图 decode 工作内存吃满 → OOM。本类在 `decode()` 入口先
+    `try` 整图，CUDA OOM 才走 cosine-blend 切块 decode（每 tile 64 latent /
+    512 pixel，单 tile 工作峰值约 75MB）。
+
+    大显存路径永远在 `try` 一次就过、零成本；fallback 路径每张图慢 ~30%。
+
+    现有训练代码（dataset 编 latent / phases/dataset.py 训练时重建预览）继续直
+    接调 `wrapper.model.encode/decode(z, wrapper.scale)`，保持现有行为不动 ——
+    encode 路径与训练侧低分辨率重建不会 OOM。
+    """
+
+    # tile 几何：tile=512px / overlap=128px / 4-stage VAE 8× upsample
+    _TILE_LATENT = 64
+    _STRIDE_LATENT = 48
+    _UPSAMPLE = 8
+
+    def __init__(self, model, mean, std):
+        self.model = model
+        self.mean = mean
+        self.std = std
+        self.scale = [mean, 1.0 / std]
+
+    def decode(self, z):
+        """latent → pixel；整图 OOM 时自动切块重试。
+
+        z: ``[b, 16, t, H, W]`` latent
+        return: ``[b, 3, t, H*8, W*8]``（与底层 `WanVAE_.decode` 一致，未 clamp）
+        """
+        try:
+            return self.model.decode(z, self.scale)
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            logger.warning(
+                "VAE 整图 decode OOM，回退到 tiled decode "
+                "(tile=%dpx, overlap=%dpx)",
+                self._TILE_LATENT * self._UPSAMPLE,
+                (self._TILE_LATENT - self._STRIDE_LATENT) * self._UPSAMPLE,
+            )
+            return self._tiled_decode(z)
+
+    @torch.no_grad()
+    def _tiled_decode(self, z):
+        """在 H/W 维度切块独立 decode，cosine blend 拼回。
+
+        - tile=64 latent，stride=48，overlap=16 latent (128 px)；最后一个 tile
+          起点 clamp 到 (size - tile) 防超出
+        - 小图（H 或 W < tile）走 ``eff_h/eff_w = min(tile, size)``，等价单 tile 全图
+        - blend 用 raised cosine 边缘 ramp，accumulator 走 fp32 防 bf16 精度损失
+        - mask 最小值 clamp 1e-6 防角落像素 wsum 除 0
+        """
+        b, _c, t, H, W = z.shape
+        tile = self._TILE_LATENT
+        stride = self._STRIDE_LATENT
+        up = self._UPSAMPLE
+
+        eff_h = min(tile, H)
+        eff_w = min(tile, W)
+        hs = _tile_starts(H, eff_h, stride)
+        ws = _tile_starts(W, eff_w, stride)
+
+        tile_h_px = eff_h * up
+        tile_w_px = eff_w * up
+        overlap_px = (tile - stride) * up
+        H_px, W_px = H * up, W * up
+
+        acc = torch.zeros(b, 3, t, H_px, W_px, dtype=torch.float32, device=z.device)
+        wsum = torch.zeros(1, 1, 1, H_px, W_px, dtype=torch.float32, device=z.device)
+
+        mask = _cosine_blend_mask(tile_h_px, tile_w_px, fade=overlap_px, device=z.device)
+
+        for hi in hs:
+            for wi in ws:
+                z_tile = z[:, :, :, hi:hi + eff_h, wi:wi + eff_w]
+                img_tile = self.model.decode(z_tile, self.scale).float()
+                hp, wp = hi * up, wi * up
+                acc[:, :, :, hp:hp + tile_h_px, wp:wp + tile_w_px] += img_tile * mask
+                wsum[:, :, :, hp:hp + tile_h_px, wp:wp + tile_w_px] += mask
+
+        return (acc / wsum).to(z.dtype)
+
+
+def _tile_starts(size: int, tile: int, stride: int) -> list[int]:
+    """固定 stride 的 tile 起点列表；尾部未覆盖时追加 ``size - tile``。"""
+    if size <= tile:
+        return [0]
+    starts = list(range(0, size - tile + 1, stride))
+    if starts[-1] + tile < size:
+        starts.append(size - tile)
+    return starts
+
+
+def _cosine_blend_mask(h: int, w: int, *, fade: int, device) -> torch.Tensor:
+    """2D raised-cosine mask；边缘 `fade` 像素内 0→1 ramp，中心 1。
+
+    最终 mask 整体 clamp_min(1e-6) 防 wsum 角落除 0 —— 2D 角落是 1D × 1D，
+    1D 上 clamp 1e-6 在 2D 角落变成 1e-12 太接近 fp32 denormal，统一在 2D 后 clamp。
+    """
+    def ramp_1d(n: int) -> torch.Tensor:
+        m = torch.ones(n, dtype=torch.float32, device=device)
+        if fade > 0:
+            t = torch.linspace(math.pi, 2 * math.pi, fade, device=device)
+            r = torch.cos(t) * 0.5 + 0.5
+            m[:fade] = r
+            m[-fade:] = r.flip(0)
+        return m
+    mh = ramp_1d(h)
+    mw = ramp_1d(w)
+    mask_2d = (mh[:, None] * mw[None, :]).clamp_min(1e-6)
+    return mask_2d[None, None, None, :, :]
 
 
 def ensure_models_namespace(repo_root):
@@ -155,17 +271,8 @@ def load_vae(vae_path, device, dtype, repo_root):
         3.2687, 2.1526, 2.8652, 1.5579, 1.6382, 1.1253, 2.8251, 1.9160
     ], dtype=dtype, device=device)
 
-    class VAEWrapper:
-        pass
-
-    wrapper = VAEWrapper()
-    wrapper.model = model
-    wrapper.mean = mean
-    wrapper.std = std
-    wrapper.scale = [mean, 1.0 / std]
-
     logger.info("VAE 加载完成")
-    return wrapper
+    return VAEWrapper(model, mean, std)
 
 
 def load_text_encoders(qwen_path, t5_tokenizer_path, device, dtype):

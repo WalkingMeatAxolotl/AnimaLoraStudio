@@ -199,7 +199,9 @@ def sample_image(
     latents = x.to(device=device, dtype=dtype)
     logger.info(f"[Debug] Final latents: mean={latents.mean().item():.4f}, std={latents.std().item():.4f}")
     try:
-        images = vae.model.decode(latents, vae.scale)
+        # VAEWrapper.decode：整图 OOM 时自动 tile+cosine blend 回退（issue #200）。
+        # 大显存路径在 try 一次就过，零成本；fallback 路径每张图慢 ~30%。
+        images = vae.decode(latents)
         images = images.squeeze(2)  # [B,C,H,W]
         images = (images.clamp(-1, 1) + 1) / 2
 
