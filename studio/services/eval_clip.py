@@ -431,7 +431,7 @@ def _feature_tensor(output, *, projection=None):
         return image_embeds
     pooler = getattr(output, "pooler_output", None)
     if pooler is not None:
-        return projection(pooler) if projection is not None else pooler
+        return _maybe_project_feature(pooler, projection)
     if isinstance(output, dict):
         for key in ("text_embeds", "image_embeds"):
             value = output.get(key)
@@ -439,7 +439,7 @@ def _feature_tensor(output, *, projection=None):
                 return value
         pooler_value = output.get("pooler_output")
         if pooler_value is not None:
-            return projection(pooler_value) if projection is not None else pooler_value
+            return _maybe_project_feature(pooler_value, projection)
         hidden = output.get("last_hidden_state")
         if hidden is not None:
             return hidden
@@ -450,6 +450,17 @@ def _feature_tensor(output, *, projection=None):
     raise EvalClipError(
         f"CLIP feature output is not tensor-like: {type(output).__name__}"
     )
+
+
+def _maybe_project_feature(feature, projection):
+    if projection is None:
+        return feature
+    in_features = getattr(projection, "in_features", None)
+    shape = getattr(feature, "shape", None)
+    last_dim = shape[-1] if shape is not None and len(shape) else None
+    if in_features is not None and last_dim is not None and int(in_features) != int(last_dim):
+        return feature
+    return projection(feature)
 
 
 def _mean(values: list[float]) -> float | None:

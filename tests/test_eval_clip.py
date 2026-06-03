@@ -196,6 +196,7 @@ def test_run_clip_job_clears_stale_clip_value_when_unavailable(isolated) -> None
 def test_feature_tensor_accepts_model_output_pooler() -> None:
     class FakeTensor:
         projected = False
+        shape = (1, 768)
 
         def float(self):
             return self
@@ -214,6 +215,32 @@ def test_feature_tensor_accepts_model_output_pooler() -> None:
 
     assert got is output.pooler_output
     assert got.projected is True
+
+
+def test_feature_tensor_skips_mismatched_projection() -> None:
+    class FakeTensor:
+        projected = False
+        shape = (1, 512)
+
+        def float(self):
+            return self
+
+    class FakeOutput:
+        def __init__(self):
+            self.pooler_output = FakeTensor()
+
+    class FakeProjection:
+        in_features = 768
+
+        def __call__(self, tensor):
+            tensor.projected = True
+            return tensor
+
+    output = FakeOutput()
+    got = eval_clip._feature_tensor(output, projection=FakeProjection())
+
+    assert got is output.pooler_output
+    assert got.projected is False
 
 
 def test_eval_clip_http_start_queues_job(client: TestClient) -> None:
