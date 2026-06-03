@@ -902,6 +902,43 @@ def train_restore(
     return {"restored": restored, "missing": missing, "no_origin": no_origin}
 
 
+def train_swap_entry(
+    project_dir: Path,
+    version_label: str,
+    old_name: str,
+    new_name: str,
+    meta: dict[str, Any],
+) -> None:
+    """原子替换 train manifest entry：删 `old_name`，写 `new_name`。
+
+    给 worker 在 upscale 输出扩展名变化时用（如 src=`1_data/X.jpg` →
+    dst=`1_data/X.png`），避免 manifest 残留 dangling 老 entry。
+
+    `meta` 跟 `train_add_processed` 一致——只采纳 origin/mtime/size，其他丢弃。
+    size 兜底 stat `train/{new_name}`。
+    """
+    ensure_train_manifest(project_dir, version_label)
+    target = train_manifest_path(project_dir, version_label)
+    with _LOCK:
+        m = _read_train_target(target)
+        m["images"].pop(old_name, None)
+        origin = meta.get("origin") or meta.get("source") or new_name
+        entry: dict[str, Any] = {
+            "origin": origin,
+            "mtime": meta.get("mtime", time.time()),
+        }
+        if "size" in meta:
+            entry["size"] = meta["size"]
+        else:
+            png = _train_dir(project_dir, version_label) / new_name
+            try:
+                entry["size"] = png.stat().st_size
+            except OSError:
+                entry["size"] = 0
+        m["images"][new_name] = entry
+        _atomic_write(target, m)
+
+
 def train_clear_all(project_dir: Path, version_label: str) -> None:
     """清空本 version 的 train manifest 状态——只清 manifest 文件，**不动**
     train/ 物理文件。

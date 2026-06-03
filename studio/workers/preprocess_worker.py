@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 from studio import db
 from studio.services.preprocess import core as preprocess
-from studio.services.projects import jobs as project_jobs, projects
+from studio.services.projects import jobs as project_jobs, projects, versions
 from studio.services import models as model_downloader
 from studio.services.preprocess import manifest as preprocess_manifest
 from studio.services.inference import upscaler
@@ -81,6 +81,24 @@ def run(job_id: int) -> int:  # noqa: PLR0912, PLR0915 - 主流程线性可读
             project = projects.get_project(conn, job["project_id"])
         if not project:
             log(f"[error] project {job['project_id']} missing")
+            return 1
+
+        # ADR 0010 train-scope 分发：job.version_id 非空 → 新 train scope 路径；
+        # None → 老 project scope 路径（backward-compat，PR-3 删）
+        version_id = job.get("version_id")
+        if version_id is not None:
+            with db.connection_for() as conn:
+                version = versions.get_version(conn, version_id)
+            if not version:
+                log(f"[error] version {version_id} missing")
+                return 1
+            if stage == preprocess.STAGE_CROP:
+                return _run_crop_train(project, version, params, log, emit_event)
+            if stage == preprocess.STAGE_UPSCALE:
+                return _run_upscale_train(
+                    project, version, params, log, emit_event,
+                )
+            log(f"[error] 未知 stage: {stage!r}")
             return 1
 
         if stage == preprocess.STAGE_CROP:
@@ -427,6 +445,340 @@ def _run_crop(
             emit_throttled(
                 force=True,
                 idx=idx, total=total, name=src_name, status="fail",
+                error=str(exc)[:200],
+                succeeded=succeeded, failed=failed, skipped=skipped,
+            )
+
+    log(f"[done] succeeded={succeeded} failed={failed} skipped={skipped}")
+    return 0
+
+
+def _run_upscale_train(
+    project: dict[str, Any],
+    version: dict[str, Any],
+    params: dict[str, Any],
+    log: Callable[[str], None],
+    emit_event: Callable[..., None],
+) -> int:
+    """ADR 0010 train-scope upscale。
+
+    源 + 产物都在 `versions/{label}/train/{folder}/`，manifest 写到
+    `versions/{label}/train/manifest.json`。PNG 输出 stem 不变但扩展名可能
+    改（X.jpg → X.png）—— `train_swap_entry` 原子替换 manifest，物理 src
+    单独 unlink 避免训练集 stem 冲突；caption (.txt) 同 stem 保留不动。
+    """
+    mode = params.get("mode", "all")
+    names = params.get("names") or None
+    model_label = params.get("model", preprocess.DEFAULT_MODEL)
+    tile_size = int(params.get("tile_size", preprocess.DEFAULT_TILE_SIZE))
+    tile_pad = int(params.get("tile_pad", preprocess.DEFAULT_TILE_PAD))
+    device = params.get("device", preprocess.DEFAULT_DEVICE)
+    target_area_raw = params.get("target_area", preprocess.DEFAULT_TARGET_AREA)
+    target_area = int(target_area_raw) if target_area_raw else None
+
+    project_dir = projects.project_dir(project["id"], project["slug"])
+    train_dir = preprocess.version_train_dir(project, version["label"])
+    train_dir.mkdir(parents=True, exist_ok=True)
+
+    model_path = model_downloader.upscaler_target(model_label)
+    if not model_path.exists():
+        log(
+            f"[error] 模型权重不存在：{model_path}（请先在设置页下载 {model_label}）"
+        )
+        return 1
+
+    try:
+        sources = preprocess.resolve_targets_train(
+            project, version["label"], mode=mode, names=names
+        )
+    except preprocess.PreprocessError as exc:
+        log(f"[error] 解析目标失败: {exc}")
+        return 1
+
+    total = len(sources)
+    if total == 0:
+        log("[done] 没有需要处理的图")
+        return 0
+
+    target_desc = (
+        f"{int(math.sqrt(target_area))}²={target_area}px"
+        if target_area else "off (直接 4×)"
+    )
+    log(
+        f"[start] mode={mode} model={model_label} tile={tile_size}+{tile_pad} "
+        f"device={device} target={target_desc} total={total} scope=train"
+    )
+
+    try:
+        import torch
+        resolved_dev = upscaler.resolve_device(device)
+        resolved_dtype = upscaler.resolve_dtype("auto", resolved_dev)
+        gpu_name = (
+            torch.cuda.get_device_name(0)
+            if resolved_dev.type == "cuda" and torch.cuda.is_available()
+            else "—"
+        )
+        log(
+            f"[device] resolved={resolved_dev} dtype={str(resolved_dtype).replace('torch.', '')} "
+            f"gpu={gpu_name} cuda_available={torch.cuda.is_available()}"
+        )
+        upscaler.load_model(model_path, device=resolved_dev, dtype=resolved_dtype)
+        log(f"[model] {model_label} loaded → {resolved_dev}")
+    except Exception as exc:  # noqa: BLE001
+        log(f"[device] diagnostic failed: {exc}（继续，但可能跑在 CPU 上）")
+
+    succeeded = 0
+    failed = 0
+    skipped = 0
+
+    for idx, src_rel in enumerate(sources, start=1):
+        if _stop_requested:
+            log(f"[cancel] 收到取消信号，已处理 {idx - 1}/{total}")
+            break
+        src_path = train_dir / src_rel
+        if not src_path.exists():
+            log(f"[skip] ({idx}/{total}) {src_rel}: 源已不存在")
+            skipped += 1
+            emit_event(
+                "preprocess_progress",
+                idx=idx, total=total, name=src_rel, status="skip",
+                succeeded=succeeded, failed=failed, skipped=skipped,
+            )
+            continue
+
+        # origin 沿用 manifest 已有 entry（multi-crop 派生 root），否则用 rel
+        # path 末段（curate 复制图时写的就是 file name == origin）
+        existing = preprocess_manifest.train_get_entry(
+            project_dir, version["label"], src_rel
+        )
+        src_filename = src_rel.rsplit("/", 1)[-1]
+        if existing is not None:
+            origin_name = preprocess_manifest.entry_origin(existing, src_filename)
+        else:
+            origin_name = src_filename
+
+        # dst rel：同 folder 同 stem，扩展名固定 .png（upscaler 输出 PNG）
+        folder, _ = src_rel.split("/", 1)
+        src_stem = Path(src_filename).stem
+        dst_rel = f"{folder}/{src_stem}.png"
+        dst_path = train_dir / dst_rel
+
+        log(f"[upscale] ({idx}/{total}) {src_rel} → {dst_rel}")
+        try:
+            meta = upscaler.upscale_file(
+                src_path,
+                dst_path,
+                model_path=model_path,
+                label=model_label,
+                tile_size=tile_size,
+                tile_pad=tile_pad,
+                device=device,
+                target_area=target_area,
+                on_log=log,
+                prewarm_thumb_sizes=[256, 768],
+            )
+            meta["origin"] = origin_name
+            if dst_rel != src_rel:
+                # 扩展名变 → 原子 swap entry + 删 src 物理文件
+                preprocess_manifest.train_swap_entry(
+                    project_dir, version["label"],
+                    old_name=src_rel, new_name=dst_rel, meta=meta,
+                )
+                try:
+                    src_path.unlink()
+                except OSError as exc:
+                    log(f"   ⚠ 删旧 {src_rel} 失败: {exc}")
+            else:
+                # 覆盖原文件（src == dst rel path）→ 普通 add_processed
+                preprocess_manifest.train_add_processed(
+                    project_dir, version["label"], dst_rel, meta,
+                )
+            succeeded += 1
+            emit_event(
+                "preprocess_progress",
+                idx=idx, total=total, name=src_rel, status="done",
+                action=meta.get("action"),
+                succeeded=succeeded, failed=failed, skipped=skipped,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log(f"[fail] {src_rel}: {exc}")
+            failed += 1
+            emit_event(
+                "preprocess_progress",
+                idx=idx, total=total, name=src_rel, status="fail",
+                error=str(exc)[:200],
+                succeeded=succeeded, failed=failed, skipped=skipped,
+            )
+
+    log(f"[done] succeeded={succeeded} failed={failed} skipped={skipped}")
+    return 0
+
+
+def _run_crop_train(
+    project: dict[str, Any],
+    version: dict[str, Any],
+    params: dict[str, Any],
+    log: Callable[[str], None],
+    emit_event: Callable[..., None],
+) -> int:
+    """ADR 0010 train-scope crop。
+
+    `params['crops']` = `{rel_path: [rects]}`，rel_path 形如 `1_data/X.png`。
+    crop 产物输出到同 folder 内：N=1 覆盖源文件名（`folder/stem.png`），
+    N>1 fan-out 成 `folder/stem_c0.png` / `folder/stem_c1.png` / ...；
+    train_replace_with_crops 原子替换 manifest。
+    """
+    project_dir = projects.project_dir(project["id"], project["slug"])
+    train_dir = preprocess.version_train_dir(project, version["label"])
+    train_dir.mkdir(parents=True, exist_ok=True)
+
+    crops_param = params.get("crops") or {}
+    if not crops_param:
+        log("[done] crops 为空，无事可做")
+        return 0
+    sources = sorted(crops_param.keys())
+
+    _last_emit_at = [0.0]
+
+    def emit_throttled(*, force: bool, **payload) -> None:
+        now = time.monotonic()
+        if not force and (now - _last_emit_at[0]) < 1.0:
+            return
+        _last_emit_at[0] = now
+        emit_event("crop_progress", **payload)
+
+    total = len(sources)
+    log(f"[start] stage=crop total={total} scope=train")
+
+    succeeded = 0
+    failed = 0
+    skipped = 0
+
+    for idx, src_rel in enumerate(sources, start=1):
+        if _stop_requested:
+            log(f"[cancel] 收到取消信号，已处理 {idx - 1}/{total}")
+            break
+        is_last = idx == total
+        try:
+            preprocess._validate_rel_name(src_rel)
+        except preprocess.PreprocessError as exc:
+            log(f"[skip] {src_rel}: {exc}")
+            skipped += 1
+            emit_throttled(
+                force=True,
+                idx=idx, total=total, name=src_rel, status="skip",
+                succeeded=succeeded, failed=failed, skipped=skipped,
+            )
+            continue
+
+        src_path = train_dir / src_rel
+        if not src_path.is_file():
+            log(f"[skip] ({idx}/{total}) {src_rel}: 源不存在")
+            skipped += 1
+            emit_throttled(
+                force=True,
+                idx=idx, total=total, name=src_rel, status="skip",
+                succeeded=succeeded, failed=failed, skipped=skipped,
+            )
+            continue
+
+        # origin 沿用 manifest 已有 entry root，否则用 src filename
+        existing = preprocess_manifest.train_get_entry(
+            project_dir, version["label"], src_rel
+        )
+        src_filename = src_rel.rsplit("/", 1)[-1]
+        if existing is not None:
+            origin = preprocess_manifest.entry_origin(existing, src_filename)
+        else:
+            origin = src_filename
+
+        rects = crops_param[src_rel]
+        n = len(rects)
+        folder, _ = src_rel.split("/", 1)
+        src_stem = Path(src_filename).stem
+        out_rels = (
+            [f"{folder}/{src_stem}.png"] if n == 1
+            else [f"{folder}/{src_stem}_c{i}.png" for i in range(n)]
+        )
+
+        log(f"[crop] ({idx}/{total}) {src_rel} → {n} 个产物")
+        try:
+            t0 = time.monotonic()
+            with Image.open(src_path) as raw:
+                raw.load()
+                src_img = raw.convert("RGB") if raw.mode != "RGB" else raw.copy()
+            sw, sh = src_img.size
+            outputs: list[dict[str, Any]] = []
+            for r, out_rel in zip(rects, out_rels):
+                left = int(round(r["x"] * sw))
+                top = int(round(r["y"] * sh))
+                right = int(round((r["x"] + r["w"]) * sw))
+                bottom = int(round((r["y"] + r["h"]) * sh))
+                right = max(left + 1, right)
+                bottom = max(top + 1, bottom)
+                piece = src_img.crop((left, top, right, bottom))
+                out_path = train_dir / out_rel
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
+                piece.save(tmp_path, format="PNG", optimize=False)
+                import os as _os
+                _os.replace(tmp_path, out_path)
+                try:
+                    st = out_path.stat()
+                    sz, mt = st.st_size, st.st_mtime
+                except OSError:
+                    sz, mt = 0, time.time()
+                outputs.append({
+                    "name": out_rel,
+                    "origin": origin,
+                    "size": sz,
+                    "mtime": mt,
+                })
+
+            # N>1：原 src 物理文件（如果不在 outputs 列表里）应当删
+            if n > 1:
+                stale_rel = f"{folder}/{src_stem}.png"
+                stale_path = train_dir / stale_rel
+                if stale_path.is_file() and stale_rel not in out_rels:
+                    try:
+                        stale_path.unlink()
+                    except OSError as exc:
+                        log(f"   ⚠ 删旧 {stale_rel} 失败: {exc}")
+
+            preprocess_manifest.train_replace_with_crops(
+                project_dir, version["label"],
+                source_name=src_rel,
+                outputs=outputs,
+            )
+            # thumb prewarm
+            try:
+                from studio.services.dataset import thumb_cache
+                for out_rel in out_rels:
+                    out_path = train_dir / out_rel
+                    with Image.open(out_path) as piece:
+                        piece.load()
+                        thumb_cache.prewarm_from_image(out_path, piece, [256, 768])
+            except Exception as exc:  # noqa: BLE001
+                log(f"   ⚠ thumb prewarm failed: {exc}")
+
+            elapsed = time.monotonic() - t0
+            succeeded += 1
+            log(
+                f"   ✓ {src_rel} → {', '.join(out_rels)}  "
+                f"({sw}×{sh} → {n} 块, {elapsed:.2f}s)"
+            )
+            emit_throttled(
+                force=(idx == 1 or is_last),
+                idx=idx, total=total, name=src_rel, status="done",
+                n_out=n, outputs=out_rels,
+                succeeded=succeeded, failed=failed, skipped=skipped,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log(f"[fail] {src_rel}: {exc}")
+            failed += 1
+            emit_throttled(
+                force=True,
+                idx=idx, total=total, name=src_rel, status="fail",
                 error=str(exc)[:200],
                 succeeded=succeeded, failed=failed, skipped=skipped,
             )
