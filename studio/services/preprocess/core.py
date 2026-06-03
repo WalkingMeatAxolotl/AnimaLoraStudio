@@ -257,6 +257,20 @@ def _validate_name(name: str) -> None:
         raise PreprocessError(f"非法文件名: {name!r}")
 
 
+def _validate_rel_name(name: str) -> None:
+    """ADR 0010 train-scope name 校验：必须形如 `"folder/image"`（POSIX 形式）。
+
+    严格 2 段 + 拒 `..` / 反斜杠 / 绝对路径 / 空段，防 path traversal。
+    """
+    if not name:
+        raise PreprocessError(f"非法 rel name: {name!r}")
+    if "\\" in name or name.startswith("/"):
+        raise PreprocessError(f"非法 rel name: {name!r}")
+    parts = name.split("/")
+    if len(parts) != 2 or not parts[0] or not parts[1] or ".." in parts:
+        raise PreprocessError(f"非法 rel name（要求 folder/image）: {name!r}")
+
+
 def resolve_targets(
     p: dict[str, Any], *, mode: str, names: Optional[Iterable[str]] = None
 ) -> list[str]:
@@ -585,10 +599,25 @@ def version_train_dir(p: dict[str, Any], version_label: str) -> Path:
     return project_root(p) / "versions" / version_label / "train"
 
 
-def _train_images_listing(train_dir: Path) -> list[Path]:
+def _train_images_listing(train_dir: Path) -> list[tuple[str, Path]]:
+    """递归 train_dir 一级 sub-folder（LoRA repeat folder）收集 `(rel_path, full_path)`。
+
+    rel_path = POSIX 形式 `"{folder}/{image}"`，跟 manifest entry key 一致。
+    train_dir 根目录直接放的图忽略（LoRA 训练只读 sub-folder 内）。
+    按 rel_path 字典序稳定输出。
+    """
     if not train_dir.exists():
         return []
-    return sorted([f for f in train_dir.iterdir() if _is_image(f)])
+    out: list[tuple[str, Path]] = []
+    for sub in train_dir.iterdir():
+        if not sub.is_dir():
+            continue
+        for f in sub.iterdir():
+            if not _is_image(f):
+                continue
+            out.append((f"{sub.name}/{f.name}", f))
+    out.sort(key=lambda t: t[0])
+    return out
 
 
 def list_train_images(
@@ -626,10 +655,10 @@ def list_train_images(
 
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for f in _train_images_listing(train_dir):
-        seen.add(f.name)
-        entry = entries.get(f.name, {})
-        origin = preprocess_manifest.entry_origin(entry, f.name)
+    for rel, f in _train_images_listing(train_dir):
+        seen.add(rel)
+        entry = entries.get(rel, {})
+        origin = preprocess_manifest.entry_origin(entry, rel)
         st = f.stat()
         w: Optional[int] = None
         h: Optional[int] = None
@@ -639,7 +668,7 @@ def list_train_images(
         except (OSError, ValueError):
             pass
         items.append({
-            "name": f.name,
+            "name": rel,
             "mtime": st.st_mtime,
             "size": st.st_size,
             "w": w, "h": h,
@@ -689,7 +718,7 @@ def summary_train(p: dict[str, Any], version_label: str) -> dict[str, Any]:
     pdir = project_root(p)
     train_dir = version_train_dir(p, version_label)
     m = preprocess_manifest.train_load(pdir, version_label)
-    physical = {f.name for f in _train_images_listing(train_dir)}
+    physical = {rel for rel, _ in _train_images_listing(train_dir)}
     soft_removed_only = {
         name for name, entry in m["images"].items()
         if preprocess_manifest.is_duplicate_removed_entry(entry)
@@ -710,7 +739,7 @@ def resolve_targets_train(
     train_dir = version_train_dir(p, version_label)
     if not train_dir.exists() and mode != "selected":
         return []
-    existing = {f.name for f in _train_images_listing(train_dir)}
+    existing = {rel for rel, _ in _train_images_listing(train_dir)}
 
     if mode in ("all", "all_force"):
         return sorted(existing)
@@ -719,7 +748,7 @@ def resolve_targets_train(
             raise PreprocessError("mode=selected 时 names 不能为空")
         chosen: list[str] = []
         for n in names:
-            _validate_name(n)
+            _validate_rel_name(n)
             if n in existing:
                 chosen.append(n)
         return sorted(set(chosen))
@@ -750,7 +779,7 @@ def start_job_train(
         raise PreprocessError("mode=selected 必须给 names")
     if names:
         for n in names:
-            _validate_name(n)
+            _validate_rel_name(n)
 
     params: dict[str, Any] = {
         "stage": STAGE_UPSCALE,
@@ -787,7 +816,7 @@ def start_crop_job_train(
         raise PreprocessError("crops 不能为空")
     sanitized: dict[str, list[dict[str, Any]]] = {}
     for name, rects in crops.items():
-        _validate_name(name)
+        _validate_rel_name(name)
         if not isinstance(rects, list) or not rects:
             raise PreprocessError(f"{name!r} 的 rects 为空")
         out_rects: list[dict[str, Any]] = []
@@ -830,11 +859,11 @@ def list_crop_workspace_train(
     )
 
     items: list[dict[str, Any]] = []
-    for f in _train_images_listing(train_dir):
-        entry = entries.get(f.name, {})
+    for rel, f in _train_images_listing(train_dir):
+        entry = entries.get(rel, {})
         if preprocess_manifest.is_duplicate_removed_entry(entry):
             continue
-        origin = preprocess_manifest.entry_origin(entry, f.name)
+        origin = preprocess_manifest.entry_origin(entry, rel)
         if origin in removed_origins:
             continue
         try:
@@ -843,13 +872,15 @@ def list_crop_workspace_train(
         except (OSError, ValueError):
             continue
         st = f.stat()
+        # processed 推断：origin 文件名 != rel 文件名（扩展名变 or 含 _c0 后缀等）
+        rel_filename = rel.rsplit("/", 1)[-1]
         items.append({
-            "name": f.name,
+            "name": rel,
             "source": origin,
             "w": w, "h": h,
             "mtime": st.st_mtime,
             "size": st.st_size,
-            "processed": f.name != origin,
+            "processed": rel_filename != origin,
         })
     return items
 
@@ -908,6 +939,6 @@ def restore_products_train(
     pdir = project_root(p)
     name_list: list[str] = []
     for raw in names:
-        _validate_name(raw)
+        _validate_rel_name(raw)
         name_list.append(raw)
     return preprocess_manifest.train_restore(pdir, version_label, name_list)

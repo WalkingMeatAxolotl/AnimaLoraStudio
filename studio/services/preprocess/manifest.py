@@ -473,34 +473,72 @@ def ensure_manifest(project_dir: Path) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 TRAIN_MANIFEST_VERSION = 2
-_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp"})
 
 
 def train_manifest_path(project_dir: Path, version_label: str) -> Path:
     return project_dir / "versions" / version_label / "train" / MANIFEST_NAME
 
 
+def _scan_train_images(train_dir: Path) -> set[str]:
+    """递归 train_dir 一级 sub-folder 收集图片相对路径（POSIX 形式）。
+
+    LoRA 训练用 repeat folder 结构：`train/1_data/X.png` 而不是 `train/X.png`
+    （`{N_label}/{image}` 由 dataset_config.toml 解析）。manifest entry key
+    用 POSIX 相对路径表达跨 folder 唯一性（同名图可在多个 folder 重复出现）。
+
+    根目录直接放的图忽略（不该有，但防御）；非 image 文件（caption .txt /
+    arbitrary）也忽略。
+    """
+    from ..dataset.scan import IMAGE_EXTS
+
+    if not train_dir.exists():
+        return set()
+    rel_paths: set[str] = set()
+    for sub in train_dir.iterdir():
+        if not sub.is_dir():
+            continue
+        for f in sub.iterdir():
+            if f.is_file() and f.suffix.lower() in IMAGE_EXTS:
+                rel_paths.add(f"{sub.name}/{f.name}")
+    return rel_paths
+
+
 def _build_train_manifest_from_legacy(
-    legacy: dict[str, Any], train_files: set[str]
+    legacy: dict[str, Any], train_rel_paths: set[str]
 ) -> dict[str, Any]:
     """从老 project 级 manifest 抽出 train/ 里实际存在的图的 origin 关系。
 
-    跳过：(1) train/ 里没有的 entry、(2) 老 entry 标 duplicate_removed 的（人工
-    去重审核记录，跟 train manifest 无关，新模型走 version 级独立记录）。
+    老 manifest entry name 是平铺产物名（如 `X.png`，不含 folder 前缀）。
+    新 train/ 实际位置在 sub-folder 里（如 `1_data/X.png`）。匹配规则：
+
+    - 按文件名（rel path 的末段）建索引
+    - 老 entry name 找到任意同名 train 文件 → 用该 train rel path 作新 key
+    - 跨 sub-folder 同名 → 给每个匹配的 rel path 各加一条 entry（保守，让
+      用户在 UI 自决；罕见但合法）
+
+    跳过：(1) train/ 没匹配文件名的 entry、(2) duplicate_removed 老 entry
+    （人工去重审核状态不跨模型迁移；新模型走 version 级独立记录）。
     """
+    by_filename: dict[str, list[str]] = {}
+    for rel in train_rel_paths:
+        nm = rel.rsplit("/", 1)[-1]
+        by_filename.setdefault(nm, []).append(rel)
+
     images: dict[str, Any] = {}
     for name, entry in legacy.get("images", {}).items():
         if not isinstance(entry, dict):
             continue
-        if name not in train_files:
-            continue
         if is_duplicate_removed_entry(entry):
             continue
-        images[name] = {
-            "origin": entry_origin(entry, name),
-            "mtime": entry.get("mtime", 0),
-            "size": entry.get("size", 0),
-        }
+        rels = by_filename.get(name)
+        if not rels:
+            continue
+        for rel in rels:
+            images[rel] = {
+                "origin": entry_origin(entry, name),
+                "mtime": entry.get("mtime", 0),
+                "size": entry.get("size", 0),
+            }
     return {"version": TRAIN_MANIFEST_VERSION, "images": images}
 
 
@@ -537,12 +575,8 @@ def ensure_train_manifest(project_dir: Path, version_label: str) -> Path:
 
         train_dir.mkdir(parents=True, exist_ok=True)
 
-        # 收集 train/ 里的图（一级目录，不递归；按图像后缀过滤避免把 .txt 算进来）
-        train_files: set[str] = set()
-        if train_dir.exists():
-            for entry in train_dir.iterdir():
-                if entry.is_file() and entry.suffix.lower() in _IMAGE_SUFFIXES:
-                    train_files.add(entry.name)
+        # 收集 train/ 里的图（递归一级 sub-folder，LoRA repeat folder 结构）
+        train_rel_paths = _scan_train_images(train_dir)
 
         # 读老 manifest（不存在 / 损坏 → 空，跟 load() 一致语义）
         legacy: dict[str, Any]
@@ -555,7 +589,7 @@ def ensure_train_manifest(project_dir: Path, version_label: str) -> Path:
         else:
             legacy = {}
 
-        manifest = _build_train_manifest_from_legacy(legacy, train_files)
+        manifest = _build_train_manifest_from_legacy(legacy, train_rel_paths)
         _atomic_write(target, manifest)
         return target
 
@@ -570,6 +604,8 @@ def ensure_train_manifest(project_dir: Path, version_label: str) -> Path:
 #
 # 关键语义差异（vs ADR 0004 老 API）：
 # - manifest 落 `versions/{label}/train/manifest.json`（PR-1 已加 ensure 路径）
+# - entry key 用 **POSIX 相对路径**（如 `"1_data/X.png"`），表达 LoRA repeat
+#   folder 结构（`train/{N_label}/{image}`）；跨 folder 同名图各自独立 entry
 # - `train_restore(name)` = 从 `download/{entry.origin}` 复制覆盖回 `train/{name}`
 #   （不是删 entry；详 ADR 0010 §Restore 语义）；缺 origin 文件时 → no_origin 列表
 # - `train_add_processed` size 兜底 stat `train/{name}`（不是老 `preprocess/{name}`）
