@@ -99,11 +99,14 @@ def test_version_status_enum_values() -> None:
 
 
 def test_version_phase_order_and_skippable() -> None:
+    # ADR 0010 加 preprocessing phase（curating 之后，可跳过跟 regularizing 一致）
     assert versions.VersionPhase.ORDER == (
-        "curating", "tagging", "editing", "regularizing", "ready",
+        "curating", "preprocessing", "tagging", "editing", "regularizing", "ready",
     )
-    assert len(versions.VersionPhase.VALUES) == 5
-    assert versions.VersionPhase.SKIPPABLE == frozenset({"regularizing"})
+    assert len(versions.VersionPhase.VALUES) == 6
+    assert versions.VersionPhase.SKIPPABLE == frozenset(
+        {"preprocessing", "regularizing"}
+    )
 
 
 def test_get_status_fallback_to_preparing() -> None:

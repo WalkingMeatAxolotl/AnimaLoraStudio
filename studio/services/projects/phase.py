@@ -80,6 +80,26 @@ def check_regularizing(
     return CheckResult(True)
 
 
+def check_preprocessing(
+    conn: sqlite3.Connection, version_id: int
+) -> CheckResult:
+    """无 preprocess job 处于 pending/running（ADR 0010；可跳过 = 不强求处理过）。
+
+    跟 `check_regularizing` 同 pattern——预处理是可选 phase（upscale / crop /
+    去重等都可跳过，接受训练时默认放大算法）；校验仅防 concurrent job 撞车。
+    """
+    row = conn.execute(
+        "SELECT COUNT(*) FROM project_jobs "
+        "WHERE version_id = ? "
+        "  AND kind = 'preprocess' "
+        "  AND status IN ('pending', 'running')",
+        (version_id,),
+    ).fetchone()
+    if int(row[0]) > 0:
+        return CheckResult(False, "预处理任务进行中，请等待完成")
+    return CheckResult(True)
+
+
 def check_ready(
     project: dict[str, Any], version: dict[str, Any]
 ) -> CheckResult:
@@ -110,6 +130,8 @@ def check_phase(
     P = _versions.VersionPhase
     if phase == P.CURATING:
         return check_curating(_versions.stats_for_version(p, v))
+    if phase == P.PREPROCESSING:
+        return check_preprocessing(conn, version_id)
     if phase == P.TAGGING:
         return check_tagging(_versions.stats_for_version(p, v))
     if phase == P.EDITING:
@@ -164,10 +186,11 @@ def advance_phase(
 def skip_phase(
     conn: sqlite3.Connection, version_id: int
 ) -> tuple[bool, CheckResult, Optional[str]]:
-    """跳过当前 phase（仅 ``SKIPPABLE`` 集合允许；当前 = regularizing）。
+    """跳过当前 phase（仅 ``SKIPPABLE`` 集合允许；当前 = preprocessing /
+    regularizing）。
 
-    与 ``advance_phase`` 区别：不要求"完成条件"满足（如不要求生成正则集），
-    仅校验"无 concurrent job"防止状态错乱。
+    与 ``advance_phase`` 区别：不要求"完成条件"满足（如不要求生成正则集 /
+    不要求每张图都预处理过），仅校验"无 concurrent job"防止状态错乱。
     """
     v = _versions.get_version(conn, version_id)
     if not v:
@@ -177,9 +200,13 @@ def skip_phase(
     if current_phase not in _versions.VersionPhase.SKIPPABLE:
         return False, CheckResult(False, f"phase {current_phase} 不可跳过"), None
 
-    # regularizing 跳过也要 no job running
+    # skip 时仍校验"无 concurrent job"防止状态错乱
     if current_phase == _versions.VersionPhase.REGULARIZING:
         result = check_regularizing(conn, version_id)
+        if not result.ok:
+            return False, result, None
+    elif current_phase == _versions.VersionPhase.PREPROCESSING:
+        result = check_preprocessing(conn, version_id)
         if not result.ok:
             return False, result, None
 

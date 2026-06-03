@@ -71,7 +71,8 @@ def test_advance_fails_with_empty_train(client: TestClient) -> None:
     assert body["new_phase"] is None
 
 
-def test_advance_curating_to_tagging_with_image(client: TestClient) -> None:
+def test_advance_curating_to_preprocessing_with_image(client: TestClient) -> None:
+    """ADR 0010 加 preprocessing phase（curating 之后）。"""
     p, v = _make_pv(client)
     vdir = versions.version_dir(p["id"], p["slug"], v["label"])
     _put_image(vdir / "train" / "5_concept", "001", with_caption=False)
@@ -80,8 +81,8 @@ def test_advance_curating_to_tagging_with_image(client: TestClient) -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert body["advanced"] is True
-    assert body["new_phase"] == "tagging"
-    assert body["version"]["phase"] == "tagging"
+    assert body["new_phase"] == "preprocessing"
+    assert body["version"]["phase"] == "preprocessing"
 
 
 def test_advance_tagging_fails_with_missing_caption(client: TestClient) -> None:

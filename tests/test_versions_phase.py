@@ -167,13 +167,9 @@ def test_advance_phase_blocked_by_failed_check(isolated) -> None:
     assert versions.get_phase(v2) == "curating"
 
 
-def test_advance_phase_curating_to_tagging(isolated) -> None:
-    """curating phase + train 有图 → 推进到 tagging。"""
+def test_advance_phase_curating_to_preprocessing(isolated) -> None:
+    """curating phase + train 有图 → 推进到 preprocessing（ADR 0010 加新 phase）。"""
     v = _make_version(isolated)
-    vdir = versions.version_dir(v["project_id"],
-                                 projects.PROJECTS_DIR.name and v["label"] or v["label"],
-                                 v["label"])
-    # 用真正的 project slug
     with db.connection_for(isolated["db"]) as conn:
         p = projects.get_project(conn, v["project_id"])
     vdir = versions.version_dir(p["id"], p["slug"], v["label"])
@@ -183,10 +179,10 @@ def test_advance_phase_curating_to_tagging(isolated) -> None:
         advanced, result, new_phase = versions_phase.advance_phase(conn, v["id"])
     assert advanced
     assert result.ok
-    assert new_phase == "tagging"
+    assert new_phase == "preprocessing"
     with db.connection_for(isolated["db"]) as conn:
         v2 = versions.get_version(conn, v["id"])
-    assert versions.get_phase(v2) == "tagging"
+    assert versions.get_phase(v2) == "preprocessing"
 
 
 def test_advance_phase_tagging_blocked_by_missing_caption(isolated) -> None:
@@ -213,6 +209,41 @@ def test_skip_phase_only_works_for_skippable(isolated) -> None:
         advanced, result, _ = versions_phase.skip_phase(conn, v["id"])
     assert not advanced
     assert "不可跳过" in result.reason
+
+
+def test_skip_phase_preprocessing_jumps_to_tagging(isolated) -> None:
+    """ADR 0010：preprocessing 可跳过（无 preprocess job running） → cursor 跳到 tagging。"""
+    v = _make_version(isolated)
+    with db.connection_for(isolated["db"]) as conn:
+        versions.update_version(conn, v["id"], phase="preprocessing")
+        advanced, result, new_phase = versions_phase.skip_phase(conn, v["id"])
+    assert advanced
+    assert result.ok
+    assert new_phase == "tagging"
+
+
+def test_skip_phase_preprocessing_blocked_by_running_job(isolated) -> None:
+    """有 preprocess job pending/running → 拒跳过（防 concurrent job 撞车）。"""
+    v = _make_version(isolated)
+    with db.connection_for(isolated["db"]) as conn:
+        versions.update_version(conn, v["id"], phase="preprocessing")
+        conn.execute(
+            "INSERT INTO project_jobs(project_id, version_id, kind, params, status) "
+            "VALUES (?, ?, 'preprocess', '{}', 'running')",
+            (v["project_id"], v["id"]),
+        )
+        conn.commit()
+        advanced, result, _ = versions_phase.skip_phase(conn, v["id"])
+    assert not advanced
+    assert "预处理" in result.reason
+
+
+def test_check_preprocessing_ok_without_running_job(isolated) -> None:
+    """无 concurrent preprocess job → OK（preprocessing 可跳过不强求完成度）。"""
+    v = _make_version(isolated)
+    with db.connection_for(isolated["db"]) as conn:
+        result = versions_phase.check_preprocessing(conn, v["id"])
+    assert result.ok
 
 
 def test_skip_phase_regularizing_jumps_to_ready(isolated) -> None:

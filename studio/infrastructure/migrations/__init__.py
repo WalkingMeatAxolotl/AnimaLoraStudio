@@ -25,6 +25,7 @@ from ._v7_version_trigger_word import migrate as _migrate_v7
 from ._v8_version_status_phase import migrate as _migrate_v8
 from ._v9_drop_legacy_stage import migrate as _migrate_v9
 from ._v10_request_trace import migrate as _migrate_v10
+from ._v11_preprocessing_phase import migrate as _migrate_v11
 
 Migration = Callable[[sqlite3.Connection], None]
 
@@ -39,6 +40,7 @@ MIGRATIONS: list[Migration] = [
     _migrate_v8,  # v8: versions.status / phase / last_failure_reason（ADR-0007）
     _migrate_v9,  # v9: 删 projects.stage + versions.stage（ADR-0007 PR-5 destructive）
     _migrate_v10, # v10: tasks.request_trace_id（ADR-0009 PR-1 C6 trace_id 跨进程贯穿）
+    _migrate_v11, # v11: versions.phase 加 preprocessing 值（ADR-0010 配套，回填 curating+train 非空 → preprocessing）
 ]
 
 
