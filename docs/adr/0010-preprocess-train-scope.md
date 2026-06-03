@@ -108,15 +108,26 @@ projects/{id}-{slug}/
 **字段语义**：
 
 - `version` (int): schema 版本，当前固定 `2`
-- `images` (map): key = train 内**实际文件名**（含扩展名），value = entry
-- `entry.origin` (string): `download/` 下对应原图的**文件名**，用于 restore 反查
+- `images` (map): key = train 内**POSIX 相对路径** `"{N_label}/{image}"`（LoRA
+  repeat folder 结构：`train/1_data/X.png` → entry key `"1_data/X.png"`），
+  value = entry
+- `entry.origin` (string): `download/` 下对应原图的**平铺文件名**（download/
+  无 sub-folder 结构），用于 restore 反查
 - `entry.mtime` / `entry.size` (number): 产物文件元数据，可检测外部修改
+
+**为什么 rel path 而不是平铺**：LoRA 训练 dataset config 把 `train/{N_label}/`
+当 repeat folder（N = 重复次数）；同一张图可在多个 folder 出现（罕见但合法）。
+平铺 entry key 无法表达跨 folder 唯一性 + 同名歧义。POSIX 形式 `/` 跨平台一致。
+
+`train/` 根目录直接放的图**被忽略**（LoRA 训练只读 sub-folder 内）；validator
+`_validate_rel_name` 强制 `folder/image` 两段格式，防 path traversal。
 
 **状态从字段差异隐含推断**（承袭 ADR 0004 极简原则）：
 
-- `name="X.png"` + `origin="X.jpg"` → 处理过（扩展名变 = upscale / crop / 转码之一）
-- `name="X.jpg"` + `origin="X.jpg"` + mtime/size 匹配 → 原样未处理
-- `name="X.jpg"` + `origin="X.jpg"` + mtime/size 不匹配 → 外部修改
+- entry key rel path 末段 `"X.png"` + `origin="X.jpg"` → 处理过（扩展名变 =
+  upscale / crop / 转码之一）
+- 末段 `"X.jpg"` + `origin="X.jpg"` + mtime/size 匹配 → 原样未处理
+- 末段 `"X.jpg"` + `origin="X.jpg"` + mtime/size 不匹配 → 外部修改
 
 **不存的字段**（明确否定项，跟 ADR 0004 Addendum 1 一致）：
 
@@ -134,9 +145,14 @@ projects/{id}-{slug}/
 **重建规则**（按优先级）：
 
 1. 目标 `versions/{label}/train/manifest.json` 已存在 → 直接返回（O(1) stat，热路径 0 开销）
-2. 不存在 + 老 `projects/{id}/preprocess/manifest.json` 存在 → 按 `train/` 实际文件名集合（仅 `.png/.jpg/.jpeg/.webp`）与老 entry 的 `origin` 反查匹配 → 重建 v2 schema
+2. 不存在 + 老 `projects/{id}/preprocess/manifest.json` 存在 → 递归扫
+   `train/` 一级 sub-folder 收集图片相对路径集合（仅图像后缀；根目录直接放
+   的图忽略）；按文件名（rel path 末段）匹配老平铺 entry name → 重建 v2
+   schema，entry key 用 rel path
 3. 老 manifest 不存在 / 损坏（非 dict / 非法 JSON） → 写空 v2 manifest（`{"version": 2, "images": {}}`）
 4. 老 entry 标 `kind: duplicate_removed` → **跳过**（人工去重审核状态不跨模型迁移，新模型下用户在 train scope 重新去重）
+5. 跨 sub-folder 同名图（罕见但合法，如 `1_data/X.png` + `5_extra/X.png`） →
+   各自独立 entry，都继承同一老 origin
 
 并发：`threading.Lock` 串行 + 原子 `tmp+rename` 落盘 + 双检查防竞态。
 

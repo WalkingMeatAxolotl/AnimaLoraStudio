@@ -427,6 +427,176 @@ def options_to_json(options: DuplicateOptions) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# ADR 0010 — train-scope duplicates API (PR-2 step E)
+#
+# 老 _resolve_download_sources / scan_project_duplicates / apply_duplicate_removals
+# 暂留作 backward-compat 给老 endpoint 用，PR-3 删。新代码 / 新 endpoint 请用
+# *_train 系列：scope 收窄到 versions/{label}/train/，每个 version 独立审核。
+# ---------------------------------------------------------------------------
+
+
+def _resolve_train_sources(
+    conn,
+    project_id: int,
+    version_id: int,
+    project_dir: Path,
+) -> list[tuple[str, Path]]:
+    """ADR 0010 train scope: 列 `versions/{label}/train/{folder}/` 全部图作
+    duplicate-scan sources。
+
+    跳过 train manifest 已标 `duplicate_removed` 的（用户审核过的不再 dup-scan）。
+    name 用 POSIX rel path 形式（`"1_data/X.png"`）跟 train manifest entry key
+    一致；下游 group/report/apply 走同一形式。
+    """
+    from ..projects import versions as ver
+
+    version = ver.get_version(conn, version_id)
+    if not version or version["project_id"] != project_id:
+        raise DuplicateFinderError(
+            f"version not found / mismatch: id={version_id}"
+        )
+    label = version["label"]
+    train_dir = project_dir / "versions" / label / "train"
+    if not train_dir.exists():
+        return []
+    removed_rels = set(
+        preprocess_manifest.train_duplicate_removed(project_dir, label).keys()
+    )
+    sources: list[tuple[str, Path]] = []
+    for sub in sorted(train_dir.iterdir()):
+        if not sub.is_dir():
+            continue
+        for f in sorted(sub.iterdir()):
+            if not f.is_file():
+                continue
+            if f.suffix.lower() not in IMAGE_EXTS:
+                continue
+            rel = f"{sub.name}/{f.name}"
+            if rel in removed_rels:
+                continue
+            sources.append((rel, f))
+    return sources
+
+
+def scan_train_duplicates(
+    conn,
+    project_id: int,
+    version_id: int,
+    options: DuplicateOptions,
+    on_progress: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    """ADR 0010 train-scope 重复扫描。主流程跟 scan_project_duplicates 一致，
+    只是 sources 解析改成 `_resolve_train_sources`。
+
+    返回结构跟老版本相同（前端契约不变；PR-3 改 endpoint 后才换前端），仅
+    `target` 字段改成 `"train"` 表明 scope。
+    """
+    _require_imagehash()
+    project, project_dir = curation._project_dir(conn, project_id)  # noqa: SLF001
+    sources = _resolve_train_sources(conn, project_id, version_id, project_dir)
+    if on_progress:
+        on_progress({
+            "stage": "hashing",
+            "idx": 0,
+            "total": len(sources),
+            "text": f"Preparing hashes for {len(sources)} images...",
+        })
+    started = time.monotonic()
+    infos = build_all_image_infos(sources, options, on_progress=on_progress)
+    if on_progress:
+        total_pairs = len(infos) * (len(infos) - 1) // 2
+        on_progress({
+            "stage": "comparing",
+            "idx": 0,
+            "total": total_pairs,
+            "text": f"Comparing {total_pairs} image pairs...",
+        })
+    groups, pair_metrics, stats = group_similar_images(
+        infos, options, on_progress=on_progress,
+    )
+    blur_candidates = (
+        find_blur_candidates(infos, options) if options.detect_blur else []
+    )
+    crop_relations: list[CropRelation] = []
+    if options.detect_crops:
+        if on_progress:
+            total_pairs = len(infos) * (len(infos) - 1) // 2
+            on_progress({
+                "stage": "crop_relations",
+                "idx": 0,
+                "total": total_pairs,
+                "text": f"Checking {total_pairs} crop/scale relation pairs...",
+            })
+        crop_relations = find_crop_relations(infos, options, on_progress=on_progress)
+    elapsed = time.monotonic() - started
+
+    return {
+        "target": "train",
+        "match_scope": options.match_scope,
+        "total_images": len(sources),
+        "readable_images": len(infos),
+        "group_count": len(groups),
+        "candidate_count": sum(max(0, len(g) - 1) for g in groups),
+        "blur_candidate_count": len(blur_candidates),
+        "crop_relation_count": len(crop_relations),
+        "elapsed_seconds": round(elapsed, 3),
+        "options": options_to_json(options),
+        "stats": stats,
+        "groups": [
+            _group_to_json(index, group, pair_metrics)
+            for index, group in enumerate(groups, start=1)
+        ],
+        "blur_candidates": [
+            _blur_candidate_to_json(candidate)
+            for candidate in blur_candidates
+        ],
+        "crop_relations": [
+            _crop_relation_to_json(relation)
+            for relation in crop_relations
+        ],
+    }
+
+
+def apply_train_duplicate_removals(
+    conn,
+    project_id: int,
+    version_id: int,
+    *,
+    names: list[str],
+) -> dict[str, Any]:
+    """ADR 0010 train scope: 把 names 标记 duplicate_removed（per-version 审核
+    状态，写到 train manifest）。
+
+    `names` 是 train rel path 形式（`"1_data/X.png"`）。物理文件不动——保留
+    作"已审核但跳过"标记，跟老 mark_duplicate_removed 一致。
+    """
+    from ..projects import versions as ver
+
+    project = projects.get_project(conn, project_id)
+    if not project:
+        raise DuplicateFinderError(f"project not found: id={project_id}")
+    version = ver.get_version(conn, version_id)
+    if not version or version["project_id"] != project_id:
+        raise DuplicateFinderError(
+            f"version not found / mismatch: id={version_id}"
+        )
+
+    project_dir = projects.project_dir(project["id"], project["slug"])
+    # 校验 rel path 形式（跟 core._validate_rel_name 一致：两段、无 ..）
+    for raw_name in names:
+        if not raw_name or "\\" in raw_name or raw_name.startswith("/"):
+            raise DuplicateFinderError(f"非法 rel name: {raw_name!r}")
+        parts = raw_name.split("/")
+        if len(parts) != 2 or not parts[0] or not parts[1] or ".." in parts:
+            raise DuplicateFinderError(
+                f"非法 rel name（要求 folder/image）: {raw_name!r}"
+            )
+    return preprocess_manifest.train_mark_duplicate_removed(
+        project_dir, version["label"], names,
+    )
+
+
 def _resolve_download_sources(
     conn,
     project_id: int,
