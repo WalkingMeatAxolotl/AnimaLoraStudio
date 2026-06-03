@@ -29,6 +29,29 @@ const ANIM_MS = 220
 export default function SettingsDrawer() {
   const { isOpen, close } = useSettingsDrawer()
   const [contentReady, setContentReady] = useState(false)
+  const [shouldRender, setShouldRender] = useState(isOpen)
+  const [active, setActive] = useState(isOpen)
+
+  useEffect(() => {
+    if (isOpen) {
+      setShouldRender(true)
+    } else {
+      setActive(false)
+      const timer = setTimeout(() => {
+        setShouldRender(false)
+      }, ANIM_MS)
+      return () => clearTimeout(timer)
+    }
+  }, [isOpen])
+
+  useEffect(() => {
+    if (shouldRender && isOpen) {
+      const id = requestAnimationFrame(() => {
+        setActive(true)
+      })
+      return () => cancelAnimationFrame(id)
+    }
+  }, [shouldRender, isOpen])
 
   // open: 让外壳先滑进来（GPU 动画），下一帧再 mount Settings
   // close: 立刻卸 Settings，外壳的 slide-out 在空骨架上跑
@@ -41,10 +64,12 @@ export default function SettingsDrawer() {
     return () => cancelAnimationFrame(id)
   }, [isOpen])
 
+  if (!shouldRender) return null
+
   return (
     <div
       aria-hidden={!isOpen}
-      className={`absolute inset-0 z-30 ${isOpen ? '' : 'pointer-events-none'}`}
+      className={`absolute inset-0 z-30 ${active ? '' : 'pointer-events-none'}`}
     >
       {/* backdrop：absolute 铺满 viewport，让 panel slide-in 中途不会从右边露出底页。
        *  之前用 flex + flex-1 时 backdrop 只占 panel 左边那条，panel 滑动期间右侧
@@ -52,7 +77,7 @@ export default function SettingsDrawer() {
       <div
         onClick={() => void close()}
         className={`absolute inset-0 transition-[background-color,backdrop-filter,-webkit-backdrop-filter] ease-out ${
-          isOpen ? 'bg-black/25 backdrop-blur-sm' : 'bg-black/0 backdrop-blur-0'
+          active ? 'bg-black/25 backdrop-blur-sm' : 'bg-black/0 backdrop-blur-0'
         }`}
         style={{ transitionDuration: `${ANIM_MS}ms` }}
         aria-label="close settings"
@@ -61,7 +86,7 @@ export default function SettingsDrawer() {
         role="dialog"
         aria-modal="true"
         className={`absolute top-0 right-0 bottom-0 flex flex-col bg-canvas border-l border-subtle shadow-2xl transition-transform ease-out ${DRAWER_WIDTH_CLASS} ${
-          isOpen ? 'translate-x-0' : 'translate-x-full'
+          active ? 'translate-x-0' : 'translate-x-full'
         }`}
         style={{ transitionDuration: `${ANIM_MS}ms` }}
       >

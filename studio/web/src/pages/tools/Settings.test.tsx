@@ -125,6 +125,11 @@ const initialServerState = {
   },
   models: { root: null, selected_anima: '1.0', selected_upscaler: '4x-AnimeSharp', auto_sync_paths: true },
   queue: { allow_gpu_during_train: false },
+  download_source: 'huggingface',
+  modelscope: { token: '' },
+  generate: { preview_every_n_steps: 0, attention_backend: 'sdpa' },
+  system: { update_channel: 'stable', show_dev_channel: false },
+  proxy: { enabled: false, http_proxy: '', https_proxy: '', no_proxy: '' },
 }
 
 const emptyModelsCatalog = {
