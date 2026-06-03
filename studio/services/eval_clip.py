@@ -387,7 +387,10 @@ def _encode_images(
                 images.append(img.convert("RGB"))
         inputs = processor(images=images, return_tensors="pt")
         inputs = {key: value.to(device) for key, value in inputs.items()}
-        feats = model.get_image_features(**inputs)
+        feats = _feature_tensor(
+            model.get_image_features(**inputs),
+            projection=getattr(model, "visual_projection", None),
+        )
         chunks.append(F.normalize(feats.float(), dim=-1).cpu())
     return torch.cat(chunks, dim=0)
 
@@ -408,9 +411,45 @@ def _encode_texts(model, processor, texts: list[str], device: str):
             truncation=True,
         )
         inputs = {key: value.to(device) for key, value in inputs.items()}
-        feats = model.get_text_features(**inputs)
+        feats = _feature_tensor(
+            model.get_text_features(**inputs),
+            projection=getattr(model, "text_projection", None),
+        )
         chunks.append(F.normalize(feats.float(), dim=-1).cpu())
     return torch.cat(chunks, dim=0)
+
+
+def _feature_tensor(output, *, projection=None):
+    """Return the embedding tensor from Tensor or ModelOutput-like values."""
+    if hasattr(output, "float"):
+        return output
+    text_embeds = getattr(output, "text_embeds", None)
+    if text_embeds is not None:
+        return text_embeds
+    image_embeds = getattr(output, "image_embeds", None)
+    if image_embeds is not None:
+        return image_embeds
+    pooler = getattr(output, "pooler_output", None)
+    if pooler is not None:
+        return projection(pooler) if projection is not None else pooler
+    if isinstance(output, dict):
+        for key in ("text_embeds", "image_embeds"):
+            value = output.get(key)
+            if value is not None:
+                return value
+        pooler_value = output.get("pooler_output")
+        if pooler_value is not None:
+            return projection(pooler_value) if projection is not None else pooler_value
+        hidden = output.get("last_hidden_state")
+        if hidden is not None:
+            return hidden
+    if isinstance(output, (list, tuple)):
+        for idx in (1, 0):
+            if len(output) > idx and output[idx] is not None:
+                return output[idx]
+    raise EvalClipError(
+        f"CLIP feature output is not tensor-like: {type(output).__name__}"
+    )
 
 
 def _mean(values: list[float]) -> float | None:
