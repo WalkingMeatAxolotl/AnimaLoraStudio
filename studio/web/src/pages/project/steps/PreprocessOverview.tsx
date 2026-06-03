@@ -39,9 +39,10 @@ type Tab = 'all' | 'removed'
  */
 export default function PreprocessOverviewPage() {
   const { t } = useTranslation()
-  const { project, reload } = useOutletContext<Ctx>()
+  const { project, activeVersion, reload } = useOutletContext<Ctx>()
   const { toast } = useToast()
   const { confirm } = useDialog()
+  const vid = activeVersion?.id ?? 0
 
   const [tab, setTab] = useState<Tab>('all')
   const [workspace, setWorkspace] = useState<CropWorkspaceItem[]>([])
@@ -52,10 +53,11 @@ export default function PreprocessOverviewPage() {
   const [previewIdx, setPreviewIdx] = useState<number | null>(null)
 
   const refresh = useCallback(async () => {
+    if (!vid) return
     try {
       const [ws, rm] = await Promise.all([
-        api.listCropWorkspace(project.id),
-        api.listPreprocessDuplicatesRemoved(project.id),
+        api.listCropWorkspaceTrain(project.id, vid),
+        api.listPreprocessDuplicatesRemovedTrain(project.id, vid),
       ])
       setWorkspace(ws.images)
       setRemoved(rm.images)
@@ -64,7 +66,7 @@ export default function PreprocessOverviewPage() {
     } finally {
       setLoading(false)
     }
-  }, [project.id])
+  }, [project.id, vid])
   useEffect(() => { void refresh() }, [refresh])
 
   // Live-update on preprocess SSE — upscale / crop / restore / duplicate apply
@@ -106,39 +108,60 @@ export default function PreprocessOverviewPage() {
     caption: string
   }
 
+  // ADR 0010: workspace 的 name 是 train rel path "1_data/X.png"。
+  // 拆 folder + filename 喂 versionThumbUrl(bucket='train')；split 预览左侧
+  // 仍走 download bucket 看原图（origin 平铺名）。
+  const splitRel = (rel: string) => {
+    const i = rel.lastIndexOf('/')
+    return i >= 0
+      ? { folder: rel.slice(0, i), filename: rel.slice(i + 1) }
+      : { folder: '', filename: rel }
+  }
+
   const allItems = useMemo<GridItem[]>(
     () => workspace.map((im) => {
+      const { folder, filename } = splitRel(im.name)
+      const trainThumb = (size: number) =>
+        api.versionThumbUrl(project.id, vid, 'train', filename, folder, size)
+          + `&_=${im.mtime}`
       if (im.processed) {
         return {
           name: im.name,
-          // 缩略图也走 preprocess 派生（看到处理后的样子）
-          thumbUrl: api.projectThumbUrl(project.id, im.name, 'preprocess', 256, im.mtime),
-          // split 预览：左 = download 原图（raw=1 跳过 resolve_origin，否则会被
-          // hijack 回派生产物），右 = preprocess 派生
+          thumbUrl: trainThumb(256),
+          // split 预览：左 = download 原图（origin 平铺名），右 = train 派生
           previewUrl: api.projectThumbUrl(project.id, im.source, 'download', 1600, im.mtime, true),
-          compareSrc: api.projectThumbUrl(project.id, im.name, 'preprocess', 1600, im.mtime),
+          compareSrc: trainThumb(1600),
           badge: t('preprocessOverview.badgeProcessed'),
           caption: `${im.name} · ${im.w}×${im.h}`,
         }
       }
-      // 未处理：原图视图
+      // 原样未处理：train 里的图就是 download 原图副本
       return {
         name: im.name,
-        thumbUrl: api.projectThumbUrl(project.id, im.source, 'download', 256, im.mtime),
-        previewUrl: api.projectThumbUrl(project.id, im.source, 'download', 1600, im.mtime),
+        thumbUrl: trainThumb(256),
+        previewUrl: trainThumb(1600),
         caption: `${im.name} · ${im.w}×${im.h}`,
       }
     }),
-    [workspace, project.id, t],
+    [workspace, project.id, vid, t],
   )
   const removedItems = useMemo<GridItem[]>(
     () => removed.map((im) => ({
       name: im.name,
-      thumbUrl: api.projectThumbUrl(project.id, im.source, 'download', 256, im.mtime),
-      previewUrl: api.projectThumbUrl(project.id, im.source, 'download', 1600, im.mtime),
+      // duplicate_removed 物理仍在 train/{name}；缩略图走 train bucket
+      thumbUrl: (() => {
+        const { folder, filename } = splitRel(im.name)
+        return api.versionThumbUrl(project.id, vid, 'train', filename, folder, 256)
+          + `&_=${im.mtime}`
+      })(),
+      previewUrl: (() => {
+        const { folder, filename } = splitRel(im.name)
+        return api.versionThumbUrl(project.id, vid, 'train', filename, folder, 1600)
+          + `&_=${im.mtime}`
+      })(),
       caption: im.w && im.h ? `${im.source} · ${im.w}×${im.h}` : im.source,
     })),
-    [removed, project.id],
+    [removed, project.id, vid],
   )
 
   const items = tab === 'all' ? allItems : removedItems
@@ -152,10 +175,13 @@ export default function PreprocessOverviewPage() {
       { tone: 'danger', okText: t('preprocessOverview.confirmRestoreOk') },
     ))) return
     try {
-      const r = await api.restorePreprocessFiles(project.id, names)
+      const r = await api.restorePreprocessFilesTrain(project.id, vid, names)
       toast(
-        t('preprocessOverview.restoredToast', { n: r.restored.length }),
-        'success',
+        t('preprocessOverview.restoredToast', {
+          n: r.restored.length,
+          missing: r.no_origin.length,
+        }),
+        r.no_origin.length > 0 ? 'error' : 'success',
       )
       setSel(new Set())
       setSelAnchor(null)
@@ -164,7 +190,7 @@ export default function PreprocessOverviewPage() {
     } catch (e) {
       toast(String(e), 'error')
     }
-  }, [confirm, project.id, t, toast, refresh, reload])
+  }, [confirm, project.id, vid, t, toast, refresh, reload])
 
   const resetAll = useCallback(async () => {
     if (processed.length === 0) return
@@ -173,7 +199,7 @@ export default function PreprocessOverviewPage() {
       { tone: 'danger', okText: t('preprocessOverview.confirmResetAllOk') },
     ))) return
     try {
-      await api.resetPreprocessFiles(project.id)
+      await api.resetPreprocessFilesTrain(project.id, vid)
       toast(t('preprocessOverview.resetAllToast'), 'success')
       setSel(new Set())
       setSelAnchor(null)
@@ -182,7 +208,7 @@ export default function PreprocessOverviewPage() {
     } catch (e) {
       toast(String(e), 'error')
     }
-  }, [confirm, processed.length, project.id, t, toast, refresh, reload])
+  }, [confirm, processed.length, project.id, vid, t, toast, refresh, reload])
 
   // all tab 里 select all 只选「已处理」项 —— 未处理的 download 原图没什么
   // 可恢复（没有 manifest entry），加进选中会浪费一次 confirm。
@@ -201,6 +227,15 @@ export default function PreprocessOverviewPage() {
   const emptyHint =
     tab === 'all' ? t('preprocessOverview.emptyAll')
     : t('preprocessOverview.emptyRemoved')
+
+  // ADR 0010: hooks 之后再做 vid guard
+  if (!activeVersion) {
+    return (
+      <div className="p-6 text-fg-secondary">
+        {t('projectStepper.selectVersion')}
+      </div>
+    )
+  }
 
   return (
     <StepShell

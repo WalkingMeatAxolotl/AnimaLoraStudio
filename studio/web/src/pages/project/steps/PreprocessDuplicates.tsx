@@ -32,9 +32,10 @@ interface DuplicateLog {
 
 export default function PreprocessDuplicatesPage() {
   const { t } = useTranslation()
-  const { project, reload } = useOutletContext<Ctx>()
+  const { project, activeVersion, reload } = useOutletContext<Ctx>()
   const { toast } = useToast()
   const { confirm } = useDialog()
+  const vid = activeVersion?.id ?? 0
   const [options, setOptions] = useState<DuplicateScanOptions>(DEFAULT_DUPLICATE_OPTIONS)
   const [result, setResult] = useState<DuplicateScanResult | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -85,7 +86,7 @@ export default function PreprocessDuplicatesPage() {
     setScanLogVisible(true)
     setLogs([{ ts: Date.now(), status: 'running', text: t('duplicates.logStarted') }])
     try {
-      const next = await api.scanDuplicates(project.id, options)
+      const next = await api.scanDuplicatesTrain(project.id, vid, options)
       setResult(next)
       setSelected(new Set(
         next.groups.flatMap((group) =>
@@ -118,7 +119,7 @@ export default function PreprocessDuplicatesPage() {
     if (!ok) return
     setBusy(true)
     try {
-      const res = await api.applyDuplicateAction(project.id, { names })
+      const res = await api.applyDuplicateActionTrain(project.id, vid, { names })
       toast(
         t('duplicates.appliedToast', { n: res.removed.length }) +
           (res.skipped.length ? t('duplicates.appliedSkipped', { n: res.skipped.length }) : '') +
@@ -139,6 +140,15 @@ export default function PreprocessDuplicatesPage() {
   const openPreview = (name: string) => {
     const index = previewNames.indexOf(name)
     setPreviewIdx(index >= 0 ? index : 0)
+  }
+
+  // ADR 0010: hooks 之后再做 vid guard
+  if (!activeVersion) {
+    return (
+      <div className="p-6 text-fg-secondary">
+        {t('projectStepper.selectVersion')}
+      </div>
+    )
   }
 
   return (

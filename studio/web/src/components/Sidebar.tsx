@@ -8,24 +8,27 @@ import { useToast } from './Toast'
 
 /** ADR-0007 §11.2 / §11.5: cursor 派生 step 完成态。
  *
- * STEPS 顺序：0 download / 1 preprocess / 2 curate / 3 tag / 4 edit / 5 reg / 6 train
- * 项目级 ①②：`*_image_count > 0` 派生
- * version 级 ③-⑦：`PHASE_ORDER.indexOf(STEP_KEY_TO_PHASE[key]) < cursorIdx`
+ * STEPS 顺序（ADR 0010 后）：0 download / 1 curate / 2 preprocess / 3 tag / 4 edit / 5 reg / 6 train
+ * 项目级 ①：`download_image_count > 0` 派生
+ * version 级 ②-⑦：`PHASE_ORDER.indexOf(STEP_KEY_TO_PHASE[key]) < cursorIdx`
+ * （ADR 0010 把 preprocess 从 project scope 移到 version scope，curate 之后）
  */
 const STEP_KEY_TO_PHASE: Record<string, VersionPhase> = {
-  curate: 'curating',
-  tag:    'tagging',
-  edit:   'editing',
-  reg:    'regularizing',
-  train:  'ready',
+  curate:     'curating',
+  preprocess: 'preprocessing',
+  tag:        'tagging',
+  edit:       'editing',
+  reg:        'regularizing',
+  train:      'ready',
 }
 
 const PHASE_TO_STEP_KEY: Record<VersionPhase, string> = {
-  curating:     'curate',
-  tagging:      'tag',
-  editing:      'edit',
-  regularizing: 'reg',
-  ready:        'train',
+  curating:      'curate',
+  preprocessing: 'preprocess',
+  tagging:       'tag',
+  editing:       'edit',
+  regularizing:  'reg',
+  ready:         'train',
 }
 import { useProjectCtx } from '../context/ProjectContext'
 
@@ -261,16 +264,17 @@ function ProjectStepperNav({ pid, activeVid, currentStep, version, collapsed }: 
   const navigate = useNavigate()
   const { toast } = useToast()
 
-  // 项目级 ①② 跟"概览"同款：圆盘里放 icon、无序号、无完成绿色态。
-  // version 级 phase 重编号 1-5（每个 version 自己一段流水线）。
+  // 项目级 ① 跟"概览"同款：圆盘里放 icon、无序号、无完成绿色态。
+  // version 级 phase 重编号 1-6（每个 version 自己一段流水线，ADR 0010 加
+  // preprocess phase 后是 6 个 version 级 step）。
   const STEPS = [
     { key: 'download',   labelKey: 'nav.download',   idx: '',  icon: I.download, scope: 'project' as const },
-    { key: 'preprocess', labelKey: 'nav.preprocess', idx: '',  icon: I.upscale,  scope: 'project' as const },
     { key: 'curate',     labelKey: 'nav.curate',     idx: '1', icon: I.filter,   scope: 'version' as const },
-    { key: 'tag',        labelKey: 'nav.tag',        idx: '2', icon: I.tag,      scope: 'version' as const },
-    { key: 'edit',       labelKey: 'nav.tagEdit',    idx: '3', icon: I.edit,     scope: 'version' as const },
-    { key: 'reg',        labelKey: 'nav.reg',        idx: '4', icon: I.reg,      scope: 'version' as const },
-    { key: 'train',      labelKey: 'nav.train',      idx: '5', icon: I.train,    scope: 'version' as const },
+    { key: 'preprocess', labelKey: 'nav.preprocess', idx: '2', icon: I.upscale,  scope: 'version' as const },
+    { key: 'tag',        labelKey: 'nav.tag',        idx: '3', icon: I.tag,      scope: 'version' as const },
+    { key: 'edit',       labelKey: 'nav.tagEdit',    idx: '4', icon: I.edit,     scope: 'version' as const },
+    { key: 'reg',        labelKey: 'nav.reg',        idx: '5', icon: I.reg,      scope: 'version' as const },
+    { key: 'train',      labelKey: 'nav.train',      idx: '6', icon: I.train,    scope: 'version' as const },
   ]
 
   const overviewActive = currentStep === null
@@ -469,7 +473,8 @@ export default function Sidebar() {
   const pid = location.pathname.match(/^\/projects\/([^/]+)/)?.[1] ?? null
   const urlVid = location.pathname.match(/\/v\/([^/]+)/)?.[1] ?? null
   const stepMatch = location.pathname.match(/\/v\/[^/]+\/([^/]+)$/)
-  const projectScopeStep = location.pathname.match(/^\/projects\/[^/]+\/(download|preprocess)$/)?.[1] ?? null
+  // ADR 0010: preprocess 从 project scope 移到 version scope；project scope 只剩 download
+  const projectScopeStep = location.pathname.match(/^\/projects\/[^/]+\/(download)$/)?.[1] ?? null
   const currentStep = stepMatch?.[1] ?? projectScopeStep
 
   const activeVid = ctx?.activeVersion?.id?.toString() ?? urlVid

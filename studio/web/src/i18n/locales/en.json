@@ -12,7 +12,7 @@
     "tagEdit": "Tag Edit",
     "reg": "Reg set (optional)",
     "train": "Train",
-    "preprocess": "Preprocess Tools",
+    "preprocess": "Preprocess (optional)",
     "overview": "Overview"
   },
   "common": {
@@ -146,8 +146,8 @@
   },
   "projectStepper": {
     "download": "① Download",
-    "preprocess": "② Preprocess",
-    "curate": "③ Curate",
+    "curate": "② Curate",
+    "preprocess": "③ Preprocess (optional)",
     "tag": "④ Tag",
     "tagEdit": "⑤ Tag Edit",
     "reg": "⑥ Reg set (optional)",

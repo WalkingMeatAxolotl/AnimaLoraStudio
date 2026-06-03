@@ -557,19 +557,21 @@ export type VersionStatus =
   | 'canceled'
 
 /** ADR-0007 §11.3-B 新模型：version 准备 cursor（仅 status=preparing 时有意义）。
- *  按 PHASE_ORDER 顺序：curating → tagging → editing → regularizing → ready。 */
+ *  按 PHASE_ORDER 顺序：curating → preprocessing → tagging → editing →
+ *  regularizing → ready（ADR 0010 amendment 加 preprocessing）。 */
 export type VersionPhase =
   | 'curating'
+  | 'preprocessing'
   | 'tagging'
   | 'editing'
   | 'regularizing'
   | 'ready'
 
 export const PHASE_ORDER: VersionPhase[] = [
-  'curating', 'tagging', 'editing', 'regularizing', 'ready',
+  'curating', 'preprocessing', 'tagging', 'editing', 'regularizing', 'ready',
 ]
 
-export const PHASE_SKIPPABLE: VersionPhase[] = ['regularizing']
+export const PHASE_SKIPPABLE: VersionPhase[] = ['preprocessing', 'regularizing']
 
 /** ADR-0007 §11.5-A: advance / skip phase endpoint response。 */
 export interface PhaseAdvanceResult {
@@ -744,6 +746,45 @@ export interface DuplicateRemovedItem {
   h: number | null
   mtime: number
   size: number
+}
+
+// ---- ADR 0010 train-scope types -----------------------------------------
+
+/** ADR 0010 train scope: 列 versions/{label}/train/ 全部图 + manifest 元数据。
+ *  替代老 `{processed, pending}` 双 list 概念——新模型下 train/ 即"训练集 grid"，
+ *  状态从字段差异隐含推断（详 ADR 0010 §Manifest schema v2）。 */
+export interface TrainImage {
+  /** POSIX rel path "{N_label}/{image}"（如 "1_data/X.png"）。 */
+  name: string
+  mtime: number
+  size: number
+  /** PIL 读图头；损坏 / 物理不存在 null。 */
+  w: number | null
+  h: number | null
+  /** download/ 下原图名（无 sub-folder 结构）；restore 反查走这个。 */
+  origin: string | null
+  /** @deprecated 兼容字段；后端两个字段值相同。 */
+  source: string | null
+  /** download/{origin} 物理缺失（restore 会落 no_origin）。 */
+  orphan: boolean
+  /** 人工去重审核标记。UI 区分"训练参与" vs "审核跳过"。 */
+  duplicate_removed: boolean
+  /** 老 schema 透传字段（新 entry 一律 null；前端容忍）。 */
+  model: string | null
+  scale: number | null
+  action: string | null
+  target_area: number | null
+  src_size: [number, number] | null
+  dst_size: [number, number] | null
+  elapsed_seconds: number | null
+}
+
+/** ADR 0010 §Restore 语义：restore 返三组：成功 / manifest 无 entry / download
+ *  缺失。`no_origin` 给 UI 三选项 [拖入替换 / 保留 / 移除] 用。 */
+export interface TrainRestoreResult {
+  restored: string[]
+  missing: string[]
+  no_origin: string[]
 }
 
 // ---- curation (PP3) -------------------------------------------------------
@@ -1849,6 +1890,67 @@ export const api = {
       body: JSON.stringify({ crops }),
     }),
 
+  // ---- ADR 0010 train-scope endpoints -----------------------------------
+  // PR-3 加；PR-4 前端切到这套；后续 PR-5 删老的 (`/preprocess/*` without vid)。
+  startPreprocessTrain: (
+    pid: number,
+    vid: number,
+    body: {
+      mode: 'all' | 'selected' | 'all_force'
+      names?: string[]
+      model?: string
+      tile_size?: number
+      tile_pad?: number
+      device?: 'auto' | 'cuda' | 'cpu'
+      target_area?: number | null
+    },
+  ) =>
+    req<Job>(`/api/projects/${pid}/versions/${vid}/preprocess/start`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  getPreprocessStatusTrain: (pid: number, vid: number) =>
+    req<{
+      job: Job | null
+      log_tail: string
+      summary: { image_count: number }
+    }>(`/api/projects/${pid}/versions/${vid}/preprocess/status`),
+  listPreprocessFilesTrain: (pid: number, vid: number) =>
+    req<{
+      images: TrainImage[]
+      summary: { image_count: number }
+    }>(`/api/projects/${pid}/versions/${vid}/preprocess/files`),
+  /** ADR 0010 §Restore: 从 download/{entry.origin} 复制覆盖回 train/{name}；
+   *  download 缺失返 `no_origin` 列表（UI 给三选项 [拖入替换 / 保留 / 移除]）。 */
+  restorePreprocessFilesTrain: (pid: number, vid: number, names: string[]) =>
+    req<TrainRestoreResult>(
+      `/api/projects/${pid}/versions/${vid}/preprocess/files/restore`,
+      { method: 'POST', body: JSON.stringify({ names }) },
+    ),
+  /** 只清 train manifest，**不动** train/ 物理文件（train 是训练数据本身）。 */
+  resetPreprocessFilesTrain: (pid: number, vid: number) =>
+    req<{ ok: boolean }>(
+      `/api/projects/${pid}/versions/${vid}/preprocess/files/reset`,
+      { method: 'POST' },
+    ),
+  listCropWorkspaceTrain: (pid: number, vid: number) =>
+    req<{ images: CropWorkspaceItem[] }>(
+      `/api/projects/${pid}/versions/${vid}/preprocess/crop/workspace`,
+    ),
+  listPreprocessDuplicatesRemovedTrain: (pid: number, vid: number) =>
+    req<{ images: DuplicateRemovedItem[] }>(
+      `/api/projects/${pid}/versions/${vid}/preprocess/duplicates/removed`,
+    ),
+  startPreprocessCropTrain: (
+    pid: number,
+    vid: number,
+    crops: Record<string, { x: number; y: number; w: number; h: number; label?: string }[]>,
+  ) =>
+    req<Job>(`/api/projects/${pid}/versions/${vid}/preprocess/crop`, {
+      method: 'POST',
+      body: JSON.stringify({ crops }),
+    }),
+
   getJob: (jid: number) => req<Job>(`/api/jobs/${jid}`),
   getJobLog: (jid: number, tail?: number) => {
     const qs = tail ? `?tail=${tail}` : ''
@@ -2137,6 +2239,25 @@ export const api = {
   applyDuplicateAction: (pid: number, body: { names: string[] }) =>
     req<DuplicateApplyResult>(
       `/api/projects/${pid}/preprocess/duplicates/apply`,
+      { method: 'POST', body: JSON.stringify(body) }
+    ),
+  // ADR 0010 train scope duplicates (PR-3 加；PR-4 前端切到这套)
+  scanDuplicatesTrain: (
+    pid: number,
+    vid: number,
+    body: DuplicateScanOptions,
+  ) =>
+    req<DuplicateScanResult>(
+      `/api/projects/${pid}/versions/${vid}/preprocess/duplicates/scan`,
+      { method: 'POST', body: JSON.stringify(body) }
+    ),
+  applyDuplicateActionTrain: (
+    pid: number,
+    vid: number,
+    body: { names: string[] },
+  ) =>
+    req<DuplicateApplyResult>(
+      `/api/projects/${pid}/versions/${vid}/preprocess/duplicates/apply`,
       { method: 'POST', body: JSON.stringify(body) }
     ),
   versionThumbUrl: (
