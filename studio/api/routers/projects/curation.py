@@ -36,7 +36,7 @@ from ...schemas.curation import (
 )
 from ._shared import _publish_project_state
 from .... import db
-from ....services.projects import jobs as project_jobs, projects
+from ....services.projects import jobs as project_jobs, projects, versions
 from ....services.dataset import curation, scan as datasets
 from ....infrastructure.event_bus import bus
 from ....services.preprocess import duplicates as duplicate_finder, manifest as preprocess_manifest
@@ -374,6 +374,127 @@ def apply_project_duplicates(
 ) -> dict[str, Any]:
     """Backward-compatible alias; now marks manifest duplicate_removed."""
     return apply_preprocess_duplicates(pid, body)
+
+
+# ---------------------------------------------------------------------------
+# ADR 0010 — train-scope duplicates endpoint（PR-3 step 2）
+#
+# scope 收窄到 versions/{label}/train/，对应 PR-2 加的 scan_train_duplicates
+# / apply_train_duplicate_removals。老 endpoint 暂留作 backward-compat，PR-4
+# 改前端用新 URL，之后单独 PR 删老路径。
+# ---------------------------------------------------------------------------
+
+
+def _resolve_pv_or_404_dup(
+    pid: int, vid: int,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    with db.connection_for() as conn:
+        p = projects.get_project(conn, pid)
+        if not p:
+            raise HTTPException(404, f"项目不存在: id={pid}")
+        v = versions.get_version(conn, vid)
+        if not v or v["project_id"] != pid:
+            raise HTTPException(404, f"版本不存在: id={vid}")
+    return p, v
+
+
+@router.post("/api/projects/{pid}/versions/{vid}/preprocess/duplicates/scan")
+def scan_preprocess_duplicates_train(
+    pid: int, vid: int, body: DuplicateScanRequest,
+) -> dict[str, Any]:
+    """ADR 0010 train scope 重复扫描。sources = versions/{label}/train/
+    （跳过 manifest 已标 duplicate_removed 的）；返回结构跟老 endpoint 一致，
+    `target` 字段从 `"preprocess"` 改成 `"train"`。"""
+    _resolve_pv_or_404_dup(pid, vid)
+    with db.connection_for() as conn:
+        try:
+            options = duplicate_finder.options_from_payload(body.model_dump())
+            last_progress_at = 0.0
+
+            def publish_progress(payload: dict[str, Any]) -> None:
+                nonlocal last_progress_at
+                now = time.monotonic()
+                if now - last_progress_at < 1.0:
+                    return
+                last_progress_at = now
+                bus.publish({
+                    "type": "duplicate_scan_progress",
+                    "project_id": pid,
+                    "version_id": vid,
+                    "status": "running",
+                    **payload,
+                })
+
+            bus.publish({
+                "type": "duplicate_scan_progress",
+                "project_id": pid,
+                "version_id": vid,
+                "status": "running",
+                "text": "Scanning duplicate candidates in train set...",
+            })
+            result = duplicate_finder.scan_train_duplicates(
+                conn, pid, vid, options, on_progress=publish_progress,
+            )
+            bus.publish({
+                "type": "duplicate_scan_progress",
+                "project_id": pid,
+                "version_id": vid,
+                "status": "done",
+                "total_images": result["total_images"],
+                "group_count": result["group_count"],
+                "candidate_count": result["candidate_count"],
+                "blur_candidate_count": result.get("blur_candidate_count", 0),
+                "crop_relation_count": result.get("crop_relation_count", 0),
+                "elapsed_seconds": result["elapsed_seconds"],
+                "text": (
+                    f"Scanned {result['total_images']} train images; "
+                    f"found {result['group_count']} groups / "
+                    f"{result['candidate_count']} candidates, "
+                    f"{result.get('blur_candidate_count', 0)} blur candidates, "
+                    f"{result.get('crop_relation_count', 0)} crop relations."
+                ),
+            })
+            return result
+        except curation.CurationError as exc:
+            bus.publish({
+                "type": "duplicate_scan_progress",
+                "project_id": pid,
+                "version_id": vid,
+                "status": "failed",
+                "text": str(exc),
+            })
+            _curation_err_code(exc); raise
+        except duplicate_finder.DuplicateFinderError as exc:
+            bus.publish({
+                "type": "duplicate_scan_progress",
+                "project_id": pid,
+                "version_id": vid,
+                "status": "failed",
+                "text": str(exc),
+            })
+            _duplicate_err_code(exc); raise
+
+
+@router.post("/api/projects/{pid}/versions/{vid}/preprocess/duplicates/apply")
+def apply_preprocess_duplicates_train(
+    pid: int, vid: int, body: DuplicateApplyRequest,
+) -> dict[str, Any]:
+    """ADR 0010 train scope: 标记 per-version 审核状态到 train manifest。
+    `names` 是 train rel path（`"1_data/X.png"`）。物理文件不动。"""
+    _resolve_pv_or_404_dup(pid, vid)
+    with db.connection_for() as conn:
+        try:
+            result = duplicate_finder.apply_train_duplicate_removals(
+                conn, pid, vid, names=body.names,
+            )
+            project = projects.get_project(conn, pid)
+        except curation.CurationError as exc:
+            _curation_err_code(exc); raise
+        except duplicate_finder.DuplicateFinderError as exc:
+            _duplicate_err_code(exc); raise
+    if project:
+        _publish_project_state(project)
+    return result
 
 
 @router.post("/api/projects/{pid}/versions/{vid}/curation/copy")
