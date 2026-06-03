@@ -275,6 +275,74 @@ def copy_to_train(
     return {"copied": copied, "skipped": skipped, "missing": missing}
 
 
+def copy_download_to_train(
+    conn,
+    project_id: int,
+    version_id: int,
+    files: list[str],
+    dest_folder: str,
+) -> dict[str, list[str]]:
+    """ADR 0010 train scope（PR-2 step C）：纯 download → train 复制 + 写
+    train manifest entry。简化版替代 `copy_to_train`，PR-3 删老的。
+
+    跟老 `copy_to_train` 的差异：
+
+    - **取消 preprocess 派生分支** — bytes 始终从 `download/{name}` 拿
+    - 写 train manifest entry，key = `f"{dest_folder}/{name}"`，
+      origin = name（curate 阶段图是原图未处理；后续 preprocess 在 train/
+      原地处理时再 update entry）
+    - caption (.txt/.json) 仍从 `download/{stem}.{ext}` 复制到
+      `train/{dest_folder}/{stem}.{ext}`
+    - 不消费 / 不感知 preprocess 派生（multi-crop fan-out 在新模型下发生在
+      curate 之后的 preprocess phase）
+
+    `files` 是 download 池里的图名（平铺），不带 folder 前缀。
+    """
+    _validate_folder(dest_folder)
+    p, v, train = _version_train_dir(conn, project_id, version_id)
+    pdir = projects.project_dir(p["id"], p["slug"])
+    download_dir = pdir / "download"
+    dst_dir = train / dest_folder
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    preprocess_manifest.ensure_train_manifest(pdir, v["label"])
+
+    copied: list[str] = []
+    skipped: list[str] = []
+    missing: list[str] = []
+    for name in files:
+        _validate_filename(name)
+        src = download_dir / name
+        if not src.exists():
+            missing.append(name)
+            continue
+        dst = dst_dir / name
+        if dst.exists():
+            skipped.append(name)
+            continue
+        shutil.copy2(src, dst)
+        # caption metadata 跟随
+        stem = Path(name).stem
+        for ext in _META_EXTS:
+            sm = download_dir / f"{stem}{ext}"
+            if sm.exists():
+                try:
+                    shutil.copy2(sm, dst_dir / f"{stem}{ext}")
+                except OSError:
+                    pass
+        # 写 train manifest entry，key = "{folder}/{name}"
+        rel = f"{dest_folder}/{name}"
+        meta: dict[str, Any] = {"origin": name}
+        try:
+            st = dst.stat()
+            meta["mtime"] = st.st_mtime
+            meta["size"] = st.st_size
+        except OSError:
+            pass
+        preprocess_manifest.train_add_processed(pdir, v["label"], rel, meta)
+        copied.append(name)
+    return {"copied": copied, "skipped": skipped, "missing": missing}
+
+
 def remove_from_train(
     conn,
     project_id: int,
