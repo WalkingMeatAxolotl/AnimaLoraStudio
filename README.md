@@ -73,6 +73,13 @@
 
 - 核心训练脚本派生自 [**Moeblack/AnimaLoraToolkit**](https://github.com/Moeblack/AnimaLoraToolkit)。
 - 主模型 / VAE：[circlestone-labs / Anima](https://huggingface.co/circlestone-labs/Anima)
+- **Automagic optimizer**：算法 + 8-bit `lr_mask` + `Auto8bitTensor` 量化路径来自
+  [**ostris / ai-toolkit**](https://github.com/ostris/ai-toolkit)（MIT, © 2024 Ostris, LLC）。
+  bf16 Kahan compensated summation 路径借鉴自
+  [**tdrussell / diffusion-pipe**](https://github.com/tdrussell/diffusion-pipe) 的同名移植。
+- **Lion optimizer**：Chen et al. 2023, [*Symbolic Discovery of Optimization Algorithms*](https://arxiv.org/abs/2302.06675) (Google Brain)；
+  本仓库自实现，对齐 [Google reference](https://github.com/google/automl/tree/master/lion) 和
+  社区版 [lucidrains / lion-pytorch](https://github.com/lucidrains/lion-pytorch)。
 
 ---
 

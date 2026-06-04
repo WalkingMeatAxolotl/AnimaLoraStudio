@@ -7,8 +7,10 @@ Optimizer Utils Module - 优化器创建
 3. Prodigy (prodigyopt) - 无需调 lr 的自适应优化器
 4. ProdigyPlusScheduleFree (prodigy-plus-schedule-free) - Schedule-Free + Prodigy，
    解决 Prodigy 在扩散 LoRA 训练中的 mutation ep / 风格突变问题。
-5. Lion - 符号动量优化器，优化器状态比 AdamW 少一半。
-6. Automagic - AI Toolkit 风格的 per-parameter adaptive learning-rate 优化器。
+5. Lion - EvoLved Sign Momentum (Chen et al., 2023, arxiv 2302.06675)
+6. Automagic - Per-parameter adaptive lr via sign-agreement tracking
+   原作者: Ostris (https://github.com/ostris/ai-toolkit, MIT license, Copyright (c)
+   2024 Ostris, LLC). bf16 Kahan summation path 借鉴自 tdrussell/diffusion-pipe.
 """
 
 from __future__ import annotations
@@ -319,6 +321,38 @@ def create_standard_adamw(
     print("  [OK] AdamW optimizer created")
 
     return optimizer
+
+
+# ============================================================================
+# Automagic optimizer + Auto8bitTensor helper
+#
+# Adapted from ostris/ai-toolkit (https://github.com/ostris/ai-toolkit), which
+# also flowed through tdrussell/diffusion-pipe (added Kahan summation for
+# bfloat16). The core sign-agreement schedule, 8-bit lr_mask, Adafactor-style
+# factored 2nd moment, and stochastic-rounding helpers below are Ostris's
+# design. We re-implement on top of the upstream structure and align with
+# diffusion-pipe's bf16 Kahan path.
+#
+# MIT License — Copyright (c) 2024 Ostris, LLC
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+# ============================================================================
 
 
 class Auto8bitTensor:
@@ -659,6 +693,19 @@ def create_automagic(
 
 
 class Lion(Optimizer):
+    """EvoLved Sign Momentum optimizer (Chen et al., 2023).
+
+    Paper: "Symbolic Discovery of Optimization Algorithms"
+        https://arxiv.org/abs/2302.06675  (Google Brain)
+
+    Reference implementations:
+    - Google official:    https://github.com/google/automl/tree/master/lion
+    - Community PyTorch:  https://github.com/lucidrains/lion-pytorch
+
+    This is a minimal re-implementation aligning with the paper's Algorithm 1
+    and Google's reference; no dependency on `lion-pytorch`.
+    """
+
     def __init__(
         self,
         params,
