@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { SchemaResponse, ConfigData } from '../api/client'
 import { evalShowWhen, schemaAltDescription, schemaDisableHint, schemaDescription, schemaGroupLabel } from '../lib/schema'
@@ -75,6 +75,24 @@ export default function SchemaForm({
     // 故意只监听 values；onChange / props 引用稳定，加进去会无限循环。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [values])
+
+  // Automagic 推荐 init lr=1e-6（upstream ostris/ai-toolkit + diffusion-pipe 默认）；
+  // 用 AdamW 量级 lr (1e-4) 起跑会让 sign-agreement 自适应慢 ~100× 才收敛回工作区间。
+  // 用户从其他 optimizer 切到 automagic 时，自动改写为 1e-6；不 disable，用户可继续调整。
+  // 初次 mount（含加载 saved config）不触发，避免覆盖用户已保存值——saved config 路径由
+  // training runtime 的 logger.warning 兜底。
+  const prevOptimizerType = useRef(values.optimizer_type)
+  useEffect(() => {
+    const prev = prevOptimizerType.current
+    const curr = values.optimizer_type
+    if (prev !== curr) {
+      prevOptimizerType.current = curr
+      if (curr === 'automagic' && Number(values.learning_rate) > 1e-5) {
+        onChange({ ...values, learning_rate: 1e-6 })
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [values.optimizer_type])
 
   // 按 group 分桶。hidden=true 的字段直接跳过：值仍由 ConfigData 透传（PUT 时不丢），
   // 只是不在 UI 上渲染。如果一个组所有字段都 hidden，下面 `fields.length === 0`

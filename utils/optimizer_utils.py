@@ -199,7 +199,7 @@ def create_optimizer(
     else:
         raise ValueError(
             f"Unknown optimizer type: {optimizer_type}. "
-            f"Choose from: adamw, adamw8bit, automagic, lion, prodigy, prodigy_plus_schedulefree"
+            f"Choose from: adamw, automagic, lion, prodigy, prodigy_plus_schedulefree"
         )
 
 
@@ -398,16 +398,19 @@ def _copy_stochastic(target: torch.Tensor, source: torch.Tensor) -> None:
     target.copy_(source.to(target.dtype))
 
 
-def _stochastic_grad_accumulation(param: nn.Parameter) -> None:
-    if hasattr(param, "_accum_grad"):
-        grad_fp32 = param._accum_grad.clone().to(torch.float32)
-        grad_fp32.add_(param.grad.to(torch.float32))
-        _copy_stochastic(param._accum_grad, grad_fp32)
-        del grad_fp32
-        del param.grad
-    else:
-        param._accum_grad = param.grad.clone()
-        del param.grad
+# Note on stochastic-rounding grad accumulation:
+# Upstream (ostris/ai-toolkit, tdrussell/diffusion-pipe) registers a
+# post-accumulate-grad hook to do fp32 grad accumulation with stochastic
+# rounding. We deliberately do NOT enable that path because it silently
+# breaks two common training paths:
+#   1. torch.cuda.amp.GradScaler.unscale_ skips params where p.grad is None
+#      — the hook deletes p.grad after each backward, so unscale never runs
+#      and the optimizer would step on still-scaled gradients.
+#   2. torch.nn.utils.clip_grad_norm_ skips p.grad is None, so grad clipping
+#      becomes a no-op.
+# bf16 numerical stability is instead handled inside Automagic.step via
+# Kahan compensated summation (see `shift` buffer below). See upstream
+# diffusion-pipe optimizers/automagic.py:72-79 (commented out by author).
 
 
 class Automagic(Optimizer):
@@ -456,19 +459,6 @@ class Automagic(Optimizer):
             ),
         )
         self.base_lrs = [self.lr for _ in self.param_groups]
-        # Upstream (ostris/ai-toolkit, tdrussell/diffusion-pipe) registers a
-        # post-accumulate-grad hook here to do fp32 grad accumulation with
-        # stochastic rounding. It silently breaks two common training paths and
-        # we disable it by default to match the upstream comment-out:
-        #   1. torch.cuda.amp.GradScaler.unscale_ skips params where
-        #      p.grad is None — the hook deletes p.grad after each backward,
-        #      so unscale never runs and the optimizer steps on still-scaled
-        #      gradients.
-        #   2. torch.nn.utils.clip_grad_norm_ skips p.grad is None, so grad
-        #      clipping becomes a no-op.
-        # See upstream diffusion-pipe optimizers/automagic.py:72-79 (commented
-        # out in-place by the original author).
-        self.is_stochastic_rounding_accumulation = False
 
     @staticmethod
     def _rms(tensor: torch.Tensor) -> torch.Tensor:
@@ -503,15 +493,6 @@ class Automagic(Optimizer):
         lrs = self.get_learning_rates()
         return sum(lrs) / len(lrs)
 
-    def step_hook(self) -> None:
-        if not self.is_stochastic_rounding_accumulation:
-            return
-        for group in self.param_groups:
-            for param in group["params"]:
-                if param.requires_grad and hasattr(param, "_accum_grad"):
-                    param.grad = param._accum_grad
-                    del param._accum_grad
-
     def initialize_state(self, p: nn.Parameter) -> None:
         state = self.state[p]
         state["step"] = 0
@@ -536,7 +517,6 @@ class Automagic(Optimizer):
 
     @torch.no_grad()
     def step(self, closure=None):
-        self.step_hook()
         loss = None
         if closure is not None:
             with torch.enable_grad():
@@ -671,6 +651,15 @@ def create_automagic(
     weight_decay: float = 0.0,
     **kwargs,
 ) -> Optimizer:
+    # Automagic 上游推荐 init lr=1e-6（每参数自适应起点）；> 1e-5 量级是 AdamW
+    # 风格 lr 误用，sign-agreement 调度需要很多 step 才能从过高起点收敛回工作区间。
+    # UI 切换 optimizer_type 时会自动改写 lr=1e-6；这里兜底 saved config / CLI 路径。
+    if lr > 1e-5:
+        logger.warning(
+            "Automagic 初始 lr=%.2e 远高于推荐 1e-6；sign-agreement 自适应从过高起点"
+            "收敛慢，建议设为 1e-6（per-param lr 由 [min_lr, max_lr] 自动调）",
+            lr,
+        )
     param_list = params if _is_param_groups(params) else list(params)
     optimizer = Automagic(
         param_list,
@@ -763,6 +752,16 @@ def create_lion(
     weight_decay: float = 0.0,
     **kwargs,
 ) -> Optimizer:
+    # Lion 论文（Chen et al. 2023, arxiv 2302.06675 §4.3）经验：lr ≈ AdamW lr / 3，
+    # weight_decay 3-10× AdamW。从 AdamW 默认 lr=1e-4 直切 Lion 容易发散；这里在
+    # lr 落在 AdamW 量级（1e-4 及以上）时提示一下。详细见 docs/user-guide/optimizers.md。
+    if lr >= 1e-4:
+        logger.warning(
+            "Lion lr=%.2e 接近/高于 AdamW 量级；论文推荐 lr ≈ AdamW lr / 3 "
+            "（如 AdamW 1e-4 → Lion ~3e-5）。继续训练但可能发散，详见 "
+            "docs/user-guide/optimizers.md",
+            lr,
+        )
     param_list = params if _is_param_groups(params) else list(params)
     optimizer = Lion(param_list, lr=lr, betas=betas, weight_decay=weight_decay, **kwargs)
     print(f"Creating Lion optimizer (lr={lr}, betas={betas}, weight_decay={weight_decay})")

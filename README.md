@@ -27,7 +27,7 @@
 - **Loss 函数**：MSE / Huber，可配置权重曲线（min_snr / cosmap / detail_inv_t 等）
 - **Timestep 采样**：uniform / logit_normal / mode / mixed_uniform 等，含可配置 schedule shift
 - **InfoNoise 自适应采样（可选）**：基于 I-MMSE 的反 CDF 时间步采样器
-- **优化器**：AdamW / Prodigy / Prodigy+ScheduleFree
+- **优化器**：AdamW / Lion / Automagic / Prodigy / Prodigy+ScheduleFree（推荐起点 / 切换换算见 [`docs/user-guide/optimizers.md`](docs/user-guide/optimizers.md)）
 - **Adapter**：LoRA + LyCORIS LoKr（走 [lycoris-lora](https://github.com/KohakuBlueleaf/LyCORIS) 官方库，含 DoRA / rs-LoRA / dropout）
 - **分层 rank**：`lora_rank_rules` 按层名正则配不同 rank，便于按模块重要性差异化分配参数预算
 - **Attention backend**：xformers / flash_attn / PyTorch SDPA
@@ -165,8 +165,8 @@ AnimaLoraStudio/
 │   ├── anima_train.py             # 训练入口
 │   ├── training/                  # 训练栈子包：context / phases / loop / sample_runner
 │   │   ├── adapters/              # plugin: lokr / loha / lora
-│   │   ├── optimizers/            # plugin: adamw / prodigy / prodigy_plus_schedulefree
-│   │   ├── schedulers/            # plugin: cosine / cosine_with_restart / none
+│   │   ├── optimizers/            # plugin: adamw / lion / automagic / prodigy / prodigy_plus_schedulefree
+│   │   ├── schedulers/            # plugin: cosine / cosine_with_restart / cosine_with_warmup / none
 │   │   ├── inference_samplers/    # plugin: er_sde 等
 │   │   └── phases/                # bootstrap / models / dataset / optimizer / resume / finalize
 │   ├── anima_generate.py          # 出图：单图 / XY 矩阵

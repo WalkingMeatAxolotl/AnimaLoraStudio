@@ -14,7 +14,9 @@ prodigyopt>=1.0          # Prodigy 优化器（anima_train.py optimizer=prodigy 
 # ProdigyPlusScheduleFree (LoganBooker) — Flux/Qwen-Image LoRA 社区主流，解决 Prodigy 的
 # mutation ep 问题。pin >=2.0.0 因为 v1.9.2 ↔ v2.0.0 的 state_dict 不兼容。
 prodigy-plus-schedule-free>=2.0.0  # optimizer_type=prodigy_plus_schedulefree 时必需
-optimum-quanto>=0.2.0       # optimizer_type=automagic 的 QBytesTensor 兼容路径
+# optimum-quanto>=0.2.0     # Optional: optimizer_type=automagic 走 quanto 量化权重时
+                            # 才用到 QBytesTensor（utils/optimizer_utils.py 有 try/except
+                            # 兜底，未装就走 dense fp32/bf16 路径）。装：pip install 'optimum-quanto>=0.2.0'
 safetensors>=0.4.0
 Pillow>=10.0.0
 numpy>=1.24.0

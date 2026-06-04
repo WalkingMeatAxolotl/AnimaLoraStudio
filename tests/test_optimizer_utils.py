@@ -187,21 +187,21 @@ def test_automagic_sign_flip_decreases_lr() -> None:
 
 
 def test_automagic_does_not_register_grad_accum_hook() -> None:
-    """对齐上游 diffusion-pipe：默认不开 stochastic-rounding grad accum hook，
+    """对齐上游 diffusion-pipe：不挂 stochastic-rounding grad accum hook，
     避免和 AMP GradScaler.unscale_ / clip_grad_norm_ 静默冲突。"""
     model = nn.Linear(2, 2).to(torch.bfloat16)
     optim = create_optimizer("automagic", model.parameters(), learning_rate=1e-6)
 
-    assert optim.is_stochastic_rounding_accumulation is False, (
-        "Automagic must not enable post-accumulate-grad hook by default"
-    )
-    # 确认 backward 后 p.grad 不被 hook 删掉
+    # backward 后 p.grad 应保留（如果 hook 在跑，会把 p.grad 删掉移到 _accum_grad）
     out = model(torch.ones(1, 2, dtype=torch.bfloat16)).sum()
     out.backward()
     for p in model.parameters():
         if p.requires_grad:
             assert p.grad is not None, (
-                "p.grad was unexpectedly deleted; hook must not be active"
+                "p.grad was unexpectedly deleted; no accum hook should be active"
+            )
+            assert not hasattr(p, "_accum_grad"), (
+                "_accum_grad buffer present; stochastic-rounding hook must not run"
             )
 
 

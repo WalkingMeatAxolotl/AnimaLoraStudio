@@ -196,7 +196,7 @@ class TrainingConfig(BaseModel):
     )
     learning_rate: float = Field(
         1e-4, gt=0.0,
-        description="学习率（Automagic 作为初始每参数学习率；Prodigy 必须为 1.0）",
+        description="学习率。Automagic 作为初始每参数学习率，推荐 1e-6（切换 optimizer 到 automagic 时会自动改写）；Lion 推荐为 AdamW lr / 3；Prodigy / PPSF 必须 1.0",
         json_schema_extra=_meta(
             "training",
             cli_alias="--lr",
@@ -237,7 +237,7 @@ class TrainingConfig(BaseModel):
     )
     optimizer_type: Literal["adamw", "automagic", "lion", "prodigy", "prodigy_plus_schedulefree"] = Field(
         "adamw",
-        description="优化器。adamw 需手动调 lr；automagic / lion 状态更省显存；prodigy / prodigy_plus_schedulefree 自适应估计 lr（lr 字段填 1.0）",
+        description="优化器。adamw 标准基线；automagic 自适应每参数 lr（推荐 lr=1e-6）；lion 显存约 AdamW 一半（推荐 lr=AdamW lr / 3）；prodigy / prodigy_plus_schedulefree 自适应估 lr（lr 填 1.0）",
         json_schema_extra=_meta("training"),
     )
     prodigy_d_coef: float = Field(
