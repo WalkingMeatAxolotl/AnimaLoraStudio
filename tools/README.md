@@ -88,6 +88,19 @@ python tools/bench_gelbooru.py
 
 凭证自动从 `studio_data/secrets.json` 读；缺失时回退环境变量 `GELBOORU_USER_ID` / `GELBOORU_API_KEY`。日志同时打 stdout 与 `bench_gelbooru.log`。
 
+### `infonoise_e2e_verify.py`
+InfoNoise 端到端算法 verify：纯 numpy mock 训练 loop + closed-form toy mmse 函数跑 `InfoNoiseScheduler`，对照 4 个 pivot 配置（`current` / `fix_last_above` / `fix_paper_c015` / `oracle`）输出 paper-aligned 指标（c 时间序列 / mass 分布 / KL→target ρ / gate entropy）。**不依赖 GPU、不真训模型**；用于：算法 bug 端到端复现、修法 PR 前的回归 verify、跟 paper §5 报告值对照。
+
+```
+python tools/infonoise_e2e_verify.py                                # 全 96 组合（4 config × 4 mmse × 3 ga × 2 baseline），5-15 分钟
+python tools/infonoise_e2e_verify.py --quick                        # CI smoke (<1 分钟)，4 个核心组合
+python tools/infonoise_e2e_verify.py --mmse-shape paper_fig4 \
+        --config fix_last_above --grad-accum 1                      # 单组合
+python tools/infonoise_e2e_verify.py --out-dir tmp/my_run --no-plots
+```
+
+输出 `<out>/report.md`（对照表 + finding + 推荐）+ 每组合 `log.csv` + `plots.png` 4-panel（c 时间序列 / mass 分布演化 / sampled t hist / final gate 形状）。设计文档见脚本顶部 docstring；不要 monkey-patch 源码（脚本通过动态 override `_refresh` 实现 fix 配置）。
+
 ---
 
 ## Release / schema 维护

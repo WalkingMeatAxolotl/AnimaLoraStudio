@@ -382,8 +382,6 @@ class TrainingConfig(BaseModel):
             "timestep_sampling",
             alt_description="【时间步采样】分布；InfoNoise 启用时作为热身期 baseline，正式阶段由自适应 CDF 接管",
             alt_description_when="infonoise_enabled==true",
-            disable_when="infonoise_enabled==true",
-            disable_hint="InfoNoise 接管时间步采样",
             advanced=True,
         ),
     )
@@ -395,8 +393,6 @@ class TrainingConfig(BaseModel):
             show_when="timestep_sampling!=uniform",
             alt_description="【InfoNoise 热身期】InfoNoise 开启时作为热身阶段的 baseline shift，正式阶段由自适应 CDF 接管",
             alt_description_when="infonoise_enabled==true",
-            disable_when="infonoise_enabled==true",
-            disable_hint="InfoNoise 接管时间步采样",
             advanced=True,
         ),
     )
@@ -453,7 +449,12 @@ class TrainingConfig(BaseModel):
     )
     infonoise_N_min: int = Field(
         50, ge=1,
-        description="【InfoNoise】刷新触发条件：每个 bin 至少需要的样本数才会重算分布",
+        description="【InfoNoise】刷新触发条件：每个 bin 至少需要的样本数才会重算分布（必须 ≤ infonoise_B）",
+        json_schema_extra=_meta("timestep_sampling", show_when="infonoise_enabled==true", advanced=True),
+    )
+    infonoise_gate_pivot_c: float = Field(
+        0.15, ge=0.0, le=10.0,
+        description="【InfoNoise】gate 函数 pivot c：默认 0.15（论文 §5 CIFAR 报告值，跨数据集鲁棒）；设 0 走自适应选取（论文 Eq 87 字面实现）；其他正数为自定义 c。多数情况保持默认",
         json_schema_extra=_meta("timestep_sampling", show_when="infonoise_enabled==true", advanced=True),
     )
     loss_type: Literal["mse", "huber"] = Field(
@@ -541,6 +542,34 @@ class TrainingConfig(BaseModel):
             raise ValueError(
                 f"detail_inv_t_min ({self.detail_inv_t_min}) 不能大于 "
                 f"detail_inv_t_max ({self.detail_inv_t_max})。"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_infonoise_loss_weighting_exclusive(self) -> "TrainingConfig":
+        """InfoNoise 与 loss_weighting 互斥：两者都在做 schedule 重塑，叠加会互相消磨。
+
+        InfoNoise 用未加权 MSE 估各噪声区间的信息量（论文 entropy rate 推导的必要前提，
+        见 arxiv 2602.18647 §3.1）；loss_weighting 改实际优化目标。同开时 InfoNoise 学
+        到的分布跟用户配的 loss_weighting 方向冲突（如 detail_inv_t 抬高低 t 权重 vs
+        InfoNoise 默认压低低 t 采样）。强制二选一避免 silent 不一致。
+        """
+        if self.infonoise_enabled and self.loss_weighting != "none":
+            raise ValueError(
+                f"infonoise_enabled=true 与 loss_weighting={self.loss_weighting!r} 互斥："
+                "两个机制都在做 schedule 重塑（前者自适应 resample，后者手工 reweight）。"
+                "请二选一：(a) 关闭 InfoNoise 走传统 loss_weighting 路径；"
+                "或 (b) 设 loss_weighting=none 走 InfoNoise 自适应路径。"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_infonoise_n_min_le_b(self) -> "TrainingConfig":
+        """N_min > B 会让自适应分布永远学不出来（FIFO 容量不够触发刷新）。"""
+        if self.infonoise_enabled and self.infonoise_N_min > self.infonoise_B:
+            raise ValueError(
+                f"infonoise_N_min ({self.infonoise_N_min}) 不能大于 "
+                f"infonoise_B ({self.infonoise_B})：超出会让自适应分布永远学不出来。"
             )
         return self
 

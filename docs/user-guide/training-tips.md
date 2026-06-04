@@ -191,8 +191,9 @@ EDM/Karras 论文里 δ=0.15 是常用经验值。
 | `infonoise_K` | `64` | log-σ 空间分 bin 数；高 K = 更细 |
 | `infonoise_M` | `100` | 每 M 步刷新一次采样分布 |
 | `infonoise_B` | `256` | 每 bin 的 FIFO buffer 大小 |
-| `infonoise_beta` | `0.9` | EMA 新值权重（论文 Algorithm 1）。FIFO 已做一轮平均，β 偏高合理 |
-| `infonoise_N_min` | `50` | 触发刷新所需的每 bin 最小样本数 |
+| `infonoise_beta` | `0.9` | 自适应分布对最新 batch 的响应强度。FIFO 已做底层平滑，β 偏高合理 |
+| `infonoise_N_min` | `50` | 触发刷新所需的每 bin 最小样本数（必须 ≤ `infonoise_B`） |
+| `infonoise_gate_pivot_c` | `0.15` | gate 函数 pivot：低于 c 的噪声区段被压低采样。默认值取论文 §5 CIFAR 报告值；设 0 走自适应选取 |
 
 **观察是否生效**：训练时 wandb 面板会有两个指标
 - `infonoise/cdf_ready`：1 = 自适应 CDF 已就绪，0 = 还在 baseline
@@ -200,6 +201,8 @@ EDM/Karras 论文里 δ=0.15 是常用经验值。
   说明你的 loss 在 log-σ 上太均匀（已收敛模型），InfoNoise 没加速空间 — 关掉即可
 
 **注意**：InfoNoise 启用后 `timestep_sampling` 字段仅用于热身期。正式阶段由自适应 CDF 接管。
+
+**与 `loss_weighting` 的关系**：InfoNoise 用未加权 MSE 估各噪声区间的信息量；这是论文 entropy rate 推导的必要前提。如果同时启用 `loss_weighting`（`min_snr` / `detail_inv_t` / `cosmap`），两个机制在做同一件事的两种方式（自适应 schedule resample vs 手工 schedule reweight），会互相消磨。schema 校验拦截这种组合，需要二选一。
 
 ### 噪声增强
 
