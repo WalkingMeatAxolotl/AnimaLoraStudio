@@ -160,25 +160,3 @@ def test_apply_train_duplicate_mismatched_version_raises(env) -> None:
             )
 
 
-# ---------------------------------------------------------------------------
-# Backward-compat：老 _resolve_download_sources / apply_duplicate_removals 不动
-# ---------------------------------------------------------------------------
-
-
-def test_train_apis_dont_affect_legacy_apis(env) -> None:
-    """train-scope API 写 train manifest，不影响项目级 manifest（PR-3 才删
-    老 API）。"""
-    _png(env["sub"] / "A.png")
-    # 老 manifest 先准备一条
-    preprocess_manifest.add_processed(env["pdir"], "X.png", {"source": "X.png"})
-
-    with db.connection_for(env["db"]) as conn:
-        duplicate_finder.apply_train_duplicate_removals(
-            conn, env["p"]["id"], env["v"]["id"],
-            names=["1_data/A.png"],
-        )
-
-    # 项目级 manifest 没动
-    legacy = preprocess_manifest.get_entry(env["pdir"], "X.png")
-    assert legacy is not None  # 老条目仍在
-    assert legacy.get("kind", "processed") == "processed"

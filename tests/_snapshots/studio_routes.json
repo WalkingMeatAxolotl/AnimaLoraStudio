@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 173,
+  "count": 160,
   "routes": [
     {
       "path": "/",
@@ -410,22 +410,6 @@
       "type": "APIRoute"
     },
     {
-      "path": "/api/projects/{pid}/duplicates/apply",
-      "methods": [
-        "POST"
-      ],
-      "name": "apply_project_duplicates",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/projects/{pid}/duplicates/scan",
-      "methods": [
-        "POST"
-      ],
-      "name": "scan_project_duplicates",
-      "type": "APIRoute"
-    },
-    {
       "path": "/api/projects/{pid}/files",
       "methods": [
         "GET"
@@ -447,94 +431,6 @@
         "GET"
       ],
       "name": "list_project_lora_ckpts",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/projects/{pid}/preprocess/crop",
-      "methods": [
-        "POST"
-      ],
-      "name": "start_preprocess_crop",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/projects/{pid}/preprocess/crop/workspace",
-      "methods": [
-        "GET"
-      ],
-      "name": "list_crop_workspace",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/projects/{pid}/preprocess/duplicates/apply",
-      "methods": [
-        "POST"
-      ],
-      "name": "apply_preprocess_duplicates",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/projects/{pid}/preprocess/duplicates/removed",
-      "methods": [
-        "GET"
-      ],
-      "name": "list_duplicate_removed",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/projects/{pid}/preprocess/duplicates/scan",
-      "methods": [
-        "POST"
-      ],
-      "name": "scan_preprocess_duplicates",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/projects/{pid}/preprocess/files",
-      "methods": [
-        "GET"
-      ],
-      "name": "list_preprocess_files",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/projects/{pid}/preprocess/files/reset",
-      "methods": [
-        "POST"
-      ],
-      "name": "reset_preprocess_files",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/projects/{pid}/preprocess/files/restore",
-      "methods": [
-        "POST"
-      ],
-      "name": "restore_preprocess_files",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/projects/{pid}/preprocess/start",
-      "methods": [
-        "POST"
-      ],
-      "name": "start_preprocess",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/projects/{pid}/preprocess/status",
-      "methods": [
-        "GET"
-      ],
-      "name": "preprocess_status",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/projects/{pid}/preprocess/thumb",
-      "methods": [
-        "GET"
-      ],
-      "name": "preprocess_thumb",
       "type": "APIRoute"
     },
     {

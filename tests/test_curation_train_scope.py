@@ -129,12 +129,16 @@ def test_copy_download_to_train_multiple_folders_indep_entries(env) -> None:
 def test_copy_download_to_train_no_preprocess_branch(env) -> None:
     """ADR 0010：copy_download_to_train 不消费 preprocess 派生，即使老 manifest
     标 X.jpg 已经处理过（preprocess/X.png），新函数仍只从 download 复制原图。"""
+    import json
     _dl(env, "X.jpg", blob=b"raw")
     # 模拟老项目残留 preprocess/X.png + 项目级 manifest entry
     pre = _pdir(env) / "preprocess"
     pre.mkdir(parents=True, exist_ok=True)
     (pre / "X.png").write_bytes(b"upscaled-residue")
-    preprocess_manifest.add_processed(_pdir(env), "X.png", {"source": "X.jpg"})
+    preprocess_manifest.manifest_path(_pdir(env)).write_text(
+        json.dumps({"images": {"X.png": {"origin": "X.jpg"}}}),
+        encoding="utf-8",
+    )
 
     with db.connection_for(env["db"]) as conn:
         curation.copy_download_to_train(
