@@ -290,7 +290,8 @@
       "lrScheduler": {
         "none": "Constant",
         "cosine": "Cosine",
-        "cosineWithRestart": "Cosine with restart"
+        "cosineWithRestart": "Cosine with restart",
+        "cosineWithWarmup": "Cosine with warmup"
       },
       "optimizerType": {
         "adamw": "AdamW",
@@ -377,7 +378,8 @@
       "lr_scheduler_t0": "First cosine_with_restart cycle length (unit: step)",
       "lr_scheduler_t_mult": "cosine_with_restart cycle-length multiplier relative to the previous cycle (>1 = lengthening cycles)",
       "lr_scheduler_eta_min": "LR decay floor for cosine schedules; should be much smaller than the initial lr (e.g. 1e-6 for an initial lr of 1e-4)",
-      "optimizer_type": "Optimizer. adamw requires manual lr tuning; lion saves optimizer state memory; prodigy / prodigy_plus_schedulefree self-estimate lr (fill 1.0 in the lr field)",
+      "lr_scheduler_warmup_steps": "cosine_with_warmup warmup steps",
+      "optimizer_type": "Optimizer. adamw requires manual lr tuning; automagic / lion saves optimizer state memory; prodigy / prodigy_plus_schedulefree self-estimate lr (fill 1.0 in the lr field)",
       "prodigy_d_coef": "Overall scaling coefficient on Prodigy's estimated d; larger = larger effective lr. Raise (2.0+) when underfitting; lower (0.5) when overfitting or on small datasets",
       "prodigy_safeguard_warmup": "Prevent d from being inflated by early high gradients during Prodigy warmup; default on for stability",
       "lion_beta1": "Lion β1 (momentum interpolation coefficient)",

@@ -217,6 +217,18 @@ def test_training_config_cli_automagic() -> None:
     assert ns.automagic_clip_threshold == 0.8
 
 
+def test_training_config_cli_cosine_with_warmup() -> None:
+    parser = bridge.build_parser(TrainingConfig)
+    ns = parser.parse_args([
+        "--lr-scheduler", "cosine_with_warmup",
+        "--lr-scheduler-warmup-steps", "25",
+        "--lr-scheduler-eta-min", "1e-7",
+    ])
+    assert ns.lr_scheduler == "cosine_with_warmup"
+    assert ns.lr_scheduler_warmup_steps == 25
+    assert ns.lr_scheduler_eta_min == 1e-7
+
+
 def test_training_config_yaml_round_trip() -> None:
     """走完 CLI → YAML 合并这一条路径，确认 yaml_dict 字段都能被读进 args。"""
     parser = bridge.build_parser(TrainingConfig)

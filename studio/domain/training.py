@@ -205,7 +205,7 @@ class TrainingConfig(BaseModel):
             disable_hint="Prodigy 接管学习率",
         ),
     )
-    lr_scheduler: Literal["none", "cosine", "cosine_with_restart"] = Field(
+    lr_scheduler: Literal["none", "cosine", "cosine_with_restart", "cosine_with_warmup"] = Field(
         "none",
         description="学习率调度（none = 常数；Prodigy / PPSF 固定为 none）",
         json_schema_extra=_meta(
@@ -229,6 +229,11 @@ class TrainingConfig(BaseModel):
         1e-6, ge=0.0,
         description="学习率衰减下限：cosine 调度到此值后不再下降；通常远小于初始 lr（如初始 1e-4 配 1e-6）",
         json_schema_extra=_meta("training", show_when="lr_scheduler!=none", advanced=True),
+    )
+    lr_scheduler_warmup_steps: int = Field(
+        100, ge=0,
+        description="cosine_with_warmup 预热步数",
+        json_schema_extra=_meta("training", show_when="lr_scheduler==cosine_with_warmup", advanced=True),
     )
     optimizer_type: Literal["adamw", "automagic", "lion", "prodigy", "prodigy_plus_schedulefree"] = Field(
         "adamw",

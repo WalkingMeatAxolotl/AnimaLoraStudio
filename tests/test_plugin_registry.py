@@ -51,7 +51,7 @@ def test_optimizer_builders_dict_has_5_variants() -> None:
 
 def test_scheduler_builders_dict_excludes_none() -> None:
     from training.schedulers import BUILDERS, SCHEMA_ONLY_OPTIONS
-    assert set(BUILDERS) == {"cosine", "cosine_with_restart"}
+    assert set(BUILDERS) == {"cosine", "cosine_with_restart", "cosine_with_warmup"}
     assert SCHEMA_ONLY_OPTIONS == {"none"}
 
 
@@ -76,6 +76,32 @@ def test_build_scheduler_returns_none_when_lr_scheduler_is_none() -> None:
     from training.schedulers import build_scheduler
     args = argparse.Namespace(lr_scheduler="none")
     assert build_scheduler(args, optimizer=None, total_steps=None) is None
+
+
+def test_cosine_with_warmup_scheduler_warms_then_decays() -> None:
+    torch = pytest.importorskip("torch")
+    from training.schedulers import build_scheduler
+
+    param = torch.nn.Parameter(torch.tensor([1.0]))
+    optimizer = torch.optim.SGD([param], lr=1.0)
+    args = argparse.Namespace(
+        lr_scheduler="cosine_with_warmup",
+        lr_scheduler_warmup_steps=2,
+        lr_scheduler_eta_min=0.1,
+    )
+    scheduler = build_scheduler(args, optimizer, total_steps=6)
+
+    lrs = []
+    for _ in range(6):
+        lrs.append(optimizer.param_groups[0]["lr"])
+        optimizer.step()
+        scheduler.step()
+
+    assert lrs[0] == pytest.approx(0.5)
+    assert lrs[1] == pytest.approx(1.0)
+    assert lrs[2] == pytest.approx(1.0)
+    assert lrs[-1] < lrs[2]
+    assert lrs[-1] >= 0.1
 
 
 def test_ppsf_zero_prodigy_steps_disables_freeze(monkeypatch) -> None:
