@@ -3,6 +3,14 @@
 > 临时设计文档，整理**逻辑模型 + 用户场景 + 数据契约**。实现细节看后续 PR。
 >
 > 落地后做了多轮 UI 迭代，详见 [§9 Addendum 1](#addendum-1--ui-演进2026-05-21)。
+>
+> **2026-06-04 状态更新**：[ADR 0010](../adr/0010-preprocess-train-scope.md) 把
+> 预处理整体下沉到版本级 `versions/{label}/train/`。本文中的 `preprocess/` 一律
+> 改读作 `versions/{label}/train/{folder}/`，manifest 落在
+> `versions/{label}/train/manifest.json`（entry key 是 POSIX rel path
+> `"folder/file"`）。crop 逻辑模型（multi-crop fan-out / 命名规则 / restore 折叠
+> 到 origin）不变，只是 scope 收窄。「还原」语义改为"从 `download/{origin}`
+> 复制覆盖 `train/{folder}/{origin}` + 清 sibling"（详 ADR 0010 §Restore 语义）。
 
 ## 0. 目的与非目的
 
@@ -47,10 +55,9 @@
 
 ### 老 schema 兼容
 
-ADR 0004 的 `{kind, model, scale, action, target_area, src_size, dst_size, elapsed_seconds, source}` 字段：
-- **读时兼容**：缺 `origin` 时，取 `source ?? entry_key`
-- **写时丢弃**：保存只写新字段
-- 几个 version 后逐步 deprecate 老字段读支持
+ADR 0004 的 `{kind, model, scale, action, target_area, src_size, dst_size, elapsed_seconds, source}` 字段已 deprecate（ADR 0010 PR-5 清掉了 reader 兼容代码）：
+- `origin` 缺失只回退到 entry key 本身，**不再** 读 `source` 字段
+- 仅 `kind == "duplicate_removed"` 作 tombstone 仍有意义；其他 `kind` 值不再分流
 
 ### resolve(download_name)
 
@@ -124,28 +131,28 @@ OperationPanel 下方独立 section，**默认折叠**；点 `▸ 智能聚类` 
 
 ## 4. 后端契约
 
-### 新增 endpoint
+### 新增 endpoint（ADR 0010 后均下沉到 version scope）
 
 ```
-POST /api/projects/:id/preprocess/crop
+POST /api/projects/:id/versions/:vid/preprocess/crop
 body: {
   crops: {
-    "IMG_2741.png": [
+    "1_data/IMG_2741.png": [
       { x: 0.10, y: 0.05, w: 0.55, h: 0.45, label: "头像" },
       { x: 0.12, y: 0.42, w: 0.72, h: 0.55, label: "全身" }
     ],
-    "IMG_2742.png": [ { x: 0.25, y: 0.12, w: 0.50, h: 0.78, label: "" } ]
+    "1_data/IMG_2742.png": [ { x: 0.25, y: 0.12, w: 0.50, h: 0.78, label: "" } ]
   }
 } → Job
 ```
 
 辅助 endpoint：
 
-- `GET /api/projects/:id/preprocess/crop/workspace` —— 列出所有可裁剪的图
-  （preprocess/ 已处理 + download/ 未处理合并），含 PIL 读图头返回的 w/h；
-  前端裁剪页 filmstrip 用
-- `POST /api/projects/:id/preprocess/files/reset` —— 总览 tab 的"撤销全部"
-  调用，清空 manifest + 删 preprocess/ 所有 PNG
+- `GET /api/projects/:id/versions/:vid/preprocess/crop/workspace` —— 列出
+  `train/{folder}/{image}` 全部 + 像素尺寸 + processed 标记，前端裁剪页 filmstrip 用
+- `POST /api/projects/:id/versions/:vid/preprocess/files/reset` —— 总览 tab
+  的"撤销全部"调用，清空 train manifest（**不动** train/ 物理文件，详 ADR 0010
+  §`train_clear_all` 决策）
 
 ### Worker 逻辑
 
