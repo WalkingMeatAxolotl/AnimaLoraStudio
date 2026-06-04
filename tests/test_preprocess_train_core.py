@@ -370,6 +370,7 @@ def test_list_duplicate_removed_workspace_no_origin(isolated) -> None:
 
 
 def test_restore_products_train_copies_download_to_train(isolated) -> None:
+    """restore X.png (entry origin=X.jpg) → train/1_data/X.jpg + 删原 entry。"""
     p = isolated["project"]
     sub = isolated["sub"]
     download = _download_dir(p)
@@ -382,7 +383,17 @@ def test_restore_products_train_copies_download_to_train(isolated) -> None:
 
     result = preprocess.restore_products_train(p, "v1", [_rel("X.png")])
     assert result == {"restored": [_rel("X.png")], "missing": [], "no_origin": []}
-    assert (sub / "X.png").read_bytes() == b"original" * 5
+    # 新文件落在 {folder}/{origin}
+    assert (sub / "X.jpg").read_bytes() == b"original" * 5
+    # 老 entry / 文件清掉
+    assert not (sub / "X.png").exists()
+    assert preprocess_manifest.train_get_entry(
+        preprocess.project_root(p), "v1", _rel("X.png")
+    ) is None
+    new_entry = preprocess_manifest.train_get_entry(
+        preprocess.project_root(p), "v1", _rel("X.jpg")
+    )
+    assert new_entry is not None and new_entry["origin"] == "X.jpg"
 
 
 def test_restore_products_train_no_origin_when_download_missing(isolated) -> None:

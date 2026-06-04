@@ -595,15 +595,20 @@ def train_restore(
     version_label: str,
     names: list[str],
 ) -> dict[str, list[str]]:
-    """复原：从 `download/{entry.origin}` 复制覆盖回 `train/{name}`。
+    """复原：从 `download/{entry.origin}` 复制覆盖回 `train/{folder}/{origin}`。
 
-    跟老 `restore` 语义完全不同——老的是"删 manifest entry + 删 preprocess
-    PNG"靠 resolver fallback；新模型下 train/ 是 self-contained 没 fallback，
-    必须显式从 download 复制（详 ADR 0010 §Restore 语义）。
+    Multi-crop fan-out 折叠：若 `name` 是某 fan-out 组的成员（同 folder 内多个
+    entry 共享同一 origin），整组被复原到 `train/{folder}/{origin}` 一张图，
+    sibling 物理文件 + manifest entry + caption sidecar 一并清理。这保证撤销
+    a_0/a_1 不会得到"两张同名 A 副本"。
+
+    Caption 跟随：从 `download/{origin_stem}.{ext}` 拷到
+    `train/{folder}/{origin_stem}.{ext}`（`.txt` / `.json`）。
 
     返回三组：
-    - `restored`：成功复原（download 原图存在并已复制覆盖）
-    - `missing`：name 在 manifest 没 entry（也不复制；调用方决定怎么提示）
+    - `restored`：成功复原的 *输入* name（fan-out 组里其他 sibling 即使被一并
+      清理也单独 list 在 restored 里，方便 UI 对账）
+    - `missing`：name 在 manifest 没 entry（且不在已被本批次清理过的 sibling 里）
     - `no_origin`：entry 存在但 `download/{origin}` 物理文件缺失——UI 应该
       给用户三选项（拖入替换 / 保留处理后版本 / 从 train 移除）
     """
@@ -616,35 +621,78 @@ def train_restore(
     target = train_manifest_path(project_dir, version_label)
     download_dir = project_dir / "download"
     train_dir = _train_dir(project_dir, version_label)
+    # batch 内 already-handled siblings（避免重复 copy / 误报 missing）
+    handled: set[str] = set()
     with _LOCK:
         m = _read_train_target(target)
         for name in names:
+            if name in handled:
+                restored.append(name)
+                continue
             entry = m["images"].get(name)
             if entry is None:
                 missing.append(name)
                 continue
             origin = entry_origin(entry, name)
+            folder = name.rsplit("/", 1)[0] if "/" in name else ""
             src = download_dir / origin
             if not src.is_file():
                 no_origin.append(name)
                 continue
-            dst = train_dir / name
+            # 找 fan-out 组：同 folder 下 origin 一致的全部 entry
+            group: list[str] = [
+                k for k, e in m["images"].items()
+                if (k.rsplit("/", 1)[0] if "/" in k else "") == folder
+                and entry_origin(e, k) == origin
+            ]
+            dst_rel = f"{folder}/{origin}" if folder else origin
+            dst = train_dir / dst_rel
+            # 删 sibling 物理 + caption（dst 本身先不删——下面 copy 会覆盖）
+            for sib in group:
+                if sib == dst_rel:
+                    continue
+                sib_path = train_dir / sib
+                if sib_path.is_file():
+                    try:
+                        sib_path.unlink()
+                    except OSError:
+                        pass
+                for ext in (".txt", ".json"):
+                    side = sib_path.with_suffix(ext)
+                    if side.is_file():
+                        try:
+                            side.unlink()
+                        except OSError:
+                            pass
+            dst.parent.mkdir(parents=True, exist_ok=True)
             try:
                 shutil.copy2(src, dst)
             except OSError:
                 no_origin.append(name)
                 continue
+            # caption sidecar 跟随
+            origin_stem = Path(origin).stem
+            for ext in (".txt", ".json"):
+                cap_src = download_dir / f"{origin_stem}{ext}"
+                if cap_src.is_file():
+                    try:
+                        shutil.copy2(cap_src, dst.with_suffix(ext))
+                    except OSError:
+                        pass
+            # manifest：删整组 + 写新 entry at dst_rel
+            for sib in group:
+                m["images"].pop(sib, None)
             try:
                 st = src.stat()
-                m["images"][name] = {
+                m["images"][dst_rel] = {
                     "origin": origin,
                     "mtime": int(st.st_mtime),
                     "size": st.st_size,
                 }
             except OSError:
-                # 极端：copy2 成功但 stat 失败 — 保守只更 origin
-                m["images"][name] = {**entry, "origin": origin}
+                m["images"][dst_rel] = {"origin": origin}
             restored.append(name)
+            handled.update(group)
         _atomic_write(target, m)
     return {"restored": restored, "missing": missing, "no_origin": no_origin}
 

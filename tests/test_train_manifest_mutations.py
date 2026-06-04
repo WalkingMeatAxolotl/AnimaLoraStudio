@@ -286,7 +286,7 @@ def test_restore_duplicate_removed_missing_when_not_marked(
 def test_restore_copies_from_download_overwriting_train(
     project_dir: Path,
 ) -> None:
-    """已 upscale 产物 train/X.png ← 从 download/X.jpg 复制覆盖。"""
+    """已 upscale 产物 X.png（origin=X.jpg）→ restore 写 X.jpg + 清老 entry。"""
     _download_path(project_dir, "X.jpg").write_bytes(b"orig" * 10)
     _train_path(project_dir, "X.png").write_bytes(b"upscaled" * 100)
     pm.train_add_processed(project_dir, "v1", "X.png", {"origin": "X.jpg"})
@@ -294,13 +294,70 @@ def test_restore_copies_from_download_overwriting_train(
     result = pm.train_restore(project_dir, "v1", ["X.png"])
 
     assert result == {"restored": ["X.png"], "missing": [], "no_origin": []}
-    # train/X.png 内容被替换成 download 原图
-    assert _train_path(project_dir, "X.png").read_bytes() == b"orig" * 10
-    # manifest entry 保留 origin，mtime/size 更新到 download 文件
-    entry = pm.train_get_entry(project_dir, "v1", "X.png")
+    # 新文件落在 {origin}，老文件物理 + entry 一并清掉
+    assert _train_path(project_dir, "X.jpg").read_bytes() == b"orig" * 10
+    assert not _train_path(project_dir, "X.png").exists()
+    assert pm.train_get_entry(project_dir, "v1", "X.png") is None
+    entry = pm.train_get_entry(project_dir, "v1", "X.jpg")
     assert entry is not None
     assert entry["origin"] == "X.jpg"
     assert entry["size"] == 40
+
+
+def test_restore_collapses_fan_out_to_single_origin(
+    project_dir: Path,
+) -> None:
+    """multi-crop fan-out a_0/a_1 (同 origin=a.jpg) 撤销→单张 a.jpg + 清 sibling。"""
+    _download_path(project_dir, "a.jpg").write_bytes(b"orig" * 10)
+    sub = project_dir / "versions" / "v1" / "train" / "1_data"
+    sub.mkdir(parents=True, exist_ok=True)
+    (sub / "a_0.png").write_bytes(b"crop0")
+    (sub / "a_1.png").write_bytes(b"crop1")
+    pm.train_replace_with_crops(
+        project_dir, "v1",
+        source_name="1_data/a.jpg",
+        outputs=[
+            {"name": "1_data/a_0.png", "origin": "a.jpg", "size": 5},
+            {"name": "1_data/a_1.png", "origin": "a.jpg", "size": 5},
+        ],
+    )
+
+    result = pm.train_restore(project_dir, "v1", ["1_data/a_0.png"])
+    assert result["restored"] == ["1_data/a_0.png"]
+    assert result["no_origin"] == [] and result["missing"] == []
+    # fan-out 折叠：单张 a.jpg，sibling 全清
+    assert (sub / "a.jpg").read_bytes() == b"orig" * 10
+    assert not (sub / "a_0.png").exists()
+    assert not (sub / "a_1.png").exists()
+    assert pm.train_get_entry(project_dir, "v1", "1_data/a_0.png") is None
+    assert pm.train_get_entry(project_dir, "v1", "1_data/a_1.png") is None
+    new_entry = pm.train_get_entry(project_dir, "v1", "1_data/a.jpg")
+    assert new_entry is not None and new_entry["origin"] == "a.jpg"
+
+
+def test_restore_fan_out_batch_handles_siblings_once(
+    project_dir: Path,
+) -> None:
+    """batch 传 [a_0, a_1] 一起撤销，两个都报 restored（不报 missing）。"""
+    _download_path(project_dir, "a.jpg").write_bytes(b"orig")
+    sub = project_dir / "versions" / "v1" / "train" / "1_data"
+    sub.mkdir(parents=True, exist_ok=True)
+    (sub / "a_0.png").write_bytes(b"c0")
+    (sub / "a_1.png").write_bytes(b"c1")
+    pm.train_replace_with_crops(
+        project_dir, "v1",
+        source_name="1_data/a.jpg",
+        outputs=[
+            {"name": "1_data/a_0.png", "origin": "a.jpg", "size": 2},
+            {"name": "1_data/a_1.png", "origin": "a.jpg", "size": 2},
+        ],
+    )
+
+    result = pm.train_restore(
+        project_dir, "v1", ["1_data/a_0.png", "1_data/a_1.png"]
+    )
+    assert sorted(result["restored"]) == ["1_data/a_0.png", "1_data/a_1.png"]
+    assert result["missing"] == [] and result["no_origin"] == []
 
 
 def test_restore_missing_when_no_manifest_entry(project_dir: Path) -> None:
