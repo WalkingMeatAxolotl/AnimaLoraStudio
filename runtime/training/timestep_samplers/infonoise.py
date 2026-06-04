@@ -1,17 +1,32 @@
 """InfoNoise 自适应时间步采样器。
 
-基于 I-MMSE 恒等式 d/dσ H[x0|xσ] = mmse(σ)/σ³，动态估计各噪声区间的信息量，
-把采样概率集中在"信息窗口"内，跳过极高/极低噪声的低效区间。
-
-在 Flow Matching 的 t ∈ (0,1) 空间工作，内部把 t 映射到 σ = t/(1-t)
-后在 log-σ 空间均匀分 bin，以保持与原始论文的一致性。
+基于 I-MMSE 恒等式动态估计各噪声区间的信息量，把采样概率集中到信息窗口
+（"既不太简单也不太难"的 σ 区段）。在 Flow Matching t ∈ (0,1) 空间工作，
+内部映射到 σ = t/(1-t) 后在 log-σ 空间均匀分 K bin。
 
 参考论文：arxiv 2602.18647 "Information-Guided Noise Allocation for Efficient
-Diffusion Training"，Algorithm 1 第 11 行：
-    mse^k ← (1-β)·mse^k + β·ℓ̄_k
-**β 乘的是新值**（responsiveness 强、平滑弱）；FIFO buffer 已做了一轮平均，
-EMA 是第二层平滑，β=0.9 即"新值占 90% 权重"是论文设计意图，不是 bug。
-**任何"按主观 EMA 直觉"翻转公式的 PR 都会改错算法，请先 verify 论文。**
+Diffusion Training"（§3.1 + Algorithm 1）。
+
+关键实现选择（与论文对齐 + 偏离说明）：
+
+- **EMA 平滑方向**：m̂_k ← (1-β)·m̂_k + β·ℓ̄_k，β 乘新值。β=0.9 即新值占
+  90% 权重；FIFO B=256 已做底层平滑，EMA 是二次轻平滑。论文 §3.1 描述
+  "smoothed binwise estimate" 但未给字面公式；该方向由
+  test_ema_responsiveness_codifies_design_choice codify。
+
+- **Entropy rate r̂_k = mse_k / σ_k²**（log-σ 空间，论文附录 B.2 Eq 61）。
+  与 Δlog σ 求和自洽。注：论文 §3 VE 通道给的是 mse/σ³ (Eq 59)，FM-OT 路径
+  字面给的是 (1-u)/u³ (Eq 64)；σ² log-σ 形式在两种路径下统一，且消解
+  低 σ 端 1/σ³ universal tail 主导归一化的问题（§B.6）。
+
+- **Gate pivot c**：默认 c=0.15（论文 §5 CIFAR 报告值）。设 gate_pivot_c=0
+  走 dynamic Eq 87 实现（从高 σ 向低 σ 扫，找最后一个 r_norm ≥ p_onset
+  的 bin）。dynamic 在 mmse 单调降形状下会退化，c=0.15 跨形状鲁棒；
+  详见 tools/infonoise_e2e_verify.py 报告。
+
+- **Warmup 单位**：N_warm 按 optimizer step 计（在 maybe_refresh 内 gate），
+  与 build 里 total_steps × 20% 默认值同维度。grad_accum>1 不影响 warmup
+  时长。_internal_step 是 record 累计（micro-batch 粒度），仅诊断用。
 """
 
 from __future__ import annotations
@@ -41,11 +56,14 @@ class InfoNoiseScheduler:
         n_gate: int = 3,
         p_onset: float = 0.002,
         N_min: int = 50,
+        gate_pivot_c: float = 0.15,
         baseline_shift: float = 3.0,
         baseline_mode: str = "logit_normal",
         baseline_mix_low_prob: float = 0.0,
         baseline_timestep_schedule_shift: float = 1.0,
     ):
+        if not 0.0 < p_onset < 1.0:
+            raise ValueError(f"p_onset 必须 ∈ (0,1)，得到 {p_onset}")
         self.K = K
         self.N_warm = N_warm
         self.M = M
@@ -54,6 +72,7 @@ class InfoNoiseScheduler:
         self.n_gate = n_gate
         self.p_onset = p_onset
         self.N_min = N_min
+        self.gate_pivot_c = gate_pivot_c
         self.baseline_shift = baseline_shift
         self.baseline_mode = baseline_mode
         self.baseline_mix_low_prob = baseline_mix_low_prob
@@ -70,10 +89,9 @@ class InfoNoiseScheduler:
         self._fifo = [deque(maxlen=B) for _ in range(K)]
         self._mse_ema = np.zeros(K, dtype=np.float64)
         self._n_count = np.zeros(K, dtype=np.int32)
-        self._cdf_values: Optional["np.ndarray"] = None
-        # 可观测性（P1-1 反方/正方都标了"InfoNoise 静默退化是 trust killer"）：
-        # last_refresh_status 暴露 _refresh 上一次的退出原因；refresh_attempts 计退化次数；
-        # warned_cold_start 防 logger 刷屏。
+        self._cdf_values: Optional[np.ndarray] = None
+        # 可观测性：last_refresh_status 暴露 _refresh 上一次的退出原因；
+        # refresh_attempts 计退化次数；warned_cold_start 防 logger 刷屏。
         self._last_refresh_status: str = "not_refreshed_yet"
         self._refresh_attempts: int = 0
         self._refresh_degraded_count: int = 0
@@ -114,11 +132,16 @@ class InfoNoiseScheduler:
             k = int(np.searchsorted(edges_inner, log_sigma_np[i]))
             self._fifo[k].append(float(mse_np[i]))
             self._n_count[k] = min(self._n_count[k] + 1, self.B)
-        self._internal_step += 1
+        self._internal_step += 1   # 仅诊断用：micro-batch 累计计数，不参与 warmup 判定
 
     def maybe_refresh(self, global_step: int):
-        """条件满足时刷新 schedule（每 M 步、热身结束后、每 bin 有足够样本）。"""
-        if self._internal_step < self.N_warm:
+        """条件满足时刷新 schedule（每 M 步、热身结束后、每 bin 有足够样本）。
+
+        warmup gate 用 global_step (optimizer step)，与 N_warm 在 build 里按
+        total_steps × 20% 计算的语义一致。grad_accum>1 项目下用 _internal_step
+        会让 warmup 提前 grad_accum× 结束（PR #TODO 修复）。
+        """
+        if global_step < self.N_warm:
             return
         if global_step % self.M != 0:
             return
@@ -126,8 +149,8 @@ class InfoNoiseScheduler:
             self._last_refresh_status = "skipped_bins_not_full"
             return
         self._refresh()
-        # 冷启动退化 trip wire（P1-1）：跑完一次完整 _refresh 但 CDF 仍未就绪
-        # → InfoNoise 静默走 baseline，必须告知用户避免"花算力没效果"。
+        # 冷启动 trip wire：跑完一次完整 _refresh 但 CDF 仍未就绪 → InfoNoise
+        # 静默走 baseline，logger.warning 一次性提醒用户避免"花算力没效果"。
         if self._cdf_values is None and not self._warned_cold_start:
             logger.warning(
                 "InfoNoise: warmup 已过且各 bin 样本充足，但首次 schedule "
@@ -154,8 +177,12 @@ class InfoNoiseScheduler:
     # 不保存 hyperparameter（K/B/N_warm/M/beta/...）—— 这些由 args 重建；只保存 *学到的* 状态。
     # 但记录 K/B 让 load_state_dict 做形状校验，避免不同配置 ckpt 间错乱。
 
+    # v1 = σ³ entropy rate + buggy pivot；v2 = σ² log-σ entropy rate + paper-aligned pivot
+    _STATE_VERSION = 2
+
     def state_dict(self) -> dict:
         return {
+            "__version__": self._STATE_VERSION,
             "K": self.K,
             "B": self.B,
             "fifo": [list(buf) for buf in self._fifo],
@@ -170,6 +197,16 @@ class InfoNoiseScheduler:
         }
 
     def load_state_dict(self, state: dict) -> None:
+        saved_version = int(state.get("__version__", 1))
+        if saved_version != self._STATE_VERSION:
+            # v1 用 σ³ 公式 + buggy pivot，跟 v2 数学语义不兼容；丢 mse_ema/cdf 走冷启动
+            logger.warning(
+                "InfoNoise resume: state_dict version %d (current=%d) — 算法已变更"
+                "（σ³→σ² entropy rate + paper-aligned gate pivot），丢弃 mse_ema/cdf "
+                "走冷启动 warmup。",
+                saved_version, self._STATE_VERSION,
+            )
+            return
         saved_K = int(state.get("K", self.K))
         saved_B = int(state.get("B", self.B))
         if saved_K != self.K or saved_B != self.B:
@@ -194,33 +231,40 @@ class InfoNoiseScheduler:
     def _refresh(self):
         self._refresh_attempts += 1
 
-        # Step A+B: 平均 loss + EMA 平滑
-        # 论文 Algorithm 1 第 11 行：mse^k ← (1-β)·mse^k + β·ℓ̄_k
-        # β 乘新值，beta=0.9 即"新值占 90% 权重"（responsiveness 强、第二层轻平滑）。
-        # 顶部 docstring 有更完整说明，不要按主观 EMA 直觉翻转。
+        # Step A+B: 平均 loss + EMA 平滑（论文 §3.1 binwise smoothing）
+        # 实现选择：m̂_k ← (1-β)·m̂_k + β·ℓ̄_k，β 控制新值权重（β=0.9 → 新值占 90%）。
+        # 论文 §3.1 描述 "smoothed binwise estimate" 但未给字面公式；测试
+        # test_ema_responsiveness_codifies_design_choice 锁定此选择。
         l_bar = np.array([
             float(np.mean(list(buf))) if buf else 0.0
             for buf in self._fifo
         ])
         self._mse_ema = (1.0 - self.beta) * self._mse_ema + self.beta * l_bar
 
-        # Step C: entropy rate r̂_k = mse_k / σ_k³
-        r_hat = self._mse_ema / (self._sigma_centers ** 3 + 1e-30)
+        # Step C: entropy rate r̂_k = mse_k / σ_k² (log-σ 空间，论文附录 B.2 Eq 61)
+        # 注：早期实现用 mse/σ³（VE 通道 Eq 59）+ Δlog σ 求和缺一档 σ Jacobian；
+        # σ² 让 log-σ 空间 entropy rate 与归一化自洽（M1/M3 修复）。
+        r_hat = self._mse_ema / (self._sigma_centers ** 2 + 1e-30)
 
-        # Step D: 找 gate pivot c（从低 σ 向高 σ 扫，取第一个超过 p_onset 的前一个 bin）
+        # Step D: gate pivot c
+        # 默认走 gate_pivot_c=0.15（paper §5 CIFAR 报告值）；gate_pivot_c=0
+        # 走 dynamic Eq 87 字面实现（从高 σ 向低 σ 扫，找最后一个 r_norm ≥ p_onset 的 bin）。
+        # 早期实现 above.argmax() 选低 σ 端第一个 above → c=σ_min 让 gate 退化为恒等
+        # 映射（E2E 实测 mass 99% 集中到 σ_min quarter）。
         r_max = float(r_hat.max())
         if r_max < 1e-30:
             self._last_refresh_status = "mse_collapsed"
             self._refresh_degraded_count += 1
             return
-        r_norm = r_hat / r_max
-        above = r_norm >= self.p_onset
-        if not any(above):
-            self._last_refresh_status = "gate_empty"
-            self._refresh_degraded_count += 1
-            return
-        first_above = int(above.argmax())
-        c = float(self._sigma_centers[max(0, first_above - 1)])
+        if self.gate_pivot_c > 0:
+            c = float(self.gate_pivot_c)
+        else:
+            r_norm = r_hat / r_max
+            above = r_norm >= self.p_onset
+            # any(above) 严格恒为 True：r_norm.max() ≡ 1.0 ≥ p_onset
+            # （__init__ 已 assert p_onset ∈ (0,1)），故 dynamic 路径不需早退分支
+            last_above = int(np.where(above)[0][-1])
+            c = float(self._sigma_centers[last_above])
 
         # Step E: gate g(σ) = σⁿ / (σⁿ + cⁿ)
         sn = self._sigma_centers ** self.n_gate
@@ -259,6 +303,7 @@ def build(args, total_steps: Optional[int]) -> InfoNoiseScheduler:
         B=int(getattr(args, "infonoise_B", 256) or 256),
         beta=float(getattr(args, "infonoise_beta", 0.9) or 0.9),
         N_min=int(getattr(args, "infonoise_N_min", 50) or 50),
+        gate_pivot_c=float(getattr(args, "infonoise_gate_pivot_c", 0.15) or 0.0),
         baseline_shift=float(getattr(args, "timestep_shift", 3.0) or 3.0),
         baseline_mode=str(getattr(args, "timestep_sampling", "logit_normal") or "logit_normal"),
         baseline_mix_low_prob=float(getattr(args, "timestep_mix_low_prob", 0.0) or 0.0),
@@ -267,6 +312,7 @@ def build(args, total_steps: Optional[int]) -> InfoNoiseScheduler:
     logger.info(
         f"InfoNoise 已启用：K={scheduler.K}, N_warm={scheduler.N_warm}, "
         f"M={scheduler.M}, B={scheduler.B}, beta={scheduler.beta}, "
+        f"gate_pivot_c={scheduler.gate_pivot_c}, "
         f"baseline={scheduler.baseline_mode}(shift={scheduler.baseline_shift}, "
         f"mix_low_prob={scheduler.baseline_mix_low_prob}, "
         f"timestep_schedule_shift={scheduler.baseline_timestep_schedule_shift})"

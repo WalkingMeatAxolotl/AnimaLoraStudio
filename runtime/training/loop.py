@@ -138,7 +138,18 @@ def run(ctx: TrainingContext) -> None:
                     _raw_mse = _raw_mse_per_sample.mean(
                         dim=list(range(1, _raw_mse_per_sample.dim()))
                     )
-                ctx.timestep_sampler.record(t.detach(), _raw_mse)
+                # 仅 main 集样本进 InfoNoise schedule 学习：论文 entropy rate 假设单一
+                # 数据分布；reg 集典型 reg_weight=0.3 跟 train 集分布差距通常很大（booru
+                # 通用图 vs LoRA 主题），混入 record 会让 schedule 被 reg 集 unweighted 影响
+                # （违反 reg_weight<1 想表达的"仅微弱影响"意图）。MergedDataset 给 main 集
+                # set loss_weight=1.0、reg 集 set =reg_weight；无 reg 时整个 batch 没这个 key。
+                if "loss_weight" in batch:
+                    _lw = batch["loss_weight"].to(_raw_mse.device)
+                    _main_mask = _lw >= 0.99
+                    if _main_mask.any():
+                        ctx.timestep_sampler.record(t.detach()[_main_mask], _raw_mse[_main_mask])
+                else:
+                    ctx.timestep_sampler.record(t.detach(), _raw_mse)
                 # 按样本加权（正则集可降低权重）
                 if "loss_weight" in batch:
                     w = batch["loss_weight"].to(ctx.device).view(-1, *([1] * (loss_per_sample.dim() - 1)))

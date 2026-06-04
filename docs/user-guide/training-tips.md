@@ -191,8 +191,9 @@ EDM/Karras 论文里 δ=0.15 是常用经验值。
 | `infonoise_K` | `64` | log-σ 空间分 bin 数；高 K = 更细 |
 | `infonoise_M` | `100` | 每 M 步刷新一次采样分布 |
 | `infonoise_B` | `256` | 每 bin 的 FIFO buffer 大小 |
-| `infonoise_beta` | `0.9` | EMA 新值权重（论文 Algorithm 1）。FIFO 已做一轮平均，β 偏高合理 |
-| `infonoise_N_min` | `50` | 触发刷新所需的每 bin 最小样本数 |
+| `infonoise_beta` | `0.9` | 自适应分布对最新 batch 的响应强度。FIFO 已做底层平滑，β 偏高合理 |
+| `infonoise_N_min` | `50` | 触发刷新所需的每 bin 最小样本数（必须 ≤ `infonoise_B`） |
+| `infonoise_gate_pivot_c` | `0.15` | gate 函数 pivot：低于 c 的噪声区段被压低采样。默认值取论文 §5 CIFAR 报告值；设 0 走自适应选取 |
 
 **观察是否生效**：训练时 wandb 面板会有两个指标
 - `infonoise/cdf_ready`：1 = 自适应 CDF 已就绪，0 = 还在 baseline
@@ -200,6 +201,18 @@ EDM/Karras 论文里 δ=0.15 是常用经验值。
   说明你的 loss 在 log-σ 上太均匀（已收敛模型），InfoNoise 没加速空间 — 关掉即可
 
 **注意**：InfoNoise 启用后 `timestep_sampling` 字段仅用于热身期。正式阶段由自适应 CDF 接管。
+
+**与其他训练选项的关系**：InfoNoise 用未加权 MSE 估各噪声区间的信息量；这是论文 entropy rate 推导的必要前提。下面列出已知会跟 InfoNoise 产生干扰的配置：
+
+| 配置 | 关系 | 处置 |
+|------|------|------|
+| `loss_weighting != none` (`min_snr`/`detail_inv_t`/`cosmap`) | 两个机制都在重塑 σ schedule（自适应 resample vs 手工 reweight），叠加互相消磨 | schema 互斥，保存配置时报错 |
+| `loss_type=huber` | huber 削峰让 outlier 区间不学，但 InfoNoise 用 raw MSE 看到 outlier 仍高 → 推 mass 进去 → 反馈环 | schema 互斥 |
+| `timestep_schedule_shift != 1.0` | shift 只在 baseline 路径生效；CDF 接管后静默失效 | schema 互斥 |
+| `noise_offset > 0` | 改 mse 形状（低 σ 端被 offset 抬高），InfoNoise 学到的是含 offset 的 schedule | 可同开但 schedule 形状会变；如想跟论文一致建议关 noise_offset |
+| `noise_enhancement_type=pyramid` | 同上，多尺度叠加比 offset 影响更大 | 同上 |
+| 正则集（`reg_data_dir != null` + `reg_weight < 1`） | reg 集分布跟 train 集不同；InfoNoise 自动跳过 reg 集样本仅学 train 集分布（loop 内 mask 处理） | 透明处理，无需用户操作 |
+| LoRA dropout（`lora_dropout` / `lora_rank_dropout` / `lora_module_dropout`） | 加梯度噪声，不改 mse 形状的系统性偏移 | 可同开，FIFO + EMA 双层平滑能 absorb |
 
 ### 噪声增强
 
