@@ -801,6 +801,13 @@ export interface TrainRestoreResult {
 export interface CurationItem {
   name: string
   mtime: number
+  /** ADR 0010 fixup（2026-06-04）：train 区项目带 download 原图文件名（按
+   *  train manifest entry.origin 反查；老项目无 manifest → fallback 用 name
+   *  自身）。Curation 右侧 thumb 走 `download` bucket + 这个 origin，显示
+   *  **预处理前的样子**——避免 multi-crop fan-out / 去重 / upscale 改字节
+   *  让筛选页缩略图"位置移动"。预处理结果用 Preprocess Overview 看。
+   *  left 区项目（download 候选）这个字段缺失/无意义。 */
+  origin?: string
 }
 
 export interface CurationView {

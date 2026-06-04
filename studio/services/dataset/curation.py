@@ -166,14 +166,32 @@ def list_download(conn, project_id: int) -> list[dict[str, Any]]:
 def list_train(
     conn, project_id: int, version_id: int
 ) -> dict[str, list[dict[str, Any]]]:
-    """train 子文件夹 → [{name, mtime}, ...]。"""
-    _, _, train = _version_train_dir(conn, project_id, version_id)
+    """train 子文件夹 → [{name, mtime, origin}, ...]。
+
+    `origin`（ADR 0010 fixup 2026-06-04）：train manifest 反查 download 原图
+    文件名。Curation 右侧显示 download 原图（**预处理前的样子**）而不是
+    train 物理产物，避免 multi-crop fan-out / 去重 / upscale 改字节后右侧
+    缩略图"显示移动"。预处理结果仍可在 Preprocess Overview 看。
+    缺 manifest entry / 老项目 fallback：origin 用 name 自身（1:1 同名兜底）。
+    """
+    p, v, train = _version_train_dir(conn, project_id, version_id)
     if not train.exists():
         return {}
+    pdir = projects.project_dir(p["id"], p["slug"])
+    tm = preprocess_manifest.train_load(pdir, v["label"])
+    entries_by_rel = tm.get("images", {})
+
     out: dict[str, list[dict[str, Any]]] = {}
     for sub in sorted(train.iterdir()):
-        if sub.is_dir():
-            out[sub.name] = _list_image_entries(sub)
+        if not sub.is_dir():
+            continue
+        items: list[dict[str, Any]] = []
+        for raw in _list_image_entries(sub):
+            rel = f"{sub.name}/{raw['name']}"
+            entry = entries_by_rel.get(rel, {})
+            origin = preprocess_manifest.entry_origin(entry, raw["name"])
+            items.append({**raw, "origin": origin})
+        out[sub.name] = items
     return out
 
 

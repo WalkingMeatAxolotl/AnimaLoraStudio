@@ -206,6 +206,16 @@ export default function CurationPage() {
     [trainEntries, sortMode]
   )
 
+  // ADR 0010 fixup: train 区 thumb 走 download bucket + manifest.origin，
+  // 显示"预处理前的样子"。trainEntries 已带 origin（backend list_train 加）。
+  const rightOriginByName = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const e of trainEntries) {
+      m.set(e.name, e.origin ?? e.name)
+    }
+    return m
+  }, [trainEntries])
+
   const leftItems = useMemo(
     () => leftSortedNames.map((n) => ({ name: n, thumbUrl: api.projectThumbUrl(project.id, n) })),
     [leftSortedNames, project.id]
@@ -216,9 +226,11 @@ export default function CurationPage() {
         ? []
         : rightSortedNames.map((n) => ({
             name: n,
-            thumbUrl: api.versionThumbUrl(project.id, versionId, 'train', n, rightFolder),
+            thumbUrl: api.projectThumbUrl(
+              project.id, rightOriginByName.get(n) ?? n, 'download', 256,
+            ),
           })),
-    [rightSortedNames, project.id, versionId, rightFolder]
+    [rightSortedNames, project.id, versionId, rightOriginByName]
   )
 
   const onLeftHover = useCallback(
@@ -230,14 +242,15 @@ export default function CurationPage() {
   const onRightHover = useCallback(
     (name: string) => {
       if (versionId == null || !rightFolder) return
+      const origin = rightOriginByName.get(name) ?? name
       setFocus({
         side: 'right',
         folder: rightFolder,
         name,
-        url: api.versionThumbUrl(project.id, versionId, 'train', name, rightFolder, 768),
+        url: api.projectThumbUrl(project.id, origin, 'download', 768),
       })
     },
-    [versionId, project.id, rightFolder]
+    [versionId, project.id, rightFolder, rightOriginByName]
   )
 
   if (!activeVersion) {
