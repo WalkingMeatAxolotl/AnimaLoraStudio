@@ -128,7 +128,6 @@ def list_download(conn, project_id: int) -> list[dict[str, Any]]:
     download_dir = pdir / "download"
     preprocess_manifest.ensure_manifest(pdir)
     processed = preprocess_manifest.all_processed(pdir)
-    removed_origins = preprocess_manifest.duplicate_removed_origins(pdir)
 
     # origin → [preprocess names...]
     by_origin: dict[str, list[str]] = {}
@@ -136,6 +135,9 @@ def list_download(conn, project_id: int) -> list[dict[str, Any]]:
         origin = preprocess_manifest.entry_origin(entry, name)
         by_origin.setdefault(origin, []).append(name)
 
+    # ADR 0010 §去重 scope：去重已下沉到 train 集（per-version 审核），
+    # download 池不再过滤；老项目里残留的 duplicate_removed 标记仅在老
+    # endpoint 范围内有意义（PR-5 删），Curation 候选不该被它影响。
     entries: list[dict[str, Any]] = []
     if download_dir.exists():
         for f in sorted(download_dir.iterdir()):
@@ -152,8 +154,6 @@ def list_download(conn, project_id: int) -> list[dict[str, Any]]:
                         continue
                     entries.append({"name": pname, "mtime": mtime})
             else:
-                if f.name in removed_origins:
-                    continue
                 try:
                     mtime = f.stat().st_mtime
                 except OSError:

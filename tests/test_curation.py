@@ -483,6 +483,10 @@ def test_duplicate_scan_can_report_blur_and_crop_candidates(env) -> None:
 
 
 def test_duplicate_apply_marks_confirmed_names_without_touching_download(env) -> None:
+    """ADR 0010 §去重 scope：dedupe 下沉到 train 集；老 project-level
+    apply_duplicate_removals 仍能写 manifest entry，但 list_download 不再
+    据此过滤——Curation 候选显示所有 download 图（用户可以重新选）。
+    """
     _png(env, "1.png")
     _png(env, "2.png")
     _meta(env, "2.png", ".txt", "tag")
@@ -501,4 +505,5 @@ def test_duplicate_apply_marks_confirmed_names_without_touching_download(env) ->
     assert (pdir / "download" / "2.png").exists()
     assert (pdir / "download" / "2.txt").exists()
     assert not (pdir / "download" / "_Duplicates_Found").exists()
-    assert {item["name"] for item in left} == {"1.png"}
+    # ADR 0010 fixup: list_download 不再过滤 duplicate_removed，2.png 仍显示
+    assert {item["name"] for item in left} == {"1.png", "2.png"}
