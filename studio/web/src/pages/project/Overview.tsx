@@ -311,11 +311,12 @@ function BannerProgress({
 }
 
 const PHASE_ORDER_TIMELINE: { id: VersionPhase; n: string; key: string }[] = [
-  { id: 'curating',     n: '①', key: 'nav.curate' },
-  { id: 'tagging',      n: '②', key: 'nav.tag' },
-  { id: 'editing',      n: '③', key: 'nav.tagEdit' },
-  { id: 'regularizing', n: '④', key: 'nav.reg' },
-  { id: 'ready',        n: '⑤', key: 'nav.train' },
+  { id: 'curating',      n: '①', key: 'nav.curate' },
+  { id: 'preprocessing', n: '②', key: 'nav.preprocess' },
+  { id: 'tagging',       n: '③', key: 'nav.tag' },
+  { id: 'editing',       n: '④', key: 'nav.tagEdit' },
+  { id: 'regularizing',  n: '⑤', key: 'nav.reg' },
+  { id: 'ready',         n: '⑥', key: 'nav.train' },
 ]
 
 function PhaseTimeline({
@@ -599,11 +600,12 @@ function StatusBanner({
 
 /** phase enum → URL step key（StatusBanner 内用，独立于 sidebar 的同名 map）。 */
 const PHASE_TO_STEP_LOCAL: Record<VersionPhase, string> = {
-  curating:     'curate',
-  tagging:      'tag',
-  editing:      'edit',
-  regularizing: 'reg',
-  ready:        'train',
+  curating:      'curate',
+  preprocessing: 'preprocess',
+  tagging:       'tag',
+  editing:       'edit',
+  regularizing:  'reg',
+  ready:         'train',
 }
 
 /** cursor 校验：preparing 态下只允许 cursor 及之前的 phase（cursor+1 也禁，
@@ -1080,14 +1082,14 @@ function DetailGrid({ project, version }: { project: ProjectDetail; version: Ver
           title={t('overview.detail.resolutionDist')}
           bins={pixelBins}
           emptyHint={t('overview.detail.emptyResolution')}
-          action={{ label: `② ${t('nav.preprocess')}`, onClick: () => navigate(`/projects/${project.id}/preprocess?tool=upscale`) }}
+          action={version ? { label: `② ${t('nav.preprocess')}`, onClick: () => navigate(`/projects/${project.id}/v/${version.id}/preprocess?tool=upscale`) } : undefined}
           phase={`② ${t('nav.preprocess')}`}
         />
         <HistTileCard
           title={t('overview.detail.aspectDist')}
           bins={arBins}
           emptyHint={t('overview.detail.emptyAspect')}
-          action={{ label: `② ${t('nav.preprocess')}`, onClick: () => navigate(`/projects/${project.id}/preprocess?tool=crop`) }}
+          action={version ? { label: `② ${t('nav.preprocess')}`, onClick: () => navigate(`/projects/${project.id}/v/${version.id}/preprocess?tool=crop`) } : undefined}
           phase={`② ${t('nav.preprocess')}`}
         />
         <RegTileCard

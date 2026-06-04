@@ -191,8 +191,10 @@ def test_crop_train_origin_inherited_from_existing_entry(env) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_upscale_train_dispatches_to_train_paths(env, monkeypatch) -> None:
-    """mock upscaler.upscale_file 验证 src/dst path + manifest 更新逻辑。"""
+def test_upscale_train_in_place_overwrites_jpg(env, monkeypatch) -> None:
+    """ADR 0010 fixup（2026-06-04）：upscale 不改扩展名，in-place 覆盖
+    src（X.jpg → X.jpg）。manifest entry 加 processed=True。
+    """
     sub = env["sub"]
     (sub / "X.jpg").write_bytes(b"raw")
     pm.train_add_processed(env["pdir"], "v1", "1_data/X.jpg", {"origin": "X.jpg"})
@@ -202,22 +204,18 @@ def test_upscale_train_dispatches_to_train_paths(env, monkeypatch) -> None:
     def fake_upscale(src, dst, **kwargs):
         called["src"] = src
         called["dst"] = dst
-        # mock 产物：往 dst 写一个 PNG
-        Image.new("RGB", (400, 200), (0, 255, 0)).save(dst, format="PNG")
+        called["save_kwargs"] = kwargs.get("save_kwargs")
+        # 模拟 upscaler in-place 覆盖（src == dst）
+        Image.new("RGB", (400, 200), (0, 255, 0)).save(dst, format="JPEG", quality=95)
         return {
-            "model": "fake",
-            "scale": 4,
-            "src_size": [200, 100],
-            "dst_size": [400, 200],
-            "action": "upscale",
+            "model": "fake", "scale": 4, "action": "upscale",
+            "src_size": [200, 100], "dst_size": [400, 200],
         }
 
     monkeypatch.setattr(worker.upscaler, "upscale_file", fake_upscale)
     monkeypatch.setattr(worker.upscaler, "load_model", lambda *a, **k: None)
     monkeypatch.setattr(worker.upscaler, "resolve_device", lambda d: type("Dev", (), {"type": "cpu"})())
     monkeypatch.setattr(worker.upscaler, "resolve_dtype", lambda *a, **k: "float32")
-
-    # mock model_downloader.upscaler_target → 返回一个存在的路径
     fake_model = env["pdir"] / "fake-model.pth"
     fake_model.write_bytes(b"weight")
     monkeypatch.setattr(
@@ -225,30 +223,35 @@ def test_upscale_train_dispatches_to_train_paths(env, monkeypatch) -> None:
     )
 
     rc = worker._run_upscale_train(
-        env["project"], env["version"],
-        {"mode": "all"},
-        _silence, _silence,
+        env["project"], env["version"], {"mode": "all"}, _silence, _silence,
     )
     assert rc == 0
-    # src/dst path 对
+    # src == dst：in-place 覆盖
     assert called["src"] == sub / "X.jpg"
-    assert called["dst"] == sub / "X.png"
-    # src 物理被删（扩展名变）
-    assert not (sub / "X.jpg").is_file()
-    assert (sub / "X.png").is_file()
-    # manifest swap：old key 走，new key 入
+    assert called["dst"] == sub / "X.jpg"
+    # JPEG 扩展名 → save_kwargs format=JPEG quality=95
+    assert called["save_kwargs"]["format"] == "JPEG"
+    assert called["save_kwargs"]["quality"] == 95
+    # 物理文件保留同名
+    assert (sub / "X.jpg").is_file()
+    assert not (sub / "X.png").exists()
+    # manifest 仍是同 key + processed=True
     m = pm.train_load(env["pdir"], "v1")
-    assert "1_data/X.jpg" not in m["images"]
-    assert m["images"]["1_data/X.png"]["origin"] == "X.jpg"
+    assert set(m["images"].keys()) == {"1_data/X.jpg"}
+    assert m["images"]["1_data/X.jpg"]["origin"] == "X.jpg"
+    assert m["images"]["1_data/X.jpg"]["processed"] is True
 
 
-def test_upscale_train_overwrites_when_extension_same(env, monkeypatch) -> None:
-    """src 已是 .png（已处理过的图再上调）→ src == dst path → 普通 add_processed。"""
+def test_upscale_train_in_place_overwrites_png(env, monkeypatch) -> None:
+    """PNG 输入 → save_kwargs format=PNG。"""
     sub = env["sub"]
     (sub / "X.png").write_bytes(b"old")
     pm.train_add_processed(env["pdir"], "v1", "1_data/X.png", {"origin": "X.png"})
 
+    called: dict = {}
+
     def fake_upscale(src, dst, **kwargs):
+        called["save_kwargs"] = kwargs.get("save_kwargs")
         Image.new("RGB", (400, 200), (0, 255, 0)).save(dst, format="PNG")
         return {"model": "fake", "scale": 4, "action": "upscale"}
 
@@ -264,7 +267,8 @@ def test_upscale_train_overwrites_when_extension_same(env, monkeypatch) -> None:
         env["project"], env["version"], {"mode": "all"}, _silence, _silence,
     )
     assert rc == 0
-    # 仅 X.png（dst 覆盖 src）
+    assert called["save_kwargs"]["format"] == "PNG"
     m = pm.train_load(env["pdir"], "v1")
     assert set(m["images"].keys()) == {"1_data/X.png"}
+    assert m["images"]["1_data/X.png"]["processed"] is True
     assert (sub / "X.png").is_file()

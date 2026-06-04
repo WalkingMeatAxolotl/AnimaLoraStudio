@@ -32,9 +32,10 @@ interface DuplicateLog {
 
 export default function PreprocessDuplicatesPage() {
   const { t } = useTranslation()
-  const { project, reload } = useOutletContext<Ctx>()
+  const { project, activeVersion, reload } = useOutletContext<Ctx>()
   const { toast } = useToast()
   const { confirm } = useDialog()
+  const vid = activeVersion?.id ?? 0
   const [options, setOptions] = useState<DuplicateScanOptions>(DEFAULT_DUPLICATE_OPTIONS)
   const [result, setResult] = useState<DuplicateScanResult | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -85,7 +86,7 @@ export default function PreprocessDuplicatesPage() {
     setScanLogVisible(true)
     setLogs([{ ts: Date.now(), status: 'running', text: t('duplicates.logStarted') }])
     try {
-      const next = await api.scanDuplicates(project.id, options)
+      const next = await api.scanDuplicatesTrain(project.id, vid, options)
       setResult(next)
       setSelected(new Set(
         next.groups.flatMap((group) =>
@@ -118,7 +119,7 @@ export default function PreprocessDuplicatesPage() {
     if (!ok) return
     setBusy(true)
     try {
-      const res = await api.applyDuplicateAction(project.id, { names })
+      const res = await api.applyDuplicateActionTrain(project.id, vid, { names })
       toast(
         t('duplicates.appliedToast', { n: res.removed.length }) +
           (res.skipped.length ? t('duplicates.appliedSkipped', { n: res.skipped.length }) : '') +
@@ -141,6 +142,15 @@ export default function PreprocessDuplicatesPage() {
     setPreviewIdx(index >= 0 ? index : 0)
   }
 
+  // ADR 0010: hooks 之后再做 vid guard
+  if (!activeVersion) {
+    return (
+      <div className="p-6 text-fg-secondary">
+        {t('projectStepper.selectVersion')}
+      </div>
+    )
+  }
+
   return (
     <StepShell
       idx={2}
@@ -150,7 +160,7 @@ export default function PreprocessDuplicatesPage() {
       <div className="flex flex-col h-full gap-3 min-h-0">
         <div className="grid gap-3 flex-1 min-h-0" style={{ gridTemplateColumns: '1fr 260px' }}>
           <div className="flex flex-col gap-2 min-h-0 min-w-0">
-            <PreprocessToolsBar current="dedupe" projectId={project.id} />
+            <PreprocessToolsBar current="dedupe" projectId={project.id} versionId={vid} />
             <DuplicateOperationPanel
               options={options}
               result={result}
@@ -164,6 +174,7 @@ export default function PreprocessDuplicatesPage() {
             {scanLogVisible && <DuplicateLogStrip logs={logs} busy={busy} />}
             <DuplicateReviewPanel
               projectId={project.id}
+              versionId={vid}
               result={result}
               selected={selected}
               busy={busy}
@@ -172,6 +183,7 @@ export default function PreprocessDuplicatesPage() {
             />
             <QualityReviewPanel
               projectId={project.id}
+              versionId={vid}
               result={result}
               selected={selected}
               busy={busy}
@@ -197,10 +209,15 @@ export default function PreprocessDuplicatesPage() {
         </div>
       </div>
 
-      {previewIdx !== null && previewNames[previewIdx] && (
+      {previewIdx !== null && previewNames[previewIdx] && (() => {
+        const rel = previewNames[previewIdx]
+        const i = rel.lastIndexOf('/')
+        const folder = i >= 0 ? rel.slice(0, i) : ''
+        const filename = i >= 0 ? rel.slice(i + 1) : rel
+        return (
         <ImagePreviewModal
-          src={api.projectThumbUrl(project.id, previewNames[previewIdx], 'download', 1600)}
-          caption={previewNames[previewIdx]}
+          src={api.versionThumbUrl(project.id, vid, 'train', filename, folder, 1600)}
+          caption={rel}
           hasPrev={previewIdx > 0}
           hasNext={previewIdx < previewNames.length - 1}
           onClose={() => setPreviewIdx(null)}
@@ -208,7 +225,8 @@ export default function PreprocessDuplicatesPage() {
           onNext={() => previewIdx < previewNames.length - 1 && setPreviewIdx(previewIdx + 1)}
           shortcutHint={t('duplicates.previewHint')}
         />
-      )}
+        )
+      })()}
     </StepShell>
   )
 }
@@ -451,6 +469,7 @@ function DuplicateLogStrip({ logs, busy }: { logs: DuplicateLog[]; busy: boolean
 
 function QualityReviewPanel({
   projectId,
+  versionId,
   result,
   selected,
   busy,
@@ -459,6 +478,7 @@ function QualityReviewPanel({
   onPreview,
 }: {
   projectId: number
+  versionId: number
   result: DuplicateScanResult | null
   selected: Set<string>
   busy: boolean
@@ -557,6 +577,7 @@ function QualityReviewPanel({
             note: item.reason,
           }))}
           projectId={projectId}
+          versionId={versionId}
           selected={selected}
           busy={busy}
           onToggle={onToggle}
@@ -585,6 +606,7 @@ function QualityReviewPanel({
             ].join(' · '),
           }))}
           projectId={projectId}
+          versionId={versionId}
           selected={selected}
           busy={busy}
           onToggle={onToggle}
@@ -600,6 +622,7 @@ function QualitySection({
   empty,
   items,
   projectId,
+  versionId,
   selected,
   busy,
   onToggle,
@@ -609,6 +632,7 @@ function QualitySection({
   empty: string
   items: Array<{ key: string; images: Array<{ name: string; label?: string }>; meta: string; score: string; note: string }>
   projectId: number
+  versionId: number
   selected: Set<string>
   busy: boolean
   onToggle: (name: string) => void
@@ -628,6 +652,7 @@ function QualitySection({
                   <QualityImageCell
                     key={image.name}
                     projectId={projectId}
+                    versionId={versionId}
                     name={image.name}
                     label={image.label}
                     selected={selected.has(image.name)}
@@ -655,6 +680,7 @@ function QualitySection({
 
 function QualityImageCell({
   projectId,
+  versionId,
   name,
   label,
   selected,
@@ -663,6 +689,7 @@ function QualityImageCell({
   onPreview,
 }: {
   projectId: number
+  versionId: number
   name: string
   label?: string
   selected: boolean
@@ -685,13 +712,20 @@ function QualityImageCell({
         className="block w-full aspect-square bg-sunken disabled:opacity-70"
         title={name}
       >
-        <img
-          src={api.projectThumbUrl(projectId, name, 'download', 256)}
-          alt={name}
-          loading="lazy"
-          decoding="async"
-          className="w-full h-full object-cover"
-        />
+        {(() => {
+          const i = name.lastIndexOf('/')
+          const folder = i >= 0 ? name.slice(0, i) : ''
+          const filename = i >= 0 ? name.slice(i + 1) : name
+          return (
+            <img
+              src={api.versionThumbUrl(projectId, versionId, 'train', filename, folder, 256)}
+              alt={name}
+              loading="lazy"
+              decoding="async"
+              className="w-full h-full object-cover"
+            />
+          )
+        })()}
       </button>
       <div className="px-1.5 py-1 flex items-center gap-1 min-w-0">
         <button

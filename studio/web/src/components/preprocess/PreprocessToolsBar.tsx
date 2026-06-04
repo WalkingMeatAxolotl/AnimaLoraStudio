@@ -24,19 +24,21 @@ const TOOLS: ReadonlyArray<ToolDef> = [
 interface Props {
   current: PreprocessTool
   projectId: number
+  versionId: number
 }
 
 /** Top-of-page tools bar shared by every preprocess sub-tool.
  *
  *  The tools (放大 / 裁剪 / 涂抹) are peer **tools**, not pipeline stages — they
  *  don't have a completion state, and any one can be used at any time in any
- *  order. URL convention: `/projects/:pid/preprocess?tool=...`. The query
- *  string lets the sidebar's `/preprocess` matcher stay simple AND keeps the
- *  parent route mounted across tool switches (cheaper than full page swap).
+ *  order. URL convention（ADR 0010 后）：
+ *  `/projects/:pid/v/:vid/preprocess?tool=...`. The query string lets the
+ *  sidebar's `/preprocess` matcher stay simple AND keeps the parent route
+ *  mounted across tool switches.
  */
-export default function PreprocessToolsBar({ current, projectId }: Props) {
+export default function PreprocessToolsBar({ current, projectId, versionId }: Props) {
   const { t } = useTranslation()
-  const base = `/projects/${projectId}/preprocess`
+  const base = `/projects/${projectId}/v/${versionId}/preprocess`
   return (
     <nav className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-subtle bg-surface shrink-0">
       <span className="text-fg-tertiary font-medium uppercase tracking-wider text-[10px] mr-1">

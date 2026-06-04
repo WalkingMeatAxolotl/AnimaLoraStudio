@@ -703,8 +703,13 @@ def train_add_processed(
 ) -> None:
     """记录一张已处理图（train scope）。
 
-    schema 跟老 `add_processed` 一致——只采纳 `origin / mtime / size`，其他
-    字段（model/scale/action/...）丢弃。size 兜底 stat `train/{name}`。
+    schema：采纳 `origin / mtime / size / processed`，其他字段（model/scale/
+    action/...）丢弃。size 兜底 stat `train/{name}`。
+
+    `processed: bool`（ADR 0010 fixup 2026-06-04）：worker upscale/crop 完成
+    后传 `meta["processed"] = True` 标记，curate 时 `copy_download_to_train`
+    不传（默认 False 不写字段）。前端用这个字段画"已处理"徽章；详 ADR 0010
+    §状态从字段差异隐含推断。
     """
     ensure_train_manifest(project_dir, version_label)
     target = train_manifest_path(project_dir, version_label)
@@ -723,6 +728,8 @@ def train_add_processed(
                 entry["size"] = png.stat().st_size
             except OSError:
                 entry["size"] = 0
+        if meta.get("processed"):
+            entry["processed"] = True
         m["images"][name] = entry
         _atomic_write(target, m)
 
@@ -759,6 +766,9 @@ def train_replace_with_crops(
                 "mtime": o.get("mtime", now),
                 "size": int(o.get("size", 0)),
             }
+            # crop 派生本质是处理操作（ADR 0010 fixup）
+            if o.get("processed", True):
+                entry["processed"] = True
             m["images"][o["name"]] = entry
         _atomic_write(target, m)
 
@@ -935,8 +945,34 @@ def train_swap_entry(
                 entry["size"] = png.stat().st_size
             except OSError:
                 entry["size"] = 0
+        if meta.get("processed"):
+            entry["processed"] = True
         m["images"][new_name] = entry
         _atomic_write(target, m)
+
+
+def train_remove_entries(
+    project_dir: Path,
+    version_label: str,
+    names: list[str],
+) -> int:
+    """批量删 train manifest entries（按 entry key）。返回实际删除数。
+
+    给 `curation.remove_from_train` 用：用户从 train 删一张 download 原图时，
+    后者按 origin 反查得到 N 个派生 rel path（multi-crop fan-out），一次性
+    pop + 原子写盘比逐条 mutation 高效。
+    """
+    ensure_train_manifest(project_dir, version_label)
+    target = train_manifest_path(project_dir, version_label)
+    removed = 0
+    with _LOCK:
+        m = _read_train_target(target)
+        for name in names:
+            if m["images"].pop(name, None) is not None:
+                removed += 1
+        if removed:
+            _atomic_write(target, m)
+    return removed
 
 
 def train_clear_all(project_dir: Path, version_label: str) -> None:

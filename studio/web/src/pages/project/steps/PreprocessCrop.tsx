@@ -61,23 +61,25 @@ function genRectId(): string {
 
 export default function PreprocessCropPage() {
   const { t } = useTranslation()
-  const { project, reload } = useOutletContext<Ctx>()
+  const { project, activeVersion, reload } = useOutletContext<Ctx>()
   const { toast } = useToast()
+  const vid = activeVersion?.id ?? 0
 
   // ────── Workspace data ──────
   const [images, setImages] = useState<CropWorkspaceItem[]>([])
   const [loading, setLoading] = useState(true)
 
   const refreshWorkspace = useCallback(async () => {
+    if (!vid) return
     try {
-      const r = await api.listCropWorkspace(project.id)
+      const r = await api.listCropWorkspaceTrain(project.id, vid)
       setImages(r.images)
     } catch {
       /* ignore */
     } finally {
       setLoading(false)
     }
-  }, [project.id])
+  }, [project.id, vid])
 
   useEffect(() => { void refreshWorkspace() }, [refreshWorkspace])
 
@@ -298,7 +300,7 @@ export default function PreprocessCropPage() {
     }
     setBusy(true)
     try {
-      const j = await api.startPreprocessCrop(project.id, payload)
+      const j = await api.startPreprocessCropTrain(project.id, vid, payload)
       setJob(j)
       setLogs([])
       toast(t('preprocessCrop.toastStarted', { id: j.id }), 'success')
@@ -307,9 +309,18 @@ export default function PreprocessCropPage() {
     } finally {
       setBusy(false)
     }
-  }, [cropsByImage, activeName, project.id, toast, t])
+  }, [cropsByImage, activeName, project.id, vid, toast, t])
 
   // ────── Render ──────
+  // ADR 0010: hooks 之后再做 vid guard
+  if (!activeVersion) {
+    return (
+      <div className="p-6 text-fg-secondary">
+        {t('projectStepper.selectVersion')}
+      </div>
+    )
+  }
+
   return (
     <StepShell
       idx={2}
@@ -320,7 +331,7 @@ export default function PreprocessCropPage() {
         <div className="grid gap-3 flex-1 min-h-0" style={{ gridTemplateColumns: '1fr 260px' }}>
           {/* 左栏 */}
           <div className="flex flex-col gap-2 min-h-0 min-w-0">
-            <PreprocessToolsBar current="crop" projectId={project.id} />
+            <PreprocessToolsBar current="crop" projectId={project.id} versionId={vid} />
             <OperationPanel
               arSel={arSel} setArSel={setArSel}
               customAR={customAR} setCustomAR={setCustomAR}
@@ -385,7 +396,7 @@ export default function PreprocessCropPage() {
                 {!loading && images.length === 0 && (
                   <p className="text-fg-tertiary text-sm">
                     {t('preprocessCrop.emptyWorkspace')}{' '}
-                    <Link to={`/projects/${project.id}/preprocess?tool=upscale`} className="text-accent hover:underline">
+                    <Link to={`/projects/${project.id}/v/${vid}/preprocess?tool=upscale`} className="text-accent hover:underline">
                       {t('preprocessCrop.goToUpscale')}
                     </Link>
                   </p>
@@ -413,13 +424,14 @@ export default function PreprocessCropPage() {
                         setActiveName(name)
                         setSelectedRectId(null)
                       }}
-                      thumbUrl={(im) => api.projectThumbUrl(
-                        project.id,
-                        im.name,
-                        im.processed ? 'preprocess' : 'download',
-                        256,
-                        im.mtime,
-                      )}
+                      thumbUrl={(im) => {
+                        const i = im.name.lastIndexOf('/')
+                        const folder = i >= 0 ? im.name.slice(0, i) : ''
+                        const filename = i >= 0 ? im.name.slice(i + 1) : im.name
+                        return api.versionThumbUrl(
+                          project.id, vid, 'train', filename, folder, 256,
+                        ) + `&_=${im.mtime}`
+                      }}
                       emptyHint={t(`preprocessCrop.filmstripEmpty.${filter}`)}
                     />
 
@@ -430,13 +442,14 @@ export default function PreprocessCropPage() {
                           name: activeImage.name,
                           w: activeImage.w,
                           h: activeImage.h,
-                          thumbUrl: api.projectThumbUrl(
-                            project.id,
-                            activeImage.name,
-                            activeImage.processed ? 'preprocess' : 'download',
-                            1024,
-                            activeImage.mtime,
-                          ),
+                          thumbUrl: (() => {
+                            const i = activeImage.name.lastIndexOf('/')
+                            const folder = i >= 0 ? activeImage.name.slice(0, i) : ''
+                            const filename = i >= 0 ? activeImage.name.slice(i + 1) : activeImage.name
+                            return api.versionThumbUrl(
+                              project.id, vid, 'train', filename, folder, 1024,
+                            ) + `&_=${activeImage.mtime}`
+                          })(),
                         }}
                         crops={activeCrops}
                         selectedId={selectedRectId}

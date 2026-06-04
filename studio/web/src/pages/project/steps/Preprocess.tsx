@@ -4,8 +4,6 @@ import { useOutletContext } from 'react-router-dom'
 import {
   api,
   type Job,
-  type PreprocessedItem,
-  type PreprocessPendingItem,
   type ProjectDetail,
   type UpscalerVariant,
   type Version,
@@ -33,25 +31,29 @@ interface Status {
 }
 
 interface FilesView {
-  processed: PreprocessedItem[]
-  pending: PreprocessPendingItem[]
+  /** ADR 0010: train 集合所有图（替代老 pending+processed 二元）。 */
+  images: import('../../../api/client').TrainImage[]
   summary: Status['summary']
 }
 
-/** 单图视图：合并 pending + processed 成一份带状态的列表。
+/** 单图视图：从 train manifest 派生的带状态列表（ADR 0010）。
  *
- *  ADR 0004：用户视角只有一份图，「未处理 / 已处理」是图上的徽章而非分组。 */
+ *  ADR 0010：用户视角只有一份图，「未处理 / 已处理」是图上的徽章而非分组；
+ *  状态从 entry 字段差异推断（rel path 末段 ≠ origin → processed；相同 →
+ *  pending/原样）。
+ */
 interface ImageRow {
-  name: string                  // download/ 下的原文件名（用作 selection key + thumb URL）
-  productName: string           // preprocess/ 下的产物名（{stem}.png），还原 API 用这个
+  /** train rel path "1_data/X.png"（用作 selection key + manifest entry key）。 */
+  name: string
+  /** name 末段文件名（restore/crop 操作 + thumb URL 用）。 */
+  filename: string
+  /** name 的 folder 段（thumb URL 用）。 */
+  folder: string
   status: 'pending' | 'processed'
-  processed?: PreprocessedItem  // status=processed 时有
+  processed?: import('../../../api/client').TrainImage
   size: number
-  /** 实际像素尺寸（pending 取 download/，processed 取 preprocess/）。filter 用。 */
   w: number | null
   h: number | null
-  /** 源文件 mtime — 当 thumb cache-buster 用。in-place 覆盖（同名裁剪 / 同名再放大）
-   *  后 URL 不带这个 → 浏览器 memory image cache 会继续展示旧 decoded 像素。 */
   mtime: number
 }
 
@@ -67,16 +69,11 @@ type Device = 'auto' | 'cuda' | 'cpu'
 // value=null 是「关闭智能」模式，直接 4× 模型输出（老路径，盘费高）。
 const DEFAULT_TARGET_EDGE = 1024
 
-/** stem 工具（去扩展名）—— 前端 product name 拼装用。 */
-function fileStem(name: string): string {
-  const dot = name.lastIndexOf('.')
-  return dot < 0 ? name : name.slice(0, dot)
-}
-
 export default function PreprocessPage() {
   const { t } = useTranslation()
-  const { project, reload } = useOutletContext<Ctx>()
+  const { project, activeVersion, reload } = useOutletContext<Ctx>()
   const { toast } = useToast()
+  const vid = activeVersion?.id ?? 0
 
   const [files, setFiles] = useState<FilesView | null>(null)
   const [status, setStatus] = useState<Status | null>(null)
@@ -104,17 +101,19 @@ export default function PreprocessPage() {
   )
 
   const refreshFiles = useCallback(async () => {
+    if (!vid) return
     try {
-      const r = await api.listPreprocessFiles(project.id)
+      const r = await api.listPreprocessFilesTrain(project.id, vid)
       setFiles(r)
     } catch {
       /* ignore */
     }
-  }, [project.id])
+  }, [project.id, vid])
 
   const refreshStatus = useCallback(async () => {
+    if (!vid) return
     try {
-      const r = await api.getPreprocessStatus(project.id)
+      const r = await api.getPreprocessStatusTrain(project.id, vid)
       setStatus(r)
       // Logs are ephemeral per-session — don't hydrate from log_tail. After
       // refresh the user only sees a fresh, empty log; SSE appends as the
@@ -123,7 +122,7 @@ export default function PreprocessPage() {
     } catch {
       /* ignore */
     }
-  }, [project.id])
+  }, [project.id, vid])
 
   const refreshUpscaler = useCallback(async () => {
     try {
@@ -179,25 +178,25 @@ export default function PreprocessPage() {
   const summary = files?.summary ?? status?.summary ?? { image_count: 0 }
   const modelReady = !!upscaler?.exists
 
-  // ADR 0004：合并 pending + processed 成单一带状态的列表。
+  // ADR 0010: TrainImage[] → ImageRow[]。processed 用 backend `_is_processed`
+  // 推断（扩展名变 / _cN 后缀 / train size != download size），前端不自己算。
   const rows = useMemo<ImageRow[]>(() => {
     if (!files) return []
     const out: ImageRow[] = []
-    for (const it of files.pending) {
+    for (const img of files.images) {
+      if (img.duplicate_removed) continue // 软删除不进 grid
+      const lastSlash = img.name.lastIndexOf('/')
+      const folder = lastSlash >= 0 ? img.name.slice(0, lastSlash) : ''
+      const filename = lastSlash >= 0 ? img.name.slice(lastSlash + 1) : img.name
       out.push({
-        name: it.name, productName: `${fileStem(it.name)}.png`,
-        status: 'pending', size: it.size,
-        w: it.w, h: it.h,
-        mtime: it.mtime,
-      })
-    }
-    for (const p of files.processed) {
-      const downloadName = p.source ?? p.name
-      out.push({
-        name: downloadName, productName: p.name,
-        status: 'processed', processed: p, size: p.size,
-        w: p.w, h: p.h,
-        mtime: p.mtime,
+        name: img.name,
+        filename,
+        folder,
+        status: img.processed ? 'processed' : 'pending',
+        processed: img.processed ? img : undefined,
+        size: img.size,
+        w: img.w, h: img.h,
+        mtime: img.mtime,
       })
     }
     out.sort((a, b) => a.name.localeCompare(b.name))
@@ -223,59 +222,33 @@ export default function PreprocessPage() {
       }),
     [rows, filter],
   )
-  // visibleNames must match gridItems' unique keys (see gridItems below) so
-  // shift-range selection stays consistent — multi-crop fan-out produces
-  // processed rows sharing one download `name`, productName disambiguates.
+  // ADR 0010: grid key = rel path (manifest entry key)，跨 sub-folder 唯一。
   const visibleNames = useMemo(
-    () =>
-      visibleRows.map((r) =>
-        r.status === 'processed' ? r.productName : r.name,
-      ),
+    () => visibleRows.map((r) => r.name),
     [visibleRows],
   )
 
   const gridItems = useMemo(
     () =>
       visibleRows.map((r) => ({
-        // Grid key — must be unique per row. Multi-crop fan-out produces
-        // multiple processed rows that share the same download `name`; use
-        // productName (= preprocess filename, including _c0/_c1 suffixes) to
-        // disambiguate. Pending rows have unique download names.
-        name: r.status === 'processed' ? r.productName : r.name,
-        // For processed rows, address by preprocess product name (handles
-        // multi-crop fan-out where multiple products share one origin). For
-        // pending rows, still address by download name.
-        thumbUrl: r.status === 'processed'
-          ? api.projectThumbUrl(project.id, r.productName, 'preprocess', 256, r.mtime)
-          : api.projectThumbUrl(project.id, r.name, 'download', 256, r.mtime),
-        // ADR 0004 Addendum 1 §「Stage 不强制时序」：grid 不分"未处理 / 已处理"。
-        // 只在派生路径标 action 给用户看上次处理留下的痕迹（resize / upscale
-        // / crop 等），原图路径不挂角标 — 那只是"当前态从 download 读"，不是
-        // 一种待办状态。
+        name: r.name,
+        // train bucket thumb：folder + filename
+        thumbUrl: api.versionThumbUrl(
+          project.id, vid, 'train', r.filename, r.folder, 256,
+        ) + `&_=${r.mtime}`,
+        // ADR 0010: processed entry 显示 action 角标（继承自老 schema 透传）
         meta: r.status === 'processed' ? (r.processed?.action ?? undefined) : undefined,
       })),
-    [visibleRows, project.id],
+    [visibleRows, project.id, vid],
   )
 
-  // grid key（= productName / r.name，跟 gridItems 一致）→ resolve_targets 接收的
-  // 后端名（processed 走 productName / pending 走 r.name 都是 ADR-0004 selected
-  // mode selectable 集合的元素）。这俩在当前实现下等值，但保留这层映射方便未来
-  // grid key 跟后端名分流时只动 byKey。
+  // ADR 0010: 选中传给 start_job_train 的 names 直接用 rel path
+  // （resolve_targets_train 接受 rel path，跟 manifest entry key 一致）。
   const selectedTargets = useMemo(() => {
-    const byKey = new Map(
-      rows.map((r) => [
-        r.status === 'processed' ? r.productName : r.name,
-        r,
-      ] as const),
-    )
     const names: string[] = []
-    for (const k of sel) {
-      const r = byKey.get(k)
-      if (!r) continue
-      names.push(r.status === 'processed' ? r.productName : r.name)
-    }
+    for (const k of sel) names.push(k)
     return { count: names.length, names }
-  }, [sel, rows])
+  }, [sel])
 
   // ----- 操作 ---------------------------------------------------------------
   const downloadModel = async () => {
@@ -319,7 +292,7 @@ export default function PreprocessPage() {
     }
     setBusy(true)
     try {
-      const j = await api.startPreprocess(project.id, {
+      const j = await api.startPreprocessTrain(project.id, vid, {
         mode,
         names,
         model: selectedModel,
@@ -356,6 +329,15 @@ export default function PreprocessPage() {
   // 撤销 (restore) 流程已迁移到「总览」tab (PreprocessOverview)，作为
   // 跨工具统一入口，避免每个工具页都有自己的撤销按钮。
 
+  // ADR 0010: hooks 之后再做 vid guard（hooks 顺序不能被早 return 打断）
+  if (!activeVersion) {
+    return (
+      <div className="p-6 text-fg-secondary">
+        {t('projectStepper.selectVersion')}
+      </div>
+    )
+  }
+
   return (
     <StepShell
       idx={2}
@@ -366,7 +348,7 @@ export default function PreprocessPage() {
         <div className="grid gap-3 flex-1 min-h-0" style={{ gridTemplateColumns: '1fr 260px' }}>
           {/* 左栏 */}
           <div className="flex flex-col gap-2 min-h-0 min-w-0">
-            <PreprocessToolsBar current="upscale" projectId={project.id} />
+            <PreprocessToolsBar current="upscale" projectId={project.id} versionId={vid} />
             <OperationPanel
               tileSize={tileSize}
               setTileSize={setTileSize}
@@ -439,8 +421,7 @@ export default function PreprocessPage() {
             upscaler={upscaler}
             selectedModel={selectedModel}
             tileSize={tileSize}
-            processed={files?.processed ?? []}
-            pending={files?.pending ?? []}
+            images={files?.images ?? []}
             targetEdge={targetEdge}
           />
         </div>
@@ -448,9 +429,11 @@ export default function PreprocessPage() {
 
       {previewIdx !== null && visibleRows[previewIdx] && (
         <ImagePreviewModal
-          src={visibleRows[previewIdx].status === 'processed'
-            ? api.projectThumbUrl(project.id, visibleRows[previewIdx].productName, 'preprocess', 1600, visibleRows[previewIdx].mtime)
-            : api.projectThumbUrl(project.id, visibleRows[previewIdx].name, 'download', 1600, visibleRows[previewIdx].mtime)}
+          src={api.versionThumbUrl(
+            project.id, vid, 'train',
+            visibleRows[previewIdx].filename,
+            visibleRows[previewIdx].folder, 1600,
+          ) + `&_=${visibleRows[previewIdx].mtime}`}
           caption={`${visibleRows[previewIdx].name} · ${
             visibleRows[previewIdx].status === 'processed' ? '✓ 已处理' : '⊘ 未处理'
           }`}
@@ -795,33 +778,35 @@ function PreprocessSidebar({
   upscaler,
   selectedModel,
   tileSize,
-  processed,
-  pending,
+  images,
   targetEdge,
 }: {
   upscaler: UpscalerVariant | null
   selectedModel: string
   tileSize: number
-  processed: PreprocessedItem[]
-  pending: PreprocessPendingItem[]
+  images: import('../../../api/client').TrainImage[]
   targetEdge: number | null
 }) {
   const { t } = useTranslation()
   const estVramMB = Math.round((tileSize * tileSize * 16 * 2 * 7) / (1024 * 1024))
 
-  // Histogram counts BOTH processed and pending — global view of the
-  // dataset's resolution distribution. 按 ADR 0004 这俩只是 grid 来源不同
-  // （preprocess/ 派生 vs download 原图），全部图就是 grid 上看到的全部图。
+  // ADR 0010: 直方图基于 train 集全图；状态从 entry 字段差异隐含推断。
   const pixelHist = useMemo(
-    () => computePixelHist([...processed, ...pending]),
-    [processed, pending],
+    () => computePixelHist(images.filter((i) => !i.duplicate_removed)),
+    [images],
+  )
+
+  // ADR 0010: backend `_is_processed` 推断（扩展名变 / _cN / size diff）
+  const processedImages = useMemo(
+    () => images.filter((i) => i.processed && !i.duplicate_removed),
+    [images],
   )
 
   const processedBytes = useMemo(
-    () => processed.reduce((s, it) => s + (it.size ?? 0), 0),
-    [processed],
+    () => processedImages.reduce((s, it) => s + (it.size ?? 0), 0),
+    [processedImages],
   )
-  const avgBytes = processed.length > 0 ? processedBytes / processed.length : 0
+  const avgBytes = processedImages.length > 0 ? processedBytes / processedImages.length : 0
   const fmtBytes = (b: number) =>
     b >= 1024 * 1024 * 1024
       ? `${(b / 1024 / 1024 / 1024).toFixed(2)} GB`
@@ -852,10 +837,10 @@ function PreprocessSidebar({
         </h3>
         <StatRow
           label={t('preprocess.diskTotal')}
-          value={processed.length > 0 ? fmtBytes(processedBytes) : '—'}
+          value={processedImages.length > 0 ? fmtBytes(processedBytes) : '—'}
           accent={processedBytes > 5 * 1024 ** 3 ? 'warn' : undefined}
         />
-        {processed.length > 0 && (
+        {processedImages.length > 0 && (
           <StatRow label={t('preprocess.diskAvg')} value={fmtBytes(avgBytes)} />
         )}
         <p className="text-[11px] text-fg-tertiary mt-1.5 leading-snug">

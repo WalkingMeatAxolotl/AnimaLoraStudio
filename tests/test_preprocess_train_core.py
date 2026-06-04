@@ -133,21 +133,26 @@ def test_list_train_images_includes_stale_duplicate_removed(isolated) -> None:
     assert items[0]["w"] is None
 
 
-def test_list_train_images_processed_state_from_origin_diff(isolated) -> None:
-    """name (rel path 末段) != origin → 隐含"处理过"。"""
+def test_list_train_images_returns_processed_flag(isolated) -> None:
+    """list_train_images 返 `processed` 字段（ADR 0010 fixup：读 manifest 字段）。"""
     p = isolated["project"]
     sub = isolated["sub"]
-    _write_png(sub / "P.png")
-    download = _download_dir(p)
-    download.mkdir(parents=True, exist_ok=True)
-    (download / "P.jpg").write_bytes(b"o")
+
+    _write_png(sub / "up.png")
     preprocess_manifest.train_add_processed(
-        preprocess.project_root(p), "v1", _rel("P.png"), {"origin": "P.jpg"}
+        preprocess.project_root(p), "v1", _rel("up.png"),
+        {"origin": "up.png", "processed": True},
+    )
+    _write_png(sub / "raw.png")
+    preprocess_manifest.train_add_processed(
+        preprocess.project_root(p), "v1", _rel("raw.png"),
+        {"origin": "raw.png"},
     )
 
     items = preprocess.list_train_images(p, "v1")
-    # rel path "1_data/P.png" vs origin "P.jpg" → 处理过（origin 是平铺 download 名）
-    assert items[0]["origin"] != items[0]["name"].rsplit("/", 1)[-1]
+    by_name = {it["name"]: it for it in items}
+    assert by_name[_rel("up.png")]["processed"] is True
+    assert by_name[_rel("raw.png")]["processed"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -294,24 +299,29 @@ def test_list_crop_workspace_excludes_duplicate_removed(isolated) -> None:
 
 
 def test_list_crop_workspace_processed_flag(isolated) -> None:
-    """rel path 末段 != origin → processed=True；相等 → False。"""
+    """ADR 0010 fixup（2026-06-04）：`_is_processed` 直接读 manifest entry
+    的 `processed` 字段（worker 写 True，curate 复制不写）。
+    """
     p = isolated["project"]
     sub = isolated["sub"]
-    _write_png(sub / "proc.png")
-    _write_png(sub / "raw.jpg")
+
+    # worker upscale 后写的 entry（processed=True）
+    _write_png(sub / "up.png")
     preprocess_manifest.train_add_processed(
-        preprocess.project_root(p), "v1", _rel("proc.png"),
-        {"origin": "proc.jpg"},
+        preprocess.project_root(p), "v1", _rel("up.png"),
+        {"origin": "up.png", "processed": True},
     )
+    # curate 复制原图（无 processed 字段）
+    _write_png(sub / "raw.png")
     preprocess_manifest.train_add_processed(
-        preprocess.project_root(p), "v1", _rel("raw.jpg"),
-        {"origin": "raw.jpg"},
+        preprocess.project_root(p), "v1", _rel("raw.png"),
+        {"origin": "raw.png"},
     )
 
     out = preprocess.list_crop_workspace_train(p, "v1")
     by_name = {it["name"]: it for it in out}
-    assert by_name[_rel("proc.png")]["processed"] is True
-    assert by_name[_rel("raw.jpg")]["processed"] is False
+    assert by_name[_rel("up.png")]["processed"] is True
+    assert by_name[_rel("raw.png")]["processed"] is False
 
 
 # ---------------------------------------------------------------------------

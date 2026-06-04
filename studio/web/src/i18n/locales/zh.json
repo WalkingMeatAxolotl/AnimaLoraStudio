@@ -12,7 +12,7 @@
     "tagEdit": "标签编辑",
     "reg": "正则集（可选）",
     "train": "训练",
-    "preprocess": "预处理工具",
+    "preprocess": "预处理（可选）",
     "overview": "概览"
   },
   "common": {
@@ -146,8 +146,8 @@
   },
   "projectStepper": {
     "download": "① 下载",
-    "preprocess": "② 预处理",
-    "curate": "③ 筛选",
+    "curate": "② 筛选",
+    "preprocess": "③ 预处理（可选）",
     "tag": "④ 打标",
     "tagEdit": "⑤ 标签编辑",
     "reg": "⑥ 正则集（可选）",

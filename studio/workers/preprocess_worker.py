@@ -463,9 +463,11 @@ def _run_upscale_train(
     """ADR 0010 train-scope upscale。
 
     源 + 产物都在 `versions/{label}/train/{folder}/`，manifest 写到
-    `versions/{label}/train/manifest.json`。PNG 输出 stem 不变但扩展名可能
-    改（X.jpg → X.png）—— `train_swap_entry` 原子替换 manifest，物理 src
-    单独 unlink 避免训练集 stem 冲突；caption (.txt) 同 stem 保留不动。
+    `versions/{label}/train/manifest.json`。ADR 0010 fixup（2026-06-04）：
+    **不改扩展名** —— 同名 in-place 覆盖（X.jpg → X.jpg / X.png → X.png），
+    避免 caption 对应关系断裂 / dataset_config 扩展名 glob 失效。upscaler
+    按 src 扩展名 save（JPEG quality=95 / PNG 无压缩 / WebP quality=95）；
+    manifest entry 加 `processed=True` 标记给 UI 推断徽章用。
     """
     mode = params.get("mode", "all")
     names = params.get("names") or None
@@ -557,13 +559,19 @@ def _run_upscale_train(
         else:
             origin_name = src_filename
 
-        # dst rel：同 folder 同 stem，扩展名固定 .png（upscaler 输出 PNG）
-        folder, _ = src_rel.split("/", 1)
-        src_stem = Path(src_filename).stem
-        dst_rel = f"{folder}/{src_stem}.png"
-        dst_path = train_dir / dst_rel
+        # ADR 0010 fixup：dst == src，in-place 覆盖。upscaler 按 src 扩展名
+        # save（JPEG 95 / WebP 95 / PNG 无压缩），保 caption + dataset_config 对
+        # 扩展名的依赖；manifest entry 加 processed=True 标记。
+        dst_path = src_path
+        src_ext = Path(src_filename).suffix.lower()
+        if src_ext in (".jpg", ".jpeg"):
+            save_kwargs: dict[str, Any] = {"format": "JPEG", "quality": 95}
+        elif src_ext == ".webp":
+            save_kwargs = {"format": "WEBP", "quality": 95, "method": 6}
+        else:
+            save_kwargs = {"format": "PNG", "optimize": False}
 
-        log(f"[upscale] ({idx}/{total}) {src_rel} → {dst_rel}")
+        log(f"[upscale] ({idx}/{total}) {src_rel}")
         try:
             meta = upscaler.upscale_file(
                 src_path,
@@ -576,23 +584,13 @@ def _run_upscale_train(
                 target_area=target_area,
                 on_log=log,
                 prewarm_thumb_sizes=[256, 768],
+                save_kwargs=save_kwargs,
             )
             meta["origin"] = origin_name
-            if dst_rel != src_rel:
-                # 扩展名变 → 原子 swap entry + 删 src 物理文件
-                preprocess_manifest.train_swap_entry(
-                    project_dir, version["label"],
-                    old_name=src_rel, new_name=dst_rel, meta=meta,
-                )
-                try:
-                    src_path.unlink()
-                except OSError as exc:
-                    log(f"   ⚠ 删旧 {src_rel} 失败: {exc}")
-            else:
-                # 覆盖原文件（src == dst rel path）→ 普通 add_processed
-                preprocess_manifest.train_add_processed(
-                    project_dir, version["label"], dst_rel, meta,
-                )
+            meta["processed"] = True
+            preprocess_manifest.train_add_processed(
+                project_dir, version["label"], src_rel, meta,
+            )
             succeeded += 1
             emit_event(
                 "preprocess_progress",

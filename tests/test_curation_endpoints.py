@@ -248,4 +248,6 @@ def test_duplicate_scan_and_apply_requires_explicit_names(client: TestClient) ->
 
     view = client.get(f"/api/projects/{pid}/versions/{_vid}/curation")
     assert view.status_code == 200
-    assert {item["name"] for item in view.json()["left"]} == {"1.png", "3.png"}
+    # ADR 0010 fixup: list_download 不再据老 project-level duplicate_removed
+    # 标记过滤；dedupe 已下沉 train scope。所有 3 张图都出现在 left。
+    assert {item["name"] for item in view.json()["left"]} == {"1.png", "2.png", "3.png"}

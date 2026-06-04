@@ -667,6 +667,7 @@ def list_train_images(
                 w, h = im.size
         except (OSError, ValueError):
             pass
+        is_dup = preprocess_manifest.is_duplicate_removed_entry(entry)
         items.append({
             "name": rel,
             "mtime": st.st_mtime,
@@ -675,7 +676,9 @@ def list_train_images(
             "origin": origin,
             "source": origin,
             "orphan": origin not in download_names,
-            "duplicate_removed": preprocess_manifest.is_duplicate_removed_entry(entry),
+            "duplicate_removed": is_dup,
+            # ADR 0010 fixup（2026-06-04）：直接读 manifest entry.processed 字段
+            "processed": not is_dup and _is_processed(entry),
             "model": entry.get("model"),
             "scale": entry.get("scale"),
             "action": entry.get("action"),
@@ -701,6 +704,7 @@ def list_train_images(
             "source": origin,
             "orphan": origin not in download_names,
             "duplicate_removed": True,
+            "processed": False,
             "model": None, "scale": None, "action": None,
             "target_area": None, "src_size": None, "dst_size": None,
             "elapsed_seconds": None,
@@ -840,18 +844,30 @@ def start_crop_job_train(
     )
 
 
+def _is_processed(entry: dict[str, Any]) -> bool:
+    """ADR 0010 状态推断（2026-06-04 fixup）：直接读 manifest entry 的
+    `processed` 字段。
+
+    worker upscale/crop 完成后写 `processed: True`；curate 复制原图不写
+    （默认 False）。老 entry（没 `processed` 字段）一律视为未处理——
+    用户重新跑 preprocess 即升级到新字段。
+    """
+    return bool(entry.get("processed", False))
+
+
 def list_crop_workspace_train(
     p: dict[str, Any], version_label: str
 ) -> list[dict[str, Any]]:
     """裁剪页工作集（train scope）：train/ 里所有图，附像素尺寸 + processed 标记。
 
-    `processed` 推断：`name != origin`（扩展名变 = 经过 upscale/crop/转码之一）。
-    duplicate_removed 的图跳过（不让用户对软删除图再裁）。
+    详 `_is_processed` 的判定逻辑。duplicate_removed 的图跳过（不让用户对软
+    删除图再裁）。
     """
     from PIL import Image
 
     pdir = project_root(p)
     train_dir = version_train_dir(p, version_label)
+    download_dir = pdir / "download"
     m = preprocess_manifest.train_load(pdir, version_label)
     entries = m["images"]
     removed_origins = preprocess_manifest.train_duplicate_removed_origins(
@@ -872,15 +888,13 @@ def list_crop_workspace_train(
         except (OSError, ValueError):
             continue
         st = f.stat()
-        # processed 推断：origin 文件名 != rel 文件名（扩展名变 or 含 _c0 后缀等）
-        rel_filename = rel.rsplit("/", 1)[-1]
         items.append({
             "name": rel,
             "source": origin,
             "w": w, "h": h,
             "mtime": st.st_mtime,
             "size": st.st_size,
-            "processed": rel_filename != origin,
+            "processed": _is_processed(entry),
         })
     return items
 

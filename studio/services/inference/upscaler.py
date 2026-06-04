@@ -257,6 +257,7 @@ def upscale_file(
     target_area: Optional[int] = None,
     on_log: Callable[[str], None] = lambda _l: None,
     prewarm_thumb_sizes: Optional[list[int]] = None,
+    save_kwargs: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """读 src → 智能放大 → 写 dst（PNG）。返回元数据 dict。
 
@@ -319,7 +320,19 @@ def upscale_file(
             action = "upscale"
 
     dst.parent.mkdir(parents=True, exist_ok=True)
-    out_img.save(dst, format="PNG", optimize=False)
+    # `save_kwargs` 决定输出格式（默认 PNG 无压缩，跟历史行为兼容）。worker 按
+    # src 扩展名传相应 format 以保留 caption/dataset_config 对扩展名的依赖
+    # （ADR 0010 fixup：不改扩展名）。in-place 覆盖（src == dst）走 tmp+rename
+    # 防 partial write 让训练框架读到半文件。
+    final_save_kwargs: dict[str, Any] = (
+        {"format": "PNG", "optimize": False}
+        if save_kwargs is None
+        else dict(save_kwargs)
+    )
+    tmp = dst.with_suffix(dst.suffix + ".upscale.tmp")
+    out_img.save(tmp, **final_save_kwargs)
+    import os as _os
+    _os.replace(tmp, dst)
 
     # 趁内存里还有 PIL Image，把缩略图预生成进缓存。
     # 不预热的话用户首次浏览 grid 时会逐张解码 PNG（一张 1-3s，200 张要等几分钟），

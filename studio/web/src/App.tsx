@@ -100,11 +100,12 @@ const router = createBrowserRouter(
           children: [
             { index: true, element: <ProjectOverview /> },
             { path: 'download', element: <DownloadPage /> },
-            { path: 'preprocess', element: <PreprocessHub /> },
             {
               path: 'v/:vid',
               children: [
                 { path: 'curate', element: <CurationPage /> },
+                // ADR 0010: preprocess 从 project scope 移到 version scope
+                { path: 'preprocess', element: <PreprocessHub /> },
                 { path: 'tag', element: <TaggingPage /> },
                 { path: 'edit', element: <TagEditPage /> },
                 { path: 'reg', element: <RegularizationPage /> },

@@ -501,9 +501,15 @@ def apply_preprocess_duplicates_train(
 def copy_to_train(
     pid: int, vid: int, body: CopyRequest,
 ) -> dict[str, Any]:
+    """ADR 0010 fixup（2026-06-04）：endpoint 切到 `copy_download_to_train`
+    简化版——纯 download → train 复制 + 写 train manifest entry。不再走
+    "preprocess 派生 vs download 原图"双分支 / 不再 check 老
+    `duplicate_removed`（PR-4 决议 dedupe 下沉 train scope，老标记不影响
+    Curation 操作）。前端 Curation 选 download 原图加入 train 直接 work。
+    """
     with db.connection_for() as conn:
         try:
-            result = curation.copy_to_train(
+            result = curation.copy_download_to_train(
                 conn, pid, vid, body.files, body.dest_folder,
             )
         except curation.CurationError as exc:

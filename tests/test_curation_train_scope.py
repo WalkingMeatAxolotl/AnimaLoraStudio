@@ -168,3 +168,80 @@ def test_copy_download_to_train_invalid_filename_rejected(env) -> None:
                 conn, env["p"]["id"], env["v"]["id"],
                 files=["../../etc/passwd"], dest_folder="1_data",
             )
+
+
+# ---------------------------------------------------------------------------
+# ADR 0010 fixup（2026-06-04）：list_train 按 origin 去重 + 仍含
+# duplicate_removed（筛选时间 < 预处理，跟预处理状态解耦）
+# ---------------------------------------------------------------------------
+
+
+def test_list_train_dedupes_by_origin_on_fan_out(env) -> None:
+    """multi-crop 派生 X_c0 / X_c1 同 origin=X.jpg → list_train 只一条。"""
+    train_sub = _train(env, "1_data")
+    train_sub.mkdir(parents=True, exist_ok=True)
+    # 模拟 fan-out 后物理状态 + manifest
+    (train_sub / "X_c0.png").write_bytes(b"c0")
+    (train_sub / "X_c1.png").write_bytes(b"c1")
+    preprocess_manifest.train_replace_with_crops(
+        _pdir(env), env["v"]["label"],
+        source_name="1_data/X.jpg",
+        outputs=[
+            {"name": "1_data/X_c0.png", "origin": "X.jpg", "mtime": 1, "size": 10},
+            {"name": "1_data/X_c1.png", "origin": "X.jpg", "mtime": 1, "size": 10},
+        ],
+    )
+
+    with db.connection_for(env["db"]) as conn:
+        view = curation.curation_view(conn, env["p"]["id"], env["v"]["id"])
+    assert [e["name"] for e in view["right"]["1_data"]] == ["X.jpg"]
+    # name = origin（统一到 download scope）
+    assert view["right"]["1_data"][0]["origin"] == "X.jpg"
+
+
+def test_list_train_shows_duplicate_removed_in_curation(env) -> None:
+    """duplicate_removed 标记的图物理还在 → Curation 右侧仍显示（筛选时间
+    在预处理之前，时间语义上独立于 dedupe 决定）。"""
+    train_sub = _train(env, "1_data")
+    train_sub.mkdir(parents=True, exist_ok=True)
+    (train_sub / "Y.jpg").write_bytes(b"y")
+    preprocess_manifest.train_add_processed(
+        _pdir(env), env["v"]["label"], "1_data/Y.jpg", {"origin": "Y.jpg"},
+    )
+    preprocess_manifest.train_mark_duplicate_removed(
+        _pdir(env), env["v"]["label"], ["1_data/Y.jpg"],
+    )
+
+    with db.connection_for(env["db"]) as conn:
+        view = curation.curation_view(conn, env["p"]["id"], env["v"]["id"])
+    # duplicate_removed entry 物理仍在 → Curation 右侧仍含 Y.jpg
+    assert [e["name"] for e in view["right"]["1_data"]] == ["Y.jpg"]
+
+
+def test_remove_from_train_deletes_all_fan_out_derivatives(env) -> None:
+    """按 origin 删 → 所有派生物理文件 + manifest entries 一起清。"""
+    train_sub = _train(env, "1_data")
+    train_sub.mkdir(parents=True, exist_ok=True)
+    (train_sub / "X_c0.png").write_bytes(b"c0")
+    (train_sub / "X_c1.png").write_bytes(b"c1")
+    preprocess_manifest.train_replace_with_crops(
+        _pdir(env), env["v"]["label"],
+        source_name="1_data/X.jpg",
+        outputs=[
+            {"name": "1_data/X_c0.png", "origin": "X.jpg", "mtime": 1, "size": 10},
+            {"name": "1_data/X_c1.png", "origin": "X.jpg", "mtime": 1, "size": 10},
+        ],
+    )
+
+    with db.connection_for(env["db"]) as conn:
+        res = curation.remove_from_train(
+            conn, env["p"]["id"], env["v"]["id"], "1_data", ["X.jpg"],
+        )
+    assert res["removed"] == ["X.jpg"]
+    # 两个派生物理文件都没了
+    assert not (train_sub / "X_c0.png").exists()
+    assert not (train_sub / "X_c1.png").exists()
+    # manifest entry 都清掉
+    m = preprocess_manifest.train_load(_pdir(env), env["v"]["label"])
+    assert "1_data/X_c0.png" not in m["images"]
+    assert "1_data/X_c1.png" not in m["images"]
