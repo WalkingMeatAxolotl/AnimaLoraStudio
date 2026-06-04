@@ -422,12 +422,19 @@ class Automagic(Optimizer):
             ),
         )
         self.base_lrs = [self.lr for _ in self.param_groups]
+        # Upstream (ostris/ai-toolkit, tdrussell/diffusion-pipe) registers a
+        # post-accumulate-grad hook here to do fp32 grad accumulation with
+        # stochastic rounding. It silently breaks two common training paths and
+        # we disable it by default to match the upstream comment-out:
+        #   1. torch.cuda.amp.GradScaler.unscale_ skips params where
+        #      p.grad is None — the hook deletes p.grad after each backward,
+        #      so unscale never runs and the optimizer steps on still-scaled
+        #      gradients.
+        #   2. torch.nn.utils.clip_grad_norm_ skips p.grad is None, so grad
+        #      clipping becomes a no-op.
+        # See upstream diffusion-pipe optimizers/automagic.py:72-79 (commented
+        # out in-place by the original author).
         self.is_stochastic_rounding_accumulation = False
-        for group in self.param_groups:
-            for param in group["params"]:
-                if param.requires_grad and param.dtype != torch.float32:
-                    self.is_stochastic_rounding_accumulation = True
-                    param.register_post_accumulate_grad_hook(_stochastic_grad_accumulation)
 
     @staticmethod
     def _rms(tensor: torch.Tensor) -> torch.Tensor:
@@ -487,6 +494,11 @@ class Automagic(Optimizer):
         else:
             state["exp_avg_sq"] = torch.zeros_like(p)
         state["RMS"] = 0
+        # Kahan compensated summation for bf16 — keeps the rounded-off portion
+        # of each update so it can be applied on the next step. Aligns with
+        # upstream diffusion-pipe (optimizers/automagic.py:354-356).
+        if p.dtype == torch.bfloat16 and "shift" not in state:
+            state["shift"] = torch.zeros_like(p)
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -559,11 +571,33 @@ class Automagic(Optimizer):
                 state["avg_lr"] = torch.mean(new_lr)
 
                 if group["weight_decay"] != 0:
-                    p_data_fp32.add_(p_data_fp32 * (-group["weight_decay"]) * new_lr)
-                p_data_fp32.add_(-update)
+                    weight_decay_update = p_data_fp32 * (-group["weight_decay"]) * new_lr
+                else:
+                    weight_decay_update = None
 
-                if p.dtype != torch.float32:
-                    _copy_stochastic(p, p_data_fp32)
+                if p.dtype == torch.bfloat16:
+                    # Kahan compensated summation — matches upstream
+                    # diffusion-pipe (optimizers/automagic.py:308-318). Trades
+                    # one extra bf16 buffer (`state['shift']`) for unbiased,
+                    # zero-variance accumulation over long bf16 training; the
+                    # alternative stochastic-rounding path injects ~scale/2
+                    # noise per step into the lr_mask sign-agreement signal.
+                    update.mul_(-1)
+                    if weight_decay_update is not None:
+                        update.add_(weight_decay_update)
+                    shift = state.setdefault("shift", torch.zeros_like(p))
+                    shift.add_(update)
+                    # Use grad tensor as scratch buffer for the pre-update p,
+                    # so shift carries forward only the bf16 rounding error.
+                    grad.copy_(p.detach())
+                    p.add_(shift)
+                    shift.add_(grad.sub_(p))
+                else:
+                    if weight_decay_update is not None:
+                        p_data_fp32.add_(weight_decay_update)
+                    p_data_fp32.add_(-update)
+                    if p.dtype != torch.float32:
+                        _copy_stochastic(p, p_data_fp32)
 
         return loss
 

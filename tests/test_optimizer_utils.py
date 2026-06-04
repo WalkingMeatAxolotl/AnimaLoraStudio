@@ -92,13 +92,15 @@ def test_create_automagic_optimizer_updates_parameters() -> None:
     model = nn.Linear(2, 1, bias=False)
     with torch.no_grad():
         model.weight.fill_(1.0)
+    # 起点 lr 给到 max_lr，单步变化才能跨过 torch.allclose 默认 tolerance；
+    # 默认 lr=1e-6 单步 ~1e-7 变化在 atol=1e-8+rtol=1e-5 内会被判 "close"。
     optim = create_optimizer(
         "automagic",
         model.parameters(),
-        learning_rate=1e-6,
+        learning_rate=1e-3,
         min_lr=1e-7,
         max_lr=1e-3,
-        lr_bump=1e-6,
+        lr_bump=1e-5,
         weight_decay=0.0,
     )
 
@@ -120,6 +122,144 @@ def test_automagic_monitor_metrics_use_dynamic_lr() -> None:
     metrics = get_optimizer_monitor_metrics(optim)
     assert metrics["lr"] == pytest.approx(1e-6)
     assert metrics["actual_lr"] == pytest.approx(1e-6)
+
+
+def test_automagic_sign_agreement_increases_lr() -> None:
+    """Same-sign gradients across two steps → sign_agreement>0 → lr_mask bumps up."""
+    model = nn.Linear(2, 1, bias=False)
+    with torch.no_grad():
+        model.weight.fill_(1.0)
+    optim = create_optimizer(
+        "automagic",
+        model.parameters(),
+        learning_rate=1e-5,
+        min_lr=1e-7,
+        max_lr=1e-3,
+        lr_bump=5e-5,  # 大于 8-bit 量化粒度，保证可观测
+        weight_decay=0.0,
+    )
+
+    # 第一步：建立 last_polarity
+    model(torch.ones(1, 2)).sum().backward()
+    optim.step()
+    lr_after_step1 = optim.get_avg_learning_rate()
+    optim.zero_grad()
+
+    # 第二步：同号梯度 → sign_agreement>0 → lr 应升
+    model(torch.ones(1, 2)).sum().backward()
+    optim.step()
+    lr_after_step2 = optim.get_avg_learning_rate()
+
+    assert lr_after_step2 > lr_after_step1, (
+        f"sign-agreement 同向时 lr_mask 应上调，但 {lr_after_step1} → {lr_after_step2}"
+    )
+
+
+def test_automagic_sign_flip_decreases_lr() -> None:
+    """Sign-flipped gradients between steps → sign_agreement<0 → lr_mask bumps down."""
+    model = nn.Linear(2, 1, bias=False)
+    with torch.no_grad():
+        model.weight.fill_(1.0)
+    optim = create_optimizer(
+        "automagic",
+        model.parameters(),
+        learning_rate=5e-4,  # 起点高一点，留下降空间
+        min_lr=1e-7,
+        max_lr=1e-3,
+        lr_bump=5e-5,
+        weight_decay=0.0,
+    )
+
+    # 第一步：正梯度
+    model(torch.ones(1, 2)).sum().backward()
+    optim.step()
+    lr_after_step1 = optim.get_avg_learning_rate()
+    optim.zero_grad()
+
+    # 第二步：负梯度（翻 sign）
+    (-model(torch.ones(1, 2)).sum()).backward()
+    optim.step()
+    lr_after_step2 = optim.get_avg_learning_rate()
+
+    assert lr_after_step2 < lr_after_step1, (
+        f"sign 翻转时 lr_mask 应下调，但 {lr_after_step1} → {lr_after_step2}"
+    )
+
+
+def test_automagic_does_not_register_grad_accum_hook() -> None:
+    """对齐上游 diffusion-pipe：默认不开 stochastic-rounding grad accum hook，
+    避免和 AMP GradScaler.unscale_ / clip_grad_norm_ 静默冲突。"""
+    model = nn.Linear(2, 2).to(torch.bfloat16)
+    optim = create_optimizer("automagic", model.parameters(), learning_rate=1e-6)
+
+    assert optim.is_stochastic_rounding_accumulation is False, (
+        "Automagic must not enable post-accumulate-grad hook by default"
+    )
+    # 确认 backward 后 p.grad 不被 hook 删掉
+    out = model(torch.ones(1, 2, dtype=torch.bfloat16)).sum()
+    out.backward()
+    for p in model.parameters():
+        if p.requires_grad:
+            assert p.grad is not None, (
+                "p.grad was unexpectedly deleted; hook must not be active"
+            )
+
+
+def test_automagic_bf16_step_runs_finite() -> None:
+    """bf16 训练单步：Kahan summation 路径 + lr_mask 正常更新，loss/p 保持有限。"""
+    model = nn.Linear(4, 4, bias=False).to(torch.bfloat16)
+    optim = create_optimizer(
+        "automagic",
+        model.parameters(),
+        learning_rate=1e-5,
+        min_lr=1e-7,
+        max_lr=1e-3,
+        weight_decay=0.0,
+    )
+    x = torch.randn(2, 4, dtype=torch.bfloat16)
+    loss = model(x).sum()
+    loss.backward()
+    optim.step()
+
+    for p in model.parameters():
+        assert torch.isfinite(p).all(), "bf16 Kahan path produced non-finite p"
+        # Kahan 路径必须建出 shift state
+        assert "shift" in optim.state[p]
+        assert optim.state[p]["shift"].dtype == torch.bfloat16
+
+
+def test_automagic_state_dict_roundtrip() -> None:
+    """state_dict / load_state_dict 保留 lr_mask（Auto8bitTensor）+ 数值一致。"""
+    model1 = nn.Linear(4, 4, bias=False)
+    optim1 = create_optimizer(
+        "automagic", model1.parameters(),
+        learning_rate=1e-5, min_lr=1e-7, max_lr=1e-3, lr_bump=5e-5,
+    )
+    # 跑两步建立 state
+    for _ in range(2):
+        model1(torch.randn(2, 4)).sum().backward()
+        optim1.step()
+        optim1.zero_grad()
+    sd = optim1.state_dict()
+
+    # 用第二个 optim 加载
+    model2 = nn.Linear(4, 4, bias=False)
+    with torch.no_grad():
+        for p1, p2 in zip(model1.parameters(), model2.parameters()):
+            p2.copy_(p1)
+    optim2 = create_optimizer(
+        "automagic", model2.parameters(),
+        learning_rate=1e-5, min_lr=1e-7, max_lr=1e-3, lr_bump=5e-5,
+    )
+    optim2.load_state_dict(sd)
+
+    # lr_mask 的 quantized + scale 都得对得上
+    for p1, p2 in zip(model1.parameters(), model2.parameters()):
+        s1 = optim1.state[p1]
+        s2 = optim2.state[p2]
+        assert "lr_mask" in s2
+        assert torch.equal(s1["lr_mask"].quantized, s2["lr_mask"].quantized)
+        assert s1["lr_mask"].scale == s2["lr_mask"].scale
 
 
 def test_create_lion_optimizer_updates_parameters() -> None:
