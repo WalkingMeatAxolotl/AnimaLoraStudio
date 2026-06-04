@@ -174,6 +174,7 @@ export default function PreprocessDuplicatesPage() {
             {scanLogVisible && <DuplicateLogStrip logs={logs} busy={busy} />}
             <DuplicateReviewPanel
               projectId={project.id}
+              versionId={vid}
               result={result}
               selected={selected}
               busy={busy}
@@ -182,6 +183,7 @@ export default function PreprocessDuplicatesPage() {
             />
             <QualityReviewPanel
               projectId={project.id}
+              versionId={vid}
               result={result}
               selected={selected}
               busy={busy}
@@ -207,10 +209,15 @@ export default function PreprocessDuplicatesPage() {
         </div>
       </div>
 
-      {previewIdx !== null && previewNames[previewIdx] && (
+      {previewIdx !== null && previewNames[previewIdx] && (() => {
+        const rel = previewNames[previewIdx]
+        const i = rel.lastIndexOf('/')
+        const folder = i >= 0 ? rel.slice(0, i) : ''
+        const filename = i >= 0 ? rel.slice(i + 1) : rel
+        return (
         <ImagePreviewModal
-          src={api.projectThumbUrl(project.id, previewNames[previewIdx], 'download', 1600)}
-          caption={previewNames[previewIdx]}
+          src={api.versionThumbUrl(project.id, vid, 'train', filename, folder, 1600)}
+          caption={rel}
           hasPrev={previewIdx > 0}
           hasNext={previewIdx < previewNames.length - 1}
           onClose={() => setPreviewIdx(null)}
@@ -218,7 +225,8 @@ export default function PreprocessDuplicatesPage() {
           onNext={() => previewIdx < previewNames.length - 1 && setPreviewIdx(previewIdx + 1)}
           shortcutHint={t('duplicates.previewHint')}
         />
-      )}
+        )
+      })()}
     </StepShell>
   )
 }
@@ -461,6 +469,7 @@ function DuplicateLogStrip({ logs, busy }: { logs: DuplicateLog[]; busy: boolean
 
 function QualityReviewPanel({
   projectId,
+  versionId,
   result,
   selected,
   busy,
@@ -469,6 +478,7 @@ function QualityReviewPanel({
   onPreview,
 }: {
   projectId: number
+  versionId: number
   result: DuplicateScanResult | null
   selected: Set<string>
   busy: boolean
@@ -567,6 +577,7 @@ function QualityReviewPanel({
             note: item.reason,
           }))}
           projectId={projectId}
+          versionId={versionId}
           selected={selected}
           busy={busy}
           onToggle={onToggle}
@@ -595,6 +606,7 @@ function QualityReviewPanel({
             ].join(' · '),
           }))}
           projectId={projectId}
+          versionId={versionId}
           selected={selected}
           busy={busy}
           onToggle={onToggle}
@@ -610,6 +622,7 @@ function QualitySection({
   empty,
   items,
   projectId,
+  versionId,
   selected,
   busy,
   onToggle,
@@ -619,6 +632,7 @@ function QualitySection({
   empty: string
   items: Array<{ key: string; images: Array<{ name: string; label?: string }>; meta: string; score: string; note: string }>
   projectId: number
+  versionId: number
   selected: Set<string>
   busy: boolean
   onToggle: (name: string) => void
@@ -638,6 +652,7 @@ function QualitySection({
                   <QualityImageCell
                     key={image.name}
                     projectId={projectId}
+                    versionId={versionId}
                     name={image.name}
                     label={image.label}
                     selected={selected.has(image.name)}
@@ -665,6 +680,7 @@ function QualitySection({
 
 function QualityImageCell({
   projectId,
+  versionId,
   name,
   label,
   selected,
@@ -673,6 +689,7 @@ function QualityImageCell({
   onPreview,
 }: {
   projectId: number
+  versionId: number
   name: string
   label?: string
   selected: boolean
@@ -695,13 +712,20 @@ function QualityImageCell({
         className="block w-full aspect-square bg-sunken disabled:opacity-70"
         title={name}
       >
-        <img
-          src={api.projectThumbUrl(projectId, name, 'download', 256)}
-          alt={name}
-          loading="lazy"
-          decoding="async"
-          className="w-full h-full object-cover"
-        />
+        {(() => {
+          const i = name.lastIndexOf('/')
+          const folder = i >= 0 ? name.slice(0, i) : ''
+          const filename = i >= 0 ? name.slice(i + 1) : name
+          return (
+            <img
+              src={api.versionThumbUrl(projectId, versionId, 'train', filename, folder, 256)}
+              alt={name}
+              loading="lazy"
+              decoding="async"
+              className="w-full h-full object-cover"
+            />
+          )
+        })()}
       </button>
       <div className="px-1.5 py-1 flex items-center gap-1 min-w-0">
         <button

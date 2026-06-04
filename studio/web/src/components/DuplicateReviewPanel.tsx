@@ -35,6 +35,7 @@ export const DEFAULT_DUPLICATE_OPTIONS: DuplicateScanOptions = {
 
 interface Props {
   projectId: number
+  versionId: number
   result: DuplicateScanResult | null
   selected: Set<string>
   busy: boolean
@@ -42,8 +43,17 @@ interface Props {
   onPreview: (name: string) => void
 }
 
+/** ADR 0010 fixup: train rel path "1_data/X.png" → train bucket thumb URL。 */
+function splitRel(rel: string): { folder: string; filename: string } {
+  const i = rel.lastIndexOf('/')
+  return i >= 0
+    ? { folder: rel.slice(0, i), filename: rel.slice(i + 1) }
+    : { folder: '', filename: rel }
+}
+
 export default function DuplicateReviewPanel({
   projectId,
+  versionId,
   result,
   selected,
   busy,
@@ -117,6 +127,7 @@ export default function DuplicateReviewPanel({
               <DuplicateGroupCard
                 key={group.group_id}
                 projectId={projectId}
+                versionId={versionId}
                 group={group}
                 selected={selected}
                 busy={busy}
@@ -133,6 +144,7 @@ export default function DuplicateReviewPanel({
 
 function DuplicateGroupCard({
   projectId,
+  versionId,
   group,
   selected,
   busy,
@@ -140,6 +152,7 @@ function DuplicateGroupCard({
   onPreview,
 }: {
   projectId: number
+  versionId: number
   group: DuplicateGroup
   selected: Set<string>
   busy: boolean
@@ -163,6 +176,7 @@ function DuplicateGroupCard({
           <DuplicateItemCell
             key={item.name}
             projectId={projectId}
+            versionId={versionId}
             item={item}
             selected={selected.has(item.name)}
             suggestedKeep={item.keep}
@@ -178,6 +192,7 @@ function DuplicateGroupCard({
 
 function DuplicateItemCell({
   projectId,
+  versionId,
   item,
   selected,
   suggestedKeep,
@@ -186,6 +201,7 @@ function DuplicateItemCell({
   onPreview,
 }: {
   projectId: number
+  versionId: number
   item: DuplicateItem
   selected: boolean
   suggestedKeep: boolean
@@ -203,13 +219,18 @@ function DuplicateItemCell({
       }
     >
       <button type="button" onClick={onPreview} className="block w-full aspect-square bg-sunken" title={item.name}>
-        <img
-          src={api.projectThumbUrl(projectId, item.name, 'download', 256)}
-          alt={item.name}
-          loading="lazy"
-          decoding="async"
-          className="w-full h-full object-cover"
-        />
+        {(() => {
+          const { folder, filename } = splitRel(item.name)
+          return (
+            <img
+              src={api.versionThumbUrl(projectId, versionId, 'train', filename, folder, 256)}
+              alt={item.name}
+              loading="lazy"
+              decoding="async"
+              className="w-full h-full object-cover"
+            />
+          )
+        })()}
       </button>
       <div className="p-1.5 flex flex-col gap-1 text-[11px]">
         <div className="flex items-center gap-1 min-w-0 flex-wrap">
