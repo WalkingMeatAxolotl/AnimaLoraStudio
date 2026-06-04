@@ -667,6 +667,8 @@ def list_train_images(
                 w, h = im.size
         except (OSError, ValueError):
             pass
+        rel_filename = rel.rsplit("/", 1)[-1]
+        is_dup = preprocess_manifest.is_duplicate_removed_entry(entry)
         items.append({
             "name": rel,
             "mtime": st.st_mtime,
@@ -675,7 +677,13 @@ def list_train_images(
             "origin": origin,
             "source": origin,
             "orphan": origin not in download_names,
-            "duplicate_removed": preprocess_manifest.is_duplicate_removed_entry(entry),
+            "duplicate_removed": is_dup,
+            # ADR 0010 状态推断（详 _is_processed）：扩展名变 / fan-out 后缀 /
+            # train size != download size 任一命中即处理过
+            "processed": (
+                not is_dup
+                and _is_processed(rel_filename, origin, st.st_size, download_dir)
+            ),
             "model": entry.get("model"),
             "scale": entry.get("scale"),
             "action": entry.get("action"),
@@ -701,6 +709,7 @@ def list_train_images(
             "source": origin,
             "orphan": origin not in download_names,
             "duplicate_removed": True,
+            "processed": False,
             "model": None, "scale": None, "action": None,
             "target_area": None, "src_size": None, "dst_size": None,
             "elapsed_seconds": None,
@@ -840,18 +849,49 @@ def start_crop_job_train(
     )
 
 
+def _is_processed(
+    rel_filename: str,
+    origin: str,
+    train_size: int,
+    download_dir: Path,
+) -> bool:
+    """ADR 0010 状态推断：判断 train 文件是不是处理过（vs curate 时复制的原样）。
+
+    判定顺序（任一命中即算 processed）：
+    1. 扩展名变（如 ``X.jpg`` → ``X.png``）—— 必经过 upscale / crop / 转码
+    2. 含 ``_c{N}`` 后缀（multi-crop fan-out 派生）
+    3. 同扩展名时比较 ``train`` 文件 size 跟 ``download/{origin}`` 物理 size：
+       不同 = upscale / crop 改了字节；相同 = curate 时复制的原样副本
+
+    第 3 条覆盖 PNG → PNG upscale 这种扩展名不变的常见场景；走 1 次额外
+    ``stat()``，对几百张图代价可忽略。
+    """
+    if rel_filename != origin:
+        return True
+    # 同名场景：用 size diff 兜底（download 缺失则保守判 False = 原样）
+    src_orig = download_dir / origin
+    if src_orig.is_file():
+        try:
+            if src_orig.stat().st_size != train_size:
+                return True
+        except OSError:
+            pass
+    return False
+
+
 def list_crop_workspace_train(
     p: dict[str, Any], version_label: str
 ) -> list[dict[str, Any]]:
     """裁剪页工作集（train scope）：train/ 里所有图，附像素尺寸 + processed 标记。
 
-    `processed` 推断：`name != origin`（扩展名变 = 经过 upscale/crop/转码之一）。
-    duplicate_removed 的图跳过（不让用户对软删除图再裁）。
+    详 `_is_processed` 的判定逻辑。duplicate_removed 的图跳过（不让用户对软
+    删除图再裁）。
     """
     from PIL import Image
 
     pdir = project_root(p)
     train_dir = version_train_dir(p, version_label)
+    download_dir = pdir / "download"
     m = preprocess_manifest.train_load(pdir, version_label)
     entries = m["images"]
     removed_origins = preprocess_manifest.train_duplicate_removed_origins(
@@ -872,7 +912,6 @@ def list_crop_workspace_train(
         except (OSError, ValueError):
             continue
         st = f.stat()
-        # processed 推断：origin 文件名 != rel 文件名（扩展名变 or 含 _c0 后缀等）
         rel_filename = rel.rsplit("/", 1)[-1]
         items.append({
             "name": rel,
@@ -880,7 +919,7 @@ def list_crop_workspace_train(
             "w": w, "h": h,
             "mtime": st.st_mtime,
             "size": st.st_size,
-            "processed": rel_filename != origin,
+            "processed": _is_processed(rel_filename, origin, st.st_size, download_dir),
         })
     return items
 

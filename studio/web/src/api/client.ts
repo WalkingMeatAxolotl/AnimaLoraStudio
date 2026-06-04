@@ -752,7 +752,8 @@ export interface DuplicateRemovedItem {
 
 /** ADR 0010 train scope: 列 versions/{label}/train/ 全部图 + manifest 元数据。
  *  替代老 `{processed, pending}` 双 list 概念——新模型下 train/ 即"训练集 grid"，
- *  状态从字段差异隐含推断（详 ADR 0010 §Manifest schema v2）。 */
+ *  状态从字段差异隐含推断（详 ADR 0010 §Manifest schema v2 + backend
+ *  `_is_processed`：扩展名变 / `_cN` 后缀 / train size != download size）。 */
 export interface TrainImage {
   /** POSIX rel path "{N_label}/{image}"（如 "1_data/X.png"）。 */
   name: string
@@ -769,6 +770,9 @@ export interface TrainImage {
   orphan: boolean
   /** 人工去重审核标记。UI 区分"训练参与" vs "审核跳过"。 */
   duplicate_removed: boolean
+  /** ADR 0010 状态推断（backend `_is_processed`）：upscale / crop / 转码过的 train
+   *  文件 → true；curate 时复制的原样副本 → false。UI 用这个画"已处理"徽章。 */
+  processed: boolean
   /** 老 schema 透传字段（新 entry 一律 null；前端容忍）。 */
   model: string | null
   scale: number | null

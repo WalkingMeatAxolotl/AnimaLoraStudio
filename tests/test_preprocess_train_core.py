@@ -133,21 +133,41 @@ def test_list_train_images_includes_stale_duplicate_removed(isolated) -> None:
     assert items[0]["w"] is None
 
 
-def test_list_train_images_processed_state_from_origin_diff(isolated) -> None:
-    """name (rel path 末段) != origin → 隐含"处理过"。"""
+def test_list_train_images_returns_processed_flag(isolated) -> None:
+    """list_train_images 返 `processed` 字段（前端不自己算）。"""
     p = isolated["project"]
     sub = isolated["sub"]
-    _write_png(sub / "P.png")
     download = _download_dir(p)
     download.mkdir(parents=True, exist_ok=True)
-    (download / "P.jpg").write_bytes(b"o")
+
+    # 扩展名变 → processed=True
+    _write_png(sub / "ext.png")
+    (download / "ext.jpg").write_bytes(b"j")
     preprocess_manifest.train_add_processed(
-        preprocess.project_root(p), "v1", _rel("P.png"), {"origin": "P.jpg"}
+        preprocess.project_root(p), "v1", _rel("ext.png"),
+        {"origin": "ext.jpg"},
+    )
+    # PNG→PNG size diff → processed=True
+    _write_png(sub / "big.png", (200, 200))
+    Image.new("RGB", (40, 40), "blue").save(download / "big.png", "PNG")
+    preprocess_manifest.train_add_processed(
+        preprocess.project_root(p), "v1", _rel("big.png"),
+        {"origin": "big.png"},
+    )
+    # 原样副本 → processed=False
+    _write_png(sub / "raw.png", (30, 30))
+    import shutil
+    shutil.copy2(sub / "raw.png", download / "raw.png")
+    preprocess_manifest.train_add_processed(
+        preprocess.project_root(p), "v1", _rel("raw.png"),
+        {"origin": "raw.png"},
     )
 
     items = preprocess.list_train_images(p, "v1")
-    # rel path "1_data/P.png" vs origin "P.jpg" → 处理过（origin 是平铺 download 名）
-    assert items[0]["origin"] != items[0]["name"].rsplit("/", 1)[-1]
+    by_name = {it["name"]: it for it in items}
+    assert by_name[_rel("ext.png")]["processed"] is True
+    assert by_name[_rel("big.png")]["processed"] is True
+    assert by_name[_rel("raw.png")]["processed"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -294,24 +314,52 @@ def test_list_crop_workspace_excludes_duplicate_removed(isolated) -> None:
 
 
 def test_list_crop_workspace_processed_flag(isolated) -> None:
-    """rel path 末段 != origin → processed=True；相等 → False。"""
+    """`_is_processed` 推断（详 ADR 0010）：扩展名变 / size diff vs download。
+
+    覆盖 3 个 case：
+    - 扩展名变（X.jpg → X.png upscale）→ processed=True
+    - 扩展名同 + size 跟 download 不同（PNG → PNG upscale 后 train 大于
+      原图）→ processed=True
+    - 扩展名同 + size 跟 download 相同（curate 时复制的原样副本）
+      → processed=False
+    """
     p = isolated["project"]
     sub = isolated["sub"]
-    _write_png(sub / "proc.png")
-    _write_png(sub / "raw.jpg")
+    download = _download_dir(p)
+    download.mkdir(parents=True, exist_ok=True)
+
+    # Case 1: 扩展名变（jpg→png upscale）
+    _write_png(sub / "ext.png")
+    (download / "ext.jpg").write_bytes(b"small-jpg")  # 不需要真图
     preprocess_manifest.train_add_processed(
-        preprocess.project_root(p), "v1", _rel("proc.png"),
-        {"origin": "proc.jpg"},
+        preprocess.project_root(p), "v1", _rel("ext.png"),
+        {"origin": "ext.jpg"},
     )
+
+    # Case 2: 同扩展名 + size 跟 download 不同（PNG → PNG upscale 后变大）
+    _write_png(sub / "big.png", (200, 200))  # upscale 后产物
+    Image.new("RGB", (40, 40), "blue").save(
+        download / "big.png", "PNG",
+    )  # 原图，size 小
     preprocess_manifest.train_add_processed(
-        preprocess.project_root(p), "v1", _rel("raw.jpg"),
-        {"origin": "raw.jpg"},
+        preprocess.project_root(p), "v1", _rel("big.png"),
+        {"origin": "big.png"},
+    )
+
+    # Case 3: 同扩展名 + size 一致（curate 复制原样）
+    _write_png(sub / "raw.png", (30, 30))
+    import shutil
+    shutil.copy2(sub / "raw.png", download / "raw.png")
+    preprocess_manifest.train_add_processed(
+        preprocess.project_root(p), "v1", _rel("raw.png"),
+        {"origin": "raw.png"},
     )
 
     out = preprocess.list_crop_workspace_train(p, "v1")
     by_name = {it["name"]: it for it in out}
-    assert by_name[_rel("proc.png")]["processed"] is True
-    assert by_name[_rel("raw.jpg")]["processed"] is False
+    assert by_name[_rel("ext.png")]["processed"] is True
+    assert by_name[_rel("big.png")]["processed"] is True
+    assert by_name[_rel("raw.png")]["processed"] is False
 
 
 # ---------------------------------------------------------------------------

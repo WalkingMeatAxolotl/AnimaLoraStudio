@@ -178,8 +178,8 @@ export default function PreprocessPage() {
   const summary = files?.summary ?? status?.summary ?? { image_count: 0 }
   const modelReady = !!upscaler?.exists
 
-  // ADR 0010: TrainImage[] → ImageRow[]，状态从字段差异隐含推断
-  //（rel path 末段 ≠ origin → processed；相同 → pending/原样）。
+  // ADR 0010: TrainImage[] → ImageRow[]。processed 用 backend `_is_processed`
+  // 推断（扩展名变 / _cN 后缀 / train size != download size），前端不自己算。
   const rows = useMemo<ImageRow[]>(() => {
     if (!files) return []
     const out: ImageRow[] = []
@@ -188,14 +188,12 @@ export default function PreprocessPage() {
       const lastSlash = img.name.lastIndexOf('/')
       const folder = lastSlash >= 0 ? img.name.slice(0, lastSlash) : ''
       const filename = lastSlash >= 0 ? img.name.slice(lastSlash + 1) : img.name
-      const origin = img.origin ?? filename
-      const processed = filename !== origin
       out.push({
         name: img.name,
         filename,
         folder,
-        status: processed ? 'processed' : 'pending',
-        processed: processed ? img : undefined,
+        status: img.processed ? 'processed' : 'pending',
+        processed: img.processed ? img : undefined,
         size: img.size,
         w: img.w, h: img.h,
         mtime: img.mtime,
@@ -798,15 +796,9 @@ function PreprocessSidebar({
     [images],
   )
 
-  // ADR 0010: "processed" 按 rel path 末段 != origin 推断
+  // ADR 0010: backend `_is_processed` 推断（扩展名变 / _cN / size diff）
   const processedImages = useMemo(
-    () =>
-      images.filter((i) => {
-        if (i.duplicate_removed) return false
-        const last = i.name.lastIndexOf('/')
-        const filename = last >= 0 ? i.name.slice(last + 1) : i.name
-        return (i.origin ?? filename) !== filename
-      }),
+    () => images.filter((i) => i.processed && !i.duplicate_removed),
     [images],
   )
 
