@@ -1025,32 +1025,36 @@ function RegTileCard({
 function DetailGrid({ project, version }: { project: ProjectDetail; version: Version | null }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  const vid = version?.id
 
-  // preprocess 项目级 — 像素 hist 数据源
+  // ADR 0010: preprocess 已下沉 version scope；project 概览 hist 用 active
+  // version 的 train 数据。没 active version → 空。
   const [preprocessItems, setPreprocessItems] = useState<Array<{ w: number | null; h: number | null }>>([])
   useEffect(() => {
+    if (vid == null) { setPreprocessItems([]); return }
     let cancelled = false
-    void api.listPreprocessFiles(project.id)
+    void api.listPreprocessFilesTrain(project.id, vid)
       .then((res) => {
         if (cancelled) return
-        setPreprocessItems([...res.processed, ...res.pending])
+        setPreprocessItems(res.images.map((i) => ({ w: i.w, h: i.h })))
       })
       .catch(() => { if (!cancelled) setPreprocessItems([]) })
     return () => { cancelled = true }
-  }, [project.id])
+  }, [project.id, vid])
 
-  // crop workspace 项目级 — 长宽比 hist 数据源
+  // crop workspace - 长宽比 hist 数据源（train scope）
   const [cropItems, setCropItems] = useState<Array<{ w: number; h: number }>>([])
   useEffect(() => {
+    if (vid == null) { setCropItems([]); return }
     let cancelled = false
-    void api.listCropWorkspace(project.id)
+    void api.listCropWorkspaceTrain(project.id, vid)
       .then((res) => {
         if (cancelled) return
         setCropItems(res.images.map((i) => ({ w: i.w, h: i.h })))
       })
       .catch(() => { if (!cancelled) setCropItems([]) })
     return () => { cancelled = true }
-  }, [project.id])
+  }, [project.id, vid])
 
   const pixelBins = useMemo(
     () => computePixelHist(preprocessItems).map((b) => ({ key: b.id, label: b.label, n: b.n })),

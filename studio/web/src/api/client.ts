@@ -679,51 +679,9 @@ export interface BundleImportResult {
   }
 }
 
-// ---- preprocess (放大第一阶段) ---------------------------------------------
+// ---- preprocess (ADR 0010 train scope) -----------------------------------
 
-/** 已处理图：manifest 里 kind=processed 的 entry 拼上磁盘 stat。
- *
- *  ADR 0004 之后状态走 `preprocess/manifest.json` 单文件（无 per-image sidecar），
- *  manifest 缺字段时 source/model/... 为 null（兼容迁移自老 sidecar 的旧 entry）。 */
-export interface PreprocessedItem {
-  name: string
-  mtime: number
-  size: number
-  /** 实际像素宽 / 高（后端 PIL 读图头）。损坏 / 不存在时为 null。 */
-  w: number | null
-  h: number | null
-  /** 派生根：download/ 下原始文件名。multi-crop 同一 origin 出 N 张 entry。
-   *  老 schema 字段叫 `source`，后端两个都填同样的值，前端优先读 origin。 */
-  origin: string | null
-  /** @deprecated 兼容 0.9.x 字段名；新代码读 origin。后端两个字段值相同。 */
-  source: string | null
-  /** 以下字段都仅老 schema entry 才有，新 schema entry 一律 null。 */
-  model: string | null
-  scale: number | null
-  /** 'resize' | 'upscale' | 'upscale+resize'，新 entry 为 null。 */
-  action: string | null
-  /** 目标像素面积；null = 关闭智能模式（老路径 4×）或新 schema。 */
-  target_area: number | null
-  src_size: [number, number] | null
-  dst_size: [number, number] | null
-  elapsed_seconds: number | null
-  /** 源图（download/{origin}）已被删 → orphan=true。 */
-  orphan: boolean
-}
-
-/** 未处理图：download/ 存在、manifest 没记的图（隐式 original）。 */
-export interface PreprocessPendingItem {
-  name: string
-  mtime: number
-  size: number
-  /** download/ 下原图像素尺寸（PIL 读图头）。损坏 / 读不到时 null。前端
-   *  像素分布 histogram 需要把 pending 一起统计 — 不然 200 张里只有几张
-   *  被放大的会让 histogram 看起来空荡荡。 */
-  w: number | null
-  h: number | null
-}
-
-/** 裁剪页工作集一项：preprocess/ 当前文件名 + 像素尺寸 + 是否已处理。 */
+/** 裁剪页工作集一项（train scope，rel path 形式）：name + 像素尺寸 + 是否已处理。 */
 export interface CropWorkspaceItem {
   name: string
   /** download/ 下原图名（origin）；下游还原走这个名。 */
@@ -1834,73 +1792,6 @@ export const api = {
     + (v ? `&v=${v}` : '')
     + (raw ? '&raw=1' : ''),
 
-  // Preprocess (放大 / 裁剪 / 涂抹) ----------------------------------------
-  startPreprocess: (
-    pid: number,
-    body: {
-      mode: 'all' | 'selected' | 'all_force'
-      names?: string[]
-      model?: string
-      tile_size?: number
-      tile_pad?: number
-      device?: 'auto' | 'cuda' | 'cpu'
-      /** 目标像素面积。null = 关闭智能模式，纯 4× 输出。 */
-      target_area?: number | null
-    },
-  ) =>
-    req<Job>(`/api/projects/${pid}/preprocess/start`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-  getPreprocessStatus: (pid: number) =>
-    req<{
-      job: Job | null
-      log_tail: string
-      summary: { image_count: number }
-    }>(`/api/projects/${pid}/preprocess/status`),
-  listPreprocessFiles: (pid: number) =>
-    req<{
-      processed: PreprocessedItem[]
-      pending: PreprocessPendingItem[]
-      summary: { image_count: number }
-    }>(`/api/projects/${pid}/preprocess/files`),
-  /** 还原指定产物：删 manifest entry + 删 preprocess/{name} PNG。
-   *  还原后图回到「未处理」（隐式 original）。ADR 0004。 */
-  restorePreprocessFiles: (pid: number, names: string[]) =>
-    req<{ restored: string[]; missing: string[] }>(
-      `/api/projects/${pid}/preprocess/files/restore`,
-      { method: 'POST', body: JSON.stringify({ names }) },
-    ),
-  /** 整项目预处理状态归零：删 manifest 所有 entry + 删 preprocess/ 所有 PNG。
-   *  「总览」tab 的「撤销全部」走这个。 */
-  resetPreprocessFiles: (pid: number) =>
-    req<{ ok: boolean }>(`/api/projects/${pid}/preprocess/files/reset`, {
-      method: 'POST',
-    }),
-  /** 裁剪页工作集：所有可裁剪的图 + 像素尺寸（来自 PIL 读头）。
-   *  preprocess/ 里已处理 + download/ 里未处理的合并列表。 */
-  listCropWorkspace: (pid: number) =>
-    req<{ images: CropWorkspaceItem[] }>(
-      `/api/projects/${pid}/preprocess/crop/workspace`,
-    ),
-  /** 总览页「已删除」tab：被去重审核标记 (kind=duplicate_removed) 的 entry 列表。
-   *  恢复走 restorePreprocessFiles（restore 对 duplicate_removed entry 也 work）。 */
-  listPreprocessDuplicatesRemoved: (pid: number) =>
-    req<{ images: DuplicateRemovedItem[] }>(
-      `/api/projects/${pid}/preprocess/duplicates/removed`,
-    ),
-  /** 开始裁剪 job。`crops` 为 `{源文件名: [{x,y,w,h,label?}]}`，归一化 [0..1]。
-   *  N=1 覆盖 stem.png；N>1 输出 stem_c{0..N-1}.png 并删原 stem.png。
-   *  详见 docs/design/preprocess-crop-design.md。 */
-  startPreprocessCrop: (
-    pid: number,
-    crops: Record<string, { x: number; y: number; w: number; h: number; label?: string }[]>,
-  ) =>
-    req<Job>(`/api/projects/${pid}/preprocess/crop`, {
-      method: 'POST',
-      body: JSON.stringify({ crops }),
-    }),
-
   // ---- ADR 0010 train-scope endpoints -----------------------------------
   // PR-3 加；PR-4 前端切到这套；后续 PR-5 删老的 (`/preprocess/*` without vid)。
   startPreprocessTrain: (
@@ -2242,17 +2133,7 @@ export const api = {
       `/api/projects/${pid}/versions/${vid}/curation/folder`,
       { method: 'POST', body: JSON.stringify(body) }
     ),
-  scanDuplicates: (pid: number, body: DuplicateScanOptions) =>
-    req<DuplicateScanResult>(
-      `/api/projects/${pid}/preprocess/duplicates/scan`,
-      { method: 'POST', body: JSON.stringify(body) }
-    ),
-  applyDuplicateAction: (pid: number, body: { names: string[] }) =>
-    req<DuplicateApplyResult>(
-      `/api/projects/${pid}/preprocess/duplicates/apply`,
-      { method: 'POST', body: JSON.stringify(body) }
-    ),
-  // ADR 0010 train scope duplicates (PR-3 加；PR-4 前端切到这套)
+  // ADR 0010 train scope duplicates
   scanDuplicatesTrain: (
     pid: number,
     vid: number,

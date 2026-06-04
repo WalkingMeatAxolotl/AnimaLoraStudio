@@ -312,94 +312,6 @@ def options_from_payload(payload: dict[str, Any]) -> DuplicateOptions:
     )
 
 
-def scan_project_duplicates(
-    conn,
-    project_id: int,
-    options: DuplicateOptions,
-    on_progress: Callable[[dict[str, Any]], None] | None = None,
-) -> dict[str, Any]:
-    _require_imagehash()
-    project, project_dir = curation._project_dir(conn, project_id)  # noqa: SLF001
-    sources = _resolve_download_sources(conn, project_id, project_dir)
-    if on_progress:
-        on_progress({
-            "stage": "hashing",
-            "idx": 0,
-            "total": len(sources),
-            "text": f"Preparing hashes for {len(sources)} images...",
-        })
-    started = time.monotonic()
-    infos = build_all_image_infos(sources, options, on_progress=on_progress)
-    if on_progress:
-        total_pairs = len(infos) * (len(infos) - 1) // 2
-        on_progress({
-            "stage": "comparing",
-            "idx": 0,
-            "total": total_pairs,
-            "text": f"Comparing {total_pairs} image pairs...",
-        })
-    groups, pair_metrics, stats = group_similar_images(
-        infos,
-        options,
-        on_progress=on_progress,
-    )
-    blur_candidates = find_blur_candidates(infos, options) if options.detect_blur else []
-    crop_relations: list[CropRelation] = []
-    if options.detect_crops:
-        if on_progress:
-            total_pairs = len(infos) * (len(infos) - 1) // 2
-            on_progress({
-                "stage": "crop_relations",
-                "idx": 0,
-                "total": total_pairs,
-                "text": f"Checking {total_pairs} crop/scale relation pairs...",
-            })
-        crop_relations = find_crop_relations(infos, options, on_progress=on_progress)
-    elapsed = time.monotonic() - started
-
-    return {
-        "target": "preprocess",
-        "match_scope": options.match_scope,
-        "total_images": len(sources),
-        "readable_images": len(infos),
-        "group_count": len(groups),
-        "candidate_count": sum(max(0, len(g) - 1) for g in groups),
-        "blur_candidate_count": len(blur_candidates),
-        "crop_relation_count": len(crop_relations),
-        "elapsed_seconds": round(elapsed, 3),
-        "options": options_to_json(options),
-        "stats": stats,
-        "groups": [
-            _group_to_json(index, group, pair_metrics)
-            for index, group in enumerate(groups, start=1)
-        ],
-        "blur_candidates": [
-            _blur_candidate_to_json(candidate)
-            for candidate in blur_candidates
-        ],
-        "crop_relations": [
-            _crop_relation_to_json(relation)
-            for relation in crop_relations
-        ],
-    }
-
-
-def apply_duplicate_removals(
-    conn,
-    project_id: int,
-    *,
-    names: list[str],
-) -> dict[str, Any]:
-    project = projects.get_project(conn, project_id)
-    if not project:
-        raise DuplicateFinderError(f"project not found: id={project_id}")
-
-    project_dir = projects.project_dir(project["id"], project["slug"])
-    for raw_name in names:
-        curation._validate_filename(raw_name)  # noqa: SLF001
-    return preprocess_manifest.mark_duplicate_removed(project_dir, names)
-
-
 def options_to_json(options: DuplicateOptions) -> dict[str, Any]:
     return {
         "match_scope": options.match_scope,
@@ -428,11 +340,9 @@ def options_to_json(options: DuplicateOptions) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# ADR 0010 — train-scope duplicates API (PR-2 step E)
+# ADR 0010 — train-scope duplicates API
 #
-# 老 _resolve_download_sources / scan_project_duplicates / apply_duplicate_removals
-# 暂留作 backward-compat 给老 endpoint 用，PR-3 删。新代码 / 新 endpoint 请用
-# *_train 系列：scope 收窄到 versions/{label}/train/，每个 version 独立审核。
+# scope 收窄到 versions/{label}/train/，每个 version 独立审核。
 # ---------------------------------------------------------------------------
 
 
@@ -595,30 +505,6 @@ def apply_train_duplicate_removals(
     return preprocess_manifest.train_mark_duplicate_removed(
         project_dir, version["label"], names,
     )
-
-
-def _resolve_download_sources(
-    conn,
-    project_id: int,
-    project_dir: Path,
-) -> list[tuple[str, Path]]:
-    names = [item["name"] for item in curation.list_download(conn, project_id)]
-
-    sources: list[tuple[str, Path]] = []
-    for name in names:
-        curation._validate_filename(name)  # noqa: SLF001
-        if Path(name).suffix.lower() not in IMAGE_EXTS:
-            continue
-        entry = preprocess_manifest.get_entry(project_dir, name)
-        if preprocess_manifest.is_duplicate_removed_entry(entry):
-            continue
-        if entry is not None:
-            path = project_dir / "preprocess" / name
-        else:
-            path = project_dir / "download" / name
-        if path.is_file():
-            sources.append((name, path))
-    return sorted(sources, key=lambda item: item[0].lower())
 
 
 def oriented_size(img: Image.Image) -> tuple[int, int]:
