@@ -165,6 +165,63 @@ def test_preset_path_is_public_alias() -> None:
 
 
 # ---------------------------------------------------------------------------
+# InfoNoise 老 config 互斥兼容：_tolerant_validate 自动关 InfoNoise 保住用户原值
+# ---------------------------------------------------------------------------
+
+
+def test_tolerant_validate_infonoise_mutex_disables_infonoise() -> None:
+    """老 yaml 同时 infonoise=on + 4 互斥字段任一非默认 → 自动关 InfoNoise
+    保留用户原投入字段，"infonoise_enabled" 进 defaulted_fields 让前端 banner。
+    """
+    cases = [
+        {"infonoise_enabled": True, "noise_enhancement_type": "offset"},
+        {"infonoise_enabled": True, "loss_weighting": "detail_inv_t"},
+        {"infonoise_enabled": True, "loss_type": "huber"},
+        {"infonoise_enabled": True, "timestep_schedule_shift": 2.0},
+    ]
+    for overrides in cases:
+        cfg, _, defaulted = presets_io._tolerant_validate(overrides)
+        assert cfg.infonoise_enabled is False, overrides
+        assert "infonoise_enabled" in defaulted, overrides
+        # 用户原投入字段全保留
+        for k, v in overrides.items():
+            if k == "infonoise_enabled":
+                continue
+            assert getattr(cfg, k) == v, overrides
+
+
+def test_tolerant_validate_infonoise_mutex_multi_conflict_one_pass() -> None:
+    """同时 4 条互斥全冲突 → 一刀关 InfoNoise，4 字段全保留，defaulted 只有
+    "infonoise_enabled"（一次性处理，不重复 append）。"""
+    cfg, _, defaulted = presets_io._tolerant_validate({
+        "infonoise_enabled": True,
+        "noise_enhancement_type": "offset",
+        "loss_weighting": "detail_inv_t",
+        "loss_type": "huber",
+        "timestep_schedule_shift": 2.0,
+    })
+    assert cfg.infonoise_enabled is False
+    assert cfg.noise_enhancement_type == "offset"
+    assert cfg.loss_weighting == "detail_inv_t"
+    assert cfg.loss_type == "huber"
+    assert cfg.timestep_schedule_shift == 2.0
+    assert defaulted == ["infonoise_enabled"]
+
+
+def test_write_preset_strict_path_still_rejects_infonoise_mutex(
+    presets_dir: Path,
+) -> None:
+    """write_preset 走严格 model_validate（非 tolerant）—— 互斥配置直接拒，
+    防 UI 绕过 disable_when 锁直接发 PUT 提交 silent 改值。"""
+    with pytest.raises(presets_io.PresetError):
+        presets_io.write_preset("conflict", {
+            **_payload(),
+            "infonoise_enabled": True,
+            "loss_type": "huber",
+        })
+
+
+# ---------------------------------------------------------------------------
 # 路径规范化（PP10.5）：yaml 写盘 / 读取统一绝对路径
 # ---------------------------------------------------------------------------
 

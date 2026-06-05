@@ -92,6 +92,11 @@ export default function TrainPage() {
 
   const vid = activeVersion?.id ?? null
 
+  const applyPresetWarnings = useCallback((r: { dropped_fields?: string[]; defaulted_fields?: string[] }) => {
+    setDroppedFields(r.dropped_fields ?? [])
+    setDefaultedFields(r.defaulted_fields ?? [])
+  }, [])
+
   const refreshConfig = useCallback(async () => {
     if (!vid) return
     try {
@@ -99,15 +104,13 @@ export default function TrainPage() {
       setConfigResp(r)
       setConfigSync(r.config)
       savedJsonRef.current = JSON.stringify(r.config)
+      // 老 config 兼容（InfoNoise 互斥被后端自动关掉等）由后端写进 r.defaulted_fields，
+      // 顶部 banner 渲染。dropped_fields 兜底 schema 演进时丢弃的旧字段。
+      applyPresetWarnings(r)
     } catch (e) {
       toast(t('train.loadConfigFailed', { error: e }), 'error')
     }
-  }, [project.id, vid, toast, setConfigSync, t])
-
-  const applyPresetWarnings = useCallback((r: { dropped_fields?: string[]; defaulted_fields?: string[] }) => {
-    setDroppedFields(r.dropped_fields ?? [])
-    setDefaultedFields(r.defaulted_fields ?? [])
-  }, [])
+  }, [project.id, vid, toast, setConfigSync, t, applyPresetWarnings])
 
   useEffect(() => {
     api.schema().then(setSchema).catch((e) => toast(t('train.loadSchemaFailed', { error: e }), 'error'))

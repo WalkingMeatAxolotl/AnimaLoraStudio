@@ -106,6 +106,19 @@ def read_version_config(
     project: dict[str, Any], version: dict[str, Any]
 ) -> dict[str, Any]:
     """读 version 私有 config；不存在抛 VersionConfigError。"""
+    cfg, _, _ = read_version_config_with_warnings(project, version)
+    return cfg
+
+
+def read_version_config_with_warnings(
+    project: dict[str, Any], version: dict[str, Any]
+) -> tuple[dict[str, Any], list[str], list[str]]:
+    """读 version 私有 config 同时返回容错校验产出的 (dropped, defaulted) 字段列表。
+
+    用于 GET 端点把 compat 信息透传给前端（顶部 banner 提示）。InfoNoise 老 config
+    互斥被 _tolerant_validate 自动关 InfoNoise 时，"infonoise_enabled" 会出现在
+    defaulted 里。
+    """
     p = version_config_path(project, version)
     if not p.exists():
         raise VersionConfigError(
@@ -114,8 +127,8 @@ def read_version_config(
     raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
         raise VersionConfigError("config.yaml 顶层不是 mapping")
-    cfg, _, _ = _tolerant_validate(raw)
-    return _absolutize_model_paths(cfg.model_dump(mode="python"))
+    cfg, dropped, defaulted = _tolerant_validate(raw)
+    return _absolutize_model_paths(cfg.model_dump(mode="python")), dropped, defaulted
 
 
 def write_version_config(

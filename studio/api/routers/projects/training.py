@@ -567,7 +567,7 @@ def get_version_config_endpoint(pid: int, vid: int) -> dict[str, Any]:
             "project_specific_defaults": psd,
         }
     try:
-        cfg = version_config.read_version_config(project, ver)
+        cfg, dropped, defaulted = version_config.read_version_config_with_warnings(project, ver)
     except version_config.VersionConfigError as exc:
         raise HTTPException(422, str(exc)) from exc
     return {
@@ -575,6 +575,8 @@ def get_version_config_endpoint(pid: int, vid: int) -> dict[str, Any]:
         "config": cfg,
         "project_specific_fields": psf,
         "project_specific_defaults": psd,
+        "dropped_fields": dropped,
+        "defaulted_fields": defaulted,
     }
 
 

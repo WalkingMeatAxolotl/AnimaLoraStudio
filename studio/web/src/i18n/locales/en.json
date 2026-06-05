@@ -345,7 +345,8 @@
       "noise_enhancement_type": "Disabled while InfoNoise is enabled (schema mutex)",
       "loss_weighting": "Disabled while InfoNoise is enabled (schema mutex, only `none` compatible)",
       "loss_type": "Disabled while InfoNoise is enabled (schema mutex, only `mse` compatible)",
-      "timestep_schedule_shift": "Disabled while InfoNoise is enabled (schema mutex, only `1.0` compatible)"
+      "timestep_schedule_shift": "Disabled while InfoNoise is enabled (schema mutex, only `1.0` compatible)",
+      "infonoise_enabled": "Reset noise_enhancement / loss_weighting / loss_type / schedule_shift to defaults to enable (schema mutex)"
     },
     "descriptions": {
       "transformer_path": "Main diffusion model weights (.safetensors)",
