@@ -54,12 +54,15 @@ export default function SchemaForm({
   }
   const takeoverValueForField = (name: string, prop: typeof props[string]) => {
     if (name === 'lr_scheduler' && isProdigyOptimizer) return 'none'
-    return prop.disable_value ?? prop.default
+    return prop.disable_value
   }
 
-  // disable_when 触发时把字段值强制回到 default。避免「切换 optimizer 到
-  // prodigy_plus_schedulefree 之后 lr_scheduler 还停在 cosine，保存时被 pydantic
-  // model_validator 拒绝」这种死锁 UX。
+  // disable_when 触发时：
+  //   - 显式带 disable_value（或 lr_scheduler 特例）→ 强制改值，避免「切到 prodigy
+  //     之后 lr_scheduler 还停在 cosine 保存被 pydantic 拒」的死锁 UX
+  //   - 只 disable_when 不带 disable_value → 保留用户当前值，把冲突交给后端
+  //     model_validator 报错（InfoNoise 互斥四件套走这条：让用户看到原始冲突
+  //     值 + toast 告知是哪个组合炸，而不是 silent 抹掉用户的 detail_inv_t / huber）
   useEffect(() => {
     let nextValues = values
     let changed = false

@@ -342,7 +342,10 @@
       "lr_scheduler": "自适应优化器固定为常数学习率",
       "timestep_sampling": "InfoNoise 接管时间步采样",
       "timestep_shift": "InfoNoise 接管时间步采样",
-      "noise_enhancement_type": "InfoNoise 启用时禁用噪声增强（schema 互斥）"
+      "noise_enhancement_type": "InfoNoise 启用时禁用噪声增强（schema 互斥）",
+      "loss_weighting": "InfoNoise 启用时禁用 loss 加权（schema 互斥，仅 none 兼容）",
+      "loss_type": "InfoNoise 启用时禁用 loss 类型切换（schema 互斥，仅 mse 兼容）",
+      "timestep_schedule_shift": "InfoNoise 启用时禁用 schedule shift（schema 互斥，仅 1.0 兼容）"
     },
     "descriptions": {
       "transformer_path": "主扩散模型权重（.safetensors）",

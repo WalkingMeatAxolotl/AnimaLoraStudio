@@ -201,4 +201,33 @@ describe('SchemaForm takeover behavior', () => {
     expect(screen.getByText('InfoNoise takes over timestep sampling')).toBeInTheDocument()
     expect(screen.queryByText('Normal timestep description')).not.toBeInTheDocument()
   })
+
+  it('disable_when without disable_value preserves the existing value (no silent reset)', async () => {
+    const onChange = vi.fn()
+    // timestep_sampling has disable_when='infonoise_enabled==true' but NO disable_value
+    // in the mock schema. Old behavior reset to prop.default; new behavior keeps the
+    // user's value so the backend model_validator surfaces the real conflict combo.
+    render(
+      <SchemaForm
+        schema={schema}
+        values={{
+          optimizer_type: 'adamw',
+          learning_rate: 0.0001,
+          lr_scheduler: 'none',
+          infonoise_enabled: true,
+          timestep_sampling: 'uniform',
+        }}
+        onChange={onChange}
+        advancedMode
+      />,
+    )
+
+    // Yield once to let the disable-takeover useEffect run (it would have called
+    // onChange under the old behavior).
+    await new Promise((r) => setTimeout(r, 0))
+    expect(onChange).not.toHaveBeenCalled()
+    const timestepSelect = screen.getAllByRole('combobox').find((el) => (el as HTMLSelectElement).value === 'uniform') as HTMLSelectElement
+    expect(timestepSelect.value).toBe('uniform')
+    expect(timestepSelect).toBeDisabled()
+  })
 })

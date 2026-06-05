@@ -355,7 +355,6 @@ class TrainingConfig(BaseModel):
             "noise_augmentation",
             advanced=True,
             disable_when="infonoise_enabled==true",
-            disable_value="none",
             disable_hint="InfoNoise 启用时禁用噪声增强（schema 互斥）",
         ),
     )
@@ -421,6 +420,8 @@ class TrainingConfig(BaseModel):
             alt_description="【InfoNoise 热身期】InfoNoise 开启时仅热身期生效；正式阶段由自适应 CDF 接管",
             alt_description_when="infonoise_enabled==true",
             advanced=True,
+            disable_when="infonoise_enabled==true",
+            disable_hint="InfoNoise 启用时禁用 schedule shift（schema 互斥，仅 1.0 兼容）",
         ),
     )
     infonoise_enabled: bool = Field(
@@ -466,7 +467,11 @@ class TrainingConfig(BaseModel):
     loss_type: Literal["mse", "huber"] = Field(
         "mse",
         description="训练 loss 类型。mse 经典；huber 对 outlier 鲁棒（在 |x|<δ 时用二次，|x|≥δ 时用线性）",
-        json_schema_extra=_meta("loss"),
+        json_schema_extra=_meta(
+            "loss",
+            disable_when="infonoise_enabled==true",
+            disable_hint="InfoNoise 启用时禁用 loss 类型切换（schema 互斥，仅 mse 兼容）",
+        ),
     )
     huber_c: float = Field(
         0.15, ge=0.01, le=5.0,
@@ -476,7 +481,11 @@ class TrainingConfig(BaseModel):
     loss_weighting: Literal["none", "min_snr", "detail_inv_t", "cosmap"] = Field(
         "none",
         description="loss 加权方案：none 不加权；min_snr 抑制极端时步的权重；detail_inv_t 强化低 t 细节；cosmap 用 SD3 cosine 映射",
-        json_schema_extra=_meta("loss"),
+        json_schema_extra=_meta(
+            "loss",
+            disable_when="infonoise_enabled==true",
+            disable_hint="InfoNoise 启用时禁用 loss 加权（schema 互斥，仅 none 兼容）",
+        ),
     )
     min_snr_gamma: float = Field(
         5.0, ge=0.1, le=20.0,
