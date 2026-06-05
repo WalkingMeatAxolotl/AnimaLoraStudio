@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from studio import db, server
+from studio import db, secrets, server
 from studio.services import eval_dino, eval_manifest, eval_metrics, eval_samples
 from studio.services.projects import jobs as project_jobs, projects, versions
 from studio.supervisor import GPU_BOUND_JOB_KINDS
@@ -21,6 +21,7 @@ def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(project_jobs, "JOB_LOGS_DIR", tmp_path / "jobs")
     monkeypatch.setattr(db, "STUDIO_DB", dbfile)
     monkeypatch.setattr(server.db, "STUDIO_DB", dbfile)
+    monkeypatch.setattr(secrets, "SECRETS_FILE", tmp_path / "secrets.json")
     return {"db": dbfile}
 
 
@@ -219,6 +220,23 @@ def test_eval_dino_http_start_queues_job(client: TestClient) -> None:
     body = started.json()
     assert body["job"]["kind"] == "eval_dino"
     assert body["result"]["metric_states"]["dino_i"]["status"] == "pending"
+
+
+def test_eval_dino_http_start_uses_saved_default_model(client: TestClient) -> None:
+    pid, vid = _make(client)
+    project, version, vdir = _vdir_for(pid, vid)
+    run = _sample_run(project, version, vdir)
+    secrets.update({"eval_metrics": {"dino_model_name": "/models/local-dino"}})
+
+    started = client.post(
+        f"/api/projects/{pid}/versions/{vid}/eval/samples/{run['run_id']}/metrics/dino",
+        json={},
+    )
+
+    assert started.status_code == 200, started.text
+    body = started.json()
+    assert body["job"]["params_decoded"]["model_name"] == "/models/local-dino"
+    assert body["result"]["metric_states"]["dino_i"]["model_name"] == "/models/local-dino"
 
 
 def test_eval_dino_job_kind_is_schedulable_and_gpu_bound(isolated) -> None:

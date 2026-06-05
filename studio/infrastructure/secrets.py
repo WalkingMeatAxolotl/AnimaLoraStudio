@@ -106,6 +106,17 @@ class ModelScopeConfig(BaseModel):
     # 没有映射的模型自动回退 HuggingFace。
 
 
+class EvalMetricModelsConfig(BaseModel):
+    """LoRA eval metric model defaults.
+
+    Metric API callers may still pass `model_name` explicitly. Empty request
+    values fall back to these defaults so server-local ModelScope/HF cache paths
+    do not need to be repeated for every metric run.
+    """
+    clip_model_name: str = "openai/clip-vit-base-patch32"
+    dino_model_name: str = "facebook/dinov2-small"
+
+
 class DownloadConfig(BaseModel):
     """全局下载偏好（跨渠道共享）。"""
     # 全局排除 tag：搜索时自动追加 -tag1 -tag2（gelbooru / danbooru 语法一致）
@@ -505,6 +516,9 @@ class Secrets(BaseModel):
     huggingface: HuggingFaceConfig = Field(default_factory=HuggingFaceConfig)
     wandb: WandBConfig = Field(default_factory=WandBConfig)
     modelscope: ModelScopeConfig = Field(default_factory=ModelScopeConfig)
+    eval_metrics: EvalMetricModelsConfig = Field(
+        default_factory=EvalMetricModelsConfig
+    )
     # 旧的全局下载源（已退役为「迁移种子」）。不再有 UI 开关；新模型按类型在
     # download_sources 里各自选源。保留此字段仅为兼容旧 secrets.json：load 时把它
     # 的值种子填充到尚未设过的 download_sources 类型，避免老（尤其国内设了

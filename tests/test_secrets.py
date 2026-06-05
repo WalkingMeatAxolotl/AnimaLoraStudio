@@ -60,7 +60,6 @@ def test_cltagger_defaults_use_1_02(secrets_file: Path) -> None:
     assert s.cltagger.tag_mapping_path == "cl_tagger_1_02/tag_mapping.json"
     assert s.cltagger.threshold_character == pytest.approx(0.6)
 
-
 def test_legacy_local_dir_dropped_on_load(secrets_file: Path) -> None:
     """旧 secrets.json 里残留的 local_dir / variant_local_dirs 字段：load 时被
     pydantic（extra=ignore）静默丢弃，不报错、不再出现在模型上。"""
@@ -78,6 +77,22 @@ def test_legacy_local_dir_dropped_on_load(secrets_file: Path) -> None:
     assert not hasattr(s.wd14, "local_dir")
     assert not hasattr(s.cltagger, "local_dir")
     assert not hasattr(s.cltagger, "variant_local_dirs")
+
+
+def test_eval_metrics_defaults_and_persistence(secrets_file: Path) -> None:
+    s = secrets.load()
+    assert s.eval_metrics.clip_model_name == "openai/clip-vit-base-patch32"
+    assert s.eval_metrics.dino_model_name == "facebook/dinov2-small"
+
+    secrets.update({
+        "eval_metrics": {
+            "clip_model_name": "/models/clip",
+            "dino_model_name": "/models/dino",
+        }
+    })
+    saved = secrets.load()
+    assert saved.eval_metrics.clip_model_name == "/models/clip"
+    assert saved.eval_metrics.dino_model_name == "/models/dino"
 
 
 def test_llm_tagger_defaults(secrets_file: Path) -> None:
