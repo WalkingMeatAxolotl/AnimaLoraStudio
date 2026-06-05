@@ -350,22 +350,22 @@ class TrainingConfig(BaseModel):
     )
     noise_enhancement_type: Literal["none", "offset", "pyramid"] = Field(
         "none",
-        description="二选一：offset 给噪声加常数低频偏移（亮暗对比）；pyramid 多尺度叠加低频噪声（构图/光照）。两者互斥",
+        description="噪声增强机制（默认 none）。offset 在噪声上加 per-sample DC 偏置；pyramid 在多个尺度叠加低频噪声。两者机制不同，但都改变低频成分，互斥防双倍叠加。LoRA 训练默认保持 none",
         json_schema_extra=_meta("noise_augmentation", advanced=True),
     )
     noise_offset: float = Field(
         0.0, ge=0.0, le=0.2,
-        description="低频偏移强度，缓解亮度均值偏差。越大对比越强；常用 0.05-0.1",
+        description="DC 偏置强度（0-0.2，0=关闭）。让噪声 mean 偏离 0，让模型有机会学习生成极端亮度场景（pure black / pure white / 强对比）。典型范围 0.05-0.1；0.05 以下噪声场跟 baseline 几乎一样，超过 0.1 起点 loss 会显著偏高",
         json_schema_extra=_meta("noise_augmentation", show_when="noise_enhancement_type==offset", advanced=True),
     )
     pyramid_noise_iters: int = Field(
         0, ge=0, le=6,
-        description="多尺度噪声叠加层数；越多覆盖的低频尺度越广。2-3 帮助全局光照与构图学习",
+        description="金字塔噪声层数（0-6，0=关闭）。每层在 spatial // 2^(k+1) 尺度注入。实际效果强度由 pyramid_noise_discount 决定 —— iters 单独决定覆盖的频段范围，discount 低时层数多少差异很小",
         json_schema_extra=_meta("noise_augmentation", show_when="noise_enhancement_type==pyramid", advanced=True),
     )
     pyramid_noise_discount: float = Field(
-        0.35, ge=0.1, le=0.9,
-        description="金字塔每层相对上一层的衰减系数；越大每层贡献递减越慢、低频扰动越强；越小逼近标准噪声",
+        0.5, ge=0.1, le=0.9,
+        description="每层相对衰减系数（0.1-0.9）。控制低频强度的核心参数：anima 实现把整体噪声 std 归一化到 1，所以 discount 决定低频占比。0.1-0.4 归一化后噪声接近标准高斯，等价于关闭；0.5-0.7 显著改变低频结构",
         json_schema_extra=_meta("noise_augmentation", show_when="noise_enhancement_type==pyramid", advanced=True),
     )
     timestep_sampling: Literal[
@@ -604,6 +604,23 @@ class TrainingConfig(BaseModel):
                 "（不学），但 InfoNoise 用 raw MSE 看到 outlier 区间高损失会持续把采样推过去，"
                 "形成 mass 集中在不学的区间的反馈环。请二选一：(a) 关闭 InfoNoise 保留 huber；"
                 "或 (b) 设 loss_type=mse 走 InfoNoise 自适应路径。"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_infonoise_noise_enhancement_exclusive(self) -> "TrainingConfig":
+        """InfoNoise 与 noise_enhancement_type 互斥：噪声增强改变 noise 形状会让 InfoNoise
+        schedule 偏离论文最优。
+
+        InfoNoise 论文 I-MMSE 推导假设标准高斯 noise；offset 加 DC 偏置、pyramid 加多尺度
+        低频成分都改变 noise 频谱，让 InfoNoise 学到的不再是 clean entropy rate profile。
+        """
+        if self.infonoise_enabled and self.noise_enhancement_type != "none":
+            raise ValueError(
+                f"infonoise_enabled=true 与 noise_enhancement_type={self.noise_enhancement_type!r} 互斥："
+                "噪声增强会改变 noise 形状，让 InfoNoise 学到的 schedule 偏离论文最优"
+                "（I-MMSE 推导假设标准高斯 noise）。请二选一：(a) 关闭 InfoNoise 保留噪声增强；"
+                "或 (b) 设 noise_enhancement_type=none 走 InfoNoise 自适应路径。"
             )
         return self
 

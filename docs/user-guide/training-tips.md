@@ -209,8 +209,7 @@ EDM/Karras 论文里 δ=0.15 是常用经验值。
 | `loss_weighting != none` (`min_snr`/`detail_inv_t`/`cosmap`) | 两个机制都在重塑 σ schedule（自适应 resample vs 手工 reweight），叠加互相消磨 | schema 互斥，保存配置时报错 |
 | `loss_type=huber` | huber 削峰让 outlier 区间不学，但 InfoNoise 用 raw MSE 看到 outlier 仍高 → 推 mass 进去 → 反馈环 | schema 互斥 |
 | `timestep_schedule_shift != 1.0` | shift 只在 baseline 路径生效；CDF 接管后静默失效 | schema 互斥 |
-| `noise_offset > 0` | 改 mse 形状（低 σ 端被 offset 抬高），InfoNoise 学到的是含 offset 的 schedule | 可同开但 schedule 形状会变；如想跟论文一致建议关 noise_offset |
-| `noise_enhancement_type=pyramid` | 同上，多尺度叠加比 offset 影响更大 | 同上 |
+| `noise_enhancement_type != none` (`offset` / `pyramid`) | 噪声增强改变 noise 形状，InfoNoise 学到的不再是 clean entropy rate profile（I-MMSE 推导假设标准高斯 noise）| schema 互斥 |
 | 正则集（`reg_data_dir != null` + `reg_weight < 1`） | reg 集分布跟 train 集不同；InfoNoise 自动跳过 reg 集样本仅学 train 集分布（loop 内 mask 处理） | 透明处理，无需用户操作 |
 | LoRA dropout（`lora_dropout` / `lora_rank_dropout` / `lora_module_dropout`） | 加梯度噪声，不改 mse 形状的系统性偏移 | 可同开，FIFO + EMA 双层平滑能 absorb |
 
@@ -218,14 +217,12 @@ EDM/Karras 论文里 δ=0.15 是常用经验值。
 
 | 字段 | 默认 | 用途 |
 |------|------|------|
-| `noise_enhancement_type` | `none` | `none` / `offset` / `pyramid` 三选一，互斥（见下） |
-| `noise_offset` | `0.0` | 给噪声加常数偏置；`0.05~0.1` 能改善超暗 / 超亮场景的对比度。仅 `type=offset` 生效 |
-| `pyramid_noise_iters` | `0` | 金字塔噪声层数；多尺度叠加噪声，纹理多样性更好。仅 `type=pyramid` 生效 |
-| `pyramid_noise_discount` | `0.35` | 金字塔每层衰减系数。仅 `type=pyramid` 生效 |
+| `noise_enhancement_type` | `none` | `none` / `offset` / `pyramid` 三选一。LoRA 训练默认保持 `none` |
+| `noise_offset` | `0.0` | DC 偏置强度（0-0.2，0=关闭）。让噪声 mean 偏离 0，让模型有机会学习生成极端亮度场景（pure black / pure white / 强对比）。典型范围 0.05-0.1 |
+| `pyramid_noise_iters` | `0` | 金字塔噪声层数（0-6，0=关闭）。每层在 `spatial // 2^(k+1)` 尺度注入。**实际效果强度由 `pyramid_noise_discount` 决定** —— iters 单独决定覆盖的频段范围 |
+| `pyramid_noise_discount` | `0.5` | 每层相对衰减系数（0.1-0.9）。**控制低频强度的核心参数**：anima 把整体噪声 std 归一化到 1。0.1-0.4 归一化后接近标准高斯，等价于关闭；0.5-0.7 显著改变低频结构 |
 
 **互斥约束**：`noise_offset` 与金字塔噪声**不能同时启用**。两者都在给噪声注入低频成分（pyramid 最低分辨率那层 ≈ `noise_offset` 等价物），叠加会让低频成分双倍灌入，训练目标失真。这跟 kohya 上游 [sd-scripts PR #477](https://github.com/kohya-ss/sd-scripts/pull/477) 的硬约束一致。Anima 的 schema 校验会强制清零反组字段，老 yaml 同开会按 `pyramid_noise_iters > 0` 优先映射到 pyramid。
-
-`pyramid_noise` 来自 Mistoline / Diffusion 社区实验，画风 LoRA 受益明显，角色 LoRA 一般。
 
 ### Flip Augment + Cache Latents（双份缓存）
 
