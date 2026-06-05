@@ -390,6 +390,26 @@ export interface ProxyConfig {
     no_proxy: string;
 }
 
+/** Tag 翻译词典 — meta 字段。kind=default：来自首启自动下载或用户点 "恢复默认"；
+ *  kind=user：用户手动上传。前端 Settings UI 用 source_name / entry_count 显示。 */
+export interface TagDictionaryMeta {
+  source_name: string
+  source_url: string
+  entry_count: number
+  downloaded_at: number
+  kind: 'default' | 'user'
+}
+
+export interface TagDictionaryMetaResponse {
+  loaded: boolean
+  meta: TagDictionaryMeta | null
+}
+
+export interface TagDictionaryPayload {
+  entries: Record<string, string[]>
+  meta: TagDictionaryMeta
+}
+
 export interface Secrets {
   gelbooru: GelbooruConfig
   danbooru: DanbooruConfig
@@ -1573,6 +1593,40 @@ export const api = {
 
   // Secrets ------------------------------------------------------------
   getSecrets: () => req<Secrets>('/api/secrets'),
+
+  // Tag dictionary -----------------------------------------------------
+  /** 当前词典 meta + 是否已加载。Settings UI 启动时 ping，决定显示"未初始化"还是详情。 */
+  getTagDictionaryMeta: () =>
+    req<TagDictionaryMetaResponse>('/api/tag-dictionary/meta'),
+  /** 完整 dict JSON (~600KB gzip)。store.ts 启动拉一次后缓存内存。 */
+  getTagDictionaryData: () =>
+    req<TagDictionaryPayload>('/api/tag-dictionary/data'),
+  /** 上传 csv/txt 替换当前词典。返回新 meta。 */
+  uploadTagDictionary: async (file: File): Promise<TagDictionaryMetaResponse> => {
+    const fd = new FormData()
+    fd.append('file', file, file.name)
+    const resp = await fetch('/api/tag-dictionary/upload', { method: 'POST', body: fd })
+    if (!resp.ok) {
+      let message = `${resp.status} ${resp.statusText}`
+      let rawDetail: unknown = null
+      try {
+        const body = await resp.json()
+        if (typeof body?.detail === 'string') message = body.detail
+        else if (body?.detail && typeof body.detail === 'object') {
+          rawDetail = body.detail
+          message = (body.detail as { message?: string }).message ?? JSON.stringify(body.detail)
+        }
+      } catch { /* 非 JSON，保留 statusText */ }
+      const err = new Error(message) as ApiError
+      err.status = resp.status
+      err.detail = rawDetail
+      throw err
+    }
+    return (await resp.json()) as TagDictionaryMetaResponse
+  },
+  /** 重新从 GitHub 拉默认词典（首次失败 / 用户想重置都走这个）。 */
+  resetTagDictionary: () =>
+    req<TagDictionaryMetaResponse>('/api/tag-dictionary/reset', { method: 'POST' }),
 
   // Models management (PP7) ------------------------------------------------
   getModelsCatalog: () => req<ModelsCatalog>('/api/models/catalog'),

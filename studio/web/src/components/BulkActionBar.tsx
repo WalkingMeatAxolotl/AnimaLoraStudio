@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useDialog } from './Dialog'
 import { useToast } from './Toast'
+import { TranslatedTag } from './tagDisplay/TranslatedTag'
 
 type Op = 'add' | 'remove' | 'replace' | 'dedupe'
 type Position = 'front' | 'back'
@@ -469,7 +470,7 @@ function TagsField({ value, onChange, placeholder, suggestions, ariaLabel }: Tag
               onMouseDown={(e) => { e.preventDefault(); pick(s) }}
               className="px-2.5 py-1 text-xs font-mono text-fg-primary cursor-pointer hover:bg-overlay rounded-sm"
             >
-              {s}
+              <TranslatedTag tag={s} />
             </li>
           ))}
         </ul>

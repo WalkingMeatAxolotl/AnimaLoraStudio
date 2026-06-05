@@ -29,6 +29,8 @@ import { useDialog } from '../../components/Dialog'
 import { InfoButton } from '../../components/InfoButton'
 import LLMTaggerWorkspace from '../../components/LLMTaggerWorkspace'
 import { TagListInput } from '../../components/TagsInput'
+import { useShowTagTranslation } from '../../tagDict/showToggle'
+import { useTagDict, reloadDict } from '../../tagDict/store'
 import PageHeader from '../../components/PageHeader'
 import { useToast } from '../../components/Toast'
 import { useSettingsData } from '../../lib/SettingsData'
@@ -99,6 +101,7 @@ const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
     { id: 'wd14', labelKey: 'settings.wd14' },
     { id: 'cltagger', labelKey: 'settings.clTagger' },
     { id: 'onnxruntime', labelKey: 'settings.onnxRuntime' },
+    { id: 'tag-dictionary', labelKey: 'settings.tagDictionary.title' },
   ],
   training: [
     { id: 'download-source', labelKey: 'settings.modelSource' },
@@ -931,6 +934,7 @@ export default function SettingsPage() {
       </SettingsSection>
 
       <ONNXRuntimeSection />
+      <TagDictionarySection />
       </>)}
 
       {tab === 'training' && (<>
@@ -2201,6 +2205,116 @@ function DownloadButton({ exists, status, busy, onClick }: {
       title={exists ? t('settings.redownloadTitle') : t('common.download')}>
       {exists ? t('settings.redownload') : t('settings.downloadAction')}
     </button>
+  )
+}
+
+// ── Tag 翻译词典：上传 / 恢复默认 / 全局 chip toggle ──────────────────────
+
+function TagDictionarySection() {
+  const { t } = useTranslation()
+  const { toast } = useToast()
+  const dict = useTagDict()
+  const [show, setShow] = useShowTagTranslation()
+  const [busy, setBusy] = useState<null | 'reset' | 'upload'>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const meta = dict.meta
+  const sourceLabel = meta?.kind === 'default'
+    ? t('settings.tagDictionary.sourceDefault')
+    : meta?.kind === 'user'
+      ? t('settings.tagDictionary.sourceUser')
+      : t('settings.tagDictionary.sourceUnknown')
+
+  const downloadedAt = meta?.downloaded_at
+    ? new Date(meta.downloaded_at * 1000).toLocaleString()
+    : '—'
+
+  const reset = async () => {
+    if (busy) return
+    setBusy('reset')
+    try {
+      await api.resetTagDictionary()
+      await reloadDict()
+      toast(t('settings.tagDictionary.resetOk'))
+    } catch (err) {
+      toast(`${t('settings.tagDictionary.resetFail')}: ${err instanceof Error ? err.message : String(err)}`)
+    } finally { setBusy(null) }
+  }
+
+  const upload = async (file: File) => {
+    setBusy('upload')
+    try {
+      await api.uploadTagDictionary(file)
+      await reloadDict()
+      toast(t('settings.tagDictionary.uploadOk', { name: file.name }))
+    } catch (err) {
+      toast(`${t('settings.tagDictionary.uploadFail')}: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setBusy(null)
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
+
+  return (
+    <SettingsSection id="tag-dictionary" title={t('settings.tagDictionary.title')}>
+      <SettingsField label={t('settings.tagDictionary.statusLabel')}>
+        {dict.status === 'loading' && (
+          <span className="text-xs text-fg-tertiary">{t('settings.tagDictionary.loading')}</span>
+        )}
+        {dict.status === 'empty' && (
+          <span className="text-xs text-warn">{t('settings.tagDictionary.empty')}</span>
+        )}
+        {dict.status === 'error' && (
+          <span className="text-xs text-err">{dict.error ?? t('settings.tagDictionary.error')}</span>
+        )}
+        {dict.status === 'ready' && meta && (
+          <div className="text-xs flex flex-col gap-0.5">
+            <div>
+              <span className="text-fg-tertiary">{sourceLabel}：</span>
+              <code className="font-mono text-fg-primary">{meta.source_name}</code>
+            </div>
+            <div className="text-fg-tertiary">
+              {t('settings.tagDictionary.entryCount', { n: meta.entry_count })} · {downloadedAt}
+            </div>
+          </div>
+        )}
+      </SettingsField>
+
+      <SettingsField
+        label={t('settings.tagDictionary.uploadLabel')}
+        desc={t('settings.tagDictionary.uploadHint')}
+      >
+        <div className="flex gap-1.5 items-center flex-wrap">
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".csv,.txt"
+            disabled={busy !== null}
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              if (f) void upload(f)
+            }}
+            className="text-xs"
+          />
+          <button
+            type="button"
+            disabled={busy !== null}
+            onClick={() => void reset()}
+            className="btn btn-secondary btn-sm"
+            title={t('settings.tagDictionary.resetHint')}
+          >
+            {busy === 'reset' ? t('common.downloading') : t('settings.tagDictionary.resetButton')}
+          </button>
+        </div>
+      </SettingsField>
+
+      <SettingsField
+        label={t('settings.tagDictionary.showToggleLabel')}
+        desc={t('settings.tagDictionary.showToggleHint')}
+      >
+        <Bool value={show} onChange={setShow} />
+      </SettingsField>
+    </SettingsSection>
   )
 }
 

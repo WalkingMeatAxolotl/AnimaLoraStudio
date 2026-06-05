@@ -25,6 +25,7 @@ import {
 } from '../../api/client'
 import VersionStatusBadge from '../../components/VersionStatusBadge'
 import BarHistogram from '../../components/BarHistogram'
+import { TranslatedTag } from '../../components/tagDisplay/TranslatedTag'
 import ImageGrid, { type ImageGridItem } from '../../components/ImageGrid'
 import ImagePreviewModal from '../../components/ImagePreviewModal'
 import { OutputsTab } from '../QueueDetail'
@@ -931,7 +932,7 @@ function TagDistCard({ project, version }: { project: ProjectDetail; version: Ve
                   color: isTrigger ? 'var(--accent)' : 'var(--fg-primary)',
                   fontWeight: isTrigger ? 700 : 500,
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                }}>{isTrigger ? '★ ' : ''}{row.tag}</span>
+                }}>{isTrigger ? '★ ' : ''}<TranslatedTag tag={row.tag} /></span>
                 <span style={{
                   position: 'relative', zIndex: 1,
                   fontSize: 'var(--t-xs)',

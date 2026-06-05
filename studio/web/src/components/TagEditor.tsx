@@ -16,6 +16,10 @@ import {
 import { CSS } from '@dnd-kit/utilities'
 import { useTranslation } from 'react-i18next'
 
+import { TranslatedTag } from './tagDisplay/TranslatedTag'
+import { TagSuggestList } from './tagSuggest/TagSuggestList'
+import { useTagSuggest } from './tagSuggest/useTagSuggest'
+
 interface Props {
   tags: string[]
   natural?: boolean
@@ -38,6 +42,8 @@ export default function TagEditor({
   const tagsJoined = useMemo(() => tags.join(', '), [tags])
   const [mode, setMode] = useState<Mode>(natural ? 'text' : 'chip')
   const [textBuf, setTextBuf] = useState(() => tagsJoined)
+  const draftInputRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   // PointerSensor + 6px 启动距离：拖拽手感不会跟「点 × 删除」/ 误触冲突。
   const sensors = useSensors(
@@ -64,6 +70,32 @@ export default function TagEditor({
     onChange([...tags, t])
     setDraft('')
   }
+
+  // chip 模式 input：draft 整体当一个 token；选中候选直接 addTag。
+  const draftSuggest = useTagSuggest({
+    value: draft,
+    inputRef: draftInputRef,
+    wholeAsToken: true,
+    onPick: ({ suggestion }) => { addTag(suggestion.tag) },
+  })
+
+  // text 模式 textarea：根据 cursor 算 token range，替换为 `tag, ` 并保持光标。
+  const textSuggest = useTagSuggest({
+    value: textBuf,
+    inputRef: textareaRef,
+    onPick: ({ suggestion, range }) => {
+      const before = textBuf.slice(0, range.start)
+      const after = textBuf.slice(range.end)
+      const cleanAfter = after.replace(/^[,，]\s*/, '')
+      const next = `${before}${suggestion.tag}, ${cleanAfter}`
+      setTextBuf(next)
+      const newCursor = before.length + suggestion.tag.length + 2
+      requestAnimationFrame(() => {
+        const el = textareaRef.current
+        if (el) { el.focus(); el.setSelectionRange(newCursor, newCursor) }
+      })
+    },
+  })
 
   const removeTag = (t: string) => {
     onChange(tags.filter((x) => x !== t))
@@ -152,19 +184,35 @@ export default function TagEditor({
             </SortableContext>
           </DndContext>
           <div className="flex items-center gap-1.5 shrink-0">
-            <input
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ',' || e.key === '，') {
-                  e.preventDefault(); addTag(draft)
-                } else if (e.key === 'Backspace' && !draft && tags.length) {
-                  removeTag(tags[tags.length - 1])
-                }
-              }}
-              placeholder={t('tagEditor.addPlaceholder')}
-              className="input input-mono text-xs flex-1"
-            />
+            <div className="relative flex-1">
+              <input
+                ref={draftInputRef}
+                value={draft}
+                onChange={(e) => { setDraft(e.target.value); draftSuggest.notifyChange() }}
+                onKeyDown={(e) => {
+                  if (draftSuggest.handleKeyDown(e)) return
+                  if (e.key === 'Enter' || e.key === ',' || e.key === '，') {
+                    e.preventDefault(); addTag(draft)
+                  } else if (e.key === 'Backspace' && !draft && tags.length) {
+                    removeTag(tags[tags.length - 1])
+                  }
+                }}
+                onFocus={() => draftSuggest.notifyFocus()}
+                onBlur={() => draftSuggest.notifyBlur()}
+                placeholder={t('tagEditor.addPlaceholder')}
+                className="input input-mono text-xs w-full"
+              />
+              <TagSuggestList
+                open={draftSuggest.open}
+                suggestions={draftSuggest.suggestions}
+                activeIdx={draftSuggest.activeIdx}
+                onPick={(s) => draftSuggest.pickAt(draftSuggest.suggestions.indexOf(s))}
+                onHover={draftSuggest.setActiveIdx}
+                inputRef={draftInputRef}
+                cursor={draftSuggest.cursor}
+                positionDeps={[draft]}
+              />
+            </div>
             {onSave && (
               <button
                 disabled={saving || !dirty}
@@ -178,13 +226,30 @@ export default function TagEditor({
         </>
       ) : (
         <>
-          <textarea
-            value={textBuf}
-            onChange={(e) => setTextBuf(e.target.value)}
-            onBlur={commitText}
-            placeholder={t('tagEditor.textPlaceholder')}
-            className="input input-mono text-xs flex-1 resize-none"
-          />
+          <div className="relative flex-1 min-h-0 flex flex-col">
+            <textarea
+              ref={textareaRef}
+              value={textBuf}
+              onChange={(e) => { setTextBuf(e.target.value); textSuggest.notifyChange() }}
+              onKeyDown={(e) => { textSuggest.handleKeyDown(e) }}
+              onKeyUp={() => textSuggest.notifySelect()}
+              onClick={() => textSuggest.notifySelect()}
+              onFocus={() => textSuggest.notifyFocus()}
+              onBlur={() => { textSuggest.notifyBlur(); commitText() }}
+              placeholder={t('tagEditor.textPlaceholder')}
+              className="input input-mono text-xs flex-1 resize-none"
+            />
+            <TagSuggestList
+              open={textSuggest.open}
+              suggestions={textSuggest.suggestions}
+              activeIdx={textSuggest.activeIdx}
+              onPick={(s) => textSuggest.pickAt(textSuggest.suggestions.indexOf(s))}
+              onHover={textSuggest.setActiveIdx}
+              inputRef={textareaRef}
+              cursor={textSuggest.cursor}
+              positionDeps={[textBuf]}
+            />
+          </div>
           <div className="flex items-center gap-1.5 shrink-0">
             <button onClick={commitText} className="btn btn-ghost btn-sm">{t('tagEditor.sync')}</button>
             {onSave && (
@@ -247,7 +312,7 @@ function SortableChip({ id, onRemove }: { id: string; onRemove: () => void }) {
       {...listeners}
       className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-overlay border border-subtle text-sm font-mono text-fg-primary cursor-grab active:cursor-grabbing select-none touch-none"
     >
-      {id}
+      <TranslatedTag tag={id} />
       <button
         onPointerDown={(e) => e.stopPropagation()}
         onClick={onRemove}

@@ -17,6 +17,9 @@ import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import ImagePreviewModal from '../../../components/ImagePreviewModal'
 import JobProgress from '../../../components/JobProgress'
 import StepShell from '../../../components/StepShell'
+import { TranslatedTag } from '../../../components/tagDisplay/TranslatedTag'
+import { TagSuggestList } from '../../../components/tagSuggest/TagSuggestList'
+import { useTagSuggest } from '../../../components/tagSuggest/useTagSuggest'
 import { useDialog } from '../../../components/Dialog'
 import { useToast } from '../../../components/Toast'
 import { useEventStream } from '../../../lib/useEventStream'
@@ -1136,6 +1139,14 @@ function ExcludeTags({
 }) {
   const { t } = useTranslation()
   const [draft, setDraft] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+  const suggest = useTagSuggest({
+    value: draft,
+    inputRef,
+    wholeAsToken: true,
+    // 选中候选时把整段 draft 替换；用户再按 Enter 走 addCustom 走 normalize → 落 booru 形态
+    onPick: ({ suggestion }) => { setDraft(suggestion.tag) },
+  })
   const trainTagSet = useMemo(
     () => new Set(trainTags.map((t) => t.tag)),
     [trainTags]
@@ -1196,7 +1207,7 @@ function ExcludeTags({
                 <span className={on ? 'text-accent' : 'text-fg-tertiary'}>
                   {on ? '✕' : '+'}
                 </span>
-                {info.tag.replace(/_/g, ' ')}
+                <TranslatedTag tag={info.tag.replace(/_/g, ' ')} />
                 <span className="text-fg-disabled text-2xs">×{info.count}</span>
               </button>
             )
@@ -1219,7 +1230,7 @@ function ExcludeTags({
                 color: 'var(--warn)',
               }}
             >
-              {tag.replace(/_/g, ' ')}
+              <TranslatedTag tag={tag.replace(/_/g, ' ')} />
               <button
                 onClick={() => onToggle(tag)}
                 className="bg-transparent border-none cursor-pointer p-0 text-warn opacity-80"
@@ -1232,18 +1243,34 @@ function ExcludeTags({
         </div>
       )}
       <div className="flex gap-2 mt-3">
-        <input
-          className="input font-mono flex-1 text-sm"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault()
-              addCustom()
-            }
-          }}
-          placeholder={t('reg.excludePlaceholder')}
-        />
+        <div className="relative flex-1">
+          <input
+            ref={inputRef}
+            className="input font-mono w-full text-sm"
+            value={draft}
+            onChange={(e) => { setDraft(e.target.value); suggest.notifyChange() }}
+            onKeyDown={(e) => {
+              if (suggest.handleKeyDown(e)) return
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                addCustom()
+              }
+            }}
+            onFocus={() => suggest.notifyFocus()}
+            onBlur={() => suggest.notifyBlur()}
+            placeholder={t('reg.excludePlaceholder')}
+          />
+          <TagSuggestList
+            open={suggest.open}
+            suggestions={suggest.suggestions}
+            activeIdx={suggest.activeIdx}
+            onPick={(s) => suggest.pickAt(suggest.suggestions.indexOf(s))}
+            onHover={suggest.setActiveIdx}
+            inputRef={inputRef}
+            cursor={suggest.cursor}
+            positionDeps={[draft]}
+          />
+        </div>
         <button
           onClick={addCustom}
           disabled={!draft.trim()}

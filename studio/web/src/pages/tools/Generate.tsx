@@ -23,6 +23,7 @@ import PromptFromDatasetPicker, { type DatasetPick } from './generate/PromptFrom
 import { makeThumbnail, useGenerateHistory, type HistoryEntry } from './generate/useGenerateHistory'
 import PreviewXYGrid from './generate/PreviewXYGrid'
 import PromptList from './generate/PromptList'
+import NegPromptInput from './generate/NegPromptInput'
 import SampleGallery from './generate/SampleGallery'
 import SidebarLoras from './generate/SidebarLoras'
 import SidebarXYAxes from './generate/SidebarXYAxes'
@@ -533,12 +534,7 @@ export default function GeneratePage() {
               <label className="caption block mb-1">{t('generate.positive')}</label>
               <PromptList prompts={prompts} onChange={setPrompts} />
               <label className="caption block mb-1 mt-3">{t('generate.negative')}</label>
-              <textarea
-                className="input w-full font-mono text-xs resize-y"
-                rows={5}
-                value={negPrompt}
-                onChange={(e) => setNegPrompt(e.target.value)}
-              />
+              <NegPromptInput value={negPrompt} onChange={setNegPrompt} />
             </div>
 
             <div className="card" style={{ padding: 18 }}>
