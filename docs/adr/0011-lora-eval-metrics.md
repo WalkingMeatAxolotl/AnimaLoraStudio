@@ -123,11 +123,12 @@ manifest 记录：
 | 3 | Metric result schema：定义 `metrics.json`、embedding cache 目录、API 返回格式、空状态 | 不实现具体指标 | 2 |
 | 4（当前 PR2） | CLIP-T / CLIP-I：新增 `eval_clip` job，读取 sample run 与 manifest reference，写入 `metrics.json` 的 `clip_t` / `clip_i` | 不做 DINO / diversity / copy-risk / paired CMMD²，不做 UI，不做 checkpoint ranking | 3 |
 | 5（当前 PR2） | DINO-I：新增 `eval_dino` job，读取 generated/reference image pairs，写入 `metrics.json` 的 `dino_i` | 不改 CLIP 逻辑、不做 diversity / copy-risk / paired CMMD²、不做诊断 UI | 3, 4 |
-| 6 | Diversity（LPIPS 或 DreamSim） | 不判断训练图复制 | 3 |
-| 7 | SSCD copy-risk：nearest-neighbor 相似度、高风险比例、对照图 | 不做综合评分 | 3 |
-| 8 | paired CMMD² | 不做 checkpoint 自动推荐 | 3, 4, 5 |
-| 9 | Diagnosis UI：汇总指标并提示拟合不足 / 过拟合 / 复制风险 | 不新增指标模型 | 4, 5, 6, 7, 8 |
-| 10 | Checkpoint ranking：基于已有指标给可追溯推荐理由 | 不改变训练默认流程 | 9 |
+| 6（当前 PR2） | Eval metric model settings：为 CLIP / DINO 指标保存默认模型名或本地路径，API 请求省略 `model_name` 时读取这些默认值 | 不新增下载 UI、不改指标算法、不接 diversity / copy-risk / paired CMMD²、不做诊断 UI | 4, 5 |
+| 7 | Diversity（LPIPS 或 DreamSim） | 不判断训练图复制 | 3 |
+| 8 | SSCD copy-risk：nearest-neighbor 相似度、高风险比例、对照图 | 不做综合评分 | 3 |
+| 9 | paired CMMD² | 不做 checkpoint 自动推荐 | 3, 4, 5 |
+| 10 | Diagnosis UI：汇总指标并提示拟合不足 / 过拟合 / 复制风险 | 不新增指标模型 | 4, 5, 7, 8, 9 |
+| 11 | Checkpoint ranking：基于已有指标给可追溯推荐理由 | 不改变训练默认流程 | 10 |
 
 Step 2 的 sample runner 应先落地为一个可持久化、可重跑、可被后续指标读取的 eval sample run：
 
@@ -156,6 +157,14 @@ Step 5 的 DINO runner 沿用同一套 metric job contract，但只回答 subjec
 - 缓存：在 `eval/cache/embeddings/dino/` 写 generated / reference embeddings 与 metadata；
 - 降级：缺模型、缺依赖或缺 paired reference 时，把 `dino_i` 标为 `failed` 或 `unavailable`；
 - 明确不做：不改 CLIP runner、不做 diversity、不做 copy-risk、不自动推荐 checkpoint。
+
+Step 6 的 eval metric model settings 先把服务器实测过的 ModelScope / 本地路径流程产品化，但不引入新的指标依赖：
+
+- 输入：Settings 中保存的 CLIP / DINO 默认模型名或本地目录；
+- 调度：不新建 job，只影响已有 `eval_clip` / `eval_dino` API 在请求体省略 `model_name` 时的默认值解析；
+- 输出：保存到 secrets 配置，metric job params 与 `metric_states.*.model_name` 记录实际使用的模型值；
+- 兼容：手动 API 请求仍可传 `model_name` 覆盖默认值，便于单次实验；
+- 明确不做：不新增模型下载 UI、不改变 CLIP / DINO 指标算法、不做 diversity / copy-risk / paired CMMD²、不做 checkpoint ranking。
 
 每个后续 review step / commit 说明固定包含：
 

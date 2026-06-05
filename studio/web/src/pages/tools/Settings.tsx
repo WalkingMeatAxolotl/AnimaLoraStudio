@@ -58,6 +58,7 @@ type Section =
   | 'huggingface'
   | 'wandb'
   | 'modelscope'
+  | 'eval_metrics'
   | 'llm_tagger'
   | 'wd14'
   | 'cltagger'
@@ -73,6 +74,7 @@ type Tab = 'dataset' | 'tagging' | 'preprocess' | 'training' | 'monitor' | 'test
 const SECTION_TO_TAB: Record<string, Tab> = {
   'models': 'training',
   'download-source': 'training',
+  'eval-metrics': 'training',
   'version': 'system',
   'service': 'system',
 }
@@ -109,6 +111,7 @@ const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
   ],
   training: [
     { id: 'download-source', labelKey: 'settings.modelSource' },
+    { id: 'eval-metrics', labelKey: 'settings.evalMetricModels' },
     { id: 'queue', labelKey: 'settings.queueSchedule' },
     { id: 'pytorch', labelKey: 'settings.torch' },
     { id: 'flash-attn', labelKey: 'settings.flashAttn' },
@@ -227,6 +230,10 @@ const EMPTY: Secrets = {
     upload_state_auto_policy: 'last',
   },
   modelscope: { token: '' },
+  eval_metrics: {
+    clip_model_name: 'openai/clip-vit-base-patch32',
+    dino_model_name: 'facebook/dinov2-small',
+  },
   download_source: 'huggingface',
   llm_tagger: {
     current_preset: 'style_json',
@@ -1001,6 +1008,29 @@ export default function SettingsPage() {
             />
           </SettingsField>
         )}
+      </SettingsSection>
+
+      <SettingsSection id="eval-metrics" title={t('settings.evalMetricModels')}>
+        <SettingsField
+          label={t('settings.evalClipModel')}
+          helpTooltip={<p>{t('settings.evalClipModelHelp')}</p>}
+        >
+          <input
+            value={draft.eval_metrics.clip_model_name}
+            onChange={(e) => update('eval_metrics', 'clip_model_name', e.target.value)}
+            className={textInputClass}
+          />
+        </SettingsField>
+        <SettingsField
+          label={t('settings.evalDinoModel')}
+          helpTooltip={<p>{t('settings.evalDinoModelHelp')}</p>}
+        >
+          <input
+            value={draft.eval_metrics.dino_model_name}
+            onChange={(e) => update('eval_metrics', 'dino_model_name', e.target.value)}
+            className={textInputClass}
+          />
+        </SettingsField>
       </SettingsSection>
 
       <SettingsSection id="queue" title={t('settings.queueSchedule')}>

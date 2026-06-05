@@ -150,6 +150,13 @@ export interface ModelScopeConfig {
   token: string
 }
 
+export interface EvalMetricModelsConfig {
+  /** CLIP-T / CLIP-I 默认模型名或本地目录。 */
+  clip_model_name: string
+  /** DINO-I 默认模型名或本地目录。 */
+  dino_model_name: string
+}
+
 /** Preset messages 序列里的单条 item。
  *  - type='text'：普通文本，需指定 role；content 是 prompt 内容
  *  - type='image'：图片占位 item，打标时后端塞入当前图片；UI 不可编辑 content，但可拖动位置
@@ -428,6 +435,7 @@ export interface Secrets {
   huggingface: HuggingFaceConfig
   wandb: WandBConfig
   modelscope: ModelScopeConfig
+  eval_metrics: EvalMetricModelsConfig
   /** 模型下载源：'huggingface'（默认）或 'modelscope'。
    *  选 modelscope 时，有映射的模型走魔搭 CLI 下载；无映射的自动回退 HF。 */
   download_source: string

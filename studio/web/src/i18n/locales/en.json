@@ -784,6 +784,11 @@
       "showToggleHint": "Display English + Chinese on tag chips. UI-only — does not modify caption data."
     },
     "modelSource": "Model download source",
+    "evalMetricModels": "Eval metric models",
+    "evalClipModel": "CLIP model",
+    "evalClipModelHelp": "Default model name or local directory for CLIP-T / CLIP-I. Manual metric API calls can still override it.",
+    "evalDinoModel": "DINO model",
+    "evalDinoModelHelp": "Default model name or local directory for DINO-I. Use a ModelScope-downloaded local path when the server cannot reach HuggingFace.",
     "queueSchedule": "Queue scheduling",
     "torch": "PyTorch",
     "flashAttn": "Flash Attention",

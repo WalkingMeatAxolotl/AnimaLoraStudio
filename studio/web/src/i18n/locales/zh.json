@@ -784,6 +784,11 @@
       "showToggleHint": "tag chip 上显示英文 + 中文，便于扫读。仅前端显示，不改 caption 数据。"
     },
     "modelSource": "模型下载源",
+    "evalMetricModels": "评估指标模型",
+    "evalClipModel": "CLIP 模型",
+    "evalClipModelHelp": "用于 CLIP-T / CLIP-I 的默认模型名或本地目录。手动触发指标时仍可用 API 参数覆盖。",
+    "evalDinoModel": "DINO 模型",
+    "evalDinoModelHelp": "用于 DINO-I 的默认模型名或本地目录。服务器无法访问 HuggingFace 时，可填写 ModelScope 下载后的本地路径。",
     "queueSchedule": "队列调度",
     "torch": "PyTorch",
     "flashAttn": "Flash Attention",

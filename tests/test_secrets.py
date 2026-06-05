@@ -61,6 +61,22 @@ def test_cltagger_defaults_use_1_02(secrets_file: Path) -> None:
     assert s.cltagger.threshold_character == pytest.approx(0.6)
 
 
+def test_eval_metrics_defaults_and_persistence(secrets_file: Path) -> None:
+    s = secrets.load()
+    assert s.eval_metrics.clip_model_name == "openai/clip-vit-base-patch32"
+    assert s.eval_metrics.dino_model_name == "facebook/dinov2-small"
+
+    secrets.update({
+        "eval_metrics": {
+            "clip_model_name": "/models/clip",
+            "dino_model_name": "/models/dino",
+        }
+    })
+    saved = secrets.load()
+    assert saved.eval_metrics.clip_model_name == "/models/clip"
+    assert saved.eval_metrics.dino_model_name == "/models/dino"
+
+
 def test_llm_tagger_defaults(secrets_file: Path) -> None:
     s = secrets.load()
     assert s.llm_tagger.current_preset == "style_json"

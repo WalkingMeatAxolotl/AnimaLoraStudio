@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException
 
 from ...schemas.projects import EvalClipStart, EvalDinoStart
 from ._shared import _publish_job_state, _version_dir_or_404
-from .... import db
+from .... import db, secrets
 from ....services import eval_clip, eval_dino, eval_metrics, eval_samples
 
 router = APIRouter()
@@ -46,6 +46,7 @@ def start_eval_clip_metrics_endpoint(
     pid: int, vid: int, run_id: str, body: EvalClipStart
 ) -> dict[str, Any]:
     p, v, vdir = _version_dir_or_404(pid, vid)
+    cfg = secrets.load().eval_metrics
     try:
         with db.connection_for() as conn:
             job, result = eval_clip.start_job(
@@ -54,7 +55,7 @@ def start_eval_clip_metrics_endpoint(
                 v,
                 vdir,
                 run_id,
-                model_name=body.model_name,
+                model_name=body.model_name or cfg.clip_model_name,
             )
     except (
         eval_clip.EvalClipError,
@@ -71,6 +72,7 @@ def start_eval_dino_metrics_endpoint(
     pid: int, vid: int, run_id: str, body: EvalDinoStart
 ) -> dict[str, Any]:
     p, v, vdir = _version_dir_or_404(pid, vid)
+    cfg = secrets.load().eval_metrics
     try:
         with db.connection_for() as conn:
             job, result = eval_dino.start_job(
@@ -79,7 +81,7 @@ def start_eval_dino_metrics_endpoint(
                 v,
                 vdir,
                 run_id,
-                model_name=body.model_name,
+                model_name=body.model_name or cfg.dino_model_name,
             )
     except (
         eval_dino.EvalDinoError,
