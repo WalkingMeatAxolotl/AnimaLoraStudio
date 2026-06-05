@@ -26,6 +26,7 @@ VALID_KINDS: frozenset[str] = frozenset({
     "reg_build",
     "eval_samples",
     "eval_clip",
+    "eval_dino",
 })
 VALID_STATUSES: frozenset[str] = frozenset({
     "pending", "running", "done", "failed", "canceled"

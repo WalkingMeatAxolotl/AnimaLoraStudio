@@ -122,7 +122,7 @@ manifest 记录：
 | 2 | Eval sample runner：按 manifest 对 checkpoint 出图，保存单图与 `run.json` metadata | 不接 CLIP / DINO / CMMD | 0 + 1 |
 | 3 | Metric result schema：定义 `metrics.json`、embedding cache 目录、API 返回格式、空状态 | 不实现具体指标 | 2 |
 | 4（当前 PR2） | CLIP-T / CLIP-I：新增 `eval_clip` job，读取 sample run 与 manifest reference，写入 `metrics.json` 的 `clip_t` / `clip_i` | 不做 DINO / diversity / copy-risk / paired CMMD²，不做 UI，不做 checkpoint ranking | 3 |
-| 5 | DINO-I | 不改 CLIP 逻辑、不做诊断 | 3, 4 |
+| 5（当前 PR2） | DINO-I：新增 `eval_dino` job，读取 generated/reference image pairs，写入 `metrics.json` 的 `dino_i` | 不改 CLIP 逻辑、不做 diversity / copy-risk / paired CMMD²、不做诊断 UI | 3, 4 |
 | 6 | Diversity（LPIPS 或 DreamSim） | 不判断训练图复制 | 3 |
 | 7 | SSCD copy-risk：nearest-neighbor 相似度、高风险比例、对照图 | 不做综合评分 | 3 |
 | 8 | paired CMMD² | 不做 checkpoint 自动推荐 | 3, 4, 5 |
@@ -147,6 +147,15 @@ Step 4 的 CLIP runner 应先落地为一个最小可复用指标 job：
 - 缓存：在 `eval/cache/embeddings/clip/` 写 generated / text / reference embeddings 与 metadata，便于后续同 checkpoint 或同 reference 复用；
 - 降级：缺模型、缺依赖、缺 reference 或缺 prompt 时，把对应 metric 标为 `failed` 或 `unavailable`，不影响 sample run 与其他 metric；
 - 明确不做：不改 UI、不做 DINO、不做 copy-risk、不自动推荐 checkpoint。
+
+Step 5 的 DINO runner 沿用同一套 metric job contract，但只回答 subject/style fidelity：
+
+- 输入：已完成的 eval sample run、run 内冻结的 manifest snapshot、generated images 与 reference image；
+- 调度：通过 `project_jobs` 新增 `eval_dino` job kind，并按 GPU-bound job 处理；
+- 输出：写回同一个 `metrics.json`，只更新 `dino_i` 与对应 `metric_states`，不得覆盖 CLIP / diversity / SSCD / CMMD 等其他指标结果；
+- 缓存：在 `eval/cache/embeddings/dino/` 写 generated / reference embeddings 与 metadata；
+- 降级：缺模型、缺依赖或缺 paired reference 时，把 `dino_i` 标为 `failed` 或 `unavailable`；
+- 明确不做：不改 CLIP runner、不做 diversity、不做 copy-risk、不自动推荐 checkpoint。
 
 每个后续 review step / commit 说明固定包含：
 

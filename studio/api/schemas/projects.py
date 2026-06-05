@@ -44,3 +44,7 @@ class EvalSamplesStart(BaseModel):
 
 class EvalClipStart(BaseModel):
     model_name: Optional[str] = None
+
+
+class EvalDinoStart(BaseModel):
+    model_name: Optional[str] = None
