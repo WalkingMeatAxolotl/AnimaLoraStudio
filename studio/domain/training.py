@@ -427,7 +427,17 @@ class TrainingConfig(BaseModel):
     infonoise_enabled: bool = Field(
         False,
         description="【InfoNoise】启用自适应时间步采样：训练中根据信息量自动调整 t 分布，聚焦更有效的训练区间",
-        json_schema_extra=_meta("timestep_sampling", advanced=True),
+        json_schema_extra=_meta(
+            "timestep_sampling",
+            advanced=True,
+            disable_when=(
+                "noise_enhancement_type!=none"
+                "||loss_weighting!=none"
+                "||loss_type==huber"
+                "||timestep_schedule_shift!=1"
+            ),
+            disable_hint="互斥字段（noise_enhancement / loss_weighting / loss_type / schedule_shift）非默认时不可启用（schema 互斥）",
+        ),
     )
     infonoise_K: int = Field(
         64, ge=16, le=256,

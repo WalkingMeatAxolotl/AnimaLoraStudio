@@ -73,15 +73,17 @@ export default function SchemaForm({
   }
   const takeoverValueForField = (name: string, prop: typeof props[string]) => {
     if (name === 'lr_scheduler' && isProdigyOptimizer) return 'none'
-    return prop.disable_value
+    return prop.disable_value ?? prop.default
   }
 
-  // disable_when 触发时：
-  //   - 显式带 disable_value（或 lr_scheduler 特例）→ 强制改值，避免「切到 prodigy
-  //     之后 lr_scheduler 还停在 cosine 保存被 pydantic 拒」的死锁 UX
-  //   - 只 disable_when 不带 disable_value → 保留用户当前值，把冲突交给后端
-  //     model_validator 报错（InfoNoise 互斥四件套走这条：让用户看到原始冲突
-  //     值 + toast 告知是哪个组合炸，而不是 silent 抹掉用户的 detail_inv_t / huber）
+  // disable_when 触发 → 字段灰显 + 值 reset 到 disable_value（缺省回到 default）。
+  // 「先开的赢」语义：当 InfoNoise 与 loss_weighting / loss_type / schedule_shift /
+  // noise_enhancement_type 任一互斥，先把状态切到非默认的那一侧赢，另一侧灰显且
+  // reset 到 default。两侧都装 disable_when 形成对称锁。
+  //
+  // 老 config 同开（infonoise=on + 互斥字段非默认）由后端 _tolerant_validate 反向
+  // 处理：关掉 infonoise 保留用户原投入的 weighting / huber / shift / enhancement，
+  // 把 "infonoise_enabled" 写进 defaulted_fields，前端顶部 banner 提示。
   useEffect(() => {
     let nextValues = values
     let changed = false
