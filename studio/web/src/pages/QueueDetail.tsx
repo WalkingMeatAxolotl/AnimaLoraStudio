@@ -767,7 +767,7 @@ export function OutputsTab({ taskId }: { taskId: number }) {
                 <button
                   onClick={handleDelete}
                   disabled={deleting || noneSelected}
-                  className="btn btn-danger btn-sm"
+                  className="btn btn-ghost btn-sm text-err"
                 >
                   {t('queueDetail.deleteSelected', { n: selected.size })}
                 </button>

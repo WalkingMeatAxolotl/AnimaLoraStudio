@@ -23,6 +23,25 @@ interface Props {
   advancedMode?: boolean
 }
 
+/** 计算当前 advancedMode 下哪些 group 至少有一个可见字段（用于侧栏锚点导航）。
+ * 与下面的 buckets 逻辑保持一致：跳过 hidden / 跳过 advanced（简单模式下）。
+ * 不考虑 show_when —— 那是 per-field 动态，section header 仍按 bucket 渲染。 */
+export function visibleSchemaGroups(
+  schema: SchemaResponse,
+  advancedMode: boolean,
+): Array<{ key: string; label: string }> {
+  const counts = new Map<string, number>()
+  for (const [, prop] of Object.entries(schema.schema.properties)) {
+    if (prop.hidden) continue
+    if (prop.advanced && !advancedMode) continue
+    const g = prop.group ?? 'misc'
+    counts.set(g, (counts.get(g) ?? 0) + 1)
+  }
+  return schema.groups
+    .filter((g) => (counts.get(g.key) ?? 0) > 0)
+    .map((g) => ({ key: g.key, label: g.label }))
+}
+
 /**
  * 按 schema.groups 分区渲染表单；分组可折叠。
  * show_when 用 evalShowWhen 做条件显示，依赖当前 values。
@@ -119,7 +138,8 @@ export default function SchemaForm({
         return (
           <section
             key={key}
-            className="rounded-md border border-subtle bg-surface"
+            id={`schema-group-${key}`}
+            className="rounded-md border border-subtle bg-surface scroll-mt-4"
           >
             <button
               type="button"
