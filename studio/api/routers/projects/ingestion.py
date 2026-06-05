@@ -150,6 +150,10 @@ async def upload_local_files(
 
     与 booru 下载共用同一份「全量备份」目录；上传不走 job 系统，端点同步处理
     并返回 added / skipped 列表。任一文件成功即把项目 stage 推到 downloading。
+
+    复用 `gelbooru.convert_to_png` / `remove_alpha_channel` 设置：开启时上传图
+    也归一到 PNG（同 stem 加 `_1` 后缀避免 caption 撞车），与 booru 下载链路
+    保持一致。
     """
     if not files:
         raise HTTPException(400, "没有上传文件")
@@ -165,7 +169,12 @@ async def upload_local_files(
     for f in files:
         data = await f.read()
         pairs.append((f.filename or "", io.BytesIO(data)))
-    result = uploads_svc.accept_many(pairs, pdir)
+    sec = secrets.load()
+    result = uploads_svc.accept_many(
+        pairs, pdir,
+        convert_to_png=sec.gelbooru.convert_to_png,
+        remove_alpha_channel=sec.gelbooru.remove_alpha_channel,
+    )
     return _apply_project_upload_result(pid, result)
 
 
@@ -186,8 +195,13 @@ def upload_local_file_from_path(pid: int, body: UploadFromPathBody) -> dict[str,
     if not src.is_file():
         raise HTTPException(400, "请选择文件")
     pdir = projects.project_dir(p["id"], p["slug"]) / "download"
+    sec = secrets.load()
     with src.open("rb") as fh:
-        result = uploads_svc.accept_many([(src.name, fh)], pdir)
+        result = uploads_svc.accept_many(
+            [(src.name, fh)], pdir,
+            convert_to_png=sec.gelbooru.convert_to_png,
+            remove_alpha_channel=sec.gelbooru.remove_alpha_channel,
+        )
     return _apply_project_upload_result(pid, result)
 
 
