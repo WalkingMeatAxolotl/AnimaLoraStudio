@@ -351,7 +351,13 @@ class TrainingConfig(BaseModel):
     noise_enhancement_type: Literal["none", "offset", "pyramid"] = Field(
         "none",
         description="噪声增强机制（默认 none）。offset 在噪声上加 per-sample DC 偏置；pyramid 在多个尺度叠加低频噪声。两者机制不同，但都改变低频成分，互斥防双倍叠加。LoRA 训练默认保持 none",
-        json_schema_extra=_meta("noise_augmentation", advanced=True),
+        json_schema_extra=_meta(
+            "noise_augmentation",
+            advanced=True,
+            disable_when="infonoise_enabled==true",
+            disable_value="none",
+            disable_hint="InfoNoise 启用时禁用噪声增强（schema 互斥）",
+        ),
     )
     noise_offset: float = Field(
         0.0, ge=0.0, le=0.2,

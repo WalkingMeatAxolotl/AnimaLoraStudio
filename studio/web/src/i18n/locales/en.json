@@ -341,7 +341,8 @@
       "learning_rate": "Prodigy controls the learning rate",
       "lr_scheduler": "Adaptive optimizers use a constant learning rate",
       "timestep_sampling": "InfoNoise controls timestep sampling",
-      "timestep_shift": "InfoNoise controls timestep sampling"
+      "timestep_shift": "InfoNoise controls timestep sampling",
+      "noise_enhancement_type": "Disabled while InfoNoise is enabled (schema mutex)"
     },
     "descriptions": {
       "transformer_path": "Main diffusion model weights (.safetensors)",

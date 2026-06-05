@@ -341,7 +341,8 @@
       "learning_rate": "Prodigy 接管学习率",
       "lr_scheduler": "自适应优化器固定为常数学习率",
       "timestep_sampling": "InfoNoise 接管时间步采样",
-      "timestep_shift": "InfoNoise 接管时间步采样"
+      "timestep_shift": "InfoNoise 接管时间步采样",
+      "noise_enhancement_type": "InfoNoise 启用时禁用噪声增强（schema 互斥）"
     },
     "descriptions": {
       "transformer_path": "主扩散模型权重（.safetensors）",
