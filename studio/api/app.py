@@ -100,7 +100,7 @@ app.include_router(projects_crud.router)
 app.include_router(projects_eval_manifest.router)
 # ADR-0010 PR 2: version-scoped eval sample runs (4 routes)
 app.include_router(projects_eval_samples.router)
-# ADR-0010 metric result contract: metrics.json/cache empty states (2 routes)
+# ADR-0010 metric result endpoints and concrete metric runner triggers
 app.include_router(projects_eval_metrics.router)
 # PR-6.5 commit 2: train.zip / bundle.zip / export-bundle / import-bundle (path/upload) /
 # import-train（6 routes）

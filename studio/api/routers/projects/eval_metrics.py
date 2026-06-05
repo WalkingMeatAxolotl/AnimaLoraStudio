@@ -5,10 +5,10 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from ...schemas.projects import EvalClipStart
+from ...schemas.projects import EvalClipStart, EvalDinoStart
 from ._shared import _publish_job_state, _version_dir_or_404
 from .... import db
-from ....services import eval_clip, eval_metrics, eval_samples
+from ....services import eval_clip, eval_dino, eval_metrics, eval_samples
 
 router = APIRouter()
 
@@ -58,6 +58,31 @@ def start_eval_clip_metrics_endpoint(
             )
     except (
         eval_clip.EvalClipError,
+        eval_metrics.EvalMetricsError,
+        eval_samples.EvalSamplesError,
+    ) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    _publish_job_state(job)
+    return {"job": job, "result": result}
+
+
+@router.post("/api/projects/{pid}/versions/{vid}/eval/samples/{run_id}/metrics/dino")
+def start_eval_dino_metrics_endpoint(
+    pid: int, vid: int, run_id: str, body: EvalDinoStart
+) -> dict[str, Any]:
+    p, v, vdir = _version_dir_or_404(pid, vid)
+    try:
+        with db.connection_for() as conn:
+            job, result = eval_dino.start_job(
+                conn,
+                p,
+                v,
+                vdir,
+                run_id,
+                model_name=body.model_name,
+            )
+    except (
+        eval_dino.EvalDinoError,
         eval_metrics.EvalMetricsError,
         eval_samples.EvalSamplesError,
     ) as exc:
