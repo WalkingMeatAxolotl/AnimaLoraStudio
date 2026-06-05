@@ -19,7 +19,18 @@ def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(db, "STUDIO_DB", dbfile)
     monkeypatch.setattr(server.db, "STUDIO_DB", dbfile)
     monkeypatch.setattr(secrets, "SECRETS_FILE", tmp_path / "secrets.json")
-    secrets.update({"gelbooru": {"user_id": "u", "api_key": "k"}})
+    # 上传 endpoint 默认会按 gelbooru.convert_to_png 走 PIL 重编码；这里关掉，让
+    # 现有用 raw bytes 的上传测试继续验证原始拷贝分支。convert 路径用专门测试。
+    secrets.update(
+        {
+            "gelbooru": {
+                "user_id": "u",
+                "api_key": "k",
+                "convert_to_png": False,
+                "remove_alpha_channel": False,
+            }
+        }
+    )
     return {"db": dbfile}
 
 
@@ -365,6 +376,48 @@ def test_upload_skip_existing(client: TestClient) -> None:
     assert body["added"] == []
     assert body["skipped"][0]["reason"] == "已存在，跳过"
     assert (pdir / "x.png").read_bytes() == b"old"
+
+
+def test_upload_convert_to_png_renames_and_dedups(
+    client: TestClient,
+) -> None:
+    """gelbooru.convert_to_png=True：上传 1.png + 1.jpg（不同图）→ 1.png + 1_1.png。
+
+    解决 caption `1.txt` 被 jpg/png 两张不同图共用的问题；同 stem 加 `_N` 后缀
+    保住第二张而不是跳过。
+    """
+    import io as _io
+
+    from PIL import Image
+    from studio import secrets
+
+    secrets.update({"gelbooru": {"convert_to_png": True}})
+
+    def _png(color):
+        buf = _io.BytesIO()
+        Image.new("RGB", (4, 4), color).save(buf, "PNG")
+        return buf.getvalue()
+
+    def _jpg(color):
+        buf = _io.BytesIO()
+        Image.new("RGB", (4, 4), color).save(buf, "JPEG", quality=90)
+        return buf.getvalue()
+
+    p = _make_project(client)
+    r = client.post(
+        f"/api/projects/{p['id']}/upload",
+        files=[
+            ("files", ("1.png", _png((0, 0, 0)), "image/png")),
+            ("files", ("1.jpg", _jpg((255, 255, 255)), "image/jpeg")),
+        ],
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert sorted(body["added"]) == ["1.png", "1_1.png"]
+    assert body["skipped"] == []
+    pdir = projects.project_dir(p["id"], p["slug"]) / "download"
+    assert (pdir / "1.png").exists()
+    assert (pdir / "1_1.png").exists()
 
 
 def test_upload_404_for_unknown_project(client: TestClient) -> None:
