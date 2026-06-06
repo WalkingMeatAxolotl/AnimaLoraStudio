@@ -174,6 +174,7 @@ export interface LLMPreset {
   endpoint: 'chat_completions' | 'responses'
   messages: LLMMessage[]
   output_format: 'json' | 'text'
+  inject_existing_tags: boolean
   temperature: number
   max_tokens: number
   max_side: number

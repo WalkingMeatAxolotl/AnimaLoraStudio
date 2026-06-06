@@ -510,3 +510,116 @@ def test_image_data_url_respects_payload_cap(tmp_path: Path) -> None:
 
     encoded = data_url.split(",", 1)[1].encode("ascii")
     assert len(encoded) <= int(0.25 * 1024 * 1024)
+
+
+def test_inject_existing_tags_prepends_txt_hint_to_chat(
+    isolated_secrets, tmp_path: Path
+) -> None:
+    secrets.update(
+        {"llm_tagger": {"presets": [{"id": "style_json", "inject_existing_tags": True}]}}
+    )
+    sess = MagicMock()
+    sess.post.return_value = _chat_response('{"tags":["ink"]}')
+    tagger = llm_tagger.LLMTagger(session=sess)
+    img = _png(tmp_path / "1.png")
+    (tmp_path / "1.txt").write_text("cat, sitting", encoding="utf-8")
+
+    list(tagger.tag([img]))
+
+    body = sess.post.call_args.kwargs["json"]
+    image_msg = body["messages"][1]["content"]
+    # hint 文本在 image 之前
+    assert image_msg[0]["type"] == "text"
+    assert "cat, sitting" in image_msg[0]["text"]
+    assert image_msg[1]["type"] == "image_url"
+
+
+def test_inject_existing_tags_reads_json_when_no_txt(
+    isolated_secrets, tmp_path: Path
+) -> None:
+    secrets.update(
+        {"llm_tagger": {"presets": [{"id": "style_json", "inject_existing_tags": True}]}}
+    )
+    sess = MagicMock()
+    sess.post.return_value = _chat_response('{"tags":["ink"]}')
+    tagger = llm_tagger.LLMTagger(session=sess)
+    img = _png(tmp_path / "1.png")
+    (tmp_path / "1.json").write_text(
+        json.dumps({"tags": ["dog", "running"]}), encoding="utf-8"
+    )
+
+    list(tagger.tag([img]))
+
+    body = sess.post.call_args.kwargs["json"]
+    image_msg = body["messages"][1]["content"]
+    assert image_msg[0]["type"] == "text"
+    assert "dog" in image_msg[0]["text"]
+
+
+def test_inject_existing_tags_off_by_default(
+    isolated_secrets, tmp_path: Path
+) -> None:
+    sess = MagicMock()
+    sess.post.return_value = _chat_response('{"tags":["ink"]}')
+    tagger = llm_tagger.LLMTagger(session=sess)
+    img = _png(tmp_path / "1.png")
+    # 即使存在同名 .txt，默认 inject_existing_tags=False 时也不注入
+    (tmp_path / "1.txt").write_text("cat, sitting", encoding="utf-8")
+
+    list(tagger.tag([img]))
+
+    body = sess.post.call_args.kwargs["json"]
+    image_msg = body["messages"][1]["content"]
+    assert len(image_msg) == 1
+    assert image_msg[0]["type"] == "image_url"
+
+
+def test_inject_existing_tags_skips_when_no_caption_file(
+    isolated_secrets, tmp_path: Path
+) -> None:
+    secrets.update(
+        {"llm_tagger": {"presets": [{"id": "style_json", "inject_existing_tags": True}]}}
+    )
+    sess = MagicMock()
+    sess.post.return_value = _chat_response('{"tags":["ink"]}')
+    tagger = llm_tagger.LLMTagger(session=sess)
+    img = _png(tmp_path / "1.png")
+
+    list(tagger.tag([img]))
+
+    body = sess.post.call_args.kwargs["json"]
+    image_msg = body["messages"][1]["content"]
+    assert len(image_msg) == 1
+    assert image_msg[0]["type"] == "image_url"
+
+
+def test_inject_existing_tags_responses_endpoint(
+    isolated_secrets, tmp_path: Path
+) -> None:
+    secrets.update(
+        {
+            "llm_tagger": {
+                "presets": [
+                    {
+                        "id": "style_json",
+                        "endpoint": "responses",
+                        "inject_existing_tags": True,
+                    }
+                ]
+            }
+        }
+    )
+    sess = MagicMock()
+    sess.post.return_value = _responses_response('{"tags":["ink"]}')
+    tagger = llm_tagger.LLMTagger(session=sess)
+    img = _png(tmp_path / "1.png")
+    (tmp_path / "1.txt").write_text("cat, sitting", encoding="utf-8")
+
+    list(tagger.tag([img]))
+
+    body = sess.post.call_args.kwargs["json"]
+    content = body["input"][0]["content"]
+    text_parts = [c for c in content if c["type"] == "input_text"]
+    assert any("cat, sitting" in c["text"] for c in text_parts)
+    # 图片仍在 content 中
+    assert any(c["type"] == "input_image" for c in content)

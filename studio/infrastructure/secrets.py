@@ -181,6 +181,8 @@ class LLMPresetConfig(BaseModel):
     # prompt 消息序列（含图片位置）
     messages: list[LLMMessage] = Field(default_factory=lambda: _default_messages_for(""))
     output_format: str = "json"  # json | text
+    # 先验注入：读取同名 .txt/.json 作为 prior 拼入 user message
+    inject_existing_tags: bool = False
     # 生成参数
     temperature: float = 0.2
     max_tokens: int = 700

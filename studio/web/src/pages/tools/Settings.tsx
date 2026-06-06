@@ -146,6 +146,7 @@ function _makeFallbackPreset(id: string, label: string, output_format: 'json' | 
       { type: 'image', role: 'user', content: '' },
     ],
     output_format,
+    inject_existing_tags: false,
     temperature: 0.2,
     max_tokens: 700,
     max_side: 1280,
