@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 160,
+  "count": 165,
   "routes": [
     {
       "path": "/",
@@ -996,6 +996,14 @@
     {
       "path": "/api/queue/{task_id}/outputs",
       "methods": [
+        "DELETE"
+      ],
+      "name": "delete_task_output_files",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/queue/{task_id}/outputs",
+      "methods": [
         "GET"
       ],
       "name": "list_task_outputs",
@@ -1167,6 +1175,38 @@
         "GET"
       ],
       "name": "system_version",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/tag-dictionary/data",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_data",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/tag-dictionary/meta",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_meta",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/tag-dictionary/reset",
+      "methods": [
+        "POST"
+      ],
+      "name": "reset",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/tag-dictionary/upload",
+      "methods": [
+        "POST"
+      ],
+      "name": "upload",
       "type": "APIRoute"
     },
     {
