@@ -88,13 +88,13 @@ def test_write_tolerates_stale_preset_fields(env) -> None:
     p, v = _make_pv(env)
     cfg_in = _minimal_config(
         lora_rank=64,
-        optimizer_type="lion",
+        optimizer_type="made_up_optim",
         future_field_from_other_branch=True,
     )
     version_config.write_version_config(p, v, cfg_in)
     cfg_out = version_config.read_version_config(p, v)
     assert cfg_out["lora_rank"] == 64
-    assert cfg_out["optimizer_type"] != "lion"
+    assert cfg_out["optimizer_type"] != "made_up_optim"
     assert "future_field_from_other_branch" not in cfg_out
 
 
@@ -102,7 +102,7 @@ def test_read_tolerates_stale_version_config(env) -> None:
     p, v = _make_pv(env)
     raw = _minimal_config(
         lora_rank=96,
-        optimizer_type="lion",
+        optimizer_type="made_up_optim",
         future_field_from_other_branch=True,
     )
     path = version_config.version_config_path(p, v)
@@ -111,7 +111,7 @@ def test_read_tolerates_stale_version_config(env) -> None:
 
     cfg_out = version_config.read_version_config(p, v)
     assert cfg_out["lora_rank"] == 96
-    assert cfg_out["optimizer_type"] != "lion"
+    assert cfg_out["optimizer_type"] != "made_up_optim"
     assert "future_field_from_other_branch" not in cfg_out
 
 
@@ -172,7 +172,7 @@ def test_fork_preset_for_version_reports_warnings(env) -> None:
     p, v = _make_pv(env)
     raw = _minimal_config(
         lora_rank=128,
-        optimizer_type="lion",
+        optimizer_type="made_up_optim",
         future_field_from_other_branch=True,
     )
     (env["presets"] / "stale.yaml").write_text(
@@ -186,14 +186,14 @@ def test_fork_preset_for_version_reports_warnings(env) -> None:
     assert cfg["lora_rank"] == 128
     assert dropped == ["future_field_from_other_branch"]
     assert "optimizer_type" in defaulted
-    assert presets_io.read_preset("stale")["optimizer_type"] != "lion"
+    assert presets_io.read_preset("stale")["optimizer_type"] != "made_up_optim"
 
 
 def test_fork_preset_endpoint_returns_warnings(env) -> None:
     p, v = _make_pv(env)
     raw = _minimal_config(
         lora_rank=128,
-        optimizer_type="lion",
+        optimizer_type="made_up_optim",
         future_field_from_other_branch=True,
     )
     (env["presets"] / "stale.yaml").write_text(
