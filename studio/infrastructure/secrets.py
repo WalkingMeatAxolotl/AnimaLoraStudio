@@ -433,9 +433,13 @@ class GenerateConfig(BaseModel):
     - `attention_backend`：注意力后端选择。`'auto'`（默认）→ 装了什么用什么
       （优先级 flash_attn > xformers > none/SDPA）；显式值（flash_attn/
       xformers/none）则强制 —— 想 debug 或对比时手动指定。
+    - `idle_timeout_minutes`：daemon 闲置 N 分钟自动卸载模型释放 VRAM。
+      0 = 关闭，模型常驻直到用户手动清。计时只在 daemon idle + 模型已 load
+      时跑；进 busy / 已 unload 时取消。
     """
     preview_every_n_steps: int = 3
     attention_backend: str = "auto"
+    idle_timeout_minutes: int = 10
 
 
 class SystemConfig(BaseModel):
