@@ -989,6 +989,14 @@
     "previewThrottle": "节流（每 N 步推一次预览）",
     "previewThrottleDesc": "0 = 关闭；推荐 3-5",
     "taeFluxHelp": "TAEFlux 解码模型 server 启动时已后台下载，UI 不需要单独操作。",
+    "idleTimeout": {
+      "title": "显存自动清理",
+      "label": "闲置自动卸载（分钟）",
+      "desc": "默认 10 分钟",
+      "help": "测试出图模型加载后会常驻显存，方便重复调参。超过指定时长没出图就自动卸载释放显存（下次出图重新加载约 30-60 秒）。0 = 关闭，模型常驻直到手动点\"清理显存\"。推荐 10 分钟。",
+      "minutesSuffix": "分",
+      "offHint": "已关闭：模型常驻直到手动清理"
+    },
     "theme": "主题",
     "themeLight": "☀ 日间",
     "themeDark": "☾ 暗色",

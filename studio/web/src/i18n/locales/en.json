@@ -989,6 +989,14 @@
     "previewThrottle": "Throttle (preview every N steps)",
     "previewThrottleDesc": "0 = off; recommended 3-5",
     "taeFluxHelp": "The TAEFlux decode model is downloaded in the background when the server starts; no separate UI action is needed.",
+    "idleTimeout": {
+      "title": "Auto-unload VRAM",
+      "label": "Unload after idle (minutes)",
+      "desc": "Default: 10 minutes",
+      "help": "The generate daemon keeps the model in VRAM after the first run so you can quickly retry with different params. If no new generation arrives within this window, the model is auto-unloaded to free VRAM (next run reloads, ~30-60s). 0 = off, keep the model resident until you manually click \"Free VRAM\". Recommended: 10 minutes.",
+      "minutesSuffix": "min",
+      "offHint": "Off: model stays resident until manually freed"
+    },
     "theme": "Theme",
     "themeLight": "☀ Light",
     "themeDark": "☾ Dark",
