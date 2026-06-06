@@ -1,10 +1,20 @@
 """SPA 静态文件 mount（PR-5 从 server.py 抽出）。"""
 from __future__ import annotations
 
+import mimetypes
 from pathlib import Path
 
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+
+# Windows 注册表常把 .js 标成 text/plain（IIS / 杀软 / 旧装机污染），
+# 导致 ES module strict MIME check 拒载 → 启动白屏。issue #228
+# import time 主动覆盖，确保跨平台一致。
+mimetypes.add_type("application/javascript", ".js")
+mimetypes.add_type("application/javascript", ".mjs")
+mimetypes.add_type("text/css", ".css")
+mimetypes.add_type("application/json", ".json")
+mimetypes.add_type("image/svg+xml", ".svg")
 
 
 class SPAStaticFiles(StaticFiles):
