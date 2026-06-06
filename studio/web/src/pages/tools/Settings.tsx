@@ -242,6 +242,8 @@ const EMPTY: Secrets = {
   eval_metrics: {
     clip_model_name: 'openai/clip-vit-base-patch32',
     dino_model_name: 'facebook/dinov2-small',
+    auto_eval_on_checkpoint: false,
+    auto_eval_max_items: 1,
   },
   download_source: 'huggingface',
   download_sources: {},
@@ -919,6 +921,28 @@ export default function SettingsPage() {
 
       {tab === 'training' && (<>
       <SettingsSection id="eval-metrics" title={t('settings.evalMetricModels')}>
+        <SettingsField
+          label={t('settings.autoEvalOnCheckpoint')}
+          helpTooltip={<p>{t('settings.autoEvalOnCheckpointHelp')}</p>}
+        >
+          <Bool
+            value={draft.eval_metrics.auto_eval_on_checkpoint}
+            onChange={(v) => update('eval_metrics', 'auto_eval_on_checkpoint', v)}
+          />
+        </SettingsField>
+        <SettingsField
+          label={t('settings.autoEvalMaxItems')}
+          helpTooltip={<p>{t('settings.autoEvalMaxItemsHelp')}</p>}
+        >
+          <input
+            type="number"
+            min={1}
+            max={256}
+            value={draft.eval_metrics.auto_eval_max_items}
+            onChange={(e) => update('eval_metrics', 'auto_eval_max_items', Math.max(1, Math.min(256, parseInt(e.target.value) || 1)))}
+            className={textInputClass}
+          />
+        </SettingsField>
         <SettingsField
           label={t('settings.evalClipModel')}
           helpTooltip={<p>{t('settings.evalClipModelHelp')}</p>}
