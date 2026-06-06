@@ -9,7 +9,7 @@ import logging
 from typing import Any
 
 from studio import db
-from studio.services import eval_samples
+from studio.services import eval_auto, eval_samples
 from studio.services.projects import jobs as project_jobs, projects, versions
 
 logger = logging.getLogger(__name__)
@@ -62,6 +62,17 @@ def run(job_id: int) -> int:
             f"[done] status={result['status']} "
             f"done={result['summary']['done']}/{result['summary']['total']}"
         )
+        if result["status"] == "done" and bool(params.get("auto_metrics")):
+            with db.connection_for() as conn:
+                jobs = eval_auto.queue_metric_jobs_for_sample(
+                    conn,
+                    project,
+                    version,
+                    vdir,
+                    run_id,
+                )
+            ids = ", ".join(str(j.get("id")) for j in jobs)
+            progress(f"[auto] queued metric jobs: {ids}")
         return 0 if result["status"] == "done" else 1
     except Exception as exc:  # noqa: BLE001
         logger.exception("eval samples worker crashed (job_id=%s)", job_id)

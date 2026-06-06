@@ -120,6 +120,13 @@ class EvalMetricModelsConfig(BaseModel):
     """
     clip_model_name: str = "openai/clip-vit-base-patch32"
     dino_model_name: str = "facebook/dinov2-small"
+    auto_eval_on_checkpoint: bool = False
+    auto_eval_max_items: int = 1
+
+    @model_validator(mode="after")
+    def _normalize_eval_metrics(self):
+        self.auto_eval_max_items = max(1, min(256, int(self.auto_eval_max_items or 1)))
+        return self
 
 
 class DownloadConfig(BaseModel):

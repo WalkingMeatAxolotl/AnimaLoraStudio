@@ -346,6 +346,8 @@ def start_job(
     *,
     checkpoint_path: str | None = None,
     max_items: int | None = None,
+    auto_metrics: bool = False,
+    auto_source: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     run = create_run(
         project,
@@ -354,16 +356,21 @@ def start_job(
         checkpoint_path=checkpoint_path,
         max_items=max_items,
     )
+    params: dict[str, Any] = {
+        "version_id": int(version["id"]),
+        "run_id": run["run_id"],
+        "checkpoint_path": run["checkpoint"]["path"],
+    }
+    if auto_metrics:
+        params["auto_metrics"] = True
+    if auto_source:
+        params["auto_source"] = dict(auto_source)
     job = project_jobs.create_job(
         conn,
         project_id=int(project["id"]),
         version_id=int(version["id"]),
         kind=JOB_KIND,
-        params={
-            "version_id": int(version["id"]),
-            "run_id": run["run_id"],
-            "checkpoint_path": run["checkpoint"]["path"],
-        },
+        params=params,
     )
     return job, run
 

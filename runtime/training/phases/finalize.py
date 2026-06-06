@@ -9,6 +9,7 @@ import logging
 
 from training.context import TrainingContext
 from training.observability import render_loss_curve
+from training.snapshot import emit_event
 from utils.optimizer_utils import optimizer_eval_mode
 
 
@@ -29,6 +30,12 @@ def run(ctx: TrainingContext) -> None:
     # PPSF：最终输出走 averaged weights
     with optimizer_eval_mode(ctx.optimizer):
         ctx.injector.save(final_path)
+    emit_event("eval_checkpoint_saved", {
+        "checkpoint_path": str(final_path),
+        "epoch": int(ctx.current_epoch or 0),
+        "step": int(ctx.global_step or 0),
+        "trigger": "final",
+    })
 
     # 清理进度显示
     if ctx.live:

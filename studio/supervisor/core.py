@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from .. import db, secrets as _secrets
+from ..services import eval_auto
 from ..services.projects import jobs as project_jobs
 from ..infrastructure.log_tail import LogTailer, MonitorStatePoller
 from ..paths import (
@@ -679,6 +680,8 @@ class Supervisor:
                     # 旧 pause 文件对已被消费完，删盘 + 清 db 字段，避免下次
                     # pause 时跟旧文件命名撞 / 让 ResumeFieldPicker 显示 stale 项。
                     self._clear_pause_artifacts(tid)
+                elif evt_type == "eval_checkpoint_saved":
+                    self._queue_auto_eval_for_checkpoint(tid, payload)
                 self._on_event({
                     "type": evt_type,
                     "task_id": tid,
@@ -692,6 +695,31 @@ class Supervisor:
                 "seq": next(self._log_seq),
             })
         return _on_task_log
+
+    def _queue_auto_eval_for_checkpoint(
+        self, tid: int, payload: dict[str, Any]
+    ) -> None:
+        try:
+            with db.connection_for(self._db_path) as conn:
+                task = db.get_task(conn, tid)
+                if not task:
+                    return
+                queued = eval_auto.queue_checkpoint_eval(conn, task, payload)
+        except Exception:
+            logger.exception("auto eval enqueue failed for task=%s", tid)
+            return
+        if not queued:
+            return
+        job, run = queued
+        self._on_event({
+            "type": "eval_auto_sample_queued",
+            "task_id": tid,
+            "job_id": job.get("id"),
+            "project_id": job.get("project_id"),
+            "version_id": job.get("version_id"),
+            "run_id": run.get("run_id"),
+            "checkpoint": run.get("checkpoint"),
+        })
 
     def _make_monitor_callback(
         self, tid: int

@@ -39,6 +39,15 @@ from utils.optimizer_utils import get_optimizer_monitor_metrics, optimizer_eval_
 logger = logging.getLogger(__name__)
 
 
+def _emit_eval_checkpoint_saved(path, *, epoch: int, step: int, trigger: str) -> None:
+    emit_event("eval_checkpoint_saved", {
+        "checkpoint_path": str(path),
+        "epoch": int(epoch),
+        "step": int(step),
+        "trigger": trigger,
+    })
+
+
 def run(ctx: TrainingContext) -> None:
     """跑训练直到 args.epochs 或 args.max_steps 上限。"""
     args = ctx.args
@@ -294,6 +303,12 @@ def run(ctx: TrainingContext) -> None:
                         ctx.injector.save(lora_path)
                     ctx.emit(f"Saved LoRA: {lora_path}")
                     ctx.wandb_monitor.upload_model(lora_path)
+                    _emit_eval_checkpoint_saved(
+                        lora_path,
+                        epoch=epoch + 1,
+                        step=ctx.global_step,
+                        trigger="step",
+                    )
 
                 # 定期保存训练状态（断点续训）
                 save_state_every_steps = getattr(args, "save_state_every_steps", 0)
@@ -343,6 +358,12 @@ def run(ctx: TrainingContext) -> None:
                     ctx.injector.save(save_path)
                 ctx.emit(f"Saved LoRA: {save_path}")
                 ctx.wandb_monitor.upload_model(save_path)
+                _emit_eval_checkpoint_saved(
+                    save_path,
+                    epoch=ctx.current_epoch,
+                    step=ctx.global_step,
+                    trigger="epoch",
+                )
 
             # 采样（轮换提示词）
             if args.sample_every > 0 and ctx.current_epoch % args.sample_every == 0:
