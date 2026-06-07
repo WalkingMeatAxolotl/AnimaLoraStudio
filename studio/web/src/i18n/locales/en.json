@@ -2195,6 +2195,8 @@
     "subtitle": "Here are the basics you'll want set up. Tick what you need and install them in one go. Already-installed items are auto-checked.",
     "downloadSource": "Download source",
     "downloadSourceHint": "Pre-selected based on your language; feel free to change. This source is used for all model downloads.",
+    "downloadSourceInstallHint": "Switching applies to downloads not yet started — current in-flight downloads keep running. To switch right now, close this guide and restart Studio.",
+    "skipWhileInstalling": "Guide closed — downloads keep running in the background. To stop them, restart Studio.",
     "skip": "Skip",
     "installSelected": "Install selected ({{count}})",
     "checkingState": "Checking installed state…",

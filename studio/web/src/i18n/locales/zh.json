@@ -2195,6 +2195,8 @@
     "subtitle": "下面是建议安装的基础能力,勾选后一键安装。已装好的会自动打勾。",
     "downloadSource": "下载源",
     "downloadSourceHint": "已为你按语言推荐,可以改。下载源同时影响后续所有模型下载。",
+    "downloadSourceInstallHint": "切换后对未启动的下载生效;当前进行中的任务不会被中断。如要立即换源,可关闭引导并重启 Studio。",
+    "skipWhileInstalling": "已关闭引导,后台仍在继续下载。要彻底停止请重启 Studio。",
     "skip": "跳过引导",
     "installSelected": "一键安装选中 ({{count}})",
     "checkingState": "检查安装状态…",

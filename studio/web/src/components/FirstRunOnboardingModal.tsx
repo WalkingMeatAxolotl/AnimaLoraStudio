@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, type ModelsCatalog } from '../api/client'
 import { useSettingsData } from '../lib/SettingsData'
+import { useToast } from './Toast'
 
 const ONBOARDING_DONE_KEY = 'studio.onboarding.done'
 const LANG_KEY = 'studio.lang'
@@ -130,6 +131,7 @@ function deriveUpscalerStatus(
 export function FirstRunOnboardingModal() {
   const { t, i18n } = useTranslation()
   const { secrets, setSecrets, catalog, reloadCatalog } = useSettingsData()
+  const { toast } = useToast()
 
   const [open, setOpen] = useState<boolean>(false)
   // 选中要装的条目；初次 mount 时按"推荐勾选"填充。
@@ -221,6 +223,27 @@ export function FirstRunOnboardingModal() {
     return (['base', 'tagger', 'accel', 'upscaler'] as ItemKey[])
       .some((k) => itemStatus[k].status === 'checking')
   }, [itemStatus])
+
+  // 派生每个条目对应 catalog.downloads 里 running 任务的 log_tail,实时显示
+  // 下载速度 / tqdm 进度;accel(pip install) 不进 catalog.downloads,空。
+  const liveLogs = useMemo<Record<ItemKey, string[]>>(() => {
+    const empty = { base: [], tagger: [], accel: [], upscaler: [] }
+    if (!catalog) return empty
+    const collect = (filter: (k: string) => boolean): string[] => {
+      const tails = Object.entries(catalog.downloads)
+        .filter(([k]) => filter(k))
+        .filter(([, v]) => v.status === 'running' || v.status === 'pending')
+        .map(([, v]) => v.log_tail)
+      return tails.flat()
+    }
+    return {
+      base: collect((k) => k.startsWith('anima_main') || k.startsWith('anima_vae')
+                       || k.startsWith('qwen3') || k.startsWith('t5_tokenizer')),
+      tagger: collect((k) => k.startsWith('wd14')),
+      accel: [],
+      upscaler: collect((k) => k.startsWith('upscalers')),
+    }
+  }, [catalog])
 
   const toggleSelected = useCallback((key: ItemKey) => {
     if (installingNow) return
@@ -442,9 +465,11 @@ export function FirstRunOnboardingModal() {
   }, [])
 
   const handleSkip = useCallback(() => {
-    if (installingNow) return
+    // 装中也允许关 modal —— 后端 daemon thread 不受影响,继续下载。
+    // 给个 toast 提示让用户知道不是"按了就停",真要停得重启 Studio。
+    if (installingNow) toast(t('onboarding.skipWhileInstalling'), 'info')
     handleClose()
-  }, [installingNow, handleClose])
+  }, [installingNow, handleClose, toast, t])
 
   if (!open) return null
 
@@ -476,7 +501,8 @@ export function FirstRunOnboardingModal() {
           <DownloadSourceRow
             value={downloadSource}
             onChange={saveDownloadSource}
-            disabled={installingNow || savingSource}
+            disabled={savingSource}
+            installHint={installingNow ? t('onboarding.downloadSourceInstallHint') : null}
           />
 
           <div className="border-t border-dim" />
@@ -489,6 +515,7 @@ export function FirstRunOnboardingModal() {
             onToggle={() => toggleSelected('base')}
             status={itemStatus.base}
             failureLog={failureLogs.base}
+            liveLog={liveLogs.base}
             onRetry={() => retryItem('base')}
             disabled={installingNow}
           />
@@ -501,6 +528,7 @@ export function FirstRunOnboardingModal() {
             onToggle={() => toggleSelected('tagger')}
             status={itemStatus.tagger}
             failureLog={failureLogs.tagger}
+            liveLog={liveLogs.tagger}
             onRetry={() => retryItem('tagger')}
             disabled={installingNow}
           />
@@ -513,6 +541,7 @@ export function FirstRunOnboardingModal() {
             onToggle={() => toggleSelected('accel')}
             status={itemStatus.accel}
             failureLog={failureLogs.accel}
+            liveLog={liveLogs.accel}
             onRetry={() => retryItem('accel')}
             disabled={installingNow}
           />
@@ -525,6 +554,7 @@ export function FirstRunOnboardingModal() {
             onToggle={() => toggleSelected('upscaler')}
             status={itemStatus.upscaler}
             failureLog={failureLogs.upscaler}
+            liveLog={liveLogs.upscaler}
             onRetry={() => retryItem('upscaler')}
             disabled={installingNow}
           />
@@ -534,7 +564,7 @@ export function FirstRunOnboardingModal() {
           <button
             type="button"
             onClick={handleSkip}
-            disabled={installingNow}
+            disabled={false}
             className="px-3 py-1.5 text-sm text-fg-tertiary hover:text-fg-primary disabled:opacity-50 disabled:cursor-not-allowed bg-transparent border-none cursor-pointer"
             data-testid="onboarding-skip"
           >
@@ -599,6 +629,7 @@ function DownloadSourceRow(props: {
   value: 'huggingface' | 'modelscope'
   onChange: (v: 'huggingface' | 'modelscope') => void
   disabled: boolean
+  installHint: string | null
 }) {
   const { t } = useTranslation()
   return (
@@ -622,7 +653,9 @@ function DownloadSourceRow(props: {
           </button>
         ))}
       </div>
-      <div className="text-xs text-fg-tertiary">{t('onboarding.downloadSourceHint')}</div>
+      <div className="text-xs text-fg-tertiary">
+        {props.installHint ?? t('onboarding.downloadSourceHint')}
+      </div>
     </div>
   )
 }
@@ -658,12 +691,22 @@ function ChecklistItem(props: {
   onToggle: () => void
   status: ItemDerived
   failureLog: string[]
+  liveLog: string[]
   onRetry: () => void
   disabled: boolean
 }) {
   const { t } = useTranslation()
   const [logOpen, setLogOpen] = useState(false)
   const isDone = props.status.status === 'done'
+  const isInstalling = props.status.status === 'installing'
+  const isFailed = props.status.status === 'failed'
+  // installing 时默认展开 log,让用户能看到下载速度(tqdm 输出);failed 默认折叠
+  // (避免错误信息一下糊到屏幕)。这里用 useEffect 跟着状态切默认值。
+  useEffect(() => {
+    if (isInstalling) setLogOpen(true)
+    if (isDone) setLogOpen(false)
+  }, [isInstalling, isDone])
+  const shownLog = isFailed ? props.failureLog : props.liveLog
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-start gap-3">
@@ -680,9 +723,18 @@ function ChecklistItem(props: {
           <div className="flex items-center gap-2 flex-wrap">
             <div className="text-sm font-medium text-fg-primary">{props.label}</div>
             <StatusBadge status={props.status.status} progress={props.status.progress} />
+            {(isInstalling || isFailed) && shownLog.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setLogOpen((v) => !v)}
+                className="ml-auto px-2 py-0.5 text-xs text-fg-tertiary hover:text-fg-primary bg-transparent border-none cursor-pointer"
+              >
+                {logOpen ? t('onboarding.hideLog') : t('onboarding.showLog')}
+              </button>
+            )}
           </div>
           <div className="text-xs text-fg-tertiary mt-0.5">{props.description}</div>
-          {props.status.status === 'failed' && (
+          {isFailed && (
             <div className="mt-2 flex items-center gap-2">
               <button
                 type="button"
@@ -692,18 +744,11 @@ function ChecklistItem(props: {
               >
                 {t('onboarding.retry')}
               </button>
-              <button
-                type="button"
-                onClick={() => setLogOpen((v) => !v)}
-                className="px-2 py-1 text-xs text-fg-tertiary hover:text-fg-primary bg-transparent border-none cursor-pointer"
-              >
-                {logOpen ? t('onboarding.hideLog') : t('onboarding.showLog')}
-              </button>
             </div>
           )}
-          {logOpen && props.failureLog.length > 0 && (
-            <pre className="mt-2 p-2 text-xs bg-surface border border-dim rounded overflow-x-auto whitespace-pre-wrap max-h-32">
-              {props.failureLog.join('\n')}
+          {logOpen && shownLog.length > 0 && (
+            <pre className="mt-2 p-2 text-xs bg-surface border border-dim rounded overflow-x-auto whitespace-pre-wrap max-h-40 font-mono leading-snug">
+              {shownLog.join('\n')}
             </pre>
           )}
         </div>
