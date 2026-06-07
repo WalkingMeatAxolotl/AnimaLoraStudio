@@ -2197,6 +2197,7 @@
     "downloadSourceHint": "已为你按语言推荐,可以改。下载源同时影响后续所有模型下载。",
     "skip": "跳过引导",
     "installSelected": "一键安装选中 ({{count}})",
+    "checkingState": "检查安装状态…",
     "finish": "完成",
     "retry": "重试",
     "showLog": "查看日志",
@@ -2212,6 +2213,7 @@
       "upscaler": "正在安装: 图像增强"
     },
     "status": {
+      "checking": "检查中…",
       "idle": "未安装",
       "queued": "排队中",
       "installing": "安装中",

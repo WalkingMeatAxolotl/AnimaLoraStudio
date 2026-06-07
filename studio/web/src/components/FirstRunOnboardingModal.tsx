@@ -44,7 +44,7 @@ export function defaultDownloadSource(lang: string | null | undefined): 'hugging
 // ---- item states ---------------------------------------------------------
 
 type ItemKey = 'base' | 'tagger' | 'accel' | 'upscaler'
-type ItemStatus = 'idle' | 'queued' | 'installing' | 'done' | 'failed'
+type ItemStatus = 'checking' | 'idle' | 'queued' | 'installing' | 'done' | 'failed'
 
 interface ItemDerived {
   status: ItemStatus
@@ -54,7 +54,7 @@ interface ItemDerived {
 
 // 从 catalog 派生底模套件状态（4 个子文件全 exists 算 done）。
 function deriveBaseStatus(c: ModelsCatalog | null, dl: Record<ItemKey, ItemStatus>): ItemDerived {
-  if (!c) return { status: dl.base }
+  if (!c) return { status: 'checking' }
   const animaLatest = c.anima_main.variants.find((v) => v.is_latest)
   const checks: boolean[] = [
     !!animaLatest?.exists,
@@ -77,9 +77,10 @@ function deriveBaseStatus(c: ModelsCatalog | null, dl: Record<ItemKey, ItemStatu
 function deriveTaggerStatus(
   c: ModelsCatalog | null,
   hasOnnx: boolean,
+  runtimeChecked: boolean,
   dl: Record<ItemKey, ItemStatus>,
 ): ItemDerived {
-  if (!c) return { status: dl.tagger }
+  if (!c || !runtimeChecked) return { status: 'checking' }
   const current = c.wd14.variants.find((v) => v.is_current) ?? c.wd14.variants[0]
   const wd14Ok = !!current?.exists
   const checks = [wd14Ok, hasOnnx]
@@ -98,8 +99,10 @@ function deriveTaggerStatus(
 function deriveAccelStatus(
   hasFlash: boolean,
   hasXformers: boolean,
+  runtimeChecked: boolean,
   dl: Record<ItemKey, ItemStatus>,
 ): ItemDerived {
+  if (!runtimeChecked) return { status: 'checking' }
   if (hasFlash || hasXformers) return { status: 'done' }
   if (dl.accel === 'failed') return { status: 'failed' }
   if (dl.accel === 'installing' || dl.accel === 'queued') return { status: dl.accel }
@@ -111,7 +114,8 @@ function deriveUpscalerStatus(
   c: ModelsCatalog | null,
   dl: Record<ItemKey, ItemStatus>,
 ): ItemDerived {
-  if (!c?.upscalers) return { status: dl.upscaler }
+  if (!c) return { status: 'checking' }
+  if (!c.upscalers) return { status: dl.upscaler }
   const current =
     c.upscalers.variants.find((v) => v.is_current)
     ?? c.upscalers.variants.find((v) => v.label === c.upscalers!.default)
@@ -142,6 +146,9 @@ export function FirstRunOnboardingModal() {
     flashAttn: boolean
     xformers: boolean
   }>({ onnx: false, flashAttn: false, xformers: false })
+  // runtime status 是否拉过(区分"还没拉"和"拉完都没装");catalog 有自己的 null
+  // 表示未拉,runtime 是个对象所以需要单独 flag。
+  const [runtimeChecked, setRuntimeChecked] = useState<boolean>(false)
   const [restartRequired, setRestartRequired] = useState<boolean>(false)
   const [restarting, setRestarting] = useState<boolean>(false)
   const [currentItem, setCurrentItem] = useState<ItemKey | null>(null)
@@ -178,6 +185,7 @@ export function FirstRunOnboardingModal() {
         flashAttn: !!fa?.installed,
         xformers: !!xf?.installed,
       })
+      setRuntimeChecked(true)
     })
     return () => { cancelled = true }
   }, [open])
@@ -185,10 +193,10 @@ export function FirstRunOnboardingModal() {
   // 派生每个条目状态。
   const itemStatus = useMemo<Record<ItemKey, ItemDerived>>(() => ({
     base: deriveBaseStatus(catalog, installState),
-    tagger: deriveTaggerStatus(catalog, runtimeStatus.onnx, installState),
-    accel: deriveAccelStatus(runtimeStatus.flashAttn, runtimeStatus.xformers, installState),
+    tagger: deriveTaggerStatus(catalog, runtimeStatus.onnx, runtimeChecked, installState),
+    accel: deriveAccelStatus(runtimeStatus.flashAttn, runtimeStatus.xformers, runtimeChecked, installState),
     upscaler: deriveUpscalerStatus(catalog, installState),
-  }), [catalog, installState, runtimeStatus])
+  }), [catalog, installState, runtimeStatus, runtimeChecked])
 
   // 全部装完判定：选中的条目全 done。
   const allSelectedDone = useMemo(() => {
@@ -203,6 +211,12 @@ export function FirstRunOnboardingModal() {
     return (['base', 'tagger', 'accel', 'upscaler'] as ItemKey[])
       .some((k) => installState[k] === 'installing' || installState[k] === 'queued')
   }, [installState])
+
+  // catalog 或 runtime status 还在拉,任一条目处于 checking 态。
+  const isChecking = useMemo(() => {
+    return (['base', 'tagger', 'accel', 'upscaler'] as ItemKey[])
+      .some((k) => itemStatus[k].status === 'checking')
+  }, [itemStatus])
 
   const toggleSelected = useCallback((key: ItemKey) => {
     if (installingNow) return
@@ -479,6 +493,15 @@ export function FirstRunOnboardingModal() {
                 {restarting ? t('onboarding.restarting') : t('onboarding.restart')}
               </button>
             </div>
+          ) : isChecking ? (
+            <button
+              type="button"
+              disabled
+              className="px-4 py-2 text-sm font-medium bg-accent text-white rounded opacity-50 cursor-not-allowed"
+              data-testid="onboarding-checking"
+            >
+              {t('onboarding.checkingState')}
+            </button>
           ) : allSelectedDone ? (
             <button
               type="button"
@@ -553,6 +576,8 @@ function StatusBadge({ status, progress }: { status: ItemStatus; progress?: { do
       return <span className={`${baseClass} bg-surface text-fg-tertiary`}>⏱ {t('onboarding.status.queued')}</span>
     case 'failed':
       return <span className={`${baseClass} bg-err-soft text-err`}>✕ {t('onboarding.status.failed')}</span>
+    case 'checking':
+      return <span className={`${baseClass} bg-surface text-fg-tertiary`}>⋯ {t('onboarding.status.checking')}</span>
     default: {
       const suffix = progress && progress.done > 0 ? ` (${progress.done}/${progress.total})` : ''
       return <span className={`${baseClass} bg-surface text-fg-tertiary`}>○ {t('onboarding.status.idle')}{suffix}</span>
