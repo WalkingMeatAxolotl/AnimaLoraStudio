@@ -64,14 +64,27 @@ def test_decide_target_explicit() -> None:
     assert ors._decide_target("gpu").startswith("onnxruntime-gpu")
     assert ors._decide_target("cpu").startswith("onnxruntime")
     assert "gpu" not in ors._decide_target("cpu")
+    assert ors._decide_target("directml").startswith("onnxruntime-directml")
 
 
-def test_decide_target_auto_with_gpu(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_decide_target_auto_with_gpu_linux(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux + 有 GPU → onnxruntime-gpu（native CUDA EP）。"""
+    monkeypatch.setattr(ors.sys, "platform", "linux")
     monkeypatch.setattr(
         ors, "detect_cuda",
         lambda: {"available": True, "driver_version": "551.86", "gpu_name": "RTX 5090"},
     )
     assert ors._decide_target("auto").startswith("onnxruntime-gpu")
+
+
+def test_decide_target_auto_with_gpu_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows + 有 GPU → onnxruntime-directml（绕开 CUDA dlopen 兼容性问题）。"""
+    monkeypatch.setattr(ors.sys, "platform", "win32")
+    monkeypatch.setattr(
+        ors, "detect_cuda",
+        lambda: {"available": True, "driver_version": "551.86", "gpu_name": "RTX 5090"},
+    )
+    assert ors._decide_target("auto").startswith("onnxruntime-directml")
 
 
 def test_decide_target_auto_without_gpu(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -81,7 +94,9 @@ def test_decide_target_auto_without_gpu(monkeypatch: pytest.MonkeyPatch) -> None
     )
     res = ors._decide_target("auto")
     assert res.startswith("onnxruntime")
+    # 既不是 onnxruntime-gpu 也不是 onnxruntime-directml
     assert "gpu" not in res
+    assert "directml" not in res
 
 
 def test_decide_target_invalid() -> None:
@@ -111,14 +126,49 @@ def test_install_runtime_runs_uninstall_then_install(
     res = ors.install_runtime("gpu")
     assert len(calls) == 2
     assert calls[0][0] == "uninstall"
+    # uninstall 必须覆盖全部三个互斥包，避免老包残留
     assert "onnxruntime-gpu" in calls[0]
     assert "onnxruntime" in calls[0]
+    assert "onnxruntime-directml" in calls[0]
     assert calls[1][0] == "install"
     assert any("onnxruntime-gpu" in a for a in calls[1])
     assert res["installed_pkg"] == "onnxruntime-gpu"
     assert res["installed_version"] == "1.20.0"
     # 装完必须返回 restart_required 提示前端
     assert res["restart_required"] is True
+
+
+def test_install_runtime_directml_skips_cuda_wheels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DirectML 路径不应触发 _install_cuda_runtime_wheels（DX12 不需要 CUDA runtime）。"""
+    calls: list[list[str]] = []
+
+    def fake_pip(args, mirror=None):
+        calls.append(args)
+        return 0, "ok"
+
+    monkeypatch.setattr(ors, "_pip", fake_pip)
+    monkeypatch.setattr(
+        ors, "_query_dist_info",
+        lambda: ("onnxruntime-directml", "1.20.0"),
+    )
+    wheel_called = []
+    monkeypatch.setattr(
+        ors, "_install_cuda_runtime_wheels",
+        lambda: wheel_called.append(True) or {"installed": [], "skipped": [], "platform_skip": True, "stdout": ""},
+    )
+    res = ors.install_runtime("directml")
+    assert wheel_called == []  # 完全不应该被调
+    assert res["cuda_runtime"] is None
+    assert res["installed_pkg"] == "onnxruntime-directml"
+    assert res["restart_required"] is True
+    # uninstall 仍要覆盖全部三个
+    assert "onnxruntime-directml" in calls[0]
+    assert "onnxruntime-gpu" in calls[0]
+    assert "onnxruntime" in calls[0]
+    # install 命令装的是 directml
+    assert any("onnxruntime-directml" in a for a in calls[1])
 
 
 def test_install_runtime_install_failure_raises(
@@ -136,96 +186,8 @@ def test_install_runtime_install_failure_raises(
 
 
 # ---------------------------------------------------------------------------
-# bootstrap
+# current_runtime — restart_required 判定
 # ---------------------------------------------------------------------------
-
-
-def test_bootstrap_installs_when_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        ors, "detect_cuda",
-        lambda: {"available": True, "driver_version": "551.86", "gpu_name": "RTX 5090"},
-    )
-    # current_runtime 第一次返回未安装；install 完后第二次返回新状态
-    rt_calls = iter([
-        {"installed": None, "version": None, "providers": [], "cuda_available": False, "restart_required": False},
-        {
-            "installed": "onnxruntime-gpu",
-            "version": "1.20.0",
-            "providers": ["CUDAExecutionProvider", "CPUExecutionProvider"],
-            "cuda_available": True,
-            "restart_required": False,
-        },
-    ])
-    monkeypatch.setattr(ors, "current_runtime", lambda: next(rt_calls))
-    captured: dict = {}
-
-    def fake_install(target):
-        captured["target"] = target
-        return {
-            "target": "onnxruntime-gpu>=1.20",
-            "installed_pkg": "onnxruntime-gpu",
-            "installed_version": "1.20.0",
-            "restart_required": True,
-            "stdout": "",
-        }
-
-    monkeypatch.setattr(ors, "install_runtime", fake_install)
-    state = ors.bootstrap()
-    assert captured["target"] == "gpu"
-    assert state["installed"] == "onnxruntime-gpu"
-    assert state["cuda_available"] is True
-
-
-def test_bootstrap_warns_on_cpu_pkg_with_gpu_present(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """有 GPU 但只装了 CPU 包 → 不自动重装，仅 warn。"""
-    monkeypatch.setattr(
-        ors, "detect_cuda",
-        lambda: {"available": True, "driver_version": "551.86", "gpu_name": "RTX 5090"},
-    )
-    monkeypatch.setattr(
-        ors, "current_runtime",
-        lambda: {
-            "installed": "onnxruntime",
-            "version": "1.18.0",
-            "providers": ["CPUExecutionProvider"],
-            "cuda_available": False,
-        },
-    )
-    install_called = []
-    monkeypatch.setattr(
-        ors, "install_runtime",
-        lambda *a: install_called.append(a) or {},
-    )
-    with caplog.at_level("WARNING"):
-        state = ors.bootstrap()
-    assert install_called == []
-    assert state["installed"] == "onnxruntime"
-    assert any("CPU EP" in r.message for r in caplog.records)
-
-
-def test_bootstrap_silent_when_already_correct(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        ors, "detect_cuda",
-        lambda: {"available": True, "driver_version": "551.86", "gpu_name": "RTX 5090"},
-    )
-    monkeypatch.setattr(
-        ors, "current_runtime",
-        lambda: {
-            "installed": "onnxruntime-gpu",
-            "version": "1.20.0",
-            "providers": ["CUDAExecutionProvider", "CPUExecutionProvider"],
-            "cuda_available": True,
-        },
-    )
-    install_called = []
-    monkeypatch.setattr(ors, "install_runtime", lambda *a: install_called.append(a) or {})
-    state = ors.bootstrap()
-    assert install_called == []
-    assert state["cuda_available"] is True
 
 
 def test_current_runtime_flags_restart_when_dist_version_mismatches_process(
@@ -266,27 +228,6 @@ def test_current_runtime_no_restart_when_gpu_pkg_and_cuda_ep(
     rt = ors.current_runtime()
     assert rt["restart_required"] is False
     assert rt["cuda_available"] is True
-
-
-def test_bootstrap_install_failure_returns_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        ors, "detect_cuda",
-        lambda: {"available": False, "driver_version": None, "gpu_name": None},
-    )
-    monkeypatch.setattr(
-        ors, "current_runtime",
-        lambda: {"installed": None, "version": None, "providers": [], "cuda_available": False},
-    )
-
-    def _raise(_):
-        raise RuntimeError("pip exploded")
-
-    monkeypatch.setattr(ors, "install_runtime", _raise)
-    state = ors.bootstrap()
-    assert "error" in state
-    assert "pip exploded" in state["error"]
 
 
 # ---------------------------------------------------------------------------

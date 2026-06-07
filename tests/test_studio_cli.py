@@ -526,7 +526,7 @@ def _stub_run_bootstrap(
     monkeypatch.setattr(cli, "_apply_pending_install", lambda: None)
     monkeypatch.setattr(cli, "_check_torch_cuda", lambda: None)
     monkeypatch.setattr(cli, "_try_enable_flash_attn", lambda: None)
-    monkeypatch.setattr(cli, "_bootstrap_onnxruntime", lambda: None)
+    monkeypatch.setattr(cli, "_check_onnxruntime", lambda: None)
     monkeypatch.setattr(cli, "_spawn_browser_opener", lambda *a, **k: None)
     return dist
 

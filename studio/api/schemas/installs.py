@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 
 class WD14InstallRequest(BaseModel):
-    target: str = "auto"  # "auto" | "gpu" | "cpu"
+    target: str = "auto"  # "auto" | "gpu" | "cpu" | "directml"
 
 
 class TorchReinstallRequest(BaseModel):

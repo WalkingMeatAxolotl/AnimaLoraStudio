@@ -159,6 +159,65 @@ def test_create_session_no_false_positive_when_cuda_not_requested(
         onnx_tagger_base.onnxruntime_setup.record_cuda_load_error(None)
 
 
+def test_create_session_uses_directml_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """装了 onnxruntime-directml → providers 应该是 [Dml, CPU]，不能漏掉
+    DirectML EP（否则 InferenceSession 实际只跑 CPU）。"""
+    t = _StubTagger()
+    fake_session = _make_fake_session(
+        ["DmlExecutionProvider", "CPUExecutionProvider"]
+    )
+    requested_providers: list[list[str]] = []
+
+    def fake_session_ctor(path, providers):
+        requested_providers.append(list(providers))
+        return fake_session
+
+    fake_ort = MagicMock(InferenceSession=fake_session_ctor)
+    # onnxruntime-directml wheel：DmlExecutionProvider 可用，无 CUDA
+    fake_ort.get_available_providers.return_value = [
+        "DmlExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+    monkeypatch.setitem(__import__("sys").modules, "onnxruntime", fake_ort)
+    onnx_tagger_base.onnxruntime_setup.record_cuda_load_error(None)
+
+    try:
+        t._create_session(Path("/fake/model.onnx"))
+        assert requested_providers
+        assert requested_providers[0][0] == "DmlExecutionProvider"
+        assert "CPUExecutionProvider" in requested_providers[0]
+        # DirectML 成功路径不应该误 stash 到 cuda_load_error
+        assert onnx_tagger_base.onnxruntime_setup.get_cuda_load_error() is None
+    finally:
+        onnx_tagger_base.onnxruntime_setup.record_cuda_load_error(None)
+
+
+def test_create_session_directml_silent_downgrade_does_not_stash_cuda_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DirectML 静默降级（avail 报有，实际 get_providers 只剩 CPU）→ 不污染
+    cuda_load_error 字段（语义只属于 CUDA EP）。"""
+    t = _StubTagger()
+    fake_session = _make_fake_session(["CPUExecutionProvider"])
+
+    fake_ort = MagicMock(InferenceSession=lambda _p, providers: fake_session)
+    fake_ort.get_available_providers.return_value = [
+        "DmlExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+    monkeypatch.setitem(__import__("sys").modules, "onnxruntime", fake_ort)
+    onnx_tagger_base.onnxruntime_setup.record_cuda_load_error(None)
+
+    try:
+        t._create_session(Path("/fake/model.onnx"))
+        # 走 DirectML 静默降级路径，cuda_load_error 仍应为 None
+        assert onnx_tagger_base.onnxruntime_setup.get_cuda_load_error() is None
+    finally:
+        onnx_tagger_base.onnxruntime_setup.record_cuda_load_error(None)
+
+
 # ---------------------------------------------------------------------------
 # _fallback_to_cpu_session
 # ---------------------------------------------------------------------------

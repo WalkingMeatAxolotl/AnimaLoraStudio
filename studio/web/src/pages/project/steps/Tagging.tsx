@@ -350,6 +350,16 @@ export default function TaggingPage() {
                   : `${t('tag.statusUnavail')} ${taggerStatus.msg}`
                 : t('tag.statusChecking')}
             </span>
+            {taggerStatus && !taggerStatus.ok && taggerStatus.msg.includes('未安装 onnxruntime') && (
+              <button
+                type="button"
+                onClick={() => settingsDrawer.open({ section: 'onnxruntime' })}
+                className="text-xs text-accent underline bg-transparent border-none p-0 cursor-pointer"
+                title={t('tag.goInstallOnnx')}
+              >
+                {t('tag.goInstallOnnx')}
+              </button>
+            )}
             {taggerStatus && !taggerStatus.ok && taggerStatus.msg.includes('需下载模型') && (
               <button
                 type="button"

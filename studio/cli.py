@@ -450,67 +450,38 @@ def _check_torch_cuda() -> None:
     )
 
 
-def _bootstrap_onnxruntime() -> None:
-    """PP8 — 启动期检测 GPU 后按需装 onnxruntime / onnxruntime-gpu。
+def _check_onnxruntime() -> None:
+    """启动期 onnxruntime 状态检查（仅 detect，不装包）。
 
-    requirements.txt 不写死它，避免用户机器 CUDA 与硬编码包不匹配踩坑。
-
-    安装路径（onnxruntime 未装时）：
-    - 直接调 cli._pip_install()，终端实时可见进度，失败自动切国内镜像重试
-    - 失败不致命：打印警告后继续启动，WD14 打标不可用但其余功能正常
-
-    EP 检查路径（onnxruntime 已装时）：
-    - 委托 onnxruntime_setup.bootstrap()（仅做 GPU/EP 匹配警告，不重装）
+    对齐 xformers / flash-attention：未装时 silent skip（Tagging 页选 WD14 /
+    CLTagger 会有徽章 + 引导按钮）。已装则打一行状态；CPU 包 + 有 GPU 走
+    warn，提醒用户去 Settings 切 GPU 版。
     """
     try:
         from studio.services.runtime import onnxruntime as onnxruntime_setup
 
-        # ── 步骤 1：检查是否已安装（不 import .pyd，只读 dist-info）────────
         rt = onnxruntime_setup.current_runtime()
         if rt["installed"] is None:
-            # 未安装：用能显示进度且有镜像回退的 _pip_install() 安装
-            cuda = onnxruntime_setup.detect_cuda()
-            if cuda["available"]:
-                pkg = f"{onnxruntime_setup.GPU_PACKAGE}{onnxruntime_setup.GPU_VERSION_SPEC}"
-                gpu_hint = f"（检测到 NVIDIA GPU: {cuda.get('gpu_name', '?')}，装 GPU 版）"
-            else:
-                pkg = f"{onnxruntime_setup.CPU_PACKAGE}{onnxruntime_setup.CPU_VERSION_SPEC}"
-                gpu_hint = "（未检测到 NVIDIA GPU，装 CPU 版）"
-            _say(f"ONNX Runtime 未安装，正在安装 {pkg} {gpu_hint}")
-            _say("提示：首次下载可能需要几分钟，进度会实时显示在下方...")
-            rc = _pip_install([pkg])
-            if rc != 0:
-                print(
-                    f"[studio] 警告：ONNX Runtime 安装失败（见上方输出）。\n"
-                    f"         WD14 打标功能暂不可用；其余功能正常。\n"
-                    f"         可稍后在 Settings → WD14 页面手动重装。",
-                    file=sys.stderr,
-                )
-                return
-            _say(f"ONNX Runtime 安装完成：{pkg}")
-            # 刷新状态（供后续 EP 检查）
-            rt = onnxruntime_setup.current_runtime()
+            return
 
-        # ── 步骤 2：已装（或刚装完）→ 检查 GPU/EP 匹配，打印状态 ────────
-        cuda = onnxruntime_setup.detect_cuda()
-        ver = rt.get("version") or "?"
         installed = rt.get("installed") or "?"
-        cuda_available = rt.get("cuda_available", False)
-
-        if cuda_available:
+        ver = rt.get("version") or "?"
+        if rt.get("cuda_available"):
             _say(f"onnxruntime: {installed}=={ver}（CUDA EP 可用）")
-        elif cuda.get("available"):
-            print(
-                f"[studio] 警告：检测到 NVIDIA GPU 但 onnxruntime 只有 CPU EP "
-                f"（installed={installed}）。WD14 打标会跑 CPU（较慢）。"
-                f"可在 Settings → WD14 点「重装为 GPU 版」。",
-                file=sys.stderr,
+            return
+
+        cuda = onnxruntime_setup.detect_cuda()
+        if cuda.get("available"):
+            _say(
+                f"检测到 NVIDIA GPU 但 onnxruntime 只有 CPU EP（installed={installed}）。"
+                f"WD14 / CLTagger 打标会跑 CPU（较慢）。可在 Settings → ONNX Runtime 重装为 GPU 版。",
+                "warning",
             )
         else:
             _say(f"onnxruntime: {installed}=={ver}（CPU only，未检测到 NVIDIA GPU）")
 
     except Exception as exc:  # noqa: BLE001
-        _say(f"onnxruntime bootstrap 异常（已忽略）: {exc}", "error")
+        _say(f"onnxruntime 状态检查异常（已忽略）: {exc}", "error")
 
 
 WEB_SRC = WEB_DIR / "src"
@@ -699,7 +670,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             _apply_pending_install()
         _check_torch_cuda()
         _try_enable_flash_attn()
-        _bootstrap_onnxruntime()
+        _check_onnxruntime()
         url = f"http://{args.host}:{args.port}/studio/"
         _say(f"启动后端 → {url}")
         if not args.no_browser and not opened_browser:
@@ -747,7 +718,7 @@ def cmd_dev(args: argparse.Namespace) -> int:
         _apply_pending_install()
     _check_torch_cuda()
     _try_enable_flash_attn()
-    _bootstrap_onnxruntime()
+    _check_onnxruntime()
 
     pg = ProcGroup()
     try:

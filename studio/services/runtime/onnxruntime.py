@@ -1,13 +1,13 @@
-"""PP8 — onnxruntime 运行时检测 / 安装。
+"""onnxruntime 运行时检测 / 安装（Settings 页驱动）。
 
-由于 onnxruntime（CPU 包）和 onnxruntime-gpu 共享同一个 import 名 `onnxruntime`，
-两者**互斥**（同 PyPI 包名），不能同装。requirements.txt 不写死它，由本模块在
-启动期检测 GPU 后决定装哪一个，避免用户机器 CUDA 与硬编码包不匹配的踩坑。
+onnxruntime（CPU）和 onnxruntime-gpu 共享 import 名且**互斥**，不能同装；
+不同机器 CUDA 版本不同，requirements.txt 不写死它。安装由用户在 Settings →
+ONNX Runtime 主动触发，对齐 xformers / flash-attention 的模式 —— 不用打标的
+用户不会被启动期 pip install 阻塞。
 
 主路径：
-    bootstrap()   — cli.cmd_run / cmd_dev 启动前调；未装 → install("auto")
-    install_runtime(target) — Settings 页「重装为 X」按钮调；同步 pip
-    current_runtime()       — Settings 页展示当前状态
+    install_runtime(target) — Settings 页「安装 / 重装为 X」按钮调；同步 pip
+    current_runtime()       — Settings 页展示当前状态 / cli.py 启动期检查
     detect_cuda()           — nvidia-smi 探针
 
 约定：
@@ -40,9 +40,16 @@ logger = logging.getLogger(__name__)
 
 GPU_PACKAGE = "onnxruntime-gpu"
 CPU_PACKAGE = "onnxruntime"
+# onnxruntime-directml 给 Windows 用户用 DX12 后端，绕开 CUDA/cuDNN ABI 兼容性
+# 问题（issue #231：RTX 5090 + onnxruntime-gpu 静默降 CPU）。任何支持 DX12 的 GPU
+# 都能跑（NVIDIA / AMD / Intel）。仅 Windows 有 PyPI wheel。
+DIRECTML_PACKAGE = "onnxruntime-directml"
 # onnxruntime-gpu 1.19+ PyPI 默认 CUDA 12.x，覆盖 RTX 30/40/50（5090 Blackwell 需 1.20+）
 GPU_VERSION_SPEC = ">=1.20"
 CPU_VERSION_SPEC = ">=1.16"
+DIRECTML_VERSION_SPEC = ">=1.20"
+# 三包共享 import 名 `onnxruntime`，**互斥**；切换前必须 uninstall 其余两个
+_MUTUALLY_EXCLUSIVE_PACKAGES: tuple[str, ...] = (GPU_PACKAGE, CPU_PACKAGE, DIRECTML_PACKAGE)
 
 # PP9.6 — onnxruntime-gpu wheel 不打包 CUDA runtime so（libcurand / libcublas
 # / ...），用户机器没系统装 CUDA 时 dlopen 直接挂。靠 PyPI 上的 nvidia-*-cu12
@@ -80,6 +87,25 @@ _TORCH_NVIDIA_LIBS_LINUX: tuple[tuple[str, str], ...] = (
     ("nvidia.cusolver", "libcusolver.so.11"),
     ("nvidia.cudnn", "libcudnn.so.9"),
 )
+
+
+# ---------------------------------------------------------------------------
+# dist-info 探针（不 import .pyd）
+# ---------------------------------------------------------------------------
+
+
+def _query_dist_info() -> tuple[Optional[str], Optional[str]]:
+    """从 dist-info 读三个互斥包的安装状态。返回 (pkg_name, version)。"""
+    try:
+        from importlib.metadata import PackageNotFoundError, version as _ver
+        for pkg in _MUTUALLY_EXCLUSIVE_PACKAGES:
+            try:
+                return pkg, _ver(pkg)
+            except PackageNotFoundError:
+                continue
+    except Exception:  # noqa: BLE001
+        pass
+    return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -263,26 +289,47 @@ def _preload_torch_cuda_libs() -> dict[str, Any]:
 
 
 def _ensure_preload() -> dict[str, Any]:
-    """幂等触发预加载；首次调用时跑一次，后续返回 cached 结果。"""
+    """幂等触发预加载；首次调用时跑一次，后续返回 cached 结果。
+
+    onnxruntime 未装时整体 skip —— preload 唯一作用是给后续 import onnxruntime
+    的 CUDA EP dlopen 兜底；没装就无意义。装上后必须重启 Studio（C extension
+    不能热替换），新进程 import 本模块时会再次触发，依然正确生效。
+    """
     global _PRELOAD_RESULT
-    if _PRELOAD_RESULT is None:
-        _PRELOAD_RESULT = _preload_torch_cuda_libs()
-        if _PRELOAD_RESULT["preloaded"]:
-            logger.info(
-                "[onnx_setup] 预加载 torch 自带 CUDA 库 %d 个: %s",
-                len(_PRELOAD_RESULT["preloaded"]),
-                ", ".join(
-                    os.path.basename(p) for p in _PRELOAD_RESULT["preloaded"]
-                ),
-            )
-        elif _PRELOAD_RESULT.get("system_cuda_skip"):
-            logger.info(
-                "[onnx_setup] 检测到系统 CUDA，跳过 torch wheel preload（避免 cuBLAS 版本错位）"
-            )
-        elif _PRELOAD_RESULT["applied"] and _PRELOAD_RESULT["candidates"] == 0:
-            logger.debug(
-                "[onnx_setup] 未发现 torch 自带 CUDA wheel；GPU EP 依赖系统 CUDA"
-            )
+    if _PRELOAD_RESULT is not None:
+        return _PRELOAD_RESULT
+    if _query_dist_info()[0] is None:
+        _PRELOAD_RESULT = {
+            "applied": False,
+            "platform_skip": False,
+            "system_cuda_skip": False,
+            "not_installed_skip": True,
+            "preloaded": [],
+            "errors": [],
+            "candidates": 0,
+        }
+        return _PRELOAD_RESULT
+    _PRELOAD_RESULT = _preload_torch_cuda_libs()
+    if sys.platform == "win32" and _PRELOAD_RESULT["preloaded"]:
+        logger.info(
+            "[onnx_setup] DLL 搜索路径已加入 torch/lib（onnxruntime-gpu CUDA dlopen 用）"
+        )
+    elif _PRELOAD_RESULT["preloaded"]:
+        logger.info(
+            "[onnx_setup] 预加载 torch 自带 CUDA 库 %d 个: %s",
+            len(_PRELOAD_RESULT["preloaded"]),
+            ", ".join(
+                os.path.basename(p) for p in _PRELOAD_RESULT["preloaded"]
+            ),
+        )
+    elif _PRELOAD_RESULT.get("system_cuda_skip"):
+        logger.info(
+            "[onnx_setup] 检测到系统 CUDA，跳过 torch wheel preload（避免 cuBLAS 版本错位）"
+        )
+    elif _PRELOAD_RESULT["applied"] and _PRELOAD_RESULT["candidates"] == 0:
+        logger.debug(
+            "[onnx_setup] 未发现 torch 自带 CUDA wheel；GPU EP 依赖系统 CUDA"
+        )
     return _PRELOAD_RESULT
 
 
@@ -368,8 +415,11 @@ def current_runtime() -> dict[str, Any]:
         # 版本号不一致直接判定 stale
         if installed_ver != process_version:
             restart_required = True
-        # 包名: GPU 包应该有 CUDA EP，CPU 包不会有
+        # 包名 vs EP：装了 GPU 包应有 CUDAExecutionProvider；装了 DirectML 包应有
+        # DmlExecutionProvider；CPU 包不会有任何加速 EP
         elif installed_pkg == GPU_PACKAGE and "CUDAExecutionProvider" not in providers:
+            restart_required = True
+        elif installed_pkg == DIRECTML_PACKAGE and "DmlExecutionProvider" not in providers:
             restart_required = True
 
     return {
@@ -377,6 +427,10 @@ def current_runtime() -> dict[str, Any]:
         "version": installed_ver or process_version,
         "providers": providers,
         "cuda_available": "CUDAExecutionProvider" in providers,
+        "directml_available": "DmlExecutionProvider" in providers,
+        # 平台标识：前端按平台 disable DirectML/GPU 按钮（DirectML 仅 Windows；
+        # nvidia-*-cu12 wheel 仅 Linux 有；CPU 全平台可用）
+        "platform": sys.platform,
         "restart_required": restart_required,
         # PP9.5 — 创 InferenceSession 时实际 dlopen 报的错（如 `libcurand.so.10`
         # 缺失）；wd14_tagger.prepare 降 CPU 后填进来。None=没碰过 / 上次成功。
@@ -420,17 +474,27 @@ def _pip(args: list[str], *, mirror: str = "") -> tuple[int, str]:
 
 
 def _decide_target(target: str) -> str:
-    """auto/gpu/cpu → 实际包名（带版本约束）。"""
+    """auto/gpu/cpu/directml → 实际包名（带版本约束）。
+
+    auto 路径按平台分流：
+    - Windows + GPU → DirectML（绕开 CUDA dlopen 问题，跨厂商）
+    - Linux + GPU → onnxruntime-gpu（native CUDA EP 最优）
+    - 无 GPU → CPU 包
+    """
     if target == "gpu":
         return f"{GPU_PACKAGE}{GPU_VERSION_SPEC}"
     if target == "cpu":
         return f"{CPU_PACKAGE}{CPU_VERSION_SPEC}"
+    if target == "directml":
+        return f"{DIRECTML_PACKAGE}{DIRECTML_VERSION_SPEC}"
     if target == "auto":
         cuda = detect_cuda()
         if cuda["available"]:
+            if sys.platform == "win32":
+                return f"{DIRECTML_PACKAGE}{DIRECTML_VERSION_SPEC}"
             return f"{GPU_PACKAGE}{GPU_VERSION_SPEC}"
         return f"{CPU_PACKAGE}{CPU_VERSION_SPEC}"
-    raise ValueError(f"非法 target: {target!r}（应为 auto/gpu/cpu）")
+    raise ValueError(f"非法 target: {target!r}（应为 auto/gpu/cpu/directml）")
 
 
 def _is_dist_installed(pkg: str) -> bool:
@@ -503,19 +567,19 @@ def _install_cuda_runtime_wheels() -> dict[str, Any]:
 
 
 def install_runtime(target: str = "auto") -> dict[str, Any]:
-    """先 uninstall 两个互斥包再装目标。
+    """先 uninstall 三个互斥包再装目标。
 
-    target: "auto" | "gpu" | "cpu"
+    target: "auto" | "gpu" | "cpu" | "directml"
     返回 `{"target", "installed_pkg", "installed_version", "restart_required": True,
            "stdout", "cuda_runtime"}`，最后一个字段是 PP9.6 装的 nvidia-*-cu12 报告
-    （仅 GPU 路径；CPU 路径为 None）。失败抛 RuntimeError。
+    （仅 GPU 路径；CPU / DirectML 路径为 None）。失败抛 RuntimeError。
 
     **重要**：onnxruntime 是 C extension，pip 卸装重装后**当前进程**里已 import 的
     .pyd/.so 不会被热替换 —— 必须重启 Studio 才能切换 EP。所以本函数不再尝试 reload；
     返回 `restart_required=True` 让 UI 提示用户重启。
     """
     spec = _decide_target(target)
-    rc1, log1 = _pip(["uninstall", "-y", GPU_PACKAGE, CPU_PACKAGE])
+    rc1, log1 = _pip(["uninstall", "-y", *_MUTUALLY_EXCLUSIVE_PACKAGES])
     rc2, log2 = _pip(["install", "--upgrade", spec])
     if rc2 != 0:
         logger.warning("[onnx_setup] pip 官方源失败，切换腾讯镜像重试...")
@@ -551,64 +615,3 @@ def install_runtime(target: str = "auto") -> dict[str, Any]:
         "stdout": log1 + log2,
         "cuda_runtime": cuda_runtime,
     }
-
-
-def _query_dist_info() -> tuple[Optional[str], Optional[str]]:
-    """从 dist-info 读两个互斥包的安装状态。返回 (pkg_name, version)。"""
-    try:
-        from importlib.metadata import PackageNotFoundError, version as _ver
-        for pkg in (GPU_PACKAGE, CPU_PACKAGE):
-            try:
-                return pkg, _ver(pkg)
-            except PackageNotFoundError:
-                continue
-    except Exception:  # noqa: BLE001
-        pass
-    return None, None
-
-
-# ---------------------------------------------------------------------------
-# bootstrap
-# ---------------------------------------------------------------------------
-
-
-def bootstrap() -> dict[str, Any]:
-    """启动期一次性检查：
-
-    - 未装 → 自动 install_runtime("auto")
-    - 装了但 EP 不匹配机器（有 GPU 但只有 CPU EP）→ 仅 log warn，不动
-    - 装了且 EP 匹配 → 静默
-
-    始终返回 current_runtime()（含 detect_cuda 信息），失败不抛出（仅 log）。
-    """
-    cuda = detect_cuda()
-    rt = current_runtime()
-    state = {**rt, "cuda_detect": cuda}
-
-    if rt["installed"] is None:
-        target = "gpu" if cuda["available"] else "cpu"
-        logger.info(
-            "[onnx_setup] onnxruntime 未安装，按检测自动装 (target=%s, gpu=%s, driver=%s)",
-            target,
-            cuda["available"],
-            cuda.get("driver_version"),
-        )
-        try:
-            install_runtime(target)
-            # bootstrap 在 cli.py 起 server 子进程前跑；server 是新进程会 fresh import → 装完直接重读
-            state.update(current_runtime())
-        except RuntimeError as exc:
-            logger.error("[onnx_setup] 自动安装失败: %s", exc)
-            state["error"] = str(exc)
-        return state
-
-    # 已装 - 检查 GPU/EP 是否匹配
-    if cuda["available"] and not rt["cuda_available"]:
-        logger.warning(
-            "[onnx_setup] 检测到 NVIDIA GPU 但 onnxruntime 只有 CPU EP "
-            "(installed=%s, providers=%s)。WD14 打标会跑在 CPU 上（很慢）。"
-            "可在 Settings → WD14 点「重装为 GPU 版」。",
-            rt["installed"],
-            rt["providers"],
-        )
-    return state
