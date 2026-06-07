@@ -26,6 +26,10 @@ import {
   type WD14Runtime,
 } from '../../api/client'
 import { useDialog } from '../../components/Dialog'
+import {
+  clearOnboardingDone,
+  ONBOARDING_EVENTS,
+} from '../../components/FirstRunOnboardingModal'
 import { InfoButton } from '../../components/InfoButton'
 import LLMTaggerWorkspace from '../../components/LLMTaggerWorkspace'
 import { TagListInput } from '../../components/TagsInput'
@@ -122,6 +126,7 @@ const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
     { id: 'display', labelKey: 'settings.display' },
   ],
   system: [
+    { id: 'onboarding', labelKey: 'settings.onboardingSection' },
     { id: 'version', labelKey: 'settings.version' },
     { id: 'service', labelKey: 'settings.service' },
   ],
@@ -3164,9 +3169,38 @@ function DisplaySection() {
 function SystemSection() {
   return (
     <>
+      <OnboardingSection />
       <VersionSection />
       <ServiceSection />
     </>
+  )
+}
+
+// ── 重新运行首次引导 Section ─────────────────────────────────────────────
+//
+// 清掉 localStorage 的 onboarding done 标记 + dispatch event,触发
+// FirstRunOnboardingModal 显示。不重启服务、不动 secrets。
+function OnboardingSection() {
+  const { t } = useTranslation()
+  const handleReopen = () => {
+    clearOnboardingDone()
+    window.dispatchEvent(new Event(ONBOARDING_EVENTS.open))
+  }
+  return (
+    <SettingsSection id="onboarding" title={t('settings.onboardingSection')}>
+      <SettingsField
+        label={t('settings.onboardingReopenTitle')}
+        helpTooltip={<p>{t('settings.onboardingReopenHelp')}</p>}
+      >
+        <button
+          type="button"
+          onClick={handleReopen}
+          className="btn btn-secondary btn-sm self-start"
+        >
+          {t('settings.onboardingReopen')}
+        </button>
+      </SettingsField>
+    </SettingsSection>
   )
 }
 

@@ -1026,6 +1026,10 @@
     "currentDevLocked": "当前在 dev · 不可关闭",
     "updateLogTitle": "上次更新日志",
     "close": "关闭",
+    "onboardingSection": "首次引导",
+    "onboardingReopenTitle": "重新运行首次引导",
+    "onboardingReopenHelp": "重新弹出首次启动时的「基础能力安装」面板,可用于检查哪些还没装、或装漏了想补。",
+    "onboardingReopen": "重新运行引导",
     "serviceRestartTitle": "重启 Studio",
     "serviceRestartHelp1": "关闭并重新启动后端进程。",
     "serviceRestartHelp2": "常用场景：修改 <code>secrets.json</code> 后强制刷新、装完新 onnxruntime / PyTorch 让 EP 生效。",
@@ -2185,5 +2189,67 @@
     "processing": "服务器处理中…",
     "failed": "失败",
     "etaPrefix": "剩余"
+  },
+  "onboarding": {
+    "title": "欢迎使用 AnimaLoraStudio",
+    "subtitle": "下面是建议安装的基础能力,勾选后一键安装。已装好的会自动打勾。",
+    "downloadSource": "下载源",
+    "downloadSourceHint": "已为你按语言推荐,可以改。下载源同时影响后续所有模型下载。",
+    "advanced": "高级选项",
+    "skip": "跳过引导",
+    "installSelected": "一键安装选中 ({{count}})",
+    "finish": "完成",
+    "retry": "重试",
+    "showLog": "查看日志",
+    "hideLog": "收起日志",
+    "restart": "现在重启服务",
+    "restarting": "重启中…",
+    "restartHint": "全部装完,需要重启服务才能生效",
+    "installing": {
+      "generic": "安装中…",
+      "base": "正在安装: 底模套件",
+      "tagger": "正在安装: 打标功能",
+      "accel": "正在安装: 训练加速",
+      "upscaler": "正在安装: 图像增强"
+    },
+    "status": {
+      "idle": "未安装",
+      "queued": "排队中",
+      "installing": "安装中",
+      "done": "已安装",
+      "failed": "失败"
+    },
+    "items": {
+      "base": {
+        "label": "底模套件",
+        "description": "Anima 主模型 + VAE + Qwen3 + T5,训练所需基础模型(总计约 30GB)"
+      },
+      "tagger": {
+        "label": "打标功能",
+        "description": "WD14 模型 + ONNX Runtime,自动给训练集打标签"
+      },
+      "accel": {
+        "label": "训练加速 (可选)",
+        "description": "更快的注意力实现,显著提速;CPU / 旧显卡可不装",
+        "choice": {
+          "flash_attn": {
+            "label": "Flash Attention",
+            "hint": "推荐,速度最快"
+          },
+          "xformers": {
+            "label": "Xformers",
+            "hint": "备选,flash-attn 装不上时用"
+          },
+          "none": {
+            "label": "不装",
+            "hint": "CPU / 旧显卡也能跑,只是慢"
+          }
+        }
+      },
+      "upscaler": {
+        "label": "图像增强 (可选)",
+        "description": "4x-AnimeSharp,预处理时把训练图放大"
+      }
+    }
   }
 }
