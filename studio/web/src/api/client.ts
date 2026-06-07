@@ -1945,6 +1945,11 @@ export const api = {
       tagger: TaggerName
       output_format?: 'txt' | 'json'
       /**
+       * 已有 caption 文件时的策略：overwrite（默认覆盖）/ skip（保留原文件）
+       * / append（tag 级 merge + dedupe 后写回原格式）。
+       */
+      on_existing?: 'overwrite' | 'skip' | 'append'
+      /**
        * wd14 本次任务的临时覆盖；仅在 worker 进程生效，不写回 settings。
        * 字段为 undefined / null 时沿用全局 settings。
        */

@@ -1904,7 +1904,12 @@
     "cancelToast": "Cancelled",
     "triggerWord": "trigger word",
     "triggerWordPlaceholder": "e.g. ohwx / mychar",
-    "triggerWordHint": "Prepended as the first tag of every caption during tagging; empty = disabled. Changing this and starting tagging will persist it to the current version."
+    "triggerWordHint": "Prepended as the first tag of every caption during tagging; empty = disabled. Changing this and starting tagging will persist it to the current version.",
+    "onExisting": "existing",
+    "onExistingHint": "What to do when an image already has a caption file (.txt or .json).",
+    "onExistingOverwrite": "Overwrite",
+    "onExistingSkip": "Skip",
+    "onExistingAppend": "Append"
   },
   "presets": {
     "loadSchemaFailed": "Failed to load schema: {{error}}",
