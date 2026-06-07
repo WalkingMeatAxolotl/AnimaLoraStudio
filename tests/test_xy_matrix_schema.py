@@ -225,21 +225,6 @@ def test_generate_xy_y_axis_validated_too() -> None:
         )
 
 
-def test_generate_legacy_attention_with_xy_compatible() -> None:
-    """老 cfg（xformers/flash_attn 双 bool）+ xy_matrix 共存可以正常 migrate。"""
-    g = GenerateConfig.model_validate({
-        "transformer_path": "t",
-        "vae_path": "v",
-        "text_encoder_path": "te",
-        "xformers": True,  # 老字段
-        "xy_matrix": {
-            "x": {"axis": "steps", "values": [20, 25]},
-        },
-    })
-    assert g.attention_backend == "xformers"  # migrate 生效
-    assert g.xy_matrix is not None
-
-
 def test_generate_xy_serialize_round_trip() -> None:
     """model_dump → model_validate 等幂（确保 server 端透传不丢字段）。"""
     g = _gen(

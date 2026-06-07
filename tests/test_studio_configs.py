@@ -367,7 +367,7 @@ def test_get_preset_with_warnings_reports_defaulted(
 ) -> None:
     """字段值不合法时回退默认值并列入 defaulted_fields。"""
     payload = _payload()
-    payload["optimizer_type"] = "lion"  # 不在 Literal 里
+    payload["optimizer_type"] = "made_up_optim"  # 不在 Literal 里
     yaml_bytes = yaml.safe_dump(payload, allow_unicode=True).encode("utf-8")
     (presets_dir / "badval.yaml").write_bytes(yaml_bytes)
 
@@ -375,7 +375,7 @@ def test_get_preset_with_warnings_reports_defaulted(
     assert resp.status_code == 200
     body = resp.json()
     assert "optimizer_type" in body["defaulted_fields"]
-    assert body["config"]["optimizer_type"] != "lion"
+    assert body["config"]["optimizer_type"] != "made_up_optim"
 
 
 def test_get_preset_without_warnings_returns_flat(
@@ -394,7 +394,7 @@ def test_tolerant_load_invalid_values(
 ) -> None:
     """跨分支预设：未知字段 + 非法值 → 都能加载，不会 500。"""
     payload = _payload()
-    payload["optimizer_type"] = "lion"
+    payload["optimizer_type"] = "made_up_optim"
     payload["infonoise_K"] = 0
     raw = {**payload, "nonexistent_thing": True}
     yaml_bytes = yaml.safe_dump(raw, allow_unicode=True).encode("utf-8")
