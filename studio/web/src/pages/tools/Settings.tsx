@@ -121,6 +121,7 @@ const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
   testing: [
     { id: 'idle-timeout', labelKey: 'settings.idleTimeout.title' },
     { id: 'preview', labelKey: 'settings.intermediatePreview' },
+    { id: 'save-test-images', labelKey: 'settings.saveTestImages.title' },
   ],
   appearance: [
     { id: 'display', labelKey: 'settings.display' },
@@ -257,7 +258,7 @@ const EMPTY: Secrets = {
   },
   models: { root: null, selected_anima: '1.0', selected_upscaler: '4x-AnimeSharp', auto_sync_paths: true },
   queue: { allow_gpu_during_train: false },
-  generate: { preview_every_n_steps: 3, attention_backend: 'auto', idle_timeout_minutes: 10 },
+  generate: { preview_every_n_steps: 3, attention_backend: 'auto', idle_timeout_minutes: 10, save_test_images: false },
   system: { update_channel: 'stable', show_dev_channel: false },
   proxy: {
     enabled: false,
@@ -1197,6 +1198,7 @@ export default function SettingsPage() {
             （flash_attn / xformers / none）。安装管理在『训练』tab。 */}
         <IdleTimeoutSection draft={draft} update={update} />
         <TaeFluxSection draft={draft} update={update} />
+        <SaveTestImagesSection draft={draft} update={update} />
       </>)}
 
       {tab === 'appearance' && (
@@ -3059,6 +3061,31 @@ function TaeFluxSection({
           onChange={(e) => update('generate', 'preview_every_n_steps', Number(e.target.value) || 0)}
           className="input"
           style={{ width: 80 }}
+        />
+      </SettingsField>
+    </SettingsSection>
+  )
+}
+
+
+function SaveTestImagesSection({
+  draft, update,
+}: {
+  draft: Secrets
+  update: <S extends Section, K extends keyof Secrets[S]>(
+    section: S, key: K, value: Secrets[S][K],
+  ) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <SettingsSection id="save-test-images" title={t('settings.saveTestImages.title')}>
+      <SettingsField
+        label={t('settings.saveTestImages.label')}
+        desc={t('settings.saveTestImages.desc')}
+      >
+        <Bool
+          value={draft.generate.save_test_images}
+          onChange={(v) => update('generate', 'save_test_images', v)}
         />
       </SettingsField>
     </SettingsSection>

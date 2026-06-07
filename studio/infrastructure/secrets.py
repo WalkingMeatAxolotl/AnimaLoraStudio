@@ -436,10 +436,14 @@ class GenerateConfig(BaseModel):
     - `idle_timeout_minutes`：daemon 闲置 N 分钟自动卸载模型释放 VRAM。
       0 = 关闭，模型常驻直到用户手动清。计时只在 daemon idle + 模型已 load
       时跑；进 busy / 已 unload 时取消。
+    - `save_test_images`：开关测试出图自动落盘。默认关；开后每次出完图前端
+      会调 /api/generate/save 把成图存到 studio_data/test/<date>/{single,xy}/
+      image_N.png（N 按当前文件夹已有最大编号+1）。compare 模式不落盘。
     """
     preview_every_n_steps: int = 3
     attention_backend: str = "auto"
     idle_timeout_minutes: int = 10
+    save_test_images: bool = False
 
 
 class SystemConfig(BaseModel):

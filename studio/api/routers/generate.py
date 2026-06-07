@@ -18,9 +18,12 @@ task 结束 supervisor 仍调 cleanup_generate_tempdir 清掉空目录。server 
 from __future__ import annotations
 
 import json
+import re
+from datetime import date
+from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 
 from ..deps import _resolve_anima_model_paths
@@ -29,8 +32,27 @@ from ..schemas.generate import GenerateRequest
 from ... import db, secrets
 from ...domain import GenerateConfig
 from ...infrastructure.event_bus import bus
+from ...infrastructure.paths import STUDIO_DATA
 
 router = APIRouter()
+
+TEST_IMAGES_DIR = STUDIO_DATA / "test"
+_IMAGE_NAME_RE = re.compile(r"^image_(\d+)\.png$")
+
+
+def _next_image_index(dir_: Path) -> int:
+    """扫描 dir 下 image_<N>.png，返回最大 N+1。找不到则 0。"""
+    if not dir_.is_dir():
+        return 0
+    max_n = -1
+    for p in dir_.iterdir():
+        m = _IMAGE_NAME_RE.match(p.name)
+        if m:
+            try:
+                max_n = max(max_n, int(m.group(1)))
+            except ValueError:
+                pass
+    return max_n + 1
 
 
 @router.post("/api/generate")
@@ -219,3 +241,36 @@ def get_generate_sample(task_id: int, filename: str) -> Any:
         media_type="image/png",
         headers={"Cache-Control": "no-store"},
     )
+
+
+@router.post("/api/generate/save")
+async def save_test_image(
+    mode: str = Form(...),
+    image: UploadFile = File(...),
+) -> dict[str, Any]:
+    """落盘测试出图到 studio_data/test/<YYYY-MM-DD>/<mode>/image_N.png。
+
+    - mode ∈ {"single", "xy"}，其它值（含 "compare"）400
+    - Settings 开关 generate.save_test_images=False → 403
+    - N = 当前 <date>/<mode>/ 下已有 image_*.png 最大编号+1（找不到则 0）
+    - 并发兜底：x-flag 写入，FileExistsError 则重扫一次
+    """
+    if mode not in ("single", "xy"):
+        raise HTTPException(400, f"unsupported mode: {mode}")
+    if not secrets.load().generate.save_test_images:
+        raise HTTPException(403, "save_test_images is disabled")
+    raw = await image.read()
+    if not raw:
+        raise HTTPException(400, "empty image body")
+    target_dir = TEST_IMAGES_DIR / date.today().isoformat() / mode
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for _ in range(20):
+        idx = _next_image_index(target_dir)
+        target = target_dir / f"image_{idx}.png"
+        try:
+            with open(target, "xb") as f:
+                f.write(raw)
+            return {"path": str(target), "index": idx}
+        except FileExistsError:
+            continue
+    raise HTTPException(500, "could not allocate filename")

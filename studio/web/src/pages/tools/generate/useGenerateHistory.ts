@@ -170,7 +170,6 @@ export async function makeThumbnail(
 export interface UseGenerateHistoryResult {
   entries: HistoryEntry[]
   add: (entry: Omit<HistoryEntry, 'id' | 'createdAt'>) => Promise<void>
-  remove: (id: string) => Promise<void>
   clearByMode: (mode: HistoryMode) => Promise<void>
   /** 检查每条 entry 的第一张图是否还在 server cache 里；
    * 404 / fail 的 entry 删除（"原图已释放，留着只剩 thumbnail 没意义"）。
@@ -201,11 +200,6 @@ export function useGenerateHistory(): UseGenerateHistoryResult {
     setEntries((prev) => [full, ...prev])
   }
 
-  const remove = async (id: string) => {
-    await deleteEntry(id)
-    setEntries((prev) => prev.filter((e) => e.id !== id))
-  }
-
   const clearByMode = async (mode: HistoryMode) => {
     await clearMode(mode)
     setEntries((prev) => prev.filter((e) => e.mode !== mode))
@@ -231,5 +225,5 @@ export function useGenerateHistory(): UseGenerateHistoryResult {
     return stale.length
   }
 
-  return { entries, add, remove, clearByMode, pruneStale }
+  return { entries, add, clearByMode, pruneStale }
 }

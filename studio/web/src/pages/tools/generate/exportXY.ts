@@ -19,7 +19,7 @@ interface ExportSample {
   xy: { xi: number; yi: number }
 }
 
-interface ExportInput {
+export interface ExportInput {
   samples: ExportSample[]
   taskId: number
   xAxis: XYAxisType
@@ -37,7 +37,8 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   })
 }
 
-export async function exportXYMatrix(input: ExportInput): Promise<void> {
+/** 把 XY 矩阵合成成一张 PNG Blob —— exportXYMatrix 下载 + saveTestImages 自动落盘共用。 */
+export async function composeXYMatrix(input: ExportInput): Promise<Blob> {
   const { samples, taskId, xAxis, yAxis, xValues, yValues } = input
   const xLen = xValues.length
   const yLen = Math.max(yValues.length, 1)
@@ -120,19 +121,22 @@ export async function exportXYMatrix(input: ExportInput): Promise<void> {
     }
   }
 
-  // toBlob → 下载
-  return new Promise<void>((resolve, reject) => {
+  return new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((b) => {
       if (!b) { reject(new Error(i18n.t('generate.canvasToBlobNull'))); return }
-      const url = URL.createObjectURL(b)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `xy_matrix_${taskId}_${Date.now()}.png`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
-      resolve()
+      resolve(b)
     }, 'image/png')
   })
+}
+
+export async function exportXYMatrix(input: ExportInput): Promise<void> {
+  const blob = await composeXYMatrix(input)
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `xy_matrix_${input.taskId}_${Date.now()}.png`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
 }

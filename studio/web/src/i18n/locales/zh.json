@@ -1005,6 +1005,11 @@
       "minutesSuffix": "分",
       "offHint": "已关闭：模型常驻直到手动清理"
     },
+    "saveTestImages": {
+      "title": "测试出图自动落盘",
+      "label": "保存测试图片",
+      "desc": "打开后每次出图自动保存到 studio_data/test/<日期>/{single,xy}/image_N.png。xy 模式存合成的网格图；compare 模式不保存。默认关闭。"
+    },
     "theme": "主题",
     "themeLight": "☀ 日间",
     "themeDark": "☾ 暗色",

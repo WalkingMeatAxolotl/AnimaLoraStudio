@@ -1005,6 +1005,11 @@
       "minutesSuffix": "min",
       "offHint": "Off: model stays resident until manually freed"
     },
+    "saveTestImages": {
+      "title": "Save test images to disk",
+      "label": "Save test images",
+      "desc": "When enabled, every generation is written to studio_data/test/<date>/{single,xy}/image_N.png. xy mode saves the composed grid; compare mode is never saved. Default: off."
+    },
     "theme": "Theme",
     "themeLight": "☀ Light",
     "themeDark": "☾ Dark",

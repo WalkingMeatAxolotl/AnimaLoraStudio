@@ -379,6 +379,9 @@ export interface GenerateSecretsConfig {
   /** 测试出图 daemon 闲置 N 分钟自动卸载模型释放 VRAM。0 = 关闭，模型常驻
    * 直到手动点"清理显存"。计时只在 idle + 模型 loaded 时跑。 */
   idle_timeout_minutes: number
+  /** 开后每次出图自动落盘到 studio_data/test/<date>/{single,xy}/image_N.png。
+   * 默认关；compare 模式始终不落盘。 */
+  save_test_images: boolean
 }
 
 /** 系统级偏好（ADR 0002 / 0005）。update_channel 是用户视图偏好（"stable" /

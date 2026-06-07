@@ -15,14 +15,13 @@ interface Props {
   entries: HistoryEntry[]
   mode: HistoryMode
   onSelect: (entry: HistoryEntry) => void
-  onRemove?: (id: string) => void
   onClear?: () => void
   /** 清理失效（server cache 已没的 entry） */
   onPruneStale?: () => Promise<number>
 }
 
 export default function PreviewHistoryRail({
-  entries, mode, onSelect, onRemove, onClear, onPruneStale,
+  entries, mode, onSelect, onClear, onPruneStale,
 }: Props) {
   const { t } = useTranslation()
   const list = entries.filter((e) => e.mode === mode)
@@ -76,7 +75,6 @@ export default function PreviewHistoryRail({
             key={entry.id}
             entry={entry}
             onSelect={() => onSelect(entry)}
-            onRemove={onRemove ? () => onRemove(entry.id) : undefined}
           />
         ))
       )}
@@ -87,11 +85,9 @@ export default function PreviewHistoryRail({
 interface ItemProps {
   entry: HistoryEntry
   onSelect: () => void
-  onRemove?: () => void
 }
 
-function HistoryItem({ entry, onSelect, onRemove }: ItemProps) {
-  const { t } = useTranslation()
+function HistoryItem({ entry, onSelect }: ItemProps) {
   return (
     <div
       className="relative rounded-sm border border-subtle hover:border-strong cursor-pointer overflow-hidden"
@@ -112,19 +108,6 @@ function HistoryItem({ entry, onSelect, onRemove }: ItemProps) {
         >
           {entry.badge}
         </span>
-      )}
-      {onRemove && (
-        <button
-          className="absolute top-0 right-0 bg-canvas/80 text-fg-tertiary hover:text-err text-xs leading-none"
-          style={{ padding: '1px 4px', lineHeight: 1 }}
-          onClick={(e) => {
-            e.stopPropagation()
-            onRemove()
-          }}
-          title={t('common.delete')}
-        >
-          ×
-        </button>
       )}
     </div>
   )

@@ -20,6 +20,7 @@ import NumField from './generate/NumField'
 import PreviewCompare from './generate/PreviewCompare'
 import PreviewHistoryRail from './generate/PreviewHistoryRail'
 import PromptFromDatasetPicker, { type DatasetPick } from './generate/PromptFromDatasetPicker'
+import { saveSingleSamples, saveXYMatrix } from './generate/saveTestImages'
 import { makeThumbnail, useGenerateHistory, type HistoryEntry } from './generate/useGenerateHistory'
 import PreviewXYGrid from './generate/PreviewXYGrid'
 import PromptList from './generate/PromptList'
@@ -365,6 +366,26 @@ export default function GeneratePage() {
         xy: xyMeta,
       }))
       .catch(() => { /* thumbnail 失败 — 不入库（避免无封面 entry） */ })
+    // 自动落盘（Settings.generate.save_test_images=on 时）。compare 不落盘；
+    // 关闭时跳过避免 XY 模式白白合成网格图。
+    if (mode === 'single' || mode === 'xy') {
+      void api.getSecrets().then((sec) => {
+        if (!sec.generate?.save_test_images) return
+        if (mode === 'single') {
+          return saveSingleSamples(taskId, filenames)
+        }
+        if (xyMeta) {
+          return saveXYMatrix({
+            samples: xyMeta.samples.map((s) => ({ path: s.path, xy: { xi: s.xy.xi, yi: s.xy.yi } })),
+            taskId,
+            xAxis: xyMeta.xAxis as Parameters<typeof saveXYMatrix>[0]['xAxis'],
+            yAxis: xyMeta.yAxis as Parameters<typeof saveXYMatrix>[0]['yAxis'],
+            xValues: xyMeta.xValues,
+            yValues: xyMeta.yValues,
+          })
+        }
+      }).catch(() => { /* silent */ })
+    }
   }, [currentTask, samples, mode, selectedIndices, history, xDraft, yDraft])
 
   const handleHistorySelect = (entry: HistoryEntry) => {
@@ -812,7 +833,6 @@ export default function GeneratePage() {
             entries={history.entries}
             mode={mode}
             onSelect={handleHistorySelect}
-            onRemove={(id) => { void history.remove(id) }}
             onClear={() => { void history.clearByMode(mode) }}
             onPruneStale={history.pruneStale}
           />
