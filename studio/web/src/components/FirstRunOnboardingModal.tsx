@@ -155,6 +155,10 @@ export function FirstRunOnboardingModal() {
   const [savingSource, setSavingSource] = useState<boolean>(false)
   // first-run 自动按 i18n 写一次 secrets.download_source(只跑一次,避免覆盖用户手动改)。
   const autoSourceWrittenRef = useRef<boolean>(false)
+  // catalog 最新值 ref —— installItem polling 闭包里看不到 catalog state 更新,
+  // 必须经 ref 拿。catalog 本身通过 SettingsData 的 SSE 自动刷新。
+  const catalogRef = useRef(catalog)
+  useEffect(() => { catalogRef.current = catalog }, [catalog])
 
   // 触发：lang 已设 + onboarding 未 done → 自动弹；显式 open 事件 → 强制弹。
   useEffect(() => {
@@ -264,40 +268,92 @@ export function FirstRunOnboardingModal() {
     autoSourceWrittenRef.current = true
   }, [open, secrets, i18n.language, saveDownloadSource])
 
-  // 安装单个条目。返回是否成功（用于判断 restart_required）。
+  // 等 catalog 反映"装齐"或"失败",最长 timeoutMs。SettingsData 通过 SSE
+  // model_download_changed 自动 reloadCatalog,所以这里只要轮询 ref 就行。
+  // 任意一个 relevant download 进 failed → 立刻返回失败;全 done → 成功。
+  const waitForCatalog = useCallback(async (
+    isAllDone: (c: ModelsCatalog) => boolean,
+    keyFilter: (k: string) => boolean,
+    timeoutMs = 30 * 60_000,
+  ): Promise<{ ok: boolean; errors: string[] }> => {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      const c = catalogRef.current
+      if (c) {
+        if (isAllDone(c)) return { ok: true, errors: [] }
+        const failed = Object.entries(c.downloads)
+          .filter(([k]) => keyFilter(k))
+          .map(([, v]) => v)
+          .filter((d) => d.status === 'failed')
+        if (failed.length > 0) {
+          const tail = failed.flatMap((d) => d.log_tail.slice(-10))
+          return { ok: false, errors: tail.length > 0 ? tail : [failed.map((d) => d.message).join('\n')] }
+        }
+      }
+      await new Promise((r) => setTimeout(r, 1500))
+    }
+    return { ok: false, errors: ['Timed out waiting for download to finish'] }
+  }, [])
+
+  // 安装单个条目。触发后端开始下载/装包,然后 polling catalog 等到真完成,
+  // 才把状态切到 done/failed —— startModelDownload 只是 fire-and-forget,
+  // 立刻 set done 会让派生状态短暂闪一下又回 idle。
   const installItem = useCallback(async (key: ItemKey): Promise<{ ok: boolean; needsRestart: boolean }> => {
     setInstallState((s) => ({ ...s, [key]: 'installing' }))
     setCurrentItem(key)
-    let ok = true
     let needsRestart = false
     const errors: string[] = []
     try {
       if (key === 'base' && catalog) {
         const latest = catalog.anima_main.variants.find((v) => v.is_latest)
+        const triggers: Promise<unknown>[] = []
         if (latest && !latest.exists) {
-          await api.startModelDownload({ model_id: 'anima_main', variant: latest.variant })
+          triggers.push(api.startModelDownload({ model_id: 'anima_main', variant: latest.variant }))
         }
         if (!catalog.anima_vae.exists) {
-          await api.startModelDownload({ model_id: 'anima_vae' })
+          triggers.push(api.startModelDownload({ model_id: 'anima_vae' }))
         }
         if (!catalog.qwen3.files.every((f) => f.exists)) {
-          await api.startModelDownload({ model_id: 'qwen3' })
+          triggers.push(api.startModelDownload({ model_id: 'qwen3' }))
         }
         if (!catalog.t5_tokenizer.files.every((f) => f.exists)) {
-          await api.startModelDownload({ model_id: 't5_tokenizer' })
+          triggers.push(api.startModelDownload({ model_id: 't5_tokenizer' }))
+        }
+        if (triggers.length > 0) {
+          await Promise.all(triggers)
+          const res = await waitForCatalog(
+            (c) => {
+              const a = c.anima_main.variants.find((v) => v.is_latest)
+              return !!a?.exists
+                && !!c.anima_vae.exists
+                && c.qwen3.files.length > 0 && c.qwen3.files.every((f) => f.exists)
+                && c.t5_tokenizer.files.length > 0 && c.t5_tokenizer.files.every((f) => f.exists)
+            },
+            (k) => k.startsWith('anima_main') || k.startsWith('anima_vae')
+                || k.startsWith('qwen3') || k.startsWith('t5_tokenizer'),
+          )
+          if (!res.ok) errors.push(...res.errors)
         }
       } else if (key === 'tagger' && catalog) {
         const current = catalog.wd14.variants.find((v) => v.is_current) ?? catalog.wd14.variants[0]
-        if (current && !current.exists) {
+        const needWd14 = current && !current.exists
+        if (needWd14) {
           await api.startModelDownload({ model_id: 'wd14', variant: current.model_id })
+          const res = await waitForCatalog(
+            (c) => {
+              const cur = c.wd14.variants.find((v) => v.is_current) ?? c.wd14.variants[0]
+              return !!cur?.exists
+            },
+            (k) => k.startsWith('wd14'),
+          )
+          if (!res.ok) errors.push(...res.errors)
         }
-        if (!runtimeStatus.onnx) {
+        if (errors.length === 0 && !runtimeStatus.onnx) {
           const r = await api.installWD14Runtime('auto')
           if (r.installed) {
             setRuntimeStatus((s) => ({ ...s, onnx: true }))
             needsRestart = needsRestart || !!r.restart_required
           } else {
-            ok = false
             errors.push(r.stdout_tail.split('\n').slice(-10).join('\n'))
           }
         }
@@ -308,7 +364,6 @@ export function FirstRunOnboardingModal() {
             setRuntimeStatus((s) => ({ ...s, flashAttn: true }))
             needsRestart = needsRestart || !!r.restart_required
           } else {
-            ok = false
             errors.push(r.stdout_tail.split('\n').slice(-10).join('\n'))
           }
         }
@@ -318,12 +373,22 @@ export function FirstRunOnboardingModal() {
           ?? catalog.upscalers.variants.find((v) => v.label === catalog.upscalers!.default)
         if (target && !target.exists) {
           await api.startModelDownload({ model_id: 'upscalers', variant: target.label })
+          const res = await waitForCatalog(
+            (c) => {
+              if (!c.upscalers) return true
+              const t = c.upscalers.variants.find((v) => v.is_current)
+                ?? c.upscalers.variants.find((v) => v.label === c.upscalers!.default)
+              return !!t?.exists
+            },
+            (k) => k.startsWith('upscalers'),
+          )
+          if (!res.ok) errors.push(...res.errors)
         }
       }
     } catch (e) {
-      ok = false
       errors.push(String(e))
     }
+    const ok = errors.length === 0
     if (!ok) {
       setFailureLogs((s) => ({ ...s, [key]: errors }))
       setInstallState((s) => ({ ...s, [key]: 'failed' }))
@@ -332,7 +397,7 @@ export function FirstRunOnboardingModal() {
     }
     await reloadCatalog()
     return { ok, needsRestart }
-  }, [catalog, runtimeStatus, reloadCatalog])
+  }, [catalog, runtimeStatus, reloadCatalog, waitForCatalog])
 
   // 一键装：串行跑选中条目（后端有些接口本身是同步阻塞 pip，无法并行）。
   const installAll = useCallback(async () => {
