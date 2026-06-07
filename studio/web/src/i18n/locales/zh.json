@@ -1904,7 +1904,12 @@
     "cancelToast": "已取消",
     "triggerWord": "触发词",
     "triggerWordPlaceholder": "如 ohwx / mychar",
-    "triggerWordHint": "打标时作为第一个 tag 写入每张 caption；空 = 不启用。改后启动打标会同步落库到当前 version。"
+    "triggerWordHint": "打标时作为第一个 tag 写入每张 caption；空 = 不启用。改后启动打标会同步落库到当前 version。",
+    "onExisting": "已有 caption",
+    "onExistingHint": "图片已有 caption 文件（.txt 或 .json）时怎么处理。",
+    "onExistingOverwrite": "覆盖",
+    "onExistingSkip": "跳过",
+    "onExistingAppend": "追加到末尾"
   },
   "presets": {
     "loadSchemaFailed": "schema 加载失败: {{error}}",

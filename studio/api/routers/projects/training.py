@@ -89,6 +89,8 @@ def start_tag(pid: int, vid: int, body: TagJobRequest) -> dict[str, Any]:
         raise HTTPException(400, f"unknown tagger: {body.tagger}")
     if body.output_format not in {"txt", "json"}:
         raise HTTPException(400, "output_format must be txt|json")
+    if body.on_existing not in {"overwrite", "skip", "append"}:
+        raise HTTPException(400, "on_existing must be overwrite|skip|append")
     _, v, _ = _version_train_dir_or_404(pid, vid)
 
     # 触发词：先 strip，落到 version 表（持久化，TagEdit / Train 都能读），再
@@ -101,6 +103,9 @@ def start_tag(pid: int, vid: int, body: TagJobRequest) -> dict[str, Any]:
         "version_id": vid,
         "output_format": body.output_format,
     }
+    # 默认值 "overwrite" 不写入 params（worker 端默认就是 overwrite），减小 payload。
+    if body.on_existing != "overwrite":
+        params["on_existing"] = body.on_existing
     if trigger_word:
         params["trigger_word"] = trigger_word
     # 通用：按 tagger 名取 `<name>_overrides` 字段并落到 params 同名键。

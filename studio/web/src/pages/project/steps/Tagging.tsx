@@ -131,6 +131,7 @@ export default function TaggingPage() {
   const [tagger, setTagger] = useState<TaggerName>('wd14')
   const [taggerStatus, setTaggerStatus] = useState<TaggerStatus | null>(null)
   const [outputFormat, setOutputFormat] = useState<'txt' | 'json'>('txt')
+  const [onExisting, setOnExisting] = useState<'overwrite' | 'skip' | 'append'>('overwrite')
   // 触发词：初值从 activeVersion 取（持久化在 version 表）；启动打标时一并提交，
   // 后端会同步落库 + 传给 worker prepend 到每张 caption。
   const [triggerWord, setTriggerWord] = useState<string>('')
@@ -285,7 +286,8 @@ export default function TaggingPage() {
       const overrides = wd14_overrides ?? cltagger_overrides ?? llm_overrides
       const trigger = triggerWord.trim()
       const j = await api.startTag(project.id, activeVersion.id, {
-        tagger, output_format: outputFormat, wd14_overrides, cltagger_overrides, llm_overrides,
+        tagger, output_format: outputFormat, on_existing: onExisting,
+        wd14_overrides, cltagger_overrides, llm_overrides,
         // 传 trigger 永远，让 server 决定是否落库（与现有值比较），空串显式清空
         trigger_word: trigger,
       })
@@ -381,6 +383,23 @@ export default function TaggingPage() {
             >
               <option value="txt">.txt</option>
               <option value="json">.json</option>
+            </select>
+
+            <span className="text-dim">|</span>
+            <span className="text-fg-tertiary" title={t('tag.onExistingHint')}>
+              {t('tag.onExisting')}
+            </span>
+            <select
+              value={onExisting}
+              onChange={(e) => setOnExisting(e.target.value as 'overwrite' | 'skip' | 'append')}
+              disabled={isLive}
+              className="input text-sm"
+              style={{ padding: '3px 8px' }}
+              title={t('tag.onExistingHint')}
+            >
+              <option value="overwrite">{t('tag.onExistingOverwrite')}</option>
+              <option value="skip">{t('tag.onExistingSkip')}</option>
+              <option value="append">{t('tag.onExistingAppend')}</option>
             </select>
 
             <span className="text-dim">|</span>
