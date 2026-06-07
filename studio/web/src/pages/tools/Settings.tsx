@@ -2327,7 +2327,7 @@ function ONNXRuntimeSection() {
   const dialog = useDialog()
   const [rt, setRt] = useState<WD14Runtime | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState<null | 'auto' | 'gpu' | 'cpu'>(null)
+  const [busy, setBusy] = useState<null | 'auto' | 'gpu' | 'cpu' | 'directml'>(null)
   const [reinstallOpen, setReinstallOpen] = useState(false)
   const { toast } = useToast()
 
@@ -2343,12 +2343,14 @@ function ONNXRuntimeSection() {
 
   useEffect(() => { void refresh() }, [refresh])
 
-  const install = async (target: 'auto' | 'gpu' | 'cpu') => {
+  const install = async (target: 'auto' | 'gpu' | 'cpu' | 'directml') => {
     const confirmKey = target === 'auto'
       ? 'settings.confirmInstallOnnxAuto'
       : target === 'gpu'
         ? 'settings.confirmInstallOnnxGpu'
-        : 'settings.confirmInstallOnnxCpu'
+        : target === 'directml'
+          ? 'settings.confirmInstallOnnxDirectml'
+          : 'settings.confirmInstallOnnxCpu'
     const ok = await dialog.confirm(
       t(confirmKey),
       { tone: 'warn', okText: t('settings.startInstall') },
@@ -2359,7 +2361,10 @@ function ONNXRuntimeSection() {
       const result = await api.installWD14Runtime(target)
       setRt({
         installed: result.installed, version: result.version, providers: result.providers,
-        cuda_available: result.cuda_available, restart_required: result.restart_required,
+        cuda_available: result.cuda_available,
+        directml_available: result.directml_available,
+        platform: result.platform,
+        restart_required: result.restart_required,
         cuda_load_error: result.cuda_load_error, preload: result.preload, cuda_detect: result.cuda_detect,
       })
       const newPkg = result.installed_pkg ?? result.installed ?? '?'
@@ -2373,26 +2378,34 @@ function ONNXRuntimeSection() {
   }
 
   const cuda = rt?.cuda_detect ?? { available: false, driver_version: null, gpu_name: null }
-  const mismatched = !!rt && cuda.available && !rt.cuda_available
-  // 默认状态正常时整体折叠；有错 / mismatch / 需重启时自动展开
+  const notInstalled = !!rt && rt.installed === null
+  const gpuAccel = !!rt && (rt.cuda_available || rt.directml_available)
+  const isWindows = !rt || rt.platform === 'win32'
+  // mismatched: 装了某个包 + 有 GPU 但没用上任何加速 EP（CUDA 或 DirectML）。
+  // 未装由 notInstalled 接管；已装且已经在用 DirectML 不算 mismatch。
+  const mismatched = !!rt && rt.installed !== null && cuda.available && !gpuAccel
+  // 默认状态正常时整体折叠；未装 / 有错 / mismatch / 需重启时自动展开
   const hasIssue = !!error || (rt && (
-    !!rt.cuda_load_error || rt.restart_required || mismatched
+    notInstalled || !!rt.cuda_load_error || rt.restart_required || mismatched
   ))
 
   // summary 里显示一行简短状态，用户不展开就能扫到
+  const epShort = !rt
+    ? '?'
+    : rt.cuda_available ? 'CUDA' : rt.directml_available ? 'DirectML' : 'CPU'
   const statusLabel = error
     ? `⚠ ${t('settings.statusLoadFailed')}`
     : !rt
       ? t('settings.loadingStatus')
-      : rt.cuda_load_error
-        ? `⚠ ${t('settings.cudaLoadFailed')}`
-        : rt.restart_required
-          ? `⚠ ${t('settings.restartStudioRequired')}`
-          : mismatched
-            ? `⚠ ${t('settings.gpuRunningCpuEp')}`
-            : rt.cuda_available
-              ? `CUDA · ${rt.installed ?? '?'}`
-              : `CPU · ${rt.installed ?? '?'}`
+      : notInstalled
+        ? `⚠ ${t('settings.notInstalledShort')}`
+        : rt.cuda_load_error
+          ? `⚠ ${t('settings.cudaLoadFailed')}`
+          : rt.restart_required
+            ? `⚠ ${t('settings.restartStudioRequired')}`
+            : mismatched
+              ? `⚠ ${t('settings.gpuRunningCpuEp')}`
+              : `${epShort} · ${rt.installed ?? '?'}`
   const statusOk = rt && !hasIssue
 
   return (
@@ -2413,7 +2426,7 @@ function ONNXRuntimeSection() {
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-fg-tertiary shrink-0">runtime:</span>
                 <code className="font-mono text-fg-primary">{rt.installed ?? t('settings.notInstalledParen')}{rt.version ? `==${rt.version}` : ''}</code>
-                <StatusLabel bg={rt.cuda_available ? 'bg-ok-soft' : 'bg-warn-soft'} fg={rt.cuda_available ? 'text-ok' : 'text-warn'} text={rt.cuda_available ? 'CUDA' : 'CPU only'} />
+                <StatusLabel bg={gpuAccel ? 'bg-ok-soft' : 'bg-warn-soft'} fg={gpuAccel ? 'text-ok' : 'text-warn'} text={rt.cuda_available ? 'CUDA' : rt.directml_available ? 'DirectML' : 'CPU only'} />
               </div>
               <div className="text-fg-tertiary">EP: <code className="text-fg-secondary font-mono">{(rt.providers ?? []).map((p) => p.replace('ExecutionProvider', '')).join(' / ') || '(none)'}</code></div>
               <div className="text-fg-tertiary">{t('settings.gpuDetect')}: <span className="text-fg-secondary">{cuda.available ? `${cuda.gpu_name ?? '?'} (driver ${cuda.driver_version ?? '?'})` : t('settings.noNvidiaGpu')}</span></div>
@@ -2422,6 +2435,11 @@ function ONNXRuntimeSection() {
             {rt.restart_required && (
               <div className="rounded-sm border border-err bg-err-soft px-2 py-1.5 text-err text-xs">
                 <Trans i18nKey="settings.onnxRestartRequired" components={{ strong: <strong /> }} />
+              </div>
+            )}
+            {!rt.restart_required && notInstalled && (
+              <div className="rounded-sm border border-info bg-info-soft px-2 py-1.5 text-info text-xs">
+                {cuda.available ? t('settings.onnxNotInstalledHintGpu') : t('settings.onnxNotInstalledHintCpu')}
               </div>
             )}
             {!rt.restart_required && mismatched && (
@@ -2450,9 +2468,33 @@ function ONNXRuntimeSection() {
               </button>
             </div>
             {reinstallOpen && (
-              <div className="flex gap-1.5 items-center flex-wrap pt-2 border-t border-subtle">
-                <button onClick={() => install('gpu')} disabled={busy !== null} className="btn btn-secondary btn-sm">{busy === 'gpu' ? t('settings.installingPackage') : t('settings.reinstallGpu')}</button>
-                <button onClick={() => install('cpu')} disabled={busy !== null} className="btn btn-secondary btn-sm">{busy === 'cpu' ? t('settings.installingPackage') : t('settings.reinstallCpu')}</button>
+              <div className="flex flex-col gap-2 pt-2 border-t border-subtle">
+                <div className="flex gap-1.5 items-center flex-wrap">
+                  <button
+                    onClick={() => install('directml')}
+                    disabled={busy !== null || !isWindows}
+                    title={isWindows ? t('settings.directmlPackageHint') : t('settings.directmlWinOnlyHint')}
+                    className="btn btn-secondary btn-sm"
+                  >
+                    {busy === 'directml' ? t('settings.installingPackage') : t('settings.reinstallDirectml')}
+                  </button>
+                  <button
+                    onClick={() => install('gpu')}
+                    disabled={busy !== null}
+                    title={t('settings.cudaPackageHint')}
+                    className="btn btn-secondary btn-sm"
+                  >
+                    {busy === 'gpu' ? t('settings.installingPackage') : t('settings.reinstallGpu')}
+                  </button>
+                  <button
+                    onClick={() => install('cpu')}
+                    disabled={busy !== null}
+                    title={t('settings.cpuPackageHint')}
+                    className="btn btn-secondary btn-sm"
+                  >
+                    {busy === 'cpu' ? t('settings.installingPackage') : t('settings.reinstallCpu')}
+                  </button>
+                </div>
                 <span className="text-[10px] text-fg-tertiary">{t('settings.onnxForceHint')}</span>
               </div>
             )}

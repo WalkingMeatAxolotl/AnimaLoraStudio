@@ -292,16 +292,21 @@ export interface FlashAttnInstallResult {
   restart_required: boolean
 }
 
-/** PP8 — onnxruntime 装包状态 + nvidia-smi 检测结果。 */
+/** onnxruntime 装包状态 + nvidia-smi 检测 + 平台标识（前端用来按平台 disable 按钮）。 */
 export interface WD14Runtime {
-  installed: 'onnxruntime' | 'onnxruntime-gpu' | null
+  installed: 'onnxruntime' | 'onnxruntime-gpu' | 'onnxruntime-directml' | null
   version: string | null
   providers: string[]
   cuda_available: boolean
+  /** DirectML EP 可用（Windows + 装了 onnxruntime-directml 时为 true）。 */
+  directml_available: boolean
+  /** 后端 sys.platform：'win32' / 'linux' / 'darwin' 等。Settings UI 据此 disable
+   *  跨平台不可用的按钮（DirectML 仅 Windows；GPU + nvidia-* wheel 仅 Linux 最优）。 */
+  platform: string
   /** 装的包（dist-info）与当前进程已 import 的 .pyd 不一致 → 需重启 Studio。 */
   restart_required: boolean
   /** PP9.5 — InferenceSession 创建时实际 dlopen 报的错（如缺 libcurand.so.10）；
-   *  非 null 表示已自动降级到 CPU EP，UI 应提示用户装 CUDA 库。 */
+   *  非 null 表示已自动降级到 CPU EP，UI 应提示用户装 CUDA 库或换 DirectML。 */
   cuda_load_error: string | null
   /** PP9.5 — torch 自带 CUDA so 预加载结果（Linux 才会 applied=true）。 */
   preload?: {
@@ -2302,7 +2307,7 @@ export const api = {
   /** 当前 onnxruntime 状态：包名 / 版本 / providers / nvidia-smi 检测结果。 */
   getWD14Runtime: () => req<WD14Runtime>('/api/wd14/runtime'),
   /** 切换 onnxruntime（同步 pip，几分钟级；UI 必须带 loading）。 */
-  installWD14Runtime: (target: 'auto' | 'gpu' | 'cpu') =>
+  installWD14Runtime: (target: 'auto' | 'gpu' | 'cpu' | 'directml') =>
     req<WD14InstallResult>('/api/wd14/install', {
       method: 'POST',
       body: JSON.stringify({ target }),
