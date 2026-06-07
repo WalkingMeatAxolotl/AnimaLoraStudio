@@ -106,6 +106,8 @@ class BooruPoolConfig:
     api_rate_per_sec: float = 2.0
     cdn_rate_per_sec: float = 5.0
     backoff_on_429: float = 60.0
+    # 503 = 服务端瞬时不可用，纯瞬时问题，不应像 429 那样长时间 sticky + 减速
+    backoff_on_503: float = 15.0
 
 
 class BooruClient:
@@ -128,7 +130,8 @@ class BooruClient:
         self.cfg = cfg or BooruPoolConfig()
         self._session = session or requests.Session()
         patch_requests_session(self._session)
-        logger.info(f"BooruClient session proxies: {self._session.proxies}")
+        # 外部传入的 session 不一定是 requests.Session（测试里有最小 FakeSession 只实现 .get）
+        logger.info("BooruClient session proxies: %s", getattr(self._session, "proxies", {}))
         self._owns_session = session is None
         self._api_bucket = TokenBucket(self.cfg.api_rate_per_sec)
         self._cdn_bucket = TokenBucket(self.cfg.cdn_rate_per_sec)
@@ -136,9 +139,9 @@ class BooruClient:
             max_workers=max(1, self.cfg.parallel_workers),
             thread_name_prefix="booru-pool",
         )
-        # 429 sticky 退避状态
+        # sticky 退避状态 —— API / CDN 独立，避免 CDN 503 风暴锁住 API host
         self._lock = threading.Lock()
-        self._backoff_until: float = 0.0
+        self._backoff_until: dict[str, float] = {"api": 0.0, "cdn": 0.0}
         self._rate_halved = False
 
     # -------------------- lifecycle --------------------
@@ -160,63 +163,85 @@ class BooruClient:
     def __exit__(self, *_exc: Any) -> None:
         self.close()
 
-    # -------------------- 429 sticky 状态 --------------------
+    # -------------------- sticky 退避状态 --------------------
 
-    def _wait_if_backoff(self) -> None:
-        """若上次撞 429，整 client 等到 backoff_until 之后才发新请求。"""
+    def _wait_if_backoff(self, kind: str) -> None:
+        """若该 host class 处在 backoff window 内，阻塞到 window 结束。
+
+        不 log —— 进入 backoff 时 `_trigger_backoff` 已经 log 过一次；
+        每个 worker 各自在这里 log 会刷屏（N worker → N 行相同 backoff 提示）。
+        """
         with self._lock:
-            until = self._backoff_until
+            until = self._backoff_until[kind]
         wait = until - time.monotonic()
         if wait > 0:
-            logger.warning("[booru_pool] 429 backoff，等 %.1fs", wait)
             time.sleep(wait)
 
-    def _trigger_backoff(self, status_code: int) -> None:
-        """收到 429/503 → 全 client backoff 60s + 永久减半速率。"""
+    def _trigger_backoff(self, status_code: int, kind: str) -> None:
+        """收到 429/503 → 该 host class 进 sticky backoff。
+
+        - 429（服务端明确「太快了」）：长退避 + 永久减半速率（一次）
+        - 503（服务端瞬时不可用）：短退避，不动速率 —— 服务端宕机不是我们的问题
+        - 一个 backoff window 内连续触发只 log 一次（避免 burst 503 时刷 N 行）
+        """
+        is_429 = status_code == 429
+        backoff = self.cfg.backoff_on_429 if is_429 else self.cfg.backoff_on_503
+        log_new_window = False
+        do_halve = False
         with self._lock:
-            self._backoff_until = time.monotonic() + self.cfg.backoff_on_429
-            if not self._rate_halved:
+            # 仅在当前不在 backoff window 内时视为「新 window」→ log 一次
+            if self._backoff_until[kind] <= time.monotonic():
+                log_new_window = True
+            self._backoff_until[kind] = time.monotonic() + backoff
+            if is_429 and not self._rate_halved:
                 self._rate_halved = True
                 self.cfg.api_rate_per_sec /= 2
                 self.cfg.cdn_rate_per_sec /= 2
-                self._api_bucket.set_rate(self.cfg.api_rate_per_sec)
-                self._cdn_bucket.set_rate(self.cfg.cdn_rate_per_sec)
-                logger.warning(
-                    "[booru_pool] 收到 %d，速率永久减半（API %.2f / CDN %.2f req/s）",
-                    status_code,
-                    self.cfg.api_rate_per_sec,
-                    self.cfg.cdn_rate_per_sec,
-                )
+                do_halve = True
 
-    def _check_response(self, resp: requests.Response) -> None:
+        if log_new_window:
+            logger.warning(
+                "[booru_pool] %s 收到 %d，sticky backoff %.0fs",
+                kind, status_code, backoff,
+            )
+        if do_halve:
+            self._api_bucket.set_rate(self.cfg.api_rate_per_sec)
+            self._cdn_bucket.set_rate(self.cfg.cdn_rate_per_sec)
+            logger.warning(
+                "[booru_pool] 429 触发速率永久减半（API %.2f / CDN %.2f req/s）",
+                self.cfg.api_rate_per_sec,
+                self.cfg.cdn_rate_per_sec,
+            )
+
+    def _check_response(self, resp: requests.Response, kind: str) -> None:
         """429/503 触发 sticky 退避；其他 4xx/5xx 不动池子（让上层抛错）。"""
         if resp.status_code in (429, 503):
-            self._trigger_backoff(resp.status_code)
+            self._trigger_backoff(resp.status_code, kind)
 
     # -------------------- 公开 API --------------------
 
     def search_posts(self, api_source: str, tags_query: str, **kw: Any) -> list[dict[str, Any]]:
         """走 API bucket。kw 透传给 booru_api.search_posts。"""
-        self._wait_if_backoff()
+        self._wait_if_backoff("api")
         self._api_bucket.acquire()
         kw.setdefault("session", self._session)
         try:
             return booru_api.search_posts(api_source, tags_query, **kw)
         except requests.HTTPError as exc:
             if exc.response is not None:
-                self._check_response(exc.response)
+                self._check_response(exc.response, "api")
             raise
 
     def download_image(self, url: str, save_path: Path, **kw: Any) -> Path:
         """走 CDN bucket。kw 透传给 booru_api.download_image。"""
-        self._wait_if_backoff()
+        self._wait_if_backoff("cdn")
         self._cdn_bucket.acquire()
         kw.setdefault("session", self._session)
         try:
             return booru_api.download_image(url, save_path, **kw)
         except requests.HTTPError as exc:
             if exc.response is not None:
-                self._check_response(exc.response)
+                self._check_response(exc.response, "cdn")
             raise
 
     def parallel_download(
