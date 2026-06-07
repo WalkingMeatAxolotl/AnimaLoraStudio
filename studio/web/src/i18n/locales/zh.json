@@ -2195,7 +2195,6 @@
     "subtitle": "下面是建议安装的基础能力,勾选后一键安装。已装好的会自动打勾。",
     "downloadSource": "下载源",
     "downloadSourceHint": "已为你按语言推荐,可以改。下载源同时影响后续所有模型下载。",
-    "advanced": "高级选项",
     "skip": "跳过引导",
     "installSelected": "一键安装选中 ({{count}})",
     "finish": "完成",
@@ -2230,21 +2229,7 @@
       },
       "accel": {
         "label": "训练加速 (可选)",
-        "description": "更快的注意力实现,显著提速;CPU / 旧显卡可不装",
-        "choice": {
-          "flash_attn": {
-            "label": "Flash Attention",
-            "hint": "推荐,速度最快"
-          },
-          "xformers": {
-            "label": "Xformers",
-            "hint": "备选,flash-attn 装不上时用"
-          },
-          "none": {
-            "label": "不装",
-            "hint": "CPU / 旧显卡也能跑,只是慢"
-          }
-        }
+        "description": "Flash Attention,显著提速训练;CPU / 旧显卡装不上时可跳过"
       },
       "upscaler": {
         "label": "图像增强 (可选)",

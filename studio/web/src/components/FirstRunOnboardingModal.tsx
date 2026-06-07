@@ -45,7 +45,6 @@ export function defaultDownloadSource(lang: string | null | undefined): 'hugging
 
 type ItemKey = 'base' | 'tagger' | 'accel' | 'upscaler'
 type ItemStatus = 'idle' | 'queued' | 'installing' | 'done' | 'failed'
-type AccelChoice = 'flash_attn' | 'xformers' | 'none'
 
 interface ItemDerived {
   status: ItemStatus
@@ -94,16 +93,14 @@ function deriveTaggerStatus(
   return { status: 'idle', progress: { done, total } }
 }
 
-// 训练加速 = 用户选的那个已装；'none' 选项永远 done（用户主动不装）。
+// 训练加速：检测 flash_attn 或 xformers 任一已装(尊重用户已有环境),
+// 安装时统一装 flash_attn(推荐方案,新人不用选)。
 function deriveAccelStatus(
-  choice: AccelChoice,
   hasFlash: boolean,
   hasXformers: boolean,
   dl: Record<ItemKey, ItemStatus>,
 ): ItemDerived {
-  if (choice === 'none') return { status: 'done' }
-  if (choice === 'flash_attn' && hasFlash) return { status: 'done' }
-  if (choice === 'xformers' && hasXformers) return { status: 'done' }
+  if (hasFlash || hasXformers) return { status: 'done' }
   if (dl.accel === 'failed') return { status: 'failed' }
   if (dl.accel === 'installing' || dl.accel === 'queued') return { status: dl.accel }
   return { status: 'idle' }
@@ -133,7 +130,6 @@ export function FirstRunOnboardingModal() {
   const [open, setOpen] = useState<boolean>(false)
   // 选中要装的条目；初次 mount 时按"推荐勾选"填充。
   const [selected, setSelected] = useState<Set<ItemKey>>(new Set(['base', 'tagger']))
-  const [accelChoice, setAccelChoice] = useState<AccelChoice>('flash_attn')
   // 安装本地状态机（catalog 还没反映到结果时用）。
   const [installState, setInstallState] = useState<Record<ItemKey, ItemStatus>>({
     base: 'idle', tagger: 'idle', accel: 'idle', upscaler: 'idle',
@@ -190,9 +186,9 @@ export function FirstRunOnboardingModal() {
   const itemStatus = useMemo<Record<ItemKey, ItemDerived>>(() => ({
     base: deriveBaseStatus(catalog, installState),
     tagger: deriveTaggerStatus(catalog, runtimeStatus.onnx, installState),
-    accel: deriveAccelStatus(accelChoice, runtimeStatus.flashAttn, runtimeStatus.xformers, installState),
+    accel: deriveAccelStatus(runtimeStatus.flashAttn, runtimeStatus.xformers, installState),
     upscaler: deriveUpscalerStatus(catalog, installState),
-  }), [catalog, installState, runtimeStatus, accelChoice])
+  }), [catalog, installState, runtimeStatus])
 
   // 全部装完判定：选中的条目全 done。
   const allSelectedDone = useMemo(() => {
@@ -292,19 +288,10 @@ export function FirstRunOnboardingModal() {
           }
         }
       } else if (key === 'accel') {
-        if (accelChoice === 'flash_attn' && !runtimeStatus.flashAttn) {
+        if (!runtimeStatus.flashAttn && !runtimeStatus.xformers) {
           const r = await api.installFlashAttn(null)
           if (r.installed) {
             setRuntimeStatus((s) => ({ ...s, flashAttn: true }))
-            needsRestart = needsRestart || !!r.restart_required
-          } else {
-            ok = false
-            errors.push(r.stdout_tail.split('\n').slice(-10).join('\n'))
-          }
-        } else if (accelChoice === 'xformers' && !runtimeStatus.xformers) {
-          const r = await api.installXformers()
-          if (r.installed) {
-            setRuntimeStatus((s) => ({ ...s, xformers: true }))
             needsRestart = needsRestart || !!r.restart_required
           } else {
             ok = false
@@ -331,7 +318,7 @@ export function FirstRunOnboardingModal() {
     }
     await reloadCatalog()
     return { ok, needsRestart }
-  }, [catalog, accelChoice, runtimeStatus, reloadCatalog])
+  }, [catalog, runtimeStatus, reloadCatalog])
 
   // 一键装：串行跑选中条目（后端有些接口本身是同步阻塞 pip，无法并行）。
   const installAll = useCallback(async () => {
@@ -439,11 +426,12 @@ export function FirstRunOnboardingModal() {
             disabled={installingNow}
           />
 
-          <AccelItem
+          <ChecklistItem
+            itemKey="accel"
+            label={t('onboarding.items.accel.label')}
+            description={t('onboarding.items.accel.description')}
             checked={selected.has('accel')}
             onToggle={() => toggleSelected('accel')}
-            choice={accelChoice}
-            onChoiceChange={setAccelChoice}
             status={itemStatus.accel}
             failureLog={failureLogs.accel}
             onRetry={() => retryItem('accel')}
@@ -556,15 +544,15 @@ function StatusBadge({ status, progress }: { status: ItemStatus; progress?: { do
   const baseClass = 'inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded'
   switch (status) {
     case 'done':
-      return <span className={`${baseClass} bg-success-soft text-success`}>✓ {t('onboarding.status.done')}</span>
+      return <span className={`${baseClass} bg-accent-soft text-accent`}>✓ {t('onboarding.status.done')}</span>
     case 'installing': {
       const suffix = progress ? ` (${progress.done}/${progress.total})` : ''
-      return <span className={`${baseClass} bg-accent-soft text-accent`}>⏳ {t('onboarding.status.installing')}{suffix}</span>
+      return <span className={`${baseClass} bg-info-soft text-info`}>⏳ {t('onboarding.status.installing')}{suffix}</span>
     }
     case 'queued':
       return <span className={`${baseClass} bg-surface text-fg-tertiary`}>⏱ {t('onboarding.status.queued')}</span>
     case 'failed':
-      return <span className={`${baseClass} bg-danger-soft text-danger`}>✕ {t('onboarding.status.failed')}</span>
+      return <span className={`${baseClass} bg-err-soft text-err`}>✕ {t('onboarding.status.failed')}</span>
     default: {
       const suffix = progress && progress.done > 0 ? ` (${progress.done}/${progress.total})` : ''
       return <span className={`${baseClass} bg-surface text-fg-tertiary`}>○ {t('onboarding.status.idle')}{suffix}</span>
@@ -595,6 +583,7 @@ function ChecklistItem(props: {
           onChange={props.onToggle}
           disabled={props.disabled}
           className="mt-1 cursor-pointer disabled:cursor-not-allowed"
+          style={{ accentColor: 'var(--accent)' }}
           data-testid={`onboarding-check-${props.itemKey}`}
         />
         <div className="flex-1 min-w-0">
@@ -633,78 +622,3 @@ function ChecklistItem(props: {
   )
 }
 
-function AccelItem(props: {
-  checked: boolean
-  onToggle: () => void
-  choice: AccelChoice
-  onChoiceChange: (c: AccelChoice) => void
-  status: ItemDerived
-  failureLog: string[]
-  onRetry: () => void
-  disabled: boolean
-}) {
-  const { t } = useTranslation()
-  const [logOpen, setLogOpen] = useState(false)
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-start gap-3">
-        <input
-          type="checkbox"
-          checked={props.checked}
-          onChange={props.onToggle}
-          disabled={props.disabled}
-          className="mt-1 cursor-pointer"
-          data-testid="onboarding-check-accel"
-        />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <div className="text-sm font-medium text-fg-primary">{t('onboarding.items.accel.label')}</div>
-            <StatusBadge status={props.status.status} />
-          </div>
-          <div className="text-xs text-fg-tertiary mt-0.5">{t('onboarding.items.accel.description')}</div>
-          {props.checked && (
-            <div className="mt-2 flex flex-col gap-1 pl-1">
-              {(['flash_attn', 'xformers', 'none'] as const).map((c) => (
-                <label key={c} className="flex items-center gap-2 text-xs cursor-pointer">
-                  <input
-                    type="radio"
-                    name="onboarding-accel-choice"
-                    checked={props.choice === c}
-                    onChange={() => props.onChoiceChange(c)}
-                    disabled={props.disabled}
-                    className="cursor-pointer"
-                  />
-                  <span className="font-medium text-fg-secondary">{t(`onboarding.items.accel.choice.${c}.label`)}</span>
-                  <span className="text-fg-tertiary">{t(`onboarding.items.accel.choice.${c}.hint`)}</span>
-                </label>
-              ))}
-            </div>
-          )}
-          {props.status.status === 'failed' && (
-            <div className="mt-2 flex items-center gap-2">
-              <button
-                type="button"
-                onClick={props.onRetry}
-                className="px-2 py-1 text-xs bg-surface border border-dim rounded hover:border-accent cursor-pointer"
-              >
-                {t('onboarding.retry')}
-              </button>
-              <button
-                type="button"
-                onClick={() => setLogOpen((v) => !v)}
-                className="px-2 py-1 text-xs text-fg-tertiary hover:text-fg-primary bg-transparent border-none cursor-pointer"
-              >
-                {logOpen ? t('onboarding.hideLog') : t('onboarding.showLog')}
-              </button>
-            </div>
-          )}
-          {logOpen && props.failureLog.length > 0 && (
-            <pre className="mt-2 p-2 text-xs bg-surface border border-dim rounded overflow-x-auto whitespace-pre-wrap max-h-32">
-              {props.failureLog.join('\n')}
-            </pre>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}

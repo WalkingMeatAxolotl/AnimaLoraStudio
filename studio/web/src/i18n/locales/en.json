@@ -2195,7 +2195,6 @@
     "subtitle": "Here are the basics you'll want set up. Tick what you need and install them in one go. Already-installed items are auto-checked.",
     "downloadSource": "Download source",
     "downloadSourceHint": "Pre-selected based on your language; feel free to change. This source is used for all model downloads.",
-    "advanced": "Advanced",
     "skip": "Skip",
     "installSelected": "Install selected ({{count}})",
     "finish": "Done",
@@ -2230,21 +2229,7 @@
       },
       "accel": {
         "label": "Training acceleration (optional)",
-        "description": "Faster attention implementations for noticeable speedups; skip on CPU / older GPUs",
-        "choice": {
-          "flash_attn": {
-            "label": "Flash Attention",
-            "hint": "Recommended, fastest"
-          },
-          "xformers": {
-            "label": "Xformers",
-            "hint": "Fallback when flash-attn won't install"
-          },
-          "none": {
-            "label": "Skip",
-            "hint": "CPU / older GPUs work too, just slower"
-          }
-        }
+        "description": "Flash Attention — noticeable training speedup; skip on CPU / older GPUs where it won't build"
       },
       "upscaler": {
         "label": "Image upscaler (optional)",
