@@ -134,7 +134,6 @@ export function FirstRunOnboardingModal() {
   // 选中要装的条目；初次 mount 时按"推荐勾选"填充。
   const [selected, setSelected] = useState<Set<ItemKey>>(new Set(['base', 'tagger']))
   const [accelChoice, setAccelChoice] = useState<AccelChoice>('flash_attn')
-  const [advancedOpen, setAdvancedOpen] = useState<boolean>(false)
   // 安装本地状态机（catalog 还没反映到结果时用）。
   const [installState, setInstallState] = useState<Record<ItemKey, ItemStatus>>({
     base: 'idle', tagger: 'idle', accel: 'idle', upscaler: 'idle',
@@ -440,40 +439,28 @@ export function FirstRunOnboardingModal() {
             disabled={installingNow}
           />
 
-          <details
-            open={advancedOpen}
-            onToggle={(e) => setAdvancedOpen((e.target as HTMLDetailsElement).open)}
-            className="border-t border-dim pt-4"
-          >
-            <summary className="cursor-pointer text-sm font-medium text-fg-secondary hover:text-fg-primary select-none">
-              {t('onboarding.advanced')}
-            </summary>
+          <AccelItem
+            checked={selected.has('accel')}
+            onToggle={() => toggleSelected('accel')}
+            choice={accelChoice}
+            onChoiceChange={setAccelChoice}
+            status={itemStatus.accel}
+            failureLog={failureLogs.accel}
+            onRetry={() => retryItem('accel')}
+            disabled={installingNow}
+          />
 
-            <div className="mt-3 flex flex-col gap-4">
-              <AccelItem
-                checked={selected.has('accel')}
-                onToggle={() => toggleSelected('accel')}
-                choice={accelChoice}
-                onChoiceChange={setAccelChoice}
-                status={itemStatus.accel}
-                failureLog={failureLogs.accel}
-                onRetry={() => retryItem('accel')}
-                disabled={installingNow}
-              />
-
-              <ChecklistItem
-                itemKey="upscaler"
-                label={t('onboarding.items.upscaler.label')}
-                description={t('onboarding.items.upscaler.description')}
-                checked={selected.has('upscaler')}
-                onToggle={() => toggleSelected('upscaler')}
-                status={itemStatus.upscaler}
-                failureLog={failureLogs.upscaler}
-                onRetry={() => retryItem('upscaler')}
-                disabled={installingNow}
-              />
-            </div>
-          </details>
+          <ChecklistItem
+            itemKey="upscaler"
+            label={t('onboarding.items.upscaler.label')}
+            description={t('onboarding.items.upscaler.description')}
+            checked={selected.has('upscaler')}
+            onToggle={() => toggleSelected('upscaler')}
+            status={itemStatus.upscaler}
+            failureLog={failureLogs.upscaler}
+            onRetry={() => retryItem('upscaler')}
+            disabled={installingNow}
+          />
         </div>
 
         <div className="border-t border-dim p-4 flex items-center justify-between bg-surface">
@@ -606,7 +593,7 @@ function ChecklistItem(props: {
           type="checkbox"
           checked={props.checked || isDone}
           onChange={props.onToggle}
-          disabled={props.disabled || isDone}
+          disabled={props.disabled}
           className="mt-1 cursor-pointer disabled:cursor-not-allowed"
           data-testid={`onboarding-check-${props.itemKey}`}
         />
