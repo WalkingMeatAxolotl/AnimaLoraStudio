@@ -115,6 +115,7 @@ const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
     { id: 'wandb', labelKey: 'settings.wandb' },
   ],
   testing: [
+    { id: 'idle-timeout', labelKey: 'settings.idleTimeout.title' },
     { id: 'preview', labelKey: 'settings.intermediatePreview' },
   ],
   appearance: [
@@ -251,7 +252,7 @@ const EMPTY: Secrets = {
   },
   models: { root: null, selected_anima: '1.0', selected_upscaler: '4x-AnimeSharp', auto_sync_paths: true },
   queue: { allow_gpu_during_train: false },
-  generate: { preview_every_n_steps: 3, attention_backend: 'auto' },
+  generate: { preview_every_n_steps: 3, attention_backend: 'auto', idle_timeout_minutes: 10 },
   system: { update_channel: 'stable', show_dev_channel: false },
   proxy: {
     enabled: false,
@@ -1189,6 +1190,7 @@ export default function SettingsPage() {
         {/* attention 后端走全局 auto-detect，UI 不暴露切换；想强制覆盖
             的高级用户改 secrets.json 的 generate.attention_backend
             （flash_attn / xformers / none）。安装管理在『训练』tab。 */}
+        <IdleTimeoutSection draft={draft} update={update} />
         <TaeFluxSection draft={draft} update={update} />
       </>)}
 
@@ -2943,6 +2945,45 @@ function XformersSection() {
 //
 // TAEFlux 模型 server 启动时后台下载（lifespan startup）；UI 只暴露用户必须
 // 控制的「节流 N」一个输入，其他状态/下载/帮助文字全删（用户决策）。
+
+function IdleTimeoutSection({
+  draft, update,
+}: {
+  draft: Secrets
+  update: <S extends Section, K extends keyof Secrets[S]>(
+    section: S, key: K, value: Secrets[S][K],
+  ) => void
+}) {
+  const { t } = useTranslation()
+  const minutes = draft.generate.idle_timeout_minutes
+  return (
+    <SettingsSection id="idle-timeout" title={t('settings.idleTimeout.title')}>
+      <SettingsField
+        label={t('settings.idleTimeout.label')}
+        desc={t('settings.idleTimeout.desc')}
+        helpTooltip={<p>{t('settings.idleTimeout.help')}</p>}
+      >
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            min={0}
+            max={240}
+            value={minutes}
+            onChange={(e) => update('generate', 'idle_timeout_minutes', Math.max(0, Number(e.target.value) || 0))}
+            className="input"
+            style={{ width: 80 }}
+          />
+          <span className="text-xs text-fg-tertiary">
+            {minutes === 0
+              ? t('settings.idleTimeout.offHint')
+              : t('settings.idleTimeout.minutesSuffix')}
+          </span>
+        </div>
+      </SettingsField>
+    </SettingsSection>
+  )
+}
+
 
 function TaeFluxSection({
   draft, update,
