@@ -107,10 +107,12 @@ def run(ctx: TrainingContext) -> None:
         ctx.sample_prompts = [args.sample_prompt]
     ctx.sample_prompt_idx = 0
 
-    # Step 0 初始采样（基线效果，测试所有提示词）
-    # 只在新训练时执行（global_step == 0），resume 时跳过
-    sampling_enabled = args.sample_steps > 0 or args.sample_every > 0
-    if ctx.global_step == 0 and sampling_enabled:
+    # Step 0 初始采样（基线效果，测试所有提示词）。
+    # 启动前采样很重，单独用 sample_on_start 控制；周期采样仍由
+    # sample_every / sample_steps 控制，不受此开关影响。
+    periodic_sampling_enabled = args.sample_steps > 0 or args.sample_every > 0
+    startup_sampling_enabled = bool(getattr(args, "sample_on_start", False)) and periodic_sampling_enabled
+    if ctx.global_step == 0 and startup_sampling_enabled:
         ctx.emit("采样中 (step 0, 基线)...")
         for i, prompt in enumerate(ctx.sample_prompts[:3]):  # 最多测试 3 个
             sample_path = ctx.sample_dir / f"step_0_baseline_{i}.png"
@@ -123,7 +125,7 @@ def run(ctx: TrainingContext) -> None:
                 wandb_step=0,
                 seed_offset=i,
             )
-    elif ctx.global_step > 0 and sampling_enabled:
+    elif ctx.global_step > 0 and startup_sampling_enabled:
         ctx.emit(f"跳过启动基线采样（从 step {ctx.global_step} 恢复，非 step 0）")
 
     # ADR §8.1 is_pausable 信号：resume phase 全部跑完 → 训练进入主循环 →
