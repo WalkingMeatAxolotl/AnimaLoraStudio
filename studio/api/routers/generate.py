@@ -20,7 +20,6 @@ from __future__ import annotations
 import io
 import json
 import re
-import time
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -245,27 +244,86 @@ def get_generate_sample(task_id: int, filename: str) -> Any:
     )
 
 
-SIDECAR_SCHEMA_VERSION = 1
-
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _DISK_MODES = ("single", "xy")
 
 
-def _inject_png_params(raw: bytes, params: dict[str, Any]) -> bytes:
-    """把 params 作为 tEXt `anima_params` 注入 PNG。失败返回原 bytes。
+def _format_a1111_parameters(params: dict[str, Any]) -> str:
+    """组装 a1111 兼容的 `parameters` tEXt 块（ComfyUI / WebUI / Civitai 等通用）。
 
-    单一 tEXt 块即可——用户拷走单文件，参数随图走。a1111 兼容文本块按需后加。
+    格式：
+        <prompt> [<lora:name:scale> ...]
+        Negative prompt: <neg>
+        Steps: N, Sampler: ..., Schedule type: ..., CFG scale: N, Seed: N, Size: WxH
+
+    LoRA 用 <lora:basename-without-ext:scale> 语法（a1111/ComfyUI 标准）。
+    xy_draft / dataset_pick 不入此块（a1111 没标准字段；用 anima_params 取）。
+    """
+    prompts = params.get("prompts") or [""]
+    prompt = prompts[0] if isinstance(prompts, list) else str(prompts)
+    loras = params.get("loras") or []
+    lora_tags: list[str] = []
+    for lo in loras:
+        if not isinstance(lo, dict):
+            continue
+        name = str(lo.get("name") or "").rsplit(".", 1)[0]  # 去 .safetensors
+        if not name:
+            continue
+        scale = lo.get("scale", 1.0)
+        lora_tags.append(f"<lora:{name}:{scale}>")
+    if lora_tags:
+        prompt = f"{prompt} {' '.join(lora_tags)}".strip()
+
+    neg = params.get("negative_prompt", "")
+    width = params.get("width", 0)
+    height = params.get("height", 0)
+    parts = [
+        f"Steps: {params.get('steps', '')}",
+        f"Sampler: {params.get('sampler_name', 'er_sde')}",
+        f"Schedule type: {params.get('scheduler', 'simple')}",
+        f"CFG scale: {params.get('cfg_scale', '')}",
+        f"Seed: {params.get('seed', '')}",
+        f"Size: {width}x{height}",
+    ]
+    return f"{prompt}\nNegative prompt: {neg}\n{', '.join(parts)}"
+
+
+def _inject_png_metadata(raw: bytes, params: dict[str, Any]) -> bytes:
+    """注入两个 PNG tEXt 块到图：
+       - `anima_params` —— 结构化 JSON，本程序回填 prefs 用
+       - `parameters`   —— a1111 兼容文本，ComfyUI / WebUI 拖图能识别
+
+    失败返回原 bytes（不阻塞落盘主流程）。
     """
     try:
         from PIL import Image, PngImagePlugin
         img = Image.open(io.BytesIO(raw))
         info = PngImagePlugin.PngInfo()
         info.add_text("anima_params", json.dumps(params, ensure_ascii=False))
+        info.add_text("parameters", _format_a1111_parameters(params))
         out = io.BytesIO()
         img.save(out, format="PNG", pnginfo=info)
         return out.getvalue()
     except Exception:
         return raw
+
+
+def _read_png_anima_params(path: Path) -> dict[str, Any] | None:
+    """从 PNG `anima_params` tEXt 块解析 params；无 / 解析失败返 None。
+
+    PIL 只读 PNG header 的 chunk（不 decode 像素），单图几 ms 级。
+    """
+    try:
+        from PIL import Image
+        with Image.open(path) as img:
+            img.load()  # 触发 tEXt chunk 解析
+            text = img.text.get("anima_params") if hasattr(img, "text") else None
+        if not text:
+            return None
+        data = json.loads(text)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
 
 
 @router.post("/api/generate/save")
@@ -280,8 +338,9 @@ async def save_test_image(
     - Settings 开关 generate.save_test_images=False → 403
     - N = 当前 <date>/<mode>/ 下已有 image_*.png 最大编号+1（找不到则 0）
     - 并发兜底：x-flag 写入，FileExistsError 则重扫一次
-    - params 非空 → 注入 PNG `anima_params` tEXt + 同目录写 image_N.json sidecar
-      （sidecar 是 disk-history 扫描入口；PNG metadata 给"拷走 PNG 还能恢复"用）
+    - params 非空 → 注入 PNG `anima_params` (结构化) + `parameters` (a1111) tEXt 块；
+      磁盘上不另写 sidecar JSON（PNG 文件单一 source of truth，拷走/移动/改名都
+      不会跟参数掉队）。
     """
     if mode not in ("single", "xy"):
         raise HTTPException(400, f"unsupported mode: {mode}")
@@ -291,7 +350,6 @@ async def save_test_image(
     if not raw:
         raise HTTPException(400, "empty image body")
 
-    params_obj: dict[str, Any] | None = None
     if params:
         try:
             decoded = json.loads(params)
@@ -299,8 +357,7 @@ async def save_test_image(
             raise HTTPException(400, f"params: invalid JSON ({e})")
         if not isinstance(decoded, dict):
             raise HTTPException(400, "params: must be a JSON object")
-        params_obj = decoded
-        raw = _inject_png_params(raw, params_obj)
+        raw = _inject_png_metadata(raw, decoded)
 
     target_dir = TEST_IMAGES_DIR / date.today().isoformat() / mode
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -312,26 +369,12 @@ async def save_test_image(
                 f.write(raw)
         except FileExistsError:
             continue
-        sidecar_path: str | None = None
-        if params_obj is not None:
-            sidecar = target_dir / f"image_{idx}.json"
-            sidecar.write_text(
-                json.dumps({
-                    "schema_version": SIDECAR_SCHEMA_VERSION,
-                    "mode": mode,
-                    "created_at": time.time(),
-                    "filename": f"image_{idx}.png",
-                    "params": params_obj,
-                }, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            sidecar_path = str(sidecar)
-        return {"path": str(target), "index": idx, "sidecar": sidecar_path}
+        return {"path": str(target), "index": idx}
     raise HTTPException(500, "could not allocate filename")
 
 
 # ---------------------------------------------------------------------------
-# 磁盘历史浏览：扫 sidecar JSON 列 entries，按图片 URL 单独服务
+# 磁盘历史浏览：扫 PNG `anima_params` tEXt 块列 entries，按图片 URL 单独服务
 # ---------------------------------------------------------------------------
 
 
@@ -340,10 +383,11 @@ def _disk_history_id(date_str: str, mode: str, stem: str) -> str:
     return f"disk:{date_str}:{mode}:{stem}"
 
 
-def _scan_sidecars(limit: int) -> list[dict[str, Any]]:
-    """扫 TEST_IMAGES_DIR 下所有 <date>/{single,xy}/image_*.json。
+def _scan_png_metadata(limit: int) -> list[dict[str, Any]]:
+    """扫 TEST_IMAGES_DIR 下所有 <date>/{single,xy}/image_*.png 的 anima_params。
 
-    没有 sidecar 的图不入列表（参数缺失，回填无意义；用户仍可去文件夹手动看）。
+    没有 anima_params tEXt 块的图（老数据 / 客户端没传 params）不入列表 ——
+    用户仍可去文件夹手动看 PNG。created_at 用文件 mtime（落盘即写，准确）。
     """
     if not TEST_IMAGES_DIR.is_dir():
         return []
@@ -355,34 +399,24 @@ def _scan_sidecars(limit: int) -> list[dict[str, Any]]:
             mode_dir = date_dir / mode
             if not mode_dir.is_dir():
                 continue
-            for sc in mode_dir.glob("image_*.json"):
-                stem = sc.stem  # image_5
-                img = mode_dir / f"{stem}.png"
-                if not img.is_file():
-                    continue  # sidecar 留着但图没了 → 跳过
+            for img in mode_dir.glob("image_*.png"):
+                params = _read_png_anima_params(img)
+                if params is None:
+                    continue
                 try:
-                    data = json.loads(sc.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
+                    created_at = img.stat().st_mtime
+                except OSError:
                     continue
-                params = data.get("params")
-                if not isinstance(params, dict):
-                    continue
-                created_at = data.get("created_at")
-                if not isinstance(created_at, (int, float)):
-                    # 容错：旧 sidecar 缺时间 → fallback 文件 mtime
-                    try:
-                        created_at = img.stat().st_mtime
-                    except OSError:
-                        continue
+                stem = img.stem  # image_5
                 out.append({
                     "id": _disk_history_id(date_dir.name, mode, stem),
                     "date": date_dir.name,
                     "mode": mode,
-                    "filename": f"{stem}.png",
+                    "filename": img.name,
                     "path": str(img),
-                    "url": f"/api/generate/disk/image/{date_dir.name}/{mode}/{stem}.png",
+                    "url": f"/api/generate/disk/image/{date_dir.name}/{mode}/{img.name}",
                     "created_at": float(created_at),
-                    "schema_version": data.get("schema_version", 1),
+                    "schema_version": int(params.get("schema_version", 1)),
                     "params": params,
                 })
     out.sort(key=lambda e: e["created_at"], reverse=True)
@@ -391,13 +425,13 @@ def _scan_sidecars(limit: int) -> list[dict[str, Any]]:
 
 @router.get("/api/generate/disk/history")
 def list_disk_history(limit: int = 500) -> dict[str, Any]:
-    """列出所有落盘测试图（按 sidecar JSON 扫），按 created_at desc 排。
+    """列出所有落盘测试图（按 PNG `anima_params` tEXt 扫），按 created_at desc 排。
 
     前端历史栏拉一次 merge 到 IndexedDB 视图；entry.id 稳定，前端按 id dedup。
-    没有 sidecar 的图（老数据 / 客户端没传 params）不入列表。
+    没有 anima_params 的图（老数据 / 客户端没传 params）不入列表。
     """
     limit = max(1, min(int(limit), 2000))
-    return {"entries": _scan_sidecars(limit)}
+    return {"entries": _scan_png_metadata(limit)}
 
 
 @router.get("/api/generate/disk/image/{date_str}/{mode}/{filename}")

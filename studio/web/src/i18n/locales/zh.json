@@ -1214,6 +1214,7 @@
     "historyTask": "历史 #{{id}}",
     "imageCount": "{{n}} 张",
     "backToCurrent": "返回当前",
+    "historyLorasMissing": "历史里的 {{n}} 个 LoRA 在本机找不到，请手动重选",
     "emptyHint": "填写参数后点击「开始生成」",
     "previewStep": "采样 {{step}} / {{total}}（中间步预览）",
     "waitingImages": "等待生成图…",
