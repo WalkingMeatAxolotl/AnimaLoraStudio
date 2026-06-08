@@ -468,6 +468,10 @@ export default function GeneratePage() {
         yDraft: params.xy_draft?.y ?? null,
       }
     })
+    // SidebarLoras / SidebarXYAxes 内的 InlineLoraPicker 只在 mount 时从 props
+    // 取 projectId/versionId 初始化下拉，后续 props 变化不同步（同 URL ?lora=
+    // 路径的修复 — bump key 强制整块 remount，让下拉跟着回填值刷新）。
+    setUrlConsumedKey((k) => k + 1)
   }
 
   const handleGenerate = async () => {
