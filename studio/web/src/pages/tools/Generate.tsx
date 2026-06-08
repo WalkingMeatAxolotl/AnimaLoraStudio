@@ -20,8 +20,9 @@ import NumField from './generate/NumField'
 import PreviewCompare from './generate/PreviewCompare'
 import PreviewHistoryRail from './generate/PreviewHistoryRail'
 import PromptFromDatasetPicker, { type DatasetPick } from './generate/PromptFromDatasetPicker'
+import { PARAMS_SNAPSHOT_VERSION, type GenerateParamsSnapshot } from './generate/paramsSnapshot'
 import { saveSingleSamples, saveXYMatrix } from './generate/saveTestImages'
-import { makeThumbnail, useGenerateHistory, type HistoryEntry } from './generate/useGenerateHistory'
+import { historyImageUrl, makeThumbnail, useGenerateHistory, type HistoryEntry } from './generate/useGenerateHistory'
 import PreviewXYGrid from './generate/PreviewXYGrid'
 import PromptList from './generate/PromptList'
 import NegPromptInput from './generate/NegPromptInput'
@@ -356,7 +357,22 @@ export default function GeneratePage() {
         xValues, yValues, samples: xySamples,
       }
     }
-    void makeThumbnail(api.generateSampleUrl(taskId, filename), 256)
+    // 参数快照（IDB entry.params + 落盘 sidecar 共用）。回填时按 mode 路由
+    // 灌 singleLoras / xyLoras + xDraft/yDraft；compare 视图记录为 'compare'
+    // 但回填时映射到 xy。
+    const params: GenerateParamsSnapshot = {
+      schema_version: PARAMS_SNAPSHOT_VERSION,
+      mode,
+      prompts,
+      negative_prompt: negPrompt,
+      width, height, steps,
+      cfg_scale: cfgScale,
+      count, seed,
+      lora_configs: loras,
+      xy_draft: mode === 'xy' ? { x: xDraft, y: yDraft } : null,
+      dataset_pick: datasetPick,
+    }
+    const entryPromise = makeThumbnail(api.generateSampleUrl(taskId, filename), 256)
       .then((dataUrl) => history.add({
         mode,
         taskId,
@@ -364,32 +380,71 @@ export default function GeneratePage() {
         filenames,
         badge: badge || undefined,
         xy: xyMeta,
+        params,
       }))
-      .catch(() => { /* thumbnail 失败 — 不入库（避免无封面 entry） */ })
+      .catch(() => null /* thumbnail 失败 — 不入库（avoid 无封面 entry），落盘仍跑 */)
     // 自动落盘（Settings.generate.save_test_images=on 时）。compare 不落盘；
-    // 关闭时跳过避免 XY 模式白白合成网格图。
+    // 关闭时跳过避免 XY 模式白白合成网格图。落盘成功 → patch entry.diskPath
+    // 用于和 disk-history 接口的 entries 做 dedup（IDB 优先，磁盘兜底）。
     if (mode === 'single' || mode === 'xy') {
-      void api.getSecrets().then((sec) => {
-        if (!sec.generate?.save_test_images) return
+      void (async () => {
+        const sec = await api.getSecrets().catch(() => null)
+        if (!sec?.generate?.save_test_images) return
+        let diskPath: string | null = null
         if (mode === 'single') {
-          return saveSingleSamples(taskId, filenames)
-        }
-        if (xyMeta) {
-          return saveXYMatrix({
+          const paths = await saveSingleSamples(taskId, filenames, params)
+          // 用第一张图的 path 作为 entry.diskPath（去重 key）；后续若用户跨
+          // session 看 disk-history，能正确合并到对应 IDB entry。
+          diskPath = paths.find(Boolean) ?? null
+        } else if (xyMeta) {
+          diskPath = await saveXYMatrix({
             samples: xyMeta.samples.map((s) => ({ path: s.path, xy: { xi: s.xy.xi, yi: s.xy.yi } })),
             taskId,
             xAxis: xyMeta.xAxis as Parameters<typeof saveXYMatrix>[0]['xAxis'],
             yAxis: xyMeta.yAxis as Parameters<typeof saveXYMatrix>[0]['yAxis'],
             xValues: xyMeta.xValues,
             yValues: xyMeta.yValues,
-          })
+          }, params)
         }
-      }).catch(() => { /* silent */ })
+        if (!diskPath) return
+        const entryId = await entryPromise
+        if (entryId) await history.patch(entryId, { diskPath })
+      })()
     }
-  }, [currentTask, samples, mode, selectedIndices, history, xDraft, yDraft])
+  }, [currentTask, samples, mode, selectedIndices, history, xDraft, yDraft,
+      prompts, negPrompt, width, height, steps, cfgScale, count, seed, loras, datasetPick])
 
   const handleHistorySelect = (entry: HistoryEntry) => {
     setHistoryOverride(entry)
+    const params = entry.params
+    if (!params) return  // 老 entry / 早于本次改动 → 仅切图，不回填
+    // compare 视图回填到 xy 模式（compare 是 xy 子视图，没 selectedIndices 不直接进）
+    const newMode: ViewMode = params.mode === 'single' ? 'single' : 'xy'
+    setPrefs((prev) => {
+      const base: GeneratePrefs = {
+        ...prev,
+        mode: newMode,
+        prompts: params.prompts.length > 0 ? params.prompts : prev.prompts,
+        negPrompt: params.negative_prompt,
+        width: params.width,
+        height: params.height,
+        aspect: aspectFromDimensions(params.width, params.height),
+        steps: params.steps,
+        cfgScale: params.cfg_scale,
+        count: params.count,
+        seed: params.seed,
+        datasetPick: params.dataset_pick ?? null,
+      }
+      if (params.mode === 'single') {
+        return { ...base, singleLoras: params.lora_configs }
+      }
+      return {
+        ...base,
+        xyLoras: params.lora_configs,
+        xDraft: params.xy_draft?.x ?? prev.xDraft,
+        yDraft: params.xy_draft?.y ?? null,
+      }
+    })
   }
 
   const handleGenerate = async () => {
@@ -724,8 +779,8 @@ export default function GeneratePage() {
                           gap: 2,
                         }}
                       >
-                        {historyOverride.filenames.map((fn) => {
-                          const url = api.generateSampleUrl(historyOverride.taskId, fn)
+                        {historyOverride.filenames.map((fn, idx) => {
+                          const url = historyImageUrl(historyOverride, idx)
                           return (
                             <a
                               key={fn} href={url} target="_blank" rel="noreferrer"
@@ -750,13 +805,13 @@ export default function GeneratePage() {
                     /* 单图回看（single / compare 历史 / 单张 xy） */
                     <a
                       className="flex-1 min-h-0 flex items-center justify-center w-full"
-                      href={api.generateSampleUrl(historyOverride.taskId, historyOverride.filenames[0] ?? '')}
+                      href={historyImageUrl(historyOverride, 0)}
                       target="_blank"
                       rel="noreferrer"
                     >
                       <img
                         key={historyOverride.id}
-                        src={api.generateSampleUrl(historyOverride.taskId, historyOverride.filenames[0] ?? '')}
+                        src={historyImageUrl(historyOverride, 0)}
                         onError={(e) => {
                           (e.currentTarget as HTMLImageElement).src = historyOverride.thumbnailDataUrl
                           ;(e.currentTarget as HTMLImageElement).title = t('generate.originalReleasedThumbOnly')

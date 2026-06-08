@@ -1161,6 +1161,27 @@ export interface GenerateRequest {
   xy_matrix?: XYMatrixSpec | null
 }
 
+/** 落盘测试图历史 entry（GET /api/generate/disk-history）。
+ *  params 是 GenerateParamsSnapshot（前端用 paramsSnapshot.ts 的类型解读），
+ *  这里用 unknown 让 api/client.ts 不依赖 pages 层类型。 */
+export interface DiskGenerateHistoryEntry {
+  /** 稳定 ID："disk:<date>:<mode>:image_<N>"；前端按此 dedup */
+  id: string
+  /** YYYY-MM-DD */
+  date: string
+  mode: 'single' | 'xy'
+  filename: string
+  /** 服务端绝对路径，用于和 IDB entry.diskPath 做 dedup */
+  path: string
+  /** /api/generate/disk-image/<date>/<mode>/<filename> */
+  url: string
+  /** Unix timestamp（sidecar 写入或 fallback 文件 mtime） */
+  created_at: number
+  schema_version: number
+  /** sidecar 里的 params object（前端按 GenerateParamsSnapshot 解读） */
+  params: Record<string, unknown>
+}
+
 /** version output/ 下扫到的 training_state_step*.pt（断点续训用）。 */
 export interface StateCkpt {
   /** global_step 数 */
@@ -2115,6 +2136,11 @@ export const api = {
   /** PR-9 — 启动测试出图 task。Phase 2 起：图走 server 内存 cache，关页面即丢。 */
   enqueueGenerate: (body: GenerateRequest) =>
     req<Task>('/api/generate', { method: 'POST', body: JSON.stringify(body) }),
+  /** 落盘历史：扫 studio_data/test/&lt;date&gt;/{single,xy}/image_N.json sidecar，
+   *  按 created_at desc 返回；用于历史栏跨会话回看已落盘的测试图。
+   *  注意路径用 disk/ 子前缀避开 `/api/generate/{task_id}` 的单段 catch-all。 */
+  listDiskGenerateHistory: (limit = 500) =>
+    req<{ entries: DiskGenerateHistoryEntry[] }>(`/api/generate/disk/history?limit=${limit}`),
   /** 查询测试 task 状态。 */
   getGenerateTask: (id: number) => req<Task>(`/api/generate/${id}`),
   /** 测试出图单张 URL（task 跑中或刚完成时拉；客户端断连 30s + LRU 后 404）。 */

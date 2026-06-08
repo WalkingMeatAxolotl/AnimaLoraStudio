@@ -12,8 +12,9 @@
  * tab 关后留下也无伤大雅 —— 用户重开 tab 还能看到历史，符合"看图/对比"
  * 主流程。整体内存 / 磁盘可控（每条 thumb ~20KB，1000 条也才 20MB）。
  */
-import { useEffect, useRef, useState } from 'react'
-import { api } from '../../../api/client'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { api, type DiskGenerateHistoryEntry } from '../../../api/client'
+import type { GenerateParamsSnapshot } from './paramsSnapshot'
 
 const DB_NAME = 'anima-generate-history'
 const DB_VERSION = 1
@@ -47,6 +48,24 @@ export interface HistoryEntry {
   badge?: string
   /** XY 模式才填：回看时重建 PreviewXYGrid 用 */
   xy?: HistoryXYMeta
+  /** 测试参数快照（用于历史点击回填 prefs）。老 entry 缺此字段 → 回填 noop。 */
+  params?: GenerateParamsSnapshot
+  /** 落盘成功后回写：第一张图（single）/ 合成图（xy）的 server path；用于和
+   *  GET /api/generate/disk-history 拉到的 disk entries 做 dedup。 */
+  diskPath?: string
+  /** 缺省时按 generateSampleUrl(taskId, filename) 构造（cache 来源 entry）。
+   *  磁盘来源 entry 必填（指向 /api/generate/disk-image/...），因为它的 taskId
+   *  是 sentinel，generateSampleUrl 路径不可用。 */
+  imageUrls?: string[]
+}
+
+/** entry 对应位置 idx 的图片 URL。disk entry 走 imageUrls，cache entry 走
+ *  generateSampleUrl(taskId, filename)。所有历史回看渲染处都该用这个 helper。 */
+export function historyImageUrl(entry: HistoryEntry, idx = 0): string {
+  const explicit = entry.imageUrls?.[idx]
+  if (explicit) return explicit
+  const fn = entry.filenames[idx] ?? ''
+  return api.generateSampleUrl(entry.taskId, fn)
 }
 
 function openDb(): Promise<IDBDatabase> {
@@ -99,6 +118,27 @@ async function putEntry(entry: HistoryEntry): Promise<void> {
   }
 }
 
+async function updateEntry(id: string, patch: Partial<HistoryEntry>): Promise<HistoryEntry | null> {
+  try {
+    const db = await openDb()
+    return await new Promise<HistoryEntry | null>((resolve, reject) => {
+      const tx = db.transaction(STORE, 'readwrite')
+      const store = tx.objectStore(STORE)
+      const getReq = store.get(id)
+      getReq.onsuccess = () => {
+        const cur = getReq.result as HistoryEntry | undefined
+        if (!cur) { resolve(null); return }
+        const next = { ...cur, ...patch, id: cur.id }
+        store.put(next)
+        tx.oncomplete = () => resolve(next)
+      }
+      tx.onerror = () => reject(tx.error)
+    })
+  } catch {
+    return null
+  }
+}
+
 async function deleteEntry(id: string): Promise<void> {
   try {
     const db = await openDb()
@@ -110,6 +150,35 @@ async function deleteEntry(id: string): Promise<void> {
     })
   } catch {
     /* ignore */
+  }
+}
+
+/** disk-history server entry → HistoryEntry shape。
+ *  - taskId = -1 sentinel（cache 接口不可用，所有图片走 imageUrls）
+ *  - thumbnailDataUrl 直接放 disk-image URL（不预生成缩略图，浏览器自缩；
+ *    落盘历史规模有限，避免 disk → fetch → canvas → dataURL 的额外开销）
+ *  - id 保持服务端给的 "disk:<date>:<mode>:image_<N>"（前端按此 dedup）
+ */
+function diskEntryToHistory(d: DiskGenerateHistoryEntry): HistoryEntry {
+  return {
+    id: d.id,
+    mode: d.mode,
+    taskId: -1,
+    createdAt: d.created_at * 1000,  // server 给的是秒；HistoryEntry.createdAt 是 ms
+    thumbnailDataUrl: d.url,
+    filenames: [d.filename],
+    imageUrls: [d.url],
+    diskPath: d.path,
+    params: d.params as unknown as GenerateParamsSnapshot,
+  }
+}
+
+async function loadDisk(): Promise<HistoryEntry[]> {
+  try {
+    const resp = await api.listDiskGenerateHistory()
+    return resp.entries.map(diskEntryToHistory)
+  } catch {
+    return []
   }
 }
 
@@ -169,24 +238,43 @@ export async function makeThumbnail(
 
 export interface UseGenerateHistoryResult {
   entries: HistoryEntry[]
-  add: (entry: Omit<HistoryEntry, 'id' | 'createdAt'>) => Promise<void>
+  /** 返回新 entry 的 id，方便 add 后续 patch（如落盘成功回写 diskPath） */
+  add: (entry: Omit<HistoryEntry, 'id' | 'createdAt'>) => Promise<string>
+  /** 局部更新 entry —— 主要给 saveTestImages 回写 diskPath 用 */
+  patch: (id: string, patch: Partial<HistoryEntry>) => Promise<void>
   clearByMode: (mode: HistoryMode) => Promise<void>
   /** 检查每条 entry 的第一张图是否还在 server cache 里；
-   * 404 / fail 的 entry 删除（"原图已释放，留着只剩 thumbnail 没意义"）。
+   * 404 / fail 的 entry：若已落盘（有 diskPath）保留（磁盘还能看），否则删除。
    * 返回删除的 entry 数量。 */
   pruneStale: () => Promise<number>
 }
 
-/** 全局 history 状态 hook。所有调用者共享一份内存视图（loadAll 一次）。 */
+/** 合并 IDB + disk entries：diskPath 重复时 IDB 优先（带本地 thumbnail）。 */
+function mergeEntries(idb: HistoryEntry[], disk: HistoryEntry[]): HistoryEntry[] {
+  const usedDiskPaths = new Set(
+    idb.map((e) => e.diskPath).filter((p): p is string => Boolean(p))
+  )
+  const remainingDisk = disk.filter((d) => !d.diskPath || !usedDiskPaths.has(d.diskPath))
+  return [...idb, ...remainingDisk].sort((a, b) => b.createdAt - a.createdAt)
+}
+
+/** 全局 history 状态 hook。IDB 持久化 + 磁盘 sidecar 兜底（跨会话回看）。 */
 export function useGenerateHistory(): UseGenerateHistoryResult {
-  const [entries, setEntries] = useState<HistoryEntry[]>([])
+  const [idbEntries, setIdbEntries] = useState<HistoryEntry[]>([])
+  const [diskEntries, setDiskEntries] = useState<HistoryEntry[]>([])
   const loadedRef = useRef(false)
 
   useEffect(() => {
     if (loadedRef.current) return
     loadedRef.current = true
-    void loadAll().then(setEntries)
+    void loadAll().then(setIdbEntries)
+    void loadDisk().then(setDiskEntries)
   }, [])
+
+  const entries = useMemo(
+    () => mergeEntries(idbEntries, diskEntries),
+    [idbEntries, diskEntries],
+  )
 
   const add = async (entry: Omit<HistoryEntry, 'id' | 'createdAt'>) => {
     const full: HistoryEntry = {
@@ -197,20 +285,31 @@ export function useGenerateHistory(): UseGenerateHistoryResult {
       createdAt: Date.now(),
     }
     await putEntry(full)
-    setEntries((prev) => [full, ...prev])
+    setIdbEntries((prev) => [full, ...prev])
+    return full.id
+  }
+
+  const patch = async (id: string, p: Partial<HistoryEntry>) => {
+    const next = await updateEntry(id, p)
+    if (next) setIdbEntries((prev) => prev.map((e) => (e.id === id ? next : e)))
   }
 
   const clearByMode = async (mode: HistoryMode) => {
+    // 只清 IDB；磁盘文件用户得手动去文件夹删（避免误删历史档案）。
+    // 下次 loadDisk 时磁盘 entries 仍会出现 — 这是有意保留。
     await clearMode(mode)
-    setEntries((prev) => prev.filter((e) => e.mode !== mode))
+    setIdbEntries((prev) => prev.filter((e) => e.mode !== mode))
   }
 
   const pruneStale = async (): Promise<number> => {
-    // 并发 HEAD 请求每条 entry 的第一张图；4xx/5xx 则视为失效，IndexedDB 删
+    // 只对 IDB entries 操作（disk entries 是只读视图，背后是磁盘文件）。
+    // 已落盘（diskPath）的 IDB entry：图在磁盘上随时回看，不删（仅 HEAD 失败说明
+    // 内存 cache 释放了，并不代表"图没了"）。
     const stale: string[] = []
-    await Promise.all(entries.map(async (e) => {
+    await Promise.all(idbEntries.map(async (e) => {
       const fn = e.filenames[0]
       if (!fn) return  // 没 filename 不动
+      if (e.diskPath) return  // 已落盘 → 永远不剪
       const url = api.generateSampleUrl(e.taskId, fn)
       try {
         const r = await fetch(url, { method: 'HEAD' })
@@ -221,9 +320,9 @@ export function useGenerateHistory(): UseGenerateHistoryResult {
     }))
     if (stale.length === 0) return 0
     await Promise.all(stale.map((id) => deleteEntry(id)))
-    setEntries((prev) => prev.filter((e) => !stale.includes(e.id)))
+    setIdbEntries((prev) => prev.filter((e) => !stale.includes(e.id)))
     return stale.length
   }
 
-  return { entries, add, clearByMode, pruneStale }
+  return { entries, add, patch, clearByMode, pruneStale }
 }

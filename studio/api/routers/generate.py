@@ -17,14 +17,16 @@ task 结束 supervisor 仍调 cleanup_generate_tempdir 清掉空目录。server 
 """
 from __future__ import annotations
 
+import io
 import json
 import re
+import time
 from datetime import date
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 
 from ..deps import _resolve_anima_model_paths
 from ..errors import _validate_component_or_400
@@ -243,10 +245,34 @@ def get_generate_sample(task_id: int, filename: str) -> Any:
     )
 
 
+SIDECAR_SCHEMA_VERSION = 1
+
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_DISK_MODES = ("single", "xy")
+
+
+def _inject_png_params(raw: bytes, params: dict[str, Any]) -> bytes:
+    """把 params 作为 tEXt `anima_params` 注入 PNG。失败返回原 bytes。
+
+    单一 tEXt 块即可——用户拷走单文件，参数随图走。a1111 兼容文本块按需后加。
+    """
+    try:
+        from PIL import Image, PngImagePlugin
+        img = Image.open(io.BytesIO(raw))
+        info = PngImagePlugin.PngInfo()
+        info.add_text("anima_params", json.dumps(params, ensure_ascii=False))
+        out = io.BytesIO()
+        img.save(out, format="PNG", pnginfo=info)
+        return out.getvalue()
+    except Exception:
+        return raw
+
+
 @router.post("/api/generate/save")
 async def save_test_image(
     mode: str = Form(...),
     image: UploadFile = File(...),
+    params: str = Form(""),
 ) -> dict[str, Any]:
     """落盘测试出图到 studio_data/test/<YYYY-MM-DD>/<mode>/image_N.png。
 
@@ -254,6 +280,8 @@ async def save_test_image(
     - Settings 开关 generate.save_test_images=False → 403
     - N = 当前 <date>/<mode>/ 下已有 image_*.png 最大编号+1（找不到则 0）
     - 并发兜底：x-flag 写入，FileExistsError 则重扫一次
+    - params 非空 → 注入 PNG `anima_params` tEXt + 同目录写 image_N.json sidecar
+      （sidecar 是 disk-history 扫描入口；PNG metadata 给"拷走 PNG 还能恢复"用）
     """
     if mode not in ("single", "xy"):
         raise HTTPException(400, f"unsupported mode: {mode}")
@@ -262,6 +290,18 @@ async def save_test_image(
     raw = await image.read()
     if not raw:
         raise HTTPException(400, "empty image body")
+
+    params_obj: dict[str, Any] | None = None
+    if params:
+        try:
+            decoded = json.loads(params)
+        except json.JSONDecodeError as e:
+            raise HTTPException(400, f"params: invalid JSON ({e})")
+        if not isinstance(decoded, dict):
+            raise HTTPException(400, "params: must be a JSON object")
+        params_obj = decoded
+        raw = _inject_png_params(raw, params_obj)
+
     target_dir = TEST_IMAGES_DIR / date.today().isoformat() / mode
     target_dir.mkdir(parents=True, exist_ok=True)
     for _ in range(20):
@@ -270,7 +310,108 @@ async def save_test_image(
         try:
             with open(target, "xb") as f:
                 f.write(raw)
-            return {"path": str(target), "index": idx}
         except FileExistsError:
             continue
+        sidecar_path: str | None = None
+        if params_obj is not None:
+            sidecar = target_dir / f"image_{idx}.json"
+            sidecar.write_text(
+                json.dumps({
+                    "schema_version": SIDECAR_SCHEMA_VERSION,
+                    "mode": mode,
+                    "created_at": time.time(),
+                    "filename": f"image_{idx}.png",
+                    "params": params_obj,
+                }, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            sidecar_path = str(sidecar)
+        return {"path": str(target), "index": idx, "sidecar": sidecar_path}
     raise HTTPException(500, "could not allocate filename")
+
+
+# ---------------------------------------------------------------------------
+# 磁盘历史浏览：扫 sidecar JSON 列 entries，按图片 URL 单独服务
+# ---------------------------------------------------------------------------
+
+
+def _disk_history_id(date_str: str, mode: str, stem: str) -> str:
+    """前端 dedup / merge 用的稳定 id。同图不论几次扫描都映射同一 id。"""
+    return f"disk:{date_str}:{mode}:{stem}"
+
+
+def _scan_sidecars(limit: int) -> list[dict[str, Any]]:
+    """扫 TEST_IMAGES_DIR 下所有 <date>/{single,xy}/image_*.json。
+
+    没有 sidecar 的图不入列表（参数缺失，回填无意义；用户仍可去文件夹手动看）。
+    """
+    if not TEST_IMAGES_DIR.is_dir():
+        return []
+    out: list[dict[str, Any]] = []
+    for date_dir in TEST_IMAGES_DIR.iterdir():
+        if not date_dir.is_dir() or not _DATE_RE.match(date_dir.name):
+            continue
+        for mode in _DISK_MODES:
+            mode_dir = date_dir / mode
+            if not mode_dir.is_dir():
+                continue
+            for sc in mode_dir.glob("image_*.json"):
+                stem = sc.stem  # image_5
+                img = mode_dir / f"{stem}.png"
+                if not img.is_file():
+                    continue  # sidecar 留着但图没了 → 跳过
+                try:
+                    data = json.loads(sc.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                params = data.get("params")
+                if not isinstance(params, dict):
+                    continue
+                created_at = data.get("created_at")
+                if not isinstance(created_at, (int, float)):
+                    # 容错：旧 sidecar 缺时间 → fallback 文件 mtime
+                    try:
+                        created_at = img.stat().st_mtime
+                    except OSError:
+                        continue
+                out.append({
+                    "id": _disk_history_id(date_dir.name, mode, stem),
+                    "date": date_dir.name,
+                    "mode": mode,
+                    "filename": f"{stem}.png",
+                    "path": str(img),
+                    "url": f"/api/generate/disk/image/{date_dir.name}/{mode}/{stem}.png",
+                    "created_at": float(created_at),
+                    "schema_version": data.get("schema_version", 1),
+                    "params": params,
+                })
+    out.sort(key=lambda e: e["created_at"], reverse=True)
+    return out[:limit]
+
+
+@router.get("/api/generate/disk/history")
+def list_disk_history(limit: int = 500) -> dict[str, Any]:
+    """列出所有落盘测试图（按 sidecar JSON 扫），按 created_at desc 排。
+
+    前端历史栏拉一次 merge 到 IndexedDB 视图；entry.id 稳定，前端按 id dedup。
+    没有 sidecar 的图（老数据 / 客户端没传 params）不入列表。
+    """
+    limit = max(1, min(int(limit), 2000))
+    return {"entries": _scan_sidecars(limit)}
+
+
+@router.get("/api/generate/disk/image/{date_str}/{mode}/{filename}")
+def get_disk_image(date_str: str, mode: str, filename: str) -> Any:
+    """读落盘测试图（前端历史栏点击磁盘 entry 时大图来源）。"""
+    if not _DATE_RE.match(date_str):
+        raise HTTPException(400, "invalid date")
+    if mode not in _DISK_MODES:
+        raise HTTPException(400, "invalid mode")
+    _validate_component_or_400(filename)
+    if not filename.lower().endswith(".png"):
+        raise HTTPException(400, "only .png supported")
+    path = TEST_IMAGES_DIR / date_str / mode / filename
+    if not path.is_file():
+        raise HTTPException(404)
+    # 落盘图内容稳定（不会被同名覆盖——image_N 编号递增），可缓存
+    return FileResponse(path, media_type="image/png")
