@@ -193,10 +193,18 @@ def test_training_config_cli_tlora() -> None:
         "--lora-type", "tlora",
         "--tlora-min-rank", "12",
         "--tlora-alpha-rank-scale", "1.5",
+        "--tlora-use-ortho",
     ])
     assert ns.lora_type == "tlora"
     assert ns.tlora_min_rank == 12
     assert ns.tlora_alpha_rank_scale == 1.5
+    assert ns.tlora_use_ortho is True
+
+
+def test_training_config_cli_ortho() -> None:
+    parser = bridge.build_parser(TrainingConfig)
+    ns = parser.parse_args(["--lora-type", "ortho"])
+    assert ns.lora_type == "ortho"
 
 
 def test_training_config_yaml_round_trip() -> None:

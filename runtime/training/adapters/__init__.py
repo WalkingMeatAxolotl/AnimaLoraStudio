@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from training.adapters import lycoris, tlora
+from training.adapters import lycoris, ortho, tlora
 from training.adapters.protocol import AdapterProtocol, StepContext
 
 __all__ = ["AdapterProtocol", "StepContext", "BUILDERS", "build_adapter",
@@ -25,6 +25,7 @@ BUILDERS: dict[str, Callable[..., AdapterProtocol]] = {
     "lokr": lycoris.build,
     "loha": lycoris.build,
     "lora": lycoris.build,
+    "ortho": ortho.build,
     "tlora": tlora.build,
 }
 

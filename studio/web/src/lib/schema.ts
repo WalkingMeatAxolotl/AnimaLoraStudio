@@ -100,6 +100,7 @@ export const SCHEMA_ENUM_LABEL_KEYS: Record<string, Record<string, string>> = {
     lora: 'schema.enums.loraType.lora',
     lokr: 'schema.enums.loraType.lokr',
     loha: 'schema.enums.loraType.loha',
+    ortho: 'schema.enums.loraType.ortho',
     tlora: 'schema.enums.loraType.tlora',
   },
   lr_scheduler: {

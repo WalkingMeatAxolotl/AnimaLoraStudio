@@ -116,9 +116,9 @@ class TrainingConfig(BaseModel):
     )
 
     # ------------------------------------------------------------------- LoRA
-    lora_type: Literal["lora", "lokr", "loha", "tlora"] = Field(
+    lora_type: Literal["lora", "lokr", "loha", "ortho", "tlora"] = Field(
         "lokr",
-        description="适配器算法。lokr Kronecker 分解参数最省（默认）；lora 经典低秩通用；loha Hadamard 积，表达力较高但参数较多；tlora 时间步自适应 rank",
+        description="适配器算法。lokr Kronecker 分解参数最省（默认）；lora 经典低秩通用；loha Hadamard 积，表达力较高但参数较多；ortho SVD/Cayley 正交参数化；tlora 时间步自适应 rank",
         json_schema_extra=_meta("lora"),
     )
     lora_rank: int = Field(
@@ -148,6 +148,11 @@ class TrainingConfig(BaseModel):
             ">1 越偏向低噪声端才开高 rank；<1 越早开高 rank。"
             "公式 r=(1-t)^α·(rank-min_rank)+min_rank，t 为 noise level (0=clean, 1=noisy)"
         ),
+        json_schema_extra=_meta("lora", show_when="lora_type==tlora", advanced=True),
+    )
+    tlora_use_ortho: bool = Field(
+        False,
+        description="T-LoRA 专属：启用 OrthoLoRA 的 SVD/Cayley 正交参数化；关闭时使用普通 T-LoRA",
         json_schema_extra=_meta("lora", show_when="lora_type==tlora", advanced=True),
     )
     lora_dora: bool = Field(

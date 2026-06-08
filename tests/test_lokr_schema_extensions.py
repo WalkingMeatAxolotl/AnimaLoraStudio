@@ -16,6 +16,12 @@ def test_lora_type_accepts_tlora():
     # 与官方 ControlGenAI/T-LoRA argparse default 对齐
     assert cfg.tlora_min_rank == 1
     assert cfg.tlora_alpha_rank_scale == 1.0
+    assert cfg.tlora_use_ortho is False
+
+
+def test_lora_type_accepts_ortho():
+    cfg = TrainingConfig(lora_type="ortho")
+    assert cfg.lora_type == "ortho"
 
 
 def test_lora_type_still_accepts_legacy_values():
@@ -76,7 +82,7 @@ def test_new_fields_in_lora_group():
     props = schema["properties"]
     for f in (
         "lora_dora", "lora_rs", "lora_dropout", "lora_rank_dropout", "lora_module_dropout",
-        "tlora_min_rank", "tlora_alpha_rank_scale",
+        "tlora_min_rank", "tlora_alpha_rank_scale", "tlora_use_ortho",
     ):
         assert f in props, f"字段缺失: {f}"
         assert props[f].get("group") == "lora", f"{f} 不在 lora 分组"

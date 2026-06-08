@@ -37,7 +37,7 @@ def test_schema_is_complete() -> None:
     fields = TrainingConfig.model_fields
     for name in (
         "transformer_path", "data_dir", "lora_type", "lora_rank", "epochs",
-        "tlora_min_rank", "tlora_alpha_rank_scale",
+        "tlora_min_rank", "tlora_alpha_rank_scale", "tlora_use_ortho",
         "optimizer_type", "prodigy_d_coef", "prodigy_safeguard_warmup",
         # ProdigyPlusScheduleFree 字段
         "ppsf_d_coef", "ppsf_prodigy_steps", "ppsf_beta1", "ppsf_beta2",
@@ -49,6 +49,7 @@ def test_schema_is_complete() -> None:
     assert "wandb_enabled" in fields
     lora_annotation = fields["lora_type"].annotation
     lora_options = getattr(lora_annotation, "__args__", ())
+    assert "ortho" in lora_options
     assert "tlora" in lora_options
     # optimizer_type Literal 包含 PPSF
     optimizer_annotation = fields["optimizer_type"].annotation
@@ -84,6 +85,7 @@ def test_schema_carries_ui_metadata(client: TestClient) -> None:
     assert "show_when" in props["prodigy_d_coef"]
     assert props["tlora_min_rank"]["show_when"] == "lora_type==tlora"
     assert props["tlora_alpha_rank_scale"]["show_when"] == "lora_type==tlora"
+    assert props["tlora_use_ortho"]["show_when"] == "lora_type==tlora"
     assert props["wandb_enabled"]["group"] == "wandb"
     # PPSF 字段都按 optimizer_type==prodigy_plus_schedulefree 显示
     for ppsf_field in (
