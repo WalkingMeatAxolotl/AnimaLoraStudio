@@ -20,7 +20,11 @@ import NumField from './generate/NumField'
 import PreviewCompare from './generate/PreviewCompare'
 import PreviewHistoryRail from './generate/PreviewHistoryRail'
 import PromptFromDatasetPicker, { type DatasetPick } from './generate/PromptFromDatasetPicker'
-import { PARAMS_SNAPSHOT_VERSION, type GenerateParamsSnapshot } from './generate/paramsSnapshot'
+import {
+  PARAMS_SNAPSHOT_VERSION, loraBasename, resolveSnapshotLora,
+  transformAxisRawForSnapshot,
+  type GenerateParamsSnapshot, type SnapshotLora,
+} from './generate/paramsSnapshot'
 import { saveSingleSamples, saveXYMatrix } from './generate/saveTestImages'
 import { historyImageUrl, makeThumbnail, useGenerateHistory, type HistoryEntry } from './generate/useGenerateHistory'
 import PreviewXYGrid from './generate/PreviewXYGrid'
@@ -357,9 +361,16 @@ export default function GeneratePage() {
         xValues, yValues, samples: xySamples,
       }
     }
-    // 参数快照（IDB entry.params + 落盘 sidecar 共用）。回填时按 mode 路由
-    // 灌 singleLoras / xyLoras + xDraft/yDraft；compare 视图记录为 'compare'
-    // 但回填时映射到 xy。
+    // 参数快照（IDB entry.params + 落盘 PNG metadata 共用）。回填时按 mode
+    // 路由灌 singleLoras / xyLoras + xDraft/yDraft；compare 视图记录为 'compare'
+    // 但回填时映射到 xy。LoRA 只存 name + ids（不存 path 避免泄露 / 跨机器死链）；
+    // 回填时通过 projectLoras 用 ids → path resolve。
+    const snapshotLoras: SnapshotLora[] = loras.map((l) => ({
+      name: loraBasename(l.path),
+      scale: l.scale,
+      project_id: l.project_id ?? null,
+      version_id: l.version_id ?? null,
+    }))
     const params: GenerateParamsSnapshot = {
       schema_version: PARAMS_SNAPSHOT_VERSION,
       mode,
@@ -368,8 +379,13 @@ export default function GeneratePage() {
       width, height, steps,
       cfg_scale: cfgScale,
       count, seed,
-      lora_configs: loras,
-      xy_draft: mode === 'xy' ? { x: xDraft, y: yDraft } : null,
+      loras: snapshotLoras,
+      xy_draft: mode === 'xy'
+        ? {
+            x: transformAxisRawForSnapshot(xDraft),
+            y: yDraft ? transformAxisRawForSnapshot(yDraft) : null,
+          }
+        : null,
       dataset_pick: datasetPick,
     }
     const entryPromise = makeThumbnail(api.generateSampleUrl(taskId, filename), 256)
@@ -418,6 +434,11 @@ export default function GeneratePage() {
     setHistoryOverride(entry)
     const params = entry.params
     if (!params) return  // 老 entry / 早于本次改动 → 仅切图，不回填
+    const resolved = params.loras.map((l) => resolveSnapshotLora(l, projectLoras))
+    const missingCount = resolved.filter((l) => !l.path).length
+    if (missingCount > 0) {
+      toast(t('generate.historyLorasMissing', { n: missingCount }), 'info')
+    }
     // compare 视图回填到 xy 模式（compare 是 xy 子视图，没 selectedIndices 不直接进）
     const newMode: ViewMode = params.mode === 'single' ? 'single' : 'xy'
     setPrefs((prev) => {
@@ -436,11 +457,13 @@ export default function GeneratePage() {
         datasetPick: params.dataset_pick ?? null,
       }
       if (params.mode === 'single') {
-        return { ...base, singleLoras: params.lora_configs }
+        return { ...base, singleLoras: resolved }
       }
+      // xy_draft snapshot 的 lora_ckpt 轴 raw 是 basename 列表；shape 兼容
+      // XYAxisDraft 但用户重 submit 前需要 picker 重选定位 ckpt path。
       return {
         ...base,
-        xyLoras: params.lora_configs,
+        xyLoras: resolved,
         xDraft: params.xy_draft?.x ?? prev.xDraft,
         yDraft: params.xy_draft?.y ?? null,
       }

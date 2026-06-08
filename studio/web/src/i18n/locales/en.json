@@ -1214,6 +1214,7 @@
     "historyTask": "History #{{id}}",
     "imageCount": "{{n}} images",
     "backToCurrent": "Back to current",
+    "historyLorasMissing": "{{n}} LoRA(s) from history not found locally; please re-pick",
     "emptyHint": "Fill parameters, then click “Start generate”",
     "previewStep": "Sampling {{step}} / {{total}} (intermediate preview)",
     "waitingImages": "Waiting for images…",
