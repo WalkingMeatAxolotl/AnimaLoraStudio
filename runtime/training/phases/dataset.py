@@ -78,9 +78,16 @@ def run(ctx: TrainingContext) -> None:
     # 缓存 VAE latents（在 repeat 之前）
     ctx.use_cached = getattr(args, "cache_latents", False)
     if ctx.use_cached:
-        ctx.dataset = CachedLatentDataset(ctx.dataset, ctx.vae, ctx.device, ctx.dtype)
+        cache_batch_size = int(getattr(args, "vae_cache_batch_size", 4) or 1)
+        ctx.dataset = CachedLatentDataset(
+            ctx.dataset, ctx.vae, ctx.device, ctx.dtype,
+            cache_batch_size=cache_batch_size,
+        )
     if ctx.reg_dataset is not None and ctx.use_cached:
-        ctx.reg_dataset = CachedLatentDataset(ctx.reg_dataset, ctx.vae, ctx.device, ctx.dtype)
+        ctx.reg_dataset = CachedLatentDataset(
+            ctx.reg_dataset, ctx.vae, ctx.device, ctx.dtype,
+            cache_batch_size=cache_batch_size,
+        )
 
     # repeat: 主数据集和正则数据集均通过文件夹名 Kohya 风格 repeat（如 5_concept），无需全局 repeat
     if ctx.reg_dataset is not None:

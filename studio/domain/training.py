@@ -114,6 +114,11 @@ class TrainingConfig(BaseModel):
         description="缓存 VAE latent 加速训练",
         json_schema_extra=_meta("system"),
     )
+    vae_cache_batch_size: int = Field(
+        4, ge=1,
+        description="VAE latent 缓存编码批次大小；调大可加速首次缓存，显存不足时调回 1",
+        json_schema_extra=_meta("system", advanced=True),
+    )
 
     # ------------------------------------------------------------------- LoRA
     lora_type: Literal["lora", "lokr", "loha"] = Field(
@@ -706,6 +711,11 @@ class TrainingConfig(BaseModel):
         0, ge=0,
         description="每 N step 采样（0=禁用）",
         json_schema_extra=_meta("sample"),
+    )
+    sample_on_start: bool = Field(
+        False,
+        description="启动训练前先生成 step 0 baseline 采样图；会明显增加起步时间",
+        json_schema_extra=_meta("sample", advanced=True),
     )
     sample_infer_steps: int = Field(
         25, ge=1,
