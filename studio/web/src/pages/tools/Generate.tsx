@@ -772,7 +772,8 @@ export default function GeneratePage() {
 
               {historyOverride ? (
                 <div className="flex-1 min-h-0 flex flex-col gap-2">
-                  {historyOverride.mode === 'xy' && historyOverride.xy ? (
+                  {historyOverride.mode === 'xy' && historyOverride.xy
+                    && !(historyOverride.imageUrls && historyOverride.imageUrls.length) ? (
                     /* xy 历史回看：用 PreviewXYGrid 重建（带轴标签 + 双击全屏） */
                     <PreviewXYGrid
                       samples={historyOverride.xy.samples.map((s) => ({

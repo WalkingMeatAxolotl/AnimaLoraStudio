@@ -250,12 +250,30 @@ export interface UseGenerateHistoryResult {
 }
 
 /** 合并 IDB + disk entries：diskPath 重复时 IDB 优先（带本地 thumbnail）。 */
+/** 合并 IDB + disk entries：
+ *  1. dedup —— diskPath 相同的 IDB entry 优先（带本地 thumbnail）
+ *  2. **升级 IDB entry** —— 落盘但 cache 已失效的 entry（关 tab / 重启后）从
+ *     对应 disk entry 拿 imageUrls 作为大图来源；本地 thumbnail 仍走 IDB 的
+ *     dataUrl。这样"点击显示已释放"在已落盘时不会再误报。 */
 function mergeEntries(idb: HistoryEntry[], disk: HistoryEntry[]): HistoryEntry[] {
+  const diskByPath = new Map<string, HistoryEntry>()
+  for (const d of disk) {
+    if (d.diskPath) diskByPath.set(d.diskPath, d)
+  }
+  const upgradedIdb = idb.map((e) => {
+    if (e.imageUrls || !e.diskPath) return e
+    const d = diskByPath.get(e.diskPath)
+    if (!d?.imageUrls) return e
+    // 同时替换 filenames：xy 落盘是一张合成大图（disk.filenames.length === 1），
+    // 让 historyImageUrl + 渲染分支的 filenames.length > 1 判断统一走单图视图。
+    // 本地 thumbnail（cell 0,0）仍走 IDB 的 thumbnailDataUrl。
+    return { ...e, imageUrls: d.imageUrls, filenames: d.filenames }
+  })
   const usedDiskPaths = new Set(
-    idb.map((e) => e.diskPath).filter((p): p is string => Boolean(p))
+    upgradedIdb.map((e) => e.diskPath).filter((p): p is string => Boolean(p))
   )
   const remainingDisk = disk.filter((d) => !d.diskPath || !usedDiskPaths.has(d.diskPath))
-  return [...idb, ...remainingDisk].sort((a, b) => b.createdAt - a.createdAt)
+  return [...upgradedIdb, ...remainingDisk].sort((a, b) => b.createdAt - a.createdAt)
 }
 
 /** 全局 history 状态 hook。IDB 持久化 + 磁盘 sidecar 兜底（跨会话回看）。 */
