@@ -1325,6 +1325,8 @@
     "checkingShort": "查…",
     "pruneStale": "清失效",
     "noHistory": "暂无历史",
+    "refreshHistory": "刷新",
+    "refreshHistoryTitle": "重新读取磁盘历史（用于多 tab 同步或外部修改文件夹后）",
     "noExportableXyData": "没有可导出的 XY 数据",
     "allCellsLoadFailed": "所有 cell 图都加载失败（可能原图已释放）",
     "canvas2dUnavailable": "canvas 2d 不可用",

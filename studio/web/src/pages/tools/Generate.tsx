@@ -21,12 +21,16 @@ import PreviewCompare from './generate/PreviewCompare'
 import PreviewHistoryRail from './generate/PreviewHistoryRail'
 import PromptFromDatasetPicker, { type DatasetPick } from './generate/PromptFromDatasetPicker'
 import {
-  PARAMS_SNAPSHOT_VERSION, loraBasename, resolveSnapshotLora,
+  PARAMS_SNAPSHOT_VERSION, applySnapshot, loraBasename,
   transformAxisRawForSnapshot,
   type GenerateParamsSnapshot, type SnapshotLora,
 } from './generate/paramsSnapshot'
 import { saveSingleSamples, saveXYMatrix } from './generate/saveTestImages'
-import { historyImageUrl, makeThumbnail, useGenerateHistory, type HistoryEntry } from './generate/useGenerateHistory'
+import { useGenerateHistory } from './generate/useGenerateHistory'
+import {
+  entryImageUrl,
+  type CacheEntry, type HistoryEntry,
+} from './generate/entryAdapter'
 import PreviewXYGrid from './generate/PreviewXYGrid'
 import PromptList from './generate/PromptList'
 import NegPromptInput from './generate/NegPromptInput'
@@ -330,13 +334,7 @@ export default function GeneratePage() {
     if (!cover) return
     const filename = (cover.path.split(/[\\/]/).pop() ?? '')
     if (!filename) return
-    // badge
-    let badge = ''
-    if (mode === 'xy') {
-      const xs = new Set(samples.map((s) => s.xy?.xi).filter((x) => x !== undefined))
-      const ys = new Set(samples.map((s) => s.xy?.yi).filter((x) => x !== undefined))
-      badge = `XY ${xs.size}×${ys.size || 1}`
-    }
+    // badge 字段不再存 entry（adapter.entryBadge 计算）
     const filenames = samples
       .map((s) => s.path.split(/[\\/]/).pop() ?? '')
       .filter(Boolean)
@@ -361,10 +359,9 @@ export default function GeneratePage() {
         xValues, yValues, samples: xySamples,
       }
     }
-    // 参数快照（IDB entry.params + 落盘 PNG metadata 共用）。回填时按 mode
-    // 路由灌 singleLoras / xyLoras + xDraft/yDraft；compare 视图记录为 'compare'
-    // 但回填时映射到 xy。LoRA 只存 name + ids（不存 path 避免泄露 / 跨机器死链）；
-    // 回填时通过 projectLoras 用 ids → path resolve。
+    // 参数快照（落盘 PNG metadata + cache entry 共用，回填用）。
+    // LoRA 只存 name + ids（不存 path 避免泄露 / 跨机器死链）；回填时通过
+    // projectLoras 用 ids → path resolve。
     const snapshotLoras: SnapshotLora[] = loras.map((l) => ({
       name: loraBasename(l.path),
       scale: l.scale,
@@ -388,32 +385,20 @@ export default function GeneratePage() {
         : null,
       dataset_pick: datasetPick,
     }
-    const entryPromise = makeThumbnail(api.generateSampleUrl(taskId, filename), 256)
-      .then((dataUrl) => history.add({
-        mode,
-        taskId,
-        thumbnailDataUrl: dataUrl,
-        filenames,
-        badge: badge || undefined,
-        xy: xyMeta,
-        params,
-      }))
-      .catch(() => null /* thumbnail 失败 — 不入库（avoid 无封面 entry），落盘仍跑 */)
-    // 自动落盘（Settings.generate.save_test_images=on 时）。compare 不落盘；
-    // 关闭时跳过避免 XY 模式白白合成网格图。落盘成功 → patch entry.diskPath
-    // 用于和 disk-history 接口的 entries 做 dedup（IDB 优先，磁盘兜底）。
-    if (mode === 'single' || mode === 'xy') {
-      void (async () => {
-        const sec = await api.getSecrets().catch(() => null)
-        if (!sec?.generate?.save_test_images) return
-        let diskPath: string | null = null
+    // 决策 #5 二元模式：开关开 = 落盘 + refresh disk-history（DiskEntry 由
+    // server 给）；开关关 = 直接 add CacheEntry（session 内存，关 tab 丢）。
+    // compare 不入历史（保留现状）。
+    if (mode !== 'single' && mode !== 'xy') return
+    void (async () => {
+      const sec = await api.getSecrets().catch(() => null)
+      const saveToDisk = !!sec?.generate?.save_test_images
+      if (saveToDisk) {
+        // 持久路径：落盘 + 重拉 disk-history（DiskEntry 由 server 端 disk-history
+        // 接口构造，含 sha1 id + thumb url + 已 URL-encoded image url）
         if (mode === 'single') {
-          const paths = await saveSingleSamples(taskId, filenames, params)
-          // 用第一张图的 path 作为 entry.diskPath（去重 key）；后续若用户跨
-          // session 看 disk-history，能正确合并到对应 IDB entry。
-          diskPath = paths.find(Boolean) ?? null
+          await saveSingleSamples(taskId, filenames, params)
         } else if (xyMeta) {
-          diskPath = await saveXYMatrix({
+          await saveXYMatrix({
             samples: xyMeta.samples.map((s) => ({ path: s.path, xy: { xi: s.xy.xi, yi: s.xy.yi } })),
             taskId,
             xAxis: xyMeta.xAxis as Parameters<typeof saveXYMatrix>[0]['xAxis'],
@@ -422,56 +407,65 @@ export default function GeneratePage() {
             yValues: xyMeta.yValues,
           }, params)
         }
-        if (!diskPath) return
-        const entryId = await entryPromise
-        if (entryId) await history.patch(entryId, { diskPath })
-      })()
-    }
+        await history.refresh()
+      } else {
+        // 临时路径：直接 add CacheEntry，浏览器拉 cache URL 显示
+        const cacheEntry: CacheEntry = {
+          source: 'cache',
+          id: typeof crypto !== 'undefined' && 'randomUUID' in crypto
+            ? crypto.randomUUID()
+            : Math.random().toString(36).slice(2),
+          mode,
+          taskId,
+          createdAt: Date.now(),
+          filenames,
+          params,
+          xyMeta,
+        }
+        history.add(cacheEntry)
+      }
+    })()
   }, [currentTask, samples, mode, selectedIndices, history, xDraft, yDraft,
       prompts, negPrompt, width, height, steps, cfgScale, count, seed, loras, datasetPick])
 
   const handleHistorySelect = (entry: HistoryEntry) => {
     setHistoryOverride(entry)
-    const params = entry.params
-    if (!params) return  // 老 entry / 早于本次改动 → 仅切图，不回填
-    const resolved = params.loras.map((l) => resolveSnapshotLora(l, projectLoras))
-    const missingCount = resolved.filter((l) => !l.path).length
-    if (missingCount > 0) {
-      toast(t('generate.historyLorasMissing', { n: missingCount }), 'info')
+    // applySnapshot 统一所有"应用快照"入口（决策 #8 / Step 3）；老 entry 缺
+    // params 会走 catch 兜底（snap.loras 等访问报错 → 不回填，仅切图）
+    let applied
+    try {
+      applied = applySnapshot(entry.params, projectLoras)
+    } catch {
+      return
     }
-    // compare 视图回填到 xy 模式（compare 是 xy 子视图，没 selectedIndices 不直接进）
-    const newMode: ViewMode = params.mode === 'single' ? 'single' : 'xy'
+    if (applied.unresolvedLoraCount > 0) {
+      toast(t('generate.historyLorasMissing', { n: applied.unresolvedLoraCount }), 'info')
+    }
     setPrefs((prev) => {
       const base: GeneratePrefs = {
         ...prev,
-        mode: newMode,
-        prompts: params.prompts.length > 0 ? params.prompts : prev.prompts,
-        negPrompt: params.negative_prompt,
-        width: params.width,
-        height: params.height,
-        aspect: aspectFromDimensions(params.width, params.height),
-        steps: params.steps,
-        cfgScale: params.cfg_scale,
-        count: params.count,
-        seed: params.seed,
-        datasetPick: params.dataset_pick ?? null,
+        mode: applied.mode,
+        prompts: applied.prompts.length > 0 ? applied.prompts : prev.prompts,
+        negPrompt: applied.negPrompt,
+        width: applied.width,
+        height: applied.height,
+        aspect: aspectFromDimensions(applied.width, applied.height),
+        steps: applied.steps,
+        cfgScale: applied.cfgScale,
+        count: applied.count,
+        seed: applied.seed,
+        datasetPick: applied.datasetPick,
       }
-      if (params.mode === 'single') {
-        return { ...base, singleLoras: resolved }
+      if (applied.mode === 'single') {
+        return { ...base, singleLoras: applied.loras }
       }
-      // xy_draft snapshot 的 lora_ckpt 轴 raw 是 basename 列表；shape 兼容
-      // XYAxisDraft 但用户重 submit 前需要 picker 重选定位 ckpt path。
       return {
         ...base,
-        xyLoras: resolved,
-        xDraft: params.xy_draft?.x ?? prev.xDraft,
-        yDraft: params.xy_draft?.y ?? null,
+        xyLoras: applied.loras,
+        xDraft: applied.xDraft ?? prev.xDraft,
+        yDraft: applied.yDraft ?? null,
       }
     })
-    // SidebarLoras / SidebarXYAxes 内的 InlineLoraPicker 只在 mount 时从 props
-    // 取 projectId/versionId 初始化下拉，后续 props 变化不同步（同 URL ?lora=
-    // 路径的修复 — bump key 强制整块 remount，让下拉跟着回填值刷新）。
-    setUrlConsumedKey((k) => k + 1)
   }
 
   const handleGenerate = async () => {
@@ -772,11 +766,11 @@ export default function GeneratePage() {
 
               {historyOverride ? (
                 <div className="flex-1 min-h-0 flex flex-col gap-2">
-                  {historyOverride.mode === 'xy' && historyOverride.xy
-                    && !(historyOverride.imageUrls && historyOverride.imageUrls.length) ? (
-                    /* xy 历史回看：用 PreviewXYGrid 重建（带轴标签 + 双击全屏） */
+                  {historyOverride.source === 'cache' && historyOverride.mode === 'xy'
+                    && historyOverride.xyMeta ? (
+                    /* CacheEntry + xyMeta：cache 里 per-cell 图都在，走 PreviewXYGrid */
                     <PreviewXYGrid
-                      samples={historyOverride.xy.samples.map((s) => ({
+                      samples={historyOverride.xyMeta.samples.map((s) => ({
                         path: s.path,
                         xy: {
                           xi: s.xy.xi, yi: s.xy.yi,
@@ -785,76 +779,42 @@ export default function GeneratePage() {
                       }))}
                       taskId={historyOverride.taskId}
                       xDraft={{
-                        axis: historyOverride.xy.xAxis as never,
-                        raw: historyOverride.xy.xValues.join(', '),
+                        axis: historyOverride.xyMeta.xAxis as never,
+                        raw: historyOverride.xyMeta.xValues.join(', '),
                         loraIndex: null,
                       }}
-                      yDraft={historyOverride.xy.yAxis ? {
-                        axis: historyOverride.xy.yAxis as never,
-                        raw: (historyOverride.xy.yValues as string[]).filter(Boolean).join(', '),
+                      yDraft={historyOverride.xyMeta.yAxis ? {
+                        axis: historyOverride.xyMeta.yAxis as never,
+                        raw: (historyOverride.xyMeta.yValues as string[]).filter(Boolean).join(', '),
                         loraIndex: null,
                       } : null}
                       onCellClick={undefined /* 历史回看不允许选 cell 进 compare */}
                       selectedIndices={[]}
                     />
-                  ) : historyOverride.mode === 'xy' && historyOverride.filenames.length > 1 ? (
-                    /* legacy: 旧 entry 没 xy meta，回退到 grid auto-fit 平铺 */
-                    <div className="flex-1 min-h-0 overflow-auto">
-                      <div
-                        style={{
-                          display: 'grid',
-                          gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-                          gap: 2,
-                        }}
-                      >
-                        {historyOverride.filenames.map((fn, idx) => {
-                          const url = historyImageUrl(historyOverride, idx)
-                          return (
-                            <a
-                              key={fn} href={url} target="_blank" rel="noreferrer"
-                              className="block bg-sunken rounded-sm overflow-hidden"
-                            >
-                              <img
-                                src={url}
-                                onError={(e) => {
-                                  (e.currentTarget as HTMLImageElement).src = historyOverride.thumbnailDataUrl
-                                  ;(e.currentTarget as HTMLImageElement).title = t('generate.originalReleasedCoverOnly')
-                                }}
-                                alt={fn}
-                                className="block w-full h-auto"
-                                loading="lazy"
-                              />
-                            </a>
-                          )
-                        })}
-                      </div>
-                    </div>
                   ) : (
-                    /* 单图回看（single / compare 历史 / 单张 xy） */
+                    /* DiskEntry（含 XY 合成大图）/ CacheEntry single → 单图视图 */
                     <a
                       className="flex-1 min-h-0 flex items-center justify-center w-full"
-                      href={historyImageUrl(historyOverride, 0)}
+                      href={entryImageUrl(historyOverride, 0)}
                       target="_blank"
                       rel="noreferrer"
                     >
                       <img
                         key={historyOverride.id}
-                        src={historyImageUrl(historyOverride, 0)}
+                        src={entryImageUrl(historyOverride, 0)}
                         onError={(e) => {
-                          (e.currentTarget as HTMLImageElement).src = historyOverride.thumbnailDataUrl
-                          ;(e.currentTarget as HTMLImageElement).title = t('generate.originalReleasedThumbOnly')
+                          (e.currentTarget as HTMLImageElement).title = t('generate.originalReleasedThumbOnly')
                         }}
-                        alt={`history #${historyOverride.taskId}`}
+                        alt=""
                         className="rounded-md object-contain"
                         style={{ maxWidth: '100%', maxHeight: '100%' }}
                       />
                     </a>
                   )}
                   <div className="text-xs text-fg-tertiary shrink-0">
-                    {t('generate.historyTask', { id: historyOverride.taskId })}
-                    {historyOverride.badge ? ` · ${historyOverride.badge}` : ''}
-                    {historyOverride.mode === 'xy' && historyOverride.filenames.length > 1
-                      ? ` · ${t('generate.imageCount', { n: historyOverride.filenames.length })}` : ''}
+                    {historyOverride.source === 'disk'
+                      ? historyOverride.filename.replace(/\.png$/i, '')
+                      : t('generate.historyTask', { id: historyOverride.taskId })}
                     <button
                       className="btn btn-ghost text-xs ml-2"
                       style={{ padding: '2px 8px' }}
@@ -911,13 +871,13 @@ export default function GeneratePage() {
             </div>
           </div>
 
-          {/* 右：图片历史栏（commit 16，按当前 mode 分桶） */}
+          {/* 右：图片历史栏（按当前 mode 分桶） */}
           <PreviewHistoryRail
             entries={history.entries}
             mode={mode}
             onSelect={handleHistorySelect}
-            onClear={() => { void history.clearByMode(mode) }}
-            onPruneStale={history.pruneStale}
+            onRefresh={history.refresh}
+            loading={history.loading}
           />
       </div>
 

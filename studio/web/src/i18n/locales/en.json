@@ -1325,6 +1325,8 @@
     "checkingShort": "Checking…",
     "pruneStale": "Clear stale",
     "noHistory": "No history",
+    "refreshHistory": "Refresh",
+    "refreshHistoryTitle": "Reload disk history (use after multi-tab sync or external folder changes)",
     "noExportableXyData": "No exportable XY data",
     "allCellsLoadFailed": "All cell images failed to load (the originals may have been released)",
     "canvas2dUnavailable": "canvas 2d is unavailable",
