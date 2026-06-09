@@ -24,6 +24,25 @@ from PIL import Image, ImageEnhance
 from torch.utils.data import Dataset
 
 
+def _lab_chroma_scale(img: Image.Image, factor: float) -> Image.Image:
+    """CIELAB chroma 缩放：在 Lab 空间把 a*/b* 通道（chroma）×factor，L* 完全不动。
+
+    比 PIL ImageEnhance.Color 更纯：后者保 BT.601 L 但不保 HSV V，VAE encode 后
+    LoRA 会捎带学到亮度方向。Lab 的 L* 是感知均匀亮度，a*/b* 跟 L* 数学上正交，
+    缩 a*/b* 不会影响 L* 一个像素。
+
+    factor=1.0 → 原图；factor=0.5 → 半饱和（chroma 减半）；factor=0.0 → 灰度。
+    """
+    from skimage import color
+    arr = np.asarray(img, dtype=np.float32) / 255.0  # [H,W,3] in [0,1]
+    lab = color.rgb2lab(arr)  # L* in [0,100], a*/b* in ~[-128, 127]
+    lab[..., 1] *= float(factor)
+    lab[..., 2] *= float(factor)
+    rgb = color.lab2rgb(lab)  # back to [0,1]
+    rgb = np.clip(rgb * 255.0, 0, 255).astype(np.uint8)
+    return Image.fromarray(rgb, mode="RGB")
+
+
 logger = logging.getLogger(__name__)
 
 _IMG_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
@@ -36,11 +55,13 @@ class SaturationPairDataset(Dataset):
         data_dir: 图片目录（递归扫描；不解析 Kohya 文件夹 repeat 前缀，POC 简化）
         resolution: 强制单分辨率（pair shape 必须相同）
         caption: 所有图共用同一 caption；POC 推荐保持空或短词
-        neg_strength: 负向 pair 的 ImageEnhance.Color factor（0.0=全灰度，1.0=原图）。
+        neg_strength: 负向 pair 的饱和度缩放 factor（0.0=全灰度，1.0=原图）。
             默认 0.5 = 半饱和。
-            **不要用 0.0**：那会让 LoRA 把"去色"整条向量学进去（亮度/对比度
-            PIL 数学上保 L 没事，但色温 / 色相会被吸走），weight=-1 推理时
-            退化成黑白 tweaker。0.5 让 axis 更短更纯，推理 weight 动态范围 +。
+        pair_op: pair 生成算子
+            - "lab_chroma" (默认推荐): CIELAB 空间缩 a*/b* chroma，L* 完全不变
+              → 训练 pair **严格保感知亮度**，LoRA 没机会把亮度方向编进去
+            - "pil_color": PIL ImageEnhance.Color，保 BT.601 luminance 但不保
+              HSV V → LoRA 会捎带学到亮度变化（v2 实测有亮度漂）
     """
 
     def __init__(
@@ -49,11 +70,15 @@ class SaturationPairDataset(Dataset):
         resolution: int = 1024,
         caption: str = "a photo",
         neg_strength: float = 0.5,
+        pair_op: str = "lab_chroma",
     ):
         self.data_dir = Path(data_dir)
         self.resolution = int(resolution)
         self.caption = caption
         self.neg_strength = float(neg_strength)
+        if pair_op not in ("lab_chroma", "pil_color"):
+            raise ValueError(f"pair_op 必须是 'lab_chroma' / 'pil_color'，得到 {pair_op!r}")
+        self.pair_op = pair_op
         self.image_paths: list[Path] = []
         if not self.data_dir.exists():
             raise FileNotFoundError(f"data_dir 不存在: {self.data_dir}")
@@ -64,7 +89,7 @@ class SaturationPairDataset(Dataset):
             raise RuntimeError(f"data_dir 下没扫到图片: {self.data_dir}")
         logger.info(
             f"SaturationPairDataset: {len(self.image_paths)} 张图 @ {self.resolution}x{self.resolution}, "
-            f"caption=\"{self.caption}\", neg_strength={self.neg_strength}"
+            f"caption=\"{self.caption}\", neg_strength={self.neg_strength}, pair_op={self.pair_op}"
         )
 
     def __len__(self) -> int:
@@ -88,7 +113,10 @@ class SaturationPairDataset(Dataset):
 
         # pos = 原图，neg = 弱化饱和（默认 0.5；不走 0.0 避免变成"去色 tweaker"）
         img_pos = img
-        img_neg = ImageEnhance.Color(img).enhance(self.neg_strength)
+        if self.pair_op == "lab_chroma":
+            img_neg = _lab_chroma_scale(img, self.neg_strength)
+        else:  # pil_color
+            img_neg = ImageEnhance.Color(img).enhance(self.neg_strength)
 
         return {
             "pixel_pos": self._to_tensor(img_pos),
@@ -117,9 +145,10 @@ def build_dataloader(ctx) -> None:
     args = ctx.args
     caption = str(getattr(args, "slider_caption", "") or "a photo")
     neg_strength = float(getattr(args, "slider_neg_strength", 0.5))
+    pair_op = str(getattr(args, "slider_pair_op", "lab_chroma"))
     ds = SaturationPairDataset(
         args.data_dir, resolution=args.resolution,
-        caption=caption, neg_strength=neg_strength,
+        caption=caption, neg_strength=neg_strength, pair_op=pair_op,
     )
     ctx.base_dataset = ds
     ctx.dataset = ds

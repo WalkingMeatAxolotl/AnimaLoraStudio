@@ -1,11 +1,21 @@
 """Concept slider 训练循环（POC）。
 
-四前向公式（image-pair, Gandikota+ 2023）：
+单向公式（默认，4 forwards/step）：
   pred_pos_base = model(noisy_pos, t, c) | LoRA off, no_grad
   pred_neg_base = model(noisy_neg, t, c) | LoRA off, no_grad
   pred_lora     = model(noisy_pos, t, c) | LoRA on,  grad
   target        = pred_pos_base + eta * (pred_pos_base - pred_neg_base)
   loss          = MSE(pred_lora, target)
+
+双向公式（--slider_bidirectional，6 forwards/step）：
+  在单向之上额外 +：
+  pred_lora_neg = model(noisy_neg, t, c) | LoRA on, grad
+  target_neg    = pred_neg_base - eta * (pred_pos_base - pred_neg_base)
+  loss          += MSE(pred_lora_neg, target_neg)
+
+  动机：单向训练 LoRA 只见 noisy_pos 输入，weight=-1 推理时 LoRA 外推
+  到训练外区域 → 实测 +1 强 / -1 弱。双向强制 LoRA 对两个方向都有训练
+  信号，对称性显著改善。代价：+50% wall-clock。
 
 方向：weight=+1 推理时 → 更高饱和（pos 方向）；weight=-1 → 更低饱和。
 
@@ -89,7 +99,11 @@ def run(ctx: TrainingContext) -> None:
     """跑 concept slider 训练循环直到 args.epochs 或 args.max_steps 上限。"""
     args = ctx.args
     eta = float(getattr(args, "slider_eta", 1.0) or 1.0)
-    logger.info(f"concept slider 训练启动: eta={eta}, save_every_steps={args.save_every_steps}, sample_steps={args.sample_steps}")
+    bidirectional = bool(getattr(args, "slider_bidirectional", False))
+    logger.info(
+        f"concept slider 训练启动: eta={eta}, bidirectional={bidirectional}, "
+        f"save_every_steps={args.save_every_steps}, sample_steps={args.sample_steps}"
+    )
 
     step_start_time = time.perf_counter()
 
@@ -142,14 +156,26 @@ def run(ctx: TrainingContext) -> None:
                         use_checkpoint=False,
                     )
 
-            # LoRA 前向（有 grad）；target 用 base 算出来，对 pred_lora 拉到 pos+eta·(pos-neg)
+            # 公共的 delta（pos - neg）；double 化避免 autocast 误差
+            delta_base = pred_pos_base.float() - pred_neg_base.float()
+
+            # LoRA 前向（pos 输入，有 grad）
             with torch.autocast("cuda", dtype=ctx.dtype):
-                pred_lora = forward_with_optional_checkpoint(
+                pred_lora_pos = forward_with_optional_checkpoint(
                     ctx.model, noisy_pos, t.view(-1, 1), cross, pad_mask,
                     use_checkpoint=args.grad_checkpoint,
                 )
-                target = pred_pos_base.float() + eta * (pred_pos_base.float() - pred_neg_base.float())
-                loss = F.mse_loss(pred_lora.float(), target)
+                target_pos = pred_pos_base.float() + eta * delta_base
+                loss = F.mse_loss(pred_lora_pos.float(), target_pos)
+
+                # 双向：额外训 noisy_neg 输入，target 朝 -delta 方向
+                if bidirectional:
+                    pred_lora_neg = forward_with_optional_checkpoint(
+                        ctx.model, noisy_neg, t.view(-1, 1), cross, pad_mask,
+                        use_checkpoint=args.grad_checkpoint,
+                    )
+                    target_neg = pred_neg_base.float() - eta * delta_base
+                    loss = loss + F.mse_loss(pred_lora_neg.float(), target_neg)
 
             if not torch.isfinite(loss):
                 logger.warning(f"step {ctx.global_step} micro-batch {batch_idx}: loss={loss.item():.4g}，跳过")

@@ -43,8 +43,18 @@ def parse_args():
     )
     p.add_argument(
         "--slider_neg_strength", type=float, default=0.5,
-        help="负向 pair 的 PIL ImageEnhance.Color factor（0=全灰度，1=原图）。"
+        help="负向 pair 的饱和度缩放 factor（0=全灰度，1=原图）。"
              "默认 0.5。设 0 会让 weight=-1 推理退化成黑白 tweaker，不推荐。",
+    )
+    p.add_argument(
+        "--slider_pair_op", choices=["lab_chroma", "pil_color"], default="lab_chroma",
+        help="pair 生成算子。lab_chroma=CIELAB 缩 a*/b*，L* 严格不变（默认，推荐）。"
+             "pil_color=PIL ImageEnhance.Color（v2 实测有亮度漂，仅兼容旧配置用）。",
+    )
+    p.add_argument(
+        "--slider_bidirectional", action="store_true",
+        help="双向训练：同时 supervise noisy_pos 和 noisy_neg 输入。"
+             "+50%% wall-clock。修 +1 强 / -1 弱不对称。",
     )
     # PP6.1 — 监控状态文件路径；不传则默认写到 output_dir/monitor_state.json
     # 注：--no-monitor / --monitor-host / --monitor-port / --no-browser 由 schema
