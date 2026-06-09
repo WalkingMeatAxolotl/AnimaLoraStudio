@@ -56,6 +56,10 @@ class _ActiveTask:
     task_id: int
     request_id: str
     on_event: EventCallback
+    # 决策 #15：task 启动时冻结 secrets.generate.save_test_images，避免中途切开关
+    # 导致一 task 内一半 cache 一半 disk。enqueueGenerate 写 cfg.save_test_images_at_dispatch
+    # → submit_task 读出来存这里 → _handle_image_done 决定 SSE delivery 子字段
+    save_to_disk: bool = False
     started_at: float = field(default_factory=time.time)
 
 
@@ -327,8 +331,10 @@ class InferenceDaemon:
                 )
             self._req_seq += 1
             req_id = f"task-{task_id}-{self._req_seq}"
+            save_to_disk = bool(config.get("save_test_images_at_dispatch", False))
             self._active = _ActiveTask(
                 task_id=task_id, request_id=req_id, on_event=on_event,
+                save_to_disk=save_to_disk,
             )
             self._state = STATE_BUSY
             self._reschedule_idle_timer_locked()
@@ -535,6 +541,10 @@ class InferenceDaemon:
         # commit 14：preview_step 含 base64 JPEG → 直接透传给 callback（不入 cache，
         #   前端 SSE 收到立刻 <img src="data:..."> 显示当前步预览；done/最终图
         #   会替换它）
+        # 决策 #14：image_done 加 `delivery: 'disk' | 'cache'` 子字段，前端按此
+        # 走 POST /api/generate/save 落盘（disk）or 直接 add CacheEntry（cache）。
+        # 仍走 cache 中转（持久模式下 cache 是落盘前的临时存放，前端落盘成功后
+        # 用户可手动删 cache 或等 LRU 自然剔）。
         forward_msg = msg
         if kind == "image_done" and "image_b64" in msg:
             filename = msg.get("filename") or ""
@@ -544,6 +554,7 @@ class InferenceDaemon:
             except Exception:
                 logger.exception("cache_image failed for %s", filename)
             forward_msg = {k: v for k, v in msg.items() if k != "image_b64"}
+            forward_msg["delivery"] = "disk" if active.save_to_disk else "cache"
 
         # done/error/canceled 先切状态，再回调 —— 让 callback 内查询 is_busy/state 时
         # 看到准确的 IDLE 状态（commit 13 daemon_state_changed 依赖这个顺序）

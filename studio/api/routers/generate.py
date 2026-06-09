@@ -132,6 +132,16 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
         cfg_dict = cfg.model_dump()
         cfg_dict["preview_every_n_steps"] = preview_n
 
+        # 决策 #15：task 启动时冻结 save_test_images，避免用户中途切开关导致
+        # 一 task 内一半图走 cache 一半落盘。daemon submit_task 读这个字段
+        # 存到 _ActiveTask.save_to_disk，_handle_image_done 决定 SSE delivery
+        try:
+            cfg_dict["save_test_images_at_dispatch"] = bool(
+                secrets.load().generate.save_test_images
+            )
+        except Exception:
+            cfg_dict["save_test_images_at_dispatch"] = False
+
         cfg_path = tempdir / "config.json"
         cfg_path.write_text(
             json.dumps(cfg_dict, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -541,7 +551,7 @@ def list_disk_history(limit: int = 500) -> dict[str, Any]:
 
 
 def _resolve_disk_png(date_str: str, mode: str, filename: str) -> Path:
-    """三种 endpoint（image / thumb / delete）共用的路径校验 + resolve。
+    r"""三种 endpoint（image / thumb / delete）共用的路径校验 + resolve。
 
     校验：date 格式 / mode 枚举 / filename 安全字符集（无 / \ .. 等）/ 扩展名 .png
     返回：实际磁盘 Path（不保证 exists，由调用方决定 404 时机）
