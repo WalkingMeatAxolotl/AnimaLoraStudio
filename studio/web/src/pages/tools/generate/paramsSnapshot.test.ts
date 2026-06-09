@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  applySnapshot, loraBasename, resolveSnapshotLora, transformAxisRawForSnapshot,
+  applySnapshot, buildCellSnapshot, loraBasename, resolveSnapshotLora, transformAxisRawForSnapshot,
   type GenerateParamsSnapshot, type SnapshotLora,
 } from './paramsSnapshot'
 import type { ProjectLora } from './types'
@@ -152,6 +152,55 @@ describe('applySnapshot', () => {
     expect(r.yDraft?.axis).toBe('steps')
   })
 
+  it('dataset_pick fallback：project 在 projectLoras 还在 → datasetPick 保留', () => {
+    const snap = snapshot({
+      dataset_pick: {
+        projectId: 1, versionId: 11,
+        name: '0001.txt', tags: ['tag-a', 'tag-b'],
+      },
+    })
+    const r = applySnapshot(snap, projects)
+    expect(r.datasetPick?.projectId).toBe(1)
+    expect(r.prompts).toEqual(['1girl'])  // 没污染 prompts
+  })
+
+  it('dataset_pick fallback：project 在 projectLoras 找不到 → tags 拼进第一条 prompt + datasetPick=null', () => {
+    const snap = snapshot({
+      prompts: ['base prompt'],
+      dataset_pick: {
+        projectId: 999, versionId: 88,  // 不在 projects 列表里
+        name: '0001.txt', tags: ['fall-tag-1', 'fall-tag-2'],
+      },
+    })
+    const r = applySnapshot(snap, projects)
+    expect(r.datasetPick).toBeNull()
+    expect(r.prompts[0]).toBe('base prompt, fall-tag-1, fall-tag-2')
+  })
+
+  it('dataset_pick fallback：第一条 prompt 空 → 直接是 tags 串', () => {
+    const snap = snapshot({
+      prompts: [''],
+      dataset_pick: {
+        projectId: 999, versionId: 88,
+        name: '0001.txt', tags: ['x', 'y'],
+      },
+    })
+    const r = applySnapshot(snap, projects)
+    expect(r.prompts[0]).toBe('x, y')
+  })
+
+  it('dataset_pick fallback：tags 已在第一条末尾 → 不重复追加（防双击同一历史 entry）', () => {
+    const snap = snapshot({
+      prompts: ['base, x, y'],
+      dataset_pick: {
+        projectId: 999, versionId: 88,
+        name: '0001.txt', tags: ['x', 'y'],
+      },
+    })
+    const r = applySnapshot(snap, projects)
+    expect(r.prompts[0]).toBe('base, x, y')
+  })
+
   it('未 resolve 的 LoRA → unresolvedLoraCount > 0', () => {
     const snap = snapshot({
       loras: [
@@ -165,5 +214,80 @@ describe('applySnapshot', () => {
     expect(r.loras[0].path).toBe('')
     expect(r.loras[1].path).toBe('/loras/cute_chibi/v3.safetensors')
     expect(r.loras[2].path).toBe('')
+  })
+})
+
+describe('buildCellSnapshot', () => {
+  const baseXy = snapshot({
+    mode: 'xy',
+    steps: 20,
+    cfg_scale: 5,
+    loras: [{ name: 'a.safetensors', scale: 0.5 }, { name: 'b.safetensors', scale: 0.7 }],
+  })
+
+  it('steps axis: 顶层 steps 覆盖；mode → single；xy_draft → null；xy_origin 记位置', () => {
+    const cell = buildCellSnapshot(baseXy, { xi: 2, yi: 0 }, {
+      x: { axis: 'steps', loraIndex: null, value: 30 },
+      y: null,
+    })
+    expect(cell.mode).toBe('single')
+    expect(cell.steps).toBe(30)
+    expect(cell.cfg_scale).toBe(5)  // 未被轴改
+    expect(cell.xy_draft).toBeNull()
+    expect(cell.xy_origin).toEqual({
+      xi: 2, yi: 0, xv: 30, yv: null, x_axis: 'steps', y_axis: null,
+    })
+  })
+
+  it('cfg_scale axis: 顶层 cfg_scale 覆盖（字符串 input 也接受）', () => {
+    const cell = buildCellSnapshot(baseXy, { xi: 1, yi: 0 }, {
+      x: { axis: 'cfg_scale', loraIndex: null, value: '7.5' },
+      y: null,
+    })
+    expect(cell.cfg_scale).toBe(7.5)
+    expect(cell.steps).toBe(20)
+  })
+
+  it('lora_scale axis: 全 LoRA 共用 cell value（不按 loraIndex 单独改）', () => {
+    const cell = buildCellSnapshot(baseXy, { xi: 0, yi: 0 }, {
+      x: { axis: 'lora_scale', loraIndex: null, value: 0.9 },
+      y: null,
+    })
+    expect(cell.loras).toEqual([
+      { name: 'a.safetensors', scale: 0.9 },
+      { name: 'b.safetensors', scale: 0.9 },
+    ])
+  })
+
+  it('lora_ckpt axis: 仅指定 loraIndex 的 name 改成 basename，原 ids 失效', () => {
+    const cell = buildCellSnapshot(baseXy, { xi: 1, yi: 0 }, {
+      x: { axis: 'lora_ckpt', loraIndex: 0, value: '/some/path/new.safetensors' },
+      y: null,
+    })
+    expect(cell.loras[0]).toEqual({
+      name: 'new.safetensors', scale: 0.5, project_id: null, version_id: null,
+    })
+    // loras[1] 不动
+    expect(cell.loras[1].name).toBe('b.safetensors')
+  })
+
+  it('2D: x + y 双轴都物化', () => {
+    const cell = buildCellSnapshot(baseXy, { xi: 1, yi: 2 }, {
+      x: { axis: 'steps', loraIndex: null, value: 25 },
+      y: { axis: 'cfg_scale', loraIndex: null, value: 8.0 },
+    })
+    expect(cell.steps).toBe(25)
+    expect(cell.cfg_scale).toBe(8.0)
+    expect(cell.xy_origin?.yi).toBe(2)
+    expect(cell.xy_origin?.y_axis).toBe('cfg_scale')
+  })
+
+  it('不污染原 XY snapshot（loras 是深复制）', () => {
+    const before = JSON.parse(JSON.stringify(baseXy.loras))
+    buildCellSnapshot(baseXy, { xi: 0, yi: 0 }, {
+      x: { axis: 'lora_scale', loraIndex: null, value: 0.1 },
+      y: null,
+    })
+    expect(baseXy.loras).toEqual(before)
   })
 })

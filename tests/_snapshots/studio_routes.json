@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 165,
+  "count": 173,
   "routes": [
     {
       "path": "/",
@@ -127,6 +127,70 @@
         "POST"
       ],
       "name": "unload_daemon",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/disk/history",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_disk_history",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/disk/image/{date_str}/xy/{folder}/{filename}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_disk_xy_image",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/disk/image/{date_str}/{mode}/{filename}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_disk_image",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/disk/thumb/{date_str}/xy/{folder}/{filename}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_disk_xy_thumb",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/disk/thumb/{date_str}/{mode}/{filename}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_disk_thumb",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/disk/{date_str}/xy/{folder}",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_disk_xy_folder",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/disk/{date_str}/{mode}/{filename}",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_disk_image",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/save",
+      "methods": [
+        "POST"
+      ],
+      "name": "save_test_image",
       "type": "APIRoute"
     },
     {

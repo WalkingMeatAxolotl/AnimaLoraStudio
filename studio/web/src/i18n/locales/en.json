@@ -1008,7 +1008,7 @@
     "saveTestImages": {
       "title": "Save test images to disk",
       "label": "Save test images",
-      "desc": "When enabled, every generation is written to studio_data/test/<date>/{single,xy}/image_N.png. xy mode saves the composed grid; compare mode is never saved. Default: off."
+      "tooltip": "When enabled, every generation writes to studio_data/test/<date>/: single mode saves a single PNG; xy mode saves a folder (composite + per-cell PNGs, each cell is drop-into-Comfy/A1111 compatible); compare is never saved. Default: off."
     },
     "theme": "Theme",
     "themeLight": "☀ Light",

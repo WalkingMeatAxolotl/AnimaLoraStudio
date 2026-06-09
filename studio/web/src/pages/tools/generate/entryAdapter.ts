@@ -14,8 +14,12 @@
 import { api } from '../../../api/client'
 import type { GenerateParamsSnapshot } from './paramsSnapshot'
 
-/** XY 历史回看的 axis 元数据（仅 CacheEntry 重建 PreviewXYGrid 用；
- *  DiskEntry 是合成大图，不需要 per-cell 信息走网格视图） */
+/** XY 历史回看的 axis 元数据（CacheEntry + DiskEntry 共用 —— PreviewXYGrid 重建用）。
+ *
+ *  - CacheEntry: samples[].path 是 cache 文件名；imageUrl 留空，PreviewXYGrid
+ *    fallback 走 `api.generateSampleUrl(taskId, filename)`
+ *  - DiskEntry: server 已 encode 好 imageUrl（`/api/generate/disk/image/<date>/xy/<folder>/<cell>`），
+ *    PreviewXYGrid 直接吃 */
 export interface HistoryXYMeta {
   xAxis: string
   yAxis: string | null
@@ -24,10 +28,17 @@ export interface HistoryXYMeta {
   samples: Array<{
     path: string
     xy: { xi: number; yi: number; xv: string | number; yv: string | number | null }
+    /** disk-served 时 server 端已 URL-encode 好；cache 时 undefined → 回退 api.generateSampleUrl */
+    imageUrl?: string
   }>
 }
 
-/** 持久 entry：磁盘上的 PNG，server disk-history 接口返回的纯派生数据。 */
+/** 持久 entry：磁盘上的 PNG / 文件夹，server disk-history 接口返回的纯派生数据。
+ *
+ * single：一张 PNG（filename + imageUrl 指向它）
+ * xy：一个 `xy plot N/` 文件夹（folder + imageUrl 指向 composite，
+ *     xyMeta.samples 是每 cell 信息 + 直读 URL）。
+ */
 export interface DiskEntry {
   source: 'disk'
   /** server 返回的稳定 id：'disk:<sha1-12>'（决策 #12，避免文件名带空格塞进 React key） */
@@ -35,16 +46,20 @@ export interface DiskEntry {
   mode: 'single' | 'xy'
   /** YYYY-MM-DD，对应文件夹 */
   date: string
-  /** 文件名（含扩展名）；URL 已编码版在 imageUrl/thumbUrl 里 */
-  filename: string
-  /** 大图 URL，可直接 <img src=...> 用（server 端已 URL encode） */
+  /** single：PNG 文件名（含扩展名）；xy：undefined（用 folder） */
+  filename?: string
+  /** xy：文件夹名 `xy plot <N>`；single：undefined */
+  folder?: string
+  /** 大图 URL，可直接 <img src=...> 用（server 端已 URL encode）。xy 模式指向 composite。 */
   imageUrl: string
   /** 缩略图 URL，server 在线缩 + ETag */
   thumbUrl: string
-  /** PNG mtime * 1000 */
+  /** PNG / composite mtime */
   createdAt: number
-  /** 从 PNG anima_params 解出来的参数快照 */
+  /** 从 PNG anima_params 解出来的参数快照（xy 模式是 composite 的 XY snapshot） */
   params: GenerateParamsSnapshot
+  /** xy 模式 per-cell 元数据（PreviewXYGrid 重建用）；single 模式 undefined */
+  xyMeta?: HistoryXYMeta
 }
 
 /** 临时 entry：仅在 server 内存 cache 中存活，session 期间使用。
@@ -104,7 +119,9 @@ export function entryParams(e: HistoryEntry): GenerateParamsSnapshot {
 export function entryDisplayLabel(e: HistoryEntry): string {
   switch (e.source) {
     case 'disk':
-      return e.filename.replace(/\.png$/i, '')
+      // xy 用 folder ("xy plot 3")；single 用 filename 去 .png 后缀
+      if (e.mode === 'xy' && e.folder) return e.folder
+      return (e.filename ?? '').replace(/\.png$/i, '')
     case 'cache':
       return `#${e.taskId}`
   }
@@ -126,15 +143,21 @@ export function entryBadge(e: HistoryEntry): string | undefined {
   return 'XY'
 }
 
-/** 删除 entry：DiskEntry 走 DELETE endpoint；CacheEntry 仅本地 splice（无 server 删）。
- *  返回 server 端是否真删了文件（CacheEntry 永远 false）。 */
+/** 删除 entry：
+ *  - DiskEntry single：单文件 DELETE `/api/generate/disk/<date>/single/<encoded>`
+ *  - DiskEntry xy：整文件夹 DELETE `/api/generate/disk/<date>/xy/<encoded folder>`
+ *  - CacheEntry：仅本地 splice（无 server 删）
+ *  返回 server 端是否真删了（CacheEntry 永远 false）。 */
 export async function entryDelete(e: HistoryEntry): Promise<{ removed: boolean }> {
   if (e.source !== 'disk') return { removed: false }
-  // server 端 URL 是 /api/generate/disk/image/<date>/<mode>/<encoded>，
-  // DELETE 走 /api/generate/disk/<date>/<mode>/<encoded>（少一层 image/）
-  // 复用 imageUrl 末段的 encoded filename
-  const encoded = e.imageUrl.slice(e.imageUrl.lastIndexOf('/') + 1)
-  const url = `/api/generate/disk/${e.date}/${e.mode}/${encoded}`
+  let url: string
+  if (e.mode === 'xy') {
+    if (!e.folder) throw new Error('xy disk entry missing folder')
+    url = `/api/generate/disk/${e.date}/xy/${encodeURIComponent(e.folder)}`
+  } else {
+    if (!e.filename) throw new Error('single disk entry missing filename')
+    url = `/api/generate/disk/${e.date}/single/${encodeURIComponent(e.filename)}`
+  }
   const r = await fetch(url, { method: 'DELETE' })
   if (!r.ok) throw new Error(`delete failed: ${r.status}`)
   const data = await r.json() as { ok: boolean; noop?: boolean }

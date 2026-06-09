@@ -435,6 +435,13 @@ export default function GeneratePage() {
     if (applied.unresolvedLoraCount > 0) {
       toast(t('generate.historyLorasMissing', { n: applied.unresolvedLoraCount }), 'info')
     }
+    // datasetPick 非空 → 自动展开 picker 让用户看到选中行 + tags 文本（picker
+    // 是 closed by default，不展开的话 prompts[0] 经常是 ""（用户全靠 dataset
+    // tags 当 prompt 的常见场景），UI 表面看就像"啥都没回填"）。fallback 路径
+    // 已经把 tags 灌到 prompts[0] + datasetPick=null，所以这里只看 applied 即可。
+    if (applied.datasetPick) {
+      setDatasetPickerOpen(true)
+    }
     setPrefs((prev) => {
       const base: GeneratePrefs = {
         ...prev,
@@ -758,9 +765,11 @@ export default function GeneratePage() {
 
               {historyOverride ? (
                 <div className="flex-1 min-h-0 flex flex-col gap-2">
-                  {historyOverride.source === 'cache' && historyOverride.mode === 'xy'
-                    && historyOverride.xyMeta ? (
-                    /* CacheEntry + xyMeta：cache 里 per-cell 图都在，走 PreviewXYGrid */
+                  {historyOverride.mode === 'xy' && historyOverride.xyMeta ? (
+                    /* XY 回看 (cache / disk 共用)：per-cell 信息齐 → PreviewXYGrid
+                       cache 时 taskId 是真 task id（GridCell fallback 走 cache URL）；
+                       disk 时 server 已给 imageUrl，taskId 走 -1 sentinel（不会被用到）。
+                       disk 时多传 compositeUrl → 导出 PNG 走文件下载，不再 re-compose */
                     <PreviewXYGrid
                       samples={historyOverride.xyMeta.samples.map((s) => ({
                         path: s.path,
@@ -768,8 +777,9 @@ export default function GeneratePage() {
                           xi: s.xy.xi, yi: s.xy.yi,
                           xv: s.xy.xv as never, yv: s.xy.yv as never,
                         },
+                        imageUrl: s.imageUrl,
                       }))}
-                      taskId={historyOverride.taskId}
+                      taskId={historyOverride.source === 'cache' ? historyOverride.taskId : -1}
                       xDraft={{
                         axis: historyOverride.xyMeta.xAxis as never,
                         raw: historyOverride.xyMeta.xValues.join(', '),
@@ -782,9 +792,10 @@ export default function GeneratePage() {
                       } : null}
                       onCellClick={undefined /* 历史回看不允许选 cell 进 compare */}
                       selectedIndices={[]}
+                      compositeUrl={historyOverride.source === 'disk' ? historyOverride.imageUrl : undefined}
                     />
                   ) : (
-                    /* DiskEntry（含 XY 合成大图）/ CacheEntry single → 单图视图 */
+                    /* DiskEntry single / legacy XY（无 xyMeta） / CacheEntry single → 单图视图 */
                     <a
                       className="flex-1 min-h-0 flex items-center justify-center w-full"
                       href={entryImageUrl(historyOverride, 0)}
@@ -805,7 +816,7 @@ export default function GeneratePage() {
                   )}
                   <div className="text-xs text-fg-tertiary shrink-0">
                     {historyOverride.source === 'disk'
-                      ? historyOverride.filename.replace(/\.png$/i, '')
+                      ? (historyOverride.folder ?? (historyOverride.filename ?? '').replace(/\.png$/i, ''))
                       : t('generate.historyTask', { id: historyOverride.taskId })}
                     <button
                       className="btn btn-ghost text-xs ml-2"

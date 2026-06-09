@@ -1,6 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, type LoraCkpt } from '../../../api/client'
 import type { ProjectLora } from './types'
+
+function basenameOf(path: string): string {
+  return path.split(/[\\/]/).pop() ?? path
+}
 
 /** 项目缩写图标（2 字符 uppercase）。SidebarLoras / 历史代码引用。 */
 export function projectAbbr(title: string): string {
@@ -50,6 +54,18 @@ interface MultiModeProps extends CommonProps {
   /** 即时生效：每次 chip toggle 都 onPick，不再渲染「添加 N 个」commit footer。
    *  用于 XY 轴卡片这种「picker 常驻、用户期望所见即所得」的场景。 */
   live?: boolean
+  /** 受控选中集合（仅 live 模式有意义）：picker 同步内部 picked 跟随这个数组。
+   *
+   * 元素可以是全 path 或 basename：raw 字符串 split 即可塞过来，picker 内会按
+   * basename 等价匹配 ckpts 后高亮全 path。命中 basename → path 时立即 onPick
+   * 回写全 path（修历史回填时 raw 是 basename 让 daemon "路径不存在"）。
+   *
+   * undefined = picker 用纯内部 picked state（active task / bulk-add 流程）。 */
+  selectedPaths?: string[]
+  /** 受控 pid/vid 初值（仅 live 模式）：与 selectedPaths 配套，让 picker mount
+   *  时锚到正确 project/version，否则会 fallback 到 projects[0]。 */
+  initialPid?: number | null
+  initialVid?: number | null
   value?: never
   weight?: never
   onChange?: never
@@ -81,19 +97,23 @@ export default function InlineLoraPicker(props: Props) {
     return Array.from(map.values())
   }, [projectLoras])
 
-  // 初始 pid/vid：single 模式优先用 value 的；否则取第一个项目
-  const initialPid = isSingle ? (props.value?.projectId ?? projects[0]?.id ?? null) : (projects[0]?.id ?? null)
+  // multi mode 受控锚定：caller 给 initialPid/Vid 时直接采纳（历史回填走这条）
+  const multiInitialPid = !isSingle ? (props as MultiModeProps).initialPid ?? null : null
+  const multiInitialVid = !isSingle ? (props as MultiModeProps).initialVid ?? null : null
+  // 初始 pid/vid：single 用 value 的；multi 用 initialPid/Vid 兜底，再 fallback projects[0]
+  const initialPid = isSingle
+    ? (props.value?.projectId ?? projects[0]?.id ?? null)
+    : (multiInitialPid ?? projects[0]?.id ?? null)
   const initialVid = isSingle
     ? (props.value?.versionId ?? null)
-    : (projectLoras.find((l) => l.projectId === projects[0]?.id)?.versionId ?? null)
+    : (multiInitialVid ?? projectLoras.find((l) => l.projectId === projects[0]?.id)?.versionId ?? null)
 
   const [pid, setPid] = useState<number | null>(initialPid)
 
   // 决策 #8（plan §9.2）：single 模式是受控的，pid 必须跟 props.value.projectId
   // 同步 —— 否则历史回填 / URL ?lora= 流回新 LoraEntry 时，下拉框还卡在
   // 旧值（之前靠父级 bump urlConsumedKey 强制 remount 兜底，Step 6 砍掉）。
-  // setPid 函数式更新 + 值未变跳过自动免无限循环。multi 模式无 props.value，
-  // 保留 mount-only 行为（用户在 picker 内自由切项目）。
+  // setPid 函数式更新 + 值未变跳过自动免无限循环。
   // value=null 时不 sync（保留 fallback：未选 LoRA 时给用户看 projects[0] ckpts）
   const singleValue = isSingle ? props.value : null
   useEffect(() => {
@@ -101,6 +121,12 @@ export default function InlineLoraPicker(props: Props) {
     const next = singleValue.projectId
     setPid((cur) => (cur === next ? cur : next))
   }, [isSingle, singleValue])
+
+  // multi mode：当 caller 给 initialPid（XY 历史回填），pid 跟着 prop 走
+  useEffect(() => {
+    if (isSingle || multiInitialPid == null) return
+    setPid((cur) => (cur === multiInitialPid ? cur : multiInitialPid))
+  }, [isSingle, multiInitialPid])
 
   const versions = useMemo(() => {
     if (pid === null) return []
@@ -116,6 +142,12 @@ export default function InlineLoraPicker(props: Props) {
     const next = singleValue.versionId
     setVid((cur) => (cur === next ? cur : next))
   }, [isSingle, singleValue])
+
+  // multi mode：受控 vid（同 multiInitialPid 一对儿）
+  useEffect(() => {
+    if (isSingle || multiInitialVid == null) return
+    setVid((cur) => (cur === multiInitialVid ? cur : multiInitialVid))
+  }, [isSingle, multiInitialVid])
   // versions 切换时如果当前 vid 不在新 versions 列表里，自动取第一个
   // （用户切 project 下拉时触发）
   useEffect(() => {
@@ -177,8 +209,18 @@ export default function InlineLoraPicker(props: Props) {
   // multi 模式的当前会话选中（single 模式不用，受控走 props.value）
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const isLive = !isSingle && (props as MultiModeProps).live === true
+  // 受控选中（live 模式专用）：caller 给 selectedPaths 时 picker 以它为单一来源
+  const multiSelectedPaths = !isSingle ? (props as MultiModeProps).selectedPaths : undefined
+  const isControlled = !isSingle && multiSelectedPaths !== undefined
+  // 区分"prop 同步导致的 pid/vid 变化"vs"用户手点下拉"—— 前者不应清 axis
+  const lastPropPidVid = useRef({ pid: multiInitialPid, vid: multiInitialVid })
+  useEffect(() => {
+    lastPropPidVid.current = { pid: multiInitialPid, vid: multiInitialVid }
+  }, [multiInitialPid, multiInitialVid])
   useEffect(() => {
     if (isSingle) return
+    // controlled：prop 同步触发的 pid/vid 变化不清 picked（让 selectedPaths sync 接手）
+    if (isControlled && pid === lastPropPidVid.current.pid && vid === lastPropPidVid.current.vid) return
     setPicked(new Set())  // pid/vid 切换时清空 UI 选中
     // live 模式：pid/vid 切了把 axis 也清掉（新版本下旧 path 已无意义）；
     // 初始 mount 也会跑一次，但此时 draft.raw 通常已是空，commit 空集合即 no-op。
@@ -186,7 +228,48 @@ export default function InlineLoraPicker(props: Props) {
       (props as MultiModeProps).onPick([], internalWeight)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pid, vid, isSingle])
+  }, [pid, vid, isSingle, isControlled])
+
+  // 受控同步：selectedPaths + ckpts 决定 picked。
+  //   - selectedPaths 元素是全 path → 直接 hit
+  //   - 是 basename（历史回填基础形态，避免快照泄露绝对路径） → 按 basename 在 ckpts 里找匹配
+  //     全 path，picked 用全 path；同时立刻 onPick 回写让 raw 升级成全 path，
+  //     修 daemon 拿到 basename 触发"LoRA 路径不存在"。
+  useEffect(() => {
+    if (!isControlled || !multiSelectedPaths || loading) return
+    if (pid === null || vid === null) return
+    const ckptByPath = new Map(ckpts.map((c) => [c.path, c]))
+    const ckptByBasename = new Map<string, LoraCkpt>()
+    for (const c of ckpts) ckptByBasename.set(basenameOf(c.path), c)
+    const resolvedPaths: string[] = []
+    let needUpgrade = false
+    for (const v of multiSelectedPaths) {
+      if (!v) continue
+      if (ckptByPath.has(v)) {
+        resolvedPaths.push(v)
+        continue
+      }
+      const ck = ckptByBasename.get(basenameOf(v))
+      if (ck) {
+        resolvedPaths.push(ck.path)
+        needUpgrade = true  // raw 里是 basename / 旧 path，要升级到当前机器上的全 path
+      }
+      // 找不到 → 当前 ckpts 没扫到，跳过（用户可能换了项目或文件被删）
+    }
+    const resolvedSet = new Set(resolvedPaths)
+    // 避免无限循环：picked 实际不变时不 setState
+    setPicked((prev) => {
+      if (prev.size === resolvedSet.size && [...prev].every((p) => resolvedSet.has(p))) return prev
+      return resolvedSet
+    })
+    if (needUpgrade && isLive) {
+      const picks = ckpts
+        .filter((c) => resolvedSet.has(c.path))
+        .map((c) => ({ path: c.path, projectId: pid, versionId: vid }))
+      ;(props as MultiModeProps).onPick(picks, internalWeight)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isControlled, multiSelectedPaths, ckpts, loading, pid, vid, isLive])
 
   const currentVersion = versions.find((v) => v.id === vid)
 

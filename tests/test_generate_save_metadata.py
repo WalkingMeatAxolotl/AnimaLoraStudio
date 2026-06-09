@@ -66,6 +66,31 @@ def _open_png_text(path: Path) -> dict[str, str]:
         return dict(img.text)
 
 
+def _post_xy_save(
+    tc: TestClient,
+    composite_params: dict,
+    cells: list[tuple[int, int, dict]],
+    task_id: int | None = None,
+):
+    """XY save 帮手：composite + N 张 cell + cells_manifest 一次 multipart 发出去。
+
+    `cells` 每条 = (xi, yi, cell_params)；cell_params 是物化后的 single-snapshot。"""
+    files: list[tuple[str, tuple[str, bytes, str]]] = [
+        ("image", ("xy plot.png", _png_bytes(), "image/png")),
+    ]
+    for xi, yi, _cp in cells:
+        files.append(("cells", (f"cell x{xi} y{yi}.png", _png_bytes(), "image/png")))
+    manifest = [{"xi": xi, "yi": yi, "params": cp} for (xi, yi, cp) in cells]
+    data = {
+        "mode": "xy",
+        "params": json.dumps(composite_params),
+        "cells_manifest": json.dumps(manifest),
+    }
+    if task_id is not None:
+        data["task_id"] = str(task_id)
+    return tc.post("/api/generate/save", data=data, files=files)
+
+
 def test_save_writes_anima_params_text_block(client) -> None:
     tc, _ = client
     r = tc.post(
@@ -220,12 +245,18 @@ def test_disk_history_skips_png_with_only_a1111_block(client) -> None:
 
 
 def test_disk_history_includes_xy_mode_entries(client) -> None:
-    """xy 模式的合成大图也走 disk-history。"""
+    """xy 模式的合成大图 + cell 文件夹走 disk-history。"""
     tc, _ = client
-    tc.post(
-        "/api/generate/save",
-        data={"mode": "xy", "params": json.dumps(_params(mode="xy", seed=99))},
-        files={"image": ("xy.png", _png_bytes(), "image/png")},
+    _post_xy_save(
+        tc,
+        composite_params=_params(mode="xy", seed=99, xy_draft={
+            "x": {"axis": "steps", "raw": "10, 20", "loraIndex": None},
+            "y": None,
+        }),
+        cells=[
+            (0, 0, _params(mode="single", seed=99, steps=10)),
+            (1, 0, _params(mode="single", seed=99, steps=20)),
+        ],
     )
     entries = tc.get("/api/generate/disk/history").json()["entries"]
     assert len(entries) == 1
@@ -265,7 +296,7 @@ def test_disk_image_validates_inputs(client) -> None:
 
 
 def test_save_uses_v2_filename(client) -> None:
-    """决策 #6：v2 命名 'single image 1.png' / 'xy plot 1.png'，1-based。"""
+    """决策 #6：single v2 命名 'single image 1.png'，1-based。XY 见 test_save_xy_creates_folder。"""
     tc, _ = client
     r1 = tc.post(
         "/api/generate/save",
@@ -277,14 +308,8 @@ def test_save_uses_v2_filename(client) -> None:
         data={"mode": "single", "params": json.dumps(_params())},
         files={"image": ("a.png", _png_bytes(), "image/png")},
     )
-    r3 = tc.post(
-        "/api/generate/save",
-        data={"mode": "xy", "params": json.dumps(_params(mode="xy"))},
-        files={"image": ("a.png", _png_bytes(), "image/png")},
-    )
     assert r1.json()["filename"] == "single image 1.png"
     assert r2.json()["filename"] == "single image 2.png"
-    assert r3.json()["filename"] == "xy plot 1.png"
 
 
 def test_save_sets_task_id_from_form_field(client) -> None:
@@ -313,17 +338,27 @@ def test_save_atomic_write_no_tmp_remains(client, tmp_path) -> None:
 
 
 def test_save_xy_skips_a1111_block(client) -> None:
-    """决策 #7：XY PNG 不写 a1111 parameters 块（矩阵图单图对应不上）。"""
+    """决策 #7：XY composite PNG 不写 a1111 parameters 块（矩阵图单图对应不上）。
+    cell PNG 是 single-snapshot，**会**写 a1111 block。"""
     tc, _ = client
-    r = tc.post(
-        "/api/generate/save",
-        data={"mode": "xy", "params": json.dumps(_params(mode="xy"))},
-        files={"image": ("a.png", _png_bytes(), "image/png")},
+    r = _post_xy_save(
+        tc,
+        composite_params=_params(mode="xy", xy_draft={
+            "x": {"axis": "steps", "raw": "20", "loraIndex": None},
+            "y": None,
+        }),
+        cells=[(0, 0, _params(mode="single", steps=20))],
     )
-    saved = Path(r.json()["path"])
-    text = _open_png_text(saved)
-    assert "anima_params" in text
-    assert "parameters" not in text
+    assert r.status_code == 200, r.text
+    composite = Path(r.json()["composite"])
+    composite_text = _open_png_text(composite)
+    assert "anima_params" in composite_text
+    assert "parameters" not in composite_text
+    # cell 是 single-snapshot：anima_params + a1111 块都在
+    cell = Path(r.json()["cells"][0])
+    cell_text = _open_png_text(cell)
+    assert "anima_params" in cell_text
+    assert "parameters" in cell_text
 
 
 def test_disk_history_migrates_v1_to_v2(client, tmp_path) -> None:
@@ -451,3 +486,248 @@ def test_save_disabled_returns_403(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         files={"image": ("a.png", _png_bytes(), "image/png")},
     )
     assert r.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# XY 文件夹布局（恢复 PreviewXYGrid 历史回看）
+# ---------------------------------------------------------------------------
+
+
+def _xy_snapshot(*, x_raw: str = "10, 20, 30", y_raw: str | None = "3, 5") -> dict:
+    return _params(mode="xy", xy_draft={
+        "x": {"axis": "steps", "raw": x_raw, "loraIndex": None},
+        "y": {"axis": "cfg_scale", "raw": y_raw, "loraIndex": None} if y_raw else None,
+    })
+
+
+def test_save_xy_creates_folder_with_composite_and_cells(client) -> None:
+    """XY save 落出 <date>/xy/xy plot N/{xy plot.png + cell x<i> y<j>.png ...}，无残留 tmp。"""
+    tc, test_dir = client
+    r = _post_xy_save(
+        tc,
+        composite_params=_xy_snapshot(x_raw="10, 20", y_raw="3"),
+        cells=[
+            (0, 0, _params(mode="single", steps=10, cfg_scale=3.0)),
+            (1, 0, _params(mode="single", steps=20, cfg_scale=3.0)),
+        ],
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    folder = Path(body["folder"])
+    assert folder.is_dir()
+    assert folder.name == "xy plot 1"
+    assert (folder / "xy plot.png").is_file()
+    assert (folder / "cell x0 y0.png").is_file()
+    assert (folder / "cell x1 y0.png").is_file()
+    # 无残留 tmp
+    assert not list(folder.parent.glob(".xy plot *.tmp"))
+
+
+def test_save_xy_cell_carries_single_snapshot_and_xy_origin(client) -> None:
+    """cell PNG 是 single-snapshot：mode='single' + a1111 块 + xy_origin 链回 XY plot。"""
+    tc, _ = client
+    r = _post_xy_save(
+        tc,
+        composite_params=_xy_snapshot(x_raw="10, 20", y_raw=None),
+        cells=[
+            (0, 0, _params(mode="single", steps=10)),
+            (1, 0, {**_params(mode="single", steps=20), "xy_origin": {
+                "xi": 1, "yi": 0, "xv": "20", "yv": None,
+                "x_axis": "steps", "y_axis": None,
+            }}),
+        ],
+    )
+    assert r.status_code == 200, r.text
+    cell1 = Path(r.json()["cells"][1])
+    text = _open_png_text(cell1)
+    assert "anima_params" in text
+    assert "parameters" in text  # single mode 写 a1111
+    parsed = json.loads(text["anima_params"])
+    assert parsed["mode"] == "single"
+    assert parsed["steps"] == 20
+    assert parsed["xy_origin"]["xi"] == 1
+    assert parsed["xy_origin"]["x_axis"] == "steps"
+
+
+def test_save_xy_rejects_cell_xy_collision(client) -> None:
+    """两条 cell 同 (xi, yi) → 400."""
+    tc, _ = client
+    r = _post_xy_save(
+        tc,
+        composite_params=_xy_snapshot(),
+        cells=[
+            (0, 0, _params(mode="single")),
+            (0, 0, _params(mode="single")),
+        ],
+    )
+    assert r.status_code == 400
+    assert "duplicate" in r.text
+
+
+def test_save_xy_rejects_cell_count_mismatch(client) -> None:
+    """cells_manifest 数 != cells 数 → 400."""
+    tc, _ = client
+    # 手工拼一个 mismatch：1 file vs 2 manifest entries
+    r = tc.post(
+        "/api/generate/save",
+        data={
+            "mode": "xy",
+            "params": json.dumps(_xy_snapshot()),
+            "cells_manifest": json.dumps([
+                {"xi": 0, "yi": 0, "params": _params(mode="single")},
+                {"xi": 1, "yi": 0, "params": _params(mode="single")},
+            ]),
+        },
+        files=[
+            ("image", ("xy plot.png", _png_bytes(), "image/png")),
+            ("cells", ("cell x0 y0.png", _png_bytes(), "image/png")),
+        ],
+    )
+    assert r.status_code == 400
+    assert "length" in r.text
+
+
+def test_save_xy_folder_index_skips_legacy_files(client) -> None:
+    """残留的 legacy 平铺 `xy plot 7.png` 占位 → 新文件夹从 8 起，不撞号。"""
+    tc, test_dir = client
+    xy_dir = test_dir / "2026-06-08" / "xy"
+    xy_dir.mkdir(parents=True)
+    (xy_dir / "xy plot 7.png").write_bytes(_png_bytes())
+
+    # 把"今天"设成 2026-06-08
+    from datetime import date as _date
+    from studio.api.routers import generate as _gen
+    class _FixedDate(_date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 6, 8)
+    import datetime
+    orig_date = _gen.date
+    try:
+        _gen.date = _FixedDate
+        r = _post_xy_save(
+            tc,
+            composite_params=_xy_snapshot(x_raw="10", y_raw=None),
+            cells=[(0, 0, _params(mode="single", steps=10))],
+        )
+    finally:
+        _gen.date = orig_date
+    assert r.status_code == 200
+    assert Path(r.json()["folder"]).name == "xy plot 8"
+
+
+def test_disk_history_xy_folder_entry_has_xy_meta(client) -> None:
+    """扫到 XY 文件夹时返回 xy_meta（per-cell 信息 + 直读 URL）。"""
+    tc, _ = client
+    _post_xy_save(
+        tc,
+        composite_params=_xy_snapshot(x_raw="10, 20", y_raw="3"),
+        cells=[
+            (0, 0, _params(mode="single", steps=10, cfg_scale=3.0)),
+            (1, 0, _params(mode="single", steps=20, cfg_scale=3.0)),
+        ],
+    )
+    entries = tc.get("/api/generate/disk/history").json()["entries"]
+    assert len(entries) == 1
+    e = entries[0]
+    assert e["mode"] == "xy"
+    assert e["folder"] == "xy plot 1"
+    assert e["image_url"].endswith("xy%20plot.png")
+    meta = e["xy_meta"]
+    assert meta["x_axis"] == "steps"
+    assert meta["y_axis"] == "cfg_scale"
+    assert meta["x_values"] == ["10", "20"]
+    assert meta["y_values"] == ["3"]
+    assert len(meta["samples"]) == 2
+    samples_by_pos = {(s["xy"]["xi"], s["xy"]["yi"]): s for s in meta["samples"]}
+    assert samples_by_pos[(0, 0)]["xy"]["xv"] == "10"
+    assert samples_by_pos[(1, 0)]["xy"]["xv"] == "20"
+    # image_url 已 encode（空格 → %20）
+    assert "%20" in samples_by_pos[(0, 0)]["image_url"]
+
+
+def test_disk_history_skips_legacy_xy_flat_files(client) -> None:
+    """legacy 平铺 `xy plot N.png` 文件即便带 anima_params 也不出现在 history（用户决策 hide）。"""
+    tc, test_dir = client
+    xy_dir = test_dir / "2026-06-08" / "xy"
+    xy_dir.mkdir(parents=True)
+    # 写一个带 anima_params 的 legacy 平铺文件
+    info = PngImagePlugin.PngInfo()
+    info.add_text("anima_params", json.dumps(_params(mode="xy")))
+    Image.new("RGB", (8, 8)).save(xy_dir / "xy plot 99.png", format="PNG", pnginfo=info)
+
+    entries = tc.get("/api/generate/disk/history").json()["entries"]
+    assert entries == []
+
+
+def test_disk_history_skips_xy_folder_without_composite(client) -> None:
+    """文件夹存在但没 composite（半成品 / 手 mkdir）→ 跳过。"""
+    tc, test_dir = client
+    xy_dir = test_dir / "2026-06-08" / "xy" / "xy plot 1"
+    xy_dir.mkdir(parents=True)
+    # 只有 cell，没 composite
+    info = PngImagePlugin.PngInfo()
+    info.add_text("anima_params", json.dumps(_params(mode="single")))
+    Image.new("RGB", (8, 8)).save(xy_dir / "cell x0 y0.png", format="PNG", pnginfo=info)
+
+    entries = tc.get("/api/generate/disk/history").json()["entries"]
+    assert entries == []
+
+
+def test_disk_xy_folder_delete_removes_recursively(client) -> None:
+    """DELETE /api/generate/disk/<date>/xy/<folder> → rmtree 整文件夹。"""
+    tc, _ = client
+    r = _post_xy_save(
+        tc,
+        composite_params=_xy_snapshot(x_raw="10", y_raw=None),
+        cells=[(0, 0, _params(mode="single", steps=10))],
+    )
+    folder = Path(r.json()["folder"])
+    assert folder.is_dir()
+    entry = tc.get("/api/generate/disk/history").json()["entries"][0]
+    url = f"/api/generate/disk/{entry['date']}/xy/{entry['folder'].replace(' ', '%20')}"
+    delete_r = tc.delete(url)
+    assert delete_r.status_code == 200
+    assert delete_r.json()["noop"] is False
+    assert not folder.exists()
+    # 二次删 noop=True
+    assert tc.delete(url).json()["noop"] is True
+
+
+def test_disk_xy_image_route_resolves_subpath(client) -> None:
+    """GET /api/generate/disk/image/<date>/xy/<folder>/<filename> → cell PNG bytes."""
+    tc, _ = client
+    r = _post_xy_save(
+        tc,
+        composite_params=_xy_snapshot(x_raw="10", y_raw=None),
+        cells=[(0, 0, _params(mode="single", steps=10))],
+    )
+    entry = tc.get("/api/generate/disk/history").json()["entries"][0]
+    cell_url = entry["xy_meta"]["samples"][0]["image_url"]
+    cell_r = tc.get(cell_url)
+    assert cell_r.status_code == 200
+    assert cell_r.headers["content-type"] == "image/png"
+    assert len(cell_r.content) > 0
+    # composite 也可读
+    composite_r = tc.get(entry["image_url"])
+    assert composite_r.status_code == 200
+    # thumb 也可读
+    thumb_r = tc.get(entry["thumb_url"])
+    assert thumb_r.status_code == 200
+
+
+def test_disk_xy_path_traversal_blocked(client) -> None:
+    """folder / filename 反 traversal：folder=`..` / 非法 folder name → 400."""
+    tc, _ = client
+    # folder name 不符 `xy plot N`
+    r1 = tc.get("/api/generate/disk/image/2026-06-08/xy/not%20a%20folder/cell.png")
+    assert r1.status_code == 400
+    # date 非法
+    r2 = tc.get("/api/generate/disk/image/bad-date/xy/xy%20plot%201/x.png")
+    assert r2.status_code == 400
+    # filename 非法
+    r3 = tc.get("/api/generate/disk/image/2026-06-08/xy/xy%20plot%201/..%2Fsecret.png")
+    assert r3.status_code in (400, 404)
+    # DELETE 同样校验
+    r4 = tc.delete("/api/generate/disk/2026-06-08/xy/bad%20folder")
+    assert r4.status_code == 400

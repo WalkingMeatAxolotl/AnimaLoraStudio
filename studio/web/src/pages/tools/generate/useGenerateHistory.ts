@@ -15,26 +15,58 @@ import {
   type CacheEntry,
   type DiskEntry,
   type HistoryEntry,
+  type HistoryXYMeta,
 } from './entryAdapter'
 import type { GenerateParamsSnapshot } from './paramsSnapshot'
 
 export type { CacheEntry, DiskEntry, HistoryEntry, HistoryXYMeta } from './entryAdapter'
 
+interface DiskHistoryServerXYMeta {
+  x_axis: string | null
+  y_axis: string | null
+  x_values: string[]
+  y_values: Array<string | null>
+  samples: Array<{
+    path: string
+    xy: { xi: number; yi: number; xv: string | null; yv: string | null }
+    image_url: string
+  }>
+}
+
 interface DiskHistoryServerEntry {
   id: string
   date: string
   mode: 'single' | 'xy'
-  filename: string
+  /** single 时存在；xy 时 undefined（用 folder） */
+  filename?: string
+  /** xy 时存在；single 时 undefined */
+  folder?: string
   path: string
   image_url: string
   thumb_url: string
   created_at: number
   schema_version: number
   params: unknown
+  /** xy 模式 server 派生的 per-cell 元数据 */
+  xy_meta?: DiskHistoryServerXYMeta | null
 }
 
 interface DiskHistoryResponse {
   entries: DiskHistoryServerEntry[]
+}
+
+function xyMetaFromServer(meta: DiskHistoryServerXYMeta): HistoryXYMeta {
+  return {
+    xAxis: meta.x_axis ?? '',
+    yAxis: meta.y_axis,
+    xValues: meta.x_values,
+    yValues: meta.y_values,
+    samples: meta.samples.map((s) => ({
+      path: s.path,
+      xy: { xi: s.xy.xi, yi: s.xy.yi, xv: s.xy.xv ?? '', yv: s.xy.yv },
+      imageUrl: s.image_url,
+    })),
+  }
 }
 
 function diskEntryFromServer(d: DiskHistoryServerEntry): DiskEntry {
@@ -44,10 +76,12 @@ function diskEntryFromServer(d: DiskHistoryServerEntry): DiskEntry {
     mode: d.mode,
     date: d.date,
     filename: d.filename,
+    folder: d.folder,
     imageUrl: d.image_url,
     thumbUrl: d.thumb_url,
     createdAt: d.created_at * 1000,  // server 给秒；entry.createdAt 用 ms
     params: d.params as GenerateParamsSnapshot,
+    xyMeta: d.xy_meta ? xyMetaFromServer(d.xy_meta) : undefined,
   }
 }
 

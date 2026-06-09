@@ -10,7 +10,7 @@
  *   studio_data 后用户主动同步）
  */
 import { useTranslation } from 'react-i18next'
-import { entryBadge, entryThumbUrl, type HistoryEntry } from './entryAdapter'
+import { entryBadge, entryDisplayLabel, entryThumbUrl, type HistoryEntry } from './entryAdapter'
 
 interface Props {
   entries: HistoryEntry[]
@@ -69,7 +69,7 @@ function HistoryItem({ entry, onSelect }: ItemProps) {
       className="relative rounded-sm border border-subtle hover:border-strong cursor-pointer overflow-hidden"
       style={{ width: 56, height: 56, flexShrink: 0 }}
       onClick={onSelect}
-      title={`${entry.source === 'disk' ? entry.filename : `#${entry.taskId}`} · ${new Date(entry.createdAt).toLocaleString()}`}
+      title={`${entryDisplayLabel(entry)} · ${new Date(entry.createdAt).toLocaleString()}`}
     >
       <img
         src={entryThumbUrl(entry)}

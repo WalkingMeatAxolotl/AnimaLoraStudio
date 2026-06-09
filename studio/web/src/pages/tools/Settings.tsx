@@ -3081,7 +3081,7 @@ function SaveTestImagesSection({
     <SettingsSection id="save-test-images" title={t('settings.saveTestImages.title')}>
       <SettingsField
         label={t('settings.saveTestImages.label')}
-        desc={t('settings.saveTestImages.desc')}
+        helpTooltip={t('settings.saveTestImages.tooltip')}
       >
         <Bool
           value={draft.generate.save_test_images}

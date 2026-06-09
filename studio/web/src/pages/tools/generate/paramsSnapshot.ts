@@ -38,6 +38,17 @@ export interface SnapshotXYAxis {
   loraIndex: number | null
 }
 
+/** 仅 XY cell PNG 用：链回所属 XY plot 的位置（拖进 Comfy / A1111 时
+ *  能识别"这是 XY 第 (xi,yi) 格"；本程序回填走 mode='single' 主路径不读它）。 */
+export interface XYCellOrigin {
+  xi: number
+  yi: number
+  xv: string | number
+  yv: string | number | null
+  x_axis: XYAxisType
+  y_axis: XYAxisType | null
+}
+
 export interface GenerateParamsSnapshot {
   schema_version: number
   /** 当时的 mode；回填时按 mode 决定灌 singleLoras 还是 xyLoras + xDraft/yDraft */
@@ -59,6 +70,9 @@ export interface GenerateParamsSnapshot {
   /** 训练集 caption picker 选择（保留 picker UI 上下文）。
    *  name 是相对路径（如 "5_concept/0001.txt"），不含本地绝对路径。 */
   dataset_pick?: DatasetPick | null
+  /** XY cell PNG 专有；composite / single PNG 永远是 undefined。
+   *  forward-compat 字段，老代码读不到不影响 v2 migrate 透传。 */
+  xy_origin?: XYCellOrigin | null
 }
 
 /** path → basename（去目录），保留 .safetensors 等后缀。
@@ -137,6 +151,27 @@ export interface AppliedSnapshot {
   unresolvedLoraCount: number
 }
 
+/** dataset_pick 的 project 是否还在当前机器上能 resolve（heuristic：projectLoras
+ *  里有任何这个 projectId 的条目就算"活着"）。用作 applySnapshot 决定是 picker
+ *  受控回填还是 fallback 到正向 prompt 的判据。 */
+function isDatasetProjectAlive(
+  pick: DatasetPick, projectLoras: ProjectLora[],
+): boolean {
+  return projectLoras.some((p) => p.projectId === pick.projectId)
+}
+
+/** dataset_pick 失败兜底：把 tags 追加到第一条 prompt 末尾。
+ *  和 handleGenerate 里 `datasetSuffix` 拼法保持一致（join(', ')），避免视觉差异。 */
+function mergeTagsIntoFirstPrompt(prompts: string[], tags: string[]): string[] {
+  if (tags.length === 0) return prompts
+  const suffix = tags.join(', ')
+  const first = (prompts[0] ?? '').trimEnd()
+  // 已经以 tags 结尾（用户在前一次回填后又点了一次同 entry）→ 不重复追加
+  if (first.endsWith(suffix)) return prompts
+  const sep = first === '' ? '' : (first.endsWith(',') ? ' ' : ', ')
+  return [`${first}${sep}${suffix}`, ...prompts.slice(1)]
+}
+
 export function applySnapshot(
   snap: GenerateParamsSnapshot,
   projectLoras: ProjectLora[],
@@ -145,9 +180,21 @@ export function applySnapshot(
   const unresolved = resolved.filter((l) => !l.path).length
   // compare 视图回填到 xy（compare 是 xy 子视图，无 selectedIndices 不直接进）
   const mode: 'single' | 'xy' = snap.mode === 'single' ? 'single' : 'xy'
+
+  // dataset_pick fallback：snap 存了 dataset_pick 但 project 在当前机器上没了
+  // （project 被删 / 跨机器 / projectLoras 还没 load）→ tags 拼进 prompts[0]，
+  // 不再回填 picker（datasetPick=null）。用户能在正向 textarea 里直接看到具体
+  // 内容，否则 picker 关着 tags 不可见、又会偷偷在 handleGenerate 里拼一次。
+  let prompts = snap.prompts
+  let datasetPick = snap.dataset_pick ?? null
+  if (datasetPick && datasetPick.tags.length > 0 && !isDatasetProjectAlive(datasetPick, projectLoras)) {
+    prompts = mergeTagsIntoFirstPrompt(prompts, datasetPick.tags)
+    datasetPick = null
+  }
+
   const applied: AppliedSnapshot = {
     mode,
-    prompts: snap.prompts,
+    prompts,
     negPrompt: snap.negative_prompt,
     width: snap.width,
     height: snap.height,
@@ -155,7 +202,7 @@ export function applySnapshot(
     cfgScale: snap.cfg_scale,
     count: snap.count,
     seed: snap.seed,
-    datasetPick: snap.dataset_pick ?? null,
+    datasetPick,
     loras: resolved,
     unresolvedLoraCount: unresolved,
   }
@@ -164,4 +211,83 @@ export function applySnapshot(
     applied.yDraft = snap.xy_draft.y
   }
   return applied
+}
+
+// ---------------------------------------------------------------------------
+// XY cell single-snapshot 物化（落盘 cell PNG metadata 用）
+// ---------------------------------------------------------------------------
+
+/** XY snapshot 按 (xi, yi) 物化成单格 single-snapshot。
+ *
+ * 用途：落盘 cell PNG 时每张要带"如果只看这一张是什么参数"的快照 — 拖进
+ * Comfy / A1111 能识别 steps/cfg/seed/lora 全套；本程序回填走 mode='single'
+ * 主路径（同 single 出图 PNG）。
+ *
+ * 轴语义（daemon `_apply_axis` 对齐）：
+ * - `steps` / `cfg_scale`：顶层标量字段覆盖
+ * - `lora_scale`：全 LoRA 共用一个 scale（不按 loraIndex 单独改）
+ * - `lora_ckpt`：仅 `loras[loraIndex]` 的 name 改成 cell value 的 basename，
+ *   原 ids 失效（ckpt 换了，project_id/version_id 不再准）
+ *
+ * 输出额外带 `xy_origin: {xi, yi, xv, yv, x_axis, y_axis}` 链回所属 XY plot。
+ */
+export function buildCellSnapshot(
+  xy: GenerateParamsSnapshot,
+  cellPos: { xi: number; yi: number },
+  axes: {
+    x: { axis: XYAxisType; loraIndex: number | null; value: string | number }
+    y: { axis: XYAxisType; loraIndex: number | null; value: string | number } | null
+  },
+): GenerateParamsSnapshot {
+  const out: GenerateParamsSnapshot = {
+    ...xy,
+    mode: 'single',
+    xy_draft: null,
+    // 浅克隆 loras 数组让下面 mutate 不污染 xy.loras
+    loras: xy.loras.map((l) => ({ ...l })),
+  }
+  applyAxisToCell(out, axes.x.axis, axes.x.value, axes.x.loraIndex)
+  if (axes.y) {
+    applyAxisToCell(out, axes.y.axis, axes.y.value, axes.y.loraIndex)
+  }
+  out.xy_origin = {
+    xi: cellPos.xi,
+    yi: cellPos.yi,
+    xv: axes.x.value,
+    yv: axes.y?.value ?? null,
+    x_axis: axes.x.axis,
+    y_axis: axes.y?.axis ?? null,
+  }
+  return out
+}
+
+function applyAxisToCell(
+  snap: GenerateParamsSnapshot,
+  axis: XYAxisType,
+  value: string | number,
+  loraIndex: number | null,
+): void {
+  switch (axis) {
+    case 'steps':
+      snap.steps = Math.trunc(Number(value))
+      return
+    case 'cfg_scale':
+      snap.cfg_scale = Number(value)
+      return
+    case 'lora_scale': {
+      const scale = Number(value)
+      snap.loras = snap.loras.map((l) => ({ ...l, scale }))
+      return
+    }
+    case 'lora_ckpt': {
+      if (loraIndex == null || !snap.loras[loraIndex]) return
+      // value 已经是 basename（snapshot 写时 transformAxisRawForSnapshot 处理过；
+      // 但 buildCellSnapshot 也可能被传 raw path，统一过一遍 basename）
+      const name = loraBasename(String(value))
+      snap.loras = snap.loras.map((l, i) =>
+        i === loraIndex ? { ...l, name, project_id: null, version_id: null } : l,
+      )
+      return
+    }
+  }
 }
