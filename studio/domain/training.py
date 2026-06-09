@@ -221,17 +221,17 @@ class TrainingConfig(BaseModel):
             cli_alias="--lr",
             disable_when="optimizer_type==prodigy||optimizer_type==prodigy_plus_schedulefree",
             disable_value=1.0,
-            disable_hint="Prodigy 接管学习率",
+            disable_hint="此优化器自动管理学习率",
         ),
     )
     lr_scheduler: Literal["none", "cosine", "cosine_with_restart"] = Field(
         "none",
-        description="学习率调度（none = 常数；Prodigy / PPSF 固定为 none）",
+        description="学习率调度（none = 常数；Prodigy / PPSF / Automagic 固定为 none）",
         json_schema_extra=_meta(
             "training",
-            disable_when="optimizer_type==prodigy||optimizer_type==prodigy_plus_schedulefree",
+            disable_when="optimizer_type==prodigy||optimizer_type==prodigy_plus_schedulefree||optimizer_type==automagic",
             disable_value="none",
-            disable_hint="Prodigy 固定为常数学习率",
+            disable_hint="此优化器固定为常数学习率",
         ),
     )
     lr_scheduler_t0: int = Field(
@@ -249,10 +249,51 @@ class TrainingConfig(BaseModel):
         description="学习率衰减下限：cosine 调度到此值后不再下降；通常远小于初始 lr（如初始 1e-4 配 1e-6）",
         json_schema_extra=_meta("training", show_when="lr_scheduler!=none", advanced=True),
     )
-    optimizer_type: Literal["adamw", "prodigy", "prodigy_plus_schedulefree"] = Field(
+    optimizer_type: Literal["adamw", "automagic", "prodigy", "prodigy_plus_schedulefree"] = Field(
         "adamw",
-        description="优化器。adamw 需手动调 lr；prodigy / prodigy_plus_schedulefree 自适应估计 lr（lr 字段填 1.0）",
+        description="优化器。adamw 需手动调 lr；automagic 自适应 per-param lr（sign-agreement）；prodigy 系列自适应估计 lr",
         json_schema_extra=_meta("training"),
+    )
+    # ---------------- Automagic 专属字段 ----------------
+    automagic_variant: Literal["v1", "v2"] = Field(
+        "v1",
+        description="v1: per-element lr mask（经典）；v2: per-param scalar lr + fused backward（省 VRAM，不兼容 grad_clip）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==automagic"),
+    )
+    automagic_min_lr: float = Field(
+        1e-7, ge=0.0,
+        description="自适应 lr 下界；低于此值时停止降低",
+        json_schema_extra=_meta("training", show_when="optimizer_type==automagic", advanced=True),
+    )
+    automagic_max_lr: float = Field(
+        1e-3, gt=0.0,
+        description="自适应 lr 上界；高于此值时停止升高",
+        json_schema_extra=_meta("training", show_when="optimizer_type==automagic", advanced=True),
+    )
+    automagic_lr_bump: float = Field(
+        1e-6, gt=0.0,
+        description="每步 lr 涨/降幅度",
+        json_schema_extra=_meta("training", show_when="optimizer_type==automagic", advanced=True),
+    )
+    automagic_beta2: float = Field(
+        0.999, ge=0.0, lt=1.0,
+        description="二阶矩 EMA 衰减率",
+        json_schema_extra=_meta("training", show_when="optimizer_type==automagic", advanced=True),
+    )
+    automagic_clip_threshold: float = Field(
+        1.0, gt=0.0,
+        description="RMS 裁剪阈值（内部梯度归一化）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==automagic", advanced=True),
+    )
+    automagic_agreement_threshold: float = Field(
+        0.5, ge=0.0, le=1.0,
+        description="v2 符号一致率阈值：超过此比例认为方向一致 → 涨 lr",
+        json_schema_extra=_meta("training", show_when="optimizer_type==automagic&&automagic_variant==v2", advanced=True),
+    )
+    automagic_eps: float = Field(
+        1e-30, gt=0.0,
+        description="数值稳定性 epsilon（极少需要修改）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==automagic", advanced=True, hidden=True),
     )
     prodigy_d_coef: float = Field(
         1.0, ge=0.1, le=10.0,
@@ -500,11 +541,11 @@ class TrainingConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_prodigy_scheduler(self) -> "TrainingConfig":
-        """Prodigy 系列固定使用常数学习率，外部 scheduler 统一拦截。"""
-        if self.optimizer_type in {"prodigy", "prodigy_plus_schedulefree"} and self.lr_scheduler != "none":
+        """Prodigy / Automagic 系列固定使用常数学习率，外部 scheduler 统一拦截。"""
+        if self.optimizer_type in {"prodigy", "prodigy_plus_schedulefree", "automagic"} and self.lr_scheduler != "none":
             raise ValueError(
                 f"optimizer_type={self.optimizer_type} requires lr_scheduler=none "
-                "(Prodigy 系列固定使用常数学习率)."
+                "(此优化器内部管理学习率)."
             )
         return self
 

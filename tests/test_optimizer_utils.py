@@ -1,8 +1,10 @@
-"""Optimizer utils 测试 — 重点覆盖 PPSF 接入。
+"""Optimizer utils 测试 — 覆盖 PPSF 接入 + Automagic v1/v2。
 
 - optimizer_eval_mode context manager 对 PPSF / 非 PPSF 行为
 - create_prodigy_plus_schedulefree 工厂在依赖缺失时友好报错
 - 工厂 lr 强制 1.0 + betas 默认覆盖逻辑
+- Automagic v1: step、bf16 Kahan (fp32 shift)、state_dict roundtrip
+- Automagic v2: fused backward hook、scalar lr
 """
 from __future__ import annotations
 
@@ -16,6 +18,11 @@ import torch
 from torch import nn
 
 from utils.optimizer_utils import (
+    Automagic,
+    Automagic2,
+    create_automagic,
+    create_automagic_v2,
+    create_optimizer,
     create_prodigy_plus_schedulefree,
     get_optimizer_monitor_metrics,
     optimizer_eval_mode,
@@ -198,3 +205,143 @@ def test_create_ppsf_exposes_train_eval_methods() -> None:
     optim = create_prodigy_plus_schedulefree(model.parameters(), lr=1.0)
     assert hasattr(optim, "train") and callable(optim.train)
     assert hasattr(optim, "eval") and callable(optim.eval)
+
+
+# ---------------------------------------------------------------------------
+# Automagic v1
+# ---------------------------------------------------------------------------
+
+
+def test_create_automagic_optimizer_updates_parameters() -> None:
+    """Automagic v1 基本 step 能跑通 — 参数发生变化。"""
+    torch.manual_seed(42)
+    model = nn.Linear(4, 4, bias=False)
+    p_before = model.weight.data.clone()
+
+    optim = create_automagic(model.parameters(), lr=1e-4)
+    # 模拟 5 步训练
+    for _ in range(5):
+        out = model(torch.randn(2, 4))
+        loss = out.sum()
+        loss.backward()
+        optim.step()
+        optim.zero_grad()
+
+    assert not torch.allclose(model.weight.data, p_before), "5 步后参数应该有变化"
+
+
+def test_automagic_bf16_shift_is_fp32() -> None:
+    """核心修复验证：bf16 参数的 Kahan shift buffer 必须是 fp32。"""
+    p = nn.Parameter(torch.randn(8, 8, dtype=torch.bfloat16))
+    optim = Automagic([p], lr=1e-4)
+
+    # 手动触发一步让 state 初始化
+    p.grad = torch.randn_like(p)
+    optim.step()
+
+    state = optim.state[p]
+    assert "shift" in state, "bf16 参数应该创建 shift buffer"
+    assert state["shift"].dtype == torch.float32, (
+        f"shift 应为 fp32，实际 {state['shift'].dtype}"
+    )
+
+
+def test_automagic_state_dict_roundtrip() -> None:
+    """lr_mask (Auto8bitTensor) 序列化/反序列化后数值不丢失。"""
+    torch.manual_seed(0)
+    p = nn.Parameter(torch.randn(16, 16))
+    optim = Automagic([p], lr=1e-4)
+
+    # 跑几步让 lr_mask 积累非零值
+    for _ in range(10):
+        p.grad = torch.randn_like(p)
+        optim.step()
+        p.grad = None
+
+    sd = optim.state_dict()
+
+    # 新建实例并 load
+    p2 = nn.Parameter(torch.randn(16, 16))
+    optim2 = Automagic([p2], lr=1e-4)
+    optim2.load_state_dict(sd)
+
+    # 比较 lr_mask 数值
+    orig_lr = optim.state[p]["lr_mask"].dequantize()
+    loaded_lr = optim2.state[p2]["lr_mask"].dequantize()
+    assert torch.allclose(orig_lr, loaded_lr, atol=1e-6), "lr_mask roundtrip 应保持数值一致"
+
+
+# ---------------------------------------------------------------------------
+# Automagic v2
+# ---------------------------------------------------------------------------
+
+
+def test_automagic_v2_scalar_lr_updates() -> None:
+    """Automagic v2 使用 fused backward hook，验证参数确实更新。"""
+    torch.manual_seed(7)
+    model = nn.Linear(8, 4, bias=False)
+    p_before = model.weight.data.clone()
+
+    optim = create_automagic_v2(model.parameters(), lr=1e-3)
+
+    # v2 的 hook 在 backward 时自动更新参数
+    for _ in range(5):
+        out = model(torch.randn(2, 8))
+        loss = out.sum()
+        loss.backward()
+        # v2 不需要手动 step（hook 内完成），但调用也无害
+        optim.zero_grad()
+
+    assert not torch.allclose(model.weight.data, p_before), "v2 backward hook 应导致参数变化"
+
+
+def test_automagic_v2_get_avg_learning_rate() -> None:
+    """v2 实例应暴露 get_avg_learning_rate 方法。"""
+    model = nn.Linear(4, 4)
+    optim = create_automagic_v2(model.parameters(), lr=1e-3)
+    assert hasattr(optim, "get_avg_learning_rate")
+    avg_lr = optim.get_avg_learning_rate()
+    assert isinstance(avg_lr, float) or isinstance(avg_lr, torch.Tensor)
+
+
+# ---------------------------------------------------------------------------
+# get_optimizer_monitor_metrics — Automagic duck typing
+# ---------------------------------------------------------------------------
+
+
+def test_automagic_monitor_metrics_uses_get_avg_learning_rate() -> None:
+    """get_optimizer_monitor_metrics 优先走 get_avg_learning_rate 鸭子类型。"""
+    torch.manual_seed(0)
+    model = nn.Linear(4, 4)
+    optim = create_automagic(model.parameters(), lr=1e-4)
+
+    # 跑几步让 lr 有值
+    for _ in range(3):
+        out = model(torch.randn(2, 4))
+        out.sum().backward()
+        optim.step()
+        optim.zero_grad()
+
+    metrics = get_optimizer_monitor_metrics(optim)
+    assert "lr" in metrics
+    assert "actual_lr" in metrics
+    assert metrics["lr"] > 0
+
+
+# ---------------------------------------------------------------------------
+# create_optimizer 工厂分派
+# ---------------------------------------------------------------------------
+
+
+def test_create_optimizer_dispatches_automagic() -> None:
+    """create_optimizer(optimizer_type='automagic') 返回 Automagic 实例。"""
+    model = nn.Linear(4, 4)
+    optim = create_optimizer("automagic", model.parameters(), learning_rate=1e-4)
+    assert isinstance(optim, Automagic)
+
+
+def test_create_optimizer_dispatches_automagic_v2() -> None:
+    """create_optimizer(optimizer_type='automagic_v2') 返回 Automagic2 实例。"""
+    model = nn.Linear(4, 4)
+    optim = create_optimizer("automagic_v2", model.parameters(), learning_rate=1e-3)
+    assert isinstance(optim, Automagic2)

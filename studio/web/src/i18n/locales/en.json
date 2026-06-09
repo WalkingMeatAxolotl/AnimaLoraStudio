@@ -296,6 +296,7 @@
       },
       "optimizerType": {
         "adamw": "AdamW",
+        "automagic": "Automagic",
         "prodigy": "Prodigy",
         "prodigyPlusSchedulefree": "Prodigy + Schedule-Free"
       },
