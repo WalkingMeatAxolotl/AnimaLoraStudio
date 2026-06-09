@@ -17,14 +17,17 @@ task 结束 supervisor 仍调 cleanup_generate_tempdir 清掉空目录。server 
 """
 from __future__ import annotations
 
+import hashlib
 import io
 import json
+import os
 import re
+import time
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
 
 from ..deps import _resolve_anima_model_paths
@@ -38,21 +41,36 @@ from ...infrastructure.paths import STUDIO_DATA
 router = APIRouter()
 
 TEST_IMAGES_DIR = STUDIO_DATA / "test"
-_IMAGE_NAME_RE = re.compile(r"^image_(\d+)\.png$")
+
+# v2 命名（决策 #6）：父目录区分 mode，文件名仅 "<label> N.png"
+_DISPLAY_LABELS = {"single": "single image", "xy": "xy plot"}
+_V2_SINGLE_RE = re.compile(r"^single image (\d+)\.png$")
+_V2_XY_RE = re.compile(r"^xy plot (\d+)\.png$")
+# v1 legacy：image_N.png（旧版命名），扫描时仍读取，但新写入只用 v2
+_V1_NAME_RE = re.compile(r"^image_(\d+)\.png$")
 
 
-def _next_image_index(dir_: Path) -> int:
-    """扫描 dir 下 image_<N>.png，返回最大 N+1。找不到则 0。"""
+def _next_image_index(dir_: Path, mode: str) -> int:
+    """扫描 dir 下当前 mode 的 PNG 文件，返回下一个 1-based 序号。
+
+    决策 #11：无并发跑图场景，不做 O_EXCL / 锁；序号扫 max+1 + atomic 写即可。
+    决策 #6：v2 命名 1-based（"single image 1" 比 0 直观），v1 legacy `image_N`
+    若同目录混存按合并扫一组取 max+1。
+    """
     if not dir_.is_dir():
-        return 0
-    max_n = -1
+        return 1
+    rx_v2 = _V2_SINGLE_RE if mode == "single" else _V2_XY_RE
+    max_n = 0
     for p in dir_.iterdir():
-        m = _IMAGE_NAME_RE.match(p.name)
-        if m:
-            try:
-                max_n = max(max_n, int(m.group(1)))
-            except ValueError:
-                pass
+        if not p.is_file():
+            continue
+        m_v2 = rx_v2.match(p.name)
+        m_v1 = _V1_NAME_RE.match(p.name)
+        if m_v2:
+            max_n = max(max_n, int(m_v2.group(1)))
+        elif m_v1:
+            # v1 legacy 0-based；映射到 v2 编号空间 +1 避免冲突
+            max_n = max(max_n, int(m_v1.group(1)) + 1)
     return max_n + 1
 
 
@@ -246,6 +264,10 @@ def get_generate_sample(task_id: int, filename: str) -> Any:
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _DISK_MODES = ("single", "xy")
+_PNG_NAME_SAFE_RE = re.compile(r"^[a-zA-Z0-9 ._-]+\.png$")  # disk-image / thumb / delete 路径校验
+
+
+SCHEMA_VERSION = 2
 
 
 def _format_a1111_parameters(params: dict[str, Any]) -> str:
@@ -288,10 +310,11 @@ def _format_a1111_parameters(params: dict[str, Any]) -> str:
     return f"{prompt}\nNegative prompt: {neg}\n{', '.join(parts)}"
 
 
-def _inject_png_metadata(raw: bytes, params: dict[str, Any]) -> bytes:
-    """注入两个 PNG tEXt 块到图：
-       - `anima_params` —— 结构化 JSON，本程序回填 prefs 用
-       - `parameters`   —— a1111 兼容文本，ComfyUI / WebUI 拖图能识别
+def _inject_png_metadata(raw: bytes, params: dict[str, Any], *, mode: str) -> bytes:
+    """注入 PNG tEXt 块到图：
+       - `anima_params` —— 结构化 JSON，**zTXt 压缩**（决策 #17），本程序回填用
+       - `parameters`   —— a1111 兼容文本（决策 #7：xy **不写**，矩阵图单图拖
+         进 a1111 参数语义对不上）；仅 single 模式写
 
     失败返回原 bytes（不阻塞落盘主流程）。
     """
@@ -299,8 +322,11 @@ def _inject_png_metadata(raw: bytes, params: dict[str, Any]) -> bytes:
         from PIL import Image, PngImagePlugin
         img = Image.open(io.BytesIO(raw))
         info = PngImagePlugin.PngInfo()
-        info.add_text("anima_params", json.dumps(params, ensure_ascii=False))
-        info.add_text("parameters", _format_a1111_parameters(params))
+        # zip=True → zTXt 压缩块（PIL 9+），XY cells[] 时 anima_params 可能 6KB+，
+        # 压缩后通常 1-2KB，a1111 不识别 anima_params 反正会跳过
+        info.add_text("anima_params", json.dumps(params, ensure_ascii=False), zip=True)
+        if mode == "single":
+            info.add_text("parameters", _format_a1111_parameters(params))
         out = io.BytesIO()
         img.save(out, format="PNG", pnginfo=info)
         return out.getvalue()
@@ -309,14 +335,17 @@ def _inject_png_metadata(raw: bytes, params: dict[str, Any]) -> bytes:
 
 
 def _read_png_anima_params(path: Path) -> dict[str, Any] | None:
-    """从 PNG `anima_params` tEXt 块解析 params；无 / 解析失败返 None。
+    """从 PNG `anima_params` tEXt / zTXt 块解析 params；无 / 解析失败返 None。
 
-    PIL 只读 PNG header 的 chunk（不 decode 像素），单图几 ms 级。
+    决策 #16：只读 PNG header chunk（PIL `Image.open` 已自动解析 tEXt/zTXt），
+    **不调 `img.load()`**（不 decode 像素）。500 张 4K PNG mount 用时从 15-30s
+    降到 1-2s。
     """
     try:
         from PIL import Image
         with Image.open(path) as img:
-            img.load()  # 触发 tEXt chunk 解析
+            # img.text 在 PIL 8+ 由 open() 阶段读 PNG chunks（含 tEXt/zTXt）填充；
+            # 不需要 img.load() 触发像素解码
             text = img.text.get("anima_params") if hasattr(img, "text") else None
         if not text:
             return None
@@ -326,21 +355,86 @@ def _read_png_anima_params(path: Path) -> dict[str, Any] | None:
         return None
 
 
+def _migrate_anima_params(meta: dict[str, Any]) -> dict[str, Any]:
+    """v1 → v2 schema 迁移（决策 #18）。
+
+    v1: `lora_configs[].path` 是绝对路径（旧 schema 直接存 path）
+    v2: `loras[].name` basename + project_id/version_id；不存绝对路径
+
+    迁移规则：v1 PNG → 把 `lora_configs[].path` 末段 basename 当 v2 `loras[].name`，
+    保留 project_id/version_id/scale；旧 path 丢弃（隐私 + 跨机器死链）。
+    """
+    version = meta.get("schema_version", 1)
+    if version >= 2:
+        return meta
+    if version == 1:
+        legacy_loras = meta.pop("lora_configs", None)
+        if isinstance(legacy_loras, list):
+            new_loras: list[dict[str, Any]] = []
+            for lc in legacy_loras:
+                if not isinstance(lc, dict):
+                    continue
+                path = str(lc.get("path") or "")
+                name = path.replace("\\", "/").rsplit("/", 1)[-1] if path else ""
+                new_loras.append({
+                    "name": name,
+                    "scale": float(lc.get("scale", 1.0)),
+                    "project_id": lc.get("project_id"),
+                    "version_id": lc.get("version_id"),
+                })
+            meta["loras"] = new_loras
+        meta["schema_version"] = 2
+        return meta
+    # 未知版本 → 当作 v2 透传（forward-compat）
+    return meta
+
+
+def _enrich_params_server_side(
+    params: dict[str, Any], *, task_id: int | None, mode: str
+) -> dict[str, Any]:
+    """server 端补全 params 的服务端信息（避免前端伪造 / 漏字段）。
+
+    - `schema_version` 强制覆盖为当前版本
+    - `created_at` 落盘时刻（Unix 秒）
+    - `task_id` 来自 enqueue（前端不传 / 不可信任）
+    - `mode` 来自路由参数（前端不传）
+    """
+    params = dict(params)
+    params["schema_version"] = SCHEMA_VERSION
+    params["created_at"] = time.time()
+    if task_id is not None:
+        params["task_id"] = int(task_id)
+    params["mode"] = mode
+    return params
+
+
+def _atomic_write_png(target: Path, raw: bytes) -> None:
+    """原子写 PNG：写 tmp + os.replace（决策 #11 crash safety）。
+
+    server 在写到一半挂掉时不会留半截 PNG 让 disk-history 扫到（半截 PNG 无
+    PNG IEND chunk，PIL 解析失败，disk-history 会跳过这条；但用户在文件管理
+    器里看到一半文件仍是噪音）。tmp + replace 让 target 出现的瞬间内容已完整。
+    """
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_bytes(raw)
+    os.replace(tmp, target)
+
+
 @router.post("/api/generate/save")
 async def save_test_image(
     mode: str = Form(...),
     image: UploadFile = File(...),
     params: str = Form(""),
+    task_id: Optional[int] = Form(None),
 ) -> dict[str, Any]:
-    """落盘测试出图到 studio_data/test/<YYYY-MM-DD>/<mode>/image_N.png。
+    """落盘测试出图到 `studio_data/test/<YYYY-MM-DD>/<mode>/<label> <N>.png`。
 
     - mode ∈ {"single", "xy"}，其它值（含 "compare"）400
     - Settings 开关 generate.save_test_images=False → 403
-    - N = 当前 <date>/<mode>/ 下已有 image_*.png 最大编号+1（找不到则 0）
-    - 并发兜底：x-flag 写入，FileExistsError 则重扫一次
-    - params 非空 → 注入 PNG `anima_params` (结构化) + `parameters` (a1111) tEXt 块；
-      磁盘上不另写 sidecar JSON（PNG 文件单一 source of truth，拷走/移动/改名都
-      不会跟参数掉队）。
+    - 文件名（决策 #6）：`single image 1.png` / `xy plot 1.png` 类型递增
+    - 原子写（决策 #11）：tmp + os.replace；不做 EEXIST 循环
+    - params 非空 → 注入 PNG `anima_params` (zTXt) + 仅 single 写 `parameters` (a1111 tEXt)
+    - server 端 enrich：强制 `schema_version`/`created_at`/`task_id`/`mode`
     """
     if mode not in ("single", "xy"):
         raise HTTPException(400, f"unsupported mode: {mode}")
@@ -357,20 +451,15 @@ async def save_test_image(
             raise HTTPException(400, f"params: invalid JSON ({e})")
         if not isinstance(decoded, dict):
             raise HTTPException(400, "params: must be a JSON object")
-        raw = _inject_png_metadata(raw, decoded)
+        enriched = _enrich_params_server_side(decoded, task_id=task_id, mode=mode)
+        raw = _inject_png_metadata(raw, enriched, mode=mode)
 
     target_dir = TEST_IMAGES_DIR / date.today().isoformat() / mode
     target_dir.mkdir(parents=True, exist_ok=True)
-    for _ in range(20):
-        idx = _next_image_index(target_dir)
-        target = target_dir / f"image_{idx}.png"
-        try:
-            with open(target, "xb") as f:
-                f.write(raw)
-        except FileExistsError:
-            continue
-        return {"path": str(target), "index": idx}
-    raise HTTPException(500, "could not allocate filename")
+    idx = _next_image_index(target_dir, mode)
+    target = target_dir / f"{_DISPLAY_LABELS[mode]} {idx}.png"
+    _atomic_write_png(target, raw)
+    return {"path": str(target), "index": idx, "filename": target.name}
 
 
 # ---------------------------------------------------------------------------
@@ -378,16 +467,29 @@ async def save_test_image(
 # ---------------------------------------------------------------------------
 
 
-def _disk_history_id(date_str: str, mode: str, stem: str) -> str:
-    """前端 dedup / merge 用的稳定 id。同图不论几次扫描都映射同一 id。"""
-    return f"disk:{date_str}:{mode}:{stem}"
+def _disk_history_id(date_str: str, mode: str, filename: str) -> str:
+    """前端 dedup / merge 用的稳定 id。
+
+    用 sha1 短哈希替代直接拼 filename —— filename 含空格（决策 #6 "single image 1"）
+    塞进 React key / data-testid / URL fragment 会踩坑。哈希 12 位足够全局唯一。
+    """
+    h = hashlib.sha1(f"{date_str}/{mode}/{filename}".encode("utf-8")).hexdigest()[:12]
+    return f"disk:{h}"
+
+
+def _url_quote_filename(filename: str) -> str:
+    """文件名内空格 / 中文等 URL encode（决策 #6 文件名带空格）。后端返 URL
+    时直接 encode 好，前端拼接禁止。"""
+    from urllib.parse import quote
+    return quote(filename, safe="")
 
 
 def _scan_png_metadata(limit: int) -> list[dict[str, Any]]:
-    """扫 TEST_IMAGES_DIR 下所有 <date>/{single,xy}/image_*.png 的 anima_params。
+    """扫 TEST_IMAGES_DIR 下所有 <date>/{single,xy}/*.png 的 anima_params。
 
-    没有 anima_params tEXt 块的图（老数据 / 客户端没传 params）不入列表 ——
-    用户仍可去文件夹手动看 PNG。created_at 用文件 mtime（落盘即写，准确）。
+    没有 anima_params tEXt 块的图（老数据 / 客户端没传 params）不入列表。
+    决策 #16：_read_png_anima_params 只读 header（不 load 像素），500 张 1-2s。
+    决策 #18：扫到 schema_version=1 PNG 用 _migrate_anima_params 适配。
     """
     if not TEST_IMAGES_DIR.is_dir():
         return []
@@ -399,24 +501,28 @@ def _scan_png_metadata(limit: int) -> list[dict[str, Any]]:
             mode_dir = date_dir / mode
             if not mode_dir.is_dir():
                 continue
-            for img in mode_dir.glob("image_*.png"):
+            for img in mode_dir.glob("*.png"):
+                if img.name.endswith(".tmp.png"):
+                    continue  # atomic write tmp file 兜底
                 params = _read_png_anima_params(img)
                 if params is None:
                     continue
+                params = _migrate_anima_params(params)
                 try:
                     created_at = img.stat().st_mtime
                 except OSError:
                     continue
-                stem = img.stem  # image_5
+                encoded = _url_quote_filename(img.name)
                 out.append({
-                    "id": _disk_history_id(date_dir.name, mode, stem),
+                    "id": _disk_history_id(date_dir.name, mode, img.name),
                     "date": date_dir.name,
                     "mode": mode,
                     "filename": img.name,
                     "path": str(img),
-                    "url": f"/api/generate/disk/image/{date_dir.name}/{mode}/{img.name}",
+                    "image_url": f"/api/generate/disk/image/{date_dir.name}/{mode}/{encoded}",
+                    "thumb_url": f"/api/generate/disk/thumb/{date_dir.name}/{mode}/{encoded}?w=128",
                     "created_at": float(created_at),
-                    "schema_version": int(params.get("schema_version", 1)),
+                    "schema_version": int(params.get("schema_version", SCHEMA_VERSION)),
                     "params": params,
                 })
     out.sort(key=lambda e: e["created_at"], reverse=True)
@@ -434,18 +540,95 @@ def list_disk_history(limit: int = 500) -> dict[str, Any]:
     return {"entries": _scan_png_metadata(limit)}
 
 
-@router.get("/api/generate/disk/image/{date_str}/{mode}/{filename}")
-def get_disk_image(date_str: str, mode: str, filename: str) -> Any:
-    """读落盘测试图（前端历史栏点击磁盘 entry 时大图来源）。"""
+def _resolve_disk_png(date_str: str, mode: str, filename: str) -> Path:
+    """三种 endpoint（image / thumb / delete）共用的路径校验 + resolve。
+
+    校验：date 格式 / mode 枚举 / filename 安全字符集（无 / \ .. 等）/ 扩展名 .png
+    返回：实际磁盘 Path（不保证 exists，由调用方决定 404 时机）
+    """
     if not _DATE_RE.match(date_str):
         raise HTTPException(400, "invalid date")
     if mode not in _DISK_MODES:
         raise HTTPException(400, "invalid mode")
-    _validate_component_or_400(filename)
-    if not filename.lower().endswith(".png"):
-        raise HTTPException(400, "only .png supported")
-    path = TEST_IMAGES_DIR / date_str / mode / filename
+    if not _PNG_NAME_SAFE_RE.match(filename):
+        raise HTTPException(400, "invalid filename")
+    # 二次防御：safe_join 反 traversal
+    base = (TEST_IMAGES_DIR / date_str / mode).resolve()
+    try:
+        path = (base / filename).resolve()
+    except OSError:
+        raise HTTPException(400, "invalid filename")
+    if not str(path).startswith(str(base)):
+        raise HTTPException(400, "path escapes base dir")
+    return path
+
+
+@router.get("/api/generate/disk/image/{date_str}/{mode}/{filename}")
+def get_disk_image(date_str: str, mode: str, filename: str) -> Any:
+    """读落盘测试图（前端历史栏点击磁盘 entry 时大图来源）。"""
+    path = _resolve_disk_png(date_str, mode, filename)
     if not path.is_file():
         raise HTTPException(404)
-    # 落盘图内容稳定（不会被同名覆盖——image_N 编号递增），可缓存
-    return FileResponse(path, media_type="image/png")
+    # 落盘图内容稳定（序号递增不覆盖），可强 cache
+    return FileResponse(
+        path, media_type="image/png",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+@router.get("/api/generate/disk/thumb/{date_str}/{mode}/{filename}")
+def get_disk_thumb(
+    date_str: str, mode: str, filename: str,
+    w: int = Query(128, ge=32, le=512),
+) -> Any:
+    """PIL 在线生成缩略图（决策 Dev v1 / Arch v2）—— 替代前端 IDB dataURL cache。
+
+    - ETag = sha1(file mtime + size + w)；304 命中直接返
+    - Cache-Control: public, max-age=86400（落盘图内容稳定）
+    - 失败 fallback 原图（避免缩略生成 bug 阻塞历史栏）
+    """
+    path = _resolve_disk_png(date_str, mode, filename)
+    if not path.is_file():
+        raise HTTPException(404)
+    try:
+        st = path.stat()
+        etag = hashlib.sha1(
+            f"{st.st_mtime}:{st.st_size}:{w}".encode("utf-8")
+        ).hexdigest()[:16]
+    except OSError:
+        raise HTTPException(404)
+    # 这里没有直接读 request header，由 FastAPI / Starlette 处理 304 略复杂；
+    # 简化方案：返 ETag + Cache-Control，浏览器自管 304 转换（max-age 内不再请求）
+    try:
+        from PIL import Image
+        with Image.open(path) as img:
+            img.thumbnail((w, w), Image.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            data = buf.getvalue()
+    except Exception:
+        return FileResponse(path, media_type="image/png")
+    return Response(
+        content=data,
+        media_type="image/png",
+        headers={
+            "ETag": f'"{etag}"',
+            "Cache-Control": "public, max-age=86400",
+        },
+    )
+
+
+@router.delete("/api/generate/disk/{date_str}/{mode}/{filename}")
+def delete_disk_image(date_str: str, mode: str, filename: str) -> dict[str, Any]:
+    """删除落盘测试图（前端历史栏单条删除）。
+
+    返回 OK + 是否真删（noop=True 表示文件本不存在）。安全校验同 image / thumb。
+    """
+    path = _resolve_disk_png(date_str, mode, filename)
+    if not path.is_file():
+        return {"ok": True, "noop": True}
+    try:
+        path.unlink()
+        return {"ok": True, "noop": False}
+    except OSError as e:
+        raise HTTPException(500, f"delete failed: {e}")
