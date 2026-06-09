@@ -28,6 +28,24 @@ def parse_args():
     p.add_argument("--auto-install", action="store_true", help="自动安装缺失依赖")
     p.add_argument("--interactive", action="store_true", help="交互模式，提示输入缺失参数")
     p.add_argument("--no-live-curve", action="store_true", help="禁用实时 Loss 曲线刷新")
+    # concept slider POC（feat/concept-slider-poc）：image-pair 训 saturation tweaker
+    p.add_argument(
+        "--training_mode", choices=["lora", "concept_slider"], default="lora",
+        help="训练模式：lora=标准 LoRA；concept_slider=image-pair 4-forward（POC saturation）",
+    )
+    p.add_argument(
+        "--slider_eta", type=float, default=1.0,
+        help="concept slider η：target = pred_pos_base + η·(pred_pos_base - pred_neg_base)；论文默认 1.0",
+    )
+    p.add_argument(
+        "--slider_caption", type=str, default="a photo",
+        help="concept slider 训练统一 caption（POC：文本侧零信号最干净）",
+    )
+    p.add_argument(
+        "--slider_neg_strength", type=float, default=0.5,
+        help="负向 pair 的 PIL ImageEnhance.Color factor（0=全灰度，1=原图）。"
+             "默认 0.5。设 0 会让 weight=-1 推理退化成黑白 tweaker，不推荐。",
+    )
     # PP6.1 — 监控状态文件路径；不传则默认写到 output_dir/monitor_state.json
     # 注：--no-monitor / --monitor-host / --monitor-port / --no-browser 由 schema
     # 自动从 TrainingConfig 字段生成（保留只为兼容旧 yaml，运行时忽略）。

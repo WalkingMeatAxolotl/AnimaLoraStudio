@@ -10,8 +10,9 @@ import json
 import logging
 import math
 import re
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 import torch
 import torch.nn as nn
@@ -306,6 +307,43 @@ class AnimaLycorisAdapter:
             f"加载 {len(sd)} 个权重张量，"
             f"missing={missing}, unexpected={unexpected}"
         )
+
+    # ─── concept slider POC：运行时切换 LoRA scale ───
+    # 论文级 image-pair concept slider 需要在同一 step 内交替跑 base（LoRA off）
+    # 和 LoRA on 两份前向，再用 4-forward 公式算 target。multiplier 是 lycoris
+    # 每个模块 forward 时读的运行时 scale（locon.py:315 / lokr.py:380），改属性
+    # 等价临时关 LoRA，不需要 detach / 重 inject。
+
+    def set_multiplier(self, scale: float) -> None:
+        """把所有 LoRA 模块的 multiplier 设为 scale。
+
+        scale=0：等价无 LoRA（forward 贡献为 0）。
+        scale=1：正常训练 / 推理。
+        scale=-1：反向 slider（推理时给负 weight 实现反向饱和度等）。
+        """
+        if self.network is None:
+            return
+        for m in self.network.loras:
+            m.multiplier = scale
+
+    @contextmanager
+    def disabled(self) -> Iterator[None]:
+        """临时关 LoRA（multiplier=0），退出 with 块时还原原 scale。
+
+        concept slider 训练循环里：base 前向（no_grad）走 disabled()，LoRA
+        前向走默认 scale；线程不安全但单进程训练里够用。
+        """
+        if self.network is None:
+            yield
+            return
+        saved = [m.multiplier for m in self.network.loras]
+        for m in self.network.loras:
+            m.multiplier = 0.0
+        try:
+            yield
+        finally:
+            for m, s in zip(self.network.loras, saved):
+                m.multiplier = s
 
     # ─── ADR 0003 PR-C：AdapterProtocol 可选 hook 的 no-op 实现 ───
     # 给 LyCORIS adapter 满足 runtime_checkable Protocol；论文级变体

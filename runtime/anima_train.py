@@ -129,10 +129,23 @@ def main():
     ctx = TrainingContext(args=args)
     phases.bootstrap.run(ctx)
     phases.models.run(ctx)
-    phases.dataset.run(ctx)
-    phases.optimizer.run(ctx)
-    phases.resume.run(ctx)
-    loop.run(ctx)
+
+    # POC concept slider 模式：替换 dataset_phase + loop（其他 phase 复用）
+    # 标准 lora 走原 flow；concept_slider 走 image-pair pair dataset + 4-forward loop。
+    mode = getattr(args, "training_mode", "lora")
+    if mode == "concept_slider":
+        from training.concept_slider import data as slider_data
+        from training.concept_slider import loop as slider_loop
+        slider_data.build_dataloader(ctx)
+        phases.optimizer.run(ctx)
+        phases.resume.run(ctx)
+        slider_loop.run(ctx)
+    else:
+        phases.dataset.run(ctx)
+        phases.optimizer.run(ctx)
+        phases.resume.run(ctx)
+        loop.run(ctx)
+
     phases.finalize.run(ctx)
 
 
