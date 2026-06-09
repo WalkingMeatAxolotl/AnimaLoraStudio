@@ -24,7 +24,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("stats_csv", help="analyze_slider_dataset.py 出的 stats.csv")
     ap.add_argument("data_dir", help="对应的图片目录")
-    ap.add_argument("--dest", default=None, help="dead 子目录（默认 <data_dir>/_dead/）")
+    ap.add_argument("--dest", default=None, help="dead 目录（默认 <data_dir 同级>/<name>_dead/；不放 data_dir 下避免 rglob 再扫到）")
     ap.add_argument("--chroma-min", type=float, default=5.0)
     ap.add_argument("--chroma-std-min", type=float, default=5.0)
     ap.add_argument("--lstar-min", type=float, default=5.0)
@@ -33,7 +33,9 @@ def main():
     args = ap.parse_args()
 
     data_dir = Path(args.data_dir)
-    dest = Path(args.dest) if args.dest else data_dir / "_dead"
+    # 默认 dest 放在 data_dir 同级而非子目录 —— SaturationPairDataset 和 analyze
+    # 脚本都用 rglob，子目录会被递归扫到，等于剔了又拣回来。
+    dest = Path(args.dest) if args.dest else data_dir.parent / f"{data_dir.name}_dead"
     df = pd.read_csv(args.stats_csv)
     flag = (
         (df["chroma"] < args.chroma_min)
