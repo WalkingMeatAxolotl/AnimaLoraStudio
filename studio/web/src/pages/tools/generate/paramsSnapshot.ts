@@ -108,3 +108,58 @@ export function resolveSnapshotLora(
     project_id: snap.project_id ?? null, version_id: snap.version_id ?? null,
   }
 }
+
+/** applySnapshot 输出（决策 #8 / Arch v2 Step 3）：把 snapshot 转成"prefs 字段补丁"。
+ *
+ * 不直接 import GeneratePrefs（避免循环依赖）；调用方接到这个 shape 自己 spread
+ * 进 setPrefs。所有"应用快照"路径（历史回填 / URL ?lora= / Stepper 跳 / 入库回写）
+ * 统一走这一个函数 —— 单一入口杜绝散落分支 + 每加一个调用点漏一个字段的 bug。
+ */
+export interface AppliedSnapshot {
+  mode: 'single' | 'xy'  // compare 视图回填映射到 xy
+  prompts: string[]
+  negPrompt: string
+  width: number
+  height: number
+  steps: number
+  cfgScale: number
+  count: number
+  seed: number
+  datasetPick: DatasetPick | null
+  /** 按 mode 二选一灌入 prefs.singleLoras / prefs.xyLoras */
+  loras: LoraEntry[]
+  /** 仅 xy 模式回填；single 时为 undefined（不动 prev.xDraft/yDraft） */
+  xDraft?: SnapshotXYAxis
+  yDraft?: SnapshotXYAxis | null
+  /** resolve 失败的 LoRA 数量（>0 时调用方应 toast 提示重选） */
+  unresolvedLoraCount: number
+}
+
+export function applySnapshot(
+  snap: GenerateParamsSnapshot,
+  projectLoras: ProjectLora[],
+): AppliedSnapshot {
+  const resolved = snap.loras.map((l) => resolveSnapshotLora(l, projectLoras))
+  const unresolved = resolved.filter((l) => !l.path).length
+  // compare 视图回填到 xy（compare 是 xy 子视图，无 selectedIndices 不直接进）
+  const mode: 'single' | 'xy' = snap.mode === 'single' ? 'single' : 'xy'
+  const applied: AppliedSnapshot = {
+    mode,
+    prompts: snap.prompts,
+    negPrompt: snap.negative_prompt,
+    width: snap.width,
+    height: snap.height,
+    steps: snap.steps,
+    cfgScale: snap.cfg_scale,
+    count: snap.count,
+    seed: snap.seed,
+    datasetPick: snap.dataset_pick ?? null,
+    loras: resolved,
+    unresolvedLoraCount: unresolved,
+  }
+  if (mode === 'xy' && snap.xy_draft) {
+    applied.xDraft = snap.xy_draft.x
+    applied.yDraft = snap.xy_draft.y
+  }
+  return applied
+}
