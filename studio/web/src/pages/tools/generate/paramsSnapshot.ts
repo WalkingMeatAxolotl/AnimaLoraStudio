@@ -106,6 +106,8 @@ export function resolveSnapshotLora(
   return {
     path: '', scale: snap.scale,
     project_id: snap.project_id ?? null, version_id: snap.version_id ?? null,
+    // placeholder: 保留 name 让 SidebarLoras 渲染 ⚠ 提示卡片
+    name: snap.name,
   }
 }
 

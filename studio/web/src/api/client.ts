@@ -1119,6 +1119,11 @@ export interface LoraEntry {
   /** 来自 picker 的项目 / 版本绑定；外部文件无 */
   project_id?: number | null
   version_id?: number | null
+  /** 仅 placeholder 状态用：历史回填时 resolve 失败保留原 basename
+   *  （如 "my-lora.safetensors"），让 SidebarLoras 渲染 ⚠ placeholder 卡片
+   *  提示用户重选。`path` 非空时此字段被忽略；submit 时 path='' 的 entry
+   *  会被 `.filter(l => l.path.trim())` 跳过，不影响 daemon。 */
+  name?: string | null
 }
 
 /** XY 矩阵：单 task 内循环全图，前端按 (yi, xi) 排成 grid。

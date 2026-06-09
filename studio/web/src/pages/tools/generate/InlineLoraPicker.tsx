@@ -89,6 +89,19 @@ export default function InlineLoraPicker(props: Props) {
 
   const [pid, setPid] = useState<number | null>(initialPid)
 
+  // 决策 #8（plan §9.2）：single 模式是受控的，pid 必须跟 props.value.projectId
+  // 同步 —— 否则历史回填 / URL ?lora= 流回新 LoraEntry 时，下拉框还卡在
+  // 旧值（之前靠父级 bump urlConsumedKey 强制 remount 兜底，Step 6 砍掉）。
+  // setPid 函数式更新 + 值未变跳过自动免无限循环。multi 模式无 props.value，
+  // 保留 mount-only 行为（用户在 picker 内自由切项目）。
+  // value=null 时不 sync（保留 fallback：未选 LoRA 时给用户看 projects[0] ckpts）
+  const singleValue = isSingle ? props.value : null
+  useEffect(() => {
+    if (!isSingle || singleValue == null) return
+    const next = singleValue.projectId
+    setPid((cur) => (cur === next ? cur : next))
+  }, [isSingle, singleValue])
+
   const versions = useMemo(() => {
     if (pid === null) return []
     return projectLoras
@@ -97,9 +110,17 @@ export default function InlineLoraPicker(props: Props) {
   }, [projectLoras, pid])
 
   const [vid, setVid] = useState<number | null>(initialVid)
+  // 同 pid：single 模式下 value 非 null 时 vid 跟 props.value.versionId 同步
+  useEffect(() => {
+    if (!isSingle || singleValue == null) return
+    const next = singleValue.versionId
+    setVid((cur) => (cur === next ? cur : next))
+  }, [isSingle, singleValue])
+  // versions 切换时如果当前 vid 不在新 versions 列表里，自动取第一个
+  // （用户切 project 下拉时触发）
   useEffect(() => {
     if (versions.length === 0) {
-      setVid(null)
+      setVid((cur) => (cur === null ? cur : null))
     } else if (!versions.some((v) => v.id === vid)) {
       setVid(versions[0].id)
     }

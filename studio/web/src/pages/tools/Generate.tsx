@@ -158,7 +158,6 @@ export default function GeneratePage() {
       }]
       return { ...p, mode: 'single', singleLoras: newLoras }
     })
-    setUrlConsumedKey((k) => k + 1)
     const url = new URL(window.location.href)
     url.searchParams.delete('lora')
     url.searchParams.delete('projectId')
@@ -181,11 +180,6 @@ export default function GeneratePage() {
   // 没法重试也没法取消（status=failed 时 cancelable=false）
   const [submitting, setSubmitting] = useState(false)
   const [currentTask, setCurrentTask] = useState<Task | null>(null)
-  // URL ?lora= 消费计数：bump 一次让 SidebarLoras 整块 remount，强制内部
-  // InlineLoraPicker 用新 value 重新初始化 pid/vid（picker 内 useState 只
-  // 一次性从 props.value 取 projectId/versionId，后续 props 变化不会同步，
-  // 不 remount 就会看到下拉 / chip 还卡在旧缓存项目）。
-  const [urlConsumedKey, setUrlConsumedKey] = useState(0)
   // monitor 走 useMonitorProgress hook (PR #37 增量协议)：currentTask 变 →
   // hook 自动重拉快照 + 订阅 SSE delta 合并；本组件只用 samples 字段，其余
   // 字段在这页生成场景下不需要。
@@ -582,7 +576,6 @@ export default function GeneratePage() {
                   <span className="text-xs text-fg-tertiary">{t('generate.loraHint')}</span>
                 </div>
                 <SidebarLoras
-                  key={`single-${urlConsumedKey}`}
                   loras={loras}
                   onChange={setLoras}
                   projectLoras={projectLoras}
@@ -592,7 +585,6 @@ export default function GeneratePage() {
 
             {mode === 'xy' && (
               <SidebarXYAxes
-                key={`xy-${urlConsumedKey}`}
                 xDraft={xDraft}
                 yDraft={yDraft}
                 onXChange={setXDraft}
