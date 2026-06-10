@@ -289,6 +289,8 @@ def create_run(
     *,
     checkpoint_path: str | None = None,
     max_items: int | None = None,
+    auto_metrics: bool = False,
+    auto_source: dict[str, Any] | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
     ts = time.time() if now is None else float(now)
@@ -329,6 +331,8 @@ def create_run(
         "manifest_digest": _manifest_digest(manifest),
         "manifest_snapshot": manifest,
         "checkpoint": checkpoint,
+        "auto_metrics": bool(auto_metrics),
+        "auto_source": dict(auto_source) if auto_source else None,
         "generation": dict(manifest.get("generation") or {}),
         "items": items,
         "summary": _summary(items),
@@ -355,6 +359,8 @@ def start_job(
         version_dir,
         checkpoint_path=checkpoint_path,
         max_items=max_items,
+        auto_metrics=auto_metrics,
+        auto_source=auto_source,
     )
     params: dict[str, Any] = {
         "version_id": int(version["id"]),

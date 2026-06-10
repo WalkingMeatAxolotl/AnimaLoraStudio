@@ -124,6 +124,26 @@ def list_jobs(
     return [_row_to_dict(r) or {} for r in conn.execute(sql, params)]
 
 
+def dispatch_order(job: dict[str, Any]) -> tuple[int, int]:
+    """Return supervisor dispatch priority for pending project jobs.
+
+    Eval metric jobs should not sit behind a long tail of newly queued
+    eval_samples. Once a sample exists, users need the lightweight metric jobs
+    to finish before spending more GPU time generating more checkpoint samples.
+    """
+    kind = str(job.get("kind") or "")
+    priority = {
+        "eval_clip": 0,
+        "eval_dino": 0,
+        "download": 1,
+        "preprocess": 1,
+        "tag": 1,
+        "reg_build": 1,
+        "eval_samples": 2,
+    }.get(kind, 1)
+    return priority, int(job.get("id") or 0)
+
+
 def latest_for(
     conn: sqlite3.Connection,
     *,
