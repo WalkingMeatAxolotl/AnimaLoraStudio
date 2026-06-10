@@ -279,3 +279,12 @@ Step 7 的 training-integrated eval POC 用已有 CLIP / DINO 指标回答“同
 - DreamBooth / DreamBench 系列：DINO-I / CLIP-I / CLIP-T 常用于个性化生成评估。
 - Rethinking FID：CMMD 使用 CLIP embedding + MMD 替代 FID 的高斯假设。
 - SSCD：图像 copy detection，可作为训练图复制风险的 nearest-neighbor 特征模型。
+
+## Addendum: Step 7 队列调度修正（2026-06-11）
+
+真实长训练测试发现，自动评估可能一次性排出较多 `eval_samples` job。若队列纯按
+job id FIFO 调度，已完成 sample 后新排出的 `eval_clip` / `eval_dino` 可能被后续大量
+`eval_samples` 堵在后面，用户需要等待更多采样完成后才能看到已经可计算的指标。
+
+对应修复是让 eval metric job 优先于后续 eval sample job 调度，并把 `auto_metrics` /
+`auto_source` 写入 run metadata，方便后续 UI 和排障直接从 `run.json` 判断自动评估来源。

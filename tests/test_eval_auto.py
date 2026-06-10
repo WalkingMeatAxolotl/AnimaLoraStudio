@@ -87,6 +87,13 @@ def test_queue_checkpoint_eval_respects_switch(isolated) -> None:
     }
     assert job["params_decoded"]["checkpoint_path"] == "output/model_epoch2.safetensors"
     assert run["checkpoint"]["path"] == "output/model_epoch2.safetensors"
+    assert run["auto_metrics"] is True
+    assert run["auto_source"] == {
+        "task_id": 7,
+        "epoch": 2,
+        "step": 20,
+        "trigger": "epoch",
+    }
     assert run["summary"]["total"] == 1
 
 

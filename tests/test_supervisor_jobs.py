@@ -39,6 +39,35 @@ def _setup_project(isolated) -> dict:
         return projects.create_project(conn, title="P")
 
 
+def test_eval_metric_jobs_dispatch_before_later_eval_samples(isolated) -> None:
+    """Completed samples should get metrics before spending GPU on more samples."""
+    p = _setup_project(isolated)
+    with db.connection_for(isolated["db"]) as conn:
+        sample = project_jobs.create_job(
+            conn,
+            project_id=p["id"],
+            kind="eval_samples",
+            params={"run_id": "run-later"},
+        )
+        clip = project_jobs.create_job(
+            conn,
+            project_id=p["id"],
+            kind="eval_clip",
+            params={"run_id": "run-ready"},
+        )
+        dino = project_jobs.create_job(
+            conn,
+            project_id=p["id"],
+            kind="eval_dino",
+            params={"run_id": "run-ready"},
+        )
+        pending = project_jobs.list_jobs(conn, status="pending")
+
+    pending.sort(key=project_jobs.dispatch_order)
+
+    assert [job["id"] for job in pending[:3]] == [clip["id"], dino["id"], sample["id"]]
+
+
 def test_download_job_runs_in_parallel_with_training_task(isolated, tmp_path) -> None:
     """PP10.2.b：download job (IO-only) 应该跟训练 task 并行跑，不互相堵塞。"""
     p = _setup_project(isolated)

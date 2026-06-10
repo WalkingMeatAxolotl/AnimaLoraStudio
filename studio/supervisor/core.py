@@ -480,7 +480,7 @@ class Supervisor:
         allow_gpu = self._allow_gpu_during_train()
         with db.connection_for(self._db_path) as conn:
             pending = project_jobs.list_jobs(conn, status="pending")
-        pending.sort(key=lambda j: j["id"])
+        pending.sort(key=project_jobs.dispatch_order)
         for job in pending:
             kind = job["kind"]
             if kind in GPU_BOUND_JOB_KINDS:
