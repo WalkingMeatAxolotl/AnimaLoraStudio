@@ -43,6 +43,7 @@ export default function PreprocessDuplicatesPage() {
   const [logs, setLogs] = useState<DuplicateLog[]>([])
   const [scanLogVisible, setScanLogVisible] = useState(false)
   const [previewIdx, setPreviewIdx] = useState<number | null>(null)
+  const [reviewMode, setReviewMode] = useState<'groups' | 'quality'>('groups')
   const lastLogAtRef = useRef(0)
 
   useEffect(() => {
@@ -80,12 +81,20 @@ export default function PreprocessDuplicatesPage() {
   const hasQualityCandidates = !!result && (
     result.blur_candidates.length > 0 || result.crop_relations.length > 0
   )
+  const activeReviewMode = reviewMode === 'quality' && hasQualityCandidates ? 'quality' : 'groups'
+
+  useEffect(() => {
+    if (!hasQualityCandidates && reviewMode === 'quality') {
+      setReviewMode('groups')
+    }
+  }, [hasQualityCandidates, reviewMode])
 
   const scan = async () => {
     if (busy) return
     setBusy(true)
     setResult(null)
     setSelected(new Set())
+    setReviewMode('groups')
     setScanLogVisible(true)
     setLogs([{ ts: Date.now(), status: 'running', text: t('duplicates.logStarted') }])
     try {
@@ -175,39 +184,76 @@ export default function PreprocessDuplicatesPage() {
               onApply={apply}
             />
             {scanLogVisible && <DuplicateLogStrip logs={logs} busy={busy} />}
-            <div className={
-              hasQualityCandidates
-                ? 'grid gap-2 flex-1 min-h-0 xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]'
-                : 'flex flex-col flex-1 min-h-0'
-            }>
-              <DuplicateReviewPanel
-                projectId={project.id}
-                versionId={vid}
-                result={result}
-                selected={selected}
-                busy={busy}
-                onSelect={setSelected}
-                onPreview={openPreview}
-              />
-              <QualityReviewPanel
-                projectId={project.id}
-                versionId={vid}
-                result={result}
-                selected={selected}
-                busy={busy}
-                onSelectNames={(names) => {
-                  const next = new Set(selected)
-                  names.forEach((name) => next.add(name))
-                  setSelected(next)
-                }}
-                onToggle={(name) => {
-                  const next = new Set(selected)
-                  if (next.has(name)) next.delete(name)
-                  else next.add(name)
-                  setSelected(next)
-                }}
-                onPreview={openPreview}
-              />
+            <div className="flex flex-col flex-1 min-h-0 gap-2">
+              <div className="shrink-0 rounded-md border border-subtle bg-surface px-2 py-1.5 flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setReviewMode('groups')}
+                  className={`btn btn-sm !py-1 text-xs ${
+                    activeReviewMode === 'groups'
+                      ? 'border-warn bg-warn-soft text-warn'
+                      : 'btn-secondary'
+                  }`}
+                >
+                  {t('duplicates.reviewTitle')} ({result?.group_count ?? 0})
+                </button>
+                <button
+                  type="button"
+                  disabled={!hasQualityCandidates}
+                  onClick={() => setReviewMode('quality')}
+                  className={`btn btn-sm !py-1 text-xs ${
+                    activeReviewMode === 'quality'
+                      ? 'border-accent bg-accent-soft text-accent'
+                      : 'btn-secondary'
+                  }`}
+                >
+                  {t('duplicates.qualityTitle')} ({(result?.blur_candidate_count ?? 0) + (result?.crop_relation_count ?? 0)})
+                </button>
+                <span className="text-xs text-fg-tertiary truncate">
+                  {activeReviewMode === 'quality'
+                    ? t('duplicates.qualitySummary', {
+                        blur: result?.blur_candidate_count ?? 0,
+                        crops: result?.crop_relation_count ?? 0,
+                      })
+                    : t('duplicates.panelSummary', {
+                        total: result?.total_images ?? project.download_image_count ?? 0,
+                        groups: result?.group_count ?? 0,
+                        selected: selected.size,
+                      })}
+                </span>
+              </div>
+
+              {activeReviewMode === 'groups' ? (
+                <DuplicateReviewPanel
+                  projectId={project.id}
+                  versionId={vid}
+                  result={result}
+                  selected={selected}
+                  busy={busy}
+                  onSelect={setSelected}
+                  onPreview={openPreview}
+                />
+              ) : (
+                <QualityReviewPanel
+                  projectId={project.id}
+                  versionId={vid}
+                  result={result}
+                  selected={selected}
+                  busy={busy}
+                  onSelectNames={(names) => {
+                    const next = new Set(selected)
+                    names.forEach((name) => next.add(name))
+                    setSelected(next)
+                  }}
+                  onToggle={(name) => {
+                    const next = new Set(selected)
+                    if (next.has(name)) next.delete(name)
+                    else next.add(name)
+                    setSelected(next)
+                  }}
+                  onPreview={openPreview}
+                />
+              )}
             </div>
           </div>
           <DuplicateStatsSidebar
@@ -498,6 +544,7 @@ function QualityReviewPanel({
   const { t } = useTranslation()
   const blurCandidates = result?.blur_candidates ?? []
   const cropRelations = result?.crop_relations ?? []
+  const [activeTab, setActiveTab] = useState<'blur' | 'crop'>('blur')
   const blurNames = useMemo(
     () => Array.from(new Set((result?.blur_candidates ?? []).map((item) => item.name))),
     [result],
@@ -524,7 +571,21 @@ function QualityReviewPanel({
       ? t('duplicates.cropLargerSameArea')
       : t('duplicates.cropLarger', { name })
   )
+  useEffect(() => {
+    if (blurCandidates.length === 0 && cropRelations.length > 0) {
+      setActiveTab('crop')
+    } else if (blurCandidates.length > 0 && cropRelations.length === 0) {
+      setActiveTab('blur')
+    }
+  }, [blurCandidates.length, cropRelations.length])
   if (!result || (blurCandidates.length === 0 && cropRelations.length === 0)) return null
+  const activeQualityTab =
+    blurCandidates.length === 0 && cropRelations.length > 0
+      ? 'crop'
+      : cropRelations.length === 0 && blurCandidates.length > 0
+        ? 'blur'
+        : activeTab
+  const showBlur = activeQualityTab === 'blur'
   return (
     <section className="flex flex-col min-h-0 rounded-md border border-subtle bg-surface overflow-hidden">
       <div className="h-0.5 bg-accent" />
@@ -536,43 +597,74 @@ function QualityReviewPanel({
         <span className="text-xs text-fg-tertiary min-w-full">
           {t('duplicates.qualityHint')}
         </span>
+        <div className="grid grid-cols-2 gap-1.5 min-w-full">
+          <button
+            type="button"
+            disabled={blurCandidates.length === 0}
+            onClick={() => setActiveTab('blur')}
+            className={`btn btn-sm !py-1 text-xs justify-center ${
+              showBlur
+                ? 'border-accent bg-accent-soft text-accent'
+                : 'btn-secondary'
+            }`}
+          >
+            {t('duplicates.blurTitle')} ({blurCandidates.length})
+          </button>
+          <button
+            type="button"
+            disabled={cropRelations.length === 0}
+            onClick={() => setActiveTab('crop')}
+            className={`btn btn-sm !py-1 text-xs justify-center ${
+              !showBlur
+                ? 'border-accent bg-accent-soft text-accent'
+                : 'btn-secondary'
+            }`}
+          >
+            {t('duplicates.cropTitle')} ({cropRelations.length})
+          </button>
+        </div>
         <div className="flex flex-wrap items-center gap-1.5 min-w-full">
-          <button
-            type="button"
-            disabled={busy || blurNames.length === 0}
-            onClick={() => onSelectNames(blurNames)}
-            className="btn btn-secondary btn-sm !py-0.5 text-[11px]"
-          >
-            {t('duplicates.selectBlur')}
-          </button>
-          <button
-            type="button"
-            disabled={busy || cropCandidateNames.length === 0}
-            onClick={() => onSelectNames(cropCandidateNames)}
-            className="btn btn-secondary btn-sm !py-0.5 text-[11px]"
-          >
-            {t('duplicates.selectCropCandidates')}
-          </button>
-          <button
-            type="button"
-            disabled={busy || cropSourceNames.length === 0}
-            onClick={() => onSelectNames(cropSourceNames)}
-            className="btn btn-secondary btn-sm !py-0.5 text-[11px]"
-          >
-            {t('duplicates.selectCropSources')}
-          </button>
-          <button
-            type="button"
-            disabled={busy || cropBothNames.length === 0}
-            onClick={() => onSelectNames(cropBothNames)}
-            className="btn btn-secondary btn-sm !py-0.5 text-[11px]"
-          >
-            {t('duplicates.selectCropBoth')}
-          </button>
+          {showBlur ? (
+            <button
+              type="button"
+              disabled={busy || blurNames.length === 0}
+              onClick={() => onSelectNames(blurNames)}
+              className="btn btn-secondary btn-sm !py-0.5 text-[11px]"
+            >
+              {t('duplicates.selectBlur')}
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                disabled={busy || cropCandidateNames.length === 0}
+                onClick={() => onSelectNames(cropCandidateNames)}
+                className="btn btn-secondary btn-sm !py-0.5 text-[11px]"
+              >
+                {t('duplicates.selectCropCandidates')}
+              </button>
+              <button
+                type="button"
+                disabled={busy || cropSourceNames.length === 0}
+                onClick={() => onSelectNames(cropSourceNames)}
+                className="btn btn-secondary btn-sm !py-0.5 text-[11px]"
+              >
+                {t('duplicates.selectCropSources')}
+              </button>
+              <button
+                type="button"
+                disabled={busy || cropBothNames.length === 0}
+                onClick={() => onSelectNames(cropBothNames)}
+                className="btn btn-secondary btn-sm !py-0.5 text-[11px]"
+              >
+                {t('duplicates.selectCropBoth')}
+              </button>
+            </>
+          )}
         </div>
       </header>
       <div className="grid grid-cols-1 gap-2 p-2 min-h-0 overflow-y-auto">
-        {blurCandidates.length > 0 && (
+        {showBlur && (
           <QualitySection
             title={t('duplicates.blurTitle')}
             empty={t('duplicates.blurEmpty')}
@@ -594,7 +686,7 @@ function QualityReviewPanel({
             onPreview={onPreview}
           />
         )}
-        {cropRelations.length > 0 && (
+        {!showBlur && (
           <QualitySection
             title={t('duplicates.cropTitle')}
             empty={t('duplicates.cropEmpty')}
