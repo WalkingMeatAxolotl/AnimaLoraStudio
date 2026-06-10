@@ -5,7 +5,7 @@
  *    及其在原串里的 range（commit 时用来切片替换）。逗号边界兼容 ASCII `,`
  *    和中文 `，`；换行也作为分隔（textarea 多行场景）。
  * 2. findSuggestions：根据 token 找 prefix + substring 候选；含 CJK 自动走
- *    反向索引；按 prefix 优先 + 长度升序。
+ *    反向索引；按 prefix 优先，同组内保持词典原始顺序（CSV 按 post_count DESC）。
  */
 import type { ReverseEntry, TagSuggestion } from './types'
 
@@ -117,9 +117,11 @@ export function findSuggestions(
       }
     }
   } else {
-    // 英文正向：扫 tagKeys（已按长度升序），prefix 先，substring 后
+    // 英文正向：扫 tagKeys，prefix 先，substring 后；同时匹配 tag 的紧凑形式
+    // （去除空格和 _），让 "redey" 也能命中 "red eyes"。
     for (const tag of store.tagKeys) {
-      if (tag === token || tag.startsWith(token)) {
+      const compacted = tag.replace(/[\s_]/g, '')
+      if (tag === token || tag.startsWith(token) || compacted.startsWith(token)) {
         pushUnique(candidates, seen, {
           tag, zh: store.entries.get(tag) ?? [],
           matchOrder: 0, weight: tag.length,
@@ -129,7 +131,12 @@ export function findSuggestions(
     }
     if (candidates.length < limit * 2) {
       for (const tag of store.tagKeys) {
-        if (!tag.startsWith(token) && tag.includes(token)) {
+        const compacted = tag.replace(/[\s_]/g, '')
+        if (
+          !tag.startsWith(token) &&
+          !compacted.startsWith(token) &&
+          (tag.includes(token) || compacted.includes(token))
+        ) {
           pushUnique(candidates, seen, {
             tag, zh: store.entries.get(tag) ?? [],
             matchOrder: 1, weight: tag.length,
@@ -140,6 +147,6 @@ export function findSuggestions(
     }
   }
 
-  candidates.sort((a, b) => a.matchOrder - b.matchOrder || a.weight - b.weight)
+  candidates.sort((a, b) => a.matchOrder - b.matchOrder)
   return candidates.slice(0, limit).map(toSuggestion)
 }

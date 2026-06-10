@@ -102,7 +102,7 @@ describe('findSuggestions — English path', () => {
     expect(findSuggestions('foo', buildStore({}))).toEqual([])
   })
 
-  it('finds prefix matches sorted by length', () => {
+  it('finds prefix matches in natural order', () => {
     const r = findSuggestions('lon', store)
     expect(r.map((s) => s.tag)).toEqual(['long hair', 'longest day'])
     expect(r[0].matchType).toBe('prefix')
@@ -125,6 +125,18 @@ describe('findSuggestions — English path', () => {
     // 1girl should show up via substring path
     const r = findSuggestions('girl', store, 5)
     expect(r.find((s) => s.tag === '1girl')?.matchType).toBe('substring')
+  })
+
+  it('matches compacted form (skip spaces/_): "redey" → "red eyes"', () => {
+    const store = buildStore({
+      '1girl': ['1女孩'],
+      'red eyes': ['红眼'],
+      'red hair': ['红发'],
+      'solo': ['单人'],
+    })
+    const r = findSuggestions('redey', store)
+    expect(r.map((s) => s.tag)).toContain('red eyes')
+    expect(r[0].matchType).toBe('prefix')
   })
 
   it('honors limit', () => {

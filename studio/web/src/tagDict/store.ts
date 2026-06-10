@@ -15,7 +15,7 @@ import type { ReverseEntry, TagDictMeta, TagDictPayload, TagDictStatus } from '.
 interface State {
   status: TagDictStatus
   entries: Map<string, string[]>
-  /** key 升序后的 tag 列表（autocomplete prefix/substring 扫描用）。 */
+  /** tag 列表（保持 CSV 原始顺序，即 post_count DESC 的热度排序；autocomplete 扫描用）。 */
   tagKeys: string[]
   reverse: ReverseEntry[]
   meta: TagDictMeta | null
@@ -79,7 +79,7 @@ async function fetchDict(): Promise<void> {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
     const payload = (await resp.json()) as TagDictPayload
     const entries = new Map(Object.entries(payload.entries || {}))
-    const tagKeys = Array.from(entries.keys()).sort((a, b) => a.length - b.length)
+    const tagKeys = Array.from(entries.keys())
     const reverse = buildReverse(entries)
     setState({
       status: 'ready',
