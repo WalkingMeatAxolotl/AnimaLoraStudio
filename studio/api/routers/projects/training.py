@@ -16,8 +16,9 @@
     GET /reg/preview-tags   GET /reg   POST /reg/build
     GET /reg/caption   DELETE /reg
 
-  reg_ai (2)
-    POST /reg/generate-prior   GET /reg/generate-prior/{task_id}
+  reg_ai (3)
+    POST /reg/generate-prior   GET /reg/generate-prior/latest
+    GET /reg/generate-prior/{task_id}
 
   version_config (4)
     GET /config  PUT /config  POST /config/from_preset  POST /config/save_as_preset
@@ -66,7 +67,7 @@ from ....services.projects import jobs as project_jobs, projects, versions
 from ....services.dataset import scan as datasets
 from ....domain import RegAiConfig
 from ....infrastructure.event_bus import bus
-from ....paths import STUDIO_DATA, safe_join
+from ....paths import LOGS_DIR, STUDIO_DATA, safe_join, task_log_path
 from ....services import model_downloader, version_config
 from ....services import presets as preset_flow
 from ....services.tagging import caption_snapshot
@@ -76,6 +77,19 @@ from ....services.tagging.base import VALID_TAGGER_NAMES
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _read_task_log(task_id: int) -> str:
+    p = task_log_path(task_id)
+    if not p.exists():
+        p = LOGS_DIR / f"{task_id}.log"
+    if not p.exists():
+        return ""
+    raw = p.read_text(encoding="utf-8", errors="replace")
+    return "".join(
+        ln for ln in raw.splitlines(keepends=True)
+        if not ln.startswith("__EVENT__:")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -434,6 +448,26 @@ def reg_generate_prior(pid: int, vid: int, body: RegAiRequest) -> dict[str, Any]
 
     bus.publish({"type": "task_state_changed", "task_id": task_id, "status": "pending"})
     return task or {"id": task_id}
+
+
+@router.get("/api/projects/{pid}/versions/{vid}/reg/generate-prior/latest")
+def get_latest_reg_prior_task(pid: int, vid: int) -> dict[str, Any]:
+    """页面 hydrate 用：返回当前 version 最近一次 AI 先验 task + 全量日志。"""
+    with db.connection_for() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM tasks
+            WHERE project_id = ? AND version_id = ? AND task_type = 'reg_ai'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (pid, vid),
+        ).fetchone()
+    task = dict(row) if row else None
+    return {
+        "task": task,
+        "log": _read_task_log(int(task["id"])) if task else "",
+    }
 
 
 @router.get("/api/projects/{pid}/versions/{vid}/reg/generate-prior/{task_id}")

@@ -50,6 +50,8 @@ const ADVANCED_DEFAULTS: AdvancedParams = {
   postprocess_max_crop_ratio: 0.1,
 }
 
+const splitLog = (log: string): string[] => (log ? log.split('\n') : [])
+
 export default function RegularizationPage() {
   const { t } = useTranslation()
   const { project, activeVersion, reload } = useOutletContext<Ctx>()
@@ -77,7 +79,11 @@ export default function RegularizationPage() {
 
   const [job, setJob] = useState<Job | null>(null)
   const [logs, setLogs] = useState<string[]>([])
+  const jobRef = useRef<Job | null>(null)
+  const logsRef = useRef<string[]>([])
   const jobIdRef = useRef<number | null>(null)
+  jobRef.current = job
+  logsRef.current = logs
   jobIdRef.current = job?.id ?? null
 
   // B2（PR-2）：「设置 & 日志」+「先验生成」合并成单 tab「生成」；顶部 source picker
@@ -101,7 +107,11 @@ export default function RegularizationPage() {
   const [aiTask, setAiTask] = useState<Task | null>(null)
   const [aiLogs, setAiLogs] = useState<string[]>([])
   const [aiBusy, setAiBusy] = useState(false)
+  const aiTaskRef = useRef<Task | null>(null)
+  const aiLogsRef = useRef<string[]>([])
   const aiTaskIdRef = useRef<number | null>(null)
+  aiTaskRef.current = aiTask
+  aiLogsRef.current = aiLogs
   aiTaskIdRef.current = aiTask?.id ?? null
 
   // 预览 modal
@@ -165,18 +175,74 @@ export default function RegularizationPage() {
     } catch { /* quota / privacy mode：丢就丢，不打扰用户 */ }
   }, [excludedStorageKey, excluded])
 
-  // 刷新 / 进入页面时回放最近一次 reg_build job：锁回 jid + 回放历史日志
-  useEffect(() => {
+  const refreshLatestRegBuild = useCallback(async () => {
     if (!vid) return
-    void api
-      .getLatestVersionJob(project.id, vid, 'reg_build')
-      .then((r) => {
-        if (!r.job) return
-        setJob(r.job)
-        setLogs(r.log ? r.log.split('\n') : [])
-      })
-      .catch(() => {})
+    try {
+      const r = await api.getLatestVersionJob(project.id, vid, 'reg_build')
+      if (!r.job) {
+        if (jobRef.current?.version_id !== vid) {
+          setJob(null)
+          setLogs([])
+        }
+        return
+      }
+      const current = jobRef.current
+      if (
+        current?.version_id === vid &&
+        current.id !== r.job.id &&
+        (current.status === 'pending' || current.status === 'running')
+      ) return
+      const hydratedLogs = splitLog(r.log)
+      if (
+        current?.version_id === vid &&
+        current.id === r.job.id &&
+        logsRef.current.length > hydratedLogs.length
+      ) return
+      setJob(r.job)
+      setLogs(hydratedLogs)
+    } catch { /* hydrate failure should not block the page */ }
   }, [project.id, vid])
+
+  const refreshLatestRegPrior = useCallback(async () => {
+    if (!vid) return
+    try {
+      const r = await api.getLatestRegPriorTask(project.id, vid)
+      if (!r.task) {
+        if (aiTaskRef.current?.version_id !== vid) {
+          setAiTask(null)
+          setAiLogs([])
+          setAiBusy(false)
+        }
+        return
+      }
+      const current = aiTaskRef.current
+      if (
+        current?.version_id === vid &&
+        current.id !== r.task.id &&
+        (current.status === 'pending' || current.status === 'running')
+      ) return
+      const hydratedLogs = splitLog(r.log)
+      if (
+        current?.version_id === vid &&
+        current.id === r.task.id &&
+        aiLogsRef.current.length > hydratedLogs.length
+      ) return
+      setAiTask(r.task)
+      setAiLogs(hydratedLogs)
+      setAiBusy(r.task.status === 'running' || r.task.status === 'pending')
+    } catch { /* hydrate failure should not block the page */ }
+  }, [project.id, vid])
+
+  // 刷新 / 进入页面时回放最近一次生成任务：锁回 id + 回放历史日志。
+  useEffect(() => {
+    void refreshLatestRegBuild()
+    void refreshLatestRegPrior()
+  }, [refreshLatestRegBuild, refreshLatestRegPrior])
+
+  const refreshLiveLogs = useCallback(() => {
+    void refreshLatestRegBuild()
+    void refreshLatestRegPrior()
+  }, [refreshLatestRegBuild, refreshLatestRegPrior])
 
   useEventStream((evt) => {
     const jid = jobIdRef.current
@@ -202,7 +268,7 @@ export default function RegularizationPage() {
         }
       }).catch(() => {})
     }
-  })
+  }, { onOpen: refreshLiveLogs })
 
   const trainImageCount = activeVersion?.stats?.train_image_count ?? 0
   // 任意一种生成跑着都视为 live —— 防止 booru / AI 并发同时写 reg/。

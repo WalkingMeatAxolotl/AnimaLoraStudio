@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useOutletContext } from 'react-router-dom'
 import {
@@ -122,6 +122,8 @@ function fromLLMPreset(p: LLMPreset): LLMTaggerForm {
   }
 }
 
+const splitLog = (log: string): string[] => (log ? log.split('\n') : [])
+
 export default function TaggingPage() {
   const { t } = useTranslation()
   const { project, activeVersion, reload } = useOutletContext<Ctx>()
@@ -146,7 +148,11 @@ export default function TaggingPage() {
 
   const [job, setJob] = useState<Job | null>(null)
   const [logs, setLogs] = useState<string[]>([])
+  const jobRef = useRef<Job | null>(null)
+  const logsRef = useRef<string[]>([])
   const jobIdRef = useRef<number | null>(null)
+  jobRef.current = job
+  logsRef.current = logs
   jobIdRef.current = job?.id ?? null
 
   useEffect(() => {
@@ -176,17 +182,38 @@ export default function TaggingPage() {
   }, [tagger])
 
   const vid = activeVersion?.id ?? null
-  useEffect(() => {
+
+  const refreshLatestTagJob = useCallback(async () => {
     if (!vid) return
-    void api
-      .getLatestVersionJob(project.id, vid, 'tag')
-      .then((r) => {
-        if (!r.job) return
-        setJob(r.job)
-        setLogs(r.log ? r.log.split('\n') : [])
-      })
-      .catch(() => {})
+    try {
+      const r = await api.getLatestVersionJob(project.id, vid, 'tag')
+      if (!r.job) {
+        if (jobRef.current?.version_id !== vid) {
+          setJob(null)
+          setLogs([])
+        }
+        return
+      }
+      const current = jobRef.current
+      if (
+        current?.version_id === vid &&
+        current.id !== r.job.id &&
+        (current.status === 'pending' || current.status === 'running')
+      ) return
+      const hydratedLogs = splitLog(r.log)
+      if (
+        current?.version_id === vid &&
+        current.id === r.job.id &&
+        logsRef.current.length > hydratedLogs.length
+      ) return
+      setJob(r.job)
+      setLogs(hydratedLogs)
+    } catch { /* hydrate failure should not block tagging controls */ }
   }, [project.id, vid])
+
+  useEffect(() => {
+    void refreshLatestTagJob()
+  }, [refreshLatestTagJob])
 
   // version 切换时同步 triggerWord 初值（持久化字段，避免回到 "" 让用户以为没保存）
   useEffect(() => {
@@ -203,7 +230,7 @@ export default function TaggingPage() {
         void reload()
       }
     }
-  })
+  }, { onOpen: () => void refreshLatestTagJob() })
 
   if (!activeVersion) {
     return <p className="text-fg-tertiary p-6">{t('tag.noVersion')}</p>
