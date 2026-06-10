@@ -26,11 +26,13 @@ zip 结构（schema_version 2，bundle.zip）：
     └── presets/         # 可选：预设
         └── {name}.yaml
 
-导入语义：永远新建 project + v1（不合并到现有），slug 冲突自动加 -imported-{ts}。
+导入语义：永远新建 project + source.version_label（缺失/非法时 v1，不合并到现有），
+slug 冲突自动加 -imported-{ts}。
 """
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 import zipfile
@@ -49,6 +51,7 @@ TRAIN_PREFIX = "train/"
 REG_PREFIX = "reg/"
 PRESETS_PREFIX = "presets/"
 CAPTION_EXTS = {".txt"}
+VERSION_LABEL_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 VERSION_CONFIG_ARC = "presets/config.yaml"
@@ -455,6 +458,8 @@ def export_bundle(
             "title": p["title"],
             "version_label": v["label"],
             "slug": p["slug"],
+            "preset_name": v.get("config_name"),
+            "config_name": v.get("config_name"),
         },
         "includes": {
             "train": opts.train,
@@ -521,12 +526,25 @@ def _safe_arc_bundle(name: str) -> Optional[tuple[str, str]]:
     return None
 
 
+def _bundle_source_version_label(source: dict[str, Any]) -> str:
+    raw = str(source.get("version_label") or "v1").strip()
+    return raw if VERSION_LABEL_RE.fullmatch(raw) else "v1"
+
+
+def _bundle_source_preset_name(source: dict[str, Any]) -> Optional[str]:
+    raw = source.get("preset_name") or source.get("config_name")
+    if raw is None:
+        return None
+    name = str(raw).strip()
+    return name or None
+
+
 def import_bundle(
     conn: sqlite3.Connection,
     zip_path: Path,
     presets_base: Path,
 ) -> dict[str, Any]:
-    """从 bundle.zip（schema_version 1 或 2）导入，新建 project + v1。
+    """从 bundle.zip（schema_version 1 或 2）导入，新建 project + source version。
 
     v1（旧 train.zip）：等同于 import_train。
     v2：按 manifest.includes 分别处理 train / reg / presets。
@@ -547,6 +565,8 @@ def import_bundle(
             source = manifest.get("source") or {}
             title = (source.get("title") or "imported").strip() or "imported"
             base_slug = projects.slugify(source.get("slug") or title)
+            version_label = _bundle_source_version_label(source)
+            preset_name = _bundle_source_preset_name(source)
 
             if schema_ver == 1:
                 # v1：仅 train/ entries，用原有安全检查
@@ -566,7 +586,9 @@ def import_bundle(
                 slug = _resolve_slug_conflict(conn, base_slug)
                 p = projects.create_project(conn, title=title, slug=slug,
                                              note=f"imported from {title!r}")
-                v = versions.create_version(conn, project_id=p["id"], label="v1")
+                v = versions.create_version(conn, project_id=p["id"], label=version_label)
+                if preset_name:
+                    v = versions.update_version(conn, v["id"], config_name=preset_name)
                 vdir = versions.version_dir(p["id"], p["slug"], v["label"])
                 train_dir = vdir / "train"
                 seen_folders: set[str] = set()
@@ -622,7 +644,9 @@ def import_bundle(
             slug = _resolve_slug_conflict(conn, base_slug)
             p = projects.create_project(conn, title=title, slug=slug,
                                          note=f"imported from {title!r}")
-            v = versions.create_version(conn, project_id=p["id"], label="v1")
+            v = versions.create_version(conn, project_id=p["id"], label=version_label)
+            if preset_name:
+                v = versions.update_version(conn, v["id"], config_name=preset_name)
             vdir = versions.version_dir(p["id"], p["slug"], v["label"])
 
             # --- 写入 train ---

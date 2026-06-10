@@ -249,6 +249,63 @@ def test_import_bad_zip(isolated, tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_export_bundle_records_version_and_preset_names(isolated, tmp_path: Path) -> None:
+    p, v, train = _make_project_with_train(isolated, label="anime-v2")
+    (train / "1_data").mkdir(parents=True, exist_ok=True)
+    (train / "1_data" / "a.png").write_bytes(_png())
+
+    dest = tmp_path / "out.bundle.zip"
+    with db.connection_for(isolated["db"]) as conn:
+        versions.update_version(conn, v["id"], config_name="style_preset")
+        result = train_io.export_bundle(
+            conn,
+            v["id"],
+            dest,
+            train_io.BundleOptions(train=True, train_captions=True),
+        )
+
+    source = result["manifest"]["source"]
+    assert source["version_label"] == "anime-v2"
+    assert source["preset_name"] == "style_preset"
+    assert source["config_name"] == "style_preset"
+
+    with zipfile.ZipFile(dest) as zf:
+        manifest = json.loads(zf.read("manifest.json"))
+    assert manifest["source"]["version_label"] == "anime-v2"
+    assert manifest["source"]["preset_name"] == "style_preset"
+
+
+def test_import_bundle_restores_version_and_preset_names(isolated, tmp_path: Path) -> None:
+    bundle = tmp_path / "named.bundle.zip"
+    with zipfile.ZipFile(bundle, "w", compression=zipfile.ZIP_STORED) as zf:
+        zf.writestr(
+            "manifest.json",
+            json.dumps({
+                "schema_version": 2,
+                "source": {
+                    "title": "Named Bundle",
+                    "slug": "named-bundle",
+                    "version_label": "anime-v2",
+                    "preset_name": "style_preset",
+                },
+                "includes": {"train": True},
+            }),
+        )
+        zf.writestr("train/1_data/a.png", b"fake")
+
+    with db.connection_for(isolated["db"]) as conn:
+        result = train_io.import_bundle(conn, bundle, presets_base=tmp_path / "presets")
+
+    assert result["version"]["label"] == "anime-v2"
+    assert result["version"]["config_name"] == "style_preset"
+    train_dir = versions.version_dir(
+        result["project"]["id"],
+        result["project"]["slug"],
+        "anime-v2",
+    ) / "train"
+    assert (train_dir / "1_data" / "a.png").exists()
+
+
 def _build_bundle_with_config(
     tmp_path: Path,
     *,
