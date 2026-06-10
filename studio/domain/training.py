@@ -607,6 +607,36 @@ class TrainingConfig(BaseModel):
         description="detail_inv_t 权重上限。默认 5.0；降低（如 3）减弱细节强化，提高（如 8）激进强化细节",
         json_schema_extra=_meta("loss", show_when="loss_weighting==detail_inv_t", advanced=True),
     )
+    leap_enabled: bool = Field(
+        False,
+        description="【LeapAlign 自蒸馏】启用两步跳跃自蒸馏（去奖励模型版）：每步用真实 latent 当 x0，per-sample 采两个时刻 (k>j) 做两步跳跃，loss=MSE(两步预测的 x̂0, 真实 x0)。本质是 shortcut/consistency 式自蒸馏，每步 2 次前向（约 2× 标准训练算力）。与 InfoNoise/loss_weighting 互斥",
+        json_schema_extra=_meta("loss"),
+    )
+    leap_ratio: float = Field(
+        1.0, ge=0.0, le=1.0,
+        description="【LeapAlign 混合训练】每步按此概率走 leap 自蒸馏、其余走传统 rectified flow：1.0 纯 leap（管全局结构）；0.0 纯传统（管细节锐度）；0.6 大头吃 leap 全局对齐、留点传统精修兜住细节。两股梯度叠在同一组 LoRA 权重上各取所长",
+        json_schema_extra=_meta("loss", show_when="leap_enabled==true", advanced=True),
+    )
+    leap_nested_grad_coe: float = Field(
+        0.3, ge=0.0, le=1.0,
+        description="【LeapAlign】梯度折扣 α（论文 Eq 9）：缩放第二跳对 x_j 的嵌套梯度。0=砍掉嵌套梯度（最省显存），1=不折扣（梯度最完整但易爆）。论文最优 0.3",
+        json_schema_extra=_meta("loss", show_when="leap_enabled==true", advanced=True),
+    )
+    leap_min_gap: float = Field(
+        0.1, ge=0.01, le=0.9,
+        description="【LeapAlign】两个采样时刻 (k,j) 的最小间隔：越大跳跃跨度越大、自蒸馏越激进但误差累积越多。典型 0.1-0.3",
+        json_schema_extra=_meta("loss", show_when="leap_enabled==true", advanced=True),
+    )
+    leap_traj_sim_weighting: bool = Field(
+        False,
+        description="【LeapAlign】轨迹相似度加权（论文 Eq 12）：跳跃越贴近真实路径权重越高，抑制大跨度跳跃的离谱预测主导 loss。默认关",
+        json_schema_extra=_meta("loss", show_when="leap_enabled==true", advanced=True),
+    )
+    leap_traj_sim_min: float = Field(
+        0.1, ge=1e-4,
+        description="【LeapAlign】轨迹相似度加权下限 τ：防止近乎相同的跳跃对被 1/d 过度放大。越小越激进。典型 0.05-0.2",
+        json_schema_extra=_meta("loss", show_when="leap_traj_sim_weighting==true", advanced=True),
+    )
     grad_clip_max_norm: float = Field(
         1.0, ge=0.0,
         description="梯度裁剪最大范数：当本步所有可训练参数的梯度全局范数超过该值时按比例缩到该值，防止单步极端梯度把模型推飞；默认 1.0 适合绝大多数场景，bf16+DoRA/LoKr 不稳可降到 0.5，0=禁用",
@@ -750,6 +780,36 @@ class TrainingConfig(BaseModel):
                 "（I-MMSE 推导假设标准高斯 noise）。请二选一：(a) 关闭 InfoNoise 保留噪声增强；"
                 "或 (b) 设 noise_enhancement_type=none 走 InfoNoise 自适应路径。"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_leap_exclusive(self) -> "TrainingConfig":
+        """LeapAlign 自蒸馏与 InfoNoise / loss_weighting 互斥。
+
+        leap 路径每步 per-sample 采两个时刻 (k,j) 做两步跳跃，单步只有 (k,j) 这对
+        timestep，不存在标准路径里那个唯一的 t：
+        - InfoNoise：用单一 t 的 raw MSE 学 I-MMSE schedule，双 timestep 无从 record；
+          且 leap 的 loss 是 x̂0 自蒸馏 MSE，不是 v 预测 MSE，语义也不匹配。
+        - loss_weighting：min_snr / detail_inv_t / cosmap 全都按单一 t 算 SNR 权重，
+          双 timestep 没有定义；leap 自带 traj_sim_weighting 做轨迹质量加权。
+        故 leap 路径在 loop.py 里有意跳过这两个机制，这里强制配置层面关闭，避免用户
+        以为开了却被静默忽略。
+        """
+        if self.leap_enabled:
+            if self.infonoise_enabled:
+                raise ValueError(
+                    "leap_enabled=true 与 infonoise_enabled=true 互斥：leap 每步采两个时刻 "
+                    "(k,j) 做两步跳跃，没有 InfoNoise 学 I-MMSE 所需的单一 t，且 loss 是 x̂0 "
+                    "自蒸馏而非 v 预测 MSE。请二选一：(a) 关闭 leap 用 InfoNoise；"
+                    "或 (b) 设 infonoise_enabled=false 走 leap 自蒸馏。"
+                )
+            if self.loss_weighting != "none":
+                raise ValueError(
+                    f"leap_enabled=true 与 loss_weighting={self.loss_weighting!r} 互斥：loss 加权"
+                    "按单一 t 算 SNR 权重，leap 的双 timestep 无从定义；leap 用 "
+                    "leap_traj_sim_weighting 做轨迹质量加权。请二选一：(a) 关闭 leap；"
+                    "或 (b) 设 loss_weighting=none 走 leap 自蒸馏。"
+                )
         return self
 
     # ---------------------------------------------------------------- 输出/保存
