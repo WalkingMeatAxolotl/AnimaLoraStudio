@@ -157,6 +157,9 @@ def apply_loras(
 ) -> list[Any]:
     """对每个 LoRA 单独 inject 一份 AnimaLycorisAdapter；forward 时 hook 累加 delta。
 
+    dtype 是 LoRA network / tensor 的计算 dtype。ComfyUI weight adapter 会用
+    fp32 中间精度计算 LoRA delta；测试生成 parity 路径应传 torch.float32。
+
     multiplier 字段控制每份 LoRA 贡献权重（用户传的 scale）：
       - LycorisNetwork.multiplier 是 forward 内取的全局倍率
       - per-lora module 也设一份兜底（lycoris 不同版本取值路径有差异）
@@ -187,6 +190,8 @@ def apply_loras(
             lora_reg_dims=meta.lora_reg_dims,
         )
         adapter.inject(model)
+        if adapter.network is not None:
+            adapter.network.to(device=device, dtype=dtype)
 
         if adapter.network is not None:
             adapter.network.multiplier = float(spec.scale)

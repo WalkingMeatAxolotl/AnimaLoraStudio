@@ -37,6 +37,7 @@ from ..errors import _validate_component_or_400
 from ..schemas.generate import GenerateRequest
 from ... import db, secrets
 from ...domain import GenerateConfig
+from ...domain.comfy_parity import force_comfy_parity_runtime_config
 from ...infrastructure.event_bus import bus
 from ...infrastructure.paths import STUDIO_DATA
 
@@ -158,8 +159,9 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
         tempdir = generate_tempdir(task_id)
         tempdir.mkdir(parents=True, exist_ok=True)
 
-        # attention_backend：secrets 读默认；body 给值则覆盖（兼容旧客户端）
-        # secrets 默认 'auto' → 调 detect_attention_backend 按"装了什么用什么"决定
+        # 测试出图走 Comfy-style runtime。xformers backend 可提供 pinned oracle
+        # 的 exact KSampler parity；flash_attn/none 可生成但不保证 exact parity。
+        # preview 节流仍读 settings；训练 / RegAI 的 backend 选择不受影响。
         try:
             gen_cfg = secrets.load().generate
             attn_default = gen_cfg.attention_backend
@@ -186,13 +188,16 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
             count=body.count,
             seed=body.seed,
             lora_configs=[lc.model_dump() for lc in body.lora_configs],
-            mixed_precision=body.mixed_precision,
+            mixed_precision="bf16",
             attention_backend=attn,
             xy_matrix=body.xy_matrix.model_dump() if body.xy_matrix else None,
         )
 
         # commit 14：注入 daemon 端用的 preview 节流参数（settings 全局开关）
-        cfg_dict = cfg.model_dump()
+        cfg_dict = force_comfy_parity_runtime_config(
+            cfg.model_dump(),
+            force_exact_ksampler_backend=False,
+        )
         cfg_dict["preview_every_n_steps"] = preview_n
 
         # 决策 #15：task 启动时冻结 save_test_images，避免用户中途切开关导致

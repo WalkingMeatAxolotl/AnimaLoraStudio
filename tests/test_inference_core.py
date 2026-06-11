@@ -212,6 +212,8 @@ def test_apply_loras_each_lora_injects_separately(tmp_path: Path) -> None:
     # multiplier 设为 spec.scale
     assert created[0].network.multiplier == 1.0
     assert created[1].network.multiplier == 0.5
+    created[0].network.to.assert_called_with(device="cpu", dtype=torch.float32)
+    created[1].network.to.assert_called_with(device="cpu", dtype=torch.float32)
 
 
 def test_apply_loras_skips_missing_path(tmp_path: Path) -> None:
@@ -251,12 +253,18 @@ def test_model_cache_hot_reloads_same_topology_lora_ckpt(tmp_path: Path) -> None
     _write_lora_safetensors(p2, rank=16, alpha=8.0, algo="lokr", factor=8)
 
     created: list[MagicMock] = []
+    loaded_dtypes: list[torch.dtype] = []
 
     def _fake_adapter(*args: object, **kwargs: object) -> MagicMock:
         m = MagicMock()
         m.network = MagicMock()
         m.network.loras = []
-        m.load_state_dict.return_value = MagicMock(missing_keys=[], unexpected_keys=[])
+
+        def _load(sd, *_args, **_kwargs):
+            loaded_dtypes.extend(t.dtype for t in sd.values())
+            return MagicMock(missing_keys=[], unexpected_keys=[])
+
+        m.load_state_dict.side_effect = _load
         created.append(m)
         return m
 
@@ -265,7 +273,7 @@ def test_model_cache_hot_reloads_same_topology_lora_ckpt(tmp_path: Path) -> None
     cache = ModelCache()
     cache.model = MagicMock()
     cache.device = "cpu"
-    cache.dtype = torch.float32
+    cache.dtype = torch.bfloat16
 
     with _patched_adapter(_fake_adapter):
         first = cache.apply_loras([{"path": str(p1), "scale": 1.0}])
@@ -278,6 +286,53 @@ def test_model_cache_hot_reloads_same_topology_lora_ckpt(tmp_path: Path) -> None
     assert created[0].load_state_dict.call_count == 2
     assert created[0].network.multiplier == 0.5
     assert cache.last_lora_specs == [LoRASpec(path=str(p2), scale=0.5)]
+    assert loaded_dtypes
+    assert all(dtype == torch.float32 for dtype in loaded_dtypes)
+
+
+def test_model_cache_moves_offloaded_model_before_injecting_lora(tmp_path: Path, monkeypatch) -> None:
+    """VAE decode offloads the base model to CPU; adding LoRA next must move it back first."""
+    p = tmp_path / "a.safetensors"
+    _write_lora_safetensors(p, rank=16, alpha=8.0, algo="lokr", factor=8)
+
+    from runtime import anima_daemon as mod
+
+    events: list[str] = []
+
+    class FakeModel:
+        def to(self, device=None, **_kwargs):
+            events.append(f"model.to:{device}")
+            return self
+
+        def eval(self):
+            events.append("model.eval")
+            return self
+
+    class FakeAdapter:
+        def __init__(self) -> None:
+            self.network = MagicMock()
+
+        def load_state_dict(self, *_args, **_kwargs):
+            return MagicMock(missing_keys=[], unexpected_keys=[])
+
+    def fake_apply_loras(model, specs, device, dtype):
+        events.append("apply_loras")
+        assert "model.to:cuda" in events
+        assert dtype == torch.float32
+        return [FakeAdapter()]
+
+    cache = mod.ModelCache()
+    cache.model = FakeModel()
+    cache.qwen_model = None
+    cache.device = "cuda"
+    cache.dtype = torch.bfloat16
+
+    monkeypatch.setattr(mod, "apply_loras", fake_apply_loras)
+
+    adapters = cache.apply_loras([{"path": str(p), "scale": 1.0}])
+
+    assert len(adapters) == 1
+    assert events[:2] == ["model.to:cuda", "apply_loras"]
 
 
 def test_model_cache_reinjects_when_lora_topology_changes(tmp_path: Path) -> None:
