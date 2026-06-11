@@ -286,5 +286,6 @@ Step 7 的 training-integrated eval POC 用已有 CLIP / DINO 指标回答“同
 job id FIFO 调度，已完成 sample 后新排出的 `eval_clip` / `eval_dino` 可能被后续大量
 `eval_samples` 堵在后面，用户需要等待更多采样完成后才能看到已经可计算的指标。
 
-对应修复是让 eval metric job 优先于后续 eval sample job 调度，并把 `auto_metrics` /
-`auto_source` 写入 run metadata，方便后续 UI 和排障直接从 `run.json` 判断自动评估来源。
+对应修复是让 eval metric job 优先于后续 eval sample job 调度，同一 run 已有
+pending/running metric job 时复用已有 job，并把 `auto_metrics` / `auto_source`
+写入 run metadata，方便后续 UI 和排障直接从 `run.json` 判断自动评估来源。
