@@ -168,8 +168,7 @@ def test_training_config_builds_without_collisions() -> None:
     assert ns.lora_rank == 32
     assert ns.lora_type == "lokr"
     assert ns.cache_latents is True
-    assert ns.vae_cache_batch_size == 4
-    assert ns.sample_on_start is False
+    assert ns.vae_cache_batch_size == 0
     assert ns.sample_prompts == []
     assert ns.optimizer_type == "adamw"
 

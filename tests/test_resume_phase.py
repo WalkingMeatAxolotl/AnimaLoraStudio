@@ -11,7 +11,7 @@ class _FakeModel:
         return None
 
 
-def _ctx(tmp_path: Path, *, sample_on_start: bool):
+def _ctx(tmp_path: Path, *, sample_every: int, sample_steps: int = 0):
     from training.context import TrainingContext
 
     args = Namespace(
@@ -21,9 +21,8 @@ def _ctx(tmp_path: Path, *, sample_on_start: bool):
         resume_state="",
         sample_prompts=["p1", "p2"],
         sample_prompt="fallback",
-        sample_steps=0,
-        sample_every=2,
-        sample_on_start=sample_on_start,
+        sample_steps=sample_steps,
+        sample_every=sample_every,
         optimizer_type="adamw",
     )
     ctx = TrainingContext(args=args)
@@ -36,27 +35,15 @@ def _ctx(tmp_path: Path, *, sample_on_start: bool):
     return ctx
 
 
-def test_resume_phase_skips_startup_baseline_by_default(tmp_path, monkeypatch):
+def test_resume_phase_runs_startup_baseline_at_step0(tmp_path, monkeypatch):
+    """周期采样开启时，新训练（global_step == 0）跑 step 0 baseline 采样。"""
     pytest.importorskip("torch")
     from training.phases import resume
 
     calls = []
     monkeypatch.setattr(resume, "run_sample", lambda *args, **kwargs: calls.append(kwargs))
 
-    ctx = _ctx(tmp_path, sample_on_start=False)
-    resume.run(ctx)
-
-    assert calls == []
-
-
-def test_resume_phase_runs_startup_baseline_when_enabled(tmp_path, monkeypatch):
-    pytest.importorskip("torch")
-    from training.phases import resume
-
-    calls = []
-    monkeypatch.setattr(resume, "run_sample", lambda *args, **kwargs: calls.append(kwargs))
-
-    ctx = _ctx(tmp_path, sample_on_start=True)
+    ctx = _ctx(tmp_path, sample_every=2)
     resume.run(ctx)
 
     assert [call["prompt"] for call in calls] == ["p1", "p2"]
@@ -64,3 +51,17 @@ def test_resume_phase_runs_startup_baseline_when_enabled(tmp_path, monkeypatch):
         "step_0_baseline_0.png",
         "step_0_baseline_1.png",
     ]
+
+
+def test_resume_phase_skips_baseline_when_sampling_disabled(tmp_path, monkeypatch):
+    """sample_every / sample_steps 都为 0（周期采样禁用）时不跑 baseline。"""
+    pytest.importorskip("torch")
+    from training.phases import resume
+
+    calls = []
+    monkeypatch.setattr(resume, "run_sample", lambda *args, **kwargs: calls.append(kwargs))
+
+    ctx = _ctx(tmp_path, sample_every=0, sample_steps=0)
+    resume.run(ctx)
+
+    assert calls == []

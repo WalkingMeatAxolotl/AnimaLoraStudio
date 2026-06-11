@@ -78,7 +78,10 @@ def run(ctx: TrainingContext) -> None:
     # 缓存 VAE latents（在 repeat 之前）
     ctx.use_cached = getattr(args, "cache_latents", False)
     if ctx.use_cached:
-        cache_batch_size = int(getattr(args, "vae_cache_batch_size", 4) or 1)
+        # 0 = 跟随训练 batch size（对齐 kohya GUI 的 VAE batch size 语义）
+        cache_batch_size = int(getattr(args, "vae_cache_batch_size", 0) or 0)
+        if cache_batch_size <= 0:
+            cache_batch_size = int(getattr(args, "batch_size", 1) or 1)
         ctx.dataset = CachedLatentDataset(
             ctx.dataset, ctx.vae, ctx.device, ctx.dtype,
             cache_batch_size=cache_batch_size,

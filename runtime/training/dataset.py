@@ -486,7 +486,7 @@ class CachedLatentDataset(Dataset):
     50% 数据被永久镜像污染；新版通过 _is_cache_valid 检测缺 latent_flipped
     键，自动重 encode 修复。
     """
-    def __init__(self, base_dataset, vae, device, dtype, cache_dir=None, cache_batch_size=4):
+    def __init__(self, base_dataset, vae, device, dtype, cache_dir=None, cache_batch_size=1):
         import numpy as np
         self.base_dataset = base_dataset
         self.base_image_dataset = self._get_base_image_dataset(base_dataset)
