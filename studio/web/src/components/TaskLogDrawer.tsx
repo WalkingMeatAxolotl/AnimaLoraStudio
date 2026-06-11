@@ -108,10 +108,13 @@ export default function TaskLogDrawer({
   return (
     <div className="relative shrink-0 mt-2">
       {expanded && (
-        <div className="absolute bottom-full inset-x-0 z-30 mb-1 rounded-md border border-subtle bg-surface shadow-lg overflow-hidden flex flex-col">
+        // 固定 40vh：高度不随日志增长，所有页面一致；顶部 accent 条 +
+        // border-bold + shadow-2xl 把面板从同色背景里抬出来（同 SettingsDrawer）。
+        <div className="absolute bottom-full inset-x-0 z-30 mb-1 h-[40vh] rounded-md border border-bold bg-surface shadow-2xl overflow-hidden flex flex-col">
+          <div className="h-0.5 bg-accent shrink-0" />
           <pre
             ref={preRef}
-            className="m-0 px-3 py-2 text-[11px] leading-relaxed font-mono text-fg-secondary bg-sunken max-h-[min(40vh,480px)] overflow-y-auto whitespace-pre-wrap break-words"
+            className="m-0 px-3 py-2 flex-1 min-h-0 text-[11px] leading-relaxed font-mono text-fg-secondary bg-sunken overflow-y-auto whitespace-pre-wrap break-words"
           >
             {active.lines.length === 0
               ? t('jobProgress.waitingLogs')
