@@ -41,6 +41,8 @@ export function extractCurrentToken(value: string, cursor: number): ExtractedTok
 export interface SuggestStore {
   entries: Map<string, string[]>
   tagKeys: string[]
+  /** tagKeys 的紧凑形式（去空格/_），同下标对齐；store 加载时预计算。 */
+  compactedKeys: string[]
   reverse: ReverseEntry[]
 }
 
@@ -52,10 +54,8 @@ export function hasCjk(s: string): boolean {
 interface InternalCandidate {
   tag: string
   zh: string[]
-  /** prefix=0；substring=1；用于稳定排序。 */
+  /** prefix=0；substring=1。两轮扫描天然 prefix 组在前，无需再排序。 */
   matchOrder: 0 | 1
-  /** 排序键：英文走 tag 长度；中文走匹配到的 zh 长度。 */
-  weight: number
 }
 
 function toSuggestion(c: InternalCandidate): TagSuggestion {
@@ -74,7 +74,8 @@ function pushUnique(out: InternalCandidate[], seen: Set<string>, c: InternalCand
 
 /** 给定查询 token 找候选；空 token / 未加载 → []。
  *
- * 排序：先 matchOrder（prefix 优先），再 weight（短优先）。 */
+ * 顺序：prefix 组在前，组内保持扫描顺序（英文 = 词典行序即热度；
+ * 中文 = zh 长度升序，见 store.buildReverse）。 */
 export function findSuggestions(
   rawToken: string,
   store: SuggestStore,
@@ -94,8 +95,7 @@ export function findSuggestions(
       if (re.zh === token || re.zh.startsWith(token)) {
         for (const tag of re.tags) {
           pushUnique(candidates, seen, {
-            tag, zh: store.entries.get(tag) ?? [],
-            matchOrder: 0, weight: re.zh.length,
+            tag, zh: store.entries.get(tag) ?? [], matchOrder: 0,
           })
           if (candidates.length >= limit * 4) break
         }
@@ -107,8 +107,7 @@ export function findSuggestions(
         if (!re.zh.startsWith(token) && re.zh.includes(token)) {
           for (const tag of re.tags) {
             pushUnique(candidates, seen, {
-              tag, zh: store.entries.get(tag) ?? [],
-              matchOrder: 1, weight: re.zh.length,
+              tag, zh: store.entries.get(tag) ?? [], matchOrder: 1,
             })
             if (candidates.length >= limit * 4) break
           }
@@ -117,36 +116,38 @@ export function findSuggestions(
       }
     }
   } else {
-    // 英文正向：扫 tagKeys，prefix 先，substring 后；同时匹配 tag 的紧凑形式
-    // （去除空格和 _），让 "redey" 也能命中 "red eyes"。
-    for (const tag of store.tagKeys) {
-      const compacted = tag.replace(/[\s_]/g, '')
-      if (tag === token || tag.startsWith(token) || compacted.startsWith(token)) {
-        pushUnique(candidates, seen, {
-          tag, zh: store.entries.get(tag) ?? [],
-          matchOrder: 0, weight: tag.length,
-        })
-        if (candidates.length >= limit * 4) break
-      }
-    }
-    if (candidates.length < limit * 2) {
-      for (const tag of store.tagKeys) {
-        const compacted = tag.replace(/[\s_]/g, '')
-        if (
-          !tag.startsWith(token) &&
-          !compacted.startsWith(token) &&
-          (tag.includes(token) || compacted.includes(token))
-        ) {
+    // 英文正向：扫 tagKeys（词典行序即热度序），prefix 先，substring 后。
+    // 双方都用紧凑形式（去空格/_）比较：tag 侧用预计算的 compactedKeys，
+    // token 侧现算一次 —— "redey" / "red_ey" / "red ey" 都能命中 "red eyes"。
+    // 原串 startsWith/includes 为真时紧凑形式必然也为真，无需重复判断。
+    const compactToken = token.replace(/[\s_]/g, '')
+    if (compactToken) {
+      for (let i = 0; i < store.tagKeys.length; i++) {
+        if (store.compactedKeys[i].startsWith(compactToken)) {
           pushUnique(candidates, seen, {
-            tag, zh: store.entries.get(tag) ?? [],
-            matchOrder: 1, weight: tag.length,
+            tag: store.tagKeys[i],
+            zh: store.entries.get(store.tagKeys[i]) ?? [],
+            matchOrder: 0,
           })
           if (candidates.length >= limit * 4) break
+        }
+      }
+      if (candidates.length < limit * 2) {
+        for (let i = 0; i < store.tagKeys.length; i++) {
+          const compacted = store.compactedKeys[i]
+          if (!compacted.startsWith(compactToken) && compacted.includes(compactToken)) {
+            pushUnique(candidates, seen, {
+              tag: store.tagKeys[i],
+              zh: store.entries.get(store.tagKeys[i]) ?? [],
+              matchOrder: 1,
+            })
+            if (candidates.length >= limit * 4) break
+          }
         }
       }
     }
   }
 
-  candidates.sort((a, b) => a.matchOrder - b.matchOrder)
+  // 两轮扫描天然 prefix 在前 + 组内保持扫描顺序，直接截断即可。
   return candidates.slice(0, limit).map(toSuggestion)
 }

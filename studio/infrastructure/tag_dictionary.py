@@ -50,6 +50,8 @@ def parse_csv(text: str) -> dict[str, list[str]]:
       （如 `breasts,胸部 乳房 oppai`），全部保留让反向索引覆盖度高
     - 空行 / '#' 起头注释跳过
     - 超 MAX_ENTRIES 截断 + 日志告警；返回字典（最后一次出现的 tag 覆盖前面）
+    - 条目顺序 = 文件行序，原样透传给前端做 autocomplete 排序。默认源按
+      post_count 降序（热度序）；用户上传的文件无此保证，补全顺序即其行序
     """
     entries: dict[str, list[str]] = {}
     truncated = False

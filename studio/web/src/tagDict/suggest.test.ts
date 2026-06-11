@@ -81,8 +81,10 @@ function buildStore(entries: Record<string, string[]>): SuggestStore {
   const reverse: ReverseEntry[] = Array.from(reverseMap.entries())
     .map(([zh, tags]) => ({ zh, tags }))
     .sort((a, b) => a.zh.length - b.zh.length)
-  const tagKeys = Array.from(map.keys()).sort((a, b) => a.length - b.length)
-  return { entries: map, tagKeys, reverse }
+  // 与生产 store.fetchDict 一致：tagKeys 保持词典行序（热度序），不重排
+  const tagKeys = Array.from(map.keys())
+  const compactedKeys = tagKeys.map((t) => t.replace(/[\s_]/g, ''))
+  return { entries: map, tagKeys, compactedKeys, reverse }
 }
 
 describe('findSuggestions — English path', () => {
@@ -102,10 +104,19 @@ describe('findSuggestions — English path', () => {
     expect(findSuggestions('foo', buildStore({}))).toEqual([])
   })
 
-  it('finds prefix matches in natural order', () => {
+  it('finds prefix matches in dictionary order', () => {
     const r = findSuggestions('lon', store)
     expect(r.map((s) => s.tag)).toEqual(['long hair', 'longest day'])
     expect(r[0].matchType).toBe('prefix')
+  })
+
+  it('orders prefix matches by dictionary (popularity) order, not length', () => {
+    // 'red eyes' 在词典里靠前（更热门）但比 'red' 长；热度序应当赢
+    const s = buildStore({
+      'red eyes': ['红眼'],
+      'red': ['红'],
+    })
+    expect(findSuggestions('re', s).map((x) => x.tag)).toEqual(['red eyes', 'red'])
   })
 
   it('case-insensitive', () => {
@@ -137,6 +148,18 @@ describe('findSuggestions — English path', () => {
     const r = findSuggestions('redey', store)
     expect(r.map((s) => s.tag)).toContain('red eyes')
     expect(r[0].matchType).toBe('prefix')
+  })
+
+  it('matches when token uses booru underscore form: "red_ey" → "red eyes"', () => {
+    const s = buildStore({ 'red eyes': ['红眼'], 'solo': ['单人'] })
+    const r = findSuggestions('red_ey', s)
+    expect(r.map((x) => x.tag)).toContain('red eyes')
+    expect(r[0].matchType).toBe('prefix')
+  })
+
+  it('returns [] for token made of separators only', () => {
+    // compactToken 为空时必须直接放弃，否则 ''.startsWith 让全字典都命中
+    expect(findSuggestions('_', store)).toEqual([])
   })
 
   it('honors limit', () => {
