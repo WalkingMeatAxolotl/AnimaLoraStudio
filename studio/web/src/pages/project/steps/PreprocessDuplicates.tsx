@@ -112,6 +112,7 @@ export default function PreprocessDuplicatesPage() {
       )
     } catch (e) {
       toast(String(e), 'error')
+      setLogs((prev) => [...prev, { ts: Date.now(), status: 'error', text: String(e) }])
     } finally {
       setBusy(false)
     }
@@ -164,6 +165,22 @@ export default function PreprocessDuplicatesPage() {
       idx={2}
       title={t('steps.preprocess.title')}
       subtitle={t('duplicates.subtitle')}
+      logSources={[
+        scanLogVisible && logs.length > 0 && {
+          key: 'dup_scan',
+          label: t('logDrawer.dupScan'),
+          // 扫描是同步 HTTP + SSE 进度，前端合成状态：跑着 = running，
+          // 否则按最后一条日志判 failed/done。不可取消。
+          status: busy
+            ? ('running' as const)
+            : logs[logs.length - 1]?.status === 'error'
+              ? ('failed' as const)
+              : ('done' as const),
+          lines: logs.map((l) => l.text),
+          startedAt: logs[0] ? logs[0].ts / 1000 : null,
+          finishedAt: busy ? null : logs[logs.length - 1] ? logs[logs.length - 1].ts / 1000 : null,
+        },
+      ]}
     >
       <div className="flex flex-col h-full gap-3 min-h-0">
         <div className="grid gap-3 flex-1 min-h-0" style={{ gridTemplateColumns: '1fr 260px' }}>
@@ -179,7 +196,6 @@ export default function PreprocessDuplicatesPage() {
               onScan={scan}
               onApply={apply}
             />
-            {scanLogVisible && <DuplicateLogStrip logs={logs} busy={busy} />}
             <div className="flex flex-col flex-1 min-h-0 gap-2">
               <div className="shrink-0 rounded-md border border-subtle bg-surface px-2 py-1.5 flex items-center gap-1.5">
                 <button
@@ -496,25 +512,6 @@ function NumberOption({
         style={{ width, padding: '2px 6px' }}
       />
     </label>
-  )
-}
-
-function DuplicateLogStrip({ logs, busy }: { logs: DuplicateLog[]; busy: boolean }) {
-  const { t } = useTranslation()
-  const lastLine = logs[logs.length - 1]?.text ?? ''
-  return (
-    <details open={busy} className="group rounded-md border border-subtle bg-surface overflow-hidden shrink-0">
-      <summary className="cursor-pointer flex items-center gap-2 list-none px-2.5 py-1.5 text-sm select-none">
-        <span className="inline-block transition-transform group-open:rotate-90 text-fg-tertiary w-3">▸</span>
-        <span className={busy ? 'badge badge-warn' : 'badge badge-neutral'}>
-          {busy ? t('duplicates.scanning') : t('duplicates.logTitle')}
-        </span>
-        <span className="mono truncate flex-1 min-w-0 text-fg-secondary text-xs">{lastLine}</span>
-      </summary>
-      <pre className="px-3 py-2 text-xs font-mono text-fg-secondary bg-sunken max-h-[224px] overflow-auto whitespace-pre-wrap border-t border-subtle m-0">
-        {logs.length === 0 ? t('jobProgress.waitingLogs') : logs.map((line) => line.text).join('\n')}
-      </pre>
-    </details>
   )
 }
 

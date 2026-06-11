@@ -16,7 +16,6 @@ import {
 } from '../../../api/client'
 import LLMMessagesEditor from '../../../components/LLMMessagesEditor'
 import TagsInput from '../../../components/TagsInput'
-import JobProgress from '../../../components/JobProgress'
 import StepShell from '../../../components/StepShell'
 import { useToast } from '../../../components/Toast'
 import { useSettingsDrawer } from '../../../lib/SettingsDrawer'
@@ -310,6 +309,22 @@ export default function TaggingPage() {
       idx={3}
       title={t('steps.tag.title')}
       subtitle={t('steps.tag.subtitle')}
+      logSources={[
+        job && {
+          key: 'tag',
+          label: t('logDrawer.tag'),
+          status: job.status,
+          lines: logs,
+          startedAt: job.started_at,
+          finishedAt: job.finished_at,
+          onCancel: () => {
+            void api
+              .cancelJob(job.id)
+              .then(() => toast(t('tag.cancelToast'), 'success'))
+              .catch((e) => toast(String(e), 'error'))
+          },
+        },
+      ]}
       actions={
         <button
           onClick={startTagging}
@@ -324,9 +339,8 @@ export default function TaggingPage() {
 
       <div className="grid gap-3 flex-1 min-h-0" style={{ gridTemplateColumns: '1.5fr 1fr' }}>
 
-        {/* 左栏：参数区可滚动，日志区固定在底部，避免高级选项展开后把日志挤出视口。 */}
-        <div className="flex flex-col gap-3 min-h-0 min-w-0">
-          <div className="flex flex-col gap-3 flex-1 min-h-0 min-w-0 overflow-y-auto pr-1">
+        {/* 左栏：参数区整体滚动；任务日志走 StepShell 的统一抽屉（issue #251） */}
+        <div className="flex flex-col gap-3 min-h-0 min-w-0 overflow-y-auto">
           <section className="rounded-md border border-subtle bg-surface px-3 py-2 flex flex-wrap items-center gap-2 shrink-0 text-sm">
             <span className="text-fg-tertiary">tagger</span>
             <select
@@ -456,24 +470,6 @@ export default function TaggingPage() {
             />
           )}
 
-          </div>
-
-          {job && (
-            <div className="shrink-0">
-              <JobProgress
-                job={job}
-                logs={logs}
-                onCancel={async () => {
-                  try {
-                    await api.cancelJob(job.id)
-                    toast(t('tag.cancelToast'), 'success')
-                  } catch (e) {
-                    toast(String(e), 'error')
-                  }
-                }}
-              />
-            </div>
-          )}
         </div>
 
         {/* 右栏：预览面板 */}

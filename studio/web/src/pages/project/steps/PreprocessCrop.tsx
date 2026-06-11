@@ -9,7 +9,6 @@ import {
   type Version,
 } from '../../../api/client'
 import FreeCropEditor, { type CropRect } from '../../../components/preprocess/FreeCropEditor'
-import PreprocessJobStrip from '../../../components/preprocess/PreprocessJobStrip'
 import PreprocessToolsBar from '../../../components/preprocess/PreprocessToolsBar'
 import StepShell from '../../../components/StepShell'
 import BarHistogram from '../../../components/BarHistogram'
@@ -117,13 +116,35 @@ export default function PreprocessCropPage() {
   const [busy, setBusy] = useState(false)
   const jobIdRef = useRef<number | null>(null)
   jobIdRef.current = job?.id ?? null
-  const isLive = job?.status === 'running' || job?.status === 'pending'
+
+  // 回放（issue #251）：crop 与放大共用 kind=preprocess，走同一 status 端点
+  // 恢复最近一次 preprocess job + log_tail；同一 job 本地已有 SSE 积累时不覆盖。
+  const refreshJobStatus = useCallback(async () => {
+    if (!vid) return
+    try {
+      const r = await api.getPreprocessStatusTrain(project.id, vid)
+      const rid = r.job?.id ?? null
+      setJob(r.job)
+      setLogs((prev) =>
+        rid !== null && rid === jobIdRef.current && prev.length > 0
+          ? prev
+          : r.log_tail
+            ? r.log_tail.split('\n')
+            : [],
+      )
+    } catch {
+      /* ignore */
+    }
+  }, [project.id, vid])
+
+  useEffect(() => { void refreshJobStatus() }, [refreshJobStatus])
+
   useEventStream((evt) => {
     const jid = jobIdRef.current
     if (evt.type === 'job_log_appended' && jid && evt.job_id === jid) {
       setLogs((prev) => [...prev, String(evt.text ?? '')])
     } else if (evt.type === 'job_state_changed' && jid && evt.job_id === jid) {
-      // mirror status change in our job object so JobStrip renders the new badge
+      // mirror status change in our job object so the log drawer renders the new badge
       setJob((prev) =>
         prev ? { ...prev, status: evt.status as Job['status'] } : prev,
       )
@@ -137,7 +158,7 @@ export default function PreprocessCropPage() {
       // Backend throttles crop_progress to ≥1Hz; safe to refresh per event here
       if (evt.status === 'done') void refreshWorkspace()
     }
-  })
+  }, { onOpen: () => void refreshJobStatus() })
 
   const cancelJob = useCallback(async () => {
     if (!job) return
@@ -326,6 +347,17 @@ export default function PreprocessCropPage() {
       idx={2}
       title={t('steps.preprocess.title')}
       subtitle={t('preprocessCrop.subtitle')}
+      logSources={[
+        job && {
+          key: 'preprocess',
+          label: t('logDrawer.preprocess'),
+          status: job.status,
+          lines: logs,
+          startedAt: job.started_at,
+          finishedAt: job.finished_at,
+          onCancel: () => void cancelJob(),
+        },
+      ]}
     >
       <div className="flex flex-col h-full gap-3 min-h-0">
         <div className="grid gap-3 flex-1 min-h-0" style={{ gridTemplateColumns: '1fr 260px' }}>
@@ -346,18 +378,6 @@ export default function PreprocessCropPage() {
               onApplySelected={() => void submitCrop(true)}
               onRunCluster={runClustering}
             />
-            {/* Job log below OperationPanel — same place as upscale page so the
-                two tools have identical UX. Hide entirely when there's no
-                live job AND no current-session logs (stale terminal job from
-                refresh would otherwise show empty). */}
-            {job && (isLive || logs.length > 0) && (
-              <PreprocessJobStrip
-                job={job}
-                logs={logs}
-                onCancel={isLive ? () => void cancelJob() : undefined}
-              />
-            )}
-
             <section className="flex flex-col flex-1 min-h-0 rounded-md border border-subtle bg-surface overflow-hidden">
               <header className="flex items-center gap-2 shrink-0 px-2.5 py-1.5 border-b border-subtle text-sm flex-wrap">
                 <div className="flex items-center gap-1">

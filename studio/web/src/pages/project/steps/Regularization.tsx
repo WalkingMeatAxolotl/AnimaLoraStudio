@@ -15,7 +15,6 @@ import {
 } from '../../../api/client'
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import ImagePreviewModal from '../../../components/ImagePreviewModal'
-import JobProgress from '../../../components/JobProgress'
 import StepShell from '../../../components/StepShell'
 import { TranslatedTag } from '../../../components/tagDisplay/TranslatedTag'
 import { TagSuggestList } from '../../../components/tagSuggest/TagSuggestList'
@@ -356,6 +355,30 @@ export default function RegularizationPage() {
       idx={5}
       title={t('steps.reg.title')}
       subtitle={t('steps.reg.subtitle')}
+      logSources={[
+        job && {
+          key: 'reg_build',
+          label: t('logDrawer.regBuild'),
+          status: job.status,
+          lines: logs,
+          startedAt: job.started_at,
+          finishedAt: job.finished_at,
+          onCancel: () => {
+            void api
+              .cancelJob(job.id)
+              .then(() => toast(t('reg.cancelToast'), 'success'))
+              .catch((e) => toast(String(e), 'error'))
+          },
+        },
+        aiTask && {
+          key: 'reg_ai',
+          label: t('logDrawer.regPrior'),
+          status: aiTask.status,
+          lines: aiLogs,
+          startedAt: aiTask.started_at,
+          finishedAt: aiTask.finished_at,
+        },
+      ]}
       actions={
         <button
           onClick={() => {
@@ -441,25 +464,6 @@ export default function RegularizationPage() {
                 autoTagKind={autoTagKind} onAutoTagKindChange={setAutoTagKind}
                 autoDedup={autoDedup} onAutoDedupChange={setAutoDedup}
                 advanced={advanced} onAdvancedChange={setAdvanced}
-              />
-            )}
-
-            {/* 运行日志：全宽置底 */}
-            {(job || aiTask) && (
-              <LogPanel
-                job={job}
-                jobLogs={logs}
-                onCancelJob={async () => {
-                  if (!job) return
-                  try {
-                    await api.cancelJob(job.id)
-                    toast(t('reg.cancelToast'), 'success')
-                  } catch (e) {
-                    toast(String(e), 'error')
-                  }
-                }}
-                aiTask={aiTask}
-                aiLogs={aiLogs}
               />
             )}
 
@@ -1371,67 +1375,6 @@ function AdvancedFields({
     </>
   )
 }
-
-// 运行日志全宽置底
-function LogPanel({
-  job, jobLogs, onCancelJob, aiTask, aiLogs,
-}: {
-  job: Job | null
-  jobLogs: string[]
-  onCancelJob: () => Promise<void>
-  aiTask: Task | null
-  aiLogs: string[]
-}) {
-  const { t } = useTranslation()
-  // 优先显示进行中的 job；否则展示 aiTask
-  if (job) {
-    return (
-      <div className="mt-4">
-        <JobProgress
-          job={job}
-          logs={jobLogs}
-          onCancel={onCancelJob}
-        />
-      </div>
-    )
-  }
-  if (aiTask) {
-    return (
-      <div className="mt-4 rounded-lg border border-subtle bg-surface overflow-hidden">
-        <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-subtle text-sm font-semibold">
-          <span>{t('reg.aiLogTitle')}</span>
-          <AiTaskBadge task={aiTask} />
-        </div>
-        {aiLogs.length > 0 && (
-          <pre className="m-0 px-4 py-3.5 bg-sunken font-mono text-xs leading-relaxed text-fg-tertiary max-h-72 overflow-auto whitespace-pre-wrap break-words">
-            {aiLogs.join('\n')}
-          </pre>
-        )}
-      </div>
-    )
-  }
-  return null
-}
-
-function AiTaskBadge({ task }: { task: Task }) {
-  const { t } = useTranslation()
-  const label =
-    task.status === 'done' ? t('reg.aiStatusDone') :
-    task.status === 'running' ? t('reg.aiStatusRunning') :
-    task.status === 'failed' ? t('reg.aiStatusFailed') :
-    task.status === 'pending' ? t('reg.aiStatusPending') :
-    task.status === 'canceled' ? t('reg.aiStatusCanceled') : task.status
-  const cls =
-    task.status === 'done' ? 'bg-ok-soft text-ok' :
-    task.status === 'running' ? 'bg-info-soft text-info' :
-    task.status === 'failed' ? 'bg-err-soft text-err' : 'bg-overlay text-fg-tertiary'
-  return (
-    <span className={`font-mono text-2xs px-2 py-0.5 rounded-full ${cls}`}>
-      {label} · #{task.id}
-    </span>
-  )
-}
-
 
 function RegPreview({
   pid,
