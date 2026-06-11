@@ -193,8 +193,6 @@ export default function TagEditor({
                   if (draftSuggest.handleKeyDown(e)) return
                   if (e.key === 'Enter' || e.key === ',' || e.key === '，') {
                     e.preventDefault(); addTag(draft)
-                  } else if (e.key === 'Backspace' && !draft && tags.length) {
-                    removeTag(tags[tags.length - 1])
                   }
                 }}
                 onFocus={() => draftSuggest.notifyFocus()}
