@@ -410,6 +410,46 @@ def test_on_existing_skip_preserves_existing_json(env) -> None:
     assert not (env["train"] / "a.txt").exists()
 
 
+def test_on_existing_skip_filters_before_tagger(env, monkeypatch: pytest.MonkeyPatch) -> None:
+    """skip：已有 caption 的图片不应进入 tagger，避免 LLM/ONNX 白跑。"""
+    seen: list[str] = []
+
+    class _SpyTagger(_FakeTagger):
+        def tag(self, paths, on_progress=lambda d, t: None):
+            seen.extend(p.name for p in paths)
+            yield from super().tag(paths, on_progress=on_progress)
+
+    (env["train"] / "a.txt").write_text("manual_a, kept", encoding="utf-8")
+    _set_on_existing(env, "skip")
+    monkeypatch.setattr(
+        "studio.workers.tag_worker.get_tagger",
+        lambda name, overrides=None: _SpyTagger(),
+    )
+
+    rc = tag_worker.run(env["job_id"])
+    assert rc == 0
+    assert seen == ["b.png"]
+    assert (env["train"] / "a.txt").read_text(encoding="utf-8") == "manual_a, kept"
+    assert (env["train"] / "b.txt").read_text(encoding="utf-8") == "tag_b, common"
+
+
+def test_on_existing_skip_all_does_not_prepare_tagger(env, monkeypatch: pytest.MonkeyPatch) -> None:
+    """skip：全量已有 caption 时不实例化 tagger，尤其避免 LLM 请求。"""
+    (env["train"] / "a.txt").write_text("manual_a", encoding="utf-8")
+    (env["train"] / "b.txt").write_text("manual_b", encoding="utf-8")
+    _set_on_existing(env, "skip")
+
+    def _factory(name: str, overrides=None):
+        raise AssertionError("tagger should not be created when all images are skipped")
+
+    monkeypatch.setattr("studio.workers.tag_worker.get_tagger", _factory)
+
+    rc = tag_worker.run(env["job_id"])
+    assert rc == 0
+    assert (env["train"] / "a.txt").read_text(encoding="utf-8") == "manual_a"
+    assert (env["train"] / "b.txt").read_text(encoding="utf-8") == "manual_b"
+
+
 def test_on_existing_append_merges_and_dedupes_txt(env) -> None:
     """append：现有 tag 在前，tagger 新 tag 追加在后；重复去重。"""
     (env["train"] / "a.txt").write_text("existing, common", encoding="utf-8")

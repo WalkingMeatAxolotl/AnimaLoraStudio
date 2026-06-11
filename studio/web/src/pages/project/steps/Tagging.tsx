@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useOutletContext } from 'react-router-dom'
 import {
@@ -21,6 +21,7 @@ import StepShell from '../../../components/StepShell'
 import { useToast } from '../../../components/Toast'
 import { useSettingsDrawer } from '../../../lib/SettingsDrawer'
 import { useEventStream } from '../../../lib/useEventStream'
+import { useLatestJobReplay } from '../../../lib/useLatestJobReplay'
 
 interface Ctx {
   project: ProjectDetail
@@ -144,10 +145,18 @@ export default function TaggingPage() {
   const [llmForm, setLlmForm] = useState<LLMTaggerForm | null>(null)
   const [advOpen, setAdvOpen] = useState(false)
 
-  const [job, setJob] = useState<Job | null>(null)
-  const [logs, setLogs] = useState<string[]>([])
-  const jobIdRef = useRef<number | null>(null)
-  jobIdRef.current = job?.id ?? null
+  const vid = activeVersion?.id ?? null
+
+  const {
+    item: job,
+    logs,
+    setItem: setJob,
+    setLogs,
+    itemIdRef: jobIdRef,
+    refresh: refreshLatestTagJob,
+  } = useLatestJobReplay<Job>(vid, (v) =>
+    api.getLatestVersionJob(project.id, v, 'tag').then((r) => ({ item: r.job, log: r.log })),
+  )
 
   useEffect(() => {
     void api
@@ -175,18 +184,10 @@ export default function TaggingPage() {
       )
   }, [tagger])
 
-  const vid = activeVersion?.id ?? null
+  // 刷新 / 进入页面时回放最近一次打标 job：锁回 id + 回放历史日志。
   useEffect(() => {
-    if (!vid) return
-    void api
-      .getLatestVersionJob(project.id, vid, 'tag')
-      .then((r) => {
-        if (!r.job) return
-        setJob(r.job)
-        setLogs(r.log ? r.log.split('\n') : [])
-      })
-      .catch(() => {})
-  }, [project.id, vid])
+    void refreshLatestTagJob()
+  }, [refreshLatestTagJob])
 
   // version 切换时同步 triggerWord 初值（持久化字段，避免回到 "" 让用户以为没保存）
   useEffect(() => {
@@ -203,7 +204,7 @@ export default function TaggingPage() {
         void reload()
       }
     }
-  })
+  }, { onOpen: () => void refreshLatestTagJob() })
 
   if (!activeVersion) {
     return <p className="text-fg-tertiary p-6">{t('tag.noVersion')}</p>
@@ -323,9 +324,9 @@ export default function TaggingPage() {
 
       <div className="grid gap-3 flex-1 min-h-0" style={{ gridTemplateColumns: '1.5fr 1fr' }}>
 
-        {/* 左栏 */}
-        <div className="flex flex-col gap-3 min-h-0 min-w-0 overflow-y-auto">
-
+        {/* 左栏：参数区可滚动，日志区固定在底部，避免高级选项展开后把日志挤出视口。 */}
+        <div className="flex flex-col gap-3 min-h-0 min-w-0">
+          <div className="flex flex-col gap-3 flex-1 min-h-0 min-w-0 overflow-y-auto pr-1">
           <section className="rounded-md border border-subtle bg-surface px-3 py-2 flex flex-wrap items-center gap-2 shrink-0 text-sm">
             <span className="text-fg-tertiary">tagger</span>
             <select
@@ -455,19 +456,23 @@ export default function TaggingPage() {
             />
           )}
 
+          </div>
+
           {job && (
-            <JobProgress
-              job={job}
-              logs={logs}
-              onCancel={async () => {
-                try {
-                  await api.cancelJob(job.id)
-                  toast(t('tag.cancelToast'), 'success')
-                } catch (e) {
-                  toast(String(e), 'error')
-                }
-              }}
-            />
+            <div className="shrink-0">
+              <JobProgress
+                job={job}
+                logs={logs}
+                onCancel={async () => {
+                  try {
+                    await api.cancelJob(job.id)
+                    toast(t('tag.cancelToast'), 'success')
+                  } catch (e) {
+                    toast(String(e), 'error')
+                  }
+                }}
+              />
+            </div>
           )}
         </div>
 

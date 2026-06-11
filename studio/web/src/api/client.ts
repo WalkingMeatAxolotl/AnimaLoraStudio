@@ -2119,6 +2119,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  /** 回放最近一次先验生成 task + 日志，用于切页面/刷新后的日志恢复。 */
+  getLatestRegPriorTask: (pid: number, vid: number) =>
+    req<{ task: Task | null; log: string }>(
+      `/api/projects/${pid}/versions/${vid}/reg/generate-prior/latest`,
+    ),
   /** 查询先验生成 task 状态。 */
   getRegPriorTask: (pid: number, vid: number, taskId: number) =>
     req<Task>(`/api/projects/${pid}/versions/${vid}/reg/generate-prior/${taskId}`),

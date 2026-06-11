@@ -147,8 +147,15 @@ def reconcile_version_status(
     update_version(conn, version_id, status=derived)
     return get_version(conn, version_id), True
 
-# label 必须是路径安全的：字母 / 数字 / 下划线 / 连字符 / 点
-_VALID_LABEL = re.compile(r"^[A-Za-z0-9_.-]+$")
+# label 必须是路径安全的：字母 / 数字 / 下划线 / 连字符 / 点。
+# 纯点 label（"." / ".."）会让 version_dir 解析到 versions/ 之外
+# （".." == project 根，delete_version 时 rmtree 整个项目），必须拒绝。
+_VALID_LABEL = re.compile(r"^(?!\.+$)[A-Za-z0-9_.-]+$")
+
+
+def is_valid_label(label: str) -> bool:
+    """version label 校验，给外部输入源（如 bundle manifest）复用。"""
+    return bool(_VALID_LABEL.fullmatch(label))
 
 
 from studio.domain.errors import DomainError

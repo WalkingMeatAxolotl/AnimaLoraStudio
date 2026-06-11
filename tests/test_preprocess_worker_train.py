@@ -96,6 +96,25 @@ def test_crop_train_single_rect_overwrites_source(env) -> None:
     assert entry["origin"] == "X.png"
 
 
+def test_crop_train_single_rect_replaces_jpg_without_doubling(env) -> None:
+    """train-only 导入/复制后没有 manifest：JPG 裁剪成 PNG 时必须删旧 JPG。"""
+    sub = env["sub"]
+    _make_image(sub / "X.jpg", size=(200, 100))
+    (sub / "X.txt").write_text("existing caption", encoding="utf-8")
+
+    rc = worker._run_crop_train(
+        env["project"], env["version"],
+        {"crops": {"1_data/X.jpg": [{"x": 0.2, "y": 0.0, "w": 0.5, "h": 1.0}]}},
+        _silence, _silence,
+    )
+    assert rc == 0
+    assert not (sub / "X.jpg").exists()
+    assert (sub / "X.png").is_file()
+    # Same stem, so the sidecar still belongs to X.png.
+    assert (sub / "X.txt").read_text(encoding="utf-8") == "existing caption"
+    assert sorted(p.name for p in sub.iterdir() if p.suffix.lower() in {".jpg", ".png"}) == ["X.png"]
+
+
 # ---------------------------------------------------------------------------
 # _run_crop_train: N>1 fan-out
 # ---------------------------------------------------------------------------
@@ -128,6 +147,27 @@ def test_crop_train_fan_out_writes_multiple(env) -> None:
     # 多 crop 共享 origin
     assert m["images"]["1_data/Y_c0.png"]["origin"] == "Y.png"
     assert m["images"]["1_data/Y_c1.png"]["origin"] == "Y.png"
+
+
+def test_crop_train_fan_out_removes_source_sidecars(env) -> None:
+    """fan-out 后原图不再存在，旧 caption sidecar 也要清掉。"""
+    sub = env["sub"]
+    _make_image(sub / "Z.jpg", size=(200, 100))
+    (sub / "Z.txt").write_text("old caption", encoding="utf-8")
+
+    rc = worker._run_crop_train(
+        env["project"], env["version"],
+        {"crops": {"1_data/Z.jpg": [
+            {"x": 0.0, "y": 0.0, "w": 0.4, "h": 1.0},
+            {"x": 0.5, "y": 0.0, "w": 0.4, "h": 1.0},
+        ]}},
+        _silence, _silence,
+    )
+    assert rc == 0
+    assert not (sub / "Z.jpg").exists()
+    assert not (sub / "Z.txt").exists()
+    assert (sub / "Z_c0.png").is_file()
+    assert (sub / "Z_c1.png").is_file()
 
 
 # ---------------------------------------------------------------------------

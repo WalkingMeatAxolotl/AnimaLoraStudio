@@ -56,6 +56,18 @@ def _collect_images(train_dir: Path) -> list[Path]:
     return out
 
 
+def _filter_existing_captions(images: list[Path]) -> tuple[list[Path], list[Path]]:
+    """Split images into (needs_tagging, skipped_existing_caption)."""
+    needs_tagging: list[Path] = []
+    skipped: list[Path] = []
+    for img in images:
+        if tagedit.caption_path(img) is not None:
+            skipped.append(img)
+        else:
+            needs_tagging.append(img)
+    return needs_tagging, skipped
+
+
 def run(job_id: int) -> int:
     with db.connection_for() as conn:
         job = project_jobs.get_job(conn, job_id)
@@ -96,13 +108,24 @@ def run(job_id: int) -> int:
         if not images:
             progress("[done] 没有图可打标（train/ 是空的）")
             return 0
+        total_images = len(images)
 
         progress(
             f"[start] tagger={tagger_name} version={v['label']} "
-            f"images={len(images)} format={fmt} on_existing={on_existing}"
+            f"images={total_images} format={fmt} on_existing={on_existing}"
         )
         if trigger_word:
             progress(f"[trigger] '{trigger_word}' 将作为第一个 tag prepend 到每张图")
+        skipped = 0
+        if on_existing == "skip":
+            images, skipped_images = _filter_existing_captions(images)
+            skipped = len(skipped_images)
+            for img in skipped_images:
+                progress(f"[skip] {img.name}")
+        if not images:
+            suffix = f" (skipped={skipped})" if skipped else ""
+            progress(f"[done] tagged {skipped}/{total_images} (errors=0){suffix}")
+            return 0
 
         tagger = get_tagger(tagger_name, overrides=overrides)
         tagger.prepare()
@@ -114,7 +137,6 @@ def run(job_id: int) -> int:
 
         ok = 0
         errs = 0
-        skipped = 0
         appended = 0
         for r in tagger.tag(
             images,
@@ -142,7 +164,7 @@ def run(job_id: int) -> int:
         suffix = ""
         if skipped or appended:
             suffix = f" (skipped={skipped}, appended={appended})"
-        progress(f"[done] tagged {ok}/{len(images)} (errors={errs}){suffix}")
+        progress(f"[done] tagged {ok + skipped}/{total_images} (errors={errs}){suffix}")
         return 0 if ok > 0 or errs == 0 else 1
     except Exception as exc:  # noqa: BLE001
         # PR-1 C7: logger.exception 进 stderr（supervisor 收 → jobs/<id>.log），

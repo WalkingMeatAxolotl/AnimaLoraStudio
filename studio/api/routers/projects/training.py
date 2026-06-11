@@ -16,8 +16,9 @@
     GET /reg/preview-tags   GET /reg   POST /reg/build
     GET /reg/caption   DELETE /reg
 
-  reg_ai (2)
-    POST /reg/generate-prior   GET /reg/generate-prior/{task_id}
+  reg_ai (3)
+    POST /reg/generate-prior   GET /reg/generate-prior/latest
+    GET /reg/generate-prior/{task_id}
 
   version_config (4)
     GET /config  PUT /config  POST /config/from_preset  POST /config/save_as_preset
@@ -40,6 +41,7 @@ from fastapi.responses import FileResponse
 
 from ...deps import _resolve_anima_model_paths
 from ...errors import _preset_err_code as _err_code, _safe_join_or_400
+from ..logs import read_task_log
 from ...responses import _thumb_response
 from ...schemas.training import (
     BatchOp,
@@ -434,6 +436,26 @@ def reg_generate_prior(pid: int, vid: int, body: RegAiRequest) -> dict[str, Any]
 
     bus.publish({"type": "task_state_changed", "task_id": task_id, "status": "pending"})
     return task or {"id": task_id}
+
+
+@router.get("/api/projects/{pid}/versions/{vid}/reg/generate-prior/latest")
+def get_latest_reg_prior_task(pid: int, vid: int) -> dict[str, Any]:
+    """页面 hydrate 用：返回当前 version 最近一次 AI 先验 task + 全量日志。"""
+    with db.connection_for() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM tasks
+            WHERE project_id = ? AND version_id = ? AND task_type = 'reg_ai'
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (pid, vid),
+        ).fetchone()
+    task = dict(row) if row else None
+    return {
+        "task": task,
+        "log": read_task_log(int(task["id"])) if task else "",
+    }
 
 
 @router.get("/api/projects/{pid}/versions/{vid}/reg/generate-prior/{task_id}")

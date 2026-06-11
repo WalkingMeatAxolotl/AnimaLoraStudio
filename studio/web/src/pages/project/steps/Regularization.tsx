@@ -23,6 +23,7 @@ import { useTagSuggest } from '../../../components/tagSuggest/useTagSuggest'
 import { useDialog } from '../../../components/Dialog'
 import { useToast } from '../../../components/Toast'
 import { useEventStream } from '../../../lib/useEventStream'
+import { useLatestJobReplay } from '../../../lib/useLatestJobReplay'
 
 interface Ctx {
   project: ProjectDetail
@@ -75,10 +76,19 @@ export default function RegularizationPage() {
   const [apiSource, setApiSource] = useState<'gelbooru' | 'danbooru'>('gelbooru')
   const [advanced, setAdvanced] = useState<AdvancedParams>(ADVANCED_DEFAULTS)
 
-  const [job, setJob] = useState<Job | null>(null)
-  const [logs, setLogs] = useState<string[]>([])
-  const jobIdRef = useRef<number | null>(null)
-  jobIdRef.current = job?.id ?? null
+  const vid = activeVersion?.id ?? null
+
+  // booru reg_build job：最近一次任务 + 日志回放（进页面 / SSE 重连时 hydrate）
+  const {
+    item: job,
+    logs,
+    setItem: setJob,
+    setLogs,
+    itemIdRef: jobIdRef,
+    refresh: refreshLatestRegBuild,
+  } = useLatestJobReplay<Job>(vid, (v) =>
+    api.getLatestVersionJob(project.id, v, 'reg_build').then((r) => ({ item: r.job, log: r.log })),
+  )
 
   // B2（PR-2）：「设置 & 日志」+「先验生成」合并成单 tab「生成」；顶部 source picker
   // 决定渲染 Booru 配置面板还是 AI 配置面板。「开始生成」按钮按 source 调对应 endpoint。
@@ -98,17 +108,24 @@ export default function RegularizationPage() {
   const [aiCfg, setAiCfg] = useState(4.0)
   const [aiSeed, setAiSeed] = useState(0)
   const [aiIncremental, setAiIncremental] = useState(false)
-  const [aiTask, setAiTask] = useState<Task | null>(null)
-  const [aiLogs, setAiLogs] = useState<string[]>([])
   const [aiBusy, setAiBusy] = useState(false)
-  const aiTaskIdRef = useRef<number | null>(null)
-  aiTaskIdRef.current = aiTask?.id ?? null
+  // AI 先验 task：同上；hydrate 时顺带把 aiBusy 同步到 task 真实状态
+  const {
+    item: aiTask,
+    logs: aiLogs,
+    setItem: setAiTask,
+    setLogs: setAiLogs,
+    itemIdRef: aiTaskIdRef,
+    refresh: refreshLatestRegPrior,
+  } = useLatestJobReplay<Task>(
+    vid,
+    (v) => api.getLatestRegPriorTask(project.id, v).then((r) => ({ item: r.task, log: r.log })),
+    (task) => setAiBusy(task ? task.status === 'running' || task.status === 'pending' : false),
+  )
 
   // 预览 modal
   const [previewIdx, setPreviewIdx] = useState<number | null>(null)
   const [previewCaption, setPreviewCaption] = useState<string>('')
-
-  const vid = activeVersion?.id ?? null
 
   const refreshReg = useCallback(async () => {
     if (!vid) return
@@ -165,18 +182,16 @@ export default function RegularizationPage() {
     } catch { /* quota / privacy mode：丢就丢，不打扰用户 */ }
   }, [excludedStorageKey, excluded])
 
-  // 刷新 / 进入页面时回放最近一次 reg_build job：锁回 jid + 回放历史日志
+  // 刷新 / 进入页面时回放最近一次生成任务：锁回 id + 回放历史日志。
   useEffect(() => {
-    if (!vid) return
-    void api
-      .getLatestVersionJob(project.id, vid, 'reg_build')
-      .then((r) => {
-        if (!r.job) return
-        setJob(r.job)
-        setLogs(r.log ? r.log.split('\n') : [])
-      })
-      .catch(() => {})
-  }, [project.id, vid])
+    void refreshLatestRegBuild()
+    void refreshLatestRegPrior()
+  }, [refreshLatestRegBuild, refreshLatestRegPrior])
+
+  const refreshLiveLogs = useCallback(() => {
+    void refreshLatestRegBuild()
+    void refreshLatestRegPrior()
+  }, [refreshLatestRegBuild, refreshLatestRegPrior])
 
   useEventStream((evt) => {
     const jid = jobIdRef.current
@@ -202,7 +217,7 @@ export default function RegularizationPage() {
         }
       }).catch(() => {})
     }
-  })
+  }, { onOpen: refreshLiveLogs })
 
   const trainImageCount = activeVersion?.stats?.train_image_count ?? 0
   // 任意一种生成跑着都视为 live —— 防止 booru / AI 并发同时写 reg/。
