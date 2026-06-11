@@ -732,6 +732,11 @@ class TrainingConfig(BaseModel):
         description="调度器",
         json_schema_extra=_meta("sample"),
     )
+    sample_comfy_parity: bool = Field(
+        True,
+        description="采样预览使用 Comfy-style 生成流程",
+        json_schema_extra=_meta("sample"),
+    )
     sample_width: int = Field(
         0, ge=0,
         description="采样宽度（0=跟随 resolution）",

@@ -164,8 +164,8 @@ export default function GeneratePage() {
     url.searchParams.delete('versionId')
     window.history.replaceState({}, '', url.toString())
   }, [setPrefs])
-  // commit C: attention backend 已从 Generate 页移到 Settings；server 端
-  // enqueue_generate 会自动从 secrets.generate.attention_backend 注入。
+  // Test generation omits attention_backend here; the server applies the
+  // Comfy-style runtime and reads the configured generate backend there.
 
   const setXDraft = (xDraft: XYAxisDraft) => setPrefs((p) => ({ ...p, xDraft }))
   const setYDraft = (yDraft: XYAxisDraft | null) => setPrefs((p) => ({ ...p, yDraft }))
@@ -520,7 +520,7 @@ export default function GeneratePage() {
         seed,
         cfg_scale: cfgScale,
         lora_configs: loraConfigs,
-        // attention_backend 不带：server 自动从 secrets.generate.attention_backend 读
+        // attention_backend 不带：server 端套 Comfy-style runtime 并读取 generate backend。
         xy_matrix,
       }
       const task = await api.enqueueGenerate(body)

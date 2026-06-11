@@ -457,6 +457,7 @@
       "sample_cfg_scale": "CFG Scale",
       "sample_sampler_name": "采样器",
       "sample_scheduler": "调度器",
+      "sample_comfy_parity": "使用 Comfy-style 采样",
       "sample_width": "采样宽度（0=跟随 resolution）",
       "sample_height": "采样高度（0=跟随 resolution）",
       "sample_seed": "采样种子（0=随机）",

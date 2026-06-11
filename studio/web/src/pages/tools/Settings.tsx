@@ -1193,9 +1193,10 @@ export default function SettingsPage() {
       )}
 
       {tab === 'testing' && (<>
-        {/* attention 后端走全局 auto-detect，UI 不暴露切换；想强制覆盖
-            的高级用户改 secrets.json 的 generate.attention_backend
-            （flash_attn / xformers / none）。安装管理在『训练』tab。 */}
+        {/* Test generation uses the server Comfy-style runtime. Attention backend
+            uses global auto-detect; advanced users may override
+            secrets.generate.attention_backend (flash_attn / xformers / none).
+            Only xformers is an exact ComfyUI KSampler parity target. */}
         <IdleTimeoutSection draft={draft} update={update} />
         <TaeFluxSection draft={draft} update={update} />
         <SaveTestImagesSection draft={draft} update={update} />

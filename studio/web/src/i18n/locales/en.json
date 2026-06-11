@@ -457,6 +457,7 @@
       "sample_cfg_scale": "CFG Scale",
       "sample_sampler_name": "Sampler",
       "sample_scheduler": "Scheduler",
+      "sample_comfy_parity": "Use Comfy-style sampling",
       "sample_width": "Sample width (0 = follow resolution)",
       "sample_height": "Sample height (0 = follow resolution)",
       "sample_seed": "Sample seed (0 = random)",
