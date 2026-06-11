@@ -409,6 +409,8 @@
       "automagic_beta2": "Automagic second-moment β2",
       "automagic_eps": "Automagic numerical stability epsilon",
       "automagic_clip_threshold": "Automagic update RMS clipping threshold",
+      "automagic_variant": "v1: per-element lr mask (classic, recommended); v2: per-parameter scalar lr with fused backward (experimental, saves VRAM; incompatible with grad accumulation / grad clip / fp16)",
+      "automagic_agreement_threshold": "v2 sign-agreement ratio threshold: above this fraction the update direction is considered consistent and the lr is bumped up",
       "ppsf_d_coef": "PPSF d scaling coefficient (0.5 for small datasets, 2.0 for overfitting)",
       "ppsf_prodigy_steps": "Freeze d after N PPSF steps (0 = never freeze; recommended 1/4 to 1/2 of total steps)",
       "ppsf_beta1": "PPSF Adam β1 (PPSF default 0.9)",

@@ -40,13 +40,32 @@ router = APIRouter()
 @router.get("/api/schema")
 def get_schema() -> dict[str, Any]:
     """返回 TrainingConfig 的 JSON Schema + 分组顺序，前端据此渲染表单。"""
+    schema = TrainingConfig.model_json_schema()
+    _apply_feature_flags(schema)
     return {
-        "schema": TrainingConfig.model_json_schema(),
+        "schema": schema,
         "groups": [
             {"key": k, "label": label, "default_collapsed": dc}
             for k, label, dc in GROUP_ORDER
         ],
     }
+
+
+def _apply_feature_flags(schema: dict[str, Any]) -> None:
+    """按 SystemConfig 的实验性 flag 动态调整 schema（只影响 UI 渲染）。
+
+    Automagic v2 未正式发布：flag 关闭时给 automagic_variant 打 hidden（值仍
+    透传，CLI/yaml 不受影响）。agreement_threshold 的 show_when 含
+    automagic_variant==v2，variant 隐藏后停在默认 v1 自然不显示，无需处理。
+    启用方式：手改 studio_data/secrets.json 的 system.enable_automagic_v2，
+    Settings 页故意不渲染该开关。
+    """
+    from ...infrastructure import secrets as secrets_infra
+
+    if not secrets_infra.load().system.enable_automagic_v2:
+        props = schema.get("properties", {})
+        if "automagic_variant" in props:
+            props["automagic_variant"]["hidden"] = True
 
 
 @router.get("/api/presets")

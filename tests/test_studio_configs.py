@@ -429,3 +429,21 @@ def test_legacy_configs_endpoint_redirects(client: TestClient) -> None:
     resp = client.get("/api/configs/foo", follow_redirects=False)
     assert resp.status_code == 308
     assert resp.headers["location"].endswith("/api/presets/foo")
+
+
+def test_automagic_v2_hidden_without_feature_flag(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """SystemConfig.enable_automagic_v2 默认 False → automagic_variant 打 hidden；
+    开启后不打。值始终透传，只影响 UI 渲染。"""
+    from studio.infrastructure import secrets as secrets_infra
+
+    # 默认（flag off）：hidden=True —— monkeypatch 隔离本机 secrets.json
+    monkeypatch.setattr(secrets_infra, "load", lambda: secrets_infra.Secrets())
+    props = client.get("/api/schema").json()["schema"]["properties"]
+    assert props["automagic_variant"].get("hidden") is True
+
+    # flag on：不打 hidden
+    flagged = secrets_infra.Secrets()
+    flagged.system.enable_automagic_v2 = True
+    monkeypatch.setattr(secrets_infra, "load", lambda: flagged)
+    props = client.get("/api/schema").json()["schema"]["properties"]
+    assert props["automagic_variant"].get("hidden") is not True

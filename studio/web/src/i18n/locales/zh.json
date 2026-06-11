@@ -409,6 +409,8 @@
       "automagic_beta2": "Automagic 二阶矩 β2",
       "automagic_eps": "Automagic 数值稳定项",
       "automagic_clip_threshold": "Automagic update RMS 裁剪阈值",
+      "automagic_variant": "v1: per-element lr mask（经典，推荐）；v2: per-param scalar lr + fused backward（实验性，省显存；与 grad_accum / grad_clip / fp16 不兼容）",
+      "automagic_agreement_threshold": "v2 符号一致率阈值：超过此比例认为方向一致 → 涨 lr",
       "ppsf_d_coef": "PPSF 估出的 d 整体缩放系数；越大有效 lr 越大。欠拟合时调高（2.0+），过拟合 / 小数据集时调低（0.5）",
       "ppsf_prodigy_steps": "PPSF 在第 N 步后冻结 d 估计；0 = 全程持续估计。建议总步数 1/4 ~ 1/2 让后期 lr 稳定",
       "ppsf_beta1": "PPSF 一阶动量衰减率 (β1)：默认 0.9；越大平滑越强、响应越慢",
