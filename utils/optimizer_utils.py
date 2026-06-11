@@ -767,11 +767,13 @@ class Automagic2(Optimizer):
         state["step"] = 0
         state["lr"] = torch.full((), float(group["lr"]), dtype=torch.float32, device=p.device)
         state["last_polarity"] = torch.zeros(p.shape, dtype=torch.bool, device=p.device)
+        # 二阶矩固定 fp32：bf16 存储下 (1-beta2)=1e-3 的每步相对增量小于 bf16
+        # 相对分辨率 (~3.9e-3)，EMA 会在写回时被 round 吞掉而停滞。
         if p.dim() >= 2:
-            state["exp_avg_sq_row"] = torch.zeros(p.shape[:-1], dtype=p.dtype, device=p.device)
-            state["exp_avg_sq_col"] = torch.zeros(p.shape[:-2] + p.shape[-1:], dtype=p.dtype, device=p.device)
+            state["exp_avg_sq_row"] = torch.zeros(p.shape[:-1], dtype=torch.float32, device=p.device)
+            state["exp_avg_sq_col"] = torch.zeros(p.shape[:-2] + p.shape[-1:], dtype=torch.float32, device=p.device)
         else:
-            state["exp_avg_sq"] = torch.zeros(p.shape, dtype=p.dtype, device=p.device)
+            state["exp_avg_sq"] = torch.zeros(p.shape, dtype=torch.float32, device=p.device)
 
     def _make_backward_hook(self, group):
         def _hook(p: torch.Tensor):
@@ -791,6 +793,16 @@ class Automagic2(Optimizer):
             raise RuntimeError("Automagic2 does not support sparse gradients.")
         if grad.dtype != torch.float32:
             grad = grad.to(torch.float32)
+
+        # fused 路径绕过了训练循环的 step 边界 NaN 梯度检查（hook 跑完 p.grad
+        # 已是 None），必须在这里自卫 —— 否则一个坏 micro-batch 直接毒化权重。
+        if not torch.isfinite(grad).all():
+            logger.warning(
+                "Automagic2: param %s 梯度含 NaN/Inf，跳过本次 fused update",
+                tuple(p.shape),
+            )
+            p.grad = None
+            return
 
         beta2 = group["beta2"]
         eps = group["eps"]
@@ -887,8 +899,14 @@ class Automagic2(Optimizer):
                 group[k] = v
             for p in group["params"]:
                 st = self.state.get(p)
-                if st is not None and isinstance(st.get("lr"), torch.Tensor):
-                    st["lr"] = st["lr"].to(torch.float32)
+                if st is None:
+                    continue
+                # PyTorch load 会把 float state cast 到 param dtype（bf16 训练时
+                # fp32 标量/二阶矩会被降级），这里统一恢复 fp32。
+                for key in ("lr", "exp_avg_sq_row", "exp_avg_sq_col", "exp_avg_sq"):
+                    v = st.get(key)
+                    if isinstance(v, torch.Tensor) and v.dtype != torch.float32:
+                        st[key] = v.to(torch.float32)
 
 
 def create_automagic_v2(

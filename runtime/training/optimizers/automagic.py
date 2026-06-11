@@ -42,6 +42,13 @@ def validate(args) -> None:
                 "Automagic v2 不兼容 fp16 混合精度"
                 "（fused backward hook 绕过 GradScaler，fp16 需要 scaler 防溢出）"
             )
+        grad_accum = int(getattr(args, "grad_accum", 1) or 1)
+        if grad_accum > 1:
+            raise ValueError(
+                "Automagic v2 (fused backward) 与梯度累积不兼容：参数在每个 "
+                "micro-batch backward 时就地更新并清掉 grad，grad_accum>1 的累积"
+                "语义会被静默破坏。请改用 automagic_variant=v1 或 grad_accum=1。"
+            )
         grad_clip = float(getattr(args, "grad_clip_max_norm", 0) or 0)
         if grad_clip > 0:
             logger.warning(

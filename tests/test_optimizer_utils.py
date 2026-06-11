@@ -521,3 +521,47 @@ def test_create_optimizer_dispatches_automagic_v2() -> None:
     model = nn.Linear(4, 4)
     optim = create_optimizer("automagic_v2", model.parameters(), learning_rate=1e-3)
     assert isinstance(optim, Automagic2)
+
+
+# ---------------------------------------------------------------------------
+# Automagic v2 守卫（followup：fused 路径自卫）
+# ---------------------------------------------------------------------------
+
+
+def test_automagic_v2_skips_nonfinite_grad() -> None:
+    """fused 路径绕过训练循环的 step 边界 NaN 检查，必须在 hook 内自卫。"""
+    p = nn.Parameter(torch.ones(4, 4))
+    optim = Automagic2([p], lr=1e-4)
+    before = p.detach().clone()
+    p.grad = torch.full_like(p, float("nan"))
+    optim._update_param(p, optim.param_groups[0])
+    assert torch.equal(p.detach(), before), "NaN 梯度不应触碰参数"
+    assert p.grad is None, "坏梯度应被丢弃"
+
+
+def test_automagic_v2_second_moment_fp32_under_bf16() -> None:
+    """二阶矩固定 fp32：bf16 存储会让 (1-beta2)=1e-3 的 EMA 增量被 round 吞掉。"""
+    p = nn.Parameter(torch.randn(4, 4, dtype=torch.bfloat16))
+    optim = Automagic2([p], lr=1e-6)
+    p.grad = torch.randn_like(p)
+    optim._update_param(p, optim.param_groups[0])
+    st = optim.state[p]
+    assert st["exp_avg_sq_row"].dtype == torch.float32
+    assert st["exp_avg_sq_col"].dtype == torch.float32
+    assert st["lr"].dtype == torch.float32
+
+
+def test_automagic_v2_validate_rejects_grad_accum() -> None:
+    """v2 fused backward 与梯度累积语义冲突，启动期必须拦截。"""
+    from types import SimpleNamespace
+    from training.optimizers import automagic as automagic_builder
+
+    args = SimpleNamespace(
+        lr_scheduler="none", automagic_variant="v2",
+        mixed_precision="bf16", grad_clip_max_norm=0, grad_accum=4,
+    )
+    with pytest.raises(ValueError, match="grad_accum"):
+        automagic_builder.validate(args)
+
+    args.grad_accum = 1
+    automagic_builder.validate(args)  # 不应抛

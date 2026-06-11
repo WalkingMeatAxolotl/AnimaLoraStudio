@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import logging
-import random
 from fnmatch import fnmatch
 from pathlib import Path
 from types import SimpleNamespace
@@ -133,7 +132,9 @@ class OrthoLoRALinear(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         org_forwarded = self.org_module(x)
-        if self.module_dropout > 0.0 and self.training and random.random() < self.module_dropout:
+        # 用 torch RNG（而非 python random）：grad checkpoint 重算只恢复 torch
+        # RNG 状态，python random 会让重算分支与首次前向不一致 → recompute mismatch。
+        if self.module_dropout > 0.0 and self.training and bool(torch.rand(()) < self.module_dropout):
             return org_forwarded
 
         work = self.P_basis.dtype
@@ -295,6 +296,7 @@ class OrthoLoRAAdapter:
     def load_state_dict(self, sd: dict[str, torch.Tensor], strict: bool = True) -> Any:
         missing: list[str] = []
         unexpected = set(sd)
+        projected_layers = 0
         for layer in self.loras:
             prefix = layer.lora_name
             runtime_keys = {
@@ -321,12 +323,20 @@ class OrthoLoRAAdapter:
             up_key = f"{prefix}.lora_up.weight"
             if down_key in sd and up_key in sd:
                 layer.project_plain_lora_(sd[down_key], sd[up_key])
+                projected_layers += 1
                 unexpected.discard(down_key)
                 unexpected.discard(up_key)
                 unexpected.discard(f"{prefix}.alpha")
                 continue
 
             missing.extend(f"{prefix}.{suffix}" for suffix in runtime_keys)
+
+        if projected_layers:
+            logger.warning(
+                "OrthoLoRA: %s 层从 plain LoRA 投影恢复（仅取冻结 SVD 基上的对角分量，"
+                "旋转信息丢失）—— 这是近似续训，非完整恢复。无损断点续训请用训练 state "
+                "(.pt) 而非蒸馏后的 LoRA 文件。", projected_layers,
+            )
 
         if strict and (missing or unexpected):
             raise RuntimeError(f"OrthoLoRA load_state_dict mismatch: missing={missing}, unexpected={sorted(unexpected)}")
