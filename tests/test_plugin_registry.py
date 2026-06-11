@@ -1,7 +1,7 @@
 """ADR 0003 PR-C：plugin registry + AdapterProtocol 单元测试。
 
 覆盖：
-- 4 个 plugin 子包的 BUILDERS / build_X / validate_schema_consistency 三件套
+- adapter plugin 子包的 BUILDERS / build_X / validate_schema_consistency 三件套
 - AdapterProtocol runtime_checkable 对 AnimaLycorisAdapter 返回 True
 - 动态/per-step / loss 加项 hook 在 mock adapter 上能被正确调用
 - train_loop.py / phases/optimizer.py 已不含 if optimizer_type == / if lora_type ==
@@ -39,7 +39,7 @@ def AnimaLycorisAdapter():
 
 def test_adapter_builders_dict_has_lokr_loha_lora() -> None:
     from training.adapters import BUILDERS
-    assert set(BUILDERS) == {"lokr", "loha", "lora", "tlora"}
+    assert set(BUILDERS) == {"lokr", "loha", "lora", "ortho", "tlora"}
 
 
 def test_optimizer_builders_dict_has_3_variants() -> None:
@@ -178,7 +178,7 @@ def test_schema_consistency_raises_when_builder_missing(monkeypatch) -> None:
     try:
         # 用 typing.Literal 重建一个含 "tlora" 的 annotation
         from typing import Literal
-        field.annotation = Literal["lora", "lokr", "loha", "tlora"]  # type: ignore[assignment]
+        field.annotation = Literal["lora", "lokr", "loha", "ortho", "tlora"]  # type: ignore[assignment]
         with pytest.raises(RuntimeError, match="不同步"):
             adapters.validate_schema_consistency()
     finally:
