@@ -119,8 +119,10 @@ class AnimaLycorisAdapter:
         if self.lora_reg_dims:
             _apply_reg_dims_(self.network, self.lora_reg_dims)
 
-        # lycoris 默认在 CPU 创建模块；model 多半已在 CUDA — 必须显式同步 device/dtype，
-        # 否则首次 forward 报 "tensors on cuda:0 and cpu"。从模型首个 parameter 推断。
+        # lycoris 默认在 CPU 创建模块；model 多半已在 CUDA — 必须显式同步
+        # device/dtype，否则首次 forward 报 "tensors on cuda:0 and cpu"。从模型
+        # 首个 parameter 推断。推理 parity 路径会在 load_state_dict 前再把 network
+        # 转成 fp32，以贴近 ComfyUI LoRA patch 的中间精度。
         try:
             ref = next(model.parameters())
             self.network.to(device=ref.device, dtype=ref.dtype)
