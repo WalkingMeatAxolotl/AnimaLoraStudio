@@ -216,6 +216,43 @@ def test_apply_loras_each_lora_injects_separately(tmp_path: Path) -> None:
     created[1].network.to.assert_called_with(device="cpu", dtype=torch.float32)
 
 
+@pytest.mark.parametrize("algo", ["lora", "loha"])
+def test_apply_loras_uses_fp32_for_lora_and_loha_algos(tmp_path: Path, algo: str) -> None:
+    """Comfy parity dtype handling is per LycorisNetwork, not only LoKr.
+
+    LoRA and LoHa are represented by the same AnimaLycorisAdapter with different
+    metadata `algo` values, so fp32 network/tensor loading must apply to them too.
+    """
+    p = tmp_path / f"{algo}.safetensors"
+    _write_lora_safetensors(p, rank=8, alpha=4.0, algo=algo, factor=8)
+
+    created: list[MagicMock] = []
+    loaded_dtypes: list[torch.dtype] = []
+
+    def _fake_adapter(*args: object, **kwargs: object) -> MagicMock:
+        m = MagicMock()
+        m.init_kwargs = dict(kwargs)
+        m.network = MagicMock()
+        m.network.loras = []
+
+        def _load(sd, *_args, **_kwargs):
+            loaded_dtypes.extend(t.dtype for t in sd.values())
+            return MagicMock(missing_keys=[], unexpected_keys=[])
+
+        m.load_state_dict.side_effect = _load
+        created.append(m)
+        return m
+
+    model = MagicMock()
+    with _patched_adapter(_fake_adapter):
+        apply_loras(model, [LoRASpec(path=str(p), scale=1.0)], device="cpu", dtype=torch.float32)
+
+    assert created[0].init_kwargs["algo"] == algo
+    created[0].network.to.assert_called_once_with(device="cpu", dtype=torch.float32)
+    assert loaded_dtypes
+    assert all(dtype == torch.float32 for dtype in loaded_dtypes)
+
+
 def test_apply_loras_skips_missing_path(tmp_path: Path) -> None:
     p_real = tmp_path / "real.safetensors"
     _write_lora_safetensors(p_real, rank=16, alpha=8.0, algo="lokr", factor=8)
