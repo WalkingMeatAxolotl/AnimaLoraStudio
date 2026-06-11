@@ -32,11 +32,28 @@
 - **来源**：[`comfyanonymous/ComfyUI`](https://github.com/comfyanonymous/ComfyUI)（现由 Comfy-Org 维护）
 - **许可**：GPL-3.0
 - **涉及文件**：
-  - `models/anima_modeling.py` — 实现结构与 ComfyUI `comfy/ldm/anima/model.py` 高度相关
-  - `runtime/training/inference_samplers/er_sde.py` — `sample_er_sde` + `default_noise_sampler`
-    参考 ComfyUI `k_diffusion_sampling`（删去 model_patcher 依赖）
+  - `models/anima_modeling.py` — Anima DiT / LLMAdapter 结构与 ComfyUI
+    `comfy/ldm/anima/model.py` 高度相关
+  - `models/anima_modeling_core.py` — 自动生成的合并模型文件；底层 Cosmos 代码保留
+    Apache-2.0 文件头，Anima / LLMAdapter 部分仍与 ComfyUI
+    `comfy/ldm/anima/model.py` 高度相关
+  - `runtime/training/comfy_qwen.py` — Comfy-style Anima Qwen3 0.6B text encoder
+    路径，对应 ComfyUI `comfy/text_encoders/anima.py` 的 Qwen3 encoder 行为
+  - `runtime/training/text_encoding.py` — Anima prompt / tag 权重 / T5 token weights
+    行为对齐 ComfyUI Anima text encoder 与 prompt weighting 规则
   - `runtime/training/sampling.py` — `_time_snr_shift` / `_flow_sigmas_simple` /
-    sample helper 对齐 ComfyUI `ModelSamplingDiscreteFlow` + KSampler 行为
+    `_flow_sigmas_sgm_uniform` / empty latent channel fix / CPU-seeded txt2img noise /
+    batched CFG / sample helper 对齐 ComfyUI `ModelSamplingDiscreteFlow` + KSampler 行为
+  - `runtime/training/inference_samplers/er_sde.py` — `sample_er_sde` +
+    `default_noise_sampler` 参考 ComfyUI `k_diffusion_sampling`
+    （删去 model_patcher 依赖）
+  - `runtime/training/inference_samplers/dpmpp_3m_sde.py` —
+    DPM-Solver++(3M) SDE / BrownianTree noise / first-sigma offset / log-SNR 细节
+    对齐 ComfyUI `comfy/k_diffusion/sampling.py` + `comfy/model_sampling.py`
+  - `studio/domain/comfy_parity.py`、`runtime/anima_generate.py`、
+    `runtime/anima_daemon.py`、`runtime/training/sample_runner.py`、
+    `studio/api/routers/generate.py` — 将测试出图与训练 sample 接到 Comfy-style
+    parity runtime 的本项目 glue/config 代码
 
 > 由于包含/派生自 GPL-3.0 代码，本项目整体以 GPL-3.0 发布（见 `LICENSE`）。
 

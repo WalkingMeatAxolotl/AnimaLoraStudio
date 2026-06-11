@@ -81,6 +81,7 @@ nul
 
 # 工具生成的临时目录
 .spec-workflow/
+.worktrees/
 
 # Self-update 进程间通信用的瞬时标志（server 写 → cli.py / wrapper 读后立即删）
 tmp/
