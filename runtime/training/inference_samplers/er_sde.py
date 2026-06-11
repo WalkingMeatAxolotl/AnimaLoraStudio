@@ -29,6 +29,19 @@ def _default_noise_sampler(x: torch.Tensor, seed: Optional[int]):
     return _sample
 
 
+def _offset_first_sigma_for_snr(sigmas: torch.Tensor, shift: float = 3.0) -> torch.Tensor:
+    """对齐 ComfyUI offset_first_sigma_for_snr（CONST）：σ_0 ≥ 1 时替换为
+    percent_to_sigma(1e-4) = time_snr_shift(shift, 1 - 1e-4)，避免 logSNR 爆
+    inf 导致 er_lambda 溢出 → noise_scaler NaN。"""
+    if sigmas.numel() <= 1:
+        return sigmas
+    if float(sigmas[0]) >= 1.0:
+        sigmas = sigmas.clone()
+        t = 1.0 - 1e-4
+        sigmas[0] = shift * t / (1.0 + (shift - 1.0) * t)
+    return sigmas
+
+
 @torch.no_grad()
 def sample(
     denoise_fn,
@@ -38,6 +51,7 @@ def sample(
     seed: Optional[int] = None,
     s_noise: float = 1.0,
     max_stage: int = 3,
+    shift: float = 3.0,
     step_callback=None,
 ) -> torch.Tensor:
     """ER-SDE-3 stochastic sampler。
@@ -53,7 +67,11 @@ def sample(
 
     noise_sampler = _default_noise_sampler(x, seed=seed)
 
-    # CONST: half_log_snr = log((1 - t) / t) = -logit(t)
+    # 对齐 ComfyUI：先 offset σ_0（≥1 → ~0.9997），再算 half-log-SNR。直接 clamp
+    # 到 1-1e-12 会让 er_lambda≈1e12 → noise_scaler exp 溢出 NaN。
+    sigmas = _offset_first_sigma_for_snr(sigmas, shift=shift)
+    # CONST: half_log_snr = log((1 - t) / t) = -logit(t)。末尾 0 留给下方
+    # sigmas[i+1]==0 分支处理，这里只 clamp 下界避免 log(0)。
     eps = 1e-12
     t = sigmas.clamp(min=eps, max=1.0 - eps)
     half_log_snrs = torch.log((1 - t) / t)
