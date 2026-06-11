@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import math
 import sys
+import importlib
 from pathlib import Path
 
 import torch
@@ -176,19 +177,37 @@ def load_anima_model(transformer_path, device, dtype, repo_root, *, flash_attn: 
     )
     Anima = anima_modeling.Anima
 
-    # flash_attn 全局开关：set_flash_attn_enabled 内部检查 _FLASH_ATTN_AVAILABLE，
-    # 未装时返回 False 不抛错（idempotent）。用 caller 传入的 flash_attn 而不是
-    # 强制 True，让 attention_backend=none/xformers 时显式关掉。
-    fn = getattr(cosmos_modeling, "set_flash_attn_enabled", None)
-    if fn is not None:
+    # attention backend 全局开关：新模型代码用 set_attention_backend() 一次性清掉
+    # 未选中的 fast path；旧 standalone 副本仍 fallback 到 set_flash_attn_enabled()。
+    flash_enabled = False
+    flash_modules = [cosmos_modeling, anima_modeling]
+    for module_name in ("models.cosmos_predict2_modeling", "models.anima_modeling"):
         try:
-            if fn(flash_attn):
-                logger.info("flash_attn 启用（训练 + sample 走 fast path）")
-            else:
-                logger.info("flash_attn 关闭（attention_backend=%s 或包未安装）",
-                            "flash_attn" if flash_attn else "non-flash")
+            flash_modules.append(importlib.import_module(module_name))
+        except Exception:
+            pass
+    for module in flash_modules:
+        set_backend = getattr(module, "set_attention_backend", None)
+        if set_backend is not None:
+            try:
+                effective = str(set_backend("flash_attn" if flash_attn else "none"))
+                flash_enabled = (effective == "flash_attn") or flash_enabled
+                continue
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("attention backend 设置失败，继续走 SDPA fallback: %s", exc)
+                continue
+        fn = getattr(module, "set_flash_attn_enabled", None)
+        if fn is None:
+            continue
+        try:
+            flash_enabled = bool(fn(flash_attn)) or flash_enabled
         except Exception as exc:  # noqa: BLE001
             logger.warning("flash_attn 启用失败，继续走 SDPA fallback: %s", exc)
+    if flash_enabled:
+        logger.info("flash_attn 启用（训练 + sample 走 fast path）")
+    else:
+        logger.info("flash_attn 关闭（attention_backend=%s 或包未安装）",
+                    "flash_attn" if flash_attn else "non-flash")
 
     # 从 checkpoint 推断配置
     with safe_open(transformer_path, framework="pt", device="cpu") as f:
@@ -275,21 +294,35 @@ def load_vae(vae_path, device, dtype, repo_root):
     return VAEWrapper(model, mean, std)
 
 
-def load_text_encoders(qwen_path, t5_tokenizer_path, device, dtype):
+def load_text_encoders(
+    qwen_path,
+    t5_tokenizer_path,
+    device,
+    dtype,
+    *,
+    comfy_qwen: bool = False,
+    t5_fast: bool = False,
+):
     """加载文本编码器（Qwen + T5）。"""
-    from transformers import AutoModelForCausalLM, AutoTokenizer, T5Tokenizer
+    from transformers import AutoModelForCausalLM, AutoTokenizer, T5Tokenizer, T5TokenizerFast
 
     # Qwen
     qwen_tokenizer = AutoTokenizer.from_pretrained(qwen_path, trust_remote_code=True)
-    qwen_model = AutoModelForCausalLM.from_pretrained(
-        qwen_path, torch_dtype=dtype, trust_remote_code=True
-    ).to(device).eval().requires_grad_(False)
+    if comfy_qwen:
+        from training.comfy_qwen import load_comfy_qwen3_encoder
+
+        qwen_model = load_comfy_qwen3_encoder(qwen_path, device=device, dtype=dtype)
+    else:
+        qwen_model = AutoModelForCausalLM.from_pretrained(
+            qwen_path, torch_dtype=dtype, trust_remote_code=True
+        ).to(device).eval().requires_grad_(False)
 
     # T5 tokenizer
+    t5_cls = T5TokenizerFast if t5_fast else T5Tokenizer
     if t5_tokenizer_path and Path(t5_tokenizer_path).exists():
-        t5_tokenizer = T5Tokenizer.from_pretrained(t5_tokenizer_path)
+        t5_tokenizer = t5_cls.from_pretrained(t5_tokenizer_path)
     else:
-        t5_tokenizer = T5Tokenizer.from_pretrained("google/t5-v1_1-xxl")
+        t5_tokenizer = t5_cls.from_pretrained("google/t5-v1_1-xxl")
 
     logger.info("文本编码器加载完成")
     return qwen_model, qwen_tokenizer, t5_tokenizer
