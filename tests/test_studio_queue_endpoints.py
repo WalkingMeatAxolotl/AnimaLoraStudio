@@ -415,6 +415,85 @@ def test_download_outputs_zip_partial_blocks_traversal(
 
 
 
+def test_delete_task_output_files(
+    client: TestClient, isolated, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DELETE /outputs 删除选中文件，其它保留。"""
+    from studio.services.projects import projects as projects_mod, versions as versions_mod
+    monkeypatch.setattr(projects_mod, "PROJECTS_DIR", isolated / "projects")
+    with db.connection_for() as conn:
+        p = projects_mod.create_project(conn, title="P")
+        v = versions_mod.create_version(conn, project_id=p["id"], label="v1")
+        tid = db.create_task(conn, name="t", config_name="good")
+        db.update_task(conn, tid, status="done", project_id=p["id"], version_id=v["id"])
+    out_dir = versions_mod.version_dir(p["id"], p["slug"], v["label"]) / "output"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "keep.safetensors").write_bytes(b"K")
+    (out_dir / "drop.safetensors").write_bytes(b"D")
+    state_dir = out_dir / "state" / f"task_{tid}"
+    state_dir.mkdir(parents=True)
+    (state_dir / "training_state_epoch2.pt").write_bytes(b"S")
+
+    resp = client.request(
+        "DELETE",
+        f"/api/queue/{tid}/outputs",
+        json={"files": ["drop.safetensors", f"state/task_{tid}/training_state_epoch2.pt"]},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert sorted(body["deleted"]) == sorted([
+        "drop.safetensors",
+        f"state/task_{tid}/training_state_epoch2.pt",
+    ])
+    assert (out_dir / "keep.safetensors").exists()
+    assert not (out_dir / "drop.safetensors").exists()
+    assert not (state_dir / "training_state_epoch2.pt").exists()
+
+
+def test_delete_task_output_files_missing_404(
+    client: TestClient, isolated, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """任一不存在 → 404，整批拒绝，已存在的不删。"""
+    from studio.services.projects import projects as projects_mod, versions as versions_mod
+    monkeypatch.setattr(projects_mod, "PROJECTS_DIR", isolated / "projects")
+    with db.connection_for() as conn:
+        p = projects_mod.create_project(conn, title="P")
+        v = versions_mod.create_version(conn, project_id=p["id"], label="v1")
+        tid = db.create_task(conn, name="t", config_name="good")
+        db.update_task(conn, tid, status="done", project_id=p["id"], version_id=v["id"])
+    out_dir = versions_mod.version_dir(p["id"], p["slug"], v["label"]) / "output"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "a.safetensors").write_bytes(b"A")
+
+    resp = client.request(
+        "DELETE",
+        f"/api/queue/{tid}/outputs",
+        json={"files": ["a.safetensors", "ghost.safetensors"]},
+    )
+    assert resp.status_code == 404
+    assert (out_dir / "a.safetensors").exists()
+
+
+def test_delete_task_output_files_blocks_traversal(
+    client: TestClient, isolated, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """禁止 path traversal / 绝对路径。"""
+    from studio.services.projects import projects as projects_mod, versions as versions_mod
+    monkeypatch.setattr(projects_mod, "PROJECTS_DIR", isolated / "projects")
+    with db.connection_for() as conn:
+        p = projects_mod.create_project(conn, title="P")
+        v = versions_mod.create_version(conn, project_id=p["id"], label="v1")
+        tid = db.create_task(conn, name="t", config_name="good")
+        db.update_task(conn, tid, status="done", project_id=p["id"], version_id=v["id"])
+    out_dir = versions_mod.version_dir(p["id"], p["slug"], v["label"]) / "output"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "a.safetensors").write_bytes(b"A")
+
+    for bad in ("../secret", "/abs", "state/../secret"):
+        resp = client.request("DELETE", f"/api/queue/{tid}/outputs", json={"files": [bad]})
+        assert resp.status_code == 400, f"{bad!r} should be 400, got {resp.status_code}"
+
+
 def test_download_outputs_zip_empty_dir_404(
     client: TestClient, isolated, monkeypatch: pytest.MonkeyPatch
 ) -> None:

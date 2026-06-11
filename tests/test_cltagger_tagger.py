@@ -10,6 +10,7 @@ import pytest
 from PIL import Image
 
 from studio import secrets
+from studio.services import models as model_downloader
 from studio.services.tagging import cltagger as cltagger_tagger
 
 
@@ -17,6 +18,9 @@ from studio.services.tagging import cltagger as cltagger_tagger
 def isolated_secrets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     sf = tmp_path / "secrets.json"
     monkeypatch.setattr(secrets, "SECRETS_FILE", sf)
+    # 隔离 models_root：默认回退到 REPO_ROOT/models，dev 机上可能真有
+    # cl_tagger_1_02，导致 is_available 误判 True。
+    monkeypatch.setattr(model_downloader, "models_root", lambda: tmp_path / "models")
     return tmp_path
 
 

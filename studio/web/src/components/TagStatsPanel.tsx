@@ -1,5 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { useTranslation } from 'react-i18next'
+
+import { TranslatedTag } from './tagDisplay/TranslatedTag'
+import { TagSuggestList } from './tagSuggest/TagSuggestList'
+import { useTagSuggest } from './tagSuggest/useTagSuggest'
 
 type Sort = 'count_desc' | 'count_asc' | 'name_asc' | 'name_desc'
 
@@ -163,17 +167,12 @@ export default function TagStatsPanel({
                     key={tag}
                     className="flex items-center gap-1 px-2 py-0.5 rounded-sm bg-overlay"
                   >
-                    <input
-                      ref={editInputRef}
+                    <EditTagInput
+                      editInputRef={editInputRef}
                       value={editValue}
-                      onChange={(e) => setEditValue(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') commitEdit()
-                        else if (e.key === 'Escape') cancelEdit()
-                      }}
-                      onBlur={cancelEdit}
-                      className="input input-mono flex-1 min-w-0"
-                      style={{ fontSize: 'var(--t-xs)', padding: '1px 6px' }}
+                      setValue={setEditValue}
+                      onCommit={commitEdit}
+                      onCancel={cancelEdit}
                     />
                     {/* onMouseDown 而不是 onClick：input 的 onBlur 会先触发，
                      * onClick 来时 commitEdit 已经被 cancelEdit 覆盖。
@@ -208,7 +207,7 @@ export default function TagStatsPanel({
                     title={t('tagStats.pickTagTitle', { tag })}
                     className="font-mono text-fg-primary flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap relative z-[1] text-left bg-transparent border-none cursor-pointer p-0"
                   >
-                    {tag}
+                    <TranslatedTag tag={tag} />
                   </button>
                   <span className="text-fg-tertiary font-mono text-[10px] relative z-[1] shrink-0">
                     {c}
@@ -236,5 +235,50 @@ export default function TagStatsPanel({
         )}
       </div>
     </section>
+  )
+}
+
+/** Inline tag rename input + 翻译 autocomplete。抽出来是为了能放 useTagSuggest hook —
+ *  父组件 .map 内部不能调 hook。 */
+function EditTagInput({ editInputRef, value, setValue, onCommit, onCancel }: {
+  editInputRef: RefObject<HTMLInputElement>
+  value: string
+  setValue: (v: string) => void
+  onCommit: () => void
+  onCancel: () => void
+}) {
+  const suggest = useTagSuggest({
+    value,
+    inputRef: editInputRef,
+    wholeAsToken: true,
+    onPick: ({ suggestion }) => setValue(suggestion.tag),
+  })
+  return (
+    <div className="relative flex-1 min-w-0">
+      <input
+        ref={editInputRef}
+        value={value}
+        onChange={(e) => { setValue(e.target.value); suggest.notifyChange() }}
+        onKeyDown={(e) => {
+          if (suggest.handleKeyDown(e)) return
+          if (e.key === 'Enter') onCommit()
+          else if (e.key === 'Escape') onCancel()
+        }}
+        onFocus={() => suggest.notifyFocus()}
+        onBlur={() => { suggest.notifyBlur(); onCancel() }}
+        className="input input-mono w-full"
+        style={{ fontSize: 'var(--t-xs)', padding: '1px 6px' }}
+      />
+      <TagSuggestList
+        open={suggest.open}
+        suggestions={suggest.suggestions}
+        activeIdx={suggest.activeIdx}
+        onPick={(s) => suggest.pickAt(suggest.suggestions.indexOf(s))}
+        onHover={suggest.setActiveIdx}
+        inputRef={editInputRef}
+        cursor={suggest.cursor}
+        positionDeps={[value]}
+      />
+    </div>
   )
 }

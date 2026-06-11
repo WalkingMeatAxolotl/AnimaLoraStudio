@@ -314,6 +314,53 @@ def test_start_tag_drops_empty_wd14_overrides(client: TestClient) -> None:
     assert "wd14_overrides" not in params
 
 
+def test_start_tag_on_existing_skip(client: TestClient) -> None:
+    """on_existing=skip 时端点把它落进 params。"""
+    import json as _json
+    pid, vid = _make(client)
+    r = client.post(
+        f"/api/projects/{pid}/versions/{vid}/tag",
+        json={"tagger": "wd14", "output_format": "txt", "on_existing": "skip"},
+    )
+    assert r.status_code == 200, r.text
+    params = _json.loads(r.json()["params"])
+    assert params["on_existing"] == "skip"
+
+
+def test_start_tag_on_existing_append(client: TestClient) -> None:
+    import json as _json
+    pid, vid = _make(client)
+    r = client.post(
+        f"/api/projects/{pid}/versions/{vid}/tag",
+        json={"tagger": "wd14", "output_format": "txt", "on_existing": "append"},
+    )
+    assert r.status_code == 200, r.text
+    params = _json.loads(r.json()["params"])
+    assert params["on_existing"] == "append"
+
+
+def test_start_tag_on_existing_overwrite_not_persisted(client: TestClient) -> None:
+    """默认 overwrite 不写入 params（worker 端默认即 overwrite，减小 payload）。"""
+    import json as _json
+    pid, vid = _make(client)
+    r = client.post(
+        f"/api/projects/{pid}/versions/{vid}/tag",
+        json={"tagger": "wd14", "output_format": "txt", "on_existing": "overwrite"},
+    )
+    assert r.status_code == 200, r.text
+    params = _json.loads(r.json()["params"])
+    assert "on_existing" not in params
+
+
+def test_start_tag_on_existing_bad_value_400(client: TestClient) -> None:
+    pid, vid = _make(client)
+    r = client.post(
+        f"/api/projects/{pid}/versions/{vid}/tag",
+        json={"tagger": "wd14", "output_format": "txt", "on_existing": "bogus"},
+    )
+    assert r.status_code == 400
+
+
 def test_start_tag_ignores_overrides_for_joycaption(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -201,4 +201,5 @@ describe('SchemaForm takeover behavior', () => {
     expect(screen.getByText('InfoNoise takes over timestep sampling')).toBeInTheDocument()
     expect(screen.queryByText('Normal timestep description')).not.toBeInTheDocument()
   })
+
 })

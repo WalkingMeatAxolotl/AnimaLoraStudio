@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { LoraEntry, XYAxisType } from '../../../api/client'
 import PathPicker from '../../../components/PathPicker'
 import InlineLoraPicker from './InlineLoraPicker'
@@ -72,6 +72,14 @@ function AxisLoraCkptPicker({
   const matched = bound ? projectLoras.find((p) => p.versionId === bound.version_id) : null
   const pickedCount = draft.raw.trim() ? draft.raw.split(',').filter((s) => s.trim()).length : 0
 
+  // 受控同步给 InlineLoraPicker：raw 字符串当 path/basename 列表喂过去 + 锚定
+  // 到 bound LoRA 的 (pid, vid)，让历史回填 picker chip 高亮、basename → 全 path
+  // 自动 upgrade。
+  const selectedPaths = useMemo(
+    () => draft.raw.split(',').map((s) => s.trim()).filter(Boolean),
+    [draft.raw],
+  )
+
   return (
     <div className="flex flex-col gap-1.5">
       {bound && pickedCount > 0 && (
@@ -97,6 +105,9 @@ function AxisLoraCkptPicker({
         projectLoras={projectLoras}
         existingPaths={new Set()}
         showWeight={false}
+        selectedPaths={selectedPaths}
+        initialPid={bound?.project_id ?? null}
+        initialVid={bound?.version_id ?? null}
         onPick={commitPicks}
         onClose={() => { /* 常驻在 axis card 里，nothing to close */ }}
         onPickExternal={() => setExternalOpen(true)}

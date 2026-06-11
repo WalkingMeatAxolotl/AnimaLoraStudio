@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { LoraEntry } from '../../../api/client'
 import PathPicker from '../../../components/PathPicker'
 import InlineLoraPicker, { type PickedLora } from './InlineLoraPicker'
@@ -20,6 +21,7 @@ export default function SidebarLoras({
   onChange: (l: LoraEntry[]) => void
   projectLoras: ProjectLora[]
 }) {
+  const { t } = useTranslation()
   const [externalForIdx, setExternalForIdx] = useState<number | null>(null)
 
   // 已选 path（互相 disable，避免重复添加）—— 排除空槽
@@ -62,6 +64,24 @@ export default function SidebarLoras({
     <div className="flex flex-col gap-2">
       {loras.map((l, i) => {
         const hasCkpt = !!l.path
+        // 决策 #8 / plan §3：历史回填后 resolve 失败的 LoRA（path='' && name 保留）
+        // 渲染 ⚠ placeholder 卡片，提示用户重选；不要静默 path 空让用户困惑
+        if (!hasCkpt && l.name) {
+          return (
+            <PlaceholderLoraCard
+              key={`lora-${i}`}
+              name={l.name}
+              onPick={() => {
+                // 清掉 name 让 InlineLoraPicker 出来供用户重选
+                onChange(loras.map((lo, idx) => (
+                  idx === i ? { ...lo, name: null } : lo
+                )))
+              }}
+              onRemove={() => handleSlotRemove(i)}
+              t={t}
+            />
+          )
+        }
         return (
           <InlineLoraPicker
             // key 只用 index：避免 ckpt 切换 / 反选时整个 picker remount
@@ -104,6 +124,7 @@ export default function SidebarLoras({
         + 添加 LoRA
       </button>
 
+      {/* placeholder 卡片渲染：path='' && name 保留 */}
       {externalForIdx !== null && (
         <PathPicker
           dirOnly={false}
@@ -122,6 +143,77 @@ export default function SidebarLoras({
           onClose={() => setExternalForIdx(null)}
         />
       )}
+    </div>
+  )
+}
+
+/** 历史回填后 resolve 失败的 LoRA 槽渲染（决策 #8 / plan §3）。
+ *  样式跟 InlineLoraPicker 一致（card 风格 + border），但内容显示 ⚠ + name +
+ *  [重选] [移除]，不阻断 submit（path='' 会被过滤）。 */
+function PlaceholderLoraCard({
+  name, onPick, onRemove, t,
+}: {
+  name: string
+  onPick: () => void
+  onRemove: () => void
+  t: (key: string) => string
+}) {
+  return (
+    <div
+      className="flex items-center gap-2"
+      style={{
+        border: '1px solid var(--border-warn, var(--border-subtle))',
+        background: 'var(--bg-warn-soft, var(--bg-sunken))',
+        borderRadius: 'var(--r-md)',
+        padding: '8px 10px',
+        fontSize: 12,
+      }}
+    >
+      <span aria-hidden="true" style={{ flexShrink: 0 }}>⚠</span>
+      <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+        <div className="font-mono truncate" style={{ fontSize: 11, color: 'var(--fg-secondary)' }}>
+          {name}
+        </div>
+        <div className="text-2xs text-fg-tertiary">{t('generate.loraNotFoundHint')}</div>
+      </div>
+      <button
+        type="button"
+        onClick={onPick}
+        className="font-mono"
+        style={{
+          border: '1px solid var(--border-subtle)',
+          background: 'var(--bg-elevated)',
+          borderRadius: 'var(--r-sm)',
+          padding: '3px 8px',
+          fontSize: 11,
+          color: 'var(--fg-secondary)',
+          cursor: 'pointer',
+          flexShrink: 0,
+        }}
+      >
+        {t('generate.repickLora')}
+      </button>
+      <button
+        type="button"
+        onClick={onRemove}
+        title={t('common.delete')}
+        aria-label={t('common.delete')}
+        style={{
+          width: 20, height: 20,
+          display: 'grid', placeItems: 'center',
+          borderRadius: 999,
+          border: 0,
+          background: 'transparent',
+          color: 'var(--fg-tertiary)',
+          cursor: 'pointer',
+          fontSize: 14,
+          lineHeight: 1,
+          padding: 0,
+          flexShrink: 0,
+        }}
+      >
+        ×
+      </button>
     </div>
   )
 }

@@ -7,7 +7,8 @@ Optimizer Utils Module - 优化器创建
 3. Prodigy (prodigyopt) - 无需调 lr 的自适应优化器
 4. ProdigyPlusScheduleFree (prodigy-plus-schedule-free) - Schedule-Free + Prodigy，
    解决 Prodigy 在扩散 LoRA 训练中的 mutation ep / 风格突变问题。
-5. Automagic - Per-parameter adaptive lr via sign-agreement tracking
+5. Lion - EvoLved Sign Momentum (Chen et al., 2023, arxiv 2302.06675)
+6. Automagic - Per-parameter adaptive lr via sign-agreement tracking
    原作者: Ostris (https://github.com/ostris/ai-toolkit, MIT license, Copyright (c)
    2024 Ostris, LLC). bf16 Kahan summation path 借鉴自 tdrussell/diffusion-pipe.
 """
@@ -31,6 +32,11 @@ try:
     BITSANDBYTES_AVAILABLE = True
 except ImportError:
     BITSANDBYTES_AVAILABLE = False
+
+try:
+    from optimum.quanto import QBytesTensor
+except ImportError:
+    QBytesTensor = ()
 
 
 def _is_param_groups(params: Any) -> bool:
@@ -163,13 +169,12 @@ def create_optimizer(
             **kwargs
         )
 
-    elif optimizer_type == "prodigy_plus_schedulefree":
-        return create_prodigy_plus_schedulefree(
+    elif optimizer_type == "lion":
+        return create_lion(
             params=params,
             lr=learning_rate,
             betas=betas,
             weight_decay=weight_decay,
-            eps=eps,
             **kwargs,
         )
 
@@ -189,10 +194,20 @@ def create_optimizer(
             **kwargs,
         )
 
+    elif optimizer_type == "prodigy_plus_schedulefree":
+        return create_prodigy_plus_schedulefree(
+            params=params,
+            lr=learning_rate,
+            betas=betas,
+            weight_decay=weight_decay,
+            eps=eps,
+            **kwargs,
+        )
+
     else:
         raise ValueError(
             f"Unknown optimizer type: {optimizer_type}. "
-            f"Choose from: adamw, adamw8bit, automagic, automagic_v2, prodigy, prodigy_plus_schedulefree"
+            f"Choose from: adamw, automagic, automagic_v2, lion, prodigy, prodigy_plus_schedulefree"
         )
 
 
@@ -313,6 +328,686 @@ def create_standard_adamw(
     
     print("  [OK] AdamW optimizer created")
 
+    return optimizer
+
+
+# ============================================================================
+# Automagic optimizer + Auto8bitTensor helper
+#
+# Adapted from ostris/ai-toolkit (https://github.com/ostris/ai-toolkit), which
+# also flowed through tdrussell/diffusion-pipe (added Kahan summation for
+# bfloat16). The core sign-agreement schedule, 8-bit lr_mask, Adafactor-style
+# factored 2nd moment, and stochastic-rounding helpers below are Ostris's
+# design. We re-implement on top of the upstream structure and align with
+# diffusion-pipe's bf16 Kahan path.
+#
+# MIT License — Copyright (c) 2024 Ostris, LLC
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+# ============================================================================
+
+
+class Auto8bitTensor:
+    def __init__(self, data: torch.Tensor | dict[str, Any]) -> None:
+        if isinstance(data, dict):
+            self.quantized = data["quantized"]
+            self.scale = data["scale"]
+            self.orig_dtype = data["orig_dtype"]
+            return
+        abs_max = data.abs().max().item()
+        self.scale = abs_max / 127.0 if abs_max > 0 else 1.0
+        self.quantized = (data / self.scale).round().clamp(-127, 127).to(torch.int8)
+        self.orig_dtype = data.dtype
+
+    def dequantize(self) -> torch.Tensor:
+        return self.quantized.to(dtype=torch.float32) * self.scale
+
+    def to(self, *args, **kwargs):
+        return self.dequantize().to(*args, **kwargs)
+
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "quantized": self.quantized,
+            "scale": self.scale,
+            "orig_dtype": self.orig_dtype,
+        }
+
+
+def _copy_stochastic_bf16(target: torch.Tensor, source: torch.Tensor) -> None:
+    result = torch.randint_like(source, dtype=torch.int32, low=0, high=(1 << 16))
+    result.add_(source.view(dtype=torch.int32))
+    result.bitwise_and_(-65536)
+    target.copy_(result.view(dtype=torch.float32))
+
+
+def _copy_stochastic(target: torch.Tensor, source: torch.Tensor) -> None:
+    if target.dtype == torch.float32:
+        target.copy_(source)
+        return
+    if target.dtype == torch.bfloat16:
+        _copy_stochastic_bf16(target, source)
+        return
+    target.copy_(source.to(target.dtype))
+
+
+# Note on stochastic-rounding grad accumulation:
+# Upstream (ostris/ai-toolkit, tdrussell/diffusion-pipe) registers a
+# post-accumulate-grad hook to do fp32 grad accumulation with stochastic
+# rounding. Automagic (v1) deliberately does NOT enable that path because it
+# silently breaks two common training paths (Automagic2 / v2 below is the
+# explicit experimental opt-in for the fused-backward design — gated off in
+# the UI by default, see SystemConfig.enable_automagic_v2):
+#   1. torch.cuda.amp.GradScaler.unscale_ skips params where p.grad is None
+#      — the hook deletes p.grad after each backward, so unscale never runs
+#      and the optimizer would step on still-scaled gradients.
+#   2. torch.nn.utils.clip_grad_norm_ skips p.grad is None, so grad clipping
+#      becomes a no-op.
+# bf16 numerical stability is instead handled inside Automagic.step via
+# Kahan compensated summation (see `shift` buffer below). See upstream
+# diffusion-pipe optimizers/automagic.py:72-79 (commented out by author).
+
+
+class Automagic(Optimizer):
+    def __init__(
+        self,
+        params,
+        lr: float = 1e-6,
+        min_lr: float = 1e-7,
+        max_lr: float = 1e-3,
+        lr_bump: float = 1e-6,
+        eps: float = 1e-30,
+        clip_threshold: float = 1.0,
+        beta2: float = 0.999,
+        weight_decay: float = 0.0,
+    ) -> None:
+        if lr < 0.0:
+            raise ValueError(f"Invalid learning rate: {lr}")
+        if min_lr < 0.0:
+            raise ValueError(f"Invalid min_lr: {min_lr}")
+        if max_lr <= 0.0 or max_lr < min_lr:
+            raise ValueError(f"Invalid max_lr: {max_lr}")
+        if lr_bump < 0.0:
+            raise ValueError(f"Invalid lr_bump: {lr_bump}")
+        if not 0.0 <= beta2 < 1.0:
+            raise ValueError(f"Invalid beta2: {beta2}")
+        if clip_threshold <= 0.0:
+            raise ValueError(f"Invalid clip_threshold: {clip_threshold}")
+        if weight_decay < 0.0:
+            raise ValueError(f"Invalid weight_decay: {weight_decay}")
+
+        self.lr = min(lr, max_lr)
+        if lr > 1e-3:
+            logger.warning("Automagic start lr %s is high; clamping to 1e-6", lr)
+            self.lr = 1e-6
+        self.min_lr = min_lr
+        self.max_lr = max_lr
+        self.lr_bump = lr_bump
+        super().__init__(
+            params,
+            dict(
+                lr=self.lr,
+                eps=eps,
+                clip_threshold=clip_threshold,
+                beta2=beta2,
+                weight_decay=weight_decay,
+            ),
+        )
+        self.base_lrs = [self.lr for _ in self.param_groups]
+
+    @staticmethod
+    def _rms(tensor: torch.Tensor) -> torch.Tensor:
+        return tensor.norm(2) / (tensor.numel() ** 0.5)
+
+    @staticmethod
+    def _approx_sq_grad(exp_avg_sq_row: torch.Tensor, exp_avg_sq_col: torch.Tensor) -> torch.Tensor:
+        r_factor = (exp_avg_sq_row / exp_avg_sq_row.mean(dim=-1, keepdim=True)).rsqrt_().unsqueeze(-1)
+        c_factor = exp_avg_sq_col.unsqueeze(-2).rsqrt()
+        return torch.mul(r_factor, c_factor)
+
+    @staticmethod
+    def _get_lr(param_state: dict[str, Any]) -> float:
+        avg_lr = param_state.get("avg_lr")
+        if avg_lr is None:
+            return 0.0
+        if isinstance(avg_lr, torch.Tensor):
+            return float(avg_lr.detach().float().item())
+        return float(avg_lr)
+
+    def _get_group_lr(self, group: dict[str, Any]) -> float:
+        lrs = [self._get_lr(self.state[p]) for p in group["params"] if p in self.state]
+        if not lrs:
+            return self.lr
+        return sum(lrs) / len(lrs)
+
+    def get_learning_rates(self) -> list[float]:
+        lrs = [self._get_group_lr(group) for group in self.param_groups]
+        return lrs or self.base_lrs
+
+    def get_avg_learning_rate(self) -> float:
+        lrs = self.get_learning_rates()
+        return sum(lrs) / len(lrs)
+
+    def initialize_state(self, p: nn.Parameter) -> None:
+        state = self.state[p]
+        state["step"] = 0
+        if "lr_mask" not in state:
+            state["lr_mask"] = Auto8bitTensor(
+                torch.ones(p.shape, device=p.device, dtype=torch.float32) * self.lr
+            )
+        state["avg_lr"] = torch.mean(state["lr_mask"].to(torch.float32))
+        if "last_polarity" not in state:
+            state["last_polarity"] = torch.zeros(p.shape, dtype=torch.bool, device=p.device)
+        if len(p.shape) >= 2:
+            state["exp_avg_sq_row"] = torch.zeros(p.shape[:-1]).to(p)
+            state["exp_avg_sq_col"] = torch.zeros(p.shape[:-2] + p.shape[-1:]).to(p)
+        else:
+            state["exp_avg_sq"] = torch.zeros_like(p)
+        state["RMS"] = 0
+        # Kahan compensated summation for bf16 — keeps the rounded-off portion
+        # of each update so it can be applied on the next step. Aligns with
+        # upstream diffusion-pipe (optimizers/automagic.py:354-356).
+        if p.dtype == torch.bfloat16 and "shift" not in state:
+            state["shift"] = torch.zeros_like(p)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None or not p.requires_grad:
+                    continue
+                grad = p.grad
+                if grad.dtype != torch.float32:
+                    grad = grad.to(torch.float32)
+                if grad.is_sparse:
+                    raise RuntimeError("Automagic does not support sparse gradients")
+
+                state = self.state[p]
+                if len(state) == 0:
+                    self.initialize_state(p)
+                factored = len(grad.shape) >= 2
+                if factored:
+                    state.setdefault("exp_avg_sq_row", torch.zeros(p.shape[:-1]).to(grad))
+                    state.setdefault("exp_avg_sq_col", torch.zeros(p.shape[:-2] + p.shape[-1:]).to(grad))
+                    state["exp_avg_sq_row"] = state["exp_avg_sq_row"].to(grad)
+                    state["exp_avg_sq_col"] = state["exp_avg_sq_col"].to(grad)
+                else:
+                    state.setdefault("exp_avg_sq", torch.zeros_like(grad))
+                    state["exp_avg_sq"] = state["exp_avg_sq"].to(grad)
+
+                p_data_fp32 = p.dequantize() if QBytesTensor and isinstance(p, QBytesTensor) else p
+                if p.dtype != torch.float32:
+                    p_data_fp32 = p_data_fp32.clone().float()
+
+                state["step"] = state.get("step", 0) + 1
+                state["RMS"] = self._rms(p_data_fp32)
+                beta2 = group["beta2"]
+                eps = group["eps"]
+                update = (grad ** 2) + eps
+                if factored:
+                    exp_avg_sq_row = state["exp_avg_sq_row"]
+                    exp_avg_sq_col = state["exp_avg_sq_col"]
+                    exp_avg_sq_row.mul_(beta2).add_(update.mean(dim=-1), alpha=(1.0 - beta2))
+                    exp_avg_sq_col.mul_(beta2).add_(update.mean(dim=-2), alpha=(1.0 - beta2))
+                    update = self._approx_sq_grad(exp_avg_sq_row, exp_avg_sq_col)
+                    update.mul_(grad)
+                else:
+                    exp_avg_sq = state["exp_avg_sq"]
+                    exp_avg_sq.mul_(beta2).add_(update, alpha=(1.0 - beta2))
+                    update = exp_avg_sq.rsqrt().mul_(grad)
+
+                update.div_((self._rms(update) / group["clip_threshold"]).clamp_(min=1.0))
+
+                if "last_polarity" not in state or "lr_mask" not in state:
+                    self.initialize_state(p)
+                current_polarity = (update > 0).to(torch.bool)
+                sign_agreement = torch.where(state["last_polarity"] == current_polarity, 1, -1)
+                state["last_polarity"] = current_polarity
+                lr_mask = state["lr_mask"].to(torch.float32)
+                new_lr = torch.where(
+                    sign_agreement > 0,
+                    lr_mask + self.lr_bump,
+                    lr_mask - self.lr_bump,
+                )
+                new_lr = torch.clamp(new_lr, min=self.min_lr, max=self.max_lr)
+                update.mul_(new_lr)
+                state["lr_mask"] = Auto8bitTensor(new_lr)
+                state["avg_lr"] = torch.mean(new_lr)
+
+                if group["weight_decay"] != 0:
+                    weight_decay_update = p_data_fp32 * (-group["weight_decay"]) * new_lr
+                else:
+                    weight_decay_update = None
+
+                if p.dtype == torch.bfloat16:
+                    # Kahan compensated summation — matches upstream
+                    # diffusion-pipe (optimizers/automagic.py:308-318). Trades
+                    # one extra bf16 buffer (`state['shift']`) for unbiased,
+                    # zero-variance accumulation over long bf16 training; the
+                    # alternative stochastic-rounding path injects ~scale/2
+                    # noise per step into the lr_mask sign-agreement signal.
+                    update.mul_(-1)
+                    if weight_decay_update is not None:
+                        update.add_(weight_decay_update)
+                    shift = state.setdefault("shift", torch.zeros_like(p))
+                    shift.add_(update)
+                    # Use grad tensor as scratch buffer for the pre-update p,
+                    # so shift carries forward only the bf16 rounding error.
+                    grad.copy_(p.detach())
+                    p.add_(shift)
+                    shift.add_(grad.sub_(p))
+                else:
+                    if weight_decay_update is not None:
+                        p_data_fp32.add_(weight_decay_update)
+                    p_data_fp32.add_(-update)
+                    if p.dtype != torch.float32:
+                        _copy_stochastic(p, p_data_fp32)
+
+        return loss
+
+    def state_dict(self, *args, **kwargs):
+        state_dict = super().state_dict(*args, **kwargs)
+        state_dict["state"] = {
+            p: {
+                **{k: v for k, v in state.items() if k != "lr_mask"},
+                **({"lr_mask": state["lr_mask"].state_dict()} if "lr_mask" in state else {}),
+            }
+            for p, state in state_dict["state"].items()
+        }
+        return state_dict
+
+    def load_state_dict(self, state_dict, strict: bool = True):
+        converted = {
+            "state": {},
+            "param_groups": state_dict.get("param_groups", []),
+        }
+        for param_id, state in state_dict.get("state", {}).items():
+            converted_state = dict(state)
+            if isinstance(converted_state.get("lr_mask"), dict):
+                converted_state["lr_mask"] = Auto8bitTensor(converted_state["lr_mask"])
+            converted["state"][param_id] = converted_state
+        result = super().load_state_dict(converted)
+        # PyTorch 只把 float state 搬到 param 的 dtype/device；bool tensor 与
+        # Auto8bitTensor 内部的 int8 不参与，resume 后留在 CPU。统一搬回。
+        for group in self.param_groups:
+            for p in group["params"]:
+                st = self.state.get(p)
+                if st is None:
+                    continue
+                device = p.device
+                if isinstance(st.get("last_polarity"), torch.Tensor):
+                    st["last_polarity"] = st["last_polarity"].to(device=device)
+                if isinstance(st.get("lr_mask"), Auto8bitTensor):
+                    st["lr_mask"].quantized = st["lr_mask"].quantized.to(device=device)
+        return result
+
+
+def create_automagic(
+    params: Iterator[nn.Parameter],
+    lr: float,
+    min_lr: float = 1e-7,
+    max_lr: float = 1e-3,
+    lr_bump: float = 1e-6,
+    eps: float = 1e-30,
+    clip_threshold: float = 1.0,
+    beta2: float = 0.999,
+    weight_decay: float = 0.0,
+    **kwargs,
+) -> Optimizer:
+    # Automagic 上游推荐 init lr=1e-6（每参数自适应起点）；> 1e-5 量级是 AdamW
+    # 风格 lr 误用，sign-agreement 调度需要很多 step 才能从过高起点收敛回工作区间。
+    # UI 切换 optimizer_type 时会自动改写 lr=1e-6；这里兜底 saved config / CLI 路径。
+    if lr > 1e-5:
+        logger.warning(
+            "Automagic 初始 lr=%.2e 远高于推荐 1e-6；sign-agreement 自适应从过高起点"
+            "收敛慢，建议设为 1e-6（per-param lr 由 [min_lr, max_lr] 自动调）",
+            lr,
+        )
+    param_list = params if _is_param_groups(params) else list(params)
+    optimizer = Automagic(
+        param_list,
+        lr=lr,
+        min_lr=min_lr,
+        max_lr=max_lr,
+        lr_bump=lr_bump,
+        eps=eps,
+        clip_threshold=clip_threshold,
+        beta2=beta2,
+        weight_decay=weight_decay,
+        **kwargs,
+    )
+    print(
+        f"Creating Automagic optimizer (lr={lr}, min_lr={min_lr}, max_lr={max_lr}, "
+        f"lr_bump={lr_bump}, beta2={beta2}, weight_decay={weight_decay})"
+    )
+    print("  [OK] Automagic optimizer created")
+    return optimizer
+
+
+class Automagic2(Optimizer):
+    """Automagic v2 — per-parameter scalar LR, fused into backward pass.
+
+    Instead of a per-element lr_mask, keeps one scalar lr per parameter tensor.
+    The optimizer step is fused into backward via register_post_accumulate_grad_hook:
+    each parameter is updated and its grad freed as soon as autograd finishes
+    accumulating into it. .step() is therefore a no-op and peak VRAM stays low.
+
+    Incompatible with GradScaler, clip_grad_norm_ and gradient accumulation
+    (params update during backward) — see the design note above class Automagic.
+    Experimental: UI 默认隐藏（SystemConfig.enable_automagic_v2）。
+    """
+
+    def __init__(
+        self,
+        params,
+        lr: float = 1e-6,
+        min_lr: float = 1e-7,
+        max_lr: float = 1e-3,
+        lr_bump: float = 1e-6,
+        beta2: float = 0.999,
+        eps: float = 1e-30,
+        clip_threshold: float = 1.0,
+        weight_decay: float = 0.0,
+        agreement_threshold: float = 0.5,
+    ) -> None:
+        if lr > 1e-3:
+            logger.warning("Automagic2 start lr %s is high; forcing to 1e-6.", lr)
+            lr = 1e-6
+        defaults = dict(
+            lr=lr, min_lr=min_lr, max_lr=max_lr, lr_bump=lr_bump,
+            beta2=beta2, eps=eps, clip_threshold=clip_threshold,
+            weight_decay=weight_decay, agreement_threshold=agreement_threshold,
+        )
+        super().__init__(params, defaults)
+
+        self._hook_handles: list = []
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.requires_grad:
+                    handle = p.register_post_accumulate_grad_hook(
+                        self._make_backward_hook(group)
+                    )
+                    self._hook_handles.append(handle)
+
+        total = sum(p.numel() for g in self.param_groups for p in g["params"])
+        logger.info(f"Automagic2 total training params: {total:,}")
+
+    @staticmethod
+    def _rms(t: torch.Tensor) -> torch.Tensor:
+        return t.norm(2) / (t.numel() ** 0.5)
+
+    @staticmethod
+    def _approx_sq_grad(row: torch.Tensor, col: torch.Tensor) -> torch.Tensor:
+        r = (row / row.mean(dim=-1, keepdim=True)).rsqrt_().unsqueeze(-1)
+        c = col.unsqueeze(-2).rsqrt()
+        return torch.mul(r, c)
+
+    def _init_state(self, p: torch.Tensor, group: dict) -> None:
+        state = self.state[p]
+        state["step"] = 0
+        state["lr"] = torch.full((), float(group["lr"]), dtype=torch.float32, device=p.device)
+        state["last_polarity"] = torch.zeros(p.shape, dtype=torch.bool, device=p.device)
+        if p.dim() >= 2:
+            state["exp_avg_sq_row"] = torch.zeros(p.shape[:-1], dtype=p.dtype, device=p.device)
+            state["exp_avg_sq_col"] = torch.zeros(p.shape[:-2] + p.shape[-1:], dtype=p.dtype, device=p.device)
+        else:
+            state["exp_avg_sq"] = torch.zeros(p.shape, dtype=p.dtype, device=p.device)
+
+    def _make_backward_hook(self, group):
+        def _hook(p: torch.Tensor):
+            self._update_param(p, group)
+        return _hook
+
+    @torch.no_grad()
+    def _update_param(self, p: torch.Tensor, group: dict) -> None:
+        if p.grad is None:
+            return
+        state = self.state[p]
+        if len(state) == 0:
+            self._init_state(p, group)
+
+        grad = p.grad
+        if grad.is_sparse:
+            raise RuntimeError("Automagic2 does not support sparse gradients.")
+        if grad.dtype != torch.float32:
+            grad = grad.to(torch.float32)
+
+        beta2 = group["beta2"]
+        eps = group["eps"]
+        sq = (grad * grad).add_(eps)
+
+        if p.dim() >= 2:
+            row_state = state["exp_avg_sq_row"]
+            col_state = state["exp_avg_sq_col"]
+            if row_state.dtype == torch.float32:
+                row, col = row_state, col_state
+            else:
+                row = row_state.to(torch.float32)
+                col = col_state.to(torch.float32)
+            row.mul_(beta2).add_(sq.mean(dim=-1), alpha=1.0 - beta2)
+            col.mul_(beta2).add_(sq.mean(dim=-2), alpha=1.0 - beta2)
+            if row_state.dtype != torch.float32:
+                row_state.copy_(row.to(row_state.dtype))
+                col_state.copy_(col.to(col_state.dtype))
+            update = self._approx_sq_grad(row, col).mul_(grad)
+        else:
+            v_state = state["exp_avg_sq"]
+            if v_state.dtype == torch.float32:
+                v = v_state
+            else:
+                v = v_state.to(torch.float32)
+            v.mul_(beta2).add_(sq, alpha=1.0 - beta2)
+            if v_state.dtype != torch.float32:
+                v_state.copy_(v.to(v_state.dtype))
+            update = v.rsqrt().mul_(grad)
+
+        update.div_((self._rms(update) / group["clip_threshold"]).clamp_(min=1.0))
+
+        # Per-element sign agreement collapsed to a single scalar lr decision
+        cur_polarity = update > 0
+        last_polarity = state["last_polarity"]
+        agreement = (cur_polarity == last_polarity).to(torch.float32).mean()
+        state["last_polarity"] = cur_polarity
+
+        lr_t = state["lr"]
+        if state["step"] > 0:
+            direction = (agreement >= group["agreement_threshold"]).to(lr_t.dtype) * 2.0 - 1.0
+            lr_t.add_(direction, alpha=group["lr_bump"]).clamp_(
+                min=group["min_lr"], max=group["max_lr"]
+            )
+        state["step"] += 1
+
+        update.mul_(lr_t)
+        wd = group["weight_decay"]
+
+        if p.dtype == torch.bfloat16:
+            new_p_fp32 = p.to(torch.float32)
+            if wd != 0.0:
+                update.addcmul_(new_p_fp32, lr_t, value=wd)
+            new_p_fp32.sub_(update)
+            # Stochastic rounding fp32 → bf16
+            as_int = new_p_fp32.view(torch.int32)
+            as_int.add_(torch.randint_like(as_int, 1 << 16)).bitwise_and_(-65536)
+            p.copy_(new_p_fp32)
+        else:
+            if wd != 0.0:
+                p_fp32 = p if p.dtype == torch.float32 else p.to(torch.float32)
+                update.addcmul_(p_fp32, lr_t, value=wd)
+            p.add_(update.to(p.dtype), alpha=-1.0)
+
+        p.grad = None
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+        return loss
+
+    def get_learning_rates(self) -> "list[float]":
+        out = []
+        for group in self.param_groups:
+            lrs = [
+                float(self.state[p]["lr"])
+                for p in group["params"]
+                if p in self.state and "lr" in self.state[p]
+            ]
+            out.append(sum(lrs) / len(lrs) if lrs else float(group["lr"]))
+        return out
+
+    def get_avg_learning_rate(self) -> float:
+        lrs = self.get_learning_rates()
+        return sum(lrs) / len(lrs) if lrs else float(self.defaults["lr"])
+
+    def load_state_dict(self, state_dict):
+        super().load_state_dict(state_dict)
+        for group in self.param_groups:
+            for k, v in self.defaults.items():
+                group[k] = v
+            for p in group["params"]:
+                st = self.state.get(p)
+                if st is not None and isinstance(st.get("lr"), torch.Tensor):
+                    st["lr"] = st["lr"].to(torch.float32)
+
+
+def create_automagic_v2(
+    params: Iterator[nn.Parameter],
+    lr: float,
+    min_lr: float = 1e-7,
+    max_lr: float = 1e-3,
+    lr_bump: float = 1e-6,
+    eps: float = 1e-30,
+    clip_threshold: float = 1.0,
+    beta2: float = 0.999,
+    weight_decay: float = 0.0,
+    agreement_threshold: float = 0.5,
+    **kwargs,
+) -> Optimizer:
+    if lr > 1e-5:
+        logger.warning(
+            "Automagic2 初始 lr=%.2e 远高于推荐 1e-6；sign-agreement 自适应从过高起点"
+            "收敛慢，建议设为 1e-6", lr,
+        )
+    param_list = params if _is_param_groups(params) else list(params)
+    optimizer = Automagic2(
+        param_list, lr=lr, min_lr=min_lr, max_lr=max_lr, lr_bump=lr_bump,
+        eps=eps, clip_threshold=clip_threshold, beta2=beta2, weight_decay=weight_decay,
+        agreement_threshold=agreement_threshold,
+    )
+    logger.info(
+        f"Creating Automagic v2 (lr={lr}, min_lr={min_lr}, max_lr={max_lr}, "
+        f"lr_bump={lr_bump}, beta2={beta2}, wd={weight_decay}, "
+        f"agreement_threshold={agreement_threshold})"
+    )
+    return optimizer
+
+
+class Lion(Optimizer):
+    """EvoLved Sign Momentum optimizer (Chen et al., 2023).
+
+    Paper: "Symbolic Discovery of Optimization Algorithms"
+        https://arxiv.org/abs/2302.06675  (Google Brain)
+
+    Reference implementations:
+    - Google official:    https://github.com/google/automl/tree/master/lion
+    - Community PyTorch:  https://github.com/lucidrains/lion-pytorch
+
+    This is a minimal re-implementation aligning with the paper's Algorithm 1
+    and Google's reference; no dependency on `lion-pytorch`.
+    """
+
+    def __init__(
+        self,
+        params,
+        lr: float = 1e-4,
+        betas: tuple[float, float] = (0.9, 0.99),
+        weight_decay: float = 0.0,
+    ) -> None:
+        if lr < 0.0:
+            raise ValueError(f"Invalid learning rate: {lr}")
+        if not 0.0 <= betas[0] < 1.0:
+            raise ValueError(f"Invalid beta1: {betas[0]}")
+        if not 0.0 <= betas[1] < 1.0:
+            raise ValueError(f"Invalid beta2: {betas[1]}")
+        if weight_decay < 0.0:
+            raise ValueError(f"Invalid weight_decay: {weight_decay}")
+        super().__init__(params, dict(lr=lr, betas=betas, weight_decay=weight_decay))
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        for group in self.param_groups:
+            lr = group["lr"]
+            beta1, beta2 = group["betas"]
+            weight_decay = group["weight_decay"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                grad = p.grad
+                if grad.is_sparse:
+                    raise RuntimeError("Lion does not support sparse gradients")
+
+                if weight_decay != 0.0:
+                    p.mul_(1 - lr * weight_decay)
+
+                state = self.state[p]
+                if len(state) == 0:
+                    state["exp_avg"] = torch.zeros_like(p)
+                exp_avg = state["exp_avg"]
+
+                update = exp_avg.mul(beta1).add(grad, alpha=1 - beta1)
+                p.add_(update.sign(), alpha=-lr)
+                exp_avg.mul_(beta2).add_(grad, alpha=1 - beta2)
+
+        return loss
+
+
+def create_lion(
+    params: Iterator[nn.Parameter],
+    lr: float,
+    betas: tuple = (0.9, 0.99),
+    weight_decay: float = 0.0,
+    **kwargs,
+) -> Optimizer:
+    # Lion 论文（Chen et al. 2023, arxiv 2302.06675 §4.3）经验：lr ≈ AdamW lr / 3，
+    # weight_decay 3-10× AdamW。从 AdamW 默认 lr=1e-4 直切 Lion 容易发散；这里在
+    # lr 落在 AdamW 量级（1e-4 及以上）时提示一下。详细见 docs/user-guide/optimizers.md。
+    if lr >= 1e-4:
+        logger.warning(
+            "Lion lr=%.2e 接近/高于 AdamW 量级；论文推荐 lr ≈ AdamW lr / 3 "
+            "（如 AdamW 1e-4 → Lion ~3e-5）。继续训练但可能发散，详见 "
+            "docs/user-guide/optimizers.md",
+            lr,
+        )
+    param_list = params if _is_param_groups(params) else list(params)
+    optimizer = Lion(param_list, lr=lr, betas=betas, weight_decay=weight_decay, **kwargs)
+    print(f"Creating Lion optimizer (lr={lr}, betas={betas}, weight_decay={weight_decay})")
+    print("  [OK] Lion optimizer created")
     return optimizer
 
 
@@ -527,540 +1222,6 @@ def optimizer_eval_mode(optimizer: Optimizer):
         yield
 
 
-# ============================================================================
-# Automagic optimizer + Auto8bitTensor helper
-#
-# Adapted from ostris/ai-toolkit (https://github.com/ostris/ai-toolkit), which
-# also flowed through tdrussell/diffusion-pipe (added Kahan summation for
-# bfloat16). The core sign-agreement schedule, 8-bit lr_mask, Adafactor-style
-# factored 2nd moment, and stochastic-rounding helpers below are Ostris's
-# design.
-#
-# MIT License — Copyright (c) 2024 Ostris, LLC
-# ============================================================================
-
-
-class Auto8bitTensor:
-    def __init__(self, data: "torch.Tensor | dict[str, Any]") -> None:
-        if isinstance(data, dict):
-            self.quantized = data["quantized"]
-            self.scale = data["scale"]
-            self.orig_dtype = data["orig_dtype"]
-            return
-        abs_max = data.abs().max().item()
-        self.scale = abs_max / 127.0 if abs_max > 0 else 1.0
-        self.quantized = (data / self.scale).round().clamp(-127, 127).to(torch.int8)
-        self.orig_dtype = data.dtype
-
-    def dequantize(self) -> torch.Tensor:
-        return self.quantized.to(dtype=torch.float32) * self.scale
-
-    def to(self, *args, **kwargs):
-        return self.dequantize().to(*args, **kwargs)
-
-    def state_dict(self) -> "dict[str, Any]":
-        return {
-            "quantized": self.quantized,
-            "scale": self.scale,
-            "orig_dtype": self.orig_dtype,
-        }
-
-
-def _copy_stochastic_bf16(target: torch.Tensor, source: torch.Tensor) -> None:
-    result = torch.randint_like(source, dtype=torch.int32, low=0, high=(1 << 16))
-    result.add_(source.view(dtype=torch.int32))
-    result.bitwise_and_(-65536)
-    target.copy_(result.view(dtype=torch.float32))
-
-
-def _copy_stochastic(target: torch.Tensor, source: torch.Tensor) -> None:
-    if target.dtype == torch.float32:
-        target.copy_(source)
-        return
-    if target.dtype == torch.bfloat16:
-        _copy_stochastic_bf16(target, source)
-        return
-    target.copy_(source.to(target.dtype))
-
-
-# --- PLACEHOLDER_AUTOMAGIC_CLASSES ---
-
-
-class Automagic(Optimizer):
-    """Per-element adaptive LR optimizer via sign-agreement tracking (v1).
-
-    Uses Adafactor-style factored second moment + per-element lr_mask stored
-    as int8 (Auto8bitTensor). bf16 training uses Kahan compensated summation
-    with fp32 shift buffer for lossless accumulation.
-    """
-
-    def __init__(
-        self,
-        params,
-        lr: float = 1e-6,
-        min_lr: float = 1e-7,
-        max_lr: float = 1e-3,
-        lr_bump: float = 1e-6,
-        eps: float = 1e-30,
-        clip_threshold: float = 1.0,
-        beta2: float = 0.999,
-        weight_decay: float = 0.0,
-    ) -> None:
-        if lr < 0.0:
-            raise ValueError(f"Invalid learning rate: {lr}")
-        if not 0.0 <= beta2 < 1.0:
-            raise ValueError(f"Invalid beta2: {beta2}")
-
-        self.lr = min(lr, max_lr)
-        if lr > 1e-3:
-            logger.warning("Automagic start lr %s is high; clamping to 1e-6", lr)
-            self.lr = 1e-6
-        self.min_lr = min_lr
-        self.max_lr = max_lr
-        self.lr_bump = lr_bump
-        super().__init__(
-            params,
-            dict(lr=self.lr, eps=eps, clip_threshold=clip_threshold,
-                 beta2=beta2, weight_decay=weight_decay),
-        )
-        self.base_lrs = [self.lr for _ in self.param_groups]
-
-    @staticmethod
-    def _rms(tensor: torch.Tensor) -> torch.Tensor:
-        return tensor.norm(2) / (tensor.numel() ** 0.5)
-
-    @staticmethod
-    def _approx_sq_grad(row: torch.Tensor, col: torch.Tensor) -> torch.Tensor:
-        r = (row / row.mean(dim=-1, keepdim=True)).rsqrt_().unsqueeze(-1)
-        c = col.unsqueeze(-2).rsqrt()
-        return torch.mul(r, c)
-
-    @staticmethod
-    def _get_lr(param_state: "dict[str, Any]") -> float:
-        avg_lr = param_state.get("avg_lr")
-        if avg_lr is None:
-            return 0.0
-        if isinstance(avg_lr, torch.Tensor):
-            return float(avg_lr.detach().float().item())
-        return float(avg_lr)
-
-    def _get_group_lr(self, group: "dict[str, Any]") -> float:
-        lrs = [self._get_lr(self.state[p]) for p in group["params"] if p in self.state]
-        return sum(lrs) / len(lrs) if lrs else self.lr
-
-    def get_learning_rates(self) -> "list[float]":
-        lrs = [self._get_group_lr(g) for g in self.param_groups]
-        return lrs or self.base_lrs
-
-    def get_avg_learning_rate(self) -> float:
-        lrs = self.get_learning_rates()
-        return sum(lrs) / len(lrs)
-
-    def initialize_state(self, p: nn.Parameter) -> None:
-        state = self.state[p]
-        state["step"] = 0
-        if "lr_mask" not in state:
-            state["lr_mask"] = Auto8bitTensor(
-                torch.ones(p.shape, device=p.device, dtype=torch.float32) * self.lr
-            )
-        state["avg_lr"] = torch.mean(state["lr_mask"].to(torch.float32))
-        if "last_polarity" not in state:
-            state["last_polarity"] = torch.zeros(p.shape, dtype=torch.bool, device=p.device)
-        if len(p.shape) >= 2:
-            state["exp_avg_sq_row"] = torch.zeros(p.shape[:-1]).to(p)
-            state["exp_avg_sq_col"] = torch.zeros(p.shape[:-2] + p.shape[-1:]).to(p)
-        else:
-            state["exp_avg_sq"] = torch.zeros_like(p)
-        state["RMS"] = 0
-        # Kahan compensated summation — fp32 shift tracks bf16 rounding error
-        if p.dtype == torch.bfloat16 and "shift" not in state:
-            state["shift"] = torch.zeros(p.shape, dtype=torch.float32, device=p.device)
-
-    # --- PLACEHOLDER_AUTOMAGIC_STEP ---
-
-    @torch.no_grad()
-    def step(self, closure=None):
-        loss = None
-        if closure is not None:
-            with torch.enable_grad():
-                loss = closure()
-
-        for group in self.param_groups:
-            for p in group["params"]:
-                if p.grad is None or not p.requires_grad:
-                    continue
-                grad = p.grad
-                if grad.dtype != torch.float32:
-                    grad = grad.to(torch.float32)
-                if grad.is_sparse:
-                    raise RuntimeError("Automagic does not support sparse gradients")
-
-                state = self.state[p]
-                if len(state) == 0:
-                    self.initialize_state(p)
-                factored = len(grad.shape) >= 2
-                if factored:
-                    state.setdefault("exp_avg_sq_row", torch.zeros(p.shape[:-1]).to(grad))
-                    state.setdefault("exp_avg_sq_col", torch.zeros(p.shape[:-2] + p.shape[-1:]).to(grad))
-                    state["exp_avg_sq_row"] = state["exp_avg_sq_row"].to(grad)
-                    state["exp_avg_sq_col"] = state["exp_avg_sq_col"].to(grad)
-                else:
-                    state.setdefault("exp_avg_sq", torch.zeros_like(grad))
-                    state["exp_avg_sq"] = state["exp_avg_sq"].to(grad)
-
-                p_data_fp32 = p
-                if p.dtype != torch.float32:
-                    p_data_fp32 = p.clone().float()
-
-                state["step"] = state.get("step", 0) + 1
-                state["RMS"] = self._rms(p_data_fp32)
-                beta2 = group["beta2"]
-                eps = group["eps"]
-                update = (grad ** 2) + eps
-                if factored:
-                    row = state["exp_avg_sq_row"]
-                    col = state["exp_avg_sq_col"]
-                    row.mul_(beta2).add_(update.mean(dim=-1), alpha=(1.0 - beta2))
-                    col.mul_(beta2).add_(update.mean(dim=-2), alpha=(1.0 - beta2))
-                    update = self._approx_sq_grad(row, col)
-                    update.mul_(grad)
-                else:
-                    v = state["exp_avg_sq"]
-                    v.mul_(beta2).add_(update, alpha=(1.0 - beta2))
-                    update = v.rsqrt().mul_(grad)
-
-                update.div_((self._rms(update) / group["clip_threshold"]).clamp_(min=1.0))
-
-                if "last_polarity" not in state or "lr_mask" not in state:
-                    self.initialize_state(p)
-                current_polarity = (update > 0).to(torch.bool)
-                sign_agreement = torch.where(state["last_polarity"] == current_polarity, 1, -1)
-                state["last_polarity"] = current_polarity
-                lr_mask = state["lr_mask"].to(torch.float32)
-                new_lr = torch.where(
-                    sign_agreement > 0,
-                    lr_mask + self.lr_bump,
-                    lr_mask - self.lr_bump,
-                )
-                new_lr = torch.clamp(new_lr, min=self.min_lr, max=self.max_lr)
-                update.mul_(new_lr)
-                state["lr_mask"] = Auto8bitTensor(new_lr)
-                state["avg_lr"] = torch.mean(new_lr)
-
-                if group["weight_decay"] != 0:
-                    wd_update = p_data_fp32 * (-group["weight_decay"]) * new_lr
-                else:
-                    wd_update = None
-
-                if p.dtype == torch.bfloat16:
-                    # Kahan compensated summation with fp32 shift buffer
-                    delta = -update
-                    if wd_update is not None:
-                        delta.add_(wd_update)
-                    shift = state.setdefault(
-                        "shift", torch.zeros(p.shape, dtype=torch.float32, device=p.device)
-                    )
-                    shift.add_(delta)
-                    old_p_fp32 = p.float()
-                    new_p_fp32 = old_p_fp32 + shift
-                    p.copy_(new_p_fp32.to(torch.bfloat16))
-                    # shift carries forward the rounding error
-                    shift.copy_(new_p_fp32 - p.float())
-                else:
-                    if wd_update is not None:
-                        p_data_fp32.add_(wd_update)
-                    p_data_fp32.add_(-update)
-                    if p.dtype != torch.float32:
-                        _copy_stochastic(p, p_data_fp32)
-
-        return loss
-
-    def state_dict(self, *args, **kwargs):
-        sd = super().state_dict(*args, **kwargs)
-        sd["state"] = {
-            pid: {
-                **{k: v for k, v in st.items() if k != "lr_mask"},
-                **({"lr_mask": st["lr_mask"].state_dict()} if "lr_mask" in st else {}),
-            }
-            for pid, st in sd["state"].items()
-        }
-        return sd
-
-    def load_state_dict(self, state_dict, strict: bool = True):
-        converted = {"state": {}, "param_groups": state_dict.get("param_groups", [])}
-        for pid, st in state_dict.get("state", {}).items():
-            cs = dict(st)
-            if isinstance(cs.get("lr_mask"), dict):
-                cs["lr_mask"] = Auto8bitTensor(cs["lr_mask"])
-            converted["state"][pid] = cs
-        result = super().load_state_dict(converted)
-        # PyTorch only moves float tensors to param device; bool state and
-        # Auto8bitTensor internals stay on CPU after load. Fix them up.
-        for group in self.param_groups:
-            for p in group["params"]:
-                st = self.state.get(p)
-                if st is None:
-                    continue
-                device = p.device
-                if isinstance(st.get("last_polarity"), torch.Tensor):
-                    st["last_polarity"] = st["last_polarity"].to(device=device)
-                if isinstance(st.get("lr_mask"), Auto8bitTensor):
-                    st["lr_mask"].quantized = st["lr_mask"].quantized.to(device=device)
-        return result
-
-
-# --- PLACEHOLDER_AUTOMAGIC2 ---
-
-
-class Automagic2(Optimizer):
-    """Automagic v2 — per-parameter scalar LR, fused into backward pass.
-
-    Instead of a per-element lr_mask, keeps one scalar lr per parameter tensor.
-    The optimizer step is fused into backward via register_post_accumulate_grad_hook:
-    each parameter is updated and its grad freed as soon as autograd finishes
-    accumulating into it. .step() is therefore a no-op and peak VRAM stays low.
-
-    Incompatible with GradScaler and clip_grad_norm_ (params update during backward).
-    """
-
-    def __init__(
-        self,
-        params,
-        lr: float = 1e-6,
-        min_lr: float = 1e-7,
-        max_lr: float = 1e-3,
-        lr_bump: float = 1e-6,
-        beta2: float = 0.999,
-        eps: float = 1e-30,
-        clip_threshold: float = 1.0,
-        weight_decay: float = 0.0,
-        agreement_threshold: float = 0.5,
-    ) -> None:
-        if lr > 1e-3:
-            logger.warning("Automagic2 start lr %s is high; forcing to 1e-6.", lr)
-            lr = 1e-6
-        defaults = dict(
-            lr=lr, min_lr=min_lr, max_lr=max_lr, lr_bump=lr_bump,
-            beta2=beta2, eps=eps, clip_threshold=clip_threshold,
-            weight_decay=weight_decay, agreement_threshold=agreement_threshold,
-        )
-        super().__init__(params, defaults)
-
-        self._hook_handles: list = []
-        for group in self.param_groups:
-            for p in group["params"]:
-                if p.requires_grad:
-                    handle = p.register_post_accumulate_grad_hook(
-                        self._make_backward_hook(group)
-                    )
-                    self._hook_handles.append(handle)
-
-        total = sum(p.numel() for g in self.param_groups for p in g["params"])
-        logger.info(f"Automagic2 total training params: {total:,}")
-
-    @staticmethod
-    def _rms(t: torch.Tensor) -> torch.Tensor:
-        return t.norm(2) / (t.numel() ** 0.5)
-
-    @staticmethod
-    def _approx_sq_grad(row: torch.Tensor, col: torch.Tensor) -> torch.Tensor:
-        r = (row / row.mean(dim=-1, keepdim=True)).rsqrt_().unsqueeze(-1)
-        c = col.unsqueeze(-2).rsqrt()
-        return torch.mul(r, c)
-
-    def _init_state(self, p: torch.Tensor, group: dict) -> None:
-        state = self.state[p]
-        state["step"] = 0
-        state["lr"] = torch.full((), float(group["lr"]), dtype=torch.float32, device=p.device)
-        state["last_polarity"] = torch.zeros(p.shape, dtype=torch.bool, device=p.device)
-        if p.dim() >= 2:
-            state["exp_avg_sq_row"] = torch.zeros(p.shape[:-1], dtype=p.dtype, device=p.device)
-            state["exp_avg_sq_col"] = torch.zeros(p.shape[:-2] + p.shape[-1:], dtype=p.dtype, device=p.device)
-        else:
-            state["exp_avg_sq"] = torch.zeros(p.shape, dtype=p.dtype, device=p.device)
-
-    def _make_backward_hook(self, group):
-        def _hook(p: torch.Tensor):
-            self._update_param(p, group)
-        return _hook
-
-    @torch.no_grad()
-    def _update_param(self, p: torch.Tensor, group: dict) -> None:
-        if p.grad is None:
-            return
-        state = self.state[p]
-        if len(state) == 0:
-            self._init_state(p, group)
-
-        grad = p.grad
-        if grad.is_sparse:
-            raise RuntimeError("Automagic2 does not support sparse gradients.")
-        if grad.dtype != torch.float32:
-            grad = grad.to(torch.float32)
-
-        beta2 = group["beta2"]
-        eps = group["eps"]
-        sq = (grad * grad).add_(eps)
-
-        if p.dim() >= 2:
-            row_state = state["exp_avg_sq_row"]
-            col_state = state["exp_avg_sq_col"]
-            if row_state.dtype == torch.float32:
-                row, col = row_state, col_state
-            else:
-                row = row_state.to(torch.float32)
-                col = col_state.to(torch.float32)
-            row.mul_(beta2).add_(sq.mean(dim=-1), alpha=1.0 - beta2)
-            col.mul_(beta2).add_(sq.mean(dim=-2), alpha=1.0 - beta2)
-            if row_state.dtype != torch.float32:
-                row_state.copy_(row.to(row_state.dtype))
-                col_state.copy_(col.to(col_state.dtype))
-            update = self._approx_sq_grad(row, col).mul_(grad)
-        else:
-            v_state = state["exp_avg_sq"]
-            if v_state.dtype == torch.float32:
-                v = v_state
-            else:
-                v = v_state.to(torch.float32)
-            v.mul_(beta2).add_(sq, alpha=1.0 - beta2)
-            if v_state.dtype != torch.float32:
-                v_state.copy_(v.to(v_state.dtype))
-            update = v.rsqrt().mul_(grad)
-
-        update.div_((self._rms(update) / group["clip_threshold"]).clamp_(min=1.0))
-
-        # Per-element sign agreement collapsed to a single scalar lr decision
-        cur_polarity = update > 0
-        last_polarity = state["last_polarity"]
-        agreement = (cur_polarity == last_polarity).to(torch.float32).mean()
-        state["last_polarity"] = cur_polarity
-
-        lr_t = state["lr"]
-        if state["step"] > 0:
-            direction = (agreement >= group["agreement_threshold"]).to(lr_t.dtype) * 2.0 - 1.0
-            lr_t.add_(direction, alpha=group["lr_bump"]).clamp_(
-                min=group["min_lr"], max=group["max_lr"]
-            )
-        state["step"] += 1
-
-        update.mul_(lr_t)
-        wd = group["weight_decay"]
-
-        if p.dtype == torch.bfloat16:
-            new_p_fp32 = p.to(torch.float32)
-            if wd != 0.0:
-                update.addcmul_(new_p_fp32, lr_t, value=wd)
-            new_p_fp32.sub_(update)
-            # Stochastic rounding fp32 → bf16
-            as_int = new_p_fp32.view(torch.int32)
-            as_int.add_(torch.randint_like(as_int, 1 << 16)).bitwise_and_(-65536)
-            p.copy_(new_p_fp32)
-        else:
-            if wd != 0.0:
-                p_fp32 = p if p.dtype == torch.float32 else p.to(torch.float32)
-                update.addcmul_(p_fp32, lr_t, value=wd)
-            p.add_(update.to(p.dtype), alpha=-1.0)
-
-        p.grad = None
-
-    @torch.no_grad()
-    def step(self, closure=None):
-        loss = None
-        if closure is not None:
-            with torch.enable_grad():
-                loss = closure()
-        return loss
-
-    def get_learning_rates(self) -> "list[float]":
-        out = []
-        for group in self.param_groups:
-            lrs = [
-                float(self.state[p]["lr"])
-                for p in group["params"]
-                if p in self.state and "lr" in self.state[p]
-            ]
-            out.append(sum(lrs) / len(lrs) if lrs else float(group["lr"]))
-        return out
-
-    def get_avg_learning_rate(self) -> float:
-        lrs = self.get_learning_rates()
-        return sum(lrs) / len(lrs) if lrs else float(self.defaults["lr"])
-
-    def load_state_dict(self, state_dict):
-        super().load_state_dict(state_dict)
-        for group in self.param_groups:
-            for k, v in self.defaults.items():
-                group[k] = v
-            for p in group["params"]:
-                st = self.state.get(p)
-                if st is not None and isinstance(st.get("lr"), torch.Tensor):
-                    st["lr"] = st["lr"].to(torch.float32)
-
-
-# --- PLACEHOLDER_FACTORIES ---
-
-
-def create_automagic(
-    params: Iterator[nn.Parameter],
-    lr: float,
-    min_lr: float = 1e-7,
-    max_lr: float = 1e-3,
-    lr_bump: float = 1e-6,
-    eps: float = 1e-30,
-    clip_threshold: float = 1.0,
-    beta2: float = 0.999,
-    weight_decay: float = 0.0,
-    **kwargs,
-) -> Optimizer:
-    if lr > 1e-5:
-        logger.warning(
-            "Automagic 初始 lr=%.2e 远高于推荐 1e-6；sign-agreement 自适应从过高起点"
-            "收敛慢，建议设为 1e-6（per-param lr 由 [min_lr, max_lr] 自动调）", lr,
-        )
-    param_list = params if _is_param_groups(params) else list(params)
-    optimizer = Automagic(
-        param_list, lr=lr, min_lr=min_lr, max_lr=max_lr, lr_bump=lr_bump,
-        eps=eps, clip_threshold=clip_threshold, beta2=beta2, weight_decay=weight_decay,
-    )
-    logger.info(
-        f"Creating Automagic v1 (lr={lr}, min_lr={min_lr}, max_lr={max_lr}, "
-        f"lr_bump={lr_bump}, beta2={beta2}, wd={weight_decay})"
-    )
-    return optimizer
-
-
-def create_automagic_v2(
-    params: Iterator[nn.Parameter],
-    lr: float,
-    min_lr: float = 1e-7,
-    max_lr: float = 1e-3,
-    lr_bump: float = 1e-6,
-    eps: float = 1e-30,
-    clip_threshold: float = 1.0,
-    beta2: float = 0.999,
-    weight_decay: float = 0.0,
-    agreement_threshold: float = 0.5,
-    **kwargs,
-) -> Optimizer:
-    if lr > 1e-5:
-        logger.warning(
-            "Automagic2 初始 lr=%.2e 远高于推荐 1e-6；sign-agreement 自适应从过高起点"
-            "收敛慢，建议设为 1e-6", lr,
-        )
-    param_list = params if _is_param_groups(params) else list(params)
-    optimizer = Automagic2(
-        param_list, lr=lr, min_lr=min_lr, max_lr=max_lr, lr_bump=lr_bump,
-        eps=eps, clip_threshold=clip_threshold, beta2=beta2, weight_decay=weight_decay,
-        agreement_threshold=agreement_threshold,
-    )
-    logger.info(
-        f"Creating Automagic v2 (lr={lr}, min_lr={min_lr}, max_lr={max_lr}, "
-        f"lr_bump={lr_bump}, beta2={beta2}, wd={weight_decay}, "
-        f"agreement_threshold={agreement_threshold})"
-    )
-    return optimizer
-
-
 def create_optimizer_grouped_parameters(
     model: nn.Module,
     weight_decay: float,
@@ -1167,6 +1328,8 @@ def get_optimizer_info(optimizer: Optimizer) -> Dict[str, Any]:
     # PPSF 内部 d 估计 — 调试时有用
     if "d" in pg0:
         info["d"] = pg0["d"]
+    if hasattr(optimizer, "get_avg_learning_rate") and callable(getattr(optimizer, "get_avg_learning_rate")):
+        info["learning_rate"] = optimizer.get_avg_learning_rate()
 
     return info
 

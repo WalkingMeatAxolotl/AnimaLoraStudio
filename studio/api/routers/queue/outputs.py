@@ -23,7 +23,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from ...errors import _export_result, _safe_join_or_400, _unique_data_export_path
-from ...schemas.queue import ExportOutputsBody
+from ...schemas.queue import DeleteOutputsBody, ExportOutputsBody
 from .... import db
 from ....services.projects import projects, versions
 from ....infrastructure.event_bus import bus
@@ -271,6 +271,31 @@ def download_task_output(task_id: int, filename: str) -> FileResponse:
         media_type="application/octet-stream",
         filename=f.name,
     )
+
+
+@router.delete("/api/queue/{task_id}/outputs")
+def delete_task_output_files(
+    task_id: int,
+    body: DeleteOutputsBody,
+) -> dict[str, Any]:
+    """删除 output 目录下的指定文件（批量）。
+
+    body.files 是相对 output/ 的路径列表，禁绝对路径 / path traversal；
+    任何一个不存在 → 404 拒绝整批，避免半删状态。
+    """
+    if not body.files:
+        raise HTTPException(400, "empty files list")
+    task, selected, _ = _select_task_output_files(task_id, body.files)
+    deleted: list[str] = []
+    out_dir = _task_output_dir(task)
+    assert out_dir is not None
+    for f in selected:
+        try:
+            f.unlink()
+            deleted.append(_task_output_relpath(out_dir, f))
+        except OSError as exc:
+            raise HTTPException(500, f"failed to delete {f.name}: {exc}") from exc
+    return {"deleted": deleted}
 
 
 @router.post("/api/queue/{task_id}/open-folder")

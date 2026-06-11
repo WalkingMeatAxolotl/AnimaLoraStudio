@@ -26,9 +26,15 @@ import {
   type WD14Runtime,
 } from '../../api/client'
 import { useDialog } from '../../components/Dialog'
+import {
+  clearOnboardingDone,
+  ONBOARDING_EVENTS,
+} from '../../components/FirstRunOnboardingModal'
 import { InfoButton } from '../../components/InfoButton'
 import LLMTaggerWorkspace from '../../components/LLMTaggerWorkspace'
 import { TagListInput } from '../../components/TagsInput'
+import { useShowTagTranslation } from '../../tagDict/showToggle'
+import { useTagDict, reloadDict } from '../../tagDict/store'
 import PageHeader from '../../components/PageHeader'
 import { useToast } from '../../components/Toast'
 import { useSettingsData } from '../../lib/SettingsData'
@@ -99,6 +105,7 @@ const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
     { id: 'wd14', labelKey: 'settings.wd14' },
     { id: 'cltagger', labelKey: 'settings.clTagger' },
     { id: 'onnxruntime', labelKey: 'settings.onnxRuntime' },
+    { id: 'tag-dictionary', labelKey: 'settings.tagDictionary.title' },
   ],
   training: [
     { id: 'download-source', labelKey: 'settings.modelSource' },
@@ -112,12 +119,15 @@ const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
     { id: 'wandb', labelKey: 'settings.wandb' },
   ],
   testing: [
+    { id: 'idle-timeout', labelKey: 'settings.idleTimeout.title' },
     { id: 'preview', labelKey: 'settings.intermediatePreview' },
+    { id: 'save-test-images', labelKey: 'settings.saveTestImages.title' },
   ],
   appearance: [
     { id: 'display', labelKey: 'settings.display' },
   ],
   system: [
+    { id: 'onboarding', labelKey: 'settings.onboardingSection' },
     { id: 'version', labelKey: 'settings.version' },
     { id: 'service', labelKey: 'settings.service' },
   ],
@@ -248,7 +258,7 @@ const EMPTY: Secrets = {
   },
   models: { root: null, selected_anima: '1.0', selected_upscaler: '4x-AnimeSharp', auto_sync_paths: true },
   queue: { allow_gpu_during_train: false },
-  generate: { preview_every_n_steps: 3, attention_backend: 'auto' },
+  generate: { preview_every_n_steps: 3, attention_backend: 'auto', idle_timeout_minutes: 10, save_test_images: false },
   system: { update_channel: 'stable', show_dev_channel: false },
   proxy: {
     enabled: false,
@@ -931,6 +941,7 @@ export default function SettingsPage() {
       </SettingsSection>
 
       <ONNXRuntimeSection />
+      <TagDictionarySection />
       </>)}
 
       {tab === 'training' && (<>
@@ -1185,7 +1196,9 @@ export default function SettingsPage() {
         {/* attention 后端走全局 auto-detect，UI 不暴露切换；想强制覆盖
             的高级用户改 secrets.json 的 generate.attention_backend
             （flash_attn / xformers / none）。安装管理在『训练』tab。 */}
+        <IdleTimeoutSection draft={draft} update={update} />
         <TaeFluxSection draft={draft} update={update} />
+        <SaveTestImagesSection draft={draft} update={update} />
       </>)}
 
       {tab === 'appearance' && (
@@ -2204,6 +2217,116 @@ function DownloadButton({ exists, status, busy, onClick }: {
   )
 }
 
+// ── Tag 翻译词典：上传 / 恢复默认 / 全局 chip toggle ──────────────────────
+
+function TagDictionarySection() {
+  const { t } = useTranslation()
+  const { toast } = useToast()
+  const dict = useTagDict()
+  const [show, setShow] = useShowTagTranslation()
+  const [busy, setBusy] = useState<null | 'reset' | 'upload'>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const meta = dict.meta
+  const sourceLabel = meta?.kind === 'default'
+    ? t('settings.tagDictionary.sourceDefault')
+    : meta?.kind === 'user'
+      ? t('settings.tagDictionary.sourceUser')
+      : t('settings.tagDictionary.sourceUnknown')
+
+  const downloadedAt = meta?.downloaded_at
+    ? new Date(meta.downloaded_at * 1000).toLocaleString()
+    : '—'
+
+  const reset = async () => {
+    if (busy) return
+    setBusy('reset')
+    try {
+      await api.resetTagDictionary()
+      await reloadDict()
+      toast(t('settings.tagDictionary.resetOk'))
+    } catch (err) {
+      toast(`${t('settings.tagDictionary.resetFail')}: ${err instanceof Error ? err.message : String(err)}`)
+    } finally { setBusy(null) }
+  }
+
+  const upload = async (file: File) => {
+    setBusy('upload')
+    try {
+      await api.uploadTagDictionary(file)
+      await reloadDict()
+      toast(t('settings.tagDictionary.uploadOk', { name: file.name }))
+    } catch (err) {
+      toast(`${t('settings.tagDictionary.uploadFail')}: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setBusy(null)
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
+
+  return (
+    <SettingsSection id="tag-dictionary" title={t('settings.tagDictionary.title')}>
+      <SettingsField label={t('settings.tagDictionary.statusLabel')}>
+        {dict.status === 'loading' && (
+          <span className="text-xs text-fg-tertiary">{t('settings.tagDictionary.loading')}</span>
+        )}
+        {dict.status === 'empty' && (
+          <span className="text-xs text-warn">{t('settings.tagDictionary.empty')}</span>
+        )}
+        {dict.status === 'error' && (
+          <span className="text-xs text-err">{dict.error ?? t('settings.tagDictionary.error')}</span>
+        )}
+        {dict.status === 'ready' && meta && (
+          <div className="text-xs flex flex-col gap-0.5">
+            <div>
+              <span className="text-fg-tertiary">{sourceLabel}：</span>
+              <code className="font-mono text-fg-primary">{meta.source_name}</code>
+            </div>
+            <div className="text-fg-tertiary">
+              {t('settings.tagDictionary.entryCount', { n: meta.entry_count })} · {downloadedAt}
+            </div>
+          </div>
+        )}
+      </SettingsField>
+
+      <SettingsField
+        label={t('settings.tagDictionary.uploadLabel')}
+        desc={t('settings.tagDictionary.uploadHint')}
+      >
+        <div className="flex gap-1.5 items-center flex-wrap">
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".csv,.txt"
+            disabled={busy !== null}
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              if (f) void upload(f)
+            }}
+            className="text-xs"
+          />
+          <button
+            type="button"
+            disabled={busy !== null}
+            onClick={() => void reset()}
+            className="btn btn-secondary btn-sm"
+            title={t('settings.tagDictionary.resetHint')}
+          >
+            {busy === 'reset' ? t('common.downloading') : t('settings.tagDictionary.resetButton')}
+          </button>
+        </div>
+      </SettingsField>
+
+      <SettingsField
+        label={t('settings.tagDictionary.showToggleLabel')}
+        desc={t('settings.tagDictionary.showToggleHint')}
+      >
+        <Bool value={show} onChange={setShow} />
+      </SettingsField>
+    </SettingsSection>
+  )
+}
+
 // ── ONNX Runtime Section（WD14 + CLTagger 共用 onnxruntime 包管理） ─────────
 
 function ONNXRuntimeSection() {
@@ -2211,7 +2334,7 @@ function ONNXRuntimeSection() {
   const dialog = useDialog()
   const [rt, setRt] = useState<WD14Runtime | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState<null | 'auto' | 'gpu' | 'cpu'>(null)
+  const [busy, setBusy] = useState<null | 'auto' | 'gpu' | 'cpu' | 'directml'>(null)
   const [reinstallOpen, setReinstallOpen] = useState(false)
   const { toast } = useToast()
 
@@ -2227,12 +2350,14 @@ function ONNXRuntimeSection() {
 
   useEffect(() => { void refresh() }, [refresh])
 
-  const install = async (target: 'auto' | 'gpu' | 'cpu') => {
+  const install = async (target: 'auto' | 'gpu' | 'cpu' | 'directml') => {
     const confirmKey = target === 'auto'
       ? 'settings.confirmInstallOnnxAuto'
       : target === 'gpu'
         ? 'settings.confirmInstallOnnxGpu'
-        : 'settings.confirmInstallOnnxCpu'
+        : target === 'directml'
+          ? 'settings.confirmInstallOnnxDirectml'
+          : 'settings.confirmInstallOnnxCpu'
     const ok = await dialog.confirm(
       t(confirmKey),
       { tone: 'warn', okText: t('settings.startInstall') },
@@ -2243,7 +2368,10 @@ function ONNXRuntimeSection() {
       const result = await api.installWD14Runtime(target)
       setRt({
         installed: result.installed, version: result.version, providers: result.providers,
-        cuda_available: result.cuda_available, restart_required: result.restart_required,
+        cuda_available: result.cuda_available,
+        directml_available: result.directml_available,
+        platform: result.platform,
+        restart_required: result.restart_required,
         cuda_load_error: result.cuda_load_error, preload: result.preload, cuda_detect: result.cuda_detect,
       })
       const newPkg = result.installed_pkg ?? result.installed ?? '?'
@@ -2257,26 +2385,34 @@ function ONNXRuntimeSection() {
   }
 
   const cuda = rt?.cuda_detect ?? { available: false, driver_version: null, gpu_name: null }
-  const mismatched = !!rt && cuda.available && !rt.cuda_available
-  // 默认状态正常时整体折叠；有错 / mismatch / 需重启时自动展开
+  const notInstalled = !!rt && rt.installed === null
+  const gpuAccel = !!rt && (rt.cuda_available || rt.directml_available)
+  const isWindows = !rt || rt.platform === 'win32'
+  // mismatched: 装了某个包 + 有 GPU 但没用上任何加速 EP（CUDA 或 DirectML）。
+  // 未装由 notInstalled 接管；已装且已经在用 DirectML 不算 mismatch。
+  const mismatched = !!rt && rt.installed !== null && cuda.available && !gpuAccel
+  // 默认状态正常时整体折叠；未装 / 有错 / mismatch / 需重启时自动展开
   const hasIssue = !!error || (rt && (
-    !!rt.cuda_load_error || rt.restart_required || mismatched
+    notInstalled || !!rt.cuda_load_error || rt.restart_required || mismatched
   ))
 
   // summary 里显示一行简短状态，用户不展开就能扫到
+  const epShort = !rt
+    ? '?'
+    : rt.cuda_available ? 'CUDA' : rt.directml_available ? 'DirectML' : 'CPU'
   const statusLabel = error
     ? `⚠ ${t('settings.statusLoadFailed')}`
     : !rt
       ? t('settings.loadingStatus')
-      : rt.cuda_load_error
-        ? `⚠ ${t('settings.cudaLoadFailed')}`
-        : rt.restart_required
-          ? `⚠ ${t('settings.restartStudioRequired')}`
-          : mismatched
-            ? `⚠ ${t('settings.gpuRunningCpuEp')}`
-            : rt.cuda_available
-              ? `CUDA · ${rt.installed ?? '?'}`
-              : `CPU · ${rt.installed ?? '?'}`
+      : notInstalled
+        ? `⚠ ${t('settings.notInstalledShort')}`
+        : rt.cuda_load_error
+          ? `⚠ ${t('settings.cudaLoadFailed')}`
+          : rt.restart_required
+            ? `⚠ ${t('settings.restartStudioRequired')}`
+            : mismatched
+              ? `⚠ ${t('settings.gpuRunningCpuEp')}`
+              : `${epShort} · ${rt.installed ?? '?'}`
   const statusOk = rt && !hasIssue
 
   return (
@@ -2297,7 +2433,7 @@ function ONNXRuntimeSection() {
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-fg-tertiary shrink-0">runtime:</span>
                 <code className="font-mono text-fg-primary">{rt.installed ?? t('settings.notInstalledParen')}{rt.version ? `==${rt.version}` : ''}</code>
-                <StatusLabel bg={rt.cuda_available ? 'bg-ok-soft' : 'bg-warn-soft'} fg={rt.cuda_available ? 'text-ok' : 'text-warn'} text={rt.cuda_available ? 'CUDA' : 'CPU only'} />
+                <StatusLabel bg={gpuAccel ? 'bg-ok-soft' : 'bg-warn-soft'} fg={gpuAccel ? 'text-ok' : 'text-warn'} text={rt.cuda_available ? 'CUDA' : rt.directml_available ? 'DirectML' : 'CPU only'} />
               </div>
               <div className="text-fg-tertiary">EP: <code className="text-fg-secondary font-mono">{(rt.providers ?? []).map((p) => p.replace('ExecutionProvider', '')).join(' / ') || '(none)'}</code></div>
               <div className="text-fg-tertiary">{t('settings.gpuDetect')}: <span className="text-fg-secondary">{cuda.available ? `${cuda.gpu_name ?? '?'} (driver ${cuda.driver_version ?? '?'})` : t('settings.noNvidiaGpu')}</span></div>
@@ -2306,6 +2442,11 @@ function ONNXRuntimeSection() {
             {rt.restart_required && (
               <div className="rounded-sm border border-err bg-err-soft px-2 py-1.5 text-err text-xs">
                 <Trans i18nKey="settings.onnxRestartRequired" components={{ strong: <strong /> }} />
+              </div>
+            )}
+            {!rt.restart_required && notInstalled && (
+              <div className="rounded-sm border border-info bg-info-soft px-2 py-1.5 text-info text-xs">
+                {cuda.available ? t('settings.onnxNotInstalledHintGpu') : t('settings.onnxNotInstalledHintCpu')}
               </div>
             )}
             {!rt.restart_required && mismatched && (
@@ -2334,9 +2475,33 @@ function ONNXRuntimeSection() {
               </button>
             </div>
             {reinstallOpen && (
-              <div className="flex gap-1.5 items-center flex-wrap pt-2 border-t border-subtle">
-                <button onClick={() => install('gpu')} disabled={busy !== null} className="btn btn-secondary btn-sm">{busy === 'gpu' ? t('settings.installingPackage') : t('settings.reinstallGpu')}</button>
-                <button onClick={() => install('cpu')} disabled={busy !== null} className="btn btn-secondary btn-sm">{busy === 'cpu' ? t('settings.installingPackage') : t('settings.reinstallCpu')}</button>
+              <div className="flex flex-col gap-2 pt-2 border-t border-subtle">
+                <div className="flex gap-1.5 items-center flex-wrap">
+                  <button
+                    onClick={() => install('directml')}
+                    disabled={busy !== null || !isWindows}
+                    title={isWindows ? t('settings.directmlPackageHint') : t('settings.directmlWinOnlyHint')}
+                    className="btn btn-secondary btn-sm"
+                  >
+                    {busy === 'directml' ? t('settings.installingPackage') : t('settings.reinstallDirectml')}
+                  </button>
+                  <button
+                    onClick={() => install('gpu')}
+                    disabled={busy !== null}
+                    title={t('settings.cudaPackageHint')}
+                    className="btn btn-secondary btn-sm"
+                  >
+                    {busy === 'gpu' ? t('settings.installingPackage') : t('settings.reinstallGpu')}
+                  </button>
+                  <button
+                    onClick={() => install('cpu')}
+                    disabled={busy !== null}
+                    title={t('settings.cpuPackageHint')}
+                    className="btn btn-secondary btn-sm"
+                  >
+                    {busy === 'cpu' ? t('settings.installingPackage') : t('settings.reinstallCpu')}
+                  </button>
+                </div>
                 <span className="text-[10px] text-fg-tertiary">{t('settings.onnxForceHint')}</span>
               </div>
             )}
@@ -2830,6 +2995,45 @@ function XformersSection() {
 // TAEFlux 模型 server 启动时后台下载（lifespan startup）；UI 只暴露用户必须
 // 控制的「节流 N」一个输入，其他状态/下载/帮助文字全删（用户决策）。
 
+function IdleTimeoutSection({
+  draft, update,
+}: {
+  draft: Secrets
+  update: <S extends Section, K extends keyof Secrets[S]>(
+    section: S, key: K, value: Secrets[S][K],
+  ) => void
+}) {
+  const { t } = useTranslation()
+  const minutes = draft.generate.idle_timeout_minutes
+  return (
+    <SettingsSection id="idle-timeout" title={t('settings.idleTimeout.title')}>
+      <SettingsField
+        label={t('settings.idleTimeout.label')}
+        desc={t('settings.idleTimeout.desc')}
+        helpTooltip={<p>{t('settings.idleTimeout.help')}</p>}
+      >
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            min={0}
+            max={240}
+            value={minutes}
+            onChange={(e) => update('generate', 'idle_timeout_minutes', Math.max(0, Number(e.target.value) || 0))}
+            className="input"
+            style={{ width: 80 }}
+          />
+          <span className="text-xs text-fg-tertiary">
+            {minutes === 0
+              ? t('settings.idleTimeout.offHint')
+              : t('settings.idleTimeout.minutesSuffix')}
+          </span>
+        </div>
+      </SettingsField>
+    </SettingsSection>
+  )
+}
+
+
 function TaeFluxSection({
   draft, update,
 }: {
@@ -2857,6 +3061,31 @@ function TaeFluxSection({
           onChange={(e) => update('generate', 'preview_every_n_steps', Number(e.target.value) || 0)}
           className="input"
           style={{ width: 80 }}
+        />
+      </SettingsField>
+    </SettingsSection>
+  )
+}
+
+
+function SaveTestImagesSection({
+  draft, update,
+}: {
+  draft: Secrets
+  update: <S extends Section, K extends keyof Secrets[S]>(
+    section: S, key: K, value: Secrets[S][K],
+  ) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <SettingsSection id="save-test-images" title={t('settings.saveTestImages.title')}>
+      <SettingsField
+        label={t('settings.saveTestImages.label')}
+        helpTooltip={t('settings.saveTestImages.tooltip')}
+      >
+        <Bool
+          value={draft.generate.save_test_images}
+          onChange={(v) => update('generate', 'save_test_images', v)}
         />
       </SettingsField>
     </SettingsSection>
@@ -2967,9 +3196,38 @@ function DisplaySection() {
 function SystemSection() {
   return (
     <>
+      <OnboardingSection />
       <VersionSection />
       <ServiceSection />
     </>
+  )
+}
+
+// ── 重新运行首次引导 Section ─────────────────────────────────────────────
+//
+// 清掉 localStorage 的 onboarding done 标记 + dispatch event,触发
+// FirstRunOnboardingModal 显示。不重启服务、不动 secrets。
+function OnboardingSection() {
+  const { t } = useTranslation()
+  const handleReopen = () => {
+    clearOnboardingDone()
+    window.dispatchEvent(new Event(ONBOARDING_EVENTS.open))
+  }
+  return (
+    <SettingsSection id="onboarding" title={t('settings.onboardingSection')}>
+      <SettingsField
+        label={t('settings.onboardingReopenTitle')}
+        helpTooltip={<p>{t('settings.onboardingReopenHelp')}</p>}
+      >
+        <button
+          type="button"
+          onClick={handleReopen}
+          className="btn btn-secondary btn-sm self-start"
+        >
+          {t('settings.onboardingReopen')}
+        </button>
+      </SettingsField>
+    </SettingsSection>
   )
 }
 

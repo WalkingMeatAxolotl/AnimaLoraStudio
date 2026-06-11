@@ -1,15 +1,16 @@
-"""InfoNoise 单元测试（P2-3）。
+"""InfoNoise 单元测试。
 
-InfoNoise 是 PR #63 引入的核心 timestep 采样算法。这次重构（PR #65）一度
-把 EMA 公式按"直觉"翻反了，正是因为没有任何测试 codify 论文原意。
+InfoNoise 是 PR #63 引入的核心 timestep 采样算法。这些测试 codify
+关键设计选择（EMA 方向、warmup 单位、gate pivot 默认值）防回归。
 
 测试覆盖：
-- EMA 公式 = 论文 Algorithm 1（β 乘新值）
-- _refresh 三个早退分支正确记 status
+- EMA 设计选择（β 乘新值，FIFO + EMA 两层平滑）
+- _refresh 早退分支正确记 status
 - 退化时 sample() 走 baseline，sample() 输出 t 在 (0,1)
-- baseline_mode 四种模式都能跑（P1-3）
+- baseline_mode 四种模式都能跑
 - 冷启动 trip wire：CDF 没就绪时 maybe_refresh 发一次 logger.warning
-- N_warm = 0 自动按 total_steps × 20% 计算（最少 200）
+- N_warm 按 optimizer step 计（防 grad_accum>1 时 warmup 提前结束）
+- gate pivot 默认 c=0.15（防回归到 σ_min）
 """
 from __future__ import annotations
 
@@ -25,15 +26,15 @@ from training.timestep_samplers.infonoise import build as build_info_noise
 
 
 # ---------------------------------------------------------------------------
-# EMA 公式（防 P0-2 类回归）
+# EMA 设计选择（防回归）
 # ---------------------------------------------------------------------------
 
 
-def test_ema_formula_matches_paper_algorithm1():
-    """论文 arxiv 2602.18647 Algorithm 1 第 11 行：mse^k ← (1-β)·mse^k + β·ℓ̄_k
+def test_ema_responsiveness_codifies_design_choice():
+    """EMA 公式 new = (1-β)·old + β·l_bar；β 乘新值是 InfoNoise 设计选择。
 
-    β 乘的是**新值**，不是历史。β=0.5 + 历史 0 + 新值 10 → 5。
-    若公式反了（β*old + (1-β)*new），β=0.5 给出同样结果，区分不开 —— 用 β=0.9 测。
+    论文 §3.1 描述 "smoothed binwise estimate" 但未给字面公式；方向由实现固定。
+    用 β=0.9 + 历史 1 + 新值 10 → 9.1 区分公式方向（β=0.5 给同样结果，区分不开）。
     """
     s = InfoNoiseScheduler(K=4, N_warm=1, M=1, B=2, N_min=1, beta=0.9)
     # 设置初始历史
@@ -43,8 +44,8 @@ def test_ema_formula_matches_paper_algorithm1():
         s._fifo[k].append(10.0)
         s._n_count[k] = 1
     s._refresh()
-    # 论文公式: new_ema = (1-0.9)*1 + 0.9*10 = 0.1 + 9.0 = 9.1
-    # 反向公式: new_ema = 0.9*1 + 0.1*10 = 0.9 + 1.0 = 1.9
+    # 设计选择: new_ema = (1-0.9)*1 + 0.9*10 = 0.1 + 9.0 = 9.1
+    # 反向：    new_ema = 0.9*1 + 0.1*10 = 0.9 + 1.0 = 1.9
     np.testing.assert_allclose(s._mse_ema, 9.1, rtol=1e-6)
 
 
@@ -225,3 +226,133 @@ def test_build_info_noise_passes_baseline_mode():
     s = build_info_noise(args, total_steps=10_000)
     assert s is not None
     assert s.baseline_mode == "uniform"
+
+
+# ---------------------------------------------------------------------------
+# Warmup gate 用 optimizer step（防 grad_accum>1 提前结束 — P0-1）
+# ---------------------------------------------------------------------------
+
+
+def test_n_warm_uses_optimizer_step_not_micro_batch():
+    """maybe_refresh 内 warmup 判定用 global_step (optimizer step)。
+
+    grad_accum>1 项目下，micro-batch 计数（_internal_step）增长比 global_step 快
+    grad_accum 倍。如果 warmup 用 _internal_step 判定，grad_accum=4 下配置
+    N_warm=100 实际只跑 25 个 optimizer step 就切自适应（早 4× 结束）。
+    """
+    s = InfoNoiseScheduler(K=4, N_warm=100, M=10, B=4, N_min=1, beta=0.9)
+    # 模拟 grad_accum=4 跑 50 optimizer steps：200 个 micro-batch 喂 record
+    for _ in range(200):
+        s.record(torch.tensor([0.5] * 4), torch.tensor([1.0] * 4))
+    # global_step=50 < N_warm=100 → maybe_refresh 必须早退（不管 _internal_step 已经 200）
+    s.maybe_refresh(global_step=50)
+    assert s._cdf_values is None
+    # 防回归：明确断言 _internal_step 跟 global_step 是两个量
+    assert s._internal_step == 200
+    assert s._internal_step > 100  # 旧逻辑会让这里 ≥ N_warm 然后 refresh，新逻辑不会
+
+
+# ---------------------------------------------------------------------------
+# Gate pivot 默认 c=0.15（防回归到 σ_min — P0-5）
+# ---------------------------------------------------------------------------
+
+
+def test_default_gate_pivot_uses_paper_c_value():
+    """gate_pivot_c 默认 0.15（论文 §5 CIFAR 报告值）。"""
+    s = InfoNoiseScheduler(K=8, N_warm=1, M=1, B=2, N_min=1)
+    assert s.gate_pivot_c == 0.15
+
+
+def test_dynamic_gate_pivot_when_set_to_zero():
+    """gate_pivot_c=0 走 dynamic last_above 路径（论文 Eq 87 字面实现）。"""
+    s = InfoNoiseScheduler(K=8, N_warm=1, M=1, B=2, N_min=1, gate_pivot_c=0.0)
+    # 注入中段 information mass 形状
+    for k in range(8):
+        val = 10.0 if 2 <= k <= 5 else 0.01
+        s._fifo[k].append(val)
+        s._n_count[k] = 1
+    s._refresh()
+    assert s._last_refresh_status == "ok"
+    assert s._cdf_values is not None
+
+
+def test_p_onset_rejected_when_invalid():
+    """p_onset ∈ (0,1) 是 gate 早退分支不可达的前提；__init__ 应 fail-fast。"""
+    with pytest.raises(ValueError, match="p_onset"):
+        InfoNoiseScheduler(K=4, N_warm=1, M=1, B=2, N_min=1, p_onset=1.5)
+
+
+# ---------------------------------------------------------------------------
+# state_dict version 兼容（防 σ³→σ² 公式切换的老 ckpt 漂移 — P0-4）
+# ---------------------------------------------------------------------------
+
+
+def test_state_dict_version_mismatch_triggers_cold_start():
+    """老 ckpt（v1: σ³ 公式）resume 到新代码（v2: σ²）走冷启动，不偷偷读老 mse_ema。"""
+    s = InfoNoiseScheduler(K=4, N_warm=1, M=1, B=2, N_min=1)
+    # 装一个 v1 state（无 __version__ 字段，等价 v1）
+    old_state = {
+        "K": 4, "B": 2,
+        "fifo": [[1.0], [2.0], [3.0], [4.0]],
+        "mse_ema": np.array([1.0, 2.0, 3.0, 4.0]),
+        "n_count": np.array([1, 1, 1, 1], dtype=np.int32),
+        "cdf_values": np.linspace(0, 1, 5),
+        "internal_step": 100,
+        "last_refresh_status": "ok",
+        "refresh_attempts": 5,
+        "refresh_degraded_count": 0,
+        "warned_cold_start": False,
+    }
+    s.load_state_dict(old_state)
+    # v1 → v2 → 冷启动：mse_ema 保持 zeros，cdf_values 保持 None
+    np.testing.assert_array_equal(s._mse_ema, np.zeros(4))
+    assert s._cdf_values is None
+    assert s._internal_step == 0
+
+
+def test_state_dict_round_trip_v2():
+    """v2 state_dict 正确 round-trip。"""
+    s1 = InfoNoiseScheduler(K=4, N_warm=1, M=1, B=2, N_min=1)
+    for k in range(4):
+        s1._fifo[k].append(float(k))
+    s1._mse_ema = np.array([1.0, 2.0, 3.0, 4.0])
+    state = s1.state_dict()
+    assert state["__version__"] == 2
+
+    s2 = InfoNoiseScheduler(K=4, N_warm=1, M=1, B=2, N_min=1)
+    s2.load_state_dict(state)
+    np.testing.assert_array_equal(s2._mse_ema, s1._mse_ema)
+    assert list(s2._fifo[2]) == [2.0]
+
+
+# ---------------------------------------------------------------------------
+# Reg 集 record mask（loop.py:141 行为，C3）
+# ---------------------------------------------------------------------------
+
+
+def test_record_accepts_partial_batch_after_reg_mask():
+    """模拟 loop.py 用 ~is_reg mask 跳过 reg 集样本后再 record。
+
+    InfoNoise 不应假定每次 record 都收到固定 batch size — main+reg 混合 batch
+    经 mask 后样本数变少，scheduler 必须能正确处理。
+    """
+    s = InfoNoiseScheduler(K=4, N_warm=1, M=1, B=4, N_min=1, beta=0.5)
+    # 模拟 batch=4: 2 个 main (is_reg=False) + 2 个 reg (is_reg=True)
+    t_full = torch.tensor([0.1, 0.5, 0.9, 0.5])
+    mse_full = torch.tensor([10.0, 5.0, 1.0, 5.0])
+    is_reg = torch.tensor([False, True, True, False])
+    main_mask = ~is_reg
+    # 应取 idx 0 + 3 = 2 个样本进 record
+    s.record(t_full[main_mask], mse_full[main_mask])
+    assert s._internal_step == 1  # 1 次调用
+    assert int(s._n_count.sum()) == 2  # 累计 2 个样本进 bin
+
+
+def test_record_handles_empty_after_mask():
+    """边界 case：整 batch 全是 reg 集，mask 后空 → record 0 个样本应安全。"""
+    s = InfoNoiseScheduler(K=4, N_warm=1, M=1, B=4, N_min=1, beta=0.5)
+    empty_t = torch.tensor([], dtype=torch.float32)
+    empty_mse = torch.tensor([], dtype=torch.float32)
+    s.record(empty_t, empty_mse)
+    assert int(s._n_count.sum()) == 0
+    assert s._internal_step == 1  # 仍计入"一次 record"

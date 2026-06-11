@@ -56,6 +56,10 @@ class _ActiveTask:
     task_id: int
     request_id: str
     on_event: EventCallback
+    # 决策 #15：task 启动时冻结 secrets.generate.save_test_images，避免中途切开关
+    # 导致一 task 内一半 cache 一半 disk。enqueueGenerate 写 cfg.save_test_images_at_dispatch
+    # → submit_task 读出来存这里 → _handle_image_done 决定 SSE delivery 子字段
+    save_to_disk: bool = False
     started_at: float = field(default_factory=time.time)
 
 
@@ -97,6 +101,11 @@ class InferenceDaemon:
         self._log_buffer: collections.deque[dict[str, Any]] = collections.deque(maxlen=2000)
         self._log_seq = 0
         self._log_listeners: list[EventCallback] = []
+        # idle timeout：daemon 闲 N 秒（模型已 load）自动 unload 释放 VRAM。
+        # 0 = 关闭。supervisor 在 spawn 后通过 sync_idle_timeout_from_secrets() 注入；
+        # PUT /api/secrets 后 router 也会调一次同步。
+        self._idle_timeout_seconds: float = 0.0
+        self._idle_timer: Optional[threading.Timer] = None
 
     # ---------------------------------------------------------------- 状态
     @property
@@ -122,6 +131,83 @@ class InferenceDaemon:
     def add_global_listener(self, cb: EventCallback) -> None:
         with self._lock:
             self._global_listeners.append(cb)
+
+    # --------------------------------------------------------------- idle 自动卸载
+    def set_idle_timeout_seconds(self, seconds: float) -> None:
+        """设置 daemon 闲置自动 unload 的超时（秒）。0 = 关闭。
+
+        定时器只在 daemon idle + 模型已 load + 进程存活 时跑；进 busy / 模型卸了 /
+        进程死了 都会自动 cancel。无需调用方关心。
+        """
+        secs = max(0.0, float(seconds))
+        with self._lock:
+            if self._idle_timeout_seconds == secs:
+                return
+            self._idle_timeout_seconds = secs
+            self._reschedule_idle_timer_locked()
+
+    def sync_idle_timeout_from_secrets(self) -> None:
+        """从 secrets.generate.idle_timeout_minutes 读出并应用。
+
+        失败（文件坏 / 字段缺）走 fallback：不改当前值，记一行 warning。
+        """
+        try:
+            # 局部 import 避免 services/inference → infrastructure 模块层循环
+            from ...infrastructure import secrets as _secrets
+            minutes = int(_secrets.load().generate.idle_timeout_minutes)
+        except Exception:
+            logger.warning(
+                "failed to read idle_timeout_minutes from secrets; keeping current value",
+                exc_info=True,
+            )
+            return
+        self.set_idle_timeout_seconds(max(0, minutes) * 60.0)
+
+    def _reschedule_idle_timer_locked(self) -> None:
+        """根据当前状态重置 idle timer。**必须持 self._lock 调用。**
+
+        cancel 旧 timer；当 timeout>0 + IDLE + 模型 loaded + 进程存活 时起新 timer。
+        其余情况只 cancel 不重启（包括 BUSY / UNLOADING / STOPPED / 模型未 load）。
+        """
+        old = self._idle_timer
+        if old is not None:
+            try:
+                old.cancel()
+            except Exception:
+                pass
+            self._idle_timer = None
+        if (
+            self._idle_timeout_seconds > 0
+            and self._state == STATE_IDLE
+            and self._model_loaded
+            and self._proc is not None
+        ):
+            timer = threading.Timer(self._idle_timeout_seconds, self._on_idle_timeout)
+            timer.daemon = True
+            timer.name = "inference-daemon-idle-timer"
+            self._idle_timer = timer
+            timer.start()
+
+    def _on_idle_timeout(self) -> None:
+        """idle timer 到期回调：仍 idle+loaded 时触发 unload。
+
+        触发瞬间状态可能已变（其他线程刚 submit_task / 手动 unload）；
+        重新检查再走 request_unload，避免冗余协议消息。
+        """
+        with self._lock:
+            should_unload = (
+                self._state == STATE_IDLE
+                and self._model_loaded
+                and self._proc is not None
+            )
+            timeout = self._idle_timeout_seconds
+        if not should_unload:
+            return
+        logger.info("daemon idle for %.0fs; auto-unloading model", timeout)
+        try:
+            self.request_unload()
+        except Exception:
+            logger.exception("auto unload from idle timer failed")
 
     # --------------------------------------------------------------- 生命周期
     def start(self) -> None:
@@ -223,6 +309,7 @@ class InferenceDaemon:
             self._state = STATE_STOPPED
             self._model_loaded = False
             self._active = None
+            self._reschedule_idle_timer_locked()
 
     # ----------------------------------------------------------------- 提交
     def submit_task(
@@ -244,10 +331,13 @@ class InferenceDaemon:
                 )
             self._req_seq += 1
             req_id = f"task-{task_id}-{self._req_seq}"
+            save_to_disk = bool(config.get("save_test_images_at_dispatch", False))
             self._active = _ActiveTask(
                 task_id=task_id, request_id=req_id, on_event=on_event,
+                save_to_disk=save_to_disk,
             )
             self._state = STATE_BUSY
+            self._reschedule_idle_timer_locked()
             assert self._proc is not None and self._proc.stdin is not None
             stdin = self._proc.stdin
 
@@ -266,6 +356,7 @@ class InferenceDaemon:
             with self._lock:
                 self._state = STATE_IDLE
                 self._active = None
+                self._reschedule_idle_timer_locked()
             raise RuntimeError(f"daemon write failed: {e}") from e
         return req_id
 
@@ -305,6 +396,7 @@ class InferenceDaemon:
             assert self._proc is not None and self._proc.stdin is not None
             stdin = self._proc.stdin
             self._state = STATE_UNLOADING
+            self._reschedule_idle_timer_locked()
         try:
             stdin.write(json.dumps({"id": "_unload", "action": "unload"}) + "\n")
             stdin.flush()
@@ -428,6 +520,9 @@ class InferenceDaemon:
                 elif kind == "unloaded":
                     self._state = STATE_IDLE
                     self._model_loaded = False
+                # `loaded` 进入 idle+loaded → 启动 idle timer；`unloaded` 模型走 → cancel
+                if kind in ("ready", "loaded", "unloaded"):
+                    self._reschedule_idle_timer_locked()
             for cb in list(self._global_listeners):
                 try:
                     cb(msg)
@@ -446,6 +541,10 @@ class InferenceDaemon:
         # commit 14：preview_step 含 base64 JPEG → 直接透传给 callback（不入 cache，
         #   前端 SSE 收到立刻 <img src="data:..."> 显示当前步预览；done/最终图
         #   会替换它）
+        # 决策 #14：image_done 加 `delivery: 'disk' | 'cache'` 子字段，前端按此
+        # 走 POST /api/generate/save 落盘（disk）or 直接 add CacheEntry（cache）。
+        # 仍走 cache 中转（持久模式下 cache 是落盘前的临时存放，前端落盘成功后
+        # 用户可手动删 cache 或等 LRU 自然剔）。
         forward_msg = msg
         if kind == "image_done" and "image_b64" in msg:
             filename = msg.get("filename") or ""
@@ -455,6 +554,7 @@ class InferenceDaemon:
             except Exception:
                 logger.exception("cache_image failed for %s", filename)
             forward_msg = {k: v for k, v in msg.items() if k != "image_b64"}
+            forward_msg["delivery"] = "disk" if active.save_to_disk else "cache"
 
         # done/error/canceled 先切状态，再回调 —— 让 callback 内查询 is_busy/state 时
         # 看到准确的 IDLE 状态（commit 13 daemon_state_changed 依赖这个顺序）
@@ -462,6 +562,8 @@ class InferenceDaemon:
             with self._lock:
                 self._active = None
                 self._state = STATE_IDLE
+                # task 完成回 idle；模型还在 → 重启 idle 倒计时
+                self._reschedule_idle_timer_locked()
 
         try:
             active.on_event({**forward_msg, "task_id": active.task_id})
@@ -480,6 +582,7 @@ class InferenceDaemon:
             active = self._active
             self._active = None
             listeners = list(self._global_listeners)
+            self._reschedule_idle_timer_locked()
 
         if active is not None and prev_state != STATE_UNLOADING:
             try:

@@ -13,7 +13,8 @@ import {
 } from '../../../api/client'
 import ConfigSkeleton from '../../../components/ConfigSkeleton'
 import { useDialog } from '../../../components/Dialog'
-import SchemaForm from '../../../components/SchemaForm'
+import SchemaForm, { visibleSchemaGroups } from '../../../components/SchemaForm'
+import SchemaSectionIndex from '../../../components/SchemaSectionIndex'
 import StepShell from '../../../components/StepShell'
 import { useToast } from '../../../components/Toast'
 import { useSettingsDrawer } from '../../../lib/SettingsDrawer'
@@ -92,6 +93,11 @@ export default function TrainPage() {
 
   const vid = activeVersion?.id ?? null
 
+  const applyPresetWarnings = useCallback((r: { dropped_fields?: string[]; defaulted_fields?: string[] }) => {
+    setDroppedFields(r.dropped_fields ?? [])
+    setDefaultedFields(r.defaulted_fields ?? [])
+  }, [])
+
   const refreshConfig = useCallback(async () => {
     if (!vid) return
     try {
@@ -99,15 +105,13 @@ export default function TrainPage() {
       setConfigResp(r)
       setConfigSync(r.config)
       savedJsonRef.current = JSON.stringify(r.config)
+      // 老 config 兼容（InfoNoise 互斥被后端自动关掉等）由后端写进 r.defaulted_fields，
+      // 顶部 banner 渲染。dropped_fields 兜底 schema 演进时丢弃的旧字段。
+      applyPresetWarnings(r)
     } catch (e) {
       toast(t('train.loadConfigFailed', { error: e }), 'error')
     }
-  }, [project.id, vid, toast, setConfigSync, t])
-
-  const applyPresetWarnings = useCallback((r: { dropped_fields?: string[]; defaulted_fields?: string[] }) => {
-    setDroppedFields(r.dropped_fields ?? [])
-    setDefaultedFields(r.defaulted_fields ?? [])
-  }, [])
+  }, [project.id, vid, toast, setConfigSync, t, applyPresetWarnings])
 
   useEffect(() => {
     api.schema().then(setSchema).catch((e) => toast(t('train.loadSchemaFailed', { error: e }), 'error'))
@@ -252,6 +256,13 @@ export default function TrainPage() {
   const filteredPresets = useMemo(
     () => presets.filter((p) => !pickerSearch || p.name.toLowerCase().includes(pickerSearch.toLowerCase())),
     [presets, pickerSearch],
+  )
+
+  // 右侧 SchemaSectionIndex 的 IntersectionObserver root + 跳转目标
+  const schemaScrollRef = useRef<HTMLDivElement | null>(null)
+  const visibleGroups = useMemo(
+    () => (schema ? visibleSchemaGroups(schema, advancedMode) : []),
+    [schema, advancedMode],
   )
 
   // popover 关闭：点外面 / Esc
@@ -463,7 +474,7 @@ export default function TrainPage() {
       <div className="flex flex-col h-full gap-3">
 
         {/* 两栏布局：左（预设 + config 编辑） / 右（估算面板） */}
-        <div className="grid grid-cols-[1.5fr_1fr] gap-3 flex-1 min-h-0">
+        <div className="grid grid-cols-[3fr_1fr] gap-3 flex-1 min-h-0">
 
           {/* 左栏 */}
           <div className="flex flex-col gap-3 min-h-0 min-w-0 overflow-y-auto">
@@ -595,7 +606,7 @@ export default function TrainPage() {
                 {t('train.noConfigHint')}
               </div>
             ) : config ? (
-              <section className="flex-1 min-h-0 overflow-y-auto pr-1">
+              <section ref={schemaScrollRef} className="flex-1 min-h-0 overflow-y-auto pr-1">
                 <div className="flex justify-end mb-2">
                   <div className="inline-flex rounded-md border border-subtle overflow-hidden text-xs">
                     <button
@@ -641,12 +652,22 @@ export default function TrainPage() {
             )}
           </div>
 
-        {/* 右栏：训练集 + 正则集分布 */}
-        <DatasetStatsPanel
-          activeVersion={activeVersion}
-          reg={reg}
-          config={config}
-        />
+        {/* 右栏：训练集 + 正则集分布 + 章节锚点导航 */}
+        <div className="flex flex-col min-h-0 min-w-0 overflow-y-auto">
+          <DatasetStatsPanel
+            activeVersion={activeVersion}
+            reg={reg}
+            config={config}
+          />
+          {configResp?.has_config && config && visibleGroups.length > 0 && (
+            <div className="mt-8">
+              <SchemaSectionIndex
+                groups={visibleGroups}
+                scrollContainer={schemaScrollRef}
+              />
+            </div>
+          )}
+        </div>
       </div>
     </div>
     </StepShell>

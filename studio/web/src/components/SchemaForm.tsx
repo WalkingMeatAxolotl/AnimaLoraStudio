@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { SchemaResponse, ConfigData } from '../api/client'
 import { evalShowWhen, schemaAltDescription, schemaDisableHint, schemaDescription, schemaGroupLabel } from '../lib/schema'
@@ -21,6 +21,25 @@ interface Props {
   fieldSuffixes?: Record<string, React.ReactNode>
   /** false（默认）= 简单模式，隐藏 advanced=true 的字段。 */
   advancedMode?: boolean
+}
+
+/** 计算当前 advancedMode 下哪些 group 至少有一个可见字段（用于侧栏锚点导航）。
+ * 与下面的 buckets 逻辑保持一致：跳过 hidden / 跳过 advanced（简单模式下）。
+ * 不考虑 show_when —— 那是 per-field 动态，section header 仍按 bucket 渲染。 */
+export function visibleSchemaGroups(
+  schema: SchemaResponse,
+  advancedMode: boolean,
+): Array<{ key: string; label: string }> {
+  const counts = new Map<string, number>()
+  for (const [, prop] of Object.entries(schema.schema.properties)) {
+    if (prop.hidden) continue
+    if (prop.advanced && !advancedMode) continue
+    const g = prop.group ?? 'misc'
+    counts.set(g, (counts.get(g) ?? 0) + 1)
+  }
+  return schema.groups
+    .filter((g) => (counts.get(g.key) ?? 0) > 0)
+    .map((g) => ({ key: g.key, label: g.label }))
 }
 
 /**
@@ -57,9 +76,14 @@ export default function SchemaForm({
     return prop.disable_value ?? prop.default
   }
 
-  // disable_when 触发时把字段值强制回到 default。避免「切换 optimizer 到
-  // prodigy_plus_schedulefree 之后 lr_scheduler 还停在 cosine，保存时被 pydantic
-  // model_validator 拒绝」这种死锁 UX。
+  // disable_when 触发 → 字段灰显 + 值 reset 到 disable_value（缺省回到 default）。
+  // 「先开的赢」语义：当 InfoNoise 与 loss_weighting / loss_type / schedule_shift /
+  // noise_enhancement_type 任一互斥，先把状态切到非默认的那一侧赢，另一侧灰显且
+  // reset 到 default。两侧都装 disable_when 形成对称锁。
+  //
+  // 老 config 同开（infonoise=on + 互斥字段非默认）由后端 _tolerant_validate 反向
+  // 处理：关掉 infonoise 保留用户原投入的 weighting / huber / shift / enhancement，
+  // 把 "infonoise_enabled" 写进 defaulted_fields，前端顶部 banner 提示。
   useEffect(() => {
     let nextValues = values
     let changed = false
@@ -75,6 +99,24 @@ export default function SchemaForm({
     // 故意只监听 values；onChange / props 引用稳定，加进去会无限循环。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [values])
+
+  // Automagic 推荐 init lr=1e-6（upstream ostris/ai-toolkit + diffusion-pipe 默认）；
+  // 用 AdamW 量级 lr (1e-4) 起跑会让 sign-agreement 自适应慢 ~100× 才收敛回工作区间。
+  // 用户从其他 optimizer 切到 automagic 时，自动改写为 1e-6；不 disable，用户可继续调整。
+  // 初次 mount（含加载 saved config）不触发，避免覆盖用户已保存值——saved config 路径由
+  // training runtime 的 logger.warning 兜底。
+  const prevOptimizerType = useRef(values.optimizer_type)
+  useEffect(() => {
+    const prev = prevOptimizerType.current
+    const curr = values.optimizer_type
+    if (prev !== curr) {
+      prevOptimizerType.current = curr
+      if (curr === 'automagic' && Number(values.learning_rate) > 1e-5) {
+        onChange({ ...values, learning_rate: 1e-6 })
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [values.optimizer_type])
 
   // 按 group 分桶。hidden=true 的字段直接跳过：值仍由 ConfigData 透传（PUT 时不丢），
   // 只是不在 UI 上渲染。如果一个组所有字段都 hidden，下面 `fields.length === 0`
@@ -98,7 +140,8 @@ export default function SchemaForm({
         return (
           <section
             key={key}
-            className="rounded-md border border-subtle bg-surface"
+            id={`schema-group-${key}`}
+            className="rounded-md border border-subtle bg-surface scroll-mt-4"
           >
             <button
               type="button"

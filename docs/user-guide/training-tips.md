@@ -191,8 +191,9 @@ EDM/Karras 论文里 δ=0.15 是常用经验值。
 | `infonoise_K` | `64` | log-σ 空间分 bin 数；高 K = 更细 |
 | `infonoise_M` | `100` | 每 M 步刷新一次采样分布 |
 | `infonoise_B` | `256` | 每 bin 的 FIFO buffer 大小 |
-| `infonoise_beta` | `0.9` | EMA 新值权重（论文 Algorithm 1）。FIFO 已做一轮平均，β 偏高合理 |
-| `infonoise_N_min` | `50` | 触发刷新所需的每 bin 最小样本数 |
+| `infonoise_beta` | `0.9` | 自适应分布对最新 batch 的响应强度。FIFO 已做底层平滑，β 偏高合理 |
+| `infonoise_N_min` | `50` | 触发刷新所需的每 bin 最小样本数（必须 ≤ `infonoise_B`） |
+| `infonoise_gate_pivot_c` | `0.15` | gate 函数 pivot：低于 c 的噪声区段被压低采样。默认值取论文 §5 CIFAR 报告值；设 0 走自适应选取 |
 
 **观察是否生效**：训练时 wandb 面板会有两个指标
 - `infonoise/cdf_ready`：1 = 自适应 CDF 已就绪，0 = 还在 baseline
@@ -201,18 +202,27 @@ EDM/Karras 论文里 δ=0.15 是常用经验值。
 
 **注意**：InfoNoise 启用后 `timestep_sampling` 字段仅用于热身期。正式阶段由自适应 CDF 接管。
 
+**与其他训练选项的关系**：InfoNoise 用未加权 MSE 估各噪声区间的信息量；这是论文 entropy rate 推导的必要前提。下面列出已知会跟 InfoNoise 产生干扰的配置：
+
+| 配置 | 关系 | 处置 |
+|------|------|------|
+| `loss_weighting != none` (`min_snr`/`detail_inv_t`/`cosmap`) | 两个机制都在重塑 σ schedule（自适应 resample vs 手工 reweight），叠加互相消磨 | schema 互斥，保存配置时报错 |
+| `loss_type=huber` | huber 削峰让 outlier 区间不学，但 InfoNoise 用 raw MSE 看到 outlier 仍高 → 推 mass 进去 → 反馈环 | schema 互斥 |
+| `timestep_schedule_shift != 1.0` | shift 只在 baseline 路径生效；CDF 接管后静默失效 | schema 互斥 |
+| `noise_enhancement_type != none` (`offset` / `pyramid`) | 噪声增强改变 noise 形状，InfoNoise 学到的不再是 clean entropy rate profile（I-MMSE 推导假设标准高斯 noise）| schema 互斥 |
+| 正则集（`reg_data_dir != null`，任意 `reg_weight`） | reg 集与 main 集分布不同（典型 booru 通用图 vs LoRA 主题）；I-MMSE 假设单分布，混入会让 schedule 学到 mixture MMSE 而非 mmse_main。InfoNoise 按 batch 内 `is_reg` flag 硬过滤 reg 样本，仅 main 样本进 schedule 学习；reg 样本仍参与梯度（按 `reg_weight` 加权） | 透明处理，无需用户操作。未来若主流用法转向多 main 分布（multi-concept LoRA），按 `docs/todo/infonoise-reg-policy-reeval.md` 重评估 |
+| LoRA dropout（`lora_dropout` / `lora_rank_dropout` / `lora_module_dropout`） | 加梯度噪声，不改 mse 形状的系统性偏移 | 可同开，FIFO + EMA 双层平滑能 absorb |
+
 ### 噪声增强
 
 | 字段 | 默认 | 用途 |
 |------|------|------|
-| `noise_enhancement_type` | `none` | `none` / `offset` / `pyramid` 三选一，互斥（见下） |
-| `noise_offset` | `0.0` | 给噪声加常数偏置；`0.05~0.1` 能改善超暗 / 超亮场景的对比度。仅 `type=offset` 生效 |
-| `pyramid_noise_iters` | `0` | 金字塔噪声层数；多尺度叠加噪声，纹理多样性更好。仅 `type=pyramid` 生效 |
-| `pyramid_noise_discount` | `0.35` | 金字塔每层衰减系数。仅 `type=pyramid` 生效 |
+| `noise_enhancement_type` | `none` | `none` / `offset` / `pyramid` 三选一。LoRA 训练默认保持 `none` |
+| `noise_offset` | `0.0` | DC 偏置强度（0-0.2，0=关闭）。让噪声 mean 偏离 0，让模型有机会学习生成极端亮度场景（pure black / pure white / 强对比）。典型范围 0.05-0.1 |
+| `pyramid_noise_iters` | `0` | 金字塔噪声层数（0-6，0=关闭）。每层在 `spatial // 2^(k+1)` 尺度注入。**实际效果强度由 `pyramid_noise_discount` 决定** —— iters 单独决定覆盖的频段范围 |
+| `pyramid_noise_discount` | `0.5` | 每层相对衰减系数（0.1-0.9）。**控制低频强度的核心参数**：anima 把整体噪声 std 归一化到 1。0.1-0.4 归一化后接近标准高斯，等价于关闭；0.5-0.7 显著改变低频结构 |
 
 **互斥约束**：`noise_offset` 与金字塔噪声**不能同时启用**。两者都在给噪声注入低频成分（pyramid 最低分辨率那层 ≈ `noise_offset` 等价物），叠加会让低频成分双倍灌入，训练目标失真。这跟 kohya 上游 [sd-scripts PR #477](https://github.com/kohya-ss/sd-scripts/pull/477) 的硬约束一致。Anima 的 schema 校验会强制清零反组字段，老 yaml 同开会按 `pyramid_noise_iters > 0` 优先映射到 pyramid。
-
-`pyramid_noise` 来自 Mistoline / Diffusion 社区实验，画风 LoRA 受益明显，角色 LoRA 一般。
 
 ### Flip Augment + Cache Latents（双份缓存）
 
@@ -221,6 +231,7 @@ EDM/Karras 论文里 δ=0.15 是常用经验值。
 - cache 阶段对每张图 encode 两次（原图 + 镜像），分别存到 npz 的 `latent` / `latent_flipped` 键
 - 训练时 `__getitem__` 50% 概率取 flipped 版本，跟非 cache 路径行为对齐
 - 代价：**编码时间和 cache 大小都 ×2**（小数据集无感知，大数据集要权衡）
+- 缓存阶段会按相同 bucket 尺寸合批送入 VAE（`vae_cache_batch_size`，默认 `0` = 跟随训练 batch size，对齐 kohya）；显存不足时设为 `1` 逐张编码
 - 老 cache（只有 `latent`）+ `flip_augment=true` → 自动判失效，重 encode 补全；切回 `flip_augment=false` 不会反复重 encode（双份是单份的超集）
 
 历史 bug：旧版 0.11.x 之前同开两者会让 cache 阶段那一次随机翻转 baked 进 npz，**flip_augment 永久失效 + 50% 数据被永久镜像污染**。0.11.x 起按双份方案修复，已有的污染 cache 通过 `_is_cache_valid` 自动检测重 encode。

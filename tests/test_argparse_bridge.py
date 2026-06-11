@@ -168,6 +168,7 @@ def test_training_config_builds_without_collisions() -> None:
     assert ns.lora_rank == 32
     assert ns.lora_type == "lokr"
     assert ns.cache_latents is True
+    assert ns.vae_cache_batch_size == 0
     assert ns.sample_prompts == []
     assert ns.optimizer_type == "adamw"
 
@@ -205,6 +206,48 @@ def test_training_config_cli_ortho() -> None:
     parser = bridge.build_parser(TrainingConfig)
     ns = parser.parse_args(["--lora-type", "ortho"])
     assert ns.lora_type == "ortho"
+
+
+def test_training_config_cli_lion() -> None:
+    parser = bridge.build_parser(TrainingConfig)
+    ns = parser.parse_args([
+        "--optimizer-type", "lion",
+        "--lion-beta1", "0.95",
+        "--lion-beta2", "0.98",
+    ])
+    assert ns.optimizer_type == "lion"
+    assert ns.lion_beta1 == 0.95
+    assert ns.lion_beta2 == 0.98
+
+
+def test_training_config_cli_automagic() -> None:
+    parser = bridge.build_parser(TrainingConfig)
+    ns = parser.parse_args([
+        "--optimizer-type", "automagic",
+        "--automagic-min-lr", "1e-8",
+        "--automagic-max-lr", "0.001",
+        "--automagic-lr-bump", "2e-6",
+        "--automagic-beta2", "0.998",
+        "--automagic-clip-threshold", "0.8",
+    ])
+    assert ns.optimizer_type == "automagic"
+    assert ns.automagic_min_lr == 1e-8
+    assert ns.automagic_max_lr == 0.001
+    assert ns.automagic_lr_bump == 2e-6
+    assert ns.automagic_beta2 == 0.998
+    assert ns.automagic_clip_threshold == 0.8
+
+
+def test_training_config_cli_cosine_with_warmup() -> None:
+    parser = bridge.build_parser(TrainingConfig)
+    ns = parser.parse_args([
+        "--lr-scheduler", "cosine_with_warmup",
+        "--lr-scheduler-warmup-steps", "25",
+        "--lr-scheduler-eta-min", "1e-7",
+    ])
+    assert ns.lr_scheduler == "cosine_with_warmup"
+    assert ns.lr_scheduler_warmup_steps == 25
+    assert ns.lr_scheduler_eta_min == 1e-7
 
 
 def test_training_config_yaml_round_trip() -> None:

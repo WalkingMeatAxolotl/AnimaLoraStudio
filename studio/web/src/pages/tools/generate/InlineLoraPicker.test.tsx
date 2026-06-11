@@ -306,3 +306,72 @@ describe('InlineLoraPicker — single mode (controlled slot)', () => {
     expect(screen.getByLabelText('LoRA 权重数值')).toBeInTheDocument()
   })
 })
+
+describe('InlineLoraPicker — controlled sync (Step 6 / 决策 #8)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('rerender with new props.value → project/version dropdowns reflect new ids', async () => {
+    vi.spyOn(api, 'listVersionLoraCkpts').mockResolvedValue(ckptsV3)
+    const onChange = vi.fn()
+    const onClose = vi.fn()
+    const initialValue: PickedLora = {
+      path: '/loras/cute_chibi/v3/final.safetensors',
+      projectId: 1, versionId: 11,
+    }
+    const { rerender } = render(
+      <InlineLoraPicker
+        mode="single"
+        projectLoras={sample}
+        value={initialValue}
+        weight={1.0}
+        onChange={onChange}
+        onClose={onClose}
+      />
+    )
+    await waitFor(() => {
+      const projectSelect = screen.getAllByRole('combobox')[0] as HTMLSelectElement
+      expect(projectSelect.value).toBe('1')
+    })
+
+    // 模拟历史回填：props.value 切换到另一项目 (id=2)
+    const newValue: PickedLora = {
+      path: '/loras/noir/v1/final.safetensors',
+      projectId: 2, versionId: 21,
+    }
+    rerender(
+      <InlineLoraPicker
+        mode="single"
+        projectLoras={sample}
+        value={newValue}
+        weight={1.0}
+        onChange={onChange}
+        onClose={onClose}
+      />
+    )
+    // sync useEffect 把 pid 设到 2 —— 项目下拉跟着更新
+    await waitFor(() => {
+      const projectSelect = screen.getAllByRole('combobox')[0] as HTMLSelectElement
+      expect(projectSelect.value).toBe('2')
+    })
+  })
+
+  it('value=null 时不 sync，保留 fallback 默认（projects[0] ckpts 显示）', async () => {
+    vi.spyOn(api, 'listVersionLoraCkpts').mockResolvedValue(ckptsV3)
+    const onChange = vi.fn()
+    const onClose = vi.fn()
+    render(
+      <InlineLoraPicker
+        mode="single"
+        projectLoras={sample}
+        value={null}
+        weight={1.0}
+        onChange={onChange}
+        onClose={onClose}
+      />
+    )
+    // 没有受控 value 时仍能看到 projects[0] 的 ckpts（fallback 行为）
+    await waitFor(() => expect(screen.getByText('step 2000')).toBeInTheDocument())
+  })
+})

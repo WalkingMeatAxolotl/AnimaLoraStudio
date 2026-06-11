@@ -15,11 +15,14 @@ import {
 } from '../../../api/client'
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import ImagePreviewModal from '../../../components/ImagePreviewModal'
-import JobProgress from '../../../components/JobProgress'
 import StepShell from '../../../components/StepShell'
+import { TranslatedTag } from '../../../components/tagDisplay/TranslatedTag'
+import { TagSuggestList } from '../../../components/tagSuggest/TagSuggestList'
+import { useTagSuggest } from '../../../components/tagSuggest/useTagSuggest'
 import { useDialog } from '../../../components/Dialog'
 import { useToast } from '../../../components/Toast'
 import { useEventStream } from '../../../lib/useEventStream'
+import { useLatestJobReplay } from '../../../lib/useLatestJobReplay'
 
 interface Ctx {
   project: ProjectDetail
@@ -72,10 +75,19 @@ export default function RegularizationPage() {
   const [apiSource, setApiSource] = useState<'gelbooru' | 'danbooru'>('gelbooru')
   const [advanced, setAdvanced] = useState<AdvancedParams>(ADVANCED_DEFAULTS)
 
-  const [job, setJob] = useState<Job | null>(null)
-  const [logs, setLogs] = useState<string[]>([])
-  const jobIdRef = useRef<number | null>(null)
-  jobIdRef.current = job?.id ?? null
+  const vid = activeVersion?.id ?? null
+
+  // booru reg_build job：最近一次任务 + 日志回放（进页面 / SSE 重连时 hydrate）
+  const {
+    item: job,
+    logs,
+    setItem: setJob,
+    setLogs,
+    itemIdRef: jobIdRef,
+    refresh: refreshLatestRegBuild,
+  } = useLatestJobReplay<Job>(vid, (v) =>
+    api.getLatestVersionJob(project.id, v, 'reg_build').then((r) => ({ item: r.job, log: r.log })),
+  )
 
   // B2（PR-2）：「设置 & 日志」+「先验生成」合并成单 tab「生成」；顶部 source picker
   // 决定渲染 Booru 配置面板还是 AI 配置面板。「开始生成」按钮按 source 调对应 endpoint。
@@ -95,17 +107,24 @@ export default function RegularizationPage() {
   const [aiCfg, setAiCfg] = useState(4.0)
   const [aiSeed, setAiSeed] = useState(0)
   const [aiIncremental, setAiIncremental] = useState(false)
-  const [aiTask, setAiTask] = useState<Task | null>(null)
-  const [aiLogs, setAiLogs] = useState<string[]>([])
   const [aiBusy, setAiBusy] = useState(false)
-  const aiTaskIdRef = useRef<number | null>(null)
-  aiTaskIdRef.current = aiTask?.id ?? null
+  // AI 先验 task：同上；hydrate 时顺带把 aiBusy 同步到 task 真实状态
+  const {
+    item: aiTask,
+    logs: aiLogs,
+    setItem: setAiTask,
+    setLogs: setAiLogs,
+    itemIdRef: aiTaskIdRef,
+    refresh: refreshLatestRegPrior,
+  } = useLatestJobReplay<Task>(
+    vid,
+    (v) => api.getLatestRegPriorTask(project.id, v).then((r) => ({ item: r.task, log: r.log })),
+    (task) => setAiBusy(task ? task.status === 'running' || task.status === 'pending' : false),
+  )
 
   // 预览 modal
   const [previewIdx, setPreviewIdx] = useState<number | null>(null)
   const [previewCaption, setPreviewCaption] = useState<string>('')
-
-  const vid = activeVersion?.id ?? null
 
   const refreshReg = useCallback(async () => {
     if (!vid) return
@@ -162,18 +181,16 @@ export default function RegularizationPage() {
     } catch { /* quota / privacy mode：丢就丢，不打扰用户 */ }
   }, [excludedStorageKey, excluded])
 
-  // 刷新 / 进入页面时回放最近一次 reg_build job：锁回 jid + 回放历史日志
+  // 刷新 / 进入页面时回放最近一次生成任务：锁回 id + 回放历史日志。
   useEffect(() => {
-    if (!vid) return
-    void api
-      .getLatestVersionJob(project.id, vid, 'reg_build')
-      .then((r) => {
-        if (!r.job) return
-        setJob(r.job)
-        setLogs(r.log ? r.log.split('\n') : [])
-      })
-      .catch(() => {})
-  }, [project.id, vid])
+    void refreshLatestRegBuild()
+    void refreshLatestRegPrior()
+  }, [refreshLatestRegBuild, refreshLatestRegPrior])
+
+  const refreshLiveLogs = useCallback(() => {
+    void refreshLatestRegBuild()
+    void refreshLatestRegPrior()
+  }, [refreshLatestRegBuild, refreshLatestRegPrior])
 
   useEventStream((evt) => {
     const jid = jobIdRef.current
@@ -199,7 +216,7 @@ export default function RegularizationPage() {
         }
       }).catch(() => {})
     }
-  })
+  }, { onOpen: refreshLiveLogs })
 
   const trainImageCount = activeVersion?.stats?.train_image_count ?? 0
   // 任意一种生成跑着都视为 live —— 防止 booru / AI 并发同时写 reg/。
@@ -338,6 +355,30 @@ export default function RegularizationPage() {
       idx={5}
       title={t('steps.reg.title')}
       subtitle={t('steps.reg.subtitle')}
+      logSources={[
+        job && {
+          key: 'reg_build',
+          label: t('logDrawer.regBuild'),
+          status: job.status,
+          lines: logs,
+          startedAt: job.started_at,
+          finishedAt: job.finished_at,
+          onCancel: () => {
+            void api
+              .cancelJob(job.id)
+              .then(() => toast(t('reg.cancelToast'), 'success'))
+              .catch((e) => toast(String(e), 'error'))
+          },
+        },
+        aiTask && {
+          key: 'reg_ai',
+          label: t('logDrawer.regPrior'),
+          status: aiTask.status,
+          lines: aiLogs,
+          startedAt: aiTask.started_at,
+          finishedAt: aiTask.finished_at,
+        },
+      ]}
       actions={
         <button
           onClick={() => {
@@ -396,7 +437,6 @@ export default function RegularizationPage() {
             {source === 'ai' ? (
               <AiForm
                 trainTags={trainTags}
-                trainImageCount={trainImageCount}
                 excluded={excluded}
                 onToggleExcluded={toggleTag}
                 neg={aiNeg} onNegChange={setAiNeg}
@@ -424,25 +464,6 @@ export default function RegularizationPage() {
                 autoTagKind={autoTagKind} onAutoTagKindChange={setAutoTagKind}
                 autoDedup={autoDedup} onAutoDedupChange={setAutoDedup}
                 advanced={advanced} onAdvancedChange={setAdvanced}
-              />
-            )}
-
-            {/* 运行日志：全宽置底 */}
-            {(job || aiTask) && (
-              <LogPanel
-                job={job}
-                jobLogs={logs}
-                onCancelJob={async () => {
-                  if (!job) return
-                  try {
-                    await api.cancelJob(job.id)
-                    toast(t('reg.cancelToast'), 'success')
-                  } catch (e) {
-                    toast(String(e), 'error')
-                  }
-                }}
-                aiTask={aiTask}
-                aiLogs={aiLogs}
               />
             )}
 
@@ -809,7 +830,7 @@ function Field({
 
 // AI 表单 — grp 卡：出图（常用）/ 排除 tag / 采样（进阶）
 function AiForm({
-  trainTags, trainImageCount,
+  trainTags,
   excluded, onToggleExcluded,
   neg, onNegChange,
   width, onWidthChange,
@@ -820,7 +841,6 @@ function AiForm({
   incremental, onIncrementalChange,
 }: {
   trainTags: RegTagCount[]
-  trainImageCount: number
   excluded: Set<string>
   onToggleExcluded: (tag: string) => void
   neg: string
@@ -882,12 +902,10 @@ function AiForm({
         </Field>
       </GrpCard>
 
-      <ExcludeTagsTiered
+      <ExcludeTags
         trainTags={trainTags}
-        trainImageCount={trainImageCount}
         excluded={excluded}
         onToggle={onToggleExcluded}
-        modeHint={t('reg.excludeHintAi')}
       />
 
       <GrpCard
@@ -1039,9 +1057,8 @@ function BooruForm({
         </Field>
       </GrpCard>
 
-      <ExcludeTagsTiered
+      <ExcludeTags
         trainTags={trainTags}
-        trainImageCount={trainImageCount}
         excluded={excluded}
         onToggle={onToggleExcluded}
         modeHint={t('reg.excludeHintBooru')}
@@ -1130,31 +1147,25 @@ function CheckRow({
   )
 }
 
-// 排除 tag — 按 count / trainImageCount 比例分 3 档
-function ExcludeTagsTiered({
-  trainTags, trainImageCount, excluded, onToggle, modeHint,
+// 排除 tag — train 高频 tag 一栏列出 + 自定义排除一栏
+function ExcludeTags({
+  trainTags, excluded, onToggle, modeHint,
 }: {
   trainTags: RegTagCount[]
-  trainImageCount: number
   excluded: Set<string>
   onToggle: (tag: string) => void
   modeHint?: string
 }) {
   const { t } = useTranslation()
   const [draft, setDraft] = useState('')
-  const tiers = useMemo(() => {
-    const high: RegTagCount[] = []
-    const mid: RegTagCount[] = []
-    const low: RegTagCount[] = []
-    const n = Math.max(1, trainImageCount)
-    for (const tag of trainTags) {
-      const r = tag.count / n
-      if (r >= 0.9) high.push(tag)
-      else if (r >= 0.6) mid.push(tag)
-      else low.push(tag)
-    }
-    return { high, mid, low }
-  }, [trainTags, trainImageCount])
+  const inputRef = useRef<HTMLInputElement>(null)
+  const suggest = useTagSuggest({
+    value: draft,
+    inputRef,
+    wholeAsToken: true,
+    // 选中候选时把整段 draft 替换；用户再按 Enter 走 addCustom 走 normalize → 落 booru 形态
+    onPick: ({ suggestion }) => { setDraft(suggestion.tag) },
+  })
   const trainTagSet = useMemo(
     () => new Set(trainTags.map((t) => t.tag)),
     [trainTags]
@@ -1191,28 +1202,37 @@ function ExcludeTagsTiered({
       collapsible
       defaultOpen
     >
-      <TierGroup
-        label={t('reg.tierHigh')}
-        sub={t('reg.tierHighSub')}
-        leadColor
-        tags={tiers.high}
-        excluded={excluded}
-        onToggle={onToggle}
-      />
-      <TierGroup
-        label={t('reg.tierMid')}
-        sub={t('reg.tierMidSub')}
-        tags={tiers.mid}
-        excluded={excluded}
-        onToggle={onToggle}
-      />
-      <TierGroup
-        label={t('reg.tierLow')}
-        sub={t('reg.tierLowSub')}
-        tags={tiers.low}
-        excluded={excluded}
-        onToggle={onToggle}
-      />
+      {trainTags.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {trainTags.map((info) => {
+            const on = excluded.has(info.tag)
+            return (
+              <button
+                key={info.tag}
+                onClick={() => onToggle(info.tag)}
+                className={
+                  'inline-flex items-center gap-1.5 h-6 px-2.5 rounded-md font-mono text-xs cursor-pointer transition-colors border ' +
+                  (on
+                    ? 'text-accent-hover'
+                    : 'bg-sunken text-fg-secondary hover:text-fg-primary')
+                }
+                style={
+                  on
+                    ? { background: 'var(--accent-soft)', borderColor: 'rgba(237,107,58,0.42)' }
+                    : { borderColor: 'var(--border-default)' }
+                }
+                title={on ? t('reg.excludeUnclick') : t('reg.excludeClick')}
+              >
+                <span className={on ? 'text-accent' : 'text-fg-tertiary'}>
+                  {on ? '✕' : '+'}
+                </span>
+                <TranslatedTag tag={info.tag.replace(/_/g, ' ')} />
+                <span className="text-fg-disabled text-2xs">×{info.count}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
       <div className="font-mono text-2xs uppercase tracking-wider text-fg-tertiary mt-4 mb-2 flex items-center gap-2">
         <span>{t('reg.tierCustom')}</span>
         <span className="flex-1 h-px bg-subtle" />
@@ -1229,7 +1249,7 @@ function ExcludeTagsTiered({
                 color: 'var(--warn)',
               }}
             >
-              {tag.replace(/_/g, ' ')}
+              <TranslatedTag tag={tag.replace(/_/g, ' ')} />
               <button
                 onClick={() => onToggle(tag)}
                 className="bg-transparent border-none cursor-pointer p-0 text-warn opacity-80"
@@ -1242,18 +1262,34 @@ function ExcludeTagsTiered({
         </div>
       )}
       <div className="flex gap-2 mt-3">
-        <input
-          className="input font-mono flex-1 text-sm"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault()
-              addCustom()
-            }
-          }}
-          placeholder={t('reg.excludePlaceholder')}
-        />
+        <div className="relative flex-1">
+          <input
+            ref={inputRef}
+            className="input font-mono w-full text-sm"
+            value={draft}
+            onChange={(e) => { setDraft(e.target.value); suggest.notifyChange() }}
+            onKeyDown={(e) => {
+              if (suggest.handleKeyDown(e)) return
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                addCustom()
+              }
+            }}
+            onFocus={() => suggest.notifyFocus()}
+            onBlur={() => suggest.notifyBlur()}
+            placeholder={t('reg.excludePlaceholder')}
+          />
+          <TagSuggestList
+            open={suggest.open}
+            suggestions={suggest.suggestions}
+            activeIdx={suggest.activeIdx}
+            onPick={(s) => suggest.pickAt(suggest.suggestions.indexOf(s))}
+            onHover={suggest.setActiveIdx}
+            inputRef={inputRef}
+            cursor={suggest.cursor}
+            positionDeps={[draft]}
+          />
+        </div>
         <button
           onClick={addCustom}
           disabled={!draft.trim()}
@@ -1263,59 +1299,6 @@ function ExcludeTagsTiered({
         </button>
       </div>
     </GrpCard>
-  )
-}
-
-function TierGroup({
-  label, sub, leadColor, tags, excluded, onToggle,
-}: {
-  label: string
-  sub?: string
-  leadColor?: boolean
-  tags: RegTagCount[]
-  excluded: Set<string>
-  onToggle: (tag: string) => void
-}) {
-  if (tags.length === 0) return null
-  return (
-    <div className="mt-3.5 first:mt-0">
-      <div className="font-mono text-2xs uppercase tracking-wider text-fg-tertiary mb-2 flex items-center gap-2">
-        <span style={leadColor ? { color: 'var(--accent)' } : undefined}>
-          {label}
-        </span>
-        {sub && <span>· {sub}</span>}
-        <span className="flex-1 h-px bg-subtle" />
-      </div>
-      <div className="flex flex-wrap gap-1.5">
-        {tags.map((info) => {
-          const on = excluded.has(info.tag)
-          return (
-            <button
-              key={info.tag}
-              onClick={() => onToggle(info.tag)}
-              className={
-                'inline-flex items-center gap-1.5 h-6 px-2.5 rounded-md font-mono text-xs cursor-pointer transition-colors border ' +
-                (on
-                  ? 'text-accent-hover'
-                  : 'bg-sunken text-fg-secondary hover:text-fg-primary')
-              }
-              style={
-                on
-                  ? { background: 'var(--accent-soft)', borderColor: 'rgba(237,107,58,0.42)' }
-                  : { borderColor: 'var(--border-default)' }
-              }
-              title={on ? '点击取消排除' : '点击加入排除'}
-            >
-              <span className={on ? 'text-accent' : 'text-fg-tertiary'}>
-                {on ? '✕' : '+'}
-              </span>
-              {info.tag.replace(/_/g, ' ')}
-              <span className="text-fg-disabled text-2xs">×{info.count}</span>
-            </button>
-          )
-        })}
-      </div>
-    </div>
   )
 }
 
@@ -1392,67 +1375,6 @@ function AdvancedFields({
     </>
   )
 }
-
-// 运行日志全宽置底
-function LogPanel({
-  job, jobLogs, onCancelJob, aiTask, aiLogs,
-}: {
-  job: Job | null
-  jobLogs: string[]
-  onCancelJob: () => Promise<void>
-  aiTask: Task | null
-  aiLogs: string[]
-}) {
-  const { t } = useTranslation()
-  // 优先显示进行中的 job；否则展示 aiTask
-  if (job) {
-    return (
-      <div className="mt-4">
-        <JobProgress
-          job={job}
-          logs={jobLogs}
-          onCancel={onCancelJob}
-        />
-      </div>
-    )
-  }
-  if (aiTask) {
-    return (
-      <div className="mt-4 rounded-lg border border-subtle bg-surface overflow-hidden">
-        <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-subtle text-sm font-semibold">
-          <span>{t('reg.aiLogTitle')}</span>
-          <AiTaskBadge task={aiTask} />
-        </div>
-        {aiLogs.length > 0 && (
-          <pre className="m-0 px-4 py-3.5 bg-sunken font-mono text-xs leading-relaxed text-fg-tertiary max-h-72 overflow-auto whitespace-pre-wrap break-words">
-            {aiLogs.join('\n')}
-          </pre>
-        )}
-      </div>
-    )
-  }
-  return null
-}
-
-function AiTaskBadge({ task }: { task: Task }) {
-  const { t } = useTranslation()
-  const label =
-    task.status === 'done' ? t('reg.aiStatusDone') :
-    task.status === 'running' ? t('reg.aiStatusRunning') :
-    task.status === 'failed' ? t('reg.aiStatusFailed') :
-    task.status === 'pending' ? t('reg.aiStatusPending') :
-    task.status === 'canceled' ? t('reg.aiStatusCanceled') : task.status
-  const cls =
-    task.status === 'done' ? 'bg-ok-soft text-ok' :
-    task.status === 'running' ? 'bg-info-soft text-info' :
-    task.status === 'failed' ? 'bg-err-soft text-err' : 'bg-overlay text-fg-tertiary'
-  return (
-    <span className={`font-mono text-2xs px-2 py-0.5 rounded-full ${cls}`}>
-      {label} · #{task.id}
-    </span>
-  )
-}
-
 
 function RegPreview({
   pid,

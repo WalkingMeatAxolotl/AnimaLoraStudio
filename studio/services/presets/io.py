@@ -150,7 +150,9 @@ def _tolerant_validate(raw: dict[str, Any]) -> tuple[TrainingConfig, list[str], 
 
     defaults = TrainingConfig()
     defaulted: list[str] = []
-    max_rounds = len(data)
+    # loop bound = data fields + 1 extra round for the InfoNoise compat shim
+    # below (which doesn't consume a field-level slot).
+    max_rounds = len(data) + 1
     for _ in range(max_rounds):
         try:
             cfg = TrainingConfig.model_validate(data)
@@ -160,6 +162,15 @@ def _tolerant_validate(raw: dict[str, Any]) -> tuple[TrainingConfig, list[str], 
                 e["loc"][0] for e in exc.errors() if e.get("loc")
             }
             if not bad_fields:
+                # Model-level validator (loc=()) — for the InfoNoise mutex set
+                # (4 _validate_infonoise_*_exclusive), prefer to disable InfoNoise
+                # and preserve the user's investment in loss_weighting / loss_type /
+                # timestep_schedule_shift / noise_enhancement_type. Frontend shows
+                # this as a compat banner via defaulted_fields.
+                if data.get("infonoise_enabled") is True:
+                    data["infonoise_enabled"] = False
+                    defaulted.append("infonoise_enabled")
+                    continue
                 raise PresetError(f"预设校验失败: {exc}") from exc
             for f in bad_fields:
                 data[f] = getattr(defaults, f)

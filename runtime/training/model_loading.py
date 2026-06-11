@@ -248,7 +248,9 @@ def _load_weights_best_effort(model: torch.nn.Module, sd: dict, label: str) -> d
     model_keys = set(model.state_dict().keys())
     sd_keys = list(sd.keys())
     prefixes, matched = _pick_best_prefix_remap(sd_keys, model_keys)
-    remapped = {_strip_prefixes(k, prefixes): v for k, v in sd.items()}
+    # Common path is no prefix remap. Reusing the original dict avoids building
+    # another large key->tensor mapping while loading multi-GB checkpoints.
+    remapped = sd if not prefixes else {_strip_prefixes(k, prefixes): v for k, v in sd.items()}
 
     incompatible = model.load_state_dict(remapped, strict=False)
     missing = list(getattr(incompatible, "missing_keys", []) or [])

@@ -10,7 +10,6 @@ import {
 } from '../../../api/client'
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import ImagePreviewModal from '../../../components/ImagePreviewModal'
-import PreprocessJobStrip from '../../../components/preprocess/PreprocessJobStrip'
 import PreprocessToolsBar from '../../../components/preprocess/PreprocessToolsBar'
 import StepShell from '../../../components/StepShell'
 import BarHistogram from '../../../components/BarHistogram'
@@ -115,10 +114,16 @@ export default function PreprocessPage() {
     try {
       const r = await api.getPreprocessStatusTrain(project.id, vid)
       setStatus(r)
-      // Logs are ephemeral per-session — don't hydrate from log_tail. After
-      // refresh the user only sees a fresh, empty log; SSE appends as the
-      // current job emits. Matches the crop tool's behavior so the two pages
-      // are consistent.
+      // 回放（issue #251）：进页面 / SSE 重连时用 log_tail 恢复日志；
+      // 同一 job 且本地已有 SSE 积累时不覆盖（tail 只有 50 行，比本地短）。
+      const rid = r.job?.id ?? null
+      setLogs((prev) =>
+        rid !== null && rid === jobIdRef.current && prev.length > 0
+          ? prev
+          : r.log_tail
+            ? r.log_tail.split('\n')
+            : [],
+      )
     } catch {
       /* ignore */
     }
@@ -171,7 +176,7 @@ export default function PreprocessPage() {
     } else if (evt.type === 'model_download_changed') {
       void refreshUpscaler()
     }
-  })
+  }, { onOpen: () => void refreshStatus() })
 
   const job = status?.job ?? null
   const isLive = job?.status === 'running' || job?.status === 'pending'
@@ -343,6 +348,17 @@ export default function PreprocessPage() {
       idx={2}
       title={t('steps.preprocess.title')}
       subtitle={t('steps.preprocess.subtitle')}
+      logSources={[
+        job && {
+          key: 'preprocess',
+          label: t('logDrawer.preprocess'),
+          status: job.status,
+          lines: logs,
+          startedAt: job.started_at,
+          finishedAt: job.finished_at,
+          onCancel: () => void cancel(),
+        },
+      ]}
     >
       <div className="flex flex-col h-full gap-3 min-h-0">
         <div className="grid gap-3 flex-1 min-h-0" style={{ gridTemplateColumns: '1fr 260px' }}>
@@ -373,19 +389,6 @@ export default function PreprocessPage() {
                 void startPreprocess('selected', selectedTargets.names)
               }
             />
-
-            {/* Show JobStrip only when there's a live job OR session has
-                accumulated logs. After a page refresh the historic job may
-                still be present in `status.job` but logs are reset (ephemeral
-                per session) — rendering an empty JobStrip for a stale
-                terminal job is just clutter. */}
-            {job && (isLive || logs.length > 0) && (
-              <PreprocessJobStrip
-                job={job}
-                logs={logs}
-                onCancel={isLive ? cancel : undefined}
-              />
-            )}
 
             <ImagesPanel
               summary={summary}

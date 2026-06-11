@@ -1,9 +1,29 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, type MonitorState } from '../../../api/client'
+import { api } from '../../../api/client'
 import { exportXYMatrix } from './exportXY'
 import FullscreenViewer from './FullscreenViewer'
 import { axisLabel, formatAxisValue, type XYAxisDraft } from './xy'
+
+/** PreviewXYGrid 本地 sample 类型。
+ *
+ *  `MonitorState['samples']` 结构性可赋值过来（active task 路径，`xy` optional —
+ *  非 XY 模式 sample 也复用同一 streaming buffer）；
+ *  历史 disk 回看路径补 `imageUrl`（server 已 URL encode 好的 cell URL），
+ *  GridCell + FullscreenViewer 都优先 `imageUrl`，否则回退
+ *  `api.generateSampleUrl(taskId, filename)`。 */
+export interface XYSample {
+  path: string
+  step?: number
+  xy?: {
+    xi: number
+    yi: number
+    xv?: string | number
+    yv?: string | number | null
+  }
+  /** disk-served 时由 server 给；cache / active task 留空 */
+  imageUrl?: string
+}
 
 // zoom = 单 cell 物理宽度（px）。固定列宽 → 滚轮 zoom 视觉立即生效；
 // 列总宽 > 容器时横滚（已有 overflow:auto 兜底）。
@@ -28,13 +48,18 @@ function clamp(v: number, lo: number, hi: number): number {
  */
 export default function PreviewXYGrid({
   samples, taskId, xDraft, yDraft, onCellClick, selectedIndices,
+  compositeUrl,
 }: {
-  samples: NonNullable<MonitorState['samples']>
+  samples: XYSample[]
   taskId: number
   xDraft: XYAxisDraft
   yDraft: XYAxisDraft | null
   onCellClick?: (sampleIdx: number) => void
   selectedIndices?: number[]
+  /** disk 历史回看专用：传 composite 大图 URL → 导出 PNG 按钮直接 anchor download，
+   *  绕过 composeXYMatrix（disk entry 的 cache 早就没了，re-compose 会失败）。
+   *  active task 模式不传 → fallback 走 exportXYMatrix。 */
+  compositeUrl?: string
 }) {
   const { t } = useTranslation()
   const [cellW, setCellW] = useState(ZOOM_DEFAULT)
@@ -49,17 +74,29 @@ export default function PreviewXYGrid({
     setExporting(true)
     setExportMsg(null)
     try {
-      const exportSamples = samples
-        .filter((s): s is typeof s & { xy: NonNullable<typeof s.xy> } => s.xy != null)
-        .map((s) => ({ path: s.path, xy: { xi: s.xy.xi, yi: s.xy.yi } }))
-      await exportXYMatrix({
-        samples: exportSamples,
-        taskId,
-        xAxis: xDraft.axis,
-        yAxis: yDraft?.axis ?? null,
-        xValues,
-        yValues,
-      })
+      // disk 历史回看：composite 已在磁盘上，直接下载它（不调 composeXYMatrix
+      // —— per-cell URL 跨 task 拉 cache 会 404，且 server 端的 composite
+      // 已经是 pixel-equivalent 的成品）
+      if (compositeUrl) {
+        const a = document.createElement('a')
+        a.href = compositeUrl
+        a.download = `xy_matrix_${taskId}_${compositeUrl.split('/').pop() ?? 'plot.png'}`
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+      } else {
+        const exportSamples = samples
+          .filter((s): s is XYSample & { xy: NonNullable<XYSample['xy']> } => s.xy != null)
+          .map((s) => ({ path: s.path, xy: { xi: s.xy.xi, yi: s.xy.yi } }))
+        await exportXYMatrix({
+          samples: exportSamples,
+          taskId,
+          xAxis: xDraft.axis,
+          yAxis: yDraft?.axis ?? null,
+          xValues,
+          yValues,
+        })
+      }
       setExportMsg(t('generate.exportDownloaded'))
       setTimeout(() => setExportMsg(null), 3000)
     } catch (e) {
@@ -277,7 +314,7 @@ export default function PreviewXYGrid({
         }
         return (
           <FullscreenViewer
-            src={api.generateSampleUrl(taskId, fn)}
+            src={s.imageUrl ?? api.generateSampleUrl(taskId, fn)}
             alt={fn}
             caption={captionParts.join(' · ')}
             onClose={() => setFullscreenIdx(null)}
@@ -316,7 +353,7 @@ function Row({
   xDraft: XYAxisDraft
   yDraft: XYAxisDraft | null
   cellIndex: Map<string, number>
-  samples: NonNullable<MonitorState['samples']>
+  samples: XYSample[]
   taskId: number
   selSet: Set<number>
   onCellClick?: (sampleIdx: number) => void
@@ -349,6 +386,7 @@ function Row({
             key={`c-${yi}-${xi}`}
             taskId={taskId}
             filename={filename}
+            imageUrl={sample?.imageUrl}
             sampleIdx={idx ?? null}
             isSelected={isSel}
             tooltip={tooltip}
@@ -362,10 +400,12 @@ function Row({
 }
 
 function GridCell({
-  taskId, filename, sampleIdx, isSelected, tooltip, onClick, onDoubleClick,
+  taskId, filename, imageUrl, sampleIdx, isSelected, tooltip, onClick, onDoubleClick,
 }: {
   taskId: number
   filename: string | null
+  /** disk-served 时由 server 给的 URL；cache / active task 留空，回退 api.generateSampleUrl */
+  imageUrl?: string
   sampleIdx: number | null
   isSelected: boolean
   tooltip: string
@@ -375,14 +415,17 @@ function GridCell({
   const { t } = useTranslation()
   const [errored, setErrored] = useState(false)
 
-  // 切 task / filename 变（如点击历史回看）时 reset errored，让 img
+  // src 优先 imageUrl（disk 历史 server 给的 URL），否则 fallback 走 cache URL
+  const src = imageUrl ?? (filename ? api.generateSampleUrl(taskId, filename) : null)
+
+  // 切 task / src 变（如点击历史回看）时 reset errored，让 img
   // 重新尝试加载。否则上次 errored=true 残留，新 src 来了仍显示 "..."
   useEffect(() => {
     setErrored(false)
-  }, [taskId, filename])
+  }, [taskId, src])
 
   // 占位（无 sample / cache miss）：minHeight 撑高让 grid 行不塌缩
-  if (!filename || errored) {
+  if (!src || errored) {
     return (
       <div
         className="grid place-items-center rounded-sm border border-subtle bg-sunken text-fg-tertiary text-2xs"
@@ -406,13 +449,13 @@ function GridCell({
       title={tooltip}
       style={{ minHeight: 80 }}
     >
-      {/* key 加 taskId+filename 让 src 变化时 React 强制重挂载 img，避免
+      {/* key 加 src 让 src 变化时 React 强制重挂载 img，避免
           上次失败的浏览器缓存或 onError 状态残留 */}
       <img
-        key={`${taskId}-${filename}`}
-        src={api.generateSampleUrl(taskId, filename)}
+        key={src}
+        src={src}
         className="block w-full h-auto pointer-events-none"
-        alt={filename}
+        alt={filename ?? ''}
         loading="lazy"
         draggable={false}
         onError={() => setErrored(true)}

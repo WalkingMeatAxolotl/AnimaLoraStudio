@@ -1,235 +1,159 @@
-/**
- * commit 16：测试出图历史栏（IndexedDB 持久化）。
+/** 测试出图历史栏（plan Step 4 重写）。
  *
- * - 按 mode 三个独立桶：single / xy / compare
- * - 每条历史一个封面缩略图（dataUrl，~256px PNG）
- * - 跨 SPA 路由保持；浏览器 tab 关闭后清（IndexedDB 默认行为，与
- *   sessionStorage 不同 —— IndexedDB 跨 tab 持久，但用户决策是"tab 关
- *   就丢"，所以我们写 tab 级 sessionStorage 之上的 in-memory cache，
- *   IndexedDB 只用作页面刷新但不关 tab 时的恢复）
- *
- * 实际选择：IndexedDB（用户决策"无上限，几十 mb 对现代计算机太小"），
- * tab 关后留下也无伤大雅 —— 用户重开 tab 还能看到历史，符合"看图/对比"
- * 主流程。整体内存 / 磁盘可控（每条 thumb ~20KB，1000 条也才 20MB）。
+ * 设计转向（决策 #5 / #9 / #12）：
+ * - 砍 IndexedDB 整层（~-250 LOC）—— 不再做"params + thumb 双份持久化"
+ * - 单一 source of truth = 磁盘 PNG（持久 entry）+ server cache（临时 entry）
+ * - mount 总拉 disk-history（不分模式）；不受 save_test_images 开关影响
+ * - session in-memory 持有所有 entry，关 tab 即丢；刷新页面重 mount 拉 disk
+ * - HistoryEntry 是 union: DiskEntry | CacheEntry（adapter pattern，分支收敛
+ *   到 entryAdapter.ts）
+ * - 没有 merge upgrade / dedup / pruneStale —— 两类 entry 自然独立、不会撞 id
  */
-import { useEffect, useRef, useState } from 'react'
-import { api } from '../../../api/client'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  entryDelete,
+  type CacheEntry,
+  type DiskEntry,
+  type HistoryEntry,
+  type HistoryXYMeta,
+} from './entryAdapter'
+import type { GenerateParamsSnapshot } from './paramsSnapshot'
 
-const DB_NAME = 'anima-generate-history'
-const DB_VERSION = 1
-const STORE = 'entries'
+export type { CacheEntry, DiskEntry, HistoryEntry, HistoryXYMeta } from './entryAdapter'
 
-export type HistoryMode = 'single' | 'xy' | 'compare'
-
-/** XY 历史回看用的 axis 元数据。回看时复用 PreviewXYGrid 渲染（带轴标签）。 */
-export interface HistoryXYMeta {
-  /** 'lora_ckpt' / 'lora_scale' / 'steps' / 'cfg_scale' */
-  xAxis: string
-  yAxis: string | null
-  xValues: string[]
-  yValues: Array<string | null>
-  /** 每个 sample 的 xy 元数据；filename 来自 path 末段 */
+interface DiskHistoryServerXYMeta {
+  x_axis: string | null
+  y_axis: string | null
+  x_values: string[]
+  y_values: Array<string | null>
   samples: Array<{
     path: string
-    xy: { xi: number; yi: number; xv: string | number; yv: string | number | null }
+    xy: { xi: number; yi: number; xv: string | null; yv: string | null }
+    image_url: string
   }>
 }
 
-export interface HistoryEntry {
+interface DiskHistoryServerEntry {
   id: string
-  mode: HistoryMode
-  taskId: number
-  createdAt: number
-  thumbnailDataUrl: string  // 256px PNG/JPEG，封面（XY 取 (0,0)，对比取左图）
-  /** 后端 cache 里的 filenames，按 sample order；点击时 fetch 原图，404 fallback thumb */
-  filenames: string[]
-  /** XY: 'XY M×N'；compare: '2×'；single: '' */
-  badge?: string
-  /** XY 模式才填：回看时重建 PreviewXYGrid 用 */
-  xy?: HistoryXYMeta
+  date: string
+  mode: 'single' | 'xy'
+  /** single 时存在；xy 时 undefined（用 folder） */
+  filename?: string
+  /** xy 时存在；single 时 undefined */
+  folder?: string
+  path: string
+  image_url: string
+  thumb_url: string
+  created_at: number
+  schema_version: number
+  params: unknown
+  /** xy 模式 server 派生的 per-cell 元数据 */
+  xy_meta?: DiskHistoryServerXYMeta | null
 }
 
-function openDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION)
-    req.onupgradeneeded = () => {
-      const db = req.result
-      if (!db.objectStoreNames.contains(STORE)) {
-        const store = db.createObjectStore(STORE, { keyPath: 'id' })
-        store.createIndex('mode_createdAt', ['mode', 'createdAt'])
-      }
-    }
-    req.onsuccess = () => resolve(req.result)
-    req.onerror = () => reject(req.error)
-  })
+interface DiskHistoryResponse {
+  entries: DiskHistoryServerEntry[]
 }
 
-async function loadAll(): Promise<HistoryEntry[]> {
-  try {
-    const db = await openDb()
-    return await new Promise<HistoryEntry[]>((resolve, reject) => {
-      const tx = db.transaction(STORE, 'readonly')
-      const store = tx.objectStore(STORE)
-      const req = store.getAll()
-      req.onsuccess = () => {
-        const items = (req.result as HistoryEntry[]).sort(
-          (a, b) => b.createdAt - a.createdAt
-        )
-        resolve(items)
-      }
-      req.onerror = () => reject(req.error)
-    })
-  } catch {
-    // IndexedDB 不可用（隐私模式 / Safari 限制）→ 返回空数组，不挂前端
-    return []
+function xyMetaFromServer(meta: DiskHistoryServerXYMeta): HistoryXYMeta {
+  return {
+    xAxis: meta.x_axis ?? '',
+    yAxis: meta.y_axis,
+    xValues: meta.x_values,
+    yValues: meta.y_values,
+    samples: meta.samples.map((s) => ({
+      path: s.path,
+      xy: { xi: s.xy.xi, yi: s.xy.yi, xv: s.xy.xv ?? '', yv: s.xy.yv },
+      imageUrl: s.image_url,
+    })),
   }
 }
 
-async function putEntry(entry: HistoryEntry): Promise<void> {
-  try {
-    const db = await openDb()
-    await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(STORE, 'readwrite')
-      tx.objectStore(STORE).put(entry)
-      tx.oncomplete = () => resolve()
-      tx.onerror = () => reject(tx.error)
-    })
-  } catch {
-    /* 忽略：写失败不阻塞主流程 */
+function diskEntryFromServer(d: DiskHistoryServerEntry): DiskEntry {
+  return {
+    source: 'disk',
+    id: d.id,
+    mode: d.mode,
+    date: d.date,
+    filename: d.filename,
+    folder: d.folder,
+    imageUrl: d.image_url,
+    thumbUrl: d.thumb_url,
+    createdAt: d.created_at * 1000,  // server 给秒；entry.createdAt 用 ms
+    params: d.params as GenerateParamsSnapshot,
+    xyMeta: d.xy_meta ? xyMetaFromServer(d.xy_meta) : undefined,
   }
-}
-
-async function deleteEntry(id: string): Promise<void> {
-  try {
-    const db = await openDb()
-    await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(STORE, 'readwrite')
-      tx.objectStore(STORE).delete(id)
-      tx.oncomplete = () => resolve()
-      tx.onerror = () => reject(tx.error)
-    })
-  } catch {
-    /* ignore */
-  }
-}
-
-async function clearMode(mode: HistoryMode): Promise<void> {
-  try {
-    const db = await openDb()
-    await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(STORE, 'readwrite')
-      const store = tx.objectStore(STORE)
-      const req = store.openCursor()
-      req.onsuccess = () => {
-        const cur = req.result
-        if (cur) {
-          if ((cur.value as HistoryEntry).mode === mode) cur.delete()
-          cur.continue()
-        }
-      }
-      tx.oncomplete = () => resolve()
-      tx.onerror = () => reject(tx.error)
-    })
-  } catch {
-    /* ignore */
-  }
-}
-
-/** 把图片 URL → canvas 缩到 maxPx → PNG dataUrl。封面缩略图用。 */
-export async function makeThumbnail(
-  imageUrl: string, maxPx = 256
-): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const img = new Image()
-    img.crossOrigin = 'anonymous'
-    img.onload = () => {
-      const w = img.naturalWidth, h = img.naturalHeight
-      const scale = Math.min(1, maxPx / Math.max(w, h))
-      const tw = Math.max(1, Math.round(w * scale))
-      const th = Math.max(1, Math.round(h * scale))
-      const canvas = document.createElement('canvas')
-      canvas.width = tw
-      canvas.height = th
-      const ctx = canvas.getContext('2d')
-      if (!ctx) {
-        reject(new Error('no 2d context'))
-        return
-      }
-      ctx.drawImage(img, 0, 0, tw, th)
-      try {
-        resolve(canvas.toDataURL('image/png'))
-      } catch (e) {
-        reject(e)
-      }
-    }
-    img.onerror = () => reject(new Error(`failed to load ${imageUrl}`))
-    img.src = imageUrl
-  })
 }
 
 export interface UseGenerateHistoryResult {
+  /** 所有 entry，按 createdAt desc 排 */
   entries: HistoryEntry[]
-  add: (entry: Omit<HistoryEntry, 'id' | 'createdAt'>) => Promise<void>
+  /** disk-history 拉取中（mount 短暂期间为 true） */
+  loading: boolean
+  /** 添加新 entry（出图完成 / 落盘后调用） */
+  add: (entry: HistoryEntry) => void
+  /** 删除 entry：DiskEntry 调 DELETE endpoint；CacheEntry 仅本地 splice */
   remove: (id: string) => Promise<void>
-  clearByMode: (mode: HistoryMode) => Promise<void>
-  /** 检查每条 entry 的第一张图是否还在 server cache 里；
-   * 404 / fail 的 entry 删除（"原图已释放，留着只剩 thumbnail 没意义"）。
-   * 返回删除的 entry 数量。 */
-  pruneStale: () => Promise<number>
+  /** 手动重拉 disk-history（多 tab 同步 / 外部改 studio_data 后用户主动刷新） */
+  refresh: () => Promise<void>
 }
 
-/** 全局 history 状态 hook。所有调用者共享一份内存视图（loadAll 一次）。 */
 export function useGenerateHistory(): UseGenerateHistoryResult {
-  const [entries, setEntries] = useState<HistoryEntry[]>([])
+  const [diskEntries, setDiskEntries] = useState<DiskEntry[]>([])
+  const [cacheEntries, setCacheEntries] = useState<CacheEntry[]>([])
+  const [loading, setLoading] = useState(true)
   const loadedRef = useRef(false)
+
+  const fetchDisk = async () => {
+    setLoading(true)
+    try {
+      const r = await fetch('/api/generate/disk/history')
+      if (!r.ok) return
+      const data = (await r.json()) as DiskHistoryResponse
+      setDiskEntries(data.entries.map(diskEntryFromServer))
+    } catch {
+      // 拉取失败不挂前端 —— 历史栏只显示 session 期间出的 CacheEntry
+    } finally {
+      setLoading(false)
+    }
+  }
 
   useEffect(() => {
     if (loadedRef.current) return
     loadedRef.current = true
-    void loadAll().then(setEntries)
+    void fetchDisk()
   }, [])
 
-  const add = async (entry: Omit<HistoryEntry, 'id' | 'createdAt'>) => {
-    const full: HistoryEntry = {
-      ...entry,
-      id: typeof crypto !== 'undefined' && 'randomUUID' in crypto
-        ? crypto.randomUUID()
-        : Math.random().toString(36).slice(2),
-      createdAt: Date.now(),
+  // entries union 按 createdAt desc 排。两类 entry 自然独立 —— 同一张图
+  // 不会既是 disk 又是 cache（开关冻结后 task 走单一路径）。
+  const entries = useMemo<HistoryEntry[]>(
+    () => [...diskEntries, ...cacheEntries].sort((a, b) => b.createdAt - a.createdAt),
+    [diskEntries, cacheEntries],
+  )
+
+  const add = (entry: HistoryEntry) => {
+    if (entry.source === 'disk') {
+      setDiskEntries((prev) => [entry, ...prev])
+    } else {
+      setCacheEntries((prev) => [entry, ...prev])
     }
-    await putEntry(full)
-    setEntries((prev) => [full, ...prev])
   }
 
   const remove = async (id: string) => {
-    await deleteEntry(id)
-    setEntries((prev) => prev.filter((e) => e.id !== id))
-  }
-
-  const clearByMode = async (mode: HistoryMode) => {
-    await clearMode(mode)
-    setEntries((prev) => prev.filter((e) => e.mode !== mode))
-  }
-
-  const pruneStale = async (): Promise<number> => {
-    // 并发 HEAD 请求每条 entry 的第一张图；4xx/5xx 则视为失效，IndexedDB 删
-    const stale: string[] = []
-    await Promise.all(entries.map(async (e) => {
-      const fn = e.filenames[0]
-      if (!fn) return  // 没 filename 不动
-      const url = api.generateSampleUrl(e.taskId, fn)
+    const target = entries.find((e) => e.id === id)
+    if (!target) return
+    if (target.source === 'disk') {
       try {
-        const r = await fetch(url, { method: 'HEAD' })
-        if (!r.ok) stale.push(e.id)
+        await entryDelete(target)
       } catch {
-        // 网络错误（断网等）不算失效，留着下次再试
+        // server 失败仍本地剔（用户能看到列表里少了一条；下次 refresh 时
+        // 如果文件真在仍会回来 —— 是预期的"乐观删除"模式）
       }
-    }))
-    if (stale.length === 0) return 0
-    await Promise.all(stale.map((id) => deleteEntry(id)))
-    setEntries((prev) => prev.filter((e) => !stale.includes(e.id)))
-    return stale.length
+      setDiskEntries((prev) => prev.filter((e) => e.id !== id))
+    } else {
+      setCacheEntries((prev) => prev.filter((e) => e.id !== id))
+    }
   }
 
-  return { entries, add, remove, clearByMode, pruneStale }
+  return { entries, loading, add, remove, refresh: fetchDisk }
 }

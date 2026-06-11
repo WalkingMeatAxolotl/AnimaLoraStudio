@@ -292,16 +292,21 @@ export interface FlashAttnInstallResult {
   restart_required: boolean
 }
 
-/** PP8 — onnxruntime 装包状态 + nvidia-smi 检测结果。 */
+/** onnxruntime 装包状态 + nvidia-smi 检测 + 平台标识（前端用来按平台 disable 按钮）。 */
 export interface WD14Runtime {
-  installed: 'onnxruntime' | 'onnxruntime-gpu' | null
+  installed: 'onnxruntime' | 'onnxruntime-gpu' | 'onnxruntime-directml' | null
   version: string | null
   providers: string[]
   cuda_available: boolean
+  /** DirectML EP 可用（Windows + 装了 onnxruntime-directml 时为 true）。 */
+  directml_available: boolean
+  /** 后端 sys.platform：'win32' / 'linux' / 'darwin' 等。Settings UI 据此 disable
+   *  跨平台不可用的按钮（DirectML 仅 Windows；GPU + nvidia-* wheel 仅 Linux 最优）。 */
+  platform: string
   /** 装的包（dist-info）与当前进程已 import 的 .pyd 不一致 → 需重启 Studio。 */
   restart_required: boolean
   /** PP9.5 — InferenceSession 创建时实际 dlopen 报的错（如缺 libcurand.so.10）；
-   *  非 null 表示已自动降级到 CPU EP，UI 应提示用户装 CUDA 库。 */
+   *  非 null 表示已自动降级到 CPU EP，UI 应提示用户装 CUDA 库或换 DirectML。 */
   cuda_load_error: string | null
   /** PP9.5 — torch 自带 CUDA so 预加载结果（Linux 才会 applied=true）。 */
   preload?: {
@@ -371,6 +376,12 @@ export interface GenerateSecretsConfig {
   /** 注意力后端默认值（design 决策：用户配置一次，不每次出图都改）。
    * Generate 页 enqueue 自动注入；Settings 训练 tab 切换。 */
   attention_backend: AttentionBackend
+  /** 测试出图 daemon 闲置 N 分钟自动卸载模型释放 VRAM。0 = 关闭，模型常驻
+   * 直到手动点"清理显存"。计时只在 idle + 模型 loaded 时跑。 */
+  idle_timeout_minutes: number
+  /** 开后每次出图自动落盘到 studio_data/test/<date>/{single,xy}/image_N.png。
+   * 默认关；compare 模式始终不落盘。 */
+  save_test_images: boolean
 }
 
 /** 系统级偏好（ADR 0002 / 0005）。update_channel 是用户视图偏好（"stable" /
@@ -388,6 +399,26 @@ export interface ProxyConfig {
     http_proxy: string;
     https_proxy: string;
     no_proxy: string;
+}
+
+/** Tag 翻译词典 — meta 字段。kind=default：来自首启自动下载或用户点 "恢复默认"；
+ *  kind=user：用户手动上传。前端 Settings UI 用 source_name / entry_count 显示。 */
+export interface TagDictionaryMeta {
+  source_name: string
+  source_url: string
+  entry_count: number
+  downloaded_at: number
+  kind: 'default' | 'user'
+}
+
+export interface TagDictionaryMetaResponse {
+  loaded: boolean
+  meta: TagDictionaryMeta | null
+}
+
+export interface TagDictionaryPayload {
+  entries: Record<string, string[]>
+  meta: TagDictionaryMeta
 }
 
 export interface Secrets {
@@ -1088,6 +1119,11 @@ export interface LoraEntry {
   /** 来自 picker 的项目 / 版本绑定；外部文件无 */
   project_id?: number | null
   version_id?: number | null
+  /** 仅 placeholder 状态用：历史回填时 resolve 失败保留原 basename
+   *  （如 "my-lora.safetensors"），让 SidebarLoras 渲染 ⚠ placeholder 卡片
+   *  提示用户重选。`path` 非空时此字段被忽略；submit 时 path='' 的 entry
+   *  会被 `.filter(l => l.path.trim())` 跳过，不影响 daemon。 */
+  name?: string | null
 }
 
 /** XY 矩阵：单 task 内循环全图，前端按 (yi, xi) 排成 grid。
@@ -1128,6 +1164,27 @@ export interface GenerateRequest {
   attention_backend?: AttentionBackend
   /** 设值时 prompts 限单条 + count=1（schema 校验） */
   xy_matrix?: XYMatrixSpec | null
+}
+
+/** 落盘测试图历史 entry（GET /api/generate/disk-history）。
+ *  params 是 GenerateParamsSnapshot（前端用 paramsSnapshot.ts 的类型解读），
+ *  这里用 unknown 让 api/client.ts 不依赖 pages 层类型。 */
+export interface DiskGenerateHistoryEntry {
+  /** 稳定 ID："disk:<date>:<mode>:image_<N>"；前端按此 dedup */
+  id: string
+  /** YYYY-MM-DD */
+  date: string
+  mode: 'single' | 'xy'
+  filename: string
+  /** 服务端绝对路径，用于和 IDB entry.diskPath 做 dedup */
+  path: string
+  /** /api/generate/disk-image/<date>/<mode>/<filename> */
+  url: string
+  /** Unix timestamp（sidecar 写入或 fallback 文件 mtime） */
+  created_at: number
+  schema_version: number
+  /** sidecar 里的 params object（前端按 GenerateParamsSnapshot 解读） */
+  params: Record<string, unknown>
 }
 
 /** version output/ 下扫到的 training_state_step*.pt（断点续训用）。 */
@@ -1574,6 +1631,40 @@ export const api = {
   // Secrets ------------------------------------------------------------
   getSecrets: () => req<Secrets>('/api/secrets'),
 
+  // Tag dictionary -----------------------------------------------------
+  /** 当前词典 meta + 是否已加载。Settings UI 启动时 ping，决定显示"未初始化"还是详情。 */
+  getTagDictionaryMeta: () =>
+    req<TagDictionaryMetaResponse>('/api/tag-dictionary/meta'),
+  /** 完整 dict JSON (~600KB gzip)。store.ts 启动拉一次后缓存内存。 */
+  getTagDictionaryData: () =>
+    req<TagDictionaryPayload>('/api/tag-dictionary/data'),
+  /** 上传 csv/txt 替换当前词典。返回新 meta。 */
+  uploadTagDictionary: async (file: File): Promise<TagDictionaryMetaResponse> => {
+    const fd = new FormData()
+    fd.append('file', file, file.name)
+    const resp = await fetch('/api/tag-dictionary/upload', { method: 'POST', body: fd })
+    if (!resp.ok) {
+      let message = `${resp.status} ${resp.statusText}`
+      let rawDetail: unknown = null
+      try {
+        const body = await resp.json()
+        if (typeof body?.detail === 'string') message = body.detail
+        else if (body?.detail && typeof body.detail === 'object') {
+          rawDetail = body.detail
+          message = (body.detail as { message?: string }).message ?? JSON.stringify(body.detail)
+        }
+      } catch { /* 非 JSON，保留 statusText */ }
+      const err = new Error(message) as ApiError
+      err.status = resp.status
+      err.detail = rawDetail
+      throw err
+    }
+    return (await resp.json()) as TagDictionaryMetaResponse
+  },
+  /** 重新从 GitHub 拉默认词典（首次失败 / 用户想重置都走这个）。 */
+  resetTagDictionary: () =>
+    req<TagDictionaryMetaResponse>('/api/tag-dictionary/reset', { method: 'POST' }),
+
   // Models management (PP7) ------------------------------------------------
   getModelsCatalog: () => req<ModelsCatalog>('/api/models/catalog'),
   /** 当前 Settings 算出的 4 个模型字段绝对路径。预设页 reset / 新建用。 */
@@ -1883,6 +1974,11 @@ export const api = {
       tagger: TaggerName
       output_format?: 'txt' | 'json'
       /**
+       * 已有 caption 文件时的策略：overwrite（默认覆盖）/ skip（保留原文件）
+       * / append（tag 级 merge + dedupe 后写回原格式）。
+       */
+      on_existing?: 'overwrite' | 'skip' | 'append'
+      /**
        * wd14 本次任务的临时覆盖；仅在 worker 进程生效，不写回 settings。
        * 字段为 undefined / null 时沿用全局 settings。
        */
@@ -2023,6 +2119,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  /** 回放最近一次先验生成 task + 日志，用于切页面/刷新后的日志恢复。 */
+  getLatestRegPriorTask: (pid: number, vid: number) =>
+    req<{ task: Task | null; log: string }>(
+      `/api/projects/${pid}/versions/${vid}/reg/generate-prior/latest`,
+    ),
   /** 查询先验生成 task 状态。 */
   getRegPriorTask: (pid: number, vid: number, taskId: number) =>
     req<Task>(`/api/projects/${pid}/versions/${vid}/reg/generate-prior/${taskId}`),
@@ -2045,6 +2146,11 @@ export const api = {
   /** PR-9 — 启动测试出图 task。Phase 2 起：图走 server 内存 cache，关页面即丢。 */
   enqueueGenerate: (body: GenerateRequest) =>
     req<Task>('/api/generate', { method: 'POST', body: JSON.stringify(body) }),
+  /** 落盘历史：扫 studio_data/test/&lt;date&gt;/{single,xy}/image_N.json sidecar，
+   *  按 created_at desc 返回；用于历史栏跨会话回看已落盘的测试图。
+   *  注意路径用 disk/ 子前缀避开 `/api/generate/{task_id}` 的单段 catch-all。 */
+  listDiskGenerateHistory: (limit = 500) =>
+    req<{ entries: DiskGenerateHistoryEntry[] }>(`/api/generate/disk/history?limit=${limit}`),
   /** 查询测试 task 状态。 */
   getGenerateTask: (id: number) => req<Task>(`/api/generate/${id}`),
   /** 测试出图单张 URL（task 跑中或刚完成时拉；客户端断连 30s + LRU 后 404）。 */
@@ -2233,12 +2339,19 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ files: files && files.length > 0 ? Array.from(files) : null }),
     }),
+  /** 删除 output 目录下选中的文件（批量）。relative_paths 相对 output/。
+   *  任一不存在 → 后端 404 整批拒绝，前端 toast 错误后调用方 caller 应自行刷新。 */
+  deleteTaskOutputs: (id: number, files: ReadonlyArray<string>) =>
+    req<{ deleted: string[] }>(`/api/queue/${id}/outputs`, {
+      method: 'DELETE',
+      body: JSON.stringify({ files: Array.from(files) }),
+    }),
 
   // PP8 — WD14 运行时 / GPU 装包 ------------------------------------------
   /** 当前 onnxruntime 状态：包名 / 版本 / providers / nvidia-smi 检测结果。 */
   getWD14Runtime: () => req<WD14Runtime>('/api/wd14/runtime'),
   /** 切换 onnxruntime（同步 pip，几分钟级；UI 必须带 loading）。 */
-  installWD14Runtime: (target: 'auto' | 'gpu' | 'cpu') =>
+  installWD14Runtime: (target: 'auto' | 'gpu' | 'cpu' | 'directml') =>
     req<WD14InstallResult>('/api/wd14/install', {
       method: 'POST',
       body: JSON.stringify({ target }),

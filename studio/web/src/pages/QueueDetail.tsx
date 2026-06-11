@@ -8,6 +8,7 @@ import {
   type TaskStatus,
 } from '../api/client'
 import { PauseProgressModal } from '../components/PauseProgressModal'
+import { useDialog } from '../components/Dialog'
 import { useToast } from '../components/Toast'
 import { useEventStream } from '../lib/useEventStream'
 import MonitorDashboard from '../components/MonitorDashboard'
@@ -478,11 +479,13 @@ function MonitorTab({ taskId }: { taskId: number }) {
 export function OutputsTab({ taskId }: { taskId: number }) {
   const { t } = useTranslation()
   const { toast } = useToast()
+  const { confirm } = useDialog()
   const [data, setData] = useState<TaskOutputs | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [zipping, setZipping] = useState(false)
   const [exportingOutputs, setExportingOutputs] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
@@ -645,6 +648,25 @@ export function OutputsTab({ taskId }: { taskId: number }) {
     catch { toast(t('queueDetail.copyFailed'), 'error') }
   }
 
+  const handleDelete = async () => {
+    if (deleting) return
+    const files = Array.from(selected)
+    if (files.length === 0) return
+    const ok = await confirm(t('queueDetail.deleteConfirmTitle'), { tone: 'danger' })
+    if (!ok) return
+    setDeleting(true)
+    try {
+      const r = await api.deleteTaskOutputs(taskId, files)
+      toast(t('queueDetail.deletedFiles', { n: r.deleted.length }), 'success')
+      setSelected(new Set())
+      setRefreshKey((k) => k + 1)
+    } catch (e) {
+      toast(t('queueDetail.deleteFailed', { error: String(e) }), 'error')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   const renderFileRows = (files: typeof sortedFiles) => files.map((f) => {
     const isSel = selected.has(f.path)
     return (
@@ -724,11 +746,11 @@ export function OutputsTab({ taskId }: { taskId: number }) {
         <div className="flex items-center gap-2 text-xs shrink-0 border-b border-subtle pb-2.5">
           <span className="text-fg-tertiary shrink-0">{t('common.directory')}</span>
           <code className="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-fg-primary font-mono">{data.output_dir}</code>
-          <button onClick={copyPath} className="btn btn-ghost btn-sm">{t('common.copy')}</button>
+          <button onClick={copyPath} className="btn btn-ghost btn-sm">{t('queueDetail.copyPath')}</button>
           {data.supports_open_folder ? (
             <button onClick={openFolder} disabled={busy || !data.exists}
-              className="btn btn-secondary btn-sm"
-            >{t('common.open')}</button>
+              className="btn btn-ghost btn-sm"
+            >{t('queueDetail.openFolder')}</button>
           ) : (
             <span className="text-xs text-fg-tertiary shrink-0">{t('common.remote')}</span>
           )}
@@ -741,9 +763,18 @@ export function OutputsTab({ taskId }: { taskId: number }) {
               >
                 {selectMode ? t('queueDetail.exitBatchMode') : t('queueDetail.batchMode')}
               </button>
+              {selectMode && (
+                <button
+                  onClick={handleDelete}
+                  disabled={deleting || noneSelected}
+                  className="btn btn-ghost btn-sm text-err"
+                >
+                  {t('queueDetail.deleteSelected', { n: selected.size })}
+                </button>
+              )}
               <button
                 onClick={() => setDownloadDialog({ destination: 'download' })}
-                disabled={zipping || exportingOutputs || (selectMode && noneSelected)}
+                disabled={zipping || exportingOutputs || deleting || (selectMode && noneSelected)}
                 className="btn btn-primary btn-sm"
               >
                 {zipping

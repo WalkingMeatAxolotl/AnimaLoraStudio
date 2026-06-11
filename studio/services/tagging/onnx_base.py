@@ -86,65 +86,75 @@ class OnnxTaggerBase:
     def _get_batch_size_cfg(self) -> int:
         raise NotImplementedError
 
-    # -------------------- session 创建（含 CUDA fallback） --------------------
+    # -------------------- session 创建（含 GPU EP fallback） --------------------
 
     def _create_session(self, model_path: Path) -> None:
-        """创建 onnxruntime InferenceSession，CUDA 失败自动降 CPU。
+        """创建 onnxruntime InferenceSession，GPU EP 失败自动降 CPU。
+
+        GPU EP 选择优先级：CUDA > DirectML > CPU。装了 onnxruntime-gpu 用 CUDA，
+        装了 onnxruntime-directml 用 DirectML（Windows + DX12 后端，跨厂商），
+        CPU 包用 CPU。
 
         副作用：设 `_session` / `_input_name` / `_output_names` / `_model_path`，
-        并 stash CUDA 错给 Settings UI（成功路径同时清掉旧错记录）。
+        并 stash CUDA 错给 Settings UI（成功路径同时清掉旧错记录）。DirectML
+        静默降级仅打日志，UI 不专项展示（DX12 兼容性问题极少）。
         """
         self._model_path = model_path
         try:
             import onnxruntime as ort
         except ImportError as exc:  # pragma: no cover - install hint
             raise RuntimeError(
-                "未安装 onnxruntime；请安装 onnxruntime 或 onnxruntime-gpu"
+                "未安装 onnxruntime；请安装 onnxruntime / onnxruntime-gpu / onnxruntime-directml"
             ) from exc
 
-        providers = ["CPUExecutionProvider"]
         avail = ort.get_available_providers()
+        gpu_ep: Optional[str] = None
         if "CUDAExecutionProvider" in avail:
-            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        # PP9.5 — get_available_providers() 报 CUDA 可用 ≠ 真能 dlopen。
+            gpu_ep = "CUDAExecutionProvider"
+        elif "DmlExecutionProvider" in avail:
+            gpu_ep = "DmlExecutionProvider"
+        providers = [gpu_ep, "CPUExecutionProvider"] if gpu_ep else ["CPUExecutionProvider"]
+
+        # PP9.5 — CUDA EP `get_available_providers()` 报可用 ≠ 真能 dlopen。
         # 缺系统 CUDA runtime 时挂在 InferenceSession 创建。fd-level stderr 静默
-        # 吞掉 C 层污染日志，Python 异常已经能完整拿到原因；CPU fallback 不静默。
-        cuda_attempt = "CUDAExecutionProvider" in providers
-        ctx = silenced_fd_stderr() if cuda_attempt else contextlib.nullcontext()
+        # 吞掉 C 层污染日志，Python 异常已经能完整拿到原因；DirectML 错误诊断少，
+        # 不静默；CPU fallback 不静默。
+        silence_stderr = gpu_ep == "CUDAExecutionProvider"
+        ctx = silenced_fd_stderr() if silence_stderr else contextlib.nullcontext()
         try:
             with ctx:
                 self._session = ort.InferenceSession(
                     str(model_path), providers=providers
                 )
         except Exception as exc:  # noqa: BLE001
-            if not cuda_attempt:
+            if not gpu_ep:
                 raise
             err = str(exc)
             logger.warning(
-                "%s CUDA session 创建失败，降级 CPU 重试: %s", self.name, err
+                "%s %s session 创建失败，降级 CPU 重试: %s", self.name, gpu_ep, err
             )
-            onnxruntime_setup.record_cuda_load_error(err)
+            if gpu_ep == "CUDAExecutionProvider":
+                onnxruntime_setup.record_cuda_load_error(err)
             self._session = ort.InferenceSession(
                 str(model_path), providers=["CPUExecutionProvider"]
             )
         else:
-            # onnxruntime 在 CUDA EP dlopen 失败时**不抛异常** —— 内部 silently
+            # onnxruntime 在 GPU EP dlopen 失败时**不抛异常** —— 内部 silently
             # fallback 到下一个 EP（CPU）。光看 try/except 不够，必须比对实际
             # session.get_providers()；不一致 → 用户实际跑 CPU，但 UI 看不到。
-            if cuda_attempt:
+            if gpu_ep:
                 actual = list(self._session.get_providers())
-                if "CUDAExecutionProvider" not in actual:
+                if gpu_ep not in actual:
                     msg = (
-                        f"CUDA EP 静默降级到 CPU（InferenceSession 未抛异常，"
-                        f"但 get_providers={actual}）。常见原因：CUDA 驱动版本不够 / "
-                        f"runtime so/DLL 缺失 / cuDNN ABI 错位。"
+                        f"{gpu_ep} 静默降级到 CPU（InferenceSession 未抛异常，"
+                        f"但 get_providers={actual}）。常见原因：驱动版本不够 / "
+                        f"runtime so/DLL 缺失 / cuDNN ABI 错位 / DX12 不支持。"
                     )
                     logger.warning("%s %s", self.name, msg)
-                    onnxruntime_setup.record_cuda_load_error(msg)
-                else:
+                    if gpu_ep == "CUDAExecutionProvider":
+                        onnxruntime_setup.record_cuda_load_error(msg)
+                elif gpu_ep == "CUDAExecutionProvider":
                     onnxruntime_setup.record_cuda_load_error(None)
-            else:
-                onnxruntime_setup.record_cuda_load_error(None)
 
         self._input_name = self._session.get_inputs()[0].name
         self._output_names = [o.name for o in self._session.get_outputs()]

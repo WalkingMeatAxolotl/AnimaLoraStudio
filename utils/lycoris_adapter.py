@@ -343,20 +343,32 @@ class AnimaLycorisAdapter:
     def save(self, path: str | Path) -> None:
         """保存为 safetensors（带 ss_* metadata，ComfyUI/sd-scripts 兼容）"""
         sd = self.state_dict()
+        # 每层 .alpha 按当前 (scale, lora_dim) 重算，让下游标准公式 alpha/rank 还原
+        # 训练 scale。lycoris init 写入的 .alpha 已经是 scale*lora_dim；但
+        # _apply_reg_dims_ 改 lora_dim 后没动 self.scale / self.alpha buffer，
+        # 分层 rank 的层 .alpha 与 per-layer rank 失配 → ComfyUI 按 alpha/rank
+        # 算出的 scale 偏离训练实际值几十倍，导致出图噪点。
+        # 这里按 lora 当前真实 (scale, lora_dim) 重写：未分层层 no-op；分层层修正。
+        _rewrite_per_layer_alpha_(self.network, sd)
+        # lora_reg_dims 必须写入：训练时按 pattern 改了部分层的 rank，推理重建
+        # 网络要用同一份字典才能让 lokr_w2_a/b 形状对齐 checkpoint。
+        ss_args: dict[str, Any] = {
+            "algo": self.algo,
+            "factor": self.factor,
+            "preset": "anima_full",
+            "dropout": self.dropout,
+            "rank_dropout": self.rank_dropout,
+            "module_dropout": self.module_dropout,
+            "weight_decompose": self.weight_decompose,
+            "rs_lora": self.rs_lora,
+        }
+        if self.lora_reg_dims:
+            ss_args["lora_reg_dims"] = self.lora_reg_dims
         meta = {
             "ss_network_dim": str(self.rank),
             "ss_network_alpha": str(self.alpha),
             "ss_network_module": "lycoris.kohya",
-            "ss_network_args": json.dumps({
-                "algo": self.algo,
-                "factor": self.factor,
-                "preset": "anima_full",
-                "dropout": self.dropout,
-                "rank_dropout": self.rank_dropout,
-                "module_dropout": self.module_dropout,
-                "weight_decompose": self.weight_decompose,
-                "rs_lora": self.rs_lora,
-            }),
+            "ss_network_args": json.dumps(ss_args),
         }
         save_file(sd, str(path), metadata=meta)
         logger.info(f"LoRA 保存到: {path}")
@@ -403,6 +415,32 @@ class AnimaLycorisAdapter:
         部 caller（如 phase log 决策）调。
         """
         return self.use_lokr and "lokr_w1" in param_name
+
+
+def _rewrite_per_layer_alpha_(network: Optional[nn.Module], sd: dict[str, torch.Tensor]) -> None:
+    """对 sd 里每层 .alpha tensor 重算为 lora.scale × lora.lora_dim。
+
+    保持下游标准 LoRA 公式 alpha/rank 还原训练 scale。对未触发 lora_reg_dims
+    的层是 no-op（lycoris init 写入的 .alpha 本来就 = scale × lora_dim）；对
+    分层 rank 的层是修正。
+    """
+    if network is None:
+        return
+    loras = getattr(network, "loras", None) or []
+    for lora in loras:
+        name = getattr(lora, "lora_name", None)
+        if not name:
+            continue
+        alpha_key = f"{name}.alpha"
+        if alpha_key not in sd:
+            continue
+        try:
+            scale = float(getattr(lora, "scale"))
+            dim = int(getattr(lora, "lora_dim"))
+        except (AttributeError, TypeError, ValueError):
+            continue
+        old = sd[alpha_key]
+        sd[alpha_key] = torch.tensor(scale * dim, dtype=old.dtype, device=old.device)
 
 
 def _apply_reg_dims_(network: nn.Module, lora_reg_dims: dict[str, int]) -> None:

@@ -369,6 +369,141 @@ def test_trigger_word_dataset_loader_sees_meta(env, tmp_path: Path) -> None:
     assert caption.startswith("ohwx,")
 
 
+# ---------------------------------------------------------------------------
+# on_existing: skip / overwrite / append（已有 caption 时的策略）
+# ---------------------------------------------------------------------------
+
+
+def _set_on_existing(env, mode: str) -> None:
+    with db.connection_for(env["db"]) as conn:
+        conn.execute(
+            "UPDATE project_jobs SET params = json_set(params, '$.on_existing', ?) "
+            "WHERE id = ?",
+            (mode, env["job_id"]),
+        )
+        conn.commit()
+
+
+def test_on_existing_skip_preserves_existing_txt(env) -> None:
+    """skip：已有 .txt 完全保留，新 tagger 输出被丢弃。"""
+    (env["train"] / "a.txt").write_text("manual_a, kept", encoding="utf-8")
+    _set_on_existing(env, "skip")
+    rc = tag_worker.run(env["job_id"])
+    assert rc == 0
+    assert (env["train"] / "a.txt").read_text(encoding="utf-8") == "manual_a, kept"
+    # b 没有 existing，正常写
+    assert (env["train"] / "b.txt").read_text(encoding="utf-8") == "tag_b, common"
+
+
+def test_on_existing_skip_preserves_existing_json(env) -> None:
+    """skip：已有 .json 也不动；不应写出 .txt。"""
+    (env["train"] / "a.json").write_text(
+        json.dumps({"tags": ["manual_a", "kept"], "extra": "x"}),
+        encoding="utf-8",
+    )
+    _set_on_existing(env, "skip")
+    rc = tag_worker.run(env["job_id"])
+    assert rc == 0
+    data = json.loads((env["train"] / "a.json").read_text(encoding="utf-8"))
+    assert data["tags"] == ["manual_a", "kept"]
+    assert data["extra"] == "x"
+    assert not (env["train"] / "a.txt").exists()
+
+
+def test_on_existing_skip_filters_before_tagger(env, monkeypatch: pytest.MonkeyPatch) -> None:
+    """skip：已有 caption 的图片不应进入 tagger，避免 LLM/ONNX 白跑。"""
+    seen: list[str] = []
+
+    class _SpyTagger(_FakeTagger):
+        def tag(self, paths, on_progress=lambda d, t: None):
+            seen.extend(p.name for p in paths)
+            yield from super().tag(paths, on_progress=on_progress)
+
+    (env["train"] / "a.txt").write_text("manual_a, kept", encoding="utf-8")
+    _set_on_existing(env, "skip")
+    monkeypatch.setattr(
+        "studio.workers.tag_worker.get_tagger",
+        lambda name, overrides=None: _SpyTagger(),
+    )
+
+    rc = tag_worker.run(env["job_id"])
+    assert rc == 0
+    assert seen == ["b.png"]
+    assert (env["train"] / "a.txt").read_text(encoding="utf-8") == "manual_a, kept"
+    assert (env["train"] / "b.txt").read_text(encoding="utf-8") == "tag_b, common"
+
+
+def test_on_existing_skip_all_does_not_prepare_tagger(env, monkeypatch: pytest.MonkeyPatch) -> None:
+    """skip：全量已有 caption 时不实例化 tagger，尤其避免 LLM 请求。"""
+    (env["train"] / "a.txt").write_text("manual_a", encoding="utf-8")
+    (env["train"] / "b.txt").write_text("manual_b", encoding="utf-8")
+    _set_on_existing(env, "skip")
+
+    def _factory(name: str, overrides=None):
+        raise AssertionError("tagger should not be created when all images are skipped")
+
+    monkeypatch.setattr("studio.workers.tag_worker.get_tagger", _factory)
+
+    rc = tag_worker.run(env["job_id"])
+    assert rc == 0
+    assert (env["train"] / "a.txt").read_text(encoding="utf-8") == "manual_a"
+    assert (env["train"] / "b.txt").read_text(encoding="utf-8") == "manual_b"
+
+
+def test_on_existing_append_merges_and_dedupes_txt(env) -> None:
+    """append：现有 tag 在前，tagger 新 tag 追加在后；重复去重。"""
+    (env["train"] / "a.txt").write_text("existing, common", encoding="utf-8")
+    _set_on_existing(env, "append")
+    rc = tag_worker.run(env["job_id"])
+    assert rc == 0
+    # existing, common 在前；tag_a 追加；common 重复被去重
+    assert (env["train"] / "a.txt").read_text(encoding="utf-8") == "existing, common, tag_a"
+    # b 没有 existing，正常写
+    assert (env["train"] / "b.txt").read_text(encoding="utf-8") == "tag_b, common"
+
+
+def test_on_existing_append_merges_json_preserves_other_fields(env) -> None:
+    """append + 已有 .json：merge tags 数组，保留其他顶层字段。"""
+    (env["train"] / "a.json").write_text(
+        json.dumps({"tags": ["existing"], "extra": "x"}),
+        encoding="utf-8",
+    )
+    _set_on_existing(env, "append")
+    rc = tag_worker.run(env["job_id"])
+    assert rc == 0
+    data = json.loads((env["train"] / "a.json").read_text(encoding="utf-8"))
+    assert data["tags"] == ["existing", "tag_a", "common"]
+    assert data["extra"] == "x"
+
+
+def test_on_existing_append_with_trigger_word(env) -> None:
+    """append + trigger：trigger 已在 existing 里 → 不重复加在末尾。"""
+    (env["train"] / "a.txt").write_text("ohwx, manual_a", encoding="utf-8")
+    _set_on_existing(env, "append")
+    _set_trigger(env, "ohwx")
+    rc = tag_worker.run(env["job_id"])
+    assert rc == 0
+    # existing 已有 ohwx，append 段也会 prepend ohwx，但 merge dedupe 保留位置
+    assert (env["train"] / "a.txt").read_text(encoding="utf-8") == "ohwx, manual_a, tag_a, common"
+
+
+def test_on_existing_overwrite_is_default(env) -> None:
+    """不设 on_existing → 仍是覆盖（保留 PR 前行为）。"""
+    (env["train"] / "a.txt").write_text("old_a", encoding="utf-8")
+    rc = tag_worker.run(env["job_id"])
+    assert rc == 0
+    assert (env["train"] / "a.txt").read_text(encoding="utf-8") == "tag_a, common"
+
+
+def test_on_existing_invalid_falls_back_to_overwrite(env) -> None:
+    """非法 on_existing → 当 overwrite 处理（防 worker crash）。"""
+    (env["train"] / "a.txt").write_text("old_a", encoding="utf-8")
+    _set_on_existing(env, "bogus")
+    rc = tag_worker.run(env["job_id"])
+    assert rc == 0
+    assert (env["train"] / "a.txt").read_text(encoding="utf-8") == "tag_a, common"
+
+
 def test_worker_imports_onnxruntime_setup_at_module_level() -> None:
     """worker 是独立 subprocess —— 必须在任何 `import onnxruntime` 之前触发
     onnxruntime_setup 的顶层 preload。回归测试：防止有人删掉那行 import 后

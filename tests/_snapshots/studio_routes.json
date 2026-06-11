@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 160,
+  "count": 173,
   "routes": [
     {
       "path": "/",
@@ -127,6 +127,70 @@
         "POST"
       ],
       "name": "unload_daemon",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/disk/history",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_disk_history",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/disk/image/{date_str}/xy/{folder}/{filename}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_disk_xy_image",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/disk/image/{date_str}/{mode}/{filename}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_disk_image",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/disk/thumb/{date_str}/xy/{folder}/{filename}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_disk_xy_thumb",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/disk/thumb/{date_str}/{mode}/{filename}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_disk_thumb",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/disk/{date_str}/xy/{folder}",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_disk_xy_folder",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/disk/{date_str}/{mode}/{filename}",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_disk_image",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/save",
+      "methods": [
+        "POST"
+      ],
+      "name": "save_test_image",
       "type": "APIRoute"
     },
     {
@@ -996,6 +1060,14 @@
     {
       "path": "/api/queue/{task_id}/outputs",
       "methods": [
+        "DELETE"
+      ],
+      "name": "delete_task_output_files",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/queue/{task_id}/outputs",
+      "methods": [
         "GET"
       ],
       "name": "list_task_outputs",
@@ -1167,6 +1239,38 @@
         "GET"
       ],
       "name": "system_version",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/tag-dictionary/data",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_data",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/tag-dictionary/meta",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_meta",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/tag-dictionary/reset",
+      "methods": [
+        "POST"
+      ],
+      "name": "reset",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/tag-dictionary/upload",
+      "methods": [
+        "POST"
+      ],
+      "name": "upload",
       "type": "APIRoute"
     },
     {

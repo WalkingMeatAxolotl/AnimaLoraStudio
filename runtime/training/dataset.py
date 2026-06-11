@@ -387,9 +387,11 @@ class MergedDataset(Dataset):
         if idx < self._main_len:
             item = self.main_dataset[idx]
             item["loss_weight"] = 1.0
+            item["is_reg"] = False
             return item
         item = self.reg_dataset[idx - self._main_len]
         item["loss_weight"] = self.reg_weight
+        item["is_reg"] = True
         return item
 
 
@@ -484,7 +486,7 @@ class CachedLatentDataset(Dataset):
     50% 数据被永久镜像污染；新版通过 _is_cache_valid 检测缺 latent_flipped
     键，自动重 encode 修复。
     """
-    def __init__(self, base_dataset, vae, device, dtype, cache_dir=None):
+    def __init__(self, base_dataset, vae, device, dtype, cache_dir=None, cache_batch_size=1):
         import numpy as np
         self.base_dataset = base_dataset
         self.base_image_dataset = self._get_base_image_dataset(base_dataset)
@@ -493,6 +495,7 @@ class CachedLatentDataset(Dataset):
         self.samples = self._get_base_samples(base_dataset)
         self.cache_dir = Path(cache_dir) if cache_dir else None
         self.bucket_for_index = []
+        self.cache_batch_size = max(1, int(cache_batch_size or 1))
         # cache 是否需要双份 latent —— 取决于底层 ImageDataset.flip_augment
         self.flip_augment = bool(
             getattr(self.base_image_dataset, "flip_augment", False)
@@ -622,35 +625,77 @@ class CachedLatentDataset(Dataset):
         flip_augment=True 时对每张图编码两次（flip=False / flip=True）分别存到
         `latent` / `latent_flipped` 键；训练时 __getitem__ 随机选其一。
         flip_augment=False 时只编码一次，存 `latent`。
+
+        按实际 bucket 尺寸分组并批量送入 VAE；不同尺寸不能 stack，分别攒批。
         """
         base_img = self.base_image_dataset
         want_flip = self.flip_augment and base_img is not None
-        for count, i in enumerate(indices):
-            npz_kwargs = {}
+        pending = {}
+        encoded_count = 0
+
+        def _encode_pixels(pixel_tensors):
+            pixels = torch.stack(pixel_tensors, dim=0).to(device, dtype=dtype)
+            with torch.inference_mode():
+                latents = vae.model.encode(pixels.unsqueeze(2), vae.scale)
+            return latents.detach().cpu().float()
+
+        def _flush(bucket_key):
+            nonlocal encoded_count
+            batch = pending.pop(bucket_key, [])
+            if not batch:
+                return
+
+            latents = _encode_pixels([entry["pixels"] for entry in batch])
+            if want_flip:
+                latents_flipped = _encode_pixels([entry["pixels_flipped"] for entry in batch])
+            else:
+                latents_flipped = [None] * len(batch)
+
+            for n, entry in enumerate(batch):
+                npz_kwargs = {"latent": latents[n].numpy()}
+                if want_flip:
+                    npz_kwargs["latent_flipped"] = latents_flipped[n].numpy()
+
+                npz_path = self._get_npz_path(self.samples[entry["index"]]["image"])
+                self.np.savez(
+                    npz_path,
+                    bucket_w=entry["bucket_w"],
+                    bucket_h=entry["bucket_h"],
+                    **npz_kwargs,
+                )
+                encoded_count += 1
+                if encoded_count % 10 == 0 or encoded_count == len(indices):
+                    logger.info(f"  编码进度: {encoded_count}/{len(indices)}")
+
+        logger.info(f"VAE cache batch size: {self.cache_batch_size}")
+        for i in indices:
             if base_img is not None:
                 # 显式控制 flip，避免随机性 baked 进 npz
                 item = base_img.get_with_flip(i, flip=False)
             else:
                 item = self.base_dataset[i]
-            pixels = item["pixel_values"].unsqueeze(0).to(device, dtype=dtype)
-            _, _, ph, pw = pixels.shape
+            pixels = item["pixel_values"]
+            _, ph, pw = pixels.shape
             bucket_w, bucket_h = pw, ph
-            with torch.no_grad():
-                pixels_5d = pixels.unsqueeze(2)
-                latent = vae.model.encode(pixels_5d, vae.scale)
-            npz_kwargs["latent"] = latent.squeeze(0).cpu().float().numpy()
 
+            pixels_flipped = None
             if want_flip:
                 item_f = base_img.get_with_flip(i, flip=True)
-                pixels_f = item_f["pixel_values"].unsqueeze(0).to(device, dtype=dtype)
-                with torch.no_grad():
-                    latent_f = vae.model.encode(pixels_f.unsqueeze(2), vae.scale)
-                npz_kwargs["latent_flipped"] = latent_f.squeeze(0).cpu().float().numpy()
+                pixels_flipped = item_f["pixel_values"]
 
-            npz_path = self._get_npz_path(self.samples[i]["image"])
-            self.np.savez(npz_path, bucket_w=bucket_w, bucket_h=bucket_h, **npz_kwargs)
-            if (count + 1) % 10 == 0 or count == len(indices) - 1:
-                logger.info(f"  编码进度: {count + 1}/{len(indices)}")
+            bucket_key = (bucket_h, bucket_w)
+            pending.setdefault(bucket_key, []).append({
+                "index": i,
+                "pixels": pixels,
+                "pixels_flipped": pixels_flipped,
+                "bucket_w": bucket_w,
+                "bucket_h": bucket_h,
+            })
+            if len(pending[bucket_key]) >= self.cache_batch_size:
+                _flush(bucket_key)
+
+        for bucket_key in list(pending):
+            _flush(bucket_key)
 
     def __len__(self):
         return len(self.samples)
@@ -700,6 +745,7 @@ def collate_fn(batch):
     result = {"pixel_values": pixels, "captions": captions}
     if "loss_weight" in batch[0]:
         result["loss_weight"] = torch.tensor([b["loss_weight"] for b in batch], dtype=torch.float32)
+        result["is_reg"] = torch.tensor([b["is_reg"] for b in batch], dtype=torch.bool)
     return result
 
 
@@ -710,4 +756,5 @@ def collate_fn_cached(batch):
     result = {"latents": latents, "captions": captions}
     if "loss_weight" in batch[0]:
         result["loss_weight"] = torch.tensor([b["loss_weight"] for b in batch], dtype=torch.float32)
+        result["is_reg"] = torch.tensor([b["is_reg"] for b in batch], dtype=torch.bool)
     return result

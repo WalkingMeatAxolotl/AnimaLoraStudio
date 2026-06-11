@@ -148,6 +148,41 @@ def test_submit_task_runs_to_done(mock_daemon_script: Path) -> None:
     assert image_done_events
     for e in image_done_events:
         assert "image_b64" not in e
+    # 决策 #14：image_done 加 delivery 子字段；config 没 save_test_images_at_dispatch
+    # 时默认 'cache'
+    for e in image_done_events:
+        assert e.get("delivery") == "cache"
+    generate_cache.clear_all()
+
+
+def test_submit_task_delivery_disk_when_save_to_disk_true(
+    mock_daemon_script: Path,
+) -> None:
+    """决策 #14 / #15：config 含 save_test_images_at_dispatch=True 时，
+    image_done event 的 delivery 字段是 'disk'。
+    """
+    from studio.services.inference import cache as generate_cache
+
+    generate_cache.clear_all()
+    d = InferenceDaemon(script_path=mock_daemon_script)
+    d.start()
+    events: list[dict[str, Any]] = []
+    try:
+        d.submit_task(
+            task_id=43,
+            config={"prompts": ["a"], "save_test_images_at_dispatch": True},
+            output_dir="/tmp/x",
+            on_event=events.append,
+        )
+        assert _wait_for(
+            lambda: any(e.get("kind") == "done" for e in events), timeout=3
+        ), f"events={events}"
+    finally:
+        d.stop()
+    image_done_events = [e for e in events if e.get("kind") == "image_done"]
+    assert image_done_events
+    for e in image_done_events:
+        assert e.get("delivery") == "disk"
     generate_cache.clear_all()
 
 

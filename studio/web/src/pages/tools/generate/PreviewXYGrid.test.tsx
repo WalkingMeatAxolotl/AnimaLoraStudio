@@ -1,11 +1,10 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
-import type { MonitorState } from '../../../api/client'
-import PreviewXYGrid from './PreviewXYGrid'
+import PreviewXYGrid, { type XYSample } from './PreviewXYGrid'
 import type { XYAxisDraft } from './xy'
 
-type Sample = NonNullable<MonitorState['samples']>[number]
+type Sample = XYSample
 
 const xDraft: XYAxisDraft = { axis: 'steps', raw: '20, 25, 30', loraIndex: null }
 const yDraft: XYAxisDraft = { axis: 'cfg_scale', raw: '3.0, 5.0', loraIndex: null }
@@ -134,5 +133,37 @@ describe('PreviewXYGrid', () => {
 
     await user.keyboard('{ArrowDown}')
     expect(screen.getByText(/步数=25 .* CFG Scale=5/)).toBeInTheDocument()
+  })
+
+  it('uses sample.imageUrl when provided (disk 回看路径)', () => {
+    const sample: Sample = {
+      ...makeSample(0, 0, 20, null),
+      imageUrl: '/api/generate/disk/image/2026-06-08/xy/xy%20plot%201/cell%20x0%20y0.png',
+    }
+    render(
+      <PreviewXYGrid samples={[sample]} taskId={-1} xDraft={xDraft} yDraft={null} />
+    )
+    const img = screen.getAllByRole('img')[0] as HTMLImageElement
+    expect(img.src).toContain('/api/generate/disk/image/2026-06-08/xy/')
+    expect(img.src).not.toContain('/sample/')  // 不走 generateSampleUrl 兜底
+  })
+
+  it('compositeUrl set → 导出 PNG 走 anchor download, 不调 composeXYMatrix', async () => {
+    // composeXYMatrix 需要 canvas + fetch，jsdom 都没 → 若 fallback 走它必然抛错。
+    // 这里点 export 按钮，断言能拿到 exportDownloaded 文案 = 走了 compositeUrl 直下载分支。
+    const user = userEvent.setup()
+    const samples = [makeSample(0, 0, 20, null)]
+    // 拦截 anchor click（避免真的下载窗口）
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    render(
+      <PreviewXYGrid
+        samples={samples} taskId={-1} xDraft={xDraft} yDraft={null}
+        compositeUrl="/api/generate/disk/image/2026-06-08/xy/xy%20plot%201/xy%20plot.png"
+      />
+    )
+    const exportBtn = screen.getByRole('button', { name: /导出 PNG|Export/ })
+    await user.click(exportBtn)
+    expect(clickSpy).toHaveBeenCalledTimes(1)
+    clickSpy.mockRestore()
   })
 })

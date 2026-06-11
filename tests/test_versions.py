@@ -47,7 +47,9 @@ def test_create_version_builds_tree_and_activates(isolated) -> None:
 def test_create_version_rejects_invalid_label(isolated) -> None:
     p = _new_project(isolated)
     with db.connection_for(isolated["db"]) as conn:
-        for bad in ("has space", "../escape", "name/sub", "中文"):
+        # "." / ".." 单独列出：字符集本身放行点号，但纯点 label 会让
+        # version_dir 解析到 versions/ 之外（".." == project 根）。
+        for bad in ("has space", "../escape", "name/sub", "中文", ".", "..", "..."):
             with pytest.raises(versions.VersionError, match="label"):
                 versions.create_version(conn, project_id=p["id"], label=bad)
 

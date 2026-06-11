@@ -1,6 +1,6 @@
 # AnimaLoraStudio
 
-[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-lightgrey)](README.md) [![English](https://img.shields.io/badge/lang-English-blue)](README.en.md) [![Version](https://img.shields.io/badge/version-0.11.1-blue)](CHANGELOG.md)
+[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-lightgrey)](README.md) [![English](https://img.shields.io/badge/lang-English-blue)](README.en.md) [![Version](https://img.shields.io/badge/version-0.12.0-blue)](CHANGELOG.md)
 
 **End-to-end pipeline**: scrape from Booru → curate → tag → reg set → train → image testing, all driven from a single browser panel. Optimized for [Anima](https://huggingface.co/circlestone-labs/Anima) (Cosmos DiT, anime-tuned) training.
 
@@ -148,13 +148,14 @@ Open <http://127.0.0.1:8765/studio/>:
 1. Click "+ New project" on the projects page
 2. **① Download**: Booru scraping (fill in Gelbooru / Danbooru credentials in Settings first) or local zip upload
 3. **② Curate**: dual grid, select images to copy into train/
-4. **③ Tag**: choose WD14 / CLTagger / LLM (OpenAI-compatible, including a JoyCaption preset), set thresholds, run automatically
-5. **④ Tag editor**: bulk add / delete / replace, per-image edits, automatic restore points
-6. **⑤ Regularization set**: two generation modes —
+4. **③ Preprocess** (optional): duplicate review / upscale / crop; skip if not needed
+5. **④ Tag**: choose WD14 / CLTagger / LLM (OpenAI-compatible, including a JoyCaption preset), set thresholds, run automatically
+6. **⑤ Tag editor**: bulk add / delete / replace, per-image edits, automatic restore points
+7. **⑥ Regularization set** (optional): two generation modes —
    - **Booru reverse search**: reverse search Booru based on tag distribution, with automatic WD14 tagging and aspect-ratio clustering
    - **AI prior generation**: use the base model directly to generate the reg set (no LoRA required)
-7. **⑥ Train**: pick a preset to copy into the version's private config, edit parameters (autosaved with 600ms debounce, no save button), submit to the queue. The picker label shows "· customized" once the config has diverged from the source preset; the preset pool is never modified
-8. View tasks on the **Queue** page; open **task detail** for logs / monitoring / output (with one-click full zip download)
+8. **⑦ Train**: pick a preset to copy into the version's private config, edit parameters (autosaved with 600ms debounce, no save button), submit to the queue. The picker label shows "· customized" once the config has diverged from the source preset; the preset pool is never modified
+9. View tasks on the **Queue** page; open **task detail** for logs / monitoring / output (with one-click full zip download)
 
 After training, the sidebar **Test** page provides single-image generation / XY matrices / inference daemon for LoRA evaluation. Prompts can be pulled directly from the training set, eliminating round trips to ComfyUI.
 
@@ -266,7 +267,7 @@ Documentation entry: [docs/README.md](docs/README.md). Three sections:
 
 ## Version
 
-Current version is **0.11.1**. See [CHANGELOG.md](CHANGELOG.md) for the full history. The Settings → System → version card inside Studio allows one-click upgrade to the latest version.
+Current version is **0.12.0**. See [CHANGELOG.md](CHANGELOG.md) for the full history. The Settings → System → version card inside Studio allows one-click upgrade to the latest version.
 
 ---
 

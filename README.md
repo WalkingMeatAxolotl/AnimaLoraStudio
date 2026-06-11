@@ -1,6 +1,6 @@
 # AnimaLoraStudio
 
-[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-blue)](README.md) [![English](https://img.shields.io/badge/lang-English-lightgrey)](README.en.md) [![Version](https://img.shields.io/badge/version-0.11.1-blue)](CHANGELOG.md)
+[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-blue)](README.md) [![English](https://img.shields.io/badge/lang-English-lightgrey)](README.en.md) [![Version](https://img.shields.io/badge/version-0.12.0-blue)](CHANGELOG.md)
 
 **端到端流水线**：从 Booru 抓图 → 筛选 → 打标 → 正则集 → 训练 → 出图测试，全流程在一个浏览器面板里推进。专为 [Anima](https://huggingface.co/circlestone-labs/Anima)（Cosmos DiT 二次元特调）训练优化。
 
@@ -27,7 +27,7 @@
 - **Loss 函数**：MSE / Huber，可配置权重曲线（min_snr / cosmap / detail_inv_t 等）
 - **Timestep 采样**：uniform / logit_normal / mode / mixed_uniform 等，含可配置 schedule shift
 - **InfoNoise 自适应采样（可选）**：基于 I-MMSE 的反 CDF 时间步采样器
-- **优化器**：AdamW / Prodigy / Prodigy+ScheduleFree
+- **优化器**：AdamW / Lion / Automagic / Prodigy / Prodigy+ScheduleFree（推荐起点 / 切换换算见 [`docs/user-guide/optimizers.md`](docs/user-guide/optimizers.md)）
 - **Adapter**：LoRA + LyCORIS LoKr（走 [lycoris-lora](https://github.com/KohakuBlueleaf/LyCORIS) 官方库，含 DoRA / rs-LoRA / dropout）
 - **分层 rank**：`lora_rank_rules` 按层名正则配不同 rank，便于按模块重要性差异化分配参数预算
 - **Attention backend**：xformers / flash_attn / PyTorch SDPA
@@ -68,11 +68,6 @@
 - 暗色 / 日间模式与字号密度切换
 
 ---
-
-## 上游与致谢
-
-- 核心训练脚本派生自 [**Moeblack/AnimaLoraToolkit**](https://github.com/Moeblack/AnimaLoraToolkit)。
-- 主模型 / VAE：[circlestone-labs / Anima](https://huggingface.co/circlestone-labs/Anima)
 
 ---
 
@@ -148,13 +143,14 @@ WD14 打标模型不在这里——首次进 ③ 打标时自动从 HF 拉到 `m
 1. 项目页「+ 新建项目」
 2. **① 下载**：Booru 抓图（先在设置填 Gelbooru / Danbooru 凭据）或本地上传 zip
 3. **② 筛选**：双 grid，选要训的图复制到 train/
-4. **③ 打标**：选 WD14 / CLTagger / LLM（OpenAI compatible，含 JoyCaption preset）+ 阈值，一键自动打标
-5. **④ 标签编辑**：批量加 / 删 / 替换；单图修；自动还原点
-6. **⑤ 正则集**：两种生成方式可选 ——
+4. **③ 预处理（可选）**：去重审核 / 放大 / 裁剪；不需要可直接跳过
+5. **④ 打标**：选 WD14 / CLTagger / LLM（OpenAI compatible，含 JoyCaption preset）+ 阈值，一键自动打标
+6. **⑤ 标签编辑**：批量加 / 删 / 替换；单图修；自动还原点
+7. **⑥ 正则集（可选）**：两种生成方式可选 ——
    - **Booru 反向搜**：基于 tag 分布反向搜 booru，自动 WD14 打标 + 分辨率 AR 聚类
    - **AI 先验生成**：无 LoRA 直接用底模出图当 reg 集
-7. **⑥ 训练**：选 preset 复制进 version 私有 config，改参数（debounce 600ms 自动落盘，无需点保存），入队即开始训练。Picker 标签会显示「· 已自定义」表示和原预设已分叉，预设池不会被改
-8. 「队列」页查看任务，进**任务详情**看日志 / 监控 / 输出（含一键全量 zip 下载）
+8. **⑦ 训练**：选 preset 复制进 version 私有 config，改参数（debounce 600ms 自动落盘，无需点保存），入队即开始训练。Picker 标签会显示「· 已自定义」表示和原预设已分叉，预设池不会被改
+9. 「队列」页查看任务，进**任务详情**看日志 / 监控 / 输出（含一键全量 zip 下载）
 
 训完后侧栏 **测试**：跑单图 / XY 矩阵 / 推理 daemon 评测 LoRA，prompt 可从训练集直接拉，不用切 ComfyUI 反复测。
 
@@ -170,8 +166,8 @@ AnimaLoraStudio/
 │   ├── anima_train.py             # 训练入口
 │   ├── training/                  # 训练栈子包：context / phases / loop / sample_runner
 │   │   ├── adapters/              # plugin: lokr / loha / lora
-│   │   ├── optimizers/            # plugin: adamw / prodigy / prodigy_plus_schedulefree
-│   │   ├── schedulers/            # plugin: cosine / cosine_with_restart / none
+│   │   ├── optimizers/            # plugin: adamw / lion / automagic / prodigy / prodigy_plus_schedulefree
+│   │   ├── schedulers/            # plugin: cosine / cosine_with_restart / cosine_with_warmup / none
 │   │   ├── inference_samplers/    # plugin: er_sde 等
 │   │   └── phases/                # bootstrap / models / dataset / optimizer / resume / finalize
 │   ├── anima_generate.py          # 出图：单图 / XY 矩阵
@@ -260,7 +256,7 @@ AnimaLoraStudio/
 
 ## 版本
 
-当前版本 **0.11.1**。完整变更历史见 [CHANGELOG.md](CHANGELOG.md)。Studio 内 Settings → 系统 → 版本卡片可一键升级到最新版本。
+当前版本 **0.12.0**。完整变更历史见 [CHANGELOG.md](CHANGELOG.md)。Studio 内 Settings → 系统 → 版本卡片可一键升级到最新版本。
 
 ---
 
@@ -269,6 +265,15 @@ AnimaLoraStudio/
 - **GPU**：NVIDIA，**16 GB+ 显存推荐**（RTX 4060Ti 16G / 4070Ti / 4080 / 5070+ / 3090 / 4090 / 5090 等）；**8 GB 极限可跑**（部分笔记本 GPU 实测可行，需关 sample 输出 + 减小 batch / 分辨率，且训练速度明显下降）。系统 GPU 占用低，VRAM 主要给训练；A 卡 / Apple Silicon 不支持
 - **RAM**：16 GB+
 - **存储**：SSD 强烈推荐（latent cache + sample 输出 IO 频繁）
+
+---
+
+## 上游与致谢
+
+- 核心训练脚本派生自 [**Moeblack/AnimaLoraToolkit**](https://github.com/Moeblack/AnimaLoraToolkit)
+- 主模型 / VAE：[circlestone-labs / Anima](https://huggingface.co/circlestone-labs/Anima)
+
+完整的第三方算法 / 代码 / 论文出处见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
 
 ---
 

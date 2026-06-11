@@ -22,3 +22,7 @@ class ImportRequest(BaseModel):
 
 class ExportOutputsBody(BaseModel):
     files: Optional[list[str]] = None
+
+
+class DeleteOutputsBody(BaseModel):
+    files: list[str]

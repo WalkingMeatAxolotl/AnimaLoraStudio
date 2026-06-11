@@ -866,6 +866,10 @@ class Supervisor:
                 self._fail_daemon_task(task_id, f"daemon start failed: {e}")
                 return
 
+        # spawn 后立刻把 idle timeout 从 secrets 同步进 daemon，避免首个 task 出图后
+        # 模型常驻；用户在 settings 改值后下一次 dispatch 也会重新读取。
+        daemon.sync_idle_timeout_from_secrets()
+
         if not self._daemon_listener_registered:
             daemon.add_global_listener(self._on_daemon_global_event)
             daemon.add_log_listener(self._on_daemon_log_line)

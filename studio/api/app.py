@@ -34,6 +34,7 @@ from .routers import (
     samples,
     secrets as secrets_router,
     system,
+    tag_dictionary,
     tagger,
     upscalers,
 )
@@ -77,6 +78,7 @@ app.include_router(jobs.router)
 app.include_router(secrets_router.router)
 app.include_router(models.router)
 app.include_router(upscalers.router)
+app.include_router(tag_dictionary.router)
 # PR-6 commit 3: installs router（10 routes: wd14/torch/flash-attn/xformers/llm-tagger admin）
 app.include_router(installs.router)
 # PR-6 commit 4: system router（11 routes: restart / update / rollback / preflight / etc.）

@@ -138,7 +138,18 @@ def run(ctx: TrainingContext) -> None:
                     _raw_mse = _raw_mse_per_sample.mean(
                         dim=list(range(1, _raw_mse_per_sample.dim()))
                     )
-                ctx.timestep_sampler.record(t.detach(), _raw_mse)
+                # 仅 main 集样本进 InfoNoise schedule 学习：I-MMSE 假设单一数据分布，
+                # reg 集典型是通用图（booru）vs main 集是单一主题，混入 record 学到的是
+                # mixture MMSE 不是 mmse_main(t)。用 is_reg flag 而非 loss_weight 阈值
+                # 是因为 distribution identity 跟 gradient 权重是两条独立轴
+                # （reg_weight=1.0 时 loss_weight=1.0 但 reg 仍是不同分布）。
+                # 见 docs/todo/infonoise-reg-policy-reeval.md 未来重评估条件。
+                if "is_reg" in batch:
+                    _main_mask = ~batch["is_reg"].to(t.device)
+                    if _main_mask.any():
+                        ctx.timestep_sampler.record(t.detach()[_main_mask], _raw_mse[_main_mask])
+                else:
+                    ctx.timestep_sampler.record(t.detach(), _raw_mse)
                 # 按样本加权（正则集可降低权重）
                 if "loss_weight" in batch:
                     w = batch["loss_weight"].to(ctx.device).view(-1, *([1] * (loss_per_sample.dim() - 1)))

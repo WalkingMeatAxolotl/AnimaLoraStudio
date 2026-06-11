@@ -10,7 +10,8 @@ import {
 import ConfigSkeleton from '../../components/ConfigSkeleton'
 import { useDialog } from '../../components/Dialog'
 import PathPicker from '../../components/PathPicker'
-import SchemaForm from '../../components/SchemaForm'
+import SchemaForm, { visibleSchemaGroups } from '../../components/SchemaForm'
+import SchemaSectionIndex from '../../components/SchemaSectionIndex'
 import { useToast } from '../../components/Toast'
 import { useSettingsDrawer } from '../../lib/SettingsDrawer'
 import { useAdvancedMode } from '../../lib/useAdvancedMode'
@@ -282,6 +283,14 @@ export default function PresetsPage() {
     }
     return out
   }, [autoSyncPaths, modelPathDefaults, config, t, MODEL_PATH_FIELDS])
+
+  // 右侧 SchemaSectionIndex 的 IntersectionObserver root + 跳转目标。
+  // 这里的 root 是整个内容滚动区，跟 Settings 页一致。
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null)
+  const visibleGroups = useMemo(
+    () => (schema ? visibleSchemaGroups(schema, advancedMode) : []),
+    [schema, advancedMode],
+  )
 
   // ── popover 关闭：点外面关 ──
   useEffect(() => {
@@ -684,8 +693,12 @@ export default function PresetsPage() {
       </div>
 
       {/* ── content（scroll） ── */}
-      <div className="flex-1 min-h-0 overflow-auto p-4">
-        <div className="flex flex-col gap-3">
+      <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-auto p-4">
+        <div
+          className="grid gap-10"
+          style={{ gridTemplateColumns: '3fr 1fr' }}
+        >
+        <div className="flex flex-col gap-3 min-w-0">
 
           {/* 名称 / 描述 */}
           <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5">
@@ -811,6 +824,19 @@ export default function PresetsPage() {
               )}
             </section>
           )}
+        </div>
+
+        {/* 右侧锚点导航：跟 Settings 页一个套路，sticky 跟随滚动 */}
+        <aside className="hidden lg:block">
+          <div className="sticky top-0">
+            {schema && config && visibleGroups.length > 0 && (
+              <SchemaSectionIndex
+                groups={visibleGroups}
+                scrollContainer={scrollContainerRef}
+              />
+            )}
+          </div>
+        </aside>
         </div>
       </div>
 

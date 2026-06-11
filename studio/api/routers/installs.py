@@ -64,8 +64,8 @@ def wd14_install(body: WD14InstallRequest) -> dict[str, Any]:
     重装不能热替换已 import 的 .pyd/.so）。返回 `restart_required=True` 让前端
     显式提示。
     """
-    if body.target not in ("auto", "gpu", "cpu"):
-        raise HTTPException(400, "target must be auto|gpu|cpu")
+    if body.target not in ("auto", "gpu", "cpu", "directml"):
+        raise HTTPException(400, "target must be auto|gpu|cpu|directml")
     try:
         res = onnxruntime_setup.install_runtime(body.target)
     except RuntimeError as exc:
