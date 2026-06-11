@@ -167,4 +167,24 @@ describe('mergeDelta (PR #37 增量协议)', () => {
     )
     expect(out.config).toEqual({ rank: 32 })
   })
+
+  it('keeps task project/version metadata across deltas', () => {
+    const out = mergeDelta(
+      {
+        task_id: 12,
+        project_id: 28,
+        project_slug: 'xi410',
+        version_id: 3,
+        version_label: 'v1',
+        losses: [],
+        lr_history: [],
+        samples: [],
+      },
+      { step: 6 },
+    )
+    expect(out.project_id).toBe(28)
+    expect(out.project_slug).toBe('xi410')
+    expect(out.version_id).toBe(3)
+    expect(out.version_label).toBe('v1')
+  })
 })
