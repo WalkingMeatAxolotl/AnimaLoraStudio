@@ -15,7 +15,7 @@ interface Props {
 
 export default function StepShell({ title, subtitle, actions, topRight, children, logSources }: Props) {
   return (
-    <div className="fade-in flex flex-col h-full">
+    <div className="fade-in flex flex-col h-full relative">
       <PageHeader
         title={title}
         subtitle={subtitle}
@@ -24,10 +24,11 @@ export default function StepShell({ title, subtitle, actions, topRight, children
         sticky
       />
       {/* flex column container: overflow:hidden stops page scroll; children use flex:1 to fill */}
-      <div className="flex-1 min-h-0 p-6 flex flex-col overflow-hidden relative">
+      <div className="flex-1 min-h-0 p-6 flex flex-col overflow-hidden">
         {children}
-        {logSources && <TaskLogDrawer sources={logSources} />}
       </div>
+      {/* 页面级 footer 抽屉：全宽贴底，展开时 overlay 在内容上方（issue #251） */}
+      {logSources && <TaskLogDrawer sources={logSources} />}
     </div>
   )
 }

@@ -45,10 +45,9 @@ function pickActive(sources: LogSource[]): LogSource | null {
 /**
  * 任务日志抽屉 —— 全 app 统一的任务进度/日志 UI（issue #251）。
  *
- * 三态：
- * - 无任务：整体隐藏
- * - 收起条（默认）：一行 status 徽标 + 最后一行日志 + 耗时，点击展开
- * - 展开：日志面板 overlay 在内容区上方（不挤压页面布局），自动滚底
+ * 形态：页面级 footer。收起时一行 header 全宽贴在页面最底（status 徽标 +
+ * 最后一行日志 + 耗时）；点击后日志面板从 header 下方升起（200ms 高度动画，
+ * overlay 不挤压页面布局），header 骑在面板顶上充当与内容区的分隔条。
  *
  * 开合状态机（手动开合随时生效）：
  * - 进入 live（含挂载即 running 的回放场景）→ 自动展开
@@ -106,58 +105,65 @@ export default function TaskLogDrawer({
   const lastLine = active.lines[active.lines.length - 1] ?? ''
 
   return (
-    <div className="relative shrink-0 mt-2">
-      {expanded && (
-        // 固定 40vh：高度不随日志增长，所有页面一致；顶部 accent 条 +
-        // border-bold + shadow-2xl 把面板从同色背景里抬出来（同 SettingsDrawer）。
-        <div className="absolute bottom-full inset-x-0 z-30 mb-1 h-[40vh] rounded-md border border-bold bg-surface shadow-2xl overflow-hidden flex flex-col">
-          <div className="h-0.5 bg-accent shrink-0" />
+    <>
+      {/* 占位：与 footer header 同高，让页面内容不被贴底的 header 盖住 */}
+      <div className="shrink-0 h-9" aria-hidden />
+      {/* footer 抽屉本体：贴页面底、全宽、无圆角无 margin；anchored bottom，
+          body 高度动画 0 ↔ 40vh 时 header 随抽屉上升，充当内容/日志分隔条 */}
+      <div
+        className={`absolute bottom-0 inset-x-0 z-30 flex flex-col ${expanded ? 'shadow-2xl' : ''}`}
+      >
+        <div
+          role="button"
+          tabIndex={0}
+          aria-expanded={expanded}
+          onClick={() => setExpanded((v) => !v)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              setExpanded((v) => !v)
+            }
+          }}
+          className="h-9 shrink-0 cursor-pointer select-none border-t-2 border-accent bg-surface px-4 flex items-center gap-2 text-sm"
+        >
+          <span
+            className={`inline-block transition-transform text-fg-tertiary w-3 ${expanded ? 'rotate-90' : ''}`}
+          >
+            ▸
+          </span>
+          <span className={STATUS_BADGE[active.status]}>{active.status}</span>
+          <span className="text-fg-secondary shrink-0">{active.label}</span>
+          {elapsed != null && elapsed > 0 && (
+            <span className="text-fg-tertiary text-xs shrink-0">· {Math.round(elapsed)}s</span>
+          )}
+          <span className="mono truncate flex-1 min-w-0 text-fg-secondary text-xs">{lastLine}</span>
+          {live && active.onCancel && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                active.onCancel?.()
+              }}
+              className="btn btn-ghost btn-sm text-err"
+            >
+              {t('common.cancel')}
+            </button>
+          )}
+        </div>
+        <div
+          data-testid="log-drawer-body"
+          className="overflow-hidden bg-sunken transition-[height] duration-200 ease-out"
+          style={{ height: expanded ? '40vh' : '0px' }}
+        >
           <pre
             ref={preRef}
-            className="m-0 px-3 py-2 flex-1 min-h-0 text-[11px] leading-relaxed font-mono text-fg-secondary bg-sunken overflow-y-auto whitespace-pre-wrap break-words"
+            className="m-0 h-full px-4 py-2 text-[11px] leading-relaxed font-mono text-fg-secondary overflow-y-auto whitespace-pre-wrap break-words"
           >
             {active.lines.length === 0
               ? t('jobProgress.waitingLogs')
               : active.lines.slice(-1000).join('\n')}
           </pre>
         </div>
-      )}
-      <div
-        role="button"
-        tabIndex={0}
-        aria-expanded={expanded}
-        onClick={() => setExpanded((v) => !v)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault()
-            setExpanded((v) => !v)
-          }
-        }}
-        className="cursor-pointer select-none rounded-md border border-subtle bg-surface px-2.5 py-1.5 flex items-center gap-2 text-sm"
-      >
-        <span
-          className={`inline-block transition-transform text-fg-tertiary w-3 ${expanded ? 'rotate-90' : ''}`}
-        >
-          ▸
-        </span>
-        <span className={STATUS_BADGE[active.status]}>{active.status}</span>
-        <span className="text-fg-secondary shrink-0">{active.label}</span>
-        {elapsed != null && elapsed > 0 && (
-          <span className="text-fg-tertiary text-xs shrink-0">· {Math.round(elapsed)}s</span>
-        )}
-        <span className="mono truncate flex-1 min-w-0 text-fg-secondary text-xs">{lastLine}</span>
-        {live && active.onCancel && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              active.onCancel?.()
-            }}
-            className="btn btn-ghost btn-sm text-err"
-          >
-            {t('common.cancel')}
-          </button>
-        )}
       </div>
-    </div>
+    </>
   )
 }

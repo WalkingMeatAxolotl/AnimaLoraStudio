@@ -21,16 +21,17 @@ describe('TaskLogDrawer (issue #251)', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('挂载即 running（回放场景）→ 自动展开，日志面板可见且显示尾部', () => {
+  it('挂载即 running（回放场景）→ 自动展开，日志面板升起且显示尾部', () => {
     render(<TaskLogDrawer sources={[makeSource()]} />)
     expect(screen.getByRole('button', { name: /打标任务/ })).toHaveAttribute(
       'aria-expanded',
       'true',
     )
+    expect(screen.getByTestId('log-drawer-body')).toHaveStyle({ height: '40vh' })
     expect(screen.getByText(/line a\s+line b/)).toBeInTheDocument()
   })
 
-  it('挂载即 done（历史回放）→ 默认收起，条上显示最后一行', () => {
+  it('挂载即 done（历史回放）→ 默认收起（body 高度 0），条上显示最后一行', () => {
     render(
       <TaskLogDrawer
         sources={[makeSource({ status: 'done', finishedAt: 1700000010 })]}
@@ -38,9 +39,9 @@ describe('TaskLogDrawer (issue #251)', () => {
     )
     const strip = screen.getByRole('button', { name: /打标任务/ })
     expect(strip).toHaveAttribute('aria-expanded', 'false')
-    // 面板没渲染，但收起条上有最后一行
+    // body 常驻 DOM 做高度动画，收起 = 高度 0；收起条上有最后一行
+    expect(screen.getByTestId('log-drawer-body')).toHaveStyle({ height: '0px' })
     expect(screen.getByText('line b')).toBeInTheDocument()
-    expect(screen.queryByText(/line a\s+line b/)).toBeNull()
   })
 
   it('任务结束不自动收起（done / failed 都保持展开，收起只靠手动或切页卸载）', () => {
