@@ -32,7 +32,6 @@ slug 冲突自动加 -imported-{ts}。
 from __future__ import annotations
 
 import json
-import re
 import sqlite3
 import time
 import zipfile
@@ -51,7 +50,6 @@ TRAIN_PREFIX = "train/"
 REG_PREFIX = "reg/"
 PRESETS_PREFIX = "presets/"
 CAPTION_EXTS = {".txt"}
-VERSION_LABEL_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 VERSION_CONFIG_ARC = "presets/config.yaml"
@@ -527,8 +525,10 @@ def _safe_arc_bundle(name: str) -> Optional[tuple[str, str]]:
 
 
 def _bundle_source_version_label(source: dict[str, Any]) -> str:
+    """manifest 是不可信输入 — 校验走 versions 同一套规则（含拒绝 "." / ".."），
+    不合法回退 v1 而不是报错，保证老 / 手改 bundle 仍可导入。"""
     raw = str(source.get("version_label") or "v1").strip()
-    return raw if VERSION_LABEL_RE.fullmatch(raw) else "v1"
+    return raw if versions.is_valid_label(raw) else "v1"
 
 
 def _bundle_source_preset_name(source: dict[str, Any]) -> Optional[str]:

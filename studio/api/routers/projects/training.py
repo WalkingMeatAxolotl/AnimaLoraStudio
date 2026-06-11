@@ -41,6 +41,7 @@ from fastapi.responses import FileResponse
 
 from ...deps import _resolve_anima_model_paths
 from ...errors import _preset_err_code as _err_code, _safe_join_or_400
+from ..logs import read_task_log
 from ...responses import _thumb_response
 from ...schemas.training import (
     BatchOp,
@@ -67,7 +68,7 @@ from ....services.projects import jobs as project_jobs, projects, versions
 from ....services.dataset import scan as datasets
 from ....domain import RegAiConfig
 from ....infrastructure.event_bus import bus
-from ....paths import LOGS_DIR, STUDIO_DATA, safe_join, task_log_path
+from ....paths import STUDIO_DATA, safe_join
 from ....services import model_downloader, version_config
 from ....services import presets as preset_flow
 from ....services.tagging import caption_snapshot
@@ -77,19 +78,6 @@ from ....services.tagging.base import VALID_TAGGER_NAMES
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-
-def _read_task_log(task_id: int) -> str:
-    p = task_log_path(task_id)
-    if not p.exists():
-        p = LOGS_DIR / f"{task_id}.log"
-    if not p.exists():
-        return ""
-    raw = p.read_text(encoding="utf-8", errors="replace")
-    return "".join(
-        ln for ln in raw.splitlines(keepends=True)
-        if not ln.startswith("__EVENT__:")
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -466,7 +454,7 @@ def get_latest_reg_prior_task(pid: int, vid: int) -> dict[str, Any]:
     task = dict(row) if row else None
     return {
         "task": task,
-        "log": _read_task_log(int(task["id"])) if task else "",
+        "log": read_task_log(int(task["id"])) if task else "",
     }
 
 

@@ -306,6 +306,31 @@ def test_import_bundle_restores_version_and_preset_names(isolated, tmp_path: Pat
     assert (train_dir / "1_data" / "a.png").exists()
 
 
+def test_import_bundle_rejects_dot_version_label(isolated, tmp_path: Path) -> None:
+    """manifest 不可信：纯点 label（".." == project 根）必须回退 v1，
+    否则 delete_version 时 rmtree 会带走整个项目目录。"""
+    bundle = tmp_path / "dots.bundle.zip"
+    with zipfile.ZipFile(bundle, "w", compression=zipfile.ZIP_STORED) as zf:
+        zf.writestr(
+            "manifest.json",
+            json.dumps({
+                "schema_version": 2,
+                "source": {"title": "Evil", "slug": "evil", "version_label": ".."},
+                "includes": {"train": True},
+            }),
+        )
+        zf.writestr("train/1_data/a.png", b"fake")
+
+    with db.connection_for(isolated["db"]) as conn:
+        result = train_io.import_bundle(conn, bundle, presets_base=tmp_path / "presets")
+
+    assert result["version"]["label"] == "v1"
+    vdir = versions.version_dir(
+        result["project"]["id"], result["project"]["slug"], "v1"
+    )
+    assert (vdir / "train" / "1_data" / "a.png").exists()
+
+
 def _build_bundle_with_config(
     tmp_path: Path,
     *,
