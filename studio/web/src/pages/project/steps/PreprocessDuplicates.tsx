@@ -578,7 +578,7 @@ function QualityReviewPanel({
         : activeTab
   const showBlur = activeQualityTab === 'blur'
   return (
-    <section className="flex flex-col min-h-0 rounded-md border border-subtle bg-surface overflow-hidden">
+    <section className="flex flex-col flex-1 min-h-0 rounded-md border border-subtle bg-surface overflow-hidden">
       <div className="h-0.5 bg-accent" />
       <header className="flex flex-wrap items-center gap-2 px-2.5 py-1.5 border-b border-subtle text-sm">
         <h3 className="font-semibold">{t('duplicates.qualityTitle')}</h3>
@@ -654,7 +654,7 @@ function QualityReviewPanel({
           )}
         </div>
       </header>
-      <div className="grid grid-cols-1 gap-2 p-2 min-h-0 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto p-2">
         {showBlur && (
           <QualitySection
             title={t('duplicates.blurTitle')}
@@ -740,7 +740,16 @@ function QualitySection({
       {items.length === 0 ? (
         <div className="px-2 py-3 text-xs text-fg-tertiary">{empty}</div>
       ) : (
-        <div className="max-h-[360px] overflow-y-auto p-2 flex flex-col gap-2">
+        // 卡片铺响应式多列：缩略图只有 256px，卡片不能拉满面板宽（会放大到糊）。
+        // 滚动交给面板内容区的 overflow-y-auto，这里不再嵌套 max-h 滚动窗口。
+        <div
+          className="p-2 grid gap-2"
+          style={{
+            gridTemplateColumns: `repeat(auto-fill, minmax(${
+              items.some((item) => item.images.length > 1) ? 340 : 200
+            }px, 1fr))`,
+          }}
+        >
           {items.map((item) => (
             <article key={item.key} className="rounded-sm border border-subtle bg-surface p-1.5">
               <div className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${item.images.length}, minmax(0, 1fr))` }}>
