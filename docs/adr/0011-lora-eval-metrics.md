@@ -124,12 +124,13 @@ manifest 记录：
 | 4（PR2） | CLIP-T / CLIP-I：新增 `eval_clip` job，读取 sample run 与 manifest reference，写入 `metrics.json` 的 `clip_t` / `clip_i` | 不做 diversity / copy-risk / paired CMMD²，不做 UI，不做 checkpoint ranking | 3 |
 | 5（PR2） | DINO-I：新增 `eval_dino` job，读取 generated/reference image pairs，写入 `metrics.json` 的 `dino_i` | 不做 diversity / copy-risk / paired CMMD²、不做诊断 UI | 3, 4 |
 | 6（PR2） | Eval metric model settings：为 CLIP / DINO 指标保存默认模型名或本地路径，API 请求省略 `model_name` 时读取这些默认值 | 不新增下载 UI、不改指标算法、不接 diversity / copy-risk / paired CMMD²、不做诊断 UI | 4, 5 |
-| 7（当前 PR3） | Training-integrated eval：训练保存 LoRA checkpoint 后自动排 eval sample，sample 完成后自动排 CLIP / DINO | 不做 polished monitor UI、不自动给训练参数建议、不新增 diversity / copy-risk / paired CMMD²、不做 checkpoint ranking | 4, 5, 6 |
-| 8 | Diversity（LPIPS 或 DreamSim） | 不判断训练图复制 | 7 |
-| 9 | SSCD copy-risk：nearest-neighbor 相似度、高风险比例、对照图 | 不做综合评分 | 7 |
-| 10 | paired CMMD² | 不做 checkpoint 自动推荐 | 7, 8 |
-| 11 | Diagnosis UI：汇总指标并提示拟合不足 / 过拟合 / 复制风险 | 不新增指标模型 | 7, 8, 9, 10 |
-| 12 | Checkpoint ranking：基于已有指标给可追溯推荐理由 | 不改变训练默认流程 | 11 |
+| 7（PR3） | Training-integrated eval：训练保存 LoRA checkpoint 后自动排 eval sample，sample 完成后自动排 CLIP / DINO | 不做 polished monitor UI、不自动给训练参数建议、不新增 diversity / copy-risk / paired CMMD²、不做 checkpoint ranking | 4, 5, 6 |
+| 8（当前 PR4） | Formal UI embedding：Settings 明确三指标模型 / 自动评估配置，Monitor 按 checkpoint 展示 CLIP-T / CLIP-I / DINO-I 值和趋势 | 不新增指标算法、不做综合诊断、不做 checkpoint ranking | 7 |
+| 9 | Diversity（LPIPS 或 DreamSim） | 不判断训练图复制 | 8 |
+| 10 | SSCD copy-risk：nearest-neighbor 相似度、高风险比例、对照图 | 不做综合评分 | 8 |
+| 11 | paired CMMD² | 不做 checkpoint 自动推荐 | 8, 9 |
+| 12 | Diagnosis UI：汇总指标并提示拟合不足 / 过拟合 / 复制风险 | 不新增指标模型 | 8, 9, 10, 11 |
+| 13 | Checkpoint ranking：基于已有指标给可追溯推荐理由 | 不改变训练默认流程 | 12 |
 
 Step 2 的 sample runner 应先落地为一个可持久化、可重跑、可被后续指标读取的 eval sample run：
 
@@ -174,6 +175,14 @@ Step 7 的 training-integrated eval POC 用已有 CLIP / DINO 指标回答“同
 - 串联：自动排队的 sample run 成功后，继续排 `eval_clip` 与 `eval_dino`，模型路径读取 Step 6 的 Settings 默认值；
 - 输出：每个 checkpoint 仍产生普通 `eval/samples/{run_id}/run.json` 与同目录 `metrics.json`，不引入单独的实验结果格式；
 - 明确不做：不根据指标自动修改训练参数，不新增正式 monitor UI，不新增新指标，不做 ranking。
+
+Step 8 的 UI embedding 把前三个指标从“脚本可查”推进到“训练监控可见”：
+
+- Settings：保留 CLIP / DINO 默认模型路径和自动评估开关，文案明确本地 ModelScope 路径与 Monitor 输出位置；
+- State context：`/api/state` 为绑定 project/version 的训练任务附带轻量上下文，前端可据此读取该 version 的 eval metrics；
+- Monitor：新增 LoRA eval 面板，按 checkpoint 展示 CLIP-T / CLIP-I / DINO-I 最新值、pending/running/failed 状态和简单趋势；
+- 刷新：训练连接仍在或 metric job 尚未结束时定时刷新 eval results，训练结束后保留手动刷新；
+- 明确不做：不新增 Diversity / SSCD / CMMD，不解释“最佳 checkpoint”，不根据指标自动修改训练参数。
 
 每个后续 review step / commit 说明固定包含：
 

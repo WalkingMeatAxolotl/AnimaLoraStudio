@@ -21,6 +21,20 @@ from ...services import system_stats
 router = APIRouter()
 
 
+_TASK_STATE_SELECT = """
+    SELECT
+        t.monitor_state_path,
+        t.id AS task_id,
+        t.project_id,
+        t.version_id,
+        p.slug AS project_slug,
+        v.label AS version_label
+    FROM tasks t
+    LEFT JOIN projects p ON p.id = t.project_id
+    LEFT JOIN versions v ON v.id = t.version_id
+"""
+
+
 @router.get("/api/health")
 def health(request: Request) -> dict[str, Any]:
     return {"status": "ok", "version": request.app.version}
@@ -50,31 +64,34 @@ def get_state(task_id: Optional[int] = None, max_points: int = 0) -> JSONRespons
     旧的全局 `monitor_data/state.json` 路径已退役（PP6.1）。
     """
     target_path: Optional[Path] = None
+    target_task: dict[str, Any] | None = None
     if task_id is not None:
         with db.connection_for() as conn:
             row = conn.execute(
-                "SELECT monitor_state_path FROM tasks WHERE id = ?",
+                _TASK_STATE_SELECT + " WHERE t.id = ?",
                 (task_id,),
             ).fetchone()
         if row and row["monitor_state_path"]:
             target_path = Path(row["monitor_state_path"])
+            target_task = dict(row)
     else:
         # 没给 task_id：先找 running 的 task；没 running 回退到最近的完成任务
         with db.connection_for() as conn:
             row = conn.execute(
-                "SELECT monitor_state_path FROM tasks WHERE status = 'running' "
-                "AND monitor_state_path IS NOT NULL "
-                "ORDER BY started_at DESC LIMIT 1"
+                _TASK_STATE_SELECT +
+                " WHERE t.status = 'running' AND t.monitor_state_path IS NOT NULL "
+                "ORDER BY t.started_at DESC LIMIT 1"
             ).fetchone()
             if not (row and row["monitor_state_path"]):
                 row = conn.execute(
-                    "SELECT monitor_state_path FROM tasks "
-                    "WHERE monitor_state_path IS NOT NULL "
-                    "ORDER BY COALESCE(finished_at, started_at, created_at) DESC "
+                    _TASK_STATE_SELECT +
+                    " WHERE t.monitor_state_path IS NOT NULL "
+                    "ORDER BY COALESCE(t.finished_at, t.started_at, t.created_at) DESC "
                     "LIMIT 1"
                 ).fetchone()
         if row and row["monitor_state_path"]:
             target_path = Path(row["monitor_state_path"])
+            target_task = dict(row)
 
     if target_path is None or not target_path.exists():
         return JSONResponse(_responses.EMPTY_STATE)
@@ -93,4 +110,21 @@ def get_state(task_id: Optional[int] = None, max_points: int = 0) -> JSONRespons
         if isinstance(data.get("optimizer_metrics_history"), list):
             data["optimizer_metrics_history"] = _downsample_uniform(data["optimizer_metrics_history"], max_points)
 
+    _attach_eval_context(data, target_task)
     return JSONResponse(data)
+
+
+def _attach_eval_context(data: Any, task: dict[str, Any] | None) -> None:
+    if not isinstance(data, dict) or not task:
+        return
+    project_id = task.get("project_id")
+    version_id = task.get("version_id")
+    if project_id is None or version_id is None:
+        return
+    data.setdefault("task_id", task.get("task_id"))
+    data.setdefault("project_id", project_id)
+    data.setdefault("version_id", version_id)
+    if task.get("project_slug") is not None:
+        data.setdefault("project_slug", task.get("project_slug"))
+    if task.get("version_label") is not None:
+        data.setdefault("version_label", task.get("version_label"))

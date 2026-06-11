@@ -26,6 +26,7 @@ def isolated_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str,
     from studio import db
     from studio.api.routers import root as _root_router
     from studio.api.routers import samples as _samples_router
+    from studio.services.projects import projects
     output = tmp_path / "output"
     samples_dir = output / "samples"
     web_dist = tmp_path / "web_dist"  # 不创建即模拟未构建
@@ -39,6 +40,7 @@ def isolated_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str,
     monkeypatch.setattr(server, "WEB_DIST", web_dist)
     monkeypatch.setattr(_samples_router, "OUTPUT_DIR", output)
     monkeypatch.setattr(_root_router, "WEB_DIST", web_dist)
+    monkeypatch.setattr(projects, "PROJECTS_DIR", tmp_path / "projects")
     return {
         "tmp": tmp_path,
         "db": dbfile,
@@ -303,6 +305,46 @@ def test_state_by_task_id_returns_parsed_json(
     resp = client.get(f"/api/state?task_id={tid}")
     assert resp.status_code == 200
     assert resp.json() == payload
+
+
+def test_state_includes_eval_context_for_bound_task(
+    client: TestClient, isolated_paths: dict[str, Path]
+) -> None:
+    from studio import db as _db
+    from studio.services.projects import projects, versions
+
+    payload = {
+        "losses": [],
+        "lr_history": [],
+        "epoch": 1,
+        "step": 10,
+        "total_steps": 20,
+        "speed": 1.0,
+        "samples": [],
+        "start_time": 1700000000.0,
+        "config": {},
+    }
+    tid = _make_task_with_state(isolated_paths, payload)
+    with _db.connection_for(isolated_paths["db"]) as conn:
+        project = projects.create_project(conn, title="Eval Monitor")
+        version = versions.create_version(conn, project_id=project["id"], label="v1")
+        _db.update_task(
+            conn,
+            tid,
+            project_id=project["id"],
+            version_id=version["id"],
+        )
+
+    resp = client.get(f"/api/state?task_id={tid}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["project_id"] == project["id"]
+    assert body["project_slug"] == project["slug"]
+    assert body["version_id"] == version["id"]
+    assert body["version_label"] == "v1"
+    assert body["task_id"] == tid
+    assert body["step"] == 10
 
 
 def test_state_corrupt_returns_500(
