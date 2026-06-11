@@ -50,10 +50,11 @@ function pickActive(sources: LogSource[]): LogSource | null {
  * - 收起条（默认）：一行 status 徽标 + 最后一行日志 + 耗时，点击展开
  * - 展开：日志面板 overlay 在内容区上方（不挤压页面布局），自动滚底
  *
- * 开合状态机（手动开合在下一次状态迁移前生效）：
+ * 开合状态机（手动开合随时生效）：
  * - 进入 live（含挂载即 running 的回放场景）→ 自动展开
- * - live → done/canceled → 自动收起
- * - live → failed → 保持展开（用户要读错误）
+ * - 任务结束**不**自动收起 —— 用户要回看结果/错误；只有切页（组件卸载）
+ *   或手动点击才收
+ * - 挂载即终态（历史回放）→ 默认收起
  *
  * 由 StepShell 统一挂载（`logSources` prop），页面只声明 source。
  */
@@ -76,11 +77,7 @@ export default function TaskLogDrawer({
     if (!activeKey || !activeStatus) return
     const prev = prevRef.current
     const wasLive = prev?.key === activeKey && isLiveStatus(prev.status)
-    if (isLiveStatus(activeStatus)) {
-      if (!wasLive) setExpanded(true)
-    } else if (wasLive) {
-      setExpanded(activeStatus === 'failed')
-    }
+    if (isLiveStatus(activeStatus) && !wasLive) setExpanded(true)
     prevRef.current = { key: activeKey, status: activeStatus }
   }, [activeKey, activeStatus])
 

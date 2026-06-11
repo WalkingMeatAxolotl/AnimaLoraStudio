@@ -43,13 +43,13 @@ describe('TaskLogDrawer (issue #251)', () => {
     expect(screen.queryByText(/line a\s+line b/)).toBeNull()
   })
 
-  it('live → done 自动收起；live → failed 保持展开', () => {
+  it('任务结束不自动收起（done / failed 都保持展开，收起只靠手动或切页卸载）', () => {
     const { rerender } = render(<TaskLogDrawer sources={[makeSource()]} />)
     const strip = () => screen.getByRole('button', { name: /打标任务/ })
     expect(strip()).toHaveAttribute('aria-expanded', 'true')
 
     rerender(<TaskLogDrawer sources={[makeSource({ status: 'done' })]} />)
-    expect(strip()).toHaveAttribute('aria-expanded', 'false')
+    expect(strip()).toHaveAttribute('aria-expanded', 'true')
 
     rerender(<TaskLogDrawer sources={[makeSource()]} />)
     rerender(<TaskLogDrawer sources={[makeSource({ status: 'failed' })]} />)
