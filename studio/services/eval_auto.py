@@ -7,7 +7,7 @@ from typing import Any
 
 from studio import secrets
 from studio.services import eval_clip, eval_dino, eval_samples
-from studio.services.projects import projects, versions
+from studio.services.projects import jobs as project_jobs, projects, versions
 
 logger = logging.getLogger(__name__)
 
@@ -87,23 +87,39 @@ def queue_metric_jobs_for_sample(
     """Queue CLIP and DINO metrics after an automatically queued sample run."""
     cfg = secrets.load().eval_metrics
     jobs: list[dict[str, Any]] = []
-    clip_job, _ = eval_clip.start_job(
+    clip_job = _active_metric_job(
         conn,
-        project,
-        version,
-        version_dir,
-        run_id,
-        model_name=cfg.clip_model_name,
+        project=project,
+        version=version,
+        kind=eval_clip.JOB_KIND,
+        run_id=run_id,
     )
+    if clip_job is None:
+        clip_job, _ = eval_clip.start_job(
+            conn,
+            project,
+            version,
+            version_dir,
+            run_id,
+            model_name=cfg.clip_model_name,
+        )
     jobs.append(clip_job)
-    dino_job, _ = eval_dino.start_job(
+    dino_job = _active_metric_job(
         conn,
-        project,
-        version,
-        version_dir,
-        run_id,
-        model_name=cfg.dino_model_name,
+        project=project,
+        version=version,
+        kind=eval_dino.JOB_KIND,
+        run_id=run_id,
     )
+    if dino_job is None:
+        dino_job, _ = eval_dino.start_job(
+            conn,
+            project,
+            version,
+            version_dir,
+            run_id,
+            model_name=cfg.dino_model_name,
+        )
     jobs.append(dino_job)
     logger.info(
         "queued auto eval metric jobs for run=%s clip_job=%s dino_job=%s",
@@ -112,6 +128,30 @@ def queue_metric_jobs_for_sample(
         dino_job.get("id"),
     )
     return jobs
+
+
+def _active_metric_job(
+    conn,
+    *,
+    project: dict[str, Any],
+    version: dict[str, Any],
+    kind: str,
+    run_id: str,
+) -> dict[str, Any] | None:
+    for status in ("pending", "running"):
+        for job in project_jobs.list_jobs(
+            conn,
+            project_id=int(project["id"]),
+            version_id=int(version["id"]),
+            kind=kind,
+            status=status,
+        ):
+            params = job.get("params_decoded")
+            if not isinstance(params, dict):
+                continue
+            if str(params.get("run_id") or "") == str(run_id):
+                return job
+    return None
 
 
 def _checkpoint_relative_to_output(

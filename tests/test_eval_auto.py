@@ -146,6 +146,46 @@ def test_queue_metric_jobs_for_sample_uses_saved_defaults(isolated) -> None:
     assert jobs[1]["params_decoded"]["model_name"] == "/models/dino"
 
 
+def test_queue_metric_jobs_for_sample_reuses_active_jobs(isolated) -> None:
+    project, version, vdir = _project_version(isolated)
+    secrets.update({
+        "eval_metrics": {
+            "auto_eval_on_checkpoint": True,
+            "clip_model_name": "/models/clip",
+            "dino_model_name": "/models/dino",
+        }
+    })
+    with db.connection_for(isolated["db"]) as conn:
+        _sample_job, run = eval_auto.queue_checkpoint_eval(conn, {
+            "id": 7,
+            "project_id": project["id"],
+            "version_id": version["id"],
+        }, {
+            "checkpoint_path": str(vdir / "output" / "model_epoch2.safetensors"),
+        })
+        run = eval_samples.run_sample_job(
+            project,
+            version,
+            vdir,
+            run["run_id"],
+            generator=_fake_generator,
+        )
+        first = eval_auto.queue_metric_jobs_for_sample(
+            conn, project, version, vdir, run["run_id"]
+        )
+        second = eval_auto.queue_metric_jobs_for_sample(
+            conn, project, version, vdir, run["run_id"]
+        )
+        clip_jobs = project_jobs.list_jobs(conn, kind="eval_clip")
+        dino_jobs = project_jobs.list_jobs(conn, kind="eval_dino")
+
+    assert [job["id"] for job in second] == [job["id"] for job in first]
+    assert len(clip_jobs) == 1
+    assert len(dino_jobs) == 1
+    assert clip_jobs[0]["params_decoded"]["model_name"] == "/models/clip"
+    assert dino_jobs[0]["params_decoded"]["model_name"] == "/models/dino"
+
+
 def test_supervisor_eval_checkpoint_event_queues_sample_job(isolated) -> None:
     import json
 
