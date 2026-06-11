@@ -456,9 +456,14 @@ class SystemConfig(BaseModel):
     - `show_dev_channel`：deprecated，由 `_migrate_legacy_schema` 一次性迁移成
       `update_channel`（true → "dev"，false → "stable"），保留字段以便旧
       secrets.json 读取时 pydantic 不报错；新代码不要再用。
+    - `enable_automagic_v2`：实验性 feature flag。Automagic v2（fused backward）
+      未正式发布，UI 默认隐藏 automagic_variant 字段（/api/schema 动态打 hidden）。
+      Settings 页**故意不渲染**这个开关 —— 只能手改 secrets.json 启用；CLI/yaml
+      路径不受影响（validate 仍拦 grad_accum/fp16 等不兼容组合）。
     """
     update_channel: str = "stable"  # "stable" / "dev"
     show_dev_channel: bool = False  # deprecated, 仅作迁移源
+    enable_automagic_v2: bool = False  # 实验性：文件级开关，UI 不暴露
 
 
 class ProxyConfig(BaseModel):

@@ -1,7 +1,7 @@
 """ADR 0003 PR-C：plugin registry + AdapterProtocol 单元测试。
 
 覆盖：
-- 4 个 plugin 子包的 BUILDERS / build_X / validate_schema_consistency 三件套
+- adapter plugin 子包的 BUILDERS / build_X / validate_schema_consistency 三件套
 - AdapterProtocol runtime_checkable 对 AnimaLycorisAdapter 返回 True
 - 动态/per-step / loss 加项 hook 在 mock adapter 上能被正确调用
 - train_loop.py / phases/optimizer.py 已不含 if optimizer_type == / if lora_type ==
@@ -40,7 +40,7 @@ def AnimaLycorisAdapter():
 
 def test_adapter_builders_dict_has_lokr_loha_lora() -> None:
     from training.adapters import BUILDERS
-    assert set(BUILDERS) == {"lokr", "loha", "lora"}
+    assert set(BUILDERS) == {"lokr", "loha", "lora", "ortho", "tlora"}
 
 
 def test_optimizer_builders_dict_has_5_variants() -> None:
@@ -279,15 +279,14 @@ def test_schema_consistency_raises_when_builder_missing(monkeypatch) -> None:
     """模拟漏注册：schema 加了 lora_type=tlora 但 BUILDERS 没注册时，校验
     必须 raise，而不是放行让训练跑半天才暴露。"""
     from training import adapters
-    monkeypatch.setitem(adapters.BUILDERS.copy(), "tlora", lambda args: None)
-    # 临时改 schema 的 Literal 表演成 "schema 有 tlora 但 registry 没有"
+    monkeypatch.delitem(adapters.BUILDERS, "tlora")
     from studio.schema import TrainingConfig
     field = TrainingConfig.model_fields["lora_type"]
     original = field.annotation
     try:
         # 用 typing.Literal 重建一个含 "tlora" 的 annotation
         from typing import Literal
-        field.annotation = Literal["lora", "lokr", "loha", "tlora"]  # type: ignore[assignment]
+        field.annotation = Literal["lora", "lokr", "loha", "ortho", "tlora"]  # type: ignore[assignment]
         with pytest.raises(RuntimeError, match="不同步"):
             adapters.validate_schema_consistency()
     finally:
@@ -340,6 +339,23 @@ def test_animalycoris_non_lokr_does_not_exclude_weight_decay(AnimaLycorisAdapter
     assert adapter.excludes_weight_decay("lora_unet_xxx.lokr_w1") is False
     adapter = AnimaLycorisAdapter(algo="loha")
     assert adapter.excludes_weight_decay("lora_unet_xxx.lokr_w1") is False
+
+
+def test_tlora_mask_changes_with_sigma_and_is_not_saved(AnimaLycorisAdapter) -> None:
+    """与 ControlGenAI/T-LoRA 官方 (arxiv 2507.05964) 对齐：
+    high noise → low rank, clean → full rank。"""
+    import torch
+    from training.adapters.protocol import StepContext
+
+    adapter = AnimaLycorisAdapter(algo="tlora", rank=8, tlora_min_rank=2, tlora_alpha_rank_scale=1.0)
+    adapter._tlora_modules = [types.SimpleNamespace()]
+    # t=0 (clean) → 满 rank (frac = (1-0)^1 = 1, active = rank)
+    adapter.on_step_begin(StepContext(0, 10, 0, torch.tensor([0.0]), argparse.Namespace()))
+    assert adapter._tlora_mask.tolist() == [1.0] * 8
+    # t=1 (max noise) → 只有前 min_rank=2 active (frac = (1-1)^1 = 0)
+    adapter.on_step_begin(StepContext(1, 10, 0, torch.tensor([1.0]), argparse.Namespace()))
+    assert adapter._tlora_mask.tolist() == [1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    assert adapter.state_dict() == {}
 
 
 # ---------------------------------------------------------------------------

@@ -293,7 +293,9 @@
       "loraType": {
         "lora": "LoRA",
         "lokr": "LoKr",
-        "loha": "LoHa"
+        "loha": "LoHa",
+        "ortho": "OrthoLoRA",
+        "tlora": "T-LoRA"
       },
       "lrScheduler": {
         "none": "常数",
@@ -373,10 +375,13 @@
       "prefer_json": "优先使用 JSON 标签文件（推荐，支持分类 shuffle）",
       "cache_latents": "缓存 VAE latent 加速训练",
       "vae_cache_batch_size": "VAE latent 缓存编码批次大小；0=跟随训练 batch size，显存不足时设为 1 逐张编码",
-      "lora_type": "适配器算法。lokr Kronecker 分解参数最省（默认）；lora 经典低秩通用；loha Hadamard 积，表达力较高但参数较多",
+      "lora_type": "适配器算法。lokr Kronecker 分解参数最省（默认）；lora 经典低秩通用；loha Hadamard 积，表达力较高但参数较多；ortho 使用 SVD/Cayley 正交参数化；tlora 时间步自适应 rank",
       "lora_rank": "rank：越大表达力越强，参数量与显存上升、易过拟合；越小越省但易欠拟合。常用 8/16/32/64",
       "lora_alpha": "alpha：LoRA 缩放系数，越大 LoRA 效果越强。通常等于 rank；启用 rs_lora 时常设为 √rank",
       "lokr_factor": "LoKr 矩阵分解因子：越大压缩越强、参数越少；越小参数越多。默认 8 适合大多数场景",
+      "tlora_min_rank": "T-LoRA 高噪声时保留的最小 active rank",
+      "tlora_alpha_rank_scale": "T-LoRA timestep 到 active rank 的幂次缩放；越大越偏向低噪声端才开高 rank",
+      "tlora_use_ortho": "T-LoRA 专属：叠加 OrthoLoRA 正交参数化；关闭时使用普通 T-LoRA",
       "lora_dora": "DoRA：分解权重为方向 + 幅度独立训练；收敛通常更稳，显存略增",
       "lora_rs": "rs-LoRA：scale=α/√r 而非 α/r，高 rank（>32）训练更稳",
       "lora_dropout": "LoRA 输入特征的随机丢弃概率：越大正则化越强、收敛越慢；0 = 关闭",
@@ -404,6 +409,8 @@
       "automagic_beta2": "Automagic 二阶矩 β2",
       "automagic_eps": "Automagic 数值稳定项",
       "automagic_clip_threshold": "Automagic update RMS 裁剪阈值",
+      "automagic_variant": "v1: per-element lr mask（经典，推荐）；v2: per-param scalar lr + fused backward（实验性，省显存；与 grad_accum / grad_clip / fp16 不兼容）",
+      "automagic_agreement_threshold": "v2 符号一致率阈值：超过此比例认为方向一致 → 涨 lr",
       "ppsf_d_coef": "PPSF 估出的 d 整体缩放系数；越大有效 lr 越大。欠拟合时调高（2.0+），过拟合 / 小数据集时调低（0.5）",
       "ppsf_prodigy_steps": "PPSF 在第 N 步后冻结 d 估计；0 = 全程持续估计。建议总步数 1/4 ~ 1/2 让后期 lr 稳定",
       "ppsf_beta1": "PPSF 一阶动量衰减率 (β1)：默认 0.9；越大平滑越强、响应越慢",
