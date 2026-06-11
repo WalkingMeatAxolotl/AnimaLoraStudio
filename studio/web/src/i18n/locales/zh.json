@@ -186,6 +186,14 @@
   "jobProgress": {
     "waitingLogs": "(等待日志...)"
   },
+  "logDrawer": {
+    "download": "下载任务",
+    "preprocess": "预处理任务",
+    "dupScan": "去重扫描",
+    "tag": "打标任务",
+    "regBuild": "Booru 建集",
+    "regPrior": "AI 先验生成"
+  },
   "pathPicker": {
     "title": "选择路径",
     "parent": "← 上级",

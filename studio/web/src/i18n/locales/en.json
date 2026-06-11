@@ -186,6 +186,14 @@
   "jobProgress": {
     "waitingLogs": "(Waiting for logs...)"
   },
+  "logDrawer": {
+    "download": "Download job",
+    "preprocess": "Preprocess job",
+    "dupScan": "Duplicate scan",
+    "tag": "Tagging job",
+    "regBuild": "Booru build",
+    "regPrior": "AI prior generation"
+  },
   "pathPicker": {
     "title": "Select path",
     "parent": "← Parent",
