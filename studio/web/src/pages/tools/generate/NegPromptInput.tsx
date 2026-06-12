@@ -2,6 +2,7 @@ import { useRef } from 'react'
 
 import { TagSuggestList } from '../../../components/tagSuggest/TagSuggestList'
 import { useTagSuggest } from '../../../components/tagSuggest/useTagSuggest'
+import { useAutoGrowTextarea } from '../../../lib/useAutoGrowTextarea'
 
 /** 负向提示词输入：接 tag autocomplete，跟 PromptList 同 UX。 */
 export default function NegPromptInput({ value, onChange }: {
@@ -25,11 +26,12 @@ export default function NegPromptInput({ value, onChange }: {
       })
     },
   })
+  useAutoGrowTextarea(taRef, value)
   return (
     <div className="relative">
       <textarea
         ref={taRef}
-        className="input w-full font-mono text-xs resize-y"
+        className="input w-full font-mono text-xs resize-none overflow-hidden"
         rows={5}
         value={value}
         onChange={(e) => { onChange(e.target.value); suggest.notifyChange() }}

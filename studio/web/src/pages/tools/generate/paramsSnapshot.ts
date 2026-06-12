@@ -15,7 +15,10 @@
  */
 import type { LoraEntry, XYAxisType } from '../../../api/client'
 import type { DatasetPick } from './PromptFromDatasetPicker'
-import type { ProjectLora } from './types'
+import {
+  DEFAULT_SAMPLER, DEFAULT_SCHEDULER, SAMPLER_OPTIONS, SCHEDULER_OPTIONS,
+  type ProjectLora, type SamplerName, type SchedulerName,
+} from './types'
 import type { XYAxisDraft } from './xy'
 
 export const PARAMS_SNAPSHOT_VERSION = 1
@@ -60,6 +63,9 @@ export interface GenerateParamsSnapshot {
   height: number
   steps: number
   cfg_scale: number
+  /** v1 早期快照无此二字段（当时固定 er_sde/simple）；回填时缺省到默认值 */
+  sampler_name?: string
+  scheduler?: string
   /** xy 模式下 daemon 端强制 1，仅 single 有意义 */
   count: number
   seed: number
@@ -139,6 +145,8 @@ export interface AppliedSnapshot {
   height: number
   steps: number
   cfgScale: number
+  samplerName: SamplerName
+  scheduler: SchedulerName
   count: number
   seed: number
   datasetPick: DatasetPick | null
@@ -172,6 +180,15 @@ function mergeTagsIntoFirstPrompt(prompts: string[], tags: string[]): string[] {
   return [`${first}${sep}${suffix}`, ...prompts.slice(1)]
 }
 
+/** 快照里的 sampler/scheduler 归并到合法值 —— 老快照缺字段、或外部 PNG 带了
+ *  本程序不支持的值（如 euler）时回退默认，而不是把非法值灌进 prefs。 */
+function coerceSampler(v: string | undefined): SamplerName {
+  return (SAMPLER_OPTIONS as readonly string[]).includes(v ?? '') ? (v as SamplerName) : DEFAULT_SAMPLER
+}
+function coerceScheduler(v: string | undefined): SchedulerName {
+  return (SCHEDULER_OPTIONS as readonly string[]).includes(v ?? '') ? (v as SchedulerName) : DEFAULT_SCHEDULER
+}
+
 export function applySnapshot(
   snap: GenerateParamsSnapshot,
   projectLoras: ProjectLora[],
@@ -200,6 +217,8 @@ export function applySnapshot(
     height: snap.height,
     steps: snap.steps,
     cfgScale: snap.cfg_scale,
+    samplerName: coerceSampler(snap.sampler_name),
+    scheduler: coerceScheduler(snap.scheduler),
     count: snap.count,
     seed: snap.seed,
     datasetPick,
