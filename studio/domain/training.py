@@ -130,7 +130,7 @@ class TrainingConfig(BaseModel):
     # ------------------------------------------------------------------- LoRA
     lora_type: Literal["lora", "lokr", "loha", "ortho", "tlora"] = Field(
         "lokr",
-        description="适配器算法。lokr Kronecker 分解参数最省（默认）；lora 经典低秩通用；loha Hadamard 积，表达力较高但参数较多；ortho SVD/Cayley 正交参数化；tlora 时间步自适应 rank",
+        description="适配器算法。lokr：Kronecker 分解，参数最省（默认）；lora：经典低秩，通用；loha：Hadamard 积，表达力较高但参数较多；ortho：正交参数化，可训练参数极少、防过拟合，适合小数据集人物/主体；tlora：噪声越高 rank 越小，专为单图/极少图主体定制防过拟合",
         json_schema_extra=_meta("lora"),
     )
     lora_rank: int = Field(
@@ -163,8 +163,8 @@ class TrainingConfig(BaseModel):
         json_schema_extra=_meta("lora", show_when="lora_type==tlora", advanced=True),
     )
     tlora_use_ortho: bool = Field(
-        False,
-        description="T-LoRA 专属：启用 OrthoLoRA 的 SVD/Cayley 正交参数化；关闭时使用普通 T-LoRA",
+        True,
+        description="T-LoRA 专属：叠加 OrthoLoRA 正交参数化（论文完整配方，默认开启）；关闭时使用普通 T-LoRA",
         json_schema_extra=_meta("lora", show_when="lora_type==tlora", advanced=True),
     )
     lora_dora: bool = Field(

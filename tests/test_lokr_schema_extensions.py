@@ -13,10 +13,11 @@ def test_lora_type_accepts_loha():
 def test_lora_type_accepts_tlora():
     cfg = TrainingConfig(lora_type="tlora")
     assert cfg.lora_type == "tlora"
-    # 与官方 ControlGenAI/T-LoRA argparse default 对齐
+    # min_rank / alpha_rank_scale 与官方 ControlGenAI/T-LoRA argparse default 对齐
     assert cfg.tlora_min_rank == 1
     assert cfg.tlora_alpha_rank_scale == 1.0
-    assert cfg.tlora_use_ortho is False
+    # use_ortho 默认开启：论文完整配方（官方主推的就是 ortho 变体）
+    assert cfg.tlora_use_ortho is True
 
 
 def test_lora_type_accepts_ortho():
