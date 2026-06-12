@@ -47,6 +47,7 @@ class _Slot:
     # 未结束时按钮完全隐藏，避免用户暂停后无可恢复 state。
     last_auto_epoch_state_path: Optional[str] = None
     last_auto_epoch_config_path: Optional[str] = None
+    eval_training_finished_payload: Optional[dict[str, Any]] = None
 
     @property
     def busy(self) -> bool:
@@ -67,3 +68,4 @@ class _Slot:
         self.train_loop_started = False
         self.last_auto_epoch_state_path = None
         self.last_auto_epoch_config_path = None
+        self.eval_training_finished_payload = None

@@ -36,6 +36,10 @@ def run(ctx: TrainingContext) -> None:
         "step": int(ctx.global_step or 0),
         "trigger": "final",
     })
+    emit_event("eval_training_finished", {
+        "epoch": int(ctx.current_epoch or 0),
+        "step": int(ctx.global_step or 0),
+    })
 
     # 清理进度显示
     if ctx.live:

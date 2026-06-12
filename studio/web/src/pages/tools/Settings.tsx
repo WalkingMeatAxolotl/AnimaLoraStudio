@@ -67,6 +67,8 @@ type Section =
   | 'generate'
   | 'proxy'
 
+type AutoEvalTrigger = 'after_training' | 'checkpoint'
+
 type Tab = 'dataset' | 'tagging' | 'preprocess' | 'training' | 'monitor' | 'testing' | 'appearance' | 'system'
 
 // 外部页面通过 `?section=<id>` 跳转到 SettingsPage 的特定 section 时，用这个
@@ -234,6 +236,7 @@ const EMPTY: Secrets = {
     clip_model_name: 'openai/clip-vit-base-patch32',
     dino_model_name: 'facebook/dinov2-small',
     auto_eval_on_checkpoint: false,
+    auto_eval_trigger: 'after_training',
     auto_eval_max_items: 1,
   },
   download_source: 'huggingface',
@@ -1021,6 +1024,19 @@ export default function SettingsPage() {
             value={draft.eval_metrics.auto_eval_on_checkpoint}
             onChange={(v) => update('eval_metrics', 'auto_eval_on_checkpoint', v)}
           />
+        </SettingsField>
+        <SettingsField
+          label={t('settings.autoEvalTrigger')}
+          helpTooltip={<p>{t('settings.autoEvalTriggerHelp')}</p>}
+        >
+          <select
+            value={draft.eval_metrics.auto_eval_trigger}
+            onChange={(e) => update('eval_metrics', 'auto_eval_trigger', e.target.value as AutoEvalTrigger)}
+            className={textInputClass}
+          >
+            <option value="after_training">{t('settings.autoEvalTriggerAfterTraining')}</option>
+            <option value="checkpoint">{t('settings.autoEvalTriggerCheckpoint')}</option>
+          </select>
         </SettingsField>
         <SettingsField
           label={t('settings.autoEvalMaxItems')}

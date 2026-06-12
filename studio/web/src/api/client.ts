@@ -155,9 +155,11 @@ export interface EvalMetricModelsConfig {
   clip_model_name: string
   /** DINO-I 默认模型名或本地目录。 */
   dino_model_name: string
-  /** POC: enqueue eval jobs automatically when training saves LoRA checkpoints. */
+  /** Enable automatic eval jobs for saved training LoRA checkpoints. */
   auto_eval_on_checkpoint: boolean
-  /** POC: cap generated eval samples per automatically queued checkpoint. */
+  /** When automatic eval runs. */
+  auto_eval_trigger: 'after_training' | 'checkpoint'
+  /** Cap generated eval samples per automatically queued checkpoint. */
   auto_eval_max_items: number
 }
 
