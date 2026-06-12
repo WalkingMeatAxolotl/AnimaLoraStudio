@@ -18,6 +18,7 @@ import torch
 import torch.nn.functional as F
 
 from training.context import TrainingContext
+from training.eval_auto import run_inline_checkpoint_eval
 from training.leap import (
     bridge_training_step,
     lagrange_training_step,
@@ -117,6 +118,18 @@ def _emit_eval_checkpoint_saved(path, *, epoch: int, step: int, trigger: str) ->
         "step": int(step),
         "trigger": trigger,
     })
+
+
+def _handle_eval_checkpoint(ctx: TrainingContext, path, *, epoch: int, step: int, trigger: str) -> None:
+    handled = run_inline_checkpoint_eval(
+        ctx,
+        path,
+        epoch=epoch,
+        step=step,
+        trigger=trigger,
+    )
+    if not handled:
+        _emit_eval_checkpoint_saved(path, epoch=epoch, step=step, trigger=trigger)
 
 
 def run(ctx: TrainingContext) -> None:
@@ -521,7 +534,8 @@ def run(ctx: TrainingContext) -> None:
                         ctx.injector.save(lora_path)
                     ctx.emit(f"Saved LoRA: {lora_path}")
                     ctx.wandb_monitor.upload_model(lora_path)
-                    _emit_eval_checkpoint_saved(
+                    _handle_eval_checkpoint(
+                        ctx,
                         lora_path,
                         epoch=epoch + 1,
                         step=ctx.global_step,
@@ -569,6 +583,7 @@ def run(ctx: TrainingContext) -> None:
                 step=ctx.global_step,
             )
         if not args.max_steps or ctx.global_step < args.max_steps:
+            eval_checkpoint_path = None
             # 保存 checkpoint
             if args.save_every_epochs > 0 and ctx.current_epoch % args.save_every_epochs == 0:
                 save_path = ctx.output_dir / f"{args.output_name}_epoch{ctx.current_epoch}.safetensors"
@@ -577,12 +592,7 @@ def run(ctx: TrainingContext) -> None:
                     ctx.injector.save(save_path)
                 ctx.emit(f"Saved LoRA: {save_path}")
                 ctx.wandb_monitor.upload_model(save_path)
-                _emit_eval_checkpoint_saved(
-                    save_path,
-                    epoch=ctx.current_epoch,
-                    step=ctx.global_step,
-                    trigger="epoch",
-                )
+                eval_checkpoint_path = save_path
 
             # 采样（轮换提示词）
             if args.sample_every > 0 and ctx.current_epoch % args.sample_every == 0:
@@ -596,6 +606,15 @@ def run(ctx: TrainingContext) -> None:
                     wandb_key="samples/epoch",
                     wandb_caption=f"epoch {ctx.current_epoch}: {prompt}",
                     wandb_step=ctx.global_step,
+                )
+
+            if eval_checkpoint_path is not None:
+                _handle_eval_checkpoint(
+                    ctx,
+                    eval_checkpoint_path,
+                    epoch=ctx.current_epoch,
+                    step=ctx.global_step,
+                    trigger="epoch",
                 )
 
             # 定期保存训练状态（epoch 版）

@@ -186,6 +186,60 @@ def test_queue_metric_jobs_for_sample_reuses_active_jobs(isolated) -> None:
     assert dino_jobs[0]["params_decoded"]["model_name"] == "/models/dino"
 
 
+def test_run_checkpoint_eval_for_task_runs_inline_without_queue_jobs(isolated) -> None:
+    project, version, vdir = _project_version(isolated)
+    secrets.update({
+        "eval_metrics": {
+            "auto_eval_on_checkpoint": True,
+            "auto_eval_max_items": 1,
+            "clip_model_name": "/models/clip",
+            "dino_model_name": "/models/dino",
+        }
+    })
+    with db.connection_for(isolated["db"]) as conn:
+        tid = db.create_task(conn, name="train", config_name="fake")
+        db.update_task(
+            conn,
+            tid,
+            project_id=project["id"],
+            version_id=version["id"],
+        )
+
+    result = eval_auto.run_checkpoint_eval_for_task(
+        tid,
+        {
+            "checkpoint_path": str(vdir / "output" / "model_epoch2.safetensors"),
+            "epoch": 2,
+            "step": 20,
+            "trigger": "epoch",
+        },
+        sample_generator=_fake_generator,
+        clip_scorer=lambda _run, _vdir, model, _progress: {
+            "clip_t": 0.11,
+            "clip_i": 0.22,
+            "clip_t_count": 1,
+            "clip_i_count": 1,
+            "model_name": model,
+        },
+        dino_scorer=lambda _run, _vdir, model, _progress: {
+            "dino_i": 0.33,
+            "dino_i_count": 1,
+            "model_name": model,
+        },
+    )
+
+    assert result is not None
+    run = result["run"]
+    assert run["status"] == "done"
+    assert run["auto_source"]["inline"] is True
+    assert result["metrics"]["clip"]["metric_states"]["clip_t"]["model_name"] == "/models/clip"
+    assert result["metrics"]["clip"]["metric_states"]["clip_i"]["value"] == 0.22
+    assert result["metrics"]["dino"]["metric_states"]["dino_i"]["model_name"] == "/models/dino"
+    assert result["metrics"]["dino"]["metric_states"]["dino_i"]["value"] == 0.33
+    with db.connection_for(isolated["db"]) as conn:
+        assert project_jobs.list_jobs(conn) == []
+
+
 def test_supervisor_eval_checkpoint_event_queues_sample_job(isolated) -> None:
     import json
 
