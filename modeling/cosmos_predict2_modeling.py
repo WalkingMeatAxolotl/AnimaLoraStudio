@@ -20,7 +20,6 @@ import numpy as np
 import logging
 
 import torch
-from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
 from torch import nn
 from torch.distributed import get_process_group_ranks
@@ -113,6 +112,21 @@ def warn_xformers_fallback(stage: str, shape: tuple, reason: str) -> None:
         shape,
         reason,
     )
+
+
+@torch.compiler.disable(recursive=True)
+def _unflatten_native_shape(x, flatten_info):
+    """Restore fake-5D flattened sequence back to (B, T, H, W, D).
+
+    Disabled from dynamo: flatten_info is a Python-int tuple computed outside
+    the compile zone. Running this eagerly keeps the returned tensor's shape as
+    the only signal crossing back into downstream ops.
+    """
+    T_s, H_s, W_s, seq_len = flatten_info
+    x = x.squeeze(3).squeeze(1)
+    x = x[:, :seq_len, :]
+    x = x.unflatten(1, (T_s, H_s, W_s))
+    return x
 
 
 def try_flash_attn(
@@ -355,7 +369,6 @@ class RMSNorm(torch.nn.Module):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
-        self._compile_friendly = False
 
     def reset_parameters(self) -> None:
         torch.nn.init.ones_(self.weight)
@@ -363,17 +376,9 @@ class RMSNorm(torch.nn.Module):
     def _norm(self, x: torch.Tensor) -> torch.Tensor:
         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
 
-    @torch.autocast('cuda', dtype=torch.float32)
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self._compile_friendly:
-            return self._forward_compile(x)
-        output = self._norm(x.float()).type_as(x)
-        return output * self.weight
-
-    def _forward_compile(self, x: torch.Tensor) -> torch.Tensor:
         orig_dtype = x.dtype
-        x_f32 = x.to(torch.float32)
-        output = self._norm(x_f32).to(orig_dtype)
+        output = self._norm(x.to(torch.float32)).to(orig_dtype)
         return output * self.weight
 
 
@@ -433,26 +438,12 @@ def torch_attention_op(q_B_S_H_D: torch.Tensor, k_B_S_H_D: torch.Tensor, v_B_S_H
     # flash_attn fast path：输入已是 bshd 格式，无需 transpose；helper 处理状态判断 + warn-once。
     out, used = try_flash_attn(q_B_S_H_D, k_B_S_H_D, v_B_S_H_D, "torch_attention_op")
     if used:
-        return rearrange(out, "b s h d -> b s (h d)")
+        return out.reshape(out.shape[0], out.shape[1], -1)
 
     out, used = try_xformers_attention(q_B_S_H_D, k_B_S_H_D, v_B_S_H_D, "torch_attention_op")
     if used:
-        return rearrange(out, "b s h d -> b s (h d)")
+        return out.reshape(out.shape[0], out.shape[1], -1)
 
-    in_q_shape = q_B_S_H_D.shape
-    in_k_shape = k_B_S_H_D.shape
-    q_B_H_S_D = rearrange(q_B_S_H_D, "b ... h k -> b h ... k").view(in_q_shape[0], in_q_shape[-2], -1, in_q_shape[-1])
-    k_B_H_S_D = rearrange(k_B_S_H_D, "b ... h v -> b h ... v").view(in_k_shape[0], in_k_shape[-2], -1, in_k_shape[-1])
-    v_B_H_S_D = rearrange(v_B_S_H_D, "b ... h v -> b h ... v").view(in_k_shape[0], in_k_shape[-2], -1, in_k_shape[-1])
-    result_B_S_HD = rearrange(
-        torch.nn.functional.scaled_dot_product_attention(q_B_H_S_D, k_B_H_S_D, v_B_H_S_D), "b h ... l -> b ... (h l)"
-    )
-
-    return result_B_S_HD
-
-
-def torch_attention_op_compile(q_B_S_H_D: torch.Tensor, k_B_S_H_D: torch.Tensor, v_B_S_H_D: torch.Tensor) -> torch.Tensor:
-    """Compile-friendly attention op: avoids einops, uses permute/reshape."""
     B, S, H, D = q_B_S_H_D.shape
     q_B_H_S_D = q_B_S_H_D.permute(0, 2, 1, 3)
     k_B_H_S_D = k_B_S_H_D.permute(0, 2, 1, 3)
@@ -549,7 +540,6 @@ class Attention(nn.Module):
         self._query_dim = query_dim
         self._context_dim = context_dim
         self._inner_dim = inner_dim
-        self._compile_friendly = False
         self.init_weights()
 
     def init_weights(self) -> None:
@@ -576,17 +566,11 @@ class Attention(nn.Module):
         context = x if context is None else context
         k = self.k_proj(context)
         v = self.v_proj(context)
-        if self._compile_friendly:
-            shape_q = q.shape[:-1] + (self.n_heads, self.head_dim)
-            shape_k = k.shape[:-1] + (self.n_heads, self.head_dim)
-            q = q.view(shape_q)
-            k = k.view(shape_k)
-            v = v.view(shape_k)
-        else:
-            q, k, v = map(
-                lambda t: rearrange(t, "b ... (h d) -> b ... h d", h=self.n_heads, d=self.head_dim),
-                (q, k, v),
-            )
+        shape_q = q.shape[:-1] + (self.n_heads, self.head_dim)
+        shape_kv = k.shape[:-1] + (self.n_heads, self.head_dim)
+        q = q.view(shape_q)
+        k = k.view(shape_kv)
+        v = v.view(shape_kv)
 
         def apply_norm_and_rotary_pos_emb(
             q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, rope_emb: Optional[torch.Tensor]
@@ -604,10 +588,7 @@ class Attention(nn.Module):
         return q, k, v
 
     def compute_attention(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
-        if self._compile_friendly:
-            result = torch_attention_op_compile(q, k, v)
-        else:
-            result = self.attn_op(q, k, v)
+        result = self.attn_op(q, k, v)
         return self.output_dropout(self.output_proj(result))
 
     def forward(
@@ -769,15 +750,15 @@ class VideoRopePosition3DEmb(VideoPositionEmb):
 
         em_T_H_W_D = torch.cat(
             [
-                repeat(half_emb_t, "t d -> t h w d", h=H, w=W),
-                repeat(half_emb_h, "h d -> t h w d", t=T, w=W),
-                repeat(half_emb_w, "w d -> t h w d", t=T, h=H),
+                half_emb_t[:, None, None, :].expand(T, H, W, -1),
+                half_emb_h[None, :, None, :].expand(T, H, W, -1),
+                half_emb_w[None, None, :, :].expand(T, H, W, -1),
             ]
             * 2,
             dim=-1,
         )
 
-        return rearrange(em_T_H_W_D, "t h w d -> (t h w) 1 1 d").float()
+        return em_T_H_W_D.reshape(-1, 1, 1, em_T_H_W_D.shape[-1]).float()
 
     @property
     def seq_dim(self) -> int:
@@ -824,9 +805,9 @@ class LearnablePosEmbAxis(VideoPositionEmb):
             emb_w_W = self.pos_emb_w[:W]
             emb_t_T = self.pos_emb_t[:T]
             emb = (
-                repeat(emb_t_T, "t d-> b t h w d", b=B, h=H, w=W)
-                + repeat(emb_h_H, "h d-> b t h w d", b=B, t=T, w=W)
-                + repeat(emb_w_W, "w d-> b t h w d", b=B, t=T, h=H)
+                emb_t_T[None, :, None, None, :].expand(B, T, H, W, -1)
+                + emb_h_H[None, None, :, None, :].expand(B, T, H, W, -1)
+                + emb_w_W[None, None, None, :, :].expand(B, T, H, W, -1)
             )
             assert list(emb.shape)[:4] == [B, T, H, W], f"bad shape: {list(emb.shape)[:4]} != {B, T, H, W}"
         else:
@@ -841,7 +822,6 @@ class Timesteps(nn.Module):
     def __init__(self, num_channels: int):
         super().__init__()
         self.num_channels = num_channels
-        self._compile_friendly = False
 
     def forward(self, timesteps_B_T: torch.Tensor) -> torch.Tensor:
         assert timesteps_B_T.ndim == 2, f"Expected 2D input, got {timesteps_B_T.ndim}"
@@ -859,11 +839,7 @@ class Timesteps(nn.Module):
         cos_emb = torch.cos(emb)
         emb = torch.cat([cos_emb, sin_emb], dim=-1)
 
-        if self._compile_friendly:
-            return emb.to(dtype=in_dype).reshape(B, T, -1)
-        return rearrange(emb.to(dtype=in_dype), "(b t) d -> b t d", b=B, t=T)
-
-        return rearrange(emb.to(dtype=in_dype), "(b t) d -> b t d", b=timesteps_B_T.shape[0], t=timesteps_B_T.shape[1])
+        return emb.to(dtype=in_dype).reshape(B, T, -1)
 
 
 class TimestepEmbedding(nn.Module):
@@ -1051,7 +1027,6 @@ class FinalLayer(nn.Module):
         self.n_adaln_chunks = 2
         self.use_adaln_lora = use_adaln_lora
         self.adaln_lora_dim = adaln_lora_dim
-        self._compile_friendly = False
         if use_adaln_lora:
             self.adaln_modulation = nn.Sequential(
                 nn.SiLU(),
@@ -1090,13 +1065,8 @@ class FinalLayer(nn.Module):
         else:
             shift_B_T_D, scale_B_T_D = self.adaln_modulation(emb_B_T_D).chunk(2, dim=-1)
 
-        if self._compile_friendly:
-            shift_B_T_1_1_D = shift_B_T_D.unsqueeze(2).unsqueeze(3)
-            scale_B_T_1_1_D = scale_B_T_D.unsqueeze(2).unsqueeze(3)
-        else:
-            shift_B_T_1_1_D, scale_B_T_1_1_D = rearrange(shift_B_T_D, "b t d -> b t 1 1 d"), rearrange(
-                scale_B_T_D, "b t d -> b t 1 1 d"
-            )
+        shift_B_T_1_1_D = shift_B_T_D.unsqueeze(2).unsqueeze(3)
+        scale_B_T_1_1_D = scale_B_T_D.unsqueeze(2).unsqueeze(3)
 
         def _fn(
             _x_B_T_H_W_D: torch.Tensor,
@@ -1203,8 +1173,6 @@ class Block(nn.Module):
             torch.nn.init.zeros_(self.adaln_modulation_cross_attn[1].weight)
             torch.nn.init.zeros_(self.adaln_modulation_mlp[1].weight)
 
-        self._compile_friendly = False
-
     def init_weights(self) -> None:
         self.reset_parameters()
         self.self_attn.init_weights()
@@ -1242,127 +1210,60 @@ class Block(nn.Module):
             ).chunk(3, dim=-1)
             shift_mlp_B_T_D, scale_mlp_B_T_D, gate_mlp_B_T_D = self.adaln_modulation_mlp(emb_B_T_D).chunk(3, dim=-1)
 
-        if self._compile_friendly:
-            return self._forward_compile(
-                x_B_T_H_W_D,
-                shift_self_attn_B_T_D, scale_self_attn_B_T_D, gate_self_attn_B_T_D,
-                shift_cross_attn_B_T_D, scale_cross_attn_B_T_D, gate_cross_attn_B_T_D,
-                shift_mlp_B_T_D, scale_mlp_B_T_D, gate_mlp_B_T_D,
-                crossattn_emb, rope_emb_L_1_1_D,
-            )
-
         # Reshape tensors from (B, T, D) to (B, T, 1, 1, D) for broadcasting
-        shift_self_attn_B_T_1_1_D = rearrange(shift_self_attn_B_T_D, "b t d -> b t 1 1 d")
-        scale_self_attn_B_T_1_1_D = rearrange(scale_self_attn_B_T_D, "b t d -> b t 1 1 d")
-        gate_self_attn_B_T_1_1_D = rearrange(gate_self_attn_B_T_D, "b t d -> b t 1 1 d")
+        shift_self_attn_B_T_1_1_D = shift_self_attn_B_T_D.unsqueeze(2).unsqueeze(3)
+        scale_self_attn_B_T_1_1_D = scale_self_attn_B_T_D.unsqueeze(2).unsqueeze(3)
+        gate_self_attn_B_T_1_1_D = gate_self_attn_B_T_D.unsqueeze(2).unsqueeze(3)
 
-        shift_cross_attn_B_T_1_1_D = rearrange(shift_cross_attn_B_T_D, "b t d -> b t 1 1 d")
-        scale_cross_attn_B_T_1_1_D = rearrange(scale_cross_attn_B_T_D, "b t d -> b t 1 1 d")
-        gate_cross_attn_B_T_1_1_D = rearrange(gate_cross_attn_B_T_D, "b t d -> b t 1 1 d")
+        shift_cross_attn_B_T_1_1_D = shift_cross_attn_B_T_D.unsqueeze(2).unsqueeze(3)
+        scale_cross_attn_B_T_1_1_D = scale_cross_attn_B_T_D.unsqueeze(2).unsqueeze(3)
+        gate_cross_attn_B_T_1_1_D = gate_cross_attn_B_T_D.unsqueeze(2).unsqueeze(3)
 
-        shift_mlp_B_T_1_1_D = rearrange(shift_mlp_B_T_D, "b t d -> b t 1 1 d")
-        scale_mlp_B_T_1_1_D = rearrange(scale_mlp_B_T_D, "b t d -> b t 1 1 d")
-        gate_mlp_B_T_1_1_D = rearrange(gate_mlp_B_T_D, "b t d -> b t 1 1 d")
+        shift_mlp_B_T_1_1_D = shift_mlp_B_T_D.unsqueeze(2).unsqueeze(3)
+        scale_mlp_B_T_1_1_D = scale_mlp_B_T_D.unsqueeze(2).unsqueeze(3)
+        gate_mlp_B_T_1_1_D = gate_mlp_B_T_D.unsqueeze(2).unsqueeze(3)
 
         B, T, H, W, D = x_B_T_H_W_D.shape
 
         def _fn(_x_B_T_H_W_D, _norm_layer, _scale_B_T_1_1_D, _shift_B_T_1_1_D):
             return _norm_layer(_x_B_T_H_W_D) * (1 + _scale_B_T_1_1_D) + _shift_B_T_1_1_D
 
+        # Self-attention
         normalized_x_B_T_H_W_D = _fn(
             x_B_T_H_W_D,
             self.layer_norm_self_attn,
             scale_self_attn_B_T_1_1_D,
             shift_self_attn_B_T_1_1_D,
         )
-        result_B_T_H_W_D = rearrange(
-            self.self_attn(
-                # normalized_x_B_T_HW_D,
-                rearrange(normalized_x_B_T_H_W_D, "b t h w d -> b (t h w) d"),
-                None,
-                rope_emb=rope_emb_L_1_1_D,
-            ),
-            "b (t h w) d -> b t h w d",
-            t=T,
-            h=H,
-            w=W,
+        sa_out = self.self_attn(
+            normalized_x_B_T_H_W_D.reshape(B, T * H * W, D),
+            None,
+            rope_emb=rope_emb_L_1_1_D,
         )
-        x_B_T_H_W_D = x_B_T_H_W_D + gate_self_attn_B_T_1_1_D * result_B_T_H_W_D
+        x_B_T_H_W_D = x_B_T_H_W_D + gate_self_attn_B_T_1_1_D * sa_out.reshape(B, T, H, W, D)
 
-        def _x_fn(
-            _x_B_T_H_W_D: torch.Tensor,
-            layer_norm_cross_attn: Callable,
-            _scale_cross_attn_B_T_1_1_D: torch.Tensor,
-            _shift_cross_attn_B_T_1_1_D: torch.Tensor,
-        ) -> torch.Tensor:
-            _normalized_x_B_T_H_W_D = _fn(
-                _x_B_T_H_W_D, layer_norm_cross_attn, _scale_cross_attn_B_T_1_1_D, _shift_cross_attn_B_T_1_1_D
-            )
-            _result_B_T_H_W_D = rearrange(
-                self.cross_attn(
-                    rearrange(_normalized_x_B_T_H_W_D, "b t h w d -> b (t h w) d"),
-                    crossattn_emb,
-                    rope_emb=rope_emb_L_1_1_D,
-                ),
-                "b (t h w) d -> b t h w d",
-                t=T,
-                h=H,
-                w=W,
-            )
-            return _result_B_T_H_W_D
-
-        result_B_T_H_W_D = _x_fn(
+        # Cross-attention
+        normalized_x_B_T_H_W_D = _fn(
             x_B_T_H_W_D,
             self.layer_norm_cross_attn,
             scale_cross_attn_B_T_1_1_D,
             shift_cross_attn_B_T_1_1_D,
         )
-        x_B_T_H_W_D = result_B_T_H_W_D * gate_cross_attn_B_T_1_1_D + x_B_T_H_W_D
+        ca_out = self.cross_attn(
+            normalized_x_B_T_H_W_D.reshape(B, T * H * W, D),
+            crossattn_emb,
+            rope_emb=rope_emb_L_1_1_D,
+        )
+        x_B_T_H_W_D = ca_out.reshape(B, T, H, W, D) * gate_cross_attn_B_T_1_1_D + x_B_T_H_W_D
 
+        # MLP
         normalized_x_B_T_H_W_D = _fn(
             x_B_T_H_W_D,
             self.layer_norm_mlp,
             scale_mlp_B_T_1_1_D,
             shift_mlp_B_T_1_1_D,
         )
-        result_B_T_H_W_D = self.mlp(normalized_x_B_T_H_W_D)
-        x_B_T_H_W_D = x_B_T_H_W_D + gate_mlp_B_T_1_1_D * result_B_T_H_W_D
-        return x_B_T_H_W_D
-
-    def _forward_compile(
-        self,
-        x_B_T_H_W_D: torch.Tensor,
-        shift_self_attn_B_T_D: torch.Tensor, scale_self_attn_B_T_D: torch.Tensor, gate_self_attn_B_T_D: torch.Tensor,
-        shift_cross_attn_B_T_D: torch.Tensor, scale_cross_attn_B_T_D: torch.Tensor, gate_cross_attn_B_T_D: torch.Tensor,
-        shift_mlp_B_T_D: torch.Tensor, scale_mlp_B_T_D: torch.Tensor, gate_mlp_B_T_D: torch.Tensor,
-        crossattn_emb: torch.Tensor,
-        rope_emb_L_1_1_D: Optional[torch.Tensor],
-    ) -> torch.Tensor:
-        """Compile-friendly forward: uses unsqueeze/reshape instead of einops."""
-        shift_self_attn = shift_self_attn_B_T_D.unsqueeze(2).unsqueeze(3)
-        scale_self_attn = scale_self_attn_B_T_D.unsqueeze(2).unsqueeze(3)
-        gate_self_attn = gate_self_attn_B_T_D.unsqueeze(2).unsqueeze(3)
-
-        shift_cross_attn = shift_cross_attn_B_T_D.unsqueeze(2).unsqueeze(3)
-        scale_cross_attn = scale_cross_attn_B_T_D.unsqueeze(2).unsqueeze(3)
-        gate_cross_attn = gate_cross_attn_B_T_D.unsqueeze(2).unsqueeze(3)
-
-        shift_mlp = shift_mlp_B_T_D.unsqueeze(2).unsqueeze(3)
-        scale_mlp = scale_mlp_B_T_D.unsqueeze(2).unsqueeze(3)
-        gate_mlp = gate_mlp_B_T_D.unsqueeze(2).unsqueeze(3)
-
-        B, T, H, W, D = x_B_T_H_W_D.shape
-
-        normed = self.layer_norm_self_attn(x_B_T_H_W_D) * (1 + scale_self_attn) + shift_self_attn
-        sa_out = self.self_attn(normed.reshape(B, T * H * W, D), None, rope_emb=rope_emb_L_1_1_D)
-        x_B_T_H_W_D = x_B_T_H_W_D + gate_self_attn * sa_out.reshape(B, T, H, W, D)
-
-        normed = self.layer_norm_cross_attn(x_B_T_H_W_D) * (1 + scale_cross_attn) + shift_cross_attn
-        ca_out = self.cross_attn(normed.reshape(B, T * H * W, D), crossattn_emb, rope_emb=rope_emb_L_1_1_D)
-        x_B_T_H_W_D = ca_out.reshape(B, T, H, W, D) * gate_cross_attn + x_B_T_H_W_D
-
-        normed = self.layer_norm_mlp(x_B_T_H_W_D) * (1 + scale_mlp) + shift_mlp
-        x_B_T_H_W_D = x_B_T_H_W_D + gate_mlp * self.mlp(normed)
+        x_B_T_H_W_D = x_B_T_H_W_D + gate_mlp_B_T_1_1_D * self.mlp(normalized_x_B_T_H_W_D)
         return x_B_T_H_W_D
 
 
@@ -1501,7 +1402,7 @@ class MiniTrainDIT(nn.Module):
         )
 
         self.t_embedding_norm = RMSNorm(model_channels, eps=1e-6)
-        self._compile_friendly = False
+        self._native_flatten = False
         self.init_weights()
 
     def init_weights(self) -> None:
@@ -1517,20 +1418,42 @@ class MiniTrainDIT(nn.Module):
         self.final_layer.init_weights()
         self.t_embedding_norm.reset_parameters()
 
-    def compile_blocks(self, backend="inductor", mode=None):
-        """Per-block torch.compile for static-shape training."""
-        self._compile_friendly = True
-        for module in self.modules():
-            if hasattr(module, "_compile_friendly"):
-                module._compile_friendly = True
+    def compile_blocks(self, backend: str = "inductor", mode: Optional[str] = None):
+        """Enable native-shape flattening and torch.compile each block's forward.
 
-        compile_kwargs = {"backend": backend}
-        if mode:
+        Sets _native_flatten=True so the forward flattens every bucket's patch
+        sequence to fake-5D (B, 1, seq_len, 1, D), keying the block graph on
+        token count alone (2 families from CONSTANT_TOKEN_BUCKETS) instead of
+        per-resolution (24 graphs). Also raises dynamo cache_size_limit.
+        """
+        self._native_flatten = True
+
+        import torch._dynamo as _dynamo
+        from runtime.training.dataset import CONSTANT_TOKEN_BUCKETS
+
+        all_resos = [r for family in CONSTANT_TOKEN_BUCKETS.values() for r in family]
+        n = len(
+            {
+                (h // self.patch_spatial) * (w // self.patch_spatial)
+                for h, w in all_resos
+            }
+        )
+        _dynamo.config.cache_size_limit = max(
+            _dynamo.config.cache_size_limit, 2 * n + 8
+        )
+
+        compile_kwargs = {"backend": backend, "dynamic": False}
+        if mode is not None:
             compile_kwargs["mode"] = mode
-
         for block in self.blocks:
             block.forward = torch.compile(block.forward, **compile_kwargs)
         self.final_layer.forward = torch.compile(self.final_layer.forward, **compile_kwargs)
+        _logger.info(
+            "Anima: native_flatten on, %d token-count families "
+            "(cache_size_limit=%d); compiled %d block.forward + final_layer "
+            "with backend=%s, mode=%s",
+            n, _dynamo.config.cache_size_limit, len(self.blocks), backend, mode,
+        )
 
     def build_patch_embed(self) -> None:
         (
@@ -1637,19 +1560,8 @@ class MiniTrainDIT(nn.Module):
 
         return x_B_T_H_W_D, None, extra_pos_emb
 
+    @torch.compiler.disable
     def unpatchify(self, x_B_T_H_W_M: torch.Tensor) -> torch.Tensor:
-        if self._compile_friendly:
-            return self._unpatchify_compile(x_B_T_H_W_M)
-        x_B_C_Tt_Hp_Wp = rearrange(
-            x_B_T_H_W_M,
-            "B T H W (p1 p2 t C) -> B C (T t) (H p1) (W p2)",
-            p1=self.patch_spatial,
-            p2=self.patch_spatial,
-            t=self.patch_temporal,
-        )
-        return x_B_C_Tt_Hp_Wp
-
-    def _unpatchify_compile(self, x_B_T_H_W_M: torch.Tensor) -> torch.Tensor:
         B, T, H, W, _M = x_B_T_H_W_M.shape
         p1 = self.patch_spatial
         p2 = self.patch_spatial
@@ -1657,8 +1569,7 @@ class MiniTrainDIT(nn.Module):
         C = _M // (p1 * p2 * t)
         x = x_B_T_H_W_M.reshape(B, T, H, W, p1, p2, t, C)
         x = x.permute(0, 7, 1, 6, 2, 4, 3, 5)
-        x = x.reshape(B, C, T * t, H * p1, W * p2)
-        return x
+        return x.reshape(B, C, T * t, H * p1, W * p2)
 
     def forward(
         self,
@@ -1697,6 +1608,12 @@ class MiniTrainDIT(nn.Module):
                 x_B_T_H_W_D.shape == extra_pos_emb_B_T_H_W_D_or_T_H_W_B_D.shape
             ), f"{x_B_T_H_W_D.shape} != {extra_pos_emb_B_T_H_W_D_or_T_H_W_B_D.shape}"
 
+        _native_flatten_info = None
+        if self._native_flatten:
+            B_s, T_s, H_s, W_s, D_s = x_B_T_H_W_D.shape
+            seq_len = T_s * H_s * W_s
+            _native_flatten_info = (T_s, H_s, W_s, seq_len)
+            x_B_T_H_W_D = x_B_T_H_W_D.flatten(1, 3).unsqueeze(1).unsqueeze(3)
 
         blocks = self.blocks
 
@@ -1712,6 +1629,9 @@ class MiniTrainDIT(nn.Module):
                 crossattn_emb,
                 **block_kwargs,
             )
+
+        if _native_flatten_info is not None:
+            x_B_T_H_W_D = _unflatten_native_shape(x_B_T_H_W_D, _native_flatten_info)
 
         x_B_T_H_W_O = self.final_layer(x_B_T_H_W_D, t_embedding_B_T_D, adaln_lora_B_T_3D=adaln_lora_B_T_3D)
         x_B_C_Tt_Hp_Wp = self.unpatchify(x_B_T_H_W_O)

@@ -18,6 +18,7 @@ ENV/
 
 # Logs / local outputs
 output/
+*.tmp
 data_exports/
 monitor_data/
 config/autosave/
