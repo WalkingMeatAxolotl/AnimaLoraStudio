@@ -148,4 +148,30 @@ describe('ImageGrid (PP3)', () => {
     )
     expect(screen.getByText('空空')).toBeInTheDocument()
   })
+
+  // 切路由 / 滚出 overscan 时 cell unmount，浏览器不会自动取消半途的 <img>
+  // 下载 —— 几十张 thumb 占满同源 6 连接会饿死新页面的 fetch。Cell 在
+  // unmount cleanup 里把 src 置空主动 abort。注意 cleanup 跑的时候 React 已
+  // 把 ref 置 null，必须在 effect body 抓元素 —— 这个测试同时锁住该时序。
+  it('aborts in-flight image load on unmount (src cleared)', () => {
+    const { unmount } = render(
+      <ImageGrid items={items} selected={new Set()} onSelect={() => {}} />
+    )
+    const imgs = screen.getAllByRole('img')
+    // jsdom 不真正加载图片，complete 恒为 false == 永远"半途"，正好覆盖取消分支
+    expect(imgs[0]).toHaveAttribute('src', '/a')
+    unmount()
+    for (const img of imgs) expect(img).toHaveAttribute('src', '')
+  })
+
+  it('keeps src of already-loaded images on unmount (no pointless abort)', () => {
+    const { unmount } = render(
+      <ImageGrid items={items.slice(0, 1)} selected={new Set()} onSelect={() => {}} />
+    )
+    const img = screen.getByRole('img') as HTMLImageElement
+    // jsdom 的 complete 是 getter，defineProperty 模拟"已加载完"
+    Object.defineProperty(img, 'complete', { value: true })
+    unmount()
+    expect(img).toHaveAttribute('src', '/a')
+  })
 })

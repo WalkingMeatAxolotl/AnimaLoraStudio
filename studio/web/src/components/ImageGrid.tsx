@@ -1,4 +1,4 @@
-import { memo, useState, type SyntheticEvent } from 'react'
+import { memo, useEffect, useRef, useState, type SyntheticEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { VirtuosoGrid } from 'react-virtuoso'
 
@@ -173,6 +173,20 @@ const Cell = memo(function Cell({
   // cache 命中场景下的视觉跳变；cache miss 场景也从"黑 → 啪一下出图"变成
   // "黑 → 图淡入"。
   const [loaded, setLoaded] = useState(false)
+  const imgRef = useRef<HTMLImageElement>(null)
+  // unmount 时 abort 还在下载的缩略图（src='' 是 <img> 唯一的取消手段）。
+  // 浏览器不会因为节点被移除就取消请求 —— 切路由后几十张半途的 thumb 会
+  // 继续占满同源 HTTP/1.1 的 6 个连接，新页面的 /api fetch 全在队尾排队，
+  // 用户视角就是"路由被图片卡住"。半途取消的图不进 HTTP 缓存，但后端
+  // thumb_cache 已落盘 + 完整加载过的走 304，重进页面的代价很小。
+  useEffect(() => {
+    // mount 时抓住元素：unmount 时 React 已把 ref 置 null，cleanup 里直接读
+    // imgRef.current 拿不到节点。脱离 DOM 的 <img> 改 src 同样会 abort 请求。
+    const img = imgRef.current
+    return () => {
+      if (img && !img.complete) img.src = ''
+    }
+  }, [])
   const handleCellClick = (e: React.MouseEvent) => {
     if (clickMode === 'activate' && onActivate && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
       onActivate(item.name)
@@ -219,10 +233,15 @@ const Cell = memo(function Cell({
        * 全废。这里改 eager（默认）让 Virtuoso 一 mount cell 浏览器就开 fetch
        * + decode，配合大 overscan 几乎看不到滚动闪。 */}
       <img
+        ref={imgRef}
         src={item.thumbUrl}
         alt={item.name}
         decoding="async"
         draggable={false}
+        // 让尚未开始的 thumb 请求排在数据 fetch 之后，页内操作不被图片饿死。
+        // React 18 只透传小写 unknown attribute（camelCase fetchPriority 是
+        // React 19 的事），spread 绕开 TS 对未知 prop 的检查。
+        {...{ fetchpriority: 'low' }}
         onLoad={handleImgLoad}
         className={
           'w-full h-full object-cover pointer-events-none transition-opacity duration-150 ' +
