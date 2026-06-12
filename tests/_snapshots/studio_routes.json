@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 174,
+  "count": 173,
   "routes": [
     {
       "path": "/",
@@ -1396,12 +1396,6 @@
       ],
       "name": "get_sample",
       "type": "APIRoute"
-    },
-    {
-      "path": "/studio",
-      "methods": [],
-      "name": "studio",
-      "type": "Mount"
     }
   ]
 }

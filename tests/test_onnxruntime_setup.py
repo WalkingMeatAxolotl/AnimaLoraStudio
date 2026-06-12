@@ -123,6 +123,13 @@ def test_install_runtime_runs_uninstall_then_install(
         ors, "_query_dist_info",
         lambda: ("onnxruntime-gpu", "1.20.0"),
     )
+    # GPU 路径会续接 _install_cuda_runtime_wheels，其内部 _pip 调用数随平台
+    # 变化（Windows skip / Linux 真装）。本测试只验证 uninstall→install 序列，
+    # mock 掉保持平台无关（同 DirectML 测试的处理）。
+    monkeypatch.setattr(
+        ors, "_install_cuda_runtime_wheels",
+        lambda: {"installed": [], "skipped": [], "platform_skip": True, "stdout": ""},
+    )
     res = ors.install_runtime("gpu")
     assert len(calls) == 2
     assert calls[0][0] == "uninstall"
