@@ -3,6 +3,12 @@
 替换 anima_train.py 中的 LoRAInjector / LoRALayer / LoKrLayer / LoRALinear。
 
 API 与原 LoRAInjector 等价（drop-in），并保留 w1 排除 weight_decay 的优化。
+
+T-LoRA timestep rank mask 调度（_install_tlora_masks / _set_tlora_mask 的
+``(1-t)^α`` 公式与 batch 均值聚合）取自 sorryhyun/anima_lora（MIT，
+Copyright (c) 2026 Seunghyun Ji，见 THIRD_PARTY_NOTICES.md）；mask 注入机制
+（patch lycoris make_weight）为本仓库实现。算法思想出自 T-LoRA 论文
+（ControlGenAI/T-LoRA）。
 """
 from __future__ import annotations
 

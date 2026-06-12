@@ -73,6 +73,11 @@ Common panels:
 
 - Core training scripts derived from [**Moeblack/AnimaLoraToolkit**](https://github.com/Moeblack/AnimaLoraToolkit).
 - Base model / VAE: [circlestone-labs / Anima](https://huggingface.co/circlestone-labs/Anima)
+- OrthoLoRA / T-LoRA adapter implementation derived from [**sorryhyun/anima_lora**](https://github.com/sorryhyun/anima_lora) (MIT); the algorithm originates from the [ControlGenAI/T-LoRA](https://github.com/ControlGenAI/T-LoRA) paper and official implementation
+- Automagic optimizer ported from [**ostris/ai-toolkit**](https://github.com/ostris/ai-toolkit) (MIT), with the bf16 Kahan path following [tdrussell/diffusion-pipe](https://github.com/tdrussell/diffusion-pipe)
+- Generation / sampling pipeline aligned with and derived from [**ComfyUI**](https://github.com/comfyanonymous/ComfyUI) (GPL-3.0)
+
+See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for the complete list of third-party algorithms, code, and paper attributions.
 
 ---
 

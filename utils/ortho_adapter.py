@@ -3,6 +3,24 @@
 This is the PSOFT-style OrthoLoRA path used by the T-LoRA stack: train
 Cayley-rotated SVD bases, optionally apply a timestep rank mask, and save a
 plain LoRA checkpoint for inference.
+
+Provenance:
+    Derived from sorryhyun/anima_lora ``networks/lora_modules/ortho.py``
+    (OrthoLoRAModule: frozen SVD bases + Cayley rotations + zero-init lambda,
+    closed-form distill-to-plain-LoRA save) and its T-LoRA timestep rank
+    schedule. https://github.com/sorryhyun/anima_lora
+    Copyright (c) 2026 Seunghyun Ji, MIT License — full text in
+    THIRD_PARTY_NOTICES.md.
+
+    Local changes vs upstream: module_dropout uses torch RNG (grad-checkpoint
+    recompute consistency), svd_lowrank falls back to full SVD on failure,
+    basis dtype follows the base weight (fp16 supported), per-layer timestep
+    masks honor per-layer clamped rank, and ``project_plain_lora_`` adds
+    approximate warm-resume from distilled checkpoints.
+
+    Research attribution: T-LoRA (ControlGenAI/T-LoRA, MIT) for the
+    timestep-adaptive rank idea; PSOFT (Wu et al.) for the orthogonal
+    parameterization family.
 """
 from __future__ import annotations
 
