@@ -1,6 +1,6 @@
 # 全量测试门禁 — PR 与 dev/master push 自动跑后端 pytest + 前端 vitest/lint/tsc。
 #
-# 定位（见 CONTRIBUTING「测试时机」）：本地开发只跑相关测试，全量由本 workflow
+# 定位（见 CONTRIBUTING「提交前自检」）：本地开发只跑相关测试，全量由本 workflow
 # 在机器时间兜底；release 前的全量人工自检照旧。
 #
 # 注意：runner 无 GPU。torch 装 CPU 版（官方 cpu index，避免拉 CUDA 大包）；
@@ -21,9 +21,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -49,9 +49,9 @@ jobs:
       run:
         working-directory: studio/web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm

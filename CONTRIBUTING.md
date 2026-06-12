@@ -86,12 +86,33 @@ chore(release): v0.5.0 — 版本控制系统 + bump 0.4 → 0.5.0
 
 ### 3. 提交前自检
 
+本地**不要求跑全量**（Windows 上全量 pytest 十几分钟；CI 会在 PR 上自动跑全量兜底），只跑两类：
+
 ```bash
-python -m studio test          # 后端 pytest + 前端 vitest 全过
+# (1) 相关测试：改了哪个模块就跑对应 tests/test_<module>*.py
+python -m pytest tests/test_xxx.py -q
+
+# (2) 横切安全网（秒级，改后端必带——专抓"改 A 坏 B"）：
+python -m pytest tests/test_route_snapshot.py tests/test_studio_configs.py -q
+
+# 改了前端：
 cd studio/web
-npm run lint                   # 前端 lint
-npx tsc --noEmit               # 前端 typecheck
+npx vitest run                 # 前端全量也只要 ~20s
+npm run lint && npx tsc --noEmit
 ```
+
+想本地全量也可以：`python -m studio test`。
+
+**测试卫生三条**（违反的测试在别人机器 / CI 上会假红，等于拆掉安全网）：
+
+1. **不依赖机器状态**：secrets.json / 环境变量 / 已安装的可选包 / 网络都要
+   monkeypatch 掉。反例教训：`_get_download_source()` 读真实 secrets，配了
+   ModelScope 的机器上测试常年红。
+2. **不依赖平台分支**：代码里有 `sys.platform` / GPU 检测分支的，测试要么
+   mock 掉分支入口，要么显式参数化两个平台路径。CI 是 Linux 无 GPU，本地是
+   Windows 有 GPU——两边都得绿。
+3. **flake 即修，不许习惯**：超时类断言要留并发余量（CI runner 2 核且邻居
+   吵）。一旦大家习惯"红的是 flake，重跑就行"，门禁就废了。
 
 ### 4. 开 PR
 
@@ -107,7 +128,10 @@ npx tsc --noEmit               # 前端 typecheck
 
 - Maintainer review，可能让你改
 - 改完不需要重开 PR，在原 branch 继续 push 就行
-- CI 必须全过（如果有）
+- **CI 必须全绿才能合并**（`.github/workflows/test.yml`：全量 pytest +
+  vitest + lint + tsc，PR 推上来自动跑，几分钟出结果）。CI 红了先看是不是
+  自己改挂的；确认是 flake / 既有问题就修它或单独开 issue，**不要默默重跑
+  到绿为止**
 
 ### 6. 合并
 
