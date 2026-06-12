@@ -269,6 +269,8 @@ const EVAL_LABELS: Record<EvalMetricKey, string> = {
   dino_i: 'DINO-I',
 }
 
+type MonitorTab = 'training' | 'eval'
+
 function checkpointSortValue(result: EvalMetricResult, index: number): number {
   const value = result.checkpoint?.value
   if (typeof value === 'number') return value
@@ -456,7 +458,7 @@ function EvalMetricsPanel({ state, connected }: { state: MonitorState | null; co
         </div>
       ) : results.length === 0 ? (
         <div className="rounded-md border border-dashed border-subtle px-3 py-3 text-sm text-fg-tertiary">
-          暂无 eval sample 结果。开启自动评估后，每次保存 LoRA checkpoint 会生成样本并写入 CLIP-T、CLIP-I、DINO-I。
+          暂无 eval sample 结果。开启自动评估后，系统会按设置的触发时机生成样本并写入 CLIP-T、CLIP-I、DINO-I。
         </div>
       ) : (
         <>
@@ -693,6 +695,7 @@ function SampleViewer({ samples, taskId }: {
 
 export default function MonitorDashboard({ taskId }: { taskId: number }) {
   const { state, connected } = useMonitorProgress(taskId)
+  const [activeTab, setActiveTab] = useState<MonitorTab>('training')
   const [emaAlpha, setEmaAlpha] = useState(0.02)
   // LR / d 默认不做 EMA（数据本身已是 EMA 派生量），slider 拉到 < 1 才平滑
   const [lrAlpha, setLrAlpha] = useState(1)
@@ -798,112 +801,137 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
         )}
       </div>
 
-      {/* 6 stat cards */}
-      <div className="grid grid-cols-6 gap-2.5">
-        <StatCard label="step" value={step ? step.toLocaleString() : '--'}
-          sub={totalSteps ? `of ${totalSteps.toLocaleString()}` : undefined} tone="accent" />
-        <StatCard
-          label="loss"
-          value={lossInfo ? lossInfo.val.toFixed(4) : '--'}
-          sub={lossInfo?.delta != null
-            ? `recent avg, ${lossInfo.delta > 0 ? '↑' : '↓'}${Math.abs(lossInfo.delta).toFixed(4)}`
-            : losses.length > 0 ? 'recent avg' : 'awaiting'}
-          tone={lossInfo?.delta != null ? (lossInfo.delta < 0 ? 'ok' : 'warn') : undefined}
-        />
-        <StatCard label="avg loss" value={avgLoss != null ? avgLoss.toFixed(4) : '--'}
-          sub={losses.length ? `${losses.length} pts raw mean` : 'awaiting'} />
-        <StatCard label="lr" value={fmtLr(lastLr)}
-          sub={lastD != null ? `actual · d ${fmtMetric(lastD)}` : lrHistory.length ? 'learning rate' : undefined} />
-        <StatCard
-          label={vram ? 'vram' : 'speed'}
-          value={vram ? `${vram.toFixed(1)} GB` : speed ? `${speed.toFixed(2)} it/s` : '--'}
-          sub={vramTotal ? `of ${vramTotal.toFixed(0)} GB · ${((vram! / vramTotal) * 100).toFixed(0)}%` : undefined}
-          tone={vramTone}
-        />
-        <StatCard label="eta" value={eta} sub={speed ? `${speed.toFixed(2)} it/s` : undefined} />
+      <div className="flex items-center gap-1 border-b border-subtle shrink-0">
+        {([
+          ['training', '训练监控'],
+          ['eval', 'LoRA 评估'],
+        ] as const).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setActiveTab(id)}
+            className={[
+              'px-3 py-2 text-sm border-b-2 transition-colors',
+              activeTab === id
+                ? 'border-accent text-fg-primary font-semibold'
+                : 'border-transparent text-fg-tertiary hover:text-fg-primary',
+            ].join(' ')}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
-      <EvalMetricsPanel state={state} connected={connected} />
+      {activeTab === 'eval' ? (
+        <EvalMetricsPanel state={state} connected={connected} />
+      ) : (
+        <>
+          {/* 6 stat cards */}
+          <div className="grid grid-cols-6 gap-2.5">
+            <StatCard label="step" value={step ? step.toLocaleString() : '--'}
+              sub={totalSteps ? `of ${totalSteps.toLocaleString()}` : undefined} tone="accent" />
+            <StatCard
+              label="loss"
+              value={lossInfo ? lossInfo.val.toFixed(4) : '--'}
+              sub={lossInfo?.delta != null
+                ? `recent avg, ${lossInfo.delta > 0 ? '↑' : '↓'}${Math.abs(lossInfo.delta).toFixed(4)}`
+                : losses.length > 0 ? 'recent avg' : 'awaiting'}
+              tone={lossInfo?.delta != null ? (lossInfo.delta < 0 ? 'ok' : 'warn') : undefined}
+            />
+            <StatCard label="avg loss" value={avgLoss != null ? avgLoss.toFixed(4) : '--'}
+              sub={losses.length ? `${losses.length} pts raw mean` : 'awaiting'} />
+            <StatCard label="lr" value={fmtLr(lastLr)}
+              sub={lastD != null ? `actual · d ${fmtMetric(lastD)}` : lrHistory.length ? 'learning rate' : undefined} />
+            <StatCard
+              label={vram ? 'vram' : 'speed'}
+              value={vram ? `${vram.toFixed(1)} GB` : speed ? `${speed.toFixed(2)} it/s` : '--'}
+              sub={vramTotal ? `of ${vramTotal.toFixed(0)} GB · ${((vram! / vramTotal) * 100).toFixed(0)}%` : undefined}
+              tone={vramTone}
+            />
+            <StatCard label="eta" value={eta} sub={speed ? `${speed.toFixed(2)} it/s` : undefined} />
+          </div>
 
-      {/* 左：采样图（竖） / 右：loss → LR
+          {/* 左：采样图（竖） / 右：loss → LR
           gridTemplateRows: '1fr' → row 跟随 flex-1 撑满，避免 row 默认 auto 在大屏留空白；
           右卡 minHeight 形成下界，flex-1 在 row 高度 > 3*min+gap 时均分扩展；
           总 min 超视口时由外层 overflow-y-auto 滚 */}
-      <div
-        className="grid grid-cols-[1fr_1.5fr] gap-3.5 flex-1"
-        style={{ gridTemplateRows: '1fr' }}
-      >
-        {/* 左：采样图 */}
-        <div className="card p-0 overflow-hidden flex flex-col min-h-0">
-          <div className="px-3.5 py-2.5 border-b border-subtle flex items-center justify-between shrink-0">
-            <span className="text-sm font-semibold">采样</span>
-            <span className="text-xs text-fg-tertiary font-mono">{samples.length} 张</span>
-          </div>
-          <div className="flex-1 p-3 flex flex-col min-h-0">
-            <SampleViewer samples={samples} taskId={taskId} />
-          </div>
-        </div>
+          <div
+            className="grid grid-cols-[1fr_1.5fr] gap-3.5 flex-1"
+            style={{ gridTemplateRows: '1fr' }}
+          >
+            {/* 左：采样图 */}
+            <div className="card p-0 overflow-hidden flex flex-col min-h-0">
+              <div className="px-3.5 py-2.5 border-b border-subtle flex items-center justify-between shrink-0">
+                <span className="text-sm font-semibold">采样</span>
+                <span className="text-xs text-fg-tertiary font-mono">{samples.length} 张</span>
+              </div>
+              <div className="flex-1 p-3 flex flex-col min-h-0">
+                <SampleViewer samples={samples} taskId={taskId} />
+              </div>
+            </div>
 
-        {/* 右：loss / lr / d 三卡（d 可选），flex-1 等高平分但夹在 [140, 300] 之间。
+            {/* 右：loss / lr / d 三卡（d 可选），flex-1 等高平分但夹在 [140, 300] 之间。
             每张卡同结构：header 单行 + 占满 flex-1 的 chart。LR 不再夹带任何 d 信息
             （avoid 之前 d-block 作为 LR 内 shrink-0 死成本顶起 LR card min 的问题）。
             minHeight 140 = 可读下界（再小 chart 不易读，触发外层滚动条而非继续压缩）；
             maxHeight 300 = 防止 4K / 大屏上卡片被拉到失衡的高度（剩余空间留给左列采样图）。 */}
-        <div className="flex flex-col gap-3.5 min-h-0">
-          <div className="card p-4 flex-1 flex flex-col" style={{ minHeight: 140, maxHeight: 300 }}>
-            <div className="flex items-center justify-between mb-2 shrink-0">
-              <span className="text-sm font-semibold">loss</span>
-              <SmoothControl alpha={emaAlpha} setAlpha={setEmaAlpha} min={0.001} max={0.3} step={0.001} />
-            </div>
-            <SeriesChart
-              data={losses.map((l) => ({ step: l.step, value: l.loss }))}
-              rawColor="rgba(74,71,64,0.35)"
-              smoothColor="var(--accent)"
-              fillColor="var(--accent-soft)"
-              emaAlpha={emaAlpha}
-              yFormat={(v) => v.toFixed(4)}
-              minHeight={60}
-            />
-          </div>
-
-          <div className="card p-4 flex-1 flex flex-col" style={{ minHeight: 140, maxHeight: 300 }}>
-            <div className="flex items-center justify-between mb-2 shrink-0">
-              <span className="text-sm font-semibold">learning rate</span>
-              <SmoothControl alpha={lrAlpha} setAlpha={setLrAlpha} min={0.005} max={1} step={0.005} />
-            </div>
-            <SeriesChart
-              data={lrSeries}
-              rawColor="rgba(224,162,58,0.35)"
-              smoothColor="var(--warn)"
-              emaAlpha={lrAlpha}
-              yFormat={fmtLr}
-              minHeight={60}
-            />
-          </div>
-
-          {dSeries.length >= 2 && (
-            <div className="card p-4 flex-1 flex flex-col" style={{ minHeight: 140, maxHeight: 300 }}>
-              <div className="flex items-center justify-between mb-2 shrink-0">
-                <div className="flex items-baseline gap-2">
-                  <span className="text-sm font-semibold">d</span>
-                  <span className="text-xs font-mono text-fg-tertiary tabular-nums">
-                    {fmtMetric(lastD)}
-                  </span>
+            <div className="flex flex-col gap-3.5 min-h-0">
+              <div className="card p-4 flex-1 flex flex-col" style={{ minHeight: 140, maxHeight: 300 }}>
+                <div className="flex items-center justify-between mb-2 shrink-0">
+                  <span className="text-sm font-semibold">loss</span>
+                  <SmoothControl alpha={emaAlpha} setAlpha={setEmaAlpha} min={0.001} max={0.3} step={0.001} />
                 </div>
-                <SmoothControl alpha={dAlpha} setAlpha={setDAlpha} min={0.005} max={1} step={0.005} />
+                <SeriesChart
+                  data={losses.map((l) => ({ step: l.step, value: l.loss }))}
+                  rawColor="rgba(74,71,64,0.35)"
+                  smoothColor="var(--accent)"
+                  fillColor="var(--accent-soft)"
+                  emaAlpha={emaAlpha}
+                  yFormat={(v) => v.toFixed(4)}
+                  minHeight={60}
+                />
               </div>
-              <SeriesChart
-                data={dSeries}
-                rawColor="rgba(237,107,58,0.30)"
-                smoothColor="var(--accent)"
-                emaAlpha={dAlpha}
-                yFormat={fmtMetric}
-                minHeight={60}
-              />
+
+              <div className="card p-4 flex-1 flex flex-col" style={{ minHeight: 140, maxHeight: 300 }}>
+                <div className="flex items-center justify-between mb-2 shrink-0">
+                  <span className="text-sm font-semibold">learning rate</span>
+                  <SmoothControl alpha={lrAlpha} setAlpha={setLrAlpha} min={0.005} max={1} step={0.005} />
+                </div>
+                <SeriesChart
+                  data={lrSeries}
+                  rawColor="rgba(224,162,58,0.35)"
+                  smoothColor="var(--warn)"
+                  emaAlpha={lrAlpha}
+                  yFormat={fmtLr}
+                  minHeight={60}
+                />
+              </div>
+
+              {dSeries.length >= 2 && (
+                <div className="card p-4 flex-1 flex flex-col" style={{ minHeight: 140, maxHeight: 300 }}>
+                  <div className="flex items-center justify-between mb-2 shrink-0">
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-sm font-semibold">d</span>
+                      <span className="text-xs font-mono text-fg-tertiary tabular-nums">
+                        {fmtMetric(lastD)}
+                      </span>
+                    </div>
+                    <SmoothControl alpha={dAlpha} setAlpha={setDAlpha} min={0.005} max={1} step={0.005} />
+                  </div>
+                  <SeriesChart
+                    data={dSeries}
+                    rawColor="rgba(237,107,58,0.30)"
+                    smoothColor="var(--accent)"
+                    emaAlpha={dAlpha}
+                    yFormat={fmtMetric}
+                    minHeight={60}
+                  />
+                </div>
+              )}
             </div>
-          )}
-        </div>
-      </div>
+          </div>
+        </>
+      )}
     </div>
   )
 }

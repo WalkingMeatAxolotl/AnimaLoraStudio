@@ -24,6 +24,8 @@ def queue_checkpoint_eval(
     cfg = secrets.load().eval_metrics
     if not cfg.auto_eval_on_checkpoint:
         return None
+    if cfg.auto_eval_trigger != "checkpoint":
+        return None
 
     project_id = int(task.get("project_id") or 0)
     version_id = int(task.get("version_id") or 0)
@@ -98,6 +100,8 @@ def run_checkpoint_eval_for_task(
     cfg = secrets.load().eval_metrics
     if not cfg.auto_eval_on_checkpoint:
         return None
+    if cfg.auto_eval_trigger != "checkpoint":
+        return None
 
     progress = on_progress or (lambda _line: None)
     with db.connection_for() as conn:
@@ -161,6 +165,72 @@ def run_checkpoint_eval_for_task(
             logger.exception("inline auto eval %s failed for run=%s", key, run["run_id"])
             progress(f"[eval-auto] {key} failed: {exc}")
     return results
+
+
+def queue_training_finished_eval(
+    conn,
+    task: dict[str, Any],
+    payload: dict[str, Any] | None = None,
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """Queue eval sample jobs for all saved LoRA checkpoints after training."""
+    cfg = secrets.load().eval_metrics
+    if not cfg.auto_eval_on_checkpoint:
+        return []
+    if cfg.auto_eval_trigger != "after_training":
+        return []
+
+    project_id = int(task.get("project_id") or 0)
+    version_id = int(task.get("version_id") or 0)
+    if not project_id or not version_id:
+        return []
+
+    project = projects.get_project(conn, project_id)
+    version = versions.get_version(conn, version_id)
+    if not project or not version or int(version["project_id"]) != project_id:
+        return []
+
+    vdir = versions.version_dir(project_id, str(project["slug"]), str(version["label"]))
+    queued: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for checkpoint in versions.list_lora_ckpts(vdir):
+        rel = _checkpoint_relative_to_output(
+            project_id,
+            str(project.get("slug") or ""),
+            version,
+            str(checkpoint.get("path") or ""),
+        )
+        if not rel:
+            continue
+        try:
+            job, run = eval_samples.start_job(
+                conn,
+                project,
+                version,
+                vdir,
+                checkpoint_path=rel,
+                max_items=cfg.auto_eval_max_items,
+                auto_metrics=True,
+                auto_source={
+                    "task_id": int(task.get("id") or 0),
+                    "epoch": (payload or {}).get("epoch"),
+                    "step": (payload or {}).get("step"),
+                    "trigger": "after_training",
+                },
+            )
+        except Exception:
+            logger.exception(
+                "auto eval after-training enqueue failed for task=%s checkpoint=%s",
+                task.get("id"),
+                checkpoint.get("path"),
+            )
+            continue
+        queued.append((job, run))
+
+    logger.info(
+        "queued after-training eval sample jobs for task=%s count=%s",
+        task.get("id"),
+        len(queued),
+    )
+    return queued
 
 
 def queue_metric_jobs_for_sample(

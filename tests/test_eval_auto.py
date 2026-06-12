@@ -69,6 +69,7 @@ def test_queue_checkpoint_eval_respects_switch(isolated) -> None:
     secrets.update({
         "eval_metrics": {
             "auto_eval_on_checkpoint": True,
+            "auto_eval_trigger": "checkpoint",
             "auto_eval_max_items": 1,
         }
     })
@@ -118,6 +119,7 @@ def test_queue_metric_jobs_for_sample_uses_saved_defaults(isolated) -> None:
     secrets.update({
         "eval_metrics": {
             "auto_eval_on_checkpoint": True,
+            "auto_eval_trigger": "checkpoint",
             "clip_model_name": "/models/clip",
             "dino_model_name": "/models/dino",
         }
@@ -151,6 +153,7 @@ def test_queue_metric_jobs_for_sample_reuses_active_jobs(isolated) -> None:
     secrets.update({
         "eval_metrics": {
             "auto_eval_on_checkpoint": True,
+            "auto_eval_trigger": "checkpoint",
             "clip_model_name": "/models/clip",
             "dino_model_name": "/models/dino",
         }
@@ -186,11 +189,47 @@ def test_queue_metric_jobs_for_sample_reuses_active_jobs(isolated) -> None:
     assert dino_jobs[0]["params_decoded"]["model_name"] == "/models/dino"
 
 
+def test_after_training_eval_queues_all_checkpoints_by_default(isolated) -> None:
+    project, version, vdir = _project_version(isolated)
+    (vdir / "output" / "model_epoch4.safetensors").write_bytes(b"lora")
+    task = {"id": 7, "project_id": project["id"], "version_id": version["id"]}
+    payload = {
+        "checkpoint_path": str(vdir / "output" / "model_epoch2.safetensors"),
+        "epoch": 4,
+        "step": 40,
+    }
+    secrets.update({
+        "eval_metrics": {
+            "auto_eval_on_checkpoint": True,
+            "auto_eval_max_items": 1,
+        }
+    })
+
+    with db.connection_for(isolated["db"]) as conn:
+        assert eval_auto.queue_checkpoint_eval(conn, task, payload) is None
+        queued = eval_auto.queue_training_finished_eval(conn, task, payload)
+        jobs = project_jobs.list_jobs(conn, kind="eval_samples", status="pending")
+
+    assert len(queued) == 2
+    assert len(jobs) == 2
+    paths = {job["params_decoded"]["checkpoint_path"] for job in jobs}
+    assert paths == {
+        "output/model_epoch2.safetensors",
+        "output/model_epoch4.safetensors",
+    }
+    assert all(job["params_decoded"]["auto_metrics"] is True for job in jobs)
+    assert all(
+        job["params_decoded"]["auto_source"]["trigger"] == "after_training"
+        for job in jobs
+    )
+
+
 def test_run_checkpoint_eval_for_task_runs_inline_without_queue_jobs(isolated) -> None:
     project, version, vdir = _project_version(isolated)
     secrets.update({
         "eval_metrics": {
             "auto_eval_on_checkpoint": True,
+            "auto_eval_trigger": "checkpoint",
             "auto_eval_max_items": 1,
             "clip_model_name": "/models/clip",
             "dino_model_name": "/models/dino",
@@ -247,6 +286,7 @@ def test_supervisor_eval_checkpoint_event_queues_sample_job(isolated) -> None:
     secrets.update({
         "eval_metrics": {
             "auto_eval_on_checkpoint": True,
+            "auto_eval_trigger": "checkpoint",
             "auto_eval_max_items": 1,
         }
     })
@@ -280,3 +320,48 @@ def test_supervisor_eval_checkpoint_event_queues_sample_job(isolated) -> None:
         jobs = project_jobs.list_jobs(conn, kind="eval_samples", status="pending")
     assert len(jobs) == 1
     assert jobs[0]["params_decoded"]["auto_metrics"] is True
+
+
+def test_supervisor_eval_training_finished_queues_after_task_done(isolated) -> None:
+    import json
+
+    project, version, _vdir = _project_version(isolated)
+    secrets.update({
+        "eval_metrics": {
+            "auto_eval_on_checkpoint": True,
+            "auto_eval_max_items": 1,
+        }
+    })
+    with db.connection_for(isolated["db"]) as conn:
+        tid = db.create_task(conn, name="train", config_name="fake")
+        db.update_task(
+            conn,
+            tid,
+            project_id=project["id"],
+            version_id=version["id"],
+            status="running",
+        )
+
+    events: list[dict[str, Any]] = []
+    sup = Supervisor(on_event=events.append, db_path=isolated["db"])
+    slot = _Slot(name="train", kind="task", id=tid)
+    callback = sup._make_task_log_callback(slot, tid)
+    callback(
+        "__EVENT__:eval_training_finished:"
+        + json.dumps({
+            "epoch": 2,
+            "step": 20,
+        })
+    )
+
+    with db.connection_for(isolated["db"]) as conn:
+        assert project_jobs.list_jobs(conn, kind="eval_samples") == []
+
+    sup._finish_slot(slot, 0)
+
+    with db.connection_for(isolated["db"]) as conn:
+        jobs = project_jobs.list_jobs(conn, kind="eval_samples", status="pending")
+    assert len(jobs) == 1
+    assert jobs[0]["params_decoded"]["auto_source"]["trigger"] == "after_training"
+    queued = [e for e in events if e["type"] == "eval_auto_after_training_queued"]
+    assert queued and queued[0]["count"] == 1

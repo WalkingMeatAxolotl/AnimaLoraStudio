@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -116,6 +116,7 @@ class EvalMetricModelsConfig(BaseModel):
     clip_model_name: str = "openai/clip-vit-base-patch32"
     dino_model_name: str = "facebook/dinov2-small"
     auto_eval_on_checkpoint: bool = False
+    auto_eval_trigger: Literal["after_training", "checkpoint"] = "after_training"
     auto_eval_max_items: int = 1
 
     @model_validator(mode="after")
