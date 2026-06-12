@@ -217,6 +217,19 @@ def test_upload_endpoint_persists(client: TestClient, tag_dict_dir: Path) -> Non
     assert data["entries"]["mytag"] == ["我的标签"]
 
 
+def test_get_data_endpoint_keys_preserve_file_order(
+    client: TestClient, tag_dict_dir: Path
+) -> None:
+    # 纯数字 tag（"69"）会被 JS 对象重排到最前；keys 数组是前端唯一可靠的
+    # 行序来源，必须严格等于文件行序
+    csv = "1girl,1女孩\n69,六九\nsolo,单人\n"
+    files = {"file": ("o.csv", csv.encode("utf-8"), "text/csv")}
+    assert client.post("/api/tag-dictionary/upload", files=files).status_code == 200
+    r = client.get("/api/tag-dictionary/data")
+    assert r.status_code == 200
+    assert r.json()["keys"] == ["1girl", "69", "solo"]
+
+
 def test_upload_endpoint_400_on_bad_file(client: TestClient) -> None:
     files = {"file": ("empty.csv", b"# comments only\n", "text/csv")}
     r = client.post("/api/tag-dictionary/upload", files=files)

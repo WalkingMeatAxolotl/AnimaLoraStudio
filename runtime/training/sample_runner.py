@@ -59,6 +59,15 @@ def run_sample(
     s_comfy_parity = bool(getattr(args, "sample_comfy_parity", True))
     negative_arg = s_neg if s_comfy_parity else (s_neg or None)
 
+    # T-LoRA：与 ControlGenAI/T-LoRA 官方推理一致 —— sample 阶段不应用 timestep
+    # mask。官方 inferencer 不传 sigma_mask, forward 内 fallback 出全 1 mask =
+    # 满 rank 推理。这里显式清零 PR 的训练态 mask；下一次 on_step_begin 会
+    # 重新按 sigma_t 写入，无需事后恢复。
+    # non-tlora adapter (lokr / loha / lora) 没这个方法, getattr 返回 None 安全跳过。
+    clear_fn = getattr(ctx.injector, "clear_timestep_mask", None)
+    if callable(clear_fn):
+        clear_fn()
+
     was_training = bool(getattr(ctx.model, "training", True))
     try:
         with optimizer_eval_mode(ctx.optimizer):

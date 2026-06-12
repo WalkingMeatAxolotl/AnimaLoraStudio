@@ -188,6 +188,26 @@ def test_training_config_cli_smoke() -> None:
     assert ns.sample_prompts == ["p1", "p2"]
 
 
+def test_training_config_cli_tlora() -> None:
+    parser = bridge.build_parser(TrainingConfig)
+    ns = parser.parse_args([
+        "--lora-type", "tlora",
+        "--tlora-min-rank", "12",
+        "--tlora-alpha-rank-scale", "1.5",
+        "--tlora-use-ortho",
+    ])
+    assert ns.lora_type == "tlora"
+    assert ns.tlora_min_rank == 12
+    assert ns.tlora_alpha_rank_scale == 1.5
+    assert ns.tlora_use_ortho is True
+
+
+def test_training_config_cli_ortho() -> None:
+    parser = bridge.build_parser(TrainingConfig)
+    ns = parser.parse_args(["--lora-type", "ortho"])
+    assert ns.lora_type == "ortho"
+
+
 def test_training_config_cli_lion() -> None:
     parser = bridge.build_parser(TrainingConfig)
     ns = parser.parse_args([

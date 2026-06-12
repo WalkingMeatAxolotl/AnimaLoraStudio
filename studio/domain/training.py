@@ -121,9 +121,9 @@ class TrainingConfig(BaseModel):
     )
 
     # ------------------------------------------------------------------- LoRA
-    lora_type: Literal["lora", "lokr", "loha"] = Field(
+    lora_type: Literal["lora", "lokr", "loha", "ortho", "tlora"] = Field(
         "lokr",
-        description="适配器算法。lokr Kronecker 分解参数最省（默认）；lora 经典低秩通用；loha Hadamard 积，表达力较高但参数较多",
+        description="适配器算法。lokr Kronecker 分解参数最省（默认）；lora 经典低秩通用；loha Hadamard 积，表达力较高但参数较多；ortho SVD/Cayley 正交参数化；tlora 时间步自适应 rank",
         json_schema_extra=_meta("lora"),
     )
     lora_rank: int = Field(
@@ -140,6 +140,25 @@ class TrainingConfig(BaseModel):
         8, ge=2,
         description="LoKr 矩阵分解因子：越大压缩越强、参数越少；越小参数越多。默认 8 适合大多数场景",
         json_schema_extra=_meta("lora", show_when="lora_type==lokr"),
+    )
+    tlora_min_rank: int = Field(
+        1, ge=1,
+        description="T-LoRA 高噪声时保留的最小 active rank（与论文 ControlGenAI/T-LoRA 对齐，默认 1）",
+        json_schema_extra=_meta("lora", show_when="lora_type==tlora", advanced=True),
+    )
+    tlora_alpha_rank_scale: float = Field(
+        1.0, ge=0.0,
+        description=(
+            "T-LoRA 幂次缩放（对齐官方 SDXL `alpha_rank_scale`）：1.0=线性 schedule；"
+            ">1 越偏向低噪声端才开高 rank；<1 越早开高 rank。"
+            "公式 r=(1-t)^α·(rank-min_rank)+min_rank，t 为 noise level (0=clean, 1=noisy)"
+        ),
+        json_schema_extra=_meta("lora", show_when="lora_type==tlora", advanced=True),
+    )
+    tlora_use_ortho: bool = Field(
+        False,
+        description="T-LoRA 专属：启用 OrthoLoRA 的 SVD/Cayley 正交参数化；关闭时使用普通 T-LoRA",
+        json_schema_extra=_meta("lora", show_when="lora_type==tlora", advanced=True),
     )
     lora_dora: bool = Field(
         False,
@@ -207,12 +226,12 @@ class TrainingConfig(BaseModel):
             cli_alias="--lr",
             disable_when="optimizer_type==prodigy||optimizer_type==prodigy_plus_schedulefree",
             disable_value=1.0,
-            disable_hint="Prodigy 接管学习率",
+            disable_hint="此优化器自动管理学习率",
         ),
     )
     lr_scheduler: Literal["none", "cosine", "cosine_with_restart", "cosine_with_warmup"] = Field(
         "none",
-        description="学习率调度（none = 常数；Prodigy / PPSF 固定为 none）",
+        description="学习率调度（none = 常数；Prodigy / PPSF / Automagic 固定为 none）",
         json_schema_extra=_meta(
             "training",
             disable_when="optimizer_type==automagic||optimizer_type==prodigy||optimizer_type==prodigy_plus_schedulefree",
@@ -265,6 +284,11 @@ class TrainingConfig(BaseModel):
         description="Lion β2（动量累计系数）",
         json_schema_extra=_meta("training", show_when="optimizer_type==lion", advanced=True),
     )
+    automagic_variant: Literal["v1", "v2"] = Field(
+        "v1",
+        description="v1: per-element lr mask（经典，推荐）；v2: per-param scalar lr + fused backward（实验性，省显存；与 grad_accum / grad_clip / fp16 不兼容）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==automagic"),
+    )
     automagic_min_lr: float = Field(
         1e-7, ge=0.0,
         description="Automagic 每参数学习率下限",
@@ -294,6 +318,11 @@ class TrainingConfig(BaseModel):
         1.0, gt=0.0,
         description="Automagic update RMS 裁剪阈值",
         json_schema_extra=_meta("training", show_when="optimizer_type==automagic", advanced=True),
+    )
+    automagic_agreement_threshold: float = Field(
+        0.5, ge=0.0, le=1.0,
+        description="v2 符号一致率阈值：超过此比例认为方向一致 → 涨 lr",
+        json_schema_extra=_meta("training", show_when="optimizer_type==automagic&&automagic_variant==v2", advanced=True),
     )
     # ---------------- ProdigyPlusScheduleFree (PPSF) 专属字段 ----------------
     # 选 PPSF 时 lr_scheduler 必须为 none（Schedule-Free 不需要 scheduler，
@@ -557,7 +586,7 @@ class TrainingConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_prodigy_scheduler(self) -> "TrainingConfig":
-        """Prodigy 系列固定使用常数学习率，外部 scheduler 统一拦截。"""
+        """Prodigy / Automagic 系列固定使用常数学习率，外部 scheduler 统一拦截。"""
         if self.optimizer_type in {"automagic", "prodigy", "prodigy_plus_schedulefree"} and self.lr_scheduler != "none":
             raise ValueError(
                 f"optimizer_type={self.optimizer_type} requires lr_scheduler=none "

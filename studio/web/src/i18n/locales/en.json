@@ -293,7 +293,9 @@
       "loraType": {
         "lora": "LoRA",
         "lokr": "LoKr",
-        "loha": "LoHa"
+        "loha": "LoHa",
+        "ortho": "OrthoLoRA",
+        "tlora": "T-LoRA"
       },
       "lrScheduler": {
         "none": "Constant",
@@ -373,10 +375,13 @@
       "prefer_json": "Prefer JSON tag files (recommended; supports category shuffle)",
       "cache_latents": "Cache VAE latents to speed up training",
       "vae_cache_batch_size": "VAE latent cache encoding batch size; 0 = follow training batch size, set to 1 if VRAM is tight",
-      "lora_type": "Adapter algorithm. lokr: Kronecker factorization, smallest parameter count (default); lora: classic low-rank, general purpose; loha: Hadamard product, higher expressiveness but more parameters",
+      "lora_type": "Adapter algorithm. lokr: Kronecker factorization, smallest parameter count (default); lora: classic low-rank, general purpose; loha: Hadamard product, higher expressiveness but more parameters; ortho: SVD/Cayley orthogonal parameterization; tlora: timestep-adaptive rank",
       "lora_rank": "Rank: larger = more capacity but higher parameter/VRAM cost and overfit risk; smaller = leaner but underfits more easily. Common 8/16/32/64",
       "lora_alpha": "Alpha: LoRA scaling factor; larger = stronger LoRA effect. Usually equal to rank; when rs_lora is enabled, often set to √rank",
       "lokr_factor": "LoKr factorization factor: larger = stronger compression, fewer parameters; smaller = more parameters. Default 8 suits most cases",
+      "tlora_min_rank": "T-LoRA minimum active rank at high-noise timesteps",
+      "tlora_alpha_rank_scale": "T-LoRA power scale from timestep to active rank; larger = high rank opens later toward low-noise timesteps",
+      "tlora_use_ortho": "T-LoRA only: stack OrthoLoRA orthogonal parameterization; disabled keeps plain T-LoRA",
       "lora_dora": "DoRA: trains weight direction and magnitude separately; usually more stable convergence at slight VRAM cost",
       "lora_rs": "rs-LoRA: scale=α/√r instead of α/r, more stable at high rank (>32)",
       "lora_dropout": "Dropout on LoRA input features: larger = stronger regularization but slower convergence; 0 = disabled",
@@ -404,6 +409,8 @@
       "automagic_beta2": "Automagic second-moment β2",
       "automagic_eps": "Automagic numerical stability epsilon",
       "automagic_clip_threshold": "Automagic update RMS clipping threshold",
+      "automagic_variant": "v1: per-element lr mask (classic, recommended); v2: per-parameter scalar lr with fused backward (experimental, saves VRAM; incompatible with grad accumulation / grad clip / fp16)",
+      "automagic_agreement_threshold": "v2 sign-agreement ratio threshold: above this fraction the update direction is considered consistent and the lr is bumped up",
       "ppsf_d_coef": "PPSF d scaling coefficient (0.5 for small datasets, 2.0 for overfitting)",
       "ppsf_prodigy_steps": "Freeze d after N PPSF steps (0 = never freeze; recommended 1/4 to 1/2 of total steps)",
       "ppsf_beta1": "PPSF Adam β1 (PPSF default 0.9)",

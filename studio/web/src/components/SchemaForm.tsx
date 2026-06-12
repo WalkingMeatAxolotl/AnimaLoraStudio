@@ -66,13 +66,13 @@ export default function SchemaForm({
     onChange({ ...values, [name]: v })
 
   const props = schema.schema.properties
-  const isProdigyOptimizer = values.optimizer_type === 'prodigy' || values.optimizer_type === 'prodigy_plus_schedulefree'
+  const isAutoLrOptimizer = values.optimizer_type === 'prodigy' || values.optimizer_type === 'prodigy_plus_schedulefree' || values.optimizer_type === 'automagic'
   const shouldDisableField = (name: string, prop: typeof props[string]) => {
-    if (name === 'lr_scheduler' && isProdigyOptimizer) return true
+    if (name === 'lr_scheduler' && isAutoLrOptimizer) return true
     return !!prop.disable_when && evalShowWhen(prop.disable_when, values)
   }
   const takeoverValueForField = (name: string, prop: typeof props[string]) => {
-    if (name === 'lr_scheduler' && isProdigyOptimizer) return 'none'
+    if (name === 'lr_scheduler' && isAutoLrOptimizer) return 'none'
     return prop.disable_value ?? prop.default
   }
 

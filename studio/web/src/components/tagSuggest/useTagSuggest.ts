@@ -72,9 +72,13 @@ export function useTagSuggest({
     return findSuggestions(tokenInfo.token, {
       entries: dict.entries,
       tagKeys: dict.tagKeys,
+      compactedKeys: dict.compactedKeys,
       reverse: dict.reverse,
     })
-  }, [disabled, open, tokenInfo.token, dict.status, dict.entries, dict.tagKeys, dict.reverse])
+  }, [
+    disabled, open, tokenInfo.token,
+    dict.status, dict.entries, dict.tagKeys, dict.compactedKeys, dict.reverse,
+  ])
 
   // suggestions 列表变化时重置 active
   const sugKey = suggestions.map((s) => s.tag).join('|')

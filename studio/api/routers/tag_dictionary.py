@@ -32,8 +32,10 @@ def get_data() -> JSONResponse:
     entries, meta = loaded
     # `Cache-Control: public, max-age=300` 让浏览器 5 分钟内不重发；上传/reset 后
     # 后端没有 ETag，前端通过 meta.downloaded_at 比对决定是否强刷。
+    # `keys` 单独下发：JS 对象会把整数型 key（"69"、年份 tag 等）重排到最前，
+    # 前端靠这个数组拿到文件原始行序（默认源 = post_count 降序的热度序）。
     return JSONResponse(
-        content={"entries": entries, "meta": meta},
+        content={"entries": entries, "keys": list(entries.keys()), "meta": meta},
         headers={"Cache-Control": "public, max-age=300"},
     )
 
