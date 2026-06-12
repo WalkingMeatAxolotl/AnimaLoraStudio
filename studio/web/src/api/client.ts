@@ -1542,6 +1542,39 @@ async function xhrUpload<T>(
   })
 }
 
+/** studio_data 存储位置：当前/默认 + 全量扫描（迁移确认 modal 显示用）。 */
+export interface StudioDataScanEntry {
+  name: string
+  is_dir: boolean
+  files: number
+  bytes: number
+}
+
+export interface StudioDataInfo {
+  current: string
+  default: string
+  is_custom: boolean
+  /** 请求带 scan=false 时为 null（Settings 页仅显示路径，免扫盘） */
+  scan: {
+    total_files: number
+    total_bytes: number
+    entries: StudioDataScanEntry[]
+  } | null
+}
+
+/** 迁移状态快照（modal 重开 / SSE 漏事件兜底；实时进度走 SSE
+ *  `studio_data_migrate_progress` / `_done` 事件）。 */
+export interface StudioDataMigrateStatus {
+  state: 'idle' | 'running' | 'done' | 'error'
+  target: string
+  total_files: number
+  total_bytes: number
+  done_files: number
+  done_bytes: number
+  current_file: string
+  error: string
+}
+
 export const api = {
   health: () => req<HealthResponse>('/api/health'),
   systemStats: () => req<SystemStats>('/api/system/stats'),
@@ -2525,6 +2558,19 @@ export const api = {
     const qs = path ? `?path=${encodeURIComponent(path)}` : ''
     return req<BrowseResult>(`/api/browse${qs}`)
   },
+
+  // studio_data 存储位置 -------------------------------------------------
+  // withScan=true 含全量扫描，大目录可能要数秒 —— 调用方给加载态。
+  getStudioDataInfo: (withScan = true) =>
+    req<StudioDataInfo>(`/api/studio-data/info?scan=${withScan}`),
+  // 422 = 目标不合法 / 有 running task；409 = 已有迁移在跑。
+  startStudioDataMigrate: (target: string) =>
+    req<{ ok: boolean }>('/api/studio-data/migrate', {
+      method: 'POST',
+      body: JSON.stringify({ target }),
+    }),
+  getStudioDataMigrateStatus: () =>
+    req<StudioDataMigrateStatus>('/api/studio-data/migrate_status'),
 
   // System lifecycle (ADR 0002) ----------------------------------------
   // 重启 server。后端写 tmp/restart + 给自己发 SIGINT 触发 uvicorn graceful

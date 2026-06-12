@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 174,
+  "count": 176,
   "routes": [
     {
       "path": "/",
@@ -1151,6 +1151,30 @@
         "GET"
       ],
       "name": "get_state",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/studio-data/info",
+      "methods": [
+        "GET"
+      ],
+      "name": "studio_data_info",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/studio-data/migrate",
+      "methods": [
+        "POST"
+      ],
+      "name": "studio_data_migrate",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/studio-data/migrate_status",
+      "methods": [
+        "GET"
+      ],
+      "name": "studio_data_migrate_status",
       "type": "APIRoute"
     },
     {

@@ -26,6 +26,8 @@ wandb/
 
 # Studio runtime data (SQLite, user configs, task logs)
 studio_data/
+# studio_data 自定义位置指针（机器特定，Settings → 系统 → 存储位置 写入）
+studio_data_location.json
 
 # Studio frontend (Node deps and build artifacts)
 studio/web/node_modules/

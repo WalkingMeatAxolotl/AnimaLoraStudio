@@ -1,5 +1,8 @@
 """Studio 内部使用的路径常量与目录初始化。"""
 from __future__ import annotations
+
+import json
+import logging
 from pathlib import Path
 
 # PR-7：本文件从 studio/paths.py 搬到 studio/infrastructure/paths.py，多嵌一层；
@@ -16,8 +19,41 @@ OUTPUT_DIR = REPO_ROOT / "output"
 DATA_EXPORTS = REPO_ROOT / "data_exports"
 
 
-# Studio 持久化（SQLite + 用户保存的 preset + 任务日志）
-STUDIO_DATA = REPO_ROOT / "studio_data"
+# Studio 持久化（SQLite + 用户保存的 preset + 任务日志）。
+#
+# 位置可自定义：仓库根的指针文件 `studio_data_location.json`（{"path": "..."}）
+# 指向自定义目录。指针必须在 studio_data **外面** —— secrets.json / db 都在
+# studio_data 里，位置本身的配置存里面就成了鸡生蛋。指针在模块 import 时读
+# 一次，进程内不变；迁移（/api/studio-data/migrate）写完指针后需重启 server
+# 生效（cli.py 重启循环用 subprocess 拉新进程，paths 会重新求值）。
+DEFAULT_STUDIO_DATA = REPO_ROOT / "studio_data"
+STUDIO_DATA_POINTER = REPO_ROOT / "studio_data_location.json"
+
+
+def resolve_studio_data(pointer_file: Path | None = None) -> Path:
+    """读指针文件解析 studio_data 位置；无指针 / 指针无效 → 默认位置。
+
+    指针目标必须是已存在的绝对路径目录 —— 盘符未挂载 / 目录被删时回退默认
+    （默认位置仍保留迁移前的旧数据，可用），只 log warning 不抛错。
+    """
+    ptr = pointer_file if pointer_file is not None else STUDIO_DATA_POINTER
+    try:
+        if ptr.is_file():
+            raw = json.loads(ptr.read_text("utf-8"))
+            target = Path(str(raw.get("path", "")))
+            if target.is_absolute() and target.is_dir():
+                return target
+            logging.getLogger(__name__).warning(
+                "studio_data 指针目标无效（不存在或非绝对路径），回退默认位置: %s", target,
+            )
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "studio_data 指针文件解析失败，回退默认位置: %s", ptr, exc_info=True,
+        )
+    return DEFAULT_STUDIO_DATA
+
+
+STUDIO_DATA = resolve_studio_data()
 STUDIO_DB = STUDIO_DATA / "studio.db"
 USER_PRESETS_DIR = STUDIO_DATA / "presets"
 USER_CONFIGS_DIR = USER_PRESETS_DIR  # 兼容别名（PP0 后将随 configs_io 一起移除）

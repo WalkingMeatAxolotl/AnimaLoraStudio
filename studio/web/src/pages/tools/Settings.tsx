@@ -12,6 +12,7 @@ import {
   type ModelsCatalog,
   type Secrets,
   type SecretsPatch,
+  type StudioDataInfo,
   type DevCommit,
   type DevCommitsResult,
   type PreflightResult,
@@ -32,6 +33,8 @@ import {
 } from '../../components/FirstRunOnboardingModal'
 import { InfoButton } from '../../components/InfoButton'
 import LLMTaggerWorkspace from '../../components/LLMTaggerWorkspace'
+import PathPicker from '../../components/PathPicker'
+import StudioDataMigrateModal from '../../components/StudioDataMigrateModal'
 import { TagListInput } from '../../components/TagsInput'
 import { useShowTagTranslation } from '../../tagDict/showToggle'
 import { useTagDict, reloadDict } from '../../tagDict/store'
@@ -129,6 +132,7 @@ const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
   system: [
     { id: 'onboarding', labelKey: 'settings.onboardingSection' },
     { id: 'version', labelKey: 'settings.version' },
+    { id: 'storage', labelKey: 'settings.storage.sectionTitle' },
     { id: 'service', labelKey: 'settings.service' },
   ],
 }
@@ -3231,6 +3235,7 @@ function SystemSection() {
     <>
       <OnboardingSection />
       <VersionSection />
+      <StorageSection />
       <ServiceSection />
     </>
   )
@@ -4592,6 +4597,97 @@ function ReleaseNotesDetailModal({
         </div>
       </div>
     </div>
+  )
+}
+
+// ── 存储位置 Section（studio_data 自定义位置 + 迁移）──────────────────────
+function StorageSection() {
+  const { t } = useTranslation()
+  const { toast } = useToast()
+  const [info, setInfo] = useState<StudioDataInfo | null>(null)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  // 迁移 modal 的目标目录；非 null = modal 打开（迁移期间 modal 不可关，
+  // 不存在"后台迁移中"的游离状态，section 无需跟踪迁移进度）
+  const [migrateTarget, setMigrateTarget] = useState<string | null>(null)
+  const [restartBusy, setRestartBusy] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    void api.getStudioDataInfo(false).then((i) => {
+      if (!cancelled) setInfo(i)
+    }).catch(() => { /* section 显示用，拉不到不阻塞页面 */ })
+    return () => { cancelled = true }
+  }, [])
+
+  // done 态「立即重启」：modal 上下文已是确认语境，不再二次 confirm
+  const handleRestart = async () => {
+    setRestartBusy(true)
+    try {
+      await api.restartServer()
+    } catch (e) {
+      const err = e as Error & { status?: number; detail?: { error?: string; tasks?: { name: string; id?: number }[] } }
+      if (err.status === 422 && err.detail?.error === 'running_tasks_present') {
+        const names = (err.detail.tasks ?? []).map((task) => task.name || `task#${task.id ?? '?'}`).join(', ')
+        toast(t('settings.taskRunningCancelFirst', { names }), 'error')
+      } else {
+        toast(t('settings.restartTriggerFailed', { error: err.message ?? String(e) }), 'error')
+      }
+      setRestartBusy(false)
+      return
+    }
+    void pollHealthThenReload(toast, 5 * 60_000, t('settings.restart'), () => setRestartBusy(false), t)
+  }
+
+  return (
+    <SettingsSection id="storage" title={t('settings.storage.sectionTitle')}>
+      <SettingsField
+        label={t('settings.storage.locationLabel')}
+        helpTooltip={
+          <>
+            <p>{t('settings.storage.help1')}</p>
+            <p>{t('settings.storage.help2')}</p>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <code className="font-mono text-xs truncate">{info?.current ?? '…'}</code>
+            {info && (
+              <span className="text-2xs text-fg-tertiary shrink-0">
+                {info.is_custom ? t('settings.storage.customBadge') : t('settings.storage.defaultBadge')}
+              </span>
+            )}
+          </div>
+          <button
+            className="btn btn-secondary btn-sm self-start"
+            onClick={() => setPickerOpen(true)}
+            disabled={restartBusy}
+          >
+            {t('settings.storage.changeLocation')}
+          </button>
+        </div>
+      </SettingsField>
+
+      {pickerOpen && (
+        <PathPicker
+          dirOnly
+          initialPath={info?.current}
+          onPick={(path) => {
+            setPickerOpen(false)
+            setMigrateTarget(path)
+          }}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
+
+      {migrateTarget != null && (
+        <StudioDataMigrateModal
+          target={migrateTarget}
+          onClose={() => setMigrateTarget(null)}
+          onRestart={() => void handleRestart()}
+        />
+      )}
+    </SettingsSection>
   )
 }
 
