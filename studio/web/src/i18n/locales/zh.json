@@ -1022,6 +1022,12 @@
       "minutesSuffix": "分",
       "offHint": "已关闭：模型常驻直到手动清理"
     },
+    "vaePrecision": {
+      "title": "VAE 解码精度",
+      "label": "测试出图 VAE 精度",
+      "desc": "默认 bf16（与 ComfyUI 在现代显卡上的默认一致）",
+      "help": "测试出图最后一步 VAE 解码使用的精度。bf16 与 ComfyUI 在现代显卡上自动选择的 VAE 精度一致，为默认值。fp32 全精度解码：显存峰值更高，daemon 会在解码前后临时把 DiT/Qwen 模型挪到内存腾显存（每张图更慢）。"
+    },
     "saveTestImages": {
       "title": "测试出图自动落盘",
       "label": "保存测试图片",

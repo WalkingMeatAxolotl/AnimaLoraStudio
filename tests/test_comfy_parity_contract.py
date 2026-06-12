@@ -111,8 +111,17 @@ def test_comfy_parity_runtime_config_forces_comfy_aki_runtime() -> None:
 
     assert cfg["attention_backend"] == "xformers"
     assert cfg["mixed_precision"] == "bf16"
-    assert cfg["vae_precision"] == "fp32"
+    assert cfg["vae_precision"] == "bf16"
     assert cfg["text_encoder_backend"] == "comfy_qwen3"
     assert cfg["t5_tokenizer_backend"] == "fast"
     assert "xformers" not in cfg
     assert "flash_attn" not in cfg
+
+
+def test_comfy_parity_runtime_config_preserves_explicit_vae_precision() -> None:
+    """vae_precision 是用户选项（settings.generate.vae_precision），不被强制覆盖。"""
+    cfg = force_comfy_parity_runtime_config({"vae_precision": "fp32"})
+    assert cfg["vae_precision"] == "fp32"
+
+    cfg = force_comfy_parity_runtime_config({})
+    assert cfg["vae_precision"] == "bf16"

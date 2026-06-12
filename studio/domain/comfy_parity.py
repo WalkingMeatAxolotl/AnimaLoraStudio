@@ -1,8 +1,9 @@
 """Comfy-style runtime defaults for test generation.
 
 Comfy-style generation follows the ComfyUI implementation where possible:
-bf16 UNET/text weights, fp32 VAE, fast T5 tokenization, and Comfy-style Qwen
-conditioning. Exact image/latent parity with the pinned ComfyUI KSampler oracle
+bf16 UNET/text weights, bf16 VAE by default (matching ComfyUI's auto VAE dtype
+on modern GPUs; fp32 selectable in settings), fast T5 tokenization, and
+Comfy-style Qwen conditioning. Exact image/latent parity with the pinned ComfyUI KSampler oracle
 is guaranteed only for the xformers attention backend used by that oracle
 environment. Other backends can run the same Comfy-style path, but they are not
 exact KSampler parity guarantees.
@@ -14,7 +15,7 @@ from typing import Any
 EXACT_KSAMPLER_PARITY_BACKEND = "xformers"
 COMFY_PARITY_ATTENTION_BACKEND = EXACT_KSAMPLER_PARITY_BACKEND
 COMFY_PARITY_MIXED_PRECISION = "bf16"
-COMFY_PARITY_VAE_PRECISION = "fp32"
+DEFAULT_VAE_PRECISION = "bf16"
 COMFY_PARITY_TEXT_ENCODER_BACKEND = "comfy_qwen3"
 
 
@@ -45,7 +46,10 @@ def force_comfy_parity_runtime_config(
     else:
         out["attention_backend"] = str(out.get("attention_backend") or "none")
     out["mixed_precision"] = COMFY_PARITY_MIXED_PRECISION
-    out["vae_precision"] = COMFY_PARITY_VAE_PRECISION
+    # VAE 精度是用户选项（settings.generate.vae_precision），不强制覆盖：
+    # bf16 默认对齐 ComfyUI 在现代 GPU 上的 auto VAE dtype；fp32 留给想用
+    # 全精度 decode 的用户（会触发 decode 前的模块 offload）。
+    out["vae_precision"] = str(out.get("vae_precision") or DEFAULT_VAE_PRECISION)
     out["text_encoder_backend"] = COMFY_PARITY_TEXT_ENCODER_BACKEND
     out["t5_tokenizer_backend"] = "fast"
     return out

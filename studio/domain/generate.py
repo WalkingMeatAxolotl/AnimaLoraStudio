@@ -60,6 +60,10 @@ class GenerateConfig(BaseModel):
     # 运行时
     output_dir: str = Field("", description="输出目录（服务端填 tempdir，task 结束清）")
     mixed_precision: str = Field("bf16")
+    vae_precision: Literal["bf16", "fp32"] = Field(
+        "bf16",
+        description="VAE decode 精度：bf16 对齐 ComfyUI 现代 GPU 默认；fp32 全精度（decode 前会 offload 腾显存）",
+    )
     attention_backend: AttentionBackend = Field(
         "flash_attn",
         description="Attention backend：none（SDPA）/ xformers / flash_attn",

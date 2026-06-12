@@ -258,7 +258,7 @@ const EMPTY: Secrets = {
   },
   models: { root: null, selected_anima: '1.0', selected_upscaler: '4x-AnimeSharp', auto_sync_paths: true },
   queue: { allow_gpu_during_train: false },
-  generate: { preview_every_n_steps: 3, attention_backend: 'auto', idle_timeout_minutes: 10, save_test_images: false },
+  generate: { preview_every_n_steps: 3, attention_backend: 'auto', vae_precision: 'bf16', idle_timeout_minutes: 10, save_test_images: false },
   system: { update_channel: 'stable', show_dev_channel: false },
   proxy: {
     enabled: false,
@@ -1198,6 +1198,7 @@ export default function SettingsPage() {
             secrets.generate.attention_backend (flash_attn / xformers / none).
             Only xformers is an exact ComfyUI KSampler parity target. */}
         <IdleTimeoutSection draft={draft} update={update} />
+        <VaePrecisionSection draft={draft} update={update} />
         <TaeFluxSection draft={draft} update={update} />
         <SaveTestImagesSection draft={draft} update={update} />
       </>)}
@@ -3029,6 +3030,37 @@ function IdleTimeoutSection({
               : t('settings.idleTimeout.minutesSuffix')}
           </span>
         </div>
+      </SettingsField>
+    </SettingsSection>
+  )
+}
+
+
+function VaePrecisionSection({
+  draft, update,
+}: {
+  draft: Secrets
+  update: <S extends Section, K extends keyof Secrets[S]>(
+    section: S, key: K, value: Secrets[S][K],
+  ) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <SettingsSection id="vae-precision" title={t('settings.vaePrecision.title')}>
+      <SettingsField
+        label={t('settings.vaePrecision.label')}
+        desc={t('settings.vaePrecision.desc')}
+        helpTooltip={<p>{t('settings.vaePrecision.help')}</p>}
+      >
+        <select
+          value={draft.generate.vae_precision ?? 'bf16'}
+          onChange={(e) => update('generate', 'vae_precision', e.target.value as 'bf16' | 'fp32')}
+          className={textInputClass}
+          style={{ width: 120 }}
+        >
+          <option value="bf16">bf16</option>
+          <option value="fp32">fp32</option>
+        </select>
       </SettingsField>
     </SettingsSection>
   )

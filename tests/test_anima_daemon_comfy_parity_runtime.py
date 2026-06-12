@@ -52,7 +52,7 @@ def test_daemon_model_cache_preserves_user_backend_and_sets_comfy_style_dtype(mo
 
     assert loads[0]["backend"] == "flash_attn"
     assert loads[0]["precision"] == "bf16"
-    assert loads[0]["vae_precision"] == "fp32"
+    assert loads[0]["vae_precision"] == "bf16"
     assert loads[0]["text_encoder_backend"] == "comfy_qwen3"
     assert loads[0]["t5_tokenizer_backend"] == "fast"
 

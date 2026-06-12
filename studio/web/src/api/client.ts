@@ -376,6 +376,9 @@ export interface GenerateSecretsConfig {
   /** 注意力后端默认值（design 决策：用户配置一次，不每次出图都改）。
    * Generate 页 enqueue 自动注入；Settings 训练 tab 切换。 */
   attention_backend: AttentionBackend
+  /** 测试出图 VAE decode 精度。bf16（默认）对齐 ComfyUI 现代 GPU 的 auto
+   * VAE dtype；fp32 全精度（decode 前 daemon 临时 offload DiT/Qwen 腾显存）。 */
+  vae_precision: 'bf16' | 'fp32'
   /** 测试出图 daemon 闲置 N 分钟自动卸载模型释放 VRAM。0 = 关闭，模型常驻
    * 直到手动点"清理显存"。计时只在 idle + 模型 loaded 时跑。 */
   idle_timeout_minutes: number

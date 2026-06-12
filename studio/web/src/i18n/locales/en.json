@@ -1022,6 +1022,12 @@
       "minutesSuffix": "min",
       "offHint": "Off: model stays resident until manually freed"
     },
+    "vaePrecision": {
+      "title": "VAE decode precision",
+      "label": "Test generation VAE precision",
+      "desc": "Default: bf16 (matches ComfyUI on modern GPUs)",
+      "help": "Precision used for the final VAE decode in test generation. bf16 matches ComfyUI's automatic VAE dtype on modern GPUs and is the default. fp32 decodes in full precision: peak VRAM is higher, so the daemon temporarily offloads the DiT/Qwen models to CPU around the decode (slower per image)."
+    },
     "saveTestImages": {
       "title": "Save test images to disk",
       "label": "Save test images",

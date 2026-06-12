@@ -166,9 +166,11 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
             gen_cfg = secrets.load().generate
             attn_default = gen_cfg.attention_backend
             preview_n = int(gen_cfg.preview_every_n_steps or 0)
+            vae_precision = str(getattr(gen_cfg, "vae_precision", "bf16") or "bf16")
         except Exception:
             attn_default = "auto"
             preview_n = 0
+            vae_precision = "bf16"
         attn = body.attention_backend or attn_default
         if attn == "auto":
             from ...services.runtime.xformers import detect_attention_backend
@@ -189,6 +191,7 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
             seed=body.seed,
             lora_configs=[lc.model_dump() for lc in body.lora_configs],
             mixed_precision="bf16",
+            vae_precision=vae_precision,
             attention_backend=attn,
             xy_matrix=body.xy_matrix.model_dump() if body.xy_matrix else None,
         )
