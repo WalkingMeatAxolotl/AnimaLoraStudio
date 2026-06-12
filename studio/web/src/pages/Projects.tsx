@@ -363,23 +363,28 @@ function FilterBar({
 }) {
   const { t } = useTranslation()
   const filtering = query.trim() !== '' || status !== 'all' || showArchived
+  // 单行布局（用户反馈）：收起时只剩一个细行下拉符号，不占空间；
+  // 展开后搜索 / 状态 / 排序 / 已归档全部排进同一行。
   return (
-    <div className="px-6 pt-4 border-b border-subtle pb-3">
+    <div className="px-6 py-1.5 border-b border-subtle flex flex-wrap items-center gap-3">
       <button
         type="button"
-        className="btn btn-secondary btn-sm"
+        className="bg-transparent border-none px-1.5 py-0.5 rounded-sm text-fg-tertiary text-sm cursor-pointer hover:text-fg-primary"
         aria-expanded={open}
+        aria-label={t('projects.filters')}
+        title={t('projects.filters')}
         onClick={onToggle}
       >
-        <span className="inline-block w-3 text-center">{open ? '▾' : '▸'}</span>
-        {t('projects.filters')}
-        {filtering && <span className="dot dot-running ml-1" aria-label={t('projects.filtersActive')} />}
+        {open ? '▴' : '▾'}
+        {!open && filtering && (
+          <span className="dot dot-running ml-1" aria-label={t('projects.filtersActive')} />
+        )}
       </button>
       {open && (
-        <div className="mt-3 flex flex-wrap items-center gap-3">
+        <>
           <input
             className="input"
-            style={{ width: 240 }}
+            style={{ width: 220 }}
             value={query}
             onChange={(e) => onQuery(e.target.value)}
             placeholder={t('projects.searchPlaceholder')}
@@ -407,7 +412,7 @@ function FilterBar({
               <option key={s} value={s}>{t(`projects.sort_${s}`)}</option>
             ))}
           </select>
-          <label className="flex items-center gap-1.5 text-sm text-fg-secondary cursor-pointer select-none">
+          <label className="flex items-center gap-1.5 text-sm text-fg-secondary cursor-pointer select-none whitespace-nowrap">
             <input
               type="checkbox"
               checked={showArchived}
@@ -415,7 +420,7 @@ function FilterBar({
             />
             {t('projects.showArchived', { n: archivedCount })}
           </label>
-        </div>
+        </>
       )}
     </div>
   )
