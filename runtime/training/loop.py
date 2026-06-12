@@ -173,7 +173,8 @@ def run(ctx: TrainingContext) -> None:
                     cross = F.pad(cross, (0, 0, 0, 512 - cross.shape[1]))
                 # KV trim：把 padding 截到最近有效 token bucket（64/128/256/512）
                 # t5_attn=1 表示有效 token；取批次内最大实际长度再 round up
-                if getattr(args, "kv_trim", False):
+                # torch.compile 模式禁用 kv_trim（trim 引入动态 seq 维度，导致 recompile）
+                if getattr(args, "kv_trim", False) and not getattr(args, "torch_compile", False):
                     _actual = int(t5_attn.sum(dim=-1).max().item())
                     _bucket = 512  # _actual > 512 时兜底（不裁，保持原行为）
                     for _b in (64, 128, 256, 512):

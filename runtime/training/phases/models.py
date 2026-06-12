@@ -115,3 +115,18 @@ def run(ctx: TrainingContext) -> None:
             dtype=ctx.dtype,
             normalize=bool(getattr(args, "sra_normalize", True)),
         )
+
+    # torch.compile per-block（LoRA 注入后再 compile，trace 的是修改后的 forward）
+    if getattr(args, "torch_compile", False):
+        import torch
+        if not hasattr(torch, "compile"):
+            logger.warning("torch.compile 不可用（需要 PyTorch >= 2.0），已跳过")
+        else:
+            logger.info("启用 torch.compile (per-block Inductor)，首步有 ~30s 编译预热...")
+            try:
+                ctx.model.compile_blocks()
+            except Exception as e:
+                logger.warning(f"torch.compile 失败，fallback 到非编译模式: {e}")
+                for module in ctx.model.modules():
+                    if hasattr(module, "_compile_friendly"):
+                        module._compile_friendly = False

@@ -57,7 +57,11 @@ def run(ctx: TrainingContext) -> None:
     base_reso = res_list[0]
 
     # 数据集
-    ctx.bucket_mgr = BucketManager(base_reso, aspect_ratio_limit=ar_limit)
+    ctx.bucket_mgr = BucketManager(
+        base_reso,
+        aspect_ratio_limit=ar_limit,
+        constant_token_mode=getattr(args, "torch_compile", False),
+    )
     ctx.base_dataset = ImageDataset(
         args.data_dir, base_reso, ctx.bucket_mgr,
         shuffle_caption=args.shuffle_caption,

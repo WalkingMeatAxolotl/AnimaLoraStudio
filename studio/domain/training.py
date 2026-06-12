@@ -448,7 +448,12 @@ class TrainingConfig(BaseModel):
     kv_trim: bool = Field(
         False,
         description="Cross-attention KV trim：按实际 token 数裁到最近 bucket（64/128/256/512），减少 padding 计算量",
-        json_schema_extra=_meta("system", advanced=True),
+        json_schema_extra=_meta(
+            "system", advanced=True,
+            disable_when="torch_compile==true",
+            disable_value=False,
+            disable_hint="torch.compile 模式需要固定序列维度，已自动禁用 KV trim",
+        ),
     )
     noise_enhancement_type: Literal["none", "offset", "pyramid"] = Field(
         "none",
@@ -718,7 +723,16 @@ class TrainingConfig(BaseModel):
     attention_backend: AttentionBackend = Field(
         "flash_attn",
         description="Attention 后端。none = PyTorch SDPA 默认；xformers 显存更省；flash_attn 最快（需 Ampere+ GPU 支持）",
-        json_schema_extra=_meta("system"),
+        json_schema_extra=_meta(
+            "system",
+            alt_description="Attention 后端（torch.compile 模式下 block 内部走 compile-friendly SDPA 路径，此选项仅影响未编译的部分）",
+            alt_description_when="torch_compile==true",
+        ),
+    )
+    torch_compile: bool = Field(
+        False,
+        description="启用 torch.compile 加速（实验性）。自动启用 constant-token bucketing + per-block Inductor 编译。需要 Ampere+ GPU、CUDA toolkit。首步有 ~30s 编译预热",
+        json_schema_extra=_meta("system", advanced=True),
     )
     num_workers: int = Field(
         0, ge=0,

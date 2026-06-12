@@ -23,6 +23,35 @@ from torch.utils.data import Dataset
 logger = logging.getLogger(__name__)
 
 
+# Constant-token bucket tables for torch.compile mode.
+# Each family guarantees (W/16)*(H/16) == fixed token count, so compiled graphs
+# are reused across all aspect ratios within the same family.
+# Two families (4032, 4200) cover common AR range 0.57-1.75 with 12 resolutions.
+CONSTANT_TOKEN_BUCKETS = {
+    4032: [
+        (1024, 1008),  # 64×63  ~1:1
+        (1008, 1024),  # 63×64  ~1:1
+        (1152, 896),   # 72×56  ~1.29:1
+        (896, 1152),   # 56×72  ~0.78:1
+        (1344, 768),   # 84×48  ~1.75:1
+        (768, 1344),   # 48×84  ~0.57:1
+    ],
+    4200: [
+        (1120, 960),   # 70×60  ~1.17:1
+        (960, 1120),   # 60×70  ~0.86:1
+        (1200, 896),   # 75×56  ~1.34:1
+        (896, 1200),   # 56×75  ~0.75:1
+        (1344, 800),   # 84×50  ~1.68:1
+        (800, 1344),   # 50×84  ~0.60:1
+    ],
+}
+
+# Flat list for BucketManager constant_token_mode
+CONSTANT_TOKEN_BUCKET_LIST = [
+    reso for family in CONSTANT_TOKEN_BUCKETS.values() for reso in family
+]
+
+
 class BucketManager:
     """ARB 分桶管理.
 
@@ -54,21 +83,25 @@ class BucketManager:
     ``docs/design/multi-resolution-training-design.md`` §6 for the derivation.
     """
     def __init__(self, base_reso=1024, min_reso=None, max_reso=None, step=64,
-                 aspect_ratio_limit=2.0):
+                 aspect_ratio_limit=2.0, constant_token_mode=False):
         self.base_reso = base_reso
         self.aspect_ratio_limit = aspect_ratio_limit
         self.step = step
-        if min_reso is None or max_reso is None:
-            span = math.sqrt(aspect_ratio_limit)
-            derived_min = max(step, int(math.floor(base_reso / span / step) * step) - step)
-            derived_max = int(math.ceil(base_reso * span / step) * step) + step
-            if min_reso is None:
-                min_reso = derived_min
-            if max_reso is None:
-                max_reso = derived_max
-        self.min_reso = min_reso
-        self.max_reso = max_reso
-        self.buckets = self._generate(min_reso, max_reso, step, base_reso, aspect_ratio_limit)
+        self.constant_token_mode = constant_token_mode
+        if constant_token_mode:
+            self.buckets = list(CONSTANT_TOKEN_BUCKET_LIST)
+        else:
+            if min_reso is None or max_reso is None:
+                span = math.sqrt(aspect_ratio_limit)
+                derived_min = max(step, int(math.floor(base_reso / span / step) * step) - step)
+                derived_max = int(math.ceil(base_reso * span / step) * step) + step
+                if min_reso is None:
+                    min_reso = derived_min
+                if max_reso is None:
+                    max_reso = derived_max
+            self.min_reso = min_reso
+            self.max_reso = max_reso
+            self.buckets = self._generate(min_reso, max_reso, step, base_reso, aspect_ratio_limit)
 
     def _generate(self, min_r, max_r, step, base, ar_limit):
         # Keep algorithm identical to trainBuckets.generateBuckets() in TS:

@@ -355,6 +355,7 @@ class RMSNorm(torch.nn.Module):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
+        self._compile_friendly = False
 
     def reset_parameters(self) -> None:
         torch.nn.init.ones_(self.weight)
@@ -364,7 +365,15 @@ class RMSNorm(torch.nn.Module):
 
     @torch.autocast('cuda', dtype=torch.float32)
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self._compile_friendly:
+            return self._forward_compile(x)
         output = self._norm(x.float()).type_as(x)
+        return output * self.weight
+
+    def _forward_compile(self, x: torch.Tensor) -> torch.Tensor:
+        orig_dtype = x.dtype
+        x_f32 = x.to(torch.float32)
+        output = self._norm(x_f32).to(orig_dtype)
         return output * self.weight
 
 
@@ -440,6 +449,16 @@ def torch_attention_op(q_B_S_H_D: torch.Tensor, k_B_S_H_D: torch.Tensor, v_B_S_H
     )
 
     return result_B_S_HD
+
+
+def torch_attention_op_compile(q_B_S_H_D: torch.Tensor, k_B_S_H_D: torch.Tensor, v_B_S_H_D: torch.Tensor) -> torch.Tensor:
+    """Compile-friendly attention op: avoids einops, uses permute/reshape."""
+    B, S, H, D = q_B_S_H_D.shape
+    q_B_H_S_D = q_B_S_H_D.permute(0, 2, 1, 3)
+    k_B_H_S_D = k_B_S_H_D.permute(0, 2, 1, 3)
+    v_B_H_S_D = v_B_S_H_D.permute(0, 2, 1, 3)
+    attn_out = torch.nn.functional.scaled_dot_product_attention(q_B_H_S_D, k_B_H_S_D, v_B_H_S_D)
+    return attn_out.permute(0, 2, 1, 3).reshape(B, S, H * D)
 
 
 class Attention(nn.Module):
@@ -530,6 +549,7 @@ class Attention(nn.Module):
         self._query_dim = query_dim
         self._context_dim = context_dim
         self._inner_dim = inner_dim
+        self._compile_friendly = False
         self.init_weights()
 
     def init_weights(self) -> None:
@@ -556,10 +576,17 @@ class Attention(nn.Module):
         context = x if context is None else context
         k = self.k_proj(context)
         v = self.v_proj(context)
-        q, k, v = map(
-            lambda t: rearrange(t, "b ... (h d) -> b ... h d", h=self.n_heads, d=self.head_dim),
-            (q, k, v),
-        )
+        if self._compile_friendly:
+            shape_q = q.shape[:-1] + (self.n_heads, self.head_dim)
+            shape_k = k.shape[:-1] + (self.n_heads, self.head_dim)
+            q = q.view(shape_q)
+            k = k.view(shape_k)
+            v = v.view(shape_k)
+        else:
+            q, k, v = map(
+                lambda t: rearrange(t, "b ... (h d) -> b ... h d", h=self.n_heads, d=self.head_dim),
+                (q, k, v),
+            )
 
         def apply_norm_and_rotary_pos_emb(
             q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, rope_emb: Optional[torch.Tensor]
@@ -577,7 +604,10 @@ class Attention(nn.Module):
         return q, k, v
 
     def compute_attention(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
-        result = self.attn_op(q, k, v)  # [B, S, H, D]
+        if self._compile_friendly:
+            result = torch_attention_op_compile(q, k, v)
+        else:
+            result = self.attn_op(q, k, v)
         return self.output_dropout(self.output_proj(result))
 
     def forward(
@@ -811,9 +841,11 @@ class Timesteps(nn.Module):
     def __init__(self, num_channels: int):
         super().__init__()
         self.num_channels = num_channels
+        self._compile_friendly = False
 
     def forward(self, timesteps_B_T: torch.Tensor) -> torch.Tensor:
         assert timesteps_B_T.ndim == 2, f"Expected 2D input, got {timesteps_B_T.ndim}"
+        B, T = timesteps_B_T.shape
         in_dype = timesteps_B_T.dtype
         timesteps = timesteps_B_T.flatten().float()
         half_dim = self.num_channels // 2
@@ -826,6 +858,10 @@ class Timesteps(nn.Module):
         sin_emb = torch.sin(emb)
         cos_emb = torch.cos(emb)
         emb = torch.cat([cos_emb, sin_emb], dim=-1)
+
+        if self._compile_friendly:
+            return emb.to(dtype=in_dype).reshape(B, T, -1)
+        return rearrange(emb.to(dtype=in_dype), "(b t) d -> b t d", b=B, t=T)
 
         return rearrange(emb.to(dtype=in_dype), "(b t) d -> b t d", b=timesteps_B_T.shape[0], t=timesteps_B_T.shape[1])
 
@@ -1015,6 +1051,7 @@ class FinalLayer(nn.Module):
         self.n_adaln_chunks = 2
         self.use_adaln_lora = use_adaln_lora
         self.adaln_lora_dim = adaln_lora_dim
+        self._compile_friendly = False
         if use_adaln_lora:
             self.adaln_modulation = nn.Sequential(
                 nn.SiLU(),
@@ -1053,9 +1090,13 @@ class FinalLayer(nn.Module):
         else:
             shift_B_T_D, scale_B_T_D = self.adaln_modulation(emb_B_T_D).chunk(2, dim=-1)
 
-        shift_B_T_1_1_D, scale_B_T_1_1_D = rearrange(shift_B_T_D, "b t d -> b t 1 1 d"), rearrange(
-            scale_B_T_D, "b t d -> b t 1 1 d"
-        )
+        if self._compile_friendly:
+            shift_B_T_1_1_D = shift_B_T_D.unsqueeze(2).unsqueeze(3)
+            scale_B_T_1_1_D = scale_B_T_D.unsqueeze(2).unsqueeze(3)
+        else:
+            shift_B_T_1_1_D, scale_B_T_1_1_D = rearrange(shift_B_T_D, "b t d -> b t 1 1 d"), rearrange(
+                scale_B_T_D, "b t d -> b t 1 1 d"
+            )
 
         def _fn(
             _x_B_T_H_W_D: torch.Tensor,
@@ -1162,6 +1203,8 @@ class Block(nn.Module):
             torch.nn.init.zeros_(self.adaln_modulation_cross_attn[1].weight)
             torch.nn.init.zeros_(self.adaln_modulation_mlp[1].weight)
 
+        self._compile_friendly = False
+
     def init_weights(self) -> None:
         self.reset_parameters()
         self.self_attn.init_weights()
@@ -1198,6 +1241,15 @@ class Block(nn.Module):
                 emb_B_T_D
             ).chunk(3, dim=-1)
             shift_mlp_B_T_D, scale_mlp_B_T_D, gate_mlp_B_T_D = self.adaln_modulation_mlp(emb_B_T_D).chunk(3, dim=-1)
+
+        if self._compile_friendly:
+            return self._forward_compile(
+                x_B_T_H_W_D,
+                shift_self_attn_B_T_D, scale_self_attn_B_T_D, gate_self_attn_B_T_D,
+                shift_cross_attn_B_T_D, scale_cross_attn_B_T_D, gate_cross_attn_B_T_D,
+                shift_mlp_B_T_D, scale_mlp_B_T_D, gate_mlp_B_T_D,
+                crossattn_emb, rope_emb_L_1_1_D,
+            )
 
         # Reshape tensors from (B, T, D) to (B, T, 1, 1, D) for broadcasting
         shift_self_attn_B_T_1_1_D = rearrange(shift_self_attn_B_T_D, "b t d -> b t 1 1 d")
@@ -1275,6 +1327,42 @@ class Block(nn.Module):
         )
         result_B_T_H_W_D = self.mlp(normalized_x_B_T_H_W_D)
         x_B_T_H_W_D = x_B_T_H_W_D + gate_mlp_B_T_1_1_D * result_B_T_H_W_D
+        return x_B_T_H_W_D
+
+    def _forward_compile(
+        self,
+        x_B_T_H_W_D: torch.Tensor,
+        shift_self_attn_B_T_D: torch.Tensor, scale_self_attn_B_T_D: torch.Tensor, gate_self_attn_B_T_D: torch.Tensor,
+        shift_cross_attn_B_T_D: torch.Tensor, scale_cross_attn_B_T_D: torch.Tensor, gate_cross_attn_B_T_D: torch.Tensor,
+        shift_mlp_B_T_D: torch.Tensor, scale_mlp_B_T_D: torch.Tensor, gate_mlp_B_T_D: torch.Tensor,
+        crossattn_emb: torch.Tensor,
+        rope_emb_L_1_1_D: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        """Compile-friendly forward: uses unsqueeze/reshape instead of einops."""
+        shift_self_attn = shift_self_attn_B_T_D.unsqueeze(2).unsqueeze(3)
+        scale_self_attn = scale_self_attn_B_T_D.unsqueeze(2).unsqueeze(3)
+        gate_self_attn = gate_self_attn_B_T_D.unsqueeze(2).unsqueeze(3)
+
+        shift_cross_attn = shift_cross_attn_B_T_D.unsqueeze(2).unsqueeze(3)
+        scale_cross_attn = scale_cross_attn_B_T_D.unsqueeze(2).unsqueeze(3)
+        gate_cross_attn = gate_cross_attn_B_T_D.unsqueeze(2).unsqueeze(3)
+
+        shift_mlp = shift_mlp_B_T_D.unsqueeze(2).unsqueeze(3)
+        scale_mlp = scale_mlp_B_T_D.unsqueeze(2).unsqueeze(3)
+        gate_mlp = gate_mlp_B_T_D.unsqueeze(2).unsqueeze(3)
+
+        B, T, H, W, D = x_B_T_H_W_D.shape
+
+        normed = self.layer_norm_self_attn(x_B_T_H_W_D) * (1 + scale_self_attn) + shift_self_attn
+        sa_out = self.self_attn(normed.reshape(B, T * H * W, D), None, rope_emb=rope_emb_L_1_1_D)
+        x_B_T_H_W_D = x_B_T_H_W_D + gate_self_attn * sa_out.reshape(B, T, H, W, D)
+
+        normed = self.layer_norm_cross_attn(x_B_T_H_W_D) * (1 + scale_cross_attn) + shift_cross_attn
+        ca_out = self.cross_attn(normed.reshape(B, T * H * W, D), crossattn_emb, rope_emb=rope_emb_L_1_1_D)
+        x_B_T_H_W_D = ca_out.reshape(B, T, H, W, D) * gate_cross_attn + x_B_T_H_W_D
+
+        normed = self.layer_norm_mlp(x_B_T_H_W_D) * (1 + scale_mlp) + shift_mlp
+        x_B_T_H_W_D = x_B_T_H_W_D + gate_mlp * self.mlp(normed)
         return x_B_T_H_W_D
 
 
@@ -1413,6 +1501,7 @@ class MiniTrainDIT(nn.Module):
         )
 
         self.t_embedding_norm = RMSNorm(model_channels, eps=1e-6)
+        self._compile_friendly = False
         self.init_weights()
 
     def init_weights(self) -> None:
@@ -1427,6 +1516,21 @@ class MiniTrainDIT(nn.Module):
 
         self.final_layer.init_weights()
         self.t_embedding_norm.reset_parameters()
+
+    def compile_blocks(self, backend="inductor", mode=None):
+        """Per-block torch.compile for static-shape training."""
+        self._compile_friendly = True
+        for module in self.modules():
+            if hasattr(module, "_compile_friendly"):
+                module._compile_friendly = True
+
+        compile_kwargs = {"backend": backend}
+        if mode:
+            compile_kwargs["mode"] = mode
+
+        for block in self.blocks:
+            block.forward = torch.compile(block.forward, **compile_kwargs)
+        self.final_layer.forward = torch.compile(self.final_layer.forward, **compile_kwargs)
 
     def build_patch_embed(self) -> None:
         (
@@ -1534,6 +1638,8 @@ class MiniTrainDIT(nn.Module):
         return x_B_T_H_W_D, None, extra_pos_emb
 
     def unpatchify(self, x_B_T_H_W_M: torch.Tensor) -> torch.Tensor:
+        if self._compile_friendly:
+            return self._unpatchify_compile(x_B_T_H_W_M)
         x_B_C_Tt_Hp_Wp = rearrange(
             x_B_T_H_W_M,
             "B T H W (p1 p2 t C) -> B C (T t) (H p1) (W p2)",
@@ -1542,6 +1648,17 @@ class MiniTrainDIT(nn.Module):
             t=self.patch_temporal,
         )
         return x_B_C_Tt_Hp_Wp
+
+    def _unpatchify_compile(self, x_B_T_H_W_M: torch.Tensor) -> torch.Tensor:
+        B, T, H, W, _M = x_B_T_H_W_M.shape
+        p1 = self.patch_spatial
+        p2 = self.patch_spatial
+        t = self.patch_temporal
+        C = _M // (p1 * p2 * t)
+        x = x_B_T_H_W_M.reshape(B, T, H, W, p1, p2, t, C)
+        x = x.permute(0, 7, 1, 6, 2, 4, 3, 5)
+        x = x.reshape(B, C, T * t, H * p1, W * p2)
+        return x
 
     def forward(
         self,
