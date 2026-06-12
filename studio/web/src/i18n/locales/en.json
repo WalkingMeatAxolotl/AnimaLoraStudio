@@ -604,7 +604,24 @@
     "versionLabel": "Initial version label",
     "versionPlaceholder": "v1 / baseline / ...",
     "notesPlaceholder": "Training goal / notes",
-    "creating": "Creating…"
+    "creating": "Creating…",
+    "filters": "Filter / sort",
+    "filtersActive": "Filters active",
+    "searchPlaceholder": "Search title / slug / notes…",
+    "statusAll": "All statuses",
+    "sortLabel": "Sort",
+    "sort_updated": "Recently active",
+    "sort_created": "Newest created",
+    "sort_title": "By name",
+    "showArchived": "Show archived ({{n}})",
+    "archivedSection": "Archived",
+    "archiveProjectTitle": "Archive project (recoverable)",
+    "archiveConfirm": "Archive project \"{{title}}\"?\nIt will be hidden from the list; data is untouched. Recover it via \"Show archived\" in the filter panel.",
+    "archiveBtn": "Archive",
+    "archived": "Archived: {{title}}",
+    "unarchiveTitle": "Restore project",
+    "unarchiveConfirm": "Restore project \"{{title}}\" to the project list?",
+    "unarchived": "Restored: {{title}}"
   },
   "queue": {
     "title": "Queue",
@@ -1519,6 +1536,12 @@
     "completed": "Completed",
     "failed": "Failed",
     "canceled": "Canceled"
+  },
+  "versionPhase": {
+    "curating": "Curating",
+    "tagging": "Tagging",
+    "editing": "Tag edit",
+    "ready": "Ready to train"
   },
   "snapshot": {
     "title": "Training config snapshot",

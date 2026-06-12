@@ -651,8 +651,12 @@ export interface ProjectSummary {
   /** ADR-0007 §11.8-E: 项目卡片右上角 status badge / 卡片显 version 名（list 端点 enrich）。 */
   active_version_label: string | null
   active_version_status: VersionStatus | null
+  /** v12: preparing 时的 phase cursor（badge 显示"准备中 · 打标"）；无 active version 为 null。 */
+  active_version_phase: VersionPhase | null
   created_at: number
   updated_at: number
+  /** v12: 非 null = 已归档（软隐藏）。list 归档/活跃都返回，切分在前端。 */
+  archived_at: number | null
   note: string | null
   download_image_count?: number
   preprocess_image_count?: number
@@ -1778,6 +1782,11 @@ export const api = {
     }),
   deleteProject: (pid: number) =>
     req<{ deleted: number }>(`/api/projects/${pid}`, { method: 'DELETE' }),
+  /** 归档（软隐藏，可逆）：目录 / versions / 任务全部原样。 */
+  archiveProject: (pid: number) =>
+    req<ProjectDetail>(`/api/projects/${pid}/archive`, { method: 'POST' }),
+  unarchiveProject: (pid: number) =>
+    req<ProjectDetail>(`/api/projects/${pid}/unarchive`, { method: 'POST' }),
 
   listVersions: (pid: number) =>
     req<{ items: Version[] }>(`/api/projects/${pid}/versions`).then(

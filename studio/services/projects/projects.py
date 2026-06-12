@@ -6,6 +6,9 @@ title 和 note 可改。
 
 删除：直接 rmtree 项目目录 + DELETE db 行（CASCADE 清 versions /
 project_jobs）。无回收站、不可恢复 —— UI 层 confirm 提示用户。
+
+归档（v12）：archived_at 非 NULL = 归档，仅做列表软隐藏（目录 / versions /
+任务全部原样）。UI 上"×"先归档，归档视图里再删才走 delete_project。
 """
 from __future__ import annotations
 
@@ -155,6 +158,22 @@ def update_project(
     params.append(time.time())
     params.append(project_id)
     conn.execute(f"UPDATE projects SET {cols} WHERE id = ?", params)
+    conn.commit()
+    p = _must_get(conn, project_id)
+    _write_project_json(p)
+    return p
+
+
+def set_archived(
+    conn: sqlite3.Connection, project_id: int, archived: bool
+) -> dict[str, Any]:
+    """归档 / 取消归档。只写 archived_at，不动 updated_at —— 恢复后项目
+    在"按活跃时间"排序里回到原来的位置，而不是顶到最前。"""
+    _must_get(conn, project_id)
+    conn.execute(
+        "UPDATE projects SET archived_at = ? WHERE id = ?",
+        (time.time() if archived else None, project_id),
+    )
     conn.commit()
     p = _must_get(conn, project_id)
     _write_project_json(p)

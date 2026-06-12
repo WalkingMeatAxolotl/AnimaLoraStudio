@@ -604,7 +604,24 @@
     "versionLabel": "初始版本标签",
     "versionPlaceholder": "v1 / baseline / ...",
     "notesPlaceholder": "训练目标 / 备注",
-    "creating": "创建中…"
+    "creating": "创建中…",
+    "filters": "筛选 / 排序",
+    "filtersActive": "有筛选生效",
+    "searchPlaceholder": "搜索标题 / slug / 备注…",
+    "statusAll": "全部状态",
+    "sortLabel": "排序",
+    "sort_updated": "最近活跃",
+    "sort_created": "最新创建",
+    "sort_title": "按名称",
+    "showArchived": "显示已归档（{{n}}）",
+    "archivedSection": "已归档",
+    "archiveProjectTitle": "归档项目（可恢复）",
+    "archiveConfirm": "归档项目「{{title}}」？\n项目将从列表隐藏，数据不受影响；可在「筛选 / 排序」面板开启「显示已归档」找回。",
+    "archiveBtn": "归档",
+    "archived": "已归档: {{title}}",
+    "unarchiveTitle": "恢复项目",
+    "unarchiveConfirm": "把项目「{{title}}」恢复回项目列表？",
+    "unarchived": "已恢复: {{title}}"
   },
   "queue": {
     "title": "队列",
@@ -1519,6 +1536,12 @@
     "completed": "已完成",
     "failed": "失败",
     "canceled": "已取消"
+  },
+  "versionPhase": {
+    "curating": "筛选",
+    "tagging": "打标",
+    "editing": "标签编辑",
+    "ready": "待训练"
   },
   "snapshot": {
     "title": "训练配置记录",

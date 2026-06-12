@@ -95,6 +95,49 @@ def test_delete_removes_dir(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
+# archive（v12 软隐藏）
+# ---------------------------------------------------------------------------
+
+
+def test_archive_roundtrip(client: TestClient) -> None:
+    p = client.post("/api/projects", json={"title": "Arch"}).json()
+    pid = p["id"]
+    pdir = projects.project_dir(pid, p["slug"])
+
+    resp = client.post(f"/api/projects/{pid}/archive")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["archived_at"] is not None
+    # 归档只是软隐藏：目录原样、list 仍返回该行（带 archived_at 给前端切分）
+    assert pdir.exists()
+    items = client.get("/api/projects").json()["items"]
+    assert [r["id"] for r in items if r["archived_at"]] == [pid]
+
+    resp = client.post(f"/api/projects/{pid}/unarchive")
+    assert resp.status_code == 200
+    assert resp.json()["archived_at"] is None
+
+
+def test_archive_404(client: TestClient) -> None:
+    assert client.post("/api/projects/9999/archive").status_code == 404
+
+
+def test_archive_keeps_updated_at(client: TestClient) -> None:
+    """归档/恢复不动 updated_at —— 恢复后按活跃时间排序的位置不变。"""
+    p = client.post("/api/projects", json={"title": "Keep"}).json()
+    client.post(f"/api/projects/{p['id']}/archive")
+    after = client.post(f"/api/projects/{p['id']}/unarchive").json()
+    assert after["updated_at"] == p["updated_at"]
+
+
+def test_list_enriches_active_version_phase(client: TestClient) -> None:
+    """preparing 项目的 list 行带 phase cursor（badge"准备中 · 打标"用）。"""
+    client.post("/api/projects", json={"title": "PhaseTest"})
+    row = client.get("/api/projects").json()["items"][0]
+    assert row["active_version_status"] == "preparing"
+    assert row["active_version_phase"] == "curating"
+
+
+# ---------------------------------------------------------------------------
 # versions CRUD
 # ---------------------------------------------------------------------------
 

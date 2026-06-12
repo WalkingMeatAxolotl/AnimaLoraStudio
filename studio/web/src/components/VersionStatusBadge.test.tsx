@@ -42,4 +42,28 @@ describe('VersionStatusBadge', () => {
     const { container } = render(<VersionStatusBadge status="canceled" />)
     expect(container.querySelector('.badge')?.className).toContain('badge-neutral')
   })
+
+  // v12 — preparing 时显示 phase 后缀（项目卡片"准备中 · 打标"）
+  it('appends phase suffix when preparing', () => {
+    const { container } = render(
+      <VersionStatusBadge status="preparing" phase="tagging" />
+    )
+    expect(container.querySelector('.badge')?.textContent).toBe('准备中 · 打标')
+  })
+
+  it('hides suffix for optional phases (preprocessing / regularizing)', () => {
+    for (const phase of ['preprocessing', 'regularizing'] as const) {
+      const { container } = render(
+        <VersionStatusBadge status="preparing" phase={phase} />
+      )
+      expect(container.querySelector('.badge')?.textContent).toBe('准备中')
+    }
+  })
+
+  it('ignores phase when status is not preparing', () => {
+    const { container } = render(
+      <VersionStatusBadge status="training" phase="tagging" />
+    )
+    expect(container.querySelector('.badge')?.textContent).toBe('训练中')
+  })
 })

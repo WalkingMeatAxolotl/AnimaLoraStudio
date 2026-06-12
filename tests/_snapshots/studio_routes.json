@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 176,
+  "count": 178,
   "routes": [
     {
       "path": "/",
@@ -450,6 +450,14 @@
       "type": "APIRoute"
     },
     {
+      "path": "/api/projects/{pid}/archive",
+      "methods": [
+        "POST"
+      ],
+      "name": "archive_project_endpoint",
+      "type": "APIRoute"
+    },
+    {
       "path": "/api/projects/{pid}/download",
       "methods": [
         "POST"
@@ -511,6 +519,14 @@
         "GET"
       ],
       "name": "project_thumb",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/unarchive",
+      "methods": [
+        "POST"
+      ],
+      "name": "unarchive_project_endpoint",
       "type": "APIRoute"
     },
     {
