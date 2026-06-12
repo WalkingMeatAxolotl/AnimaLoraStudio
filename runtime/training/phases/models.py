@@ -105,6 +105,4 @@ def run(ctx: TrainingContext) -> None:
                 ctx.model.compile_blocks()
             except Exception as e:
                 logger.warning(f"torch.compile 失败，fallback 到非编译模式: {e}")
-                for module in ctx.model.modules():
-                    if hasattr(module, "_compile_friendly"):
-                        module._compile_friendly = False
+                ctx.model._native_flatten = False

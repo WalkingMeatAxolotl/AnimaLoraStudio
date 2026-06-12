@@ -44,6 +44,9 @@ def run(ctx: TrainingContext) -> None:
     """跑训练直到 args.epochs 或 args.max_steps 上限。"""
     args = ctx.args
 
+    if getattr(args, "kv_trim", False) and getattr(args, "torch_compile", False):
+        logger.warning("kv_trim 已被 torch_compile 静默禁用（动态 seq 维度导致 recompile）")
+
     step_start_time = time.perf_counter()
 
     for epoch in range(ctx.start_epoch, args.epochs):
