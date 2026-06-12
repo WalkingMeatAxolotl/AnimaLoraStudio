@@ -109,6 +109,13 @@ class TrainingConfig(BaseModel):
         description="优先使用 JSON 标签文件（推荐，支持分类 shuffle）",
         json_schema_extra=_meta("caption"),
     )
+    caption_comfy_encoding: bool = Field(
+        True,
+        description="标签按 ComfyUI 方式编码文本（与测试出图、采样预览同一条编码链路，"
+                    "推荐保持开启）；关闭走旧版逐 tag 编码，用于新旧编码 A/B 对比，"
+                    "或继续用旧编码训练的断点状态",
+        json_schema_extra=_meta("caption", advanced=True),
+    )
     cache_latents: bool = Field(
         True,
         description="缓存 VAE latent 加速训练",
@@ -584,6 +591,19 @@ class TrainingConfig(BaseModel):
     def _migrate_noise_enhancement(cls, data: Any) -> Any:
         return migrate_noise_enhancement_type(data)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_sample_sampler_scheduler(cls, data: Any) -> Any:
+        """sampler/scheduler 收紧为 Literal 前是自由文本，旧 preset / 旧版本
+        config 可能存了其他值（如 euler，当年走 inline Euler 兜底）。统一
+        归并到默认值而不是让整个 config 加载失败。"""
+        if isinstance(data, dict):
+            if data.get("sample_sampler_name") not in (None, "er_sde", "dpmpp_3m_sde"):
+                data["sample_sampler_name"] = "er_sde"
+            if data.get("sample_scheduler") not in (None, "simple", "sgm_uniform"):
+                data["sample_scheduler"] = "simple"
+        return data
+
     @model_validator(mode="after")
     def _validate_prodigy_scheduler(self) -> "TrainingConfig":
         """Prodigy / Automagic 系列固定使用常数学习率，外部 scheduler 统一拦截。"""
@@ -751,19 +771,15 @@ class TrainingConfig(BaseModel):
         description="CFG Scale",
         json_schema_extra=_meta("sample"),
     )
-    sample_sampler_name: str = Field(
+    sample_sampler_name: Literal["er_sde", "dpmpp_3m_sde"] = Field(
         "er_sde",
-        description="采样器",
+        description="采样器。er_sde 默认；dpmpp_3m_sde 与 ComfyUI 同款"
+                    "（BrownianTree 噪声，需要 torchsde）",
         json_schema_extra=_meta("sample"),
     )
-    sample_scheduler: str = Field(
+    sample_scheduler: Literal["simple", "sgm_uniform"] = Field(
         "simple",
-        description="调度器",
-        json_schema_extra=_meta("sample"),
-    )
-    sample_comfy_parity: bool = Field(
-        True,
-        description="采样预览使用 Comfy-style 生成流程",
+        description="调度器。simple 默认；sgm_uniform 为 ComfyUI 的 SGM 均匀切分",
         json_schema_extra=_meta("sample"),
     )
     sample_width: int = Field(

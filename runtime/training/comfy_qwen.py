@@ -288,6 +288,32 @@ def _resolve_qwen_safetensors_path(qwen_path: str | Path) -> Path:
     return path
 
 
+def select_encoder_state_dict(expected_keys, state_dict, *, source: str = "") -> dict:
+    """过滤 checkpoint state dict 到 encoder 实际需要的 key 集。
+
+    HF Qwen3 checkpoint 变体可能带 encoder 用不到的额外权重（如非 tied
+    embeddings 的 lm_head.weight）。缺失 key 硬错（权重不完整出图必坏）；
+    多余 key 过滤并记日志——直接 strict=True 喂全量 dict 会在这类变体上误炸。
+    """
+    import logging
+
+    expected = set(expected_keys)
+    provided = set(state_dict.keys())
+    missing = expected - provided
+    if missing:
+        raise RuntimeError(
+            f"comfy_qwen3 encoder checkpoint missing keys: {sorted(missing)[:8]}"
+            f"{' ...' if len(missing) > 8 else ''} ({source})"
+        )
+    extra = provided - expected
+    if extra:
+        logging.getLogger(__name__).info(
+            "comfy_qwen3 encoder ignoring %d unexpected checkpoint keys (e.g. %s)",
+            len(extra), sorted(extra)[:4],
+        )
+    return {k: state_dict[k] for k in expected}
+
+
 def load_comfy_qwen3_encoder(
     qwen_path: str | Path,
     *,
@@ -299,6 +325,9 @@ def load_comfy_qwen3_encoder(
     ckpt_path = _resolve_qwen_safetensors_path(qwen_path)
     model = ComfyQwen3Encoder(device=device, dtype=dtype)
     state_dict = load_file(str(ckpt_path), device="cpu")
+    state_dict = select_encoder_state_dict(
+        model.state_dict().keys(), state_dict, source=str(ckpt_path)
+    )
     model.load_state_dict(state_dict, strict=True)
     model.to(device=device)
     model.eval().requires_grad_(False)

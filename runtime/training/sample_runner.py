@@ -56,8 +56,6 @@ def run_sample(
     s_steps = int(getattr(args, "sample_infer_steps", 25) or 25)
     s_sampler = str(getattr(args, "sample_sampler_name", "er_sde") or "er_sde")
     s_sched = str(getattr(args, "sample_scheduler", "simple") or "simple")
-    s_comfy_parity = bool(getattr(args, "sample_comfy_parity", True))
-    negative_arg = s_neg if s_comfy_parity else (s_neg or None)
 
     # T-LoRA：与 ControlGenAI/T-LoRA 官方推理一致 —— sample 阶段不应用 timestep
     # mask。官方 inferencer 不传 sigma_mask, forward 内 fallback 出全 1 mask =
@@ -77,12 +75,11 @@ def run_sample(
             img = sample_image(
                 ctx.model, ctx.vae, ctx.qwen_model, ctx.qwen_tok, ctx.t5_tok,
                 prompt, height=s_h, width=s_w, steps=s_steps, cfg_scale=s_cfg,
-                negative_prompt=negative_arg,
+                negative_prompt=s_neg,
                 sampler_name=s_sampler,
                 scheduler=s_sched,
                 device=ctx.device, dtype=ctx.dtype,
                 seed=(s_seed + seed_offset) if s_seed else None,
-                comfy_parity=s_comfy_parity,
             )
             img.save(sample_path)
             ctx.emit(f"采样保存: {sample_path.name}")

@@ -6,7 +6,7 @@ rank/alpha 从 ss_network_args 读，正确合并多 LoRA。
 注意：不使用 `from __future__ import annotations`——Pydantic v2 + Python 3.12+
 在延迟求值模式下会将 typing._SpecialForm 当成 schema key，触发 AttributeError。
 """
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -40,8 +40,8 @@ class GenerateConfig(BaseModel):
     height: int = Field(1024, ge=256, le=4096)
     steps: int = Field(25, ge=1, le=150)
     cfg_scale: float = Field(4.0, ge=0.0, le=20.0)
-    sampler_name: str = Field("er_sde")
-    scheduler: str = Field("simple")
+    sampler_name: Literal["er_sde", "dpmpp_3m_sde"] = Field("er_sde")
+    scheduler: Literal["simple", "sgm_uniform"] = Field("simple")
     count: int = Field(1, ge=1, le=32, description="每个 prompt 生成张数")
     seed: int = Field(0, description="随机种子（0=随机）")
 

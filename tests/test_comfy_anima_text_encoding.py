@@ -192,6 +192,10 @@ class AssertingVAEModel:
         self.qwen_model = qwen_model
         self.decode_calls = 0
 
+    def parameters(self):
+        # offload 只在 fp32 VAE（Generate parity runtime）时触发
+        yield torch.zeros((), dtype=torch.float32)
+
     def decode(self, latents, scale):
         self.decode_calls += 1
         assert next(self.anima_model.parameters()).device.type == "cpu"
@@ -387,11 +391,6 @@ def test_sample_image_comfy_parity_uses_raw_qwen_text_and_model_weight_api(monke
         lambda _name: (lambda denoise_fn, x, sigmas, **_kwargs: x),
     )
 
-    def fail_external_weighting(*_args, **_kwargs):
-        raise AssertionError("comfy_parity sampling should pass weights through model.preprocess_text_embeds")
-
-    monkeypatch.setattr(sampling, "apply_t5_token_weights", fail_external_weighting)
-
     image = sample_image(
         model,
         FakeVAE(),
@@ -409,7 +408,6 @@ def test_sample_image_comfy_parity_uses_raw_qwen_text_and_model_weight_api(monke
         device="cpu",
         dtype=torch.float32,
         seed=123,
-        comfy_parity=True,
     )
 
     assert image.size == (2, 2)
@@ -446,7 +444,6 @@ def test_sample_image_comfy_parity_batches_cfg_like_comfyui(monkeypatch) -> None
         device="cpu",
         dtype=torch.float32,
         seed=123,
-        comfy_parity=True,
     )
 
     assert image.size == (2, 2)
@@ -494,12 +491,12 @@ def test_sample_image_retries_with_sdpa_when_xformers_outputs_nan(monkeypatch) -
         device="cpu",
         dtype=torch.float32,
         seed=123,
-        comfy_parity=True,
     )
 
     assert image.size == (2, 2)
     assert len(model.forward_calls) == 2
-    assert cosmos._USE_XFORMERS is False
+    # 采样结束后开关复位：本张图用 SDPA 跑完，下一张重新尝试 xformers
+    assert cosmos._USE_XFORMERS is True
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA-only VRAM offload behavior")
@@ -546,7 +543,6 @@ def test_sample_image_offloads_inactive_modules_for_vae_decode_and_restores_afte
             device="cuda",
             dtype=torch.float32,
             seed=123,
-            comfy_parity=True,
         )
         assert image.size == (2, 2)
         assert next(model.parameters()).device.type == "cuda"
@@ -587,8 +583,117 @@ def test_sample_image_restores_offloaded_modules_when_vae_decode_fails(monkeypat
             device="cuda",
             dtype=torch.float32,
             seed=123,
-            comfy_parity=True,
         )
 
     assert next(model.parameters()).device.type == "cuda"
     assert next(qwen_model.parameters()).device.type == "cuda"
+
+
+class NoOffloadAssertingVAEModel:
+    """bf16 VAE：decode 时模型必须仍在 CUDA（不应触发 offload）。"""
+
+    def __init__(self, anima_model: TinyTrackedAnimaModel, qwen_model: TinyTrackedQwenModel) -> None:
+        self.anima_model = anima_model
+        self.qwen_model = qwen_model
+        self.decode_calls = 0
+
+    def parameters(self):
+        yield torch.zeros((), dtype=torch.bfloat16)
+
+    def decode(self, latents, scale):
+        self.decode_calls += 1
+        assert next(self.anima_model.parameters()).device.type == "cuda"
+        assert next(self.qwen_model.parameters()).device.type == "cuda"
+        batch, _channels, frames, height, width = latents.shape
+        return torch.zeros((batch, 3, frames, height, width), device=latents.device, dtype=torch.float32)
+
+
+class NoOffloadTrackedVAE:
+    scale = 1.0
+
+    def __init__(self, anima_model: TinyTrackedAnimaModel, qwen_model: TinyTrackedQwenModel) -> None:
+        self.model = NoOffloadAssertingVAEModel(anima_model, qwen_model)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA-only VRAM offload behavior")
+def test_sample_image_skips_offload_for_bf16_vae(monkeypatch) -> None:
+    model = TinyTrackedAnimaModel().cuda()
+    qwen_model = TinyTrackedQwenModel().cuda()
+    vae = NoOffloadTrackedVAE(model, qwen_model)
+
+    monkeypatch.setattr(
+        inference_samplers,
+        "build_inference_sampler",
+        lambda _name: (lambda denoise_fn, x, sigmas, **_kwargs: x),
+    )
+
+    image = sample_image(
+        model,
+        vae,
+        qwen_model,
+        RecordingQwenTokenizer(),
+        FakeTokenizer(),
+        "1girl",
+        height=16,
+        width=16,
+        steps=1,
+        cfg_scale=1.0,
+        negative_prompt="",
+        sampler_name="er_sde",
+        scheduler="simple",
+        device="cuda",
+        dtype=torch.float32,
+        seed=123,
+    )
+    assert image.size == (2, 2)
+    assert vae.model.decode_calls == 1
+    assert next(model.parameters()).device.type == "cuda"
+
+
+# ---------------- tokenize_t5_comfy_literal（训练 caption 编码） ----------------
+
+def test_tokenize_t5_comfy_literal_keeps_parentheses_literal_weight_one() -> None:
+    from training.text_encoding import tokenize_t5_comfy_literal
+
+    caption = "ganyu (genshin impact), 1girl"
+    ids, attn, w = tokenize_t5_comfy_literal(FakeTokenizer(), [caption], max_length=512)
+
+    valid = attn[0].bool()
+    valid_ids = ids[0][valid].tolist()
+    # 字面 tokenize：括号字符保留在 token 序列里，不做权重语法解析
+    assert FakeTokenizer.token_id("(") in valid_ids
+    assert FakeTokenizer.token_id(")") in valid_ids
+    assert valid_ids == _ids_for_text(caption) + [FakeTokenizer.eos_token_id]
+    # 权重全 1.0
+    assert torch.all(w[0][valid] == 1.0)
+
+
+def test_tokenize_t5_comfy_literal_differs_from_prompt_weight_parsing() -> None:
+    from training.text_encoding import tokenize_t5_comfy_literal
+
+    caption = "ganyu (genshin impact)"
+    ids, attn, _w = tokenize_t5_comfy_literal(FakeTokenizer(), [caption], max_length=512)
+    valid_ids = ids[0][attn[0].bool()].tolist()
+
+    # prompt 权重解析会吃掉括号并给 1.1 倍权重——caption 路径必须不同
+    _qwen, p_ids, p_attn, p_w = build_comfy_anima_conditioning_inputs(FakeTokenizer(), caption)
+    parsed_ids = p_ids[0][p_attn[0].bool()].tolist()
+    assert FakeTokenizer.token_id("(") not in parsed_ids
+    assert valid_ids != parsed_ids
+
+
+def test_tokenize_t5_comfy_literal_batch_padding_conventions() -> None:
+    from training.text_encoding import tokenize_t5_comfy_literal
+
+    ids, attn, w = tokenize_t5_comfy_literal(FakeTokenizer(), ["1girl", "a"], max_length=512)
+
+    assert ids.shape == attn.shape == w.shape
+    assert ids.shape[0] == 2
+    # 短样本 padding：pad_id=0 / attn=0 / weight=0.0（下游清零 padding cross）
+    short_pad = ~attn[1].bool()
+    assert short_pad.any()
+    assert torch.all(ids[1][short_pad] == FakeTokenizer.pad_token_id)
+    assert torch.all(w[1][short_pad] == 0.0)
+    # 两行都以 EOS 结尾
+    assert ids[0][attn[0].bool()][-1].item() == FakeTokenizer.eos_token_id
+    assert ids[1][attn[1].bool()][-1].item() == FakeTokenizer.eos_token_id

@@ -7,6 +7,8 @@
 - tokenize_t5_weighted — 参考 ComfyUI anima-kai，按 tag 切分 + 权重 + pad
 - build_comfy_anima_conditioning_inputs — Generate Comfy parity 路径用的
   raw-Qwen + SDTokenizer-style T5 加权输入
+- tokenize_t5_comfy_literal — 训练 caption 的 Comfy-style 字面 T5 tokenization
+  （批量、不解析权重语法；caption_comfy_encoding=true 时由训练 loop 使用）
 
 内部：
 - _parse_weighted_tag / _build_qwen_text_from_prompt
@@ -261,6 +263,44 @@ def build_comfy_anima_conditioning_inputs(t5_tokenizer, prompt: str, max_length=
     t5_weights = torch.tensor([weights], dtype=torch.float32)
     t5_attn = torch.ones_like(t5_ids, dtype=torch.long)
     return qwen_text, t5_ids, t5_attn, t5_weights
+
+
+def tokenize_t5_comfy_literal(tokenizer, texts, max_length=512):
+    """Comfy-style 字面 T5 tokenization（训练 caption 用，批量版）。
+
+    与 build_comfy_anima_conditioning_inputs 的差异：caption 是数据不是 prompt，
+    整段按字面文本分词——不做权重语法解析、不清洗。booru tag 的括号
+    （`ganyu (genshin impact)`）保持字面字符，等价于 ComfyUI 用户推理时
+    转义 `\\(...\\)` 后 T5 实际看到的 token 序列。
+
+    返回与 tokenize_t5_weighted 相同的约定：input_ids / attention_mask(1=有效) /
+    token_weights（有效位 1.0），padding 位权重 0.0（下游乘到 LLMAdapter 输出
+    上等于把 padding cross 清零）。
+    """
+    if isinstance(texts, str):
+        texts = [texts]
+
+    pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
+    eos_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else 1
+
+    seqs: list[list[int]] = []
+    for text in texts:
+        ids = _tokenizer_input_ids_without_eos(tokenizer, str(text), int(eos_id))
+        ids.append(int(eos_id))
+        if max_length and len(ids) > int(max_length):
+            ids = ids[: int(max_length)]
+            ids[-1] = int(eos_id)
+        seqs.append(ids)
+
+    max_len = max((len(s) for s in seqs), default=1)
+    input_ids = torch.full((len(seqs), max_len), int(pad_id), dtype=torch.long)
+    attention_mask = torch.zeros((len(seqs), max_len), dtype=torch.long)
+    token_w = torch.zeros((len(seqs), max_len), dtype=torch.float32)
+    for i, s in enumerate(seqs):
+        input_ids[i, : len(s)] = torch.tensor(s, dtype=torch.long)
+        attention_mask[i, : len(s)] = 1
+        token_w[i, : len(s)] = 1.0
+    return input_ids, attention_mask, token_w
 
 
 def apply_t5_token_weights(cross: torch.Tensor, token_weights: torch.Tensor | None) -> torch.Tensor:

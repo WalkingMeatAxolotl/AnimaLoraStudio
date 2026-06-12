@@ -3,7 +3,6 @@ import pytest
 from studio.domain.comfy_parity import force_comfy_parity_runtime_config
 from studio.domain.training import TrainingConfig
 from training.sampling import (
-    _normalize_negative_prompt,
     _resolve_parity_sampler_scheduler,
     sample_image,
 )
@@ -54,7 +53,6 @@ def test_sample_image_comfy_parity_rejects_unsupported_scheduler_before_fallback
             scheduler="normal",
             device="cpu",
             dtype=None,
-            comfy_parity=True,
         )
 
 
@@ -76,29 +74,29 @@ def test_sample_image_comfy_parity_rejects_unsupported_sampler_before_fallback()
             scheduler="simple",
             device="cpu",
             dtype=None,
-            comfy_parity=True,
         )
 
 
-def test_negative_prompt_empty_string_stays_empty_for_comfy_parity() -> None:
-    assert _normalize_negative_prompt("", comfy_parity=True) == ""
-
-
-def test_negative_prompt_none_uses_legacy_default_outside_comfy_parity() -> None:
-    value = _normalize_negative_prompt(None, comfy_parity=False)
-    assert "worst quality" in value
-
-
-def test_negative_prompt_none_stays_empty_for_comfy_parity() -> None:
-    assert _normalize_negative_prompt(None, comfy_parity=True) == ""
-
-
-def test_training_config_exposes_sample_comfy_parity_default_true() -> None:
+def test_training_config_caption_comfy_encoding_default_true() -> None:
     cfg = TrainingConfig()
-    assert cfg.sample_comfy_parity is True
+    assert cfg.caption_comfy_encoding is True
     schema = TrainingConfig.model_json_schema()
-    field = schema["properties"]["sample_comfy_parity"]
+    field = schema["properties"]["caption_comfy_encoding"]
     assert field["default"] is True
+
+
+def test_training_config_sampler_scheduler_are_enums() -> None:
+    """收紧为 Literal 后 UI 自动渲染下拉，非法值在 config 层就挡掉。"""
+    schema = TrainingConfig.model_json_schema()
+    assert set(schema["properties"]["sample_sampler_name"]["enum"]) == {"er_sde", "dpmpp_3m_sde"}
+    assert set(schema["properties"]["sample_scheduler"]["enum"]) == {"simple", "sgm_uniform"}
+
+
+def test_training_config_coerces_legacy_sampler_values() -> None:
+    """旧 preset 可能存了 euler（当年走 inline Euler 兜底）：归并默认而非炸 config。"""
+    cfg = TrainingConfig(sample_sampler_name="euler", sample_scheduler="normal")
+    assert cfg.sample_sampler_name == "er_sde"
+    assert cfg.sample_scheduler == "simple"
 
 
 def test_comfy_parity_runtime_config_forces_comfy_aki_runtime() -> None:

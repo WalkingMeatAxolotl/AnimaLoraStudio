@@ -494,7 +494,7 @@ def main() -> None:
                 width=width,
                 steps=steps,
                 cfg_scale=cfg_scale,
-                negative_prompt=negative_prompt or None,
+                negative_prompt=negative_prompt,
                 sampler_name=sampler_name,
                 scheduler=scheduler,
                 device=device,

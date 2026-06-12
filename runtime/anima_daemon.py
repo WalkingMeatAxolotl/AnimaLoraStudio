@@ -139,7 +139,13 @@ def _move_adapter_to_device(adapter: Any, device: str, dtype: Any) -> None:
 
 
 class GenerationCanceled(BaseException):
-    pass
+    """取消信号。
+
+    刻意继承 BaseException 而非 Exception：取消由 step_callback 在采样步内
+    抛出，而 sampler 对 step_callback 的调用包在 `except Exception: pass`
+    里（回调失败不该毁掉采样）。继承 Exception 会被这层静默吞掉、无法
+    中断采样。所有捕获点都显式写 `except GenerationCanceled`。
+    """
 
 
 _CANCEL_EVENTS: dict[str, threading.Event] = {}
@@ -743,7 +749,6 @@ def _run_generate(
                     dtype=CACHE.dtype,
                     step_callback=preview_callback,
                     seed=seed,
-                    comfy_parity=True,
                 )
                 CACHE._move_runtime_to_device()
                 fname = f"gen_{img_idx:04d}_p{pi}_c{ci}_s{seed}.png"
@@ -877,7 +882,6 @@ def _run_xy(
                     device=CACHE.device,
                     dtype=CACHE.dtype,
                     seed=cur_seed,
-                    comfy_parity=True,
                 )
                 CACHE._move_runtime_to_device()
                 fname = f"xy_x{xi:02d}_y{yi:02d}_s{cur_seed}.png"
