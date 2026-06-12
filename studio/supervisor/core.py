@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from .. import db, secrets as _secrets
+from ..services import eval_auto
 from ..services.projects import jobs as project_jobs
 from ..infrastructure.log_tail import LogTailer, MonitorStatePoller
 from ..paths import (
@@ -479,7 +480,7 @@ class Supervisor:
         allow_gpu = self._allow_gpu_during_train()
         with db.connection_for(self._db_path) as conn:
             pending = project_jobs.list_jobs(conn, status="pending")
-        pending.sort(key=lambda j: j["id"])
+        pending.sort(key=project_jobs.dispatch_order)
         for job in pending:
             kind = job["kind"]
             if kind in GPU_BOUND_JOB_KINDS:
@@ -679,6 +680,10 @@ class Supervisor:
                     # 旧 pause 文件对已被消费完，删盘 + 清 db 字段，避免下次
                     # pause 时跟旧文件命名撞 / 让 ResumeFieldPicker 显示 stale 项。
                     self._clear_pause_artifacts(tid)
+                elif evt_type == "eval_checkpoint_saved":
+                    self._queue_auto_eval_for_checkpoint(tid, payload)
+                elif evt_type == "eval_training_finished":
+                    slot.eval_training_finished_payload = dict(payload)
                 self._on_event({
                     "type": evt_type,
                     "task_id": tid,
@@ -692,6 +697,61 @@ class Supervisor:
                 "seq": next(self._log_seq),
             })
         return _on_task_log
+
+    def _queue_auto_eval_for_checkpoint(
+        self, tid: int, payload: dict[str, Any]
+    ) -> None:
+        try:
+            with db.connection_for(self._db_path) as conn:
+                task = db.get_task(conn, tid)
+                if not task:
+                    return
+                queued = eval_auto.queue_checkpoint_eval(conn, task, payload)
+        except Exception:
+            logger.exception("auto eval enqueue failed for task=%s", tid)
+            return
+        if not queued:
+            return
+        job, run = queued
+        self._on_event({
+            "type": "eval_auto_sample_queued",
+            "task_id": tid,
+            "job_id": job.get("id"),
+            "project_id": job.get("project_id"),
+            "version_id": job.get("version_id"),
+            "run_id": run.get("run_id"),
+            "checkpoint": run.get("checkpoint"),
+        })
+
+    def _queue_auto_eval_after_training(
+        self, tid: int, payload: dict[str, Any]
+    ) -> None:
+        try:
+            with db.connection_for(self._db_path) as conn:
+                task = db.get_task(conn, tid)
+                if not task:
+                    return
+                queued = eval_auto.queue_training_finished_eval(conn, task, payload)
+        except Exception:
+            logger.exception("after-training auto eval enqueue failed for task=%s", tid)
+            return
+        if not queued:
+            return
+        for job, run in queued:
+            self._on_event({
+                "type": "eval_auto_sample_queued",
+                "task_id": tid,
+                "job_id": job.get("id"),
+                "project_id": job.get("project_id"),
+                "version_id": job.get("version_id"),
+                "run_id": run.get("run_id"),
+                "checkpoint": run.get("checkpoint"),
+            })
+        self._on_event({
+            "type": "eval_auto_after_training_queued",
+            "task_id": tid,
+            "count": len(queued),
+        })
 
     def _make_monitor_callback(
         self, tid: int
@@ -1206,6 +1266,11 @@ class Supervisor:
                 {"type": "task_state_changed", "task_id": cid, "status": status}
             )
             logger.info("task %d finished: %s (rc=%d)", cid, status, rc)
+            if status == "done" and slot.eval_training_finished_payload is not None:
+                self._queue_auto_eval_after_training(
+                    cid,
+                    slot.eval_training_finished_payload,
+                )
         else:  # job
             with db.connection_for(self._db_path) as conn:
                 if status == "done":

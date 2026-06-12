@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -109,6 +109,25 @@ class ModelScopeConfig(BaseModel):
     # 魔搭社区（modelscope.cn）下载 token。公开模型不填也能下，私有 / 限速时需要。
     # 使用前需 pip install modelscope；下载时会优先找 MODELSCOPE_REPO_MAP 里的对应仓库，
     # 没有映射的模型自动回退 HuggingFace。
+
+
+class EvalMetricModelsConfig(BaseModel):
+    """LoRA eval metric model defaults.
+
+    Metric API callers may still pass `model_name` explicitly. Empty request
+    values fall back to these defaults so server-local ModelScope/HF cache paths
+    do not need to be repeated for every metric run.
+    """
+    clip_model_name: str = "openai/clip-vit-base-patch32"
+    dino_model_name: str = "facebook/dinov2-small"
+    auto_eval_on_checkpoint: bool = False
+    auto_eval_trigger: Literal["after_training", "checkpoint"] = "after_training"
+    auto_eval_max_items: int = 1
+
+    @model_validator(mode="after")
+    def _normalize_eval_metrics(self):
+        self.auto_eval_max_items = max(1, min(256, int(self.auto_eval_max_items or 1)))
+        return self
 
 
 class DownloadConfig(BaseModel):
@@ -485,6 +504,9 @@ class Secrets(BaseModel):
     huggingface: HuggingFaceConfig = Field(default_factory=HuggingFaceConfig)
     wandb: WandBConfig = Field(default_factory=WandBConfig)
     modelscope: ModelScopeConfig = Field(default_factory=ModelScopeConfig)
+    eval_metrics: EvalMetricModelsConfig = Field(
+        default_factory=EvalMetricModelsConfig
+    )
     # 模型下载源。"huggingface"（默认）走 HF + endpoint 配置；
     # "modelscope" 走魔搭社区，没有对应映射的模型自动回退 HF。
     download_source: str = "huggingface"

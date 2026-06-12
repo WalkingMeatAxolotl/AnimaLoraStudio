@@ -150,6 +150,74 @@ export interface ModelScopeConfig {
   token: string
 }
 
+export interface EvalMetricModelsConfig {
+  /** CLIP-T / CLIP-I 默认模型名或本地目录。 */
+  clip_model_name: string
+  /** DINO-I 默认模型名或本地目录。 */
+  dino_model_name: string
+  /** Enable automatic eval jobs for saved training LoRA checkpoints. */
+  auto_eval_on_checkpoint: boolean
+  /** When automatic eval runs. */
+  auto_eval_trigger: 'after_training' | 'checkpoint'
+  /** Cap generated eval samples per automatically queued checkpoint. */
+  auto_eval_max_items: number
+}
+
+export interface EvalMetricSpec {
+  key: string
+  label: string
+  question: string
+  requires: string[]
+  higher_is_better: boolean
+}
+
+export interface EvalMetricState {
+  key: string
+  label?: string
+  status: 'not_run' | 'pending' | 'running' | 'done' | 'failed' | 'unavailable' | string
+  value: number | null
+  reason?: string
+  question?: string
+  requires?: string[]
+  higher_is_better?: boolean
+  count?: number
+  model_name?: string
+  job_id?: number
+}
+
+export interface EvalMetricResult {
+  schema_version: number
+  has_metrics: boolean
+  status: string
+  run_id: string
+  project_id?: number
+  project_slug?: string
+  version_id?: number
+  version_label?: string
+  created_at?: number | null
+  updated_at?: number | null
+  manifest_digest?: string
+  checkpoint?: {
+    kind?: string
+    label?: string
+    path?: string
+    value?: number
+    mtime?: number
+  }
+  metrics: Record<string, unknown>
+  metric_states: Record<string, EvalMetricState>
+  summary?: Record<string, number>
+}
+
+export interface EvalMetricsListResponse {
+  metric_specs: EvalMetricSpec[]
+  cache: {
+    embeddings_dir: string
+    entries: Array<{ key: string; path: string; file_count: number; size_bytes: number }>
+  }
+  results: EvalMetricResult[]
+}
+
 /** Preset messages 序列里的单条 item。
  *  - type='text'：普通文本，需指定 role；content 是 prompt 内容
  *  - type='image'：图片占位 item，打标时后端塞入当前图片；UI 不可编辑 content，但可拖动位置
@@ -431,6 +499,7 @@ export interface Secrets {
   huggingface: HuggingFaceConfig
   wandb: WandBConfig
   modelscope: ModelScopeConfig
+  eval_metrics: EvalMetricModelsConfig
   /** 模型下载源：'huggingface'（默认）或 'modelscope'。
    *  选 modelscope 时，有映射的模型走魔搭 CLI 下载；无映射的自动回退 HF。 */
   download_source: string
@@ -1309,6 +1378,11 @@ export interface LogResponse {
 
 /** /api/state — per-task monitor state written by the training process */
 export interface MonitorState {
+  task_id?: number
+  project_id?: number
+  project_slug?: string
+  version_id?: number
+  version_label?: string
   step?: number
   total_steps?: number
   epoch?: number
@@ -2497,6 +2571,10 @@ export const api = {
     ),
   sampleImageUrl: (filename: string, taskId: number, w?: number) =>
     `/samples/${filename}?task_id=${taskId}${w ? `&w=${w}` : ''}`,
+  listEvalMetrics: (pid: number, vid: number) =>
+    req<EvalMetricsListResponse>(
+      `/api/projects/${pid}/versions/${vid}/eval/metrics?_=${Date.now()}`,
+    ),
 
   // Queue import / export ---------------------------------------------
   /** 队列导出直链。响应带 Content-Disposition: attachment,<a href download>
