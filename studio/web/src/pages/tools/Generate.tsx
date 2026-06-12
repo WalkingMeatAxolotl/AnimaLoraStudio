@@ -9,6 +9,7 @@ import {
 } from '../../api/client'
 import PageHeader from '../../components/PageHeader'
 import { useToast } from '../../components/Toast'
+import { schemaEnumLabel } from '../../lib/schema'
 import { useEventStream } from '../../lib/useEventStream'
 import { useMonitorProgress } from '../../lib/useMonitorProgress'
 import { useLocalStorageState } from '../../lib/useLocalStorageState'
@@ -39,7 +40,11 @@ import SidebarLoras from './generate/SidebarLoras'
 import SidebarXYAxes from './generate/SidebarXYAxes'
 import StatusBadge from './generate/StatusBadge'
 import ViewModeTabs, { type ViewMode } from './generate/ViewModeTabs'
-import { DEFAULT_NEG } from './generate/types'
+import {
+  DEFAULT_NEG, DEFAULT_SAMPLER, DEFAULT_SCHEDULER,
+  SAMPLER_OPTIONS, SCHEDULER_OPTIONS,
+  type SamplerName, type SchedulerName,
+} from './generate/types'
 import { useProjectLoras } from './generate/useProjectLoras'
 import { buildXYMatrix, cellCount, parseAxisValues, type XYAxisDraft } from './generate/xy'
 
@@ -54,6 +59,8 @@ const DEFAULT_GENERATE_PREFS = {
   height: 1024,
   steps: 25,
   cfgScale: 4.0,
+  samplerName: DEFAULT_SAMPLER as SamplerName,
+  scheduler: DEFAULT_SCHEDULER as SchedulerName,
   count: 1,
   seed: 0,
   // single / xy 的 LoRA 列表完全独立（用户决策 2026-05-29）：切 mode 互不影响。
@@ -121,7 +128,7 @@ export default function GeneratePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const { mode, prompts, negPrompt, aspect, width, height, steps, cfgScale, count, seed, xDraft, yDraft, datasetPick } = prefs
+  const { mode, prompts, negPrompt, aspect, width, height, steps, cfgScale, samplerName, scheduler, count, seed, xDraft, yDraft, datasetPick } = prefs
   // LoRA 列表按 mode 完全独立：single 用 singleLoras，xy（含 compare 子视图）用
   // xyLoras。读写都按当前 mode 路由，切 mode 互不影响。
   const loras = mode === 'single' ? prefs.singleLoras : prefs.xyLoras
@@ -135,6 +142,8 @@ export default function GeneratePage() {
   const setHeight = (height: number) => setPrefs((p) => ({ ...p, height }))
   const setSteps = (steps: number) => setPrefs((p) => ({ ...p, steps }))
   const setCfgScale = (cfgScale: number) => setPrefs((p) => ({ ...p, cfgScale }))
+  const setSamplerName = (samplerName: SamplerName) => setPrefs((p) => ({ ...p, samplerName }))
+  const setScheduler = (scheduler: SchedulerName) => setPrefs((p) => ({ ...p, scheduler }))
   const setCount = (count: number) => setPrefs((p) => ({ ...p, count }))
   const setSeed = (seed: number) => setPrefs((p) => ({ ...p, seed }))
 
@@ -369,6 +378,8 @@ export default function GeneratePage() {
       negative_prompt: negPrompt,
       width, height, steps,
       cfg_scale: cfgScale,
+      sampler_name: samplerName,
+      scheduler,
       count, seed,
       loras: snapshotLoras,
       xy_draft: mode === 'xy'
@@ -420,7 +431,7 @@ export default function GeneratePage() {
       }
     })()
   }, [currentTask, samples, mode, selectedIndices, history, xDraft, yDraft,
-      prompts, negPrompt, width, height, steps, cfgScale, count, seed, loras, datasetPick])
+      prompts, negPrompt, width, height, steps, cfgScale, samplerName, scheduler, count, seed, loras, datasetPick])
 
   const handleHistorySelect = (entry: HistoryEntry) => {
     setHistoryOverride(entry)
@@ -453,6 +464,8 @@ export default function GeneratePage() {
         aspect: aspectFromDimensions(applied.width, applied.height),
         steps: applied.steps,
         cfgScale: applied.cfgScale,
+        samplerName: applied.samplerName,
+        scheduler: applied.scheduler,
         count: applied.count,
         seed: applied.seed,
         datasetPick: applied.datasetPick,
@@ -519,6 +532,8 @@ export default function GeneratePage() {
         count: mode === 'xy' ? 1 : count,
         seed,
         cfg_scale: cfgScale,
+        sampler_name: samplerName,
+        scheduler,
         lora_configs: loraConfigs,
         // attention_backend 不带：server 端套 Comfy-style runtime 并读取 generate backend。
         xy_matrix,
@@ -684,6 +699,35 @@ export default function GeneratePage() {
                   {mode !== 'xy' && (
                     <NumField label={t('generate.perPrompt')} value={count} onChange={setCount} min={1} max={32} />
                   )}
+                </div>
+                <div className="flex gap-2">
+                  <div className="flex-1 min-w-0">
+                    <label className="caption block mb-1">{t('generate.sampler')}</label>
+                    <select
+                      className="input text-xs w-full"
+                      value={samplerName}
+                      onChange={(e) => setSamplerName(e.target.value as SamplerName)}
+                      aria-label={t('generate.sampler')}
+                    >
+                      {/* 文案与训练配置页共用 schema.enums.* 映射，两边保持一致 */}
+                      {SAMPLER_OPTIONS.map((s) => (
+                        <option key={s} value={s}>{schemaEnumLabel('sample_sampler_name', s, t)}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <label className="caption block mb-1">{t('generate.scheduler')}</label>
+                    <select
+                      className="input text-xs w-full"
+                      value={scheduler}
+                      onChange={(e) => setScheduler(e.target.value as SchedulerName)}
+                      aria-label={t('generate.scheduler')}
+                    >
+                      {SCHEDULER_OPTIONS.map((s) => (
+                        <option key={s} value={s}>{schemaEnumLabel('sample_scheduler', s, t)}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
                 <NumField
                   label={t('generate.seed')}

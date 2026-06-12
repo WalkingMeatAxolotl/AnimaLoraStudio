@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 
 import { TagSuggestList } from '../../../components/tagSuggest/TagSuggestList'
 import { useTagSuggest } from '../../../components/tagSuggest/useTagSuggest'
+import { useAutoGrowTextarea } from '../../../lib/useAutoGrowTextarea'
 
 /** 正向提示词输入。
  *
@@ -35,11 +36,12 @@ export default function PromptList({ prompts, onChange }: {
       })
     },
   })
+  useAutoGrowTextarea(taRef, value)
   return (
     <div className="relative">
       <textarea
         ref={taRef}
-        className="input w-full font-mono text-sm resize-y"
+        className="input w-full font-mono text-sm resize-none overflow-hidden"
         rows={5}
         value={value}
         onChange={(e) => { onChange([e.target.value]); suggest.notifyChange() }}

@@ -147,6 +147,14 @@ export const SCHEMA_ENUM_LABEL_KEYS: Record<string, Record<string, string>> = {
     offset: 'schema.enums.noiseEnhancementType.offset',
     pyramid: 'schema.enums.noiseEnhancementType.pyramid',
   },
+  sample_sampler_name: {
+    er_sde: 'schema.enums.sampler.erSde',
+    dpmpp_3m_sde: 'schema.enums.sampler.dpmpp3mSde',
+  },
+  sample_scheduler: {
+    simple: 'schema.enums.scheduler.simple',
+    sgm_uniform: 'schema.enums.scheduler.sgmUniform',
+  },
   wandb_mode: {
     '': 'field.useGlobal',
     online: 'schema.enums.wandbMode.online',
