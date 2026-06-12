@@ -51,12 +51,16 @@ describe('VersionStatusBadge', () => {
     expect(container.querySelector('.badge')?.textContent).toBe('准备中 · 打标')
   })
 
-  it('hides suffix for optional phases (preprocessing / regularizing)', () => {
-    for (const phase of ['preprocessing', 'regularizing'] as const) {
+  it('shows suffix for optional phases too (PR #265 review)', () => {
+    const cases = [
+      ['preprocessing', '准备中 · 预处理'],
+      ['regularizing', '准备中 · 正则集'],
+    ] as const
+    for (const [phase, text] of cases) {
       const { container } = render(
         <VersionStatusBadge status="preparing" phase={phase} />
       )
-      expect(container.querySelector('.badge')?.textContent).toBe('准备中')
+      expect(container.querySelector('.badge')?.textContent).toBe(text)
     }
   })
 

@@ -199,8 +199,12 @@ export default function ProjectsPage() {
 
   const archivedItems = items.filter((p) => p.archived_at != null)
   const filterOpts = { query, status: statusFilter, sort: sortKey }
-  const visible = filterProjects(items.filter((p) => p.archived_at == null), filterOpts)
-  const visibleArchived = showArchived ? filterProjects(archivedItems, filterOpts) : []
+  // 归档开关是视图切换（radio 语义）：开 = 只看已归档，关 = 只看活跃
+  const visible = filterProjects(
+    showArchived ? archivedItems : items.filter((p) => p.archived_at == null),
+    filterOpts,
+  )
+  const filtering = query.trim() !== '' || statusFilter !== 'all'
 
   return (
     <div className="fade-in">
@@ -209,6 +213,30 @@ export default function ProjectsPage() {
         subtitle={t('projects.description')}
         actions={
           <>
+            {/* 过滤 icon：折叠态完全不占行，开关过滤行；有筛选生效且收起时带小圆点 */}
+            <button
+              className={`btn btn-sm ${filtersOpen ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setFiltersOpen((o) => !o)}
+              aria-expanded={filtersOpen}
+              aria-label={t('projects.filters')}
+              title={t('projects.filters')}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 4h18l-7 8v6l-4 2v-8L3 4z" />
+              </svg>
+              {!filtersOpen && filtering && (
+                <span className="dot dot-running" aria-label={t('projects.filtersActive')} />
+              )}
+            </button>
+            {/* 已归档视图开关（radio 语义：开 = 列表只显示已归档项目） */}
+            <button
+              className={`btn btn-sm ${showArchived ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setShowArchived((v) => !v)}
+              aria-pressed={showArchived}
+              title={t('projects.archivedToggleHint')}
+            >
+              {t('projects.archivedToggle', { n: archivedItems.length })}
+            </button>
             <button
               className="btn btn-secondary btn-sm"
               onClick={() => setShowImportDialog(true)}
@@ -227,19 +255,16 @@ export default function ProjectsPage() {
         }
       />
 
-      <FilterBar
-        open={filtersOpen}
-        onToggle={() => setFiltersOpen((o) => !o)}
-        query={query}
-        onQuery={setQuery}
-        status={statusFilter}
-        onStatus={setStatusFilter}
-        sort={sortKey}
-        onSort={setSortKey}
-        showArchived={showArchived}
-        onShowArchived={setShowArchived}
-        archivedCount={archivedItems.length}
-      />
+      {filtersOpen && (
+        <FilterBar
+          query={query}
+          onQuery={setQuery}
+          status={statusFilter}
+          onStatus={setStatusFilter}
+          sort={sortKey}
+          onSort={setSortKey}
+        />
+      )}
 
       <div className="p-6 pt-4">
         {error && (
@@ -260,42 +285,24 @@ export default function ProjectsPage() {
             <div className="text-lg mb-2">{t('projects.noProjects')}</div>
             <div className="text-sm">{t('projects.noProjectsHint')}</div>
           </div>
-        ) : visible.length === 0 && visibleArchived.length === 0 ? (
+        ) : visible.length === 0 ? (
           <div className="mt-20 text-center text-fg-tertiary text-sm">
             {t('common.noResults')}
           </div>
         ) : (
-          <>
-            <div className="grid gap-4 auto-rows-fr" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))' }}>
-              {visible.map((p) => (
-                <ProjectCard
-                  key={p.id}
-                  project={p}
-                  onClick={() => openProject(p)}
-                  onArchive={(e) => handleArchive(p, e)}
-                />
-              ))}
-            </div>
-            {showArchived && visibleArchived.length > 0 && (
-              <>
-                <div className="mt-8 mb-3 text-sm font-medium text-fg-tertiary">
-                  {t('projects.archivedSection')}（{visibleArchived.length}）
-                </div>
-                <div className="grid gap-4 auto-rows-fr" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))' }}>
-                  {visibleArchived.map((p) => (
-                    <ProjectCard
-                      key={p.id}
-                      project={p}
-                      archived
-                      onClick={() => openProject(p)}
-                      onUnarchive={(e) => handleUnarchive(p, e)}
-                      onDelete={(e) => handleDelete(p, e)}
-                    />
-                  ))}
-                </div>
-              </>
-            )}
-          </>
+          <div className="grid gap-4 auto-rows-fr" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))' }}>
+            {visible.map((p) => (
+              <ProjectCard
+                key={p.id}
+                project={p}
+                archived={showArchived}
+                onClick={() => openProject(p)}
+                onArchive={(e) => handleArchive(p, e)}
+                onUnarchive={(e) => handleUnarchive(p, e)}
+                onDelete={(e) => handleDelete(p, e)}
+              />
+            ))}
+          </div>
         )}
       </div>
 
@@ -334,94 +341,60 @@ export default function ProjectsPage() {
   )
 }
 
-/** Header 下方的过滤 / 排序条：默认折叠成一行按钮，展开后是搜索 + 状态 +
- * 排序 + 已归档开关。有非默认过滤生效时折叠态按钮上显示小圆点提示。 */
+/** Header 下方的过滤 / 排序行（仅 filtersOpen 时渲染，折叠完全不占空间；
+ * 开关在 PageHeader 的过滤 icon 上）。单行：搜索 60% 居左，状态 / 排序
+ * 各 10% 推到最右。 */
 function FilterBar({
-  open,
-  onToggle,
   query,
   onQuery,
   status,
   onStatus,
   sort,
   onSort,
-  showArchived,
-  onShowArchived,
-  archivedCount,
 }: {
-  open: boolean
-  onToggle: () => void
   query: string
   onQuery: (v: string) => void
   status: ProjectStatusFilter
   onStatus: (v: ProjectStatusFilter) => void
   sort: ProjectSortKey
   onSort: (v: ProjectSortKey) => void
-  showArchived: boolean
-  onShowArchived: (v: boolean) => void
-  archivedCount: number
 }) {
   const { t } = useTranslation()
-  const filtering = query.trim() !== '' || status !== 'all' || showArchived
-  // 单行布局（用户反馈）：收起时只剩一个细行下拉符号，不占空间；
-  // 展开后搜索 / 状态 / 排序 / 已归档全部排进同一行。
   return (
-    <div className="px-6 py-1.5 border-b border-subtle flex flex-wrap items-center gap-3">
-      <button
-        type="button"
-        className="bg-transparent border-none px-1.5 py-0.5 rounded-sm text-fg-tertiary text-sm cursor-pointer hover:text-fg-primary"
-        aria-expanded={open}
-        aria-label={t('projects.filters')}
-        title={t('projects.filters')}
-        onClick={onToggle}
+    <div className="px-6 py-2 border-b border-subtle flex items-center gap-3">
+      <input
+        className="input"
+        style={{ width: '60%' }}
+        value={query}
+        onChange={(e) => onQuery(e.target.value)}
+        placeholder={t('projects.searchPlaceholder')}
+        aria-label={t('common.search')}
+      />
+      <span className="flex-1" />
+      <select
+        className="input"
+        style={{ width: '10%', minWidth: 104 }}
+        value={status}
+        onChange={(e) => onStatus(e.target.value as ProjectStatusFilter)}
+        aria-label={t('common.status')}
       >
-        {open ? '▴' : '▾'}
-        {!open && filtering && (
-          <span className="dot dot-running ml-1" aria-label={t('projects.filtersActive')} />
-        )}
-      </button>
-      {open && (
-        <>
-          <input
-            className="input"
-            style={{ width: 220 }}
-            value={query}
-            onChange={(e) => onQuery(e.target.value)}
-            placeholder={t('projects.searchPlaceholder')}
-            aria-label={t('common.search')}
-          />
-          <select
-            className="input"
-            value={status}
-            onChange={(e) => onStatus(e.target.value as ProjectStatusFilter)}
-            aria-label={t('common.status')}
-          >
-            {STATUS_OPTIONS.map((s) => (
-              <option key={s} value={s}>
-                {s === 'all' ? t('projects.statusAll') : t(`versionStatus.${s}`)}
-              </option>
-            ))}
-          </select>
-          <select
-            className="input"
-            value={sort}
-            onChange={(e) => onSort(e.target.value as ProjectSortKey)}
-            aria-label={t('projects.sortLabel')}
-          >
-            {SORT_OPTIONS.map((s) => (
-              <option key={s} value={s}>{t(`projects.sort_${s}`)}</option>
-            ))}
-          </select>
-          <label className="flex items-center gap-1.5 text-sm text-fg-secondary cursor-pointer select-none whitespace-nowrap">
-            <input
-              type="checkbox"
-              checked={showArchived}
-              onChange={(e) => onShowArchived(e.target.checked)}
-            />
-            {t('projects.showArchived', { n: archivedCount })}
-          </label>
-        </>
-      )}
+        {STATUS_OPTIONS.map((s) => (
+          <option key={s} value={s}>
+            {s === 'all' ? t('projects.statusAll') : t(`versionStatus.${s}`)}
+          </option>
+        ))}
+      </select>
+      <select
+        className="input"
+        style={{ width: '10%', minWidth: 104 }}
+        value={sort}
+        onChange={(e) => onSort(e.target.value as ProjectSortKey)}
+        aria-label={t('projects.sortLabel')}
+      >
+        {SORT_OPTIONS.map((s) => (
+          <option key={s} value={s}>{t(`projects.sort_${s}`)}</option>
+        ))}
+      </select>
     </div>
   )
 }

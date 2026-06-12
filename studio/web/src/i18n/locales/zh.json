@@ -613,10 +613,10 @@
     "sort_updated": "最近活跃",
     "sort_created": "最新创建",
     "sort_title": "按名称",
-    "showArchived": "显示已归档（{{n}}）",
-    "archivedSection": "已归档",
+    "archivedToggle": "已归档（{{n}}）",
+    "archivedToggleHint": "切换：只显示已归档项目",
     "archiveProjectTitle": "归档项目（可恢复）",
-    "archiveConfirm": "归档项目「{{title}}」？\n项目将从列表隐藏，数据不受影响；可在「筛选 / 排序」面板开启「显示已归档」找回。",
+    "archiveConfirm": "归档项目「{{title}}」？\n项目将从列表隐藏，数据不受影响；可通过标题栏「已归档」开关查看并恢复。",
     "archiveBtn": "归档",
     "archived": "已归档: {{title}}",
     "unarchiveTitle": "恢复项目",
@@ -1539,8 +1539,10 @@
   },
   "versionPhase": {
     "curating": "筛选",
+    "preprocessing": "预处理",
     "tagging": "打标",
     "editing": "标签编辑",
+    "regularizing": "正则集",
     "ready": "待训练"
   },
   "snapshot": {

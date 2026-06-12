@@ -21,13 +21,14 @@ const STATUS_MAP: Record<VersionStatus, StatusEntry> = {
   canceled:  { badge: 'badge-neutral', key: 'versionStatus.canceled' },
 }
 
-/** preparing 时 badge 后缀的 phase 文案。可选 phase（preprocessing /
- * regularizing）刻意缺席 —— 用户决策：optional 步骤不值得占 badge 空间，
- * cursor 落在上面时只显"准备中"。 */
-const PHASE_SUFFIX_KEY: Partial<Record<VersionPhase, string>> = {
+/** preparing 时 badge 后缀的 phase 文案（PR #265 评审改：可选步骤
+ * preprocessing / regularizing 也显示 —— cursor 在哪就显示哪）。 */
+const PHASE_SUFFIX_KEY: Record<VersionPhase, string> = {
   curating: 'versionPhase.curating',
+  preprocessing: 'versionPhase.preprocessing',
   tagging: 'versionPhase.tagging',
   editing: 'versionPhase.editing',
+  regularizing: 'versionPhase.regularizing',
   ready: 'versionPhase.ready',
 }
 
