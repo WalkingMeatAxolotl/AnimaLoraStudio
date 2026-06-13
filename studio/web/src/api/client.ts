@@ -2639,6 +2639,11 @@ export const api = {
   getReleaseNotes: (tag: string) =>
     req<ReleaseNotes>(`/api/system/release_notes?tag=${encodeURIComponent(tag)}`),
 
+  // yaml 内全部 release notes（latest first）。详情 modal 版本切换用，
+  // 一次拉完前端缓存在 modal 生命周期内导航；yaml 缺失 → versions=[]
+  getAllReleaseNotes: () =>
+    req<{ versions: ReleaseNotes[] }>('/api/system/release_notes_all'),
+
   // chunk 3 — git fetch + log origin/dev，返回最近 N 个 commit
   // （DevCard 时间线 + 任意 commit 切换用）。limit 默认 10，clamp 1-50。
   getDevCommits: (limit = 10) =>

@@ -3348,6 +3348,11 @@ function VersionSection() {
   )
   // chunk 2 重做：release notes 详细内容 modal（含 detail markdown）
   const [detailModalOpen, setDetailModalOpen] = useState(false)
+  // modal 打开时定位的版本 tag（默认当前；从右上角"更新日志"入口打开则用 latest）
+  const [detailInitialTag, setDetailInitialTag] = useState<string | null>(null)
+  // 全量历史 release notes（modal 左右切换用）。lazy：modal 首次打开时拉。
+  // 拉之前 / 失败 → null，modal 退化到只显示传入的单版本（无左右按钮）。
+  const [allReleaseNotes, setAllReleaseNotes] = useState<ReleaseNotes[] | null>(null)
   // 0.8.1 hotfix — zip 安装用户首次 init git 仓库
   const [initing, setIniting] = useState(false)
   const [initError, setInitError] = useState<string | null>(null)
@@ -3618,6 +3623,19 @@ function VersionSection() {
   // 上次 update 失败 banner（aborted / failed / partial 时显示红色提示）
   const statusBadFailed = !!status && (status.status === 'failed' || status.status === 'aborted' || status.status === 'partial')
 
+  // 打开 release notes modal：默认定位到当前展示 tag；从"更新日志"入口
+  // 打开则传 null → 默认 latest（modal 内 findIndex 找不到时回退到 idx 0）
+  const openReleaseNotesModal = useCallback((tag: string | null) => {
+    setDetailInitialTag(tag)
+    setDetailModalOpen(true)
+    // lazy 加载全量历史：仅首次打开拉一次，后续 modal 复用同一份
+    if (allReleaseNotes === null) {
+      void api.getAllReleaseNotes()
+        .then((r) => setAllReleaseNotes(r.versions))
+        .catch(() => setAllReleaseNotes([]))
+    }
+  }, [allReleaseNotes])
+
   // release notes 拉对应 tag：stable 通道有更新时展示目标版本，否则展示当前
   // 已装版本；dev 通道不展示 release notes（dev 是滚动的，没有版本号语义）
   const displayedTag = showDevView
@@ -3644,14 +3662,28 @@ function VersionSection() {
       id="version"
       title={t('settings.version')}
       headerExtras={
-        <InfoButton>
-          <ul>
-            <li>{t('settings.versionInfoChannel')}</li>
-            <li>{t('settings.versionInfoAutoCheck')}</li>
-            <li>{t('settings.versionInfoUpdateImpl')}</li>
-            <li>{t('settings.versionInfoPreflight')}</li>
-          </ul>
-        </InfoButton>
+        <>
+          <InfoButton>
+            <ul>
+              <li>{t('settings.versionInfoChannel')}</li>
+              <li>{t('settings.versionInfoAutoCheck')}</li>
+              <li>{t('settings.versionInfoUpdateImpl')}</li>
+              <li>{t('settings.versionInfoPreflight')}</li>
+            </ul>
+          </InfoButton>
+          {/* webui 的"更新日志"入口：打开 detail modal 并定位到 latest
+              历史版本，配合左右切换可浏览全部 release notes（防止 hotfix
+              发布后看不到之前主版本的更新内容） */}
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm text-xs text-fg-tertiary ml-auto inline-flex items-center gap-1"
+            onClick={() => openReleaseNotesModal(null)}
+            title={t('settings.viewUpdateHistoryHint')}
+          >
+            <VersionIcon name="log" />
+            {t('settings.viewUpdateHistory')}
+          </button>
+        </>
       }
     >
       {/* 0.8.1 hotfix — zip 安装用户首次启用自更新功能的 banner。
@@ -3741,7 +3773,7 @@ function VersionSection() {
               hasRollback={hasRollback}
               statusBadFailed={statusBadFailed}
               releaseNotes={releaseNotes}
-              onShowReleaseNotesDetail={() => setDetailModalOpen(true)}
+              onShowReleaseNotesDetail={() => openReleaseNotesModal(displayedTag)}
               checking={checking}
               busy={busy}
               cardState={masterState}
@@ -3789,11 +3821,25 @@ function VersionSection() {
         />
       )}
 
-      {detailModalOpen && releaseNotes?.found && (
-        <ReleaseNotesDetailModal
-          notes={releaseNotes}
-          onClose={() => setDetailModalOpen(false)}
-        />
+      {/* allNotes 没拉到 / 还在拉 → 退化到单版本（无左右切换，旧行为）；
+          拉到后 modal 自动重渲染，左右按钮出现 */}
+      {detailModalOpen && (allReleaseNotes && allReleaseNotes.length > 0
+        ? (
+          <ReleaseNotesDetailModal
+            allNotes={allReleaseNotes}
+            initialTag={detailInitialTag ?? allReleaseNotes[0].tag}
+            onClose={() => setDetailModalOpen(false)}
+          />
+        )
+        : releaseNotes?.found
+          ? (
+            <ReleaseNotesDetailModal
+              allNotes={[releaseNotes]}
+              initialTag={releaseNotes.tag}
+              onClose={() => setDetailModalOpen(false)}
+            />
+          )
+          : null
       )}
     </SettingsSection>
   )
@@ -4519,47 +4565,114 @@ function UpdateLogModal({
 }
 
 // chunk 2 重做 — release notes 全量详细内容 modal。结构：
-//   header: tag · date · block summary
-//   body: 每条 entry 一块（kind 徽章 + summary + PR refs 链接 + detail 文本）
+//   header: [←] tag · date · (n / N) [→]  + 关闭   |  body: entries 列表
+// 接收 allNotes 全量（latest first），按 initialTag 定位起始 index；
+// 左右键 / 按钮在版本间切换，作为 webui 的更新日志浏览器。
 // detail 字段是 markdown 但这里不渲染 markdown 库（依赖最少），直接
-// whitespace-pre-wrap 显示原文，code/`` /列表用户能读懂；未来想真渲染 markdown
-// 再加 marked / react-markdown 依赖。
+// whitespace-pre-wrap 显示原文；未来想真渲染 markdown 再加 marked /
+// react-markdown 依赖。
 function ReleaseNotesDetailModal({
-  notes, onClose,
-}: { notes: ReleaseNotes; onClose: () => void }) {
+  allNotes, initialTag, onClose,
+}: { allNotes: ReleaseNotes[]; initialTag: string; onClose: () => void }) {
   const { t } = useTranslation()
+  // 起始 index：按 tag 匹配；找不到（dev / custom 或 yaml 没该 tag）退到 latest
+  const initialIdx = useMemo(() => {
+    const i = allNotes.findIndex((n) => n.tag === initialTag)
+    return i >= 0 ? i : 0
+  }, [allNotes, initialTag])
+  const [idx, setIdx] = useState(initialIdx)
+  // initialTag / allNotes 变化时同步（modal 复用同一实例打开多版本）
+  useEffect(() => { setIdx(initialIdx) }, [initialIdx])
+
+  const total = allNotes.length
+  const current: ReleaseNotes | null = total > 0 ? allNotes[idx] : null
+  // yaml latest-first：idx + 1 = 更旧，idx - 1 = 更新
+  const hasOlder = idx < total - 1
+  const hasNewer = idx > 0
+
+  const goOlder = useCallback(() => {
+    setIdx((i) => Math.min(i + 1, Math.max(0, total - 1)))
+  }, [total])
+  const goNewer = useCallback(() => {
+    setIdx((i) => Math.max(i - 1, 0))
+  }, [])
+
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { onClose(); return }
+      // 输入框内按方向键不切版本，避免误触
+      const target = e.target as HTMLElement | null
+      const tag = target?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return
+      if (e.key === 'ArrowLeft') { goOlder(); e.preventDefault() }
+      else if (e.key === 'ArrowRight') { goNewer(); e.preventDefault() }
+    }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [onClose, goOlder, goNewer])
+
+  // 换版本时滚回顶部，避免长 detail 看完后切版本仍停在底部
+  const bodyRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (bodyRef.current) bodyRef.current.scrollTop = 0
+  }, [idx])
+
+  if (!current) return null
+  const navBtnCls = 'text-fg-dim hover:text-fg-primary disabled:opacity-25 disabled:hover:text-fg-dim disabled:cursor-not-allowed text-lg leading-none px-2 py-1 rounded'
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
       onClick={onClose}
     >
       <div
-        className="bg-surface border border-subtle rounded-md shadow-lg max-w-3xl w-[92vw] max-h-[85vh] flex flex-col"
+        className="bg-surface border border-subtle rounded-md shadow-lg w-[50vw] h-[80vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-subtle px-5 py-3">
-          <div className="flex flex-col gap-0.5">
-            <h3 className="text-base font-semibold text-fg-primary font-mono">
-              {notes.tag}
-              {notes.date && <span className="text-fg-tertiary font-normal text-sm font-sans"> · {notes.date}</span>}
-            </h3>
-            {notes.summary && (
-              <span className="text-xs text-fg-secondary">{notes.summary}</span>
-            )}
-          </div>
+        {/* 顶部控制栏：左右切换 + 关闭，放在 title 上方独立一行 */}
+        <div className="flex items-center gap-1 border-b border-subtle px-3 py-2">
+          {total > 1 && (
+            <>
+              <button
+                type="button"
+                onClick={goOlder}
+                disabled={!hasOlder}
+                className={navBtnCls}
+                aria-label={t('settings.releaseNotesOlder')}
+                title={t('settings.releaseNotesOlder')}
+              >‹</button>
+              <button
+                type="button"
+                onClick={goNewer}
+                disabled={!hasNewer}
+                className={navBtnCls}
+                aria-label={t('settings.releaseNotesNewer')}
+                title={t('settings.releaseNotesNewer')}
+              >›</button>
+              <span className="text-2xs text-fg-dim font-mono ml-1">
+                {t('settings.releaseNotesPosition', { index: idx + 1, total })}
+              </span>
+            </>
+          )}
+          <div className="flex-1" />
           <button
             onClick={onClose}
             className="text-fg-dim hover:text-fg-primary text-xl leading-none px-1"
             aria-label={t('common.close')}
           >×</button>
         </div>
-        <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-4">
-          {notes.entries.map((e, i) => (
+        {/* title 行：tag · date / summary */}
+        <div className="flex flex-col gap-0.5 border-b border-subtle px-5 py-3 min-w-0">
+          <h3 className="text-base font-semibold text-fg-primary font-mono">
+            <span>{current.tag}</span>
+            {current.date && <span className="text-fg-tertiary font-normal text-sm font-sans"> · {current.date}</span>}
+          </h3>
+          {current.summary && (
+            <span className="text-xs text-fg-secondary">{current.summary}</span>
+          )}
+        </div>
+        <div ref={bodyRef} className="flex-1 overflow-y-auto p-5 flex flex-col gap-4">
+          {current.entries.map((e, i) => (
             <div key={i} className="flex flex-col gap-1.5">
               <div className="flex items-start gap-2 flex-wrap">
                 <span
