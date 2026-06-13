@@ -648,8 +648,10 @@
     "pauseHint": "保存训练状态，可日后从此处继续",
     "resume": "恢复",
     "resumeHint": "从暂停点继续训练（沿用暂停时配置）",
-    "cancelPaused": "彻底取消",
-    "cancelPausedHint": "放弃这个 task，删除暂停文件",
+    "resumeTerminal": "继续训练",
+    "resumeTerminalHint": "从最近一次 epoch 自动备份继续训练（沿用当时配置）",
+    "cancelPaused": "取消任务",
+    "cancelPausedHint": "停止这个 task（恢复点保留，之后仍可继续训练）",
     "pausedAtStep": "在 step {{step}} 暂停于 {{time}}",
     "holdQueue": "挂起队列",
     "releaseQueue": "恢复调度",
@@ -694,7 +696,7 @@
       "cancel": "取消",
       "confirm": "确认暂停"
     },
-    "resumeFailedMissing": "暂停文件已丢失，无法恢复。请通过 ResumeFieldPicker 新建任务从其他 .pt 起。",
+    "resumeFailedMissing": "恢复点文件已丢失，无法恢复。请通过 ResumeFieldPicker 新建任务从其他 .pt 起。",
     "resumeFailed": "恢复失败：{{reason}}",
     "pauseFailed": "暂停失败：{{reason}}"
   },

@@ -258,7 +258,18 @@ export default function QueueDetailPage() {
           )}
           {isTerminal && (
             <>
-              <button onClick={retry} disabled={busy} className="btn btn-primary btn-sm">{t('common.retry')}</button>
+              {/* ADR 0006 Addendum 2 — failed/canceled 且恢复点在盘 → 继续训练
+                  （done 后端不放行，is_resumable 必为 false）。retry 是从头重跑，
+                  两个按钮并列给用户选。 */}
+              {task?.is_resumable && (
+                <button onClick={resumePaused} disabled={busy} className="btn btn-primary btn-sm"
+                  data-testid="detail-resume-btn"
+                  title={t('queue.resumeTerminalHint')}
+                >{t('queue.resumeTerminal')}</button>
+              )}
+              <button onClick={retry} disabled={busy}
+                className={`btn btn-sm ${task?.is_resumable ? 'btn-secondary' : 'btn-primary'}`}
+              >{t('common.retry')}</button>
               <button onClick={() => setConfirmDelete(true)} disabled={busy}
                 className="btn btn-sm bg-err-soft border border-err text-err"
               >{t('queueDetail.deleteRecord')}</button>

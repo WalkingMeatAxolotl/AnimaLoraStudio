@@ -640,3 +640,64 @@ PR-A / PR-B 之间无强依赖可并行；PR-C1 可合进 PR-B；PR-C2 单独 sh
 - `runtime/training/timestep_samplers/infonoise.py:29-80` InfoNoiseScheduler 9 个内部 state 字段
 - `runtime/training/optimizers/prodigy_plus_schedulefree.py` PPSF 工厂
 - worktree-090validation 内本地草稿（内容已部分过时，按用户决定不合并）
+
+### 2026-06-12 — Addendum 2: failed / canceled task 也可 resume（terminal-resume）
+
+**影响范围**：推翻初版 ADR「决策第 6 条（pause 文件对生命周期）」与
+`TERMINAL_STATUSES` 不可复活的隐含假设；修订 Addendum 1 的
+`resume_state_loaded → 删文件` 行为；初版「不在范围 / server crash 自动保
+state」一条实质已被 Addendum 1 推翻，本 Addendum 把它的产品面补完。
+
+**起因**：用户指出——既然 Addendum 1 让每个 epoch 末尾无条件写
+`auto_epoch_state.pt`，那么 failed（崩溃 / 关机）和 canceled 的 task 的恢复点
+大概率完好在盘上，"只有 paused 可恢复"是 API/UI 层的人为限制。实测确认：
+
+- failed：supervisor 重启 `_reconcile_orphans` 把孤儿 running 标 failed，
+  state 文件不受影响；
+- canceled（running 中取消）：取消流程从不碰 auto backup 文件；
+- 唯一主动删文件的路径是「取消 paused task」和「resume 成功后清理」，两者的
+  删除理由都来自初版 `pause_step_<N>.pt` 命名堆积问题——Addendum 1 改覆盖式
+  单文件后理由已消失。
+
+#### 决策
+
+1. **resume 状态放宽**：`POST /api/queue/{id}/resume` 允许
+   `status ∈ {paused, failed, canceled}`。done 不允许（语义是重训，走 retry /
+   ResumeFieldPicker）。文件缺失仍 409 引导 ResumeFieldPicker，语义不变。
+2. **恢复点路径落 DB**：supervisor 收到 `auto_epoch_backup_written` 事件时把
+   state/config 路径 + epoch/step 持久化到 tasks 新列
+   `last_state_path / last_config_path / last_state_epoch / last_state_step`
+   （migration v13）。此前只存内存 slot 字段，进程 / 机器一死信息即丢——落 DB
+   后关机重启照样能 resume。每 epoch 一次 UPDATE，开销可忽略。
+3. **resume 复用 paused 管道**：failed/canceled resume 时 endpoint 把
+   `last_state_path / last_config_path` 复制进 `paused_state_path /
+   paused_config_path` 再置 pending——cmd_builder（`--resume-state` 注入）、
+   bootstrap（sibling snapshot freeze）、`resume_state_loaded`（清字段）整条
+   下游零改动。
+4. **不再删恢复点文件**：`_clear_pause_artifacts` 改名 `_clear_pause_fields`，
+   只清 DB `paused_*` 字段不删文件。两处调用点行为变化：
+   - resume 成功（`resume_state_loaded`）：文件保留——消除「resume 后到下一
+     epoch 末之间无恢复点」的窗口；文件本来就是覆盖式，不会堆积。
+   - 取消 paused task：文件保留——canceled task 现在可 resume，"彻底取消"
+     文案随之修订。
+   文件生命周期改为跟 task 删除绑定：`DELETE /api/queue/{id}` 时按
+   `last_state_path` 的父目录（校验目录名 == `task_<id>` 防误删）一并 rmtree。
+5. **version 状态回滚**：failed/canceled 曾触发 `_maybe_finalize_version`；
+   resume 置 pending 后 endpoint 调 `reconcile_version_status`（派生回
+   training）+ publish `version_state_changed`，UI 立即一致（dispatch 时
+   `_write_task_running_to_db` 本来也会再写一次，双保险）。
+6. **`is_resumable` 信号**：list / get queue 注入。paused 看 `paused_state_path`，
+   failed/canceled 看 `last_state_path`，且文件真实存在。UI 据此显隐
+   "继续训练" 按钮（与 retry「从头重跑」并列）。
+7. **原子写盘（隐患修复）**：`save_training_state` 改 tmp + `os.replace`；
+   `write_config_snapshot` 同理。关机若砸在 epoch 末写盘窗口，旧恢复点完好，
+   不会留下半截 `.pt`。
+
+#### 边界 / 不在范围
+
+- 本 Addendum 之前已 failed/canceled 的存量 task 不回填 `last_state_path`
+  （train task 不写 `tasks.output_dir`，服务端无法可靠重建路径；存量恢复点
+  仍可走 ResumeFieldPicker 手动选）。
+- failed 原因为确定性错误（OOM / 配置错）时 resume 会原地再炸——不做服务端
+  判断，交给用户；retry 与 resume 按钮并列即是给用户的选择权。
+- done task 永不 resume。

@@ -257,12 +257,12 @@ def test_pause_rejects_when_cancel_pending(env) -> None:
 # ---- cancel paused task → canceled ------------------------------------------
 
 
-def test_cancel_paused_task_changes_to_canceled_and_clears_files(env, tmp_path) -> None:
-    """ADR §5.5: paused → canceled 必须删 pause 文件对。"""
+def test_cancel_paused_task_changes_to_canceled_keeps_files(env, tmp_path) -> None:
+    """ADR §5.5 + Addendum 2 修订: paused → canceled 清 paused_* 字段，
+    但恢复点文件**保留**（canceled task 之后仍可 resume）。"""
     sup = _new_sup(env)
-    # 准备 paused task + 真实存在的 pause 文件对
-    state_pt = tmp_path / "pause_step_100.pt"
-    state_cfg = tmp_path / "pause_step_100.config.json"
+    state_pt = tmp_path / "auto_epoch_state.pt"
+    state_cfg = tmp_path / "auto_epoch_state.config.json"
     state_pt.write_bytes(b"fake")
     state_cfg.write_text("{}", encoding="utf-8")
 
@@ -273,6 +273,8 @@ def test_cancel_paused_task_changes_to_canceled_and_clears_files(env, tmp_path) 
             status="paused",
             paused_state_path=str(state_pt),
             paused_config_path=str(state_cfg),
+            last_state_path=str(state_pt),
+            last_config_path=str(state_cfg),
             paused_step=100,
             paused_at=time.time(),
         )
@@ -282,9 +284,10 @@ def test_cancel_paused_task_changes_to_canceled_and_clears_files(env, tmp_path) 
     with db.connection_for(env["db"]) as conn:
         task = db.get_task(conn, tid)
     assert task["status"] == "canceled"
-    assert task["paused_state_path"] is None  # 字段清掉
-    assert not state_pt.exists()  # 文件删掉
-    assert not state_cfg.exists()
+    assert task["paused_state_path"] is None    # paused_* 字段清掉
+    assert task["last_state_path"] == str(state_pt)  # 恢复点字段保留
+    assert state_pt.exists()   # 文件保留（Addendum 2）
+    assert state_cfg.exists()
 
 
 def test_cancel_paused_task_robust_to_missing_files(env) -> None:

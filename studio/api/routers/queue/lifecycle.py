@@ -7,10 +7,10 @@
     POST  /api/queue/hold            挂起队列（dispatcher 停拉新 task）
     POST  /api/queue/release         恢复调度
     POST  /api/queue/reorder         按 id 列表重排
-    GET   /api/queue/{task_id}       task DB 行（含 is_pausable 信号）
+    GET   /api/queue/{task_id}       task DB 行（含 is_pausable / is_resumable 信号）
     POST  /api/queue/{task_id}/cancel
     POST  /api/queue/{task_id}/pause   ADR 0006 §4.1
-    POST  /api/queue/{task_id}/resume  ADR 0006 §6 路径 A
+    POST  /api/queue/{task_id}/resume  ADR 0006 §6 路径 A + Addendum 2（paused/failed/canceled）
     POST  /api/queue/{task_id}/retry   复制 config_path / project_id / version_id 起新 task
     DELETE /api/queue/{task_id}       仅 terminal task 可删
 """
@@ -28,6 +28,37 @@ from ....infrastructure.event_bus import bus
 from ....paths import USER_PRESETS_DIR, task_dir
 
 router = APIRouter()
+
+# resume 允许的起点状态（ADR 0006 Addendum 2）。done 不进 — 语义是重训，
+# 走 retry / ResumeFieldPicker。
+RESUMABLE_STATUSES = ("paused", "failed", "canceled")
+
+
+def _resume_source_paths(task: dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+    """按 status 取恢复点 (state_path, config_path)。
+
+    paused 用 paused_*（pause 流程写入，指向 auto_epoch_state.pt）；
+    failed/canceled 用 last_*（supervisor 每 epoch 收 auto_epoch_backup_written
+    事件落 DB，ADR Addendum 2）；其余状态无恢复点。
+    """
+    status = task.get("status")
+    if status == "paused":
+        return task.get("paused_state_path"), task.get("paused_config_path")
+    if status in ("failed", "canceled"):
+        return task.get("last_state_path"), task.get("last_config_path")
+    return None, None
+
+
+def _is_resumable(task: dict[str, Any]) -> bool:
+    """UI "继续训练" 按钮显隐信号。跟 resume endpoint 的放行条件保持一致：
+    state 文件必须在；config snapshot 路径有值时文件也必须在（严格 freeze）。
+    """
+    state_path, config_path = _resume_source_paths(task)
+    if not state_path or not Path(state_path).exists():
+        return False
+    if config_path and not Path(config_path).exists():
+        return False
+    return True
 
 
 @router.get("/api/queue")
@@ -55,6 +86,9 @@ def list_queue(
     except HTTPException:
         for it in items:
             it["is_pausable"] = False
+    # ADR Addendum 2 — is_resumable 信号（paused/failed/canceled + 恢复点文件在盘）
+    for it in items:
+        it["is_resumable"] = _is_resumable(it)
     return {"items": items}
 
 
@@ -125,6 +159,7 @@ def get_queue_item(task_id: int) -> dict[str, Any]:
         task["is_pausable"] = _supervisor().is_task_pausable(task_id)
     except HTTPException:
         task["is_pausable"] = False
+    task["is_resumable"] = _is_resumable(task)
     return task
 
 
@@ -162,32 +197,40 @@ def pause_task(task_id: int) -> dict[str, Any]:
 
 @router.post("/api/queue/{task_id}/resume")
 def resume_task(task_id: int) -> dict[str, Any]:
-    """恢复 paused task（ADR 0006 §6 路径 A）。
+    """恢复 paused / failed / canceled task（ADR 0006 §6 路径 A + Addendum 2）。
 
     流程：
-      1. 校验 status == 'paused' + paused_state_path 文件存在
-      2. task → pending（**保留 paused_* 字段**，cmd_builder 下轮 dispatch 读它）
-      3. supervisor 下次 _tick 自然 pick up，cmd 加 `--resume-state <pt>`，
-         bootstrap_phase 读 sibling .config.json snapshot 覆盖 args
+      1. 校验 status ∈ RESUMABLE_STATUSES + 恢复点文件存在
+         （paused 读 paused_*；failed/canceled 读 last_*，即 epoch 末 auto backup）
+      2. task → pending；failed/canceled 把 last_* 复制进 paused_* —— 复用
+         paused 管道，cmd_builder（--resume-state 注入）/ bootstrap_phase
+         （sibling .config.json snapshot freeze）整条下游零改动
+      3. supervisor 下次 _tick 自然 pick up
       4. 子进程 load_training_state 成功后 emit `resume_state_loaded` →
-         supervisor `_clear_pause_artifacts` 清文件对 + db 字段
+         supervisor `_clear_pause_fields` 清 db 字段（文件保留，Addendum 2）
+      5. failed/canceled 曾把 version finalize 成 failed/canceled —— 复活后
+         reconcile 派生回 training 并 publish version_state_changed
 
     文件丢失 → 409（ADR §5.5：引导用户走 ResumeFieldPicker 起新 task）。
+    done 不可 resume（语义是重训，走 retry / ResumeFieldPicker）。
     """
+    corrected_version: Optional[dict[str, Any]] = None
     with db.connection_for() as conn:
         task = db.get_task(conn, task_id)
         if not task:
             raise HTTPException(404, "task not found")
-        if task["status"] != "paused":
+        status = task["status"]
+        if status not in RESUMABLE_STATUSES:
             raise HTTPException(
-                409, f"task status is {task['status']!r}, not paused"
+                409,
+                f"task status is {status!r}, not resumable "
+                f"(expected one of {', '.join(RESUMABLE_STATUSES)})",
             )
-        state_path = task.get("paused_state_path")
-        config_path = task.get("paused_config_path")
+        state_path, config_path = _resume_source_paths(task)
         if not state_path or not Path(state_path).exists():
             raise HTTPException(
                 409,
-                f"paused state file missing: {state_path!r}; "
+                f"resume state file missing: {state_path!r}; "
                 f"use ResumeFieldPicker to start a fresh task from another .pt",
             )
         if config_path and not Path(config_path).exists():
@@ -195,18 +238,42 @@ def resume_task(task_id: int) -> dict[str, Any]:
             # 但 resume 语义会漂；按 ADR §5.7 严格 freeze 原则，拒绝继续。
             raise HTTPException(
                 409,
-                f"paused config snapshot missing: {config_path!r}; "
+                f"resume config snapshot missing: {config_path!r}; "
                 f"cannot guarantee config freeze, refusing to resume",
             )
-        db.update_task(
-            conn, task_id,
+        fields: dict[str, Any] = dict(
             status="pending",
             started_at=None,
             finished_at=None,
             exit_code=None,
             error_msg=None,
         )
+        if status in ("failed", "canceled"):
+            # ADR Addendum 2 决策 3：把恢复点搬进 paused_* 走既有管道。
+            fields["paused_state_path"] = state_path
+            fields["paused_config_path"] = config_path
+            fields["paused_step"] = task.get("last_state_step")
+        db.update_task(conn, task_id, **fields)
+        if status in ("failed", "canceled") and task.get("version_id"):
+            # ADR Addendum 2 决策 5：version status 从 failed/canceled 派生回
+            # training（task 已 pending）。dispatch 时 _write_task_running_to_db
+            # 还会再写一次，这里先改是为了 UI 立即一致。
+            from ....services.projects import versions as _versions
+            v, was_corrected = _versions.reconcile_version_status(
+                conn, int(task["version_id"])
+            )
+            if was_corrected and v:
+                corrected_version = v
     bus.publish({"type": "task_state_changed", "task_id": task_id, "status": "pending"})
+    if corrected_version is not None:
+        from ....services.projects import versions as _versions
+        bus.publish({
+            "type": "version_state_changed",
+            "project_id": corrected_version["project_id"],
+            "version_id": corrected_version["id"],
+            "status": _versions.get_status(corrected_version),
+            "phase": _versions.get_phase(corrected_version),
+        })
     return {"task_id": task_id, "status": "pending"}
 
 
@@ -265,4 +332,14 @@ def delete_queue_item(task_id: int) -> dict[str, Any]:
     tdir = task_dir(task_id)
     if tdir.exists():
         shutil.rmtree(tdir, ignore_errors=True)
+    # ADR Addendum 2 决策 4：恢复点文件（<output_dir>/state/task_<id>/）不在
+    # task_dir 下，生命周期同样跟 task 行绑定，删 task 一并清。目录名必须
+    # 精确等于 task_<id> 才动手 —— 防 DB 路径异常时误删别的目录。
+    for col in ("last_state_path", "paused_state_path"):
+        p = task.get(col)
+        if not p:
+            continue
+        state_dir = Path(p).parent
+        if state_dir.name == f"task_{task_id}" and state_dir.exists():
+            shutil.rmtree(state_dir, ignore_errors=True)
     return {"deleted": task_id}

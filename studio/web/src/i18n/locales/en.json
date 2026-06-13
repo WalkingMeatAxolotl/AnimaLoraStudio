@@ -648,8 +648,10 @@
     "pauseHint": "Save state — resume later from the same step",
     "resume": "Resume",
     "resumeHint": "Continue training from the saved checkpoint (frozen config)",
-    "cancelPaused": "Cancel",
-    "cancelPausedHint": "Abandon this task and delete pause files",
+    "resumeTerminal": "Resume training",
+    "resumeTerminalHint": "Continue from the latest end-of-epoch auto backup (frozen config)",
+    "cancelPaused": "Cancel task",
+    "cancelPausedHint": "Stop this task (the recovery point is kept, you can resume later)",
     "pausedAtStep": "Paused at step {{step}} on {{time}}",
     "holdQueue": "Hold queue",
     "releaseQueue": "Release queue",
@@ -694,7 +696,7 @@
       "cancel": "Cancel",
       "confirm": "Confirm pause"
     },
-    "resumeFailedMissing": "Pause file is missing — cannot resume. Start a fresh task from another .pt via ResumeFieldPicker.",
+    "resumeFailedMissing": "Recovery-point file is missing — cannot resume. Start a fresh task from another .pt via ResumeFieldPicker.",
     "resumeFailed": "Resume failed: {{reason}}",
     "pauseFailed": "Pause failed: {{reason}}"
   },

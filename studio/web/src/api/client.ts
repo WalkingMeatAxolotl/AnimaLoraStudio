@@ -1296,6 +1296,18 @@ export interface Task {
   /** ADR 0006 PR-4 — is_pausable 信号（§8.1）：UI 用来决定是否显示暂停
    *  按钮。supervisor 跑得起来时由 server enrich；空载默认 false。 */
   is_pausable?: boolean
+  /** ADR 0006 Addendum 2 — 最近一次 epoch 末 auto backup 的 .pt 路径
+   *  （auto_epoch_state.pt，覆盖式单文件）。failed/canceled resume 的恢复点。 */
+  last_state_path?: string | null
+  /** ADR 0006 Addendum 2 — auto backup 配套 config snapshot 路径。 */
+  last_config_path?: string | null
+  /** ADR 0006 Addendum 2 — 备份点 epoch（UI "从 epoch N 继续" 提示）。 */
+  last_state_epoch?: number | null
+  /** ADR 0006 Addendum 2 — 备份点 global_step。 */
+  last_state_step?: number | null
+  /** ADR 0006 Addendum 2 — is_resumable 信号：status ∈ paused/failed/canceled
+   *  且恢复点文件在盘上。UI 用来决定是否显示"继续训练"按钮。 */
+  is_resumable?: boolean
 }
 
 /** ADR 0006 PR-2 — GET /api/queue/hold 返回。`held=true` 时 UI 顶部
@@ -2346,8 +2358,9 @@ export const api = {
       `/api/queue/${id}/pause`,
       { method: 'POST' },
     ),
-  /** ADR 0006 PR-3 — 恢复 paused task。pause 文件缺失返 409 引导走
-   *  ResumeFieldPicker 起新 task。 */
+  /** ADR 0006 PR-3 + Addendum 2 — 恢复 paused / failed / canceled task
+   *  （从最近的 epoch 末 auto backup 续训）。恢复点文件缺失返 409 引导走
+   *  ResumeFieldPicker 起新 task。done 不可恢复（走 retry）。 */
   resumeTask: (id: number) =>
     req<{ task_id: number; status: string }>(
       `/api/queue/${id}/resume`,

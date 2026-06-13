@@ -583,11 +583,25 @@ export default function QueuePage() {
                           )}
                         </span>
                       ) : task.finished_at ? (
-                        <>
-                          <span>{fmtAgo(task.finished_at)}</span>
-                          <br />
-                          <span className="text-xs text-fg-tertiary">{t('status.done')}</span>
-                        </>
+                        <span className="flex flex-col items-end gap-1">
+                          {/* ADR 0006 Addendum 2 — failed/canceled 且恢复点在盘 → 继续训练。
+                              paused 走上面的分支，到这里 is_resumable=true 只剩 terminal。 */}
+                          {task.is_resumable && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); void resumeTask(task) }}
+                              className="btn btn-secondary btn-xs"
+                              title={t('queue.resumeTerminalHint')}
+                              data-testid={`resume-btn-${task.id}`}
+                            >
+                              {t('queue.resumeTerminal')}
+                            </button>
+                          )}
+                          <span>
+                            <span>{fmtAgo(task.finished_at)}</span>
+                            <br />
+                            <span className="text-xs text-fg-tertiary">{t('status.done')}</span>
+                          </span>
+                        </span>
                       ) : (
                         <span className="flex flex-col items-end gap-0.5">
                           <span>{t('queue.ahead', { n: prevCount(task.id) })}</span>
