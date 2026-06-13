@@ -105,14 +105,14 @@ async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
             logger.exception("taeflux background download crashed")
     threading.Thread(target=_bg_download_taeflux, name="taeflux-bg-download", daemon=True).start()
 
-    # Tag 翻译词典（约 3MB CSV）后台下载：仅当 active.json 不存在时拉取；失败只
+    # Tag 翻译词典（约 30MB SQLite）后台下载：仅当 active.json 不存在时拉取；失败只
     # log warning，让用户进 Settings 看状态后手动点 "恢复默认词典" 重试。
     def _bg_download_tag_dict() -> None:
         from ..infrastructure import tag_dictionary as _td
         try:
             if _td.ACTIVE_JSON.exists():
                 return
-            logger.info("background-downloading tag dictionary (~3MB)…")
+            logger.info("background-downloading tag dictionary (~30MB)…")
             _td.download_default()
         except Exception as exc:
             logger.warning(

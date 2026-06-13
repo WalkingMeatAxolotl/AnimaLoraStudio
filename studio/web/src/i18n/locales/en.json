@@ -810,7 +810,7 @@
       "uploadLabel": "Custom dictionary",
       "uploadHint": "CSV / TXT format: one line per `english_tag,zh1 zh2`. Replaces (not merges) the current dictionary. Max 10MB / 200k entries.",
       "resetButton": "Restore default dictionary",
-      "resetHint": "Re-download Physton danbooru.zh_CN.csv from GitHub (~3MB)",
+      "resetHint": "Re-download the ffdkj Danbooru tag Chinese translation table from GitHub (~30MB, top 200k tags by popularity, updated daily)",
       "resetOk": "Default dictionary restored",
       "resetFail": "Reset failed",
       "uploadOk": "Loaded {{name}}",

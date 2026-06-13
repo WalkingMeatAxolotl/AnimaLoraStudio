@@ -810,7 +810,7 @@
       "uploadLabel": "自定义词典",
       "uploadHint": "CSV / TXT 格式：每行 `english_tag,中文1 中文2`。上传后替换当前词典（不合并）。最大 10MB / 20 万条。",
       "resetButton": "恢复默认词典",
-      "resetHint": "从 GitHub 重新下载 Physton danbooru.zh_CN.csv（约 3MB）",
+      "resetHint": "从 GitHub 重新下载 ffdkj Danbooru 标签中文翻译表（约 30MB，收录热度前 20 万条，每日更新）",
       "resetOk": "已恢复默认词典",
       "resetFail": "恢复失败",
       "uploadOk": "已加载 {{name}}",

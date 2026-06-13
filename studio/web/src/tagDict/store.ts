@@ -1,6 +1,7 @@
 /** Tag 翻译词典 — 模块级 singleton + useSyncExternalStore hook。
  *
- * 设计：dict 约 3MB JSON，启动拉一次后放内存；浏览器 HTTP cache 处理 304。
+ * 设计：dict 约 7MB JSON（默认源 20 万条，gzip 后约 3.5MB），启动拉一次后放
+ * 内存；浏览器 HTTP cache 处理 304。
  * 不写 IndexedDB（项目无先例，复杂度不值；体量更大后再换）。
  *
  * 对外 API：

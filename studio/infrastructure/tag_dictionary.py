@@ -2,10 +2,17 @@
 
 存储布局：
     studio_data/tag_dictionary/
-        active.json   ← 解析后的词典 + meta（前端 GET /api/tag-dictionary/data 读这个）
-        source.csv    ← 原始上传 / 下载文件留底（排查用）
+        active.json    ← 解析后的词典 + meta（前端 GET /api/tag-dictionary/data 读这个）
+        source.sqlite  ← 默认源下载文件留底（排查用）
+        source.csv     ← 用户上传文件留底（排查用；与 source.sqlite 互斥，只留当前 active 的）
 
-默认数据源（Physton/sd-webui-prompt-all-in-one-assets）格式：
+默认数据源（ffdkj/ffdkj-Danbooru_Tag-Chinese-English-Translation-Table，
+每日更新，Gemini 翻译 + 人工校对）是 SQLite 单表：
+    tags(name TEXT PRIMARY KEY, category INTEGER, cn_name TEXT, post_count INTEGER)
+    全量 ~31 万条；按 post_count 降序取前 MAX_ENTRIES 条（截掉的是引用数
+    最低的长尾，对补全 / 翻译覆盖影响最小，同时控制 active.json 体积）。
+
+用户上传仍走 csv/txt 格式：
     english_tag,zh1 zh2 zh3
     （第二列空白分隔多个中文别名；无 header；'#' 起头视为注释）
 """
@@ -13,7 +20,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -27,14 +36,16 @@ logger = logging.getLogger(__name__)
 TAG_DICT_DIR = STUDIO_DATA / "tag_dictionary"
 ACTIVE_JSON = TAG_DICT_DIR / "active.json"
 SOURCE_FILE = TAG_DICT_DIR / "source.csv"
+SOURCE_SQLITE = TAG_DICT_DIR / "source.sqlite"
 
 DEFAULT_URL = (
-    "https://raw.githubusercontent.com/Physton/"
-    "sd-webui-prompt-all-in-one-assets/main/tags/danbooru.zh_CN.csv"
+    "https://raw.githubusercontent.com/ffdkj/"
+    "ffdkj-Danbooru_Tag-Chinese-English-Translation-Table/main/tag.sqlite"
 )
-DEFAULT_SOURCE_NAME = "physton/danbooru.zh_CN.csv"
+DEFAULT_SOURCE_NAME = "ffdkj/tag.sqlite"
 
-MAX_BYTES = 10 * 1024 * 1024  # 10MB
+MAX_BYTES = 10 * 1024 * 1024  # 10MB —— 用户上传 csv/txt 上限
+MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024  # 64MB —— 默认源 sqlite 上限（当前 ~30MB）
 MAX_ENTRIES = 200_000
 
 _CJK_RE = re.compile(r"[一-鿿]")
@@ -76,6 +87,40 @@ def parse_csv(text: str) -> dict[str, list[str]]:
         logger.warning(
             "tag_dictionary: 超过 %d 条上限，截断；丢弃了后续行", MAX_ENTRIES
         )
+    return entries
+
+
+def parse_sqlite(path: Path) -> dict[str, list[str]]:
+    """解析默认源 tag.sqlite → `{english_tag: [cn_name]}`。
+
+    规则：
+    - 按 post_count 降序取前 MAX_ENTRIES 条 —— dict 插入序即热度序，
+      原样透传给前端做 autocomplete 排序（同老 csv 源的行序约定）
+    - name 列：strip + 把 '_' 换成空格（用户/caption 形态约定）
+    - cn_name 是**单个**翻译，不按空白切分（有「宝可梦 (生物)」这类含
+      空格的译名）；空值 → `[]`（英文 tag 仍参与补全）
+    - 不是 sqlite / 缺表缺列 → 抛 sqlite3.Error，caller 转 RuntimeError
+    """
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        total = conn.execute("SELECT COUNT(*) FROM tags").fetchone()[0]
+        rows = conn.execute(
+            "SELECT name, cn_name FROM tags ORDER BY post_count DESC LIMIT ?",
+            (MAX_ENTRIES,),
+        ).fetchall()
+    finally:
+        conn.close()
+    if total > MAX_ENTRIES:
+        logger.info(
+            "tag_dictionary: 源共 %d 条，按 post_count 取前 %d 条", total, MAX_ENTRIES
+        )
+    entries: dict[str, list[str]] = {}
+    for name, cn_name in rows:
+        tag = str(name or "").strip().replace("_", " ")
+        if not tag:
+            continue
+        cn = str(cn_name or "").strip()
+        entries[tag] = [cn] if cn else []
     return entries
 
 
@@ -124,26 +169,35 @@ def get_meta() -> Optional[dict[str, Any]]:
 
 
 def download_default() -> dict[str, Any]:
-    """从 GitHub 拉默认词典并 commit 成 active.json，返回新 meta。
+    """从 GitHub 拉默认词典（sqlite）并 commit 成 active.json，返回新 meta。
 
-    失败抛 RuntimeError（带原因），上层 router 转 502。
+    sqlite 必须落盘才能打开，所以先写 .tmp 解析成功后 os.replace 成留底文件
+    （解析失败不留半截 source.sqlite）。失败抛 RuntimeError（带原因），上层
+    router 转 502。
     """
     TAG_DICT_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        resp = requests.get(DEFAULT_URL, timeout=30)
+        resp = requests.get(DEFAULT_URL, timeout=60)
         resp.raise_for_status()
     except Exception as exc:
         raise RuntimeError(f"download failed: {exc}") from exc
     content = resp.content
-    if len(content) > MAX_BYTES:
+    if len(content) > MAX_DOWNLOAD_BYTES:
         raise RuntimeError(
-            f"downloaded file too large: {len(content)} bytes > {MAX_BYTES}"
+            f"downloaded file too large: {len(content)} bytes > {MAX_DOWNLOAD_BYTES}"
         )
-    text = content.decode("utf-8", errors="replace")
-    entries = parse_csv(text)
+    tmp = SOURCE_SQLITE.with_suffix(".sqlite.tmp")
+    tmp.write_bytes(content)
+    try:
+        entries = parse_sqlite(tmp)
+    except sqlite3.Error as exc:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"invalid sqlite file: {exc}") from exc
     if not entries:
+        tmp.unlink(missing_ok=True)
         raise RuntimeError("downloaded file parsed to zero entries")
-    SOURCE_FILE.write_bytes(content)
+    os.replace(tmp, SOURCE_SQLITE)
+    SOURCE_FILE.unlink(missing_ok=True)  # 留底只保留当前 active 的源文件
     meta = _meta(DEFAULT_SOURCE_NAME, DEFAULT_URL, "default", len(entries))
     _write_active(entries, meta)
     logger.info("tag_dictionary: 默认词典已下载 (%d 条)", len(entries))
@@ -168,6 +222,7 @@ def apply_uploaded(content: bytes, filename: str) -> dict[str, Any]:
         raise ValueError("解析后 0 条；文件格式可能不对（期望 `english_tag,zh1 zh2`）")
     TAG_DICT_DIR.mkdir(parents=True, exist_ok=True)
     SOURCE_FILE.write_bytes(content)
+    SOURCE_SQLITE.unlink(missing_ok=True)  # 留底只保留当前 active 的源文件
     meta = _meta(filename or "user-upload", "", "user", len(entries))
     _write_active(entries, meta)
     logger.info("tag_dictionary: 用户上传词典已加载 (%d 条, %s)", len(entries), filename)

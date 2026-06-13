@@ -1,6 +1,7 @@
 """Tag 翻译词典：解析 / 上传 / 下载 / API 端点。"""
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +19,23 @@ def tag_dict_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(td, "TAG_DICT_DIR", d)
     monkeypatch.setattr(td, "ACTIVE_JSON", d / "active.json")
     monkeypatch.setattr(td, "SOURCE_FILE", d / "source.csv")
+    monkeypatch.setattr(td, "SOURCE_SQLITE", d / "source.sqlite")
     return d
+
+
+def _sqlite_bytes(tmp_path: Path, rows: list[tuple[str, int, str, int]]) -> bytes:
+    """构造默认源 schema 的 sqlite 文件，返回字节（喂给 fake requests）。"""
+    p = tmp_path / "_make_tag.sqlite"
+    p.unlink(missing_ok=True)
+    conn = sqlite3.connect(p)
+    conn.execute(
+        "CREATE TABLE tags (name TEXT PRIMARY KEY, category INTEGER, "
+        "cn_name TEXT, post_count INTEGER)"
+    )
+    conn.executemany("INSERT INTO tags VALUES (?, ?, ?, ?)", rows)
+    conn.commit()
+    conn.close()
+    return p.read_bytes()
 
 
 @pytest.fixture
@@ -83,6 +100,59 @@ def test_parse_first_comma_only() -> None:
 
 
 # ---------------------------------------------------------------------------
+# parse_sqlite（默认源格式）
+# ---------------------------------------------------------------------------
+
+
+def test_parse_sqlite_orders_by_post_count_desc(tmp_path: Path) -> None:
+    _sqlite_bytes(tmp_path, [
+        ("solo", 0, "单人", 100),
+        ("1girl", 0, "1个女孩", 300),
+        ("smile", 0, "微笑", 200),
+    ])
+    entries = td.parse_sqlite(tmp_path / "_make_tag.sqlite")
+    # dict 插入序 = post_count 降序 = 前端 autocomplete 热度序
+    assert list(entries.keys()) == ["1girl", "smile", "solo"]
+    assert entries["1girl"] == ["1个女孩"]
+
+
+def test_parse_sqlite_underscore_to_space(tmp_path: Path) -> None:
+    _sqlite_bytes(tmp_path, [("long_hair", 0, "长发", 10)])
+    entries = td.parse_sqlite(tmp_path / "_make_tag.sqlite")
+    assert entries == {"long hair": ["长发"]}
+
+
+def test_parse_sqlite_keeps_cn_name_with_spaces_whole(tmp_path: Path) -> None:
+    # cn_name 是单个译名，含空格也不能按空白切成多个别名
+    _sqlite_bytes(tmp_path, [("pokemon_(creature)", 0, "宝可梦 (生物)", 10)])
+    entries = td.parse_sqlite(tmp_path / "_make_tag.sqlite")
+    assert entries["pokemon (creature)"] == ["宝可梦 (生物)"]
+
+
+def test_parse_sqlite_empty_cn_name_keeps_tag(tmp_path: Path) -> None:
+    _sqlite_bytes(tmp_path, [("rare_tag", 0, "", 10), ("none_tag", 0, None, 5)])
+    entries = td.parse_sqlite(tmp_path / "_make_tag.sqlite")
+    assert entries == {"rare tag": [], "none tag": []}
+
+
+def test_parse_sqlite_truncates_to_max_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(td, "MAX_ENTRIES", 2)
+    _sqlite_bytes(tmp_path, [(f"tag{i}", 0, f"翻译{i}", i) for i in range(10)])
+    entries = td.parse_sqlite(tmp_path / "_make_tag.sqlite")
+    # 取 post_count 最高的前 2 条
+    assert list(entries.keys()) == ["tag9", "tag8"]
+
+
+def test_parse_sqlite_garbage_raises(tmp_path: Path) -> None:
+    p = tmp_path / "garbage.sqlite"
+    p.write_bytes(b"this is not a sqlite file at all, padding padding padding")
+    with pytest.raises(sqlite3.Error):
+        td.parse_sqlite(p)
+
+
+# ---------------------------------------------------------------------------
 # apply_uploaded
 # ---------------------------------------------------------------------------
 
@@ -135,13 +205,13 @@ class _FakeResp:
 
 
 def test_download_default_writes_active(
-    tag_dict_dir: Path, monkeypatch: pytest.MonkeyPatch
+    tag_dict_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(
-        td.requests,
-        "get",
-        lambda url, timeout: _FakeResp("1girl,1女孩\nsolo,单人\n".encode("utf-8")),
-    )
+    content = _sqlite_bytes(tmp_path, [
+        ("1girl", 0, "1个女孩", 300),
+        ("solo", 0, "单人", 100),
+    ])
+    monkeypatch.setattr(td.requests, "get", lambda url, timeout: _FakeResp(content))
     meta = td.download_default()
     assert meta["kind"] == "default"
     assert meta["source_name"] == td.DEFAULT_SOURCE_NAME
@@ -149,7 +219,35 @@ def test_download_default_writes_active(
     loaded = td.load_active()
     assert loaded is not None
     entries, _ = loaded
-    assert entries["1girl"] == ["1女孩"]
+    assert entries["1girl"] == ["1个女孩"]
+    # 留底是 sqlite，且没有半截 tmp 文件
+    assert td.SOURCE_SQLITE.exists()
+    assert not td.SOURCE_SQLITE.with_suffix(".sqlite.tmp").exists()
+
+
+def test_download_default_removes_stale_csv_source(
+    tag_dict_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """先有用户上传的 csv 留底，恢复默认后留底只剩 sqlite（互斥语义）。"""
+    td.apply_uploaded("mytag,我的标签\n".encode("utf-8"), "my.csv")
+    assert td.SOURCE_FILE.exists()
+    content = _sqlite_bytes(tmp_path, [("1girl", 0, "1个女孩", 300)])
+    monkeypatch.setattr(td.requests, "get", lambda url, timeout: _FakeResp(content))
+    td.download_default()
+    assert td.SOURCE_SQLITE.exists()
+    assert not td.SOURCE_FILE.exists()
+
+
+def test_apply_uploaded_removes_stale_sqlite_source(
+    tag_dict_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    content = _sqlite_bytes(tmp_path, [("1girl", 0, "1个女孩", 300)])
+    monkeypatch.setattr(td.requests, "get", lambda url, timeout: _FakeResp(content))
+    td.download_default()
+    assert td.SOURCE_SQLITE.exists()
+    td.apply_uploaded("mytag,我的标签\n".encode("utf-8"), "my.csv")
+    assert td.SOURCE_FILE.exists()
+    assert not td.SOURCE_SQLITE.exists()
 
 
 def test_download_default_propagates_http_error(
@@ -160,12 +258,35 @@ def test_download_default_propagates_http_error(
         td.download_default()
 
 
-def test_download_default_rejects_empty_parse(
+def test_download_default_rejects_oversize(
+    tag_dict_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(td, "MAX_DOWNLOAD_BYTES", 10)
+    monkeypatch.setattr(td.requests, "get", lambda url, timeout: _FakeResp(b"x" * 11))
+    with pytest.raises(RuntimeError, match="too large"):
+        td.download_default()
+
+
+def test_download_default_rejects_non_sqlite(
     tag_dict_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        td.requests, "get", lambda url, timeout: _FakeResp(b"# only comments\n")
+        td.requests,
+        "get",
+        lambda url, timeout: _FakeResp(b"english_tag,zh -- old csv format, not sqlite"),
     )
+    with pytest.raises(RuntimeError, match="invalid sqlite"):
+        td.download_default()
+    # 解析失败不留半截留底
+    assert not td.SOURCE_SQLITE.exists()
+    assert not td.SOURCE_SQLITE.with_suffix(".sqlite.tmp").exists()
+
+
+def test_download_default_rejects_empty_parse(
+    tag_dict_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    content = _sqlite_bytes(tmp_path, [])
+    monkeypatch.setattr(td.requests, "get", lambda url, timeout: _FakeResp(content))
     with pytest.raises(RuntimeError, match="zero entries"):
         td.download_default()
 
@@ -249,13 +370,11 @@ def test_reset_endpoint_502_on_network_error(
 
 
 def test_reset_endpoint_success(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch, tag_dict_dir: Path
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+    tag_dict_dir: Path, tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(
-        td.requests,
-        "get",
-        lambda url, timeout: _FakeResp(b"1girl,1\xe5\xa5\xb3\xe5\xad\xa9\n"),
-    )
+    content = _sqlite_bytes(tmp_path, [("1girl", 0, "1个女孩", 300)])
+    monkeypatch.setattr(td.requests, "get", lambda url, timeout: _FakeResp(content))
     r = client.post("/api/tag-dictionary/reset")
     assert r.status_code == 200
     assert r.json()["meta"]["kind"] == "default"
