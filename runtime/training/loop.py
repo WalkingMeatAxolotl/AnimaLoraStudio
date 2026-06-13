@@ -116,6 +116,8 @@ def run(ctx: TrainingContext) -> None:
 
     if getattr(args, "kv_trim", False) and getattr(args, "torch_compile", False):
         logger.warning("kv_trim 已被 torch_compile 静默禁用（动态 seq 维度导致 recompile）")
+    if getattr(args, "kv_trim", False) and getattr(args, "cache_text_embeds", False):
+        logger.info("kv_trim + cache_text_embeds：使用缓存的 t5_attn 做 KV trim")
 
     step_start_time = time.perf_counter()
 
@@ -161,6 +163,15 @@ def run(ctx: TrainingContext) -> None:
                     cross = ctx.model.preprocess_text_embeds(qwen_emb, t5_ids, t5xxl_weights=t5_w)
                     if cross.shape[1] < 512:
                         cross = F.pad(cross, (0, 0, 0, 512 - cross.shape[1]))
+                    if getattr(args, "kv_trim", False) and not getattr(args, "torch_compile", False):
+                        t5_attn = batch["t5_attn"].to(ctx.device, non_blocking=_nb)
+                        _actual = int(t5_attn.sum(dim=-1).max().item())
+                        _bucket = 512
+                        for _b in (64, 128, 256, 512):
+                            if _b >= _actual:
+                                _bucket = _b
+                                break
+                        cross = cross[:, :_bucket, :].contiguous()
                 else:
                     if bool(getattr(args, "caption_comfy_encoding", True)):
                         qwen_texts = [str(c) for c in captions]
