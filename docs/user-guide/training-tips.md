@@ -489,3 +489,22 @@ cache_latents: true
 ### 多 GPU
 
 目前脚本不支持多 GPU 并行，建议单卡训练。
+
+### TREAD token routing（训练提速）
+
+TREAD（[arXiv 2501.04765](https://arxiv.org/abs/2501.04765)）是**训练期专用**的 token 路由：中间若干 transformer block 只处理每步随机保留的一部分 token，段尾再把结果放回原位、被丢的 token 恒等旁路。等价于让中间层在更少 token 上算 attention/MLP，**省这些 block 的算力**；推理 / 采样完全不经此路径，出图行为不变。
+
+```yaml
+tread_enabled: true
+tread_ratio: 0.5        # 路由段每步丢弃的 token 比例（0.25-0.5 常用）
+tread_start_layer: 2    # 路由段起始 block（含）；保留最前几层全 token 结构
+tread_end_layer: -2     # 结束 block（不含，开区间）；负数从末尾数，保留最后两层全 token 细化
+```
+
+要点：
+
+- **只在训练生效**：`model.eval()`（采样 / 验证）自动关闭，无需手动切。
+- **段的选择**：跳过最前 / 最后若干层（早期结构、晚期细化用全 token），中段路由。`tread_ratio` 越大省得越多但信息损失越大。
+- **限制**：仅 Anima 图像 latent（T=1）+ rope-only 位置编码；学习型逐块位置嵌入（`extra_per_block_pos_emb`）下会报错关掉。
+- **画质**：是训练加速件，正常不影响最终画质；若怀疑某次训练异常，第一个关掉复跑的就是它。
+- **验证**：`python tools/tread_smoke.py --base <底模>` 用真权重确认前向数值一致 + 粗看耗时。

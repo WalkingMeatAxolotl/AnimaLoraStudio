@@ -389,6 +389,29 @@ class TrainingConfig(BaseModel):
         description="Cross-attention KV trim：按实际 token 数裁到最近 bucket（64/128/256/512），减少 padding 计算量",
         json_schema_extra=_meta("system", advanced=True),
     )
+    # --------------------------- TREAD token routing ---------------------------
+    # arXiv 2501.04765：训练期专用 token 路由，中间若干 block 只算随机保留的 token 子集，
+    # 省这些 block 的算力；推理 / 采样不经此路径，default off。
+    tread_enabled: bool = Field(
+        False,
+        description="TREAD 训练期 token 路由：中间 block 段只处理随机保留的 token 子集（省算力，推理不变）。仅 Anima 图像 latent（T=1）+ rope-only 位置编码",
+        json_schema_extra=_meta("system", advanced=True),
+    )
+    tread_ratio: float = Field(
+        0.5, ge=0.0, lt=1.0,
+        description="路由段每步丢弃的 token 比例（0=不丢；0.5=丢一半）。越大省得越多但信息损失越大，典型 0.25-0.5",
+        json_schema_extra=_meta("system", show_when="tread_enabled==true", advanced=True),
+    )
+    tread_start_layer: int = Field(
+        2,
+        description="路由段起始 block 索引（含）；负数按 python 切片语义从末尾数。建议跳过最前几层（保留早期全 token 结构）",
+        json_schema_extra=_meta("system", show_when="tread_enabled==true", advanced=True),
+    )
+    tread_end_layer: int = Field(
+        -2,
+        description="路由段结束 block 索引（不含，开区间）；负数从末尾数（-2 = 倒数第 2 层之前结束，保留最后两层全 token 细化）",
+        json_schema_extra=_meta("system", show_when="tread_enabled==true", advanced=True),
+    )
     noise_enhancement_type: Literal["none", "offset", "pyramid"] = Field(
         "none",
         description="噪声增强机制（默认 none）。offset 在噪声上加 per-sample DC 偏置；pyramid 在多个尺度叠加低频噪声。两者机制不同，但都改变低频成分，互斥防双倍叠加。LoRA 训练默认保持 none",

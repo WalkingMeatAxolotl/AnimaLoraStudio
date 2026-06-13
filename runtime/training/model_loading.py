@@ -30,9 +30,43 @@ logger = logging.getLogger(__name__)
 # 梯度检查点
 # ============================================================================
 
-def forward_with_optional_checkpoint(model, latents, timesteps, cross, padding_mask, use_checkpoint=False):
-    """带可选梯度检查点的前向传播。"""
-    if not use_checkpoint:
+def tread_route_indices(bs: int, n_tokens: int, ratio: float, device) -> "torch.Tensor":
+    """TREAD（arXiv 2501.04765）逐样本随机保留索引。
+
+    返回 (B, N_keep) 升序 token 索引，N_keep = round(N·(1-ratio))（至少 1）。
+    每样本独立抽样（与论文一致）；升序保持原 token 顺序便于 RoPE 子集对齐。
+    """
+    n_keep = max(int(round(n_tokens * (1.0 - float(ratio)))), 1)
+    scores = torch.rand(bs, n_tokens, device=device)
+    idx = scores.argsort(dim=1)[:, :n_keep]
+    return idx.sort(dim=1).values
+
+
+def forward_with_optional_checkpoint(
+    model,
+    latents,
+    timesteps,
+    cross,
+    padding_mask,
+    use_checkpoint=False,
+    tread_ratio: float = 0.0,
+    tread_start_layer: int = 0,
+    tread_end_layer: int = 0,
+):
+    """带可选梯度检查点的前向传播 + 可选 TREAD token 路由。
+
+    TREAD（arXiv 2501.04765，训练期专用 token 路由，推理不变）：当 ``tread_ratio>0``
+    且 ``model.training`` 时，blocks[start:end)（负索引按 python 切片语义，end 开区间）
+    只处理每样本随机保留的 N·(1-ratio) 个 token，段尾把结果 scatter 回原位、被丢 token
+    恒等旁路 → 省这些 block 的算力。采样 / eval 调用方不传 tread 参数 + model.eval()
+    双保险关闭。
+
+    实现不动模型定义：保留 token 子集 reshape 成 (B,1,1,N_keep,D) 伪网格，复用现有
+    ``Block.forward``（其内部本就 ``rearrange("b t h w d -> b (t h w) d")`` 走 token 注意力，
+    rope 按位置应用），对 Anima 图像 latent（T=1）与逐 token 前向逐 bit 等价。
+    """
+    use_tread = float(tread_ratio) > 0.0 and bool(getattr(model, "training", False))
+    if not use_checkpoint and not use_tread:
         return model(latents, timesteps, cross, padding_mask=padding_mask)
     from torch.utils.checkpoint import checkpoint
 
@@ -50,10 +84,69 @@ def forward_with_optional_checkpoint(model, latents, timesteps, cross, padding_m
         "extra_per_block_pos_emb": extra_pos_emb,
     }
 
-    for block in model.blocks:
-        def custom_forward(x, blk=block):
-            return blk(x, t_embedding, cross, **block_kwargs)
-        x_B_T_H_W_D = checkpoint(custom_forward, x_B_T_H_W_D, use_reentrant=False)
+    n_blocks = len(model.blocks)
+    seg_s = seg_e = -1
+    if use_tread:
+        if extra_pos_emb is not None:
+            raise RuntimeError(
+                "TREAD 路由段不支持 extra_per_block_pos_emb（学习型逐块位置嵌入）；"
+                "请关闭 tread 或使用 rope-only 位置编码。"
+            )
+        if x_B_T_H_W_D.shape[1] != 1:
+            raise RuntimeError(
+                f"TREAD 伪网格路径目前仅支持 T=1 图像 latent，收到 T={x_B_T_H_W_D.shape[1]}。"
+            )
+        seg_s = tread_start_layer if tread_start_layer >= 0 else n_blocks + tread_start_layer
+        seg_e = tread_end_layer if tread_end_layer > 0 else n_blocks + tread_end_layer
+        if not (0 <= seg_s < seg_e <= n_blocks):
+            raise ValueError(
+                f"非法 TREAD 路由段: blocks[{seg_s}:{seg_e}) / n_blocks={n_blocks}"
+            )
+
+    def _run_grid(blk, x):
+        def fwd(x_in, _b=blk):
+            return _b(x_in, t_embedding, cross, **block_kwargs)
+        return checkpoint(fwd, x, use_reentrant=False) if use_checkpoint else fwd(x)
+
+    def _run_routed(blk, x_pseudo, rope_keep):
+        # 伪网格 (B,1,1,N_keep,D)：复用 Block.forward，rope 传保留子集、关学习型位置嵌入
+        def fwd(x_in, _b=blk):
+            return _b(
+                x_in, t_embedding, cross,
+                rope_emb_L_1_1_D=rope_keep,
+                adaln_lora_B_T_3D=adaln_lora,
+                extra_per_block_pos_emb=None,
+            )
+        return checkpoint(fwd, x_pseudo, use_reentrant=False) if use_checkpoint else fwd(x_pseudo)
+
+    b = tt = hh = ww = dd = 0
+    x_tok_full = gather_idx = grid_shape = x_keep = rope_keep = None
+    for i, block in enumerate(model.blocks):
+        if use_tread and i == seg_s:
+            b, tt, hh, ww, dd = x_B_T_H_W_D.shape
+            grid_shape = (b, tt, hh, ww, dd)
+            n_tok = tt * hh * ww
+            x_tok_full = x_B_T_H_W_D.reshape(b, n_tok, dd)
+            keep_idx = tread_route_indices(b, n_tok, tread_ratio, x_tok_full.device)
+            gather_idx = keep_idx.unsqueeze(-1).expand(-1, -1, dd)
+            x_keep = torch.gather(x_tok_full, 1, gather_idx)  # (B, N_keep, D)
+            if rope_emb is not None:
+                if rope_emb.shape[0] != n_tok:
+                    raise RuntimeError(
+                        f"rope_emb 第 0 维 ({rope_emb.shape[0]}) != token 数 ({n_tok})，"
+                        "TREAD 无法对齐 RoPE 子集"
+                    )
+                rope_keep = rope_emb[keep_idx]  # (B, N_keep, 1, 1, Dh)
+        if use_tread and seg_s <= i < seg_e:
+            n_keep = x_keep.shape[1]
+            x_pseudo = x_keep.reshape(b, 1, 1, n_keep, dd)
+            x_pseudo = _run_routed(block, x_pseudo, rope_keep)
+            x_keep = x_pseudo.reshape(b, n_keep, dd)
+            if i == seg_e - 1:
+                x_tok_full = x_tok_full.scatter(1, gather_idx, x_keep.to(x_tok_full.dtype))
+                x_B_T_H_W_D = x_tok_full.reshape(grid_shape)
+            continue
+        x_B_T_H_W_D = _run_grid(block, x_B_T_H_W_D)
 
     x_B_T_H_W_O = model.final_layer(x_B_T_H_W_D, t_embedding, adaln_lora_B_T_3D=adaln_lora)
     return model.unpatchify(x_B_T_H_W_O)
