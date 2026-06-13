@@ -12,6 +12,7 @@
     GET  /api/system/dev_commits    `git log origin/dev -N` 摘要
     POST /api/system/init_git       zip 用户初始化 git 仓库（幂等）
     GET  /api/system/release_notes  yaml 取指定 tag 的结构化 release notes
+    GET  /api/system/release_notes_all  yaml 全量历史版本（modal 切换用）
 
 重启协议（参见 docs/adr/0002-webui-self-update.md）：
     1. server 写 REPO_ROOT/tmp/restart 标志
@@ -336,14 +337,7 @@ def system_init_git() -> dict[str, Any]:
     return {"ok": True, "already_initialized": False, **asdict(result)}
 
 
-@router.get("/api/system/release_notes")
-def system_release_notes(tag: str) -> dict[str, Any]:
-    """读 release_notes.yaml，返回指定 tag 的结构化 release notes。
-
-    数据模型见 docs/release-notes-spec.md。tag 接受 `v0.6.0` 或 `0.6.0`。
-    yaml 缺该 tag → found=false，UI 退化到 CHANGELOG.md 链接占位。
-    """
-    result = release_notes_svc.parse(tag)
+def _serialize_release_notes(result: release_notes_svc.ReleaseNotesResult) -> dict[str, Any]:
     return {
         "tag": result.tag,
         "found": result.found,
@@ -351,3 +345,24 @@ def system_release_notes(tag: str) -> dict[str, Any]:
         "summary": result.summary,
         "entries": [asdict(e) for e in result.entries],
     }
+
+
+@router.get("/api/system/release_notes")
+def system_release_notes(tag: str) -> dict[str, Any]:
+    """读 release_notes.yaml，返回指定 tag 的结构化 release notes。
+
+    数据模型见 docs/release-notes-spec.md。tag 接受 `v0.6.0` 或 `0.6.0`。
+    yaml 缺该 tag → found=false，UI 退化到 CHANGELOG.md 链接占位。
+    """
+    return _serialize_release_notes(release_notes_svc.parse(tag))
+
+
+@router.get("/api/system/release_notes_all")
+def system_release_notes_all() -> dict[str, Any]:
+    """yaml 内全部 release notes（latest first）。modal 版本切换用。
+
+    yaml 不存在 / 全部损坏 → versions=[]，前端 fallback 到只显示当前版本。
+    payload 约 ~120KB（~20 版本），一次拉完，前端缓存在 modal 生命周期内。
+    """
+    versions = [_serialize_release_notes(r) for r in release_notes_svc.parse_all()]
+    return {"versions": versions}

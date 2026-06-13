@@ -162,3 +162,57 @@ def test_real_repo_parses_known_version() -> None:
         kinds = {e.kind for e in r.entries}
         # 0.6.0 至少有 added / changed / fixed 三类
         assert "added" in kinds
+
+
+# ---------------------------------------------------------------------------
+# parse_all — modal 版本切换用全量接口
+# ---------------------------------------------------------------------------
+
+
+def test_parse_all_preserves_yaml_order(fake_yaml: Path) -> None:
+    """yaml latest-first 的顺序原样回吐，前端导航直接按 index 走。"""
+    _write(fake_yaml, [
+        {"version": "0.6.0", "date": "2026-05-12",
+         "entries": [{"kind": "added", "summary": "v60"}]},
+        {"version": "0.5.1", "date": "2026-05-10",
+         "entries": [{"kind": "fixed", "summary": "v51"}]},
+        {"version": "0.5.0", "date": "2026-05-09",
+         "entries": [{"kind": "added", "summary": "v50"}]},
+    ])
+    results = release_notes.parse_all()
+    assert [r.tag for r in results] == ["v0.6.0", "v0.5.1", "v0.5.0"]
+    assert all(r.found for r in results)
+
+
+def test_parse_all_normalizes_v_prefix(fake_yaml: Path) -> None:
+    """yaml 内 version 不带 v 前缀，parse_all 对外统一加 v（与 git tag 习惯一致）。"""
+    _write(fake_yaml, [
+        {"version": "0.6.0", "date": "2026-05-12",
+         "entries": [{"kind": "added", "summary": "x"}]}
+    ])
+    results = release_notes.parse_all()
+    assert results[0].tag == "v0.6.0"
+
+
+def test_parse_all_skips_blocks_without_version(fake_yaml: Path) -> None:
+    """block 缺 version 字段直接跳过，不污染 list。"""
+    _write(fake_yaml, [
+        {"version": "0.6.0", "date": "2026-05-12",
+         "entries": [{"kind": "added", "summary": "good"}]},
+        {"date": "2026-05-09",  # 缺 version
+         "entries": [{"kind": "added", "summary": "bad"}]},
+        {"version": "0.5.0", "date": "2026-05-09",
+         "entries": [{"kind": "added", "summary": "ok"}]},
+    ])
+    results = release_notes.parse_all()
+    assert [r.tag for r in results] == ["v0.6.0", "v0.5.0"]
+
+
+def test_parse_all_missing_file_returns_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(release_notes, "YAML_PATH", tmp_path / "absent.yaml")
+    assert release_notes.parse_all() == []
+
+
+def test_parse_all_corrupt_yaml_returns_empty(fake_yaml: Path) -> None:
+    fake_yaml.write_text("{not valid: yaml:\n  - broken", encoding="utf-8")
+    assert release_notes.parse_all() == []
