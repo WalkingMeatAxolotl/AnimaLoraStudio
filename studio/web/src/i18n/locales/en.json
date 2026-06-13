@@ -833,7 +833,7 @@
       "sectionTitle": "Storage location",
       "locationLabel": "studio_data location",
       "help1": "studio_data holds projects, datasets, task archives, presets and the database. By default it lives in the app root directory.",
-      "help2": "Changing the location copies all current data to the new directory (the original is kept, not deleted). Restart Studio afterwards for it to take effect.",
+      "help2": "Changing the location creates a studio_data subdirectory inside the chosen directory and copies all current data into it (the original is kept, not deleted). Restart Studio afterwards for it to take effect.",
       "customBadge": "custom",
       "defaultBadge": "default",
       "changeLocation": "Change location…",

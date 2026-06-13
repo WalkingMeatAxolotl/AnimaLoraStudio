@@ -5,5 +5,5 @@ from pydantic import BaseModel
 
 
 class StudioDataMigrateRequest(BaseModel):
-    """迁移目标目录（绝对路径；空目录或不存在）。"""
+    """迁移目标父目录（绝对路径；数据落 `target/studio_data/`，目标不要求为空）。"""
     target: str

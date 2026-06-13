@@ -833,7 +833,7 @@
       "sectionTitle": "存储位置",
       "locationLabel": "studio_data 位置",
       "help1": "studio_data 存放项目、数据集、任务档案、预设和数据库。默认在程序根目录。",
-      "help2": "更改位置会把当前数据完整复制到新目录（原数据保留不删除），完成后需重启 Studio 生效。",
+      "help2": "更改位置会在所选目录下创建 studio_data 子目录并完整复制当前数据（原数据保留不删除），完成后需重启 Studio 生效。",
       "customBadge": "自定义",
       "defaultBadge": "默认",
       "changeLocation": "更改位置…",

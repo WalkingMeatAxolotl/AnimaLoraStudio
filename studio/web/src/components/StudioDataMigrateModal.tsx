@@ -35,6 +35,10 @@ export default function StudioDataMigrateModal({ target, onClose, onRestart }: {
   onRestart: () => void
 }) {
   const { t } = useTranslation()
+  // 用户选的是父目录，后端实际把数据复制到 target/studio_data/（display 用，
+  // API 仍传 target，由后端拼接）
+  const sep = target.includes('\\') ? '\\' : '/'
+  const destination = target.endsWith(sep) ? `${target}studio_data` : `${target}${sep}studio_data`
   const [phase, setPhase] = useState<Phase>('loading')
   const [info, setInfo] = useState<StudioDataInfo | null>(null)
   const [progress, setProgress] = useState<Progress>(EMPTY_PROGRESS)
@@ -137,7 +141,7 @@ export default function StudioDataMigrateModal({ target, onClose, onRestart }: {
                 </div>
                 <div>
                   <span className="text-fg-tertiary">{t('settings.storage.to')}</span>{' '}
-                  <code className="font-mono">{target}</code>
+                  <code className="font-mono">{destination}</code>
                 </div>
               </div>
               <div className="text-sm font-semibold">

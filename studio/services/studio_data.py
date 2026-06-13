@@ -6,8 +6,11 @@
 3. 复制完成 → 写仓库根指针文件 `studio_data_location.json` → 重启 server 生效
 
 设计要点：
-- **只复制不删除**：旧数据原样保留（用户决策）；失败时清掉复制了一半的目标
-  目录（开始前要求目标为空，rmtree 安全），指针不写，等于什么都没发生。
+- **目标是父目录**：用户选任意目录，数据落 `目标/studio_data/`（整个
+  studio_data「搬进去」），目标本身不要求为空 —— 只要求落地子目录不存在或
+  为空（不 merge 进已有数据）。
+- **只复制不删除**：旧数据原样保留（用户决策）；失败时清掉复制了一半的落地
+  目录（开始前要求其为空 / 不存在，rmtree 安全），指针不写，等于什么都没发生。
 - **sqlite 一致性**：server 进程随请求随时可能写 studio.db，直接 copy 可能
   截到写一半的页。`.db` 文件走 sqlite3 backup API（在线备份，拿到一致快照）；
   对应的 `-wal` / `-shm` 跳过（backup 产物自含）。
@@ -31,6 +34,9 @@ from ..infrastructure.paths import DEFAULT_STUDIO_DATA, STUDIO_DATA, STUDIO_DATA
 logger = logging.getLogger(__name__)
 
 PROGRESS_INTERVAL_SECONDS = 0.2
+
+# 落地子目录名固定 —— 不跟随当前位置的目录名（老式迁移的自定义位置可能叫别的）
+DATA_DIR_NAME = "studio_data"
 
 Publish = Callable[[dict[str, Any]], None]
 
@@ -124,29 +130,34 @@ def _set_status(**kw: Any) -> None:
 # 校验 + 启动
 # ---------------------------------------------------------------------------
 
-def validate_target(target: Path, *, source: Path | None = None) -> None:
-    """迁移目标目录校验，不合法抛 ValueError（caller 转 422）。
+def validate_target(target: Path, *, source: Path | None = None) -> Path:
+    """迁移目标校验，不合法抛 ValueError（caller 转 422）；返回实际落地目录。
 
-    规则：绝对路径；不等于当前位置；双方互不嵌套（copy 进自己子树会无限递归，
-    当前嵌进目标会让旧数据被新目录"包住"语义混乱）；目标不存在或为空目录。
+    target 是用户选的任意目录，数据落 `target/studio_data/`，所以 target 本身
+    不要求为空。规则：绝对路径；target 已存在时必须是目录；落地目录不等于
+    当前位置；落地目录与当前位置互不嵌套（copy 进自己子树会无限递归）；
+    落地目录不存在或为空（不 merge 进已有数据）。
     """
     src = (source if source is not None else STUDIO_DATA).resolve()
     if not target.is_absolute():
         raise ValueError("目标必须是绝对路径")
-    tgt = target.resolve()
-    if tgt == src:
+    if target.exists() and not target.is_dir():
+        raise ValueError("目标已存在且不是目录")
+    dst = target.resolve() / DATA_DIR_NAME
+    if dst == src:
         raise ValueError("目标与当前 studio_data 位置相同")
-    for a, b in ((tgt, src), (src, tgt)):
+    for a, b in ((dst, src), (src, dst)):
         try:
             a.relative_to(b)
         except ValueError:
             continue
         raise ValueError("目标目录与当前 studio_data 互相嵌套")
-    if tgt.exists():
-        if not tgt.is_dir():
-            raise ValueError("目标已存在且不是目录")
-        if any(tgt.iterdir()):
-            raise ValueError("目标目录非空 —— 请选择空目录或不存在的路径")
+    if dst.exists():
+        if not dst.is_dir():
+            raise ValueError(f"目标下已存在同名文件 {DATA_DIR_NAME}")
+        if any(dst.iterdir()):
+            raise ValueError(f"目标下已存在非空 {DATA_DIR_NAME} 目录")
+    return dst
 
 
 def start_migration(
@@ -158,17 +169,18 @@ def start_migration(
 ) -> None:
     """校验 + 起后台复制线程。已有迁移在跑时抛 RuntimeError（caller 转 409）。
 
-    source / pointer_file 参数仅测试注入用；生产走默认（当前 STUDIO_DATA +
-    仓库根指针）。
+    target 是用户选的父目录，实际复制到 `target/studio_data/`（validate_target
+    返回值）。source / pointer_file 参数仅测试注入用；生产走默认（当前
+    STUDIO_DATA + 仓库根指针）。
     """
     src = (source if source is not None else STUDIO_DATA).resolve()
     ptr = pointer_file if pointer_file is not None else STUDIO_DATA_POINTER
-    validate_target(target, source=src)
+    dst = validate_target(target, source=src)
     with _status_lock:
         if _status.state == "running":
             raise RuntimeError("已有迁移正在进行")
         _status.state = "running"
-        _status.target = str(target)
+        _status.target = str(dst)
         _status.total_files = 0
         _status.total_bytes = 0
         _status.done_files = 0
@@ -177,7 +189,7 @@ def start_migration(
         _status.error = ""
     t = threading.Thread(
         target=_run_migration,
-        args=(src, target.resolve(), publish, ptr),
+        args=(src, dst, publish, ptr),
         name="studio-data-migration",
         daemon=True,
     )
@@ -250,7 +262,8 @@ def _run_migration(src: Path, dst: Path, publish: Publish, pointer_file: Path) -
         logger.info("studio_data 迁移完成: %s → %s（%d 文件），重启后生效", src, dst, done_files)
     except Exception as exc:
         logger.exception("studio_data 迁移失败: %s → %s", src, dst)
-        # 开始前目标为空 / 不存在（validate_target 保证），整树清掉等于回到迁移前
+        # dst 是 target/studio_data 落地目录，开始前为空 / 不存在
+        # （validate_target 保证），整树清掉等于回到迁移前；用户的 target 父目录不动
         shutil.rmtree(dst, ignore_errors=True)
         _set_status(state="error", error=str(exc))
         publish({"type": "studio_data_migrate_done", "ok": False, "error": str(exc)})

@@ -45,7 +45,8 @@ describe('StudioDataMigrateModal', () => {
       expect(screen.getByText(/共 42 个文件/)).toBeInTheDocument()
     })
     expect(screen.getByText(/5\.0 MB/)).toBeInTheDocument()
-    expect(screen.getByText('D:\\data')).toBeInTheDocument()
+    // 目标显示实际落地目录 target\studio_data（用户选的是父目录）
+    expect(screen.getByText('D:\\data\\studio_data')).toBeInTheDocument()
     expect(screen.getByText('projects/')).toBeInTheDocument()
     expect(screen.getByText('studio.db')).toBeInTheDocument()
   })

@@ -90,27 +90,53 @@ def test_validate_rejects_relative(tmp_path: Path) -> None:
 
 
 def test_validate_rejects_same_path(tmp_path: Path) -> None:
+    # 当前位置就是 tmp_path/studio_data，再选 tmp_path 当目标 → 落地目录撞上自己
+    src = tmp_path / "studio_data"
+    src.mkdir()
     with pytest.raises(ValueError, match="相同"):
-        svc.validate_target(tmp_path, source=tmp_path)
+        svc.validate_target(tmp_path, source=src)
 
 
 def test_validate_rejects_nested_both_ways(tmp_path: Path) -> None:
+    # 落地目录（target/studio_data）嵌进当前位置
     src = tmp_path / "sd"
     src.mkdir()
     with pytest.raises(ValueError, match="嵌套"):
         svc.validate_target(src / "inner", source=src)
+    # 当前位置嵌进落地目录
+    nested_src = tmp_path / "studio_data" / "inner"
+    nested_src.mkdir(parents=True)
     with pytest.raises(ValueError, match="嵌套"):
-        svc.validate_target(tmp_path, source=src)
+        svc.validate_target(tmp_path, source=nested_src)
 
 
-def test_validate_rejects_nonempty_target(tmp_path: Path) -> None:
+def test_validate_accepts_nonempty_target(tmp_path: Path) -> None:
+    # 目标本身非空没关系 —— 数据落 target/studio_data/ 子目录
     src = tmp_path / "sd"
     src.mkdir()
     tgt = tmp_path / "tgt"
     tgt.mkdir()
     (tgt / "junk.txt").write_text("x")
+    assert svc.validate_target(tgt, source=src) == tgt / "studio_data"
+
+
+def test_validate_rejects_nonempty_destination(tmp_path: Path) -> None:
+    src = tmp_path / "sd"
+    src.mkdir()
+    tgt = tmp_path / "tgt"
+    (tgt / "studio_data").mkdir(parents=True)
+    (tgt / "studio_data" / "junk.txt").write_text("x")
     with pytest.raises(ValueError, match="非空"):
         svc.validate_target(tgt, source=src)
+
+
+def test_validate_rejects_file_target(tmp_path: Path) -> None:
+    src = tmp_path / "sd"
+    src.mkdir()
+    f = tmp_path / "afile"
+    f.write_text("x")
+    with pytest.raises(ValueError, match="不是目录"):
+        svc.validate_target(f, source=src)
 
 
 def test_validate_accepts_empty_or_absent(tmp_path: Path) -> None:
@@ -118,8 +144,8 @@ def test_validate_accepts_empty_or_absent(tmp_path: Path) -> None:
     src.mkdir()
     empty = tmp_path / "empty"
     empty.mkdir()
-    svc.validate_target(empty, source=src)
-    svc.validate_target(tmp_path / "absent", source=src)
+    assert svc.validate_target(empty, source=src) == empty / "studio_data"
+    assert svc.validate_target(tmp_path / "absent", source=src) == tmp_path / "absent" / "studio_data"
 
 
 # ---------------------------------------------------------------------------
@@ -207,3 +233,29 @@ def test_start_migration_rejects_concurrent(tmp_path: Path, monkeypatch: pytest.
         svc.start_migration(tmp_path / "t2", source=src, publish=lambda e: None,
                             pointer_file=tmp_path / "ptr.json")
     release.set()
+
+
+def test_start_migration_lands_in_studio_data_subdir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """目标传父目录（可非空），复制线程拿到的落地目录是 target/studio_data/。"""
+    src = tmp_path / "sd"
+    src.mkdir()
+    (src / "f.txt").write_text("x")
+    got: dict[str, Path] = {}
+    finished = threading.Event()
+
+    def fake_run(s: Path, d: Path, pub, ptr) -> None:
+        got["dst"] = d
+        svc._set_status(state="done")
+        finished.set()
+    monkeypatch.setattr(svc, "_run_migration", fake_run)
+
+    tgt = tmp_path / "tgt"
+    tgt.mkdir()
+    (tgt / "existing.bin").write_text("y")  # 非空目标也接受
+    svc.start_migration(tgt, source=src, publish=lambda e: None,
+                        pointer_file=tmp_path / "ptr.json")
+    assert finished.wait(5)
+    assert got["dst"] == tgt / "studio_data"
+    assert svc.migration_status()["target"] == str(tgt / "studio_data")
