@@ -277,11 +277,10 @@ def _encode_text_for_dataset(
             qwen_text = _build_qwen_text_from_prompt(caption)
 
         with torch.no_grad():
-            qwen_emb, qwen_attn = encode_qwen(
+            qwen_emb, _qwen_attn = encode_qwen(
                 ctx.qwen_model, ctx.qwen_tok, [qwen_text], ctx.device, max_length=512,
             )
-            qwen_emb_np = qwen_emb[0].cpu().half().numpy()
-            qwen_attn_np = qwen_attn[0].cpu().numpy().astype(np.int8)
+            qwen_emb_np = qwen_emb[0].cpu().float().numpy()
 
             if comfy_mode:
                 t5_ids, t5_attn, t5_w = tokenize_t5_comfy_literal(
@@ -297,12 +296,21 @@ def _encode_text_for_dataset(
 
         existing = dict(np.load(npz_path))
         existing["qwen_emb"] = qwen_emb_np
-        existing["qwen_attn"] = qwen_attn_np
         existing["t5_ids"] = t5_ids_np
         existing["t5_attn"] = t5_attn_np
         existing["t5_w"] = t5_w_np
         existing["text_cache_mode"] = np.array(cache_mode_tag)
-        np.savez(npz_path, **existing)
+
+        import tempfile
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".npz", dir=str(npz_path.parent))
+        os.close(tmp_fd)
+        try:
+            np.savez(tmp_path, **existing)
+            os.replace(tmp_path, npz_path)
+        except BaseException:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            raise
 
         if count % 20 == 0 or count == len(to_encode):
             logger.info(f"  文本编码进度: {count}/{len(to_encode)}")

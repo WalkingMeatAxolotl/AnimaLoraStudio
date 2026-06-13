@@ -17,6 +17,7 @@ import re
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 
@@ -978,7 +979,6 @@ class CachedLatentDataset(Dataset):
                 "latent": latent,
                 "caption": "",
                 "qwen_emb": torch.from_numpy(data["qwen_emb"].copy()),
-                "qwen_attn": torch.from_numpy(data["qwen_attn"].copy()).long(),
                 "t5_ids": torch.from_numpy(data["t5_ids"].copy()).long(),
                 "t5_attn": torch.from_numpy(data["t5_attn"].copy()).long(),
                 "t5_w": torch.from_numpy(data["t5_w"].copy()).float(),
@@ -1025,19 +1025,15 @@ def collate_fn_cached(batch):
     result = {"latents": latents, "captions": captions}
 
     if "qwen_emb" in batch[0]:
-        import torch.nn.functional as _F
         max_qwen = max(b["qwen_emb"].shape[0] for b in batch)
-        qwen_embs, qwen_attns = [], []
+        qwen_embs = []
         for b in batch:
-            emb, attn = b["qwen_emb"], b["qwen_attn"]
+            emb = b["qwen_emb"]
             pad = max_qwen - emb.shape[0]
             if pad > 0:
-                emb = _F.pad(emb, (0, 0, 0, pad))
-                attn = _F.pad(attn, (0, pad))
+                emb = F.pad(emb, (0, 0, 0, pad))
             qwen_embs.append(emb)
-            qwen_attns.append(attn)
         result["qwen_emb"] = torch.stack(qwen_embs)
-        result["qwen_attn"] = torch.stack(qwen_attns)
 
         max_t5 = max(b["t5_ids"].shape[0] for b in batch)
         t5_ids_l, t5_attn_l, t5_w_l = [], [], []
@@ -1045,9 +1041,9 @@ def collate_fn_cached(batch):
             ids, attn, w = b["t5_ids"], b["t5_attn"], b["t5_w"]
             pad = max_t5 - ids.shape[0]
             if pad > 0:
-                ids = _F.pad(ids, (0, pad))
-                attn = _F.pad(attn, (0, pad))
-                w = _F.pad(w, (0, pad))
+                ids = F.pad(ids, (0, pad))
+                attn = F.pad(attn, (0, pad))
+                w = F.pad(w, (0, pad))
             t5_ids_l.append(ids)
             t5_attn_l.append(attn)
             t5_w_l.append(w)

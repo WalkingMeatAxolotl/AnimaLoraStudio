@@ -1418,7 +1418,7 @@ class MiniTrainDIT(nn.Module):
         self.final_layer.init_weights()
         self.t_embedding_norm.reset_parameters()
 
-    def compile_blocks(self, backend: str = "inductor", mode: Optional[str] = None, families: list[int] | None = None):
+    def compile_blocks(self, backend: str = "inductor", mode: Optional[str] = None, families: Optional[List[int]] = None):
         """Enable native-shape flattening and torch.compile each block's forward.
 
         Sets _native_flatten=True so the forward flattens every bucket's patch

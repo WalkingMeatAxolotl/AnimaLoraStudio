@@ -157,7 +157,6 @@ def run(ctx: TrainingContext) -> None:
                     # 文本缓存快路径：跳过 Qwen/T5 前向
                     qwen_emb = batch["qwen_emb"].to(ctx.device, dtype=ctx.dtype, non_blocking=_nb)
                     t5_ids = batch["t5_ids"].to(ctx.device, non_blocking=_nb)
-                    t5_attn = batch["t5_attn"].to(ctx.device, non_blocking=_nb)
                     t5_w = batch["t5_w"].to(ctx.device, dtype=torch.float32, non_blocking=_nb)
                     cross = ctx.model.preprocess_text_embeds(qwen_emb, t5_ids, t5xxl_weights=t5_w)
                     if cross.shape[1] < 512:
