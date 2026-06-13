@@ -1,6 +1,6 @@
 # AnimaLoraStudio
 
-[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-lightgrey)](README.md) [![English](https://img.shields.io/badge/lang-English-blue)](README.en.md) [![Version](https://img.shields.io/badge/version-0.12.0-blue)](CHANGELOG.md)
+[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-lightgrey)](README.md) [![English](https://img.shields.io/badge/lang-English-blue)](README.en.md) [![Version](https://img.shields.io/badge/version-0.13.0-blue)](CHANGELOG.md)
 
 **End-to-end pipeline**: scrape from Booru → curate → tag → reg set → train → image testing, all driven from a single browser panel. Optimized for [Anima](https://huggingface.co/circlestone-labs/Anima) (Cosmos DiT, anime-tuned) training.
 
@@ -34,9 +34,9 @@
 
 ### Engineering experience
 
-- **Self-healing environment**: first install automatically selects a GPU-compatible torch (cu118 through cu130), venv synchronizes with requirements.txt via hash comparison, Windows lockfile handling, automatic ONNX CUDA → CPU fallback on failure
+- **Self-healing environment**: first install automatically selects a GPU-compatible torch (cu118 through cu130), venv synchronizes with requirements.txt via hash comparison, Windows lockfile handling
 - **In-app updates**: Settings supports git pull, restart, and rollback; both master (stable) and dev (rolling) channels
-- **Acceleration backend switching**: one-click install of xformers / flash_attn wheels from Settings
+- **Acceleration backend switching**: one-click install of xformers / flash_attn wheels from Settings; ONNX Runtime three-way picker (DirectML / CUDA / CPU) by platform
 - **Internationalization**: bilingual UI (English / Chinese), language picker on first launch, switchable from Settings
 
 ![Studio training page](docs/images/studio-train.png)
@@ -105,7 +105,7 @@ studio.bat
 ./studio.sh
 ```
 
-On first run, the launcher automatically: creates `venv/` → installs the matching CUDA torch (cu118 through cu130) based on detected GPU driver → installs `requirements.txt` → installs onnxruntime based on GPU detection → builds the frontend → starts the backend → opens the browser to <http://127.0.0.1:8765/studio/>.
+On first run, the launcher automatically: creates `venv/` → installs the matching CUDA torch (cu118 through cu130) based on detected GPU driver → installs `requirements.txt` → builds the frontend → starts the backend → opens the browser to <http://127.0.0.1:8765/studio/>. A first-run onboarding modal then walks through installing base models, ONNX Runtime, and training acceleration with one click.
 
 > If GPU detection falls back to CPU torch, you can reinstall the CUDA build from Settings → System → PyTorch with one click, or specify it explicitly via `studio.bat --torch cu128` (or `studio.sh --torch cu128`).
 
@@ -272,7 +272,7 @@ Documentation entry: [docs/README.md](docs/README.md). Three sections:
 
 ## Version
 
-Current version is **0.12.0**. See [CHANGELOG.md](CHANGELOG.md) for the full history. The Settings → System → version card inside Studio allows one-click upgrade to the latest version.
+Current version is **0.13.0**. See [CHANGELOG.md](CHANGELOG.md) for the full history. The Settings → System → version card inside Studio allows one-click upgrade to the latest version.
 
 ---
 
