@@ -1418,20 +1418,22 @@ class MiniTrainDIT(nn.Module):
         self.final_layer.init_weights()
         self.t_embedding_norm.reset_parameters()
 
-    def compile_blocks(self, backend: str = "inductor", mode: Optional[str] = None):
+    def compile_blocks(self, backend: str = "inductor", mode: Optional[str] = None, families: list[int] | None = None):
         """Enable native-shape flattening and torch.compile each block's forward.
 
         Sets _native_flatten=True so the forward flattens every bucket's patch
         sequence to fake-5D (B, 1, seq_len, 1, D), keying the block graph on
-        token count alone (2 families from CONSTANT_TOKEN_BUCKETS) instead of
-        per-resolution (24 graphs). Also raises dynamo cache_size_limit.
+        token count alone (2 families per tier) instead of per-resolution.
+        Also raises dynamo cache_size_limit.
         """
         self._native_flatten = True
 
         import torch._dynamo as _dynamo
-        from runtime.training.dataset import CONSTANT_TOKEN_BUCKETS
+        from runtime.training.dataset import CONSTANT_TOKEN_BUCKETS, get_compile_families_for_reso
 
-        all_resos = [r for family in CONSTANT_TOKEN_BUCKETS.values() for r in family]
+        if families is None:
+            families = get_compile_families_for_reso(1024)
+        all_resos = [r for k in families for r in CONSTANT_TOKEN_BUCKETS[k]]
         n = len(
             {
                 (h // self.patch_spatial) * (w // self.patch_spatial)
