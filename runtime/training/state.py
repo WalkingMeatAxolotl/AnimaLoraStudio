@@ -11,7 +11,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import random
+from pathlib import Path
 
 import torch
 
@@ -54,7 +56,17 @@ def save_training_state(
             sampler_state = None
         if sampler_state:  # 空 dict（baseline）不存
             state["timestep_sampler_state"] = sampler_state
-    torch.save(state, path)
+    # ADR 0006 Addendum 2：tmp + os.replace 原子落盘。auto_epoch_state.pt 是
+    # 覆盖式单文件恢复点，直接 torch.save 在断电 / 强杀砸中写盘窗口时会把
+    # 唯一恢复点写成半截；先写 sibling tmp 再 rename，旧文件要么完整保留
+    # 要么被完整新文件替换。
+    path = Path(path)
+    tmp_path = path.with_name(path.name + ".tmp")
+    try:
+        torch.save(state, tmp_path)
+        os.replace(tmp_path, path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
     logger.info(f"训练状态已保存: {path} (epoch={epoch}, step={global_step})")
 
 
