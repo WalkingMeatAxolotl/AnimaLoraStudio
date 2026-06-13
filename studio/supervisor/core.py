@@ -172,8 +172,9 @@ class Supervisor:
     def cancel(self, task_id: int) -> bool:
         """取消 task：pending → status=canceled；running → 异步发信号立即返回。
 
-        ADR 0006 PR-2：paused task 也可被取消（"彻底放弃这个 task"），状态从
-        paused 直接改 canceled，并清理对应的 pause 文件对（已不需要了）。
+        ADR 0006 PR-2：paused task 也可被取消，状态从 paused 直接改 canceled。
+        ADR Addendum 2：恢复点文件保留（canceled 之后仍可 resume），只清
+        paused_* 字段。
 
         异步路径关键：**不阻塞 web 请求线程**。supervisor 主循环会自然 poll
         proc.poll() 拿到退出码并走 `_finish_slot` 流程，把 status 写为
@@ -192,10 +193,11 @@ class Supervisor:
                 )
                 return True
         if task["status"] == "paused":
-            # 进程已退出，无需发信号 — 复用 _clear_pause_artifacts 删文件 + 清字段，
-            # 再单独写 status=canceled + finished_at（ADR §5.5）。
-            # 故意走 with 块外：_clear_pause_artifacts 内部开自己 conn，避免嵌套。
-            self._clear_pause_artifacts(task_id)
+            # 进程已退出，无需发信号 — 清 paused_* 字段再单独写 status=canceled
+            # + finished_at。ADR Addendum 2：恢复点文件保留，canceled 后仍可
+            # resume（last_state_* 字段还在）。
+            # 故意走 with 块外：_clear_pause_fields 内部开自己 conn，避免嵌套。
+            self._clear_pause_fields(task_id)
             with db.connection_for(self._db_path) as conn:
                 db.update_task(
                     conn, task_id,
@@ -541,8 +543,10 @@ class Supervisor:
             log_fp = open(log_path, "wb")
 
             cmd = self._cmd_builder(task, cfg_path)
-            # ADR 0006 PR-1：LORA_TASK_ID 注入让训练子进程把 state 文件写到
+            # ADR 0006 PR-1：LORA_TASK_ID 注入让训练子进程把用户周期 save 写到
             # output_dir/state/task_<TID>/ 子目录，避免同 version 多 task 互覆盖。
+            # Addendum 2 起 auto_epoch_state.pt 改落 task 档案 tasks/<id>/state/
+            # —— 路径由子进程从 --monitor-state-file 推出（bootstrap，同 samples/）。
             # ADR-0009 PR-1 C6：TRACE_ENV + PROCESS_ENV 让 worker bootstrap 拿到。
             proc = self._popen(cmd, log_fp, extra_env={
                 "LORA_TASK_ID": str(task["id"]),
@@ -674,11 +678,17 @@ class Supervisor:
                     # 字段 → is_pausable 升级条件满足 → SSE 解锁 UI 暂停按钮。
                     slot.last_auto_epoch_state_path = str(payload.get("state_path") or "") or None
                     slot.last_auto_epoch_config_path = str(payload.get("config_path") or "") or None
+                    # ADR Addendum 2：同步落 DB。slot 字段是内存态，进程 / 机器
+                    # 一死即丢；落 DB 后 task 之后 failed（崩溃 / 关机）或
+                    # canceled 时恢复点路径仍可查，resume endpoint 据此放行。
+                    self._persist_last_state(tid, payload)
                 elif evt_type == "resume_state_loaded":
                     # ADR §5.5 / PR-3：训练子进程 load_training_state 成功 →
-                    # 旧 pause 文件对已被消费完，删盘 + 清 db 字段，避免下次
-                    # pause 时跟旧文件命名撞 / 让 ResumeFieldPicker 显示 stale 项。
-                    self._clear_pause_artifacts(tid)
+                    # paused_* 字段已被消费完，清 db 字段避免 stale。
+                    # ADR Addendum 2：**不再删文件** —— auto_epoch_state.pt 是
+                    # 覆盖式单文件不会堆积，删了反而造成「resume 后到下一
+                    # epoch 末之间无恢复点」的窗口。
+                    self._clear_pause_fields(tid)
                 self._on_event({
                     "type": evt_type,
                     "task_id": tid,
@@ -1339,28 +1349,43 @@ class Supervisor:
         slot.pause_pending = True
         self._send_pause_signal(slot.proc)
 
-    def _clear_pause_artifacts(self, task_id: int) -> None:
-        """删 pause 文件对 + 清 db `paused_*` 字段（ADR §5.5）。
+    def _persist_last_state(self, task_id: int, payload: dict[str, Any]) -> None:
+        """把 auto_epoch_backup_written 的恢复点信息写进 tasks 行（ADR Addendum 2）。
+
+        每 epoch 一次 UPDATE，开销可忽略；失败只 log 不抛 —— 训练不能因
+        DB 写入异常受影响，丢一拍下个 epoch 会再写。
+        """
+        state_path = str(payload.get("state_path") or "") or None
+        if not state_path:
+            return
+        try:
+            with db.connection_for(self._db_path) as conn:
+                db.update_task(
+                    conn, task_id,
+                    last_state_path=state_path,
+                    last_config_path=str(payload.get("config_path") or "") or None,
+                    last_state_epoch=payload.get("epoch"),
+                    last_state_step=payload.get("step"),
+                )
+        except Exception:
+            logger.exception("task %s last_state persist failed", task_id)
+
+    def _clear_pause_fields(self, task_id: int) -> None:
+        """清 db `paused_*` 字段（ADR §5.5 / Addendum 2 修订）。
 
         调用点：
           - resume_state_loaded 事件（cmd_builder 成功 load 后）
           - cancel paused → canceled
-          - 删除 paused task（未来 PR）
 
-        故意 **不改 status** — caller 决定要写什么状态。文件 unlink 兜 missing_ok
-        以容忍用户手动删 / 磁盘异常；db update 是 single transaction。
+        Addendum 2 起 **不再删恢复点文件**：auto_epoch_state.pt 覆盖式单文件
+        不会堆积，保留它让 canceled task 可 resume、resume 后立刻仍有恢复点。
+        文件清理统一挪到 DELETE task（lifecycle.delete_queue_item）。
+        故意 **不改 status** — caller 决定要写什么状态。
         """
         with db.connection_for(self._db_path) as conn:
             task = db.get_task(conn, task_id)
             if not task:
                 return
-            for col in ("paused_state_path", "paused_config_path"):
-                p = task.get(col)
-                if p:
-                    try:
-                        Path(p).unlink(missing_ok=True)
-                    except Exception:
-                        logger.exception("failed to remove pause file %s", p)
             db.update_task(
                 conn, task_id,
                 paused_state_path=None,

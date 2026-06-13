@@ -41,6 +41,11 @@ class TrainingContext:
     # 时 env 不存在 → None → state_dir() fallback 到 task_unknown 子目录。
     # 注意：跟 progress bar 的 task_id 字段（line ~80）是两回事，故意起不同名字。
     lora_task_id: Optional[int] = None
+    # ADR 0006 Addendum 2：auto_epoch_state.pt 落 task 档案（studio_data/tasks/
+    # <id>/state/）。bootstrap 从 --monitor-state-file 推出档案根后填充（跟
+    # sample_dir 同一约定）；纯 CLI 没传 → None → auto_state_dir() fallback
+    # 到 state_dir()。
+    task_archive_state_dir: Optional[Path] = None
 
     # ─── models_phase 填充 ───
     repo_root: Optional[Path] = None
@@ -96,7 +101,7 @@ class TrainingContext:
     # ─── 共用方法 ───
 
     def state_dir(self) -> Path:
-        """周期 save / handle_interrupt 写 state 的目录，per-task 隔离。
+        """用户周期 save（save_state_every*）写 state 的目录，per-task 隔离。
 
         ADR 0006 §5.3：同一 version 下多 task 跑 state 文件互相覆盖是 latent
         bug，加 task_id 子目录隔离。env LORA_TASK_ID 没设（CLI 直接跑）时
@@ -107,6 +112,22 @@ class TrainingContext:
         d = self.output_dir / "state" / f"task_{tid}"
         d.mkdir(parents=True, exist_ok=True)
         return d
+
+    def auto_state_dir(self) -> Path:
+        """auto_epoch_state.pt（系统级恢复点）的落盘目录（ADR 0006 Addendum 2）。
+
+        跟用户周期 save 分家：auto backup 是 task 档案的一部分（同 run.log /
+        monitor/ / samples/），落 `studio_data/tasks/<id>/state/` —— 生命周期
+        跟 task 行绑定（删 task 一并清），且服务端可从 task id 直接推算路径。
+        用户周期 save 是用户产物，留在 state_dir()（version output 树，
+        ResumeFieldPicker 按 version 扫得到）。
+
+        纯 CLI（没传 --monitor-state-file）fallback 到 state_dir()，行为不变。
+        """
+        if self.task_archive_state_dir is not None:
+            self.task_archive_state_dir.mkdir(parents=True, exist_ok=True)
+            return self.task_archive_state_dir
+        return self.state_dir()
 
     def emit(self, msg: str) -> None:
         """打印一条 user-facing 消息，按当前进度显示模式分流。

@@ -4,7 +4,7 @@
   - cmd_builder 单测：构造 task dict 调 `_default_cmd_builder`
   - bootstrap 覆盖单测：argparse.Namespace + sibling snapshot 落盘 + 调
     `_maybe_apply_pause_snapshot`
-  - supervisor `_clear_pause_artifacts` 单测：构造 db 状态 + 调 method
+  - supervisor `_clear_pause_fields` 单测：构造 db 状态 + 调 method
   - server resume endpoint 单测：直接调函数（绕过 fastapi router，因为本
     dev env 没装 fastapi/test_client）
 
@@ -360,7 +360,7 @@ def test_resolve_sample_seed_missing_attr_treated_as_zero() -> None:
 
 
 # ---------------------------------------------------------------------------
-# supervisor._clear_pause_artifacts
+# supervisor._clear_pause_fields（Addendum 2 起不删文件，只清 db 字段）
 # ---------------------------------------------------------------------------
 
 
@@ -386,10 +386,11 @@ def _new_sup(env) -> Supervisor:
     )
 
 
-def test_clear_pause_artifacts_deletes_files_and_clears_db(env) -> None:
+def test_clear_pause_fields_keeps_files_and_clears_db(env) -> None:
+    """Addendum 2：恢复点文件保留（resume 后窗口期仍有恢复点），只清 db 字段。"""
     sup = _new_sup(env)
-    state_pt = env["root"] / "pause_step_100.pt"
-    cfg_json = env["root"] / "pause_step_100.config.json"
+    state_pt = env["root"] / "auto_epoch_state.pt"
+    cfg_json = env["root"] / "auto_epoch_state.config.json"
     state_pt.write_bytes(b"fake state")
     cfg_json.write_text("{}", encoding="utf-8")
 
@@ -404,10 +405,10 @@ def test_clear_pause_artifacts_deletes_files_and_clears_db(env) -> None:
             paused_at=time.time(),
         )
 
-    sup._clear_pause_artifacts(tid)
+    sup._clear_pause_fields(tid)
 
-    assert not state_pt.exists()
-    assert not cfg_json.exists()
+    assert state_pt.exists()
+    assert cfg_json.exists()
     with db.connection_for(env["db"]) as conn:
         task = db.get_task(conn, tid)
     assert task is not None
@@ -419,14 +420,14 @@ def test_clear_pause_artifacts_deletes_files_and_clears_db(env) -> None:
     assert task["status"] == "running"
 
 
-def test_clear_pause_artifacts_unknown_task_noop(env) -> None:
+def test_clear_pause_fields_unknown_task_noop(env) -> None:
     """task 不存在 → 静默返回，不抛错。"""
     sup = _new_sup(env)
-    sup._clear_pause_artifacts(99999)
+    sup._clear_pause_fields(99999)
 
 
-def test_clear_pause_artifacts_missing_files_robust(env) -> None:
-    """文件已被外部删 → db 字段照样清，不抛错。"""
+def test_clear_pause_fields_dangling_paths_robust(env) -> None:
+    """路径指向不存在的文件 → db 字段照样清，不抛错。"""
     sup = _new_sup(env)
     with db.connection_for(env["db"]) as conn:
         tid = db.create_task(conn, name="t", config_name="c")
@@ -436,7 +437,7 @@ def test_clear_pause_artifacts_missing_files_robust(env) -> None:
             paused_config_path="/nonexistent/path.config.json",
             paused_step=100,
         )
-    sup._clear_pause_artifacts(tid)
+    sup._clear_pause_fields(tid)
     with db.connection_for(env["db"]) as conn:
         task = db.get_task(conn, tid)
     assert task["paused_state_path"] is None
@@ -505,7 +506,9 @@ def test_resume_endpoint_rejects_unknown_task(server_env) -> None:
     assert exc.value.status_code == 404
 
 
-def test_resume_endpoint_rejects_non_paused(server_env) -> None:
+def test_resume_endpoint_rejects_non_resumable_status(server_env) -> None:
+    """pending 不可 resume（Addendum 2 放宽到 paused/failed/canceled，
+    但 pending/running/done 仍拒绝）。"""
     server = _import_server_module()
     with db.connection_for(server_env["db"]) as conn:
         tid = db.create_task(conn, name="t", config_name="c")
@@ -513,7 +516,7 @@ def test_resume_endpoint_rejects_non_paused(server_env) -> None:
     with pytest.raises(server.HTTPException) as exc:
         server.resume_task(tid)
     assert exc.value.status_code == 409
-    assert "not paused" in exc.value.detail
+    assert "not resumable" in exc.value.detail
 
 
 def test_resume_endpoint_rejects_when_state_file_missing(server_env) -> None:
