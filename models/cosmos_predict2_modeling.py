@@ -44,16 +44,43 @@ try:
 except Exception:  # noqa: BLE001  flash_attn 未装是常态，BLE 是设计上的吞错
     _flash_attn_func = None
 
+_XFORMERS_AVAILABLE = False
+_USE_XFORMERS = False
+try:
+    import xformers.ops as _xops  # type: ignore[import-not-found]
+    _XFORMERS_AVAILABLE = True
+except Exception:  # noqa: BLE001  xformers 未装是常态，BLE 是设计上的吞错
+    _xops = None
+
+
+def set_attention_backend(backend: str) -> str:
+    """Set one attention fast path globally and clear the others."""
+    global _USE_FLASH_ATTN, _USE_XFORMERS
+    normalized = str(backend or "none").lower().strip()
+    _USE_FLASH_ATTN = False
+    _USE_XFORMERS = False
+    if normalized == "flash_attn":
+        _USE_FLASH_ATTN = _FLASH_ATTN_AVAILABLE
+        return "flash_attn" if _USE_FLASH_ATTN else "none"
+    if normalized == "xformers":
+        _USE_XFORMERS = _XFORMERS_AVAILABLE
+        return "xformers" if _USE_XFORMERS else "none"
+    return "none"
+
 
 def set_flash_attn_enabled(enabled: bool) -> bool:
     """全局开关。返回最终生效值（flash_attn 没装 → 永远 False）。"""
-    global _USE_FLASH_ATTN
-    _USE_FLASH_ATTN = bool(enabled) and _FLASH_ATTN_AVAILABLE
-    return _USE_FLASH_ATTN
+    return set_attention_backend("flash_attn" if enabled else "none") == "flash_attn"
+
+
+def set_xformers_enabled(enabled: bool) -> bool:
+    """全局开关。返回最终生效值（xformers 没装 → 永远 False）。"""
+    return set_attention_backend("xformers" if enabled else "none") == "xformers"
 
 
 # 同 (stage, shape) 只警告一次；避免训练时每个 step 都刷日志
 _FLASH_FALLBACK_WARNED: set[str] = set()
+_XFORMERS_FALLBACK_WARNED: set[str] = set()
 
 
 def warn_flash_fallback(stage: str, shape: tuple, reason: str) -> None:
@@ -68,6 +95,20 @@ def warn_flash_fallback(stage: str, shape: tuple, reason: str) -> None:
     _FLASH_FALLBACK_WARNED.add(key)
     _logger.warning(
         "flash_attn fallback at %s shape=%s: %s（同 shape 只警告这一次）",
+        stage,
+        shape,
+        reason,
+    )
+
+
+def warn_xformers_fallback(stage: str, shape: tuple, reason: str) -> None:
+    """xformers fast path 失败时记 warn-once。"""
+    key = f"{stage}:{shape}"
+    if key in _XFORMERS_FALLBACK_WARNED:
+        return
+    _XFORMERS_FALLBACK_WARNED.add(key)
+    _logger.warning(
+        "xformers fallback at %s shape=%s: %s（同 shape 只警告这一次）",
         stage,
         shape,
         reason,
@@ -95,6 +136,21 @@ def try_flash_attn(
             return _flash_attn_func(q_BSHD, k_BSHD, v_BSHD), True
         except Exception as exc:  # noqa: BLE001
             warn_flash_fallback(stage, tuple(q_BSHD.shape), str(exc))
+    return None, False
+
+
+def try_xformers_attention(
+    q_BSHD: torch.Tensor,
+    k_BSHD: torch.Tensor,
+    v_BSHD: torch.Tensor,
+    stage: str,
+):
+    """统一 xformers 调用路径：尝试 fast path，失败时 warn-once 并 fallback。"""
+    if _USE_XFORMERS and _xops is not None:
+        try:
+            return _xops.memory_efficient_attention(q_BSHD, k_BSHD, v_BSHD), True
+        except Exception as exc:  # noqa: BLE001
+            warn_xformers_fallback(stage, tuple(q_BSHD.shape), str(exc))
     return None, False
 
 
@@ -367,6 +423,10 @@ def torch_attention_op(q_B_S_H_D: torch.Tensor, k_B_S_H_D: torch.Tensor, v_B_S_H
     """
     # flash_attn fast path：输入已是 bshd 格式，无需 transpose；helper 处理状态判断 + warn-once。
     out, used = try_flash_attn(q_B_S_H_D, k_B_S_H_D, v_B_S_H_D, "torch_attention_op")
+    if used:
+        return rearrange(out, "b s h d -> b s (h d)")
+
+    out, used = try_xformers_attention(q_B_S_H_D, k_B_S_H_D, v_B_S_H_D, "torch_attention_op")
     if used:
         return rearrange(out, "b s h d -> b s (h d)")
 

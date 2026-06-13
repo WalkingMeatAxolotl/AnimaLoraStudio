@@ -63,6 +63,15 @@ export default function PromptFromDatasetPicker({
   // useLocalStorageState 默认值仅在 storage 无值时生效；有 value 时用它作初始的"浏览位置"
   const [pid, setPid] = useLocalStorageState<number | null>(LAST_PROJECT_KEY, value?.projectId ?? null)
   const [vid, setVid] = useLocalStorageState<number | null>(LAST_VERSION_KEY, value?.versionId ?? null)
+  // 历史回填：value 切到一个 (projectId, versionId) 时，浏览中的 pid/vid 跟随它
+  // —— 否则 caption 列表停留在用户上次浏览的版本，看不到当前 value.name 行高亮，
+  //    底部 tags 又孤零显示，对不上号。控件外的状态(localStorage)不持久这次切换，
+  //    只更新 in-memory state；用户关掉 picker 再开还会回到他们手选的位置。
+  useEffect(() => {
+    if (value == null) return
+    setPid((cur) => (cur === value.projectId ? cur : value.projectId))
+    setVid((cur) => (cur === value.versionId ? cur : value.versionId))
+  }, [value?.projectId, value?.versionId])  // eslint-disable-line react-hooks/exhaustive-deps
   const [versions, setVersions] = useState<Array<{ id: number; label: string }>>([])
   const [captions, setCaptions] = useState<CaptionEntry[]>([])
   const [loading, setLoading] = useState(false)

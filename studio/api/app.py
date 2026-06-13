@@ -33,6 +33,7 @@ from .routers import (
     root,
     samples,
     secrets as secrets_router,
+    studio_data,
     system,
     tag_dictionary,
     tagger,
@@ -82,6 +83,7 @@ app.include_router(tag_dictionary.router)
 # PR-6 commit 3: installs router（10 routes: wd14/torch/flash-attn/xformers/llm-tagger admin）
 app.include_router(installs.router)
 # PR-6 commit 4: system router（11 routes: restart / update / rollback / preflight / etc.）
+app.include_router(studio_data.router)
 app.include_router(system.router)
 # PR-6 commit 5: generate router（8 routes: 出图 + daemon 状态 + TAEFlux）
 app.include_router(generate.router)

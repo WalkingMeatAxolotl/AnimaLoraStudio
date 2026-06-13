@@ -186,6 +186,14 @@
   "jobProgress": {
     "waitingLogs": "(Waiting for logs...)"
   },
+  "logDrawer": {
+    "download": "Download job",
+    "preprocess": "Preprocess job",
+    "dupScan": "Duplicate scan",
+    "tag": "Tagging job",
+    "regBuild": "Booru build",
+    "regPrior": "AI prior generation"
+  },
   "pathPicker": {
     "title": "Select path",
     "parent": "← Parent",
@@ -285,7 +293,9 @@
       "loraType": {
         "lora": "LoRA",
         "lokr": "LoKr",
-        "loha": "LoHa"
+        "loha": "LoHa",
+        "ortho": "OrthoLoRA",
+        "tlora": "T-LoRA"
       },
       "lrScheduler": {
         "none": "Constant",
@@ -335,6 +345,14 @@
       "wandbPolicy": {
         "all": "Keep all",
         "last": "Keep latest only"
+      },
+      "sampler": {
+        "erSde": "ER SDE",
+        "dpmpp3mSde": "DPM++ 3M SDE"
+      },
+      "scheduler": {
+        "simple": "Simple",
+        "sgmUniform": "SGM Uniform"
       }
     },
     "disableHints": {
@@ -363,11 +381,16 @@
       "flip_augment": "Horizontal flip augmentation",
       "tag_dropout": "Per-tag random dropout probability during training (0 = off); non-zero values help generalization and reduce single-tag dependence",
       "prefer_json": "Prefer JSON tag files (recommended; supports category shuffle)",
+      "caption_comfy_encoding": "Encode captions the ComfyUI way (same pipeline as test generation; recommended)",
       "cache_latents": "Cache VAE latents to speed up training",
-      "lora_type": "Adapter algorithm. lokr: Kronecker factorization, smallest parameter count (default); lora: classic low-rank, general purpose; loha: Hadamard product, higher expressiveness but more parameters",
+      "vae_cache_batch_size": "VAE latent cache encoding batch size; 0 = follow training batch size, set to 1 if VRAM is tight",
+      "lora_type": "Adapter algorithm. lokr: Kronecker factorization, smallest parameter count (default); lora: classic low-rank, general purpose; loha: Hadamard product, higher expressiveness but more parameters; ortho: orthogonal parameterization, very few trainable parameters, resists overfitting, suited to small-dataset character/subject training; tlora: rank shrinks as noise increases, built to prevent overfitting in single-/few-image subject personalization",
       "lora_rank": "Rank: larger = more capacity but higher parameter/VRAM cost and overfit risk; smaller = leaner but underfits more easily. Common 8/16/32/64",
       "lora_alpha": "Alpha: LoRA scaling factor; larger = stronger LoRA effect. Usually equal to rank; when rs_lora is enabled, often set to √rank",
       "lokr_factor": "LoKr factorization factor: larger = stronger compression, fewer parameters; smaller = more parameters. Default 8 suits most cases",
+      "tlora_min_rank": "T-LoRA minimum active rank at high-noise timesteps",
+      "tlora_alpha_rank_scale": "T-LoRA power scale from timestep to active rank; larger = high rank opens later toward low-noise timesteps",
+      "tlora_use_ortho": "T-LoRA only: stack OrthoLoRA orthogonal parameterization (full recipe from the paper, enabled by default); disable to keep plain T-LoRA",
       "lora_dora": "DoRA: trains weight direction and magnitude separately; usually more stable convergence at slight VRAM cost",
       "lora_rs": "rs-LoRA: scale=α/√r instead of α/r, more stable at high rank (>32)",
       "lora_dropout": "Dropout on LoRA input features: larger = stronger regularization but slower convergence; 0 = disabled",
@@ -395,6 +418,8 @@
       "automagic_beta2": "Automagic second-moment β2",
       "automagic_eps": "Automagic numerical stability epsilon",
       "automagic_clip_threshold": "Automagic update RMS clipping threshold",
+      "automagic_variant": "v1: per-element lr mask (classic, recommended); v2: per-parameter scalar lr with fused backward (experimental, saves VRAM; incompatible with grad accumulation / grad clip / fp16)",
+      "automagic_agreement_threshold": "v2 sign-agreement ratio threshold: above this fraction the update direction is considered consistent and the lr is bumped up",
       "ppsf_d_coef": "PPSF d scaling coefficient (0.5 for small datasets, 2.0 for overfitting)",
       "ppsf_prodigy_steps": "Freeze d after N PPSF steps (0 = never freeze; recommended 1/4 to 1/2 of total steps)",
       "ppsf_beta1": "PPSF Adam β1 (PPSF default 0.9)",
@@ -579,7 +604,24 @@
     "versionLabel": "Initial version label",
     "versionPlaceholder": "v1 / baseline / ...",
     "notesPlaceholder": "Training goal / notes",
-    "creating": "Creating…"
+    "creating": "Creating…",
+    "filters": "Filter / sort",
+    "filtersActive": "Filters active",
+    "searchPlaceholder": "Search title / slug / notes…",
+    "statusAll": "All statuses",
+    "sortLabel": "Sort",
+    "sort_updated": "Recently active",
+    "sort_created": "Newest created",
+    "sort_title": "By name",
+    "archivedToggle": "Archived ({{n}})",
+    "archivedToggleHint": "Toggle: show only archived projects",
+    "archiveProjectTitle": "Archive project (recoverable)",
+    "archiveConfirm": "Archive project \"{{title}}\"?\nIt will be hidden from the list; data is untouched. View and restore it via the \"Archived\" toggle in the header.",
+    "archiveBtn": "Archive",
+    "archived": "Archived: {{title}}",
+    "unarchiveTitle": "Restore project",
+    "unarchiveConfirm": "Restore project \"{{title}}\" to the project list?",
+    "unarchived": "Restored: {{title}}"
   },
   "queue": {
     "title": "Queue",
@@ -606,8 +648,10 @@
     "pauseHint": "Save state — resume later from the same step",
     "resume": "Resume",
     "resumeHint": "Continue training from the saved checkpoint (frozen config)",
-    "cancelPaused": "Cancel",
-    "cancelPausedHint": "Abandon this task and delete pause files",
+    "resumeTerminal": "Resume training",
+    "resumeTerminalHint": "Continue from the latest end-of-epoch auto backup (frozen config)",
+    "cancelPaused": "Cancel task",
+    "cancelPausedHint": "Stop this task (the recovery point is kept, you can resume later)",
     "pausedAtStep": "Paused at step {{step}} on {{time}}",
     "holdQueue": "Hold queue",
     "releaseQueue": "Release queue",
@@ -652,7 +696,7 @@
       "cancel": "Cancel",
       "confirm": "Confirm pause"
     },
-    "resumeFailedMissing": "Pause file is missing — cannot resume. Start a fresh task from another .pt via ResumeFieldPicker.",
+    "resumeFailedMissing": "Recovery-point file is missing — cannot resume. Start a fresh task from another .pt via ResumeFieldPicker.",
     "resumeFailed": "Resume failed: {{reason}}",
     "pauseFailed": "Pause failed: {{reason}}"
   },
@@ -766,7 +810,7 @@
       "uploadLabel": "Custom dictionary",
       "uploadHint": "CSV / TXT format: one line per `english_tag,zh1 zh2`. Replaces (not merges) the current dictionary. Max 10MB / 200k entries.",
       "resetButton": "Restore default dictionary",
-      "resetHint": "Re-download Physton danbooru.zh_CN.csv from GitHub (~3MB)",
+      "resetHint": "Re-download the ffdkj Danbooru tag Chinese translation table from GitHub (~30MB, top 200k tags by popularity, updated daily)",
       "resetOk": "Default dictionary restored",
       "resetFail": "Reset failed",
       "uploadOk": "Loaded {{name}}",
@@ -785,6 +829,28 @@
     "display": "Display",
     "version": "Version",
     "service": "Service",
+    "storage": {
+      "sectionTitle": "Storage location",
+      "locationLabel": "studio_data location",
+      "help1": "studio_data holds projects, datasets, task archives, presets and the database. By default it lives in the app root directory.",
+      "help2": "Changing the location creates a studio_data subdirectory inside the chosen directory and copies all current data into it (the original is kept, not deleted). Restart Studio afterwards for it to take effect.",
+      "customBadge": "custom",
+      "defaultBadge": "default",
+      "changeLocation": "Change location…",
+      "migrateTitle": "Migrate studio_data",
+      "scanning": "Scanning current data…",
+      "from": "From",
+      "to": "To",
+      "totalLine": "{{files}} files, {{size}} total",
+      "entryMeta": "{{files}} files · {{size}}",
+      "keepOriginalNote": "Data at the original location is kept, not deleted. Restart Studio after migration for the new location to take effect.",
+      "migrating": "Copying…",
+      "doneTitle": "Migration complete",
+      "doneRestartNote": "Restart Studio to start using the new location. The original data is kept; delete it yourself once you have verified everything.",
+      "failed": "Migration failed: {{error}}",
+      "startMigrate": "Start migration",
+      "restartNow": "Restart now"
+    },
     "gelbooru": "Gelbooru",
     "danbooru": "Danbooru",
     "language": "Language",
@@ -915,9 +981,10 @@
     },
     "downloadSourceHuggingface": "HuggingFace (including hf-mirror and other mirrors)",
     "downloadSourceModelscope": "ModelScope (direct access in China)",
-    "confirmInstallOnnxAuto": "nvidia-smi will be used to choose the GPU/CPU package automatically. Package installation takes a few minutes.\n\nNote: restart Studio after installation for it to take effect. Continue?",
-    "confirmInstallOnnxGpu": "The current onnxruntime package will be removed and onnxruntime-gpu installed. Package installation takes a few minutes.\n\nNote: restart Studio after installation for it to take effect. Continue?",
-    "confirmInstallOnnxCpu": "The current onnxruntime-gpu package will be removed and onnxruntime (CPU) installed. Package installation takes a few minutes.\n\nNote: restart Studio after installation for it to take effect. Continue?",
+    "confirmInstallOnnxAuto": "Platform + nvidia-smi detection chooses the best package (Windows + GPU → DirectML; Linux + GPU → CUDA; no GPU → CPU). Package installation takes a few minutes.\n\nNote: restart Studio after installation for it to take effect. Continue?",
+    "confirmInstallOnnxGpu": "The current onnxruntime package will be removed and onnxruntime-gpu (CUDA EP) installed. Package installation takes a few minutes.\n\nNote: restart Studio after installation for it to take effect. Continue?",
+    "confirmInstallOnnxCpu": "The current onnxruntime package will be removed and onnxruntime (CPU) installed. Package installation takes a few minutes.\n\nNote: restart Studio after installation for it to take effect. Continue?",
+    "confirmInstallOnnxDirectml": "The current onnxruntime package will be removed and onnxruntime-directml (DirectML EP, DX12, vendor-agnostic) installed. Package installation takes a few minutes.\n\nNote: restart Studio after installation for it to take effect. Continue?",
     "startInstall": "Start install",
     "statusLoadFailed": "Failed to load status",
     "loadingStatus": "Loading...",
@@ -930,14 +997,21 @@
     "notInstalledShort": "Not installed",
     "gpuDetect": "GPU detection",
     "noNvidiaGpu": "No NVIDIA GPU detected",
-    "onnxCpuEpWarning": "NVIDIA GPU detected, but onnxruntime only has CPU EP — WD14 / CLTagger will be very slow. Expand “force reinstall” to install the GPU package.",
+    "onnxCpuEpWarning": "NVIDIA GPU detected, but onnxruntime only has CPU EP — WD14 / CLTagger will be very slow. Expand “Candidates” to install DirectML (recommended on Windows, vendor-agnostic) or the CUDA package.",
+    "onnxNotInstalledHintGpu": "Not installed. Click “Auto-detect + install” below to install the best package for your platform (Windows + GPU → DirectML; Linux + GPU → CUDA).",
+    "onnxNotInstalledHintCpu": "Not installed. Click “Auto-detect + install” below to install the CPU package (no NVIDIA GPU detected).",
     "cudaEpFailedCpu": "CUDA EP failed to load and fell back to CPU.",
     "installingPackage": "Installing package...",
     "autoDetectInstall": "Auto-detect + install suitable package",
     "refreshStatus": "Refresh status",
-    "forceReinstallAdvanced": "Force reinstall (advanced)",
-    "reinstallGpu": "Reinstall as GPU",
-    "reinstallCpu": "Reinstall as CPU",
+    "forceReinstallAdvanced": "Candidates (pick manually)",
+    "reinstallGpu": "Install CUDA",
+    "reinstallCpu": "Install CPU",
+    "reinstallDirectml": "Install DirectML",
+    "directmlWinOnlyHint": "Windows only (no PyPI wheel for Linux/macOS)",
+    "cudaPackageHint": "NVIDIA GPU; best on Linux. On Windows, switch to DirectML if it silently falls back to CPU.",
+    "directmlPackageHint": "DX12 backend, bypasses CUDA/cuDNN compatibility issues, vendor-agnostic (NVIDIA/AMD/Intel).",
+    "cpuPackageHint": "Fallback; use when no GPU or the other two cannot install.",
     "onnxForceHint": "If unsure, use “auto-detect” above.",
     "confirmRegisterTorch": "A torch reinstall request will be registered ({{tag}} build).\nAfter submitting, press Ctrl+C to close Studio and rerun studio.bat — torch will be installed on startup (~3 GB, 5-30 minutes). Continue?",
     "registerRequest": "Register request",
@@ -989,6 +1063,25 @@
     "previewThrottle": "Throttle (preview every N steps)",
     "previewThrottleDesc": "0 = off; recommended 3-5",
     "taeFluxHelp": "The TAEFlux decode model is downloaded in the background when the server starts; no separate UI action is needed.",
+    "idleTimeout": {
+      "title": "Auto-unload VRAM",
+      "label": "Unload after idle (minutes)",
+      "desc": "Default: 10 minutes",
+      "help": "The generate daemon keeps the model in VRAM after the first run so you can quickly retry with different params. If no new generation arrives within this window, the model is auto-unloaded to free VRAM (next run reloads, ~30-60s). 0 = off, keep the model resident until you manually click \"Free VRAM\". Recommended: 10 minutes.",
+      "minutesSuffix": "min",
+      "offHint": "Off: model stays resident until manually freed"
+    },
+    "vaePrecision": {
+      "title": "VAE decode precision",
+      "label": "Test generation VAE precision",
+      "desc": "Default: bf16 (matches ComfyUI on modern GPUs)",
+      "help": "Precision used for the final VAE decode in test generation. bf16 matches ComfyUI's automatic VAE dtype on modern GPUs and is the default. fp32 decodes in full precision: peak VRAM is higher, so the daemon temporarily offloads the DiT/Qwen models to CPU around the decode (slower per image)."
+    },
+    "saveTestImages": {
+      "title": "Save test images to disk",
+      "label": "Save test images",
+      "tooltip": "When enabled, every generation writes to studio_data/test/<date>/: single mode saves a single PNG; xy mode saves a folder (composite + per-cell PNGs, each cell is drop-into-Comfy/A1111 compatible); compare is never saved. Default: off."
+    },
     "theme": "Theme",
     "themeLight": "☀ Light",
     "themeDark": "☾ Dark",
@@ -1010,6 +1103,10 @@
     "currentDevLocked": "Currently on dev · cannot disable",
     "updateLogTitle": "Last update log",
     "close": "Close",
+    "onboardingSection": "First-run guide",
+    "onboardingReopenTitle": "Re-run first-run guide",
+    "onboardingReopenHelp": "Re-open the first-run install panel. Useful for checking what's not installed yet, or for filling in what you skipped.",
+    "onboardingReopen": "Re-run guide",
     "serviceRestartTitle": "Restart Studio",
     "serviceRestartHelp1": "Shut down and restart the backend process.",
     "serviceRestartHelp2": "Common use cases: force refresh after editing <code>secrets.json</code>, or apply a newly installed onnxruntime / PyTorch EP.",
@@ -1045,6 +1142,11 @@
     "progressDetail": "The current process has sent SIGINT and exited; cli.py is running git reset / pip / npm / restart. Realtime progress is unavailable because the server is down. The frontend will reconnect and refresh after restart; failures appear as a red banner on the master card.",
     "releaseNoEntry": "This tag has no entry in <code>release_notes.yaml</code>",
     "releaseSeeChangelog": "See full changes in <code>CHANGELOG.md</code>",
+    "releaseNotesOlder": "Previous version (older)",
+    "releaseNotesNewer": "Next version (newer)",
+    "releaseNotesPosition": "{{index}} / {{total}}",
+    "viewUpdateHistory": "Update log",
+    "viewUpdateHistoryHint": "Browse update notes from all historical versions (← / → to switch)",
     "moreItems": "{{count}} more · ",
     "detailContent": "Details ↗",
     "loadingEllipsis": "Loading…",
@@ -1174,6 +1276,8 @@
     "width": "Width",
     "height": "Height",
     "steps": "Steps",
+    "sampler": "Sampler",
+    "scheduler": "Scheduler",
     "perPrompt": "Per prompt",
     "seed": "Seed (0 = random)",
     "seedHint": "Specific number → reproducible; 0 → random each time",
@@ -1189,6 +1293,9 @@
     "historyTask": "History #{{id}}",
     "imageCount": "{{n}} images",
     "backToCurrent": "Back to current",
+    "historyLorasMissing": "{{n}} LoRA(s) from history not found locally; please re-pick",
+    "loraNotFoundHint": "Not found locally; please re-pick",
+    "repickLora": "Re-pick",
     "emptyHint": "Fill parameters, then click “Start generate”",
     "previewStep": "Sampling {{step}} / {{total}} (intermediate preview)",
     "waitingImages": "Waiting for images…",
@@ -1299,6 +1406,8 @@
     "checkingShort": "Checking…",
     "pruneStale": "Clear stale",
     "noHistory": "No history",
+    "refreshHistory": "Refresh",
+    "refreshHistoryTitle": "Reload disk history (use after multi-tab sync or external folder changes)",
     "noExportableXyData": "No exportable XY data",
     "allCellsLoadFailed": "All cell images failed to load (the originals may have been released)",
     "canvas2dUnavailable": "canvas 2d is unavailable",
@@ -1434,6 +1543,14 @@
     "completed": "Completed",
     "failed": "Failed",
     "canceled": "Canceled"
+  },
+  "versionPhase": {
+    "curating": "Curating",
+    "preprocessing": "Preprocess",
+    "tagging": "Tagging",
+    "editing": "Tag edit",
+    "regularizing": "Regularization",
+    "ready": "Ready to train"
   },
   "snapshot": {
     "title": "Training config snapshot",
@@ -1850,6 +1967,7 @@
     "checkingBtn": "Checking…",
     "startBtn": "Start tagging all",
     "goDownload": "Download →",
+    "goInstallOnnx": "Install ONNX Runtime →",
     "wd14Loading": "Loading WD14 defaults...",
     "wd14Params": "WD14 Params",
     "paramsSubtitle": "Pre-filled from {{link}} · Effective this run only",
@@ -1887,7 +2005,12 @@
     "cancelToast": "Cancelled",
     "triggerWord": "trigger word",
     "triggerWordPlaceholder": "e.g. ohwx / mychar",
-    "triggerWordHint": "Prepended as the first tag of every caption during tagging; empty = disabled. Changing this and starting tagging will persist it to the current version."
+    "triggerWordHint": "Prepended as the first tag of every caption during tagging; empty = disabled. Changing this and starting tagging will persist it to the current version.",
+    "onExisting": "existing",
+    "onExistingHint": "What to do when an image already has a caption file (.txt or .json).",
+    "onExistingOverwrite": "Overwrite",
+    "onExistingSkip": "Skip",
+    "onExistingAppend": "Append"
   },
   "presets": {
     "loadSchemaFailed": "Failed to load schema: {{error}}",
@@ -2163,5 +2286,56 @@
     "processing": "Server processing…",
     "failed": "Failed",
     "etaPrefix": "ETA"
+  },
+  "onboarding": {
+    "title": "Welcome to AnimaLoraStudio",
+    "subtitle": "Here are the basics you'll want set up. Tick what you need and install them in one go. Already-installed items are auto-checked.",
+    "downloadSource": "Download source",
+    "downloadSourceHint": "Pre-selected based on your language; feel free to change. This source is used for all model downloads.",
+    "downloadSourceInstallHint": "Switching applies to downloads not yet started — current in-flight downloads keep running. To switch right now, close this guide and restart Studio.",
+    "skipWhileInstalling": "Guide closed — downloads keep running in the background. To stop them, restart Studio.",
+    "skip": "Skip",
+    "installSelected": "Install selected ({{count}})",
+    "checkingState": "Checking installed state…",
+    "finish": "Done",
+    "retry": "Retry",
+    "showLog": "Show log",
+    "hideLog": "Hide log",
+    "restart": "Restart now",
+    "restarting": "Restarting…",
+    "restartHint": "All installs done — a service restart is required to take effect",
+    "installing": {
+      "generic": "Installing…",
+      "base": "Installing: Base model bundle",
+      "tagger": "Installing: Auto-tagging",
+      "accel": "Installing: Training acceleration",
+      "upscaler": "Installing: Image upscaler"
+    },
+    "status": {
+      "checking": "Checking…",
+      "idle": "Not installed",
+      "queued": "Queued",
+      "installing": "Installing",
+      "done": "Installed",
+      "failed": "Failed"
+    },
+    "items": {
+      "base": {
+        "label": "Base model bundle",
+        "description": "Anima main + VAE + Qwen3 + T5 — the core models needed for training (about 30 GB total)"
+      },
+      "tagger": {
+        "label": "Auto-tagging",
+        "description": "WD14 model + ONNX Runtime — auto-generates tags for your training set"
+      },
+      "accel": {
+        "label": "Training acceleration (optional)",
+        "description": "Flash Attention — noticeable training speedup; skip on CPU / older GPUs where it won't build"
+      },
+      "upscaler": {
+        "label": "Image upscaler (optional)",
+        "description": "4x-AnimeSharp — upscales training images during preprocessing"
+      }
+    }
   }
 }

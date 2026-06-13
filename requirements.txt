@@ -18,13 +18,18 @@ prodigy-plus-schedule-free>=2.0.0  # optimizer_type=prodigy_plus_schedulefree �
                             # 才用到 QBytesTensor（utils/optimizer_utils.py 有 try/except
                             # 兜底，未装就走 dense fp32/bf16 路径）。装：pip install 'optimum-quanto>=0.2.0'
 safetensors>=0.4.0
+# torchsde —— BrownianTreeNoiseSampler for dpmpp_3m_sde (correlated noise on σ axis)
+torchsde>=0.2.6
 Pillow>=10.0.0
 numpy>=1.24.0
 ImageHash>=4.3.0
 tqdm>=4.66.0
 omegaconf>=2.3.0
 einops>=0.7.0
-# xformers>=0.0.23       # Optional: memory efficient attention (may fail on Windows)
+# Optional exact ComfyUI KSampler parity attention path.
+# Install the xformers wheel matching your torch/CUDA stack,
+# e.g. xformers==0.0.30 for torch 2.7.x/cu128.
+# xformers==0.0.30
 # flash-attn>=2.4.0      # Optional: FlashAttention (usually Linux only)
 lpips>=0.1.4
 pytorch-fid>=0.3.0
@@ -59,11 +64,10 @@ rich>=13.7.0
 requests[socks]>=2.31.0
 httpx[socks]>=0.27
 
-# PP4 — WD14 打标
-# onnxruntime 由 studio 启动期按 GPU 检测自动安装（services/onnxruntime_setup.py）：
-# 有 NVIDIA GPU → onnxruntime-gpu>=1.20（PyPI default，CUDA 12.x，覆盖 RTX 30/40/50）
-# 无 → onnxruntime（CPU 兜底）
-# 用户也可在 Settings → WD14 → 重装按钮手动切换。
+# onnxruntime>=1.20 / onnxruntime-gpu>=1.20  # Optional: WD14 / CLTagger 打标依赖
+# 不写死：onnxruntime 和 onnxruntime-gpu 互斥（共享 import 名），不同机器 CUDA
+# 版本不同。用户在 Settings → ONNX Runtime 手动安装（auto/gpu/cpu 三档），对齐
+# xformers / flash-attn 的处理模式 —— 不打标的用户不会被启动期 pip install 阻塞。
 huggingface_hub>=0.20.0
 
 # PP5.5 — 正则集分辨率聚类后处理（K-means + silhouette）

@@ -3,6 +3,7 @@
 // 替代 PR #76 那个塞在 studio.bat/sh 里的 CLI prompt（触达率低 + ASCII 受限 +
 // 无法预览要选的语言长什么样）。
 import { useEffect, useRef, useState } from 'react'
+import { ONBOARDING_EVENTS } from './FirstRunOnboardingModal'
 import i18n, { getStoredLang, setStoredLang } from '../i18n'
 
 type Lang = 'en' | 'zh'
@@ -37,6 +38,8 @@ export function FirstRunLangModal() {
     setStoredLang(lang)
     void i18n.changeLanguage(lang)
     setOpen(false)
+    // 通知 OnboardingModal: lang 已设好,可以接力弹引导。
+    window.dispatchEvent(new Event(ONBOARDING_EVENTS.langSet))
   }
 
   return (

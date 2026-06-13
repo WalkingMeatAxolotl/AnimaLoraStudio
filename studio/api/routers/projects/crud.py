@@ -1,11 +1,13 @@
 """Projects + Versions CRUD + phase 推进 + ckpts（PR-6.5 commit 1 从 server.py 抽出）。
 
-16 routes：
-    GET    /api/projects                                       list（含 active version enrich）
+18 routes：
+    GET    /api/projects                                       list（含 active version enrich；含已归档行）
     POST   /api/projects                                       create（可选 initial version）
     GET    /api/projects/{pid}                                 get（含 versions 列表）
     PATCH  /api/projects/{pid}                                 update
     DELETE /api/projects/{pid}                                 delete
+    POST   /api/projects/{pid}/archive                         归档（软隐藏，可逆）
+    POST   /api/projects/{pid}/unarchive                       取消归档
     GET    /api/projects/{pid}/versions                        list versions
     POST   /api/projects/{pid}/versions                        create version
     GET    /api/projects/{pid}/versions/{vid}                  get version
@@ -45,19 +47,26 @@ router = APIRouter()
 
 @router.get("/api/projects")
 def list_projects_endpoint() -> dict[str, Any]:
-    """ADR-0007 §11.8-E：enrich active version label + status，卡片右上角 badge 用。"""
+    """ADR-0007 §11.8-E：enrich active version label + status，卡片右上角 badge 用。
+
+    v12 起额外带 archived_at（归档行不在这里过滤 —— 项目量小，归档/活跃的
+    切分交给前端，省一次切视图的往返）+ active_version_phase（preparing 时
+    badge 显示当前 phase，如"准备中 · 打标"）。
+    """
     with db.connection_for() as conn:
         rows = projects.list_projects(conn)
         enriched: list[dict[str, Any]] = []
         for r in projects.projects_with_stats(rows):
             r["active_version_label"] = None
             r["active_version_status"] = None
+            r["active_version_phase"] = None
             avid = r.get("active_version_id")
             if avid:
                 av = versions.get_version(conn, int(avid))
                 if av:
                     r["active_version_label"] = av["label"]
                     r["active_version_status"] = versions.get_status(av)
+                    r["active_version_phase"] = versions.get_phase(av)
             enriched.append(r)
     return {"items": enriched}
 
@@ -100,6 +109,29 @@ def patch_project_endpoint(pid: int, body: ProjectUpdate) -> dict[str, Any]:
     with db.connection_for() as conn:
         try:
             p = projects.update_project(conn, pid, **fields)
+        except projects.ProjectError as exc:
+            _project_err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
+    _publish_project_state(p)
+    return _project_payload(p)
+
+
+@router.post("/api/projects/{pid}/archive")
+def archive_project_endpoint(pid: int) -> dict[str, Any]:
+    """归档：列表软隐藏，目录 / versions / 任务全部原样，可随时取消。"""
+    with db.connection_for() as conn:
+        try:
+            p = projects.set_archived(conn, pid, True)
+        except projects.ProjectError as exc:
+            _project_err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
+    _publish_project_state(p)
+    return _project_payload(p)
+
+
+@router.post("/api/projects/{pid}/unarchive")
+def unarchive_project_endpoint(pid: int) -> dict[str, Any]:
+    with db.connection_for() as conn:
+        try:
+            p = projects.set_archived(conn, pid, False)
         except projects.ProjectError as exc:
             _project_err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
     _publish_project_state(p)

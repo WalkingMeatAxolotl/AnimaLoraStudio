@@ -292,16 +292,21 @@ export interface FlashAttnInstallResult {
   restart_required: boolean
 }
 
-/** PP8 — onnxruntime 装包状态 + nvidia-smi 检测结果。 */
+/** onnxruntime 装包状态 + nvidia-smi 检测 + 平台标识（前端用来按平台 disable 按钮）。 */
 export interface WD14Runtime {
-  installed: 'onnxruntime' | 'onnxruntime-gpu' | null
+  installed: 'onnxruntime' | 'onnxruntime-gpu' | 'onnxruntime-directml' | null
   version: string | null
   providers: string[]
   cuda_available: boolean
+  /** DirectML EP 可用（Windows + 装了 onnxruntime-directml 时为 true）。 */
+  directml_available: boolean
+  /** 后端 sys.platform：'win32' / 'linux' / 'darwin' 等。Settings UI 据此 disable
+   *  跨平台不可用的按钮（DirectML 仅 Windows；GPU + nvidia-* wheel 仅 Linux 最优）。 */
+  platform: string
   /** 装的包（dist-info）与当前进程已 import 的 .pyd 不一致 → 需重启 Studio。 */
   restart_required: boolean
   /** PP9.5 — InferenceSession 创建时实际 dlopen 报的错（如缺 libcurand.so.10）；
-   *  非 null 表示已自动降级到 CPU EP，UI 应提示用户装 CUDA 库。 */
+   *  非 null 表示已自动降级到 CPU EP，UI 应提示用户装 CUDA 库或换 DirectML。 */
   cuda_load_error: string | null
   /** PP9.5 — torch 自带 CUDA so 预加载结果（Linux 才会 applied=true）。 */
   preload?: {
@@ -371,6 +376,15 @@ export interface GenerateSecretsConfig {
   /** 注意力后端默认值（design 决策：用户配置一次，不每次出图都改）。
    * Generate 页 enqueue 自动注入；Settings 训练 tab 切换。 */
   attention_backend: AttentionBackend
+  /** 测试出图 VAE decode 精度。bf16（默认）对齐 ComfyUI 现代 GPU 的 auto
+   * VAE dtype；fp32 全精度（decode 前 daemon 临时 offload DiT/Qwen 腾显存）。 */
+  vae_precision: 'bf16' | 'fp32'
+  /** 测试出图 daemon 闲置 N 分钟自动卸载模型释放 VRAM。0 = 关闭，模型常驻
+   * 直到手动点"清理显存"。计时只在 idle + 模型 loaded 时跑。 */
+  idle_timeout_minutes: number
+  /** 开后每次出图自动落盘到 studio_data/test/<date>/{single,xy}/image_N.png。
+   * 默认关；compare 模式始终不落盘。 */
+  save_test_images: boolean
 }
 
 /** 系统级偏好（ADR 0002 / 0005）。update_channel 是用户视图偏好（"stable" /
@@ -637,8 +651,12 @@ export interface ProjectSummary {
   /** ADR-0007 §11.8-E: 项目卡片右上角 status badge / 卡片显 version 名（list 端点 enrich）。 */
   active_version_label: string | null
   active_version_status: VersionStatus | null
+  /** v12: preparing 时的 phase cursor（badge 显示"准备中 · 打标"）；无 active version 为 null。 */
+  active_version_phase: VersionPhase | null
   created_at: number
   updated_at: number
+  /** v12: 非 null = 已归档（软隐藏）。list 归档/活跃都返回，切分在前端。 */
+  archived_at: number | null
   note: string | null
   download_image_count?: number
   preprocess_image_count?: number
@@ -1108,6 +1126,11 @@ export interface LoraEntry {
   /** 来自 picker 的项目 / 版本绑定；外部文件无 */
   project_id?: number | null
   version_id?: number | null
+  /** 仅 placeholder 状态用：历史回填时 resolve 失败保留原 basename
+   *  （如 "my-lora.safetensors"），让 SidebarLoras 渲染 ⚠ placeholder 卡片
+   *  提示用户重选。`path` 非空时此字段被忽略；submit 时 path='' 的 entry
+   *  会被 `.filter(l => l.path.trim())` 跳过，不影响 daemon。 */
+  name?: string | null
 }
 
 /** XY 矩阵：单 task 内循环全图，前端按 (yi, xi) 排成 grid。
@@ -1148,6 +1171,27 @@ export interface GenerateRequest {
   attention_backend?: AttentionBackend
   /** 设值时 prompts 限单条 + count=1（schema 校验） */
   xy_matrix?: XYMatrixSpec | null
+}
+
+/** 落盘测试图历史 entry（GET /api/generate/disk-history）。
+ *  params 是 GenerateParamsSnapshot（前端用 paramsSnapshot.ts 的类型解读），
+ *  这里用 unknown 让 api/client.ts 不依赖 pages 层类型。 */
+export interface DiskGenerateHistoryEntry {
+  /** 稳定 ID："disk:<date>:<mode>:image_<N>"；前端按此 dedup */
+  id: string
+  /** YYYY-MM-DD */
+  date: string
+  mode: 'single' | 'xy'
+  filename: string
+  /** 服务端绝对路径，用于和 IDB entry.diskPath 做 dedup */
+  path: string
+  /** /api/generate/disk-image/<date>/<mode>/<filename> */
+  url: string
+  /** Unix timestamp（sidecar 写入或 fallback 文件 mtime） */
+  created_at: number
+  schema_version: number
+  /** sidecar 里的 params object（前端按 GenerateParamsSnapshot 解读） */
+  params: Record<string, unknown>
 }
 
 /** version output/ 下扫到的 training_state_step*.pt（断点续训用）。 */
@@ -1252,6 +1296,18 @@ export interface Task {
   /** ADR 0006 PR-4 — is_pausable 信号（§8.1）：UI 用来决定是否显示暂停
    *  按钮。supervisor 跑得起来时由 server enrich；空载默认 false。 */
   is_pausable?: boolean
+  /** ADR 0006 Addendum 2 — 最近一次 epoch 末 auto backup 的 .pt 路径
+   *  （auto_epoch_state.pt，覆盖式单文件）。failed/canceled resume 的恢复点。 */
+  last_state_path?: string | null
+  /** ADR 0006 Addendum 2 — auto backup 配套 config snapshot 路径。 */
+  last_config_path?: string | null
+  /** ADR 0006 Addendum 2 — 备份点 epoch（UI "从 epoch N 继续" 提示）。 */
+  last_state_epoch?: number | null
+  /** ADR 0006 Addendum 2 — 备份点 global_step。 */
+  last_state_step?: number | null
+  /** ADR 0006 Addendum 2 — is_resumable 信号：status ∈ paused/failed/canceled
+   *  且恢复点文件在盘上。UI 用来决定是否显示"继续训练"按钮。 */
+  is_resumable?: boolean
 }
 
 /** ADR 0006 PR-2 — GET /api/queue/hold 返回。`held=true` 时 UI 顶部
@@ -1502,6 +1558,39 @@ async function xhrUpload<T>(
   })
 }
 
+/** studio_data 存储位置：当前/默认 + 全量扫描（迁移确认 modal 显示用）。 */
+export interface StudioDataScanEntry {
+  name: string
+  is_dir: boolean
+  files: number
+  bytes: number
+}
+
+export interface StudioDataInfo {
+  current: string
+  default: string
+  is_custom: boolean
+  /** 请求带 scan=false 时为 null（Settings 页仅显示路径，免扫盘） */
+  scan: {
+    total_files: number
+    total_bytes: number
+    entries: StudioDataScanEntry[]
+  } | null
+}
+
+/** 迁移状态快照（modal 重开 / SSE 漏事件兜底；实时进度走 SSE
+ *  `studio_data_migrate_progress` / `_done` 事件）。 */
+export interface StudioDataMigrateStatus {
+  state: 'idle' | 'running' | 'done' | 'error'
+  target: string
+  total_files: number
+  total_bytes: number
+  done_files: number
+  done_bytes: number
+  current_file: string
+  error: string
+}
+
 export const api = {
   health: () => req<HealthResponse>('/api/health'),
   systemStats: () => req<SystemStats>('/api/system/stats'),
@@ -1705,6 +1794,11 @@ export const api = {
     }),
   deleteProject: (pid: number) =>
     req<{ deleted: number }>(`/api/projects/${pid}`, { method: 'DELETE' }),
+  /** 归档（软隐藏，可逆）：目录 / versions / 任务全部原样。 */
+  archiveProject: (pid: number) =>
+    req<ProjectDetail>(`/api/projects/${pid}/archive`, { method: 'POST' }),
+  unarchiveProject: (pid: number) =>
+    req<ProjectDetail>(`/api/projects/${pid}/unarchive`, { method: 'POST' }),
 
   listVersions: (pid: number) =>
     req<{ items: Version[] }>(`/api/projects/${pid}/versions`).then(
@@ -1937,6 +2031,11 @@ export const api = {
       tagger: TaggerName
       output_format?: 'txt' | 'json'
       /**
+       * 已有 caption 文件时的策略：overwrite（默认覆盖）/ skip（保留原文件）
+       * / append（tag 级 merge + dedupe 后写回原格式）。
+       */
+      on_existing?: 'overwrite' | 'skip' | 'append'
+      /**
        * wd14 本次任务的临时覆盖；仅在 worker 进程生效，不写回 settings。
        * 字段为 undefined / null 时沿用全局 settings。
        */
@@ -2077,6 +2176,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  /** 回放最近一次先验生成 task + 日志，用于切页面/刷新后的日志恢复。 */
+  getLatestRegPriorTask: (pid: number, vid: number) =>
+    req<{ task: Task | null; log: string }>(
+      `/api/projects/${pid}/versions/${vid}/reg/generate-prior/latest`,
+    ),
   /** 查询先验生成 task 状态。 */
   getRegPriorTask: (pid: number, vid: number, taskId: number) =>
     req<Task>(`/api/projects/${pid}/versions/${vid}/reg/generate-prior/${taskId}`),
@@ -2099,6 +2203,11 @@ export const api = {
   /** PR-9 — 启动测试出图 task。Phase 2 起：图走 server 内存 cache，关页面即丢。 */
   enqueueGenerate: (body: GenerateRequest) =>
     req<Task>('/api/generate', { method: 'POST', body: JSON.stringify(body) }),
+  /** 落盘历史：扫 studio_data/test/&lt;date&gt;/{single,xy}/image_N.json sidecar，
+   *  按 created_at desc 返回；用于历史栏跨会话回看已落盘的测试图。
+   *  注意路径用 disk/ 子前缀避开 `/api/generate/{task_id}` 的单段 catch-all。 */
+  listDiskGenerateHistory: (limit = 500) =>
+    req<{ entries: DiskGenerateHistoryEntry[] }>(`/api/generate/disk/history?limit=${limit}`),
   /** 查询测试 task 状态。 */
   getGenerateTask: (id: number) => req<Task>(`/api/generate/${id}`),
   /** 测试出图单张 URL（task 跑中或刚完成时拉；客户端断连 30s + LRU 后 404）。 */
@@ -2249,8 +2358,9 @@ export const api = {
       `/api/queue/${id}/pause`,
       { method: 'POST' },
     ),
-  /** ADR 0006 PR-3 — 恢复 paused task。pause 文件缺失返 409 引导走
-   *  ResumeFieldPicker 起新 task。 */
+  /** ADR 0006 PR-3 + Addendum 2 — 恢复 paused / failed / canceled task
+   *  （从最近的 epoch 末 auto backup 续训）。恢复点文件缺失返 409 引导走
+   *  ResumeFieldPicker 起新 task。done 不可恢复（走 retry）。 */
   resumeTask: (id: number) =>
     req<{ task_id: number; status: string }>(
       `/api/queue/${id}/resume`,
@@ -2299,7 +2409,7 @@ export const api = {
   /** 当前 onnxruntime 状态：包名 / 版本 / providers / nvidia-smi 检测结果。 */
   getWD14Runtime: () => req<WD14Runtime>('/api/wd14/runtime'),
   /** 切换 onnxruntime（同步 pip，几分钟级；UI 必须带 loading）。 */
-  installWD14Runtime: (target: 'auto' | 'gpu' | 'cpu') =>
+  installWD14Runtime: (target: 'auto' | 'gpu' | 'cpu' | 'directml') =>
     req<WD14InstallResult>('/api/wd14/install', {
       method: 'POST',
       body: JSON.stringify({ target }),
@@ -2471,6 +2581,19 @@ export const api = {
     return req<BrowseResult>(`/api/browse${qs}`)
   },
 
+  // studio_data 存储位置 -------------------------------------------------
+  // withScan=true 含全量扫描，大目录可能要数秒 —— 调用方给加载态。
+  getStudioDataInfo: (withScan = true) =>
+    req<StudioDataInfo>(`/api/studio-data/info?scan=${withScan}`),
+  // 422 = 目标不合法 / 有 running task；409 = 已有迁移在跑。
+  startStudioDataMigrate: (target: string) =>
+    req<{ ok: boolean }>('/api/studio-data/migrate', {
+      method: 'POST',
+      body: JSON.stringify({ target }),
+    }),
+  getStudioDataMigrateStatus: () =>
+    req<StudioDataMigrateStatus>('/api/studio-data/migrate_status'),
+
   // System lifecycle (ADR 0002) ----------------------------------------
   // 重启 server。后端写 tmp/restart + 给自己发 SIGINT 触发 uvicorn graceful
   // shutdown；cli.py 的 loop 拾起并重启。前端调完后应进入"重启中"等待状态，
@@ -2515,6 +2638,11 @@ export const api = {
   // （MasterCard 用此填进 change-block；缺失时 found=false 优雅退化）
   getReleaseNotes: (tag: string) =>
     req<ReleaseNotes>(`/api/system/release_notes?tag=${encodeURIComponent(tag)}`),
+
+  // yaml 内全部 release notes（latest first）。详情 modal 版本切换用，
+  // 一次拉完前端缓存在 modal 生命周期内导航；yaml 缺失 → versions=[]
+  getAllReleaseNotes: () =>
+    req<{ versions: ReleaseNotes[] }>('/api/system/release_notes_all'),
 
   // chunk 3 — git fetch + log origin/dev，返回最近 N 个 commit
   // （DevCard 时间线 + 任意 commit 切换用）。limit 默认 10，clamp 1-50。

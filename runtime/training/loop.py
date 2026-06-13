@@ -31,6 +31,7 @@ from training.state import save_training_state
 from training.text_encoding import (
     _build_qwen_text_from_prompt,
     encode_qwen,
+    tokenize_t5_comfy_literal,
     tokenize_t5_weighted,
 )
 from utils.optimizer_utils import get_optimizer_monitor_metrics, optimizer_eval_mode
@@ -71,10 +72,20 @@ def run(ctx: TrainingContext) -> None:
 
             # 文本编码
             with torch.no_grad():
-                # 参考指南/ComfyUI：Qwen 通道不传权重；T5 通道提供 token 权重
-                qwen_texts = [_build_qwen_text_from_prompt(c) for c in captions]
-                qwen_emb, qwen_attn = encode_qwen(ctx.qwen_model, ctx.qwen_tok, qwen_texts, ctx.device)
-                t5_ids, t5_attn, t5_w = tokenize_t5_weighted(ctx.t5_tok, captions, max_length=512)
+                if bool(getattr(args, "caption_comfy_encoding", True)):
+                    # Comfy-style（默认）：raw caption 进 Qwen（不清洗）；T5 整段
+                    # 字面 tokenize，不解析权重语法——booru 括号 tag 保持字面，
+                    # 等价于 CUI 用户推理时转义后 T5 看到的序列。与测试出图 /
+                    # 训练预览的 conditioning 同一链路。
+                    qwen_texts = [str(c) for c in captions]
+                    qwen_emb, qwen_attn = encode_qwen(ctx.qwen_model, ctx.qwen_tok, qwen_texts, ctx.device)
+                    t5_ids, t5_attn, t5_w = tokenize_t5_comfy_literal(ctx.t5_tok, captions, max_length=512)
+                else:
+                    # legacy（A/B 对照 / 旧 state 续训）：清洗 Qwen 文本；T5 按
+                    # 逗号逐 tag 分词 + (tag:1.3) 权重语法
+                    qwen_texts = [_build_qwen_text_from_prompt(c) for c in captions]
+                    qwen_emb, qwen_attn = encode_qwen(ctx.qwen_model, ctx.qwen_tok, qwen_texts, ctx.device)
+                    t5_ids, t5_attn, t5_w = tokenize_t5_weighted(ctx.t5_tok, captions, max_length=512)
                 t5_ids = t5_ids.to(ctx.device)
                 t5_attn = t5_attn.to(ctx.device)
                 t5_w = t5_w.to(ctx.device, dtype=torch.float32)
@@ -388,8 +399,10 @@ def run(ctx: TrainingContext) -> None:
             # 跟用户主动开的 save_state_every_epochs / save_state_every_steps（多份历史归档）独立，无 args gate ——
             # 这是系统级 pause 后盾，给 handle_interrupt 暂停时引用。
             # 时机：放在 user-opt epoch save 之后，确保即使 user-opt 没开也有 backup。
-            auto_state_path = build_auto_epoch_state_path(ctx.state_dir())
-            auto_config_path = build_auto_epoch_config_path(ctx.state_dir())
+            # Addendum 2：落 auto_state_dir()（task 档案 tasks/<id>/state/；CLI fallback
+            # 到 state_dir()）—— 用户周期 save 仍走上面的 state_dir() 不动。
+            auto_state_path = build_auto_epoch_state_path(ctx.auto_state_dir())
+            auto_config_path = build_auto_epoch_config_path(ctx.auto_state_dir())
             monitor_data = None
             if ctx.monitor_server:
                 try:

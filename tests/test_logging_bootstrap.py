@@ -45,6 +45,11 @@ def test_webui_lifespan_calls_setup_logging(tmp_path: Path,
     with TestClient(server.app) as client:
         client.get("/api/health")
 
+    # RotatingFileHandler delay=True，不 emit 不开文件；
+    # dev 机上 taeflux/tag-dictionary 都已装时 lifespan 不会自动 emit。
+    # 主动 emit 一次强制 handler 打开 studio.log。
+    logging.getLogger("test.lifespan").info("force-emit to open file handler")
+
     # studio.log 应该被创建
     assert (tmp_path / "studio.log").exists(), (
         "lifespan 应该调 setup_logging('webui')，会装 studio.log file handler"

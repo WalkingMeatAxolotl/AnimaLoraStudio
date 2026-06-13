@@ -55,6 +55,45 @@ def _load_all() -> list[dict]:
     return data
 
 
+def _parse_block(block: dict, *, tag_override: Optional[str] = None) -> Optional[ReleaseNotesResult]:
+    """yaml 单个 version block → ReleaseNotesResult；version 字段缺失 → None。"""
+    version = block.get("version")
+    if not isinstance(version, str) or not version.strip():
+        return None
+    entries_raw = block.get("entries") or []
+    entries: list[ReleaseNotesEntry] = []
+    for e in entries_raw:
+        if not isinstance(e, dict):
+            continue
+        kind = e.get("kind")
+        summary = e.get("summary")
+        if not isinstance(kind, str) or not isinstance(summary, str) or not summary.strip():
+            continue
+        pr_refs = e.get("pr_refs") or []
+        if not isinstance(pr_refs, list):
+            pr_refs = []
+        pr_refs = [p for p in pr_refs if isinstance(p, int) and p > 0]
+        detail = e.get("detail")
+        entries.append(ReleaseNotesEntry(
+            kind=kind,
+            summary=summary.strip(),
+            pr_refs=pr_refs,
+            detail=detail if isinstance(detail, str) else None,
+        ))
+    date = block.get("date") if isinstance(block.get("date"), str) else None
+    block_summary = block.get("summary") if isinstance(block.get("summary"), str) else None
+    # tag 字段：yaml 里 version 不带 v 前缀；对外回吐统一加 v 前缀以匹配 git tag 习惯
+    # tag_override 仅在 caller 显式按 tag 查询时使用（保留 caller 原始大小写 / 前缀）
+    out_tag = tag_override if tag_override is not None else f"v{_normalize_tag(version)}"
+    return ReleaseNotesResult(
+        tag=out_tag,
+        found=bool(entries),
+        date=date,
+        summary=block_summary,
+        entries=entries,
+    )
+
+
 def parse(tag: str) -> ReleaseNotesResult:
     """按 tag 查 release notes。yaml / tag 缺失 / 损坏 → found=False。"""
     norm = _normalize_tag(tag)
@@ -64,33 +103,23 @@ def parse(tag: str) -> ReleaseNotesResult:
         version = block.get("version")
         if not isinstance(version, str) or _normalize_tag(version) != norm:
             continue
-        entries_raw = block.get("entries") or []
-        entries: list[ReleaseNotesEntry] = []
-        for e in entries_raw:
-            if not isinstance(e, dict):
-                continue
-            kind = e.get("kind")
-            summary = e.get("summary")
-            if not isinstance(kind, str) or not isinstance(summary, str) or not summary.strip():
-                continue
-            pr_refs = e.get("pr_refs") or []
-            if not isinstance(pr_refs, list):
-                pr_refs = []
-            pr_refs = [p for p in pr_refs if isinstance(p, int) and p > 0]
-            detail = e.get("detail")
-            entries.append(ReleaseNotesEntry(
-                kind=kind,
-                summary=summary.strip(),
-                pr_refs=pr_refs,
-                detail=detail if isinstance(detail, str) else None,
-            ))
-        date = block.get("date") if isinstance(block.get("date"), str) else None
-        block_summary = block.get("summary") if isinstance(block.get("summary"), str) else None
-        return ReleaseNotesResult(
-            tag=tag,
-            found=bool(entries),
-            date=date,
-            summary=block_summary,
-            entries=entries,
-        )
+        result = _parse_block(block, tag_override=tag)
+        if result is not None:
+            return result
     return ReleaseNotesResult(tag=tag, found=False)
+
+
+def parse_all() -> list[ReleaseNotesResult]:
+    """整个 yaml → 所有版本的 release notes（保持 yaml 顺序：latest 在前）。
+
+    Modal 版本切换用：caller 一次拉全量，前端用 prev / next 在 list 内导航。
+    yaml 不存在 / 损坏 → []。损坏的 block silently skip（与 parse 行为一致）。
+    """
+    out: list[ReleaseNotesResult] = []
+    for block in _load_all():
+        if not isinstance(block, dict):
+            continue
+        result = _parse_block(block)
+        if result is not None:
+            out.append(result)
+    return out

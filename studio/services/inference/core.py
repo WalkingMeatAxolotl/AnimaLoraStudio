@@ -25,9 +25,9 @@ import json
 import logging
 import shutil
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,10 @@ class LoRAMeta:
     weight_decompose / rs_lora 必须忠实回放训练侧设置 —— 否则推理网络结构
     与文件不匹配：DoRA 漏 dora_scale 张量（unexpected keys），RS-LoRA 把
     effective alpha 从 α/√rank 错算成 α/rank，强度被砍 √rank 倍。
+
+    lora_reg_dims（正则 → rank）同理：训练时按 pattern 把部分层的 rank 覆盖
+    成自定义值；推理重建网络若用全局 rank 实例化，被覆盖层的 lokr_w2_a/b
+    形状跟 checkpoint 立刻 mismatch。
     """
     rank: int
     alpha: float
@@ -65,6 +69,7 @@ class LoRAMeta:
     factor: int
     weight_decompose: bool = False
     rs_lora: bool = False
+    lora_reg_dims: Optional[dict[str, int]] = None
 
 
 def read_lora_meta(path: str) -> LoRAMeta:
@@ -119,6 +124,20 @@ def read_lora_meta(path: str) -> LoRAMeta:
     weight_decompose = bool(ss_args.get("weight_decompose", False))
     rs_lora = bool(ss_args.get("rs_lora", False))
 
+    # lora_reg_dims：训练时按正则覆盖部分层 rank；推理必须按同样 pattern 重建，
+    # 否则被覆盖层 shape 与 checkpoint 不匹配。校验是 dict[str, int]，其他形态丢弃。
+    lora_reg_dims: Optional[dict[str, int]] = None
+    raw_reg = ss_args.get("lora_reg_dims")
+    if isinstance(raw_reg, dict) and raw_reg:
+        parsed: dict[str, int] = {}
+        for k, v in raw_reg.items():
+            try:
+                parsed[str(k)] = int(v)
+            except (ValueError, TypeError):
+                logger.warning(f"lora_reg_dims 条目跳过（rank 非整数）: {k!r}={v!r}")
+        if parsed:
+            lora_reg_dims = parsed
+
     return LoRAMeta(
         rank=rank,
         alpha=alpha,
@@ -126,6 +145,7 @@ def read_lora_meta(path: str) -> LoRAMeta:
         factor=factor,
         weight_decompose=weight_decompose,
         rs_lora=rs_lora,
+        lora_reg_dims=lora_reg_dims,
     )
 
 
@@ -136,6 +156,9 @@ def apply_loras(
     dtype: Any,
 ) -> list[Any]:
     """对每个 LoRA 单独 inject 一份 AnimaLycorisAdapter；forward 时 hook 累加 delta。
+
+    dtype 是 LoRA network / tensor 的计算 dtype。ComfyUI weight adapter 会用
+    fp32 中间精度计算 LoRA delta；测试生成 parity 路径应传 torch.float32。
 
     multiplier 字段控制每份 LoRA 贡献权重（用户传的 scale）：
       - LycorisNetwork.multiplier 是 forward 内取的全局倍率
@@ -164,8 +187,11 @@ def apply_loras(
             factor=meta.factor,
             weight_decompose=meta.weight_decompose,
             rs_lora=meta.rs_lora,
+            lora_reg_dims=meta.lora_reg_dims,
         )
         adapter.inject(model)
+        if adapter.network is not None:
+            adapter.network.to(device=device, dtype=dtype)
 
         if adapter.network is not None:
             adapter.network.multiplier = float(spec.scale)

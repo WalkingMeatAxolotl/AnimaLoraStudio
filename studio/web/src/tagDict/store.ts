@@ -1,6 +1,7 @@
 /** Tag 翻译词典 — 模块级 singleton + useSyncExternalStore hook。
  *
- * 设计：dict 约 3MB JSON，启动拉一次后放内存；浏览器 HTTP cache 处理 304。
+ * 设计：dict 约 7MB JSON（默认源 20 万条，gzip 后约 3.5MB），启动拉一次后放
+ * 内存；浏览器 HTTP cache 处理 304。
  * 不写 IndexedDB（项目无先例，复杂度不值；体量更大后再换）。
  *
  * 对外 API：
@@ -15,8 +16,12 @@ import type { ReverseEntry, TagDictMeta, TagDictPayload, TagDictStatus } from '.
 interface State {
   status: TagDictStatus
   entries: Map<string, string[]>
-  /** key 升序后的 tag 列表（autocomplete prefix/substring 扫描用）。 */
+  /** tag 列表（保持词典文件行序；默认源即 post_count DESC 的热度排序，
+   * 用户上传的词典无此保证。autocomplete 扫描用）。 */
   tagKeys: string[]
+  /** tagKeys 的紧凑形式（去空格/_），同下标对齐。加载时一次算好，
+   * 避免 suggest 每次按键对全字典逐个 regex replace。 */
+  compactedKeys: string[]
   reverse: ReverseEntry[]
   meta: TagDictMeta | null
   error: string | null
@@ -26,6 +31,7 @@ let state: State = {
   status: 'idle',
   entries: new Map(),
   tagKeys: [],
+  compactedKeys: [],
   reverse: [],
   meta: null,
   error: null,
@@ -56,7 +62,7 @@ function buildReverse(entries: Map<string, string[]>): ReverseEntry[] {
       else zhToTags.set(zh, [tag])
     })
   })
-  // 按 zh 长度升序，让 prefix match 短的优先；suggest.ts 内部还会再排序。
+  // 按 zh 长度升序，让 prefix match 短的优先；suggest.ts 按此扫描序直接输出。
   return Array.from(zhToTags.entries())
     .map(([zh, tags]) => ({ zh, tags }))
     .sort((a, b) => a.zh.length - b.zh.length)
@@ -71,6 +77,7 @@ async function fetchDict(): Promise<void> {
         status: 'empty',
         entries: new Map(),
         tagKeys: [],
+        compactedKeys: [],
         reverse: [],
         meta: null,
       })
@@ -79,12 +86,18 @@ async function fetchDict(): Promise<void> {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
     const payload = (await resp.json()) as TagDictPayload
     const entries = new Map(Object.entries(payload.entries || {}))
-    const tagKeys = Array.from(entries.keys()).sort((a, b) => a.length - b.length)
+    // 行序以后端 keys 数组为准：JS 对象会把整数型 key（"69"、年份 tag 等）
+    // 重排到最前，entries 自身的 key 序不可靠。旧后端没有 keys 时退回对象序。
+    const tagKeys = payload.keys && payload.keys.length === entries.size
+      ? payload.keys
+      : Array.from(entries.keys())
+    const compactedKeys = tagKeys.map((t) => t.replace(/[\s_]/g, ''))
     const reverse = buildReverse(entries)
     setState({
       status: 'ready',
       entries,
       tagKeys,
+      compactedKeys,
       reverse,
       meta: payload.meta || null,
       error: null,

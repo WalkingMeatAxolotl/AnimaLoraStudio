@@ -34,6 +34,9 @@ def _route_entry(route: Any) -> dict[str, Any]:
 
 def _collect_routes() -> list[dict[str, Any]]:
     entries = [_route_entry(r) for r in app.routes]
+    # /studio 静态 Mount 是条件挂载（server.py 仅在前端 dist/ 存在时挂）——
+    # CI 不构建前端，本地构建过；纳入 snapshot 会让结果依赖环境，排除。
+    entries = [e for e in entries if not (e["type"] == "Mount" and e["path"] == "/studio")]
     entries.sort(key=lambda e: (e["path"], ",".join(e["methods"]), e["name"]))
     return entries
 

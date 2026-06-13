@@ -215,7 +215,9 @@ def test_fork_preset_still_forces_project_overrides(
     assert cfg["output_name"] != "wrong_name"
 
 
-def test_put_config_invalid_data_400(client: TestClient, env) -> None:
+def test_put_config_tolerates_invalid_values(client: TestClient, env) -> None:
+    """PR #146 之后 write_version_config 走 _tolerant_validate：非法字段
+    静默回退默认值（不再 400）。和 preset 导入路径行为一致。"""
     pid, vid = _make(client)
     _seed_preset(env, "tpl")
     client.post(
@@ -223,9 +225,10 @@ def test_put_config_invalid_data_400(client: TestClient, env) -> None:
         json={"name": "tpl"},
     )
     cfg = client.get(f"/api/projects/{pid}/versions/{vid}/config").json()["config"]
-    cfg["lora_rank"] = 0  # ge=4 → 下限越界（lora_rank 故意没设上限，LoKr 全维度走大数）
+    cfg["lora_rank"] = 0  # ge=4 越界 → 回退默认 32
     r = client.put(f"/api/projects/{pid}/versions/{vid}/config", json=cfg)
-    assert r.status_code == 400
+    assert r.status_code == 200
+    assert r.json()["config"]["lora_rank"] == 32
 
 
 # ---------------------------------------------------------------------------

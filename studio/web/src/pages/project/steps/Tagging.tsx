@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useOutletContext } from 'react-router-dom'
 import {
@@ -16,11 +16,11 @@ import {
 } from '../../../api/client'
 import LLMMessagesEditor from '../../../components/LLMMessagesEditor'
 import TagsInput from '../../../components/TagsInput'
-import JobProgress from '../../../components/JobProgress'
 import StepShell from '../../../components/StepShell'
 import { useToast } from '../../../components/Toast'
 import { useSettingsDrawer } from '../../../lib/SettingsDrawer'
 import { useEventStream } from '../../../lib/useEventStream'
+import { useLatestJobReplay } from '../../../lib/useLatestJobReplay'
 
 interface Ctx {
   project: ProjectDetail
@@ -131,6 +131,7 @@ export default function TaggingPage() {
   const [tagger, setTagger] = useState<TaggerName>('wd14')
   const [taggerStatus, setTaggerStatus] = useState<TaggerStatus | null>(null)
   const [outputFormat, setOutputFormat] = useState<'txt' | 'json'>('txt')
+  const [onExisting, setOnExisting] = useState<'overwrite' | 'skip' | 'append'>('overwrite')
   // 触发词：初值从 activeVersion 取（持久化在 version 表）；启动打标时一并提交，
   // 后端会同步落库 + 传给 worker prepend 到每张 caption。
   const [triggerWord, setTriggerWord] = useState<string>('')
@@ -143,10 +144,18 @@ export default function TaggingPage() {
   const [llmForm, setLlmForm] = useState<LLMTaggerForm | null>(null)
   const [advOpen, setAdvOpen] = useState(false)
 
-  const [job, setJob] = useState<Job | null>(null)
-  const [logs, setLogs] = useState<string[]>([])
-  const jobIdRef = useRef<number | null>(null)
-  jobIdRef.current = job?.id ?? null
+  const vid = activeVersion?.id ?? null
+
+  const {
+    item: job,
+    logs,
+    setItem: setJob,
+    setLogs,
+    itemIdRef: jobIdRef,
+    refresh: refreshLatestTagJob,
+  } = useLatestJobReplay<Job>(vid, (v) =>
+    api.getLatestVersionJob(project.id, v, 'tag').then((r) => ({ item: r.job, log: r.log })),
+  )
 
   useEffect(() => {
     void api
@@ -174,18 +183,10 @@ export default function TaggingPage() {
       )
   }, [tagger])
 
-  const vid = activeVersion?.id ?? null
+  // 刷新 / 进入页面时回放最近一次打标 job：锁回 id + 回放历史日志。
   useEffect(() => {
-    if (!vid) return
-    void api
-      .getLatestVersionJob(project.id, vid, 'tag')
-      .then((r) => {
-        if (!r.job) return
-        setJob(r.job)
-        setLogs(r.log ? r.log.split('\n') : [])
-      })
-      .catch(() => {})
-  }, [project.id, vid])
+    void refreshLatestTagJob()
+  }, [refreshLatestTagJob])
 
   // version 切换时同步 triggerWord 初值（持久化字段，避免回到 "" 让用户以为没保存）
   useEffect(() => {
@@ -202,7 +203,7 @@ export default function TaggingPage() {
         void reload()
       }
     }
-  })
+  }, { onOpen: () => void refreshLatestTagJob() })
 
   if (!activeVersion) {
     return <p className="text-fg-tertiary p-6">{t('tag.noVersion')}</p>
@@ -285,7 +286,8 @@ export default function TaggingPage() {
       const overrides = wd14_overrides ?? cltagger_overrides ?? llm_overrides
       const trigger = triggerWord.trim()
       const j = await api.startTag(project.id, activeVersion.id, {
-        tagger, output_format: outputFormat, wd14_overrides, cltagger_overrides, llm_overrides,
+        tagger, output_format: outputFormat, on_existing: onExisting,
+        wd14_overrides, cltagger_overrides, llm_overrides,
         // 传 trigger 永远，让 server 决定是否落库（与现有值比较），空串显式清空
         trigger_word: trigger,
       })
@@ -307,6 +309,22 @@ export default function TaggingPage() {
       idx={3}
       title={t('steps.tag.title')}
       subtitle={t('steps.tag.subtitle')}
+      logSources={[
+        job && {
+          key: 'tag',
+          label: t('logDrawer.tag'),
+          status: job.status,
+          lines: logs,
+          startedAt: job.started_at,
+          finishedAt: job.finished_at,
+          onCancel: () => {
+            void api
+              .cancelJob(job.id)
+              .then(() => toast(t('tag.cancelToast'), 'success'))
+              .catch((e) => toast(String(e), 'error'))
+          },
+        },
+      ]}
       actions={
         <button
           onClick={startTagging}
@@ -321,9 +339,8 @@ export default function TaggingPage() {
 
       <div className="grid gap-3 flex-1 min-h-0" style={{ gridTemplateColumns: '1.5fr 1fr' }}>
 
-        {/* 左栏 */}
+        {/* 左栏：参数区整体滚动；任务日志走 StepShell 的统一抽屉（issue #251） */}
         <div className="flex flex-col gap-3 min-h-0 min-w-0 overflow-y-auto">
-
           <section className="rounded-md border border-subtle bg-surface px-3 py-2 flex flex-wrap items-center gap-2 shrink-0 text-sm">
             <span className="text-fg-tertiary">tagger</span>
             <select
@@ -350,6 +367,16 @@ export default function TaggingPage() {
                   : `${t('tag.statusUnavail')} ${taggerStatus.msg}`
                 : t('tag.statusChecking')}
             </span>
+            {taggerStatus && !taggerStatus.ok && taggerStatus.msg.includes('未安装 onnxruntime') && (
+              <button
+                type="button"
+                onClick={() => settingsDrawer.open({ section: 'onnxruntime' })}
+                className="text-xs text-accent underline bg-transparent border-none p-0 cursor-pointer"
+                title={t('tag.goInstallOnnx')}
+              >
+                {t('tag.goInstallOnnx')}
+              </button>
+            )}
             {taggerStatus && !taggerStatus.ok && taggerStatus.msg.includes('需下载模型') && (
               <button
                 type="button"
@@ -371,6 +398,23 @@ export default function TaggingPage() {
             >
               <option value="txt">.txt</option>
               <option value="json">.json</option>
+            </select>
+
+            <span className="text-dim">|</span>
+            <span className="text-fg-tertiary" title={t('tag.onExistingHint')}>
+              {t('tag.onExisting')}
+            </span>
+            <select
+              value={onExisting}
+              onChange={(e) => setOnExisting(e.target.value as 'overwrite' | 'skip' | 'append')}
+              disabled={isLive}
+              className="input text-sm"
+              style={{ padding: '3px 8px' }}
+              title={t('tag.onExistingHint')}
+            >
+              <option value="overwrite">{t('tag.onExistingOverwrite')}</option>
+              <option value="skip">{t('tag.onExistingSkip')}</option>
+              <option value="append">{t('tag.onExistingAppend')}</option>
             </select>
 
             <span className="text-dim">|</span>
@@ -426,20 +470,6 @@ export default function TaggingPage() {
             />
           )}
 
-          {job && (
-            <JobProgress
-              job={job}
-              logs={logs}
-              onCancel={async () => {
-                try {
-                  await api.cancelJob(job.id)
-                  toast(t('tag.cancelToast'), 'success')
-                } catch (e) {
-                  toast(String(e), 'error')
-                }
-              }}
-            />
-          )}
         </div>
 
         {/* 右栏：预览面板 */}

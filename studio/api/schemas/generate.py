@@ -1,7 +1,7 @@
 """/api/generate 请求 BaseModel（PR-6 commit 5 从 server.py 抽出）。"""
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel
 
@@ -15,8 +15,8 @@ class GenerateRequest(BaseModel):
     height: int = 1024
     steps: int = 25
     cfg_scale: float = 4.0
-    sampler_name: str = "er_sde"
-    scheduler: str = "simple"
+    sampler_name: Literal["er_sde", "dpmpp_3m_sde"] = "er_sde"
+    scheduler: Literal["simple", "sgm_uniform"] = "simple"
     count: int = 1
     seed: int = 0
     lora_configs: list[LoraEntry] = []

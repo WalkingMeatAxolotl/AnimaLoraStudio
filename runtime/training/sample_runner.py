@@ -57,31 +57,49 @@ def run_sample(
     s_sampler = str(getattr(args, "sample_sampler_name", "er_sde") or "er_sde")
     s_sched = str(getattr(args, "sample_scheduler", "simple") or "simple")
 
-    with optimizer_eval_mode(ctx.optimizer):
-        ctx.model.eval()
-        if s_seed:
-            torch.manual_seed(s_seed + seed_offset)
-        img = sample_image(
-            ctx.model, ctx.vae, ctx.qwen_model, ctx.qwen_tok, ctx.t5_tok,
-            prompt, height=s_h, width=s_w, steps=s_steps, cfg_scale=s_cfg,
-            negative_prompt=(s_neg or None),
-            sampler_name=s_sampler,
-            scheduler=s_sched,
-            device=ctx.device, dtype=ctx.dtype,
-        )
-        img.save(sample_path)
-        ctx.emit(f"采样保存: {sample_path.name}")
-        if wandb_key and ctx.wandb_monitor.log_samples:
-            ctx.wandb_monitor.log_image(
-                wandb_key,
-                sample_path,
-                caption=wandb_caption or prompt,
-                step=wandb_step,
+    # T-LoRA：与 ControlGenAI/T-LoRA 官方推理一致 —— sample 阶段不应用 timestep
+    # mask。官方 inferencer 不传 sigma_mask, forward 内 fallback 出全 1 mask =
+    # 满 rank 推理。这里显式清零 PR 的训练态 mask；下一次 on_step_begin 会
+    # 重新按 sigma_t 写入，无需事后恢复。
+    # non-tlora adapter (lokr / loha / lora) 没这个方法, getattr 返回 None 安全跳过。
+    clear_fn = getattr(ctx.injector, "clear_timestep_mask", None)
+    if callable(clear_fn):
+        clear_fn()
+
+    was_training = bool(getattr(ctx.model, "training", True))
+    try:
+        with optimizer_eval_mode(ctx.optimizer):
+            ctx.model.eval()
+            if s_seed:
+                torch.manual_seed(s_seed + seed_offset)
+            img = sample_image(
+                ctx.model, ctx.vae, ctx.qwen_model, ctx.qwen_tok, ctx.t5_tok,
+                prompt, height=s_h, width=s_w, steps=s_steps, cfg_scale=s_cfg,
+                negative_prompt=s_neg,
+                sampler_name=s_sampler,
+                scheduler=s_sched,
+                device=ctx.device, dtype=ctx.dtype,
+                seed=(s_seed + seed_offset) if s_seed else None,
             )
-        if ctx.monitor_server:
-            try:
-                from train_monitor import update_monitor
-                update_monitor(sample_path=sample_path)
-            except Exception:
-                pass
-        ctx.model.train()
+            img.save(sample_path)
+            ctx.emit(f"采样保存: {sample_path.name}")
+            if wandb_key and ctx.wandb_monitor.log_samples:
+                ctx.wandb_monitor.log_image(
+                    wandb_key,
+                    sample_path,
+                    caption=wandb_caption or prompt,
+                    step=wandb_step,
+                )
+            if ctx.monitor_server:
+                try:
+                    from train_monitor import update_monitor
+                    update_monitor(sample_path=sample_path)
+                except Exception:
+                    pass
+    except Exception as exc:
+        logger.warning("采样失败，已跳过本次预览，不中断训练: %s", exc, exc_info=True)
+    finally:
+        if was_training:
+            ctx.model.train()
+        else:
+            ctx.model.eval()

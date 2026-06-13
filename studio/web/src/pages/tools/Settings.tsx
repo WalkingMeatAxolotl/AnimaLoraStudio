@@ -12,6 +12,7 @@ import {
   type ModelsCatalog,
   type Secrets,
   type SecretsPatch,
+  type StudioDataInfo,
   type DevCommit,
   type DevCommitsResult,
   type PreflightResult,
@@ -26,8 +27,14 @@ import {
   type WD14Runtime,
 } from '../../api/client'
 import { useDialog } from '../../components/Dialog'
+import {
+  clearOnboardingDone,
+  ONBOARDING_EVENTS,
+} from '../../components/FirstRunOnboardingModal'
 import { InfoButton } from '../../components/InfoButton'
 import LLMTaggerWorkspace from '../../components/LLMTaggerWorkspace'
+import PathPicker from '../../components/PathPicker'
+import StudioDataMigrateModal from '../../components/StudioDataMigrateModal'
 import { TagListInput } from '../../components/TagsInput'
 import { useShowTagTranslation } from '../../tagDict/showToggle'
 import { useTagDict, reloadDict } from '../../tagDict/store'
@@ -115,13 +122,17 @@ const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
     { id: 'wandb', labelKey: 'settings.wandb' },
   ],
   testing: [
+    { id: 'idle-timeout', labelKey: 'settings.idleTimeout.title' },
     { id: 'preview', labelKey: 'settings.intermediatePreview' },
+    { id: 'save-test-images', labelKey: 'settings.saveTestImages.title' },
   ],
   appearance: [
     { id: 'display', labelKey: 'settings.display' },
   ],
   system: [
+    { id: 'onboarding', labelKey: 'settings.onboardingSection' },
     { id: 'version', labelKey: 'settings.version' },
+    { id: 'storage', labelKey: 'settings.storage.sectionTitle' },
     { id: 'service', labelKey: 'settings.service' },
   ],
 }
@@ -251,7 +262,7 @@ const EMPTY: Secrets = {
   },
   models: { root: null, selected_anima: '1.0', selected_upscaler: '4x-AnimeSharp', auto_sync_paths: true },
   queue: { allow_gpu_during_train: false },
-  generate: { preview_every_n_steps: 3, attention_backend: 'auto' },
+  generate: { preview_every_n_steps: 3, attention_backend: 'auto', vae_precision: 'bf16', idle_timeout_minutes: 10, save_test_images: false },
   system: { update_channel: 'stable', show_dev_channel: false },
   proxy: {
     enabled: false,
@@ -1186,10 +1197,14 @@ export default function SettingsPage() {
       )}
 
       {tab === 'testing' && (<>
-        {/* attention 后端走全局 auto-detect，UI 不暴露切换；想强制覆盖
-            的高级用户改 secrets.json 的 generate.attention_backend
-            （flash_attn / xformers / none）。安装管理在『训练』tab。 */}
+        {/* Test generation uses the server Comfy-style runtime. Attention backend
+            uses global auto-detect; advanced users may override
+            secrets.generate.attention_backend (flash_attn / xformers / none).
+            Only xformers is an exact ComfyUI KSampler parity target. */}
+        <IdleTimeoutSection draft={draft} update={update} />
+        <VaePrecisionSection draft={draft} update={update} />
         <TaeFluxSection draft={draft} update={update} />
+        <SaveTestImagesSection draft={draft} update={update} />
       </>)}
 
       {tab === 'appearance' && (
@@ -2325,7 +2340,7 @@ function ONNXRuntimeSection() {
   const dialog = useDialog()
   const [rt, setRt] = useState<WD14Runtime | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState<null | 'auto' | 'gpu' | 'cpu'>(null)
+  const [busy, setBusy] = useState<null | 'auto' | 'gpu' | 'cpu' | 'directml'>(null)
   const [reinstallOpen, setReinstallOpen] = useState(false)
   const { toast } = useToast()
 
@@ -2341,12 +2356,14 @@ function ONNXRuntimeSection() {
 
   useEffect(() => { void refresh() }, [refresh])
 
-  const install = async (target: 'auto' | 'gpu' | 'cpu') => {
+  const install = async (target: 'auto' | 'gpu' | 'cpu' | 'directml') => {
     const confirmKey = target === 'auto'
       ? 'settings.confirmInstallOnnxAuto'
       : target === 'gpu'
         ? 'settings.confirmInstallOnnxGpu'
-        : 'settings.confirmInstallOnnxCpu'
+        : target === 'directml'
+          ? 'settings.confirmInstallOnnxDirectml'
+          : 'settings.confirmInstallOnnxCpu'
     const ok = await dialog.confirm(
       t(confirmKey),
       { tone: 'warn', okText: t('settings.startInstall') },
@@ -2357,7 +2374,10 @@ function ONNXRuntimeSection() {
       const result = await api.installWD14Runtime(target)
       setRt({
         installed: result.installed, version: result.version, providers: result.providers,
-        cuda_available: result.cuda_available, restart_required: result.restart_required,
+        cuda_available: result.cuda_available,
+        directml_available: result.directml_available,
+        platform: result.platform,
+        restart_required: result.restart_required,
         cuda_load_error: result.cuda_load_error, preload: result.preload, cuda_detect: result.cuda_detect,
       })
       const newPkg = result.installed_pkg ?? result.installed ?? '?'
@@ -2371,26 +2391,34 @@ function ONNXRuntimeSection() {
   }
 
   const cuda = rt?.cuda_detect ?? { available: false, driver_version: null, gpu_name: null }
-  const mismatched = !!rt && cuda.available && !rt.cuda_available
-  // 默认状态正常时整体折叠；有错 / mismatch / 需重启时自动展开
+  const notInstalled = !!rt && rt.installed === null
+  const gpuAccel = !!rt && (rt.cuda_available || rt.directml_available)
+  const isWindows = !rt || rt.platform === 'win32'
+  // mismatched: 装了某个包 + 有 GPU 但没用上任何加速 EP（CUDA 或 DirectML）。
+  // 未装由 notInstalled 接管；已装且已经在用 DirectML 不算 mismatch。
+  const mismatched = !!rt && rt.installed !== null && cuda.available && !gpuAccel
+  // 默认状态正常时整体折叠；未装 / 有错 / mismatch / 需重启时自动展开
   const hasIssue = !!error || (rt && (
-    !!rt.cuda_load_error || rt.restart_required || mismatched
+    notInstalled || !!rt.cuda_load_error || rt.restart_required || mismatched
   ))
 
   // summary 里显示一行简短状态，用户不展开就能扫到
+  const epShort = !rt
+    ? '?'
+    : rt.cuda_available ? 'CUDA' : rt.directml_available ? 'DirectML' : 'CPU'
   const statusLabel = error
     ? `⚠ ${t('settings.statusLoadFailed')}`
     : !rt
       ? t('settings.loadingStatus')
-      : rt.cuda_load_error
-        ? `⚠ ${t('settings.cudaLoadFailed')}`
-        : rt.restart_required
-          ? `⚠ ${t('settings.restartStudioRequired')}`
-          : mismatched
-            ? `⚠ ${t('settings.gpuRunningCpuEp')}`
-            : rt.cuda_available
-              ? `CUDA · ${rt.installed ?? '?'}`
-              : `CPU · ${rt.installed ?? '?'}`
+      : notInstalled
+        ? `⚠ ${t('settings.notInstalledShort')}`
+        : rt.cuda_load_error
+          ? `⚠ ${t('settings.cudaLoadFailed')}`
+          : rt.restart_required
+            ? `⚠ ${t('settings.restartStudioRequired')}`
+            : mismatched
+              ? `⚠ ${t('settings.gpuRunningCpuEp')}`
+              : `${epShort} · ${rt.installed ?? '?'}`
   const statusOk = rt && !hasIssue
 
   return (
@@ -2411,7 +2439,7 @@ function ONNXRuntimeSection() {
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-fg-tertiary shrink-0">runtime:</span>
                 <code className="font-mono text-fg-primary">{rt.installed ?? t('settings.notInstalledParen')}{rt.version ? `==${rt.version}` : ''}</code>
-                <StatusLabel bg={rt.cuda_available ? 'bg-ok-soft' : 'bg-warn-soft'} fg={rt.cuda_available ? 'text-ok' : 'text-warn'} text={rt.cuda_available ? 'CUDA' : 'CPU only'} />
+                <StatusLabel bg={gpuAccel ? 'bg-ok-soft' : 'bg-warn-soft'} fg={gpuAccel ? 'text-ok' : 'text-warn'} text={rt.cuda_available ? 'CUDA' : rt.directml_available ? 'DirectML' : 'CPU only'} />
               </div>
               <div className="text-fg-tertiary">EP: <code className="text-fg-secondary font-mono">{(rt.providers ?? []).map((p) => p.replace('ExecutionProvider', '')).join(' / ') || '(none)'}</code></div>
               <div className="text-fg-tertiary">{t('settings.gpuDetect')}: <span className="text-fg-secondary">{cuda.available ? `${cuda.gpu_name ?? '?'} (driver ${cuda.driver_version ?? '?'})` : t('settings.noNvidiaGpu')}</span></div>
@@ -2420,6 +2448,11 @@ function ONNXRuntimeSection() {
             {rt.restart_required && (
               <div className="rounded-sm border border-err bg-err-soft px-2 py-1.5 text-err text-xs">
                 <Trans i18nKey="settings.onnxRestartRequired" components={{ strong: <strong /> }} />
+              </div>
+            )}
+            {!rt.restart_required && notInstalled && (
+              <div className="rounded-sm border border-info bg-info-soft px-2 py-1.5 text-info text-xs">
+                {cuda.available ? t('settings.onnxNotInstalledHintGpu') : t('settings.onnxNotInstalledHintCpu')}
               </div>
             )}
             {!rt.restart_required && mismatched && (
@@ -2448,9 +2481,33 @@ function ONNXRuntimeSection() {
               </button>
             </div>
             {reinstallOpen && (
-              <div className="flex gap-1.5 items-center flex-wrap pt-2 border-t border-subtle">
-                <button onClick={() => install('gpu')} disabled={busy !== null} className="btn btn-secondary btn-sm">{busy === 'gpu' ? t('settings.installingPackage') : t('settings.reinstallGpu')}</button>
-                <button onClick={() => install('cpu')} disabled={busy !== null} className="btn btn-secondary btn-sm">{busy === 'cpu' ? t('settings.installingPackage') : t('settings.reinstallCpu')}</button>
+              <div className="flex flex-col gap-2 pt-2 border-t border-subtle">
+                <div className="flex gap-1.5 items-center flex-wrap">
+                  <button
+                    onClick={() => install('directml')}
+                    disabled={busy !== null || !isWindows}
+                    title={isWindows ? t('settings.directmlPackageHint') : t('settings.directmlWinOnlyHint')}
+                    className="btn btn-secondary btn-sm"
+                  >
+                    {busy === 'directml' ? t('settings.installingPackage') : t('settings.reinstallDirectml')}
+                  </button>
+                  <button
+                    onClick={() => install('gpu')}
+                    disabled={busy !== null}
+                    title={t('settings.cudaPackageHint')}
+                    className="btn btn-secondary btn-sm"
+                  >
+                    {busy === 'gpu' ? t('settings.installingPackage') : t('settings.reinstallGpu')}
+                  </button>
+                  <button
+                    onClick={() => install('cpu')}
+                    disabled={busy !== null}
+                    title={t('settings.cpuPackageHint')}
+                    className="btn btn-secondary btn-sm"
+                  >
+                    {busy === 'cpu' ? t('settings.installingPackage') : t('settings.reinstallCpu')}
+                  </button>
+                </div>
                 <span className="text-[10px] text-fg-tertiary">{t('settings.onnxForceHint')}</span>
               </div>
             )}
@@ -2944,6 +3001,76 @@ function XformersSection() {
 // TAEFlux 模型 server 启动时后台下载（lifespan startup）；UI 只暴露用户必须
 // 控制的「节流 N」一个输入，其他状态/下载/帮助文字全删（用户决策）。
 
+function IdleTimeoutSection({
+  draft, update,
+}: {
+  draft: Secrets
+  update: <S extends Section, K extends keyof Secrets[S]>(
+    section: S, key: K, value: Secrets[S][K],
+  ) => void
+}) {
+  const { t } = useTranslation()
+  const minutes = draft.generate.idle_timeout_minutes
+  return (
+    <SettingsSection id="idle-timeout" title={t('settings.idleTimeout.title')}>
+      <SettingsField
+        label={t('settings.idleTimeout.label')}
+        desc={t('settings.idleTimeout.desc')}
+        helpTooltip={<p>{t('settings.idleTimeout.help')}</p>}
+      >
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            min={0}
+            max={240}
+            value={minutes}
+            onChange={(e) => update('generate', 'idle_timeout_minutes', Math.max(0, Number(e.target.value) || 0))}
+            className="input"
+            style={{ width: 80 }}
+          />
+          <span className="text-xs text-fg-tertiary">
+            {minutes === 0
+              ? t('settings.idleTimeout.offHint')
+              : t('settings.idleTimeout.minutesSuffix')}
+          </span>
+        </div>
+      </SettingsField>
+    </SettingsSection>
+  )
+}
+
+
+function VaePrecisionSection({
+  draft, update,
+}: {
+  draft: Secrets
+  update: <S extends Section, K extends keyof Secrets[S]>(
+    section: S, key: K, value: Secrets[S][K],
+  ) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <SettingsSection id="vae-precision" title={t('settings.vaePrecision.title')}>
+      <SettingsField
+        label={t('settings.vaePrecision.label')}
+        desc={t('settings.vaePrecision.desc')}
+        helpTooltip={<p>{t('settings.vaePrecision.help')}</p>}
+      >
+        <select
+          value={draft.generate.vae_precision ?? 'bf16'}
+          onChange={(e) => update('generate', 'vae_precision', e.target.value as 'bf16' | 'fp32')}
+          className={textInputClass}
+          style={{ width: 120 }}
+        >
+          <option value="bf16">bf16</option>
+          <option value="fp32">fp32</option>
+        </select>
+      </SettingsField>
+    </SettingsSection>
+  )
+}
+
+
 function TaeFluxSection({
   draft, update,
 }: {
@@ -2971,6 +3098,31 @@ function TaeFluxSection({
           onChange={(e) => update('generate', 'preview_every_n_steps', Number(e.target.value) || 0)}
           className="input"
           style={{ width: 80 }}
+        />
+      </SettingsField>
+    </SettingsSection>
+  )
+}
+
+
+function SaveTestImagesSection({
+  draft, update,
+}: {
+  draft: Secrets
+  update: <S extends Section, K extends keyof Secrets[S]>(
+    section: S, key: K, value: Secrets[S][K],
+  ) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <SettingsSection id="save-test-images" title={t('settings.saveTestImages.title')}>
+      <SettingsField
+        label={t('settings.saveTestImages.label')}
+        helpTooltip={t('settings.saveTestImages.tooltip')}
+      >
+        <Bool
+          value={draft.generate.save_test_images}
+          onChange={(v) => update('generate', 'save_test_images', v)}
         />
       </SettingsField>
     </SettingsSection>
@@ -3081,9 +3233,39 @@ function DisplaySection() {
 function SystemSection() {
   return (
     <>
+      <OnboardingSection />
       <VersionSection />
+      <StorageSection />
       <ServiceSection />
     </>
+  )
+}
+
+// ── 重新运行首次引导 Section ─────────────────────────────────────────────
+//
+// 清掉 localStorage 的 onboarding done 标记 + dispatch event,触发
+// FirstRunOnboardingModal 显示。不重启服务、不动 secrets。
+function OnboardingSection() {
+  const { t } = useTranslation()
+  const handleReopen = () => {
+    clearOnboardingDone()
+    window.dispatchEvent(new Event(ONBOARDING_EVENTS.open))
+  }
+  return (
+    <SettingsSection id="onboarding" title={t('settings.onboardingSection')}>
+      <SettingsField
+        label={t('settings.onboardingReopenTitle')}
+        helpTooltip={<p>{t('settings.onboardingReopenHelp')}</p>}
+      >
+        <button
+          type="button"
+          onClick={handleReopen}
+          className="btn btn-secondary btn-sm self-start"
+        >
+          {t('settings.onboardingReopen')}
+        </button>
+      </SettingsField>
+    </SettingsSection>
   )
 }
 
@@ -3166,6 +3348,11 @@ function VersionSection() {
   )
   // chunk 2 重做：release notes 详细内容 modal（含 detail markdown）
   const [detailModalOpen, setDetailModalOpen] = useState(false)
+  // modal 打开时定位的版本 tag（默认当前；从右上角"更新日志"入口打开则用 latest）
+  const [detailInitialTag, setDetailInitialTag] = useState<string | null>(null)
+  // 全量历史 release notes（modal 左右切换用）。lazy：modal 首次打开时拉。
+  // 拉之前 / 失败 → null，modal 退化到只显示传入的单版本（无左右按钮）。
+  const [allReleaseNotes, setAllReleaseNotes] = useState<ReleaseNotes[] | null>(null)
   // 0.8.1 hotfix — zip 安装用户首次 init git 仓库
   const [initing, setIniting] = useState(false)
   const [initError, setInitError] = useState<string | null>(null)
@@ -3436,6 +3623,19 @@ function VersionSection() {
   // 上次 update 失败 banner（aborted / failed / partial 时显示红色提示）
   const statusBadFailed = !!status && (status.status === 'failed' || status.status === 'aborted' || status.status === 'partial')
 
+  // 打开 release notes modal：默认定位到当前展示 tag；从"更新日志"入口
+  // 打开则传 null → 默认 latest（modal 内 findIndex 找不到时回退到 idx 0）
+  const openReleaseNotesModal = useCallback((tag: string | null) => {
+    setDetailInitialTag(tag)
+    setDetailModalOpen(true)
+    // lazy 加载全量历史：仅首次打开拉一次，后续 modal 复用同一份
+    if (allReleaseNotes === null) {
+      void api.getAllReleaseNotes()
+        .then((r) => setAllReleaseNotes(r.versions))
+        .catch(() => setAllReleaseNotes([]))
+    }
+  }, [allReleaseNotes])
+
   // release notes 拉对应 tag：stable 通道有更新时展示目标版本，否则展示当前
   // 已装版本；dev 通道不展示 release notes（dev 是滚动的，没有版本号语义）
   const displayedTag = showDevView
@@ -3462,14 +3662,28 @@ function VersionSection() {
       id="version"
       title={t('settings.version')}
       headerExtras={
-        <InfoButton>
-          <ul>
-            <li>{t('settings.versionInfoChannel')}</li>
-            <li>{t('settings.versionInfoAutoCheck')}</li>
-            <li>{t('settings.versionInfoUpdateImpl')}</li>
-            <li>{t('settings.versionInfoPreflight')}</li>
-          </ul>
-        </InfoButton>
+        <>
+          <InfoButton>
+            <ul>
+              <li>{t('settings.versionInfoChannel')}</li>
+              <li>{t('settings.versionInfoAutoCheck')}</li>
+              <li>{t('settings.versionInfoUpdateImpl')}</li>
+              <li>{t('settings.versionInfoPreflight')}</li>
+            </ul>
+          </InfoButton>
+          {/* webui 的"更新日志"入口：打开 detail modal 并定位到 latest
+              历史版本，配合左右切换可浏览全部 release notes（防止 hotfix
+              发布后看不到之前主版本的更新内容） */}
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm text-xs text-fg-tertiary ml-auto inline-flex items-center gap-1"
+            onClick={() => openReleaseNotesModal(null)}
+            title={t('settings.viewUpdateHistoryHint')}
+          >
+            <VersionIcon name="log" />
+            {t('settings.viewUpdateHistory')}
+          </button>
+        </>
       }
     >
       {/* 0.8.1 hotfix — zip 安装用户首次启用自更新功能的 banner。
@@ -3559,7 +3773,7 @@ function VersionSection() {
               hasRollback={hasRollback}
               statusBadFailed={statusBadFailed}
               releaseNotes={releaseNotes}
-              onShowReleaseNotesDetail={() => setDetailModalOpen(true)}
+              onShowReleaseNotesDetail={() => openReleaseNotesModal(displayedTag)}
               checking={checking}
               busy={busy}
               cardState={masterState}
@@ -3607,11 +3821,25 @@ function VersionSection() {
         />
       )}
 
-      {detailModalOpen && releaseNotes?.found && (
-        <ReleaseNotesDetailModal
-          notes={releaseNotes}
-          onClose={() => setDetailModalOpen(false)}
-        />
+      {/* allNotes 没拉到 / 还在拉 → 退化到单版本（无左右切换，旧行为）；
+          拉到后 modal 自动重渲染，左右按钮出现 */}
+      {detailModalOpen && (allReleaseNotes && allReleaseNotes.length > 0
+        ? (
+          <ReleaseNotesDetailModal
+            allNotes={allReleaseNotes}
+            initialTag={detailInitialTag ?? allReleaseNotes[0].tag}
+            onClose={() => setDetailModalOpen(false)}
+          />
+        )
+        : releaseNotes?.found
+          ? (
+            <ReleaseNotesDetailModal
+              allNotes={[releaseNotes]}
+              initialTag={releaseNotes.tag}
+              onClose={() => setDetailModalOpen(false)}
+            />
+          )
+          : null
       )}
     </SettingsSection>
   )
@@ -4337,47 +4565,114 @@ function UpdateLogModal({
 }
 
 // chunk 2 重做 — release notes 全量详细内容 modal。结构：
-//   header: tag · date · block summary
-//   body: 每条 entry 一块（kind 徽章 + summary + PR refs 链接 + detail 文本）
+//   header: [←] tag · date · (n / N) [→]  + 关闭   |  body: entries 列表
+// 接收 allNotes 全量（latest first），按 initialTag 定位起始 index；
+// 左右键 / 按钮在版本间切换，作为 webui 的更新日志浏览器。
 // detail 字段是 markdown 但这里不渲染 markdown 库（依赖最少），直接
-// whitespace-pre-wrap 显示原文，code/`` /列表用户能读懂；未来想真渲染 markdown
-// 再加 marked / react-markdown 依赖。
+// whitespace-pre-wrap 显示原文；未来想真渲染 markdown 再加 marked /
+// react-markdown 依赖。
 function ReleaseNotesDetailModal({
-  notes, onClose,
-}: { notes: ReleaseNotes; onClose: () => void }) {
+  allNotes, initialTag, onClose,
+}: { allNotes: ReleaseNotes[]; initialTag: string; onClose: () => void }) {
   const { t } = useTranslation()
+  // 起始 index：按 tag 匹配；找不到（dev / custom 或 yaml 没该 tag）退到 latest
+  const initialIdx = useMemo(() => {
+    const i = allNotes.findIndex((n) => n.tag === initialTag)
+    return i >= 0 ? i : 0
+  }, [allNotes, initialTag])
+  const [idx, setIdx] = useState(initialIdx)
+  // initialTag / allNotes 变化时同步（modal 复用同一实例打开多版本）
+  useEffect(() => { setIdx(initialIdx) }, [initialIdx])
+
+  const total = allNotes.length
+  const current: ReleaseNotes | null = total > 0 ? allNotes[idx] : null
+  // yaml latest-first：idx + 1 = 更旧，idx - 1 = 更新
+  const hasOlder = idx < total - 1
+  const hasNewer = idx > 0
+
+  const goOlder = useCallback(() => {
+    setIdx((i) => Math.min(i + 1, Math.max(0, total - 1)))
+  }, [total])
+  const goNewer = useCallback(() => {
+    setIdx((i) => Math.max(i - 1, 0))
+  }, [])
+
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { onClose(); return }
+      // 输入框内按方向键不切版本，避免误触
+      const target = e.target as HTMLElement | null
+      const tag = target?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return
+      if (e.key === 'ArrowLeft') { goOlder(); e.preventDefault() }
+      else if (e.key === 'ArrowRight') { goNewer(); e.preventDefault() }
+    }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [onClose, goOlder, goNewer])
+
+  // 换版本时滚回顶部，避免长 detail 看完后切版本仍停在底部
+  const bodyRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (bodyRef.current) bodyRef.current.scrollTop = 0
+  }, [idx])
+
+  if (!current) return null
+  const navBtnCls = 'text-fg-dim hover:text-fg-primary disabled:opacity-25 disabled:hover:text-fg-dim disabled:cursor-not-allowed text-lg leading-none px-2 py-1 rounded'
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
       onClick={onClose}
     >
       <div
-        className="bg-surface border border-subtle rounded-md shadow-lg max-w-3xl w-[92vw] max-h-[85vh] flex flex-col"
+        className="bg-surface border border-subtle rounded-md shadow-lg w-[50vw] h-[80vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-subtle px-5 py-3">
-          <div className="flex flex-col gap-0.5">
-            <h3 className="text-base font-semibold text-fg-primary font-mono">
-              {notes.tag}
-              {notes.date && <span className="text-fg-tertiary font-normal text-sm font-sans"> · {notes.date}</span>}
-            </h3>
-            {notes.summary && (
-              <span className="text-xs text-fg-secondary">{notes.summary}</span>
-            )}
-          </div>
+        {/* 顶部控制栏：左右切换 + 关闭，放在 title 上方独立一行 */}
+        <div className="flex items-center gap-1 border-b border-subtle px-3 py-2">
+          {total > 1 && (
+            <>
+              <button
+                type="button"
+                onClick={goOlder}
+                disabled={!hasOlder}
+                className={navBtnCls}
+                aria-label={t('settings.releaseNotesOlder')}
+                title={t('settings.releaseNotesOlder')}
+              >‹</button>
+              <button
+                type="button"
+                onClick={goNewer}
+                disabled={!hasNewer}
+                className={navBtnCls}
+                aria-label={t('settings.releaseNotesNewer')}
+                title={t('settings.releaseNotesNewer')}
+              >›</button>
+              <span className="text-2xs text-fg-dim font-mono ml-1">
+                {t('settings.releaseNotesPosition', { index: idx + 1, total })}
+              </span>
+            </>
+          )}
+          <div className="flex-1" />
           <button
             onClick={onClose}
             className="text-fg-dim hover:text-fg-primary text-xl leading-none px-1"
             aria-label={t('common.close')}
           >×</button>
         </div>
-        <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-4">
-          {notes.entries.map((e, i) => (
+        {/* title 行：tag · date / summary */}
+        <div className="flex flex-col gap-0.5 border-b border-subtle px-5 py-3 min-w-0">
+          <h3 className="text-base font-semibold text-fg-primary font-mono">
+            <span>{current.tag}</span>
+            {current.date && <span className="text-fg-tertiary font-normal text-sm font-sans"> · {current.date}</span>}
+          </h3>
+          {current.summary && (
+            <span className="text-xs text-fg-secondary">{current.summary}</span>
+          )}
+        </div>
+        <div ref={bodyRef} className="flex-1 overflow-y-auto p-5 flex flex-col gap-4">
+          {current.entries.map((e, i) => (
             <div key={i} className="flex flex-col gap-1.5">
               <div className="flex items-start gap-2 flex-wrap">
                 <span
@@ -4415,6 +4710,97 @@ function ReleaseNotesDetailModal({
         </div>
       </div>
     </div>
+  )
+}
+
+// ── 存储位置 Section（studio_data 自定义位置 + 迁移）──────────────────────
+function StorageSection() {
+  const { t } = useTranslation()
+  const { toast } = useToast()
+  const [info, setInfo] = useState<StudioDataInfo | null>(null)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  // 迁移 modal 的目标目录；非 null = modal 打开（迁移期间 modal 不可关，
+  // 不存在"后台迁移中"的游离状态，section 无需跟踪迁移进度）
+  const [migrateTarget, setMigrateTarget] = useState<string | null>(null)
+  const [restartBusy, setRestartBusy] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    void api.getStudioDataInfo(false).then((i) => {
+      if (!cancelled) setInfo(i)
+    }).catch(() => { /* section 显示用，拉不到不阻塞页面 */ })
+    return () => { cancelled = true }
+  }, [])
+
+  // done 态「立即重启」：modal 上下文已是确认语境，不再二次 confirm
+  const handleRestart = async () => {
+    setRestartBusy(true)
+    try {
+      await api.restartServer()
+    } catch (e) {
+      const err = e as Error & { status?: number; detail?: { error?: string; tasks?: { name: string; id?: number }[] } }
+      if (err.status === 422 && err.detail?.error === 'running_tasks_present') {
+        const names = (err.detail.tasks ?? []).map((task) => task.name || `task#${task.id ?? '?'}`).join(', ')
+        toast(t('settings.taskRunningCancelFirst', { names }), 'error')
+      } else {
+        toast(t('settings.restartTriggerFailed', { error: err.message ?? String(e) }), 'error')
+      }
+      setRestartBusy(false)
+      return
+    }
+    void pollHealthThenReload(toast, 5 * 60_000, t('settings.restart'), () => setRestartBusy(false), t)
+  }
+
+  return (
+    <SettingsSection id="storage" title={t('settings.storage.sectionTitle')}>
+      <SettingsField
+        label={t('settings.storage.locationLabel')}
+        helpTooltip={
+          <>
+            <p>{t('settings.storage.help1')}</p>
+            <p>{t('settings.storage.help2')}</p>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <code className="font-mono text-xs truncate">{info?.current ?? '…'}</code>
+            {info && (
+              <span className="text-2xs text-fg-tertiary shrink-0">
+                {info.is_custom ? t('settings.storage.customBadge') : t('settings.storage.defaultBadge')}
+              </span>
+            )}
+          </div>
+          <button
+            className="btn btn-secondary btn-sm self-start"
+            onClick={() => setPickerOpen(true)}
+            disabled={restartBusy}
+          >
+            {t('settings.storage.changeLocation')}
+          </button>
+        </div>
+      </SettingsField>
+
+      {pickerOpen && (
+        <PathPicker
+          dirOnly
+          initialPath={info?.current}
+          onPick={(path) => {
+            setPickerOpen(false)
+            setMigrateTarget(path)
+          }}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
+
+      {migrateTarget != null && (
+        <StudioDataMigrateModal
+          target={migrateTarget}
+          onClose={() => setMigrateTarget(null)}
+          onRestart={() => void handleRestart()}
+        />
+      )}
+    </SettingsSection>
   )
 }
 

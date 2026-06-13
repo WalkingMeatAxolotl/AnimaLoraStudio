@@ -640,3 +640,90 @@ PR-A / PR-B 之间无强依赖可并行；PR-C1 可合进 PR-B；PR-C2 单独 sh
 - `runtime/training/timestep_samplers/infonoise.py:29-80` InfoNoiseScheduler 9 个内部 state 字段
 - `runtime/training/optimizers/prodigy_plus_schedulefree.py` PPSF 工厂
 - worktree-090validation 内本地草稿（内容已部分过时，按用户决定不合并）
+
+### 2026-06-12 — Addendum 2: failed / canceled task 也可 resume（terminal-resume）
+
+**影响范围**：推翻初版 ADR「决策第 6 条（pause 文件对生命周期）」与
+`TERMINAL_STATUSES` 不可复活的隐含假设；修订 Addendum 1 的
+`resume_state_loaded → 删文件` 行为；初版「不在范围 / server crash 自动保
+state」一条实质已被 Addendum 1 推翻，本 Addendum 把它的产品面补完。
+
+**起因**：用户指出——既然 Addendum 1 让每个 epoch 末尾无条件写
+`auto_epoch_state.pt`，那么 failed（崩溃 / 关机）和 canceled 的 task 的恢复点
+大概率完好在盘上，"只有 paused 可恢复"是 API/UI 层的人为限制。实测确认：
+
+- failed：supervisor 重启 `_reconcile_orphans` 把孤儿 running 标 failed，
+  state 文件不受影响；
+- canceled（running 中取消）：取消流程从不碰 auto backup 文件；
+- 唯一主动删文件的路径是「取消 paused task」和「resume 成功后清理」，两者的
+  删除理由都来自初版 `pause_step_<N>.pt` 命名堆积问题——Addendum 1 改覆盖式
+  单文件后理由已消失。
+
+#### 决策
+
+1. **resume 状态放宽**：`POST /api/queue/{id}/resume` 允许
+   `status ∈ {paused, failed, canceled}`。done 不允许（语义是重训，走 retry /
+   ResumeFieldPicker）。文件缺失仍 409 引导 ResumeFieldPicker，语义不变。
+2. **恢复点路径落 DB**：supervisor 收到 `auto_epoch_backup_written` 事件时把
+   state/config 路径 + epoch/step 持久化到 tasks 新列
+   `last_state_path / last_config_path / last_state_epoch / last_state_step`
+   （migration v13）。此前只存内存 slot 字段，进程 / 机器一死信息即丢——落 DB
+   后关机重启照样能 resume。每 epoch 一次 UPDATE，开销可忽略。
+3. **resume 复用 paused 管道**：failed/canceled resume 时 endpoint 把
+   `last_state_path / last_config_path` 复制进 `paused_state_path /
+   paused_config_path` 再置 pending——cmd_builder（`--resume-state` 注入）、
+   bootstrap（sibling snapshot freeze）、`resume_state_loaded`（清字段）整条
+   下游零改动。
+4. **不再删恢复点文件**：`_clear_pause_artifacts` 改名 `_clear_pause_fields`，
+   只清 DB `paused_*` 字段不删文件。两处调用点行为变化：
+   - resume 成功（`resume_state_loaded`）：文件保留——消除「resume 后到下一
+     epoch 末之间无恢复点」的窗口；文件本来就是覆盖式，不会堆积。
+   - 取消 paused task：文件保留——canceled task 现在可 resume，"彻底取消"
+     文案随之修订。
+   文件生命周期改为跟 task 删除绑定：`DELETE /api/queue/{id}` 时按
+   `last_state_path` 的父目录（校验目录名 == `task_<id>` 防误删）一并 rmtree。
+5. **version 状态回滚**：failed/canceled 曾触发 `_maybe_finalize_version`；
+   resume 置 pending 后 endpoint 调 `reconcile_version_status`（派生回
+   training）+ publish `version_state_changed`，UI 立即一致（dispatch 时
+   `_write_task_running_to_db` 本来也会再写一次，双保险）。
+6. **`is_resumable` 信号**：list / get queue 注入。paused 看 `paused_state_path`，
+   failed/canceled 看 `last_state_path`，且文件真实存在。UI 据此显隐
+   "继续训练" 按钮（与 retry「从头重跑」并列）。
+7. **原子写盘（隐患修复）**：`save_training_state` 改 tmp + `os.replace`；
+   `write_config_snapshot` 同理。关机若砸在 epoch 末写盘窗口，旧恢复点完好，
+   不会留下半截 `.pt`。
+8. **auto backup 挪进 task 档案**（修订初版决策 4 / Addendum 1 决策 1 的
+   存放位置）：`auto_epoch_state.pt` + `.config.json` 改落
+   `studio_data/tasks/<id>/state/`（跟 run.log / monitor/ / samples/ 同根）。
+   原位置 `<output_dir>/state/task_<TID>/` 是从周期 save 惯性继承的，从未
+   被论证过；而 auto backup 的身份是 task 级系统恢复点，不是用户产物：
+   - 生命周期天然跟 task 行绑定，DELETE task 的 task_dir rmtree 顺手覆盖，
+     不再需要伸进 version 树删目录；
+   - 路径从 task id 可直接推算，与"事件落 DB"互为冗余；
+   - 删 version 不再顺手带走还活着的 task 的恢复点。
+   路径由子进程从 `--monitor-state-file` 推出（bootstrap，与 samples/ 同
+   约定）；纯 CLI 没传 → fallback 原 `state_dir()`，行为不变。
+   **用户周期 save（`training_state_step/epochN.pt`）不挪**——它们是用户
+   主动开的产物，留在 version output 树，ResumeFieldPicker 按 version 扫描
+   不受影响（picker 的 `_STATE_FILE_RE` 本来就只匹配周期 save 命名，auto
+   backup 从未在 picker 暴露过，挪动对 picker 零影响）。
+9. **存量 backfill**：v13 migration 对挂在项目上的 failed/canceled task 按
+   version 目录约定探测旧布局 `<version>/output/state/task_<id>/
+   auto_epoch_state.pt`，探到就回填 `last_state_path / last_config_path`
+   （epoch/step 不回填——要 torch.load 才拿得到，纯 UI 提示字段不值得）。
+   resume 链路只认 DB 记录的实际路径，老 task 从旧位置、新 task 从新位置
+   resume，机制一致。旧布局文件不搬运（几百 MB 不做复制迁移），由 DELETE
+   task 的旧布局清理分支兜底回收。
+
+#### 边界 / 不在范围
+
+- backfill 探测不到的存量 task 维持不可一键 resume：Addendum 1 之前的 task
+  没有 auto backup；version 已删的恢复点已随目录消失；游离 task（无
+  project/version）的 output_dir 只在 yaml 里、可能已被用户改过，不按写时
+  值推断。这些场景走 ResumeFieldPicker 选周期 save（如有）起新 task。
+- failed 原因为确定性错误（OOM / 配置错）时 resume 会原地再炸——不做服务端
+  判断，交给用户；retry 与 resume 按钮并列即是给用户的选择权。
+- done task 永不 resume。
+- auto backup 不进 ResumeFieldPicker（维持现状）：picker 语义是"选用户产物
+  fork 新 task"，系统恢复点的消费入口是 resume 按钮。要 fork 最新 epoch，
+  开 `save_state_every_epochs=1` 即可。

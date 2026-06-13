@@ -37,6 +37,7 @@ def test_schema_is_complete() -> None:
     fields = TrainingConfig.model_fields
     for name in (
         "transformer_path", "data_dir", "lora_type", "lora_rank", "epochs",
+        "tlora_min_rank", "tlora_alpha_rank_scale", "tlora_use_ortho",
         "optimizer_type", "prodigy_d_coef", "prodigy_safeguard_warmup",
         "lr_scheduler_warmup_steps",
         "lion_beta1", "lion_beta2",
@@ -50,10 +51,14 @@ def test_schema_is_complete() -> None:
     ):
         assert name in fields, f"missing: {name}"
     assert "wandb_enabled" in fields
-    # optimizer_type Literal 包含 Lion / PPSF
+    lora_annotation = fields["lora_type"].annotation
+    lora_options = getattr(lora_annotation, "__args__", ())
+    assert "ortho" in lora_options
+    assert "tlora" in lora_options
     scheduler_annotation = fields["lr_scheduler"].annotation
     scheduler_options = getattr(scheduler_annotation, "__args__", ())
     assert "cosine_with_warmup" in scheduler_options
+    # optimizer_type Literal 包含 Lion / PPSF
     optimizer_annotation = fields["optimizer_type"].annotation
     # Literal 的 __args__ 包含所有合法值
     optimizer_options = getattr(optimizer_annotation, "__args__", ())
@@ -88,6 +93,9 @@ def test_schema_carries_ui_metadata(client: TestClient) -> None:
     assert props["transformer_path"]["group"] == "model"
     assert props["transformer_path"]["control"] == "path"
     assert "show_when" in props["prodigy_d_coef"]
+    assert props["tlora_min_rank"]["show_when"] == "lora_type==tlora"
+    assert props["tlora_alpha_rank_scale"]["show_when"] == "lora_type==tlora"
+    assert props["tlora_use_ortho"]["show_when"] == "lora_type==tlora"
     assert props["lion_beta1"]["show_when"] == "optimizer_type==lion"
     assert props["lion_beta2"]["show_when"] == "optimizer_type==lion"
     assert "automagic" not in props["learning_rate"]["disable_when"]
@@ -95,6 +103,8 @@ def test_schema_carries_ui_metadata(client: TestClient) -> None:
     assert props["lr_scheduler_warmup_steps"]["show_when"] == "lr_scheduler==cosine_with_warmup"
     assert props["automagic_min_lr"]["show_when"] == "optimizer_type==automagic"
     assert props["automagic_max_lr"]["show_when"] == "optimizer_type==automagic"
+    assert props["automagic_variant"]["show_when"] == "optimizer_type==automagic"
+    assert props["automagic_agreement_threshold"]["show_when"] == "optimizer_type==automagic&&automagic_variant==v2"
     assert props["wandb_enabled"]["group"] == "wandb"
     # PPSF 字段都按 optimizer_type==prodigy_plus_schedulefree 显示
     for ppsf_field in (
@@ -367,7 +377,7 @@ def test_get_preset_with_warnings_reports_defaulted(
 ) -> None:
     """字段值不合法时回退默认值并列入 defaulted_fields。"""
     payload = _payload()
-    payload["optimizer_type"] = "lion"  # 不在 Literal 里
+    payload["optimizer_type"] = "made_up_optim"  # 不在 Literal 里
     yaml_bytes = yaml.safe_dump(payload, allow_unicode=True).encode("utf-8")
     (presets_dir / "badval.yaml").write_bytes(yaml_bytes)
 
@@ -375,7 +385,7 @@ def test_get_preset_with_warnings_reports_defaulted(
     assert resp.status_code == 200
     body = resp.json()
     assert "optimizer_type" in body["defaulted_fields"]
-    assert body["config"]["optimizer_type"] != "lion"
+    assert body["config"]["optimizer_type"] != "made_up_optim"
 
 
 def test_get_preset_without_warnings_returns_flat(
@@ -394,7 +404,7 @@ def test_tolerant_load_invalid_values(
 ) -> None:
     """跨分支预设：未知字段 + 非法值 → 都能加载，不会 500。"""
     payload = _payload()
-    payload["optimizer_type"] = "lion"
+    payload["optimizer_type"] = "made_up_optim"
     payload["infonoise_K"] = 0
     raw = {**payload, "nonexistent_thing": True}
     yaml_bytes = yaml.safe_dump(raw, allow_unicode=True).encode("utf-8")
@@ -419,3 +429,21 @@ def test_legacy_configs_endpoint_redirects(client: TestClient) -> None:
     resp = client.get("/api/configs/foo", follow_redirects=False)
     assert resp.status_code == 308
     assert resp.headers["location"].endswith("/api/presets/foo")
+
+
+def test_automagic_v2_hidden_without_feature_flag(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """SystemConfig.enable_automagic_v2 默认 False → automagic_variant 打 hidden；
+    开启后不打。值始终透传，只影响 UI 渲染。"""
+    from studio.infrastructure import secrets as secrets_infra
+
+    # 默认（flag off）：hidden=True —— monkeypatch 隔离本机 secrets.json
+    monkeypatch.setattr(secrets_infra, "load", lambda: secrets_infra.Secrets())
+    props = client.get("/api/schema").json()["schema"]["properties"]
+    assert props["automagic_variant"].get("hidden") is True
+
+    # flag on：不打 hidden
+    flagged = secrets_infra.Secrets()
+    flagged.system.enable_automagic_v2 = True
+    monkeypatch.setattr(secrets_infra, "load", lambda: flagged)
+    props = client.get("/api/schema").json()["schema"]["properties"]
+    assert props["automagic_variant"].get("hidden") is not True

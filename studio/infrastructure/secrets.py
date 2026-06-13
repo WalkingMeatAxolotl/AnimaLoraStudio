@@ -433,9 +433,21 @@ class GenerateConfig(BaseModel):
     - `attention_backend`：注意力后端选择。`'auto'`（默认）→ 装了什么用什么
       （优先级 flash_attn > xformers > none/SDPA）；显式值（flash_attn/
       xformers/none）则强制 —— 想 debug 或对比时手动指定。
+    - `idle_timeout_minutes`：daemon 闲置 N 分钟自动卸载模型释放 VRAM。
+      0 = 关闭，模型常驻直到用户手动清。计时只在 daemon idle + 模型已 load
+      时跑；进 busy / 已 unload 时取消。
+    - `vae_precision`：测试出图 VAE decode 精度。`'bf16'`（默认）对齐 ComfyUI
+      在现代 GPU 上的 auto VAE dtype；`'fp32'` 全精度 decode（显存高峰更大，
+      daemon 会在 decode 前临时 offload DiT/Qwen 腾显存）。
+    - `save_test_images`：开关测试出图自动落盘。默认关；开后每次出完图前端
+      会调 /api/generate/save 把成图存到 studio_data/test/<date>/{single,xy}/
+      image_N.png（N 按当前文件夹已有最大编号+1）。compare 模式不落盘。
     """
     preview_every_n_steps: int = 3
     attention_backend: str = "auto"
+    vae_precision: str = "bf16"
+    idle_timeout_minutes: int = 10
+    save_test_images: bool = False
 
 
 class SystemConfig(BaseModel):
@@ -448,9 +460,14 @@ class SystemConfig(BaseModel):
     - `show_dev_channel`：deprecated，由 `_migrate_legacy_schema` 一次性迁移成
       `update_channel`（true → "dev"，false → "stable"），保留字段以便旧
       secrets.json 读取时 pydantic 不报错；新代码不要再用。
+    - `enable_automagic_v2`：实验性 feature flag。Automagic v2（fused backward）
+      未正式发布，UI 默认隐藏 automagic_variant 字段（/api/schema 动态打 hidden）。
+      Settings 页**故意不渲染**这个开关 —— 只能手改 secrets.json 启用；CLI/yaml
+      路径不受影响（validate 仍拦 grad_accum/fp16 等不兼容组合）。
     """
     update_channel: str = "stable"  # "stable" / "dev"
     show_dev_channel: bool = False  # deprecated, 仅作迁移源
+    enable_automagic_v2: bool = False  # 实验性：文件级开关，UI 不暴露
 
 
 class ProxyConfig(BaseModel):

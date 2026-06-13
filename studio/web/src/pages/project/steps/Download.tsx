@@ -37,14 +37,6 @@ interface Estimate {
   count: number // -1 表示未知
 }
 
-const STATUS_COLOR: Record<Job['status'], string> = {
-  pending: 'badge badge-neutral',
-  running: 'badge badge-warn',
-  done: 'badge badge-ok',
-  failed: 'badge badge-err',
-  canceled: 'badge badge-neutral',
-}
-
 // 信息密度优先：每个 panel 紧凑成单/双 inline 行；已下载 grid 占主区域。
 export default function DownloadPage() {
   const { t } = useTranslation()
@@ -109,7 +101,7 @@ export default function DownloadPage() {
     ) {
       void refreshFiles()
     }
-  })
+  }, { onOpen: () => void refreshStatus() })
 
   useEffect(() => {
     setEstimate(null)
@@ -177,6 +169,17 @@ export default function DownloadPage() {
       idx={1}
       title={t('steps.download.title')}
       subtitle={t('steps.download.subtitle')}
+      logSources={[
+        job && {
+          key: 'download',
+          label: t('logDrawer.download'),
+          status: job.status,
+          lines: logs,
+          startedAt: job.started_at,
+          finishedAt: job.finished_at,
+          onCancel: () => void cancel(),
+        },
+      ]}
     >
     <div className="flex flex-col h-full gap-3 min-h-0">
 
@@ -212,22 +215,13 @@ export default function DownloadPage() {
             />
           </div>
 
-          {/* 状态条：仅在有 job / 上次上传结果时出现，details 折叠 */}
-          {(job || lastUpload) && (
+          {/* 上传结果条（下载任务日志走 StepShell 统一抽屉，issue #251） */}
+          {lastUpload && (
             <div className="flex flex-col gap-1.5 shrink-0">
-              {job && (
-                <JobStrip
-                  job={job}
-                  logs={logs}
-                  onCancel={isLive ? cancel : undefined}
-                />
-              )}
-              {lastUpload && (
-                <UploadResultStrip
-                  result={lastUpload}
-                  onDismiss={() => setLastUpload(null)}
-                />
-              )}
+              <UploadResultStrip
+                result={lastUpload}
+                onDismiss={() => setLastUpload(null)}
+              />
             </div>
           )}
 
@@ -681,58 +675,6 @@ function UploadPanel({
         />
       )}
     </section>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// 状态条 — 1 行 summary，details 折叠完整内容
-// ---------------------------------------------------------------------------
-
-function JobStrip({
-  job,
-  logs,
-  onCancel,
-}: {
-  job: Job
-  logs: string[]
-  onCancel?: () => void
-}) {
-  const { t } = useTranslation()
-  const elapsed =
-    job.started_at && (job.finished_at ?? Date.now() / 1000) - job.started_at
-  const isLive = job.status === 'running' || job.status === 'pending'
-  const lastLine = logs[logs.length - 1] ?? ''
-  return (
-    <details
-      open={isLive}
-      className="group rounded-md border border-subtle bg-surface overflow-hidden"
-    >
-      <summary className="cursor-pointer flex items-center gap-2 list-none px-2.5 py-1.5 text-sm select-none">
-        <span className="inline-block transition-transform group-open:rotate-90 text-fg-tertiary w-3">▸</span>
-        <span className={STATUS_COLOR[job.status]}>{job.status}</span>
-        <span className="mono text-fg-secondary">job #{job.id}</span>
-        {elapsed && elapsed > 0 && (
-          <span className="text-fg-tertiary">· {Math.round(elapsed)}s</span>
-        )}
-        <span className="mono truncate flex-1 min-w-0 text-fg-secondary text-xs">
-          {lastLine}
-        </span>
-        {isLive && onCancel && (
-          <button
-            onClick={(e) => {
-              e.preventDefault()
-              onCancel()
-            }}
-            className="btn btn-ghost btn-sm text-err"
-          >
-            {t('common.cancel')}
-          </button>
-        )}
-      </summary>
-      <pre className="px-3 py-2 text-xs font-mono text-fg-secondary bg-sunken max-h-[224px] overflow-auto whitespace-pre-wrap border-t border-subtle m-0">
-        {logs.length === 0 ? t('jobProgress.waitingLogs') : logs.slice(-1000).join('\n')}
-      </pre>
-    </details>
   )
 }
 

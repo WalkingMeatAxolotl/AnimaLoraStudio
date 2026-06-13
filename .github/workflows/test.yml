@@ -1,0 +1,70 @@
+# 全量测试门禁 — PR 与 dev/master push 自动跑后端 pytest + 前端 vitest/lint/tsc。
+#
+# 定位（见 CONTRIBUTING「提交前自检」）：本地开发只跑相关测试，全量由本 workflow
+# 在机器时间兜底；release 前的全量人工自检照旧。
+#
+# 注意：runner 无 GPU。torch 装 CPU 版（官方 cpu index，避免拉 CUDA 大包）；
+# 依赖 CUDA 的测试应当用 torch.cuda.is_available() 守卫或 skip，在 CI 上走 CPU 路径。
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [dev, master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install CPU torch
+        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          # requirements.txt 里注释掉的可选项，测试需要：
+          # pytest/httpx（TestClient）、onnxruntime（wd14/cltagger 路径）
+          pip install pytest httpx onnxruntime
+
+      - name: pytest
+        run: python -m pytest tests/ -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: studio/web
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: studio/web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: vitest
+        run: npx vitest run
+
+      - name: lint
+        run: npm run lint
+
+      - name: typecheck
+        run: npx tsc --noEmit

@@ -60,6 +60,10 @@ export function evalShowWhen(
   if (branches.length > 1) {
     return branches.some((branch) => evalShowWhen(branch, values))
   }
+  const ands = expr.split('&&').map((part) => part.trim()).filter(Boolean)
+  if (ands.length > 1) {
+    return ands.every((clause) => evalShowWhen(clause, values))
+  }
   const eq = expr.split('==')
   if (eq.length === 2) {
     return String(values[eq[0].trim()]) === eq[1].trim()
@@ -100,6 +104,8 @@ export const SCHEMA_ENUM_LABEL_KEYS: Record<string, Record<string, string>> = {
     lora: 'schema.enums.loraType.lora',
     lokr: 'schema.enums.loraType.lokr',
     loha: 'schema.enums.loraType.loha',
+    ortho: 'schema.enums.loraType.ortho',
+    tlora: 'schema.enums.loraType.tlora',
   },
   lr_scheduler: {
     none: 'schema.enums.lrScheduler.none',
@@ -140,6 +146,14 @@ export const SCHEMA_ENUM_LABEL_KEYS: Record<string, Record<string, string>> = {
     none: 'schema.enums.noiseEnhancementType.none',
     offset: 'schema.enums.noiseEnhancementType.offset',
     pyramid: 'schema.enums.noiseEnhancementType.pyramid',
+  },
+  sample_sampler_name: {
+    er_sde: 'schema.enums.sampler.erSde',
+    dpmpp_3m_sde: 'schema.enums.sampler.dpmpp3mSde',
+  },
+  sample_scheduler: {
+    simple: 'schema.enums.scheduler.simple',
+    sgm_uniform: 'schema.enums.scheduler.sgmUniform',
   },
   wandb_mode: {
     '': 'field.useGlobal',

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from pathlib import Path
 
 import torch
@@ -71,6 +72,29 @@ def enable_xformers(model):
         return False
 
     enabled_count = 0
+    module_switches = 0
+    module_names = {
+        cls.__module__
+        for cls in type(model).__mro__
+        if getattr(cls, "__module__", None)
+    }
+    module_names.update({
+        "models.cosmos_predict2_modeling",
+        "cosmos_predict2_modeling",
+        "models.anima_modeling",
+        "anima_modeling",
+    })
+    for module_name in sorted(module_names):
+        module = sys.modules.get(module_name)
+        fn = getattr(module, "set_xformers_enabled", None) if module is not None else None
+        if fn is None:
+            continue
+        try:
+            if fn(True):
+                module_switches += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("xformers 模组开关启用失败 (%s): %s", module_name, exc)
+
     for name, module in model.named_modules():
         # 查找 attention 模块并替换
         if hasattr(module, "set_use_memory_efficient_attention_xformers"):
@@ -80,13 +104,16 @@ def enable_xformers(model):
             module.enable_xformers_memory_efficient_attention()
             enabled_count += 1
 
-    if enabled_count > 0:
-        logger.info(f"xformers 已启用: {enabled_count} 个模块")
+    if module_switches > 0 or enabled_count > 0:
+        logger.info(
+            "xformers 已启用: module_switches=%d, module_hooks=%d",
+            module_switches,
+            enabled_count,
+        )
         return True
 
-    # 如果模型没有内置支持，尝试 monkey patch
-    logger.info("xformers 已加载，将在 attention 计算中使用")
-    return True
+    logger.warning("xformers 已安装，但当前模型没有可启用的 xformers attention hook")
+    return False
 
 
 # ============================================================================
@@ -248,7 +275,9 @@ def _load_weights_best_effort(model: torch.nn.Module, sd: dict, label: str) -> d
     model_keys = set(model.state_dict().keys())
     sd_keys = list(sd.keys())
     prefixes, matched = _pick_best_prefix_remap(sd_keys, model_keys)
-    remapped = {_strip_prefixes(k, prefixes): v for k, v in sd.items()}
+    # Common path is no prefix remap. Reusing the original dict avoids building
+    # another large key->tensor mapping while loading multi-GB checkpoints.
+    remapped = sd if not prefixes else {_strip_prefixes(k, prefixes): v for k, v in sd.items()}
 
     incompatible = model.load_state_dict(remapped, strict=False)
     missing = list(getattr(incompatible, "missing_keys", []) or [])

@@ -7,6 +7,11 @@
 @tailwind components;
 @tailwind utilities;
 
+input[type='checkbox'],
+input[type='radio'] {
+  accent-color: var(--accent);
+}
+
 /* 给所有 overflow-auto / overflow-y-auto 默认预留滚动槽，杜绝抖动 */
 .overflow-auto,
 .overflow-y-auto {

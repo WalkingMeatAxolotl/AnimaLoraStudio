@@ -361,6 +361,10 @@ def test_download_upscaler_delegates_to_download_flat(
         return True
 
     monkeypatch.setattr("studio.services.models.sources.download_flat", fake_download_flat)
+    # 钉死下载源：_get_download_source 读真实 secrets.json，开发机若配了
+    # modelscope 会走 download_flat_ms 分支（甚至真实下载），patch 落空。
+    # env 优先级最高，保证任何机器上都走 HF 分支。
+    monkeypatch.setenv("MODELSCOPE_SOURCE", "huggingface")
 
     ok = model_downloader.download_upscaler("4x-AnimeSharp", tmp_path, on_log=lambda _l: None)
     assert ok

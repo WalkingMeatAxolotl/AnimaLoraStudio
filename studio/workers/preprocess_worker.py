@@ -49,6 +49,16 @@ def _install_signal_handlers() -> None:
         signal.signal(signal.SIGBREAK, _on_signal)  # type: ignore[attr-defined]
 
 
+def _unlink_image_and_sidecars(path: Path, *, keep_sidecars: bool = False) -> None:
+    """Remove an image and caption sidecars that are no longer part of train/."""
+    if path.is_file():
+        path.unlink(missing_ok=True)
+    if keep_sidecars:
+        return
+    for ext in (".txt", ".json"):
+        path.with_suffix(ext).unlink(missing_ok=True)
+
+
 def run(job_id: int) -> int:  # noqa: PLR0912, PLR0915 - 主流程线性可读
     _install_signal_handlers()
 
@@ -277,9 +287,9 @@ def _run_crop_train(
     """ADR 0010 train-scope crop。
 
     `params['crops']` = `{rel_path: [rects]}`，rel_path 形如 `1_data/X.png`。
-    crop 产物输出到同 folder 内：N=1 覆盖源文件名（`folder/stem.png`），
-    N>1 fan-out 成 `folder/stem_c0.png` / `folder/stem_c1.png` / ...；
-    train_replace_with_crops 原子替换 manifest。
+    crop 产物输出到同 folder 内：N=1 产出 `folder/stem.png`，N>1 fan-out
+    成 `folder/stem_c0.png` / `folder/stem_c1.png` / ...；成功后清理不再
+    属于 outputs 的旧源图，再用 train_replace_with_crops 原子替换 manifest。
     """
     project_dir = projects.project_dir(project["id"], project["slug"])
     train_dir = preprocess.version_train_dir(project, version["label"])
@@ -388,13 +398,25 @@ def _run_crop_train(
                     "mtime": mt,
                 })
 
-            # N>1：原 src 物理文件（如果不在 outputs 列表里）应当删
-            if n > 1:
-                stale_rel = f"{folder}/{src_stem}.png"
+            # 输出可能换成 .png 或 fan-out 成多张；源不再属于 outputs 时必须删，
+            # 否则从 bundle/版本复制来的 train-only 数据会同时保留原图 + 裁剪图。
+            # 已知边界（沿袭旧行为）：`{stem}.png` 进 stale 集是为了清掉历史
+            # N=1 crop 的产物；若 train 里恰好有同 stem 的两张独立图
+            # （X.jpg + X.png），对 X.jpg fan-out 会把无关的 X.png 一并删掉。
+            stale_rels = {src_rel, f"{folder}/{src_stem}.png"} - set(out_rels)
+            output_stems = {Path(rel).stem for rel in out_rels}
+            for stale_rel in sorted(stale_rels):
                 stale_path = train_dir / stale_rel
-                if stale_path.is_file() and stale_rel not in out_rels:
+                has_sidecar = (
+                    stale_path.with_suffix(".txt").exists()
+                    or stale_path.with_suffix(".json").exists()
+                )
+                if stale_path.exists() or has_sidecar:
                     try:
-                        stale_path.unlink()
+                        _unlink_image_and_sidecars(
+                            stale_path,
+                            keep_sidecars=Path(stale_rel).stem in output_stems,
+                        )
                     except OSError as exc:
                         log(f"   ⚠ 删旧 {stale_rel} 失败: {exc}")
 

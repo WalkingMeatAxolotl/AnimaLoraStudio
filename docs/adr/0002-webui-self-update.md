@@ -24,7 +24,7 @@
 仓库已经隐式具备"启动期 bootstrap"层，只是不循环、不接受外部触发：
 
 - `studio.sh` / `studio.bat` shell wrapper（一次性 venv / 系统级 setup，单次调用 `python -m studio`）
-- `studio/cli.py:cmd_run` Python 启动器：`_ensure_python_deps` / `_web_dist_is_stale` 触发前端 rebuild / `_apply_pending_install` / `_check_torch_cuda` / `_bootstrap_onnxruntime`，最后 `subprocess.call(server)` 阻塞
+- `studio/cli.py:cmd_run` Python 启动器：`_ensure_python_deps` / `_web_dist_is_stale` 触发前端 rebuild / `_apply_pending_install` / `_check_torch_cuda` / `_check_onnxruntime`，最后 `subprocess.call(server)` 阻塞
 - `studio/services/pending_install.py` 实现"延迟到下次启动执行的 pip 操作"（为 torch 重装设计）
 - `cli.py:_web_dist_is_stale` 已实现 git HEAD 比对 + mtime 比对的 stale 检测
 - `studio.sh:135-148` 已实现 `requirements.txt` sha256 marker 比对 → 增量 `pip install -r`

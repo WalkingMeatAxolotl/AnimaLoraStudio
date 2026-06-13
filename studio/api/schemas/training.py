@@ -60,6 +60,9 @@ class LLMTaggerOverrides(BaseModel):
 class TagJobRequest(BaseModel):
     tagger: str = "wd14"
     output_format: str = "txt"                # "txt" | "json"
+    # 已有 caption 文件时的策略："overwrite"（默认，覆盖）| "skip"（保留原文件）
+    # | "append"（tag 级 merge + dedupe，写回原格式）。
+    on_existing: str = "overwrite"
     wd14_overrides: Optional[Wd14Overrides] = None
     cltagger_overrides: Optional[CLTaggerOverrides] = None
     llm_overrides: Optional[LLMTaggerOverrides] = None

@@ -1,8 +1,10 @@
-"""Optimizer utils 测试 — 重点覆盖 PPSF 接入。
+"""Optimizer utils 测试 — 覆盖 PPSF 接入 + Automagic v1/v2。
 
 - optimizer_eval_mode context manager 对 PPSF / 非 PPSF 行为
 - create_prodigy_plus_schedulefree 工厂在依赖缺失时友好报错
 - 工厂 lr 强制 1.0 + betas 默认覆盖逻辑
+- Automagic v1: step、bf16 Kahan（shift 同 param dtype，对齐 diffusion-pipe）、state_dict roundtrip
+- Automagic v2: fused backward hook、scalar lr
 """
 from __future__ import annotations
 
@@ -17,7 +19,10 @@ from torch import nn
 
 from utils.optimizer_utils import (
     Automagic,
+    Automagic2,
     Lion,
+    create_automagic,
+    create_automagic_v2,
     create_optimizer,
     create_prodigy_plus_schedulefree,
     get_optimizer_monitor_metrics,
@@ -412,3 +417,151 @@ def test_create_ppsf_exposes_train_eval_methods() -> None:
     optim = create_prodigy_plus_schedulefree(model.parameters(), lr=1.0)
     assert hasattr(optim, "train") and callable(optim.train)
     assert hasattr(optim, "eval") and callable(optim.eval)
+
+
+# ---------------------------------------------------------------------------
+# Automagic v1
+# ---------------------------------------------------------------------------
+
+
+def test_automagic_bf16_shift_dtype_stable_across_resume() -> None:
+    """bf16 参数的 Kahan shift buffer 与上游 diffusion-pipe 对齐：同 param dtype
+    （bf16）。关键性质是 resume 稳定 —— PyTorch load_state_dict 会把 float state
+    cast 到 param dtype，bf16 shift 在 roundtrip 后 dtype 不变（fp32 shift 则会被
+    静默降成 bf16，行为漂移）。"""
+    p = nn.Parameter(torch.randn(8, 8, dtype=torch.bfloat16))
+    optim = Automagic([p], lr=1e-4)
+
+    p.grad = torch.randn_like(p)
+    optim.step()
+
+    state = optim.state[p]
+    assert "shift" in state, "bf16 参数应该创建 shift buffer"
+    assert state["shift"].dtype == p.dtype
+
+    # state_dict roundtrip 后 dtype 不漂移
+    sd = optim.state_dict()
+    p2 = nn.Parameter(torch.randn(8, 8, dtype=torch.bfloat16))
+    optim2 = Automagic([p2], lr=1e-4)
+    optim2.load_state_dict(sd)
+    assert optim2.state[p2]["shift"].dtype == p2.dtype
+
+
+# ---------------------------------------------------------------------------
+# Automagic v2
+# ---------------------------------------------------------------------------
+
+
+def test_automagic_v2_scalar_lr_updates() -> None:
+    """Automagic v2 使用 fused backward hook，验证参数确实更新。"""
+    torch.manual_seed(7)
+    model = nn.Linear(8, 4, bias=False)
+    p_before = model.weight.data.clone()
+
+    optim = create_automagic_v2(model.parameters(), lr=1e-3)
+
+    # v2 的 hook 在 backward 时自动更新参数
+    for _ in range(5):
+        out = model(torch.randn(2, 8))
+        loss = out.sum()
+        loss.backward()
+        # v2 不需要手动 step（hook 内完成），但调用也无害
+        optim.zero_grad()
+
+    assert not torch.allclose(model.weight.data, p_before), "v2 backward hook 应导致参数变化"
+
+
+def test_automagic_v2_get_avg_learning_rate() -> None:
+    """v2 实例应暴露 get_avg_learning_rate 方法。"""
+    model = nn.Linear(4, 4)
+    optim = create_automagic_v2(model.parameters(), lr=1e-3)
+    assert hasattr(optim, "get_avg_learning_rate")
+    avg_lr = optim.get_avg_learning_rate()
+    assert isinstance(avg_lr, float) or isinstance(avg_lr, torch.Tensor)
+
+
+# ---------------------------------------------------------------------------
+# get_optimizer_monitor_metrics — Automagic duck typing
+# ---------------------------------------------------------------------------
+
+
+def test_automagic_monitor_metrics_uses_get_avg_learning_rate() -> None:
+    """get_optimizer_monitor_metrics 优先走 get_avg_learning_rate 鸭子类型。"""
+    torch.manual_seed(0)
+    model = nn.Linear(4, 4)
+    optim = create_automagic(model.parameters(), lr=1e-4)
+
+    # 跑几步让 lr 有值
+    for _ in range(3):
+        out = model(torch.randn(2, 4))
+        out.sum().backward()
+        optim.step()
+        optim.zero_grad()
+
+    metrics = get_optimizer_monitor_metrics(optim)
+    assert "lr" in metrics
+    assert "actual_lr" in metrics
+    assert metrics["lr"] > 0
+
+
+# ---------------------------------------------------------------------------
+# create_optimizer 工厂分派
+# ---------------------------------------------------------------------------
+
+
+def test_create_optimizer_dispatches_automagic() -> None:
+    """create_optimizer(optimizer_type='automagic') 返回 Automagic 实例。"""
+    model = nn.Linear(4, 4)
+    optim = create_optimizer("automagic", model.parameters(), learning_rate=1e-4)
+    assert isinstance(optim, Automagic)
+
+
+def test_create_optimizer_dispatches_automagic_v2() -> None:
+    """create_optimizer(optimizer_type='automagic_v2') 返回 Automagic2 实例。"""
+    model = nn.Linear(4, 4)
+    optim = create_optimizer("automagic_v2", model.parameters(), learning_rate=1e-3)
+    assert isinstance(optim, Automagic2)
+
+
+# ---------------------------------------------------------------------------
+# Automagic v2 守卫（followup：fused 路径自卫）
+# ---------------------------------------------------------------------------
+
+
+def test_automagic_v2_skips_nonfinite_grad() -> None:
+    """fused 路径绕过训练循环的 step 边界 NaN 检查，必须在 hook 内自卫。"""
+    p = nn.Parameter(torch.ones(4, 4))
+    optim = Automagic2([p], lr=1e-4)
+    before = p.detach().clone()
+    p.grad = torch.full_like(p, float("nan"))
+    optim._update_param(p, optim.param_groups[0])
+    assert torch.equal(p.detach(), before), "NaN 梯度不应触碰参数"
+    assert p.grad is None, "坏梯度应被丢弃"
+
+
+def test_automagic_v2_second_moment_fp32_under_bf16() -> None:
+    """二阶矩固定 fp32：bf16 存储会让 (1-beta2)=1e-3 的 EMA 增量被 round 吞掉。"""
+    p = nn.Parameter(torch.randn(4, 4, dtype=torch.bfloat16))
+    optim = Automagic2([p], lr=1e-6)
+    p.grad = torch.randn_like(p)
+    optim._update_param(p, optim.param_groups[0])
+    st = optim.state[p]
+    assert st["exp_avg_sq_row"].dtype == torch.float32
+    assert st["exp_avg_sq_col"].dtype == torch.float32
+    assert st["lr"].dtype == torch.float32
+
+
+def test_automagic_v2_validate_rejects_grad_accum() -> None:
+    """v2 fused backward 与梯度累积语义冲突，启动期必须拦截。"""
+    from types import SimpleNamespace
+    from training.optimizers import automagic as automagic_builder
+
+    args = SimpleNamespace(
+        lr_scheduler="none", automagic_variant="v2",
+        mixed_precision="bf16", grad_clip_max_norm=0, grad_accum=4,
+    )
+    with pytest.raises(ValueError, match="grad_accum"):
+        automagic_builder.validate(args)
+
+    args.grad_accum = 1
+    automagic_builder.validate(args)  # 不应抛

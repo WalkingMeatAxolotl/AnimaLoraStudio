@@ -1,7 +1,7 @@
 """Version 数据模型 + 物理目录 + fork 训练树 + activate。
 
 Version 是 Pipeline 的「实验单元」：每个 version 独立维护 train/ reg/
-output/ samples/ 与 monitor_state.json。label 由用户起（baseline /
+output/。label 由用户起（baseline /
 high-lr 这种语义名），同 project 内唯一，且不可改（路径锚点）。
 
 删除：直接 rmtree version 目录 + DELETE db 行。不可恢复。
@@ -147,8 +147,15 @@ def reconcile_version_status(
     update_version(conn, version_id, status=derived)
     return get_version(conn, version_id), True
 
-# label 必须是路径安全的：字母 / 数字 / 下划线 / 连字符 / 点
-_VALID_LABEL = re.compile(r"^[A-Za-z0-9_.-]+$")
+# label 必须是路径安全的：字母 / 数字 / 下划线 / 连字符 / 点。
+# 纯点 label（"." / ".."）会让 version_dir 解析到 versions/ 之外
+# （".." == project 根，delete_version 时 rmtree 整个项目），必须拒绝。
+_VALID_LABEL = re.compile(r"^(?!\.+$)[A-Za-z0-9_.-]+$")
+
+
+def is_valid_label(label: str) -> bool:
+    """version label 校验，给外部输入源（如 bundle manifest）复用。"""
+    return bool(_VALID_LABEL.fullmatch(label))
 
 
 from studio.domain.errors import DomainError
@@ -366,7 +373,9 @@ DEFAULT_TRAIN_FOLDER = "1_data"
 
 
 def _ensure_version_tree(vdir: Path) -> None:
-    for sub in ("train", "reg", "output", "samples"):
+    # samples/ 不再建：采样图是 task 档案（studio_data/tasks/<id>/samples/），
+    # version 树里只有老 task 的历史数据，读兼容由 samples.py 多候选解析负责
+    for sub in ("train", "reg", "output"):
         (vdir / sub).mkdir(parents=True, exist_ok=True)
     (vdir / "train" / DEFAULT_TRAIN_FOLDER).mkdir(parents=True, exist_ok=True)
 

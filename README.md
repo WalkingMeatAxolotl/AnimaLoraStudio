@@ -1,6 +1,6 @@
 # AnimaLoraStudio
 
-[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-blue)](README.md) [![English](https://img.shields.io/badge/lang-English-lightgrey)](README.en.md) [![Version](https://img.shields.io/badge/version-0.12.0-blue)](CHANGELOG.md)
+[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-blue)](README.md) [![English](https://img.shields.io/badge/lang-English-lightgrey)](README.en.md) [![Version](https://img.shields.io/badge/version-0.13.0-blue)](CHANGELOG.md)
 
 **端到端流水线**：从 Booru 抓图 → 筛选 → 打标 → 正则集 → 训练 → 出图测试，全流程在一个浏览器面板里推进。专为 [Anima](https://huggingface.co/circlestone-labs/Anima)（Cosmos DiT 二次元特调）训练优化。
 
@@ -34,9 +34,9 @@
 
 ### 工程体验
 
-- **环境自愈**：首装自动选择 GPU 兼容 torch（cu118 至 cu130）、venv 与 requirements.txt 哈希比对自动同步、Windows 锁文件处理、ONNX CUDA 失败自动降级 CPU
+- **环境自愈**：首装自动选择 GPU 兼容 torch（cu118 至 cu130）、venv 与 requirements.txt 哈希比对自动同步、Windows 锁文件处理
 - **Web 界面自更新**：Settings 内支持 git pull、重启、回滚；master 稳定通道与 dev 滚动通道
-- **加速后端切换**：Settings 内一键安装 xformers / flash_attn wheel
+- **加速后端切换**：Settings 内一键安装 xformers / flash_attn wheel；ONNX Runtime 三档（DirectML / CUDA / CPU）按平台一键装
 - **国际化**：内置中英双语界面，首次启动选择语言，Settings 内可切换
 
 ![Studio 训练页](docs/images/studio-train.png)
@@ -95,7 +95,7 @@ studio.bat
 ./studio.sh
 ```
 
-首次运行会自动：建 `venv/` → 按 GPU 驱动检测装对应 CUDA torch（cu118 至 cu130）→ 装 `requirements.txt` → 按 GPU 检测装 onnxruntime → 构建前端 → 起后端 → 自动开浏览器到 <http://127.0.0.1:8765/studio/>。
+首次运行会自动：建 `venv/` → 按 GPU 驱动检测装对应 CUDA torch（cu118 至 cu130）→ 装 `requirements.txt` → 构建前端 → 起后端 → 自动开浏览器到 <http://127.0.0.1:8765/studio/>。首次启动会弹引导 modal，按 checklist 一键安装底模 + ONNX Runtime + 训练加速包。
 
 > 如果驱动检测失败导致装了 CPU 版 torch，可在 Settings → 系统 → PyTorch 一键重装 CUDA 版；也可通过 `studio.bat --torch cu128`（或 `studio.sh --torch cu128`）显式指定。
 
@@ -256,7 +256,7 @@ AnimaLoraStudio/
 
 ## 版本
 
-当前版本 **0.12.0**。完整变更历史见 [CHANGELOG.md](CHANGELOG.md)。Studio 内 Settings → 系统 → 版本卡片可一键升级到最新版本。
+当前版本 **0.13.0**。完整变更历史见 [CHANGELOG.md](CHANGELOG.md)。Studio 内 Settings → 系统 → 版本卡片可一键升级到最新版本。
 
 ---
 
@@ -272,6 +272,9 @@ AnimaLoraStudio/
 
 - 核心训练脚本派生自 [**Moeblack/AnimaLoraToolkit**](https://github.com/Moeblack/AnimaLoraToolkit)
 - 主模型 / VAE：[circlestone-labs / Anima](https://huggingface.co/circlestone-labs/Anima)
+- OrthoLoRA / T-LoRA 适配器实现派生自 [**sorryhyun/anima_lora**](https://github.com/sorryhyun/anima_lora)（MIT），算法出自 [ControlGenAI/T-LoRA](https://github.com/ControlGenAI/T-LoRA) 论文与官方实现
+- Automagic 优化器移植自 [**ostris/ai-toolkit**](https://github.com/ostris/ai-toolkit)（MIT），bf16 Kahan 路径参考 [tdrussell/diffusion-pipe](https://github.com/tdrussell/diffusion-pipe)
+- 测试出图 / 采样链路对齐并派生自 [**ComfyUI**](https://github.com/comfyanonymous/ComfyUI)（GPL-3.0）
 
 完整的第三方算法 / 代码 / 论文出处见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
 

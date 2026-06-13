@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -104,10 +105,17 @@ def write_config_snapshot(
         "sample_prompts": list(sample_prompts) if sample_prompts else [],
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True),
-        encoding="utf-8",
-    )
+    # ADR 0006 Addendum 2：跟 save_training_state 一样 tmp + os.replace 原子写，
+    # 防断电砸中写盘窗口留半截 json（resume 严格 freeze，损坏即拒绝恢复）。
+    tmp_path = path.with_name(path.name + ".tmp")
+    try:
+        tmp_path.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True),
+            encoding="utf-8",
+        )
+        os.replace(tmp_path, path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def emit_event(event_type: str, payload: dict[str, Any] | None = None) -> None:

@@ -42,6 +42,7 @@ for _p in (_THIS_DIR, _REPO_ROOT):
 
 import anima_train as _T  # noqa: E402
 
+from studio.domain.comfy_parity import force_comfy_parity_runtime_config  # noqa: E402
 from studio.services.inference.core import LoRASpec, apply_loras  # noqa: E402
 
 logging.basicConfig(
@@ -50,6 +51,15 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger("anima_generate")
+
+
+def _torch_dtype_from_precision(value: str | None) -> torch.dtype:
+    normalized = str(value or "fp32").lower().strip()
+    if normalized in {"bf16", "bfloat16"}:
+        return torch.bfloat16
+    if normalized in {"fp16", "float16", "half"}:
+        return torch.float16
+    return torch.float32
 
 
 def parse_args() -> argparse.Namespace:
@@ -69,6 +79,10 @@ def main() -> None:
 
     with open(cfg_path, encoding="utf-8") as f:
         cfg = json.load(f)
+    cfg = force_comfy_parity_runtime_config(
+        cfg,
+        force_exact_ksampler_backend=False,
+    )
 
     output_dir = Path(cfg.get("output_dir", "./generate_output"))
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -85,7 +99,10 @@ def main() -> None:
     base_seed: int = int(cfg.get("seed", 0))
     lora_configs: list[dict] = cfg.get("lora_configs", [])
     mixed_precision: str = cfg.get("mixed_precision", "bf16")
-    backend: str = cfg.get("attention_backend", "flash_attn")
+    vae_precision: str = cfg.get("vae_precision", mixed_precision)
+    text_encoder_backend: str = cfg.get("text_encoder_backend", "hf")
+    t5_tokenizer_backend: str = cfg.get("t5_tokenizer_backend", "slow")
+    backend: str = cfg.get("attention_backend", "none")
     use_flash = (backend == "flash_attn")
     use_xformers = (backend == "xformers")
 
@@ -112,7 +129,8 @@ def main() -> None:
         logger.warning(f"monitor 初始化失败: {e}")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    dtype = torch.bfloat16 if mixed_precision == "bf16" else torch.float32
+    dtype = _torch_dtype_from_precision(mixed_precision)
+    vae_dtype = _torch_dtype_from_precision(vae_precision)
 
     # 路径解析
     repo_root = _T.find_diffusion_pipe_root()
@@ -125,15 +143,23 @@ def main() -> None:
 
     logger.info("加载 Transformer...")
     model = _T.load_anima_model(transformer_path, device, dtype, repo_root, flash_attn=use_flash)
-    if use_xformers:
-        _T.enable_xformers(model)
+    if use_xformers and not _T.enable_xformers(model):
+        raise RuntimeError(
+            "Exact ComfyUI KSampler parity is guaranteed only with xformers, "
+            "but xformers could not be enabled"
+        )
 
     logger.info("加载 VAE...")
-    vae = _T.load_vae(vae_path, device, dtype, repo_root)
+    vae = _T.load_vae(vae_path, device, vae_dtype, repo_root)
 
     logger.info("加载文本编码器...")
     qwen_model, qwen_tok, t5_tok = _T.load_text_encoders(
-        text_encoder_path, t5_tokenizer_path or None, device, dtype,
+        text_encoder_path,
+        t5_tokenizer_path or None,
+        device,
+        dtype,
+        comfy_qwen=text_encoder_backend == "comfy_qwen3",
+        t5_fast=t5_tokenizer_backend == "fast",
     )
 
     # 多 LoRA：每份独立 inject + multiplier=scale。adapters 必须保持引用，否则
@@ -142,7 +168,7 @@ def main() -> None:
         LoRASpec(path=str(lc.get("path", "")), scale=float(lc.get("scale", 1.0)))
         for lc in lora_configs
     ]
-    _adapters = apply_loras(model, specs, device, dtype)  # noqa: F841 — 保持引用
+    _adapters = apply_loras(model, specs, device, torch.float32)  # noqa: F841 — 保持引用
 
     model.eval()
 
@@ -191,7 +217,7 @@ def main() -> None:
                     width=width,
                     steps=steps,
                     cfg_scale=cfg_scale,
-                    negative_prompt=negative_prompt or None,
+                    negative_prompt=negative_prompt,
                     sampler_name=sampler_name,
                     scheduler=scheduler,
                     device=device,
@@ -357,7 +383,7 @@ def _run_xy_matrix(
                     width=width,
                     steps=cur_steps,
                     cfg_scale=cur_cfg_scale,
-                    negative_prompt=negative_prompt or None,
+                    negative_prompt=negative_prompt,
                     sampler_name=cur_sampler,
                     scheduler=scheduler,
                     device=device,

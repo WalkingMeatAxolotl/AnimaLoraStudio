@@ -25,12 +25,21 @@ def cosmos_module():
     orig_avail = m._FLASH_ATTN_AVAILABLE
     orig_func = m._flash_attn_func
     orig_warned = set(m._FLASH_FALLBACK_WARNED)
+    orig_x_use = m._USE_XFORMERS
+    orig_x_avail = m._XFORMERS_AVAILABLE
+    orig_xops = m._xops
+    orig_x_warned = set(m._XFORMERS_FALLBACK_WARNED)
     yield m
     m._USE_FLASH_ATTN = orig_use
     m._FLASH_ATTN_AVAILABLE = orig_avail
     m._flash_attn_func = orig_func
     m._FLASH_FALLBACK_WARNED.clear()
     m._FLASH_FALLBACK_WARNED.update(orig_warned)
+    m._USE_XFORMERS = orig_x_use
+    m._XFORMERS_AVAILABLE = orig_x_avail
+    m._xops = orig_xops
+    m._XFORMERS_FALLBACK_WARNED.clear()
+    m._XFORMERS_FALLBACK_WARNED.update(orig_x_warned)
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +59,7 @@ def test_set_flash_attn_enabled_returns_true_when_available(cosmos_module) -> No
     cosmos_module._flash_attn_func = lambda q, k, v: q  # 不会真调，但要非 None
     assert cosmos_module.set_flash_attn_enabled(True) is True
     assert cosmos_module._USE_FLASH_ATTN is True
+    assert cosmos_module._USE_XFORMERS is False
 
 
 def test_set_flash_attn_enabled_disable(cosmos_module) -> None:
@@ -58,6 +68,46 @@ def test_set_flash_attn_enabled_disable(cosmos_module) -> None:
     cosmos_module.set_flash_attn_enabled(True)
     assert cosmos_module.set_flash_attn_enabled(False) is False
     assert cosmos_module._USE_FLASH_ATTN is False
+
+
+def test_set_flash_attn_disabled_clears_existing_xformers(cosmos_module) -> None:
+    cosmos_module._XFORMERS_AVAILABLE = True
+    cosmos_module.set_xformers_enabled(True)
+
+    assert cosmos_module.set_flash_attn_enabled(False) is False
+
+    assert cosmos_module._USE_FLASH_ATTN is False
+    assert cosmos_module._USE_XFORMERS is False
+
+
+# ---------------------------------------------------------------------------
+# set_xformers_enabled
+# ---------------------------------------------------------------------------
+
+
+def test_set_xformers_enabled_returns_false_when_unavailable(cosmos_module) -> None:
+    """xformers 没装（_XFORMERS_AVAILABLE=False）→ enable 永远返回 False。"""
+    cosmos_module._XFORMERS_AVAILABLE = False
+    assert cosmos_module.set_xformers_enabled(True) is False
+    assert cosmos_module._USE_XFORMERS is False
+
+
+def test_set_xformers_enabled_returns_true_when_available(cosmos_module) -> None:
+    cosmos_module._XFORMERS_AVAILABLE = True
+    cosmos_module._USE_FLASH_ATTN = True
+    assert cosmos_module.set_xformers_enabled(True) is True
+    assert cosmos_module._USE_XFORMERS is True
+    assert cosmos_module._USE_FLASH_ATTN is False
+
+
+def test_set_attention_backend_none_clears_all_fast_paths(cosmos_module) -> None:
+    cosmos_module._XFORMERS_AVAILABLE = True
+    cosmos_module.set_xformers_enabled(True)
+
+    assert cosmos_module.set_attention_backend("none") == "none"
+
+    assert cosmos_module._USE_FLASH_ATTN is False
+    assert cosmos_module._USE_XFORMERS is False
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +148,54 @@ def test_torch_attention_op_skips_flash_when_disabled(cosmos_module) -> None:
     v = torch.randn(1, 4, 2, 8)
     cosmos_module.torch_attention_op(q, k, v)  # 应走 SDPA fallback
     assert called == []
+
+
+def test_torch_attention_op_uses_xformers_when_enabled(cosmos_module) -> None:
+    """启用 xformers 后 torch_attention_op 应直接调 memory_efficient_attention。"""
+    captured: list = []
+    expected_out = torch.zeros(2, 4, 3, 8)  # b=2 s=4 h=3 d=8
+
+    class FakeXops:
+        @staticmethod
+        def memory_efficient_attention(q, k, v):
+            captured.append((q.shape, k.shape, v.shape))
+            return expected_out
+
+    cosmos_module._FLASH_ATTN_AVAILABLE = False
+    cosmos_module._USE_FLASH_ATTN = False
+    cosmos_module._XFORMERS_AVAILABLE = True
+    cosmos_module._xops = FakeXops
+    cosmos_module._USE_XFORMERS = True
+
+    q = torch.randn(2, 4, 3, 8)
+    k = torch.randn(2, 4, 3, 8)
+    v = torch.randn(2, 4, 3, 8)
+    out = cosmos_module.torch_attention_op(q, k, v)
+    assert captured == [(q.shape, k.shape, v.shape)]
+    assert out.shape == (2, 4, 24)
+
+
+def test_llm_adapter_attention_does_not_use_xformers(cosmos_module) -> None:
+    """ComfyUI Anima keeps LLMAdapterAttention on SDPA even when main attention uses xformers."""
+    from models.anima_modeling import LLMAdapterAttention
+
+    class BoomXops:
+        @staticmethod
+        def memory_efficient_attention(*_args, **_kwargs):
+            raise AssertionError("LLMAdapterAttention should not call xformers")
+
+    cosmos_module._FLASH_ATTN_AVAILABLE = False
+    cosmos_module._USE_FLASH_ATTN = False
+    cosmos_module._XFORMERS_AVAILABLE = True
+    cosmos_module._xops = BoomXops
+    cosmos_module._USE_XFORMERS = True
+
+    attn = LLMAdapterAttention(query_dim=8, context_dim=8, n_heads=2, head_dim=4)
+    x = torch.randn(1, 3, 8)
+    context = torch.randn(1, 4, 8)
+
+    out = attn(x, context=context)
+    assert out.shape == x.shape
 
 
 def test_torch_attention_op_fallback_on_flash_error(

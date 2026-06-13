@@ -229,11 +229,13 @@ class _CountingVAEModel:
     """Mock VAE：每次 encode 把调用次数 +1，让测试能数 VAE 实际被调用了几次。"""
     def __init__(self):
         self.encode_calls = 0
+        self.batch_sizes = []
 
     def encode(self, pixels_5d, scale):
         import torch
         self.encode_calls += 1
         b, _, _, h, w = pixels_5d.shape
+        self.batch_sizes.append(b)
         return torch.zeros(b, 16, 1, h // 8, w // 8, dtype=pixels_5d.dtype)
 
 
@@ -269,11 +271,12 @@ def test_cached_latent_dedupes_repeats_in_encode_pass(tmp_path: Path) -> None:
     vae = _CountingVAE()
     CachedLatentDataset(dataset, vae, device="cpu", dtype=torch.float32)
 
-    # 唯一图 2 张 × flip_augment=False → 2 次 VAE encode（不是 10 次）
+    # 唯一图 2 张 × flip_augment=False，默认 cache_batch_size=1 逐张 → 2 次（不是 10 次）
     assert vae.model.encode_calls == 2, (
         f"期望 2 次 encode（唯一图数）,实际 {vae.model.encode_calls} 次 — "
         "_build_cache 没按 npz_path 去重，对同一张图按 repeat 倍数重复编码"
     )
+    assert vae.model.batch_sizes == [1, 1]
     # 唯一 npz 文件 = 2
     assert len(list(folder.glob("*.npz"))) == 2
 
@@ -304,6 +307,29 @@ def test_cached_latent_dedupes_repeats_with_flip_aug(tmp_path: Path) -> None:
     assert vae.model.encode_calls == 4, (
         f"期望 4 次 encode（2 唯一 × flip/不 flip）,实际 {vae.model.encode_calls} 次"
     )
+    assert vae.model.batch_sizes == [1, 1, 1, 1]
+
+
+def test_cached_latent_respects_cache_batch_size(tmp_path: Path) -> None:
+    """vae_cache_batch_size 控制缓存阶段每次送入 VAE 的同尺寸图片数量。"""
+    pytest.importorskip("torch")
+    import torch
+    from PIL import Image
+
+    from runtime.training.dataset import BucketManager, CachedLatentDataset, ImageDataset
+
+    for i in range(5):
+        img_path = tmp_path / f"img{i}.png"
+        Image.new("RGB", (256, 256), color=(127 + i, 127, 127)).save(img_path)
+        img_path.with_suffix(".txt").write_text("tag", encoding="utf-8")
+
+    bucket_mgr = BucketManager(256, min_reso=256, max_reso=256, step=64)
+    dataset = ImageDataset(tmp_path, 256, bucket_mgr, flip_augment=False)
+    vae = _CountingVAE()
+    CachedLatentDataset(dataset, vae, device="cpu", dtype=torch.float32, cache_batch_size=2)
+
+    assert vae.model.batch_sizes == [2, 2, 1]
+    assert len(list(tmp_path.glob("*.npz"))) == 5
 
 
 def test_cached_latent_getitem_picks_flipped_per_random(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -44,6 +44,7 @@ for _p in (_THIS_DIR, _REPO_ROOT):
 
 import anima_train as _T  # noqa: E402
 
+from studio.domain.comfy_parity import force_comfy_parity_runtime_config  # noqa: E402
 from studio.services.inference.core import LoRAMeta, LoRASpec, apply_loras, read_lora_meta  # noqa: E402
 
 # 预热 transformers.generation → sklearn → scipy.special import 链。
@@ -90,10 +91,14 @@ def _emit_for(req_id: str, kind: str, **extra: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _lora_topology(meta: LoRAMeta) -> tuple[int, float, str, int, bool, bool]:
+def _lora_topology(meta: LoRAMeta) -> tuple:
     # weight_decompose / rs_lora 改了网络结构（前者加 dora_scale 张量、后者改
     # effective alpha 公式），不同设置不能走热换权重路径，必须重新 inject。
-    return (meta.rank, meta.alpha, meta.algo, meta.factor, meta.weight_decompose, meta.rs_lora)
+    # lora_reg_dims 直接改单层 rank → 不同 pattern 配置同 base rank 也不能复用。
+    reg = meta.lora_reg_dims
+    reg_key: Any = tuple(sorted(reg.items())) if reg else None
+    return (meta.rank, meta.alpha, meta.algo, meta.factor,
+            meta.weight_decompose, meta.rs_lora, reg_key)
 
 
 def _load_lora_state_dict(path: str, device: str, dtype: Any) -> dict[str, Any]:
@@ -118,8 +123,29 @@ def _reload_adapter_weights(adapter: Any, spec: LoRASpec, device: str, dtype: An
         f"已热换 LoRA 权重: {Path(spec.path).name} "
         f"(scale={spec.scale}; missing={missing}, unexpected={unexpected})"
     )
-class GenerationCanceled(Exception):
-    pass
+
+
+def _move_module_to_device(module: Any, device: str) -> None:
+    if module is None or not hasattr(module, "to"):
+        return
+    module.to(device)
+
+
+def _move_adapter_to_device(adapter: Any, device: str, dtype: Any) -> None:
+    network = getattr(adapter, "network", None)
+    if network is None or not hasattr(network, "to"):
+        return
+    network.to(device=device, dtype=dtype)
+
+
+class GenerationCanceled(BaseException):
+    """取消信号。
+
+    刻意继承 BaseException 而非 Exception：取消由 step_callback 在采样步内
+    抛出，而 sampler 对 step_callback 的调用包在 `except Exception: pass`
+    里（回调失败不该毁掉采样）。继承 Exception 会被这层静默吞掉、无法
+    中断采样。所有捕获点都显式写 `except GenerationCanceled`。
+    """
 
 
 _CANCEL_EVENTS: dict[str, threading.Event] = {}
@@ -154,6 +180,15 @@ def _raise_if_canceled(cancel_event: threading.Event | None) -> None:
         raise GenerationCanceled()
 
 
+def _torch_dtype_from_precision(value: str | None) -> torch.dtype:
+    normalized = str(value or "fp32").lower().strip()
+    if normalized in {"bf16", "bfloat16"}:
+        return torch.bfloat16
+    if normalized in {"fp16", "float16", "half"}:
+        return torch.float16
+    return torch.float32
+
+
 class ModelCache:
     """缓存已加载的模型 / adapters。
 
@@ -171,8 +206,12 @@ class ModelCache:
         self.t5_tokenizer_path: Optional[str] = None
         self.attention_backend: Optional[str] = None
         self.mixed_precision: Optional[str] = None
+        self.vae_precision: Optional[str] = None
+        self.text_encoder_backend: Optional[str] = None
+        self.t5_tokenizer_backend: Optional[str] = None
         self.device: Optional[str] = None
         self.dtype: Any = None
+        self.lora_dtype: Any = torch.float32
         self.model: Any = None
         self.vae: Any = None
         self.qwen_model: Any = None
@@ -223,9 +262,15 @@ class ModelCache:
 
     def ensure_loaded(self, cfg: dict[str, Any]) -> None:
         """按 cfg 决定是否需要 (重新) 加载。路径或后端变了 → 全重载。"""
-        cfg = dict(cfg)
-        backend = cfg.get("attention_backend", "flash_attn")
+        cfg = force_comfy_parity_runtime_config(
+            cfg,
+            force_exact_ksampler_backend=False,
+        )
+        backend = cfg.get("attention_backend", "none")
         precision = cfg.get("mixed_precision", "bf16")
+        vae_precision = cfg.get("vae_precision", precision)
+        text_encoder_backend = cfg.get("text_encoder_backend", "hf")
+        t5_tokenizer_backend = cfg.get("t5_tokenizer_backend", "slow")
         transformer_path = cfg["transformer_path"]
         vae_path = cfg["vae_path"]
         text_encoder_path = cfg["text_encoder_path"]
@@ -249,6 +294,9 @@ class ModelCache:
             or self.t5_tokenizer_path != t5_tokenizer_path
             or self.attention_backend != backend
             or self.mixed_precision != precision
+            or self.vae_precision != vae_precision
+            or self.text_encoder_backend != text_encoder_backend
+            or self.t5_tokenizer_backend != t5_tokenizer_backend
         )
 
         if needs_reload:
@@ -260,6 +308,9 @@ class ModelCache:
                 t5_tokenizer_path=t5_tokenizer_path,
                 backend=backend,
                 precision=precision,
+                vae_precision=vae_precision,
+                text_encoder_backend=text_encoder_backend,
+                t5_tokenizer_backend=t5_tokenizer_backend,
             )
             _emit_evt("loaded")
 
@@ -272,9 +323,13 @@ class ModelCache:
         t5_tokenizer_path: str,
         backend: str,
         precision: str,
+        vae_precision: str,
+        text_encoder_backend: str,
+        t5_tokenizer_backend: str,
     ) -> None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        dtype = torch.bfloat16 if precision == "bf16" else torch.float32
+        dtype = _torch_dtype_from_precision(precision)
+        vae_dtype = _torch_dtype_from_precision(vae_precision)
         repo_root = _T.find_diffusion_pipe_root()
         use_flash = backend == "flash_attn"
         use_xformers = backend == "xformers"
@@ -283,15 +338,23 @@ class ModelCache:
         model = _T.load_anima_model(
             transformer_path, device, dtype, repo_root, flash_attn=use_flash,
         )
-        if use_xformers:
-            _T.enable_xformers(model)
+        if use_xformers and not _T.enable_xformers(model):
+            raise RuntimeError(
+                "Exact ComfyUI KSampler parity is guaranteed only with xformers, "
+                "but xformers could not be enabled"
+            )
 
         logger.info("loading vae %s", vae_path)
-        vae = _T.load_vae(vae_path, device, dtype, repo_root)
+        vae = _T.load_vae(vae_path, device, vae_dtype, repo_root)
 
         logger.info("loading text encoders %s", text_encoder_path)
         qwen_model, qwen_tok, t5_tok = _T.load_text_encoders(
-            text_encoder_path, t5_tokenizer_path or None, device, dtype,
+            text_encoder_path,
+            t5_tokenizer_path or None,
+            device,
+            dtype,
+            comfy_qwen=text_encoder_backend == "comfy_qwen3",
+            t5_fast=t5_tokenizer_backend == "fast",
         )
 
         self.model = model
@@ -305,14 +368,20 @@ class ModelCache:
         self.t5_tokenizer_path = t5_tokenizer_path
         self.attention_backend = backend
         self.mixed_precision = precision
+        self.vae_precision = vae_precision
+        self.text_encoder_backend = text_encoder_backend
+        self.t5_tokenizer_backend = t5_tokenizer_backend
         self.device = device
         self.dtype = dtype
+        self.lora_dtype = torch.float32
         self.adapters = []
         self.last_lora_specs = []
         self.last_lora_metas = []
 
     def apply_loras(self, lora_configs: list[dict[str, Any]]) -> list[Any]:
         """按 lora_configs inject adapters；同结构 checkpoint 切换时只热换权重。"""
+        self._move_runtime_to_device()
+
         specs = [
             LoRASpec(path=str(lc.get("path", "")), scale=float(lc.get("scale", 1.0)))
             for lc in lora_configs
@@ -342,7 +411,7 @@ class ModelCache:
         if can_hot_reload:
             try:
                 for adapter, spec in zip(self.adapters, specs):
-                    _reload_adapter_weights(adapter, spec, self.device, self.dtype)
+                    _reload_adapter_weights(adapter, spec, self.device, self.lora_dtype)
             except Exception:
                 logger.exception("LoRA hot reload failed; reinjecting adapters")
             else:
@@ -367,6 +436,8 @@ class ModelCache:
                 self.transformer_path, self.vae_path,
                 self.text_encoder_path, self.t5_tokenizer_path,
                 self.attention_backend, self.mixed_precision,
+                self.vae_precision, self.text_encoder_backend,
+                self.t5_tokenizer_backend,
             )
             self.unload()
             self._load(
@@ -376,16 +447,27 @@ class ModelCache:
                 t5_tokenizer_path=saved_paths[3] or "",
                 backend=saved_paths[4],
                 precision=saved_paths[5],
+                vae_precision=saved_paths[6] or saved_paths[5],
+                text_encoder_backend=saved_paths[7] or "hf",
+                t5_tokenizer_backend=saved_paths[8] or "slow",
             )
             _emit_evt("loaded")
         self.last_lora_specs = []
         self.last_lora_metas = []
 
-        self.adapters = apply_loras(self.model, specs, self.device, self.dtype)
+        self.adapters = apply_loras(self.model, specs, self.device, self.lora_dtype)
         self.last_lora_specs = specs
         self.last_lora_metas = current_metas
         self.model.eval()
         return self.adapters
+
+    def _move_runtime_to_device(self) -> None:
+        if not self.device:
+            return
+        _move_module_to_device(self.model, self.device)
+        _move_module_to_device(self.qwen_model, self.device)
+        for adapter in self.adapters:
+            _move_adapter_to_device(adapter, self.device, self.lora_dtype)
 
     def unload(self) -> None:
         if not self.loaded:
@@ -589,6 +671,10 @@ def _run_generate(
     是虚拟路径，磁盘上无对应文件 —— 前端只用它 split+pop 拿 filename 来
     构建 /api/generate/{tid}/sample/{fn} URL。
     """
+    cfg = force_comfy_parity_runtime_config(
+        cfg,
+        force_exact_ksampler_backend=False,
+    )
     update_monitor = _setup_monitor(cfg)
 
     _raise_if_canceled(cancel_event)
@@ -632,6 +718,8 @@ def _run_generate(
     _emit_for(req_id, "started", task_id=task_id, total=total)
 
     img_idx = 0
+    image_done_count = 0
+    image_errors: list[str] = []
     for pi, prompt in enumerate(prompts):
         for ci in range(count):
             _raise_if_canceled(cancel_event)
@@ -654,7 +742,7 @@ def _run_generate(
                     width=width,
                     steps=steps,
                     cfg_scale=cfg_scale,
-                    negative_prompt=negative_prompt or None,
+                    negative_prompt=negative_prompt,
                     sampler_name=sampler_name,
                     scheduler=scheduler,
                     device=CACHE.device,
@@ -662,6 +750,7 @@ def _run_generate(
                     step_callback=preview_callback,
                     seed=seed,
                 )
+                CACHE._move_runtime_to_device()
                 fname = f"gen_{img_idx:04d}_p{pi}_c{ci}_s{seed}.png"
                 vpath = _virtual_path(task_id, fname)
                 b64, byte_size = _encode_png(img)
@@ -673,12 +762,17 @@ def _run_generate(
                     step=img_idx + 1, total=total,
                     image_b64=b64, byte_size=byte_size,
                 )
+                image_done_count += 1
             except GenerationCanceled:
                 raise
             except Exception as e:
                 logger.exception("generate failed")
+                image_errors.append(str(e))
                 _emit_for(req_id, "image_error", step=img_idx + 1, message=str(e))
             img_idx += 1
+
+    if image_done_count == 0 and image_errors:
+        raise RuntimeError(f"all generated images failed: {image_errors[-1]}")
 
 
 def _run_xy(
@@ -725,6 +819,8 @@ def _run_xy(
             lora_configs[idx]["path"] = str(val)
 
     img_idx = 0
+    image_done_count = 0
+    image_errors: list[str] = []
     for yi, yv in enumerate(y_values):
         for xi, xv in enumerate(x_values):
             _raise_if_canceled(cancel_event)
@@ -780,13 +876,14 @@ def _run_xy(
                     steps=cur_steps,
                     step_callback=preview_callback,
                     cfg_scale=cur_cfg_scale,
-                    negative_prompt=negative_prompt or None,
+                    negative_prompt=negative_prompt,
                     sampler_name=base_sampler,
                     scheduler=scheduler,
                     device=CACHE.device,
                     dtype=CACHE.dtype,
                     seed=cur_seed,
                 )
+                CACHE._move_runtime_to_device()
                 fname = f"xy_x{xi:02d}_y{yi:02d}_s{cur_seed}.png"
                 vpath = _virtual_path(task_id, fname)
                 b64, byte_size = _encode_png(img)
@@ -803,16 +900,21 @@ def _run_xy(
                     xy={"xi": xi, "yi": yi, "xv": xv, "yv": yv},
                     image_b64=b64, byte_size=byte_size,
                 )
+                image_done_count += 1
             except GenerationCanceled:
                 raise
             except Exception as e:
                 logger.exception("XY [%d,%d] failed", xi, yi)
+                image_errors.append(str(e))
                 _emit_for(
                     req_id, "image_error",
                     step=img_idx + 1, message=str(e),
                     xy={"xi": xi, "yi": yi, "xv": xv, "yv": yv},
                 )
             img_idx += 1
+
+    if image_done_count == 0 and image_errors:
+        raise RuntimeError(f"all generated images failed: {image_errors[-1]}")
 
 
 def _run_generate_worker(

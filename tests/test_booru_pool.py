@@ -177,6 +177,100 @@ def test_429_triggers_backoff_and_halves_rate(monkeypatch: pytest.MonkeyPatch) -
     client.close()
 
 
+def test_503_triggers_backoff_but_does_not_halve_rate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """503 是服务端瞬时不可用（非「我们太快」）—— 进 sticky 但不减速率。"""
+    cfg = booru_pool.BooruPoolConfig(
+        parallel_workers=2,
+        api_rate_per_sec=10.0,
+        cdn_rate_per_sec=10.0,
+        backoff_on_429=0.05,
+        backoff_on_503=0.05,
+    )
+    client = booru_pool.BooruClient(cfg)
+
+    resp = MagicMock()
+    resp.status_code = 503
+    err = requests.HTTPError("503"); err.response = resp
+
+    def fake_download(*_a, **_k):
+        raise err
+
+    monkeypatch.setattr(booru_api, "download_image", fake_download)
+    with pytest.raises(requests.HTTPError):
+        client.download_image(
+            "https://img3.gelbooru.com/x.png",
+            Path("/tmp/x.png"),
+            convert_to_png=False,
+            remove_alpha_channel=False,
+        )
+    # 503 不减速
+    assert client.cfg.api_rate_per_sec == pytest.approx(10.0)
+    assert client.cfg.cdn_rate_per_sec == pytest.approx(10.0)
+    # 但 CDN sticky 状态已设
+    assert client._backoff_until["cdn"] > 0
+    # API 侧不受影响（独立 backoff）
+    assert client._backoff_until["api"] == 0.0
+    client.close()
+
+
+def test_cdn_backoff_does_not_block_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CDN 503 不该让后续 search（API host）也等 sticky window。"""
+    cfg = booru_pool.BooruPoolConfig(
+        parallel_workers=2,
+        api_rate_per_sec=100.0,
+        cdn_rate_per_sec=100.0,
+        backoff_on_429=10.0,  # 故意长，证明 API 不被它拖
+        backoff_on_503=10.0,
+    )
+    client = booru_pool.BooruClient(cfg)
+
+    # CDN 抛 503，触发 cdn sticky 10s
+    resp = MagicMock(); resp.status_code = 503
+    err = requests.HTTPError("503"); err.response = resp
+    monkeypatch.setattr(booru_api, "download_image", lambda *_a, **_k: (_ for _ in ()).throw(err))
+    monkeypatch.setattr(booru_api, "search_posts", lambda *_a, **_k: [{"id": 1}])
+
+    with pytest.raises(requests.HTTPError):
+        client.download_image(
+            "https://img3.gelbooru.com/x.png",
+            Path("/tmp/x.png"),
+            convert_to_png=False,
+            remove_alpha_channel=False,
+        )
+    # 后续 API search 应立即返回（不等 10s）
+    t0 = time.monotonic()
+    client.search_posts("gelbooru", "x", user_id="u", api_key="k")
+    elapsed = time.monotonic() - t0
+    assert elapsed < 0.5, f"API 被 CDN backoff 拖住了，耗时 {elapsed:.2f}s"
+    client.close()
+
+
+def test_burst_503_in_same_window_logs_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """同一 backoff window 内多 worker 连发 503 只应 log 1 次（避免刷屏）。
+
+    模拟原 bug：4 个 worker 在 sticky window 设置后还在飞中，全部撞 503 回来。
+    这里直接连发 _trigger_backoff 模拟并发；正常下载路径下 _wait_if_backoff
+    会让后续 worker sleep 出窗口再触发，那是真正的「新事件」应当 log。
+    """
+    cfg = booru_pool.BooruPoolConfig(backoff_on_503=10.0)  # 窗口足够大
+    client = booru_pool.BooruClient(cfg)
+    caplog.set_level("WARNING", logger="studio.services.booru.pool")
+
+    for _ in range(10):
+        client._trigger_backoff(503, "cdn")
+
+    sticky_logs = [r for r in caplog.records if "sticky backoff" in r.message]
+    assert len(sticky_logs) == 1, (
+        f"同一 window 内 503 应仅 log 1 次，实际 {len(sticky_logs)} 次："
+        f"{[r.message for r in sticky_logs]}"
+    )
+    client.close()
+
+
 def test_parallel_download_respects_workers(monkeypatch: pytest.MonkeyPatch) -> None:
     """parallel_workers=2 → 同时活动的 fn 调用数 ≤ 2。"""
     cfg = booru_pool.BooruPoolConfig(

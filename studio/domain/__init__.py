@@ -13,6 +13,10 @@
 在延迟求值模式下会将 typing._SpecialForm 当成 schema key，触发 AttributeError。
 """
 from .common import AttentionBackend, GROUP_ORDER, _meta
+from .comfy_parity import (
+    force_comfy_parity_runtime_config,
+    is_exact_ksampler_parity_backend,
+)
 from .generate import GenerateConfig
 from .lora import LoraEntry
 from .migrations import migrate_legacy_save_keys, migrate_noise_enhancement_type
@@ -32,6 +36,8 @@ __all__ = [
     "XYMatrixSpec",
     "_check_axis_values",
     "_meta",
+    "force_comfy_parity_runtime_config",
+    "is_exact_ksampler_parity_backend",
     "migrate_legacy_save_keys",
     "migrate_noise_enhancement_type",
 ]

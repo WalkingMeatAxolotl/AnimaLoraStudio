@@ -305,4 +305,91 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(stored.singleLoras).toEqual([A])
     expect(stored.xyLoras).toEqual([A])
   })
+
+  // ---- 点击 XY 历史 entry 回填 sidebar 参数（含 xDraft）----
+  it('点击 XY 落盘历史 → 左侧 XY 轴 dropdown 切到 LoRA + raw 写入', async () => {
+    // 用户场景：当前 sidebar 在 XY mode 默认 X=steps；点 XY plot 1 历史 entry
+    // 回填后 X 轴应切到 lora_ckpt + raw=basenames（picker 后续会按 basename 升级
+    // 成全 path 给 daemon；这里只验 xDraft 同步进 prefs 这一步）。
+    seedPrefs({ mode: 'xy' })  // 起步默认 X=steps
+    const xySnapshotParams = {
+      schema_version: 1,
+      mode: 'xy',
+      prompts: ['recall-prompt'],
+      negative_prompt: 'recall-neg',
+      width: 768, height: 1344,
+      steps: 25, cfg_scale: 5, count: 1, seed: 7,
+      loras: [
+        { name: 'chen-bin_V3.7_step5500.safetensors', scale: 1,
+          project_id: 19, version_id: 44 },
+      ],
+      xy_draft: {
+        x: {
+          axis: 'lora_ckpt',
+          raw: 'epoch40.safetensors, epoch38.safetensors, epoch24.safetensors',
+          loraIndex: 0,
+        },
+        y: null,
+      },
+      dataset_pick: null,
+    }
+    const diskEntry = {
+      id: 'disk:abc123',
+      date: '2026-06-09',
+      mode: 'xy',
+      folder: 'xy plot 1',
+      path: '/tmp/test/2026-06-09/xy/xy plot 1',
+      image_url: '/api/generate/disk/image/2026-06-09/xy/xy%20plot%201/xy%20plot.png',
+      thumb_url: '/api/generate/disk/thumb/2026-06-09/xy/xy%20plot%201/xy%20plot.png?w=128',
+      created_at: 1717900000,
+      schema_version: 2,
+      params: xySnapshotParams,
+      xy_meta: {
+        x_axis: 'lora_ckpt',
+        y_axis: null,
+        x_values: ['epoch40.safetensors', 'epoch38.safetensors', 'epoch24.safetensors'],
+        y_values: [null],
+        samples: [],
+      },
+    }
+    const previousImpl = fetchMock.getMockImplementation()
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/generate/disk/history') && (init?.method ?? 'GET') === 'GET') {
+        return Promise.resolve({
+          ok: true, status: 200,
+          json: async () => ({ entries: [diskEntry] }),
+          text: async () => JSON.stringify({ entries: [diskEntry] }),
+          headers: new Headers({ 'content-type': 'application/json' }),
+        } as Response)
+      }
+      return previousImpl ? previousImpl(url, init) : Promise.resolve({
+        ok: false, status: 404, json: async () => null, text: async () => '',
+        headers: new Headers(),
+      } as Response)
+    })
+
+    const user = userEvent.setup()
+    setup()
+    await waitForInitialLorasLoad()
+
+    // 默认 X 轴是 steps —— 文本输入框显示 "20, 25, 30"
+    const initialAxisInput = await screen.findByDisplayValue(/20, 25, 30/)
+    expect(initialAxisInput).toBeInTheDocument()
+
+    // 等历史栏的 thumbnail 出现（HistoryItem div 的 title 含 folder 名）
+    const thumb = await screen.findByTitle(/xy plot 1 ·/)
+    await user.click(thumb)
+
+    // 回填后：X 轴 dropdown 切到 LoRA，raw 写入新值。
+    // 因为 axis=lora_ckpt 渲染的是 AxisLoraCkptPicker（不是 text input）—— 直接
+    // 看 X 轴 select 的 value（一行 select 元素，AxisCard.label='X'）。
+    await waitFor(() => {
+      const xLabel = screen.getAllByText('X')[0]
+      const card = xLabel.closest('div.bg-sunken')!
+      const axisSelect = card.querySelector('select') as HTMLSelectElement
+      expect(axisSelect.value).toBe('lora_ckpt')
+    })
+    // 原 "20, 25, 30" 文本框该消失（切到 lora_ckpt 渲染的是 picker）
+    expect(screen.queryByDisplayValue(/20, 25, 30/)).not.toBeInTheDocument()
+  })
 })

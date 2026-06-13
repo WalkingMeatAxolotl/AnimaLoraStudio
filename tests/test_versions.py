@@ -35,8 +35,10 @@ def test_create_version_builds_tree_and_activates(isolated) -> None:
         v = versions.create_version(conn, project_id=p["id"], label="baseline")
     vdir = versions.version_dir(p["id"], p["slug"], "baseline")
     assert vdir.exists()
-    for sub in ("train", "reg", "output", "samples"):
+    for sub in ("train", "reg", "output"):
         assert (vdir / sub).is_dir()
+    # 采样图归 task 档案（tasks/<id>/samples/），version 树不再预建空 samples/
+    assert not (vdir / "samples").exists()
     assert (vdir / "version.json").exists()
     # 项目里第一个版本自动设为 active
     with db.connection_for(isolated["db"]) as conn:
@@ -47,7 +49,9 @@ def test_create_version_builds_tree_and_activates(isolated) -> None:
 def test_create_version_rejects_invalid_label(isolated) -> None:
     p = _new_project(isolated)
     with db.connection_for(isolated["db"]) as conn:
-        for bad in ("has space", "../escape", "name/sub", "中文"):
+        # "." / ".." 单独列出：字符集本身放行点号，但纯点 label 会让
+        # version_dir 解析到 versions/ 之外（".." == project 根）。
+        for bad in ("has space", "../escape", "name/sub", "中文", ".", "..", "..."):
             with pytest.raises(versions.VersionError, match="label"):
                 versions.create_version(conn, project_id=p["id"], label=bad)
 

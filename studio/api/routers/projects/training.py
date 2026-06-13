@@ -16,8 +16,9 @@
     GET /reg/preview-tags   GET /reg   POST /reg/build
     GET /reg/caption   DELETE /reg
 
-  reg_ai (2)
-    POST /reg/generate-prior   GET /reg/generate-prior/{task_id}
+  reg_ai (3)
+    POST /reg/generate-prior   GET /reg/generate-prior/latest
+    GET /reg/generate-prior/{task_id}
 
   version_config (4)
     GET /config  PUT /config  POST /config/from_preset  POST /config/save_as_preset
@@ -40,6 +41,7 @@ from fastapi.responses import FileResponse
 
 from ...deps import _resolve_anima_model_paths
 from ...errors import _preset_err_code as _err_code, _safe_join_or_400
+from ..logs import read_task_log
 from ...responses import _thumb_response
 from ...schemas.training import (
     BatchOp,
@@ -89,6 +91,8 @@ def start_tag(pid: int, vid: int, body: TagJobRequest) -> dict[str, Any]:
         raise HTTPException(400, f"unknown tagger: {body.tagger}")
     if body.output_format not in {"txt", "json"}:
         raise HTTPException(400, "output_format must be txt|json")
+    if body.on_existing not in {"overwrite", "skip", "append"}:
+        raise HTTPException(400, "on_existing must be overwrite|skip|append")
     _, v, _ = _version_train_dir_or_404(pid, vid)
 
     # 触发词：先 strip，落到 version 表（持久化，TagEdit / Train 都能读），再
@@ -101,6 +105,9 @@ def start_tag(pid: int, vid: int, body: TagJobRequest) -> dict[str, Any]:
         "version_id": vid,
         "output_format": body.output_format,
     }
+    # 默认值 "overwrite" 不写入 params（worker 端默认就是 overwrite），减小 payload。
+    if body.on_existing != "overwrite":
+        params["on_existing"] = body.on_existing
     if trigger_word:
         params["trigger_word"] = trigger_word
     # 通用：按 tagger 名取 `<name>_overrides` 字段并落到 params 同名键。
@@ -429,6 +436,26 @@ def reg_generate_prior(pid: int, vid: int, body: RegAiRequest) -> dict[str, Any]
 
     bus.publish({"type": "task_state_changed", "task_id": task_id, "status": "pending"})
     return task or {"id": task_id}
+
+
+@router.get("/api/projects/{pid}/versions/{vid}/reg/generate-prior/latest")
+def get_latest_reg_prior_task(pid: int, vid: int) -> dict[str, Any]:
+    """页面 hydrate 用：返回当前 version 最近一次 AI 先验 task + 全量日志。"""
+    with db.connection_for() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM tasks
+            WHERE project_id = ? AND version_id = ? AND task_type = 'reg_ai'
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (pid, vid),
+        ).fetchone()
+    task = dict(row) if row else None
+    return {
+        "task": task,
+        "log": read_task_log(int(task["id"])) if task else "",
+    }
 
 
 @router.get("/api/projects/{pid}/versions/{vid}/reg/generate-prior/{task_id}")

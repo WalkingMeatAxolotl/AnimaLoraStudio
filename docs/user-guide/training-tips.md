@@ -231,6 +231,7 @@ EDM/Karras 论文里 δ=0.15 是常用经验值。
 - cache 阶段对每张图 encode 两次（原图 + 镜像），分别存到 npz 的 `latent` / `latent_flipped` 键
 - 训练时 `__getitem__` 50% 概率取 flipped 版本，跟非 cache 路径行为对齐
 - 代价：**编码时间和 cache 大小都 ×2**（小数据集无感知，大数据集要权衡）
+- 缓存阶段会按相同 bucket 尺寸合批送入 VAE（`vae_cache_batch_size`，默认 `0` = 跟随训练 batch size，对齐 kohya）；显存不足时设为 `1` 逐张编码
 - 老 cache（只有 `latent`）+ `flip_augment=true` → 自动判失效，重 encode 补全；切回 `flip_augment=false` 不会反复重 encode（双份是单份的超集）
 
 历史 bug：旧版 0.11.x 之前同开两者会让 cache 阶段那一次随机翻转 baked 进 npz，**flip_augment 永久失效 + 50% 数据被永久镜像污染**。0.11.x 起按双份方案修复，已有的污染 cache 通过 `_is_cache_valid` 自动检测重 encode。

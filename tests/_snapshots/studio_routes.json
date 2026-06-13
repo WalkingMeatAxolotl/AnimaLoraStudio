@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 160,
+  "count": 179,
   "routes": [
     {
       "path": "/",
@@ -127,6 +127,70 @@
         "POST"
       ],
       "name": "unload_daemon",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/disk/history",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_disk_history",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/disk/image/{date_str}/xy/{folder}/{filename}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_disk_xy_image",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/disk/image/{date_str}/{mode}/{filename}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_disk_image",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/disk/thumb/{date_str}/xy/{folder}/{filename}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_disk_xy_thumb",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/disk/thumb/{date_str}/{mode}/{filename}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_disk_thumb",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/disk/{date_str}/xy/{folder}",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_disk_xy_folder",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/disk/{date_str}/{mode}/{filename}",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_disk_image",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/save",
+      "methods": [
+        "POST"
+      ],
+      "name": "save_test_image",
       "type": "APIRoute"
     },
     {
@@ -386,6 +450,14 @@
       "type": "APIRoute"
     },
     {
+      "path": "/api/projects/{pid}/archive",
+      "methods": [
+        "POST"
+      ],
+      "name": "archive_project_endpoint",
+      "type": "APIRoute"
+    },
+    {
       "path": "/api/projects/{pid}/download",
       "methods": [
         "POST"
@@ -447,6 +519,14 @@
         "GET"
       ],
       "name": "project_thumb",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/unarchive",
+      "methods": [
+        "POST"
+      ],
+      "name": "unarchive_project_endpoint",
       "type": "APIRoute"
     },
     {
@@ -834,6 +914,14 @@
       "type": "APIRoute"
     },
     {
+      "path": "/api/projects/{pid}/versions/{vid}/reg/generate-prior/latest",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_latest_reg_prior_task",
+      "type": "APIRoute"
+    },
+    {
       "path": "/api/projects/{pid}/versions/{vid}/reg/generate-prior/{task_id}",
       "methods": [
         "GET"
@@ -996,6 +1084,14 @@
     {
       "path": "/api/queue/{task_id}/outputs",
       "methods": [
+        "DELETE"
+      ],
+      "name": "delete_task_output_files",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/queue/{task_id}/outputs",
+      "methods": [
         "GET"
       ],
       "name": "list_task_outputs",
@@ -1074,6 +1170,30 @@
       "type": "APIRoute"
     },
     {
+      "path": "/api/studio-data/info",
+      "methods": [
+        "GET"
+      ],
+      "name": "studio_data_info",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/studio-data/migrate",
+      "methods": [
+        "POST"
+      ],
+      "name": "studio_data_migrate",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/studio-data/migrate_status",
+      "methods": [
+        "GET"
+      ],
+      "name": "studio_data_migrate_status",
+      "type": "APIRoute"
+    },
+    {
       "path": "/api/system/dev_commits",
       "methods": [
         "GET"
@@ -1103,6 +1223,14 @@
         "GET"
       ],
       "name": "system_release_notes",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/system/release_notes_all",
+      "methods": [
+        "GET"
+      ],
+      "name": "system_release_notes_all",
       "type": "APIRoute"
     },
     {
@@ -1167,6 +1295,38 @@
         "GET"
       ],
       "name": "system_version",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/tag-dictionary/data",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_data",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/tag-dictionary/meta",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_meta",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/tag-dictionary/reset",
+      "methods": [
+        "POST"
+      ],
+      "name": "reset",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/tag-dictionary/upload",
+      "methods": [
+        "POST"
+      ],
+      "name": "upload",
       "type": "APIRoute"
     },
     {
@@ -1284,12 +1444,6 @@
       ],
       "name": "get_sample",
       "type": "APIRoute"
-    },
-    {
-      "path": "/studio",
-      "methods": [],
-      "name": "studio",
-      "type": "Mount"
     }
   ]
 }

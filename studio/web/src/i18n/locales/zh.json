@@ -186,6 +186,14 @@
   "jobProgress": {
     "waitingLogs": "(等待日志...)"
   },
+  "logDrawer": {
+    "download": "下载任务",
+    "preprocess": "预处理任务",
+    "dupScan": "去重扫描",
+    "tag": "打标任务",
+    "regBuild": "Booru 建集",
+    "regPrior": "AI 先验生成"
+  },
   "pathPicker": {
     "title": "选择路径",
     "parent": "← 上级",
@@ -285,7 +293,9 @@
       "loraType": {
         "lora": "LoRA",
         "lokr": "LoKr",
-        "loha": "LoHa"
+        "loha": "LoHa",
+        "ortho": "OrthoLoRA",
+        "tlora": "T-LoRA"
       },
       "lrScheduler": {
         "none": "常数",
@@ -335,6 +345,14 @@
       "wandbPolicy": {
         "all": "保留全部",
         "last": "仅保留最新"
+      },
+      "sampler": {
+        "erSde": "ER SDE",
+        "dpmpp3mSde": "DPM++ 3M SDE"
+      },
+      "scheduler": {
+        "simple": "Simple",
+        "sgmUniform": "SGM Uniform"
       }
     },
     "disableHints": {
@@ -363,11 +381,16 @@
       "flip_augment": "水平翻转增强",
       "tag_dropout": "训练时每个标签的随机丢弃概率（0 = 关闭）；非 0 帮助泛化、减弱单标签依赖",
       "prefer_json": "优先使用 JSON 标签文件（推荐，支持分类 shuffle）",
+      "caption_comfy_encoding": "标签按 ComfyUI 方式编码（与测试出图同一链路，推荐开启）",
       "cache_latents": "缓存 VAE latent 加速训练",
-      "lora_type": "适配器算法。lokr Kronecker 分解参数最省（默认）；lora 经典低秩通用；loha Hadamard 积，表达力较高但参数较多",
+      "vae_cache_batch_size": "VAE latent 缓存编码批次大小；0=跟随训练 batch size，显存不足时设为 1 逐张编码",
+      "lora_type": "适配器算法。lokr：Kronecker 分解，参数最省（默认）；lora：经典低秩，通用；loha：Hadamard 积，表达力较高但参数较多；ortho：正交参数化，可训练参数极少、防过拟合，适合小数据集人物/主体；tlora：噪声越高 rank 越小，专为单图/极少图主体定制防过拟合",
       "lora_rank": "rank：越大表达力越强，参数量与显存上升、易过拟合；越小越省但易欠拟合。常用 8/16/32/64",
       "lora_alpha": "alpha：LoRA 缩放系数，越大 LoRA 效果越强。通常等于 rank；启用 rs_lora 时常设为 √rank",
       "lokr_factor": "LoKr 矩阵分解因子：越大压缩越强、参数越少；越小参数越多。默认 8 适合大多数场景",
+      "tlora_min_rank": "T-LoRA 高噪声时保留的最小 active rank",
+      "tlora_alpha_rank_scale": "T-LoRA timestep 到 active rank 的幂次缩放；越大越偏向低噪声端才开高 rank",
+      "tlora_use_ortho": "T-LoRA 专属：叠加 OrthoLoRA 正交参数化（论文完整配方，默认开启）；关闭时使用普通 T-LoRA",
       "lora_dora": "DoRA：分解权重为方向 + 幅度独立训练；收敛通常更稳，显存略增",
       "lora_rs": "rs-LoRA：scale=α/√r 而非 α/r，高 rank（>32）训练更稳",
       "lora_dropout": "LoRA 输入特征的随机丢弃概率：越大正则化越强、收敛越慢；0 = 关闭",
@@ -395,6 +418,8 @@
       "automagic_beta2": "Automagic 二阶矩 β2",
       "automagic_eps": "Automagic 数值稳定项",
       "automagic_clip_threshold": "Automagic update RMS 裁剪阈值",
+      "automagic_variant": "v1: per-element lr mask（经典，推荐）；v2: per-param scalar lr + fused backward（实验性，省显存；与 grad_accum / grad_clip / fp16 不兼容）",
+      "automagic_agreement_threshold": "v2 符号一致率阈值：超过此比例认为方向一致 → 涨 lr",
       "ppsf_d_coef": "PPSF 估出的 d 整体缩放系数；越大有效 lr 越大。欠拟合时调高（2.0+），过拟合 / 小数据集时调低（0.5）",
       "ppsf_prodigy_steps": "PPSF 在第 N 步后冻结 d 估计；0 = 全程持续估计。建议总步数 1/4 ~ 1/2 让后期 lr 稳定",
       "ppsf_beta1": "PPSF 一阶动量衰减率 (β1)：默认 0.9；越大平滑越强、响应越慢",
@@ -579,7 +604,24 @@
     "versionLabel": "初始版本标签",
     "versionPlaceholder": "v1 / baseline / ...",
     "notesPlaceholder": "训练目标 / 备注",
-    "creating": "创建中…"
+    "creating": "创建中…",
+    "filters": "筛选 / 排序",
+    "filtersActive": "有筛选生效",
+    "searchPlaceholder": "搜索标题 / slug / 备注…",
+    "statusAll": "全部状态",
+    "sortLabel": "排序",
+    "sort_updated": "最近活跃",
+    "sort_created": "最新创建",
+    "sort_title": "按名称",
+    "archivedToggle": "已归档（{{n}}）",
+    "archivedToggleHint": "切换：只显示已归档项目",
+    "archiveProjectTitle": "归档项目（可恢复）",
+    "archiveConfirm": "归档项目「{{title}}」？\n项目将从列表隐藏，数据不受影响；可通过标题栏「已归档」开关查看并恢复。",
+    "archiveBtn": "归档",
+    "archived": "已归档: {{title}}",
+    "unarchiveTitle": "恢复项目",
+    "unarchiveConfirm": "把项目「{{title}}」恢复回项目列表？",
+    "unarchived": "已恢复: {{title}}"
   },
   "queue": {
     "title": "队列",
@@ -606,8 +648,10 @@
     "pauseHint": "保存训练状态，可日后从此处继续",
     "resume": "恢复",
     "resumeHint": "从暂停点继续训练（沿用暂停时配置）",
-    "cancelPaused": "彻底取消",
-    "cancelPausedHint": "放弃这个 task，删除暂停文件",
+    "resumeTerminal": "继续训练",
+    "resumeTerminalHint": "从最近一次 epoch 自动备份继续训练（沿用当时配置）",
+    "cancelPaused": "取消任务",
+    "cancelPausedHint": "停止这个 task（恢复点保留，之后仍可继续训练）",
     "pausedAtStep": "在 step {{step}} 暂停于 {{time}}",
     "holdQueue": "挂起队列",
     "releaseQueue": "恢复调度",
@@ -652,7 +696,7 @@
       "cancel": "取消",
       "confirm": "确认暂停"
     },
-    "resumeFailedMissing": "暂停文件已丢失，无法恢复。请通过 ResumeFieldPicker 新建任务从其他 .pt 起。",
+    "resumeFailedMissing": "恢复点文件已丢失，无法恢复。请通过 ResumeFieldPicker 新建任务从其他 .pt 起。",
     "resumeFailed": "恢复失败：{{reason}}",
     "pauseFailed": "暂停失败：{{reason}}"
   },
@@ -766,7 +810,7 @@
       "uploadLabel": "自定义词典",
       "uploadHint": "CSV / TXT 格式：每行 `english_tag,中文1 中文2`。上传后替换当前词典（不合并）。最大 10MB / 20 万条。",
       "resetButton": "恢复默认词典",
-      "resetHint": "从 GitHub 重新下载 Physton danbooru.zh_CN.csv（约 3MB）",
+      "resetHint": "从 GitHub 重新下载 ffdkj Danbooru 标签中文翻译表（约 30MB，收录热度前 20 万条，每日更新）",
       "resetOk": "已恢复默认词典",
       "resetFail": "恢复失败",
       "uploadOk": "已加载 {{name}}",
@@ -785,6 +829,28 @@
     "display": "显示",
     "version": "版本",
     "service": "服务",
+    "storage": {
+      "sectionTitle": "存储位置",
+      "locationLabel": "studio_data 位置",
+      "help1": "studio_data 存放项目、数据集、任务档案、预设和数据库。默认在程序根目录。",
+      "help2": "更改位置会在所选目录下创建 studio_data 子目录并完整复制当前数据（原数据保留不删除），完成后需重启 Studio 生效。",
+      "customBadge": "自定义",
+      "defaultBadge": "默认",
+      "changeLocation": "更改位置…",
+      "migrateTitle": "迁移 studio_data",
+      "scanning": "正在扫描当前数据…",
+      "from": "从",
+      "to": "到",
+      "totalLine": "共 {{files}} 个文件，{{size}}",
+      "entryMeta": "{{files}} 文件 · {{size}}",
+      "keepOriginalNote": "原位置数据不会被删除。迁移完成后需重启 Studio，新位置才会生效。",
+      "migrating": "正在复制…",
+      "doneTitle": "迁移完成",
+      "doneRestartNote": "重启 Studio 后开始使用新位置；原位置数据已保留，确认无误后可自行删除。",
+      "failed": "迁移失败：{{error}}",
+      "startMigrate": "开始迁移",
+      "restartNow": "立即重启"
+    },
     "gelbooru": "Gelbooru",
     "danbooru": "Danbooru",
     "language": "语言",
@@ -915,9 +981,10 @@
     },
     "downloadSourceHuggingface": "HuggingFace（含 hf-mirror 等镜像）",
     "downloadSourceModelscope": "ModelScope（魔搭社区，国内直连）",
-    "confirmInstallOnnxAuto": "将按 nvidia-smi 检测自动选 GPU/CPU 包。装包需要几分钟。\n\n注意：装完后必须重启 Studio 才能生效。继续？",
-    "confirmInstallOnnxGpu": "将卸载现有 onnxruntime 并安装 onnxruntime-gpu。装包需要几分钟。\n\n注意：装完后必须重启 Studio 才能生效。继续？",
-    "confirmInstallOnnxCpu": "将卸载现有 onnxruntime-gpu 并安装 onnxruntime（CPU）。装包需要几分钟。\n\n注意：装完后必须重启 Studio 才能生效。继续？",
+    "confirmInstallOnnxAuto": "将按平台 + nvidia-smi 检测自动选最合适的包（Windows + GPU → DirectML；Linux + GPU → CUDA；无 GPU → CPU）。装包需要几分钟。\n\n注意：装完后必须重启 Studio 才能生效。继续？",
+    "confirmInstallOnnxGpu": "将卸载现有 onnxruntime 包并安装 onnxruntime-gpu（CUDA EP）。装包需要几分钟。\n\n注意：装完后必须重启 Studio 才能生效。继续？",
+    "confirmInstallOnnxCpu": "将卸载现有 onnxruntime 包并安装 onnxruntime（CPU）。装包需要几分钟。\n\n注意：装完后必须重启 Studio 才能生效。继续？",
+    "confirmInstallOnnxDirectml": "将卸载现有 onnxruntime 包并安装 onnxruntime-directml（DirectML EP，走 DX12，跨厂商）。装包需要几分钟。\n\n注意：装完后必须重启 Studio 才能生效。继续？",
     "startInstall": "开始装",
     "statusLoadFailed": "加载状态失败",
     "loadingStatus": "加载中...",
@@ -930,14 +997,21 @@
     "notInstalledShort": "未安装",
     "gpuDetect": "GPU 检测",
     "noNvidiaGpu": "未检测到 NVIDIA GPU",
-    "onnxCpuEpWarning": "检测到 NVIDIA GPU 但 onnxruntime 只有 CPU EP — WD14 / CLTagger 会跑得很慢。展开「强制重装」装 GPU 版本。",
+    "onnxCpuEpWarning": "检测到 NVIDIA GPU 但 onnxruntime 只有 CPU EP — WD14 / CLTagger 会跑得很慢。展开「候选」装 DirectML（Windows 推荐，跨厂商）或 CUDA 版本。",
+    "onnxNotInstalledHintGpu": "未安装。点下面「自动检测 + 装合适的包」按平台装最佳包（Windows + GPU → DirectML；Linux + GPU → CUDA）。",
+    "onnxNotInstalledHintCpu": "未安装。点下面「自动检测 + 装合适的包」会装 CPU 版本（未检测到 NVIDIA GPU）。",
     "cudaEpFailedCpu": "CUDA EP 加载失败，已降级到 CPU。",
     "installingPackage": "装包中...",
     "autoDetectInstall": "自动检测 + 装合适的包",
     "refreshStatus": "刷新状态",
-    "forceReinstallAdvanced": "强制重装（高级）",
-    "reinstallGpu": "重装为 GPU",
-    "reinstallCpu": "重装为 CPU",
+    "forceReinstallAdvanced": "候选（手动选）",
+    "reinstallGpu": "装 CUDA 版",
+    "reinstallCpu": "装 CPU 版",
+    "reinstallDirectml": "装 DirectML 版",
+    "directmlWinOnlyHint": "仅 Windows 可用（PyPI wheel 不覆盖 Linux/macOS）",
+    "cudaPackageHint": "NVIDIA GPU 用；Linux 最优。Windows 上若静默降 CPU 改用 DirectML。",
+    "directmlPackageHint": "走 DX12，绕开 CUDA/cuDNN 兼容性问题，跨厂商（NVIDIA/AMD/Intel）。",
+    "cpuPackageHint": "兜底；无 GPU 或前两个都装不上时用。",
     "onnxForceHint": "不知道选哪个就用上面\"自动检测\"。",
     "confirmRegisterTorch": "将注册 torch 重装请求（{{tag}} 版）。\n提交后请 Ctrl+C 关闭 Studio 重新运行 studio.bat —— 启动时会装 torch（~3 GB，5-30 分钟）。继续？",
     "registerRequest": "注册请求",
@@ -989,6 +1063,25 @@
     "previewThrottle": "节流（每 N 步推一次预览）",
     "previewThrottleDesc": "0 = 关闭；推荐 3-5",
     "taeFluxHelp": "TAEFlux 解码模型 server 启动时已后台下载，UI 不需要单独操作。",
+    "idleTimeout": {
+      "title": "显存自动清理",
+      "label": "闲置自动卸载（分钟）",
+      "desc": "默认 10 分钟",
+      "help": "测试出图模型加载后会常驻显存，方便重复调参。超过指定时长没出图就自动卸载释放显存（下次出图重新加载约 30-60 秒）。0 = 关闭，模型常驻直到手动点\"清理显存\"。推荐 10 分钟。",
+      "minutesSuffix": "分",
+      "offHint": "已关闭：模型常驻直到手动清理"
+    },
+    "vaePrecision": {
+      "title": "VAE 解码精度",
+      "label": "测试出图 VAE 精度",
+      "desc": "默认 bf16（与 ComfyUI 在现代显卡上的默认一致）",
+      "help": "测试出图最后一步 VAE 解码使用的精度。bf16 与 ComfyUI 在现代显卡上自动选择的 VAE 精度一致，为默认值。fp32 全精度解码：显存峰值更高，daemon 会在解码前后临时把 DiT/Qwen 模型挪到内存腾显存（每张图更慢）。"
+    },
+    "saveTestImages": {
+      "title": "测试出图自动落盘",
+      "label": "保存测试图片",
+      "tooltip": "打开后每次出图自动落盘到 studio_data/test/<日期>/：single 模式存单张 PNG；xy 模式存文件夹（合成大图 + 每格 cell PNG，cell 可拖进 Comfy/A1111 复用参数）；compare 模式不保存。默认关闭。"
+    },
     "theme": "主题",
     "themeLight": "☀ 日间",
     "themeDark": "☾ 暗色",
@@ -1010,6 +1103,10 @@
     "currentDevLocked": "当前在 dev · 不可关闭",
     "updateLogTitle": "上次更新日志",
     "close": "关闭",
+    "onboardingSection": "首次引导",
+    "onboardingReopenTitle": "重新运行首次引导",
+    "onboardingReopenHelp": "重新弹出首次启动时的「基础能力安装」面板,可用于检查哪些还没装、或装漏了想补。",
+    "onboardingReopen": "重新运行引导",
     "serviceRestartTitle": "重启 Studio",
     "serviceRestartHelp1": "关闭并重新启动后端进程。",
     "serviceRestartHelp2": "常用场景：修改 <code>secrets.json</code> 后强制刷新、装完新 onnxruntime / PyTorch 让 EP 生效。",
@@ -1045,6 +1142,11 @@
     "progressDetail": "当前进程已发完 SIGINT 退出；cli.py 在做 git reset / pip / npm / 重启。无法获取实时进度（server 已死）。重启后前端 reconnect 自动刷新；失败时会进 master 卡片的红色 banner。",
     "releaseNoEntry": "本 tag 在 <code>release_notes.yaml</code> 没有条目",
     "releaseSeeChangelog": "完整变更见 <code>CHANGELOG.md</code>",
+    "releaseNotesOlder": "上一版（更旧）",
+    "releaseNotesNewer": "下一版（更新）",
+    "releaseNotesPosition": "{{index}} / {{total}}",
+    "viewUpdateHistory": "更新日志",
+    "viewUpdateHistoryHint": "查看所有历史版本的更新内容（← / → 切换版本）",
     "moreItems": "还有 {{count}} 项 · ",
     "detailContent": "详细内容 ↗",
     "loadingEllipsis": "加载中…",
@@ -1174,6 +1276,8 @@
     "width": "宽",
     "height": "高",
     "steps": "步数",
+    "sampler": "采样器",
+    "scheduler": "调度器",
     "perPrompt": "每 prompt",
     "seed": "种子（0 = 随机）",
     "seedHint": "填具体数字 → 固定可复现；0 → 每次随机",
@@ -1189,6 +1293,9 @@
     "historyTask": "历史 #{{id}}",
     "imageCount": "{{n}} 张",
     "backToCurrent": "返回当前",
+    "historyLorasMissing": "历史里的 {{n}} 个 LoRA 在本机找不到，请手动重选",
+    "loraNotFoundHint": "本机找不到，请重选",
+    "repickLora": "重选",
     "emptyHint": "填写参数后点击「开始生成」",
     "previewStep": "采样 {{step}} / {{total}}（中间步预览）",
     "waitingImages": "等待生成图…",
@@ -1299,6 +1406,8 @@
     "checkingShort": "查…",
     "pruneStale": "清失效",
     "noHistory": "暂无历史",
+    "refreshHistory": "刷新",
+    "refreshHistoryTitle": "重新读取磁盘历史（用于多 tab 同步或外部修改文件夹后）",
     "noExportableXyData": "没有可导出的 XY 数据",
     "allCellsLoadFailed": "所有 cell 图都加载失败（可能原图已释放）",
     "canvas2dUnavailable": "canvas 2d 不可用",
@@ -1434,6 +1543,14 @@
     "completed": "已完成",
     "failed": "失败",
     "canceled": "已取消"
+  },
+  "versionPhase": {
+    "curating": "筛选",
+    "preprocessing": "预处理",
+    "tagging": "打标",
+    "editing": "标签编辑",
+    "regularizing": "正则集",
+    "ready": "待训练"
   },
   "snapshot": {
     "title": "训练配置记录",
@@ -1850,6 +1967,7 @@
     "checkingBtn": "检查中…",
     "startBtn": "开始打标全部",
     "goDownload": "去下载 →",
+    "goInstallOnnx": "去安装 ONNX Runtime →",
     "wd14Loading": "加载 wd14 默认参数...",
     "wd14Params": "WD14 参数",
     "paramsSubtitle": "预填 {{link}} · 本次有效，不写回",
@@ -1887,7 +2005,12 @@
     "cancelToast": "已取消",
     "triggerWord": "触发词",
     "triggerWordPlaceholder": "如 ohwx / mychar",
-    "triggerWordHint": "打标时作为第一个 tag 写入每张 caption；空 = 不启用。改后启动打标会同步落库到当前 version。"
+    "triggerWordHint": "打标时作为第一个 tag 写入每张 caption；空 = 不启用。改后启动打标会同步落库到当前 version。",
+    "onExisting": "已有 caption",
+    "onExistingHint": "图片已有 caption 文件（.txt 或 .json）时怎么处理。",
+    "onExistingOverwrite": "覆盖",
+    "onExistingSkip": "跳过",
+    "onExistingAppend": "追加到末尾"
   },
   "presets": {
     "loadSchemaFailed": "schema 加载失败: {{error}}",
@@ -2163,5 +2286,56 @@
     "processing": "服务器处理中…",
     "failed": "失败",
     "etaPrefix": "剩余"
+  },
+  "onboarding": {
+    "title": "欢迎使用 AnimaLoraStudio",
+    "subtitle": "下面是建议安装的基础能力,勾选后一键安装。已装好的会自动打勾。",
+    "downloadSource": "下载源",
+    "downloadSourceHint": "已为你按语言推荐,可以改。下载源同时影响后续所有模型下载。",
+    "downloadSourceInstallHint": "切换后对未启动的下载生效;当前进行中的任务不会被中断。如要立即换源,可关闭引导并重启 Studio。",
+    "skipWhileInstalling": "已关闭引导,后台仍在继续下载。要彻底停止请重启 Studio。",
+    "skip": "跳过引导",
+    "installSelected": "一键安装选中 ({{count}})",
+    "checkingState": "检查安装状态…",
+    "finish": "完成",
+    "retry": "重试",
+    "showLog": "查看日志",
+    "hideLog": "收起日志",
+    "restart": "现在重启服务",
+    "restarting": "重启中…",
+    "restartHint": "全部装完,需要重启服务才能生效",
+    "installing": {
+      "generic": "安装中…",
+      "base": "正在安装: 底模套件",
+      "tagger": "正在安装: 打标功能",
+      "accel": "正在安装: 训练加速",
+      "upscaler": "正在安装: 图像增强"
+    },
+    "status": {
+      "checking": "检查中…",
+      "idle": "未安装",
+      "queued": "排队中",
+      "installing": "安装中",
+      "done": "已安装",
+      "failed": "失败"
+    },
+    "items": {
+      "base": {
+        "label": "底模套件",
+        "description": "Anima 主模型 + VAE + Qwen3 + T5,训练所需基础模型(总计约 30GB)"
+      },
+      "tagger": {
+        "label": "打标功能",
+        "description": "WD14 模型 + ONNX Runtime,自动给训练集打标签"
+      },
+      "accel": {
+        "label": "训练加速 (可选)",
+        "description": "Flash Attention,显著提速训练;CPU / 旧显卡装不上时可跳过"
+      },
+      "upscaler": {
+        "label": "图像增强 (可选)",
+        "description": "4x-AnimeSharp,预处理时把训练图放大"
+      }
+    }
   }
 }

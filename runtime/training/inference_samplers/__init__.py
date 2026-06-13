@@ -15,13 +15,14 @@ from __future__ import annotations
 
 from typing import Callable
 
-from training.inference_samplers import er_sde
+from training.inference_samplers import dpmpp_3m_sde, er_sde
 
 __all__ = ["BUILDERS", "build_inference_sampler"]
 
 
 BUILDERS: dict[str, Callable] = {
     "er_sde": er_sde.sample,
+    "dpmpp_3m_sde": dpmpp_3m_sde.sample,
 }
 
 

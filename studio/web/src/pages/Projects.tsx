@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
-import { api, type BundleImportResult, type ProjectSummary } from '../api/client'
+import { api, type BundleImportResult, type ProjectSummary, type VersionStatus } from '../api/client'
 import PageHeader from '../components/PageHeader'
 import PathPicker from '../components/PathPicker'
 import UploadProgressBar from '../components/UploadProgressBar'
@@ -9,7 +9,35 @@ import VersionStatusBadge from '../components/VersionStatusBadge'
 import { useDialog } from '../components/Dialog'
 import { useToast } from '../components/Toast'
 import { useEventStream } from '../lib/useEventStream'
+import { useLocalStorageState } from '../lib/useLocalStorageState'
 import { useUploadProgress } from '../lib/useUploadProgress'
+
+export type ProjectSortKey = 'updated' | 'created' | 'title'
+export type ProjectStatusFilter = VersionStatus | 'all'
+
+const STATUS_OPTIONS: ProjectStatusFilter[] = [
+  'all', 'preparing', 'training', 'completed', 'failed', 'canceled',
+]
+const SORT_OPTIONS: ProjectSortKey[] = ['updated', 'created', 'title']
+
+/** 过滤 + 排序（纯函数，单测覆盖）。query 匹配 title / slug / note。 */
+export function filterProjects(
+  items: ProjectSummary[],
+  opts: { query: string; status: ProjectStatusFilter; sort: ProjectSortKey },
+): ProjectSummary[] {
+  const q = opts.query.trim().toLowerCase()
+  const matched = items.filter((p) => {
+    if (q && !`${p.title}\n${p.slug}\n${p.note ?? ''}`.toLowerCase().includes(q)) return false
+    if (opts.status !== 'all' && p.active_version_status !== opts.status) return false
+    return true
+  })
+  const cmp: Record<ProjectSortKey, (a: ProjectSummary, b: ProjectSummary) => number> = {
+    updated: (a, b) => b.updated_at - a.updated_at,
+    created: (a, b) => b.created_at - a.created_at,
+    title: (a, b) => a.title.localeCompare(b.title),
+  }
+  return [...matched].sort(cmp[opts.sort])
+}
 
 export default function ProjectsPage() {
   const { t } = useTranslation()
@@ -21,6 +49,12 @@ export default function ProjectsPage() {
   const [importing, setImporting] = useState(false)
   const [showImportDialog, setShowImportDialog] = useState(false)
   const [showImportPicker, setShowImportPicker] = useState(false)
+  // 过滤面板：默认折叠；排序偏好持久化，搜索 / 状态 / 归档可见性每次进页重置
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState<ProjectStatusFilter>('all')
+  const [sortKey, setSortKey] = useLocalStorageState<ProjectSortKey>('studio:projects:sort', 'updated')
+  const [showArchived, setShowArchived] = useState(false)
   const navigate = useNavigate()
   const { toast } = useToast()
   const { confirm } = useDialog()
@@ -72,6 +106,38 @@ export default function ProjectsPage() {
     try {
       await api.deleteProject(p.id)
       toast(t('projects.deleted', { title: p.title }), 'success')
+      await refresh()
+    } catch (err) {
+      toast(String(err), 'error')
+    }
+  }
+
+  const handleArchive = async (p: ProjectSummary, e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!(await confirm(
+      t('projects.archiveConfirm', { title: p.title }),
+      { okText: t('projects.archiveBtn') },
+    ))) return
+    try {
+      await api.archiveProject(p.id)
+      toast(t('projects.archived', { title: p.title }), 'success')
+      await refresh()
+    } catch (err) {
+      toast(String(err), 'error')
+    }
+  }
+
+  const handleUnarchive = async (p: ProjectSummary, e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!(await confirm(
+      t('projects.unarchiveConfirm', { title: p.title }),
+      { okText: t('common.restore') },
+    ))) return
+    try {
+      await api.unarchiveProject(p.id)
+      toast(t('projects.unarchived', { title: p.title }), 'success')
       await refresh()
     } catch (err) {
       toast(String(err), 'error')
@@ -131,6 +197,15 @@ export default function ProjectsPage() {
     navigate(`/projects/${p.id}`)
   }
 
+  const archivedItems = items.filter((p) => p.archived_at != null)
+  const filterOpts = { query, status: statusFilter, sort: sortKey }
+  // 归档开关是视图切换（radio 语义）：开 = 只看已归档，关 = 只看活跃
+  const visible = filterProjects(
+    showArchived ? archivedItems : items.filter((p) => p.archived_at == null),
+    filterOpts,
+  )
+  const filtering = query.trim() !== '' || statusFilter !== 'all'
+
   return (
     <div className="fade-in">
       <PageHeader
@@ -138,15 +213,41 @@ export default function ProjectsPage() {
         subtitle={t('projects.description')}
         actions={
           <>
+            {/* btn 词汇与 Queue / Generate 页 header 统一：轻操作 ghost、
+             * 激活态 secondary、全部 btn-sm；唯一 primary 留给页面 CTA。 */}
+            {/* 过滤 icon：折叠态完全不占行，开关过滤行；有筛选生效且收起时带小圆点 */}
             <button
-              className="btn btn-secondary btn-sm"
+              className={`btn btn-sm ${filtersOpen ? 'btn-secondary' : 'btn-ghost'}`}
+              onClick={() => setFiltersOpen((o) => !o)}
+              aria-expanded={filtersOpen}
+              aria-label={t('projects.filters')}
+              title={t('projects.filters')}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 4h18l-7 8v6l-4 2v-8L3 4z" />
+              </svg>
+              {!filtersOpen && filtering && (
+                <span className="dot dot-running" aria-label={t('projects.filtersActive')} />
+              )}
+            </button>
+            {/* 已归档视图开关（radio 语义：开 = 列表只显示已归档项目） */}
+            <button
+              className={`btn btn-sm ${showArchived ? 'btn-secondary' : 'btn-ghost'}`}
+              onClick={() => setShowArchived((v) => !v)}
+              aria-pressed={showArchived}
+              title={t('projects.archivedToggleHint')}
+            >
+              {t('projects.archivedToggle', { n: archivedItems.length })}
+            </button>
+            <button
+              className="btn btn-ghost btn-sm"
               onClick={() => setShowImportDialog(true)}
               disabled={importing}
               title={importing ? t('projects.importing') : t('projects.importZipHint')}
             >
               {importing ? t('projects.importing') : t('projects.importZip')}
             </button>
-            <button className="btn btn-primary" onClick={() => setCreating(true)}>
+            <button className="btn btn-primary btn-sm" onClick={() => setCreating(true)}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
                 <path d="M12 5v14M5 12h14" />
               </svg>
@@ -156,7 +257,18 @@ export default function ProjectsPage() {
         }
       />
 
-      <div className="p-6">
+      {filtersOpen && (
+        <FilterBar
+          query={query}
+          onQuery={setQuery}
+          status={statusFilter}
+          onStatus={setStatusFilter}
+          sort={sortKey}
+          onSort={setSortKey}
+        />
+      )}
+
+      <div className="p-6 pt-4">
         {error && (
           <div className="mb-4 px-3.5 py-2.5 rounded-md bg-err-soft border border-err text-err text-sm font-mono">{error}</div>
         )}
@@ -175,13 +287,20 @@ export default function ProjectsPage() {
             <div className="text-lg mb-2">{t('projects.noProjects')}</div>
             <div className="text-sm">{t('projects.noProjectsHint')}</div>
           </div>
+        ) : visible.length === 0 ? (
+          <div className="mt-20 text-center text-fg-tertiary text-sm">
+            {t('common.noResults')}
+          </div>
         ) : (
           <div className="grid gap-4 auto-rows-fr" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))' }}>
-            {items.map((p) => (
+            {visible.map((p) => (
               <ProjectCard
                 key={p.id}
                 project={p}
+                archived={showArchived}
                 onClick={() => openProject(p)}
+                onArchive={(e) => handleArchive(p, e)}
+                onUnarchive={(e) => handleUnarchive(p, e)}
                 onDelete={(e) => handleDelete(p, e)}
               />
             ))}
@@ -220,6 +339,64 @@ export default function ProjectsPage() {
           onPick={(path) => { void handleImportPath(path) }}
         />
       )}
+    </div>
+  )
+}
+
+/** Header 下方的过滤 / 排序行（仅 filtersOpen 时渲染，折叠完全不占空间；
+ * 开关在 PageHeader 的过滤 icon 上）。单行：搜索 60% 居左，状态 / 排序
+ * 各 10% 推到最右。 */
+function FilterBar({
+  query,
+  onQuery,
+  status,
+  onStatus,
+  sort,
+  onSort,
+}: {
+  query: string
+  onQuery: (v: string) => void
+  status: ProjectStatusFilter
+  onStatus: (v: ProjectStatusFilter) => void
+  sort: ProjectSortKey
+  onSort: (v: ProjectSortKey) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className="px-6 py-2 border-b border-subtle flex items-center gap-3">
+      <input
+        className="input"
+        style={{ width: '60%' }}
+        value={query}
+        onChange={(e) => onQuery(e.target.value)}
+        placeholder={t('projects.searchPlaceholder')}
+        aria-label={t('common.search')}
+      />
+      <span className="flex-1" />
+      <select
+        className="input"
+        style={{ width: '10%', minWidth: 104 }}
+        value={status}
+        onChange={(e) => onStatus(e.target.value as ProjectStatusFilter)}
+        aria-label={t('common.status')}
+      >
+        {STATUS_OPTIONS.map((s) => (
+          <option key={s} value={s}>
+            {s === 'all' ? t('projects.statusAll') : t(`versionStatus.${s}`)}
+          </option>
+        ))}
+      </select>
+      <select
+        className="input"
+        style={{ width: '10%', minWidth: 104 }}
+        value={sort}
+        onChange={(e) => onSort(e.target.value as ProjectSortKey)}
+        aria-label={t('projects.sortLabel')}
+      >
+        {SORT_OPTIONS.map((s) => (
+          <option key={s} value={s}>{t(`projects.sort_${s}`)}</option>
+        ))}
+      </select>
     </div>
   )
 }
@@ -295,12 +472,19 @@ function BundleImportDialog({
 
 function ProjectCard({
   project: p,
+  archived = false,
   onClick,
+  onArchive,
+  onUnarchive,
   onDelete,
 }: {
   project: ProjectSummary
+  /** 已归档卡片：半透明 + ↺ 恢复（在 × 左边）+ × 真删；普通卡片 × = 归档。 */
+  archived?: boolean
   onClick: () => void
-  onDelete: (e: React.MouseEvent) => void
+  onArchive?: (e: React.MouseEvent) => void
+  onUnarchive?: (e: React.MouseEvent) => void
+  onDelete?: (e: React.MouseEvent) => void
 }) {
   const { t } = useTranslation()
   const [hovered, setHovered] = useState(false)
@@ -310,8 +494,8 @@ function ProjectCard({
       onClick={onClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      className={`p-[18px] text-left rounded-lg cursor-pointer flex flex-col gap-3.5 relative w-full ${hovered ? 'border-dim shadow-sm bg-surface' : 'border border-subtle bg-surface'}`}
-      style={{ transition: 'border-color 0.15s, box-shadow 0.15s' }}
+      className={`p-[18px] text-left rounded-lg cursor-pointer flex flex-col gap-3.5 relative w-full ${hovered ? 'border-dim shadow-sm bg-surface' : 'border border-subtle bg-surface'} ${archived ? 'opacity-70' : ''}`}
+      style={{ transition: 'border-color 0.15s, box-shadow 0.15s, opacity 0.15s' }}
     >
       {/* ADR-0007 §11.8-E: 右上角 = active version status；去 stage badge / 时间 / 产物 */}
       <div className="flex justify-between items-start gap-2">
@@ -323,7 +507,7 @@ function ProjectCard({
             {p.slug}
           </div>
         </div>
-        <VersionStatusBadge status={p.active_version_status} />
+        <VersionStatusBadge status={p.active_version_status} phase={p.active_version_phase} />
       </div>
 
       {p.note && (
@@ -340,13 +524,35 @@ function ProjectCard({
           <span className="text-fg-tertiary italic text-xs">{t('projects.noActiveVersion')}</span>
         )}
         <span className="flex-1" />
-        <button
-          onClick={onDelete}
-          className="bg-transparent border-none px-1.5 py-0.5 rounded-sm text-fg-tertiary text-xs cursor-pointer"
-          title={t('projects.deleteProjectTitle')}
-        >
-          ×
-        </button>
+        {archived ? (
+          <>
+            <button
+              onClick={onUnarchive}
+              className="bg-transparent border-none px-1.5 py-0.5 rounded-sm text-fg-tertiary text-xs cursor-pointer"
+              title={t('projects.unarchiveTitle')}
+              aria-label={`${t('projects.unarchiveTitle')} ${p.title}`}
+            >
+              ↺
+            </button>
+            <button
+              onClick={onDelete}
+              className="bg-transparent border-none px-1.5 py-0.5 rounded-sm text-fg-tertiary text-xs cursor-pointer"
+              title={t('projects.deleteProjectTitle')}
+              aria-label={`${t('projects.deleteProjectTitle')} ${p.title}`}
+            >
+              ×
+            </button>
+          </>
+        ) : (
+          <button
+            onClick={onArchive}
+            className="bg-transparent border-none px-1.5 py-0.5 rounded-sm text-fg-tertiary text-xs cursor-pointer"
+            title={t('projects.archiveProjectTitle')}
+            aria-label={`${t('projects.archiveProjectTitle')} ${p.title}`}
+          >
+            ×
+          </button>
+        )}
       </div>
     </button>
   )
