@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 179,
+  "count": 180,
   "routes": [
     {
       "path": "/",
@@ -103,6 +103,14 @@
         "POST"
       ],
       "name": "enqueue_generate",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/cache/index",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_cache_index",
       "type": "APIRoute"
     },
     {

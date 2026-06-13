@@ -58,6 +58,17 @@ export default function DownloadPage() {
   const [count, setCount] = useState<number>(20)
   const [busy, setBusy] = useState(false)
   const [lastUpload, setLastUpload] = useState<UploadResult | null>(null)
+  // 上传任务在 TaskLogDrawer 里独立成 LogSource —— server 端 on_log 推 SSE
+  // `project_upload_log` / `project_upload_state`，前端 accumulate 成 lines + status。
+  // 不同于 download 走 job 系统（log file 持久化 + 跨刷新可回放），upload 是
+  // 同步路由没 job，SSE 期间错过的行就丢了 —— 跨页面 / 刷新拿不到上次的历史
+  // 是预期行为（issue #251 "活着的优先" 的精神）。
+  const [uploadLogs, setUploadLogs] = useState<string[]>([])
+  const [uploadStatus, setUploadStatus] = useState<
+    'pending' | 'running' | 'done' | 'failed' | null
+  >(null)
+  const [uploadStartedAt, setUploadStartedAt] = useState<number | null>(null)
+  const [uploadFinishedAt, setUploadFinishedAt] = useState<number | null>(null)
 
   const refreshFiles = useCallback(async () => {
     try {
@@ -100,6 +111,25 @@ export default function DownloadPage() {
       evt.project_id === project.id
     ) {
       void refreshFiles()
+    } else if (
+      evt.type === 'project_upload_log' &&
+      evt.project_id === project.id
+    ) {
+      const line = typeof evt.line === 'string' ? evt.line : ''
+      if (line) setUploadLogs((prev) => [...prev, line])
+    } else if (
+      evt.type === 'project_upload_state' &&
+      evt.project_id === project.id
+    ) {
+      const status = evt.status as typeof uploadStatus
+      if (status === 'running') {
+        setUploadLogs([])  // 新一轮上传，旧 lines 清掉
+        setUploadStartedAt(Date.now() / 1000)
+        setUploadFinishedAt(null)
+      } else if (status === 'done' || status === 'failed') {
+        setUploadFinishedAt(Date.now() / 1000)
+      }
+      setUploadStatus(status)
     }
   }, { onOpen: () => void refreshStatus() })
 
@@ -178,6 +208,14 @@ export default function DownloadPage() {
           startedAt: job.started_at,
           finishedAt: job.finished_at,
           onCancel: () => void cancel(),
+        },
+        uploadStatus && {
+          key: 'upload',
+          label: t('logDrawer.upload'),
+          status: uploadStatus,
+          lines: uploadLogs,
+          startedAt: uploadStartedAt,
+          finishedAt: uploadFinishedAt,
         },
       ]}
     >

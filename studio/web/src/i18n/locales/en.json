@@ -188,6 +188,7 @@
   },
   "logDrawer": {
     "download": "Download job",
+    "upload": "Upload job",
     "preprocess": "Preprocess job",
     "dupScan": "Duplicate scan",
     "tag": "Tagging job",

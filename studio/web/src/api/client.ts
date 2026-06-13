@@ -1171,6 +1171,30 @@ export interface GenerateRequest {
   attention_backend?: AttentionBackend
   /** 设值时 prompts 限单条 + count=1（schema 校验） */
   xy_matrix?: XYMatrixSpec | null
+  /** 前端构造的 GenerateParamsSnapshot dict，server 不解释结构、透传到
+   *  daemon → image_done 时塞进加密 cache payload header。
+   *  /api/generate/cache/index 时返还作为 CacheEntry.params 回填用。 */
+  params_snapshot?: Record<string, unknown> | null
+}
+
+/** GET /api/generate/cache/index — 当前 session 加密磁盘 cache 索引。
+ *  server 端 SessionCache 按 task_id 聚合返回；前端转成 CacheEntry。 */
+export interface CacheGenerateHistoryEntry {
+  /** "cache:<task_id>" */
+  id: string
+  taskId: number
+  mode: 'single' | 'xy'
+  /** Unix timestamp ms */
+  createdAt: number
+  /** 该 task 的所有文件名（XY 时按文件名排序） */
+  filenames: string[]
+  /** GenerateParamsSnapshot dict */
+  params: Record<string, unknown>
+  /** 仅 mode=xy 存在；列每张图的 xy 位置，PreviewXYGrid 重建网格用 */
+  samples?: Array<{
+    filename: string
+    xy: { xi: number; yi: number; xv: string | number; yv: string | number | null }
+  }>
 }
 
 /** 落盘测试图历史 entry（GET /api/generate/disk-history）。
@@ -2208,6 +2232,10 @@ export const api = {
    *  注意路径用 disk/ 子前缀避开 `/api/generate/{task_id}` 的单段 catch-all。 */
   listDiskGenerateHistory: (limit = 500) =>
     req<{ entries: DiskGenerateHistoryEntry[] }>(`/api/generate/disk/history?limit=${limit}`),
+  /** 当前 session 加密磁盘 cache 历史（save_test_images=false 时唯一来源）。
+   *  server 重启 / SSE 断连 30s + LRU 后 entry 消失；刷新 / 切路由都拉这里。 */
+  listCacheGenerateHistory: () =>
+    req<{ entries: CacheGenerateHistoryEntry[] }>('/api/generate/cache/index'),
   /** 查询测试 task 状态。 */
   getGenerateTask: (id: number) => req<Task>(`/api/generate/${id}`),
   /** 测试出图单张 URL（task 跑中或刚完成时拉；客户端断连 30s + LRU 后 404）。 */

@@ -249,3 +249,128 @@ def test_convert_off_preserves_raw_bytes(tmp_path: Path) -> None:
     out = uploads.accept_one("photo.jpg", io.BytesIO(raw), tmp_path)
     assert out.added == ["photo.jpg"]
     assert (tmp_path / "photo.jpg").read_bytes() == raw
+
+
+# ---------------------------------------------------------------------------
+# PNG 直通路径（hotfix #273）：源已是 PNG 且不需要 alpha 处理 → 不 re-encode
+# ---------------------------------------------------------------------------
+
+
+def test_png_passthrough_when_convert_to_png_true(tmp_path: Path) -> None:
+    """convert_to_png=True 但源已经是 RGB PNG → 直接字节拷贝，不走 PIL re-encode。
+
+    判定：落盘字节必须跟源**完全相同**（re-encode 路径会因 zlib 参数不同导致
+    字节不一致，即便像素一致）。这是 PNG 直通的核心保证。
+    """
+    src_bytes = _png_bytes(color=(123, 45, 67))
+    out = uploads.accept_one(
+        "x.png", io.BytesIO(src_bytes), tmp_path,
+        convert_to_png=True,
+        remove_alpha_channel=False,
+    )
+    assert out.added == ["x.png"]
+    assert (tmp_path / "x.png").read_bytes() == src_bytes, (
+        "PNG 直通失败：源已是 PNG 但落盘字节被 re-encode 改了"
+    )
+
+
+def test_png_passthrough_when_remove_alpha_but_no_alpha(tmp_path: Path) -> None:
+    """convert_to_png=True + remove_alpha_channel=True，源 PNG 本身无 alpha →
+    依然走直通（没东西好 flatten 的）。"""
+    src_bytes = _png_bytes(color=(10, 20, 30))  # RGB 无 alpha
+    out = uploads.accept_one(
+        "x.png", io.BytesIO(src_bytes), tmp_path,
+        convert_to_png=True,
+        remove_alpha_channel=True,
+    )
+    assert out.added == ["x.png"]
+    assert (tmp_path / "x.png").read_bytes() == src_bytes
+
+
+def test_png_reencode_when_remove_alpha_and_has_alpha(tmp_path: Path) -> None:
+    """PNG 直通**不**应触发：源有 alpha + remove_alpha_channel=True，必须走慢
+    路径 flatten。"""
+    out = uploads.accept_one(
+        "rgba.png", io.BytesIO(_rgba_png_bytes()), tmp_path,
+        convert_to_png=True,
+        remove_alpha_channel=True,
+    )
+    assert out.added == ["rgba.png"]
+    with Image.open(tmp_path / "rgba.png") as im:
+        assert im.mode == "RGB"  # 真的 flatten 了
+
+
+def test_jpg_still_re_encodes_when_convert_true(tmp_path: Path) -> None:
+    """直通只对源 PNG 生效：JPG 必须走 re-encode 路径，输出合规 PNG。"""
+    out = uploads.accept_one(
+        "photo.jpg", io.BytesIO(_jpg_bytes()), tmp_path,
+        convert_to_png=True,
+    )
+    assert out.added == ["photo.png"]
+    with Image.open(tmp_path / "photo.png") as im:
+        assert im.format == "PNG"
+
+
+def test_png_passthrough_speed_smoke(tmp_path: Path) -> None:
+    """轻量 smoke：100 张 PNG 走直通应该 < 1s 完成（re-encode 路径同等规模
+    会跑几秒）。如果该测试 flaky 把上限调到 3s 也行；只是 sanity check
+    没人不小心把直通拆了。"""
+    import time
+    src = _png_bytes(size=(64, 64), color=(7, 7, 7))
+    files = [(f"img{i}.png", io.BytesIO(src)) for i in range(100)]
+    t0 = time.monotonic()
+    out = uploads.accept_many(files, tmp_path, convert_to_png=True)
+    elapsed = time.monotonic() - t0
+    assert len(out.added) == 100
+    assert elapsed < 3.0, f"PNG 直通失效：100 张 64×64 PNG 跑了 {elapsed:.2f}s"
+
+
+# ---------------------------------------------------------------------------
+# 阶段日志：模仿 booru downloader.on_progress 的回调
+# ---------------------------------------------------------------------------
+
+
+def test_accept_many_emits_start_and_done_log(tmp_path: Path) -> None:
+    """accept_many 开始 + 结束各推一行 `[upload]` 前缀的日志。"""
+    lines: list[str] = []
+    src = _png_bytes(color=(0, 0, 0))
+    out = uploads.accept_many(
+        [("a.png", io.BytesIO(src)), ("b.png", io.BytesIO(src))],
+        tmp_path, convert_to_png=True, on_log=lines.append,
+    )
+    assert out.added == ["a.png", "b.png"]
+    assert any(line.startswith("[upload] starting:") for line in lines)
+    assert any("all done" in line for line in lines)
+
+
+def test_zip_path_emits_per_zip_progress(tmp_path: Path) -> None:
+    """zip 处理时 emit `打开 zip` + 中间进度（数量大时） + `完成`。"""
+    lines: list[str] = []
+    # 50 张图触发至少一次 25/n 节流
+    entries = {
+        f"img{i:03d}.png": _png_bytes(size=(32, 32), color=(i, i, i))
+        for i in range(50)
+    }
+    blob = _zip_bytes(entries)
+    out = uploads.accept_one(
+        "pack.zip", io.BytesIO(blob), tmp_path,
+        convert_to_png=True, on_log=lines.append,
+    )
+    assert len(out.added) == 50
+    assert any("打开 zip" in line for line in lines)
+    assert any("完成" in line for line in lines)
+    # 中间进度行（25/50 这种）
+    assert any("/50" in line for line in lines), (
+        f"未见 zip 中间进度日志：{lines!r}"
+    )
+
+
+def test_accept_one_image_does_not_log_per_image(tmp_path: Path) -> None:
+    """单张图（非 zip）路径不该刷日志 —— 上层 accept_many 会推总结。"""
+    lines: list[str] = []
+    out = uploads.accept_one(
+        "x.png", io.BytesIO(_png_bytes()), tmp_path,
+        convert_to_png=True, on_log=lines.append,
+    )
+    assert out.added == ["x.png"]
+    assert lines == []  # 单张图无需日志噪声

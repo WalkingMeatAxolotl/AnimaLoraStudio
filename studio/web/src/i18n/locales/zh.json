@@ -188,6 +188,7 @@
   },
   "logDrawer": {
     "download": "下载任务",
+    "upload": "上传任务",
     "preprocess": "预处理任务",
     "dupScan": "去重扫描",
     "tag": "打标任务",

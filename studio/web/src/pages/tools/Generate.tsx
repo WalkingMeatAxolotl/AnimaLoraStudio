@@ -30,7 +30,7 @@ import { saveSingleSamples, saveXYMatrix } from './generate/saveTestImages'
 import { useGenerateHistory } from './generate/useGenerateHistory'
 import {
   entryImageUrl,
-  type CacheEntry, type HistoryEntry,
+  type HistoryEntry,
 } from './generate/entryAdapter'
 import PreviewXYGrid from './generate/PreviewXYGrid'
 import PromptList from './generate/PromptList'
@@ -391,8 +391,8 @@ export default function GeneratePage() {
       dataset_pick: datasetPick,
     }
     // 决策 #5 二元模式：开关开 = 落盘 + refresh disk-history（DiskEntry 由
-    // server 给）；开关关 = 直接 add CacheEntry（session 内存，关 tab 丢）。
-    // compare 不入历史（保留现状）。
+    // server 给）；开关关 = server 已自动入加密 cache，前端 refreshCache
+    // 拉新 index 即可（不再前端构造 CacheEntry）。compare 不入历史（保留现状）。
     if (mode !== 'single' && mode !== 'xy') return
     void (async () => {
       const sec = await api.getSecrets().catch(() => null)
@@ -414,20 +414,9 @@ export default function GeneratePage() {
         }
         await history.refresh()
       } else {
-        // 临时路径：直接 add CacheEntry，浏览器拉 cache URL 显示
-        const cacheEntry: CacheEntry = {
-          source: 'cache',
-          id: typeof crypto !== 'undefined' && 'randomUUID' in crypto
-            ? crypto.randomUUID()
-            : Math.random().toString(36).slice(2),
-          mode,
-          taskId,
-          createdAt: Date.now(),
-          filenames,
-          params,
-          xyMeta,
-        }
-        history.add(cacheEntry)
+        // 临时路径：server 端 image_done 已写入加密 disk cache（含 snapshot +
+        // xy 元数据），这里只拉新 index
+        await history.refreshCache()
       }
     })()
   }, [currentTask, samples, mode, selectedIndices, history, xDraft, yDraft,
@@ -525,6 +514,35 @@ export default function GeneratePage() {
             ? baseTrimmed.map((p) => `${p}, ${datasetSuffix}`)
             : [datasetSuffix])
         : baseTrimmed
+      // 跟 dispatch 一起送 snapshot 给 server：image_done 时塞进加密 cache
+      // payload header（save=false）+ list_index 时返还回填用。落盘 save=true
+      // 分支仍用各自 saveSingleSamples/saveXYMatrix 自己构造；两边字段对齐。
+      const snapshotLoras: SnapshotLora[] = loras.map((l) => ({
+        name: loraBasename(l.path),
+        scale: l.scale,
+        project_id: l.project_id ?? null,
+        version_id: l.version_id ?? null,
+      }))
+      const dispatchSnapshot: GenerateParamsSnapshot = {
+        schema_version: PARAMS_SNAPSHOT_VERSION,
+        mode,
+        prompts,
+        negative_prompt: negPrompt,
+        width, height, steps,
+        cfg_scale: cfgScale,
+        sampler_name: samplerName,
+        scheduler,
+        count: mode === 'xy' ? 1 : count,
+        seed,
+        loras: snapshotLoras,
+        xy_draft: mode === 'xy'
+          ? {
+              x: transformAxisRawForSnapshot(xDraft),
+              y: yDraft ? transformAxisRawForSnapshot(yDraft) : null,
+            }
+          : null,
+        dataset_pick: datasetPick,
+      }
       const body: GenerateRequest = {
         prompts: mergedPrompts,
         negative_prompt: negPrompt,
@@ -537,6 +555,7 @@ export default function GeneratePage() {
         lora_configs: loraConfigs,
         // attention_backend 不带：server 端套 Comfy-style runtime 并读取 generate backend。
         xy_matrix,
+        params_snapshot: dispatchSnapshot as unknown as Record<string, unknown>,
       }
       const task = await api.enqueueGenerate(body)
       // 立即同步 ref，避免 supervisor 在 enqueue 返回 → setCurrentTask 渲染

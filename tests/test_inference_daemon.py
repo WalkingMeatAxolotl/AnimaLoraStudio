@@ -113,10 +113,10 @@ def test_daemon_starts_and_reaches_idle(mock_daemon_script: Path) -> None:
     assert d.state == STATE_STOPPED
 
 
-def test_submit_task_runs_to_done(mock_daemon_script: Path) -> None:
-    from studio.services.inference import cache as generate_cache
+def test_submit_task_runs_to_done(mock_daemon_script: Path, tmp_path: Path) -> None:
+    from studio.services.inference import disk_cache as generate_cache
 
-    generate_cache.clear_all()
+    generate_cache.init(tmp_path / "cache")
     d = InferenceDaemon(script_path=mock_daemon_script)
     d.start()
     events: list[dict[str, Any]] = []
@@ -157,13 +157,14 @@ def test_submit_task_runs_to_done(mock_daemon_script: Path) -> None:
 
 def test_submit_task_delivery_disk_when_save_to_disk_true(
     mock_daemon_script: Path,
+    tmp_path: Path,
 ) -> None:
     """决策 #14 / #15：config 含 save_test_images_at_dispatch=True 时，
     image_done event 的 delivery 字段是 'disk'。
     """
-    from studio.services.inference import cache as generate_cache
+    from studio.services.inference import disk_cache as generate_cache
 
-    generate_cache.clear_all()
+    generate_cache.init(tmp_path / "cache")
     d = InferenceDaemon(script_path=mock_daemon_script)
     d.start()
     events: list[dict[str, Any]] = []

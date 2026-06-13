@@ -1,15 +1,19 @@
-/** 测试出图历史栏（plan Step 4 重写）。
+/** 测试出图历史栏。
  *
- * 设计转向（决策 #5 / #9 / #12）：
- * - 砍 IndexedDB 整层（~-250 LOC）—— 不再做"params + thumb 双份持久化"
- * - 单一 source of truth = 磁盘 PNG（持久 entry）+ server cache（临时 entry）
- * - mount 总拉 disk-history（不分模式）；不受 save_test_images 开关影响
- * - session in-memory 持有所有 entry，关 tab 即丢；刷新页面重 mount 拉 disk
- * - HistoryEntry 是 union: DiskEntry | CacheEntry（adapter pattern，分支收敛
- *   到 entryAdapter.ts）
- * - 没有 merge upgrade / dedup / pruneStale —— 两类 entry 自然独立、不会撞 id
+ * 两条 source 都从 server 拉（本地零持久化层）：
+ * - DiskEntry：`/api/generate/disk/history` 扫 `studio_data/test/<date>/` 下
+ *   落盘 PNG metadata（save_test_images=true 写的）
+ * - CacheEntry：`/api/generate/cache/index` 当前 session 加密磁盘 cache
+ *   (save_test_images=false 时；server 重启 / SSE 断连 30s + LRU 后丢)
+ *
+ * 之前的版本前端 useState 持 cacheEntries —— 切路由组件 unmount 就丢了；现在
+ * cache 由 server 持，前端只 fetch 视图，切路由 mount 再拉。零持久化心智 +
+ * 零脏数据（server 死了 cache index 也空了，不会指向不存在的图）。
+ *
+ * add() 被砍：server 端 image_done 自动入 cache，前端只 refresh 拉新视图。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { api, type CacheGenerateHistoryEntry } from '../../../api/client'
 import {
   entryDelete,
   type CacheEntry,
@@ -37,9 +41,7 @@ interface DiskHistoryServerEntry {
   id: string
   date: string
   mode: 'single' | 'xy'
-  /** single 时存在；xy 时 undefined（用 folder） */
   filename?: string
-  /** xy 时存在；single 时 undefined */
   folder?: string
   path: string
   image_url: string
@@ -47,7 +49,6 @@ interface DiskHistoryServerEntry {
   created_at: number
   schema_version: number
   params: unknown
-  /** xy 模式 server 派生的 per-cell 元数据 */
   xy_meta?: DiskHistoryServerXYMeta | null
 }
 
@@ -85,17 +86,56 @@ function diskEntryFromServer(d: DiskHistoryServerEntry): DiskEntry {
   }
 }
 
+/** server cache index → 前端 CacheEntry。XY 模式从 server samples 重建 xyMeta；
+ *  axis 元数据从 params.xy_draft 派生（跟 entryBadge 同一套）。 */
+function cacheEntryFromServer(c: CacheGenerateHistoryEntry): CacheEntry {
+  const params = c.params as unknown as GenerateParamsSnapshot
+  let xyMeta: HistoryXYMeta | undefined
+  if (c.mode === 'xy' && c.samples && c.samples.length > 0) {
+    const xDraft = params.xy_draft?.x
+    const yDraft = params.xy_draft?.y
+    const xValues = xDraft?.raw.split(',').map((s) => s.trim()).filter(Boolean) ?? []
+    const yValues = yDraft
+      ? yDraft.raw.split(',').map((s) => s.trim()).filter(Boolean)
+      : [null as string | null]
+    xyMeta = {
+      xAxis: xDraft?.axis ?? '',
+      yAxis: yDraft?.axis ?? null,
+      xValues,
+      yValues,
+      samples: c.samples.map((s) => ({
+        path: s.filename,
+        xy: {
+          xi: s.xy.xi, yi: s.xy.yi,
+          xv: typeof s.xy.xv === 'number' ? s.xy.xv : (s.xy.xv ?? ''),
+          yv: s.xy.yv,
+        },
+      })),
+    }
+  }
+  return {
+    source: 'cache',
+    id: c.id,
+    mode: c.mode,
+    taskId: c.taskId,
+    createdAt: c.createdAt,
+    filenames: c.filenames,
+    params,
+    xyMeta,
+  }
+}
+
 export interface UseGenerateHistoryResult {
   /** 所有 entry，按 createdAt desc 排 */
   entries: HistoryEntry[]
-  /** disk-history 拉取中（mount 短暂期间为 true） */
+  /** 任一 source 在拉取中 */
   loading: boolean
-  /** 添加新 entry（出图完成 / 落盘后调用） */
-  add: (entry: HistoryEntry) => void
   /** 删除 entry：DiskEntry 调 DELETE endpoint；CacheEntry 仅本地 splice */
   remove: (id: string) => Promise<void>
   /** 手动重拉 disk-history（多 tab 同步 / 外部改 studio_data 后用户主动刷新） */
   refresh: () => Promise<void>
+  /** 重拉 cache index（image_done SSE 后 Generate.tsx 调） */
+  refreshCache: () => Promise<void>
 }
 
 export function useGenerateHistory(): UseGenerateHistoryResult {
@@ -105,39 +145,39 @@ export function useGenerateHistory(): UseGenerateHistoryResult {
   const loadedRef = useRef(false)
 
   const fetchDisk = async () => {
-    setLoading(true)
     try {
       const r = await fetch('/api/generate/disk/history')
       if (!r.ok) return
       const data = (await r.json()) as DiskHistoryResponse
       setDiskEntries(data.entries.map(diskEntryFromServer))
     } catch {
-      // 拉取失败不挂前端 —— 历史栏只显示 session 期间出的 CacheEntry
-    } finally {
-      setLoading(false)
+      // 拉取失败不挂前端 —— 历史栏只显示另一 source
+    }
+  }
+
+  const fetchCache = async () => {
+    try {
+      const data = await api.listCacheGenerateHistory()
+      setCacheEntries(data.entries.map(cacheEntryFromServer))
+    } catch {
+      // 同上
     }
   }
 
   useEffect(() => {
     if (loadedRef.current) return
     loadedRef.current = true
-    void fetchDisk()
+    setLoading(true)
+    void Promise.all([fetchDisk(), fetchCache()]).finally(() => setLoading(false))
   }, [])
 
-  // entries union 按 createdAt desc 排。两类 entry 自然独立 —— 同一张图
-  // 不会既是 disk 又是 cache（开关冻结后 task 走单一路径）。
+  // entries union 按 createdAt desc 排。两类 entry 自然独立 —— 同一 task
+  // 不会既走 disk 又走 cache（save_test_images 开关 dispatch 时冻结，task
+  // 只走单一路径）。
   const entries = useMemo<HistoryEntry[]>(
     () => [...diskEntries, ...cacheEntries].sort((a, b) => b.createdAt - a.createdAt),
     [diskEntries, cacheEntries],
   )
-
-  const add = (entry: HistoryEntry) => {
-    if (entry.source === 'disk') {
-      setDiskEntries((prev) => [entry, ...prev])
-    } else {
-      setCacheEntries((prev) => [entry, ...prev])
-    }
-  }
 
   const remove = async (id: string) => {
     const target = entries.find((e) => e.id === id)
@@ -151,9 +191,10 @@ export function useGenerateHistory(): UseGenerateHistoryResult {
       }
       setDiskEntries((prev) => prev.filter((e) => e.id !== id))
     } else {
+      // CacheEntry：本地剔即可（server 端 LRU / shutdown 会清理）
       setCacheEntries((prev) => prev.filter((e) => e.id !== id))
     }
   }
 
-  return { entries, loading, add, remove, refresh: fetchDisk }
+  return { entries, loading, remove, refresh: fetchDisk, refreshCache: fetchCache }
 }

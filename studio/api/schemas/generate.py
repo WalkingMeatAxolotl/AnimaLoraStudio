@@ -1,7 +1,7 @@
 """/api/generate 请求 BaseModel（PR-6 commit 5 从 server.py 抽出）。"""
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel
 
@@ -26,3 +26,9 @@ class GenerateRequest(BaseModel):
     attention_backend: Optional[AttentionBackend] = None
     # XY 矩阵：None=单图模式；设值时 schema 强制 prompts 单条 + count=1
     xy_matrix: Optional[XYMatrixSpec] = None
+    # 前端构造的 GenerateParamsSnapshot dict（prefs 视图：含 prompts/loras/
+    # xy_draft/dataset_pick 等），server 不解释结构、原样透传到 daemon →
+    # image_done 时塞进加密 cache payload header。/api/generate/cache/index
+    # 时返还前端，作为 CacheEntry.params 回填用。save_test_images=true 走
+    # 落盘分支也共用这份 snapshot 写入 PNG anima_params metadata。
+    params_snapshot: Optional[dict[str, Any]] = None

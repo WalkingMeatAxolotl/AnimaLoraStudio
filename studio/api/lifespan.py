@@ -17,7 +17,7 @@ import app` 不再触发文件系统初始化，便于测试 / 工具 import 而
     1. 取消挂着的 SSE disconnect timer
     2. SystemStatsSampler.stop
     3. Supervisor.stop（含 daemon stop + 子进程 graceful terminate）
-    4. generate_cache.clear_all（释放图缓存内存）
+    4. disk_cache.clear_all（删 session 目录 + key 跟着进程退出一起没）
 """
 from __future__ import annotations
 
@@ -86,10 +86,16 @@ async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
 
     # 测试出图 tempdir 遗留清扫（防 supervisor crash 泄漏 anima_gen_* 目录）
     from ..services.inference.core import cleanup_stale_generate_tempdirs
-    from ..services.inference import cache as generate_cache
+    from ..services.inference import disk_cache as generate_cache
     from ..services import models as _md
     from ..services import system_stats
+    from ..infrastructure.paths import STUDIO_DATA
     cleanup_stale_generate_tempdirs()
+
+    # 加密磁盘 cache 初始化：startup_clean 清掉残留 session-* 目录（上次 SIGKILL
+    # / 断电 / 正常 shutdown 漏删的），再开一个新 session（随机 session_id + aes_key，
+    # 进程退出 key 一起没 → 残留文件等于乱字节，扫盘工具识不出）。
+    generate_cache.init(STUDIO_DATA / ".cache" / "generate")
 
     # TAEFlux（中间步预览）后台下载：跟 server 一起启动；下载失败不阻塞 server。
     # 如果已下载则 noop；下载期间用户能正常用其他功能，预览功能等下载完才生效。
@@ -147,7 +153,7 @@ async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
         n = generate_cache.total_count()
         if n:
             generate_cache.clear_all()
-            logger.info("flushed generate cache (%d images) after SSE idle", n)
+            logger.info("flushed generate disk cache (%d images) after SSE idle", n)
         _disconnect_timer["t"] = None
 
     bus.set_connection_callbacks(
@@ -177,5 +183,6 @@ async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
             timer.cancel()
         sys_sampler.stop()
         sup.stop()
-        # commit 11：lifespan shutdown 清掉所有图 cache（释放内存 + 干净退出）
+        # shutdown 清整个 session 目录 + 进程退出 aes_key 一起没（即便 rmtree
+        # 失败，残留文件无 key 也是乱字节，下次启动 startup_clean 兜底）
         generate_cache.clear_all()

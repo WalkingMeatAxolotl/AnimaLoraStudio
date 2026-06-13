@@ -213,6 +213,13 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
         except Exception:
             cfg_dict["save_test_images_at_dispatch"] = False
 
+        # 前端 params snapshot 透传：路由 → config.json → supervisor →
+        # daemon.submit_task → _ActiveTask.params_snapshot → cache.put 时
+        # 跟 PNG bytes 一起塞进加密 payload header。下划线前缀提示 daemon
+        # 子进程不读这个字段（cfg 透传不解析）。
+        if body.params_snapshot:
+            cfg_dict["_anima_params_snapshot_"] = body.params_snapshot
+
         cfg_path = tempdir / "config.json"
         cfg_path.write_text(
             json.dumps(cfg_dict, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -327,7 +334,7 @@ def get_generate_sample(task_id: int, filename: str) -> Any:
     _validate_component_or_400(filename)
     if not filename.lower().endswith(".png"):
         raise HTTPException(400, "only .png supported")
-    from ...services.inference import cache as generate_cache
+    from ...services.inference import disk_cache as generate_cache
     data = generate_cache.get_image(task_id, filename)
     if data is None:
         raise HTTPException(404)
@@ -837,6 +844,25 @@ def list_disk_history(limit: int = 500) -> dict[str, Any]:
     """
     limit = max(1, min(int(limit), 2000))
     return {"entries": _scan_png_metadata(limit)}
+
+
+@router.get("/api/generate/cache/index")
+def list_cache_index() -> dict[str, Any]:
+    """当前 session 加密磁盘 cache 里所有 entry 的索引（save_test_images=false
+    时前端历史栏唯一来源）。
+
+    server 进程 SessionCache 维护活跃 entry → 这里直接 dump；按 createdAt
+    desc 排。entry 里的 params snapshot 是图入 cache 时跟 PNG bytes 一起塞
+    进加密 payload header 的那份，进程死了一起没。
+
+    刷新 / 切路由都拉这里 → 前端零持久化层，零脏数据可能。
+    """
+    from ...services.inference import disk_cache as generate_cache
+    try:
+        return {"entries": generate_cache.list_index()}
+    except RuntimeError:
+        # cache 尚未 init（理论上不该发生，lifespan startup 已建好）
+        return {"entries": []}
 
 
 def _resolve_disk_png(date_str: str, mode: str, filename: str) -> Path:

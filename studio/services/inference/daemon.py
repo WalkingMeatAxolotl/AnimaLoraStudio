@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ...paths import REPO_ROOT
-from . import cache as generate_cache
+from . import disk_cache as generate_cache
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +60,12 @@ class _ActiveTask:
     # 导致一 task 内一半 cache 一半 disk。enqueueGenerate 写 cfg.save_test_images_at_dispatch
     # → submit_task 读出来存这里 → _handle_image_done 决定 SSE delivery 子字段
     save_to_disk: bool = False
+    # 前端构造的 GenerateParamsSnapshot dict；image_done 时跟 PNG bytes 一起
+    # 塞进加密 cache payload header，list_index 时返回给前端历史栏回填用。
+    # 走 config.json 透传：路由 → supervisor → daemon.submit_task → 这里。
+    params_snapshot: dict[str, Any] = field(default_factory=dict)
+    # 'single' | 'xy'；前端历史栏分组用，从 params_snapshot.mode 派生
+    mode: str = "single"
     started_at: float = field(default_factory=time.time)
 
 
@@ -332,15 +338,27 @@ class InferenceDaemon:
             self._req_seq += 1
             req_id = f"task-{task_id}-{self._req_seq}"
             save_to_disk = bool(config.get("save_test_images_at_dispatch", False))
+            snapshot = config.get("_anima_params_snapshot_") or {}
+            if not isinstance(snapshot, dict):
+                snapshot = {}
+            mode = str(snapshot.get("mode") or "single")
+            if mode not in ("single", "xy"):
+                mode = "single"
             self._active = _ActiveTask(
                 task_id=task_id, request_id=req_id, on_event=on_event,
                 save_to_disk=save_to_disk,
+                params_snapshot=snapshot,
+                mode=mode,
             )
             self._state = STATE_BUSY
             self._reschedule_idle_timer_locked()
             assert self._proc is not None and self._proc.stdin is not None
             stdin = self._proc.stdin
 
+        # snapshot 是 server 内部协议字段，不传给 daemon 子进程（避免下游
+        # config schema 校验拒未知字段；下划线前缀本就提示"server-only"）。
+        if "_anima_params_snapshot_" in config:
+            config = {k: v for k, v in config.items() if k != "_anima_params_snapshot_"}
         msg = {
             "id": req_id,
             "action": "generate",
@@ -548,9 +566,15 @@ class InferenceDaemon:
         forward_msg = msg
         if kind == "image_done" and "image_b64" in msg:
             filename = msg.get("filename") or ""
+            xy_info = msg.get("xy") if isinstance(msg.get("xy"), dict) else None
             try:
                 data = base64.b64decode(msg["image_b64"])
-                generate_cache.cache_image(active.task_id, filename, data)
+                generate_cache.cache_image(
+                    active.task_id, filename, data,
+                    snapshot=active.params_snapshot,
+                    mode=active.mode,
+                    xy_info=xy_info,
+                )
             except Exception:
                 logger.exception("cache_image failed for %s", filename)
             forward_msg = {k: v for k, v in msg.items() if k != "image_b64"}

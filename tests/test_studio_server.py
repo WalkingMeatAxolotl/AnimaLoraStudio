@@ -66,17 +66,19 @@ def test_health_returns_ok(client: TestClient) -> None:
 
 
 def test_generate_sample_response_is_not_browser_cached(client: TestClient) -> None:
-    from studio.services.inference import cache as generate_cache
+    """加密磁盘 cache 读路径：put PNG → GET /api/generate/{tid}/sample/{fn} →
+    解密后 no-store 返回。lifespan 已 init session cache，这里直接 put/get。
+    """
+    from studio.services.inference import disk_cache as generate_cache
 
-    generate_cache.clear_all()
     try:
-        generate_cache.cache_image(7, "sample.png", b"PNG")
+        generate_cache.cache_image(7, "sample.png", b"PNG", snapshot={"mode": "single"})
         resp = client.get("/api/generate/7/sample/sample.png")
         assert resp.status_code == 200
         assert resp.content == b"PNG"
         assert resp.headers["cache-control"] == "no-store"
     finally:
-        generate_cache.clear_all()
+        generate_cache.drop_task(7)
 
 
 # ---------------------------------------------------------------------------
