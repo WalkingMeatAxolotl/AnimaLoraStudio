@@ -543,8 +543,10 @@ class Supervisor:
             log_fp = open(log_path, "wb")
 
             cmd = self._cmd_builder(task, cfg_path)
-            # ADR 0006 PR-1：LORA_TASK_ID 注入让训练子进程把 state 文件写到
+            # ADR 0006 PR-1：LORA_TASK_ID 注入让训练子进程把用户周期 save 写到
             # output_dir/state/task_<TID>/ 子目录，避免同 version 多 task 互覆盖。
+            # Addendum 2 起 auto_epoch_state.pt 改落 task 档案 tasks/<id>/state/
+            # —— 路径由子进程从 --monitor-state-file 推出（bootstrap，同 samples/）。
             # ADR-0009 PR-1 C6：TRACE_ENV + PROCESS_ENV 让 worker bootstrap 拿到。
             proc = self._popen(cmd, log_fp, extra_env={
                 "LORA_TASK_ID": str(task["id"]),

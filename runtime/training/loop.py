@@ -399,8 +399,10 @@ def run(ctx: TrainingContext) -> None:
             # 跟用户主动开的 save_state_every_epochs / save_state_every_steps（多份历史归档）独立，无 args gate ——
             # 这是系统级 pause 后盾，给 handle_interrupt 暂停时引用。
             # 时机：放在 user-opt epoch save 之后，确保即使 user-opt 没开也有 backup。
-            auto_state_path = build_auto_epoch_state_path(ctx.state_dir())
-            auto_config_path = build_auto_epoch_config_path(ctx.state_dir())
+            # Addendum 2：落 auto_state_dir()（task 档案 tasks/<id>/state/；CLI fallback
+            # 到 state_dir()）—— 用户周期 save 仍走上面的 state_dir() 不动。
+            auto_state_path = build_auto_epoch_state_path(ctx.auto_state_dir())
+            auto_config_path = build_auto_epoch_config_path(ctx.auto_state_dir())
             monitor_data = None
             if ctx.monitor_server:
                 try:

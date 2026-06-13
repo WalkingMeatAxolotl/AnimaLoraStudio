@@ -453,3 +453,194 @@ def test_delete_task_guards_against_foreign_dir(server_env, monkeypatch) -> None
 
     assert foreign.exists()
     assert stray.exists()
+
+
+def test_delete_task_removes_new_layout_state_via_task_dir(server_env, monkeypatch) -> None:
+    """新布局（tasks/<id>/state/）由 task_dir rmtree 覆盖，无需 guard 分支。"""
+    lifecycle, _ = _lifecycle()
+    tasks_root = server_env["root"] / "tasks"
+    monkeypatch.setattr(
+        lifecycle, "task_dir", lambda tid: tasks_root / str(tid),
+    )
+    tid = _create_task(server_env, status="pending")
+    state_dir = tasks_root / str(tid) / "state"
+    state_dir.mkdir(parents=True)
+    pt = state_dir / "auto_epoch_state.pt"
+    pt.write_bytes(b"x")
+    with db.connection_for(server_env["db"]) as conn:
+        db.update_task(
+            conn, tid,
+            status="canceled",
+            finished_at=time.time(),
+            last_state_path=str(pt),
+        )
+
+    lifecycle.delete_queue_item(tid)
+
+    assert not (tasks_root / str(tid)).exists()
+
+
+# ---------------------------------------------------------------------------
+# v13 backfill：旧布局存量 task 回填 last_state_*
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def project_env(server_env, monkeypatch):
+    """server_env + 真实 project/version 目录树（monkeypatch PROJECTS_DIR）。"""
+    from studio.services.projects import projects, versions
+    monkeypatch.setattr(projects, "PROJECTS_DIR", server_env["root"] / "projects")
+    with db.connection_for(server_env["db"]) as conn:
+        p = projects.create_project(conn, title="P1")
+        v = versions.create_version(conn, project_id=p["id"], label="baseline")
+    server_env["project"] = p
+    server_env["version"] = v
+    server_env["vdir"] = versions.version_dir(p["id"], p["slug"], "baseline")
+    return server_env
+
+
+def _write_legacy_state(vdir: Path, tid: int, with_config: bool = True) -> Path:
+    """旧布局：<version>/output/state/task_<id>/auto_epoch_state.pt。"""
+    state_dir = vdir / "output" / "state" / f"task_{tid}"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    pt = state_dir / "auto_epoch_state.pt"
+    pt.write_bytes(b"legacy state")
+    if with_config:
+        (state_dir / "auto_epoch_state.config.json").write_text(
+            "{}", encoding="utf-8"
+        )
+    return pt
+
+
+def _run_backfill(env) -> None:
+    from studio.infrastructure.migrations._v13_last_state import migrate
+    with db.connection_for(env["db"]) as conn:
+        migrate(conn)  # 幂等：列已存在则跳过 DDL，只跑 backfill
+
+
+def test_backfill_fills_legacy_failed_task(project_env) -> None:
+    tid = _create_task(project_env, status="pending")
+    with db.connection_for(project_env["db"]) as conn:
+        db.update_task(
+            conn, tid,
+            status="failed",
+            project_id=project_env["project"]["id"],
+            version_id=project_env["version"]["id"],
+        )
+    pt = _write_legacy_state(project_env["vdir"], tid)
+
+    _run_backfill(project_env)
+
+    task = _get_task(project_env, tid)
+    assert task["last_state_path"] == str(pt)
+    assert task["last_config_path"] == str(pt.with_name("auto_epoch_state.config.json"))
+    # epoch/step 不回填（要 torch.load 才拿得到，纯 UI 提示字段）
+    assert task["last_state_epoch"] is None
+    # 回填后 is_resumable / resume endpoint 走同一管道
+    lifecycle, _ = _lifecycle()
+    assert lifecycle._is_resumable(task) is True
+
+
+def test_backfill_skips_task_without_legacy_file(project_env) -> None:
+    """Addendum 1 之前的 task（盘上没有 auto backup）→ 维持 NULL。"""
+    tid = _create_task(project_env, status="pending")
+    with db.connection_for(project_env["db"]) as conn:
+        db.update_task(
+            conn, tid,
+            status="failed",
+            project_id=project_env["project"]["id"],
+            version_id=project_env["version"]["id"],
+        )
+    _run_backfill(project_env)
+    assert _get_task(project_env, tid)["last_state_path"] is None
+
+
+def test_backfill_skips_done_and_orphan_tasks(project_env) -> None:
+    """done 不回填（不可 resume）；无 project/version 的游离 task 不回填。"""
+    done_id = _create_task(project_env, status="pending")
+    orphan_id = _create_task(project_env, status="pending")
+    with db.connection_for(project_env["db"]) as conn:
+        db.update_task(
+            conn, done_id,
+            status="done",
+            project_id=project_env["project"]["id"],
+            version_id=project_env["version"]["id"],
+        )
+        db.update_task(conn, orphan_id, status="failed")
+    _write_legacy_state(project_env["vdir"], done_id)
+    _write_legacy_state(project_env["vdir"], orphan_id)
+
+    _run_backfill(project_env)
+
+    assert _get_task(project_env, done_id)["last_state_path"] is None
+    assert _get_task(project_env, orphan_id)["last_state_path"] is None
+
+
+def test_backfill_does_not_overwrite_existing(project_env) -> None:
+    """已有 last_state_path（事件落 DB 写的）→ 不被旧布局探测覆盖。"""
+    tid = _create_task(project_env, status="pending")
+    with db.connection_for(project_env["db"]) as conn:
+        db.update_task(
+            conn, tid,
+            status="failed",
+            project_id=project_env["project"]["id"],
+            version_id=project_env["version"]["id"],
+            last_state_path="/already/recorded.pt",
+        )
+    _write_legacy_state(project_env["vdir"], tid)
+    _run_backfill(project_env)
+    assert _get_task(project_env, tid)["last_state_path"] == "/already/recorded.pt"
+
+
+def test_backfill_missing_config_stores_null_config(project_env) -> None:
+    """旧布局只有 .pt 没有 .config.json → state 回填、config 留 NULL
+    （resume endpoint 对 config NULL 放行，bootstrap 沿用 task config yaml）。"""
+    tid = _create_task(project_env, status="pending")
+    with db.connection_for(project_env["db"]) as conn:
+        db.update_task(
+            conn, tid,
+            status="canceled",
+            project_id=project_env["project"]["id"],
+            version_id=project_env["version"]["id"],
+        )
+    pt = _write_legacy_state(project_env["vdir"], tid, with_config=False)
+    _run_backfill(project_env)
+    task = _get_task(project_env, tid)
+    assert task["last_state_path"] == str(pt)
+    assert task["last_config_path"] is None
+
+
+# ---------------------------------------------------------------------------
+# runtime: auto_state_dir 位置（Addendum 2 决策 8）
+# ---------------------------------------------------------------------------
+
+
+def test_auto_state_dir_uses_task_archive_when_injected(tmp_path: Path) -> None:
+    """studio 跑（bootstrap 从 --monitor-state-file 推出档案根）→ auto backup
+    落 tasks/<id>/state/；用户周期 save 的 state_dir() 不受影响。"""
+    pytest.importorskip("torch")
+    from argparse import Namespace
+    from runtime.training.context import TrainingContext
+
+    ctx = TrainingContext(args=Namespace())
+    ctx.output_dir = tmp_path / "output"
+    ctx.lora_task_id = 7
+    ctx.task_archive_state_dir = tmp_path / "tasks" / "7" / "state"
+
+    assert ctx.auto_state_dir() == tmp_path / "tasks" / "7" / "state"
+    assert ctx.auto_state_dir().is_dir()  # mkdir 副作用
+    assert ctx.state_dir() == tmp_path / "output" / "state" / "task_7"
+
+
+def test_auto_state_dir_falls_back_to_state_dir_for_cli(tmp_path: Path) -> None:
+    """纯 CLI（没传 --monitor-state-file → 字段 None）→ 行为不变。"""
+    pytest.importorskip("torch")
+    from argparse import Namespace
+    from runtime.training.context import TrainingContext
+
+    ctx = TrainingContext(args=Namespace())
+    ctx.output_dir = tmp_path / "output"
+    ctx.lora_task_id = None
+    ctx.task_archive_state_dir = None
+
+    assert ctx.auto_state_dir() == tmp_path / "output" / "state" / "task_unknown"

@@ -190,6 +190,10 @@ def run(ctx: TrainingContext) -> None:
     _msf = getattr(args, "monitor_state_file", None)
     ctx.sample_dir = (Path(_msf).parent.parent / "samples") if _msf else (ctx.output_dir / "samples")
     ctx.sample_dir.mkdir(parents=True, exist_ok=True)
+    # ADR 0006 Addendum 2：auto_epoch_state.pt 同样归 task 档案 —— tasks/<id>/state/，
+    # 跟 samples/ 同根。没传 --monitor-state-file（纯 CLI）→ None，
+    # ctx.auto_state_dir() fallback 到 output_dir/state/task_<id>/（行为不变）。
+    ctx.task_archive_state_dir = (Path(_msf).parent.parent / "state") if _msf else None
     # supervisor 启动训练时通过 env LORA_TASK_ID 注入 queue task id（ADR 0006）。
     # 用于 ctx.state_dir() 计算 per-task state 子目录；env 不存在时 fallback unknown。
     _env_tid = os.environ.get("LORA_TASK_ID")

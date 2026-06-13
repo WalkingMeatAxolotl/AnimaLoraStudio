@@ -332,8 +332,9 @@ def delete_queue_item(task_id: int) -> dict[str, Any]:
     tdir = task_dir(task_id)
     if tdir.exists():
         shutil.rmtree(tdir, ignore_errors=True)
-    # ADR Addendum 2 决策 4：恢复点文件（<output_dir>/state/task_<id>/）不在
-    # task_dir 下，生命周期同样跟 task 行绑定，删 task 一并清。目录名必须
+    # ADR Addendum 2 决策 4：**旧布局**恢复点（<version>/output/state/task_<id>/，
+    # 本 Addendum 之前的存量）不在 task_dir 下，单独清；新布局
+    # （tasks/<id>/state/）已被上面的 task_dir rmtree 覆盖。目录名必须
     # 精确等于 task_<id> 才动手 —— 防 DB 路径异常时误删别的目录。
     for col in ("last_state_path", "paused_state_path"):
         p = task.get(col)
