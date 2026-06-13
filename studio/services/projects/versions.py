@@ -1,7 +1,7 @@
 """Version 数据模型 + 物理目录 + fork 训练树 + activate。
 
 Version 是 Pipeline 的「实验单元」：每个 version 独立维护 train/ reg/
-output/ samples/ 与 monitor_state.json。label 由用户起（baseline /
+output/。label 由用户起（baseline /
 high-lr 这种语义名），同 project 内唯一，且不可改（路径锚点）。
 
 删除：直接 rmtree version 目录 + DELETE db 行。不可恢复。
@@ -373,7 +373,9 @@ DEFAULT_TRAIN_FOLDER = "1_data"
 
 
 def _ensure_version_tree(vdir: Path) -> None:
-    for sub in ("train", "reg", "output", "samples"):
+    # samples/ 不再建：采样图是 task 档案（studio_data/tasks/<id>/samples/），
+    # version 树里只有老 task 的历史数据，读兼容由 samples.py 多候选解析负责
+    for sub in ("train", "reg", "output"):
         (vdir / sub).mkdir(parents=True, exist_ok=True)
     (vdir / "train" / DEFAULT_TRAIN_FOLDER).mkdir(parents=True, exist_ok=True)
 
