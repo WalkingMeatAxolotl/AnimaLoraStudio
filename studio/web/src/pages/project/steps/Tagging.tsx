@@ -58,6 +58,7 @@ type LLMTaggerForm = {
   endpoint: LLMPreset['endpoint']
   messages: LLMMessage[]
   output_format: LLMPreset['output_format']
+  inject_existing_tags: boolean
   temperature: number
   max_tokens: number
   timeout: number
@@ -109,6 +110,7 @@ function fromLLMPreset(p: LLMPreset): LLMTaggerForm {
     endpoint: p.endpoint,
     messages: p.messages.map((m) => ({ ...m })),
     output_format: p.output_format,
+    inject_existing_tags: p.inject_existing_tags ?? false,
     temperature: p.temperature,
     max_tokens: p.max_tokens,
     timeout: p.timeout,
@@ -261,7 +263,7 @@ export default function TaggingPage() {
     const out: Record<string, unknown> = {}
     if (llmForm.preset_id !== llmDefaults.current_preset) out.current_preset = llmForm.preset_id
     const fields: ReadonlyArray<Exclude<keyof LLMTaggerForm, 'preset_id'>> = [
-      'base_url', 'model', 'endpoint', 'messages', 'output_format',
+      'base_url', 'model', 'endpoint', 'messages', 'output_format', 'inject_existing_tags',
       'temperature', 'max_tokens', 'timeout', 'max_retries',
       'concurrency', 'requests_per_second', 'max_requests_per_minute',
       'max_side', 'jpeg_quality', 'max_image_mb',
@@ -820,6 +822,22 @@ function LLMTaggerPanel({
           </select>
         </label>
       </div>
+
+      <label className="flex items-center gap-2 cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={form.inject_existing_tags}
+          disabled={disabled}
+          onChange={(e) => onChange({ ...form, inject_existing_tags: e.target.checked })}
+        />
+        <span className="text-sm">结合本地打标数据</span>
+        <span className="text-xs text-fg-tertiary">
+          读取同名 .txt / .json 的已有 caption 作为先验注入 prompt
+        </span>
+        {form.inject_existing_tags !== activePreset.inject_existing_tags && (
+          <span className="badge badge-warn text-[10px]">已改</span>
+        )}
+      </label>
 
       <div className="flex items-center gap-3 flex-wrap">
         <LLMNumberInput label="temperature" value={form.temperature} base={activePreset.temperature} step={0.05} min={0} max={2} disabled={disabled} onChange={(v) => onChange({ ...form, temperature: v })} />

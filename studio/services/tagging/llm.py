@@ -505,10 +505,15 @@ class LLMTagger:
                 quality=cfg.jpeg_quality,
                 max_image_mb=cfg.max_image_mb,
             )
+            existing = (
+                self._read_existing_caption(image_path)
+                if cfg.inject_existing_tags else ""
+            )
             content = self._call_with_retry(
                 cfg,
                 data_url,
                 image_path,
+                existing=existing,
                 rate_limiter=rate_limiter,
             )
             if cfg.output_format == "text":
@@ -547,6 +552,7 @@ class LLMTagger:
         data_url: str,
         image_path: Path,
         *,
+        existing: str = "",
         rate_limiter: _RequestRateLimiter | None = None,
     ) -> str:
         last_exc: Optional[Exception] = None
@@ -554,12 +560,12 @@ class LLMTagger:
             try:
                 if cfg.endpoint == "responses":
                     endpoint = _openai_compatible_endpoint(cfg.base_url, kind="responses")
-                    body = self._responses_payload(cfg, data_url, image_path)
+                    body = self._responses_payload(cfg, data_url, image_path, existing)
                 else:
                     endpoint = _openai_compatible_endpoint(
                         cfg.base_url, kind="chat/completions"
                     )
-                    body = self._chat_payload(cfg, data_url, image_path)
+                    body = self._chat_payload(cfg, data_url, image_path, existing)
                 if rate_limiter is not None:
                     rate_limiter.wait()
                 started = time.monotonic()
@@ -602,19 +608,23 @@ class LLMTagger:
         cfg: "secrets.LLMPresetConfig",
         data_url: str,
         image_path: Path,
+        existing: str = "",
     ) -> dict[str, Any]:
         """按 preset.messages 顺序构造 chat-completions messages 数组。
 
         text item → 单条 message；image item → 单条 `{role: user, content: [image_url]}`。
+        若 existing 非空，会在含图片的 user message 里放在 image 之前作为先验提示。
         相邻同 role 不自动合并（OpenAI 完全 OK；Anthropic 兼容层会自动处理）。
         """
+        hint = self._existing_hint_text(existing)
         messages: list[dict[str, Any]] = []
         for item in cfg.messages:
             if item.type == "image":
-                messages.append({
-                    "role": "user",
-                    "content": [{"type": "image_url", "image_url": {"url": data_url}}],
-                })
+                user_content: list[dict[str, Any]] = []
+                if hint:
+                    user_content.append({"type": "text", "text": hint})
+                user_content.append({"type": "image_url", "image_url": {"url": data_url}})
+                messages.append({"role": "user", "content": user_content})
             else:
                 messages.append({"role": item.role, "content": item.content})
         return {
@@ -630,6 +640,7 @@ class LLMTagger:
         cfg: "secrets.LLMPresetConfig",
         data_url: str,
         image_path: Path,
+        existing: str = "",
     ) -> dict[str, Any]:
         """Responses API 限制式适配：
 
@@ -655,6 +666,9 @@ class LLMTagger:
         user_content: list[dict[str, Any]] = []
         if user_text:
             user_content.append({"type": "input_text", "text": user_text})
+        hint = self._existing_hint_text(existing)
+        if hint:
+            user_content.append({"type": "input_text", "text": hint})
         user_content.append({"type": "input_image", "image_url": data_url})
 
         return {
@@ -665,6 +679,44 @@ class LLMTagger:
             "stream": False,
             "input": [{"role": "user", "content": user_content}],
         }
+
+    @staticmethod
+    def _read_existing_caption(image_path: Path) -> str:
+        """读图片同名 .txt 或 .json，转成纯文本 tag 串。
+
+        优先 .txt（wd14/cltagger 默认输出）；缺则 .json（走 caption_format
+        归一化拼装）。两者都无 / 读不出有效内容返回空串，调用方据此跳过注入。
+        """
+        txt = image_path.with_suffix(".txt")
+        if txt.exists():
+            try:
+                text = txt.read_text(encoding="utf-8").strip()
+                if text:
+                    return text
+            except OSError:
+                pass
+        js = image_path.with_suffix(".json")
+        if js.exists():
+            try:
+                data = json.loads(js.read_text(encoding="utf-8"))
+                text = caption_json_to_text(normalize_caption_json(data)).strip()
+                if text:
+                    return text
+            except (OSError, ValueError):
+                pass
+        return ""
+
+    @staticmethod
+    def _existing_hint_text(existing: str) -> str:
+        """把已有 caption 包装成给 LLM 的先验提示文本；空串原样返回。"""
+        text = (existing or "").strip()
+        if not text:
+            return ""
+        return (
+            "Existing local tags from a prior tagger (treat as reference, "
+            "refine if inaccurate, may extend with newly observed details):\n"
+            f"{text}"
+        )
 
     @staticmethod
     def _extract_chat_text(payload: dict[str, Any]) -> str:
