@@ -339,6 +339,47 @@ def test_upload_single_image(client: TestClient) -> None:
     # ADR-0007 PR-5: upload 不再推 stage；download_image_count 派生即可
 
 
+def test_upload_runs_accept_many_off_event_loop(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression：accept_many 必须跑在 threadpool worker（不持有 asyncio loop），
+    否则 PIL / zipfile 同步 CPU 工作会卡死 event loop —— 用户表现是上传"卡 100%"
+    后 F5 刷新页面完全卡死（所有 HTTP 请求排队等被卡的 loop），并且 SIGINT 也
+    无效（PIL/zipfile C 扩展持 GIL 期间 Python 收不到信号）。
+
+    判定：把 accept_many 包一层，在调用瞬间 try asyncio.get_running_loop()
+    —— 跑在 event loop 线程会返回 loop（BUG），跑在 worker 线程会 RuntimeError
+    （正确）。
+    """
+    import asyncio
+    from studio.services.dataset import uploads
+    in_loop: list[bool] = []
+    original = uploads.accept_many
+
+    def tracking(*args, **kwargs):
+        try:
+            asyncio.get_running_loop()
+            in_loop.append(True)
+        except RuntimeError:
+            in_loop.append(False)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "studio.api.routers.projects.ingestion.uploads_svc.accept_many",
+        tracking,
+    )
+    p = _make_project(client)
+    r = client.post(
+        f"/api/projects/{p['id']}/upload",
+        files=[("files", ("a.jpg", b"\xff\xd8jpgdata", "image/jpeg"))],
+    )
+    assert r.status_code == 200, r.text
+    assert in_loop == [False], (
+        "accept_many ran on the asyncio event loop thread — F5 卡死 bug 复发。"
+        " 路由必须用 run_in_threadpool 把同步 CPU 工作挪进 worker 线程。"
+    )
+
+
 def test_upload_zip_extracts_images(client: TestClient) -> None:
     p = _make_project(client)
     blob = _zip_bytes({"a.jpg": b"AA", "sub/b.png": b"BB", "skip.txt": b"X"})

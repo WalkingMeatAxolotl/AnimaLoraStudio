@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 
 from ...errors import _validate_component_or_400  # noqa: F401  reserved for future use
 from ...schemas.ingestion import (
@@ -154,6 +155,12 @@ async def upload_local_files(
     复用 `gelbooru.convert_to_png` / `remove_alpha_channel` 设置：开启时上传图
     也归一到 PNG（同 stem 加 `_1` 后缀避免 caption 撞车），与 booru 下载链路
     保持一致。
+
+    accept_many() 是同步 CPU 密集（PIL 解码 / zip 解压 / PNG 重编码），直接在
+    async 路由里跑会卡死 asyncio event loop —— 期间所有其它 HTTP 请求都排队等，
+    用户 F5 刷新时连静态资源都拉不动，看起来"完全卡死"，并且 SIGINT 被 PIL/zipfile
+    C 扩展持 GIL 卡掉，终端 Ctrl-C 也无效。挪进 run_in_threadpool 让 event loop
+    保持响应。
     """
     if not files:
         raise HTTPException(400, "没有上传文件")
@@ -170,7 +177,8 @@ async def upload_local_files(
         data = await f.read()
         pairs.append((f.filename or "", io.BytesIO(data)))
     sec = secrets.load()
-    result = uploads_svc.accept_many(
+    result = await run_in_threadpool(
+        uploads_svc.accept_many,
         pairs, pdir,
         convert_to_png=sec.gelbooru.convert_to_png,
         remove_alpha_channel=sec.gelbooru.remove_alpha_channel,

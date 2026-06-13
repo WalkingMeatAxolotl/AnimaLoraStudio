@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
 from ...errors import _data_export_path, _export_result, _unique_data_export_path
@@ -220,7 +221,11 @@ def import_bundle_zip(body: BundleImportBody) -> dict[str, Any]:
 
 @router.post("/api/projects/import-bundle/upload")
 async def import_bundle_upload(file: UploadFile = File(...)) -> dict[str, Any]:
-    """上传 bundle zip → 新建 project + version。"""
+    """上传 bundle zip → 新建 project + version。
+
+    `_import_bundle_from_path` 是同步 zip 解压 + manifest 校验 + 落盘，必须挪进
+    run_in_threadpool 否则卡死 event loop（详见 ingestion.upload_local_files）。
+    """
     if not file.filename:
         raise HTTPException(400, "缺少上传文件")
     if Path(file.filename).suffix.lower() != ".zip":
@@ -233,7 +238,9 @@ async def import_bundle_upload(file: UploadFile = File(...)) -> dict[str, Any]:
                 break
             tmp.write(chunk)
         tmp.close()
-        return _import_bundle_from_path(Path(tmp.name), file.filename)
+        return await run_in_threadpool(
+            _import_bundle_from_path, Path(tmp.name), file.filename,
+        )
     finally:
         try:
             Path(tmp.name).unlink(missing_ok=True)
@@ -243,7 +250,11 @@ async def import_bundle_upload(file: UploadFile = File(...)) -> dict[str, Any]:
 
 @router.post("/api/projects/import-train")
 async def import_train_zip(file: UploadFile = File(...)) -> dict[str, Any]:
-    """上传训练集 zip → 新建 project + v1（stage=tagging），返回新项目。"""
+    """上传训练集 zip → 新建 project + v1（stage=tagging），返回新项目。
+
+    train_io.import_train() 是同步 zip 解压 + 写 db + 落图，挪进 run_in_threadpool
+    （详见 ingestion.upload_local_files 的根因说明）。
+    """
     if not file.filename:
         raise HTTPException(400, "缺少上传文件")
     tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
@@ -256,11 +267,15 @@ async def import_train_zip(file: UploadFile = File(...)) -> dict[str, Any]:
             tmp.write(chunk)
         tmp.close()
         tmp_path = Path(tmp.name)
-        with db.connection_for() as conn:
-            try:
-                result = train_io.import_train(conn, tmp_path)
-            except train_io.TrainIOError as exc:
-                raise HTTPException(400, str(exc)) from exc
+
+        def _do_import() -> dict[str, Any]:
+            with db.connection_for() as conn:
+                try:
+                    return train_io.import_train(conn, tmp_path)
+                except train_io.TrainIOError as exc:
+                    raise HTTPException(400, str(exc)) from exc
+
+        result = await run_in_threadpool(_do_import)
     finally:
         try:
             Path(tmp.name).unlink(missing_ok=True)
