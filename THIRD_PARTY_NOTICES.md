@@ -137,6 +137,37 @@
 `class Lion` 是自实现（~50 行），按论文 Algorithm 1 重写，不直接复制 reference 代码，
 故 license 不强制 attribution；论文引用 + reference URL 作为学术礼貌已在 docstring 标注。
 
+### nikhilvyas / SOAP — SOAP optimizer (MIT)
+
+- **来源**：[`nikhilvyas/SOAP`](https://github.com/nikhilvyas/SOAP) — Nikhil Vyas
+- **论文**：Vyas et al. 2024, *SOAP: Improving and Stabilizing Shampoo using Adam*,
+  [arXiv:2409.11321](https://arxiv.org/abs/2409.11321)
+- **许可**：MIT — Copyright (c) 2024 Nikhil Vyas
+- **涉及文件**：
+  - `utils/soap_optimizer.py` `class SOAP` — Adam-in-Shampoo-eigenbasis update
+    （`_project` / `_project_back` / `_orthogonal_matrix(_qr)` / `_update_preconditioner`）
+    派生自官方参考实现
+  - `runtime/training/optimizers/soap.py` — registry 接线（本仓库代码）
+  - `utils/optimizer_utils.py` `create_soap` — 工厂壳（本仓库代码）
+- **修改点**：optimizer state 固定 fp32（bf16 LoRA/LoKr 训练数值稳定）；新增
+  `precond_in_state=False` 把可重算的 GG/Q 剔出 state_dict 保持 ckpt 小 + resume
+  冷重建。原文件头 MIT license block 已贴在 `utils/soap_optimizer.py` 顶部，请勿删除。
+
+### facebookresearch / schedule-free — Schedule-Free 机制 (Apache-2.0, research attribution)
+
+- **来源**：[`facebookresearch/schedule-free`](https://github.com/facebookresearch/schedule-free)
+  `AdamWScheduleFree`
+- **论文**：Defazio et al. 2024, *The Road Less Scheduled*,
+  [arXiv:2405.15682](https://arxiv.org/abs/2405.15682)
+- **许可**：Apache-2.0
+- **涉及文件**：
+  - `utils/soap_optimizer.py` `class SOAPScheduleFree` — 在 SOAP 预条件外套 Schedule-Free
+    轨迹（丢一阶动量、z/x Polyak 平均、`train()`/`eval()` 权重 swap）。SF 机制 base-optimizer
+    无关，按论文 + 参考 `AdamWScheduleFree` 的 in-place y/z 更新与 train/eval swap 自实现，
+    非直接复制代码；SOAP 预条件部分见上条 MIT 归属
+  - `runtime/training/optimizers/soap_sf.py` — registry 接线 + lr_scheduler=none 校验（本仓库代码）
+  - `utils/optimizer_utils.py` `create_soap_sf` — 工厂壳（本仓库代码）
+
 ### InfoNoise timestep sampler (research attribution — 自实现)
 
 - **论文**：*Information-Guided Noise Allocation for Efficient Diffusion Training*,

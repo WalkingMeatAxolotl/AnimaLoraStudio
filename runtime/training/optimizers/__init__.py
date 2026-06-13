@@ -14,7 +14,15 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from training.optimizers import adamw, automagic, lion, prodigy, prodigy_plus_schedulefree
+from training.optimizers import (
+    adamw,
+    automagic,
+    lion,
+    prodigy,
+    prodigy_plus_schedulefree,
+    soap,
+    soap_sf,
+)
 
 __all__ = ["BUILDERS", "VALIDATORS", "build_optimizer", "validate_optimizer",
            "validate_schema_consistency"]
@@ -26,12 +34,15 @@ BUILDERS: dict[str, Callable] = {
     "lion": lion.build,
     "prodigy": prodigy.build,
     "prodigy_plus_schedulefree": prodigy_plus_schedulefree.build,
+    "soap": soap.build,
+    "soap_sf": soap_sf.build,
 }
 
 # 启动期校验函数（None / 未注册 = 跳过）
 VALIDATORS: dict[str, Callable[[object], None]] = {
     "automagic": automagic.validate,
     "prodigy_plus_schedulefree": prodigy_plus_schedulefree.validate,
+    "soap_sf": soap_sf.validate,
 }
 
 

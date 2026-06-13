@@ -97,7 +97,10 @@ def run(ctx: TrainingContext) -> None:
 
     ctx.current_epoch = ctx.start_epoch
     ctx.model.train()
-    if ctx.optimizer_type == "prodigy_plus_schedulefree" and hasattr(ctx.optimizer, "train"):
+    # Schedule-Free 系优化器（PPSF / soap_sf 等）须从 train_mode 起步：参数张量
+    # 持有梯度评估点 y 而非 averaged x。duck-type 而非硬编码 optimizer_type，新增
+    # schedule-free 变体零改动；AdamW / Prodigy 无 .train 方法走 hasattr 静默跳过。
+    if hasattr(ctx.optimizer, "train") and callable(getattr(ctx.optimizer, "train")):
         ctx.optimizer.train()
     # step_start_time 由 train_loop 内自己重置；这里不需要
 

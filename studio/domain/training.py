@@ -238,12 +238,12 @@ class TrainingConfig(BaseModel):
     )
     lr_scheduler: Literal["none", "cosine", "cosine_with_restart", "cosine_with_warmup"] = Field(
         "none",
-        description="学习率调度（none = 常数；Prodigy / PPSF / Automagic 固定为 none）",
+        description="学习率调度（none = 常数；Prodigy / PPSF / Automagic / SOAP-SF 固定为 none）",
         json_schema_extra=_meta(
             "training",
-            disable_when="optimizer_type==automagic||optimizer_type==prodigy||optimizer_type==prodigy_plus_schedulefree",
+            disable_when="optimizer_type==automagic||optimizer_type==prodigy||optimizer_type==prodigy_plus_schedulefree||optimizer_type==soap_sf",
             disable_value="none",
-            disable_hint="自适应优化器固定为常数学习率",
+            disable_hint="自适应 / Schedule-Free 优化器固定为常数学习率",
         ),
     )
     lr_scheduler_t0: int = Field(
@@ -266,9 +266,9 @@ class TrainingConfig(BaseModel):
         description="cosine_with_warmup 预热步数",
         json_schema_extra=_meta("training", show_when="lr_scheduler==cosine_with_warmup", advanced=True),
     )
-    optimizer_type: Literal["adamw", "automagic", "lion", "prodigy", "prodigy_plus_schedulefree"] = Field(
+    optimizer_type: Literal["adamw", "automagic", "lion", "prodigy", "prodigy_plus_schedulefree", "soap", "soap_sf"] = Field(
         "adamw",
-        description="优化器。adamw 标准基线；automagic 自适应每参数 lr（推荐 lr=1e-6）；lion 显存约 AdamW 一半（推荐 lr=AdamW lr / 3）；prodigy / prodigy_plus_schedulefree 自适应估 lr（lr 填 1.0）",
+        description="优化器。adamw 标准基线；automagic 自适应每参数 lr（推荐 lr=1e-6）；lion 显存约 AdamW 一半（推荐 lr=AdamW lr / 3）；prodigy / prodigy_plus_schedulefree 自适应估 lr（lr 填 1.0）；soap Adam-in-Shampoo-eigenbasis 二阶预条件（拟合更快，lr 同 AdamW 量级）；soap_sf SOAP + Schedule-Free（lr_scheduler 固定 none）",
         json_schema_extra=_meta("training"),
     )
     prodigy_d_coef: float = Field(
@@ -378,6 +378,55 @@ class TrainingConfig(BaseModel):
         True,
         description="PPSF 启用 stable AdamW 风格归一化，防止单步梯度尺度异常；默认开启",
         json_schema_extra=_meta("training", show_when="optimizer_type==prodigy_plus_schedulefree", advanced=True),
+    )
+    # ------------------------- SOAP / SOAP-SF 专属字段 -------------------------
+    # SOAP = Adam in the Shampoo eigenbasis（Vyas et al. 2024, arxiv 2409.11321）。
+    # soap_sf = SOAP + Schedule-Free（arxiv 2405.15682）；选 soap_sf 时 lr_scheduler
+    # 必须 none（启动期校验会 fatal），lr 用 AdamW 量级（不像 Prodigy 填 1.0）。
+    soap_beta1: float = Field(
+        0.95, ge=0.0, lt=1.0,
+        description="SOAP β1。soap：Adam 一阶动量衰减；soap_sf：Schedule-Free 的 z↔x 插值权重（不是动量）。soap_sf 常用 0.9",
+        json_schema_extra=_meta("training", show_when="optimizer_type==soap||optimizer_type==soap_sf", advanced=True),
+    )
+    soap_beta2: float = Field(
+        0.95, ge=0.0, lt=1.0,
+        description="SOAP β2（二阶矩 / eigenbasis 协方差衰减）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==soap||optimizer_type==soap_sf", advanced=True),
+    )
+    soap_precondition_frequency: int = Field(
+        10, ge=1,
+        description="每 N 步刷新一次 Shampoo 特征基：越大越省算力、特征基越旧。典型 5-20",
+        json_schema_extra=_meta("training", show_when="optimizer_type==soap||optimizer_type==soap_sf", advanced=True),
+    )
+    soap_max_precond_dim: int = Field(
+        10000, ge=1,
+        description="逐维阈值：某轴维度 ≤ 此值才建满秩二阶预条件，> 此值该轴退化为 Adam。设大（10000）让大特征维也做二阶=提速主来源；设小=SOAP-lite 省显存",
+        json_schema_extra=_meta("training", show_when="optimizer_type==soap||optimizer_type==soap_sf", advanced=True),
+    )
+    soap_shampoo_beta: float = Field(
+        -1.0, le=1.0,
+        description="Shampoo 协方差 EMA 衰减；< 0 时复用 β2（推荐）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==soap||optimizer_type==soap_sf", advanced=True),
+    )
+    soap_precond_in_state: bool = Field(
+        True,
+        description="是否把可重算的 Shampoo 矩阵（GG/Q）存进 ckpt。False=ckpt 更小、resume 时冷重建特征基（从零训练不 resume 时零代价）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==soap||optimizer_type==soap_sf", advanced=True),
+    )
+    soap_sf_weight_lr_power: float = Field(
+        2.0, ge=0.0,
+        description="Schedule-Free Polyak 权重里 lr 的幂；越大越偏向 lr 大的步",
+        json_schema_extra=_meta("training", show_when="optimizer_type==soap_sf", advanced=True),
+    )
+    soap_sf_r: float = Field(
+        0.0, ge=0.0,
+        description="Schedule-Free Polyak 权重里 step index 的幂（0=均匀平均；越大越偏向后期 iterate，短训练 x 追 z 更快）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==soap_sf", advanced=True),
+    )
+    soap_sf_warmup_steps: int = Field(
+        0, ge=0,
+        description="Schedule-Free 线性 lr warmup 步数；SF 一般不需要，几步可稳定早期预条件估计",
+        json_schema_extra=_meta("training", show_when="optimizer_type==soap_sf", advanced=True),
     )
     weight_decay: float = Field(
         0.0, ge=0.0,
@@ -606,8 +655,8 @@ class TrainingConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_prodigy_scheduler(self) -> "TrainingConfig":
-        """Prodigy / Automagic 系列固定使用常数学习率，外部 scheduler 统一拦截。"""
-        if self.optimizer_type in {"automagic", "prodigy", "prodigy_plus_schedulefree"} and self.lr_scheduler != "none":
+        """Prodigy / Automagic / Schedule-Free 系列固定使用常数学习率，外部 scheduler 统一拦截。"""
+        if self.optimizer_type in {"automagic", "prodigy", "prodigy_plus_schedulefree", "soap_sf"} and self.lr_scheduler != "none":
             raise ValueError(
                 f"optimizer_type={self.optimizer_type} requires lr_scheduler=none "
                 "(自适应优化器固定使用常数学习率)."

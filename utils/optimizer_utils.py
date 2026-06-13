@@ -11,6 +11,10 @@ Optimizer Utils Module - 优化器创建
 6. Automagic - Per-parameter adaptive lr via sign-agreement tracking
    原作者: Ostris (https://github.com/ostris/ai-toolkit, MIT license, Copyright (c)
    2024 Ostris, LLC). bf16 Kahan summation path 借鉴自 tdrussell/diffusion-pipe.
+7. SOAP - Adam in the Shampoo eigenbasis (Vyas et al., 2024, arxiv 2409.11321)
+8. SOAP-SF - Schedule-Free SOAP，SOAP 预条件 + Schedule-Free trajectory
+   (Defazio et al., 2024, "The Road Less Scheduled", arxiv 2405.15682)。SOAP 类
+   实现在 utils/soap_optimizer.py（MIT，Copyright (c) 2024 Nikhil Vyas）。
 """
 
 from __future__ import annotations
@@ -204,10 +208,31 @@ def create_optimizer(
             **kwargs,
         )
 
+    elif optimizer_type == "soap":
+        return create_soap(
+            params=params,
+            lr=learning_rate,
+            betas=betas,
+            weight_decay=weight_decay,
+            eps=eps,
+            **kwargs,
+        )
+
+    elif optimizer_type == "soap_sf":
+        return create_soap_sf(
+            params=params,
+            lr=learning_rate,
+            betas=betas,
+            weight_decay=weight_decay,
+            eps=eps,
+            **kwargs,
+        )
+
     else:
         raise ValueError(
             f"Unknown optimizer type: {optimizer_type}. "
-            f"Choose from: adamw, automagic, automagic_v2, lion, prodigy, prodigy_plus_schedulefree"
+            f"Choose from: adamw, automagic, automagic_v2, lion, prodigy, "
+            f"prodigy_plus_schedulefree, soap, soap_sf"
         )
 
 
@@ -1207,6 +1232,118 @@ def create_prodigy_plus_schedulefree(
 
     total = sum(p.numel() for g in optimizer.param_groups for p in g["params"] if p.requires_grad)
     logger.info(f"[ProdigyPlus] Trainable params: {total:,}")
+    return optimizer
+
+
+def create_soap(
+    params: Iterator[nn.Parameter],
+    lr: float,
+    betas: tuple = (0.95, 0.95),
+    weight_decay: float = 0.01,
+    eps: float = 1e-8,
+    shampoo_beta: float = -1.0,
+    precondition_frequency: int = 10,
+    max_precond_dim: int = 10000,
+    precond_in_state: bool = True,
+    **kwargs,
+) -> Optimizer:
+    """创建 SOAP 优化器（Vyas et al. 2024, arxiv 2409.11321）。
+
+    SOAP = Adam 跑在 Shampoo 的 eigenbasis 里：用梯度协方差的特征基旋转梯度，
+    在该基里做标准 Adam，再旋转回来。相比纯 Adam，对矩阵型参数（LoRA/LoKr 的
+    低秩因子）拟合更快；相比 Shampoo，预条件刷新更省（precondition_frequency）。
+
+    实现见 utils/soap_optimizer.py（MIT, Copyright (c) 2024 Nikhil Vyas）。
+
+    Args:
+        betas: (Adam β1, β2)，SOAP 论文默认 (0.95, 0.95)。
+        shampoo_beta: Shampoo 协方差 EMA 衰减；< 0 时复用 β2。
+        precondition_frequency: 每 N 步刷新一次特征基（越大越省算力、越旧）。
+        max_precond_dim: 逐维阈值——某轴维度 ≤ 此值才建满秩预条件，> 此值该轴退化
+            为 Adam。设大（如 10000）让大特征维也做二阶 = 提速来源；设小 = SOAP-lite。
+        precond_in_state: False 时把可重算的 Shampoo 矩阵（GG/Q）剔出 state_dict，
+            ckpt 更小，resume 时冷重建（从零训练不 resume 时零代价）。
+    """
+    from utils.soap_optimizer import SOAP
+
+    param_list = params if _is_param_groups(params) else list(params)
+    optimizer = SOAP(
+        param_list,
+        lr=lr,
+        betas=tuple(betas),
+        shampoo_beta=shampoo_beta,
+        eps=eps,
+        weight_decay=weight_decay,
+        precondition_frequency=precondition_frequency,
+        max_precond_dim=max_precond_dim,
+        precond_in_state=precond_in_state,
+        **kwargs,
+    )
+    logger.info(
+        f"Creating SOAP optimizer (lr={lr}, betas={tuple(betas)}, wd={weight_decay}, "
+        f"precond_freq={precondition_frequency}, max_precond_dim={max_precond_dim})"
+    )
+    return optimizer
+
+
+def create_soap_sf(
+    params: Iterator[nn.Parameter],
+    lr: float,
+    betas: tuple = (0.9, 0.95),
+    weight_decay: float = 0.01,
+    eps: float = 1e-8,
+    shampoo_beta: float = -1.0,
+    precondition_frequency: int = 10,
+    max_precond_dim: int = 10000,
+    precond_in_state: bool = True,
+    weight_lr_power: float = 2.0,
+    r: float = 0.0,
+    warmup_steps: int = 0,
+    **kwargs,
+) -> Optimizer:
+    """创建 Schedule-Free SOAP（SOAP 预条件 + Schedule-Free 轨迹）。
+
+    在 SOAP 的 Adam-in-Shampoo-eigenbasis update 外面套 Schedule-Free 机制
+    （Defazio et al. 2024, "The Road Less Scheduled", arxiv 2405.15682）：丢掉
+    一阶动量 buffer，用 base 序列 z 与 Polyak-Ruppert 平均 x 的插值取代 LR 调度。
+    因此**不需要 lr_scheduler**（调用方应强制 lr_scheduler=none 并启动期校验），
+    并像其他 schedule-free 优化器一样暴露 train()/eval()：sample/save 前 eval()
+    切到平均权重 x，事后 train() 切回 y（trainer 的 optimizer_eval_mode 已统一处理）。
+
+    实现见 utils/soap_optimizer.py `SOAPScheduleFree`。
+
+    Args:
+        betas: (SF 插值权重 β1, 二阶矩衰减 β2)。SF 下 β1 不是动量而是 z↔x 插值系数。
+        weight_lr_power / r / warmup_steps: Schedule-Free 专属——Polyak 权重里 lr
+            的幂 / step index 的幂（0=均匀平均）/ 线性 lr warmup 步数。
+        其余同 create_soap。
+
+    注意：SF 的 Polyak 平均在极短训练（≤ ~100 步）严重滞后（x ≈ 轨迹质心 = 欠拟合），
+    那种 regime 用纯 ``soap`` 而非 ``soap_sf``；千步级训练 SF 正常。
+    """
+    from utils.soap_optimizer import SOAPScheduleFree
+
+    param_list = params if _is_param_groups(params) else list(params)
+    optimizer = SOAPScheduleFree(
+        param_list,
+        lr=lr,
+        betas=tuple(betas),
+        shampoo_beta=shampoo_beta,
+        eps=eps,
+        weight_decay=weight_decay,
+        precondition_frequency=precondition_frequency,
+        max_precond_dim=max_precond_dim,
+        precond_in_state=precond_in_state,
+        weight_lr_power=weight_lr_power,
+        r=r,
+        warmup_steps=warmup_steps,
+        **kwargs,
+    )
+    logger.info(
+        f"Creating Schedule-Free SOAP optimizer (lr={lr}, betas={tuple(betas)}, "
+        f"wd={weight_decay}, precond_freq={precondition_frequency}, "
+        f"max_precond_dim={max_precond_dim}, weight_lr_power={weight_lr_power}, r={r})"
+    )
     return optimizer
 
 
