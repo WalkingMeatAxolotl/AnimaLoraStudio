@@ -213,9 +213,11 @@ export default function ProjectsPage() {
         subtitle={t('projects.description')}
         actions={
           <>
+            {/* btn 词汇与 Queue / Generate 页 header 统一：轻操作 ghost、
+             * 激活态 secondary、全部 btn-sm；唯一 primary 留给页面 CTA。 */}
             {/* 过滤 icon：折叠态完全不占行，开关过滤行；有筛选生效且收起时带小圆点 */}
             <button
-              className={`btn btn-sm ${filtersOpen ? 'btn-primary' : 'btn-secondary'}`}
+              className={`btn btn-sm ${filtersOpen ? 'btn-secondary' : 'btn-ghost'}`}
               onClick={() => setFiltersOpen((o) => !o)}
               aria-expanded={filtersOpen}
               aria-label={t('projects.filters')}
@@ -230,7 +232,7 @@ export default function ProjectsPage() {
             </button>
             {/* 已归档视图开关（radio 语义：开 = 列表只显示已归档项目） */}
             <button
-              className={`btn btn-sm ${showArchived ? 'btn-primary' : 'btn-secondary'}`}
+              className={`btn btn-sm ${showArchived ? 'btn-secondary' : 'btn-ghost'}`}
               onClick={() => setShowArchived((v) => !v)}
               aria-pressed={showArchived}
               title={t('projects.archivedToggleHint')}
@@ -238,14 +240,14 @@ export default function ProjectsPage() {
               {t('projects.archivedToggle', { n: archivedItems.length })}
             </button>
             <button
-              className="btn btn-secondary btn-sm"
+              className="btn btn-ghost btn-sm"
               onClick={() => setShowImportDialog(true)}
               disabled={importing}
               title={importing ? t('projects.importing') : t('projects.importZipHint')}
             >
               {importing ? t('projects.importing') : t('projects.importZip')}
             </button>
-            <button className="btn btn-primary" onClick={() => setCreating(true)}>
+            <button className="btn btn-primary btn-sm" onClick={() => setCreating(true)}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
                 <path d="M12 5v14M5 12h14" />
               </svg>
