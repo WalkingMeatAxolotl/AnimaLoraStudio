@@ -178,6 +178,16 @@ def run(ctx: TrainingContext) -> None:
     ctx.device = "cuda" if torch.cuda.is_available() else "cpu"
     ctx.dtype = torch.bfloat16 if args.mixed_precision == "bf16" else torch.float32
 
+    if ctx.device == "cuda":
+        if getattr(args, "tf32_matmul", True):
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            torch.set_float32_matmul_precision("high")
+            logger.info("TF32 matmul 已启用")
+        if getattr(args, "cudnn_benchmark", True) and not getattr(args, "torch_compile", False):
+            torch.backends.cudnn.benchmark = True
+            logger.info("cuDNN benchmark 已启用")
+
     # 创建输出目录
     ctx.output_dir = Path(args.output_dir)
     ctx.output_dir.mkdir(parents=True, exist_ok=True)

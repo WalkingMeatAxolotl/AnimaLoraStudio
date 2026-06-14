@@ -44,6 +44,11 @@ def run(ctx: TrainingContext) -> None:
     """跑训练直到 args.epochs 或 args.max_steps 上限。"""
     args = ctx.args
 
+    if getattr(args, "kv_trim", False) and getattr(args, "torch_compile", False):
+        logger.warning("kv_trim 已被 torch_compile 静默禁用（动态 seq 维度导致 recompile）")
+    if getattr(args, "kv_trim", False) and getattr(args, "cache_text_embeds", False):
+        logger.info("kv_trim + cache_text_embeds：使用缓存的 t5_attn 做 KV trim")
+
     step_start_time = time.perf_counter()
 
     for epoch in range(ctx.start_epoch, args.epochs):
@@ -58,12 +63,13 @@ def run(ctx: TrainingContext) -> None:
                 step_start_time = time.perf_counter()
 
             captions = batch["captions"]
+            _nb = getattr(args, "non_blocking_transfer", True)
 
             # 获取 latents（缓存模式或实时编码）
             if ctx.use_cached:
-                latents = batch["latents"].to(ctx.device, dtype=ctx.dtype)
+                latents = batch["latents"].to(ctx.device, dtype=ctx.dtype, non_blocking=_nb)
             else:
-                pixels = batch["pixel_values"].to(ctx.device, dtype=ctx.dtype)
+                pixels = batch["pixel_values"].to(ctx.device, dtype=ctx.dtype, non_blocking=_nb)
                 with torch.no_grad():
                     pixels_5d = pixels.unsqueeze(2)  # [B,C,1,H,W]
                     latents = ctx.vae.model.encode(pixels_5d, ctx.vae.scale)
@@ -72,38 +78,47 @@ def run(ctx: TrainingContext) -> None:
 
             # 文本编码
             with torch.no_grad():
-                if bool(getattr(args, "caption_comfy_encoding", True)):
-                    # Comfy-style（默认）：raw caption 进 Qwen（不清洗）；T5 整段
-                    # 字面 tokenize，不解析权重语法——booru 括号 tag 保持字面，
-                    # 等价于 CUI 用户推理时转义后 T5 看到的序列。与测试出图 /
-                    # 训练预览的 conditioning 同一链路。
-                    qwen_texts = [str(c) for c in captions]
-                    qwen_emb, qwen_attn = encode_qwen(ctx.qwen_model, ctx.qwen_tok, qwen_texts, ctx.device)
-                    t5_ids, t5_attn, t5_w = tokenize_t5_comfy_literal(ctx.t5_tok, captions, max_length=512)
+                if "qwen_emb" in batch:
+                    # 文本缓存快路径：跳过 Qwen/T5 前向
+                    qwen_emb = batch["qwen_emb"].to(ctx.device, dtype=ctx.dtype, non_blocking=_nb)
+                    t5_ids = batch["t5_ids"].to(ctx.device, non_blocking=_nb)
+                    t5_w = batch["t5_w"].to(ctx.device, dtype=torch.float32, non_blocking=_nb)
+                    cross = ctx.model.preprocess_text_embeds(qwen_emb, t5_ids, t5xxl_weights=t5_w)
+                    if cross.shape[1] < 512:
+                        cross = F.pad(cross, (0, 0, 0, 512 - cross.shape[1]))
+                    if getattr(args, "kv_trim", False) and not getattr(args, "torch_compile", False):
+                        t5_attn = batch["t5_attn"].to(ctx.device, non_blocking=_nb)
+                        _actual = int(t5_attn.sum(dim=-1).max().item())
+                        _bucket = 512
+                        for _b in (64, 128, 256, 512):
+                            if _b >= _actual:
+                                _bucket = _b
+                                break
+                        cross = cross[:, :_bucket, :].contiguous()
                 else:
-                    # legacy（A/B 对照 / 旧 state 续训）：清洗 Qwen 文本；T5 按
-                    # 逗号逐 tag 分词 + (tag:1.3) 权重语法
-                    qwen_texts = [_build_qwen_text_from_prompt(c) for c in captions]
-                    qwen_emb, qwen_attn = encode_qwen(ctx.qwen_model, ctx.qwen_tok, qwen_texts, ctx.device)
-                    t5_ids, t5_attn, t5_w = tokenize_t5_weighted(ctx.t5_tok, captions, max_length=512)
-                t5_ids = t5_ids.to(ctx.device)
-                t5_attn = t5_attn.to(ctx.device)
-                t5_w = t5_w.to(ctx.device, dtype=torch.float32)
-                # t5_w 透传到 preprocess_text_embeds 内乘到 LLMAdapter 输出上（与
-                # ComfyUI 原生 `comfy/ldm/anima/model.py:198-206` 对齐）。
-                cross = ctx.model.preprocess_text_embeds(qwen_emb, t5_ids, t5xxl_weights=t5_w)
-                if cross.shape[1] < 512:
-                    cross = F.pad(cross, (0, 0, 0, 512 - cross.shape[1]))
-                # KV trim：把 padding 截到最近有效 token bucket（64/128/256/512）
-                # t5_attn=1 表示有效 token；取批次内最大实际长度再 round up
-                if getattr(args, "kv_trim", False):
-                    _actual = int(t5_attn.sum(dim=-1).max().item())
-                    _bucket = 512  # _actual > 512 时兜底（不裁，保持原行为）
-                    for _b in (64, 128, 256, 512):
-                        if _b >= _actual:
-                            _bucket = _b
-                            break
-                    cross = cross[:, :_bucket, :].contiguous()
+                    if bool(getattr(args, "caption_comfy_encoding", True)):
+                        qwen_texts = [str(c) for c in captions]
+                        qwen_emb, qwen_attn = encode_qwen(ctx.qwen_model, ctx.qwen_tok, qwen_texts, ctx.device)
+                        t5_ids, t5_attn, t5_w = tokenize_t5_comfy_literal(ctx.t5_tok, captions, max_length=512)
+                    else:
+                        qwen_texts = [_build_qwen_text_from_prompt(c) for c in captions]
+                        qwen_emb, qwen_attn = encode_qwen(ctx.qwen_model, ctx.qwen_tok, qwen_texts, ctx.device)
+                        t5_ids, t5_attn, t5_w = tokenize_t5_weighted(ctx.t5_tok, captions, max_length=512)
+                    t5_ids = t5_ids.to(ctx.device, non_blocking=_nb)
+                    t5_attn = t5_attn.to(ctx.device, non_blocking=_nb)
+                    t5_w = t5_w.to(ctx.device, dtype=torch.float32, non_blocking=_nb)
+                    cross = ctx.model.preprocess_text_embeds(qwen_emb, t5_ids, t5xxl_weights=t5_w)
+                    if cross.shape[1] < 512:
+                        cross = F.pad(cross, (0, 0, 0, 512 - cross.shape[1]))
+                    # KV trim：把 padding 截到最近有效 token bucket（64/128/256/512）
+                    if getattr(args, "kv_trim", False) and not getattr(args, "torch_compile", False):
+                        _actual = int(t5_attn.sum(dim=-1).max().item())
+                        _bucket = 512
+                        for _b in (64, 128, 256, 512):
+                            if _b >= _actual:
+                                _bucket = _b
+                                break
+                        cross = cross[:, :_bucket, :].contiguous()
 
             # Flow Matching：统一通过 timestep_sampler plugin 接口采样
             # （baseline = 4 种 mode；adaptive = InfoNoise 等；接口在 ADR 0003 plugin registry）
@@ -188,7 +203,7 @@ def run(ctx: TrainingContext) -> None:
             # NaN 检测：forward 出 NaN 时跳过本 micro-batch
             if not torch.isfinite(loss):
                 logger.warning(f"step {ctx.global_step} micro-batch {batch_idx}: loss={loss.item():.4g}，跳过")
-                ctx.optimizer.zero_grad()
+                ctx.optimizer.zero_grad(set_to_none=getattr(args, "zero_grad_set_to_none", True))
                 continue
 
             # 反向传播
@@ -203,7 +218,7 @@ def run(ctx: TrainingContext) -> None:
                 )
                 if has_nan_grad:
                     logger.warning(f"step {ctx.global_step}: 梯度含 NaN/Inf，跳过 optimizer.step()")
-                    ctx.optimizer.zero_grad()
+                    ctx.optimizer.zero_grad(set_to_none=getattr(args, "zero_grad_set_to_none", True))
                     continue
 
                 if ctx.grad_clip > 0:
@@ -211,7 +226,7 @@ def run(ctx: TrainingContext) -> None:
                 ctx.optimizer.step()
                 if ctx.scheduler is not None and ctx.optimizer_type != "prodigy_plus_schedulefree":
                     ctx.scheduler.step()
-                ctx.optimizer.zero_grad()
+                ctx.optimizer.zero_grad(set_to_none=getattr(args, "zero_grad_set_to_none", True))
                 ctx.global_step += 1
 
                 # 自适应采样器：刷新采样分布；baseline 是 no-op

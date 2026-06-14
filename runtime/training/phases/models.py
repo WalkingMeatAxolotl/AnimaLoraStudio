@@ -93,3 +93,18 @@ def run(ctx: TrainingContext) -> None:
     if getattr(args, "resume_lora", "") and Path(args.resume_lora).exists():
         ctx.injector.load(args.resume_lora)
         logger.info(f"将从已有 LoRA 继续训练: {args.resume_lora}")
+
+    # torch.compile per-block（LoRA 注入后再 compile，trace 的是修改后的 forward）
+    if getattr(args, "torch_compile", False):
+        import torch
+        if not hasattr(torch, "compile"):
+            logger.warning("torch.compile 不可用（需要 PyTorch >= 2.0），已跳过")
+        else:
+            from runtime.training.dataset import get_compile_families_for_reso
+            families = get_compile_families_for_reso(getattr(args, "base_reso", 1024))
+            logger.info("启用 torch.compile (per-block Inductor)，首步有 ~30s 编译预热...")
+            try:
+                ctx.model.compile_blocks(families=families)
+            except Exception as e:
+                logger.warning(f"torch.compile 失败，fallback 到非编译模式: {e}")
+                ctx.model._native_flatten = False

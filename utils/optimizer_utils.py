@@ -314,43 +314,45 @@ def create_standard_adamw(
     betas: tuple = (0.9, 0.999),
     weight_decay: float = 0.01,
     eps: float = 1e-8,
+    fused: bool = False,
     **kwargs
 ) -> Optimizer:
     """
     创建标准 AdamW 优化器
-    
+
     标准的 PyTorch AdamW 实现。作为后备选项，当其他
     优化器不可用时使用。
-    
+
     AdamW 特点：
     - 将权重衰减与梯度更新解耦（decoupled weight decay）
     - 比 Adam + L2 正则化效果更好
     - 现代深度学习的事实标准优化器
-    
+
     Args:
         params: 模型参数
         lr: 学习率
         betas: Adam beta 参数
         weight_decay: 权重衰减
         eps: epsilon
-        
+        fused: 启用 CUDA fused kernel（需要 CUDA，所有参数在同一 GPU 上）
+
     Returns:
         AdamW: 标准 AdamW 优化器
     """
     print(f"Creating standard AdamW optimizer (lr={lr}, weight_decay={weight_decay})")
-    
+
     # 将参数转换为列表
     param_list = list(params)
-    
-    optimizer = AdamW(
-        param_list,
-        lr=lr,
-        betas=betas,
-        eps=eps,
-        weight_decay=weight_decay,
-        **kwargs
+
+    adamw_kwargs: dict = dict(
+        lr=lr, betas=betas, eps=eps, weight_decay=weight_decay, **kwargs,
     )
-    
+    if fused and torch.cuda.is_available():
+        adamw_kwargs["fused"] = True
+        print("  fused=True (CUDA kernel)")
+
+    optimizer = AdamW(param_list, **adamw_kwargs)
+
     print("  [OK] AdamW optimizer created")
 
     return optimizer

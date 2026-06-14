@@ -15,10 +15,118 @@ import random
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 
 logger = logging.getLogger(__name__)
+
+
+# Constant-token bucket tables for torch.compile mode.
+# Each family guarantees (W/16)*(H/16) == fixed token count, so compiled graphs
+# are reused across all aspect ratios within the same family.
+# Grouped by base resolution tier; BucketManager auto-selects the closest tier.
+CONSTANT_TOKEN_BUCKETS = {
+    # ~1024 base (token counts: 4032, 4200)
+    4032: [
+        (1008, 1024),  # 63×64  ar 0.98
+        (1024, 1008),  # 64×63  ar 1.02
+        (896, 1152),   # 56×72  ar 0.78
+        (1152, 896),   # 72×56  ar 1.29
+        (768, 1344),   # 48×84  ar 0.57
+        (1344, 768),   # 84×48  ar 1.75
+        (672, 1536),   # 42×96  ar 0.44
+        (1536, 672),   # 96×42  ar 2.29
+        (576, 1792),   # 36×112 ar 0.32
+        (1792, 576),   # 112×36 ar 3.11
+        (512, 2016),   # 32×126 ar 0.25
+        (2016, 512),   # 126×32 ar 3.94
+    ],
+    4200: [
+        (960, 1120),   # 60×70  ar 0.86
+        (1120, 960),   # 70×60  ar 1.17
+        (896, 1200),   # 56×75  ar 0.75
+        (1200, 896),   # 75×56  ar 1.34
+        (800, 1344),   # 50×84  ar 0.60
+        (1344, 800),   # 84×50  ar 1.68
+        (672, 1600),   # 42×100 ar 0.42
+        (1600, 672),   # 100×42 ar 2.38
+        (640, 1680),   # 40×105 ar 0.38
+        (1680, 640),   # 105×40 ar 2.62
+        (560, 1920),   # 35×120 ar 0.29
+        (1920, 560),   # 120×35 ar 3.43
+    ],
+    # ~1440 base (token counts: 8100, 9000)
+    8100: [
+        (1440, 1440),  # 90×90  ar 1.00
+        (1296, 1600),  # 81×100 ar 0.81
+        (1600, 1296),  # 100×81 ar 1.23
+        (1200, 1728),  # 75×108 ar 0.69
+        (1728, 1200),  # 108×75 ar 1.44
+        (960, 2160),   # 60×135 ar 0.44
+        (2160, 960),   # 135×60 ar 2.25
+        (864, 2400),   # 54×150 ar 0.36
+        (2400, 864),   # 150×54 ar 2.78
+        (800, 2592),   # 50×162 ar 0.31
+        (2592, 800),   # 162×50 ar 3.24
+        (720, 2880),   # 45×180 ar 0.25
+        (2880, 720),   # 180×45 ar 4.00
+    ],
+    9000: [
+        (1440, 1600),  # 90×100 ar 0.90
+        (1600, 1440),  # 100×90 ar 1.11
+        (1200, 1920),  # 75×120 ar 0.62
+        (1920, 1200),  # 120×75 ar 1.60
+        (1152, 2000),  # 72×125 ar 0.58
+        (2000, 1152),  # 125×72 ar 1.74
+        (960, 2400),   # 60×150 ar 0.40
+        (2400, 960),   # 150×60 ar 2.50
+        (800, 2880),   # 50×180 ar 0.28
+        (2880, 800),   # 180×50 ar 3.60
+    ],
+    # ~1536 base (token counts: 9216, 9240)
+    9216: [
+        (1536, 1536),  # 96×96  ar 1.00
+        (1152, 2048),  # 72×128 ar 0.56
+        (2048, 1152),  # 128×72 ar 1.78
+        (1024, 2304),  # 64×144 ar 0.44
+        (2304, 1024),  # 144×64 ar 2.25
+        (768, 3072),   # 48×192 ar 0.25
+        (3072, 768),   # 192×48 ar 4.00
+    ],
+    9240: [
+        (1408, 1680),  # 88×105 ar 0.84
+        (1680, 1408),  # 105×88 ar 1.19
+        (1344, 1760),  # 84×110 ar 0.76
+        (1760, 1344),  # 110×84 ar 1.31
+        (1232, 1920),  # 77×120 ar 0.64
+        (1920, 1232),  # 120×77 ar 1.56
+        (1120, 2112),  # 70×132 ar 0.53
+        (2112, 1120),  # 132×70 ar 1.89
+        (1056, 2240),  # 66×140 ar 0.47
+        (2240, 1056),  # 140×66 ar 2.12
+        (960, 2464),   # 60×154 ar 0.39
+        (2464, 960),   # 154×60 ar 2.57
+        (896, 2640),   # 56×165 ar 0.34
+        (2640, 896),   # 165×56 ar 2.95
+    ],
+}
+
+# Resolution tiers: (max_base_reso_threshold, [token_family_keys])
+_COMPILE_TIERS = [
+    (1152, [4032, 4200]),
+    (1440, [8100, 9000]),
+    (9999, [9216, 9240]),
+]
+
+
+def get_compile_families_for_reso(base_reso: int) -> list[int]:
+    """Select token families appropriate for the given base resolution."""
+    for threshold, families in _COMPILE_TIERS:
+        if base_reso <= threshold:
+            return families
+    return _COMPILE_TIERS[-1][1]
+
 
 
 class BucketManager:
@@ -36,9 +144,15 @@ class BucketManager:
     See ``docs/design/preprocess-crop-design.md`` §7 for the UX policy and
     rationale.
     """
-    def __init__(self, base_reso=1024, min_reso=512, max_reso=2048, step=64):
+    def __init__(self, base_reso=1024, min_reso=512, max_reso=2048, step=64, constant_token_mode=False):
         self.base_reso = base_reso
-        self.buckets = self._generate(min_reso, max_reso, step, base_reso)
+        self.constant_token_mode = constant_token_mode
+        if constant_token_mode:
+            families = get_compile_families_for_reso(base_reso)
+            self.buckets = [r for k in families for r in CONSTANT_TOKEN_BUCKETS[k]]
+            self._compile_families = families
+        else:
+            self.buckets = self._generate(min_reso, max_reso, step, base_reso)
 
     def _generate(self, min_r, max_r, step, base):
         # Keep algorithm identical to trainBuckets.generateBuckets() in TS:
@@ -715,26 +829,37 @@ class CachedLatentDataset(Dataset):
         latent_key = "latent_flipped" if use_flip else "latent"
         latent = torch.from_numpy(data[latent_key])
 
+        # 文本编码缓存命中：直接返回预计算的 embed tensors
+        if "qwen_emb" in data.files:
+            return {
+                "latent": latent,
+                "caption": "",
+                "qwen_emb": torch.from_numpy(data["qwen_emb"].copy()),
+                "t5_ids": torch.from_numpy(data["t5_ids"].copy()).long(),
+                "t5_attn": torch.from_numpy(data["t5_attn"].copy()).long(),
+                "t5_w": torch.from_numpy(data["t5_w"].copy()).float(),
+            }
+
         # 获取 base_dataset 的引用（处理可能的嵌套）
         base = self.base_dataset
         while hasattr(base, "dataset"):
             base = base.dataset
-        
+
         # 处理 caption（正则集 caption_override 优先）
         caption = None
         if getattr(base, "caption_override", None) is not None:
             caption = base.caption_override
         elif sample.get("json_path") and hasattr(base, "_process_caption_json"):
             caption = base._process_caption_json(sample["json_path"])
-        
+
         if caption is None and sample.get("txt_path"):
             caption = sample["txt_path"].read_text(encoding="utf-8").strip()
             if hasattr(base, "_process_caption_txt"):
                 caption = base._process_caption_txt(caption)
-        
+
         if caption is None:
             caption = ""
-        
+
         return {"latent": latent, "caption": caption}
 
 
@@ -754,6 +879,34 @@ def collate_fn_cached(batch):
     latents = torch.stack([b["latent"] for b in batch])
     captions = [b["caption"] for b in batch]
     result = {"latents": latents, "captions": captions}
+
+    if "qwen_emb" in batch[0]:
+        max_qwen = max(b["qwen_emb"].shape[0] for b in batch)
+        qwen_embs = []
+        for b in batch:
+            emb = b["qwen_emb"]
+            pad = max_qwen - emb.shape[0]
+            if pad > 0:
+                emb = F.pad(emb, (0, 0, 0, pad))
+            qwen_embs.append(emb)
+        result["qwen_emb"] = torch.stack(qwen_embs)
+
+        max_t5 = max(b["t5_ids"].shape[0] for b in batch)
+        t5_ids_l, t5_attn_l, t5_w_l = [], [], []
+        for b in batch:
+            ids, attn, w = b["t5_ids"], b["t5_attn"], b["t5_w"]
+            pad = max_t5 - ids.shape[0]
+            if pad > 0:
+                ids = F.pad(ids, (0, pad))
+                attn = F.pad(attn, (0, pad))
+                w = F.pad(w, (0, pad))
+            t5_ids_l.append(ids)
+            t5_attn_l.append(attn)
+            t5_w_l.append(w)
+        result["t5_ids"] = torch.stack(t5_ids_l)
+        result["t5_attn"] = torch.stack(t5_attn_l)
+        result["t5_w"] = torch.stack(t5_w_l)
+
     if "loss_weight" in batch[0]:
         result["loss_weight"] = torch.tensor([b["loss_weight"] for b in batch], dtype=torch.float32)
         result["is_reg"] = torch.tensor([b["is_reg"] for b in batch], dtype=torch.bool)
