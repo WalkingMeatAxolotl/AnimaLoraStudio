@@ -134,9 +134,19 @@ def run(ctx: TrainingContext) -> None:
             # 前向
             pad_mask = torch.zeros(bs, 1, latents.shape[-2], latents.shape[-1], device=ctx.device, dtype=ctx.dtype)
             with torch.autocast("cuda", dtype=ctx.dtype):
+                # TREAD（arXiv 2501.04765）训练期 token 路由：tread_enabled 才传 ratio，
+                # 否则 ratio=0 → forward 内部走原路径。采样/eval 不经此调用，天然关闭。
+                _tread_ratio = (
+                    float(getattr(args, "tread_ratio", 0.0) or 0.0)
+                    if getattr(args, "tread_enabled", False)
+                    else 0.0
+                )
                 pred = forward_with_optional_checkpoint(
                     ctx.model, noisy, t.view(-1, 1), cross, pad_mask,
                     use_checkpoint=args.grad_checkpoint,
+                    tread_ratio=_tread_ratio,
+                    tread_start_layer=int(getattr(args, "tread_start_layer", 0) or 0),
+                    tread_end_layer=int(getattr(args, "tread_end_layer", 0) or 0),
                 )
                 # 训练 loss 通过 losses/ plugin registry 派发（mse / huber / ...）
                 loss_per_sample = ctx.loss_fn.compute(pred.float(), target.float(), t)

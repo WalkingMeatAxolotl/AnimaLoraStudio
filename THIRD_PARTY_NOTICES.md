@@ -178,6 +178,21 @@
   reference 代码。Anima 在 Flow Matching `t ∈ (0,1)` 空间内做了 `σ = t/(1-t)` 适配，
   与论文 σ-空间设计保持一致。
 
+### TREAD token routing (research attribution — 自实现)
+
+- **论文**：Krause et al. 2025, *TREAD: Token Routing for Efficient
+  Architecture-agnostic Diffusion Training*,
+  [arXiv:2501.04765](https://arxiv.org/abs/2501.04765)
+- **涉及文件**：
+  - `runtime/training/model_loading.py` `tread_route_indices` /
+    `forward_with_optional_checkpoint`（TREAD 分支）
+  - `tools/tread_smoke.py` — 真权重冒烟验证工具
+- **关系**：按论文思路自实现的训练期 token 路由（中间 block 段只算随机保留的 token
+  子集，段尾 scatter 回原位、被丢 token 恒等旁路），未参考特定 reference 代码。
+  实现不改模型定义：保留 token 子集 reshape 成 (B,1,1,N_keep,D) 伪网格复用现有
+  `Block.forward`，对 Anima 图像 latent（T=1）与逐 token 前向等价。仅训练生效，
+  推理 / 采样不经此路径。
+
 ---
 
 ## Pip 依赖（许可随各自 wheel 分发）
