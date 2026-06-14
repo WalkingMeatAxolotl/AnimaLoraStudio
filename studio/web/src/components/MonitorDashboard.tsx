@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api, type EvalMetricResult, type EvalMetricState, type MonitorState } from '../api/client'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
+import { InfoButton } from './InfoButton'
 import ImagePreviewModal from './ImagePreviewModal'
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -269,6 +270,12 @@ const EVAL_LABELS: Record<EvalMetricKey, string> = {
   dino_i: 'DINO-I',
 }
 
+const EVAL_DESCRIPTIONS: Record<EvalMetricKey, string> = {
+  clip_t: '生成图和 prompt 文本的 CLIP 相似度，用来看 prompt following；越高越好。',
+  clip_i: '生成图和参考图的 CLIP 图像相似度，用来看整体视觉相似度；越高越好。',
+  dino_i: '生成图和参考图的 DINO 图像特征相似度，用来看主体或风格特征是否学到；越高越好。',
+}
+
 type MonitorTab = 'training' | 'eval'
 
 function checkpointSortValue(result: EvalMetricResult, index: number): number {
@@ -492,7 +499,14 @@ function EvalMetricsPanel({ state, connected }: { state: MonitorState | null; co
                 <tr className="border-b border-subtle">
                   <th className="text-left font-medium py-1.5 pr-3">checkpoint</th>
                   {EVAL_METRIC_KEYS.map((key) => (
-                    <th key={key} className="text-right font-medium py-1.5 px-2">{EVAL_LABELS[key]}</th>
+                    <th key={key} className="text-right font-medium py-1.5 px-2">
+                      <span className="inline-flex items-center justify-end gap-1.5">
+                        {EVAL_LABELS[key]}
+                        <InfoButton ariaLabel={`${EVAL_LABELS[key]} 指标说明`}>
+                          <p>{EVAL_DESCRIPTIONS[key]}</p>
+                        </InfoButton>
+                      </span>
+                    </th>
                   ))}
                   <th className="text-right font-medium py-1.5 pl-3">状态</th>
                 </tr>
