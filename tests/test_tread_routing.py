@@ -26,25 +26,70 @@ from training.model_loading import forward_with_optional_checkpoint, tread_route
 @pytest.mark.parametrize("ratio,n,expected_keep", [(0.5, 16, 8), (0.25, 16, 12), (0.9, 10, 1)])
 def test_route_indices_count_and_sorted(ratio, n, expected_keep) -> None:
     torch.manual_seed(0)
-    idx = tread_route_indices(4, n, ratio, device="cpu")
-    assert idx.shape == (4, expected_keep)
-    # 升序 + 取值范围 + 逐行唯一
-    for row in idx:
-        assert torch.equal(row, row.sort().values)
-        assert int(row.min()) >= 0 and int(row.max()) < n
-        assert len(set(row.tolist())) == len(row)
+    idx = tread_route_indices(n, ratio, device="cpu")
+    # batch 内共享 → 1-D (N_keep,)；升序 + 取值范围 + 唯一
+    assert idx.shape == (expected_keep,)
+    assert torch.equal(idx, idx.sort().values)
+    assert int(idx.min()) >= 0 and int(idx.max()) < n
+    assert len(set(idx.tolist())) == len(idx)
 
 
 def test_route_indices_keep_at_least_one() -> None:
-    idx = tread_route_indices(2, 8, 0.999, device="cpu")
-    assert idx.shape == (2, 1)
+    idx = tread_route_indices(8, 0.999, device="cpu")
+    assert idx.shape == (1,)
 
 
-def test_route_indices_per_sample_differs() -> None:
+def test_route_indices_rerandomizes() -> None:
     torch.manual_seed(0)
-    idx = tread_route_indices(8, 64, 0.5, device="cpu")
-    # 逐样本独立抽样：极不可能 8 行全相同
-    assert not all(torch.equal(idx[0], idx[j]) for j in range(1, 8))
+    a = tread_route_indices(64, 0.5, device="cpu")
+    b = tread_route_indices(64, 0.5, device="cpu")
+    # 每步重新随机：极不可能两次完全相同
+    assert not torch.equal(a, b)
+
+
+def test_rope_subset_stays_4d() -> None:
+    """回归：RoPE freqs 子集必须保持 (N_keep,1,1,Dh) 4-D。
+
+    apply_rotary_pos_emb 期望 freqs 形如 [seq,1,1,d]（取 .shape[0] 当 seq、transpose(0,1)）。
+    曾经用逐样本索引 rope_emb[keep_idx_(B,N)] → (B,N_keep,1,1,Dh) 5-D，与 q(4-D) 相乘报
+    "Tensors must have same number of dimensions: got 5 and 4"。batch 共享索引修复之。
+    """
+    n_tok, dh = 64, 16
+    rope_emb_L_1_1_D = torch.zeros(n_tok, 1, 1, dh)  # 与 prepare_embedded_sequence 输出同形
+    keep_idx = tread_route_indices(n_tok, 0.5, device="cpu")
+    rope_keep = rope_emb_L_1_1_D.index_select(0, keep_idx)
+    assert rope_keep.ndim == 4
+    assert rope_keep.shape == (keep_idx.numel(), 1, 1, dh)
+
+
+def test_rope_subset_runs_through_real_apply_rotary() -> None:
+    """端到端回归：保留 token 子集的 RoPE 走真实 apply_rotary_pos_emb 不报维度错。
+
+    直接调模型里的真函数（stub block 不算 rope，正是它放过了最初的 5-vs-4 bug）。
+    """
+    from pathlib import Path
+    from training.model_loading import load_module_from_path
+
+    cosmos_path = Path(__file__).resolve().parents[1] / "models" / "cosmos_predict2_modeling.py"
+    try:
+        cosmos = load_module_from_path("cosmos_predict2_modeling", cosmos_path)
+    except Exception as exc:  # pragma: no cover - 环境缺依赖时跳过，不假红
+        pytest.skip(f"cosmos 模型模块不可导入，跳过真 rope 测试: {exc}")
+
+    apply_rotary = cosmos.apply_rotary_pos_emb
+    n_tok, b, n_heads, dh = 64, 2, 4, 16
+    full_rope = torch.zeros(n_tok, 1, 1, dh)
+    keep_idx = tread_route_indices(n_tok, 0.5, device="cpu")
+    n_keep = keep_idx.numel()
+    rope_keep = full_rope.index_select(0, keep_idx)  # (N_keep,1,1,Dh) 4-D 共享
+    q = torch.randn(b, n_keep, n_heads, dh)  # bshd
+    out = apply_rotary(q, rope_keep, tensor_format="bshd", fused=False)
+    assert out.shape == q.shape  # 4-D rope 正常应用
+
+    # 逐样本 5-D rope 必须出问题（记录最初 "got 5 and 4" 的根因）
+    rope_per_sample = full_rope.index_select(0, keep_idx).unsqueeze(0).expand(b, -1, -1, -1, -1)
+    with pytest.raises((RuntimeError, AssertionError, IndexError)):
+        apply_rotary(q, rope_per_sample, tensor_format="bshd", fused=False)
 
 
 # ---------------------------------------------------------------------------

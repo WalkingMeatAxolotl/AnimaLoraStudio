@@ -30,16 +30,17 @@ logger = logging.getLogger(__name__)
 # 梯度检查点
 # ============================================================================
 
-def tread_route_indices(bs: int, n_tokens: int, ratio: float, device) -> "torch.Tensor":
-    """TREAD（arXiv 2501.04765）逐样本随机保留索引。
+def tread_route_indices(n_tokens: int, ratio: float, device) -> "torch.Tensor":
+    """TREAD（arXiv 2501.04765）随机保留索引（batch 内共享一套）。
 
-    返回 (B, N_keep) 升序 token 索引，N_keep = round(N·(1-ratio))（至少 1）。
-    每样本独立抽样（与论文一致）；升序保持原 token 顺序便于 RoPE 子集对齐。
+    返回升序 1-D 索引 (N_keep,)，N_keep = round(N·(1-ratio))（至少 1）。整个 batch
+    共用同一套保留位置，因此 RoPE freqs 子集保持 (N_keep,1,1,Dh) 4-D，与
+    apply_rotary_pos_emb 的形状契约一致（freqs 期望 [seq,1,1,d]，逐样本索引会让它
+    变 5-D 触发维度不匹配）。升序保持原 token 顺序便于子集对齐；每步重新随机。
     """
     n_keep = max(int(round(n_tokens * (1.0 - float(ratio)))), 1)
-    scores = torch.rand(bs, n_tokens, device=device)
-    idx = scores.argsort(dim=1)[:, :n_keep]
-    return idx.sort(dim=1).values
+    perm = torch.randperm(n_tokens, device=device)[:n_keep]
+    return perm.sort().values
 
 
 def forward_with_optional_checkpoint(
@@ -57,9 +58,9 @@ def forward_with_optional_checkpoint(
 
     TREAD（arXiv 2501.04765，训练期专用 token 路由，推理不变）：当 ``tread_ratio>0``
     且 ``model.training`` 时，blocks[start:end)（负索引按 python 切片语义，end 开区间）
-    只处理每样本随机保留的 N·(1-ratio) 个 token，段尾把结果 scatter 回原位、被丢 token
-    恒等旁路 → 省这些 block 的算力。采样 / eval 调用方不传 tread 参数 + model.eval()
-    双保险关闭。
+    只处理每步随机保留的 N·(1-ratio) 个 token（batch 内共享一套位置，保证 RoPE 子集
+    4-D 契约），段尾把结果 scatter 回原位、被丢 token 恒等旁路 → 省这些 block 的算力。
+    采样 / eval 调用方不传 tread 参数 + model.eval() 双保险关闭。
 
     实现不动模型定义：保留 token 子集 reshape 成 (B,1,1,N_keep,D) 伪网格，复用现有
     ``Block.forward``（其内部本就 ``rearrange("b t h w d -> b (t h w) d")`` 走 token 注意力，
@@ -120,30 +121,30 @@ def forward_with_optional_checkpoint(
         return checkpoint(fwd, x_pseudo, use_reentrant=False) if use_checkpoint else fwd(x_pseudo)
 
     b = tt = hh = ww = dd = 0
-    x_tok_full = gather_idx = grid_shape = x_keep = rope_keep = None
+    x_tok_full = keep_idx = grid_shape = x_keep = rope_keep = None
     for i, block in enumerate(model.blocks):
         if use_tread and i == seg_s:
             b, tt, hh, ww, dd = x_B_T_H_W_D.shape
             grid_shape = (b, tt, hh, ww, dd)
             n_tok = tt * hh * ww
             x_tok_full = x_B_T_H_W_D.reshape(b, n_tok, dd)
-            keep_idx = tread_route_indices(b, n_tok, tread_ratio, x_tok_full.device)
-            gather_idx = keep_idx.unsqueeze(-1).expand(-1, -1, dd)
-            x_keep = torch.gather(x_tok_full, 1, gather_idx)  # (B, N_keep, D)
+            keep_idx = tread_route_indices(n_tok, tread_ratio, x_tok_full.device)  # (N_keep,)
+            x_keep = x_tok_full.index_select(1, keep_idx)  # (B, N_keep, D)
             if rope_emb is not None:
                 if rope_emb.shape[0] != n_tok:
                     raise RuntimeError(
                         f"rope_emb 第 0 维 ({rope_emb.shape[0]}) != token 数 ({n_tok})，"
                         "TREAD 无法对齐 RoPE 子集"
                     )
-                rope_keep = rope_emb[keep_idx]  # (B, N_keep, 1, 1, Dh)
+                rope_keep = rope_emb.index_select(0, keep_idx)  # (N_keep, 1, 1, Dh) — 4-D，契约一致
         if use_tread and seg_s <= i < seg_e:
             n_keep = x_keep.shape[1]
             x_pseudo = x_keep.reshape(b, 1, 1, n_keep, dd)
             x_pseudo = _run_routed(block, x_pseudo, rope_keep)
             x_keep = x_pseudo.reshape(b, n_keep, dd)
             if i == seg_e - 1:
-                x_tok_full = x_tok_full.scatter(1, gather_idx, x_keep.to(x_tok_full.dtype))
+                # 段尾把处理过的保留 token 放回原位；丢弃 token 保持段首值（恒等旁路）
+                x_tok_full = x_tok_full.index_copy(1, keep_idx, x_keep.to(x_tok_full.dtype))
                 x_B_T_H_W_D = x_tok_full.reshape(grid_shape)
             continue
         x_B_T_H_W_D = _run_grid(block, x_B_T_H_W_D)
