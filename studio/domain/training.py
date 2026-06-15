@@ -654,6 +654,21 @@ class TrainingConfig(BaseModel):
         description="【SRA v2】对齐 loss 权重 λ：align_loss 乘以此值后加到总 loss。论文默认 1.0；LoRA 微调建议从 0.5-1.0 开始试",
         json_schema_extra=_meta("loss", show_when="sra_enabled==true", advanced=True),
     )
+    sra_decay_type: Literal["none", "linear", "cosine", "jump"] = Field(
+        "none",
+        description="【SRA v2】权重衰减方式：none 全程固定；linear 从起点线性降到 0；cosine 从起点余弦降到 0；jump 到起点直接关掉。实际权重 = sra_weight × 衰减系数",
+        json_schema_extra=_meta("loss", show_when="sra_enabled==true", advanced=True),
+    )
+    sra_decay_start_ratio: float = Field(
+        0.2, ge=0.0, le=1.0,
+        description="【SRA v2】衰减起点（训练总步数比例）。linear/cosine 在此之前保持满权重；jump 在此比例直接从 sra_weight 跳到 0",
+        json_schema_extra=_meta("loss", show_when="sra_enabled==true&&sra_decay_type!=none", advanced=True),
+    )
+    sra_decay_end_ratio: float = Field(
+        0.3, ge=0.0, le=1.0,
+        description="【SRA v2】衰减终点（训练总步数比例）。linear/cosine 到此比例降为 0；jump 不使用此字段",
+        json_schema_extra=_meta("loss", show_when="sra_enabled==true&&sra_decay_type!=none&&sra_decay_type!=jump", advanced=True),
+    )
 
     grad_clip_max_norm: float = Field(
         1.0, ge=0.0,
@@ -718,6 +733,16 @@ class TrainingConfig(BaseModel):
             raise ValueError(
                 f"detail_inv_t_min ({self.detail_inv_t_min}) 不能大于 "
                 f"detail_inv_t_max ({self.detail_inv_t_max})。"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_sra_decay_range(self) -> "TrainingConfig":
+        """SRA linear/cosine 衰减需要 start <= end；jump 只读 start。"""
+        if self.sra_decay_type in {"linear", "cosine"} and self.sra_decay_start_ratio > self.sra_decay_end_ratio:
+            raise ValueError(
+                f"sra_decay_start_ratio ({self.sra_decay_start_ratio}) 不能大于 "
+                f"sra_decay_end_ratio ({self.sra_decay_end_ratio})。"
             )
         return self
 
