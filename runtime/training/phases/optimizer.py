@@ -31,6 +31,12 @@ def run(ctx: TrainingContext) -> None:
     param_groups = ctx.injector.get_param_groups(ctx.weight_decay)
     ctx.optimizer_type = (getattr(args, "optimizer_type", "adamw") or "adamw").lower()
 
+    # SRA v2：projection MLP 的参数加入 optimizer（weight_decay=0，可选独立 lr）
+    if ctx.sra_aligner is not None:
+        sra_groups = ctx.sra_aligner.get_param_groups(lr=None)
+        param_groups = param_groups + sra_groups
+        logger.info(f"SRA v2: 已将 projection MLP 参数加入 optimizer ({sum(p.numel() for g in sra_groups for p in g['params'])/1e6:.1f}M params)")
+
     from training.optimizers import build_optimizer, validate_optimizer
     validate_optimizer(args)  # PPSF 检查 lr_scheduler=none 等启动期约束
     ctx.optimizer = build_optimizer(args, param_groups, args.learning_rate, ctx.weight_decay)
