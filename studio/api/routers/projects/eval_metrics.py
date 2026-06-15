@@ -8,32 +8,42 @@ from fastapi import APIRouter, HTTPException
 from ...schemas.projects import EvalClipStart, EvalDinoStart
 from ._shared import _publish_job_state, _version_dir_or_404
 from .... import db, secrets
+from ....infrastructure.paths import task_eval_dir
 from ....services import eval_clip, eval_dino, eval_metrics, eval_samples
 
 router = APIRouter()
 
 
 @router.get("/api/projects/{pid}/versions/{vid}/eval/metrics")
-def list_eval_metric_results_endpoint(pid: int, vid: int) -> dict[str, Any]:
+def list_eval_metric_results_endpoint(
+    pid: int,
+    vid: int,
+    task_id: int | None = None,
+) -> dict[str, Any]:
     _, _, vdir = _version_dir_or_404(pid, vid)
+    eval_root = task_eval_dir(task_id) if task_id else None
     try:
-        results = eval_metrics.list_results(vdir)
+        results = eval_metrics.list_results(vdir, eval_root)
     except (eval_metrics.EvalMetricsError, eval_samples.EvalSamplesError) as exc:
         raise HTTPException(400, str(exc)) from exc
     return {
         "metric_specs": eval_metrics.metric_specs(),
-        "cache": eval_metrics.cache_layout(vdir),
+        "cache": eval_metrics.cache_layout(vdir, eval_root),
         "results": results,
     }
 
 
 @router.get("/api/projects/{pid}/versions/{vid}/eval/samples/{run_id}/metrics")
 def get_eval_metric_result_endpoint(
-    pid: int, vid: int, run_id: str
+    pid: int,
+    vid: int,
+    run_id: str,
+    task_id: int | None = None,
 ) -> dict[str, Any]:
     _, _, vdir = _version_dir_or_404(pid, vid)
+    eval_root = task_eval_dir(task_id) if task_id else None
     try:
-        result = eval_metrics.load_result(vdir, run_id)
+        result = eval_metrics.load_result(vdir, run_id, eval_root)
     except (eval_metrics.EvalMetricsError, eval_samples.EvalSamplesError) as exc:
         raise HTTPException(400, str(exc)) from exc
     if result is None:

@@ -36,20 +36,27 @@ def start_job(
     run_id: str,
     *,
     model_name: str | None = None,
+    eval_root: Path | None = None,
+    task_id: int | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Queue a CLIP metric job and mark CLIP states as pending."""
     model = _normalize_model_name(model_name)
-    run = _load_scored_run(project, version, version_dir, run_id)
+    run = _load_scored_run(project, version, version_dir, run_id, eval_root)
+    scoped_root = _run_eval_root(run, eval_root)
+    inferred_task_id = _run_task_id(run, task_id)
+    params: dict[str, Any] = {
+        "version_id": int(version["id"]),
+        "run_id": str(run["run_id"]),
+        "model_name": model,
+    }
+    if inferred_task_id:
+        params["task_id"] = int(inferred_task_id)
     job = project_jobs.create_job(
         conn,
         project_id=int(project["id"]),
         version_id=int(version["id"]),
         kind=JOB_KIND,
-        params={
-            "version_id": int(version["id"]),
-            "run_id": str(run["run_id"]),
-            "model_name": model,
-        },
+        params=params,
     )
     result = _save_clip_states(
         version_dir,
@@ -71,6 +78,7 @@ def start_job(
             ),
         },
         clear_values=True,
+        eval_root=scoped_root,
     )
     return job, result
 
@@ -84,12 +92,14 @@ def run_clip_job(
     scorer: ClipScorer | None = None,
     model_name: str | None = None,
     on_progress: Callable[[str], None] | None = None,
+    eval_root: Path | None = None,
 ) -> dict[str, Any]:
     """Compute CLIP-T / CLIP-I for one completed eval sample run."""
     progress = on_progress or (lambda _line: None)
     model = _normalize_model_name(model_name)
-    run = _load_scored_run(project, version, version_dir, run_id)
-    _done_image_items(run, version_dir)
+    run = _load_scored_run(project, version, version_dir, run_id, eval_root)
+    eval_root = _run_eval_root(run, eval_root)
+    _done_image_items(run, version_dir, eval_root)
     _save_clip_states(
         version_dir,
         str(run["run_id"]),
@@ -102,13 +112,19 @@ def run_clip_job(
             ),
         },
         clear_values=True,
+        eval_root=eval_root,
     )
 
     try:
         progress(f"[eval-clip] scoring run={run['run_id']} model={model}")
         scored = (scorer or _default_scorer)(run, version_dir, model, progress)
         result = _result_from_scores(scored, model)
-        saved = eval_metrics.save_result(version_dir, str(run["run_id"]), result)
+        saved = eval_metrics.save_result(
+            version_dir,
+            str(run["run_id"]),
+            result,
+            eval_root=eval_root,
+        )
         progress(
             "[eval-clip] done "
             f"clip_t={saved['metric_states']['clip_t']['status']} "
@@ -116,7 +132,7 @@ def run_clip_job(
         )
         return saved
     except Exception as exc:
-        _save_failed(version_dir, str(run["run_id"]), model, str(exc))
+        _save_failed(version_dir, str(run["run_id"]), model, str(exc), eval_root)
         raise
 
 
@@ -134,8 +150,9 @@ def _load_scored_run(
     version: dict[str, Any],
     version_dir: Path,
     run_id: str,
+    eval_root: Path | None = None,
 ) -> dict[str, Any]:
-    run = eval_samples.load_run(version_dir, run_id)
+    run = eval_samples.load_run(version_dir, run_id, eval_root)
     if run is None:
         raise EvalClipError(f"eval sample run not found: {run_id}")
     if int(run.get("project_id") or 0) != int(project["id"]):
@@ -147,14 +164,42 @@ def _load_scored_run(
     return run
 
 
-def _done_image_items(run: dict[str, Any], version_dir: Path) -> list[dict[str, Any]]:
+def _run_eval_root(
+    run: dict[str, Any],
+    eval_root: Path | None = None,
+) -> Path | None:
+    if eval_root is not None:
+        return eval_root
+    if str(run.get("storage_scope") or "") == "task" and run.get("eval_root"):
+        return Path(str(run["eval_root"]))
+    return None
+
+
+def _run_task_id(run: dict[str, Any], task_id: int | None = None) -> int | None:
+    if task_id:
+        return int(task_id)
+    source = run.get("auto_source") if isinstance(run.get("auto_source"), dict) else {}
+    value = int(source.get("task_id") or 0)
+    return value or None
+
+
+def _done_image_items(
+    run: dict[str, Any],
+    version_dir: Path,
+    eval_root: Path | None = None,
+) -> list[dict[str, Any]]:
     items = run.get("items") if isinstance(run.get("items"), list) else []
     out: list[dict[str, Any]] = []
     for item in items:
         if not isinstance(item, dict) or item.get("status") != "done":
             continue
         filename = str(item.get("filename") or "")
-        path = eval_samples.sample_image_path(version_dir, str(run["run_id"]), filename)
+        path = eval_samples.sample_image_path(
+            version_dir,
+            str(run["run_id"]),
+            filename,
+            eval_root,
+        )
         if not path.is_file():
             continue
         out.append({**item, "_image_path": path})
@@ -193,6 +238,7 @@ def _save_clip_states(
     states: dict[str, dict[str, Any]],
     *,
     clear_values: bool,
+    eval_root: Path | None = None,
 ) -> dict[str, Any]:
     metrics: dict[str, Any] = {}
     if clear_values:
@@ -201,6 +247,7 @@ def _save_clip_states(
         version_dir,
         run_id,
         {"metrics": metrics, "metric_states": states},
+        eval_root=eval_root,
     )
 
 
@@ -209,6 +256,7 @@ def _save_failed(
     run_id: str,
     model_name: str,
     reason: str,
+    eval_root: Path | None = None,
 ) -> dict[str, Any]:
     return _save_clip_states(
         version_dir,
@@ -222,6 +270,7 @@ def _save_failed(
             ),
         },
         clear_values=True,
+        eval_root=eval_root,
     )
 
 
@@ -292,7 +341,8 @@ def _default_scorer(
     import torch
     from transformers import CLIPModel, CLIPProcessor
 
-    items = _done_image_items(run, version_dir)
+    eval_root = _run_eval_root(run)
+    items = _done_image_items(run, version_dir, eval_root)
     references = _reference_paths(run, version_dir)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     progress(f"[eval-clip] loading CLIP on {device}")
@@ -337,7 +387,7 @@ def _default_scorer(
         clip_i_values.append(float((image_emb[idx] * ref_emb[ref_idx]).sum().item()))
         ref_idx += 1
 
-    cache = eval_metrics.ensure_embeddings_cache_dir(version_dir) / CACHE_KEY
+    cache = eval_metrics.ensure_embeddings_cache_dir(version_dir, eval_root) / CACHE_KEY
     cache.mkdir(parents=True, exist_ok=True)
     np.save(cache / "generated.npy", image_emb.cpu().numpy())
     np.save(cache / "text.npy", text_emb.cpu().numpy())

@@ -8,6 +8,7 @@ import logging
 from typing import Any
 
 from studio import db
+from studio.infrastructure.paths import task_eval_dir
 from studio.services import eval_dino
 from studio.services.projects import jobs as project_jobs, projects, versions
 
@@ -33,6 +34,8 @@ def run(job_id: int) -> int:
         version_id = int(params.get("version_id") or job.get("version_id") or 0)
         run_id = str(params.get("run_id") or "")
         model_name = str(params.get("model_name") or eval_dino.DEFAULT_MODEL_NAME)
+        task_id = int(params.get("task_id") or 0)
+        eval_root = task_eval_dir(task_id) if task_id else None
         if not version_id or not run_id:
             progress("[error] missing version_id or run_id")
             return 1
@@ -58,6 +61,7 @@ def run(job_id: int) -> int:
             run_id,
             model_name=model_name,
             on_progress=progress,
+            eval_root=eval_root,
         )
         dino_i = (result.get("metric_states") or {}).get("dino_i") or {}
         progress(f"[done] dino_i={dino_i.get('status')} value={dino_i.get('value')}")

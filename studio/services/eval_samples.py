@@ -37,17 +37,21 @@ class EvalSamplesError(Exception):
 SampleGenerator = Callable[[dict[str, Any], Path, Callable[[str], None]], None]
 
 
-def samples_dir(version_dir: Path) -> Path:
-    return eval_manifest.eval_dir(version_dir) / RUNS_DIRNAME
+def _eval_root(version_dir: Path, eval_root: Path | None = None) -> Path:
+    return eval_root if eval_root is not None else eval_manifest.eval_dir(version_dir)
 
 
-def run_dir(version_dir: Path, run_id: str) -> Path:
+def samples_dir(version_dir: Path, eval_root: Path | None = None) -> Path:
+    return _eval_root(version_dir, eval_root) / RUNS_DIRNAME
+
+
+def run_dir(version_dir: Path, run_id: str, eval_root: Path | None = None) -> Path:
     _validate_run_id(run_id)
-    return samples_dir(version_dir) / run_id
+    return samples_dir(version_dir, eval_root) / run_id
 
 
-def run_path(version_dir: Path, run_id: str) -> Path:
-    return run_dir(version_dir, run_id) / RUN_FILE
+def run_path(version_dir: Path, run_id: str, eval_root: Path | None = None) -> Path:
+    return run_dir(version_dir, run_id, eval_root) / RUN_FILE
 
 
 def _atomic_write(path: Path, data: dict[str, Any]) -> None:
@@ -96,6 +100,13 @@ def _rel_to_version(version_dir: Path, path: Path) -> str:
         return path.resolve().relative_to(version_dir.resolve()).as_posix()
     except ValueError as exc:
         raise EvalSamplesError(f"路径不属于当前 version: {path}") from exc
+
+
+def _storage_path(version_dir: Path, path: Path) -> str:
+    try:
+        return path.resolve().relative_to(version_dir.resolve()).as_posix()
+    except ValueError:
+        return path.resolve().as_posix()
 
 
 def _resolve_checkpoint(version_dir: Path, raw_path: str | None) -> dict[str, Any]:
@@ -239,8 +250,8 @@ def _summary(items: list[dict[str, Any]]) -> dict[str, int]:
     }
 
 
-def load_run(version_dir: Path, run_id: str) -> dict[str, Any] | None:
-    path = run_path(version_dir, run_id)
+def load_run(version_dir: Path, run_id: str, eval_root: Path | None = None) -> dict[str, Any] | None:
+    path = run_path(version_dir, run_id, eval_root)
     if not path.exists():
         return None
     try:
@@ -252,17 +263,17 @@ def load_run(version_dir: Path, run_id: str) -> dict[str, Any] | None:
     return data
 
 
-def save_run(version_dir: Path, run: dict[str, Any]) -> dict[str, Any]:
+def save_run(version_dir: Path, run: dict[str, Any], eval_root: Path | None = None) -> dict[str, Any]:
     run_id = _validate_run_id(str(run.get("run_id") or ""))
     items = run.get("items") if isinstance(run.get("items"), list) else []
     run["summary"] = _summary(items)
     run["updated_at"] = time.time()
-    _atomic_write(run_path(version_dir, run_id), run)
+    _atomic_write(run_path(version_dir, run_id, eval_root), run)
     return run
 
 
-def list_runs(version_dir: Path) -> list[dict[str, Any]]:
-    root = samples_dir(version_dir)
+def list_runs(version_dir: Path, eval_root: Path | None = None) -> list[dict[str, Any]]:
+    root = samples_dir(version_dir, eval_root)
     if not root.exists():
         return []
     runs: list[dict[str, Any]] = []
@@ -273,7 +284,7 @@ def list_runs(version_dir: Path) -> list[dict[str, Any]]:
         if not path.exists():
             continue
         try:
-            run = load_run(version_dir, child.name)
+            run = load_run(version_dir, child.name, eval_root)
         except EvalSamplesError:
             continue
         if run:
@@ -291,6 +302,7 @@ def create_run(
     max_items: int | None = None,
     auto_metrics: bool = False,
     auto_source: dict[str, Any] | None = None,
+    eval_root: Path | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
     ts = time.time() if now is None else float(now)
@@ -301,17 +313,17 @@ def create_run(
     items = _planned_items(manifest, _clamp_max_items(max_items))
     base_run_id = _now_run_id(ts, checkpoint)
     run_id = base_run_id
-    root = run_dir(version_dir, run_id)
+    root = run_dir(version_dir, run_id, eval_root)
     suffix = 2
     while (root / RUN_FILE).exists():
         run_id = f"{base_run_id}-{suffix}"
-        root = run_dir(version_dir, run_id)
+        root = run_dir(version_dir, run_id, eval_root)
         suffix += 1
 
     for item in items:
-        item["path"] = (
-            eval_manifest.EVAL_DIRNAME
-            + f"/{RUNS_DIRNAME}/{run_id}/{IMAGES_DIRNAME}/{item['filename']}"
+        item["path"] = _storage_path(
+            version_dir,
+            run_dir(version_dir, run_id, eval_root) / IMAGES_DIRNAME / item["filename"],
         )
 
     run = {
@@ -333,6 +345,8 @@ def create_run(
         "checkpoint": checkpoint,
         "auto_metrics": bool(auto_metrics),
         "auto_source": dict(auto_source) if auto_source else None,
+        "storage_scope": "task" if eval_root is not None else "version",
+        "eval_root": str(eval_root.resolve()) if eval_root is not None else None,
         "generation": dict(manifest.get("generation") or {}),
         "items": items,
         "summary": _summary(items),
@@ -352,6 +366,7 @@ def start_job(
     max_items: int | None = None,
     auto_metrics: bool = False,
     auto_source: dict[str, Any] | None = None,
+    eval_root: Path | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     run = create_run(
         project,
@@ -361,6 +376,7 @@ def start_job(
         max_items=max_items,
         auto_metrics=auto_metrics,
         auto_source=auto_source,
+        eval_root=eval_root,
     )
     params: dict[str, Any] = {
         "version_id": int(version["id"]),
@@ -371,6 +387,10 @@ def start_job(
         params["auto_metrics"] = True
     if auto_source:
         params["auto_source"] = dict(auto_source)
+    if eval_root is not None:
+        task_id = int((auto_source or {}).get("task_id") or 0)
+        if task_id:
+            params["task_id"] = task_id
     job = project_jobs.create_job(
         conn,
         project_id=int(project["id"]),
@@ -389,9 +409,10 @@ def run_sample_job(
     *,
     generator: SampleGenerator | None = None,
     on_progress: Callable[[str], None] | None = None,
+    eval_root: Path | None = None,
 ) -> dict[str, Any]:
     progress = on_progress or (lambda _line: None)
-    run = load_run(version_dir, run_id)
+    run = load_run(version_dir, run_id, eval_root)
     if run is None:
         raise EvalSamplesError(f"eval sample run 不存在: {run_id}")
     if int(run.get("project_id") or 0) != int(project["id"]):
@@ -402,19 +423,19 @@ def run_sample_job(
     run["status"] = "running"
     run["started_at"] = run.get("started_at") or time.time()
     run["error"] = None
-    save_run(version_dir, run)
+    save_run(version_dir, run, eval_root)
 
     try:
         (generator or _default_generator)(run, version_dir, progress)
     except Exception as exc:
-        run = load_run(version_dir, run_id) or run
+        run = load_run(version_dir, run_id, eval_root) or run
         run["status"] = "failed"
         run["finished_at"] = time.time()
         run["error"] = str(exc)
-        save_run(version_dir, run)
+        save_run(version_dir, run, eval_root)
         raise
 
-    run = load_run(version_dir, run_id) or run
+    run = load_run(version_dir, run_id, eval_root) or run
     failed = [item for item in run.get("items", []) if item.get("status") == "failed"]
     pending = [
         item for item in run.get("items", [])
@@ -426,39 +447,39 @@ def run_sample_job(
         f"{len(failed)} sample(s) failed"
         if failed else ("sample generation incomplete" if pending else None)
     )
-    save_run(version_dir, run)
+    save_run(version_dir, run, eval_root)
     return run
 
 
-def mark_item_running(version_dir: Path, run: dict[str, Any], idx: int) -> dict[str, Any]:
+def mark_item_running(version_dir: Path, run: dict[str, Any], idx: int, eval_root: Path | None = None) -> dict[str, Any]:
     run["items"][idx]["status"] = "running"
-    save_run(version_dir, run)
+    save_run(version_dir, run, eval_root)
     return run
 
 
-def mark_item_done(version_dir: Path, run: dict[str, Any], idx: int) -> dict[str, Any]:
+def mark_item_done(version_dir: Path, run: dict[str, Any], idx: int, eval_root: Path | None = None) -> dict[str, Any]:
     run["items"][idx]["status"] = "done"
     run["items"][idx]["error"] = None
-    save_run(version_dir, run)
+    save_run(version_dir, run, eval_root)
     return run
 
 
 def mark_item_failed(
-    version_dir: Path, run: dict[str, Any], idx: int, error: str
+    version_dir: Path, run: dict[str, Any], idx: int, error: str, eval_root: Path | None = None
 ) -> dict[str, Any]:
     run["items"][idx]["status"] = "failed"
     run["items"][idx]["error"] = error
-    save_run(version_dir, run)
+    save_run(version_dir, run, eval_root)
     return run
 
 
-def sample_image_path(version_dir: Path, run_id: str, filename: str) -> Path:
+def sample_image_path(version_dir: Path, run_id: str, filename: str, eval_root: Path | None = None) -> Path:
     if "/" in filename or "\\" in filename or filename in {"", ".", ".."}:
         raise EvalSamplesError(f"非法 sample filename: {filename!r}")
     if not filename.lower().endswith(_IMAGE_EXT):
         raise EvalSamplesError("eval sample image 只支持 .png")
-    path = run_dir(version_dir, run_id) / IMAGES_DIRNAME / filename
-    base = (run_dir(version_dir, run_id) / IMAGES_DIRNAME).resolve()
+    path = run_dir(version_dir, run_id, eval_root) / IMAGES_DIRNAME / filename
+    base = (run_dir(version_dir, run_id, eval_root) / IMAGES_DIRNAME).resolve()
     resolved = path.resolve()
     try:
         resolved.relative_to(base)
@@ -545,12 +566,17 @@ def _default_generator(
     model.eval()
 
     items = run.get("items") if isinstance(run.get("items"), list) else []
+    scoped_root = (
+        Path(str(run.get("eval_root")))
+        if str(run.get("storage_scope") or "") == "task" and run.get("eval_root")
+        else None
+    )
     for idx, item in enumerate(items):
-        run = mark_item_running(version_dir, load_run(version_dir, run["run_id"]) or run, idx)
+        run = mark_item_running(version_dir, load_run(version_dir, run["run_id"], scoped_root) or run, idx, scoped_root)
         seed = int(item["seed"])
         random.seed(seed)
         torch.manual_seed(seed)
-        output = sample_image_path(version_dir, run["run_id"], item["filename"])
+        output = sample_image_path(version_dir, run["run_id"], item["filename"], scoped_root)
         output.parent.mkdir(parents=True, exist_ok=True)
         progress(
             f"[eval-samples] {idx + 1}/{len(items)} seed={seed} "
@@ -572,8 +598,8 @@ def _default_generator(
                 seed=seed,
             )
             img.save(output)
-            run = mark_item_done(version_dir, load_run(version_dir, run["run_id"]) or run, idx)
+            run = mark_item_done(version_dir, load_run(version_dir, run["run_id"], scoped_root) or run, idx, scoped_root)
         except Exception as exc:  # noqa: BLE001
             run = mark_item_failed(
-                version_dir, load_run(version_dir, run["run_id"]) or run, idx, str(exc)
+                version_dir, load_run(version_dir, run["run_id"], scoped_root) or run, idx, str(exc), scoped_root
             )

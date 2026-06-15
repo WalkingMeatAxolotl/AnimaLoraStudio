@@ -1,14 +1,11 @@
-"""Eval sample worker.
-
-Runs one manifest-backed eval sample run and writes persistent PNGs plus
-run.json metadata under versions/{label}/eval/samples/{run_id}/.
-"""
+"""Eval sample worker."""
 from __future__ import annotations
 
 import logging
 from typing import Any
 
 from studio import db
+from studio.infrastructure.paths import task_eval_dir
 from studio.services import eval_auto, eval_samples
 from studio.services.projects import jobs as project_jobs, projects, versions
 
@@ -33,6 +30,8 @@ def run(job_id: int) -> int:
     try:
         version_id = int(params.get("version_id") or job.get("version_id") or 0)
         run_id = str(params.get("run_id") or "")
+        task_id = int(params.get("task_id") or 0)
+        eval_root = task_eval_dir(task_id) if task_id else None
         if not version_id or not run_id:
             progress("[error] missing version_id or run_id")
             return 1
@@ -57,6 +56,7 @@ def run(job_id: int) -> int:
             vdir,
             run_id,
             on_progress=progress,
+            eval_root=eval_root,
         )
         progress(
             f"[done] status={result['status']} "
@@ -70,6 +70,8 @@ def run(job_id: int) -> int:
                     version,
                     vdir,
                     run_id,
+                    eval_root=eval_root,
+                    task_id=task_id or None,
                 )
             ids = ", ".join(str(j.get("id")) for j in jobs)
             progress(f"[auto] queued metric jobs: {ids}")

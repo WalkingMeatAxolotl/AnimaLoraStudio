@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from studio import db, server
+from studio.infrastructure import paths as infra_paths
 from studio.services import eval_manifest, eval_metrics, eval_samples
 from studio.services.projects import projects, versions
 
@@ -17,6 +18,7 @@ def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     dbfile = tmp_path / "studio.db"
     db.init_db(dbfile)
     monkeypatch.setattr(projects, "PROJECTS_DIR", tmp_path / "projects")
+    monkeypatch.setattr(infra_paths, "TASKS_DIR", tmp_path / "tasks")
     monkeypatch.setattr(db, "STUDIO_DB", dbfile)
     monkeypatch.setattr(server.db, "STUDIO_DB", dbfile)
     return {"db": dbfile}
@@ -49,7 +51,11 @@ def _seed_train_and_ckpt(vdir: Path) -> None:
 
 
 def _sample_run(
-    project: dict[str, Any], version: dict[str, Any], vdir: Path
+    project: dict[str, Any],
+    version: dict[str, Any],
+    vdir: Path,
+    *,
+    eval_root: Path | None = None,
 ) -> dict[str, Any]:
     _seed_train_and_ckpt(vdir)
     eval_manifest.save_default_manifest(project, version, vdir, now=1000.0)
@@ -59,6 +65,7 @@ def _sample_run(
         vdir,
         checkpoint_path="model_step100.safetensors",
         max_items=1,
+        eval_root=eval_root,
         now=2000.0,
     )
 
@@ -221,3 +228,58 @@ def test_eval_metrics_http_reads_saved_result(client: TestClient) -> None:
         "file_count": 1,
         "size_bytes": 5,
     }]
+
+
+def test_eval_metrics_can_store_results_under_task_eval_root(isolated) -> None:
+    project, version, vdir = _new_project(isolated)
+    eval_root = infra_paths.task_eval_dir(42)
+    run = _sample_run(project, version, vdir, eval_root=eval_root)
+    (eval_metrics.ensure_embeddings_cache_dir(vdir, eval_root) / "clip").mkdir(
+        parents=True
+    )
+    (eval_root / "cache" / "embeddings" / "clip" / "real.npy").write_bytes(b"cache")
+
+    result = eval_metrics.save_result(
+        vdir,
+        run["run_id"],
+        {"metrics": {"clip_t": 0.75}},
+        eval_root=eval_root,
+        now=3000.0,
+    )
+
+    assert result["metric_states"]["clip_t"]["value"] == 0.75
+    assert result["metrics_path"].endswith(
+        f"tasks/42/eval/samples/{run['run_id']}/metrics.json"
+    )
+    assert (eval_root / "samples" / run["run_id"] / "metrics.json").exists()
+    assert not (vdir / "eval" / "samples" / run["run_id"] / "metrics.json").exists()
+    assert result["cache"]["embeddings_dir"].endswith("tasks/42/eval/cache/embeddings")
+    assert result["cache"]["entries"][0]["path"].endswith(
+        "tasks/42/eval/cache/embeddings/clip"
+    )
+
+
+def test_eval_metrics_http_can_list_task_scoped_results(client: TestClient) -> None:
+    pid, vid = _make(client)
+    project, version, vdir = _vdir_for(pid, vid)
+    task_root = infra_paths.task_eval_dir(42)
+    task_run = _sample_run(project, version, vdir, eval_root=task_root)
+    version_run = _sample_run(project, version, vdir)
+    eval_metrics.save_result(
+        vdir,
+        task_run["run_id"],
+        {"metrics": {"clip_t": 0.75}},
+        eval_root=task_root,
+    )
+    eval_metrics.save_result(
+        vdir,
+        version_run["run_id"],
+        {"metrics": {"clip_t": 0.11}},
+    )
+
+    listed = client.get(f"/api/projects/{pid}/versions/{vid}/eval/metrics?task_id=42")
+
+    assert listed.status_code == 200, listed.text
+    body = listed.json()
+    assert [item["run_id"] for item in body["results"]] == [task_run["run_id"]]
+    assert body["results"][0]["metric_states"]["clip_t"]["value"] == 0.75

@@ -82,20 +82,21 @@ def metric_specs() -> list[dict[str, Any]]:
     ]
 
 
-def metrics_path(version_dir: Path, run_id: str) -> Path:
-    return eval_samples.run_dir(version_dir, run_id) / METRICS_FILE
+def metrics_path(version_dir: Path, run_id: str, eval_root: Path | None = None) -> Path:
+    return eval_samples.run_dir(version_dir, run_id, eval_root) / METRICS_FILE
 
 
-def cache_dir(version_dir: Path) -> Path:
-    return eval_manifest.eval_dir(version_dir) / CACHE_DIRNAME
+def cache_dir(version_dir: Path, eval_root: Path | None = None) -> Path:
+    root = eval_root if eval_root is not None else eval_manifest.eval_dir(version_dir)
+    return root / CACHE_DIRNAME
 
 
-def embeddings_cache_dir(version_dir: Path) -> Path:
-    return cache_dir(version_dir) / EMBEDDINGS_DIRNAME
+def embeddings_cache_dir(version_dir: Path, eval_root: Path | None = None) -> Path:
+    return cache_dir(version_dir, eval_root) / EMBEDDINGS_DIRNAME
 
 
-def ensure_embeddings_cache_dir(version_dir: Path) -> Path:
-    path = embeddings_cache_dir(version_dir)
+def ensure_embeddings_cache_dir(version_dir: Path, eval_root: Path | None = None) -> Path:
+    path = embeddings_cache_dir(version_dir, eval_root)
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -113,8 +114,8 @@ def _atomic_write(path: Path, data: dict[str, Any]) -> None:
 def _rel_to_version(version_dir: Path, path: Path) -> str:
     try:
         return path.resolve().relative_to(version_dir.resolve()).as_posix()
-    except ValueError as exc:
-        raise EvalMetricsError(f"path is outside version dir: {path}") from exc
+    except ValueError:
+        return path.as_posix()
 
 
 def _file_count_and_size(path: Path) -> tuple[int, int]:
@@ -133,8 +134,8 @@ def _file_count_and_size(path: Path) -> tuple[int, int]:
     return count, size
 
 
-def cache_layout(version_dir: Path) -> dict[str, Any]:
-    root = embeddings_cache_dir(version_dir)
+def cache_layout(version_dir: Path, eval_root: Path | None = None) -> dict[str, Any]:
+    root = embeddings_cache_dir(version_dir, eval_root)
     entries: list[dict[str, Any]] = []
     if root.exists():
         for child in sorted(root.iterdir()):
@@ -203,11 +204,11 @@ def _overall_status(states: dict[str, dict[str, Any]]) -> str:
     return "empty"
 
 
-def _sample_run_ref(version_dir: Path, run: dict[str, Any]) -> dict[str, Any]:
+def _sample_run_ref(version_dir: Path, run: dict[str, Any], eval_root: Path | None = None) -> dict[str, Any]:
     run_id = str(run.get("run_id") or "")
     return {
         "run_id": run_id,
-        "path": _rel_to_version(version_dir, eval_samples.run_path(version_dir, run_id)),
+        "path": _rel_to_version(version_dir, eval_samples.run_path(version_dir, run_id, eval_root)),
         "status": run.get("status") or "unknown",
         "summary": run.get("summary") if isinstance(run.get("summary"), dict) else {},
         "created_at": run.get("created_at"),
@@ -247,7 +248,7 @@ def _merge_metric_states(raw: Any, metrics: Any) -> dict[str, dict[str, Any]]:
     return states
 
 
-def empty_result(version_dir: Path, run: dict[str, Any]) -> dict[str, Any]:
+def empty_result(version_dir: Path, run: dict[str, Any], eval_root: Path | None = None) -> dict[str, Any]:
     states = _default_metric_states()
     run_id = str(run.get("run_id") or "")
     return {
@@ -261,14 +262,14 @@ def empty_result(version_dir: Path, run: dict[str, Any]) -> dict[str, Any]:
         "version_label": run.get("version_label"),
         "created_at": None,
         "updated_at": None,
-        "metrics_path": _rel_to_version(version_dir, metrics_path(version_dir, run_id)),
-        "sample_run": _sample_run_ref(version_dir, run),
+        "metrics_path": _rel_to_version(version_dir, metrics_path(version_dir, run_id, eval_root)),
+        "sample_run": _sample_run_ref(version_dir, run, eval_root),
         "manifest_digest": run.get("manifest_digest"),
         "checkpoint": run.get("checkpoint") if isinstance(run.get("checkpoint"), dict) else {},
         "metrics": {},
         "metric_states": states,
         "summary": _status_summary(states),
-        "cache": cache_layout(version_dir),
+        "cache": cache_layout(version_dir, eval_root),
     }
 
 
@@ -278,6 +279,7 @@ def _normalize_result(
     data: dict[str, Any],
     *,
     has_metrics: bool,
+    eval_root: Path | None = None,
 ) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise EvalMetricsError("metrics result must be a JSON object")
@@ -296,29 +298,29 @@ def _normalize_result(
         "version_label": run.get("version_label"),
         "created_at": data.get("created_at"),
         "updated_at": data.get("updated_at"),
-        "metrics_path": _rel_to_version(version_dir, metrics_path(version_dir, run_id)),
-        "sample_run": _sample_run_ref(version_dir, run),
+        "metrics_path": _rel_to_version(version_dir, metrics_path(version_dir, run_id, eval_root)),
+        "sample_run": _sample_run_ref(version_dir, run, eval_root),
         "manifest_digest": run.get("manifest_digest"),
         "checkpoint": run.get("checkpoint") if isinstance(run.get("checkpoint"), dict) else {},
         "metrics": metrics,
         "metric_states": states,
         "summary": _status_summary(states),
-        "cache": cache_layout(version_dir),
+        "cache": cache_layout(version_dir, eval_root),
     }
 
 
-def load_result(version_dir: Path, run_id: str) -> dict[str, Any] | None:
-    run = eval_samples.load_run(version_dir, run_id)
+def load_result(version_dir: Path, run_id: str, eval_root: Path | None = None) -> dict[str, Any] | None:
+    run = eval_samples.load_run(version_dir, run_id, eval_root)
     if run is None:
         return None
-    path = metrics_path(version_dir, run_id)
+    path = metrics_path(version_dir, run_id, eval_root)
     if not path.exists():
-        return empty_result(version_dir, run)
+        return empty_result(version_dir, run, eval_root)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise EvalMetricsError(f"metrics result read failed: {exc}") from exc
-    return _normalize_result(version_dir, run, data, has_metrics=True)
+    return _normalize_result(version_dir, run, data, has_metrics=True, eval_root=eval_root)
 
 
 def save_result(
@@ -326,13 +328,14 @@ def save_result(
     run_id: str,
     result: dict[str, Any],
     *,
+    eval_root: Path | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
-    run = eval_samples.load_run(version_dir, run_id)
+    run = eval_samples.load_run(version_dir, run_id, eval_root)
     if run is None:
         raise EvalMetricsError(f"eval sample run not found: {run_id}")
     ts = time.time() if now is None else float(now)
-    path = metrics_path(version_dir, run_id)
+    path = metrics_path(version_dir, run_id, eval_root)
     existing: dict[str, Any] = {}
     if path.exists():
         try:
@@ -377,7 +380,7 @@ def save_result(
     payload.setdefault("schema_version", SCHEMA_VERSION)
     payload.setdefault("created_at", existing.get("created_at") or ts)
     payload["updated_at"] = ts
-    normalized = _normalize_result(version_dir, run, payload, has_metrics=True)
+    normalized = _normalize_result(version_dir, run, payload, has_metrics=True, eval_root=eval_root)
     to_write = {
         "schema_version": normalized["schema_version"],
         "status": normalized["status"],
@@ -390,17 +393,17 @@ def save_result(
         "metric_states": normalized["metric_states"],
         "summary": normalized["summary"],
     }
-    _atomic_write(metrics_path(version_dir, run_id), to_write)
-    return load_result(version_dir, run_id) or normalized
+    _atomic_write(metrics_path(version_dir, run_id, eval_root), to_write)
+    return load_result(version_dir, run_id, eval_root) or normalized
 
 
-def list_results(version_dir: Path) -> list[dict[str, Any]]:
+def list_results(version_dir: Path, eval_root: Path | None = None) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
-    for run in eval_samples.list_runs(version_dir):
+    for run in eval_samples.list_runs(version_dir, eval_root):
         run_id = str(run.get("run_id") or "")
         if not run_id:
             continue
-        result = load_result(version_dir, run_id)
+        result = load_result(version_dir, run_id, eval_root)
         if result is not None:
             results.append(result)
     return results

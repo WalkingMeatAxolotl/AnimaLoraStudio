@@ -276,8 +276,6 @@ const EVAL_DESCRIPTIONS: Record<EvalMetricKey, string> = {
   dino_i: '生成图和参考图的 DINO 图像特征相似度，用来看主体或风格特征是否学到；越高越好。',
 }
 
-type MonitorTab = 'training' | 'eval'
-
 function checkpointSortValue(result: EvalMetricResult, index: number): number {
   const value = result.checkpoint?.value
   if (typeof value === 'number') return value
@@ -350,7 +348,11 @@ function MiniMetricSparkline({ points }: { points: Array<{ x: number; value: num
   )
 }
 
-function EvalMetricsPanel({ state, connected }: { state: MonitorState | null; connected: boolean }) {
+export function EvalMetricsPanel({ state, connected, taskId }: {
+  state: MonitorState | null
+  connected: boolean
+  taskId?: number
+}) {
   const pid = state?.project_id
   const vid = state?.version_id
   const [payload, setPayload] = useState<Awaited<ReturnType<typeof api.listEvalMetrics>> | null>(null)
@@ -361,7 +363,7 @@ function EvalMetricsPanel({ state, connected }: { state: MonitorState | null; co
     if (!pid || !vid) return
     if (!quiet) setLoading(true)
     try {
-      const next = await api.listEvalMetrics(pid, vid)
+      const next = await api.listEvalMetrics(pid, vid, taskId)
       setPayload(next)
       setError(null)
     } catch (err) {
@@ -369,7 +371,7 @@ function EvalMetricsPanel({ state, connected }: { state: MonitorState | null; co
     } finally {
       if (!quiet) setLoading(false)
     }
-  }, [pid, vid])
+  }, [pid, vid, taskId])
 
   useEffect(() => {
     setPayload(null)
@@ -709,7 +711,6 @@ function SampleViewer({ samples, taskId }: {
 
 export default function MonitorDashboard({ taskId }: { taskId: number }) {
   const { state, connected } = useMonitorProgress(taskId)
-  const [activeTab, setActiveTab] = useState<MonitorTab>('training')
   const [emaAlpha, setEmaAlpha] = useState(0.02)
   // LR / d 默认不做 EMA（数据本身已是 EMA 派生量），slider 拉到 < 1 才平滑
   const [lrAlpha, setLrAlpha] = useState(1)
@@ -815,57 +816,32 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
         )}
       </div>
 
-      <div className="flex items-center gap-1 border-b border-subtle shrink-0">
-        {([
-          ['training', '训练监控'],
-          ['eval', 'LoRA 评估'],
-        ] as const).map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => setActiveTab(id)}
-            className={[
-              'px-3 py-2 text-sm border-b-2 transition-colors',
-              activeTab === id
-                ? 'border-accent text-fg-primary font-semibold'
-                : 'border-transparent text-fg-tertiary hover:text-fg-primary',
-            ].join(' ')}
-          >
-            {label}
-          </button>
-        ))}
+      {/* 6 stat cards */}
+      <div className="grid grid-cols-6 gap-2.5">
+        <StatCard label="step" value={step ? step.toLocaleString() : '--'}
+          sub={totalSteps ? `of ${totalSteps.toLocaleString()}` : undefined} tone="accent" />
+        <StatCard
+          label="loss"
+          value={lossInfo ? lossInfo.val.toFixed(4) : '--'}
+          sub={lossInfo?.delta != null
+            ? `recent avg, ${lossInfo.delta > 0 ? '↑' : '↓'}${Math.abs(lossInfo.delta).toFixed(4)}`
+            : losses.length > 0 ? 'recent avg' : 'awaiting'}
+          tone={lossInfo?.delta != null ? (lossInfo.delta < 0 ? 'ok' : 'warn') : undefined}
+        />
+        <StatCard label="avg loss" value={avgLoss != null ? avgLoss.toFixed(4) : '--'}
+          sub={losses.length ? `${losses.length} pts raw mean` : 'awaiting'} />
+        <StatCard label="lr" value={fmtLr(lastLr)}
+          sub={lastD != null ? `actual · d ${fmtMetric(lastD)}` : lrHistory.length ? 'learning rate' : undefined} />
+        <StatCard
+          label={vram ? 'vram' : 'speed'}
+          value={vram ? `${vram.toFixed(1)} GB` : speed ? `${speed.toFixed(2)} it/s` : '--'}
+          sub={vramTotal ? `of ${vramTotal.toFixed(0)} GB · ${((vram! / vramTotal) * 100).toFixed(0)}%` : undefined}
+          tone={vramTone}
+        />
+        <StatCard label="eta" value={eta} sub={speed ? `${speed.toFixed(2)} it/s` : undefined} />
       </div>
 
-      {activeTab === 'eval' ? (
-        <EvalMetricsPanel state={state} connected={connected} />
-      ) : (
-        <>
-          {/* 6 stat cards */}
-          <div className="grid grid-cols-6 gap-2.5">
-            <StatCard label="step" value={step ? step.toLocaleString() : '--'}
-              sub={totalSteps ? `of ${totalSteps.toLocaleString()}` : undefined} tone="accent" />
-            <StatCard
-              label="loss"
-              value={lossInfo ? lossInfo.val.toFixed(4) : '--'}
-              sub={lossInfo?.delta != null
-                ? `recent avg, ${lossInfo.delta > 0 ? '↑' : '↓'}${Math.abs(lossInfo.delta).toFixed(4)}`
-                : losses.length > 0 ? 'recent avg' : 'awaiting'}
-              tone={lossInfo?.delta != null ? (lossInfo.delta < 0 ? 'ok' : 'warn') : undefined}
-            />
-            <StatCard label="avg loss" value={avgLoss != null ? avgLoss.toFixed(4) : '--'}
-              sub={losses.length ? `${losses.length} pts raw mean` : 'awaiting'} />
-            <StatCard label="lr" value={fmtLr(lastLr)}
-              sub={lastD != null ? `actual · d ${fmtMetric(lastD)}` : lrHistory.length ? 'learning rate' : undefined} />
-            <StatCard
-              label={vram ? 'vram' : 'speed'}
-              value={vram ? `${vram.toFixed(1)} GB` : speed ? `${speed.toFixed(2)} it/s` : '--'}
-              sub={vramTotal ? `of ${vramTotal.toFixed(0)} GB · ${((vram! / vramTotal) * 100).toFixed(0)}%` : undefined}
-              tone={vramTone}
-            />
-            <StatCard label="eta" value={eta} sub={speed ? `${speed.toFixed(2)} it/s` : undefined} />
-          </div>
-
-          {/* 左：采样图（竖） / 右：loss → LR
+      {/* 左：采样图（竖） / 右：loss → LR
           gridTemplateRows: '1fr' → row 跟随 flex-1 撑满，避免 row 默认 auto 在大屏留空白；
           右卡 minHeight 形成下界，flex-1 在 row 高度 > 3*min+gap 时均分扩展；
           总 min 超视口时由外层 overflow-y-auto 滚 */}
@@ -944,8 +920,6 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
               )}
             </div>
           </div>
-        </>
-      )}
     </div>
   )
 }

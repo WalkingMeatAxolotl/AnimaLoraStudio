@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 from ...schemas.projects import EvalSamplesStart
 from ._shared import _publish_job_state, _version_dir_or_404
 from .... import db
+from ....infrastructure.paths import task_eval_dir
 from ....services import eval_samples
 from ....services.projects import jobs as project_jobs
 
@@ -30,14 +31,19 @@ def _tail_log(job: dict[str, Any] | None, *, lines: int = 80) -> str:
 
 
 @router.get("/api/projects/{pid}/versions/{vid}/eval/samples")
-def list_eval_sample_runs_endpoint(pid: int, vid: int) -> dict[str, Any]:
+def list_eval_sample_runs_endpoint(
+    pid: int,
+    vid: int,
+    task_id: int | None = None,
+) -> dict[str, Any]:
     _, _, vdir = _version_dir_or_404(pid, vid)
+    eval_root = task_eval_dir(task_id) if task_id else None
     with db.connection_for() as conn:
         job = project_jobs.latest_for(
             conn, project_id=pid, version_id=vid, kind=eval_samples.JOB_KIND
         )
     try:
-        runs = eval_samples.list_runs(vdir)
+        runs = eval_samples.list_runs(vdir, eval_root)
     except eval_samples.EvalSamplesError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"runs": runs, "latest_job": job, "log_tail": _tail_log(job)}
@@ -67,10 +73,16 @@ def start_eval_sample_run_endpoint(
 
 
 @router.get("/api/projects/{pid}/versions/{vid}/eval/samples/{run_id}")
-def get_eval_sample_run_endpoint(pid: int, vid: int, run_id: str) -> dict[str, Any]:
+def get_eval_sample_run_endpoint(
+    pid: int,
+    vid: int,
+    run_id: str,
+    task_id: int | None = None,
+) -> dict[str, Any]:
     _, _, vdir = _version_dir_or_404(pid, vid)
+    eval_root = task_eval_dir(task_id) if task_id else None
     try:
-        run = eval_samples.load_run(vdir, run_id)
+        run = eval_samples.load_run(vdir, run_id, eval_root)
     except eval_samples.EvalSamplesError as exc:
         raise HTTPException(400, str(exc)) from exc
     if run is None:
@@ -80,11 +92,16 @@ def get_eval_sample_run_endpoint(pid: int, vid: int, run_id: str) -> dict[str, A
 
 @router.get("/api/projects/{pid}/versions/{vid}/eval/samples/{run_id}/images/{filename}")
 def get_eval_sample_image_endpoint(
-    pid: int, vid: int, run_id: str, filename: str
+    pid: int,
+    vid: int,
+    run_id: str,
+    filename: str,
+    task_id: int | None = None,
 ) -> Any:
     _, _, vdir = _version_dir_or_404(pid, vid)
+    eval_root = task_eval_dir(task_id) if task_id else None
     try:
-        path = eval_samples.sample_image_path(vdir, run_id, filename)
+        path = eval_samples.sample_image_path(vdir, run_id, filename, eval_root)
     except eval_samples.EvalSamplesError as exc:
         raise HTTPException(400, str(exc)) from exc
     if not path.exists():

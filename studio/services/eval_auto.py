@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from studio import db
 from studio import secrets
+from studio.infrastructure.paths import task_eval_dir
 from studio.services import eval_clip, eval_dino, eval_samples
 from studio.services.projects import jobs as project_jobs, projects, versions
 
@@ -49,6 +50,8 @@ def queue_checkpoint_eval(
         return None
 
     vdir = versions.version_dir(project_id, project["slug"], str(version["label"]))
+    task_id = int(task.get("id") or 0)
+    eval_root = task_eval_dir(task_id) if task_id else None
     try:
         job, run = eval_samples.start_job(
             conn,
@@ -64,6 +67,7 @@ def queue_checkpoint_eval(
                 "step": payload.get("step"),
                 "trigger": payload.get("trigger"),
             },
+            eval_root=eval_root,
         )
     except Exception:
         logger.exception(
@@ -120,6 +124,7 @@ def run_checkpoint_eval_for_task(
         "trigger": payload.get("trigger"),
         "inline": True,
     }
+    eval_root = task_eval_dir(int(task_id))
     progress(
         f"[eval-auto] start checkpoint={checkpoint} "
         f"epoch={payload.get('epoch')} step={payload.get('step')}"
@@ -132,6 +137,7 @@ def run_checkpoint_eval_for_task(
         max_items=cfg.auto_eval_max_items,
         auto_metrics=True,
         auto_source=auto_source,
+        eval_root=eval_root,
     )
 
     sample_result = eval_samples.run_sample_job(
@@ -141,6 +147,7 @@ def run_checkpoint_eval_for_task(
         str(run["run_id"]),
         generator=sample_generator,
         on_progress=progress,
+        eval_root=eval_root,
     )
     results: dict[str, Any] = {"run": sample_result, "metrics": {}}
     if sample_result.get("status") != "done":
@@ -160,6 +167,7 @@ def run_checkpoint_eval_for_task(
                 model_name=model_name,
                 scorer=scorer,
                 on_progress=progress,
+                eval_root=eval_root,
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("inline auto eval %s failed for run=%s", key, run["run_id"])
@@ -190,6 +198,8 @@ def queue_training_finished_eval(
         return []
 
     vdir = versions.version_dir(project_id, str(project["slug"]), str(version["label"]))
+    task_id = int(task.get("id") or 0)
+    eval_root = task_eval_dir(task_id) if task_id else None
     queued: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for checkpoint in versions.list_lora_ckpts(vdir):
         rel = _checkpoint_relative_to_output(
@@ -215,6 +225,7 @@ def queue_training_finished_eval(
                     "step": (payload or {}).get("step"),
                     "trigger": "after_training",
                 },
+                eval_root=eval_root,
             )
         except Exception:
             logger.exception(
@@ -239,6 +250,9 @@ def queue_metric_jobs_for_sample(
     version: dict[str, Any],
     version_dir: Path,
     run_id: str,
+    *,
+    eval_root: Path | None = None,
+    task_id: int | None = None,
 ) -> list[dict[str, Any]]:
     """Queue CLIP and DINO metrics after an automatically queued sample run."""
     cfg = secrets.load().eval_metrics
@@ -249,6 +263,7 @@ def queue_metric_jobs_for_sample(
         version=version,
         kind=eval_clip.JOB_KIND,
         run_id=run_id,
+        task_id=task_id,
     )
     if clip_job is None:
         clip_job, _ = eval_clip.start_job(
@@ -258,6 +273,8 @@ def queue_metric_jobs_for_sample(
             version_dir,
             run_id,
             model_name=cfg.clip_model_name,
+            eval_root=eval_root,
+            task_id=task_id,
         )
     jobs.append(clip_job)
     dino_job = _active_metric_job(
@@ -266,6 +283,7 @@ def queue_metric_jobs_for_sample(
         version=version,
         kind=eval_dino.JOB_KIND,
         run_id=run_id,
+        task_id=task_id,
     )
     if dino_job is None:
         dino_job, _ = eval_dino.start_job(
@@ -275,6 +293,8 @@ def queue_metric_jobs_for_sample(
             version_dir,
             run_id,
             model_name=cfg.dino_model_name,
+            eval_root=eval_root,
+            task_id=task_id,
         )
     jobs.append(dino_job)
     logger.info(
@@ -321,6 +341,7 @@ def _active_metric_job(
     version: dict[str, Any],
     kind: str,
     run_id: str,
+    task_id: int | None = None,
 ) -> dict[str, Any] | None:
     for status in ("pending", "running"):
         for job in project_jobs.list_jobs(
@@ -334,6 +355,10 @@ def _active_metric_job(
             if not isinstance(params, dict):
                 continue
             if str(params.get("run_id") or "") == str(run_id):
+                if task_id is not None and int(params.get("task_id") or 0) != int(task_id):
+                    continue
+                if task_id is None and int(params.get("task_id") or 0):
+                    continue
                 return job
     return None
 

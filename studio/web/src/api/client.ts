@@ -2735,9 +2735,11 @@ export const api = {
     ),
   sampleImageUrl: (filename: string, taskId: number, w?: number) =>
     `/samples/${filename}?task_id=${taskId}${w ? `&w=${w}` : ''}`,
-  listEvalMetrics: (pid: number, vid: number) =>
+  listEvalMetrics: (pid: number, vid: number, taskId?: number) =>
     req<EvalMetricsListResponse>(
-      `/api/projects/${pid}/versions/${vid}/eval/metrics?_=${Date.now()}`,
+      `/api/projects/${pid}/versions/${vid}/eval/metrics?` +
+      (taskId ? `task_id=${taskId}&` : '') +
+      `_=${Date.now()}`,
     ),
 
   // Queue import / export ---------------------------------------------

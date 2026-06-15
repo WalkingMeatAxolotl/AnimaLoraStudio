@@ -725,6 +725,7 @@
     "tabOverview": "详情",
     "tabLogs": "日志",
     "tabMonitor": "监控",
+    "tabEval": "LoRA 评估",
     "tabOutputs": "输出",
     "tabSnapshot": "关联配置",
     "deleteRecord": "删除记录",

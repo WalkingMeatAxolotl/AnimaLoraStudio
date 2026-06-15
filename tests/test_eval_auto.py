@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from studio import db, secrets
+from studio.infrastructure import paths as infra_paths
 from studio.services import eval_auto, eval_samples
 from studio.services.projects import jobs as project_jobs, projects, versions
 from studio.supervisor import Supervisor
@@ -19,6 +20,7 @@ def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     db.init_db(dbfile)
     monkeypatch.setattr(projects, "PROJECTS_DIR", tmp_path / "projects")
     monkeypatch.setattr(project_jobs, "JOB_LOGS_DIR", tmp_path / "jobs")
+    monkeypatch.setattr(infra_paths, "TASKS_DIR", tmp_path / "tasks")
     monkeypatch.setattr(db, "STUDIO_DB", dbfile)
     monkeypatch.setattr(secrets, "SECRETS_FILE", tmp_path / "secrets.json")
     return {"db": dbfile}
@@ -42,15 +44,20 @@ def _project_version(isolated) -> tuple[dict[str, Any], dict[str, Any], Path]:
 
 
 def _fake_generator(run: dict[str, Any], version_dir: Path, progress) -> None:
+    eval_root = (
+        Path(str(run["eval_root"]))
+        if run.get("storage_scope") == "task" and run.get("eval_root")
+        else None
+    )
     for idx, item in enumerate(run["items"]):
         progress(f"fake {idx}")
-        run = eval_samples.mark_item_running(version_dir, run, idx)
+        run = eval_samples.mark_item_running(version_dir, run, idx, eval_root)
         path = eval_samples.sample_image_path(
-            version_dir, run["run_id"], item["filename"]
+            version_dir, run["run_id"], item["filename"], eval_root
         )
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"PNG")
-        run = eval_samples.mark_item_done(version_dir, run, idx)
+        run = eval_samples.mark_item_done(version_dir, run, idx, eval_root)
 
 
 def test_queue_checkpoint_eval_respects_switch(isolated) -> None:
@@ -79,6 +86,7 @@ def test_queue_checkpoint_eval_respects_switch(isolated) -> None:
     assert queued is not None
     job, run = queued
     assert job["kind"] == "eval_samples"
+    assert job["params_decoded"]["task_id"] == 7
     assert job["params_decoded"]["auto_metrics"] is True
     assert job["params_decoded"]["auto_source"] == {
         "task_id": 7,
@@ -96,6 +104,10 @@ def test_queue_checkpoint_eval_respects_switch(isolated) -> None:
         "trigger": "epoch",
     }
     assert run["summary"]["total"] == 1
+    assert run["storage_scope"] == "task"
+    assert run["eval_root"] == str(infra_paths.task_eval_dir(7).resolve())
+    assert (infra_paths.task_eval_dir(7) / "samples" / run["run_id"] / "run.json").exists()
+    assert not (vdir / "eval" / "samples" / run["run_id"] / "run.json").exists()
 
 
 def test_queue_metric_jobs_for_sample_uses_saved_defaults(isolated) -> None:
@@ -132,20 +144,30 @@ def test_queue_metric_jobs_for_sample_uses_saved_defaults(isolated) -> None:
         }, {
             "checkpoint_path": str(vdir / "output" / "model_epoch2.safetensors"),
         })
+        eval_root = infra_paths.task_eval_dir(7)
         run = eval_samples.run_sample_job(
             project,
             version,
             vdir,
             run["run_id"],
             generator=_fake_generator,
+            eval_root=eval_root,
         )
         jobs = eval_auto.queue_metric_jobs_for_sample(
-            conn, project, version, vdir, run["run_id"]
+            conn,
+            project,
+            version,
+            vdir,
+            run["run_id"],
+            eval_root=eval_root,
+            task_id=7,
         )
 
     assert [j["kind"] for j in jobs] == ["eval_clip", "eval_dino"]
     assert jobs[0]["params_decoded"]["model_name"] == "/models/clip"
     assert jobs[1]["params_decoded"]["model_name"] == "/models/dino"
+    assert jobs[0]["params_decoded"]["task_id"] == 7
+    assert jobs[1]["params_decoded"]["task_id"] == 7
 
 
 def test_queue_metric_jobs_for_sample_reuses_active_jobs(isolated) -> None:
@@ -166,18 +188,32 @@ def test_queue_metric_jobs_for_sample_reuses_active_jobs(isolated) -> None:
         }, {
             "checkpoint_path": str(vdir / "output" / "model_epoch2.safetensors"),
         })
+        eval_root = infra_paths.task_eval_dir(7)
         run = eval_samples.run_sample_job(
             project,
             version,
             vdir,
             run["run_id"],
             generator=_fake_generator,
+            eval_root=eval_root,
         )
         first = eval_auto.queue_metric_jobs_for_sample(
-            conn, project, version, vdir, run["run_id"]
+            conn,
+            project,
+            version,
+            vdir,
+            run["run_id"],
+            eval_root=eval_root,
+            task_id=7,
         )
         second = eval_auto.queue_metric_jobs_for_sample(
-            conn, project, version, vdir, run["run_id"]
+            conn,
+            project,
+            version,
+            vdir,
+            run["run_id"],
+            eval_root=eval_root,
+            task_id=7,
         )
         clip_jobs = project_jobs.list_jobs(conn, kind="eval_clip")
         dino_jobs = project_jobs.list_jobs(conn, kind="eval_dino")
@@ -218,6 +254,7 @@ def test_after_training_eval_queues_all_checkpoints_by_default(isolated) -> None
         "output/model_epoch4.safetensors",
     }
     assert all(job["params_decoded"]["auto_metrics"] is True for job in jobs)
+    assert all(job["params_decoded"]["task_id"] == 7 for job in jobs)
     assert all(
         job["params_decoded"]["auto_source"]["trigger"] == "after_training"
         for job in jobs
@@ -271,12 +308,16 @@ def test_run_checkpoint_eval_for_task_runs_inline_without_queue_jobs(isolated) -
     run = result["run"]
     assert run["status"] == "done"
     assert run["auto_source"]["inline"] is True
+    assert run["storage_scope"] == "task"
+    assert run["eval_root"] == str(infra_paths.task_eval_dir(tid).resolve())
     assert result["metrics"]["clip"]["metric_states"]["clip_t"]["model_name"] == "/models/clip"
     assert result["metrics"]["clip"]["metric_states"]["clip_i"]["value"] == 0.22
     assert result["metrics"]["dino"]["metric_states"]["dino_i"]["model_name"] == "/models/dino"
     assert result["metrics"]["dino"]["metric_states"]["dino_i"]["value"] == 0.33
     with db.connection_for(isolated["db"]) as conn:
         assert project_jobs.list_jobs(conn) == []
+    assert (infra_paths.task_eval_dir(tid) / "samples" / run["run_id"] / "metrics.json").exists()
+    assert not (vdir / "eval" / "samples" / run["run_id"] / "metrics.json").exists()
 
 
 def test_supervisor_eval_checkpoint_event_queues_sample_job(isolated) -> None:
@@ -320,6 +361,7 @@ def test_supervisor_eval_checkpoint_event_queues_sample_job(isolated) -> None:
         jobs = project_jobs.list_jobs(conn, kind="eval_samples", status="pending")
     assert len(jobs) == 1
     assert jobs[0]["params_decoded"]["auto_metrics"] is True
+    assert jobs[0]["params_decoded"]["task_id"] == tid
 
 
 def test_supervisor_eval_training_finished_queues_after_task_done(isolated) -> None:
@@ -363,5 +405,6 @@ def test_supervisor_eval_training_finished_queues_after_task_done(isolated) -> N
         jobs = project_jobs.list_jobs(conn, kind="eval_samples", status="pending")
     assert len(jobs) == 1
     assert jobs[0]["params_decoded"]["auto_source"]["trigger"] == "after_training"
+    assert jobs[0]["params_decoded"]["task_id"] == tid
     queued = [e for e in events if e["type"] == "eval_auto_after_training_queued"]
     assert queued and queued[0]["count"] == 1
