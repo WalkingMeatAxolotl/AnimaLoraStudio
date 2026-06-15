@@ -475,8 +475,8 @@ class TrainingConfig(BaseModel):
         description="采样分布。logit_normal 偏中段（SD3/Anima 默认）；uniform 等概率；mode 单峰偏移；mixed_* 混合 uniform 与偏置端（比例由 timestep_mix_low_prob 控制）",
         json_schema_extra=_meta(
             "timestep_sampling",
-            alt_description="【时间步采样】分布；InfoNoise 启用时作为热身期 baseline，正式阶段由自适应 CDF 接管",
-            alt_description_when="infonoise_enabled==true",
+            alt_description="【时间步采样】InfoNoise 启用时作为热身期 baseline，正式阶段由自适应 CDF 接管；Leap 启用时 leap 路径恒用 U(0,1)，本字段仅作用于 (1-leap_ratio) 比例的标准 step",
+            alt_description_when="infonoise_enabled==true||leap_enabled==true",
             advanced=True,
         ),
     )
@@ -486,8 +486,8 @@ class TrainingConfig(BaseModel):
         json_schema_extra=_meta(
             "timestep_sampling",
             show_when="timestep_sampling!=uniform",
-            alt_description="【InfoNoise 热身期】InfoNoise 开启时作为热身阶段的 baseline shift，正式阶段由自适应 CDF 接管",
-            alt_description_when="infonoise_enabled==true",
+            alt_description="InfoNoise 开启时作为热身阶段的 baseline shift，正式阶段由自适应 CDF 接管；Leap 启用时 leap 路径恒用 U(0,1)，本字段仅作用于 (1-leap_ratio) 比例的标准 step",
+            alt_description_when="infonoise_enabled==true||leap_enabled==true",
             advanced=True,
         ),
     )
@@ -497,8 +497,8 @@ class TrainingConfig(BaseModel):
         json_schema_extra=_meta(
             "timestep_sampling",
             show_when="timestep_sampling!=uniform",
-            alt_description="【InfoNoise 热身期】InfoNoise 开启 + mixed_* baseline 时，热身阶段混合比例；正式阶段由自适应 CDF 接管",
-            alt_description_when="infonoise_enabled==true",
+            alt_description="InfoNoise 开启 + mixed_* baseline 时，热身阶段混合比例，正式阶段由自适应 CDF 接管；Leap 启用时 leap 路径恒用 U(0,1)，本字段仅作用于 (1-leap_ratio) 比例的标准 step",
+            alt_description_when="infonoise_enabled==true||leap_enabled==true",
             advanced=True,
         ),
     )
@@ -507,8 +507,8 @@ class TrainingConfig(BaseModel):
         description="采样后对 t 做的额外 σ schedule 偏移：1.0 = 无偏移；越大整体偏向高噪声端。与 timestep_shift 区别：作用于最终 t 而非 logit-normal 内部",
         json_schema_extra=_meta(
             "timestep_sampling",
-            alt_description="【InfoNoise 热身期】InfoNoise 开启时仅热身期生效；正式阶段由自适应 CDF 接管",
-            alt_description_when="infonoise_enabled==true",
+            alt_description="InfoNoise 开启时仅热身期生效，正式阶段由自适应 CDF 接管；Leap 启用时 leap 路径恒用 U(0,1)，本字段仅作用于 (1-leap_ratio) 比例的标准 step",
+            alt_description_when="infonoise_enabled==true||leap_enabled==true",
             advanced=True,
             disable_when="infonoise_enabled==true",
             disable_hint="InfoNoise 启用时禁用 schedule shift（schema 互斥，仅 1.0 兼容）",
@@ -569,8 +569,8 @@ class TrainingConfig(BaseModel):
         description="训练 loss 类型。mse 经典；huber 对 outlier 鲁棒（在 |x|<δ 时用二次，|x|≥δ 时用线性）",
         json_schema_extra=_meta(
             "loss",
-            disable_when="infonoise_enabled==true",
-            disable_hint="InfoNoise 启用时禁用 loss 类型切换（schema 互斥，仅 mse 兼容）",
+            disable_when="infonoise_enabled==true||leap_enabled==true",
+            disable_hint="InfoNoise / Leap 启用时禁用 loss 类型切换（schema 互斥，仅 mse 兼容）",
         ),
     )
     huber_c: float = Field(
@@ -784,15 +784,17 @@ class TrainingConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_leap_exclusive(self) -> "TrainingConfig":
-        """LeapAlign 自蒸馏与 InfoNoise / loss_weighting 互斥。
+        """LeapAlign 自蒸馏与 InfoNoise / loss_weighting / loss_type=huber 互斥。
 
         leap 路径每步 per-sample 采两个时刻 (k,j) 做两步跳跃，单步只有 (k,j) 这对
-        timestep，不存在标准路径里那个唯一的 t：
+        timestep，且 loss 在 leap.py 里写死 MSE(x̂0, x0)：
         - InfoNoise：用单一 t 的 raw MSE 学 I-MMSE schedule，双 timestep 无从 record；
           且 leap 的 loss 是 x̂0 自蒸馏 MSE，不是 v 预测 MSE，语义也不匹配。
         - loss_weighting：min_snr / detail_inv_t / cosmap 全都按单一 t 算 SNR 权重，
           双 timestep 没有定义；leap 自带 traj_sim_weighting 做轨迹质量加权。
-        故 leap 路径在 loop.py 里有意跳过这两个机制，这里强制配置层面关闭，避免用户
+        - loss_type=huber：leap.py 直接走 (x̂0-x0)**2 内联 MSE，绕过 ctx.loss_fn，开了
+          huber 会被静默无视。
+        故 leap 路径在 loop.py 里有意跳过这三个机制，这里强制配置层面关闭，避免用户
         以为开了却被静默忽略。
         """
         if self.leap_enabled:
@@ -809,6 +811,12 @@ class TrainingConfig(BaseModel):
                     "按单一 t 算 SNR 权重，leap 的双 timestep 无从定义；leap 用 "
                     "leap_traj_sim_weighting 做轨迹质量加权。请二选一：(a) 关闭 leap；"
                     "或 (b) 设 loss_weighting=none 走 leap 自蒸馏。"
+                )
+            if self.loss_type == "huber":
+                raise ValueError(
+                    "leap_enabled=true 与 loss_type=huber 互斥：leap.py 写死 MSE(x̂0, x0) "
+                    "内联自蒸馏目标，绕过 ctx.loss_fn 分发，huber 会被静默忽略。"
+                    "请二选一：(a) 关闭 leap；或 (b) 设 loss_type=mse 走 leap 自蒸馏。"
                 )
         return self
 
