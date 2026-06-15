@@ -8,6 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import torch
 import torch.nn as nn
 
@@ -79,6 +80,44 @@ def test_sra_weight_zero_is_preserved() -> None:
     assert _resolve_sra_weight(SimpleNamespace(sra_weight=0.0)) == 0.0
     assert _resolve_sra_weight(SimpleNamespace(sra_weight=None)) == 1.0
     assert _resolve_sra_weight(SimpleNamespace()) == 1.0
+
+
+def test_sra_effective_weight_decay_modes() -> None:
+    from training.loop import _resolve_sra_effective_weight
+
+    base = dict(
+        sra_weight=0.1,
+        sra_decay_start_ratio=0.2,
+        sra_decay_end_ratio=0.4,
+    )
+
+    assert _resolve_sra_effective_weight(
+        SimpleNamespace(**base, sra_decay_type="none"), 50, 100,
+    ) == pytest.approx(0.1)
+    assert _resolve_sra_effective_weight(
+        SimpleNamespace(**base, sra_decay_type="linear"), 30, 100,
+    ) == pytest.approx(0.05)
+    assert _resolve_sra_effective_weight(
+        SimpleNamespace(**base, sra_decay_type="cosine"), 30, 100,
+    ) == pytest.approx(0.05)
+    assert _resolve_sra_effective_weight(
+        SimpleNamespace(**base, sra_decay_type="jump"), 19, 100,
+    ) == pytest.approx(0.1)
+    assert _resolve_sra_effective_weight(
+        SimpleNamespace(**base, sra_decay_type="jump"), 20, 100,
+    ) == pytest.approx(0.0)
+
+
+def test_sra_decay_schema_rejects_inverted_linear_range() -> None:
+    from studio.schema import TrainingConfig
+
+    with pytest.raises(Exception):
+        TrainingConfig(
+            sra_enabled=True,
+            sra_decay_type="linear",
+            sra_decay_start_ratio=0.5,
+            sra_decay_end_ratio=0.25,
+        )
 
 
 def test_sra_state_roundtrip(tmp_path: Path) -> None:

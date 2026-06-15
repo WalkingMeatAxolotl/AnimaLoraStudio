@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from typing import Any
 
@@ -44,6 +45,38 @@ def _resolve_sra_weight(args: Any) -> float:
     """Read sra_weight without treating explicit 0 as a missing value."""
     raw = getattr(args, "sra_weight", 1.0)
     return 1.0 if raw is None else float(raw)
+
+
+def _resolve_sra_effective_weight(args: Any, global_step: int, total_steps: int | None) -> float:
+    """Apply the configured SRA schedule to the base SRA weight."""
+    base = _resolve_sra_weight(args)
+    if base == 0.0:
+        return 0.0
+
+    decay_type = str(getattr(args, "sra_decay_type", "none") or "none").lower()
+    if decay_type == "none" or not total_steps or total_steps <= 0:
+        return base
+
+    start = float(getattr(args, "sra_decay_start_ratio", 0.2) or 0.0)
+    end = float(getattr(args, "sra_decay_end_ratio", 0.3) or 0.0)
+    progress = max(0.0, min(1.0, float(global_step) / float(total_steps)))
+
+    if decay_type == "jump":
+        return base if progress < start else 0.0
+
+    if progress <= start:
+        return base
+    if progress >= end:
+        return 0.0
+
+    x = (progress - start) / max(end - start, 1e-8)
+    if decay_type == "linear":
+        scale = 1.0 - x
+    elif decay_type == "cosine":
+        scale = 0.5 * (1.0 + math.cos(math.pi * x))
+    else:
+        scale = 1.0
+    return base * max(0.0, min(1.0, scale))
 
 
 def run(ctx: TrainingContext) -> None:
@@ -145,6 +178,10 @@ def run(ctx: TrainingContext) -> None:
 
             # 前向
             pad_mask = torch.zeros(bs, 1, latents.shape[-2], latents.shape[-1], device=ctx.device, dtype=ctx.dtype)
+            denoise_loss_log = None
+            sra_align_loss_log = None
+            sra_weighted_loss_log = None
+            sra_effective_weight_log = None
             with torch.autocast("cuda", dtype=ctx.dtype):
                 if use_leap_this_step:
                     # ── LeapAlign 两步跳跃自蒸馏路径 ──
@@ -171,6 +208,7 @@ def run(ctx: TrainingContext) -> None:
                         w = batch["loss_weight"].to(ctx.device).view(-1, *([1] * (loss_per_sample.dim() - 1)))
                         loss_per_sample = loss_per_sample * w
                     loss = loss_per_sample.mean()
+                    denoise_loss_log = loss.detach()
                 else:
                     # ── 标准 rectified flow 路径（零行为变化）──
                     noisy = (1 - t_exp) * latents + t_exp * noise
@@ -219,18 +257,23 @@ def run(ctx: TrainingContext) -> None:
                         ).to(device=ctx.device, dtype=torch.float32)
                         loss_per_sample = loss_per_sample * lw.view(-1, *([1] * (loss_per_sample.dim() - 1)))
                     loss = loss_per_sample.mean()
+                    denoise_loss_log = loss.detach()
 
                 # SRA v2 表征对齐 loss（标准路径；leap 路径不适用）
                 if ctx.sra_aligner is not None and not use_leap_this_step:
-                    sra_weight = _resolve_sra_weight(args)
+                    sra_weight = _resolve_sra_effective_weight(args, ctx.global_step, ctx.total_steps)
+                    sra_effective_weight_log = sra_weight
                     if sra_weight != 0.0:
                         align_loss = ctx.sra_aligner.compute(
                             latents,
                             sample_weight=batch.get("loss_weight"),
                         )
-                        loss = loss + sra_weight * align_loss
-                        if ctx.global_step % args.log_every == 0:
-                            ctx.wandb_monitor.log({"train/sra_align_loss": float(align_loss.item())}, step=ctx.global_step)
+                        weighted_align_loss = sra_weight * align_loss
+                        loss = loss + weighted_align_loss
+                        sra_align_loss_log = align_loss.detach()
+                        sra_weighted_loss_log = weighted_align_loss.detach()
+                    else:
+                        sra_weighted_loss_log = loss.new_tensor(0.0).detach()
 
                 # PR-C：adapter hook — 变体可加正则项（OFT orth penalty /
                 # Ortho-Hydra balance loss 等）。LyCORIS 返回 None，noop。
@@ -272,6 +315,18 @@ def run(ctx: TrainingContext) -> None:
 
                 # 记录 loss 历史
                 loss_val = float(loss.item() * args.grad_accum)
+                denoise_loss_val = (
+                    float(denoise_loss_log.item())
+                    if denoise_loss_log is not None else loss_val
+                )
+                sra_align_loss_val = (
+                    float(sra_align_loss_log.item())
+                    if sra_align_loss_log is not None else None
+                )
+                sra_weighted_loss_val = (
+                    float(sra_weighted_loss_log.item())
+                    if sra_weighted_loss_log is not None else None
+                )
                 epoch_loss_sum += loss_val
                 epoch_step_count += 1
                 if args.loss_curve_steps and len(ctx.loss_history) < args.loss_curve_steps:
@@ -286,12 +341,20 @@ def run(ctx: TrainingContext) -> None:
                 if ctx.monitor_server:
                     try:
                         from train_monitor import update_monitor
+                        monitor_metrics = dict(optimizer_metrics)
+                        monitor_metrics["denoise_loss"] = denoise_loss_val
+                        if sra_align_loss_val is not None:
+                            monitor_metrics["sra_align_loss"] = sra_align_loss_val
+                        if sra_weighted_loss_val is not None:
+                            monitor_metrics["sra_weighted_loss"] = sra_weighted_loss_val
+                        if sra_effective_weight_log is not None:
+                            monitor_metrics["sra_effective_weight"] = float(sra_effective_weight_log)
                         update_monitor(
                             loss=loss_val, lr=lr, epoch=epoch + 1,
                             total_epochs=int(args.epochs or 0),
                             step=ctx.global_step,
                             total_steps=ctx.total_steps, speed=ctx.speed_ema or 0,
-                            optimizer_metrics=optimizer_metrics,
+                            optimizer_metrics=monitor_metrics,
                         )
                     except Exception:
                         pass
@@ -300,9 +363,16 @@ def run(ctx: TrainingContext) -> None:
                 ctx.speed_ema = steps_per_sec if ctx.speed_ema is None else (0.9 * ctx.speed_ema + 0.1 * steps_per_sec)
                 log_payload: dict[str, Any] = {
                     "train/loss": loss_val,
+                    "train/denoise_loss": denoise_loss_val,
                     "train/lr": float(lr),
                     "train/speed_it_s": float(ctx.speed_ema or 0),
                 }
+                if sra_align_loss_val is not None:
+                    log_payload["train/sra_align_loss"] = sra_align_loss_val
+                if sra_weighted_loss_val is not None:
+                    log_payload["train/sra_weighted_loss"] = sra_weighted_loss_val
+                if sra_effective_weight_log is not None:
+                    log_payload["train/sra_effective_weight"] = float(sra_effective_weight_log)
                 if "d" in optimizer_metrics:
                     log_payload["train/optimizer_d"] = float(optimizer_metrics["d"])
                 if "base_lr" in optimizer_metrics:
@@ -331,9 +401,23 @@ def run(ctx: TrainingContext) -> None:
                             from rich.console import Group
                             ctx.live.update(Group(ctx.progress, panel))
                 elif ctx.use_plain:
-                    print(f"epoch {epoch+1}/{args.epochs} step {ctx.global_step} loss={loss_val:.6f} lr={lr:.2e} speed={ctx.speed_ema:.2f} it/s", end="\r", flush=True)
+                    sra_suffix = (
+                        f" denoise={denoise_loss_val:.6f}"
+                        f" sra={sra_align_loss_val:.6f}"
+                        f" sra_w={sra_weighted_loss_val:.6f}"
+                        if sra_align_loss_val is not None and sra_weighted_loss_val is not None
+                        else f" denoise={denoise_loss_val:.6f}"
+                    )
+                    print(f"epoch {epoch+1}/{args.epochs} step {ctx.global_step} loss={loss_val:.6f}{sra_suffix} lr={lr:.2e} speed={ctx.speed_ema:.2f} it/s", end="\r", flush=True)
                 elif args.log_every and ctx.global_step % args.log_every == 0:
-                    print(f"epoch={epoch} step={ctx.global_step} loss={loss_val:.6f} lr={lr:.2e} speed={steps_per_sec:.2f} it/s")
+                    sra_suffix = (
+                        f" denoise={denoise_loss_val:.6f}"
+                        f" sra={sra_align_loss_val:.6f}"
+                        f" sra_w={sra_weighted_loss_val:.6f}"
+                        if sra_align_loss_val is not None and sra_weighted_loss_val is not None
+                        else f" denoise={denoise_loss_val:.6f}"
+                    )
+                    print(f"epoch={epoch} step={ctx.global_step} loss={loss_val:.6f}{sra_suffix} lr={lr:.2e} speed={steps_per_sec:.2f} it/s")
 
                 # 按 step 采样（轮换提示词）
                 if args.sample_steps > 0 and ctx.global_step % args.sample_steps == 0:
