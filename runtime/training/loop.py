@@ -218,13 +218,7 @@ def run(ctx: TrainingContext) -> None:
                 if ctx.sra_aligner is not None and not use_leap_this_step:
                     align_loss = ctx.sra_aligner.compute(latents)
                     sra_weight = float(getattr(args, "sra_weight", 1.0) or 1.0)
-                    sra_decay_start = int(getattr(args, "sra_decay_start_epoch", 20) or 20)
-                    if epoch > sra_decay_start:
-                        decay = 0.1 ** ((epoch - sra_decay_start) / 1000 + 1)
-                    else:
-                        decay = 1.0
-                    weighted_align = sra_weight * decay * align_loss
-                    loss = loss + weighted_align
+                    loss = loss + sra_weight * align_loss
                     if ctx.global_step % args.log_every == 0:
                         ctx.wandb_monitor.log({"train/sra_align_loss": float(align_loss.item())}, step=ctx.global_step)
 

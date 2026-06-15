@@ -654,11 +654,6 @@ class TrainingConfig(BaseModel):
         description="【SRA v2】对齐 loss 权重 λ：align_loss 乘以此值后加到总 loss。论文默认 1.0；LoRA 微调建议从 0.5-1.0 开始试",
         json_schema_extra=_meta("loss", show_when="sra_enabled==true", advanced=True),
     )
-    sra_decay_start_epoch: int = Field(
-        20, ge=0,
-        description="【SRA v2】对齐权重开始衰减的 epoch：超过此值后 λ 按指数衰减（避免后期对齐约束过强限制模型自由度）。短训练（<30 epoch）建议设为 epochs//3",
-        json_schema_extra=_meta("loss", show_when="sra_enabled==true", advanced=True),
-    )
 
     grad_clip_max_norm: float = Field(
         1.0, ge=0.0,
