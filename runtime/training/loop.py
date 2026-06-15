@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import random
 import time
 from typing import Any
 
@@ -16,6 +17,7 @@ import torch
 import torch.nn.functional as F
 
 from training.context import TrainingContext
+from training.leap import leap_training_step, sample_two_timesteps
 from training.loss_weighting import compute_loss_weight
 from training.model_loading import forward_with_optional_checkpoint
 from training.noise import make_noise
@@ -128,56 +130,93 @@ def run(ctx: TrainingContext) -> None:
                 pyramid_iters=int(getattr(args, "pyramid_noise_iters", 0) or 0),
                 pyramid_discount=float(getattr(args, "pyramid_noise_discount", 0.35) or 0.35),
             )
-            noisy = (1 - t_exp) * latents + t_exp * noise
-            target = noise - latents
+
+            leap_enabled = bool(getattr(args, "leap_enabled", False))
+            # 方式 A 混合训练：每个 micro-batch 按 leap_ratio 概率掷骰子决定走哪条目标。
+            # leap 管全局结构、传统管细节锐度，两股梯度叠在同一组 LoRA 权重上各取所长。
+            # ratio=1.0 纯 leap（默认，不破坏纯 leap 行为）；0.0 纯传统；0.6 大头 leap 留点细节。
+            # 用 Python random（bootstrap 设过 random.seed）而非 torch.rand，避免每步消耗 torch
+            # global RNG 状态——否则"同种子换 leap_ratio"的对照实验里，标准路径的 noise / timestep
+            # 会随 leap_ratio 漂移。
+            use_leap_this_step = leap_enabled and (
+                random.random() < float(getattr(args, "leap_ratio", 1.0) or 1.0)
+            )
 
             # 前向
             pad_mask = torch.zeros(bs, 1, latents.shape[-2], latents.shape[-1], device=ctx.device, dtype=ctx.dtype)
             with torch.autocast("cuda", dtype=ctx.dtype):
-                pred = forward_with_optional_checkpoint(
-                    ctx.model, noisy, t.view(-1, 1), cross, pad_mask,
-                    use_checkpoint=args.grad_checkpoint,
-                )
-                # 训练 loss 通过 losses/ plugin registry 派发（mse / huber / ...）
-                loss_per_sample = ctx.loss_fn.compute(pred.float(), target.float(), t)
-                # 自适应采样器（如 InfoNoise）记录原始 per-sample MSE（不受 huber/loss_weighting 等
-                # 加工影响）；跟训练 loss 解耦保证 InfoNoise 论文一致性。
-                # baseline 采样器是 no-op，无需 if 守卫。
-                # 用 no_grad 避免构造 autograd 元数据（比 .detach() 少一份 grad_fn 开销）。
-                with torch.no_grad():
-                    _raw_mse_per_sample = F.mse_loss(pred.float(), target.float(), reduction="none")
-                    _raw_mse = _raw_mse_per_sample.mean(
-                        dim=list(range(1, _raw_mse_per_sample.dim()))
+                if use_leap_this_step:
+                    # ── LeapAlign 两步跳跃自蒸馏路径 ──
+                    # 用真实 latent 当 x0，per-sample 采两个时刻 (k,j) 做两步跳跃，
+                    # 自蒸馏 loss = MSE(两步跳跃预测的 x̂0, 真实 x0)。详见 training/leap.py。
+                    t_k, t_j = sample_two_timesteps(
+                        bs, ctx.device,
+                        min_gap=float(getattr(args, "leap_min_gap", 0.1) or 0.1),
+                        dtype=torch.float32,
                     )
-                # 仅 main 集样本进 InfoNoise schedule 学习：I-MMSE 假设单一数据分布，
-                # reg 集典型是通用图（booru）vs main 集是单一主题，混入 record 学到的是
-                # mixture MMSE 不是 mmse_main(t)。用 is_reg flag 而非 loss_weight 阈值
-                # 是因为 distribution identity 跟 gradient 权重是两条独立轴
-                # （reg_weight=1.0 时 loss_weight=1.0 但 reg 仍是不同分布）。
-                # 见 docs/todo/infonoise-reg-policy-reeval.md 未来重评估条件。
-                if "is_reg" in batch:
-                    _main_mask = ~batch["is_reg"].to(t.device)
-                    if _main_mask.any():
-                        ctx.timestep_sampler.record(t.detach()[_main_mask], _raw_mse[_main_mask])
+                    loss_per_sample = leap_training_step(
+                        ctx.model, latents, noise, cross, pad_mask, t_k, t_j,
+                        nested_grad_coe=float(getattr(args, "leap_nested_grad_coe", 0.3)),
+                        traj_sim_weighting=bool(getattr(args, "leap_traj_sim_weighting", False)),
+                        traj_sim_min=float(getattr(args, "leap_traj_sim_min", 0.1) or 0.1),
+                        use_checkpoint=args.grad_checkpoint,
+                    )
+                    # leap 路径有意跳过两个标准机制（互斥校验已在 TrainingConfig 强制关闭）：
+                    #   - InfoNoise record：双 timestep 与单 t 的 I-MMSE 语义不匹配
+                    #   - loss_weighting：依赖单一 t 算 SNR 权重；leap 自带 traj_sim 加权
+                    # 仍尊重 batch 的 loss_weight（正则集降权），与标准路径一致。
+                    if "loss_weight" in batch:
+                        w = batch["loss_weight"].to(ctx.device).view(-1, *([1] * (loss_per_sample.dim() - 1)))
+                        loss_per_sample = loss_per_sample * w
+                    loss = loss_per_sample.mean()
                 else:
-                    ctx.timestep_sampler.record(t.detach(), _raw_mse)
-                # 按样本加权（正则集可降低权重）
-                if "loss_weight" in batch:
-                    w = batch["loss_weight"].to(ctx.device).view(-1, *([1] * (loss_per_sample.dim() - 1)))
-                    loss_per_sample = loss_per_sample * w
-                # timestep-dependent loss 权重
-                lw_scheme = str(getattr(args, "loss_weighting", "none") or "none")
-                if lw_scheme != "none":
-                    lw = compute_loss_weight(
-                        t,
-                        scheme=lw_scheme,
-                        min_snr_gamma=float(getattr(args, "min_snr_gamma", 5.0) or 5.0),
-                        weight_cap_ratio=float(getattr(args, "weight_cap_ratio", 0.0) or 0.0),
-                        detail_inv_t_min=float(getattr(args, "detail_inv_t_min", 1.0) or 1.0),
-                        detail_inv_t_max=float(getattr(args, "detail_inv_t_max", 5.0) or 5.0),
-                    ).to(device=ctx.device, dtype=torch.float32)
-                    loss_per_sample = loss_per_sample * lw.view(-1, *([1] * (loss_per_sample.dim() - 1)))
-                loss = loss_per_sample.mean()
+                    # ── 标准 rectified flow 路径（零行为变化）──
+                    noisy = (1 - t_exp) * latents + t_exp * noise
+                    target = noise - latents
+                    pred = forward_with_optional_checkpoint(
+                        ctx.model, noisy, t.view(-1, 1), cross, pad_mask,
+                        use_checkpoint=args.grad_checkpoint,
+                    )
+                    # 训练 loss 通过 losses/ plugin registry 派发（mse / huber / ...）
+                    loss_per_sample = ctx.loss_fn.compute(pred.float(), target.float(), t)
+                    # 自适应采样器（如 InfoNoise）记录原始 per-sample MSE（不受 huber/loss_weighting 等
+                    # 加工影响）；跟训练 loss 解耦保证 InfoNoise 论文一致性。
+                    # baseline 采样器是 no-op，无需 if 守卫。
+                    # 用 no_grad 避免构造 autograd 元数据（比 .detach() 少一份 grad_fn 开销）。
+                    with torch.no_grad():
+                        _raw_mse_per_sample = F.mse_loss(pred.float(), target.float(), reduction="none")
+                        _raw_mse = _raw_mse_per_sample.mean(
+                            dim=list(range(1, _raw_mse_per_sample.dim()))
+                        )
+                    # 仅 main 集样本进 InfoNoise schedule 学习：I-MMSE 假设单一数据分布，
+                    # reg 集典型是通用图（booru）vs main 集是单一主题，混入 record 学到的是
+                    # mixture MMSE 不是 mmse_main(t)。用 is_reg flag 而非 loss_weight 阈值
+                    # 是因为 distribution identity 跟 gradient 权重是两条独立轴
+                    # （reg_weight=1.0 时 loss_weight=1.0 但 reg 仍是不同分布）。
+                    # 见 docs/todo/infonoise-reg-policy-reeval.md 未来重评估条件。
+                    if "is_reg" in batch:
+                        _main_mask = ~batch["is_reg"].to(t.device)
+                        if _main_mask.any():
+                            ctx.timestep_sampler.record(t.detach()[_main_mask], _raw_mse[_main_mask])
+                    else:
+                        ctx.timestep_sampler.record(t.detach(), _raw_mse)
+                    # 按样本加权（正则集可降低权重）
+                    if "loss_weight" in batch:
+                        w = batch["loss_weight"].to(ctx.device).view(-1, *([1] * (loss_per_sample.dim() - 1)))
+                        loss_per_sample = loss_per_sample * w
+                    # timestep-dependent loss 权重
+                    lw_scheme = str(getattr(args, "loss_weighting", "none") or "none")
+                    if lw_scheme != "none":
+                        lw = compute_loss_weight(
+                            t,
+                            scheme=lw_scheme,
+                            min_snr_gamma=float(getattr(args, "min_snr_gamma", 5.0) or 5.0),
+                            weight_cap_ratio=float(getattr(args, "weight_cap_ratio", 0.0) or 0.0),
+                            detail_inv_t_min=float(getattr(args, "detail_inv_t_min", 1.0) or 1.0),
+                            detail_inv_t_max=float(getattr(args, "detail_inv_t_max", 5.0) or 5.0),
+                        ).to(device=ctx.device, dtype=torch.float32)
+                        loss_per_sample = loss_per_sample * lw.view(-1, *([1] * (loss_per_sample.dim() - 1)))
+                    loss = loss_per_sample.mean()
 
                 # PR-C：adapter hook — 变体可加正则项（OFT orth penalty /
                 # Ortho-Hydra balance loss 等）。LyCORIS 返回 None，noop。
