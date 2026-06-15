@@ -66,28 +66,56 @@ def detect_env() -> dict[str, Any]:
     cuda_ver: Optional[str] = None
     torch_tag: Optional[str] = None
     torch_ver: Optional[str] = None
+    # 'cu128' / 'cu130' / 'cpu' / None(未装) —— 区分 CPU 误装很重要：flash_attn
+    # 是 CUDA C extension，CPU 版 torch 上压根装不了，UI 要给「先重装 CUDA 版 torch」
+    # 而不是「找不到 wheel」这种误导。
+    torch_cuda_build: Optional[str] = None
+    # 历史 except 只挡 ImportError，但 Windows 上 torch DLL 加载失败抛 OSError
+    # （WinError 126），新 torch 版本里 __version__ 解析也可能出 IndexError —— 任何
+    # 异常都不该让 status endpoint 500。捕获到走 None。
     try:
         import torch  # type: ignore[import-not-found]  # noqa: PLC0415
         torch_ver = torch.__version__
-        v = torch_ver.split("+")[0].split(".")
-        torch_tag = f"torch{v[0]}.{v[1]}"
-        m = re.search(r"\+cu(\d+)", torch_ver)
+        parts = torch_ver.split("+")[0].split(".")
+        if len(parts) >= 2:
+            torch_tag = f"torch{parts[0]}.{parts[1]}"
+        m = re.search(r"\+(cu\d+|cpu)", torch_ver)
         if m:
-            num = m.group(1)
-            cuda_tag = f"cu{num}"
-            # cu128 → 12.8、cu130 → 13.0（最后一位 minor，其余 major）
-            if len(num) >= 2:
-                cuda_ver = f"{num[:-1]}.{num[-1]}"
-    except ImportError:
+            tag = m.group(1)
+            torch_cuda_build = tag
+            if tag.startswith("cu"):
+                cuda_tag = tag
+                num = tag[2:]
+                # cu128 → 12.8、cu130 → 13.0（最后一位 minor，其余 major）
+                if len(num) >= 2:
+                    cuda_ver = f"{num[:-1]}.{num[-1]}"
+        else:
+            # 没 +cu/+cpu 后缀的老 build，靠 torch.version.cuda 判
+            cuda_v = getattr(getattr(torch, "version", None), "cuda", None)
+            if cuda_v is None:
+                torch_cuda_build = "cpu"
+            else:
+                clean = str(cuda_v).replace(".", "")
+                torch_cuda_build = f"cu{clean}"
+                cuda_tag = torch_cuda_build
+                cuda_ver = str(cuda_v)
+    except Exception:  # noqa: BLE001
         pass
 
     # nvidia-smi 仍跑一下：torch 没 +cu 后缀（CPU-only build）→ fallback 给 cuda_tag；
     # driver 版本始终单独存到 `driver_cuda_ver` 供 UI 显示与排错（让用户看到「驱动支持
     # cu130，PyTorch 是 cu128」这种场景，立刻明白为什么 wheel 应该选 cu128）。
     driver_cuda_ver: Optional[str] = None
+    # 历史只挡 (subprocess.SubprocessError, OSError)；Windows 中文 locale (cp936)
+    # 下 text=True 解码 nvidia-smi 输出可能抛 UnicodeDecodeError（非上述子类），
+    # 直接 500。改用 errors='replace' 避免，并把 except 兜底放宽到 Exception。
     try:
         r = subprocess.run(
-            ["nvidia-smi"], capture_output=True, text=True, timeout=10
+            ["nvidia-smi"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            errors="replace",
         )
         if r.returncode == 0:
             m = re.search(r"CUDA Version:\s*(\d+)\.(\d+)", r.stdout)
@@ -96,7 +124,7 @@ def detect_env() -> dict[str, Any]:
                 if cuda_tag is None:
                     cuda_tag = f"cu{m.group(1)}{m.group(2)}"
                     cuda_ver = driver_cuda_ver
-    except (subprocess.SubprocessError, OSError):
+    except Exception:  # noqa: BLE001
         pass
 
     return {
@@ -106,6 +134,7 @@ def detect_env() -> dict[str, Any]:
         "driver_cuda_ver": driver_cuda_ver,
         "torch_tag": torch_tag,
         "torch_ver": torch_ver,
+        "torch_cuda_build": torch_cuda_build,
         "platform": plat,
     }
 
@@ -247,6 +276,17 @@ def install(url: Optional[str] = None) -> dict[str, Any]:
     env = detect_env()
 
     if url is None:
+        # CPU 版 torch 装不了 flash_attn —— flash_attn 是 CUDA C extension，必须配
+        # CUDA 版 torch。auto 路径先 pre-check 给清楚错误，否则 find_best_wheel 会因
+        # cuda_tag 来自 nvidia-smi（cu130）而误报「未找到 wheel」，让用户误以为是
+        # 网络/仓库问题。显式 URL 路径不挡，留给强制安装。
+        if env.get("torch_cuda_build") == "cpu":
+            raise RuntimeError(
+                "PyTorch 是 CPU 版（torch+cpu），无法安装 flash_attn。"
+                "flash_attn 是 CUDA C extension，必须先把 PyTorch 重装为 CUDA 版。\n"
+                "请到「设置 → 训练 → PyTorch」一键重装为 cu128 / cu130 等 CUDA 版本，"
+                "重启 Studio 后再回来装 flash_attn。"
+            )
         if not env.get("platform"):
             raise RuntimeError("不支持的平台（仅 linux_x86_64 / win_amd64）")
         if not env.get("torch_tag"):

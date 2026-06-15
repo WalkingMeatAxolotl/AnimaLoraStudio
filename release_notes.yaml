@@ -5,6 +5,24 @@
 #
 # 顺序：最新版本在 list 顶。
 
+- version: "0.13.2"
+  date: "2026-06-15"
+  summary: "首次启动引导放大模型下载修复 + Flash Attention 装失败错误信息明确化"
+  entries:
+    - kind: fixed
+      summary: "修复首次启动引导里的放大模型下载报错（#275）"
+      pr_refs: [275]
+      detail: |
+        - 之前点放大模型条目的「重试」永远报 `unknown model_id 'upscalers'` 卡住，想在引导里一键装放大模型（4x-AnimeSharp 等）的用户只能绕去 Settings 才能下载；本版起恢复一键下载。
+
+    - kind: improved
+      summary: "Flash Attention 装失败的错误信息更明确，CPU 版 PyTorch 提前提示重装（#275）"
+      pr_refs: [275]
+      detail: |
+        - Flash Attention 安装失败大多数情况实际是因为 PyTorch 装的是 CPU 版（flash_attn 必须配 CUDA 版 PyTorch），之前只能看到「Internal Server Error」加 trace_id 看不出原因。
+        - 本版起在 Settings → 训练 → Flash Attention 段和首次启动引导里检测到 CPU 版 PyTorch 时，直接显示「先去 PyTorch 段重装 CUDA 版」的提示并禁用 flash_attn 安装按钮，避免无效下载。
+        - 其它意外错误（GitHub Releases 拉不到、wheel 不兼容等）也会带具体类型回显，整段 UI 不再因为后端意外塌成「加载失败」。
+
 - version: "0.13.1"
   date: "2026-06-13"
   summary: "数据集大文件上传性能修复 + 测试出图临时缓存加密"

@@ -241,7 +241,7 @@ export function FirstRunOnboardingModal() {
                        || k.startsWith('qwen3') || k.startsWith('t5_tokenizer')),
       tagger: collect((k) => k.startsWith('wd14')),
       accel: [],
-      upscaler: collect((k) => k.startsWith('upscalers')),
+      upscaler: collect((k) => k.startsWith('upscaler')),
     }
   }, [catalog])
 
@@ -395,7 +395,7 @@ export function FirstRunOnboardingModal() {
           catalog.upscalers.variants.find((v) => v.is_current)
           ?? catalog.upscalers.variants.find((v) => v.label === catalog.upscalers!.default)
         if (target && !target.exists) {
-          await api.startModelDownload({ model_id: 'upscalers', variant: target.label })
+          await api.startModelDownload({ model_id: 'upscaler', variant: target.label })
           const res = await waitForCatalog(
             (c) => {
               if (!c.upscalers) return true
@@ -403,7 +403,7 @@ export function FirstRunOnboardingModal() {
                 ?? c.upscalers.variants.find((v) => v.label === c.upscalers!.default)
               return !!t?.exists
             },
-            (k) => k.startsWith('upscalers'),
+            (k) => k.startsWith('upscaler'),
           )
           if (!res.ok) errors.push(...res.errors)
         }

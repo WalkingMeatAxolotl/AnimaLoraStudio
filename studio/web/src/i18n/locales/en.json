@@ -1043,6 +1043,7 @@
     "unsupported": "Unsupported",
     "githubApiFailed": "GitHub API request failed (network may be unstable in China; refresh and retry):",
     "noWheelForPython": "No prebuilt wheel was found for {{python}} (the current Python version may not be supported yet). Select another candidate below manually, or paste a URL from GitHub Releases.",
+    "flashAttnNeedsCudaTorch": "PyTorch is currently a CPU build (torch+cpu) and flash_attn cannot be installed on it. flash_attn is a CUDA C extension — go to the PyTorch section above to reinstall a CUDA build (cu128 / cu130), restart Studio, then come back here.",
     "noWheelManual": "No usable wheel; select manually",
     "reinstallAutoMatch": "↻ Reinstall (auto match)",
     "autoMatchInstall": "⤓ Auto-match install",

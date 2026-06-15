@@ -2757,8 +2757,11 @@ function FlashAttentionSection() {
   const fetchError = status?.fetch_error ?? null
   const usable = candidates.filter((c) => c.usable)
   const bestCandidate = usable[0] ?? null
+  // CPU 版 torch 装不了 flash_attn —— UI 必须显著提示用户先去 PyTorch 那栏重装。
+  // 否则用户只会看到「未找到 wheel」/「Internal Server Error」这种误导信息。
+  const isCpuTorch = env?.torch_cuda_build === 'cpu'
   const hasIssue = !!error || (status && !status.installed)
-  const canAutoInstall = !!env?.torch_tag && !!env?.platform && usable.length > 0
+  const canAutoInstall = !isCpuTorch && !!env?.torch_tag && !!env?.platform && usable.length > 0
 
   const statusLabel = error
     ? t('settings.loadFailedShort')
@@ -2800,8 +2803,15 @@ function FlashAttentionSection() {
             </div>
           </div>
 
+          {/* CPU 版 torch：根本装不了 flash_attn，优先显示这条 */}
+          {isCpuTorch && (
+            <div className="rounded-sm border border-warn bg-warn-soft px-2 py-1.5 text-warn text-xs">
+              {t('settings.flashAttnNeedsCudaTorch')}
+            </div>
+          )}
+
           {/* GitHub API 失败 */}
-          {fetchError && (
+          {!isCpuTorch && fetchError && (
             <div className="rounded-sm border border-err bg-err-soft px-2 py-1.5 text-err text-xs">
               {t('settings.githubApiFailed')}
               <code className="block mt-0.5 break-all">{fetchError}</code>
@@ -2809,7 +2819,7 @@ function FlashAttentionSection() {
           )}
 
           {/* 没匹配 wheel */}
-          {!canAutoInstall && !fetchError && env.platform && env.torch_tag && (
+          {!isCpuTorch && !canAutoInstall && !fetchError && env.platform && env.torch_tag && (
             <div className="rounded-sm border border-warn bg-warn-soft px-2 py-1.5 text-warn text-xs">
               {t('settings.noWheelForPython', { python: env.python_tag })}
             </div>

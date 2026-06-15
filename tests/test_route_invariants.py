@@ -16,14 +16,19 @@ from fastapi.routing import APIRoute
 
 from studio.server import app
 
+from ._route_helpers import iter_leaf_routes
+
 STUDIO_DIR = Path(__file__).parent.parent / "studio"
 SERVER_PY = STUDIO_DIR / "server.py"
 API_ROUTERS_DIR = STUDIO_DIR / "api" / "routers"
 
 
 def test_route_count_in_sane_range() -> None:
-    n = len(app.routes)
-    assert 100 <= n <= 250, f"len(app.routes) = {n}，超出合理区间 [100, 250]"
+    # FastAPI 0.137+ 把 include_router 包成 `_IncludedRouter` wrapper（详
+    # tests/_route_helpers.py），直接 len(app.routes) 在新版只数 wrapper 不数
+    # 内部 APIRoute；递归展开后才是真实路由数。
+    n = sum(1 for _ in iter_leaf_routes(app.routes))
+    assert 100 <= n <= 250, f"app.routes 展开后 = {n}，超出合理区间 [100, 250]"
 
 
 def test_decorator_count_matches_api_routes() -> None:
@@ -52,7 +57,7 @@ def test_decorator_count_matches_api_routes() -> None:
             )
 
     decorator_total = app_decorator_count + router_decorator_count
-    api_route_count = sum(1 for r in app.routes if isinstance(r, APIRoute))
+    api_route_count = sum(1 for r in iter_leaf_routes(app.routes) if isinstance(r, APIRoute))
     assert decorator_total == api_route_count, (
         f"装饰器总数 {decorator_total}（server.py {app_decorator_count} + "
         f"api/routers/ {router_decorator_count}）≠ app.routes 里 APIRoute 实例 "

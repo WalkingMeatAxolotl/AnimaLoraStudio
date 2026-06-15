@@ -130,15 +130,40 @@ def flash_attn_status() -> dict[str, Any]:
     候选最多取前 20 个，避免 GitHub 历史 release 一大坨刷屏。
     fetch_error 非 None 表示 GitHub API 请求失败（限流 / 网络 / 国内防火墙）；
     UI 要展示这条让用户能选择手动粘 URL。
+
+    任何意外异常都包成 fetch_error 返回 200 —— 这是 Settings 页 mount 就拉的诊断
+    数据，宁可降级显示「无法拉候选」也不要 500 把整段 UI 打成「加载失败」让用户
+    误以为后端坏了。真出问题靠 server log 里的 traceback 排查。
     """
-    status = flash_attention_setup.current_status()
-    env = flash_attention_setup.detect_env()
-    candidates, fetch_error = flash_attention_setup.find_candidates(env)
-    slim = [
-        {"url": c["url"], "name": c["name"], "notes": c["notes"], "usable": c["usable"]}
-        for c in candidates[:20]
-    ]
-    return {**status, "env": env, "candidates": slim, "fetch_error": fetch_error}
+    try:
+        status = flash_attention_setup.current_status()
+        env = flash_attention_setup.detect_env()
+        candidates, fetch_error = flash_attention_setup.find_candidates(env)
+        slim = [
+            {"url": c["url"], "name": c["name"], "notes": c["notes"], "usable": c["usable"]}
+            for c in candidates[:20]
+        ]
+        return {**status, "env": env, "candidates": slim, "fetch_error": fetch_error}
+    except Exception as exc:  # noqa: BLE001
+        # logger.exception 把 traceback 落盘 + 带 trace_id（trace middleware bound）
+        import logging  # noqa: PLC0415
+        logging.getLogger(__name__).exception("flash_attn status endpoint failed")
+        return {
+            "installed": False,
+            "version": None,
+            "env": {
+                "python_tag": None,
+                "cuda_tag": None,
+                "cuda_ver": None,
+                "driver_cuda_ver": None,
+                "torch_tag": None,
+                "torch_ver": None,
+                "torch_cuda_build": None,
+                "platform": None,
+            },
+            "candidates": [],
+            "fetch_error": f"诊断失败：{type(exc).__name__}: {exc}",
+        }
 
 
 @router.post("/api/flash-attention/install")
