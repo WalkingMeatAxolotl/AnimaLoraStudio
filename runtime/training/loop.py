@@ -40,6 +40,12 @@ from utils.optimizer_utils import get_optimizer_monitor_metrics, optimizer_eval_
 logger = logging.getLogger(__name__)
 
 
+def _resolve_sra_weight(args: Any) -> float:
+    """Read sra_weight without treating explicit 0 as a missing value."""
+    raw = getattr(args, "sra_weight", 1.0)
+    return 1.0 if raw is None else float(raw)
+
+
 def run(ctx: TrainingContext) -> None:
     """跑训练直到 args.epochs 或 args.max_steps 上限。"""
     args = ctx.args
@@ -216,11 +222,15 @@ def run(ctx: TrainingContext) -> None:
 
                 # SRA v2 表征对齐 loss（标准路径；leap 路径不适用）
                 if ctx.sra_aligner is not None and not use_leap_this_step:
-                    align_loss = ctx.sra_aligner.compute(latents)
-                    sra_weight = float(getattr(args, "sra_weight", 1.0) or 1.0)
-                    loss = loss + sra_weight * align_loss
-                    if ctx.global_step % args.log_every == 0:
-                        ctx.wandb_monitor.log({"train/sra_align_loss": float(align_loss.item())}, step=ctx.global_step)
+                    sra_weight = _resolve_sra_weight(args)
+                    if sra_weight != 0.0:
+                        align_loss = ctx.sra_aligner.compute(
+                            latents,
+                            sample_weight=batch.get("loss_weight"),
+                        )
+                        loss = loss + sra_weight * align_loss
+                        if ctx.global_step % args.log_every == 0:
+                            ctx.wandb_monitor.log({"train/sra_align_loss": float(align_loss.item())}, step=ctx.global_step)
 
                 # PR-C：adapter hook — 变体可加正则项（OFT orth penalty /
                 # Ortho-Hydra balance loss 等）。LyCORIS 返回 None，noop。
@@ -367,6 +377,7 @@ def run(ctx: TrainingContext) -> None:
                             state_path, ctx.injector, ctx.optimizer, epoch, ctx.global_step,
                             ctx.loss_history, monitor_state=monitor_data, scheduler=ctx.scheduler,
                             timestep_sampler=ctx.timestep_sampler,
+                            sra_aligner=ctx.sra_aligner,
                         )
                         # 同时保存 LoRA 权重
                         lora_path = ctx.output_dir / f"{args.output_name}_step{ctx.global_step}.safetensors"
@@ -431,6 +442,7 @@ def run(ctx: TrainingContext) -> None:
                         state_path, ctx.injector, ctx.optimizer, ctx.current_epoch, ctx.global_step,
                         ctx.loss_history, monitor_state=monitor_data, scheduler=ctx.scheduler,
                         timestep_sampler=ctx.timestep_sampler,
+                        sra_aligner=ctx.sra_aligner,
                     )
                     lora_path = ctx.output_dir / f"{args.output_name}_epoch{ctx.current_epoch}.safetensors"
                     if not lora_path.exists():
@@ -461,6 +473,7 @@ def run(ctx: TrainingContext) -> None:
                     ctx.current_epoch, ctx.global_step, ctx.loss_history,
                     monitor_state=monitor_data, scheduler=ctx.scheduler,
                     timestep_sampler=ctx.timestep_sampler,
+                    sra_aligner=ctx.sra_aligner,
                 )
             ctx.wandb_monitor.upload_state_auto(auto_state_path)
             # 更新 ctx 字段供 handle_interrupt emit pause_state 用

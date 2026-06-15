@@ -75,16 +75,18 @@ class SRAAligner:
         block_idx: int,
         patch_spatial: int,
         model_channels: int,
+        patch_temporal: int = 1,
         vae_channels: int = 16,
         device: str = "cuda",
         dtype: torch.dtype = torch.float32,
     ):
         self.block_idx = block_idx
         self.patch_spatial = patch_spatial
+        self.patch_temporal = patch_temporal
         self.vae_channels = vae_channels
         self._cached_hidden: Optional[Tensor] = None
 
-        out_per_token = vae_channels * patch_spatial * patch_spatial
+        out_per_token = vae_channels * patch_temporal * patch_spatial * patch_spatial
         self.proj = SRAProjectionHead(model_channels, out_per_token).to(
             device=device, dtype=dtype
         )
@@ -102,11 +104,49 @@ class SRAAligner:
     def _hook_fn(self, module, input, output):
         self._cached_hidden = output
 
-    def compute(self, clean_latents: Tensor) -> Tensor:
+    def _hidden_as_target_grid(self, hidden: Tensor, target: Tensor) -> Tensor:
+        """Reshape captured tokens to the VAE latent patch grid.
+
+        In torch.compile native-flatten mode, block outputs are shaped as
+        (B, 1, seq_len, 1, D). Rebuilding the grid from clean_latents keeps SRA
+        independent of the model's internal flattening strategy.
+        """
+        if not isinstance(hidden, Tensor):
+            raise RuntimeError(f"SRA expected block tensor output, got {type(hidden)!r}")
+
+        B, _C, T, H, W = target.shape
+        ps = self.patch_spatial
+        pt = self.patch_temporal
+        if T % pt != 0 or H % ps != 0 or W % ps != 0:
+            raise RuntimeError(
+                f"SRA target shape {target.shape} is not divisible by "
+                f"patch_temporal={pt}, patch_spatial={ps}"
+            )
+
+        T_p, H_p, W_p = T // pt, H // ps, W // ps
+        B_h, T_h, H_h, W_h, D = hidden.shape
+        if B_h != B:
+            raise RuntimeError(f"SRA batch mismatch: hidden B={B_h} vs target B={B}")
+
+        expected_tokens = T_p * H_p * W_p
+        actual_tokens = T_h * H_h * W_h
+        if actual_tokens != expected_tokens:
+            raise RuntimeError(
+                f"SRA token mismatch: hidden grid {(T_h, H_h, W_h)} "
+                f"({actual_tokens}) vs target grid {(T_p, H_p, W_p)} "
+                f"({expected_tokens})"
+            )
+
+        if (T_h, H_h, W_h) == (T_p, H_p, W_p):
+            return hidden
+        return hidden.reshape(B, T_p, H_p, W_p, D)
+
+    def compute(self, clean_latents: Tensor, sample_weight: Optional[Tensor] = None) -> Tensor:
         """Compute alignment loss between projected hidden state and VAE latents.
 
         Args:
             clean_latents: (B, C, T, H_lat, W_lat) — the original VAE-encoded latent.
+            sample_weight: optional per-sample training weights, e.g. reg loss weights.
 
         Returns:
             Scalar alignment loss.
@@ -115,22 +155,24 @@ class SRAAligner:
         if hidden is None:
             raise RuntimeError("SRAAligner.compute() called before model forward")
 
+        target = clean_latents.detach().float()
+        hidden = self._hidden_as_target_grid(hidden, target)
+
         # hidden: (B, T_p, H_p, W_p, D) from block output
         B, T_p, H_p, W_p, D = hidden.shape
         ps = self.patch_spatial
+        pt = self.patch_temporal
         C = self.vae_channels
 
-        # Project: (B, T_p, H_p, W_p, D) → (B, T_p, H_p, W_p, C*ps*ps)
+        # Project: (B, T_p, H_p, W_p, D) → (B, T_p, H_p, W_p, C*pt*ps*ps)
         projected = self.proj(hidden.float())
 
         # Unpatchify to (B, C, T, H_lat, W_lat)
-        # reshape to (B, T_p, H_p, W_p, C, ps, ps)
-        projected = projected.view(B, T_p, H_p, W_p, C, ps, ps)
-        # rearrange: b t h w c p q -> b c t (h p) (w q)
-        projected = projected.permute(0, 4, 1, 2, 5, 3, 6)  # (B, C, T_p, H_p, ps, W_p, ps)
-        projected = projected.reshape(B, C, T_p, H_p * ps, W_p * ps)
-
-        target = clean_latents.detach().float()
+        # reshape to (B, T_p, H_p, W_p, C, pt, ps, ps)
+        projected = projected.view(B, T_p, H_p, W_p, C, pt, ps, ps)
+        # rearrange: b t h w c r p q -> b c (t r) (h p) (w q)
+        projected = projected.permute(0, 4, 1, 5, 2, 6, 3, 7)
+        projected = projected.reshape(B, C, T_p * pt, H_p * ps, W_p * ps)
 
         # Handle potential shape mismatch (e.g. if patch_temporal != 1)
         if projected.shape != target.shape:
@@ -138,7 +180,18 @@ class SRAAligner:
                 f"SRA shape mismatch: projected {projected.shape} vs target {target.shape}"
             )
 
-        return F.smooth_l1_loss(projected, target, beta=0.05)
+        loss_per_sample = F.smooth_l1_loss(
+            projected, target, beta=0.05, reduction="none"
+        ).mean(dim=tuple(range(1, projected.dim())))
+        if sample_weight is not None:
+            weight = sample_weight.to(device=loss_per_sample.device, dtype=loss_per_sample.dtype).view(-1)
+            if weight.numel() != loss_per_sample.numel():
+                raise RuntimeError(
+                    f"SRA sample_weight shape mismatch: {tuple(weight.shape)} "
+                    f"vs batch={loss_per_sample.numel()}"
+                )
+            loss_per_sample = loss_per_sample * weight
+        return loss_per_sample.mean()
 
     def get_param_groups(self, lr: Optional[float] = None) -> list[dict]:
         """Return optimizer param groups for the projection MLP."""
@@ -146,6 +199,25 @@ class SRAAligner:
         if lr is not None:
             group["lr"] = lr
         return [group]
+
+    def state_dict(self) -> dict:
+        """Return checkpointable SRA state.
+
+        Hooks and cached activations are runtime-only; only the trained
+        projection head and shape metadata need to survive resume.
+        """
+        return {
+            "block_idx": self.block_idx,
+            "patch_spatial": self.patch_spatial,
+            "patch_temporal": self.patch_temporal,
+            "vae_channels": self.vae_channels,
+            "proj": self.proj.state_dict(),
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        """Restore projection-head weights from a checkpoint."""
+        proj_state = state.get("proj", state)
+        self.proj.load_state_dict(proj_state)
 
     def remove_hooks(self):
         """Remove the forward hook and free cached state."""

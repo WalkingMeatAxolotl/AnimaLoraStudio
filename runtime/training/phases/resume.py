@@ -63,6 +63,7 @@ def run(ctx: TrainingContext) -> None:
         ctx.start_epoch, ctx.global_step, ctx.loss_history, saved_monitor_state = load_training_state(
             args.resume_state, ctx.injector, ctx.optimizer, ctx.scheduler,
             timestep_sampler=ctx.timestep_sampler,
+            sra_aligner=ctx.sra_aligner,
         )
         ctx.emit(f"从断点恢复训练: epoch={ctx.start_epoch}, step={ctx.global_step}")
 

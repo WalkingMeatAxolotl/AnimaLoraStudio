@@ -106,7 +106,8 @@ def run(ctx: TrainingContext) -> None:
         ctx.sra_aligner = SRAAligner(
             model=ctx.model,
             block_idx=block_idx,
-            patch_spatial=2,
+            patch_spatial=ctx.model.patch_spatial,
+            patch_temporal=ctx.model.patch_temporal,
             model_channels=model_channels,
             vae_channels=16,
             device=ctx.device,
