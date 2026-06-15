@@ -183,7 +183,14 @@ def test_rate_limit_window_recovers(client: TestClient,
 
 
 def test_endpoint_registered_on_webui_app() -> None:
-    """app.py 必须 include_router(client_errors)，route 在 app.routes 内。"""
+    """app.py 必须 include_router(client_errors)，route 在 app.routes 内。
+
+    FastAPI 0.137+ 把 include_router 包成 `_IncludedRouter` wrapper —— 顶层
+    iter 看不到子 path，必须递归展开（详 tests/_route_helpers.py）。
+    """
     from studio.api.app import app
-    paths = {r.path for r in app.routes if hasattr(r, "path")}
+
+    from ._route_helpers import iter_leaf_routes
+
+    paths = {r.path for r in iter_leaf_routes(app.routes) if hasattr(r, "path")}
     assert "/api/client-errors" in paths
