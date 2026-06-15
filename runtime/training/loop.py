@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import random
 import time
 from typing import Any
 
@@ -16,6 +17,7 @@ import torch
 import torch.nn.functional as F
 
 from training.context import TrainingContext
+from training.leap import leap_training_step, sample_two_timesteps
 from training.loss_weighting import compute_loss_weight
 from training.model_loading import forward_with_optional_checkpoint
 from training.noise import make_noise
@@ -133,8 +135,11 @@ def run(ctx: TrainingContext) -> None:
             # 方式 A 混合训练：每个 micro-batch 按 leap_ratio 概率掷骰子决定走哪条目标。
             # leap 管全局结构、传统管细节锐度，两股梯度叠在同一组 LoRA 权重上各取所长。
             # ratio=1.0 纯 leap（默认，不破坏纯 leap 行为）；0.0 纯传统；0.6 大头 leap 留点细节。
+            # 用 Python random（bootstrap 设过 random.seed）而非 torch.rand，避免每步消耗 torch
+            # global RNG 状态——否则"同种子换 leap_ratio"的对照实验里，标准路径的 noise / timestep
+            # 会随 leap_ratio 漂移。
             use_leap_this_step = leap_enabled and (
-                torch.rand(1).item() < float(getattr(args, "leap_ratio", 1.0) or 1.0)
+                random.random() < float(getattr(args, "leap_ratio", 1.0) or 1.0)
             )
 
             # 前向
@@ -144,7 +149,6 @@ def run(ctx: TrainingContext) -> None:
                     # ── LeapAlign 两步跳跃自蒸馏路径 ──
                     # 用真实 latent 当 x0，per-sample 采两个时刻 (k,j) 做两步跳跃，
                     # 自蒸馏 loss = MSE(两步跳跃预测的 x̂0, 真实 x0)。详见 training/leap.py。
-                    from training.leap import leap_training_step, sample_two_timesteps
                     t_k, t_j = sample_two_timesteps(
                         bs, ctx.device,
                         min_gap=float(getattr(args, "leap_min_gap", 0.1) or 0.1),
