@@ -1043,6 +1043,7 @@
     "unsupported": "不支持",
     "githubApiFailed": "GitHub API 请求失败（国内网络可能不稳定，请刷新重试）：",
     "noWheelForPython": "未找到 {{python}} 的预编译 wheel（当前 Python 版本可能尚无支持）。请在下方候选列表手动选择其他版本，或从 GitHub Releases 粘贴 URL。",
+    "flashAttnNeedsCudaTorch": "PyTorch 当前是 CPU 版（torch+cpu），无法安装 flash_attn。请先去上方「PyTorch」一栏一键重装为 CUDA 版（cu128 / cu130 等），重启 Studio 后再回来装 flash_attn。",
     "noWheelManual": "无可用 wheel，请手动选择",
     "reinstallAutoMatch": "↻ 重装（自动匹配）",
     "autoMatchInstall": "⤓ 自动匹配安装",

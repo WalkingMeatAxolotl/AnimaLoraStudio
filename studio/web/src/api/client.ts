@@ -269,6 +269,9 @@ export interface FlashAttnEnv {
   driver_cuda_ver: string | null
   torch_tag: string | null           // torch2.5
   torch_ver: string | null
+  /** 'cu128' / 'cu130' = CUDA 版 torch；'cpu' = CPU 版（装不了 flash_attn）；
+   *  null = torch 未装 / 检测失败。UI 用 'cpu' 触发「先重装 CUDA 版」提示。 */
+  torch_cuda_build: string | null
   platform: 'linux_x86_64' | 'win_amd64' | null
 }
 export interface FlashAttnCandidate {
