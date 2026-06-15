@@ -218,6 +218,20 @@ def run(ctx: TrainingContext) -> None:
                         loss_per_sample = loss_per_sample * lw.view(-1, *([1] * (loss_per_sample.dim() - 1)))
                     loss = loss_per_sample.mean()
 
+                # SRA v2 表征对齐 loss（标准路径；leap 路径不适用）
+                if ctx.sra_aligner is not None and not use_leap_this_step:
+                    align_loss = ctx.sra_aligner.compute(latents)
+                    sra_weight = float(getattr(args, "sra_weight", 1.0) or 1.0)
+                    sra_decay_start = int(getattr(args, "sra_decay_start_epoch", 20) or 20)
+                    if epoch > sra_decay_start:
+                        decay = 0.1 ** ((epoch - sra_decay_start) / 1000 + 1)
+                    else:
+                        decay = 1.0
+                    weighted_align = sra_weight * decay * align_loss
+                    loss = loss + weighted_align
+                    if ctx.global_step % args.log_every == 0:
+                        ctx.wandb_monitor.log({"train/sra_align_loss": float(align_loss.item())}, step=ctx.global_step)
+
                 # PR-C：adapter hook — 变体可加正则项（OFT orth penalty /
                 # Ortho-Hydra balance loss 等）。LyCORIS 返回 None，noop。
                 reg = ctx.injector.regularization_loss(step_ctx)

@@ -637,6 +637,29 @@ class TrainingConfig(BaseModel):
         description="【LeapAlign】轨迹相似度加权下限 τ：防止近乎相同的跳跃对被 1/d 过度放大。越小越激进。典型 0.05-0.2",
         json_schema_extra=_meta("loss", show_when="leap_traj_sim_weighting==true", advanced=True),
     )
+
+    # ----------------------------------------------------------- SRA v2 表征对齐
+    sra_enabled: bool = Field(
+        False,
+        description="【SRA v2 表征对齐】启用 VAE Self-Representation Alignment：将中间 transformer block 的 hidden state 对齐到 clean VAE latent，加速收敛并正则化表征。仅增加 ~4% GFLOPs（一个轻量 MLP），训练完自动丢弃",
+        json_schema_extra=_meta("loss"),
+    )
+    sra_block: int = Field(
+        4, ge=1, le=35,
+        description="【SRA v2】从哪一层 block 取中间表征做对齐（0-indexed）。论文建议浅层效果最好：1.3B 模型（28 blocks）推荐 2-6，14B 模型（36 blocks）推荐 4-8",
+        json_schema_extra=_meta("loss", show_when="sra_enabled==true", advanced=True),
+    )
+    sra_weight: float = Field(
+        1.0, ge=0.0,
+        description="【SRA v2】对齐 loss 权重 λ：align_loss 乘以此值后加到总 loss。论文默认 1.0；LoRA 微调建议从 0.5-1.0 开始试",
+        json_schema_extra=_meta("loss", show_when="sra_enabled==true", advanced=True),
+    )
+    sra_decay_start_epoch: int = Field(
+        20, ge=0,
+        description="【SRA v2】对齐权重开始衰减的 epoch：超过此值后 λ 按指数衰减（避免后期对齐约束过强限制模型自由度）。短训练（<30 epoch）建议设为 epochs//3",
+        json_schema_extra=_meta("loss", show_when="sra_enabled==true", advanced=True),
+    )
+
     grad_clip_max_norm: float = Field(
         1.0, ge=0.0,
         description="梯度裁剪最大范数：当本步所有可训练参数的梯度全局范数超过该值时按比例缩到该值，防止单步极端梯度把模型推飞；默认 1.0 适合绝大多数场景，bf16+DoRA/LoKr 不稳可降到 0.5，0=禁用",
