@@ -100,8 +100,12 @@ export default function PromptFromDatasetPicker({
   // 2. 选项目后拉版本列表；优先复用 vid（如果该版本在新项目里仍存在）
   useEffect(() => {
     if (!pid) { setVersions([]); setVid(null); return }
+    // 同款 stale-response 守卫：连切 project 时旧 getProject 晚返回会把别的
+    // project 的 versions / 默认 vid 灌进来，间接喂给上面的 captions effect。
+    let cancelled = false
     void api.getProject(pid)
       .then((p) => {
+        if (cancelled) return
         const vs = p.versions.map((v) => ({ id: v.id, label: v.label }))
         setVersions(vs)
         if (vs.length > 0) {
@@ -110,7 +114,8 @@ export default function PromptFromDatasetPicker({
           setVid(null)
         }
       })
-      .catch((e) => setError(String(e)))
+      .catch((e) => { if (!cancelled) setError(String(e)) })
+    return () => { cancelled = true }
     // 同上：vid 只在 effect 内部读，不进依赖
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pid])
@@ -118,11 +123,25 @@ export default function PromptFromDatasetPicker({
   // 3. 选版本后拉 captions
   useEffect(() => {
     if (!pid || !vid) { setCaptions([]); return }
+    // stale-response 守卫：快速切 project/version 时旧请求可能晚于新请求返回，
+    // 没守卫就会把旧 captions 覆盖回去、与当前 pid/vid 错配 —— 行内/预览缩略图
+    // URL（versionThumbUrl(pid, vid, …, c.name, c.folder)）于是拿当前 pid/vid 去
+    // 找别的 project 的文件名，整列 thumb 404。对齐 InlineLoraPicker 同款守卫。
+    let cancelled = false
     setLoading(true)
     setError(null)
     void api.listCaptionsFull(pid, vid)
-      .then((r) => { setCaptions(r.items); setLoading(false) })
-      .catch((e) => { setError(String(e)); setLoading(false) })
+      .then((r) => {
+        if (cancelled) return
+        setCaptions(r.items)
+        setLoading(false)
+      })
+      .catch((e) => {
+        if (cancelled) return
+        setError(String(e))
+        setLoading(false)
+      })
+    return () => { cancelled = true }
   }, [pid, vid])
 
   const filtered = useMemo(() => {
