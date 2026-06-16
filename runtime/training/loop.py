@@ -159,7 +159,7 @@ def run(ctx: TrainingContext) -> None:
                     #   original  两步跳 + straight-through connector（K=2，行为同历史版）
                     #   sparse    K 点 Euler 重放，纯直接项求和（零 connector / 零雅可比）
                     #   bridge    两步跳 + Euler 重构 connector（无 straight-through 偏差）
-                    #   lagrange  两段跳 + 每段 Simpson 两点积分
+                    #   lagrange  两段跳 + 每段三点 Simpson 积分（6× 前向）
                     leap_variant = str(getattr(args, "leap_variant", "original") or "original")
                     _leap_min_gap = float(getattr(args, "leap_min_gap", 0.1) or 0.1)
                     _leap_tsw = bool(getattr(args, "leap_traj_sim_weighting", False))

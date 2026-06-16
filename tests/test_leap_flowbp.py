@@ -104,6 +104,80 @@ def test_sparse_exact_reconstruction(k: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Lagrange：变速度场下锁死 Simpson 权重(1:4:1) + 段终点取解析真值(非 Euler 预测)
+#
+# 恒等速度场的精确重构测试抓不到这两件事：常数场下任意归一化权重(1:4:1 / 旧 1:1
+# 梯形 / ...)都精确重构、且段终点输入是真值还是 Euler 预测都一样(v 处处相等)。
+# 这里用 *依赖位置* 的速度场 v_θ(x)=x，让两者都可观测：
+#   - 第二段(j→0)的 x̂0 只由该段三点速度决定(与第一段解耦)，可解析算出期望值；
+#   - 期望值按"段终点用 x0"算；若实现退回 Euler 预测点，结果会偏，断言失败。
+# ---------------------------------------------------------------------------
+
+
+class _PositionVelocityModel:
+    """Mock：v_θ(x, t) = x（依赖输入位置，与 t / cross 无关）。
+
+    用于区分 Simpson 三点权重与段终点取值——常数场下不可观测，位置相关场下可观测。
+    """
+
+    def __init__(self) -> None:
+        self.n_calls = 0
+
+    def __call__(self, latents, timesteps, cross, padding_mask=None):  # noqa: ARG002
+        self.n_calls += 1
+        return latents.clone()
+
+
+def test_lagrange_simpson_weights_and_endpoint() -> None:
+    """v_θ(x)=x 下，第二段 x̂0 应等于按 x0 端点 + 1:4:1 权重算出的解析值。"""
+    x0, noise, cross, pad_mask = _make_batch()
+    # 固定 (k, j) 避免随机性，便于解析对照
+    bs = x0.shape[0]
+    t_k = torch.full((bs,), 0.8)
+    t_j = torch.full((bs,), 0.4)
+
+    # ngc=1.0：connector 前向值 = x_j_real（straight-through 数值），第二段起点确定
+    loss = lagrange_training_step(
+        _PositionVelocityModel(), x0, noise, cross, pad_mask, t_k, t_j,
+        nested_grad_coe=1.0,
+    )
+
+    # ── 解析复算第二段（前向数值，梯度无关）──
+    view = (-1, *([1] * (x0.ndim - 1)))
+    k = t_k.view(*view)
+    j = t_j.view(*view)
+    # 第一段 Simpson(x_k, x_m1, x_j_real)，v=x ⇒ 端点速度=端点本身
+    x_k = (1.0 - k) * x0 + k * noise
+    x_j_real = (1.0 - j) * x0 + j * noise
+    m1 = (k + j) * 0.5
+    x_m1 = (1.0 - m1) * x0 + m1 * noise
+    v_seg1 = (x_k + 4.0 * x_m1 + x_j_real) / 6.0
+    x_hat_j = x_k - (k - j) * v_seg1
+    # connector straight-through：前向数值 = x_j_real，第二段起点 = x_j_real
+    x_j_in = x_j_real
+    # 第二段 Simpson(x_j_in, x_m2, x0)，段终点用 x0（非 Euler 预测）
+    m2 = j * 0.5
+    x_m2 = (1.0 - m2) * x0 + m2 * noise
+    v_seg2 = (x_j_in + 4.0 * x_m2 + x0) / 6.0
+    x_hat_0_expected = x_j_in - j * v_seg2
+    expected_loss = (x_hat_0_expected.float() - x0.float()).pow(2).mean(dim=(1, 2, 3))
+
+    assert torch.allclose(loss, expected_loss, atol=1e-6), (
+        f"lagrange x̂0 偏离 Simpson(1:4:1)+x0 端点解析值: {loss} vs {expected_loss}"
+    )
+
+    # ── 反向断言：若段终点退回 Euler 预测点，结果应 *不同*（守住回归）──
+    v_j_start = x_j_in  # v=x
+    x_hat_0_euler = x_j_in - j * v_j_start  # Euler 预测端点
+    v_seg2_euler = (x_j_in + 4.0 * x_m2 + x_hat_0_euler) / 6.0
+    x_hat_0_euler_full = x_j_in - j * v_seg2_euler
+    euler_loss = (x_hat_0_euler_full.float() - x0.float()).pow(2).mean(dim=(1, 2, 3))
+    assert not torch.allclose(loss, euler_loss, atol=1e-6), (
+        "段终点取真值 vs Euler 预测应当可区分；若相等说明位置场测试退化"
+    )
+
+
+# ---------------------------------------------------------------------------
 # 前向次数（显存/算力估算的依据，diff 里写错过一次，锁死）
 # ---------------------------------------------------------------------------
 

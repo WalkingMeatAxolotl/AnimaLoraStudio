@@ -16,7 +16,7 @@
 - original  : 两步跳 + straight-through connector + α 折扣（= LeapAlign 现状，K=2，1 雅可比）
 - sparse    : K 点 Euler 重放，纯直接项求和（FlowBP-Sparse，零 connector / 零雅可比）
 - bridge    : 两步跳 + Euler 重构 connector + α 折扣（FlowBP-Bridge，结构精确无 ST 偏差）
-- lagrange  : 两段跳，每段 Simpson 两点积分（FlowBP-Lagrange，降单段积分误差）
+- lagrange  : 两段跳，每段三点 Lagrange/Simpson 积分（FlowBP-Lagrange，降单段积分误差）
 
 自蒸馏特性注记：真值是解析直线插值点、无 rollout 噪声，connector 残差被釜底抽薪，
 故 bridge/lagrange 相比 original 增益收窄；sparse 是唯一结构性差异（去 connector +
@@ -347,10 +347,17 @@ def lagrange_training_step(
 
         ∫_b^a v dt ≈ (a-b)/6 · [v(x_a) + 4·v(x_m) + v(x_b)]
 
-    三点都需速度：端点 x_a、中点 x_m、另端点 x_b。中点带噪点用解析真值
-    x_m_real=(1-m)x0+m·noise（自蒸馏免 rollout）；另端点 x_b 在积分时尚未知，取 Euler
-    预测 x̂_b_euler = x_a - (a-b)·v(x_a) 处的速度（论文 §A.2 同款处理，段终点速度依赖
-    自身 Euler 预测）。最终段输出仍以 Simpson 加权积分为准（非 Euler 预测值）。
+    三点都需速度：端点 x_a、中点 x_m、另端点 x_b。**梯度约束**（论文 Eq 4/24，摘要
+    "at most one Jacobian factor"）：非 bridge-anchor 的 active support 一律对 latent
+    输入取 stop-gradient——v_θ(sg(x_i), σ_i)，梯度只经 θ 不回传到 x_i。本自蒸馏实现
+    没有 rollout，每个时刻的 cached latent 就是解析直线插值真值，故三点输入都用解析真值
+    （天然 detach、不依赖 θ）：
+      - 端点 x_a、中点 x_m=(1-m)x0+m·noise；
+      - 另端点 x_b 的真值在自蒸馏下**已知**：第一段段终点 b=j 即 x_j_real，第二段段终点
+        b=0 即 x0 本身（在 t=0 评估）。
+    这与论文取 cached-latent 速度一致，避免旧版用 Euler 预测点 x̂_b=x_a-(a-b)·v(x_a)
+    带入的未折扣嵌套雅可比（∂v(x̂_b)/∂v(x_a)），后者会绕过 α 违反单雅可比约束。
+    唯一保留 latent 雅可比的是第二段起点 x_j（bridge anchor，α 缩放的 connector）。
 
     代价：每段 3 次前向（端点 + 中点 + 另端点），两段共 6 次前向 ≈ 6× 算力 + 显存，
     是四 variant 中最重者。两段串联：第一段 k→j，connector（straight-through，
@@ -365,17 +372,17 @@ def lagrange_training_step(
     x_j_real = (1.0 - j) * x0 + j * noise
     x_m1_real = (1.0 - m1) * x0 + m1 * noise  # 中点解析真值（detach）
 
-    # ── 第一段三点 Lagrange / Simpson 积分：x_k, x_m1, x̂_j_euler ──
+    # ── 第一段三点 Lagrange / Simpson 积分：x_k, x_m1, x_j_real ──
     v_k = forward_with_optional_checkpoint(
         model, x_k, t_k.view(-1, 1), cross, pad_mask, use_checkpoint=use_checkpoint,
     )
     v_m1 = forward_with_optional_checkpoint(
         model, x_m1_real, t_m1.view(-1, 1), cross, pad_mask, use_checkpoint=use_checkpoint,
     )
-    # 段终点（j）处速度：用 Euler 预测的 x̂_j 当输入（论文 §A.2 同款处理）
-    x_hat_j_euler = x_k - (k - j) * v_k
+    # 段终点（j）速度：自蒸馏下真值已知 = x_j_real（解析、detach），非 Euler 预测点，
+    # 避免未折扣嵌套雅可比（论文 Eq 4：非 anchor support 取 v_θ(sg(x_i))）
     v_j_seg1 = forward_with_optional_checkpoint(
-        model, x_hat_j_euler, t_j.view(-1, 1), cross, pad_mask, use_checkpoint=use_checkpoint,
+        model, x_j_real, t_j.view(-1, 1), cross, pad_mask, use_checkpoint=use_checkpoint,
     )
     v_seg1 = (v_k + 4.0 * v_m1 + v_j_seg1) / 6.0  # Simpson 权重 1:4:1
     x_hat_j = x_k - (k - j) * v_seg1
@@ -389,7 +396,7 @@ def lagrange_training_step(
     else:
         x_j_in = nested_grad_coe * x_j + (1.0 - nested_grad_coe) * x_j.detach()
 
-    # ── 第二段三点 Lagrange / Simpson 积分：x_j, x_m2, x̂_0_euler ──
+    # ── 第二段三点 Lagrange / Simpson 积分：x_j, x_m2, x0 ──
     m2 = j * 0.5  # 第二段中点（j→0 的中点是 j/2）
     t_m2 = t_j * 0.5
     x_m2_real = (1.0 - m2) * x0 + m2 * noise
@@ -399,11 +406,10 @@ def lagrange_training_step(
     v_m2 = forward_with_optional_checkpoint(
         model, x_m2_real, t_m2.view(-1, 1), cross, pad_mask, use_checkpoint=use_checkpoint,
     )
-    # 段终点（0）处速度：用 Euler 预测的 x̂_0_euler 当输入
-    x_hat_0_euler = x_j_in - j * v_j
+    # 段终点（0）速度：自蒸馏下真值已知 = x0（在 t=0 评估），非 Euler 预测点
     t_0 = torch.zeros_like(t_j)
     v_0_seg2 = forward_with_optional_checkpoint(
-        model, x_hat_0_euler, t_0.view(-1, 1), cross, pad_mask, use_checkpoint=use_checkpoint,
+        model, x0, t_0.view(-1, 1), cross, pad_mask, use_checkpoint=use_checkpoint,
     )
     v_seg2 = (v_j + 4.0 * v_m2 + v_0_seg2) / 6.0  # Simpson 权重 1:4:1
     x_hat_0 = x_j_in - j * v_seg2

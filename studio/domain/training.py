@@ -525,8 +525,9 @@ class TrainingConfig(BaseModel):
                 "||loss_weighting!=none"
                 "||loss_type==huber"
                 "||timestep_schedule_shift!=1"
+                "||leap_enabled==true"
             ),
-            disable_hint="互斥字段（noise_enhancement / loss_weighting / loss_type / schedule_shift）非默认时不可启用（schema 互斥）",
+            disable_hint="互斥字段（noise_enhancement / loss_weighting / loss_type / schedule_shift / leap）非默认时不可启用（schema 互斥）",
         ),
     )
     infonoise_K: int = Field(
@@ -583,8 +584,8 @@ class TrainingConfig(BaseModel):
         description="loss 加权方案：none 不加权；min_snr 抑制极端时步的权重；detail_inv_t 强化低 t 细节；cosmap 用 SD3 cosine 映射",
         json_schema_extra=_meta(
             "loss",
-            disable_when="infonoise_enabled==true",
-            disable_hint="InfoNoise 启用时禁用 loss 加权（schema 互斥，仅 none 兼容）",
+            disable_when="infonoise_enabled==true||leap_enabled==true",
+            disable_hint="InfoNoise / Leap 启用时禁用 loss 加权（schema 互斥，仅 none 兼容）",
         ),
     )
     min_snr_gamma: float = Field(
@@ -610,7 +611,11 @@ class TrainingConfig(BaseModel):
     leap_enabled: bool = Field(
         False,
         description="【LeapAlign 自蒸馏】启用两步跳跃自蒸馏（去奖励模型版）：每步用真实 latent 当 x0，per-sample 采两个时刻 (k>j) 做两步跳跃，loss=MSE(两步预测的 x̂0, 真实 x0)。本质是 shortcut/consistency 式自蒸馏。开销：leap_ratio=1.0 时每步 2 次前向 ≈ 2× 算力 + activation 显存接近 2×（两次前向都带 grad）。与 InfoNoise / loss_weighting / loss_type=huber 互斥",
-        json_schema_extra=_meta("loss"),
+        json_schema_extra=_meta(
+            "loss",
+            disable_when="infonoise_enabled==true||loss_weighting!=none||loss_type==huber",
+            disable_hint="互斥字段（InfoNoise / loss_weighting / loss_type=huber）非默认时不可启用（schema 互斥，与对侧形成对称锁）",
+        ),
     )
     leap_ratio: float = Field(
         1.0, ge=0.0, le=1.0,
