@@ -96,7 +96,7 @@ def test_lagrange_exact_reconstruction(ngc: float) -> None:
 def test_sparse_exact_reconstruction(k: int) -> None:
     x0, noise, cross, pad_mask = _make_batch()
     model = _IdentityVelocityModel(x0, noise)
-    t_steps = sample_activation_timesteps(x0.shape[0], x0.device, k=k, min_gap=0.1)
+    t_steps = sample_activation_timesteps(x0.shape[0], x0.device, k=k)
     loss = sparse_training_step(
         model, x0, noise, cross, pad_mask, t_steps,
     )

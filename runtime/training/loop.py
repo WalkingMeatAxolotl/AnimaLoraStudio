@@ -170,7 +170,7 @@ def run(ctx: TrainingContext) -> None:
                         t_steps = sample_activation_timesteps(
                             bs, ctx.device,
                             k=int(getattr(args, "leap_activation_k", 3) or 3),
-                            min_gap=_leap_min_gap, dtype=torch.float32,
+                            dtype=torch.float32,
                         )
                         loss_per_sample = sparse_training_step(
                             ctx.model, latents, noise, cross, pad_mask, t_steps,

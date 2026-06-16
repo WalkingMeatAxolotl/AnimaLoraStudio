@@ -182,19 +182,14 @@ def sample_activation_timesteps(
     bs: int,
     device,
     k: int,
-    min_gap: float = 0.1,
     dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
     """per-sample 采样 K 个降序时刻 t_1 > t_2 > ... > t_K，均 ∈ (0,1)。
 
     用于 FlowBP-Sparse 的激活集：从噪声端 t_1 出发，沿 K 个支撑点 Euler 重放到数据端。
-    参考论文（FlowBP §B）用 Dirichlet 划分保证支撑点沿 (0,1) 铺开、不塌缩；这里取等价
-    的"分层抖动（stratified jitter）"实现：把 (0,1) 等分 K 格，每格内采一个 uniform
-    点，天然保证（i）每点独立落在 (i/k, (i+1)/k)，覆盖整条轨迹；（ii）严格降序；
+    用"分层抖动（stratified jitter）"：把 (0,1) 等分 K 格，每格内采一个 uniform 点，
+    天然保证（i）每点独立落在 (i/k, (i+1)/k)，覆盖整条轨迹；（ii）严格降序；
     （iii）相邻间隔 ≥ ~0（实际下界 ≈ 0，远好于旧贪心下压的塌缩风险）。
-
-    min_gap 在 sparse 下语义为"总跨度提示"：若需保证最大跨度 t_1-t_K ≥ min_gap，
-    调用方可在传入前约束（这里不强制，因为分层抖动已天然铺满 (0,1)）。
 
     返回 shape (B, K) 的张量，每行降序。
     """

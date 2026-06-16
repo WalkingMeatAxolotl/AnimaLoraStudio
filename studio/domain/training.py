@@ -630,7 +630,7 @@ class TrainingConfig(BaseModel):
     leap_activation_k: int = Field(
         3, ge=2, le=8,
         description="【FlowBP-Sparse】激活集大小 K：沿 (0,1) 分层抖动采 K 个降序时刻做 Euler 重放，K 点全带梯度。K 直接决定显存/算力（K× 前向+K× activation 显存）与监督稠密度。3 是显存与稠密度的平衡点（比 original 的 2× 略重）；消费级小显存可设 2（退化到 original 同档显存）；4+ 监督更密但 12G 卡可能吃紧。仅 sparse 变体生效",
-        json_schema_extra=_meta("loss", show_when="leap_variant==sparse", advanced=True),
+        json_schema_extra=_meta("loss", show_when="leap_enabled==true&&leap_variant==sparse", advanced=True),
     )
     leap_nested_grad_coe: float = Field(
         0.3, ge=0.0, le=1.0,
@@ -639,8 +639,8 @@ class TrainingConfig(BaseModel):
     )
     leap_min_gap: float = Field(
         0.1, ge=0.01, le=0.9,
-        description="【LeapAlign】采样时刻的最小间隔：original/bridge/lagrange 下是两时刻 (k,j) 的最小间隔，越大跳跃跨度越大、自蒸馏越激进但误差累积越多，典型 0.1-0.3；sparse 下激活集改用分层抖动天然铺满 (0,1)（论文 §B Dirichlet 同款意图），此字段不再强制相邻间隔约束、仅作总跨度提示",
-        json_schema_extra=_meta("loss", show_when="leap_enabled==true", advanced=True),
+        description="【LeapAlign】两个采样时刻 (k,j) 的最小间隔：越大跳跃跨度越大、自蒸馏越激进但误差累积越多。典型 0.1-0.3。仅 original/bridge/lagrange 生效；sparse 的激活集用分层抖动铺满 (0,1)，不用此字段",
+        json_schema_extra=_meta("loss", show_when="leap_enabled==true&&leap_variant!=sparse", advanced=True),
     )
     leap_traj_sim_weighting: bool = Field(
         False,
