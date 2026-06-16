@@ -77,18 +77,6 @@ def _module_device(module) -> torch.device | None:
     return param.device
 
 
-def _vae_param_dtype(vae) -> torch.dtype | None:
-    """取 VAE 权重 dtype——offload 只在 fp32 decode（Generate parity runtime）时
-    才值得做；bf16 VAE（训练预览 / RegAI）显存压力小，搬模型反而是纯开销。"""
-    inner = getattr(vae, "model", vae)
-    if not hasattr(inner, "parameters"):
-        return None
-    try:
-        return next(inner.parameters()).dtype
-    except Exception:
-        return None
-
-
 def _offload_modules_for_vae_decode(*modules) -> list[tuple[object, torch.device]]:
     """Move large, inactive modules off GPU while fp32 VAE decode runs."""
     offloaded: list[tuple[object, torch.device]] = []
@@ -443,14 +431,21 @@ def sample_image(
     del denoise_fn, x, cross_cond, cross_uncond, pad_mask, sigmas, empty_latent
     offloaded_modules: list[tuple[object, torch.device]] = []
     try:
-        # VAEWrapper.decode：整图 OOM 时自动 tile+cosine blend 回退（issue #200）。
-        # 大显存路径在 try 一次就过，零成本；fallback 路径每张图慢 ~30%。
-        # offload 仅在 fp32 VAE（Generate parity runtime）时做；bf16 VAE
-        # （训练预览 / RegAI）显存压力小，搬整个 DiT+Qwen 是纯开销。
-        vae_is_fp32 = _vae_param_dtype(vae) == torch.float32
-        if vae_is_fp32 and device_type == "cuda":
-            logger.info("[Debug] VAE decode: offloading inactive modules before fp32 decode")
-            offloaded_modules = _offload_modules_for_vae_decode(model, qwen_model)
+        # VAEWrapper.decode 按 tiling(auto/on/off) 决策整图/分块。
+        # offload 改为 free-VRAM 驱动、与分块统一（取代旧的「仅 fp32 才 offload」——dtype
+        # 不是显存压力的准确代理：bf16+大图/常驻同样会爆）。只在「腾出显存就能整图且快」
+        # 时才 offload：峰值本身已越过崖（如 fp32 1536²）时，腾显存也救不了整图（崖按总显存
+        # 比例算、与 free 无关，实测整图仍 ~190s），交给 wrapper 分块即可，避免白搬 DiT+Qwen
+        # 占系统内存。
+        if (device_type == "cuda" and torch.cuda.is_available()
+                and hasattr(vae, "_est_decode_peak_bytes")):
+            free, total = torch.cuda.mem_get_info()
+            est = vae._est_decode_peak_bytes(latents)
+            crowded = vae._should_auto_tile(total - free, est, total)         # 当前(含常驻)会触发分块
+            whole_fast_possible = est < total * type(vae)._TILE_VRAM_FRACTION  # 峰值在崖下：腾显存即可整图
+            if crowded and whole_fast_possible:
+                logger.info("[Debug] VAE decode: free VRAM 紧张但峰值在崖下，offload 非活跃模块以整图 decode")
+                offloaded_modules = _offload_modules_for_vae_decode(model, qwen_model)
         images = _decode_vae(vae, latents)
         images = images.squeeze(2)  # [B,C,H,W]
         images = (images.clamp(-1, 1) + 1) / 2
@@ -461,7 +456,7 @@ def sample_image(
         pil_image = Image.fromarray(img)
 
         del images, latents
-        if vae_is_fp32 and device_type == "cuda" and torch.cuda.is_available():
+        if device_type == "cuda" and torch.cuda.is_available():
             torch.cuda.empty_cache()
     except Exception as e:
         logger.error(f"[Debug] VAE decode failed: {e}")

@@ -636,7 +636,8 @@ class CachedLatentDataset(Dataset):
         def _encode_pixels(pixel_tensors):
             pixels = torch.stack(pixel_tensors, dim=0).to(device, dtype=dtype)
             with torch.inference_mode():
-                latents = vae.model.encode(pixels.unsqueeze(2), vae.scale)
+                # 走 VAEWrapper.encode（含 auto/on 分块），大图/大 batch 不会撞 VRAM 崖
+                latents = vae.encode(pixels.unsqueeze(2))
             return latents.detach().cpu().float()
 
         def _flush(bucket_key):

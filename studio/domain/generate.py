@@ -64,6 +64,12 @@ class GenerateConfig(BaseModel):
         "bf16",
         description="VAE decode 精度：bf16 对齐 ComfyUI 现代 GPU 默认；fp32 全精度（decode 前会 offload 腾显存）",
     )
+    vae_tiling: Literal["auto", "on", "off"] = Field(
+        "auto",
+        description="VAE 分块 decode：auto=可用显存紧张时自动分块（推荐）；on=始终分块（省显存、慢约 30%）；"
+                    "off=整图，仅真正 OOM 时回退。fp32 / 高分辨率在大显存卡上整图 decode 会逼近占满显存、"
+                    "触发系统内存回退导致单次 decode 卡上百秒，auto 可避免",
+    )
     attention_backend: AttentionBackend = Field(
         "flash_attn",
         description="Attention backend：none（SDPA）/ xformers / flash_attn",

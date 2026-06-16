@@ -75,7 +75,8 @@ def run(ctx: TrainingContext) -> None:
         logger.info("attention_backend=none，flash_attn / xformers 都不启用，走 PyTorch SDPA")
 
     logger.info("加载 VAE...")
-    ctx.vae = load_vae(args.vae_path, ctx.device, ctx.dtype, ctx.repo_root)
+    ctx.vae = load_vae(args.vae_path, ctx.device, ctx.dtype, ctx.repo_root,
+                       tiling=getattr(args, "vae_tiling", "auto"))
 
     logger.info("加载文本编码器...")
     ctx.qwen_model, ctx.qwen_tok, ctx.t5_tok = load_text_encoders(

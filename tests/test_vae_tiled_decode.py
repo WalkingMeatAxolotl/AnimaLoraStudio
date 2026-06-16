@@ -84,9 +84,26 @@ def test_cosine_blend_mask_zero_fade_all_ones() -> None:
 class _RecordingModel:
     """记录 decode 调用次数 + 形状的 mock；行为是 nearest upsample 8× + 取前 3 通道。"""
 
-    def __init__(self, oom_on_full: bool = False):
+    def __init__(self, oom_on_full: bool = False, oom_on_full_enc: bool = False):
         self.calls: list[tuple[int, ...]] = []
+        self.enc_calls: list[tuple[int, ...]] = []
         self.oom_on_full = oom_on_full
+        self.oom_on_full_enc = oom_on_full_enc
+
+    def encode(self, pixels: torch.Tensor, scale) -> torch.Tensor:
+        """线性 mock：8× avg_pool 下采样 + 3ch→16ch 补零（与 decode 的 nearest 互逆近似）。
+
+        avg_pool stride=8、tile 起点恒为 8 倍数 → 每个输出 latent 像素对应固定 8×8 输入块，
+        分块与整图逐块一致，blend 拼接可高精度复原。
+        """
+        self.enc_calls.append(tuple(pixels.shape))
+        b, _c, t, H, W = pixels.shape
+        if self.oom_on_full_enc and H >= 1024 and len(self.enc_calls) == 1:
+            raise torch.cuda.OutOfMemoryError("simulated OOM on full encode")
+        z = torch.nn.functional.avg_pool3d(pixels, kernel_size=(1, 8, 8))  # [b,3,t,H/8,W/8]
+        if z.shape[1] < 16:
+            z = torch.nn.functional.pad(z, (0, 0, 0, 0, 0, 0, 0, 16 - z.shape[1]))  # 3ch→16ch
+        return z
 
     def decode(self, z: torch.Tensor, scale) -> torch.Tensor:
         self.calls.append(tuple(z.shape))
@@ -177,3 +194,127 @@ def test_tiled_decode_handles_small_input_without_tiling() -> None:
     z = torch.randn(1, 16, 1, 32, 32)  # < tile=64
     out = wrapper._tiled_decode(z)
     assert out.shape == (1, 3, 1, 256, 256)
+
+
+# ---------------------------------------------------------------------------
+# tiling 模式（auto / on / off）+ 峰值估算 + auto 判定阈值
+# ---------------------------------------------------------------------------
+
+
+def test_tiling_on_always_tiles_no_full_call() -> None:
+    """tiling='on'：直接走 _tiled_decode，没有整图 decode 调用。
+
+    128 latent → tile 起点 [0,48,64] → 9 个 64×64 tile，且首调不是 128 整图。
+    """
+    model = _RecordingModel(oom_on_full=False)
+    wrapper = VAEWrapper(model, torch.zeros(16), torch.ones(16), tiling="on")
+    z = torch.zeros(1, 16, 1, 128, 128)
+    out = wrapper.decode(z)
+    assert out.shape == (1, 3, 1, 1024, 1024)
+    assert len(model.calls) == 9
+    assert all(s == (1, 16, 1, 64, 64) for s in model.calls)
+
+
+def test_tiling_off_uses_whole_image_then_oom_net() -> None:
+    """tiling='off'：整图优先；仍保留真 OOM 兜底分块（小显存安全网）。"""
+    model = _RecordingModel(oom_on_full=True)
+    wrapper = VAEWrapper(model, torch.zeros(16), torch.ones(16), tiling="off")
+    z = torch.zeros(1, 16, 1, 128, 128)
+    out = wrapper.decode(z)
+    assert out.shape == (1, 3, 1, 1024, 1024)
+    # 1 次失败整图 + 9 个 tile（OOM 兜底仍在）
+    assert model.calls[0] == (1, 16, 1, 128, 128)
+    assert len(model.calls) == 1 + 9
+
+
+def test_est_decode_peak_scales_with_pixels_and_dtype() -> None:
+    """峰值估算 ∝ 输出像素 × 元素大小。fp32 1024² ≈ 11.5G，bf16 减半。"""
+    model = _RecordingModel()
+    wrapper = _make_wrapper(model)
+    z32 = torch.zeros(1, 16, 1, 128, 128, dtype=torch.float32)   # 1024² 输出
+    est_fp32 = wrapper._est_decode_peak_bytes(z32)
+    assert est_fp32 == pytest.approx(11000 * 1024 * 1024, rel=1e-6)
+    z16 = torch.zeros(1, 16, 1, 128, 128, dtype=torch.bfloat16)
+    assert wrapper._est_decode_peak_bytes(z16) == pytest.approx(est_fp32 / 2, rel=1e-6)
+
+
+def test_should_auto_tile_threshold_matches_measured_cliff() -> None:
+    """auto 阈值复刻实测崖（RTX 5090 31.8G）：fp32 1536² 分块、其余快路径整图。"""
+    GB = 1024 ** 3
+    total = int(31.8 * GB)
+    model = _RecordingModel()
+    w = _make_wrapper(model)
+
+    def est(res, dtype):
+        h = res // 8
+        return w._est_decode_peak_bytes(torch.zeros(1, 16, 1, h, h, dtype=dtype))
+
+    light = int(2.2 * GB)  # 仅 VAE 常驻
+    # fp32 1024（实测 0.34s 整图安全）→ 不分块
+    assert not VAEWrapper._should_auto_tile(light, est(1024, torch.float32), total)
+    # fp32 1536（实测整图 196s）→ 分块
+    assert VAEWrapper._should_auto_tile(light, est(1536, torch.float32), total)
+    # bf16 1536（实测 0.4s 整图安全）→ 不分块
+    assert not VAEWrapper._should_auto_tile(light, est(1536, torch.bfloat16), total)
+    # bf16 1536 但叠加 ~12G 常驻模型（训练 sample 场景）→ 分块
+    heavy = int(13 * GB)
+    assert VAEWrapper._should_auto_tile(heavy, est(1536, torch.bfloat16), total)
+
+
+# ---------------------------------------------------------------------------
+# encode 分块（latent 缓存路径）
+# ---------------------------------------------------------------------------
+
+
+def test_encode_full_path_calls_model_once() -> None:
+    """CPU（非 cuda）走整图 encode：model.encode 只调一次。"""
+    model = _RecordingModel()
+    wrapper = _make_wrapper(model)
+    px = torch.randn(1, 3, 1, 256, 256)
+    z = wrapper.encode(px)
+    assert z.shape == (1, 16, 1, 32, 32)
+    assert len(model.enc_calls) == 1
+
+
+def test_encode_tiling_on_tiles_in_pixel_space() -> None:
+    """tiling='on'：1024px → 像素 tile=512/stride=384 起点 [0,384,512] → 9 个 512² tile。"""
+    model = _RecordingModel()
+    wrapper = VAEWrapper(model, torch.zeros(16), torch.ones(16), tiling="on")
+    px = torch.zeros(1, 3, 1, 1024, 1024)
+    z = wrapper.encode(px)
+    assert z.shape == (1, 16, 1, 128, 128)
+    assert len(model.enc_calls) == 9
+    assert all(s == (1, 3, 1, 512, 512) for s in model.enc_calls)
+
+
+def test_encode_oom_fallback_invokes_tiled_encode() -> None:
+    """整图 encode OOM → catch + tile 兜底（off 模式也保留安全网）。"""
+    model = _RecordingModel(oom_on_full_enc=True)
+    wrapper = VAEWrapper(model, torch.zeros(16), torch.ones(16), tiling="off")
+    px = torch.zeros(1, 3, 1, 1024, 1024)
+    z = wrapper.encode(px)
+    assert z.shape == (1, 16, 1, 128, 128)
+    assert model.enc_calls[0] == (1, 3, 1, 1024, 1024)  # 先试整图
+    assert len(model.enc_calls) == 1 + 9                 # 失败 + 9 tile
+
+
+def test_tiled_encode_reconstructs_full_for_linear_encoder() -> None:
+    """线性 encode（avg_pool）下，tile + cosine blend 拼接 ≈ 整图 encode。"""
+    model = _RecordingModel()
+    wrapper = _make_wrapper(model)
+    torch.manual_seed(0)
+    px = torch.randn(1, 3, 1, 1024, 1024)
+    full = wrapper.model.encode(px, wrapper.scale)
+    tiled = wrapper._tiled_encode(px)
+    assert tiled.shape == full.shape
+    assert torch.allclose(tiled, full, atol=1e-4)
+
+
+def test_est_encode_peak_scales_with_pixels_and_dtype() -> None:
+    """encode 峰值估算 ∝ 输入像素 × 元素大小。fp32 1024² ≈ 5.5G，bf16 减半。"""
+    wrapper = _make_wrapper(_RecordingModel())
+    px32 = torch.zeros(1, 3, 1, 1024, 1024, dtype=torch.float32)
+    est_fp32 = wrapper._est_encode_peak_bytes(px32)
+    assert est_fp32 == pytest.approx(5500 * 1024 * 1024, rel=1e-6)
+    px16 = torch.zeros(1, 3, 1, 1024, 1024, dtype=torch.bfloat16)
+    assert wrapper._est_encode_peak_bytes(px16) == pytest.approx(est_fp32 / 2, rel=1e-6)

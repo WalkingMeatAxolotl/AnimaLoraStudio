@@ -39,11 +39,13 @@ class VAEWrapper:
     `try` 整图，CUDA OOM 才走 cosine-blend 切块 decode（每 tile 64 latent /
     512 pixel，单 tile 工作峰值约 75MB）。
 
-    大显存路径永远在 `try` 一次就过、零成本；fallback 路径每张图慢 ~30%。
+    后续（VRAM 崖修复）：`decode()` / `encode()` 都按 `tiling`（auto/on/off）决策，
+    auto 在「已用 + 预计峰值」越过总显存阈值时主动分块——不只是等 OOM。大显存卡上
+    整图 op 接近占满显存会触发 WDDM 显存换页、单次 op 从 <1s 退化到上百秒，且不抛
+    干净 OOM，reactive 兜底救不了，故需 proactive。
 
-    现有训练代码（dataset 编 latent / phases/dataset.py 训练时重建预览）继续直
-    接调 `wrapper.model.encode/decode(z, wrapper.scale)`，保持现有行为不动 ——
-    encode 路径与训练侧低分辨率重建不会 OOM。
+    调用方应走 `wrapper.encode(pixels)` / `wrapper.decode(z)`（带分块决策），不要直接
+    调 `wrapper.model.encode/decode(...)`（绕过分块）。
     """
 
     # tile 几何：tile=512px / overlap=128px / 4-stage VAE 8× upsample
@@ -51,18 +53,70 @@ class VAEWrapper:
     _STRIDE_LATENT = 48
     _UPSAMPLE = 8
 
-    def __init__(self, model, mean, std):
+    # 整图 decode 峰值显存 ≈ _DECODE_PEAK_BYTES_PER_OUT_PX × (elem/4) × 输出像素 × B × T。
+    # 标定自 tools/spike/vae_stress.py（RTX 5090 / WAN VAE dim=96）：fp32 1024²≈10.4G、
+    # 1536²≈22.6G；bf16 减半。取 11000（实测 ~9.8k）留 ~12% 余量。
+    _DECODE_PEAK_BYTES_PER_OUT_PX = 11000
+    # 整图 encode 峰值 ≈ _ENCODE_PEAK_BYTES_PER_IN_PX × (elem/4) × 输入像素 × B × T。
+    # 标定自 tools/spike/vae_stress.py（fp32）：1024²≈5.5G、1536²≈11.6G、2048²≈20.3G。
+    _ENCODE_PEAK_BYTES_PER_IN_PX = 5500
+    # auto：当「当前已用 + 预计峰值」超过总显存此比例就分块。崖在 ~50% 而非满显存——
+    # fp32 1536²(峰值 22.6G / 总 31.8G = 71%) 即便「装得下」也会因 WDDM 显存换页退化到
+    # ~190s；fp32 1024²(10.4G / 33%) 正常。0.5 让快路径(fp32≤1024 / bf16≤1536)走整图，
+    # 把会撞崖的(大图、fp32、或叠加常驻模型)切到分块。
+    _TILE_VRAM_FRACTION = 0.5
+
+    def __init__(self, model, mean, std, tiling: str = "auto"):
         self.model = model
         self.mean = mean
         self.std = std
         self.scale = [mean, 1.0 / std]
+        # 分块模式：
+        #   auto（默认）= 按 free VRAM 估算，整图峰值逼近可用显存时主动分块；
+        #   on          = 始终分块（省显存，慢约 30%）；
+        #   off          = 整图，仅真 OOM 时回退分块（旧行为）。
+        # auto 解决大显存卡整图 decode 接近占满时触发「系统内存回退」→ 单次 decode
+        # 从 <1s 退化到上百秒的卡死（reactive OOM 兜底救不了，因为没抛干净 OOM）。
+        self.tiling = str(tiling or "auto").lower().strip()
+
+    def _est_decode_peak_bytes(self, z) -> int:
+        b, _c, t, H, W = z.shape
+        out_px = (H * self._UPSAMPLE) * (W * self._UPSAMPLE)
+        elem = z.element_size()  # 2=bf16/fp16, 4=fp32
+        return int(self._DECODE_PEAK_BYTES_PER_OUT_PX * (elem / 4.0) * out_px * b * max(1, t))
+
+    def _est_encode_peak_bytes(self, pixels) -> int:
+        b, _c, t, H, W = pixels.shape  # H/W 为像素分辨率
+        in_px = H * W
+        elem = pixels.element_size()
+        return int(self._ENCODE_PEAK_BYTES_PER_IN_PX * (elem / 4.0) * in_px * b * max(1, t))
+
+    @classmethod
+    def _should_auto_tile(cls, used_bytes: int, est_peak_bytes: int, total_bytes: int) -> bool:
+        """auto 判定：当前已用 + 预计 decode 峰值 是否越过总显存的分块阈值。"""
+        return (used_bytes + est_peak_bytes) > total_bytes * cls._TILE_VRAM_FRACTION
 
     def decode(self, z):
-        """latent → pixel；整图 OOM 时自动切块重试。
+        """latent → pixel；按 self.tiling 决定整图 / 分块。
 
         z: ``[b, 16, t, H, W]`` latent
         return: ``[b, 3, t, H*8, W*8]``（与底层 `WanVAE_.decode` 一致，未 clamp）
         """
+        if self.tiling == "on":
+            return self._tiled_decode(z)
+
+        if self.tiling == "auto" and z.is_cuda and torch.cuda.is_available():
+            free, total = torch.cuda.mem_get_info()
+            used = total - free
+            est = self._est_decode_peak_bytes(z)
+            if self._should_auto_tile(used, est, total):
+                logger.info(
+                    "VAE decode 主动分块（tiling=auto）：已用 %.1fG + 预计峰值 %.1fG > 总显存 %.1fG×%.2f",
+                    used / 1024 ** 3, est / 1024 ** 3, total / 1024 ** 3, self._TILE_VRAM_FRACTION,
+                )
+                return self._tiled_decode(z)
+
+        # off，或 auto 判定显存够：整图，仍保留 OOM 兜底（小显存卡的安全网）。
         try:
             return self.model.decode(z, self.scale)
         except torch.cuda.OutOfMemoryError:
@@ -74,6 +128,38 @@ class VAEWrapper:
                 (self._TILE_LATENT - self._STRIDE_LATENT) * self._UPSAMPLE,
             )
             return self._tiled_decode(z)
+
+    def encode(self, pixels):
+        """pixel → latent；按 self.tiling 决定整图 / 分块。
+
+        pixels: ``[b, 3, t, H, W]``（H/W 为像素分辨率，须为 8 的倍数）
+        return: ``[b, 16, t, H/8, W/8]`` latent（与 `WanVAE_.encode` 一致）
+        """
+        if self.tiling == "on":
+            return self._tiled_encode(pixels)
+
+        if self.tiling == "auto" and pixels.is_cuda and torch.cuda.is_available():
+            free, total = torch.cuda.mem_get_info()
+            used = total - free
+            est = self._est_encode_peak_bytes(pixels)
+            if self._should_auto_tile(used, est, total):
+                logger.info(
+                    "VAE encode 主动分块（tiling=auto）：已用 %.1fG + 预计峰值 %.1fG > 总显存 %.1fG×%.2f",
+                    used / 1024 ** 3, est / 1024 ** 3, total / 1024 ** 3, self._TILE_VRAM_FRACTION,
+                )
+                return self._tiled_encode(pixels)
+
+        try:
+            return self.model.encode(pixels, self.scale)
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            logger.warning(
+                "VAE 整图 encode OOM，回退到 tiled encode "
+                "(tile=%dpx, overlap=%dpx)",
+                self._TILE_LATENT * self._UPSAMPLE,
+                (self._TILE_LATENT - self._STRIDE_LATENT) * self._UPSAMPLE,
+            )
+            return self._tiled_encode(pixels)
 
     @torch.no_grad()
     def _tiled_decode(self, z):
@@ -114,6 +200,45 @@ class VAEWrapper:
                 wsum[:, :, :, hp:hp + tile_h_px, wp:wp + tile_w_px] += mask
 
         return (acc / wsum).to(z.dtype)
+
+    @torch.no_grad()
+    def _tiled_encode(self, pixels):
+        """在 H/W 维度切块独立 encode，latent 空间 cosine blend 拼回。
+
+        - tile=512px / stride=384px / overlap=128px（= decode 的 64/48/16 latent ×8）
+        - 像素起点恒为 8 的倍数 → latent 位置为整数（_TILE/_STRIDE×8 与 H/W 均整除 8）
+        - blend 在 latent 空间（tile=64 latent，fade=16 latent），accumulator 走 fp32
+        - encode 非线性，拼接为近似（overlap+cosine 抹平 tile 边界），用于 latent 缓存足够
+        """
+        b, _c, t, H, W = pixels.shape
+        up = self._UPSAMPLE
+        tile_px = self._TILE_LATENT * up
+        stride_px = self._STRIDE_LATENT * up
+
+        eff_h = min(tile_px, H)
+        eff_w = min(tile_px, W)
+        hs = _tile_starts(H, eff_h, stride_px)
+        ws = _tile_starts(W, eff_w, stride_px)
+
+        lat_h, lat_w = H // up, W // up
+        tile_lh, tile_lw = eff_h // up, eff_w // up
+        overlap_lat = (tile_px - stride_px) // up
+
+        # encode 输出通道 = z_dim(16)。从第一个 tile 拿真实通道数更稳，但 WAN VAE 固定 16。
+        acc = torch.zeros(b, 16, t, lat_h, lat_w, dtype=torch.float32, device=pixels.device)
+        wsum = torch.zeros(1, 1, 1, lat_h, lat_w, dtype=torch.float32, device=pixels.device)
+
+        mask = _cosine_blend_mask(tile_lh, tile_lw, fade=overlap_lat, device=pixels.device)
+
+        for hi in hs:
+            for wi in ws:
+                px_tile = pixels[:, :, :, hi:hi + eff_h, wi:wi + eff_w]
+                z_tile = self.model.encode(px_tile, self.scale).float()
+                lh, lw = hi // up, wi // up
+                acc[:, :, :, lh:lh + tile_lh, lw:lw + tile_lw] += z_tile * mask
+                wsum[:, :, :, lh:lh + tile_lh, lw:lw + tile_lw] += mask
+
+        return (acc / wsum).to(pixels.dtype)
 
 
 def _tile_starts(size: int, tile: int, stride: int) -> list[int]:
@@ -263,8 +388,8 @@ def load_anima_model(transformer_path, device, dtype, repo_root, *, flash_attn: 
     return model
 
 
-def load_vae(vae_path, device, dtype, repo_root):
-    """加载 VAE。"""
+def load_vae(vae_path, device, dtype, repo_root, *, tiling: str = "auto"):
+    """加载 VAE。``tiling`` 透传给 VAEWrapper（auto/on/off）。"""
     wan_vae = load_module_from_path("wan_vae", repo_root / "wan" / "vae2_1.py")
     WanVAE = wan_vae.WanVAE_
 
@@ -291,7 +416,7 @@ def load_vae(vae_path, device, dtype, repo_root):
     ], dtype=dtype, device=device)
 
     logger.info("VAE 加载完成")
-    return VAEWrapper(model, mean, std)
+    return VAEWrapper(model, mean, std, tiling=tiling)
 
 
 def load_text_encoders(

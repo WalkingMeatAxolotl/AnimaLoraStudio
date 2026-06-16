@@ -150,7 +150,8 @@ def main() -> None:
         )
 
     logger.info("加载 VAE...")
-    vae = _T.load_vae(vae_path, device, vae_dtype, repo_root)
+    vae = _T.load_vae(vae_path, device, vae_dtype, repo_root,
+                      tiling=str(cfg.get("vae_tiling", "auto")))
 
     logger.info("加载文本编码器...")
     qwen_model, qwen_tok, t5_tok = _T.load_text_encoders(

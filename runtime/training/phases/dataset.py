@@ -130,8 +130,9 @@ def run(ctx: TrainingContext) -> None:
             item0 = ctx.base_dataset[0]
             pixels0 = item0["pixel_values"].unsqueeze(0).to(ctx.device, dtype=ctx.dtype)  # [1,3,H,W]
             with torch.no_grad():
-                z0 = ctx.vae.model.encode(pixels0.unsqueeze(2), ctx.vae.scale)   # [1,16,1,h,w]
-                recon0 = ctx.vae.model.decode(z0, ctx.vae.scale).squeeze(2)      # [1,3,H,W]
+                # encode/decode 均走 VAEWrapper（含 auto/on 分块），避免大图整图 op 触发系统内存回退卡死
+                z0 = ctx.vae.encode(pixels0.unsqueeze(2))                        # [1,16,1,h,w]
+                recon0 = ctx.vae.decode(z0).squeeze(2)                           # [1,3,H,W]
                 recon0 = (recon0.clamp(-1, 1) + 1) / 2
             arr0 = (recon0[0].permute(1, 2, 0).detach().cpu().float().numpy() * 255).clip(0, 255).astype("uint8")
             Image.fromarray(arr0).save(ctx.sample_dir / "vae_roundtrip.png")
