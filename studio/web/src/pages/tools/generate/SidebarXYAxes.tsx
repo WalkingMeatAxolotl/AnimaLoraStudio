@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { LoraEntry, XYAxisType } from '../../../api/client'
 import PathPicker from '../../../components/PathPicker'
+import AddSlotButton from './AddSlotButton'
 import InlineLoraPicker from './InlineLoraPicker'
 import NumberListInput from './NumberListInput'
 import type { ProjectLora } from './types'
@@ -137,46 +139,55 @@ function AxisCard({
   onLorasChange: (l: LoraEntry[]) => void
   projectLoras: ProjectLora[]
 }) {
+  const { t } = useTranslation()
   const isCkpt = draft.axis === 'lora_ckpt'
 
+  // 背景 / padding 对齐 LoRA 槽的 InlineLoraPicker（bg-overlay + p-2.5）；不用 bg-sunken
+  // —— dark 下近黑，跟 LoRA 区不一致显突兀。
   return (
-    <div className="bg-sunken border border-subtle rounded-md px-2.5 py-2 flex flex-col gap-2">
-      <div className="flex items-center gap-2">
-        <span className="text-xs font-semibold text-fg-secondary shrink-0 w-4">{label}</span>
-        <select
-          className="input text-xs flex-1"
-          value={draft.axis}
-          onChange={(e) => {
-            const newAxis = e.target.value as XYAxisType
-            onChange({
-              ...draft,
-              axis: newAxis,
-              raw: newAxis === 'lora_ckpt' ? '' : draft.raw,
-              loraIndex: REQUIRES_LORA_INDEX.has(newAxis)
-                ? (loras.length > 0 ? 0 : null)
-                : null,
-            })
-          }}
-        >
-          {ALL_AXES.map((a) => (
-            <option key={a} value={a}>{axisLabel(a)}</option>
-          ))}
-        </select>
+    <div className="bg-overlay border border-subtle rounded-md p-2.5 flex flex-col gap-2">
+      {/* 轴名单独成行作整张卡的标题（下面的轴类型 dropdown + 取值都隶属它）；× 放这行
+          最右端、跟轴名分处两端 —— 之前单字母 "X" 跟下拉同行、像个关闭按钮，易混淆。 */}
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-semibold text-fg-secondary">
+          {t('generate.xyAxis', { label })}
+        </span>
         {onRemove && (
           <button
             onClick={onRemove}
             className="btn btn-ghost btn-sm text-fg-tertiary hover:text-err shrink-0 px-1.5"
-            title="移除 Y 轴（退化到单轴）"
-            aria-label="移除 Y 轴"
+            title={t('generate.xyRemoveAxisTitle', { label })}
+            aria-label={t('generate.xyRemoveAxisAria', { label })}
           >
             ×
           </button>
         )}
       </div>
 
-      {/* axis=lora_ckpt：多选 chip picker 直接产出 raw + loraIndex；
-          axis=lora_scale：纯数字（chip 列表），不再绑 LoRA；
-          axis=steps/cfg：文本输入。 */}
+      <select
+        className="input text-xs w-full"
+        value={draft.axis}
+        onChange={(e) => {
+          const newAxis = e.target.value as XYAxisType
+          onChange({
+            ...draft,
+            axis: newAxis,
+            raw: newAxis === 'lora_ckpt' ? '' : draft.raw,
+            loraIndex: REQUIRES_LORA_INDEX.has(newAxis)
+              ? (loras.length > 0 ? 0 : null)
+              : null,
+          })
+        }}
+      >
+        {ALL_AXES.map((a) => (
+          <option key={a} value={a}>{axisLabel(a)}</option>
+        ))}
+      </select>
+
+      {/* 用细线把轴类型 dropdown 跟取值分隔（不靠缩进、不占横向空间）；取值隶属上面
+          选中的轴类型：lora_ckpt → 多选 chip picker（产出 raw + loraIndex）；
+          lora_scale → 纯数字 chip（不绑 LoRA）；steps/cfg → 文本。 */}
+      <div className="divider" />
       {isCkpt ? (
         <AxisLoraCkptPicker
           draft={draft}
@@ -189,9 +200,6 @@ function AxisCard({
         <NumberListInput
           raw={draft.raw}
           onChange={(raw) => onChange({ ...draft, raw })}
-          min={0}
-          max={1.5}
-          step={0.05}
           placeholder="0.6, 0.8, 1.0"
         />
       ) : (
@@ -227,7 +235,8 @@ export default function SidebarXYAxes({
   projectLoras: ProjectLora[]
 }) {
   return (
-    <div className="card" style={{ padding: 18 }}>
+    // 外层不再套 .card —— 父级 sidebar 已是统一卡片，这里只做内容分组避免双重边框。
+    <div>
       <div className="flex items-center justify-between mb-3">
         <div className="text-md font-semibold">XY 轴</div>
       </div>
@@ -244,16 +253,15 @@ export default function SidebarXYAxes({
             loras={loras} onLorasChange={onLorasChange} projectLoras={projectLoras}
           />
         ) : (
-          <button
+          <AddSlotButton
             onClick={() => onYChange({
               axis: 'lora_scale',
               raw: '1',  // 一个值起步，用户自己 + 添加
               loraIndex: null,
             })}
-            className="btn btn-ghost btn-sm self-start text-xs text-fg-tertiary"
           >
             + 添加 Y 轴
-          </button>
+          </AddSlotButton>
         )}
       </div>
     </div>

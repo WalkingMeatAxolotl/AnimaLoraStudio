@@ -1262,6 +1262,9 @@
   "generate": {
     "singleMode": "Single",
     "xyMode": "XY Matrix",
+    "xyAxis": "{{label}} axis",
+    "xyRemoveAxisTitle": "Remove {{label}} axis (back to single axis)",
+    "xyRemoveAxisAria": "Remove {{label}} axis",
     "title": "Generate",
     "subtitle": "Standalone inference · Single / XY matrix / two-image compare (outputs are temporary and disappear when the page closes)",
     "promptRequired": "Enter at least one prompt",
@@ -1337,6 +1340,8 @@
     "selectedDatasetTagsLabel": "Selected tags (appended after the positive prompt when generating)",
     "selectedDatasetTagsPlaceholder": "No caption selected — click a row above to activate one",
     "selectedDatasetTagsAria": "Selected caption tags (read-only)",
+    "datasetPreviewAlt": "Training image preview",
+    "datasetPreviewEmpty": "Hover or select a row to preview",
     "replaceCurrentPrompt": "Replace current prompt",
     "appendToCurrentPrompt": "Append to current prompt",
     "weight": "Weight",

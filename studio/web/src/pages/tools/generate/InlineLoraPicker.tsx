@@ -406,16 +406,20 @@ export default function InlineLoraPicker(props: Props) {
         </div>
       )}
 
-      {/* ckpt chip 列表 */}
-      <div className="flex flex-wrap gap-1.5 overflow-y-auto" style={{ maxHeight: 280, padding: 2 }}>
-        {loading && <div className="text-2xs text-fg-tertiary px-1 py-2">加载中…</div>}
+      {/* ckpt chip 列表 —— 等宽网格（auto-fill）：名字长短不一时也对齐成整齐的列，
+          长名在格内 truncate + title 看全名，避免散乱的 ragged 流式排布。 */}
+      <div
+        className="grid gap-1.5 overflow-y-auto"
+        style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', maxHeight: 280, padding: 2 }}
+      >
+        {loading && <div className="text-2xs text-fg-tertiary px-1 py-2" style={{ gridColumn: '1 / -1' }}>加载中…</div>}
         {!loading && projects.length === 0 && (
-          <div className="text-fg-tertiary text-xs px-1 py-4 text-center w-full">
+          <div className="text-fg-tertiary text-xs px-1 py-4 text-center" style={{ gridColumn: '1 / -1' }}>
             还没有训练好的 LoRA —— 先去训练一个{onPickExternal ? '，或用「外部文件」' : ''}
           </div>
         )}
         {!loading && projects.length > 0 && pid !== null && vid !== null && ckpts.length === 0 && !error && (
-          <div className="text-2xs text-fg-tertiary px-1 py-4 text-center w-full">
+          <div className="text-2xs text-fg-tertiary px-1 py-4 text-center" style={{ gridColumn: '1 / -1' }}>
             该版本没扫到 ckpt 文件
           </div>
         )}
@@ -429,11 +433,11 @@ export default function InlineLoraPicker(props: Props) {
               type="button"
               onClick={() => onChipClick(c)}
               disabled={isExisting}
-              className="font-mono inline-flex items-center gap-1"
+              className="font-mono flex items-center gap-1 min-w-0"
               style={{
                 fontSize: 11,
-                padding: '3px 10px',
-                borderRadius: 999,
+                padding: '4px 8px',
+                borderRadius: 'var(--r-md)',
                 border: isPicked
                   ? '1px solid transparent'
                   : (isExisting ? '1px dashed var(--border-default)' : '1px solid var(--border-subtle)'),
@@ -444,17 +448,16 @@ export default function InlineLoraPicker(props: Props) {
                   ? 'var(--fg-tertiary)'
                   : (isPicked ? 'var(--accent)' : 'var(--fg-secondary)'),
                 cursor: isExisting ? 'not-allowed' : 'pointer',
-                whiteSpace: 'nowrap',
               }}
               title={c.path}
             >
-              <span>{marker}</span>
-              <span>{c.label}</span>
+              <span className="shrink-0">{marker}</span>
+              <span className="truncate flex-1 text-left">{c.label}</span>
             </button>
           )
         })}
         {!loading && ckpts.length > 0 && filtered.length === 0 && (
-          <div className="text-fg-tertiary text-xs px-1 py-4 text-center w-full">没有匹配的 ckpt</div>
+          <div className="text-fg-tertiary text-xs px-1 py-4 text-center" style={{ gridColumn: '1 / -1' }}>没有匹配的 ckpt</div>
         )}
       </div>
 

@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { LoraEntry } from '../../../api/client'
 import PathPicker from '../../../components/PathPicker'
+import AddSlotButton from './AddSlotButton'
 import InlineLoraPicker, { type PickedLora } from './InlineLoraPicker'
 import type { ProjectLora } from './types'
 
@@ -101,28 +102,7 @@ export default function SidebarLoras({
         )
       })}
 
-      <button
-        onClick={handleAddSlot}
-        className="font-mono inline-flex items-center gap-1.5 self-start"
-        style={{
-          border: '1px solid var(--border-subtle)',
-          background: 'var(--bg-sunken)',
-          borderRadius: 'var(--r-md)',
-          padding: '6px 10px',
-          fontSize: 12,
-          color: 'var(--fg-tertiary)',
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.color = 'var(--fg-primary)'
-          e.currentTarget.style.borderColor = 'var(--border-default)'
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.color = 'var(--fg-tertiary)'
-          e.currentTarget.style.borderColor = 'var(--border-subtle)'
-        }}
-      >
-        + 添加 LoRA
-      </button>
+      <AddSlotButton onClick={handleAddSlot}>+ 添加 LoRA</AddSlotButton>
 
       {/* placeholder 卡片渲染：path='' && name 保留 */}
       {externalForIdx !== null && (

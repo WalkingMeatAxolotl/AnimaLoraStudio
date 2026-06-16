@@ -37,6 +37,7 @@ import PromptList from './generate/PromptList'
 import NegPromptInput from './generate/NegPromptInput'
 import SampleGallery from './generate/SampleGallery'
 import SidebarLoras from './generate/SidebarLoras'
+import SidebarSectionTabs, { type SidebarTab } from './generate/SidebarSectionTabs'
 import SidebarXYAxes from './generate/SidebarXYAxes'
 import StatusBadge from './generate/StatusBadge'
 import ViewModeTabs, { type ViewMode } from './generate/ViewModeTabs'
@@ -200,6 +201,8 @@ export default function GeneratePage() {
     batchIdx: null, batchTotal: null, currentStep: null, totalSteps: null,
   })
   const [datasetPickerOpen, setDatasetPickerOpen] = useState(false)
+  // 左侧配置区当前分页（LoRA/XY · 提示词 · 配置）。跨 session 记忆用户停留的页。
+  const [sidebarTab, setSidebarTab] = useLocalStorageState<SidebarTab>('studio:generate:sidebarTab', 'lora')
   const [logOpen, setLogOpen] = useState(false)
   // 训练 / reg-ai / 打标等 GPU 任务在跑时，禁用生成防 VRAM 竞争（driver 抢
   // 3D / Copy engine 触发图像渲染卡顿，甚至训练进程 OOM）。listQueue 默认
@@ -605,38 +608,45 @@ export default function GeneratePage() {
       {/* 三列各自独立滚动，整页固定高度 = viewport */}
       <div className="p-6 flex gap-4 items-stretch flex-wrap xl:flex-nowrap flex-1 min-h-0">
 
-          {/* 左：sidebar — 上半部分独立 scroll，Generate bar 固定底部始终可见 */}
-          <div className="flex flex-col gap-4 w-full xl:w-[420px] shrink-0 self-stretch min-h-0">
-          <div className="flex flex-col gap-4 flex-1 min-h-0 overflow-y-auto pr-2">
+          {/* 左：sidebar — 单卡片包裹；内容区独立 scroll，底部 footer 固定 tab + 生成按钮 */}
+          <div className="card flex flex-col w-full xl:w-[420px] shrink-0 self-stretch min-h-0 overflow-hidden">
+            {/* 内容区：三个 section 都常驻 DOM、用 display 切换（不卸载）—— 切 tab 不重渲不闪烁。
+                scrollbar-gutter: stable both-edges —— 两侧都常驻预留滚动条槽（槽在 padding 外侧、
+                靠 border），所以左右 18px 内边距恒对称，且滚动条出现时只占右槽、不挤压/不位移内容。 */}
+            <div
+              className="flex flex-col flex-1 min-h-0 overflow-y-auto"
+              style={{ padding: 18, scrollbarGutter: 'stable both-edges' }}
+            >
 
-            {/* mode=single：独立 LoRA 卡片；mode=xy：LoRA 选择合并到 XY 卡片顶部 */}
-            {mode === 'single' && (
-              <div className="card" style={{ padding: 18 }}>
-                <div className="flex items-baseline justify-between mb-3">
-                  <h3 className="m-0 text-md font-semibold">LoRA</h3>
-                  <span className="text-xs text-fg-tertiary">{t('generate.loraHint')}</span>
-                </div>
-                <SidebarLoras
+            {/* tab=lora：mode=single → LoRA 选择；mode=xy → XY 轴（顶部合并 LoRA 选择） */}
+            <div style={{ display: sidebarTab === 'lora' ? undefined : 'none' }}>
+              {mode === 'single' ? (
+                <>
+                  <div className="flex items-baseline justify-between mb-3">
+                    <h3 className="m-0 text-md font-semibold">LoRA</h3>
+                    <span className="text-xs text-fg-tertiary">{t('generate.loraHint')}</span>
+                  </div>
+                  <SidebarLoras
+                    loras={loras}
+                    onChange={setLoras}
+                    projectLoras={projectLoras}
+                  />
+                </>
+              ) : (
+                <SidebarXYAxes
+                  xDraft={xDraft}
+                  yDraft={yDraft}
+                  onXChange={setXDraft}
+                  onYChange={setYDraft}
                   loras={loras}
-                  onChange={setLoras}
+                  onLorasChange={setLoras}
                   projectLoras={projectLoras}
                 />
-              </div>
-            )}
+              )}
+            </div>
 
-            {mode === 'xy' && (
-              <SidebarXYAxes
-                xDraft={xDraft}
-                yDraft={yDraft}
-                onXChange={setXDraft}
-                onYChange={setYDraft}
-                loras={loras}
-                onLorasChange={setLoras}
-                projectLoras={projectLoras}
-              />
-            )}
-
-            <div className="card" style={{ padding: 18 }}>
+            {/* tab=prompts */}
+            <div style={{ display: sidebarTab === 'prompts' ? undefined : 'none' }}>
               <div className="flex items-baseline justify-between mb-3">
                 <h3 className="m-0 text-md font-semibold">{t('generate.prompts')}</h3>
                 {!datasetPickerOpen && (
@@ -667,7 +677,8 @@ export default function GeneratePage() {
               <NegPromptInput value={negPrompt} onChange={setNegPrompt} />
             </div>
 
-            <div className="card" style={{ padding: 18 }}>
+            {/* tab=config */}
+            <div style={{ display: sidebarTab === 'config' ? undefined : 'none' }}>
               <h3 className="m-0 text-md font-semibold mb-3">{t('generate.samplingParams')}</h3>
               <div className="flex flex-col gap-3">
                 <div>
@@ -760,48 +771,47 @@ export default function GeneratePage() {
               </div>
             </div>
 
-          </div>
-            {/* Generate bar：固定 sidebar 底部（在 scroll 区外），橙色大按钮 + 右侧 meta */}
+            </div>
+
+            {/* footer：分页 tab（segmented）+「开始生成」同处一个 footer、跟内容区共卡片，
+                border-top 分隔。tab 选中态用 sunken 轨道而非橙色，跟下方生成按钮区分开。 */}
             <div
-              className="flex items-center gap-3 shrink-0"
-              style={{
-                padding: '10px 12px',
-                borderRadius: 'var(--r-lg)',
-                border: '1px solid var(--border-subtle)',
-                background: 'var(--bg-elevated)',
-                marginRight: 8, // 跟内层 pr-2 对齐，按钮区不被 scrollbar 占地
-              }}
+              className="shrink-0 flex flex-col gap-2.5"
+              style={{ borderTop: '1px solid var(--border-subtle)', padding: 12 }}
             >
-              <button
-                className="btn btn-primary flex-1"
-                style={{ padding: 12, fontWeight: 600, justifyContent: 'center' }}
-                onClick={handleGenerate}
-                disabled={busy || activeBlockingTask !== null}
-                title={
-                  activeBlockingTask
-                    ? t('generate.blockedByActiveTask', { id: activeBlockingTask.id })
-                    : undefined
-                }
-              >
-                {generateLabel}
-              </button>
-              {cancelable && (
-                <button className="btn btn-ghost" onClick={handleCancel} title={t('generate.cancelCurrentTitle')}>
-                  {t('common.cancel')}
+              <SidebarSectionTabs tab={sidebarTab} onTabChange={setSidebarTab} mode={mode} />
+              <div className="flex items-center gap-3">
+                <button
+                  className="btn btn-primary flex-1"
+                  style={{ padding: 12, fontWeight: 600, justifyContent: 'center' }}
+                  onClick={handleGenerate}
+                  disabled={busy || activeBlockingTask !== null}
+                  title={
+                    activeBlockingTask
+                      ? t('generate.blockedByActiveTask', { id: activeBlockingTask.id })
+                      : undefined
+                  }
+                >
+                  {generateLabel}
                 </button>
-              )}
-              {!cancelable && (
-                <div className="font-mono text-xs text-fg-tertiary text-right" style={{ lineHeight: 1.3 }}>
-                  <div>{width}×{height}</div>
-                  <div>
-                    {busy
-                      ? t('generate.generating')
-                      : activeBlockingTask
-                        ? t('generate.blockedByActiveTaskHint', { id: activeBlockingTask.id })
-                        : t('generate.sharedGpu')}
+                {cancelable && (
+                  <button className="btn btn-ghost" onClick={handleCancel} title={t('generate.cancelCurrentTitle')}>
+                    {t('common.cancel')}
+                  </button>
+                )}
+                {!cancelable && (
+                  <div className="font-mono text-xs text-fg-tertiary text-right" style={{ lineHeight: 1.3 }}>
+                    <div>{width}×{height}</div>
+                    <div>
+                      {busy
+                        ? t('generate.generating')
+                        : activeBlockingTask
+                          ? t('generate.blockedByActiveTaskHint', { id: activeBlockingTask.id })
+                          : t('generate.sharedGpu')}
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           </div>
 
