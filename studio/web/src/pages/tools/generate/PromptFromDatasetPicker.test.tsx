@@ -99,4 +99,28 @@ describe('PromptFromDatasetPicker — thumbnail / pid·vid 同步', () => {
     expect(src).toContain('name=b_v12.png')
     expect(src).not.toContain('name=a_v11.png')
   })
+
+  it('新版本 captions 加载失败时旧行缩略图仍锚定旧 (pid,vid)（不套 live vid 出 404）', async () => {
+    vi.spyOn(api, 'listProjects').mockResolvedValue(projects)
+    vi.spyOn(api, 'getProject').mockResolvedValue(projectDetail)
+    // v1(11) 正常；切到 v2(12) 的 captions 失败 → 旧行继续显示，live vid 已是 12 但
+    // captions / loaded 仍是 v1(11)。缩略图绑 loaded 才对；用 live vid 就 404 黑图。
+    vi.spyOn(api, 'listCaptionsFull').mockImplementation((_pid, vid) =>
+      vid === 11
+        ? Promise.resolve({ folder: null, items: [cap('only.png', 'x')] })
+        : Promise.reject(new Error('boom'))
+    )
+
+    const user = await selectProjectAndV1()
+    await waitFor(() => expect(screen.getByText('only.png')).toBeInTheDocument())
+
+    await user.selectOptions(screen.getByLabelText('选择版本'), '12')
+    await waitFor(() => expect(api.listCaptionsFull).toHaveBeenCalledWith(1, 12))
+
+    // v2 captions 失败、旧行未清空仍可见；缩略图必须仍指 v1(11)，不能跟 live vid 漂到 12
+    expect(screen.getByText('only.png')).toBeInTheDocument()
+    const src = rowThumb().getAttribute('src') ?? ''
+    expect(src).toContain('/versions/11/thumb')
+    expect(src).not.toContain('/versions/12/thumb')
+  })
 })

@@ -79,6 +79,11 @@ export default function PromptFromDatasetPicker({
   }, [value?.projectId, value?.versionId])  // eslint-disable-line react-hooks/exhaustive-deps
   const [versions, setVersions] = useState<Array<{ id: number; label: string }>>([])
   const [captions, setCaptions] = useState<CaptionEntry[]>([])
+  // captions 实际所属的 (pid, vid)。行内/预览缩略图 URL 一律用它、不用实时 pid/vid —
+  // 切 project/version 的那一帧旧 captions 仍在渲染，若套实时 pid/vid 就会把旧文件名
+  // 拼到新 project 上整列 404（黑图）。绑到来源后，旧图在被新数据替换前始终用自己的
+  // (pid, vid)，永远指得回真实文件。捕获响应时与 captions 原子写入，二者不会脱节。
+  const [loaded, setLoaded] = useState<{ pid: number; vid: number } | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
@@ -122,11 +127,11 @@ export default function PromptFromDatasetPicker({
 
   // 3. 选版本后拉 captions
   useEffect(() => {
-    if (!pid || !vid) { setCaptions([]); return }
+    if (!pid || !vid) { setCaptions([]); setLoaded(null); return }
     // stale-response 守卫：快速切 project/version 时旧请求可能晚于新请求返回，
-    // 没守卫就会把旧 captions 覆盖回去、与当前 pid/vid 错配 —— 行内/预览缩略图
-    // URL（versionThumbUrl(pid, vid, …, c.name, c.folder)）于是拿当前 pid/vid 去
-    // 找别的 project 的文件名，整列 thumb 404。对齐 InlineLoraPicker 同款守卫。
+    // 没守卫就会把旧 captions 覆盖回去、与当前选择错配（显示别的 project 的图）。
+    // 对齐 InlineLoraPicker 同款守卫。captions 与其来源 (pid, vid) 一起写，供
+    // 缩略图 URL 锚定（见 `loaded` 注释），二者原子更新不脱节。
     let cancelled = false
     setLoading(true)
     setError(null)
@@ -134,6 +139,7 @@ export default function PromptFromDatasetPicker({
       .then((r) => {
         if (cancelled) return
         setCaptions(r.items)
+        setLoaded({ pid, vid })
         setLoading(false)
       })
       .catch((e) => {
@@ -153,11 +159,12 @@ export default function PromptFromDatasetPicker({
     )
   }, [captions, search])
 
-  // 当前 list 中匹配选中 caption 的 key（仅当浏览中的 pid/vid 与 value 一致才高亮）
+  // 当前 list 中匹配选中 caption 的 key（仅当已加载的 captions 与 value 同属一个
+  // (pid, vid) 才高亮 —— 用 loaded 而非实时 pid/vid，跟列表/缩略图保持同一来源）
   const selectedKeyInList = useMemo(() => {
-    if (!value || value.projectId !== pid || value.versionId !== vid) return null
+    if (!value || !loaded || value.projectId !== loaded.pid || value.versionId !== loaded.vid) return null
     return value.name
-  }, [value, pid, vid])
+  }, [value, loaded])
 
   const tagsText = value ? value.tags.join(', ') : ''
 
@@ -167,27 +174,29 @@ export default function PromptFromDatasetPicker({
     ? captions.find((c) => `${c.folder}/${c.name}` === hoveredKey) ?? null
     : null
   const previewSrc =
-    hoveredCaption && pid && vid
-      ? api.versionThumbUrl(pid, vid, 'train', hoveredCaption.name, hoveredCaption.folder, 512)
+    hoveredCaption && loaded
+      ? api.versionThumbUrl(loaded.pid, loaded.vid, 'train', hoveredCaption.name, hoveredCaption.folder, 512)
       : value && value.folder
         ? api.versionThumbUrl(value.projectId, value.versionId, 'train', value.name, value.folder, 512)
         : ''
 
   const handleRowClick = (c: CaptionEntry) => {
+    // 行属于 loaded 这一组 captions，选中也要落到 loaded 的 (pid, vid)，不能用
+    // 实时 pid/vid（切换瞬间二者可能不一致，否则会把别的 project 写进 datasetPick）。
+    if (!loaded) return
     if (
       value
-      && value.projectId === pid
-      && value.versionId === vid
+      && value.projectId === loaded.pid
+      && value.versionId === loaded.vid
       && value.name === c.name
     ) {
       // 反选
       onChange(null)
       return
     }
-    if (!pid || !vid) return
     onChange({
-      projectId: pid,
-      versionId: vid,
+      projectId: loaded.pid,
+      versionId: loaded.vid,
       name: c.name,
       folder: c.folder,
       tags: c.tags,
@@ -275,9 +284,10 @@ export default function PromptFromDatasetPicker({
           const k = `${c.folder}/${c.name}`
           const active = selectedKeyInList === c.name
           // 行内缩略图请求 64px（≈2× 显示尺寸）保证高 DPI 不糊；native lazy
-          // 让没滚到的行不发请求，长列表不会一次性把图全拉下来。
-          const thumb = pid && vid
-            ? api.versionThumbUrl(pid, vid, 'train', c.name, c.folder, 64)
+          // 让没滚到的行不发请求，长列表不会一次性把图全拉下来。URL 用 loaded
+          // 而非实时 pid/vid，保证文件名与 (pid, vid) 同属一组、不会错配 404。
+          const thumb = loaded
+            ? api.versionThumbUrl(loaded.pid, loaded.vid, 'train', c.name, c.folder, 64)
             : ''
           return (
             <button
