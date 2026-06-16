@@ -323,6 +323,12 @@
         "detailInvT": "Detail Inv-T",
         "cosmap": "Cosmap"
       },
+      "leapVariant": {
+        "original": "Original (LeapAlign)",
+        "sparse": "Sparse (FlowBP)",
+        "bridge": "Bridge (FlowBP)",
+        "lagrange": "Lagrange (FlowBP)"
+      },
       "mixedPrecision": {
         "bf16": "BF16",
         "fp16": "FP16",
@@ -457,6 +463,8 @@
       "detail_inv_t_max": "detail_inv_t weight upper bound. Default 5.0; lower (e.g. 3) weakens detail emphasis, higher (e.g. 8) strengthens it aggressively",
       "leap_enabled": "[LeapAlign self-distillation] Enable two-step leap self-distillation (reward-model-free variant): each step uses the real latent as x0, samples two per-sample timesteps (k>j), and runs two consecutive jumps with loss=MSE(predicted x̂0 after two jumps, real x0). Essentially a shortcut/consistency-style self-distillation. Cost: at leap_ratio=1.0 each step runs 2 forwards ≈ 2× compute + activation VRAM close to 2× (both forwards keep grads). Mutually exclusive with InfoNoise / loss_weighting / loss_type=huber",
       "leap_ratio": "[LeapAlign mixed training] Probability per step of taking the leap self-distillation branch; the rest take the standard rectified flow branch. 1.0 = pure leap (handles global structure); 0.0 = pure standard (handles detail sharpness); 0.6 = mostly leap for global alignment with some standard polishing for details. Both gradients accumulate on the same LoRA weights for complementary effects",
+      "leap_variant": "[LeapAlign/FlowBP] Trajectory self-distillation variant (unified form: analytically construct trajectory points + integrate x̂0 along them + MSE(x̂0, real x0)): original = two-step leap + straight-through connector (K=2, 1 Jacobian, identical to the legacy version, default); sparse = K-point Euler replay summing direct terms only (FlowBP-Sparse, zero connector / zero Jacobian, K-point dense supervision, most stable, costs K× forwards + K× VRAM, K set by leap_activation_k); bridge = two-step leap + Euler-reconstructed connector (FlowBP-Bridge, no straight-through bias); lagrange = two-segment leap with Simpson two-point quadrature per segment (FlowBP-Lagrange, 3× forwards, lowers per-segment integration error). Note: under self-distillation the ground truth is an analytic straight-line interpolation point with no rollout noise, so connector residuals are eliminated at the root — bridge/lagrange gains over original shrink, and sparse is the only structural difference",
+      "leap_activation_k": "[FlowBP-Sparse] Activation set size K: sample K descending timesteps over (0,1) for Euler replay, all K points keep gradients. K directly determines VRAM/compute (K× forwards + K× activation VRAM) and supervision density. 3 balances VRAM and density (slightly heavier than original's 2×); set 2 on small-VRAM consumer cards (same VRAM tier as original); 4+ gives denser supervision but may strain 12G cards. Only effective for the sparse variant",
       "leap_nested_grad_coe": "[LeapAlign] Gradient discount α (paper Eq 9): scales the nested gradient from the second jump back to x_j. 0 = drop the nested gradient (most VRAM-friendly), 1 = no discount (most complete gradient but prone to explosion). Paper-optimal is 0.3",
       "leap_min_gap": "[LeapAlign] Minimum gap between the two sampled timesteps (k, j): larger = bigger jumps, more aggressive self-distillation but more accumulated error. Typical 0.1-0.3",
       "leap_traj_sim_weighting": "[LeapAlign] Trajectory similarity weighting (paper Eq 12): jumps closer to the true trajectory receive higher weight, preventing wild large-jump predictions from dominating the loss. Off by default",

@@ -617,6 +617,16 @@ class TrainingConfig(BaseModel):
         description="【LeapAlign 混合训练】每步按此概率走 leap 自蒸馏、其余走传统 rectified flow：1.0 纯 leap（管全局结构）；0.0 纯传统（管细节锐度）；0.6 大头吃 leap 全局对齐、留点传统精修兜住细节。两股梯度叠在同一组 LoRA 权重上各取所长",
         json_schema_extra=_meta("loss", show_when="leap_enabled==true", advanced=True),
     )
+    leap_variant: Literal["original", "sparse", "bridge", "lagrange"] = Field(
+        "original",
+        description="【LeapAlign/FlowBP】轨迹自蒸馏变体（统一形式：解析构造轨迹点+沿轨迹积分 x̂0+MSE(x̂0,真实x0)）：original=两步跳+straight-through connector（K=2，1 雅可比，行为同历史版，默认）；sparse=K 点 Euler 重放纯直接项求和（FlowBP-Sparse，零 connector/零雅可比，K 点稠密监督，最稳，代价 K× 前向+K× 显存，K 由 leap_activation_k 控）；bridge=两步跳+Euler 重构 connector（FlowBP-Bridge，无 straight-through 偏差）；lagrange=两段跳每段 Simpson 两点积分（FlowBP-Lagrange，3× 前向，降单段积分误差）。注：自蒸馏下真值是解析直线插值点、无 rollout 噪声，connector 残差被釜底抽薪，故 bridge/lagrange 相比 original 增益收窄，sparse 是唯一结构性差异",
+        json_schema_extra=_meta("loss", show_when="leap_enabled==true", advanced=True),
+    )
+    leap_activation_k: int = Field(
+        3, ge=2, le=8,
+        description="【FlowBP-Sparse】激活集大小 K：沿 (0,1) 采 K 个降序时刻做 Euler 重放，K 点全带梯度。K 直接决定显存/算力（K× 前向+K× activation 显存）与监督稠密度。3 是显存与稠密度的平衡点（比 original 的 2× 略重）；消费级小显存可设 2（退化到 original 同档显存）；4+ 监督更密但 12G 卡可能吃紧。仅 sparse 变体生效",
+        json_schema_extra=_meta("loss", show_when="leap_variant==sparse", advanced=True),
+    )
     leap_nested_grad_coe: float = Field(
         0.3, ge=0.0, le=1.0,
         description="【LeapAlign】梯度折扣 α（论文 Eq 9）：缩放第二跳对 x_j 的嵌套梯度。0=砍掉嵌套梯度（最省显存），1=不折扣（梯度最完整但易爆）。论文最优 0.3",
@@ -784,31 +794,32 @@ class TrainingConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_leap_exclusive(self) -> "TrainingConfig":
-        """LeapAlign 自蒸馏与 InfoNoise / loss_weighting / loss_type=huber 互斥。
+        """LeapAlign/FlowBP 自蒸馏与 InfoNoise / loss_weighting / loss_type=huber 互斥。
 
-        leap 路径每步 per-sample 采两个时刻 (k,j) 做两步跳跃，单步只有 (k,j) 这对
-        timestep，且 loss 在 leap.py 里写死 MSE(x̂0, x0)：
-        - InfoNoise：用单一 t 的 raw MSE 学 I-MMSE schedule，双 timestep 无从 record；
+        leap 路径（任意 variant）每步 per-sample 采多个时刻沿代理轨迹积分（original/bridge/
+        lagrange 采两个时刻 (k,j)，sparse 采 K 个时刻），不存在单一 t，且 loss 在 leap.py
+        里写死 MSE(x̂0, x0)：
+        - InfoNoise：用单一 t 的 raw MSE 学 I-MMSE schedule，多 timestep 无从 record；
           且 leap 的 loss 是 x̂0 自蒸馏 MSE，不是 v 预测 MSE，语义也不匹配。
         - loss_weighting：min_snr / detail_inv_t / cosmap 全都按单一 t 算 SNR 权重，
-          双 timestep 没有定义；leap 自带 traj_sim_weighting 做轨迹质量加权。
+          多 timestep 没有定义；leap 自带 traj_sim_weighting 做轨迹质量加权。
         - loss_type=huber：leap.py 直接走 (x̂0-x0)**2 内联 MSE，绕过 ctx.loss_fn，开了
           huber 会被静默无视。
         故 leap 路径在 loop.py 里有意跳过这三个机制，这里强制配置层面关闭，避免用户
-        以为开了却被静默忽略。
+        以为开了却被静默忽略。三条互斥对全部四个 variant 一致成立。
         """
         if self.leap_enabled:
             if self.infonoise_enabled:
                 raise ValueError(
-                    "leap_enabled=true 与 infonoise_enabled=true 互斥：leap 每步采两个时刻 "
-                    "(k,j) 做两步跳跃，没有 InfoNoise 学 I-MMSE 所需的单一 t，且 loss 是 x̂0 "
+                    "leap_enabled=true 与 infonoise_enabled=true 互斥：leap 每步沿代理轨迹采"
+                    "多个时刻积分，没有 InfoNoise 学 I-MMSE 所需的单一 t，且 loss 是 x̂0 "
                     "自蒸馏而非 v 预测 MSE。请二选一：(a) 关闭 leap 用 InfoNoise；"
                     "或 (b) 设 infonoise_enabled=false 走 leap 自蒸馏。"
                 )
             if self.loss_weighting != "none":
                 raise ValueError(
                     f"leap_enabled=true 与 loss_weighting={self.loss_weighting!r} 互斥：loss 加权"
-                    "按单一 t 算 SNR 权重，leap 的双 timestep 无从定义；leap 用 "
+                    "按单一 t 算 SNR 权重，leap 的多 timestep 无从定义；leap 用 "
                     "leap_traj_sim_weighting 做轨迹质量加权。请二选一：(a) 关闭 leap；"
                     "或 (b) 设 loss_weighting=none 走 leap 自蒸馏。"
                 )

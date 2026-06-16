@@ -132,6 +132,12 @@ export const SCHEMA_ENUM_LABEL_KEYS: Record<string, Record<string, string>> = {
     detail_inv_t: 'schema.enums.lossWeighting.detailInvT',
     cosmap: 'schema.enums.lossWeighting.cosmap',
   },
+  leap_variant: {
+    original: 'schema.enums.leapVariant.original',
+    sparse: 'schema.enums.leapVariant.sparse',
+    bridge: 'schema.enums.leapVariant.bridge',
+    lagrange: 'schema.enums.leapVariant.lagrange',
+  },
   mixed_precision: {
     bf16: 'schema.enums.mixedPrecision.bf16',
     fp16: 'schema.enums.mixedPrecision.fp16',

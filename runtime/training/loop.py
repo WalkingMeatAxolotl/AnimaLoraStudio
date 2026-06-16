@@ -17,7 +17,14 @@ import torch
 import torch.nn.functional as F
 
 from training.context import TrainingContext
-from training.leap import leap_training_step, sample_two_timesteps
+from training.leap import (
+    bridge_training_step,
+    lagrange_training_step,
+    leap_training_step,
+    sample_activation_timesteps,
+    sample_two_timesteps,
+    sparse_training_step,
+)
 from training.loss_weighting import compute_loss_weight
 from training.model_loading import forward_with_optional_checkpoint
 from training.noise import make_noise
@@ -146,21 +153,47 @@ def run(ctx: TrainingContext) -> None:
             pad_mask = torch.zeros(bs, 1, latents.shape[-2], latents.shape[-1], device=ctx.device, dtype=ctx.dtype)
             with torch.autocast("cuda", dtype=ctx.dtype):
                 if use_leap_this_step:
-                    # ── LeapAlign 两步跳跃自蒸馏路径 ──
-                    # 用真实 latent 当 x0，per-sample 采两个时刻 (k,j) 做两步跳跃，
-                    # 自蒸馏 loss = MSE(两步跳跃预测的 x̂0, 真实 x0)。详见 training/leap.py。
-                    t_k, t_j = sample_two_timesteps(
-                        bs, ctx.device,
-                        min_gap=float(getattr(args, "leap_min_gap", 0.1) or 0.1),
-                        dtype=torch.float32,
-                    )
-                    loss_per_sample = leap_training_step(
-                        ctx.model, latents, noise, cross, pad_mask, t_k, t_j,
-                        nested_grad_coe=float(getattr(args, "leap_nested_grad_coe", 0.3)),
-                        traj_sim_weighting=bool(getattr(args, "leap_traj_sim_weighting", False)),
-                        traj_sim_min=float(getattr(args, "leap_traj_sim_min", 0.1) or 0.1),
-                        use_checkpoint=args.grad_checkpoint,
-                    )
+                    # ── LeapAlign / FlowBP 轨迹自蒸馏路径（四 variant）──
+                    # 用真实 latent 当 x0，沿解析构造的代理轨迹积分出 x̂0，
+                    # 自蒸馏 loss = MSE(x̂0, 真实 x0)。variant 决定轨迹结构，详见 training/leap.py：
+                    #   original  两步跳 + straight-through connector（K=2，行为同历史版）
+                    #   sparse    K 点 Euler 重放，纯直接项求和（零 connector / 零雅可比）
+                    #   bridge    两步跳 + Euler 重构 connector（无 straight-through 偏差）
+                    #   lagrange  两段跳 + 每段 Simpson 两点积分
+                    leap_variant = str(getattr(args, "leap_variant", "original") or "original")
+                    _leap_min_gap = float(getattr(args, "leap_min_gap", 0.1) or 0.1)
+                    _leap_tsw = bool(getattr(args, "leap_traj_sim_weighting", False))
+                    _leap_tsm = float(getattr(args, "leap_traj_sim_min", 0.1) or 0.1)
+                    _leap_ngc = float(getattr(args, "leap_nested_grad_coe", 0.3))
+                    if leap_variant == "sparse":
+                        # K 点激活集（K× 前向 + K× activation 显存）
+                        t_steps = sample_activation_timesteps(
+                            bs, ctx.device,
+                            k=int(getattr(args, "leap_activation_k", 3) or 3),
+                            min_gap=_leap_min_gap, dtype=torch.float32,
+                        )
+                        loss_per_sample = sparse_training_step(
+                            ctx.model, latents, noise, cross, pad_mask, t_steps,
+                            traj_sim_weighting=_leap_tsw, traj_sim_min=_leap_tsm,
+                            use_checkpoint=args.grad_checkpoint,
+                        )
+                    else:
+                        # original / bridge / lagrange 共用两时刻 (k,j) 拓扑
+                        t_k, t_j = sample_two_timesteps(
+                            bs, ctx.device, min_gap=_leap_min_gap, dtype=torch.float32,
+                        )
+                        if leap_variant == "bridge":
+                            _step_fn = bridge_training_step
+                        elif leap_variant == "lagrange":
+                            _step_fn = lagrange_training_step
+                        else:  # original（默认，行为零变化）
+                            _step_fn = leap_training_step
+                        loss_per_sample = _step_fn(
+                            ctx.model, latents, noise, cross, pad_mask, t_k, t_j,
+                            nested_grad_coe=_leap_ngc,
+                            traj_sim_weighting=_leap_tsw, traj_sim_min=_leap_tsm,
+                            use_checkpoint=args.grad_checkpoint,
+                        )
                     # leap 路径有意跳过两个标准机制（互斥校验已在 TrainingConfig 强制关闭）：
                     #   - InfoNoise record：双 timestep 与单 t 的 I-MMSE 语义不匹配
                     #   - loss_weighting：依赖单一 t 算 SNR 权重；leap 自带 traj_sim 加权
