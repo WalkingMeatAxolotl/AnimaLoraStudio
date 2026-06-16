@@ -96,6 +96,19 @@ class VAEWrapper:
         """auto 判定：当前已用 + 预计 decode 峰值 是否越过总显存的分块阈值。"""
         return (used_bytes + est_peak_bytes) > total_bytes * cls._TILE_VRAM_FRACTION
 
+    def should_offload_for_whole_decode(self, z) -> bool:
+        """采样 decode 前是否值得把非活跃模块（DiT/Qwen）挪到 CPU 腾显存。
+
+        仅当「显存紧张（当前会分块）**且** 峰值仍在崖下」时 True：此时腾出常驻模块
+        就能整图 decode、保住 parity / 无 tile 缝。峰值已越崖（如 fp32 1536²）时 False
+        —— 腾显存也救不了整图（崖按总显存比例算、与 free 无关），交给分块更省系统内存。
+        """
+        if not (torch.is_tensor(z) and z.is_cuda and torch.cuda.is_available()):
+            return False
+        free, total = torch.cuda.mem_get_info()
+        est = self._est_decode_peak_bytes(z)
+        return self._should_auto_tile(total - free, est, total) and est < total * self._TILE_VRAM_FRACTION
+
     def decode(self, z):
         """latent → pixel；按 self.tiling 决定整图 / 分块。
 

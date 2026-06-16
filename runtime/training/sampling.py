@@ -433,19 +433,13 @@ def sample_image(
     try:
         # VAEWrapper.decode 按 tiling(auto/on/off) 决策整图/分块。
         # offload 改为 free-VRAM 驱动、与分块统一（取代旧的「仅 fp32 才 offload」——dtype
-        # 不是显存压力的准确代理：bf16+大图/常驻同样会爆）。只在「腾出显存就能整图且快」
-        # 时才 offload：峰值本身已越过崖（如 fp32 1536²）时，腾显存也救不了整图（崖按总显存
-        # 比例算、与 free 无关，实测整图仍 ~190s），交给 wrapper 分块即可，避免白搬 DiT+Qwen
-        # 占系统内存。
-        if (device_type == "cuda" and torch.cuda.is_available()
-                and hasattr(vae, "_est_decode_peak_bytes")):
-            free, total = torch.cuda.mem_get_info()
-            est = vae._est_decode_peak_bytes(latents)
-            crowded = vae._should_auto_tile(total - free, est, total)         # 当前(含常驻)会触发分块
-            whole_fast_possible = est < total * type(vae)._TILE_VRAM_FRACTION  # 峰值在崖下：腾显存即可整图
-            if crowded and whole_fast_possible:
-                logger.info("[Debug] VAE decode: free VRAM 紧张但峰值在崖下，offload 非活跃模块以整图 decode")
-                offloaded_modules = _offload_modules_for_vae_decode(model, qwen_model)
+        # 不是显存压力的准确代理：bf16+大图/常驻同样会爆）：只在「腾出显存就能整图且快」时
+        # 才把 DiT+Qwen 挪到 CPU，避免峰值越崖时白搬占系统内存。决策见
+        # VAEWrapper.should_offload_for_whole_decode。
+        _should_offload = getattr(vae, "should_offload_for_whole_decode", None)
+        if device_type == "cuda" and callable(_should_offload) and _should_offload(latents):
+            logger.info("[Debug] VAE decode: 显存紧张且峰值在崖下，offload 非活跃模块以整图 decode")
+            offloaded_modules = _offload_modules_for_vae_decode(model, qwen_model)
         images = _decode_vae(vae, latents)
         images = images.squeeze(2)  # [B,C,H,W]
         images = (images.clamp(-1, 1) + 1) / 2

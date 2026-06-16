@@ -310,6 +310,13 @@ def test_tiled_encode_reconstructs_full_for_linear_encoder() -> None:
     assert torch.allclose(tiled, full, atol=1e-4)
 
 
+def test_should_offload_for_whole_decode_false_on_cpu() -> None:
+    """CPU 张量（无 cuda）下不 offload：守卫返回 False，不触碰 mem_get_info。"""
+    wrapper = _make_wrapper(_RecordingModel())
+    z = torch.zeros(1, 16, 1, 128, 128)  # CPU
+    assert wrapper.should_offload_for_whole_decode(z) is False
+
+
 def test_est_encode_peak_scales_with_pixels_and_dtype() -> None:
     """encode 峰值估算 ∝ 输入像素 × 元素大小。fp32 1024² ≈ 5.5G，bf16 减半。"""
     wrapper = _make_wrapper(_RecordingModel())

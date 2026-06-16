@@ -157,6 +157,10 @@ class _FakeVAE:
         self.model = _FakeVAEModel()
         self.scale = 1.0
 
+    def encode(self, pixels):
+        # 镜像 VAEWrapper.encode 的非分块路径（CPU 小图不触发分块）
+        return self.model.encode(pixels, self.scale)
+
 
 def test_cached_latent_encodes_both_flipped_and_unflipped_when_flip_aug(tmp_path: Path) -> None:
     """flip_augment=True → cache 阶段对每张图 encode 两次，npz 同时有 latent + latent_flipped。
@@ -243,6 +247,10 @@ class _CountingVAE:
     def __init__(self):
         self.model = _CountingVAEModel()
         self.scale = 1.0
+
+    def encode(self, pixels):
+        # 镜像 VAEWrapper.encode 的非分块路径（CPU 小图不触发分块）
+        return self.model.encode(pixels, self.scale)
 
 
 def test_cached_latent_dedupes_repeats_in_encode_pass(tmp_path: Path) -> None:

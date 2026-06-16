@@ -193,10 +193,10 @@ class AssertingVAEModel:
         self.decode_calls = 0
 
     def parameters(self):
-        # offload 只在 fp32 VAE（Generate parity runtime）时触发
         yield torch.zeros((), dtype=torch.float32)
 
     def decode(self, latents, scale):
+        # 包它的 TrackedVAE.should_offload_for_whole_decode=True → decode 时模型应已 offload 到 CPU
         self.decode_calls += 1
         assert next(self.anima_model.parameters()).device.type == "cpu"
         assert next(self.qwen_model.parameters()).device.type == "cpu"
@@ -210,6 +210,9 @@ class TrackedVAE:
     def __init__(self, anima_model: TinyTrackedAnimaModel, qwen_model: TinyTrackedQwenModel) -> None:
         self.model = AssertingVAEModel(anima_model, qwen_model)
 
+    def should_offload_for_whole_decode(self, z):
+        return True
+
 
 class FailingAssertingVAEModel(AssertingVAEModel):
     def decode(self, latents, scale):
@@ -222,6 +225,9 @@ class FailingTrackedVAE:
 
     def __init__(self, anima_model: TinyTrackedAnimaModel, qwen_model: TinyTrackedQwenModel) -> None:
         self.model = FailingAssertingVAEModel(anima_model, qwen_model)
+
+    def should_offload_for_whole_decode(self, z):
+        return True
 
 
 def _tokenized_non_eos(prompt: str) -> tuple[list[int], list[float]]:
@@ -590,7 +596,7 @@ def test_sample_image_restores_offloaded_modules_when_vae_decode_fails(monkeypat
 
 
 class NoOffloadAssertingVAEModel:
-    """bf16 VAE：decode 时模型必须仍在 CUDA（不应触发 offload）。"""
+    """should_offload_for_whole_decode=False：decode 时模型必须仍在 CUDA（不应触发 offload）。"""
 
     def __init__(self, anima_model: TinyTrackedAnimaModel, qwen_model: TinyTrackedQwenModel) -> None:
         self.anima_model = anima_model
@@ -614,9 +620,12 @@ class NoOffloadTrackedVAE:
     def __init__(self, anima_model: TinyTrackedAnimaModel, qwen_model: TinyTrackedQwenModel) -> None:
         self.model = NoOffloadAssertingVAEModel(anima_model, qwen_model)
 
+    def should_offload_for_whole_decode(self, z):
+        return False
+
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA-only VRAM offload behavior")
-def test_sample_image_skips_offload_for_bf16_vae(monkeypatch) -> None:
+def test_sample_image_skips_offload_when_vae_declines(monkeypatch) -> None:
     model = TinyTrackedAnimaModel().cuda()
     qwen_model = TinyTrackedQwenModel().cuda()
     vae = NoOffloadTrackedVAE(model, qwen_model)
