@@ -1262,6 +1262,9 @@
   "generate": {
     "singleMode": "单图",
     "xyMode": "XY 矩阵",
+    "xyAxis": "{{label}} 轴",
+    "xyRemoveAxisTitle": "移除 {{label}} 轴（退化到单轴）",
+    "xyRemoveAxisAria": "移除 {{label}} 轴",
     "title": "测试",
     "subtitle": "独立推理 · 单图 / XY 矩阵 / 双图对比（出图不保存，关页面即丢）",
     "promptRequired": "请输入至少一条提示词",
@@ -1337,6 +1340,8 @@
     "selectedDatasetTagsLabel": "已选 tags（点「生成」时接在正向之后）",
     "selectedDatasetTagsPlaceholder": "还没选 caption — 点上方列表里的一行激活",
     "selectedDatasetTagsAria": "已选 caption 的 tags（只读）",
+    "datasetPreviewAlt": "训练集图片预览",
+    "datasetPreviewEmpty": "悬停或选中一行看大图",
     "replaceCurrentPrompt": "替换当前提示词",
     "appendToCurrentPrompt": "追加到当前提示词",
     "weight": "权重",

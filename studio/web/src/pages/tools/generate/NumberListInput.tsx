@@ -3,22 +3,20 @@ import { useTranslation } from 'react-i18next'
 
 /** 数值列表输入：[输入框] [+ 添加] + 已加 chips（× 删除）。
  *
- * 替代 "0.6, 0.8, 1.0" 这种逗号分隔的 text input —— 用户反馈打错容易（少
- * 个逗号、多个空格、混入字母）。chips 输入避免格式错误，并直观看到已加值。
+ * 用 chips 直观看到已加的每个值，避免裸 "0.6, 0.8, 1.0" text input 打错难发现。
+ * 但输入框本身支持一次性粘贴 / 输入逗号（中英文）或空格分隔的多个值 ——
+ * 不在 onChange 拦截，点「+ 添加」/ Enter 时才拆分 + 逐个 Number() 校验，
+ * 有限数才入列（无效 token 直接忽略）。
  *
  * 内部仍把 chips 序列化成 ", " 分隔的 raw 字符串往外抛，与 schema
  * parseAxisValues 兼容（不改 backend）。
  */
 export default function NumberListInput({
   raw, onChange,
-  min = 0, max = 1, step = 0.05,
   placeholder = '0.85',
 }: {
   raw: string
   onChange: (raw: string) => void
-  min?: number
-  max?: number
-  step?: number
   placeholder?: string
 }) {
   const { t } = useTranslation()
@@ -26,16 +24,19 @@ export default function NumberListInput({
 
   const values = raw.split(',').map((s) => s.trim()).filter(Boolean)
 
+  // 转化时校验：按中英文逗号 / 空白拆 token，逐个 Number() 留有限数（保留原文本，
+  // 不强转规范化，"0.50" 仍显示 "0.50"）。一次性输入 "0.2, 0.3 0.4" → [0.2,0.3,0.4]。
+  const parseDraft = (s: string): string[] =>
+    s.split(/[,，\s]+/).map((x) => x.trim()).filter((x) => x && Number.isFinite(Number(x)))
+
   const addValue = () => {
-    const t = draft.trim()
-    if (!t) return
-    const n = Number(t)
-    if (!Number.isFinite(n)) return
-    if (values.includes(t)) {
-      setDraft('')
-      return
+    const parsed = parseDraft(draft)
+    if (parsed.length === 0) return
+    const merged = [...values]
+    for (const v of parsed) {
+      if (!merged.includes(v)) merged.push(v)
     }
-    onChange([...values, t].join(', '))
+    onChange(merged.join(', '))
     setDraft('')
   }
 
@@ -47,11 +48,9 @@ export default function NumberListInput({
     <div className="flex flex-col gap-1.5">
       <div className="flex gap-1.5 items-stretch">
         <input
-          type="number"
+          type="text"
+          inputMode="decimal"
           className="input font-mono text-xs flex-1"
-          min={min}
-          max={max}
-          step={step}
           placeholder={placeholder}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -65,7 +64,7 @@ export default function NumberListInput({
         <button
           type="button"
           onClick={addValue}
-          disabled={!draft.trim() || !Number.isFinite(Number(draft))}
+          disabled={parseDraft(draft).length === 0}
           className="font-mono"
           style={{
             border: '1px solid var(--border-subtle)',

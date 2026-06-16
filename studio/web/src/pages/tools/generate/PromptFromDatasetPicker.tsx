@@ -25,8 +25,13 @@ function migrateLegacyKey(legacyKey: string, newKey: string): void {
 export interface DatasetPick {
   projectId: number
   versionId: number
-  /** caption 文件名（含目录，例如 "5_concept/0001.txt"） */
+  /** 训练集图片文件名（CaptionEntry.name，例如 "0001.png"） */
   name: string
+  /**
+   * 图片所在子目录（CaptionEntry.folder，例如 "5_concept"）。可选：旧快照
+   * （加这个字段之前序列化的）没有它，缩略图就不渲染，不影响 tags 拼接。
+   */
+  folder?: string
   /** caption 文本拆出的 tag 列表，按训练集原始顺序 */
   tags: string[]
 }
@@ -77,6 +82,8 @@ export default function PromptFromDatasetPicker({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  // 鼠标悬停的 caption key，驱动底部大图预览（移开 → 回落到已选 value 的图）
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null)
 
   // 1. 拉项目列表；若上次记的 pid 在新项目列表中不存在则清掉避免幽灵选择
   useEffect(() => {
@@ -135,6 +142,18 @@ export default function PromptFromDatasetPicker({
 
   const tagsText = value ? value.tags.join(', ') : ''
 
+  // 底部大图预览源：优先悬停行（浏览中 pid/vid），其次已选 value（用 value 自带
+  // 的 project/version/folder，跟浏览位置解耦）。旧快照的 value 没 folder → 不渲染。
+  const hoveredCaption = hoveredKey
+    ? captions.find((c) => `${c.folder}/${c.name}` === hoveredKey) ?? null
+    : null
+  const previewSrc =
+    hoveredCaption && pid && vid
+      ? api.versionThumbUrl(pid, vid, 'train', hoveredCaption.name, hoveredCaption.folder, 512)
+      : value && value.folder
+        ? api.versionThumbUrl(value.projectId, value.versionId, 'train', value.name, value.folder, 512)
+        : ''
+
   const handleRowClick = (c: CaptionEntry) => {
     if (
       value
@@ -151,6 +170,7 @@ export default function PromptFromDatasetPicker({
       projectId: pid,
       versionId: vid,
       name: c.name,
+      folder: c.folder,
       tags: c.tags,
     })
   }
@@ -223,7 +243,11 @@ export default function PromptFromDatasetPicker({
       {error && <div className="text-2xs text-err">{error}</div>}
 
       {/* caption 列表 */}
-      <div className="flex flex-col gap-px overflow-y-auto" style={{ maxHeight: 240 }}>
+      <div
+        className="flex flex-col gap-px overflow-y-auto"
+        style={{ maxHeight: 320 }}
+        onMouseLeave={() => setHoveredKey(null)}
+      >
         {loading && <div className="text-2xs text-fg-tertiary">{t('common.loading')}</div>}
         {!loading && pid && vid && captions.length === 0 && !error && (
           <div className="text-2xs text-fg-tertiary">{t('generate.noCaptions')}</div>
@@ -231,10 +255,16 @@ export default function PromptFromDatasetPicker({
         {!loading && filtered.map((c) => {
           const k = `${c.folder}/${c.name}`
           const active = selectedKeyInList === c.name
+          // 行内缩略图请求 64px（≈2× 显示尺寸）保证高 DPI 不糊；native lazy
+          // 让没滚到的行不发请求，长列表不会一次性把图全拉下来。
+          const thumb = pid && vid
+            ? api.versionThumbUrl(pid, vid, 'train', c.name, c.folder, 64)
+            : ''
           return (
             <button
               key={k}
               onClick={() => handleRowClick(c)}
+              onMouseEnter={() => setHoveredKey(k)}
               className="flex items-center gap-2 px-2 py-1.5 rounded text-xs text-left border-none transition-colors"
               style={{
                 background: active ? 'var(--accent-soft)' : 'transparent',
@@ -242,6 +272,16 @@ export default function PromptFromDatasetPicker({
                 cursor: 'pointer',
               }}
             >
+              {thumb && (
+                <img
+                  src={thumb}
+                  alt=""
+                  loading="lazy"
+                  className="shrink-0 rounded object-cover bg-sunken"
+                  style={{ width: 36, height: 36 }}
+                  onError={(e) => { e.currentTarget.style.visibility = 'hidden' }}
+                />
+              )}
               <span className="font-mono text-2xs shrink-0">{active ? '✓' : '+'}</span>
               <div className="flex-1 min-w-0">
                 <div className="font-medium truncate">{c.name}</div>
@@ -255,14 +295,37 @@ export default function PromptFromDatasetPicker({
       </div>
 
       <label className="caption block mt-1">{t('generate.selectedDatasetTagsLabel')}</label>
-      <textarea
-        className="input w-full font-mono text-xs resize-y"
-        rows={3}
-        value={tagsText}
-        readOnly
-        placeholder={t('generate.selectedDatasetTagsPlaceholder')}
-        aria-label={t('generate.selectedDatasetTagsAria')}
-      />
+      {/* 上：训练集大图（悬停行 / 已选行），跟生成结果肉眼比对；下：只读 tags。
+          object-contain 看全图（大预览惯例，对齐 TagEdit / Preprocess），不裁切。 */}
+      <div className="flex flex-col gap-2">
+        <div
+          className="rounded border border-subtle bg-sunken overflow-hidden flex items-center justify-center"
+          style={{ height: 240 }}
+        >
+          {previewSrc ? (
+            <img
+              src={previewSrc}
+              alt={t('generate.datasetPreviewAlt')}
+              loading="lazy"
+              className="w-full h-full object-contain"
+              onError={(e) => { e.currentTarget.style.visibility = 'hidden' }}
+            />
+          ) : (
+            <span className="text-2xs text-fg-tertiary px-1.5 text-center leading-snug">
+              {t('generate.datasetPreviewEmpty')}
+            </span>
+          )}
+        </div>
+        {/* 最小高度对齐「正向」(PromptList rows=5 text-sm)：5×20 行高 + .input 14 padding + 2 边框 = 116 */}
+        <textarea
+          className="input w-full font-mono text-xs resize-y"
+          style={{ minHeight: 116 }}
+          value={tagsText}
+          readOnly
+          placeholder={t('generate.selectedDatasetTagsPlaceholder')}
+          aria-label={t('generate.selectedDatasetTagsAria')}
+        />
+      </div>
     </div>
   )
 }

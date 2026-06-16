@@ -76,6 +76,12 @@ async function waitForInitialLorasLoad() {
   )
 }
 
+// 正向 / 负向 textarea 现在归到左侧「提示词」分页 tab（默认 tab 是 LoRA）；
+// 要操作 prompt 的用例先切到这一页。
+async function openPromptsTab(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole('button', { name: '提示词' }))
+}
+
 describe('GeneratePage 端到端 smoke', () => {
   it('mode=single：enqueue payload 含 xy_matrix=null + 完整字段', async () => {
     const user = userEvent.setup()
@@ -118,8 +124,10 @@ describe('GeneratePage 端到端 smoke', () => {
   })
 
   it('多 prompt 轮换功能已隐藏：只有一个 textarea，"添加 prompt"按钮不存在', async () => {
+    const user = userEvent.setup()
     setup()
     await waitForInitialLorasLoad()
+    await openPromptsTab(user)
     // 单 textarea
     const promptInputs = screen.getAllByPlaceholderText('输入正向提示词…')
     expect(promptInputs.length).toBe(1)
@@ -130,6 +138,7 @@ describe('GeneratePage 端到端 smoke', () => {
   it('切到 xy 再切回 single：sidebar 已填的 prompts/seed 等保留', async () => {
     const user = userEvent.setup()
     setup()
+    await openPromptsTab(user)
 
     const promptArea = screen.getAllByPlaceholderText('输入正向提示词…')[0]
     await user.clear(promptArea)
@@ -226,6 +235,7 @@ describe('GeneratePage 端到端 smoke', () => {
     const user = userEvent.setup()
     const first = setup()
     await waitForInitialLorasLoad()
+    await openPromptsTab(user)
 
     const promptArea = screen.getAllByPlaceholderText('输入正向提示词…')[0]
     await user.clear(promptArea)
@@ -384,8 +394,9 @@ describe('GeneratePage 端到端 smoke', () => {
     // 因为 axis=lora_ckpt 渲染的是 AxisLoraCkptPicker（不是 text input）—— 直接
     // 看 X 轴 select 的 value（一行 select 元素，AxisCard.label='X'）。
     await waitFor(() => {
-      const xLabel = screen.getAllByText('X')[0]
-      const card = xLabel.closest('div.bg-sunken')!
+      const xLabel = screen.getAllByText('X 轴')[0]
+      // AxisCard 外框跟 LoRA 槽对齐用 bg-overlay（原 bg-sunken 在 dark 下近黑显突兀）
+      const card = xLabel.closest('div.bg-overlay')!
       const axisSelect = card.querySelector('select') as HTMLSelectElement
       expect(axisSelect.value).toBe('lora_ckpt')
     })

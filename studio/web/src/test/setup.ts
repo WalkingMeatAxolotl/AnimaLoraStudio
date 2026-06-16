@@ -13,6 +13,16 @@ if (typeof globalThis.fetch === 'function') {
   vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 404 })))
 }
 
+// jsdom 没有 ResizeObserver（useAutoGrowTextarea 等会 new 它撑高 textarea）；装个
+// no-op，避免组件 mount 时抛错。测试不校验自动撑高，回调不触发即可。
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver
+}
+
 // 把 tagDict store 预热到 'empty' 状态：useTagDict 的 useEffect 看到非 idle 就
 // 跳过 loadDict，避免组件 mount 时触发异步 fetch + act() warning。需要看 dict
 // ready 状态的具体测试可以 __setStateForTest 覆盖。
