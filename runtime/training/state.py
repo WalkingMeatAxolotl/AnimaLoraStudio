@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 def save_training_state(
     path, injector, optimizer, epoch, global_step,
     loss_history=None, rng_state=None, monitor_state=None,
-    scheduler=None, timestep_sampler=None,
+    scheduler=None, timestep_sampler=None, sra_aligner=None,
 ):
     """保存完整训练状态，支持断点续训。
 
@@ -46,6 +46,11 @@ def save_training_state(
     }
     if scheduler is not None:
         state["scheduler_state_dict"] = scheduler.state_dict()
+    if sra_aligner is not None and hasattr(sra_aligner, "state_dict"):
+        try:
+            state["sra_aligner_state"] = sra_aligner.state_dict()
+        except Exception as e:
+            logger.warning(f"sra_aligner.state_dict() 失败（跳过）: {e}")
     if timestep_sampler is not None and hasattr(timestep_sampler, "state_dict"):
         # hasattr 防御：Protocol 不提供 default dispatch，未来新加的 sampler 若忘记
         # 实现这两个 hook，要静默跳过而非崩溃（训练 8 小时不能因 resume hook 缺失废）
@@ -70,7 +75,7 @@ def save_training_state(
     logger.info(f"训练状态已保存: {path} (epoch={epoch}, step={global_step})")
 
 
-def load_training_state(path, injector, optimizer, scheduler=None, timestep_sampler=None):
+def load_training_state(path, injector, optimizer, scheduler=None, timestep_sampler=None, sra_aligner=None):
     """加载训练状态，返回 (epoch, global_step, loss_history, monitor_state)。
 
     timestep_sampler（ADR 0006 Addendum 1）：如 ckpt 含 timestep_sampler_state 且 sampler
@@ -90,6 +95,18 @@ def load_training_state(path, injector, optimizer, scheduler=None, timestep_samp
         logger.warning(
             f"resume LoRA: missing={missing}, unexpected={unexpected}（旧格式 ckpt？）"
         )
+
+    # 恢复 SRA v2 projection MLP（如启用）。必须在 optimizer state 恢复前完成，
+    # 保证后续训练从同一组投影权重继续，而不是随机新 MLP + 旧 optimizer moments。
+    if sra_aligner is not None:
+        if "sra_aligner_state" in state and hasattr(sra_aligner, "load_state_dict"):
+            try:
+                sra_aligner.load_state_dict(state["sra_aligner_state"])
+                logger.info("SRA v2 projection MLP 状态已恢复")
+            except Exception as e:
+                logger.warning(f"SRA v2 projection MLP 状态恢复失败（冷启动）: {e}")
+        else:
+            logger.warning("checkpoint 不含 SRA v2 状态；projection MLP 将冷启动")
 
     # 加载优化器状态
     optimizer.load_state_dict(state["optimizer_state_dict"])

@@ -75,6 +75,7 @@ class TrainingContext:
     scheduler: Any = None
     timestep_sampler: Any = None    # training.timestep_samplers.TimestepSamplerProtocol
     loss_fn: Optional["LossProtocol"] = None
+    sra_aligner: Any = None         # training.sra_align.SRAAligner (optional)
 
     # ─── resume_phase 填充 ───
     global_step: int = 0

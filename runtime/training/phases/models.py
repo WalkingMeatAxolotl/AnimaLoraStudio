@@ -93,3 +93,23 @@ def run(ctx: TrainingContext) -> None:
     if getattr(args, "resume_lora", "") and Path(args.resume_lora).exists():
         ctx.injector.load(args.resume_lora)
         logger.info(f"将从已有 LoRA 继续训练: {args.resume_lora}")
+
+    # SRA v2 表征对齐（LoRA 注入后构造）
+    if getattr(args, "sra_enabled", False):
+        from training.sra_align import SRAAligner
+        model_channels = ctx.model.model_channels
+        block_idx = int(getattr(args, "sra_block", 4))
+        num_blocks = len(ctx.model.blocks)
+        if block_idx >= num_blocks:
+            logger.warning(f"sra_block={block_idx} >= 模型 blocks 数({num_blocks})，clamp 到 {num_blocks - 1}")
+            block_idx = num_blocks - 1
+        ctx.sra_aligner = SRAAligner(
+            model=ctx.model,
+            block_idx=block_idx,
+            patch_spatial=ctx.model.patch_spatial,
+            patch_temporal=ctx.model.patch_temporal,
+            model_channels=model_channels,
+            vae_channels=16,
+            device=ctx.device,
+            dtype=ctx.dtype,
+        )

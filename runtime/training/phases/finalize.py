@@ -30,6 +30,11 @@ def run(ctx: TrainingContext) -> None:
     with optimizer_eval_mode(ctx.optimizer):
         ctx.injector.save(final_path)
 
+    # 清理 SRA v2 hook（MLP 不保存到 LoRA safetensors，训练完即丢弃）
+    if ctx.sra_aligner is not None:
+        ctx.sra_aligner.remove_hooks()
+        ctx.sra_aligner = None
+
     # 清理进度显示
     if ctx.live:
         ctx.live.stop()
