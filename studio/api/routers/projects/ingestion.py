@@ -197,8 +197,10 @@ async def upload_local_files(
         raise HTTPException(404, f"项目不存在: id={pid}")
     pdir = projects.project_dir(p["id"], p["slug"]) / "download"
 
-    # 流式：直接传 SpooledTemporaryFile，不读进 bytes 对象。f.file 是 seekable
-    # 的（zipfile.ZipFile 要求），FastAPI 写完后 cursor 不保证在 0 → 手动 seek。
+    # 流式：直接传 SpooledTemporaryFile，不读进 bytes 对象。FastAPI 写完后
+    # cursor 不保证在 0 → 手动 seek。注意 py<3.11 的 SpooledTemporaryFile 没有
+    # seekable()/readable()/writable()，service 层 _ensure_seekable() 会按需包
+    # 一层适配器（zipfile.zf.open() 要求 seekable），这里直接传裸流即可。
     pairs: list[tuple[str, BinaryIO]] = []
     for f in files:
         f.file.seek(0)
