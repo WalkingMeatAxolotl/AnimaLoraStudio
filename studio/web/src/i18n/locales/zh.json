@@ -323,6 +323,12 @@
         "detailInvT": "Detail Inv-T",
         "cosmap": "Cosmap"
       },
+      "leapVariant": {
+        "original": "Original（LeapAlign）",
+        "sparse": "Sparse（FlowBP）",
+        "bridge": "Bridge（FlowBP）",
+        "lagrange": "Lagrange（FlowBP）"
+      },
       "mixedPrecision": {
         "bf16": "BF16",
         "fp16": "FP16",
@@ -457,8 +463,10 @@
       "detail_inv_t_max": "detail_inv_t 权重上限。默认 5.0；降低（如 3）减弱细节强化，提高（如 8）激进强化细节",
       "leap_enabled": "【LeapAlign 自蒸馏】启用两步跳跃自蒸馏（去奖励模型版）：每步用真实 latent 当 x0，per-sample 采两个时刻 (k>j) 做两步跳跃，loss=MSE(两步预测的 x̂0, 真实 x0)。本质是 shortcut/consistency 式自蒸馏。开销：leap_ratio=1.0 时每步 2 次前向 ≈ 2× 算力 + activation 显存接近 2×（两次前向都带 grad）。与 InfoNoise / loss_weighting / loss_type=huber 互斥",
       "leap_ratio": "【LeapAlign 混合训练】每步按此概率走 leap 自蒸馏、其余走传统 rectified flow：1.0 纯 leap（管全局结构）；0.0 纯传统（管细节锐度）；0.6 大头吃 leap 全局对齐、留点传统精修兜住细节。两股梯度叠在同一组 LoRA 权重上各取所长",
-      "leap_nested_grad_coe": "【LeapAlign】梯度折扣 α（论文 Eq 9）：缩放第二跳对 x_j 的嵌套梯度。0=砍掉嵌套梯度（最省显存），1=不折扣（梯度最完整但易爆）。论文最优 0.3",
-      "leap_min_gap": "【LeapAlign】两个采样时刻 (k,j) 的最小间隔：越大跳跃跨度越大、自蒸馏越激进但误差累积越多。典型 0.1-0.3",
+      "leap_variant": "【LeapAlign/FlowBP】轨迹自蒸馏变体（统一形式：解析构造轨迹点+沿轨迹积分 x̂0+MSE(x̂0,真实x0)）：original=两步跳+straight-through connector（K=2，1 雅可比，行为同历史版，默认）；sparse=K 点 Euler 重放纯直接项求和（FlowBP-Sparse，零 connector/零雅可比，K 点稠密监督，最稳，代价 K× 前向+K× 显存，K 由 leap_activation_k 控）；bridge=两步跳+Euler 重构 connector（FlowBP-Bridge，无 straight-through 偏差）；lagrange=两段跳每段三点 Lagrange/Simpson 积分（FlowBP-Lagrange，6× 前向，单段积分误差 O(Δt²)→O(Δt⁵)，论文 §A.2）。注：自蒸馏下真值是解析直线插值点、无 rollout 噪声，connector 残差被釜底抽薪，故 bridge/lagrange 相比 original 增益收窄，sparse 是唯一结构性差异",
+      "leap_activation_k": "【FlowBP-Sparse】激活集大小 K：沿 (0,1) 分层抖动采 K 个降序时刻做 Euler 重放，K 点全带梯度。K 直接决定显存/算力（K× 前向+K× activation 显存）与监督稠密度。3 是显存与稠密度的平衡点（比 original 的 2× 略重）；消费级小显存可设 2（退化到 original 同档显存）；4+ 监督更密但 12G 卡可能吃紧。仅 sparse 变体生效",
+      "leap_nested_grad_coe": "【LeapAlign】梯度折扣 α（论文 Eq 9）：缩放第二跳对 x_j 的嵌套梯度。0=砍掉嵌套梯度（最省显存），1=不折扣（梯度最完整但易爆）。论文最优 0.3。对 original/bridge/lagrange 生效；sparse 零 connector/零雅可比不使用此参数",
+      "leap_min_gap": "【LeapAlign】两个采样时刻 (k,j) 的最小间隔：越大跳跃跨度越大、自蒸馏越激进但误差累积越多。典型 0.1-0.3。仅 original/bridge/lagrange 生效；sparse 的激活集用分层抖动铺满 (0,1)，不用此字段",
       "leap_traj_sim_weighting": "【LeapAlign】轨迹相似度加权（论文 Eq 12）：跳跃越贴近真实路径权重越高，抑制大跨度跳跃的离谱预测主导 loss。默认关",
       "leap_traj_sim_min": "【LeapAlign】轨迹相似度加权下限 τ：防止近乎相同的跳跃对被 1/d 过度放大。越小越激进。典型 0.05-0.2",
       "grad_clip_max_norm": "梯度范数上限：本步所有可训练参数的梯度总范数超过该值时按比例缩到该值，防止单步极端梯度把模型推飞。默认 1.0 适合绝大多数场景；bf16+DoRA/LoKr 不稳可降到 0.5；0=禁用。",
