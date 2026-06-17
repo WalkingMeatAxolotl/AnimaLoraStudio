@@ -96,6 +96,41 @@ def test_zip_extracts_jpg_png(tmp_path: Path) -> None:
     assert not (tmp_path / "sub").exists()
 
 
+def test_zip_stream_without_seekable_predicate(tmp_path: Path) -> None:
+    """回归 (#hotfix)：Python<3.11 的 SpooledTemporaryFile（FastAPI UploadFile.file
+    的实际类型，含文档支持的最低版本 3.10）没有 seekable()/readable()/writable()。
+
+    路由把它直接交给 zipfile 时，构造 + infolist() 正常（日志「打开 zip」打得出来），
+    但 zf.open() 经 _SharedFile 取 fileobj.seekable → AttributeError —— 表现为
+    「打开 zip 后开始读内层图片才炸」。accept_one 必须包一层适配器扛住。
+
+    CI 跑 3.12（SpooledTemporaryFile 已有 seekable），故用一个故意不实现这三个
+    谓词方法的假流来稳定复现，与 Python 版本无关。
+    """
+    blob = _zip_bytes({"a.png": b"AA", "sub/b.jpg": b"BB"})
+
+    class _Pre311Spool:
+        # 仿 py<3.11 的 SpooledTemporaryFile：转发 read/seek/tell，无谓词方法
+        def __init__(self, data: bytes) -> None:
+            self._buf = io.BytesIO(data)
+
+        def read(self, *a):
+            return self._buf.read(*a)
+
+        def seek(self, *a):
+            return self._buf.seek(*a)
+
+        def tell(self):
+            return self._buf.tell()
+
+    stream = _Pre311Spool(blob)
+    assert not hasattr(stream, "seekable"), "前置：假流必须确实缺失 seekable 才能复现"
+    out = uploads.accept_one("pack.zip", stream, tmp_path)
+    assert sorted(out.added) == ["a.png", "b.jpg"]
+    assert (tmp_path / "a.png").read_bytes() == b"AA"
+    assert (tmp_path / "b.jpg").read_bytes() == b"BB"
+
+
 def test_zip_skip_dup_in_zip(tmp_path: Path) -> None:
     (tmp_path / "x.png").write_bytes(b"existing")
     blob = _zip_bytes({"x.png": b"new"})

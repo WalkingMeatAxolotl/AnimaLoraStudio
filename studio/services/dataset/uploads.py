@@ -85,6 +85,50 @@ def _is_image_ext(name: str) -> bool:
     return Path(name).suffix.lower() in ALLOWED_IMAGE_EXTS
 
 
+class _SeekableStream:
+    """给缺失 seekable/readable/writable 的流补上这三个 IOBase 谓词方法，其余透传。
+
+    Python < 3.11 的 `SpooledTemporaryFile`（FastAPI `UploadFile.file` 的实际
+    类型）只显式转发 read/seek/tell 给底层 `_file`，却漏了这三个谓词方法（3.11
+    才让它继承 io.IOBase 补全）。`zipfile.ZipFile` 构造与 `infolist()` 只用
+    seek/read，都正常；但 `zf.open()` 经 `_SharedFile` 取 `fileobj.seekable`
+    → AttributeError —— 表现为「打开 zip」成功、开始读内层图片时才炸。
+
+    底层 `_file`（spool 内的 BytesIO 或已 rollover 的真临时文件）本身支持 seek，
+    所以零拷贝包一层即可，保住上层流式上传「不把整包读进内存」的初衷。
+    """
+
+    def __init__(self, stream: BinaryIO) -> None:
+        self._stream = stream
+
+    def seekable(self) -> bool:
+        return True
+
+    def readable(self) -> bool:
+        return True
+
+    def writable(self) -> bool:
+        return False
+
+    def __getattr__(self, name: str):  # seek/read/tell/close 等透传给底层流
+        return getattr(self._stream, name)
+
+
+def _ensure_seekable(stream: BinaryIO) -> BinaryIO:
+    """zipfile 需要 `fileobj.seekable()`；老 SpooledTemporaryFile 没有 → 包一层。
+
+    真文件 / BytesIO / 3.11+ 的 SpooledTemporaryFile 已实现则原样返回，不包。
+    """
+    probe = getattr(stream, "seekable", None)
+    if callable(probe):
+        try:
+            probe()
+            return stream
+        except Exception:  # noqa: BLE001 — 任何异常都按"谓词不可用"降级包一层
+            pass
+    return _SeekableStream(stream)
+
+
 def _unique_target(dest_dir: Path, name: str) -> Path:
     """目标已存在时加 `_1` / `_2` ... 后缀直到不冲突。
 
@@ -241,7 +285,7 @@ def accept_one(
     if suffix == ZIP_EXT:
         t_zip_start = time.monotonic()
         try:
-            with zipfile.ZipFile(src_stream) as zf:
+            with zipfile.ZipFile(_ensure_seekable(src_stream)) as zf:
                 infos = [info for info in zf.infolist() if not info.is_dir()]
                 image_count = sum(
                     1 for info in infos
