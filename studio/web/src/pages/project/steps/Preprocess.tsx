@@ -655,7 +655,7 @@ function OperationPanel({
         <button
           onClick={onStartSelected}
           disabled={busy || !modelReady || selectedCount === 0}
-          className="btn btn-secondary btn-sm"
+          className="btn btn-primary btn-sm"
           title={selectedCount === 0 ? t('preprocess.upscaleSelectedHint') : ''}
         >
           {t('preprocess.upscaleSelected', { n: selectedCount })}
@@ -663,7 +663,7 @@ function OperationPanel({
         <button
           onClick={onStartAll}
           disabled={busy || !modelReady || totalCount === 0}
-          className="btn btn-primary btn-sm"
+          className="btn btn-secondary btn-sm"
         >
           {t('preprocess.upscaleAll', { n: totalCount })}
         </button>
