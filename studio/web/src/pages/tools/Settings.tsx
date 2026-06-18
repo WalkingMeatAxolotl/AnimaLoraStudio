@@ -58,6 +58,7 @@ type Section =
   | 'gelbooru'
   | 'danbooru'
   | 'download'
+  | 'reg'
   | 'huggingface'
   | 'wandb'
   | 'modelscope'
@@ -98,6 +99,7 @@ const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
     { id: 'gelbooru', labelKey: 'settings.gelbooru' },
     { id: 'danbooru', labelKey: 'settings.danbooru' },
     { id: 'download-global', labelKey: 'settings.downloadGlobal' },
+    { id: 'reg', labelKey: 'settings.reg.sectionTitle' },
     { id: 'proxy', labelKey: 'settings.proxy.sectionTitle' },
   ],
   preprocess: [
@@ -212,6 +214,7 @@ const EMPTY: Secrets = {
     api_rate_per_sec: 2,
     cdn_rate_per_sec: 5,
   },
+  reg: { default_excluded_tags: [] },
   huggingface: { token: '', endpoint: '' },
   wandb: {
     enabled: false,
@@ -723,6 +726,21 @@ export default function SettingsPage() {
             />
           </div>
         </div>
+      </SettingsSection>
+
+      <SettingsSection id="reg" title={t('settings.reg.sectionTitle')}>
+        <SettingsField
+          label="default_excluded_tags"
+          desc={t('settings.commaSeparated')}
+          helpTooltip={<p>{t('settings.reg.defaultExcludedHelp')}</p>}
+        >
+          <TagListInput
+            value={draft.reg?.default_excluded_tags ?? []}
+            onChange={(tags) => update('reg', 'default_excluded_tags', tags)}
+            placeholder={t('settings.reg.defaultExcludedPlaceholder')}
+            className={textInputClass}
+          />
+        </SettingsField>
       </SettingsSection>
 
       <SettingsSection id="proxy" title={t('settings.proxy.sectionTitle')}>

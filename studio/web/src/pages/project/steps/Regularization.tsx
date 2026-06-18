@@ -50,6 +50,11 @@ const ADVANCED_DEFAULTS: AdvancedParams = {
   postprocess_max_crop_ratio: 0.1,
 }
 
+// 排除 tag 归一到 booru 形态（小写 + 下划线）：train top-tag、自定义输入、全局默认
+// 三个来源都过这个，保证 excluded 集里形态一致（与后端 booru 搜索语法对齐）。
+const normalizeRegTag = (raw: string): string =>
+  raw.trim().toLowerCase().replace(/\s+/g, '_')
+
 export default function RegularizationPage() {
   const { t } = useTranslation()
   const { project, activeVersion, reload } = useOutletContext<Ctx>()
@@ -151,31 +156,46 @@ export default function RegularizationPage() {
     void refreshTrainTags()
   }, [refreshReg, refreshTrainTags])
 
+  // 全局默认排除（Settings → 正则集）。null = 还没拉到 secrets；拉到前既不 seed 也
+  // 不写盘，避免初始空值把某个 build 的本地记录覆盖成空、让种子永远不触发。
+  const [defaultExcluded, setDefaultExcluded] = useState<string[] | null>(null)
+  useEffect(() => {
+    let alive = true
+    api.getSecrets()
+      .then((s) => { if (alive) setDefaultExcluded(s.reg?.default_excluded_tags ?? []) })
+      .catch(() => { if (alive) setDefaultExcluded([]) })
+    return () => { alive = false }
+  }, [])
+
   // 把 excluded 持久化到 localStorage（按 project + version 隔离），切页面回来也在。
-  // 切 version / 进入页面时先 seed 一次；之后随 setExcluded 变化自动保存。
+  // 进页面 / 切 version 时：有本地记录就恢复；没有则用全局默认排除做种子（归一到
+  // booru 形态，与 train top-tag / 自定义输入一致）。之后随 setExcluded 自动保存。
   const excludedStorageKey = vid
     ? `studio.reg.excluded.${project.id}.${vid}`
     : null
+  const hydratedKeyRef = useRef<string | null>(null)
   useEffect(() => {
-    if (!excludedStorageKey) return
+    if (!excludedStorageKey || defaultExcluded === null) return
     try {
       const raw = localStorage.getItem(excludedStorageKey)
       if (!raw) {
-        setExcluded(new Set())
-        return
-      }
-      const arr = JSON.parse(raw)
-      if (Array.isArray(arr)) {
-        setExcluded(new Set(arr.filter((x): x is string => typeof x === 'string')))
+        // 没有这个 build 的本地选择 → 用全局默认排除做初始值
+        setExcluded(new Set(defaultExcluded.map(normalizeRegTag).filter(Boolean)))
       } else {
-        setExcluded(new Set())
+        const arr = JSON.parse(raw)
+        setExcluded(Array.isArray(arr)
+          ? new Set(arr.filter((x): x is string => typeof x === 'string'))
+          : new Set())
       }
     } catch {
       setExcluded(new Set())
     }
-  }, [excludedStorageKey])
+    hydratedKeyRef.current = excludedStorageKey
+  }, [excludedStorageKey, defaultExcluded])
   useEffect(() => {
-    if (!excludedStorageKey) return
+    // 必须等 seed 跑完（hydratedKeyRef 命中当前 key）才允许写盘，否则 secrets 还没
+    // 拉到时的初始空值会先落盘，把「无本地记录」变成「有空记录」，种子就被吃掉了。
+    if (!excludedStorageKey || hydratedKeyRef.current !== excludedStorageKey) return
     try {
       localStorage.setItem(excludedStorageKey, JSON.stringify(Array.from(excluded)))
     } catch { /* quota / privacy mode：丢就丢，不打扰用户 */ }
@@ -1175,12 +1195,10 @@ function ExcludeTags({
     [excluded, trainTagSet]
   )
   const excludedCount = excluded.size
-  const normalize = (raw: string): string =>
-    raw.trim().toLowerCase().replace(/\s+/g, '_')
   const addCustom = () => {
     const items = draft
       .split(/[,，\n]+/)
-      .map(normalize)
+      .map(normalizeRegTag)
       .filter(Boolean)
     if (items.length === 0) return
     for (const tag of items) {

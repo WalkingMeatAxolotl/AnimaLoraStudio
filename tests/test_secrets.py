@@ -226,6 +226,45 @@ def test_wd14_user_can_replace_current_then_drop(secrets_file: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# reg.default_excluded_tags（正则集全局默认排除）
+# ---------------------------------------------------------------------------
+
+
+def test_reg_default_excluded_empty_by_default(secrets_file: Path) -> None:
+    s = secrets.load()
+    assert s.reg.default_excluded_tags == []
+
+
+def test_reg_default_excluded_round_trip(secrets_file: Path) -> None:
+    """patch 保存后能从磁盘读回（正则集页进新 build 时按此 seed）。"""
+    secrets.update(
+        {"reg": {"default_excluded_tags": ["white background", "signature"]}}
+    )
+    assert secrets.load().reg.default_excluded_tags == [
+        "white background",
+        "signature",
+    ]
+
+
+def test_reg_legacy_file_without_reg_field(secrets_file: Path) -> None:
+    """老 secrets.json 没有 reg 字段时，加载用默认空列表，其它字段不受影响。"""
+    secrets_file.write_text(
+        json.dumps({"gelbooru": {"user_id": "alice"}}),
+        encoding="utf-8",
+    )
+    s = secrets.load()
+    assert s.reg.default_excluded_tags == []
+    assert s.gelbooru.user_id == "alice"
+
+
+def test_reg_default_excluded_in_masked_dict(secrets_file: Path) -> None:
+    """default_excluded_tags 不是敏感字段，掩码后保留原值（前端需读它做 seed）。"""
+    secrets.update({"reg": {"default_excluded_tags": ["lowres"]}})
+    masked = secrets.to_masked_dict(secrets.load())
+    assert masked["reg"]["default_excluded_tags"] == ["lowres"]
+
+
+# ---------------------------------------------------------------------------
 # update / mask round-trip
 # ---------------------------------------------------------------------------
 

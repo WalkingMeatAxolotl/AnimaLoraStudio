@@ -121,6 +121,14 @@ class DownloadConfig(BaseModel):
     cdn_rate_per_sec: float = 5.0
 
 
+class RegConfig(BaseModel):
+    """正则集生成偏好（全局默认）。"""
+    # 全局默认排除 tag：正则集生成页进入某个 build 且尚无本地选择时，用这份列表
+    # 做初始排除（种子）。仅作初值，用户进页面后仍可逐 tag 增删，不影响已有 build 的
+    # 本地记录。前端按本页约定归一到 booru 形态（下划线）后存进 excluded 集。
+    default_excluded_tags: list[str] = Field(default_factory=list)
+
+
 LLM_MESSAGE_ROLES: tuple[str, ...] = ("system", "user", "assistant")
 LLM_MESSAGE_TYPES: tuple[str, ...] = ("text", "image")
 
@@ -482,6 +490,7 @@ class Secrets(BaseModel):
     gelbooru: GelbooruConfig = Field(default_factory=GelbooruConfig)
     danbooru: DanbooruConfig = Field(default_factory=DanbooruConfig)
     download: DownloadConfig = Field(default_factory=DownloadConfig)
+    reg: RegConfig = Field(default_factory=RegConfig)
     huggingface: HuggingFaceConfig = Field(default_factory=HuggingFaceConfig)
     wandb: WandBConfig = Field(default_factory=WandBConfig)
     modelscope: ModelScopeConfig = Field(default_factory=ModelScopeConfig)

@@ -807,6 +807,11 @@
       "tips3": "留空某类代理（如 HTTPS）则会回退使用 HTTP 代理地址。"
     },
     "downloadGlobal": "下载（全局）",
+    "reg": {
+      "sectionTitle": "正则集",
+      "defaultExcludedHelp": "新建正则集时默认排除这些 tag。仅作进入生成页时的初始排除，之后仍可逐 tag 增删，不影响已保存的 build。",
+      "defaultExcludedPlaceholder": "例：white background, simple background, signature"
+    },
     "upscalers": "放大器",
     "llmTagger": "LLM Tagger",
     "wd14": "WD14",

@@ -23,6 +23,7 @@ const initialServerState = {
     api_rate_per_sec: 2,
     cdn_rate_per_sec: 5,
   },
+  reg: { default_excluded_tags: [] },
   huggingface: { token: '', endpoint: '' },
   wandb: {
     enabled: false,

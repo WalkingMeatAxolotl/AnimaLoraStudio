@@ -109,6 +109,11 @@ export interface DownloadGlobalConfig {
   cdn_rate_per_sec: number
 }
 
+export interface RegConfig {
+  /** 正则集生成全局默认排除 tag；进入某个 build 且无本地选择时作种子填充。 */
+  default_excluded_tags: string[]
+}
+
 export interface HuggingFaceConfig {
   token: string
   /** PR-S3 — HF 模型下载端点 endpoint。
@@ -431,6 +436,7 @@ export interface Secrets {
   gelbooru: GelbooruConfig
   danbooru: DanbooruConfig
   download: DownloadGlobalConfig
+  reg: RegConfig
   huggingface: HuggingFaceConfig
   wandb: WandBConfig
   modelscope: ModelScopeConfig

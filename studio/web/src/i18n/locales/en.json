@@ -807,6 +807,11 @@
       "tips3": "Leaving a proxy type (e.g., HTTPS) empty will fall back to using the HTTP proxy address."
     },
     "downloadGlobal": "Download (Global)",
+    "reg": {
+      "sectionTitle": "Regularization",
+      "defaultExcludedHelp": "Tags excluded by default when building a regularization set. Used only as the initial exclusion when you open the generation page; you can still add or remove tags per build, and existing builds are unaffected.",
+      "defaultExcludedPlaceholder": "e.g. white background, simple background, signature"
+    },
     "upscalers": "Upscalers",
     "llmTagger": "LLM Tagger",
     "wd14": "WD14",
