@@ -653,19 +653,19 @@ function OperationPanel({
         <span className="flex-1" />
 
         <button
+          onClick={onStartAll}
+          disabled={busy || !modelReady || totalCount === 0}
+          className="btn btn-ghost btn-sm"
+        >
+          {t('preprocess.upscaleAll', { n: totalCount })}
+        </button>
+        <button
           onClick={onStartSelected}
           disabled={busy || !modelReady || selectedCount === 0}
           className="btn btn-primary btn-sm"
           title={selectedCount === 0 ? t('preprocess.upscaleSelectedHint') : ''}
         >
           {t('preprocess.upscaleSelected', { n: selectedCount })}
-        </button>
-        <button
-          onClick={onStartAll}
-          disabled={busy || !modelReady || totalCount === 0}
-          className="btn btn-secondary btn-sm"
-        >
-          {t('preprocess.upscaleAll', { n: totalCount })}
         </button>
       </div>
 
