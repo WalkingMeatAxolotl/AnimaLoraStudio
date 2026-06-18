@@ -636,7 +636,10 @@
     "archived": "已归档: {{title}}",
     "unarchiveTitle": "恢复项目",
     "unarchiveConfirm": "把项目「{{title}}」恢复回项目列表？",
-    "unarchived": "已恢复: {{title}}"
+    "unarchived": "已恢复: {{title}}",
+    "editProject": "编辑项目",
+    "edited": "已保存「{{title}}」",
+    "editSlugNote": "slug 与输出名固定不变"
   },
   "queue": {
     "title": "队列",

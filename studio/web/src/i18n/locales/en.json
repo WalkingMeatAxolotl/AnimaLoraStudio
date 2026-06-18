@@ -636,7 +636,10 @@
     "archived": "Archived: {{title}}",
     "unarchiveTitle": "Restore project",
     "unarchiveConfirm": "Restore project \"{{title}}\" to the project list?",
-    "unarchived": "Restored: {{title}}"
+    "unarchived": "Restored: {{title}}",
+    "editProject": "Edit project",
+    "edited": "Saved \"{{title}}\"",
+    "editSlugNote": "slug and output name stay fixed"
   },
   "queue": {
     "title": "Queue",

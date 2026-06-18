@@ -45,6 +45,7 @@ export default function ProjectsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
+  const [editing, setEditing] = useState<ProjectSummary | null>(null)
   const [busy, setBusy] = useState(false)
   const [importing, setImporting] = useState(false)
   const [showImportDialog, setShowImportDialog] = useState(false)
@@ -89,6 +90,22 @@ export default function ProjectsPage() {
       toast(t('projects.created', { title: p.title }), 'success')
       setCreating(false)
       navigate(`/projects/${p.id}`)
+    } catch (e) {
+      toast(String(e), 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // 改 title/note 只动展示用元数据；slug（磁盘路径 / LoRA 输出名锚点）不可改。
+  const handleEdit = async (patch: { title: string; note: string }) => {
+    if (!editing) return
+    setBusy(true)
+    try {
+      const p = await api.updateProject(editing.id, { title: patch.title, note: patch.note })
+      toast(t('projects.edited', { title: p.title }), 'success')
+      setEditing(null)
+      await refresh()
     } catch (e) {
       toast(String(e), 'error')
     } finally {
@@ -299,6 +316,7 @@ export default function ProjectsPage() {
                 project={p}
                 archived={showArchived}
                 onClick={() => openProject(p)}
+                onEdit={(e) => { e.preventDefault(); e.stopPropagation(); setEditing(p) }}
                 onArchive={(e) => handleArchive(p, e)}
                 onUnarchive={(e) => handleUnarchive(p, e)}
                 onDelete={(e) => handleDelete(p, e)}
@@ -313,6 +331,15 @@ export default function ProjectsPage() {
           busy={busy}
           onCancel={() => setCreating(false)}
           onSubmit={handleCreate}
+        />
+      )}
+
+      {editing && (
+        <EditProjectDialog
+          project={editing}
+          busy={busy}
+          onCancel={() => setEditing(null)}
+          onSubmit={handleEdit}
         />
       )}
 
@@ -474,6 +501,7 @@ function ProjectCard({
   project: p,
   archived = false,
   onClick,
+  onEdit,
   onArchive,
   onUnarchive,
   onDelete,
@@ -482,6 +510,7 @@ function ProjectCard({
   /** 已归档卡片：半透明 + ↺ 恢复（在 × 左边）+ × 真删；普通卡片 × = 归档。 */
   archived?: boolean
   onClick: () => void
+  onEdit?: (e: React.MouseEvent) => void
   onArchive?: (e: React.MouseEvent) => void
   onUnarchive?: (e: React.MouseEvent) => void
   onDelete?: (e: React.MouseEvent) => void
@@ -494,7 +523,7 @@ function ProjectCard({
       onClick={onClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      className={`p-[18px] text-left rounded-lg cursor-pointer flex flex-col gap-3.5 relative w-full ${hovered ? 'border-dim shadow-sm bg-surface' : 'border border-subtle bg-surface'} ${archived ? 'opacity-70' : ''}`}
+      className={`group p-[18px] text-left rounded-lg cursor-pointer flex flex-col gap-3.5 relative w-full ${hovered ? 'border-dim shadow-sm bg-surface' : 'border border-subtle bg-surface'} ${archived ? 'opacity-70' : ''}`}
       style={{ transition: 'border-color 0.15s, box-shadow 0.15s, opacity 0.15s' }}
     >
       {/* ADR-0007 §11.8-E: 右上角 = active version status；去 stage badge / 时间 / 产物 */}
@@ -524,6 +553,19 @@ function ProjectCard({
           <span className="text-fg-tertiary italic text-xs">{t('projects.noActiveVersion')}</span>
         )}
         <span className="flex-1" />
+        {/* 操作图标默认隐藏，hover / 键盘聚焦卡片时淡入，减少常驻视觉噪声 */}
+        <div className="flex gap-3 items-center opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+        <button
+          onClick={onEdit}
+          className="bg-transparent border-none px-1.5 py-0.5 rounded-sm text-fg-tertiary text-xs cursor-pointer"
+          title={t('projects.editProject')}
+          aria-label={`${t('projects.editProject')} ${p.title}`}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 20h9" />
+            <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+          </svg>
+        </button>
         {archived ? (
           <>
             <button
@@ -553,6 +595,7 @@ function ProjectCard({
             ×
           </button>
         )}
+        </div>
       </div>
     </button>
   )
@@ -639,6 +682,85 @@ function NewProjectDialog({
             disabled={busy || !form.title.trim()}
           >
             {busy ? t('projects.creating') : t('common.create')}
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+// ── Edit Project Dialog ─────────────────────────────────────────
+// 只改 title / note；slug 不可改（磁盘路径 / LoRA 输出名锚点）。
+
+function EditProjectDialog({
+  project,
+  busy,
+  onCancel,
+  onSubmit,
+}: {
+  project: ProjectSummary
+  busy: boolean
+  onCancel: () => void
+  onSubmit: (patch: { title: string; note: string }) => void
+}) {
+  const { t } = useTranslation()
+  const [title, setTitle] = useState(project.title)
+  const [note, setNote] = useState(project.note ?? '')
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!title.trim()) return
+    onSubmit({ title, note })
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/45"
+      onClick={onCancel}
+    >
+      <form
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={submit}
+        className="bg-surface border border-dim rounded-xl p-7 flex flex-col gap-[18px] shadow-lg"
+        style={{ width: '90%', maxWidth: 440 }}
+      >
+        <h2 className="m-0 text-xl font-semibold">{t('projects.editProject')}</h2>
+
+        <FieldLabel label={t('projects.newProjectTitle')} hint="title">
+          <input
+            autoFocus
+            className="input"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder={t('projects.titlePlaceholder')}
+          />
+        </FieldLabel>
+
+        <FieldLabel label={t('common.notes')} hint="note（可选）">
+          <textarea
+            className="input"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder={t('projects.notesPlaceholder')}
+            rows={3}
+            style={{ resize: 'vertical' }}
+          />
+        </FieldLabel>
+
+        <p className="m-0 text-xs text-fg-tertiary">
+          <span className="font-mono">{project.slug}</span>
+          {' · '}
+          {t('projects.editSlugNote')}
+        </p>
+
+        <div className="flex gap-2 justify-end">
+          <button type="button" className="btn btn-secondary" onClick={onCancel}>{t('common.cancel')}</button>
+          <button
+            type="submit"
+            className="btn btn-primary"
+            disabled={busy || !title.trim()}
+          >
+            {busy ? t('common.saving') : t('common.save')}
           </button>
         </div>
       </form>
