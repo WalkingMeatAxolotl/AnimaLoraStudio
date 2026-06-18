@@ -122,11 +122,14 @@ export default function QueuePage() {
 
   useEventStream(
     (evt) => {
-      // ADR 0006 PR-4 — train_loop_started 不改 task.status 但要让 UI 看到
-      // is_pausable=true（解锁暂停按钮）；queue_hold_changed 要刷 banner。
+      // ADR 0006 PR-4 — train_loop_started / auto_epoch_backup_written 都不改
+      // task.status 但要让 UI 看到 is_pausable=true（解锁暂停按钮）：is_task_pausable
+      // 要 train_loop_started + 首个 epoch backup 落盘二者都满足，真正翻 true 的
+      // 是后者，所以两个事件都得 reload；queue_hold_changed 要刷 banner。
       if (
         evt.type === 'task_state_changed' ||
         evt.type === 'train_loop_started' ||
+        evt.type === 'auto_epoch_backup_written' ||
         evt.type === 'queue_hold_changed'
       ) {
         if (evt.type === 'queue_hold_changed') {

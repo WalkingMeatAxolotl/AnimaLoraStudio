@@ -117,17 +117,50 @@ export default function QueueDetailPage() {
     }
   }, [location.hash])
 
+  // reload 串行号：SSE 事件密集时多个 getTask 并发在飞，HTTP 响应可能乱序回来。
+  // 只让「最后发起」的那次写 state，避免旧快照覆盖新状态（典型故障：恢复后
+  // is_pausable / status 被一个更早发出、更晚到达的响应拍回旧值，header 的
+  // 暂停 / 取消按钮状态错乱）。
+  const reloadSeq = useRef(0)
   const reload = useCallback(async () => {
     if (!Number.isFinite(taskId)) return
-    try { const t = await api.getTask(taskId); setTask(t); setError(null) }
-    catch (e) { setError(String(e)) }
+    const seq = ++reloadSeq.current
+    try {
+      const t = await api.getTask(taskId)
+      if (seq === reloadSeq.current) { setTask(t); setError(null) }
+    } catch (e) {
+      if (seq === reloadSeq.current) setError(String(e))
+    }
   }, [taskId])
 
   useEffect(() => { void reload() }, [reload])
 
+  // SSE → 刷新 task。除了 status 变化（task_state_changed），还要监听解锁暂停
+  // 按钮的两个信号：train_loop_started（进主循环）+ auto_epoch_backup_written
+  // （首个 epoch backup 落盘）—— is_task_pausable 要二者都满足才 true（core.py
+  // §is_task_pausable）。漏听这两个事件会让恢复 / 启动后暂停按钮一直不出现，
+  // 必须切到 /queue 再回来（整页重挂触发一次干净 reload）才有。Queue.tsx 已
+  // 在听 train_loop_started，这里之前漏了。100ms 防抖把启动瞬间的事件风暴
+  // （pending → running → train_loop_started → auto_epoch_backup_written）合并
+  // 成一次拉取。
+  const reloadTimer = useRef<number | null>(null)
   useEventStream((evt) => {
-    if (evt.type === 'task_state_changed' && evt.task_id === taskId) void reload()
+    if (evt.task_id !== taskId) return
+    if (
+      evt.type === 'task_state_changed' ||
+      evt.type === 'train_loop_started' ||
+      evt.type === 'auto_epoch_backup_written'
+    ) {
+      if (reloadTimer.current) return
+      reloadTimer.current = window.setTimeout(() => {
+        reloadTimer.current = null
+        void reload()
+      }, 100)
+    }
   })
+  useEffect(() => () => {
+    if (reloadTimer.current) window.clearTimeout(reloadTimer.current)
+  }, [])
 
   useEffect(() => {
     if (task?.status !== 'running') return

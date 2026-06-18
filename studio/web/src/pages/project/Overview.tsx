@@ -10,7 +10,7 @@
  *  Live 训练进度 (step/total/ETA) 不实装 —— 需 SSE/monitor state 整合，留 follow-up。
  *  "复制配置开新版本" / "调小 batch 重训" 需新后端 API，渲染为占位按钮 toast 提示。
  */
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import {
@@ -32,6 +32,7 @@ import { OutputsTab } from '../QueueDetail'
 import { arBucket } from '../../lib/aspectRatio'
 import { computePixelHist } from '../../lib/pixelBins'
 import { useProjectCtx } from '../../context/ProjectContext'
+import { useEventStream } from '../../lib/useEventStream'
 import { useToast } from '../../components/Toast'
 
 type OverviewTab = 'details' | 'tasks' | 'output'
@@ -1224,20 +1225,49 @@ export default function ProjectOverview() {
 
   // 拉 selected version 的最新 task — banner 状态叙事 + CTA 数据源
   const [latestTask, setLatestTask] = useState<Task | null>(null)
-  useEffect(() => {
+  // seq 守卫：SSE 防抖重拉与切版本拉取可能并发，旧响应不许覆盖新状态。
+  const latestSeqRef = useRef(0)
+  const reloadLatestTask = useCallback(async () => {
     if (!selectedVid) { setLatestTask(null); return }
-    let cancelled = false
-    void api.listQueue()
-      .then((items) => {
-        if (cancelled) return
-        const list = items
-          .filter((tk) => tk.project_id === project.id && tk.version_id === selectedVid)
-          .sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0))
-        setLatestTask(list[0] ?? null)
-      })
-      .catch(() => { if (!cancelled) setLatestTask(null) })
-    return () => { cancelled = true }
+    const seq = ++latestSeqRef.current
+    try {
+      const items = await api.listQueue()
+      if (seq !== latestSeqRef.current) return
+      const list = items
+        .filter((tk) => tk.project_id === project.id && tk.version_id === selectedVid)
+        .sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0))
+      setLatestTask(list[0] ?? null)
+    } catch {
+      if (seq === latestSeqRef.current) setLatestTask(null)
+    }
   }, [project.id, selectedVid])
+
+  useEffect(() => { void reloadLatestTask() }, [reloadLatestTask])
+
+  // latestTask 是独立 local state（不是 project prop）—— Layout 的
+  // version_state_changed reload 只刷 project，碰不到它。但训练态 banner 的
+  // 暂停按钮（latestTask.is_pausable）要靠 train_loop_started +
+  // auto_epoch_backup_written 翻 true，task 生命周期变化（新任务启动 / 结束落
+  // finished_at·error_msg）也得让 banner 的 CTA 跟上，所以这几个事件都要重拉。
+  // 不订阅就会出现「暂停按钮一直不出现」「完成/失败 banner 时间停在 —」等
+  // 滞后，必须切版本 / 刷新页面才更新。100ms 防抖合并启动瞬间的事件风暴。
+  const latestReloadTimer = useRef<number | null>(null)
+  useEventStream((evt) => {
+    if (
+      evt.type === 'task_state_changed' ||
+      evt.type === 'train_loop_started' ||
+      evt.type === 'auto_epoch_backup_written'
+    ) {
+      if (latestReloadTimer.current) return
+      latestReloadTimer.current = window.setTimeout(() => {
+        latestReloadTimer.current = null
+        void reloadLatestTask()
+      }, 100)
+    }
+  })
+  useEffect(() => () => {
+    if (latestReloadTimer.current) window.clearTimeout(latestReloadTimer.current)
+  }, [])
 
   const [activeTab, setActiveTab] = useState<OverviewTab>('details')
 
