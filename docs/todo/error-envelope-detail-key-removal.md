@@ -2,7 +2,7 @@
 
 **创建于** 2026-06-19
 **触发** 0.14.0 发版核对时发现 [ADR 0009](../adr/0009-logging-error-system.md) §错误 envelope 渐进迁移的 Phase 2/3 早已滑期：ADR 当时把 Phase 2 排到 0.13.0、Phase 3 排到 0.14.0，但实际只有 Phase 1 跟 0.12.0 发出去了，后两阶段一直没人做。已把目标版本下调（Phase 2 → 0.15.0、Phase 3 → 0.16.0）并立此条防再忘。
-**当前状态** 🟢 Phase 2 已实现（分支 `feat/error-envelope-i18n`，待并入 0.15.0）；Phase 1 已发布；Phase 3 待做——前端已主读 `body.error.*`，删 legacy `detail` 现在安全（仅余 fallback + RequestValidationError 的 422 list）。
+**当前状态** ✅ 全部完成。Phase 1 已发布（0.12.0）；Phase 2 已合 dev（PR #294）；**Phase 3 已实现**（分支 `feat/error-envelope-phase3`，删 legacy `detail` key，错误响应只发 `error`；唯一例外 RequestValidationError 的 422 list）。三阶段随 0.15.0 一起发布后本条可归档。
 
 ---
 
@@ -46,11 +46,11 @@ API 错误信封从老格式 `{"detail": <str>}` 渐进迁到新结构化 `{"err
 设计目录（code → en/zh 总表 + 每处映射）见 `tmp/error_i18n/CATALOG.md`（gitignored 草稿，
 Phase 3 / 后续错误 i18n 可复用，必要时移入 docs/）。
 
-## Phase 3 待办（0.16.0，Phase 2 落地后）
+## Phase 3 已完成（分支 feat/error-envelope-phase3，提前到 0.15.0）
 
-- [ ] `exception_handlers.py` 的 `_error_envelope` 删 `detail` key，只留 `error`。
-- [ ] RequestValidationError handler 仍保 starlette 默认 `{"detail": [...]}`（pydantic body 校验，前端有专门处理）——这条不在本迁移范围。
-- [ ] 收尾测试 + ADR 0009 状态更新。
+- [x] `exception_handlers.py`：`_error_envelope` + Exception fallback + HTTPException backstop 都只发 `error`，删顶层 `detail`。backstop 的 dict/list detail 改放 error.details。
+- [x] RequestValidationError handler 保 `{"detail": [...]}`（唯一保留 detail 的路径）。
+- [x] 收尾：~8 测试文件断言迁到 error 信封；error_response_baseline 契约测试改锁 error key；ADR / 注释更新。前端无需改（makeApiError 早已主读 error）。
 
 ## 同步点
 
