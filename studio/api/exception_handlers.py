@@ -26,9 +26,11 @@ HTTPException 不重新注册 — starlette 默认 handler 已经处理（仅返
 
 dual-write 渐进迁移路径（ADR-0009 §错误 envelope 渐进迁移）：
   Phase 1 (0.12.0): dual-write 同时填 detail + error —— 已发布
-  Phase 2 (0.15.0): raise HTTPException 加 deprecation log；前端迁 body.error.*
-  Phase 3 (0.16.0): handler 删 detail key
-  Phase 2/3 滑期，进度/阻塞见 docs/todo/error-envelope-detail-key-removal.md
+  Phase 2 (0.15.0): HTTPException backstop handler（本文件）让 body.error 全覆盖；
+    ~330 处 raise 迁 DomainError 带语义 code + details；前端按 code 查 errors.* i18n
+    —— 已实现
+  Phase 3 (待): handler 删 legacy detail key（前端已主读 error.*，仅余 fallback）
+  详见 docs/todo/error-envelope-detail-key-removal.md
 """
 from __future__ import annotations
 

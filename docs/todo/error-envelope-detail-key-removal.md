@@ -2,7 +2,7 @@
 
 **创建于** 2026-06-19
 **触发** 0.14.0 发版核对时发现 [ADR 0009](../adr/0009-logging-error-system.md) §错误 envelope 渐进迁移的 Phase 2/3 早已滑期：ADR 当时把 Phase 2 排到 0.13.0、Phase 3 排到 0.14.0，但实际只有 Phase 1 跟 0.12.0 发出去了，后两阶段一直没人做。已把目标版本下调（Phase 2 → 0.15.0、Phase 3 → 0.16.0）并立此条防再忘。
-**当前状态** 🟡 Phase 1 已发布（0.12.0 起 dual-write）；Phase 2 待做（**下个版本 0.15.0**）；Phase 3 被 Phase 2 阻塞。
+**当前状态** 🟢 Phase 2 已实现（分支 `feat/error-envelope-i18n`，待并入 0.15.0）；Phase 1 已发布；Phase 3 待做——前端已主读 `body.error.*`，删 legacy `detail` 现在安全（仅余 fallback + RequestValidationError 的 422 list）。
 
 ---
 
@@ -26,12 +26,25 @@ API 错误信封从老格式 `{"detail": <str>}` 渐进迁到新结构化 `{"err
 
 所以现在删 `detail` key（Phase 3）会让所有错误 toast 丢文案。**必须先做 Phase 2**（前端迁到 `error.*` + 后端加 deprecation log），Phase 3 才安全。
 
-## Phase 2 待办（下个版本 0.15.0）
+## Phase 2 已完成（分支 feat/error-envelope-i18n）
 
-- [ ] 前端 `client.ts`：把错误文案主来源从 `body.detail` 改读 `body.error.message`，`body.detail` 退为 fallback；保留 `ApiError.traceId` 现有逻辑。核对所有 callsite（`e.detail` / `e.detail.error` 等结构化用法）。
-- [ ] 后端：给老 `raise HTTPException` 路径加一次性 deprecation log（标识仍走 legacy detail-only 形态的 endpoint），方便盘点残留。
-- [ ] 把还在 `raise HTTPException(...)` 的 router 逐步迁到 `DomainError`（走 dual-write handler），减少 Phase 3 时的 detail-only 残留面。
-- [ ] 测试：更新依赖 `body.detail` 的断言（ADR 记为 5 文件 11 处）改读 `body.error.*`。
+实现与原计划略有出入（更优）：用 HTTPException **backstop handler** 代替「deprecation log」，
+一步让 `body.error` 全覆盖；并做了**全量**迁移而非渐进。
+
+- [x] 前端 `client.ts`：4 处 fetch/XHR 错误解析收口为 `makeApiError`，主读 `body.error.code`
+      查 `errors.*` i18n（带 details 插值），`body.detail` 退 fallback；结构化数据经
+      `err.detail`(=error.details) 给 callsite（Presets 冲突 / Settings 运行中任务已迁）。
+- [x] 后端：注册 HTTPException backstop handler（`exception_handlers.py`）→ `body.error` 覆盖所有
+      错误响应，detail 原样保留。
+- [x] ~330 处 raise（HTTPException + service 异常）迁到 `DomainError` 子类带语义 code + details；
+      删 4 个中文子串匹配 helper（`_preset/_project/_curation/_duplicate_err_code`）；router 不再转
+      HTTPException。新增 `errors.*` locale（120 code，中英，从 CATALOG 生成）。
+- [x] 测试：18 文件断言对齐新信封（子类 + code + error.details）；preset 冲突 400→409。
+- [x] 修 `preprocess_worker` 两处 `except PreprocessError`（迁移后改抛 InvalidPathError/
+      ValidationError，原 catch 漏接会崩 job）→ 放宽 `except DomainError`。
+
+设计目录（code → en/zh 总表 + 每处映射）见 `tmp/error_i18n/CATALOG.md`（gitignored 草稿，
+Phase 3 / 后续错误 i18n 可复用，必要时移入 docs/）。
 
 ## Phase 3 待办（0.16.0，Phase 2 落地后）
 

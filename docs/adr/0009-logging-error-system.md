@@ -179,7 +179,7 @@ api/middleware/  ────►  api/exception_handlers  ────►  domai
 
 **关键**：Phase 1 多写 ~30 行（handler 同时填两个 key），给前端 toast trace_id body 可见性提前 3 release。
 
-> **进度（2026-06-19 更新）**：实际只有 Phase 1 跟 0.12.0 发布。Phase 2/3 滑期 —— 前端 `client.ts` 仍以 `body.detail` 为主错误文案来源、未迁到 `body.error.*`，故 Phase 3 删 `detail` 会丢 toast 文案、被 Phase 2 阻塞。目标版本已下调（原 0.13.0 / 0.14.0 → 现 0.15.0 / 0.16.0）。详细待办与现状见 [`docs/todo/error-envelope-detail-key-removal.md`](../todo/error-envelope-detail-key-removal.md)。
+> **进度（2026-06-19 更新）**：Phase 1 随 0.12.0 发布；Phase 2/3 曾滑期（目标下调到 0.15.0 / 0.16.0）。**Phase 2 已实现**（分支 `feat/error-envelope-i18n`，待并入 0.15.0）：HTTPException backstop handler 让 `body.error` 全覆盖 + ~330 处 raise 迁 `DomainError` 带语义 code + 前端按 code 查 `errors.*` i18n（删 4 个中文子串匹配 helper）。实现与本表略有出入（用 backstop handler 替代 deprecation log，且全量迁移而非渐进）。Phase 3（删 legacy `detail`）现可安全做。详见 [`docs/todo/error-envelope-detail-key-removal.md`](../todo/error-envelope-detail-key-removal.md)。
 
 ---
 
