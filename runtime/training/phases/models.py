@@ -113,4 +113,5 @@ def run(ctx: TrainingContext) -> None:
             vae_channels=16,
             device=ctx.device,
             dtype=ctx.dtype,
+            normalize=bool(getattr(args, "sra_normalize", True)),
         )

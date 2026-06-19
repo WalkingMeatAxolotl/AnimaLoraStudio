@@ -79,11 +79,15 @@ class SRAAligner:
         vae_channels: int = 16,
         device: str = "cuda",
         dtype: torch.dtype = torch.float32,
+        normalize: bool = True,
+        norm_eps: float = 1e-5,
     ):
         self.block_idx = block_idx
         self.patch_spatial = patch_spatial
         self.patch_temporal = patch_temporal
         self.vae_channels = vae_channels
+        self.normalize = normalize
+        self.norm_eps = norm_eps
         self._cached_hidden: Optional[Tensor] = None
 
         out_per_token = vae_channels * patch_temporal * patch_spatial * patch_spatial
@@ -98,11 +102,28 @@ class SRAAligner:
         logger.info(
             f"SRA v2: hook on block[{block_idx}], "
             f"proj {model_channels} → {out_per_token}, "
-            f"{n_params / 1e6:.1f}M params"
+            f"{n_params / 1e6:.1f}M params, normalize={normalize}"
         )
 
     def _hook_fn(self, module, input, output):
         self._cached_hidden = output
+
+    def _standardize(self, x: Tensor) -> Tensor:
+        """Per-sample z-score over all feature dims (channel + spatial/temporal).
+
+        The original SRA 2 paper aligns to raw SD-VAE latents (≈unit scale) during
+        from-scratch SiT pretraining, so it needs no normalization. This project
+        fine-tunes a LoRA on a video model whose latents live on a different scale;
+        without standardization the smooth-L1 align loss sits several orders of
+        magnitude above the (already-converged) denoising loss and collapses
+        training. Standardizing both projected and target keeps the objective on
+        a structural, scale-invariant footing — the same intuition behind the
+        cosine variant the paper ablates (Tab. 4), while retaining smooth-L1.
+        """
+        dims = tuple(range(1, x.dim()))
+        mean = x.mean(dim=dims, keepdim=True)
+        std = x.std(dim=dims, keepdim=True)
+        return (x - mean) / (std + self.norm_eps)
 
     def _hidden_as_target_grid(self, hidden: Tensor, target: Tensor) -> Tensor:
         """Reshape captured tokens to the VAE latent patch grid.
@@ -180,6 +201,10 @@ class SRAAligner:
                 f"SRA shape mismatch: projected {projected.shape} vs target {target.shape}"
             )
 
+        if self.normalize:
+            projected = self._standardize(projected)
+            target = self._standardize(target)
+
         loss_per_sample = F.smooth_l1_loss(
             projected, target, beta=0.05, reduction="none"
         ).mean(dim=tuple(range(1, projected.dim())))
@@ -211,6 +236,7 @@ class SRAAligner:
             "patch_spatial": self.patch_spatial,
             "patch_temporal": self.patch_temporal,
             "vae_channels": self.vae_channels,
+            "normalize": self.normalize,
             "proj": self.proj.state_dict(),
         }
 

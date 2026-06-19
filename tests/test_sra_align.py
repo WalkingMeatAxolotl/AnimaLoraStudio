@@ -34,7 +34,7 @@ class _StubInjector:
         return SimpleNamespace(missing_keys=[], unexpected_keys=[])
 
 
-def _new_aligner(seed: int = 0) -> tuple[_FakeModel, SRAAligner]:
+def _new_aligner(seed: int = 0, normalize: bool = True) -> tuple[_FakeModel, SRAAligner]:
     torch.manual_seed(seed)
     model = _FakeModel()
     aligner = SRAAligner(
@@ -46,6 +46,7 @@ def _new_aligner(seed: int = 0) -> tuple[_FakeModel, SRAAligner]:
         vae_channels=16,
         device="cpu",
         dtype=torch.float32,
+        normalize=normalize,
     )
     return model, aligner
 
@@ -62,6 +63,26 @@ def test_sra_compute_accepts_native_flatten_block_output() -> None:
     loss = aligner.compute(target)
     assert loss.ndim == 0
     assert torch.isfinite(loss)
+
+
+def test_sra_normalize_keeps_loss_order_one_for_large_targets() -> None:
+    # A large-magnitude target (e.g. a video-VAE latent) blows the un-normalized
+    # smooth-L1 align loss several orders of magnitude above the denoise loss.
+    # Standardizing both sides keeps it on an O(1) structural footing.
+    big_target = torch.randn(2, 16, 1, 4, 4) * 50.0
+    hidden = torch.randn(2, 1, 4, 1, 8)
+
+    model_n, aligner_norm = _new_aligner(normalize=True)
+    model_n.blocks[0](hidden)
+    loss_norm = aligner_norm.compute(big_target)
+
+    model_r, aligner_raw = _new_aligner(normalize=False)
+    model_r.blocks[0](hidden)
+    loss_raw = aligner_raw.compute(big_target)
+
+    assert torch.isfinite(loss_norm)
+    assert loss_norm.item() < 5.0
+    assert loss_raw.item() > 10.0 * loss_norm.item()
 
 
 def test_sra_compute_applies_sample_weight() -> None:

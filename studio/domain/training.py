@@ -677,6 +677,11 @@ class TrainingConfig(BaseModel):
         description="【SRA v2】对齐 loss 权重 λ：align_loss 乘以此值后加到总 loss。trainer 默认 0.2，过大会导致异常",
         json_schema_extra=_meta("loss", show_when="sra_enabled==true", advanced=True),
     )
+    sra_normalize: bool = Field(
+        True,
+        description="【SRA v2】对 projected/target 各自做 per-sample z-score 标准化后再算 smooth-L1（论文 cosine 消融的同族思路：幅度无关、只对齐结构）。原论文用 SD-VAE（latent ~单位尺度）从零训练故不归一化；本项目视频 VAE latent 尺度不同 + LoRA 微调，关闭会导致 align loss 比 denoise 高几个量级并很快崩坏。建议保持开启",
+        json_schema_extra=_meta("loss", show_when="sra_enabled==true", advanced=True),
+    )
     sra_decay_type: Literal["none", "linear", "cosine", "jump"] = Field(
         "linear",
         description="【SRA v2】权重衰减方式：none 全程固定；linear 从起点线性降到 0；cosine 从起点余弦降到 0；jump 到起点直接关掉。实际权重 = sra_weight × 衰减系数",
