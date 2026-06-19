@@ -69,7 +69,15 @@ export default function LLMMessagesEditor({ messages, onChange, disabled }: Prop
   }
 
   const updateMsg = (i: number, patch: Partial<LLMMessage>) => {
-    onChange(messages.map((m, idx) => (idx === i ? { ...m, ...patch } : m)))
+    onChange(messages.map((m, idx) => {
+      if (idx !== i) return m
+      const updated = { ...m, ...patch }
+      // 不可变更新会换掉对象引用；把稳定 id 一并迁到新对象上，否则 idOf
+      // 会发新 id → key 变 → 整个 SortableMessage（含 textarea）重挂、输入失焦。
+      const id = idRefs.current.get(m)
+      if (id) idRefs.current.set(updated, id)
+      return updated
+    }))
   }
 
   const deleteMsg = (i: number) => {
