@@ -24,6 +24,7 @@ def test_parse_wheel_canonical() -> None:
     """官方命名：flash_attn-2.8.3+cu130torch2.11-cp312-cp312-win_amd64.whl"""
     tags = fa._parse_wheel("flash_attn-2.8.3+cu130torch2.11-cp312-cp312-win_amd64.whl")
     assert tags == {
+        "version": "2.8.3",
         "cuda": "cu130",
         "torch": "torch2.11",
         "python": "cp312",
@@ -314,6 +315,36 @@ def test_find_candidates_cuda_major_diff_negative_score(
     # 大版本不同：Python +20, CUDA -5 = 15
     assert candidates[0]["score"] == 15
     assert any("CUDA 大版本不同" in n for n in candidates[0]["notes"])
+
+
+def test_find_candidates_prefers_newest_version_on_tie(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """同 python/cuda/torch、仅 flash 版本不同 → 评分相同，应选最新版本。
+
+    回归（autodl 5090）：旧实现平手时退回 GitHub asset 顺序（最旧在前），自动安装首选
+    2.6.3；但 2.6.3 没有 Blackwell(sm_120) kernel → flash 在 5090 上全程回退 SDPA。
+    """
+    payload = [{
+        "assets": [
+            {"name": "flash_attn-2.6.3+cu128torch2.11-cp312-cp312-linux_x86_64.whl",
+             "browser_download_url": "https://x/2.6.3.whl"},
+            {"name": "flash_attn-2.7.4+cu128torch2.11-cp312-cp312-linux_x86_64.whl",
+             "browser_download_url": "https://x/2.7.4.whl"},
+            {"name": "flash_attn-2.8.3+cu128torch2.11-cp312-cp312-linux_x86_64.whl",
+             "browser_download_url": "https://x/2.8.3.whl"},
+        ],
+    }]
+    _mock_releases(monkeypatch, payload)
+    env = {
+        "platform": "linux_x86_64", "torch_tag": "torch2.11",
+        "cuda_tag": "cu128", "python_tag": "cp312",
+    }
+    candidates, err = fa.find_candidates(env)
+    assert err is None
+    # 评分全相同（python+cuda 精确）→ 版本降序：2.8.3 在前
+    assert [c["version"] for c in candidates] == ["2.8.3", "2.7.4", "2.6.3"]
+    assert fa.find_best_wheel(env) == "https://x/2.8.3.whl"
 
 
 # ---------------------------------------------------------------------------

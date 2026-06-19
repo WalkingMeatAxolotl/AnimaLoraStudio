@@ -140,21 +140,23 @@ def detect_env() -> dict[str, Any]:
 
 
 def _parse_wheel(name: str) -> Optional[dict[str, str]]:
-    """从 wheel 文件名解析出 cuda / torch / python / platform 标签。
+    """从 wheel 文件名解析出 version / cuda / torch / python / platform 标签。
 
     例：flash_attn-2.8.3+cu130torch2.11-cp312-cp312-win_amd64.whl
-    → {cuda: "cu130", torch: "torch2.11", python: "cp312", platform: "win_amd64"}
+    → {version: "2.8.3", cuda: "cu130", torch: "torch2.11", python: "cp312",
+       platform: "win_amd64"}
     """
     m = re.search(
-        r"\+(cu\d+)(torch[\d.]+)-(cp\d+)-cp\d+-([\w]+)\.whl$", name
+        r"flash_attn-([^+]+)\+(cu\d+)(torch[\d.]+)-(cp\d+)-cp\d+-([\w]+)\.whl$", name
     )
     if not m:
         return None
     return {
-        "cuda": m.group(1),
-        "torch": m.group(2),
-        "python": m.group(3),
-        "platform": m.group(4),
+        "version": m.group(1),
+        "cuda": m.group(2),
+        "torch": m.group(3),
+        "python": m.group(4),
+        "platform": m.group(5),
     }
 
 
@@ -162,6 +164,14 @@ def _cuda_major(tag: str) -> int:
     """cu130 → 13，cu124 → 12；解析失败返回 -1。"""
     m = re.search(r"cu(\d+)", tag)
     return int(m.group(1)) // 10 if m else -1
+
+
+def _version_key(version: str) -> tuple[int, ...]:
+    """flash_attn 版本字符串 → 可比较的整数元组，用于评分相同的候选间偏向更新版本。
+
+    例：'2.8.3' → (2, 8, 3)；'2.7.4.post1' → (2, 7, 4, 1)；解析不出 → ()。
+    """
+    return tuple(int(x) for x in re.findall(r"\d+", version or ""))
 
 
 def find_candidates(
@@ -240,13 +250,22 @@ def find_candidates(
             candidates.append({
                 "url": asset["browser_download_url"],
                 "name": asset["name"],
+                "version": tags["version"],
                 "score": score,
                 "notes": notes,
                 "usable": usable,
                 "tags": tags,
             })
 
-    return sorted(candidates, key=lambda x: -x["score"]), None
+    # 评分相同（同 python/cuda/torch）时偏向更新的 flash 版本。旧实现只按 score 排，平手
+    # 退回 GitHub asset 顺序（恰好最旧在前）→ 自动安装首选最旧 wheel；而比该 wheel 更新的
+    # GPU 架构上（如 Blackwell sm_120）旧 wheel 没有对应 kernel，flash 全程回退 SDPA。把
+    # 版本作为次级 key（高于 asset 顺序、低于 score）即可让 find_best_wheel 选到最新可用版本。
+    return sorted(
+        candidates,
+        key=lambda x: (x["score"], _version_key(x["version"])),
+        reverse=True,
+    ), None
 
 
 def find_best_wheel(env: dict[str, Any]) -> Optional[str]:
