@@ -408,18 +408,25 @@ def current_runtime() -> dict[str, Any]:
     except ImportError:
         pass
 
-    # 检测「pip 装的包名/版本」 vs 「进程里 import 的版本」不一致
-    # （onnxruntime 是 C extension，pip 重装不会热替换已 import 的 .pyd）
+    # 检测「pip 装的包」与「进程里已 import 的 native 模块」不一致 —— onnxruntime
+    # 是 C extension，pip 卸装重装不会热替换已 import 的 .pyd，必须重启才换 EP。
+    #
+    # 判定只看「装的包类型 ↔ 进程里实际加载的 EP」，**不比版本号字符串**：
+    # onnxruntime-directml 的 dist 版本（如 1.24.4）与它内部捆绑的 onnxruntime 核心
+    # 版本（ort.__version__，如 1.27.0）是两条独立版本线、天然不相等；比版本号会让
+    # DirectML 用户永久误报「需重启」，重启多少次都消不掉。EP 一致性才是可靠信号，
+    # 也正是本功能的目的（让 EP 切换生效）。
+    _ACCEL_EPS = ("CUDAExecutionProvider", "DmlExecutionProvider")
     restart_required = False
     if installed_pkg is not None and process_version is not None:
-        # 版本号不一致直接判定 stale
-        if installed_ver != process_version:
-            restart_required = True
-        # 包名 vs EP：装了 GPU 包应有 CUDAExecutionProvider；装了 DirectML 包应有
-        # DmlExecutionProvider；CPU 包不会有任何加速 EP
-        elif installed_pkg == GPU_PACKAGE and "CUDAExecutionProvider" not in providers:
+        if installed_pkg == GPU_PACKAGE and "CUDAExecutionProvider" not in providers:
+            # 装了 GPU 包但进程没 CUDA EP → 仍在跑旧（CPU / DirectML）包
             restart_required = True
         elif installed_pkg == DIRECTML_PACKAGE and "DmlExecutionProvider" not in providers:
+            # 装了 DirectML 包但进程没 Dml EP → 仍在跑旧（CPU / GPU）包
+            restart_required = True
+        elif installed_pkg == CPU_PACKAGE and any(ep in providers for ep in _ACCEL_EPS):
+            # 装了 CPU 包但进程还有加速 EP → 仍在跑旧（GPU / DirectML）包
             restart_required = True
 
     return {

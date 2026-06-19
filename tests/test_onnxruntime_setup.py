@@ -197,15 +197,44 @@ def test_install_runtime_install_failure_raises(
 # ---------------------------------------------------------------------------
 
 
-def test_current_runtime_flags_restart_when_dist_version_mismatches_process(
+def test_current_runtime_no_restart_when_directml_version_decoupled_from_core(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """pip 装了 onnxruntime-gpu==1.25.1，但已 import 的进程内还是旧 1.18.0 →
-    restart_required=True（C extension 不能热替换）。"""
-    monkeypatch.setattr(ors, "_query_dist_info", lambda: ("onnxruntime-gpu", "1.25.1"))
+    """regression：onnxruntime-directml 的 dist 版本（1.24.4）与它捆绑的 onnxruntime
+    核心 ort.__version__（1.27.0）是两条独立版本线、天然不等。只要 Dml EP 已加载就
+    不该报需重启 —— 否则 DirectML 用户重启再多次也消不掉「需重启 Studio」红条
+    （比版本号字符串判定 stale 的旧逻辑就是这么误报的）。"""
+    monkeypatch.setattr(ors, "_query_dist_info", lambda: ("onnxruntime-directml", "1.24.4"))
     fake_ort = MagicMock()
-    fake_ort.get_available_providers.return_value = ["AzureExecutionProvider", "CPUExecutionProvider"]
-    fake_ort.__version__ = "1.18.0"
+    fake_ort.get_available_providers.return_value = ["DmlExecutionProvider", "CPUExecutionProvider"]
+    fake_ort.__version__ = "1.27.0"
+    monkeypatch.setitem(__import__("sys").modules, "onnxruntime", fake_ort)
+    rt = ors.current_runtime()
+    assert rt["restart_required"] is False
+    assert rt["directml_available"] is True
+
+
+def test_current_runtime_flags_restart_when_directml_pkg_but_no_dml_ep(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """装了 DirectML 包但进程没 Dml EP（仍在跑旧 CPU 包）→ 需重启。"""
+    monkeypatch.setattr(ors, "_query_dist_info", lambda: ("onnxruntime-directml", "1.24.4"))
+    fake_ort = MagicMock()
+    fake_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
+    fake_ort.__version__ = "1.27.0"
+    monkeypatch.setitem(__import__("sys").modules, "onnxruntime", fake_ort)
+    rt = ors.current_runtime()
+    assert rt["restart_required"] is True
+
+
+def test_current_runtime_flags_restart_when_cpu_pkg_but_process_has_accel_ep(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """装了 CPU 包但进程里还残留加速 EP（如刚从 DirectML 切回 CPU 未重启）→ 需重启。"""
+    monkeypatch.setattr(ors, "_query_dist_info", lambda: ("onnxruntime", "1.18.0"))
+    fake_ort = MagicMock()
+    fake_ort.get_available_providers.return_value = ["DmlExecutionProvider", "CPUExecutionProvider"]
+    fake_ort.__version__ = "1.27.0"
     monkeypatch.setitem(__import__("sys").modules, "onnxruntime", fake_ort)
     rt = ors.current_runtime()
     assert rt["restart_required"] is True
