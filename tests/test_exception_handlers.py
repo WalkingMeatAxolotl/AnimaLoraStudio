@@ -153,25 +153,31 @@ def test_domain_error_4xx_logs_info_not_exception(
 
 
 def test_http_exception_string_detail_preserved(client: TestClient) -> None:
-    """raise HTTPException(detail='str') 仍返 {detail: str}，handler 不截胡。"""
+    """ADR-0009 Phase 2：raise HTTPException(detail='str') 的 detail 原样保留（老
+    路径不破），且 backstop handler 旁边补 error 信封（code=http.<status>）。"""
     resp = client.get("/raise_http")
     assert resp.status_code == 400
     body = resp.json()
-    assert body == {"detail": "legacy http err string"}, (
-        f"HTTPException 形状必须不变，实际 {body}"
-    )
-    # 应该 *没有* error 字段（不被 DomainError handler 处理）
-    assert "error" not in body
+    # detail 形状不变（前端 fallback + 老 callsite 依赖）
+    assert body["detail"] == "legacy http err string"
+    # Phase 2：error 信封补齐，前端可一律读 body.error
+    assert body["error"]["code"] == "http.400"
+    assert body["error"]["message"] == "legacy http err string"
+    assert body["error"]["trace_id"] is not None
 
 
 def test_http_exception_dict_detail_preserved(client: TestClient) -> None:
-    """raise HTTPException(detail={"error": "x", ...}) 仍 {detail: {...}}。
-
-    test_studio_server.py 7 处断言 body['detail']['error'] 走这条；不能变。
-    """
+    """ADR-0009 Phase 2：raise HTTPException(detail={...}) 的 dict detail 原样保留
+    （test_studio_server.py 7 处断言 body['detail']['error'] 依赖此，不能变），
+    并旁边合成 error（message 取 detail.message/error 兜底）。"""
     resp = client.get("/raise_http_dict")
     body = resp.json()
-    assert body == {"detail": {"error": "running_tasks_present", "count": 3}}
+    # 结构化 detail 原样保留
+    assert body["detail"] == {"error": "running_tasks_present", "count": 3}
+    # Phase 2：合成 error 信封
+    assert body["error"]["code"] == "http.400"
+    assert body["error"]["message"] == "running_tasks_present"
+    assert body["error"]["trace_id"] is not None
 
 
 def test_http_exception_still_has_trace_id_header(client: TestClient) -> None:

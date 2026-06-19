@@ -2366,5 +2366,181 @@
         "description": "4x-AnimeSharp — upscales training images during preprocessing"
       }
     }
+  },
+  "errors": {
+    "path": {
+      "invalid": "Invalid path",
+      "not_found": "Path not found",
+      "not_a_file": "Selected path is not a file",
+      "not_a_directory": "Path is not a directory",
+      "permission_denied": "Permission denied"
+    },
+    "file": {
+      "not_found": "File \"{{filename}}\" not found",
+      "required": "Select a file",
+      "ext_invalid": "Select a {{types}} file"
+    },
+    "image": {
+      "not_found": "Image not found"
+    },
+    "project": {
+      "not_found": "Project not found",
+      "title_required": "Project title is required"
+    },
+    "version": {
+      "not_found": "Version not found",
+      "label_invalid": "Invalid version label \"{{name}}\"; use letters, digits, underscore, hyphen, or dot",
+      "label_exists": "Version label \"{{name}}\" already exists",
+      "fork_source_invalid": "The version to copy from was not found in this project",
+      "config_missing": "Training configuration is not set for this version",
+      "config_invalid": "Training configuration is invalid: {{reason}}",
+      "has_active_task": "This version already has a running task; wait for it to finish or cancel it"
+    },
+    "preset": {
+      "not_found": "Preset \"{{name}}\" not found",
+      "exists": "Preset \"{{name}}\" already exists",
+      "name_invalid": "Invalid preset name \"{{name}}\"; use letters, digits, underscore, or hyphen",
+      "invalid": "Preset file is invalid: {{reason}}"
+    },
+    "dataset": {
+      "no_files": "No files uploaded",
+      "export_empty": "No images to export",
+      "export_nothing_selected": "Select at least one item to export (training set, regularization set, or training configuration)",
+      "import_invalid": "Import file is invalid: {{reason}}",
+      "import_empty": "Import file contains nothing to import",
+      "import_corrupt": "Import file is corrupt",
+      "delete_failed": "Failed to delete \"{{name}}\": {{reason}}",
+      "thumbnail_not_found": "Thumbnail not found",
+      "image_set_invalid": "Unsupported image set"
+    },
+    "download": {
+      "source_unsupported": "Unsupported image source: {{source}}",
+      "tag_required": "Tag is required",
+      "credentials_missing": "No {{source}} credentials configured; add them on the Settings page",
+      "count_invalid": "Download count must be at least 1"
+    },
+    "preprocess": {
+      "mode_invalid": "Invalid preprocess mode: {{mode}}",
+      "tile_size_invalid": "Tile size must be greater than 0",
+      "device_invalid": "Invalid device: {{device}}",
+      "target_area_out_of_range": "Target area is out of range: {{value}}",
+      "crops_required": "No crop regions provided",
+      "crop_rect_invalid": "Invalid crop region",
+      "crop_too_small": "Crop region is too small",
+      "selection_empty": "No images selected"
+    },
+    "upscaler": {
+      "not_found": "Upscaler \"{{name}}\" not found",
+      "not_downloaded": "Upscaler weights for \"{{name}}\" are not downloaded; download them under Settings → Preprocess",
+      "label_required": "Upscaler name is required",
+      "download_source_invalid": "Unsupported download source: {{source}}",
+      "download_fields_required": "Repository ID and file name are required"
+    },
+    "curation": {
+      "folder_name_invalid": "Invalid folder name: \"{{name}}\"",
+      "file_name_invalid": "Invalid file name: \"{{name}}\"",
+      "folder_exists": "Folder \"{{name}}\" already exists",
+      "folder_not_found": "Folder \"{{name}}\" not found",
+      "new_name_required": "A new name is required to rename a folder",
+      "op_invalid": "Unknown folder operation: {{op}}"
+    },
+    "duplicate": {
+      "not_installed": "Duplicate detection requires the imagehash package, which is not installed",
+      "tile_grid_invalid": "Invalid tile grid value: {{value}}",
+      "tile_grid_out_of_range": "Tile grid must be between 2 and 12",
+      "tile_grid_required": "At least one tile grid is required",
+      "match_scope_invalid": "Invalid match scope: {{value}}"
+    },
+    "tag": {
+      "tagger_invalid": "Unknown tagger: \"{{name}}\"",
+      "output_format_invalid": "Output format must be txt or json",
+      "on_existing_invalid": "On-existing mode must be overwrite, skip, or append",
+      "replace_args_required": "Replace requires both the old and new tag",
+      "op_invalid": "Unknown operation: \"{{op}}\"",
+      "dictionary_not_loaded": "Tag dictionary is not loaded",
+      "dictionary_upload_invalid": "Invalid tag dictionary file: {{reason}}",
+      "dictionary_download_failed": "Failed to download the default tag dictionary: {{reason}}"
+    },
+    "reg": {
+      "not_found": "Regularization set not found",
+      "paths_empty": "No files selected",
+      "api_source_invalid": "Image source must be Gelbooru or Danbooru",
+      "postprocess_method_invalid": "Postprocess method must be smart, stretch, or crop",
+      "crop_ratio_out_of_range": "Max crop ratio must be between 0.05 and 0.5",
+      "aspect_ratio_invalid": "Min aspect ratio must be less than max aspect ratio, and both must be greater than 0",
+      "auto_tag_kind_invalid": "Auto-tag mode must be one of: {{allowed}}",
+      "build_mode_invalid": "Build mode must be mirror or flat",
+      "target_count_invalid": "Target count must be greater than 0 or empty"
+    },
+    "train": {
+      "no_images": "Add images to the training set first"
+    },
+    "snapshot": {
+      "not_found": "Snapshot not found",
+      "invalid": "Invalid snapshot id",
+      "id_collision": "Could not allocate a snapshot id; please retry"
+    },
+    "task": {
+      "not_found": "Task not found",
+      "already_finished": "This task has already finished",
+      "cancel_rejected": "Cannot cancel this task in its current state",
+      "pause_rejected": "Cannot pause this task right now",
+      "not_resumable": "This task cannot be resumed",
+      "resume_state_missing": "The saved training state is missing; start a new run instead",
+      "not_retryable": "Only finished tasks can be retried",
+      "not_deletable": "Only finished tasks can be deleted",
+      "no_outputs": "This task has no output files",
+      "output_files_missing": "Some files are no longer available: {{files}}",
+      "empty_selection": "No files selected",
+      "snapshot_not_found": "No saved configuration for this task"
+    },
+    "sample": {
+      "not_found": "Sample image not found"
+    },
+    "queue": {
+      "status_filter_invalid": "Unsupported status filter: {{status}}",
+      "export_ids_invalid": "The selected task IDs are not valid",
+      "import_invalid": "Could not import the queue: {{reason}}"
+    },
+    "job": {
+      "not_found": "Job not found",
+      "already_finished": "This job has already finished",
+      "cancel_rejected": "Cannot cancel this job in its current state"
+    },
+    "generate": {
+      "daemon_busy": "Inference service is busy; try again after the current task finishes",
+      "params_invalid": "Image parameters are not valid JSON",
+      "mode_invalid": "Unsupported mode: {{mode}}",
+      "save_disabled": "Saving test images is disabled",
+      "empty_image": "The uploaded image is empty",
+      "preview_model_download_failed": "Failed to download the preview model; check the server log"
+    },
+    "model": {
+      "invalid": "Invalid model selection: {{reason}}"
+    },
+    "install": {
+      "target_invalid": "Unsupported runtime target"
+    },
+    "llm_tagger": {
+      "base_url_required": "API base URL is required",
+      "connect_failed": "Could not reach the model service: {{reason}}",
+      "model_required": "A model must be selected"
+    },
+    "system": {
+      "starting": "The service is still starting; try again in a moment",
+      "tasks_running": "Tasks are running; cancel or wait for them to finish first",
+      "channel_invalid": "Unsupported update channel: {{channel}}",
+      "working_tree_dirty": "Local changes are uncommitted; commit or stash them before updating",
+      "no_rollback_target": "No previous version is available to roll back to",
+      "git_init_failed": "Failed to initialize the Git repository: {{reason}}",
+      "open_folder_local_only": "Opening the folder is only available on the local machine"
+    },
+    "studio_data": {
+      "target_invalid": "Invalid target location: {{reason}}",
+      "migration_busy": "A data migration is already in progress"
+    },
+    "export": {
+      "name_conflict": "Too many files named \"{{name}}\"; rename and try again"
+    }
   }
 }

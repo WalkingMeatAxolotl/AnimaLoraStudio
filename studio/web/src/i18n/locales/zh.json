@@ -2366,5 +2366,181 @@
         "description": "4x-AnimeSharp,预处理时把训练图放大"
       }
     }
+  },
+  "errors": {
+    "path": {
+      "invalid": "路径无效",
+      "not_found": "路径不存在",
+      "not_a_file": "所选路径不是文件",
+      "not_a_directory": "路径不是目录",
+      "permission_denied": "没有访问该路径的权限"
+    },
+    "file": {
+      "not_found": "文件「{{filename}}」不存在",
+      "required": "请选择文件",
+      "ext_invalid": "请选择 {{types}} 文件"
+    },
+    "image": {
+      "not_found": "图片不存在"
+    },
+    "project": {
+      "not_found": "项目不存在",
+      "title_required": "项目标题不能为空"
+    },
+    "version": {
+      "not_found": "版本不存在",
+      "label_invalid": "版本标签「{{name}}」格式无效，仅允许字母、数字、下划线、连字符与点",
+      "label_exists": "版本标签「{{name}}」已存在",
+      "fork_source_invalid": "找不到要复制的源版本，或它不属于当前项目",
+      "config_missing": "该版本尚未配置训练参数",
+      "config_invalid": "训练配置无效：{{reason}}",
+      "has_active_task": "该版本已有正在进行的任务，请等其完成或取消"
+    },
+    "preset": {
+      "not_found": "预设「{{name}}」不存在",
+      "exists": "预设「{{name}}」已存在",
+      "name_invalid": "预设名「{{name}}」格式无效，仅允许字母、数字、下划线与连字符",
+      "invalid": "预设文件无效：{{reason}}"
+    },
+    "dataset": {
+      "no_files": "没有上传文件",
+      "export_empty": "没有可导出的内容",
+      "export_nothing_selected": "请至少选择一项导出内容（训练集、正则集或训练配置）",
+      "import_invalid": "导入文件无效：{{reason}}",
+      "import_empty": "导入文件中没有可导入的内容",
+      "import_corrupt": "导入文件已损坏",
+      "delete_failed": "删除「{{name}}」失败：{{reason}}",
+      "thumbnail_not_found": "缩略图不存在",
+      "image_set_invalid": "不支持的图片集"
+    },
+    "download": {
+      "source_unsupported": "不支持的图源：{{source}}",
+      "tag_required": "标签不能为空",
+      "credentials_missing": "未配置 {{source}} 凭据，请先在「设置」页填写",
+      "count_invalid": "下载数量至少为 1"
+    },
+    "preprocess": {
+      "mode_invalid": "预处理模式无效：{{mode}}",
+      "tile_size_invalid": "分块尺寸必须大于 0",
+      "device_invalid": "设备无效：{{device}}",
+      "target_area_out_of_range": "目标面积超出范围：{{value}}",
+      "crops_required": "裁剪区域不能为空",
+      "crop_rect_invalid": "裁剪区域无效",
+      "crop_too_small": "裁剪区域过小",
+      "selection_empty": "未选择图片"
+    },
+    "upscaler": {
+      "not_found": "放大模型「{{name}}」不存在",
+      "not_downloaded": "放大模型「{{name}}」权重未下载，请先在「设置 → 预处理」下载",
+      "label_required": "请填写放大模型名称",
+      "download_source_invalid": "不支持的下载源：{{source}}",
+      "download_fields_required": "请填写仓库 ID 和文件名"
+    },
+    "curation": {
+      "folder_name_invalid": "文件夹名称无效：「{{name}}」",
+      "file_name_invalid": "文件名无效：「{{name}}」",
+      "folder_exists": "文件夹「{{name}}」已存在",
+      "folder_not_found": "文件夹「{{name}}」不存在",
+      "new_name_required": "重命名文件夹需要填写新名称",
+      "op_invalid": "未知的文件夹操作：{{op}}"
+    },
+    "duplicate": {
+      "not_installed": "去重功能依赖 imagehash 组件，但尚未安装",
+      "tile_grid_invalid": "分块网格值无效：{{value}}",
+      "tile_grid_out_of_range": "分块网格必须在 2 到 12 之间",
+      "tile_grid_required": "至少需要一个分块网格",
+      "match_scope_invalid": "匹配范围无效：{{value}}"
+    },
+    "tag": {
+      "tagger_invalid": "打标器「{{name}}」不支持",
+      "output_format_invalid": "输出格式必须为 txt 或 json",
+      "on_existing_invalid": "已有标签处理方式必须为覆盖、跳过或追加",
+      "replace_args_required": "替换操作需要同时填写原标签和新标签",
+      "op_invalid": "不支持的操作：「{{op}}」",
+      "dictionary_not_loaded": "标签词典尚未加载",
+      "dictionary_upload_invalid": "标签词典文件无效：{{reason}}",
+      "dictionary_download_failed": "默认标签词典下载失败：{{reason}}"
+    },
+    "reg": {
+      "not_found": "正则集不存在",
+      "paths_empty": "未选择任何文件",
+      "api_source_invalid": "图源必须为 Gelbooru 或 Danbooru",
+      "postprocess_method_invalid": "后处理方式必须为 smart、stretch 或 crop",
+      "crop_ratio_out_of_range": "最大裁剪比例必须在 0.05 到 0.5 之间",
+      "aspect_ratio_invalid": "最小宽高比必须小于最大宽高比，且两者均大于 0",
+      "auto_tag_kind_invalid": "自动打标方式必须为以下之一：{{allowed}}",
+      "build_mode_invalid": "构建方式必须为 mirror 或 flat",
+      "target_count_invalid": "目标数量必须大于 0 或留空"
+    },
+    "train": {
+      "no_images": "训练集还没有图片，请先下载或筛选"
+    },
+    "snapshot": {
+      "not_found": "快照不存在",
+      "invalid": "快照标识无效",
+      "id_collision": "无法分配快照编号，请重试"
+    },
+    "task": {
+      "not_found": "任务不存在",
+      "already_finished": "该任务已结束",
+      "cancel_rejected": "当前状态下无法取消该任务",
+      "pause_rejected": "当前无法暂停该任务",
+      "not_resumable": "该任务无法继续训练",
+      "resume_state_missing": "恢复点已丢失，请重新发起训练",
+      "not_retryable": "仅已结束的任务可重试",
+      "not_deletable": "仅已结束的任务可删除",
+      "no_outputs": "该任务没有输出文件",
+      "output_files_missing": "部分文件已不存在：{{files}}",
+      "empty_selection": "未选择任何文件",
+      "snapshot_not_found": "该任务没有关联配置"
+    },
+    "sample": {
+      "not_found": "采样图不存在"
+    },
+    "queue": {
+      "status_filter_invalid": "不支持的状态筛选：{{status}}",
+      "export_ids_invalid": "所选任务编号无效",
+      "import_invalid": "队列导入失败：{{reason}}"
+    },
+    "job": {
+      "not_found": "任务不存在",
+      "already_finished": "该任务已结束",
+      "cancel_rejected": "当前状态下无法取消该任务"
+    },
+    "generate": {
+      "daemon_busy": "推理服务忙，请在当前任务结束后重试",
+      "params_invalid": "图片参数不是合法 JSON",
+      "mode_invalid": "不支持的模式：{{mode}}",
+      "save_disabled": "测试出图落盘已关闭",
+      "empty_image": "上传的图片为空",
+      "preview_model_download_failed": "预览模型下载失败，请查看服务端日志"
+    },
+    "model": {
+      "invalid": "模型选择无效：{{reason}}"
+    },
+    "install": {
+      "target_invalid": "不支持的运行时目标"
+    },
+    "llm_tagger": {
+      "base_url_required": "请填写 API 地址",
+      "connect_failed": "无法连接模型服务：{{reason}}",
+      "model_required": "请选择模型"
+    },
+    "system": {
+      "starting": "服务正在启动，请稍后重试",
+      "tasks_running": "有任务正在运行，请先取消或等待完成",
+      "channel_invalid": "不支持的更新通道：{{channel}}",
+      "working_tree_dirty": "本地有未提交的修改，请先提交或暂存",
+      "no_rollback_target": "没有可回滚的上一版本",
+      "git_init_failed": "初始化 Git 仓库失败：{{reason}}",
+      "open_folder_local_only": "仅本机访问时可打开文件夹"
+    },
+    "studio_data": {
+      "target_invalid": "目标位置无效：{{reason}}",
+      "migration_busy": "数据迁移已在进行中"
+    },
+    "export": {
+      "name_conflict": "导出文件名「{{name}}」冲突过多，请重命名后重试"
+    }
   }
 }

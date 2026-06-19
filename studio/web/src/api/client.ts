@@ -5,6 +5,7 @@
 // window.onerror 上报时带上（让开发者在 server log 能 join "前端崩前最后一次
 // API 失败" 跟 "用户实际看到的 toast"）。
 import { setLastApiTraceId } from '../lib/errors/report'
+import i18n from '../i18n'
 
 export interface HealthResponse {
   status: string
@@ -1449,8 +1450,68 @@ export interface ImportResult {
  */
 export type ApiError = Error & {
   status?: number
+  /** ADR-0009 Phase 2: 后端 body.error.code（语义错误码），前端按它查 errors.* i18n。 */
+  code?: string
   detail?: unknown
   traceId?: string
+}
+
+/**
+ * ADR-0009 Phase 2 统一错误解析：所有 fetch / XHR 失败路径共用，保证 toast 文案
+ * 一致且可本地化。
+ *
+ * 优先 `body.error`：用 `error.code` 查 `errors.<code>` i18n（带 `error.details`
+ * 插值，缺词条则回退 `error.message` 英文）。`body.detail` 退为 fallback —— 结构化
+ * detail（如 409 冲突的 config/suggested_name）仍挂到 `err.detail` 给 callsite；
+ * 没有 error 信封时（RequestValidationError 422 list / 极老路径）才用 detail 取文案。
+ */
+export function makeApiError(
+  status: number,
+  statusText: string,
+  body: unknown,
+  headerTraceId?: string | null,
+): ApiError {
+  let message = `${status} ${statusText}`
+  let code: string | undefined
+  let detail: unknown = null
+  let traceId: string | undefined
+  const b = body as {
+    detail?: unknown
+    error?: { code?: unknown; message?: unknown; trace_id?: unknown; details?: unknown }
+  } | null | undefined
+  const err = b?.error
+  if (err && typeof err === 'object') {
+    code = typeof err.code === 'string' ? err.code : undefined
+    const enMsg =
+      typeof err.message === 'string' && err.message ? err.message : message
+    const params =
+      err.details && typeof err.details === 'object'
+        ? (err.details as Record<string, unknown>)
+        : {}
+    message = code ? i18n.t(`errors.${code}`, { ...params, defaultValue: enMsg }) : enMsg
+    if (typeof err.trace_id === 'string') traceId = err.trace_id
+  }
+  if (b && b.detail !== undefined) {
+    if (!err) {
+      if (typeof b.detail === 'string') {
+        message = b.detail
+      } else if (b.detail && typeof b.detail === 'object') {
+        detail = b.detail
+        const dm = (b.detail as { message?: unknown }).message
+        if (typeof dm === 'string') message = dm
+      }
+    } else if (b.detail && typeof b.detail === 'object') {
+      detail = b.detail
+    }
+  }
+  if (!traceId && headerTraceId) traceId = headerTraceId
+  if (traceId) setLastApiTraceId(traceId)
+  const e = new Error(message) as ApiError
+  e.status = status
+  e.code = code
+  e.detail = detail
+  e.traceId = traceId
+  return e
 }
 
 /**
@@ -1480,39 +1541,8 @@ async function req<T>(
     ...init,
   })
   if (!resp.ok) {
-    let detail = `${resp.status} ${resp.statusText}`
-    let rawDetail: unknown = null
-    let traceId: string | undefined
-    try {
-      const body = await resp.json()
-      if (typeof body?.detail === 'string') {
-        detail = body.detail
-      } else if (body?.detail && typeof body.detail === 'object') {
-        rawDetail = body.detail
-        // 结构化 detail：取 .message 作为可读字符串；callsite 想拿完整结构走 e.detail
-        detail = (body.detail as { message?: string }).message ?? JSON.stringify(body.detail)
-      }
-      // ADR-0009 dual-write envelope: body.error.trace_id 优先
-      const errStruct = (body as { error?: { trace_id?: string } } | undefined)?.error
-      if (errStruct?.trace_id) {
-        traceId = errStruct.trace_id
-      }
-    } catch {
-      // body 不是 JSON / 解析失败：保持 statusText 默认
-    }
-    // header 兜底（DomainError dual-write 路径或 HTTPException 路径都有）
-    if (!traceId) {
-      traceId = resp.headers.get('X-Trace-Id') ?? undefined
-    }
-    if (traceId) {
-      // 写入 atom 给 ErrorBoundary / window.onerror 上报时附带
-      setLastApiTraceId(traceId)
-    }
-    const err = new Error(detail) as ApiError
-    err.status = resp.status
-    err.detail = rawDetail
-    err.traceId = traceId
-    throw err
+    const body = await resp.json().catch(() => null)
+    throw makeApiError(resp.status, resp.statusText, body, resp.headers.get('X-Trace-Id'))
   }
   if (resp.status === 204) return undefined as T
   return (await resp.json()) as T
@@ -1558,33 +1588,15 @@ async function xhrUpload<T>(
         }
         return
       }
-      let detail = `${xhr.status} ${xhr.statusText}`
-      let rawDetail: unknown = null
-      let traceId: string | undefined
+      let parsed: unknown = null
       try {
-        const j = JSON.parse(text)
-        if (typeof j?.detail === 'string') {
-          detail = j.detail
-        } else if (j?.detail && typeof j.detail === 'object') {
-          rawDetail = j.detail
-          detail = (j.detail as { message?: string }).message ?? JSON.stringify(j.detail)
-        }
-        // ADR-0009 PR-3 C3: dual-write envelope body.error.trace_id
-        const errStruct = (j as { error?: { trace_id?: string } })?.error
-        if (errStruct?.trace_id) traceId = errStruct.trace_id
+        parsed = JSON.parse(text)
       } catch {
-        /* body 不是 JSON：保持 statusText */
+        /* body 不是 JSON：makeApiError 用 statusText 兜底 */
       }
-      // header 兜底
-      if (!traceId) {
-        traceId = xhr.getResponseHeader('X-Trace-Id') ?? undefined
-      }
-      if (traceId) setLastApiTraceId(traceId)
-      const err = new Error(detail) as ApiError
-      err.status = xhr.status
-      err.detail = rawDetail
-      err.traceId = traceId
-      reject(err)
+      reject(
+        makeApiError(xhr.status, xhr.statusText, parsed, xhr.getResponseHeader('X-Trace-Id')),
+      )
     }
     xhr.onerror = () => reject(new Error('network error'))
     xhr.send(body)
@@ -1677,21 +1689,8 @@ export const api = {
     fd.append('file', file, file.name)
     const resp = await fetch('/api/presets/import', { method: 'POST', body: fd })
     if (!resp.ok) {
-      let message = `${resp.status} ${resp.statusText}`
-      let rawDetail: unknown = null
-      try {
-        const body = await resp.json()
-        if (typeof body?.detail === 'string') {
-          message = body.detail
-        } else if (body?.detail && typeof body.detail === 'object') {
-          rawDetail = body.detail
-          message = (body.detail as { message?: string }).message ?? JSON.stringify(body.detail)
-        }
-      } catch { /* body 非 JSON,保留 statusText */ }
-      const err = new Error(message) as ApiError
-      err.status = resp.status
-      err.detail = rawDetail
-      throw err
+      const body = await resp.json().catch(() => null)
+      throw makeApiError(resp.status, resp.statusText, body, resp.headers.get('X-Trace-Id'))
     }
     return (await resp.json()) as { name: string; path: string }
   },
@@ -1729,20 +1728,8 @@ export const api = {
     fd.append('file', file, file.name)
     const resp = await fetch('/api/tag-dictionary/upload', { method: 'POST', body: fd })
     if (!resp.ok) {
-      let message = `${resp.status} ${resp.statusText}`
-      let rawDetail: unknown = null
-      try {
-        const body = await resp.json()
-        if (typeof body?.detail === 'string') message = body.detail
-        else if (body?.detail && typeof body.detail === 'object') {
-          rawDetail = body.detail
-          message = (body.detail as { message?: string }).message ?? JSON.stringify(body.detail)
-        }
-      } catch { /* 非 JSON，保留 statusText */ }
-      const err = new Error(message) as ApiError
-      err.status = resp.status
-      err.detail = rawDetail
-      throw err
+      const body = await resp.json().catch(() => null)
+      throw makeApiError(resp.status, resp.statusText, body, resp.headers.get('X-Trace-Id'))
     }
     return (await resp.json()) as TagDictionaryMetaResponse
   },
