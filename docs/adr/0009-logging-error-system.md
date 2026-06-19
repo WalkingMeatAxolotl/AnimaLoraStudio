@@ -174,10 +174,12 @@ api/middleware/  ────►  api/exception_handlers  ────►  domai
 | 阶段 | release | 后端 | 前端 |
 |---|---|---|---|
 | Phase 1 | 0.12.0 | dual-write：`{"detail": <legacy>, "error": {"code", "message", "trace_id"}}` | 优先读 `body.error.trace_id` 显 toast；fallback 读 `body.detail` |
-| Phase 2 | 0.13.0 | 所有 `raise HTTPException` 加 deprecation log；front-end 完成全量迁移到 `body.error.*` | 删 `client.ts` 内 `body.detail` 解析路径，只剩单一 `ApiError` |
-| Phase 3 | 0.14.0 | handler 删 `detail` key；测试 5 文件 11 处迁完 | — |
+| Phase 2 | 0.15.0 | 所有 `raise HTTPException` 加 deprecation log；front-end 完成全量迁移到 `body.error.*` | 删 `client.ts` 内 `body.detail` 解析路径，只剩单一 `ApiError` |
+| Phase 3 | 0.16.0 | handler 删 `detail` key；测试 5 文件 11 处迁完 | — |
 
 **关键**：Phase 1 多写 ~30 行（handler 同时填两个 key），给前端 toast trace_id body 可见性提前 3 release。
+
+> **进度（2026-06-19 更新）**：实际只有 Phase 1 跟 0.12.0 发布。Phase 2/3 滑期 —— 前端 `client.ts` 仍以 `body.detail` 为主错误文案来源、未迁到 `body.error.*`，故 Phase 3 删 `detail` 会丢 toast 文案、被 Phase 2 阻塞。目标版本已下调（原 0.13.0 / 0.14.0 → 现 0.15.0 / 0.16.0）。详细待办与现状见 [`docs/todo/error-envelope-detail-key-removal.md`](../todo/error-envelope-detail-key-removal.md)。
 
 ---
 
@@ -239,7 +241,7 @@ api/middleware/  ────►  api/exception_handlers  ────►  domai
 |---|---|
 | `infrastructure/logging.py` 单文件 → 子包 | 当前 ~200 LOC，超 400 触发；纯文件搬动 PR 2h |
 | Worker 单写 → 双写（worker 直接 emit `studio.log`） | `concurrent-log-handler` Windows + OneDrive + Defender 稳定性需先验证；当前单写 + supervisor 回写已经解 1.6 痛点；运维 grep `jobs/*.log studio.log` 也能聚合 |
-| envelope Phase 2/3（删 `detail` legacy key） | 跨 release deprecation 周期，最早 0.13.0 |
+| envelope Phase 2/3（删 `detail` legacy key） | 跨 release deprecation 周期；滑期后 Phase 2 → 0.15.0、Phase 3 → 0.16.0（见 `docs/todo/error-envelope-detail-key-removal.md`） |
 | IndexedDB 离线上报 retry | 前端上报失败 silently swallow 是合理默认；离线场景属于增强 |
 | `jobs/<id>.log` 真 rotation | 单 job 几 MB 量级可控；改 `_finish_slot` 删超 7 天 .log 即可（GC 而非 rotation），独立 follow-up |
 | CLI cmd_run subprocess 不接管 stdout（B-5.2） | 跟 nssm/systemd wrapper 行为相关，本批不动 |
