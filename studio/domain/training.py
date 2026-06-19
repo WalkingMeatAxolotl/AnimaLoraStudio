@@ -620,6 +620,7 @@ class TrainingConfig(BaseModel):
         description="【LeapAlign 自蒸馏】启用两步跳跃自蒸馏（去奖励模型版）：每步用真实 latent 当 x0，per-sample 采两个时刻 (k>j) 做两步跳跃，loss=MSE(两步预测的 x̂0, 真实 x0)。本质是 shortcut/consistency 式自蒸馏。开销：leap_ratio=1.0 时每步 2 次前向 ≈ 2× 算力 + activation 显存接近 2×（两次前向都带 grad）。与 InfoNoise / loss_weighting / loss_type=huber 互斥",
         json_schema_extra=_meta(
             "loss",
+            advanced=True,
             disable_when="infonoise_enabled==true||loss_weighting!=none||loss_type==huber",
             disable_hint="互斥字段（InfoNoise / loss_weighting / loss_type=huber）非默认时不可启用（schema 互斥，与对侧形成对称锁）",
         ),
@@ -664,20 +665,20 @@ class TrainingConfig(BaseModel):
     sra_enabled: bool = Field(
         False,
         description="【SRA v2 表征对齐】启用 VAE Self-Representation Alignment：将中间 transformer block 的 hidden state 对齐到 clean VAE latent，加速收敛并正则化表征。仅增加 ~4% GFLOPs（一个轻量 MLP），训练完自动丢弃",
-        json_schema_extra=_meta("loss"),
+        json_schema_extra=_meta("loss", advanced=True),
     )
     sra_block: int = Field(
         4, ge=1, le=35,
-        description="【SRA v2】从哪一层 block 取中间表征做对齐（0-indexed）。论文建议浅层效果最好：1.3B 模型（28 blocks）推荐 2-6，14B 模型（36 blocks）推荐 4-8",
+        description="【SRA v2】从哪一层 block 取中间表征做对齐（0-indexed）。论文建议浅层效果最好",
         json_schema_extra=_meta("loss", show_when="sra_enabled==true", advanced=True),
     )
     sra_weight: float = Field(
-        1.0, ge=0.0,
-        description="【SRA v2】对齐 loss 权重 λ：align_loss 乘以此值后加到总 loss。论文默认 1.0；LoRA 微调建议从 0.5-1.0 开始试",
+        0.2, ge=0.0,
+        description="【SRA v2】对齐 loss 权重 λ：align_loss 乘以此值后加到总 loss。trainer 默认 0.2，过大会导致异常",
         json_schema_extra=_meta("loss", show_when="sra_enabled==true", advanced=True),
     )
     sra_decay_type: Literal["none", "linear", "cosine", "jump"] = Field(
-        "none",
+        "linear",
         description="【SRA v2】权重衰减方式：none 全程固定；linear 从起点线性降到 0；cosine 从起点余弦降到 0；jump 到起点直接关掉。实际权重 = sra_weight × 衰减系数",
         json_schema_extra=_meta("loss", show_when="sra_enabled==true", advanced=True),
     )

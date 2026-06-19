@@ -78,8 +78,8 @@ def test_sra_weight_zero_is_preserved() -> None:
     from training.loop import _resolve_sra_weight
 
     assert _resolve_sra_weight(SimpleNamespace(sra_weight=0.0)) == 0.0
-    assert _resolve_sra_weight(SimpleNamespace(sra_weight=None)) == 1.0
-    assert _resolve_sra_weight(SimpleNamespace()) == 1.0
+    assert _resolve_sra_weight(SimpleNamespace(sra_weight=None)) == 0.2
+    assert _resolve_sra_weight(SimpleNamespace()) == 0.2
 
 
 def test_sra_effective_weight_decay_modes() -> None:

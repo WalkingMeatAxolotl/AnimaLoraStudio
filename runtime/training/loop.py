@@ -52,8 +52,8 @@ logger = logging.getLogger(__name__)
 
 def _resolve_sra_weight(args: Any) -> float:
     """Read sra_weight without treating explicit 0 as a missing value."""
-    raw = getattr(args, "sra_weight", 1.0)
-    return 1.0 if raw is None else float(raw)
+    raw = getattr(args, "sra_weight", 0.2)
+    return 0.2 if raw is None else float(raw)
 
 
 def _resolve_sra_effective_weight(args: Any, global_step: int, total_steps: int | None) -> float:
