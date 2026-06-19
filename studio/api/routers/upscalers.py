@@ -9,10 +9,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
 from ..schemas.models import UpscalerCustomDownloadRequest, UpscalerSelectRequest
 from ... import secrets
+from ...domain.errors import InvalidPathError, NotFoundError, ValidationError
 from ...services import models as model_downloader
 
 router = APIRouter()
@@ -27,17 +28,20 @@ def select_upscaler(body: UpscalerSelectRequest) -> dict[str, Any]:
     """
     label = body.label.strip()
     if not label:
-        raise HTTPException(400, "label 不能为空")
+        raise ValidationError(
+            "Upscaler name is required", code="upscaler.label_required", http_status=400,
+        )
     valid = label in model_downloader.UPSCALER_VARIANTS
     if not valid:
         # custom 文件名：必须已经在磁盘上
         try:
             target = model_downloader.upscaler_target(label)
         except ValueError as exc:
-            raise HTTPException(400, str(exc)) from exc
+            raise InvalidPathError("Invalid path", details={"reason": str(exc)}) from exc
         if not target.exists():
-            raise HTTPException(
-                404, f"放大器不存在: {label}（既非预设也未在 upscalers/ 找到）"
+            raise NotFoundError(
+                f'Upscaler "{label}" not found',
+                code="upscaler.not_found", details={"name": label},
             )
     cur = secrets.load()
     new_models = cur.models.model_copy(update={"selected_upscaler": label})
@@ -56,14 +60,22 @@ def start_upscaler_custom_download(
     过滤 + catalog 状态匹配。
     """
     if body.source not in ("hf", "ms"):
-        raise HTTPException(400, f"未知下载源: {body.source}")
+        raise ValidationError(
+            f"Unsupported download source: {body.source}",
+            code="upscaler.download_source_invalid",
+            details={"source": body.source}, http_status=400,
+        )
     if not body.repo_id.strip() or not body.filename.strip():
-        raise HTTPException(400, "repo_id / filename 不能为空")
+        raise ValidationError(
+            "Repository ID and file name are required",
+            code="upscaler.download_fields_required", http_status=400,
+        )
     save_name = Path(body.filename).name
     if not save_name.lower().endswith(model_downloader.UPSCALER_EXTS):
-        raise HTTPException(
-            400,
-            f"仅支持 {model_downloader.UPSCALER_EXTS} 扩展名",
+        _exts = " / ".join(model_downloader.UPSCALER_EXTS)
+        raise ValidationError(
+            f"Select a {_exts} file",
+            code="file.ext_invalid", details={"types": _exts}, http_status=400,
         )
     key = f"upscaler:custom:{save_name}"
     model_downloader.start_download_async(
