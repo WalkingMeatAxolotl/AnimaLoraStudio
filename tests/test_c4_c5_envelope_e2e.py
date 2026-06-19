@@ -39,17 +39,15 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
 # ── preset 404 路径（C4 batch 1）───────────────────────────────────────
 
 
-def test_preset_not_found_envelope_dual_write(client: TestClient) -> None:
+def test_preset_not_found_envelope(client: TestClient) -> None:
     resp = client.get("/api/presets/__nonexistent__")
     assert resp.status_code == 404
     body = resp.json()
-    # legacy contract — detail 现在是英文兜底，含资源名 + "not found"
-    assert "not found" in body["detail"]
-    assert "__nonexistent__" in body["detail"]
-    # 新结构化（C2 dual-write）
-    assert "error" in body
-    assert body["error"]["code"] == "preset.not_found"  # C4 _preset_err_code mutate
-    assert body["error"]["message"] == body["detail"]
+    # Phase 3：只发 error 信封，无 legacy detail
+    assert "detail" not in body
+    assert body["error"]["code"] == "preset.not_found"
+    assert "not found" in body["error"]["message"]
+    assert "__nonexistent__" in body["error"]["message"]
     # trace_id 跟 header 一致
     assert body["error"]["trace_id"] == resp.headers[TRACE_HEADER]
 
@@ -61,6 +59,7 @@ def test_preset_name_invalid_envelope_400(client: TestClient) -> None:
     # 我们接受 400 或 404；锁 envelope 形态
     body = resp.json()
     assert resp.status_code in (400, 404, 422)
-    assert "detail" in body
+    # Phase 3：error 信封（422 RequestValidationError 仍是 detail list）
+    assert "error" in body or isinstance(body.get("detail"), list)
     # 4xx 全部应该有 trace_id header（middleware）
     assert TRACE_HEADER in resp.headers

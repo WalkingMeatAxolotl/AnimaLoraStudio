@@ -118,7 +118,7 @@ def _create_task(isolated, name: str = "t1") -> int:
 def test_endpoint_404_when_task_missing(client: TestClient) -> None:
     resp = client.get("/api/queue/99999/snapshot/config")
     assert resp.status_code == 404
-    assert "task" in resp.json()["detail"].lower()
+    assert resp.json()["error"]["code"] == "task.not_found"
 
 
 def test_endpoint_404_when_snapshot_missing(client: TestClient, isolated) -> None:

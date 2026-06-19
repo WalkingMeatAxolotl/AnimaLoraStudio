@@ -102,7 +102,7 @@ def test_start_download_requires_credentials(
         json={"tag": "x", "count": 1, "api_source": "gelbooru"},
     )
     assert resp.status_code == 400
-    assert "gelbooru" in resp.json()["detail"]
+    assert "gelbooru" in resp.json()["error"]["message"]
 
 
 def test_start_download_danbooru_does_not_require_credentials(

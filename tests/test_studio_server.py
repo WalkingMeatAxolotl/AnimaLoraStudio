@@ -255,7 +255,7 @@ def test_flash_attention_install_failure_returns_500(
     monkeypatch.setattr(flash_attention_setup, "install", boom)
     resp = client.post("/api/flash-attention/install", json={"url": "https://x/bad.whl"})
     assert resp.status_code == 500
-    assert "bad wheel" in resp.json()["detail"]
+    assert "bad wheel" in resp.json()["error"]["message"]
 
 
 def test_state_missing_returns_empty(client: TestClient, isolated_paths: dict[str, Path]) -> None:

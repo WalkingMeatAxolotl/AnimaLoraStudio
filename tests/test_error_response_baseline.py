@@ -1,12 +1,12 @@
-"""PR-LOG-1 安全网 — 锁错误响应 envelope 形状（防 PR-LOG-4 破前端 contract）。
+"""安全网 — 锁错误响应 envelope 形状（ADR-0009）。
 
 策略：调若干已知会 4xx 的端点，断言：
   (a) status code 是预期
-  (b) response.json() 顶层有 "detail" key
-  (c) detail 是 str 或 dict（非 list 非 None）
+  (b) response.json() 顶层有 "error" key（{code, message, trace_id, details?}）
+  (c) ADR-0009 Phase 3：顶层不再有 legacy "detail" key
 
-不锁 detail 内容文案（PR 期间允许改）；不锁额外字段（PR-LOG-4 dual-write 会新增 "error" 平行 key）。
-未来 PR-LOG-4 合完应该仍能通过本测试（dual-write 保 detail 形态不变）。
+例外：RequestValidationError（pydantic body 校验，422）仍保 `{"detail": [...]}`
+（前端专门处理），见 test_validation_error_returns_422_with_detail。
 """
 from __future__ import annotations
 
@@ -37,33 +37,36 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     return TestClient(server.app)
 
 
-def _assert_detail_envelope(body: dict, status: int) -> None:
-    assert "detail" in body, f"missing 'detail' key in {status} response: {body!r}"
-    d = body["detail"]
-    assert isinstance(d, (str, dict)), (
-        f"detail must be str or dict (前端 client.ts 只 handle 这两态), got {type(d).__name__}: {d!r}"
+def _assert_error_envelope(body: dict, status: int) -> None:
+    assert "detail" not in body, f"Phase 3：错误响应不应再有 legacy detail key: {body!r}"
+    assert "error" in body, f"missing 'error' key in {status} response: {body!r}"
+    err = body["error"]
+    assert isinstance(err, dict) and isinstance(err.get("code"), str), (
+        f"error 必须是 {{code, message, trace_id}}，got {err!r}"
     )
+    assert isinstance(err.get("message"), str)
+    assert err.get("trace_id")
 
 
-def test_preset_not_found_returns_404_with_detail(client: TestClient, tmp_path: Path,
-                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+def test_preset_not_found_returns_404_with_error(client: TestClient, tmp_path: Path,
+                                                  monkeypatch: pytest.MonkeyPatch) -> None:
     from studio.services.presets import io as presets_io
     monkeypatch.setattr(presets_io, "USER_PRESETS_DIR", tmp_path / "presets")
     resp = client.get("/api/presets/__definitely_does_not_exist_xxx__")
     assert resp.status_code == 404, f"expected 404, got {resp.status_code} body={resp.text!r}"
-    _assert_detail_envelope(resp.json(), resp.status_code)
+    _assert_error_envelope(resp.json(), resp.status_code)
 
 
-def test_preset_invalid_name_returns_400_with_detail(client: TestClient, tmp_path: Path,
-                                                       monkeypatch: pytest.MonkeyPatch) -> None:
+def test_preset_invalid_name_returns_400_with_error(client: TestClient, tmp_path: Path,
+                                                     monkeypatch: pytest.MonkeyPatch) -> None:
     from studio.services.presets import io as presets_io
     monkeypatch.setattr(presets_io, "USER_PRESETS_DIR", tmp_path / "presets")
-    # 路径分隔符是非法字符之一，触发 PresetError "非法预设名"
+    # 路径分隔符是非法字符之一，触发 preset 名校验
     resp = client.put("/api/presets/bad..name/with/slash", json={"foo": "bar"})
     assert resp.status_code in (400, 404, 422), (
         f"expected 4xx, got {resp.status_code} body={resp.text!r}"
     )
-    _assert_detail_envelope(resp.json(), resp.status_code)
+    _assert_error_envelope(resp.json(), resp.status_code)
 
 
 def test_unknown_task_log_returns_empty_not_error(client: TestClient) -> None:
