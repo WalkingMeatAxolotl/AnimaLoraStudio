@@ -109,5 +109,5 @@ def test_delete_removes_dir_and_row(isolated) -> None:
 
 def test_delete_missing_raises(isolated) -> None:
     with db.connection_for(isolated["db"]) as conn:
-        with pytest.raises(projects.ProjectError, match="不存在"):
+        with pytest.raises(projects.ProjectError, match="not found"):
             projects.delete_project(conn, 9999)

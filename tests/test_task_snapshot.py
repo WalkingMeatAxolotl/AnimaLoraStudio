@@ -125,7 +125,9 @@ def test_endpoint_404_when_snapshot_missing(client: TestClient, isolated) -> Non
     tid = _create_task(isolated)
     resp = client.get(f"/api/queue/{tid}/snapshot/config")
     assert resp.status_code == 404
-    assert "snapshot" in resp.json()["detail"].lower()
+    # ADR 0009 Phase 2: assert the structured error code (the English detail is
+    # "No saved configuration for this task"; the i18n code is the stable contract).
+    assert resp.json()["error"]["code"] == "task.snapshot_not_found"
 
 
 def test_endpoint_returns_snapshot_data(

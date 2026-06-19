@@ -40,7 +40,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
 from ...deps import _resolve_anima_model_paths
-from ...errors import _preset_err_code as _err_code, _safe_join_or_400
+from ...errors import _safe_join_or_400
 from ..logs import read_task_log
 from ...responses import _thumb_response
 from ...schemas.training import (
@@ -63,6 +63,12 @@ from ._shared import (
     _version_train_dir_or_404,
 )
 from .... import db
+from ....domain.errors import (
+    ConflictError,
+    InvalidPathError,
+    NotFoundError,
+    ValidationError,
+)
 from ....services.presets import io as presets_io
 from ....services.projects import jobs as project_jobs, projects, versions
 from ....services.dataset import scan as datasets
@@ -88,11 +94,21 @@ logger = logging.getLogger(__name__)
 @router.post("/api/projects/{pid}/versions/{vid}/tag")
 def start_tag(pid: int, vid: int, body: TagJobRequest) -> dict[str, Any]:
     if body.tagger not in VALID_TAGGER_NAMES:
-        raise HTTPException(400, f"unknown tagger: {body.tagger}")
+        raise ValidationError(
+            f'Unknown tagger: "{body.tagger}"',
+            code="tag.tagger_invalid", details={"name": body.tagger},
+            http_status=400,
+        )
     if body.output_format not in {"txt", "json"}:
-        raise HTTPException(400, "output_format must be txt|json")
+        raise ValidationError(
+            "Output format must be txt or json",
+            code="tag.output_format_invalid", http_status=400,
+        )
     if body.on_existing not in {"overwrite", "skip", "append"}:
-        raise HTTPException(400, "on_existing must be overwrite|skip|append")
+        raise ValidationError(
+            "On-existing mode must be overwrite, skip, or append",
+            code="tag.on_existing_invalid", http_status=400,
+        )
     _, v, _ = _version_train_dir_or_404(pid, vid)
 
     # 触发词：先 strip，落到 version 表（持久化，TagEdit / Train 都能读），再
@@ -162,7 +178,11 @@ def get_caption_endpoint(
     try:
         return tagedit.read_one(train, folder, filename)
     except FileNotFoundError as exc:
-        raise HTTPException(404, str(exc)) from exc
+        raise NotFoundError(
+            "Image not found",
+            code="image.not_found",
+            details={"folder": folder, "filename": filename},
+        ) from exc
 
 
 @router.put("/api/projects/{pid}/versions/{vid}/captions/{folder}/{filename}")
@@ -174,7 +194,11 @@ def put_caption_endpoint(
     try:
         return tagedit.write_one(train, folder, filename, body.tags)
     except FileNotFoundError as exc:
-        raise HTTPException(404, str(exc)) from exc
+        raise NotFoundError(
+            "Image not found",
+            code="image.not_found",
+            details={"folder": folder, "filename": filename},
+        ) from exc
 
 
 @router.post("/api/projects/{pid}/versions/{vid}/captions/snapshot")
@@ -192,24 +216,14 @@ def list_caption_snapshots(pid: int, vid: int) -> dict[str, Any]:
 @router.post("/api/projects/{pid}/versions/{vid}/captions/snapshots/{sid}/restore")
 def restore_caption_snapshot(pid: int, vid: int, sid: str) -> dict[str, Any]:
     _, _, vdir = _version_dir_or_404(pid, vid)
-    try:
-        return caption_snapshot.restore_snapshot(vdir, sid)
-    except FileNotFoundError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except caption_snapshot.SnapshotError as exc:
-        raise HTTPException(400, str(exc)) from exc
+    return caption_snapshot.restore_snapshot(vdir, sid)
 
 
 @router.delete("/api/projects/{pid}/versions/{vid}/captions/snapshots/{sid}")
 def delete_caption_snapshot(pid: int, vid: int, sid: str) -> dict[str, Any]:
     _, _, vdir = _version_dir_or_404(pid, vid)
-    try:
-        caption_snapshot.delete_snapshot(vdir, sid)
-        return {"deleted": sid}
-    except FileNotFoundError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except caption_snapshot.SnapshotError as exc:
-        raise HTTPException(400, str(exc)) from exc
+    caption_snapshot.delete_snapshot(vdir, sid)
+    return {"deleted": sid}
 
 
 @router.post("/api/projects/{pid}/versions/{vid}/captions/commit")
@@ -251,13 +265,19 @@ def batch_caption_endpoint(
         return {"op": op, "affected": tagedit.remove_tags(scope, train, body.tags or [])}
     if op == "replace":
         if not body.old or not body.new:
-            raise HTTPException(400, "replace 需要 old 和 new")
+            raise ValidationError(
+                "Replace requires both the old and new tag",
+                code="tag.replace_args_required", http_status=400,
+            )
         return {"op": op, "affected": tagedit.replace_tag(scope, train, body.old, body.new)}
     if op == "dedupe":
         return {"op": op, "affected": tagedit.dedupe(scope, train)}
     if op == "stats":
         return {"op": op, "items": tagedit.stats(scope, train, top=max(1, body.top))}
-    raise HTTPException(400, f"unknown op: {op}")
+    raise ValidationError(
+        f'Unknown operation: "{op}"',
+        code="tag.op_invalid", details={"op": op}, http_status=400,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -310,25 +330,46 @@ _REG_TAGGER_ALLOWED = {"wd14", "cltagger"}
 @router.post("/api/projects/{pid}/versions/{vid}/reg/build")
 def start_reg_build(pid: int, vid: int, body: RegBuildRequest) -> dict[str, Any]:
     if body.api_source not in {"gelbooru", "danbooru"}:
-        raise HTTPException(400, "api_source must be gelbooru|danbooru")
+        raise ValidationError(
+            "Image source must be Gelbooru or Danbooru",
+            code="reg.api_source_invalid", http_status=400,
+        )
     if body.postprocess_method not in {"smart", "stretch", "crop"}:
-        raise HTTPException(400, "postprocess_method must be smart|stretch|crop")
+        raise ValidationError(
+            "Postprocess method must be smart, stretch, or crop",
+            code="reg.postprocess_method_invalid", http_status=400,
+        )
     if not (0.05 <= body.postprocess_max_crop_ratio <= 0.5):
-        raise HTTPException(400, "postprocess_max_crop_ratio must be 0.05–0.5")
+        raise ValidationError(
+            "Max crop ratio must be between 0.05 and 0.5",
+            code="reg.crop_ratio_out_of_range", http_status=400,
+        )
     if body.aspect_ratio_filter_enabled and not (
         0.0 < body.min_aspect_ratio < body.max_aspect_ratio
     ):
-        raise HTTPException(400, "min_aspect_ratio must be < max_aspect_ratio (both > 0)")
+        raise ValidationError(
+            "Min aspect ratio must be less than max aspect ratio, "
+            "and both must be greater than 0",
+            code="reg.aspect_ratio_invalid", http_status=400,
+        )
     if body.auto_tag_kind not in _REG_TAGGER_ALLOWED:
-        raise HTTPException(
-            422,
-            f"auto_tag_kind must be one of {sorted(_REG_TAGGER_ALLOWED)}",
+        _allowed = sorted(_REG_TAGGER_ALLOWED)
+        raise ValidationError(
+            f"Auto-tag mode must be one of: {_allowed}",
+            code="reg.auto_tag_kind_invalid", details={"allowed": _allowed},
+            http_status=422,
         )
     # B1 — build_mode + target_count 校验
     if body.build_mode not in {"mirror", "flat"}:
-        raise HTTPException(422, "build_mode must be 'mirror' or 'flat'")
+        raise ValidationError(
+            "Build mode must be mirror or flat",
+            code="reg.build_mode_invalid", http_status=422,
+        )
     if body.target_count is not None and body.target_count <= 0:
-        raise HTTPException(422, "target_count must be > 0 or null")
+        raise ValidationError(
+            "Target count must be greater than 0 or empty",
+            code="reg.target_count_invalid", http_status=422,
+        )
     _, v, vdir = _version_dir_or_404(pid, vid)
     train = vdir / "train"
     has_image = train.exists() and any(
@@ -336,7 +377,10 @@ def start_reg_build(pid: int, vid: int, body: RegBuildRequest) -> dict[str, Any]
         for f in train.rglob("*")
     )
     if not has_image:
-        raise HTTPException(400, "train 还没有图片，先去 ① 整理 / ② 下载")
+        raise ValidationError(
+            "Add images to the training set first",
+            code="train.no_images", http_status=400,
+        )
 
     with db.connection_for() as conn:
         job = project_jobs.create_job(
@@ -370,14 +414,16 @@ def start_reg_build(pid: int, vid: int, body: RegBuildRequest) -> dict[str, Any]
 def get_reg_caption(pid: int, vid: int, path: str) -> dict[str, Any]:
     """读 reg 集中单张图的 caption。`path` 是相对 reg/ 的路径（含子文件夹）。"""
     if not path:
-        raise HTTPException(400, "invalid path")
+        raise InvalidPathError("Invalid path", code="path.invalid")
     _, _, vdir = _version_dir_or_404(pid, vid)
     rdir = _reg_dir(vdir)
     # path 允许含 `/` 子目录；按分隔符拆成片段交给 safe_join 做组件校验 + containment
     parts = [p for p in path.replace("\\", "/").split("/") if p]
     img = _safe_join_or_400(rdir, *parts)
     if not img.exists() or img.suffix.lower() not in datasets.IMAGE_EXTS:
-        raise HTTPException(404, "image not found")
+        raise NotFoundError(
+            "Image not found", code="image.not_found", details={"path": path},
+        )
     return {"path": path, "tags": tagedit.read_tags(img)}
 
 
@@ -392,7 +438,10 @@ def reg_generate_prior(pid: int, vid: int, body: RegAiRequest) -> dict[str, Any]
         for f in train.rglob("*")
     )
     if not has_image:
-        raise HTTPException(400, "train 还没有图片，请先完成 Step 1（下载）或 Step 2（筛选）")
+        raise ValidationError(
+            "Add images to the training set first",
+            code="train.no_images", http_status=400,
+        )
 
     rdir = _reg_dir(vdir)
     rdir.mkdir(parents=True, exist_ok=True)
@@ -463,7 +512,9 @@ def get_reg_prior_task(pid: int, vid: int, task_id: int) -> dict[str, Any]:
     with db.connection_for() as conn:
         task = db.get_task(conn, task_id)
     if not task or task.get("task_type") != "reg_ai":
-        raise HTTPException(404)
+        raise NotFoundError(
+            "Task not found", code="task.not_found", details={"id": task_id},
+        )
     return task
 
 
@@ -510,11 +561,15 @@ def delete_reg_files(
     走 _safe_join_or_400 抛 400。
     """
     if not body.relative_paths:
-        raise HTTPException(400, "relative_paths is empty")
+        raise ValidationError(
+            "No files selected", code="reg.paths_empty", http_status=400,
+        )
     _, _, vdir = _version_dir_or_404(pid, vid)
     rdir = _reg_dir(vdir)
     if not rdir.exists():
-        raise HTTPException(404, "reg dir not found")
+        raise NotFoundError(
+            "Regularization set not found", code="reg.not_found",
+        )
 
     # 端点入口：每条路径走 _safe_join_or_400 防 traversal；合法的转回 rdir
     # 相对形式喂给 reg_dedup.purge_paths。worker 走 dedup.scan_for_dedup
@@ -545,7 +600,9 @@ def dedup_purge_reg(pid: int, vid: int) -> dict[str, Any]:
     _, _, vdir = _version_dir_or_404(pid, vid)
     rdir = _reg_dir(vdir)
     if not rdir.exists():
-        raise HTTPException(404, "reg dir not found")
+        raise NotFoundError(
+            "Regularization set not found", code="reg.not_found",
+        )
 
     to_delete = reg_dedup.scan_for_dedup(rdir)
     scanned = sum(
@@ -596,7 +653,11 @@ def get_version_config_endpoint(pid: int, vid: int) -> dict[str, Any]:
     try:
         cfg, dropped, defaulted = version_config.read_version_config_with_warnings(project, ver)
     except version_config.VersionConfigError as exc:
-        raise HTTPException(422, str(exc)) from exc
+        raise ValidationError(
+            f"Training configuration is invalid: {exc}",
+            code="version.config_invalid", details={"reason": str(exc)},
+            http_status=422,
+        ) from exc
     return {
         "has_config": True,
         "config": cfg,
@@ -625,7 +686,11 @@ def put_version_config_endpoint(
         )
         cfg = version_config.read_version_config(project, ver)
     except version_config.VersionConfigError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise ValidationError(
+            f"Training configuration is invalid: {exc}",
+            code="version.config_invalid", details={"reason": str(exc)},
+            http_status=400,
+        ) from exc
     return {"has_config": True, "config": cfg}
 
 
@@ -639,10 +704,12 @@ def fork_preset_for_version_endpoint(
         cfg, dropped, defaulted = preset_flow.fork_preset_for_version_with_warnings(
             body.name, project, ver
         )
-    except presets_io.PresetError as exc:
-        _err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
     except version_config.VersionConfigError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise ValidationError(
+            f"Training configuration is invalid: {exc}",
+            code="version.config_invalid", details={"reason": str(exc)},
+            http_status=400,
+        ) from exc
     # 同步 versions.config_name = 来源 preset 名（informational only）
     with db.connection_for() as conn:
         versions.update_version(conn, vid, config_name=body.name)
@@ -665,10 +732,12 @@ def save_version_config_as_preset_endpoint(
         cfg = preset_flow.save_version_config_as_preset(
             project, ver, body.name, overwrite=body.overwrite,
         )
-    except presets_io.PresetError as exc:
-        _err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
     except version_config.VersionConfigError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise ValidationError(
+            f"Training configuration is invalid: {exc}",
+            code="version.config_invalid", details={"reason": str(exc)},
+            http_status=400,
+        ) from exc
     return {"saved_preset": body.name, "config": cfg}
 
 
@@ -682,8 +751,9 @@ def enqueue_version_training(pid: int, vid: int) -> dict[str, Any]:
     """
     project, ver = _project_and_version_or_404(pid, vid)
     if not version_config.has_version_config(project, ver):
-        raise HTTPException(
-            400, "请先在 ⑥ 训练页选预设并保存配置后再入队",
+        raise ValidationError(
+            "Training configuration is not set for this version",
+            code="version.config_missing", http_status=400,
         )
     cfg_path = version_config.version_config_path(project, ver)
 
@@ -696,10 +766,11 @@ def enqueue_version_training(pid: int, vid: int) -> dict[str, Any]:
             (vid,),
         ).fetchone()
         if active:
-            raise HTTPException(
-                409,
-                f"该版本已有 active task #{active['id']}（{active['status']}），"
-                "请等其完成或取消",
+            raise ConflictError(
+                "This version already has a running task; "
+                "wait for it to finish or cancel it",
+                code="version.has_active_task",
+                details={"task_id": active["id"], "status": active["status"]},
             )
 
         # 创建 task
@@ -740,16 +811,18 @@ def version_thumb(
     size: int = 256,
 ) -> FileResponse:
     if bucket not in {"train", "reg", "samples"}:
-        raise HTTPException(400, f"非法 bucket: {bucket}")
+        raise InvalidPathError("Invalid path", code="path.invalid")
     with db.connection_for() as conn:
         v = versions.get_version(conn, vid)
         p = projects.get_project(conn, pid)
     if not v or not p or v["project_id"] != pid:
-        raise HTTPException(404, "版本不存在")
+        raise NotFoundError(
+            "Version not found", code="version.not_found", details={"id": vid},
+        )
     vdir = versions.version_dir(p["id"], p["slug"], v["label"]) / bucket
     if bucket in {"train", "reg"}:
         if not folder:
-            raise HTTPException(400, "invalid folder")
+            raise InvalidPathError("Invalid path", code="path.invalid")
         f = _safe_join_or_400(vdir, folder, name)
     else:
         f = _safe_join_or_400(vdir, name)
@@ -758,5 +831,5 @@ def version_thumb(
             "version thumb 404: pid=%s vid=%s bucket=%s folder=%s name=%s -> %s",
             pid, vid, bucket, folder, name, f,
         )
-        raise HTTPException(404)
+        raise NotFoundError("Image not found", code="image.not_found")
     return _thumb_response(f, size)

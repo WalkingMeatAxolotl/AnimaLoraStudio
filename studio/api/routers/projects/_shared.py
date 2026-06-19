@@ -8,34 +8,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import HTTPException
-
 from .... import db
+from ....domain.errors import NotFoundError
 from ....services.projects import projects, versions
 from ....infrastructure.event_bus import bus
 from ....services import version_config
-
-
-def _project_err_code(exc: Exception) -> None:
-    """PR-2 C4: mutate ProjectError/VersionError exc.http_status + exc.code，
-    让 DomainError handler 翻 dual-write envelope。
-
-    callsite 模式：
-        except (ProjectError, VersionError) as exc:
-            _project_err_code(exc); raise
-    """
-    msg = str(exc)
-    if "不存在" in msg:
-        exc.http_status = 404
-        exc.code = "project.not_found"
-    elif "已存在" in msg:
-        exc.http_status = 400
-        exc.code = "project.exists"
-    elif "非法" in msg or "不能为空" in msg:
-        exc.http_status = 400
-        exc.code = "project.invalid"
-    else:
-        exc.http_status = 422
 
 
 def _project_payload(p: dict[str, Any]) -> dict[str, Any]:
@@ -83,7 +60,10 @@ def _version_dir_or_404(pid: int, vid: int) -> tuple[dict[str, Any], dict[str, A
     with db.connection_for() as conn:
         v = versions.get_version(conn, vid)
         if not v or v["project_id"] != pid:
-            raise HTTPException(404, f"版本不存在: id={vid}")
+            raise NotFoundError(
+                "Version not found", code="version.not_found",
+                details={"id": vid},
+            )
         p = projects.get_project(conn, pid)
     assert p is not None
     return p, v, versions.version_dir(p["id"], p["slug"], v["label"])
@@ -94,7 +74,10 @@ def _version_train_dir_or_404(pid: int, vid: int) -> tuple[dict[str, Any], dict[
     with db.connection_for() as conn:
         v = versions.get_version(conn, vid)
         if not v or v["project_id"] != pid:
-            raise HTTPException(404, f"版本不存在: id={vid}")
+            raise NotFoundError(
+                "Version not found", code="version.not_found",
+                details={"id": vid},
+            )
         p = projects.get_project(conn, pid)
     assert p is not None
     return p, v, versions.version_dir(p["id"], p["slug"], v["label"]) / "train"
@@ -103,12 +86,13 @@ def _version_train_dir_or_404(pid: int, vid: int) -> tuple[dict[str, Any], dict[
 def _project_and_version_or_404(
     pid: int, vid: int,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """version_config domain 的双对象解析（含 VersionConfigError → 404 包装）。"""
+    """version_config domain 的双对象解析。
+
+    VersionConfigError（project/version not_found，已带 code + http_status=404）
+    直接冒泡到全局 DomainError handler。
+    """
     with db.connection_for() as conn:
-        try:
-            return version_config.get_project_and_version(conn, pid, vid)
-        except version_config.VersionConfigError as exc:
-            raise HTTPException(404, str(exc)) from exc
+        return version_config.get_project_and_version(conn, pid, vid)
 
 
 def _reg_dir(vdir: Path) -> Path:

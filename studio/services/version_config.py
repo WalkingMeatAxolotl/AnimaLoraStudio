@@ -122,11 +122,15 @@ def read_version_config_with_warnings(
     p = version_config_path(project, version)
     if not p.exists():
         raise VersionConfigError(
-            f"版本未配置训练参数: project={project['id']} version={version['label']}"
+            "Training configuration is not set for this version",
+            code="version.config_missing",
         )
     raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
-        raise VersionConfigError("config.yaml 顶层不是 mapping")
+        raise VersionConfigError(
+            "Training configuration is invalid",
+            code="version.config_invalid",
+        )
     cfg, dropped, defaulted = _tolerant_validate(raw)
     return _absolutize_model_paths(cfg.model_dump(mode="python")), dropped, defaulted
 
@@ -179,10 +183,14 @@ def get_project_and_version(
     from ..services.projects import versions as _versions
     p = _projects.get_project(conn, project_id)
     if not p:
-        raise VersionConfigError(f"项目不存在: id={project_id}")
+        raise VersionConfigError(
+            "Project not found", code="project.not_found",
+            details={"id": project_id}, http_status=404,
+        )
     v = _versions.get_version(conn, version_id)
     if not v or v["project_id"] != project_id:
         raise VersionConfigError(
-            f"版本不存在或不属当前项目: id={version_id}"
+            "Version not found", code="version.not_found",
+            details={"id": version_id}, http_status=404,
         )
     return p, v

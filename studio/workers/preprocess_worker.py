@@ -28,6 +28,7 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 from studio import db
+from studio.domain.errors import DomainError
 from studio.services.preprocess import core as preprocess
 from studio.services.projects import jobs as project_jobs, projects, versions
 from studio.services import models as model_downloader
@@ -158,7 +159,7 @@ def _run_upscale_train(
         sources = preprocess.resolve_targets_train(
             project, version["label"], mode=mode, names=names
         )
-    except preprocess.PreprocessError as exc:
+    except DomainError as exc:
         log(f"[error] 解析目标失败: {exc}")
         return 1
 
@@ -324,7 +325,7 @@ def _run_crop_train(
         is_last = idx == total
         try:
             preprocess._validate_rel_name(src_rel)
-        except preprocess.PreprocessError as exc:
+        except DomainError as exc:
             log(f"[skip] {src_rel}: {exc}")
             skipped += 1
             emit_throttled(

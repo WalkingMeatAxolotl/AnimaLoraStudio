@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from studio import server
+from studio.domain.errors import InvalidPathError, NotFoundError
 from studio.services.dataset import browse
 
 
@@ -51,7 +52,7 @@ def test_list_dir_rejects_outside_repo(fake_repo: Path, tmp_path: Path) -> None:
     """lib 层默认仍然挡外部路径；server 端显式 opt-in 才放行。"""
     outside = tmp_path / "outside"
     outside.mkdir()
-    with pytest.raises(browse.BrowseError, match="outside repo"):
+    with pytest.raises(InvalidPathError, match="Invalid path"):
         browse.list_dir(outside)
 
 
@@ -63,7 +64,7 @@ def test_list_dir_allows_outside_when_opted_in(fake_repo: Path, tmp_path: Path) 
 
 
 def test_list_dir_missing_path(fake_repo: Path) -> None:
-    with pytest.raises(browse.BrowseError, match="does not exist"):
+    with pytest.raises(NotFoundError, match="Path not found"):
         browse.list_dir(fake_repo / "nope")
 
 

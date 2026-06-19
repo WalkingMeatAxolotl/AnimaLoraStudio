@@ -51,19 +51,26 @@ class CurationError(DomainError):
 def _validate_folder(name: str) -> None:
     if not _FOLDER_PATTERN.fullmatch(name):
         raise CurationError(
-            f"非法文件夹名: {name!r}（Kohya 风格 N_xxx 或纯字母数字）"
+            f'Invalid folder name: "{name}"',
+            code="curation.folder_name_invalid", details={"name": name},
         )
 
 
 def _validate_filename(name: str) -> None:
     if not _FILE_PATTERN.fullmatch(name) or ".." in name:
-        raise CurationError(f"非法文件名: {name!r}")
+        raise CurationError(
+            f'Invalid file name: "{name}"',
+            code="curation.file_name_invalid", details={"name": name},
+        )
 
 
 def _project_dir(conn, project_id: int) -> tuple[dict[str, Any], Path]:
     p = projects.get_project(conn, project_id)
     if not p:
-        raise CurationError(f"项目不存在: id={project_id}")
+        raise CurationError(
+            "Project not found", code="project.not_found",
+            details={"id": project_id}, http_status=404,
+        )
     return p, projects.project_dir(p["id"], p["slug"])
 
 
@@ -72,10 +79,16 @@ def _version_train_dir(conn, project_id: int, version_id: int) -> tuple[
 ]:
     p = projects.get_project(conn, project_id)
     if not p:
-        raise CurationError(f"项目不存在: id={project_id}")
+        raise CurationError(
+            "Project not found", code="project.not_found",
+            details={"id": project_id}, http_status=404,
+        )
     v = versions.get_version(conn, version_id)
     if not v or v["project_id"] != project_id:
-        raise CurationError(f"版本不存在: id={version_id}")
+        raise CurationError(
+            "Version not found", code="version.not_found",
+            details={"id": version_id}, http_status=404,
+        )
     train_dir = versions.version_dir(p["id"], p["slug"], v["label"]) / "train"
     return p, v, train_dir
 
@@ -377,7 +390,10 @@ def create_folder(conn, project_id: int, version_id: int, name: str) -> Path:
     _, _, train = _version_train_dir(conn, project_id, version_id)
     target = train / name
     if target.exists():
-        raise CurationError(f"文件夹已存在: {name}")
+        raise CurationError(
+            f'Folder "{name}" already exists',
+            code="curation.folder_exists", details={"name": name},
+        )
     target.mkdir(parents=True, exist_ok=False)
     return target
 
@@ -393,9 +409,16 @@ def rename_folder(
     src = train / name
     dst = train / new_name
     if not src.exists():
-        raise CurationError(f"文件夹不存在: {name}")
+        raise CurationError(
+            f'Folder "{name}" not found',
+            code="curation.folder_not_found", details={"name": name},
+            http_status=404,
+        )
     if dst.exists():
-        raise CurationError(f"目标已存在: {new_name}")
+        raise CurationError(
+            f'Folder "{new_name}" already exists',
+            code="curation.folder_exists", details={"name": new_name},
+        )
     src.rename(dst)
     return dst
 
@@ -406,7 +429,11 @@ def delete_folder(conn, project_id: int, version_id: int, name: str) -> None:
     _, _, train = _version_train_dir(conn, project_id, version_id)
     target = train / name
     if not target.exists():
-        raise CurationError(f"文件夹不存在: {name}")
+        raise CurationError(
+            f'Folder "{name}" not found',
+            code="curation.folder_not_found", details={"name": name},
+            http_status=404,
+        )
     shutil.rmtree(target)
 
 

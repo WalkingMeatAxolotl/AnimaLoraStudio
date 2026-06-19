@@ -138,7 +138,9 @@ def test_torch_reinstall_invalid_target_returns_400(
     )
     resp = client.post("/api/torch/reinstall", json={"target": "xpu"})
     assert resp.status_code == 400
-    assert "非法 target" in resp.json()["detail"]
+    body = resp.json()
+    assert body["error"]["code"] == "install.target_invalid"
+    assert body["error"]["details"]["target"] == "xpu"
 
 
 def test_flash_attention_status_returns_env_and_candidates(
@@ -639,9 +641,9 @@ def test_system_update_rejects_when_running_task(
     resp = client.post("/api/system/update", json={"target": "origin/master"})
     assert resp.status_code == 422
     body = resp.json()
-    assert body["detail"]["error"] == "running_tasks_present"
-    assert len(body["detail"]["tasks"]) == 1
-    assert body["detail"]["tasks"][0]["id"] == tid
+    assert body["error"]["code"] == "system.tasks_running"
+    assert len(body["error"]["details"]["tasks"]) == 1
+    assert body["error"]["details"]["tasks"][0]["id"] == tid
 
 
 def test_system_update_rejects_when_dirty(
@@ -658,7 +660,7 @@ def test_system_update_rejects_when_dirty(
     resp = client.post("/api/system/update", json={"target": "origin/master"})
     assert resp.status_code == 422
     body = resp.json()
-    assert body["detail"]["error"] == "dirty_working_tree"
+    assert body["error"]["code"] == "system.working_tree_dirty"
 
 
 def test_system_update_writes_pending_and_restart_flag(
@@ -706,7 +708,7 @@ def test_system_restart_rejects_when_running_task(
 
     resp = client.post("/api/system/restart")
     assert resp.status_code == 422
-    assert resp.json()["detail"]["error"] == "running_tasks_present"
+    assert resp.json()["error"]["code"] == "system.tasks_running"
 
 
 # ---------------------------------------------------------------------------
@@ -800,7 +802,7 @@ def test_system_rollback_409_when_no_target(
 
     resp = client.post("/api/system/rollback")
     assert resp.status_code == 409
-    assert resp.json()["detail"]["error"] == "no_rollback_target"
+    assert resp.json()["error"]["code"] == "system.no_rollback_target"
 
 
 def test_system_rollback_rejects_dirty(
@@ -817,7 +819,7 @@ def test_system_rollback_rejects_dirty(
 
     resp = client.post("/api/system/rollback")
     assert resp.status_code == 422
-    assert resp.json()["detail"]["error"] == "dirty_working_tree"
+    assert resp.json()["error"]["code"] == "system.working_tree_dirty"
 
 
 def test_system_rollback_rejects_running_task(
@@ -833,7 +835,7 @@ def test_system_rollback_rejects_running_task(
 
     resp = client.post("/api/system/rollback")
     assert resp.status_code == 422
-    assert resp.json()["detail"]["error"] == "running_tasks_present"
+    assert resp.json()["error"]["code"] == "system.tasks_running"
 
 
 def test_system_rollback_success_writes_flag(

@@ -97,7 +97,9 @@ def create_project(
 ) -> dict[str, Any]:
     title = (title or "").strip()
     if not title:
-        raise ProjectError("title 不能为空")
+        raise ProjectError(
+            "Project title is required", code="project.title_required",
+        )
     base_slug = slug or slugify(title)
     final_slug = _unique_slug(conn, base_slug)
     now = time.time()
@@ -129,7 +131,10 @@ def get_project(
 def _must_get(conn: sqlite3.Connection, project_id: int) -> dict[str, Any]:
     p = get_project(conn, project_id)
     if not p:
-        raise ProjectError(f"项目不存在: id={project_id}")
+        raise ProjectError(
+            "Project not found", code="project.not_found",
+            details={"id": project_id}, http_status=404,
+        )
     return p
 
 

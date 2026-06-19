@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
 from ..schemas.models import ModelDownloadRequest
+from ...domain.errors import ValidationError
 from ...services import models as model_downloader
 
 router = APIRouter()
@@ -41,6 +42,9 @@ def start_model_download(body: ModelDownloadRequest) -> dict[str, Any]:
     try:
         key = model_downloader.trigger(body.model_id, body.variant)
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise ValidationError(
+            f"Invalid model selection: {exc}",
+            code="model.invalid", details={"reason": str(exc)}, http_status=400,
+        ) from exc
     snap = model_downloader.get_status_snapshot()
     return {"key": key, "status": snap.get(key, {}).get("status", "running")}

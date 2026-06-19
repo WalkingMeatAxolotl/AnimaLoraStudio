@@ -485,8 +485,9 @@ def _import_server_module():
     重 import server。
     """
     try:
-        from fastapi import HTTPException
+        from fastapi import HTTPException  # noqa: F401  (kept for back-compat)
         from studio.api.routers.queue.lifecycle import resume_task as _resume_task
+        from studio.domain.errors import ConflictError, NotFoundError
     except ImportError:
         pytest.skip("fastapi not installed; cannot import resume endpoint")
 
@@ -494,16 +495,21 @@ def _import_server_module():
         pass
 
     shim = _ServerShim()
+    # ADR 0009 Phase 2: resume_task now raises studio.domain.errors.* (DomainError
+    # subclasses with .http_status / .message / .code), not fastapi HTTPException.
     shim.HTTPException = HTTPException
+    shim.NotFoundError = NotFoundError
+    shim.ConflictError = ConflictError
     shim.resume_task = _resume_task
     return shim
 
 
 def test_resume_endpoint_rejects_unknown_task(server_env) -> None:
     server = _import_server_module()
-    with pytest.raises(server.HTTPException) as exc:
+    with pytest.raises(server.NotFoundError) as exc:
         server.resume_task(99999)
-    assert exc.value.status_code == 404
+    assert exc.value.http_status == 404
+    assert exc.value.code == "task.not_found"
 
 
 def test_resume_endpoint_rejects_non_resumable_status(server_env) -> None:
@@ -513,10 +519,10 @@ def test_resume_endpoint_rejects_non_resumable_status(server_env) -> None:
     with db.connection_for(server_env["db"]) as conn:
         tid = db.create_task(conn, name="t", config_name="c")
         # pending status
-    with pytest.raises(server.HTTPException) as exc:
+    with pytest.raises(server.ConflictError) as exc:
         server.resume_task(tid)
-    assert exc.value.status_code == 409
-    assert "not resumable" in exc.value.detail
+    assert exc.value.http_status == 409
+    assert exc.value.code == "task.not_resumable"
 
 
 def test_resume_endpoint_rejects_when_state_file_missing(server_env) -> None:
@@ -525,10 +531,11 @@ def test_resume_endpoint_rejects_when_state_file_missing(server_env) -> None:
     cfg_json = server_env["root"] / "pause_step_100.config.json"
     cfg_json.write_text("{}", encoding="utf-8")  # state missing, config exists
     tid = _create_paused_task(server_env, state_pt, cfg_json)
-    with pytest.raises(server.HTTPException) as exc:
+    with pytest.raises(server.ConflictError) as exc:
         server.resume_task(tid)
-    assert exc.value.status_code == 409
-    assert "missing" in exc.value.detail
+    assert exc.value.http_status == 409
+    assert exc.value.code == "task.resume_state_missing"
+    assert "missing" in exc.value.message
 
 
 def test_resume_endpoint_rejects_when_config_snapshot_missing(server_env) -> None:
@@ -537,10 +544,12 @@ def test_resume_endpoint_rejects_when_config_snapshot_missing(server_env) -> Non
     cfg_json = server_env["root"] / "pause_step_100.config.json"
     state_pt.write_bytes(b"")  # state exists, config missing
     tid = _create_paused_task(server_env, state_pt, cfg_json)
-    with pytest.raises(server.HTTPException) as exc:
+    with pytest.raises(server.ConflictError) as exc:
         server.resume_task(tid)
-    assert exc.value.status_code == 409
-    assert "snapshot missing" in exc.value.detail
+    assert exc.value.http_status == 409
+    # config snapshot missing reuses the resume_state_missing code (CATALOG: the
+    # frozen config is part of the saved training state).
+    assert exc.value.code == "task.resume_state_missing"
 
 
 def test_resume_endpoint_success_flips_status_keeps_paused_fields(server_env) -> None:

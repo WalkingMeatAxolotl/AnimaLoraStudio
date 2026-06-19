@@ -10,10 +10,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from fastapi.responses import FileResponse
 
 from .. import errors as _errors
+from ...domain.errors import InvalidPathError, NotFoundError
 from ...services.dataset import browse, scan as datasets
 from ...infrastructure.paths import REPO_ROOT
 
@@ -40,10 +41,7 @@ def browse_dir(path: str = "") -> dict[str, Any]:
     target = Path(path) if path else REPO_ROOT
     if not target.is_absolute():
         target = (REPO_ROOT / target).resolve()
-    try:
-        return browse.list_dir(target, allow_outside_repo=True)
-    except browse.BrowseError as exc:
-        raise HTTPException(404, str(exc)) from exc
+    return browse.list_dir(target, allow_outside_repo=True)
 
 
 @router.get("/api/datasets/thumbnail")
@@ -58,7 +56,9 @@ def get_dataset_thumbnail(folder: str, name: str) -> FileResponse:
     try:
         p.relative_to(REPO_ROOT.resolve())
     except ValueError:
-        raise HTTPException(403, "thumbnail path outside repo")
+        raise InvalidPathError("Invalid path", http_status=403) from None
     if not p.exists() or p.suffix.lower() not in datasets.IMAGE_EXTS:
-        raise HTTPException(404)
+        raise NotFoundError(
+            "Thumbnail not found", code="dataset.thumbnail_not_found",
+        )
     return FileResponse(p)

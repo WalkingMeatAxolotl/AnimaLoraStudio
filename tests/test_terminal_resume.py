@@ -214,11 +214,14 @@ def server_env(env, monkeypatch):
 
 def _lifecycle():
     try:
-        from fastapi import HTTPException
+        import fastapi  # noqa: F401  (ensure the web stack is installed)
         from studio.api.routers.queue import lifecycle
+        from studio.domain.errors import ConflictError
     except ImportError:
         pytest.skip("fastapi not installed")
-    return lifecycle, HTTPException
+    # ADR 0009 Phase 2: resume_task now raises studio.domain.errors.ConflictError
+    # (.http_status / .message / .code) on rejection, not fastapi HTTPException.
+    return lifecycle, ConflictError
 
 
 def test_resume_failed_task_with_recovery_point(server_env) -> None:
@@ -275,38 +278,40 @@ def test_resume_canceled_task_with_recovery_point(server_env) -> None:
 
 def test_resume_failed_without_recovery_point_409(server_env) -> None:
     """failed 但首 epoch 没跑完（last_state_path NULL）→ 409 引导 ResumeFieldPicker。"""
-    lifecycle, HTTPException = _lifecycle()
+    lifecycle, ConflictError = _lifecycle()
     tid = _create_task(server_env, status="failed")
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ConflictError) as exc:
         lifecycle.resume_task(tid)
-    assert exc.value.status_code == 409
-    assert "missing" in exc.value.detail
+    assert exc.value.http_status == 409
+    assert exc.value.code == "task.resume_state_missing"
+    assert "missing" in exc.value.message
 
 
 def test_resume_failed_with_deleted_state_file_409(server_env) -> None:
     """DB 有路径但文件被外部删 → 409。"""
-    lifecycle, HTTPException = _lifecycle()
+    lifecycle, ConflictError = _lifecycle()
     tid = _create_task(
         server_env, status="failed",
         last_state_path="/nonexistent/auto_epoch_state.pt",
         last_config_path="/nonexistent/auto_epoch_state.config.json",
     )
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ConflictError) as exc:
         lifecycle.resume_task(tid)
-    assert exc.value.status_code == 409
+    assert exc.value.http_status == 409
+    assert exc.value.code == "task.resume_state_missing"
 
 
 def test_resume_done_task_rejected(server_env) -> None:
     """done 不可 resume（语义是重训，走 retry / ResumeFieldPicker）。"""
-    lifecycle, HTTPException = _lifecycle()
+    lifecycle, ConflictError = _lifecycle()
     tid = _create_task(server_env, status="done")
     pt, cfg = _write_recovery_pair(server_env["root"], tid)
     with db.connection_for(server_env["db"]) as conn:
         db.update_task(conn, tid, last_state_path=str(pt), last_config_path=str(cfg))
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ConflictError) as exc:
         lifecycle.resume_task(tid)
-    assert exc.value.status_code == 409
-    assert "not resumable" in exc.value.detail
+    assert exc.value.http_status == 409
+    assert exc.value.code == "task.not_resumable"
 
 
 def test_resume_failed_with_bogus_version_id_no_crash(server_env) -> None:

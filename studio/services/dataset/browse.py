@@ -11,7 +11,13 @@ from typing import Any
 from ...paths import REPO_ROOT
 
 
-from studio.domain.errors import DomainError
+from studio.domain.errors import (
+    DomainError,
+    ForbiddenError,
+    InvalidPathError,
+    NotFoundError,
+    ValidationError,
+)
 
 
 class BrowseError(DomainError):
@@ -33,7 +39,7 @@ def list_dir(target: Path, *, allow_outside_repo: bool = False) -> dict[str, Any
         try:
             target.relative_to(REPO_ROOT.resolve())
         except ValueError:
-            raise BrowseError(f"path outside repo: {target}")
+            raise InvalidPathError("Invalid path")
 
     selected: str | None = None
     if target.exists() and not target.is_dir():
@@ -41,9 +47,12 @@ def list_dir(target: Path, *, allow_outside_repo: bool = False) -> dict[str, Any
         target = target.parent
 
     if not target.exists():
-        raise BrowseError(f"path does not exist: {target}")
+        raise NotFoundError("Path not found", code="path.not_found")
     if not target.is_dir():
-        raise BrowseError(f"not a directory: {target}")
+        raise ValidationError(
+            "Path is not a directory",
+            code="path.not_a_directory", http_status=400,
+        )
 
     entries: list[dict[str, Any]] = []
     try:
@@ -57,7 +66,9 @@ def list_dir(target: Path, *, allow_outside_repo: bool = False) -> dict[str, Any
                 "type": "dir" if is_dir else "file",
             })
     except PermissionError:
-        raise BrowseError(f"permission denied: {target}")
+        raise ForbiddenError(
+            "Permission denied", code="path.permission_denied",
+        )
 
     parent = target.parent.as_posix() if target.parent != target else None
     return {

@@ -60,7 +60,7 @@ def test_create_version_rejects_duplicate_label(isolated) -> None:
     p = _new_project(isolated)
     with db.connection_for(isolated["db"]) as conn:
         versions.create_version(conn, project_id=p["id"], label="baseline")
-        with pytest.raises(versions.VersionError, match="已存在"):
+        with pytest.raises(versions.VersionError, match="already exists"):
             versions.create_version(conn, project_id=p["id"], label="baseline")
 
 
@@ -177,7 +177,7 @@ def test_fork_rejects_alien_source(isolated) -> None:
     b = _new_project(isolated, title="B")
     with db.connection_for(isolated["db"]) as conn:
         src = versions.create_version(conn, project_id=a["id"], label="baseline")
-        with pytest.raises(versions.VersionError, match="fork"):
+        with pytest.raises(versions.VersionError, match="copy from"):
             versions.create_version(
                 conn,
                 project_id=b["id"],

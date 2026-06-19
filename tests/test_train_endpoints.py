@@ -270,7 +270,8 @@ def test_save_as_preset_existing_409(client: TestClient, env) -> None:
         f"/api/projects/{pid}/versions/{vid}/config/save_as_preset",
         json={"name": "tpl"},  # 同名 + 不带 overwrite
     )
-    assert r.status_code == 400  # presets_io.PresetError("已存在") → _err_code 400
+    assert r.status_code == 409  # preset.exists → ConflictError (CATALOG 改 400→409)
+    assert r.json()["error"]["code"] == "preset.exists"
     # overwrite=True 应允许
     r2 = client.post(
         f"/api/projects/{pid}/versions/{vid}/config/save_as_preset",

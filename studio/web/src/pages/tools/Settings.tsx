@@ -3470,15 +3470,15 @@ function VersionSection() {
 
   // 公用的 422 / 其它错误分流（update 和 rollback 都用）
   const _formatActionError = (e: unknown, action: string): string => {
-    const err = e as Error & { status?: number; detail?: { error?: string; tasks?: { name: string; id?: number }[] } }
-    if (err.status === 422 && err.detail?.error === 'running_tasks_present') {
-      const names = (err.detail.tasks ?? []).map((task) => task.name || `task#${task.id ?? '?'}`).join(', ')
+    const err = e as Error & { status?: number; code?: string; detail?: { tasks?: { name: string; id?: number }[] } }
+    if (err.code === 'system.tasks_running') {
+      const names = (err.detail?.tasks ?? []).map((task) => task.name || `task#${task.id ?? '?'}`).join(', ')
       return t('settings.taskRunningCancelFirst', { names })
     }
-    if (err.status === 422 && err.detail?.error === 'dirty_working_tree') {
+    if (err.code === 'system.working_tree_dirty') {
       return t('settings.dirtyWorkingTree')
     }
-    if (err.status === 409 && err.detail?.error === 'no_rollback_target') {
+    if (err.code === 'system.no_rollback_target') {
       return t('settings.noRollbackTarget')
     }
     return t('settings.triggerActionFailed', { action, error: err.message ?? String(e) })
@@ -4766,9 +4766,9 @@ function StorageSection() {
     try {
       await api.restartServer()
     } catch (e) {
-      const err = e as Error & { status?: number; detail?: { error?: string; tasks?: { name: string; id?: number }[] } }
-      if (err.status === 422 && err.detail?.error === 'running_tasks_present') {
-        const names = (err.detail.tasks ?? []).map((task) => task.name || `task#${task.id ?? '?'}`).join(', ')
+      const err = e as Error & { status?: number; code?: string; detail?: { tasks?: { name: string; id?: number }[] } }
+      if (err.code === 'system.tasks_running') {
+        const names = (err.detail?.tasks ?? []).map((task) => task.name || `task#${task.id ?? '?'}`).join(', ')
         toast(t('settings.taskRunningCancelFirst', { names }), 'error')
       } else {
         toast(t('settings.restartTriggerFailed', { error: err.message ?? String(e) }), 'error')
@@ -4850,9 +4850,9 @@ function ServiceSection() {
     try {
       await api.restartServer()
     } catch (e) {
-      const err = e as Error & { status?: number; detail?: { error?: string; tasks?: { name: string; id?: number }[] } }
-      if (err.status === 422 && err.detail?.error === 'running_tasks_present') {
-        const names = (err.detail.tasks ?? []).map((task) => task.name || `task#${task.id ?? '?'}`).join(', ')
+      const err = e as Error & { status?: number; code?: string; detail?: { tasks?: { name: string; id?: number }[] } }
+      if (err.code === 'system.tasks_running') {
+        const names = (err.detail?.tasks ?? []).map((task) => task.name || `task#${task.id ?? '?'}`).join(', ')
         toast(t('settings.taskRunningCancelFirst', { names }), 'error')
       } else {
         toast(t('settings.restartTriggerFailed', { error: err.message ?? String(e) }), 'error')

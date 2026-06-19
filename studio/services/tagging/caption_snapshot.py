@@ -19,7 +19,7 @@ CAPTION_EXTS = (".txt", ".json")
 SNAPSHOT_DIRNAME = "caption_snapshots"
 
 
-from studio.domain.errors import DomainError
+from studio.domain.errors import DomainError, NotFoundError
 
 
 class SnapshotError(DomainError):
@@ -75,7 +75,10 @@ def create_snapshot(version_dir: Path) -> dict[str, Any]:
         suffix += 1
         zip_path = out_dir / f"{sid}_{suffix}.zip"
         if suffix > 9:
-            raise SnapshotError("snapshot id 冲突过多")
+            raise SnapshotError(
+                "Could not allocate a snapshot id; please retry",
+                code="snapshot.id_collision",
+            )
 
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
         for arcname, src in _iter_caption_files(train_dir):
@@ -101,13 +104,24 @@ def _resolve_snapshot(version_dir: Path, sid: str) -> Path:
     try:
         validate_path_component(sid)
     except ValueError as exc:
-        raise SnapshotError(f"非法 id: {sid} ({exc})") from exc
+        raise SnapshotError(
+            "Invalid snapshot id",
+            code="snapshot.invalid", details={"id": sid, "reason": str(exc)},
+            http_status=400,
+        ) from exc
     try:
         p = safe_join(snapshot_root(version_dir), f"{sid}.zip")
     except ValueError as exc:
-        raise SnapshotError(f"非法 id: {sid} ({exc})") from exc
+        raise SnapshotError(
+            "Invalid snapshot id",
+            code="snapshot.invalid", details={"id": sid, "reason": str(exc)},
+            http_status=400,
+        ) from exc
     if not p.exists():
-        raise FileNotFoundError(f"snapshot not found: {sid}")
+        raise NotFoundError(
+            "Snapshot not found",
+            code="snapshot.not_found", details={"id": sid},
+        )
     return p
 
 

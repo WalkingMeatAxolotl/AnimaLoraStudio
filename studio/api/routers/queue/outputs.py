@@ -25,6 +25,11 @@ from fastapi.responses import FileResponse
 from ...errors import _export_result, _safe_join_or_400, _unique_data_export_path
 from ...schemas.queue import DeleteOutputsBody, ExportOutputsBody
 from .... import db
+from ....domain.errors import (
+    ForbiddenError,
+    NotFoundError,
+    ValidationError,
+)
 from ....services.projects import projects, versions
 from ....infrastructure.event_bus import bus
 from ....paths import DATA_EXPORTS
@@ -57,13 +62,19 @@ def _select_task_output_files(task_id: int, files: Optional[list[str]] = None) -
     with db.connection_for() as conn:
         task = db.get_task(conn, task_id)
     if not task:
-        raise HTTPException(404)
+        raise NotFoundError("Task not found", code="task.not_found", details={"task_id": task_id})
     out_dir = _task_output_dir(task)
     if not out_dir or not out_dir.exists():
-        raise HTTPException(404, "no output dir")
+        raise NotFoundError(
+            "This task has no output files",
+            code="task.no_outputs", details={"task_id": task_id},
+        )
     all_files = _iter_task_output_files(out_dir, task_id)
     if not all_files:
-        raise HTTPException(404, "empty output dir")
+        raise NotFoundError(
+            "This task has no output files",
+            code="task.no_outputs", details={"task_id": task_id},
+        )
     if not files:
         return task, all_files, False
     by_path = {_task_output_relpath(out_dir, f): f for f in all_files}
@@ -77,9 +88,14 @@ def _select_task_output_files(task_id: int, files: Optional[list[str]] = None) -
         else:
             missing.append(name)
     if missing:
-        raise HTTPException(404, f"file(s) not found: {', '.join(missing)}")
+        raise NotFoundError(
+            f"Some files are no longer available: {', '.join(missing)}",
+            code="task.output_files_missing", details={"files": missing},
+        )
     if not selected:
-        raise HTTPException(400, "empty files list")
+        raise ValidationError(
+            "No files selected", code="task.empty_selection", http_status=400,
+        )
     return task, selected, True
 
 
@@ -156,7 +172,7 @@ def list_task_outputs(task_id: int, request: Request) -> dict[str, Any]:
     with db.connection_for() as conn:
         task = db.get_task(conn, task_id)
     if not task:
-        raise HTTPException(404)
+        raise NotFoundError("Task not found", code="task.not_found", details={"task_id": task_id})
     out_dir = _task_output_dir(task)
     files: list[dict[str, Any]] = []
     if out_dir and out_dir.exists():
@@ -195,7 +211,9 @@ def download_task_outputs_zip(
     import tempfile
     wanted = [n for n in files.split(",") if n] if files else None
     if files is not None and not wanted:
-        raise HTTPException(400, "empty files list")
+        raise ValidationError(
+            "No files selected", code="task.empty_selection", http_status=400,
+        )
     task, selected, partial = _select_task_output_files(task_id, wanted)
     out_dir = _task_output_dir(task)
     assert out_dir is not None  # _select_task_output_files 已经校验
@@ -259,13 +277,19 @@ def download_task_output(task_id: int, filename: str) -> FileResponse:
     with db.connection_for() as conn:
         task = db.get_task(conn, task_id)
     if not task:
-        raise HTTPException(404)
+        raise NotFoundError("Task not found", code="task.not_found", details={"task_id": task_id})
     out_dir = _task_output_dir(task)
     if not out_dir or not out_dir.exists():
-        raise HTTPException(404, "no output dir")
+        raise NotFoundError(
+            "This task has no output files",
+            code="task.no_outputs", details={"task_id": task_id},
+        )
     f = _safe_output_relpath_or_400(out_dir, filename)
     if not f.exists() or not f.is_file():
-        raise HTTPException(404, "file not found")
+        raise NotFoundError(
+            f"Some files are no longer available: {filename}",
+            code="task.output_files_missing", details={"files": [filename]},
+        )
     return FileResponse(
         f,
         media_type="application/octet-stream",
@@ -284,7 +308,9 @@ def delete_task_output_files(
     任何一个不存在 → 404 拒绝整批，避免半删状态。
     """
     if not body.files:
-        raise HTTPException(400, "empty files list")
+        raise ValidationError(
+            "No files selected", code="task.empty_selection", http_status=400,
+        )
     task, selected, _ = _select_task_output_files(task_id, body.files)
     deleted: list[str] = []
     out_dir = _task_output_dir(task)
@@ -306,16 +332,20 @@ def open_task_folder(task_id: int, request: Request) -> dict[str, Any]:
     看不到，反而是远程命令执行入口；这里直接 403 拒绝。
     """
     if not _is_loopback(request):
-        raise HTTPException(
-            403, "open-folder is only available for local (loopback) requests"
+        raise ForbiddenError(
+            "Opening the folder is only available on the local machine",
+            code="system.open_folder_local_only",
         )
     with db.connection_for() as conn:
         task = db.get_task(conn, task_id)
     if not task:
-        raise HTTPException(404)
+        raise NotFoundError("Task not found", code="task.not_found", details={"task_id": task_id})
     out_dir = _task_output_dir(task)
     if not out_dir or not out_dir.exists():
-        raise HTTPException(404, "no output dir")
+        raise NotFoundError(
+            "This task has no output files",
+            code="task.no_outputs", details={"task_id": task_id},
+        )
     try:
         import platform
         import subprocess as _sub

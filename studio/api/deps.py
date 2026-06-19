@@ -8,8 +8,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import HTTPException
-
+from ..domain.errors import DomainError
 from ..supervisor import Supervisor
 
 
@@ -23,7 +22,10 @@ def _supervisor() -> Supervisor:
     from .app import app
     sup: Optional[Supervisor] = getattr(app.state, "supervisor", None)
     if sup is None:
-        raise HTTPException(503, "supervisor not running")
+        raise DomainError(
+            "The service is still starting; try again in a moment",
+            code="system.starting", http_status=503,
+        )
     return sup
 
 

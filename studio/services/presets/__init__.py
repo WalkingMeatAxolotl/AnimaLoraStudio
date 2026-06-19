@@ -85,6 +85,11 @@ def save_version_config_as_preset(
 
     target_path = presets_io._preset_path(target_preset_name)  # 校验名字合法
     if target_path.exists() and not overwrite:
-        raise presets_io.PresetError(f"预设已存在: {target_preset_name}")
+        raise presets_io.PresetError(
+            f'Preset "{target_preset_name}" already exists',
+            code="preset.exists",
+            details={"name": target_preset_name},
+            http_status=409,
+        )
     presets_io.write_preset(target_preset_name, cleaned)
     return presets_io.read_preset(target_preset_name)

@@ -67,7 +67,7 @@ def test_remove_reports_missing(env) -> None:
 def test_create_folder(env) -> None:
     with db.connection_for(env["db"]) as conn:
         curation.create_folder(conn, env["p"]["id"], env["v"]["id"], "10_x")
-        with pytest.raises(curation.CurationError, match="已存在"):
+        with pytest.raises(curation.CurationError, match="already exists"):
             curation.create_folder(
                 conn, env["p"]["id"], env["v"]["id"], "10_x"
             )

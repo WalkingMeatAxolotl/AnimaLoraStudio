@@ -55,9 +55,12 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient,
 
     monkeypatch.setattr(_gen.secrets, "load", lambda: _FakeSecrets())
 
+    from studio.api.exception_handlers import register_exception_handlers
+
     app = FastAPI()
+    register_exception_handlers(app)
     app.include_router(_gen.router)
-    return TestClient(app), test_dir
+    return TestClient(app, raise_server_exceptions=False), test_dir
 
 
 def _open_png_text(path: Path) -> dict[str, str]:
@@ -183,6 +186,7 @@ def test_save_rejects_invalid_params_json(client) -> None:
         files={"image": ("a.png", _png_bytes(), "image/png")},
     )
     assert r.status_code == 400
+    assert r.json()["error"]["code"] == "generate.params_invalid"
 
 
 def test_save_rejects_non_object_params(client) -> None:
@@ -193,6 +197,7 @@ def test_save_rejects_non_object_params(client) -> None:
         files={"image": ("a.png", _png_bytes(), "image/png")},
     )
     assert r.status_code == 400
+    assert r.json()["error"]["code"] == "generate.params_invalid"
 
 
 def test_disk_history_lists_entries_from_png_metadata(client) -> None:
@@ -476,9 +481,13 @@ def test_save_disabled_returns_403(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         generate = _FakeGenCfg()
 
     monkeypatch.setattr(_gen.secrets, "load", lambda: _FakeSecrets())
+
+    from studio.api.exception_handlers import register_exception_handlers
+
     app = FastAPI()
+    register_exception_handlers(app)
     app.include_router(_gen.router)
-    tc = TestClient(app)
+    tc = TestClient(app, raise_server_exceptions=False)
 
     r = tc.post(
         "/api/generate/save",
@@ -486,6 +495,7 @@ def test_save_disabled_returns_403(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         files={"image": ("a.png", _png_bytes(), "image/png")},
     )
     assert r.status_code == 403
+    assert r.json()["error"]["code"] == "generate.save_disabled"
 
 
 # ---------------------------------------------------------------------------

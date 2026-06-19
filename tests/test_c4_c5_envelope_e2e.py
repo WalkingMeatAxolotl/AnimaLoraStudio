@@ -43,8 +43,9 @@ def test_preset_not_found_envelope_dual_write(client: TestClient) -> None:
     resp = client.get("/api/presets/__nonexistent__")
     assert resp.status_code == 404
     body = resp.json()
-    # legacy contract
-    assert body["detail"] == "预设不存在: __nonexistent__" or "不存在" in body["detail"]
+    # legacy contract — detail 现在是英文兜底，含资源名 + "not found"
+    assert "not found" in body["detail"]
+    assert "__nonexistent__" in body["detail"]
     # 新结构化（C2 dual-write）
     assert "error" in body
     assert body["error"]["code"] == "preset.not_found"  # C4 _preset_err_code mutate

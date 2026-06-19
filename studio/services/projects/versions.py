@@ -401,7 +401,10 @@ def get_version(
 def _must_get(conn: sqlite3.Connection, version_id: int) -> dict[str, Any]:
     v = get_version(conn, version_id)
     if not v:
-        raise VersionError(f"版本不存在: id={version_id}")
+        raise VersionError(
+            "Version not found", code="version.not_found",
+            details={"id": version_id}, http_status=404,
+        )
     return v
 
 
@@ -438,24 +441,36 @@ def create_version(
     """
     p = projects.get_project(conn, project_id)
     if not p:
-        raise VersionError(f"项目不存在: id={project_id}")
+        raise VersionError(
+            "Project not found", code="project.not_found",
+            details={"id": project_id}, http_status=404,
+        )
     if not _VALID_LABEL.fullmatch(label):
         raise VersionError(
-            f"非法 label: {label!r}（仅允许字母/数字/下划线/连字符/点）"
+            f'Invalid version label "{label}"; use letters, digits, '
+            "underscore, hyphen, or dot",
+            code="version.label_invalid", details={"name": label},
+            http_status=400,
         )
     # 唯一性
     if conn.execute(
         "SELECT 1 FROM versions WHERE project_id = ? AND label = ?",
         (project_id, label),
     ).fetchone():
-        raise VersionError(f"label 已存在: {label!r}")
+        raise VersionError(
+            f'Version label "{label}" already exists',
+            code="version.label_exists", details={"name": label},
+            http_status=400,
+        )
 
     src_config_name: Optional[str] = None
     if fork_from_version_id is not None:
         src = get_version(conn, fork_from_version_id)
         if not src or src["project_id"] != project_id:
             raise VersionError(
-                f"fork 源不存在或不属于当前项目: id={fork_from_version_id}"
+                "The version to copy from was not found in this project",
+                code="version.fork_source_invalid",
+                details={"id": fork_from_version_id}, http_status=404,
             )
         src_config_name = src["config_name"]
 

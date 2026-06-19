@@ -30,13 +30,18 @@ describe('makeApiError', () => {
     expect(e.code).toBeUndefined()
   })
 
-  it('结构化 detail（409 冲突）→ 挂到 err.detail 给 callsite', () => {
+  it('结构化数据在 error.details（409 冲突）→ 挂到 err.detail 给 callsite', () => {
     const e = makeApiError(409, 'Conflict', {
-      detail: { message: 'exists', config: { a: 1 }, suggested_name: 'foo-2' },
-      error: { code: 'preset.exists', message: 'Preset "foo" already exists', details: { name: 'foo' }, trace_id: 't2' },
+      detail: 'Preset "foo" already exists',
+      error: {
+        code: 'preset.exists',
+        message: 'Preset "foo" already exists',
+        details: { name: 'foo', config: { a: 1 }, suggested_name: 'foo-2' },
+        trace_id: 't2',
+      },
     })
     expect(e.message).toBe('预设「foo」已存在')
-    expect(e.detail).toEqual({ message: 'exists', config: { a: 1 }, suggested_name: 'foo-2' })
+    expect(e.detail).toEqual({ name: 'foo', config: { a: 1 }, suggested_name: 'foo-2' })
   })
 
   it('非 JSON body（null）→ statusText 兜底 + header trace', () => {

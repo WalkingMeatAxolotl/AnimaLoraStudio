@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from studio.domain.errors import NotFoundError
 from studio.services.tagging import caption_snapshot
 
 
@@ -63,8 +64,9 @@ def test_restore_does_not_touch_images(tmp_path: Path) -> None:
 
 
 def test_restore_missing_id(tmp_path: Path) -> None:
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(NotFoundError) as exc:
         caption_snapshot.restore_snapshot(tmp_path, "9999999999")
+    assert exc.value.code == "snapshot.not_found"
 
 
 def test_restore_rejects_path_traversal(tmp_path: Path) -> None:

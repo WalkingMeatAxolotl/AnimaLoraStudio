@@ -1490,6 +1490,9 @@ export function makeApiError(
         : {}
     message = code ? i18n.t(`errors.${code}`, { ...params, defaultValue: enMsg }) : enMsg
     if (typeof err.trace_id === 'string') traceId = err.trace_id
+    // 结构化数据现在挂在 error.details（如 409 冲突的 config/suggested_name、
+    // running_tasks 列表），callsite 经 err.detail 读到。
+    if (err.details && typeof err.details === 'object') detail = err.details
   }
   if (b && b.detail !== undefined) {
     if (!err) {
@@ -1500,7 +1503,7 @@ export function makeApiError(
         const dm = (b.detail as { message?: unknown }).message
         if (typeof dm === 'string') message = dm
       }
-    } else if (b.detail && typeof b.detail === 'object') {
+    } else if (detail === null && b.detail && typeof b.detail === 'object') {
       detail = b.detail
     }
   }

@@ -24,6 +24,12 @@ from fastapi import APIRouter, HTTPException
 from ...deps import _supervisor
 from ...schemas.queue import EnqueueRequest, ReorderRequest
 from .... import db
+from ....domain.errors import (
+    ConflictError,
+    NotFoundError,
+    PresetNotFoundError,
+    ValidationError,
+)
 from ....infrastructure.event_bus import bus
 from ....paths import USER_PRESETS_DIR, task_dir
 
@@ -73,7 +79,11 @@ def list_queue(
     `?include_generate=true` 兜底。
     """
     if status and status not in db.VALID_STATUSES:
-        raise HTTPException(400, f"unknown status: {status}")
+        raise ValidationError(
+            f"Unsupported status filter: {status}",
+            code="queue.status_filter_invalid", details={"status": status},
+            http_status=400,
+        )
     with db.connection_for() as conn:
         items = db.list_tasks(conn, status=status)
     if not include_generate:
@@ -96,7 +106,10 @@ def list_queue(
 def enqueue(body: EnqueueRequest) -> dict[str, Any]:
     cfg_path = USER_PRESETS_DIR / f"{body.config_name}.yaml"
     if not cfg_path.exists():
-        raise HTTPException(404, f"preset not found: {body.config_name}")
+        raise PresetNotFoundError(
+            f'Preset "{body.config_name}" not found',
+            code="preset.not_found", details={"name": body.config_name},
+        )
     name = body.name or body.config_name
     with db.connection_for() as conn:
         task_id = db.create_task(
@@ -152,7 +165,7 @@ def get_queue_item(task_id: int) -> dict[str, Any]:
     with db.connection_for() as conn:
         task = db.get_task(conn, task_id)
     if not task:
-        raise HTTPException(404)
+        raise NotFoundError("Task not found", code="task.not_found", details={"task_id": task_id})
     # ADR 0006 PR-4 — is_pausable 信号让 UI 决定是否显示暂停按钮（§8.1）。
     # 仅 supervisor 跑得起来时计算；空载（test / 启动期）默认 False。
     try:
@@ -170,10 +183,15 @@ def cancel_task(task_id: int) -> dict[str, Any]:
         with db.connection_for() as conn:
             task = db.get_task(conn, task_id)
         if not task:
-            raise HTTPException(404)
+            raise NotFoundError("Task not found", code="task.not_found", details={"task_id": task_id})
         if task["status"] in db.TERMINAL_STATUSES:
-            raise HTTPException(400, f"task already {task['status']}")
-        raise HTTPException(409, "cancel rejected (state mismatch)")
+            raise ValidationError(
+                "This task has already finished",
+                code="task.already_finished", http_status=400,
+            )
+        raise ConflictError(
+            "Cannot cancel this task in its current state", code="task.cancel_rejected",
+        )
     return {"task_id": task_id, "canceled": True}
 
 
@@ -190,8 +208,12 @@ def pause_task(task_id: int) -> dict[str, Any]:
         with db.connection_for() as conn:
             task = db.get_task(conn, task_id)
         if not task:
-            raise HTTPException(404, "task not found")
-        raise HTTPException(409, reason or "pause rejected")
+            raise NotFoundError("Task not found", code="task.not_found", details={"task_id": task_id})
+        raise ConflictError(
+            "Cannot pause this task right now",
+            code="task.pause_rejected",
+            details={"reason": reason} if reason else None,
+        )
     return {"task_id": task_id, "pause_pending": True}
 
 
@@ -218,28 +240,25 @@ def resume_task(task_id: int) -> dict[str, Any]:
     with db.connection_for() as conn:
         task = db.get_task(conn, task_id)
         if not task:
-            raise HTTPException(404, "task not found")
+            raise NotFoundError("Task not found", code="task.not_found", details={"task_id": task_id})
         status = task["status"]
         if status not in RESUMABLE_STATUSES:
-            raise HTTPException(
-                409,
-                f"task status is {status!r}, not resumable "
-                f"(expected one of {', '.join(RESUMABLE_STATUSES)})",
+            raise ConflictError(
+                "This task cannot be resumed",
+                code="task.not_resumable", details={"status": status},
             )
         state_path, config_path = _resume_source_paths(task)
         if not state_path or not Path(state_path).exists():
-            raise HTTPException(
-                409,
-                f"resume state file missing: {state_path!r}; "
-                f"use ResumeFieldPicker to start a fresh task from another .pt",
+            raise ConflictError(
+                "The saved training state is missing; start a new run instead",
+                code="task.resume_state_missing",
             )
         if config_path and not Path(config_path).exists():
             # snapshot 缺失虽然不致命（bootstrap_phase 会沿用 args.config yaml），
             # 但 resume 语义会漂；按 ADR §5.7 严格 freeze 原则，拒绝继续。
-            raise HTTPException(
-                409,
-                f"resume config snapshot missing: {config_path!r}; "
-                f"cannot guarantee config freeze, refusing to resume",
+            raise ConflictError(
+                "The saved training state is missing; start a new run instead",
+                code="task.resume_state_missing",
             )
         fields: dict[str, Any] = dict(
             status="pending",
@@ -293,9 +312,12 @@ def retry_task(task_id: int) -> dict[str, Any]:
     with db.connection_for() as conn:
         original = db.get_task(conn, task_id)
         if not original:
-            raise HTTPException(404)
+            raise NotFoundError("Task not found", code="task.not_found", details={"task_id": task_id})
         if original["status"] not in db.TERMINAL_STATUSES:
-            raise HTTPException(400, "only terminal tasks can be retried")
+            raise ValidationError(
+                "Only finished tasks can be retried",
+                code="task.not_retryable", http_status=400,
+            )
         new_id = db.create_task(
             conn,
             name=original["name"],
@@ -320,9 +342,12 @@ def delete_queue_item(task_id: int) -> dict[str, Any]:
     with db.connection_for() as conn:
         task = db.get_task(conn, task_id)
         if not task:
-            raise HTTPException(404)
+            raise NotFoundError("Task not found", code="task.not_found", details={"task_id": task_id})
         if task["status"] not in db.TERMINAL_STATUSES:
-            raise HTTPException(400, "only terminal tasks can be deleted")
+            raise ValidationError(
+                "Only finished tasks can be deleted",
+                code="task.not_deletable", http_status=400,
+            )
         db.delete_task(conn, task_id)
     # task-scoped 档案（snapshot/config.yaml / monitor/state.json / samples/ /
     # run.log）跟 task DB 行同生命周期 —— 删 task 一并清。老 task 散在
