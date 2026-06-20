@@ -13,6 +13,7 @@ import {
   type VersionConfigResponse,
 } from '../../../api/client'
 import { parseFolderMeta } from '../../../lib/folderMeta'
+import { useLocalStorageState } from '../../../lib/useLocalStorageState'
 import ConfigSkeleton from '../../../components/ConfigSkeleton'
 import { useDialog } from '../../../components/Dialog'
 import SchemaForm, { visibleSchemaGroups } from '../../../components/SchemaForm'
@@ -262,6 +263,8 @@ export default function TrainPage() {
 
   // 右侧 SchemaSectionIndex 的 IntersectionObserver root + 跳转目标
   const schemaScrollRef = useRef<HTMLDivElement | null>(null)
+  // 右侧训练集分布预览抽屉的展开/收起（持久化）。收起时把横向空间让给表单。
+  const [previewOpen, setPreviewOpen] = useLocalStorageState('train.previewOpen', true)
   const visibleGroups = useMemo(
     () => (schema ? visibleSchemaGroups(schema, advancedMode) : []),
     [schema, advancedMode],
@@ -476,10 +479,10 @@ export default function TrainPage() {
       <div className="flex flex-col h-full gap-3">
 
         {/* 两栏布局：左（预设 + config 编辑） / 右（估算面板） */}
-        <div className="grid grid-cols-[3fr_1fr] gap-3 flex-1 min-h-0">
+        <div className="flex gap-3 flex-1 min-h-0">
 
-          {/* 左栏 */}
-          <div className="flex flex-col gap-3 min-h-0 min-w-0 overflow-y-auto">
+          {/* 左栏：配置表单 */}
+          <div className="flex flex-col gap-3 min-h-0 min-w-0 overflow-y-auto flex-1">
 
           {/* 预设 picker：dropdown 入口。0.8.2 起承认 version yaml 是 first-class
               「项目专属配置」，不再显示「绑定哪个预设」+「已自定义」标签 —— 这套
@@ -654,19 +657,39 @@ export default function TrainPage() {
             )}
           </div>
 
-        {/* 右栏：训练集 + 正则集分布 + 章节锚点导航 */}
-        <div className="flex flex-col min-h-0 min-w-0 overflow-y-auto">
-          <DatasetStatsPanel
-            projectId={project.id}
-            activeVersion={activeVersion}
-            reg={reg}
-            config={config}
-          />
-          {configResp?.has_config && config && visibleGroups.length > 0 && (
-            <div className="mt-8">
-              <SchemaSectionIndex
-                groups={visibleGroups}
-                scrollContainer={schemaScrollRef}
+        {/* 中栏：章节锚点导航（很窄，始终可见） */}
+        {configResp?.has_config && config && visibleGroups.length > 0 && (
+          <div className="shrink-0 w-28 overflow-y-auto">
+            <SchemaSectionIndex
+              groups={visibleGroups}
+              scrollContainer={schemaScrollRef}
+            />
+          </div>
+        )}
+
+        {/* 右栏：训练集分布预览抽屉（可收回）+ 把手 */}
+        <div className="flex shrink-0 min-h-0">
+          {/* 把手：双竖线 + 顶部圆圈 ›/‹ */}
+          <div className="relative w-3 shrink-0 self-stretch flex justify-center gap-[2px]">
+            <div className="w-px bg-subtle" />
+            <div className="w-px bg-subtle" />
+            <button
+              type="button"
+              onClick={() => setPreviewOpen((v) => !v)}
+              title={previewOpen ? t('train.collapsePreview') : t('train.expandPreview')}
+              aria-label={previewOpen ? t('train.collapsePreview') : t('train.expandPreview')}
+              className="absolute top-1 left-1/2 -translate-x-1/2 w-6 h-6 rounded-full border border-subtle bg-surface text-fg-tertiary hover:text-accent hover:border-accent flex items-center justify-center text-xs leading-none shadow-sm"
+            >
+              {previewOpen ? '›' : '‹'}
+            </button>
+          </div>
+          {previewOpen && (
+            <div className="w-72 shrink-0 overflow-y-auto">
+              <DatasetStatsPanel
+                projectId={project.id}
+                activeVersion={activeVersion}
+                reg={reg}
+                config={config}
               />
             </div>
           )}
