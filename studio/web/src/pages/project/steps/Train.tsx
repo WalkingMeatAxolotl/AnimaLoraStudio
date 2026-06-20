@@ -667,9 +667,8 @@ export default function TrainPage() {
           </div>
         )}
 
-        {/* 把手：双竖线 + 顶部圆圈 ›/‹ —— 分隔预览抽屉 */}
-        <div className="relative w-3 shrink-0 self-stretch flex justify-center gap-[2px]">
-          <div className="w-px bg-subtle" />
+        {/* 把手：单竖线 + 顶部圆圈 ›/‹ —— 分隔预览抽屉 */}
+        <div className="relative w-3 shrink-0 self-stretch flex justify-center">
           <div className="w-px bg-subtle" />
           <button
             type="button"
