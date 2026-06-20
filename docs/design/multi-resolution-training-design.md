@@ -1,7 +1,7 @@
 # 多分辨率训练设计
 
 > Issue: [#246 多分辨率训练支持可能性](https://github.com/WalkingMeatAxolotl/AnimaLoraStudio/issues/246)
-> 状态: 设计已定稿，实现待排期。
+> 状态: 已实现（PR #296，→ dev）。
 
 ## 1. 背景
 
@@ -73,7 +73,7 @@ concept            → 分辨率=config, repeat 1
 规则：
 - 分辨率与 repeat 都可选；分辨率在前、repeat 在后（`1024px_2_data`）。
 - 单数字（无 `px`）= repeat，保持与 Kohya 完全兼容。
-- 解析必须 Python（`runtime/training/dataset.py`）与前端展示（`studio/web/src/pages/project/steps/Train.tsx:parseFolderRepeat`）两处同步。
+- 解析必须 Python（`runtime/training/dataset.py:_parse_folder_meta`）与前端（`studio/web/src/lib/folderMeta.ts:parseFolderMeta`，Train / Preprocess 共用）两处同步。
 
 ## 5. 样本展开语义
 
@@ -200,7 +200,7 @@ crop 定的是构图 / 长宽比；裁出的区域最终是多少像素由文件
 | 训练-cache | `runtime/training/dataset.py:CachedLatentDataset` | 多分辨率图按 `img.r{reso}.npz` 分别缓存 |
 | 后端-stats | version stats builder（`train_folders` 同源处） | 用真 `BucketManager` 算桶直方图 `{reso:[{w,h,count}]}`（§10） |
 | schema | `studio/domain/training.py` | `resolution` 标量→标量/列表 + validator + 迁移；新增 `aspect_ratio_limit` |
-| 前端-展示 | `studio/web/src/pages/project/steps/Train.tsx` | `parseFolderRepeat` 扩展显示 px；有效样本数 ×分辨率数；渲染桶分布预览（分辨率分组 / 有效数 / 隐藏 0） |
+| 前端-展示 | `studio/web/src/pages/project/steps/Train.tsx` + `lib/folderMeta.ts` | `parseFolderMeta` 识别 px；有效样本数 ×分辨率数；渲染桶分布预览（分辨率分组 / 有效数 / 隐藏 0） |
 | 前端-放大 | `studio/web/src/pages/project/steps/Preprocess.tsx` | 文件夹 filter + 目标分辨率跟随文件夹 |
 | 前端-schema | `studio/web/src/components/SchemaForm.tsx` | 列表输入控件 + `aspect_ratio_limit` + i18n |
 | 镜像 | `studio/web/src/lib/trainBuckets.ts` | min/max + AR 上限(R) 派生同步（如改 Python） |
