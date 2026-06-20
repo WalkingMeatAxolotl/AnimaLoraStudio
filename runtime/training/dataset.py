@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import random
 from pathlib import Path
 
@@ -28,33 +29,61 @@ class BucketManager:
     UI predicts trainer buckets to pre-align cluster crops so the trainer
     doesn't re-resize them — that prediction depends on a TS port of this
     class. Any change to the algorithm or to the default parameters
-    (``base_reso``, ``min_reso``, ``max_reso``, ``step``, the 0.1 area
-    tolerance, the 2.0 AR cap) MUST land in both files in the same commit,
-    or the frontend's predicted bucket ≠ trainer's actual bucket and crops
-    will silently degrade.
+    (``base_reso``, ``step``, the 0.1 area tolerance, the
+    ``aspect_ratio_limit`` R, the min/max derivation) MUST land in both files
+    in the same commit, or the frontend's predicted bucket ≠ trainer's actual
+    bucket and crops will silently degrade.
 
-    See ``docs/design/preprocess-crop-design.md`` §7 for the UX policy and
-    rationale.
+    The bucket set is a pure function of ``(base_reso, aspect_ratio_limit,
+    step)``:
+
+    - ``aspect_ratio_limit`` (R, default 2.0) symmetrically caps the widest
+      bucket at R:1 and the tallest at 1:R.
+    - ``min_reso`` / ``max_reso`` are the edge-length search bounds. When not
+      given they are **derived** from ``(base_reso, R)`` — at constant area
+      base² the most extreme bucket has edges ``base·√R × base/√R``, so the
+      bounds round outward to ``≈ base/√R`` and ``≈ base·√R`` (one ``step`` of
+      margin so quantization never clips; the area band + AR cap do the real
+      cut). Passing them explicitly (tests / special cases) overrides the
+      derivation. The old hard-wired 512/2048 degrade at small base — e.g.
+      base=512 left only the 512×512 square, killing all AR variety — which is
+      why the bounds now scale with base.
+
+    See ``docs/design/preprocess-crop-design.md`` §7 for the crop UX policy and
+    ``docs/design/multi-resolution-training-design.md`` §6 for the derivation.
     """
-    def __init__(self, base_reso=1024, min_reso=512, max_reso=2048, step=64):
+    def __init__(self, base_reso=1024, min_reso=None, max_reso=None, step=64,
+                 aspect_ratio_limit=2.0):
         self.base_reso = base_reso
-        self.buckets = self._generate(min_reso, max_reso, step, base_reso)
+        self.aspect_ratio_limit = aspect_ratio_limit
+        self.step = step
+        if min_reso is None or max_reso is None:
+            span = math.sqrt(aspect_ratio_limit)
+            derived_min = max(step, int(math.floor(base_reso / span / step) * step) - step)
+            derived_max = int(math.ceil(base_reso * span / step) * step) + step
+            if min_reso is None:
+                min_reso = derived_min
+            if max_reso is None:
+                max_reso = derived_max
+        self.min_reso = min_reso
+        self.max_reso = max_reso
+        self.buckets = self._generate(min_reso, max_reso, step, base_reso, aspect_ratio_limit)
 
-    def _generate(self, min_r, max_r, step, base):
+    def _generate(self, min_r, max_r, step, base, ar_limit):
         # Keep algorithm identical to trainBuckets.generateBuckets() in TS:
         #   - double loop over (w, h) in [min_r, max_r] step `step`
         #   - area within ±10% of base² (the 0.1 below)
-        #   - max AR ratio ≤ 2.0 (the 2.0 below)
-        # Default-param consumers should see exactly the same 37 buckets on
-        # both sides — covered by `studio/web/src/lib/trainBuckets.test.ts`
-        # asserting count == 37.
+        #   - max AR ratio ≤ ar_limit (R)
+        # Default-param consumers (base=1024, R=2.0) should see exactly the same
+        # 37 buckets on both sides — covered by
+        # `studio/web/src/lib/trainBuckets.test.ts` asserting count == 37.
         buckets = []
         base_area = base * base
         for w in range(min_r, max_r + 1, step):
             for h in range(min_r, max_r + 1, step):
                 if abs(w * h - base_area) / base_area > 0.1:
                     continue
-                if max(w/h, h/w) > 2.0:
+                if max(w/h, h/w) > ar_limit:
                     continue
                 buckets.append((w, h))
         return buckets
