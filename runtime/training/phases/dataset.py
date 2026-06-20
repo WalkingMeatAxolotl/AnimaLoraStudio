@@ -27,6 +27,18 @@ from training.dataset import (
 logger = logging.getLogger(__name__)
 
 
+def _as_resolutions(value) -> list[int]:
+    """把 config 的 resolution 归一成 list[int]。
+
+    schema 标量、schema 列表、手写 YAML 标量都可能出现（merge_yaml_into_namespace
+    是裸 setattr、不过 pydantic validator），这里统一兜底成非空 list。
+    """
+    if isinstance(value, (list, tuple)):
+        out = [int(v) for v in value]
+        return out or [1024]
+    return [int(value)]
+
+
 def run(ctx: TrainingContext) -> None:
     """
     - 主数据集 / 正则数据集 + per-folder repeat
@@ -38,15 +50,23 @@ def run(ctx: TrainingContext) -> None:
     """
     args = ctx.args
 
+    # 多分辨率：args.resolution 可能是标量或列表（手写 YAML 也可能是标量），统一归一成
+    # list；base 档取第一项，其它档的 BucketManager 由 ImageDataset 按需建。
+    res_list = _as_resolutions(args.resolution)
+    ar_limit = float(getattr(args, "aspect_ratio_limit", 2.0))
+    base_reso = res_list[0]
+
     # 数据集
-    ctx.bucket_mgr = BucketManager(args.resolution)
+    ctx.bucket_mgr = BucketManager(base_reso, aspect_ratio_limit=ar_limit)
     ctx.base_dataset = ImageDataset(
-        args.data_dir, args.resolution, ctx.bucket_mgr,
+        args.data_dir, base_reso, ctx.bucket_mgr,
         shuffle_caption=args.shuffle_caption,
         keep_tokens=args.keep_tokens,
         flip_augment=args.flip_augment,
         tag_dropout=args.tag_dropout,
         prefer_json=args.prefer_json,
+        resolutions=res_list,
+        aspect_ratio_limit=ar_limit,
     )
     ctx.dataset = ctx.base_dataset
 
@@ -61,13 +81,15 @@ def run(ctx: TrainingContext) -> None:
         else:
             reg_caption = (getattr(args, "reg_caption", "") or "").strip()
             reg_base = ImageDataset(
-                reg_data_dir, args.resolution, ctx.bucket_mgr,
+                reg_data_dir, base_reso, ctx.bucket_mgr,
                 shuffle_caption=args.shuffle_caption,
                 keep_tokens=args.keep_tokens,
                 flip_augment=args.flip_augment,
                 tag_dropout=0.0,  # 正则集通常不用 dropout
                 prefer_json=args.prefer_json,
                 caption_override=reg_caption if reg_caption else None,
+                resolutions=res_list,
+                aspect_ratio_limit=ar_limit,
             )
             ctx.reg_dataset = reg_base
             reg_weight = float(getattr(args, "reg_weight", 1.0) or 1.0)

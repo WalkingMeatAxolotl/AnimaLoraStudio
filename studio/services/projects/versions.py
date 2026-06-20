@@ -646,3 +646,79 @@ def stats_for_version(p: dict[str, Any], v: dict[str, Any]) -> dict[str, Any]:
         "reg_meta_exists": reg_meta_exists,
         "has_output": has_output,
     }
+
+
+def compute_bucket_histogram(
+    train_dir: Path,
+    resolutions: list[int],
+    aspect_ratio_limit: float = 2.0,
+    prefer_json: bool = True,
+) -> list[dict[str, Any]]:
+    """按**真正的** BucketManager 算训练集 ARB 桶分布（与实际训练逐桶一致）。
+
+    扫描规则镜像 trainer 的 ``ImageDataset._scan`` / ``_make_sample``，避免预览与实际
+    训练数量不符：
+    - 根目录散图按 repeat=1 + config 分辨率列表计入；
+    - 子文件夹**递归**（``rglob``）扫，按文件夹名 px 覆盖 / repeat 解析；
+    - **只计有 caption 的图**（无 ``.json``/``.txt``/``.caption`` 的会被 trainer 丢弃）。
+
+    每张图按其分辨率 fan-out 落桶，count = 有效样本数（含 repeat × 分辨率档数）。
+    复用 runtime 的 ``BucketManager`` + ``_parse_folder_meta``，不引入桶算法第三份拷贝。
+    返回 ``[{reso, buckets: [{w, h, count}]}]``，按分辨率升序、桶按 count 降序。
+    """
+    from runtime.training.dataset import BucketManager, ImageDataset
+    from PIL import Image
+
+    train_dir = Path(train_dir)
+    base_resos = [int(r) for r in resolutions]
+    mgrs: dict[int, Any] = {}
+
+    def mgr_for(reso: int):
+        if reso not in mgrs:
+            mgrs[reso] = BucketManager(int(reso), aspect_ratio_limit=aspect_ratio_limit)
+        return mgrs[reso]
+
+    def has_caption(img_path: Path) -> bool:
+        # 镜像 _make_sample：prefer_json 且 .json 存在 → json；否则要 .txt 或 .caption。
+        if prefer_json and img_path.with_suffix(".json").exists():
+            return True
+        return img_path.with_suffix(".txt").exists() or img_path.with_suffix(".caption").exists()
+
+    hist: dict[int, dict[tuple[int, int], int]] = {}
+
+    def add_image(img_path: Path, repeat: int, resos: list[int]) -> None:
+        if not has_caption(img_path):
+            return
+        try:
+            with Image.open(img_path) as im:
+                w, h = im.size
+        except Exception:
+            return
+        for target_reso in resos:
+            bw, bh = mgr_for(target_reso).get_bucket(w, h)
+            bmap = hist.setdefault(int(target_reso), {})
+            bmap[(bw, bh)] = bmap.get((bw, bh), 0) + repeat
+
+    if train_dir.exists():
+        # 根目录散图：repeat=1，无 px 前缀 → 用 config 分辨率列表
+        for p in sorted(train_dir.iterdir()):
+            if p.is_file() and p.suffix.lower() in IMAGE_EXTS:
+                add_image(p, 1, base_resos)
+        # 子文件夹：递归扫 + px 覆盖 / repeat 解析
+        for sub in sorted(train_dir.iterdir()):
+            if not sub.is_dir():
+                continue
+            reso_override, repeat, _label = ImageDataset._parse_folder_meta(sub.name)
+            resos = [reso_override] if reso_override else base_resos
+            for f in sorted(sub.rglob("*")):
+                if f.is_file() and f.suffix.lower() in IMAGE_EXTS:
+                    add_image(f, repeat, resos)
+
+    out: list[dict[str, Any]] = []
+    for reso in sorted(hist):
+        buckets = [
+            {"w": w, "h": h, "count": c}
+            for (w, h), c in sorted(hist[reso].items(), key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))
+        ]
+        out.append({"reso": reso, "buckets": buckets})
+    return out

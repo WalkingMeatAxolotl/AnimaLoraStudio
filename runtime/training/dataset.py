@@ -11,7 +11,9 @@
 from __future__ import annotations
 
 import logging
+import math
 import random
+import re
 from pathlib import Path
 
 import torch
@@ -28,33 +30,61 @@ class BucketManager:
     UI predicts trainer buckets to pre-align cluster crops so the trainer
     doesn't re-resize them — that prediction depends on a TS port of this
     class. Any change to the algorithm or to the default parameters
-    (``base_reso``, ``min_reso``, ``max_reso``, ``step``, the 0.1 area
-    tolerance, the 2.0 AR cap) MUST land in both files in the same commit,
-    or the frontend's predicted bucket ≠ trainer's actual bucket and crops
-    will silently degrade.
+    (``base_reso``, ``step``, the 0.1 area tolerance, the
+    ``aspect_ratio_limit`` R, the min/max derivation) MUST land in both files
+    in the same commit, or the frontend's predicted bucket ≠ trainer's actual
+    bucket and crops will silently degrade.
 
-    See ``docs/design/preprocess-crop-design.md`` §7 for the UX policy and
-    rationale.
+    The bucket set is a pure function of ``(base_reso, aspect_ratio_limit,
+    step)``:
+
+    - ``aspect_ratio_limit`` (R, default 2.0) symmetrically caps the widest
+      bucket at R:1 and the tallest at 1:R.
+    - ``min_reso`` / ``max_reso`` are the edge-length search bounds. When not
+      given they are **derived** from ``(base_reso, R)`` — at constant area
+      base² the most extreme bucket has edges ``base·√R × base/√R``, so the
+      bounds round outward to ``≈ base/√R`` and ``≈ base·√R`` (one ``step`` of
+      margin so quantization never clips; the area band + AR cap do the real
+      cut). Passing them explicitly (tests / special cases) overrides the
+      derivation. The old hard-wired 512/2048 degrade at small base — e.g.
+      base=512 left only the 512×512 square, killing all AR variety — which is
+      why the bounds now scale with base.
+
+    See ``docs/design/preprocess-crop-design.md`` §7 for the crop UX policy and
+    ``docs/design/multi-resolution-training-design.md`` §6 for the derivation.
     """
-    def __init__(self, base_reso=1024, min_reso=512, max_reso=2048, step=64):
+    def __init__(self, base_reso=1024, min_reso=None, max_reso=None, step=64,
+                 aspect_ratio_limit=2.0):
         self.base_reso = base_reso
-        self.buckets = self._generate(min_reso, max_reso, step, base_reso)
+        self.aspect_ratio_limit = aspect_ratio_limit
+        self.step = step
+        if min_reso is None or max_reso is None:
+            span = math.sqrt(aspect_ratio_limit)
+            derived_min = max(step, int(math.floor(base_reso / span / step) * step) - step)
+            derived_max = int(math.ceil(base_reso * span / step) * step) + step
+            if min_reso is None:
+                min_reso = derived_min
+            if max_reso is None:
+                max_reso = derived_max
+        self.min_reso = min_reso
+        self.max_reso = max_reso
+        self.buckets = self._generate(min_reso, max_reso, step, base_reso, aspect_ratio_limit)
 
-    def _generate(self, min_r, max_r, step, base):
+    def _generate(self, min_r, max_r, step, base, ar_limit):
         # Keep algorithm identical to trainBuckets.generateBuckets() in TS:
         #   - double loop over (w, h) in [min_r, max_r] step `step`
         #   - area within ±10% of base² (the 0.1 below)
-        #   - max AR ratio ≤ 2.0 (the 2.0 below)
-        # Default-param consumers should see exactly the same 37 buckets on
-        # both sides — covered by `studio/web/src/lib/trainBuckets.test.ts`
-        # asserting count == 37.
+        #   - max AR ratio ≤ ar_limit (R)
+        # Default-param consumers (base=1024, R=2.0) should see exactly the same
+        # 37 buckets on both sides — covered by
+        # `studio/web/src/lib/trainBuckets.test.ts` asserting count == 37.
         buckets = []
         base_area = base * base
         for w in range(min_r, max_r + 1, step):
             for h in range(min_r, max_r + 1, step):
                 if abs(w * h - base_area) / base_area > 0.1:
                     continue
-                if max(w/h, h/w) > 2.0:
+                if max(w/h, h/w) > ar_limit:
                     continue
                 buckets.append((w, h))
         return buckets
@@ -87,10 +117,18 @@ class ImageDataset(Dataset):
 
     def __init__(self, data_dir, resolution=1024, bucket_mgr=None,
                  shuffle_caption=False, keep_tokens=0, flip_augment=False,
-                 tag_dropout=0.0, prefer_json=True, caption_override=None):
+                 tag_dropout=0.0, prefer_json=True, caption_override=None,
+                 resolutions=None, aspect_ratio_limit=2.0):
         self.data_dir = Path(data_dir)
         self.resolution = resolution
+        # 多分辨率：bucket_mgr 是 base 分辨率的 manager（向后兼容，单一 ARB 路径仍走它，
+        # 含 None→方桶语义）。非 base 分辨率（文件夹 px 覆盖 / config 列表的其它档）的
+        # manager 由 _bucket_mgr_for 按需建在 bucket_mgrs 里。每个样本带 target_reso
+        # 决定走哪套桶；不指定 target_reso（或 == base）时走 bucket_mgr。
         self.bucket_mgr = bucket_mgr
+        self.aspect_ratio_limit = aspect_ratio_limit
+        self.resolutions = [int(r) for r in resolutions] if resolutions else [resolution]
+        self.bucket_mgrs = {}
         self.shuffle_caption = shuffle_caption
         self.keep_tokens = keep_tokens
         self.flip_augment = flip_augment
@@ -160,12 +198,54 @@ class ImageDataset(Dataset):
         return out
 
     @staticmethod
+    def _parse_folder_meta(name: str) -> tuple[int | None, int, str]:
+        """解析文件夹名 ``[Npx_][R_]label`` → ``(reso_override, repeat, label)``。
+
+        token 顺序（均可选）：``\\d+px`` 分辨率前缀 → ``\\d+`` repeat 前缀 → 其余为 label。
+
+        - ``1024px_2_data`` → ``(1024, 2, 'data')``
+        - ``768px_concept`` → ``(768, 1, 'concept')``
+        - ``1024px_data``   → ``(1024, 1, 'data')``
+        - ``5_concept``（Kohya 风格，向后兼容）→ ``(None, 5, 'concept')``
+        - ``concept``       → ``(None, 1, 'concept')``
+
+        分辨率值 snap 到最近的 64 倍数（half-up）并 clamp 到 ``[256, 4096]``（与 schema
+        validator 和前端 ``Math.round`` 一致，避免偏心桶 / 跨语言取整分歧）。
+        SYNC WITH ``studio/web/src/lib/folderMeta.ts`` 的 ``parseFolderMeta``——两处解析必须一致。
+        """
+        reso: int | None = None
+        repeat = 1
+        rest = name
+        m = re.match(r"^(\d+)px_(.*)$", rest)
+        if m:
+            raw = int(m.group(1))
+            reso = max(256, min(4096, (raw + 32) // 64 * 64))  # round-half-up，对齐 JS Math.round
+            rest = m.group(2)
+        m = re.match(r"^(\d+)_(.*)$", rest)
+        if m:
+            repeat = max(int(m.group(1)), 1)
+            rest = m.group(2)
+        return reso, repeat, rest
+
+    @staticmethod
     def _parse_repeats_from_dir(name: str) -> int:
-        """从文件夹名解析 Kohya 风格重复次数，如 '5_concept' → 5"""
-        prefix = name.split("_", 1)[0]
-        if prefix.isdigit():
-            return max(int(prefix), 1)
-        return 1
+        """从文件夹名解析 Kohya 风格重复次数，如 '5_concept' → 5（兼容旧调用）。"""
+        return ImageDataset._parse_folder_meta(name)[1]
+
+    def _bucket_mgr_for(self, reso):
+        """取 reso 对应的 BucketManager。
+
+        base 分辨率（reso 为 None 或 == self.resolution）走 self.bucket_mgr —— 保持
+        旧路径不变（含 bucket_mgr=None → 方桶）。其它分辨率按需建 manager 缓存进
+        bucket_mgrs。
+        """
+        if reso is None or reso == self.resolution:
+            return self.bucket_mgr
+        mgr = self.bucket_mgrs.get(reso)
+        if mgr is None:
+            mgr = BucketManager(reso, aspect_ratio_limit=self.aspect_ratio_limit)
+            self.bucket_mgrs[reso] = mgr
+        return mgr
 
     def _make_sample(self, img_path):
         """为单张图构建 sample dict，找不到 caption 返回 None"""
@@ -185,63 +265,68 @@ class ImageDataset(Dataset):
         return sample
 
     def _scan(self):
-        """扫描数据集目录，支持 Kohya 风格文件夹重复。
+        """扫描数据集目录，支持 Kohya 风格 repeat + 多分辨率。
 
-        目录结构示例::
+        目录名 ``[Npx_][R_]label``::
 
             dataset/
-            ├── 1_old/       ← repeat 1
-            │   ├── img.jpg
-            │   └── img.txt
-            └── 5_new/       ← repeat 5
-                ├── img.jpg
-                └── img.txt
+            ├── 5_new/          ← repeat 5，用 config 的 resolutions
+            ├── 1024px_2_hires/ ← repeat 2，固定 1024（覆盖列表，不 fan-out）
+            └── old/            ← repeat 1，用 config 的 resolutions
 
-        没有数字前缀的文件夹或根目录下的图片按 repeat=1 处理。
+        - 带 ``Npx_`` 前缀 → 该文件夹固定用 N 分辨率，覆盖 config 列表、不 fan-out。
+        - 无 px 前缀 → 用 ``self.resolutions``；列表多于一档时每张图在每档各一份（fan-out）。
+
+        每张唯一图展开成 ``repeat × 该文件夹分辨率数`` 个样本，每个带 ``target_reso``。
         """
-        unique_samples = []
-        folder_info = []  # (folder_name, repeat, count) for logging
+        unique = []  # (sample_dict, repeat, resos)
+        folder_info = []  # (name, repeat, resos, count) for logging
 
-        # 收集根目录下的图片（repeat=1）
+        # 根目录图片（repeat=1，无 px → 用 resolutions）
         root_count = 0
         for p in sorted(self.data_dir.iterdir()):
             if p.is_file() and p.suffix.lower() in self.EXTS:
                 s = self._make_sample(p)
                 if s:
-                    s["_repeat"] = 1
-                    unique_samples.append(s)
+                    unique.append((s, 1, self.resolutions))
                     root_count += 1
         if root_count:
-            folder_info.append(("(root)", 1, root_count))
+            folder_info.append(("(root)", 1, self.resolutions, root_count))
 
-        # 收集子文件夹中的图片（解析 repeat）
+        # 子文件夹（解析 px 覆盖 + repeat）
         for subdir in sorted(self.data_dir.iterdir()):
             if not subdir.is_dir():
                 continue
-            repeats = self._parse_repeats_from_dir(subdir.name)
+            reso_override, repeats, _label = self._parse_folder_meta(subdir.name)
+            resos = [reso_override] if reso_override else self.resolutions
             count = 0
             for img_path in sorted(subdir.rglob("*")):
                 if img_path.suffix.lower() not in self.EXTS:
                     continue
                 s = self._make_sample(img_path)
                 if s:
-                    s["_repeat"] = repeats
-                    unique_samples.append(s)
+                    unique.append((s, repeats, resos))
                     count += 1
             if count:
-                folder_info.append((subdir.name, repeats, count))
+                folder_info.append((subdir.name, repeats, resos, count))
 
-        # 展开 repeat：将每个样本按其 repeat 次数复制
+        # 展开：repeat × 分辨率 fan-out；每个展开样本带 target_reso。
+        # 同一 (图, reso) 的 repeat 份共享一个 dict；不同 reso 各自 copy 以带各自 target_reso。
         samples = []
-        for s in unique_samples:
-            r = s.pop("_repeat", 1)
-            for _ in range(r):
-                samples.append(s)
+        for s, repeat, resos in unique:
+            for target_reso in resos:
+                item = dict(s)
+                item["target_reso"] = target_reso
+                for _ in range(repeat):
+                    samples.append(item)
 
-        # 日志：每个文件夹的 repeat 信息
-        if folder_info:
-            for name, rep, cnt in folder_info:
-                logger.info(f"  文件夹 {name}: {cnt} 张 × repeat {rep} = {cnt * rep} 样本")
+        # 日志：每个文件夹的 repeat × 分辨率
+        for name, rep, resos, cnt in folder_info:
+            reso_str = "/".join(str(r) for r in resos)
+            logger.info(
+                f"  文件夹 {name}: {cnt} 张 × repeat {rep} × 分辨率[{reso_str}] "
+                f"= {cnt * rep * len(resos)} 样本"
+            )
 
         return samples
 
@@ -329,11 +414,13 @@ class ImageDataset(Dataset):
         if caption is None:
             caption = ""
 
-        # ARB 分桶
-        if self.bucket_mgr:
-            tw, th = self.bucket_mgr.get_bucket(img.width, img.height)
+        # ARB 分桶（按样本 target_reso 选对应 manager；base 档走 self.bucket_mgr）
+        target_reso = sample.get("target_reso")
+        mgr = self._bucket_mgr_for(target_reso)
+        if mgr:
+            tw, th = mgr.get_bucket(img.width, img.height)
         else:
-            tw = th = self.resolution
+            tw = th = target_reso or self.resolution
 
         # 缩放裁剪
         scale = max(tw / img.width, th / img.height)
@@ -519,6 +606,13 @@ class CachedLatentDataset(Dataset):
         self.np = np
         # 获取原始数据集的 samples 列表
         self.samples = self._get_base_samples(base_dataset)
+        # 同一张图 fan-out 到多个分辨率时 npz 必须分文件（否则不同分辨率 latent 互相
+        # 覆盖）。只有真出现在 >1 个 target_reso 的图走 r{reso} 命名；单分辨率图保持
+        # img.npz，不动现有缓存。
+        _resos_per_img: dict[str, set] = {}
+        for s in self.samples:
+            _resos_per_img.setdefault(str(s["image"]), set()).add(s.get("target_reso"))
+        self._multi_reso = {img for img, rs in _resos_per_img.items() if len(rs) > 1}
         self.cache_dir = Path(cache_dir) if cache_dir else None
         self.bucket_for_index = []
         self.cache_batch_size = max(1, int(cache_batch_size or 1))
@@ -543,26 +637,36 @@ class CachedLatentDataset(Dataset):
             return self._get_base_image_dataset(dataset.dataset)
         return None
 
-    def _expected_bucket_size(self, img_path):
+    def _expected_bucket_size(self, img_path, target_reso=None):
         base = self.base_image_dataset
         if base is None:
             return None
         try:
             from PIL import Image
             with Image.open(img_path) as img:
-                if getattr(base, "bucket_mgr", None):
-                    return base.bucket_mgr.get_bucket(img.width, img.height)
-                resolution = int(getattr(base, "resolution"))
+                if hasattr(base, "_bucket_mgr_for"):
+                    mgr = base._bucket_mgr_for(target_reso)
+                else:
+                    mgr = getattr(base, "bucket_mgr", None)
+                if mgr:
+                    return mgr.get_bucket(img.width, img.height)
+                resolution = int(target_reso or getattr(base, "resolution"))
                 return (resolution, resolution)
         except Exception:
             return None
 
-    def _get_npz_path(self, img_path):
-        """获取图像对应的 npz 缓存路径"""
+    def _get_npz_path(self, img_path, target_reso=None):
+        """图像对应的 npz 缓存路径。
+
+        单分辨率图 → ``img.npz``（不动现有缓存）；同图 fan-out 到多分辨率 →
+        ``img.r{reso}.npz``，避免不同分辨率 latent 互相覆盖。
+        """
         img_path = Path(img_path)
+        if target_reso is not None and str(img_path) in getattr(self, "_multi_reso", set()):
+            return img_path.with_suffix(f".r{int(target_reso)}.npz")
         return img_path.with_suffix(".npz")
 
-    def _is_cache_valid(self, img_path, npz_path):
+    def _is_cache_valid(self, img_path, npz_path, target_reso=None):
         """检查缓存是否有效（图像未修改，且格式兼容当前 flip_augment 设置）。
 
         - 缺 `latent` 键 / 其他模型的不兼容缓存 → 删除重 encode
@@ -584,7 +688,7 @@ class CachedLatentDataset(Dataset):
                     return False
                 if getattr(self, "flip_augment", False) and "latent_flipped" not in data.files:
                     return False
-                expected_bucket = self._expected_bucket_size(img_path)
+                expected_bucket = self._expected_bucket_size(img_path, target_reso)
                 if expected_bucket is not None:
                     if "bucket_w" not in data.files or "bucket_h" not in data.files:
                         return False
@@ -601,10 +705,11 @@ class CachedLatentDataset(Dataset):
     def _build_cache(self, vae, device, dtype):
         """构建/加载 npz 缓存。
 
-        per-folder repeat（5_concept 前缀）让 ImageDataset.samples 里同一张图重复 N 次，
-        但 npz 落点是 img_path.with_suffix(".npz") — 每张唯一图只对应一个 npz。
-        按 npz_path 去重，每张图最多 encode 一次；否则同 npz 会被反复覆盖写 N 次
-        （flip_augment 模式下再乘 2），首次构建 cache 时 80% 的 VAE encode 都是浪费。
+        per-folder repeat（5_concept 前缀）让 samples 里同一张图重复 N 次；多分辨率
+        fan-out 还让同一张图带不同 target_reso 出现多次。npz 落点由
+        `_get_npz_path(img, target_reso)` 决定 —— 单分辨率图用 `img.npz`，fan-out 到多
+        分辨率的图用 `img.r{reso}.npz` 分文件。按 npz_path 去重，每个 (图, reso) 最多
+        encode 一次；否则同 npz 会被反复覆盖写 N 次（flip_augment 模式下再乘 2）。
         """
         logger.info("检查 VAE latent 缓存...")
         to_encode = []
@@ -612,12 +717,12 @@ class CachedLatentDataset(Dataset):
         unique_total = 0
         for i, sample in enumerate(self.samples):
             img_path = sample["image"]
-            npz_path = self._get_npz_path(img_path)
+            npz_path = self._get_npz_path(img_path, sample.get("target_reso"))
             if npz_path in seen_npz:
                 continue
             seen_npz.add(npz_path)
             unique_total += 1
-            if not self._is_cache_valid(img_path, npz_path):
+            if not self._is_cache_valid(img_path, npz_path, sample.get("target_reso")):
                 to_encode.append(i)
 
         if to_encode:
@@ -633,7 +738,7 @@ class CachedLatentDataset(Dataset):
         Uses latent spatial shape (h, w) as grouping key so batches have consistent tensor sizes."""
         self.bucket_for_index = [None] * len(self.samples)
         for i in range(len(self.samples)):
-            npz_path = self._get_npz_path(self.samples[i]["image"])
+            npz_path = self._get_npz_path(self.samples[i]["image"], self.samples[i].get("target_reso"))
             if not npz_path.exists():
                 continue
             with self.np.load(npz_path) as data:
@@ -683,7 +788,8 @@ class CachedLatentDataset(Dataset):
                 if want_flip:
                     npz_kwargs["latent_flipped"] = latents_flipped[n].numpy()
 
-                npz_path = self._get_npz_path(self.samples[entry["index"]]["image"])
+                _entry_sample = self.samples[entry["index"]]
+                npz_path = self._get_npz_path(_entry_sample["image"], _entry_sample.get("target_reso"))
                 self.np.savez(
                     npz_path,
                     bucket_w=entry["bucket_w"],
@@ -729,7 +835,7 @@ class CachedLatentDataset(Dataset):
 
     def __getitem__(self, idx):
         sample = self.samples[idx]
-        npz_path = self._get_npz_path(sample["image"])
+        npz_path = self._get_npz_path(sample["image"], sample.get("target_reso"))
         data = self.np.load(npz_path)
         # flip_augment=True 且 npz 有 latent_flipped 时 50% 概率取镜像版本，
         # 跟非 cache 路径 ImageDataset.__getitem__ 的 flip 概率一致。

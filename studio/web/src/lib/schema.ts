@@ -13,6 +13,7 @@ export type ControlKind =
   | 'textarea'
   | 'code'
   | 'string-list'
+  | 'int-list'
 
 /**
  * 推断字段的控件类型。优先用 schema 里 control 自定义元字段，否则按
@@ -44,7 +45,10 @@ export function controlKind(prop: SchemaProperty): ControlKind {
   if (type === 'boolean') return 'bool'
   if (type === 'integer') return 'int'
   if (type === 'number') return 'float'
-  if (type === 'array') return 'string-list'
+  if (type === 'array') {
+    const itemType = prop.items?.type
+    return itemType === 'integer' || itemType === 'number' ? 'int-list' : 'string-list'
+  }
   return 'string'
 }
 

@@ -167,6 +167,21 @@ export default function Field({
     )
   }
 
+  // int-list (e.g. resolution: [512, 768, 1024]) -----------------------
+  if (kind === 'int-list') {
+    return (
+      <IntListField
+        label={label}
+        help={help}
+        value={value}
+        defaultValue={prop.default}
+        onChange={onChange}
+        disabled={disabled}
+        hintNode={hintNode}
+      />
+    )
+  }
+
   // code ----------------------------------------------------------------
   if (kind === 'code') {
     return (
@@ -284,6 +299,76 @@ function JsonCodeField({
         style={inputStyle}
       />
       {error && <div className="text-xs text-err mt-1">{error}</div>}
+      {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
+    </div>
+  )
+}
+
+interface IntListFieldProps {
+  label: string
+  help: string | undefined
+  value: unknown
+  defaultValue: unknown
+  onChange: (v: unknown) => void
+  disabled?: boolean
+  hintNode?: React.ReactNode
+}
+
+/** 整数列表输入（如 resolution: [512, 768, 1024]）。逗号或空格分隔；后端 validator
+ *  负责 snap/clamp，前端只收集数字。清空后回落到默认值（与 NumberField 一致）。 */
+function IntListField({
+  label, help, value, defaultValue, onChange, disabled = false, hintNode,
+}: IntListFieldProps) {
+  const fmt = (v: unknown) =>
+    Array.isArray(v) ? (v as number[]).join(', ') : v === null || v === undefined ? '' : String(v)
+  const [raw, setRaw] = useState<string>(() => fmt(value))
+  const inputRef = useRef<HTMLInputElement | null>(null)
+  // placeholder 纯由该字段的 default 派生（通用组件，不写死任何字段专属值）
+  const placeholder = fmt(defaultValue)
+
+  useEffect(() => {
+    if (document.activeElement !== inputRef.current) setRaw(fmt(value))
+  }, [value])
+
+  const commit = () => {
+    const nums = raw
+      .split(/[,\s]+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0)
+      .map((s) => parseInt(s, 10))
+      .filter((n) => Number.isFinite(n))
+    // 清空 → 回落默认值（避免存空列表）
+    if (nums.length === 0 && Array.isArray(defaultValue)) {
+      onChange(defaultValue)
+      setRaw(fmt(defaultValue))
+      return
+    }
+    onChange(nums)
+    setRaw(nums.join(', '))
+  }
+
+  return (
+    <div className="py-1.5">
+      <div className="text-sm font-medium text-fg-secondary mb-1">
+        {label}{hintNode}
+      </div>
+      <input
+        ref={inputRef}
+        type="text"
+        inputMode="numeric"
+        value={raw}
+        onChange={(e) => setRaw(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            commit()
+          }
+        }}
+        disabled={disabled}
+        className="input input-mono" style={inputStyle}
+        placeholder={placeholder}
+      />
       {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
     </div>
   )
