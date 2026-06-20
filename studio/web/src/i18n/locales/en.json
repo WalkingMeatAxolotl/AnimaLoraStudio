@@ -379,7 +379,7 @@
       "text_encoder_path": "Qwen text encoder directory",
       "t5_tokenizer_path": "T5 tokenizer directory",
       "data_dir": "Dataset directory (supports Kohya-style N_xxx repeat folders)",
-      "resolution": "Training resolution",
+      "resolution": "Training resolution. Accepts multiple values (comma-separated, e.g. 512, 768, 1024) — images in folders without a resolution prefix train once at each; a single value is traditional single-resolution training",
       "aspect_ratio_limit": "Max bucket aspect ratio. 2.0 = up to 2:1 wide / 1:2 tall. Higher values let longer/wider images train at native ratio, but extreme-ratio buckets hold fewer images and have lower short-edge resolution",
       "reg_data_dir": "Regularization dataset directory (optional, helps prevent overfitting)",
       "reg_caption": "Shared regularization caption (leave blank to use each image's .txt/.json)",

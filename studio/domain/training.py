@@ -15,7 +15,7 @@
 """
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .common import AttentionBackend, _meta
 from .migrations import migrate_legacy_save_keys, migrate_noise_enhancement_type
@@ -62,9 +62,9 @@ class TrainingConfig(BaseModel):
         description="数据集目录（支持 Kohya 风格 N_xxx 子目录设定 repeat）",
         json_schema_extra=_meta("dataset", "path"),
     )
-    resolution: int = Field(
-        1024, ge=256, le=4096,
-        description="训练分辨率",
+    resolution: list[int] = Field(
+        default_factory=lambda: [1024],
+        description="训练分辨率。可填多个（逗号分隔，如 512, 768, 1024）——无分辨率前缀的文件夹里每张图会在每个分辨率各训一遍；单个值即传统单分辨率训练",
         json_schema_extra=_meta("dataset"),
     )
     aspect_ratio_limit: float = Field(
@@ -725,6 +725,21 @@ class TrainingConfig(BaseModel):
         description="数据加载并行线程数；越大加载越快但内存占用上升。Windows 必须填 0",
         json_schema_extra=_meta("system", advanced=True),
     )
+
+    @field_validator("resolution", mode="before")
+    @classmethod
+    def _normalize_resolution(cls, v: Any) -> list[int]:
+        """标量 / 列表 / 旧 config 标量 → 归一成 list[int]；各值 snap 到 64 的倍数
+        并 clamp 到 [256, 4096]（与 dataset 文件夹 px 解析一致，避免偏心桶）。"""
+        if v is None:
+            return [1024]
+        if isinstance(v, (int, float, str)):
+            v = [v]
+        out: list[int] = []
+        for x in v:
+            n = int(round(float(x) / 64) * 64)
+            out.append(max(256, min(4096, n)))
+        return out or [1024]
 
     @model_validator(mode="before")
     @classmethod

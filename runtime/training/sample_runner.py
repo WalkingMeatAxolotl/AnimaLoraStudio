@@ -45,8 +45,11 @@ def run_sample(
     sample_path 必须由 caller 决定（baseline 编号 / step / epoch 不在本函数判断）。
     """
     args = ctx.args
-    s_w = int(getattr(args, "sample_width", 0) or 0) or int(args.resolution)
-    s_h = int(getattr(args, "sample_height", 0) or 0) or int(args.resolution)
+    # resolution 可能是列表（多分辨率）；采样预览用首档（base）分辨率。
+    _res = args.resolution
+    base_reso = int(_res[0]) if isinstance(_res, (list, tuple)) and _res else int(_res)
+    s_w = int(getattr(args, "sample_width", 0) or 0) or base_reso
+    s_h = int(getattr(args, "sample_height", 0) or 0) or base_reso
     # 必须 16 的倍数（VAE 8 × patch_spatial 2），否则 cosmos_predict2 spatial_patch 断言失败
     s_w = max(16, (s_w // 16) * 16)
     s_h = max(16, (s_h // 16) * 16)

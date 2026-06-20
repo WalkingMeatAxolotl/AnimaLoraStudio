@@ -379,7 +379,7 @@
       "text_encoder_path": "Qwen 文本编码器目录",
       "t5_tokenizer_path": "T5 tokenizer 目录",
       "data_dir": "数据集目录（支持 Kohya 风格 N_xxx 子目录设定 repeat）",
-      "resolution": "训练分辨率",
+      "resolution": "训练分辨率。可填多个（逗号分隔，如 512, 768, 1024）——无分辨率前缀的文件夹里每张图会在每个分辨率各训一遍；单个值即传统单分辨率训练",
       "aspect_ratio_limit": "桶的最大长宽比上限。2.0 = 最宽 2:1、最高 1:2。值越大越长/越扁的图按原比例训练，但极端比例的桶图片更少、短边有效分辨率更低",
       "reg_data_dir": "正则集目录（可选，防过拟合）",
       "reg_caption": "正则集统一 caption（留空则使用各图自带的 .txt/.json）",
