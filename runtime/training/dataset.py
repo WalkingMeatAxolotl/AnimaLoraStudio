@@ -580,6 +580,13 @@ class CachedLatentDataset(Dataset):
         self.np = np
         # 获取原始数据集的 samples 列表
         self.samples = self._get_base_samples(base_dataset)
+        # 同一张图 fan-out 到多个分辨率时 npz 必须分文件（否则不同分辨率 latent 互相
+        # 覆盖）。只有真出现在 >1 个 target_reso 的图走 r{reso} 命名；单分辨率图保持
+        # img.npz，不动现有缓存。
+        _resos_per_img: dict[str, set] = {}
+        for s in self.samples:
+            _resos_per_img.setdefault(str(s["image"]), set()).add(s.get("target_reso"))
+        self._multi_reso = {img for img, rs in _resos_per_img.items() if len(rs) > 1}
         self.cache_dir = Path(cache_dir) if cache_dir else None
         self.bucket_for_index = []
         self.cache_batch_size = max(1, int(cache_batch_size or 1))
@@ -622,9 +629,15 @@ class CachedLatentDataset(Dataset):
         except Exception:
             return None
 
-    def _get_npz_path(self, img_path):
-        """获取图像对应的 npz 缓存路径"""
+    def _get_npz_path(self, img_path, target_reso=None):
+        """图像对应的 npz 缓存路径。
+
+        单分辨率图 → ``img.npz``（不动现有缓存）；同图 fan-out 到多分辨率 →
+        ``img.r{reso}.npz``，避免不同分辨率 latent 互相覆盖。
+        """
         img_path = Path(img_path)
+        if target_reso is not None and str(img_path) in getattr(self, "_multi_reso", set()):
+            return img_path.with_suffix(f".r{int(target_reso)}.npz")
         return img_path.with_suffix(".npz")
 
     def _is_cache_valid(self, img_path, npz_path, target_reso=None):
@@ -677,7 +690,7 @@ class CachedLatentDataset(Dataset):
         unique_total = 0
         for i, sample in enumerate(self.samples):
             img_path = sample["image"]
-            npz_path = self._get_npz_path(img_path)
+            npz_path = self._get_npz_path(img_path, sample.get("target_reso"))
             if npz_path in seen_npz:
                 continue
             seen_npz.add(npz_path)
@@ -698,7 +711,7 @@ class CachedLatentDataset(Dataset):
         Uses latent spatial shape (h, w) as grouping key so batches have consistent tensor sizes."""
         self.bucket_for_index = [None] * len(self.samples)
         for i in range(len(self.samples)):
-            npz_path = self._get_npz_path(self.samples[i]["image"])
+            npz_path = self._get_npz_path(self.samples[i]["image"], self.samples[i].get("target_reso"))
             if not npz_path.exists():
                 continue
             with self.np.load(npz_path) as data:
@@ -748,7 +761,8 @@ class CachedLatentDataset(Dataset):
                 if want_flip:
                     npz_kwargs["latent_flipped"] = latents_flipped[n].numpy()
 
-                npz_path = self._get_npz_path(self.samples[entry["index"]]["image"])
+                _entry_sample = self.samples[entry["index"]]
+                npz_path = self._get_npz_path(_entry_sample["image"], _entry_sample.get("target_reso"))
                 self.np.savez(
                     npz_path,
                     bucket_w=entry["bucket_w"],
@@ -794,7 +808,7 @@ class CachedLatentDataset(Dataset):
 
     def __getitem__(self, idx):
         sample = self.samples[idx]
-        npz_path = self._get_npz_path(sample["image"])
+        npz_path = self._get_npz_path(sample["image"], sample.get("target_reso"))
         data = self.np.load(npz_path)
         # flip_augment=True 且 npz 有 latent_flipped 时 50% 概率取镜像版本，
         # 跟非 cache 路径 ImageDataset.__getitem__ 的 flip 概率一致。

@@ -86,6 +86,58 @@ def test_resolution_list_fans_out_per_image(tmp_path: Path) -> None:
     assert sorted(s["target_reso"] for s in ds.samples) == [512, 512, 768, 768]
 
 
+class _TinyVAE:
+    """最小 mock VAE：latent shape 随 bucket 尺寸变（h//8, w//8），足以验证
+    不同分辨率的 npz 形状不同。"""
+    scale = 1.0
+
+    def encode(self, pixels):  # pixels: [B, C, T=1, H, W]
+        import torch
+        b, c, t, h, w = pixels.shape
+        return torch.zeros(b, 16, 1, h // 8, w // 8, dtype=pixels.dtype)
+
+
+def test_cache_fanout_writes_per_resolution_npz(tmp_path: Path) -> None:
+    pytest.importorskip("torch")
+    import torch
+    from runtime.training.dataset import BucketManager, CachedLatentDataset, ImageDataset
+
+    _write_img(tmp_path / "data" / "sq.png", size=(256, 256))
+    ds = ImageDataset(
+        tmp_path, 256, BucketManager(256),
+        resolutions=[256, 384], aspect_ratio_limit=2.0, prefer_json=False,
+    )
+    assert len(ds.samples) == 2  # 1 图 × 2 分辨率
+
+    cached = CachedLatentDataset(ds, _TinyVAE(), "cpu", torch.float32)
+    img = tmp_path / "data" / "sq.png"
+    # 两个分辨率各落一个独立 npz，不互相覆盖
+    assert img.with_suffix(".r256.npz").exists()
+    assert img.with_suffix(".r384.npz").exists()
+    assert not img.with_suffix(".npz").exists()  # 多分辨率图不用裸 img.npz
+    # 两份 latent 空间尺寸不同（256→32², 384→48²）
+    shapes = sorted(tuple(cached[i]["latent"].shape) for i in range(len(cached)))
+    assert shapes[0] != shapes[1]
+
+
+def test_single_resolution_keeps_plain_npz(tmp_path: Path) -> None:
+    pytest.importorskip("torch")
+    import torch
+    from runtime.training.dataset import BucketManager, CachedLatentDataset, ImageDataset
+
+    _write_img(tmp_path / "data" / "sq.png", size=(256, 256))
+    ds = ImageDataset(
+        tmp_path, 256, BucketManager(256),
+        resolutions=[256], aspect_ratio_limit=2.0, prefer_json=False,
+    )
+    cached = CachedLatentDataset(ds, _TinyVAE(), "cpu", torch.float32)
+    img = tmp_path / "data" / "sq.png"
+    # 单分辨率图保持裸 img.npz（不动现有缓存习惯）
+    assert img.with_suffix(".npz").exists()
+    assert not img.with_suffix(".r256.npz").exists()
+    assert len(cached) == 1
+
+
 def test_px_folder_overrides_list_no_fanout(tmp_path: Path) -> None:
     pytest.importorskip("torch")
     from runtime.training.dataset import BucketManager, ImageDataset
