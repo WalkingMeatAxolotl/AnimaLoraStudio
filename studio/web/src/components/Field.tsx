@@ -323,7 +323,8 @@ function IntListField({
     Array.isArray(v) ? (v as number[]).join(', ') : v === null || v === undefined ? '' : String(v)
   const [raw, setRaw] = useState<string>(() => fmt(value))
   const inputRef = useRef<HTMLInputElement | null>(null)
-  const placeholder = fmt(defaultValue) || '1024'
+  // placeholder 纯由该字段的 default 派生（通用组件，不写死任何字段专属值）
+  const placeholder = fmt(defaultValue)
 
   useEffect(() => {
     if (document.activeElement !== inputRef.current) setRaw(fmt(value))
