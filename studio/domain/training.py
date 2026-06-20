@@ -63,7 +63,7 @@ class TrainingConfig(BaseModel):
         json_schema_extra=_meta("dataset", "path"),
     )
     resolution: list[int] = Field(
-        default_factory=lambda: [1024],
+        default=[1024],
         description="训练分辨率。可填多个（逗号分隔，如 512, 768, 1024）——无分辨率前缀的文件夹里每张图会在每个分辨率各训一遍；单个值即传统单分辨率训练",
         json_schema_extra=_meta("dataset"),
     )
