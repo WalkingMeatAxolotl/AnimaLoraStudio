@@ -845,10 +845,10 @@ export default function SettingsPage() {
           t={t}
         />
         <SettingsField label="local_dir" desc={t('settings.blankAutoHfDownload')}>
-          <SettingsInput
+          <input
             type="text"
             value={draft.wd14.local_dir ?? ''}
-            onChange={(v) => update('wd14', 'local_dir', v || null)}
+            onChange={(e) => update('wd14', 'local_dir', e.target.value || null)}
             className={textInputClass}
           />
         </SettingsField>
@@ -905,10 +905,10 @@ export default function SettingsPage() {
           t={t}
         />
         <SettingsField label="local_dir" desc={t('settings.blankAutoHfDownload')}>
-          <SettingsInput
+          <input
             type="text"
             value={draft.cltagger.local_dir ?? ''}
-            onChange={(v) => update('cltagger', 'local_dir', v || null)}
+            onChange={(e) => update('cltagger', 'local_dir', e.target.value || null)}
             className={textInputClass}
           />
         </SettingsField>
