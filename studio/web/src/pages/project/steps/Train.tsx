@@ -839,7 +839,8 @@ function DatasetStatsPanel({
         sig={JSON.stringify([
           config?.resolution,
           config?.aspect_ratio_limit,
-          activeVersion?.stats?.train_image_count,
+          // 文件夹名单（含 px 前缀 / repeat / 图数）—— 改名加 px 也要触发重取，不能只看总数
+          activeVersion?.stats?.train_folders,
         ])}
       />
     </div>
@@ -912,6 +913,7 @@ function FolderSection({
   resoCount: number
   empty: string
 }) {
+  const { t } = useTranslation()
   return (
     <div>
       <div className="flex items-baseline justify-between text-xs mb-1">
@@ -933,7 +935,9 @@ function FolderSection({
               <div
                 key={f.name}
                 className="flex items-baseline gap-1.5 text-xs font-mono text-fg-secondary pl-1"
-                title={`${f.name}：${repeat} repeat × ${f.image_count} 图${folderResos > 1 ? ` × ${folderResos} 分辨率` : ''} = ${eff}`}
+                title={folderResos > 1
+                  ? t('train.folderTipReso', { name: f.name, repeat, imgs: f.image_count, resos: folderResos, total: eff })
+                  : t('train.folderTip', { name: f.name, repeat, imgs: f.image_count, total: eff })}
               >
                 <span className="text-fg-tertiary">{label}</span>
                 {resoTag && <span className="text-[10px] text-accent">{resoTag}</span>}

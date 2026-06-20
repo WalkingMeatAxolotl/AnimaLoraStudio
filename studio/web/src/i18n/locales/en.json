@@ -2151,6 +2151,8 @@
     "maxStepsLabel": "max_steps cap {{n}}",
     "collapsePreview": "Collapse distribution preview",
     "expandPreview": "Expand distribution preview",
+    "folderTip": "{{name}}: {{repeat}} repeat × {{imgs}} imgs = {{total}}",
+    "folderTipReso": "{{name}}: {{repeat}} repeat × {{imgs}} imgs × {{resos}} resolutions = {{total}}",
     "bucketDistTitle": "Bucket distribution (actual)",
     "bucketDistHint": "Buckets group by resolution × aspect ratio; same bucket = same batch. Under-filled buckets emit a short batch — no images are dropped.",
     "confirmReset": "Reset config to preset {{name}}? All customizations on the current version will be lost.",

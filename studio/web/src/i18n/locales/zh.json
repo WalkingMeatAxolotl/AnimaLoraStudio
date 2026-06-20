@@ -2151,6 +2151,8 @@
     "maxStepsLabel": "max_steps 上限 {{n}}",
     "collapsePreview": "收起分布预览",
     "expandPreview": "展开分布预览",
+    "folderTip": "{{name}}：{{repeat}} repeat × {{imgs}} 图 = {{total}}",
+    "folderTipReso": "{{name}}：{{repeat}} repeat × {{imgs}} 图 × {{resos}} 分辨率 = {{total}}",
     "bucketDistTitle": "桶分布（实际）",
     "bucketDistHint": "按分辨率 × 长宽比分桶，同桶进同一 batch；桶不满只出短 batch、不丢图。",
     "confirmReset": "重置为预设 {{name}} 的配置？当前 version 的所有自定义内容会丢失。",
