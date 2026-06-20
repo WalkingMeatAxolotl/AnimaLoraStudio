@@ -67,6 +67,11 @@ class TrainingConfig(BaseModel):
         description="训练分辨率",
         json_schema_extra=_meta("dataset"),
     )
+    aspect_ratio_limit: float = Field(
+        2.0, ge=1.0, le=4.0,
+        description="桶的最大长宽比上限。2.0 = 最宽 2:1、最高 1:2。值越大越长/越扁的图按原比例训练，但极端比例的桶图片更少、短边有效分辨率更低",
+        json_schema_extra=_meta("dataset"),
+    )
     reg_data_dir: Optional[str] = Field(
         None,
         description="正则集目录（可选，防过拟合）",

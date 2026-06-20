@@ -39,7 +39,10 @@ def run(ctx: TrainingContext) -> None:
     args = ctx.args
 
     # 数据集
-    ctx.bucket_mgr = BucketManager(args.resolution)
+    ctx.bucket_mgr = BucketManager(
+        args.resolution,
+        aspect_ratio_limit=getattr(args, "aspect_ratio_limit", 2.0),
+    )
     ctx.base_dataset = ImageDataset(
         args.data_dir, args.resolution, ctx.bucket_mgr,
         shuffle_caption=args.shuffle_caption,

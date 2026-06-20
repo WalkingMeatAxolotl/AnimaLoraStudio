@@ -380,6 +380,7 @@
       "t5_tokenizer_path": "T5 tokenizer 目录",
       "data_dir": "数据集目录（支持 Kohya 风格 N_xxx 子目录设定 repeat）",
       "resolution": "训练分辨率",
+      "aspect_ratio_limit": "桶的最大长宽比上限。2.0 = 最宽 2:1、最高 1:2。值越大越长/越扁的图按原比例训练，但极端比例的桶图片更少、短边有效分辨率更低",
       "reg_data_dir": "正则集目录（可选，防过拟合）",
       "reg_caption": "正则集统一 caption（留空则使用各图自带的 .txt/.json）",
       "reg_weight": "正则集 loss 相对训练集的权重；1.0 = 等权重，调低削弱 reg 影响",

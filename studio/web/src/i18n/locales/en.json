@@ -380,6 +380,7 @@
       "t5_tokenizer_path": "T5 tokenizer directory",
       "data_dir": "Dataset directory (supports Kohya-style N_xxx repeat folders)",
       "resolution": "Training resolution",
+      "aspect_ratio_limit": "Max bucket aspect ratio. 2.0 = up to 2:1 wide / 1:2 tall. Higher values let longer/wider images train at native ratio, but extreme-ratio buckets hold fewer images and have lower short-edge resolution",
       "reg_data_dir": "Regularization dataset directory (optional, helps prevent overfitting)",
       "reg_caption": "Shared regularization caption (leave blank to use each image's .txt/.json)",
       "reg_weight": "Regularization loss weight relative to the main set; 1.0 = equal, lower values weaken reg",
