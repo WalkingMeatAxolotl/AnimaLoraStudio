@@ -40,6 +40,7 @@ class CLTagger(OnnxTaggerBase):
         self._labels: _LabelData | None = None
         self._input_size: int = 448
         self._input_layout: str = "nchw"
+        self._color_order: str = "bgr"
 
     def _cfg(self) -> "secrets.CLTaggerConfig":
         base = secrets.load().cltagger.model_dump()
@@ -57,18 +58,49 @@ class CLTagger(OnnxTaggerBase):
             return Path(cfg.local_dir)
         return model_downloader.cltagger_target_root(model_downloader.models_root(), cfg.model_id)
 
+    def _expected_extra_paths(self, base: Path) -> list[Path]:
+        cfg = self._cfg()
+        return [
+            base / f
+            for preset in model_downloader.CLTAGGER_VERSIONS.values()
+            if (
+                preset["model_id"] == cfg.model_id
+                and preset["model_path"] == cfg.model_path
+                and preset["tag_mapping_path"] == cfg.tag_mapping_path
+            )
+            for f in preset.get("extra_files", [])
+        ]
+
+    def _missing_local_files_message(self, model_path: Path, mapping_path: Path) -> str:
+        base = self._compute_base()
+        paths = [model_path, mapping_path, *self._expected_extra_paths(base)]
+        if self._cfg().local_dir:
+            flat_model = base / Path(self._cfg().model_path).name
+            flat_mapping = base / Path(self._cfg().tag_mapping_path).name
+            if flat_model.exists() and flat_mapping.exists():
+                paths = [
+                    flat_model,
+                    flat_mapping,
+                    *[base / Path(p).name for p in self._expected_extra_paths(base)],
+                ]
+        missing = [str(p) for p in paths if not p.exists()]
+        missing = list(dict.fromkeys(missing))
+        return "local_dir 缺少 CLTagger 模型文件: " + " / ".join(missing)
+
     def _local_model_files_status(self) -> tuple[Path, Path, bool]:
         cfg = self._cfg()
         base = self._compute_base()
         model_path = base / cfg.model_path
         mapping_path = base / cfg.tag_mapping_path
+        extra_paths = self._expected_extra_paths(base)
         if model_path.exists() and mapping_path.exists():
-            return model_path, mapping_path, True
+            return model_path, mapping_path, all(p.exists() for p in extra_paths)
         if cfg.local_dir:
             flat_model = base / Path(cfg.model_path).name
             flat_mapping = base / Path(cfg.tag_mapping_path).name
+            flat_extra = [base / Path(p).name for p in extra_paths]
             if flat_model.exists() and flat_mapping.exists():
-                return flat_model, flat_mapping, True
+                return flat_model, flat_mapping, all(p.exists() for p in flat_extra)
         return model_path, mapping_path, False
 
     def _resolve_model_files(self) -> tuple[Path, Path]:
@@ -77,16 +109,16 @@ class CLTagger(OnnxTaggerBase):
         if ok:
             return model_path, mapping_path
         if cfg.local_dir:
-            raise FileNotFoundError(
-                "local_dir 缺少 CLTagger 模型文件或 tag_mapping.json: "
-                f"{model_path} / {mapping_path}"
-            )
+            raise FileNotFoundError(self._missing_local_files_message(model_path, mapping_path))
         model_downloader.download_cltagger(self._compute_base(), cfg, on_log=logger.info)
         missing: list[str] = []
         if not model_path.exists():
             missing.append(f"model: {model_path}")
         if not mapping_path.exists():
             missing.append(f"mapping: {mapping_path}")
+        for p in self._expected_extra_paths(self._compute_base()):
+            if not p.exists():
+                missing.append(f"extra: {p}")
         if missing:
             raise FileNotFoundError(
                 f"CLTagger 下载后仍缺少 {', '.join(missing)}（请到设置→模型管理查看下载日志）"
@@ -100,10 +132,7 @@ class CLTagger(OnnxTaggerBase):
             return False, str(exc)
         if not ok:
             if self._cfg().local_dir:
-                return False, (
-                    "local_dir 缺少 CLTagger 模型文件或 tag_mapping.json: "
-                    f"{model_path} / {mapping_path}"
-                )
+                return False, self._missing_local_files_message(model_path, mapping_path)
             return False, f"需下载模型: {model_path.parent.name}"
         return True, f"模型: {model_path.parent.name}"
 
@@ -117,6 +146,7 @@ class CLTagger(OnnxTaggerBase):
         self._input_layout = self._infer_input_layout(input_meta.shape)
         self._input_size = self._infer_input_size(input_meta.shape, self._input_layout)
         self._labels = self._load_tag_mapping(mapping_path)
+        self._color_order = "rgb" if mapping_path.name == "model_vocabulary.json" else "bgr"
 
     @staticmethod
     def _infer_input_layout(shape: list[object]) -> str:
@@ -149,6 +179,10 @@ class CLTagger(OnnxTaggerBase):
         raw = json.loads(mapping_path.read_text(encoding="utf-8"))
         if isinstance(raw, dict) and "idx_to_tag" in raw:
             idx_to_tag = {int(k): str(v) for k, v in raw["idx_to_tag"].items()}
+            tag_to_category = {str(k): str(v) for k, v in raw.get("tag_to_category", {}).items()}
+        elif isinstance(raw, dict) and "tag_to_idx" in raw:
+            tag_to_idx = {str(k): int(v) for k, v in raw["tag_to_idx"].items()}
+            idx_to_tag = {idx: tag for tag, idx in tag_to_idx.items()}
             tag_to_category = {str(k): str(v) for k, v in raw.get("tag_to_category", {}).items()}
         elif isinstance(raw, dict):
             idx_to_tag = {}
@@ -186,7 +220,8 @@ class CLTagger(OnnxTaggerBase):
             img = canvas
         img = img.resize((size, size), Image.Resampling.BICUBIC)
         arr = np.asarray(img, dtype=np.float32) / 255.0
-        arr = arr[..., ::-1]  # RGB -> BGR
+        if self._color_order == "bgr":
+            arr = arr[..., ::-1]  # RGB -> BGR for CLTagger 1.x
         if self._input_layout == "nchw":
             arr = arr.transpose(2, 0, 1)
             mean = np.array([0.5, 0.5, 0.5], dtype=np.float32).reshape(3, 1, 1)

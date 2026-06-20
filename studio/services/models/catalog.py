@@ -97,18 +97,27 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
     # CLTagger 版本预设（CLTAGGER_VERSIONS 写死的子目录布局）。
     cl_root = cltagger_target_root(r, cl_cfg.model_id)
     cl_variants = []
-    for label, (mp, tmp) in CLTAGGER_VERSIONS.items():
-        files = [
-            {"name": mp, **_file_status(cl_root / mp)},
-            {"name": tmp, **_file_status(cl_root / tmp)},
-        ]
+    for label, preset in CLTAGGER_VERSIONS.items():
+        model_id = preset["model_id"]
+        mp = preset["model_path"]
+        tmp = preset["tag_mapping_path"]
+        target_root = cltagger_target_root(r, model_id)
+        file_names = [mp, tmp, *preset.get("extra_files", [])]
+        files = [{"name": f, **_file_status(target_root / f)} for f in file_names]
         all_exist = all(f["exists"] for f in files)
         total_size = sum(f["size"] for f in files)
         cl_variants.append({
             "label": label,
+            "model_id": model_id,
             "model_path": mp,
             "tag_mapping_path": tmp,
-            "is_current": cl_cfg.model_path == mp and cl_cfg.tag_mapping_path == tmp,
+            "description": preset.get("description", ""),
+            "target_dir": str(target_root),
+            "is_current": (
+                cl_cfg.model_id == model_id
+                and cl_cfg.model_path == mp
+                and cl_cfg.tag_mapping_path == tmp
+            ),
             "exists": all_exist,
             "size": total_size,
             "files": files,

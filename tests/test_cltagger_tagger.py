@@ -73,6 +73,30 @@ def test_is_available_does_not_download_when_model_missing(
     assert called["download"] is False
 
 
+def test_v2_local_dir_requires_external_data(isolated_secrets: Path) -> None:
+    model_dir = isolated_secrets / "cl_v2"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    (model_dir / "model.onnx").write_bytes(b"fake-onnx")
+    (model_dir / "model_vocabulary.json").write_text(
+        json.dumps({
+            "idx_to_tag": {"0": "general_tag"},
+            "tag_to_category": {"general_tag": "General"},
+        }),
+        encoding="utf-8",
+    )
+    secrets.update({
+        "cltagger": {
+            "model_id": "cella110n/cl_tagger_v2",
+            "model_path": "v2_01a/model.onnx",
+            "tag_mapping_path": "v2_01a/model_vocabulary.json",
+            "local_dir": str(model_dir),
+        }
+    })
+    ok, msg = cltagger_tagger.CLTagger().is_available()
+    assert ok is False
+    assert "local_dir 缺少" in msg
+
+
 def test_postprocess_uses_character_threshold_and_optional_categories(
     isolated_secrets: Path,
 ) -> None:
@@ -196,6 +220,32 @@ def test_load_tag_mapping_supports_inline_object_schema(tmp_path: Path) -> None:
     assert labels.categories == ["General", "Character", "General", "General"]
 
 
+def test_load_tag_mapping_supports_v2_vocabulary_schema(tmp_path: Path) -> None:
+    """CLTagger v2 uses model_vocabulary.json with tag_to_idx / idx_to_tag."""
+    mapping_path = tmp_path / "model_vocabulary.json"
+    mapping_path.write_text(
+        json.dumps({
+            "tag_to_idx": {
+                "general_tag": 0,
+                "hero_name": 1,
+            },
+            "idx_to_tag": {
+                "0": "general_tag",
+                "1": "hero_name",
+            },
+            "tag_to_category": {
+                "general_tag": "General",
+                "hero_name": "Character",
+            },
+            "categories": ["General", "Character"],
+        }),
+        encoding="utf-8",
+    )
+    labels = cltagger_tagger.CLTagger._load_tag_mapping(mapping_path)
+    assert labels.names == ["general_tag", "hero_name"]
+    assert labels.categories == ["General", "Character"]
+
+
 def test_preprocess_supports_nhwc_layout(isolated_secrets: Path) -> None:
     t = cltagger_tagger.CLTagger()
     t._input_size = 4
@@ -204,3 +254,14 @@ def test_preprocess_supports_nhwc_layout(isolated_secrets: Path) -> None:
     assert arr.shape == (4, 4, 3)
     assert arr[0, 0, 0] == pytest.approx(-1.0, abs=1e-4)  # B
     assert arr[0, 0, 2] == pytest.approx(1.0, abs=1e-4)   # R
+
+
+def test_preprocess_v2_keeps_rgb_order(isolated_secrets: Path) -> None:
+    t = cltagger_tagger.CLTagger()
+    t._input_size = 4
+    t._input_layout = "nchw"
+    t._color_order = "rgb"
+    arr = t._preprocess(Image.new("RGB", (8, 8), (255, 0, 0)))
+    assert arr.shape == (3, 4, 4)
+    assert arr[0, 0, 0] == pytest.approx(1.0, abs=1e-4)   # R
+    assert arr[2, 0, 0] == pytest.approx(-1.0, abs=1e-4)  # B

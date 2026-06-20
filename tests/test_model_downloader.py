@@ -314,6 +314,51 @@ def test_download_qwen3_modelscope_builds_complete_directory(
         assert (qwen_dir / f).read_text(encoding="utf-8") == f
 
 
+def test_download_cltagger_v2_downloads_external_data(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CLTagger v2 ONNX uses external weights, so model.onnx.data is required."""
+    from studio import secrets
+
+    cfg = secrets.CLTaggerConfig(
+        model_id="cella110n/cl_tagger_v2",
+        model_path="v2_01a/model.onnx",
+        tag_mapping_path="v2_01a/model_vocabulary.json",
+    )
+    calls: list[tuple[str, str, str]] = []
+
+    def fake_download_flat(repo_id, repo_subpath, target, *, on_log=print):
+        calls.append((repo_id, repo_subpath, str(target)))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"x")
+        return True
+
+    monkeypatch.setattr(model_downloader, "download_flat", fake_download_flat)
+    ok = model_downloader.download_cltagger(tmp_path, cfg, on_log=lambda _l: None)
+    assert ok
+    assert [(repo, path) for repo, path, _ in calls] == [
+        ("cella110n/cl_tagger_v2", "v2_01a/model.onnx"),
+        ("cella110n/cl_tagger_v2", "v2_01a/model_vocabulary.json"),
+        ("cella110n/cl_tagger_v2", "v2_01a/model.onnx.data"),
+        ("cella110n/cl_tagger_v2", "v2_01a/model_metadata.json"),
+    ]
+
+
+def test_build_catalog_includes_cltagger_v2_variant(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from studio import secrets
+
+    monkeypatch.setattr(secrets, "load", lambda: secrets.Secrets())
+    cat = model_downloader.build_catalog(tmp_path)
+    variants = cat["cltagger"]["variants"]
+    v2 = next(v for v in variants if v["label"] == "v2_01a")
+    assert v2["model_id"] == "cella110n/cl_tagger_v2"
+    assert v2["model_path"] == "v2_01a/model.onnx"
+    assert v2["tag_mapping_path"] == "v2_01a/model_vocabulary.json"
+    assert "v2_01a/model.onnx.data" in [f["name"] for f in v2["files"]]
+
+
 # ---------------------------------------------------------------------------
 # 预处理放大器
 # ---------------------------------------------------------------------------

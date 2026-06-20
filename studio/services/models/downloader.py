@@ -152,7 +152,16 @@ def download_cltagger(
     on_log(f"\n📥 CLTagger → {target_root}")
     target_root.mkdir(parents=True, exist_ok=True)
     ok = True
-    for f in (cfg.model_path, cfg.tag_mapping_path):
+    files = [cfg.model_path, cfg.tag_mapping_path]
+    for preset in CLTAGGER_VERSIONS.values():
+        if (
+            preset["model_id"] == cfg.model_id
+            and preset["model_path"] == cfg.model_path
+            and preset["tag_mapping_path"] == cfg.tag_mapping_path
+        ):
+            files.extend(preset.get("extra_files", []))
+            break
+    for f in dict.fromkeys(files):
         if not _sources.download_flat(cfg.model_id, f, target_root / f, on_log=on_log):
             ok = False
     return ok
@@ -393,7 +402,6 @@ def trigger(model_id: str, variant: Optional[str] = None) -> str:
         return key
     if model_id == "cltagger":
         cfg = secrets.load().cltagger
-        target = cltagger_target_root(root, cfg.model_id)
         # variant 可指定预设 label（覆盖 cfg 当前的 model_path），便于 UI 一键
         # 下载非"当前选中"的版本。未指定时用 cfg 当前路径。
         if variant:
@@ -401,11 +409,17 @@ def trigger(model_id: str, variant: Optional[str] = None) -> str:
             if preset is None:
                 raise ValueError(f"unknown cltagger variant {variant!r}")
             cfg = secrets.CLTaggerConfig(
-                **{**cfg.model_dump(), "model_path": preset[0], "tag_mapping_path": preset[1]}
+                **{
+                    **cfg.model_dump(),
+                    "model_id": preset["model_id"],
+                    "model_path": preset["model_path"],
+                    "tag_mapping_path": preset["tag_mapping_path"],
+                }
             )
             key = f"cltagger:{variant}"
         else:
             key = "cltagger"
+        target = cltagger_target_root(root, cfg.model_id)
         start_download_async(
             key, lambda log: download_cltagger(target, cfg, on_log=log)
         )

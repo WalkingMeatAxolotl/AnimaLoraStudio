@@ -60,14 +60,26 @@ TAEFLUX_FILES = [
     "config.json",
 ]
 
-# CLTagger 子目录布局：仓库内 cl_tagger_1_02/model.onnx 等。新版本（1.03 等）
-# 出现时往这里加一行；UI 自动作为 radio 选项暴露。
-# label → (model_path, tag_mapping_path)
-CLTAGGER_VERSIONS: dict[str, tuple[str, str]] = {
-    "cl_tagger_1_02": (
-        "cl_tagger_1_02/model.onnx",
-        "cl_tagger_1_02/tag_mapping.json",
-    ),
+# CLTagger 子目录布局。UI 会自动把这里的 label 暴露成 radio 选项。
+# label → repo/model/mapping/files metadata
+CLTAGGER_VERSIONS: dict[str, dict[str, Any]] = {
+    "v2_01a": {
+        "model_id": "cella110n/cl_tagger_v2",
+        "model_path": "v2_01a/model.onnx",
+        "tag_mapping_path": "v2_01a/model_vocabulary.json",
+        "extra_files": [
+            "v2_01a/model.onnx.data",
+            "v2_01a/model_metadata.json",
+        ],
+        "description": "CL Tagger v2 provisional SigLIP2 ONNX",
+    },
+    "cl_tagger_1_02": {
+        "model_id": "cella110n/cl_tagger",
+        "model_path": "cl_tagger_1_02/model.onnx",
+        "tag_mapping_path": "cl_tagger_1_02/tag_mapping.json",
+        "extra_files": [],
+        "description": "CLTagger 1.02 ONNX",
+    },
 }
 
 # WD14 模型常驻文件名（HF SmilingWolf/* 仓库顶层都是这两个）。

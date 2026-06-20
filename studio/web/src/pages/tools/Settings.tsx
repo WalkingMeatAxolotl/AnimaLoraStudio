@@ -895,6 +895,7 @@ export default function SettingsPage() {
           currentModelPath={draft.cltagger.model_path}
           currentTagMappingPath={draft.cltagger.tag_mapping_path}
           onSelectVariant={(v: CLTaggerVariantInfo) => {
+            update('cltagger', 'model_id', v.model_id)
             update('cltagger', 'model_path', v.model_path)
             update('cltagger', 'tag_mapping_path', v.tag_mapping_path)
           }}
