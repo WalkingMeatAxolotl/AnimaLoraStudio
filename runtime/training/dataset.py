@@ -132,6 +132,32 @@ class ImageDataset(Dataset):
         txt_count = len(self.samples) - json_count
         unique_count = len(set(id(s) for s in self.samples))
         logger.info(f"数据集: {unique_count} 张图 → {len(self.samples)} 样本（含 repeat）(JSON: {json_count}, TXT: {txt_count})")
+        self.bucket_for_index = self._build_bucket_for_index()
+
+    def _build_bucket_for_index(self):
+        """预扫每张图尺寸，算出每个样本的桶 (tw, th)，供 BucketBatchSampler 按桶分批。
+
+        非缓存路径必需：``collate_fn`` 用 ``torch.stack`` 拼一个 batch 的 pixel_values，
+        若 batch 混入不同桶尺寸会崩；``BucketBatchSampler`` 靠 ``dataset.bucket_for_index``
+        把同尺寸样本分进同一 batch。缓存路径不读这份（``CachedLatentDataset`` 从 npz
+        latent shape 自建一份并作为外层 wrapper 暴露），但这份也很便宜（只读图片 header）。
+        无 ``bucket_mgr``（不分桶）时全 None → sampler 退回普通切批。
+        """
+        if not self.bucket_mgr:
+            return [None] * len(self.samples)
+        from PIL import Image
+        by_image: dict = {}
+        out = []
+        for s in self.samples:
+            key = str(s["image"])
+            if key not in by_image:
+                try:
+                    with Image.open(s["image"]) as im:
+                        by_image[key] = self.bucket_mgr.get_bucket(im.width, im.height)
+                except Exception:
+                    by_image[key] = None
+            out.append(by_image[key])
+        return out
 
     @staticmethod
     def _parse_repeats_from_dir(name: str) -> int:

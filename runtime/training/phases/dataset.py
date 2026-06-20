@@ -116,9 +116,17 @@ def run(ctx: TrainingContext) -> None:
             num_workers=args.num_workers,
         )
     else:
-        ctx.dataloader = DataLoader(
+        # 非缓存路径也必须按桶分批：collate_fn 用 torch.stack 拼 pixel_values，一个 batch
+        # 混入不同桶尺寸（ARB 下不同长宽比 → 不同 H×W）会 RuntimeError。BucketBatchSampler
+        # 靠 ImageDataset.bucket_for_index 把同尺寸样本分进同一 batch（缓存路径早已这么做，
+        # 非缓存路径此前漏了 → bs>1 必崩）。drop_last=False 与缓存路径一致。
+        batch_sampler = BucketBatchSampler(
             ctx.dataset, batch_size=args.batch_size,
-            shuffle=True,
+            drop_last=False, shuffle=True,
+            seed=getattr(args, "seed", 42),
+        )
+        ctx.dataloader = DataLoader(
+            ctx.dataset, batch_sampler=batch_sampler,
             collate_fn=collate_fn,
             num_workers=args.num_workers,
         )
