@@ -646,3 +646,58 @@ def stats_for_version(p: dict[str, Any], v: dict[str, Any]) -> dict[str, Any]:
         "reg_meta_exists": reg_meta_exists,
         "has_output": has_output,
     }
+
+
+def compute_bucket_histogram(
+    train_dir: Path,
+    resolutions: list[int],
+    aspect_ratio_limit: float = 2.0,
+) -> list[dict[str, Any]]:
+    """按**真正的** BucketManager 算训练集 ARB 桶分布（与实际训练逐桶一致）。
+
+    复用 runtime 的 ``ImageDataset._parse_folder_meta`` + ``BucketManager``，避免桶算法
+    第三份拷贝漂移。每张图按其文件夹的分辨率（px 覆盖 / config 列表 fan-out）落桶，
+    count 为有效样本数（含 repeat × 分辨率档数）。
+
+    返回 ``[{reso, buckets: [{w, h, count}]}]``，按分辨率升序、桶按 count 降序。
+    只统计训练集子文件夹（与 stats_for_version 一致）；reg / 根目录散图不计。
+    """
+    from runtime.training.dataset import BucketManager, ImageDataset
+    from PIL import Image
+
+    train_dir = Path(train_dir)
+    mgrs: dict[int, Any] = {}
+
+    def mgr_for(reso: int):
+        if reso not in mgrs:
+            mgrs[reso] = BucketManager(int(reso), aspect_ratio_limit=aspect_ratio_limit)
+        return mgrs[reso]
+
+    hist: dict[int, dict[tuple[int, int], int]] = {}
+    if train_dir.exists():
+        for sub in sorted(train_dir.iterdir()):
+            if not sub.is_dir():
+                continue
+            reso_override, repeat, _label = ImageDataset._parse_folder_meta(sub.name)
+            resos = [reso_override] if reso_override else [int(r) for r in resolutions]
+            for f in sub.iterdir():
+                if not (f.is_file() and f.suffix.lower() in IMAGE_EXTS):
+                    continue
+                try:
+                    with Image.open(f) as im:
+                        w, h = im.size
+                except Exception:
+                    continue
+                for target_reso in resos:
+                    bw, bh = mgr_for(target_reso).get_bucket(w, h)
+                    bmap = hist.setdefault(int(target_reso), {})
+                    bmap[(bw, bh)] = bmap.get((bw, bh), 0) + repeat
+
+    out: list[dict[str, Any]] = []
+    for reso in sorted(hist):
+        buckets = [
+            {"w": w, "h": h, "count": c}
+            for (w, h), c in sorted(hist[reso].items(), key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))
+        ]
+        out.append({"reso": reso, "buckets": buckets})
+    return out

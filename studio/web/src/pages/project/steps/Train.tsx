@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import {
   api,
+  type BucketDistribution,
   type ConfigData,
   type PresetSummary,
   type ProjectDetail,
@@ -655,6 +656,7 @@ export default function TrainPage() {
         {/* 右栏：训练集 + 正则集分布 + 章节锚点导航 */}
         <div className="flex flex-col min-h-0 min-w-0 overflow-y-auto">
           <DatasetStatsPanel
+            projectId={project.id}
             activeVersion={activeVersion}
             reg={reg}
             config={config}
@@ -728,10 +730,12 @@ function aggregateRegFolders(files: string[]): Array<{ name: string; image_count
  * train / reg 分两块汇总，最后给出有效图数总和——这是 anima_train 单 epoch 的实际样本数。
  */
 function DatasetStatsPanel({
+  projectId,
   activeVersion,
   reg,
   config,
 }: {
+  projectId: number
   activeVersion: Version | null
   reg: RegStatus | null
   config: ConfigData | null
@@ -825,6 +829,77 @@ function DatasetStatsPanel({
           )}
         </div>
       </div>
+
+      <BucketPreview
+        projectId={projectId}
+        vid={activeVersion?.id ?? 0}
+        batchSize={bs}
+        sig={JSON.stringify([
+          config?.resolution,
+          config?.aspect_ratio_limit,
+          activeVersion?.stats?.train_image_count,
+        ])}
+      />
+    </div>
+  )
+}
+
+/** 训练集实际桶分布（后端用真 BucketManager 算）。按分辨率档分组、每桶有效图数；
+ *  count < batch_size 的桶会被 drop_last 丢掉，标红提示。 */
+function BucketPreview({
+  projectId, vid, batchSize, sig,
+}: {
+  projectId: number
+  vid: number
+  batchSize: number
+  sig: string
+}) {
+  const { t } = useTranslation()
+  const [dist, setDist] = useState<BucketDistribution | null>(null)
+
+  useEffect(() => {
+    if (!projectId || !vid) return
+    let cancelled = false
+    api.getBucketDistribution(projectId, vid)
+      .then((d) => { if (!cancelled) setDist(d) })
+      .catch(() => { if (!cancelled) setDist(null) })
+    return () => { cancelled = true }
+  }, [projectId, vid, sig])
+
+  if (!dist || dist.groups.length === 0) return null
+
+  return (
+    <div className="rounded-md border border-subtle bg-surface px-3 py-2.5">
+      <div className="flex items-center gap-1.5 mb-2.5">
+        <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
+        <span className="caption uppercase tracking-[0.06em] text-xs">{t('train.bucketDistTitle')}</span>
+      </div>
+      <div className="flex flex-col gap-2">
+        {dist.groups.map((g) => (
+          <div key={g.reso}>
+            <div className="text-xs font-mono text-fg-secondary mb-1">{g.reso}px</div>
+            <div className="flex flex-col gap-0.5">
+              {g.buckets.map((b) => {
+                const dropped = batchSize > 0 && b.count < batchSize
+                return (
+                  <div
+                    key={`${b.w}x${b.h}`}
+                    className="flex items-baseline gap-1.5 text-xs font-mono pl-1"
+                    title={dropped ? t('train.bucketDropWarn', { n: batchSize }) : undefined}
+                  >
+                    <span className="text-fg-tertiary">{b.w}×{b.h}</span>
+                    <span className="flex-1 border-b border-dotted border-subtle self-end mb-1" />
+                    <span className={dropped ? 'text-warn font-semibold' : 'text-fg-primary'}>
+                      {b.count}{dropped ? ' ⚠' : ''}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="text-[10px] text-fg-tertiary mt-2">{t('train.bucketDropHint')}</div>
     </div>
   )
 }

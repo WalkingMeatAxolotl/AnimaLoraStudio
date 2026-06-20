@@ -1079,6 +1079,16 @@ export interface VersionConfigResponse {
   defaulted_fields?: string[]
 }
 
+/** 训练集 ARB 桶分布（后端用真 BucketManager 算）。count = 有效样本数（含 repeat × fan-out）。 */
+export interface BucketDistribution {
+  resolutions: number[]
+  aspect_ratio_limit: number
+  groups: Array<{
+    reso: number
+    buckets: Array<{ w: number; h: number; count: number }>
+  }>
+}
+
 export interface RegBuildRequest {
   excluded_tags?: string[]
   auto_tag?: boolean
@@ -2261,6 +2271,10 @@ export const api = {
   // Train config (PP6.2) -------------------------------------------------
   getVersionConfig: (pid: number, vid: number) =>
     req<VersionConfigResponse>(`/api/projects/${pid}/versions/${vid}/config`),
+  getBucketDistribution: (pid: number, vid: number) =>
+    req<BucketDistribution>(
+      `/api/projects/${pid}/versions/${vid}/bucket-distribution`
+    ),
   putVersionConfig: (pid: number, vid: number, data: ConfigData) =>
     req<{ has_config: true; config: ConfigData }>(
       `/api/projects/${pid}/versions/${vid}/config`,
