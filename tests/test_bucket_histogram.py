@@ -1,6 +1,7 @@
 """compute_bucket_histogram：后端用真 BucketManager 算训练集桶分布（桶预览数据源）。
 
-复用 runtime 的 BucketManager + _parse_folder_meta，保证与实际训练逐桶一致。
+复用 runtime 的 BucketManager + _parse_folder_meta，扫描规则镜像 ImageDataset._scan
+（递归 rglob + 根目录散图 + 只计有 caption 的图），保证与实际训练逐桶一致。
 """
 from __future__ import annotations
 
@@ -9,11 +10,13 @@ from pathlib import Path
 import pytest
 
 
-def _sq(d: Path, names, size=(1024, 1024)) -> None:
+def _sq(d: Path, names, size=(1024, 1024), caption=True) -> None:
     from PIL import Image
     d.mkdir(parents=True, exist_ok=True)
     for n in names:
         Image.new("RGB", size).save(d / f"{n}.png")
+        if caption:
+            (d / f"{n}.txt").write_text("1girl", encoding="utf-8")
 
 
 def test_single_resolution_repeat_counts(tmp_path: Path) -> None:
@@ -50,3 +53,24 @@ def test_empty_train_dir(tmp_path: Path) -> None:
     pytest.importorskip("torch")
     from studio.services.projects.versions import compute_bucket_histogram
     assert compute_bucket_histogram(tmp_path / "nope", [1024], 2.0) == []
+
+
+def test_only_captioned_images_counted(tmp_path: Path) -> None:
+    # 镜像 trainer：无 caption 的图被丢弃，不计入直方图（否则预览 ≠ 实际训练）。
+    pytest.importorskip("torch")
+    from studio.services.projects.versions import compute_bucket_histogram
+    _sq(tmp_path / "1_data", ["a", "b"])               # 有 caption
+    _sq(tmp_path / "1_data", ["c"], caption=False)     # 无 caption
+    out = compute_bucket_histogram(tmp_path, [1024], 2.0)
+    assert sum(b["count"] for b in out[0]["buckets"]) == 2  # c 不计
+
+
+def test_root_and_nested_images_counted(tmp_path: Path) -> None:
+    # 根目录散图（repeat=1）+ 子文件夹深层图（rglob）都要计，跟 _scan 一致。
+    pytest.importorskip("torch")
+    from studio.services.projects.versions import compute_bucket_histogram
+    _sq(tmp_path, ["root"])                              # 根目录散图
+    _sq(tmp_path / "2_data" / "nested", ["deep"])        # 子文件夹深层
+    out = compute_bucket_histogram(tmp_path, [1024], 2.0)
+    total = sum(b["count"] for g in out for b in g["buckets"])
+    assert total == 1 + 2  # root×1 + deep×repeat2

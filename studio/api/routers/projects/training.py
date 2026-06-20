@@ -679,6 +679,7 @@ def get_bucket_distribution_endpoint(pid: int, vid: int) -> dict[str, Any]:
     project, ver, train_dir = _version_train_dir_or_404(pid, vid)
     resolutions: list[int] = [1024]
     ar_limit = 2.0
+    prefer_json = True
     if version_config.has_version_config(project, ver):
         try:
             cfg, _dropped, _defaulted = version_config.read_version_config_with_warnings(project, ver)
@@ -688,9 +689,10 @@ def get_bucket_distribution_endpoint(pid: int, vid: int) -> dict[str, Any]:
             elif isinstance(r, (int, float)):
                 resolutions = [int(r)]
             ar_limit = float(cfg.get("aspect_ratio_limit", 2.0) or 2.0)
+            prefer_json = bool(cfg.get("prefer_json", True))
         except version_config.VersionConfigError:
             pass
-    groups = versions.compute_bucket_histogram(train_dir, resolutions, ar_limit)
+    groups = versions.compute_bucket_histogram(train_dir, resolutions, ar_limit, prefer_json)
     return {"resolutions": resolutions, "aspect_ratio_limit": ar_limit, "groups": groups}
 
 
