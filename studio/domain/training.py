@@ -729,16 +729,24 @@ class TrainingConfig(BaseModel):
     @field_validator("resolution", mode="before")
     @classmethod
     def _normalize_resolution(cls, v: Any) -> list[int]:
-        """标量 / 列表 / 旧 config 标量 → 归一成 list[int]；各值 snap 到 64 的倍数
-        并 clamp 到 [256, 4096]（与 dataset 文件夹 px 解析一致，避免偏心桶）。"""
+        """标量 / 列表 / 旧 config 标量 → 归一成 list[int]。
+
+        各值 snap 到最近的 64 倍数（half-up，与前端 `Math.round` + dataset 的
+        `_parse_folder_meta` 一致，避免偏心桶）+ clamp 到 [256, 4096]，再**去重保序**
+        （否则 `[1000, 1024]` snap 后都成 1024 → 该档被 fan-out 训两遍 + 直方图双计数）。
+        """
         if v is None:
             return [1024]
         if isinstance(v, (int, float, str)):
             v = [v]
         out: list[int] = []
+        seen: set[int] = set()
         for x in v:
-            n = int(round(float(x) / 64) * 64)
-            out.append(max(256, min(4096, n)))
+            n = int((float(x) + 32) // 64) * 64  # round-half-up to /64
+            n = max(256, min(4096, n))
+            if n not in seen:
+                seen.add(n)
+                out.append(n)
         return out or [1024]
 
     @model_validator(mode="before")

@@ -24,9 +24,19 @@ def test_parse_folder_meta() -> None:
     assert f("1024px_data") == (1024, 1, "data")
     assert f("5_concept") == (None, 5, "concept")          # Kohya 向后兼容
     assert f("concept") == (None, 1, "concept")
-    # 分辨率值 snap 到 64 倍数 + clamp
-    assert f("1000px_data") == (1024, 1, "data")           # round(1000/64)*64
+    # 分辨率值 snap 到 64 倍数（half-up，对齐 JS Math.round）+ clamp
+    assert f("1000px_data") == (1024, 1, "data")
+    assert f("288px_data") == (320, 1, "data")             # 288=64×4.5 → half-up 到 5×64
     assert f("100px_data") == (256, 1, "data")             # clamp 下限 256
+
+
+def test_resolution_validator_dedup_and_round() -> None:
+    from studio.domain import TrainingConfig
+    # half-up round + 去重保序（[1000,1024] snap 后都成 1024）
+    assert TrainingConfig(resolution=[1000, 1024]).resolution == [1024]
+    assert TrainingConfig(resolution=288).resolution == [320]           # half-up
+    assert TrainingConfig(resolution=[512, 512, 768]).resolution == [512, 768]
+    assert TrainingConfig(resolution=[9000, 5000]).resolution == [4096]  # clamp 后去重
 
 
 def test_as_resolutions_normalizes() -> None:

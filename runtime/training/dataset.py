@@ -183,9 +183,9 @@ class ImageDataset(Dataset):
         - ``5_concept``（Kohya 风格，向后兼容）→ ``(None, 5, 'concept')``
         - ``concept``       → ``(None, 1, 'concept')``
 
-        分辨率值 snap 到 64 的倍数并 clamp 到 ``[256, 4096]``（与 schema validator 一致，
-        避免偏心桶）。SYNC WITH ``studio/web/src/pages/project/steps/Train.tsx``
-        的 ``parseFolderRepeat``——两处解析必须一致。
+        分辨率值 snap 到最近的 64 倍数（half-up）并 clamp 到 ``[256, 4096]``（与 schema
+        validator 和前端 ``Math.round`` 一致，避免偏心桶 / 跨语言取整分歧）。
+        SYNC WITH ``studio/web/src/lib/folderMeta.ts`` 的 ``parseFolderMeta``——两处解析必须一致。
         """
         reso: int | None = None
         repeat = 1
@@ -193,7 +193,7 @@ class ImageDataset(Dataset):
         m = re.match(r"^(\d+)px_(.*)$", rest)
         if m:
             raw = int(m.group(1))
-            reso = max(256, min(4096, round(raw / 64) * 64))
+            reso = max(256, min(4096, (raw + 32) // 64 * 64))  # round-half-up，对齐 JS Math.round
             rest = m.group(2)
         m = re.match(r"^(\d+)_(.*)$", rest)
         if m:
@@ -679,10 +679,11 @@ class CachedLatentDataset(Dataset):
     def _build_cache(self, vae, device, dtype):
         """构建/加载 npz 缓存。
 
-        per-folder repeat（5_concept 前缀）让 ImageDataset.samples 里同一张图重复 N 次，
-        但 npz 落点是 img_path.with_suffix(".npz") — 每张唯一图只对应一个 npz。
-        按 npz_path 去重，每张图最多 encode 一次；否则同 npz 会被反复覆盖写 N 次
-        （flip_augment 模式下再乘 2），首次构建 cache 时 80% 的 VAE encode 都是浪费。
+        per-folder repeat（5_concept 前缀）让 samples 里同一张图重复 N 次；多分辨率
+        fan-out 还让同一张图带不同 target_reso 出现多次。npz 落点由
+        `_get_npz_path(img, target_reso)` 决定 —— 单分辨率图用 `img.npz`，fan-out 到多
+        分辨率的图用 `img.r{reso}.npz` 分文件。按 npz_path 去重，每个 (图, reso) 最多
+        encode 一次；否则同 npz 会被反复覆盖写 N 次（flip_augment 模式下再乘 2）。
         """
         logger.info("检查 VAE latent 缓存...")
         to_encode = []
