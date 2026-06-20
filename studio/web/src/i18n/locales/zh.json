@@ -1720,6 +1720,8 @@
     "modelDownloading": "下载中...",
     "downloadModel": "下载 {{model}}",
     "targetRes": "目标分辨率",
+    "folderFilter": "文件夹",
+    "folderAll": "全部文件夹",
     "edgePlaceholder": "边长",
     "modelLabel": "模型",
     "notDownloaded": " · 未下载",

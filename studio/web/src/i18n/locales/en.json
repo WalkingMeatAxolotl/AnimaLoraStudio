@@ -1720,6 +1720,8 @@
     "modelDownloading": "Downloading...",
     "downloadModel": "Download {{model}}",
     "targetRes": "Target resolution",
+    "folderFilter": "Folder",
+    "folderAll": "All folders",
     "edgePlaceholder": "edge px",
     "modelLabel": "Model",
     "notDownloaded": " · not downloaded",

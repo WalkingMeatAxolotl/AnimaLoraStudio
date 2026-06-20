@@ -12,6 +12,7 @@ import {
   type Version,
   type VersionConfigResponse,
 } from '../../../api/client'
+import { parseFolderMeta } from '../../../lib/folderMeta'
 import ConfigSkeleton from '../../../components/ConfigSkeleton'
 import { useDialog } from '../../../components/Dialog'
 import SchemaForm, { visibleSchemaGroups } from '../../../components/SchemaForm'
@@ -674,26 +675,6 @@ export default function TrainPage() {
     </div>
     </StepShell>
   )
-}
-
-/** 解析文件夹名 `[Npx_][R_]label` → {reso, repeat, label}。
- *  SYNC WITH `runtime/training/dataset.py:ImageDataset._parse_folder_meta` —— 两处必须一致。
- *  reso 为 null 表示无 px 前缀（用 config 的分辨率列表，每张图 fan-out 到每档）。 */
-function parseFolderMeta(name: string): { reso: number | null; repeat: number; label: string } {
-  let reso: number | null = null
-  let repeat = 1
-  let rest = name
-  let m = rest.match(/^(\d+)px_(.*)$/)
-  if (m) {
-    reso = Math.max(256, Math.min(4096, Math.round(parseInt(m[1], 10) / 64) * 64))
-    rest = m[2]
-  }
-  m = rest.match(/^(\d+)_(.*)$/)
-  if (m) {
-    repeat = Math.max(parseInt(m[1], 10), 1)
-    rest = m[2]
-  }
-  return { reso, repeat, label: rest }
 }
 
 /** config.resolution 归一成 number[]（schema 是 list[int]，旧 config / 标量也兜底）。 */
