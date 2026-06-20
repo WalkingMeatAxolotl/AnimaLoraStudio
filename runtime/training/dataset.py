@@ -179,22 +179,33 @@ class ImageDataset(Dataset):
         若 batch 混入不同桶尺寸会崩；``BucketBatchSampler`` 靠 ``dataset.bucket_for_index``
         把同尺寸样本分进同一 batch。缓存路径不读这份（``CachedLatentDataset`` 从 npz
         latent shape 自建一份并作为外层 wrapper 暴露），但这份也很便宜（只读图片 header）。
-        无 ``bucket_mgr``（不分桶）时全 None → sampler 退回普通切批。
+
+        多分辨率：每个样本按其 ``target_reso`` 走对应 manager（``_bucket_mgr_for``），同一
+        图在不同 reso 落不同桶，故按 ``(图, target_reso)`` 去重；图只 open 一次复用尺寸。
+        某档无 manager（base 档且 ``bucket_mgr=None`` 即不分桶）→ None → sampler 退回普通切批。
         """
-        if not self.bucket_mgr:
-            return [None] * len(self.samples)
         from PIL import Image
-        by_image: dict = {}
+        dims: dict = {}     # 图路径 → (w, h)
+        by_key: dict = {}   # (图路径, target_reso) → 桶 (tw, th)
         out = []
         for s in self.samples:
-            key = str(s["image"])
-            if key not in by_image:
-                try:
-                    with Image.open(s["image"]) as im:
-                        by_image[key] = self.bucket_mgr.get_bucket(im.width, im.height)
-                except Exception:
-                    by_image[key] = None
-            out.append(by_image[key])
+            target_reso = s.get("target_reso")
+            mgr = self._bucket_mgr_for(target_reso)
+            if mgr is None:
+                out.append(None)
+                continue
+            path = str(s["image"])
+            key = (path, target_reso)
+            if key not in by_key:
+                if path not in dims:
+                    try:
+                        with Image.open(s["image"]) as im:
+                            dims[path] = (im.width, im.height)
+                    except Exception:
+                        dims[path] = None
+                wh = dims[path]
+                by_key[key] = mgr.get_bucket(*wh) if wh else None
+            out.append(by_key[key])
         return out
 
     @staticmethod
