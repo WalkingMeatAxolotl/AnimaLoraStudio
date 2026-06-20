@@ -895,6 +895,7 @@ export default function SettingsPage() {
           currentModelPath={draft.cltagger.model_path}
           currentTagMappingPath={draft.cltagger.tag_mapping_path}
           onSelectVariant={(v: CLTaggerVariantInfo) => {
+            update('cltagger', 'model_id', v.model_id)
             update('cltagger', 'model_path', v.model_path)
             update('cltagger', 'tag_mapping_path', v.tag_mapping_path)
           }}
@@ -1693,6 +1694,7 @@ function CLTaggerModelCard({
           const key = `cltagger:${v.label}`
           const dl = catalog.downloads[key]
           const isSel =
+            v.model_id === modelId &&
             v.model_path === currentModelPath &&
             v.tag_mapping_path === currentTagMappingPath
           return (

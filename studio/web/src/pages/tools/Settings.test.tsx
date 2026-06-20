@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
@@ -185,7 +185,28 @@ const emptyModelsCatalog = {
     target_dir: '/tmp/anima/cltagger',
     current_model_path: 'cl_tagger_1_02/model.onnx',
     current_tag_mapping_path: 'cl_tagger_1_02/tag_mapping.json',
-    variants: [],
+    variants: [
+      {
+        label: 'cl_tagger_1_02',
+        model_id: 'cella110n/cl_tagger',
+        model_path: 'cl_tagger_1_02/model.onnx',
+        tag_mapping_path: 'cl_tagger_1_02/tag_mapping.json',
+        is_current: true,
+        exists: false,
+        size: 0,
+        files: [],
+      },
+      {
+        label: 'cl_tagger_v2_v2_01a',
+        model_id: 'cella110n/cl_tagger_v2',
+        model_path: 'v2_01a/model.onnx',
+        tag_mapping_path: 'v2_01a/model_vocabulary.json',
+        is_current: false,
+        exists: false,
+        size: 0,
+        files: [],
+      },
+    ],
   },
   downloads: {},
 }
@@ -300,5 +321,30 @@ describe('SettingsPage (PP0)', () => {
     expect(screen.getByText('Requests/sec')).toBeInTheDocument()
     expect(screen.getByText('Max/min')).toBeInTheDocument()
     expect(screen.getAllByText('0 = no limit').length).toBeGreaterThanOrEqual(2)
+  })
+
+
+  it('selecting CLTagger v2 updates model id and versioned file paths', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: '打标' }))
+    const v2Row = screen.getByText('cl_tagger_v2_v2_01a').closest('li')
+    expect(v2Row).not.toBeNull()
+    await user.click(within(v2Row as HTMLElement).getByRole('radio'))
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(
+        ([, init]) => init?.method === 'PUT'
+      )
+      expect(putCall).toBeDefined()
+      const body = JSON.parse(String(putCall![1].body))
+      expect(body.cltagger).toMatchObject({
+        model_id: 'cella110n/cl_tagger_v2',
+        model_path: 'v2_01a/model.onnx',
+        tag_mapping_path: 'v2_01a/model_vocabulary.json',
+      })
+    })
   })
 })

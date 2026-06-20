@@ -36,6 +36,8 @@ from .paths import (
     WD14_FILES,
     anima_main_target,
     anima_vae_target,
+    cltagger_canonical_file_paths,
+    cltagger_required_files,
     cltagger_target_root,
     models_root,
     qwen_dir,
@@ -149,10 +151,15 @@ def download_cltagger(
     on_log: Callable[[str], None] = print,
 ) -> bool:
     cfg = cfg or secrets.load().cltagger
+    model_path, tag_mapping_path = cltagger_canonical_file_paths(
+        cfg.model_id,
+        cfg.model_path,
+        cfg.tag_mapping_path,
+    )
     on_log(f"\n📥 CLTagger → {target_root}")
     target_root.mkdir(parents=True, exist_ok=True)
     ok = True
-    for f in (cfg.model_path, cfg.tag_mapping_path):
+    for f in cltagger_required_files(model_path, tag_mapping_path):
         if not _sources.download_flat(cfg.model_id, f, target_root / f, on_log=on_log):
             ok = False
     return ok
@@ -393,19 +400,24 @@ def trigger(model_id: str, variant: Optional[str] = None) -> str:
         return key
     if model_id == "cltagger":
         cfg = secrets.load().cltagger
-        target = cltagger_target_root(root, cfg.model_id)
-        # variant 可指定预设 label（覆盖 cfg 当前的 model_path），便于 UI 一键
+        # variant 可指定预设 label（覆盖 cfg 当前的 repo/path），便于 UI 一键
         # 下载非"当前选中"的版本。未指定时用 cfg 当前路径。
         if variant:
             preset = CLTAGGER_VERSIONS.get(variant)
             if preset is None:
                 raise ValueError(f"unknown cltagger variant {variant!r}")
             cfg = secrets.CLTaggerConfig(
-                **{**cfg.model_dump(), "model_path": preset[0], "tag_mapping_path": preset[1]}
+                **{
+                    **cfg.model_dump(),
+                    "model_id": preset[0],
+                    "model_path": preset[1],
+                    "tag_mapping_path": preset[2],
+                }
             )
             key = f"cltagger:{variant}"
         else:
             key = "cltagger"
+        target = cltagger_target_root(root, cfg.model_id)
         start_download_async(
             key, lambda log: download_cltagger(target, cfg, on_log=log)
         )

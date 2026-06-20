@@ -520,9 +520,11 @@ export interface WD14Catalog {
 
 export interface CLTaggerVariantInfo {
   label: string
+  model_id: string
   model_path: string
   tag_mapping_path: string
   is_current: boolean
+  target_path?: string
   exists: boolean
   size: number
   files: Array<{ name: string; exists: boolean; size: number; mtime: number }>

@@ -99,6 +99,38 @@ def _ms_token() -> Optional[str]:
     except Exception:  # noqa: BLE001
         return None
 
+
+def _hf_token() -> Optional[str]:
+    """读 HF token：环境变量优先，其次 secrets.huggingface.token。
+
+    gated / private 仓库（如 cl_tagger_v2）下载需要；公开仓库不填也能下。
+    """
+    for var in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_TOKEN"):
+        env = os.environ.get(var, "").strip()
+        if env:
+            return env
+    try:
+        t = secrets.load().huggingface.token
+        return t or None
+    except Exception:  # noqa: BLE001  secrets 损坏不应阻断下载
+        return None
+
+
+def _is_gated_auth_error(exc: BaseException) -> bool:
+    """粗判下载异常是否源于 gated/private 授权失败，用于追加可操作提示。"""
+    name = type(exc).__name__.lower()
+    msg = str(exc).lower()
+    return (
+        "gated" in name
+        or "gated" in msg
+        or "401" in msg
+        or "403" in msg
+        or "unauthorized" in msg
+        or "private or gated" in msg
+        or "authentication" in msg
+    )
+
+
 def download_flat_ms(
     ms_repo_id: str,
     repo_subpath: str,
@@ -181,6 +213,7 @@ def download_flat(
         return False
     target.parent.mkdir(parents=True, exist_ok=True)
     endpoint = _resolve_endpoint()
+    token = _hf_token()
     try:
         kwargs = dict(
             repo_id=repo_id,
@@ -190,9 +223,17 @@ def download_flat(
         )
         if endpoint:
             kwargs["endpoint"] = endpoint
+        if token:
+            kwargs["token"] = token
         hf_hub_download(**kwargs)
     except Exception as exc:
         on_log(f"   ✗ {target.name}: {exc}")
+        if _is_gated_auth_error(exc):
+            on_log(
+                "   ↳ 该仓库可能是 gated/private：请先到 huggingface.co 申请并接受"
+                "模型授权，再到 设置→密钥 填 HuggingFace token（或设 HF_TOKEN 环境"
+                "变量）后重试。"
+            )
         return False
     src = target.parent / repo_subpath
     if src != target:
