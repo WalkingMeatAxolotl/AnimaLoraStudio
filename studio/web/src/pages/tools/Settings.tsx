@@ -898,6 +898,7 @@ export default function SettingsPage() {
             update('cltagger', 'model_id', v.model_id)
             update('cltagger', 'model_path', v.model_path)
             update('cltagger', 'tag_mapping_path', v.tag_mapping_path)
+            update('cltagger', 'local_dir', v.local_dir ?? v.target_dir ?? null)
           }}
           modelId={draft.cltagger.model_id}
           onModelIdChange={(id) => update('cltagger', 'model_id', id)}
@@ -1696,6 +1697,7 @@ function CLTaggerModelCard({
           const isSel =
             v.model_path === currentModelPath &&
             v.tag_mapping_path === currentTagMappingPath
+          const manualDir = v.version_dir ?? v.target_dir
           return (
             <li key={v.label} className={`flex items-center gap-2 text-xs px-1.5 py-1 rounded-sm ${
               isSel ? 'bg-accent-soft border border-accent' : 'bg-transparent border border-transparent'
@@ -1706,7 +1708,14 @@ function CLTaggerModelCard({
                 style={{ accentColor: 'var(--accent)' }}
                 title={t('settings.selectClTaggerVersion')}
               />
-              <code className="font-mono text-fg-primary flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{v.label}</code>
+              <div className="flex flex-col flex-1 min-w-0">
+                <code className="font-mono text-fg-primary overflow-hidden text-ellipsis whitespace-nowrap">{v.label}</code>
+                {manualDir && (
+                  <span className="text-[10px] text-fg-tertiary overflow-hidden text-ellipsis whitespace-nowrap" title={manualDir}>
+                    files: <code>{manualDir}</code>
+                  </span>
+                )}
+              </div>
               <ModelStatusBadge
                 exists={v.exists} size={v.size} status={dl?.status}
                 fileCount={v.files.length}

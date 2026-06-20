@@ -525,6 +525,8 @@ export interface CLTaggerVariantInfo {
   tag_mapping_path: string
   description?: string
   target_dir?: string
+  local_dir?: string
+  version_dir?: string
   is_current: boolean
   exists: boolean
   size: number
@@ -537,6 +539,7 @@ export interface CLTaggerCatalog {
   description: string
   repo: string
   target_dir: string
+  current_local_dir: string | null
   current_model_path: string
   current_tag_mapping_path: string
   variants: CLTaggerVariantInfo[]

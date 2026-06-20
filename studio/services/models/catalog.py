@@ -102,6 +102,7 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
         mp = preset["model_path"]
         tmp = preset["tag_mapping_path"]
         target_root = cltagger_target_root(r, model_id)
+        version_dir = target_root / Path(mp).parent
         file_names = [mp, tmp, *preset.get("extra_files", [])]
         files = [{"name": f, **_file_status(target_root / f)} for f in file_names]
         all_exist = all(f["exists"] for f in files)
@@ -113,6 +114,8 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
             "tag_mapping_path": tmp,
             "description": preset.get("description", ""),
             "target_dir": str(target_root),
+            "local_dir": str(target_root),
+            "version_dir": str(version_dir),
             "is_current": (
                 cl_cfg.model_id == model_id
                 and cl_cfg.model_path == mp
@@ -221,6 +224,7 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
             "description": "cella110n CLTagger ONNX",
             "repo": cl_cfg.model_id,
             "target_dir": str(cl_root),
+            "current_local_dir": cl_cfg.local_dir,
             "current_model_path": cl_cfg.model_path,
             "current_tag_mapping_path": cl_cfg.tag_mapping_path,
             "variants": cl_variants,

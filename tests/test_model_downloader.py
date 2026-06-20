@@ -356,7 +356,14 @@ def test_build_catalog_includes_cltagger_v2_variant(
     assert v2["model_id"] == "cella110n/cl_tagger_v2"
     assert v2["model_path"] == "v2_01a/model.onnx"
     assert v2["tag_mapping_path"] == "v2_01a/model_vocabulary.json"
+    assert v2["local_dir"] == str(tmp_path / "cltagger" / "cella110n_cl_tagger_v2")
+    assert v2["version_dir"] == str(tmp_path / "cltagger" / "cella110n_cl_tagger_v2" / "v2_01a")
     assert "v2_01a/model.onnx.data" in [f["name"] for f in v2["files"]]
+
+    v1 = next(v for v in variants if v["label"] == "cl_tagger_1_02")
+    assert v1["local_dir"] == str(tmp_path / "cltagger" / "cella110n_cl_tagger")
+    assert v1["version_dir"] == str(tmp_path / "cltagger" / "cella110n_cl_tagger" / "cl_tagger_1_02")
+    assert v1["local_dir"] != v2["local_dir"]
 
 
 # ---------------------------------------------------------------------------
