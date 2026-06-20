@@ -226,6 +226,7 @@ export interface CLTaggerConfig {
   model_path: string
   tag_mapping_path: string
   local_dir: string | null
+  variant_local_dirs: Record<string, string>
   threshold_general: number
   threshold_character: number
   add_copyright_tag: boolean

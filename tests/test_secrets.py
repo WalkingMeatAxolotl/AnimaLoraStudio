@@ -58,7 +58,24 @@ def test_cltagger_defaults_use_1_02(secrets_file: Path) -> None:
     assert s.cltagger.model_id == "cella110n/cl_tagger"
     assert s.cltagger.model_path == "cl_tagger_1_02/model.onnx"
     assert s.cltagger.tag_mapping_path == "cl_tagger_1_02/tag_mapping.json"
+    assert s.cltagger.variant_local_dirs == {}
     assert s.cltagger.threshold_character == pytest.approx(0.6)
+
+
+def test_cltagger_variant_local_dirs_persist(secrets_file: Path) -> None:
+    secrets.update({
+        "cltagger": {
+            "local_dir": "/models/cltagger-v2",
+            "variant_local_dirs": {
+                "v2_01a": "/models/cltagger-v2",
+                "cl_tagger_1_02": "/models/cltagger-102",
+            },
+        }
+    })
+    s = secrets.load()
+    assert s.cltagger.local_dir == "/models/cltagger-v2"
+    assert s.cltagger.variant_local_dirs["v2_01a"] == "/models/cltagger-v2"
+    assert s.cltagger.variant_local_dirs["cl_tagger_1_02"] == "/models/cltagger-102"
 
 
 def test_llm_tagger_defaults(secrets_file: Path) -> None:

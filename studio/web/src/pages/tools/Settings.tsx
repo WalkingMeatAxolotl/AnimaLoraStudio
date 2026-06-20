@@ -253,6 +253,7 @@ const EMPTY: Secrets = {
     model_path: 'cl_tagger_1_02/model.onnx',
     tag_mapping_path: 'cl_tagger_1_02/tag_mapping.json',
     local_dir: null,
+    variant_local_dirs: {},
     threshold_general: 0.35,
     threshold_character: 0.6,
     add_copyright_tag: true,
@@ -389,6 +390,65 @@ export default function SettingsPage() {
   /** 更新 Secrets 顶层非对象字段（如 download_source）。 */
   const updateTop = <K extends keyof Secrets>(key: K, value: Secrets[K]) => {
     setDraft((prev) => ({ ...prev, [key]: value }))
+  }
+
+  const currentCLTaggerVariant = useMemo(() => {
+    const variants = catalog?.cltagger?.variants ?? []
+    return variants.find((v) =>
+      v.model_id === draft.cltagger.model_id &&
+      v.model_path === draft.cltagger.model_path &&
+      v.tag_mapping_path === draft.cltagger.tag_mapping_path
+    ) ?? null
+  }, [
+    catalog?.cltagger?.variants,
+    draft.cltagger.model_id,
+    draft.cltagger.model_path,
+    draft.cltagger.tag_mapping_path,
+  ])
+
+  const updateCLTaggerLocalDir = (value: string) => {
+    const localDir = value || null
+    const label = currentCLTaggerVariant?.label
+    setDraft((prev) => {
+      const nextVariantLocalDirs = { ...(prev.cltagger.variant_local_dirs ?? {}) }
+      if (label) {
+        if (value) nextVariantLocalDirs[label] = value
+        else delete nextVariantLocalDirs[label]
+      }
+      return {
+        ...prev,
+        cltagger: {
+          ...prev.cltagger,
+          local_dir: localDir,
+          variant_local_dirs: nextVariantLocalDirs,
+        },
+      }
+    })
+  }
+
+  const selectCLTaggerVariant = (variant: CLTaggerVariantInfo) => {
+    const currentLabel = currentCLTaggerVariant?.label
+    setDraft((prev) => {
+      const nextVariantLocalDirs = { ...(prev.cltagger.variant_local_dirs ?? {}) }
+      if (currentLabel && prev.cltagger.local_dir) {
+        nextVariantLocalDirs[currentLabel] = prev.cltagger.local_dir
+      }
+      const nextLocalDir = nextVariantLocalDirs[variant.label]
+        ?? variant.local_dir
+        ?? variant.target_dir
+        ?? null
+      return {
+        ...prev,
+        cltagger: {
+          ...prev.cltagger,
+          model_id: variant.model_id,
+          model_path: variant.model_path,
+          tag_mapping_path: variant.tag_mapping_path,
+          local_dir: nextLocalDir,
+          variant_local_dirs: nextVariantLocalDirs,
+        },
+      }
+    })
   }
 
   const save = async () => {
@@ -895,10 +955,7 @@ export default function SettingsPage() {
           currentModelPath={draft.cltagger.model_path}
           currentTagMappingPath={draft.cltagger.tag_mapping_path}
           onSelectVariant={(v: CLTaggerVariantInfo) => {
-            update('cltagger', 'model_id', v.model_id)
-            update('cltagger', 'model_path', v.model_path)
-            update('cltagger', 'tag_mapping_path', v.tag_mapping_path)
-            update('cltagger', 'local_dir', v.local_dir ?? v.target_dir ?? null)
+            selectCLTaggerVariant(v)
           }}
           modelId={draft.cltagger.model_id}
           onModelIdChange={(id) => update('cltagger', 'model_id', id)}
@@ -908,7 +965,7 @@ export default function SettingsPage() {
           <input
             type="text"
             value={draft.cltagger.local_dir ?? ''}
-            onChange={(e) => update('cltagger', 'local_dir', e.target.value || null)}
+            onChange={(e) => updateCLTaggerLocalDir(e.target.value)}
             className={textInputClass}
           />
         </SettingsField>

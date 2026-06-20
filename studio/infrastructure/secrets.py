@@ -380,6 +380,7 @@ class CLTaggerConfig(BaseModel):
     model_path: str = "cl_tagger_1_02/model.onnx"
     tag_mapping_path: str = "cl_tagger_1_02/tag_mapping.json"
     local_dir: Optional[str] = None
+    variant_local_dirs: dict[str, str] = Field(default_factory=dict)
     threshold_general: float = 0.35
     threshold_character: float = 0.6
     # CLTagger 模型输出 7 个 category：General / Character 走阈值过滤，其余 5 个
