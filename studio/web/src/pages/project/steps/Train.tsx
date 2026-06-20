@@ -674,11 +674,38 @@ export default function TrainPage() {
   )
 }
 
-/** Kohya 风格文件夹名「N_label」→ {repeat=N, label}。无前缀数字默认 1。 */
-function parseFolderRepeat(name: string): { repeat: number; label: string } {
-  const m = name.match(/^(\d+)_(.*)$/)
-  if (m) return { repeat: parseInt(m[1], 10), label: m[2] }
-  return { repeat: 1, label: name }
+/** 解析文件夹名 `[Npx_][R_]label` → {reso, repeat, label}。
+ *  SYNC WITH `runtime/training/dataset.py:ImageDataset._parse_folder_meta` —— 两处必须一致。
+ *  reso 为 null 表示无 px 前缀（用 config 的分辨率列表，每张图 fan-out 到每档）。 */
+function parseFolderMeta(name: string): { reso: number | null; repeat: number; label: string } {
+  let reso: number | null = null
+  let repeat = 1
+  let rest = name
+  let m = rest.match(/^(\d+)px_(.*)$/)
+  if (m) {
+    reso = Math.max(256, Math.min(4096, Math.round(parseInt(m[1], 10) / 64) * 64))
+    rest = m[2]
+  }
+  m = rest.match(/^(\d+)_(.*)$/)
+  if (m) {
+    repeat = Math.max(parseInt(m[1], 10), 1)
+    rest = m[2]
+  }
+  return { reso, repeat, label: rest }
+}
+
+/** config.resolution 归一成 number[]（schema 是 list[int]，旧 config / 标量也兜底）。 */
+function configResolutions(config: ConfigData | null): number[] {
+  const r = config?.resolution as unknown
+  if (Array.isArray(r)) return r.length ? (r as number[]) : [1024]
+  if (typeof r === 'number') return [r]
+  return [1024]
+}
+
+/** 文件夹有效样本数 = repeat × 图数 × 分辨率档数（px 文件夹固定 1 档；否则跟 config 列表）。 */
+function folderEffective(name: string, imageCount: number, resoCount: number): number {
+  const { reso, repeat } = parseFolderMeta(name)
+  return repeat * imageCount * (reso ? 1 : resoCount)
 }
 
 /** reg.files 形如 `5_concept/12345.png` —— 按首段文件夹聚合计数。 */
@@ -716,12 +743,13 @@ function DatasetStatsPanel({
     [reg]
   )
 
+  const resoCount = configResolutions(config).length
   const trainEffective = trainFolders.reduce(
-    (s, f) => s + parseFolderRepeat(f.name).repeat * f.image_count,
+    (s, f) => s + folderEffective(f.name, f.image_count, resoCount),
     0,
   )
   const regEffective = regFolders.reduce(
-    (s, f) => s + parseFolderRepeat(f.name).repeat * f.image_count,
+    (s, f) => s + folderEffective(f.name, f.image_count, resoCount),
     0,
   )
   const totalEffective = trainEffective + regEffective
@@ -757,6 +785,7 @@ function DatasetStatsPanel({
           title="train/"
           folders={trainFolders}
           effective={trainEffective}
+          resoCount={resoCount}
           empty={t('train.noTrainImages')}
         />
 
@@ -766,6 +795,7 @@ function DatasetStatsPanel({
           title="reg/"
           folders={regFolders}
           effective={regEffective}
+          resoCount={resoCount}
           empty={reg && !reg.exists ? t('train.regNotBuilt') : t('train.noRegImages')}
         />
 
@@ -803,11 +833,13 @@ function FolderSection({
   title,
   folders,
   effective,
+  resoCount,
   empty,
 }: {
   title: string
   folders: Array<{ name: string; image_count: number }>
   effective: number
+  resoCount: number
   empty: string
 }) {
   return (
@@ -823,20 +855,29 @@ function FolderSection({
       ) : (
         <div className="flex flex-col gap-0.5">
           {folders.map((f) => {
-            const { repeat, label } = parseFolderRepeat(f.name)
-            const eff = repeat * f.image_count
+            const { reso, repeat, label } = parseFolderMeta(f.name)
+            const folderResos = reso ? 1 : resoCount
+            const eff = repeat * f.image_count * folderResos
+            const resoTag = reso ? `${reso}px` : null
             return (
               <div
                 key={f.name}
                 className="flex items-baseline gap-1.5 text-xs font-mono text-fg-secondary pl-1"
-                title={`${f.name}：${repeat} repeat × ${f.image_count} = ${eff}`}
+                title={`${f.name}：${repeat} repeat × ${f.image_count} 图${folderResos > 1 ? ` × ${folderResos} 分辨率` : ''} = ${eff}`}
               >
                 <span className="text-fg-tertiary">{label}</span>
+                {resoTag && <span className="text-[10px] text-accent">{resoTag}</span>}
                 <span className="flex-1 border-b border-dotted border-subtle self-end mb-1" />
                 <span>
                   <span className="text-accent">{repeat}</span>
                   <span className="text-fg-tertiary"> × </span>
                   <span className="text-fg-primary">{f.image_count}</span>
+                  {folderResos > 1 && (
+                    <>
+                      <span className="text-fg-tertiary"> × </span>
+                      <span className="text-accent">{folderResos}</span>
+                    </>
+                  )}
                   <span className="text-fg-tertiary"> = </span>
                   <span className="text-fg-primary font-semibold">{eff}</span>
                 </span>
