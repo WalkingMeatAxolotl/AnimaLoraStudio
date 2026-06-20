@@ -409,9 +409,6 @@ export default function PreprocessPage() {
               allUpscalers={allUpscalers}
               selectedModel={selectedModel}
               onSelectedModelChange={(label) => void changeSelectedModel(label)}
-              folders={folders}
-              folderFilter={folderFilter}
-              setFolderFilter={setFolderFilter}
               totalCount={folderScopedNames ? folderScopedNames.length : rows.length}
               selectedCount={selectedTargets.count}
               busy={busy || isLive}
@@ -435,6 +432,14 @@ export default function PreprocessPage() {
                 setPreviewIdx(null)
               }}
               binCounts={binCounts}
+              folders={folders}
+              folderFilter={folderFilter}
+              setFolderFilter={(f) => {
+                setFolderFilter(f)
+                setSel(new Set())
+                setSelAnchor(null)
+                setPreviewIdx(null)
+              }}
               items={gridItems}
               selected={sel}
               onSelect={(name, e) => {
@@ -506,9 +511,6 @@ interface OperationPanelProps {
   allUpscalers: UpscalerVariant[]
   selectedModel: string
   onSelectedModelChange: (label: string) => void
-  folders: string[]
-  folderFilter: string
-  setFolderFilter: (f: string) => void
   totalCount: number
   selectedCount: number
   busy: boolean
@@ -532,9 +534,6 @@ function OperationPanel({
   allUpscalers,
   selectedModel,
   onSelectedModelChange,
-  folders,
-  folderFilter,
-  setFolderFilter,
   totalCount,
   selectedCount,
   busy,
@@ -598,25 +597,8 @@ function OperationPanel({
         </div>
       )}
 
-      {/* 文件夹 filter + 目标分辨率行 */}
+      {/* 目标分辨率行 */}
       <div className="flex items-center gap-2 text-sm flex-wrap">
-        {folders.length > 0 && (
-          <label className="flex items-center gap-1.5">
-            <span className="text-fg-tertiary">{t('preprocess.folderFilter')}</span>
-            <select
-              value={folderFilter}
-              onChange={(e) => setFolderFilter(e.target.value)}
-              disabled={busy}
-              className="input text-sm"
-              style={{ width: 'auto', padding: '2px 6px' }}
-            >
-              <option value="all">{t('preprocess.folderAll')}</option>
-              {folders.map((f) => (
-                <option key={f} value={f}>{f}</option>
-              ))}
-            </select>
-          </label>
-        )}
         <label className="flex items-center gap-1.5">
           <span className="text-fg-tertiary">{t('preprocess.targetRes')}</span>
           <select
@@ -746,6 +728,9 @@ function ImagesPanel({
   filter,
   setFilter,
   binCounts,
+  folders,
+  folderFilter,
+  setFolderFilter,
   items,
   selected,
   onSelect,
@@ -757,6 +742,9 @@ function ImagesPanel({
   filter: FilterMode
   setFilter: (f: FilterMode) => void
   binCounts: Map<PxBinId, number>
+  folders: string[]
+  folderFilter: string
+  setFolderFilter: (f: string) => void
   items: { name: string; thumbUrl: string; meta?: string }[]
   selected: Set<string>
   onSelect: (name: string, e: React.MouseEvent) => void
@@ -803,6 +791,25 @@ function ImagesPanel({
             chip(b.id, b.label, binCounts.get(b.id) ?? 0),
           )}
         </div>
+        {folders.length > 0 && (
+          <>
+            <span className="mx-1 text-dim">·</span>
+            <label className="flex items-center gap-1 text-xs text-fg-tertiary">
+              {t('preprocess.folderFilter')}
+              <select
+                value={folderFilter}
+                onChange={(e) => setFolderFilter(e.target.value)}
+                className="input text-xs"
+                style={{ width: 'auto', padding: '1px 6px' }}
+              >
+                <option value="all">{t('preprocess.folderAll')}</option>
+                {folders.map((f) => (
+                  <option key={f} value={f}>{f}</option>
+                ))}
+              </select>
+            </label>
+          </>
+        )}
         <span className="flex-1" />
         <button
           onClick={onSelectAll}
