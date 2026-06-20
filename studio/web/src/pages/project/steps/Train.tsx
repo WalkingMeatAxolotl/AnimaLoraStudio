@@ -814,7 +814,6 @@ function DatasetStatsPanel({
       <BucketPreview
         projectId={projectId}
         vid={activeVersion?.id ?? 0}
-        batchSize={bs}
         sig={JSON.stringify([
           config?.resolution,
           config?.aspect_ratio_limit,
@@ -825,14 +824,13 @@ function DatasetStatsPanel({
   )
 }
 
-/** 训练集实际桶分布（后端用真 BucketManager 算）。按分辨率档分组、每桶有效图数；
- *  count < batch_size 的桶会被 drop_last 丢掉，标红提示。 */
+/** 训练集实际桶分布（后端用真 BucketManager 算）。按分辨率档分组、每桶有效图数。
+ *  trainer 用 drop_last=False —— 桶不满只出短 batch、不丢图，所以这里不做丢图警告。 */
 function BucketPreview({
-  projectId, vid, batchSize, sig,
+  projectId, vid, sig,
 }: {
   projectId: number
   vid: number
-  batchSize: number
   sig: string
 }) {
   const { t } = useTranslation()
@@ -860,27 +858,21 @@ function BucketPreview({
           <div key={g.reso}>
             <div className="text-xs font-mono text-fg-secondary mb-1">{g.reso}px</div>
             <div className="flex flex-col gap-0.5">
-              {g.buckets.map((b) => {
-                const dropped = batchSize > 0 && b.count < batchSize
-                return (
-                  <div
-                    key={`${b.w}x${b.h}`}
-                    className="flex items-baseline gap-1.5 text-xs font-mono pl-1"
-                    title={dropped ? t('train.bucketDropWarn', { n: batchSize }) : undefined}
-                  >
-                    <span className="text-fg-tertiary">{b.w}×{b.h}</span>
-                    <span className="flex-1 border-b border-dotted border-subtle self-end mb-1" />
-                    <span className={dropped ? 'text-warn font-semibold' : 'text-fg-primary'}>
-                      {b.count}{dropped ? ' ⚠' : ''}
-                    </span>
-                  </div>
-                )
-              })}
+              {g.buckets.map((b) => (
+                <div
+                  key={`${b.w}x${b.h}`}
+                  className="flex items-baseline gap-1.5 text-xs font-mono pl-1"
+                >
+                  <span className="text-fg-tertiary">{b.w}×{b.h}</span>
+                  <span className="flex-1 border-b border-dotted border-subtle self-end mb-1" />
+                  <span className="text-fg-primary">{b.count}</span>
+                </div>
+              ))}
             </div>
           </div>
         ))}
       </div>
-      <div className="text-[10px] text-fg-tertiary mt-2">{t('train.bucketDropHint')}</div>
+      <div className="text-[10px] text-fg-tertiary mt-2">{t('train.bucketDistHint')}</div>
     </div>
   )
 }

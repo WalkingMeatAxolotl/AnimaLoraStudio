@@ -105,7 +105,7 @@ concept            → 分辨率=config, repeat 1
 - `_generate` 里的 `2.0` 字面量换成 R；默认 2.0 → 桶集与今天完全一致。
 - **作用域（v1 决策）**：全局一个值，默认 2.0。per-folder 覆盖（同 px 机制）留作后续——全局放宽到 3.0 会让所有文件夹的桶都摊到 3:1；其碎片化代价由 §10 的桶分布预览显性化后，再决定是否细化到 per-folder。
 
-> 放宽 R 的代价（写给用户的提醒）：面积恒定下 AR 越大短边有效分辨率越低；极端 AR 桶样本少 → 易被 `drop_last` 丢 / 梯度噪声大 → 需足够样本量。§10 预览可直接看每桶命中数来权衡。
+> 放宽 R 的代价（写给用户的提醒）：面积恒定下 AR 越大短边有效分辨率越低；极端 AR 桶样本少 → 单独成小/短 batch、梯度噪声大 → 需足够样本量。§10 预览可直接看每桶命中数来权衡。
 
 ### 6.3 min/max 由 (base, R) 派生（取代写死值）
 
@@ -153,7 +153,7 @@ crop 定的是构图 / 长宽比；裁出的区域最终是多少像素由文件
 
 ## 10. 右栏桶分布预览（`DatasetStatsPanel`）
 
-现状：Train 页右栏只算"有效样本数 / steps 估算"。新增"实际桶分布"，把多分辨率 + 可配 R 的隐性代价显性化，辅助 batch size 决策。
+现状：Train 页右栏只算"有效样本数 / steps 估算"。新增"实际桶分布"，把多分辨率 + 可配 R 的形态显性化（每个分辨率档命中了哪些桶、各多少图），辅助判断数据在各尺度/长宽比上的分布。
 
 按"分辨率档 → 桶 → 有效图数"分组展示，0 命中桶不显示：
 
@@ -161,17 +161,17 @@ crop 定的是构图 / 长宽比；裁出的区域最终是多少像素由文件
 1024 档
   1024×1024   128
   1152×896     34
-  1408×704      2   ⚠ < batch_size，drop_last 会丢
+  1408×704      2
 768 档
   768×768      96
   ...
 ```
 
 设计要点：
-1. **后端权威计算**：直接用真正的 `BucketManager`（Python）+ 每张图尺寸算直方图，保证与实际训练逐桶一致，绕开 TS 预测的同步脆弱性。后端已有每张图尺寸（放大页像素直方图同源）。扩展 version stats 返回 `{reso: [{w, h, count}]}`。
+1. **后端权威计算**：直接用真正的 `BucketManager`（Python）+ 每张图尺寸算直方图，保证与实际训练逐桶一致，绕开 TS 预测的同步脆弱性。后端已有每张图尺寸（放大页像素直方图同源）。新增 `GET /versions/{vid}/bucket-distribution` 返回 `{reso: [{w, h, count}]}`。
 2. **按分辨率档分组**：多分辨率 fan-out 下同一张图进多档，分组展示让 fan-out 形态可见。
-3. **计数用"有效数"**（含 repeat / fan-out 展开后），对齐 `drop_last` 在一个 epoch 实际看到的样本数。
-4. **标红会被 `drop_last` 丢的桶**：`count < batch_size`（整桶丢）或 `count % batch_size` 的零头——最可操作的一行提示。
+3. **计数用"有效数"**（含 repeat / fan-out 展开后），即一个 epoch 该桶实际样本数。
+4. **不做 drop_last 丢图警告**：trainer 缓存路径写死 `drop_last=False`（`phases/dataset.py`），桶不满只出**短 batch**、不丢图（diffusion 的 Norm 对动态 batch 不敏感，loop.py 按 `latents.shape[0]` 读 bs）。故预览只展示分布、不标红。
 5. 隐藏 0 命中桶（37 个桶通常只命中一小撮）。
 6. **只统计训练集**：reg 不裁剪、无需在预览展示（但 reg 仍参与 fan-out 与实际批处理，见 §14）。
 
@@ -200,7 +200,7 @@ crop 定的是构图 / 长宽比；裁出的区域最终是多少像素由文件
 | 训练-cache | `runtime/training/dataset.py:CachedLatentDataset` | 多分辨率图按 `img.r{reso}.npz` 分别缓存 |
 | 后端-stats | version stats builder（`train_folders` 同源处） | 用真 `BucketManager` 算桶直方图 `{reso:[{w,h,count}]}`（§10） |
 | schema | `studio/domain/training.py` | `resolution` 标量→标量/列表 + validator + 迁移；新增 `aspect_ratio_limit` |
-| 前端-展示 | `studio/web/src/pages/project/steps/Train.tsx` | `parseFolderRepeat` 扩展显示 px；有效样本数 ×分辨率数；渲染桶分布预览（分辨率分组 / 有效数 / drop_last 标红） |
+| 前端-展示 | `studio/web/src/pages/project/steps/Train.tsx` | `parseFolderRepeat` 扩展显示 px；有效样本数 ×分辨率数；渲染桶分布预览（分辨率分组 / 有效数 / 隐藏 0） |
 | 前端-放大 | `studio/web/src/pages/project/steps/Preprocess.tsx` | 文件夹 filter + 目标分辨率跟随文件夹 |
 | 前端-schema | `studio/web/src/components/SchemaForm.tsx` | 列表输入控件 + `aspect_ratio_limit` + i18n |
 | 镜像 | `studio/web/src/lib/trainBuckets.ts` | min/max + AR 上限(R) 派生同步（如改 Python） |
@@ -210,7 +210,7 @@ crop 定的是构图 / 长宽比；裁出的区域最终是多少像素由文件
 
 - 配比 R：暴露**一个对称值**（`aspect_ratio_limit`，默认 2.0），**不**暴露 min/max_ar、**不**暴露 min/max reso（由 base+R 派生）。
 - 配比作用域：**v1 全局**，per-folder 留作后续（§6.2）。
-- 桶分布预览：后端权威计算、按分辨率分组、用有效数、标红 drop_last 牺牲桶、隐藏 0（§10）。
+- 桶分布预览：后端权威计算、按分辨率分组、用有效数、隐藏 0（§10）。trainer `drop_last=False`（桶不满出短 batch、不丢图），故不做丢图警告。
 - **reg 正则集参与 fan-out**：与训练集一致，每张 reg 图在列表各分辨率各训一遍；桶分布预览只统计训练集、不含 reg（reg 不裁剪、无需展示，但仍参与实际批处理）。
 - **bucket 步长固定 64、不暴露**：受架构约束（VAE ÷8 × DiT patchify ÷2 = latent ÷16 下限，64 是安全超集）；调低会崩，暴露只挖坑。
 - **放大目标（列表 config + 无前缀文件夹）= 列表 `max`**：图会在所有分辨率训，放大到最大那档才保证最大尺度有真实细节，小档从它缩小。路由不变：无前缀→配置分辨率、有前缀→前缀。
