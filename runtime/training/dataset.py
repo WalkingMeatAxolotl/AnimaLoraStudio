@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import math
 import random
+import re
 from pathlib import Path
 
 import torch
@@ -116,10 +117,18 @@ class ImageDataset(Dataset):
 
     def __init__(self, data_dir, resolution=1024, bucket_mgr=None,
                  shuffle_caption=False, keep_tokens=0, flip_augment=False,
-                 tag_dropout=0.0, prefer_json=True, caption_override=None):
+                 tag_dropout=0.0, prefer_json=True, caption_override=None,
+                 resolutions=None, aspect_ratio_limit=2.0):
         self.data_dir = Path(data_dir)
         self.resolution = resolution
+        # 多分辨率：bucket_mgr 是 base 分辨率的 manager（向后兼容，单一 ARB 路径仍走它，
+        # 含 None→方桶语义）。非 base 分辨率（文件夹 px 覆盖 / config 列表的其它档）的
+        # manager 由 _bucket_mgr_for 按需建在 bucket_mgrs 里。每个样本带 target_reso
+        # 决定走哪套桶；不指定 target_reso（或 == base）时走 bucket_mgr。
         self.bucket_mgr = bucket_mgr
+        self.aspect_ratio_limit = aspect_ratio_limit
+        self.resolutions = [int(r) for r in resolutions] if resolutions else [resolution]
+        self.bucket_mgrs = {}
         self.shuffle_caption = shuffle_caption
         self.keep_tokens = keep_tokens
         self.flip_augment = flip_augment
@@ -163,12 +172,54 @@ class ImageDataset(Dataset):
         logger.info(f"数据集: {unique_count} 张图 → {len(self.samples)} 样本（含 repeat）(JSON: {json_count}, TXT: {txt_count})")
 
     @staticmethod
+    def _parse_folder_meta(name: str) -> tuple[int | None, int, str]:
+        """解析文件夹名 ``[Npx_][R_]label`` → ``(reso_override, repeat, label)``。
+
+        token 顺序（均可选）：``\\d+px`` 分辨率前缀 → ``\\d+`` repeat 前缀 → 其余为 label。
+
+        - ``1024px_2_data`` → ``(1024, 2, 'data')``
+        - ``768px_concept`` → ``(768, 1, 'concept')``
+        - ``1024px_data``   → ``(1024, 1, 'data')``
+        - ``5_concept``（Kohya 风格，向后兼容）→ ``(None, 5, 'concept')``
+        - ``concept``       → ``(None, 1, 'concept')``
+
+        分辨率值 snap 到 64 的倍数并 clamp 到 ``[256, 4096]``（与 schema validator 一致，
+        避免偏心桶）。SYNC WITH ``studio/web/src/pages/project/steps/Train.tsx``
+        的 ``parseFolderRepeat``——两处解析必须一致。
+        """
+        reso: int | None = None
+        repeat = 1
+        rest = name
+        m = re.match(r"^(\d+)px_(.*)$", rest)
+        if m:
+            raw = int(m.group(1))
+            reso = max(256, min(4096, round(raw / 64) * 64))
+            rest = m.group(2)
+        m = re.match(r"^(\d+)_(.*)$", rest)
+        if m:
+            repeat = max(int(m.group(1)), 1)
+            rest = m.group(2)
+        return reso, repeat, rest
+
+    @staticmethod
     def _parse_repeats_from_dir(name: str) -> int:
-        """从文件夹名解析 Kohya 风格重复次数，如 '5_concept' → 5"""
-        prefix = name.split("_", 1)[0]
-        if prefix.isdigit():
-            return max(int(prefix), 1)
-        return 1
+        """从文件夹名解析 Kohya 风格重复次数，如 '5_concept' → 5（兼容旧调用）。"""
+        return ImageDataset._parse_folder_meta(name)[1]
+
+    def _bucket_mgr_for(self, reso):
+        """取 reso 对应的 BucketManager。
+
+        base 分辨率（reso 为 None 或 == self.resolution）走 self.bucket_mgr —— 保持
+        旧路径不变（含 bucket_mgr=None → 方桶）。其它分辨率按需建 manager 缓存进
+        bucket_mgrs。
+        """
+        if reso is None or reso == self.resolution:
+            return self.bucket_mgr
+        mgr = self.bucket_mgrs.get(reso)
+        if mgr is None:
+            mgr = BucketManager(reso, aspect_ratio_limit=self.aspect_ratio_limit)
+            self.bucket_mgrs[reso] = mgr
+        return mgr
 
     def _make_sample(self, img_path):
         """为单张图构建 sample dict，找不到 caption 返回 None"""
@@ -188,63 +239,68 @@ class ImageDataset(Dataset):
         return sample
 
     def _scan(self):
-        """扫描数据集目录，支持 Kohya 风格文件夹重复。
+        """扫描数据集目录，支持 Kohya 风格 repeat + 多分辨率。
 
-        目录结构示例::
+        目录名 ``[Npx_][R_]label``::
 
             dataset/
-            ├── 1_old/       ← repeat 1
-            │   ├── img.jpg
-            │   └── img.txt
-            └── 5_new/       ← repeat 5
-                ├── img.jpg
-                └── img.txt
+            ├── 5_new/          ← repeat 5，用 config 的 resolutions
+            ├── 1024px_2_hires/ ← repeat 2，固定 1024（覆盖列表，不 fan-out）
+            └── old/            ← repeat 1，用 config 的 resolutions
 
-        没有数字前缀的文件夹或根目录下的图片按 repeat=1 处理。
+        - 带 ``Npx_`` 前缀 → 该文件夹固定用 N 分辨率，覆盖 config 列表、不 fan-out。
+        - 无 px 前缀 → 用 ``self.resolutions``；列表多于一档时每张图在每档各一份（fan-out）。
+
+        每张唯一图展开成 ``repeat × 该文件夹分辨率数`` 个样本，每个带 ``target_reso``。
         """
-        unique_samples = []
-        folder_info = []  # (folder_name, repeat, count) for logging
+        unique = []  # (sample_dict, repeat, resos)
+        folder_info = []  # (name, repeat, resos, count) for logging
 
-        # 收集根目录下的图片（repeat=1）
+        # 根目录图片（repeat=1，无 px → 用 resolutions）
         root_count = 0
         for p in sorted(self.data_dir.iterdir()):
             if p.is_file() and p.suffix.lower() in self.EXTS:
                 s = self._make_sample(p)
                 if s:
-                    s["_repeat"] = 1
-                    unique_samples.append(s)
+                    unique.append((s, 1, self.resolutions))
                     root_count += 1
         if root_count:
-            folder_info.append(("(root)", 1, root_count))
+            folder_info.append(("(root)", 1, self.resolutions, root_count))
 
-        # 收集子文件夹中的图片（解析 repeat）
+        # 子文件夹（解析 px 覆盖 + repeat）
         for subdir in sorted(self.data_dir.iterdir()):
             if not subdir.is_dir():
                 continue
-            repeats = self._parse_repeats_from_dir(subdir.name)
+            reso_override, repeats, _label = self._parse_folder_meta(subdir.name)
+            resos = [reso_override] if reso_override else self.resolutions
             count = 0
             for img_path in sorted(subdir.rglob("*")):
                 if img_path.suffix.lower() not in self.EXTS:
                     continue
                 s = self._make_sample(img_path)
                 if s:
-                    s["_repeat"] = repeats
-                    unique_samples.append(s)
+                    unique.append((s, repeats, resos))
                     count += 1
             if count:
-                folder_info.append((subdir.name, repeats, count))
+                folder_info.append((subdir.name, repeats, resos, count))
 
-        # 展开 repeat：将每个样本按其 repeat 次数复制
+        # 展开：repeat × 分辨率 fan-out；每个展开样本带 target_reso。
+        # 同一 (图, reso) 的 repeat 份共享一个 dict；不同 reso 各自 copy 以带各自 target_reso。
         samples = []
-        for s in unique_samples:
-            r = s.pop("_repeat", 1)
-            for _ in range(r):
-                samples.append(s)
+        for s, repeat, resos in unique:
+            for target_reso in resos:
+                item = dict(s)
+                item["target_reso"] = target_reso
+                for _ in range(repeat):
+                    samples.append(item)
 
-        # 日志：每个文件夹的 repeat 信息
-        if folder_info:
-            for name, rep, cnt in folder_info:
-                logger.info(f"  文件夹 {name}: {cnt} 张 × repeat {rep} = {cnt * rep} 样本")
+        # 日志：每个文件夹的 repeat × 分辨率
+        for name, rep, resos, cnt in folder_info:
+            reso_str = "/".join(str(r) for r in resos)
+            logger.info(
+                f"  文件夹 {name}: {cnt} 张 × repeat {rep} × 分辨率[{reso_str}] "
+                f"= {cnt * rep * len(resos)} 样本"
+            )
 
         return samples
 
@@ -332,11 +388,13 @@ class ImageDataset(Dataset):
         if caption is None:
             caption = ""
 
-        # ARB 分桶
-        if self.bucket_mgr:
-            tw, th = self.bucket_mgr.get_bucket(img.width, img.height)
+        # ARB 分桶（按样本 target_reso 选对应 manager；base 档走 self.bucket_mgr）
+        target_reso = sample.get("target_reso")
+        mgr = self._bucket_mgr_for(target_reso)
+        if mgr:
+            tw, th = mgr.get_bucket(img.width, img.height)
         else:
-            tw = th = self.resolution
+            tw = th = target_reso or self.resolution
 
         # 缩放裁剪
         scale = max(tw / img.width, th / img.height)
@@ -546,16 +604,20 @@ class CachedLatentDataset(Dataset):
             return self._get_base_image_dataset(dataset.dataset)
         return None
 
-    def _expected_bucket_size(self, img_path):
+    def _expected_bucket_size(self, img_path, target_reso=None):
         base = self.base_image_dataset
         if base is None:
             return None
         try:
             from PIL import Image
             with Image.open(img_path) as img:
-                if getattr(base, "bucket_mgr", None):
-                    return base.bucket_mgr.get_bucket(img.width, img.height)
-                resolution = int(getattr(base, "resolution"))
+                if hasattr(base, "_bucket_mgr_for"):
+                    mgr = base._bucket_mgr_for(target_reso)
+                else:
+                    mgr = getattr(base, "bucket_mgr", None)
+                if mgr:
+                    return mgr.get_bucket(img.width, img.height)
+                resolution = int(target_reso or getattr(base, "resolution"))
                 return (resolution, resolution)
         except Exception:
             return None
@@ -565,7 +627,7 @@ class CachedLatentDataset(Dataset):
         img_path = Path(img_path)
         return img_path.with_suffix(".npz")
 
-    def _is_cache_valid(self, img_path, npz_path):
+    def _is_cache_valid(self, img_path, npz_path, target_reso=None):
         """检查缓存是否有效（图像未修改，且格式兼容当前 flip_augment 设置）。
 
         - 缺 `latent` 键 / 其他模型的不兼容缓存 → 删除重 encode
@@ -587,7 +649,7 @@ class CachedLatentDataset(Dataset):
                     return False
                 if getattr(self, "flip_augment", False) and "latent_flipped" not in data.files:
                     return False
-                expected_bucket = self._expected_bucket_size(img_path)
+                expected_bucket = self._expected_bucket_size(img_path, target_reso)
                 if expected_bucket is not None:
                     if "bucket_w" not in data.files or "bucket_h" not in data.files:
                         return False
@@ -620,7 +682,7 @@ class CachedLatentDataset(Dataset):
                 continue
             seen_npz.add(npz_path)
             unique_total += 1
-            if not self._is_cache_valid(img_path, npz_path):
+            if not self._is_cache_valid(img_path, npz_path, sample.get("target_reso")):
                 to_encode.append(i)
 
         if to_encode:
