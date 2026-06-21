@@ -877,7 +877,12 @@
       "doneRestartNote": "Restart Studio to start using the new location. The original data is kept; delete it yourself once you have verified everything.",
       "failed": "Migration failed: {{error}}",
       "startMigrate": "Start migration",
-      "restartNow": "Restart now"
+      "restartNow": "Restart now",
+      "modelsRootLabel": "Models root directory",
+      "modelsRootHelp": "Holds downloaded model weights (Anima / VAE / text encoder / tokenizer / WD14, etc.); defaults to models/ in the app root. Changing the location copies existing weights into a models subdirectory of the chosen directory and takes effect immediately (no restart); the original is kept.",
+      "modelsMigrateTitle": "Migrate models root",
+      "modelsKeepOriginalNote": "Data at the original location is kept, not deleted. Takes effect immediately after copying — no restart needed.",
+      "modelsDoneNote": "Switched to the new models root, effective immediately (no restart). The original data is kept; delete it yourself once verified."
     },
     "gelbooru": "Gelbooru",
     "danbooru": "Danbooru",

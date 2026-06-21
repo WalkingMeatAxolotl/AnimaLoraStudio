@@ -877,7 +877,12 @@
       "doneRestartNote": "重启 Studio 后开始使用新位置；原位置数据已保留，确认无误后可自行删除。",
       "failed": "迁移失败：{{error}}",
       "startMigrate": "开始迁移",
-      "restartNow": "立即重启"
+      "restartNow": "立即重启",
+      "modelsRootLabel": "模型根目录",
+      "modelsRootHelp": "存放下载的 Anima / VAE / 文本编码器 / tokenizer / WD14 等模型权重，默认在程序根目录的 models/。更改位置会把现有权重复制到所选目录的 models 子目录并立即生效（无需重启），原数据保留不删除。",
+      "modelsMigrateTitle": "迁移模型根目录",
+      "modelsKeepOriginalNote": "原位置数据不会被删除。复制完成后立即生效，无需重启。",
+      "modelsDoneNote": "已切换到新模型根目录，立即生效（无需重启）；原位置数据已保留，确认无误后可自行删除。"
     },
     "gelbooru": "Gelbooru",
     "danbooru": "Danbooru",

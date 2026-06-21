@@ -13,6 +13,7 @@ import {
   type Secrets,
   type SecretsPatch,
   type StudioDataInfo,
+  type ModelsRootInfo,
   type DevCommit,
   type DevCommitsResult,
   type PreflightResult,
@@ -35,6 +36,7 @@ import { InfoButton } from '../../components/InfoButton'
 import LLMTaggerWorkspace from '../../components/LLMTaggerWorkspace'
 import PathPicker from '../../components/PathPicker'
 import StudioDataMigrateModal from '../../components/StudioDataMigrateModal'
+import ModelsRootMigrateModal from '../../components/ModelsRootMigrateModal'
 import { TagListInput } from '../../components/TagsInput'
 import { useShowTagTranslation } from '../../tagDict/showToggle'
 import { useTagDict, reloadDict } from '../../tagDict/store'
@@ -1844,33 +1846,20 @@ function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, catalog
   t: TFunction
 }) {
   const { toast } = useToast()
-  const [rootDraft, setRootDraft] = useState<string>('')
-  const [serverRoot, setServerRoot] = useState<string | null>(null)
-  const [savingRoot, setSavingRoot] = useState(false)
   const [selectedAnima, setSelectedAnima] = useState<string>('1.0')
   const [autoSyncPaths, setAutoSyncPaths] = useState<boolean>(true)
   const [savingAutoSync, setSavingAutoSync] = useState(false)
-  const [secretsLoaded, setSecretsLoaded] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
   const [addingCustom, setAddingCustom] = useState(false)
 
-  // 一次性拉一份 secrets 取 models.root + selected_anima + auto_sync_paths
-  // （这几项走独立 PUT，不进 SettingsPage 的全局 dirty 流程）。catalog 由父级注入。
+  // 一次性拉 secrets 取 selected_anima + auto_sync_paths（独立 PUT，不进全局 dirty
+  // 流程）。模型根目录已挪到「系统 → 存储位置」，不再在此渲染。
   useEffect(() => {
     void api.getSecrets().then((sec) => {
-      setServerRoot(sec.models?.root ?? null)
       setSelectedAnima(sec.models?.selected_anima ?? '1.0')
       setAutoSyncPaths(sec.models?.auto_sync_paths ?? true)
-      setSecretsLoaded(true)
-    }).catch(() => { setSecretsLoaded(true) })
+    }).catch(() => { /* 显示用，拉不到不阻塞 */ })
   }, [])
-
-  // secrets + catalog 都到位后，把输入框预填成「已保存值」或「实际默认绝对路径」。
-  // 用 prev !== '' 当作"已初始化 / 用户已编辑"的标志，避免覆盖用户输入。
-  useEffect(() => {
-    if (!secretsLoaded || !catalog) return
-    setRootDraft((prev) => (prev !== '' ? prev : (serverRoot ?? catalog.models_root ?? '')))
-  }, [secretsLoaded, catalog, serverRoot])
 
   const pickAnima = async (variant: string) => {
     if (variant === selectedAnima) return
@@ -1882,21 +1871,6 @@ function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, catalog
     } catch (e) {
       toast(String(e), 'error')
       void reloadCatalog()
-    }
-  }
-
-  const saveRoot = async () => {
-    const v = rootDraft.trim()
-    setSavingRoot(true)
-    try {
-      await api.updateSecrets({ models: { root: v ? v : null } })
-      toast(v ? t('settings.modelRootSaved', { path: v }) : t('settings.modelRootDefault'), 'success')
-      setServerRoot(v ? v : null)
-      await reloadCatalog()
-    } catch (e) {
-      toast(String(e), 'error')
-    } finally {
-      setSavingRoot(false)
     }
   }
 
@@ -1948,7 +1922,6 @@ function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, catalog
     }
   }
 
-  const rootDirty = rootDraft.trim() !== (serverRoot ?? '')
   const error = catalogError
 
   return (
@@ -1957,24 +1930,6 @@ function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, catalog
         opt={catalog?.download_source_options?.training}
         onChange={(s) => void setSource('training', s)}
       />
-      <SettingsField label={t('settings.modelsRoot')}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <input
-            type="text"
-            value={rootDraft}
-            onChange={(e) => setRootDraft(e.target.value)}
-            className={`${textInputClass} flex-1`}                                  />
-          <button onClick={saveRoot} disabled={!rootDirty || savingRoot} className="btn btn-primary btn-sm"
-            title={rootDirty ? t('settings.savePathConfig') : t('settings.notModified')}>
-            {savingRoot ? t('common.saving') : t('settings.savePath')}
-          </button>
-          <button onClick={() => setRootDraft(serverRoot ?? (catalog?.models_root ?? ''))} disabled={!rootDirty || savingRoot}
-            className="px-2 py-0.5 text-fg-tertiary bg-transparent border-none cursor-pointer rounded-sm"
-            style={{ opacity: !rootDirty ? 0.3 : 1 }}
-          >↻</button>
-        </div>
-      </SettingsField>
-
       <SettingsField
         label={t('settings.autoSyncPathsLabel')}
         helpTooltip={<p>{t('settings.autoSyncPathsHelp')}</p>}
@@ -2119,7 +2074,7 @@ function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, catalog
       )}
       {showPicker && (
         <PathPicker
-          initialPath={serverRoot ?? catalog?.models_root ?? undefined}
+          initialPath={catalog?.models_root ?? undefined}
           onPick={(p) => void addCustom(p)}
           onClose={() => setShowPicker(false)}
         />
@@ -4900,6 +4855,10 @@ function StorageSection() {
   // 不存在"后台迁移中"的游离状态，section 无需跟踪迁移进度）
   const [migrateTarget, setMigrateTarget] = useState<string | null>(null)
   const [restartBusy, setRestartBusy] = useState(false)
+  // 模型根目录（同区块第二张卡；迁移完无需重启，立即生效）
+  const [modelsInfo, setModelsInfo] = useState<ModelsRootInfo | null>(null)
+  const [modelsPickerOpen, setModelsPickerOpen] = useState(false)
+  const [modelsMigrateTarget, setModelsMigrateTarget] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -4907,6 +4866,13 @@ function StorageSection() {
       if (!cancelled) setInfo(i)
     }).catch(() => { /* section 显示用，拉不到不阻塞页面 */ })
     return () => { cancelled = true }
+  }, [])
+
+  const refreshModelsInfo = () => {
+    void api.getModelsRootInfo(false).then(setModelsInfo).catch(() => { /* 显示用 */ })
+  }
+  useEffect(() => {
+    refreshModelsInfo()
   }, [])
 
   // done 态「立即重启」：modal 上下文已是确认语境，不再二次 confirm
@@ -4958,6 +4924,28 @@ function StorageSection() {
         </div>
       </SettingsField>
 
+      <SettingsField
+        label={t('settings.storage.modelsRootLabel')}
+        helpTooltip={<p>{t('settings.storage.modelsRootHelp')}</p>}
+      >
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <code className="font-mono text-xs truncate">{modelsInfo?.current ?? '…'}</code>
+            {modelsInfo && (
+              <span className="text-2xs text-fg-tertiary shrink-0">
+                {modelsInfo.is_custom ? t('settings.storage.customBadge') : t('settings.storage.defaultBadge')}
+              </span>
+            )}
+          </div>
+          <button
+            className="btn btn-secondary btn-sm self-start"
+            onClick={() => setModelsPickerOpen(true)}
+          >
+            {t('settings.storage.changeLocation')}
+          </button>
+        </div>
+      </SettingsField>
+
       {pickerOpen && (
         <PathPicker
           dirOnly
@@ -4975,6 +4963,26 @@ function StorageSection() {
           target={migrateTarget}
           onClose={() => setMigrateTarget(null)}
           onRestart={() => void handleRestart()}
+        />
+      )}
+
+      {modelsPickerOpen && (
+        <PathPicker
+          dirOnly
+          initialPath={modelsInfo?.current}
+          onPick={(path) => {
+            setModelsPickerOpen(false)
+            setModelsMigrateTarget(path)
+          }}
+          onClose={() => setModelsPickerOpen(false)}
+        />
+      )}
+
+      {modelsMigrateTarget != null && (
+        <ModelsRootMigrateModal
+          target={modelsMigrateTarget}
+          onClose={() => setModelsMigrateTarget(null)}
+          onDone={refreshModelsInfo}
         />
       )}
     </SettingsSection>

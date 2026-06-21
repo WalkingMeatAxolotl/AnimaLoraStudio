@@ -1674,6 +1674,31 @@ export interface StudioDataMigrateStatus {
   error: string
 }
 
+/** 模型根目录存储位置：和 studio_data 同结构（迁移确认 modal 复用展示）。 */
+export interface ModelsRootInfo {
+  current: string
+  default: string
+  is_custom: boolean
+  /** 请求带 scan=false 时为 null（Settings 页仅显示路径，免扫盘） */
+  scan: {
+    total_files: number
+    total_bytes: number
+    entries: StudioDataScanEntry[]
+  } | null
+}
+
+/** 模型根目录迁移状态快照（实时进度走 SSE `models_root_migrate_progress` / `_done`）。 */
+export interface ModelsRootMigrateStatus {
+  state: 'idle' | 'running' | 'done' | 'error'
+  target: string
+  total_files: number
+  total_bytes: number
+  done_files: number
+  done_bytes: number
+  current_file: string
+  error: string
+}
+
 export const api = {
   health: () => req<HealthResponse>('/api/health'),
   systemStats: () => req<SystemStats>('/api/system/stats'),
@@ -2671,6 +2696,18 @@ export const api = {
     }),
   getStudioDataMigrateStatus: () =>
     req<StudioDataMigrateStatus>('/api/studio-data/migrate_status'),
+
+  // 模型根目录存储位置（镜像 studio_data，但迁移完无需重启，立即生效）----------
+  getModelsRootInfo: (withScan = true) =>
+    req<ModelsRootInfo>(`/api/models-root/info?scan=${withScan}`),
+  // 422 = 目标不合法 / 有 running task；409 = 已有迁移在跑。
+  startModelsRootMigrate: (target: string) =>
+    req<{ ok: boolean }>('/api/models-root/migrate', {
+      method: 'POST',
+      body: JSON.stringify({ target }),
+    }),
+  getModelsRootMigrateStatus: () =>
+    req<ModelsRootMigrateStatus>('/api/models-root/migrate_status'),
 
   // System lifecycle (ADR 0002) ----------------------------------------
   // 重启 server。后端写 tmp/restart + 给自己发 SIGINT 触发 uvicorn graceful
