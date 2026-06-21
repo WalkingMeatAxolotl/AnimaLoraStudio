@@ -788,6 +788,10 @@ export default function SettingsPage() {
       </div>
 
       <SettingsSection id="wd14" title="WD14">
+        <SourceSelect
+          opt={catalog?.download_source_options?.wd14}
+          onChange={(s) => void setDownloadSource('wd14', s)}
+        />
         <WD14ModelCard
           catalog={catalog}
           busy={downloadBusy}
@@ -797,10 +801,6 @@ export default function SettingsPage() {
           candidates={draft.wd14.model_ids}
           onCandidatesChange={(next) => update('wd14', 'model_ids', next)}
           t={t}
-        />
-        <SourceSelect
-          opt={catalog?.download_source_options?.wd14}
-          onChange={(s) => void setDownloadSource('wd14', s)}
         />
         <div className="grid grid-cols-2 gap-3">
           <SettingsField label="threshold_general">
@@ -838,6 +838,10 @@ export default function SettingsPage() {
       </SettingsSection>
 
       <SettingsSection id="cltagger" title="CLTagger">
+        <SourceSelect
+          opt={catalog?.download_source_options?.cltagger}
+          onChange={(s) => void setDownloadSource('cltagger', s)}
+        />
         <CLTaggerModelCard
           catalog={catalog}
           busy={downloadBusy}
@@ -848,10 +852,6 @@ export default function SettingsPage() {
           modelId={draft.cltagger.model_id}
           onModelIdChange={(id) => update('cltagger', 'model_id', id)}
           t={t}
-        />
-        <SourceSelect
-          opt={catalog?.download_source_options?.cltagger}
-          onChange={(s) => void setDownloadSource('cltagger', s)}
         />
         <div className="grid grid-cols-2 gap-3">
           <SettingsField label="threshold_general">
