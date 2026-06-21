@@ -30,6 +30,7 @@ interface SettingsData {
   reloadCatalog: () => Promise<void>
   downloadBusy: Set<string>
   startDownload: (model_id: string, variant?: string) => Promise<void>
+  setDownloadSource: (type: string, source: string) => Promise<void>
 }
 
 const Ctx = createContext<SettingsData | null>(null)
@@ -79,11 +80,24 @@ export function SettingsDataProvider({ children }: { children: ReactNode }) {
     }
   }, [reloadCatalog, t, toast])
 
+  // 按类型选下载源：即时存（跟「下载」/ models.root 一样是立即动作，不进表单
+  // draft）。刻意不 setSecrets —— 否则会让 SettingsPage 的 draft/server 失同步，
+  // 表单 Save 时把这次改动 clobber 回去。dropdown 当前值读 catalog（reloadCatalog
+  // 刷新），不依赖表单 secrets。
+  const setDownloadSource = useCallback(async (type: string, source: string) => {
+    try {
+      await api.updateSecrets({ download_sources: { [type]: source } })
+      await reloadCatalog()
+    } catch (e) {
+      toast(String(e), 'error')
+    }
+  }, [reloadCatalog, toast])
+
   return (
     <Ctx.Provider value={{
       secrets, secretsError, setSecrets,
       catalog, catalogError, reloadCatalog,
-      downloadBusy, startDownload,
+      downloadBusy, startDownload, setDownloadSource,
     }}>
       {children}
     </Ctx.Provider>

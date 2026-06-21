@@ -12,9 +12,6 @@ const initialServerState = {
   gelbooru: {
     user_id: 'alice',
     api_key: '***', // 已保存，掩码
-    save_tags: false,
-    convert_to_png: true,
-    remove_alpha_channel: false,
   },
   danbooru: { username: '', api_key: '', account_type: 'free' },
   download: {
@@ -22,6 +19,9 @@ const initialServerState = {
     parallel_workers: 4,
     api_rate_per_sec: 2,
     cdn_rate_per_sec: 5,
+    save_tags: false,
+    convert_to_png: true,
+    remove_alpha_channel: false,
   },
   reg: { default_excluded_tags: [] },
   huggingface: { token: '', endpoint: '' },
@@ -208,6 +208,13 @@ const emptyModelsCatalog = {
       },
     ],
   },
+  download_source_options: {
+    training: { current: 'huggingface', available: ['huggingface', 'modelscope'] },
+    wd14: { current: 'huggingface', available: ['huggingface', 'modelscope'] },
+    upscaler: { current: 'huggingface', available: ['huggingface', 'modelscope'] },
+    cltagger: { current: 'huggingface', available: ['huggingface'] },
+    taeflux: { current: 'huggingface', available: ['huggingface'] },
+  },
   downloads: {},
 }
 
@@ -277,7 +284,10 @@ function renderPage() {
 
 describe('SettingsPage (PP0)', () => {
   it('hydrates from /api/secrets and shows masked sensitive fields as placeholder', async () => {
+    const user = userEvent.setup()
     renderPage()
+    // gelbooru 凭证已挪到「密钥」tab
+    await user.click(await screen.findByRole('button', { name: '密钥' }))
     await waitFor(() =>
       expect(screen.getByDisplayValue('alice')).toBeInTheDocument()
     )
@@ -290,6 +300,7 @@ describe('SettingsPage (PP0)', () => {
   it('PUT /api/secrets only sends the changed leaves', async () => {
     const user = userEvent.setup()
     renderPage()
+    await user.click(await screen.findByRole('button', { name: '密钥' }))
     const userInput = await screen.findByDisplayValue('alice')
     await user.clear(userInput)
     await user.type(userInput, 'bob')
@@ -307,6 +318,45 @@ describe('SettingsPage (PP0)', () => {
       const body = JSON.parse(String(putCall![1].body))
       // 只有 user_id 被改动；api_key 仍是 *** ⇒ 不应该出现在 body 里
       expect(body).toEqual({ gelbooru: { user_id: 'bob' } })
+    })
+  })
+
+  it('credentials tab gathers all service tokens; old sections no longer hold them', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: '密钥' }))
+    // 下载 / 抓取类凭证聚到密钥 tab（WandB token 留在监控页跟其配置一起）
+    for (const name of ['HuggingFace', 'ModelScope', 'Gelbooru', 'Danbooru']) {
+      expect(screen.getByRole('heading', { name })).toBeInTheDocument()
+    }
+    expect(screen.queryByRole('heading', { name: 'Weights & Biases' })).not.toBeInTheDocument()
+    // gelbooru user_id 现在在密钥 tab 编辑
+    expect(screen.getByDisplayValue('alice')).toBeInTheDocument()
+
+    // 原数据集 tab 的 gelbooru 不再有 user_id（凭证已挪走，无指引文案）
+    await user.click(await screen.findByRole('button', { name: '数据集' }))
+    expect(screen.queryByDisplayValue('alice')).not.toBeInTheDocument()
+  })
+
+  it('per-item source dropdown writes download_sources immediately', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: '打标' }))
+    // WD14 卡的源 dropdown：本 tab 唯一带 ModelScope 选项的 select
+    // （CLTagger 是固定 HF 单选，无 ModelScope 选项）。
+    const msOption = await screen.findByRole('option', { name: /ModelScope/ })
+    const select = msOption.closest('select') as HTMLSelectElement
+    await user.selectOptions(select, 'modelscope')
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(([url, init]) => {
+        if (init?.method !== 'PUT' || !String(url).includes('/api/secrets')) return false
+        try { return 'download_sources' in JSON.parse(String(init.body)) } catch { return false }
+      })
+      expect(putCall).toBeDefined()
+      const body = JSON.parse(String(putCall![1].body))
+      expect(body.download_sources).toEqual({ wd14: 'modelscope' })
     })
   })
 

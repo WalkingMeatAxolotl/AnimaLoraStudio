@@ -8,6 +8,7 @@ import {
   type UpscalerVariant,
   type Version,
 } from '../../../api/client'
+import { parseFolderMeta } from '../../../lib/folderMeta'
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import ImagePreviewModal from '../../../components/ImagePreviewModal'
 import PreprocessToolsBar from '../../../components/preprocess/PreprocessToolsBar'
@@ -84,6 +85,7 @@ export default function PreprocessPage() {
   const [targetEdge, setTargetEdge] = useState<number | null>(DEFAULT_TARGET_EDGE)
   const [customEdge, setCustomEdge] = useState<string>(String(DEFAULT_TARGET_EDGE))
   const [filter, setFilter] = useState<FilterMode>('all')
+  const [folderFilter, setFolderFilter] = useState<string>('all')
   const [sel, setSel] = useState<Set<string>>(new Set())
   const [selAnchor, setSelAnchor] = useState<string | null>(null)
   // 大图预览：index 引用 visibleRows[]（filter 当前的可见 ImageRow 列表）
@@ -219,14 +221,40 @@ export default function PreprocessPage() {
     return m
   }, [rows])
 
+  // 数据集子文件夹列表（多分辨率：一次放大一个文件夹，目标分辨率可跟随 px 前缀）。
+  const folders = useMemo(
+    () => Array.from(new Set(rows.map((r) => r.folder).filter(Boolean))).sort(),
+    [rows],
+  )
+  // 选中某文件夹时「全部放大」的范围 = 该文件夹全部图（忽略像素档 filter）；
+  // 'all' 时为 null → 走全局 'all' 模式。
+  const folderScopedNames = useMemo(
+    () =>
+      folderFilter === 'all'
+        ? null
+        : rows.filter((r) => r.folder === folderFilter).map((r) => r.name),
+    [rows, folderFilter],
+  )
+
   const visibleRows = useMemo(
     () =>
       rows.filter((r) => {
+        if (folderFilter !== 'all' && r.folder !== folderFilter) return false
         if (filter === 'all') return true
         return pxBinFor(r.w, r.h) === filter
       }),
-    [rows, filter],
+    [rows, filter, folderFilter],
   )
+
+  // 选中带 px 前缀的文件夹 → 目标分辨率自动跟随该文件夹（如 1024px_xxx → 1024）。
+  useEffect(() => {
+    if (folderFilter === 'all') return
+    const reso = parseFolderMeta(folderFilter).reso
+    if (reso !== null) {
+      setTargetEdge(reso)
+      setCustomEdge(String(reso))
+    }
+  }, [folderFilter])
   // ADR 0010: grid key = rel path (manifest entry key)，跨 sub-folder 唯一。
   const visibleNames = useMemo(
     () => visibleRows.map((r) => r.name),
@@ -381,10 +409,14 @@ export default function PreprocessPage() {
               allUpscalers={allUpscalers}
               selectedModel={selectedModel}
               onSelectedModelChange={(label) => void changeSelectedModel(label)}
-              totalCount={rows.length}
+              totalCount={folderScopedNames ? folderScopedNames.length : rows.length}
               selectedCount={selectedTargets.count}
               busy={busy || isLive}
-              onStartAll={() => void startPreprocess('all')}
+              onStartAll={() =>
+                void (folderScopedNames
+                  ? startPreprocess('selected', folderScopedNames)
+                  : startPreprocess('all'))
+              }
               onStartSelected={() =>
                 void startPreprocess('selected', selectedTargets.names)
               }
@@ -400,6 +432,14 @@ export default function PreprocessPage() {
                 setPreviewIdx(null)
               }}
               binCounts={binCounts}
+              folders={folders}
+              folderFilter={folderFilter}
+              setFolderFilter={(f) => {
+                setFolderFilter(f)
+                setSel(new Set())
+                setSelAnchor(null)
+                setPreviewIdx(null)
+              }}
               items={gridItems}
               selected={sel}
               onSelect={(name, e) => {
@@ -688,6 +728,9 @@ function ImagesPanel({
   filter,
   setFilter,
   binCounts,
+  folders,
+  folderFilter,
+  setFolderFilter,
   items,
   selected,
   onSelect,
@@ -699,6 +742,9 @@ function ImagesPanel({
   filter: FilterMode
   setFilter: (f: FilterMode) => void
   binCounts: Map<PxBinId, number>
+  folders: string[]
+  folderFilter: string
+  setFolderFilter: (f: string) => void
   items: { name: string; thumbUrl: string; meta?: string }[]
   selected: Set<string>
   onSelect: (name: string, e: React.MouseEvent) => void
@@ -745,6 +791,25 @@ function ImagesPanel({
             chip(b.id, b.label, binCounts.get(b.id) ?? 0),
           )}
         </div>
+        {folders.length > 0 && (
+          <>
+            <span className="mx-1 text-dim">·</span>
+            <label className="flex items-center gap-1 text-xs text-fg-tertiary">
+              {t('preprocess.folderFilter')}
+              <select
+                value={folderFilter}
+                onChange={(e) => setFolderFilter(e.target.value)}
+                className="input text-xs"
+                style={{ width: 'auto', padding: '1px 6px' }}
+              >
+                <option value="all">{t('preprocess.folderAll')}</option>
+                {folders.map((f) => (
+                  <option key={f} value={f}>{f}</option>
+                ))}
+              </select>
+            </label>
+          </>
+        )}
         <span className="flex-1" />
         <button
           onClick={onSelectAll}

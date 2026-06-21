@@ -223,6 +223,92 @@ def test_get_download_source_default_huggingface(monkeypatch: pytest.MonkeyPatch
     assert model_downloader._get_download_source() == "huggingface"
 
 
+def test_source_for_reads_per_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_source_for 按类型读 download_sources；各类型独立。"""
+    from studio import secrets
+    from studio.services.models import sources
+
+    monkeypatch.delenv("MODELSCOPE_SOURCE", raising=False)
+    monkeypatch.setattr(
+        secrets, "load",
+        lambda: secrets.Secrets(download_sources={"training": "modelscope", "wd14": "huggingface"}),
+    )
+    assert sources._source_for("training") == "modelscope"
+    assert sources._source_for("wd14") == "huggingface"
+    assert sources._source_for("upscaler") == "huggingface"  # 种子默认
+
+
+def test_source_for_env_overrides_all_types(monkeypatch: pytest.MonkeyPatch) -> None:
+    """MODELSCOPE_SOURCE env 仍是全局强制覆盖（CLI / CI）。"""
+    from studio import secrets
+    from studio.services.models import sources
+
+    monkeypatch.setenv("MODELSCOPE_SOURCE", "modelscope")
+    monkeypatch.setattr(
+        secrets, "load",
+        lambda: secrets.Secrets(download_sources={"training": "huggingface"}),
+    )
+    assert sources._source_for("training") == "modelscope"
+    assert sources._source_for("wd14") == "modelscope"
+
+
+def test_per_type_source_routing_is_isolated(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """training=modelscope 只让训练前置走 MS；wd14（=hf）仍走 HF。"""
+    from studio import secrets
+
+    monkeypatch.delenv("MODELSCOPE_SOURCE", raising=False)
+    monkeypatch.setattr(
+        secrets, "load",
+        lambda: secrets.Secrets(
+            download_sources={"training": "modelscope", "wd14": "huggingface"}
+        ),
+    )
+    hf: list[str] = []
+    ms: list[str] = []
+
+    def fake_hf(repo_id, subpath, target, *, on_log=print):
+        hf.append(repo_id)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"x")
+        return True
+
+    def fake_ms(repo_id, subpath, target, *, on_log=print):
+        ms.append(repo_id)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"x")
+        return True
+
+    monkeypatch.setattr("studio.services.models.sources.download_flat", fake_hf)
+    monkeypatch.setattr("studio.services.models.sources.download_flat_ms", fake_ms)
+
+    model_downloader.download_anima_vae(tmp_path, on_log=lambda _l: None)
+    assert ms and not hf  # 训练组 → MS
+
+    hf.clear()
+    ms.clear()
+    model_downloader.download_wd14("SmilingWolf/wd-vit-tagger-v3", tmp_path, on_log=lambda _l: None)
+    assert hf and not ms  # WD14 → HF
+
+
+def test_build_catalog_exposes_download_source_options(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from studio import secrets
+
+    monkeypatch.delenv("MODELSCOPE_SOURCE", raising=False)
+    monkeypatch.setattr(
+        secrets, "load",
+        lambda: secrets.Secrets(download_sources={"training": "modelscope"}),
+    )
+    opts = model_downloader.build_catalog(tmp_path)["download_source_options"]
+    assert opts["training"] == {"current": "modelscope", "available": ["huggingface", "modelscope"]}
+    assert opts["wd14"]["current"] == "huggingface"
+    assert opts["cltagger"] == {"current": "huggingface", "available": ["huggingface"]}
+    assert opts["taeflux"]["available"] == ["huggingface"]
+
+
 def test_download_flat_ms_skips_existing(tmp_path: "Path") -> None:
     """target 已存在时跳过，不调 modelscope API。"""
     target = tmp_path / "model.safetensors"
@@ -275,7 +361,7 @@ def test_download_qwen3_modelscope_builds_complete_directory(
 ) -> None:
     """ModelScope 源下载权重后，仍会从 HF 补齐 tokenizer/config 文件，
     使 text_encoders/ 成为 transformers 可直接加载的完整目录。"""
-    monkeypatch.setattr("studio.services.models.sources._get_download_source", lambda: "modelscope")
+    monkeypatch.setenv("MODELSCOPE_SOURCE", "modelscope")
 
     ms_calls: list[tuple[str, str, str]] = []
     hf_calls: list[tuple[str, str, str]] = []
@@ -428,10 +514,8 @@ def test_build_catalog_picks_up_custom_upscaler(
 def test_download_upscaler_uses_modelscope_when_configured(
     tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """secrets.download_source='modelscope' → download_upscaler 走 download_flat_ms。"""
-    monkeypatch.setattr(
-        "studio.services.models.sources._get_download_source", lambda: "modelscope"
-    )
+    """download_sources['upscaler']='modelscope' → download_upscaler 走 download_flat_ms。"""
+    monkeypatch.setenv("MODELSCOPE_SOURCE", "modelscope")
     ms_calls: list[tuple] = []
     hf_calls: list[tuple] = []
 
@@ -462,9 +546,7 @@ def test_download_upscaler_fallback_to_ms_when_hf_missing(
     tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """R-ESRGAN_4x+Anime6B 没 HF 镜像；source=hf 时也应回退到 MS。"""
-    monkeypatch.setattr(
-        "studio.services.models.sources._get_download_source", lambda: "huggingface"
-    )
+    monkeypatch.setenv("MODELSCOPE_SOURCE", "huggingface")
     ms_calls: list[tuple] = []
 
     def fake_ms(repo_id, subpath, target, *, on_log=print):

@@ -33,6 +33,18 @@ describe('controlKind', () => {
     expect(controlKind({ type: 'string' } as SchemaProperty)).toBe('string')
   })
 
+  it('maps integer arrays (e.g. resolution) to int-list, string arrays to string-list', () => {
+    expect(
+      controlKind({ type: 'array', items: { type: 'integer' } } as SchemaProperty)
+    ).toBe('int-list')
+    expect(
+      controlKind({ type: 'array', items: { type: 'number' } } as SchemaProperty)
+    ).toBe('int-list')
+    expect(
+      controlKind({ type: 'array', items: { type: 'string' } } as SchemaProperty)
+    ).toBe('string-list')
+  })
+
   it('handles Optional[T] via anyOf', () => {
     expect(
       controlKind({

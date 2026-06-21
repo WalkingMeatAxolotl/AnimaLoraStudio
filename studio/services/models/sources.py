@@ -88,6 +88,23 @@ def _get_download_source() -> str:
         return "huggingface"
 
 
+def _source_for(type_key: str) -> str:
+    """某下载类型（training / wd14 / upscaler）当前选的源。
+
+    MODELSCOPE_SOURCE env 仍作全局强制覆盖（CLI flag / CI）；否则读
+    secrets.download_sources[type_key]，缺省 / 非法值回落 huggingface。
+    固定 HF 的类型（cltagger / t5 / taeflux）不走这里。
+    """
+    env = os.environ.get("MODELSCOPE_SOURCE", "").strip().lower()
+    if env in ("huggingface", "modelscope"):
+        return env
+    try:
+        src = secrets.load().download_sources.get(type_key, "huggingface")
+    except Exception:  # noqa: BLE001
+        return "huggingface"
+    return src if src in ("huggingface", "modelscope") else "huggingface"
+
+
 def _ms_token() -> Optional[str]:
     """读 ModelScope token：环境变量优先，其次 secrets。"""
     env = os.environ.get("MODELSCOPE_API_TOKEN", "").strip()

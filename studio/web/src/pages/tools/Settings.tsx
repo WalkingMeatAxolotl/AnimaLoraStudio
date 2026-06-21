@@ -70,18 +70,18 @@ type Section =
   | 'generate'
   | 'proxy'
 
-type Tab = 'dataset' | 'tagging' | 'preprocess' | 'training' | 'monitor' | 'testing' | 'appearance' | 'system'
+type Tab = 'dataset' | 'tagging' | 'preprocess' | 'training' | 'monitor' | 'testing' | 'credentials' | 'appearance' | 'system'
 
 // 外部页面通过 `?section=<id>` 跳转到 SettingsPage 的特定 section 时，用这个
 // 反向映射决定要先切到哪个 tab。只列出能从外部链接到的 sections。
 const SECTION_TO_TAB: Record<string, Tab> = {
   'models': 'training',
-  'download-source': 'training',
   'version': 'system',
   'service': 'system',
 }
 
 const TAB_LIST: { id: Tab; labelKey: string }[] = [
+  { id: 'credentials', labelKey: 'settings.tabCredentials' },
   { id: 'dataset', labelKey: 'settings.tabDataset' },
   { id: 'preprocess', labelKey: 'settings.tabPreprocess' },
   { id: 'tagging', labelKey: 'settings.tabTagging' },
@@ -96,8 +96,6 @@ const TAB_LIST: { id: Tab; labelKey: string }[] = [
 // 对应；label 在导航里直接显示。修改 section 顺序时记得同步这里。
 const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
   dataset: [
-    { id: 'gelbooru', labelKey: 'settings.gelbooru' },
-    { id: 'danbooru', labelKey: 'settings.danbooru' },
     { id: 'download-global', labelKey: 'settings.downloadGlobal' },
     { id: 'reg', labelKey: 'settings.reg.sectionTitle' },
     { id: 'proxy', labelKey: 'settings.proxy.sectionTitle' },
@@ -113,7 +111,6 @@ const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
     { id: 'tag-dictionary', labelKey: 'settings.tagDictionary.title' },
   ],
   training: [
-    { id: 'download-source', labelKey: 'settings.modelSource' },
     { id: 'queue', labelKey: 'settings.queueSchedule' },
     { id: 'pytorch', labelKey: 'settings.torch' },
     { id: 'flash-attn', labelKey: 'settings.flashAttn' },
@@ -127,6 +124,12 @@ const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
     { id: 'idle-timeout', labelKey: 'settings.idleTimeout.title' },
     { id: 'preview', labelKey: 'settings.intermediatePreview' },
     { id: 'save-test-images', labelKey: 'settings.saveTestImages.title' },
+  ],
+  credentials: [
+    { id: 'cred-huggingface', labelKey: 'settings.credHuggingface' },
+    { id: 'cred-modelscope', labelKey: 'settings.credModelscope' },
+    { id: 'cred-gelbooru', labelKey: 'settings.gelbooru' },
+    { id: 'cred-danbooru', labelKey: 'settings.danbooru' },
   ],
   appearance: [
     { id: 'display', labelKey: 'settings.display' },
@@ -190,8 +193,8 @@ function getStoredTab(): Tab {
     const v = localStorage.getItem(TAB_STORAGE_KEY)
     if (
       v === 'dataset' || v === 'tagging' || v === 'preprocess' || v === 'training'
-      || v === 'monitor' || v === 'testing' || v === 'appearance'
-      || v === 'system'
+      || v === 'monitor' || v === 'testing' || v === 'credentials'
+      || v === 'appearance' || v === 'system'
     ) return v
   } catch {
     /* ignore localStorage errors */
@@ -200,19 +203,16 @@ function getStoredTab(): Tab {
 }
 
 const EMPTY: Secrets = {
-  gelbooru: {
-    user_id: '',
-    api_key: '',
-    save_tags: false,
-    convert_to_png: true,
-    remove_alpha_channel: true,
-  },
+  gelbooru: { user_id: '', api_key: '' },
   danbooru: { username: '', api_key: '', account_type: 'free' },
   download: {
     exclude_tags: [],
     parallel_workers: 4,
     api_rate_per_sec: 2,
     cdn_rate_per_sec: 5,
+    save_tags: false,
+    convert_to_png: true,
+    remove_alpha_channel: true,
   },
   reg: { default_excluded_tags: [] },
   huggingface: { token: '', endpoint: '' },
@@ -235,6 +235,7 @@ const EMPTY: Secrets = {
   },
   modelscope: { token: '' },
   download_source: 'huggingface',
+  download_sources: {},
   llm_tagger: {
     current_preset: 'style_json',
     presets: [...DEFAULT_LLM_PRESETS],
@@ -312,6 +313,7 @@ export default function SettingsPage() {
     reloadCatalog,
     downloadBusy,
     startDownload,
+    setDownloadSource,
   } = useSettingsData()
   const [draft, setDraft] = useState<Secrets>(EMPTY)
   const [error, setError] = useState<string | null>(null)
@@ -386,10 +388,6 @@ export default function SettingsPage() {
     }))
   }
 
-  /** 更新 Secrets 顶层非对象字段（如 download_source）。 */
-  const updateTop = <K extends keyof Secrets>(key: K, value: Secrets[K]) => {
-    setDraft((prev) => ({ ...prev, [key]: value }))
-  }
 
   const save = async () => {
     if (!server) return
@@ -614,70 +612,6 @@ export default function SettingsPage() {
       )}
 
       {tab === 'dataset' && (<>
-      <SettingsSection id="gelbooru" title="Gelbooru">
-        <SettingsField label="user_id">
-          <SettingsInput
-            type="text"
-            value={draft.gelbooru.user_id}
-            onChange={(v) => update('gelbooru', 'user_id', v)}
-            autoComplete="off"
-            data-lpignore="true"
-            data-1p-ignore
-            data-form-type="other"
-            className={textInputClass}
-          />
-        </SettingsField>
-        <SettingsField label="api_key">
-          <SensitiveInput
-            value={draft.gelbooru.api_key}
-            serverValue={server?.gelbooru.api_key ?? ''}
-            onChange={(v) => update('gelbooru', 'api_key', v)}
-          />
-        </SettingsField>
-        <SettingsField label="save_tags">
-          <Bool value={draft.gelbooru.save_tags} onChange={(v) => update('gelbooru', 'save_tags', v)} />
-        </SettingsField>
-        <SettingsField label="convert_to_png">
-          <Bool value={draft.gelbooru.convert_to_png} onChange={(v) => update('gelbooru', 'convert_to_png', v)} />
-        </SettingsField>
-        <SettingsField label="remove_alpha_channel">
-          <Bool value={draft.gelbooru.remove_alpha_channel} onChange={(v) => update('gelbooru', 'remove_alpha_channel', v)} />
-        </SettingsField>
-      </SettingsSection>
-
-      <SettingsSection id="danbooru" title="Danbooru">
-        <SettingsField label="username">
-          <SettingsInput
-            type="text"
-            value={draft.danbooru.username}
-            onChange={(v) => update('danbooru', 'username', v)}
-            placeholder={t('settings.danbooruUsernamePlaceholder')}
-            autoComplete="off"
-            data-lpignore="true"
-            data-1p-ignore
-            data-form-type="other"
-            className={textInputClass}
-          />
-        </SettingsField>
-        <SettingsField label="api_key">
-          <SensitiveInput
-            value={draft.danbooru.api_key}
-            serverValue={server?.danbooru.api_key ?? ''}
-            onChange={(v) => update('danbooru', 'api_key', v)}
-          />
-        </SettingsField>
-        <SettingsField label="account_type">
-          <select
-            value={draft.danbooru.account_type}
-            onChange={(e) => update('danbooru', 'account_type', e.target.value as 'free' | 'gold' | 'platinum')}
-            className={textInputClass}          >
-            <option value="free">{t('settings.accountFree')}</option>
-            <option value="gold">{t('settings.accountGold')}</option>
-            <option value="platinum">{t('settings.accountPlatinum')}</option>
-          </select>
-        </SettingsField>
-      </SettingsSection>
-
       <SettingsSection id="download-global" title={t('settings.downloadGlobal')}>
         <SettingsField
           label="exclude_tags"
@@ -697,34 +631,43 @@ export default function SettingsPage() {
           />
         </SettingsField>
 
-        <div className="grid grid-cols-3 gap-3 pt-2 border-t border-subtle">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-fg-secondary font-mono">parallel_workers</label>
+        <div className="flex flex-col gap-2 pt-2 border-t border-subtle">
+          <SettingsField label="parallel_workers">
             <SettingsInput
               type="number" min={1} max={16}
               value={draft.download.parallel_workers}
               onChange={(v) => update('download', 'parallel_workers', Math.max(1, Number(v) || 1))}
               className={`${textInputClass} max-w-24`}
             />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-fg-secondary font-mono">api_rate_per_sec</label>
+          </SettingsField>
+          <SettingsField label="api_rate_per_sec">
             <SettingsInput
               type="number" step="0.5" min={0.5} max={10}
               value={draft.download.api_rate_per_sec}
               onChange={(v) => update('download', 'api_rate_per_sec', Math.max(0.5, Number(v) || 0.5))}
               className={`${textInputClass} max-w-24`}
             />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-fg-secondary font-mono">cdn_rate_per_sec</label>
+          </SettingsField>
+          <SettingsField label="cdn_rate_per_sec">
             <SettingsInput
               type="number" step="1" min={1} max={20}
               value={draft.download.cdn_rate_per_sec}
               onChange={(v) => update('download', 'cdn_rate_per_sec', Math.max(1, Number(v) || 1))}
               className={`${textInputClass} max-w-24`}
             />
-          </div>
+          </SettingsField>
+        </div>
+
+        <div className="flex flex-col gap-2 pt-2 border-t border-subtle">
+          <SettingsField label="save_tags">
+            <Bool value={draft.download.save_tags} onChange={(v) => update('download', 'save_tags', v)} />
+          </SettingsField>
+          <SettingsField label="convert_to_png">
+            <Bool value={draft.download.convert_to_png} onChange={(v) => update('download', 'convert_to_png', v)} />
+          </SettingsField>
+          <SettingsField label="remove_alpha_channel">
+            <Bool value={draft.download.remove_alpha_channel} onChange={(v) => update('download', 'remove_alpha_channel', v)} />
+          </SettingsField>
         </div>
       </SettingsSection>
 
@@ -844,6 +787,10 @@ export default function SettingsPage() {
           onCandidatesChange={(next) => update('wd14', 'model_ids', next)}
           t={t}
         />
+        <SourceSelect
+          opt={catalog?.download_source_options?.wd14}
+          onChange={(s) => void setDownloadSource('wd14', s)}
+        />
         <SettingsField label="local_dir" desc={t('settings.blankAutoHfDownload')}>
           <SettingsInput
             type="text"
@@ -902,6 +849,10 @@ export default function SettingsPage() {
           modelId={draft.cltagger.model_id}
           onModelIdChange={(id) => update('cltagger', 'model_id', id)}
           t={t}
+        />
+        <SourceSelect
+          opt={catalog?.download_source_options?.cltagger}
+          onChange={(s) => void setDownloadSource('cltagger', s)}
         />
         <SettingsField label="local_dir" desc={t('settings.blankAutoHfDownload')}>
           <SettingsInput
@@ -968,64 +919,6 @@ export default function SettingsPage() {
       </>)}
 
       {tab === 'training' && (<>
-      <SettingsSection id="download-source" title={t('settings.modelSource')}>
-        <SettingsField
-          label={t('settings.downloadSource')}
-          helpTooltip={
-            <p>{t('settings.downloadSourceHelp')}</p>
-          }
-        >
-          <DownloadSourceSelect
-            value={draft.download_source}
-            onChange={(v) => updateTop('download_source', v)}
-          />
-        </SettingsField>
-
-        {/* 下方按当前下载源条件渲染对应凭证配置。HF/ModelScope token 都保留在
-         * secrets 里（即便切换源也不丢失），只是 UI 一次只露面一份。 */}
-        {draft.download_source === 'huggingface' ? (
-          <>
-            <SettingsField
-              label="token"
-              helpTooltip={
-                <p>{t('settings.hfTokenHelp')}</p>
-              }
-            >
-              <SensitiveInput
-                value={draft.huggingface.token}
-                serverValue={server?.huggingface.token ?? ''}
-                onChange={(v) => update('huggingface', 'token', v)}
-              />
-            </SettingsField>
-            <SettingsField
-              label="endpoint"
-              helpTooltip={<p>{t('settings.hfEndpointHelp')}</p>}
-            >
-              <HFEndpointSelect
-                value={draft.huggingface.endpoint}
-                onChange={(v) => update('huggingface', 'endpoint', v)}
-              />
-            </SettingsField>
-          </>
-        ) : (
-          <SettingsField
-            label="token"
-            helpTooltip={
-              <>
-                <p>{t('settings.modelscopeTokenHelp')}</p>
-                <p><Trans i18nKey="settings.modelscopeInstallHelp" components={{ code: <code /> }} /></p>
-              </>
-            }
-          >
-            <SensitiveInput
-              value={draft.modelscope.token}
-              serverValue={server?.modelscope.token ?? ''}
-              onChange={(v) => update('modelscope', 'token', v)}
-            />
-          </SettingsField>
-        )}
-      </SettingsSection>
-
       <SettingsSection id="queue" title={t('settings.queueSchedule')}>
         <SettingsField label={t('settings.allowGpuDuringTrain')}>
           <div className="flex items-center gap-3">
@@ -1047,6 +940,7 @@ export default function SettingsPage() {
         catalog={catalog}
         busy={downloadBusy}
         start={startDownload}
+        setSource={setDownloadSource}
         reloadCatalog={reloadCatalog}
         catalogError={catalogError}
         t={t}
@@ -1210,6 +1104,7 @@ export default function SettingsPage() {
           catalog={catalog}
           busy={downloadBusy}
           start={startDownload}
+          setSource={setDownloadSource}
           reloadCatalog={reloadCatalog}
           t={t}
         />
@@ -1224,6 +1119,99 @@ export default function SettingsPage() {
         <VaePrecisionSection draft={draft} update={update} />
         <TaeFluxSection draft={draft} update={update} />
         <SaveTestImagesSection draft={draft} update={update} />
+      </>)}
+
+      {tab === 'credentials' && (<>
+        <p className="text-xs text-fg-tertiary">{t('settings.credentialsIntro')}</p>
+        <SettingsSection id="cred-huggingface" title="HuggingFace">
+          <SettingsField label="token" helpTooltip={<p>{t('settings.hfTokenHelp')}</p>}>
+            <SensitiveInput
+              value={draft.huggingface.token}
+              serverValue={server?.huggingface.token ?? ''}
+              onChange={(v) => update('huggingface', 'token', v)}
+            />
+          </SettingsField>
+          <SettingsField label="endpoint" helpTooltip={<p>{t('settings.hfEndpointHelp')}</p>}>
+            <HFEndpointSelect
+              value={draft.huggingface.endpoint}
+              onChange={(v) => update('huggingface', 'endpoint', v)}
+            />
+          </SettingsField>
+        </SettingsSection>
+
+        <SettingsSection id="cred-modelscope" title="ModelScope">
+          <SettingsField
+            label="token"
+            helpTooltip={
+              <>
+                <p>{t('settings.modelscopeTokenHelp')}</p>
+                <p><Trans i18nKey="settings.modelscopeInstallHelp" components={{ code: <code /> }} /></p>
+              </>
+            }
+          >
+            <SensitiveInput
+              value={draft.modelscope.token}
+              serverValue={server?.modelscope.token ?? ''}
+              onChange={(v) => update('modelscope', 'token', v)}
+            />
+          </SettingsField>
+        </SettingsSection>
+
+        <SettingsSection id="cred-gelbooru" title="Gelbooru">
+          <SettingsField label="user_id">
+            <SettingsInput
+              type="text"
+              value={draft.gelbooru.user_id}
+              onChange={(v) => update('gelbooru', 'user_id', v)}
+              autoComplete="off"
+              data-lpignore="true"
+              data-1p-ignore
+              data-form-type="other"
+              className={textInputClass}
+            />
+          </SettingsField>
+          <SettingsField label="api_key">
+            <SensitiveInput
+              value={draft.gelbooru.api_key}
+              serverValue={server?.gelbooru.api_key ?? ''}
+              onChange={(v) => update('gelbooru', 'api_key', v)}
+            />
+          </SettingsField>
+        </SettingsSection>
+
+        <SettingsSection id="cred-danbooru" title="Danbooru">
+          <SettingsField label="username">
+            <SettingsInput
+              type="text"
+              value={draft.danbooru.username}
+              onChange={(v) => update('danbooru', 'username', v)}
+              placeholder={t('settings.danbooruUsernamePlaceholder')}
+              autoComplete="off"
+              data-lpignore="true"
+              data-1p-ignore
+              data-form-type="other"
+              className={textInputClass}
+            />
+          </SettingsField>
+          <SettingsField label="api_key">
+            <SensitiveInput
+              value={draft.danbooru.api_key}
+              serverValue={server?.danbooru.api_key ?? ''}
+              onChange={(v) => update('danbooru', 'api_key', v)}
+            />
+          </SettingsField>
+          <SettingsField label="account_type" desc={t('settings.danbooruAccountTypeHint')}>
+            <select
+              value={draft.danbooru.account_type}
+              onChange={(e) => update('danbooru', 'account_type', e.target.value as 'free' | 'gold' | 'platinum')}
+              className={textInputClass}
+            >
+              <option value="free">{t('settings.accountFree')}</option>
+              <option value="gold">{t('settings.accountGold')}</option>
+              <option value="platinum">{t('settings.accountPlatinum')}</option>
+            </select>
+          </SettingsField>
+        </SettingsSection>
       </>)}
 
       {tab === 'appearance' && (
@@ -1496,7 +1484,7 @@ function HFEndpointSelect({ value, onChange }: {
             onChange(v)
           }
         }}
-        className={`${textInputClass} max-w-md`}
+        className={textInputClass}
       >
         {HF_ENDPOINT_PRESETS.map(p => (
           <option key={p.value} value={p.value}>
@@ -1510,7 +1498,7 @@ function HFEndpointSelect({ value, onChange }: {
           value={value && !isPreset ? value : ''}
           placeholder="https://your-mirror.example.com"
           onChange={(e) => onChange(e.target.value.trim())}
-          className={`${textInputClass} max-w-md`}
+          className={textInputClass}
         />
       )}
     </div>
@@ -1519,19 +1507,31 @@ function HFEndpointSelect({ value, onChange }: {
 
 // ── DownloadSourceSelect ────────────────────────────────────────────────────
 
-function DownloadSourceSelect({ value, onChange }: {
-  value: string; onChange: (v: string) => void
+// 按类型的下载源选择器。available 多于 1 项才是真 dropdown；固定单源（如
+// CLTagger/T5/TAEFlux）渲染成禁用框，纯指示「这个到底从哪下」。
+function SourceSelect({ opt, onChange }: {
+  opt?: { current: string; available: string[] }
+  onChange: (source: string) => void
 }) {
   const { t } = useTranslation()
+  if (!opt) return null
+  const single = opt.available.length <= 1
+  const labelOf = (s: string) =>
+    s === 'modelscope' ? t('settings.downloadSourceModelscope') : t('settings.downloadSourceHuggingface')
   return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className={`${textInputClass} max-w-xs`}
+    <SettingsField
+      label={t('settings.downloadSource')}
+      desc={single ? t('settings.singleSourceFixed') : undefined}
     >
-      <option value="huggingface">{t('settings.downloadSourceHuggingface')}</option>
-      <option value="modelscope">{t('settings.downloadSourceModelscope')}</option>
-    </select>
+      <select
+        value={opt.current}
+        disabled={single}
+        onChange={(e) => onChange(e.target.value)}
+        className={`${textInputClass} disabled:opacity-60`}
+      >
+        {opt.available.map((s) => <option key={s} value={s}>{labelOf(s)}</option>)}
+      </select>
+    </SettingsField>
   )
 }
 
@@ -1773,10 +1773,11 @@ function fmtBytes(n: number): string {
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
 }
 
-function ModelsSection({ catalog, busy, start, reloadCatalog, catalogError, t }: {
+function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, catalogError, t }: {
   catalog: ModelsCatalog | null
   busy: Set<string>
   start: (model_id: string, variant?: string) => Promise<void>
+  setSource: (type: string, source: string) => Promise<void>
   reloadCatalog: () => Promise<void>
   catalogError: string | null
   t: TFunction
@@ -1856,6 +1857,10 @@ function ModelsSection({ catalog, busy, start, reloadCatalog, catalogError, t }:
 
   return (
     <SettingsSection id="models" title={t('settings.trainingModelsOneClick')}>
+      <SourceSelect
+        opt={catalog?.download_source_options?.training}
+        onChange={(s) => void setSource('training', s)}
+      />
       <SettingsField label={t('settings.modelsRoot')}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <input
@@ -1987,11 +1992,12 @@ function ModelsSection({ catalog, busy, start, reloadCatalog, catalogError, t }:
 }
 
 function UpscalerSection({
-  catalog, busy, start, reloadCatalog, t,
+  catalog, busy, start, setSource, reloadCatalog, t,
 }: {
   catalog: ModelsCatalog | null
   busy: Set<string>
   start: (model_id: string, variant?: string) => Promise<void>
+  setSource: (type: string, source: string) => Promise<void>
   reloadCatalog: () => Promise<void>
   t: TFunction
 }) {
@@ -2040,6 +2046,10 @@ function UpscalerSection({
 
   return (
     <SettingsSection id="upscalers" title={t('settings.upscalersPreprocess')}>
+      <SourceSelect
+        opt={catalog?.download_source_options?.upscaler}
+        onChange={(s) => void setSource('upscaler', s)}
+      />
       {!catalog ? (
         <p className="text-fg-tertiary text-xs">{t('common.loading')}</p>
       ) : (

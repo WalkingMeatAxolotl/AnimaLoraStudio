@@ -246,8 +246,8 @@ async def upload_local_files(
         result = await run_in_threadpool(
             uploads_svc.accept_many,
             pairs, pdir,
-            convert_to_png=sec.gelbooru.convert_to_png,
-            remove_alpha_channel=sec.gelbooru.remove_alpha_channel,
+            convert_to_png=sec.download.convert_to_png,
+            remove_alpha_channel=sec.download.remove_alpha_channel,
             on_log=_on_log,
         )
     except Exception:
@@ -294,8 +294,8 @@ def upload_local_file_from_path(pid: int, body: UploadFromPathBody) -> dict[str,
             # 本路由是 sync def，FastAPI 自动跑在 threadpool worker（不会卡 event loop）
             result = uploads_svc.accept_many(
                 [(src.name, fh)], pdir,
-                convert_to_png=sec.gelbooru.convert_to_png,
-                remove_alpha_channel=sec.gelbooru.remove_alpha_channel,
+                convert_to_png=sec.download.convert_to_png,
+                remove_alpha_channel=sec.download.remove_alpha_channel,
                 on_log=_on_log,
             )
     except Exception:

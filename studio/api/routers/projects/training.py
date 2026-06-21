@@ -668,6 +668,34 @@ def get_version_config_endpoint(pid: int, vid: int) -> dict[str, Any]:
     }
 
 
+@router.get("/api/projects/{pid}/versions/{vid}/bucket-distribution")
+def get_bucket_distribution_endpoint(pid: int, vid: int) -> dict[str, Any]:
+    """训练集 ARB 桶分布预览（用真 BucketManager 算，与实际训练逐桶一致）。
+
+    按 version config 的 resolution 列表 + aspect_ratio_limit + 文件夹 px/repeat
+    把每张图落桶，返回各分辨率档的桶 + 有效样本数。无 config 用 schema 默认值，
+    空数据集返回空 groups。
+    """
+    project, ver, train_dir = _version_train_dir_or_404(pid, vid)
+    resolutions: list[int] = [1024]
+    ar_limit = 2.0
+    prefer_json = True
+    if version_config.has_version_config(project, ver):
+        try:
+            cfg, _dropped, _defaulted = version_config.read_version_config_with_warnings(project, ver)
+            r = cfg.get("resolution")
+            if isinstance(r, list) and r:
+                resolutions = [int(x) for x in r]
+            elif isinstance(r, (int, float)):
+                resolutions = [int(r)]
+            ar_limit = float(cfg.get("aspect_ratio_limit", 2.0) or 2.0)
+            prefer_json = bool(cfg.get("prefer_json", True))
+        except version_config.VersionConfigError:
+            pass
+    groups = versions.compute_bucket_histogram(train_dir, resolutions, ar_limit, prefer_json)
+    return {"resolutions": resolutions, "aspect_ratio_limit": ar_limit, "groups": groups}
+
+
 @router.put("/api/projects/{pid}/versions/{vid}/config")
 def put_version_config_endpoint(
     pid: int, vid: int, body: dict[str, Any],

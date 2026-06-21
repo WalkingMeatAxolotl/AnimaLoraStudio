@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 180,
+  "count": 181,
   "routes": [
     {
       "path": "/",
@@ -607,6 +607,14 @@
         "POST"
       ],
       "name": "advance_phase_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/bucket-distribution",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_bucket_distribution_endpoint",
       "type": "APIRoute"
     },
     {

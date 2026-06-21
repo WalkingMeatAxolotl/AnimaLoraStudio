@@ -83,7 +83,7 @@ def download_anima_main(
     target = anima_main_target(root, variant)
     subpath = ANIMA_VARIANTS[variant]
     on_log(f"\n📥 Anima 主模型 [{variant}] (~4 GB)")
-    if _sources._get_download_source() == "modelscope":
+    if _sources._source_for("training") == "modelscope":
         return _sources.download_flat_ms(ANIMA_REPO, subpath, target, on_log=on_log)
     return _sources.download_flat(ANIMA_REPO, subpath, target, on_log=on_log)
 
@@ -91,7 +91,7 @@ def download_anima_main(
 def download_anima_vae(root: Path, *, on_log: Callable[[str], None] = print) -> bool:
     target = anima_vae_target(root)
     on_log("\n📥 Anima VAE (~250 MB)")
-    if _sources._get_download_source() == "modelscope":
+    if _sources._source_for("training") == "modelscope":
         return _sources.download_flat_ms(ANIMA_REPO, ANIMA_VAE_PATH, target, on_log=on_log)
     return _sources.download_flat(ANIMA_REPO, ANIMA_VAE_PATH, target, on_log=on_log)
 
@@ -108,7 +108,7 @@ def download_qwen3(root: Path, *, on_log: Callable[[str], None] = print) -> bool
     target_dir.mkdir(parents=True, exist_ok=True)
     ok = True
 
-    if _sources._get_download_source() == "modelscope":
+    if _sources._source_for("training") == "modelscope":
         on_log(f"\n📥 Anima 文本编码器（ModelScope 权重 + HF tokenizer）→ {target_dir}")
         # 魔搭 Anima repo 里只有权重；训练脚本仍要求完整 transformers 目录。
         ok &= _sources.download_flat_ms(
@@ -173,7 +173,7 @@ def download_upscaler(
 ) -> bool:
     """下载放大器权重到 `{models_root}/upscalers/{filename}`。
 
-    源选择：按 _sources._get_download_source() 取偏好；对应源缺失时透明回退到另一个源
+    源选择：按 _sources._source_for("upscaler") 取偏好；对应源缺失时透明回退到另一个源
     （e.g. R-ESRGAN_4x+Anime6B 没有 HF 镜像 → 用户即便选了 HF 也走 MS）。
     """
     if label not in UPSCALER_VARIANTS:
@@ -188,7 +188,7 @@ def download_upscaler(
 
     target = upscaler_target(label, root)
     size_mb = info.get("size_mb", 64)
-    prefer_ms = _sources._get_download_source() == "modelscope"
+    prefer_ms = _sources._source_for("upscaler") == "modelscope"
     on_log(f"\n📥 放大器 {label} (~{size_mb} MB) → {target}")
 
     if prefer_ms and ms_src is not None:
@@ -248,7 +248,7 @@ def download_wd14(
     target = wd14_target_dir(r, model_id)
     target.mkdir(parents=True, exist_ok=True)
     ok = True
-    if _sources._get_download_source() == "modelscope":
+    if _sources._source_for("wd14") == "modelscope":
         ms_repo = _sources._ms_wd14_repo_id(model_id)
         if ms_repo:
             on_log(f"\n📥 WD14 {model_id} → {target}（via ModelScope: {ms_repo}）")
