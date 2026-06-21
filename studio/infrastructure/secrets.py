@@ -381,6 +381,10 @@ class CLTaggerConfig(BaseModel):
     model_path: str = "cl_tagger_1_02/model.onnx"
     tag_mapping_path: str = "cl_tagger_1_02/tag_mapping.json"
     local_dir: Optional[str] = None
+    # 每个 variant（label → 路径）各记一份自定义 local_dir：v1/v2 来自不同 repo、
+    # 落地目录不同，切版本时从这里还原对应目录，避免共用一个 local_dir 串台。
+    # 留空 = 该版本走自动下载目录（不固定路径，跟随 models_root）。
+    variant_local_dirs: dict[str, str] = Field(default_factory=dict)
     threshold_general: float = 0.35
     threshold_character: float = 0.6
     # CLTagger 模型输出 7 个 category：General / Character 走阈值过滤，其余 5 个

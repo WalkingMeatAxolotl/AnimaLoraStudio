@@ -397,4 +397,47 @@ describe('SettingsPage (PP0)', () => {
       })
     })
   })
+
+  it('switching CLTagger variant stashes the leaving version local_dir per label', async () => {
+    // v1 起始带一个自定义 local_dir：切到 v2 时应把它暂存到
+    // variant_local_dirs['cl_tagger_1_02']，而 v2（无记忆）回到自动下载（null）。
+    const v1Custom = {
+      ...initialServerState,
+      cltagger: { ...initialServerState.cltagger, local_dir: '/custom/v1' },
+    }
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.method === 'PUT') {
+        const body = JSON.parse(String(init.body)) as Record<string, Record<string, unknown>>
+        const merged = JSON.parse(JSON.stringify(v1Custom))
+        for (const k of Object.keys(body)) Object.assign(merged[k], body[k])
+        return Promise.resolve(new Response(JSON.stringify(merged), { status: 200 }))
+      }
+      if (typeof url === 'string' && url.includes('/api/models/catalog')) {
+        return Promise.resolve(new Response(JSON.stringify(emptyModelsCatalog), { status: 200 }))
+      }
+      if (typeof url === 'string' && url.includes('/api/wd14/runtime')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          installed: 'onnxruntime', version: '1.18.0', providers: ['CPUExecutionProvider'],
+          cuda_available: false, cuda_detect: { available: false, driver_version: null, gpu_name: null },
+        }), { status: 200 }))
+      }
+      return Promise.resolve(new Response(JSON.stringify(v1Custom), { status: 200 }))
+    })
+
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: '打标' }))
+    const v2Row = screen.getByText('cl_tagger_v2_v2_01a').closest('li')
+    await user.click(within(v2Row as HTMLElement).getByRole('radio'))
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT')
+      expect(putCall).toBeDefined()
+      const body = JSON.parse(String(putCall![1].body))
+      expect(body.cltagger.variant_local_dirs).toMatchObject({ cl_tagger_1_02: '/custom/v1' })
+      expect(body.cltagger.local_dir).toBeNull()
+      expect(body.cltagger.model_id).toBe('cella110n/cl_tagger_v2')
+    })
+  })
 })

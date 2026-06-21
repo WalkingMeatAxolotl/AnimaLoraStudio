@@ -673,6 +673,7 @@ def test_download_cltagger_v2_downloads_external_data(
     assert calls == [
         "v2_01a/model.onnx",
         "v2_01a/model.onnx.data",
+        "v2_01a/model_metadata.json",
         "v2_01a/model_vocabulary.json",
     ]
 
@@ -708,6 +709,7 @@ def test_download_cltagger_v2_normalizes_legacy_root_paths(
     assert calls == [
         "v2_01a/model.onnx",
         "v2_01a/model.onnx.data",
+        "v2_01a/model_metadata.json",
         "v2_01a/model_vocabulary.json",
     ]
 
@@ -732,6 +734,7 @@ def test_build_catalog_lists_cltagger_v2_variant_with_external_data(
     assert [f["name"] for f in v2["files"]] == [
         "v2_01a/model.onnx",
         "v2_01a/model.onnx.data",
+        "v2_01a/model_metadata.json",
         "v2_01a/model_vocabulary.json",
     ]
 
@@ -778,6 +781,34 @@ def test_trigger_cltagger_v2_uses_dedicated_repo_and_target(
     assert captured["cfg"].model_path == "v2_01a/model.onnx"
     assert captured["cfg"].tag_mapping_path == "v2_01a/model_vocabulary.json"
     assert captured["target_root"] == tmp_path / "cltagger" / "cella110n_cl_tagger_v2"
+
+
+def test_failure_summary_surfaces_gated_hint() -> None:
+    """下载失败 message 必须给出可操作原因（token / 授权），而非通用串。"""
+    from studio.services.models import downloader as dl
+
+    log = [
+        "📥 CLTagger → /models/cltagger",
+        "   ✗ model.onnx: 401 Client Error: Cannot access gated repo",
+        "   ↳ 该仓库可能是 gated/private：请到 设置→密钥 填 HuggingFace token 后重试。",
+    ]
+    msg = dl._failure_summary(log)
+    assert "↳" in msg
+    assert "token" in msg.lower()
+    assert "✗" in msg  # 同时带上原始错误
+
+
+def test_failure_summary_falls_back_to_last_error() -> None:
+    from studio.services.models import downloader as dl
+
+    log = ["📥 ...", "   ✗ model.onnx: connection reset"]
+    assert dl._failure_summary(log) == "✗ model.onnx: connection reset"
+
+
+def test_failure_summary_generic_when_no_error_line() -> None:
+    from studio.services.models import downloader as dl
+
+    assert dl._failure_summary([]) == "下载失败，详见下载日志"
 
 
 def test_download_flat_passes_configured_hf_token(

@@ -948,6 +948,7 @@
     "clTaggerVersionTitle": "{{name}} (versions)",
     "repoHelp": "{{desc}}. Repo: <code>{{repo}}</code>",
     "selectClTaggerVersion": "Use as current CLTagger version",
+    "clTaggerFilesAt": "files",
     "customRepoAdvanced": "Custom repo (advanced)",
     "trainingModelsOneClick": "Training models (one-click download)",
     "modelsRoot": "Model root (models_root)",

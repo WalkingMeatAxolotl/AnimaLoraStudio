@@ -254,6 +254,7 @@ const EMPTY: Secrets = {
     model_path: 'cl_tagger_1_02/model.onnx',
     tag_mapping_path: 'cl_tagger_1_02/tag_mapping.json',
     local_dir: null,
+    variant_local_dirs: {},
     threshold_general: 0.35,
     threshold_character: 0.6,
     add_copyright_tag: true,
@@ -388,6 +389,63 @@ export default function SettingsPage() {
     }))
   }
 
+
+  // CLTagger variant ↔ local_dir 记忆。v1/v2 是不同 repo、落地目录不同，单个
+  // local_dir 切版本会串台；variant_local_dirs 给每个 label 各记一份，切换时还原。
+  const currentCLTaggerVariant = useMemo(() => {
+    const variants = catalog?.cltagger?.variants ?? []
+    return variants.find((v) =>
+      v.model_id === draft.cltagger.model_id &&
+      v.model_path === draft.cltagger.model_path &&
+      v.tag_mapping_path === draft.cltagger.tag_mapping_path
+    ) ?? null
+  }, [
+    catalog?.cltagger?.variants,
+    draft.cltagger.model_id,
+    draft.cltagger.model_path,
+    draft.cltagger.tag_mapping_path,
+  ])
+
+  const updateCLTaggerLocalDir = (value: string) => {
+    const label = currentCLTaggerVariant?.label
+    setDraft((prev) => {
+      const nextDirs = { ...(prev.cltagger.variant_local_dirs ?? {}) }
+      if (label) {
+        if (value) nextDirs[label] = value
+        else delete nextDirs[label]
+      }
+      return {
+        ...prev,
+        cltagger: { ...prev.cltagger, local_dir: value || null, variant_local_dirs: nextDirs },
+      }
+    })
+  }
+
+  const selectCLTaggerVariant = (variant: CLTaggerVariantInfo) => {
+    const currentLabel = currentCLTaggerVariant?.label
+    setDraft((prev) => {
+      const nextDirs = { ...(prev.cltagger.variant_local_dirs ?? {}) }
+      // 离开当前版本前，把它现在的自定义 local_dir 暂存到该 label 名下。
+      if (currentLabel) {
+        if (prev.cltagger.local_dir) nextDirs[currentLabel] = prev.cltagger.local_dir
+        else delete nextDirs[currentLabel]
+      }
+      // 进入目标版本：还原它之前记住的目录；没记过则回到自动下载（null），
+      // 刻意不固定到 target_path —— 留 null 才能跟随 models_root 变化。
+      const restored = nextDirs[variant.label] ?? null
+      return {
+        ...prev,
+        cltagger: {
+          ...prev.cltagger,
+          model_id: variant.model_id,
+          model_path: variant.model_path,
+          tag_mapping_path: variant.tag_mapping_path,
+          local_dir: restored,
+          variant_local_dirs: nextDirs,
+        },
+      }
+    })
+  }
 
   const save = async () => {
     if (!server) return
@@ -841,11 +899,7 @@ export default function SettingsPage() {
           start={startDownload}
           currentModelPath={draft.cltagger.model_path}
           currentTagMappingPath={draft.cltagger.tag_mapping_path}
-          onSelectVariant={(v: CLTaggerVariantInfo) => {
-            update('cltagger', 'model_id', v.model_id)
-            update('cltagger', 'model_path', v.model_path)
-            update('cltagger', 'tag_mapping_path', v.tag_mapping_path)
-          }}
+          onSelectVariant={selectCLTaggerVariant}
           modelId={draft.cltagger.model_id}
           onModelIdChange={(id) => update('cltagger', 'model_id', id)}
           t={t}
@@ -858,7 +912,7 @@ export default function SettingsPage() {
           <SettingsInput
             type="text"
             value={draft.cltagger.local_dir ?? ''}
-            onChange={(v) => update('cltagger', 'local_dir', v || null)}
+            onChange={(v) => updateCLTaggerLocalDir(v)}
             className={textInputClass}
           />
         </SettingsField>
@@ -1707,7 +1761,14 @@ function CLTaggerModelCard({
                 style={{ accentColor: 'var(--accent)' }}
                 title={t('settings.selectClTaggerVersion')}
               />
-              <code className="font-mono text-fg-primary flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{v.label}</code>
+              <div className="flex flex-col flex-1 min-w-0">
+                <code className="font-mono text-fg-primary overflow-hidden text-ellipsis whitespace-nowrap">{v.label}</code>
+                {v.version_dir && (
+                  <span className="text-[10px] text-fg-tertiary overflow-hidden text-ellipsis whitespace-nowrap" title={v.version_dir}>
+                    {t('settings.clTaggerFilesAt')}: <code>{v.version_dir}</code>
+                  </span>
+                )}
+              </div>
               <ModelStatusBadge
                 exists={v.exists} size={v.size} status={dl?.status}
                 fileCount={v.files.length}
@@ -1778,7 +1839,7 @@ function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, catalog
   busy: Set<string>
   start: (model_id: string, variant?: string) => Promise<void>
   setSource: (type: string, source: string) => Promise<void>
-  reloadCatalog: () => Promise<void>
+  reloadCatalog: () => Promise<ModelsCatalog | null>
   catalogError: string | null
   t: TFunction
 }) {
@@ -1998,7 +2059,7 @@ function UpscalerSection({
   busy: Set<string>
   start: (model_id: string, variant?: string) => Promise<void>
   setSource: (type: string, source: string) => Promise<void>
-  reloadCatalog: () => Promise<void>
+  reloadCatalog: () => Promise<ModelsCatalog | null>
   t: TFunction
 }) {
   const { toast } = useToast()

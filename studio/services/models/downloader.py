@@ -299,6 +299,21 @@ def get_status_snapshot() -> dict[str, dict[str, Any]]:
         }
 
 
+def _failure_summary(log: list[str]) -> str:
+    """从下载日志里提取一句可操作的失败原因（给前端 toast / message 用）。
+
+    download_flat 把错误写成 `   ✗ ...`；gated / 授权类失败再追加 `   ↳ ...提示`
+    （含 token / 申请授权指引）。优先返回带提示的那条，否则退回最后一条 ✗ 错误，
+    都没有再退到通用串。避免前端只看到 badge 红了却不知为何（原因只在终端 / 折叠
+    日志里）。
+    """
+    err = next((ln.strip() for ln in reversed(log) if ln.lstrip().startswith("✗")), "")
+    hint = next((ln.strip() for ln in reversed(log) if "↳" in ln), "")
+    if hint:
+        return f"{err} {hint}".strip() if err else hint
+    return err or "下载失败，详见下载日志"
+
+
 def start_download_async(
     key: str, fn: Callable[[Callable[[str], None]], bool]
 ) -> DownloadStatus:
@@ -338,7 +353,7 @@ def start_download_async(
                 ds.status = "done" if ok else "failed"
                 ds.finished_at = time.time()
                 if not ok:
-                    ds.message = "下载失败，看 log_tail"
+                    ds.message = _failure_summary(ds.log)
         except Exception as exc:
             with _LOCK:
                 ds.status = "failed"
@@ -409,9 +424,9 @@ def trigger(model_id: str, variant: Optional[str] = None) -> str:
             cfg = secrets.CLTaggerConfig(
                 **{
                     **cfg.model_dump(),
-                    "model_id": preset[0],
-                    "model_path": preset[1],
-                    "tag_mapping_path": preset[2],
+                    "model_id": preset["model_id"],
+                    "model_path": preset["model_path"],
+                    "tag_mapping_path": preset["tag_mapping_path"],
                 }
             )
             key = f"cltagger:{variant}"

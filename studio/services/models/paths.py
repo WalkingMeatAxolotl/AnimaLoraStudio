@@ -65,19 +65,50 @@ CLTAGGER_V2_REPO = "cella110n/cl_tagger_v2"
 
 # CLTagger 预设。v1 在 cella110n/cl_tagger 的版本子目录下；v2 是独立 gated
 # repo，但文件仍在版本子目录下。新版本出现时往这里加一行，UI 自动作为 radio 暴露。
-# label → (model_id, model_path, tag_mapping_path)
-CLTAGGER_VERSIONS: dict[str, tuple[str, str, str]] = {
-    "cl_tagger_1_02": (
-        CLTAGGER_REPO,
-        "cl_tagger_1_02/model.onnx",
-        "cl_tagger_1_02/tag_mapping.json",
-    ),
-    "cl_tagger_v2_v2_01a": (
-        CLTAGGER_V2_REPO,
-        "v2_01a/model.onnx",
-        "v2_01a/model_vocabulary.json",
-    ),
+#
+# 每个 variant 显式声明 extra_files（除 model_path / tag_mapping_path 之外还需
+# 一并下载 / 校验的文件），不再靠"v2 一定有同名 .data"的启发式：
+#   - v2 的 onnx 权重在外部 sidecar model.onnx.data（2GB+），缺它 onnxruntime 加载
+#     external data 时才黑盒炸 → 必须纳入；
+#   - model_metadata.json 一并带下，作为"下载是否完整"的就绪信号。
+# 将来若出现单文件（无 .data）的 v2 变体，把它的 extra_files 留空即可，不会误要 .data。
+CLTAGGER_VERSIONS: dict[str, dict[str, Any]] = {
+    "cl_tagger_1_02": {
+        "model_id": CLTAGGER_REPO,
+        "model_path": "cl_tagger_1_02/model.onnx",
+        "tag_mapping_path": "cl_tagger_1_02/tag_mapping.json",
+        "extra_files": [],
+        "description": "CLTagger 1.02 ONNX",
+    },
+    "cl_tagger_v2_v2_01a": {
+        "model_id": CLTAGGER_V2_REPO,
+        "model_path": "v2_01a/model.onnx",
+        "tag_mapping_path": "v2_01a/model_vocabulary.json",
+        "extra_files": [
+            "v2_01a/model.onnx.data",
+            "v2_01a/model_metadata.json",
+        ],
+        "description": "CL Tagger v2 provisional SigLIP2 ONNX",
+    },
 }
+
+
+def cltagger_preset_for_paths(
+    model_path: str, tag_mapping_path: str
+) -> Optional[dict[str, Any]]:
+    """按 (model_path, tag_mapping_path) 反查匹配的预设；自定义路径返回 None。
+
+    v1/v2 的 model_path + tag_mapping_path 两两唯一，足以定位预设（无需 model_id）。
+    """
+    norm_model = model_path.replace("\\", "/")
+    norm_mapping = tag_mapping_path.replace("\\", "/")
+    for preset in CLTAGGER_VERSIONS.values():
+        if (
+            preset["model_path"] == norm_model
+            and preset["tag_mapping_path"] == norm_mapping
+        ):
+            return preset
+    return None
 
 
 def cltagger_canonical_file_paths(
@@ -95,13 +126,13 @@ def cltagger_canonical_file_paths(
     normalized_mapping = tag_mapping_path.replace("\\", "/")
     if model_id != CLTAGGER_V2_REPO:
         return model_path, tag_mapping_path
-    for mid, mp, tmp in CLTAGGER_VERSIONS.values():
+    for preset in CLTAGGER_VERSIONS.values():
         if (
-            mid == model_id
-            and Path(mp).name == normalized_model
-            and Path(tmp).name == normalized_mapping
+            preset["model_id"] == model_id
+            and Path(preset["model_path"]).name == normalized_model
+            and Path(preset["tag_mapping_path"]).name == normalized_mapping
         ):
-            return mp, tmp
+            return preset["model_path"], preset["tag_mapping_path"]
     return model_path, tag_mapping_path
 
 
@@ -115,11 +146,19 @@ def is_cltagger_v2_paths(model_path: str, tag_mapping_path: str) -> bool:
 
 
 def cltagger_required_files(model_path: str, tag_mapping_path: str) -> tuple[str, ...]:
-    files = [model_path]
-    if is_cltagger_v2_paths(model_path, tag_mapping_path):
-        files.append(f"{model_path}.data")
-    files.append(tag_mapping_path)
-    return tuple(files)
+    """一个 variant 完整可用所需的全部文件（下载 + 就绪校验共用）。
+
+    优先用预设里显式声明的 extra_files；非预设（用户自定义路径）回退到
+    "v2 onnx 必带同名 .data 权重"的启发式，保证手填路径也能正确校验。
+    """
+    preset = cltagger_preset_for_paths(model_path, tag_mapping_path)
+    if preset is not None:
+        extra = list(preset.get("extra_files", []))
+    elif is_cltagger_v2_paths(model_path, tag_mapping_path):
+        extra = [f"{model_path}.data"]
+    else:
+        extra = []
+    return (model_path, *extra, tag_mapping_path)
 
 # WD14 模型常驻文件名（HF SmilingWolf/* 仓库顶层都是这两个）。
 WD14_FILES = ("model.onnx", "selected_tags.csv")

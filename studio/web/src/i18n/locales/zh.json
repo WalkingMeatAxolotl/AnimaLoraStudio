@@ -948,6 +948,7 @@
     "clTaggerVersionTitle": "{{name}}（版本）",
     "repoHelp": "{{desc}}。仓库：<code>{{repo}}</code>",
     "selectClTaggerVersion": "选作 CLTagger 当前版本",
+    "clTaggerFilesAt": "文件",
     "customRepoAdvanced": "自定义 repo（高级）",
     "trainingModelsOneClick": "训练模型（一键下载）",
     "modelsRoot": "模型根目录 (models_root)",

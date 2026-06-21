@@ -66,6 +66,7 @@ def test_v2_legacy_root_paths_resolve_versioned_files(isolated_secrets: Path) ->
     version_dir.mkdir(parents=True, exist_ok=True)
     (version_dir / "model.onnx").write_bytes(b"fake-onnx")
     (version_dir / "model.onnx.data").write_bytes(b"fake-weights")
+    (version_dir / "model_metadata.json").write_text("{}", encoding="utf-8")
     (version_dir / "model_vocabulary.json").write_text(
         json.dumps({"idx_to_tag": {"0": "1girl"}}),
         encoding="utf-8",

@@ -99,8 +99,12 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
     # CLTagger 版本预设（每个 variant 可以来自不同 HF repo）。
     cl_root = cltagger_target_root(r, cl_cfg.model_id)
     cl_variants = []
-    for label, (mid, mp, tmp) in CLTAGGER_VERSIONS.items():
+    for label, preset in CLTAGGER_VERSIONS.items():
+        mid = preset["model_id"]
+        mp = preset["model_path"]
+        tmp = preset["tag_mapping_path"]
         variant_root = cltagger_target_root(r, mid)
+        version_dir = variant_root / Path(mp).parent
         files = [
             {"name": f, **_file_status(variant_root / f)}
             for f in cltagger_required_files(mp, tmp)
@@ -112,7 +116,10 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
             "model_id": mid,
             "model_path": mp,
             "tag_mapping_path": tmp,
+            "description": preset.get("description", ""),
+            # target_path = repo 本地根；version_dir = 该版本子目录（UI 提示文件落点）。
             "target_path": str(variant_root),
+            "version_dir": str(version_dir),
             "is_current": (
                 cl_cfg.model_id == mid
                 and cl_cfg.model_path == mp
