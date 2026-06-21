@@ -320,6 +320,60 @@ def test_run_checkpoint_eval_for_task_runs_inline_without_queue_jobs(isolated) -
     assert not (vdir / "eval" / "samples" / run["run_id"] / "metrics.json").exists()
 
 
+def test_training_inline_generator_updates_task_scoped_run(isolated, monkeypatch) -> None:
+    """Regression: inline generator must not write item state to version eval root."""
+    from types import SimpleNamespace
+    from training import eval_auto as runtime_eval_auto
+
+    _project, _version, vdir = _project_version(isolated)
+    eval_root = infra_paths.task_eval_dir(67)
+    run = eval_samples.create_run(
+        _project,
+        _version,
+        vdir,
+        checkpoint_path="model_epoch2.safetensors",
+        max_items=1,
+        eval_root=eval_root,
+        now=2000.0,
+    )
+
+    class FakeImage:
+        def save(self, path: Path) -> None:
+            path.write_bytes(b"PNG")
+
+    monkeypatch.setattr(runtime_eval_auto, "sample_image", lambda *a, **k: FakeImage())
+
+    ctx = SimpleNamespace(
+        args=SimpleNamespace(
+            sample_width=64,
+            sample_height=64,
+            resolution=64,
+            sample_infer_steps=1,
+            sample_cfg_scale=1.0,
+            sample_negative_prompt="",
+            sample_sampler_name="er_sde",
+            sample_scheduler="simple",
+        ),
+        optimizer=None,
+        model=SimpleNamespace(eval=lambda: None, train=lambda: None),
+        vae=object(),
+        qwen_model=object(),
+        qwen_tok=object(),
+        t5_tok=object(),
+        device="cpu",
+        dtype=None,
+    )
+
+    generator = runtime_eval_auto._make_training_sample_generator(ctx)
+    generator(run, vdir, lambda _line: None)
+
+    saved = eval_samples.load_run(vdir, run["run_id"], eval_root)
+    assert saved is not None
+    assert saved["summary"]["done"] == 1
+    assert saved["items"][0]["status"] == "done"
+    assert not (vdir / "eval" / "samples" / run["run_id"] / "run.json").exists()
+
+
 def test_supervisor_eval_checkpoint_event_queues_sample_job(isolated) -> None:
     import json
 

@@ -73,7 +73,13 @@ def run_inline_checkpoint_eval(
     run = result.get("run") if isinstance(result, dict) else None
     run_id = run.get("run_id") if isinstance(run, dict) else None
     if run_id:
-        ctx.emit(f"[eval-auto] 完成 checkpoint 评估: {run_id}")
+        status = str(run.get("status") or "unknown") if isinstance(run, dict) else "unknown"
+        if status == "done":
+            ctx.emit(f"[eval-auto] 完成 checkpoint 评估: {run_id}")
+        else:
+            error = str(run.get("error") or "") if isinstance(run, dict) else ""
+            suffix = f" error={error}" if error else ""
+            ctx.emit(f"[eval-auto] checkpoint 评估未完成: {run_id} status={status}{suffix}")
     return True
 
 
@@ -123,15 +129,21 @@ def _make_training_sample_generator(ctx: TrainingContext):
         )
 
         items = run.get("items") if isinstance(run.get("items"), list) else []
+        eval_root = (
+            Path(str(run["eval_root"]))
+            if run.get("storage_scope") == "task" and run.get("eval_root")
+            else None
+        )
+        run_id = str(run["run_id"])
         with optimizer_eval_mode(ctx.optimizer):
             ctx.model.eval()
             try:
                 for idx, item in enumerate(items):
-                    current = eval_samples.load_run(version_dir, str(run["run_id"])) or run
-                    eval_samples.mark_item_running(version_dir, current, idx)
+                    current = eval_samples.load_run(version_dir, run_id, eval_root) or run
+                    eval_samples.mark_item_running(version_dir, current, idx, eval_root)
                     seed = int(item["seed"])
                     output = eval_samples.sample_image_path(
-                        version_dir, str(run["run_id"]), str(item["filename"])
+                        version_dir, run_id, str(item["filename"]), eval_root
                     )
                     output.parent.mkdir(parents=True, exist_ok=True)
                     progress(
@@ -159,11 +171,19 @@ def _make_training_sample_generator(ctx: TrainingContext):
                             seed=seed,
                         )
                         img.save(output)
-                        current = eval_samples.load_run(version_dir, str(run["run_id"])) or current
-                        eval_samples.mark_item_done(version_dir, current, idx)
+                        current = (
+                            eval_samples.load_run(version_dir, run_id, eval_root)
+                            or current
+                        )
+                        eval_samples.mark_item_done(version_dir, current, idx, eval_root)
                     except Exception as exc:  # noqa: BLE001
-                        current = eval_samples.load_run(version_dir, str(run["run_id"])) or current
-                        eval_samples.mark_item_failed(version_dir, current, idx, str(exc))
+                        current = (
+                            eval_samples.load_run(version_dir, run_id, eval_root)
+                            or current
+                        )
+                        eval_samples.mark_item_failed(
+                            version_dir, current, idx, str(exc), eval_root
+                        )
             finally:
                 ctx.model.train()
 
