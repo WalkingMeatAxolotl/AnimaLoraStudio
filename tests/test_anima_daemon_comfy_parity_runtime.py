@@ -20,7 +20,7 @@ def test_daemon_model_cache_preserves_user_backend_and_sets_comfy_style_dtype(mo
     mod = importlib.import_module("anima_daemon")
     cache = mod.ModelCache()
 
-    monkeypatch.setattr(mod._T, "find_diffusion_pipe_root", lambda: _REPO / "models")
+    monkeypatch.setattr(mod._T, "find_diffusion_pipe_root", lambda: _REPO / "modeling")
     monkeypatch.setattr(
         mod._T,
         "resolve_path_best_effort",
@@ -70,7 +70,7 @@ def test_daemon_exact_ksampler_parity_fails_when_xformers_unavailable(monkeypatc
     cache = mod.ModelCache()
     reached: list[str] = []
 
-    monkeypatch.setattr(mod._T, "find_diffusion_pipe_root", lambda: _REPO / "models")
+    monkeypatch.setattr(mod._T, "find_diffusion_pipe_root", lambda: _REPO / "modeling")
     monkeypatch.setattr(mod._T, "load_anima_model", lambda *args, **kwargs: object())
     monkeypatch.setattr(mod._T, "enable_xformers", lambda _model: False)
     monkeypatch.setattr(mod._T, "load_vae", lambda *args, **kwargs: reached.append("vae"))

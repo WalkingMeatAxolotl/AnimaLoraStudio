@@ -32,10 +32,7 @@
 - **来源**：[`comfyanonymous/ComfyUI`](https://github.com/comfyanonymous/ComfyUI)（现由 Comfy-Org 维护）
 - **许可**：GPL-3.0
 - **涉及文件**：
-  - `models/anima_modeling.py` — Anima DiT / LLMAdapter 结构与 ComfyUI
-    `comfy/ldm/anima/model.py` 高度相关
-  - `models/anima_modeling_core.py` — 自动生成的合并模型文件；底层 Cosmos 代码保留
-    Apache-2.0 文件头，Anima / LLMAdapter 部分仍与 ComfyUI
+  - `modeling/anima_modeling.py` — Anima DiT / LLMAdapter 结构与 ComfyUI
     `comfy/ldm/anima/model.py` 高度相关
   - `runtime/training/comfy_qwen.py` — Comfy-style Anima Qwen3 0.6B text encoder
     路径，对应 ComfyUI `comfy/text_encoders/anima.py` 的 Qwen3 encoder 行为
@@ -62,8 +59,7 @@
 - **来源**：NVIDIA 相关实现（文件内含 SPDX 头）
 - **许可**：Apache-2.0（见文件头 `SPDX-License-Identifier: Apache-2.0`）
 - **涉及文件**：
-  - `models/cosmos_predict2_modeling.py`
-  - `models/anima_modeling_core.py`
+  - `modeling/cosmos_predict2_modeling.py`
 
 本仓库额外提供 `LICENSE-APACHE` 以便分发 Apache-2.0 许可文本。
 
@@ -72,7 +68,7 @@
 - **来源**：[`Wan-Video/Wan2.1`](https://github.com/Wan-Video/Wan2.1) 的 VAE 实现（与
   `wan/modules/vae.py` 对应）
 - **涉及文件**：
-  - `models/wan/vae2_1.py`
+  - `modeling/wan/vae2_1.py`
 
 该文件头目前仅包含版权声明（未显式 SPDX）。上游仓库通常宣称 Apache-2.0，但建议你在开源前
 **再次核对上游仓库的 LICENSE/NOTICE**，确保分发合规。

@@ -79,8 +79,10 @@ def enable_xformers(model):
         if getattr(cls, "__module__", None)
     }
     module_names.update({
-        "models.cosmos_predict2_modeling",
+        "modeling.cosmos_predict2_modeling",
+        "models.cosmos_predict2_modeling",  # 兼容外部 diffusion-pipe checkout
         "cosmos_predict2_modeling",
+        "modeling.anima_modeling",
         "models.anima_modeling",
         "anima_modeling",
     })
@@ -124,10 +126,11 @@ def find_diffusion_pipe_root():
     """查找 diffusion-pipe 模型代码路径。
 
     候选顺序（首个命中即返回）：
-      1. 脚本同目录 `diffusion_models/` / `models/`（CLI 直接 cd 进 scripts/ 跑）
-      2. 仓库根 `models/` / `diffusion_models/`（训练脚本在 runtime/ 下的 repo
-         layout：repo_root/runtime/anima_train.py → ../models/anima_modeling.py）
-      3. 环境变量 `DIFFUSION_PIPE_ROOT`（覆盖路径用）
+      1. 仓库根 `modeling/`（本仓库自带的模型架构代码，现位置）
+      2. 脚本同目录 `diffusion_models/` / `models/`（CLI 直接 cd 进 scripts/ 跑）
+      3. 仓库根 `models/` / `diffusion_models/`（兼容旧布局 / 外部 diffusion-pipe
+         checkout 把代码放 models/ 的情况）
+      4. 环境变量 `DIFFUSION_PIPE_ROOT`（覆盖路径用）
     """
     # 注：本模块从 runtime/training/model_loading.py 调用时，__file__ 在 runtime/training/
     # 下，往上两级才是 repo_root。原 anima_train.py 在 runtime/，只往上一级。
@@ -136,9 +139,10 @@ def find_diffusion_pipe_root():
     runtime_dir = module_dir.parent                 # runtime
     repo_root = runtime_dir.parent                  # repo root
     candidates = [
+        repo_root / "modeling",          # 本仓库自带的模型架构代码（现位置）
         runtime_dir / "diffusion_models",
         runtime_dir / "models",
-        repo_root / "models",
+        repo_root / "models",            # 兼容旧布局 / 外部 diffusion-pipe checkout
         repo_root / "diffusion_models",
         Path(os.environ.get("DIFFUSION_PIPE_ROOT", "")) if os.environ.get("DIFFUSION_PIPE_ROOT") else None,
     ]

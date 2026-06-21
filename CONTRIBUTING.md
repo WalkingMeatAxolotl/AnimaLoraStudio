@@ -395,7 +395,8 @@ git push origin dev
 ## 仓库目录约定
 
 ```
-models/      模型实现 + 权重落点
+modeling/    模型架构定义（vendored diffusion-pipe 子集 + Anima 包装；按路径动态加载）
+models/      下载的模型权重 / tokenizer 数据落点（gitignored、按需创建，见 .gitignore）
 utils/       lycoris_adapter / optimizer / 训练共享工具
 runtime/     Anima 运行时核心（独立进程；Studio subprocess 拉起 / 也可单独 CLI）
 studio/      Web 后端 + 前端
@@ -404,7 +405,8 @@ docs/        三块：user-guide / architecture / adr
 tests/       后端 pytest + 前端 vitest（前端测试在 studio/web/src/**/*.test.ts*）
 ```
 
-依赖方向单向：`models → utils → runtime → studio → tools`。不要反向 import。
+依赖方向单向：`modeling → utils → runtime → studio → tools`。不要反向 import。
+（`models/` 是纯数据目录，不含代码、不在依赖链里——模型架构代码在 `modeling/`。）
 
 ---
 
