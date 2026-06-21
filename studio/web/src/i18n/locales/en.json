@@ -799,7 +799,6 @@
     "credHuggingface": "HuggingFace",
     "credModelscope": "ModelScope",
     "credentialsIntro": "All service tokens and API keys in one place. Endpoints / sources stay in their own pages.",
-    "credMovedHint": "Tokens / API keys are now in the Credentials tab. <go>Go there</go>",
     "proxy": {
       "sectionTitle": "Booru Proxy",
       "enableLabel": "Enable Proxy",

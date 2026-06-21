@@ -82,13 +82,13 @@ const SECTION_TO_TAB: Record<string, Tab> = {
 }
 
 const TAB_LIST: { id: Tab; labelKey: string }[] = [
+  { id: 'credentials', labelKey: 'settings.tabCredentials' },
   { id: 'dataset', labelKey: 'settings.tabDataset' },
   { id: 'preprocess', labelKey: 'settings.tabPreprocess' },
   { id: 'tagging', labelKey: 'settings.tabTagging' },
   { id: 'training', labelKey: 'settings.tabTraining' },
   { id: 'monitor', labelKey: 'settings.tabMonitor' },
   { id: 'testing', labelKey: 'settings.tabGenerate' },
-  { id: 'credentials', labelKey: 'settings.tabCredentials' },
   { id: 'appearance', labelKey: 'settings.tabAppearance' },
   { id: 'system', labelKey: 'settings.tabSystem' },
 ]
@@ -619,9 +619,7 @@ export default function SettingsPage() {
       )}
 
       {tab === 'dataset' && (<>
-      <SettingsSection id="gelbooru" title="Gelbooru">
-        <CredentialMovedHint onGo={() => setTab('credentials')} t={t} />
-        <SettingsField label="save_tags">
+      <SettingsSection id="gelbooru" title="Gelbooru">        <SettingsField label="save_tags">
           <Bool value={draft.gelbooru.save_tags} onChange={(v) => update('gelbooru', 'save_tags', v)} />
         </SettingsField>
         <SettingsField label="convert_to_png">
@@ -632,9 +630,7 @@ export default function SettingsPage() {
         </SettingsField>
       </SettingsSection>
 
-      <SettingsSection id="danbooru" title="Danbooru">
-        <CredentialMovedHint onGo={() => setTab('credentials')} t={t} />
-        <SettingsField label="account_type">
+      <SettingsSection id="danbooru" title="Danbooru">        <SettingsField label="account_type">
           <select
             value={draft.danbooru.account_type}
             onChange={(e) => update('danbooru', 'account_type', e.target.value as 'free' | 'gold' | 'platinum')}
@@ -806,12 +802,15 @@ export default function SettingsPage() {
           catalog={catalog}
           busy={downloadBusy}
           start={startDownload}
-          setSource={setDownloadSource}
           currentModelId={draft.wd14.model_id}
           onSelectModelId={(id) => update('wd14', 'model_id', id)}
           candidates={draft.wd14.model_ids}
           onCandidatesChange={(next) => update('wd14', 'model_ids', next)}
           t={t}
+        />
+        <SourceSelect
+          opt={catalog?.download_source_options?.wd14}
+          onChange={(s) => void setDownloadSource('wd14', s)}
         />
         <SettingsField label="local_dir" desc={t('settings.blankAutoHfDownload')}>
           <SettingsInput
@@ -869,8 +868,11 @@ export default function SettingsPage() {
           }}
           modelId={draft.cltagger.model_id}
           onModelIdChange={(id) => update('cltagger', 'model_id', id)}
-          sourceOpt={catalog?.download_source_options?.cltagger}
           t={t}
+        />
+        <SourceSelect
+          opt={catalog?.download_source_options?.cltagger}
+          onChange={(s) => void setDownloadSource('cltagger', s)}
         />
         <SettingsField label="local_dir" desc={t('settings.blankAutoHfDownload')}>
           <SettingsInput
@@ -949,9 +951,7 @@ export default function SettingsPage() {
             value={draft.huggingface.endpoint}
             onChange={(v) => update('huggingface', 'endpoint', v)}
           />
-        </SettingsField>
-        <CredentialMovedHint onGo={() => setTab('credentials')} t={t} />
-      </SettingsSection>
+        </SettingsField>      </SettingsSection>
 
       <SettingsSection id="queue" title={t('settings.queueSchedule')}>
         <SettingsField label={t('settings.allowGpuDuringTrain')}>
@@ -1250,27 +1250,6 @@ export default function SettingsPage() {
 
 // ── Section / Field ────────────────────────────────────────────────────────
 
-// 原 section 失去凭证字段后留下的指引：一句话 + 跳到「密钥」tab 的链接。
-function CredentialMovedHint({ onGo, t }: { onGo: () => void; t: TFunction }) {
-  return (
-    <p className="text-xs text-fg-tertiary">
-      <Trans
-        i18nKey="settings.credMovedHint"
-        t={t}
-        components={{
-          go: (
-            <button
-              type="button"
-              onClick={onGo}
-              className="text-accent underline underline-offset-2 hover:opacity-80"
-            />
-          ),
-        }}
-      />
-    </p>
-  )
-}
-
 function SettingsSection({
   id, title, headerExtras, children,
 }: {
@@ -1557,18 +1536,19 @@ function SourceSelect({ opt, onChange }: {
   const labelOf = (s: string) =>
     s === 'modelscope' ? t('settings.downloadSourceModelscope') : t('settings.downloadSourceHuggingface')
   return (
-    <label className="flex items-center gap-1.5 text-xs text-fg-tertiary shrink-0">
-      <span>{t('settings.downloadSource')}</span>
+    <SettingsField
+      label={t('settings.downloadSource')}
+      desc={single ? t('settings.singleSourceFixed') : undefined}
+    >
       <select
         value={opt.current}
         disabled={single}
         onChange={(e) => onChange(e.target.value)}
-        title={single ? t('settings.singleSourceFixed') : undefined}
-        className="rounded-sm border border-subtle bg-surface px-1.5 py-0.5 text-xs disabled:opacity-60"
+        className={`${textInputClass} max-w-xs disabled:opacity-60`}
       >
         {opt.available.map((s) => <option key={s} value={s}>{labelOf(s)}</option>)}
       </select>
-    </label>
+    </SettingsField>
   )
 }
 
@@ -1629,14 +1609,13 @@ function ModelIdsEditor({ ids, currentId, onChange }: {
 // ── WD14 / CLTagger Model Cards（打标 tab 内嵌的模型管理器） ─────────────────
 
 function WD14ModelCard({
-  catalog, busy, start, setSource,
+  catalog, busy, start,
   currentModelId, onSelectModelId,
   candidates, onCandidatesChange, t,
 }: {
   catalog: ModelsCatalog | null
   busy: Set<string>
   start: (model_id: string, variant?: string) => Promise<void>
-  setSource: (type: string, source: string) => Promise<void>
   currentModelId: string
   onSelectModelId: (id: string) => void
   candidates: string[]
@@ -1656,12 +1635,6 @@ function WD14ModelCard({
         <p><Trans i18nKey="settings.wd14CandidateHelp" values={{ desc: wd14Description }} components={{ code: <code /> }} /></p>
       }
     >
-      <div className="self-start">
-        <SourceSelect
-          opt={catalog.download_source_options?.wd14}
-          onChange={(s) => void setSource('wd14', s)}
-        />
-      </div>
       <ul className="list-none m-0 p-0 flex flex-col gap-1">
         {wd14.variants.map((v) => {
           const key = `wd14:${v.model_id}`
@@ -1708,7 +1681,7 @@ function WD14ModelCard({
 function CLTaggerModelCard({
   catalog, busy, start,
   currentModelPath, currentTagMappingPath, onSelectVariant,
-  modelId, onModelIdChange, sourceOpt, t,
+  modelId, onModelIdChange, t,
 }: {
   catalog: ModelsCatalog | null
   busy: Set<string>
@@ -1718,7 +1691,6 @@ function CLTaggerModelCard({
   onSelectVariant: (v: CLTaggerVariantInfo) => void
   modelId: string
   onModelIdChange: (id: string) => void
-  sourceOpt?: { current: string; available: string[] }
   t: TFunction
 }) {
   const [advOpen, setAdvOpen] = useState(false)
@@ -1734,9 +1706,6 @@ function CLTaggerModelCard({
         <p><Trans i18nKey="settings.repoHelp" values={{ desc: clDescription, repo: cl.repo }} components={{ code: <code /> }} /></p>
       }
     >
-      <div className="self-start">
-        <SourceSelect opt={sourceOpt} onChange={() => {}} />
-      </div>
       <ul className="list-none m-0 p-0 flex flex-col gap-1">
         {cl.variants.map((v) => {
           const key = `cltagger:${v.label}`
@@ -1903,16 +1872,11 @@ function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, catalog
   const error = catalogError
 
   return (
-    <SettingsSection
-      id="models"
-      title={t('settings.trainingModelsOneClick')}
-      headerExtras={
-        <SourceSelect
-          opt={catalog?.download_source_options?.training}
-          onChange={(s) => void setSource('training', s)}
-        />
-      }
-    >
+    <SettingsSection id="models" title={t('settings.trainingModelsOneClick')}>
+      <SourceSelect
+        opt={catalog?.download_source_options?.training}
+        onChange={(s) => void setSource('training', s)}
+      />
       <SettingsField label={t('settings.modelsRoot')}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <input
@@ -2097,16 +2061,11 @@ function UpscalerSection({
   const current = catalog?.upscalers?.current ?? ''
 
   return (
-    <SettingsSection
-      id="upscalers"
-      title={t('settings.upscalersPreprocess')}
-      headerExtras={
-        <SourceSelect
-          opt={catalog?.download_source_options?.upscaler}
-          onChange={(s) => void setSource('upscaler', s)}
-        />
-      }
-    >
+    <SettingsSection id="upscalers" title={t('settings.upscalersPreprocess')}>
+      <SourceSelect
+        opt={catalog?.download_source_options?.upscaler}
+        onChange={(s) => void setSource('upscaler', s)}
+      />
       {!catalog ? (
         <p className="text-fg-tertiary text-xs">{t('common.loading')}</p>
       ) : (

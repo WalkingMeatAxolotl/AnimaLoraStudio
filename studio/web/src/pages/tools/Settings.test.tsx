@@ -300,7 +300,7 @@ describe('SettingsPage (PP0)', () => {
     })
   })
 
-  it('credentials tab gathers all service tokens; old sections show a moved hint', async () => {
+  it('credentials tab gathers all service tokens; old sections no longer hold them', async () => {
     const user = userEvent.setup()
     renderPage()
 
@@ -313,10 +313,9 @@ describe('SettingsPage (PP0)', () => {
     // gelbooru user_id 现在在密钥 tab 编辑
     expect(screen.getByDisplayValue('alice')).toBeInTheDocument()
 
-    // 原数据集 tab 的 gelbooru 不再有 user_id，只留「前往」指引
+    // 原数据集 tab 的 gelbooru 不再有 user_id（凭证已挪走，无指引文案）
     await user.click(await screen.findByRole('button', { name: '数据集' }))
     expect(screen.queryByDisplayValue('alice')).not.toBeInTheDocument()
-    expect(screen.getAllByRole('button', { name: '前往' }).length).toBeGreaterThan(0)
   })
 
   it('per-item source dropdown writes download_sources immediately', async () => {
