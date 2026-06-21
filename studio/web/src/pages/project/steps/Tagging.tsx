@@ -32,7 +32,6 @@ type Wd14Form = {
   threshold_general: number
   threshold_character: number
   model_id: string
-  local_dir: string
   blacklist_tags: string[]
 }
 
@@ -42,7 +41,6 @@ type CLTaggerForm = {
   model_id: string
   model_path: string
   tag_mapping_path: string
-  local_dir: string
   add_copyright_tag: boolean
   add_meta_tag: boolean
   add_model_tag: boolean
@@ -75,7 +73,6 @@ function fromConfig(cfg: WD14Config): Wd14Form {
     threshold_general: cfg.threshold_general,
     threshold_character: cfg.threshold_character,
     model_id: cfg.model_id,
-    local_dir: cfg.local_dir ?? '',
     blacklist_tags: cfg.blacklist_tags,
   }
 }
@@ -87,7 +84,6 @@ function fromCLTaggerConfig(cfg: CLTaggerConfig): CLTaggerForm {
     model_id: cfg.model_id,
     model_path: cfg.model_path,
     tag_mapping_path: cfg.tag_mapping_path,
-    local_dir: cfg.local_dir ?? '',
     add_copyright_tag: cfg.add_copyright_tag,
     add_meta_tag: cfg.add_meta_tag,
     add_model_tag: cfg.add_model_tag,
@@ -219,8 +215,6 @@ export default function TaggingPage() {
     if (wd14Form.threshold_character !== wd14Defaults.threshold_character)
       out.threshold_character = wd14Form.threshold_character
     if (wd14Form.model_id !== wd14Defaults.model_id) out.model_id = wd14Form.model_id
-    const localDirChanged = (wd14Form.local_dir || null) !== (wd14Defaults.local_dir ?? null)
-    if (localDirChanged) out.local_dir = wd14Form.local_dir || null
     if (JSON.stringify(wd14Form.blacklist_tags) !== JSON.stringify(wd14Defaults.blacklist_tags))
       out.blacklist_tags = wd14Form.blacklist_tags
     return Object.keys(out).length ? out : undefined
@@ -237,8 +231,6 @@ export default function TaggingPage() {
     if (cltaggerForm.model_path !== cltaggerDefaults.model_path) out.model_path = cltaggerForm.model_path
     if (cltaggerForm.tag_mapping_path !== cltaggerDefaults.tag_mapping_path)
       out.tag_mapping_path = cltaggerForm.tag_mapping_path
-    const localDirChanged = (cltaggerForm.local_dir || null) !== (cltaggerDefaults.local_dir ?? null)
-    if (localDirChanged) out.local_dir = cltaggerForm.local_dir || null
     if (cltaggerForm.add_copyright_tag !== cltaggerDefaults.add_copyright_tag)
       out.add_copyright_tag = cltaggerForm.add_copyright_tag
     if (cltaggerForm.add_meta_tag !== cltaggerDefaults.add_meta_tag)
@@ -513,7 +505,6 @@ function Wd14Panel({
     form.threshold_general !== defaults.threshold_general ||
     form.threshold_character !== defaults.threshold_character ||
     form.model_id !== defaults.model_id ||
-    (form.local_dir || null) !== (defaults.local_dir ?? null) ||
     JSON.stringify(form.blacklist_tags) !== JSON.stringify(defaults.blacklist_tags)
 
   const restore = () => onChange(fromConfig(defaults))
@@ -564,14 +555,6 @@ function Wd14Panel({
             onChange={(v) => onChange({ ...form, model_id: v })}
             modified={form.model_id !== defaults.model_id}
           />
-          <LabeledInput
-            label="local_dir"
-            value={form.local_dir}
-            placeholder={t('tag.blankDir')}
-            disabled={disabled}
-            onChange={(v) => onChange({ ...form, local_dir: v })}
-            modified={(form.local_dir || null) !== (defaults.local_dir ?? null)}
-          />
           <TagsInput
             className="md:col-span-2"
             label={t('tag.blacklistLabel')}
@@ -613,7 +596,6 @@ function CLTaggerPanel({
     form.model_id !== defaults.model_id ||
     form.model_path !== defaults.model_path ||
     form.tag_mapping_path !== defaults.tag_mapping_path ||
-    (form.local_dir || null) !== (defaults.local_dir ?? null) ||
     form.add_copyright_tag !== defaults.add_copyright_tag ||
     form.add_meta_tag !== defaults.add_meta_tag ||
     form.add_model_tag !== defaults.add_model_tag ||
@@ -682,7 +664,6 @@ function CLTaggerPanel({
       {advOpen && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-1">
           <LabeledInput label="model_id" value={form.model_id} disabled={disabled} onChange={(v) => onChange({ ...form, model_id: v })} modified={form.model_id !== defaults.model_id} />
-          <LabeledInput label="local_dir" value={form.local_dir} placeholder={t('tag.blankDir')} disabled={disabled} onChange={(v) => onChange({ ...form, local_dir: v })} modified={(form.local_dir || null) !== (defaults.local_dir ?? null)} />
           <LabeledInput label="model_path" value={form.model_path} disabled={disabled} onChange={(v) => onChange({ ...form, model_path: v })} modified={form.model_path !== defaults.model_path} />
           <LabeledInput label="tag_mapping_path" value={form.tag_mapping_path} disabled={disabled} onChange={(v) => onChange({ ...form, tag_mapping_path: v })} modified={form.tag_mapping_path !== defaults.tag_mapping_path} />
           <TagsInput

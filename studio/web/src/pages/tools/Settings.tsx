@@ -244,7 +244,6 @@ const EMPTY: Secrets = {
   wd14: {
     model_id: 'SmilingWolf/wd-eva02-large-tagger-v3',
     model_ids: [...DEFAULT_WD14_MODELS],
-    local_dir: null,
     threshold_general: 0.35,
     threshold_character: 0.85,
     blacklist_tags: [],
@@ -254,8 +253,6 @@ const EMPTY: Secrets = {
     model_id: 'cella110n/cl_tagger',
     model_path: 'cl_tagger_1_02/model.onnx',
     tag_mapping_path: 'cl_tagger_1_02/tag_mapping.json',
-    local_dir: null,
-    variant_local_dirs: {},
     threshold_general: 0.35,
     threshold_character: 0.6,
     add_copyright_tag: true,
@@ -391,61 +388,16 @@ export default function SettingsPage() {
   }
 
 
-  // CLTagger variant ↔ local_dir 记忆。v1/v2 是不同 repo、落地目录不同，单个
-  // local_dir 切版本会串台；variant_local_dirs 给每个 label 各记一份，切换时还原。
-  const currentCLTaggerVariant = useMemo(() => {
-    const variants = catalog?.cltagger?.variants ?? []
-    return variants.find((v) =>
-      v.model_id === draft.cltagger.model_id &&
-      v.model_path === draft.cltagger.model_path &&
-      v.tag_mapping_path === draft.cltagger.tag_mapping_path
-    ) ?? null
-  }, [
-    catalog?.cltagger?.variants,
-    draft.cltagger.model_id,
-    draft.cltagger.model_path,
-    draft.cltagger.tag_mapping_path,
-  ])
-
-  const updateCLTaggerLocalDir = (value: string) => {
-    const label = currentCLTaggerVariant?.label
-    setDraft((prev) => {
-      const nextDirs = { ...(prev.cltagger.variant_local_dirs ?? {}) }
-      if (label) {
-        if (value) nextDirs[label] = value
-        else delete nextDirs[label]
-      }
-      return {
-        ...prev,
-        cltagger: { ...prev.cltagger, local_dir: value || null, variant_local_dirs: nextDirs },
-      }
-    })
-  }
-
   const selectCLTaggerVariant = (variant: CLTaggerVariantInfo) => {
-    const currentLabel = currentCLTaggerVariant?.label
-    setDraft((prev) => {
-      const nextDirs = { ...(prev.cltagger.variant_local_dirs ?? {}) }
-      // 离开当前版本前，把它现在的自定义 local_dir 暂存到该 label 名下。
-      if (currentLabel) {
-        if (prev.cltagger.local_dir) nextDirs[currentLabel] = prev.cltagger.local_dir
-        else delete nextDirs[currentLabel]
-      }
-      // 进入目标版本：还原它之前记住的目录；没记过则回到自动下载（null），
-      // 刻意不固定到 target_path —— 留 null 才能跟随 models_root 变化。
-      const restored = nextDirs[variant.label] ?? null
-      return {
-        ...prev,
-        cltagger: {
-          ...prev.cltagger,
-          model_id: variant.model_id,
-          model_path: variant.model_path,
-          tag_mapping_path: variant.tag_mapping_path,
-          local_dir: restored,
-          variant_local_dirs: nextDirs,
-        },
-      }
-    })
+    setDraft((prev) => ({
+      ...prev,
+      cltagger: {
+        ...prev.cltagger,
+        model_id: variant.model_id,
+        model_path: variant.model_path,
+        tag_mapping_path: variant.tag_mapping_path,
+      },
+    }))
   }
 
   const save = async () => {
@@ -850,14 +802,6 @@ export default function SettingsPage() {
           opt={catalog?.download_source_options?.wd14}
           onChange={(s) => void setDownloadSource('wd14', s)}
         />
-        <SettingsField label="local_dir" desc={t('settings.blankAutoHfDownload')}>
-          <SettingsInput
-            type="text"
-            value={draft.wd14.local_dir ?? ''}
-            onChange={(v) => update('wd14', 'local_dir', v || null)}
-            className={textInputClass}
-          />
-        </SettingsField>
         <div className="grid grid-cols-2 gap-3">
           <SettingsField label="threshold_general">
             <SettingsInput
@@ -909,14 +853,6 @@ export default function SettingsPage() {
           opt={catalog?.download_source_options?.cltagger}
           onChange={(s) => void setDownloadSource('cltagger', s)}
         />
-        <SettingsField label="local_dir" desc={t('settings.blankAutoHfDownload')}>
-          <SettingsInput
-            type="text"
-            value={draft.cltagger.local_dir ?? ''}
-            onChange={(v) => updateCLTaggerLocalDir(v)}
-            className={textInputClass}
-          />
-        </SettingsField>
         <div className="grid grid-cols-2 gap-3">
           <SettingsField label="threshold_general">
             <SettingsInput
@@ -4891,9 +4827,9 @@ function StorageSection() {
               {t('settings.storage.changeLocation')}
             </button>
           </div>
-          {info && (
+          {info?.is_custom && (
             <span className="text-2xs text-fg-tertiary">
-              {info.is_custom ? t('settings.storage.customBadge') : t('settings.storage.defaultBadge')}
+              {t('settings.storage.customBadge')}
             </span>
           )}
         </div>
@@ -4918,9 +4854,9 @@ function StorageSection() {
               {t('settings.storage.changeLocation')}
             </button>
           </div>
-          {modelsInfo && (
+          {modelsInfo?.is_custom && (
             <span className="text-2xs text-fg-tertiary">
-              {modelsInfo.is_custom ? t('settings.storage.customBadge') : t('settings.storage.defaultBadge')}
+              {t('settings.storage.customBadge')}
             </span>
           )}
         </div>

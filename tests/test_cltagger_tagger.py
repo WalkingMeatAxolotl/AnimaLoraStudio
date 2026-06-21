@@ -47,16 +47,6 @@ def _make_local_model(model_dir: Path) -> None:
     )
 
 
-def test_resolve_local_dir_flat_files(isolated_secrets: Path) -> None:
-    model_dir = isolated_secrets / "cl"
-    _make_local_model(model_dir)
-    secrets.update({"cltagger": {"local_dir": str(model_dir)}})
-    t = cltagger_tagger.CLTagger()
-    model_path, mapping_path = t._resolve_model_files()
-    assert model_path == model_dir / "model.onnx"
-    assert mapping_path == model_dir / "tag_mapping.json"
-
-
 def test_v2_legacy_root_paths_resolve_versioned_files(isolated_secrets: Path) -> None:
     base = model_downloader.cltagger_target_root(
         model_downloader.models_root(),
@@ -342,19 +332,24 @@ def test_prepare_v2_prefers_pixel_values_input_and_logits_output(
     isolated_secrets: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    model_dir = isolated_secrets / "v2"
-    model_dir.mkdir(parents=True, exist_ok=True)
-    (model_dir / "model.onnx").write_bytes(b"fake-onnx")
-    (model_dir / "model.onnx.data").write_bytes(b"fake-weights")
-    (model_dir / "model_vocabulary.json").write_text(
+    base = model_downloader.cltagger_target_root(
+        model_downloader.models_root(),
+        "cella110n/cl_tagger_v2",
+    )
+    version_dir = base / "v2_01a"
+    version_dir.mkdir(parents=True, exist_ok=True)
+    (version_dir / "model.onnx").write_bytes(b"fake-onnx")
+    (version_dir / "model.onnx.data").write_bytes(b"fake-weights")
+    (version_dir / "model_metadata.json").write_text("{}", encoding="utf-8")
+    (version_dir / "model_vocabulary.json").write_text(
         json.dumps({"idx_to_tag": {"0": "1girl"}}),
         encoding="utf-8",
     )
     secrets.update({
         "cltagger": {
-            "local_dir": str(model_dir),
-            "model_path": "cl_tagger_v2/v2_01a/model.onnx",
-            "tag_mapping_path": "cl_tagger_v2/v2_01a/model_vocabulary.json",
+            "model_id": "cella110n/cl_tagger_v2",
+            "model_path": "model.onnx",
+            "tag_mapping_path": "model_vocabulary.json",
         }
     })
 

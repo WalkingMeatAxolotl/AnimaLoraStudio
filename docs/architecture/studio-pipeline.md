@@ -159,7 +159,6 @@ CREATE INDEX idx_jobs_status ON project_jobs(status);
   },
   "wd14": {
     "model_id": "SmilingWolf/wd-vit-tagger-v3",
-    "local_dir": null,                    // null = models/wd14/{model_id}/
     "threshold_general": 0.35,
     "threshold_character": 0.85,
     "blacklist_tags": []

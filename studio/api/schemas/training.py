@@ -12,7 +12,6 @@ class Wd14Overrides(BaseModel):
     threshold_general: Optional[float] = None
     threshold_character: Optional[float] = None
     model_id: Optional[str] = None
-    local_dir: Optional[str] = None
     blacklist_tags: Optional[list[str]] = None
 
 
@@ -23,7 +22,6 @@ class CLTaggerOverrides(BaseModel):
     model_id: Optional[str] = None
     model_path: Optional[str] = None
     tag_mapping_path: Optional[str] = None
-    local_dir: Optional[str] = None
     add_copyright_tag: Optional[bool] = None
     add_meta_tag: Optional[bool] = None
     add_model_tag: Optional[bool] = None

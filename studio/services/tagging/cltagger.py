@@ -88,8 +88,6 @@ class CLTagger(OnnxTaggerBase):
 
     def _compute_base(self) -> Path:
         cfg = self._cfg()
-        if cfg.local_dir:
-            return Path(cfg.local_dir)
         return model_downloader.cltagger_target_root(model_downloader.models_root(), cfg.model_id)
 
     def _local_model_files_status(self) -> tuple[Path, Path, bool]:
@@ -105,11 +103,6 @@ class CLTagger(OnnxTaggerBase):
         )
         if all((base / f).exists() for f in required):
             return model_path, mapping_path, True
-        if cfg.local_dir:
-            flat_model = base / Path(cfg.model_path).name
-            flat_mapping = base / Path(cfg.tag_mapping_path).name
-            if all((base / Path(f).name).exists() for f in required):
-                return flat_model, flat_mapping, True
         return model_path, mapping_path, False
 
     def _resolve_model_files(self) -> tuple[Path, Path]:
@@ -117,11 +110,6 @@ class CLTagger(OnnxTaggerBase):
         model_path, mapping_path, ok = self._local_model_files_status()
         if ok:
             return model_path, mapping_path
-        if cfg.local_dir:
-            raise FileNotFoundError(
-                "local_dir 缺少 CLTagger 模型文件或 tag_mapping.json: "
-                f"{model_path} / {mapping_path}"
-            )
         model_downloader.download_cltagger(self._compute_base(), cfg, on_log=logger.info)
         model_path, mapping_path, ok = self._local_model_files_status()
         if not ok:
@@ -144,11 +132,6 @@ class CLTagger(OnnxTaggerBase):
         except Exception as exc:  # noqa: BLE001
             return False, str(exc)
         if not ok:
-            if self._cfg().local_dir:
-                return False, (
-                    "local_dir 缺少 CLTagger 模型文件或 tag_mapping.json: "
-                    f"{model_path} / {mapping_path}"
-                )
             return False, f"需下载模型: {model_path.parent.name}"
         return True, f"模型: {model_path.parent.name}"
 

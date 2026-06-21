@@ -58,24 +58,26 @@ def test_cltagger_defaults_use_1_02(secrets_file: Path) -> None:
     assert s.cltagger.model_id == "cella110n/cl_tagger"
     assert s.cltagger.model_path == "cl_tagger_1_02/model.onnx"
     assert s.cltagger.tag_mapping_path == "cl_tagger_1_02/tag_mapping.json"
-    assert s.cltagger.variant_local_dirs == {}
     assert s.cltagger.threshold_character == pytest.approx(0.6)
 
 
-def test_cltagger_variant_local_dirs_persist(secrets_file: Path) -> None:
-    secrets.update({
-        "cltagger": {
-            "local_dir": "/models/cltagger-v2",
-            "variant_local_dirs": {
-                "cl_tagger_v2_v2_01a": "/models/cltagger-v2",
-                "cl_tagger_1_02": "/models/cltagger-102",
+def test_legacy_local_dir_dropped_on_load(secrets_file: Path) -> None:
+    """旧 secrets.json 里残留的 local_dir / variant_local_dirs 字段：load 时被
+    pydantic（extra=ignore）静默丢弃，不报错、不再出现在模型上。"""
+    secrets_file.write_text(
+        json.dumps({
+            "wd14": {"local_dir": "/old/wd14"},
+            "cltagger": {
+                "local_dir": "/old/cltagger",
+                "variant_local_dirs": {"cl_tagger_1_02": "/old/cltagger"},
             },
-        }
-    })
+        }),
+        encoding="utf-8",
+    )
     s = secrets.load()
-    assert s.cltagger.local_dir == "/models/cltagger-v2"
-    assert s.cltagger.variant_local_dirs["cl_tagger_v2_v2_01a"] == "/models/cltagger-v2"
-    assert s.cltagger.variant_local_dirs["cl_tagger_1_02"] == "/models/cltagger-102"
+    assert not hasattr(s.wd14, "local_dir")
+    assert not hasattr(s.cltagger, "local_dir")
+    assert not hasattr(s.cltagger, "variant_local_dirs")
 
 
 def test_llm_tagger_defaults(secrets_file: Path) -> None:

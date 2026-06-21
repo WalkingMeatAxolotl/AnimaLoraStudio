@@ -214,7 +214,6 @@ export interface WD14Config {
   model_id: string
   /** 候选模型列表；用户在「设置 → WD14」里维护，model_id 必属于该列表。 */
   model_ids: string[]
-  local_dir: string | null
   threshold_general: number
   threshold_character: number
   blacklist_tags: string[]
@@ -226,8 +225,6 @@ export interface CLTaggerConfig {
   model_id: string
   model_path: string
   tag_mapping_path: string
-  local_dir: string | null
-  variant_local_dirs: Record<string, string>
   threshold_general: number
   threshold_character: number
   add_copyright_tag: boolean
@@ -2138,7 +2135,6 @@ export const api = {
         threshold_general?: number | null
         threshold_character?: number | null
         model_id?: string | null
-        local_dir?: string | null
         blacklist_tags?: string[] | null
       }
       cltagger_overrides?: {
@@ -2147,7 +2143,6 @@ export const api = {
         model_id?: string | null
         model_path?: string | null
         tag_mapping_path?: string | null
-        local_dir?: string | null
         add_copyright_tag?: boolean | null
         add_meta_tag?: boolean | null
         add_model_tag?: boolean | null
