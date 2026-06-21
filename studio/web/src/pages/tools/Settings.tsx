@@ -631,34 +631,31 @@ export default function SettingsPage() {
           />
         </SettingsField>
 
-        <div className="grid grid-cols-3 gap-3 pt-2 border-t border-subtle">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-fg-secondary font-mono">parallel_workers</label>
+        <div className="flex flex-col gap-2 pt-2 border-t border-subtle">
+          <SettingsField label="parallel_workers">
             <SettingsInput
               type="number" min={1} max={16}
               value={draft.download.parallel_workers}
               onChange={(v) => update('download', 'parallel_workers', Math.max(1, Number(v) || 1))}
               className={`${textInputClass} max-w-24`}
             />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-fg-secondary font-mono">api_rate_per_sec</label>
+          </SettingsField>
+          <SettingsField label="api_rate_per_sec">
             <SettingsInput
               type="number" step="0.5" min={0.5} max={10}
               value={draft.download.api_rate_per_sec}
               onChange={(v) => update('download', 'api_rate_per_sec', Math.max(0.5, Number(v) || 0.5))}
               className={`${textInputClass} max-w-24`}
             />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-fg-secondary font-mono">cdn_rate_per_sec</label>
+          </SettingsField>
+          <SettingsField label="cdn_rate_per_sec">
             <SettingsInput
               type="number" step="1" min={1} max={20}
               value={draft.download.cdn_rate_per_sec}
               onChange={(v) => update('download', 'cdn_rate_per_sec', Math.max(1, Number(v) || 1))}
               className={`${textInputClass} max-w-24`}
             />
-          </div>
+          </SettingsField>
         </div>
 
         <div className="flex flex-col gap-2 pt-2 border-t border-subtle">
@@ -1486,7 +1483,7 @@ function HFEndpointSelect({ value, onChange }: {
             onChange(v)
           }
         }}
-        className={`${textInputClass} max-w-md`}
+        className={textInputClass}
       >
         {HF_ENDPOINT_PRESETS.map(p => (
           <option key={p.value} value={p.value}>
@@ -1500,7 +1497,7 @@ function HFEndpointSelect({ value, onChange }: {
           value={value && !isPreset ? value : ''}
           placeholder="https://your-mirror.example.com"
           onChange={(e) => onChange(e.target.value.trim())}
-          className={`${textInputClass} max-w-md`}
+          className={textInputClass}
         />
       )}
     </div>
@@ -1529,7 +1526,7 @@ function SourceSelect({ opt, onChange }: {
         value={opt.current}
         disabled={single}
         onChange={(e) => onChange(e.target.value)}
-        className={`${textInputClass} max-w-xs disabled:opacity-60`}
+        className={`${textInputClass} disabled:opacity-60`}
       >
         {opt.available.map((s) => <option key={s} value={s}>{labelOf(s)}</option>)}
       </select>
