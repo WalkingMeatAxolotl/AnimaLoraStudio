@@ -1147,7 +1147,6 @@
     "currentDevLocked": "当前在 dev · 不可关闭",
     "updateLogTitle": "上次更新日志",
     "close": "关闭",
-    "onboardingSection": "首次引导",
     "onboardingReopenTitle": "重新运行首次引导",
     "onboardingReopenHelp": "重新弹出首次启动时的「基础能力安装」面板,可用于检查哪些还没装、或装漏了想补。",
     "onboardingReopen": "重新运行引导",

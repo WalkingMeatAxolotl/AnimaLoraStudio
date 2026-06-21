@@ -137,7 +137,6 @@ const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
     { id: 'display', labelKey: 'settings.display' },
   ],
   system: [
-    { id: 'onboarding', labelKey: 'settings.onboardingSection' },
     { id: 'version', labelKey: 'settings.version' },
     { id: 'storage', labelKey: 'settings.storage.sectionTitle' },
     { id: 'service', labelKey: 'settings.service' },
@@ -3365,39 +3364,10 @@ function DisplaySection() {
 function SystemSection() {
   return (
     <>
-      <OnboardingSection />
       <VersionSection />
       <StorageSection />
       <ServiceSection />
     </>
-  )
-}
-
-// ── 重新运行首次引导 Section ─────────────────────────────────────────────
-//
-// 清掉 localStorage 的 onboarding done 标记 + dispatch event,触发
-// FirstRunOnboardingModal 显示。不重启服务、不动 secrets。
-function OnboardingSection() {
-  const { t } = useTranslation()
-  const handleReopen = () => {
-    clearOnboardingDone()
-    window.dispatchEvent(new Event(ONBOARDING_EVENTS.open))
-  }
-  return (
-    <SettingsSection id="onboarding" title={t('settings.onboardingSection')}>
-      <SettingsField
-        label={t('settings.onboardingReopenTitle')}
-        helpTooltip={<p>{t('settings.onboardingReopenHelp')}</p>}
-      >
-        <button
-          type="button"
-          onClick={handleReopen}
-          className="btn btn-secondary btn-sm self-start"
-        >
-          {t('settings.onboardingReopen')}
-        </button>
-      </SettingsField>
-    </SettingsSection>
   )
 }
 
@@ -4905,22 +4875,27 @@ function StorageSection() {
           </>
         }
       >
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-1.5">
           <div className="flex items-center gap-2 min-w-0">
-            <code className="font-mono text-xs truncate">{info?.current ?? '…'}</code>
-            {info && (
-              <span className="text-2xs text-fg-tertiary shrink-0">
-                {info.is_custom ? t('settings.storage.customBadge') : t('settings.storage.defaultBadge')}
-              </span>
-            )}
+            <input
+              type="text"
+              readOnly
+              value={info?.current ?? '…'}
+              className={`${textInputClass} font-mono text-xs flex-1 min-w-0 cursor-default`}
+            />
+            <button
+              className="btn btn-secondary btn-sm shrink-0"
+              onClick={() => setPickerOpen(true)}
+              disabled={restartBusy}
+            >
+              {t('settings.storage.changeLocation')}
+            </button>
           </div>
-          <button
-            className="btn btn-secondary btn-sm self-start"
-            onClick={() => setPickerOpen(true)}
-            disabled={restartBusy}
-          >
-            {t('settings.storage.changeLocation')}
-          </button>
+          {info && (
+            <span className="text-2xs text-fg-tertiary">
+              {info.is_custom ? t('settings.storage.customBadge') : t('settings.storage.defaultBadge')}
+            </span>
+          )}
         </div>
       </SettingsField>
 
@@ -4928,21 +4903,26 @@ function StorageSection() {
         label={t('settings.storage.modelsRootLabel')}
         helpTooltip={<p>{t('settings.storage.modelsRootHelp')}</p>}
       >
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-1.5">
           <div className="flex items-center gap-2 min-w-0">
-            <code className="font-mono text-xs truncate">{modelsInfo?.current ?? '…'}</code>
-            {modelsInfo && (
-              <span className="text-2xs text-fg-tertiary shrink-0">
-                {modelsInfo.is_custom ? t('settings.storage.customBadge') : t('settings.storage.defaultBadge')}
-              </span>
-            )}
+            <input
+              type="text"
+              readOnly
+              value={modelsInfo?.current ?? '…'}
+              className={`${textInputClass} font-mono text-xs flex-1 min-w-0 cursor-default`}
+            />
+            <button
+              className="btn btn-secondary btn-sm shrink-0"
+              onClick={() => setModelsPickerOpen(true)}
+            >
+              {t('settings.storage.changeLocation')}
+            </button>
           </div>
-          <button
-            className="btn btn-secondary btn-sm self-start"
-            onClick={() => setModelsPickerOpen(true)}
-          >
-            {t('settings.storage.changeLocation')}
-          </button>
+          {modelsInfo && (
+            <span className="text-2xs text-fg-tertiary">
+              {modelsInfo.is_custom ? t('settings.storage.customBadge') : t('settings.storage.defaultBadge')}
+            </span>
+          )}
         </div>
       </SettingsField>
 
@@ -4989,12 +4969,19 @@ function StorageSection() {
   )
 }
 
-// ── 服务 Section（重启 server）─────────────────────────────────────────
+// ── 服务 Section（重新运行首次引导 + 重启 server）─────────────────────
 function ServiceSection() {
   const { t } = useTranslation()
   const { toast } = useToast()
   const dialog = useDialog()
   const [busy, setBusy] = useState(false)
+
+  // 清掉 localStorage 的 onboarding done 标记 + dispatch event,触发
+  // FirstRunOnboardingModal 显示。不重启服务、不动 secrets。
+  const handleReopenOnboarding = () => {
+    clearOnboardingDone()
+    window.dispatchEvent(new Event(ONBOARDING_EVENTS.open))
+  }
 
   const handleRestart = async () => {
     const ok = await dialog.confirm(
@@ -5023,6 +5010,19 @@ function ServiceSection() {
 
   return (
     <SettingsSection id="service" title={t('settings.service')}>
+      <SettingsField
+        label={t('settings.onboardingReopenTitle')}
+        helpTooltip={<p>{t('settings.onboardingReopenHelp')}</p>}
+      >
+        <button
+          type="button"
+          onClick={handleReopenOnboarding}
+          className="btn btn-secondary btn-sm self-start"
+        >
+          {t('settings.onboardingReopen')}
+        </button>
+      </SettingsField>
+
       <SettingsField
         label={t('settings.serviceRestartTitle')}
         helpTooltip={

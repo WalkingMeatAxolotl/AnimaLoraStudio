@@ -1147,7 +1147,6 @@
     "currentDevLocked": "Currently on dev · cannot disable",
     "updateLogTitle": "Last update log",
     "close": "Close",
-    "onboardingSection": "First-run guide",
     "onboardingReopenTitle": "Re-run first-run guide",
     "onboardingReopenHelp": "Re-open the first-run install panel. Useful for checking what's not installed yet, or for filling in what you skipped.",
     "onboardingReopen": "Re-run guide",
