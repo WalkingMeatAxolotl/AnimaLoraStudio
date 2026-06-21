@@ -77,6 +77,7 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
     t5_d = t5_tokenizer_dir(r)
     cl_cfg = secrets.load().cltagger
     wd14_cfg = secrets.load().wd14
+    src_cfg = secrets.load().download_sources
 
     # WD14 候选每个 model_id 一行：两文件全在才算"已下载"。
     wd14_variants = []
@@ -224,6 +225,19 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
             "current": selected_label,
             "target_dir": str(upscaler_dir(r)),
             "variants": upscaler_variants,
+        },
+        # 按类型的下载源选择：双源类型给 dropdown，固定 HF 的给单选指示。
+        # current 来自 secrets.download_sources（已迁移种子）；available 决定前端
+        # 渲染真 dropdown 还是 1-option 禁用框。
+        "download_source_options": {
+            "training": {"current": src_cfg.get("training", "huggingface"),
+                         "available": ["huggingface", "modelscope"]},
+            "wd14": {"current": src_cfg.get("wd14", "huggingface"),
+                     "available": ["huggingface", "modelscope"]},
+            "upscaler": {"current": src_cfg.get("upscaler", "huggingface"),
+                         "available": ["huggingface", "modelscope"]},
+            "cltagger": {"current": "huggingface", "available": ["huggingface"]},
+            "taeflux": {"current": "huggingface", "available": ["huggingface"]},
         },
         "downloads": get_status_snapshot(),
     }

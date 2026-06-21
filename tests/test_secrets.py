@@ -153,6 +153,49 @@ def test_wd14_cannot_drop_current_model_id(secrets_file: Path) -> None:
     assert s.wd14.model_id in s.wd14.model_ids
 
 
+def test_download_sources_default_seeds_huggingface(secrets_file: Path) -> None:
+    """默认（无旧全局源）→ 三个双源类型都种子为 huggingface。"""
+    s = secrets.load()
+    assert s.download_sources == {
+        "training": "huggingface",
+        "wd14": "huggingface",
+        "upscaler": "huggingface",
+    }
+
+
+def test_download_sources_migrate_from_legacy_global(secrets_file: Path) -> None:
+    """旧 secrets.json 只有全局 download_source=modelscope → 各类型继承 MS，不静默回退 HF。"""
+    secrets_file.write_text(
+        json.dumps({"download_source": "modelscope"}),
+        encoding="utf-8",
+    )
+    s = secrets.load()
+    assert s.download_sources["training"] == "modelscope"
+    assert s.download_sources["wd14"] == "modelscope"
+    assert s.download_sources["upscaler"] == "modelscope"
+
+
+def test_download_sources_explicit_override_not_clobbered_by_legacy(secrets_file: Path) -> None:
+    """显式设过的类型不被旧全局种子覆盖；未设的才继承。"""
+    secrets_file.write_text(
+        json.dumps({
+            "download_source": "modelscope",
+            "download_sources": {"training": "huggingface"},
+        }),
+        encoding="utf-8",
+    )
+    s = secrets.load()
+    assert s.download_sources["training"] == "huggingface"  # 显式保留
+    assert s.download_sources["wd14"] == "modelscope"        # 未设 → 继承旧全局
+
+
+def test_download_sources_persist_and_normalize(secrets_file: Path) -> None:
+    secrets.update({"download_sources": {"wd14": "modelscope", "upscaler": "garbage"}})
+    s = secrets.load()
+    assert s.download_sources["wd14"] == "modelscope"
+    assert s.download_sources["upscaler"] == "huggingface"  # 非法值归一
+
+
 def test_models_root_default_none(secrets_file: Path) -> None:
     """默认 secrets 里 models.root = None；下游应自行回退默认路径。"""
     s = secrets.load()

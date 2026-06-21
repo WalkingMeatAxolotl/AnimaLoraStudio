@@ -187,6 +187,13 @@ const emptyModelsCatalog = {
     current_tag_mapping_path: 'cl_tagger_1_02/tag_mapping.json',
     variants: [],
   },
+  download_source_options: {
+    training: { current: 'huggingface', available: ['huggingface', 'modelscope'] },
+    wd14: { current: 'huggingface', available: ['huggingface', 'modelscope'] },
+    upscaler: { current: 'huggingface', available: ['huggingface', 'modelscope'] },
+    cltagger: { current: 'huggingface', available: ['huggingface'] },
+    taeflux: { current: 'huggingface', available: ['huggingface'] },
+  },
   downloads: {},
 }
 
@@ -310,6 +317,27 @@ describe('SettingsPage (PP0)', () => {
     await user.click(await screen.findByRole('button', { name: '数据集' }))
     expect(screen.queryByDisplayValue('alice')).not.toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: '前往' }).length).toBeGreaterThan(0)
+  })
+
+  it('per-item source dropdown writes download_sources immediately', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: '打标' }))
+    // WD14 卡的源 dropdown：本 tab 唯一带 ModelScope 选项的 select
+    // （CLTagger 是固定 HF 单选，无 ModelScope 选项）。
+    const msOption = await screen.findByRole('option', { name: /ModelScope/ })
+    const select = msOption.closest('select') as HTMLSelectElement
+    await user.selectOptions(select, 'modelscope')
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(([url, init]) => {
+        if (init?.method !== 'PUT' || !String(url).includes('/api/secrets')) return false
+        try { return 'download_sources' in JSON.parse(String(init.body)) } catch { return false }
+      })
+      expect(putCall).toBeDefined()
+      const body = JSON.parse(String(putCall![1].body))
+      expect(body.download_sources).toEqual({ wd14: 'modelscope' })
+    })
   })
 
   it('shows LLM request pool controls on the tagging settings tab', async () => {

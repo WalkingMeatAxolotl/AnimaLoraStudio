@@ -114,7 +114,7 @@ const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
     { id: 'tag-dictionary', labelKey: 'settings.tagDictionary.title' },
   ],
   training: [
-    { id: 'download-source', labelKey: 'settings.modelSource' },
+    { id: 'download-source', labelKey: 'settings.hfMirrorTitle' },
     { id: 'queue', labelKey: 'settings.queueSchedule' },
     { id: 'pytorch', labelKey: 'settings.torch' },
     { id: 'flash-attn', labelKey: 'settings.flashAttn' },
@@ -242,6 +242,7 @@ const EMPTY: Secrets = {
   },
   modelscope: { token: '' },
   download_source: 'huggingface',
+  download_sources: {},
   llm_tagger: {
     current_preset: 'style_json',
     presets: [...DEFAULT_LLM_PRESETS],
@@ -319,6 +320,7 @@ export default function SettingsPage() {
     reloadCatalog,
     downloadBusy,
     startDownload,
+    setDownloadSource,
   } = useSettingsData()
   const [draft, setDraft] = useState<Secrets>(EMPTY)
   const [error, setError] = useState<string | null>(null)
@@ -393,10 +395,6 @@ export default function SettingsPage() {
     }))
   }
 
-  /** 更新 Secrets 顶层非对象字段（如 download_source）。 */
-  const updateTop = <K extends keyof Secrets>(key: K, value: Secrets[K]) => {
-    setDraft((prev) => ({ ...prev, [key]: value }))
-  }
 
   const save = async () => {
     if (!server) return
@@ -808,6 +806,7 @@ export default function SettingsPage() {
           catalog={catalog}
           busy={downloadBusy}
           start={startDownload}
+          setSource={setDownloadSource}
           currentModelId={draft.wd14.model_id}
           onSelectModelId={(id) => update('wd14', 'model_id', id)}
           candidates={draft.wd14.model_ids}
@@ -870,6 +869,7 @@ export default function SettingsPage() {
           }}
           modelId={draft.cltagger.model_id}
           onModelIdChange={(id) => update('cltagger', 'model_id', id)}
+          sourceOpt={catalog?.download_source_options?.cltagger}
           t={t}
         />
         <SettingsField label="local_dir" desc={t('settings.blankAutoHfDownload')}>
@@ -937,31 +937,19 @@ export default function SettingsPage() {
       </>)}
 
       {tab === 'training' && (<>
-      <SettingsSection id="download-source" title={t('settings.modelSource')}>
+      <SettingsSection id="download-source" title={t('settings.hfMirrorTitle')}>
+        {/* 下载源已按类型在各模型卡上单独选；token 在「密钥」tab；这里只剩走 HF
+            时用哪个镜像 endpoint（全局，对所有 HF 下载生效）。 */}
+        <p className="text-xs text-fg-tertiary">{t('settings.perItemSourceHint')}</p>
         <SettingsField
-          label={t('settings.downloadSource')}
-          helpTooltip={
-            <p>{t('settings.downloadSourceHelp')}</p>
-          }
+          label="endpoint"
+          helpTooltip={<p>{t('settings.hfEndpointHelp')}</p>}
         >
-          <DownloadSourceSelect
-            value={draft.download_source}
-            onChange={(v) => updateTop('download_source', v)}
+          <HFEndpointSelect
+            value={draft.huggingface.endpoint}
+            onChange={(v) => update('huggingface', 'endpoint', v)}
           />
         </SettingsField>
-
-        {/* HF / ModelScope token 已移到「密钥」tab；这里只留「用哪个源」+ HF 镜像 endpoint。 */}
-        {draft.download_source === 'huggingface' && (
-          <SettingsField
-            label="endpoint"
-            helpTooltip={<p>{t('settings.hfEndpointHelp')}</p>}
-          >
-            <HFEndpointSelect
-              value={draft.huggingface.endpoint}
-              onChange={(v) => update('huggingface', 'endpoint', v)}
-            />
-          </SettingsField>
-        )}
         <CredentialMovedHint onGo={() => setTab('credentials')} t={t} />
       </SettingsSection>
 
@@ -986,6 +974,7 @@ export default function SettingsPage() {
         catalog={catalog}
         busy={downloadBusy}
         start={startDownload}
+        setSource={setDownloadSource}
         reloadCatalog={reloadCatalog}
         catalogError={catalogError}
         t={t}
@@ -1149,6 +1138,7 @@ export default function SettingsPage() {
           catalog={catalog}
           busy={downloadBusy}
           start={startDownload}
+          setSource={setDownloadSource}
           reloadCatalog={reloadCatalog}
           t={t}
         />
@@ -1555,19 +1545,30 @@ function HFEndpointSelect({ value, onChange }: {
 
 // ── DownloadSourceSelect ────────────────────────────────────────────────────
 
-function DownloadSourceSelect({ value, onChange }: {
-  value: string; onChange: (v: string) => void
+// 按类型的下载源选择器。available 多于 1 项才是真 dropdown；固定单源（如
+// CLTagger/T5/TAEFlux）渲染成禁用框，纯指示「这个到底从哪下」。
+function SourceSelect({ opt, onChange }: {
+  opt?: { current: string; available: string[] }
+  onChange: (source: string) => void
 }) {
   const { t } = useTranslation()
+  if (!opt) return null
+  const single = opt.available.length <= 1
+  const labelOf = (s: string) =>
+    s === 'modelscope' ? t('settings.downloadSourceModelscope') : t('settings.downloadSourceHuggingface')
   return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className={`${textInputClass} max-w-xs`}
-    >
-      <option value="huggingface">{t('settings.downloadSourceHuggingface')}</option>
-      <option value="modelscope">{t('settings.downloadSourceModelscope')}</option>
-    </select>
+    <label className="flex items-center gap-1.5 text-xs text-fg-tertiary shrink-0">
+      <span>{t('settings.downloadSource')}</span>
+      <select
+        value={opt.current}
+        disabled={single}
+        onChange={(e) => onChange(e.target.value)}
+        title={single ? t('settings.singleSourceFixed') : undefined}
+        className="rounded-sm border border-subtle bg-surface px-1.5 py-0.5 text-xs disabled:opacity-60"
+      >
+        {opt.available.map((s) => <option key={s} value={s}>{labelOf(s)}</option>)}
+      </select>
+    </label>
   )
 }
 
@@ -1628,13 +1629,14 @@ function ModelIdsEditor({ ids, currentId, onChange }: {
 // ── WD14 / CLTagger Model Cards（打标 tab 内嵌的模型管理器） ─────────────────
 
 function WD14ModelCard({
-  catalog, busy, start,
+  catalog, busy, start, setSource,
   currentModelId, onSelectModelId,
   candidates, onCandidatesChange, t,
 }: {
   catalog: ModelsCatalog | null
   busy: Set<string>
   start: (model_id: string, variant?: string) => Promise<void>
+  setSource: (type: string, source: string) => Promise<void>
   currentModelId: string
   onSelectModelId: (id: string) => void
   candidates: string[]
@@ -1654,6 +1656,12 @@ function WD14ModelCard({
         <p><Trans i18nKey="settings.wd14CandidateHelp" values={{ desc: wd14Description }} components={{ code: <code /> }} /></p>
       }
     >
+      <div className="self-start">
+        <SourceSelect
+          opt={catalog.download_source_options?.wd14}
+          onChange={(s) => void setSource('wd14', s)}
+        />
+      </div>
       <ul className="list-none m-0 p-0 flex flex-col gap-1">
         {wd14.variants.map((v) => {
           const key = `wd14:${v.model_id}`
@@ -1700,7 +1708,7 @@ function WD14ModelCard({
 function CLTaggerModelCard({
   catalog, busy, start,
   currentModelPath, currentTagMappingPath, onSelectVariant,
-  modelId, onModelIdChange, t,
+  modelId, onModelIdChange, sourceOpt, t,
 }: {
   catalog: ModelsCatalog | null
   busy: Set<string>
@@ -1710,6 +1718,7 @@ function CLTaggerModelCard({
   onSelectVariant: (v: CLTaggerVariantInfo) => void
   modelId: string
   onModelIdChange: (id: string) => void
+  sourceOpt?: { current: string; available: string[] }
   t: TFunction
 }) {
   const [advOpen, setAdvOpen] = useState(false)
@@ -1725,6 +1734,9 @@ function CLTaggerModelCard({
         <p><Trans i18nKey="settings.repoHelp" values={{ desc: clDescription, repo: cl.repo }} components={{ code: <code /> }} /></p>
       }
     >
+      <div className="self-start">
+        <SourceSelect opt={sourceOpt} onChange={() => {}} />
+      </div>
       <ul className="list-none m-0 p-0 flex flex-col gap-1">
         {cl.variants.map((v) => {
           const key = `cltagger:${v.label}`
@@ -1808,10 +1820,11 @@ function fmtBytes(n: number): string {
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
 }
 
-function ModelsSection({ catalog, busy, start, reloadCatalog, catalogError, t }: {
+function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, catalogError, t }: {
   catalog: ModelsCatalog | null
   busy: Set<string>
   start: (model_id: string, variant?: string) => Promise<void>
+  setSource: (type: string, source: string) => Promise<void>
   reloadCatalog: () => Promise<void>
   catalogError: string | null
   t: TFunction
@@ -1890,7 +1903,16 @@ function ModelsSection({ catalog, busy, start, reloadCatalog, catalogError, t }:
   const error = catalogError
 
   return (
-    <SettingsSection id="models" title={t('settings.trainingModelsOneClick')}>
+    <SettingsSection
+      id="models"
+      title={t('settings.trainingModelsOneClick')}
+      headerExtras={
+        <SourceSelect
+          opt={catalog?.download_source_options?.training}
+          onChange={(s) => void setSource('training', s)}
+        />
+      }
+    >
       <SettingsField label={t('settings.modelsRoot')}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <input
@@ -2022,11 +2044,12 @@ function ModelsSection({ catalog, busy, start, reloadCatalog, catalogError, t }:
 }
 
 function UpscalerSection({
-  catalog, busy, start, reloadCatalog, t,
+  catalog, busy, start, setSource, reloadCatalog, t,
 }: {
   catalog: ModelsCatalog | null
   busy: Set<string>
   start: (model_id: string, variant?: string) => Promise<void>
+  setSource: (type: string, source: string) => Promise<void>
   reloadCatalog: () => Promise<void>
   t: TFunction
 }) {
@@ -2074,7 +2097,16 @@ function UpscalerSection({
   const current = catalog?.upscalers?.current ?? ''
 
   return (
-    <SettingsSection id="upscalers" title={t('settings.upscalersPreprocess')}>
+    <SettingsSection
+      id="upscalers"
+      title={t('settings.upscalersPreprocess')}
+      headerExtras={
+        <SourceSelect
+          opt={catalog?.download_source_options?.upscaler}
+          onChange={(s) => void setSource('upscaler', s)}
+        />
+      }
+    >
       {!catalog ? (
         <p className="text-fg-tertiary text-xs">{t('common.loading')}</p>
       ) : (

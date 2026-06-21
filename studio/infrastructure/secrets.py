@@ -486,6 +486,12 @@ class ProxyConfig(BaseModel):
     no_proxy: str = ""    # 例外地址，如 localhost,127.0.0.1
 
 
+# 按类型分别选下载源的 key（双源类型）。固定 HF 的（cltagger / t5 / taeflux）
+# 不在此列，路由强制 HF。training = anima 主+VAE + qwen3 + t5 这一整组训练前置。
+DOWNLOAD_SOURCE_TYPES: tuple[str, ...] = ("training", "wd14", "upscaler")
+DOWNLOAD_SOURCE_VALUES: tuple[str, ...] = ("huggingface", "modelscope")
+
+
 class Secrets(BaseModel):
     gelbooru: GelbooruConfig = Field(default_factory=GelbooruConfig)
     danbooru: DanbooruConfig = Field(default_factory=DanbooruConfig)
@@ -494,9 +500,14 @@ class Secrets(BaseModel):
     huggingface: HuggingFaceConfig = Field(default_factory=HuggingFaceConfig)
     wandb: WandBConfig = Field(default_factory=WandBConfig)
     modelscope: ModelScopeConfig = Field(default_factory=ModelScopeConfig)
-    # 模型下载源。"huggingface"（默认）走 HF + endpoint 配置；
-    # "modelscope" 走魔搭社区，没有对应映射的模型自动回退 HF。
+    # 旧的全局下载源（已退役为「迁移种子」）。不再有 UI 开关；新模型按类型在
+    # download_sources 里各自选源。保留此字段仅为兼容旧 secrets.json：load 时把它
+    # 的值种子填充到尚未设过的 download_sources 类型，避免老（尤其国内设了
+    # modelscope 的）用户静默回退 HF。
     download_source: str = "huggingface"
+    # 按类型分别选下载源：{"training"|"wd14"|"upscaler": "huggingface"|"modelscope"}。
+    # 选中源缺某个 variant/文件时由 downloader 自动回退另一源。
+    download_sources: dict[str, str] = Field(default_factory=dict)
     # JoyCaptionConfig 已并入 llm_tagger 的 joycaption builtin preset；
     # secrets.json 里若残留 joycaption 字段，由 _migrate_legacy_schema 迁移后丢弃。
     llm_tagger: LLMTaggerConfig = Field(default_factory=LLMTaggerConfig)
@@ -507,6 +518,25 @@ class Secrets(BaseModel):
     generate: GenerateConfig = Field(default_factory=GenerateConfig)
     system: SystemConfig = Field(default_factory=SystemConfig)
     proxy: ProxyConfig = Field(default_factory=ProxyConfig)
+
+    @model_validator(mode="after")
+    def _seed_and_normalize_download_sources(self) -> "Secrets":
+        """旧全局 download_source → 按类型 download_sources 的迁移种子 + 归一化。
+
+        尚未设过的类型从旧全局值继承（老用户不丢源偏好）；非法值回落 huggingface。
+        每次 load 都 setdefault（幂等）：用户一旦在某类型上显式选过就不会被覆盖。
+        """
+        legacy = str(self.download_source or "").strip().lower()
+        if legacy not in DOWNLOAD_SOURCE_VALUES:
+            legacy = "huggingface"
+        for key in DOWNLOAD_SOURCE_TYPES:
+            self.download_sources.setdefault(key, legacy)
+        for key, val in list(self.download_sources.items()):
+            if str(val).strip().lower() not in DOWNLOAD_SOURCE_VALUES:
+                self.download_sources[key] = "huggingface"
+            else:
+                self.download_sources[key] = str(val).strip().lower()
+        return self
 
 
 # ---------------------------------------------------------------------------
