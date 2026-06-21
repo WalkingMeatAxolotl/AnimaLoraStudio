@@ -793,8 +793,13 @@
     "tabTraining": "训练",
     "tabMonitor": "监控",
     "tabGenerate": "测试",
+    "tabCredentials": "密钥",
     "tabAppearance": "页面",
     "tabSystem": "系统",
+    "credHuggingface": "HuggingFace",
+    "credModelscope": "ModelScope",
+    "credentialsIntro": "所有服务的 token / API key 集中填写。端点 / 下载源仍在各自页面。",
+    "credMovedHint": "token / API key 已移到「密钥」标签页填写。<go>前往</go>",
     "proxy": {
       "sectionTitle": "Booru 代理",
       "enableLabel": "启用代理",

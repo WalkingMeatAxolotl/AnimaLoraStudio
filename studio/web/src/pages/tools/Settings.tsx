@@ -70,7 +70,7 @@ type Section =
   | 'generate'
   | 'proxy'
 
-type Tab = 'dataset' | 'tagging' | 'preprocess' | 'training' | 'monitor' | 'testing' | 'appearance' | 'system'
+type Tab = 'dataset' | 'tagging' | 'preprocess' | 'training' | 'monitor' | 'testing' | 'credentials' | 'appearance' | 'system'
 
 // 外部页面通过 `?section=<id>` 跳转到 SettingsPage 的特定 section 时，用这个
 // 反向映射决定要先切到哪个 tab。只列出能从外部链接到的 sections。
@@ -88,6 +88,7 @@ const TAB_LIST: { id: Tab; labelKey: string }[] = [
   { id: 'training', labelKey: 'settings.tabTraining' },
   { id: 'monitor', labelKey: 'settings.tabMonitor' },
   { id: 'testing', labelKey: 'settings.tabGenerate' },
+  { id: 'credentials', labelKey: 'settings.tabCredentials' },
   { id: 'appearance', labelKey: 'settings.tabAppearance' },
   { id: 'system', labelKey: 'settings.tabSystem' },
 ]
@@ -127,6 +128,12 @@ const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
     { id: 'idle-timeout', labelKey: 'settings.idleTimeout.title' },
     { id: 'preview', labelKey: 'settings.intermediatePreview' },
     { id: 'save-test-images', labelKey: 'settings.saveTestImages.title' },
+  ],
+  credentials: [
+    { id: 'cred-huggingface', labelKey: 'settings.credHuggingface' },
+    { id: 'cred-modelscope', labelKey: 'settings.credModelscope' },
+    { id: 'cred-gelbooru', labelKey: 'settings.gelbooru' },
+    { id: 'cred-danbooru', labelKey: 'settings.danbooru' },
   ],
   appearance: [
     { id: 'display', labelKey: 'settings.display' },
@@ -190,8 +197,8 @@ function getStoredTab(): Tab {
     const v = localStorage.getItem(TAB_STORAGE_KEY)
     if (
       v === 'dataset' || v === 'tagging' || v === 'preprocess' || v === 'training'
-      || v === 'monitor' || v === 'testing' || v === 'appearance'
-      || v === 'system'
+      || v === 'monitor' || v === 'testing' || v === 'credentials'
+      || v === 'appearance' || v === 'system'
     ) return v
   } catch {
     /* ignore localStorage errors */
@@ -615,25 +622,7 @@ export default function SettingsPage() {
 
       {tab === 'dataset' && (<>
       <SettingsSection id="gelbooru" title="Gelbooru">
-        <SettingsField label="user_id">
-          <SettingsInput
-            type="text"
-            value={draft.gelbooru.user_id}
-            onChange={(v) => update('gelbooru', 'user_id', v)}
-            autoComplete="off"
-            data-lpignore="true"
-            data-1p-ignore
-            data-form-type="other"
-            className={textInputClass}
-          />
-        </SettingsField>
-        <SettingsField label="api_key">
-          <SensitiveInput
-            value={draft.gelbooru.api_key}
-            serverValue={server?.gelbooru.api_key ?? ''}
-            onChange={(v) => update('gelbooru', 'api_key', v)}
-          />
-        </SettingsField>
+        <CredentialMovedHint onGo={() => setTab('credentials')} t={t} />
         <SettingsField label="save_tags">
           <Bool value={draft.gelbooru.save_tags} onChange={(v) => update('gelbooru', 'save_tags', v)} />
         </SettingsField>
@@ -646,26 +635,7 @@ export default function SettingsPage() {
       </SettingsSection>
 
       <SettingsSection id="danbooru" title="Danbooru">
-        <SettingsField label="username">
-          <SettingsInput
-            type="text"
-            value={draft.danbooru.username}
-            onChange={(v) => update('danbooru', 'username', v)}
-            placeholder={t('settings.danbooruUsernamePlaceholder')}
-            autoComplete="off"
-            data-lpignore="true"
-            data-1p-ignore
-            data-form-type="other"
-            className={textInputClass}
-          />
-        </SettingsField>
-        <SettingsField label="api_key">
-          <SensitiveInput
-            value={draft.danbooru.api_key}
-            serverValue={server?.danbooru.api_key ?? ''}
-            onChange={(v) => update('danbooru', 'api_key', v)}
-          />
-        </SettingsField>
+        <CredentialMovedHint onGo={() => setTab('credentials')} t={t} />
         <SettingsField label="account_type">
           <select
             value={draft.danbooru.account_type}
@@ -980,49 +950,19 @@ export default function SettingsPage() {
           />
         </SettingsField>
 
-        {/* 下方按当前下载源条件渲染对应凭证配置。HF/ModelScope token 都保留在
-         * secrets 里（即便切换源也不丢失），只是 UI 一次只露面一份。 */}
-        {draft.download_source === 'huggingface' ? (
-          <>
-            <SettingsField
-              label="token"
-              helpTooltip={
-                <p>{t('settings.hfTokenHelp')}</p>
-              }
-            >
-              <SensitiveInput
-                value={draft.huggingface.token}
-                serverValue={server?.huggingface.token ?? ''}
-                onChange={(v) => update('huggingface', 'token', v)}
-              />
-            </SettingsField>
-            <SettingsField
-              label="endpoint"
-              helpTooltip={<p>{t('settings.hfEndpointHelp')}</p>}
-            >
-              <HFEndpointSelect
-                value={draft.huggingface.endpoint}
-                onChange={(v) => update('huggingface', 'endpoint', v)}
-              />
-            </SettingsField>
-          </>
-        ) : (
+        {/* HF / ModelScope token 已移到「密钥」tab；这里只留「用哪个源」+ HF 镜像 endpoint。 */}
+        {draft.download_source === 'huggingface' && (
           <SettingsField
-            label="token"
-            helpTooltip={
-              <>
-                <p>{t('settings.modelscopeTokenHelp')}</p>
-                <p><Trans i18nKey="settings.modelscopeInstallHelp" components={{ code: <code /> }} /></p>
-              </>
-            }
+            label="endpoint"
+            helpTooltip={<p>{t('settings.hfEndpointHelp')}</p>}
           >
-            <SensitiveInput
-              value={draft.modelscope.token}
-              serverValue={server?.modelscope.token ?? ''}
-              onChange={(v) => update('modelscope', 'token', v)}
+            <HFEndpointSelect
+              value={draft.huggingface.endpoint}
+              onChange={(v) => update('huggingface', 'endpoint', v)}
             />
           </SettingsField>
         )}
+        <CredentialMovedHint onGo={() => setTab('credentials')} t={t} />
       </SettingsSection>
 
       <SettingsSection id="queue" title={t('settings.queueSchedule')}>
@@ -1225,6 +1165,82 @@ export default function SettingsPage() {
         <SaveTestImagesSection draft={draft} update={update} />
       </>)}
 
+      {tab === 'credentials' && (<>
+        <p className="text-xs text-fg-tertiary">{t('settings.credentialsIntro')}</p>
+        <SettingsSection id="cred-huggingface" title="HuggingFace">
+          <SettingsField label="token" helpTooltip={<p>{t('settings.hfTokenHelp')}</p>}>
+            <SensitiveInput
+              value={draft.huggingface.token}
+              serverValue={server?.huggingface.token ?? ''}
+              onChange={(v) => update('huggingface', 'token', v)}
+            />
+          </SettingsField>
+        </SettingsSection>
+
+        <SettingsSection id="cred-modelscope" title="ModelScope">
+          <SettingsField
+            label="token"
+            helpTooltip={
+              <>
+                <p>{t('settings.modelscopeTokenHelp')}</p>
+                <p><Trans i18nKey="settings.modelscopeInstallHelp" components={{ code: <code /> }} /></p>
+              </>
+            }
+          >
+            <SensitiveInput
+              value={draft.modelscope.token}
+              serverValue={server?.modelscope.token ?? ''}
+              onChange={(v) => update('modelscope', 'token', v)}
+            />
+          </SettingsField>
+        </SettingsSection>
+
+        <SettingsSection id="cred-gelbooru" title="Gelbooru">
+          <SettingsField label="user_id">
+            <SettingsInput
+              type="text"
+              value={draft.gelbooru.user_id}
+              onChange={(v) => update('gelbooru', 'user_id', v)}
+              autoComplete="off"
+              data-lpignore="true"
+              data-1p-ignore
+              data-form-type="other"
+              className={textInputClass}
+            />
+          </SettingsField>
+          <SettingsField label="api_key">
+            <SensitiveInput
+              value={draft.gelbooru.api_key}
+              serverValue={server?.gelbooru.api_key ?? ''}
+              onChange={(v) => update('gelbooru', 'api_key', v)}
+            />
+          </SettingsField>
+        </SettingsSection>
+
+        <SettingsSection id="cred-danbooru" title="Danbooru">
+          <SettingsField label="username">
+            <SettingsInput
+              type="text"
+              value={draft.danbooru.username}
+              onChange={(v) => update('danbooru', 'username', v)}
+              placeholder={t('settings.danbooruUsernamePlaceholder')}
+              autoComplete="off"
+              data-lpignore="true"
+              data-1p-ignore
+              data-form-type="other"
+              className={textInputClass}
+            />
+          </SettingsField>
+          <SettingsField label="api_key">
+            <SensitiveInput
+              value={draft.danbooru.api_key}
+              serverValue={server?.danbooru.api_key ?? ''}
+              onChange={(v) => update('danbooru', 'api_key', v)}
+            />
+          </SettingsField>
+        </SettingsSection>
+      </>)}
+
       {tab === 'appearance' && (
         <DisplaySection />
       )}
@@ -1243,6 +1259,27 @@ export default function SettingsPage() {
 }
 
 // ── Section / Field ────────────────────────────────────────────────────────
+
+// 原 section 失去凭证字段后留下的指引：一句话 + 跳到「密钥」tab 的链接。
+function CredentialMovedHint({ onGo, t }: { onGo: () => void; t: TFunction }) {
+  return (
+    <p className="text-xs text-fg-tertiary">
+      <Trans
+        i18nKey="settings.credMovedHint"
+        t={t}
+        components={{
+          go: (
+            <button
+              type="button"
+              onClick={onGo}
+              className="text-accent underline underline-offset-2 hover:opacity-80"
+            />
+          ),
+        }}
+      />
+    </p>
+  )
+}
 
 function SettingsSection({
   id, title, headerExtras, children,

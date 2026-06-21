@@ -256,7 +256,10 @@ function renderPage() {
 
 describe('SettingsPage (PP0)', () => {
   it('hydrates from /api/secrets and shows masked sensitive fields as placeholder', async () => {
+    const user = userEvent.setup()
     renderPage()
+    // gelbooru 凭证已挪到「密钥」tab
+    await user.click(await screen.findByRole('button', { name: '密钥' }))
     await waitFor(() =>
       expect(screen.getByDisplayValue('alice')).toBeInTheDocument()
     )
@@ -269,6 +272,7 @@ describe('SettingsPage (PP0)', () => {
   it('PUT /api/secrets only sends the changed leaves', async () => {
     const user = userEvent.setup()
     renderPage()
+    await user.click(await screen.findByRole('button', { name: '密钥' }))
     const userInput = await screen.findByDisplayValue('alice')
     await user.clear(userInput)
     await user.type(userInput, 'bob')
@@ -287,6 +291,25 @@ describe('SettingsPage (PP0)', () => {
       // 只有 user_id 被改动；api_key 仍是 *** ⇒ 不应该出现在 body 里
       expect(body).toEqual({ gelbooru: { user_id: 'bob' } })
     })
+  })
+
+  it('credentials tab gathers all service tokens; old sections show a moved hint', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: '密钥' }))
+    // 下载 / 抓取类凭证聚到密钥 tab（WandB token 留在监控页跟其配置一起）
+    for (const name of ['HuggingFace', 'ModelScope', 'Gelbooru', 'Danbooru']) {
+      expect(screen.getByRole('heading', { name })).toBeInTheDocument()
+    }
+    expect(screen.queryByRole('heading', { name: 'Weights & Biases' })).not.toBeInTheDocument()
+    // gelbooru user_id 现在在密钥 tab 编辑
+    expect(screen.getByDisplayValue('alice')).toBeInTheDocument()
+
+    // 原数据集 tab 的 gelbooru 不再有 user_id，只留「前往」指引
+    await user.click(await screen.findByRole('button', { name: '数据集' }))
+    expect(screen.queryByDisplayValue('alice')).not.toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: '前往' }).length).toBeGreaterThan(0)
   })
 
   it('shows LLM request pool controls on the tagging settings tab', async () => {
