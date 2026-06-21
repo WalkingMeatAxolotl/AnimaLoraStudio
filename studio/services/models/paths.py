@@ -344,6 +344,25 @@ def selected_anima_variant() -> str:
     return LATEST_ANIMA
 
 
+def selected_anima_transformer_path() -> str:
+    """选中主模型的 transformer 绝对路径（训练新建默认 + 测试出图共用）。
+
+    `selected_anima` 为官方 variant key → 用 `anima_main_target` 算路径；为用户
+    注册的本地 custom 路径（不在 ANIMA_VARIANTS 且文件存在）→ 直接返回该路径。
+    custom 路径失效（被删 / 移走）时回退到当前 variant，保证永不返回不存在的
+    死路径。
+    """
+    try:
+        sel = secrets.load().models.selected_anima
+    except Exception:
+        sel = None
+    if sel and sel not in ANIMA_VARIANTS:
+        p = Path(str(sel).strip()).expanduser()
+        if p.exists():
+            return str(p)
+    return str(anima_main_target(models_root(), selected_anima_variant()))
+
+
 def selected_upscaler() -> str:
     """读 `secrets.models.selected_upscaler`，回退 DEFAULT_UPSCALER。
 
@@ -370,13 +389,12 @@ def default_paths_for_new_version() -> dict[str, str]:
     """Studio 创建新 version 时用：返回 4 项路径的**绝对路径字符串**。
 
     根据当前 `secrets.models.root` 和 `secrets.models.selected_anima` 计算。
-    用户在 settings 切了 selected_anima → 之后新建的 version 自动用新选择；
-    已存在 version 的 yaml 不动（重现性）。
+    用户在 settings 切了 selected_anima（官方 variant 或注册的本地 custom 路径）
+    → 之后新建的 version 自动用新选择；已存在 version 的 yaml 不动（重现性）。
     """
     root = models_root()
-    variant = selected_anima_variant()
     return {
-        "transformer_path": str(anima_main_target(root, variant)),
+        "transformer_path": selected_anima_transformer_path(),
         "vae_path": str(anima_vae_target(root)),
         "text_encoder_path": str(qwen_dir(root)),
         "t5_tokenizer_path": str(t5_tokenizer_dir(root)),

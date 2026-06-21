@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 181,
+  "count": 183,
   "routes": [
     {
       "path": "/",
@@ -287,6 +287,22 @@
         "GET"
       ],
       "name": "get_log",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/models/anima/custom",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "remove_custom_anima",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/models/anima/custom",
+      "methods": [
+        "POST"
+      ],
+      "name": "add_custom_anima",
       "type": "APIRoute"
     },
     {

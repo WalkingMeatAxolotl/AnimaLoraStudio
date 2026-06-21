@@ -265,7 +265,7 @@ const EMPTY: Secrets = {
     blacklist_tags: [],
     batch_size: 8,
   },
-  models: { root: null, selected_anima: '1.0', selected_upscaler: '4x-AnimeSharp', auto_sync_paths: true },
+  models: { root: null, selected_anima: '1.0', custom_anima_paths: [], selected_upscaler: '4x-AnimeSharp', auto_sync_paths: true },
   queue: { allow_gpu_during_train: false },
   generate: { preview_every_n_steps: 3, attention_backend: 'auto', vae_precision: 'bf16', idle_timeout_minutes: 10, save_test_images: false },
   system: { update_channel: 'stable', show_dev_channel: false },
@@ -1851,6 +1851,8 @@ function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, catalog
   const [autoSyncPaths, setAutoSyncPaths] = useState<boolean>(true)
   const [savingAutoSync, setSavingAutoSync] = useState(false)
   const [secretsLoaded, setSecretsLoaded] = useState(false)
+  const [showPicker, setShowPicker] = useState(false)
+  const [addingCustom, setAddingCustom] = useState(false)
 
   // 一次性拉一份 secrets 取 models.root + selected_anima + auto_sync_paths
   // （这几项走独立 PUT，不进 SettingsPage 的全局 dirty 流程）。catalog 由父级注入。
@@ -1895,6 +1897,39 @@ function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, catalog
       toast(String(e), 'error')
     } finally {
       setSavingRoot(false)
+    }
+  }
+
+  // PathPicker 选中本地 .safetensors → 注册到 custom_anima_paths（仅登记路径）。
+  // 注册后不自动选中：与官方 variant「下载完再点 radio」的流程一致。
+  const addCustom = async (picked: string) => {
+    setShowPicker(false)
+    const p = picked.trim()
+    if (!p) return
+    if (!p.toLowerCase().endsWith('.safetensors')) {
+      toast(t('settings.localModelInvalidExt'), 'error')
+      return
+    }
+    setAddingCustom(true)
+    try {
+      await api.addCustomAnima(p)
+      toast(t('settings.localModelAdded', { name: p.split(/[\\/]/).pop() }), 'success')
+      await reloadCatalog()
+    } catch (e) {
+      toast(String(e), 'error')
+    } finally {
+      setAddingCustom(false)
+    }
+  }
+
+  const removeCustom = async (p: string) => {
+    try {
+      await api.removeCustomAnima(p)
+      if (p === selectedAnima) setSelectedAnima('1.0')
+      toast(t('settings.localModelRemoved'), 'success')
+      await reloadCatalog()
+    } catch (e) {
+      toast(String(e), 'error')
     }
   }
 
@@ -1993,7 +2028,41 @@ function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, catalog
                   </li>
                 )
               })}
+              {/* 用户注册的本地 custom 主模型（微调权重 / 在微调上测试） */}
+              {catalog.anima_main.custom.map((c) => {
+                const isSel = c.path === selectedAnima
+                return (
+                  <li key={c.path} className={`flex items-center gap-2 text-xs px-1.5 py-1 rounded-sm ${
+                    isSel ? 'bg-accent-soft border border-accent' : 'bg-transparent border border-transparent'
+                  }`}>
+                    <input type="radio" name="anima_variant" checked={isSel} disabled={!c.exists}
+                      onChange={() => void pickAnima(c.path)}
+                      className="shrink-0"
+                      style={{ accentColor: 'var(--accent)' }}
+                      title={c.exists ? t('settings.selectDefaultMainModel') : t('settings.localModelMissing')}
+                    />
+                    <code className="font-mono text-fg-primary w-32 shrink-0 truncate" title={c.path}>{c.name}</code>
+                    {c.exists
+                      ? <ModelStatusBadge exists size={c.size} />
+                      : <span className="text-err text-2xs">{t('settings.localModelMissing')}</span>}
+                    <span className="text-2xs px-1 py-0.5 rounded-sm bg-overlay text-fg-tertiary shrink-0">{t('settings.storage.customBadge')}</span>
+                    <span style={{ flex: 1 }} />
+                    <button
+                      onClick={() => void removeCustom(c.path)}
+                      className="px-1.5 py-0.5 text-fg-tertiary bg-transparent border-none cursor-pointer rounded-sm hover:text-err shrink-0"
+                      title={t('settings.removeLocalModel')}
+                    >🗑 {t('settings.removeLocalModelShort')}</button>
+                  </li>
+                )
+              })}
             </ul>
+            <button
+              onClick={() => setShowPicker(true)}
+              disabled={addingCustom}
+              className="btn btn-ghost btn-sm self-start mt-1"
+            >
+              {addingCustom ? t('common.saving') : t('settings.addLocalModel')}
+            </button>
           </ModelGroupCard>
 
           {/* VAE */}
@@ -2047,6 +2116,13 @@ function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, catalog
             </details>
           )}
         </div>
+      )}
+      {showPicker && (
+        <PathPicker
+          initialPath={serverRoot ?? catalog?.models_root ?? undefined}
+          onPick={(p) => void addCustom(p)}
+          onClose={() => setShowPicker(false)}
+        />
       )}
     </SettingsSection>
   )

@@ -32,14 +32,9 @@ def _supervisor() -> Supervisor:
 def _resolve_anima_model_paths() -> dict[str, str]:
     """解析 base 模型默认路径（先验生成 / 测试出图共用）。
 
-    与 version_config 的 model 字段对齐。用户用别的 base 模型时，
-    在 Settings → 模型 里改 selected_anima 影响这里的 anima 主权重路径。
+    与新建训练 version 用的同一套解析（`default_paths_for_new_version`）：用户在
+    Settings → 模型 切换 `selected_anima`（官方 variant 或注册的本地 custom
+    `.safetensors`）即同时影响这里的主权重路径——所以能「在微调权重上测试出图」。
     """
-    from ..services.models import models_root
-    root = models_root()
-    return {
-        "transformer_path": str(root / "diffusion_models" / "anima-base-v1.0.safetensors"),
-        "vae_path": str(root / "vae" / "qwen_image_vae.safetensors"),
-        "text_encoder_path": str(root / "text_encoders"),
-        "t5_tokenizer_path": str(root / "t5_tokenizer"),
-    }
+    from ..services.models import default_paths_for_new_version
+    return default_paths_for_new_version()

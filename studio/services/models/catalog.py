@@ -73,6 +73,17 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
             **st,
         })
 
+    # 用户注册的本地 custom 主模型（PathPicker 选盘上已有的 .safetensors）。
+    models_cfg = secrets.load().models
+    custom_anima = []
+    for p in models_cfg.custom_anima_paths:
+        target = Path(str(p)).expanduser()
+        custom_anima.append({
+            "path": p,
+            "name": target.name,
+            **_file_status(target),
+        })
+
     vae_target = anima_vae_target(r)
     qwen_d = qwen_dir(r)
     t5_d = t5_tokenizer_dir(r)
@@ -184,6 +195,8 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
             "description": "Cosmos transformer (~4 GB)",
             "repo": ANIMA_REPO,
             "variants": anima_variants,
+            "custom": custom_anima,
+            "selected": models_cfg.selected_anima,
             "latest": LATEST_ANIMA,
         },
         "anima_vae": {

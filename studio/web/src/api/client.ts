@@ -364,10 +364,14 @@ export interface ModelsConfig {
   auto_sync_paths: boolean
   /** 训练模型根目录；null/空 → 回退 REPO_ROOT/models/（云端机改这里） */
   root: string | null
-  /** 当前默认主模型 variant（1.0 / preview3-base / preview2 / preview）。
+  /** 当前默认主模型：官方 variant key（1.0 / preview3-base / ...）或
+   * custom_anima_paths 里的某个本地 .safetensors 路径。
    * Studio 创建新 version 时把它展开成绝对路径写到 yaml.transformer_path；
    * 已存在 version 不动（保证训练重现性）。 */
   selected_anima: string
+  /** 用户注册的本地 custom 主模型（.safetensors 绝对路径）。微调训练 /
+   * 在微调权重上测试出图用；仅登记路径，不下载不复制。 */
+  custom_anima_paths: string[]
   /** 预处理默认放大器：预设 label（"4x-AnimeSharp" 等）或 custom 文件名
    * （"my-anime.pth"）。Preprocess 页和 worker 用它定权重路径。 */
   selected_upscaler: string
@@ -477,12 +481,24 @@ export interface AnimaVariantInfo extends ModelFileStatus {
   target_path: string
 }
 
+/** 用户注册的本地 custom 主模型（PathPicker 选盘上已有的 .safetensors）。 */
+export interface CustomAnimaInfo extends ModelFileStatus {
+  /** 注册的绝对路径（也是选中时写入 selected_anima 的值）。 */
+  path: string
+  /** 文件名，列表展示用。 */
+  name: string
+}
+
 export interface AnimaMainCatalog {
   id: 'anima_main'
   name: string
   description: string
   repo: string
   variants: AnimaVariantInfo[]
+  /** 本地注册的 custom 主模型列表。 */
+  custom: CustomAnimaInfo[]
+  /** 当前选中的主模型：variant key 或 custom 路径。 */
+  selected: string
   latest: string
 }
 
@@ -1767,6 +1783,18 @@ export const api = {
     req<{ key: string; status: string }>('/api/models/download', {
       method: 'POST',
       body: JSON.stringify(body),
+    }),
+  /** 注册一个本地 .safetensors 主模型（微调训练 / 微调上测试）。返回新 catalog。 */
+  addCustomAnima: (path: string) =>
+    req<ModelsCatalog>('/api/models/anima/custom', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
+  /** 注销一个本地 custom 主模型。返回新 catalog。 */
+  removeCustomAnima: (path: string) =>
+    req<ModelsCatalog>('/api/models/anima/custom', {
+      method: 'DELETE',
+      body: JSON.stringify({ path }),
     }),
   startUpscalerCustomDownload: (body: {
     source: 'hf' | 'ms'

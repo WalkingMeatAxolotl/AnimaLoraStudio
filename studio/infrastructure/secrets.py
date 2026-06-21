@@ -419,9 +419,14 @@ class ModelsConfig(BaseModel):
     - `root`：模型存放根目录。`None/""` → 回退到 `REPO_ROOT/models/`（默认）。
       云端 / 大容量数据盘可改成绝对路径，比如 `D:/anima-models` 或 `/data/anima`。
       所有训练模型（Anima / VAE / Qwen3 / T5 tokenizer / WD14）共享这一根目录。
-    - `selected_anima`：当前默认主模型 variant。Studio 创建新 version 时根据
-      此字段把 `transformer_path` 写成绝对路径到 yaml；已存在 version 不动
-      （保证训练重现性）。
+    - `selected_anima`：当前默认主模型。可为官方 variant key（`1.0` 等）**或**
+      `custom_anima_paths` 里某个本地 `.safetensors` 绝对路径。Studio 创建新
+      version 时根据此字段把 `transformer_path` 写成绝对路径到 yaml；已存在
+      version 不动（保证训练重现性）。
+    - `custom_anima_paths`：用户通过设置页 PathPicker 注册的本地主模型权重
+      （`.safetensors` 绝对路径列表）。用来微调训练 / 在微调权重上测试出图。
+      仅注册路径，不下载、不复制；条目失效（文件被删/移走）时解析自动回退到
+      官方 variant。
     - `selected_upscaler`：预处理默认放大器。可为预设 label（如 "4x-AnimeSharp"）
       或自定义/上传的文件名（如 "my-anime-model.pth"）。空串/None → 用
       DEFAULT_UPSCALER 兜底。
@@ -433,6 +438,7 @@ class ModelsConfig(BaseModel):
     """
     root: Optional[str] = None
     selected_anima: str = "1.0"
+    custom_anima_paths: list[str] = Field(default_factory=list)
     selected_upscaler: str = "4x-AnimeSharp"
     auto_sync_paths: bool = True
 
