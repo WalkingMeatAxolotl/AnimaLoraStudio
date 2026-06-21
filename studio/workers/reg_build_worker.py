@@ -208,9 +208,9 @@ def run(job_id: int) -> int:
             auto_dedup=bool(params.get("auto_dedup", True)),
             build_mode=str(params.get("build_mode") or "flat"),
             based_on_version=v["label"],
-            save_tags=sec.gelbooru.save_tags,
-            convert_to_png=sec.gelbooru.convert_to_png,
-            remove_alpha_channel=sec.gelbooru.remove_alpha_channel,
+            save_tags=sec.download.save_tags,
+            convert_to_png=sec.download.convert_to_png,
+            remove_alpha_channel=sec.download.remove_alpha_channel,
         )
         incremental = bool(params.get("incremental", True))
         pp_method = str(params.get("postprocess_method", "smart"))

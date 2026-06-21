@@ -89,9 +89,6 @@ export type ConfigData = Record<string, unknown>
 export interface GelbooruConfig {
   user_id: string
   api_key: string
-  save_tags: boolean
-  convert_to_png: boolean
-  remove_alpha_channel: boolean
 }
 
 export interface DanbooruConfig {
@@ -108,6 +105,10 @@ export interface DownloadGlobalConfig {
   api_rate_per_sec: number
   /** PP9 — CDN host (img*.gelbooru.com / cdn.donmai.us) 限速。 */
   cdn_rate_per_sec: number
+  /** 图片入库处理（booru 下载 / reg / 本地上传共用）。 */
+  save_tags: boolean
+  convert_to_png: boolean
+  remove_alpha_channel: boolean
 }
 
 export interface RegConfig {

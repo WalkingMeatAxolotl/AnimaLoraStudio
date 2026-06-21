@@ -12,9 +12,6 @@ const initialServerState = {
   gelbooru: {
     user_id: 'alice',
     api_key: '***', // 已保存，掩码
-    save_tags: false,
-    convert_to_png: true,
-    remove_alpha_channel: false,
   },
   danbooru: { username: '', api_key: '', account_type: 'free' },
   download: {
@@ -22,6 +19,9 @@ const initialServerState = {
     parallel_workers: 4,
     api_rate_per_sec: 2,
     cdn_rate_per_sec: 5,
+    save_tags: false,
+    convert_to_png: true,
+    remove_alpha_channel: false,
   },
   reg: { default_excluded_tags: [] },
   huggingface: { token: '', endpoint: '' },

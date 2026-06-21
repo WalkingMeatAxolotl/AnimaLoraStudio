@@ -932,6 +932,7 @@
     "accountFree": "free (max 2 tags)",
     "accountGold": "gold (max 6 tags)",
     "accountPlatinum": "platinum (max 12 tags)",
+    "danbooruAccountTypeHint": "Sets the multi-tag search limit when building regularization sets (free 2 / gold 6 / platinum 12).",
     "commaSeparated": "Comma-separated",
     "excludeTagsHelp": "Automatically appends <code>-tag</code> when searching; applies to Gelbooru / Danbooru too.",
     "excludeTagsPlaceholder": "e.g. comic, monochrome, lowres",

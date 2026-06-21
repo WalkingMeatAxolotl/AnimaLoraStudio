@@ -96,8 +96,6 @@ const TAB_LIST: { id: Tab; labelKey: string }[] = [
 // 对应；label 在导航里直接显示。修改 section 顺序时记得同步这里。
 const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
   dataset: [
-    { id: 'gelbooru', labelKey: 'settings.gelbooru' },
-    { id: 'danbooru', labelKey: 'settings.danbooru' },
     { id: 'download-global', labelKey: 'settings.downloadGlobal' },
     { id: 'reg', labelKey: 'settings.reg.sectionTitle' },
     { id: 'proxy', labelKey: 'settings.proxy.sectionTitle' },
@@ -205,19 +203,16 @@ function getStoredTab(): Tab {
 }
 
 const EMPTY: Secrets = {
-  gelbooru: {
-    user_id: '',
-    api_key: '',
-    save_tags: false,
-    convert_to_png: true,
-    remove_alpha_channel: true,
-  },
+  gelbooru: { user_id: '', api_key: '' },
   danbooru: { username: '', api_key: '', account_type: 'free' },
   download: {
     exclude_tags: [],
     parallel_workers: 4,
     api_rate_per_sec: 2,
     cdn_rate_per_sec: 5,
+    save_tags: false,
+    convert_to_png: true,
+    remove_alpha_channel: true,
   },
   reg: { default_excluded_tags: [] },
   huggingface: { token: '', endpoint: '' },
@@ -617,29 +612,6 @@ export default function SettingsPage() {
       )}
 
       {tab === 'dataset' && (<>
-      <SettingsSection id="gelbooru" title="Gelbooru">        <SettingsField label="save_tags">
-          <Bool value={draft.gelbooru.save_tags} onChange={(v) => update('gelbooru', 'save_tags', v)} />
-        </SettingsField>
-        <SettingsField label="convert_to_png">
-          <Bool value={draft.gelbooru.convert_to_png} onChange={(v) => update('gelbooru', 'convert_to_png', v)} />
-        </SettingsField>
-        <SettingsField label="remove_alpha_channel">
-          <Bool value={draft.gelbooru.remove_alpha_channel} onChange={(v) => update('gelbooru', 'remove_alpha_channel', v)} />
-        </SettingsField>
-      </SettingsSection>
-
-      <SettingsSection id="danbooru" title="Danbooru">        <SettingsField label="account_type">
-          <select
-            value={draft.danbooru.account_type}
-            onChange={(e) => update('danbooru', 'account_type', e.target.value as 'free' | 'gold' | 'platinum')}
-            className={textInputClass}          >
-            <option value="free">{t('settings.accountFree')}</option>
-            <option value="gold">{t('settings.accountGold')}</option>
-            <option value="platinum">{t('settings.accountPlatinum')}</option>
-          </select>
-        </SettingsField>
-      </SettingsSection>
-
       <SettingsSection id="download-global" title={t('settings.downloadGlobal')}>
         <SettingsField
           label="exclude_tags"
@@ -687,6 +659,18 @@ export default function SettingsPage() {
               className={`${textInputClass} max-w-24`}
             />
           </div>
+        </div>
+
+        <div className="flex flex-col gap-2 pt-2 border-t border-subtle">
+          <SettingsField label="save_tags">
+            <Bool value={draft.download.save_tags} onChange={(v) => update('download', 'save_tags', v)} />
+          </SettingsField>
+          <SettingsField label="convert_to_png">
+            <Bool value={draft.download.convert_to_png} onChange={(v) => update('download', 'convert_to_png', v)} />
+          </SettingsField>
+          <SettingsField label="remove_alpha_channel">
+            <Bool value={draft.download.remove_alpha_channel} onChange={(v) => update('download', 'remove_alpha_channel', v)} />
+          </SettingsField>
         </div>
       </SettingsSection>
 
@@ -1217,6 +1201,17 @@ export default function SettingsPage() {
               serverValue={server?.danbooru.api_key ?? ''}
               onChange={(v) => update('danbooru', 'api_key', v)}
             />
+          </SettingsField>
+          <SettingsField label="account_type" desc={t('settings.danbooruAccountTypeHint')}>
+            <select
+              value={draft.danbooru.account_type}
+              onChange={(e) => update('danbooru', 'account_type', e.target.value as 'free' | 'gold' | 'platinum')}
+              className={textInputClass}
+            >
+              <option value="free">{t('settings.accountFree')}</option>
+              <option value="gold">{t('settings.accountGold')}</option>
+              <option value="platinum">{t('settings.accountPlatinum')}</option>
+            </select>
           </SettingsField>
         </SettingsSection>
       </>)}

@@ -196,6 +196,34 @@ def test_download_sources_persist_and_normalize(secrets_file: Path) -> None:
     assert s.download_sources["upscaler"] == "huggingface"  # 非法值归一
 
 
+def test_download_image_settings_default(secrets_file: Path) -> None:
+    """save_tags/convert_to_png/remove_alpha_channel 现在挂在 download 下。"""
+    s = secrets.load()
+    assert s.download.save_tags is False
+    assert s.download.convert_to_png is True
+    assert s.download.remove_alpha_channel is True
+
+
+def test_migrate_gelbooru_image_settings_to_download(secrets_file: Path) -> None:
+    """旧 secrets.json 把这三个挂在 gelbooru 下 → 迁移到 download.*，老值不丢。"""
+    secrets_file.write_text(
+        json.dumps({
+            "gelbooru": {
+                "user_id": "u",
+                "save_tags": True,
+                "convert_to_png": False,
+                "remove_alpha_channel": False,
+            }
+        }),
+        encoding="utf-8",
+    )
+    s = secrets.load()
+    assert s.download.save_tags is True
+    assert s.download.convert_to_png is False
+    assert s.download.remove_alpha_channel is False
+    assert s.gelbooru.user_id == "u"  # 凭据保留
+
+
 def test_models_root_default_none(secrets_file: Path) -> None:
     """默认 secrets 里 models.root = None；下游应自行回退默认路径。"""
     s = secrets.load()

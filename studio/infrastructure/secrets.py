@@ -29,11 +29,6 @@ SENSITIVE_FIELDS: tuple[str, ...] = (
 class GelbooruConfig(BaseModel):
     user_id: str = ""
     api_key: str = ""
-    save_tags: bool = False
-    convert_to_png: bool = True
-    # 新装默认 true：训练里 4-channel PNG 会让 VAE 把透明区域当噪声学进去，
-    # 多数情况下用户都需要去掉 alpha。已存在 secrets.json 里显式 false 不受影响。
-    remove_alpha_channel: bool = True
 
 
 class DanbooruConfig(BaseModel):
@@ -119,6 +114,12 @@ class DownloadConfig(BaseModel):
     parallel_workers: int = 4
     api_rate_per_sec: float = 2.0
     cdn_rate_per_sec: float = 5.0
+    # 图片入库处理（曾挂在 gelbooru 下，实际被所有 booru 下载 / reg / 本地上传共用）：
+    save_tags: bool = False
+    convert_to_png: bool = True
+    # 新装默认 true：训练里 4-channel PNG 会让 VAE 把透明区域当噪声学进去，
+    # 多数情况下用户都需要去掉 alpha。已存在 secrets.json 里显式 false 不受影响。
+    remove_alpha_channel: bool = True
 
 
 class RegConfig(BaseModel):
@@ -643,6 +644,17 @@ def _migrate_legacy_schema(raw: dict[str, Any]) -> dict[str, Any]:
         # 新字段已显式设过 → 不覆盖（幂等）
         if "update_channel" not in sys_raw and sys_raw.get("show_dev_channel") is True:
             sys_raw["update_channel"] = "dev"
+
+    # 7. gelbooru 的图片入库设置搬到全局 download.*（这三个本被所有 booru 下载 /
+    #    reg / 本地上传共用，不该挂在 gelbooru 下）。download 侧未显式设过才搬，幂等。
+    gel_raw = raw.get("gelbooru")
+    if isinstance(gel_raw, dict):
+        dl_raw = raw.setdefault("download", {})
+        if isinstance(dl_raw, dict):
+            for k in ("save_tags", "convert_to_png", "remove_alpha_channel"):
+                if k in gel_raw and k not in dl_raw:
+                    dl_raw[k] = gel_raw[k]
+                gel_raw.pop(k, None)
 
     llm_old = raw.get("llm_tagger")
     if not isinstance(llm_old, dict):

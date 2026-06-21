@@ -932,6 +932,7 @@
     "accountFree": "free（max 2 tag）",
     "accountGold": "gold（max 6 tag）",
     "accountPlatinum": "platinum（max 12 tag）",
+    "danbooruAccountTypeHint": "影响构建正则集时 danbooru 多 tag 搜索上限（free 2 / gold 6 / platinum 12）。",
     "commaSeparated": "逗号分隔",
     "excludeTagsHelp": "搜索时自动追加 <code>-tag</code>，Gelbooru / Danbooru 同样生效。",
     "excludeTagsPlaceholder": "例：comic, monochrome, lowres",
