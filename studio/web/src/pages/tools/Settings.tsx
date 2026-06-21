@@ -76,7 +76,6 @@ type Tab = 'dataset' | 'tagging' | 'preprocess' | 'training' | 'monitor' | 'test
 // 反向映射决定要先切到哪个 tab。只列出能从外部链接到的 sections。
 const SECTION_TO_TAB: Record<string, Tab> = {
   'models': 'training',
-  'download-source': 'training',
   'version': 'system',
   'service': 'system',
 }
@@ -114,7 +113,6 @@ const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
     { id: 'tag-dictionary', labelKey: 'settings.tagDictionary.title' },
   ],
   training: [
-    { id: 'download-source', labelKey: 'settings.hfMirrorTitle' },
     { id: 'queue', labelKey: 'settings.queueSchedule' },
     { id: 'pytorch', labelKey: 'settings.torch' },
     { id: 'flash-attn', labelKey: 'settings.flashAttn' },
@@ -939,20 +937,6 @@ export default function SettingsPage() {
       </>)}
 
       {tab === 'training' && (<>
-      <SettingsSection id="download-source" title={t('settings.hfMirrorTitle')}>
-        {/* 下载源已按类型在各模型卡上单独选；token 在「密钥」tab；这里只剩走 HF
-            时用哪个镜像 endpoint（全局，对所有 HF 下载生效）。 */}
-        <p className="text-xs text-fg-tertiary">{t('settings.perItemSourceHint')}</p>
-        <SettingsField
-          label="endpoint"
-          helpTooltip={<p>{t('settings.hfEndpointHelp')}</p>}
-        >
-          <HFEndpointSelect
-            value={draft.huggingface.endpoint}
-            onChange={(v) => update('huggingface', 'endpoint', v)}
-          />
-        </SettingsField>      </SettingsSection>
-
       <SettingsSection id="queue" title={t('settings.queueSchedule')}>
         <SettingsField label={t('settings.allowGpuDuringTrain')}>
           <div className="flex items-center gap-3">
@@ -1163,6 +1147,12 @@ export default function SettingsPage() {
               value={draft.huggingface.token}
               serverValue={server?.huggingface.token ?? ''}
               onChange={(v) => update('huggingface', 'token', v)}
+            />
+          </SettingsField>
+          <SettingsField label="endpoint" helpTooltip={<p>{t('settings.hfEndpointHelp')}</p>}>
+            <HFEndpointSelect
+              value={draft.huggingface.endpoint}
+              onChange={(v) => update('huggingface', 'endpoint', v)}
             />
           </SettingsField>
         </SettingsSection>

@@ -903,8 +903,6 @@
     "batchSizeHint": "Images per GPU inference batch; CPU automatically falls back to 1",
     "downloadSource": "Source",
     "downloadSourceHelp": "ModelScope is faster for users in China; unmapped models fall back to HuggingFace automatically.",
-    "hfMirrorTitle": "HuggingFace mirror",
-    "perItemSourceHint": "Download source is now picked per model on each model card. This only sets which HF mirror to use when downloading from HuggingFace.",
     "singleSourceFixed": "Only available from this source",
     "hfTokenHelp": "For HF private repo authentication. Public repos (including SmilingWolf WD14 / cella110n CLTagger) do not need it.",
     "hfEndpointHelp": "Model download endpoint. Defaults to HuggingFace official. Pick \"Custom URL\" to paste a mirror / self-hosted reverse proxy.",
