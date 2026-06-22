@@ -114,6 +114,7 @@ const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
   ],
   training: [
     { id: 'queue', labelKey: 'settings.queueSchedule' },
+    { id: 'training-params', labelKey: 'settings.trainingParams' },
     { id: 'pytorch', labelKey: 'settings.torch' },
     { id: 'flash-attn', labelKey: 'settings.flashAttn' },
     { id: 'xformers', labelKey: 'settings.xformers' },
@@ -920,6 +921,8 @@ export default function SettingsPage() {
           </div>
         </SettingsField>
       </SettingsSection>
+
+      <TrainingParamsSection />
 
       <PyTorchSection />
 
@@ -1771,6 +1774,57 @@ function fmtBytes(n: number): string {
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
 }
 
+// ── 训练参数 Section ─────────────────────────────────────────────────
+//
+// 训练相关的全局开关。当前只有「自动配置模型路径」(auto_sync_paths)：独立 PUT，
+// 不进全局 dirty 流程。原先夹在「训练模型」section 里，挪到这里跟模型下载分开。
+function TrainingParamsSection() {
+  const { t } = useTranslation()
+  const { toast } = useToast()
+  const [autoSyncPaths, setAutoSyncPaths] = useState<boolean>(true)
+  const [savingAutoSync, setSavingAutoSync] = useState(false)
+
+  useEffect(() => {
+    void api.getSecrets().then((sec) => {
+      setAutoSyncPaths(sec.models?.auto_sync_paths ?? true)
+    }).catch(() => { /* 显示用，拉不到不阻塞 */ })
+  }, [])
+
+  const saveAutoSync = async (next: boolean) => {
+    setSavingAutoSync(true)
+    const prev = autoSyncPaths
+    setAutoSyncPaths(next)
+    try {
+      await api.updateSecrets({ models: { auto_sync_paths: next } })
+      toast(next ? t('settings.autoSyncPathsOn') : t('settings.autoSyncPathsOff'), 'success')
+    } catch (e) {
+      setAutoSyncPaths(prev)
+      toast(String(e), 'error')
+    } finally {
+      setSavingAutoSync(false)
+    }
+  }
+
+  return (
+    <SettingsSection id="training-params" title={t('settings.trainingParams')}>
+      <SettingsField
+        label={t('settings.autoSyncPathsLabel')}
+        helpTooltip={<p>{t('settings.autoSyncPathsHelp')}</p>}
+      >
+        <label className="flex items-center gap-2 pt-1.5">
+          <input
+            type="checkbox"
+            checked={autoSyncPaths}
+            onChange={(e) => void saveAutoSync(e.target.checked)}
+            disabled={savingAutoSync}
+            style={{ height: 16, width: 16 }}
+          />
+        </label>
+      </SettingsField>
+    </SettingsSection>
+  )
+}
+
 function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, catalogError, t }: {
   catalog: ModelsCatalog | null
   busy: Set<string>
@@ -1782,17 +1836,14 @@ function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, catalog
 }) {
   const { toast } = useToast()
   const [selectedAnima, setSelectedAnima] = useState<string>('1.0')
-  const [autoSyncPaths, setAutoSyncPaths] = useState<boolean>(true)
-  const [savingAutoSync, setSavingAutoSync] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
   const [addingCustom, setAddingCustom] = useState(false)
 
-  // 一次性拉 secrets 取 selected_anima + auto_sync_paths（独立 PUT，不进全局 dirty
-  // 流程）。模型根目录已挪到「系统 → 存储位置」，不再在此渲染。
+  // 一次性拉 secrets 取 selected_anima（独立 PUT，不进全局 dirty 流程）。模型
+  // 根目录已挪到「系统 → 存储位置」、自动配置模型路径已挪到「训练参数」，不在此渲染。
   useEffect(() => {
     void api.getSecrets().then((sec) => {
       setSelectedAnima(sec.models?.selected_anima ?? '1.0')
-      setAutoSyncPaths(sec.models?.auto_sync_paths ?? true)
     }).catch(() => { /* 显示用，拉不到不阻塞 */ })
   }, [])
 
@@ -1842,21 +1893,6 @@ function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, catalog
     }
   }
 
-  const saveAutoSync = async (next: boolean) => {
-    setSavingAutoSync(true)
-    const prev = autoSyncPaths
-    setAutoSyncPaths(next)
-    try {
-      await api.updateSecrets({ models: { auto_sync_paths: next } })
-      toast(next ? t('settings.autoSyncPathsOn') : t('settings.autoSyncPathsOff'), 'success')
-    } catch (e) {
-      setAutoSyncPaths(prev)
-      toast(String(e), 'error')
-    } finally {
-      setSavingAutoSync(false)
-    }
-  }
-
   const error = catalogError
 
   return (
@@ -1865,20 +1901,6 @@ function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, catalog
         opt={catalog?.download_source_options?.training}
         onChange={(s) => void setSource('training', s)}
       />
-      <SettingsField
-        label={t('settings.autoSyncPathsLabel')}
-        helpTooltip={<p>{t('settings.autoSyncPathsHelp')}</p>}
-      >
-        <label className="flex items-center gap-2 pt-1.5">
-          <input
-            type="checkbox"
-            checked={autoSyncPaths}
-            onChange={(e) => void saveAutoSync(e.target.checked)}
-            disabled={savingAutoSync}
-            style={{ height: 16, width: 16 }}
-          />
-        </label>
-      </SettingsField>
 
       {error && <div className="text-err text-xs font-mono">{error}</div>}
       {!catalog ? (
