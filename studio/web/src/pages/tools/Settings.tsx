@@ -912,13 +912,11 @@ export default function SettingsPage() {
 
       {tab === 'training' && (<>
       <SettingsSection id="queue" title={t('settings.queueSchedule')}>
-        <SettingsField label={t('settings.allowGpuDuringTrain')}>
-          <div className="flex items-center gap-3">
-            <Bool value={draft.queue.allow_gpu_during_train} onChange={(v) => update('queue', 'allow_gpu_during_train', v)} />
-            <span className="text-xs text-warn">
-              {t('settings.allowGpuDuringTrainHint')}
-            </span>
-          </div>
+        <SettingsField
+          label={t('settings.allowGpuDuringTrain')}
+          helpTooltip={<p>{t('settings.allowGpuDuringTrainHelp')}</p>}
+        >
+          <Bool value={draft.queue.allow_gpu_during_train} onChange={(v) => update('queue', 'allow_gpu_during_train', v)} />
         </SettingsField>
       </SettingsSection>
 
