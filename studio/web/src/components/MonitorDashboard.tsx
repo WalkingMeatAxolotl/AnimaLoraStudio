@@ -341,32 +341,35 @@ function SampleViewer({ samples, taskId }: {
             m.epoch != null ? `ep ${m.epoch}` : null,
             m.step != null ? `step ${m.step}` : null,
           ].filter(Boolean).join(' · ') || fn
+          // 角标放缩略图下面一行，不压在 64px 小图上（盖住看不清）。
+          const thumbCaption = [
+            m.epoch != null ? `ep${m.epoch}` : null,
+            m.step != null ? `${m.step}` : null,
+          ].filter(Boolean).join('·')
           return (
             <button
               key={`${fn}-${i}`}
               onClick={() => setActive(i)}
-              className={[
-                'shrink-0 rounded-sm overflow-hidden border transition-colors relative',
-                isActive ? 'border-accent ring-2 ring-accent-soft' : 'border-subtle hover:border-bold',
-                'cursor-pointer p-0 bg-sunken',
-              ].join(' ')}
+              className="shrink-0 flex flex-col items-center gap-0.5 p-0 bg-transparent border-none cursor-pointer"
               title={thumbTitle}
-              style={{ width: 64, height: 64 }}
             >
-              <img
-                src={thumbUrl}
-                alt=""
-                loading="lazy"
-                className="w-full h-full object-cover block"
-              />
-              {m.epoch != null && (
-                <span className="absolute top-0 inset-x-0 bg-black/55 text-accent text-[10px] font-mono text-center leading-tight py-0.5">
-                  ep {m.epoch.toLocaleString()}
-                </span>
-              )}
-              {m.step != null && (
-                <span className="absolute bottom-0 inset-x-0 bg-black/55 text-white text-[10px] font-mono text-center leading-tight py-0.5">
-                  {m.step.toLocaleString()}
+              <div
+                className={[
+                  'rounded-sm overflow-hidden border transition-colors bg-sunken',
+                  isActive ? 'border-accent ring-2 ring-accent-soft' : 'border-subtle hover:border-bold',
+                ].join(' ')}
+                style={{ width: 64, height: 64 }}
+              >
+                <img
+                  src={thumbUrl}
+                  alt=""
+                  loading="lazy"
+                  className="w-full h-full object-cover block"
+                />
+              </div>
+              {thumbCaption && (
+                <span className={`text-[10px] font-mono leading-tight text-center ${isActive ? 'text-fg-primary' : 'text-fg-tertiary'}`}>
+                  {thumbCaption}
                 </span>
               )}
             </button>
