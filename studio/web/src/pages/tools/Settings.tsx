@@ -1959,7 +1959,7 @@ function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, catalog
                     <span style={{ flex: 1 }} />
                     <button
                       onClick={() => void removeCustom(c.path)}
-                      className="btn btn-secondary btn-sm shrink-0"
+                      className="btn btn-secondary btn-sm shrink-0 min-w-[5rem] justify-center"
                       title={t('settings.removeLocalModel')}
                     >🗑 {t('settings.removeLocalModelShort')}</button>
                   </li>
@@ -2290,10 +2290,10 @@ function DownloadButton({ exists, status, busy, onClick }: {
   const { t } = useTranslation()
   const running = status === 'running' || busy
   if (running) {
-    return <button disabled className="btn btn-secondary btn-sm" style={{ opacity: 0.5 }}>...</button>
+    return <button disabled className="btn btn-secondary btn-sm min-w-[5rem] justify-center" style={{ opacity: 0.5 }}>...</button>
   }
   return (
-    <button onClick={onClick} className="btn btn-secondary btn-sm"
+    <button onClick={onClick} className="btn btn-secondary btn-sm min-w-[5rem] justify-center"
       title={exists ? t('settings.redownloadTitle') : t('common.download')}>
       {exists ? t('settings.redownload') : t('settings.downloadAction')}
     </button>
