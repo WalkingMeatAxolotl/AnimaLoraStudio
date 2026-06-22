@@ -6,8 +6,7 @@ export default function MonitorPage() {
   const [health, setHealth] = useState<HealthResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [tasks, setTasks] = useState<Task[]>([])
-  // `?task=N` 来自 MonitorDashboard 的「独立监控」按钮（旧 monitor_smooth.html 替代品），
-  // 让独立窗口直接锁定到 dashboard 当前的 task。
+  // `?task=N` 深链：直接把监控页锁定到指定 task（书签 / 外部链接用）。
   const initialTaskId = useMemo<number | null>(() => {
     if (typeof window === 'undefined') return null
     const raw = new URLSearchParams(window.location.search).get('task')

@@ -529,15 +529,6 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
             )}
           </>
         )}
-        <span className="flex-1" />
-        <a
-          href={`/tools/monitor?task=${taskId}`}
-          target="_blank"
-          rel="noopener"
-          className="text-fg-tertiary no-underline hover:text-fg-primary transition-colors"
-        >
-          独立监控 ↗
-        </a>
       </div>
 
       {/* 6 stat cards */}
