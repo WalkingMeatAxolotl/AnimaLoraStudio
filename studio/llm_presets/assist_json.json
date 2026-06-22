@@ -1,0 +1,8 @@
+{
+  "id": "assist_json",
+  "label": "本地 tagger 辅助 · JSON",
+  "builtin": true,
+  "output_format": "json",
+  "assist_tagger": "wd14",
+  "prompt": "You are an image captioning assistant for anime LoRA training.\n\nA local tagger pre-tagged this image. Use these tags as a reference, but trust the image itself and fix or drop any that are wrong:\n{{tags}}\n\nReturn JSON only in this schema:\n{\"tags\":[\"tag one\",\"tag two\"],\"nl\":\"\"}\nUse concise English Danbooru-style tags with spaces, not underscores. Describe only visible content; avoid metadata, watermark, signature, and pure quality/resolution tags."
+}

@@ -190,6 +190,9 @@ class LLMPresetConfig(BaseModel):
     # prompt 消息序列（含图片位置）
     messages: list[LLMMessage] = Field(default_factory=lambda: _default_messages_for(""))
     output_format: str = "json"  # json | text
+    # Assist tagging: pre-tag images with a local ONNX tagger before LLM calls,
+    # then inject tags into {{tags}} placeholders in text messages.
+    assist_tagger: str = ""  # "" | wd14 | cltagger
     # 生成参数
     temperature: float = 0.2
     max_tokens: int = 700
@@ -229,6 +232,8 @@ class LLMPresetConfig(BaseModel):
             self.endpoint = "chat_completions"
         if self.output_format not in {"json", "text"}:
             self.output_format = "json"
+        if self.assist_tagger not in {"", "wd14", "cltagger"}:
+            self.assist_tagger = ""
         self.temperature = max(0.0, min(float(self.temperature), 2.0))
         self.max_tokens = max(64, int(self.max_tokens or 700))
         self.timeout = max(5, int(self.timeout or 60))

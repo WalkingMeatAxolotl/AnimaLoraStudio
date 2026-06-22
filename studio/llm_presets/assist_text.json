@@ -1,0 +1,8 @@
+{
+  "id": "assist_text",
+  "label": "本地 tagger 辅助 · 文本",
+  "builtin": true,
+  "output_format": "text",
+  "assist_tagger": "wd14",
+  "prompt": "A local tagger pre-tagged this image. Use these tags as a reference, but trust the image itself and fix or drop any that are wrong:\n{{tags}}\n\nWrite a natural-language caption describing the image. Then review the tags above and find any whose meaning your caption did not already convey. Put those uncovered tags first, comma-separated, then append your natural-language caption (also comma-separated). Respond with a single line, no labels and no JSON:\n<uncovered tags>, <natural-language caption>"
+}

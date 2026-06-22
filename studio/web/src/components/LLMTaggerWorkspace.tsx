@@ -86,7 +86,7 @@ export default function LLMTaggerWorkspace(props: Props) {
     if (!serverCurrentPreset) return 0
     const keys: (keyof LLMPreset)[] = [
       'label', 'base_url', 'api_key', 'model', 'model_ids', 'endpoint',
-      'messages', 'output_format', 'temperature', 'max_tokens',
+      'messages', 'output_format', 'assist_tagger', 'temperature', 'max_tokens',
       'max_side', 'jpeg_quality', 'max_image_mb', 'timeout', 'max_retries',
       'concurrency', 'requests_per_second', 'max_requests_per_minute',
     ]
@@ -574,6 +574,11 @@ function ComposerSection({ preset, onUpdate }: {
   onUpdate: <K extends keyof LLMPreset>(field: K, value: LLMPreset[K]) => void
 }) {
   const { t } = useTranslation()
+  const assistHelp = t('llmWorkspace.assistTaggerHelp').split('%TAGS%').join('{{tags}}')
+  const assistNeedsTagsMsg = t('llmWorkspace.assistNeedsTags').split('%TAGS%').join('{{tags}}')
+  const assistNeedsTags =
+    !!preset.assist_tagger
+    && !preset.messages.some((m) => m.type === 'text' && m.content.includes('{{tags}}'))
   return (
     <div
       className="flex flex-col"
@@ -599,6 +604,33 @@ function ComposerSection({ preset, onUpdate }: {
           </span>
         </div>
         <div className="flex items-center gap-1.5">
+          <div className="flex items-center" style={{
+            background: 'var(--bg-sunken)',
+            border: '1px solid var(--border-subtle)',
+            borderRadius: 'var(--r-md)',
+            padding: '4px 6px 4px 12px',
+            gap: 8,
+          }}>
+            <span style={{
+              fontFamily: 'var(--font-mono)', fontSize: 'var(--t-2xs)',
+              color: 'var(--fg-tertiary)', letterSpacing: '0.06em',
+              textTransform: 'uppercase',
+            }}>{t('llmWorkspace.assistTagger')}</span>
+            <select
+              value={preset.assist_tagger}
+              onChange={(e) => onUpdate('assist_tagger', e.target.value)}
+              title={assistHelp}
+              className="cursor-pointer outline-none border-0"
+              style={{
+                background: 'transparent', color: 'var(--fg-primary)',
+                fontSize: 'var(--t-sm)', padding: '4px 6px',
+              }}
+            >
+              <option value="">{t('llmWorkspace.assistOff')}</option>
+              <option value="wd14">WD14</option>
+              <option value="cltagger">CLTagger</option>
+            </select>
+          </div>
           <div className="flex items-center" style={{
             background: 'var(--bg-sunken)',
             border: '1px solid var(--border-subtle)',
@@ -641,6 +673,17 @@ function ComposerSection({ preset, onUpdate }: {
             }}
           >
             {t('llmWorkspace.responsesWarning')}
+          </div>
+        )}
+        {assistNeedsTags && (
+          <div
+            style={{
+              fontSize: 'var(--t-xs)', color: 'var(--warn)',
+              fontFamily: 'var(--font-mono)', letterSpacing: '0.04em',
+              marginBottom: 10,
+            }}
+          >
+            {assistNeedsTagsMsg}
           </div>
         )}
         <LLMMessagesEditor
