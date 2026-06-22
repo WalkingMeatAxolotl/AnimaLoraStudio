@@ -649,7 +649,7 @@ export default function SettingsPage() {
               type="number" min={1} max={16}
               value={draft.download.parallel_workers}
               onChange={(v) => update('download', 'parallel_workers', Math.max(1, Number(v) || 1))}
-              className={`${textInputClass} max-w-24`}
+              className={`${textInputClass} max-w-32`}
             />
           </SettingsField>
           <SettingsField label={t('settings.fieldApiRate')}>
@@ -657,7 +657,7 @@ export default function SettingsPage() {
               type="number" step="0.5" min={0.5} max={10}
               value={draft.download.api_rate_per_sec}
               onChange={(v) => update('download', 'api_rate_per_sec', Math.max(0.5, Number(v) || 0.5))}
-              className={`${textInputClass} max-w-24`}
+              className={`${textInputClass} max-w-32`}
             />
           </SettingsField>
           <SettingsField label={t('settings.fieldCdnRate')}>
@@ -665,7 +665,7 @@ export default function SettingsPage() {
               type="number" step="1" min={1} max={20}
               value={draft.download.cdn_rate_per_sec}
               onChange={(v) => update('download', 'cdn_rate_per_sec', Math.max(1, Number(v) || 1))}
-              className={`${textInputClass} max-w-24`}
+              className={`${textInputClass} max-w-32`}
             />
           </SettingsField>
         </div>
@@ -833,7 +833,7 @@ export default function SettingsPage() {
             type="number" min={1} max={64}
             value={draft.wd14.batch_size}
             onChange={(v) => update('wd14', 'batch_size', Math.max(1, Number(v) || 1))}
-            className={`${textInputClass} max-w-24`}
+            className={`${textInputClass} max-w-32`}
           />
         </SettingsField>
       </SettingsSection>
@@ -901,7 +901,7 @@ export default function SettingsPage() {
             type="number" min={1} max={64}
             value={draft.cltagger.batch_size}
             onChange={(v) => update('cltagger', 'batch_size', Math.max(1, Number(v) || 1))}
-            className={`${textInputClass} max-w-24`}
+            className={`${textInputClass} max-w-32`}
           />
         </SettingsField>
       </SettingsSection>
@@ -1042,7 +1042,7 @@ export default function SettingsPage() {
                   <select
                     value={draft.wandb.upload_model_policy}
                     onChange={(e) => update('wandb', 'upload_model_policy', e.target.value as 'all' | 'last')}
-                    className={textInputClass + ' w-auto'}
+                    className={textInputClass + ' max-w-32'}
                   >
                     <option value="last">{t('settings.policyLast')}</option>
                     <option value="all">{t('settings.policyAll')}</option>
@@ -1060,7 +1060,7 @@ export default function SettingsPage() {
                   <select
                     value={draft.wandb.upload_state_manual_policy}
                     onChange={(e) => update('wandb', 'upload_state_manual_policy', e.target.value as 'all' | 'last')}
-                    className={textInputClass + ' w-auto'}
+                    className={textInputClass + ' max-w-32'}
                   >
                     <option value="last">{t('settings.policyLast')}</option>
                     <option value="all">{t('settings.policyAll')}</option>
@@ -1078,7 +1078,7 @@ export default function SettingsPage() {
                   <select
                     value={draft.wandb.upload_state_auto_policy}
                     onChange={(e) => update('wandb', 'upload_state_auto_policy', e.target.value as 'all' | 'last')}
-                    className={textInputClass + ' w-auto'}
+                    className={textInputClass + ' max-w-32'}
                   >
                     <option value="last">{t('settings.policyLast')}</option>
                     <option value="all">{t('settings.policyAll')}</option>
@@ -1357,7 +1357,7 @@ function Bool({ value, onChange, disabled }: { value: boolean; onChange: (v: boo
       value={value ? 'on' : 'off'}
       onChange={(e) => onChange(e.target.value === 'on')}
       disabled={disabled}
-      className={`${textInputClass} w-auto disabled:opacity-60`}
+      className={`${textInputClass} max-w-32 disabled:opacity-60`}
     >
       <option value="on">{t('settings.boolEnabled')}</option>
       <option value="off">{t('settings.boolDisabled')}</option>
@@ -2171,8 +2171,7 @@ function UpscalerSection({
                 <select
                   value={customSource}
                   onChange={(e) => setCustomSource(e.target.value as 'hf' | 'ms')}
-                  className="input text-xs"
-                  style={{ width: 'auto' }}
+                  className={`${textInputClass} max-w-32`}
                 >
                   <option value="hf">HuggingFace</option>
                   <option value="ms">ModelScope</option>
@@ -3107,8 +3106,7 @@ function IdleTimeoutSection({
             max={240}
             value={minutes}
             onChange={(e) => update('generate', 'idle_timeout_minutes', Math.max(0, Number(e.target.value) || 0))}
-            className="input"
-            style={{ width: 80 }}
+            className={`${textInputClass} max-w-32`}
           />
           <span className="text-xs text-fg-tertiary">
             {minutes === 0
@@ -3141,8 +3139,7 @@ function VaePrecisionSection({
         <select
           value={draft.generate.vae_precision ?? 'bf16'}
           onChange={(e) => update('generate', 'vae_precision', e.target.value as 'bf16' | 'fp32')}
-          className={textInputClass}
-          style={{ width: 120 }}
+          className={`${textInputClass} max-w-32`}
         >
           <option value="bf16">bf16</option>
           <option value="fp32">fp32</option>
@@ -3178,8 +3175,7 @@ function TaeFluxSection({
           max={50}
           value={n}
           onChange={(e) => update('generate', 'preview_every_n_steps', Number(e.target.value) || 0)}
-          className="input"
-          style={{ width: 80 }}
+          className={`${textInputClass} max-w-32`}
         />
       </SettingsField>
     </SettingsSection>
