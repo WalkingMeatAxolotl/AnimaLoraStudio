@@ -977,27 +977,25 @@ export default function SettingsPage() {
             className={textInputClass}
           />
         </SettingsField>
-        <div className="grid grid-cols-2 gap-3">
-          <SettingsField label={t('settings.fieldMode')}>
-            <select
-              value={draft.wandb.mode}
-              onChange={(e) => update('wandb', 'mode', e.target.value as WandBConfig['mode'])}
-              className={textInputClass}
-            >
-              <option value="online">online</option>
-              <option value="offline">offline</option>
-              <option value="disabled">disabled</option>
-            </select>
-          </SettingsField>
-          <SettingsField
-            label={t('settings.logSamples')}
-            helpTooltip={
-              <p><Trans i18nKey="settings.logSamplesHelp" components={{ code: <code /> }} /></p>
-            }
+        <SettingsField label={t('settings.fieldMode')}>
+          <select
+            value={draft.wandb.mode}
+            onChange={(e) => update('wandb', 'mode', e.target.value as WandBConfig['mode'])}
+            className={`${textInputClass} max-w-32`}
           >
-            <Bool value={draft.wandb.log_samples} onChange={(v) => update('wandb', 'log_samples', v)} />
-          </SettingsField>
-        </div>
+            <option value="online">online</option>
+            <option value="offline">offline</option>
+            <option value="disabled">disabled</option>
+          </select>
+        </SettingsField>
+        <SettingsField
+          label={t('settings.logSamples')}
+          helpTooltip={
+            <p><Trans i18nKey="settings.logSamplesHelp" components={{ code: <code /> }} /></p>
+          }
+        >
+          <Bool value={draft.wandb.log_samples} onChange={(v) => update('wandb', 'log_samples', v)} />
+        </SettingsField>
         {draft.wandb.log_samples && (
           <div className="grid grid-cols-2 gap-3">
             <SettingsField
