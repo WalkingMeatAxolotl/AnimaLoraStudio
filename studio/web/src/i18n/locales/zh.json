@@ -933,6 +933,8 @@
     "fieldUsername": "用户名",
     "fieldAccountType": "账户类型",
     "fieldModelId": "Model ID",
+    "boolEnabled": "启用",
+    "boolDisabled": "关闭",
     "downloadSourceHelp": "魔搭（ModelScope）对国内用户更快；无映射的模型自动回退 HuggingFace。",
     "singleSourceFixed": "仅此一个源可用",
     "hfTokenHelp": "用于 HF 私有 repo 鉴权。公开仓库（含 SmilingWolf WD14 / cella110n CLTagger）不用填。",

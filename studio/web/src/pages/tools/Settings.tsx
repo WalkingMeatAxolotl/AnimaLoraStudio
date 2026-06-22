@@ -1350,15 +1350,18 @@ function SettingsField({ label, desc, helpTooltip, children }: {
   )
 }
 
-function Bool({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
+function Bool({ value, onChange, disabled }: { value: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
+  const { t } = useTranslation()
   return (
-    <input
-      type="checkbox"
-      checked={value}
-      onChange={(e) => onChange(e.target.checked)}
-      className="w-4 h-4"
-      style={{ accentColor: 'var(--accent)' }}
-    />
+    <select
+      value={value ? 'on' : 'off'}
+      onChange={(e) => onChange(e.target.value === 'on')}
+      disabled={disabled}
+      className={`${textInputClass} w-auto disabled:opacity-60`}
+    >
+      <option value="on">{t('settings.boolEnabled')}</option>
+      <option value="off">{t('settings.boolDisabled')}</option>
+    </select>
   )
 }
 
@@ -1809,15 +1812,7 @@ function TrainingParamsSection() {
         label={t('settings.autoSyncPathsLabel')}
         helpTooltip={<p>{t('settings.autoSyncPathsHelp')}</p>}
       >
-        <label className="flex items-center gap-2 pt-1.5">
-          <input
-            type="checkbox"
-            checked={autoSyncPaths}
-            onChange={(e) => void saveAutoSync(e.target.checked)}
-            disabled={savingAutoSync}
-            style={{ height: 16, width: 16 }}
-          />
-        </label>
+        <Bool value={autoSyncPaths} onChange={(v) => void saveAutoSync(v)} disabled={savingAutoSync} />
       </SettingsField>
     </SettingsSection>
   )

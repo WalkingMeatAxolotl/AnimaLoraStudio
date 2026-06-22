@@ -933,6 +933,8 @@
     "fieldUsername": "Username",
     "fieldAccountType": "Account type",
     "fieldModelId": "Model ID",
+    "boolEnabled": "Enabled",
+    "boolDisabled": "Disabled",
     "downloadSourceHelp": "ModelScope is faster for users in China; unmapped models fall back to HuggingFace automatically.",
     "singleSourceFixed": "Only available from this source",
     "hfTokenHelp": "For HF private repo authentication. Public repos (including SmilingWolf WD14 / cella110n CLTagger) do not need it.",
