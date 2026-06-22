@@ -614,7 +614,7 @@ export default function SettingsPage() {
       />
 
       <div ref={scrollContainerRef} className="p-6 pb-12 flex-1 overflow-y-auto">
-      <div className="grid gap-10 max-w-[1400px]" style={{ gridTemplateColumns: 'minmax(0,1fr) 200px' }}>
+      <div className="grid gap-10 max-w-[1920px]" style={{ gridTemplateColumns: 'minmax(0,1fr) 200px' }}>
       <div className="flex flex-col gap-8 min-w-0">
 
       {error && (
