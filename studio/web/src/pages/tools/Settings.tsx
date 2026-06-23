@@ -3369,7 +3369,9 @@ async function pollHealthThenReload(
 function VersionSection() {
   const { t } = useTranslation()
   const { toast } = useToast()
-  // chunk 4：dialog 模态被 inline preview 面板取代，VersionSection 不再用 dialog
+  // chunk 4：update 预览走 inline preview 面板（不用 dialog）。例外：工作树 dirty
+  // 时确认更新前要弹一个"强制覆盖"确认 modal，复用 useDialog().confirm。
+  const dialog = useDialog()
   const [version, setVersion] = useState<SystemVersion | null>(null)
   const [check, setCheck] = useState<SystemUpdateCheck | null>(null)
   const [status, setStatus] = useState<SystemUpdateStatus | null>(null)
@@ -3531,11 +3533,22 @@ function VersionSection() {
   const confirmPreview = async () => {
     if (!pendingTarget) return
     const t = pendingTarget
+    // 工作树脏（真实改动，自动 churn 已在后端剔除）→ 弹确认 modal。reset --hard
+    // 会丢弃这些未提交改动且不可恢复，必须用户显式点确认才带 force。取消则留在
+    // preview 不动。(i18n 用 i18n.t —— 此作用域 t 已被 pendingTarget 遮蔽。)
+    const force = preflight?.working_tree_dirty === true
+    if (force) {
+      const ok = await dialog.confirm(i18n.t('settings.forceUpdateConfirm'), {
+        tone: 'warn',
+        okText: i18n.t('settings.forceUpdateConfirmOk'),
+      })
+      if (!ok) return
+    }
     if (t.kind === 'master') setMasterState('progress')
     else setDevState('progress')
     setBusy(true)
     try {
-      await api.performSystemUpdate(t.ref)
+      await api.performSystemUpdate(t.ref, force)
     } catch (e) {
       toast(_formatActionError(e, t.kind === 'master' ? i18n.t('settings.actionUpdate') : i18n.t('settings.actionSwitch')), 'error')
       setBusy(false)

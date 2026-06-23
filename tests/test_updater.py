@@ -31,6 +31,7 @@ def _isolate_flags(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     避免污染开发机的标志文件。"""
     monkeypatch.setattr(updater, "RESTART_FLAG", tmp_path / "tmp" / "restart")
     monkeypatch.setattr(updater, "UPDATE_PENDING", tmp_path / ".update_pending")
+    monkeypatch.setattr(updater, "UPDATE_FORCE", tmp_path / ".update_force")
     monkeypatch.setattr(updater, "UPDATE_CACHE", tmp_path / ".update_cache")
     monkeypatch.setattr(updater, "LAST_VERSION", tmp_path / ".last_version")
     monkeypatch.setattr(updater, "UPDATE_LOG", tmp_path / ".update_log")
@@ -56,6 +57,54 @@ def test_current_version_smoke() -> None:
 
 
 # ---------------------------------------------------------------------------
+# _porcelain_dirty_paths — allowlist 剔除（自动 churn 文件不算 dirty）
+# ---------------------------------------------------------------------------
+
+def test_porcelain_dirty_paths_clean(monkeypatch: pytest.MonkeyPatch) -> None:
+    """git status --porcelain 输出空 → 工作树干净。"""
+    monkeypatch.setattr(updater, "_git", lambda *a, **k: (0, "", ""))
+    assert updater._porcelain_dirty_paths() == []
+
+
+def test_porcelain_dirty_paths_excludes_lockfile(monkeypatch: pytest.MonkeyPatch) -> None:
+    """唯一改动是 package-lock.json（npm 按本机版本自动 churn）→ 视为干净。
+
+    用户报的 bug：新 npm 启动期改写 lockfile 补 "peer": true → working tree
+    凭空 dirty → 自更新 precondition 闸死。allowlist 剔除后不再触发。
+    """
+    monkeypatch.setattr(
+        updater, "_git",
+        lambda *a, **k: (0, " M studio/web/package-lock.json", ""),
+    )
+    assert updater._porcelain_dirty_paths() == []
+
+
+def test_porcelain_dirty_paths_keeps_real_changes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """lockfile churn + 真实手改文件混在一起 → 只剩真实改动，仍算 dirty。"""
+    out = " M studio/web/package-lock.json\n M runtime/anima_train.py"
+    monkeypatch.setattr(updater, "_git", lambda *a, **k: (0, out, ""))
+    assert updater._porcelain_dirty_paths() == ["runtime/anima_train.py"]
+
+
+def test_porcelain_dirty_paths_rename_uses_new_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """重命名行 `R  old -> new` 取箭头右侧的新路径。"""
+    monkeypatch.setattr(updater, "_git", lambda *a, **k: (0, "R  a/old.py -> a/new.py", ""))
+    assert updater._porcelain_dirty_paths() == ["a/new.py"]
+
+
+def test_current_version_clean_when_only_lockfile_churn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """current_version().is_dirty 跟随 _porcelain_dirty_paths：仅 lockfile churn →
+    is_dirty=False（这条把"自更新被 lockfile 卡死"的回归守住）。"""
+    monkeypatch.setattr(updater, "_porcelain_dirty_paths", lambda: [])
+    monkeypatch.setattr(updater, "git_repo_status",
+                        lambda: updater.GitRepoStatus(True, True, True))
+    monkeypatch.setattr(updater, "_git", lambda *a, **k: (0, "abc123def456", ""))
+    assert updater.current_version().is_dirty is False
+    monkeypatch.setattr(updater, "_porcelain_dirty_paths", lambda: ["runtime/x.py"])
+    assert updater.current_version().is_dirty is True
+
+
+# ---------------------------------------------------------------------------
 # request_update / has_pending
 # ---------------------------------------------------------------------------
 
@@ -73,6 +122,25 @@ def test_request_update_writes_flags(_isolate_flags: Path) -> None:
 def test_request_update_custom_target(_isolate_flags: Path) -> None:
     updater.request_update("abc1234567")
     assert updater.UPDATE_PENDING.read_text(encoding="utf-8") == "abc1234567"
+
+
+def test_request_update_no_force_marker_by_default(_isolate_flags: Path) -> None:
+    updater.request_update("origin/master")
+    assert not updater.UPDATE_FORCE.exists()
+
+
+def test_request_update_force_writes_marker(_isolate_flags: Path) -> None:
+    updater.request_update("origin/master", force=True)
+    assert updater.UPDATE_FORCE.exists()
+
+
+def test_request_update_clears_stale_force_marker(_isolate_flags: Path) -> None:
+    """上次写过 force marker 但没消费；本次普通（非 force）请求必须清掉它，
+    避免普通更新被误判成 force 覆盖 dirty 工作树。"""
+    updater.UPDATE_FORCE.parent.mkdir(parents=True, exist_ok=True)
+    updater.UPDATE_FORCE.touch()
+    updater.request_update("origin/master")  # force 默认 False
+    assert not updater.UPDATE_FORCE.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +180,43 @@ def test_apply_pending_dirty_tree_aborts(
     assert "[abort] working tree dirty" in log
     # 不应该调任何 git 命令（fetch / reset / pull 都不该跑）
     assert git_calls == []
+
+
+def test_apply_pending_force_overwrites_dirty(
+    _isolate_flags: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """force marker 存在时，dirty 工作树**不**中止：照常 git fetch + reset --hard
+    （覆盖本地改动），收尾清掉 force marker，status=ok。"""
+    fake = updater.VersionInfo(
+        version="0.0.0", commit="abc", commit_short="abc",
+        commit_time_iso="", branch="master", tag=None, is_dirty=True,
+        installed_kind="custom", installed_label="自定义（master @ abc）",
+        stable_version=None,
+    )
+    monkeypatch.setattr(updater, "current_version", lambda: fake)
+    monkeypatch.setattr(updater, "_requirements_marker_stale", lambda: False)
+    monkeypatch.setattr(updater, "_package_json_changed", lambda: False)
+
+    git_calls: list[tuple] = []
+    def _fake_git(*args, **kwargs):
+        git_calls.append(args)
+        return 0, "", ""
+    monkeypatch.setattr(updater, "_git", _fake_git)
+
+    updater.request_update("origin/master", force=True)
+    result = updater.apply_pending(emit=lambda _: None)
+
+    assert result is True
+    # 没 abort：fetch + reset --hard 都跑了
+    assert any(c[:2] == ("fetch", "origin") for c in git_calls), "force 路径应当 git fetch"
+    assert any(c[0] == "reset" and "--hard" in c for c in git_calls), "force 路径应当 reset --hard"
+    # force marker + pending 都清了
+    assert not updater.UPDATE_FORCE.exists()
+    assert not updater.UPDATE_PENDING.exists()
+    st = updater.last_status()
+    assert st is not None and st.status == "ok"
+    log = updater.UPDATE_LOG.read_text(encoding="utf-8")
+    assert "[force]" in log and "[abort]" not in log
 
 
 def test_apply_pending_records_last_version(

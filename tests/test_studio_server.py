@@ -663,6 +663,34 @@ def test_system_update_rejects_when_dirty(
     assert body["error"]["code"] == "system.working_tree_dirty"
 
 
+def test_system_update_force_bypasses_dirty(
+    client: TestClient,
+    isolated_paths: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """force=True：dirty 工作树不再 422，写 pending + force marker（启动期
+    apply_pending 会 reset --hard 覆盖本地改动）。"""
+    from studio.services.runtime import updater
+    dirty = updater.VersionInfo(
+        version="0.6.0", commit="abc", commit_short="abc", commit_time_iso="",
+        branch="master", tag=None, is_dirty=True,
+    )
+    monkeypatch.setattr(updater, "current_version", lambda: dirty)
+    pending = tmp_path / ".update_pending"
+    force_flag = tmp_path / ".update_force"
+    restart_flag = tmp_path / "tmp" / "restart"
+    monkeypatch.setattr(updater, "UPDATE_PENDING", pending)
+    monkeypatch.setattr(updater, "UPDATE_FORCE", force_flag)
+    monkeypatch.setattr(updater, "RESTART_FLAG", restart_flag)
+    monkeypatch.setattr("studio.api.routers.system._raise_sigint_after_response", lambda: None)
+
+    resp = client.post("/api/system/update", json={"target": "origin/master", "force": True})
+    assert resp.status_code == 200
+    assert pending.read_text(encoding="utf-8") == "origin/master"
+    assert force_flag.exists()
+
+
 def test_system_update_writes_pending_and_restart_flag(
     client: TestClient,
     isolated_paths: dict[str, Path],
@@ -895,12 +923,14 @@ def test_preflight_clean_no_running_no_diff(
     assert keys == ["dirty", "running_tasks", "requirements_diff", "last_version"]
 
 
-def test_preflight_dirty_blocks(
+def test_preflight_dirty_warns_overridable(
     client: TestClient,
     isolated_paths: dict[str, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """is_dirty=True → dirty check level=err，blocking=True。"""
+    """is_dirty=True → dirty check level=warn（不再硬阻断），working_tree_dirty=True，
+    blocking=False（仅 dirty 时）。前端据此弹"强制覆盖"确认 modal，确认后带 force
+    提交。running task / self_update 等才是不可绕过的 err。"""
     from studio.services.runtime import updater
     monkeypatch.setattr(updater, "current_version", lambda: updater.VersionInfo(
         version="0.6.0", commit="x", commit_short="x", commit_time_iso="",
@@ -911,9 +941,10 @@ def test_preflight_dirty_blocks(
     monkeypatch.setattr(updater, "target_has_self_update", lambda _ref: True)
 
     body = client.get("/api/system/preflight?target=origin/master").json()
-    assert body["blocking"] is True
+    assert body["blocking"] is False
+    assert body["working_tree_dirty"] is True
     dirty_check = next(c for c in body["checks"] if c["key"] == "dirty")
-    assert dirty_check["level"] == "err"
+    assert dirty_check["level"] == "warn"
 
 
 def test_preflight_running_tasks_block(

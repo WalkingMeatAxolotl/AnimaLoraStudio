@@ -1193,6 +1193,8 @@
     "upToDate": "Already up to date",
     "checkUpdateFailed": "Failed to check updates: {{error}}",
     "dirtyWorkingTree": "Local uncommitted changes exist; commit or stash first",
+    "forceUpdateConfirm": "The working tree has uncommitted local changes. Continuing will force-overwrite them with the target version (git reset --hard); those changes will be discarded and cannot be recovered. Continue?",
+    "forceUpdateConfirmOk": "Force-overwrite and update",
     "noRollbackTarget": "No rollback target (first startup / .last_version was cleaned)",
     "triggerActionFailed": "Failed to trigger {{action}}: {{error}}",
     "actionUpdate": "update",

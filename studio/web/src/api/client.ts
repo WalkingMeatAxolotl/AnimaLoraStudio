@@ -2724,11 +2724,12 @@ export const api = {
   },
 
   // 请求 update：写 .update_pending + 触发 SIGINT 重启。
-  // 422 = running task 或 dirty working tree。
-  performSystemUpdate: (target: string = 'origin/master') =>
+  // 422 = running task 或 dirty working tree（force=true 时跳过 dirty 闸，
+  // reset --hard 覆盖本地未提交改动；用户需先在 UI 确认强制覆盖）。
+  performSystemUpdate: (target: string = 'origin/master', force = false) =>
     req<{ ok: boolean; message: string }>('/api/system/update', {
       method: 'POST',
-      body: JSON.stringify({ target }),
+      body: JSON.stringify({ target, force }),
     }),
 
   // 回滚到 .last_version 记录的上一版本（PR-C）。
@@ -2899,6 +2900,9 @@ export interface PreflightResult {
   target_resolved: string | null
   checks: PreflightCheck[]
   blocking: boolean
+  /** 工作树有未提交改动（自动 churn 已剔除）。true → 确认时弹"强制覆盖" modal。
+   *  dirty 是 warn 不进 blocking，但仍需用户显式确认才会带 force 覆盖。 */
+  working_tree_dirty: boolean
   requirements_diff: PreflightRequirementsDiff
 }
 

@@ -144,13 +144,15 @@ def system_update(body: UpdateRequest, background: BackgroundTasks) -> dict[str,
     _check_no_running_tasks()
 
     cur = updater.current_version()
-    if cur.is_dirty:
+    # force=True：用户在 UI 上已确认"强制覆盖本地改动"，跳过 dirty 闸；启动期
+    # apply_pending 的 git reset --hard 会丢弃这些未提交改动（不可恢复）。
+    if cur.is_dirty and not body.force:
         raise ValidationError(
             "Local changes are uncommitted; commit or stash them before updating",
             code="system.working_tree_dirty", http_status=422,
         )
 
-    updater.request_update(body.target)
+    updater.request_update(body.target, force=body.force)
     background.add_task(_raise_sigint_after_response)
     return {"ok": True, "message": f"update scheduled → {body.target}"}
 
@@ -240,8 +242,12 @@ def system_preflight(target: str = "origin/master") -> dict[str, Any]:
     checks: list[dict[str, str]] = []
 
     if cur.is_dirty:
-        checks.append({"key": "dirty", "level": "err",
-                       "label": "工作树有未提交修改 — 操作会被拒绝"})
+        # warn 而非 err：dirty 不再硬阻断，前端确认时弹"强制覆盖"modal，确认后
+        # 带 force 提交 → reset --hard 覆盖本地改动。running task / self_update 等
+        # 才是不可绕过的 err。（package-lock.json 等自动 churn 已在 updater 的
+        # dirty 判定里剔除，不会走到这。）
+        checks.append({"key": "dirty", "level": "warn",
+                       "label": "工作树有未提交修改 — 确认更新会覆盖这些改动"})
     else:
         checks.append({"key": "dirty", "level": "ok",
                        "label": "工作树干净 · 无未提交改动"})
@@ -285,6 +291,9 @@ def system_preflight(target: str = "origin/master") -> dict[str, Any]:
         "target_resolved": target_resolved,
         "checks": checks,
         "blocking": blocking,
+        # 工作树脏（真实改动；自动 churn 已剔除）。前端据此在确认时弹"强制覆盖"
+        # modal —— dirty 是 warn 不进 blocking，但仍需用户显式确认才覆盖。
+        "working_tree_dirty": cur.is_dirty,
         "requirements_diff": {
             "added": req_diff.added,
             "removed": req_diff.removed,

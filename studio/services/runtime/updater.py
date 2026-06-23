@@ -14,6 +14,7 @@
 | --- | --- | --- |
 | `tmp/restart` | 需要重启 | server → cli.py / wrapper |
 | `studio_data/.update_pending` | 启动期要 git pull，内容是 target ref | server → cli.py |
+| `studio_data/.update_force` | 存在 = 允许覆盖 dirty 工作树（用户确认强制覆盖） | server → cli.py |
 | `studio_data/.update_cache` | 自动检查结果缓存（TTL 24h） | check_update() 自管 |
 | `studio_data/.last_version` | 上一版 commit（rollback 用，PR-C 启用） | apply_pending |
 | `studio_data/.update_log` | 最近一次 update 的日志（PR-C 展示） | apply_pending |
@@ -45,6 +46,16 @@ UPDATE_CACHE = STUDIO_DATA / ".update_cache"
 LAST_VERSION = STUDIO_DATA / ".last_version"
 UPDATE_LOG = STUDIO_DATA / ".update_log"
 UPDATE_STATUS = STUDIO_DATA / ".update_status"   # PR-C：结构化最近一次 update 结果
+UPDATE_FORCE = STUDIO_DATA / ".update_force"     # 存在 = 本次 pending 允许覆盖 dirty 工作树
+
+# npm 等工具会按本机版本自动改写的 tracked 文件（用户没动过）。最典型的是
+# package-lock.json：新版 npm 启动 npm install 时会往每个条目补 "peer": true 之类
+# 的元数据，导致 working tree 凭空 dirty → 自更新 precondition 把更新闸死。这类
+# churn 不算用户的真实改动：reset --hard 会照常覆盖、npm install 会重新生成，丢了
+# 零损失，所以 dirty 判定时剔除。新增此类文件往这里加一行即可。
+_GENERATED_DIRTY_ALLOWLIST = frozenset({
+    "studio/web/package-lock.json",
+})
 
 UPDATE_CACHE_TTL_SECONDS = 24 * 3600
 GIT_FETCH_TIMEOUT = 30.0
@@ -159,6 +170,33 @@ def _git(*args: str, timeout: float = 15.0) -> tuple[int, str, str]:
 # 稳定版 tag 形如 v0.8.0。HEAD 命中这种 tag 就归类 stable。
 # 第四段（如 v0.8.0-rc1）暂时不在版本面板的"稳定版"语义里，先归 custom。
 _RELEASE_TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
+
+
+def _porcelain_dirty_paths() -> list[str]:
+    """`git status --porcelain` 里"已修改的 tracked 文件"路径，剔除 allowlist。
+
+    返回剩余路径列表；空列表 = 工作树干净（dirty 判定的事实来源）。
+
+    - `--untracked-files=no`：untracked 文件（临时笔记 / 没进 gitignore 的草稿）
+      不影响 git reset --hard，原地保留，不算 dirty。
+    - allowlist（package-lock.json 等）剔除：见 `_GENERATED_DIRTY_ALLOWLIST`。
+    - porcelain 行格式 `XY <path>`；重命名 `XY <old> -> <new>` 取新名；git 对含
+      特殊字符的路径会加引号，去掉再比。porcelain 路径恒用正斜杠（跨平台一致）。
+    """
+    rc, out, _ = _git("status", "--porcelain", "--untracked-files=no")
+    if rc != 0 or not out:
+        return []
+    paths: list[str] = []
+    for line in out.splitlines():
+        path = line[3:].strip()
+        if " -> " in path:                 # 重命名：取箭头右侧的新路径
+            path = path.split(" -> ", 1)[1].strip()
+        if len(path) >= 2 and path[0] == '"' and path[-1] == '"':
+            path = path[1:-1]              # 去引号（core.quotepath 对非 ASCII 加引号）
+        if path in _GENERATED_DIRTY_ALLOWLIST:
+            continue
+        paths.append(path)
+    return paths
 
 
 # ----- zip 用户检测 + 一键 init（0.8.1 hotfix）---------------------------
@@ -328,10 +366,9 @@ def current_version() -> VersionInfo:
     rc, tag, _ = _git("describe", "--tags", "--exact-match", "HEAD")
     exact_tag = tag if rc == 0 else None
 
-    # --untracked-files=no：untracked 文件（pr18_review.md / 临时笔记 / 没进 gitignore
-    # 的草稿等）不影响 git reset --hard，它们会原地保留。dirty 仅指"修改了 tracked 文件"。
-    rc, status, _ = _git("status", "--porcelain", "--untracked-files=no")
-    is_dirty = rc == 0 and bool(status)
+    # dirty 仅指"修改了 tracked 文件（剔除 untracked 与 npm 等自动 churn 的
+    # allowlist 文件）"。详见 _porcelain_dirty_paths。
+    is_dirty = bool(_porcelain_dirty_paths())
 
     installed_kind, installed_label, stable_version = _classify_install(
         commit=commit,
@@ -688,10 +725,25 @@ def dev_commits(limit: int = 10) -> DevCommitsResult:
     return DevCommitsResult(commits=commits, fetched=fetched, error=fetch_error_msg)
 
 
-def request_update(target: str = "origin/master") -> None:
-    """server 端调：写 .update_pending + tmp/restart 让 cli.py 启动期接管。"""
+def request_update(target: str = "origin/master", force: bool = False) -> None:
+    """server 端调：写 .update_pending + tmp/restart 让 cli.py 启动期接管。
+
+    force=True 时额外写 .update_force marker：启动期 apply_pending 会跳过 dirty
+    工作树 precondition，让 git reset --hard 覆盖掉本地未提交改动（用户在 UI
+    上显式确认"强制覆盖"后才会走到这里）。
+    """
     UPDATE_PENDING.parent.mkdir(parents=True, exist_ok=True)
     UPDATE_PENDING.write_text(target, encoding="utf-8")
+    if force:
+        UPDATE_FORCE.parent.mkdir(parents=True, exist_ok=True)
+        UPDATE_FORCE.touch()
+    elif UPDATE_FORCE.exists():
+        # 上一次请求可能写过 force marker 但没走到 apply_pending（比如又点了普通
+        # 更新覆盖）；不带 force 的新请求必须清掉旧 marker，避免误用。
+        try:
+            UPDATE_FORCE.unlink()
+        except OSError:
+            pass
     RESTART_FLAG.parent.mkdir(parents=True, exist_ok=True)
     RESTART_FLAG.touch()
 
@@ -726,13 +778,14 @@ def apply_pending(emit: Callable[[str], None] = print) -> bool:
         return False
 
     target = UPDATE_PENDING.read_text(encoding="utf-8-sig").strip() or "origin/master"
-    emit(f"[updater] applying pending update → {target}")
+    force = UPDATE_FORCE.exists()
+    emit(f"[updater] applying pending update → {target}{' (force)' if force else ''}")
 
     started_at = time.time()
     cur = current_version()
     log_lines: list[str] = [
         f"=== {time.strftime('%Y-%m-%d %H:%M:%S')} update {cur.commit_short} → {target} ===",
-        f"branch={cur.branch} tag={cur.tag or '-'} dirty={cur.is_dirty}",
+        f"branch={cur.branch} tag={cur.tag or '-'} dirty={cur.is_dirty} force={force}",
     ]
 
     # 保存上一版本（rollback 用）
@@ -764,11 +817,15 @@ def apply_pending(emit: Callable[[str], None] = print) -> bool:
             pass
         return True
 
-    # 1. precondition：working tree 干净
-    if cur.is_dirty:
+    # 1. precondition：working tree 干净（force 时跳过 —— 用户已在 UI 显式确认
+    #    覆盖；下面的 git reset --hard 会丢弃这些本地改动，不可恢复）。
+    if cur.is_dirty and not force:
         log_lines.append("[abort] working tree dirty")
         emit("[updater] working tree dirty, aborting update")
         return _done("aborted", "working tree dirty", cur.commit, False)
+    if cur.is_dirty and force:
+        log_lines.append("[force] working tree dirty; reset --hard 将覆盖本地未提交改动")
+        emit("[updater] working tree dirty but force requested, discarding local changes")
 
     # 2. git fetch
     log_lines.append("[git] fetch origin")
@@ -918,17 +975,18 @@ def _write_cache(result: UpdateCheckResult) -> None:
 
 
 def _finalize(log_lines: list[str]) -> None:
-    """写 update.log + 清 .update_pending 标志。"""
+    """写 update.log + 清 .update_pending / .update_force 标志。"""
     try:
         UPDATE_LOG.parent.mkdir(parents=True, exist_ok=True)
         UPDATE_LOG.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
     except OSError:
         pass
-    try:
-        if UPDATE_PENDING.exists():
-            UPDATE_PENDING.unlink()
-    except OSError:
-        pass
+    for flag in (UPDATE_PENDING, UPDATE_FORCE):
+        try:
+            if flag.exists():
+                flag.unlink()
+        except OSError:
+            pass
 
 
 def _write_status(status: UpdateStatus) -> None:

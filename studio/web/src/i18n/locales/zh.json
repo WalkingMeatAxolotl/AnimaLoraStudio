@@ -1193,6 +1193,8 @@
     "upToDate": "已是最新版本",
     "checkUpdateFailed": "检查更新失败: {{error}}",
     "dirtyWorkingTree": "本地有未提交修改，请先 commit 或 stash",
+    "forceUpdateConfirm": "工作区有未提交的本地改动。继续更新会用目标版本强制覆盖（git reset --hard），这些改动将被丢弃且无法恢复。确定继续吗？",
+    "forceUpdateConfirmOk": "强制覆盖并更新",
     "noRollbackTarget": "没有可回滚的版本（首次启动 / .last_version 已被清理）",
     "triggerActionFailed": "触发{{action}}失败: {{error}}",
     "actionUpdate": "更新",
