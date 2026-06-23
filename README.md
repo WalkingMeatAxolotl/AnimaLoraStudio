@@ -1,6 +1,6 @@
 # AnimaLoraStudio
 
-[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-blue)](README.md) [![English](https://img.shields.io/badge/lang-English-lightgrey)](README.en.md) [![Version](https://img.shields.io/badge/version-0.14.0-blue)](CHANGELOG.md)
+[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-blue)](README.md) [![English](https://img.shields.io/badge/lang-English-lightgrey)](README.en.md) [![Version](https://img.shields.io/badge/version-0.15.0-blue)](CHANGELOG.md)
 
 **端到端流水线**：从 Booru 抓图 → 筛选 → 打标 → 正则集 → 训练 → 出图测试，全流程在一个浏览器面板里推进。专为 [Anima](https://huggingface.co/circlestone-labs/Anima)（Cosmos DiT 二次元特调）训练优化。
 
@@ -258,7 +258,7 @@ AnimaLoraStudio/
 
 ## 版本
 
-当前版本 **0.14.0**。完整变更历史见 [CHANGELOG.md](CHANGELOG.md)。Studio 内 Settings → 系统 → 版本卡片可一键升级到最新版本。
+当前版本 **0.15.0**。完整变更历史见 [CHANGELOG.md](CHANGELOG.md)。Studio 内 Settings → 系统 → 版本卡片可一键升级到最新版本。
 
 ---
 
