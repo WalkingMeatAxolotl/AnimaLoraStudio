@@ -1579,3 +1579,39 @@ def test_preserve_only_touches_hardcoded_list(
     assert rc == 0, err
     updater._restore_preserved_files(saved, emit=lambda _: None, log_lines=log)
     assert not f.exists(), "非清单文件应被 reset 正常删除，不被护栏挽留"
+
+
+def test_preserve_skips_file_user_moved_away(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """用户把模型迁走/删掉(文件已不在磁盘)时,护栏绝不"复活"它:备份只认
+    "既被追踪又在磁盘上"的文件,缺一不可 → 不备份 → reset 后不还原。
+    守"用户迁移 models 后不会被我们还原回来"。"""
+    repo = tmp_path / "repo"
+    _init_git_repo(repo)
+    monkeypatch.setattr(updater, "REPO_ROOT", repo)
+
+    rel = "models/t5_tokenizer/spiece.model"  # _PRESERVE_ON_RESET 里的一项
+    f = repo / rel
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_bytes(b"OLD")
+    _git_in(repo, "add", "-A")
+    _git_in(repo, "commit", "-qm", "A: tracked")
+    _git_in(repo, "rm", "-q", rel)
+    (repo / ".gitignore").write_text("models/\n", encoding="utf-8")
+    _git_in(repo, "add", "-A")
+    _git_in(repo, "commit", "-qm", "B: untrack")
+    target = _git_in(repo, "rev-parse", "HEAD")
+
+    _git_in(repo, "checkout", "-q", "HEAD~1")  # 回到 A：文件被追踪
+    f.unlink()                                  # 用户把它迁走/删了：磁盘上没了
+    assert not f.exists()
+
+    log: list[str] = []
+    saved = updater._backup_preserved_files(log)
+    assert saved == [], "磁盘上不存在的文件不该被备份"
+
+    rc, _, err = updater._git("reset", "--hard", target)
+    assert rc == 0, err
+    updater._restore_preserved_files(saved, emit=lambda _: None, log_lines=log)
+    assert not f.exists(), "用户迁走/删掉的文件不该被护栏还原回来"
