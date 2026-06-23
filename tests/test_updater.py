@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -36,6 +37,7 @@ def _isolate_flags(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(updater, "LAST_VERSION", tmp_path / ".last_version")
     monkeypatch.setattr(updater, "UPDATE_LOG", tmp_path / ".update_log")
     monkeypatch.setattr(updater, "UPDATE_STATUS", tmp_path / ".update_status")
+    monkeypatch.setattr(updater, "PRESERVE_HOLDING", tmp_path / ".update_preserve")
     return tmp_path
 
 
@@ -1482,3 +1484,98 @@ def test_check_update_fetch_error_returns_detached(
     r = updater.check_update("master", use_cache=False)
     assert r.state == "detached"
     assert r.error is not None
+
+
+# ---------------------------------------------------------------------------
+# 模型数据文件保护（_PRESERVE_ON_RESET）：reset --hard 跨过"删模型数据"的 commit
+# 时，老用户磁盘上的已下载文件必须保住，不被删→重下
+# ---------------------------------------------------------------------------
+
+def _init_git_repo(repo: Path) -> None:
+    repo.mkdir(parents=True, exist_ok=True)
+    def g(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=str(repo),
+                       capture_output=True, text=True, check=True)
+    g("init", "-q")
+    g("config", "user.email", "t@example.com")
+    g("config", "user.name", "tester")
+    g("config", "commit.gpgsign", "false")
+
+
+def _git_in(repo: Path, *args: str) -> str:
+    return subprocess.run(["git", *args], cwd=str(repo),
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
+def test_preserve_model_data_survives_reset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """真 git 仓库验证护栏：reset --hard 跨过"删模型数据文件"的 commit 时，
+    hardcode 清单里的文件被备份 → reset 删掉 → 还原，磁盘副本保住、内容不变、
+    且变为 untracked（更新零感知，不触发重下）。"""
+    repo = tmp_path / "repo"
+    _init_git_repo(repo)
+    monkeypatch.setattr(updater, "REPO_ROOT", repo)
+
+    rel = "models/t5_tokenizer/spiece.model"  # _PRESERVE_ON_RESET 里的一项
+    f = repo / rel
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_bytes(b"SENTINEL-WEIGHTS-9f3a")
+    _git_in(repo, "add", "-A")
+    _git_in(repo, "commit", "-qm", "A: model data tracked (old version)")
+
+    # 新版本：git rm 掉它 + 整体 ignore models/
+    _git_in(repo, "rm", "-q", rel)
+    (repo / ".gitignore").write_text("models/\n", encoding="utf-8")
+    _git_in(repo, "add", "-A")
+    _git_in(repo, "commit", "-qm", "B: untrack + ignore models/")
+    target = _git_in(repo, "rev-parse", "HEAD")
+
+    # 老用户：回到 A（文件被追踪 + 在磁盘）
+    _git_in(repo, "checkout", "-q", "HEAD~1")
+    assert f.exists()
+
+    log: list[str] = []
+    saved = updater._backup_preserved_files(log)
+    assert rel in saved, "应备份这个 hardcode 的模型数据文件"
+
+    rc, _, err = updater._git("reset", "--hard", target)
+    assert rc == 0, err
+    assert not f.exists(), "前置确认：reset --hard 确实会删掉这个已追踪文件"
+
+    updater._restore_preserved_files(saved, emit=lambda _: None, log_lines=log)
+    assert f.exists(), "护栏应把文件还原回磁盘（更新不重下）"
+    assert f.read_bytes() == b"SENTINEL-WEIGHTS-9f3a", "内容必须原样"
+    assert _git_in(repo, "ls-files", "--", rel) == "", "还原后应为 untracked"
+    assert not updater.PRESERVE_HOLDING.exists(), "备份目录应收尾清掉"
+
+
+def test_preserve_only_touches_hardcoded_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """护栏只认 hardcode 清单：不在清单里的文件（含代码 / 未来新增）即便被删也
+    照常删，不会被误留 —— 守"不要对其他文件或未来代码文件生效"。"""
+    repo = tmp_path / "repo"
+    _init_git_repo(repo)
+    monkeypatch.setattr(updater, "REPO_ROOT", repo)
+
+    rel = "models/some_future_module.py"  # 不在 _PRESERVE_ON_RESET 里
+    f = repo / rel
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("# code\n", encoding="utf-8")
+    _git_in(repo, "add", "-A")
+    _git_in(repo, "commit", "-qm", "A")
+    _git_in(repo, "rm", "-q", rel)
+    _git_in(repo, "commit", "-qm", "B: delete it")
+    target = _git_in(repo, "rev-parse", "HEAD")
+    _git_in(repo, "checkout", "-q", "HEAD~1")
+    assert f.exists()
+
+    log: list[str] = []
+    saved = updater._backup_preserved_files(log)
+    assert saved == [], "非清单文件不应被备份"
+
+    rc, _, err = updater._git("reset", "--hard", target)
+    assert rc == 0, err
+    updater._restore_preserved_files(saved, emit=lambda _: None, log_lines=log)
+    assert not f.exists(), "非清单文件应被 reset 正常删除，不被护栏挽留"
