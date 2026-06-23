@@ -29,12 +29,15 @@ def _supervisor() -> Supervisor:
     return sup
 
 
-def _resolve_anima_model_paths() -> dict[str, str]:
+def _resolve_anima_model_paths(base_model: Optional[str] = None) -> dict[str, str]:
     """解析 base 模型默认路径（先验生成 / 测试出图共用）。
 
     与新建训练 version 用的同一套解析（`default_paths_for_new_version`）：用户在
     Settings → 模型 切换 `selected_anima`（官方 variant 或注册的本地 custom
     `.safetensors`）即同时影响这里的主权重路径——所以能「在微调权重上测试出图」。
+
+    `base_model` 非空 → 本次请求临时覆盖底模（先验生成 / 测试页面的「底模」
+    下拉选了非默认值时），只换 transformer 权重，其余路径仍跟随全局设置。
     """
     from ..services.models import default_paths_for_new_version
-    return default_paths_for_new_version()
+    return default_paths_for_new_version(base_model)

@@ -149,7 +149,7 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
     """启动测试出图 task。"""
     from ...services.inference.core import generate_tempdir
 
-    model_paths = _resolve_anima_model_paths()
+    model_paths = _resolve_anima_model_paths(body.base_model)
 
     with db.connection_for() as conn:
         task_id = db.create_task(

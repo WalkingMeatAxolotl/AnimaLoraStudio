@@ -7,6 +7,7 @@ import {
   type Task,
   type XYMatrixSpec,
 } from '../../api/client'
+import BaseModelSelect from '../../components/BaseModelSelect'
 import PageHeader from '../../components/PageHeader'
 import { useToast } from '../../components/Toast'
 import { schemaEnumLabel } from '../../lib/schema'
@@ -190,6 +191,9 @@ export default function GeneratePage() {
   // 没法重试也没法取消（status=failed 时 cancelable=false）
   const [submitting, setSubmitting] = useState(false)
   const [currentTask, setCurrentTask] = useState<Task | null>(null)
+  // 本次出图临时选用的底模（null = 跟随设置页 selected_anima）。不进 prefs
+  // 持久化：每次进页面都回到「设置页默认底模」，符合「默认用设置里的」。
+  const [baseModel, setBaseModel] = useState<string | null>(null)
   // monitor 走 useMonitorProgress hook (PR #37 增量协议)：currentTask 变 →
   // hook 自动重拉快照 + 订阅 SSE delta 合并；本组件只用 samples 字段，其余
   // 字段在这页生成场景下不需要。
@@ -384,6 +388,7 @@ export default function GeneratePage() {
       sampler_name: samplerName,
       scheduler,
       count, seed,
+      base_model: baseModel,
       loras: snapshotLoras,
       xy_draft: mode === 'xy'
         ? {
@@ -423,7 +428,7 @@ export default function GeneratePage() {
       }
     })()
   }, [currentTask, samples, mode, selectedIndices, history, xDraft, yDraft,
-      prompts, negPrompt, width, height, steps, cfgScale, samplerName, scheduler, count, seed, loras, datasetPick])
+      prompts, negPrompt, width, height, steps, cfgScale, samplerName, scheduler, count, seed, baseModel, loras, datasetPick])
 
   const handleHistorySelect = (entry: HistoryEntry) => {
     setHistoryOverride(entry)
@@ -445,6 +450,8 @@ export default function GeneratePage() {
     if (applied.datasetPick) {
       setDatasetPickerOpen(true)
     }
+    // 底模不在 prefs 里（独立 ephemeral state）→ 单独回填。
+    setBaseModel(applied.baseModel)
     setPrefs((prev) => {
       const base: GeneratePrefs = {
         ...prev,
@@ -537,6 +544,7 @@ export default function GeneratePage() {
         scheduler,
         count: mode === 'xy' ? 1 : count,
         seed,
+        base_model: baseModel,
         loras: snapshotLoras,
         xy_draft: mode === 'xy'
           ? {
@@ -548,6 +556,7 @@ export default function GeneratePage() {
       }
       const body: GenerateRequest = {
         prompts: mergedPrompts,
+        base_model: baseModel ?? undefined,
         negative_prompt: negPrompt,
         width, height, steps,
         count: mode === 'xy' ? 1 : count,
@@ -767,6 +776,18 @@ export default function GeneratePage() {
                 />
                 <div className="text-2xs text-fg-tertiary font-mono" style={{ marginTop: -4 }}>
                   {t('generate.seedHint')}
+                </div>
+                <div>
+                  <label className="caption block mb-1">{t('generate.baseModel')}</label>
+                  <BaseModelSelect
+                    value={baseModel}
+                    onChange={setBaseModel}
+                    className="input text-xs w-full"
+                    ariaLabel={t('generate.baseModel')}
+                  />
+                  <div className="text-2xs text-fg-tertiary font-mono mt-1">
+                    {t('generate.baseModelHint')}
+                  </div>
                 </div>
               </div>
             </div>

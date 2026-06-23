@@ -1149,6 +1149,9 @@ export type AttentionBackend = 'auto' | 'none' | 'xformers' | 'flash_attn'
 /** PR-9 — 先验生成（base 模型反向出 reg 集，无 LoRA）。 */
 export interface RegAiRequest {
   excluded_tags?: string[]
+  /** 本次先验生成临时选用的底模（官方 variant key 或本地 custom 路径）；
+   *  省略 → server 用 Settings 里的 selected_anima。 */
+  base_model?: string
   negative_prompt?: string
   width?: number
   height?: number
@@ -1199,6 +1202,9 @@ export interface XYMatrixSpec {
 
 export interface GenerateRequest {
   prompts: string[]
+  /** 本次出图临时选用的底模（官方 variant key 或本地 custom 路径）；
+   *  省略 → server 用 Settings 里的 selected_anima。 */
+  base_model?: string
   negative_prompt?: string
   width?: number
   height?: number

@@ -94,6 +94,68 @@ def test_generate_resolver_follows_selected_custom(
 
 
 # ---------------------------------------------------------------------------
+# base_model 本次请求覆盖（先验生成 / 测试出图页「底模」下拉）
+# ---------------------------------------------------------------------------
+
+
+def test_base_model_override_picks_variant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """override 指定非默认官方 variant → 只换 transformer，无视 selected。"""
+    monkeypatch.setattr(secrets, "load", lambda: _secrets(tmp_path, selected="1.0"))
+    paths = model_downloader.default_paths_for_new_version("preview3-base")
+    assert paths["transformer_path"] == str(
+        model_downloader.anima_main_target(tmp_path, "preview3-base")
+    )
+    # 其余三件套仍跟随全局，不受 override 影响
+    assert paths["vae_path"] == str(model_downloader.anima_vae_target(tmp_path))
+
+
+def test_base_model_override_picks_custom(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    custom = tmp_path / "ft.safetensors"
+    custom.write_bytes(b"x")
+    monkeypatch.setattr(secrets, "load", lambda: _secrets(tmp_path, selected="1.0"))
+    paths = model_downloader.default_paths_for_new_version(str(custom))
+    assert paths["transformer_path"] == str(custom)
+
+
+def test_base_model_override_none_follows_selected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """None / 空 → 回退 selected_anima（保持原有「跟随设置」行为）。"""
+    monkeypatch.setattr(
+        secrets, "load", lambda: _secrets(tmp_path, selected="preview2")
+    )
+    expected = str(model_downloader.anima_main_target(tmp_path, "preview2"))
+    assert model_downloader.anima_transformer_path_for(None) == expected
+    assert model_downloader.anima_transformer_path_for("") == expected
+    assert model_downloader.default_paths_for_new_version()["transformer_path"] == expected
+
+
+def test_base_model_override_missing_custom_falls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """override 给了不存在的 custom 路径 → 回退 selected，不返回死路径。"""
+    ghost = tmp_path / "gone.safetensors"  # 不创建
+    monkeypatch.setattr(secrets, "load", lambda: _secrets(tmp_path, selected="1.0"))
+    resolved = model_downloader.anima_transformer_path_for(str(ghost))
+    assert resolved == str(model_downloader.anima_main_target(tmp_path, "1.0"))
+
+
+def test_resolve_anima_model_paths_threads_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """deps._resolve_anima_model_paths(base_model) 透传到 transformer_path。"""
+    from studio.api import deps
+
+    monkeypatch.setattr(secrets, "load", lambda: _secrets(tmp_path, selected="1.0"))
+    got = deps._resolve_anima_model_paths("preview3-base")["transformer_path"]
+    assert got == str(model_downloader.anima_main_target(tmp_path, "preview3-base"))
+
+
+# ---------------------------------------------------------------------------
 # catalog 暴露 custom 列表
 # ---------------------------------------------------------------------------
 

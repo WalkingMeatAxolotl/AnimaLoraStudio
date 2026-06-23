@@ -430,7 +430,7 @@ def get_reg_caption(pid: int, vid: int, path: str) -> dict[str, Any]:
 @router.post("/api/projects/{pid}/versions/{vid}/reg/generate-prior")
 def reg_generate_prior(pid: int, vid: int, body: RegAiRequest) -> dict[str, Any]:
     """启动先验生成 task —— base 模型给每张 train 图的 tag 反向出对照图。"""
-    model_paths = _resolve_anima_model_paths()
+    model_paths = _resolve_anima_model_paths(body.base_model)
     _, _, vdir = _version_dir_or_404(pid, vid)
     train = vdir / "train"
     has_image = train.exists() and any(

@@ -140,6 +140,9 @@ class RegDeleteFilesRequest(BaseModel):
 class RegAiRequest(BaseModel):
     """先验生成请求 —— 不含 lora_configs，先验生成不带 LoRA。"""
     excluded_tags: list[str] = []
+    # 本次先验生成临时选用的底模（官方 variant key 或注册的本地 custom 路径）；
+    # None → 用 Settings 里 selected_anima。只换 transformer 权重。
+    base_model: Optional[str] = None
     negative_prompt: str = ""
     width: int = 1024
     height: int = 1024
