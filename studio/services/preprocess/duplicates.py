@@ -86,7 +86,7 @@ DEFAULT_CROP_EARLY_ACCEPT_SCORE = 0.88
 MatchScope = Literal["strict", "both"]
 
 
-from studio.domain.errors import DomainError
+from studio.domain.errors import DomainError, InvalidPathError, NotFoundError, ValidationError
 
 
 class DuplicateFinderError(DomainError):
@@ -255,7 +255,9 @@ class UnionFind:
 def _require_imagehash() -> None:
     if imagehash is None:
         raise DuplicateFinderError(
-            "ImageHash is not installed. Please install imagehash>=4.3.0."
+            "Duplicate detection requires the imagehash package, "
+            "which is not installed",
+            code="duplicate.not_installed", http_status=422,
         ) from _IMAGEHASH_IMPORT_ERROR
 
 
@@ -272,20 +274,34 @@ def parse_tile_grids(value: str | list[int] | tuple[int, ...]) -> tuple[int, ...
         try:
             grid = int(part)
         except ValueError as exc:
-            raise DuplicateFinderError(f"invalid tile grid: {part}") from exc
+            raise DuplicateFinderError(
+                f"Invalid tile grid value: {part}",
+                code="duplicate.tile_grid_invalid",
+                details={"value": part}, http_status=400,
+            ) from exc
         if grid < 2 or grid > 12:
-            raise DuplicateFinderError("tile grids must be between 2 and 12")
+            raise DuplicateFinderError(
+                "Tile grid must be between 2 and 12",
+                code="duplicate.tile_grid_out_of_range", http_status=400,
+            )
         if grid not in grids:
             grids.append(grid)
     if not grids:
-        raise DuplicateFinderError("at least one tile grid is required")
+        raise DuplicateFinderError(
+            "At least one tile grid is required",
+            code="duplicate.tile_grid_required", http_status=400,
+        )
     return tuple(grids)
 
 
 def options_from_payload(payload: dict[str, Any]) -> DuplicateOptions:
     match_scope = payload.get("match_scope", "both")
     if match_scope not in ("strict", "both"):
-        raise DuplicateFinderError(f"invalid match scope: {match_scope!r}")
+        raise DuplicateFinderError(
+            f"Invalid match scope: {match_scope}",
+            code="duplicate.match_scope_invalid",
+            details={"value": match_scope}, http_status=400,
+        )
     return DuplicateOptions(
         match_scope=match_scope,
         hash_size=max(0, int(payload.get("hash_size", DEFAULT_HASH_SIZE))),
@@ -363,8 +379,9 @@ def _resolve_train_sources(
 
     version = ver.get_version(conn, version_id)
     if not version or version["project_id"] != project_id:
-        raise DuplicateFinderError(
-            f"version not found / mismatch: id={version_id}"
+        raise NotFoundError(
+            "Version not found",
+            code="version.not_found", details={"id": version_id},
         )
     label = version["label"]
     train_dir = project_dir / "versions" / label / "train"
@@ -485,23 +502,25 @@ def apply_train_duplicate_removals(
 
     project = projects.get_project(conn, project_id)
     if not project:
-        raise DuplicateFinderError(f"project not found: id={project_id}")
+        raise NotFoundError(
+            "Project not found",
+            code="project.not_found", details={"id": project_id},
+        )
     version = ver.get_version(conn, version_id)
     if not version or version["project_id"] != project_id:
-        raise DuplicateFinderError(
-            f"version not found / mismatch: id={version_id}"
+        raise NotFoundError(
+            "Version not found",
+            code="version.not_found", details={"id": version_id},
         )
 
     project_dir = projects.project_dir(project["id"], project["slug"])
     # 校验 rel path 形式（跟 core._validate_rel_name 一致：两段、无 ..）
     for raw_name in names:
         if not raw_name or "\\" in raw_name or raw_name.startswith("/"):
-            raise DuplicateFinderError(f"非法 rel name: {raw_name!r}")
+            raise InvalidPathError("Invalid path", details={"name": raw_name})
         parts = raw_name.split("/")
         if len(parts) != 2 or not parts[0] or not parts[1] or ".." in parts:
-            raise DuplicateFinderError(
-                f"非法 rel name（要求 folder/image）: {raw_name!r}"
-            )
+            raise InvalidPathError("Invalid path", details={"name": raw_name})
     return preprocess_manifest.train_mark_duplicate_removed(
         project_dir, version["label"], names,
     )

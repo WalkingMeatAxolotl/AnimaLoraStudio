@@ -13,10 +13,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
 from ..deps import _supervisor
 from ... import db
+from ...domain.errors import ConflictError, NotFoundError, ValidationError
 from ...services.projects import jobs as project_jobs
 
 router = APIRouter()
@@ -27,7 +28,7 @@ def get_job_endpoint(jid: int) -> dict[str, Any]:
     with db.connection_for() as conn:
         job = project_jobs.get_job(conn, jid)
     if not job:
-        raise HTTPException(404, f"job 不存在: id={jid}")
+        raise NotFoundError("Job not found", code="job.not_found", details={"job_id": jid})
     return job
 
 
@@ -36,7 +37,7 @@ def get_job_log(jid: int, tail: int = 0) -> dict[str, Any]:
     with db.connection_for() as conn:
         job = project_jobs.get_job(conn, jid)
     if not job:
-        raise HTTPException(404, f"job 不存在: id={jid}")
+        raise NotFoundError("Job not found", code="job.not_found", details={"job_id": jid})
     log_path = Path(job.get("log_path") or "")
     if not log_path.exists():
         return {"job_id": jid, "content": "", "size": 0}
@@ -58,8 +59,13 @@ def cancel_job_endpoint(jid: int) -> dict[str, Any]:
         with db.connection_for() as conn:
             job = project_jobs.get_job(conn, jid)
         if not job:
-            raise HTTPException(404, f"job 不存在: id={jid}")
+            raise NotFoundError("Job not found", code="job.not_found", details={"job_id": jid})
         if job["status"] in project_jobs.TERMINAL_STATUSES:
-            raise HTTPException(400, f"job 已 {job['status']}")
-        raise HTTPException(409, "cancel rejected (state mismatch)")
+            raise ValidationError(
+                "This job has already finished",
+                code="job.already_finished", http_status=400,
+            )
+        raise ConflictError(
+            "Cannot cancel this job in its current state", code="job.cancel_rejected",
+        )
     return {"job_id": jid, "canceled": True}

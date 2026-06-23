@@ -14,6 +14,7 @@
 | --- | --- | --- |
 | `tmp/restart` | 需要重启 | server → cli.py / wrapper |
 | `studio_data/.update_pending` | 启动期要 git pull，内容是 target ref | server → cli.py |
+| `studio_data/.update_force` | 存在 = 允许覆盖 dirty 工作树（用户确认强制覆盖） | server → cli.py |
 | `studio_data/.update_cache` | 自动检查结果缓存（TTL 24h） | check_update() 自管 |
 | `studio_data/.last_version` | 上一版 commit（rollback 用，PR-C 启用） | apply_pending |
 | `studio_data/.update_log` | 最近一次 update 的日志（PR-C 展示） | apply_pending |
@@ -45,6 +46,38 @@ UPDATE_CACHE = STUDIO_DATA / ".update_cache"
 LAST_VERSION = STUDIO_DATA / ".last_version"
 UPDATE_LOG = STUDIO_DATA / ".update_log"
 UPDATE_STATUS = STUDIO_DATA / ".update_status"   # PR-C：结构化最近一次 update 结果
+UPDATE_FORCE = STUDIO_DATA / ".update_force"     # 存在 = 本次 pending 允许覆盖 dirty 工作树
+PRESERVE_HOLDING = STUDIO_DATA / ".update_preserve"  # reset 前模型数据文件的临时备份目录
+
+# npm 等工具会按本机版本自动改写的 tracked 文件（用户没动过）。最典型的是
+# package-lock.json：新版 npm 启动 npm install 时会往每个条目补 "peer": true 之类
+# 的元数据，导致 working tree 凭空 dirty → 自更新 precondition 把更新闸死。这类
+# churn 不算用户的真实改动：reset --hard 会照常覆盖、npm install 会重新生成，丢了
+# 零损失，所以 dirty 判定时剔除。新增此类文件往这里加一行即可。
+_GENERATED_DIRTY_ALLOWLIST = frozenset({
+    "studio/web/package-lock.json",
+})
+
+# 一次性迁移护栏（**故意写死这份清单，绝不通用化**）：下面这些「下载得到的模型
+# 数据文件」早期被误入库（当时 models/ 还没整体 gitignore），后来 git rm + 转
+# gitignore（#303 把 models/ 代码挪到 modeling/ 并整体忽略 models/；更早一次移出
+# 了 cltagger 的 tag_mapping.json）。老用户从「入库时期」的版本更新到现版本时，
+# apply_pending 的 `git reset --hard` 会把这些「已追踪 → 在目标版本里被删」的文件
+# 从工作区一并删掉，逼用户重下。
+#
+# 处理办法：reset 前把它们备份，reset 后若被删则还原（还原成 untracked，现版本
+# 已 gitignore models/ → 干净）。用户已在新版本（这些文件早已 untracked）时本护栏
+# 是 no-op。**只认这几个确定是模型数据的文件**：不对 models/ 下其它文件、更不对
+# 任何代码文件（含未来新增）生效 —— 那些该被 reset 删就删。
+_PRESERVE_ON_RESET: tuple[str, ...] = (
+    "models/t5_tokenizer/special_tokens_map.json",
+    "models/t5_tokenizer/spiece.model",
+    "models/t5_tokenizer/tokenizer_config.json",
+    "models/text_encoders/config.json",
+    "models/text_encoders/merges.txt",
+    "models/text_encoders/tokenizer_config.json",
+    "models/cltagger/cella110n_cl_tagger/cl_tagger_1_02/tag_mapping.json",
+)
 
 UPDATE_CACHE_TTL_SECONDS = 24 * 3600
 GIT_FETCH_TIMEOUT = 30.0
@@ -159,6 +192,33 @@ def _git(*args: str, timeout: float = 15.0) -> tuple[int, str, str]:
 # 稳定版 tag 形如 v0.8.0。HEAD 命中这种 tag 就归类 stable。
 # 第四段（如 v0.8.0-rc1）暂时不在版本面板的"稳定版"语义里，先归 custom。
 _RELEASE_TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
+
+
+def _porcelain_dirty_paths() -> list[str]:
+    """`git status --porcelain` 里"已修改的 tracked 文件"路径，剔除 allowlist。
+
+    返回剩余路径列表；空列表 = 工作树干净（dirty 判定的事实来源）。
+
+    - `--untracked-files=no`：untracked 文件（临时笔记 / 没进 gitignore 的草稿）
+      不影响 git reset --hard，原地保留，不算 dirty。
+    - allowlist（package-lock.json 等）剔除：见 `_GENERATED_DIRTY_ALLOWLIST`。
+    - porcelain 行格式 `XY <path>`；重命名 `XY <old> -> <new>` 取新名；git 对含
+      特殊字符的路径会加引号，去掉再比。porcelain 路径恒用正斜杠（跨平台一致）。
+    """
+    rc, out, _ = _git("status", "--porcelain", "--untracked-files=no")
+    if rc != 0 or not out:
+        return []
+    paths: list[str] = []
+    for line in out.splitlines():
+        path = line[3:].strip()
+        if " -> " in path:                 # 重命名：取箭头右侧的新路径
+            path = path.split(" -> ", 1)[1].strip()
+        if len(path) >= 2 and path[0] == '"' and path[-1] == '"':
+            path = path[1:-1]              # 去引号（core.quotepath 对非 ASCII 加引号）
+        if path in _GENERATED_DIRTY_ALLOWLIST:
+            continue
+        paths.append(path)
+    return paths
 
 
 # ----- zip 用户检测 + 一键 init（0.8.1 hotfix）---------------------------
@@ -328,10 +388,9 @@ def current_version() -> VersionInfo:
     rc, tag, _ = _git("describe", "--tags", "--exact-match", "HEAD")
     exact_tag = tag if rc == 0 else None
 
-    # --untracked-files=no：untracked 文件（pr18_review.md / 临时笔记 / 没进 gitignore
-    # 的草稿等）不影响 git reset --hard，它们会原地保留。dirty 仅指"修改了 tracked 文件"。
-    rc, status, _ = _git("status", "--porcelain", "--untracked-files=no")
-    is_dirty = rc == 0 and bool(status)
+    # dirty 仅指"修改了 tracked 文件（剔除 untracked 与 npm 等自动 churn 的
+    # allowlist 文件）"。详见 _porcelain_dirty_paths。
+    is_dirty = bool(_porcelain_dirty_paths())
 
     installed_kind, installed_label, stable_version = _classify_install(
         commit=commit,
@@ -688,16 +747,101 @@ def dev_commits(limit: int = 10) -> DevCommitsResult:
     return DevCommitsResult(commits=commits, fetched=fetched, error=fetch_error_msg)
 
 
-def request_update(target: str = "origin/master") -> None:
-    """server 端调：写 .update_pending + tmp/restart 让 cli.py 启动期接管。"""
+def request_update(target: str = "origin/master", force: bool = False) -> None:
+    """server 端调：写 .update_pending + tmp/restart 让 cli.py 启动期接管。
+
+    force=True 时额外写 .update_force marker：启动期 apply_pending 会跳过 dirty
+    工作树 precondition，让 git reset --hard 覆盖掉本地未提交改动（用户在 UI
+    上显式确认"强制覆盖"后才会走到这里）。
+    """
     UPDATE_PENDING.parent.mkdir(parents=True, exist_ok=True)
     UPDATE_PENDING.write_text(target, encoding="utf-8")
+    if force:
+        UPDATE_FORCE.parent.mkdir(parents=True, exist_ok=True)
+        UPDATE_FORCE.touch()
+    elif UPDATE_FORCE.exists():
+        # 上一次请求可能写过 force marker 但没走到 apply_pending（比如又点了普通
+        # 更新覆盖）；不带 force 的新请求必须清掉旧 marker，避免误用。
+        try:
+            UPDATE_FORCE.unlink()
+        except OSError:
+            pass
     RESTART_FLAG.parent.mkdir(parents=True, exist_ok=True)
     RESTART_FLAG.touch()
 
 
 def has_pending() -> bool:
     return UPDATE_PENDING.exists()
+
+
+def _backup_preserved_files(log_lines: list[str]) -> list[str]:
+    """`git reset --hard` 前：把 `_PRESERVE_ON_RESET` 里**当前仍被追踪**的模型数据
+    文件备份到 `PRESERVE_HOLDING`，返回备份成功的相对路径列表（供 reset 后还原）。
+
+    只备份"还被 git 追踪"的（即 reset 会删的那些）；用户已在新版本时这些文件早已
+    untracked → 返回空 → 整套护栏是 no-op。任何失败只记日志、不阻断更新。
+    """
+    rc, out, _ = _git("ls-files", "--", *_PRESERVE_ON_RESET)
+    tracked = [p for p in out.splitlines() if p.strip()] if rc == 0 else []
+    if not tracked:
+        return []
+    try:
+        if PRESERVE_HOLDING.exists():
+            shutil.rmtree(PRESERVE_HOLDING, ignore_errors=True)
+        PRESERVE_HOLDING.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        log_lines.append(f"[preserve] 备份目录创建失败，跳过保护（将触发重下）: {e}")
+        return []
+    saved: list[str] = []
+    for rel in tracked:
+        src = REPO_ROOT / rel
+        if not src.is_file():
+            continue
+        dst = PRESERVE_HOLDING / rel.replace("/", "__")
+        try:
+            shutil.copy2(src, dst)
+            saved.append(rel)
+        except OSError as e:
+            log_lines.append(f"[preserve] 备份 {rel} 失败: {e}")
+    if saved:
+        log_lines.append(f"[preserve] 备份 {len(saved)} 个模型数据文件: {', '.join(saved)}")
+    return saved
+
+
+def _restore_preserved_files(
+    saved: list[str], emit: Callable[[str], None], log_lines: list[str],
+) -> None:
+    """reset 后：把备份里"被 reset 删掉"的模型数据文件还原（更新零感知），收尾清
+    备份目录。目标版本仍带该文件（如回滚到旧版）时 dst 已存在 → 不覆盖。"""
+    restored: list[str] = []
+    for rel in saved:
+        dst = REPO_ROOT / rel
+        if dst.exists():
+            continue  # reset 没删它（或目标版本仍追踪它）→ 不动
+        bak = PRESERVE_HOLDING / rel.replace("/", "__")
+        if not bak.is_file():
+            continue
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(bak, dst)
+            restored.append(rel)
+        except OSError as e:
+            log_lines.append(f"[preserve] 还原 {rel} 失败（将触发重下）: {e}")
+    _discard_preserved()
+    if restored:
+        log_lines.append(
+            f"[preserve] 还原 {len(restored)} 个模型数据文件，更新不重下: {', '.join(restored)}"
+        )
+        emit(f"[updater] 保留 {len(restored)} 个已下载模型文件，更新无需重下")
+
+
+def _discard_preserved() -> None:
+    """清掉 PRESERVE_HOLDING 备份目录（reset 失败 / 还原完成后调）。"""
+    try:
+        if PRESERVE_HOLDING.exists():
+            shutil.rmtree(PRESERVE_HOLDING, ignore_errors=True)
+    except OSError:
+        pass
 
 
 def apply_pending(emit: Callable[[str], None] = print) -> bool:
@@ -726,13 +870,14 @@ def apply_pending(emit: Callable[[str], None] = print) -> bool:
         return False
 
     target = UPDATE_PENDING.read_text(encoding="utf-8-sig").strip() or "origin/master"
-    emit(f"[updater] applying pending update → {target}")
+    force = UPDATE_FORCE.exists()
+    emit(f"[updater] applying pending update → {target}{' (force)' if force else ''}")
 
     started_at = time.time()
     cur = current_version()
     log_lines: list[str] = [
         f"=== {time.strftime('%Y-%m-%d %H:%M:%S')} update {cur.commit_short} → {target} ===",
-        f"branch={cur.branch} tag={cur.tag or '-'} dirty={cur.is_dirty}",
+        f"branch={cur.branch} tag={cur.tag or '-'} dirty={cur.is_dirty} force={force}",
     ]
 
     # 保存上一版本（rollback 用）
@@ -764,11 +909,15 @@ def apply_pending(emit: Callable[[str], None] = print) -> bool:
             pass
         return True
 
-    # 1. precondition：working tree 干净
-    if cur.is_dirty:
+    # 1. precondition：working tree 干净（force 时跳过 —— 用户已在 UI 显式确认
+    #    覆盖；下面的 git reset --hard 会丢弃这些本地改动，不可恢复）。
+    if cur.is_dirty and not force:
         log_lines.append("[abort] working tree dirty")
         emit("[updater] working tree dirty, aborting update")
         return _done("aborted", "working tree dirty", cur.commit, False)
+    if cur.is_dirty and force:
+        log_lines.append("[force] working tree dirty; reset --hard 将覆盖本地未提交改动")
+        emit("[updater] working tree dirty but force requested, discarding local changes")
 
     # 2. git fetch
     log_lines.append("[git] fetch origin")
@@ -778,13 +927,21 @@ def apply_pending(emit: Callable[[str], None] = print) -> bool:
         emit(f"[updater] git fetch failed: {stderr[:200]}")
         return _done("failed", f"git fetch: {stderr[:120]}", cur.commit, False)
 
+    # 2.5 备份「早期误入库、后转 gitignore」的模型数据文件（hardcode 清单）：
+    #     reset --hard 会把这些已追踪文件删掉 → 备份，reset 成功后还原，老用户零感知。
+    preserved = _backup_preserved_files(log_lines)
+
     # 3. git reset --hard target（避免 merge conflict；working tree 干净已验过）
     log_lines.append(f"[git] reset --hard {target}")
     rc, _, stderr = _git("reset", "--hard", target, timeout=GIT_PULL_TIMEOUT)
     if rc != 0:
+        _discard_preserved()  # reset 没成功，原文件没被动，丢弃备份即可
         log_lines.append(f"[git reset] FAILED rc={rc} stderr={stderr}")
         emit(f"[updater] git reset failed: {stderr[:200]}")
         return _done("failed", f"git reset: {stderr[:120]}", cur.commit, False)
+
+    # 3.5 还原被 reset 删掉的模型数据文件（见 _PRESERVE_ON_RESET）。
+    _restore_preserved_files(preserved, emit, log_lines)
 
     new = current_version()
     log_lines.append(f"[ok] now at {new.commit_short} ({new.tag or new.branch})")
@@ -918,17 +1075,18 @@ def _write_cache(result: UpdateCheckResult) -> None:
 
 
 def _finalize(log_lines: list[str]) -> None:
-    """写 update.log + 清 .update_pending 标志。"""
+    """写 update.log + 清 .update_pending / .update_force 标志。"""
     try:
         UPDATE_LOG.parent.mkdir(parents=True, exist_ok=True)
         UPDATE_LOG.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
     except OSError:
         pass
-    try:
-        if UPDATE_PENDING.exists():
-            UPDATE_PENDING.unlink()
-    except OSError:
-        pass
+    for flag in (UPDATE_PENDING, UPDATE_FORCE):
+        try:
+            if flag.exists():
+                flag.unlink()
+        except OSError:
+            pass
 
 
 def _write_status(status: UpdateStatus) -> None:

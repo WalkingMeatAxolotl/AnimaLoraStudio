@@ -20,7 +20,7 @@ import torch
 @pytest.fixture
 def cosmos_module():
     """每个测试拿一份重置过的 cosmos_predict2_modeling 状态。"""
-    from models import cosmos_predict2_modeling as m
+    from modeling import cosmos_predict2_modeling as m
     orig_use = m._USE_FLASH_ATTN
     orig_avail = m._FLASH_ATTN_AVAILABLE
     orig_func = m._flash_attn_func
@@ -177,7 +177,7 @@ def test_torch_attention_op_uses_xformers_when_enabled(cosmos_module) -> None:
 
 def test_llm_adapter_attention_does_not_use_xformers(cosmos_module) -> None:
     """ComfyUI Anima keeps LLMAdapterAttention on SDPA even when main attention uses xformers."""
-    from models.anima_modeling import LLMAdapterAttention
+    from modeling.anima_modeling import LLMAdapterAttention
 
     class BoomXops:
         @staticmethod

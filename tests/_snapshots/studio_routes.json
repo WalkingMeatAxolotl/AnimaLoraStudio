@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 180,
+  "count": 186,
   "routes": [
     {
       "path": "/",
@@ -287,6 +287,46 @@
         "GET"
       ],
       "name": "get_log",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/models-root/info",
+      "methods": [
+        "GET"
+      ],
+      "name": "models_root_info",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/models-root/migrate",
+      "methods": [
+        "POST"
+      ],
+      "name": "models_root_migrate",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/models-root/migrate_status",
+      "methods": [
+        "GET"
+      ],
+      "name": "models_root_migrate_status",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/models/anima/custom",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "remove_custom_anima",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/models/anima/custom",
+      "methods": [
+        "POST"
+      ],
+      "name": "add_custom_anima",
       "type": "APIRoute"
     },
     {
@@ -607,6 +647,14 @@
         "POST"
       ],
       "name": "advance_phase_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/bucket-distribution",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_bucket_distribution_endpoint",
       "type": "APIRoute"
     },
     {

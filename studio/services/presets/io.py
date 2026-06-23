@@ -76,7 +76,12 @@ def _absolutize_model_paths(data: dict[str, Any]) -> dict[str, Any]:
 
 def _validate_name(name: str) -> None:
     if not NAME_PATTERN.fullmatch(name):
-        raise PresetError(f"非法预设名: {name!r}（只允许字母/数字/下划线/连字符）")
+        raise PresetError(
+            f'Invalid preset name "{name}"; use letters, digits, underscore, or hyphen',
+            code="preset.name_invalid",
+            details={"name": name},
+            http_status=400,
+        )
 
 
 def _preset_path(name: str, base: Path | None = None) -> Path:
@@ -98,13 +103,27 @@ def parse_preset_bytes(raw: bytes, filename: str) -> tuple[dict[str, Any], str]:
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise PresetError(f"文件不是 UTF-8: {exc}") from exc
+        raise PresetError(
+            "Preset file is not valid UTF-8",
+            code="preset.invalid",
+            details={"reason": str(exc)},
+            http_status=400,
+        ) from exc
     try:
         data = yaml.safe_load(text) or {}
     except yaml.YAMLError as exc:
-        raise PresetError(f"YAML/JSON 解析失败: {exc}") from exc
+        raise PresetError(
+            f"Preset file could not be parsed: {exc}",
+            code="preset.invalid",
+            details={"reason": str(exc)},
+            http_status=400,
+        ) from exc
     if not isinstance(data, dict):
-        raise PresetError("预设格式错误（顶层不是 mapping）")
+        raise PresetError(
+            "Preset file format is invalid",
+            code="preset.invalid",
+            http_status=400,
+        )
     cfg, _, _ = _tolerant_validate(data)
     stem = re.sub(r"\.(ya?ml|json)$", "", filename, flags=re.I)
     suggested = re.sub(r"[^A-Za-z0-9_-]+", "-", stem).strip("-") or "imported"
@@ -171,7 +190,12 @@ def _tolerant_validate(raw: dict[str, Any]) -> tuple[TrainingConfig, list[str], 
                     data["infonoise_enabled"] = False
                     defaulted.append("infonoise_enabled")
                     continue
-                raise PresetError(f"预设校验失败: {exc}") from exc
+                raise PresetError(
+                    f"Preset validation failed: {exc}",
+                    code="preset.invalid",
+                    details={"reason": str(exc)},
+                    http_status=400,
+                ) from exc
             for f in bad_fields:
                 data[f] = getattr(defaults, f)
                 defaulted.append(str(f))
@@ -184,10 +208,20 @@ def read_preset(name: str, base: Path | None = None) -> dict[str, Any]:
     """读取并容错校验预设。未知字段丢弃，非法值回退默认。"""
     path = _preset_path(name, base)
     if not path.exists():
-        raise PresetError(f"预设不存在: {name}")
+        raise PresetError(
+            f'Preset "{name}" not found',
+            code="preset.not_found",
+            details={"name": name},
+            http_status=404,
+        )
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
-        raise PresetError(f"预设格式错误（顶层不是 mapping）: {name}")
+        raise PresetError(
+            "Preset file format is invalid",
+            code="preset.invalid",
+            details={"name": name},
+            http_status=400,
+        )
     cfg, _, _ = _tolerant_validate(raw)
     return _absolutize_model_paths(cfg.model_dump(mode="python"))
 
@@ -197,10 +231,20 @@ def read_preset_with_warnings(
 ) -> tuple[dict[str, Any], list[str], list[str]]:
     path = _preset_path(name, base)
     if not path.exists():
-        raise PresetError(f"预设不存在: {name}")
+        raise PresetError(
+            f'Preset "{name}" not found',
+            code="preset.not_found",
+            details={"name": name},
+            http_status=404,
+        )
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
-        raise PresetError(f"预设格式错误（顶层不是 mapping）: {name}")
+        raise PresetError(
+            "Preset file format is invalid",
+            code="preset.invalid",
+            details={"name": name},
+            http_status=400,
+        )
     cfg, dropped, defaulted = _tolerant_validate(raw)
     return _absolutize_model_paths(cfg.model_dump(mode="python")), dropped, defaulted
 
@@ -215,7 +259,12 @@ def write_preset(name: str, data: dict[str, Any], base: Path | None = None) -> P
     try:
         cfg = TrainingConfig.model_validate(data)
     except ValidationError as exc:
-        raise PresetError(f"预设校验失败: {exc}") from exc
+        raise PresetError(
+            f"Preset validation failed: {exc}",
+            code="preset.invalid",
+            details={"reason": str(exc)},
+            http_status=400,
+        ) from exc
     dumped = _absolutize_model_paths(cfg.model_dump(mode="python"))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -228,7 +277,12 @@ def write_preset(name: str, data: dict[str, Any], base: Path | None = None) -> P
 def delete_preset(name: str, base: Path | None = None) -> None:
     path = _preset_path(name, base)
     if not path.exists():
-        raise PresetError(f"预设不存在: {name}")
+        raise PresetError(
+            f'Preset "{name}" not found',
+            code="preset.not_found",
+            details={"name": name},
+            http_status=404,
+        )
     path.unlink()
 
 
@@ -236,8 +290,18 @@ def duplicate_preset(src: str, dst: str, base: Path | None = None) -> Path:
     src_path = _preset_path(src, base)
     dst_path = _preset_path(dst, base)
     if not src_path.exists():
-        raise PresetError(f"源预设不存在: {src}")
+        raise PresetError(
+            f'Source preset "{src}" not found',
+            code="preset.not_found",
+            details={"name": src},
+            http_status=404,
+        )
     if dst_path.exists():
-        raise PresetError(f"目标已存在: {dst}")
+        raise PresetError(
+            f'Preset "{dst}" already exists',
+            code="preset.exists",
+            details={"name": dst},
+            http_status=409,
+        )
     dst_path.write_bytes(src_path.read_bytes())
     return dst_path

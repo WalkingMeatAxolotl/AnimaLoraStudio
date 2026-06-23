@@ -223,6 +223,92 @@ def test_get_download_source_default_huggingface(monkeypatch: pytest.MonkeyPatch
     assert model_downloader._get_download_source() == "huggingface"
 
 
+def test_source_for_reads_per_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_source_for 按类型读 download_sources；各类型独立。"""
+    from studio import secrets
+    from studio.services.models import sources
+
+    monkeypatch.delenv("MODELSCOPE_SOURCE", raising=False)
+    monkeypatch.setattr(
+        secrets, "load",
+        lambda: secrets.Secrets(download_sources={"training": "modelscope", "wd14": "huggingface"}),
+    )
+    assert sources._source_for("training") == "modelscope"
+    assert sources._source_for("wd14") == "huggingface"
+    assert sources._source_for("upscaler") == "huggingface"  # 种子默认
+
+
+def test_source_for_env_overrides_all_types(monkeypatch: pytest.MonkeyPatch) -> None:
+    """MODELSCOPE_SOURCE env 仍是全局强制覆盖（CLI / CI）。"""
+    from studio import secrets
+    from studio.services.models import sources
+
+    monkeypatch.setenv("MODELSCOPE_SOURCE", "modelscope")
+    monkeypatch.setattr(
+        secrets, "load",
+        lambda: secrets.Secrets(download_sources={"training": "huggingface"}),
+    )
+    assert sources._source_for("training") == "modelscope"
+    assert sources._source_for("wd14") == "modelscope"
+
+
+def test_per_type_source_routing_is_isolated(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """training=modelscope 只让训练前置走 MS；wd14（=hf）仍走 HF。"""
+    from studio import secrets
+
+    monkeypatch.delenv("MODELSCOPE_SOURCE", raising=False)
+    monkeypatch.setattr(
+        secrets, "load",
+        lambda: secrets.Secrets(
+            download_sources={"training": "modelscope", "wd14": "huggingface"}
+        ),
+    )
+    hf: list[str] = []
+    ms: list[str] = []
+
+    def fake_hf(repo_id, subpath, target, *, on_log=print):
+        hf.append(repo_id)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"x")
+        return True
+
+    def fake_ms(repo_id, subpath, target, *, on_log=print):
+        ms.append(repo_id)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"x")
+        return True
+
+    monkeypatch.setattr("studio.services.models.sources.download_flat", fake_hf)
+    monkeypatch.setattr("studio.services.models.sources.download_flat_ms", fake_ms)
+
+    model_downloader.download_anima_vae(tmp_path, on_log=lambda _l: None)
+    assert ms and not hf  # 训练组 → MS
+
+    hf.clear()
+    ms.clear()
+    model_downloader.download_wd14("SmilingWolf/wd-vit-tagger-v3", tmp_path, on_log=lambda _l: None)
+    assert hf and not ms  # WD14 → HF
+
+
+def test_build_catalog_exposes_download_source_options(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from studio import secrets
+
+    monkeypatch.delenv("MODELSCOPE_SOURCE", raising=False)
+    monkeypatch.setattr(
+        secrets, "load",
+        lambda: secrets.Secrets(download_sources={"training": "modelscope"}),
+    )
+    opts = model_downloader.build_catalog(tmp_path)["download_source_options"]
+    assert opts["training"] == {"current": "modelscope", "available": ["huggingface", "modelscope"]}
+    assert opts["wd14"]["current"] == "huggingface"
+    assert opts["cltagger"] == {"current": "huggingface", "available": ["huggingface"]}
+    assert opts["taeflux"]["available"] == ["huggingface"]
+
+
 def test_download_flat_ms_skips_existing(tmp_path: "Path") -> None:
     """target 已存在时跳过，不调 modelscope API。"""
     target = tmp_path / "model.safetensors"
@@ -275,7 +361,7 @@ def test_download_qwen3_modelscope_builds_complete_directory(
 ) -> None:
     """ModelScope 源下载权重后，仍会从 HF 补齐 tokenizer/config 文件，
     使 text_encoders/ 成为 transformers 可直接加载的完整目录。"""
-    monkeypatch.setattr("studio.services.models.sources._get_download_source", lambda: "modelscope")
+    monkeypatch.setenv("MODELSCOPE_SOURCE", "modelscope")
 
     ms_calls: list[tuple[str, str, str]] = []
     hf_calls: list[tuple[str, str, str]] = []
@@ -293,7 +379,10 @@ def test_download_qwen3_modelscope_builds_complete_directory(
         return True
 
     monkeypatch.setattr("studio.services.models.sources.download_flat_ms", fake_download_flat_ms)
-    monkeypatch.setattr("studio.services.models.sources.download_flat", fake_download_flat)
+    monkeypatch.setattr(
+        "studio.services.models.sources.download_flat",
+        fake_download_flat,
+    )
 
     logs: list[str] = []
     ok = model_downloader.download_qwen3(tmp_path, on_log=logs.append)
@@ -425,10 +514,8 @@ def test_build_catalog_picks_up_custom_upscaler(
 def test_download_upscaler_uses_modelscope_when_configured(
     tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """secrets.download_source='modelscope' → download_upscaler 走 download_flat_ms。"""
-    monkeypatch.setattr(
-        "studio.services.models.sources._get_download_source", lambda: "modelscope"
-    )
+    """download_sources['upscaler']='modelscope' → download_upscaler 走 download_flat_ms。"""
+    monkeypatch.setenv("MODELSCOPE_SOURCE", "modelscope")
     ms_calls: list[tuple] = []
     hf_calls: list[tuple] = []
 
@@ -459,9 +546,7 @@ def test_download_upscaler_fallback_to_ms_when_hf_missing(
     tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """R-ESRGAN_4x+Anime6B 没 HF 镜像；source=hf 时也应回退到 MS。"""
-    monkeypatch.setattr(
-        "studio.services.models.sources._get_download_source", lambda: "huggingface"
-    )
+    monkeypatch.setenv("MODELSCOPE_SOURCE", "huggingface")
     ms_calls: list[tuple] = []
 
     def fake_ms(repo_id, subpath, target, *, on_log=print):
@@ -558,3 +643,237 @@ def test_selected_upscaler_falls_back_to_default(
 
     Fake.models.selected_upscaler = "totally-not-a-preset.pth"  # 不存在文件
     assert model_downloader.selected_upscaler() == model_downloader.DEFAULT_UPSCALER
+
+
+def test_download_cltagger_v2_downloads_external_data(
+    tmp_path: "Path",
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CLTagger v2 official ONNX uses a sibling model.onnx.data file."""
+    from studio import secrets
+
+    cfg = secrets.CLTaggerConfig(
+        model_id="cella110n/cl_tagger_v2",
+        model_path="v2_01a/model.onnx",
+        tag_mapping_path="v2_01a/model_vocabulary.json",
+    )
+    calls: list[str] = []
+
+    def fake_download_flat(repo_id, repo_subpath, target, *, on_log=print):
+        calls.append(repo_subpath)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"x")
+        return True
+
+    monkeypatch.setattr("studio.services.models.sources.download_flat", fake_download_flat)
+
+    ok = model_downloader.download_cltagger(tmp_path, cfg, on_log=lambda _l: None)
+
+    assert ok
+    assert calls == [
+        "v2_01a/model.onnx",
+        "v2_01a/model.onnx.data",
+        "v2_01a/model_metadata.json",
+        "v2_01a/model_vocabulary.json",
+    ]
+
+
+def test_download_cltagger_v2_normalizes_legacy_root_paths(
+    tmp_path: "Path",
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Earlier v2 support briefly saved root file paths; keep those configs usable."""
+    from studio import secrets
+
+    cfg = secrets.CLTaggerConfig(
+        model_id="cella110n/cl_tagger_v2",
+        model_path="model.onnx",
+        tag_mapping_path="model_vocabulary.json",
+    )
+    calls: list[str] = []
+
+    def fake_download_flat(repo_id, repo_subpath, target, *, on_log=print):
+        calls.append(repo_subpath)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"x")
+        return True
+
+    monkeypatch.setattr(
+        "studio.services.models.sources.download_flat",
+        fake_download_flat,
+    )
+
+    ok = model_downloader.download_cltagger(tmp_path, cfg, on_log=lambda _l: None)
+
+    assert ok
+    assert calls == [
+        "v2_01a/model.onnx",
+        "v2_01a/model.onnx.data",
+        "v2_01a/model_metadata.json",
+        "v2_01a/model_vocabulary.json",
+    ]
+
+
+def test_build_catalog_lists_cltagger_v2_variant_with_external_data(
+    tmp_path: "Path",
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from studio import secrets
+
+    monkeypatch.setattr(secrets, "load", lambda: secrets.Secrets())
+
+    cat = model_downloader.build_catalog(tmp_path)
+    v2 = next(
+        v for v in cat["cltagger"]["variants"]
+        if v["label"] == "cl_tagger_v2_v2_01a"
+    )
+
+    assert v2["model_id"] == "cella110n/cl_tagger_v2"
+    assert v2["model_path"] == "v2_01a/model.onnx"
+    assert v2["tag_mapping_path"] == "v2_01a/model_vocabulary.json"
+    assert [f["name"] for f in v2["files"]] == [
+        "v2_01a/model.onnx",
+        "v2_01a/model.onnx.data",
+        "v2_01a/model_metadata.json",
+        "v2_01a/model_vocabulary.json",
+    ]
+
+
+def test_trigger_cltagger_v2_uses_dedicated_repo_and_target(
+    tmp_path: "Path",
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The v2 preset lives in cella110n/cl_tagger_v2, not cella110n/cl_tagger."""
+    from studio import secrets
+
+    captured = {}
+
+    def fake_start_download_async(key, fn):
+        captured["key"] = key
+        captured["ok"] = fn(lambda _line: None)
+        return None
+
+    def fake_download_cltagger(target_root, cfg, *, on_log=print):
+        captured["target_root"] = target_root
+        captured["cfg"] = cfg
+        return True
+
+    monkeypatch.setattr(
+        "studio.services.models.downloader.models_root",
+        lambda: tmp_path,
+    )
+    monkeypatch.setattr(secrets, "load", lambda: secrets.Secrets())
+    monkeypatch.setattr(
+        "studio.services.models.downloader.start_download_async",
+        fake_start_download_async,
+    )
+    monkeypatch.setattr(
+        "studio.services.models.downloader.download_cltagger",
+        fake_download_cltagger,
+    )
+
+    key = model_downloader.trigger("cltagger", "cl_tagger_v2_v2_01a")
+
+    assert key == "cltagger:cl_tagger_v2_v2_01a"
+    assert captured["key"] == key
+    assert captured["ok"] is True
+    assert captured["cfg"].model_id == "cella110n/cl_tagger_v2"
+    assert captured["cfg"].model_path == "v2_01a/model.onnx"
+    assert captured["cfg"].tag_mapping_path == "v2_01a/model_vocabulary.json"
+    assert captured["target_root"] == tmp_path / "cltagger" / "cella110n_cl_tagger_v2"
+
+
+def test_failure_summary_surfaces_gated_hint() -> None:
+    """下载失败 message 必须给出可操作原因（token / 授权），而非通用串。"""
+    from studio.services.models import downloader as dl
+
+    log = [
+        "📥 CLTagger → /models/cltagger",
+        "   ✗ model.onnx: 401 Client Error: Cannot access gated repo",
+        "   ↳ 该仓库可能是 gated/private：请到 设置→密钥 填 HuggingFace token 后重试。",
+    ]
+    msg = dl._failure_summary(log)
+    assert "↳" in msg
+    assert "token" in msg.lower()
+    assert "✗" in msg  # 同时带上原始错误
+
+
+def test_failure_summary_falls_back_to_last_error() -> None:
+    from studio.services.models import downloader as dl
+
+    log = ["📥 ...", "   ✗ model.onnx: connection reset"]
+    assert dl._failure_summary(log) == "✗ model.onnx: connection reset"
+
+
+def test_failure_summary_generic_when_no_error_line() -> None:
+    from studio.services.models import downloader as dl
+
+    assert dl._failure_summary([]) == "下载失败，详见下载日志"
+
+
+def test_download_flat_passes_configured_hf_token(
+    tmp_path: "Path",
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """gated/private 仓库需 token：download_flat 应把 secrets 里的 HF token 透传给 hf_hub_download。"""
+    import huggingface_hub
+    from pathlib import Path
+    from studio import secrets
+    from studio.services.models import sources
+
+    for var in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_TOKEN", "HF_ENDPOINT"):
+        monkeypatch.delenv(var, raising=False)
+    fake = secrets.Secrets()
+    fake.huggingface.token = "hf_test123"
+    monkeypatch.setattr(secrets, "load", lambda: fake)
+
+    captured: dict = {}
+
+    def fake_hf_hub_download(**kwargs):
+        captured.update(kwargs)
+        p = Path(kwargs["local_dir"]) / kwargs["filename"]
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x")
+        return str(p)
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake_hf_hub_download)
+
+    ok = sources.download_flat(
+        "cella110n/cl_tagger_v2",
+        "v2_01a/model.onnx",
+        tmp_path / "model.onnx",
+        on_log=lambda _l: None,
+    )
+
+    assert ok
+    assert captured["token"] == "hf_test123"
+
+
+def test_download_flat_hints_on_gated_auth_error(
+    tmp_path: "Path",
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """gated 仓库无授权时，除裸错误外应追加可操作提示（提到 token/授权）。"""
+    import huggingface_hub
+    from studio import secrets
+    from studio.services.models import sources
+
+    for var in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_TOKEN", "HF_ENDPOINT"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(secrets, "load", lambda: secrets.Secrets())
+
+    def fake_hf_hub_download(**kwargs):
+        raise RuntimeError("401 Client Error: Cannot access gated repo for url ...")
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake_hf_hub_download)
+
+    logs: list[str] = []
+    ok = sources.download_flat(
+        "cella110n/cl_tagger_v2",
+        "v2_01a/model.onnx",
+        tmp_path / "model.onnx",
+        on_log=logs.append,
+    )
+
+    assert ok is False
+    assert any(("token" in m.lower() or "gated" in m.lower()) for m in logs)

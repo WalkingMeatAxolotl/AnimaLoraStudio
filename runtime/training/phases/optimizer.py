@@ -52,7 +52,10 @@ def run(ctx: TrainingContext) -> None:
 
     # 计算总步数
     try:
-        ctx.steps_per_epoch = len(ctx.dataloader) // args.grad_accum
+        # ceil：最后一组不满 grad_accum 也算一个 update step（loop 末批会 step），
+        # 与 _accumulation_step 的「尾组不满也 step」一致，scheduler 步数才对得上。
+        _dl_len = len(ctx.dataloader)
+        ctx.steps_per_epoch = (_dl_len + args.grad_accum - 1) // args.grad_accum
     except Exception:
         ctx.steps_per_epoch = None
 

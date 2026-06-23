@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from studio import db
+from studio.domain.errors import NotFoundError
 from studio.services.projects import projects, versions
 from studio.services.data_io import train_io
 
@@ -113,7 +114,9 @@ def test_export_empty_train_raises(isolated, tmp_path: Path) -> None:
 
 
 def test_export_missing_version(isolated, tmp_path: Path) -> None:
-    with db.connection_for(isolated["db"]) as conn, pytest.raises(train_io.TrainIOError):
+    with db.connection_for(isolated["db"]) as conn, pytest.raises(
+        NotFoundError, match="Version not found"
+    ):
         train_io.export_train(conn, 9999, tmp_path / "x.zip")
 
 

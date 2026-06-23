@@ -49,7 +49,8 @@ def _set_model_xformers_enabled(model, enabled: bool) -> bool:
         if getattr(cls, "__module__", None)
     }
     module_names.update({
-        "models.cosmos_predict2_modeling",
+        "modeling.cosmos_predict2_modeling",
+        "models.cosmos_predict2_modeling",  # 兼容外部 diffusion-pipe checkout
         "cosmos_predict2_modeling",
     })
 

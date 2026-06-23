@@ -132,7 +132,7 @@ class RecordingBatchedDenoiseModel(RecordingAnimaModel):
 
 class XformersNaNThenFiniteModel(RecordingBatchedDenoiseModel):
     def __call__(self, x, timesteps, cross, **kwargs):
-        from models import cosmos_predict2_modeling as cosmos
+        from modeling import cosmos_predict2_modeling as cosmos
 
         self.forward_calls.append(
             {
@@ -468,7 +468,7 @@ def test_sample_image_comfy_parity_batches_cfg_like_comfyui(monkeypatch) -> None
 
 
 def test_sample_image_retries_with_sdpa_when_xformers_outputs_nan(monkeypatch) -> None:
-    from models import cosmos_predict2_modeling as cosmos
+    from modeling import cosmos_predict2_modeling as cosmos
 
     model = XformersNaNThenFiniteModel()
 

@@ -260,6 +260,19 @@ function ChartSvg({ data, W, H, rawColor, smoothColor, fillColor, emaAlpha, yFor
 
 // ── SampleViewer（单图 + 左右切换） ──────────────────────────────────────
 
+// monitor 给每张图都记了触发那一刻的 global_step，所以 step 始终能显示；epoch 只有
+// 按 epoch 采样（文件名 epoch_N.png）的图才有，从文件名解析。两个都返回 → 角标 / 标题
+// 「step 一直显示、ep 有就附加」，不用点开看文件名才知道是第几 epoch。
+function sampleMarks(s: { path: string; step?: number }): { step: number | null; epoch: number | null } {
+  const fn = s.path.split(/[\\/]/).pop() ?? s.path
+  const ep = /^epoch_(\d+)/i.exec(fn)
+  const st = /^step_(\d+)/i.exec(fn)
+  return {
+    epoch: ep ? Number(ep[1]) : null,
+    step: st ? Number(st[1]) : (s.step != null ? s.step : null),
+  }
+}
+
 function SampleViewer({ samples, taskId }: {
   samples: Array<{ path: string; step?: number }>
   taskId: number
@@ -305,6 +318,11 @@ function SampleViewer({ samples, taskId }: {
   const cur = list[active]
   const filename = cur.path.split(/[\\/]/).pop() ?? cur.path
   const fullUrl = api.sampleImageUrl(filename, taskId)
+  const curM = sampleMarks(cur)
+  const markText = [
+    curM.epoch != null ? `ep ${curM.epoch.toLocaleString()}` : null,
+    curM.step != null ? `step ${curM.step.toLocaleString()}` : null,
+  ].filter(Boolean).join(' · ')
 
   return (
     <div className="flex flex-col gap-2.5 w-full flex-1">
@@ -318,27 +336,40 @@ function SampleViewer({ samples, taskId }: {
           const fn = s.path.split(/[\\/]/).pop() ?? s.path
           const thumbUrl = api.sampleImageUrl(fn, taskId, 128)
           const isActive = i === active
+          const m = sampleMarks(s)
+          const thumbTitle = [
+            m.epoch != null ? `ep ${m.epoch}` : null,
+            m.step != null ? `step ${m.step}` : null,
+          ].filter(Boolean).join(' · ') || fn
+          // 角标放缩略图下面一行，不压在 64px 小图上（盖住看不清）。
+          const thumbCaption = [
+            m.epoch != null ? `ep${m.epoch}` : null,
+            m.step != null ? `${m.step}` : null,
+          ].filter(Boolean).join('·')
           return (
             <button
               key={`${fn}-${i}`}
               onClick={() => setActive(i)}
-              className={[
-                'shrink-0 rounded-sm overflow-hidden border transition-colors relative',
-                isActive ? 'border-accent ring-2 ring-accent-soft' : 'border-subtle hover:border-bold',
-                'cursor-pointer p-0 bg-sunken',
-              ].join(' ')}
-              title={s.step != null ? `step ${s.step}` : fn}
-              style={{ width: 64, height: 64 }}
+              className="shrink-0 flex flex-col items-center gap-0.5 p-0 bg-transparent border-none cursor-pointer"
+              title={thumbTitle}
             >
-              <img
-                src={thumbUrl}
-                alt=""
-                loading="lazy"
-                className="w-full h-full object-cover block"
-              />
-              {s.step != null && (
-                <span className="absolute bottom-0 inset-x-0 bg-black/55 text-white text-[10px] font-mono text-center leading-tight py-0.5">
-                  {s.step.toLocaleString()}
+              <div
+                className={[
+                  'rounded-sm overflow-hidden border transition-colors bg-sunken',
+                  isActive ? 'border-accent ring-2 ring-accent-soft' : 'border-subtle hover:border-bold',
+                ].join(' ')}
+                style={{ width: 64, height: 64 }}
+              >
+                <img
+                  src={thumbUrl}
+                  alt=""
+                  loading="lazy"
+                  className="w-full h-full object-cover block"
+                />
+              </div>
+              {thumbCaption && (
+                <span className={`text-[10px] font-mono leading-tight text-center ${isActive ? 'text-fg-primary' : 'text-fg-tertiary'}`}>
+                  {thumbCaption}
                 </span>
               )}
             </button>
@@ -362,9 +393,14 @@ function SampleViewer({ samples, taskId }: {
           onClick={() => setZoomOpen(true)}
           className="absolute inset-0 w-full h-full object-contain cursor-zoom-in"
         />
-        {cur.step != null && (
+        {(curM.epoch != null || curM.step != null) && (
           <div className="absolute bottom-2.5 left-1/2 -translate-x-1/2 border border-subtle rounded-sm px-2.5 py-0.5 text-xs font-mono text-fg-secondary bg-surface/85">
-            step <strong className="text-accent">{cur.step.toLocaleString()}</strong>
+            {curM.epoch != null && (
+              <>ep <strong className="text-accent">{curM.epoch.toLocaleString()}</strong>{curM.step != null && ' · '}</>
+            )}
+            {curM.step != null && (
+              <>step <strong className="text-accent">{curM.step.toLocaleString()}</strong></>
+            )}
             <span className="text-fg-tertiary ml-2">{active + 1} / {list.length}</span>
           </div>
         )}
@@ -374,9 +410,7 @@ function SampleViewer({ samples, taskId }: {
       {zoomOpen && (
         <ImagePreviewModal
           src={fullUrl}
-          caption={cur.step != null
-            ? `step ${cur.step.toLocaleString()} · ${active + 1} / ${list.length} · ${filename}`
-            : `${filename} · ${active + 1} / ${list.length}`}
+          caption={[markText, `${active + 1} / ${list.length}`, filename].filter(Boolean).join(' · ')}
           hasPrev={active > 0}
           hasNext={active < list.length - 1}
           onClose={() => setZoomOpen(false)}
@@ -495,15 +529,6 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
             )}
           </>
         )}
-        <span className="flex-1" />
-        <a
-          href={`/tools/monitor?task=${taskId}`}
-          target="_blank"
-          rel="noopener"
-          className="text-fg-tertiary no-underline hover:text-fg-primary transition-colors"
-        >
-          独立监控 ↗
-        </a>
       </div>
 
       {/* 6 stat cards */}

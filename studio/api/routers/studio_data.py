@@ -14,9 +14,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
 from ..schemas.studio_data import StudioDataMigrateRequest
+from ...domain.errors import ConflictError, ValidationError
 from ...infrastructure.paths import DEFAULT_STUDIO_DATA, STUDIO_DATA
 from ...services import studio_data as svc
 from .system import _check_no_running_tasks
@@ -43,9 +44,16 @@ def studio_data_migrate(body: StudioDataMigrateRequest) -> dict[str, Any]:
     try:
         svc.start_migration(Path(body.target))
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise ValidationError(
+            f"Invalid target location: {exc}",
+            code="studio_data.target_invalid",
+            details={"reason": str(exc)}, http_status=422,
+        ) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise ConflictError(
+            "A data migration is already in progress",
+            code="studio_data.migration_busy",
+        ) from exc
     return {"ok": True}
 
 

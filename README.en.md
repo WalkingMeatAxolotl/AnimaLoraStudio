@@ -1,6 +1,6 @@
 # AnimaLoraStudio
 
-[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-lightgrey)](README.md) [![English](https://img.shields.io/badge/lang-English-blue)](README.en.md) [![Version](https://img.shields.io/badge/version-0.14.0-blue)](CHANGELOG.md)
+[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-lightgrey)](README.md) [![English](https://img.shields.io/badge/lang-English-blue)](README.en.md) [![Version](https://img.shields.io/badge/version-0.15.0-blue)](CHANGELOG.md)
 
 **End-to-end pipeline**: scrape from Booru → curate → tag → reg set → train → image testing, all driven from a single browser panel. Optimized for [Anima](https://huggingface.co/circlestone-labs/Anima) (Cosmos DiT, anime-tuned) training.
 
@@ -203,16 +203,17 @@ AnimaLoraStudio/
 │   └── validate_local_models.py   # Validate local Qwen / T5 for offline loading
 ├── docs/                          # Three sections: user-guide / architecture / adr (see docs/README.md)
 ├── utils/                         # Shared utilities for anima_train (model loader / optimizer / lycoris_adapter / ...)
-└── models/                        # Model code + bundled tokenizer files + downloaded weights (mixed)
-    ├── anima_modeling*.py         # tracked: PyTorch implementation of Anima Cosmos transformer
-    ├── cosmos_predict2_modeling.py
-    ├── wan/vae2_1.py              # tracked: Wan2.1 VAE implementation
-    ├── text_encoders/             # tracked: Qwen tokenizer files + user-downloaded model.safetensors
-    ├── t5_tokenizer/              # tracked: T5 tokenizer files (no weights)
-    ├── diffusion_models/          # User-downloaded Anima base model (gitignored)
-    ├── vae/                       # User-downloaded VAE weights (gitignored)
-    ├── wd14/                      # WD14 ONNX models (auto-downloaded from HF, gitignored)
-    └── taeflux/                   # TAEFlux intermediate preview weights (gitignored)
+├── modeling/                     # Model architecture defs (tracked): vendored diffusion-pipe subset + Anima wrapper
+│   ├── anima_modeling.py         # PyTorch implementation of Anima Cosmos transformer (based on ComfyUI)
+│   ├── cosmos_predict2_modeling.py
+│   └── wan/vae2_1.py             # Wan2.1 VAE implementation
+└── models/                       # Downloaded weights / tokenizer data dir (gitignored, created on use; only .gitkeep tracked)
+    ├── diffusion_models/          # User-downloaded Anima base model
+    ├── vae/                       # User-downloaded VAE weights
+    ├── text_encoders/             # Qwen3 text encoder + tokenizer (downloaded)
+    ├── t5_tokenizer/              # T5 tokenizer files (downloaded)
+    ├── wd14/                      # WD14 ONNX models (auto-downloaded from HF)
+    └── taeflux/                   # TAEFlux intermediate preview weights
 ```
 
 Runtime data (gitignored):
@@ -273,7 +274,7 @@ Documentation entry: [docs/README.md](docs/README.md). Three sections:
 
 ## Version
 
-Current version is **0.14.0**. See [CHANGELOG.md](CHANGELOG.md) for the full history. The Settings → System → version card inside Studio allows one-click upgrade to the latest version.
+Current version is **0.15.0**. See [CHANGELOG.md](CHANGELOG.md) for the full history. The Settings → System → version card inside Studio allows one-click upgrade to the latest version.
 
 ---
 

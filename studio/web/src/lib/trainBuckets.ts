@@ -23,17 +23,18 @@ export interface TrainBucket {
 /** BucketManager parameters. Defaults mirror Python `BucketManager(...)`. */
 export interface BucketParams {
   baseReso?: number       // 1024 — target area ≈ base²
-  minReso?: number        // 512  — each side min
-  maxReso?: number        // 2048 — each side max
+  minReso?: number        // edge-length min; derived from (baseReso, maxArRatio) when omitted
+  maxReso?: number        // edge-length max; derived from (baseReso, maxArRatio) when omitted
   step?: number           // 64   — w / h granularity
   areaTolerance?: number  // 0.10 — ±10% deviation from base² allowed
-  maxArRatio?: number     // 2.0  — max(w/h, h/w) cap
+  maxArRatio?: number     // 2.0  — R: symmetric max(w/h, h/w) cap
 }
 
-const DEFAULTS: Required<BucketParams> = {
+// min/max are NOT defaults — they derive from (baseReso, maxArRatio) in
+// generateBuckets so small base values keep AR variety (a hard-wired 512/2048
+// collapses base=512 to the square bucket only). Mirrors the Python derivation.
+const DEFAULTS = {
   baseReso: 1024,
-  minReso: 512,
-  maxReso: 2048,
   step: 64,
   areaTolerance: 0.10,
   maxArRatio: 2.0,
@@ -50,9 +51,17 @@ const DEFAULTS: Required<BucketParams> = {
  *  here for stable consumer-side ordering — does NOT change the bucket set).
  */
 export function generateBuckets(p: BucketParams = {}): TrainBucket[] {
-  const { baseReso, minReso, maxReso, step, areaTolerance, maxArRatio } = {
-    ...DEFAULTS, ...p,
-  }
+  const baseReso = p.baseReso ?? DEFAULTS.baseReso
+  const step = p.step ?? DEFAULTS.step
+  const areaTolerance = p.areaTolerance ?? DEFAULTS.areaTolerance
+  const maxArRatio = p.maxArRatio ?? DEFAULTS.maxArRatio
+  // Edge-length search bounds derived from (baseReso, R) — at constant area
+  // base² the most extreme bucket has edges base·√R × base/√R, so round outward
+  // to ≈ base/√R and ≈ base·√R with one step of margin. Mirrors
+  // BucketManager.__init__ in runtime/training/dataset.py exactly.
+  const span = Math.sqrt(maxArRatio)
+  const minReso = p.minReso ?? Math.max(step, Math.floor(baseReso / span / step) * step - step)
+  const maxReso = p.maxReso ?? Math.ceil(baseReso * span / step) * step + step
   const baseArea = baseReso * baseReso
   const out: TrainBucket[] = []
   for (let w = minReso; w <= maxReso; w += step) {

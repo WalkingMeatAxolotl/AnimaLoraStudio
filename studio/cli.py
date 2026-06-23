@@ -372,7 +372,7 @@ def _try_enable_flash_attn() -> None:
         from studio.services.runtime import flash_attention as flash_attention_setup  # noqa: PLC0415
         if not flash_attention_setup.current_status()["installed"]:
             return
-        from models.cosmos_predict2_modeling import set_flash_attn_enabled  # noqa: PLC0415
+        from modeling.cosmos_predict2_modeling import set_flash_attn_enabled  # noqa: PLC0415
         if set_flash_attn_enabled(True):
             _say("flash_attn 启用")
         else:

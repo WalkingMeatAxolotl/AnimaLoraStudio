@@ -63,7 +63,7 @@ def test_raise_service_error_caught_by_handler_via_isinstance(tmp_path) -> None:
     resp = c.get("/raise_preset_err")
     assert resp.status_code == 400
     body = resp.json()
-    assert body["detail"] == "preset 'x' missing"
+    assert "detail" not in body  # Phase 3：只发 error 信封
     assert body["error"]["code"] == "preset.error"
     assert body["error"]["message"] == "preset 'x' missing"
     assert body["error"]["trace_id"] is not None

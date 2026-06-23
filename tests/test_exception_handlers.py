@@ -84,14 +84,12 @@ def test_domain_error_returns_subclass_http_status(client: TestClient) -> None:
     assert resp.status_code == 404
 
 
-def test_domain_error_body_has_detail_legacy(client: TestClient) -> None:
-    """前端 client.ts 老路径读 body.detail 是 string — dual-write 保这条。"""
+def test_domain_error_body_has_no_legacy_detail(client: TestClient) -> None:
+    """ADR-0009 Phase 3：错误响应只发 error 信封，legacy detail key 已移除。"""
     resp = client.get("/raise_domain")
     body = resp.json()
-    assert "detail" in body
-    assert body["detail"] == "preset 'foo' does not exist", (
-        "detail 必须是 message 字符串（前端 client.ts:1233-1238 兜底）"
-    )
+    assert "detail" not in body
+    assert body["error"]["message"] == "preset 'foo' does not exist"
 
 
 def test_domain_error_body_has_error_struct(client: TestClient) -> None:
@@ -149,29 +147,31 @@ def test_domain_error_4xx_logs_info_not_exception(
     assert errors == [], "4xx 不应 logger.exception（业务正常路径，不该 ERROR 噪音）"
 
 
-# ── HTTPException 形态保护（前端 client.ts 老路径不破）────────────────
+# ── HTTPException backstop（Phase 3：包成 error 信封，不再发 legacy detail）──
 
 
-def test_http_exception_string_detail_preserved(client: TestClient) -> None:
-    """raise HTTPException(detail='str') 仍返 {detail: str}，handler 不截胡。"""
+def test_http_exception_string_wrapped_in_error(client: TestClient) -> None:
+    """ADR-0009 Phase 3：裸 HTTPException(detail='str') 经 backstop 包成 error 信封
+    （code=http.<status>，message=detail），不再发 legacy detail key。"""
     resp = client.get("/raise_http")
     assert resp.status_code == 400
     body = resp.json()
-    assert body == {"detail": "legacy http err string"}, (
-        f"HTTPException 形状必须不变，实际 {body}"
-    )
-    # 应该 *没有* error 字段（不被 DomainError handler 处理）
-    assert "error" not in body
+    assert "detail" not in body
+    assert body["error"]["code"] == "http.400"
+    assert body["error"]["message"] == "legacy http err string"
+    assert body["error"]["trace_id"] is not None
 
 
-def test_http_exception_dict_detail_preserved(client: TestClient) -> None:
-    """raise HTTPException(detail={"error": "x", ...}) 仍 {detail: {...}}。
-
-    test_studio_server.py 7 处断言 body['detail']['error'] 走这条；不能变。
-    """
+def test_http_exception_dict_detail_into_error_details(client: TestClient) -> None:
+    """ADR-0009 Phase 3：HTTPException(detail={...}) 的结构化 detail 进 error.details，
+    顶层 legacy detail 已移除（业务迁移后已无 dict-detail 来源，仅 backstop 兜底）。"""
     resp = client.get("/raise_http_dict")
     body = resp.json()
-    assert body == {"detail": {"error": "running_tasks_present", "count": 3}}
+    assert "detail" not in body
+    assert body["error"]["code"] == "http.400"
+    assert body["error"]["message"] == "running_tasks_present"
+    assert body["error"]["details"] == {"error": "running_tasks_present", "count": 3}
+    assert body["error"]["trace_id"] is not None
 
 
 def test_http_exception_still_has_trace_id_header(client: TestClient) -> None:
@@ -184,12 +184,11 @@ def test_http_exception_still_has_trace_id_header(client: TestClient) -> None:
 # ── Exception fallback ────────────────────────────────────────────────
 
 
-def test_uncaught_exception_returns_500_dual_envelope(client: TestClient) -> None:
+def test_uncaught_exception_returns_500_error_envelope(client: TestClient) -> None:
     resp = client.get("/raise_uncaught")
     assert resp.status_code == 500
     body = resp.json()
-    assert "detail" in body
-    assert "error" in body
+    assert "detail" not in body
     assert body["error"]["code"] == "internal.server_error"
     assert body["error"]["trace_id"] is not None
 
@@ -246,6 +245,7 @@ def test_existing_preset_404_path_still_works(
     resp = c.get("/api/presets/__nonexistent__")
     assert resp.status_code == 404
     body = resp.json()
-    # 现状（PR-2 C3 前）：presets.py 还在 raise HTTPException —— 形状保持 {detail: str}
-    assert "detail" in body
-    assert isinstance(body["detail"], str)
+    # Phase 3：错误响应只发 error 信封（preset 已迁 DomainError，带语义 code）
+    assert "detail" not in body
+    assert body["error"]["code"] == "preset.not_found"
+    assert isinstance(body["error"]["message"], str)

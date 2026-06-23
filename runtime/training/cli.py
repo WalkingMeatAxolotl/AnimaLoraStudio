@@ -139,7 +139,13 @@ def prompt_for_args(args):
     args.text_encoder_path = args.text_encoder_path or _ask_str("Qwen 模型目录", defaults["qwen"])
     args.output_dir = _ask_str("输出目录", args.output_dir)
     args.output_name = _ask_str("输出名称", args.output_name)
-    args.resolution = _ask_int("分辨率", args.resolution)
+    # resolution 现在是 list[int]。单值（含默认 [1024]）照常交互问一档；已设多分辨率
+    # （GUI / config 驱动）则不打扰。
+    _res = args.resolution
+    if not isinstance(_res, (list, tuple)):
+        args.resolution = [_ask_int("分辨率", int(_res))]
+    elif len(_res) <= 1:
+        args.resolution = [_ask_int("分辨率", int(_res[0]) if _res else 1024)]
     args.batch_size = _ask_int("Batch size", args.batch_size)
     args.grad_accum = _ask_int("梯度累积", args.grad_accum)
     args.learning_rate = _ask_float("学习率", args.learning_rate)

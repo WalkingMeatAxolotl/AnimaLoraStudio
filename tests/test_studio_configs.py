@@ -206,7 +206,8 @@ def test_api_duplicate_conflict(client: TestClient) -> None:
     client.put("/api/presets/x", json=payload)
     client.put("/api/presets/y", json=payload)
     resp = client.post("/api/presets/x/duplicate", json={"new_name": "y"})
-    assert resp.status_code == 400
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "preset.exists"
 
 
 def test_api_delete_missing(client: TestClient) -> None:
@@ -342,10 +343,11 @@ def test_import_returns_409_on_conflict(
         files={"file": ("clash.yaml", yaml_bytes2, "application/yaml")},
     )
     assert resp2.status_code == 409, resp2.text
-    detail = resp2.json()["detail"]
-    assert isinstance(detail, dict)
-    assert detail["suggested_name"] == "clash"
-    assert detail["config"]["epochs"] == 42
+    error = resp2.json()["error"]
+    assert error["code"] == "preset.exists"
+    details = error["details"]
+    assert details["suggested_name"] == "clash"
+    assert details["config"]["epochs"] == 42
     # 没覆盖原文件
     assert (presets_dir / "clash.yaml").stat().st_mtime == on_disk_mtime
     assert client.get("/api/presets/clash").json()["epochs"] != 42

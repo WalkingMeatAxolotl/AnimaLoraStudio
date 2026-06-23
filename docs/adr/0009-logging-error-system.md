@@ -175,11 +175,11 @@ api/middleware/  ────►  api/exception_handlers  ────►  domai
 |---|---|---|---|
 | Phase 1 | 0.12.0 | dual-write：`{"detail": <legacy>, "error": {"code", "message", "trace_id"}}` | 优先读 `body.error.trace_id` 显 toast；fallback 读 `body.detail` |
 | Phase 2 | 0.15.0 | 所有 `raise HTTPException` 加 deprecation log；front-end 完成全量迁移到 `body.error.*` | 删 `client.ts` 内 `body.detail` 解析路径，只剩单一 `ApiError` |
-| Phase 3 | 0.16.0 | handler 删 `detail` key；测试 5 文件 11 处迁完 | — |
+| Phase 3 | 0.15.0 | handler 删 `detail` key，错误响应只发 `error`（RequestValidationError 的 422 list 除外）| — |
 
 **关键**：Phase 1 多写 ~30 行（handler 同时填两个 key），给前端 toast trace_id body 可见性提前 3 release。
 
-> **进度（2026-06-19 更新）**：实际只有 Phase 1 跟 0.12.0 发布。Phase 2/3 滑期 —— 前端 `client.ts` 仍以 `body.detail` 为主错误文案来源、未迁到 `body.error.*`，故 Phase 3 删 `detail` 会丢 toast 文案、被 Phase 2 阻塞。目标版本已下调（原 0.13.0 / 0.14.0 → 现 0.15.0 / 0.16.0）。详细待办与现状见 [`docs/todo/error-envelope-detail-key-removal.md`](../todo/error-envelope-detail-key-removal.md)。
+> **进度（2026-06-19 完成）**：三阶段全部落地，随 0.15.0 发布。Phase 1（0.12.0 dual-write）→ Phase 2（PR #294：backstop handler 让 `body.error` 全覆盖 + ~330 处 raise 迁 `DomainError` 带语义 code + 前端按 code 查 `errors.*` i18n，删 4 个中文子串匹配 helper）→ Phase 3（分支 `feat/error-envelope-phase3`：删 legacy `detail`，错误响应只发 `error`）。实现与本表略有出入（backstop handler 替代 deprecation log、全量迁移而非渐进、Phase 3 提前到 0.15.0）。详见 [`docs/todo/error-envelope-detail-key-removal.md`](../todo/error-envelope-detail-key-removal.md)。
 
 ---
 

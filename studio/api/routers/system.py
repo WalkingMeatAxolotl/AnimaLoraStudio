@@ -32,10 +32,11 @@ import time
 from dataclasses import asdict
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks
 
 from ..schemas.system import UpdateRequest
 from ... import db
+from ...domain.errors import ConflictError, DomainError, ValidationError
 from ...paths import REPO_ROOT
 from ...services import release_notes as release_notes_svc
 from ...services.runtime import updater
@@ -80,11 +81,10 @@ def _check_no_running_tasks() -> None:
     with db.connection_for() as conn:
         running = db.list_tasks(conn, status="running")
     if running:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "running_tasks_present",
-                "message": "有任务正在运行，请先取消 / 等待完成",
+        raise ValidationError(
+            "Tasks are running; cancel or wait for them to finish first",
+            code="system.tasks_running",
+            details={
                 "tasks": [
                     {
                         "id": t["id"],
@@ -94,6 +94,7 @@ def _check_no_running_tasks() -> None:
                     for t in running
                 ],
             },
+            http_status=422,
         )
 
 
@@ -125,7 +126,11 @@ def system_update_check(channel: str = "master", force: bool = False) -> dict[st
     dev 通道每次都 fetch，不缓存（开发者主动触发，避免污染 master 信号）。
     """
     if channel not in ("master", "dev"):
-        raise HTTPException(400, f"invalid channel: {channel}")
+        raise ValidationError(
+            f"Unsupported update channel: {channel}",
+            code="system.channel_invalid",
+            details={"channel": channel}, http_status=400,
+        )
     return asdict(updater.check_update(channel=channel, use_cache=not force))
 
 
@@ -139,16 +144,15 @@ def system_update(body: UpdateRequest, background: BackgroundTasks) -> dict[str,
     _check_no_running_tasks()
 
     cur = updater.current_version()
-    if cur.is_dirty:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "dirty_working_tree",
-                "message": "本地有未提交的修改，请先 commit / stash",
-            },
+    # force=True：用户在 UI 上已确认"强制覆盖本地改动"，跳过 dirty 闸；启动期
+    # apply_pending 的 git reset --hard 会丢弃这些未提交改动（不可恢复）。
+    if cur.is_dirty and not body.force:
+        raise ValidationError(
+            "Local changes are uncommitted; commit or stash them before updating",
+            code="system.working_tree_dirty", http_status=422,
         )
 
-    updater.request_update(body.target)
+    updater.request_update(body.target, force=body.force)
     background.add_task(_raise_sigint_after_response)
     return {"ok": True, "message": f"update scheduled → {body.target}"}
 
@@ -166,22 +170,16 @@ def system_rollback(background: BackgroundTasks) -> dict[str, Any]:
 
     cur = updater.current_version()
     if cur.is_dirty:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "dirty_working_tree",
-                "message": "本地有未提交的修改，请先 commit / stash",
-            },
+        raise ValidationError(
+            "Local changes are uncommitted; commit or stash them before updating",
+            code="system.working_tree_dirty", http_status=422,
         )
 
     target = updater.request_rollback()
     if target is None:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "error": "no_rollback_target",
-                "message": ".last_version 不存在或 commit 已不在仓库里（被 GC？）",
-            },
+        raise ConflictError(
+            "No previous version is available to roll back to",
+            code="system.no_rollback_target",
         )
 
     background.add_task(_raise_sigint_after_response)
@@ -244,8 +242,12 @@ def system_preflight(target: str = "origin/master") -> dict[str, Any]:
     checks: list[dict[str, str]] = []
 
     if cur.is_dirty:
-        checks.append({"key": "dirty", "level": "err",
-                       "label": "工作树有未提交修改 — 操作会被拒绝"})
+        # warn 而非 err：dirty 不再硬阻断，前端确认时弹"强制覆盖"modal，确认后
+        # 带 force 提交 → reset --hard 覆盖本地改动。running task / self_update 等
+        # 才是不可绕过的 err。（package-lock.json 等自动 churn 已在 updater 的
+        # dirty 判定里剔除，不会走到这。）
+        checks.append({"key": "dirty", "level": "warn",
+                       "label": "工作树有未提交修改 — 确认更新会覆盖这些改动"})
     else:
         checks.append({"key": "dirty", "level": "ok",
                        "label": "工作树干净 · 无未提交改动"})
@@ -289,6 +291,9 @@ def system_preflight(target: str = "origin/master") -> dict[str, Any]:
         "target_resolved": target_resolved,
         "checks": checks,
         "blocking": blocking,
+        # 工作树脏（真实改动；自动 churn 已剔除）。前端据此在确认时弹"强制覆盖"
+        # modal —— dirty 是 warn 不进 blocking，但仍需用户显式确认才覆盖。
+        "working_tree_dirty": cur.is_dirty,
         "requirements_diff": {
             "added": req_diff.added,
             "removed": req_diff.removed,
@@ -329,9 +334,10 @@ def system_init_git() -> dict[str, Any]:
 
     result = updater.bootstrap_git_repo()
     if not result.ok:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "bootstrap_failed", "message": result.error or "未知错误"},
+        raise DomainError(
+            f"Failed to initialize the Git repository: {result.error or 'unknown error'}",
+            code="system.git_init_failed",
+            details={"reason": result.error or "unknown error"}, http_status=500,
         )
 
     return {"ok": True, "already_initialized": False, **asdict(result)}

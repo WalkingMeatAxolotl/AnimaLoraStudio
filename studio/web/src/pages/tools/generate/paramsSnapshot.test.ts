@@ -132,6 +132,14 @@ describe('applySnapshot', () => {
     expect(r.yDraft).toBeUndefined()
   })
 
+  it('base_model 回填：显式值原样，缺省 → null', () => {
+    expect(applySnapshot(snapshot({ base_model: 'preview2' }), projects).baseModel).toBe('preview2')
+    expect(applySnapshot(snapshot({ base_model: '/loras/ft.safetensors' }), projects).baseModel)
+      .toBe('/loras/ft.safetensors')
+    // 老快照无此字段 → null（沿用设置页默认底模）
+    expect(applySnapshot(snapshot(), projects).baseModel).toBeNull()
+  })
+
   it('compare 模式映射到 xy（子视图无 selectedIndices 不能直接进）', () => {
     const snap = snapshot({ mode: 'compare' })
     expect(applySnapshot(snap, projects).mode).toBe('xy')

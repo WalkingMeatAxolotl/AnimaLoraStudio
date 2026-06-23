@@ -19,16 +19,15 @@ def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(db, "STUDIO_DB", dbfile)
     monkeypatch.setattr(server.db, "STUDIO_DB", dbfile)
     monkeypatch.setattr(secrets, "SECRETS_FILE", tmp_path / "secrets.json")
-    # 上传 endpoint 默认会按 gelbooru.convert_to_png 走 PIL 重编码；这里关掉，让
+    # 上传 endpoint 默认会按 download.convert_to_png 走 PIL 重编码；这里关掉，让
     # 现有用 raw bytes 的上传测试继续验证原始拷贝分支。convert 路径用专门测试。
     secrets.update(
         {
-            "gelbooru": {
-                "user_id": "u",
-                "api_key": "k",
+            "gelbooru": {"user_id": "u", "api_key": "k"},
+            "download": {
                 "convert_to_png": False,
                 "remove_alpha_channel": False,
-            }
+            },
         }
     )
     return {"db": dbfile}
@@ -102,7 +101,7 @@ def test_start_download_requires_credentials(
         json={"tag": "x", "count": 1, "api_source": "gelbooru"},
     )
     assert resp.status_code == 400
-    assert "gelbooru" in resp.json()["detail"]
+    assert "gelbooru" in resp.json()["error"]["message"]
 
 
 def test_start_download_danbooru_does_not_require_credentials(
@@ -461,7 +460,7 @@ def test_upload_skip_existing(client: TestClient) -> None:
 def test_upload_convert_to_png_renames_and_dedups(
     client: TestClient,
 ) -> None:
-    """gelbooru.convert_to_png=True：上传 1.png + 1.jpg（不同图）→ 1.png + 1_1.png。
+    """download.convert_to_png=True：上传 1.png + 1.jpg（不同图）→ 1.png + 1_1.png。
 
     解决 caption `1.txt` 被 jpg/png 两张不同图共用的问题；同 stem 加 `_N` 后缀
     保住第二张而不是跳过。
@@ -471,7 +470,7 @@ def test_upload_convert_to_png_renames_and_dedups(
     from PIL import Image
     from studio import secrets
 
-    secrets.update({"gelbooru": {"convert_to_png": True}})
+    secrets.update({"download": {"convert_to_png": True}})
 
     def _png(color):
         buf = _io.BytesIO()

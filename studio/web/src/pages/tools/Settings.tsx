@@ -13,6 +13,7 @@ import {
   type Secrets,
   type SecretsPatch,
   type StudioDataInfo,
+  type ModelsRootInfo,
   type DevCommit,
   type DevCommitsResult,
   type PreflightResult,
@@ -35,6 +36,7 @@ import { InfoButton } from '../../components/InfoButton'
 import LLMTaggerWorkspace from '../../components/LLMTaggerWorkspace'
 import PathPicker from '../../components/PathPicker'
 import StudioDataMigrateModal from '../../components/StudioDataMigrateModal'
+import ModelsRootMigrateModal from '../../components/ModelsRootMigrateModal'
 import { TagListInput } from '../../components/TagsInput'
 import { useShowTagTranslation } from '../../tagDict/showToggle'
 import { useTagDict, reloadDict } from '../../tagDict/store'
@@ -70,18 +72,18 @@ type Section =
   | 'generate'
   | 'proxy'
 
-type Tab = 'dataset' | 'tagging' | 'preprocess' | 'training' | 'monitor' | 'testing' | 'appearance' | 'system'
+type Tab = 'dataset' | 'tagging' | 'preprocess' | 'training' | 'monitor' | 'testing' | 'credentials' | 'appearance' | 'system'
 
 // 外部页面通过 `?section=<id>` 跳转到 SettingsPage 的特定 section 时，用这个
 // 反向映射决定要先切到哪个 tab。只列出能从外部链接到的 sections。
 const SECTION_TO_TAB: Record<string, Tab> = {
   'models': 'training',
-  'download-source': 'training',
   'version': 'system',
   'service': 'system',
 }
 
 const TAB_LIST: { id: Tab; labelKey: string }[] = [
+  { id: 'credentials', labelKey: 'settings.tabCredentials' },
   { id: 'dataset', labelKey: 'settings.tabDataset' },
   { id: 'preprocess', labelKey: 'settings.tabPreprocess' },
   { id: 'tagging', labelKey: 'settings.tabTagging' },
@@ -96,8 +98,6 @@ const TAB_LIST: { id: Tab; labelKey: string }[] = [
 // 对应；label 在导航里直接显示。修改 section 顺序时记得同步这里。
 const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
   dataset: [
-    { id: 'gelbooru', labelKey: 'settings.gelbooru' },
-    { id: 'danbooru', labelKey: 'settings.danbooru' },
     { id: 'download-global', labelKey: 'settings.downloadGlobal' },
     { id: 'reg', labelKey: 'settings.reg.sectionTitle' },
     { id: 'proxy', labelKey: 'settings.proxy.sectionTitle' },
@@ -113,8 +113,8 @@ const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
     { id: 'tag-dictionary', labelKey: 'settings.tagDictionary.title' },
   ],
   training: [
-    { id: 'download-source', labelKey: 'settings.modelSource' },
     { id: 'queue', labelKey: 'settings.queueSchedule' },
+    { id: 'training-params', labelKey: 'settings.trainingParams' },
     { id: 'pytorch', labelKey: 'settings.torch' },
     { id: 'flash-attn', labelKey: 'settings.flashAttn' },
     { id: 'xformers', labelKey: 'settings.xformers' },
@@ -128,11 +128,16 @@ const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
     { id: 'preview', labelKey: 'settings.intermediatePreview' },
     { id: 'save-test-images', labelKey: 'settings.saveTestImages.title' },
   ],
+  credentials: [
+    { id: 'cred-huggingface', labelKey: 'settings.credHuggingface' },
+    { id: 'cred-modelscope', labelKey: 'settings.credModelscope' },
+    { id: 'cred-gelbooru', labelKey: 'settings.gelbooru' },
+    { id: 'cred-danbooru', labelKey: 'settings.danbooru' },
+  ],
   appearance: [
     { id: 'display', labelKey: 'settings.display' },
   ],
   system: [
-    { id: 'onboarding', labelKey: 'settings.onboardingSection' },
     { id: 'version', labelKey: 'settings.version' },
     { id: 'storage', labelKey: 'settings.storage.sectionTitle' },
     { id: 'service', labelKey: 'settings.service' },
@@ -190,8 +195,8 @@ function getStoredTab(): Tab {
     const v = localStorage.getItem(TAB_STORAGE_KEY)
     if (
       v === 'dataset' || v === 'tagging' || v === 'preprocess' || v === 'training'
-      || v === 'monitor' || v === 'testing' || v === 'appearance'
-      || v === 'system'
+      || v === 'monitor' || v === 'testing' || v === 'credentials'
+      || v === 'appearance' || v === 'system'
     ) return v
   } catch {
     /* ignore localStorage errors */
@@ -200,19 +205,16 @@ function getStoredTab(): Tab {
 }
 
 const EMPTY: Secrets = {
-  gelbooru: {
-    user_id: '',
-    api_key: '',
-    save_tags: false,
-    convert_to_png: true,
-    remove_alpha_channel: true,
-  },
+  gelbooru: { user_id: '', api_key: '' },
   danbooru: { username: '', api_key: '', account_type: 'free' },
   download: {
     exclude_tags: [],
     parallel_workers: 4,
     api_rate_per_sec: 2,
     cdn_rate_per_sec: 5,
+    save_tags: false,
+    convert_to_png: true,
+    remove_alpha_channel: true,
   },
   reg: { default_excluded_tags: [] },
   huggingface: { token: '', endpoint: '' },
@@ -235,6 +237,7 @@ const EMPTY: Secrets = {
   },
   modelscope: { token: '' },
   download_source: 'huggingface',
+  download_sources: {},
   llm_tagger: {
     current_preset: 'style_json',
     presets: [...DEFAULT_LLM_PRESETS],
@@ -242,7 +245,6 @@ const EMPTY: Secrets = {
   wd14: {
     model_id: 'SmilingWolf/wd-eva02-large-tagger-v3',
     model_ids: [...DEFAULT_WD14_MODELS],
-    local_dir: null,
     threshold_general: 0.35,
     threshold_character: 0.85,
     blacklist_tags: [],
@@ -252,7 +254,6 @@ const EMPTY: Secrets = {
     model_id: 'cella110n/cl_tagger',
     model_path: 'cl_tagger_1_02/model.onnx',
     tag_mapping_path: 'cl_tagger_1_02/tag_mapping.json',
-    local_dir: null,
     threshold_general: 0.35,
     threshold_character: 0.6,
     add_copyright_tag: true,
@@ -263,7 +264,7 @@ const EMPTY: Secrets = {
     blacklist_tags: [],
     batch_size: 8,
   },
-  models: { root: null, selected_anima: '1.0', selected_upscaler: '4x-AnimeSharp', auto_sync_paths: true },
+  models: { root: null, selected_anima: '1.0', custom_anima_paths: [], selected_upscaler: '4x-AnimeSharp', auto_sync_paths: true },
   queue: { allow_gpu_during_train: false },
   generate: { preview_every_n_steps: 3, attention_backend: 'auto', vae_precision: 'bf16', idle_timeout_minutes: 10, save_test_images: false },
   system: { update_channel: 'stable', show_dev_channel: false },
@@ -312,6 +313,7 @@ export default function SettingsPage() {
     reloadCatalog,
     downloadBusy,
     startDownload,
+    setDownloadSource,
   } = useSettingsData()
   const [draft, setDraft] = useState<Secrets>(EMPTY)
   const [error, setError] = useState<string | null>(null)
@@ -386,9 +388,17 @@ export default function SettingsPage() {
     }))
   }
 
-  /** 更新 Secrets 顶层非对象字段（如 download_source）。 */
-  const updateTop = <K extends keyof Secrets>(key: K, value: Secrets[K]) => {
-    setDraft((prev) => ({ ...prev, [key]: value }))
+
+  const selectCLTaggerVariant = (variant: CLTaggerVariantInfo) => {
+    setDraft((prev) => ({
+      ...prev,
+      cltagger: {
+        ...prev.cltagger,
+        model_id: variant.model_id,
+        model_path: variant.model_path,
+        tag_mapping_path: variant.tag_mapping_path,
+      },
+    }))
   }
 
   const save = async () => {
@@ -604,7 +614,7 @@ export default function SettingsPage() {
       />
 
       <div ref={scrollContainerRef} className="p-6 pb-12 flex-1 overflow-y-auto">
-      <div className="grid gap-10 max-w-[1400px]" style={{ gridTemplateColumns: 'minmax(0,1fr) 200px' }}>
+      <div className="grid gap-10 max-w-[1920px]" style={{ gridTemplateColumns: 'minmax(0,1fr) 200px' }}>
       <div className="flex flex-col gap-8 min-w-0">
 
       {error && (
@@ -614,73 +624,9 @@ export default function SettingsPage() {
       )}
 
       {tab === 'dataset' && (<>
-      <SettingsSection id="gelbooru" title="Gelbooru">
-        <SettingsField label="user_id">
-          <SettingsInput
-            type="text"
-            value={draft.gelbooru.user_id}
-            onChange={(v) => update('gelbooru', 'user_id', v)}
-            autoComplete="off"
-            data-lpignore="true"
-            data-1p-ignore
-            data-form-type="other"
-            className={textInputClass}
-          />
-        </SettingsField>
-        <SettingsField label="api_key">
-          <SensitiveInput
-            value={draft.gelbooru.api_key}
-            serverValue={server?.gelbooru.api_key ?? ''}
-            onChange={(v) => update('gelbooru', 'api_key', v)}
-          />
-        </SettingsField>
-        <SettingsField label="save_tags">
-          <Bool value={draft.gelbooru.save_tags} onChange={(v) => update('gelbooru', 'save_tags', v)} />
-        </SettingsField>
-        <SettingsField label="convert_to_png">
-          <Bool value={draft.gelbooru.convert_to_png} onChange={(v) => update('gelbooru', 'convert_to_png', v)} />
-        </SettingsField>
-        <SettingsField label="remove_alpha_channel">
-          <Bool value={draft.gelbooru.remove_alpha_channel} onChange={(v) => update('gelbooru', 'remove_alpha_channel', v)} />
-        </SettingsField>
-      </SettingsSection>
-
-      <SettingsSection id="danbooru" title="Danbooru">
-        <SettingsField label="username">
-          <SettingsInput
-            type="text"
-            value={draft.danbooru.username}
-            onChange={(v) => update('danbooru', 'username', v)}
-            placeholder={t('settings.danbooruUsernamePlaceholder')}
-            autoComplete="off"
-            data-lpignore="true"
-            data-1p-ignore
-            data-form-type="other"
-            className={textInputClass}
-          />
-        </SettingsField>
-        <SettingsField label="api_key">
-          <SensitiveInput
-            value={draft.danbooru.api_key}
-            serverValue={server?.danbooru.api_key ?? ''}
-            onChange={(v) => update('danbooru', 'api_key', v)}
-          />
-        </SettingsField>
-        <SettingsField label="account_type">
-          <select
-            value={draft.danbooru.account_type}
-            onChange={(e) => update('danbooru', 'account_type', e.target.value as 'free' | 'gold' | 'platinum')}
-            className={textInputClass}          >
-            <option value="free">{t('settings.accountFree')}</option>
-            <option value="gold">{t('settings.accountGold')}</option>
-            <option value="platinum">{t('settings.accountPlatinum')}</option>
-          </select>
-        </SettingsField>
-      </SettingsSection>
-
       <SettingsSection id="download-global" title={t('settings.downloadGlobal')}>
         <SettingsField
-          label="exclude_tags"
+          label={t('settings.fieldExcludeTags')}
           desc={t('settings.commaSeparated')}
           helpTooltip={<p><Trans i18nKey="settings.excludeTagsHelp" components={{ code: <code /> }} /></p>}
         >
@@ -697,40 +643,49 @@ export default function SettingsPage() {
           />
         </SettingsField>
 
-        <div className="grid grid-cols-3 gap-3 pt-2 border-t border-subtle">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-fg-secondary font-mono">parallel_workers</label>
+        <div className="flex flex-col gap-2 pt-2 border-t border-subtle">
+          <SettingsField label={t('settings.fieldParallelWorkers')}>
             <SettingsInput
               type="number" min={1} max={16}
               value={draft.download.parallel_workers}
               onChange={(v) => update('download', 'parallel_workers', Math.max(1, Number(v) || 1))}
-              className={`${textInputClass} max-w-24`}
+              className={`${textInputClass} max-w-32`}
             />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-fg-secondary font-mono">api_rate_per_sec</label>
+          </SettingsField>
+          <SettingsField label={t('settings.fieldApiRate')}>
             <SettingsInput
               type="number" step="0.5" min={0.5} max={10}
               value={draft.download.api_rate_per_sec}
               onChange={(v) => update('download', 'api_rate_per_sec', Math.max(0.5, Number(v) || 0.5))}
-              className={`${textInputClass} max-w-24`}
+              className={`${textInputClass} max-w-32`}
             />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-fg-secondary font-mono">cdn_rate_per_sec</label>
+          </SettingsField>
+          <SettingsField label={t('settings.fieldCdnRate')}>
             <SettingsInput
               type="number" step="1" min={1} max={20}
               value={draft.download.cdn_rate_per_sec}
               onChange={(v) => update('download', 'cdn_rate_per_sec', Math.max(1, Number(v) || 1))}
-              className={`${textInputClass} max-w-24`}
+              className={`${textInputClass} max-w-32`}
             />
-          </div>
+          </SettingsField>
+        </div>
+
+        <div className="flex flex-col gap-2 pt-2 border-t border-subtle">
+          <SettingsField label={t('settings.fieldSaveTags')}>
+            <Bool value={draft.download.save_tags} onChange={(v) => update('download', 'save_tags', v)} />
+          </SettingsField>
+          <SettingsField label={t('settings.fieldConvertPng')}>
+            <Bool value={draft.download.convert_to_png} onChange={(v) => update('download', 'convert_to_png', v)} />
+          </SettingsField>
+          <SettingsField label={t('settings.fieldRemoveAlpha')}>
+            <Bool value={draft.download.remove_alpha_channel} onChange={(v) => update('download', 'remove_alpha_channel', v)} />
+          </SettingsField>
         </div>
       </SettingsSection>
 
       <SettingsSection id="reg" title={t('settings.reg.sectionTitle')}>
         <SettingsField
-          label="default_excluded_tags"
+          label={t('settings.fieldDefaultExcludedTags')}
           desc={t('settings.commaSeparated')}
           helpTooltip={<p>{t('settings.reg.defaultExcludedHelp')}</p>}
         >
@@ -834,6 +789,10 @@ export default function SettingsPage() {
       </div>
 
       <SettingsSection id="wd14" title="WD14">
+        <SourceSelect
+          opt={catalog?.download_source_options?.wd14}
+          onChange={(s) => void setDownloadSource('wd14', s)}
+        />
         <WD14ModelCard
           catalog={catalog}
           busy={downloadBusy}
@@ -844,16 +803,8 @@ export default function SettingsPage() {
           onCandidatesChange={(next) => update('wd14', 'model_ids', next)}
           t={t}
         />
-        <SettingsField label="local_dir" desc={t('settings.blankAutoHfDownload')}>
-          <SettingsInput
-            type="text"
-            value={draft.wd14.local_dir ?? ''}
-            onChange={(v) => update('wd14', 'local_dir', v || null)}
-            className={textInputClass}
-          />
-        </SettingsField>
         <div className="grid grid-cols-2 gap-3">
-          <SettingsField label="threshold_general">
+          <SettingsField label={t('settings.fieldThresholdGeneral')}>
             <SettingsInput
               type="number" step="0.01" min={0} max={1}
               value={draft.wd14.threshold_general}
@@ -861,7 +812,7 @@ export default function SettingsPage() {
               className={`${textInputClass} max-w-32`}
             />
           </SettingsField>
-          <SettingsField label="threshold_character">
+          <SettingsField label={t('settings.fieldThresholdCharacter')}>
             <SettingsInput
               type="number" step="0.01" min={0} max={1}
               value={draft.wd14.threshold_character}
@@ -870,48 +821,41 @@ export default function SettingsPage() {
             />
           </SettingsField>
         </div>
-        <SettingsField label="blacklist_tags" desc={t('settings.commaSeparated')}>
+        <SettingsField label={t('settings.fieldBlacklistTags')} desc={t('settings.commaSeparated')}>
           <TagListInput
             value={draft.wd14.blacklist_tags}
             onChange={(tags) => update('wd14', 'blacklist_tags', tags)}
             className={textInputClass}
           />
         </SettingsField>
-        <SettingsField label="batch_size" desc={t('settings.batchSizeHint')}>
+        <SettingsField label={t('settings.fieldBatchSize')} desc={t('settings.batchSizeHint')}>
           <SettingsInput
             type="number" min={1} max={64}
             value={draft.wd14.batch_size}
             onChange={(v) => update('wd14', 'batch_size', Math.max(1, Number(v) || 1))}
-            className={`${textInputClass} max-w-24`}
+            className={`${textInputClass} max-w-32`}
           />
         </SettingsField>
       </SettingsSection>
 
       <SettingsSection id="cltagger" title="CLTagger">
+        <SourceSelect
+          opt={catalog?.download_source_options?.cltagger}
+          onChange={(s) => void setDownloadSource('cltagger', s)}
+        />
         <CLTaggerModelCard
           catalog={catalog}
           busy={downloadBusy}
           start={startDownload}
           currentModelPath={draft.cltagger.model_path}
           currentTagMappingPath={draft.cltagger.tag_mapping_path}
-          onSelectVariant={(v: CLTaggerVariantInfo) => {
-            update('cltagger', 'model_path', v.model_path)
-            update('cltagger', 'tag_mapping_path', v.tag_mapping_path)
-          }}
+          onSelectVariant={selectCLTaggerVariant}
           modelId={draft.cltagger.model_id}
           onModelIdChange={(id) => update('cltagger', 'model_id', id)}
           t={t}
         />
-        <SettingsField label="local_dir" desc={t('settings.blankAutoHfDownload')}>
-          <SettingsInput
-            type="text"
-            value={draft.cltagger.local_dir ?? ''}
-            onChange={(v) => update('cltagger', 'local_dir', v || null)}
-            className={textInputClass}
-          />
-        </SettingsField>
         <div className="grid grid-cols-2 gap-3">
-          <SettingsField label="threshold_general">
+          <SettingsField label={t('settings.fieldThresholdGeneral')}>
             <SettingsInput
               type="number" step="0.01" min={0} max={1}
               value={draft.cltagger.threshold_general}
@@ -919,7 +863,7 @@ export default function SettingsPage() {
               className={`${textInputClass} max-w-32`}
             />
           </SettingsField>
-          <SettingsField label="threshold_character">
+          <SettingsField label={t('settings.fieldThresholdCharacter')}>
             <SettingsInput
               type="number" step="0.01" min={0} max={1}
               value={draft.cltagger.threshold_character}
@@ -929,35 +873,35 @@ export default function SettingsPage() {
           </SettingsField>
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <SettingsField label="add_copyright_tag">
+          <SettingsField label={t('settings.fieldAddCopyright')}>
             <Bool value={draft.cltagger.add_copyright_tag} onChange={(v) => update('cltagger', 'add_copyright_tag', v)} />
           </SettingsField>
-          <SettingsField label="add_meta_tag">
+          <SettingsField label={t('settings.fieldAddMeta')}>
             <Bool value={draft.cltagger.add_meta_tag} onChange={(v) => update('cltagger', 'add_meta_tag', v)} />
           </SettingsField>
-          <SettingsField label="add_model_tag">
+          <SettingsField label={t('settings.fieldAddModel')}>
             <Bool value={draft.cltagger.add_model_tag} onChange={(v) => update('cltagger', 'add_model_tag', v)} />
           </SettingsField>
-          <SettingsField label="add_rating_tag">
+          <SettingsField label={t('settings.fieldAddRating')}>
             <Bool value={draft.cltagger.add_rating_tag} onChange={(v) => update('cltagger', 'add_rating_tag', v)} />
           </SettingsField>
-          <SettingsField label="add_quality_tag">
+          <SettingsField label={t('settings.fieldAddQuality')}>
             <Bool value={draft.cltagger.add_quality_tag} onChange={(v) => update('cltagger', 'add_quality_tag', v)} />
           </SettingsField>
         </div>
-        <SettingsField label="blacklist_tags" desc={t('settings.commaSeparated')}>
+        <SettingsField label={t('settings.fieldBlacklistTags')} desc={t('settings.commaSeparated')}>
           <TagListInput
             value={draft.cltagger.blacklist_tags}
             onChange={(tags) => update('cltagger', 'blacklist_tags', tags)}
             className={textInputClass}
           />
         </SettingsField>
-        <SettingsField label="batch_size" desc={t('settings.batchSizeHint')}>
+        <SettingsField label={t('settings.fieldBatchSize')} desc={t('settings.batchSizeHint')}>
           <SettingsInput
             type="number" min={1} max={64}
             value={draft.cltagger.batch_size}
             onChange={(v) => update('cltagger', 'batch_size', Math.max(1, Number(v) || 1))}
-            className={`${textInputClass} max-w-24`}
+            className={`${textInputClass} max-w-32`}
           />
         </SettingsField>
       </SettingsSection>
@@ -967,74 +911,16 @@ export default function SettingsPage() {
       </>)}
 
       {tab === 'training' && (<>
-      <SettingsSection id="download-source" title={t('settings.modelSource')}>
-        <SettingsField
-          label={t('settings.downloadSource')}
-          helpTooltip={
-            <p>{t('settings.downloadSourceHelp')}</p>
-          }
-        >
-          <DownloadSourceSelect
-            value={draft.download_source}
-            onChange={(v) => updateTop('download_source', v)}
-          />
-        </SettingsField>
-
-        {/* 下方按当前下载源条件渲染对应凭证配置。HF/ModelScope token 都保留在
-         * secrets 里（即便切换源也不丢失），只是 UI 一次只露面一份。 */}
-        {draft.download_source === 'huggingface' ? (
-          <>
-            <SettingsField
-              label="token"
-              helpTooltip={
-                <p>{t('settings.hfTokenHelp')}</p>
-              }
-            >
-              <SensitiveInput
-                value={draft.huggingface.token}
-                serverValue={server?.huggingface.token ?? ''}
-                onChange={(v) => update('huggingface', 'token', v)}
-              />
-            </SettingsField>
-            <SettingsField
-              label="endpoint"
-              helpTooltip={<p>{t('settings.hfEndpointHelp')}</p>}
-            >
-              <HFEndpointSelect
-                value={draft.huggingface.endpoint}
-                onChange={(v) => update('huggingface', 'endpoint', v)}
-              />
-            </SettingsField>
-          </>
-        ) : (
-          <SettingsField
-            label="token"
-            helpTooltip={
-              <>
-                <p>{t('settings.modelscopeTokenHelp')}</p>
-                <p><Trans i18nKey="settings.modelscopeInstallHelp" components={{ code: <code /> }} /></p>
-              </>
-            }
-          >
-            <SensitiveInput
-              value={draft.modelscope.token}
-              serverValue={server?.modelscope.token ?? ''}
-              onChange={(v) => update('modelscope', 'token', v)}
-            />
-          </SettingsField>
-        )}
-      </SettingsSection>
-
       <SettingsSection id="queue" title={t('settings.queueSchedule')}>
-        <SettingsField label={t('settings.allowGpuDuringTrain')}>
-          <div className="flex items-center gap-3">
-            <Bool value={draft.queue.allow_gpu_during_train} onChange={(v) => update('queue', 'allow_gpu_during_train', v)} />
-            <span className="text-xs text-warn">
-              {t('settings.allowGpuDuringTrainHint')}
-            </span>
-          </div>
+        <SettingsField
+          label={t('settings.allowGpuDuringTrain')}
+          helpTooltip={<p>{t('settings.allowGpuDuringTrainHelp')}</p>}
+        >
+          <Bool value={draft.queue.allow_gpu_during_train} onChange={(v) => update('queue', 'allow_gpu_during_train', v)} />
         </SettingsField>
       </SettingsSection>
+
+      <TrainingParamsSection />
 
       <PyTorchSection />
 
@@ -1046,6 +932,7 @@ export default function SettingsPage() {
         catalog={catalog}
         busy={downloadBusy}
         start={startDownload}
+        setSource={setDownloadSource}
         reloadCatalog={reloadCatalog}
         catalogError={catalogError}
         t={t}
@@ -1057,14 +944,14 @@ export default function SettingsPage() {
         <SettingsField label={t('settings.enableWandb')} desc={t('settings.enableWandbHint')}>
           <Bool value={draft.wandb.enabled} onChange={(v) => update('wandb', 'enabled', v)} />
         </SettingsField>
-        <SettingsField label="api_key">
+        <SettingsField label={t('settings.fieldApiKey')}>
           <SensitiveInput
             value={draft.wandb.api_key}
             serverValue={server?.wandb.api_key ?? ''}
             onChange={(v) => update('wandb', 'api_key', v)}
           />
         </SettingsField>
-        <SettingsField label="project">
+        <SettingsField label={t('settings.fieldProject')}>
           <SettingsInput
             type="text"
             value={draft.wandb.project}
@@ -1073,7 +960,7 @@ export default function SettingsPage() {
             className={textInputClass}
           />
         </SettingsField>
-        <SettingsField label="entity" desc={t('settings.wandbEntityHint')}>
+        <SettingsField label={t('settings.fieldEntity')} desc={t('settings.wandbEntityHint')}>
           <SettingsInput
             type="text"
             value={draft.wandb.entity}
@@ -1081,7 +968,7 @@ export default function SettingsPage() {
             className={textInputClass}
           />
         </SettingsField>
-        <SettingsField label="base_url" desc={t('settings.wandbBaseUrlHint')}>
+        <SettingsField label={t('settings.fieldBaseUrl')} desc={t('settings.wandbBaseUrlHint')}>
           <SettingsInput
             type="text"
             value={draft.wandb.base_url}
@@ -1090,27 +977,25 @@ export default function SettingsPage() {
             className={textInputClass}
           />
         </SettingsField>
-        <div className="grid grid-cols-2 gap-3">
-          <SettingsField label="mode">
-            <select
-              value={draft.wandb.mode}
-              onChange={(e) => update('wandb', 'mode', e.target.value as WandBConfig['mode'])}
-              className={textInputClass}
-            >
-              <option value="online">online</option>
-              <option value="offline">offline</option>
-              <option value="disabled">disabled</option>
-            </select>
-          </SettingsField>
-          <SettingsField
-            label={t('settings.logSamples')}
-            helpTooltip={
-              <p><Trans i18nKey="settings.logSamplesHelp" components={{ code: <code /> }} /></p>
-            }
+        <SettingsField label={t('settings.fieldMode')}>
+          <select
+            value={draft.wandb.mode}
+            onChange={(e) => update('wandb', 'mode', e.target.value as WandBConfig['mode'])}
+            className={`${textInputClass} max-w-32`}
           >
-            <Bool value={draft.wandb.log_samples} onChange={(v) => update('wandb', 'log_samples', v)} />
-          </SettingsField>
-        </div>
+            <option value="online">online</option>
+            <option value="offline">offline</option>
+            <option value="disabled">disabled</option>
+          </select>
+        </SettingsField>
+        <SettingsField
+          label={t('settings.logSamples')}
+          helpTooltip={
+            <p><Trans i18nKey="settings.logSamplesHelp" components={{ code: <code /> }} /></p>
+          }
+        >
+          <Bool value={draft.wandb.log_samples} onChange={(v) => update('wandb', 'log_samples', v)} />
+        </SettingsField>
         {draft.wandb.log_samples && (
           <div className="grid grid-cols-2 gap-3">
             <SettingsField
@@ -1155,7 +1040,7 @@ export default function SettingsPage() {
                   <select
                     value={draft.wandb.upload_model_policy}
                     onChange={(e) => update('wandb', 'upload_model_policy', e.target.value as 'all' | 'last')}
-                    className={textInputClass + ' w-auto'}
+                    className={textInputClass + ' max-w-32'}
                   >
                     <option value="last">{t('settings.policyLast')}</option>
                     <option value="all">{t('settings.policyAll')}</option>
@@ -1173,7 +1058,7 @@ export default function SettingsPage() {
                   <select
                     value={draft.wandb.upload_state_manual_policy}
                     onChange={(e) => update('wandb', 'upload_state_manual_policy', e.target.value as 'all' | 'last')}
-                    className={textInputClass + ' w-auto'}
+                    className={textInputClass + ' max-w-32'}
                   >
                     <option value="last">{t('settings.policyLast')}</option>
                     <option value="all">{t('settings.policyAll')}</option>
@@ -1191,7 +1076,7 @@ export default function SettingsPage() {
                   <select
                     value={draft.wandb.upload_state_auto_policy}
                     onChange={(e) => update('wandb', 'upload_state_auto_policy', e.target.value as 'all' | 'last')}
-                    className={textInputClass + ' w-auto'}
+                    className={textInputClass + ' max-w-32'}
                   >
                     <option value="last">{t('settings.policyLast')}</option>
                     <option value="all">{t('settings.policyAll')}</option>
@@ -1209,6 +1094,7 @@ export default function SettingsPage() {
           catalog={catalog}
           busy={downloadBusy}
           start={startDownload}
+          setSource={setDownloadSource}
           reloadCatalog={reloadCatalog}
           t={t}
         />
@@ -1223,6 +1109,99 @@ export default function SettingsPage() {
         <VaePrecisionSection draft={draft} update={update} />
         <TaeFluxSection draft={draft} update={update} />
         <SaveTestImagesSection draft={draft} update={update} />
+      </>)}
+
+      {tab === 'credentials' && (<>
+        <p className="text-xs text-fg-tertiary">{t('settings.credentialsIntro')}</p>
+        <SettingsSection id="cred-huggingface" title="HuggingFace">
+          <SettingsField label={t('settings.fieldToken')} helpTooltip={<p>{t('settings.hfTokenHelp')}</p>}>
+            <SensitiveInput
+              value={draft.huggingface.token}
+              serverValue={server?.huggingface.token ?? ''}
+              onChange={(v) => update('huggingface', 'token', v)}
+            />
+          </SettingsField>
+          <SettingsField label={t('settings.fieldEndpoint')} helpTooltip={<p>{t('settings.hfEndpointHelp')}</p>}>
+            <HFEndpointSelect
+              value={draft.huggingface.endpoint}
+              onChange={(v) => update('huggingface', 'endpoint', v)}
+            />
+          </SettingsField>
+        </SettingsSection>
+
+        <SettingsSection id="cred-modelscope" title="ModelScope">
+          <SettingsField
+            label={t('settings.fieldToken')}
+            helpTooltip={
+              <>
+                <p>{t('settings.modelscopeTokenHelp')}</p>
+                <p><Trans i18nKey="settings.modelscopeInstallHelp" components={{ code: <code /> }} /></p>
+              </>
+            }
+          >
+            <SensitiveInput
+              value={draft.modelscope.token}
+              serverValue={server?.modelscope.token ?? ''}
+              onChange={(v) => update('modelscope', 'token', v)}
+            />
+          </SettingsField>
+        </SettingsSection>
+
+        <SettingsSection id="cred-gelbooru" title="Gelbooru">
+          <SettingsField label={t('settings.fieldUserId')}>
+            <SettingsInput
+              type="text"
+              value={draft.gelbooru.user_id}
+              onChange={(v) => update('gelbooru', 'user_id', v)}
+              autoComplete="off"
+              data-lpignore="true"
+              data-1p-ignore
+              data-form-type="other"
+              className={textInputClass}
+            />
+          </SettingsField>
+          <SettingsField label={t('settings.fieldApiKey')}>
+            <SensitiveInput
+              value={draft.gelbooru.api_key}
+              serverValue={server?.gelbooru.api_key ?? ''}
+              onChange={(v) => update('gelbooru', 'api_key', v)}
+            />
+          </SettingsField>
+        </SettingsSection>
+
+        <SettingsSection id="cred-danbooru" title="Danbooru">
+          <SettingsField label={t('settings.fieldUsername')}>
+            <SettingsInput
+              type="text"
+              value={draft.danbooru.username}
+              onChange={(v) => update('danbooru', 'username', v)}
+              placeholder={t('settings.danbooruUsernamePlaceholder')}
+              autoComplete="off"
+              data-lpignore="true"
+              data-1p-ignore
+              data-form-type="other"
+              className={textInputClass}
+            />
+          </SettingsField>
+          <SettingsField label={t('settings.fieldApiKey')}>
+            <SensitiveInput
+              value={draft.danbooru.api_key}
+              serverValue={server?.danbooru.api_key ?? ''}
+              onChange={(v) => update('danbooru', 'api_key', v)}
+            />
+          </SettingsField>
+          <SettingsField label={t('settings.fieldAccountType')} desc={t('settings.danbooruAccountTypeHint')}>
+            <select
+              value={draft.danbooru.account_type}
+              onChange={(e) => update('danbooru', 'account_type', e.target.value as 'free' | 'gold' | 'platinum')}
+              className={textInputClass}
+            >
+              <option value="free">{t('settings.accountFree')}</option>
+              <option value="gold">{t('settings.accountGold')}</option>
+              <option value="platinum">{t('settings.accountPlatinum')}</option>
+            </select>
+          </SettingsField>
+        </SettingsSection>
       </>)}
 
       {tab === 'appearance' && (
@@ -1369,15 +1348,18 @@ function SettingsField({ label, desc, helpTooltip, children }: {
   )
 }
 
-function Bool({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
+function Bool({ value, onChange, disabled }: { value: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
+  const { t } = useTranslation()
   return (
-    <input
-      type="checkbox"
-      checked={value}
-      onChange={(e) => onChange(e.target.checked)}
-      className="w-4 h-4"
-      style={{ accentColor: 'var(--accent)' }}
-    />
+    <select
+      value={value ? 'on' : 'off'}
+      onChange={(e) => onChange(e.target.value === 'on')}
+      disabled={disabled}
+      className={`${textInputClass} max-w-32 disabled:opacity-60`}
+    >
+      <option value="on">{t('settings.boolEnabled')}</option>
+      <option value="off">{t('settings.boolDisabled')}</option>
+    </select>
   )
 }
 
@@ -1495,7 +1477,7 @@ function HFEndpointSelect({ value, onChange }: {
             onChange(v)
           }
         }}
-        className={`${textInputClass} max-w-md`}
+        className={textInputClass}
       >
         {HF_ENDPOINT_PRESETS.map(p => (
           <option key={p.value} value={p.value}>
@@ -1509,7 +1491,7 @@ function HFEndpointSelect({ value, onChange }: {
           value={value && !isPreset ? value : ''}
           placeholder="https://your-mirror.example.com"
           onChange={(e) => onChange(e.target.value.trim())}
-          className={`${textInputClass} max-w-md`}
+          className={textInputClass}
         />
       )}
     </div>
@@ -1518,19 +1500,31 @@ function HFEndpointSelect({ value, onChange }: {
 
 // ── DownloadSourceSelect ────────────────────────────────────────────────────
 
-function DownloadSourceSelect({ value, onChange }: {
-  value: string; onChange: (v: string) => void
+// 按类型的下载源选择器。available 多于 1 项才是真 dropdown；固定单源（如
+// CLTagger/T5/TAEFlux）渲染成禁用框，纯指示「这个到底从哪下」。
+function SourceSelect({ opt, onChange }: {
+  opt?: { current: string; available: string[] }
+  onChange: (source: string) => void
 }) {
   const { t } = useTranslation()
+  if (!opt) return null
+  const single = opt.available.length <= 1
+  const labelOf = (s: string) =>
+    s === 'modelscope' ? t('settings.downloadSourceModelscope') : t('settings.downloadSourceHuggingface')
   return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className={`${textInputClass} max-w-xs`}
+    <SettingsField
+      label={t('settings.downloadSource')}
+      desc={single ? t('settings.singleSourceFixed') : undefined}
     >
-      <option value="huggingface">{t('settings.downloadSourceHuggingface')}</option>
-      <option value="modelscope">{t('settings.downloadSourceModelscope')}</option>
-    </select>
+      <select
+        value={opt.current}
+        disabled={single}
+        onChange={(e) => onChange(e.target.value)}
+        className={`${textInputClass} disabled:opacity-60`}
+      >
+        {opt.available.map((s) => <option key={s} value={s}>{labelOf(s)}</option>)}
+      </select>
+    </SettingsField>
   )
 }
 
@@ -1693,6 +1687,7 @@ function CLTaggerModelCard({
           const key = `cltagger:${v.label}`
           const dl = catalog.downloads[key]
           const isSel =
+            v.model_id === modelId &&
             v.model_path === currentModelPath &&
             v.tag_mapping_path === currentTagMappingPath
           return (
@@ -1705,7 +1700,14 @@ function CLTaggerModelCard({
                 style={{ accentColor: 'var(--accent)' }}
                 title={t('settings.selectClTaggerVersion')}
               />
-              <code className="font-mono text-fg-primary flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{v.label}</code>
+              <div className="flex flex-col flex-1 min-w-0">
+                <code className="font-mono text-fg-primary overflow-hidden text-ellipsis whitespace-nowrap">{v.label}</code>
+                {v.version_dir && (
+                  <span className="text-[10px] text-fg-tertiary overflow-hidden text-ellipsis whitespace-nowrap" title={v.version_dir}>
+                    {t('settings.clTaggerFilesAt')}: <code>{v.version_dir}</code>
+                  </span>
+                )}
+              </div>
               <ModelStatusBadge
                 exists={v.exists} size={v.size} status={dl?.status}
                 fileCount={v.files.length}
@@ -1724,7 +1726,7 @@ function CLTaggerModelCard({
         {advOpen ? '▾' : '▸'} {t('settings.customRepoAdvanced')}
       </button>
       {advOpen && (
-        <SettingsField label="model_id">
+        <SettingsField label={t('settings.fieldModelId')}>
           <input
             type="text"
             value={modelId}
@@ -1771,68 +1773,21 @@ function fmtBytes(n: number): string {
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
 }
 
-function ModelsSection({ catalog, busy, start, reloadCatalog, catalogError, t }: {
-  catalog: ModelsCatalog | null
-  busy: Set<string>
-  start: (model_id: string, variant?: string) => Promise<void>
-  reloadCatalog: () => Promise<void>
-  catalogError: string | null
-  t: TFunction
-}) {
+// ── 训练参数 Section ─────────────────────────────────────────────────
+//
+// 训练相关的全局开关。当前只有「自动配置模型路径」(auto_sync_paths)：独立 PUT，
+// 不进全局 dirty 流程。原先夹在「训练模型」section 里，挪到这里跟模型下载分开。
+function TrainingParamsSection() {
+  const { t } = useTranslation()
   const { toast } = useToast()
-  const [rootDraft, setRootDraft] = useState<string>('')
-  const [serverRoot, setServerRoot] = useState<string | null>(null)
-  const [savingRoot, setSavingRoot] = useState(false)
-  const [selectedAnima, setSelectedAnima] = useState<string>('1.0')
   const [autoSyncPaths, setAutoSyncPaths] = useState<boolean>(true)
   const [savingAutoSync, setSavingAutoSync] = useState(false)
-  const [secretsLoaded, setSecretsLoaded] = useState(false)
 
-  // 一次性拉一份 secrets 取 models.root + selected_anima + auto_sync_paths
-  // （这几项走独立 PUT，不进 SettingsPage 的全局 dirty 流程）。catalog 由父级注入。
   useEffect(() => {
     void api.getSecrets().then((sec) => {
-      setServerRoot(sec.models?.root ?? null)
-      setSelectedAnima(sec.models?.selected_anima ?? '1.0')
       setAutoSyncPaths(sec.models?.auto_sync_paths ?? true)
-      setSecretsLoaded(true)
-    }).catch(() => { setSecretsLoaded(true) })
+    }).catch(() => { /* 显示用，拉不到不阻塞 */ })
   }, [])
-
-  // secrets + catalog 都到位后，把输入框预填成「已保存值」或「实际默认绝对路径」。
-  // 用 prev !== '' 当作"已初始化 / 用户已编辑"的标志，避免覆盖用户输入。
-  useEffect(() => {
-    if (!secretsLoaded || !catalog) return
-    setRootDraft((prev) => (prev !== '' ? prev : (serverRoot ?? catalog.models_root ?? '')))
-  }, [secretsLoaded, catalog, serverRoot])
-
-  const pickAnima = async (variant: string) => {
-    if (variant === selectedAnima) return
-    setSelectedAnima(variant)
-    try {
-      await api.updateSecrets({ models: { selected_anima: variant } })
-      toast(t('settings.mainModelSelected', { name: variant }), 'success')
-      await reloadCatalog()
-    } catch (e) {
-      toast(String(e), 'error')
-      void reloadCatalog()
-    }
-  }
-
-  const saveRoot = async () => {
-    const v = rootDraft.trim()
-    setSavingRoot(true)
-    try {
-      await api.updateSecrets({ models: { root: v ? v : null } })
-      toast(v ? t('settings.modelRootSaved', { path: v }) : t('settings.modelRootDefault'), 'success')
-      setServerRoot(v ? v : null)
-      await reloadCatalog()
-    } catch (e) {
-      toast(String(e), 'error')
-    } finally {
-      setSavingRoot(false)
-    }
-  }
 
   const saveAutoSync = async (next: boolean) => {
     setSavingAutoSync(true)
@@ -1849,43 +1804,94 @@ function ModelsSection({ catalog, busy, start, reloadCatalog, catalogError, t }:
     }
   }
 
-  const rootDirty = rootDraft.trim() !== (serverRoot ?? '')
-  const error = catalogError
-
   return (
-    <SettingsSection id="models" title={t('settings.trainingModelsOneClick')}>
-      <SettingsField label={t('settings.modelsRoot')}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <input
-            type="text"
-            value={rootDraft}
-            onChange={(e) => setRootDraft(e.target.value)}
-            className={`${textInputClass} flex-1`}                                  />
-          <button onClick={saveRoot} disabled={!rootDirty || savingRoot} className="btn btn-primary btn-sm"
-            title={rootDirty ? t('settings.savePathConfig') : t('settings.notModified')}>
-            {savingRoot ? t('common.saving') : t('settings.savePath')}
-          </button>
-          <button onClick={() => setRootDraft(serverRoot ?? (catalog?.models_root ?? ''))} disabled={!rootDirty || savingRoot}
-            className="px-2 py-0.5 text-fg-tertiary bg-transparent border-none cursor-pointer rounded-sm"
-            style={{ opacity: !rootDirty ? 0.3 : 1 }}
-          >↻</button>
-        </div>
-      </SettingsField>
-
+    <SettingsSection id="training-params" title={t('settings.trainingParams')}>
       <SettingsField
         label={t('settings.autoSyncPathsLabel')}
         helpTooltip={<p>{t('settings.autoSyncPathsHelp')}</p>}
       >
-        <label className="flex items-center gap-2 pt-1.5">
-          <input
-            type="checkbox"
-            checked={autoSyncPaths}
-            onChange={(e) => void saveAutoSync(e.target.checked)}
-            disabled={savingAutoSync}
-            style={{ height: 16, width: 16 }}
-          />
-        </label>
+        <Bool value={autoSyncPaths} onChange={(v) => void saveAutoSync(v)} disabled={savingAutoSync} />
       </SettingsField>
+    </SettingsSection>
+  )
+}
+
+function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, catalogError, t }: {
+  catalog: ModelsCatalog | null
+  busy: Set<string>
+  start: (model_id: string, variant?: string) => Promise<void>
+  setSource: (type: string, source: string) => Promise<void>
+  reloadCatalog: () => Promise<ModelsCatalog | null>
+  catalogError: string | null
+  t: TFunction
+}) {
+  const { toast } = useToast()
+  const [selectedAnima, setSelectedAnima] = useState<string>('1.0')
+  const [showPicker, setShowPicker] = useState(false)
+  const [addingCustom, setAddingCustom] = useState(false)
+
+  // 一次性拉 secrets 取 selected_anima（独立 PUT，不进全局 dirty 流程）。模型
+  // 根目录已挪到「系统 → 存储位置」、自动配置模型路径已挪到「训练参数」，不在此渲染。
+  useEffect(() => {
+    void api.getSecrets().then((sec) => {
+      setSelectedAnima(sec.models?.selected_anima ?? '1.0')
+    }).catch(() => { /* 显示用，拉不到不阻塞 */ })
+  }, [])
+
+  const pickAnima = async (variant: string) => {
+    if (variant === selectedAnima) return
+    setSelectedAnima(variant)
+    try {
+      await api.updateSecrets({ models: { selected_anima: variant } })
+      toast(t('settings.mainModelSelected', { name: variant }), 'success')
+      await reloadCatalog()
+    } catch (e) {
+      toast(String(e), 'error')
+      void reloadCatalog()
+    }
+  }
+
+  // PathPicker 选中本地 .safetensors → 注册到 custom_anima_paths（仅登记路径）。
+  // 注册后不自动选中：与官方 variant「下载完再点 radio」的流程一致。
+  const addCustom = async (picked: string) => {
+    setShowPicker(false)
+    const p = picked.trim()
+    if (!p) return
+    if (!p.toLowerCase().endsWith('.safetensors')) {
+      toast(t('settings.localModelInvalidExt'), 'error')
+      return
+    }
+    setAddingCustom(true)
+    try {
+      await api.addCustomAnima(p)
+      toast(t('settings.localModelAdded', { name: p.split(/[\\/]/).pop() }), 'success')
+      await reloadCatalog()
+    } catch (e) {
+      toast(String(e), 'error')
+    } finally {
+      setAddingCustom(false)
+    }
+  }
+
+  const removeCustom = async (p: string) => {
+    try {
+      await api.removeCustomAnima(p)
+      if (p === selectedAnima) setSelectedAnima('1.0')
+      toast(t('settings.localModelRemoved'), 'success')
+      await reloadCatalog()
+    } catch (e) {
+      toast(String(e), 'error')
+    }
+  }
+
+  const error = catalogError
+
+  return (
+    <SettingsSection id="models" title={t('settings.trainingModelsOneClick')}>
+      <SourceSelect
+        opt={catalog?.download_source_options?.training}
+        onChange={(s) => void setSource('training', s)}
+      />
 
       {error && <div className="text-err text-xs font-mono">{error}</div>}
       {!catalog ? (
@@ -1925,7 +1931,41 @@ function ModelsSection({ catalog, busy, start, reloadCatalog, catalogError, t }:
                   </li>
                 )
               })}
+              {/* 用户注册的本地 custom 主模型（微调权重 / 在微调上测试） */}
+              {catalog.anima_main.custom.map((c) => {
+                const isSel = c.path === selectedAnima
+                return (
+                  <li key={c.path} className={`flex items-center gap-2 text-xs px-1.5 py-1 rounded-sm ${
+                    isSel ? 'bg-accent-soft border border-accent' : 'bg-transparent border border-transparent'
+                  }`}>
+                    <input type="radio" name="anima_variant" checked={isSel} disabled={!c.exists}
+                      onChange={() => void pickAnima(c.path)}
+                      className="shrink-0"
+                      style={{ accentColor: 'var(--accent)' }}
+                      title={c.exists ? t('settings.selectDefaultMainModel') : t('settings.localModelMissing')}
+                    />
+                    <code className="font-mono text-fg-primary w-32 shrink-0 truncate" title={c.path}>{c.name}</code>
+                    {c.exists
+                      ? <ModelStatusBadge exists size={c.size} />
+                      : <span className="text-err text-2xs">{t('settings.localModelMissing')}</span>}
+                    <span className="text-2xs px-1 py-0.5 rounded-sm bg-overlay text-fg-tertiary shrink-0">{t('settings.storage.customBadge')}</span>
+                    <span style={{ flex: 1 }} />
+                    <button
+                      onClick={() => void removeCustom(c.path)}
+                      className="btn btn-secondary btn-sm shrink-0 min-w-[5rem] justify-center"
+                      title={t('settings.removeLocalModel')}
+                    >🗑 {t('settings.removeLocalModelShort')}</button>
+                  </li>
+                )
+              })}
             </ul>
+            <button
+              onClick={() => setShowPicker(true)}
+              disabled={addingCustom}
+              className="btn btn-ghost btn-sm self-start mt-1"
+            >
+              {addingCustom ? t('common.saving') : t('settings.addLocalModel')}
+            </button>
           </ModelGroupCard>
 
           {/* VAE */}
@@ -1980,17 +2020,25 @@ function ModelsSection({ catalog, busy, start, reloadCatalog, catalogError, t }:
           )}
         </div>
       )}
+      {showPicker && (
+        <PathPicker
+          initialPath={catalog?.models_root ?? undefined}
+          onPick={(p) => void addCustom(p)}
+          onClose={() => setShowPicker(false)}
+        />
+      )}
     </SettingsSection>
   )
 }
 
 function UpscalerSection({
-  catalog, busy, start, reloadCatalog, t,
+  catalog, busy, start, setSource, reloadCatalog, t,
 }: {
   catalog: ModelsCatalog | null
   busy: Set<string>
   start: (model_id: string, variant?: string) => Promise<void>
-  reloadCatalog: () => Promise<void>
+  setSource: (type: string, source: string) => Promise<void>
+  reloadCatalog: () => Promise<ModelsCatalog | null>
   t: TFunction
 }) {
   const { toast } = useToast()
@@ -2038,6 +2086,10 @@ function UpscalerSection({
 
   return (
     <SettingsSection id="upscalers" title={t('settings.upscalersPreprocess')}>
+      <SourceSelect
+        opt={catalog?.download_source_options?.upscaler}
+        onChange={(s) => void setSource('upscaler', s)}
+      />
       {!catalog ? (
         <p className="text-fg-tertiary text-xs">{t('common.loading')}</p>
       ) : (
@@ -2117,8 +2169,7 @@ function UpscalerSection({
                 <select
                   value={customSource}
                   onChange={(e) => setCustomSource(e.target.value as 'hf' | 'ms')}
-                  className="input text-xs"
-                  style={{ width: 'auto' }}
+                  className={`${textInputClass} max-w-32`}
                 >
                   <option value="hf">HuggingFace</option>
                   <option value="ms">ModelScope</option>
@@ -2231,10 +2282,10 @@ function DownloadButton({ exists, status, busy, onClick }: {
   const { t } = useTranslation()
   const running = status === 'running' || busy
   if (running) {
-    return <button disabled className="btn btn-secondary btn-sm" style={{ opacity: 0.5 }}>...</button>
+    return <button disabled className="btn btn-secondary btn-sm min-w-[5rem] justify-center" style={{ opacity: 0.5 }}>...</button>
   }
   return (
-    <button onClick={onClick} className={exists ? 'btn btn-secondary btn-sm' : 'btn btn-primary btn-sm'}
+    <button onClick={onClick} className="btn btn-secondary btn-sm min-w-[5rem] justify-center"
       title={exists ? t('settings.redownloadTitle') : t('common.download')}>
       {exists ? t('settings.redownload') : t('settings.downloadAction')}
     </button>
@@ -2397,6 +2448,7 @@ function ONNXRuntimeSection() {
         platform: result.platform,
         restart_required: result.restart_required,
         cuda_load_error: result.cuda_load_error, preload: result.preload, cuda_detect: result.cuda_detect,
+        torch_cuda_major: result.torch_cuda_major, ort_cuda_major_mismatch: result.ort_cuda_major_mismatch,
       })
       const newPkg = result.installed_pkg ?? result.installed ?? '?'
       const newVer = result.installed_version ?? result.version ?? '?'
@@ -2461,6 +2513,14 @@ function ONNXRuntimeSection() {
               </div>
               <div className="text-fg-tertiary">EP: <code className="text-fg-secondary font-mono">{(rt.providers ?? []).map((p) => p.replace('ExecutionProvider', '')).join(' / ') || '(none)'}</code></div>
               <div className="text-fg-tertiary">{t('settings.gpuDetect')}: <span className="text-fg-secondary">{cuda.available ? `${cuda.gpu_name ?? '?'} (driver ${cuda.driver_version ?? '?'})` : t('settings.noNvidiaGpu')}</span></div>
+              {rt.torch_cuda_major != null && (
+                <div className="text-fg-tertiary">
+                  {t('settings.torchCudaMajor')}: <span className="text-fg-secondary font-mono">{rt.torch_cuda_major}</span>
+                  {rt.ort_cuda_major_mismatch && (
+                    <span className="text-warn ml-2">⚠ {t('settings.ortCudaMismatch')}</span>
+                  )}
+                </div>
+              )}
             </div>
 
             {rt.restart_required && (
@@ -3053,8 +3113,7 @@ function IdleTimeoutSection({
             max={240}
             value={minutes}
             onChange={(e) => update('generate', 'idle_timeout_minutes', Math.max(0, Number(e.target.value) || 0))}
-            className="input"
-            style={{ width: 80 }}
+            className={`${textInputClass} max-w-32`}
           />
           <span className="text-xs text-fg-tertiary">
             {minutes === 0
@@ -3087,8 +3146,7 @@ function VaePrecisionSection({
         <select
           value={draft.generate.vae_precision ?? 'bf16'}
           onChange={(e) => update('generate', 'vae_precision', e.target.value as 'bf16' | 'fp32')}
-          className={textInputClass}
-          style={{ width: 120 }}
+          className={`${textInputClass} max-w-32`}
         >
           <option value="bf16">bf16</option>
           <option value="fp32">fp32</option>
@@ -3124,8 +3182,7 @@ function TaeFluxSection({
           max={50}
           value={n}
           onChange={(e) => update('generate', 'preview_every_n_steps', Number(e.target.value) || 0)}
-          className="input"
-          style={{ width: 80 }}
+          className={`${textInputClass} max-w-32`}
         />
       </SettingsField>
     </SettingsSection>
@@ -3261,39 +3318,10 @@ function DisplaySection() {
 function SystemSection() {
   return (
     <>
-      <OnboardingSection />
       <VersionSection />
       <StorageSection />
       <ServiceSection />
     </>
-  )
-}
-
-// ── 重新运行首次引导 Section ─────────────────────────────────────────────
-//
-// 清掉 localStorage 的 onboarding done 标记 + dispatch event,触发
-// FirstRunOnboardingModal 显示。不重启服务、不动 secrets。
-function OnboardingSection() {
-  const { t } = useTranslation()
-  const handleReopen = () => {
-    clearOnboardingDone()
-    window.dispatchEvent(new Event(ONBOARDING_EVENTS.open))
-  }
-  return (
-    <SettingsSection id="onboarding" title={t('settings.onboardingSection')}>
-      <SettingsField
-        label={t('settings.onboardingReopenTitle')}
-        helpTooltip={<p>{t('settings.onboardingReopenHelp')}</p>}
-      >
-        <button
-          type="button"
-          onClick={handleReopen}
-          className="btn btn-secondary btn-sm self-start"
-        >
-          {t('settings.onboardingReopen')}
-        </button>
-      </SettingsField>
-    </SettingsSection>
   )
 }
 
@@ -3350,7 +3378,9 @@ async function pollHealthThenReload(
 function VersionSection() {
   const { t } = useTranslation()
   const { toast } = useToast()
-  // chunk 4：dialog 模态被 inline preview 面板取代，VersionSection 不再用 dialog
+  // chunk 4：update 预览走 inline preview 面板（不用 dialog）。例外：工作树 dirty
+  // 时确认更新前要弹一个"强制覆盖"确认 modal，复用 useDialog().confirm。
+  const dialog = useDialog()
   const [version, setVersion] = useState<SystemVersion | null>(null)
   const [check, setCheck] = useState<SystemUpdateCheck | null>(null)
   const [status, setStatus] = useState<SystemUpdateStatus | null>(null)
@@ -3470,15 +3500,15 @@ function VersionSection() {
 
   // 公用的 422 / 其它错误分流（update 和 rollback 都用）
   const _formatActionError = (e: unknown, action: string): string => {
-    const err = e as Error & { status?: number; detail?: { error?: string; tasks?: { name: string; id?: number }[] } }
-    if (err.status === 422 && err.detail?.error === 'running_tasks_present') {
-      const names = (err.detail.tasks ?? []).map((task) => task.name || `task#${task.id ?? '?'}`).join(', ')
+    const err = e as Error & { status?: number; code?: string; detail?: { tasks?: { name: string; id?: number }[] } }
+    if (err.code === 'system.tasks_running') {
+      const names = (err.detail?.tasks ?? []).map((task) => task.name || `task#${task.id ?? '?'}`).join(', ')
       return t('settings.taskRunningCancelFirst', { names })
     }
-    if (err.status === 422 && err.detail?.error === 'dirty_working_tree') {
+    if (err.code === 'system.working_tree_dirty') {
       return t('settings.dirtyWorkingTree')
     }
-    if (err.status === 409 && err.detail?.error === 'no_rollback_target') {
+    if (err.code === 'system.no_rollback_target') {
       return t('settings.noRollbackTarget')
     }
     return t('settings.triggerActionFailed', { action, error: err.message ?? String(e) })
@@ -3512,11 +3542,22 @@ function VersionSection() {
   const confirmPreview = async () => {
     if (!pendingTarget) return
     const t = pendingTarget
+    // 工作树脏（真实改动，自动 churn 已在后端剔除）→ 弹确认 modal。reset --hard
+    // 会丢弃这些未提交改动且不可恢复，必须用户显式点确认才带 force。取消则留在
+    // preview 不动。(i18n 用 i18n.t —— 此作用域 t 已被 pendingTarget 遮蔽。)
+    const force = preflight?.working_tree_dirty === true
+    if (force) {
+      const ok = await dialog.confirm(i18n.t('settings.forceUpdateConfirm'), {
+        tone: 'warn',
+        okText: i18n.t('settings.forceUpdateConfirmOk'),
+      })
+      if (!ok) return
+    }
     if (t.kind === 'master') setMasterState('progress')
     else setDevState('progress')
     setBusy(true)
     try {
-      await api.performSystemUpdate(t.ref)
+      await api.performSystemUpdate(t.ref, force)
     } catch (e) {
       toast(_formatActionError(e, t.kind === 'master' ? i18n.t('settings.actionUpdate') : i18n.t('settings.actionSwitch')), 'error')
       setBusy(false)
@@ -4751,6 +4792,10 @@ function StorageSection() {
   // 不存在"后台迁移中"的游离状态，section 无需跟踪迁移进度）
   const [migrateTarget, setMigrateTarget] = useState<string | null>(null)
   const [restartBusy, setRestartBusy] = useState(false)
+  // 模型根目录（同区块第二张卡；迁移完无需重启，立即生效）
+  const [modelsInfo, setModelsInfo] = useState<ModelsRootInfo | null>(null)
+  const [modelsPickerOpen, setModelsPickerOpen] = useState(false)
+  const [modelsMigrateTarget, setModelsMigrateTarget] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -4760,15 +4805,22 @@ function StorageSection() {
     return () => { cancelled = true }
   }, [])
 
+  const refreshModelsInfo = () => {
+    void api.getModelsRootInfo(false).then(setModelsInfo).catch(() => { /* 显示用 */ })
+  }
+  useEffect(() => {
+    refreshModelsInfo()
+  }, [])
+
   // done 态「立即重启」：modal 上下文已是确认语境，不再二次 confirm
   const handleRestart = async () => {
     setRestartBusy(true)
     try {
       await api.restartServer()
     } catch (e) {
-      const err = e as Error & { status?: number; detail?: { error?: string; tasks?: { name: string; id?: number }[] } }
-      if (err.status === 422 && err.detail?.error === 'running_tasks_present') {
-        const names = (err.detail.tasks ?? []).map((task) => task.name || `task#${task.id ?? '?'}`).join(', ')
+      const err = e as Error & { status?: number; code?: string; detail?: { tasks?: { name: string; id?: number }[] } }
+      if (err.code === 'system.tasks_running') {
+        const names = (err.detail?.tasks ?? []).map((task) => task.name || `task#${task.id ?? '?'}`).join(', ')
         toast(t('settings.taskRunningCancelFirst', { names }), 'error')
       } else {
         toast(t('settings.restartTriggerFailed', { error: err.message ?? String(e) }), 'error')
@@ -4790,22 +4842,54 @@ function StorageSection() {
           </>
         }
       >
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-1.5">
           <div className="flex items-center gap-2 min-w-0">
-            <code className="font-mono text-xs truncate">{info?.current ?? '…'}</code>
-            {info && (
-              <span className="text-2xs text-fg-tertiary shrink-0">
-                {info.is_custom ? t('settings.storage.customBadge') : t('settings.storage.defaultBadge')}
-              </span>
-            )}
+            <input
+              type="text"
+              readOnly
+              value={info?.current ?? '…'}
+              className={`${textInputClass} font-mono text-xs flex-1 min-w-0 cursor-default`}
+            />
+            <button
+              className="btn btn-secondary btn-sm shrink-0"
+              onClick={() => setPickerOpen(true)}
+              disabled={restartBusy}
+            >
+              {t('settings.storage.changeLocation')}
+            </button>
           </div>
-          <button
-            className="btn btn-secondary btn-sm self-start"
-            onClick={() => setPickerOpen(true)}
-            disabled={restartBusy}
-          >
-            {t('settings.storage.changeLocation')}
-          </button>
+          {info?.is_custom && (
+            <span className="text-2xs text-fg-tertiary">
+              {t('settings.storage.customBadge')}
+            </span>
+          )}
+        </div>
+      </SettingsField>
+
+      <SettingsField
+        label={t('settings.storage.modelsRootLabel')}
+        helpTooltip={<p>{t('settings.storage.modelsRootHelp')}</p>}
+      >
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-2 min-w-0">
+            <input
+              type="text"
+              readOnly
+              value={modelsInfo?.current ?? '…'}
+              className={`${textInputClass} font-mono text-xs flex-1 min-w-0 cursor-default`}
+            />
+            <button
+              className="btn btn-secondary btn-sm shrink-0"
+              onClick={() => setModelsPickerOpen(true)}
+            >
+              {t('settings.storage.changeLocation')}
+            </button>
+          </div>
+          {modelsInfo?.is_custom && (
+            <span className="text-2xs text-fg-tertiary">
+              {t('settings.storage.customBadge')}
+            </span>
+          )}
         </div>
       </SettingsField>
 
@@ -4828,16 +4912,43 @@ function StorageSection() {
           onRestart={() => void handleRestart()}
         />
       )}
+
+      {modelsPickerOpen && (
+        <PathPicker
+          dirOnly
+          initialPath={modelsInfo?.current}
+          onPick={(path) => {
+            setModelsPickerOpen(false)
+            setModelsMigrateTarget(path)
+          }}
+          onClose={() => setModelsPickerOpen(false)}
+        />
+      )}
+
+      {modelsMigrateTarget != null && (
+        <ModelsRootMigrateModal
+          target={modelsMigrateTarget}
+          onClose={() => setModelsMigrateTarget(null)}
+          onDone={refreshModelsInfo}
+        />
+      )}
     </SettingsSection>
   )
 }
 
-// ── 服务 Section（重启 server）─────────────────────────────────────────
+// ── 服务 Section（重新运行首次引导 + 重启 server）─────────────────────
 function ServiceSection() {
   const { t } = useTranslation()
   const { toast } = useToast()
   const dialog = useDialog()
   const [busy, setBusy] = useState(false)
+
+  // 清掉 localStorage 的 onboarding done 标记 + dispatch event,触发
+  // FirstRunOnboardingModal 显示。不重启服务、不动 secrets。
+  const handleReopenOnboarding = () => {
+    clearOnboardingDone()
+    window.dispatchEvent(new Event(ONBOARDING_EVENTS.open))
+  }
 
   const handleRestart = async () => {
     const ok = await dialog.confirm(
@@ -4850,9 +4961,9 @@ function ServiceSection() {
     try {
       await api.restartServer()
     } catch (e) {
-      const err = e as Error & { status?: number; detail?: { error?: string; tasks?: { name: string; id?: number }[] } }
-      if (err.status === 422 && err.detail?.error === 'running_tasks_present') {
-        const names = (err.detail.tasks ?? []).map((task) => task.name || `task#${task.id ?? '?'}`).join(', ')
+      const err = e as Error & { status?: number; code?: string; detail?: { tasks?: { name: string; id?: number }[] } }
+      if (err.code === 'system.tasks_running') {
+        const names = (err.detail?.tasks ?? []).map((task) => task.name || `task#${task.id ?? '?'}`).join(', ')
         toast(t('settings.taskRunningCancelFirst', { names }), 'error')
       } else {
         toast(t('settings.restartTriggerFailed', { error: err.message ?? String(e) }), 'error')
@@ -4866,6 +4977,19 @@ function ServiceSection() {
 
   return (
     <SettingsSection id="service" title={t('settings.service')}>
+      <SettingsField
+        label={t('settings.onboardingReopenTitle')}
+        helpTooltip={<p>{t('settings.onboardingReopenHelp')}</p>}
+      >
+        <button
+          type="button"
+          onClick={handleReopenOnboarding}
+          className="btn btn-secondary btn-sm self-start"
+        >
+          {t('settings.onboardingReopen')}
+        </button>
+      </SettingsField>
+
       <SettingsField
         label={t('settings.serviceRestartTitle')}
         helpTooltip={

@@ -27,9 +27,10 @@ interface SettingsData {
   setSecrets: (s: Secrets) => void
   catalog: ModelsCatalog | null
   catalogError: string | null
-  reloadCatalog: () => Promise<void>
+  reloadCatalog: () => Promise<ModelsCatalog | null>
   downloadBusy: Set<string>
   startDownload: (model_id: string, variant?: string) => Promise<void>
+  setDownloadSource: (type: string, source: string) => Promise<void>
 }
 
 const Ctx = createContext<SettingsData | null>(null)
@@ -49,20 +50,33 @@ export function SettingsDataProvider({ children }: { children: ReactNode }) {
       .catch((e) => setSecretsError(String(e)))
   }, [])
 
-  const reloadCatalog = useCallback(async () => {
+  const reloadCatalog = useCallback(async (): Promise<ModelsCatalog | null> => {
     try {
       const c = await api.getModelsCatalog()
       setCatalog(c)
       setCatalogError(null)
+      return c
     } catch (e) {
       setCatalogError(String(e))
+      return null
     }
   }, [])
 
   useEffect(() => { void reloadCatalog() }, [reloadCatalog])
 
+  // model_download_changed 既驱动 catalog 刷新，也是下载失败时的唯一全局信号：
+  // 下载在后台线程跑，失败原因（如 gated 仓库缺 token）只进 download status，
+  // 不会让 startDownload 的 await 抛错。这里在 failed 时弹一个 error toast，
+  // 把后端汇总的可操作 message 顶到用户面前——否则用户只看到卡片上一个红 badge，
+  // 原因埋在另一个 tab 的折叠「下载日志」里（甚至只在终端）。
   useEventStream((evt) => {
-    if (evt.type === 'model_download_changed') { void reloadCatalog() }
+    if (evt.type !== 'model_download_changed') return
+    void reloadCatalog().then((c) => {
+      if (evt.status !== 'failed' || !c) return
+      const key = String(evt.key ?? '')
+      const dl = c.downloads[key]
+      toast(dl?.message || t('settings.downloadFailed', { error: key }), 'error')
+    })
   })
 
   const startDownload = useCallback(async (model_id: string, variant?: string) => {
@@ -79,11 +93,24 @@ export function SettingsDataProvider({ children }: { children: ReactNode }) {
     }
   }, [reloadCatalog, t, toast])
 
+  // 按类型选下载源：即时存（跟「下载」/ models.root 一样是立即动作，不进表单
+  // draft）。刻意不 setSecrets —— 否则会让 SettingsPage 的 draft/server 失同步，
+  // 表单 Save 时把这次改动 clobber 回去。dropdown 当前值读 catalog（reloadCatalog
+  // 刷新），不依赖表单 secrets。
+  const setDownloadSource = useCallback(async (type: string, source: string) => {
+    try {
+      await api.updateSecrets({ download_sources: { [type]: source } })
+      await reloadCatalog()
+    } catch (e) {
+      toast(String(e), 'error')
+    }
+  }, [reloadCatalog, toast])
+
   return (
     <Ctx.Provider value={{
       secrets, secretsError, setSecrets,
       catalog, catalogError, reloadCatalog,
-      downloadBusy, startDownload,
+      downloadBusy, startDownload, setDownloadSource,
     }}>
       {children}
     </Ctx.Provider>

@@ -11,6 +11,10 @@ class ModelDownloadRequest(BaseModel):
     variant: Optional[str] = None  # 仅 anima_main 用，其他忽略
 
 
+class AnimaCustomModelRequest(BaseModel):
+    path: str   # 本地 .safetensors 主模型绝对路径（PathPicker 选盘上已有文件）
+
+
 class UpscalerSelectRequest(BaseModel):
     label: str   # 预设 key 或 custom 文件名
 

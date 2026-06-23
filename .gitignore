@@ -53,7 +53,7 @@ Thumbs.db
 **/.cache/
 
 
-# Model weights (keep code/config, ignore large weights)
+# Model weights (large binaries — ignore everywhere)
 *.safetensors
 *.ckpt
 *.bin
@@ -61,11 +61,10 @@ Thumbs.db
 *.pth
 *.npz
 *.onnx
-models/text_encoders/tokenizer.json
-models/text_encoders/vocab.json
-models/wd14/
-models/taeflux/
-models/cltagger/
+
+# models/ = 下载的权重 / tokenizer 数据落点，像 studio_data/ 一样整个忽略、
+# 按需创建（下载器按需 mkdir 子目录）。模型架构代码已挪到 modeling/（tracked）。
+models/
 
 # Dataset (training images)
 dataset/

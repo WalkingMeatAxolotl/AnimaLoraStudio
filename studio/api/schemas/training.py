@@ -12,7 +12,6 @@ class Wd14Overrides(BaseModel):
     threshold_general: Optional[float] = None
     threshold_character: Optional[float] = None
     model_id: Optional[str] = None
-    local_dir: Optional[str] = None
     blacklist_tags: Optional[list[str]] = None
 
 
@@ -23,7 +22,6 @@ class CLTaggerOverrides(BaseModel):
     model_id: Optional[str] = None
     model_path: Optional[str] = None
     tag_mapping_path: Optional[str] = None
-    local_dir: Optional[str] = None
     add_copyright_tag: Optional[bool] = None
     add_meta_tag: Optional[bool] = None
     add_model_tag: Optional[bool] = None
@@ -142,6 +140,9 @@ class RegDeleteFilesRequest(BaseModel):
 class RegAiRequest(BaseModel):
     """先验生成请求 —— 不含 lora_configs，先验生成不带 LoRA。"""
     excluded_tags: list[str] = []
+    # 本次先验生成临时选用的底模（官方 variant key 或注册的本地 custom 路径）；
+    # None → 用 Settings 里 selected_anima。只换 transformer 权重。
+    base_model: Optional[str] = None
     negative_prompt: str = ""
     width: int = 1024
     height: int = 1024

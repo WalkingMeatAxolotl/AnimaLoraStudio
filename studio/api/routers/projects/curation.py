@@ -24,6 +24,7 @@ from fastapi.responses import FileResponse
 
 from ...errors import _safe_join_or_400
 from ...responses import _thumb_response
+from ....domain.errors import DomainError, NotFoundError, ValidationError
 from ...schemas.curation import (
     CopyRequest,
     DeleteFilesRequest,
@@ -59,7 +60,9 @@ def delete_project_files(
     with db.connection_for() as conn:
         p = projects.get_project(conn, pid)
     if not p:
-        raise HTTPException(404, f"项目不存在: id={pid}")
+        raise NotFoundError(
+            "Project not found", code="project.not_found", details={"id": pid},
+        )
     pdir = projects.project_dir(p["id"], p["slug"]) / "download"
     if not pdir.exists():
         return {"deleted": [], "missing": list(body.names)}
@@ -75,7 +78,12 @@ def delete_project_files(
         try:
             f.unlink()
         except OSError as exc:
-            raise HTTPException(500, f"删除失败 {name}: {exc}") from exc
+            raise DomainError(
+                f'Failed to delete "{name}": {exc}',
+                code="dataset.delete_failed",
+                details={"name": name, "reason": str(exc)},
+                http_status=500,
+            ) from exc
         # 清理同 stem 的 metadata（best-effort，失败仅日志）
         stem = f.stem
         for ext in META_EXTS:
@@ -92,13 +100,17 @@ def delete_project_files(
 @router.get("/api/projects/{pid}/files")
 def list_files(pid: int, bucket: str = "download") -> dict[str, Any]:
     if bucket != "download":
-        raise HTTPException(
-            400, f"PP2 仅支持 bucket=download（PP3 会加 train/reg/samples）",
+        raise ValidationError(
+            "Unsupported image set",
+            code="dataset.image_set_invalid",
+            details={"bucket": bucket}, http_status=400,
         )
     with db.connection_for() as conn:
         p = projects.get_project(conn, pid)
     if not p:
-        raise HTTPException(404, f"项目不存在: id={pid}")
+        raise NotFoundError(
+            "Project not found", code="project.not_found", details={"id": pid},
+        )
     pdir = projects.project_dir(p["id"], p["slug"]) / "download"
     items: list[dict[str, Any]] = []
     if pdir.exists():
@@ -140,11 +152,17 @@ def project_thumb(
     源文件 mtime 变化会自动 invalidate（hash 变）。
     """
     if bucket not in ("download", "preprocess"):
-        raise HTTPException(400, f"unknown bucket: {bucket}")
+        raise ValidationError(
+            "Unsupported image set",
+            code="dataset.image_set_invalid",
+            details={"bucket": bucket}, http_status=400,
+        )
     with db.connection_for() as conn:
         p = projects.get_project(conn, pid)
     if not p:
-        raise HTTPException(404, f"项目不存在: id={pid}")
+        raise NotFoundError(
+            "Project not found", code="project.not_found", details={"id": pid},
+        )
     pdir = projects.project_dir(p["id"], p["slug"])
 
     if bucket == "preprocess":
@@ -179,7 +197,9 @@ def project_thumb(
 
     if not f.exists() or f.suffix.lower() not in datasets.IMAGE_EXTS:
         logger.info("thumb 404: pid=%s bucket=%s name=%s -> %s", pid, bucket, name, f)
-        raise HTTPException(404)
+        raise NotFoundError(
+            "Thumbnail not found", code="dataset.thumbnail_not_found",
+        )
     return _thumb_response(f, size)
 
 
@@ -223,46 +243,10 @@ def get_latest_version_job(pid: int, vid: int, kind: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _curation_err_code(exc: curation.CurationError) -> None:
-    """PR-2 C5: 同 _preset_err_code — mutate exc.http_status + exc.code 让
-    DomainError handler 翻 dual-write envelope。callsite: `_curation_err_code(exc); raise`."""
-    msg = str(exc)
-    if "不存在" in msg:
-        exc.http_status = 404
-        exc.code = "curation.not_found"
-    elif "已存在" in msg:
-        exc.http_status = 400
-        exc.code = "curation.exists"
-    elif "非法" in msg:
-        exc.http_status = 400
-        exc.code = "curation.invalid"
-    else:
-        exc.http_status = 422
-
-
 @router.get("/api/projects/{pid}/versions/{vid}/curation")
 def get_curation(pid: int, vid: int) -> dict[str, Any]:
     with db.connection_for() as conn:
-        try:
-            return curation.curation_view(conn, pid, vid)
-        except curation.CurationError as exc:
-            _curation_err_code(exc); raise  # PR-2 C5
-
-
-def _duplicate_err_code(exc: duplicate_finder.DuplicateFinderError) -> None:
-    """PR-2 C5: 同 _curation_err_code — mutate exc.http_status + exc.code。"""
-    msg = str(exc)
-    if "not found" in msg or "不存在" in msg:
-        exc.http_status = 404
-        exc.code = "duplicate.not_found"
-    elif "invalid" in msg or "非法" in msg:
-        exc.http_status = 400
-        exc.code = "duplicate.invalid"
-    elif "not installed" in msg:
-        exc.http_status = 422
-        exc.code = "duplicate.not_installed"
-    else:
-        exc.http_status = 422
+        return curation.curation_view(conn, pid, vid)
 
 
 # ---------------------------------------------------------------------------
@@ -279,10 +263,14 @@ def _resolve_pv_or_404_dup(
     with db.connection_for() as conn:
         p = projects.get_project(conn, pid)
         if not p:
-            raise HTTPException(404, f"项目不存在: id={pid}")
+            raise NotFoundError(
+                "Project not found", code="project.not_found", details={"id": pid},
+            )
         v = versions.get_version(conn, vid)
         if not v or v["project_id"] != pid:
-            raise HTTPException(404, f"版本不存在: id={vid}")
+            raise NotFoundError(
+                "Version not found", code="version.not_found", details={"id": vid},
+            )
     return p, v
 
 
@@ -351,7 +339,7 @@ def scan_preprocess_duplicates_train(
                 "status": "failed",
                 "text": str(exc),
             })
-            _curation_err_code(exc); raise
+            raise
         except duplicate_finder.DuplicateFinderError as exc:
             bus.publish({
                 "type": "duplicate_scan_progress",
@@ -360,7 +348,7 @@ def scan_preprocess_duplicates_train(
                 "status": "failed",
                 "text": str(exc),
             })
-            _duplicate_err_code(exc); raise
+            raise
 
 
 @router.post("/api/projects/{pid}/versions/{vid}/preprocess/duplicates/apply")
@@ -371,15 +359,10 @@ def apply_preprocess_duplicates_train(
     `names` 是 train rel path（`"1_data/X.png"`）。物理文件不动。"""
     _resolve_pv_or_404_dup(pid, vid)
     with db.connection_for() as conn:
-        try:
-            result = duplicate_finder.apply_train_duplicate_removals(
-                conn, pid, vid, names=body.names,
-            )
-            project = projects.get_project(conn, pid)
-        except curation.CurationError as exc:
-            _curation_err_code(exc); raise
-        except duplicate_finder.DuplicateFinderError as exc:
-            _duplicate_err_code(exc); raise
+        result = duplicate_finder.apply_train_duplicate_removals(
+            conn, pid, vid, names=body.names,
+        )
+        project = projects.get_project(conn, pid)
     if project:
         _publish_project_state(project)
     return result
@@ -396,12 +379,9 @@ def copy_to_train(
     Curation 操作）。前端 Curation 选 download 原图加入 train 直接 work。
     """
     with db.connection_for() as conn:
-        try:
-            result = curation.copy_download_to_train(
-                conn, pid, vid, body.files, body.dest_folder,
-            )
-        except curation.CurationError as exc:
-            _curation_err_code(exc); raise  # PR-2 C5
+        result = curation.copy_download_to_train(
+            conn, pid, vid, body.files, body.dest_folder,
+        )
     return result
 
 
@@ -410,12 +390,9 @@ def remove_from_train(
     pid: int, vid: int, body: RemoveRequest,
 ) -> dict[str, Any]:
     with db.connection_for() as conn:
-        try:
-            result = curation.remove_from_train(
-                conn, pid, vid, body.folder, body.files,
-            )
-        except curation.CurationError as exc:
-            _curation_err_code(exc); raise  # PR-2 C5
+        result = curation.remove_from_train(
+            conn, pid, vid, body.folder, body.files,
+        )
     return result
 
 
@@ -424,20 +401,23 @@ def folder_op(
     pid: int, vid: int, body: FolderOp,
 ) -> dict[str, Any]:
     with db.connection_for() as conn:
-        try:
-            if body.op == "create":
-                p = curation.create_folder(conn, pid, vid, body.name)
-                return {"path": str(p)}
-            if body.op == "rename":
-                if not body.new_name:
-                    raise HTTPException(400, "rename 需要 new_name")
-                p = curation.rename_folder(
-                    conn, pid, vid, body.name, body.new_name,
+        if body.op == "create":
+            p = curation.create_folder(conn, pid, vid, body.name)
+            return {"path": str(p)}
+        if body.op == "rename":
+            if not body.new_name:
+                raise ValidationError(
+                    "A new name is required to rename a folder",
+                    code="curation.new_name_required", http_status=400,
                 )
-                return {"path": str(p)}
-            if body.op == "delete":
-                curation.delete_folder(conn, pid, vid, body.name)
-                return {"deleted": body.name}
-            raise HTTPException(400, f"unknown op: {body.op}")
-        except curation.CurationError as exc:
-            _curation_err_code(exc); raise  # PR-2 C5
+            p = curation.rename_folder(
+                conn, pid, vid, body.name, body.new_name,
+            )
+            return {"path": str(p)}
+        if body.op == "delete":
+            curation.delete_folder(conn, pid, vid, body.name)
+            return {"deleted": body.name}
+        raise ValidationError(
+            f"Unknown folder operation: {body.op}",
+            code="curation.op_invalid", details={"op": body.op}, http_status=400,
+        )

@@ -159,7 +159,6 @@ CREATE INDEX idx_jobs_status ON project_jobs(status);
   },
   "wd14": {
     "model_id": "SmilingWolf/wd-vit-tagger-v3",
-    "local_dir": null,                    // null = models/wd14/{model_id}/
     "threshold_general": 0.35,
     "threshold_character": 0.85,
     "blacklist_tags": []
@@ -178,7 +177,7 @@ Pydantic 模型在 `studio/secrets.py`；GET / PUT `/api/secrets` 操作；敏�
 ```
 ┌──────────────────────┐
 │  Anima                │
-│  lora studio · 0.14.0 │ ← 版本号从 /api/health 拉，single source of truth
+│  lora studio · 0.15.0 │ ← 版本号从 /api/health 拉，single source of truth
 ├──────────────────────┤
 │ ▶ 项目 (Projects)    │ /
 │   队列 (Queue)       │ /queue

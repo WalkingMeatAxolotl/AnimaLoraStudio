@@ -7,8 +7,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
+from ...domain.errors import ValidationError
 from ...services.tagging.base import VALID_TAGGER_NAMES, get_tagger
 
 router = APIRouter()
@@ -17,7 +18,10 @@ router = APIRouter()
 @router.get("/api/tagger/{name}/check")
 def check_tagger(name: str) -> dict[str, Any]:
     if name not in VALID_TAGGER_NAMES:
-        raise HTTPException(400, f"unknown tagger: {name}")
+        raise ValidationError(
+            f'Unknown tagger: "{name}"',
+            code="tag.tagger_invalid", details={"name": name}, http_status=400,
+        )
     try:
         t = get_tagger(name)
     except Exception as exc:  # noqa: BLE001

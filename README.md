@@ -1,6 +1,6 @@
 # AnimaLoraStudio
 
-[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-blue)](README.md) [![English](https://img.shields.io/badge/lang-English-lightgrey)](README.en.md) [![Version](https://img.shields.io/badge/version-0.14.0-blue)](CHANGELOG.md)
+[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-blue)](README.md) [![English](https://img.shields.io/badge/lang-English-lightgrey)](README.en.md) [![Version](https://img.shields.io/badge/version-0.15.0-blue)](CHANGELOG.md)
 
 **端到端流水线**：从 Booru 抓图 → 筛选 → 打标 → 正则集 → 训练 → 出图测试，全流程在一个浏览器面板里推进。专为 [Anima](https://huggingface.co/circlestone-labs/Anima)（Cosmos DiT 二次元特调）训练优化。
 
@@ -193,16 +193,17 @@ AnimaLoraStudio/
 │   └── validate_local_models.py   # 验证本地 Qwen / T5 是否可离线加载
 ├── docs/                          # 三块：user-guide / architecture / adr（见 docs/README.md）
 ├── utils/                         # anima_train 共享 utility（model loader / optimizer / lycoris_adapter / ...）
-└── models/                        # 模型代码 + tokenizer 预置文件 + 大权重落点（混合）
-    ├── anima_modeling*.py         # tracked：Anima Cosmos transformer 的 PyTorch 实现
-    ├── cosmos_predict2_modeling.py
-    ├── wan/vae2_1.py              # tracked：Wan2.1 VAE 实现
-    ├── text_encoders/             # tracked: Qwen tokenizer 小文件 + 用户下载的 model.safetensors
-    ├── t5_tokenizer/              # tracked: T5 tokenizer 文件（无权重）
-    ├── diffusion_models/          # 用户下载的 Anima 主模型（gitignored）
-    ├── vae/                       # 用户下载的 VAE 权重（gitignored）
-    ├── wd14/                      # WD14 ONNX 模型（HF 自动下载，gitignored）
-    └── taeflux/                   # TAEFlux 中间步预览权重（gitignored）
+├── modeling/                     # 模型架构定义（tracked）：vendored diffusion-pipe 子集 + Anima 包装
+│   ├── anima_modeling.py         # Anima Cosmos transformer 的 PyTorch 实现（基于 ComfyUI）
+│   ├── cosmos_predict2_modeling.py
+│   └── wan/vae2_1.py             # Wan2.1 VAE 实现
+└── models/                       # 下载的权重 / tokenizer 数据落点（gitignored、按需创建，仅 .gitkeep 进 git）
+    ├── diffusion_models/          # 用户下载的 Anima 主模型
+    ├── vae/                       # 用户下载的 VAE 权重
+    ├── text_encoders/             # Qwen3 文本编码器 + tokenizer（下载）
+    ├── t5_tokenizer/              # T5 tokenizer 文件（下载）
+    ├── wd14/                      # WD14 ONNX 模型（HF 自动下载）
+    └── taeflux/                   # TAEFlux 中间步预览权重
 ```
 
 运行时数据（gitignored）:
@@ -257,7 +258,7 @@ AnimaLoraStudio/
 
 ## 版本
 
-当前版本 **0.14.0**。完整变更历史见 [CHANGELOG.md](CHANGELOG.md)。Studio 内 Settings → 系统 → 版本卡片可一键升级到最新版本。
+当前版本 **0.15.0**。完整变更历史见 [CHANGELOG.md](CHANGELOG.md)。Studio 内 Settings → 系统 → 版本卡片可一键升级到最新版本。
 
 ---
 

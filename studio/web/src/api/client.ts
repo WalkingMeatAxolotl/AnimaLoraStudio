@@ -5,6 +5,7 @@
 // window.onerror 上报时带上（让开发者在 server log 能 join "前端崩前最后一次
 // API 失败" 跟 "用户实际看到的 toast"）。
 import { setLastApiTraceId } from '../lib/errors/report'
+import i18n from '../i18n'
 
 export interface HealthResponse {
   status: string
@@ -88,9 +89,6 @@ export type ConfigData = Record<string, unknown>
 export interface GelbooruConfig {
   user_id: string
   api_key: string
-  save_tags: boolean
-  convert_to_png: boolean
-  remove_alpha_channel: boolean
 }
 
 export interface DanbooruConfig {
@@ -107,6 +105,10 @@ export interface DownloadGlobalConfig {
   api_rate_per_sec: number
   /** PP9 — CDN host (img*.gelbooru.com / cdn.donmai.us) 限速。 */
   cdn_rate_per_sec: number
+  /** 图片入库处理（booru 下载 / reg / 本地上传共用）。 */
+  save_tags: boolean
+  convert_to_png: boolean
+  remove_alpha_channel: boolean
 }
 
 export interface RegConfig {
@@ -212,7 +214,6 @@ export interface WD14Config {
   model_id: string
   /** 候选模型列表；用户在「设置 → WD14」里维护，model_id 必属于该列表。 */
   model_ids: string[]
-  local_dir: string | null
   threshold_general: number
   threshold_character: number
   blacklist_tags: string[]
@@ -224,7 +225,6 @@ export interface CLTaggerConfig {
   model_id: string
   model_path: string
   tag_mapping_path: string
-  local_dir: string | null
   threshold_general: number
   threshold_character: number
   add_copyright_tag: boolean
@@ -316,6 +316,11 @@ export interface WD14Runtime {
   /** PP9.5 — InferenceSession 创建时实际 dlopen 报的错（如缺 libcurand.so.10）；
    *  非 null 表示已自动降级到 CPU EP，UI 应提示用户装 CUDA 库或换 DirectML。 */
   cuda_load_error: string | null
+  /** torch 的 CUDA 大版本（onnxruntime-gpu build 锚点）：12 / 13 / null。
+   *  装的 ORT build 必须同 major，否则 import 期 dlopen 挂（cu128 torch → 12）。 */
+  torch_cuda_major?: number | null
+  /** 已装 ORT 的 CUDA 大版本与 torch 不一致（如装成 cu13 但 torch 是 cu12）。 */
+  ort_cuda_major_mismatch?: boolean
   /** PP9.5 — torch 自带 CUDA so 预加载结果（Linux 才会 applied=true）。 */
   preload?: {
     applied: boolean
@@ -361,10 +366,14 @@ export interface ModelsConfig {
   auto_sync_paths: boolean
   /** 训练模型根目录；null/空 → 回退 REPO_ROOT/models/（云端机改这里） */
   root: string | null
-  /** 当前默认主模型 variant（1.0 / preview3-base / preview2 / preview）。
+  /** 当前默认主模型：官方 variant key（1.0 / preview3-base / ...）或
+   * custom_anima_paths 里的某个本地 .safetensors 路径。
    * Studio 创建新 version 时把它展开成绝对路径写到 yaml.transformer_path；
    * 已存在 version 不动（保证训练重现性）。 */
   selected_anima: string
+  /** 用户注册的本地 custom 主模型（.safetensors 绝对路径）。微调训练 /
+   * 在微调权重上测试出图用；仅登记路径，不下载不复制。 */
+  custom_anima_paths: string[]
   /** 预处理默认放大器：预设 label（"4x-AnimeSharp" 等）或 custom 文件名
    * （"my-anime.pth"）。Preprocess 页和 worker 用它定权重路径。 */
   selected_upscaler: string
@@ -440,9 +449,10 @@ export interface Secrets {
   huggingface: HuggingFaceConfig
   wandb: WandBConfig
   modelscope: ModelScopeConfig
-  /** 模型下载源：'huggingface'（默认）或 'modelscope'。
-   *  选 modelscope 时，有映射的模型走魔搭 CLI 下载；无映射的自动回退 HF。 */
+  /** 旧的全局下载源（已退役为迁移种子，无 UI）。新模型按类型在 download_sources 里各自选。 */
   download_source: string
+  /** 按类型下载源：{training|wd14|upscaler: 'huggingface'|'modelscope'}。固定 HF 的类型不在内。 */
+  download_sources: Record<string, string>
   // JoyCaption 已合并为 llm_tagger 的 builtin preset
   llm_tagger: LLMTaggerConfig
   wd14: WD14Config
@@ -473,12 +483,24 @@ export interface AnimaVariantInfo extends ModelFileStatus {
   target_path: string
 }
 
+/** 用户注册的本地 custom 主模型（PathPicker 选盘上已有的 .safetensors）。 */
+export interface CustomAnimaInfo extends ModelFileStatus {
+  /** 注册的绝对路径（也是选中时写入 selected_anima 的值）。 */
+  path: string
+  /** 文件名，列表展示用。 */
+  name: string
+}
+
 export interface AnimaMainCatalog {
   id: 'anima_main'
   name: string
   description: string
   repo: string
   variants: AnimaVariantInfo[]
+  /** 本地注册的 custom 主模型列表。 */
+  custom: CustomAnimaInfo[]
+  /** 当前选中的主模型：variant key 或 custom 路径。 */
+  selected: string
   latest: string
 }
 
@@ -519,9 +541,13 @@ export interface WD14Catalog {
 
 export interface CLTaggerVariantInfo {
   label: string
+  model_id: string
   model_path: string
   tag_mapping_path: string
+  description?: string
   is_current: boolean
+  target_path?: string
+  version_dir?: string
   exists: boolean
   size: number
   files: Array<{ name: string; exists: boolean; size: number; mtime: number }>
@@ -583,6 +609,8 @@ export interface ModelsCatalog {
   wd14: WD14Catalog
   cltagger: CLTaggerCatalog
   upscalers?: UpscalersCatalog
+  /** 按类型的下载源选项：current = 当前选中，available = 可选源（长度 1 = 固定单源）。 */
+  download_source_options: Record<string, { current: string; available: string[] }>
   downloads: Record<string, ModelDownloadStatus>
 }
 
@@ -1078,6 +1106,16 @@ export interface VersionConfigResponse {
   defaulted_fields?: string[]
 }
 
+/** 训练集 ARB 桶分布（后端用真 BucketManager 算）。count = 有效样本数（含 repeat × fan-out）。 */
+export interface BucketDistribution {
+  resolutions: number[]
+  aspect_ratio_limit: number
+  groups: Array<{
+    reso: number
+    buckets: Array<{ w: number; h: number; count: number }>
+  }>
+}
+
 export interface RegBuildRequest {
   excluded_tags?: string[]
   auto_tag?: boolean
@@ -1116,6 +1154,9 @@ export type AttentionBackend = 'auto' | 'none' | 'xformers' | 'flash_attn'
 /** PR-9 — 先验生成（base 模型反向出 reg 集，无 LoRA）。 */
 export interface RegAiRequest {
   excluded_tags?: string[]
+  /** 本次先验生成临时选用的底模（官方 variant key 或本地 custom 路径）；
+   *  省略 → server 用 Settings 里的 selected_anima。 */
+  base_model?: string
   negative_prompt?: string
   width?: number
   height?: number
@@ -1166,6 +1207,9 @@ export interface XYMatrixSpec {
 
 export interface GenerateRequest {
   prompts: string[]
+  /** 本次出图临时选用的底模（官方 variant key 或本地 custom 路径）；
+   *  省略 → server 用 Settings 里的 selected_anima。 */
+  base_model?: string
   negative_prompt?: string
   width?: number
   height?: number
@@ -1449,8 +1493,71 @@ export interface ImportResult {
  */
 export type ApiError = Error & {
   status?: number
+  /** ADR-0009 Phase 2: 后端 body.error.code（语义错误码），前端按它查 errors.* i18n。 */
+  code?: string
   detail?: unknown
   traceId?: string
+}
+
+/**
+ * ADR-0009 Phase 2 统一错误解析：所有 fetch / XHR 失败路径共用，保证 toast 文案
+ * 一致且可本地化。
+ *
+ * 优先 `body.error`：用 `error.code` 查 `errors.<code>` i18n（带 `error.details`
+ * 插值，缺词条则回退 `error.message` 英文）。`body.detail` 退为 fallback —— 结构化
+ * detail（如 409 冲突的 config/suggested_name）仍挂到 `err.detail` 给 callsite；
+ * 没有 error 信封时（RequestValidationError 422 list / 极老路径）才用 detail 取文案。
+ */
+export function makeApiError(
+  status: number,
+  statusText: string,
+  body: unknown,
+  headerTraceId?: string | null,
+): ApiError {
+  let message = `${status} ${statusText}`
+  let code: string | undefined
+  let detail: unknown = null
+  let traceId: string | undefined
+  const b = body as {
+    detail?: unknown
+    error?: { code?: unknown; message?: unknown; trace_id?: unknown; details?: unknown }
+  } | null | undefined
+  const err = b?.error
+  if (err && typeof err === 'object') {
+    code = typeof err.code === 'string' ? err.code : undefined
+    const enMsg =
+      typeof err.message === 'string' && err.message ? err.message : message
+    const params =
+      err.details && typeof err.details === 'object'
+        ? (err.details as Record<string, unknown>)
+        : {}
+    message = code ? i18n.t(`errors.${code}`, { ...params, defaultValue: enMsg }) : enMsg
+    if (typeof err.trace_id === 'string') traceId = err.trace_id
+    // 结构化数据现在挂在 error.details（如 409 冲突的 config/suggested_name、
+    // running_tasks 列表），callsite 经 err.detail 读到。
+    if (err.details && typeof err.details === 'object') detail = err.details
+  }
+  if (b && b.detail !== undefined) {
+    if (!err) {
+      if (typeof b.detail === 'string') {
+        message = b.detail
+      } else if (b.detail && typeof b.detail === 'object') {
+        detail = b.detail
+        const dm = (b.detail as { message?: unknown }).message
+        if (typeof dm === 'string') message = dm
+      }
+    } else if (detail === null && b.detail && typeof b.detail === 'object') {
+      detail = b.detail
+    }
+  }
+  if (!traceId && headerTraceId) traceId = headerTraceId
+  if (traceId) setLastApiTraceId(traceId)
+  const e = new Error(message) as ApiError
+  e.status = status
+  e.code = code
+  e.detail = detail
+  e.traceId = traceId
+  return e
 }
 
 /**
@@ -1480,39 +1587,8 @@ async function req<T>(
     ...init,
   })
   if (!resp.ok) {
-    let detail = `${resp.status} ${resp.statusText}`
-    let rawDetail: unknown = null
-    let traceId: string | undefined
-    try {
-      const body = await resp.json()
-      if (typeof body?.detail === 'string') {
-        detail = body.detail
-      } else if (body?.detail && typeof body.detail === 'object') {
-        rawDetail = body.detail
-        // 结构化 detail：取 .message 作为可读字符串；callsite 想拿完整结构走 e.detail
-        detail = (body.detail as { message?: string }).message ?? JSON.stringify(body.detail)
-      }
-      // ADR-0009 dual-write envelope: body.error.trace_id 优先
-      const errStruct = (body as { error?: { trace_id?: string } } | undefined)?.error
-      if (errStruct?.trace_id) {
-        traceId = errStruct.trace_id
-      }
-    } catch {
-      // body 不是 JSON / 解析失败：保持 statusText 默认
-    }
-    // header 兜底（DomainError dual-write 路径或 HTTPException 路径都有）
-    if (!traceId) {
-      traceId = resp.headers.get('X-Trace-Id') ?? undefined
-    }
-    if (traceId) {
-      // 写入 atom 给 ErrorBoundary / window.onerror 上报时附带
-      setLastApiTraceId(traceId)
-    }
-    const err = new Error(detail) as ApiError
-    err.status = resp.status
-    err.detail = rawDetail
-    err.traceId = traceId
-    throw err
+    const body = await resp.json().catch(() => null)
+    throw makeApiError(resp.status, resp.statusText, body, resp.headers.get('X-Trace-Id'))
   }
   if (resp.status === 204) return undefined as T
   return (await resp.json()) as T
@@ -1558,33 +1634,15 @@ async function xhrUpload<T>(
         }
         return
       }
-      let detail = `${xhr.status} ${xhr.statusText}`
-      let rawDetail: unknown = null
-      let traceId: string | undefined
+      let parsed: unknown = null
       try {
-        const j = JSON.parse(text)
-        if (typeof j?.detail === 'string') {
-          detail = j.detail
-        } else if (j?.detail && typeof j.detail === 'object') {
-          rawDetail = j.detail
-          detail = (j.detail as { message?: string }).message ?? JSON.stringify(j.detail)
-        }
-        // ADR-0009 PR-3 C3: dual-write envelope body.error.trace_id
-        const errStruct = (j as { error?: { trace_id?: string } })?.error
-        if (errStruct?.trace_id) traceId = errStruct.trace_id
+        parsed = JSON.parse(text)
       } catch {
-        /* body 不是 JSON：保持 statusText */
+        /* body 不是 JSON：makeApiError 用 statusText 兜底 */
       }
-      // header 兜底
-      if (!traceId) {
-        traceId = xhr.getResponseHeader('X-Trace-Id') ?? undefined
-      }
-      if (traceId) setLastApiTraceId(traceId)
-      const err = new Error(detail) as ApiError
-      err.status = xhr.status
-      err.detail = rawDetail
-      err.traceId = traceId
-      reject(err)
+      reject(
+        makeApiError(xhr.status, xhr.statusText, parsed, xhr.getResponseHeader('X-Trace-Id')),
+      )
     }
     xhr.onerror = () => reject(new Error('network error'))
     xhr.send(body)
@@ -1614,6 +1672,31 @@ export interface StudioDataInfo {
 /** 迁移状态快照（modal 重开 / SSE 漏事件兜底；实时进度走 SSE
  *  `studio_data_migrate_progress` / `_done` 事件）。 */
 export interface StudioDataMigrateStatus {
+  state: 'idle' | 'running' | 'done' | 'error'
+  target: string
+  total_files: number
+  total_bytes: number
+  done_files: number
+  done_bytes: number
+  current_file: string
+  error: string
+}
+
+/** 模型根目录存储位置：和 studio_data 同结构（迁移确认 modal 复用展示）。 */
+export interface ModelsRootInfo {
+  current: string
+  default: string
+  is_custom: boolean
+  /** 请求带 scan=false 时为 null（Settings 页仅显示路径，免扫盘） */
+  scan: {
+    total_files: number
+    total_bytes: number
+    entries: StudioDataScanEntry[]
+  } | null
+}
+
+/** 模型根目录迁移状态快照（实时进度走 SSE `models_root_migrate_progress` / `_done`）。 */
+export interface ModelsRootMigrateStatus {
   state: 'idle' | 'running' | 'done' | 'error'
   target: string
   total_files: number
@@ -1677,21 +1760,8 @@ export const api = {
     fd.append('file', file, file.name)
     const resp = await fetch('/api/presets/import', { method: 'POST', body: fd })
     if (!resp.ok) {
-      let message = `${resp.status} ${resp.statusText}`
-      let rawDetail: unknown = null
-      try {
-        const body = await resp.json()
-        if (typeof body?.detail === 'string') {
-          message = body.detail
-        } else if (body?.detail && typeof body.detail === 'object') {
-          rawDetail = body.detail
-          message = (body.detail as { message?: string }).message ?? JSON.stringify(body.detail)
-        }
-      } catch { /* body 非 JSON,保留 statusText */ }
-      const err = new Error(message) as ApiError
-      err.status = resp.status
-      err.detail = rawDetail
-      throw err
+      const body = await resp.json().catch(() => null)
+      throw makeApiError(resp.status, resp.statusText, body, resp.headers.get('X-Trace-Id'))
     }
     return (await resp.json()) as { name: string; path: string }
   },
@@ -1729,20 +1799,8 @@ export const api = {
     fd.append('file', file, file.name)
     const resp = await fetch('/api/tag-dictionary/upload', { method: 'POST', body: fd })
     if (!resp.ok) {
-      let message = `${resp.status} ${resp.statusText}`
-      let rawDetail: unknown = null
-      try {
-        const body = await resp.json()
-        if (typeof body?.detail === 'string') message = body.detail
-        else if (body?.detail && typeof body.detail === 'object') {
-          rawDetail = body.detail
-          message = (body.detail as { message?: string }).message ?? JSON.stringify(body.detail)
-        }
-      } catch { /* 非 JSON，保留 statusText */ }
-      const err = new Error(message) as ApiError
-      err.status = resp.status
-      err.detail = rawDetail
-      throw err
+      const body = await resp.json().catch(() => null)
+      throw makeApiError(resp.status, resp.statusText, body, resp.headers.get('X-Trace-Id'))
     }
     return (await resp.json()) as TagDictionaryMetaResponse
   },
@@ -1758,6 +1816,18 @@ export const api = {
     req<{ key: string; status: string }>('/api/models/download', {
       method: 'POST',
       body: JSON.stringify(body),
+    }),
+  /** 注册一个本地 .safetensors 主模型（微调训练 / 微调上测试）。返回新 catalog。 */
+  addCustomAnima: (path: string) =>
+    req<ModelsCatalog>('/api/models/anima/custom', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
+  /** 注销一个本地 custom 主模型。返回新 catalog。 */
+  removeCustomAnima: (path: string) =>
+    req<ModelsCatalog>('/api/models/anima/custom', {
+      method: 'DELETE',
+      body: JSON.stringify({ path }),
     }),
   startUpscalerCustomDownload: (body: {
     source: 'hf' | 'ms'
@@ -2076,7 +2146,6 @@ export const api = {
         threshold_general?: number | null
         threshold_character?: number | null
         model_id?: string | null
-        local_dir?: string | null
         blacklist_tags?: string[] | null
       }
       cltagger_overrides?: {
@@ -2085,7 +2154,6 @@ export const api = {
         model_id?: string | null
         model_path?: string | null
         tag_mapping_path?: string | null
-        local_dir?: string | null
         add_copyright_tag?: boolean | null
         add_meta_tag?: boolean | null
         add_model_tag?: boolean | null
@@ -2271,6 +2339,10 @@ export const api = {
   // Train config (PP6.2) -------------------------------------------------
   getVersionConfig: (pid: number, vid: number) =>
     req<VersionConfigResponse>(`/api/projects/${pid}/versions/${vid}/config`),
+  getBucketDistribution: (pid: number, vid: number) =>
+    req<BucketDistribution>(
+      `/api/projects/${pid}/versions/${vid}/bucket-distribution`
+    ),
   putVersionConfig: (pid: number, vid: number, data: ConfigData) =>
     req<{ has_config: true; config: ConfigData }>(
       `/api/projects/${pid}/versions/${vid}/config`,
@@ -2631,6 +2703,18 @@ export const api = {
   getStudioDataMigrateStatus: () =>
     req<StudioDataMigrateStatus>('/api/studio-data/migrate_status'),
 
+  // 模型根目录存储位置（镜像 studio_data，但迁移完无需重启，立即生效）----------
+  getModelsRootInfo: (withScan = true) =>
+    req<ModelsRootInfo>(`/api/models-root/info?scan=${withScan}`),
+  // 422 = 目标不合法 / 有 running task；409 = 已有迁移在跑。
+  startModelsRootMigrate: (target: string) =>
+    req<{ ok: boolean }>('/api/models-root/migrate', {
+      method: 'POST',
+      body: JSON.stringify({ target }),
+    }),
+  getModelsRootMigrateStatus: () =>
+    req<ModelsRootMigrateStatus>('/api/models-root/migrate_status'),
+
   // System lifecycle (ADR 0002) ----------------------------------------
   // 重启 server。后端写 tmp/restart + 给自己发 SIGINT 触发 uvicorn graceful
   // shutdown；cli.py 的 loop 拾起并重启。前端调完后应进入"重启中"等待状态，
@@ -2651,11 +2735,12 @@ export const api = {
   },
 
   // 请求 update：写 .update_pending + 触发 SIGINT 重启。
-  // 422 = running task 或 dirty working tree。
-  performSystemUpdate: (target: string = 'origin/master') =>
+  // 422 = running task 或 dirty working tree（force=true 时跳过 dirty 闸，
+  // reset --hard 覆盖本地未提交改动；用户需先在 UI 确认强制覆盖）。
+  performSystemUpdate: (target: string = 'origin/master', force = false) =>
     req<{ ok: boolean; message: string }>('/api/system/update', {
       method: 'POST',
-      body: JSON.stringify({ target }),
+      body: JSON.stringify({ target, force }),
     }),
 
   // 回滚到 .last_version 记录的上一版本（PR-C）。
@@ -2826,6 +2911,9 @@ export interface PreflightResult {
   target_resolved: string | null
   checks: PreflightCheck[]
   blocking: boolean
+  /** 工作树有未提交改动（自动 churn 已剔除）。true → 确认时弹"强制覆盖" modal。
+   *  dirty 是 warn 不进 blocking，但仍需用户显式确认才会带 force 覆盖。 */
+  working_tree_dirty: boolean
   requirements_diff: PreflightRequirementsDiff
 }
 

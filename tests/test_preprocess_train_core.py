@@ -15,6 +15,7 @@ import pytest
 from PIL import Image
 
 from studio import db
+from studio.domain.errors import InvalidPathError, ValidationError
 from studio.services.preprocess import core as preprocess
 from studio.services.preprocess import manifest as preprocess_manifest
 from studio.services.projects import jobs as project_jobs, projects, versions
@@ -203,15 +204,17 @@ def test_resolve_targets_selected_intersects_train(isolated) -> None:
 
 def test_resolve_targets_selected_empty_names_raises(isolated) -> None:
     p = isolated["project"]
-    with pytest.raises(preprocess.PreprocessError):
+    with pytest.raises(ValidationError) as exc:
         preprocess.resolve_targets_train(p, "v1", mode="selected", names=[])
+    assert exc.value.code == "preprocess.selection_empty"
 
 
 def test_resolve_targets_unknown_mode_raises(isolated) -> None:
-    with pytest.raises(preprocess.PreprocessError):
+    with pytest.raises(ValidationError) as exc:
         preprocess.resolve_targets_train(
             isolated["project"], "v1", mode="bogus"
         )
+    assert exc.value.code == "preprocess.mode_invalid"
 
 
 def test_resolve_targets_name_with_traversal_rejected(isolated) -> None:
@@ -219,10 +222,11 @@ def test_resolve_targets_name_with_traversal_rejected(isolated) -> None:
     p = isolated["project"]
     sub = isolated["sub"]
     _write_png(sub / "X.png")
-    with pytest.raises(preprocess.PreprocessError):
+    with pytest.raises(InvalidPathError) as exc:
         preprocess.resolve_targets_train(
             p, "v1", mode="selected", names=["../etc/passwd"]
         )
+    assert exc.value.code == "path.invalid"
 
 
 # ---------------------------------------------------------------------------
@@ -252,11 +256,12 @@ def test_start_job_train_selected_requires_names(isolated) -> None:
     p = isolated["project"]
     v = isolated["version"]
     with db.connection_for(isolated["db"]) as conn:
-        with pytest.raises(preprocess.PreprocessError):
+        with pytest.raises(ValidationError) as exc:
             preprocess.start_job_train(
                 conn, project_id=p["id"], version_id=v["id"],
                 mode="selected",
             )
+        assert exc.value.code == "preprocess.selection_empty"
 
 
 def test_start_crop_job_train_validates_rects(isolated) -> None:
@@ -270,11 +275,12 @@ def test_start_crop_job_train_validates_rects(isolated) -> None:
             crops={_rel("X.png"): [{"x": 0.1, "y": 0.1, "w": 0.5, "h": 0.5}]},
         )
         assert job["version_id"] == v["id"]
-        with pytest.raises(preprocess.PreprocessError):
+        with pytest.raises(ValidationError) as exc:
             preprocess.start_crop_job_train(
                 conn, project_id=p["id"], version_id=v["id"],
                 crops={_rel("X.png"): [{"x": 0, "y": 0, "w": 0.001, "h": 0.5}]},
             )
+        assert exc.value.code == "preprocess.crop_too_small"
 
 
 # ---------------------------------------------------------------------------
@@ -410,5 +416,6 @@ def test_restore_products_train_no_origin_when_download_missing(isolated) -> Non
 
 def test_restore_products_train_validates_name(isolated) -> None:
     p = isolated["project"]
-    with pytest.raises(preprocess.PreprocessError):
+    with pytest.raises(InvalidPathError) as exc:
         preprocess.restore_products_train(p, "v1", ["../etc"])
+    assert exc.value.code == "path.invalid"

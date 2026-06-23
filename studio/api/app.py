@@ -29,6 +29,7 @@ from .routers import (
     jobs,
     logs,
     models,
+    models_storage,
     presets,
     root,
     samples,
@@ -84,6 +85,7 @@ app.include_router(tag_dictionary.router)
 app.include_router(installs.router)
 # PR-6 commit 4: system router（11 routes: restart / update / rollback / preflight / etc.）
 app.include_router(studio_data.router)
+app.include_router(models_storage.router)
 app.include_router(system.router)
 # PR-6 commit 5: generate router（8 routes: 出图 + daemon 状态 + TAEFlux）
 app.include_router(generate.router)

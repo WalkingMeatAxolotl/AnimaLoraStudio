@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import {
   api,
+  type BucketDistribution,
   type ConfigData,
   type PresetSummary,
   type ProjectDetail,
@@ -11,6 +12,8 @@ import {
   type Version,
   type VersionConfigResponse,
 } from '../../../api/client'
+import { parseFolderMeta } from '../../../lib/folderMeta'
+import { useLocalStorageState } from '../../../lib/useLocalStorageState'
 import ConfigSkeleton from '../../../components/ConfigSkeleton'
 import { useDialog } from '../../../components/Dialog'
 import SchemaForm, { visibleSchemaGroups } from '../../../components/SchemaForm'
@@ -260,6 +263,8 @@ export default function TrainPage() {
 
   // 右侧 SchemaSectionIndex 的 IntersectionObserver root + 跳转目标
   const schemaScrollRef = useRef<HTMLDivElement | null>(null)
+  // 右侧训练集分布预览抽屉的展开/收起（持久化）。收起时把横向空间让给表单。
+  const [previewOpen, setPreviewOpen] = useLocalStorageState('train.previewOpen', true)
   const visibleGroups = useMemo(
     () => (schema ? visibleSchemaGroups(schema, advancedMode) : []),
     [schema, advancedMode],
@@ -474,10 +479,10 @@ export default function TrainPage() {
       <div className="flex flex-col h-full gap-3">
 
         {/* 两栏布局：左（预设 + config 编辑） / 右（估算面板） */}
-        <div className="grid grid-cols-[3fr_1fr] gap-3 flex-1 min-h-0">
+        <div className="flex gap-3 flex-1 min-h-0">
 
-          {/* 左栏 */}
-          <div className="flex flex-col gap-3 min-h-0 min-w-0 overflow-y-auto">
+          {/* 左栏：配置表单（flex-[3] 与右预览 flex-[1] 还原老 grid 3:1 比例） */}
+          <div className="flex flex-col gap-3 min-h-0 min-w-0 overflow-y-auto flex-[3]">
 
           {/* 预设 picker：dropdown 入口。0.8.2 起承认 version yaml 是 first-class
               「项目专属配置」，不再显示「绑定哪个预设」+「已自定义」标签 —— 这套
@@ -652,33 +657,60 @@ export default function TrainPage() {
             )}
           </div>
 
-        {/* 右栏：训练集 + 正则集分布 + 章节锚点导航 */}
-        <div className="flex flex-col min-h-0 min-w-0 overflow-y-auto">
-          <DatasetStatsPanel
-            activeVersion={activeVersion}
-            reg={reg}
-            config={config}
-          />
-          {configResp?.has_config && config && visibleGroups.length > 0 && (
-            <div className="mt-8">
-              <SchemaSectionIndex
-                groups={visibleGroups}
-                scrollContainer={schemaScrollRef}
-              />
-            </div>
-          )}
+        {/* 中栏：章节锚点导航（固定窄列，始终可见） */}
+        {configResp?.has_config && config && visibleGroups.length > 0 && (
+          <div className="shrink-0 w-[168px] overflow-y-auto">
+            <SchemaSectionIndex
+              groups={visibleGroups}
+              scrollContainer={schemaScrollRef}
+            />
+          </div>
+        )}
+
+        {/* 把手：单竖线 + 顶部圆圈 ›/‹ —— 分隔预览抽屉 */}
+        <div className="relative w-3 shrink-0 self-stretch flex justify-center">
+          <div className="w-px bg-subtle" />
+          <button
+            type="button"
+            onClick={() => setPreviewOpen((v) => !v)}
+            title={previewOpen ? t('train.collapsePreview') : t('train.expandPreview')}
+            aria-label={previewOpen ? t('train.collapsePreview') : t('train.expandPreview')}
+            className="absolute top-1 left-1/2 -translate-x-1/2 w-6 h-6 rounded-full border border-subtle bg-surface text-fg-tertiary hover:text-accent hover:border-accent flex items-center justify-center text-xs leading-none shadow-sm"
+          >
+            {previewOpen ? '›' : '‹'}
+          </button>
         </div>
+
+        {/* 右栏：训练集分布预览抽屉（可收回）。flex-[1] 与左表单 flex-[3] 还原老
+            grid 的 3:1 比例（按比例而非固定宽）；收起时整列不渲染、空间归表单。 */}
+        {previewOpen && (
+          <div className="flex-[1] min-w-0 overflow-y-auto">
+            <DatasetStatsPanel
+              projectId={project.id}
+              activeVersion={activeVersion}
+              reg={reg}
+              config={config}
+            />
+          </div>
+        )}
       </div>
     </div>
     </StepShell>
   )
 }
 
-/** Kohya 风格文件夹名「N_label」→ {repeat=N, label}。无前缀数字默认 1。 */
-function parseFolderRepeat(name: string): { repeat: number; label: string } {
-  const m = name.match(/^(\d+)_(.*)$/)
-  if (m) return { repeat: parseInt(m[1], 10), label: m[2] }
-  return { repeat: 1, label: name }
+/** config.resolution 归一成 number[]（schema 是 list[int]，旧 config / 标量也兜底）。 */
+function configResolutions(config: ConfigData | null): number[] {
+  const r = config?.resolution as unknown
+  if (Array.isArray(r)) return r.length ? (r as number[]) : [1024]
+  if (typeof r === 'number') return [r]
+  return [1024]
+}
+
+/** 文件夹有效样本数 = repeat × 图数 × 分辨率档数（px 文件夹固定 1 档；否则跟 config 列表）。 */
+function folderEffective(name: string, imageCount: number, resoCount: number): number {
+  const { reso, repeat } = parseFolderMeta(name)
+  return repeat * imageCount * (reso ? 1 : resoCount)
 }
 
 /** reg.files 形如 `5_concept/12345.png` —— 按首段文件夹聚合计数。 */
@@ -701,10 +733,12 @@ function aggregateRegFolders(files: string[]): Array<{ name: string; image_count
  * train / reg 分两块汇总，最后给出有效图数总和——这是 anima_train 单 epoch 的实际样本数。
  */
 function DatasetStatsPanel({
+  projectId,
   activeVersion,
   reg,
   config,
 }: {
+  projectId: number
   activeVersion: Version | null
   reg: RegStatus | null
   config: ConfigData | null
@@ -716,12 +750,13 @@ function DatasetStatsPanel({
     [reg]
   )
 
+  const resoCount = configResolutions(config).length
   const trainEffective = trainFolders.reduce(
-    (s, f) => s + parseFolderRepeat(f.name).repeat * f.image_count,
+    (s, f) => s + folderEffective(f.name, f.image_count, resoCount),
     0,
   )
   const regEffective = regFolders.reduce(
-    (s, f) => s + parseFolderRepeat(f.name).repeat * f.image_count,
+    (s, f) => s + folderEffective(f.name, f.image_count, resoCount),
     0,
   )
   const totalEffective = trainEffective + regEffective
@@ -757,6 +792,7 @@ function DatasetStatsPanel({
           title="train/"
           folders={trainFolders}
           effective={trainEffective}
+          resoCount={resoCount}
           empty={t('train.noTrainImages')}
         />
 
@@ -766,6 +802,7 @@ function DatasetStatsPanel({
           title="reg/"
           folders={regFolders}
           effective={regEffective}
+          resoCount={resoCount}
           empty={reg && !reg.exists ? t('train.regNotBuilt') : t('train.noRegImages')}
         />
 
@@ -795,6 +832,70 @@ function DatasetStatsPanel({
           )}
         </div>
       </div>
+
+      <BucketPreview
+        projectId={projectId}
+        vid={activeVersion?.id ?? 0}
+        sig={JSON.stringify([
+          config?.resolution,
+          config?.aspect_ratio_limit,
+          // 文件夹名单（含 px 前缀 / repeat / 图数）—— 改名加 px 也要触发重取，不能只看总数
+          activeVersion?.stats?.train_folders,
+        ])}
+      />
+    </div>
+  )
+}
+
+/** 训练集实际桶分布（后端用真 BucketManager 算）。按分辨率档分组、每桶有效图数。
+ *  trainer 用 drop_last=False —— 桶不满只出短 batch、不丢图，所以这里不做丢图警告。 */
+function BucketPreview({
+  projectId, vid, sig,
+}: {
+  projectId: number
+  vid: number
+  sig: string
+}) {
+  const { t } = useTranslation()
+  const [dist, setDist] = useState<BucketDistribution | null>(null)
+
+  useEffect(() => {
+    if (!projectId || !vid) return
+    let cancelled = false
+    api.getBucketDistribution(projectId, vid)
+      .then((d) => { if (!cancelled) setDist(d) })
+      .catch(() => { if (!cancelled) setDist(null) })
+    return () => { cancelled = true }
+  }, [projectId, vid, sig])
+
+  if (!dist || dist.groups.length === 0) return null
+
+  return (
+    <div className="rounded-md border border-subtle bg-surface px-3 py-2.5">
+      <div className="flex items-center gap-1.5 mb-2.5">
+        <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
+        <span className="caption uppercase tracking-[0.06em] text-xs">{t('train.bucketDistTitle')}</span>
+      </div>
+      <div className="flex flex-col gap-2">
+        {dist.groups.map((g) => (
+          <div key={g.reso}>
+            <div className="text-xs font-mono text-fg-secondary mb-1">{g.reso}px</div>
+            <div className="flex flex-col gap-0.5">
+              {g.buckets.map((b) => (
+                <div
+                  key={`${b.w}x${b.h}`}
+                  className="flex items-baseline gap-1.5 text-xs font-mono pl-1"
+                >
+                  <span className="text-fg-tertiary">{b.w}×{b.h}</span>
+                  <span className="flex-1 border-b border-dotted border-subtle self-end mb-1" />
+                  <span className="text-fg-primary">{b.count}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="text-[10px] text-fg-tertiary mt-2">{t('train.bucketDistHint')}</div>
     </div>
   )
 }
@@ -803,13 +904,16 @@ function FolderSection({
   title,
   folders,
   effective,
+  resoCount,
   empty,
 }: {
   title: string
   folders: Array<{ name: string; image_count: number }>
   effective: number
+  resoCount: number
   empty: string
 }) {
+  const { t } = useTranslation()
   return (
     <div>
       <div className="flex items-baseline justify-between text-xs mb-1">
@@ -823,20 +927,31 @@ function FolderSection({
       ) : (
         <div className="flex flex-col gap-0.5">
           {folders.map((f) => {
-            const { repeat, label } = parseFolderRepeat(f.name)
-            const eff = repeat * f.image_count
+            const { reso, repeat, label } = parseFolderMeta(f.name)
+            const folderResos = reso ? 1 : resoCount
+            const eff = repeat * f.image_count * folderResos
+            const resoTag = reso ? `${reso}px` : null
             return (
               <div
                 key={f.name}
                 className="flex items-baseline gap-1.5 text-xs font-mono text-fg-secondary pl-1"
-                title={`${f.name}：${repeat} repeat × ${f.image_count} = ${eff}`}
+                title={folderResos > 1
+                  ? t('train.folderTipReso', { name: f.name, repeat, imgs: f.image_count, resos: folderResos, total: eff })
+                  : t('train.folderTip', { name: f.name, repeat, imgs: f.image_count, total: eff })}
               >
                 <span className="text-fg-tertiary">{label}</span>
+                {resoTag && <span className="text-[10px] text-accent">{resoTag}</span>}
                 <span className="flex-1 border-b border-dotted border-subtle self-end mb-1" />
                 <span>
                   <span className="text-accent">{repeat}</span>
                   <span className="text-fg-tertiary"> × </span>
                   <span className="text-fg-primary">{f.image_count}</span>
+                  {folderResos > 1 && (
+                    <>
+                      <span className="text-fg-tertiary"> × </span>
+                      <span className="text-accent">{folderResos}</span>
+                    </>
+                  )}
                   <span className="text-fg-tertiary"> = </span>
                   <span className="text-fg-primary font-semibold">{eff}</span>
                 </span>

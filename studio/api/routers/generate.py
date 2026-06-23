@@ -37,6 +37,12 @@ from ..errors import _validate_component_or_400
 from ..schemas.generate import GenerateRequest
 from ... import db, secrets
 from ...domain import GenerateConfig
+from ...domain.errors import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    ValidationError,
+)
 from ...domain.comfy_parity import force_comfy_parity_runtime_config
 from ...infrastructure.event_bus import bus
 from ...infrastructure.paths import STUDIO_DATA
@@ -143,7 +149,7 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
     """启动测试出图 task。"""
     from ...services.inference.core import generate_tempdir
 
-    model_paths = _resolve_anima_model_paths()
+    model_paths = _resolve_anima_model_paths(body.base_model)
 
     with db.connection_for() as conn:
         task_id = db.create_task(
@@ -250,7 +256,10 @@ def get_generate_task(task_id: int) -> dict[str, Any]:
     with db.connection_for() as conn:
         task = db.get_task(conn, task_id)
     if not task or task.get("task_type") != "generate":
-        raise HTTPException(404)
+        raise NotFoundError(
+            "Task not found", code="task.not_found",
+            details={"task_id": task_id}, http_status=404,
+        )
     return task
 
 
@@ -279,7 +288,10 @@ def install_taeflux() -> dict[str, Any]:
         return {"ok": True, "noop": True}
     ok = _md.download_taeflux()
     if not ok:
-        raise HTTPException(500, "download failed; check server log")
+        raise ValidationError(
+            "Failed to download the preview model; check the server log",
+            code="generate.preview_model_download_failed", http_status=500,
+        )
     return {"ok": True}
 
 
@@ -316,7 +328,10 @@ def unload_daemon() -> dict[str, Any]:
     from ...services.inference.daemon import get_daemon
     daemon = get_daemon()
     if daemon.is_busy:
-        raise HTTPException(409, "daemon is busy, cannot unload")
+        raise ConflictError(
+            "Inference service is busy; try again after the current task finishes",
+            code="generate.daemon_busy", http_status=409,
+        )
     if not daemon.is_model_loaded:
         return {"ok": True, "noop": True}
     daemon.request_unload()
@@ -333,11 +348,17 @@ def get_generate_sample(task_id: int, filename: str) -> Any:
     """
     _validate_component_or_400(filename)
     if not filename.lower().endswith(".png"):
-        raise HTTPException(400, "only .png supported")
+        raise ValidationError(
+            "Select a .png file", code="file.ext_invalid",
+            details={"types": ".png"}, http_status=400,
+        )
     from ...services.inference import disk_cache as generate_cache
     data = generate_cache.get_image(task_id, filename)
     if data is None:
-        raise HTTPException(404)
+        raise NotFoundError(
+            "Image not found", code="image.not_found",
+            details={"task_id": task_id, "filename": filename}, http_status=404,
+        )
     # 用 no-store 不是 _thumb_response 那套 no-cache + ETag：
     # generate cache 同 (task_id, filename) 内容会随重跑覆盖（用户改 prompt 重生成），
     # 没有稳定 ETag 可发；用 no-store 让浏览器每次都重拉，永远拿到最新结果。
@@ -508,9 +529,17 @@ def _decode_params_field(raw: str, field: str) -> dict[str, Any]:
     try:
         decoded = json.loads(raw)
     except json.JSONDecodeError as e:
-        raise HTTPException(400, f"{field}: invalid JSON ({e})")
+        raise ValidationError(
+            "Image parameters are not valid JSON",
+            code="generate.params_invalid",
+            details={"field": field, "reason": str(e)}, http_status=400,
+        ) from e
     if not isinstance(decoded, dict):
-        raise HTTPException(400, f"{field}: must be a JSON object")
+        raise ValidationError(
+            "Image parameters are not valid JSON",
+            code="generate.params_invalid",
+            details={"field": field}, http_status=400,
+        )
     return decoded
 
 
@@ -541,12 +570,21 @@ async def save_test_image(
     server 端 enrich 强制 schema_version/created_at/task_id/mode。
     """
     if mode not in ("single", "xy"):
-        raise HTTPException(400, f"unsupported mode: {mode}")
+        raise ValidationError(
+            f"Unsupported mode: {mode}", code="generate.mode_invalid",
+            details={"mode": mode}, http_status=400,
+        )
     if not secrets.load().generate.save_test_images:
-        raise HTTPException(403, "save_test_images is disabled")
+        raise ForbiddenError(
+            "Saving test images is disabled",
+            code="generate.save_disabled", http_status=403,
+        )
     raw = await image.read()
     if not raw:
-        raise HTTPException(400, "empty image body")
+        raise ValidationError(
+            "The uploaded image is empty",
+            code="generate.empty_image", http_status=400,
+        )
 
     if mode == "single":
         if cells or cells_manifest:
@@ -893,7 +931,11 @@ def get_disk_image(date_str: str, mode: str, filename: str) -> Any:
     """读落盘测试图（前端历史栏点击磁盘 entry 时大图来源）。"""
     path = _resolve_disk_png(date_str, mode, filename)
     if not path.is_file():
-        raise HTTPException(404)
+        raise NotFoundError(
+            "Image not found", code="image.not_found",
+            details={"date": date_str, "mode": mode, "filename": filename},
+            http_status=404,
+        )
     # 落盘图内容稳定（序号递增不覆盖），可强 cache
     return FileResponse(
         path, media_type="image/png",
@@ -914,14 +956,22 @@ def get_disk_thumb(
     """
     path = _resolve_disk_png(date_str, mode, filename)
     if not path.is_file():
-        raise HTTPException(404)
+        raise NotFoundError(
+            "Image not found", code="image.not_found",
+            details={"date": date_str, "mode": mode, "filename": filename},
+            http_status=404,
+        )
     try:
         st = path.stat()
         etag = hashlib.sha1(
             f"{st.st_mtime}:{st.st_size}:{w}".encode("utf-8")
         ).hexdigest()[:16]
-    except OSError:
-        raise HTTPException(404)
+    except OSError as exc:
+        raise NotFoundError(
+            "Image not found", code="image.not_found",
+            details={"date": date_str, "mode": mode, "filename": filename},
+            http_status=404,
+        ) from exc
     # 这里没有直接读 request header，由 FastAPI / Starlette 处理 304 略复杂；
     # 简化方案：返 ETag + Cache-Control，浏览器自管 304 转换（max-age 内不再请求）
     try:
@@ -979,7 +1029,11 @@ def get_disk_xy_image(date_str: str, folder: str, filename: str) -> Any:
     """读 XY 文件夹下的 composite 或 cell PNG（PreviewXYGrid 回看 + 拖进 Comfy 复用）。"""
     path = _resolve_disk_xy_cell(date_str, folder, filename)
     if not path.is_file():
-        raise HTTPException(404)
+        raise NotFoundError(
+            "Image not found", code="image.not_found",
+            details={"date": date_str, "folder": folder, "filename": filename},
+            http_status=404,
+        )
     return FileResponse(
         path, media_type="image/png",
         headers={"Cache-Control": "public, max-age=3600"},
@@ -994,14 +1048,22 @@ def get_disk_xy_thumb(
     """XY 文件夹下文件的 PIL 缩略图（历史栏 thumb_url 用 composite）。"""
     path = _resolve_disk_xy_cell(date_str, folder, filename)
     if not path.is_file():
-        raise HTTPException(404)
+        raise NotFoundError(
+            "Image not found", code="image.not_found",
+            details={"date": date_str, "folder": folder, "filename": filename},
+            http_status=404,
+        )
     try:
         st = path.stat()
         etag = hashlib.sha1(
             f"{st.st_mtime}:{st.st_size}:{w}".encode("utf-8")
         ).hexdigest()[:16]
-    except OSError:
-        raise HTTPException(404)
+    except OSError as exc:
+        raise NotFoundError(
+            "Image not found", code="image.not_found",
+            details={"date": date_str, "folder": folder, "filename": filename},
+            http_status=404,
+        ) from exc
     try:
         from PIL import Image
         with Image.open(path) as img:

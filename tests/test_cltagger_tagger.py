@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -46,14 +47,68 @@ def _make_local_model(model_dir: Path) -> None:
     )
 
 
-def test_resolve_local_dir_flat_files(isolated_secrets: Path) -> None:
-    model_dir = isolated_secrets / "cl"
-    _make_local_model(model_dir)
-    secrets.update({"cltagger": {"local_dir": str(model_dir)}})
+def test_v2_legacy_root_paths_resolve_versioned_files(isolated_secrets: Path) -> None:
+    base = model_downloader.cltagger_target_root(
+        model_downloader.models_root(),
+        "cella110n/cl_tagger_v2",
+    )
+    version_dir = base / "v2_01a"
+    version_dir.mkdir(parents=True, exist_ok=True)
+    (version_dir / "model.onnx").write_bytes(b"fake-onnx")
+    (version_dir / "model.onnx.data").write_bytes(b"fake-weights")
+    (version_dir / "model_metadata.json").write_text("{}", encoding="utf-8")
+    (version_dir / "model_vocabulary.json").write_text(
+        json.dumps({"idx_to_tag": {"0": "1girl"}}),
+        encoding="utf-8",
+    )
+    secrets.update({
+        "cltagger": {
+            "model_id": "cella110n/cl_tagger_v2",
+            "model_path": "model.onnx",
+            "tag_mapping_path": "model_vocabulary.json",
+        }
+    })
+
     t = cltagger_tagger.CLTagger()
-    model_path, mapping_path = t._resolve_model_files()
-    assert model_path == model_dir / "model.onnx"
-    assert mapping_path == model_dir / "tag_mapping.json"
+    model_path, mapping_path, ok = t._local_model_files_status()
+
+    assert ok
+    assert model_path == version_dir / "model.onnx"
+    assert mapping_path == version_dir / "model_vocabulary.json"
+
+
+def test_v2_missing_external_data_reports_not_ready(isolated_secrets: Path) -> None:
+    """v2 权重在 model.onnx.data sidecar 里；缺它必须报"未就绪"，
+
+    否则 onnx 图就绪会让 is_available 误报"可用"，等到 prepare 加载 external
+    data 时才在 onnxruntime 层黑盒炸。
+    """
+    base = model_downloader.cltagger_target_root(
+        model_downloader.models_root(),
+        "cella110n/cl_tagger_v2",
+    )
+    version_dir = base / "v2_01a"
+    version_dir.mkdir(parents=True, exist_ok=True)
+    (version_dir / "model.onnx").write_bytes(b"fake-onnx")
+    (version_dir / "model_vocabulary.json").write_text(
+        json.dumps({"idx_to_tag": {"0": "1girl"}}),
+        encoding="utf-8",
+    )
+    # 故意不写 model.onnx.data —— 模拟部分下载
+    secrets.update({
+        "cltagger": {
+            "model_id": "cella110n/cl_tagger_v2",
+            "model_path": "v2_01a/model.onnx",
+            "tag_mapping_path": "v2_01a/model_vocabulary.json",
+        }
+    })
+
+    t = cltagger_tagger.CLTagger()
+    _, _, ok = t._local_model_files_status()
+    available, _ = t.is_available()
+
+    assert ok is False
+    assert available is False
 
 
 def test_is_available_does_not_download_when_model_missing(
@@ -196,6 +251,54 @@ def test_load_tag_mapping_supports_inline_object_schema(tmp_path: Path) -> None:
     assert labels.categories == ["General", "Character", "General", "General"]
 
 
+def test_load_model_vocabulary_maps_numeric_category_aliases(tmp_path: Path) -> None:
+    """CLTagger v2 model_vocabulary.json may use numeric category ids."""
+    mapping_path = tmp_path / "model_vocabulary.json"
+    mapping_path.write_text(
+        json.dumps({
+            "idx_to_tag": {
+                "2": "touhou",
+                "0": "1girl",
+                "1": "hakurei_reimu",
+            },
+            "tag_to_category": {
+                "1girl": "0",
+                "hakurei_reimu": "4",
+                "touhou": "Copyright",
+            },
+        }),
+        encoding="utf-8",
+    )
+
+    labels = cltagger_tagger.CLTagger._load_tag_mapping(mapping_path)
+
+    assert labels.names == ["1girl", "hakurei_reimu", "touhou"]
+    assert labels.categories == ["General", "Character", "Copyright"]
+
+
+def test_load_model_vocabulary_supports_tag_to_idx_fallback(tmp_path: Path) -> None:
+    """Some v2 vocabularies expose tag_to_idx instead of idx_to_tag."""
+    mapping_path = tmp_path / "model_vocabulary.json"
+    mapping_path.write_text(
+        json.dumps({
+            "tag_to_idx": {
+                "hakurei_reimu": 1,
+                "1girl": 0,
+            },
+            "tag_to_category": {
+                "1girl": "General",
+                "hakurei_reimu": "Character",
+            },
+        }),
+        encoding="utf-8",
+    )
+
+    labels = cltagger_tagger.CLTagger._load_tag_mapping(mapping_path)
+
+    assert labels.names == ["1girl", "hakurei_reimu"]
+    assert labels.categories == ["General", "Character"]
+
+
 def test_preprocess_supports_nhwc_layout(isolated_secrets: Path) -> None:
     t = cltagger_tagger.CLTagger()
     t._input_size = 4
@@ -204,3 +307,72 @@ def test_preprocess_supports_nhwc_layout(isolated_secrets: Path) -> None:
     assert arr.shape == (4, 4, 3)
     assert arr[0, 0, 0] == pytest.approx(-1.0, abs=1e-4)  # B
     assert arr[0, 0, 2] == pytest.approx(1.0, abs=1e-4)   # R
+
+
+def test_v2_preprocess_uses_rgb_chw_minus_one_to_one(isolated_secrets: Path) -> None:
+    secrets.update({
+        "cltagger": {
+            "model_path": "cl_tagger_v2/v2_01a/model.onnx",
+            "tag_mapping_path": "cl_tagger_v2/v2_01a/model_vocabulary.json",
+        }
+    })
+    t = cltagger_tagger.CLTagger()
+    t._input_size = 4
+    t._input_layout = "nchw"
+
+    arr = t._preprocess(Image.new("RGB", (8, 8), (255, 0, 0)))
+
+    assert arr.shape == (3, 4, 4)
+    assert arr[0, 0, 0] == pytest.approx(1.0, abs=1e-4)    # R
+    assert arr[1, 0, 0] == pytest.approx(-1.0, abs=1e-4)   # G
+    assert arr[2, 0, 0] == pytest.approx(-1.0, abs=1e-4)   # B
+
+
+def test_prepare_v2_prefers_pixel_values_input_and_logits_output(
+    isolated_secrets: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = model_downloader.cltagger_target_root(
+        model_downloader.models_root(),
+        "cella110n/cl_tagger_v2",
+    )
+    version_dir = base / "v2_01a"
+    version_dir.mkdir(parents=True, exist_ok=True)
+    (version_dir / "model.onnx").write_bytes(b"fake-onnx")
+    (version_dir / "model.onnx.data").write_bytes(b"fake-weights")
+    (version_dir / "model_metadata.json").write_text("{}", encoding="utf-8")
+    (version_dir / "model_vocabulary.json").write_text(
+        json.dumps({"idx_to_tag": {"0": "1girl"}}),
+        encoding="utf-8",
+    )
+    secrets.update({
+        "cltagger": {
+            "model_id": "cella110n/cl_tagger_v2",
+            "model_path": "model.onnx",
+            "tag_mapping_path": "model_vocabulary.json",
+        }
+    })
+
+    def _fake_create_session(self: cltagger_tagger.CLTagger, model_path: Path) -> None:
+        self._model_path = model_path
+        self._input_name = "image"
+        self._output_names = ["probabilities"]
+        self._session = SimpleNamespace(
+            get_inputs=lambda: [
+                SimpleNamespace(name="image", shape=[1, 3, 448, 448]),
+                SimpleNamespace(name="pixel_values", shape=[1, 3, 384, 384]),
+            ],
+            get_outputs=lambda: [
+                SimpleNamespace(name="probabilities"),
+                SimpleNamespace(name="logits"),
+            ],
+        )
+
+    monkeypatch.setattr(cltagger_tagger.CLTagger, "_create_session", _fake_create_session)
+    t = cltagger_tagger.CLTagger()
+
+    t.prepare()
+
+    assert t._input_name == "pixel_values"
+    assert t._output_names == ["logits"]
+    assert t._input_size == 384

@@ -28,10 +28,15 @@ import logging
 from pathlib import Path
 from typing import Any, BinaryIO
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, UploadFile
 from fastapi.concurrency import run_in_threadpool
 
 from ...errors import _validate_component_or_400  # noqa: F401  reserved for future use
+from ....domain.errors import (
+    ConflictError,
+    NotFoundError,
+    ValidationError,
+)
 from ...schemas.ingestion import (
     DownloadRequest,
     EstimateRequest,
@@ -67,17 +72,26 @@ def estimate_download(pid: int, body: EstimateRequest) -> dict[str, Any]:
     返回 -1 表示未知（API 不支持精确计数）；前端按「下载全部」处理。
     """
     if body.api_source not in {"gelbooru", "danbooru"}:
-        raise HTTPException(400, f"不支持的 api_source: {body.api_source}")
+        raise ValidationError(
+            f"Unsupported image source: {body.api_source}",
+            code="download.source_unsupported",
+            details={"source": body.api_source}, http_status=400,
+        )
     if not body.tag.strip():
-        raise HTTPException(400, "tag 不能为空")
+        raise ValidationError(
+            "Tag is required", code="download.tag_required", http_status=400,
+        )
     if not secrets.has_credentials_for(body.api_source):
-        raise HTTPException(
-            400,
-            f"未配置 {body.api_source} 凭据，请先到「设置」页填写",
+        raise ValidationError(
+            f"No {body.api_source} credentials configured; add them on the Settings page",
+            code="download.credentials_missing",
+            details={"source": body.api_source}, http_status=400,
         )
     with db.connection_for() as conn:
         if not projects.get_project(conn, pid):
-            raise HTTPException(404, f"项目不存在: id={pid}")
+            raise NotFoundError(
+                "Project not found", code="project.not_found", details={"id": pid},
+            )
     sec = secrets.load()
     if body.api_source == "danbooru":
         opts = downloader.DownloadOptions(
@@ -110,20 +124,32 @@ def estimate_download(pid: int, body: EstimateRequest) -> dict[str, Any]:
 @router.post("/api/projects/{pid}/download")
 def start_download(pid: int, body: DownloadRequest) -> dict[str, Any]:
     if not body.tag.strip():
-        raise HTTPException(400, "tag 不能为空")
+        raise ValidationError(
+            "Tag is required", code="download.tag_required", http_status=400,
+        )
     if body.count < 1:
-        raise HTTPException(400, "count 必须 >= 1")
+        raise ValidationError(
+            "Download count must be at least 1",
+            code="download.count_invalid", http_status=400,
+        )
     if body.api_source not in {"gelbooru", "danbooru"}:
-        raise HTTPException(400, f"不支持的 api_source: {body.api_source}")
+        raise ValidationError(
+            f"Unsupported image source: {body.api_source}",
+            code="download.source_unsupported",
+            details={"source": body.api_source}, http_status=400,
+        )
     if not secrets.has_credentials_for(body.api_source):
-        raise HTTPException(
-            400,
-            f"未配置 {body.api_source} 凭据，请先到「设置」页填写",
+        raise ValidationError(
+            f"No {body.api_source} credentials configured; add them on the Settings page",
+            code="download.credentials_missing",
+            details={"source": body.api_source}, http_status=400,
         )
 
     with db.connection_for() as conn:
         if not projects.get_project(conn, pid):
-            raise HTTPException(404, f"项目不存在: id={pid}")
+            raise NotFoundError(
+                "Project not found", code="project.not_found", details={"id": pid},
+            )
         job = project_jobs.create_job(
             conn,
             project_id=pid,
@@ -190,11 +216,15 @@ async def upload_local_files(
     用户 server 控制台 + studio.log 都能看到进度，不再是"卡 100% 几十分钟无反馈"。
     """
     if not files:
-        raise HTTPException(400, "没有上传文件")
+        raise ValidationError(
+            "No files uploaded", code="dataset.no_files", http_status=400,
+        )
     with db.connection_for() as conn:
         p = projects.get_project(conn, pid)
     if not p:
-        raise HTTPException(404, f"项目不存在: id={pid}")
+        raise NotFoundError(
+            "Project not found", code="project.not_found", details={"id": pid},
+        )
     pdir = projects.project_dir(p["id"], p["slug"]) / "download"
 
     # 流式：直接传 SpooledTemporaryFile，不读进 bytes 对象。FastAPI 写完后
@@ -216,8 +246,8 @@ async def upload_local_files(
         result = await run_in_threadpool(
             uploads_svc.accept_many,
             pairs, pdir,
-            convert_to_png=sec.gelbooru.convert_to_png,
-            remove_alpha_channel=sec.gelbooru.remove_alpha_channel,
+            convert_to_png=sec.download.convert_to_png,
+            remove_alpha_channel=sec.download.remove_alpha_channel,
             on_log=_on_log,
         )
     except Exception:
@@ -233,16 +263,24 @@ def upload_local_file_from_path(pid: int, body: UploadFromPathBody) -> dict[str,
     with db.connection_for() as conn:
         p = projects.get_project(conn, pid)
     if not p:
-        raise HTTPException(404, f"项目不存在: id={pid}")
+        raise NotFoundError(
+            "Project not found", code="project.not_found", details={"id": pid},
+        )
     src = Path(body.path)
     if not src.is_absolute():
         src = (REPO_ROOT / src).resolve()
     else:
         src = src.resolve()
     if not src.exists():
-        raise HTTPException(404, f"文件不存在: {body.path}")
+        raise NotFoundError(
+            f"Path not found: {body.path}",
+            code="path.not_found", details={"path": body.path},
+        )
     if not src.is_file():
-        raise HTTPException(400, "请选择文件")
+        raise ValidationError(
+            "Selected path is not a file",
+            code="path.not_a_file", http_status=400,
+        )
     pdir = projects.project_dir(p["id"], p["slug"]) / "download"
     sec = secrets.load()
 
@@ -256,8 +294,8 @@ def upload_local_file_from_path(pid: int, body: UploadFromPathBody) -> dict[str,
             # 本路由是 sync def，FastAPI 自动跑在 threadpool worker（不会卡 event loop）
             result = uploads_svc.accept_many(
                 [(src.name, fh)], pdir,
-                convert_to_png=sec.gelbooru.convert_to_png,
-                remove_alpha_channel=sec.gelbooru.remove_alpha_channel,
+                convert_to_png=sec.download.convert_to_png,
+                remove_alpha_channel=sec.download.remove_alpha_channel,
                 on_log=_on_log,
             )
     except Exception:
@@ -271,7 +309,9 @@ def upload_local_file_from_path(pid: int, body: UploadFromPathBody) -> dict[str,
 def download_status(pid: int) -> dict[str, Any]:
     with db.connection_for() as conn:
         if not projects.get_project(conn, pid):
-            raise HTTPException(404, f"项目不存在: id={pid}")
+            raise NotFoundError(
+                "Project not found", code="project.not_found", details={"id": pid},
+            )
         job = project_jobs.latest_for(conn, project_id=pid, kind="download")
     if not job:
         return {"job": None, "log_tail": ""}
@@ -299,10 +339,14 @@ def _resolve_pv_or_404(pid: int, vid: int) -> tuple[dict[str, Any], dict[str, An
     with db.connection_for() as conn:
         p = projects.get_project(conn, pid)
         if not p:
-            raise HTTPException(404, f"项目不存在: id={pid}")
+            raise NotFoundError(
+                "Project not found", code="project.not_found", details={"id": pid},
+            )
         v = versions.get_version(conn, vid)
         if not v or v["project_id"] != pid:
-            raise HTTPException(404, f"版本不存在: id={vid}")
+            raise NotFoundError(
+                "Version not found", code="version.not_found", details={"id": vid},
+            )
     return p, v
 
 
@@ -316,42 +360,58 @@ def start_preprocess_train(
     job.version_id 派发到 _run_upscale_train。
     """
     if body.mode not in ("all", "selected", "all_force"):
-        raise HTTPException(400, f"未知 mode: {body.mode}")
+        raise ValidationError(
+            f"Invalid preprocess mode: {body.mode}",
+            code="preprocess.mode_invalid",
+            details={"mode": body.mode}, http_status=400,
+        )
     if body.tile_size <= 0:
-        raise HTTPException(400, "tile_size 必须 > 0")
+        raise ValidationError(
+            "Tile size must be greater than 0",
+            code="preprocess.tile_size_invalid", http_status=400,
+        )
     if body.device not in ("auto", "cuda", "cpu"):
-        raise HTTPException(400, f"未知 device: {body.device}")
+        raise ValidationError(
+            f"Invalid device: {body.device}",
+            code="preprocess.device_invalid",
+            details={"device": body.device}, http_status=400,
+        )
     if body.target_area is not None and (
         body.target_area < 256 * 256 or body.target_area > 4096 * 4096
     ):
-        raise HTTPException(400, f"target_area 超出范围: {body.target_area}")
+        raise ValidationError(
+            f"Target area is out of range: {body.target_area}",
+            code="preprocess.target_area_out_of_range",
+            details={"value": body.target_area}, http_status=400,
+        )
     try:
         target = model_downloader.upscaler_target(body.model)
     except ValueError as exc:
-        raise HTTPException(400, f"未知放大器: {body.model}") from exc
+        raise NotFoundError(
+            f'Upscaler "{body.model}" not found',
+            code="upscaler.not_found", details={"name": body.model},
+        ) from exc
     if not target.exists():
-        raise HTTPException(
-            409,
-            f"放大器权重未下载: {body.model}（请先到「设置 → 预处理」下载）",
+        raise ConflictError(
+            f'Upscaler weights for "{body.model}" are not downloaded; '
+            "download them under Settings → Preprocess",
+            code="upscaler.not_downloaded", details={"name": body.model},
         )
 
     p, v = _resolve_pv_or_404(pid, vid)
     with db.connection_for() as conn:
-        try:
-            job = preprocess_svc.start_job_train(
-                conn,
-                project_id=pid,
-                version_id=vid,
-                mode=body.mode,
-                names=body.names,
-                model=body.model,
-                tile_size=body.tile_size,
-                tile_pad=body.tile_pad,
-                device=body.device,
-                target_area=body.target_area,
-            )
-        except preprocess_svc.PreprocessError as exc:
-            raise HTTPException(400, str(exc)) from exc
+        job = preprocess_svc.start_job_train(
+            conn,
+            project_id=pid,
+            version_id=vid,
+            mode=body.mode,
+            names=body.names,
+            model=body.model,
+            tile_size=body.tile_size,
+            tile_pad=body.tile_pad,
+            device=body.device,
+            target_area=body.target_area,
+        )
     _publish_job_state(job)
     return job
 
@@ -422,19 +482,19 @@ def start_preprocess_crop_train(
     """train scope: 创建 crop job。`crops` 的源文件名是 train rel path
     （`"1_data/X.png"`，跟 list_crop_workspace_train 返回 `name` 一致）。"""
     if not body.crops:
-        raise HTTPException(400, "crops 不能为空")
+        raise ValidationError(
+            "No crop regions provided",
+            code="preprocess.crops_required", http_status=400,
+        )
     _resolve_pv_or_404(pid, vid)
     crops_payload: dict[str, list[dict[str, Any]]] = {
         name: [r.model_dump() for r in rects]
         for name, rects in body.crops.items()
     }
     with db.connection_for() as conn:
-        try:
-            job = preprocess_svc.start_crop_job_train(
-                conn, project_id=pid, version_id=vid, crops=crops_payload,
-            )
-        except preprocess_svc.PreprocessError as exc:
-            raise HTTPException(400, str(exc)) from exc
+        job = preprocess_svc.start_crop_job_train(
+            conn, project_id=pid, version_id=vid, crops=crops_payload,
+        )
     _publish_job_state(job)
     return job
 
@@ -463,10 +523,7 @@ def restore_preprocess_files_train(
     if not body.names:
         return {"restored": [], "missing": [], "no_origin": []}
     p, v = _resolve_pv_or_404(pid, vid)
-    try:
-        res = preprocess_svc.restore_products_train(p, v["label"], body.names)
-    except preprocess_svc.PreprocessError as exc:
-        raise HTTPException(400, str(exc)) from exc
+    res = preprocess_svc.restore_products_train(p, v["label"], body.names)
     if res["restored"]:
         _publish_project_state(p)
     return res

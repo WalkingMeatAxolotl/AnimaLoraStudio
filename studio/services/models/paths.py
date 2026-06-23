@@ -60,15 +60,105 @@ TAEFLUX_FILES = [
     "config.json",
 ]
 
-# CLTagger 子目录布局：仓库内 cl_tagger_1_02/model.onnx 等。新版本（1.03 等）
-# 出现时往这里加一行；UI 自动作为 radio 选项暴露。
-# label → (model_path, tag_mapping_path)
-CLTAGGER_VERSIONS: dict[str, tuple[str, str]] = {
-    "cl_tagger_1_02": (
-        "cl_tagger_1_02/model.onnx",
-        "cl_tagger_1_02/tag_mapping.json",
-    ),
+CLTAGGER_REPO = "cella110n/cl_tagger"
+CLTAGGER_V2_REPO = "cella110n/cl_tagger_v2"
+
+# CLTagger 预设。v1 在 cella110n/cl_tagger 的版本子目录下；v2 是独立 gated
+# repo，但文件仍在版本子目录下。新版本出现时往这里加一行，UI 自动作为 radio 暴露。
+#
+# 每个 variant 显式声明 extra_files（除 model_path / tag_mapping_path 之外还需
+# 一并下载 / 校验的文件），不再靠"v2 一定有同名 .data"的启发式：
+#   - v2 的 onnx 权重在外部 sidecar model.onnx.data（2GB+），缺它 onnxruntime 加载
+#     external data 时才黑盒炸 → 必须纳入；
+#   - model_metadata.json 一并带下，作为"下载是否完整"的就绪信号。
+# 将来若出现单文件（无 .data）的 v2 变体，把它的 extra_files 留空即可，不会误要 .data。
+CLTAGGER_VERSIONS: dict[str, dict[str, Any]] = {
+    "cl_tagger_1_02": {
+        "model_id": CLTAGGER_REPO,
+        "model_path": "cl_tagger_1_02/model.onnx",
+        "tag_mapping_path": "cl_tagger_1_02/tag_mapping.json",
+        "extra_files": [],
+        "description": "CLTagger 1.02 ONNX",
+    },
+    "cl_tagger_v2_v2_01a": {
+        "model_id": CLTAGGER_V2_REPO,
+        "model_path": "v2_01a/model.onnx",
+        "tag_mapping_path": "v2_01a/model_vocabulary.json",
+        "extra_files": [
+            "v2_01a/model.onnx.data",
+            "v2_01a/model_metadata.json",
+        ],
+        "description": "CL Tagger v2 provisional SigLIP2 ONNX",
+    },
 }
+
+
+def cltagger_preset_for_paths(
+    model_path: str, tag_mapping_path: str
+) -> Optional[dict[str, Any]]:
+    """按 (model_path, tag_mapping_path) 反查匹配的预设；自定义路径返回 None。
+
+    v1/v2 的 model_path + tag_mapping_path 两两唯一，足以定位预设（无需 model_id）。
+    """
+    norm_model = model_path.replace("\\", "/")
+    norm_mapping = tag_mapping_path.replace("\\", "/")
+    for preset in CLTAGGER_VERSIONS.values():
+        if (
+            preset["model_path"] == norm_model
+            and preset["tag_mapping_path"] == norm_mapping
+        ):
+            return preset
+    return None
+
+
+def cltagger_canonical_file_paths(
+    model_id: str,
+    model_path: str,
+    tag_mapping_path: str,
+) -> tuple[str, str]:
+    """把早期 v2 的"裸根路径"配置还原成带版本子目录的规范路径。
+
+    早期 v2 支持曾把文件存成仓库根名（model.onnx / model_vocabulary.json）。
+    这里按 model_id + 文件名在 CLTAGGER_VERSIONS 里反查回带版本子目录的路径，
+    不写死版本号——以后加 v2_02 等变体时自动适配；已是版本化路径则原样返回。
+    """
+    normalized_model = model_path.replace("\\", "/")
+    normalized_mapping = tag_mapping_path.replace("\\", "/")
+    if model_id != CLTAGGER_V2_REPO:
+        return model_path, tag_mapping_path
+    for preset in CLTAGGER_VERSIONS.values():
+        if (
+            preset["model_id"] == model_id
+            and Path(preset["model_path"]).name == normalized_model
+            and Path(preset["tag_mapping_path"]).name == normalized_mapping
+        ):
+            return preset["model_path"], preset["tag_mapping_path"]
+    return model_path, tag_mapping_path
+
+
+def is_cltagger_v2_paths(model_path: str, tag_mapping_path: str) -> bool:
+    joined = f"{model_path}/{tag_mapping_path}".replace("\\", "/").lower()
+    return (
+        "cl_tagger_v2" in joined
+        or "cl-tagger-v2" in joined
+        or Path(tag_mapping_path).name.lower() == "model_vocabulary.json"
+    )
+
+
+def cltagger_required_files(model_path: str, tag_mapping_path: str) -> tuple[str, ...]:
+    """一个 variant 完整可用所需的全部文件（下载 + 就绪校验共用）。
+
+    优先用预设里显式声明的 extra_files；非预设（用户自定义路径）回退到
+    "v2 onnx 必带同名 .data 权重"的启发式，保证手填路径也能正确校验。
+    """
+    preset = cltagger_preset_for_paths(model_path, tag_mapping_path)
+    if preset is not None:
+        extra = list(preset.get("extra_files", []))
+    elif is_cltagger_v2_paths(model_path, tag_mapping_path):
+        extra = [f"{model_path}.data"]
+    else:
+        extra = []
+    return (model_path, *extra, tag_mapping_path)
 
 # WD14 模型常驻文件名（HF SmilingWolf/* 仓库顶层都是这两个）。
 WD14_FILES = ("model.onnx", "selected_tags.csv")
@@ -254,6 +344,45 @@ def selected_anima_variant() -> str:
     return LATEST_ANIMA
 
 
+def selected_anima_transformer_path() -> str:
+    """选中主模型的 transformer 绝对路径（训练新建默认 + 测试出图共用）。
+
+    `selected_anima` 为官方 variant key → 用 `anima_main_target` 算路径；为用户
+    注册的本地 custom 路径（不在 ANIMA_VARIANTS 且文件存在）→ 直接返回该路径。
+    custom 路径失效（被删 / 移走）时回退到当前 variant，保证永不返回不存在的
+    死路径。
+    """
+    try:
+        sel = secrets.load().models.selected_anima
+    except Exception:
+        sel = None
+    if sel and sel not in ANIMA_VARIANTS:
+        p = Path(str(sel).strip()).expanduser()
+        if p.exists():
+            return str(p)
+    return str(anima_main_target(models_root(), selected_anima_variant()))
+
+
+def anima_transformer_path_for(sel: Optional[str]) -> str:
+    """把一个显式的主模型选择解析成 transformer 绝对路径。
+
+    `sel` 语义同 `secrets.models.selected_anima`：官方 variant key（"1.0" /
+    "latest" 等）或注册的本地 custom `.safetensors` 绝对路径。空值 → 回退到
+    Settings 里 `selected_anima` 的解析结果（`selected_anima_transformer_path`），
+    即先验生成 / 测试出图沿用「设置页选定的底模」。custom 路径失效（被删 /
+    移走）→ 回退当前 selected，绝不返回不存在的死路径。
+    """
+    s = (sel or "").strip()
+    if not s:
+        return selected_anima_transformer_path()
+    if s == "latest" or s in ANIMA_VARIANTS:
+        return str(anima_main_target(models_root(), s))
+    p = Path(s).expanduser()
+    if p.exists():
+        return str(p)
+    return selected_anima_transformer_path()
+
+
 def selected_upscaler() -> str:
     """读 `secrets.models.selected_upscaler`，回退 DEFAULT_UPSCALER。
 
@@ -276,17 +405,19 @@ def selected_upscaler() -> str:
     return DEFAULT_UPSCALER
 
 
-def default_paths_for_new_version() -> dict[str, str]:
+def default_paths_for_new_version(base_model: Optional[str] = None) -> dict[str, str]:
     """Studio 创建新 version 时用：返回 4 项路径的**绝对路径字符串**。
 
     根据当前 `secrets.models.root` 和 `secrets.models.selected_anima` 计算。
-    用户在 settings 切了 selected_anima → 之后新建的 version 自动用新选择；
-    已存在 version 的 yaml 不动（重现性）。
+    用户在 settings 切了 selected_anima（官方 variant 或注册的本地 custom 路径）
+    → 之后新建的 version 自动用新选择；已存在 version 的 yaml 不动（重现性）。
+
+    `base_model` 非空时只覆盖 transformer_path（先验生成 / 测试出图按用户在
+    页面上临时选定的底模出图）；vae / text_encoder / t5 仍跟随全局设置。
     """
     root = models_root()
-    variant = selected_anima_variant()
     return {
-        "transformer_path": str(anima_main_target(root, variant)),
+        "transformer_path": anima_transformer_path_for(base_model),
         "vae_path": str(anima_vae_target(root)),
         "text_encoder_path": str(qwen_dir(root)),
         "t5_tokenizer_path": str(t5_tokenizer_dir(root)),

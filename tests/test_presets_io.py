@@ -42,7 +42,7 @@ def test_write_invalid_rejected(presets_dir: Path) -> None:
 
 def test_name_validation(presets_dir: Path) -> None:
     for bad in ("../escape", "name with space", "name/sub", "name.dot"):
-        with pytest.raises(presets_io.PresetError, match="非法预设名"):
+        with pytest.raises(presets_io.PresetError, match="Invalid preset name"):
             presets_io.write_preset(bad, _payload())
 
 
@@ -62,7 +62,7 @@ def test_delete(presets_dir: Path) -> None:
 
 
 def test_delete_missing_raises(presets_dir: Path) -> None:
-    with pytest.raises(presets_io.PresetError, match="不存在"):
+    with pytest.raises(presets_io.PresetError, match="not found"):
         presets_io.delete_preset("ghost")
 
 
@@ -78,7 +78,7 @@ def test_duplicate(presets_dir: Path) -> None:
 def test_duplicate_conflict(presets_dir: Path) -> None:
     presets_io.write_preset("a", _payload())
     presets_io.write_preset("b", _payload())
-    with pytest.raises(presets_io.PresetError, match="已存在"):
+    with pytest.raises(presets_io.PresetError, match="already exists"):
         presets_io.duplicate_preset("a", "b")
 
 
@@ -132,7 +132,7 @@ def test_parse_migrates_legacy_attention_fields() -> None:
 def test_parse_rejects_non_mapping() -> None:
     # 顶层是 list 不是 dict
     raw = b"- foo\n- bar\n"
-    with pytest.raises(presets_io.PresetError, match="不是 mapping"):
+    with pytest.raises(presets_io.PresetError, match="Preset file format is invalid"):
         presets_io.parse_preset_bytes(raw, "list.yaml")
 
 
@@ -160,7 +160,7 @@ def test_parse_empty_filename_fallback() -> None:
 
 def test_preset_path_is_public_alias() -> None:
     assert presets_io.preset_path("foo").name == "foo.yaml"
-    with pytest.raises(presets_io.PresetError, match="非法预设名"):
+    with pytest.raises(presets_io.PresetError, match="Invalid preset name"):
         presets_io.preset_path("bad/name")
 
 

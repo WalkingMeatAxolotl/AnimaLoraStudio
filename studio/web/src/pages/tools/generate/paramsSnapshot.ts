@@ -66,6 +66,9 @@ export interface GenerateParamsSnapshot {
   /** v1 早期快照无此二字段（当时固定 er_sde/simple）；回填时缺省到默认值 */
   sampler_name?: string
   scheduler?: string
+  /** 当时选用的底模（官方 variant key 或本地 custom 路径）；null/缺省 = 跟随
+   *  设置页默认底模。老快照无此字段，回填到 null（沿用默认）。 */
+  base_model?: string | null
   /** xy 模式下 daemon 端强制 1，仅 single 有意义 */
   count: number
   seed: number
@@ -149,6 +152,8 @@ export interface AppliedSnapshot {
   scheduler: SchedulerName
   count: number
   seed: number
+  /** 当时选用的底模；null = 跟随设置默认 */
+  baseModel: string | null
   datasetPick: DatasetPick | null
   /** 按 mode 二选一灌入 prefs.singleLoras / prefs.xyLoras */
   loras: LoraEntry[]
@@ -221,6 +226,7 @@ export function applySnapshot(
     scheduler: coerceScheduler(snap.scheduler),
     count: snap.count,
     seed: snap.seed,
+    baseModel: snap.base_model ?? null,
     datasetPick,
     loras: resolved,
     unresolvedLoraCount: unresolved,

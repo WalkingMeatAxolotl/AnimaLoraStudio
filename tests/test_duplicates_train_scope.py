@@ -12,6 +12,7 @@ import pytest
 from PIL import Image
 
 from studio import db
+from studio.domain.errors import InvalidPathError, NotFoundError
 from studio.services.preprocess import duplicates as duplicate_finder
 from studio.services.preprocess import manifest as preprocess_manifest
 from studio.services.projects import projects, versions
@@ -89,7 +90,7 @@ def test_resolve_train_sources_empty_when_no_train(env) -> None:
 
 
 def test_resolve_train_sources_mismatched_version_raises(env) -> None:
-    """version_id 跟 project_id 不一致 → DuplicateFinderError。"""
+    """version_id 跟 project_id 不一致 → NotFoundError(version.not_found)。"""
     # 另开一个 project + version
     with db.connection_for(env["db"]) as conn:
         other_p = projects.create_project(conn, title="Other")
@@ -97,10 +98,11 @@ def test_resolve_train_sources_mismatched_version_raises(env) -> None:
             conn, project_id=other_p["id"], label="v1"
         )
     with db.connection_for(env["db"]) as conn:
-        with pytest.raises(duplicate_finder.DuplicateFinderError):
+        with pytest.raises(NotFoundError) as exc:
             duplicate_finder._resolve_train_sources(
                 conn, env["p"]["id"], other_v["id"], env["pdir"],
             )
+        assert exc.value.code == "version.not_found"
 
 
 # ---------------------------------------------------------------------------
@@ -129,21 +131,23 @@ def test_apply_train_duplicate_marks_manifest(env) -> None:
 
 def test_apply_train_duplicate_rejects_invalid_rel_name(env) -> None:
     with db.connection_for(env["db"]) as conn:
-        with pytest.raises(duplicate_finder.DuplicateFinderError):
+        with pytest.raises(InvalidPathError) as exc:
             duplicate_finder.apply_train_duplicate_removals(
                 conn, env["p"]["id"], env["v"]["id"],
                 names=["../etc/passwd"],
             )
+        assert exc.value.code == "path.invalid"
 
 
 def test_apply_train_duplicate_rejects_flat_name(env) -> None:
     """rel path 必须含 folder 前缀（两段格式）。"""
     with db.connection_for(env["db"]) as conn:
-        with pytest.raises(duplicate_finder.DuplicateFinderError):
+        with pytest.raises(InvalidPathError) as exc:
             duplicate_finder.apply_train_duplicate_removals(
                 conn, env["p"]["id"], env["v"]["id"],
                 names=["X.png"],  # 平铺，缺 folder
             )
+        assert exc.value.code == "path.invalid"
 
 
 def test_apply_train_duplicate_mismatched_version_raises(env) -> None:
@@ -153,10 +157,11 @@ def test_apply_train_duplicate_mismatched_version_raises(env) -> None:
             conn, project_id=other_p["id"], label="v1"
         )
     with db.connection_for(env["db"]) as conn:
-        with pytest.raises(duplicate_finder.DuplicateFinderError):
+        with pytest.raises(NotFoundError) as exc:
             duplicate_finder.apply_train_duplicate_removals(
                 conn, env["p"]["id"], other_v["id"],
                 names=["1_data/A.png"],
             )
+        assert exc.value.code == "version.not_found"
 
 

@@ -25,6 +25,30 @@ def _blacklist_key(tag: str) -> str:
     return tag.replace("_", " ").strip().lower()
 
 
+_CATEGORY_ALIASES = {
+    "0": "General",
+    "general": "General",
+    "tag": "General",
+    "tags": "General",
+    "4": "Character",
+    "character": "Character",
+    "characters": "Character",
+    "9": "Rating",
+    "rating": "Rating",
+    "copyright": "Copyright",
+    "meta": "Meta",
+    "model": "Model",
+    "quality": "Quality",
+}
+
+
+def _normalize_category(raw: object | None) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return "General"
+    return _CATEGORY_ALIASES.get(text.lower(), text)
+
+
 @dataclass
 class _LabelData:
     names: list[str | None]
@@ -40,12 +64,23 @@ class CLTagger(OnnxTaggerBase):
         self._labels: _LabelData | None = None
         self._input_size: int = 448
         self._input_layout: str = "nchw"
+        cfg = self._cfg()
+        self._is_v2 = model_downloader.is_cltagger_v2_paths(
+            cfg.model_path, cfg.tag_mapping_path
+        )
 
     def _cfg(self) -> "secrets.CLTaggerConfig":
         base = secrets.load().cltagger.model_dump()
         for k, v in self._overrides.items():
             if k in base:
                 base[k] = v
+        model_path, tag_mapping_path = model_downloader.cltagger_canonical_file_paths(
+            str(base.get("model_id", "")),
+            str(base.get("model_path", "")),
+            str(base.get("tag_mapping_path", "")),
+        )
+        base["model_path"] = model_path
+        base["tag_mapping_path"] = tag_mapping_path
         return secrets.CLTaggerConfig(**base)
 
     def _get_batch_size_cfg(self) -> int:
@@ -53,8 +88,6 @@ class CLTagger(OnnxTaggerBase):
 
     def _compute_base(self) -> Path:
         cfg = self._cfg()
-        if cfg.local_dir:
-            return Path(cfg.local_dir)
         return model_downloader.cltagger_target_root(model_downloader.models_root(), cfg.model_id)
 
     def _local_model_files_status(self) -> tuple[Path, Path, bool]:
@@ -62,13 +95,14 @@ class CLTagger(OnnxTaggerBase):
         base = self._compute_base()
         model_path = base / cfg.model_path
         mapping_path = base / cfg.tag_mapping_path
-        if model_path.exists() and mapping_path.exists():
+        # v2 权重在外部 sidecar model.onnx.data（2GB+）里，必须连它一起校验：
+        # 否则 onnx 图就绪但权重缺失，is_available 会误报"可用"，prepare 时
+        # onnxruntime 才在加载 external data 处炸，错误对用户是黑盒。
+        required = model_downloader.cltagger_required_files(
+            cfg.model_path, cfg.tag_mapping_path
+        )
+        if all((base / f).exists() for f in required):
             return model_path, mapping_path, True
-        if cfg.local_dir:
-            flat_model = base / Path(cfg.model_path).name
-            flat_mapping = base / Path(cfg.tag_mapping_path).name
-            if flat_model.exists() and flat_mapping.exists():
-                return flat_model, flat_mapping, True
         return model_path, mapping_path, False
 
     def _resolve_model_files(self) -> tuple[Path, Path]:
@@ -76,18 +110,17 @@ class CLTagger(OnnxTaggerBase):
         model_path, mapping_path, ok = self._local_model_files_status()
         if ok:
             return model_path, mapping_path
-        if cfg.local_dir:
-            raise FileNotFoundError(
-                "local_dir 缺少 CLTagger 模型文件或 tag_mapping.json: "
-                f"{model_path} / {mapping_path}"
-            )
         model_downloader.download_cltagger(self._compute_base(), cfg, on_log=logger.info)
-        missing: list[str] = []
-        if not model_path.exists():
-            missing.append(f"model: {model_path}")
-        if not mapping_path.exists():
-            missing.append(f"mapping: {mapping_path}")
-        if missing:
+        model_path, mapping_path, ok = self._local_model_files_status()
+        if not ok:
+            base = self._compute_base()
+            missing = [
+                str(base / f)
+                for f in model_downloader.cltagger_required_files(
+                    cfg.model_path, cfg.tag_mapping_path
+                )
+                if not (base / f).exists()
+            ]
             raise FileNotFoundError(
                 f"CLTagger 下载后仍缺少 {', '.join(missing)}（请到设置→模型管理查看下载日志）"
             )
@@ -99,11 +132,6 @@ class CLTagger(OnnxTaggerBase):
         except Exception as exc:  # noqa: BLE001
             return False, str(exc)
         if not ok:
-            if self._cfg().local_dir:
-                return False, (
-                    "local_dir 缺少 CLTagger 模型文件或 tag_mapping.json: "
-                    f"{model_path} / {mapping_path}"
-                )
             return False, f"需下载模型: {model_path.parent.name}"
         return True, f"模型: {model_path.parent.name}"
 
@@ -113,10 +141,23 @@ class CLTagger(OnnxTaggerBase):
         model_path, mapping_path = self._resolve_model_files()
         self._create_session(model_path)
         assert self._session is not None
-        input_meta = self._session.get_inputs()[0]
+        inputs = list(self._session.get_inputs())
+        input_meta = self._select_input_meta(inputs)
+        self._input_name = input_meta.name
+        if self._is_v2:
+            logits = [o.name for o in self._session.get_outputs() if o.name == "logits"]
+            if logits:
+                self._output_names = logits
         self._input_layout = self._infer_input_layout(input_meta.shape)
         self._input_size = self._infer_input_size(input_meta.shape, self._input_layout)
         self._labels = self._load_tag_mapping(mapping_path)
+
+    def _select_input_meta(self, inputs: list[object]) -> object:
+        if self._is_v2:
+            for meta in inputs:
+                if getattr(meta, "name", None) == "pixel_values":
+                    return meta
+        return inputs[0]
 
     @staticmethod
     def _infer_input_layout(shape: list[object]) -> str:
@@ -147,10 +188,17 @@ class CLTagger(OnnxTaggerBase):
     @staticmethod
     def _load_tag_mapping(mapping_path: Path) -> _LabelData:
         raw = json.loads(mapping_path.read_text(encoding="utf-8"))
-        if isinstance(raw, dict) and "idx_to_tag" in raw:
-            idx_to_tag = {int(k): str(v) for k, v in raw["idx_to_tag"].items()}
-            tag_to_category = {str(k): str(v) for k, v in raw.get("tag_to_category", {}).items()}
-        elif isinstance(raw, dict):
+        if not isinstance(raw, dict):
+            raise ValueError("Unsupported CLTagger tag_mapping.json format")
+
+        category_ids, category_tags = CLTagger._parse_vocabulary_categories(raw)
+        if "idx_to_tag" in raw:
+            idx_to_tag = CLTagger._parse_idx_to_tag(raw["idx_to_tag"])
+            tag_to_category = CLTagger._parse_tag_to_category(raw, category_ids)
+        elif "tag_to_idx" in raw:
+            idx_to_tag = CLTagger._parse_tag_to_idx(raw["tag_to_idx"])
+            tag_to_category = CLTagger._parse_tag_to_category(raw, category_ids)
+        else:
             idx_to_tag = {}
             tag_to_category = {}
             for k, v in raw.items():
@@ -158,17 +206,64 @@ class CLTagger(OnnxTaggerBase):
                     raise ValueError("Unsupported CLTagger tag_mapping.json format")
                 tag = str(v["tag"])
                 idx_to_tag[int(k)] = tag
-                tag_to_category[tag] = str(v.get("category", "General"))
-        else:
-            raise ValueError("Unsupported CLTagger tag_mapping.json format")
+                tag_to_category[tag] = _normalize_category(v.get("category", "General"))
 
         size = max(idx_to_tag.keys(), default=-1) + 1
         names: list[str | None] = [None] * size
         categories = ["General"] * size
         for idx, tag in idx_to_tag.items():
             names[idx] = tag
-            categories[idx] = tag_to_category.get(tag, "General")
+            categories[idx] = tag_to_category.get(tag, category_tags.get(tag, "General"))
         return _LabelData(names=names, categories=categories)
+
+    @staticmethod
+    def _parse_idx_to_tag(raw: object) -> dict[int, str]:
+        if isinstance(raw, dict):
+            return {int(k): str(v) for k, v in raw.items()}
+        if isinstance(raw, list):
+            return {i: str(v) for i, v in enumerate(raw) if str(v).strip()}
+        raise ValueError("Unsupported CLTagger idx_to_tag format")
+
+    @staticmethod
+    def _parse_tag_to_idx(raw: object) -> dict[int, str]:
+        if not isinstance(raw, dict):
+            raise ValueError("Unsupported CLTagger tag_to_idx format")
+        return {int(v): str(k) for k, v in raw.items()}
+
+    @staticmethod
+    def _parse_tag_to_category(
+        raw: dict[str, object], category_ids: dict[str, str]
+    ) -> dict[str, str]:
+        tag_to_category_raw = raw.get("tag_to_category", {})
+        if not isinstance(tag_to_category_raw, dict):
+            return {}
+        out: dict[str, str] = {}
+        for tag, category in tag_to_category_raw.items():
+            category_text = str(category).strip()
+            out[str(tag)] = category_ids.get(
+                category_text,
+                _normalize_category(category_text),
+            )
+        return out
+
+    @staticmethod
+    def _parse_vocabulary_categories(raw: dict[str, object]) -> tuple[dict[str, str], dict[str, str]]:
+        categories = raw.get("categories", {})
+        if not isinstance(categories, dict):
+            return {}, {}
+        id_to_name: dict[str, str] = {}
+        tag_to_name: dict[str, str] = {}
+        for key, value in categories.items():
+            key_text = str(key).strip()
+            if isinstance(value, (str, int, float, bool)):
+                id_to_name[key_text] = _normalize_category(value)
+            elif isinstance(value, list):
+                category_name = _normalize_category(key_text)
+                for tag in value:
+                    tag_text = str(tag).strip()
+                    if tag_text:
+                        tag_to_name[tag_text] = category_name
+        return id_to_name, tag_to_name
 
     def _preprocess(self, img: Image.Image) -> np.ndarray:
         size = self._input_size
@@ -185,6 +280,12 @@ class CLTagger(OnnxTaggerBase):
             canvas.paste(img, ((side - img.width) // 2, (side - img.height) // 2))
             img = canvas
         img = img.resize((size, size), Image.Resampling.BICUBIC)
+        if self._is_v2:
+            arr = np.asarray(img, dtype=np.float32) / 127.5 - 1.0
+            if self._input_layout == "nchw":
+                arr = arr.transpose(2, 0, 1)
+            return arr
+
         arr = np.asarray(img, dtype=np.float32) / 255.0
         arr = arr[..., ::-1]  # RGB -> BGR
         if self._input_layout == "nchw":

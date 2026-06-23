@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
@@ -12,9 +12,6 @@ const initialServerState = {
   gelbooru: {
     user_id: 'alice',
     api_key: '***', // 已保存，掩码
-    save_tags: false,
-    convert_to_png: true,
-    remove_alpha_channel: false,
   },
   danbooru: { username: '', api_key: '', account_type: 'free' },
   download: {
@@ -22,6 +19,9 @@ const initialServerState = {
     parallel_workers: 4,
     api_rate_per_sec: 2,
     cdn_rate_per_sec: 5,
+    save_tags: false,
+    convert_to_png: true,
+    remove_alpha_channel: false,
   },
   reg: { default_excluded_tags: [] },
   huggingface: { token: '', endpoint: '' },
@@ -103,7 +103,6 @@ const initialServerState = {
       'SmilingWolf/wd-vit-large-tagger-v3',
       'SmilingWolf/wd-v1-4-convnext-tagger-v2',
     ],
-    local_dir: null,
     threshold_general: 0.35,
     threshold_character: 0.85,
     blacklist_tags: [],
@@ -113,7 +112,6 @@ const initialServerState = {
     model_id: 'cella110n/cl_tagger',
     model_path: 'cl_tagger_1_02/model.onnx',
     tag_mapping_path: 'cl_tagger_1_02/tag_mapping.json',
-    local_dir: null,
     threshold_general: 0.35,
     threshold_character: 0.6,
     add_copyright_tag: true,
@@ -185,7 +183,35 @@ const emptyModelsCatalog = {
     target_dir: '/tmp/anima/cltagger',
     current_model_path: 'cl_tagger_1_02/model.onnx',
     current_tag_mapping_path: 'cl_tagger_1_02/tag_mapping.json',
-    variants: [],
+    variants: [
+      {
+        label: 'cl_tagger_1_02',
+        model_id: 'cella110n/cl_tagger',
+        model_path: 'cl_tagger_1_02/model.onnx',
+        tag_mapping_path: 'cl_tagger_1_02/tag_mapping.json',
+        is_current: true,
+        exists: false,
+        size: 0,
+        files: [],
+      },
+      {
+        label: 'cl_tagger_v2_v2_01a',
+        model_id: 'cella110n/cl_tagger_v2',
+        model_path: 'v2_01a/model.onnx',
+        tag_mapping_path: 'v2_01a/model_vocabulary.json',
+        is_current: false,
+        exists: false,
+        size: 0,
+        files: [],
+      },
+    ],
+  },
+  download_source_options: {
+    training: { current: 'huggingface', available: ['huggingface', 'modelscope'] },
+    wd14: { current: 'huggingface', available: ['huggingface', 'modelscope'] },
+    upscaler: { current: 'huggingface', available: ['huggingface', 'modelscope'] },
+    cltagger: { current: 'huggingface', available: ['huggingface'] },
+    taeflux: { current: 'huggingface', available: ['huggingface'] },
   },
   downloads: {},
 }
@@ -256,7 +282,10 @@ function renderPage() {
 
 describe('SettingsPage (PP0)', () => {
   it('hydrates from /api/secrets and shows masked sensitive fields as placeholder', async () => {
+    const user = userEvent.setup()
     renderPage()
+    // gelbooru 凭证已挪到「密钥」tab
+    await user.click(await screen.findByRole('button', { name: '密钥' }))
     await waitFor(() =>
       expect(screen.getByDisplayValue('alice')).toBeInTheDocument()
     )
@@ -269,6 +298,7 @@ describe('SettingsPage (PP0)', () => {
   it('PUT /api/secrets only sends the changed leaves', async () => {
     const user = userEvent.setup()
     renderPage()
+    await user.click(await screen.findByRole('button', { name: '密钥' }))
     const userInput = await screen.findByDisplayValue('alice')
     await user.clear(userInput)
     await user.type(userInput, 'bob')
@@ -289,6 +319,45 @@ describe('SettingsPage (PP0)', () => {
     })
   })
 
+  it('credentials tab gathers all service tokens; old sections no longer hold them', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: '密钥' }))
+    // 下载 / 抓取类凭证聚到密钥 tab（WandB token 留在监控页跟其配置一起）
+    for (const name of ['HuggingFace', 'ModelScope', 'Gelbooru', 'Danbooru']) {
+      expect(screen.getByRole('heading', { name })).toBeInTheDocument()
+    }
+    expect(screen.queryByRole('heading', { name: 'Weights & Biases' })).not.toBeInTheDocument()
+    // gelbooru user_id 现在在密钥 tab 编辑
+    expect(screen.getByDisplayValue('alice')).toBeInTheDocument()
+
+    // 原数据集 tab 的 gelbooru 不再有 user_id（凭证已挪走，无指引文案）
+    await user.click(await screen.findByRole('button', { name: '数据集' }))
+    expect(screen.queryByDisplayValue('alice')).not.toBeInTheDocument()
+  })
+
+  it('per-item source dropdown writes download_sources immediately', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: '打标' }))
+    // WD14 卡的源 dropdown：本 tab 唯一带 ModelScope 选项的 select
+    // （CLTagger 是固定 HF 单选，无 ModelScope 选项）。
+    const msOption = await screen.findByRole('option', { name: /ModelScope/ })
+    const select = msOption.closest('select') as HTMLSelectElement
+    await user.selectOptions(select, 'modelscope')
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(([url, init]) => {
+        if (init?.method !== 'PUT' || !String(url).includes('/api/secrets')) return false
+        try { return 'download_sources' in JSON.parse(String(init.body)) } catch { return false }
+      })
+      expect(putCall).toBeDefined()
+      const body = JSON.parse(String(putCall![1].body))
+      expect(body.download_sources).toEqual({ wd14: 'modelscope' })
+    })
+  })
+
   it('shows LLM request pool controls on the tagging settings tab', async () => {
     const user = userEvent.setup()
     renderPage()
@@ -301,4 +370,30 @@ describe('SettingsPage (PP0)', () => {
     expect(screen.getByText('Max/min')).toBeInTheDocument()
     expect(screen.getAllByText('0 = no limit').length).toBeGreaterThanOrEqual(2)
   })
+
+
+  it('selecting CLTagger v2 updates model id and versioned file paths', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: '打标' }))
+    const v2Row = screen.getByText('cl_tagger_v2_v2_01a').closest('li')
+    expect(v2Row).not.toBeNull()
+    await user.click(within(v2Row as HTMLElement).getByRole('radio'))
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(
+        ([, init]) => init?.method === 'PUT'
+      )
+      expect(putCall).toBeDefined()
+      const body = JSON.parse(String(putCall![1].body))
+      expect(body.cltagger).toMatchObject({
+        model_id: 'cella110n/cl_tagger_v2',
+        model_path: 'v2_01a/model.onnx',
+        tag_mapping_path: 'v2_01a/model_vocabulary.json',
+      })
+    })
+  })
+
 })

@@ -15,11 +15,12 @@ import json as _json
 import time
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from fastapi.responses import Response
 
 from ...schemas.queue import ImportRequest
 from .... import db
+from ....domain.errors import NotFoundError, ValidationError
 from ....services.presets import io as presets_io
 from ....services import queue_io, task_snapshot
 from ....infrastructure.event_bus import bus
@@ -39,8 +40,11 @@ def export_queue(ids: str = "") -> Response:
     if ids.strip():
         try:
             id_list = [int(x) for x in ids.split(",") if x.strip()]
-        except ValueError:
-            raise HTTPException(400, "ids must be comma-separated integers")
+        except ValueError as exc:
+            raise ValidationError(
+                "The selected task IDs are not valid",
+                code="queue.export_ids_invalid", http_status=400,
+            ) from exc
     else:
         with db.connection_for() as conn:
             id_list = [t["id"] for t in db.list_tasks(conn)]
@@ -65,7 +69,11 @@ def import_queue(body: ImportRequest) -> dict[str, Any]:
     try:
         return queue_io.import_tasks(body.payload)
     except (ValueError, presets_io.PresetError) as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise ValidationError(
+            f"Could not import the queue: {exc}",
+            code="queue.import_invalid", details={"reason": str(exc)},
+            http_status=400,
+        ) from exc
 
 
 @router.get("/api/queue/{task_id}/snapshot/config")
@@ -78,8 +86,11 @@ def get_task_snapshot_config(task_id: int) -> dict[str, Any]:
     with db.connection_for() as conn:
         task = db.get_task(conn, task_id)
     if not task:
-        raise HTTPException(404, "task not found")
+        raise NotFoundError("Task not found", code="task.not_found", details={"task_id": task_id})
     data = task_snapshot.read_snapshot_config(task_id)
     if data is None:
-        raise HTTPException(404, "snapshot not found")
+        raise NotFoundError(
+            "No saved configuration for this task",
+            code="task.snapshot_not_found", details={"task_id": task_id},
+        )
     return data

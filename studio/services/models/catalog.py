@@ -28,6 +28,7 @@ from .paths import (
     WD14_FILES,
     anima_main_target,
     anima_vae_target,
+    cltagger_required_files,
     cltagger_target_root,
     models_root,
     qwen_dir,
@@ -72,11 +73,23 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
             **st,
         })
 
+    # 用户注册的本地 custom 主模型（PathPicker 选盘上已有的 .safetensors）。
+    models_cfg = secrets.load().models
+    custom_anima = []
+    for p in models_cfg.custom_anima_paths:
+        target = Path(str(p)).expanduser()
+        custom_anima.append({
+            "path": p,
+            "name": target.name,
+            **_file_status(target),
+        })
+
     vae_target = anima_vae_target(r)
     qwen_d = qwen_dir(r)
     t5_d = t5_tokenizer_dir(r)
     cl_cfg = secrets.load().cltagger
     wd14_cfg = secrets.load().wd14
+    src_cfg = secrets.load().download_sources
 
     # WD14 候选每个 model_id 一行：两文件全在才算"已下载"。
     wd14_variants = []
@@ -94,21 +107,35 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
             "files": files,
         })
 
-    # CLTagger 版本预设（CLTAGGER_VERSIONS 写死的子目录布局）。
+    # CLTagger 版本预设（每个 variant 可以来自不同 HF repo）。
     cl_root = cltagger_target_root(r, cl_cfg.model_id)
     cl_variants = []
-    for label, (mp, tmp) in CLTAGGER_VERSIONS.items():
+    for label, preset in CLTAGGER_VERSIONS.items():
+        mid = preset["model_id"]
+        mp = preset["model_path"]
+        tmp = preset["tag_mapping_path"]
+        variant_root = cltagger_target_root(r, mid)
+        version_dir = variant_root / Path(mp).parent
         files = [
-            {"name": mp, **_file_status(cl_root / mp)},
-            {"name": tmp, **_file_status(cl_root / tmp)},
+            {"name": f, **_file_status(variant_root / f)}
+            for f in cltagger_required_files(mp, tmp)
         ]
         all_exist = all(f["exists"] for f in files)
         total_size = sum(f["size"] for f in files)
         cl_variants.append({
             "label": label,
+            "model_id": mid,
             "model_path": mp,
             "tag_mapping_path": tmp,
-            "is_current": cl_cfg.model_path == mp and cl_cfg.tag_mapping_path == tmp,
+            "description": preset.get("description", ""),
+            # target_path = repo 本地根；version_dir = 该版本子目录（UI 提示文件落点）。
+            "target_path": str(variant_root),
+            "version_dir": str(version_dir),
+            "is_current": (
+                cl_cfg.model_id == mid
+                and cl_cfg.model_path == mp
+                and cl_cfg.tag_mapping_path == tmp
+            ),
             "exists": all_exist,
             "size": total_size,
             "files": files,
@@ -168,6 +195,8 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
             "description": "Cosmos transformer (~4 GB)",
             "repo": ANIMA_REPO,
             "variants": anima_variants,
+            "custom": custom_anima,
+            "selected": models_cfg.selected_anima,
             "latest": LATEST_ANIMA,
         },
         "anima_vae": {
@@ -224,6 +253,19 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
             "current": selected_label,
             "target_dir": str(upscaler_dir(r)),
             "variants": upscaler_variants,
+        },
+        # 按类型的下载源选择：双源类型给 dropdown，固定 HF 的给单选指示。
+        # current 来自 secrets.download_sources（已迁移种子）；available 决定前端
+        # 渲染真 dropdown 还是 1-option 禁用框。
+        "download_source_options": {
+            "training": {"current": src_cfg.get("training", "huggingface"),
+                         "available": ["huggingface", "modelscope"]},
+            "wd14": {"current": src_cfg.get("wd14", "huggingface"),
+                     "available": ["huggingface", "modelscope"]},
+            "upscaler": {"current": src_cfg.get("upscaler", "huggingface"),
+                         "available": ["huggingface", "modelscope"]},
+            "cltagger": {"current": "huggingface", "available": ["huggingface"]},
+            "taeflux": {"current": "huggingface", "available": ["huggingface"]},
         },
         "downloads": get_status_snapshot(),
     }

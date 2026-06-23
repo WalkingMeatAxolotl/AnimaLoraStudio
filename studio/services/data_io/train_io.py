@@ -65,7 +65,7 @@ class BundleOptions:
     include_config: bool = False
 
 
-from studio.domain.errors import DomainError
+from studio.domain.errors import DomainError, NotFoundError
 
 
 class TrainIOError(DomainError):
@@ -91,14 +91,22 @@ def export_train(
     """
     v = versions.get_version(conn, version_id)
     if not v:
-        raise TrainIOError(f"版本不存在: id={version_id}")
+        raise NotFoundError(
+            "Version not found", code="version.not_found",
+            details={"id": version_id},
+        )
     p = projects.get_project(conn, v["project_id"])
     if not p:
-        raise TrainIOError(f"项目不存在: id={v['project_id']}")
+        raise NotFoundError(
+            "Project not found", code="project.not_found",
+            details={"id": v["project_id"]},
+        )
 
     train_dir = versions.version_dir(p["id"], p["slug"], v["label"]) / "train"
     if not train_dir.exists():
-        raise TrainIOError("train/ 目录不存在")
+        raise TrainIOError(
+            "No images to export", code="dataset.export_empty", http_status=400,
+        )
 
     concepts: list[dict[str, Any]] = []
     image_count = 0
@@ -127,7 +135,9 @@ def export_train(
             image_count += cnt
 
     if image_count == 0:
-        raise TrainIOError("train/ 下无图片，无可导出内容")
+        raise TrainIOError(
+            "No images to export", code="dataset.export_empty", http_status=400,
+        )
 
     manifest = {
         "schema_version": SCHEMA_VERSION,
@@ -186,9 +196,16 @@ def _read_manifest(zf: zipfile.ZipFile) -> dict[str, Any]:
         with zf.open(MANIFEST_NAME) as fh:
             return json.loads(fh.read().decode("utf-8"))
     except KeyError as exc:
-        raise TrainIOError("zip 缺少 manifest.json") from exc
+        raise TrainIOError(
+            "Import file is invalid: missing manifest",
+            code="dataset.import_invalid", http_status=400,
+        ) from exc
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise TrainIOError(f"manifest.json 解析失败: {exc}") from exc
+        raise TrainIOError(
+            f"Import file is invalid: {exc}",
+            code="dataset.import_invalid",
+            details={"reason": str(exc)}, http_status=400,
+        ) from exc
 
 
 def _resolve_slug_conflict(
@@ -218,7 +235,9 @@ def import_train(
     返回 {"project": {...}, "version": {...}, "stats": {...}}。
     """
     if not zip_path.exists():
-        raise TrainIOError(f"zip 不存在: {zip_path}")
+        raise NotFoundError(
+            "File not found", code="file.not_found", http_status=404,
+        )
 
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
@@ -237,12 +256,16 @@ def import_train(
                 inner = _safe_arc(info.filename)
                 if inner is None:
                     raise TrainIOError(
-                        f"非法路径: {info.filename!r}（仅允许 train/{{folder}}/{{file}}）"
+                        "Import file contains an invalid path",
+                        code="dataset.import_invalid", http_status=400,
                     )
                 entries.append((info, inner))
 
             if not entries:
-                raise TrainIOError("zip 中无可导入内容")
+                raise TrainIOError(
+                    "Import file contains nothing to import",
+                    code="dataset.import_empty", http_status=400,
+                )
 
             # 建 project + v1（用 DAO，自动建目录树）
             slug = _resolve_slug_conflict(conn, base_slug)
@@ -260,11 +283,18 @@ def import_train(
                 folder, filename = inner.split("/", 1)
                 # 文件名再保险一层 + containment check
                 if filename.startswith("."):
-                    raise TrainIOError(f"非法文件名: {filename!r}")
+                    raise TrainIOError(
+                        "Import file contains an invalid filename",
+                        code="dataset.import_invalid", http_status=400,
+                    )
                 try:
                     target = safe_join(train_dir, folder, filename)
                 except ValueError as exc:
-                    raise TrainIOError(f"非法文件名: {filename!r} ({exc})") from exc
+                    raise TrainIOError(
+                        "Import file contains an invalid filename",
+                        code="dataset.import_invalid",
+                        details={"reason": str(exc)}, http_status=400,
+                    ) from exc
                 target.parent.mkdir(parents=True, exist_ok=True)
                 seen_folders.add(folder)
                 with zf.open(info) as src, target.open("wb") as dst:
@@ -293,7 +323,10 @@ def import_train(
             assert v is not None and p is not None
 
     except zipfile.BadZipFile as exc:
-        raise TrainIOError(f"zip 损坏: {exc}") from exc
+        raise TrainIOError(
+            "Import file is corrupt", code="dataset.import_corrupt",
+            http_status=400,
+        ) from exc
 
     stats = {
         "image_count": image_count,
@@ -402,14 +435,24 @@ def export_bundle(
     返回 {"manifest": {...}, "size_bytes": int}。
     """
     if not opts.train and not opts.reg and not opts.include_config:
-        raise TrainIOError("至少选择一项导出内容（训练集 / 正则集 / 训练配置）")
+        raise TrainIOError(
+            "Select at least one item to export (training set, regularization "
+            "set, or training configuration)",
+            code="dataset.export_nothing_selected", http_status=400,
+        )
 
     v = versions.get_version(conn, version_id)
     if not v:
-        raise TrainIOError(f"版本不存在: id={version_id}")
+        raise NotFoundError(
+            "Version not found", code="version.not_found",
+            details={"id": version_id},
+        )
     p = projects.get_project(conn, v["project_id"])
     if not p:
-        raise TrainIOError(f"项目不存在: id={v['project_id']}")
+        raise NotFoundError(
+            "Project not found", code="project.not_found",
+            details={"id": v["project_id"]},
+        )
 
     vdir = versions.version_dir(p["id"], p["slug"], v["label"])
     payload: list[tuple[Path, str]] = []
@@ -420,7 +463,10 @@ def export_bundle(
     if opts.train:
         tp, train_stats = _collect_train(vdir / "train", opts.train_captions)
         if not tp:
-            raise TrainIOError("train/ 下无图片，无可导出内容")
+            raise TrainIOError(
+                "No images to export", code="dataset.export_empty",
+                http_status=400,
+            )
         payload.extend(tp)
 
     # --- reg section ---
@@ -570,7 +616,9 @@ def import_bundle(
     返回 {"project": {...}, "version": {...}, "stats": {...}}。
     """
     if not zip_path.exists():
-        raise TrainIOError(f"zip 不存在: {zip_path}")
+        raise NotFoundError(
+            "File not found", code="file.not_found", http_status=404,
+        )
 
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
@@ -596,11 +644,15 @@ def import_bundle(
                     inner = _safe_arc(info.filename)
                     if inner is None:
                         raise TrainIOError(
-                            f"非法路径: {info.filename!r}（仅允许 train/{{folder}}/{{file}}）"
+                            "Import file contains an invalid path",
+                            code="dataset.import_invalid", http_status=400,
                         )
                     entries_v1.append((info, inner))
                 if not entries_v1:
-                    raise TrainIOError("zip 中无可导入内容")
+                    raise TrainIOError(
+                        "Import file contains nothing to import",
+                        code="dataset.import_empty", http_status=400,
+                    )
 
                 slug = _resolve_slug_conflict(conn, base_slug)
                 p = projects.create_project(conn, title=title, slug=slug,
@@ -613,7 +665,10 @@ def import_bundle(
                 for info, inner in entries_v1:
                     folder, filename = inner.split("/", 1)
                     if filename.startswith("."):
-                        raise TrainIOError(f"非法文件名: {filename!r}")
+                        raise TrainIOError(
+                            "Import file contains an invalid filename",
+                            code="dataset.import_invalid", http_status=400,
+                        )
                     target = safe_join(train_dir, folder, filename)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     seen_folders.add(folder)
@@ -647,7 +702,10 @@ def import_bundle(
                     continue
                 result = _safe_arc_bundle(info.filename)
                 if result is None:
-                    raise TrainIOError(f"非法路径: {info.filename!r}")
+                    raise TrainIOError(
+                        "Import file contains an invalid path",
+                        code="dataset.import_invalid", http_status=400,
+                    )
                 section, inner = result
                 if section == "train":
                     train_entries.append((info, inner))
@@ -657,7 +715,10 @@ def import_bundle(
                     preset_entries.append((info, inner))
 
             if not train_entries and not reg_entries and not preset_entries:
-                raise TrainIOError("bundle 中无可导入内容")
+                raise TrainIOError(
+                    "Import file contains nothing to import",
+                    code="dataset.import_empty", http_status=400,
+                )
 
             slug = _resolve_slug_conflict(conn, base_slug)
             p = projects.create_project(conn, title=title, slug=slug,
@@ -672,7 +733,10 @@ def import_bundle(
                 for info, inner in train_entries:
                     folder, filename = inner.split("/", 1)
                     if filename.startswith("."):
-                        raise TrainIOError(f"非法文件名: {filename!r}")
+                        raise TrainIOError(
+                            "Import file contains an invalid filename",
+                            code="dataset.import_invalid", http_status=400,
+                        )
                     target = safe_join(train_dir, folder, filename)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     seen_train.add(folder)
@@ -690,10 +754,16 @@ def import_bundle(
                     else:
                         parts = inner.split("/", 1)
                         if len(parts) != 2:
-                            raise TrainIOError(f"非法 reg 路径: {inner!r}")
+                            raise TrainIOError(
+                                "Import file contains an invalid path",
+                                code="dataset.import_invalid", http_status=400,
+                            )
                         folder, filename = parts
                         if filename.startswith("."):
-                            raise TrainIOError(f"非法文件名: {filename!r}")
+                            raise TrainIOError(
+                                "Import file contains an invalid filename",
+                                code="dataset.import_invalid", http_status=400,
+                            )
                         target = safe_join(reg_dir, folder, filename)
                         target.parent.mkdir(parents=True, exist_ok=True)
                         if target.suffix.lower() in IMAGE_EXTS:
@@ -770,7 +840,10 @@ def import_bundle(
             assert v is not None and p is not None
 
     except zipfile.BadZipFile as exc:
-        raise TrainIOError(f"zip 损坏: {exc}") from exc
+        raise TrainIOError(
+            "Import file is corrupt", code="dataset.import_corrupt",
+            http_status=400,
+        ) from exc
 
     return {
         "project": p,

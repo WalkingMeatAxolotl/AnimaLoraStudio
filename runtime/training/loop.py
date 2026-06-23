@@ -88,11 +88,40 @@ def _resolve_sra_effective_weight(args: Any, global_step: int, total_steps: int 
     return base * max(0.0, min(1.0, scale))
 
 
+def _accumulation_step(batch_idx, dl_len, grad_accum):
+    """返回 (group_size, is_group_end)：该 micro-batch 所在梯度累积组的实际大小，
+    以及它是否是该组最后一个（触发 optimizer.step / zero_grad）。
+
+    对齐 kohya-ss / HF Trainer：
+    - epoch 最后一个 batch 即使凑不满 grad_accum 也 step —— 否则尾部 `len % ga` 个
+      batch 的梯度会被丢（单 epoch）或泄漏进下一 epoch 第一个 step（多 epoch，因为
+      zero_grad 只在 step 后调）。
+    - 不满的尾组按**实际** micro-batch 数归一（group_size），而非恒 ÷grad_accum，
+      免得末步梯度被削弱。
+
+    dl_len=None（dataloader 无 __len__）时回退旧行为（恒 grad_accum，仅整除处 step）。
+    """
+    if dl_len is None or grad_accum <= 1:
+        return grad_accum, (batch_idx + 1) % grad_accum == 0
+    remainder = dl_len % grad_accum
+    in_tail = remainder != 0 and batch_idx >= dl_len - remainder
+    group_size = remainder if in_tail else grad_accum
+    is_group_end = (batch_idx + 1) % grad_accum == 0 or (batch_idx + 1) == dl_len
+    return group_size, is_group_end
+
+
 def run(ctx: TrainingContext) -> None:
     """跑训练直到 args.epochs 或 args.max_steps 上限。"""
     args = ctx.args
 
     step_start_time = time.perf_counter()
+
+    # dataloader 每 epoch 的 batch 数（用于尾组「不满也 step」+ 按实际大小归一）。
+    # 少数无 __len__ 的 dataloader 回退旧行为（见 _accumulation_step）。
+    try:
+        dl_len = len(ctx.dataloader)
+    except TypeError:
+        dl_len = None
 
     for epoch in range(ctx.start_epoch, args.epochs):
         ctx.current_epoch = epoch
@@ -326,11 +355,13 @@ def run(ctx: TrainingContext) -> None:
                 ctx.optimizer.zero_grad()
                 continue
 
-            # 反向传播
-            loss = loss / args.grad_accum
+            # 反向传播。尾组（len % grad_accum）不满时按实际 micro-batch 数归一，
+            # 且 epoch 末批不满也 step —— 修尾批丢弃 + 跨 epoch 梯度泄漏（见 _accumulation_step）。
+            group_size, is_group_end = _accumulation_step(batch_idx, dl_len, args.grad_accum)
+            loss = loss / group_size
             loss.backward()
 
-            if (batch_idx + 1) % args.grad_accum == 0:
+            if is_group_end:
                 # NaN 梯度检测：跳过本次 update，清零继续
                 has_nan_grad = any(
                     p.grad is not None and not torch.isfinite(p.grad).all()
@@ -353,7 +384,7 @@ def run(ctx: TrainingContext) -> None:
                 ctx.timestep_sampler.maybe_refresh(ctx.global_step)
 
                 # 记录 loss 历史
-                loss_val = float(loss.item() * args.grad_accum)
+                loss_val = float(loss.item() * group_size)
                 denoise_loss_val = (
                     float(denoise_loss_log.item())
                     if denoise_loss_log is not None else loss_val

@@ -55,7 +55,7 @@ PRODUCT_SUFFIX = ".png"
 MIN_CROP_NORM = 0.02
 
 
-from studio.domain.errors import DomainError
+from studio.domain.errors import DomainError, InvalidPathError, NotFoundError, ValidationError
 
 
 class PreprocessError(DomainError):
@@ -113,7 +113,7 @@ _SAFE_NAME_FORBIDDEN = ("/", "\\", "..")
 
 def _validate_name(name: str) -> None:
     if not name or any(t in name for t in _SAFE_NAME_FORBIDDEN):
-        raise PreprocessError(f"非法文件名: {name!r}")
+        raise InvalidPathError("Invalid path", details={"name": name})
 
 
 def _validate_rel_name(name: str) -> None:
@@ -122,12 +122,12 @@ def _validate_rel_name(name: str) -> None:
     严格 2 段 + 拒 `..` / 反斜杠 / 绝对路径 / 空段，防 path traversal。
     """
     if not name:
-        raise PreprocessError(f"非法 rel name: {name!r}")
+        raise InvalidPathError("Invalid path", details={"name": name})
     if "\\" in name or name.startswith("/"):
-        raise PreprocessError(f"非法 rel name: {name!r}")
+        raise InvalidPathError("Invalid path", details={"name": name})
     parts = name.split("/")
     if len(parts) != 2 or not parts[0] or not parts[1] or ".." in parts:
-        raise PreprocessError(f"非法 rel name（要求 folder/image）: {name!r}")
+        raise InvalidPathError("Invalid path", details={"name": name})
 
 
 def _validate_rect(rect: dict[str, Any]) -> dict[str, float]:
@@ -138,15 +138,19 @@ def _validate_rect(rect: dict[str, Any]) -> dict[str, float]:
         w = float(rect["w"])
         h = float(rect["h"])
     except (KeyError, TypeError, ValueError) as exc:
-        raise PreprocessError(f"裁剪 rect 缺字段或类型错: {rect!r}") from exc
+        raise ValidationError(
+            "Invalid crop region",
+            code="preprocess.crop_rect_invalid", http_status=400,
+        ) from exc
     # clamp 到 [0,1]，但保留 w/h 下限校验
     x = max(0.0, min(1.0, x))
     y = max(0.0, min(1.0, y))
     w = max(0.0, min(1.0 - x, w))
     h = max(0.0, min(1.0 - y, h))
     if w < MIN_CROP_NORM or h < MIN_CROP_NORM:
-        raise PreprocessError(
-            f"裁剪框过小（最小 {MIN_CROP_NORM}）: {rect!r}"
+        raise ValidationError(
+            "Crop region is too small",
+            code="preprocess.crop_too_small", http_status=400,
         )
     return {"x": x, "y": y, "w": w, "h": h}
 
@@ -318,14 +322,20 @@ def resolve_targets_train(
         return sorted(existing)
     if mode == "selected":
         if not names:
-            raise PreprocessError("mode=selected 时 names 不能为空")
+            raise ValidationError(
+                "No images selected",
+                code="preprocess.selection_empty", http_status=400,
+            )
         chosen: list[str] = []
         for n in names:
             _validate_rel_name(n)
             if n in existing:
                 chosen.append(n)
         return sorted(set(chosen))
-    raise PreprocessError(f"未知 mode: {mode!r}")
+    raise ValidationError(
+        f"Invalid preprocess mode: {mode}",
+        code="preprocess.mode_invalid", details={"mode": mode}, http_status=400,
+    )
 
 
 def start_job_train(
@@ -345,11 +355,20 @@ def start_job_train(
     """
     p = projects.get_project(conn, project_id)
     if not p:
-        raise PreprocessError(f"项目不存在: id={project_id}")
+        raise NotFoundError(
+            "Project not found",
+            code="project.not_found", details={"id": project_id},
+        )
     if mode not in ("all", "selected", "all_force"):
-        raise PreprocessError(f"未知 mode: {mode!r}")
+        raise ValidationError(
+            f"Invalid preprocess mode: {mode}",
+            code="preprocess.mode_invalid", details={"mode": mode}, http_status=400,
+        )
     if mode == "selected" and not names:
-        raise PreprocessError("mode=selected 必须给 names")
+        raise ValidationError(
+            "No images selected",
+            code="preprocess.selection_empty", http_status=400,
+        )
     if names:
         for n in names:
             _validate_rel_name(n)
@@ -384,18 +403,32 @@ def start_crop_job_train(
     """train scope crop job。`crops` 的源文件名为 `train/` 下当前文件名。"""
     p = projects.get_project(conn, project_id)
     if not p:
-        raise PreprocessError(f"项目不存在: id={project_id}")
+        raise NotFoundError(
+            "Project not found",
+            code="project.not_found", details={"id": project_id},
+        )
     if not isinstance(crops, dict) or not crops:
-        raise PreprocessError("crops 不能为空")
+        raise ValidationError(
+            "No crop regions provided",
+            code="preprocess.crops_required", http_status=400,
+        )
     sanitized: dict[str, list[dict[str, Any]]] = {}
     for name, rects in crops.items():
         _validate_rel_name(name)
         if not isinstance(rects, list) or not rects:
-            raise PreprocessError(f"{name!r} 的 rects 为空")
+            raise ValidationError(
+                "Invalid crop region",
+                code="preprocess.crop_rect_invalid",
+                details={"name": name}, http_status=400,
+            )
         out_rects: list[dict[str, Any]] = []
         for r in rects:
             if not isinstance(r, dict):
-                raise PreprocessError(f"{name!r} 含非法 rect: {r!r}")
+                raise ValidationError(
+                    "Invalid crop region",
+                    code="preprocess.crop_rect_invalid",
+                    details={"name": name}, http_status=400,
+                )
             clean = _validate_rect(r)
             label = r.get("label")
             if label is not None:

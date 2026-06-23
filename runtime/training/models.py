@@ -319,7 +319,10 @@ def load_anima_model(transformer_path, device, dtype, repo_root, *, flash_attn: 
     # 未选中的 fast path；旧 standalone 副本仍 fallback 到 set_flash_attn_enabled()。
     flash_enabled = False
     flash_modules = [cosmos_modeling, anima_modeling]
-    for module_name in ("models.cosmos_predict2_modeling", "models.anima_modeling"):
+    for module_name in (
+        "modeling.cosmos_predict2_modeling", "modeling.anima_modeling",
+        "models.cosmos_predict2_modeling", "models.anima_modeling",  # 兼容外部 checkout
+    ):
         try:
             flash_modules.append(importlib.import_module(module_name))
         except Exception:

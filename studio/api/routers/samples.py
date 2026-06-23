@@ -10,12 +10,13 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from fastapi.responses import FileResponse
 
 from .. import errors as _errors
 from ..responses import _thumb_response
 from ... import db
+from ...domain.errors import NotFoundError
 from ...paths import OUTPUT_DIR, task_samples_dir
 
 router = APIRouter()
@@ -54,7 +55,7 @@ def get_sample(
                 (task_id,),
             ).fetchone()
         if not row or not row["monitor_state_path"]:
-            raise HTTPException(404)
+            raise NotFoundError("Sample image not found", code="sample.not_found")
         monitor_dir = Path(row["monitor_state_path"]).parent
         candidates = [
             # task-scoped 档案 —— 新 task 写在这（migration 之后唯一目标）
@@ -80,11 +81,11 @@ def get_sample(
                 "sample 404: task_id=%s file=%s tried=%s",
                 task_id, filename, [str(p) for p in candidates],
             )
-            raise HTTPException(404)
+            raise NotFoundError("Sample image not found", code="sample.not_found")
     else:
         path = OUTPUT_DIR / "samples" / filename
         if not path.exists():
-            raise HTTPException(404)
+            raise NotFoundError("Sample image not found", code="sample.not_found")
         resolved = path
 
     # w 给了走缩略图；w<=0 或没给 → 原图。复用 thumb_cache，盘上落 .jpg；

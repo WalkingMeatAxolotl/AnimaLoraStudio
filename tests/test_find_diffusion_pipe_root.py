@@ -75,6 +75,22 @@ def test_finds_repo_root_models_when_train_in_subdir(tmp_path: Path) -> None:
     assert found == models, f"expected {models}, got {found}"
 
 
+def test_prefers_repo_root_modeling_over_models(tmp_path: Path) -> None:
+    """新布局：模型代码在 repo_root/modeling/；同时存在旧 models/ 时 modeling/ 优先。"""
+    fake_module = _make_fake_module(tmp_path)
+
+    modeling = tmp_path / "modeling"
+    modeling.mkdir()
+    (modeling / "anima_modeling.py").write_text("")
+    # 旧 models/ 也有同名文件（外部 checkout / 遗留）——modeling/ 应排在前面命中
+    models = tmp_path / "models"
+    models.mkdir()
+    (models / "anima_modeling.py").write_text("")
+
+    found = _run(fake_module)
+    assert found == modeling, f"expected {modeling}, got {found}"
+
+
 def test_finds_runtime_sibling_models_directory(tmp_path: Path) -> None:
     """runtime/ 同级的 models/（候选 2：runtime_dir / 'models'）。"""
     fake_module = _make_fake_module(tmp_path)

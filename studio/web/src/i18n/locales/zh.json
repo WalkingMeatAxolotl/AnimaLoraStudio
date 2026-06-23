@@ -379,7 +379,8 @@
       "text_encoder_path": "Qwen 文本编码器目录",
       "t5_tokenizer_path": "T5 tokenizer 目录",
       "data_dir": "数据集目录（支持 Kohya 风格 N_xxx 子目录设定 repeat）",
-      "resolution": "训练分辨率",
+      "resolution": "训练分辨率。可填多个（逗号分隔，如 512, 768, 1024）——无分辨率前缀的文件夹里每张图会在每个分辨率各训一遍；单个值即传统单分辨率训练",
+      "aspect_ratio_limit": "桶的最大长宽比上限。2.0 = 最宽 2:1、最高 1:2。值越大越长/越扁的图按原比例训练，但极端比例的桶图片更少、短边有效分辨率更低",
       "reg_data_dir": "正则集目录（可选，防过拟合）",
       "reg_caption": "正则集统一 caption（留空则使用各图自带的 .txt/.json）",
       "reg_weight": "正则集 loss 相对训练集的权重；1.0 = 等权重，调低削弱 reg 影响",
@@ -792,8 +793,12 @@
     "tabTraining": "训练",
     "tabMonitor": "监控",
     "tabGenerate": "测试",
+    "tabCredentials": "密钥",
     "tabAppearance": "页面",
     "tabSystem": "系统",
+    "credHuggingface": "HuggingFace",
+    "credModelscope": "ModelScope",
+    "credentialsIntro": "所有服务的 token / API key 集中填写。端点 / 下载源仍在各自页面。",
     "proxy": {
       "sectionTitle": "Booru 代理",
       "enableLabel": "启用代理",
@@ -858,7 +863,6 @@
       "help1": "studio_data 存放项目、数据集、任务档案、预设和数据库。默认在程序根目录。",
       "help2": "更改位置会在所选目录下创建 studio_data 子目录并完整复制当前数据（原数据保留不删除），完成后需重启 Studio 生效。",
       "customBadge": "自定义",
-      "defaultBadge": "默认",
       "changeLocation": "更改位置…",
       "migrateTitle": "迁移 studio_data",
       "scanning": "正在扫描当前数据…",
@@ -872,7 +876,12 @@
       "doneRestartNote": "重启 Studio 后开始使用新位置；原位置数据已保留，确认无误后可自行删除。",
       "failed": "迁移失败：{{error}}",
       "startMigrate": "开始迁移",
-      "restartNow": "立即重启"
+      "restartNow": "立即重启",
+      "modelsRootLabel": "模型根目录",
+      "modelsRootHelp": "存放下载的 Anima / VAE / 文本编码器 / tokenizer / WD14 等模型权重，默认在程序根目录的 models/。更改位置会把现有权重复制到所选目录的 models 子目录并立即生效（无需重启），原数据保留不删除。",
+      "modelsMigrateTitle": "迁移模型根目录",
+      "modelsKeepOriginalNote": "原位置数据不会被删除。复制完成后立即生效，无需重启。",
+      "modelsDoneNote": "已切换到新模型根目录，立即生效（无需重启）；原位置数据已保留，确认无误后可自行删除。"
     },
     "gelbooru": "Gelbooru",
     "danbooru": "Danbooru",
@@ -894,16 +903,46 @@
     "llmTestNotOk": "LLM 连接失败",
     "nameRequired": "不能为空",
     "danbooruUsernamePlaceholder": "必填 — danbooru 挂了 Cloudflare 后不再支持匿名",
-    "blankAutoHfDownload": "留空 = 自动 HF 下载",
     "batchSizeHint": "GPU 推理一批塞几张；CPU 自动降到 1",
     "downloadSource": "下载源",
+    "fieldExcludeTags": "排除 Tags",
+    "fieldDefaultExcludedTags": "默认排除 Tags",
+    "fieldParallelWorkers": "并行下载数",
+    "fieldApiRate": "API 速率（次/秒）",
+    "fieldCdnRate": "CDN 速率（次/秒）",
+    "fieldSaveTags": "保存标签文件",
+    "fieldConvertPng": "转为 PNG",
+    "fieldRemoveAlpha": "移除 Alpha 通道",
+    "fieldThresholdGeneral": "通用阈值",
+    "fieldThresholdCharacter": "角色阈值",
+    "fieldBlacklistTags": "屏蔽 Tags",
+    "fieldBatchSize": "批大小",
+    "fieldAddCopyright": "添加版权 Tag",
+    "fieldAddMeta": "添加元数据 Tag",
+    "fieldAddModel": "添加模型 Tag",
+    "fieldAddRating": "添加分级 Tag",
+    "fieldAddQuality": "添加质量 Tag",
+    "fieldApiKey": "API Key",
+    "fieldProject": "项目",
+    "fieldEntity": "Entity",
+    "fieldBaseUrl": "Base URL",
+    "fieldMode": "模式",
+    "fieldToken": "Token",
+    "fieldEndpoint": "Endpoint",
+    "fieldUserId": "User ID",
+    "fieldUsername": "用户名",
+    "fieldAccountType": "账户类型",
+    "fieldModelId": "Model ID",
+    "boolEnabled": "启用",
+    "boolDisabled": "关闭",
     "downloadSourceHelp": "魔搭（ModelScope）对国内用户更快；无映射的模型自动回退 HuggingFace。",
+    "singleSourceFixed": "仅此一个源可用",
     "hfTokenHelp": "用于 HF 私有 repo 鉴权。公开仓库（含 SmilingWolf WD14 / cella110n CLTagger）不用填。",
     "hfEndpointHelp": "模型下载端点。默认 HuggingFace 官方源。需要镜像 / 自建反代时选「自定义 URL」粘贴。",
     "modelscopeTokenHelp": "公开模型不用填；私有仓库或限速时需要。",
     "modelscopeInstallHelp": "使用前请先 <code>pip install modelscope</code> 安装命令行工具。",
-    "allowGpuDuringTrain": "允许 GPU 任务与训练并行",
-    "allowGpuDuringTrainHint": "WD14 打标推理 onnxruntime-gpu 大约占 ~2 GB；确认训练之外的剩余显存够再打开，否则 OOM",
+    "allowGpuDuringTrain": "训练时运行 GPU 任务",
+    "allowGpuDuringTrainHelp": "这里的 GPU 任务指打标（WD14 / CLTagger 推理）和正则集构建，都要占显存。默认在训练进行时推迟，等训练结束再跑；打开后允许它们与训练并行。下载是纯 IO 任务、不占显存，始终与训练并行、不受此开关影响。打标推理（onnxruntime-gpu）约占 ~2 GB，确认训练之外剩余显存够再打开，否则 OOM。",
     "enableWandb": "启用 WandB",
     "enableWandbHint": "打开后所有训练任务都会写入 W&B；不再占用训练配置字段",
     "wandbEntityHint": "可选；团队/用户名，留空使用 wandb 默认账号",
@@ -926,6 +965,7 @@
     "accountFree": "free（max 2 tag）",
     "accountGold": "gold（max 6 tag）",
     "accountPlatinum": "platinum（max 12 tag）",
+    "danbooruAccountTypeHint": "影响构建正则集时 danbooru 多 tag 搜索上限（free 2 / gold 6 / platinum 12）。",
     "commaSeparated": "逗号分隔",
     "excludeTagsHelp": "搜索时自动追加 <code>-tag</code>，Gelbooru / Danbooru 同样生效。",
     "excludeTagsPlaceholder": "例：comic, monochrome, lowres",
@@ -941,13 +981,15 @@
     "clTaggerVersionTitle": "{{name}}（版本）",
     "repoHelp": "{{desc}}。仓库：<code>{{repo}}</code>",
     "selectClTaggerVersion": "选作 CLTagger 当前版本",
+    "clTaggerFilesAt": "文件",
     "customRepoAdvanced": "自定义 repo（高级）",
     "trainingModelsOneClick": "训练模型（一键下载）",
     "modelsRoot": "模型根目录 (models_root)",
     "savePathConfig": "保存路径配置",
     "notModified": "未修改",
     "savePath": "保存路径",
-    "autoSyncPathsLabel": "统一训练配置/模型路径",
+    "trainingParams": "训练参数",
+    "autoSyncPathsLabel": "自动配置模型路径",
     "autoSyncPathsHelp": "开启（默认 / 多数用户）：fork 预设到 version 时，4 个模型路径字段（transformer/vae/text_encoder/t5_tokenizer）自动用 Settings 全局值覆盖，预设里这 4 字段灰显不可改。关闭（独立模型用户）：fork 时尊重预设里的绝对路径，4 字段可编辑 + picker。",
     "autoSyncPathsOn": "已开启 · fork 自动同步全局",
     "autoSyncPathsOff": "已关闭 · fork 尊重预设值",
@@ -975,6 +1017,13 @@
     "selectDefaultMainModel": "选作默认主模型",
     "downloadInProgress": "下载中...",
     "downloadRequiredFirst": "未下载，请先下载",
+    "addLocalModel": "＋ 添加本地模型",
+    "localModelAdded": "已添加本地模型 {{name}}",
+    "localModelRemoved": "已移除本地模型",
+    "removeLocalModel": "从注册表移除，不删除模型文件。",
+    "removeLocalModelShort": "移除",
+    "localModelInvalidExt": "请选择 .safetensors 文件",
+    "localModelMissing": "文件不存在",
     "defaultUpscaler": "默认放大器: {{name}}",
     "repoAndFilenameRequired": "仓库 / 文件名都要填",
     "packageInstalledRestart": "已装 {{pkg}}=={{version}}，请重启 Studio 让 EP 生效",
@@ -1020,6 +1069,8 @@
     "notInstalledShort": "未安装",
     "gpuDetect": "GPU 检测",
     "noNvidiaGpu": "未检测到 NVIDIA GPU",
+    "torchCudaMajor": "torch CUDA",
+    "ortCudaMismatch": "已装 onnxruntime 的 CUDA 大版本与 torch 不一致，重装时会按 torch 版本自动选 cu12/cu13 build",
     "onnxCpuEpWarning": "检测到 NVIDIA GPU 但 onnxruntime 只有 CPU EP — WD14 / CLTagger 会跑得很慢。展开「候选」装 DirectML（Windows 推荐，跨厂商）或 CUDA 版本。",
     "onnxNotInstalledHintGpu": "未安装。点下面「自动检测 + 装合适的包」按平台装最佳包（Windows + GPU → DirectML；Linux + GPU → CUDA）。",
     "onnxNotInstalledHintCpu": "未安装。点下面「自动检测 + 装合适的包」会装 CPU 版本（未检测到 NVIDIA GPU）。",
@@ -1127,7 +1178,6 @@
     "currentDevLocked": "当前在 dev · 不可关闭",
     "updateLogTitle": "上次更新日志",
     "close": "关闭",
-    "onboardingSection": "首次引导",
     "onboardingReopenTitle": "重新运行首次引导",
     "onboardingReopenHelp": "重新弹出首次启动时的「基础能力安装」面板,可用于检查哪些还没装、或装漏了想补。",
     "onboardingReopen": "重新运行引导",
@@ -1145,6 +1195,8 @@
     "upToDate": "已是最新版本",
     "checkUpdateFailed": "检查更新失败: {{error}}",
     "dirtyWorkingTree": "本地有未提交修改，请先 commit 或 stash",
+    "forceUpdateConfirm": "工作区有未提交的本地改动。继续更新会用目标版本强制覆盖（git reset --hard），这些改动将被丢弃且无法恢复。确定继续吗？",
+    "forceUpdateConfirmOk": "强制覆盖并更新",
     "noRollbackTarget": "没有可回滚的版本（首次启动 / .last_version 已被清理）",
     "triggerActionFailed": "触发{{action}}失败: {{error}}",
     "actionUpdate": "更新",
@@ -1308,6 +1360,8 @@
     "perPrompt": "每 prompt",
     "seed": "种子（0 = 随机）",
     "seedHint": "填具体数字 → 固定可复现；0 → 每次随机",
+    "baseModel": "底模",
+    "baseModelHint": "默认用设置页选定的主模型；可临时换成其它已下载的版本出图",
     "swapSizeTitle": "交换宽高（横版 ↔ 竖版）",
     "cancelCurrentTitle": "取消当前任务",
     "sharedGpu": "与训练共享 GPU",
@@ -1719,6 +1773,8 @@
     "modelDownloading": "下载中...",
     "downloadModel": "下载 {{model}}",
     "targetRes": "目标分辨率",
+    "folderFilter": "文件夹",
+    "folderAll": "全部文件夹",
     "edgePlaceholder": "边长",
     "modelLabel": "模型",
     "notDownloaded": " · 未下载",
@@ -2006,7 +2062,6 @@
     "modified": "已改",
     "restore": "↻ 还原",
     "advanced": "高级",
-    "blankDir": "留空 = 自动 HF 下载",
     "blacklistLabel": "blacklist_tags（逗号分隔）",
     "blacklistPlaceholder1": "如 monochrome, comic",
     "blacklistPlaceholder2": "如 low quality, signature",
@@ -2146,6 +2201,12 @@
     "effectiveSamples": "有效样本/epoch",
     "totalSteps": "总步数",
     "maxStepsLabel": "max_steps 上限 {{n}}",
+    "collapsePreview": "收起分布预览",
+    "expandPreview": "展开分布预览",
+    "folderTip": "{{name}}：{{repeat}} repeat × {{imgs}} 图 = {{total}}",
+    "folderTipReso": "{{name}}：{{repeat}} repeat × {{imgs}} 图 × {{resos}} 分辨率 = {{total}}",
+    "bucketDistTitle": "桶分布（实际）",
+    "bucketDistHint": "按分辨率 × 长宽比分桶，同桶进同一 batch；桶不满只出短 batch、不丢图。",
     "confirmReset": "重置为预设 {{name}} 的配置？当前 version 的所有自定义内容会丢失。",
     "resetOkText": "重置",
     "resetSuccess": "已重置为预设 {{name}} 的配置",
@@ -2197,6 +2258,8 @@
     "grpCollapse": "收起",
     "grpSampling": "采样 · 进阶",
     "grpSamplingMeta": "步数 · CFG · 种子",
+    "baseModelLabel": "底模",
+    "baseModelHint": "默认用设置页选定的主模型；可临时换成其它已下载的版本生成正则图",
     "grpBooruScrape": "抓取",
     "grpAdvanced": "进阶",
     "grpAdvancedMetaBooru": "打标模型 · 自动去重 · 后处理",
@@ -2365,6 +2428,182 @@
         "label": "图像增强 (可选)",
         "description": "4x-AnimeSharp,预处理时把训练图放大"
       }
+    }
+  },
+  "errors": {
+    "path": {
+      "invalid": "路径无效",
+      "not_found": "路径不存在",
+      "not_a_file": "所选路径不是文件",
+      "not_a_directory": "路径不是目录",
+      "permission_denied": "没有访问该路径的权限"
+    },
+    "file": {
+      "not_found": "文件「{{filename}}」不存在",
+      "required": "请选择文件",
+      "ext_invalid": "请选择 {{types}} 文件"
+    },
+    "image": {
+      "not_found": "图片不存在"
+    },
+    "project": {
+      "not_found": "项目不存在",
+      "title_required": "项目标题不能为空"
+    },
+    "version": {
+      "not_found": "版本不存在",
+      "label_invalid": "版本标签「{{name}}」格式无效，仅允许字母、数字、下划线、连字符与点",
+      "label_exists": "版本标签「{{name}}」已存在",
+      "fork_source_invalid": "找不到要复制的源版本，或它不属于当前项目",
+      "config_missing": "该版本尚未配置训练参数",
+      "config_invalid": "训练配置无效：{{reason}}",
+      "has_active_task": "该版本已有正在进行的任务，请等其完成或取消"
+    },
+    "preset": {
+      "not_found": "预设「{{name}}」不存在",
+      "exists": "预设「{{name}}」已存在",
+      "name_invalid": "预设名「{{name}}」格式无效，仅允许字母、数字、下划线与连字符",
+      "invalid": "预设文件无效：{{reason}}"
+    },
+    "dataset": {
+      "no_files": "没有上传文件",
+      "export_empty": "没有可导出的内容",
+      "export_nothing_selected": "请至少选择一项导出内容（训练集、正则集或训练配置）",
+      "import_invalid": "导入文件无效：{{reason}}",
+      "import_empty": "导入文件中没有可导入的内容",
+      "import_corrupt": "导入文件已损坏",
+      "delete_failed": "删除「{{name}}」失败：{{reason}}",
+      "thumbnail_not_found": "缩略图不存在",
+      "image_set_invalid": "不支持的图片集"
+    },
+    "download": {
+      "source_unsupported": "不支持的图源：{{source}}",
+      "tag_required": "标签不能为空",
+      "credentials_missing": "未配置 {{source}} 凭据，请先在「设置」页填写",
+      "count_invalid": "下载数量至少为 1"
+    },
+    "preprocess": {
+      "mode_invalid": "预处理模式无效：{{mode}}",
+      "tile_size_invalid": "分块尺寸必须大于 0",
+      "device_invalid": "设备无效：{{device}}",
+      "target_area_out_of_range": "目标面积超出范围：{{value}}",
+      "crops_required": "裁剪区域不能为空",
+      "crop_rect_invalid": "裁剪区域无效",
+      "crop_too_small": "裁剪区域过小",
+      "selection_empty": "未选择图片"
+    },
+    "upscaler": {
+      "not_found": "放大模型「{{name}}」不存在",
+      "not_downloaded": "放大模型「{{name}}」权重未下载，请先在「设置 → 预处理」下载",
+      "label_required": "请填写放大模型名称",
+      "download_source_invalid": "不支持的下载源：{{source}}",
+      "download_fields_required": "请填写仓库 ID 和文件名"
+    },
+    "curation": {
+      "folder_name_invalid": "文件夹名称无效：「{{name}}」",
+      "file_name_invalid": "文件名无效：「{{name}}」",
+      "folder_exists": "文件夹「{{name}}」已存在",
+      "folder_not_found": "文件夹「{{name}}」不存在",
+      "new_name_required": "重命名文件夹需要填写新名称",
+      "op_invalid": "未知的文件夹操作：{{op}}"
+    },
+    "duplicate": {
+      "not_installed": "去重功能依赖 imagehash 组件，但尚未安装",
+      "tile_grid_invalid": "分块网格值无效：{{value}}",
+      "tile_grid_out_of_range": "分块网格必须在 2 到 12 之间",
+      "tile_grid_required": "至少需要一个分块网格",
+      "match_scope_invalid": "匹配范围无效：{{value}}"
+    },
+    "tag": {
+      "tagger_invalid": "打标器「{{name}}」不支持",
+      "output_format_invalid": "输出格式必须为 txt 或 json",
+      "on_existing_invalid": "已有标签处理方式必须为覆盖、跳过或追加",
+      "replace_args_required": "替换操作需要同时填写原标签和新标签",
+      "op_invalid": "不支持的操作：「{{op}}」",
+      "dictionary_not_loaded": "标签词典尚未加载",
+      "dictionary_upload_invalid": "标签词典文件无效：{{reason}}",
+      "dictionary_download_failed": "默认标签词典下载失败：{{reason}}"
+    },
+    "reg": {
+      "not_found": "正则集不存在",
+      "paths_empty": "未选择任何文件",
+      "api_source_invalid": "图源必须为 Gelbooru 或 Danbooru",
+      "postprocess_method_invalid": "后处理方式必须为 smart、stretch 或 crop",
+      "crop_ratio_out_of_range": "最大裁剪比例必须在 0.05 到 0.5 之间",
+      "aspect_ratio_invalid": "最小宽高比必须小于最大宽高比，且两者均大于 0",
+      "auto_tag_kind_invalid": "自动打标方式必须为以下之一：{{allowed}}",
+      "build_mode_invalid": "构建方式必须为 mirror 或 flat",
+      "target_count_invalid": "目标数量必须大于 0 或留空"
+    },
+    "train": {
+      "no_images": "训练集还没有图片，请先下载或筛选"
+    },
+    "snapshot": {
+      "not_found": "快照不存在",
+      "invalid": "快照标识无效",
+      "id_collision": "无法分配快照编号，请重试"
+    },
+    "task": {
+      "not_found": "任务不存在",
+      "already_finished": "该任务已结束",
+      "cancel_rejected": "当前状态下无法取消该任务",
+      "pause_rejected": "当前无法暂停该任务",
+      "not_resumable": "该任务无法继续训练",
+      "resume_state_missing": "恢复点已丢失，请重新发起训练",
+      "not_retryable": "仅已结束的任务可重试",
+      "not_deletable": "仅已结束的任务可删除",
+      "no_outputs": "该任务没有输出文件",
+      "output_files_missing": "部分文件已不存在：{{files}}",
+      "empty_selection": "未选择任何文件",
+      "snapshot_not_found": "该任务没有关联配置"
+    },
+    "sample": {
+      "not_found": "采样图不存在"
+    },
+    "queue": {
+      "status_filter_invalid": "不支持的状态筛选：{{status}}",
+      "export_ids_invalid": "所选任务编号无效",
+      "import_invalid": "队列导入失败：{{reason}}"
+    },
+    "job": {
+      "not_found": "任务不存在",
+      "already_finished": "该任务已结束",
+      "cancel_rejected": "当前状态下无法取消该任务"
+    },
+    "generate": {
+      "daemon_busy": "推理服务忙，请在当前任务结束后重试",
+      "params_invalid": "图片参数不是合法 JSON",
+      "mode_invalid": "不支持的模式：{{mode}}",
+      "save_disabled": "测试出图落盘已关闭",
+      "empty_image": "上传的图片为空",
+      "preview_model_download_failed": "预览模型下载失败，请查看服务端日志"
+    },
+    "model": {
+      "invalid": "模型选择无效：{{reason}}"
+    },
+    "install": {
+      "target_invalid": "不支持的运行时目标"
+    },
+    "llm_tagger": {
+      "base_url_required": "请填写 API 地址",
+      "connect_failed": "无法连接模型服务：{{reason}}",
+      "model_required": "请选择模型"
+    },
+    "system": {
+      "starting": "服务正在启动，请稍后重试",
+      "tasks_running": "有任务正在运行，请先取消或等待完成",
+      "channel_invalid": "不支持的更新通道：{{channel}}",
+      "working_tree_dirty": "本地有未提交的修改，请先提交或暂存",
+      "no_rollback_target": "没有可回滚的上一版本",
+      "git_init_failed": "初始化 Git 仓库失败：{{reason}}",
+      "open_folder_local_only": "仅本机访问时可打开文件夹"
+    },
+    "studio_data": {
+      "target_invalid": "目标位置无效：{{reason}}",
+      "migration_busy": "数据迁移已在进行中"
+    },
+    "export": {
+      "name_conflict": "导出文件名「{{name}}」冲突过多，请重命名后重试"
     }
   }
 }

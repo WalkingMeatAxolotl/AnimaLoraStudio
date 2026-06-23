@@ -10,9 +10,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, UploadFile
 from fastapi.responses import JSONResponse
 
+from ...domain.errors import DomainError, NotFoundError, ValidationError
 from ...infrastructure import tag_dictionary as td
 
 router = APIRouter()
@@ -28,7 +29,9 @@ def get_meta() -> dict[str, Any]:
 def get_data() -> JSONResponse:
     loaded = td.load_active()
     if loaded is None:
-        raise HTTPException(status_code=404, detail="tag dictionary not initialized")
+        raise NotFoundError(
+            "Tag dictionary is not loaded", code="tag.dictionary_not_loaded",
+        )
     entries, meta = loaded
     # `Cache-Control: public, max-age=300` 让浏览器 5 分钟内不重发；上传/reset 后
     # 后端没有 ETag，前端通过 meta.downloaded_at 比对决定是否强刷。
@@ -46,7 +49,11 @@ async def upload(file: UploadFile = File(...)) -> dict[str, Any]:
     try:
         meta = td.apply_uploaded(content, file.filename or "user-upload")
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise ValidationError(
+            f"Invalid tag dictionary file: {exc}",
+            code="tag.dictionary_upload_invalid",
+            details={"reason": str(exc)}, http_status=400,
+        ) from exc
     return {"loaded": True, "meta": meta}
 
 
@@ -55,5 +62,9 @@ def reset() -> dict[str, Any]:
     try:
         meta = td.reset_to_default()
     except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise DomainError(
+            f"Failed to download the default tag dictionary: {exc}",
+            code="tag.dictionary_download_failed",
+            details={"reason": str(exc)}, http_status=502,
+        ) from exc
     return {"loaded": True, "meta": meta}

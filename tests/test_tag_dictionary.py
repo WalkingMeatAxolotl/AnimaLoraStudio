@@ -366,7 +366,8 @@ def test_reset_endpoint_502_on_network_error(
     monkeypatch.setattr(td.requests, "get", _boom)
     r = client.post("/api/tag-dictionary/reset")
     assert r.status_code == 502
-    assert "network unreachable" in r.json()["detail"]
+    err = r.json()["error"]
+    assert "network unreachable" in (err.get("message", "") + str(err.get("details", "")))
 
 
 def test_reset_endpoint_success(

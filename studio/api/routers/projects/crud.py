@@ -24,8 +24,9 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
+from ....domain.errors import NotFoundError
 from ...schemas.projects import (
     ProjectCreate,
     ProjectUpdate,
@@ -33,7 +34,6 @@ from ...schemas.projects import (
     VersionUpdate,
 )
 from ._shared import (
-    _project_err_code,
     _project_payload,
     _publish_project_state,
     _publish_version_state,
@@ -74,20 +74,14 @@ def list_projects_endpoint() -> dict[str, Any]:
 @router.post("/api/projects")
 def create_project_endpoint(body: ProjectCreate) -> dict[str, Any]:
     with db.connection_for() as conn:
-        try:
-            p = projects.create_project(
-                conn, title=body.title, slug=body.slug, note=body.note
-            )
-        except projects.ProjectError as exc:
-            _project_err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
+        p = projects.create_project(
+            conn, title=body.title, slug=body.slug, note=body.note
+        )
         if body.initial_version_label:
-            try:
-                versions.create_version(
-                    conn, project_id=p["id"], label=body.initial_version_label
-                )
-            except versions.VersionError as exc:
-                # 项目已建好；版本失败给前端但保留项目
-                _project_err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
+            # 项目已建好；版本失败时 VersionError 带 code 直接冒泡到全局 handler
+            versions.create_version(
+                conn, project_id=p["id"], label=body.initial_version_label
+            )
         p = projects.get_project(conn, p["id"])
     assert p is not None
     _publish_project_state(p)
@@ -99,7 +93,9 @@ def get_project_endpoint(pid: int) -> dict[str, Any]:
     with db.connection_for() as conn:
         p = projects.get_project(conn, pid)
     if not p:
-        raise HTTPException(404, f"项目不存在: id={pid}")
+        raise NotFoundError(
+            "Project not found", code="project.not_found", details={"id": pid},
+        )
     return _project_payload(p)
 
 
@@ -107,10 +103,8 @@ def get_project_endpoint(pid: int) -> dict[str, Any]:
 def patch_project_endpoint(pid: int, body: ProjectUpdate) -> dict[str, Any]:
     fields = body.model_dump(exclude_unset=True)
     with db.connection_for() as conn:
-        try:
-            p = projects.update_project(conn, pid, **fields)
-        except projects.ProjectError as exc:
-            _project_err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
+        # ProjectError（含 _must_get 的 project.not_found）带 code 直接冒泡
+        p = projects.update_project(conn, pid, **fields)
     _publish_project_state(p)
     return _project_payload(p)
 
@@ -119,10 +113,7 @@ def patch_project_endpoint(pid: int, body: ProjectUpdate) -> dict[str, Any]:
 def archive_project_endpoint(pid: int) -> dict[str, Any]:
     """归档：列表软隐藏，目录 / versions / 任务全部原样，可随时取消。"""
     with db.connection_for() as conn:
-        try:
-            p = projects.set_archived(conn, pid, True)
-        except projects.ProjectError as exc:
-            _project_err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
+        p = projects.set_archived(conn, pid, True)
     _publish_project_state(p)
     return _project_payload(p)
 
@@ -130,10 +121,7 @@ def archive_project_endpoint(pid: int) -> dict[str, Any]:
 @router.post("/api/projects/{pid}/unarchive")
 def unarchive_project_endpoint(pid: int) -> dict[str, Any]:
     with db.connection_for() as conn:
-        try:
-            p = projects.set_archived(conn, pid, False)
-        except projects.ProjectError as exc:
-            _project_err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
+        p = projects.set_archived(conn, pid, False)
     _publish_project_state(p)
     return _project_payload(p)
 
@@ -141,10 +129,7 @@ def unarchive_project_endpoint(pid: int) -> dict[str, Any]:
 @router.delete("/api/projects/{pid}")
 def delete_project_endpoint(pid: int) -> dict[str, Any]:
     with db.connection_for() as conn:
-        try:
-            projects.delete_project(conn, pid)
-        except projects.ProjectError as exc:
-            _project_err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
+        projects.delete_project(conn, pid)
     return {"deleted": pid}
 
 
@@ -155,7 +140,10 @@ def delete_project_endpoint(pid: int) -> dict[str, Any]:
 def list_versions_endpoint(pid: int) -> dict[str, Any]:
     with db.connection_for() as conn:
         if not projects.get_project(conn, pid):
-            raise HTTPException(404, f"项目不存在: id={pid}")
+            raise NotFoundError(
+                "Project not found", code="project.not_found",
+                details={"id": pid},
+            )
         vs = versions.list_versions(conn, pid)
         p = projects.get_project(conn, pid)
     assert p is not None
@@ -184,7 +172,10 @@ def list_project_state_ckpts(pid: int) -> dict[str, Any]:
     with db.connection_for() as conn:
         p = projects.get_project(conn, pid)
         if not p:
-            raise HTTPException(404, f"项目不存在: id={pid}")
+            raise NotFoundError(
+                "Project not found", code="project.not_found",
+                details={"id": pid},
+            )
         return {"groups": versions.list_project_state_ckpts(conn, p)}
 
 
@@ -197,7 +188,10 @@ def list_project_lora_ckpts(pid: int) -> dict[str, Any]:
     with db.connection_for() as conn:
         p = projects.get_project(conn, pid)
         if not p:
-            raise HTTPException(404, f"项目不存在: id={pid}")
+            raise NotFoundError(
+                "Project not found", code="project.not_found",
+                details={"id": pid},
+            )
         return {"groups": versions.list_project_lora_ckpts(conn, p)}
 
 
@@ -205,17 +199,19 @@ def list_project_lora_ckpts(pid: int) -> dict[str, Any]:
 def create_version_endpoint(pid: int, body: VersionCreate) -> dict[str, Any]:
     with db.connection_for() as conn:
         if not projects.get_project(conn, pid):
-            raise HTTPException(404, f"项目不存在: id={pid}")
-        try:
-            v = versions.create_version(
-                conn,
-                project_id=pid,
-                label=body.label,
-                fork_from_version_id=body.fork_from_version_id,
-                note=body.note,
+            raise NotFoundError(
+                "Project not found", code="project.not_found",
+                details={"id": pid},
             )
-        except versions.VersionError as exc:
-            _project_err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
+        # VersionError（label_invalid / label_exists / fork_source_invalid 等）
+        # 带 code 直接冒泡到全局 DomainError handler
+        v = versions.create_version(
+            conn,
+            project_id=pid,
+            label=body.label,
+            fork_from_version_id=body.fork_from_version_id,
+            note=body.note,
+        )
     _publish_version_state(v)
     return v
 
@@ -226,7 +222,9 @@ def get_version_endpoint(pid: int, vid: int) -> dict[str, Any]:
         v = versions.get_version(conn, vid)
         p = projects.get_project(conn, pid)
     if not v or v["project_id"] != pid:
-        raise HTTPException(404, f"版本不存在: id={vid}")
+        raise NotFoundError(
+            "Version not found", code="version.not_found", details={"id": vid},
+        )
     assert p is not None
     return {**v, "stats": versions.stats_for_version(p, v)}
 
@@ -239,11 +237,12 @@ def patch_version_endpoint(
     with db.connection_for() as conn:
         v = versions.get_version(conn, vid)
         if not v or v["project_id"] != pid:
-            raise HTTPException(404, f"版本不存在: id={vid}")
-        try:
-            v = versions.update_version(conn, vid, **fields)
-        except versions.VersionError as exc:
-            _project_err_code(exc); raise  # PR-2 C4: DomainError handler 翻 envelope
+            raise NotFoundError(
+                "Version not found", code="version.not_found",
+                details={"id": vid},
+            )
+        # VersionError（label_invalid / label_exists 等）带 code 直接冒泡
+        v = versions.update_version(conn, vid, **fields)
     _publish_version_state(v)
     return v
 
@@ -253,7 +252,10 @@ def delete_version_endpoint(pid: int, vid: int) -> dict[str, Any]:
     with db.connection_for() as conn:
         v = versions.get_version(conn, vid)
         if not v or v["project_id"] != pid:
-            raise HTTPException(404, f"版本不存在: id={vid}")
+            raise NotFoundError(
+                "Version not found", code="version.not_found",
+                details={"id": vid},
+            )
         versions.delete_version(conn, vid)
     return {"deleted": vid}
 
@@ -263,7 +265,10 @@ def activate_version_endpoint(pid: int, vid: int) -> dict[str, Any]:
     with db.connection_for() as conn:
         v = versions.get_version(conn, vid)
         if not v or v["project_id"] != pid:
-            raise HTTPException(404, f"版本不存在: id={vid}")
+            raise NotFoundError(
+                "Version not found", code="version.not_found",
+                details={"id": vid},
+            )
         v = versions.activate_version(conn, vid)
         p = projects.get_project(conn, pid)
     assert p is not None
@@ -299,7 +304,10 @@ def advance_phase_endpoint(pid: int, vid: int) -> dict[str, Any]:
     with db.connection_for() as conn:
         v = versions.get_version(conn, vid)
         if not v or v["project_id"] != pid:
-            raise HTTPException(404, f"版本不存在: id={vid}")
+            raise NotFoundError(
+                "Version not found", code="version.not_found",
+                details={"id": vid},
+            )
         advanced, result, new_phase = versions_phase.advance_phase(conn, vid)
         v_after = versions.get_version(conn, vid)
     if advanced and v_after is not None:
@@ -313,7 +321,10 @@ def skip_phase_endpoint(pid: int, vid: int) -> dict[str, Any]:
     with db.connection_for() as conn:
         v = versions.get_version(conn, vid)
         if not v or v["project_id"] != pid:
-            raise HTTPException(404, f"版本不存在: id={vid}")
+            raise NotFoundError(
+                "Version not found", code="version.not_found",
+                details={"id": vid},
+            )
         advanced, result, new_phase = versions_phase.skip_phase(conn, vid)
         v_after = versions.get_version(conn, vid)
     if advanced and v_after is not None:
