@@ -316,6 +316,11 @@ export interface WD14Runtime {
   /** PP9.5 — InferenceSession 创建时实际 dlopen 报的错（如缺 libcurand.so.10）；
    *  非 null 表示已自动降级到 CPU EP，UI 应提示用户装 CUDA 库或换 DirectML。 */
   cuda_load_error: string | null
+  /** torch 的 CUDA 大版本（onnxruntime-gpu build 锚点）：12 / 13 / null。
+   *  装的 ORT build 必须同 major，否则 import 期 dlopen 挂（cu128 torch → 12）。 */
+  torch_cuda_major?: number | null
+  /** 已装 ORT 的 CUDA 大版本与 torch 不一致（如装成 cu13 但 torch 是 cu12）。 */
+  ort_cuda_major_mismatch?: boolean
   /** PP9.5 — torch 自带 CUDA so 预加载结果（Linux 才会 applied=true）。 */
   preload?: {
     applied: boolean

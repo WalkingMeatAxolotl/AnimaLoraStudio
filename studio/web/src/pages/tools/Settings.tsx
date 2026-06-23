@@ -2448,6 +2448,7 @@ function ONNXRuntimeSection() {
         platform: result.platform,
         restart_required: result.restart_required,
         cuda_load_error: result.cuda_load_error, preload: result.preload, cuda_detect: result.cuda_detect,
+        torch_cuda_major: result.torch_cuda_major, ort_cuda_major_mismatch: result.ort_cuda_major_mismatch,
       })
       const newPkg = result.installed_pkg ?? result.installed ?? '?'
       const newVer = result.installed_version ?? result.version ?? '?'
@@ -2512,6 +2513,14 @@ function ONNXRuntimeSection() {
               </div>
               <div className="text-fg-tertiary">EP: <code className="text-fg-secondary font-mono">{(rt.providers ?? []).map((p) => p.replace('ExecutionProvider', '')).join(' / ') || '(none)'}</code></div>
               <div className="text-fg-tertiary">{t('settings.gpuDetect')}: <span className="text-fg-secondary">{cuda.available ? `${cuda.gpu_name ?? '?'} (driver ${cuda.driver_version ?? '?'})` : t('settings.noNvidiaGpu')}</span></div>
+              {rt.torch_cuda_major != null && (
+                <div className="text-fg-tertiary">
+                  {t('settings.torchCudaMajor')}: <span className="text-fg-secondary font-mono">{rt.torch_cuda_major}</span>
+                  {rt.ort_cuda_major_mismatch && (
+                    <span className="text-warn ml-2">⚠ {t('settings.ortCudaMismatch')}</span>
+                  )}
+                </div>
+              )}
             </div>
 
             {rt.restart_required && (

@@ -1069,6 +1069,8 @@
     "notInstalledShort": "Not installed",
     "gpuDetect": "GPU detection",
     "noNvidiaGpu": "No NVIDIA GPU detected",
+    "torchCudaMajor": "torch CUDA",
+    "ortCudaMismatch": "Installed onnxruntime's CUDA major doesn't match torch; reinstall will auto-pick the cu12/cu13 build to match torch",
     "onnxCpuEpWarning": "NVIDIA GPU detected, but onnxruntime only has CPU EP — WD14 / CLTagger will be very slow. Expand “Candidates” to install DirectML (recommended on Windows, vendor-agnostic) or the CUDA package.",
     "onnxNotInstalledHintGpu": "Not installed. Click “Auto-detect + install” below to install the best package for your platform (Windows + GPU → DirectML; Linux + GPU → CUDA).",
     "onnxNotInstalledHintCpu": "Not installed. Click “Auto-detect + install” below to install the CPU package (no NVIDIA GPU detected).",

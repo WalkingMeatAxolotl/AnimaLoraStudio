@@ -1069,6 +1069,8 @@
     "notInstalledShort": "未安装",
     "gpuDetect": "GPU 检测",
     "noNvidiaGpu": "未检测到 NVIDIA GPU",
+    "torchCudaMajor": "torch CUDA",
+    "ortCudaMismatch": "已装 onnxruntime 的 CUDA 大版本与 torch 不一致，重装时会按 torch 版本自动选 cu12/cu13 build",
     "onnxCpuEpWarning": "检测到 NVIDIA GPU 但 onnxruntime 只有 CPU EP — WD14 / CLTagger 会跑得很慢。展开「候选」装 DirectML（Windows 推荐，跨厂商）或 CUDA 版本。",
     "onnxNotInstalledHintGpu": "未安装。点下面「自动检测 + 装合适的包」按平台装最佳包（Windows + GPU → DirectML；Linux + GPU → CUDA）。",
     "onnxNotInstalledHintCpu": "未安装。点下面「自动检测 + 装合适的包」会装 CPU 版本（未检测到 NVIDIA GPU）。",
