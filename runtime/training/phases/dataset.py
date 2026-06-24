@@ -105,12 +105,12 @@ def run(ctx: TrainingContext) -> None:
         if cache_batch_size <= 0:
             cache_batch_size = int(getattr(args, "batch_size", 1) or 1)
         ctx.dataset = CachedLatentDataset(
-            ctx.dataset, ctx.vae, ctx.device, ctx.dtype,
+            ctx.dataset, ctx.vae, ctx.device, ctx.vae_dtype,
             cache_batch_size=cache_batch_size,
         )
     if ctx.reg_dataset is not None and ctx.use_cached:
         ctx.reg_dataset = CachedLatentDataset(
-            ctx.reg_dataset, ctx.vae, ctx.device, ctx.dtype,
+            ctx.reg_dataset, ctx.vae, ctx.device, ctx.vae_dtype,
             cache_batch_size=cache_batch_size,
         )
 
