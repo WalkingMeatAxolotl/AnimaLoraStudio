@@ -79,8 +79,11 @@ export function generateBuckets(p: BucketParams = {}): TrainBucket[] {
  *
  *  Mirrors `BucketManager.get_bucket` in `runtime/training/dataset.py:42-51`:
  *  argmin over buckets of **absolute** AR distance |aspect - bucket.aspect|.
- *  NOT relative distance — must match Python exactly so the frontend's
- *  predicted bucket equals what the trainer will choose.
+ *  NOT relative distance. When multiple buckets have identical AR distance,
+ *  prefer the one whose area is closest to baseReso² (e.g. exact-square inputs
+ *  at base=1536 choose 1536×1536 instead of the first smaller square bucket).
+ *  This must match Python exactly so the frontend's predicted bucket equals
+ *  what the trainer will choose.
  *
  *  Returns the (baseReso, baseReso) square bucket if `buckets` is empty.
  */
@@ -92,14 +95,18 @@ export function snapToBucket(
   if (buckets.length === 0) {
     return { w: baseReso, h: baseReso, aspect: 1 }
   }
+  const baseArea = baseReso * baseReso
   let best = buckets[0]
-  let bestDiff = Math.abs(aspect - best.aspect)
+  let bestArDiff = Math.abs(aspect - best.aspect)
+  let bestAreaDiff = Math.abs(best.w * best.h - baseArea)
   for (let i = 1; i < buckets.length; i++) {
     const b = buckets[i]
-    const d = Math.abs(aspect - b.aspect)
-    if (d < bestDiff) {
+    const arDiff = Math.abs(aspect - b.aspect)
+    const areaDiff = Math.abs(b.w * b.h - baseArea)
+    if (arDiff < bestArDiff || (arDiff === bestArDiff && areaDiff < bestAreaDiff)) {
       best = b
-      bestDiff = d
+      bestArDiff = arDiff
+      bestAreaDiff = areaDiff
     }
   }
   return best

@@ -91,14 +91,19 @@ class BucketManager:
 
     def get_bucket(self, w, h):
         # Snap by ABSOLUTE AR distance — not relative. The TS port
-        # `trainBuckets.snapToBucket()` mirrors this exactly.
+        # `trainBuckets.snapToBucket()` mirrors this exactly. Multiple buckets
+        # may share the same aspect ratio under the ±10% area band (e.g.
+        # 1472²/1536²/1600² when base=1536); in that tie, prefer the bucket
+        # whose area is closest to base² so exact-square inputs land on the
+        # configured base square instead of the first smaller square.
         aspect = w / h
+        base_area = self.base_reso * self.base_reso
         best = (self.base_reso, self.base_reso)
-        best_diff = float("inf")
+        best_score = (float("inf"), float("inf"))
         for bw, bh in self.buckets:
-            diff = abs(aspect - bw/bh)
-            if diff < best_diff:
-                best_diff = diff
+            score = (abs(aspect - bw/bh), abs(bw * bh - base_area))
+            if score < best_score:
+                best_score = score
                 best = (bw, bh)
         return best
 

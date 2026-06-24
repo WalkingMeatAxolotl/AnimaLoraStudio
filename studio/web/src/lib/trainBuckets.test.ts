@@ -115,6 +115,17 @@ describe('snapToBucket', () => {
     }
   })
 
+  it('uses area as tie-breaker for same-AR buckets', () => {
+    const highResBuckets = generateBuckets({ baseReso: 1536, maxArRatio: 2.0 })
+    expect(highResBuckets.some((b) => b.w === 1472 && b.h === 1472)).toBe(true)
+    expect(highResBuckets.some((b) => b.w === 1536 && b.h === 1536)).toBe(true)
+    expect(highResBuckets.some((b) => b.w === 1600 && b.h === 1600)).toBe(true)
+
+    const b = snapToBucket(1.0, highResBuckets, 1536)
+    expect(b.w).toBe(1536)
+    expect(b.h).toBe(1536)
+  })
+
   it('handles extreme wide → snaps to the widest bucket', () => {
     const b = snapToBucket(5.0, bs)
     // Widest allowed under max_ar=2.0
