@@ -543,6 +543,7 @@ def run(ctx: TrainingContext) -> None:
                             ctx.loss_history, monitor_state=monitor_data, scheduler=ctx.scheduler,
                             timestep_sampler=ctx.timestep_sampler,
                             sra_aligner=ctx.sra_aligner,
+                            scaler=ctx.scaler,
                         )
                         # 同时保存 LoRA 权重
                         lora_path = ctx.output_dir / f"{args.output_name}_step{ctx.global_step}.safetensors"
@@ -608,6 +609,7 @@ def run(ctx: TrainingContext) -> None:
                         ctx.loss_history, monitor_state=monitor_data, scheduler=ctx.scheduler,
                         timestep_sampler=ctx.timestep_sampler,
                         sra_aligner=ctx.sra_aligner,
+                        scaler=ctx.scaler,
                     )
                     lora_path = ctx.output_dir / f"{args.output_name}_epoch{ctx.current_epoch}.safetensors"
                     if not lora_path.exists():
@@ -639,6 +641,7 @@ def run(ctx: TrainingContext) -> None:
                     monitor_state=monitor_data, scheduler=ctx.scheduler,
                     timestep_sampler=ctx.timestep_sampler,
                     sra_aligner=ctx.sra_aligner,
+                    scaler=ctx.scaler,
                 )
             ctx.wandb_monitor.upload_state_auto(auto_state_path)
             # 更新 ctx 字段供 handle_interrupt emit pause_state 用

@@ -71,6 +71,9 @@ class VAEWrapper:
         self.mean = mean
         self.std = std
         self.scale = [mean, 1.0 / std]
+        # VAE 权重精度（mean/std 与 model 同 dtype）。encode/decode 入口按此 cast 输入，
+        # 这样 fp16 训练 + fp32 VAE 时调用方传 fp16 latent / pixel 也不会 dtype mismatch。
+        self.dtype = mean.dtype
         # 分块模式：
         #   auto（默认）= 按 free VRAM 估算，整图峰值逼近可用显存时主动分块；
         #   on          = 始终分块（省显存，慢约 30%）；
@@ -115,6 +118,7 @@ class VAEWrapper:
         z: ``[b, 16, t, H, W]`` latent
         return: ``[b, 3, t, H*8, W*8]``（与底层 `WanVAE_.decode` 一致，未 clamp）
         """
+        z = z.to(self.dtype)  # 对齐 VAE 权重精度（fp16 训练 / fp32 VAE；dtype 一致时为 no-op）
         if self.tiling == "on":
             return self._tiled_decode(z)
 
@@ -148,6 +152,7 @@ class VAEWrapper:
         pixels: ``[b, 3, t, H, W]``（H/W 为像素分辨率，须为 8 的倍数）
         return: ``[b, 16, t, H/8, W/8]`` latent（与 `WanVAE_.encode` 一致）
         """
+        pixels = pixels.to(self.dtype)  # 对齐 VAE 权重精度（同 decode；dtype 一致时为 no-op）
         if self.tiling == "on":
             return self._tiled_encode(pixels)
 

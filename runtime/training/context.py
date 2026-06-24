@@ -33,6 +33,10 @@ class TrainingContext:
     config_dir: Optional[Path] = None
     device: str = "cpu"
     dtype: torch.dtype = torch.float32
+    # VAE 工作精度，独立于训练 dtype。fp16 训练时 VAE 仍走 fp32：V100/Turing 等需要
+    # fp16 的卡没有 bf16，而 fp16 VAE encode/decode 易溢出成 NaN（黑图 / latent 全 NaN
+    # → 训练步全跳）。bootstrap 据 dtype 推导；对齐 ComfyUI vae_dtype() 与出图侧 vae_precision。
+    vae_dtype: torch.dtype = torch.float32
     output_dir: Optional[Path] = None
     sample_dir: Optional[Path] = None
     wandb_monitor: Any = None         # observability.WandBMonitor
