@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from .. import db, secrets as _secrets
-from ..services import eval_auto
+from ..services import eval_auto, eval_validation
 from ..services.projects import jobs as project_jobs
 from ..infrastructure.log_tail import LogTailer, MonitorStatePoller
 from ..paths import (
@@ -543,6 +543,10 @@ class Supervisor:
             log_path.parent.mkdir(parents=True, exist_ok=True)
             log_fp = open(log_path, "wb")
 
+            # 训练前：若 task 启用了验证集指标且设了分隔比例，从 train/ 划 held-out
+            # 到 validation/（移动，不参与训练）。失败不阻断训练，只记日志。
+            self._maybe_split_validation(task, cfg_path, log_fp)
+
             cmd = self._cmd_builder(task, cfg_path)
             # ADR 0006 PR-1：LORA_TASK_ID 注入让训练子进程把用户周期 save 写到
             # output_dir/state/task_<TID>/ 子目录，避免同 version 多 task 互覆盖。
@@ -596,6 +600,31 @@ class Supervisor:
         if explicit_cfg:
             return Path(explicit_cfg)
         return self._configs_dir / f"{task['config_name']}.yaml"
+
+    def _maybe_split_validation(
+        self, task: dict[str, Any], cfg_path: Path, log_fp: Any
+    ) -> None:
+        """训练前把 held-out 验证集从 train/ 划到 validation/（移动）。
+
+        仅当 task 启用 eval_validation 且 ratio>0 时生效；按比例补足、够了不动、
+        永不移回。失败只记日志，不阻断训练。
+        """
+        try:
+            with db.connection_for(self._db_path) as conn:
+                summary = eval_validation.split_for_task(conn, task, cfg_path)
+        except Exception:
+            logger.exception("validation split failed for task=%s", task.get("id"))
+            return
+        if summary and summary.get("moved"):
+            try:
+                log_fp.write(
+                    f"[eval-validation] moved {summary['moved']} image(s) to "
+                    f"validation/ (train={summary['train']}, "
+                    f"validation={summary['validation']})\n".encode("utf-8")
+                )
+                log_fp.flush()
+            except Exception:
+                pass
 
     def _fail_task_config_missing(
         self, task: dict[str, Any], cfg_path: Path

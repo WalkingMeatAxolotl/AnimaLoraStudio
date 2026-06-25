@@ -1037,6 +1037,25 @@ class TrainingConfig(BaseModel):
         json_schema_extra=_meta("sample", hidden=True),
     )
 
+    # ----------------------------------------------------------- 训练后指标评估
+    eval_validation_enabled: bool = Field(
+        False,
+        description="训练结束后用验证集（held-out）出图并计算 CLIP-T / CLIP-I / DINO-I 指标。"
+                    "验证集是从训练集划出、不参与训练的图，放在与 train/ 同级的 validation/。",
+        json_schema_extra=_meta("eval_validation"),
+    )
+    eval_validation_split_ratio: float = Field(
+        0.0, ge=0.0, le=1.0,
+        description="训练开始前从数据集随机划入验证集的比例（0–1，0=不自动划分）。"
+                    "推荐约 0.1。按比例补足：验证集已达到该比例就不再划分；数据集很小时取整后可能为 0。",
+        json_schema_extra=_meta("eval_validation", show_when="eval_validation_enabled==true"),
+    )
+    eval_validation_split_seed: int = Field(
+        0, ge=0,
+        description="验证集随机划分的种子，固定后划分结果可复现。",
+        json_schema_extra=_meta("eval_validation", show_when="eval_validation_enabled==true"),
+    )
+
     # --------------------------------------------------------------- WandB 预设覆盖
     wandb_notice: str = Field(
         "",

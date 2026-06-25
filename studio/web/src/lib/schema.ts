@@ -99,6 +99,7 @@ export const SCHEMA_GROUP_LABEL_KEYS: Record<string, string> = {
   system: 'schema.groups.system',
   output: 'schema.groups.output',
   sample: 'schema.groups.sample',
+  eval_validation: 'schema.groups.evalValidation',
   monitor: 'schema.groups.monitor',
   wandb: 'schema.groups.wandb',
 }

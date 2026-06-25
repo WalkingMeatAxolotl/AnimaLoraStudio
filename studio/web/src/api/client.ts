@@ -2741,6 +2741,16 @@ export const api = {
       (taskId ? `task_id=${taskId}&` : '') +
       `_=${Date.now()}`,
     ),
+  /** 手动评估完成任务的选定 checkpoint（task-scoped，绕过自动评估开关）。 */
+  runTaskEval: (
+    pid: number,
+    vid: number,
+    body: { task_id: number; checkpoints: string[]; max_items?: number },
+  ) =>
+    req<{ queued: number }>(
+      `/api/projects/${pid}/versions/${vid}/eval/run`,
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
 
   // Queue import / export ---------------------------------------------
   /** 队列导出直链。响应带 Content-Disposition: attachment,<a href download>

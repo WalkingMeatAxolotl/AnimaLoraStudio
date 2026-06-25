@@ -1,12 +1,16 @@
-"""Persistent eval sample runs for version-scoped LoRA validation.
+"""Persistent eval sample runs for LoRA validation (ADR-0011 revised).
 
-This consumes the eval manifest from ADR-0010 and records generated samples,
-but intentionally does not compute metrics. Heavy model imports stay inside the
-default generator so API/tests can exercise the contract without loading torch.
+Reference + prompts come from the version's held-out ``validation/`` set (see
+``eval_validation``): each generated sample carries its own ``reference_image``.
+When ``validation/`` is empty the run falls back to the training config's sample
+prompts and scores CLIP-T only (no reference image → no CLIP-I / DINO-I).
+Generation params come from the version's ``sample_*`` config. There is no
+separate manifest file — each ``run.json`` is self-contained. Heavy model
+imports stay inside the default generator so API/tests can exercise the contract
+without loading torch.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -14,9 +18,14 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from . import eval_manifest
+from . import eval_validation
 from .projects import jobs as project_jobs
 from .projects import versions
+
+EVAL_DIRNAME = "eval"
+# Reproducible default generation seed when sample_seed is 0 (=random for samples).
+DEFAULT_GEN_SEED = 12345
+DEFAULT_SAMPLE_PROMPT = "masterpiece, best quality"
 
 SCHEMA_VERSION = 1
 JOB_KIND = "eval_samples"
@@ -38,7 +47,9 @@ SampleGenerator = Callable[[dict[str, Any], Path, Callable[[str], None]], None]
 
 
 def _eval_root(version_dir: Path, eval_root: Path | None = None) -> Path:
-    return eval_root if eval_root is not None else eval_manifest.eval_dir(version_dir)
+    # Eval output is task-scoped (eval_root = tasks/<id>/eval). The version-dir
+    # fallback only serves legacy reads when no task scope is supplied.
+    return eval_root if eval_root is not None else version_dir / EVAL_DIRNAME
 
 
 def samples_dir(version_dir: Path, eval_root: Path | None = None) -> Path:
@@ -62,13 +73,6 @@ def _atomic_write(path: Path, data: dict[str, Any]) -> None:
         encoding="utf-8",
     )
     os.replace(tmp, path)
-
-
-def _manifest_digest(manifest: dict[str, Any]) -> str:
-    raw = json.dumps(
-        manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
 
 
 def _validate_run_id(run_id: str) -> str:
@@ -157,86 +161,115 @@ def _resolve_checkpoint(version_dir: Path, raw_path: str | None) -> dict[str, An
     }
 
 
-def _prompt_records(manifest: dict[str, Any]) -> list[dict[str, Any]]:
-    prompts = manifest.get("prompts") if isinstance(manifest.get("prompts"), list) else []
-    out: list[dict[str, Any]] = []
-    for idx, prompt in enumerate(prompts):
-        if not isinstance(prompt, dict):
-            continue
-        text = " ".join(str(prompt.get("text") or "").strip().split())
-        if not text:
-            continue
-        out.append({
-            "id": str(prompt.get("id") or f"prompt:{idx + 1}"),
-            "text": text,
-            "source": str(prompt.get("source") or "manifest"),
-        })
-    if out:
-        return out
-
-    heldout = manifest.get("heldout") if isinstance(manifest.get("heldout"), list) else []
-    for idx, item in enumerate(heldout):
-        if not isinstance(item, dict):
-            continue
-        text = " ".join(str(item.get("prompt") or "").strip().split())
+def _caption_text(image: Path) -> str:
+    """Read an image's caption sidecar (.json via caption_format, else .txt)."""
+    for caption in eval_validation.caption_sidecars(image):
+        if caption.suffix.lower() == ".json":
+            try:
+                data = json.loads(caption.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            from .tagging.caption_format import caption_json_to_text
+            text = caption_json_to_text(data if isinstance(data, dict) else None)
+        else:
+            try:
+                text = caption.read_text(encoding="utf-8")
+            except OSError:
+                continue
+        text = " ".join(str(text or "").strip().split())
         if text:
-            out.append({
-                "id": str(item.get("id") or f"heldout:{idx + 1}"),
-                "text": text,
-                "source": "heldout",
-            })
-    return out
+            return text
+    return ""
 
 
-def _seed_records(manifest: dict[str, Any]) -> list[int]:
-    raw = manifest.get("seeds") if isinstance(manifest.get("seeds"), list) else []
-    seeds: list[int] = []
-    for value in raw:
-        try:
-            seed = int(value)
-        except (TypeError, ValueError):
-            continue
-        if 0 <= seed <= 2**32 - 1 and seed not in seeds:
-            seeds.append(seed)
-    if seeds:
-        return seeds
-
-    heldout = manifest.get("heldout") if isinstance(manifest.get("heldout"), list) else []
-    for item in heldout:
-        if not isinstance(item, dict):
-            continue
-        try:
-            seed = int(item.get("seed"))
-        except (TypeError, ValueError):
-            continue
-        if 0 <= seed <= 2**32 - 1 and seed not in seeds:
-            seeds.append(seed)
-    return seeds or [12345]
+def _read_config(project: dict[str, Any], version: dict[str, Any]) -> dict[str, Any]:
+    """Version training config (for sample_* generation params). {} if unset."""
+    from . import version_config
+    try:
+        return version_config.read_version_config(project, version)
+    except Exception:
+        return {}
 
 
-def _planned_items(manifest: dict[str, Any], max_items: int) -> list[dict[str, Any]]:
-    prompts = _prompt_records(manifest)
-    if not prompts:
-        raise EvalSamplesError("eval manifest 没有可用 prompt")
-    seeds = _seed_records(manifest)
+def _generation_from_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
+    raw_res = cfg.get("resolution")
+    if isinstance(raw_res, (list, tuple)) and raw_res:
+        res = int(max(raw_res))
+    elif isinstance(raw_res, (int, float)):
+        res = int(raw_res)
+    else:
+        res = 1024
+    seed = int(cfg.get("sample_seed") or 0) or DEFAULT_GEN_SEED
+    return {
+        "width": int(cfg.get("sample_width") or 0) or res,
+        "height": int(cfg.get("sample_height") or 0) or res,
+        "steps": int(cfg.get("sample_infer_steps") or 25),
+        "guidance_scale": float(cfg.get("sample_cfg_scale") or 4.0),
+        "sampler_name": str(cfg.get("sample_sampler_name") or "er_sde"),
+        "scheduler": str(cfg.get("sample_scheduler") or "simple"),
+        "negative_prompt": str(cfg.get("sample_negative_prompt") or ""),
+        "lora_scale": 1.0,
+        "seed": seed,
+    }
+
+
+def _config_prompts(cfg: dict[str, Any]) -> list[str]:
+    raw = cfg.get("sample_prompts")
+    prompts = [str(p).strip() for p in raw if str(p).strip()] if isinstance(raw, list) else []
+    if prompts:
+        return prompts
+    single = str(cfg.get("sample_prompt") or "").strip()
+    return [single] if single else [DEFAULT_SAMPLE_PROMPT]
+
+
+def _planned_items(
+    version_dir: Path, cfg: dict[str, Any], gen_seed: int, max_items: int
+) -> list[dict[str, Any]]:
+    """Build sample items from the held-out validation set.
+
+    Each validation image → one item whose prompt is its caption and whose
+    ``reference_image`` is the image (rel to version dir) for CLIP-I / DINO-I.
+    When ``validation/`` is empty, fall back to the config's sample prompts with
+    no reference (CLIP-T only).
+    """
     items: list[dict[str, Any]] = []
-    for prompt_idx, prompt in enumerate(prompts):
-        for seed in seeds:
+    val_images = list(eval_validation.iter_images(eval_validation.validation_dir(version_dir)))
+    if val_images:
+        for folder_name, image in val_images:
             if len(items) >= max_items:
-                return items
+                break
+            rel = _rel_to_version(version_dir, image)
+            prompt = _caption_text(image) or DEFAULT_SAMPLE_PROMPT
             idx = len(items)
-            filename = f"sample_{idx:04d}_p{prompt_idx:03d}_s{seed}.png"
             items.append({
-                "id": f"{prompt['id']}:{seed}",
-                "prompt_id": prompt["id"],
-                "prompt": prompt["text"],
-                "prompt_source": prompt["source"],
-                "seed": seed,
-                "filename": filename,
+                "id": f"val:{rel}:{gen_seed}",
+                "prompt_id": f"val:{rel}",
+                "prompt": prompt,
+                "prompt_source": "caption" if _caption_text(image) else "empty",
+                "seed": gen_seed,
+                "filename": f"sample_{idx:04d}_s{gen_seed}.png",
                 "path": "",
+                "reference_image": rel,
                 "status": "pending",
                 "error": None,
             })
+        return items
+
+    for idx, prompt in enumerate(_config_prompts(cfg)):
+        if len(items) >= max_items:
+            break
+        items.append({
+            "id": f"prompt:{idx}:{gen_seed}",
+            "prompt_id": f"prompt:{idx}",
+            "prompt": prompt,
+            "prompt_source": "sample_prompt",
+            "seed": gen_seed,
+            "filename": f"sample_{idx:04d}_s{gen_seed}.png",
+            "path": "",
+            "reference_image": None,
+            "status": "pending",
+            "error": None,
+        })
     return items
 
 
@@ -306,11 +339,14 @@ def create_run(
     now: float | None = None,
 ) -> dict[str, Any]:
     ts = time.time() if now is None else float(now)
-    manifest = eval_manifest.load_manifest(version_dir)
-    if manifest is None:
-        manifest = eval_manifest.save_default_manifest(project, version, version_dir, now=ts)
+    cfg = _read_config(project, version)
+    generation = _generation_from_cfg(cfg)
     checkpoint = _resolve_checkpoint(version_dir, checkpoint_path)
-    items = _planned_items(manifest, _clamp_max_items(max_items))
+    items = _planned_items(
+        version_dir, cfg, int(generation["seed"]), _clamp_max_items(max_items)
+    )
+    if not items:
+        raise EvalSamplesError("没有可评估的样本：validation/ 为空且未配置 sample prompt")
     base_run_id = _now_run_id(ts, checkpoint)
     run_id = base_run_id
     root = run_dir(version_dir, run_id, eval_root)
@@ -339,15 +375,12 @@ def create_run(
         "started_at": None,
         "finished_at": None,
         "error": None,
-        "manifest_path": eval_manifest.manifest_path(version_dir).relative_to(version_dir).as_posix(),
-        "manifest_digest": _manifest_digest(manifest),
-        "manifest_snapshot": manifest,
         "checkpoint": checkpoint,
         "auto_metrics": bool(auto_metrics),
         "auto_source": dict(auto_source) if auto_source else None,
         "storage_scope": "task" if eval_root is not None else "version",
         "eval_root": str(eval_root.resolve()) if eval_root is not None else None,
-        "generation": dict(manifest.get("generation") or {}),
+        "generation": generation,
         "items": items,
         "summary": _summary(items),
     }
@@ -506,13 +539,12 @@ def _default_generator(
             sys.path.insert(0, text)
 
     import anima_train as _T  # noqa: WPS433
-    from studio.schema import migrate_legacy_attention
     from studio.services import version_config
     from studio.services.inference.core import LoRASpec, apply_loras
 
     project = {"id": run["project_id"], "slug": run["project_slug"]}
     version = {"id": run["version_id"], "label": run["version_label"]}
-    cfg = migrate_legacy_attention(version_config.read_version_config(project, version))
+    cfg = version_config.read_version_config(project, version)
 
     generation = run.get("generation") if isinstance(run.get("generation"), dict) else {}
     width = int(generation.get("width") or cfg.get("sample_width") or cfg.get("resolution") or 1024)

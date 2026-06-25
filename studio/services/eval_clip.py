@@ -520,44 +520,29 @@ def _mean(values: list[float]) -> float | None:
 
 
 def _reference_paths(run: dict[str, Any], version_dir: Path) -> dict[str, Path]:
-    manifest = (
-        run.get("manifest_snapshot")
-        if isinstance(run.get("manifest_snapshot"), dict)
-        else {}
-    )
-    heldout_items = (
-        manifest.get("heldout") if isinstance(manifest.get("heldout"), list) else []
-    )
-    prompts = (
-        manifest.get("prompts") if isinstance(manifest.get("prompts"), list) else []
-    )
-    heldout_by_id: dict[str, dict[str, Any]] = {}
-    heldout_by_image: dict[str, dict[str, Any]] = {}
-    for item in heldout_items:
+    """Map each item's prompt_id → its held-out reference image (validation/).
+
+    Items without a ``reference_image`` (CLIP-T-only fallback when validation/ is
+    empty) or whose reference file is missing are skipped — those score CLIP-T
+    only, never CLIP-I.
+    """
+    out: dict[str, Path] = {}
+    items = run.get("items") if isinstance(run.get("items"), list) else []
+    for item in items:
         if not isinstance(item, dict):
             continue
-        image = str(item.get("image") or "")
-        heldout_by_id[str(item.get("id") or image)] = item
-        heldout_by_image[image] = item
-
-    out: dict[str, Path] = {}
-    for prompt in prompts:
-        if not isinstance(prompt, dict):
+        rel = item.get("reference_image")
+        prompt_id = str(item.get("prompt_id") or "")
+        if not rel or not prompt_id:
             continue
-        prompt_id = str(prompt.get("id") or "")
-        heldout_id = str(prompt.get("heldout_id") or "")
-        item = heldout_by_id.get(heldout_id)
-        if item is None and prompt_id.startswith("caption:"):
-            item = heldout_by_image.get(prompt_id[len("caption:"):])
-        if item is None:
+        try:
+            out[prompt_id] = _reference_rel_path(version_dir, str(rel))
+        except EvalClipError:
             continue
-        image = str(item.get("image") or "")
-        if image:
-            out[prompt_id] = _train_rel_path(version_dir, image)
     return out
 
 
-def _train_rel_path(version_dir: Path, rel: str) -> Path:
+def _reference_rel_path(version_dir: Path, rel: str) -> Path:
     raw = rel.strip().replace("\\", "/")
     path = PurePosixPath(raw)
     if (
@@ -566,12 +551,12 @@ def _train_rel_path(version_dir: Path, rel: str) -> Path:
         or any(":" in part for part in path.parts)
     ):
         raise EvalClipError(f"invalid reference image path: {rel!r}")
-    base = (version_dir / "train").resolve()
+    base = version_dir.resolve()
     resolved = (base / Path(*path.parts)).resolve()
     try:
         resolved.relative_to(base)
     except ValueError as exc:
-        raise EvalClipError(f"reference image path escapes train/: {rel!r}") from exc
+        raise EvalClipError(f"reference image path escapes version dir: {rel!r}") from exc
     if not resolved.is_file():
         raise EvalClipError(f"reference image not found: {rel}")
     return resolved

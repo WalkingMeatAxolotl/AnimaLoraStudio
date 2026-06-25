@@ -73,8 +73,6 @@ type Section =
   | 'generate'
   | 'proxy'
 
-type AutoEvalTrigger = 'after_training' | 'checkpoint'
-
 type Tab = 'dataset' | 'tagging' | 'preprocess' | 'training' | 'monitor' | 'testing' | 'credentials' | 'appearance' | 'system'
 
 // 外部页面通过 `?section=<id>` 跳转到 SettingsPage 的特定 section 时，用这个
@@ -924,28 +922,7 @@ export default function SettingsPage() {
 
       {tab === 'training' && (<>
       <SettingsSection id="eval-metrics" title={t('settings.evalMetricModels')}>
-        <SettingsField
-          label={t('settings.autoEvalOnCheckpoint')}
-          helpTooltip={<p>{t('settings.autoEvalOnCheckpointHelp')}</p>}
-        >
-          <Bool
-            value={draft.eval_metrics.auto_eval_on_checkpoint}
-            onChange={(v) => update('eval_metrics', 'auto_eval_on_checkpoint', v)}
-          />
-        </SettingsField>
-        <SettingsField
-          label={t('settings.autoEvalTrigger')}
-          helpTooltip={<p>{t('settings.autoEvalTriggerHelp')}</p>}
-        >
-          <select
-            value={draft.eval_metrics.auto_eval_trigger}
-            onChange={(e) => update('eval_metrics', 'auto_eval_trigger', e.target.value as AutoEvalTrigger)}
-            className={textInputClass}
-          >
-            <option value="after_training">{t('settings.autoEvalTriggerAfterTraining')}</option>
-            <option value="checkpoint">{t('settings.autoEvalTriggerCheckpoint')}</option>
-          </select>
-        </SettingsField>
+        <p className="text-xs text-fg-tertiary">{t('settings.evalMetricModelsHint')}</p>
         <SettingsField
           label={t('settings.autoEvalMaxItems')}
           helpTooltip={<p>{t('settings.autoEvalMaxItemsHelp')}</p>}

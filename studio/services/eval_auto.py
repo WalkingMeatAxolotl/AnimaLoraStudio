@@ -16,6 +16,16 @@ logger = logging.getLogger(__name__)
 ProgressFn = Callable[[str], None]
 
 
+def _version_eval_enabled(project: dict[str, Any], version: dict[str, Any]) -> bool:
+    """Per-version opt-in for post-training validation metrics (training config)."""
+    from studio.services import version_config
+    try:
+        cfg = version_config.read_version_config(project, version)
+    except Exception:
+        return False
+    return bool(cfg.get("eval_validation_enabled"))
+
+
 def queue_checkpoint_eval(
     conn,
     task: dict[str, Any],
@@ -180,12 +190,12 @@ def queue_training_finished_eval(
     task: dict[str, Any],
     payload: dict[str, Any] | None = None,
 ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-    """Queue eval sample jobs for all saved LoRA checkpoints after training."""
+    """Queue eval sample jobs for all saved LoRA checkpoints after training.
+
+    Gated on the version's per-version opt-in (training config
+    ``eval_validation_enabled``); the held-out validation set is the reference.
+    """
     cfg = secrets.load().eval_metrics
-    if not cfg.auto_eval_on_checkpoint:
-        return []
-    if cfg.auto_eval_trigger != "after_training":
-        return []
 
     project_id = int(task.get("project_id") or 0)
     version_id = int(task.get("version_id") or 0)
@@ -195,6 +205,9 @@ def queue_training_finished_eval(
     project = projects.get_project(conn, project_id)
     version = versions.get_version(conn, version_id)
     if not project or not version or int(version["project_id"]) != project_id:
+        return []
+
+    if not _version_eval_enabled(project, version):
         return []
 
     vdir = versions.version_dir(project_id, str(project["slug"]), str(version["label"]))
@@ -240,6 +253,71 @@ def queue_training_finished_eval(
         "queued after-training eval sample jobs for task=%s count=%s",
         task.get("id"),
         len(queued),
+    )
+    return queued
+
+
+def queue_manual_task_eval(
+    conn,
+    task: dict[str, Any],
+    checkpoints: list[str],
+    *,
+    max_items: int | None = None,
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """Queue task-scoped eval sample+metric jobs for an explicit checkpoint set.
+
+    Unlike :func:`queue_training_finished_eval` / :func:`queue_checkpoint_eval`,
+    this is the *manual* entry point (a user clicking "运行评估" on a finished
+    task), so it does NOT gate on ``auto_eval_on_checkpoint`` / ``auto_eval_trigger``.
+    It still reuses the Settings defaults for sample count and metric models, and
+    writes under ``tasks/<id>/eval/`` so results show up in that task's eval page.
+    """
+    cfg = secrets.load().eval_metrics
+    items = max_items if max_items is not None else cfg.auto_eval_max_items
+
+    project_id = int(task.get("project_id") or 0)
+    version_id = int(task.get("version_id") or 0)
+    task_id = int(task.get("id") or 0)
+    if not project_id or not version_id or not task_id:
+        return []
+
+    project = projects.get_project(conn, project_id)
+    version = versions.get_version(conn, version_id)
+    if not project or not version or int(version["project_id"]) != project_id:
+        return []
+
+    vdir = versions.version_dir(project_id, str(project["slug"]), str(version["label"]))
+    eval_root = task_eval_dir(task_id)
+    queued: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    seen: set[str] = set()
+    for raw in checkpoints:
+        rel = _checkpoint_relative_to_output(
+            project_id, str(project.get("slug") or ""), version, str(raw or "")
+        )
+        if not rel or rel in seen:
+            continue
+        seen.add(rel)
+        try:
+            job, run = eval_samples.start_job(
+                conn,
+                project,
+                version,
+                vdir,
+                checkpoint_path=rel,
+                max_items=items,
+                auto_metrics=True,
+                auto_source={"task_id": task_id, "trigger": "manual"},
+                eval_root=eval_root,
+            )
+        except Exception:
+            logger.exception(
+                "manual eval enqueue failed for task=%s checkpoint=%s", task_id, raw
+            )
+            continue
+        queued.append((job, run))
+
+    logger.info(
+        "queued manual eval sample jobs for task=%s count=%s", task_id, len(queued)
     )
     return queued
 

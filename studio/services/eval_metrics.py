@@ -1,4 +1,4 @@
-"""Metric result contract for ADR-0010 eval sample runs.
+"""Metric result contract for ADR-0011 eval sample runs.
 
 This module defines where metric runners will write their outputs and how the
 API should represent empty/not-yet-computed states. It intentionally does not
@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import eval_manifest, eval_samples
+from . import eval_samples
 
 SCHEMA_VERSION = 1
 METRICS_FILE = "metrics.json"
@@ -87,7 +87,7 @@ def metrics_path(version_dir: Path, run_id: str, eval_root: Path | None = None) 
 
 
 def cache_dir(version_dir: Path, eval_root: Path | None = None) -> Path:
-    root = eval_root if eval_root is not None else eval_manifest.eval_dir(version_dir)
+    root = eval_root if eval_root is not None else version_dir / eval_samples.EVAL_DIRNAME
     return root / CACHE_DIRNAME
 
 

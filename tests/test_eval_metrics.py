@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from studio import db, server
 from studio.infrastructure import paths as infra_paths
-from studio.services import eval_manifest, eval_metrics, eval_samples
+from studio.services import eval_metrics, eval_samples
 from studio.services.projects import projects, versions
 
 
@@ -40,11 +40,11 @@ def _new_project(isolated) -> tuple[dict[str, Any], dict[str, Any], Path]:
     return project, version, vdir
 
 
-def _seed_train_and_ckpt(vdir: Path) -> None:
-    train = vdir / "train" / "1_data"
-    train.mkdir(parents=True, exist_ok=True)
-    (train / "a.png").write_bytes(b"png-a")
-    (train / "a.txt").write_text("solo, red hair", encoding="utf-8")
+def _seed_validation_and_ckpt(vdir: Path) -> None:
+    val = vdir / "validation" / "1_data"
+    val.mkdir(parents=True, exist_ok=True)
+    (val / "a.png").write_bytes(b"png-a")
+    (val / "a.txt").write_text("solo, red hair", encoding="utf-8")
     output = vdir / "output"
     output.mkdir(parents=True, exist_ok=True)
     (output / "model_step100.safetensors").write_bytes(b"fake-lora")
@@ -57,8 +57,7 @@ def _sample_run(
     *,
     eval_root: Path | None = None,
 ) -> dict[str, Any]:
-    _seed_train_and_ckpt(vdir)
-    eval_manifest.save_default_manifest(project, version, vdir, now=1000.0)
+    _seed_validation_and_ckpt(vdir)
     return eval_samples.create_run(
         project,
         version,

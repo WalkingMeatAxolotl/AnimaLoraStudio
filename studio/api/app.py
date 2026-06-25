@@ -43,7 +43,6 @@ from .routers import (
 from .routers.projects import crud as projects_crud
 from .routers.projects import exports as projects_exports
 from .routers.projects import curation as projects_curation
-from .routers.projects import eval_manifest as projects_eval_manifest
 from .routers.projects import eval_metrics as projects_eval_metrics
 from .routers.projects import eval_samples as projects_eval_samples
 from .routers.projects import ingestion as projects_ingestion
@@ -100,11 +99,9 @@ app.include_router(queue_lifecycle.router)
 app.include_router(queue_outputs.router)
 # PR-6.5 commit 1: projects/versions CRUD 子包第一刀（16 routes）
 app.include_router(projects_crud.router)
-# ADR-0010 PR 0+1: version-scoped eval manifest protocol (3 routes)
-app.include_router(projects_eval_manifest.router)
-# ADR-0010 PR 2: version-scoped eval sample runs (4 routes)
+# ADR-0011: eval sample runs + manual run trigger (task-scoped)
 app.include_router(projects_eval_samples.router)
-# ADR-0010 metric result endpoints and concrete metric runner triggers
+# ADR-0011: metric result endpoints and concrete metric runner triggers
 app.include_router(projects_eval_metrics.router)
 # PR-6.5 commit 2: train.zip / bundle.zip / export-bundle / import-bundle (path/upload) /
 # import-train（6 routes）

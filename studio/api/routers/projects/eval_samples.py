@@ -7,11 +7,11 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
-from ...schemas.projects import EvalSamplesStart
+from ...schemas.projects import EvalRunRequest
 from ._shared import _publish_job_state, _version_dir_or_404
 from .... import db
 from ....infrastructure.paths import task_eval_dir
-from ....services import eval_samples
+from ....services import eval_auto, eval_samples
 from ....services.projects import jobs as project_jobs
 
 router = APIRouter()
@@ -49,27 +49,37 @@ def list_eval_sample_runs_endpoint(
     return {"runs": runs, "latest_job": job, "log_tail": _tail_log(job)}
 
 
-@router.post("/api/projects/{pid}/versions/{vid}/eval/samples")
-def start_eval_sample_run_endpoint(
-    pid: int, vid: int, body: EvalSamplesStart
+@router.post("/api/projects/{pid}/versions/{vid}/eval/run")
+def run_task_eval_endpoint(
+    pid: int, vid: int, body: EvalRunRequest
 ) -> dict[str, Any]:
-    p, v, vdir = _version_dir_or_404(pid, vid)
-    try:
-        with db.connection_for() as conn:
-            job, run = eval_samples.start_job(
-                conn,
-                p,
-                v,
-                vdir,
-                checkpoint_path=body.checkpoint_path,
-                max_items=body.max_items,
+    """Manually evaluate a finished task over an explicit checkpoint set.
+
+    Results are written task-scoped (`tasks/<task_id>/eval/`) so they show up in
+    that task's eval page; the auto-eval Settings gate does not apply.
+    """
+    _version_dir_or_404(pid, vid)
+    if not body.checkpoints:
+        raise HTTPException(400, "checkpoints 不能为空")
+    with db.connection_for() as conn:
+        task = db.get_task(conn, int(body.task_id))
+        if not task:
+            raise HTTPException(404, f"task {body.task_id} 不存在")
+        if int(task.get("project_id") or 0) != pid or int(task.get("version_id") or 0) != vid:
+            raise HTTPException(400, "task 不属于该 project/version")
+        try:
+            queued = eval_auto.queue_manual_task_eval(
+                conn, task, list(body.checkpoints), max_items=body.max_items
             )
-    except eval_samples.EvalSamplesError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    except eval_samples.eval_manifest.EvalManifestError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    _publish_job_state(job)
-    return {"job": job, "run": run}
+        except eval_samples.EvalSamplesError as exc:
+            raise HTTPException(400, str(exc)) from exc
+    for job, _run in queued:
+        _publish_job_state(job)
+    return {
+        "queued": len(queued),
+        "jobs": [job for job, _ in queued],
+        "runs": [run for _, run in queued],
+    }
 
 
 @router.get("/api/projects/{pid}/versions/{vid}/eval/samples/{run_id}")

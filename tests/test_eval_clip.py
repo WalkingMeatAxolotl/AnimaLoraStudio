@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from studio import db, secrets, server
-from studio.services import eval_clip, eval_manifest, eval_metrics, eval_samples
+from studio.services import eval_clip, eval_metrics, eval_samples
 from studio.services.projects import jobs as project_jobs, projects, versions
 from studio.supervisor import GPU_BOUND_JOB_KINDS
 
@@ -41,11 +41,12 @@ def _new_project(isolated) -> tuple[dict[str, Any], dict[str, Any], Path]:
     return project, version, vdir
 
 
-def _seed_train_and_ckpt(vdir: Path) -> None:
-    train = vdir / "train" / "1_data"
-    train.mkdir(parents=True, exist_ok=True)
-    (train / "a.png").write_bytes(b"png-a")
-    (train / "a.txt").write_text("solo, red hair", encoding="utf-8")
+def _seed_validation_and_ckpt(vdir: Path) -> None:
+    # held-out validation set is the eval reference (replaces the old manifest)
+    val = vdir / "validation" / "1_data"
+    val.mkdir(parents=True, exist_ok=True)
+    (val / "a.png").write_bytes(b"png-a")
+    (val / "a.txt").write_text("solo, red hair", encoding="utf-8")
     output = vdir / "output"
     output.mkdir(parents=True, exist_ok=True)
     (output / "model_step100.safetensors").write_bytes(b"fake-lora")
@@ -66,8 +67,7 @@ def _fake_generator(run: dict[str, Any], version_dir: Path, progress) -> None:
 def _sample_run(
     project: dict[str, Any], version: dict[str, Any], vdir: Path
 ) -> dict[str, Any]:
-    _seed_train_and_ckpt(vdir)
-    eval_manifest.save_default_manifest(project, version, vdir, now=1000.0)
+    _seed_validation_and_ckpt(vdir)
     run = eval_samples.create_run(
         project,
         version,

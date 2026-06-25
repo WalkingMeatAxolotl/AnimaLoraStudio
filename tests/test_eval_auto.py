@@ -43,6 +43,14 @@ def _project_version(isolated) -> tuple[dict[str, Any], dict[str, Any], Path]:
     return project, version, vdir
 
 
+def _enable_validation(project: dict[str, Any], version: dict[str, Any]) -> None:
+    """Opt this version into post-training validation metrics (training config)."""
+    from studio.services import version_config
+    version_config.write_version_config(
+        project, version, {"eval_validation_enabled": True}
+    )
+
+
 def _fake_generator(run: dict[str, Any], version_dir: Path, progress) -> None:
     eval_root = (
         Path(str(run["eval_root"]))
@@ -228,18 +236,14 @@ def test_queue_metric_jobs_for_sample_reuses_active_jobs(isolated) -> None:
 def test_after_training_eval_queues_all_checkpoints_by_default(isolated) -> None:
     project, version, vdir = _project_version(isolated)
     (vdir / "output" / "model_epoch4.safetensors").write_bytes(b"lora")
+    _enable_validation(project, version)
     task = {"id": 7, "project_id": project["id"], "version_id": version["id"]}
     payload = {
         "checkpoint_path": str(vdir / "output" / "model_epoch2.safetensors"),
         "epoch": 4,
         "step": 40,
     }
-    secrets.update({
-        "eval_metrics": {
-            "auto_eval_on_checkpoint": True,
-            "auto_eval_max_items": 1,
-        }
-    })
+    secrets.update({"eval_metrics": {"auto_eval_max_items": 1}})
 
     with db.connection_for(isolated["db"]) as conn:
         assert eval_auto.queue_checkpoint_eval(conn, task, payload) is None
@@ -259,6 +263,51 @@ def test_after_training_eval_queues_all_checkpoints_by_default(isolated) -> None
         job["params_decoded"]["auto_source"]["trigger"] == "after_training"
         for job in jobs
     )
+
+
+def test_queue_manual_task_eval_bypasses_switch_and_scopes_to_task(isolated) -> None:
+    project, version, vdir = _project_version(isolated)
+    (vdir / "output" / "model_epoch4.safetensors").write_bytes(b"lora")
+    task = {"id": 7, "project_id": project["id"], "version_id": version["id"]}
+    ck2 = str(vdir / "output" / "model_epoch2.safetensors")
+    ck4 = str(vdir / "output" / "model_epoch4.safetensors")
+
+    # 自动评估开关默认关；手动入口应无视开关照样排队，且写 task-scoped。
+    with db.connection_for(isolated["db"]) as conn:
+        assert eval_auto.queue_checkpoint_eval(conn, task, {"checkpoint_path": ck2}) is None
+        queued = eval_auto.queue_manual_task_eval(conn, task, [ck2, ck4])
+        jobs = project_jobs.list_jobs(conn, kind="eval_samples", status="pending")
+
+    assert len(queued) == 2
+    assert len(jobs) == 2
+    paths = {job["params_decoded"]["checkpoint_path"] for job in jobs}
+    assert paths == {
+        "output/model_epoch2.safetensors",
+        "output/model_epoch4.safetensors",
+    }
+    assert all(job["params_decoded"]["task_id"] == 7 for job in jobs)
+    assert all(job["params_decoded"]["auto_metrics"] is True for job in jobs)
+    assert all(
+        job["params_decoded"]["auto_source"]["trigger"] == "manual" for job in jobs
+    )
+    assert all(run["storage_scope"] == "task" for _job, run in queued)
+
+
+def test_queue_manual_task_eval_dedupes_and_skips_invalid(isolated) -> None:
+    project, version, vdir = _project_version(isolated)
+    task = {"id": 9, "project_id": project["id"], "version_id": version["id"]}
+    ck2 = str(vdir / "output" / "model_epoch2.safetensors")
+
+    with db.connection_for(isolated["db"]) as conn:
+        # 同一 ckpt 传两次去重；output/ 外的路径被丢弃。
+        queued = eval_auto.queue_manual_task_eval(
+            conn, task, [ck2, ck2, "/etc/passwd"]
+        )
+        jobs = project_jobs.list_jobs(conn, kind="eval_samples", status="pending")
+
+    assert len(queued) == 1
+    assert len(jobs) == 1
+    assert queued[0][0]["params_decoded"]["checkpoint_path"] == "output/model_epoch2.safetensors"
 
 
 def test_run_checkpoint_eval_for_task_runs_inline_without_queue_jobs(isolated) -> None:
@@ -422,12 +471,8 @@ def test_supervisor_eval_training_finished_queues_after_task_done(isolated) -> N
     import json
 
     project, version, _vdir = _project_version(isolated)
-    secrets.update({
-        "eval_metrics": {
-            "auto_eval_on_checkpoint": True,
-            "auto_eval_max_items": 1,
-        }
-    })
+    _enable_validation(project, version)
+    secrets.update({"eval_metrics": {"auto_eval_max_items": 1}})
     with db.connection_for(isolated["db"]) as conn:
         tid = db.create_task(conn, name="train", config_name="fake")
         db.update_task(

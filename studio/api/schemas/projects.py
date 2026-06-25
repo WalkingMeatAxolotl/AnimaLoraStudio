@@ -37,8 +37,10 @@ class EvalManifestPut(BaseModel):
     manifest: dict[str, Any]
 
 
-class EvalSamplesStart(BaseModel):
-    checkpoint_path: Optional[str] = None
+class EvalRunRequest(BaseModel):
+    """Manual eval trigger for a finished task over an explicit checkpoint set."""
+    task_id: int
+    checkpoints: list[str]
     max_items: Optional[int] = None
 
 

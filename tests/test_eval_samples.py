@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from studio import db, server
 from studio.infrastructure import paths as infra_paths
-from studio.services import eval_manifest, eval_samples
+from studio.services import eval_samples
 from studio.services.projects import projects, versions
 
 
@@ -40,13 +40,14 @@ def _new_project(isolated) -> tuple[dict[str, Any], dict[str, Any], Path]:
     return project, version, vdir
 
 
-def _seed_train_and_ckpt(vdir: Path) -> Path:
-    train = vdir / "train" / "1_data"
-    train.mkdir(parents=True, exist_ok=True)
-    (train / "a.png").write_bytes(b"png-a")
-    (train / "a.txt").write_text("solo, red hair", encoding="utf-8")
-    (train / "b.png").write_bytes(b"png-b")
-    (train / "b.txt").write_text("smile, blue eyes", encoding="utf-8")
+def _seed_validation_and_ckpt(vdir: Path) -> Path:
+    # held-out validation set = eval reference + prompts (replaces old manifest)
+    val = vdir / "validation" / "1_data"
+    val.mkdir(parents=True, exist_ok=True)
+    (val / "a.png").write_bytes(b"png-a")
+    (val / "a.txt").write_text("solo, red hair", encoding="utf-8")
+    (val / "b.png").write_bytes(b"png-b")
+    (val / "b.txt").write_text("smile, blue eyes", encoding="utf-8")
     output = vdir / "output"
     output.mkdir(parents=True, exist_ok=True)
     ckpt = output / "model_step100.safetensors"
@@ -75,8 +76,7 @@ def _fake_generator(
 
 def test_create_and_run_eval_samples_with_fake_generator(isolated) -> None:
     project, version, vdir = _new_project(isolated)
-    _seed_train_and_ckpt(vdir)
-    eval_manifest.save_default_manifest(project, version, vdir, now=1000.0)
+    _seed_validation_and_ckpt(vdir)
 
     run = eval_samples.create_run(
         project,
@@ -112,9 +112,40 @@ def test_create_and_run_eval_samples_with_fake_generator(isolated) -> None:
     assert (vdir / item["path"]).read_bytes() == b"PNG"
 
 
+def test_default_generator_path_has_no_dead_schema_import(isolated) -> None:
+    """Regression: every other test injects a fake generator, so the real
+    ``generator=None`` path (``_default_generator``) was never exercised and a
+    stale ``from studio.schema import migrate_legacy_attention`` shipped — the
+    symbol was removed in the 0.11.0 schema split, so the default auto-eval /
+    worker path raised ImportError before generating anything.
+
+    No version config is written here, so the real generator must fail with a
+    *config* error, never an ImportError/NameError on that removed symbol.
+    """
+    project, version, vdir = _new_project(isolated)
+    _seed_validation_and_ckpt(vdir)
+
+    run = eval_samples.create_run(
+        project,
+        version,
+        vdir,
+        checkpoint_path="model_step100.safetensors",
+        max_items=1,
+        now=2000.0,
+    )
+
+    with pytest.raises(Exception) as excinfo:  # noqa: PT011 - asserting on message
+        eval_samples.run_sample_job(project, version, vdir, run["run_id"])
+    assert "migrate_legacy_attention" not in str(excinfo.value)
+
+    reloaded = eval_samples.load_run(vdir, run["run_id"])
+    assert reloaded["status"] == "failed"
+    assert "migrate_legacy_attention" not in str(reloaded.get("error") or "")
+
+
 def test_start_job_creates_project_job_and_run(isolated) -> None:
     project, version, vdir = _new_project(isolated)
-    _seed_train_and_ckpt(vdir)
+    _seed_validation_and_ckpt(vdir)
 
     with db.connection_for(isolated["db"]) as conn:
         job, run = eval_samples.start_job(
@@ -130,13 +161,14 @@ def test_start_job_creates_project_job_and_run(isolated) -> None:
     assert job["version_id"] == version["id"]
     assert job["params_decoded"]["run_id"] == run["run_id"]
     assert len(run["items"]) == 2
-    assert (vdir / "eval" / "manifest.json").exists()
+    # items come from the validation set, each carrying its reference image
+    assert run["items"][0]["reference_image"] == "validation/1_data/a.png"
     assert (vdir / "eval" / "samples" / run["run_id"] / "run.json").exists()
 
 
 def test_eval_samples_can_store_runs_under_task_eval_root(isolated) -> None:
     project, version, vdir = _new_project(isolated)
-    _seed_train_and_ckpt(vdir)
+    _seed_validation_and_ckpt(vdir)
     eval_root = infra_paths.task_eval_dir(42)
 
     run = eval_samples.create_run(
@@ -178,37 +210,42 @@ def _vdir_for(pid: int, vid: int) -> Path:
     return versions.version_dir(project["id"], project["slug"], version["label"])
 
 
-def test_eval_samples_http_start_list_get_and_image(client: TestClient) -> None:
+def test_eval_samples_http_run_list_get_and_image(client: TestClient, isolated) -> None:
     pid, vid = _make(client)
     vdir = _vdir_for(pid, vid)
-    _seed_train_and_ckpt(vdir)
+    ckpt = _seed_validation_and_ckpt(vdir)
+    with db.connection_for() as conn:
+        project = projects.get_project(conn, pid)
+        version = versions.get_version(conn, vid)
+    tid = _bound_task({"db": db.STUDIO_DB}, project, version)
 
     created = client.post(
-        f"/api/projects/{pid}/versions/{vid}/eval/samples",
-        json={"checkpoint_path": "model_step100.safetensors", "max_items": 1},
+        f"/api/projects/{pid}/versions/{vid}/eval/run",
+        json={"task_id": tid, "checkpoints": [str(ckpt)], "max_items": 1},
     )
     assert created.status_code == 200, created.text
     body = created.json()
-    run_id = body["run"]["run_id"]
-    assert body["job"]["kind"] == "eval_samples"
-    assert body["run"]["summary"]["total"] == 1
+    run_id = body["runs"][0]["run_id"]
+    assert body["queued"] == 1
+    assert body["jobs"][0]["kind"] == "eval_samples"
 
-    listed = client.get(f"/api/projects/{pid}/versions/{vid}/eval/samples")
+    q = f"?task_id={tid}"
+    listed = client.get(f"/api/projects/{pid}/versions/{vid}/eval/samples{q}")
     assert listed.status_code == 200, listed.text
     assert listed.json()["runs"][0]["run_id"] == run_id
-    assert listed.json()["latest_job"]["kind"] == "eval_samples"
 
-    got = client.get(f"/api/projects/{pid}/versions/{vid}/eval/samples/{run_id}")
+    got = client.get(f"/api/projects/{pid}/versions/{vid}/eval/samples/{run_id}{q}")
     assert got.status_code == 200, got.text
-    assert got.json()["run"]["items"][0]["filename"].endswith(".png")
-
     item = got.json()["run"]["items"][0]
-    image_path = vdir / item["path"]
+    assert item["filename"].endswith(".png")
+
+    eval_root = infra_paths.task_eval_dir(tid)
+    image_path = eval_samples.sample_image_path(vdir, run_id, item["filename"], eval_root)
     image_path.parent.mkdir(parents=True, exist_ok=True)
     image_path.write_bytes(b"PNG")
     image = client.get(
         f"/api/projects/{pid}/versions/{vid}/eval/samples/{run_id}"
-        f"/images/{item['filename']}"
+        f"/images/{item['filename']}{q}"
     )
     assert image.status_code == 200, image.text
     assert image.content == b"PNG"
@@ -216,7 +253,7 @@ def test_eval_samples_http_start_list_get_and_image(client: TestClient) -> None:
 
 def test_eval_samples_rejects_checkpoint_outside_output(isolated) -> None:
     project, version, vdir = _new_project(isolated)
-    _seed_train_and_ckpt(vdir)
+    _seed_validation_and_ckpt(vdir)
 
     with pytest.raises(eval_samples.EvalSamplesError, match="output"):
         eval_samples.create_run(
@@ -225,3 +262,57 @@ def test_eval_samples_rejects_checkpoint_outside_output(isolated) -> None:
             vdir,
             checkpoint_path="../escape.safetensors",
         )
+
+
+def _bound_task(isolated, project: dict[str, Any], version: dict[str, Any]) -> int:
+    with db.connection_for(isolated["db"]) as conn:
+        tid = db.create_task(conn, name="train", config_name="fake")
+        db.update_task(conn, tid, project_id=project["id"], version_id=version["id"])
+    return tid
+
+
+def test_run_task_eval_endpoint_queues_task_scoped(client, isolated) -> None:
+    project, version, vdir = _new_project(isolated)
+    ckpt = _seed_validation_and_ckpt(vdir)
+    pid, vid = project["id"], version["id"]
+    tid = _bound_task(isolated, project, version)
+
+    resp = client.post(
+        f"/api/projects/{pid}/versions/{vid}/eval/run",
+        json={"task_id": tid, "checkpoints": [str(ckpt)]},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["queued"] == 1
+    assert body["runs"][0]["storage_scope"] == "task"
+    assert body["jobs"][0]["params_decoded"]["task_id"] == tid
+
+
+def test_run_task_eval_endpoint_validates_task_ownership(client, isolated) -> None:
+    project, version, vdir = _new_project(isolated)
+    ckpt = _seed_validation_and_ckpt(vdir)
+    pid, vid = project["id"], version["id"]
+
+    # 不存在的 task → 404
+    missing = client.post(
+        f"/api/projects/{pid}/versions/{vid}/eval/run",
+        json={"task_id": 99999, "checkpoints": [str(ckpt)]},
+    )
+    assert missing.status_code == 404, missing.text
+
+    # task 未绑定到该 project/version → 400
+    with db.connection_for(isolated["db"]) as conn:
+        tid = db.create_task(conn, name="other", config_name="fake")
+    other = client.post(
+        f"/api/projects/{pid}/versions/{vid}/eval/run",
+        json={"task_id": tid, "checkpoints": [str(ckpt)]},
+    )
+    assert other.status_code == 400, other.text
+
+    # 空 checkpoints → 400
+    tid_ok = _bound_task(isolated, project, version)
+    empty = client.post(
+        f"/api/projects/{pid}/versions/{vid}/eval/run",
+        json={"task_id": tid_ok, "checkpoints": []},
+    )
+    assert empty.status_code == 400, empty.text

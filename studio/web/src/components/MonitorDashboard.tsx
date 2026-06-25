@@ -5,7 +5,7 @@
  * 走 useMonitorProgress hook 做 delta merge（PR #37 增量协议）。
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { api, type EvalMetricResult, type EvalMetricState, type MonitorState } from '../api/client'
+import { api, type EvalMetricResult, type EvalMetricState, type LoraCkpt, type MonitorState } from '../api/client'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
 import { InfoButton } from './InfoButton'
 import ImagePreviewModal from './ImagePreviewModal'
@@ -401,6 +401,64 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
     return () => window.clearInterval(id)
   }, [connected, hasActiveMetric, load, pid, vid])
 
+  // ── 手动评估：选 checkpoint → POST /eval/run（task-scoped） ──────────────
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [ckpts, setCkpts] = useState<LoraCkpt[]>([])
+  const [ckptsLoading, setCkptsLoading] = useState(false)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [running, setRunning] = useState(false)
+  const [runMsg, setRunMsg] = useState<string | null>(null)
+
+  const loadCkpts = useCallback(async () => {
+    if (!pid || !vid) return
+    setCkptsLoading(true)
+    try {
+      const items = await api.listVersionLoraCkpts(pid, vid)
+      setCkpts(items)
+    } catch (err) {
+      setRunMsg(err instanceof Error ? err.message : String(err))
+    } finally {
+      setCkptsLoading(false)
+    }
+  }, [pid, vid])
+
+  const togglePicker = useCallback(() => {
+    setPickerOpen((open) => {
+      const next = !open
+      if (next && ckpts.length === 0) void loadCkpts()
+      return next
+    })
+  }, [ckpts.length, loadCkpts])
+
+  const toggleCkpt = useCallback((path: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+  }, [])
+
+  const runEval = useCallback(async () => {
+    if (!pid || !vid || !taskId || selected.size === 0) return
+    setRunning(true)
+    setRunMsg(null)
+    try {
+      const r = await api.runTaskEval(pid, vid, {
+        task_id: taskId,
+        checkpoints: [...selected],
+      })
+      setRunMsg(`已排队 ${r.queued} 个 checkpoint 的评估`)
+      setSelected(new Set())
+      setPickerOpen(false)
+      void load(true)
+    } catch (err) {
+      setRunMsg(err instanceof Error ? err.message : String(err))
+    } finally {
+      setRunning(false)
+    }
+  }, [pid, vid, taskId, selected, load])
+
   const latestByKey = useMemo(() => {
     const out: Partial<Record<EvalMetricKey, { result: EvalMetricResult; value: number | null; state?: EvalMetricState }>> = {}
     for (const key of EVAL_METRIC_KEYS) {
@@ -436,7 +494,7 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
   if (!pid || !vid) {
     return (
       <div className="card px-4 py-3 text-sm text-fg-tertiary">
-        当前任务未绑定项目版本，暂不能读取 LoRA 评估指标。
+        当前任务未绑定项目版本，暂不能读取指标。
       </div>
     )
   }
@@ -445,13 +503,22 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
     <div className="card p-4 flex flex-col gap-3">
       <div className="flex items-center gap-3">
         <div className="min-w-0">
-          <div className="text-sm font-semibold">LoRA 评估</div>
+          <div className="text-sm font-semibold">指标</div>
           <div className="text-xs text-fg-tertiary font-mono truncate">
             {state?.project_slug ?? `project ${pid}`} · {state?.version_label ?? `version ${vid}`}
           </div>
         </div>
         <span className="flex-1" />
         {loading && <span className="text-xs text-fg-tertiary">读取中…</span>}
+        {taskId != null && (
+          <button
+            type="button"
+            onClick={togglePicker}
+            className={`btn btn-sm ${pickerOpen ? 'btn-primary' : 'btn-secondary'}`}
+          >
+            运行评估
+          </button>
+        )}
         <button
           type="button"
           onClick={() => void load()}
@@ -461,13 +528,70 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
         </button>
       </div>
 
+      {taskId != null && pickerOpen && (
+        <div className="rounded-md border border-subtle bg-overlay px-3 py-2.5 flex flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold">选择 checkpoint 评估</span>
+            <span className="text-[11px] text-fg-tertiary">
+              选多个可横向对比；样本数 / 模型用 Settings 默认
+            </span>
+            <span className="flex-1" />
+            {ckpts.length > 0 && (
+              <button
+                type="button"
+                className="text-[11px] text-fg-tertiary hover:text-fg underline"
+                onClick={() =>
+                  setSelected((prev) =>
+                    prev.size === ckpts.length ? new Set() : new Set(ckpts.map((c) => c.path)),
+                  )
+                }
+              >
+                {selected.size === ckpts.length ? '清空' : '全选'}
+              </button>
+            )}
+          </div>
+          {ckptsLoading ? (
+            <div className="text-xs text-fg-tertiary py-1">读取 checkpoint…</div>
+          ) : ckpts.length === 0 ? (
+            <div className="text-xs text-fg-tertiary py-1">output/ 下没有 LoRA checkpoint。</div>
+          ) : (
+            <div className="max-h-40 overflow-y-auto flex flex-col gap-0.5">
+              {ckpts.map((c) => (
+                <label
+                  key={c.path}
+                  className="flex items-center gap-2 text-xs py-0.5 cursor-pointer hover:bg-subtle/40 rounded px-1"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected.has(c.path)}
+                    onChange={() => toggleCkpt(c.path)}
+                  />
+                  <span className="font-mono">{c.label}</span>
+                </label>
+              ))}
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={running || selected.size === 0}
+              onClick={() => void runEval()}
+              className="btn btn-primary btn-sm"
+            >
+              {running ? '排队中…' : `运行评估${selected.size ? ` (${selected.size})` : ''}`}
+            </button>
+            {runMsg && <span className="text-[11px] text-fg-tertiary">{runMsg}</span>}
+          </div>
+        </div>
+      )}
+
       {error ? (
         <div className="rounded-md border border-err bg-err-soft px-3 py-2 text-sm text-err">
           评估指标读取失败：{error}
         </div>
       ) : results.length === 0 ? (
         <div className="rounded-md border border-dashed border-subtle px-3 py-3 text-sm text-fg-tertiary">
-          暂无 eval sample 结果。开启自动评估后，系统会按设置的触发时机生成样本并写入 CLIP-T、CLIP-I、DINO-I。
+          暂无 eval 结果。点「运行评估」选 checkpoint 手动评估，或在训练配置开启「训练后指标评估」，训练结束后自动用验证集算 CLIP-T、CLIP-I、DINO-I。
         </div>
       ) : (
         <>

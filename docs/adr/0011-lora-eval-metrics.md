@@ -5,8 +5,13 @@
 **决策者**：@WalkingMeatAxolotl
 
 > **维护约定**：本 ADR 定义 LoRA checkpoint validation metrics 的目标、边界和可审查实现步骤。
-> PR #138 只落地 eval manifest 协议/API。PR1 增加 sample runner 与 metric result contract；当前 PR2 开始加入 CLIP-T / CLIP-I / DINO-I 三个基础指标，但 Settings/Monitor UI 和训练自动触发仍拆到后续 PR。
 > 如果后续指标实测与本文假设冲突，在末尾追加 Addendum，不改写初版决策。
+>
+> ⚠️ **2026-06-25 重大修订（见末尾 Addendum: 验证集 held-out 重设计）**：初版的
+> reference/prompt **manifest** 协议已被**取代**。参考图不再取自训练集（那会奖励记忆），
+> 改为训练前从数据集划出的 **held-out 验证集 `validation/`**；manifest 文件整层删除，
+> 每个 `run.json` 自包含；出图参数取训练配置 `sample_*`；eval 输出统一 task-scoped。
+> 下文「Eval manifest」「reference 取自 train 图」等描述以该 Addendum 为准。
 
 ## 背景
 
@@ -298,3 +303,42 @@ job id FIFO 调度，已完成 sample 后新排出的 `eval_clip` / `eval_dino` 
 对应修复是让 eval metric job 优先于后续 eval sample job 调度，同一 run 已有
 pending/running metric job 时复用已有 job，并把 `auto_metrics` / `auto_source`
 写入 run metadata，方便后续 UI 和排障直接从 `run.json` 判断自动评估来源。
+
+## Addendum: 验证集 held-out 重设计（2026-06-25）
+
+初版的 reference 取自**训练集**（默认 manifest 用 train 图 + 其 caption 当 prompt + 同图当参考）。
+真实使用发现这等于**奖励记忆/复制**：LoRA 越照抄训练数据，CLIP-I / DINO-I 越高，与
+ADR 背景里「学得像 ≠ 复制训练图」的目标相悖。本次重构（仍在 PR #138 内）改掉数据模型。
+
+### 决策
+
+1. **真 held-out 验证集**。训练前从数据集物理移动一部分图（含 caption）到与 `train/`
+   同级的 `versions/{label}/validation/`，这些图**不参与训练**，作为 eval 的 reference +
+   prompt 来源。划分在 studio 侧训练启动前的钩子执行，`anima_train` 不改。
+2. **按比例补足、不移回**。`target = round(ratio × |train+validation|)`；`|validation|`
+   不足才从 `train/` 随机（固定 seed）补差额，达到目标即不再划分，且永不自动移回 —— 用户
+   手动放进 `validation/` 的图也计入目标。
+3. **训练配置开关（per-version）**，取代初版设想的全局 Settings 自动评估开关：
+   `eval_validation_enabled` / `eval_validation_split_ratio`（0–1，0=不划分）/
+   `eval_validation_split_seed`。后训练自动评估改由该 per-version 开关驱动；全局 Settings
+   只保留指标模型名与 `auto_eval_max_items`。
+4. **删除 manifest 整层**。`eval_manifest` service + 3 个 manifest 路由 + 默认 manifest
+   生成逻辑全部删除。`validation/` 文件夹本身就是「评估契约」；create_run 直接扫该目录建
+   items，每个 item 自带 `reference_image`（相对 version dir）。`run.json` 自包含本次快照，
+   不再有 `manifest_snapshot` / `manifest_digest`。
+5. **出图参数取训练配置 `sample_*`**（width/height/infer_steps/cfg_scale/sampler/
+   scheduler/negative + sample seed），修掉初版「出图参数与训练脱节」的问题。出图 seed 与
+   分隔 seed 是两件事。
+6. **无验证集图 → 只跑 CLIP-T**（不需参考图），用训练配置的 sample prompts 出图，**不回退到
+   train 图**（回退会重新引入记忆奖励）。
+7. **eval 输出统一 task-scoped**（`tasks/{id}/eval/`），删除 version-scoped 输出分支与不可达
+   的裸 `POST /eval/samples`。改由 `POST /eval/run`（带 task_id + 显式 checkpoint 集）触发
+   手动评估，结果落在该 task 的 eval 页（指标页）。
+
+### 仍未实现 / 后续
+
+- 训练中每 checkpoint 的 inline 评估路径（`run_checkpoint_eval_for_task` /
+  `queue_checkpoint_eval` / loop.py 钩子 / secrets 的 `auto_eval_on_checkpoint` /
+  `auto_eval_trigger`）现已无 UI 入口、默认不触发，作为 dead path 留待单独 PR 清除。
+- 验证集文件夹在训练配置页目前以字段描述呈现路径；专门的「手动加图」UI 是后续增强。
+- Diversity / SSCD copy-risk / paired CMMD² 仍未实现（与初版边界一致）。
