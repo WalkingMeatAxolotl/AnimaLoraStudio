@@ -127,6 +127,11 @@ def task_samples_dir(task_id: int) -> Path:
     return task_dir(task_id) / "samples"
 
 
+def task_eval_dir(task_id: int) -> Path:
+    """`tasks/<task_id>/eval/` —— training task scoped LoRA eval artifacts."""
+    return task_dir(task_id) / "eval"
+
+
 def task_log_path(task_id: int) -> Path:
     """`tasks/<task_id>/run.log` —— worker 子进程 stdout/stderr。
 

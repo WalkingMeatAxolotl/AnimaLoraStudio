@@ -64,6 +64,7 @@ type Section =
   | 'huggingface'
   | 'wandb'
   | 'modelscope'
+  | 'eval_metrics'
   | 'llm_tagger'
   | 'wd14'
   | 'cltagger'
@@ -72,12 +73,15 @@ type Section =
   | 'generate'
   | 'proxy'
 
+type AutoEvalTrigger = 'after_training' | 'checkpoint'
+
 type Tab = 'dataset' | 'tagging' | 'preprocess' | 'training' | 'monitor' | 'testing' | 'credentials' | 'appearance' | 'system'
 
 // 外部页面通过 `?section=<id>` 跳转到 SettingsPage 的特定 section 时，用这个
 // 反向映射决定要先切到哪个 tab。只列出能从外部链接到的 sections。
 const SECTION_TO_TAB: Record<string, Tab> = {
   'models': 'training',
+  'eval-metrics': 'training',
   'version': 'system',
   'service': 'system',
 }
@@ -113,6 +117,7 @@ const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
     { id: 'tag-dictionary', labelKey: 'settings.tagDictionary.title' },
   ],
   training: [
+    { id: 'eval-metrics', labelKey: 'settings.evalMetricModels' },
     { id: 'queue', labelKey: 'settings.queueSchedule' },
     { id: 'training-params', labelKey: 'settings.trainingParams' },
     { id: 'pytorch', labelKey: 'settings.torch' },
@@ -236,6 +241,13 @@ const EMPTY: Secrets = {
     upload_state_auto_policy: 'last',
   },
   modelscope: { token: '' },
+  eval_metrics: {
+    clip_model_name: 'openai/clip-vit-base-patch32',
+    dino_model_name: 'facebook/dinov2-small',
+    auto_eval_on_checkpoint: false,
+    auto_eval_trigger: 'after_training',
+    auto_eval_max_items: 1,
+  },
   download_source: 'huggingface',
   download_sources: {},
   llm_tagger: {
@@ -911,6 +923,64 @@ export default function SettingsPage() {
       </>)}
 
       {tab === 'training' && (<>
+      <SettingsSection id="eval-metrics" title={t('settings.evalMetricModels')}>
+        <SettingsField
+          label={t('settings.autoEvalOnCheckpoint')}
+          helpTooltip={<p>{t('settings.autoEvalOnCheckpointHelp')}</p>}
+        >
+          <Bool
+            value={draft.eval_metrics.auto_eval_on_checkpoint}
+            onChange={(v) => update('eval_metrics', 'auto_eval_on_checkpoint', v)}
+          />
+        </SettingsField>
+        <SettingsField
+          label={t('settings.autoEvalTrigger')}
+          helpTooltip={<p>{t('settings.autoEvalTriggerHelp')}</p>}
+        >
+          <select
+            value={draft.eval_metrics.auto_eval_trigger}
+            onChange={(e) => update('eval_metrics', 'auto_eval_trigger', e.target.value as AutoEvalTrigger)}
+            className={textInputClass}
+          >
+            <option value="after_training">{t('settings.autoEvalTriggerAfterTraining')}</option>
+            <option value="checkpoint">{t('settings.autoEvalTriggerCheckpoint')}</option>
+          </select>
+        </SettingsField>
+        <SettingsField
+          label={t('settings.autoEvalMaxItems')}
+          helpTooltip={<p>{t('settings.autoEvalMaxItemsHelp')}</p>}
+        >
+          <input
+            type="number"
+            min={1}
+            max={256}
+            value={draft.eval_metrics.auto_eval_max_items}
+            onChange={(e) => update('eval_metrics', 'auto_eval_max_items', Math.max(1, Math.min(256, parseInt(e.target.value) || 1)))}
+            className={textInputClass}
+          />
+        </SettingsField>
+        <SettingsField
+          label={t('settings.evalClipModel')}
+          helpTooltip={<p>{t('settings.evalClipModelHelp')}</p>}
+        >
+          <input
+            value={draft.eval_metrics.clip_model_name}
+            onChange={(e) => update('eval_metrics', 'clip_model_name', e.target.value)}
+            className={textInputClass}
+          />
+        </SettingsField>
+        <SettingsField
+          label={t('settings.evalDinoModel')}
+          helpTooltip={<p>{t('settings.evalDinoModelHelp')}</p>}
+        >
+          <input
+            value={draft.eval_metrics.dino_model_name}
+            onChange={(e) => update('eval_metrics', 'dino_model_name', e.target.value)}
+            className={textInputClass}
+          />
+        </SettingsField>
+      </SettingsSection>
+
       <SettingsSection id="queue" title={t('settings.queueSchedule')}>
         <SettingsField
           label={t('settings.allowGpuDuringTrain')}

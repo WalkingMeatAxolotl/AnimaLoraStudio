@@ -11,9 +11,10 @@ import { PauseProgressModal } from '../components/PauseProgressModal'
 import { useDialog } from '../components/Dialog'
 import { useToast } from '../components/Toast'
 import { useEventStream } from '../lib/useEventStream'
-import MonitorDashboard from '../components/MonitorDashboard'
+import MonitorDashboard, { EvalMetricsPanel } from '../components/MonitorDashboard'
+import { useMonitorProgress } from '../lib/useMonitorProgress'
 
-type Tab = 'overview' | 'log' | 'monitor' | 'outputs' | 'snapshot'
+type Tab = 'overview' | 'log' | 'monitor' | 'eval' | 'outputs' | 'snapshot'
 
 const STATUS_BADGE: Record<TaskStatus, string> = {
   pending: 'badge badge-neutral',
@@ -93,7 +94,7 @@ export default function QueueDetailPage() {
   const [tab, setTab] = useState<Tab>(() => {
     if (typeof window === 'undefined') return 'overview'
     const v = window.location.hash.replace(/^#/, '')
-    return (['overview', 'log', 'monitor', 'outputs', 'snapshot'] as const).includes(v as Tab) ? (v as Tab) : 'overview'
+    return (['overview', 'log', 'monitor', 'eval', 'outputs', 'snapshot'] as const).includes(v as Tab) ? (v as Tab) : 'overview'
   })
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [pauseModalOpen, setPauseModalOpen] = useState(false)
@@ -112,7 +113,7 @@ export default function QueueDetailPage() {
   // 写回不会更新 router state，所以两条 effect 不会 ping-pong。
   useEffect(() => {
     const v = location.hash.replace(/^#/, '')
-    if ((['overview', 'log', 'monitor', 'outputs', 'snapshot'] as const).includes(v as Tab)) {
+    if ((['overview', 'log', 'monitor', 'eval', 'outputs', 'snapshot'] as const).includes(v as Tab)) {
       setTab((prev) => (prev === v ? prev : (v as Tab)))
     }
   }, [location.hash])
@@ -239,6 +240,7 @@ export default function QueueDetailPage() {
     { key: 'overview', label: t('queueDetail.tabOverview') },
     { key: 'log',      label: t('queueDetail.tabLogs') },
     { key: 'monitor',  label: t('queueDetail.tabMonitor') },
+    { key: 'eval',     label: t('queueDetail.tabEval') },
     { key: 'outputs',  label: t('queueDetail.tabOutputs') },
     { key: 'snapshot', label: t('queueDetail.tabSnapshot') },
   ]
@@ -350,6 +352,7 @@ export default function QueueDetailPage() {
         )}
         {tab === 'log' && <LogTab taskId={taskId} />}
         {tab === 'monitor' && <MonitorTab taskId={taskId} />}
+        {tab === 'eval' && <EvalTab taskId={taskId} />}
         {tab === 'outputs' && <OutputsTab taskId={taskId} />}
         {tab === 'snapshot' && <SnapshotConfigTab task={task} />}
       </div>
@@ -514,6 +517,17 @@ function MonitorTab({ taskId }: { taskId: number }) {
   return (
     <div className="flex-1 min-h-0 overflow-hidden">
       <MonitorDashboard taskId={taskId} />
+    </div>
+  )
+}
+
+// ── EvalTab ─────────────────────────────────────────────────────────────────
+
+function EvalTab({ taskId }: { taskId: number }) {
+  const { state, connected } = useMonitorProgress(taskId)
+  return (
+    <div className="flex-1 min-h-0 overflow-auto p-4">
+      <EvalMetricsPanel state={state} connected={connected} taskId={taskId} />
     </div>
   )
 }

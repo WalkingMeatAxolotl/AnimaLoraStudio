@@ -4,9 +4,10 @@
  * Data source: GET /api/state?task_id=N 拉降采样快照 + SSE monitor_progress
  * 走 useMonitorProgress hook 做 delta merge（PR #37 增量协议）。
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { api } from '../api/client'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { api, type EvalMetricResult, type EvalMetricState, type MonitorState } from '../api/client'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
+import { InfoButton } from './InfoButton'
 import ImagePreviewModal from './ImagePreviewModal'
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -255,6 +256,290 @@ function ChartSvg({ data, W, H, rawColor, smoothColor, fillColor, emaAlpha, yFor
         </>
       )}
     </svg>
+  )
+}
+
+// ── EvalMetricsPanel ──────────────────────────────────────────────────────
+
+const EVAL_METRIC_KEYS = ['clip_t', 'clip_i', 'dino_i'] as const
+type EvalMetricKey = typeof EVAL_METRIC_KEYS[number]
+
+const EVAL_LABELS: Record<EvalMetricKey, string> = {
+  clip_t: 'CLIP-T',
+  clip_i: 'CLIP-I',
+  dino_i: 'DINO-I',
+}
+
+const EVAL_DESCRIPTIONS: Record<EvalMetricKey, string> = {
+  clip_t: '生成图和 prompt 文本的 CLIP 相似度，用来看 prompt following；越高越好。',
+  clip_i: '生成图和参考图的 CLIP 图像相似度，用来看整体视觉相似度；越高越好。',
+  dino_i: '生成图和参考图的 DINO 图像特征相似度，用来看主体或风格特征是否学到；越高越好。',
+}
+
+function checkpointSortValue(result: EvalMetricResult, index: number): number {
+  const value = result.checkpoint?.value
+  if (typeof value === 'number') return value
+  return result.updated_at ?? result.created_at ?? index
+}
+
+function checkpointLabel(result: EvalMetricResult): string {
+  return result.checkpoint?.label
+    || result.checkpoint?.path?.split(/[\\/]/).pop()
+    || result.run_id
+}
+
+function metricState(result: EvalMetricResult, key: EvalMetricKey): EvalMetricState | undefined {
+  return result.metric_states?.[key]
+}
+
+function metricValue(result: EvalMetricResult, key: EvalMetricKey): number | null {
+  const stateValue = metricState(result, key)?.value
+  if (typeof stateValue === 'number' && Number.isFinite(stateValue)) return stateValue
+  const raw = result.metrics?.[key]
+  return typeof raw === 'number' && Number.isFinite(raw) ? raw : null
+}
+
+function formatEvalValue(value: number | null, state?: EvalMetricState): string {
+  if (value != null) return value.toFixed(4)
+  const status = state?.status || 'not_run'
+  if (status === 'pending') return 'pending'
+  if (status === 'running') return 'running'
+  if (status === 'failed') return 'failed'
+  if (status === 'unavailable') return 'n/a'
+  return '--'
+}
+
+function stateTone(state?: EvalMetricState, value?: number | null): 'ok' | 'warn' | 'err' | 'muted' {
+  if (state?.status === 'failed') return 'err'
+  if (state?.status === 'pending' || state?.status === 'running') return 'warn'
+  if (value != null || state?.status === 'done') return 'ok'
+  return 'muted'
+}
+
+function toneClass(tone: 'ok' | 'warn' | 'err' | 'muted'): string {
+  if (tone === 'ok') return 'text-ok'
+  if (tone === 'warn') return 'text-warn'
+  if (tone === 'err') return 'text-err'
+  return 'text-fg-tertiary'
+}
+
+function MiniMetricSparkline({ points }: { points: Array<{ x: number; value: number }> }) {
+  if (points.length < 2) {
+    return <div className="h-7 grid place-items-center text-[11px] text-fg-tertiary">等待更多 checkpoint</div>
+  }
+  const W = 120
+  const H = 28
+  const values = points.map((p) => p.value)
+  const minV = Math.min(...values)
+  const maxV = Math.max(...values)
+  const range = maxV - minV || 1e-6
+  const x = (i: number) => (i / Math.max(1, points.length - 1)) * (W - 2) + 1
+  const y = (v: number) => 2 + (1 - (v - minV) / range) * (H - 4)
+  const path = points
+    .map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.value).toFixed(1)}`)
+    .join('')
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="h-7 w-full block" preserveAspectRatio="none">
+      <path d={path} stroke="var(--accent)" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+      {points.map((p, i) => (
+        <circle key={`${p.x}-${i}`} cx={x(i)} cy={y(p.value)} r="2" fill="var(--accent)" />
+      ))}
+    </svg>
+  )
+}
+
+export function EvalMetricsPanel({ state, connected, taskId }: {
+  state: MonitorState | null
+  connected: boolean
+  taskId?: number
+}) {
+  const pid = state?.project_id
+  const vid = state?.version_id
+  const [payload, setPayload] = useState<Awaited<ReturnType<typeof api.listEvalMetrics>> | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async (quiet = false) => {
+    if (!pid || !vid) return
+    if (!quiet) setLoading(true)
+    try {
+      const next = await api.listEvalMetrics(pid, vid, taskId)
+      setPayload(next)
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      if (!quiet) setLoading(false)
+    }
+  }, [pid, vid, taskId])
+
+  useEffect(() => {
+    setPayload(null)
+    setError(null)
+    if (!pid || !vid) return
+    void load()
+  }, [pid, vid, load])
+
+  const results = useMemo(() => {
+    return [...(payload?.results ?? [])]
+      .sort((a, b) => checkpointSortValue(a, 0) - checkpointSortValue(b, 0))
+  }, [payload?.results])
+
+  const hasActiveMetric = useMemo(() => {
+    return results.some((result) =>
+      EVAL_METRIC_KEYS.some((key) => {
+        const status = metricState(result, key)?.status
+        return status === 'pending' || status === 'running'
+      }),
+    )
+  }, [results])
+
+  useEffect(() => {
+    if (!pid || !vid) return
+    if (!connected && !hasActiveMetric) return
+    const id = window.setInterval(() => void load(true), 5000)
+    return () => window.clearInterval(id)
+  }, [connected, hasActiveMetric, load, pid, vid])
+
+  const latestByKey = useMemo(() => {
+    const out: Partial<Record<EvalMetricKey, { result: EvalMetricResult; value: number | null; state?: EvalMetricState }>> = {}
+    for (const key of EVAL_METRIC_KEYS) {
+      for (let i = results.length - 1; i >= 0; i--) {
+        const result = results[i]
+        const state = metricState(result, key)
+        const value = metricValue(result, key)
+        if (value != null || state?.status) {
+          out[key] = { result, value, state }
+          break
+        }
+      }
+    }
+    return out
+  }, [results])
+
+  const seriesByKey = useMemo(() => {
+    const out: Record<EvalMetricKey, Array<{ x: number; value: number }>> = {
+      clip_t: [],
+      clip_i: [],
+      dino_i: [],
+    }
+    results.forEach((result, index) => {
+      const x = checkpointSortValue(result, index)
+      for (const key of EVAL_METRIC_KEYS) {
+        const value = metricValue(result, key)
+        if (value != null) out[key].push({ x, value })
+      }
+    })
+    return out
+  }, [results])
+
+  if (!pid || !vid) {
+    return (
+      <div className="card px-4 py-3 text-sm text-fg-tertiary">
+        当前任务未绑定项目版本，暂不能读取 LoRA 评估指标。
+      </div>
+    )
+  }
+
+  return (
+    <div className="card p-4 flex flex-col gap-3">
+      <div className="flex items-center gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold">LoRA 评估</div>
+          <div className="text-xs text-fg-tertiary font-mono truncate">
+            {state?.project_slug ?? `project ${pid}`} · {state?.version_label ?? `version ${vid}`}
+          </div>
+        </div>
+        <span className="flex-1" />
+        {loading && <span className="text-xs text-fg-tertiary">读取中…</span>}
+        <button
+          type="button"
+          onClick={() => void load()}
+          className="btn btn-secondary btn-sm"
+        >
+          刷新
+        </button>
+      </div>
+
+      {error ? (
+        <div className="rounded-md border border-err bg-err-soft px-3 py-2 text-sm text-err">
+          评估指标读取失败：{error}
+        </div>
+      ) : results.length === 0 ? (
+        <div className="rounded-md border border-dashed border-subtle px-3 py-3 text-sm text-fg-tertiary">
+          暂无 eval sample 结果。开启自动评估后，系统会按设置的触发时机生成样本并写入 CLIP-T、CLIP-I、DINO-I。
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+            {EVAL_METRIC_KEYS.map((key) => {
+              const latest = latestByKey[key]
+              const tone = stateTone(latest?.state, latest?.value)
+              return (
+                <div key={key} className="rounded-md border border-subtle bg-overlay px-3 py-2.5 min-w-0">
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <span className="text-xs font-semibold">{EVAL_LABELS[key]}</span>
+                    <span className={`text-xs font-mono ${toneClass(tone)}`}>
+                      {latest?.state?.status ?? 'not_run'}
+                    </span>
+                  </div>
+                  <div className={`text-2xl font-semibold font-mono tabular-nums ${toneClass(tone)}`}>
+                    {formatEvalValue(latest?.value ?? null, latest?.state)}
+                  </div>
+                  <div className="text-[11px] text-fg-tertiary truncate mb-1.5">
+                    {latest ? checkpointLabel(latest.result) : '等待指标'}
+                  </div>
+                  <MiniMetricSparkline points={seriesByKey[key]} />
+                </div>
+              )
+            })}
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="text-fg-tertiary">
+                <tr className="border-b border-subtle">
+                  <th className="text-left font-medium py-1.5 pr-3">checkpoint</th>
+                  {EVAL_METRIC_KEYS.map((key) => (
+                    <th key={key} className="text-right font-medium py-1.5 px-2">
+                      <span className="inline-flex items-center justify-end gap-1.5">
+                        {EVAL_LABELS[key]}
+                        <InfoButton ariaLabel={`${EVAL_LABELS[key]} 指标说明`}>
+                          <p>{EVAL_DESCRIPTIONS[key]}</p>
+                        </InfoButton>
+                      </span>
+                    </th>
+                  ))}
+                  <th className="text-right font-medium py-1.5 pl-3">状态</th>
+                </tr>
+              </thead>
+              <tbody>
+                {results.slice(-8).reverse().map((result) => (
+                  <tr key={result.run_id} className="border-b border-subtle last:border-0">
+                    <td className="py-1.5 pr-3 max-w-[220px] truncate font-mono" title={checkpointLabel(result)}>
+                      {checkpointLabel(result)}
+                    </td>
+                    {EVAL_METRIC_KEYS.map((key) => {
+                      const state = metricState(result, key)
+                      const value = metricValue(result, key)
+                      const tone = stateTone(state, value)
+                      return (
+                        <td key={key} className={`py-1.5 px-2 text-right font-mono tabular-nums ${toneClass(tone)}`}>
+                          {formatEvalValue(value, state)}
+                        </td>
+                      )
+                    })}
+                    <td className="py-1.5 pl-3 text-right text-fg-tertiary font-mono">
+                      {result.status}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
   )
 }
 
@@ -560,81 +845,81 @@ export default function MonitorDashboard({ taskId }: { taskId: number }) {
           gridTemplateRows: '1fr' → row 跟随 flex-1 撑满，避免 row 默认 auto 在大屏留空白；
           右卡 minHeight 形成下界，flex-1 在 row 高度 > 3*min+gap 时均分扩展；
           总 min 超视口时由外层 overflow-y-auto 滚 */}
-      <div
-        className="grid grid-cols-[1fr_1.5fr] gap-3.5 flex-1"
-        style={{ gridTemplateRows: '1fr' }}
-      >
-        {/* 左：采样图 */}
-        <div className="card p-0 overflow-hidden flex flex-col min-h-0">
-          <div className="px-3.5 py-2.5 border-b border-subtle flex items-center justify-between shrink-0">
-            <span className="text-sm font-semibold">采样</span>
-            <span className="text-xs text-fg-tertiary font-mono">{samples.length} 张</span>
-          </div>
-          <div className="flex-1 p-3 flex flex-col min-h-0">
-            <SampleViewer samples={samples} taskId={taskId} />
-          </div>
-        </div>
+          <div
+            className="grid grid-cols-[1fr_1.5fr] gap-3.5 flex-1"
+            style={{ gridTemplateRows: '1fr' }}
+          >
+            {/* 左：采样图 */}
+            <div className="card p-0 overflow-hidden flex flex-col min-h-0">
+              <div className="px-3.5 py-2.5 border-b border-subtle flex items-center justify-between shrink-0">
+                <span className="text-sm font-semibold">采样</span>
+                <span className="text-xs text-fg-tertiary font-mono">{samples.length} 张</span>
+              </div>
+              <div className="flex-1 p-3 flex flex-col min-h-0">
+                <SampleViewer samples={samples} taskId={taskId} />
+              </div>
+            </div>
 
-        {/* 右：loss / lr / d 三卡（d 可选），flex-1 等高平分但夹在 [140, 300] 之间。
+            {/* 右：loss / lr / d 三卡（d 可选），flex-1 等高平分但夹在 [140, 300] 之间。
             每张卡同结构：header 单行 + 占满 flex-1 的 chart。LR 不再夹带任何 d 信息
             （avoid 之前 d-block 作为 LR 内 shrink-0 死成本顶起 LR card min 的问题）。
             minHeight 140 = 可读下界（再小 chart 不易读，触发外层滚动条而非继续压缩）；
             maxHeight 300 = 防止 4K / 大屏上卡片被拉到失衡的高度（剩余空间留给左列采样图）。 */}
-        <div className="flex flex-col gap-3.5 min-h-0">
-          <div className="card p-4 flex-1 flex flex-col" style={{ minHeight: 140, maxHeight: 300 }}>
-            <div className="flex items-center justify-between mb-2 shrink-0">
-              <span className="text-sm font-semibold">loss</span>
-              <SmoothControl alpha={emaAlpha} setAlpha={setEmaAlpha} min={0.001} max={0.3} step={0.001} />
-            </div>
-            <SeriesChart
-              data={losses.map((l) => ({ step: l.step, value: l.loss }))}
-              rawColor="rgba(74,71,64,0.35)"
-              smoothColor="var(--accent)"
-              fillColor="var(--accent-soft)"
-              emaAlpha={emaAlpha}
-              yFormat={(v) => v.toFixed(4)}
-              minHeight={60}
-            />
-          </div>
-
-          <div className="card p-4 flex-1 flex flex-col" style={{ minHeight: 140, maxHeight: 300 }}>
-            <div className="flex items-center justify-between mb-2 shrink-0">
-              <span className="text-sm font-semibold">learning rate</span>
-              <SmoothControl alpha={lrAlpha} setAlpha={setLrAlpha} min={0.005} max={1} step={0.005} />
-            </div>
-            <SeriesChart
-              data={lrSeries}
-              rawColor="rgba(224,162,58,0.35)"
-              smoothColor="var(--warn)"
-              emaAlpha={lrAlpha}
-              yFormat={fmtLr}
-              minHeight={60}
-            />
-          </div>
-
-          {dSeries.length >= 2 && (
-            <div className="card p-4 flex-1 flex flex-col" style={{ minHeight: 140, maxHeight: 300 }}>
-              <div className="flex items-center justify-between mb-2 shrink-0">
-                <div className="flex items-baseline gap-2">
-                  <span className="text-sm font-semibold">d</span>
-                  <span className="text-xs font-mono text-fg-tertiary tabular-nums">
-                    {fmtMetric(lastD)}
-                  </span>
+            <div className="flex flex-col gap-3.5 min-h-0">
+              <div className="card p-4 flex-1 flex flex-col" style={{ minHeight: 140, maxHeight: 300 }}>
+                <div className="flex items-center justify-between mb-2 shrink-0">
+                  <span className="text-sm font-semibold">loss</span>
+                  <SmoothControl alpha={emaAlpha} setAlpha={setEmaAlpha} min={0.001} max={0.3} step={0.001} />
                 </div>
-                <SmoothControl alpha={dAlpha} setAlpha={setDAlpha} min={0.005} max={1} step={0.005} />
+                <SeriesChart
+                  data={losses.map((l) => ({ step: l.step, value: l.loss }))}
+                  rawColor="rgba(74,71,64,0.35)"
+                  smoothColor="var(--accent)"
+                  fillColor="var(--accent-soft)"
+                  emaAlpha={emaAlpha}
+                  yFormat={(v) => v.toFixed(4)}
+                  minHeight={60}
+                />
               </div>
-              <SeriesChart
-                data={dSeries}
-                rawColor="rgba(237,107,58,0.30)"
-                smoothColor="var(--accent)"
-                emaAlpha={dAlpha}
-                yFormat={fmtMetric}
-                minHeight={60}
-              />
+
+              <div className="card p-4 flex-1 flex flex-col" style={{ minHeight: 140, maxHeight: 300 }}>
+                <div className="flex items-center justify-between mb-2 shrink-0">
+                  <span className="text-sm font-semibold">learning rate</span>
+                  <SmoothControl alpha={lrAlpha} setAlpha={setLrAlpha} min={0.005} max={1} step={0.005} />
+                </div>
+                <SeriesChart
+                  data={lrSeries}
+                  rawColor="rgba(224,162,58,0.35)"
+                  smoothColor="var(--warn)"
+                  emaAlpha={lrAlpha}
+                  yFormat={fmtLr}
+                  minHeight={60}
+                />
+              </div>
+
+              {dSeries.length >= 2 && (
+                <div className="card p-4 flex-1 flex flex-col" style={{ minHeight: 140, maxHeight: 300 }}>
+                  <div className="flex items-center justify-between mb-2 shrink-0">
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-sm font-semibold">d</span>
+                      <span className="text-xs font-mono text-fg-tertiary tabular-nums">
+                        {fmtMetric(lastD)}
+                      </span>
+                    </div>
+                    <SmoothControl alpha={dAlpha} setAlpha={setDAlpha} min={0.005} max={1} step={0.005} />
+                  </div>
+                  <SeriesChart
+                    data={dSeries}
+                    rawColor="rgba(237,107,58,0.30)"
+                    smoothColor="var(--accent)"
+                    emaAlpha={dAlpha}
+                    yFormat={fmtMetric}
+                    minHeight={60}
+                  />
+                </div>
+              )}
             </div>
-          )}
-        </div>
-      </div>
+          </div>
     </div>
   )
 }

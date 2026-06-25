@@ -209,7 +209,14 @@ def project_thumb(
 # 本 endpoint 因为路径在 /api/projects/ 下，归 projects 子包。
 # ---------------------------------------------------------------------------
 
-_HYDRATABLE_JOB_KINDS = {"download", "tag", "reg_build"}
+_HYDRATABLE_JOB_KINDS = {
+    "download",
+    "tag",
+    "reg_build",
+    "eval_samples",
+    "eval_clip",
+    "eval_dino",
+}
 
 
 @router.get("/api/projects/{pid}/versions/{vid}/jobs/latest")
