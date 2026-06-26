@@ -278,24 +278,12 @@ def queue_training_finished_eval(
         queued.append((job, run))
         last_rel = rel
 
-    # baseline 对照：纯底模(lora_scale=0)同 prompt/seed 出一组，给各 checkpoint 算 Δ。
-    # 每 task 一次（已有 baseline run 则跳过）；用任一 checkpoint 当加载目标(scale 0
-    # → LoRA 不生效 = 底模输出)。
-    if cfg.eval_baseline_enabled and queued and not _has_baseline_run(vdir, eval_root):
-        try:
-            bjob, brun = eval_samples.start_job(
-                conn, project, version, vdir,
-                checkpoint_path=last_rel,
-                auto_metrics=True,
-                auto_source={
-                    "task_id": task_id, "trigger": "after_training", "baseline": True,
-                },
-                eval_root=eval_root,
-                baseline=True,
-            )
-            queued.append((bjob, brun))
-        except Exception:
-            logger.exception("baseline eval enqueue failed for task=%s", task.get("id"))
+    base = _ensure_baseline_queued(
+        conn, project, version, vdir,
+        task_id=task_id, eval_root=eval_root, ckpt_rel=last_rel, trigger="after_training",
+    )
+    if base is not None:
+        queued.append(base)
 
     logger.info(
         "queued after-training eval sample jobs for task=%s count=%s",
@@ -311,6 +299,40 @@ def _has_baseline_run(vdir: Path, eval_root: Path | None) -> bool:
         if run.get("baseline"):
             return True
     return False
+
+
+def _ensure_baseline_queued(
+    conn,
+    project: dict[str, Any],
+    version: dict[str, Any],
+    vdir: Path,
+    *,
+    task_id: int,
+    eval_root: Path | None,
+    ckpt_rel: str,
+    trigger: str,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """每 task 排一个 baseline run（纯底模 lora_scale=0、同 prompt/seed），给各
+    checkpoint 算 Δ。已有 baseline / 关闭 / 无可用 checkpoint 则跳过。after-training
+    与 manual 共用 —— 两个入口都要有 baseline，否则手动重跑看不到 Δ。
+    """
+    cfg = secrets.load().eval_metrics
+    if not cfg.eval_baseline_enabled or not ckpt_rel:
+        return None
+    if _has_baseline_run(vdir, eval_root):
+        return None
+    try:
+        return eval_samples.start_job(
+            conn, project, version, vdir,
+            checkpoint_path=ckpt_rel,
+            auto_metrics=True,
+            auto_source={"task_id": task_id, "trigger": trigger, "baseline": True},
+            eval_root=eval_root,
+            baseline=True,
+        )
+    except Exception:
+        logger.exception("baseline eval enqueue failed for task=%s", task_id)
+        return None
 
 
 def queue_manual_task_eval(
@@ -341,6 +363,7 @@ def queue_manual_task_eval(
     eval_root = task_eval_dir(task_id)
     queued: list[tuple[dict[str, Any], dict[str, Any]]] = []
     seen: set[str] = set()
+    baseline_rel = ""
     for raw in checkpoints:
         rel = _checkpoint_relative_to_output(
             project_id, str(project.get("slug") or ""), version, str(raw or "")
@@ -348,6 +371,8 @@ def queue_manual_task_eval(
         if not rel or rel in seen:
             continue
         seen.add(rel)
+        if not baseline_rel:
+            baseline_rel = rel
         try:
             job, run = eval_samples.start_job(
                 conn,
@@ -365,6 +390,13 @@ def queue_manual_task_eval(
             )
             continue
         queued.append((job, run))
+
+    base = _ensure_baseline_queued(
+        conn, project, version, vdir,
+        task_id=task_id, eval_root=eval_root, ckpt_rel=baseline_rel, trigger="manual",
+    )
+    if base is not None:
+        queued.append(base)
 
     logger.info(
         "queued manual eval sample jobs for task=%s count=%s", task_id, len(queued)

@@ -458,8 +458,22 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
   }, [payload?.results])
 
   // baseline run（纯底模对照）不作为 checkpoint 展示——只用来给各 checkpoint 算 Δ
-  // （后端已挂在 result.delta）。卡片/表格/曲线都走 displayResults（排除 baseline）。
-  const displayResults = useMemo(() => results.filter((r) => !r.baseline), [results])
+  // （后端已挂在 result.delta）。同一 checkpoint 多次评估（重跑）只留最新一条，避免
+  // 重复行/曲线上重复点。卡片/表格/曲线都走 displayResults。
+  const displayResults = useMemo(() => {
+    const byCkpt = new Map<string, EvalMetricResult>()
+    for (const r of results) {
+      if (r.baseline) continue
+      const key = r.checkpoint?.path || r.run_id
+      const prev = byCkpt.get(key)
+      const t = r.updated_at ?? r.created_at ?? 0
+      const pt = prev ? (prev.updated_at ?? prev.created_at ?? 0) : -1
+      if (!prev || t >= pt) byCkpt.set(key, r)
+    }
+    return [...byCkpt.values()].sort(
+      (a, b) => checkpointSortValue(a, 0) - checkpointSortValue(b, 0),
+    )
+  }, [results])
 
   const hasActiveMetric = useMemo(() => {
     return results.some((result) =>

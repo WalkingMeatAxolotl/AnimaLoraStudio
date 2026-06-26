@@ -326,8 +326,10 @@ def test_queue_manual_task_eval_bypasses_switch_and_scopes_to_task(isolated) -> 
         queued = eval_auto.queue_manual_task_eval(conn, task, [ck2, ck4])
         jobs = project_jobs.list_jobs(conn, kind="eval_samples", status="pending")
 
-    assert len(queued) == 2
-    assert len(jobs) == 2
+    # 2 个 checkpoint + 1 个 baseline（手动入口现在也排 baseline，给 Δ）
+    assert len(queued) == 3
+    assert len(jobs) == 3
+    assert sum(1 for _job, r in queued if r.get("baseline")) == 1
     paths = {job["params_decoded"]["checkpoint_path"] for job in jobs}
     assert paths == {
         "output/model_epoch2.safetensors",
@@ -353,9 +355,12 @@ def test_queue_manual_task_eval_dedupes_and_skips_invalid(isolated) -> None:
         )
         jobs = project_jobs.list_jobs(conn, kind="eval_samples", status="pending")
 
-    assert len(queued) == 1
-    assert len(jobs) == 1
-    assert queued[0][0]["params_decoded"]["checkpoint_path"] == "output/model_epoch2.safetensors"
+    # 1 个 checkpoint + 1 个 baseline
+    assert len(jobs) == 2
+    assert sum(1 for _job, r in queued if r.get("baseline")) == 1
+    real = [r for _job, r in queued if not r.get("baseline")]
+    assert len(real) == 1
+    assert real[0]["checkpoint"]["path"] == "output/model_epoch2.safetensors"
 
 
 def test_run_checkpoint_eval_for_task_runs_inline_without_queue_jobs(isolated) -> None:
