@@ -470,6 +470,13 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
     )
   }, [results])
 
+  // 还有评估 job 在跑（含「出图」阶段——此时 metric 状态还是 not_run，hasActiveMetric
+  // 抓不到）。重跑评估在已 done 的 task 上时，靠这个让轮询继续，新 run 进度/日志才刷新。
+  const hasActiveJob = useMemo(
+    () => evalJobs.some((j) => j.status === 'pending' || j.status === 'running'),
+    [evalJobs],
+  )
+
   // 核心指标常显；动漫域新指标默认关，只有算过（状态非 not_run）才显示，避免空卡。
   const displayKeys = useMemo<EvalMetricKey[]>(
     () => EVAL_METRIC_KEYS.filter((k) =>
@@ -487,10 +494,10 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
 
   useEffect(() => {
     if (!pid || !vid) return
-    if (!connected && !hasActiveMetric) return
+    if (!connected && !hasActiveMetric && !hasActiveJob) return
     const id = window.setInterval(() => void load(true), 5000)
     return () => window.clearInterval(id)
-  }, [connected, hasActiveMetric, load, pid, vid])
+  }, [connected, hasActiveMetric, hasActiveJob, load, pid, vid])
 
   // ── 手动评估：选 checkpoint → POST /eval/run（task-scoped） ──────────────
   const [pickerOpen, setPickerOpen] = useState(false)
