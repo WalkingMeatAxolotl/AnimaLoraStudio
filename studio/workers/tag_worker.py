@@ -42,11 +42,12 @@ from studio.services.dataset import tagedit
 from studio.services.tagging.base import get_tagger
 
 
-def _collect_images(train_dir: Path) -> list[Path]:
-    if not train_dir.exists():
+def _collect_from_root(root: Path) -> list[Path]:
+    """`root/<folder>/<image>` 结构里所有图（train/ 或 validation/）。"""
+    if not root.exists():
         return []
     out: list[Path] = []
-    for d in (sub for sub in train_dir.iterdir() if sub.is_dir()):
+    for d in (sub for sub in root.iterdir() if sub.is_dir()):
         out.extend(
             sorted(
                 f for f in d.iterdir()
@@ -54,6 +55,34 @@ def _collect_images(train_dir: Path) -> list[Path]:
             )
         )
     return out
+
+
+def _collect_from_folder(folder: Path) -> list[Path]:
+    """单个叶子文件夹（直接含图）里的所有图。"""
+    if not folder.exists():
+        return []
+    return sorted(
+        f for f in folder.iterdir()
+        if f.is_file() and f.suffix.lower() in IMAGE_EXTS
+    )
+
+
+def _collect_for_scope(version_dir: Path, scope: str) -> list[Path]:
+    """按打标范围收图：
+    - "all"（默认）：train/ 全部 + validation/ 全部
+    - "validation"：只 held-out validation/
+    - 其它：当作 train 子文件夹名，只收 train/<scope>/
+
+    手动加入的验证图原本没 caption（打标历来只扫 train/），靠 "all" / "validation"
+    把验证集纳入打标，eval 才有 prompt 用。scope 的 traversal 安全在 endpoint 校验。
+    """
+    train = version_dir / "train"
+    val = version_dir / "validation"
+    if scope == "validation":
+        return _collect_from_root(val)
+    if scope and scope != "all":
+        return _collect_from_folder(train / scope)
+    return _collect_from_root(train) + _collect_from_root(val)
 
 
 def _filter_existing_captions(images: list[Path]) -> tuple[list[Path], list[Path]]:
@@ -92,6 +121,8 @@ def run(job_id: int) -> int:
         on_existing = str(params.get("on_existing") or "overwrite")
         if on_existing not in ("skip", "overwrite", "append"):
             on_existing = "overwrite"
+        # 打标范围：all（默认 train+validation）/ validation / 单个 train 文件夹名
+        scope = str(params.get("scope") or "all")
         # 约定：每个支持本次覆盖的 tagger 都把 overrides 存在 `<name>_overrides` 键下
         overrides = params.get(f"{tagger_name}_overrides") or None
 
@@ -102,11 +133,11 @@ def run(job_id: int) -> int:
                 return 1
             p = projects.get_project(conn, v["project_id"])
         assert p is not None
-        train_dir = versions.version_dir(p["id"], p["slug"], v["label"]) / "train"
+        version_dir = versions.version_dir(p["id"], p["slug"], v["label"])
 
-        images = _collect_images(train_dir)
+        images = _collect_for_scope(version_dir, scope)
         if not images:
-            progress("[done] 没有图可打标（train/ 是空的）")
+            progress(f"[done] 没有图可打标（范围 {scope} 下没有图）")
             return 0
         total_images = len(images)
 

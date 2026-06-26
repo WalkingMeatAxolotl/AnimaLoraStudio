@@ -131,6 +131,10 @@ export default function TaggingPage() {
   // 触发词：初值从 activeVersion 取（持久化在 version 表）；启动打标时一并提交，
   // 后端会同步落库 + 传给 worker prepend 到每张 caption。
   const [triggerWord, setTriggerWord] = useState<string>('')
+  // 打标范围：'all'（默认 train + validation）/ 'validation' / 某个 train 文件夹名。
+  // folders 给 dropdown 列 train 子文件夹选项（从 curation 拿）。
+  const [scope, setScope] = useState<string>('all')
+  const [folders, setFolders] = useState<string[]>([])
 
   const [wd14Defaults, setWd14Defaults] = useState<WD14Config | null>(null)
   const [wd14Form, setWd14Form] = useState<Wd14Form | null>(null)
@@ -188,6 +192,17 @@ export default function TaggingPage() {
   useEffect(() => {
     setTriggerWord(activeVersion?.trigger_word ?? '')
   }, [activeVersion?.id, activeVersion?.trigger_word])
+
+  // 打标范围 dropdown 的 train 文件夹选项：拿当前版本的 curation folders。
+  // 切版本时 scope 复位 'all'（旧版本的文件夹名在新版本可能不存在）。
+  useEffect(() => {
+    setScope('all')
+    if (vid == null) { setFolders([]); return }
+    void api
+      .getCuration(project.id, vid)
+      .then((v) => setFolders(v.folders))
+      .catch(() => setFolders([]))
+  }, [project.id, vid])
 
   useEventStream((evt) => {
     const jid = jobIdRef.current
@@ -279,6 +294,7 @@ export default function TaggingPage() {
       const trigger = triggerWord.trim()
       const j = await api.startTag(project.id, activeVersion.id, {
         tagger, output_format: outputFormat, on_existing: onExisting,
+        scope,
         wd14_overrides, cltagger_overrides, llm_overrides,
         // 传 trigger 永远，让 server 决定是否落库（与现有值比较），空串显式清空
         trigger_word: trigger,
@@ -379,6 +395,23 @@ export default function TaggingPage() {
                 {t('tag.goDownload')}
               </button>
             )}
+
+            <span className="text-dim">|</span>
+            <span className="text-fg-tertiary" title={t('tag.scopeHint')}>{t('tag.scope')}</span>
+            <select
+              value={scope}
+              onChange={(e) => setScope(e.target.value)}
+              disabled={isLive}
+              className="input text-sm"
+              style={{ padding: '3px 8px' }}
+              title={t('tag.scopeHint')}
+            >
+              <option value="all">{t('tag.scopeAll')}</option>
+              {folders.map((f) => (
+                <option key={f} value={f}>{f}</option>
+              ))}
+              <option value="validation">{t('tag.scopeValidation')}</option>
+            </select>
 
             <span className="text-dim">|</span>
             <span className="text-fg-tertiary">format</span>

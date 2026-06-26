@@ -2275,6 +2275,11 @@ export const api = {
        * 第一个 tag，并同步落库到 version.trigger_word，后续 train 读出。
        */
       trigger_word?: string
+      /**
+       * 打标范围：'all'（默认，train 全部 + validation）/ 'validation'（只打
+       * held-out 验证集）/ 某个 train 子文件夹名（只打那一个）。
+       */
+      scope?: string
     }
   ) =>
     req<Job>(`/api/projects/${pid}/versions/${vid}/tag`, {

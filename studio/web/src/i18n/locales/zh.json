@@ -2116,7 +2116,11 @@
     "onExistingHint": "图片已有 caption 文件（.txt 或 .json）时怎么处理。",
     "onExistingOverwrite": "覆盖",
     "onExistingSkip": "跳过",
-    "onExistingAppend": "追加到末尾"
+    "onExistingAppend": "追加到末尾",
+    "scope": "范围",
+    "scopeHint": "打哪些图。默认训练集 + 验证集一起打——手动加入的验证图原本没 caption，eval 拿 caption 当生成 prompt，得在这里把验证集纳入打标。也可只打某个训练集文件夹或只打验证集。",
+    "scopeAll": "全部（训练集 + 验证集）",
+    "scopeValidation": "验证集"
   },
   "presets": {
     "loadSchemaFailed": "schema 加载失败: {{error}}",

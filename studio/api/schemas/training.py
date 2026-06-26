@@ -67,6 +67,10 @@ class TagJobRequest(BaseModel):
     # 触发词；空串 / None = 不启用。打标时作为第一个 tag prepend 到 caption；
     # 同时持久化到 version.trigger_word，后续 train 阶段从私有 yaml 读出。
     trigger_word: Optional[str] = None
+    # 打标范围："all"（默认，train 全部文件夹 + validation）| "validation"（只打
+    # held-out 验证集）|  某个 train 子文件夹名（如 "1_data"，只打那一个）。
+    # 手动加入的验证图原本没 caption，靠这个把验证集纳入打标。
+    scope: str = "all"
 
 
 class CaptionEdit(BaseModel):

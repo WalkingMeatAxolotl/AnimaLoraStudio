@@ -2116,7 +2116,11 @@
     "onExistingHint": "What to do when an image already has a caption file (.txt or .json).",
     "onExistingOverwrite": "Overwrite",
     "onExistingSkip": "Skip",
-    "onExistingAppend": "Append"
+    "onExistingAppend": "Append",
+    "scope": "Scope",
+    "scopeHint": "Which images to tag. Defaults to train + validation together — manually-added validation images start without captions, and eval uses the caption as the generation prompt, so the validation set must be tagged here. You can also tag a single train folder or only the validation set.",
+    "scopeAll": "All (train + validation)",
+    "scopeValidation": "Validation set"
   },
   "presets": {
     "loadSchemaFailed": "Failed to load schema: {{error}}",

@@ -112,6 +112,38 @@ def test_start_tag_bad_format_400(client: TestClient) -> None:
     assert r.status_code == 400
 
 
+def test_start_tag_scope_validation_into_params(client: TestClient) -> None:
+    pid, vid = _make(client)
+    r = client.post(
+        f"/api/projects/{pid}/versions/{vid}/tag",
+        json={"tagger": "wd14", "scope": "validation"},
+    )
+    assert r.status_code == 200, r.text
+    import json as _json
+    assert _json.loads(r.json()["params"])["scope"] == "validation"
+
+
+def test_start_tag_scope_all_default_not_in_params(client: TestClient) -> None:
+    pid, vid = _make(client)
+    r = client.post(
+        f"/api/projects/{pid}/versions/{vid}/tag",
+        json={"tagger": "wd14"},
+    )
+    assert r.status_code == 200, r.text
+    import json as _json
+    assert "scope" not in _json.loads(r.json()["params"])
+
+
+def test_start_tag_scope_traversal_400(client: TestClient) -> None:
+    """scope 取 train 文件夹名时会拼进路径，必须挡 path traversal。"""
+    pid, vid = _make(client)
+    r = client.post(
+        f"/api/projects/{pid}/versions/{vid}/tag",
+        json={"tagger": "wd14", "scope": "../../etc"},
+    )
+    assert r.status_code == 400
+
+
 def test_start_tag_with_wd14_overrides(client: TestClient) -> None:
     """传 wd14_overrides 时，端点应把它落进 params['wd14_overrides']。"""
     import json as _json
