@@ -936,6 +936,45 @@ def test_trigger_eval_clip_dispatches_to_download(
     assert captured["ok"] is True
 
 
+def test_download_ccip_model_calls_snapshot_with_variant_patterns(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict = {}
+
+    def fake_snapshot(repo, target, *, allow_patterns=None, on_log=print):
+        captured["repo"] = repo
+        captured["target"] = str(target)
+        captured["patterns"] = allow_patterns
+        return True
+
+    monkeypatch.setattr("studio.services.models.sources.download_snapshot", fake_snapshot)
+    ok = model_downloader.download_ccip_model("ccip-x", tmp_path)
+    assert ok is True
+    assert captured["repo"] == "deepghs/ccip_onnx"
+    assert captured["target"].replace("\\", "/").endswith("eval/ccip")
+    assert set(captured["patterns"]) == {
+        "ccip-x/model_feat.onnx", "ccip-x/model_metrics.onnx", "ccip-x/metrics.json",
+    }
+
+
+def test_ensure_ccip_model_skips_when_files_present(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("studio.services.models.downloader.models_root", lambda: tmp_path)
+    d = model_downloader.ccip_model_dir(tmp_path, "ccip-x")
+    d.mkdir(parents=True)
+    for f in ("model_feat.onnx", "model_metrics.onnx", "metrics.json"):
+        (d / f).write_bytes(b"x")
+    called: list = []
+    monkeypatch.setattr(
+        "studio.services.models.downloader.download_ccip_model",
+        lambda *a, **k: called.append(1) or True,
+    )
+    got = model_downloader.ensure_ccip_model("ccip-x")
+    assert got == d
+    assert not called  # 三文件齐全，不触发下载
+
+
 def test_download_eval_model_routes_modelscope_when_mapped(
     tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
 ) -> None:
