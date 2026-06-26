@@ -625,26 +625,51 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
                 {selected.size === ckpts.length ? '清空' : '全选'}
               </button>
             )}
+            <button
+              type="button"
+              onClick={() => setPickerOpen(false)}
+              className="btn btn-ghost btn-sm text-fg-tertiary px-1.5"
+              title="关闭"
+              aria-label="关闭 checkpoint 选择"
+            >
+              ×
+            </button>
           </div>
           {ckptsLoading ? (
             <div className="text-xs text-fg-tertiary py-1">读取 checkpoint…</div>
           ) : ckpts.length === 0 ? (
             <div className="text-xs text-fg-tertiary py-1">output/ 下没有 LoRA checkpoint。</div>
           ) : (
-            <div className="max-h-40 overflow-y-auto flex flex-col gap-0.5">
-              {ckpts.map((c) => (
-                <label
-                  key={c.path}
-                  className="flex items-center gap-2 text-xs py-0.5 cursor-pointer hover:bg-subtle/40 rounded px-1"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selected.has(c.path)}
-                    onChange={() => toggleCkpt(c.path)}
-                  />
-                  <span className="font-mono">{c.label}</span>
-                </label>
-              ))}
+            // chip 网格（与测试页 LoRA 选择器同款）：auto-fill 等宽列、+/✓ 标记、
+            // 选中态 accent-soft 高亮。
+            <div
+              className="grid gap-1.5 overflow-y-auto"
+              style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', maxHeight: 200, padding: 2 }}
+            >
+              {ckpts.map((c) => {
+                const isPicked = selected.has(c.path)
+                return (
+                  <button
+                    key={c.path}
+                    type="button"
+                    onClick={() => toggleCkpt(c.path)}
+                    className="font-mono flex items-center gap-1 min-w-0"
+                    style={{
+                      fontSize: 11,
+                      padding: '4px 8px',
+                      borderRadius: 'var(--r-md)',
+                      border: isPicked ? '1px solid transparent' : '1px solid var(--border-subtle)',
+                      background: isPicked ? 'var(--accent-soft)' : 'var(--bg-sunken)',
+                      color: isPicked ? 'var(--accent)' : 'var(--fg-secondary)',
+                      cursor: 'pointer',
+                    }}
+                    title={c.path}
+                  >
+                    <span className="shrink-0">{isPicked ? '✓' : '+'}</span>
+                    <span className="truncate flex-1 text-left">{c.label}</span>
+                  </button>
+                )
+              })}
             </div>
           )}
           <div className="flex items-center gap-2">
