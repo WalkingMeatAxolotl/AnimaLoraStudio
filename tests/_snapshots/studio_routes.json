@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 194,
+  "count": 195,
   "routes": [
     {
       "path": "/",
@@ -799,6 +799,14 @@
         "POST"
       ],
       "name": "remove_from_train",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/eval/jobs",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_task_eval_jobs_endpoint",
       "type": "APIRoute"
     },
     {

@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from studio import db, server
 from studio.infrastructure import paths as infra_paths
 from studio.services import eval_metrics, eval_samples
-from studio.services.projects import projects, versions
+from studio.services.projects import jobs as project_jobs, projects, versions
 
 
 @pytest.fixture
@@ -80,6 +80,29 @@ def _vdir_for(pid: int, vid: int) -> tuple[dict[str, Any], dict[str, Any], Path]
     assert project and version
     vdir = versions.version_dir(project["id"], project["slug"], version["label"])
     return project, version, vdir
+
+
+def test_list_task_eval_jobs_filters_by_task_and_kind(client: TestClient) -> None:
+    pid, vid = _make(client)
+    with db.connection_for() as conn:
+        # task 42 的三种 eval job
+        for kind in ("eval_samples", "eval_clip", "eval_dino"):
+            project_jobs.create_job(
+                conn, project_id=pid, version_id=vid, kind=kind,
+                params={"task_id": 42, "run_id": f"run-{kind}"},
+            )
+        # 别的 task 的 eval job + 非 eval job：都不该出现
+        project_jobs.create_job(
+            conn, project_id=pid, version_id=vid, kind="eval_samples",
+            params={"task_id": 99, "run_id": "run-other"},
+        )
+        project_jobs.create_job(
+            conn, project_id=pid, version_id=vid, kind="tag", params={"task_id": 42},
+        )
+    r = client.get(f"/api/projects/{pid}/versions/{vid}/eval/jobs?task_id=42").json()
+    kinds = sorted(j["kind"] for j in r["jobs"])
+    assert kinds == ["eval_clip", "eval_dino", "eval_samples"]
+    assert all(j["run_id"].startswith("run-") and j["run_id"] != "run-other" for j in r["jobs"])
 
 
 def test_empty_metric_result_describes_not_run_states(isolated) -> None:

@@ -210,6 +210,26 @@ export interface EvalMetricResult {
   metrics: Record<string, unknown>
   metric_states: Record<string, EvalMetricState>
   summary?: Record<string, number>
+  /** 出图阶段（eval_samples run.json）的状态 + 逐图汇总 {total, pending, running,
+   *  done, failed}。出图是评估里最耗时的部分；用它显示「出图 done/total」子进度。 */
+  sample_run?: {
+    run_id: string
+    path?: string
+    status: string
+    summary: Record<string, number>
+    created_at?: number | null
+    updated_at?: number | null
+  }
+}
+
+/** 训练后 / 手动评估的一条 job（inline 训练时评估无 job）。按 run_id 关联到某个
+ *  checkpoint 行，用来取原始日志（含报错）。 */
+export interface EvalJobInfo {
+  id: number
+  kind: 'eval_samples' | 'eval_clip' | 'eval_dino' | string
+  status: string
+  run_id?: string | null
+  checkpoint_path?: string | null
 }
 
 export interface EvalMetricsListResponse {
@@ -2754,6 +2774,11 @@ export const api = {
       `/api/projects/${pid}/versions/${vid}/eval/metrics?` +
       (taskId ? `task_id=${taskId}&` : '') +
       `_=${Date.now()}`,
+    ),
+  /** 列某 task 的训练后/手动评估 job（按 run_id 关联 checkpoint 行 + 取原始日志）。 */
+  listTaskEvalJobs: (pid: number, vid: number, taskId: number) =>
+    req<{ jobs: EvalJobInfo[] }>(
+      `/api/projects/${pid}/versions/${vid}/eval/jobs?task_id=${taskId}`,
     ),
   /** 手动评估完成任务的选定 checkpoint（task-scoped，绕过自动评估开关）。 */
   runTaskEval: (
