@@ -121,6 +121,9 @@ class EvalMetricModelsConfig(BaseModel):
     enabled_metrics: list[str] = Field(
         default_factory=lambda: ["clip_t", "clip_i", "dino_i"]
     )
+    # baseline 对照：训练后评估额外出一组纯底模(lora_scale=0)同 prompt/seed 图，
+    # 各指标给出 Δ = checkpoint − baseline（解「绝对值难解读」）。每 task 一次。
+    eval_baseline_enabled: bool = True
     # 评估时机（全局）。是否评估由每个 version 训练配置的 eval_validation_enabled
     # 决定；启用后，这里选何时评：训练全部结束后批量评 / 训练中每存一个 LoRA 就评。
     auto_eval_trigger: Literal["after_training", "checkpoint"] = "after_training"

@@ -246,6 +246,7 @@ const EMPTY: Secrets = {
     dino_model_name: 'facebook/dinov2-small',
     ccip_model_name: 'ccip-caformer-24-randaug-pruned',
     enabled_metrics: ['clip_t', 'clip_i', 'dino_i'],
+    eval_baseline_enabled: true,
     auto_eval_trigger: 'after_training',
   },
   download_source: 'huggingface',
@@ -1010,6 +1011,19 @@ export default function SettingsPage() {
               )
             })}
           </div>
+        </SettingsField>
+        <SettingsField
+          label={t('settings.evalBaseline')}
+          helpTooltip={<p>{t('settings.evalBaselineHelp')}</p>}
+        >
+          <label className="flex items-center gap-2 text-xs cursor-pointer">
+            <input
+              type="checkbox"
+              checked={draft.eval_metrics.eval_baseline_enabled ?? true}
+              onChange={(e) => update('eval_metrics', 'eval_baseline_enabled', e.target.checked)}
+            />
+            <span className="text-fg-secondary">{t('settings.evalBaselineToggle')}</span>
+          </label>
         </SettingsField>
         <SettingsField
           label={t('settings.autoEvalTrigger')}

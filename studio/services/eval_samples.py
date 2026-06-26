@@ -323,11 +323,16 @@ def create_run(
     auto_metrics: bool = False,
     auto_source: dict[str, Any] | None = None,
     eval_root: Path | None = None,
+    baseline: bool = False,
     now: float | None = None,
 ) -> dict[str, Any]:
     ts = time.time() if now is None else float(now)
     cfg = _read_config(project, version)
     generation = _generation_from_cfg(cfg)
+    # baseline run = 纯底模对照（同 prompt/seed，lora_scale=0 → LoRA 不生效），
+    # 给各 checkpoint 算 Δ = checkpoint − baseline，解决「绝对值难解读」。
+    if baseline:
+        generation["lora_scale"] = 0.0
     checkpoint = _resolve_checkpoint(version_dir, checkpoint_path)
     items = _planned_items(version_dir, cfg, int(generation["seed"]))
     if not items:
@@ -361,6 +366,7 @@ def create_run(
         "finished_at": None,
         "error": None,
         "checkpoint": checkpoint,
+        "baseline": bool(baseline),
         "auto_metrics": bool(auto_metrics),
         "auto_source": dict(auto_source) if auto_source else None,
         "storage_scope": "task" if eval_root is not None else "version",
@@ -384,6 +390,7 @@ def start_job(
     auto_metrics: bool = False,
     auto_source: dict[str, Any] | None = None,
     eval_root: Path | None = None,
+    baseline: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     run = create_run(
         project,
@@ -393,6 +400,7 @@ def start_job(
         auto_metrics=auto_metrics,
         auto_source=auto_source,
         eval_root=eval_root,
+        baseline=baseline,
     )
     params: dict[str, Any] = {
         "version_id": int(version["id"]),

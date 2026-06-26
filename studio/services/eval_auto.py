@@ -242,6 +242,7 @@ def queue_training_finished_eval(
     task_id = int(task.get("id") or 0)
     eval_root = task_eval_dir(task_id) if task_id else None
     queued: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    last_rel = ""
     for checkpoint in versions.list_lora_ckpts(vdir):
         rel = _checkpoint_relative_to_output(
             project_id,
@@ -275,6 +276,26 @@ def queue_training_finished_eval(
             )
             continue
         queued.append((job, run))
+        last_rel = rel
+
+    # baseline 对照：纯底模(lora_scale=0)同 prompt/seed 出一组，给各 checkpoint 算 Δ。
+    # 每 task 一次（已有 baseline run 则跳过）；用任一 checkpoint 当加载目标(scale 0
+    # → LoRA 不生效 = 底模输出)。
+    if cfg.eval_baseline_enabled and queued and not _has_baseline_run(vdir, eval_root):
+        try:
+            bjob, brun = eval_samples.start_job(
+                conn, project, version, vdir,
+                checkpoint_path=last_rel,
+                auto_metrics=True,
+                auto_source={
+                    "task_id": task_id, "trigger": "after_training", "baseline": True,
+                },
+                eval_root=eval_root,
+                baseline=True,
+            )
+            queued.append((bjob, brun))
+        except Exception:
+            logger.exception("baseline eval enqueue failed for task=%s", task.get("id"))
 
     logger.info(
         "queued after-training eval sample jobs for task=%s count=%s",
@@ -282,6 +303,14 @@ def queue_training_finished_eval(
         len(queued),
     )
     return queued
+
+
+def _has_baseline_run(vdir: Path, eval_root: Path | None) -> bool:
+    """该 eval scope 下是否已有 baseline run（每 task 只生成一次）。"""
+    for run in eval_samples.list_runs(vdir, eval_root):
+        if run.get("baseline"):
+            return True
+    return False
 
 
 def queue_manual_task_eval(

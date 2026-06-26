@@ -457,6 +457,10 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
       .sort((a, b) => checkpointSortValue(a, 0) - checkpointSortValue(b, 0))
   }, [payload?.results])
 
+  // baseline run（纯底模对照）不作为 checkpoint 展示——只用来给各 checkpoint 算 Δ
+  // （后端已挂在 result.delta）。卡片/表格/曲线都走 displayResults（排除 baseline）。
+  const displayResults = useMemo(() => results.filter((r) => !r.baseline), [results])
+
   const hasActiveMetric = useMemo(() => {
     return results.some((result) =>
       EVAL_METRIC_KEYS.some((key) => {
@@ -470,12 +474,12 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
   const displayKeys = useMemo<EvalMetricKey[]>(
     () => EVAL_METRIC_KEYS.filter((k) =>
       CORE_METRIC_KEYS.has(k) ||
-      results.some((r) => {
+      displayResults.some((r) => {
         const s = metricState(r, k)?.status
         return s != null && s !== 'not_run'
       }),
     ),
-    [results],
+    [displayResults],
   )
 
   // 训练结束后评估进度：复用现有 results 聚合「评估中 done/total」，给面板头部用
@@ -549,8 +553,8 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
   const latestByKey = useMemo(() => {
     const out: Partial<Record<EvalMetricKey, { result: EvalMetricResult; value: number | null; state?: EvalMetricState }>> = {}
     for (const key of EVAL_METRIC_KEYS) {
-      for (let i = results.length - 1; i >= 0; i--) {
-        const result = results[i]
+      for (let i = displayResults.length - 1; i >= 0; i--) {
+        const result = displayResults[i]
         const state = metricState(result, key)
         const value = metricValue(result, key)
         if (value != null || state?.status) {
@@ -560,13 +564,13 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
       }
     }
     return out
-  }, [results])
+  }, [displayResults])
 
   const seriesByKey = useMemo(() => {
     const out = Object.fromEntries(
       EVAL_METRIC_KEYS.map((k) => [k, [] as Array<{ x: number; value: number }>]),
     ) as Record<EvalMetricKey, Array<{ x: number; value: number }>>
-    results.forEach((result, index) => {
+    displayResults.forEach((result, index) => {
       const x = checkpointSortValue(result, index)
       for (const key of EVAL_METRIC_KEYS) {
         const value = metricValue(result, key)
@@ -574,7 +578,7 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
       }
     })
     return out
-  }, [results])
+  }, [displayResults])
 
   if (!pid || !vid) {
     return (
@@ -736,6 +740,17 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
                     <span className={`text-2xl font-semibold font-mono tabular-nums ${toneClass(tone)}`}>
                       {formatEvalValue(latest?.value ?? null, latest?.state)}
                     </span>
+                    {(() => {
+                      const d = latest?.result.delta?.[key]
+                      return d != null ? (
+                        <span
+                          className={`text-xs font-mono tabular-nums shrink-0 ${d >= 0 ? 'text-ok' : 'text-err'}`}
+                          title="相对纯底模 baseline 的净增益 Δ"
+                        >
+                          {d >= 0 ? '+' : ''}{d.toFixed(4)}
+                        </span>
+                      ) : null
+                    })()}
                     <span className="text-[11px] text-fg-tertiary truncate">
                       {latest ? checkpointLabel(latest.result) : '等待指标'}
                     </span>
@@ -772,7 +787,7 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
                 </tr>
               </thead>
               <tbody>
-                {results.slice(-8).reverse().map((result) => {
+                {displayResults.slice(-8).reverse().map((result) => {
                   const rowStatus = evalRowStatus(result)
                   const jobs = jobsByRun.get(result.run_id) ?? []
                   const job = pickEvalJob(jobs)

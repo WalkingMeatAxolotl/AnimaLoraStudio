@@ -280,6 +280,7 @@ def empty_result(version_dir: Path, run: dict[str, Any], eval_root: Path | None 
         "sample_run": _sample_run_ref(version_dir, run, eval_root),
         "manifest_digest": run.get("manifest_digest"),
         "checkpoint": run.get("checkpoint") if isinstance(run.get("checkpoint"), dict) else {},
+        "baseline": bool(run.get("baseline")),
         "metrics": {},
         "metric_states": states,
         "summary": _status_summary(states),
@@ -316,6 +317,7 @@ def _normalize_result(
         "sample_run": _sample_run_ref(version_dir, run, eval_root),
         "manifest_digest": run.get("manifest_digest"),
         "checkpoint": run.get("checkpoint") if isinstance(run.get("checkpoint"), dict) else {},
+        "baseline": bool(run.get("baseline")),
         "metrics": metrics,
         "metric_states": states,
         "summary": _status_summary(states),
@@ -420,4 +422,37 @@ def list_results(version_dir: Path, eval_root: Path | None = None) -> list[dict[
         result = load_result(version_dir, run_id, eval_root)
         if result is not None:
             results.append(result)
+    _attach_baseline_delta(results)
     return results
+
+
+def _attach_baseline_delta(results: list[dict[str, Any]]) -> None:
+    """给每条非 baseline 结果挂 ``delta``：各指标 = 该 checkpoint 值 − baseline 值。
+
+    baseline run（纯底模、lora_scale=0、同 prompt/seed）的指标作为对照基线，Δ 才
+    能把「LoRA 净增益」从「底模本来就有的」里分离出来。无 baseline run 时不挂 delta。
+    """
+    baseline = next((r for r in results if r.get("baseline")), None)
+    if baseline is None:
+        return
+    base_metrics = baseline.get("metrics") if isinstance(baseline.get("metrics"), dict) else {}
+    base_vals: dict[str, float] = {}
+    for key, value in base_metrics.items():
+        try:
+            if value is not None:
+                base_vals[str(key)] = float(value)
+        except (TypeError, ValueError):
+            continue
+    for result in results:
+        if result.get("baseline"):
+            continue
+        metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+        delta: dict[str, float] = {}
+        for key, value in metrics.items():
+            if key in base_vals and value is not None:
+                try:
+                    delta[str(key)] = float(value) - base_vals[str(key)]
+                except (TypeError, ValueError):
+                    continue
+        result["delta"] = delta
+        result["baseline_metrics"] = dict(base_vals)

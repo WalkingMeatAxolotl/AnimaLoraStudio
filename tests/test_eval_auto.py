@@ -284,8 +284,10 @@ def test_after_training_eval_queues_all_checkpoints_by_default(isolated) -> None
         queued = eval_auto.queue_training_finished_eval(conn, task, payload)
         jobs = project_jobs.list_jobs(conn, kind="eval_samples", status="pending")
 
-    assert len(queued) == 2
-    assert len(jobs) == 2
+    # 2 个 checkpoint + 1 个 baseline（纯底模对照）= 3
+    assert len(queued) == 3
+    assert len(jobs) == 3
+    assert sum(1 for _job, r in queued if r.get("baseline")) == 1
     paths = {job["params_decoded"]["checkpoint_path"] for job in jobs}
     assert paths == {
         "output/model_epoch2.safetensors",
@@ -297,6 +299,18 @@ def test_after_training_eval_queues_all_checkpoints_by_default(isolated) -> None
         job["params_decoded"]["auto_source"]["trigger"] == "after_training"
         for job in jobs
     )
+
+
+def test_after_training_eval_skips_baseline_when_disabled(isolated) -> None:
+    project, version, vdir = _project_version(isolated)
+    (vdir / "output" / "model_epoch4.safetensors").write_bytes(b"lora")
+    _enable_validation(project, version)
+    secrets.update({"eval_metrics": {"eval_baseline_enabled": False}})
+    task = {"id": 9, "project_id": project["id"], "version_id": version["id"]}
+    payload = {"checkpoint_path": str(vdir / "output" / "model_epoch2.safetensors")}
+    with db.connection_for(isolated["db"]) as conn:
+        queued = eval_auto.queue_training_finished_eval(conn, task, payload)
+    assert queued and not any(r.get("baseline") for _job, r in queued)
 
 
 def test_queue_manual_task_eval_bypasses_switch_and_scopes_to_task(isolated) -> None:
@@ -558,11 +572,13 @@ def test_supervisor_eval_training_finished_queues_after_task_done(isolated) -> N
 
     with db.connection_for(isolated["db"]) as conn:
         jobs = project_jobs.list_jobs(conn, kind="eval_samples", status="pending")
-    assert len(jobs) == 1
-    assert jobs[0]["params_decoded"]["auto_source"]["trigger"] == "after_training"
-    assert jobs[0]["params_decoded"]["task_id"] == tid
+    # 1 个 checkpoint + 1 个 baseline
+    assert len(jobs) == 2
+    assert all(j["params_decoded"]["auto_source"]["trigger"] == "after_training" for j in jobs)
+    assert all(j["params_decoded"]["task_id"] == tid for j in jobs)
+    assert sum(1 for j in jobs if j["params_decoded"]["auto_source"].get("baseline")) == 1
     queued = [e for e in events if e["type"] == "eval_auto_after_training_queued"]
-    assert queued and queued[0]["count"] == 1
+    assert queued and queued[0]["count"] == 2
 
 
 def test_eval_runs_full_validation_set_no_cap(isolated) -> None:

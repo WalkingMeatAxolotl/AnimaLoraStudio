@@ -105,6 +105,40 @@ def test_list_task_eval_jobs_filters_by_task_and_kind(client: TestClient) -> Non
     assert all(j["run_id"].startswith("run-") and j["run_id"] != "run-other" for j in r["jobs"])
 
 
+def test_baseline_run_sets_lora_scale_zero(isolated) -> None:
+    project, version, vdir = _new_project(isolated)
+    _seed_validation_and_ckpt(vdir)
+    run = eval_samples.create_run(
+        project, version, vdir,
+        checkpoint_path="model_step100.safetensors", baseline=True, now=2000.0,
+    )
+    assert run["baseline"] is True
+    assert run["generation"]["lora_scale"] == 0.0
+
+
+def test_list_results_attaches_baseline_delta(isolated) -> None:
+    project, version, vdir = _new_project(isolated)
+    _seed_validation_and_ckpt(vdir)
+    base = eval_samples.create_run(
+        project, version, vdir,
+        checkpoint_path="model_step100.safetensors", baseline=True, now=1000.0,
+    )
+    ckpt = eval_samples.create_run(
+        project, version, vdir,
+        checkpoint_path="model_step100.safetensors", now=2000.0,
+    )
+    eval_metrics.save_result(vdir, base["run_id"], {"metrics": {"clip_i": 0.60, "dino_i": 0.50}})
+    eval_metrics.save_result(vdir, ckpt["run_id"], {"metrics": {"clip_i": 0.72, "dino_i": 0.50}})
+
+    results = eval_metrics.list_results(vdir)
+    base_res = next(r for r in results if r["baseline"])
+    ckpt_res = next(r for r in results if not r["baseline"])
+    assert "delta" not in base_res  # baseline 自己不挂 delta
+    assert ckpt_res["delta"]["clip_i"] == pytest.approx(0.12)
+    assert ckpt_res["delta"]["dino_i"] == pytest.approx(0.0)
+    assert ckpt_res["baseline_metrics"]["clip_i"] == pytest.approx(0.60)
+
+
 def test_empty_metric_result_describes_not_run_states(isolated) -> None:
     project, version, vdir = _new_project(isolated)
     run = _sample_run(project, version, vdir)

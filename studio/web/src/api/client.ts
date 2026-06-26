@@ -166,6 +166,8 @@ export interface EvalMetricModelsConfig {
   ccip_model_name: string
   /** 启用哪些评估指标（Settings 复选框）；eval 只算勾选的。 */
   enabled_metrics: string[]
+  /** 训练后评估额外出一组纯底模(scale=0)对照，各指标给 Δ = checkpoint − baseline。 */
+  eval_baseline_enabled: boolean
   /** When auto eval runs (per-version enabled gates whether it runs at all). */
   auto_eval_trigger: 'after_training' | 'checkpoint'
 }
@@ -225,6 +227,12 @@ export interface EvalMetricResult {
   metrics: Record<string, unknown>
   metric_states: Record<string, EvalMetricState>
   summary?: Record<string, number>
+  /** 纯底模(lora_scale=0)对照 run；不作为 checkpoint 展示，只供算 Δ。 */
+  baseline?: boolean
+  /** 各指标相对 baseline 的净增益 Δ = checkpoint 值 − baseline 值。 */
+  delta?: Record<string, number>
+  /** baseline 各指标值（参考）。 */
+  baseline_metrics?: Record<string, number>
   /** 出图阶段（eval_samples run.json）的状态 + 逐图汇总 {total, pending, running,
    *  done, failed}。出图是评估里最耗时的部分；用它显示「出图 done/total」子进度。 */
   sample_run?: {
