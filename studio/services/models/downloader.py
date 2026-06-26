@@ -39,6 +39,7 @@ from .paths import (
     cltagger_canonical_file_paths,
     cltagger_required_files,
     cltagger_target_root,
+    eval_model_target_dir,
     models_root,
     qwen_dir,
     selected_anima_variant,
@@ -264,6 +265,57 @@ def download_wd14(
             ok = False
     return ok
 
+
+def download_eval_model(
+    kind: str,
+    model_id: str,
+    root: Optional[Path] = None,
+    *,
+    on_log: Callable[[str], None] = print,
+) -> bool:
+    """下载 CLIP / DINO eval 模型整个 repo 到 `{models_root}/eval/{kind}/{safe_id}/`。
+
+    源选择：eval 源选 modelscope 且有镜像映射时走 MS，否则（无映射 / 选 HF）走
+    HuggingFace —— 与 wd14 同样的「有 MS 映射用 MS、否则回退 HF」逻辑。
+    """
+    r = root or models_root()
+    target = eval_model_target_dir(r, kind, model_id)
+    if _sources._source_for("eval") == "modelscope":
+        ms_repo = _sources._ms_eval_repo_id(model_id)
+        if ms_repo:
+            on_log(f"\n📥 {kind.upper()} {model_id} → {target}（via ModelScope: {ms_repo}）")
+            return _sources.download_snapshot_ms(ms_repo, target, on_log=on_log)
+        on_log(f"\n📥 {kind.upper()} {model_id}：无魔搭映射，回退 HuggingFace")
+    else:
+        on_log(f"\n📥 {kind.upper()} {model_id} → {target}")
+    return _sources.download_snapshot(model_id, target, on_log=on_log)
+
+
+def ensure_eval_model(
+    kind: str,
+    model_id: str,
+    root: Optional[Path] = None,
+    *,
+    on_log: Callable[[str], None] = print,
+) -> Path:
+    """返回 eval 模型本地目录，缺失则先下载（懒加载兜底，路径与下载卡片一致）。
+
+    与 wd14 `_resolve_model_dir` 同模式：跑 eval 时用户若没预下载，自动下到项目
+    目录，`from_pretrained` 指向它。已就绪（有 config.json）直接返回。
+
+    若 ``model_id`` 本身是一个已存在的本地模型目录（用户在文本框直接填了路径），
+    直接用它、不当 repo id 下载。
+    """
+    local = Path(str(model_id)).expanduser()
+    if local.is_dir() and (local / "config.json").exists():
+        return local
+    r = root or models_root()
+    target = eval_model_target_dir(r, kind, model_id)
+    if (target / "config.json").exists():
+        return target
+    download_eval_model(kind, model_id, r, on_log=on_log)
+    return target
+
 # ---------------------------------------------------------------------------
 # 异步下载状态机
 # ---------------------------------------------------------------------------
@@ -443,6 +495,15 @@ def trigger(model_id: str, variant: Optional[str] = None) -> str:
         key = f"wd14:{variant}"
         start_download_async(
             key, lambda log: download_wd14(variant, root, on_log=log)
+        )
+        return key
+    if model_id in ("eval_clip", "eval_dino"):
+        if not variant:
+            raise ValueError(f"{model_id} 需要 variant=model_id")
+        kind = "clip" if model_id == "eval_clip" else "dino"
+        key = f"{model_id}:{variant}"
+        start_download_async(
+            key, lambda log: download_eval_model(kind, variant, root, on_log=log)
         )
         return key
     if model_id == "upscaler":

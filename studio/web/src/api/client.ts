@@ -629,6 +629,21 @@ export interface CLTaggerCatalog {
   variants: CLTaggerVariantInfo[]
 }
 
+export interface EvalVariantInfo {
+  kind: 'clip' | 'dino'
+  model_id: string
+  target_path: string
+  exists: boolean
+  size: number
+}
+
+export interface EvalMetricsCatalog {
+  id: 'eval_metrics'
+  name: string
+  description: string
+  variants: EvalVariantInfo[]
+}
+
 export interface ModelDownloadStatus {
   key: string
   status: 'pending' | 'running' | 'done' | 'failed'
@@ -673,6 +688,7 @@ export interface ModelsCatalog {
   t5_tokenizer: ModelDirCatalog
   wd14: WD14Catalog
   cltagger: CLTaggerCatalog
+  eval_metrics?: EvalMetricsCatalog
   upscalers?: UpscalersCatalog
   /** 按类型的下载源选项：current = 当前选中，available = 可选源（长度 1 = 固定单源）。 */
   download_source_options: Record<string, { current: string; available: string[] }>

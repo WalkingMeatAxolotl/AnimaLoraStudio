@@ -281,6 +281,15 @@ def wd14_target_dir(root: Path, model_id: str) -> Path:
     return root / "wd14" / safe_dir_name(model_id)
 
 
+def eval_model_target_dir(root: Path, kind: str, model_id: str) -> Path:
+    """CLIP / DINO eval 指标模型的本地目录（kind: ``clip`` | ``dino``）。
+
+    多文件 transformers repo，整目录由 snapshot_download 落地，eval 时
+    from_pretrained 指向这里，统一归项目 models/ 管理而非 ~/.cache/huggingface。
+    """
+    return root / "eval" / kind / safe_dir_name(model_id)
+
+
 def cltagger_target_root(root: Path, model_id: str) -> Path:
     """CLTagger repo 的本地根目录。子目录布局来自 CLTAGGER_VERSIONS。"""
     return root / "cltagger" / safe_dir_name(model_id)

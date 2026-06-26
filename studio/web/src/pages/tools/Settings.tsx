@@ -936,26 +936,43 @@ export default function SettingsPage() {
             <option value="checkpoint">{t('settings.autoEvalTriggerCheckpoint')}</option>
           </select>
         </SettingsField>
-        <SettingsField
-          label={t('settings.evalClipModel')}
-          helpTooltip={<p>{t('settings.evalClipModelHelp')}</p>}
-        >
-          <input
-            value={draft.eval_metrics.clip_model_name}
-            onChange={(e) => update('eval_metrics', 'clip_model_name', e.target.value)}
-            className={textInputClass}
-          />
-        </SettingsField>
-        <SettingsField
-          label={t('settings.evalDinoModel')}
-          helpTooltip={<p>{t('settings.evalDinoModelHelp')}</p>}
-        >
-          <input
-            value={draft.eval_metrics.dino_model_name}
-            onChange={(e) => update('eval_metrics', 'dino_model_name', e.target.value)}
-            className={textInputClass}
-          />
-        </SettingsField>
+        <SourceSelect
+          opt={catalog?.download_source_options?.eval}
+          onChange={(s) => void setDownloadSource('eval', s)}
+        />
+        {([
+          { kind: 'clip', dlId: 'eval_clip', label: 'evalClipModel', help: 'evalClipModelHelp',
+            val: draft.eval_metrics.clip_model_name,
+            set: (id: string) => update('eval_metrics', 'clip_model_name', id) },
+          { kind: 'dino', dlId: 'eval_dino', label: 'evalDinoModel', help: 'evalDinoModelHelp',
+            val: draft.eval_metrics.dino_model_name,
+            set: (id: string) => update('eval_metrics', 'dino_model_name', id) },
+        ] as const).map((row) => {
+          const variant = catalog?.eval_metrics?.variants.find((x) => x.kind === row.kind)
+          const key = `${row.dlId}:${row.val}`
+          const dl = catalog?.downloads[key]
+          const exists = variant?.model_id === row.val ? !!variant?.exists : false
+          return (
+            <SettingsField
+              key={row.kind}
+              label={t(`settings.${row.label}`)}
+              helpTooltip={<p>{t(`settings.${row.help}`)}</p>}
+            >
+              <div className="flex items-center gap-2">
+                <input
+                  value={row.val}
+                  onChange={(e) => row.set(e.target.value)}
+                  className={`${textInputClass} flex-1 min-w-0`}
+                />
+                <ModelStatusBadge exists={exists} size={variant?.size ?? 0} status={dl?.status} />
+                <DownloadButton
+                  exists={exists} status={dl?.status} busy={downloadBusy.has(key)}
+                  onClick={() => void startDownload(row.dlId, row.val)}
+                />
+              </div>
+            </SettingsField>
+          )
+        })}
       </SettingsSection>
 
       <SettingsSection id="queue" title={t('settings.queueSchedule')}>

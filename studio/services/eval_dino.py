@@ -318,9 +318,12 @@ def _default_scorer(
         }
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    # 统一下载中心：缺则下到项目 models/eval/dino/（不再隐式落 ~/.cache/huggingface）。
+    from studio.services.models.downloader import ensure_eval_model
+    local_dir = ensure_eval_model("dino", model_name, on_log=progress)
     progress(f"[eval-dino] loading DINO on {device}")
-    processor = AutoImageProcessor.from_pretrained(model_name)
-    model = AutoModel.from_pretrained(model_name).to(device)
+    processor = AutoImageProcessor.from_pretrained(str(local_dir))
+    model = AutoModel.from_pretrained(str(local_dir)).to(device)
     model.eval()
 
     image_paths = [item["_image_path"] for item in paired_items]

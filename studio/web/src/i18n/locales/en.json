@@ -850,7 +850,7 @@
     },
     "modelSource": "Model download source",
     "evalMetricModels": "Eval metric models",
-    "evalMetricModelsHint": "Post-training metrics are enabled per version under the training config's “Post-training metrics” section; this page configures the eval timing and the metric models. The whole validation set is evaluated; its size is set by the training config's split ratio.",
+    "evalMetricModelsHint": "Post-training metrics are enabled per version under the training config's “Post-training metrics” section; this page configures the eval timing, the metric models and their download source. Missing models are downloaded into the project's models/ directory on first use (or pre-download them here); the whole validation set is evaluated.",
     "autoEvalTrigger": "Eval timing",
     "autoEvalTriggerHelp": "For versions that enabled post-training metrics, controls when eval runs. “After training finishes” waits for training to release VRAM, then evaluates all LoRAs in a batch without taking training time; “Each LoRA saved during training” evaluates the current checkpoint inline as training runs, surfacing metric trends mid-run but pausing training for each eval until sampling and metrics complete.",
     "autoEvalTriggerAfterTraining": "Evaluate all LoRAs after training finishes",
