@@ -940,14 +940,20 @@ export default function SettingsPage() {
           opt={catalog?.download_source_options?.eval}
           onChange={(s) => void setDownloadSource('eval', s)}
         />
-        <EvalMetricsModelCard
-          catalog={catalog}
-          busy={downloadBusy}
-          start={startDownload}
-          clipModelId={draft.eval_metrics.clip_model_name}
-          dinoModelId={draft.eval_metrics.dino_model_name}
-          onClipChange={(id) => update('eval_metrics', 'clip_model_name', id)}
-          onDinoChange={(id) => update('eval_metrics', 'dino_model_name', id)}
+        <EvalMetricModelCard
+          catalog={catalog} busy={downloadBusy} start={startDownload}
+          kind="clip" dlId="eval_clip"
+          titleKey="settings.evalClipModel" helpKey="settings.evalClipModelHelp"
+          modelId={draft.eval_metrics.clip_model_name}
+          onModelIdChange={(id) => update('eval_metrics', 'clip_model_name', id)}
+          t={t}
+        />
+        <EvalMetricModelCard
+          catalog={catalog} busy={downloadBusy} start={startDownload}
+          kind="dino" dlId="eval_dino"
+          titleKey="settings.evalDinoModel" helpKey="settings.evalDinoModelHelp"
+          modelId={draft.eval_metrics.dino_model_name}
+          onModelIdChange={(id) => update('eval_metrics', 'dino_model_name', id)}
           t={t}
         />
       </SettingsSection>
@@ -1695,60 +1701,58 @@ function WD14ModelCard({
   )
 }
 
-function EvalMetricsModelCard({
-  catalog, busy, start,
-  clipModelId, dinoModelId, onClipChange, onDinoChange, t,
+function EvalMetricModelCard({
+  catalog, busy, start, kind, dlId, titleKey, helpKey, modelId, onModelIdChange, t,
 }: {
   catalog: ModelsCatalog | null
   busy: Set<string>
   start: (model_id: string, variant?: string) => Promise<void>
-  clipModelId: string
-  dinoModelId: string
-  onClipChange: (id: string) => void
-  onDinoChange: (id: string) => void
+  kind: 'clip' | 'dino'
+  dlId: 'eval_clip' | 'eval_dino'
+  titleKey: string
+  helpKey: string
+  modelId: string
+  onModelIdChange: (id: string) => void
   t: TFunction
 }) {
+  const [advOpen, setAdvOpen] = useState(false)
   const em = catalog?.eval_metrics
   if (!em) {
     return <p className="text-fg-tertiary text-xs">{t('settings.loadingModelCatalog')}</p>
   }
-  const rows = [
-    { kind: 'clip' as const, dlId: 'eval_clip', labelKey: 'evalClipModel', helpKey: 'evalClipModelHelp',
-      val: clipModelId, onChange: onClipChange },
-    { kind: 'dino' as const, dlId: 'eval_dino', labelKey: 'evalDinoModel', helpKey: 'evalDinoModelHelp',
-      val: dinoModelId, onChange: onDinoChange },
-  ]
+  const variant = em.variants.find((x) => x.kind === kind)
+  const key = `${dlId}:${modelId}`
+  const dl = catalog.downloads[key]
+  // catalog 的 exists 按已保存的 model_id 算；草稿改了未保存时按未下载显示。
+  const exists = variant?.model_id === modelId ? !!variant?.exists : false
   return (
-    <div className="flex flex-col gap-2">
-      {rows.map((row) => {
-        const variant = em.variants.find((x) => x.kind === row.kind)
-        const key = `${row.dlId}:${row.val}`
-        const dl = catalog.downloads[key]
-        // catalog 的 exists 按已保存的 model_id 算；草稿改了未保存时按未下载显示。
-        const exists = variant?.model_id === row.val ? !!variant?.exists : false
-        return (
-          <ModelGroupCard
-            key={row.kind}
-            title={t(`settings.${row.labelKey}`)}
-            helpTooltip={<p>{t(`settings.${row.helpKey}`)}</p>}
-          >
-            <div className="flex items-center gap-2">
-              <input
-                value={row.val}
-                onChange={(e) => row.onChange(e.target.value)}
-                placeholder={t('settings.addHfModelId')}
-                className={`${textInputClass} font-mono flex-1 min-w-0`}
-              />
-              <ModelStatusBadge exists={exists} size={variant?.size ?? 0} status={dl?.status} />
-              <DownloadButton
-                exists={exists} status={dl?.status} busy={busy.has(key)}
-                onClick={() => void start(row.dlId, row.val)}
-              />
-            </div>
-          </ModelGroupCard>
-        )
-      })}
-    </div>
+    <ModelGroupCard title={t(titleKey)} helpTooltip={<p>{t(helpKey)}</p>}>
+      <ul className="list-none m-0 p-0 flex flex-col gap-1">
+        <li className="flex items-center gap-2 text-xs px-1.5 py-1 rounded-sm bg-accent-soft border border-accent">
+          <code className="font-mono text-fg-primary flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{modelId}</code>
+          <ModelStatusBadge exists={exists} size={variant?.size ?? 0} status={dl?.status} />
+          <DownloadButton
+            exists={exists} status={dl?.status} busy={busy.has(key)}
+            onClick={() => void start(dlId, modelId)}
+          />
+        </li>
+      </ul>
+      <button type="button" onClick={() => setAdvOpen(!advOpen)}
+        className="btn btn-ghost btn-sm text-xs text-fg-tertiary self-start">
+        {advOpen ? '▾' : '▸'} {t('settings.customRepoAdvanced')}
+      </button>
+      {advOpen && (
+        <SettingsField label={t('settings.fieldModelId')}>
+          <input
+            type="text"
+            value={modelId}
+            onChange={(e) => onModelIdChange(e.target.value)}
+            className={textInputClass}
+            placeholder={t('settings.addHfModelId')}
+          />
+        </SettingsField>
+      )}
+    </ModelGroupCard>
   )
 }
 
