@@ -183,6 +183,36 @@ def test_queue_metric_jobs_for_sample_uses_saved_defaults(isolated) -> None:
     assert jobs[1]["params_decoded"]["task_id"] == 7
 
 
+def test_queue_metric_jobs_for_sample_respects_enabled_metrics(isolated) -> None:
+    """Settings 关掉 dino_i → 只排 eval_clip，不排 eval_dino（registry 门控）。"""
+    project, version, vdir = _project_version(isolated)
+    _enable_validation(project, version)
+    secrets.update({
+        "eval_metrics": {
+            "auto_eval_trigger": "checkpoint",
+            "enabled_metrics": ["clip_t", "clip_i"],
+        }
+    })
+    with db.connection_for(isolated["db"]) as conn:
+        _sample_job, run = eval_auto.queue_checkpoint_eval(conn, {
+            "id": 8,
+            "project_id": project["id"],
+            "version_id": version["id"],
+        }, {
+            "checkpoint_path": str(vdir / "output" / "model_epoch2.safetensors"),
+        })
+        eval_root = infra_paths.task_eval_dir(8)
+        run = eval_samples.run_sample_job(
+            project, version, vdir, run["run_id"],
+            generator=_fake_generator, eval_root=eval_root,
+        )
+        jobs = eval_auto.queue_metric_jobs_for_sample(
+            conn, project, version, vdir, run["run_id"],
+            eval_root=eval_root, task_id=8,
+        )
+    assert [j["kind"] for j in jobs] == ["eval_clip"]
+
+
 def test_queue_metric_jobs_for_sample_reuses_active_jobs(isolated) -> None:
     project, version, vdir = _project_version(isolated)
     _enable_validation(project, version)

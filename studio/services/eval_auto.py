@@ -8,7 +8,7 @@ from typing import Any, Callable
 from studio import db
 from studio import secrets
 from studio.infrastructure.paths import task_eval_dir
-from studio.services import eval_clip, eval_dino, eval_samples
+from studio.services import eval_clip, eval_dino, eval_registry, eval_samples
 from studio.services.projects import jobs as project_jobs, projects, versions
 
 logger = logging.getLogger(__name__)
@@ -173,12 +173,19 @@ def run_checkpoint_eval_for_task(
         progress(f"[eval-auto] sample status={sample_result.get('status')}")
         return results
 
-    for key, runner, model_name, scorer in (
-        ("clip", eval_clip.run_clip_job, cfg.clip_model_name, clip_scorer),
-        ("dino", eval_dino.run_dino_job, cfg.dino_model_name, dino_scorer),
-    ):
+    # 只跑「Settings 勾选的指标」对应的 runner（registry 决定）；clip/dino 先接进来，
+    # 全启用时与原行为一致。ccip/tag runner 后续接入这张表。
+    inline_runners = {
+        "clip": (eval_clip.run_clip_job, cfg.clip_model_name, clip_scorer),
+        "dino": (eval_dino.run_dino_job, cfg.dino_model_name, dino_scorer),
+    }
+    for runner_key in eval_registry.enabled_runners(cfg.enabled_metrics):
+        spec = inline_runners.get(runner_key)
+        if spec is None:
+            continue
+        run_fn, model_name, scorer = spec
         try:
-            results["metrics"][key] = runner(
+            results["metrics"][runner_key] = run_fn(
                 project,
                 version,
                 vdir,
@@ -189,8 +196,8 @@ def run_checkpoint_eval_for_task(
                 eval_root=eval_root,
             )
         except Exception as exc:  # noqa: BLE001
-            logger.exception("inline auto eval %s failed for run=%s", key, run["run_id"])
-            progress(f"[eval-auto] {key} failed: {exc}")
+            logger.exception("inline auto eval %s failed for run=%s", runner_key, run["run_id"])
+            progress(f"[eval-auto] {runner_key} failed: {exc}")
     return results
 
 
@@ -337,54 +344,47 @@ def queue_metric_jobs_for_sample(
     eval_root: Path | None = None,
     task_id: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Queue CLIP and DINO metrics after an automatically queued sample run."""
+    """Queue metric jobs（按 Settings 勾选的指标对应 runner）after a sample run。
+
+    只排「启用集合」对应的 runner；已有活跃 job 的复用、不重排。clip/dino 先接进
+    这张表，全启用时与原行为一致；ccip/tag runner 后续加入 `queue_runners`。
+    """
     cfg = secrets.load().eval_metrics
+    # runner key → (JOB_KIND, start_job, model_name)
+    queue_runners = {
+        "clip": (eval_clip.JOB_KIND, eval_clip.start_job, cfg.clip_model_name),
+        "dino": (eval_dino.JOB_KIND, eval_dino.start_job, cfg.dino_model_name),
+    }
     jobs: list[dict[str, Any]] = []
-    clip_job = _active_metric_job(
-        conn,
-        project=project,
-        version=version,
-        kind=eval_clip.JOB_KIND,
-        run_id=run_id,
-        task_id=task_id,
-    )
-    if clip_job is None:
-        clip_job, _ = eval_clip.start_job(
+    for runner_key in eval_registry.enabled_runners(cfg.enabled_metrics):
+        spec = queue_runners.get(runner_key)
+        if spec is None:
+            continue
+        kind, start_job, model_name = spec
+        job = _active_metric_job(
             conn,
-            project,
-            version,
-            version_dir,
-            run_id,
-            model_name=cfg.clip_model_name,
-            eval_root=eval_root,
+            project=project,
+            version=version,
+            kind=kind,
+            run_id=run_id,
             task_id=task_id,
         )
-    jobs.append(clip_job)
-    dino_job = _active_metric_job(
-        conn,
-        project=project,
-        version=version,
-        kind=eval_dino.JOB_KIND,
-        run_id=run_id,
-        task_id=task_id,
-    )
-    if dino_job is None:
-        dino_job, _ = eval_dino.start_job(
-            conn,
-            project,
-            version,
-            version_dir,
-            run_id,
-            model_name=cfg.dino_model_name,
-            eval_root=eval_root,
-            task_id=task_id,
-        )
-    jobs.append(dino_job)
+        if job is None:
+            job, _ = start_job(
+                conn,
+                project,
+                version,
+                version_dir,
+                run_id,
+                model_name=model_name,
+                eval_root=eval_root,
+                task_id=task_id,
+            )
+        jobs.append(job)
     logger.info(
-        "queued auto eval metric jobs for run=%s clip_job=%s dino_job=%s",
+        "queued auto eval metric jobs for run=%s: %s",
         run_id,
-        clip_job.get("id"),
-        dino_job.get("id"),
+        [j.get("id") for j in jobs],
     )
     return jobs
 
