@@ -78,16 +78,22 @@ def test_queue_checkpoint_eval_respects_switch(isolated) -> None:
         "trigger": "epoch",
     }
 
+    # trigger 默认 after_training + version 未启用训练后评估 → 不排
     with db.connection_for(isolated["db"]) as conn:
         assert eval_auto.queue_checkpoint_eval(conn, task, payload) is None
 
+    # 切到 checkpoint 时机，但 version 仍未在训练配置启用 → 仍不排
     secrets.update({
         "eval_metrics": {
-            "auto_eval_on_checkpoint": True,
             "auto_eval_trigger": "checkpoint",
             "auto_eval_max_items": 1,
         }
     })
+    with db.connection_for(isolated["db"]) as conn:
+        assert eval_auto.queue_checkpoint_eval(conn, task, payload) is None
+
+    # version 在训练配置启用训练后评估 → 排队
+    _enable_validation(project, version)
     with db.connection_for(isolated["db"]) as conn:
         queued = eval_auto.queue_checkpoint_eval(conn, task, payload)
 
@@ -136,9 +142,9 @@ def test_queue_metric_jobs_for_sample_uses_saved_defaults(isolated) -> None:
         }) or (None, None)
     assert sample_job is None
 
+    _enable_validation(project, version)
     secrets.update({
         "eval_metrics": {
-            "auto_eval_on_checkpoint": True,
             "auto_eval_trigger": "checkpoint",
             "clip_model_name": "/models/clip",
             "dino_model_name": "/models/dino",
@@ -180,9 +186,9 @@ def test_queue_metric_jobs_for_sample_uses_saved_defaults(isolated) -> None:
 
 def test_queue_metric_jobs_for_sample_reuses_active_jobs(isolated) -> None:
     project, version, vdir = _project_version(isolated)
+    _enable_validation(project, version)
     secrets.update({
         "eval_metrics": {
-            "auto_eval_on_checkpoint": True,
             "auto_eval_trigger": "checkpoint",
             "clip_model_name": "/models/clip",
             "dino_model_name": "/models/dino",
@@ -312,9 +318,9 @@ def test_queue_manual_task_eval_dedupes_and_skips_invalid(isolated) -> None:
 
 def test_run_checkpoint_eval_for_task_runs_inline_without_queue_jobs(isolated) -> None:
     project, version, vdir = _project_version(isolated)
+    _enable_validation(project, version)
     secrets.update({
         "eval_metrics": {
-            "auto_eval_on_checkpoint": True,
             "auto_eval_trigger": "checkpoint",
             "auto_eval_max_items": 1,
             "clip_model_name": "/models/clip",
@@ -367,6 +373,32 @@ def test_run_checkpoint_eval_for_task_runs_inline_without_queue_jobs(isolated) -
         assert project_jobs.list_jobs(conn) == []
     assert (infra_paths.task_eval_dir(tid) / "samples" / run["run_id"] / "metrics.json").exists()
     assert not (vdir / "eval" / "samples" / run["run_id"] / "metrics.json").exists()
+
+
+def test_run_checkpoint_eval_skips_when_version_not_enabled(isolated) -> None:
+    """checkpoint 时机的 inline 评估仍受 per-version 训练后评估开关门控。"""
+    project, version, vdir = _project_version(isolated)
+    secrets.update({
+        "eval_metrics": {"auto_eval_trigger": "checkpoint", "auto_eval_max_items": 1}
+    })
+    with db.connection_for(isolated["db"]) as conn:
+        tid = db.create_task(conn, name="train", config_name="fake")
+        db.update_task(conn, tid, project_id=project["id"], version_id=version["id"])
+
+    # trigger=checkpoint，但 version 未在训练配置启用训练后评估 → inline 不评。
+    result = eval_auto.run_checkpoint_eval_for_task(
+        tid,
+        {
+            "checkpoint_path": str(vdir / "output" / "model_epoch2.safetensors"),
+            "epoch": 2,
+            "step": 20,
+            "trigger": "epoch",
+        },
+        sample_generator=_fake_generator,
+    )
+    assert result is None
+    with db.connection_for(isolated["db"]) as conn:
+        assert project_jobs.list_jobs(conn) == []
 
 
 def test_training_inline_generator_updates_task_scoped_run(isolated, monkeypatch) -> None:
@@ -427,9 +459,9 @@ def test_supervisor_eval_checkpoint_event_queues_sample_job(isolated) -> None:
     import json
 
     project, version, vdir = _project_version(isolated)
+    _enable_validation(project, version)
     secrets.update({
         "eval_metrics": {
-            "auto_eval_on_checkpoint": True,
             "auto_eval_trigger": "checkpoint",
             "auto_eval_max_items": 1,
         }

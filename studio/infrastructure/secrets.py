@@ -115,7 +115,8 @@ class EvalMetricModelsConfig(BaseModel):
     """
     clip_model_name: str = "openai/clip-vit-base-patch32"
     dino_model_name: str = "facebook/dinov2-small"
-    auto_eval_on_checkpoint: bool = False
+    # 评估时机（全局）。是否评估由每个 version 训练配置的 eval_validation_enabled
+    # 决定；启用后，这里选何时评：训练全部结束后批量评 / 训练中每存一个 LoRA 就评。
     auto_eval_trigger: Literal["after_training", "checkpoint"] = "after_training"
     auto_eval_max_items: int = 1
 
