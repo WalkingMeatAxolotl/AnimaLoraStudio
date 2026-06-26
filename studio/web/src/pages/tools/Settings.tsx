@@ -81,7 +81,7 @@ type Tab = 'dataset' | 'tagging' | 'preprocess' | 'training' | 'monitor' | 'test
 // 反向映射决定要先切到哪个 tab。只列出能从外部链接到的 sections。
 const SECTION_TO_TAB: Record<string, Tab> = {
   'models': 'training',
-  'eval-metrics': 'training',
+  'eval-metrics': 'monitor',
   'version': 'system',
   'service': 'system',
 }
@@ -117,7 +117,6 @@ const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
     { id: 'tag-dictionary', labelKey: 'settings.tagDictionary.title' },
   ],
   training: [
-    { id: 'eval-metrics', labelKey: 'settings.evalMetricModels' },
     { id: 'queue', labelKey: 'settings.queueSchedule' },
     { id: 'training-params', labelKey: 'settings.trainingParams' },
     { id: 'pytorch', labelKey: 'settings.torch' },
@@ -126,6 +125,7 @@ const TAB_SECTIONS: Record<Tab, { id: string; labelKey: string }[]> = {
     { id: 'models', labelKey: 'settings.trainingModels' },
   ],
   monitor: [
+    { id: 'eval-metrics', labelKey: 'settings.evalMetrics' },
     { id: 'wandb', labelKey: 'settings.wandb' },
   ],
   testing: [
@@ -921,43 +921,6 @@ export default function SettingsPage() {
       </>)}
 
       {tab === 'training' && (<>
-      <SettingsSection id="eval-metrics" title={t('settings.evalMetricModels')}>
-        <p className="text-xs text-fg-tertiary">{t('settings.evalMetricModelsHint')}</p>
-        <SettingsField
-          label={t('settings.autoEvalTrigger')}
-          helpTooltip={<p>{t('settings.autoEvalTriggerHelp')}</p>}
-        >
-          <select
-            value={draft.eval_metrics.auto_eval_trigger}
-            onChange={(e) => update('eval_metrics', 'auto_eval_trigger', e.target.value as AutoEvalTrigger)}
-            className={textInputClass}
-          >
-            <option value="after_training">{t('settings.autoEvalTriggerAfterTraining')}</option>
-            <option value="checkpoint">{t('settings.autoEvalTriggerCheckpoint')}</option>
-          </select>
-        </SettingsField>
-        <SourceSelect
-          opt={catalog?.download_source_options?.eval}
-          onChange={(s) => void setDownloadSource('eval', s)}
-        />
-        <EvalMetricModelCard
-          catalog={catalog} busy={downloadBusy} start={startDownload}
-          kind="clip" dlId="eval_clip"
-          titleKey="settings.evalClipModel" helpKey="settings.evalClipModelHelp"
-          modelId={draft.eval_metrics.clip_model_name}
-          onModelIdChange={(id) => update('eval_metrics', 'clip_model_name', id)}
-          t={t}
-        />
-        <EvalMetricModelCard
-          catalog={catalog} busy={downloadBusy} start={startDownload}
-          kind="dino" dlId="eval_dino"
-          titleKey="settings.evalDinoModel" helpKey="settings.evalDinoModelHelp"
-          modelId={draft.eval_metrics.dino_model_name}
-          onModelIdChange={(id) => update('eval_metrics', 'dino_model_name', id)}
-          t={t}
-        />
-      </SettingsSection>
-
       <SettingsSection id="queue" title={t('settings.queueSchedule')}>
         <SettingsField
           label={t('settings.allowGpuDuringTrain')}
@@ -987,6 +950,43 @@ export default function SettingsPage() {
       </>)}
 
       {tab === 'monitor' && (<>
+      <SettingsSection id="eval-metrics" title={t('settings.evalMetrics')}>
+        <p className="text-xs text-fg-tertiary">{t('settings.evalMetricModelsHint')}</p>
+        <SourceSelect
+          opt={catalog?.download_source_options?.eval}
+          onChange={(s) => void setDownloadSource('eval', s)}
+        />
+        <EvalMetricModelCard
+          catalog={catalog} busy={downloadBusy} start={startDownload}
+          kind="clip" dlId="eval_clip"
+          titleKey="settings.evalClipModel" helpKey="settings.evalClipModelHelp"
+          modelId={draft.eval_metrics.clip_model_name}
+          onModelIdChange={(id) => update('eval_metrics', 'clip_model_name', id)}
+          t={t}
+        />
+        <EvalMetricModelCard
+          catalog={catalog} busy={downloadBusy} start={startDownload}
+          kind="dino" dlId="eval_dino"
+          titleKey="settings.evalDinoModel" helpKey="settings.evalDinoModelHelp"
+          modelId={draft.eval_metrics.dino_model_name}
+          onModelIdChange={(id) => update('eval_metrics', 'dino_model_name', id)}
+          t={t}
+        />
+        <SettingsField
+          label={t('settings.autoEvalTrigger')}
+          helpTooltip={<p>{t('settings.autoEvalTriggerHelp')}</p>}
+        >
+          <select
+            value={draft.eval_metrics.auto_eval_trigger}
+            onChange={(e) => update('eval_metrics', 'auto_eval_trigger', e.target.value as AutoEvalTrigger)}
+            className={textInputClass}
+          >
+            <option value="after_training">{t('settings.autoEvalTriggerAfterTraining')}</option>
+            <option value="checkpoint">{t('settings.autoEvalTriggerCheckpoint')}</option>
+          </select>
+        </SettingsField>
+      </SettingsSection>
+
       <SettingsSection id="wandb" title="Weights & Biases">
         <SettingsField label={t('settings.enableWandb')} desc={t('settings.enableWandbHint')}>
           <Bool value={draft.wandb.enabled} onChange={(v) => update('wandb', 'enabled', v)} />

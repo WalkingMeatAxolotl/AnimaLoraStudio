@@ -850,6 +850,7 @@
     },
     "modelSource": "模型下载源",
     "evalMetricModels": "评估指标模型",
+    "evalMetrics": "评估指标",
     "evalMetricModelsHint": "是否做训练后评估在每个 version 的训练配置「训练后指标评估」里开启；此处配置评估时机、指标模型与下载源。模型缺失会在评估时自动下载到项目 models/ 目录，也可在此预先下载；评估覆盖整个验证集。",
     "autoEvalTrigger": "评估时机",
     "autoEvalTriggerHelp": "对启用了训练后评估的 version，控制在何时评估。「训练全部结束后」等训练释放显存再批量评估所有 LoRA，不占用训练时间；「训练中每产出一个 LoRA」在训练过程中同步评估当前 checkpoint，可观察训练中的指标趋势，但每次评估会暂停训练直到出图与指标算完。",
