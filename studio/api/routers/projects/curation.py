@@ -218,6 +218,7 @@ _HYDRATABLE_JOB_KINDS = {
     "eval_samples",
     "eval_clip",
     "eval_dino",
+    "eval_tag",
 }
 
 

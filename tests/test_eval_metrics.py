@@ -115,7 +115,7 @@ def test_empty_metric_result_describes_not_run_states(isolated) -> None:
     assert result["has_metrics"] is False
     assert result["status"] == "empty"
     assert result["metrics"] == {}
-    assert result["summary"]["not_run"] == 6
+    assert result["summary"]["not_run"] == 8
     assert result["metric_states"]["clip_t"]["status"] == "not_run"
     assert result["metric_states"]["clip_t"]["question"]
     assert result["metric_states"]["sscd_nn"]["higher_is_better"] is False
@@ -201,6 +201,8 @@ def test_eval_metrics_http_empty_list_and_single_run(client: TestClient) -> None
         "clip_t",
         "clip_i",
         "dino_i",
+        "ccip_i",
+        "tag_recall",
         "diversity",
         "sscd_nn",
         "paired_cmmd2",

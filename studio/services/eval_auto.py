@@ -8,7 +8,7 @@ from typing import Any, Callable
 from studio import db
 from studio import secrets
 from studio.infrastructure.paths import task_eval_dir
-from studio.services import eval_clip, eval_dino, eval_registry, eval_samples
+from studio.services import eval_clip, eval_dino, eval_registry, eval_samples, eval_tag
 from studio.services.projects import jobs as project_jobs, projects, versions
 
 logger = logging.getLogger(__name__)
@@ -178,6 +178,7 @@ def run_checkpoint_eval_for_task(
     inline_runners = {
         "clip": (eval_clip.run_clip_job, cfg.clip_model_name, clip_scorer),
         "dino": (eval_dino.run_dino_job, cfg.dino_model_name, dino_scorer),
+        "tag": (eval_tag.run_tag_job, eval_tag.DEFAULT_MODEL_NAME, None),
     }
     for runner_key in eval_registry.enabled_runners(cfg.enabled_metrics):
         spec = inline_runners.get(runner_key)
@@ -354,6 +355,7 @@ def queue_metric_jobs_for_sample(
     queue_runners = {
         "clip": (eval_clip.JOB_KIND, eval_clip.start_job, cfg.clip_model_name),
         "dino": (eval_dino.JOB_KIND, eval_dino.start_job, cfg.dino_model_name),
+        "tag": (eval_tag.JOB_KIND, eval_tag.start_job, eval_tag.DEFAULT_MODEL_NAME),
     }
     jobs: list[dict[str, Any]] = []
     for runner_key in eval_registry.enabled_runners(cfg.enabled_metrics):

@@ -42,6 +42,20 @@ DEFAULT_METRICS: tuple[dict[str, Any], ...] = (
         "higher_is_better": True,
     },
     {
+        "key": "ccip_i",
+        "label": "CCIP-I",
+        "question": "Is the generated character the same as the reference (anime identity)?",
+        "requires": ["generated_images", "reference_images"],
+        "higher_is_better": True,
+    },
+    {
+        "key": "tag_recall",
+        "label": "Tag-Recall",
+        "question": "Does the generated image recover the prompt's booru tags?",
+        "requires": ["generated_images", "prompts"],
+        "higher_is_better": True,
+    },
+    {
         "key": "diversity",
         "label": "Diversity",
         "question": "Do same-prompt multi-seed samples avoid collapse?",

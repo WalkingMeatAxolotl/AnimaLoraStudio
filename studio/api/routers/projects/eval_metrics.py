@@ -15,7 +15,7 @@ from ....services.projects import jobs as project_jobs
 router = APIRouter()
 
 # 训练后 / 手动评估的 job kind（inline 训练时评估无 job，进训练日志）。
-_EVAL_JOB_KINDS = ("eval_samples", "eval_clip", "eval_dino")
+_EVAL_JOB_KINDS = ("eval_samples", "eval_clip", "eval_dino", "eval_tag")
 
 
 @router.get("/api/projects/{pid}/versions/{vid}/eval/metrics")
