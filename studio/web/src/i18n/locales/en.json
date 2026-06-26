@@ -1965,7 +1965,16 @@
     "previewHintRight": "←/→ Browse · Delete/Backspace Remove from Train set",
     "renamedToast": "{{from}} → {{to}}",
     "sourceLabelDownload": "Dataset",
-    "sourceLabelTrain": "Train set / {{folder}}"
+    "sourceLabelTrain": "Train set / {{folder}}",
+    "bucketSwitchLabel": "Right pane target",
+    "bucketTrain": "Train set",
+    "bucketValidation": "Validation set",
+    "copyToValBtn": "→ Add to validation {{n}}",
+    "copyToValTitle": "Add to the held-out validation set",
+    "valPanelTitle": "Validation set — held-out",
+    "valSubtitle": "{{total}} images · {{sel}} selected",
+    "valHint": "Held-out validation set: these images are not trained on; they are the reference for post-training CLIP-I / DINO-I generalization metrics. Enable validation eval in the training config for it to take effect; when a split ratio is set, it tops up on top of your manual picks.",
+    "valEmpty": "No validation images yet — add some from the dataset on the left"
   },
   "duplicates": {
     "title": "Duplicate / Variant Review",

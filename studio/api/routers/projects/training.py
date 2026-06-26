@@ -838,7 +838,7 @@ def version_thumb(
     name: str = "",
     size: int = 256,
 ) -> FileResponse:
-    if bucket not in {"train", "reg", "samples"}:
+    if bucket not in {"train", "reg", "samples", "validation"}:
         raise InvalidPathError("Invalid path", code="path.invalid")
     with db.connection_for() as conn:
         v = versions.get_version(conn, vid)
@@ -848,7 +848,7 @@ def version_thumb(
             "Version not found", code="version.not_found", details={"id": vid},
         )
     vdir = versions.version_dir(p["id"], p["slug"], v["label"]) / bucket
-    if bucket in {"train", "reg"}:
+    if bucket in {"train", "reg", "validation"}:
         if not folder:
             raise InvalidPathError("Invalid path", code="path.invalid")
         f = _safe_join_or_400(vdir, folder, name)

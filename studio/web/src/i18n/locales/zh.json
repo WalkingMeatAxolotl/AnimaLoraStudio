@@ -1965,7 +1965,16 @@
     "previewHintRight": "←/→ 浏览 · Delete/Backspace 从训练集移除",
     "renamedToast": "{{from}} → {{to}}",
     "sourceLabelDownload": "数据集",
-    "sourceLabelTrain": "训练集 / {{folder}}"
+    "sourceLabelTrain": "训练集 / {{folder}}",
+    "bucketSwitchLabel": "右栏目标",
+    "bucketTrain": "训练集",
+    "bucketValidation": "验证集",
+    "copyToValBtn": "→ 加入验证集 {{n}}",
+    "copyToValTitle": "加入到 held-out 验证集",
+    "valPanelTitle": "验证集 — held-out",
+    "valSubtitle": "{{total}} 张 · 已选 {{sel}}",
+    "valHint": "held-out 验证集：这里的图不参与训练，用于训练后算 CLIP-I / DINO-I 泛化指标。需在「训练配置」开启验证集评估才会生效；设了划分比例时会在手动选择基础上再自动补足。",
+    "valEmpty": "还没有验证图，从左侧数据集选图加入"
   },
   "duplicates": {
     "title": "重复 / 差分审核",

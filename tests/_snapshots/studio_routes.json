@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 194,
+  "count": 197,
   "routes": [
     {
       "path": "/",
@@ -799,6 +799,30 @@
         "POST"
       ],
       "name": "remove_from_train",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/curation/validation",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_curation_validation",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/curation/validation/copy",
+      "methods": [
+        "POST"
+      ],
+      "name": "copy_to_validation",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/curation/validation/remove",
+      "methods": [
+        "POST"
+      ],
+      "name": "remove_from_validation",
       "type": "APIRoute"
     },
     {

@@ -74,9 +74,10 @@ def _project_dir(conn, project_id: int) -> tuple[dict[str, Any], Path]:
     return p, projects.project_dir(p["id"], p["slug"])
 
 
-def _version_train_dir(conn, project_id: int, version_id: int) -> tuple[
+def _resolve_version_dir(conn, project_id: int, version_id: int) -> tuple[
     dict[str, Any], dict[str, Any], Path
 ]:
+    """(project, version, version 根目录)；project/version 不存在抛 404。"""
     p = projects.get_project(conn, project_id)
     if not p:
         raise CurationError(
@@ -89,8 +90,21 @@ def _version_train_dir(conn, project_id: int, version_id: int) -> tuple[
             "Version not found", code="version.not_found",
             details={"id": version_id}, http_status=404,
         )
-    train_dir = versions.version_dir(p["id"], p["slug"], v["label"]) / "train"
-    return p, v, train_dir
+    return p, v, versions.version_dir(p["id"], p["slug"], v["label"])
+
+
+def _version_train_dir(conn, project_id: int, version_id: int) -> tuple[
+    dict[str, Any], dict[str, Any], Path
+]:
+    p, v, vdir = _resolve_version_dir(conn, project_id, version_id)
+    return p, v, vdir / "train"
+
+
+def _version_validation_dir(conn, project_id: int, version_id: int) -> tuple[
+    dict[str, Any], dict[str, Any], Path
+]:
+    p, v, vdir = _resolve_version_dir(conn, project_id, version_id)
+    return p, v, vdir / "validation"
 
 
 def _list_image_entries(d: Path) -> list[dict[str, Any]]:
@@ -199,18 +213,55 @@ def list_train(
     return out
 
 
+def list_validation(
+    conn, project_id: int, version_id: int
+) -> list[dict[str, Any]]:
+    """validation/ 下所有子文件夹的图拍平成一条 flat list（手动加的 +
+    auto-split 移进来的都列），每条 `{name, mtime, folder}`。
+
+    validation 无 manifest（held-out 集只读，靠目录位置区分身份，见
+    eval_validation 模块），所以这里不查 origin / 不去重，`name` 就是物理文件名。
+    `folder` 给前端用来定位缩略图（version thumb 的 validation bucket 需要它）
+    与精确删除（多选可能跨 auto-split 的不同 repeat 文件夹）。
+    """
+    _, _, val = _version_validation_dir(conn, project_id, version_id)
+    if not val.exists():
+        return []
+    out: list[dict[str, Any]] = []
+    for sub in sorted(p for p in val.iterdir() if p.is_dir()):
+        for e in _list_image_entries(sub):
+            out.append({"name": e["name"], "mtime": e["mtime"], "folder": sub.name})
+    return out
+
+
+def _used_names(train: dict[str, list[dict[str, Any]]],
+                val: list[dict[str, Any]]) -> set[str]:
+    """已分配到 train（按 origin）或 validation 的 download 名集合。
+
+    held-out 要求一张图不能同时在 train 和 validation，否则 eval 测的是记忆
+    不是泛化。左栏候选从 download 里减掉这个集合，两个 bucket 共用同一池。
+    """
+    used = {e["name"] for files in train.values() for e in files}
+    used |= {e["name"] for e in val}
+    return used
+
+
 def curation_view(conn, project_id: int, version_id: int) -> dict[str, Any]:
-    """前端用：left = download − train，right = train 按 folder 分组。
+    """前端用：left = download − train − validation，right = train 按 folder 分组。
 
     每个文件返回 `{name, mtime}`；前端用 mtime 提供「按时间」排序。
     左侧的实际字节路径由 resolver 决定（已处理走 preprocess/ 副本，未处理走原图），
     前端通过项目缩略图端点拿，不感知差异。
+
+    left 同时减掉 validation：训练后 auto-split 把图移进 validation/ 后，这些图
+    在 download/ 里仍在，旧逻辑会让它们重新冒回 train 左栏候选 → 可被重新加进
+    train → 与 validation 重叠泄漏。减掉 validation 既修这个，也让 train /
+    validation 两个 curation 视图共用同一候选池。
     """
     left = list_download(conn, project_id)
     train = list_train(conn, project_id, version_id)
-    used: set[str] = set()
-    for files in train.values():
-        used.update(e["name"] for e in files)
+    val = list_validation(conn, project_id, version_id)
+    used = _used_names(train, val)
     return {
         "left": [e for e in left if e["name"] not in used],
         "right": train,
@@ -218,6 +269,27 @@ def curation_view(conn, project_id: int, version_id: int) -> dict[str, Any]:
         "download_total": len(left),
         "train_total": sum(len(v) for v in train.values()),
         "folders": list(train.keys()),
+    }
+
+
+def curation_validation_view(
+    conn, project_id: int, version_id: int
+) -> dict[str, Any]:
+    """验证集筛选视图：left = download − train − validation（与训练集同池），
+    right = validation 扁平列表。
+
+    与 `curation_view` 对称，区别只在 right 是 flat（无文件夹概念，见
+    `list_validation`）。前端验证集模式渲染右栏用它。
+    """
+    left = list_download(conn, project_id)
+    train = list_train(conn, project_id, version_id)
+    val = list_validation(conn, project_id, version_id)
+    used = _used_names(train, val)
+    return {
+        "left": [e for e in left if e["name"] not in used],
+        "right": val,
+        "download_total": len(left),
+        "val_total": len(val),
     }
 
 
@@ -377,6 +449,109 @@ def remove_from_train(
         preprocess_manifest.train_remove_entries(
             pdir, v["label"], rels_to_pop,
         )
+    return {"removed": removed, "missing": missing}
+
+
+# ---------------------------------------------------------------------------
+# validation copy / remove（held-out 验证集手动维护）
+#
+# 与 train 的 copy/remove 对称，但 validation 无 manifest（held-out 集靠目录位置
+# 区分身份），所以更简单：纯物理复制 / 删除，不写 manifest、不做 origin 去重。
+# 手动加入的图统一落到固定 `validation/1_data/`（复用 DEFAULT_TRAIN_FOLDER，
+# 与常见 auto-split 落点一致）；UI 不暴露文件夹概念。
+# ---------------------------------------------------------------------------
+
+
+def copy_download_to_validation(
+    conn,
+    project_id: int,
+    version_id: int,
+    files: list[str],
+) -> dict[str, list[str]]:
+    """download → `validation/1_data/` 复制（连同 caption .txt/.json）。
+
+    `files` 是 download 池里的图名（平铺，不带 folder 前缀）。已在 train（按
+    origin）或 validation 里的名字一律 skip —— 防 held-out 泄漏，与
+    `curation_view` 左栏候选的排除集一致。验证集的 caption 会被 eval 当生成
+    prompt 用（见 eval_samples），所以 sidecar 必须跟着复制。
+    """
+    p, v, val = _version_validation_dir(conn, project_id, version_id)
+    pdir = projects.project_dir(p["id"], p["slug"])
+    download_dir = pdir / "download"
+    dst_dir = val / versions.DEFAULT_TRAIN_FOLDER
+    dst_dir.mkdir(parents=True, exist_ok=True)
+
+    # 已分配集合（train origins ∪ validation 名）——同 curation_view 的排除口径。
+    train = list_train(conn, project_id, version_id)
+    existing_val = list_validation(conn, project_id, version_id)
+    used = _used_names(train, existing_val)
+
+    copied: list[str] = []
+    skipped: list[str] = []
+    missing: list[str] = []
+    for name in files:
+        _validate_filename(name)
+        if name in used:
+            skipped.append(name)
+            continue
+        src = download_dir / name
+        if not src.exists():
+            missing.append(name)
+            continue
+        dst = dst_dir / name
+        if dst.exists():
+            skipped.append(name)
+            continue
+        shutil.copy2(src, dst)
+        stem = Path(name).stem
+        for ext in _META_EXTS:
+            sm = download_dir / f"{stem}{ext}"
+            if sm.exists():
+                try:
+                    shutil.copy2(sm, dst_dir / f"{stem}{ext}")
+                except OSError:
+                    pass
+        used.add(name)
+        copied.append(name)
+    return {"copied": copied, "skipped": skipped, "missing": missing}
+
+
+def remove_from_validation(
+    conn,
+    project_id: int,
+    version_id: int,
+    items: list[dict[str, str]],
+) -> dict[str, list[str]]:
+    """从 validation/ 删除指定图（连同同 stem caption）；download 不动。
+
+    `items` 是 `[{"folder": ..., "name": ...}]`：多选可能跨 auto-split 的不同
+    repeat 文件夹，所以按 (folder, name) 精确定位，而不是按名跨文件夹删。
+    """
+    _, _, val = _version_validation_dir(conn, project_id, version_id)
+    removed: list[str] = []
+    missing: list[str] = []
+    for item in items:
+        folder = item.get("folder", "")
+        name = item.get("name", "")
+        _validate_folder(folder)
+        _validate_filename(name)
+        pp = val / folder / name
+        if not pp.exists():
+            missing.append(name)
+            continue
+        try:
+            pp.unlink()
+        except OSError:
+            missing.append(name)
+            continue
+        for ext in _META_EXTS:
+            mp = pp.with_suffix(ext)
+            if mp.exists():
+                try:
+                    mp.unlink()
+                except OSError:
+                    pass
+        removed.append(name)
     return {"removed": removed, "missing": missing}
 
 
