@@ -223,13 +223,15 @@ def test_eval_samples_http_run_list_get_and_image(client: TestClient, isolated) 
     assert created.status_code == 200, created.text
     body = created.json()
     run_id = body["runs"][0]["run_id"]
-    assert body["queued"] == 1
+    # 1 个 checkpoint + 1 个 baseline 对照
+    assert body["queued"] == 2
     assert body["jobs"][0]["kind"] == "eval_samples"
 
     q = f"?task_id={tid}"
     listed = client.get(f"/api/projects/{pid}/versions/{vid}/eval/samples{q}")
     assert listed.status_code == 200, listed.text
-    assert listed.json()["runs"][0]["run_id"] == run_id
+    # 列表含 checkpoint run + baseline run；只要 checkpoint run 在里面即可（顺序不保证）
+    assert run_id in {r["run_id"] for r in listed.json()["runs"]}
 
     got = client.get(f"/api/projects/{pid}/versions/{vid}/eval/samples/{run_id}{q}")
     assert got.status_code == 200, got.text
@@ -280,7 +282,9 @@ def test_run_task_eval_endpoint_queues_task_scoped(client, isolated) -> None:
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["queued"] == 1
+    # 1 个 checkpoint + 1 个 baseline 对照
+    assert body["queued"] == 2
+    assert sum(1 for r in body["runs"] if r.get("baseline")) == 1
     assert body["runs"][0]["storage_scope"] == "task"
     assert body["jobs"][0]["params_decoded"]["task_id"] == tid
 
