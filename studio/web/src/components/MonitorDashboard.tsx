@@ -272,6 +272,13 @@ const EVAL_LABELS: Record<EvalMetricKey, string> = {
   dino_i: 'DINO-I',
 }
 
+// 每个指标一种线色（三张图并排，区分开）。深色背景上高对比、可辨。
+const EVAL_COLORS: Record<EvalMetricKey, string> = {
+  clip_t: '#3fb950',
+  clip_i: '#58a6ff',
+  dino_i: '#bc8cff',
+}
+
 const EVAL_DESCRIPTIONS: Record<EvalMetricKey, string> = {
   clip_t: '生成图和 prompt 文本的 CLIP 相似度，用来看 prompt following；越高越好。',
   clip_i: '生成图和参考图的 CLIP 图像相似度，用来看整体视觉相似度；越高越好。',
@@ -378,31 +385,6 @@ function EvalJobLog({ jobId }: { jobId: number }) {
     <pre className="max-h-52 overflow-auto bg-sunken border border-subtle rounded-md p-2 text-[11px] font-mono text-fg-secondary whitespace-pre-wrap break-all m-0">
       {content || <span className="text-fg-tertiary">暂无日志</span>}
     </pre>
-  )
-}
-
-function MiniMetricSparkline({ points }: { points: Array<{ x: number; value: number }> }) {
-  if (points.length < 2) {
-    return <div className="h-7 grid place-items-center text-[11px] text-fg-tertiary">等待更多 checkpoint</div>
-  }
-  const W = 120
-  const H = 28
-  const values = points.map((p) => p.value)
-  const minV = Math.min(...values)
-  const maxV = Math.max(...values)
-  const range = maxV - minV || 1e-6
-  const x = (i: number) => (i / Math.max(1, points.length - 1)) * (W - 2) + 1
-  const y = (v: number) => 2 + (1 - (v - minV) / range) * (H - 4)
-  const path = points
-    .map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.value).toFixed(1)}`)
-    .join('')
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="h-7 w-full block" preserveAspectRatio="none">
-      <path d={path} stroke="var(--accent)" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-      {points.map((p, i) => (
-        <circle key={`${p.x}-${i}`} cx={x(i)} cy={y(p.value)} r="2" fill="var(--accent)" />
-      ))}
-    </svg>
   )
 }
 
@@ -693,21 +675,36 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
             {EVAL_METRIC_KEYS.map((key) => {
               const latest = latestByKey[key]
               const tone = stateTone(latest?.state, latest?.value)
+              const series = seriesByKey[key].map((p) => ({ step: p.x, value: p.value }))
               return (
-                <div key={key} className="rounded-md border border-subtle bg-overlay px-3 py-2.5 min-w-0">
-                  <div className="flex items-center justify-between gap-2 mb-1">
-                    <span className="text-xs font-semibold">{EVAL_LABELS[key]}</span>
+                <div key={key} className="card p-4 flex flex-col min-w-0">
+                  <div className="flex items-center justify-between gap-2 mb-1 shrink-0">
+                    <span className="inline-flex items-center gap-1.5 text-sm font-semibold">
+                      {EVAL_LABELS[key]}
+                      <InfoButton ariaLabel={`${EVAL_LABELS[key]} 指标说明`}>
+                        <p>{EVAL_DESCRIPTIONS[key]}</p>
+                      </InfoButton>
+                    </span>
                     <span className={`text-xs font-mono ${toneClass(tone)}`}>
                       {latest?.state?.status ?? 'not_run'}
                     </span>
                   </div>
-                  <div className={`text-2xl font-semibold font-mono tabular-nums ${toneClass(tone)}`}>
-                    {formatEvalValue(latest?.value ?? null, latest?.state)}
+                  <div className="flex items-baseline gap-2 shrink-0 mb-1.5">
+                    <span className={`text-2xl font-semibold font-mono tabular-nums ${toneClass(tone)}`}>
+                      {formatEvalValue(latest?.value ?? null, latest?.state)}
+                    </span>
+                    <span className="text-[11px] text-fg-tertiary truncate">
+                      {latest ? checkpointLabel(latest.result) : '等待指标'}
+                    </span>
                   </div>
-                  <div className="text-[11px] text-fg-tertiary truncate mb-1.5">
-                    {latest ? checkpointLabel(latest.result) : '等待指标'}
-                  </div>
-                  <MiniMetricSparkline points={seriesByKey[key]} />
+                  <SeriesChart
+                    data={series}
+                    rawColor={EVAL_COLORS[key]}
+                    smoothColor={EVAL_COLORS[key]}
+                    emaAlpha={1}
+                    yFormat={(v) => v.toFixed(4)}
+                    height={132}
+                  />
                 </div>
               )
             })}
