@@ -1727,16 +1727,18 @@ function EvalMetricModelCard({
   const exists = variant?.model_id === modelId ? !!variant?.exists : false
   return (
     <ModelGroupCard title={t(titleKey)} helpTooltip={<p>{t(helpKey)}</p>}>
-      <ul className="list-none m-0 p-0 flex flex-col gap-1">
-        <li className="flex items-center gap-2 text-xs px-1.5 py-1 rounded-sm bg-accent-soft border border-accent">
-          <code className="font-mono text-fg-primary flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{modelId}</code>
-          <ModelStatusBadge exists={exists} size={variant?.size ?? 0} status={dl?.status} />
-          <DownloadButton
-            exists={exists} status={dl?.status} busy={busy.has(key)}
-            onClick={() => void start(dlId, modelId)}
-          />
-        </li>
-      </ul>
+      <div className="flex items-center gap-2 text-xs">
+        <code className="font-mono text-fg-primary min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{modelId}</code>
+        {variant?.size_estimate ? (
+          <span className="text-fg-tertiary shrink-0">~{fmtBytes(variant.size_estimate)}</span>
+        ) : null}
+        <span style={{ flex: 1 }} />
+        <ModelStatusBadge exists={exists} size={variant?.size ?? 0} status={dl?.status} />
+        <DownloadButton
+          exists={exists} status={dl?.status} busy={busy.has(key)}
+          onClick={() => void start(dlId, modelId)}
+        />
+      </div>
       <button type="button" onClick={() => setAdvOpen(!advOpen)}
         className="btn btn-ghost btn-sm text-xs text-fg-tertiary self-start">
         {advOpen ? '▾' : '▸'} {t('settings.customRepoAdvanced')}

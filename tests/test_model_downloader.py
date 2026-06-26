@@ -897,6 +897,7 @@ def test_build_catalog_includes_eval_metrics(
     assert set(kinds) == {"clip", "dino"}
     assert kinds["clip"]["model_id"] == "openai/clip-vit-base-patch32"
     assert kinds["clip"]["exists"] is False
+    assert kinds["clip"]["size_estimate"] > 0  # 已知模型给下载前预估
     assert kinds["clip"]["target_path"].replace("\\", "/").endswith(
         "eval/clip/openai_clip-vit-base-patch32"
     )

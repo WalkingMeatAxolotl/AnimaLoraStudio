@@ -46,6 +46,19 @@ from .paths import (
 # ---------------------------------------------------------------------------
 
 
+# CLIP / DINO 常见模型的下载大小预估（bytes，约值）。下载前给用户一个体量参考；
+# 未知 model_id 不显示预估。已下载后 UI 用实际目录大小。
+_EVAL_SIZE_ESTIMATES = {
+    "openai/clip-vit-base-patch32": 605_000_000,
+    "openai/clip-vit-base-patch16": 599_000_000,
+    "openai/clip-vit-large-patch14": 1_710_000_000,
+    "facebook/dinov2-small": 88_000_000,
+    "facebook/dinov2-base": 346_000_000,
+    "facebook/dinov2-large": 1_220_000_000,
+    "facebook/dinov2-giant": 4_600_000_000,
+}
+
+
 def _file_status(p: Path) -> dict[str, Any]:
     try:
         st = p.stat()
@@ -108,6 +121,7 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
             "target_path": str(target),
             "exists": exists,
             "size": size,
+            "size_estimate": _EVAL_SIZE_ESTIMATES.get(mid, 0),
         })
 
     # WD14 候选每个 model_id 一行：两文件全在才算"已下载"。

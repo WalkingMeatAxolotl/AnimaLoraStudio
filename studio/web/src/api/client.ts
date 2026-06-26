@@ -635,6 +635,8 @@ export interface EvalVariantInfo {
   target_path: string
   exists: boolean
   size: number
+  /** 下载前的预估大小（bytes）；未知 model_id 为 0。 */
+  size_estimate: number
 }
 
 export interface EvalMetricsCatalog {
