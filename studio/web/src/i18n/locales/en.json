@@ -1969,7 +1969,16 @@
     "previewHintRight": "←/→ Browse · Delete/Backspace Remove from Train set",
     "renamedToast": "{{from}} → {{to}}",
     "sourceLabelDownload": "Dataset",
-    "sourceLabelTrain": "Train set / {{folder}}"
+    "sourceLabelTrain": "Train set / {{folder}}",
+    "bucketSwitchLabel": "Right pane target",
+    "bucketTrain": "Train set",
+    "bucketValidation": "Validation set",
+    "copyToValBtn": "→ Add to validation {{n}}",
+    "copyToValTitle": "Add to the held-out validation set",
+    "valPanelTitle": "Validation set — held-out",
+    "valSubtitle": "{{total}} images · {{sel}} selected",
+    "valHint": "Held-out validation set: these images are not trained on; they are the reference for post-training CLIP-I / DINO-I generalization metrics. Enable validation eval in the training config for it to take effect; when a split ratio is set, it tops up on top of your manual picks.",
+    "valEmpty": "No validation images yet — add some from the dataset on the left"
   },
   "duplicates": {
     "title": "Duplicate / Variant Review",
@@ -2111,7 +2120,11 @@
     "onExistingHint": "What to do when an image already has a caption file (.txt or .json).",
     "onExistingOverwrite": "Overwrite",
     "onExistingSkip": "Skip",
-    "onExistingAppend": "Append"
+    "onExistingAppend": "Append",
+    "scope": "Scope",
+    "scopeHint": "Which images to tag. Defaults to train + validation together — manually-added validation images start without captions, and eval uses the caption as the generation prompt, so the validation set must be tagged here. You can also tag a single train folder or only the validation set.",
+    "scopeAll": "All (train + validation)",
+    "scopeValidation": "Validation set"
   },
   "presets": {
     "loadSchemaFailed": "Failed to load schema: {{error}}",

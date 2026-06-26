@@ -213,3 +213,68 @@ def test_version_thumb_rejects_traversal(client: TestClient) -> None:
     assert r.status_code == 400
 
 
+# ---------------------------------------------------------------------------
+# validation curation（held-out 手动维护）
+# ---------------------------------------------------------------------------
+
+
+def test_validation_copy_view_remove_flow(client: TestClient) -> None:
+    pid, vid = _make(client)
+    _drop(client, pid, "1.png")
+    _drop(client, pid, "2.png")
+    # copy → validation（落固定 1_data）
+    r = client.post(
+        f"/api/projects/{pid}/versions/{vid}/curation/validation/copy",
+        json={"files": ["1.png"]},
+    ).json()
+    assert r["copied"] == ["1.png"]
+    # validation 视图：right 扁平、left 减掉已分配
+    view = client.get(
+        f"/api/projects/{pid}/versions/{vid}/curation/validation"
+    ).json()
+    assert _names(view["left"]) == ["2.png"]
+    assert [(e["name"], e["folder"]) for e in view["right"]] == [("1.png", "1_data")]
+    assert view["val_total"] == 1
+    # remove by (folder, name)
+    r = client.post(
+        f"/api/projects/{pid}/versions/{vid}/curation/validation/remove",
+        json={"items": [{"folder": "1_data", "name": "1.png"}]},
+    ).json()
+    assert r["removed"] == ["1.png"]
+    view = client.get(
+        f"/api/projects/{pid}/versions/{vid}/curation/validation"
+    ).json()
+    assert view["val_total"] == 0
+    assert "1.png" in _names(view["left"])  # 回到候选池
+
+
+def test_validation_copy_skips_train_member(client: TestClient) -> None:
+    pid, vid = _make(client)
+    _drop(client, pid, "1.png")
+    client.post(
+        f"/api/projects/{pid}/versions/{vid}/curation/copy",
+        json={"files": ["1.png"], "dest_folder": "5_x"},
+    )
+    r = client.post(
+        f"/api/projects/{pid}/versions/{vid}/curation/validation/copy",
+        json={"files": ["1.png"]},
+    ).json()
+    assert r["skipped"] == ["1.png"]
+    assert r["copied"] == []
+
+
+def test_version_thumb_serves_validation_image(client: TestClient) -> None:
+    pid, vid = _make(client)
+    _drop(client, pid, "1.png")
+    client.post(
+        f"/api/projects/{pid}/versions/{vid}/curation/validation/copy",
+        json={"files": ["1.png"]},
+    )
+    r = client.get(
+        f"/api/projects/{pid}/versions/{vid}/thumb"
+        "?bucket=validation&folder=1_data&name=1.png"
+    )
+    assert r.status_code == 200
+    assert r.content == b"\x89PNG fake"
+
+

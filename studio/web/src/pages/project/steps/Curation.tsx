@@ -4,8 +4,10 @@ import { useOutletContext } from 'react-router-dom'
 import {
   api,
   type CurationItem,
+  type CurationValidationView,
   type CurationView,
   type ProjectDetail,
+  type ValidationItem,
   type Version,
 } from '../../../api/client'
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
@@ -26,6 +28,10 @@ type SortMode =
 
 const SORT_STORAGE_KEY = 'curation:sort'
 const DEFAULT_SORT: SortMode = 'id-asc'
+
+// 右栏目标桶：训练集（默认，现行为）/ 验证集（held-out，扁平无文件夹）
+type Bucket = 'train' | 'validation'
+const BUCKET_STORAGE_KEY = 'curation:bucket'
 
 function numericIdKey(name: string): number {
   const stem = name.replace(/\.[^.]+$/, '')
@@ -97,8 +103,20 @@ export default function CurationPage() {
   const { toast } = useToast()
   const dialog = useDialog()
   const [view, setView] = useState<CurationView | null>(null)
+  const [valView, setValView] = useState<CurationValidationView | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+
+  const [bucket, setBucket] = useState<Bucket>(() => {
+    if (typeof window === 'undefined') return 'train'
+    const v = window.localStorage.getItem(BUCKET_STORAGE_KEY)
+    return v === 'validation' ? 'validation' : 'train'
+  })
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(BUCKET_STORAGE_KEY, bucket)
+    }
+  }, [bucket])
 
   const SORT_OPTIONS: { value: SortMode; label: string }[] = [
     { value: 'id-asc', label: 'ID ↑' },
@@ -161,7 +179,7 @@ export default function CurationPage() {
 
   const versionId = activeVersion?.id ?? null
 
-  const refresh = useCallback(async () => {
+  const fetchTrain = useCallback(async () => {
     if (versionId == null) return
     try {
       const v = await api.getCuration(project.id, versionId)
@@ -178,7 +196,39 @@ export default function CurationPage() {
     }
   }, [project.id, versionId, rightFolder])
 
-  useEffect(() => { void refresh() }, [refresh])
+  const fetchValidation = useCallback(async () => {
+    if (versionId == null) return
+    try {
+      const vv = await api.getCurationValidation(project.id, versionId)
+      setValView(vv)
+      setError(null)
+    } catch (e) {
+      setError(String(e))
+    }
+  }, [project.id, versionId])
+
+  // 切换 bucket 只在目标视图没缓存时拉一次：左栏 download−train−validation 两个
+  // bucket 完全一致，纯来回切不该重拉、不该整页 loading（左栏用已有数据兜底）。
+  useEffect(() => {
+    if (versionId == null) return
+    if (bucket === 'validation') {
+      if (valView == null) void fetchValidation()
+    } else if (view == null) {
+      void fetchTrain()
+    }
+  }, [bucket, versionId, view, valView, fetchTrain, fetchValidation])
+
+  // 改动后刷新当前 bucket + 作废另一个的缓存：跨 bucket 增删会改共享的左栏候选
+  // 池 / 另一侧右栏，下次切过去自动重拉，保证不显示陈旧的左栏。
+  const refresh = useCallback(async () => {
+    if (bucket === 'validation') {
+      await fetchValidation()
+      setView(null)
+    } else {
+      await fetchTrain()
+      setValView(null)
+    }
+  }, [bucket, fetchTrain, fetchValidation])
 
   useEventStream((evt) => {
     if (
@@ -191,19 +241,29 @@ export default function CurationPage() {
     }
   })
 
+  const isVal = bucket === 'validation'
   const folderNames = view?.folders ?? []
 
-  const leftSortedNames = useMemo(
-    () => sortItems(view?.left ?? [], sortMode).map((e) => e.name),
-    [view, sortMode]
+  // 左栏候选 download − train − validation，两个 bucket 共用同一池 —— 目标视图
+  // 尚未加载时回退到另一视图的（内容相同的）左栏，切换时左栏不空屏、不闪。
+  const currentLeft = useMemo(
+    () => (isVal ? valView?.left ?? view?.left ?? [] : view?.left ?? valView?.left ?? []),
+    [isVal, valView, view]
   )
+  const leftSortedNames = useMemo(
+    () => sortItems(currentLeft, sortMode).map((e) => e.name),
+    [currentLeft, sortMode]
+  )
+
+  // train 右栏：当前文件夹的 entries（带 origin）。validation 右栏：全量扁平。
   const trainEntries = useMemo(
     () => (view && rightFolder ? view.right[rightFolder] ?? [] : []),
     [view, rightFolder]
   )
+  const valEntries = useMemo<ValidationItem[]>(() => valView?.right ?? [], [valView])
   const rightSortedNames = useMemo(
-    () => sortItems(trainEntries, sortMode).map((e) => e.name),
-    [trainEntries, sortMode]
+    () => sortItems(isVal ? valEntries : trainEntries, sortMode).map((e) => e.name),
+    [isVal, valEntries, trainEntries, sortMode]
   )
 
   // ADR 0010 fixup: train 区 thumb 走 download bucket + manifest.origin，
@@ -218,6 +278,13 @@ export default function CurationPage() {
     }
     return m
   }, [trainEntries])
+  // validation 图无 manifest / 无 origin：按 name → 物理 folder 反查，供
+  // 缩略图寻址（version thumb 的 validation bucket 需 folder）+ 精确删除。
+  const valFolderByName = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const e of valEntries) m.set(e.name, e.folder)
+    return m
+  }, [valEntries])
 
   const leftItems = useMemo(
     () => leftSortedNames.map((n) => ({
@@ -232,12 +299,16 @@ export default function CurationPage() {
         ? []
         : rightSortedNames.map((n) => ({
             name: n,
-            thumbUrl: api.projectThumbUrl(
-              project.id, rightOriginByName.get(n) ?? n, 'download', 256,
-              undefined, true,
-            ),
+            thumbUrl: isVal
+              ? api.versionThumbUrl(
+                  project.id, versionId, 'validation', n, valFolderByName.get(n), 256,
+                )
+              : api.projectThumbUrl(
+                  project.id, rightOriginByName.get(n) ?? n, 'download', 256,
+                  undefined, true,
+                ),
           })),
-    [rightSortedNames, project.id, versionId, rightOriginByName]
+    [rightSortedNames, project.id, versionId, isVal, rightOriginByName, valFolderByName]
   )
 
   const onLeftHover = useCallback(
@@ -251,7 +322,17 @@ export default function CurationPage() {
 
   const onRightHover = useCallback(
     (name: string) => {
-      if (versionId == null || !rightFolder) return
+      if (versionId == null) return
+      if (isVal) {
+        const folder = valFolderByName.get(name)
+        if (!folder) return
+        setFocus({
+          side: 'right', folder, name,
+          url: api.versionThumbUrl(project.id, versionId, 'validation', name, folder, 768),
+        })
+        return
+      }
+      if (!rightFolder) return
       const origin = rightOriginByName.get(name) ?? name
       setFocus({
         side: 'right',
@@ -260,7 +341,7 @@ export default function CurationPage() {
         url: api.projectThumbUrl(project.id, origin, 'download', 768, undefined, true),
       })
     },
-    [versionId, project.id, rightFolder, rightOriginByName]
+    [versionId, project.id, isVal, valFolderByName, rightFolder, rightOriginByName]
   )
 
   if (!activeVersion) {
@@ -273,7 +354,27 @@ export default function CurationPage() {
       </div>
     )
   }
-  if (!view) return <p className="text-fg-tertiary p-6">{t('curate.loading')}</p>
+  // 整页 loading 只在首次（两个视图都没数据）出现；切换 bucket 时另一视图已有
+  // 数据，页面照常渲染，只有右栏在等自己那侧的数据。
+  if (view == null && valView == null) {
+    return <p className="text-fg-tertiary p-6">{t('curate.loading')}</p>
+  }
+
+  // 当前 bucket 自己那侧的右栏数据是否还在加载（切到一个从没看过的 bucket 时）
+  const rightLoading = isVal ? valView == null : view == null
+  const downloadTotal = isVal
+    ? valView?.download_total ?? view?.download_total ?? 0
+    : view?.download_total ?? valView?.download_total ?? 0
+
+  const switchBucket = (next: Bucket) => {
+    if (next === bucket) return
+    setBucket(next)
+    setLeftSel(new Set())
+    setLeftAnchor(null)
+    setRightSel(new Set())
+    setRightAnchor(null)
+    setRenaming(null)
+  }
 
   const switchRightFolder = (next: string) => {
     setRightFolder(next)
@@ -294,12 +395,16 @@ export default function CurationPage() {
   }
 
   const copyLeftFiles = async (files: string[], options: { clearSelection?: boolean } = {}) => {
-    if (!rightFolder) { toast(t('curate.noTargetFolder'), 'error'); return false }
-    if (!FOLDER_PATTERN.test(rightFolder)) { toast(t('curate.invalidFolder'), 'error'); return false }
     if (files.length === 0 || busy) return false
+    if (!isVal) {
+      if (!rightFolder) { toast(t('curate.noTargetFolder'), 'error'); return false }
+      if (!FOLDER_PATTERN.test(rightFolder)) { toast(t('curate.invalidFolder'), 'error'); return false }
+    }
     setBusy(true)
     try {
-      const r = await api.copyToTrain(project.id, activeVersion.id, { files, dest_folder: rightFolder })
+      const r = isVal
+        ? await api.copyToValidation(project.id, activeVersion.id, { files })
+        : await api.copyToTrain(project.id, activeVersion.id, { files, dest_folder: rightFolder })
       toast(
         t('curate.copiedN', { n: r.copied.length }) +
         (r.skipped.length ? t('curate.copiedSkipped', { n: r.skipped.length }) : ''),
@@ -322,14 +427,22 @@ export default function CurationPage() {
     files: string[],
     options: { clearSelection?: boolean; confirm?: boolean } = {}
   ) => {
-    if (!folder || files.length === 0 || busy) return false
+    if (files.length === 0 || busy) return false
+    if (!isVal && !folder) return false
+    const folderLabel = isVal ? t('curate.bucketValidation') : folder
     if (options.confirm &&
-        !(await dialog.confirm(t('curate.confirmRemove', { folder, n: files.length }), { tone: 'warn', okText: t('curate.removeOkText') }))) {
+        !(await dialog.confirm(t('curate.confirmRemove', { folder: folderLabel, n: files.length }), { tone: 'warn', okText: t('curate.removeOkText') }))) {
       return false
     }
     setBusy(true)
     try {
-      const r = await api.removeFromTrain(project.id, activeVersion.id, { folder, files })
+      const r = isVal
+        ? await api.removeFromValidation(project.id, activeVersion.id, {
+            items: files
+              .map((name) => ({ folder: valFolderByName.get(name) ?? '', name }))
+              .filter((it) => it.folder),
+          })
+        : await api.removeFromTrain(project.id, activeVersion.id, { folder, files })
       toast(t('curate.removedN', { n: r.removed.length }), 'success')
       if (options.clearSelection) setRightSel(new Set())
       await refresh()
@@ -391,7 +504,7 @@ export default function CurationPage() {
   }
 
   const doDeleteFolder = async (name: string) => {
-    const cnt = view.right[name]?.length ?? 0
+    const cnt = view?.right[name]?.length ?? 0
     if (!(await dialog.confirm(
       t('curate.confirmDeleteFolder', { name, n: cnt }),
       { tone: 'warn', okText: t('curate.deleteFolderOkText') },
@@ -421,6 +534,19 @@ export default function CurationPage() {
   }
   const openRightPreview = (name: string) => {
     if (versionId == null) return
+    if (isVal) {
+      const folder = valFolderByName.get(name) ?? ''
+      setPreview({
+        side: 'right', name, folder,
+        url: api.versionThumbUrl(project.id, versionId, 'validation', name, folder, 1600),
+        caption: name,
+        list: rightSortedNames,
+        index: rightSortedNames.indexOf(name),
+        resolve: (n) =>
+          api.versionThumbUrl(project.id, versionId, 'validation', n, valFolderByName.get(n) ?? '', 1600),
+      })
+      return
+    }
     const folder = rightFolder
     setPreview({
       side: 'right', name, folder,
@@ -439,7 +565,7 @@ export default function CurationPage() {
     setPreview({
       ...preview, name,
       url: preview.resolve(name),
-      caption: preview.side === 'right' && preview.folder ? `${preview.folder}/${name}` : name,
+      caption: preview.side === 'right' && preview.folder && !isVal ? `${preview.folder}/${name}` : name,
       index: idx,
     })
   }
@@ -453,7 +579,7 @@ export default function CurationPage() {
     setPreview({
       ...preview, name,
       url: preview.resolve(name),
-      caption: preview.side === 'right' && preview.folder ? `${preview.folder}/${name}` : name,
+      caption: preview.side === 'right' && preview.folder && !isVal ? `${preview.folder}/${name}` : name,
       list, index,
     })
   }
@@ -477,19 +603,45 @@ export default function CurationPage() {
       title={t('steps.curate.title')}
       subtitle={t('steps.curate.subtitle')}
       actions={
-        <label className="flex items-center gap-1.5 text-sm text-fg-secondary whitespace-nowrap shrink-0">
-          {t('curate.sortLabel')}
-          <select
-            value={sortMode}
-            onChange={(e) => setSortMode(e.target.value as SortMode)}
-            className="input px-2 py-0.5 text-sm"
-            title={t('curate.sortTitle')}
+        <>
+          <div
+            className="flex items-center overflow-hidden rounded-md border border-subtle text-sm shrink-0"
+            role="tablist"
+            aria-label={t('curate.bucketSwitchLabel')}
           >
-            {SORT_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-        </label>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={bucket === 'train'}
+              onClick={() => switchBucket('train')}
+              className={`px-2.5 py-0.5 ${bucket === 'train' ? 'bg-accent-soft text-accent' : 'text-fg-secondary'}`}
+            >
+              {t('curate.bucketTrain')}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={bucket === 'validation'}
+              onClick={() => switchBucket('validation')}
+              className={`border-l border-subtle px-2.5 py-0.5 ${bucket === 'validation' ? 'bg-accent-soft text-accent' : 'text-fg-secondary'}`}
+            >
+              {t('curate.bucketValidation')}
+            </button>
+          </div>
+          <label className="flex items-center gap-1.5 text-sm text-fg-secondary whitespace-nowrap shrink-0">
+            {t('curate.sortLabel')}
+            <select
+              value={sortMode}
+              onChange={(e) => setSortMode(e.target.value as SortMode)}
+              className="input px-2 py-0.5 text-sm"
+              title={t('curate.sortTitle')}
+            >
+              {SORT_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </label>
+        </>
       }
     >
     <div className="flex flex-col h-full gap-3">
@@ -498,7 +650,7 @@ export default function CurationPage() {
         <PanelCard
           accent="emerald"
           title={t('curate.downloadPanelTitle')}
-          subtitle={t('curate.downloadSubtitle', { unused: view.left.length, total: view.download_total, sel: leftSel.size })}
+          subtitle={t('curate.downloadSubtitle', { unused: currentLeft.length, total: downloadTotal, sel: leftSel.size })}
           actions={
             <>
               <BtnSecondary
@@ -513,13 +665,23 @@ export default function CurationPage() {
               >
                 {t('curate.deselect')}
               </BtnSecondary>
-              <BtnPrimary
-                onClick={doCopy}
-                disabled={busy || leftSel.size === 0 || !rightFolder}
-                title={rightFolder ? t('curate.copyToTitle', { folder: rightFolder }) : t('curate.noFolderTitle')}
-              >
-                {t('curate.copyToBtn', { n: leftSel.size, folder: rightFolder || '?' })}
-              </BtnPrimary>
+              {isVal ? (
+                <BtnPrimary
+                  onClick={doCopy}
+                  disabled={busy || leftSel.size === 0}
+                  title={t('curate.copyToValTitle')}
+                >
+                  {t('curate.copyToValBtn', { n: leftSel.size })}
+                </BtnPrimary>
+              ) : (
+                <BtnPrimary
+                  onClick={doCopy}
+                  disabled={busy || leftSel.size === 0 || !rightFolder}
+                  title={rightFolder ? t('curate.copyToTitle', { folder: rightFolder }) : t('curate.noFolderTitle')}
+                >
+                  {t('curate.copyToBtn', { n: leftSel.size, folder: rightFolder || '?' })}
+                </BtnPrimary>
+              )}
             </>
           }
         >
@@ -541,20 +703,28 @@ export default function CurationPage() {
 
         <PanelCard
           accent="cyan"
-          title={t('curate.trainPanelTitle')}
-          subtitle={t('curate.trainSubtitle', { total: view.train_total, folders: folderNames.length, sel: rightSel.size })}
+          title={isVal ? t('curate.valPanelTitle') : t('curate.trainPanelTitle')}
+          subtitle={
+            isVal
+              ? t('curate.valSubtitle', { total: valView?.val_total ?? 0, sel: rightSel.size })
+              : t('curate.trainSubtitle', { total: view?.train_total ?? 0, folders: folderNames.length, sel: rightSel.size })
+          }
           actions={
             <>
-              <input
-                value={newFolder}
-                onChange={(e) => setNewFolder(e.target.value)}
-                placeholder={t('curate.newFolderPlaceholder')}
-                className="input input-mono px-2 py-0.5 text-sm"
-                style={{ width: 144 }}
-              />
-              <BtnSecondary onClick={doCreateFolder} disabled={busy || !newFolder.trim()}>
-                {t('curate.createFolderBtn')}
-              </BtnSecondary>
+              {!isVal && (
+                <>
+                  <input
+                    value={newFolder}
+                    onChange={(e) => setNewFolder(e.target.value)}
+                    placeholder={t('curate.newFolderPlaceholder')}
+                    className="input input-mono px-2 py-0.5 text-sm"
+                    style={{ width: 144 }}
+                  />
+                  <BtnSecondary onClick={doCreateFolder} disabled={busy || !newFolder.trim()}>
+                    {t('curate.createFolderBtn')}
+                  </BtnSecondary>
+                </>
+              )}
               <BtnSecondary
                 onClick={() => setRightSel(new Set(rightSortedNames))}
                 disabled={busy || rightSortedNames.length === 0}
@@ -567,43 +737,49 @@ export default function CurationPage() {
               >
                 {t('curate.deselect')}
               </BtnSecondary>
-              <BtnDanger onClick={doRemove} disabled={busy || rightSel.size === 0 || !rightFolder}>
+              <BtnDanger onClick={doRemove} disabled={busy || rightSel.size === 0 || (!isVal && !rightFolder)}>
                 {t('curate.removeNBtn', { n: rightSel.size })}
               </BtnDanger>
             </>
           }
         >
-          <FolderSummary
-            folders={folderNames}
-            counts={Object.fromEntries(folderNames.map((f) => [f, view.right[f]?.length ?? 0]))}
-            activeFolder={rightFolder}
-            busy={busy}
-            onSwitch={switchRightFolder}
-            onRename={(name) => setRenaming({ target: name, value: name })}
-            onDelete={doDeleteFolder}
-          />
-
-          {renaming && (
-            <div className="flex items-center gap-2 my-3 text-sm">
-              <span className="text-fg-secondary">{t('curate.renameLabel', { name: renaming.target })}</span>
-              <input
-                autoFocus
-                value={renaming.value}
-                onChange={(e) => setRenaming({ ...renaming, value: e.target.value })}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') doRenameFolder()
-                  if (e.key === 'Escape') setRenaming(null)
-                }}
-                className="input input-mono px-2 py-0.5"
-                style={{ width: 176 }}
+          {isVal ? (
+            <p className="text-xs text-fg-tertiary">{t('curate.valHint')}</p>
+          ) : (
+            <>
+              <FolderSummary
+                folders={folderNames}
+                counts={Object.fromEntries(folderNames.map((f) => [f, view?.right[f]?.length ?? 0]))}
+                activeFolder={rightFolder}
+                busy={busy}
+                onSwitch={switchRightFolder}
+                onRename={(name) => setRenaming({ target: name, value: name })}
+                onDelete={doDeleteFolder}
               />
-              <BtnPrimary onClick={doRenameFolder} disabled={busy}>
-                {t('curate.renameOk')}
-              </BtnPrimary>
-              <button onClick={() => setRenaming(null)} className="btn btn-ghost btn-sm">
-                {t('common.cancel')}
-              </button>
-            </div>
+
+              {renaming && (
+                <div className="flex items-center gap-2 my-3 text-sm">
+                  <span className="text-fg-secondary">{t('curate.renameLabel', { name: renaming.target })}</span>
+                  <input
+                    autoFocus
+                    value={renaming.value}
+                    onChange={(e) => setRenaming({ ...renaming, value: e.target.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') doRenameFolder()
+                      if (e.key === 'Escape') setRenaming(null)
+                    }}
+                    className="input input-mono px-2 py-0.5"
+                    style={{ width: 176 }}
+                  />
+                  <BtnPrimary onClick={doRenameFolder} disabled={busy}>
+                    {t('curate.renameOk')}
+                  </BtnPrimary>
+                  <button onClick={() => setRenaming(null)} className="btn btn-ghost btn-sm">
+                    {t('common.cancel')}
+                  </button>
+                </div>
+              )}
+            </>
           )}
 
           <div className={`${SCROLL_BOX} mt-3`}>
@@ -616,18 +792,22 @@ export default function CurationPage() {
               onPreview={openRightPreview}
               onActivate={openRightPreview}
               clickMode="activate"
-              ariaLabel="train-grid"
+              ariaLabel={isVal ? 'validation-grid' : 'train-grid'}
               emptyHint={
-                rightFolder
-                  ? t('curate.trainEmptyFolder', { folder: rightFolder })
-                  : t('curate.trainNoFolder')
+                rightLoading
+                  ? t('curate.loading')
+                  : isVal
+                    ? t('curate.valEmpty')
+                    : rightFolder
+                      ? t('curate.trainEmptyFolder', { folder: rightFolder })
+                      : t('curate.trainNoFolder')
               }
             />
           </div>
         </PanelCard>
       </div>
 
-      {altHeld && focus && <AltHoverPreview focus={focus} />}
+      {altHeld && focus && <AltHoverPreview focus={focus} isVal={isVal} />}
 
       {preview && (
         <ImagePreviewModal
@@ -715,11 +895,13 @@ function FolderSummary({
   )
 }
 
-function AltHoverPreview({ focus }: { focus: Focus }) {
+function AltHoverPreview({ focus, isVal }: { focus: Focus; isVal: boolean }) {
   const { t } = useTranslation()
   const sourceLabel = focus.side === 'left'
     ? t('curate.sourceLabelDownload')
-    : t('curate.sourceLabelTrain', { folder: focus.folder })
+    : isVal
+      ? t('curate.bucketValidation')
+      : t('curate.sourceLabelTrain', { folder: focus.folder })
   return (
     <div
       aria-hidden

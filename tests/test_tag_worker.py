@@ -504,6 +504,72 @@ def test_on_existing_invalid_falls_back_to_overwrite(env) -> None:
     assert (env["train"] / "a.txt").read_text(encoding="utf-8") == "tag_a, common"
 
 
+# ---------------------------------------------------------------------------
+# scope: all / validation / 单个 train 文件夹（held-out 验证集打标）
+# ---------------------------------------------------------------------------
+
+
+def _val_dir(env, folder: str = "1_data") -> Path:
+    d = (
+        versions.version_dir(env["p"]["id"], env["p"]["slug"], env["v"]["label"])
+        / "validation"
+        / folder
+    )
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _set_scope(env, scope: str) -> None:
+    with db.connection_for(env["db"]) as conn:
+        conn.execute(
+            "UPDATE project_jobs SET params = json_set(params, '$.scope', ?) "
+            "WHERE id = ?",
+            (scope, env["job_id"]),
+        )
+        conn.commit()
+
+
+def test_scope_default_all_tags_train_and_validation(env) -> None:
+    """默认（不设 scope）train + validation 一起打。"""
+    val = _val_dir(env)
+    (val / "v1.png").write_bytes(b"x")
+    rc = tag_worker.run(env["job_id"])
+    assert rc == 0
+    assert (env["train"] / "a.txt").exists()  # train 打了
+    assert (val / "v1.txt").read_text(encoding="utf-8") == "tag_v1, common"  # validation 也打了
+
+
+def test_scope_validation_only(env) -> None:
+    """scope=validation：只打 validation/，train 不动。"""
+    val = _val_dir(env)
+    (val / "v1.png").write_bytes(b"x")
+    _set_scope(env, "validation")
+    rc = tag_worker.run(env["job_id"])
+    assert rc == 0
+    assert (val / "v1.txt").exists()
+    assert not (env["train"] / "a.txt").exists()
+    assert not (env["train"] / "b.txt").exists()
+
+
+def test_scope_single_train_folder(env) -> None:
+    """scope=<train 文件夹>：只打那个文件夹，validation 不动。"""
+    val = _val_dir(env)
+    (val / "v1.png").write_bytes(b"x")
+    _set_scope(env, "1_data")
+    rc = tag_worker.run(env["job_id"])
+    assert rc == 0
+    assert (env["train"] / "a.txt").exists()
+    assert not (val / "v1.txt").exists()
+
+
+def test_scope_validation_empty_is_noop(env) -> None:
+    """scope=validation 但 validation/ 没图 → 不报错、train 不被波及。"""
+    _set_scope(env, "validation")
+    rc = tag_worker.run(env["job_id"])
+    assert rc == 0
+    assert not (env["train"] / "a.txt").exists()
+
+
 def test_worker_imports_onnxruntime_setup_at_module_level() -> None:
     """worker 是独立 subprocess —— 必须在任何 `import onnxruntime` 之前触发
     onnxruntime_setup 的顶层 preload。回归测试：防止有人删掉那行 import 后

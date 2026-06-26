@@ -32,6 +32,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import asdict
 from typing import Any, Optional
@@ -83,6 +84,10 @@ from ....services.dataset import tagedit
 from ....services.tagging.base import VALID_TAGGER_NAMES
 
 router = APIRouter()
+
+# 打标 scope 取单个 train 文件夹时的合法名（Kohya 风格，挡 path traversal），
+# 与 dataset.curation._FOLDER_PATTERN 同规则。
+_TAG_SCOPE_FOLDER_RE = re.compile(r"^([0-9]+_)?[A-Za-z][A-Za-z0-9_-]*$")
 logger = logging.getLogger(__name__)
 
 
@@ -109,6 +114,13 @@ def start_tag(pid: int, vid: int, body: TagJobRequest) -> dict[str, Any]:
             "On-existing mode must be overwrite, skip, or append",
             code="tag.on_existing_invalid", http_status=400,
         )
+    # 打标范围："all" / "validation" / 单个 train 文件夹名。后两者直接拼进路径，
+    # 必须挡 path traversal —— 文件夹名走 Kohya 规则（可选 N_ 前缀 + 字母开头）。
+    if body.scope not in {"all", "validation"} and not _TAG_SCOPE_FOLDER_RE.fullmatch(body.scope):
+        raise ValidationError(
+            f'Invalid tagging scope: "{body.scope}"',
+            code="tag.scope_invalid", details={"scope": body.scope}, http_status=400,
+        )
     _, v, _ = _version_train_dir_or_404(pid, vid)
 
     # 触发词：先 strip，落到 version 表（持久化，TagEdit / Train 都能读），再
@@ -126,6 +138,9 @@ def start_tag(pid: int, vid: int, body: TagJobRequest) -> dict[str, Any]:
         params["on_existing"] = body.on_existing
     if trigger_word:
         params["trigger_word"] = trigger_word
+    # "all" 是 worker 默认，不写入减小 payload。
+    if body.scope != "all":
+        params["scope"] = body.scope
     # 通用：按 tagger 名取 `<name>_overrides` 字段并落到 params 同名键。
     # 仅保留用户实际填写的字段；空 dict 也不写。
     overrides_field = getattr(body, f"{body.tagger}_overrides", None)
@@ -838,7 +853,7 @@ def version_thumb(
     name: str = "",
     size: int = 256,
 ) -> FileResponse:
-    if bucket not in {"train", "reg", "samples"}:
+    if bucket not in {"train", "reg", "samples", "validation"}:
         raise InvalidPathError("Invalid path", code="path.invalid")
     with db.connection_for() as conn:
         v = versions.get_version(conn, vid)
@@ -848,7 +863,7 @@ def version_thumb(
             "Version not found", code="version.not_found", details={"id": vid},
         )
     vdir = versions.version_dir(p["id"], p["slug"], v["label"]) / bucket
-    if bucket in {"train", "reg"}:
+    if bucket in {"train", "reg", "validation"}:
         if not folder:
             raise InvalidPathError("Invalid path", code="path.invalid")
         f = _safe_join_or_400(vdir, folder, name)

@@ -947,11 +947,26 @@ export interface CurationItem {
 }
 
 export interface CurationView {
-  left: CurationItem[] // download − train
+  left: CurationItem[] // download − train − validation
   right: Record<string, CurationItem[]> // folder → items
   download_total: number
   train_total: number
   folders: string[]
+}
+
+/** held-out 验证集里的一张图：扁平列表（无文件夹概念），但带物理 `folder`
+ *  供缩略图寻址（version thumb 的 validation bucket 需要）与精确删除。 */
+export interface ValidationItem {
+  name: string
+  mtime: number
+  folder: string
+}
+
+export interface CurationValidationView {
+  left: CurationItem[] // download − train − validation（与训练集同候选池）
+  right: ValidationItem[] // validation 全量扁平
+  download_total: number
+  val_total: number
 }
 
 export interface CopyResult {
@@ -2280,6 +2295,11 @@ export const api = {
        * 第一个 tag，并同步落库到 version.trigger_word，后续 train 读出。
        */
       trigger_word?: string
+      /**
+       * 打标范围：'all'（默认，train 全部 + validation）/ 'validation'（只打
+       * held-out 验证集）/ 某个 train 子文件夹名（只打那一个）。
+       */
+      scope?: string
     }
   ) =>
     req<Job>(`/api/projects/${pid}/versions/${vid}/tag`, {
@@ -2513,6 +2533,25 @@ export const api = {
       `/api/projects/${pid}/versions/${vid}/curation/folder`,
       { method: 'POST', body: JSON.stringify(body) }
     ),
+  // 验证集（held-out）手动维护——与 train curation 对称，右栏扁平无文件夹
+  getCurationValidation: (pid: number, vid: number) =>
+    req<CurationValidationView>(
+      `/api/projects/${pid}/versions/${vid}/curation/validation`
+    ),
+  copyToValidation: (pid: number, vid: number, body: { files: string[] }) =>
+    req<CopyResult>(
+      `/api/projects/${pid}/versions/${vid}/curation/validation/copy`,
+      { method: 'POST', body: JSON.stringify(body) }
+    ),
+  removeFromValidation: (
+    pid: number,
+    vid: number,
+    body: { items: { folder: string; name: string }[] }
+  ) =>
+    req<{ removed: string[]; missing: string[] }>(
+      `/api/projects/${pid}/versions/${vid}/curation/validation/remove`,
+      { method: 'POST', body: JSON.stringify(body) }
+    ),
   // ADR 0010 train scope duplicates
   scanDuplicatesTrain: (
     pid: number,
@@ -2535,7 +2574,7 @@ export const api = {
   versionThumbUrl: (
     pid: number,
     vid: number,
-    bucket: 'train' | 'reg' | 'samples',
+    bucket: 'train' | 'reg' | 'samples' | 'validation',
     name: string,
     folder?: string,
     size: number = 256

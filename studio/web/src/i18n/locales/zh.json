@@ -1969,7 +1969,16 @@
     "previewHintRight": "←/→ 浏览 · Delete/Backspace 从训练集移除",
     "renamedToast": "{{from}} → {{to}}",
     "sourceLabelDownload": "数据集",
-    "sourceLabelTrain": "训练集 / {{folder}}"
+    "sourceLabelTrain": "训练集 / {{folder}}",
+    "bucketSwitchLabel": "右栏目标",
+    "bucketTrain": "训练集",
+    "bucketValidation": "验证集",
+    "copyToValBtn": "→ 加入验证集 {{n}}",
+    "copyToValTitle": "加入到 held-out 验证集",
+    "valPanelTitle": "验证集 — held-out",
+    "valSubtitle": "{{total}} 张 · 已选 {{sel}}",
+    "valHint": "held-out 验证集：这里的图不参与训练，用于训练后算 CLIP-I / DINO-I 泛化指标。需在「训练配置」开启验证集评估才会生效；设了划分比例时会在手动选择基础上再自动补足。",
+    "valEmpty": "还没有验证图，从左侧数据集选图加入"
   },
   "duplicates": {
     "title": "重复 / 差分审核",
@@ -2111,7 +2120,11 @@
     "onExistingHint": "图片已有 caption 文件（.txt 或 .json）时怎么处理。",
     "onExistingOverwrite": "覆盖",
     "onExistingSkip": "跳过",
-    "onExistingAppend": "追加到末尾"
+    "onExistingAppend": "追加到末尾",
+    "scope": "范围",
+    "scopeHint": "打哪些图。默认训练集 + 验证集一起打——手动加入的验证图原本没 caption，eval 拿 caption 当生成 prompt，得在这里把验证集纳入打标。也可只打某个训练集文件夹或只打验证集。",
+    "scopeAll": "全部（训练集 + 验证集）",
+    "scopeValidation": "验证集"
   },
   "presets": {
     "loadSchemaFailed": "schema 加载失败: {{error}}",
