@@ -162,8 +162,23 @@ export interface EvalMetricModelsConfig {
   clip_model_name: string
   /** DINO-I 默认模型名或本地目录。 */
   dino_model_name: string
+  /** CCIP（anime 角色身份）默认 ONNX 变体名。 */
+  ccip_model_name: string
+  /** 启用哪些评估指标（Settings 复选框）；eval 只算勾选的。 */
+  enabled_metrics: string[]
   /** When auto eval runs (per-version enabled gates whether it runs at all). */
   auto_eval_trigger: 'after_training' | 'checkpoint'
+}
+
+/** 评估指标 registry 条目（catalog.eval_metric_catalog）：Settings 复选框列表用。 */
+export interface EvalMetricCatalogItem {
+  key: string
+  label: string
+  runner: string
+  models: string[]
+  default: boolean
+  desc: string
+  note: string
 }
 
 export interface EvalMetricSpec {
@@ -711,6 +726,8 @@ export interface ModelsCatalog {
   wd14: WD14Catalog
   cltagger: CLTaggerCatalog
   eval_metrics?: EvalMetricsCatalog
+  /** 评估指标 registry（Settings 复选框列表）。 */
+  eval_metric_catalog?: EvalMetricCatalogItem[]
   upscalers?: UpscalersCatalog
   /** 按类型的下载源选项：current = 当前选中，available = 可选源（长度 1 = 固定单源）。 */
   download_source_options: Record<string, { current: string; available: string[] }>

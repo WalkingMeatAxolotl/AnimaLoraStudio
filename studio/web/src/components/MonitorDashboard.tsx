@@ -263,26 +263,34 @@ function ChartSvg({ data, W, H, rawColor, smoothColor, fillColor, emaAlpha, yFor
 
 // ── EvalMetricsPanel ──────────────────────────────────────────────────────
 
-const EVAL_METRIC_KEYS = ['clip_t', 'clip_i', 'dino_i'] as const
+const EVAL_METRIC_KEYS = ['clip_t', 'clip_i', 'dino_i', 'ccip_i', 'tag_recall'] as const
 type EvalMetricKey = typeof EVAL_METRIC_KEYS[number]
+// 核心指标常显；动漫域新指标默认关，只在算过（状态非 not_run）时才显示卡片/列。
+const CORE_METRIC_KEYS = new Set<EvalMetricKey>(['clip_t', 'clip_i', 'dino_i'])
 
 const EVAL_LABELS: Record<EvalMetricKey, string> = {
   clip_t: 'CLIP-T',
   clip_i: 'CLIP-I',
   dino_i: 'DINO-I',
+  ccip_i: 'CCIP-I',
+  tag_recall: 'Tag-Recall',
 }
 
-// 每个指标一种线色（三张图并排，区分开）。深色背景上高对比、可辨。
+// 每个指标一种线色（并排区分）。深色背景上高对比、可辨。
 const EVAL_COLORS: Record<EvalMetricKey, string> = {
   clip_t: '#3fb950',
   clip_i: '#58a6ff',
   dino_i: '#bc8cff',
+  ccip_i: '#f778ba',
+  tag_recall: '#e3b341',
 }
 
 const EVAL_DESCRIPTIONS: Record<EvalMetricKey, string> = {
   clip_t: '生成图和 prompt 文本的 CLIP 相似度，用来看 prompt following；越高越好。',
   clip_i: '生成图和参考图的 CLIP 图像相似度，用来看整体视觉相似度；越高越好。',
   dino_i: '生成图和参考图的 DINO 图像特征相似度，用来看主体或风格特征是否学到；越高越好。',
+  ccip_i: '生成图被参考集判为同一动漫角色的比例（CCIP 动漫域角色身份保真）；仅单角色角色 LoRA 有意义；越高越好。',
+  tag_recall: '对生成图回标，prompt 里 booru tag 的召回率（动漫原生 prompt following）；仅 booru-tag caption 有意义；越高越好。',
 }
 
 function checkpointSortValue(result: EvalMetricResult, index: number): number {
@@ -458,6 +466,18 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
     )
   }, [results])
 
+  // 核心指标常显；动漫域新指标默认关，只有算过（状态非 not_run）才显示，避免空卡。
+  const displayKeys = useMemo<EvalMetricKey[]>(
+    () => EVAL_METRIC_KEYS.filter((k) =>
+      CORE_METRIC_KEYS.has(k) ||
+      results.some((r) => {
+        const s = metricState(r, k)?.status
+        return s != null && s !== 'not_run'
+      }),
+    ),
+    [results],
+  )
+
   // 训练结束后评估进度：复用现有 results 聚合「评估中 done/total」，给面板头部用
   const evalAgg = useMemo(() => evalProgressFromResults(results), [results])
 
@@ -543,11 +563,9 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
   }, [results])
 
   const seriesByKey = useMemo(() => {
-    const out: Record<EvalMetricKey, Array<{ x: number; value: number }>> = {
-      clip_t: [],
-      clip_i: [],
-      dino_i: [],
-    }
+    const out = Object.fromEntries(
+      EVAL_METRIC_KEYS.map((k) => [k, [] as Array<{ x: number; value: number }>]),
+    ) as Record<EvalMetricKey, Array<{ x: number; value: number }>>
     results.forEach((result, index) => {
       const x = checkpointSortValue(result, index)
       for (const key of EVAL_METRIC_KEYS) {
@@ -697,7 +715,7 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
       ) : (
         <>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
-            {EVAL_METRIC_KEYS.map((key) => {
+            {displayKeys.map((key) => {
               const latest = latestByKey[key]
               const tone = stateTone(latest?.state, latest?.value)
               const series = seriesByKey[key].map((p) => ({ step: p.x, value: p.value }))
@@ -740,7 +758,7 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
               <thead className="text-fg-tertiary">
                 <tr className="border-b border-subtle">
                   <th className="text-left font-medium py-1.5 pr-3">checkpoint</th>
-                  {EVAL_METRIC_KEYS.map((key) => (
+                  {displayKeys.map((key) => (
                     <th key={key} className="text-right font-medium py-1.5 px-2">
                       <span className="inline-flex items-center justify-end gap-1.5">
                         {EVAL_LABELS[key]}
@@ -765,7 +783,7 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
                         <td className="py-1.5 pr-3 max-w-[220px] truncate font-mono" title={checkpointLabel(result)}>
                           {checkpointLabel(result)}
                         </td>
-                        {EVAL_METRIC_KEYS.map((key) => {
+                        {displayKeys.map((key) => {
                           const state = metricState(result, key)
                           const value = metricValue(result, key)
                           const tone = stateTone(state, value)
@@ -798,7 +816,7 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
                       </tr>
                       {isOpen && job && (
                         <tr className="border-b border-subtle last:border-0">
-                          <td colSpan={EVAL_METRIC_KEYS.length + 2} className="py-1.5 pr-3">
+                          <td colSpan={displayKeys.length + 2} className="py-1.5 pr-3">
                             <div className="text-[11px] text-fg-tertiary mb-1 font-mono">
                               {job.kind} · job #{job.id} · {job.status}
                             </div>

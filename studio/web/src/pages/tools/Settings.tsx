@@ -244,6 +244,8 @@ const EMPTY: Secrets = {
   eval_metrics: {
     clip_model_name: 'openai/clip-vit-base-patch32',
     dino_model_name: 'facebook/dinov2-small',
+    ccip_model_name: 'ccip-caformer-24-randaug-pruned',
+    enabled_metrics: ['clip_t', 'clip_i', 'dino_i'],
     auto_eval_trigger: 'after_training',
   },
   download_source: 'huggingface',
@@ -972,6 +974,35 @@ export default function SettingsPage() {
           onModelIdChange={(id) => update('eval_metrics', 'dino_model_name', id)}
           t={t}
         />
+        <SettingsField
+          label={t('settings.evalMetricsEnabled')}
+          helpTooltip={<p>{t('settings.evalMetricsEnabledHelp')}</p>}
+        >
+          <div className="flex flex-col gap-1.5">
+            {(catalog?.eval_metric_catalog ?? []).map((m) => {
+              const on = (draft.eval_metrics.enabled_metrics ?? []).includes(m.key)
+              return (
+                <label key={m.key} className="flex items-start gap-2 text-xs cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    onChange={() => {
+                      const cur = draft.eval_metrics.enabled_metrics ?? []
+                      update('eval_metrics', 'enabled_metrics',
+                        on ? cur.filter((k) => k !== m.key) : [...cur, m.key])
+                    }}
+                    className="mt-0.5"
+                  />
+                  <span className="min-w-0">
+                    <span className="font-mono text-fg-primary">{m.label}</span>
+                    <span className="text-fg-tertiary"> — {m.desc}</span>
+                    {m.note ? <span className="text-warn"> · {m.note}</span> : null}
+                  </span>
+                </label>
+              )
+            })}
+          </div>
+        </SettingsField>
         <SettingsField
           label={t('settings.autoEvalTrigger')}
           helpTooltip={<p>{t('settings.autoEvalTriggerHelp')}</p>}

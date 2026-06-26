@@ -904,6 +904,10 @@ def test_build_catalog_includes_eval_metrics(
     assert cat["download_source_options"]["eval"] == {
         "current": "huggingface", "available": ["huggingface", "modelscope"]
     }
+    # 指标 registry（Settings 复选框列表）也随 catalog 暴露
+    keys = [m["key"] for m in cat["eval_metric_catalog"]]
+    assert keys == ["clip_t", "clip_i", "dino_i", "ccip_i", "tag_recall"]
+    assert all({"label", "default", "desc", "note"} <= set(m) for m in cat["eval_metric_catalog"])
 
 
 def test_trigger_eval_clip_dispatches_to_download(

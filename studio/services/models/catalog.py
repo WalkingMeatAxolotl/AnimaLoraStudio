@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ... import secrets
+from .. import eval_registry
 from .downloader import get_status_snapshot
 from .paths import (
     ANIMA_REPO,
@@ -284,6 +285,8 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
             "description": "CLIP / DINO，用于 LoRA 训练后指标评估",
             "variants": eval_variants,
         },
+        # 评估指标 registry（Settings 复选框列表用）：每个指标的 key/label/说明/默认。
+        "eval_metric_catalog": eval_registry.public_catalog(),
         "upscalers": {
             "id": "upscalers",
             "name": "放大器",
