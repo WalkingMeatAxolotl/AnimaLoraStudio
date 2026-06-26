@@ -4,7 +4,7 @@
  * Data source: GET /api/state?task_id=N 拉降采样快照 + SSE monitor_progress
  * 走 useMonitorProgress hook 做 delta merge（PR #37 增量协议）。
  */
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api, type EvalJobInfo, type EvalMetricResult, type EvalMetricState, type LoraCkpt, type MonitorState } from '../api/client'
 import { evalProgressFromResults } from '../lib/useEvalProgress'
 import { useEventStream } from '../lib/useEventStream'
@@ -396,6 +396,47 @@ function EvalJobLog({ jobId }: { jobId: number }) {
   )
 }
 
+// 统一评估日志：一个区域看所有评估 job 的原始日志（出图 + 各指标），默认跟随正在跑/
+// 失败的 job，可下拉切到具体 checkpoint —— 取代之前每行单独展开的分条日志。
+function EvalLogSection({ jobs, results }: { jobs: EvalJobInfo[]; results: EvalMetricResult[] }) {
+  const [pinnedId, setPinnedId] = useState<number | null>(null)
+  const active = useMemo(() => pickEvalJob(jobs), [jobs])
+  const shownId = pinnedId ?? active?.id ?? null
+  const labelByRun = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const r of results) m.set(r.run_id, r.baseline ? 'baseline' : checkpointLabel(r))
+    return m
+  }, [results])
+  if (jobs.length === 0) return null
+  const jobLabel = (j: EvalJobInfo) =>
+    `${j.run_id ? (labelByRun.get(j.run_id) ?? j.run_id) : '—'} · ${j.kind} · ${j.status}`
+  const ordered = jobs.slice().sort((a, b) => b.id - a.id)
+  return (
+    <div className="card p-3">
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <span className="inline-flex items-center gap-1.5 text-sm font-semibold">
+          评估日志
+          <InfoButton ariaLabel="评估日志说明">
+            <p>出图与各指标 job 的原始日志（含报错）。默认跟随正在跑 / 失败的 job，可下拉切换查看具体 checkpoint 的评估。</p>
+          </InfoButton>
+        </span>
+        <select
+          value={shownId ?? ''}
+          onChange={(e) => setPinnedId(e.target.value ? Number(e.target.value) : null)}
+          className="bg-sunken border border-subtle rounded-md px-2 py-1 text-[11px] font-mono max-w-[60%] truncate"
+        >
+          {ordered.map((j) => (
+            <option key={j.id} value={j.id}>{jobLabel(j)}</option>
+          ))}
+        </select>
+      </div>
+      {shownId != null
+        ? <EvalJobLog jobId={shownId} />
+        : <p className="text-fg-tertiary text-xs">暂无日志</p>}
+    </div>
+  )
+}
+
 export function EvalMetricsPanel({ state, connected, taskId }: {
   state: MonitorState | null
   connected: boolean
@@ -406,10 +447,8 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
   const [payload, setPayload] = useState<Awaited<ReturnType<typeof api.listEvalMetrics>> | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // 训练后/手动评估 job（取原始日志用）；inline 训练时评估无 job。
+  // 训练后/手动评估 job（统一日志区取原始日志用）。
   const [evalJobs, setEvalJobs] = useState<EvalJobInfo[]>([])
-  // 展开看原始日志的 checkpoint（run_id）集合
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
   const load = useCallback(async (quiet = false) => {
     if (!pid || !vid) return
@@ -432,18 +471,6 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
       }
     }
   }, [pid, vid, taskId])
-
-  const jobsByRun = useMemo(() => {
-    const m = new Map<string, EvalJobInfo[]>()
-    for (const j of evalJobs) {
-      const rid = j.run_id ?? ''
-      if (!rid) continue
-      const arr = m.get(rid) ?? []
-      arr.push(j)
-      m.set(rid, arr)
-    }
-    return m
-  }, [evalJobs])
 
   useEffect(() => {
     setPayload(null)
@@ -810,62 +837,32 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
               <tbody>
                 {displayResults.slice(-8).reverse().map((result) => {
                   const rowStatus = evalRowStatus(result)
-                  const jobs = jobsByRun.get(result.run_id) ?? []
-                  const job = pickEvalJob(jobs)
-                  const isOpen = expanded.has(result.run_id)
                   return (
-                    <Fragment key={result.run_id}>
-                      <tr className="border-b border-subtle last:border-0">
-                        <td className="py-1.5 pr-3 max-w-[220px] truncate font-mono" title={checkpointLabel(result)}>
-                          {checkpointLabel(result)}
-                        </td>
-                        {displayKeys.map((key) => {
-                          const state = metricState(result, key)
-                          const value = metricValue(result, key)
-                          const tone = stateTone(state, value)
-                          return (
-                            <td key={key} className={`py-1.5 px-2 text-right font-mono tabular-nums ${toneClass(tone)}`}>
-                              {formatEvalValue(value, state)}
-                            </td>
-                          )
-                        })}
-                        <td className="py-1.5 pl-3 text-right font-mono">
-                          <span className="inline-flex items-center justify-end gap-2">
-                            <span className={toneClass(rowStatus.tone)}>{rowStatus.text}</span>
-                            {job && (
-                              <button
-                                type="button"
-                                onClick={() => setExpanded((prev) => {
-                                  const n = new Set(prev)
-                                  if (n.has(result.run_id)) n.delete(result.run_id)
-                                  else n.add(result.run_id)
-                                  return n
-                                })}
-                                className="text-fg-tertiary hover:text-fg text-[11px] shrink-0"
-                                title="查看评估日志（含报错）"
-                              >
-                                {isOpen ? '▾' : '▸'} 日志
-                              </button>
-                            )}
-                          </span>
-                        </td>
-                      </tr>
-                      {isOpen && job && (
-                        <tr className="border-b border-subtle last:border-0">
-                          <td colSpan={displayKeys.length + 2} className="py-1.5 pr-3">
-                            <div className="text-[11px] text-fg-tertiary mb-1 font-mono">
-                              {job.kind} · job #{job.id} · {job.status}
-                            </div>
-                            <EvalJobLog jobId={job.id} />
+                    <tr key={result.run_id} className="border-b border-subtle last:border-0">
+                      <td className="py-1.5 pr-3 max-w-[220px] truncate font-mono" title={checkpointLabel(result)}>
+                        {checkpointLabel(result)}
+                      </td>
+                      {displayKeys.map((key) => {
+                        const state = metricState(result, key)
+                        const value = metricValue(result, key)
+                        const tone = stateTone(state, value)
+                        return (
+                          <td key={key} className={`py-1.5 px-2 text-right font-mono tabular-nums ${toneClass(tone)}`}>
+                            {formatEvalValue(value, state)}
                           </td>
-                        </tr>
-                      )}
-                    </Fragment>
+                        )
+                      })}
+                      <td className="py-1.5 pl-3 text-right font-mono">
+                        <span className={toneClass(rowStatus.tone)}>{rowStatus.text}</span>
+                      </td>
+                    </tr>
                   )
                 })}
               </tbody>
             </table>
           </div>
+          {/* 统一评估日志：一个抽屉看出图/各指标 job 的原始日志（含报错），不再逐行展开 */}
+          <EvalLogSection jobs={evalJobs} results={results} />
         </>
       )}
     </div>
