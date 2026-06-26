@@ -179,15 +179,9 @@ export default function CurationPage() {
 
   const versionId = activeVersion?.id ?? null
 
-  const refresh = useCallback(async () => {
+  const fetchTrain = useCallback(async () => {
     if (versionId == null) return
     try {
-      if (bucket === 'validation') {
-        const vv = await api.getCurationValidation(project.id, versionId)
-        setValView(vv)
-        setError(null)
-        return
-      }
       const v = await api.getCuration(project.id, versionId)
       setView(v)
       setError(null)
@@ -200,9 +194,41 @@ export default function CurationPage() {
     } catch (e) {
       setError(String(e))
     }
-  }, [project.id, versionId, rightFolder, bucket])
+  }, [project.id, versionId, rightFolder])
 
-  useEffect(() => { void refresh() }, [refresh])
+  const fetchValidation = useCallback(async () => {
+    if (versionId == null) return
+    try {
+      const vv = await api.getCurationValidation(project.id, versionId)
+      setValView(vv)
+      setError(null)
+    } catch (e) {
+      setError(String(e))
+    }
+  }, [project.id, versionId])
+
+  // 切换 bucket 只在目标视图没缓存时拉一次：左栏 download−train−validation 两个
+  // bucket 完全一致，纯来回切不该重拉、不该整页 loading（左栏用已有数据兜底）。
+  useEffect(() => {
+    if (versionId == null) return
+    if (bucket === 'validation') {
+      if (valView == null) void fetchValidation()
+    } else if (view == null) {
+      void fetchTrain()
+    }
+  }, [bucket, versionId, view, valView, fetchTrain, fetchValidation])
+
+  // 改动后刷新当前 bucket + 作废另一个的缓存：跨 bucket 增删会改共享的左栏候选
+  // 池 / 另一侧右栏，下次切过去自动重拉，保证不显示陈旧的左栏。
+  const refresh = useCallback(async () => {
+    if (bucket === 'validation') {
+      await fetchValidation()
+      setView(null)
+    } else {
+      await fetchTrain()
+      setValView(null)
+    }
+  }, [bucket, fetchTrain, fetchValidation])
 
   useEventStream((evt) => {
     if (
@@ -218,9 +244,10 @@ export default function CurationPage() {
   const isVal = bucket === 'validation'
   const folderNames = view?.folders ?? []
 
-  // 左栏候选 download − train − validation，两个 bucket 共用同一池
+  // 左栏候选 download − train − validation，两个 bucket 共用同一池 —— 目标视图
+  // 尚未加载时回退到另一视图的（内容相同的）左栏，切换时左栏不空屏、不闪。
   const currentLeft = useMemo(
-    () => (isVal ? valView?.left ?? [] : view?.left ?? []),
+    () => (isVal ? valView?.left ?? view?.left ?? [] : view?.left ?? valView?.left ?? []),
     [isVal, valView, view]
   )
   const leftSortedNames = useMemo(
@@ -327,11 +354,17 @@ export default function CurationPage() {
       </div>
     )
   }
-  if (isVal ? valView == null : view == null) {
+  // 整页 loading 只在首次（两个视图都没数据）出现；切换 bucket 时另一视图已有
+  // 数据，页面照常渲染，只有右栏在等自己那侧的数据。
+  if (view == null && valView == null) {
     return <p className="text-fg-tertiary p-6">{t('curate.loading')}</p>
   }
 
-  const downloadTotal = isVal ? valView?.download_total ?? 0 : view?.download_total ?? 0
+  // 当前 bucket 自己那侧的右栏数据是否还在加载（切到一个从没看过的 bucket 时）
+  const rightLoading = isVal ? valView == null : view == null
+  const downloadTotal = isVal
+    ? valView?.download_total ?? view?.download_total ?? 0
+    : view?.download_total ?? valView?.download_total ?? 0
 
   const switchBucket = (next: Bucket) => {
     if (next === bucket) return
@@ -761,11 +794,13 @@ export default function CurationPage() {
               clickMode="activate"
               ariaLabel={isVal ? 'validation-grid' : 'train-grid'}
               emptyHint={
-                isVal
-                  ? t('curate.valEmpty')
-                  : rightFolder
-                    ? t('curate.trainEmptyFolder', { folder: rightFolder })
-                    : t('curate.trainNoFolder')
+                rightLoading
+                  ? t('curate.loading')
+                  : isVal
+                    ? t('curate.valEmpty')
+                    : rightFolder
+                      ? t('curate.trainEmptyFolder', { folder: rightFolder })
+                      : t('curate.trainNoFolder')
               }
             />
           </div>
