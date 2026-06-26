@@ -168,8 +168,6 @@ export interface EvalMetricModelsConfig {
   enabled_metrics: string[]
   /** 训练后评估额外出一组纯底模(scale=0)对照，各指标给 Δ = checkpoint − baseline。 */
   eval_baseline_enabled: boolean
-  /** When auto eval runs (per-version enabled gates whether it runs at all). */
-  auto_eval_trigger: 'after_training' | 'checkpoint'
 }
 
 /** 评估指标 registry 条目（catalog.eval_metric_catalog）：Settings 复选框列表用。 */

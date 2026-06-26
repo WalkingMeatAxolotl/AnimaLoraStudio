@@ -73,7 +73,6 @@ type Section =
   | 'generate'
   | 'proxy'
 
-type AutoEvalTrigger = 'after_training' | 'checkpoint'
 
 type Tab = 'dataset' | 'tagging' | 'preprocess' | 'training' | 'monitor' | 'testing' | 'credentials' | 'appearance' | 'system'
 
@@ -247,7 +246,6 @@ const EMPTY: Secrets = {
     ccip_model_name: 'ccip-caformer-24-randaug-pruned',
     enabled_metrics: ['clip_t', 'clip_i', 'dino_i'],
     eval_baseline_enabled: true,
-    auto_eval_trigger: 'after_training',
   },
   download_source: 'huggingface',
   download_sources: {},
@@ -1024,19 +1022,6 @@ export default function SettingsPage() {
             />
             <span className="text-fg-secondary">{t('settings.evalBaselineToggle')}</span>
           </label>
-        </SettingsField>
-        <SettingsField
-          label={t('settings.autoEvalTrigger')}
-          helpTooltip={<p>{t('settings.autoEvalTriggerHelp')}</p>}
-        >
-          <select
-            value={draft.eval_metrics.auto_eval_trigger}
-            onChange={(e) => update('eval_metrics', 'auto_eval_trigger', e.target.value as AutoEvalTrigger)}
-            className={textInputClass}
-          >
-            <option value="after_training">{t('settings.autoEvalTriggerAfterTraining')}</option>
-            <option value="checkpoint">{t('settings.autoEvalTriggerCheckpoint')}</option>
-          </select>
         </SettingsField>
       </SettingsSection>
 

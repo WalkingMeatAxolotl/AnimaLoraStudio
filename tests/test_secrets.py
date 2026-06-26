@@ -83,19 +83,19 @@ def test_eval_metrics_defaults_and_persistence(secrets_file: Path) -> None:
     s = secrets.load()
     assert s.eval_metrics.clip_model_name == "openai/clip-vit-base-patch32"
     assert s.eval_metrics.dino_model_name == "facebook/dinov2-small"
-    assert s.eval_metrics.auto_eval_trigger == "after_training"
+    assert s.eval_metrics.eval_baseline_enabled is True
 
     secrets.update({
         "eval_metrics": {
             "clip_model_name": "/models/clip",
             "dino_model_name": "/models/dino",
-            "auto_eval_trigger": "checkpoint",
+            "eval_baseline_enabled": False,
         }
     })
     saved = secrets.load()
     assert saved.eval_metrics.clip_model_name == "/models/clip"
     assert saved.eval_metrics.dino_model_name == "/models/dino"
-    assert saved.eval_metrics.auto_eval_trigger == "checkpoint"
+    assert saved.eval_metrics.eval_baseline_enabled is False
 
 
 def test_llm_tagger_defaults(secrets_file: Path) -> None:

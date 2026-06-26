@@ -33,183 +33,6 @@ def _version_eval_enabled(project: dict[str, Any], version: dict[str, Any]) -> b
     return bool(cfg.get("eval_validation_enabled"))
 
 
-def queue_checkpoint_eval(
-    conn,
-    task: dict[str, Any],
-    payload: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    """Queue eval_samples for a saved LoRA checkpoint (checkpoint-trigger path).
-
-    Gated on the version's per-version opt-in (training config
-    ``eval_validation_enabled``) and the global ``auto_eval_trigger`` being
-    ``checkpoint``. This is the supervisor-side fallback for when inline eval
-    cannot run inside the training process (see ``run_checkpoint_eval_for_task``).
-    """
-    cfg = secrets.load().eval_metrics
-    if cfg.auto_eval_trigger != "checkpoint":
-        return None
-
-    project_id = int(task.get("project_id") or 0)
-    version_id = int(task.get("version_id") or 0)
-    if not project_id or not version_id:
-        return None
-
-    project = projects.get_project(conn, project_id)
-    version = versions.get_version(conn, version_id)
-    if not version or int(version["project_id"]) != project_id:
-        return None
-    if not project:
-        return None
-    if not _version_eval_enabled(project, version):
-        return None
-
-    checkpoint = _checkpoint_relative_to_output(
-        project_id,
-        str(project.get("slug") or ""),
-        version,
-        str(payload.get("checkpoint_path") or ""),
-    )
-    if not checkpoint:
-        return None
-
-    vdir = versions.version_dir(project_id, project["slug"], str(version["label"]))
-    task_id = int(task.get("id") or 0)
-    eval_root = task_eval_dir(task_id) if task_id else None
-    try:
-        job, run = eval_samples.start_job(
-            conn,
-            project,
-            version,
-            vdir,
-            checkpoint_path=checkpoint,
-            auto_metrics=True,
-            auto_source={
-                "task_id": int(task.get("id") or 0),
-                "epoch": payload.get("epoch"),
-                "step": payload.get("step"),
-                "trigger": payload.get("trigger"),
-            },
-            eval_root=eval_root,
-        )
-    except Exception:
-        logger.exception(
-            "auto eval sample enqueue failed for task=%s checkpoint=%s",
-            task.get("id"),
-            payload.get("checkpoint_path"),
-        )
-        return None
-
-    logger.info(
-        "queued auto eval_samples job=%s run=%s checkpoint=%s",
-        job.get("id"),
-        run.get("run_id"),
-        checkpoint,
-    )
-    return job, run
-
-
-def run_checkpoint_eval_for_task(
-    task_id: int,
-    payload: dict[str, Any],
-    *,
-    sample_generator: eval_samples.SampleGenerator | None = None,
-    clip_scorer: eval_clip.ClipScorer | None = None,
-    dino_scorer: eval_dino.DinoScorer | None = None,
-    on_progress: ProgressFn | None = None,
-) -> dict[str, Any] | None:
-    """Run checkpoint eval immediately from inside the training process.
-
-    This path is used for auto eval during training. It intentionally does not
-    create project_jobs, because the training task itself owns the GPU and must
-    wait for the eval result before continuing to the next epoch/step.
-
-    Gated on the version's per-version opt-in (training config
-    ``eval_validation_enabled``) and the global ``auto_eval_trigger`` being
-    ``checkpoint``. Returns ``None`` when not applicable so the caller may fall
-    back to the supervisor event path.
-    """
-    cfg = secrets.load().eval_metrics
-    if cfg.auto_eval_trigger != "checkpoint":
-        return None
-
-    progress = on_progress or (lambda _line: None)
-    with db.connection_for() as conn:
-        task = db.get_task(conn, int(task_id))
-        if not task:
-            return None
-        resolved = _resolve_task_checkpoint(conn, task, payload)
-        if resolved is None:
-            return None
-        project, version, vdir, checkpoint = resolved
-        if not _version_eval_enabled(project, version):
-            return None
-
-    auto_source = {
-        "task_id": int(task_id),
-        "epoch": payload.get("epoch"),
-        "step": payload.get("step"),
-        "trigger": payload.get("trigger"),
-        "inline": True,
-    }
-    eval_root = task_eval_dir(int(task_id))
-    progress(
-        f"[eval-auto] start checkpoint={checkpoint} "
-        f"epoch={payload.get('epoch')} step={payload.get('step')}"
-    )
-    run = eval_samples.create_run(
-        project,
-        version,
-        vdir,
-        checkpoint_path=checkpoint,
-        auto_metrics=True,
-        auto_source=auto_source,
-        eval_root=eval_root,
-    )
-
-    sample_result = eval_samples.run_sample_job(
-        project,
-        version,
-        vdir,
-        str(run["run_id"]),
-        generator=sample_generator,
-        on_progress=progress,
-        eval_root=eval_root,
-    )
-    results: dict[str, Any] = {"run": sample_result, "metrics": {}}
-    if sample_result.get("status") != "done":
-        progress(f"[eval-auto] sample status={sample_result.get('status')}")
-        return results
-
-    # 只跑「Settings 勾选的指标」对应的 runner（registry 决定）；clip/dino 先接进来，
-    # 全启用时与原行为一致。ccip/tag runner 后续接入这张表。
-    inline_runners = {
-        "clip": (eval_clip.run_clip_job, cfg.clip_model_name, clip_scorer),
-        "dino": (eval_dino.run_dino_job, cfg.dino_model_name, dino_scorer),
-        "tag": (eval_tag.run_tag_job, eval_tag.DEFAULT_MODEL_NAME, None),
-        "ccip": (eval_ccip.run_ccip_job, cfg.ccip_model_name, None),
-    }
-    for runner_key in eval_registry.enabled_runners(cfg.enabled_metrics):
-        spec = inline_runners.get(runner_key)
-        if spec is None:
-            continue
-        run_fn, model_name, scorer = spec
-        try:
-            results["metrics"][runner_key] = run_fn(
-                project,
-                version,
-                vdir,
-                str(run["run_id"]),
-                model_name=model_name,
-                scorer=scorer,
-                on_progress=progress,
-                eval_root=eval_root,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("inline auto eval %s failed for run=%s", runner_key, run["run_id"])
-            progress(f"[eval-auto] {runner_key} failed: {exc}")
-    return results
-
-
 def queue_training_finished_eval(
     conn,
     task: dict[str, Any],
@@ -218,13 +41,9 @@ def queue_training_finished_eval(
     """Queue eval sample jobs for all saved LoRA checkpoints after training.
 
     Gated on the version's per-version opt-in (training config
-    ``eval_validation_enabled``) and the global ``auto_eval_trigger`` being
-    ``after_training``; the held-out validation set is the reference.
+    ``eval_validation_enabled``); the held-out validation set is the reference.
+    评估统一在训练后跑（inline / checkpoint-trigger 已移除）。
     """
-    cfg = secrets.load().eval_metrics
-    if cfg.auto_eval_trigger != "after_training":
-        return []
-
     project_id = int(task.get("project_id") or 0)
     version_id = int(task.get("version_id") or 0)
     if not project_id or not version_id:
@@ -342,9 +161,9 @@ def queue_manual_task_eval(
 ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
     """Queue task-scoped eval sample+metric jobs for an explicit checkpoint set.
 
-    Unlike :func:`queue_training_finished_eval` / :func:`queue_checkpoint_eval`,
-    this is the *manual* entry point (a user clicking "运行评估" on a finished
-    task), so it does NOT gate on the per-version opt-in or ``auto_eval_trigger``.
+    Unlike :func:`queue_training_finished_eval`, this is the *manual* entry point
+    (a user clicking "运行评估" on a finished task), so it does NOT gate on the
+    per-version opt-in.
     It evaluates the full validation set and reuses the Settings metric models,
     writing under ``tasks/<id>/eval/`` so results show up in that task's eval page.
     """
