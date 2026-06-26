@@ -940,39 +940,16 @@ export default function SettingsPage() {
           opt={catalog?.download_source_options?.eval}
           onChange={(s) => void setDownloadSource('eval', s)}
         />
-        {([
-          { kind: 'clip', dlId: 'eval_clip', label: 'evalClipModel', help: 'evalClipModelHelp',
-            val: draft.eval_metrics.clip_model_name,
-            set: (id: string) => update('eval_metrics', 'clip_model_name', id) },
-          { kind: 'dino', dlId: 'eval_dino', label: 'evalDinoModel', help: 'evalDinoModelHelp',
-            val: draft.eval_metrics.dino_model_name,
-            set: (id: string) => update('eval_metrics', 'dino_model_name', id) },
-        ] as const).map((row) => {
-          const variant = catalog?.eval_metrics?.variants.find((x) => x.kind === row.kind)
-          const key = `${row.dlId}:${row.val}`
-          const dl = catalog?.downloads[key]
-          const exists = variant?.model_id === row.val ? !!variant?.exists : false
-          return (
-            <SettingsField
-              key={row.kind}
-              label={t(`settings.${row.label}`)}
-              helpTooltip={<p>{t(`settings.${row.help}`)}</p>}
-            >
-              <div className="flex items-center gap-2">
-                <input
-                  value={row.val}
-                  onChange={(e) => row.set(e.target.value)}
-                  className={`${textInputClass} flex-1 min-w-0`}
-                />
-                <ModelStatusBadge exists={exists} size={variant?.size ?? 0} status={dl?.status} />
-                <DownloadButton
-                  exists={exists} status={dl?.status} busy={downloadBusy.has(key)}
-                  onClick={() => void startDownload(row.dlId, row.val)}
-                />
-              </div>
-            </SettingsField>
-          )
-        })}
+        <EvalMetricsModelCard
+          catalog={catalog}
+          busy={downloadBusy}
+          start={startDownload}
+          clipModelId={draft.eval_metrics.clip_model_name}
+          dinoModelId={draft.eval_metrics.dino_model_name}
+          onClipChange={(id) => update('eval_metrics', 'clip_model_name', id)}
+          onDinoChange={(id) => update('eval_metrics', 'dino_model_name', id)}
+          t={t}
+        />
       </SettingsSection>
 
       <SettingsSection id="queue" title={t('settings.queueSchedule')}>
@@ -1715,6 +1692,63 @@ function WD14ModelCard({
         />
       )}
     </ModelGroupCard>
+  )
+}
+
+function EvalMetricsModelCard({
+  catalog, busy, start,
+  clipModelId, dinoModelId, onClipChange, onDinoChange, t,
+}: {
+  catalog: ModelsCatalog | null
+  busy: Set<string>
+  start: (model_id: string, variant?: string) => Promise<void>
+  clipModelId: string
+  dinoModelId: string
+  onClipChange: (id: string) => void
+  onDinoChange: (id: string) => void
+  t: TFunction
+}) {
+  const em = catalog?.eval_metrics
+  if (!em) {
+    return <p className="text-fg-tertiary text-xs">{t('settings.loadingModelCatalog')}</p>
+  }
+  const rows = [
+    { kind: 'clip' as const, dlId: 'eval_clip', labelKey: 'evalClipModel', helpKey: 'evalClipModelHelp',
+      val: clipModelId, onChange: onClipChange },
+    { kind: 'dino' as const, dlId: 'eval_dino', labelKey: 'evalDinoModel', helpKey: 'evalDinoModelHelp',
+      val: dinoModelId, onChange: onDinoChange },
+  ]
+  return (
+    <div className="flex flex-col gap-2">
+      {rows.map((row) => {
+        const variant = em.variants.find((x) => x.kind === row.kind)
+        const key = `${row.dlId}:${row.val}`
+        const dl = catalog.downloads[key]
+        // catalog 的 exists 按已保存的 model_id 算；草稿改了未保存时按未下载显示。
+        const exists = variant?.model_id === row.val ? !!variant?.exists : false
+        return (
+          <ModelGroupCard
+            key={row.kind}
+            title={t(`settings.${row.labelKey}`)}
+            helpTooltip={<p>{t(`settings.${row.helpKey}`)}</p>}
+          >
+            <div className="flex items-center gap-2">
+              <input
+                value={row.val}
+                onChange={(e) => row.onChange(e.target.value)}
+                placeholder={t('settings.addHfModelId')}
+                className={`${textInputClass} font-mono flex-1 min-w-0`}
+              />
+              <ModelStatusBadge exists={exists} size={variant?.size ?? 0} status={dl?.status} />
+              <DownloadButton
+                exists={exists} status={dl?.status} busy={busy.has(key)}
+                onClick={() => void start(row.dlId, row.val)}
+              />
+            </div>
+          </ModelGroupCard>
+        )
+      })}
+    </div>
   )
 }
 
