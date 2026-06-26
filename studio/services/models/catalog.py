@@ -29,6 +29,7 @@ from .paths import (
     WD14_FILES,
     anima_main_target,
     anima_vae_target,
+    ccip_model_dir,
     cltagger_required_files,
     cltagger_target_root,
     eval_model_target_dir,
@@ -57,7 +58,13 @@ _EVAL_SIZE_ESTIMATES = {
     "facebook/dinov2-base": 346_000_000,
     "facebook/dinov2-large": 1_220_000_000,
     "facebook/dinov2-giant": 4_600_000_000,
+    # CCIP（deepghs/ccip_onnx 变体）：只下 model_feat.onnx(~150MB)+metric+threshold。
+    "ccip-caformer-24-randaug-pruned": 152_000_000,
+    "ccip-caformer_b36-24": 384_000_000,
 }
+
+# CCIP 变体的 3 个必备文件（齐全才算已下载）。
+_CCIP_FILES = ("model_feat.onnx", "model_metrics.onnx", "metrics.json")
 
 
 def _file_status(p: Path) -> dict[str, Any]:
@@ -124,6 +131,20 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
             "size": size,
             "size_estimate": _EVAL_SIZE_ESTIMATES.get(mid, 0),
         })
+    # CCIP（anime 角色身份）：3 个文件齐全才算已下载（无 config.json）。
+    ccip_mid = eval_cfg.ccip_model_name
+    ccip_dir = ccip_model_dir(r, ccip_mid)
+    eval_variants.append({
+        "kind": "ccip",
+        "model_id": ccip_mid,
+        "target_path": str(ccip_dir),
+        "exists": all((ccip_dir / f).exists() for f in _CCIP_FILES),
+        "size": (
+            sum(f.stat().st_size for f in ccip_dir.rglob("*") if f.is_file())
+            if ccip_dir.exists() else 0
+        ),
+        "size_estimate": _EVAL_SIZE_ESTIMATES.get(ccip_mid, 0),
+    })
 
     # WD14 候选每个 model_id 一行：两文件全在才算"已下载"。
     wd14_variants = []

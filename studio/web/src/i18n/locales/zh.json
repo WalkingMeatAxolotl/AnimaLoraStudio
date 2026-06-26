@@ -866,6 +866,8 @@
     "evalClipModelHelp": "用于 CLIP-T / CLIP-I 的默认模型名或本地目录。服务器无法访问 HuggingFace 时，填写 ModelScope 下载后的 CLIPModel 目录。",
     "evalDinoModel": "DINO 模型",
     "evalDinoModelHelp": "用于 DINO-I 的默认模型名或本地目录。服务器无法访问 HuggingFace 时，可填写 ModelScope 下载后的本地路径。",
+    "evalCcipModel": "CCIP 模型",
+    "evalCcipModelHelp": "用于 CCIP-I（anime 角色身份）的 ONNX 变体名（deepghs/ccip_onnx）。只下该变体的 3 个文件（feat + metric + threshold），不是整库。评估时缺失会自动下载，也可在此预先下载。",
     "queueSchedule": "队列调度",
     "torch": "PyTorch",
     "flashAttn": "Flash Attention",

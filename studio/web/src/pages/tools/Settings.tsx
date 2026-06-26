@@ -974,6 +974,14 @@ export default function SettingsPage() {
           onModelIdChange={(id) => update('eval_metrics', 'dino_model_name', id)}
           t={t}
         />
+        <EvalMetricModelCard
+          catalog={catalog} busy={downloadBusy} start={startDownload}
+          kind="ccip" dlId="eval_ccip"
+          titleKey="settings.evalCcipModel" helpKey="settings.evalCcipModelHelp"
+          modelId={draft.eval_metrics.ccip_model_name}
+          onModelIdChange={(id) => update('eval_metrics', 'ccip_model_name', id)}
+          t={t}
+        />
         <SettingsField
           label={t('settings.evalMetricsEnabled')}
           helpTooltip={<p>{t('settings.evalMetricsEnabledHelp')}</p>}
@@ -1738,8 +1746,8 @@ function EvalMetricModelCard({
   catalog: ModelsCatalog | null
   busy: Set<string>
   start: (model_id: string, variant?: string) => Promise<void>
-  kind: 'clip' | 'dino'
-  dlId: 'eval_clip' | 'eval_dino'
+  kind: 'clip' | 'dino' | 'ccip'
+  dlId: 'eval_clip' | 'eval_dino' | 'eval_ccip'
   titleKey: string
   helpKey: string
   modelId: string

@@ -544,6 +544,14 @@ def trigger(model_id: str, variant: Optional[str] = None) -> str:
             key, lambda log: download_eval_model(kind, variant, root, on_log=log)
         )
         return key
+    if model_id == "eval_ccip":
+        if not variant:
+            raise ValueError("eval_ccip 需要 variant=ccip 变体名")
+        key = f"eval_ccip:{variant}"
+        start_download_async(
+            key, lambda log: download_ccip_model(variant, root, on_log=log)
+        )
+        return key
     if model_id == "upscaler":
         label = variant or DEFAULT_UPSCALER
         if label not in UPSCALER_VARIANTS:
