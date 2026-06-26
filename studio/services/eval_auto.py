@@ -75,7 +75,6 @@ def queue_checkpoint_eval(
             version,
             vdir,
             checkpoint_path=checkpoint,
-            max_items=cfg.auto_eval_max_items,
             auto_metrics=True,
             auto_source={
                 "task_id": int(task.get("id") or 0),
@@ -155,7 +154,6 @@ def run_checkpoint_eval_for_task(
         version,
         vdir,
         checkpoint_path=checkpoint,
-        max_items=cfg.auto_eval_max_items,
         auto_metrics=True,
         auto_source=auto_source,
         eval_root=eval_root,
@@ -244,7 +242,6 @@ def queue_training_finished_eval(
                 version,
                 vdir,
                 checkpoint_path=rel,
-                max_items=cfg.auto_eval_max_items,
                 auto_metrics=True,
                 auto_source={
                     "task_id": int(task.get("id") or 0),
@@ -275,20 +272,15 @@ def queue_manual_task_eval(
     conn,
     task: dict[str, Any],
     checkpoints: list[str],
-    *,
-    max_items: int | None = None,
 ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
     """Queue task-scoped eval sample+metric jobs for an explicit checkpoint set.
 
     Unlike :func:`queue_training_finished_eval` / :func:`queue_checkpoint_eval`,
     this is the *manual* entry point (a user clicking "运行评估" on a finished
     task), so it does NOT gate on the per-version opt-in or ``auto_eval_trigger``.
-    It still reuses the Settings defaults for sample count and metric models, and
-    writes under ``tasks/<id>/eval/`` so results show up in that task's eval page.
+    It evaluates the full validation set and reuses the Settings metric models,
+    writing under ``tasks/<id>/eval/`` so results show up in that task's eval page.
     """
-    cfg = secrets.load().eval_metrics
-    items = max_items if max_items is not None else cfg.auto_eval_max_items
-
     project_id = int(task.get("project_id") or 0)
     version_id = int(task.get("version_id") or 0)
     task_id = int(task.get("id") or 0)
@@ -318,7 +310,6 @@ def queue_manual_task_eval(
                 version,
                 vdir,
                 checkpoint_path=rel,
-                max_items=items,
                 auto_metrics=True,
                 auto_source={"task_id": task_id, "trigger": "manual"},
                 eval_root=eval_root,

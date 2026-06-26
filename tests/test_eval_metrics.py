@@ -63,7 +63,6 @@ def _sample_run(
         version,
         vdir,
         checkpoint_path="model_step100.safetensors",
-        max_items=1,
         eval_root=eval_root,
         now=2000.0,
     )

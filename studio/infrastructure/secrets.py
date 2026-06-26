@@ -118,12 +118,6 @@ class EvalMetricModelsConfig(BaseModel):
     # 评估时机（全局）。是否评估由每个 version 训练配置的 eval_validation_enabled
     # 决定；启用后，这里选何时评：训练全部结束后批量评 / 训练中每存一个 LoRA 就评。
     auto_eval_trigger: Literal["after_training", "checkpoint"] = "after_training"
-    auto_eval_max_items: int = 1
-
-    @model_validator(mode="after")
-    def _normalize_eval_metrics(self):
-        self.auto_eval_max_items = max(1, min(256, int(self.auto_eval_max_items or 1)))
-        return self
 
 
 class DownloadConfig(BaseModel):

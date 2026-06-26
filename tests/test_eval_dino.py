@@ -72,7 +72,6 @@ def _sample_run(
         version,
         vdir,
         checkpoint_path="model_step100.safetensors",
-        max_items=1,
         now=2000.0,
     )
     return eval_samples.run_sample_job(

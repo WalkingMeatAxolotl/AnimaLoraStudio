@@ -69,7 +69,7 @@ def run_task_eval_endpoint(
             raise HTTPException(400, "task 不属于该 project/version")
         try:
             queued = eval_auto.queue_manual_task_eval(
-                conn, task, list(body.checkpoints), max_items=body.max_items
+                conn, task, list(body.checkpoints)
             )
         except eval_samples.EvalSamplesError as exc:
             raise HTTPException(400, str(exc)) from exc

@@ -83,14 +83,14 @@ def test_create_and_run_eval_samples_with_fake_generator(isolated) -> None:
         version,
         vdir,
         checkpoint_path="model_step100.safetensors",
-        max_items=1,
         now=2000.0,
     )
     assert run["status"] == "pending"
     assert run["checkpoint"]["path"] == "output/model_step100.safetensors"
+    # validation set has 2 images → whole set evaluated, no max_items cap
     assert run["summary"] == {
-        "total": 1,
-        "pending": 1,
+        "total": 2,
+        "pending": 2,
         "running": 0,
         "done": 0,
         "failed": 0,
@@ -105,7 +105,7 @@ def test_create_and_run_eval_samples_with_fake_generator(isolated) -> None:
     )
 
     assert finished["status"] == "done"
-    assert finished["summary"]["done"] == 1
+    assert finished["summary"]["done"] == 2
     item = finished["items"][0]
     assert item["status"] == "done"
     assert item["prompt"] == "solo, red hair"
@@ -130,7 +130,6 @@ def test_default_generator_path_has_no_dead_schema_import(isolated) -> None:
         version,
         vdir,
         checkpoint_path="model_step100.safetensors",
-        max_items=1,
         now=2000.0,
     )
 
@@ -154,7 +153,6 @@ def test_start_job_creates_project_job_and_run(isolated) -> None:
             version,
             vdir,
             checkpoint_path="model_step100.safetensors",
-            max_items=2,
         )
 
     assert job["kind"] == "eval_samples"
@@ -176,7 +174,6 @@ def test_eval_samples_can_store_runs_under_task_eval_root(isolated) -> None:
         version,
         vdir,
         checkpoint_path="model_step100.safetensors",
-        max_items=1,
         eval_root=eval_root,
         now=2000.0,
     )
@@ -221,7 +218,7 @@ def test_eval_samples_http_run_list_get_and_image(client: TestClient, isolated) 
 
     created = client.post(
         f"/api/projects/{pid}/versions/{vid}/eval/run",
-        json={"task_id": tid, "checkpoints": [str(ckpt)], "max_items": 1},
+        json={"task_id": tid, "checkpoints": [str(ckpt)]},
     )
     assert created.status_code == 200, created.text
     body = created.json()

@@ -86,7 +86,6 @@ def test_queue_checkpoint_eval_respects_switch(isolated) -> None:
     secrets.update({
         "eval_metrics": {
             "auto_eval_trigger": "checkpoint",
-            "auto_eval_max_items": 1,
         }
     })
     with db.connection_for(isolated["db"]) as conn:
@@ -249,7 +248,6 @@ def test_after_training_eval_queues_all_checkpoints_by_default(isolated) -> None
         "epoch": 4,
         "step": 40,
     }
-    secrets.update({"eval_metrics": {"auto_eval_max_items": 1}})
 
     with db.connection_for(isolated["db"]) as conn:
         assert eval_auto.queue_checkpoint_eval(conn, task, payload) is None
@@ -322,7 +320,6 @@ def test_run_checkpoint_eval_for_task_runs_inline_without_queue_jobs(isolated) -
     secrets.update({
         "eval_metrics": {
             "auto_eval_trigger": "checkpoint",
-            "auto_eval_max_items": 1,
             "clip_model_name": "/models/clip",
             "dino_model_name": "/models/dino",
         }
@@ -379,7 +376,7 @@ def test_run_checkpoint_eval_skips_when_version_not_enabled(isolated) -> None:
     """checkpoint 时机的 inline 评估仍受 per-version 训练后评估开关门控。"""
     project, version, vdir = _project_version(isolated)
     secrets.update({
-        "eval_metrics": {"auto_eval_trigger": "checkpoint", "auto_eval_max_items": 1}
+        "eval_metrics": {"auto_eval_trigger": "checkpoint"}
     })
     with db.connection_for(isolated["db"]) as conn:
         tid = db.create_task(conn, name="train", config_name="fake")
@@ -413,7 +410,6 @@ def test_training_inline_generator_updates_task_scoped_run(isolated, monkeypatch
         _version,
         vdir,
         checkpoint_path="model_epoch2.safetensors",
-        max_items=1,
         eval_root=eval_root,
         now=2000.0,
     )
@@ -463,7 +459,6 @@ def test_supervisor_eval_checkpoint_event_queues_sample_job(isolated) -> None:
     secrets.update({
         "eval_metrics": {
             "auto_eval_trigger": "checkpoint",
-            "auto_eval_max_items": 1,
         }
     })
     with db.connection_for(isolated["db"]) as conn:
@@ -504,7 +499,6 @@ def test_supervisor_eval_training_finished_queues_after_task_done(isolated) -> N
 
     project, version, _vdir = _project_version(isolated)
     _enable_validation(project, version)
-    secrets.update({"eval_metrics": {"auto_eval_max_items": 1}})
     with db.connection_for(isolated["db"]) as conn:
         tid = db.create_task(conn, name="train", config_name="fake")
         db.update_task(
@@ -539,3 +533,23 @@ def test_supervisor_eval_training_finished_queues_after_task_done(isolated) -> N
     assert jobs[0]["params_decoded"]["task_id"] == tid
     queued = [e for e in events if e["type"] == "eval_auto_after_training_queued"]
     assert queued and queued[0]["count"] == 1
+
+
+def test_eval_runs_full_validation_set_no_cap(isolated) -> None:
+    """评估覆盖整个 validation set（无 max_items 截断）：每张图一个 item、各带 reference。"""
+    project, version, vdir = _project_version(isolated)
+    val = vdir / "validation" / "1_data"
+    val.mkdir(parents=True, exist_ok=True)
+    for i in range(3):
+        (val / f"v{i}.png").write_bytes(b"png")
+        (val / f"v{i}.txt").write_text("solo", encoding="utf-8")
+
+    run = eval_samples.create_run(
+        project,
+        version,
+        vdir,
+        checkpoint_path=str(vdir / "output" / "model_epoch2.safetensors"),
+    )
+
+    assert run["summary"]["total"] == 3
+    assert all(item["reference_image"] for item in run["items"])

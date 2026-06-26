@@ -41,7 +41,6 @@ class EvalRunRequest(BaseModel):
     """Manual eval trigger for a finished task over an explicit checkpoint set."""
     task_id: int
     checkpoints: list[str]
-    max_items: Optional[int] = None
 
 
 class EvalClipStart(BaseModel):

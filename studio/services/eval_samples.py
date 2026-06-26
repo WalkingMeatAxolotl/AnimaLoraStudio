@@ -32,8 +32,6 @@ JOB_KIND = "eval_samples"
 RUNS_DIRNAME = "samples"
 RUN_FILE = "run.json"
 IMAGES_DIRNAME = "images"
-DEFAULT_MAX_ITEMS = 64
-MAX_ITEMS_LIMIT = 256
 
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _IMAGE_EXT = ".png"
@@ -89,14 +87,6 @@ def _now_run_id(now: float, checkpoint: dict[str, Any]) -> str:
         suffix = f"{suffix}{value}"
     base = f"run-{stamp}-{suffix}"
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", base).strip("-")
-
-
-def _clamp_max_items(value: Any) -> int:
-    try:
-        n = int(value)
-    except (TypeError, ValueError):
-        n = DEFAULT_MAX_ITEMS
-    return max(1, min(MAX_ITEMS_LIMIT, n))
 
 
 def _rel_to_version(version_dir: Path, path: Path) -> str:
@@ -223,21 +213,21 @@ def _config_prompts(cfg: dict[str, Any]) -> list[str]:
 
 
 def _planned_items(
-    version_dir: Path, cfg: dict[str, Any], gen_seed: int, max_items: int
+    version_dir: Path, cfg: dict[str, Any], gen_seed: int
 ) -> list[dict[str, Any]]:
     """Build sample items from the held-out validation set.
 
     Each validation image → one item whose prompt is its caption and whose
     ``reference_image`` is the image (rel to version dir) for CLIP-I / DINO-I.
-    When ``validation/`` is empty, fall back to the config's sample prompts with
-    no reference (CLIP-T only).
+    The **entire** validation set is evaluated — its size is the eval scope, set
+    via the training config's ``eval_validation_split_ratio``. When ``validation/``
+    is empty, fall back to the config's sample prompts with no reference (CLIP-T
+    only).
     """
     items: list[dict[str, Any]] = []
     val_images = list(eval_validation.iter_images(eval_validation.validation_dir(version_dir)))
     if val_images:
         for folder_name, image in val_images:
-            if len(items) >= max_items:
-                break
             rel = _rel_to_version(version_dir, image)
             prompt = _caption_text(image) or DEFAULT_SAMPLE_PROMPT
             idx = len(items)
@@ -256,8 +246,6 @@ def _planned_items(
         return items
 
     for idx, prompt in enumerate(_config_prompts(cfg)):
-        if len(items) >= max_items:
-            break
         items.append({
             "id": f"prompt:{idx}:{gen_seed}",
             "prompt_id": f"prompt:{idx}",
@@ -332,7 +320,6 @@ def create_run(
     version_dir: Path,
     *,
     checkpoint_path: str | None = None,
-    max_items: int | None = None,
     auto_metrics: bool = False,
     auto_source: dict[str, Any] | None = None,
     eval_root: Path | None = None,
@@ -342,9 +329,7 @@ def create_run(
     cfg = _read_config(project, version)
     generation = _generation_from_cfg(cfg)
     checkpoint = _resolve_checkpoint(version_dir, checkpoint_path)
-    items = _planned_items(
-        version_dir, cfg, int(generation["seed"]), _clamp_max_items(max_items)
-    )
+    items = _planned_items(version_dir, cfg, int(generation["seed"]))
     if not items:
         raise EvalSamplesError("没有可评估的样本：validation/ 为空且未配置 sample prompt")
     base_run_id = _now_run_id(ts, checkpoint)
@@ -396,7 +381,6 @@ def start_job(
     version_dir: Path,
     *,
     checkpoint_path: str | None = None,
-    max_items: int | None = None,
     auto_metrics: bool = False,
     auto_source: dict[str, Any] | None = None,
     eval_root: Path | None = None,
@@ -406,7 +390,6 @@ def start_job(
         version,
         version_dir,
         checkpoint_path=checkpoint_path,
-        max_items=max_items,
         auto_metrics=auto_metrics,
         auto_source=auto_source,
         eval_root=eval_root,

@@ -164,8 +164,6 @@ export interface EvalMetricModelsConfig {
   dino_model_name: string
   /** When auto eval runs (per-version enabled gates whether it runs at all). */
   auto_eval_trigger: 'after_training' | 'checkpoint'
-  /** Cap generated eval samples per automatically queued checkpoint. */
-  auto_eval_max_items: number
 }
 
 export interface EvalMetricSpec {
@@ -2743,7 +2741,7 @@ export const api = {
   runTaskEval: (
     pid: number,
     vid: number,
-    body: { task_id: number; checkpoints: string[]; max_items?: number },
+    body: { task_id: number; checkpoints: string[] },
   ) =>
     req<{ queued: number }>(
       `/api/projects/${pid}/versions/${vid}/eval/run`,

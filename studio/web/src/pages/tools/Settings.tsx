@@ -245,7 +245,6 @@ const EMPTY: Secrets = {
     clip_model_name: 'openai/clip-vit-base-patch32',
     dino_model_name: 'facebook/dinov2-small',
     auto_eval_trigger: 'after_training',
-    auto_eval_max_items: 1,
   },
   download_source: 'huggingface',
   download_sources: {},
@@ -936,19 +935,6 @@ export default function SettingsPage() {
             <option value="after_training">{t('settings.autoEvalTriggerAfterTraining')}</option>
             <option value="checkpoint">{t('settings.autoEvalTriggerCheckpoint')}</option>
           </select>
-        </SettingsField>
-        <SettingsField
-          label={t('settings.autoEvalMaxItems')}
-          helpTooltip={<p>{t('settings.autoEvalMaxItemsHelp')}</p>}
-        >
-          <input
-            type="number"
-            min={1}
-            max={256}
-            value={draft.eval_metrics.auto_eval_max_items}
-            onChange={(e) => update('eval_metrics', 'auto_eval_max_items', Math.max(1, Math.min(256, parseInt(e.target.value) || 1)))}
-            className={textInputClass}
-          />
         </SettingsField>
         <SettingsField
           label={t('settings.evalClipModel')}
