@@ -11,6 +11,7 @@ import { PauseProgressModal } from '../components/PauseProgressModal'
 import { useDialog } from '../components/Dialog'
 import { useToast } from '../components/Toast'
 import { useEventStream } from '../lib/useEventStream'
+import { useTaskEvalProgress } from '../lib/useEvalProgress'
 import MonitorDashboard, { EvalMetricsPanel } from '../components/MonitorDashboard'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
 
@@ -169,6 +170,12 @@ export default function QueueDetailPage() {
     return () => window.clearInterval(tick)
   }, [task?.status])
 
+  // 训练结束后评估可见性：task done 后评估作为独立 jobs 在跑（出图 + CLIP/DINO），
+  // 这里轮询出「评估中 done/total」，header 跨 tab 常驻显示。
+  const evalProgress = useTaskEvalProgress(
+    task?.project_id, task?.version_id, taskId, task?.status === 'done',
+  )
+
   if (!Number.isFinite(taskId)) return <p className="text-err">{t('queueDetail.invalidId')}</p>
 
   const status = task?.status
@@ -266,6 +273,12 @@ export default function QueueDetailPage() {
             <span className={STATUS_BADGE[status]}>
               {status === 'running' && <span className="dot dot-running" />}
               {STATUS_LABEL[status]}
+            </span>
+          )}
+          {evalProgress?.active && (
+            <span className="badge badge-accent" title={t('eval.evaluatingHint')}>
+              <span className="dot dot-running" />
+              {t('eval.evaluatingProgress', { done: evalProgress.done, total: evalProgress.total })}
             </span>
           )}
           <span className="flex-1" />

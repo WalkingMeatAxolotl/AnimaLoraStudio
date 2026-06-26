@@ -6,6 +6,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api, type EvalMetricResult, type EvalMetricState, type LoraCkpt, type MonitorState } from '../api/client'
+import { evalProgressFromResults } from '../lib/useEvalProgress'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
 import { InfoButton } from './InfoButton'
 import ImagePreviewModal from './ImagePreviewModal'
@@ -394,6 +395,9 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
     )
   }, [results])
 
+  // 训练结束后评估进度：复用现有 results 聚合「评估中 done/total」，给面板头部用
+  const evalAgg = useMemo(() => evalProgressFromResults(results), [results])
+
   useEffect(() => {
     if (!pid || !vid) return
     if (!connected && !hasActiveMetric) return
@@ -509,6 +513,15 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
           </div>
         </div>
         <span className="flex-1" />
+        {evalAgg.active && (
+          <span
+            className="badge badge-accent text-xs"
+            title="训练结束后正在用验证集对各 checkpoint 算指标（出图 + CLIP / DINO），完成后消失"
+          >
+            <span className="dot dot-running" />
+            评估中 {evalAgg.done}/{evalAgg.total}
+          </span>
+        )}
         {loading && <span className="text-xs text-fg-tertiary">读取中…</span>}
         {taskId != null && (
           <button

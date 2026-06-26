@@ -643,6 +643,10 @@
     "edited": "已保存「{{title}}」",
     "editSlugNote": "slug 与输出名固定不变"
   },
+  "eval": {
+    "evaluatingProgress": "评估中 {{done}}/{{total}}",
+    "evaluatingHint": "训练已结束，正在用验证集对各 checkpoint 算指标（出图 + CLIP / DINO），完成后这里消失。明细看任务详情的「评估」tab。"
+  },
   "queue": {
     "title": "队列",
     "description": "同一时刻仅运行一个任务 · 完成后自动启动下一个",

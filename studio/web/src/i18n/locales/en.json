@@ -643,6 +643,10 @@
     "edited": "Saved \"{{title}}\"",
     "editSlugNote": "slug and output name stay fixed"
   },
+  "eval": {
+    "evaluatingProgress": "Evaluating {{done}}/{{total}}",
+    "evaluatingHint": "Training finished; metrics are being computed against the validation set for each checkpoint (sampling + CLIP / DINO). This disappears when done. See the Eval tab in task detail for details."
+  },
   "queue": {
     "title": "Queue",
     "description": "One task at a time · Auto-start next on completion",

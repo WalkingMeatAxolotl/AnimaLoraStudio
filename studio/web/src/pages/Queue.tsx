@@ -10,6 +10,7 @@ import { useDialog } from '../components/Dialog'
 import { useToast } from '../components/Toast'
 import { useEventStream } from '../lib/useEventStream'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
+import { useEvaluatingTasks } from '../lib/useEvalProgress'
 
 async function pickJsonFile(jsonErrorMsg: string): Promise<unknown | null> {
   return new Promise((resolve, reject) => {
@@ -176,6 +177,8 @@ export default function QueuePage() {
     [tasks],
   )
   const runningTaskId = runningTask?.id ?? null
+  // 训练结束后评估可见性：done task 仍在后台跑评估时显示「评估中 done/total」
+  const evalMap = useEvaluatingTasks(tasks)
   // monitor 进度走 useMonitorProgress hook (PR #37 增量协议)：runningTaskId
   // 切换时 hook 自动清状态 + 重拉 /api/state 冷启动；不需要本组件再写清理逻辑。
   const { state: monitor } = useMonitorProgress(runningTaskId)
@@ -545,9 +548,19 @@ export default function QueuePage() {
                           })}
                         </span>
                       ) : isTerminal ? (
-                        <span className="font-mono text-fg-tertiary text-xs">
-                          {t('queue.duration', { time: fmtDuration(task.started_at, task.finished_at) })}
-                        </span>
+                        evalMap.get(task.id)?.active ? (
+                          <span className="text-accent text-xs flex items-center gap-1" title={t('eval.evaluatingHint')}>
+                            <span className="dot dot-running" />
+                            {t('eval.evaluatingProgress', {
+                              done: evalMap.get(task.id)!.done,
+                              total: evalMap.get(task.id)!.total,
+                            })}
+                          </span>
+                        ) : (
+                          <span className="font-mono text-fg-tertiary text-xs">
+                            {t('queue.duration', { time: fmtDuration(task.started_at, task.finished_at) })}
+                          </span>
+                        )
                       ) : (
                         <span className="text-fg-tertiary text-xs">—</span>
                       )}
