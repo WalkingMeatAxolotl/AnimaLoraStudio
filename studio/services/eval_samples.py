@@ -566,7 +566,10 @@ def _default_generator(
     negative_prompt = str(generation.get("negative_prompt") or cfg.get("sample_negative_prompt") or "")
     sampler_name = str(generation.get("sampler_name") or cfg.get("sample_sampler_name") or "er_sde")
     scheduler = str(generation.get("scheduler") or cfg.get("sample_scheduler") or "simple")
-    lora_scale = float(generation.get("lora_scale") or 1.0)
+    # baseline run 用 lora_scale=0（纯底模对照）。不能写 `or 1.0`——0.0 是 falsy 会被
+    # 当成「没设」回退到 1.0，baseline 就变成正常 LoRA 跑、Δ 恒为 0。
+    _raw_scale = generation.get("lora_scale")
+    lora_scale = float(_raw_scale) if _raw_scale is not None else 1.0
     precision = str(cfg.get("mixed_precision") or "bf16")
     backend = str(cfg.get("attention_backend") or "flash_attn")
     use_flash = backend == "flash_attn"

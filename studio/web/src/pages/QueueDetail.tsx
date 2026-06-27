@@ -559,14 +559,13 @@ function useEvalLogSource(
     }
   }, [pid, vid, taskId])
 
-  useEffect(() => { void loadJobs() }, [loadJobs])
-
-  const anyActive = jobs.some((j) => j.status === 'pending' || j.status === 'running')
+  // 评估 tab 挂载期间稳定轮询：清空 + 重跑后新 job 是从无到有，靠它发现（之前只在
+  // 已有 job 活跃时轮询，清空后 job 全 canceled → 不轮询 → 重跑的新 job 看不到）。
   useEffect(() => {
-    if (!anyActive) return
+    void loadJobs()
     const id = window.setInterval(() => void loadJobs(), 5000)
     return () => window.clearInterval(id)
-  }, [anyActive, loadJobs])
+  }, [loadJobs])
 
   // 每个 job 的日志 hydrate 一次
   const jobIds = jobs.map((j) => j.id).join(',')

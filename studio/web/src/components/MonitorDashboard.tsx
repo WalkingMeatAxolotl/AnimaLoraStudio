@@ -197,10 +197,11 @@ function ChartSvg({ data, W, H, rawColor, smoothColor, fillColor, emaAlpha, yFor
   const yTicks = [minV, (minV + maxV) / 2, maxV].map((v) => ({
     v, y: y(v), label: yFormat(v),
   }))
-  const xTicks = [0, 0.25, 0.5, 0.75, 1].map((t) => {
-    const i = Math.round(t * Math.max(1, pts.length - 1))
-    return { x: x(i), label: String(steps[i] ?? '') }
-  })
+  // 点少时（eval 只有几个 checkpoint）5 个分位会 round 到重复索引（如 3 点 →
+  // 0,1,1,2,2），导致标签 "20 20 40 40" 叠在同一 x 上重叠。按索引去重。
+  const xTicks = [...new Set(
+    [0, 0.25, 0.5, 0.75, 1].map((t) => Math.round(t * Math.max(1, pts.length - 1))),
+  )].map((i) => ({ i, x: x(i), label: String(steps[i] ?? '') }))
 
   const lastY = y(smooth[smooth.length - 1])
   const showSmoothLayer = emaAlpha < 0.999
@@ -248,10 +249,10 @@ function ChartSvg({ data, W, H, rawColor, smoothColor, fillColor, emaAlpha, yFor
           ))}
           {/* x axis labels —— 首/末两 tick 在 SVG 边缘上，middle 锚点会让一半字宽溢出被裁，
               改 start/end 锚点把字往内推；中间 tick 维持 middle 居中。 */}
-          {xTicks.map(({ x: xt, label }, i, arr) => {
+          {xTicks.map(({ i: idx, x: xt, label }, i, arr) => {
             const anchor = i === 0 ? 'start' : i === arr.length - 1 ? 'end' : 'middle'
             return (
-              <text key={label} x={xt} y={H - 3} fontSize="13" fill="var(--fg-tertiary)"
+              <text key={idx} x={xt} y={H - 3} fontSize="13" fill="var(--fg-tertiary)"
                 fontFamily="var(--font-mono)" textAnchor={anchor}>{label}</text>
             )
           })}
