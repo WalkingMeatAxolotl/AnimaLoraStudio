@@ -286,6 +286,43 @@
   min-width: 0;
   word-break: break-word;
 }
+/* release notes「更新内容」固定渲染 RN_MAX_ITEMS + 1 行：加载中是骨架行、
+   数据不足时是空占位行（&nbsp; 撑高），都与真实 entry 同行高 —— 列表高度由
+   固定行数自然撑出（不靠像素估算），点检查更新异步拉取 / 切换显示版本时都不
+   撑大。 */
+.vs-change-list .vs-rn-sk {
+  align-items: center;
+  min-height: 1.55em; /* = li line-height，对齐真实 entry 单行高度 */
+}
+.vs-change-list .vs-rn-sk-pill,
+.vs-change-list .vs-rn-sk-bar {
+  background: var(--overlay);
+  animation: vs-rn-pulse 1.3s ease-in-out infinite;
+}
+.vs-change-list .vs-rn-sk-pill {
+  flex-shrink: 0;
+  width: 46px;
+  height: 15px;
+  border-radius: 999px;
+}
+.vs-change-list .vs-rn-sk-bar {
+  flex: 1;
+  height: 11px;
+  border-radius: 4px;
+}
+/* 文本骨架宽度错落，避免一刀切 */
+.vs-change-list .vs-rn-sk:nth-child(2) .vs-rn-sk-bar { max-width: 82%; }
+.vs-change-list .vs-rn-sk:nth-child(3) .vs-rn-sk-bar { max-width: 66%; }
+.vs-change-list .vs-rn-sk:nth-child(4) .vs-rn-sk-bar { max-width: 90%; }
+.vs-change-list .vs-rn-sk:nth-child(5) .vs-rn-sk-bar { max-width: 74%; }
+@media (prefers-reduced-motion: reduce) {
+  .vs-change-list .vs-rn-sk-pill,
+  .vs-change-list .vs-rn-sk-bar { animation: none; }
+}
+@keyframes vs-rn-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
 
 /* ==================== 卡底操作 ==================== */
 .vs-chan-foot {
