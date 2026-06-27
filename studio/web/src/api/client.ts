@@ -2853,13 +2853,6 @@ export const api = {
       { method: 'POST', body: JSON.stringify(body) },
     ),
 
-  /** 清空某 task 的全部评估结果（run + 指标）并取消未完成的评估 job —— 用于重新跑。 */
-  clearTaskEval: (pid: number, vid: number, taskId: number) =>
-    req<{ removed_runs: number; canceled_jobs: number }>(
-      `/api/projects/${pid}/versions/${vid}/eval/runs?task_id=${taskId}`,
-      { method: 'DELETE' },
-    ),
-
   // Queue import / export ---------------------------------------------
   /** 队列导出直链。响应带 Content-Disposition: attachment,<a href download>
    * 触发就走浏览器原生下载。后端 publish queue_export_ready/_failed SSE

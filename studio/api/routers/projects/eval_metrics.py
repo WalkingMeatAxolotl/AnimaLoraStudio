@@ -7,7 +7,6 @@ from fastapi import APIRouter, HTTPException
 
 from ...schemas.projects import EvalClipStart, EvalDinoStart
 from ._shared import _publish_job_state, _version_dir_or_404
-from ...deps import _supervisor
 from .... import db, secrets
 from ....infrastructure.paths import task_eval_dir
 from ....services import eval_clip, eval_dino, eval_metrics, eval_samples
@@ -47,7 +46,12 @@ def list_task_eval_jobs_endpoint(
 
     job_log_appended 事件不带 task_id，刷新会丢 live 关联，所以靠这个端点重新发现。
     inline 训练时评估无 job（进训练日志），不在此列。
+
+    只返回 **run 仍存在** 的 job：每次「运行评估」会删上一轮 run 文件，旧 job 的 run
+    不在了就过滤掉，合并评估日志永远只剩这次的数据。不改任何 job 状态、不污染历史。
     """
+    _, _, vdir = _version_dir_or_404(pid, vid)
+    eval_root = task_eval_dir(task_id)
     with db.connection_for() as conn:
         rows = project_jobs.list_jobs(conn, project_id=pid, version_id=vid)
     out: list[dict[str, Any]] = []
@@ -57,54 +61,17 @@ def list_task_eval_jobs_endpoint(
         params = j.get("params_decoded") or {}
         if int(params.get("task_id") or 0) != task_id:
             continue
+        run_id = params.get("run_id")
+        if not run_id or not eval_samples.run_path(vdir, str(run_id), eval_root).exists():
+            continue  # run 已被清空 → 不再显示这个历史 job
         out.append({
             "id": j.get("id"),
             "kind": j.get("kind"),
             "status": j.get("status"),
-            "run_id": params.get("run_id"),
+            "run_id": run_id,
             "checkpoint_path": params.get("checkpoint_path"),
         })
     return {"jobs": out}
-
-
-@router.delete("/api/projects/{pid}/versions/{vid}/eval/runs")
-def clear_task_eval_endpoint(pid: int, vid: int, task_id: int) -> dict[str, Any]:
-    """清空某 task 的全部评估结果（run + 出图 + 指标）并把该 task 的评估 job 全部
-    转 canceled。
-
-    用于「删掉现有评估、重新跑」：下次「运行评估」从干净状态开始。已完成的指标文件
-    一并删除；**该 task 的所有评估 job**（含已完成的）都标 canceled —— 否则历史 job
-    会一直留在 DB、堆进合并日志（评估日志抽屉），还会让状态被老 failed job 带歪。
-    pending/running 的走 supervisor 取消（SIGTERM），已结束的直接改 DB 状态。
-    """
-    _, _, vdir = _version_dir_or_404(pid, vid)
-    eval_root = task_eval_dir(task_id)
-    try:
-        sup = _supervisor()
-    except Exception:
-        sup = None  # 服务启动中 / 无 supervisor → 退化为直接改 DB 状态
-    with db.connection_for() as conn:
-        rows = project_jobs.list_jobs(conn, project_id=pid, version_id=vid)
-    targets = [
-        j for j in rows
-        if j.get("kind") in _EVAL_JOB_KINDS
-        and int((j.get("params_decoded") or {}).get("task_id") or 0) == task_id
-    ]
-    canceled = 0
-    for j in targets:
-        jid = int(j["id"])
-        was_active = j.get("status") not in ("done", "failed", "canceled")
-        # 活跃 job 优先走 supervisor（running→SIGTERM 置 cancel_pending，退出标 canceled
-        # 而非 failed）。拿不到 supervisor 或已结束 job → 直接改 DB 状态（把历史 job 从
-        # 合并日志里移除）。已是 canceled 的跳过。
-        if not (sup is not None and was_active and sup.cancel_job(jid)):
-            if j.get("status") != "canceled":
-                with db.connection_for() as conn:
-                    project_jobs.mark_canceled(conn, jid)
-        if was_active:
-            canceled += 1
-    removed = eval_samples.delete_all_runs(vdir, eval_root)
-    return {"removed_runs": removed, "canceled_jobs": canceled}
 
 
 @router.get("/api/projects/{pid}/versions/{vid}/eval/samples/{run_id}/metrics")

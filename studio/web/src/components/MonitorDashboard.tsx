@@ -8,7 +8,6 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { api, type EvalJobInfo, type EvalMetricResult, type EvalMetricState, type LoraCkpt, type MonitorState } from '../api/client'
 import { evalProgressFromResults } from '../lib/useEvalProgress'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
-import { useDialog } from './Dialog'
 import { InfoButton } from './InfoButton'
 import ImagePreviewModal from './ImagePreviewModal'
 
@@ -408,22 +407,12 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
   }, [payload?.results])
 
   // baseline run（纯底模对照）不作为 checkpoint 展示——只用来给各 checkpoint 算 Δ
-  // （后端已挂在 result.delta）。同一 checkpoint 多次评估（重跑）只留最新一条，避免
-  // 重复行/曲线上重复点。卡片/表格/曲线都走 displayResults。
-  const displayResults = useMemo(() => {
-    const byCkpt = new Map<string, EvalMetricResult>()
-    for (const r of results) {
-      if (r.baseline) continue
-      const key = r.checkpoint?.path || r.run_id
-      const prev = byCkpt.get(key)
-      const t = r.updated_at ?? r.created_at ?? 0
-      const pt = prev ? (prev.updated_at ?? prev.created_at ?? 0) : -1
-      if (!prev || t >= pt) byCkpt.set(key, r)
-    }
-    return [...byCkpt.values()].sort(
-      (a, b) => checkpointSortValue(a, 0) - checkpointSortValue(b, 0),
-    )
-  }, [results])
+  // （后端已挂在 result.delta）。每次「运行评估」会自动清空上一轮，所以这里永远只有
+  // 这次 run 的结果，每个 checkpoint 一条，无需跨轮去重。
+  const displayResults = useMemo(
+    () => results.filter((r) => !r.baseline),
+    [results],
+  )
 
   const hasActiveMetric = useMemo(() => {
     return results.some((result) =>
@@ -470,7 +459,6 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [running, setRunning] = useState(false)
   const [runMsg, setRunMsg] = useState<string | null>(null)
-  const { confirm } = useDialog()
 
   const loadCkpts = useCallback(async () => {
     if (!pid || !vid) return
@@ -521,23 +509,6 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
       setRunning(false)
     }
   }, [pid, vid, taskId, selected, load])
-
-  const clearEval = useCallback(async () => {
-    if (!pid || !vid || !taskId) return
-    const ok = await confirm(
-      '删除该任务现有的全部评估结果（出图 + 指标）并取消未完成的评估 job？之后可点「运行评估」从干净状态重新跑。',
-      { tone: 'danger', okText: '清空', title: '清空评估结果' },
-    )
-    if (!ok) return
-    setRunMsg(null)
-    try {
-      const r = await api.clearTaskEval(pid, vid, taskId)
-      setRunMsg(`已清空 ${r.removed_runs} 个评估` + (r.canceled_jobs ? `，取消 ${r.canceled_jobs} 个未完成 job` : ''))
-      void load(true)
-    } catch (err) {
-      setRunMsg(err instanceof Error ? err.message : String(err))
-    }
-  }, [pid, vid, taskId, confirm, load])
 
   const latestByKey = useMemo(() => {
     const out: Partial<Record<EvalMetricKey, { result: EvalMetricResult; value: number | null; state?: EvalMetricState }>> = {}
@@ -604,16 +575,6 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
             className={`btn btn-sm ${pickerOpen ? 'btn-primary' : 'btn-secondary'}`}
           >
             运行评估
-          </button>
-        )}
-        {taskId != null && results.length > 0 && (
-          <button
-            type="button"
-            onClick={() => void clearEval()}
-            className="btn btn-ghost btn-sm text-err"
-            title="删除该任务现有的全部评估结果，用于重新跑"
-          >
-            清空
           </button>
         )}
         <button
@@ -774,12 +735,7 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
                   <th className="text-left font-medium py-1.5 pr-3">checkpoint</th>
                   {displayKeys.map((key) => (
                     <th key={key} className="text-right font-medium py-1.5 px-2">
-                      <span className="inline-flex items-center justify-end gap-1.5">
-                        {EVAL_LABELS[key]}
-                        <InfoButton ariaLabel={`${EVAL_LABELS[key]} 指标说明`}>
-                          <p>{EVAL_DESCRIPTIONS[key]}</p>
-                        </InfoButton>
-                      </span>
+                      {EVAL_LABELS[key]}
                     </th>
                   ))}
                   <th className="text-right font-medium py-1.5 pl-3">状态</th>

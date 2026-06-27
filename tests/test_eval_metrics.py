@@ -84,9 +84,14 @@ def _vdir_for(pid: int, vid: int) -> tuple[dict[str, Any], dict[str, Any], Path]
 
 def test_list_task_eval_jobs_filters_by_task_and_kind(client: TestClient) -> None:
     pid, vid = _make(client)
+    # /eval/jobs 只返回 run 仍存在的 job —— 给 task 42 的三个 job 各建一个 run.json
+    eval_root = infra_paths.task_eval_dir(42)
     with db.connection_for() as conn:
         # task 42 的三种 eval job
         for kind in ("eval_samples", "eval_clip", "eval_dino"):
+            run_dir = eval_root / "samples" / f"run-{kind}"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "run.json").write_text("{}", encoding="utf-8")
             project_jobs.create_job(
                 conn, project_id=pid, version_id=vid, kind=kind,
                 params={"task_id": 42, "run_id": f"run-{kind}"},

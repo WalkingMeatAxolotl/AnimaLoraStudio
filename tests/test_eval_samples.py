@@ -289,7 +289,29 @@ def test_run_task_eval_endpoint_queues_task_scoped(client, isolated) -> None:
     assert body["jobs"][0]["params_decoded"]["task_id"] == tid
 
 
-def test_clear_task_eval_endpoint_removes_runs_and_cancels_jobs(client, isolated) -> None:
+def test_rerun_auto_clears_previous_task_eval(client, isolated) -> None:
+    project, version, vdir = _new_project(isolated)
+    ckpt = _seed_validation_and_ckpt(vdir)
+    pid, vid = project["id"], version["id"]
+    tid = _bound_task(isolated, project, version)
+
+    def run() -> list[dict]:
+        client.post(
+            f"/api/projects/{pid}/versions/{vid}/eval/run",
+            json={"task_id": tid, "checkpoints": [str(ckpt)]},
+        )
+        return client.get(
+            f"/api/projects/{pid}/versions/{vid}/eval/samples?task_id={tid}"
+        ).json()["runs"]
+
+    first = run()
+    assert len(first) == 2  # 1 checkpoint + 1 baseline
+    second = run()
+    # 第二轮自动清空了第一轮 → 仍是 2，而不是累积成 4
+    assert len(second) == 2
+
+
+def test_eval_jobs_endpoint_filters_jobs_of_deleted_runs(client, isolated) -> None:
     project, version, vdir = _new_project(isolated)
     ckpt = _seed_validation_and_ckpt(vdir)
     pid, vid = project["id"], version["id"]
@@ -299,20 +321,13 @@ def test_clear_task_eval_endpoint_removes_runs_and_cancels_jobs(client, isolated
         f"/api/projects/{pid}/versions/{vid}/eval/run",
         json={"task_id": tid, "checkpoints": [str(ckpt)]},
     )
-    listed = client.get(f"/api/projects/{pid}/versions/{vid}/eval/samples?task_id={tid}")
-    assert len(listed.json()["runs"]) >= 1
-
-    cleared = client.delete(f"/api/projects/{pid}/versions/{vid}/eval/runs?task_id={tid}")
-    assert cleared.status_code == 200, cleared.text
-    body = cleared.json()
-    assert body["removed_runs"] >= 1
-    assert body["canceled_jobs"] >= 1
-
-    # run 文件全删；未完成 job 标 canceled
-    after = client.get(f"/api/projects/{pid}/versions/{vid}/eval/samples?task_id={tid}")
-    assert after.json()["runs"] == []
     jobs = client.get(f"/api/projects/{pid}/versions/{vid}/eval/jobs?task_id={tid}").json()["jobs"]
-    assert jobs and all(j["status"] == "canceled" for j in jobs)
+    assert len(jobs) >= 1
+
+    # 删掉 run 文件 → /eval/jobs 不再返回这些 job（只显示 run 仍存在的）
+    eval_samples.delete_all_runs(vdir, infra_paths.task_eval_dir(tid))
+    jobs2 = client.get(f"/api/projects/{pid}/versions/{vid}/eval/jobs?task_id={tid}").json()["jobs"]
+    assert jobs2 == []
 
 
 def test_run_task_eval_endpoint_validates_task_ownership(client, isolated) -> None:

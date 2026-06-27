@@ -22,6 +22,28 @@ logger = logging.getLogger(__name__)
 
 ProgressFn = Callable[[str], None]
 
+# 训练后 / 手动评估的 job kind（与 router 的 _EVAL_JOB_KINDS 一致）。
+EVAL_JOB_KINDS = ("eval_samples", "eval_clip", "eval_dino", "eval_tag", "eval_ccip")
+
+
+def _clear_previous_task_eval(
+    conn, project_id: int, version_id: int, task_id: int, vdir: Path, eval_root: Path
+) -> None:
+    """重跑评估前清空该 task 上一轮：取消未完成的旧 eval job + 删旧 run 文件。
+
+    只显示「这次」的数据。已完成的旧 job **不改状态**（保留 done/failed 原样），靠
+    list_task_eval_jobs 的「run 是否存在」过滤，不污染历史、不需跨轮 merge。
+    """
+    for j in project_jobs.list_jobs(conn, project_id=project_id, version_id=version_id):
+        if j.get("kind") not in EVAL_JOB_KINDS:
+            continue
+        params = j.get("params_decoded") or {}
+        if int(params.get("task_id") or 0) != task_id:
+            continue
+        if j.get("status") in ("pending", "running"):
+            project_jobs.mark_canceled(conn, int(j["id"]))
+    eval_samples.delete_all_runs(vdir, eval_root)
+
 
 def _version_eval_enabled(project: dict[str, Any], version: dict[str, Any]) -> bool:
     """Per-version opt-in for post-training validation metrics (training config)."""
@@ -166,6 +188,10 @@ def queue_manual_task_eval(
     per-version opt-in.
     It evaluates the full validation set and reuses the Settings metric models,
     writing under ``tasks/<id>/eval/`` so results show up in that task's eval page.
+
+    每次「运行评估」**先自动清空上一轮**（删旧 run 文件 + 取消未完成的旧 eval job），
+    所以评估页永远只显示这次的数据 —— 不做跨轮 merge/dedup，旧值也无参考性。已完成的
+    旧 job 不改状态（靠「run 是否存在」从日志过滤，见 list_task_eval_jobs），不污染历史。
     """
     project_id = int(task.get("project_id") or 0)
     version_id = int(task.get("version_id") or 0)
@@ -180,6 +206,7 @@ def queue_manual_task_eval(
 
     vdir = versions.version_dir(project_id, str(project["slug"]), str(version["label"]))
     eval_root = task_eval_dir(task_id)
+    _clear_previous_task_eval(conn, project_id, version_id, task_id, vdir, eval_root)
     queued: list[tuple[dict[str, Any], dict[str, Any]]] = []
     seen: set[str] = set()
     baseline_rel = ""
