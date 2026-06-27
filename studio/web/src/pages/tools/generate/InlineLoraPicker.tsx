@@ -181,6 +181,14 @@ export default function InlineLoraPicker(props: Props) {
       setCkpts([])
       return
     }
+    // vid 必须确属于当前 pid 的 versions 才拉 ckpt。切 project 后有一拍 pid 已是
+    // 新值、vid 还停在旧 project 的版本（且 versions(newPid) 可能还没懒加载到）——
+    // 此时跳过，等 versions 到位 + auto-vid effect 把 vid 纠正到新 project 的版本，
+    // 否则会用 (newPid, oldVid) 发请求触发 404。
+    if (!versions.some((v) => v.id === vid)) {
+      setCkpts([])
+      return
+    }
     let cancelled = false
     setLoading(true)
     setError(null)
@@ -197,7 +205,7 @@ export default function InlineLoraPicker(props: Props) {
         setLoading(false)
       })
     return () => { cancelled = true }
-  }, [pid, vid, fetchCkpts])
+  }, [pid, vid, versions, fetchCkpts])
 
   // 搜索过滤
   const [search, setSearch] = useState('')

@@ -221,6 +221,35 @@ describe('InlineLoraPicker — multi mode (default)', () => {
     expect(screen.queryByText(/已选 1/)).not.toBeInTheDocument()
   })
 
+  it('切 project 不会用 (新 pid, 旧 vid) 拉 ckpt（回归：避免 404）', async () => {
+    // sample 合法 (pid:vid)：1:11 / 1:12 / 2:21。切 project 时若 pid 已变、vid 还
+    // 是旧 project 的版本就发请求，会得到 (2, 11) 这种非法组合 → 后端 404。
+    const user = userEvent.setup()
+    const calls: string[] = []
+    const base = catalogFrom(sample, ckptsV3)
+    const catalog: LoraCatalog = {
+      ...base,
+      fetchCkpts: (pid, vid) => { calls.push(`${pid}:${vid}`); return base.fetchCkpts(pid, vid) },
+    }
+    render(
+      <InlineLoraPicker
+        mode="multi"
+        catalog={catalog}
+        existingPaths={new Set()}
+        showWeight
+        onPick={vi.fn()}
+        onClose={vi.fn()}
+        onPickExternal={vi.fn()}
+      />,
+    )
+    await waitFor(() => expect(calls).toContain('1:11'))  // 初始锚 project 1
+    await user.selectOptions(screen.getByLabelText('选项目'), '2')
+    await waitFor(() => expect(calls).toContain('2:21'))  // 切到 project 2 的版本
+    // 关键：从没出现过 (2, 11) 这种「新 project + 旧 version」非法组合
+    const valid = new Set(['1:11', '1:12', '2:21'])
+    expect(calls.every((c) => valid.has(c))).toBe(true)
+  })
+
   it('weight slider value used in onPick', async () => {
     const user = userEvent.setup()
     const { onPick } = renderMulti()
