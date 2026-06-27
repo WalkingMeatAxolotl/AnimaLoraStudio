@@ -91,7 +91,7 @@ function SmoothControl({ alpha, setAlpha, min, max, step }: {
 // loss / lr / d 都复用：传 rawColor/smoothColor 自定义配色，传 yFormat 控制
 // y 轴数字格式（科学计数法 vs 定点）。
 
-function SeriesChart({ data, rawColor, smoothColor, fillColor, emaAlpha, yFormat, height, minHeight, axes = true }: {
+function SeriesChart({ data, rawColor, smoothColor, fillColor, emaAlpha, yFormat, height, minHeight, axes = true, refLine }: {
   data: Array<{ step: number; value: number }>
   rawColor: string
   smoothColor: string
@@ -104,6 +104,8 @@ function SeriesChart({ data, rawColor, smoothColor, fillColor, emaAlpha, yFormat
   minHeight?: number
   /** 是否绘制坐标轴 + tick label + 网格线；false 时退化为纯 sparkline 适合小高度图（d value） */
   axes?: boolean
+  /** 可选的水平参考线（eval：纯底模 baseline 值）；y 范围会纳入它。 */
+  refLine?: number
 }) {
   // ResizeObserver 测真实像素尺寸，viewBox 用真实尺寸 → SVG 1:1 渲染，
   // 文本/线宽不会被 preserveAspectRatio 非等比缩放扭曲。
@@ -150,13 +152,14 @@ function SeriesChart({ data, rawColor, smoothColor, fillColor, emaAlpha, yFormat
           emaAlpha={emaAlpha}
           yFormat={yFormat}
           axes={axes}
+          refLine={refLine}
         />
       ) : null}
     </div>
   )
 }
 
-function ChartSvg({ data, W, H, rawColor, smoothColor, fillColor, emaAlpha, yFormat, axes }: {
+function ChartSvg({ data, W, H, rawColor, smoothColor, fillColor, emaAlpha, yFormat, axes, refLine }: {
   data: Array<{ step: number; value: number }>
   W: number
   H: number
@@ -166,6 +169,7 @@ function ChartSvg({ data, W, H, rawColor, smoothColor, fillColor, emaAlpha, yFor
   emaAlpha: number
   yFormat: (v: number) => string
   axes: boolean
+  refLine?: number
 }) {
   const pts = downsample(data, 600)
   const raw = pts.map((p) => p.value)
@@ -182,7 +186,10 @@ function ChartSvg({ data, W, H, rawColor, smoothColor, fillColor, emaAlpha, yFor
   // y 范围按 smooth 算（无 smooth 时退化为 raw）—— raw 尖刺超出顶部会被裁掉，
   // 这是有意的：换取 smooth 信号占满高度、趋势可读。原 LossChart 同款行为。
   const refVals = emaAlpha >= 0.999 ? raw : smooth
-  const minV = Math.min(...refVals), maxV = Math.max(...refVals)
+  const hasRef = typeof refLine === 'number' && Number.isFinite(refLine)
+  // y 范围纳入 baseline 参考线，保证它落在可视区（曲线在 base 线上/下方一目了然）。
+  const minV = Math.min(...refVals, ...(hasRef ? [refLine as number] : []))
+  const maxV = Math.max(...refVals, ...(hasRef ? [refLine as number] : []))
   const range = maxV - minV || Math.max(Math.abs(maxV), 1e-9) * 1e-3 || 1e-9
   const x = (i: number) => PX + (i / Math.max(1, pts.length - 1)) * (W - PX - RX)
   const y = (v: number) => PY + (1 - (v - minV) / range) * (H - PY - PY)
@@ -239,6 +246,19 @@ function ChartSvg({ data, W, H, rawColor, smoothColor, fillColor, emaAlpha, yFor
       )}
       {/* last point */}
       <circle cx={x(smooth.length - 1)} cy={lastY} r="4" fill={smoothColor} stroke="var(--bg-surface)" strokeWidth="2" />
+      {/* baseline 参考线（纯底模）+ "base" 标注：曲线在它上方=优于底模，下方=不如底模 */}
+      {hasRef && (
+        <>
+          <line
+            x1={PX} y1={y(refLine as number)} x2={W - RX} y2={y(refLine as number)}
+            stroke="var(--fg-tertiary)" strokeWidth="1" strokeDasharray="4 3" opacity="0.75"
+          />
+          <text
+            x={W - RX - 1} y={y(refLine as number) - 3} fontSize="10"
+            fill="var(--fg-tertiary)" fontFamily="var(--font-mono)" textAnchor="end"
+          >base</text>
+        </>
+      )}
       {axes && (
         <>
           {/* y axis labels —— y offset +4.5 = fontSize/2 + 准基线微调，把字垂直居中到 tick */}
@@ -540,6 +560,22 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
     return out
   }, [displayResults])
 
+  // 各指标的纯底模 baseline 值（画成图上的水平参考线）。后端给每条非 baseline 结果
+  // 都挂了相同的 baseline_metrics，取任一即可。
+  const baselineByKey = useMemo(() => {
+    const out: Partial<Record<EvalMetricKey, number>> = {}
+    const bm = displayResults.find(
+      (r) => r.baseline_metrics && Object.keys(r.baseline_metrics).length,
+    )?.baseline_metrics
+    if (bm) {
+      for (const key of EVAL_METRIC_KEYS) {
+        const v = bm[key]
+        if (typeof v === 'number' && Number.isFinite(v)) out[key] = v
+      }
+    }
+    return out
+  }, [displayResults])
+
   if (!pid || !vid) {
     return (
       <div className="card px-4 py-3 text-sm text-fg-tertiary">
@@ -722,6 +758,7 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
                     emaAlpha={1}
                     yFormat={(v) => v.toFixed(4)}
                     height={132}
+                    refLine={baselineByKey[key]}
                   />
                 </div>
               )
@@ -753,9 +790,18 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
                         const state = metricState(result, key)
                         const value = metricValue(result, key)
                         const tone = stateTone(state, value)
+                        const d = result.delta?.[key]
                         return (
                           <td key={key} className={`py-1.5 px-2 text-right font-mono tabular-nums ${toneClass(tone)}`}>
                             {formatEvalValue(value, state)}
+                            {d != null && value != null && (
+                              <span
+                                className={`ml-1 text-[10px] ${d >= 0 ? 'text-ok' : 'text-err'}`}
+                                title="相对纯底模 baseline 的 Δ"
+                              >
+                                {d >= 0 ? '+' : ''}{d.toFixed(4)}
+                              </span>
+                            )}
                           </td>
                         )
                       })}
