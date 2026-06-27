@@ -7,7 +7,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api, type EvalJobInfo, type EvalMetricResult, type EvalMetricState, type LoraCkpt, type MonitorState } from '../api/client'
 import { evalProgressFromResults } from '../lib/useEvalProgress'
-import { useEventStream } from '../lib/useEventStream'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
 import { InfoButton } from './InfoButton'
 import ImagePreviewModal from './ImagePreviewModal'
@@ -357,84 +356,6 @@ function evalRowStatus(result: EvalMetricResult): { text: string; tone: 'ok' | '
   if (result.status === 'failed') return { text: '失败', tone: 'err' }
   if (result.status === 'done') return { text: '完成', tone: 'ok' }
   return { text: result.status, tone: 'muted' }
-}
-
-// 一个 checkpoint 的多个 eval job（samples/clip/dino）里挑最该看日志的那条：
-// 正在跑的 > 失败的（看报错）> 最新的。
-function pickEvalJob(jobs: EvalJobInfo[]): EvalJobInfo | null {
-  if (jobs.length === 0) return null
-  return (
-    jobs.find((j) => j.status === 'running') ??
-    jobs.find((j) => j.status === 'failed') ??
-    jobs.reduce((a, b) => (b.id > a.id ? b : a))
-  )
-}
-
-// 单个 eval job 的原始日志：hydrate 一次 + 订阅 job_log_appended 续流（看进度 + 报错）。
-function EvalJobLog({ jobId }: { jobId: number }) {
-  const [content, setContent] = useState('')
-  const contentRef = useRef('')
-  const setBoth = useCallback((s: string) => { contentRef.current = s; setContent(s) }, [])
-  useEffect(() => {
-    let alive = true
-    setBoth('')
-    void api.getJobLog(jobId).then((r) => { if (alive) setBoth(r.content || '') }).catch(() => {})
-    return () => { alive = false }
-  }, [jobId, setBoth])
-  useEventStream((evt) => {
-    if (evt.type === 'job_log_appended' && evt.job_id === jobId) {
-      const text = typeof evt.text === 'string' ? evt.text : ''
-      const prev = contentRef.current
-      const sep = prev && !prev.endsWith('\n') ? '\n' : ''
-      setBoth(prev + sep + text + '\n')
-    }
-  })
-  return (
-    <pre className="max-h-52 overflow-auto bg-sunken border border-subtle rounded-md p-2 text-[11px] font-mono text-fg-secondary whitespace-pre-wrap break-all m-0">
-      {content || <span className="text-fg-tertiary">暂无日志</span>}
-    </pre>
-  )
-}
-
-// 统一评估日志：一个区域看所有评估 job 的原始日志（出图 + 各指标），默认跟随正在跑/
-// 失败的 job，可下拉切到具体 checkpoint —— 取代之前每行单独展开的分条日志。
-function EvalLogSection({ jobs, results }: { jobs: EvalJobInfo[]; results: EvalMetricResult[] }) {
-  const [pinnedId, setPinnedId] = useState<number | null>(null)
-  const active = useMemo(() => pickEvalJob(jobs), [jobs])
-  const shownId = pinnedId ?? active?.id ?? null
-  const labelByRun = useMemo(() => {
-    const m = new Map<string, string>()
-    for (const r of results) m.set(r.run_id, r.baseline ? 'baseline' : checkpointLabel(r))
-    return m
-  }, [results])
-  if (jobs.length === 0) return null
-  const jobLabel = (j: EvalJobInfo) =>
-    `${j.run_id ? (labelByRun.get(j.run_id) ?? j.run_id) : '—'} · ${j.kind} · ${j.status}`
-  const ordered = jobs.slice().sort((a, b) => b.id - a.id)
-  return (
-    <div className="card p-3">
-      <div className="flex items-center justify-between gap-2 mb-2">
-        <span className="inline-flex items-center gap-1.5 text-sm font-semibold">
-          评估日志
-          <InfoButton ariaLabel="评估日志说明">
-            <p>出图与各指标 job 的原始日志（含报错）。默认跟随正在跑 / 失败的 job，可下拉切换查看具体 checkpoint 的评估。</p>
-          </InfoButton>
-        </span>
-        <select
-          value={shownId ?? ''}
-          onChange={(e) => setPinnedId(e.target.value ? Number(e.target.value) : null)}
-          className="bg-sunken border border-subtle rounded-md px-2 py-1 text-[11px] font-mono max-w-[60%] truncate"
-        >
-          {ordered.map((j) => (
-            <option key={j.id} value={j.id}>{jobLabel(j)}</option>
-          ))}
-        </select>
-      </div>
-      {shownId != null
-        ? <EvalJobLog jobId={shownId} />
-        : <p className="text-fg-tertiary text-xs">暂无日志</p>}
-    </div>
-  )
 }
 
 export function EvalMetricsPanel({ state, connected, taskId }: {
@@ -861,8 +782,6 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
               </tbody>
             </table>
           </div>
-          {/* 统一评估日志：一个抽屉看出图/各指标 job 的原始日志（含报错），不再逐行展开 */}
-          <EvalLogSection jobs={evalJobs} results={results} />
         </>
       )}
     </div>

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
   api,
+  type EvalJobInfo,
   type Task,
   type TaskOutputs,
   type TaskStatus,
@@ -13,6 +14,7 @@ import { useToast } from '../components/Toast'
 import { useEventStream } from '../lib/useEventStream'
 import { useTaskEvalProgress } from '../lib/useEvalProgress'
 import MonitorDashboard, { EvalMetricsPanel } from '../components/MonitorDashboard'
+import TaskLogDrawer, { type LogSource, type LogSourceStatus } from '../components/TaskLogDrawer'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
 
 type Tab = 'overview' | 'log' | 'monitor' | 'eval' | 'outputs' | 'snapshot'
@@ -536,11 +538,99 @@ function MonitorTab({ taskId }: { taskId: number }) {
 
 // ── EvalTab ─────────────────────────────────────────────────────────────────
 
+// 评估日志：把该 task 所有评估 job（出图 + 各指标）的原始日志按时间（job id）拼成
+// 一条流，喂给统一的 TaskLogDrawer（全 app 一致的底部抽屉）。不按 checkpoint 分。
+function useEvalLogSource(
+  pid: number | undefined,
+  vid: number | undefined,
+  taskId: number,
+): LogSource | null {
+  const [jobs, setJobs] = useState<EvalJobInfo[]>([])
+  const [buffers, setBuffers] = useState<Record<number, string>>({})
+  const buffersRef = useRef<Record<number, string>>({})
+
+  const loadJobs = useCallback(async () => {
+    if (!pid || !vid || !taskId) return
+    try {
+      const r = await api.listTaskEvalJobs(pid, vid, taskId)
+      setJobs(r.jobs)
+    } catch {
+      // 辅助信息，拉失败不打扰
+    }
+  }, [pid, vid, taskId])
+
+  useEffect(() => { void loadJobs() }, [loadJobs])
+
+  const anyActive = jobs.some((j) => j.status === 'pending' || j.status === 'running')
+  useEffect(() => {
+    if (!anyActive) return
+    const id = window.setInterval(() => void loadJobs(), 5000)
+    return () => window.clearInterval(id)
+  }, [anyActive, loadJobs])
+
+  // 每个 job 的日志 hydrate 一次
+  const jobIds = jobs.map((j) => j.id).join(',')
+  useEffect(() => {
+    let alive = true
+    for (const j of jobs) {
+      if (buffersRef.current[j.id] === undefined) {
+        buffersRef.current[j.id] = ''
+        void api.getJobLog(j.id).then((r) => {
+          if (!alive) return
+          buffersRef.current[j.id] = r.content || ''
+          setBuffers({ ...buffersRef.current })
+        }).catch(() => {})
+      }
+    }
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobIds])
+
+  // 实时续流
+  useEventStream((evt) => {
+    if (
+      evt.type === 'job_log_appended'
+      && typeof evt.job_id === 'number'
+      && jobs.some((j) => j.id === evt.job_id)
+    ) {
+      const id = evt.job_id
+      const text = typeof evt.text === 'string' ? evt.text : ''
+      const prev = buffersRef.current[id] ?? ''
+      const sep = prev && !prev.endsWith('\n') ? '\n' : ''
+      buffersRef.current[id] = prev + sep + text + '\n'
+      setBuffers({ ...buffersRef.current })
+    }
+  })
+
+  return useMemo(() => {
+    if (jobs.length === 0) return null
+    const ordered = [...jobs].sort((a, b) => a.id - b.id)
+    const lines: string[] = []
+    for (const j of ordered) {
+      const buf = buffers[j.id]
+      if (!buf) continue
+      const ls = buf.split('\n')
+      if (ls.length && ls[ls.length - 1] === '') ls.pop()
+      lines.push(...ls)
+    }
+    const status: LogSourceStatus =
+      jobs.some((j) => j.status === 'running') ? 'running'
+        : jobs.some((j) => j.status === 'pending') ? 'pending'
+          : jobs.some((j) => j.status === 'failed') ? 'failed'
+            : 'done'
+    return { key: `eval-${taskId}`, label: '评估', status, lines }
+  }, [jobs, buffers, taskId])
+}
+
 function EvalTab({ taskId }: { taskId: number }) {
   const { state, connected } = useMonitorProgress(taskId)
+  const evalLog = useEvalLogSource(state?.project_id, state?.version_id, taskId)
   return (
-    <div className="flex-1 min-h-0 overflow-auto p-4">
-      <EvalMetricsPanel state={state} connected={connected} taskId={taskId} />
+    <div className="relative flex flex-col flex-1 min-h-0">
+      <div className="flex-1 min-h-0 overflow-auto p-4">
+        <EvalMetricsPanel state={state} connected={connected} taskId={taskId} />
+      </div>
+      <TaskLogDrawer sources={[evalLog]} />
     </div>
   )
 }
