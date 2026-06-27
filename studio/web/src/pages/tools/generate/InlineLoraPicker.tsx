@@ -143,10 +143,12 @@ export default function InlineLoraPicker(props: Props) {
   }, [hasAnchor, projects])
 
   // 版本下拉：来自 catalog（pid 定后由上面 effect 懒拉）。还没到时为空数组。
+  // versionsOf 返 undefined = 该项目 versions 还在懒加载（区别于已加载但无版本=[]）。
   const versions = useMemo(
     () => (pid != null ? versionsOf(pid) ?? [] : []),
     [versionsOf, pid],
   )
+  const versionsLoading = pid != null && versionsOf(pid) === undefined
 
   const [vid, setVid] = useState<number | null>(initialVid)
   // 同 pid：single 模式下 value 非 null 时 vid 跟 props.value.versionId 同步
@@ -176,16 +178,11 @@ export default function InlineLoraPicker(props: Props) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // vid 不变量：要么 null（解析中），要么属于当前 pid 的 versions（切 project 时
+  // 由下拉 onChange 同步清空、auto-vid effect 从 versions 选定）。所以这里只在
+  // vid 非 null 时拉 ckpt —— 不会出现 (newPid, oldVid) 这种触发 404 的组合。
   useEffect(() => {
     if (pid === null || vid === null) {
-      setCkpts([])
-      return
-    }
-    // vid 必须确属于当前 pid 的 versions 才拉 ckpt。切 project 后有一拍 pid 已是
-    // 新值、vid 还停在旧 project 的版本（且 versions(newPid) 可能还没懒加载到）——
-    // 此时跳过，等 versions 到位 + auto-vid effect 把 vid 纠正到新 project 的版本，
-    // 否则会用 (newPid, oldVid) 发请求触发 404。
-    if (!versions.some((v) => v.id === vid)) {
       setCkpts([])
       return
     }
@@ -205,7 +202,13 @@ export default function InlineLoraPicker(props: Props) {
         setLoading(false)
       })
     return () => { cancelled = true }
-  }, [pid, vid, versions, fetchCkpts])
+  }, [pid, vid, fetchCkpts])
+
+  // 解析中（显示 pending）：已选项目但 ckpt 还没就绪 —— versions 懒加载中 /
+  // 刚切项目 vid 待 auto 选定 / ckpt 请求在飞。projectless 或确认无版本的不算
+  // （走各自空状态文案）。切 project 期间用它显「加载中」，不再闪空列表。
+  const resolving = pid !== null && !error && ckpts.length === 0
+    && (loading || versionsLoading || (vid === null && versions.length > 0))
 
   // 搜索过滤
   const [search, setSearch] = useState('')
@@ -385,7 +388,13 @@ export default function InlineLoraPicker(props: Props) {
         <select
           className="input text-xs flex-1"
           value={pid ?? ''}
-          onChange={(e) => setPid(e.target.value ? Number(e.target.value) : null)}
+          onChange={(e) => {
+            // 切项目：pid + vid 同批更新，立即把 vid 清成 null（与 setPid 一起
+            // 提交），避免出现 (newPid, oldVid) 一拍让 ckpt effect 拉错触发 404。
+            // 新 versions 懒加载到位后 auto-vid effect 再选定该项目的版本。
+            setPid(e.target.value ? Number(e.target.value) : null)
+            setVid(null)
+          }}
           aria-label="选项目"
         >
           <option value="">选项目…</option>
@@ -433,18 +442,18 @@ export default function InlineLoraPicker(props: Props) {
         className="grid gap-1.5 overflow-y-auto"
         style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', maxHeight: 280, padding: 2 }}
       >
-        {loading && <div className="text-2xs text-fg-tertiary px-1 py-2" style={{ gridColumn: '1 / -1' }}>加载中…</div>}
-        {!loading && projects.length === 0 && (
+        {resolving && <div className="text-2xs text-fg-tertiary px-1 py-2" style={{ gridColumn: '1 / -1' }}>加载中…</div>}
+        {!resolving && projects.length === 0 && (
           <div className="text-fg-tertiary text-xs px-1 py-4 text-center" style={{ gridColumn: '1 / -1' }}>
             还没有训练好的 LoRA —— 先去训练一个{onPickExternal ? '，或用「外部文件」' : ''}
           </div>
         )}
-        {!loading && projects.length > 0 && pid !== null && vid !== null && ckpts.length === 0 && !error && (
+        {!resolving && projects.length > 0 && pid !== null && vid !== null && ckpts.length === 0 && !error && (
           <div className="text-2xs text-fg-tertiary px-1 py-4 text-center" style={{ gridColumn: '1 / -1' }}>
             该版本没扫到 ckpt 文件
           </div>
         )}
-        {!loading && filtered.map((c) => {
+        {!resolving && filtered.map((c) => {
           const isExisting = existingPaths.has(c.path)
           const isPicked = isSingle ? c.path === selectedPath : picked.has(c.path)
           const marker = isExisting ? '✓' : (isPicked ? '✓' : '+')
