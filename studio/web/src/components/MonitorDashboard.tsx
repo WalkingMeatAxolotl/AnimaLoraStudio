@@ -8,6 +8,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { api, type EvalJobInfo, type EvalMetricResult, type EvalMetricState, type LoraCkpt, type MonitorState } from '../api/client'
 import { evalProgressFromResults } from '../lib/useEvalProgress'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
+import { useDialog } from './Dialog'
 import { InfoButton } from './InfoButton'
 import ImagePreviewModal from './ImagePreviewModal'
 
@@ -468,6 +469,7 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [running, setRunning] = useState(false)
   const [runMsg, setRunMsg] = useState<string | null>(null)
+  const { confirm } = useDialog()
 
   const loadCkpts = useCallback(async () => {
     if (!pid || !vid) return
@@ -518,6 +520,23 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
       setRunning(false)
     }
   }, [pid, vid, taskId, selected, load])
+
+  const clearEval = useCallback(async () => {
+    if (!pid || !vid || !taskId) return
+    const ok = await confirm(
+      '删除该任务现有的全部评估结果（出图 + 指标）并取消未完成的评估 job？之后可点「运行评估」从干净状态重新跑。',
+      { tone: 'danger', okText: '清空', title: '清空评估结果' },
+    )
+    if (!ok) return
+    setRunMsg(null)
+    try {
+      const r = await api.clearTaskEval(pid, vid, taskId)
+      setRunMsg(`已清空 ${r.removed_runs} 个评估` + (r.canceled_jobs ? `，取消 ${r.canceled_jobs} 个未完成 job` : ''))
+      void load(true)
+    } catch (err) {
+      setRunMsg(err instanceof Error ? err.message : String(err))
+    }
+  }, [pid, vid, taskId, confirm, load])
 
   const latestByKey = useMemo(() => {
     const out: Partial<Record<EvalMetricKey, { result: EvalMetricResult; value: number | null; state?: EvalMetricState }>> = {}
@@ -584,6 +603,16 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
             className={`btn btn-sm ${pickerOpen ? 'btn-primary' : 'btn-secondary'}`}
           >
             运行评估
+          </button>
+        )}
+        {taskId != null && results.length > 0 && (
+          <button
+            type="button"
+            onClick={() => void clearEval()}
+            className="btn btn-ghost btn-sm text-err"
+            title="删除该任务现有的全部评估结果，用于重新跑"
+          >
+            清空
           </button>
         )}
         <button

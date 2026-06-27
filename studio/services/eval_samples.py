@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -312,6 +313,19 @@ def list_runs(version_dir: Path, eval_root: Path | None = None) -> list[dict[str
             runs.append(run)
     runs.sort(key=lambda r: float(r.get("created_at") or 0.0), reverse=True)
     return runs
+
+
+def delete_all_runs(version_dir: Path, eval_root: Path | None = None) -> int:
+    """删该 eval scope 下所有 sample run（run.json + 图 + metrics）。返回删除的 run 数。
+
+    用于「清空评估、重新跑」：去掉该 task 的全部历史 run，下次评估从干净状态出图。
+    """
+    root = samples_dir(version_dir, eval_root)
+    if not root.exists():
+        return 0
+    count = sum(1 for c in root.iterdir() if c.is_dir() and (c / RUN_FILE).exists())
+    shutil.rmtree(root, ignore_errors=True)
+    return count
 
 
 def create_run(

@@ -66,6 +66,30 @@ def list_task_eval_jobs_endpoint(
     return {"jobs": out}
 
 
+@router.delete("/api/projects/{pid}/versions/{vid}/eval/runs")
+def clear_task_eval_endpoint(pid: int, vid: int, task_id: int) -> dict[str, Any]:
+    """清空某 task 的全部评估结果（run + 出图 + 指标）并取消未完成的评估 job。
+
+    用于「删掉现有评估、重新跑」：下次「运行评估」从干净状态开始。已完成的指标文件
+    一并删除；pending/running 的评估 job 标记 canceled，supervisor 不再调度。
+    """
+    _, _, vdir = _version_dir_or_404(pid, vid)
+    eval_root = task_eval_dir(task_id)
+    canceled = 0
+    with db.connection_for() as conn:
+        for j in project_jobs.list_jobs(conn, project_id=pid, version_id=vid):
+            if j.get("kind") not in _EVAL_JOB_KINDS:
+                continue
+            params = j.get("params_decoded") or {}
+            if int(params.get("task_id") or 0) != task_id:
+                continue
+            if j.get("status") not in ("done", "failed", "canceled"):
+                project_jobs.mark_canceled(conn, int(j["id"]))
+                canceled += 1
+    removed = eval_samples.delete_all_runs(vdir, eval_root)
+    return {"removed_runs": removed, "canceled_jobs": canceled}
+
+
 @router.get("/api/projects/{pid}/versions/{vid}/eval/samples/{run_id}/metrics")
 def get_eval_metric_result_endpoint(
     pid: int,
