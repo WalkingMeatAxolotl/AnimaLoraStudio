@@ -191,6 +191,17 @@ export default function GeneratePage() {
   // 没法重试也没法取消（status=failed 时 cancelable=false）
   const [submitting, setSubmitting] = useState(false)
   const [currentTask, setCurrentTask] = useState<Task | null>(null)
+  // #1：本次生成「运行态」定格。dispatch 成功时把当时的 XY 轴 + 完整参数
+  // 快照冻进这里；活动结果网格 / 双图对比 / 完成入库三处都读它，而不是读
+  // live xDraft/yDraft/prefs。这样任务开始后改 sidebar（取消某个 XY LoRA、
+  // 调参数等）只影响「下次生成」，不会串改已出 / 在出的右侧结果与入库元数据。
+  // taskId 不匹配当前任务时回退 live（如刷新后中途回看的边缘场景，无回归）。
+  const [run, setRun] = useState<{
+    taskId: number
+    xDraft: XYAxisDraft
+    yDraft: XYAxisDraft | null
+    snapshot: GenerateParamsSnapshot
+  } | null>(null)
   // 本次出图临时选用的底模（null = 跟随设置页 selected_anima）。不进 prefs
   // 持久化：每次进页面都回到「设置页默认底模」，符合「默认用设置里的」。
   const [baseModel, setBaseModel] = useState<string | null>(null)
@@ -243,6 +254,12 @@ export default function GeneratePage() {
   // 用 useMemo 稳定引用：monitorState 不变时 samples 引用不变，避免下方
   // useEffect 把 samples 当依赖触发不必要的重跑
   const samples = useMemo(() => monitorState?.samples ?? [], [monitorState])
+
+  // #1：活动结果网格用「dispatch 时定格的轴」(run) 而非 live xDraft/yDraft。
+  // run 对应当前任务时取冻结值（任务开始后改 sidebar 不串改右侧）；否则回退 live。
+  const frozenRun = run && currentTask && run.taskId === currentTask.id ? run : null
+  const gridXDraft = frozenRun ? frozenRun.xDraft : xDraft
+  const gridYDraft = frozenRun ? frozenRun.yDraft : yDraft
 
   // XY mode 时，按钮显示「生成 N×M=K 张」
   const xyCellCount = useMemo(() => {
@@ -331,6 +348,12 @@ export default function GeneratePage() {
     if (snap?.taskId === currentTask.id) return
     lastSnapshotRef.current = { taskId: currentTask.id, mode }
     const taskId = currentTask.id
+    // #1：入库元数据（落盘 / cache 的 xyMeta + 参数快照）用本次运行态定格 run，
+    // 而非 live prefs —— 任务开始后改 sidebar 不污染已生成结果的入库轴与参数。
+    // run 不匹配当前任务时回退 live（刷新后中途完成的边缘场景）。
+    const runFrozen = run && run.taskId === currentTask.id ? run : null
+    const metaXDraft = runFrozen ? runFrozen.xDraft : xDraft
+    const metaYDraft = runFrozen ? runFrozen.yDraft : yDraft
     // 选封面 sample
     let coverIdx = 0
     // XY：找 (xi=0, yi=0) 那张；找不到 fallback 0
@@ -351,9 +374,9 @@ export default function GeneratePage() {
     // commit: xy 历史回看用 PreviewXYGrid 重建网格 → 入库时收集 axis + sample 元数据
     let xyMeta: import('./generate/useGenerateHistory').HistoryXYMeta | undefined
     if (mode === 'xy') {
-      const xValues = xDraft.raw.split(',').map((s) => s.trim()).filter(Boolean)
-      const yValues = yDraft
-        ? yDraft.raw.split(',').map((s) => s.trim()).filter(Boolean)
+      const xValues = metaXDraft.raw.split(',').map((s) => s.trim()).filter(Boolean)
+      const yValues = metaYDraft
+        ? metaYDraft.raw.split(',').map((s) => s.trim()).filter(Boolean)
         : [null as string | null]
       const xySamples = samples
         .filter((s): s is typeof s & { xy: NonNullable<typeof s.xy> } => s.xy != null)
@@ -365,20 +388,17 @@ export default function GeneratePage() {
           },
         }))
       xyMeta = {
-        xAxis: xDraft.axis, yAxis: yDraft?.axis ?? null,
+        xAxis: metaXDraft.axis, yAxis: metaYDraft?.axis ?? null,
         xValues, yValues, samples: xySamples,
       }
     }
     // 参数快照（落盘 PNG metadata + cache entry 共用，回填用）。
+    // #1：优先用 dispatch 时定格的完整快照（runFrozen.snapshot）——任务开始后
+    // 改任意参数都不污染落盘 / cache 元数据。run 缺失时（边缘）回退按 live 现构造，
+    // xy_draft 用上面定格的轴 metaXDraft/metaYDraft。
     // LoRA 只存 name + ids（不存 path 避免泄露 / 跨机器死链）；回填时通过
     // projectLoras 用 ids → path resolve。
-    const snapshotLoras: SnapshotLora[] = loras.map((l) => ({
-      name: loraBasename(l.path),
-      scale: l.scale,
-      project_id: l.project_id ?? null,
-      version_id: l.version_id ?? null,
-    }))
-    const params: GenerateParamsSnapshot = {
+    const params: GenerateParamsSnapshot = runFrozen?.snapshot ?? {
       schema_version: PARAMS_SNAPSHOT_VERSION,
       mode,
       prompts,
@@ -389,11 +409,16 @@ export default function GeneratePage() {
       scheduler,
       count, seed,
       base_model: baseModel,
-      loras: snapshotLoras,
+      loras: loras.map((l) => ({
+        name: loraBasename(l.path),
+        scale: l.scale,
+        project_id: l.project_id ?? null,
+        version_id: l.version_id ?? null,
+      })),
       xy_draft: mode === 'xy'
         ? {
-            x: transformAxisRawForSnapshot(xDraft),
-            y: yDraft ? transformAxisRawForSnapshot(yDraft) : null,
+            x: transformAxisRawForSnapshot(metaXDraft),
+            y: metaYDraft ? transformAxisRawForSnapshot(metaYDraft) : null,
           }
         : null,
       dataset_pick: datasetPick,
@@ -427,7 +452,7 @@ export default function GeneratePage() {
         await history.refreshCache()
       }
     })()
-  }, [currentTask, samples, mode, selectedIndices, history, xDraft, yDraft,
+  }, [currentTask, samples, mode, selectedIndices, history, run, xDraft, yDraft,
       prompts, negPrompt, width, height, steps, cfgScale, samplerName, scheduler, count, seed, baseModel, loras, datasetPick])
 
   const handleHistorySelect = (entry: HistoryEntry) => {
@@ -513,6 +538,7 @@ export default function GeneratePage() {
 
     setSubmitting(true)
     setCurrentTask(null)
+    setRun(null)  // #1：清掉上一次的运行态定格，本次 enqueue 成功后重新冻结
     // monitorState 由 useMonitorProgress hook 自动随 currentTask 切 null → 清空
     setSelectedIndices([])  // 新一轮生成 — 旧选择已失效
     setProgress({ batchIdx: null, batchTotal: null, currentStep: null, totalSteps: null })
@@ -575,6 +601,14 @@ export default function GeneratePage() {
       // 早期失败会马上发 SSE，handler 拿 taskIdRef 还是 null → 漏事件）
       taskIdRef.current = task.id
       setCurrentTask(task)
+      // #1：定格本次运行态。xDraft/yDraft 是 {axis,raw,loraIndex} 纯原始对象，
+      // 浅拷贝即可隔离后续 sidebar 编辑；snapshot 复用上面已构造的 dispatchSnapshot。
+      setRun({
+        taskId: task.id,
+        xDraft: { ...xDraft },
+        yDraft: yDraft ? { ...yDraft } : null,
+        snapshot: dispatchSnapshot,
+      })
       toast(t('generate.taskEnqueued', { id: task.id }), 'success')
     } catch (e) {
       toast(String(e), 'error')
@@ -931,16 +965,16 @@ export default function GeneratePage() {
                   samples={samples}
                   taskId={currentTask.id}
                   selectedIndices={selectedIndices as [number, number]}
-                  xDraft={xDraft}
-                  yDraft={yDraft}
+                  xDraft={gridXDraft}
+                  yDraft={gridYDraft}
                   onBack={() => setSelectedIndices([])}
                 />
               ) : mode === 'xy' ? (
                 <PreviewXYGrid
                   samples={samples}
                   taskId={currentTask.id}
-                  xDraft={xDraft}
-                  yDraft={yDraft}
+                  xDraft={gridXDraft}
+                  yDraft={gridYDraft}
                   onCellClick={handleCellClick}
                   selectedIndices={selectedIndices}
                 />
