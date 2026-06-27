@@ -913,6 +913,11 @@
     "languageEn": "English",
     "title": "Settings",
     "pageIndex": "Page index",
+    "saveStatus": {
+      "saving": "Saving…",
+      "saved": "Saved {{time}}",
+      "error": "Save failed"
+    },
     "downloadStarted": "Started downloading {{name}}",
     "saved": "Saved",
     "saveFailed": "Save failed",

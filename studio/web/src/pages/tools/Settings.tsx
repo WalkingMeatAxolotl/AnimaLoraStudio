@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
 import {
   api,
   type CLTaggerVariantInfo,
   type LLMPreset,
   type Secrets,
+  type SecretsPatch,
   type WandBConfig,
 } from '../../api/client'
 import { useDialog } from '../../components/Dialog'
@@ -12,14 +13,14 @@ import LLMTaggerWorkspace from '../../components/LLMTaggerWorkspace'
 import { TagListInput } from '../../components/TagsInput'
 import PageHeader from '../../components/PageHeader'
 import { useToast } from '../../components/Toast'
-import { useSettingsData } from '../../lib/SettingsData'
+import { useSettingsData, type SaveStatus } from '../../lib/SettingsData'
 import { useSettingsDrawer } from '../../lib/SettingsDrawer'
 import {
-  buildPatch,
   DEFAULT_LLM_PRESETS,
   EMPTY,
   getStoredTab,
   _makeFallbackPreset,
+  MASK,
   SECTION_TO_TAB,
   TAB_LIST,
   TAB_SECTIONS,
@@ -47,6 +48,22 @@ import {
 } from './settings/sections'
 import { SystemSection } from './settings/SystemSection'
 
+// 全局保存状态指示（instant-apply 取代旧的顶部保存按钮）。idle 不渲染。
+function SaveIndicator({ status }: { status: SaveStatus }) {
+  const { t } = useTranslation()
+  if (status.state === 'saving') {
+    return <span className="text-xs text-fg-tertiary">{t('settings.saveStatus.saving')}</span>
+  }
+  if (status.state === 'saved') {
+    const time = new Date(status.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    return <span className="text-xs text-fg-tertiary">{t('settings.saveStatus.saved', { time })}</span>
+  }
+  if (status.state === 'error') {
+    return <span className="text-xs text-err">{t('settings.saveStatus.error')}</span>
+  }
+  return null
+}
+
 export default function SettingsPage() {
   const { t } = useTranslation()
   // 共享数据层（SettingsDataProvider）：secrets / catalog / SSE / downloadBusy 都在根级常驻，
@@ -56,6 +73,8 @@ export default function SettingsPage() {
     secrets: server,
     secretsError,
     setSecrets: setServer,
+    commitSecrets,
+    saveStatus,
     catalog,
     catalogError,
     reloadCatalog,
@@ -63,9 +82,11 @@ export default function SettingsPage() {
     startDownload,
     setDownloadSource,
   } = useSettingsData()
-  const [draft, setDraft] = useState<Secrets>(EMPTY)
+  // instant-apply：不再有本地 draft，控件直接读 server（未加载时 EMPTY 占位），
+  // 写一律走 commitSecrets 即时持久化。`draft` 别名保留是为了让下方大段表单
+  // 代码改动最小。
+  const draft = server ?? EMPTY
   const [error, setError] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
   const [tab, setTab] = useState<Tab>(getStoredTab)
   const [llmModelsBusy, setLlmModelsBusy] = useState(false)
   const [llmTestBusy, setLlmTestBusy] = useState(false)
@@ -75,16 +96,7 @@ export default function SettingsPage() {
   // 右侧 section index 用：sticky nav 的 IntersectionObserver root + 滚动平移容器
   const scrollContainerRef = useRef<HTMLDivElement>(null)
 
-  // 第一次拿到 secrets 时把 draft 同步过来；之后 server 变化（save 后）不再
-  // 覆盖 draft，避免抹掉用户的未保存编辑（save 里会自己 setDraft(next)）。
-  const draftInitRef = useRef(false)
-  useEffect(() => {
-    if (server && !draftInitRef.current) {
-      setDraft(server)
-      draftInitRef.current = true
-    }
-  }, [server])
-  // 数据层 fetch secrets 失败时把错误透出到本组件 error 状态，复用底部错误条。
+  // 数据层 fetch secrets 失败时把错误透出到本组件 error 状态。
   useEffect(() => { if (secretsError) setError(secretsError) }, [secretsError])
 
   const switchTab = (next: Tab) => {
@@ -96,17 +108,9 @@ export default function SettingsPage() {
     }
   }
 
-  const dirty = useMemo(
-    () => server !== null && JSON.stringify(server) !== JSON.stringify(draft),
-    [server, draft]
-  )
-
-  // 抽屉关闭前用这个 ref 询问"是否 dirty"；ref 每次 render 刷新，
-  // 注册的函数只挂载一次，避免 effect churn。
-  const dirtyRef = useRef(false)
-  dirtyRef.current = dirty
+  // instant-apply：所有改动即时落盘，抽屉关闭无需 dirty 守卫。
   useEffect(() => {
-    drawer.registerDirtyGuard(() => dirtyRef.current)
+    drawer.registerDirtyGuard(null)
     return () => drawer.registerDirtyGuard(null)
   }, [drawer])
 
@@ -130,43 +134,20 @@ export default function SettingsPage() {
     key: K,
     value: Secrets[S][K]
   ) => {
-    setDraft((prev) => ({
-      ...prev,
-      [section]: { ...prev[section], [key]: value },
-    }))
+    // 敏感字段清空会回传 MASK 哨兵，语义是"未改"——跳过，保持现有契约。
+    if (value === MASK) return
+    commitSecrets({ [section]: { [key]: value } } as SecretsPatch)
   }
 
 
   const selectCLTaggerVariant = (variant: CLTaggerVariantInfo) => {
-    setDraft((prev) => ({
-      ...prev,
+    commitSecrets({
       cltagger: {
-        ...prev.cltagger,
         model_id: variant.model_id,
         model_path: variant.model_path,
         tag_mapping_path: variant.tag_mapping_path,
       },
-    }))
-  }
-
-  const save = async () => {
-    if (!server) return
-    const patch = buildPatch(draft, server)
-    setSaving(true)
-    setError(null)
-    try {
-      const next = await api.updateSecrets(patch)
-      setServer(next)
-      setDraft(next)
-      // 候选 model_ids 改了之后，catalog 里的 wd14 variants 需要刷新
-      void reloadCatalog()
-      toast(t('settings.saved'), 'success')
-    } catch (e) {
-      setError(String(e))
-      toast(t('settings.saveFailed'), 'error')
-    } finally {
-      setSaving(false)
-    }
+    } as SecretsPatch)
   }
 
   // 找到当前 active preset；如果 current_preset 指向不存在的 id（理论上 validator
@@ -249,15 +230,9 @@ export default function SettingsPage() {
     setLlmModelsBusy(true)
     setError(null)
     try {
-      let source = draft
-      if (dirty) {
-        const saved = await api.updateSecrets(buildPatch(draft, server))
-        setServer(saved)
-        setDraft(saved)
-        source = saved
-      }
-      const sourcePreset = source.llm_tagger.presets.find((p) => p.id === currentPreset.id)
-        ?? source.llm_tagger.presets[0]
+      // instant-apply：preset 字段已即时落盘，直接用 server 当前值刷新。
+      const sourcePreset = server.llm_tagger.presets.find((p) => p.id === currentPreset.id)
+        ?? server.llm_tagger.presets[0]
       const result = await api.refreshLLMModels({
         preset_id: sourcePreset.id,
         base_url: sourcePreset.base_url,
@@ -265,7 +240,6 @@ export default function SettingsPage() {
         timeout: sourcePreset.timeout,
       })
       setServer(result.secrets)
-      setDraft(result.secrets)
       toast(t('settings.modelsLoaded', { n: result.items.length }), 'success')
     } catch (e) {
       setError(String(e))
@@ -350,15 +324,7 @@ export default function SettingsPage() {
             </svg>
           </button>
         ) : undefined}
-        actions={
-          <button
-            onClick={save}
-            disabled={!dirty || saving}
-            className={dirty ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
-          >
-            {saving ? t('common.saving') : t('common.save')}
-          </button>
-        }
+        actions={<SaveIndicator status={saveStatus} />}
       />
 
       <div ref={scrollContainerRef} className="p-6 pb-12 flex-1 overflow-y-auto">
