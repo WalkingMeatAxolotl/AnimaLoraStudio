@@ -827,6 +827,8 @@ function TrainSetCard({ project, version }: { project: ProjectDetail; version: V
         <ImagePreviewModal
           src={previewSrc}
           caption={previewItem.name}
+          index={previewIdx}
+          total={items.length}
           hasPrev={previewIdx > 0}
           hasNext={previewIdx < items.length - 1}
           onClose={() => setPreviewIdx(null)}

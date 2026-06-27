@@ -526,6 +526,8 @@ export default function RegularizationPage() {
         <ImagePreviewModal
           src={regOrigUrl(project.id, vid, reg.files[previewIdx])}
           caption={previewCaption}
+          index={previewIdx}
+          total={reg.files.length}
           hasPrev={previewIdx > 0}
           hasNext={previewIdx < reg.files.length - 1}
           onClose={() => setPreviewIdx(null)}

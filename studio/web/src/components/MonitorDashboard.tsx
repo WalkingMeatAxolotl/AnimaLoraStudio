@@ -972,7 +972,9 @@ function SampleViewer({ samples, taskId }: {
       {zoomOpen && (
         <ImagePreviewModal
           src={fullUrl}
-          caption={[markText, `${active + 1} / ${list.length}`, filename].filter(Boolean).join(' · ')}
+          caption={[markText, filename].filter(Boolean).join(' · ')}
+          index={active}
+          total={list.length}
           hasPrev={active > 0}
           hasNext={active < list.length - 1}
           onClose={() => setZoomOpen(false)}

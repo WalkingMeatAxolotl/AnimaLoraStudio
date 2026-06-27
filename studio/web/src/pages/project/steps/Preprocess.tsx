@@ -480,6 +480,8 @@ export default function PreprocessPage() {
           caption={`${visibleRows[previewIdx].name} · ${
             visibleRows[previewIdx].status === 'processed' ? '✓ 已处理' : '⊘ 未处理'
           }`}
+          index={previewIdx}
+          total={visibleRows.length}
           hasPrev={previewIdx > 0}
           hasNext={previewIdx < visibleRows.length - 1}
           onClose={() => setPreviewIdx(null)}

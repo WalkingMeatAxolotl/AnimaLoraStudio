@@ -813,6 +813,8 @@ export default function CurationPage() {
         <ImagePreviewModal
           src={preview.url}
           caption={preview.caption}
+          index={preview.index}
+          total={preview.list.length}
           hasPrev={preview.index > 0}
           hasNext={preview.index < preview.list.length - 1}
           onClose={() => setPreview(null)}

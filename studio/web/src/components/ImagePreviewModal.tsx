@@ -9,6 +9,9 @@ interface Props {
   /** Split 布局时右侧图顶部的小 label（如 "处理后"）。 */
   compareLabel?: string
   caption?: string
+  /** 列表中的 0-based 位置；与 total 同传时底部显示 "index+1 / total" 计数。 */
+  index?: number
+  total?: number
   hasPrev?: boolean
   hasNext?: boolean
   onClose: () => void
@@ -25,6 +28,8 @@ export default function ImagePreviewModal({
   srcLabel,
   compareLabel,
   caption,
+  index,
+  total,
   hasPrev,
   hasNext,
   onClose,
@@ -56,6 +61,8 @@ export default function ImagePreviewModal({
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [hasPrev, hasNext, onPrev, onNext, onClose, onAccept, onDelete])
+
+  const counter = index != null && total != null ? `${index + 1} / ${total}` : null
 
   return (
     <div
@@ -113,8 +120,9 @@ export default function ImagePreviewModal({
           />
         )}
       </div>
-      {(caption || shortcutHint) && (
+      {(counter || caption || shortcutHint) && (
         <div className="shrink-0 border-t border-white/10 bg-black px-4 py-2 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-slate-400">
+          {counter && <div className="font-mono text-slate-300">{counter}</div>}
           {caption && <div className="font-mono text-slate-300">{caption}</div>}
           {shortcutHint && <div>{shortcutHint}</div>}
         </div>

@@ -317,6 +317,8 @@ export default function PreviewXYGrid({
             src={s.imageUrl ?? api.generateSampleUrl(taskId, fn)}
             alt={fn}
             caption={captionParts.join(' · ')}
+            index={fullscreenIdx}
+            total={samples.length}
             onClose={() => setFullscreenIdx(null)}
             hasPrev={fullscreenNeighbors?.left != null}
             hasNext={fullscreenNeighbors?.right != null}
