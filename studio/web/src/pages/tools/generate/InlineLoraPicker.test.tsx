@@ -1,9 +1,31 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { api, type LoraCkpt } from '../../../api/client'
+import { type LoraCkpt } from '../../../api/client'
 import InlineLoraPicker, { projectAbbr, type PickedLora } from './InlineLoraPicker'
 import type { ProjectLora } from './types'
+import type { LoraCatalog, LoraVersionOption } from './useLoraCatalog'
+
+/** 用 sample（ProjectLora[]）造一个已加载好的 LoraCatalog（懒级联测试替身）：
+ *  projects / versionsByPid 同步备好，fetchCkpts 返固定 ckpts。 */
+function catalogFrom(samples: ProjectLora[], ckpts: LoraCkpt[]): LoraCatalog {
+  const projects = Array.from(
+    new Map(samples.map((s) => [s.projectId, { id: s.projectId, title: s.projectTitle }])).values(),
+  )
+  const versionsByPid: Record<number, LoraVersionOption[]> = {}
+  for (const s of samples) {
+    (versionsByPid[s.projectId] ??= []).push({ id: s.versionId, label: s.versionLabel, status: s.status })
+  }
+  return {
+    projects,
+    projectsLoading: false,
+    ensureProjects: () => {},
+    loadProjects: () => Promise.resolve(projects),
+    versionsOf: (pid) => versionsByPid[pid],
+    ensureVersions: () => {},
+    fetchCkpts: () => Promise.resolve(ckpts),
+  }
+}
 
 const sample: ProjectLora[] = [
   {
@@ -52,14 +74,14 @@ describe('InlineLoraPicker — multi mode (default)', () => {
     ckpts: LoraCkpt[]
     live: boolean
   }> = {}) {
-    vi.spyOn(api, 'listVersionLoraCkpts').mockResolvedValue(overrides.ckpts ?? ckptsV3)
+    const catalog = catalogFrom(overrides.projectLoras ?? sample, overrides.ckpts ?? ckptsV3)
     const onPick = vi.fn()
     const onClose = vi.fn()
     const onPickExternal = vi.fn()
     const utils = render(
       <InlineLoraPicker
         mode="multi"
-        projectLoras={overrides.projectLoras ?? sample}
+        catalog={catalog}
         existingPaths={overrides.existingPaths ?? new Set()}
         showWeight={overrides.showWeight ?? true}
         live={overrides.live ?? false}
@@ -231,14 +253,14 @@ describe('InlineLoraPicker — single mode (controlled slot)', () => {
     weight: number
     ckpts: LoraCkpt[]
   }> = {}) {
-    vi.spyOn(api, 'listVersionLoraCkpts').mockResolvedValue(overrides.ckpts ?? ckptsV3)
+    const catalog = catalogFrom(sample, overrides.ckpts ?? ckptsV3)
     const onChange = vi.fn()
     const onClose = vi.fn()
     const onPickExternal = vi.fn()
     const utils = render(
       <InlineLoraPicker
         mode="single"
-        projectLoras={sample}
+        catalog={catalog}
         value={overrides.value ?? null}
         weight={overrides.weight ?? 1.0}
         onChange={onChange}
@@ -301,9 +323,10 @@ describe('InlineLoraPicker — single mode (controlled slot)', () => {
     expect(onClose).toHaveBeenCalled()
   })
 
-  it('weight slider always visible in single mode (even without selection)', () => {
+  it('weight slider always visible in single mode (even without selection)', async () => {
     renderSingle({ value: null })
-    expect(screen.getByLabelText('LoRA 权重数值')).toBeInTheDocument()
+    // findBy await 让自动锚第一个项目的 effect 级联结算（避免 act 警告）
+    expect(await screen.findByLabelText('LoRA 权重数值')).toBeInTheDocument()
   })
 })
 
@@ -313,7 +336,7 @@ describe('InlineLoraPicker — controlled sync (Step 6 / 决策 #8)', () => {
   })
 
   it('rerender with new props.value → project/version dropdowns reflect new ids', async () => {
-    vi.spyOn(api, 'listVersionLoraCkpts').mockResolvedValue(ckptsV3)
+    const catalog = catalogFrom(sample, ckptsV3)
     const onChange = vi.fn()
     const onClose = vi.fn()
     const initialValue: PickedLora = {
@@ -323,7 +346,7 @@ describe('InlineLoraPicker — controlled sync (Step 6 / 决策 #8)', () => {
     const { rerender } = render(
       <InlineLoraPicker
         mode="single"
-        projectLoras={sample}
+        catalog={catalog}
         value={initialValue}
         weight={1.0}
         onChange={onChange}
@@ -343,7 +366,7 @@ describe('InlineLoraPicker — controlled sync (Step 6 / 决策 #8)', () => {
     rerender(
       <InlineLoraPicker
         mode="single"
-        projectLoras={sample}
+        catalog={catalog}
         value={newValue}
         weight={1.0}
         onChange={onChange}
@@ -358,13 +381,13 @@ describe('InlineLoraPicker — controlled sync (Step 6 / 决策 #8)', () => {
   })
 
   it('value=null 时不 sync，保留 fallback 默认（projects[0] ckpts 显示）', async () => {
-    vi.spyOn(api, 'listVersionLoraCkpts').mockResolvedValue(ckptsV3)
+    const catalog = catalogFrom(sample, ckptsV3)
     const onChange = vi.fn()
     const onClose = vi.fn()
     render(
       <InlineLoraPicker
         mode="single"
-        projectLoras={sample}
+        catalog={catalog}
         value={null}
         weight={1.0}
         onChange={onChange}

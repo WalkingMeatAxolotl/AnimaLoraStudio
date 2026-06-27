@@ -23,7 +23,7 @@ import PreviewCompare from './generate/PreviewCompare'
 import PreviewHistoryRail from './generate/PreviewHistoryRail'
 import PromptFromDatasetPicker, { type DatasetPick } from './generate/PromptFromDatasetPicker'
 import {
-  PARAMS_SNAPSHOT_VERSION, applySnapshot, loraBasename,
+  PARAMS_SNAPSHOT_VERSION, applySnapshot, loraBasename, resolveLoraFromCkpts,
   transformAxisRawForSnapshot,
   type GenerateParamsSnapshot, type SnapshotLora,
 } from './generate/paramsSnapshot'
@@ -47,7 +47,7 @@ import {
   SAMPLER_OPTIONS, SCHEDULER_OPTIONS,
   type SamplerName, type SchedulerName,
 } from './generate/types'
-import { useProjectLoras } from './generate/useProjectLoras'
+import { useLoraCatalog } from './generate/useLoraCatalog'
 import { buildXYMatrix, cellCount, parseAxisValues, type XYAxisDraft } from './generate/xy'
 
 const GENERATE_PREFS_KEY = 'studio:generate:params:v1'
@@ -239,7 +239,7 @@ export default function GeneratePage() {
   // xy mode 内部 selectedIndices=2 时切 compare sub-view
   const showCompareView = mode === 'xy' && selectedIndices.length === 2
 
-  const projectLoras = useProjectLoras()
+  const catalog = useLoraCatalog()
   // 用 useMemo 稳定引用：monitorState 不变时 samples 引用不变，避免下方
   // useEffect 把 samples 当依赖触发不必要的重跑
   const samples = useMemo(() => monitorState?.samples ?? [], [monitorState])
@@ -431,12 +431,28 @@ export default function GeneratePage() {
       prompts, negPrompt, width, height, steps, cfgScale, samplerName, scheduler, count, seed, baseModel, loras, datasetPick])
 
   const handleHistorySelect = (entry: HistoryEntry) => {
-    setHistoryOverride(entry)
-    // applySnapshot 统一所有"应用快照"入口（决策 #8 / Step 3）；老 entry 缺
-    // params 会走 catch 兜底（snap.loras 等访问报错 → 不回填，仅切图）
+    setHistoryOverride(entry)  // 先切图（同步），sidebar 回填随 ckpts 解析异步补上
+    // applySnapshot 统一所有"应用快照"入口（决策 #8 / Step 3）；现在 async：
+    // LoRA 解析按需拉对应版本 ckpts（懒级联），不依赖 mount 全量列表。老 entry
+    // 缺 params 会走 catch 兜底（snap.loras 等访问报错 → 不回填，仅切图）。
+    void (async () => {
     let applied
     try {
-      applied = applySnapshot(entry.params, projectLoras)
+      const projects = await catalog.loadProjects()
+      const projIds = new Set(projects.map((p) => p.id))
+      applied = await applySnapshot(
+        entry.params,
+        async (snap) => {
+          if (snap.project_id == null || snap.version_id == null) {
+            return resolveLoraFromCkpts(snap, [])
+          }
+          const ckpts = await catalog
+            .fetchCkpts(snap.project_id, snap.version_id)
+            .catch(() => [])
+          return resolveLoraFromCkpts(snap, ckpts)
+        },
+        (pid) => projIds.has(pid),
+      )
     } catch {
       return
     }
@@ -479,6 +495,7 @@ export default function GeneratePage() {
         yDraft: applied.yDraft ?? null,
       }
     })
+    })()
   }
 
   const handleGenerate = async () => {
@@ -638,7 +655,7 @@ export default function GeneratePage() {
                   <SidebarLoras
                     loras={loras}
                     onChange={setLoras}
-                    projectLoras={projectLoras}
+                    catalog={catalog}
                   />
                 </>
               ) : (
@@ -649,7 +666,7 @@ export default function GeneratePage() {
                   onYChange={setYDraft}
                   loras={loras}
                   onLorasChange={setLoras}
-                  projectLoras={projectLoras}
+                  catalog={catalog}
                 />
               )}
             </div>

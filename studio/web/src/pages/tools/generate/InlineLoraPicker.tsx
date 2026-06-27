@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { api, type LoraCkpt } from '../../../api/client'
-import type { ProjectLora } from './types'
+import { type LoraCkpt } from '../../../api/client'
+import type { LoraCatalog } from './useLoraCatalog'
 
 function basenameOf(path: string): string {
   return path.split(/[\\/]/).pop() ?? path
@@ -19,7 +19,8 @@ export interface PickedLora {
 }
 
 interface CommonProps {
-  projectLoras: ProjectLora[]
+  /** 懒级联数据源：picker 自己按需拉 projects / versions / ckpts（见 useLoraCatalog） */
+  catalog: LoraCatalog
   /** × 按钮回调：单选模式 = 删整个槽；多选模式 = 关 inline 面板 */
   onClose: () => void
   onPickExternal?: () => void
@@ -83,32 +84,35 @@ type Props = SingleModeProps | MultiModeProps
  *   传 `showWeight=false` 隐藏权重栏。
  */
 export default function InlineLoraPicker(props: Props) {
-  const { projectLoras, onClose, onPickExternal } = props
+  const { catalog, onClose, onPickExternal } = props
+  // 解构出稳定的 loader（useCallback）+ 响应式数据，effect deps 用纯标识符。
+  const { projects, ensureProjects, ensureVersions, versionsOf, fetchCkpts } = catalog
   const isSingle = props.mode === 'single'
   const showWeight = isSingle ? true : (props.showWeight ?? true)
   const existingPaths = isSingle ? new Set<string>() : (props.existingPaths ?? new Set<string>())
 
-  // 项目下拉：projectLoras 去重 by projectId
-  const projects = useMemo(() => {
-    const map = new Map<number, { id: number; title: string }>()
-    for (const l of projectLoras) {
-      if (!map.has(l.projectId)) map.set(l.projectId, { id: l.projectId, title: l.projectTitle })
-    }
-    return Array.from(map.values())
-  }, [projectLoras])
+  // 项目下拉：picker mount 即懒拉项目列表（catalog 缓存 + 去重，不开 picker 不发）
+  useEffect(() => { ensureProjects() }, [ensureProjects])
 
   // multi mode 受控锚定：caller 给 initialPid/Vid 时直接采纳（历史回填走这条）
   const multiInitialPid = !isSingle ? (props as MultiModeProps).initialPid ?? null : null
   const multiInitialVid = !isSingle ? (props as MultiModeProps).initialVid ?? null : null
-  // 初始 pid/vid：single 用 value 的；multi 用 initialPid/Vid 兜底，再 fallback projects[0]
+  // 初始 pid/vid：single 用 value 的；multi 用 initialPid/Vid 兜底。
+  // 懒级联下项目列表 mount 时还没到 → 起步 null；projects 到了再由下方 effect
+  // 自动锚第一个项目（保留「打开 picker 即看到第一个项目 ckpts」的既有 UX）。
   const initialPid = isSingle
-    ? (props.value?.projectId ?? projects[0]?.id ?? null)
-    : (multiInitialPid ?? projects[0]?.id ?? null)
+    ? (props.value?.projectId ?? null)
+    : (multiInitialPid ?? null)
   const initialVid = isSingle
     ? (props.value?.versionId ?? null)
-    : (multiInitialVid ?? projectLoras.find((l) => l.projectId === projects[0]?.id)?.versionId ?? null)
+    : (multiInitialVid ?? null)
 
   const [pid, setPid] = useState<number | null>(initialPid)
+
+  // pid 定下来（含 anchor 回填 / 用户选）→ 懒拉该项目的 versions
+  useEffect(() => {
+    if (pid != null) ensureVersions(pid)
+  }, [ensureVersions, pid])
 
   // 决策 #8（plan §9.2）：single 模式是受控的，pid 必须跟 props.value.projectId
   // 同步 —— 否则历史回填 / URL ?lora= 流回新 LoraEntry 时，下拉框还卡在
@@ -128,12 +132,21 @@ export default function InlineLoraPicker(props: Props) {
     setPid((cur) => (cur === multiInitialPid ? cur : multiInitialPid))
   }, [isSingle, multiInitialPid])
 
-  const versions = useMemo(() => {
-    if (pid === null) return []
-    return projectLoras
-      .filter((l) => l.projectId === pid)
-      .map((l) => ({ id: l.versionId, label: l.versionLabel, status: l.status }))
-  }, [projectLoras, pid])
+  // 无 anchor（single value=null / multi 无 initialPid）时，projects 懒加载到位后
+  // 自动锚第一个项目 —— 保留既有 UX：打开 picker 即看到第一个项目的 ckpts（不必
+  // 先手选项目）。有 anchor 时上面两个 sync effect 接手，这里跳过。
+  const hasAnchor = isSingle ? singleValue != null : multiInitialPid != null
+  useEffect(() => {
+    if (hasAnchor) return
+    if (projects.length === 0) return
+    setPid((cur) => (cur != null ? cur : projects[0].id))
+  }, [hasAnchor, projects])
+
+  // 版本下拉：来自 catalog（pid 定后由上面 effect 懒拉）。还没到时为空数组。
+  const versions = useMemo(
+    () => (pid != null ? versionsOf(pid) ?? [] : []),
+    [versionsOf, pid],
+  )
 
   const [vid, setVid] = useState<number | null>(initialVid)
   // 同 pid：single 模式下 value 非 null 时 vid 跟 props.value.versionId 同步
@@ -171,7 +184,7 @@ export default function InlineLoraPicker(props: Props) {
     let cancelled = false
     setLoading(true)
     setError(null)
-    void api.listVersionLoraCkpts(pid, vid)
+    void fetchCkpts(pid, vid)
       .then((items) => {
         if (cancelled) return
         setCkpts(items)
@@ -184,7 +197,7 @@ export default function InlineLoraPicker(props: Props) {
         setLoading(false)
       })
     return () => { cancelled = true }
-  }, [pid, vid])
+  }, [pid, vid, fetchCkpts])
 
   // 搜索过滤
   const [search, setSearch] = useState('')

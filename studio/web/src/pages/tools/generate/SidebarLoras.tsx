@@ -4,7 +4,7 @@ import type { LoraEntry } from '../../../api/client'
 import PathPicker from '../../../components/PathPicker'
 import AddSlotButton from './AddSlotButton'
 import InlineLoraPicker, { type PickedLora } from './InlineLoraPicker'
-import type { ProjectLora } from './types'
+import type { LoraCatalog } from './useLoraCatalog'
 
 /** Sidebar 的 LoRA 区：每个 LoRA = 一个常驻 picker 槽（项目下拉 + ckpt chip + 权重 + ×）。
  *
@@ -16,11 +16,11 @@ import type { ProjectLora } from './types'
  * Generate.tsx handleGenerate 在送 backend 前会 `loras.filter((l) => l.path.trim())`
  * 过滤空槽，不影响 enqueue。 */
 export default function SidebarLoras({
-  loras, onChange, projectLoras,
+  loras, onChange, catalog,
 }: {
   loras: LoraEntry[]
   onChange: (l: LoraEntry[]) => void
-  projectLoras: ProjectLora[]
+  catalog: LoraCatalog
 }) {
   const { t } = useTranslation()
   const [externalForIdx, setExternalForIdx] = useState<number | null>(null)
@@ -88,7 +88,7 @@ export default function SidebarLoras({
             // key 只用 index：避免 ckpt 切换 / 反选时整个 picker remount
             key={`lora-${i}`}
             mode="single"
-            projectLoras={projectLoras}
+            catalog={catalog}
             value={
               hasCkpt
                 ? { path: l.path, projectId: l.project_id ?? null, versionId: l.version_id ?? null }

@@ -15,7 +15,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock)
   fetchMock.mockReset()
   fetchMock.mockImplementation((url: string, init?: RequestInit) => {
-    // useProjectLoras 启动时 listProjects → 返回空（no LoRAs in picker）
+    // catalog 懒级联：picker mount 时才拉 /api/projects（这里返回空 = no LoRAs）
     if (url.endsWith('/api/projects') && (init?.method ?? 'GET') === 'GET') {
       return Promise.resolve({
         ok: true, status: 200,
@@ -70,10 +70,11 @@ function setup() {
   )
 }
 
+// LoRA 数据现在懒级联（catalog）：/api/projects 只在 picker mount 时才发，不再
+// 是 mount 必发。所以这里改成等页面渲染出生成按钮作为「页面就绪」信号；需要
+// picker 内容的用例自己再 waitFor 对应 chip（懒加载到位）。
 async function waitForInitialLorasLoad() {
-  await waitFor(() =>
-    expect(fetchMock.mock.calls.some(([url]) => url === '/api/projects')).toBe(true)
-  )
+  await screen.findByRole('button', { name: /开始生成/ })
 }
 
 // 正向 / 负向 textarea 现在归到左侧「提示词」分页 tab（默认 tab 是 LoRA）；
