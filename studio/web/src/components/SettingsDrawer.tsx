@@ -69,7 +69,7 @@ export default function SettingsDrawer() {
   return (
     <div
       aria-hidden={!isOpen}
-      className={`absolute inset-0 z-30 ${active ? '' : 'pointer-events-none'}`}
+      className={`fixed inset-0 z-40 ${active ? '' : 'pointer-events-none'}`}
     >
       {/* backdrop：absolute 铺满 viewport，让 panel slide-in 中途不会从右边露出底页。
        *  之前用 flex + flex-1 时 backdrop 只占 panel 左边那条，panel 滑动期间右侧

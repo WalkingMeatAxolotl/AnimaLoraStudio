@@ -401,6 +401,12 @@ export default function RegularizationPage() {
           lines: aiLogs,
           startedAt: aiTask.started_at,
           finishedAt: aiTask.finished_at,
+          onCancel: () => {
+            void api
+              .cancelTask(aiTask.id)
+              .then(() => toast(t('reg.cancelToast'), 'success'))
+              .catch((e) => toast(String(e), 'error'))
+          },
         },
       ]}
       actions={

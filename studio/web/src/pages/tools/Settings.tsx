@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import type { TFunction } from 'i18next'
 import { Trans, useTranslation } from 'react-i18next'
 import {
@@ -3526,6 +3526,9 @@ function VersionSection() {
   const [version, setVersion] = useState<SystemVersion | null>(null)
   const [check, setCheck] = useState<SystemUpdateCheck | null>(null)
   const [status, setStatus] = useState<SystemUpdateStatus | null>(null)
+  // status 是否已拉过（成功 / 失败都置 true）。回滚提示行占位骨架靠它判「加载中」，
+  // 不能直接判 status===null —— 拉取失败时 status 永远 null，骨架会永久不消失。
+  const [statusLoaded, setStatusLoaded] = useState(false)
   const [prefs, setPrefs] = useState<SystemPrefsConfig | null>(null)
   const [devCheck, setDevCheck] = useState<SystemUpdateCheck | null>(null)
   // chunk 2 — 当前显示的 release notes（hasUpdate 时为 target tag，否则 current tag）
@@ -3569,7 +3572,7 @@ function VersionSection() {
         void api.checkSystemUpdate('master').then((r) => { if (!cancelled) setCheck(r) }).catch(() => { /* silent */ })
       }
     })()
-    void api.getSystemUpdateStatus().then(setStatus).catch(() => { /* silent */ })
+    void api.getSystemUpdateStatus().then(setStatus).catch(() => { /* silent */ }).finally(() => setStatusLoaded(true))
     void api.getSecrets().then((s) => setPrefs(s.system)).catch(() => { /* silent */ })
     return () => { cancelled = true }
   }, [])
@@ -3847,6 +3850,15 @@ function VersionSection() {
     }
   }, [allReleaseNotes])
 
+  // 预取全量历史 release notes：进入版本 section 即后台拉一次，让「更新日志」
+  // modal 一打开就有完整版本列表，避免 ‹ › 切换按钮延迟出现把控制栏撑大。
+  useEffect(() => {
+    if (allReleaseNotes !== null) return
+    void api.getAllReleaseNotes()
+      .then((r) => setAllReleaseNotes(r.versions))
+      .catch(() => setAllReleaseNotes([]))
+  }, [allReleaseNotes])
+
   // release notes 拉对应 tag：stable 通道有更新时展示目标版本，否则展示当前
   // 已装版本；dev 通道不展示 release notes（dev 是滚动的，没有版本号语义）
   const displayedTag = showDevView
@@ -3980,6 +3992,7 @@ function VersionSection() {
               version={version}
               check={check}
               status={status}
+              statusLoaded={statusLoaded}
               hasUpdate={masterHasUpdate}
               hasRollback={hasRollback}
               statusBadFailed={statusBadFailed}
@@ -4097,6 +4110,7 @@ type MasterCardProps = {
   version: SystemVersion | null
   check: SystemUpdateCheck | null
   status: SystemUpdateStatus | null
+  statusLoaded: boolean
   hasUpdate: boolean
   hasRollback: boolean
   statusBadFailed: boolean
@@ -4241,35 +4255,29 @@ function ProgressPane({ fromLabel, toLabel }: { fromLabel: string; toLabel: stri
   )
 }
 
+// inline「更新内容」预览固定渲染 RN_MAX_ITEMS 条 + 1 条「详细内容」入口共
+// RN_SLOTS 个行槽位：加载中填骨架行、有数据填真实 entry、不足填空占位行。
+// 高度恒由固定行数撑出（不靠像素估算），异步拉取 / 切换显示版本时列表都不撑大。
+const RN_SLOTS = RN_MAX_ITEMS + 1
+
 function MasterReleaseNotes({
   notes, onShowDetail,
 }: { notes: ReleaseNotes | null; onShowDetail: () => void }) {
   const { t } = useTranslation()
+  const loading = notes === null
   const entries = notes?.found ? notes.entries : []
   const total = entries.length
-  if (total === 0) {
-    return (
-      <ul className="vs-change-list">
-        <li>
-          <span className="vs-glyph">▸</span>
-          <span className="vs-txt">
-            {notes && !notes.found
-              ? <Trans i18nKey="settings.releaseNoEntry" components={{ code: <code /> }} />
-              : <Trans i18nKey="settings.releaseSeeChangelog" components={{ code: <code /> }} />}
-          </span>
-        </li>
-      </ul>
-    )
-  }
   const shown = entries.slice(0, RN_MAX_ITEMS)
   const overflow = total - shown.length
   // 任意 entry 有 detail → 即使全部顶层 entries 都显示，"详细内容" 入口仍有意义
   const anyDetail = entries.some((e) => !!e.detail)
   const showDetailLink = overflow > 0 || anyDetail
-  return (
-    <ul className="vs-change-list">
-      {shown.map((e, i) => (
-        <li key={i}>
+
+  const rows: ReactNode[] = []
+  if (!loading) {
+    shown.forEach((e, i) => {
+      rows.push(
+        <li key={`e${i}`}>
           <span
             className={`vs-pill ${KIND_PILL_CLASS[e.kind] || 'vs-pill-info'}`}
             style={{ flexShrink: 0 }}
@@ -4279,9 +4287,11 @@ function MasterReleaseNotes({
           </span>
           <span className="vs-txt">{e.summary}</span>
         </li>
-      ))}
-      {showDetailLink && (
-        <li>
+      )
+    })
+    if (showDetailLink) {
+      rows.push(
+        <li key="detail">
           <span className="vs-glyph">·</span>
           <span className="vs-txt" style={{ color: 'var(--fg-tertiary)' }}>
             {overflow > 0 && t('settings.moreItems', { count: overflow })}
@@ -4295,7 +4305,40 @@ function MasterReleaseNotes({
             </button>
           </span>
         </li>
-      )}
+      )
+    } else if (total === 0) {
+      rows.push(
+        <li key="hint">
+          <span className="vs-glyph">▸</span>
+          <span className="vs-txt">
+            {notes && !notes.found
+              ? <Trans i18nKey="settings.releaseNoEntry" components={{ code: <code /> }} />
+              : <Trans i18nKey="settings.releaseSeeChangelog" components={{ code: <code /> }} />}
+          </span>
+        </li>
+      )
+    }
+  }
+  // 补足到固定行数：加载态填骨架行、否则填空占位行 —— 保证列表高度恒定（无像素估算）
+  while (rows.length < RN_SLOTS) {
+    const i = rows.length
+    rows.push(
+      loading ? (
+        <li key={`sk${i}`} className="vs-rn-sk" aria-hidden="true">
+          <span className="vs-rn-sk-pill" />
+          <span className="vs-rn-sk-bar" />
+        </li>
+      ) : (
+        <li key={`pad${i}`} className="vs-rn-empty" aria-hidden="true">
+          &nbsp;
+        </li>
+      )
+    )
+  }
+
+  return (
+    <ul className="vs-change-list" aria-busy={loading || undefined}>
+      {rows}
     </ul>
   )
 }
@@ -4472,7 +4515,16 @@ function MasterCard(p: MasterCardProps) {
         </div>
       </div>
 
-      {p.hasRollback && p.status?.rollback_target && (() => {
+      {!p.statusLoaded ? (
+        // status 加载中：回滚提示行占位骨架（与真实行同高），有可回滚版本时平滑
+        // 填入而非弹入把下方内容顶开；几乎总有可回滚版本（除从未更新过的首版）
+        <div className="vs-rollback-collapse" aria-hidden="true">
+          <span className="vs-rollback-summary vs-rollback-sk">
+            <span className="vs-caret">▸</span>
+            <span className="vs-rollback-sk-bar" />
+          </span>
+        </div>
+      ) : p.hasRollback && p.status?.rollback_target ? (() => {
         // rollback 显示优先 tag（"v0.6.0"），否则 sha 前 8 位
         const sha = p.status.rollback_target
         const tag = p.status.rollback_target_tag
@@ -4499,7 +4551,7 @@ function MasterCard(p: MasterCardProps) {
             </div>
           </details>
         )
-      })()}
+      })() : null}
     </div>
   )
 }
@@ -4842,28 +4894,28 @@ function ReleaseNotesDetailModal({
       >
         {/* 顶部控制栏：左右切换 + 关闭，放在 title 上方独立一行 */}
         <div className="flex items-center gap-1 border-b border-subtle px-3 py-2">
+          {/* ‹ › 始终渲染（单版本时 disabled）：让控制栏高度从 modal 打开就固定，
+              不因 allNotes 异步到位后切换按钮才出现而撑大 */}
+          <button
+            type="button"
+            onClick={goOlder}
+            disabled={!hasOlder}
+            className={navBtnCls}
+            aria-label={t('settings.releaseNotesOlder')}
+            title={t('settings.releaseNotesOlder')}
+          >‹</button>
+          <button
+            type="button"
+            onClick={goNewer}
+            disabled={!hasNewer}
+            className={navBtnCls}
+            aria-label={t('settings.releaseNotesNewer')}
+            title={t('settings.releaseNotesNewer')}
+          >›</button>
           {total > 1 && (
-            <>
-              <button
-                type="button"
-                onClick={goOlder}
-                disabled={!hasOlder}
-                className={navBtnCls}
-                aria-label={t('settings.releaseNotesOlder')}
-                title={t('settings.releaseNotesOlder')}
-              >‹</button>
-              <button
-                type="button"
-                onClick={goNewer}
-                disabled={!hasNewer}
-                className={navBtnCls}
-                aria-label={t('settings.releaseNotesNewer')}
-                title={t('settings.releaseNotesNewer')}
-              >›</button>
-              <span className="text-2xs text-fg-dim font-mono ml-1">
-                {t('settings.releaseNotesPosition', { index: idx + 1, total })}
-              </span>
-            </>
+            <span className="text-2xs text-fg-dim font-mono ml-1">
+              {t('settings.releaseNotesPosition', { index: idx + 1, total })}
+            </span>
           )}
           <div className="flex-1" />
           <button
