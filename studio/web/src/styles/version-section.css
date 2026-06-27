@@ -296,7 +296,7 @@
 }
 .vs-change-list .vs-rn-sk-pill,
 .vs-change-list .vs-rn-sk-bar {
-  background: var(--overlay);
+  background: var(--bg-overlay);
   animation: vs-rn-pulse 1.3s ease-in-out infinite;
 }
 .vs-change-list .vs-rn-sk-pill {
@@ -407,6 +407,22 @@
   margin-top: 0;
   padding-top: 0;
   border-top: 0;
+}
+/* status 加载中的回滚提示行占位骨架：复用 .vs-rollback-collapse 的 dashed 分隔
+   与间距、复用 .vs-rollback-summary 的字号/行高（caret 真实渲染撑出相同行框），
+   内部 bar 替代文字 —— 与真实行同高，status resolve 后平滑填入不顶下方内容。 */
+.vs-rollback-summary.vs-rollback-sk { cursor: default; }
+.vs-rollback-summary.vs-rollback-sk .vs-caret { opacity: 0.4; }
+.vs-rollback-sk-bar {
+  height: 0.8em;
+  width: 170px;
+  max-width: 60%;
+  border-radius: 4px;
+  background: var(--bg-overlay);
+  animation: vs-rn-pulse 1.3s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .vs-rollback-sk-bar { animation: none; }
 }
 
 /* ==================== inline rollback affordance（master 卡底） ==================== */

@@ -3526,6 +3526,9 @@ function VersionSection() {
   const [version, setVersion] = useState<SystemVersion | null>(null)
   const [check, setCheck] = useState<SystemUpdateCheck | null>(null)
   const [status, setStatus] = useState<SystemUpdateStatus | null>(null)
+  // status 是否已拉过（成功 / 失败都置 true）。回滚提示行占位骨架靠它判「加载中」，
+  // 不能直接判 status===null —— 拉取失败时 status 永远 null，骨架会永久不消失。
+  const [statusLoaded, setStatusLoaded] = useState(false)
   const [prefs, setPrefs] = useState<SystemPrefsConfig | null>(null)
   const [devCheck, setDevCheck] = useState<SystemUpdateCheck | null>(null)
   // chunk 2 — 当前显示的 release notes（hasUpdate 时为 target tag，否则 current tag）
@@ -3569,7 +3572,7 @@ function VersionSection() {
         void api.checkSystemUpdate('master').then((r) => { if (!cancelled) setCheck(r) }).catch(() => { /* silent */ })
       }
     })()
-    void api.getSystemUpdateStatus().then(setStatus).catch(() => { /* silent */ })
+    void api.getSystemUpdateStatus().then(setStatus).catch(() => { /* silent */ }).finally(() => setStatusLoaded(true))
     void api.getSecrets().then((s) => setPrefs(s.system)).catch(() => { /* silent */ })
     return () => { cancelled = true }
   }, [])
@@ -3989,6 +3992,7 @@ function VersionSection() {
               version={version}
               check={check}
               status={status}
+              statusLoaded={statusLoaded}
               hasUpdate={masterHasUpdate}
               hasRollback={hasRollback}
               statusBadFailed={statusBadFailed}
@@ -4106,6 +4110,7 @@ type MasterCardProps = {
   version: SystemVersion | null
   check: SystemUpdateCheck | null
   status: SystemUpdateStatus | null
+  statusLoaded: boolean
   hasUpdate: boolean
   hasRollback: boolean
   statusBadFailed: boolean
@@ -4510,7 +4515,16 @@ function MasterCard(p: MasterCardProps) {
         </div>
       </div>
 
-      {p.hasRollback && p.status?.rollback_target && (() => {
+      {!p.statusLoaded ? (
+        // status 加载中：回滚提示行占位骨架（与真实行同高），有可回滚版本时平滑
+        // 填入而非弹入把下方内容顶开；几乎总有可回滚版本（除从未更新过的首版）
+        <div className="vs-rollback-collapse" aria-hidden="true">
+          <span className="vs-rollback-summary vs-rollback-sk">
+            <span className="vs-caret">▸</span>
+            <span className="vs-rollback-sk-bar" />
+          </span>
+        </div>
+      ) : p.hasRollback && p.status?.rollback_target ? (() => {
         // rollback 显示优先 tag（"v0.6.0"），否则 sha 前 8 位
         const sha = p.status.rollback_target
         const tag = p.status.rollback_target_tag
@@ -4537,7 +4551,7 @@ function MasterCard(p: MasterCardProps) {
             </div>
           </details>
         )
-      })()}
+      })() : null}
     </div>
   )
 }
