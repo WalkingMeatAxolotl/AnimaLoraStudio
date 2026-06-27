@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Literal, Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -115,9 +115,17 @@ class EvalMetricModelsConfig(BaseModel):
     """
     clip_model_name: str = "openai/clip-vit-base-patch32"
     dino_model_name: str = "facebook/dinov2-small"
-    # 评估时机（全局）。是否评估由每个 version 训练配置的 eval_validation_enabled
-    # 决定；启用后，这里选何时评：训练全部结束后批量评 / 训练中每存一个 LoRA 就评。
-    auto_eval_trigger: Literal["after_training", "checkpoint"] = "after_training"
+    ccip_model_name: str = "ccip-caformer-24-randaug-pruned"
+    # 启用哪些评估指标（Settings 复选框，见 eval_registry）。eval 只算勾选的；
+    # 默认保留现有三指标，anime 域新指标（ccip_i / tag_recall）默认关、需用户开。
+    enabled_metrics: list[str] = Field(
+        default_factory=lambda: ["clip_t", "clip_i", "dino_i"]
+    )
+    # baseline 对照：训练后评估额外出一组纯底模(lora_scale=0)同 prompt/seed 图，
+    # 各指标给出 Δ = checkpoint − baseline（解「绝对值难解读」）。每 task 一次。
+    # 评估统一在训练后跑（inline / checkpoint-trigger 已移除）；是否评估由每个
+    # version 训练配置的 eval_validation_enabled 决定。
+    eval_baseline_enabled: bool = True
 
 
 class DownloadConfig(BaseModel):

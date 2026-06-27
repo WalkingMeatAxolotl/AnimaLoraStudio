@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -314,6 +315,19 @@ def list_runs(version_dir: Path, eval_root: Path | None = None) -> list[dict[str
     return runs
 
 
+def delete_all_runs(version_dir: Path, eval_root: Path | None = None) -> int:
+    """删该 eval scope 下所有 sample run（run.json + 图 + metrics）。返回删除的 run 数。
+
+    用于「清空评估、重新跑」：去掉该 task 的全部历史 run，下次评估从干净状态出图。
+    """
+    root = samples_dir(version_dir, eval_root)
+    if not root.exists():
+        return 0
+    count = sum(1 for c in root.iterdir() if c.is_dir() and (c / RUN_FILE).exists())
+    shutil.rmtree(root, ignore_errors=True)
+    return count
+
+
 def create_run(
     project: dict[str, Any],
     version: dict[str, Any],
@@ -323,11 +337,16 @@ def create_run(
     auto_metrics: bool = False,
     auto_source: dict[str, Any] | None = None,
     eval_root: Path | None = None,
+    baseline: bool = False,
     now: float | None = None,
 ) -> dict[str, Any]:
     ts = time.time() if now is None else float(now)
     cfg = _read_config(project, version)
     generation = _generation_from_cfg(cfg)
+    # baseline run = 纯底模对照（同 prompt/seed，lora_scale=0 → LoRA 不生效），
+    # 给各 checkpoint 算 Δ = checkpoint − baseline，解决「绝对值难解读」。
+    if baseline:
+        generation["lora_scale"] = 0.0
     checkpoint = _resolve_checkpoint(version_dir, checkpoint_path)
     items = _planned_items(version_dir, cfg, int(generation["seed"]))
     if not items:
@@ -361,6 +380,7 @@ def create_run(
         "finished_at": None,
         "error": None,
         "checkpoint": checkpoint,
+        "baseline": bool(baseline),
         "auto_metrics": bool(auto_metrics),
         "auto_source": dict(auto_source) if auto_source else None,
         "storage_scope": "task" if eval_root is not None else "version",
@@ -384,6 +404,7 @@ def start_job(
     auto_metrics: bool = False,
     auto_source: dict[str, Any] | None = None,
     eval_root: Path | None = None,
+    baseline: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     run = create_run(
         project,
@@ -393,6 +414,7 @@ def start_job(
         auto_metrics=auto_metrics,
         auto_source=auto_source,
         eval_root=eval_root,
+        baseline=baseline,
     )
     params: dict[str, Any] = {
         "version_id": int(version["id"]),
@@ -544,7 +566,10 @@ def _default_generator(
     negative_prompt = str(generation.get("negative_prompt") or cfg.get("sample_negative_prompt") or "")
     sampler_name = str(generation.get("sampler_name") or cfg.get("sample_sampler_name") or "er_sde")
     scheduler = str(generation.get("scheduler") or cfg.get("sample_scheduler") or "simple")
-    lora_scale = float(generation.get("lora_scale") or 1.0)
+    # baseline run 用 lora_scale=0（纯底模对照）。不能写 `or 1.0`——0.0 是 falsy 会被
+    # 当成「没设」回退到 1.0，baseline 就变成正常 LoRA 跑、Δ 恒为 0。
+    _raw_scale = generation.get("lora_scale")
+    lora_scale = float(_raw_scale) if _raw_scale is not None else 1.0
     precision = str(cfg.get("mixed_precision") or "bf16")
     backend = str(cfg.get("attention_backend") or "flash_attn")
     use_flash = backend == "flash_attn"

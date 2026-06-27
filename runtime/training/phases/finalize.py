@@ -30,12 +30,8 @@ def run(ctx: TrainingContext) -> None:
     # PPSF：最终输出走 averaged weights
     with optimizer_eval_mode(ctx.optimizer):
         ctx.injector.save(final_path)
-    emit_event("eval_checkpoint_saved", {
-        "checkpoint_path": str(final_path),
-        "epoch": int(ctx.current_epoch or 0),
-        "step": int(ctx.global_step or 0),
-        "trigger": "final",
-    })
+    # 训练全部结束 → supervisor 排训练后评估（inline / checkpoint-trigger 已移除，
+    # 评估统一走训练后的独立 job）。
     emit_event("eval_training_finished", {
         "epoch": int(ctx.current_epoch or 0),
         "step": int(ctx.global_step or 0),

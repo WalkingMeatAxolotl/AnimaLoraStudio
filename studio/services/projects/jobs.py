@@ -27,6 +27,8 @@ VALID_KINDS: frozenset[str] = frozenset({
     "eval_samples",
     "eval_clip",
     "eval_dino",
+    "eval_tag",
+    "eval_ccip",
 })
 VALID_STATUSES: frozenset[str] = frozenset({
     "pending", "running", "done", "failed", "canceled"
@@ -135,6 +137,8 @@ def dispatch_order(job: dict[str, Any]) -> tuple[int, int]:
     priority = {
         "eval_clip": 0,
         "eval_dino": 0,
+        "eval_tag": 0,
+        "eval_ccip": 0,
         "download": 1,
         "preprocess": 1,
         "tag": 1,

@@ -894,7 +894,10 @@ def test_build_catalog_includes_eval_metrics(
     em = cat["eval_metrics"]
     assert em["id"] == "eval_metrics"
     kinds = {v["kind"]: v for v in em["variants"]}
-    assert set(kinds) == {"clip", "dino"}
+    assert set(kinds) == {"clip", "dino", "ccip"}
+    assert kinds["ccip"]["model_id"] == "ccip-caformer-24-randaug-pruned"
+    assert kinds["ccip"]["exists"] is False
+    assert kinds["ccip"]["size_estimate"] > 0
     assert kinds["clip"]["model_id"] == "openai/clip-vit-base-patch32"
     assert kinds["clip"]["exists"] is False
     assert kinds["clip"]["size_estimate"] > 0  # 已知模型给下载前预估
@@ -904,6 +907,10 @@ def test_build_catalog_includes_eval_metrics(
     assert cat["download_source_options"]["eval"] == {
         "current": "huggingface", "available": ["huggingface", "modelscope"]
     }
+    # 指标 registry（Settings 复选框列表）也随 catalog 暴露
+    keys = [m["key"] for m in cat["eval_metric_catalog"]]
+    assert keys == ["clip_t", "clip_i", "dino_i", "ccip_i", "tag_recall"]
+    assert all({"label", "default", "desc", "note"} <= set(m) for m in cat["eval_metric_catalog"])
 
 
 def test_trigger_eval_clip_dispatches_to_download(
@@ -930,6 +937,67 @@ def test_trigger_eval_clip_dispatches_to_download(
     assert key == "eval_dino:facebook/dinov2-small"
     assert captured["args"] == ("dino", "facebook/dinov2-small", tmp_path)
     assert captured["ok"] is True
+
+
+def test_download_ccip_model_calls_snapshot_with_variant_patterns(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict = {}
+
+    def fake_snapshot(repo, target, *, allow_patterns=None, on_log=print):
+        captured["repo"] = repo
+        captured["target"] = str(target)
+        captured["patterns"] = allow_patterns
+        return True
+
+    monkeypatch.setattr("studio.services.models.sources.download_snapshot", fake_snapshot)
+    ok = model_downloader.download_ccip_model("ccip-x", tmp_path)
+    assert ok is True
+    assert captured["repo"] == "deepghs/ccip_onnx"
+    assert captured["target"].replace("\\", "/").endswith("eval/ccip")
+    assert set(captured["patterns"]) == {
+        "ccip-x/model_feat.onnx", "ccip-x/model_metrics.onnx", "ccip-x/metrics.json",
+    }
+
+
+def test_trigger_eval_ccip_dispatches_to_ccip_download(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict = {}
+
+    def fake_start(key, fn):
+        captured["key"] = key
+        captured["ok"] = fn(lambda _l: None)
+
+    def fake_ccip(variant, root, *, on_log=print):
+        captured["args"] = (variant, root)
+        return True
+
+    monkeypatch.setattr("studio.services.models.downloader.models_root", lambda: tmp_path)
+    monkeypatch.setattr("studio.services.models.downloader.start_download_async", fake_start)
+    monkeypatch.setattr("studio.services.models.downloader.download_ccip_model", fake_ccip)
+    key = model_downloader.trigger("eval_ccip", "ccip-caformer-24-randaug-pruned")
+    assert key == "eval_ccip:ccip-caformer-24-randaug-pruned"
+    assert captured["args"] == ("ccip-caformer-24-randaug-pruned", tmp_path)
+    assert captured["ok"] is True
+
+
+def test_ensure_ccip_model_skips_when_files_present(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("studio.services.models.downloader.models_root", lambda: tmp_path)
+    d = model_downloader.ccip_model_dir(tmp_path, "ccip-x")
+    d.mkdir(parents=True)
+    for f in ("model_feat.onnx", "model_metrics.onnx", "metrics.json"):
+        (d / f).write_bytes(b"x")
+    called: list = []
+    monkeypatch.setattr(
+        "studio.services.models.downloader.download_ccip_model",
+        lambda *a, **k: called.append(1) or True,
+    )
+    got = model_downloader.ensure_ccip_model("ccip-x")
+    assert got == d
+    assert not called  # 三文件齐全，不触发下载
 
 
 def test_download_eval_model_routes_modelscope_when_mapped(

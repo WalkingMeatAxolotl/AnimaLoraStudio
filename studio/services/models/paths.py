@@ -290,6 +290,16 @@ def eval_model_target_dir(root: Path, kind: str, model_id: str) -> Path:
     return root / "eval" / kind / safe_dir_name(model_id)
 
 
+def ccip_model_dir(root: Path, variant: str) -> Path:
+    """CCIP（anime 角色身份）ONNX 变体本地目录。
+
+    deepghs/ccip_onnx 每个变体子目录含 model_feat.onnx + model_metrics.onnx +
+    metrics.json，只选这 3 个下到这里（repo 整库 3.5GB 含 torch ckpt + png，按
+    文件名选择性下载）。
+    """
+    return root / "eval" / "ccip" / safe_dir_name(variant)
+
+
 def cltagger_target_root(root: Path, model_id: str) -> Path:
     """CLTagger repo 的本地根目录。子目录布局来自 CLTAGGER_VERSIONS。"""
     return root / "cltagger" / safe_dir_name(model_id)

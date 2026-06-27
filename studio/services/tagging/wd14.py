@@ -112,6 +112,11 @@ class WD14Tagger(OnnxTaggerBase):
                 self._tags.append(row["name"].replace("_", " "))
                 self._tag_categories.append(int(row.get("category", 0)))
 
+    def known_tags(self) -> list[str]:
+        """模型词表（空格小写前的空格形式）；`prepare()` 后可用。
+        eval tag-recall 用它过滤「WD14 认识的」prompt tag。"""
+        return list(self._tags)
+
     # -------------------- inference --------------------
 
     def _preprocess(self, img: Image.Image) -> np.ndarray:

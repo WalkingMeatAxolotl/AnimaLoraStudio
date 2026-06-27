@@ -84,9 +84,14 @@ def _vdir_for(pid: int, vid: int) -> tuple[dict[str, Any], dict[str, Any], Path]
 
 def test_list_task_eval_jobs_filters_by_task_and_kind(client: TestClient) -> None:
     pid, vid = _make(client)
+    # /eval/jobs 只返回 run 仍存在的 job —— 给 task 42 的三个 job 各建一个 run.json
+    eval_root = infra_paths.task_eval_dir(42)
     with db.connection_for() as conn:
         # task 42 的三种 eval job
         for kind in ("eval_samples", "eval_clip", "eval_dino"):
+            run_dir = eval_root / "samples" / f"run-{kind}"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "run.json").write_text("{}", encoding="utf-8")
             project_jobs.create_job(
                 conn, project_id=pid, version_id=vid, kind=kind,
                 params={"task_id": 42, "run_id": f"run-{kind}"},
@@ -105,6 +110,40 @@ def test_list_task_eval_jobs_filters_by_task_and_kind(client: TestClient) -> Non
     assert all(j["run_id"].startswith("run-") and j["run_id"] != "run-other" for j in r["jobs"])
 
 
+def test_baseline_run_sets_lora_scale_zero(isolated) -> None:
+    project, version, vdir = _new_project(isolated)
+    _seed_validation_and_ckpt(vdir)
+    run = eval_samples.create_run(
+        project, version, vdir,
+        checkpoint_path="model_step100.safetensors", baseline=True, now=2000.0,
+    )
+    assert run["baseline"] is True
+    assert run["generation"]["lora_scale"] == 0.0
+
+
+def test_list_results_attaches_baseline_delta(isolated) -> None:
+    project, version, vdir = _new_project(isolated)
+    _seed_validation_and_ckpt(vdir)
+    base = eval_samples.create_run(
+        project, version, vdir,
+        checkpoint_path="model_step100.safetensors", baseline=True, now=1000.0,
+    )
+    ckpt = eval_samples.create_run(
+        project, version, vdir,
+        checkpoint_path="model_step100.safetensors", now=2000.0,
+    )
+    eval_metrics.save_result(vdir, base["run_id"], {"metrics": {"clip_i": 0.60, "dino_i": 0.50}})
+    eval_metrics.save_result(vdir, ckpt["run_id"], {"metrics": {"clip_i": 0.72, "dino_i": 0.50}})
+
+    results = eval_metrics.list_results(vdir)
+    base_res = next(r for r in results if r["baseline"])
+    ckpt_res = next(r for r in results if not r["baseline"])
+    assert "delta" not in base_res  # baseline 自己不挂 delta
+    assert ckpt_res["delta"]["clip_i"] == pytest.approx(0.12)
+    assert ckpt_res["delta"]["dino_i"] == pytest.approx(0.0)
+    assert ckpt_res["baseline_metrics"]["clip_i"] == pytest.approx(0.60)
+
+
 def test_empty_metric_result_describes_not_run_states(isolated) -> None:
     project, version, vdir = _new_project(isolated)
     run = _sample_run(project, version, vdir)
@@ -115,7 +154,7 @@ def test_empty_metric_result_describes_not_run_states(isolated) -> None:
     assert result["has_metrics"] is False
     assert result["status"] == "empty"
     assert result["metrics"] == {}
-    assert result["summary"]["not_run"] == 6
+    assert result["summary"]["not_run"] == 8
     assert result["metric_states"]["clip_t"]["status"] == "not_run"
     assert result["metric_states"]["clip_t"]["question"]
     assert result["metric_states"]["sscd_nn"]["higher_is_better"] is False
@@ -201,6 +240,8 @@ def test_eval_metrics_http_empty_list_and_single_run(client: TestClient) -> None
         "clip_t",
         "clip_i",
         "dino_i",
+        "ccip_i",
+        "tag_recall",
         "diversity",
         "sscd_nn",
         "paired_cmmd2",

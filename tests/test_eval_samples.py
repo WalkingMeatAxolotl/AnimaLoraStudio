@@ -223,13 +223,15 @@ def test_eval_samples_http_run_list_get_and_image(client: TestClient, isolated) 
     assert created.status_code == 200, created.text
     body = created.json()
     run_id = body["runs"][0]["run_id"]
-    assert body["queued"] == 1
+    # 1 个 checkpoint + 1 个 baseline 对照
+    assert body["queued"] == 2
     assert body["jobs"][0]["kind"] == "eval_samples"
 
     q = f"?task_id={tid}"
     listed = client.get(f"/api/projects/{pid}/versions/{vid}/eval/samples{q}")
     assert listed.status_code == 200, listed.text
-    assert listed.json()["runs"][0]["run_id"] == run_id
+    # 列表含 checkpoint run + baseline run；只要 checkpoint run 在里面即可（顺序不保证）
+    assert run_id in {r["run_id"] for r in listed.json()["runs"]}
 
     got = client.get(f"/api/projects/{pid}/versions/{vid}/eval/samples/{run_id}{q}")
     assert got.status_code == 200, got.text
@@ -280,9 +282,52 @@ def test_run_task_eval_endpoint_queues_task_scoped(client, isolated) -> None:
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["queued"] == 1
+    # 1 个 checkpoint + 1 个 baseline 对照
+    assert body["queued"] == 2
+    assert sum(1 for r in body["runs"] if r.get("baseline")) == 1
     assert body["runs"][0]["storage_scope"] == "task"
     assert body["jobs"][0]["params_decoded"]["task_id"] == tid
+
+
+def test_rerun_auto_clears_previous_task_eval(client, isolated) -> None:
+    project, version, vdir = _new_project(isolated)
+    ckpt = _seed_validation_and_ckpt(vdir)
+    pid, vid = project["id"], version["id"]
+    tid = _bound_task(isolated, project, version)
+
+    def run() -> list[dict]:
+        client.post(
+            f"/api/projects/{pid}/versions/{vid}/eval/run",
+            json={"task_id": tid, "checkpoints": [str(ckpt)]},
+        )
+        return client.get(
+            f"/api/projects/{pid}/versions/{vid}/eval/samples?task_id={tid}"
+        ).json()["runs"]
+
+    first = run()
+    assert len(first) == 2  # 1 checkpoint + 1 baseline
+    second = run()
+    # 第二轮自动清空了第一轮 → 仍是 2，而不是累积成 4
+    assert len(second) == 2
+
+
+def test_eval_jobs_endpoint_filters_jobs_of_deleted_runs(client, isolated) -> None:
+    project, version, vdir = _new_project(isolated)
+    ckpt = _seed_validation_and_ckpt(vdir)
+    pid, vid = project["id"], version["id"]
+    tid = _bound_task(isolated, project, version)
+
+    client.post(
+        f"/api/projects/{pid}/versions/{vid}/eval/run",
+        json={"task_id": tid, "checkpoints": [str(ckpt)]},
+    )
+    jobs = client.get(f"/api/projects/{pid}/versions/{vid}/eval/jobs?task_id={tid}").json()["jobs"]
+    assert len(jobs) >= 1
+
+    # 删掉 run 文件 → /eval/jobs 不再返回这些 job（只显示 run 仍存在的）
+    eval_samples.delete_all_runs(vdir, infra_paths.task_eval_dir(tid))
+    jobs2 = client.get(f"/api/projects/{pid}/versions/{vid}/eval/jobs?task_id={tid}").json()["jobs"]
+    assert jobs2 == []
 
 
 def test_run_task_eval_endpoint_validates_task_ownership(client, isolated) -> None:

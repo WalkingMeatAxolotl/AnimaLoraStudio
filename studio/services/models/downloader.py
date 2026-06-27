@@ -39,6 +39,7 @@ from .paths import (
     cltagger_canonical_file_paths,
     cltagger_required_files,
     cltagger_target_root,
+    ccip_model_dir,
     eval_model_target_dir,
     models_root,
     qwen_dir,
@@ -316,6 +317,43 @@ def ensure_eval_model(
     download_eval_model(kind, model_id, r, on_log=on_log)
     return target
 
+
+# CCIP（anime 角色身份）：只下变体子目录里的 3 个文件，别整库拉（含 torch ckpt + png）。
+CCIP_REPO = "deepghs/ccip_onnx"
+CCIP_FILES = ("model_feat.onnx", "model_metrics.onnx", "metrics.json")
+
+
+def download_ccip_model(
+    variant: str,
+    root: Optional[Path] = None,
+    *,
+    on_log: Callable[[str], None] = print,
+) -> bool:
+    """下 deepghs/ccip_onnx 指定变体的 3 个文件到 `{models_root}/eval/ccip/{variant}/`。"""
+    r = root or models_root()
+    eval_ccip_root = r / "eval" / "ccip"
+    patterns = [f"{variant}/{f}" for f in CCIP_FILES]
+    on_log(f"\n📥 CCIP {variant} → {ccip_model_dir(r, variant)}")
+    return _sources.download_snapshot(
+        CCIP_REPO, eval_ccip_root, allow_patterns=patterns, on_log=on_log,
+    )
+
+
+def ensure_ccip_model(
+    variant: str,
+    root: Optional[Path] = None,
+    *,
+    on_log: Callable[[str], None] = print,
+) -> Path:
+    """返回 CCIP 变体本地目录，缺 3 个文件则先下载（懒加载兜底）。"""
+    r = root or models_root()
+    target = ccip_model_dir(r, variant)
+    if all((target / f).exists() for f in CCIP_FILES):
+        return target
+    download_ccip_model(variant, r, on_log=on_log)
+    return target
+
+
 # ---------------------------------------------------------------------------
 # 异步下载状态机
 # ---------------------------------------------------------------------------
@@ -504,6 +542,14 @@ def trigger(model_id: str, variant: Optional[str] = None) -> str:
         key = f"{model_id}:{variant}"
         start_download_async(
             key, lambda log: download_eval_model(kind, variant, root, on_log=log)
+        )
+        return key
+    if model_id == "eval_ccip":
+        if not variant:
+            raise ValueError("eval_ccip 需要 variant=ccip 变体名")
+        key = f"eval_ccip:{variant}"
+        start_download_async(
+            key, lambda log: download_ccip_model(variant, root, on_log=log)
         )
         return key
     if model_id == "upscaler":

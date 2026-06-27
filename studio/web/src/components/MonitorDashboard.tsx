@@ -4,10 +4,9 @@
  * Data source: GET /api/state?task_id=N 拉降采样快照 + SSE monitor_progress
  * 走 useMonitorProgress hook 做 delta merge（PR #37 增量协议）。
  */
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api, type EvalJobInfo, type EvalMetricResult, type EvalMetricState, type LoraCkpt, type MonitorState } from '../api/client'
 import { evalProgressFromResults } from '../lib/useEvalProgress'
-import { useEventStream } from '../lib/useEventStream'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
 import { InfoButton } from './InfoButton'
 import ImagePreviewModal from './ImagePreviewModal'
@@ -92,7 +91,7 @@ function SmoothControl({ alpha, setAlpha, min, max, step }: {
 // loss / lr / d 都复用：传 rawColor/smoothColor 自定义配色，传 yFormat 控制
 // y 轴数字格式（科学计数法 vs 定点）。
 
-function SeriesChart({ data, rawColor, smoothColor, fillColor, emaAlpha, yFormat, height, minHeight, axes = true }: {
+function SeriesChart({ data, rawColor, smoothColor, fillColor, emaAlpha, yFormat, height, minHeight, axes = true, refLine }: {
   data: Array<{ step: number; value: number }>
   rawColor: string
   smoothColor: string
@@ -105,6 +104,8 @@ function SeriesChart({ data, rawColor, smoothColor, fillColor, emaAlpha, yFormat
   minHeight?: number
   /** 是否绘制坐标轴 + tick label + 网格线；false 时退化为纯 sparkline 适合小高度图（d value） */
   axes?: boolean
+  /** 可选的水平参考线（eval：纯底模 baseline 值）；y 范围会纳入它。 */
+  refLine?: number
 }) {
   // ResizeObserver 测真实像素尺寸，viewBox 用真实尺寸 → SVG 1:1 渲染，
   // 文本/线宽不会被 preserveAspectRatio 非等比缩放扭曲。
@@ -151,13 +152,14 @@ function SeriesChart({ data, rawColor, smoothColor, fillColor, emaAlpha, yFormat
           emaAlpha={emaAlpha}
           yFormat={yFormat}
           axes={axes}
+          refLine={refLine}
         />
       ) : null}
     </div>
   )
 }
 
-function ChartSvg({ data, W, H, rawColor, smoothColor, fillColor, emaAlpha, yFormat, axes }: {
+function ChartSvg({ data, W, H, rawColor, smoothColor, fillColor, emaAlpha, yFormat, axes, refLine }: {
   data: Array<{ step: number; value: number }>
   W: number
   H: number
@@ -167,6 +169,7 @@ function ChartSvg({ data, W, H, rawColor, smoothColor, fillColor, emaAlpha, yFor
   emaAlpha: number
   yFormat: (v: number) => string
   axes: boolean
+  refLine?: number
 }) {
   const pts = downsample(data, 600)
   const raw = pts.map((p) => p.value)
@@ -183,7 +186,10 @@ function ChartSvg({ data, W, H, rawColor, smoothColor, fillColor, emaAlpha, yFor
   // y 范围按 smooth 算（无 smooth 时退化为 raw）—— raw 尖刺超出顶部会被裁掉，
   // 这是有意的：换取 smooth 信号占满高度、趋势可读。原 LossChart 同款行为。
   const refVals = emaAlpha >= 0.999 ? raw : smooth
-  const minV = Math.min(...refVals), maxV = Math.max(...refVals)
+  const hasRef = typeof refLine === 'number' && Number.isFinite(refLine)
+  // y 范围纳入 baseline 参考线，保证它落在可视区（曲线在 base 线上/下方一目了然）。
+  const minV = Math.min(...refVals, ...(hasRef ? [refLine as number] : []))
+  const maxV = Math.max(...refVals, ...(hasRef ? [refLine as number] : []))
   const range = maxV - minV || Math.max(Math.abs(maxV), 1e-9) * 1e-3 || 1e-9
   const x = (i: number) => PX + (i / Math.max(1, pts.length - 1)) * (W - PX - RX)
   const y = (v: number) => PY + (1 - (v - minV) / range) * (H - PY - PY)
@@ -197,10 +203,11 @@ function ChartSvg({ data, W, H, rawColor, smoothColor, fillColor, emaAlpha, yFor
   const yTicks = [minV, (minV + maxV) / 2, maxV].map((v) => ({
     v, y: y(v), label: yFormat(v),
   }))
-  const xTicks = [0, 0.25, 0.5, 0.75, 1].map((t) => {
-    const i = Math.round(t * Math.max(1, pts.length - 1))
-    return { x: x(i), label: String(steps[i] ?? '') }
-  })
+  // 点少时（eval 只有几个 checkpoint）5 个分位会 round 到重复索引（如 3 点 →
+  // 0,1,1,2,2），导致标签 "20 20 40 40" 叠在同一 x 上重叠。按索引去重。
+  const xTicks = [...new Set(
+    [0, 0.25, 0.5, 0.75, 1].map((t) => Math.round(t * Math.max(1, pts.length - 1))),
+  )].map((i) => ({ i, x: x(i), label: String(steps[i] ?? '') }))
 
   const lastY = y(smooth[smooth.length - 1])
   const showSmoothLayer = emaAlpha < 0.999
@@ -239,6 +246,19 @@ function ChartSvg({ data, W, H, rawColor, smoothColor, fillColor, emaAlpha, yFor
       )}
       {/* last point */}
       <circle cx={x(smooth.length - 1)} cy={lastY} r="4" fill={smoothColor} stroke="var(--bg-surface)" strokeWidth="2" />
+      {/* baseline 参考线（纯底模）+ "base" 标注：曲线在它上方=优于底模，下方=不如底模 */}
+      {hasRef && (
+        <>
+          <line
+            x1={PX} y1={y(refLine as number)} x2={W - RX} y2={y(refLine as number)}
+            stroke="var(--fg-tertiary)" strokeWidth="1" strokeDasharray="4 3" opacity="0.75"
+          />
+          <text
+            x={W - RX - 1} y={y(refLine as number) - 3} fontSize="10"
+            fill="var(--fg-tertiary)" fontFamily="var(--font-mono)" textAnchor="end"
+          >base</text>
+        </>
+      )}
       {axes && (
         <>
           {/* y axis labels —— y offset +4.5 = fontSize/2 + 准基线微调，把字垂直居中到 tick */}
@@ -248,10 +268,10 @@ function ChartSvg({ data, W, H, rawColor, smoothColor, fillColor, emaAlpha, yFor
           ))}
           {/* x axis labels —— 首/末两 tick 在 SVG 边缘上，middle 锚点会让一半字宽溢出被裁，
               改 start/end 锚点把字往内推；中间 tick 维持 middle 居中。 */}
-          {xTicks.map(({ x: xt, label }, i, arr) => {
+          {xTicks.map(({ i: idx, x: xt, label }, i, arr) => {
             const anchor = i === 0 ? 'start' : i === arr.length - 1 ? 'end' : 'middle'
             return (
-              <text key={label} x={xt} y={H - 3} fontSize="13" fill="var(--fg-tertiary)"
+              <text key={idx} x={xt} y={H - 3} fontSize="13" fill="var(--fg-tertiary)"
                 fontFamily="var(--font-mono)" textAnchor={anchor}>{label}</text>
             )
           })}
@@ -263,26 +283,34 @@ function ChartSvg({ data, W, H, rawColor, smoothColor, fillColor, emaAlpha, yFor
 
 // ── EvalMetricsPanel ──────────────────────────────────────────────────────
 
-const EVAL_METRIC_KEYS = ['clip_t', 'clip_i', 'dino_i'] as const
+const EVAL_METRIC_KEYS = ['clip_t', 'clip_i', 'dino_i', 'ccip_i', 'tag_recall'] as const
 type EvalMetricKey = typeof EVAL_METRIC_KEYS[number]
+// 核心指标常显；动漫域新指标默认关，只在算过（状态非 not_run）时才显示卡片/列。
+const CORE_METRIC_KEYS = new Set<EvalMetricKey>(['clip_t', 'clip_i', 'dino_i'])
 
 const EVAL_LABELS: Record<EvalMetricKey, string> = {
   clip_t: 'CLIP-T',
   clip_i: 'CLIP-I',
   dino_i: 'DINO-I',
+  ccip_i: 'CCIP-I',
+  tag_recall: 'Tag-Recall',
 }
 
-// 每个指标一种线色（三张图并排，区分开）。深色背景上高对比、可辨。
+// 每个指标一种线色（并排区分）。深色背景上高对比、可辨。
 const EVAL_COLORS: Record<EvalMetricKey, string> = {
   clip_t: '#3fb950',
   clip_i: '#58a6ff',
   dino_i: '#bc8cff',
+  ccip_i: '#f778ba',
+  tag_recall: '#e3b341',
 }
 
 const EVAL_DESCRIPTIONS: Record<EvalMetricKey, string> = {
   clip_t: '生成图和 prompt 文本的 CLIP 相似度，用来看 prompt following；越高越好。',
   clip_i: '生成图和参考图的 CLIP 图像相似度，用来看整体视觉相似度；越高越好。',
   dino_i: '生成图和参考图的 DINO 图像特征相似度，用来看主体或风格特征是否学到；越高越好。',
+  ccip_i: '生成图被参考集判为同一动漫角色的比例（CCIP 动漫域角色身份保真）；仅单角色角色 LoRA 有意义；越高越好。',
+  tag_recall: '对生成图回标，prompt 里 booru tag 的召回率（动漫原生 prompt following）；仅 booru-tag caption 有意义；越高越好。',
 }
 
 function checkpointSortValue(result: EvalMetricResult, index: number): number {
@@ -351,43 +379,6 @@ function evalRowStatus(result: EvalMetricResult): { text: string; tone: 'ok' | '
   return { text: result.status, tone: 'muted' }
 }
 
-// 一个 checkpoint 的多个 eval job（samples/clip/dino）里挑最该看日志的那条：
-// 正在跑的 > 失败的（看报错）> 最新的。
-function pickEvalJob(jobs: EvalJobInfo[]): EvalJobInfo | null {
-  if (jobs.length === 0) return null
-  return (
-    jobs.find((j) => j.status === 'running') ??
-    jobs.find((j) => j.status === 'failed') ??
-    jobs.reduce((a, b) => (b.id > a.id ? b : a))
-  )
-}
-
-// 单个 eval job 的原始日志：hydrate 一次 + 订阅 job_log_appended 续流（看进度 + 报错）。
-function EvalJobLog({ jobId }: { jobId: number }) {
-  const [content, setContent] = useState('')
-  const contentRef = useRef('')
-  const setBoth = useCallback((s: string) => { contentRef.current = s; setContent(s) }, [])
-  useEffect(() => {
-    let alive = true
-    setBoth('')
-    void api.getJobLog(jobId).then((r) => { if (alive) setBoth(r.content || '') }).catch(() => {})
-    return () => { alive = false }
-  }, [jobId, setBoth])
-  useEventStream((evt) => {
-    if (evt.type === 'job_log_appended' && evt.job_id === jobId) {
-      const text = typeof evt.text === 'string' ? evt.text : ''
-      const prev = contentRef.current
-      const sep = prev && !prev.endsWith('\n') ? '\n' : ''
-      setBoth(prev + sep + text + '\n')
-    }
-  })
-  return (
-    <pre className="max-h-52 overflow-auto bg-sunken border border-subtle rounded-md p-2 text-[11px] font-mono text-fg-secondary whitespace-pre-wrap break-all m-0">
-      {content || <span className="text-fg-tertiary">暂无日志</span>}
-    </pre>
-  )
-}
-
 export function EvalMetricsPanel({ state, connected, taskId }: {
   state: MonitorState | null
   connected: boolean
@@ -398,10 +389,8 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
   const [payload, setPayload] = useState<Awaited<ReturnType<typeof api.listEvalMetrics>> | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // 训练后/手动评估 job（取原始日志用）；inline 训练时评估无 job。
+  // 训练后/手动评估 job（统一日志区取原始日志用）。
   const [evalJobs, setEvalJobs] = useState<EvalJobInfo[]>([])
-  // 展开看原始日志的 checkpoint（run_id）集合
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
   const load = useCallback(async (quiet = false) => {
     if (!pid || !vid) return
@@ -425,18 +414,6 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
     }
   }, [pid, vid, taskId])
 
-  const jobsByRun = useMemo(() => {
-    const m = new Map<string, EvalJobInfo[]>()
-    for (const j of evalJobs) {
-      const rid = j.run_id ?? ''
-      if (!rid) continue
-      const arr = m.get(rid) ?? []
-      arr.push(j)
-      m.set(rid, arr)
-    }
-    return m
-  }, [evalJobs])
-
   useEffect(() => {
     setPayload(null)
     setError(null)
@@ -449,6 +426,14 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
       .sort((a, b) => checkpointSortValue(a, 0) - checkpointSortValue(b, 0))
   }, [payload?.results])
 
+  // baseline run（纯底模对照）不作为 checkpoint 展示——只用来给各 checkpoint 算 Δ
+  // （后端已挂在 result.delta）。每次「运行评估」会自动清空上一轮，所以这里永远只有
+  // 这次 run 的结果，每个 checkpoint 一条，无需跨轮去重。
+  const displayResults = useMemo(
+    () => results.filter((r) => !r.baseline),
+    [results],
+  )
+
   const hasActiveMetric = useMemo(() => {
     return results.some((result) =>
       EVAL_METRIC_KEYS.some((key) => {
@@ -458,15 +443,34 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
     )
   }, [results])
 
+  // 还有评估 job 在跑（含「出图」阶段——此时 metric 状态还是 not_run，hasActiveMetric
+  // 抓不到）。重跑评估在已 done 的 task 上时，靠这个让轮询继续，新 run 进度/日志才刷新。
+  const hasActiveJob = useMemo(
+    () => evalJobs.some((j) => j.status === 'pending' || j.status === 'running'),
+    [evalJobs],
+  )
+
+  // 核心指标常显；动漫域新指标默认关，只有算过（状态非 not_run）才显示，避免空卡。
+  const displayKeys = useMemo<EvalMetricKey[]>(
+    () => EVAL_METRIC_KEYS.filter((k) =>
+      CORE_METRIC_KEYS.has(k) ||
+      displayResults.some((r) => {
+        const s = metricState(r, k)?.status
+        return s != null && s !== 'not_run'
+      }),
+    ),
+    [displayResults],
+  )
+
   // 训练结束后评估进度：复用现有 results 聚合「评估中 done/total」，给面板头部用
   const evalAgg = useMemo(() => evalProgressFromResults(results), [results])
 
   useEffect(() => {
     if (!pid || !vid) return
-    if (!connected && !hasActiveMetric) return
+    if (!connected && !hasActiveMetric && !hasActiveJob) return
     const id = window.setInterval(() => void load(true), 5000)
     return () => window.clearInterval(id)
-  }, [connected, hasActiveMetric, load, pid, vid])
+  }, [connected, hasActiveMetric, hasActiveJob, load, pid, vid])
 
   // ── 手动评估：选 checkpoint → POST /eval/run（task-scoped） ──────────────
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -529,8 +533,8 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
   const latestByKey = useMemo(() => {
     const out: Partial<Record<EvalMetricKey, { result: EvalMetricResult; value: number | null; state?: EvalMetricState }>> = {}
     for (const key of EVAL_METRIC_KEYS) {
-      for (let i = results.length - 1; i >= 0; i--) {
-        const result = results[i]
+      for (let i = displayResults.length - 1; i >= 0; i--) {
+        const result = displayResults[i]
         const state = metricState(result, key)
         const value = metricValue(result, key)
         if (value != null || state?.status) {
@@ -540,15 +544,13 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
       }
     }
     return out
-  }, [results])
+  }, [displayResults])
 
   const seriesByKey = useMemo(() => {
-    const out: Record<EvalMetricKey, Array<{ x: number; value: number }>> = {
-      clip_t: [],
-      clip_i: [],
-      dino_i: [],
-    }
-    results.forEach((result, index) => {
+    const out = Object.fromEntries(
+      EVAL_METRIC_KEYS.map((k) => [k, [] as Array<{ x: number; value: number }>]),
+    ) as Record<EvalMetricKey, Array<{ x: number; value: number }>>
+    displayResults.forEach((result, index) => {
       const x = checkpointSortValue(result, index)
       for (const key of EVAL_METRIC_KEYS) {
         const value = metricValue(result, key)
@@ -556,7 +558,23 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
       }
     })
     return out
-  }, [results])
+  }, [displayResults])
+
+  // 各指标的纯底模 baseline 值（画成图上的水平参考线）。后端给每条非 baseline 结果
+  // 都挂了相同的 baseline_metrics，取任一即可。
+  const baselineByKey = useMemo(() => {
+    const out: Partial<Record<EvalMetricKey, number>> = {}
+    const bm = displayResults.find(
+      (r) => r.baseline_metrics && Object.keys(r.baseline_metrics).length,
+    )?.baseline_metrics
+    if (bm) {
+      for (const key of EVAL_METRIC_KEYS) {
+        const v = bm[key]
+        if (typeof v === 'number' && Number.isFinite(v)) out[key] = v
+      }
+    }
+    return out
+  }, [displayResults])
 
   if (!pid || !vid) {
     return (
@@ -697,7 +715,7 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
       ) : (
         <>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
-            {EVAL_METRIC_KEYS.map((key) => {
+            {displayKeys.map((key) => {
               const latest = latestByKey[key]
               const tone = stateTone(latest?.state, latest?.value)
               const series = seriesByKey[key].map((p) => ({ step: p.x, value: p.value }))
@@ -718,6 +736,17 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
                     <span className={`text-2xl font-semibold font-mono tabular-nums ${toneClass(tone)}`}>
                       {formatEvalValue(latest?.value ?? null, latest?.state)}
                     </span>
+                    {(() => {
+                      const d = latest?.result.delta?.[key]
+                      return d != null ? (
+                        <span
+                          className={`text-xs font-mono tabular-nums shrink-0 ${d >= 0 ? 'text-ok' : 'text-err'}`}
+                          title="相对纯底模 baseline 的净增益 Δ"
+                        >
+                          {d >= 0 ? '+' : ''}{d.toFixed(4)}
+                        </span>
+                      ) : null
+                    })()}
                     <span className="text-[11px] text-fg-tertiary truncate">
                       {latest ? checkpointLabel(latest.result) : '等待指标'}
                     </span>
@@ -729,6 +758,7 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
                     emaAlpha={1}
                     yFormat={(v) => v.toFixed(4)}
                     height={132}
+                    refLine={baselineByKey[key]}
                   />
                 </div>
               )
@@ -740,73 +770,45 @@ export function EvalMetricsPanel({ state, connected, taskId }: {
               <thead className="text-fg-tertiary">
                 <tr className="border-b border-subtle">
                   <th className="text-left font-medium py-1.5 pr-3">checkpoint</th>
-                  {EVAL_METRIC_KEYS.map((key) => (
+                  {displayKeys.map((key) => (
                     <th key={key} className="text-right font-medium py-1.5 px-2">
-                      <span className="inline-flex items-center justify-end gap-1.5">
-                        {EVAL_LABELS[key]}
-                        <InfoButton ariaLabel={`${EVAL_LABELS[key]} 指标说明`}>
-                          <p>{EVAL_DESCRIPTIONS[key]}</p>
-                        </InfoButton>
-                      </span>
+                      {EVAL_LABELS[key]}
                     </th>
                   ))}
                   <th className="text-right font-medium py-1.5 pl-3">状态</th>
                 </tr>
               </thead>
               <tbody>
-                {results.slice(-8).reverse().map((result) => {
+                {displayResults.slice(-8).reverse().map((result) => {
                   const rowStatus = evalRowStatus(result)
-                  const jobs = jobsByRun.get(result.run_id) ?? []
-                  const job = pickEvalJob(jobs)
-                  const isOpen = expanded.has(result.run_id)
                   return (
-                    <Fragment key={result.run_id}>
-                      <tr className="border-b border-subtle last:border-0">
-                        <td className="py-1.5 pr-3 max-w-[220px] truncate font-mono" title={checkpointLabel(result)}>
-                          {checkpointLabel(result)}
-                        </td>
-                        {EVAL_METRIC_KEYS.map((key) => {
-                          const state = metricState(result, key)
-                          const value = metricValue(result, key)
-                          const tone = stateTone(state, value)
-                          return (
-                            <td key={key} className={`py-1.5 px-2 text-right font-mono tabular-nums ${toneClass(tone)}`}>
-                              {formatEvalValue(value, state)}
-                            </td>
-                          )
-                        })}
-                        <td className="py-1.5 pl-3 text-right font-mono">
-                          <span className="inline-flex items-center justify-end gap-2">
-                            <span className={toneClass(rowStatus.tone)}>{rowStatus.text}</span>
-                            {job && (
-                              <button
-                                type="button"
-                                onClick={() => setExpanded((prev) => {
-                                  const n = new Set(prev)
-                                  if (n.has(result.run_id)) n.delete(result.run_id)
-                                  else n.add(result.run_id)
-                                  return n
-                                })}
-                                className="text-fg-tertiary hover:text-fg text-[11px] shrink-0"
-                                title="查看评估日志（含报错）"
+                    <tr key={result.run_id} className="border-b border-subtle last:border-0">
+                      <td className="py-1.5 pr-3 max-w-[220px] truncate font-mono" title={checkpointLabel(result)}>
+                        {checkpointLabel(result)}
+                      </td>
+                      {displayKeys.map((key) => {
+                        const state = metricState(result, key)
+                        const value = metricValue(result, key)
+                        const tone = stateTone(state, value)
+                        const d = result.delta?.[key]
+                        return (
+                          <td key={key} className={`py-1.5 px-2 text-right font-mono tabular-nums ${toneClass(tone)}`}>
+                            {formatEvalValue(value, state)}
+                            {d != null && value != null && (
+                              <span
+                                className={`ml-1 text-[10px] ${d >= 0 ? 'text-ok' : 'text-err'}`}
+                                title="相对纯底模 baseline 的 Δ"
                               >
-                                {isOpen ? '▾' : '▸'} 日志
-                              </button>
+                                {d >= 0 ? '+' : ''}{d.toFixed(4)}
+                              </span>
                             )}
-                          </span>
-                        </td>
-                      </tr>
-                      {isOpen && job && (
-                        <tr className="border-b border-subtle last:border-0">
-                          <td colSpan={EVAL_METRIC_KEYS.length + 2} className="py-1.5 pr-3">
-                            <div className="text-[11px] text-fg-tertiary mb-1 font-mono">
-                              {job.kind} · job #{job.id} · {job.status}
-                            </div>
-                            <EvalJobLog jobId={job.id} />
                           </td>
-                        </tr>
-                      )}
-                    </Fragment>
+                        )
+                      })}
+                      <td className="py-1.5 pl-3 text-right font-mono">
+                        <span className={toneClass(rowStatus.tone)}>{rowStatus.text}</span>
+                      </td>
+                    </tr>
                   )
                 })}
               </tbody>

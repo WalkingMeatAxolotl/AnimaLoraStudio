@@ -73,7 +73,6 @@ type Section =
   | 'generate'
   | 'proxy'
 
-type AutoEvalTrigger = 'after_training' | 'checkpoint'
 
 type Tab = 'dataset' | 'tagging' | 'preprocess' | 'training' | 'monitor' | 'testing' | 'credentials' | 'appearance' | 'system'
 
@@ -244,7 +243,9 @@ const EMPTY: Secrets = {
   eval_metrics: {
     clip_model_name: 'openai/clip-vit-base-patch32',
     dino_model_name: 'facebook/dinov2-small',
-    auto_eval_trigger: 'after_training',
+    ccip_model_name: 'ccip-caformer-24-randaug-pruned',
+    enabled_metrics: ['clip_t', 'clip_i', 'dino_i'],
+    eval_baseline_enabled: true,
   },
   download_source: 'huggingface',
   download_sources: {},
@@ -972,18 +973,55 @@ export default function SettingsPage() {
           onModelIdChange={(id) => update('eval_metrics', 'dino_model_name', id)}
           t={t}
         />
+        <EvalMetricModelCard
+          catalog={catalog} busy={downloadBusy} start={startDownload}
+          kind="ccip" dlId="eval_ccip"
+          titleKey="settings.evalCcipModel" helpKey="settings.evalCcipModelHelp"
+          modelId={draft.eval_metrics.ccip_model_name}
+          onModelIdChange={(id) => update('eval_metrics', 'ccip_model_name', id)}
+          t={t}
+        />
         <SettingsField
-          label={t('settings.autoEvalTrigger')}
-          helpTooltip={<p>{t('settings.autoEvalTriggerHelp')}</p>}
+          label={t('settings.evalMetricsEnabled')}
+          helpTooltip={<p>{t('settings.evalMetricsEnabledHelp')}</p>}
         >
-          <select
-            value={draft.eval_metrics.auto_eval_trigger}
-            onChange={(e) => update('eval_metrics', 'auto_eval_trigger', e.target.value as AutoEvalTrigger)}
-            className={textInputClass}
-          >
-            <option value="after_training">{t('settings.autoEvalTriggerAfterTraining')}</option>
-            <option value="checkpoint">{t('settings.autoEvalTriggerCheckpoint')}</option>
-          </select>
+          <div className="flex flex-col gap-1.5">
+            {(catalog?.eval_metric_catalog ?? []).map((m) => {
+              const on = (draft.eval_metrics.enabled_metrics ?? []).includes(m.key)
+              return (
+                <label key={m.key} className="flex items-start gap-2 text-xs cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    onChange={() => {
+                      const cur = draft.eval_metrics.enabled_metrics ?? []
+                      update('eval_metrics', 'enabled_metrics',
+                        on ? cur.filter((k) => k !== m.key) : [...cur, m.key])
+                    }}
+                    className="mt-0.5"
+                  />
+                  <span className="min-w-0">
+                    <span className="font-mono text-fg-primary">{m.label}</span>
+                    <span className="text-fg-tertiary"> — {m.desc}</span>
+                    {m.note ? <span className="text-warn"> · {m.note}</span> : null}
+                  </span>
+                </label>
+              )
+            })}
+          </div>
+        </SettingsField>
+        <SettingsField
+          label={t('settings.evalBaseline')}
+          helpTooltip={<p>{t('settings.evalBaselineHelp')}</p>}
+        >
+          <label className="flex items-center gap-2 text-xs cursor-pointer">
+            <input
+              type="checkbox"
+              checked={draft.eval_metrics.eval_baseline_enabled ?? true}
+              onChange={(e) => update('eval_metrics', 'eval_baseline_enabled', e.target.checked)}
+            />
+            <span className="text-fg-secondary">{t('settings.evalBaselineToggle')}</span>
+          </label>
         </SettingsField>
       </SettingsSection>
 
@@ -1707,8 +1745,8 @@ function EvalMetricModelCard({
   catalog: ModelsCatalog | null
   busy: Set<string>
   start: (model_id: string, variant?: string) => Promise<void>
-  kind: 'clip' | 'dino'
-  dlId: 'eval_clip' | 'eval_dino'
+  kind: 'clip' | 'dino' | 'ccip'
+  dlId: 'eval_clip' | 'eval_dino' | 'eval_ccip'
   titleKey: string
   helpKey: string
   modelId: string
