@@ -91,7 +91,7 @@ export default function SettingsPage() {
   const [llmModelsBusy, setLlmModelsBusy] = useState(false)
   const [llmTestBusy, setLlmTestBusy] = useState(false)
   const { toast } = useToast()
-  const { prompt } = useDialog()
+  const { prompt, confirm } = useDialog()
   const drawer = useSettingsDrawer()
   // 右侧 section index 用：sticky nav 的 IntersectionObserver root + 滚动平移容器
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -182,16 +182,18 @@ export default function SettingsPage() {
     update('llm_tagger', 'current_preset', id)
   }
 
-  const deleteCurrentPreset = () => {
+  const deleteCurrentPreset = async () => {
     if (currentPreset.builtin || draft.llm_tagger.presets.length <= 1) return
+    if (!(await confirm(t('settings.confirmDeletePreset', { label: currentPreset.label }), { tone: 'danger' }))) return
     const next = draft.llm_tagger.presets.filter((p) => p.id !== currentPreset.id)
     update('llm_tagger', 'presets', next)
     update('llm_tagger', 'current_preset', next[0]?.id ?? 'style_json')
   }
 
-  const resetCurrentPresetToBuiltin = () => {
+  const resetCurrentPresetToBuiltin = async () => {
     // 删除当前 builtin preset，让 backend validator 在 PUT 后从 defaults 补回
     if (!currentPreset.builtin) return
+    if (!(await confirm(t('settings.confirmResetPreset', { label: currentPreset.label }), { tone: 'danger' }))) return
     const next = draft.llm_tagger.presets.filter((p) => p.id !== currentPreset.id)
     update('llm_tagger', 'presets', next)
     // current_preset 不变；validator 会重建 preset

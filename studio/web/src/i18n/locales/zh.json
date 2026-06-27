@@ -848,6 +848,7 @@
       "uploadHint": "CSV / TXT 格式：每行 `english_tag,中文1 中文2`。上传后替换当前词典（不合并）。最大 10MB / 20 万条。",
       "resetButton": "恢复默认词典",
       "resetHint": "从 GitHub 重新下载 ffdkj Danbooru 标签中文翻译表（约 30MB，收录热度前 20 万条，每日更新）",
+      "confirmReset": "恢复默认词典？当前词典会被覆盖。",
       "resetOk": "已恢复默认词典",
       "resetFail": "恢复失败",
       "uploadOk": "已加载 {{name}}",
@@ -919,6 +920,9 @@
       "error": "保存失败"
     },
     "downloadStarted": "开始下载 {{name}}",
+    "confirmDeletePreset": "删除预设「{{label}}」？此操作不可撤销。",
+    "confirmResetPreset": "把预设「{{label}}」重置为默认？你对它的修改会丢失。",
+    "confirmRemoveLocalModel": "移除本地模型「{{name}}」？仅取消登记，不会删除文件。",
     "saved": "已保存",
     "saveFailed": "保存失败",
     "newPresetName": "新预设名称",

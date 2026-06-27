@@ -76,6 +76,7 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
   t: TFunction
 }) {
   const { toast } = useToast()
+  const dialog = useDialog()
   const [selectedAnima, setSelectedAnima] = useState<string>('1.0')
   const [showPicker, setShowPicker] = useState(false)
   const [addingCustom, setAddingCustom] = useState(false)
@@ -124,6 +125,8 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
   }
 
   const removeCustom = async (p: string) => {
+    const name = p.split(/[\\/]/).pop() || p
+    if (!(await dialog.confirm(t('settings.confirmRemoveLocalModel', { name }), { tone: 'danger' }))) return
     try {
       await api.removeCustomAnima(p)
       if (p === selectedAnima) setSelectedAnima('1.0')
@@ -486,6 +489,7 @@ export function UpscalerSection({
 export function TagDictionarySection() {
   const { t } = useTranslation()
   const { toast } = useToast()
+  const dialog = useDialog()
   const dict = useTagDict()
   const [show, setShow] = useShowTagTranslation()
   const [busy, setBusy] = useState<null | 'reset' | 'upload'>(null)
@@ -504,6 +508,7 @@ export function TagDictionarySection() {
 
   const reset = async () => {
     if (busy) return
+    if (!(await dialog.confirm(t('settings.tagDictionary.confirmReset'), { tone: 'danger' }))) return
     setBusy('reset')
     try {
       await api.resetTagDictionary()

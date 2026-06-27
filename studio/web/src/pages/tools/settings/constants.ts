@@ -3,7 +3,6 @@ import {
   DEFAULT_WD14_MODELS,
   type LLMPreset,
   type Secrets,
-  type SecretsPatch,
 } from '../../../api/client'
 
 export const MASK = '***'
@@ -260,30 +259,6 @@ export const UPSCALER_DESCRIPTION_KEYS: Record<string, string> = {
 export function translatedCatalogText(keys: Record<string, string>, id: string, fallback: string | undefined, t: TFunction): string {
   const key = keys[id]
   return key ? t(key, { defaultValue: fallback ?? '' }) : (fallback ?? '')
-}
-
-// 顶层非 object 字段（string / number / bool），直接比较后塞入 patch。
-export const TOP_LEVEL_SCALARS: (keyof Secrets)[] = ['download_source']
-
-export function buildPatch(draft: Secrets, server: Secrets): SecretsPatch {
-  const out: Record<string, unknown> = {}
-  for (const key of Object.keys(draft) as (keyof Secrets)[]) {
-    if (TOP_LEVEL_SCALARS.includes(key)) {
-      if (draft[key] !== server[key]) out[key] = draft[key]
-      continue
-    }
-    const sub: Record<string, unknown> = {}
-    const d = draft[key] as unknown as Record<string, unknown>
-    const s = server[key] as unknown as Record<string, unknown>
-    for (const k of Object.keys(d)) {
-      const dv = d[k]
-      const sv = s[k]
-      if (dv === MASK) continue
-      if (JSON.stringify(dv) !== JSON.stringify(sv)) sub[k] = dv
-    }
-    if (Object.keys(sub).length) out[key] = sub
-  }
-  return out as SecretsPatch
 }
 
 // ── Models Section ─────────────────────────────────────────────────────────
