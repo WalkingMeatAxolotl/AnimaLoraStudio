@@ -57,7 +57,11 @@ def run(ctx: TrainingContext) -> None:
     base_reso = res_list[0]
 
     # 数据集
-    ctx.bucket_mgr = BucketManager(base_reso, aspect_ratio_limit=ar_limit)
+    ctx.bucket_mgr = BucketManager(
+        base_reso,
+        aspect_ratio_limit=ar_limit,
+        constant_token_mode=getattr(args, "torch_compile", False),
+    )
     ctx.base_dataset = ImageDataset(
         args.data_dir, base_reso, ctx.bucket_mgr,
         shuffle_caption=args.shuffle_caption,
@@ -123,6 +127,14 @@ def run(ctx: TrainingContext) -> None:
         logger.warning("num_workers > 0 在 Windows 上容易崩溃：已强制设为 0（避免多进程 spawn 问题）")
         args.num_workers = 0
 
+    dl_kwargs: dict = dict(
+        num_workers=args.num_workers,
+        pin_memory=getattr(args, "pin_memory", True) and torch.cuda.is_available(),
+    )
+    if args.num_workers > 0:
+        dl_kwargs["prefetch_factor"] = getattr(args, "prefetch_factor", 2)
+        dl_kwargs["persistent_workers"] = True
+
     if ctx.use_cached:
         # drop_last=False：桶尾不足 batch_size 出短 batch 而非丢图。
         # 对齐 kohya sd-scripts / ostris ai-toolkit；diffusion 用 LayerNorm/GroupNorm，
@@ -135,13 +147,10 @@ def run(ctx: TrainingContext) -> None:
         ctx.dataloader = DataLoader(
             ctx.dataset, batch_sampler=batch_sampler,
             collate_fn=collate_fn_cached,
-            num_workers=args.num_workers,
+            **dl_kwargs,
         )
     else:
-        # 非缓存路径也必须按桶分批：collate_fn 用 torch.stack 拼 pixel_values，一个 batch
-        # 混入不同桶尺寸（ARB 下不同长宽比 → 不同 H×W）会 RuntimeError。BucketBatchSampler
-        # 靠 ImageDataset.bucket_for_index 把同尺寸样本分进同一 batch（缓存路径早已这么做，
-        # 非缓存路径此前漏了 → bs>1 必崩）。drop_last=False 与缓存路径一致。
+        # 非缓存路径也必须按桶分批
         batch_sampler = BucketBatchSampler(
             ctx.dataset, batch_size=args.batch_size,
             drop_last=False, shuffle=True,
@@ -150,8 +159,12 @@ def run(ctx: TrainingContext) -> None:
         ctx.dataloader = DataLoader(
             ctx.dataset, batch_sampler=batch_sampler,
             collate_fn=collate_fn,
-            num_workers=args.num_workers,
+            **dl_kwargs,
         )
+
+    # 文本编码缓存（预计算 Qwen hidden + T5 token ids）
+    if ctx.use_cached and getattr(args, "cache_text_embeds", False):
+        _build_text_embed_cache(ctx)
 
     # 训练前自检：VAE encode->decode 循环（快速排除 VAE/scale/shape 问题）
     try:
@@ -169,3 +182,135 @@ def run(ctx: TrainingContext) -> None:
             logger.info("VAE roundtrip 自检已保存: samples/vae_roundtrip.png")
     except Exception as e:
         logger.warning(f"VAE roundtrip 自检失败（若 sample 仍是噪点，请优先修这个）: {e}")
+
+
+def _build_text_embed_cache(ctx: TrainingContext) -> None:
+    """预计算所有静态 caption 的文本编码并写入 npz（与 latent cache 共存）。"""
+    import numpy as np
+
+    from training.text_encoding import (
+        _build_qwen_text_from_prompt,
+        encode_qwen,
+        tokenize_t5_comfy_literal,
+        tokenize_t5_weighted,
+    )
+
+    args = ctx.args
+    comfy_mode = bool(getattr(args, "caption_comfy_encoding", True))
+    cache_mode_tag = "comfy" if comfy_mode else "legacy"
+
+    cached_datasets: list = []
+    if hasattr(ctx.dataset, "main_dataset"):
+        cached_datasets.append(ctx.dataset.main_dataset)
+        if ctx.dataset.reg_dataset:
+            cached_datasets.append(ctx.dataset.reg_dataset)
+    elif isinstance(ctx.dataset, CachedLatentDataset):
+        cached_datasets.append(ctx.dataset)
+
+    for cds in cached_datasets:
+        if not isinstance(cds, CachedLatentDataset):
+            continue
+        _encode_text_for_dataset(cds, ctx, comfy_mode, cache_mode_tag)
+
+
+def _encode_text_for_dataset(
+    cds: "CachedLatentDataset",
+    ctx: TrainingContext,
+    comfy_mode: bool,
+    cache_mode_tag: str,
+) -> None:
+    """为单个 CachedLatentDataset 编码全部 caption。"""
+    import numpy as np
+
+    from training.text_encoding import (
+        _build_qwen_text_from_prompt,
+        encode_qwen,
+        tokenize_t5_comfy_literal,
+        tokenize_t5_weighted,
+    )
+
+    to_encode: list[int] = []
+    seen_npz: set = set()
+
+    for i, sample in enumerate(cds.samples):
+        npz_path = cds._get_npz_path(sample["image"])
+        if npz_path in seen_npz:
+            continue
+        seen_npz.add(npz_path)
+        if npz_path.exists():
+            with np.load(npz_path) as data:
+                if "qwen_emb" in data.files:
+                    stored_mode = str(data["text_cache_mode"]) if "text_cache_mode" in data.files else "comfy"
+                    if stored_mode == cache_mode_tag:
+                        continue
+        to_encode.append(i)
+
+    if not to_encode:
+        logger.info(f"文本编码缓存已就绪（{len(seen_npz)} 样本）")
+        return
+
+    logger.info(f"预计算文本编码: {len(to_encode)}/{len(seen_npz)} 样本...")
+
+    base = cds.base_dataset
+    while hasattr(base, "dataset"):
+        base = base.dataset
+
+    for count, i in enumerate(to_encode, 1):
+        sample = cds.samples[i]
+        npz_path = cds._get_npz_path(sample["image"])
+
+        caption = ""
+        if getattr(base, "caption_override", None) is not None:
+            caption = base.caption_override
+        elif sample.get("json_path") and hasattr(base, "_process_caption_json"):
+            caption = base._process_caption_json(sample["json_path"]) or ""
+        elif sample.get("txt_path"):
+            raw = sample["txt_path"].read_text(encoding="utf-8").strip()
+            if hasattr(base, "_process_caption_txt"):
+                caption = base._process_caption_txt(raw)
+            else:
+                caption = raw
+
+        if comfy_mode:
+            qwen_text = str(caption)
+        else:
+            qwen_text = _build_qwen_text_from_prompt(caption)
+
+        with torch.no_grad():
+            qwen_emb, _qwen_attn = encode_qwen(
+                ctx.qwen_model, ctx.qwen_tok, [qwen_text], ctx.device, max_length=512,
+            )
+            qwen_emb_np = qwen_emb[0].cpu().float().numpy()
+
+            if comfy_mode:
+                t5_ids, t5_attn, t5_w = tokenize_t5_comfy_literal(
+                    ctx.t5_tok, [caption], max_length=512,
+                )
+            else:
+                t5_ids, t5_attn, t5_w = tokenize_t5_weighted(
+                    ctx.t5_tok, [caption], max_length=512,
+                )
+            t5_ids_np = t5_ids[0].numpy()
+            t5_attn_np = t5_attn[0].numpy().astype(np.int8)
+            t5_w_np = t5_w[0].numpy()
+
+        existing = dict(np.load(npz_path))
+        existing["qwen_emb"] = qwen_emb_np
+        existing["t5_ids"] = t5_ids_np
+        existing["t5_attn"] = t5_attn_np
+        existing["t5_w"] = t5_w_np
+        existing["text_cache_mode"] = np.array(cache_mode_tag)
+
+        import tempfile
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".npz", dir=str(npz_path.parent))
+        os.close(tmp_fd)
+        try:
+            np.savez(tmp_path, **existing)
+            os.replace(tmp_path, npz_path)
+        except BaseException:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            raise
+
+        if count % 20 == 0 or count == len(to_encode):
+            logger.info(f"  文本编码进度: {count}/{len(to_encode)}")

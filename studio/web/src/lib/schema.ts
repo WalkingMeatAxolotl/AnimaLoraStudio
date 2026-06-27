@@ -53,7 +53,9 @@ export function controlKind(prop: SchemaProperty): ControlKind {
 }
 
 /**
- * show_when 简单解析器：支持 `key==value` / `key!=value`，以及 `||` 组合。
+ * show_when / disable_when 表达式解析器。
+ * 支持：`key==value` / `key!=value` / `key>value` / `key>=value` / `key<value` / `key<=value`
+ * 组合：`||`（任一为真）/ `&&`（全部为真）。
  */
 export function evalShowWhen(
   expr: string | undefined,
@@ -75,6 +77,18 @@ export function evalShowWhen(
   const ne = expr.split('!=')
   if (ne.length === 2) {
     return String(values[ne[0].trim()]) !== ne[1].trim()
+  }
+  const cmp = expr.match(/^(.+?)(>=|<=|>|<)(.+)$/)
+  if (cmp) {
+    const lhs = Number(values[cmp[1].trim()])
+    const rhs = Number(cmp[3].trim())
+    if (Number.isNaN(lhs) || Number.isNaN(rhs)) return false
+    switch (cmp[2]) {
+      case '>': return lhs > rhs
+      case '>=': return lhs >= rhs
+      case '<': return lhs < rhs
+      case '<=': return lhs <= rhs
+    }
   }
   return true
 }

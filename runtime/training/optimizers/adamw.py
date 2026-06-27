@@ -15,4 +15,5 @@ def build(args, params, lr: float, weight_decay: float):
         params=params,
         learning_rate=lr,
         weight_decay=weight_decay,
+        fused=getattr(args, "fused_optimizer", True),
     )

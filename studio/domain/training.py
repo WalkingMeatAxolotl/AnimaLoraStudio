@@ -131,6 +131,17 @@ class TrainingConfig(BaseModel):
         description="VAE latent 缓存编码批次大小；0=跟随训练 batch size，显存不足时设为 1 逐张编码",
         json_schema_extra=_meta("system", advanced=True),
     )
+    cache_text_embeds: bool = Field(
+        False,
+        description="缓存文本编码到 npz：预计算 Qwen hidden + T5 token，训练时跳过文本编码器前向。需 cache_latents=true 且 caption 静态（不打乱、不 dropout）",
+        json_schema_extra=_meta(
+            "system", advanced=True,
+            show_when="cache_latents==true",
+            disable_when="shuffle_caption==true||tag_dropout>0",
+            disable_value=False,
+            disable_hint="caption 打乱或 tag_dropout>0 时每步文本不同，无法缓存",
+        ),
+    )
     vae_tiling: Literal["auto", "on", "off"] = Field(
         "auto",
         description="VAE 分块 decode：auto=可用显存紧张时自动分块（推荐）；on=始终分块（省显存、慢约 30%）；"
@@ -448,7 +459,12 @@ class TrainingConfig(BaseModel):
     kv_trim: bool = Field(
         False,
         description="Cross-attention KV trim：按实际 token 数裁到最近 bucket（64/128/256/512），减少 padding 计算量",
-        json_schema_extra=_meta("system", advanced=True),
+        json_schema_extra=_meta(
+            "system", advanced=True,
+            disable_when="torch_compile==true",
+            disable_value=False,
+            disable_hint="torch.compile 模式需要固定序列维度，已自动禁用 KV trim",
+        ),
     )
     noise_enhancement_type: Literal["none", "offset", "pyramid"] = Field(
         "none",
@@ -718,12 +734,61 @@ class TrainingConfig(BaseModel):
     attention_backend: AttentionBackend = Field(
         "flash_attn",
         description="Attention 后端。none = PyTorch SDPA 默认；xformers 显存更省；flash_attn 最快（需 Ampere+ GPU 支持）",
-        json_schema_extra=_meta("system"),
+        json_schema_extra=_meta(
+            "system",
+            alt_description="Attention 后端（torch.compile 模式下 block 内部走 compile-friendly SDPA 路径，此选项仅影响未编译的部分）",
+            alt_description_when="torch_compile==true",
+        ),
+    )
+    torch_compile: bool = Field(
+        False,
+        description="启用 torch.compile 加速（实验性）。自动启用 constant-token bucketing + per-block Inductor 编译。需要 Ampere+ GPU、CUDA toolkit。首步有 ~30s 编译预热",
+        json_schema_extra=_meta("system", advanced=True),
     )
     num_workers: int = Field(
         0, ge=0,
         description="数据加载并行线程数；越大加载越快但内存占用上升。Windows 必须填 0",
         json_schema_extra=_meta("system", advanced=True),
+    )
+    pin_memory: bool = Field(
+        True,
+        description="DataLoader pin_memory：将数据预分配到 CUDA pinned memory，加速 Host→Device 传输。关闭仅在系统 RAM 极度紧张时有意义",
+        json_schema_extra=_meta("system", advanced=True),
+    )
+    prefetch_factor: int = Field(
+        2, ge=1, le=8,
+        description="DataLoader 预取批次数（每 worker 预加载几个 batch）。num_workers=0 时无效。提高可掩盖 IO 延迟但增加 RAM 用量",
+        json_schema_extra=_meta("system", advanced=True, show_when="num_workers>0"),
+    )
+    fused_optimizer: bool = Field(
+        True,
+        description="启用 CUDA fused optimizer kernel（AdamW/AdamW8bit）。将多次 kernel launch 合并为一次，对 LoRA 多小参数场景提速明显。不支持 CPU 训练",
+        json_schema_extra=_meta("system", advanced=True),
+    )
+    zero_grad_set_to_none: bool = Field(
+        True,
+        description="zero_grad 将 .grad 设为 None 而非填零：省显存并减少一次 kernel launch",
+        json_schema_extra=_meta("system", advanced=True),
+    )
+    non_blocking_transfer: bool = Field(
+        True,
+        description="Host→Device 传输使用 non_blocking 允许 CPU/GPU 并行；需配合 pin_memory",
+        json_schema_extra=_meta("system", advanced=True, show_when="pin_memory==true"),
+    )
+    tf32_matmul: bool = Field(
+        True,
+        description="TF32 精度矩阵乘法（Ampere+ GPU）：float32 运算使用 TF32 tensor core，精度约 4 位有效数字，训练影响可忽略",
+        json_schema_extra=_meta("system", advanced=True),
+    )
+    cudnn_benchmark: bool = Field(
+        True,
+        description="cuDNN benchmark 模式：首次自动搜索最快卷积算法。固定尺寸输入加速明显",
+        json_schema_extra=_meta(
+            "system", advanced=True,
+            disable_when="torch_compile==true",
+            disable_value=False,
+            disable_hint="torch.compile 由 Inductor 管理 kernel 选择，无需 cuDNN benchmark",
+        ),
     )
 
     @field_validator("resolution", mode="before")
@@ -883,20 +948,7 @@ class TrainingConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_leap_exclusive(self) -> "TrainingConfig":
-        """LeapAlign/FlowBP 自蒸馏与 InfoNoise / loss_weighting / loss_type=huber 互斥。
-
-        leap 路径（任意 variant）每步 per-sample 采多个时刻沿代理轨迹积分（original/bridge/
-        lagrange 采两个时刻 (k,j)，sparse 采 K 个时刻），不存在单一 t，且 loss 在 leap.py
-        里写死 MSE(x̂0, x0)：
-        - InfoNoise：用单一 t 的 raw MSE 学 I-MMSE schedule，多 timestep 无从 record；
-          且 leap 的 loss 是 x̂0 自蒸馏 MSE，不是 v 预测 MSE，语义也不匹配。
-        - loss_weighting：min_snr / detail_inv_t / cosmap 全都按单一 t 算 SNR 权重，
-          多 timestep 没有定义；leap 自带 traj_sim_weighting 做轨迹质量加权。
-        - loss_type=huber：leap.py 直接走 (x̂0-x0)**2 内联 MSE，绕过 ctx.loss_fn，开了
-          huber 会被静默无视。
-        故 leap 路径在 loop.py 里有意跳过这三个机制，这里强制配置层面关闭，避免用户
-        以为开了却被静默忽略。三条互斥对全部四个 variant 一致成立。
-        """
+        """LeapAlign/FlowBP 自蒸馏与 InfoNoise / loss_weighting / loss_type=huber 互斥。"""
         if self.leap_enabled:
             if self.infonoise_enabled:
                 raise ValueError(
@@ -917,6 +969,27 @@ class TrainingConfig(BaseModel):
                     "leap_enabled=true 与 loss_type=huber 互斥：leap.py 写死 MSE(x̂0, x0) "
                     "内联自蒸馏目标，绕过 ctx.loss_fn 分发，huber 会被静默忽略。"
                     "请二选一：(a) 关闭 leap；或 (b) 设 loss_type=mse 走 leap 自蒸馏。"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_cache_text_embeds(self) -> "TrainingConfig":
+        """cache_text_embeds 要求 cache_latents + 静态 caption。"""
+        if self.cache_text_embeds:
+            if not self.cache_latents:
+                raise ValueError(
+                    "cache_text_embeds=true 需要 cache_latents=true"
+                    "（文本缓存仅在 cached latent 路径生效）。"
+                )
+            if self.shuffle_caption:
+                raise ValueError(
+                    "cache_text_embeds=true 与 shuffle_caption=true 互斥："
+                    "打乱 caption 导致每步文本不同，无法预计算。"
+                )
+            if self.tag_dropout > 0:
+                raise ValueError(
+                    f"cache_text_embeds=true 与 tag_dropout={self.tag_dropout} 互斥："
+                    "tag dropout 导致每步文本不同，无法预计算。"
                 )
         return self
 

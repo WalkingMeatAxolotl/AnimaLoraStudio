@@ -86,6 +86,39 @@ describe('evalShowWhen', () => {
     expect(evalShowWhen(expr, { optimizer_type: 'adamw' })).toBe(false)
   })
 
+  it('handles > comparison', () => {
+    expect(evalShowWhen('tag_dropout>0', { tag_dropout: 0.1 })).toBe(true)
+    expect(evalShowWhen('tag_dropout>0', { tag_dropout: 0 })).toBe(false)
+    expect(evalShowWhen('tag_dropout>0', { tag_dropout: 0.0 })).toBe(false)
+  })
+
+  it('handles >= comparison', () => {
+    expect(evalShowWhen('rank>=8', { rank: 8 })).toBe(true)
+    expect(evalShowWhen('rank>=8', { rank: 7 })).toBe(false)
+  })
+
+  it('handles < comparison', () => {
+    expect(evalShowWhen('lr<0.001', { lr: 0.0005 })).toBe(true)
+    expect(evalShowWhen('lr<0.001', { lr: 0.01 })).toBe(false)
+  })
+
+  it('handles <= comparison', () => {
+    expect(evalShowWhen('steps<=100', { steps: 100 })).toBe(true)
+    expect(evalShowWhen('steps<=100', { steps: 101 })).toBe(false)
+  })
+
+  it('returns false for NaN in numeric comparison', () => {
+    expect(evalShowWhen('tag_dropout>0', { tag_dropout: 'abc' })).toBe(false)
+    expect(evalShowWhen('tag_dropout>0', {})).toBe(false)
+  })
+
+  it('handles combined || with numeric comparison', () => {
+    const expr = 'shuffle_caption==true||tag_dropout>0'
+    expect(evalShowWhen(expr, { shuffle_caption: false, tag_dropout: 0 })).toBe(false)
+    expect(evalShowWhen(expr, { shuffle_caption: true, tag_dropout: 0 })).toBe(true)
+    expect(evalShowWhen(expr, { shuffle_caption: false, tag_dropout: 0.1 })).toBe(true)
+  })
+
   it('returns true on unparseable expressions (failsafe)', () => {
     expect(evalShowWhen('garbage', {})).toBe(true)
   })

@@ -84,15 +84,30 @@ export default function SchemaForm({
   // 老 config 同开（infonoise=on + 互斥字段非默认）由后端 _tolerant_validate 反向
   // 处理：关掉 infonoise 保留用户原投入的 weighting / huber / shift / enhancement，
   // 把 "infonoise_enabled" 写进 defaulted_fields，前端顶部 banner 提示。
+  //
+  // stash: disable 时暂存用户原值；条件解除时恢复。
+  const stashRef = useRef<Record<string, unknown>>({})
   useEffect(() => {
     let nextValues = values
     let changed = false
     for (const [name, prop] of Object.entries(props)) {
-      if (!shouldDisableField(name, prop)) continue
+      const disabled = shouldDisableField(name, prop)
       const takeoverValue = takeoverValueForField(name, prop)
-      if (takeoverValue !== undefined && values[name] !== takeoverValue) {
-        nextValues = { ...nextValues, [name]: takeoverValue }
-        changed = true
+      if (disabled) {
+        if (takeoverValue !== undefined && values[name] !== takeoverValue) {
+          if (!(name in stashRef.current)) {
+            stashRef.current[name] = values[name]
+          }
+          nextValues = { ...nextValues, [name]: takeoverValue }
+          changed = true
+        }
+      } else if (name in stashRef.current) {
+        const restored = stashRef.current[name]
+        delete stashRef.current[name]
+        if (values[name] !== restored) {
+          nextValues = { ...nextValues, [name]: restored }
+          changed = true
+        }
       }
     }
     if (changed) onChange(nextValues)
