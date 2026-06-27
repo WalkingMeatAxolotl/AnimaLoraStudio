@@ -617,8 +617,19 @@ function useEvalLogSource(
         : jobs.some((j) => j.status === 'pending') ? 'pending'
           : jobs.some((j) => j.status === 'failed') ? 'failed'
             : 'done'
-    return { key: `eval-${taskId}`, label: '评估', status, lines }
-  }, [jobs, buffers, taskId])
+    // 中断：取消该 task 全部未完成的评估 job（异步 SIGTERM）。区别于「清空」——
+    // 不删已算出的结果，只停后续 job。drawer 在 live 时把它显示成 header 右侧取消按钮。
+    const active = jobs.filter(
+      (j) => j.status !== 'done' && j.status !== 'failed' && j.status !== 'canceled',
+    )
+    const onCancel = active.length
+      ? () => {
+          active.forEach((j) => void api.cancelJob(j.id).catch(() => {}))
+          void loadJobs()
+        }
+      : undefined
+    return { key: `eval-${taskId}`, label: '评估', status, lines, onCancel }
+  }, [jobs, buffers, taskId, loadJobs])
 }
 
 function EvalTab({ taskId }: { taskId: number }) {
