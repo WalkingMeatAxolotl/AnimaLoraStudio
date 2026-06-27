@@ -20,7 +20,7 @@ import { useToast } from '../../../components/Toast'
 import { applyDensity, applyTheme, getStoredDensity, getStoredTheme, setStoredDensity, setStoredTheme, type Density, type Theme } from '../../../lib/theme'
 import i18n, { getStoredLangWithDefault, setStoredLang } from '../../../i18n'
 import { MODEL_DESCRIPTION_KEYS, textInputClass, translatedCatalogText, UPSCALER_DESCRIPTION_KEYS, type Section } from './constants'
-import { Bool, SettingsField, SettingsSection } from './fields'
+import { Bool, SettingsField, SettingsInput, SettingsSection } from './fields'
 import { DownloadButton, ModelGroupCard, ModelStatusBadge, SourceSelect, StatusLabel } from './modelCards'
 
 // ── 训练参数 Section ─────────────────────────────────────────────────
@@ -1296,12 +1296,12 @@ export function IdleTimeoutSection({
         helpTooltip={<p>{t('settings.idleTimeout.help')}</p>}
       >
         <div className="flex items-center gap-2">
-          <input
+          <SettingsInput
             type="number"
             min={0}
             max={240}
             value={minutes}
-            onChange={(e) => update('generate', 'idle_timeout_minutes', Math.max(0, Number(e.target.value) || 0))}
+            onChange={(v) => update('generate', 'idle_timeout_minutes', Math.max(0, Number(v) || 0))}
             className={`${textInputClass} max-w-32`}
           />
           <span className="text-xs text-fg-tertiary">
@@ -1365,12 +1365,12 @@ export function TaeFluxSection({
           <p>{t('settings.taeFluxHelp')}</p>
         }
       >
-        <input
+        <SettingsInput
           type="number"
           min={0}
           max={50}
           value={n}
-          onChange={(e) => update('generate', 'preview_every_n_steps', Number(e.target.value) || 0)}
+          onChange={(v) => update('generate', 'preview_every_n_steps', Number(v) || 0)}
           className={`${textInputClass} max-w-32`}
         />
       </SettingsField>

@@ -8,7 +8,7 @@ import {
 } from '../../../api/client'
 import { InfoButton } from '../../../components/InfoButton'
 import { fmtBytes, MODEL_DESCRIPTION_KEYS, textInputClass, translatedCatalogText } from './constants'
-import { SettingsField } from './fields'
+import { SettingsField, SettingsInput } from './fields'
 
 // ── HFEndpointSelect ────────────────────────────────────────────────────────
 //
@@ -56,11 +56,11 @@ export function HFEndpointSelect({ value, onChange }: {
         ))}
       </select>
       {mode === 'custom' && (
-        <input
+        <SettingsInput
           type="text"
           value={value && !isPreset ? value : ''}
           placeholder="https://your-mirror.example.com"
-          onChange={(e) => onChange(e.target.value.trim())}
+          onChange={(v) => onChange(v.trim())}
           className={textInputClass}
         />
       )}
@@ -268,10 +268,10 @@ export function EvalMetricModelCard({
       </button>
       {advOpen && (
         <SettingsField label={t('settings.fieldModelId')}>
-          <input
+          <SettingsInput
             type="text"
             value={modelId}
-            onChange={(e) => onModelIdChange(e.target.value)}
+            onChange={onModelIdChange}
             className={textInputClass}
             placeholder={t('settings.addHfModelId')}
           />
@@ -354,10 +354,10 @@ export function CLTaggerModelCard({
       </button>
       {advOpen && (
         <SettingsField label={t('settings.fieldModelId')}>
-          <input
+          <SettingsInput
             type="text"
             value={modelId}
-            onChange={(e) => onModelIdChange(e.target.value)}
+            onChange={onModelIdChange}
             className={textInputClass}
             placeholder="cella110n/cl_tagger"
           />

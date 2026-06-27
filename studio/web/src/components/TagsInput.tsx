@@ -19,12 +19,15 @@ export function parseTags(s: string): string[] {
  * blur 时文本归整成 `tags.join(', ')`，再进编辑态看到的是规范形式。
  * 给自带外层 label 的场景（Settings 的 SettingsField）直接用这个；要 140px
  * grid label 的用下面的 {@link TagsInput}。 */
-export function TagListInput({ value, onChange, placeholder, disabled, className = '' }: {
+export function TagListInput({ value, onChange, placeholder, disabled, className = '', commitOnBlur = false }: {
   value: string[]
   onChange: (v: string[]) => void
   placeholder?: string
   disabled?: boolean
   className?: string
+  /** true：编辑过程只更新本地文本，blur 时才上抛父一次（instant-apply 设置页用，
+   *  避免逐字 commit → 逐字 PUT）。默认 false 保持逐字上抛（打标页等本地编辑场景）。 */
+  commitOnBlur?: boolean
 }) {
   const [text, setText] = useState(value.join(', '))
   const [editing, setEditing] = useState(false)
@@ -41,7 +44,7 @@ export function TagListInput({ value, onChange, placeholder, disabled, className
       const cleanAfter = after.replace(/^[,，]\s*/, '')
       const next = `${before}${suggestion.tag}, ${cleanAfter}`
       setText(next)
-      onChange(parseTags(next))
+      if (!commitOnBlur) onChange(parseTags(next))
       // cursor 移动到新插入 tag 后的 ", " 之后
       const newCursor = before.length + suggestion.tag.length + 2
       // 等 React 刷完再 setSelectionRange，否则受控更新会把 cursor 拉到末尾
@@ -55,9 +58,10 @@ export function TagListInput({ value, onChange, placeholder, disabled, className
   // 外部改 value（restore 默认 / 切表单）且与当前文本解析结果不一致 → 重新同步
   // 文本。自己打字触发的 value 变化进不来（那时 parseTags(text) 恒等 value）。
   useEffect(() => {
+    if (editing) return  // 编辑中不被外部 value 冲掉本地文本（commitOnBlur 下尤其必要）
     if (JSON.stringify(parseTags(text)) !== JSON.stringify(value)) setText(value.join(', '))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value])
+  }, [value, editing])
 
   // 进入编辑态 → 把光标放进 input。
   useEffect(() => {
@@ -74,7 +78,7 @@ export function TagListInput({ value, onChange, placeholder, disabled, className
           placeholder={placeholder}
           onChange={(e) => {
             setText(e.target.value)
-            onChange(parseTags(e.target.value))
+            if (!commitOnBlur) onChange(parseTags(e.target.value))
             suggest.notifyChange()
           }}
           onKeyDown={(e) => { suggest.handleKeyDown(e) }}
@@ -84,8 +88,9 @@ export function TagListInput({ value, onChange, placeholder, disabled, className
           onBlur={() => {
             suggest.notifyBlur()
             // blur 归整：下划线→空格（跟训练 caption 同形，后端匹配也已 _/空格不敏感），
-            // chip 统一展示空格形式
-            const canon = value.map((t) => t.replace(/_/g, ' '))
+            // chip 统一展示空格形式。commitOnBlur 模式此时才把完整 tags 上抛父一次。
+            const source = commitOnBlur ? parseTags(text) : value
+            const canon = source.map((t) => t.replace(/_/g, ' '))
             if (JSON.stringify(canon) !== JSON.stringify(value)) onChange(canon)
             setText(canon.join(', '))
             setEditing(false)

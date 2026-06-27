@@ -408,6 +408,7 @@ export default function SettingsPage() {
             onChange={(tags) => update('reg', 'default_excluded_tags', tags)}
             placeholder={t('settings.reg.defaultExcludedPlaceholder')}
             className={textInputClass}
+            commitOnBlur
           />
         </SettingsField>
       </SettingsSection>
@@ -540,6 +541,7 @@ export default function SettingsPage() {
             value={draft.wd14.blacklist_tags}
             onChange={(tags) => update('wd14', 'blacklist_tags', tags)}
             className={textInputClass}
+            commitOnBlur
           />
         </SettingsField>
         <SettingsField label={t('settings.fieldBatchSize')} desc={t('settings.batchSizeHint')}>
@@ -608,6 +610,7 @@ export default function SettingsPage() {
             value={draft.cltagger.blacklist_tags}
             onChange={(tags) => update('cltagger', 'blacklist_tags', tags)}
             className={textInputClass}
+            commitOnBlur
           />
         </SettingsField>
         <SettingsField label={t('settings.fieldBatchSize')} desc={t('settings.batchSizeHint')}>
