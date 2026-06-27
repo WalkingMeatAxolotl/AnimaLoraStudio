@@ -143,12 +143,10 @@ export default function InlineLoraPicker(props: Props) {
   }, [hasAnchor, projects])
 
   // 版本下拉：来自 catalog（pid 定后由上面 effect 懒拉）。还没到时为空数组。
-  // versionsOf 返 undefined = 该项目 versions 还在懒加载（区别于已加载但无版本=[]）。
   const versions = useMemo(
     () => (pid != null ? versionsOf(pid) ?? [] : []),
     [versionsOf, pid],
   )
-  const versionsLoading = pid != null && versionsOf(pid) === undefined
 
   const [vid, setVid] = useState<number | null>(initialVid)
   // 同 pid：single 模式下 value 非 null 时 vid 跟 props.value.versionId 同步
@@ -204,11 +202,10 @@ export default function InlineLoraPicker(props: Props) {
     return () => { cancelled = true }
   }, [pid, vid, fetchCkpts])
 
-  // 解析中（显示 pending）：已选项目但 ckpt 还没就绪 —— versions 懒加载中 /
-  // 刚切项目 vid 待 auto 选定 / ckpt 请求在飞。projectless 或确认无版本的不算
-  // （走各自空状态文案）。切 project 期间用它显「加载中」，不再闪空列表。
-  const resolving = pid !== null && !error && ckpts.length === 0
-    && (loading || versionsLoading || (vid === null && versions.length > 0))
+  // 切项目后、新项目 versions 还在网络加载（vid 尚未选定）的窄窗口 —— 显「加载中」
+  // 避免长时间空白。仅此一种；版本切换（vid 直接换值、不经 null）不触发，所以
+  // 同项目内换 checkpoint 不闪。已加载但确实无版本的项目（versionsOf 返 []）不算。
+  const settling = pid !== null && vid === null && versionsOf(pid) === undefined
 
   // 搜索过滤
   const [search, setSearch] = useState('')
@@ -442,18 +439,21 @@ export default function InlineLoraPicker(props: Props) {
         className="grid gap-1.5 overflow-y-auto"
         style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', maxHeight: 280, padding: 2 }}
       >
-        {resolving && <div className="text-2xs text-fg-tertiary px-1 py-2" style={{ gridColumn: '1 / -1' }}>加载中…</div>}
-        {!resolving && projects.length === 0 && (
+        {/* 「加载中」只在真的没东西可显示时出现（首次拉取）。切换版本/项目时旧
+            chips 仍渲染（见下方 filtered.map 不再被 loading 门控），等新结果到位
+            原地替换，不闪空列表。 */}
+        {(loading || settling) && ckpts.length === 0 && <div className="text-2xs text-fg-tertiary px-1 py-2" style={{ gridColumn: '1 / -1' }}>加载中…</div>}
+        {!loading && projects.length === 0 && (
           <div className="text-fg-tertiary text-xs px-1 py-4 text-center" style={{ gridColumn: '1 / -1' }}>
             还没有训练好的 LoRA —— 先去训练一个{onPickExternal ? '，或用「外部文件」' : ''}
           </div>
         )}
-        {!resolving && projects.length > 0 && pid !== null && vid !== null && ckpts.length === 0 && !error && (
+        {!loading && projects.length > 0 && pid !== null && vid !== null && ckpts.length === 0 && !error && (
           <div className="text-2xs text-fg-tertiary px-1 py-4 text-center" style={{ gridColumn: '1 / -1' }}>
             该版本没扫到 ckpt 文件
           </div>
         )}
-        {!resolving && filtered.map((c) => {
+        {filtered.map((c) => {
           const isExisting = existingPaths.has(c.path)
           const isPicked = isSingle ? c.path === selectedPath : picked.has(c.path)
           const marker = isExisting ? '✓' : (isPicked ? '✓' : '+')
