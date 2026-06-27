@@ -250,6 +250,44 @@ describe('InlineLoraPicker — multi mode (default)', () => {
     expect(calls.every((c) => valid.has(c))).toBe(true)
   })
 
+  it('切版本加载期间保留旧 chips（stale-while-revalidate，不闪空）', async () => {
+    const user = userEvent.setup()
+    const ckptsV2: LoraCkpt[] = [
+      { kind: 'final', value: 0, label: 'v2-final', path: '/loras/cute_chibi/v2/final.safetensors', mtime: 1 },
+    ]
+    let resolveSecond: (v: LoraCkpt[]) => void = () => {}
+    let call = 0
+    const base = catalogFrom(sample, ckptsV3)
+    const catalog: LoraCatalog = {
+      ...base,
+      fetchCkpts: () => {
+        call += 1
+        if (call === 1) return Promise.resolve(ckptsV3)         // 初始版本
+        return new Promise<LoraCkpt[]>((res) => { resolveSecond = res })  // 切版本：挂起
+      },
+    }
+    render(
+      <InlineLoraPicker
+        mode="multi"
+        catalog={catalog}
+        existingPaths={new Set()}
+        showWeight
+        onPick={vi.fn()}
+        onClose={vi.fn()}
+        onPickExternal={vi.fn()}
+      />,
+    )
+    await waitFor(() => expect(screen.getByText('step 2000')).toBeInTheDocument())
+    // 切版本 11→12（同项目），第二次 fetch 挂起模拟网络加载
+    await user.selectOptions(screen.getByLabelText('选版本'), '12')
+    // 加载期间：旧 chips 仍在原地（没被「加载中」替换 / 没闪空）
+    expect(screen.getByText('step 2000')).toBeInTheDocument()
+    // 放行 → 原地换成新版本的 chips
+    resolveSecond(ckptsV2)
+    await waitFor(() => expect(screen.getByText('v2-final')).toBeInTheDocument())
+    expect(screen.queryByText('step 2000')).not.toBeInTheDocument()
+  })
+
   it('weight slider value used in onPick', async () => {
     const user = userEvent.setup()
     const { onPick } = renderMulti()

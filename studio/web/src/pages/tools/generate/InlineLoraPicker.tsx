@@ -180,10 +180,13 @@ export default function InlineLoraPicker(props: Props) {
   // 由下拉 onChange 同步清空、auto-vid effect 从 versions 选定）。所以这里只在
   // vid 非 null 时拉 ckpt —— 不会出现 (newPid, oldVid) 这种触发 404 的组合。
   useEffect(() => {
-    if (pid === null || vid === null) {
-      setCkpts([])
+    if (pid === null) {
+      setCkpts([])  // 没选项目 → 清空
       return
     }
+    // 切 project 的过渡帧（vid 暂为 null，等 auto-vid 选定）：保留旧 chips 不清，
+    // 由 settling 显加载态。否则会先闪一下「加载中/空」再出新 chips。
+    if (vid === null) return
     let cancelled = false
     setLoading(true)
     setError(null)
@@ -206,6 +209,9 @@ export default function InlineLoraPicker(props: Props) {
   // 避免长时间空白。仅此一种；版本切换（vid 直接换值、不经 null）不触发，所以
   // 同项目内换 checkpoint 不闪。已加载但确实无版本的项目（versionsOf 返 []）不算。
   const settling = pid !== null && vid === null && versionsOf(pid) === undefined
+  // 更新中：ckpt 请求在飞 或 切项目等新 versions。期间旧 chips 仍显示但禁止点击
+  // （避免点到上一次的 ckpt），并给个不占布局的小提示。
+  const updating = loading || settling
 
   // 搜索过滤
   const [search, setSearch] = useState('')
@@ -360,6 +366,10 @@ export default function InlineLoraPicker(props: Props) {
       {/* header */}
       <div className="flex items-center gap-2">
         <span className="text-xs font-semibold text-fg-secondary shrink-0">选 LoRA</span>
+        {/* 更新中（旧 chips 还在原地）时给个不占布局的小提示，不替换 grid 内容 */}
+        {updating && ckpts.length > 0 && (
+          <span className="text-2xs text-fg-tertiary shrink-0">加载中…</span>
+        )}
         <span className="flex-1" />
         {onPickExternal && (
           <button
@@ -442,7 +452,7 @@ export default function InlineLoraPicker(props: Props) {
         {/* 「加载中」只在真的没东西可显示时出现（首次拉取）。切换版本/项目时旧
             chips 仍渲染（见下方 filtered.map 不再被 loading 门控），等新结果到位
             原地替换，不闪空列表。 */}
-        {(loading || settling) && ckpts.length === 0 && <div className="text-2xs text-fg-tertiary px-1 py-2" style={{ gridColumn: '1 / -1' }}>加载中…</div>}
+        {updating && ckpts.length === 0 && <div className="text-2xs text-fg-tertiary px-1 py-2" style={{ gridColumn: '1 / -1' }}>加载中…</div>}
         {!loading && projects.length === 0 && (
           <div className="text-fg-tertiary text-xs px-1 py-4 text-center" style={{ gridColumn: '1 / -1' }}>
             还没有训练好的 LoRA —— 先去训练一个{onPickExternal ? '，或用「外部文件」' : ''}
@@ -462,7 +472,7 @@ export default function InlineLoraPicker(props: Props) {
               key={c.path}
               type="button"
               onClick={() => onChipClick(c)}
-              disabled={isExisting}
+              disabled={isExisting || updating}
               className="font-mono flex items-center gap-1 min-w-0"
               style={{
                 fontSize: 11,
