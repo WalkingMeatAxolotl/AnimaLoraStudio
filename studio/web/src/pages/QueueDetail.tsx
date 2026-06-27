@@ -553,7 +553,9 @@ function useEvalLogSource(
     if (!pid || !vid || !taskId) return
     try {
       const r = await api.listTaskEvalJobs(pid, vid, taskId)
-      setJobs(r.jobs)
+      // 排除 canceled —— 「清空」会把该 task 历史评估 job 全转 canceled，过滤掉它们，
+      // 合并日志只剩当前这轮 run，状态也不会被老的 failed/done job 带歪。
+      setJobs(r.jobs.filter((j) => j.status !== 'canceled'))
     } catch {
       // 辅助信息，拉失败不打扰
     }
