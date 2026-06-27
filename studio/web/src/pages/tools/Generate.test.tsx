@@ -5,6 +5,14 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ToastProvider } from '../../components/Toast'
 import GeneratePage from './Generate'
+import { useMonitorProgress } from '../../lib/useMonitorProgress'
+
+// monitorState 来自 SSE，smoke 里不驱动 —— 默认返回空 state（samples=[]，等同
+// 既有行为）。#1 冻结用例单独 mockReturnValue 注入 XY samples。
+vi.mock('../../lib/useMonitorProgress', () => {
+  const NULL_MONITOR = { state: null }
+  return { useMonitorProgress: vi.fn(() => NULL_MONITOR) }
+})
 
 const fetchMock = vi.fn()
 let lastEnqueueBody: Record<string, unknown> | null = null
@@ -12,6 +20,8 @@ let lastEnqueueBody: Record<string, unknown> | null = null
 beforeEach(() => {
   lastEnqueueBody = null
   window.localStorage.clear()
+  // 每个用例重置 monitor mock 到默认空 state（隔离 #1 用例注入的 samples）
+  vi.mocked(useMonitorProgress).mockReturnValue({ state: null } as never)
   vi.stubGlobal('fetch', fetchMock)
   fetchMock.mockReset()
   fetchMock.mockImplementation((url: string, init?: RequestInit) => {
@@ -402,5 +412,40 @@ describe('GeneratePage 端到端 smoke', () => {
     })
     // 原 "20, 25, 30" 文本框该消失（切到 lora_ckpt 渲染的是 picker）
     expect(screen.queryByDisplayValue(/20, 25, 30/)).not.toBeInTheDocument()
+  })
+
+  // ---- #1：XY 开始后改轴只影响下次，不串改右侧已出结果 ----
+  it('XY 开始后改 X 轴：sidebar 改了但右侧结果网格冻结（30 列仍在）', async () => {
+    // 注入 3 个 cell 的 XY samples（X=steps 20/25/30，无 Y 轴）
+    vi.mocked(useMonitorProgress).mockReturnValue({
+      state: {
+        samples: [
+          { path: 'cell x0 y0.png', xy: { xi: 0, yi: 0, xv: 20, yv: null } },
+          { path: 'cell x1 y0.png', xy: { xi: 1, yi: 0, xv: 25, yv: null } },
+          { path: 'cell x2 y0.png', xy: { xi: 2, yi: 0, xv: 30, yv: null } },
+        ],
+      },
+    } as never)
+    seedPrefs({ mode: 'xy' })  // 默认 X=steps raw "20, 25, 30"
+    const user = userEvent.setup()
+    setup()
+    await waitForInitialLorasLoad()
+
+    // 开始生成（3 张）→ dispatch 定格本次运行态 run
+    await user.click(await screen.findByRole('button', { name: /开始生成 · 3 张/ }))
+    await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
+
+    // 网格渲染出 steps 三档表头（20/25/30）
+    await waitFor(() => expect(screen.getByText('30')).toBeInTheDocument())
+
+    // 取消 30 那一档：X 轴 raw "20, 25, 30" → "20, 25"
+    const axisInput = screen.getByDisplayValue('20, 25, 30')
+    await user.clear(axisInput)
+    await user.type(axisInput, '20, 25')
+
+    // live sidebar 确实改成了 "20, 25"（下次生成会用它）……
+    await waitFor(() => expect(axisInput).toHaveValue('20, 25'))
+    // ……但右侧已出结果网格冻结：仍含 "30" 表头，未被 live 编辑串改
+    expect(screen.getByText('30')).toBeInTheDocument()
   })
 })
