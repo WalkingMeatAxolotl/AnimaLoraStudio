@@ -562,6 +562,10 @@
     "output": "Output",
     "jsonCaption": "JSON caption",
     "textCaption": "Text caption",
+    "assistTagger": "辅助 tagger",
+    "assistOff": "关闭",
+    "assistTaggerHelp": "用本地 tagger 先给每张图预打标，把标签注入提示词里的 %TAGS% 占位符。仅当提示词包含 %TAGS% 时才生效。",
+    "assistNeedsTags": "已选辅助 tagger，但提示词里没有 %TAGS% 占位符，不会生效。",
     "responsesWarning": "⚠️ Responses endpoint 只用 system + 第一条 user；其他 messages 会被忽略",
     "secretSavedPlaceholder": "已保存（不显示），输入新值才覆盖",
     "presetLabels": {

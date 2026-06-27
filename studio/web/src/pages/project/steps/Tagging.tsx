@@ -56,6 +56,7 @@ type LLMTaggerForm = {
   endpoint: LLMPreset['endpoint']
   messages: LLMMessage[]
   output_format: LLMPreset['output_format']
+  assist_tagger: string
   temperature: number
   max_tokens: number
   timeout: number
@@ -105,6 +106,7 @@ function fromLLMPreset(p: LLMPreset): LLMTaggerForm {
     endpoint: p.endpoint,
     messages: p.messages.map((m) => ({ ...m })),
     output_format: p.output_format,
+    assist_tagger: p.assist_tagger,
     temperature: p.temperature,
     max_tokens: p.max_tokens,
     timeout: p.timeout,
@@ -268,7 +270,7 @@ export default function TaggingPage() {
     const out: Record<string, unknown> = {}
     if (llmForm.preset_id !== llmDefaults.current_preset) out.current_preset = llmForm.preset_id
     const fields: ReadonlyArray<Exclude<keyof LLMTaggerForm, 'preset_id'>> = [
-      'base_url', 'model', 'endpoint', 'messages', 'output_format',
+      'base_url', 'model', 'endpoint', 'messages', 'output_format', 'assist_tagger',
       'temperature', 'max_tokens', 'timeout', 'max_retries',
       'concurrency', 'requests_per_second', 'max_requests_per_minute',
       'max_side', 'jpeg_quality', 'max_image_mb',
@@ -833,6 +835,23 @@ function LLMTaggerPanel({
             <option value="text">Text</option>
           </select>
         </label>
+        <label className="grid grid-cols-[140px_1fr] items-center gap-2">
+          <span className="text-fg-tertiary font-mono text-xs">assist_tagger</span>
+          <select
+            value={form.assist_tagger}
+            onChange={(e) => onChange({ ...form, assist_tagger: e.target.value })}
+            disabled={disabled}
+            title={t('llmWorkspace.assistTaggerHelp').split('%TAGS%').join('{{tags}}')}
+            className={`input input-mono ${form.assist_tagger !== activePreset.assist_tagger ? 'border-warn' : ''}`}
+          >
+            <option value="">Off</option>
+            <option value="wd14">WD14</option>
+            <option value="cltagger">CLTagger</option>
+          </select>
+        </label>
+        <p className="text-fg-tertiary text-[11px] leading-snug m-0">
+          {t('llmWorkspace.assistTaggerHelp').split('%TAGS%').join('{{tags}}')}
+        </p>
       </div>
 
       <div className="flex items-center gap-3 flex-wrap">
