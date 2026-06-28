@@ -8,6 +8,7 @@ import UploadProgressBar from '../components/UploadProgressBar'
 import VersionStatusBadge from '../components/VersionStatusBadge'
 import { useDialog } from '../components/Dialog'
 import { useToast } from '../components/Toast'
+import { useSelectedProject, useSelectedProjectSetter } from '../context/ProjectContext'
 import { useEventStream } from '../lib/useEventStream'
 import { useLocalStorageState } from '../lib/useLocalStorageState'
 import { useUploadProgress } from '../lib/useUploadProgress'
@@ -60,6 +61,8 @@ export default function ProjectsPage() {
   const { toast } = useToast()
   const { confirm } = useDialog()
   const uploadProgress = useUploadProgress()
+  const selectedProject = useSelectedProject()
+  const setSelectedProject = useSelectedProjectSetter()
 
   const refresh = async () => {
     try {
@@ -74,6 +77,15 @@ export default function ProjectsPage() {
   }
 
   useEffect(() => { void refresh() }, [])
+
+  // 侧边栏的粘性"已选中项目"快照在项目被删（含清空回收站）后会变陈旧 ——
+  // 列表里已不存在就清掉，避免点侧栏步骤跳到 404。归档项目仍在列表里，不清。
+  useEffect(() => {
+    if (loading || !selectedProject) return
+    if (!items.some((p) => p.id === selectedProject.project.id)) {
+      setSelectedProject?.(null)
+    }
+  }, [items, loading, selectedProject, setSelectedProject])
 
   useEventStream((evt) => {
     if (evt.type === 'project_state_changed') void refresh()

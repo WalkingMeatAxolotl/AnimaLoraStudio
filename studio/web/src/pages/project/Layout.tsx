@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Outlet, useNavigate, useParams } from 'react-router-dom'
 import { api, type ProjectDetail } from '../../api/client'
-import { useProjectCtxSetter } from '../../context/ProjectContext'
+import { useProjectCtxSetter, useSelectedProjectSetter } from '../../context/ProjectContext'
 import { useDialog } from '../../components/Dialog'
 import { useToast } from '../../components/Toast'
 import { useEventStream } from '../../lib/useEventStream'
@@ -16,6 +16,7 @@ export default function ProjectLayout() {
   const { toast } = useToast()
   const { confirm } = useDialog()
   const setCtx = useProjectCtxSetter()
+  const setSelected = useSelectedProjectSetter()
   const [project, setProject] = useState<ProjectDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [creating, setCreating] = useState<{ forkFrom: number | null } | null>(null)
@@ -183,6 +184,12 @@ export default function ProjectLayout() {
   useEffect(() => {
     return () => { setCtx?.(null) }
   }, [setCtx])
+
+  // 粘性快照：加载/刷新时写入，离开项目页时**不清**（见 ProjectContext 注释），
+  // 让侧边栏跨页保留选中项目用于导航。打开另一个项目会覆盖这份快照。
+  useEffect(() => {
+    if (project) setSelected?.({ project, activeVersion })
+  }, [project, activeVersion, setSelected])
 
   if (error) {
     return (

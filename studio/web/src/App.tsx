@@ -10,7 +10,14 @@ import {
 import SettingsDrawer from './components/SettingsDrawer'
 import Sidebar from './components/Sidebar'
 import Topbar from './components/Topbar'
-import { ProjectContext, ProjectSetterContext, type ProjectCtxValue } from './context/ProjectContext'
+import {
+  ProjectContext,
+  ProjectSetterContext,
+  SelectedProjectContext,
+  SelectedProjectSetterContext,
+  type ProjectCtxValue,
+  type SelectedProjectValue,
+} from './context/ProjectContext'
 import { useSettingsDrawer } from './lib/SettingsDrawer'
 import ProjectsPage from './pages/Projects'
 import QueuePage from './pages/Queue'
@@ -133,11 +140,17 @@ const router = createBrowserRouter(
 
 export default function App() {
   const [projectCtx, setProjectCtx] = useState<ProjectCtxValue | null>(null)
+  // 跨页保留的"已选中项目"快照（见 ProjectContext 注释）
+  const [selectedProject, setSelectedProject] = useState<SelectedProjectValue | null>(null)
 
   return (
     <ProjectContext.Provider value={projectCtx}>
       <ProjectSetterContext.Provider value={setProjectCtx}>
-        <RouterProvider router={router} />
+        <SelectedProjectContext.Provider value={selectedProject}>
+          <SelectedProjectSetterContext.Provider value={setSelectedProject}>
+            <RouterProvider router={router} />
+          </SelectedProjectSetterContext.Provider>
+        </SelectedProjectContext.Provider>
       </ProjectSetterContext.Provider>
     </ProjectContext.Provider>
   )
