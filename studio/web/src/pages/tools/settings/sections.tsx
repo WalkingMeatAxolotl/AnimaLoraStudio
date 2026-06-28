@@ -17,6 +17,7 @@ import PathPicker from '../../../components/PathPicker'
 import { useShowTagTranslation } from '../../../tagDict/showToggle'
 import { useTagDict, reloadDict } from '../../../tagDict/store'
 import { useToast } from '../../../components/Toast'
+import { useSettingsData } from '../../../lib/SettingsData'
 import { applyDensity, applyTheme, getStoredDensity, getStoredTheme, setStoredDensity, setStoredTheme, type Density, type Theme } from '../../../lib/theme'
 import i18n, { getStoredLangWithDefault, setStoredLang } from '../../../i18n'
 import { MODEL_DESCRIPTION_KEYS, textInputClass, translatedCatalogText, UPSCALER_DESCRIPTION_KEYS, type Section } from './constants'
@@ -30,6 +31,7 @@ import { DownloadButton, ModelGroupCard, ModelStatusBadge, SourceSelect, StatusL
 export function TrainingParamsSection() {
   const { t } = useTranslation()
   const { toast } = useToast()
+  const { runSave } = useSettingsData()
   const [autoSyncPaths, setAutoSyncPaths] = useState<boolean>(true)
   const [savingAutoSync, setSavingAutoSync] = useState(false)
 
@@ -44,7 +46,7 @@ export function TrainingParamsSection() {
     const prev = autoSyncPaths
     setAutoSyncPaths(next)
     try {
-      await api.updateSecrets({ models: { auto_sync_paths: next } })
+      await runSave(() => api.updateSecrets({ models: { auto_sync_paths: next } }))
       toast(next ? t('settings.autoSyncPathsOn') : t('settings.autoSyncPathsOff'), 'success')
     } catch (e) {
       setAutoSyncPaths(prev)
@@ -77,6 +79,7 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
 }) {
   const { toast } = useToast()
   const dialog = useDialog()
+  const { runSave } = useSettingsData()
   const [selectedAnima, setSelectedAnima] = useState<string>('1.0')
   const [showPicker, setShowPicker] = useState(false)
   const [addingCustom, setAddingCustom] = useState(false)
@@ -93,7 +96,7 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
     if (variant === selectedAnima) return
     setSelectedAnima(variant)
     try {
-      await api.updateSecrets({ models: { selected_anima: variant } })
+      await runSave(() => api.updateSecrets({ models: { selected_anima: variant } }))
       toast(t('settings.mainModelSelected', { name: variant }), 'success')
       await reloadCatalog()
     } catch (e) {
@@ -114,7 +117,7 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
     }
     setAddingCustom(true)
     try {
-      await api.addCustomAnima(p)
+      await runSave(() => api.addCustomAnima(p))
       toast(t('settings.localModelAdded', { name: p.split(/[\\/]/).pop() }), 'success')
       await reloadCatalog()
     } catch (e) {
@@ -128,7 +131,7 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
     const name = p.split(/[\\/]/).pop() || p
     if (!(await dialog.confirm(t('settings.confirmRemoveLocalModel', { name }), { tone: 'danger' }))) return
     try {
-      await api.removeCustomAnima(p)
+      await runSave(() => api.removeCustomAnima(p))
       if (p === selectedAnima) setSelectedAnima('1.0')
       toast(t('settings.localModelRemoved'), 'success')
       await reloadCatalog()
@@ -295,6 +298,7 @@ export function UpscalerSection({
   t: TFunction
 }) {
   const { toast } = useToast()
+  const { runSave } = useSettingsData()
   const [customSource, setCustomSource] = useState<'hf' | 'ms'>('hf')
   const [customRepo, setCustomRepo] = useState('')
   const [customFile, setCustomFile] = useState('')
@@ -302,7 +306,7 @@ export function UpscalerSection({
 
   const pickUpscaler = async (label: string) => {
     try {
-      await api.selectUpscaler(label)
+      await runSave(() => api.selectUpscaler(label))
       toast(t('settings.defaultUpscaler', { name: label }), 'success')
       await reloadCatalog()
     } catch (e) {

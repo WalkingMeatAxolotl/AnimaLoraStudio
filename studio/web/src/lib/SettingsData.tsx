@@ -52,6 +52,8 @@ interface SettingsData {
   setSecrets: (s: Secrets) => void
   /** instant-apply 统一写入入口：乐观更新 + 串行 PUT 单字段 patch。 */
   commitSecrets: (patch: SecretsPatch) => void
+  /** 包装一次性即时 PUT（下载源 / 主模型 / upscaler 等独立保存），驱动 saveStatus 指示。 */
+  runSave: <T>(fn: () => Promise<T>) => Promise<T>
   saveStatus: SaveStatus
   catalog: ModelsCatalog | null
   catalogError: string | null
@@ -129,14 +131,28 @@ export function SettingsDataProvider({ children }: { children: ReactNode }) {
   // draft）。刻意不 setSecrets —— 否则会让 SettingsPage 的 draft/server 失同步，
   // 表单 Save 时把这次改动 clobber 回去。dropdown 当前值读 catalog（reloadCatalog
   // 刷新），不依赖表单 secrets。
+  // 即时保存包装：给「不进 commitSecrets 队列」的独立 PUT（下载源 / 主模型 /
+  // upscaler / auto_sync 等切换类）也驱动右上角 saveStatus 指示，反馈统一。
+  const runSave = useCallback(async <T,>(fn: () => Promise<T>): Promise<T> => {
+    setSaveStatus({ state: 'saving' })
+    try {
+      const r = await fn()
+      setSaveStatus({ state: 'saved', at: Date.now() })
+      return r
+    } catch (e) {
+      setSaveStatus({ state: 'error', error: String(e) })
+      throw e
+    }
+  }, [])
+
   const setDownloadSource = useCallback(async (type: string, source: string) => {
     try {
-      await api.updateSecrets({ download_sources: { [type]: source } })
+      await runSave(() => api.updateSecrets({ download_sources: { [type]: source } }))
       await reloadCatalog()
     } catch (e) {
       toast(String(e), 'error')
     }
-  }, [reloadCatalog, toast])
+  }, [runSave, reloadCatalog, toast])
 
   // instant-apply 统一写入：乐观更新本地 secrets 让控件立即反映，PUT 单字段
   // patch 入串行队列。队列全部清空后用后端权威结果回写一次（拿 validator
@@ -165,7 +181,7 @@ export function SettingsDataProvider({ children }: { children: ReactNode }) {
 
   return (
     <Ctx.Provider value={{
-      secrets, secretsError, setSecrets, commitSecrets, saveStatus,
+      secrets, secretsError, setSecrets, commitSecrets, runSave, saveStatus,
       catalog, catalogError, reloadCatalog,
       downloadBusy, startDownload, setDownloadSource,
     }}>
