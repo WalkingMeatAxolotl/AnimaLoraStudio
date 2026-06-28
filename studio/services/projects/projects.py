@@ -100,7 +100,11 @@ def create_project(
         raise ProjectError(
             "Project title is required", code="project.title_required",
         )
-    base_slug = slug or slugify(title)
+    # 用户可在创建时显式指定 slug（前端已校验为 ASCII）。这里仍统一过一遍
+    # slugify：既归一化大小写 / 非法字符，也防 API 直连绕过前端校验。留空 / 清理
+    # 后为空 → 回退到从 title 派生（全非 ASCII title 仍走 "project" 兜底）。
+    slug = (slug or "").strip()
+    base_slug = slugify(slug) if slug else slugify(title)
     final_slug = _unique_slug(conn, base_slug)
     now = time.time()
     cur = conn.execute(
