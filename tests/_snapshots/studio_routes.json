@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 198,
+  "count": 200,
   "routes": [
     {
       "path": "/",
@@ -1595,6 +1595,22 @@
         "GET"
       ],
       "name": "get_sample",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/studio",
+      "methods": [
+        "GET"
+      ],
+      "name": "legacy_studio_redirect",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/studio/{rest:path}",
+      "methods": [
+        "GET"
+      ],
+      "name": "legacy_studio_redirect",
       "type": "APIRoute"
     }
   ]
