@@ -96,7 +96,7 @@ studio.bat
 ./studio.sh
 ```
 
-首次运行会自动：建 `venv/` → 按 GPU 驱动检测装对应 CUDA torch（cu118 至 cu130）→ 装 `requirements.txt` → 构建前端 → 起后端 → 自动开浏览器到 <http://127.0.0.1:8765/studio/>。首次启动会弹引导 modal，按 checklist 一键安装底模 + ONNX Runtime + 训练加速包。
+首次运行会自动：建 `venv/` → 按 GPU 驱动检测装对应 CUDA torch（cu118 至 cu130）→ 装 `requirements.txt` → 构建前端 → 起后端 → 自动开浏览器到 <http://127.0.0.1:8765/>。首次启动会弹引导 modal，按 checklist 一键安装底模 + ONNX Runtime + 训练加速包。
 
 > 如果驱动检测失败导致装了 CPU 版 torch，可在 Settings → 系统 → PyTorch 一键重装 CUDA 版；也可通过 `studio.bat --torch cu128`（或 `studio.sh --torch cu128`）显式指定。
 
@@ -139,7 +139,7 @@ WD14 打标模型不在这里——首次进 ③ 打标时自动从 HF 拉到 `m
 
 ### 3. 跟着 Stepper 走
 
-打开 <http://127.0.0.1:8765/studio/>：
+打开 <http://127.0.0.1:8765/>：
 
 1. 项目页「+ 新建项目」
 2. **① 下载**：Booru 抓图（先在设置填 Gelbooru / Danbooru 凭据）或本地上传 zip

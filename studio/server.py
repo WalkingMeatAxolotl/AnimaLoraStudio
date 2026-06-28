@@ -38,10 +38,14 @@ from .paths import (
 )
 
 
-# SPA mount — see module docstring for why this stays in server.py
+# SPA mount — see module docstring for why this stays in server.py.
+# ADR 0012：挂到根路径 `/`（不再用 /studio 子路径）。bare `/` 由 root.py 的
+# 请求期路由处理（dist 缺失时返 JSON 提示），本 mount 负责 /assets/* 静态资源
+# 与 react-router 深链兜底（SPAStaticFiles 未命中且非 api/samples 命名空间时
+# 返回 index.html）。注册在所有 router 之后 → 显式 /api、/samples 路由优先命中。
 if WEB_DIST.exists():
     app.mount(
-        "/studio",
+        "/",
         SPAStaticFiles(directory=str(WEB_DIST), html=True),
         name="studio",
     )

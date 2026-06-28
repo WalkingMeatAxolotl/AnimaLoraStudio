@@ -106,7 +106,7 @@ studio.bat
 ./studio.sh
 ```
 
-On first run, the launcher automatically: creates `venv/` → installs the matching CUDA torch (cu118 through cu130) based on detected GPU driver → installs `requirements.txt` → builds the frontend → starts the backend → opens the browser to <http://127.0.0.1:8765/studio/>. A first-run onboarding modal then walks through installing base models, ONNX Runtime, and training acceleration with one click.
+On first run, the launcher automatically: creates `venv/` → installs the matching CUDA torch (cu118 through cu130) based on detected GPU driver → installs `requirements.txt` → builds the frontend → starts the backend → opens the browser to <http://127.0.0.1:8765/>. A first-run onboarding modal then walks through installing base models, ONNX Runtime, and training acceleration with one click.
 
 > If GPU detection falls back to CPU torch, you can reinstall the CUDA build from Settings → System → PyTorch with one click, or specify it explicitly via `studio.bat --torch cu128` (or `studio.sh --torch cu128`).
 
@@ -149,7 +149,7 @@ WD14 tagger models are not in this list — they are auto-downloaded from HF to 
 
 ### 3. Follow the stepper
 
-Open <http://127.0.0.1:8765/studio/>:
+Open <http://127.0.0.1:8765/>:
 
 1. Click "+ New project" on the projects page
 2. **① Download**: Booru scraping (fill in Gelbooru / Danbooru credentials in Settings first) or local zip upload

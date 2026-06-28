@@ -133,7 +133,8 @@ const router = createBrowserRouter(
     },
   ],
   {
-    basename: '/studio',
+    // ADR 0012：SPA 挂在根路径，不再用 /studio 子路径前缀。
+    basename: '/',
     future: { v7_relativeSplatPath: true },
   },
 )

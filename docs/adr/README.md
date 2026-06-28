@@ -16,6 +16,7 @@
 | 0008 | [studio/ 4 层重构（0.11.0）](0008-studio-restructure-0.11.0.md) | Accepted | 2026-05-28 |
 | 0010 | [preprocess scope 从项目级 download 下沉到 version 级 train](0010-preprocess-train-scope.md) | Accepted | 2026-06-03 |
 | 0011 | [LoRA 评估指标体系与可审查 PR 拆分](0011-lora-eval-metrics.md) | Proposed | 2026-05-27 |
+| 0012 | [前端 SPA 从 /studio/ 子路径改为根路径挂载](0012-serve-spa-at-root.md) | Accepted | 2026-06-28 |
 
 ## 状态值
 

@@ -521,14 +521,17 @@ def test_sample_with_task_id_finds_in_state_dir_samples(
 # /
 # ---------------------------------------------------------------------------
 
-def test_root_redirects_to_studio_when_built(
+def test_root_serves_index_when_built(
     client: TestClient, isolated_paths: dict[str, Path]
 ) -> None:
-    """前端 dist 存在时，/ 应 302 跳转到 /studio/。"""
-    isolated_paths["web_dist"].mkdir(parents=True, exist_ok=True)
+    """ADR 0012：前端 dist 存在时，/ 直接吐 index.html，不再重定向。"""
+    web_dist = isolated_paths["web_dist"]
+    web_dist.mkdir(parents=True, exist_ok=True)
+    (web_dist / "index.html").write_text("<!doctype html><title>anima</title>", encoding="utf-8")
     resp = client.get("/", follow_redirects=False)
-    assert resp.status_code == 302
-    assert resp.headers["location"] == "/studio/"
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "<title>anima</title>" in resp.text
 
 
 def test_root_fallback_when_no_dist(
@@ -540,6 +543,19 @@ def test_root_fallback_when_no_dist(
     assert resp.status_code == 200
     body = resp.json()
     assert "AnimaStudio" in body["message"]
+
+
+def test_legacy_studio_path_redirects_to_root(
+    client: TestClient, isolated_paths: dict[str, Path]
+) -> None:
+    """ADR 0012 legacy：老 /studio/... 链接一次性 307 跳到根路径，保留 query。"""
+    resp = client.get("/studio/projects/1?tab=log", follow_redirects=False)
+    assert resp.status_code == 307
+    assert resp.headers["location"] == "/projects/1?tab=log"
+    # 裸 /studio → /
+    resp = client.get("/studio", follow_redirects=False)
+    assert resp.status_code == 307
+    assert resp.headers["location"] == "/"
 
 
 # ---------------------------------------------------------------------------

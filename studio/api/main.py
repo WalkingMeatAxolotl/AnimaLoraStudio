@@ -19,8 +19,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # 真正给用户看的入口是 /studio/（前端 SPA），裸根路径只是兼容旧 monitor。
-    print(f"[AnimaStudio] http://{args.host}:{args.port}/studio/")
+    # ADR 0012：SPA 入口在根路径 /（不再用 /studio 子路径）。
+    print(f"[AnimaStudio] http://{args.host}:{args.port}/")
     uvicorn.run(
         "studio.server:app",
         host=args.host,
