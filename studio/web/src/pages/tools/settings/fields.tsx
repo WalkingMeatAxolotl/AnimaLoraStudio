@@ -1,4 +1,4 @@
-import { useEffect, useState, type RefObject } from 'react'
+import { useEffect, useRef, useState, type RefObject } from 'react'
 import { useTranslation } from 'react-i18next'
 import { InfoButton } from '../../../components/InfoButton'
 import { MASK, textInputClass } from './constants'
@@ -193,15 +193,30 @@ export interface SettingsInputProps extends Omit<React.InputHTMLAttributes<HTMLI
 
 export function SettingsInput({ value, onChange, type = 'text', ...props }: SettingsInputProps) {
   const [localValue, setLocalValue] = useState(value)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     setLocalValue(value)
   }, [value])
 
-  const handleBlur = () => {
-    if (String(localValue) !== String(value)) {
-      onChange(String(localValue))
-    }
+  // 卸载时清掉未触发的 debounce，避免对已卸载组件 setState / 提交。
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current) }, [])
+
+  const commit = (v: string) => {
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null }
+    if (String(v) !== String(value)) onChange(v)
+  }
+
+  // 数字框（spinner 点箭头 / 输入）停手 ~500ms 自动提交，不必主动失焦也有反馈；
+  // 文本框保持失焦 / Enter 提交（避免输入中途半截 PUT）。
+  const debounced = type === 'number'
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const v = e.target.value
+    setLocalValue(v)
+    if (!debounced) return
+    if (timerRef.current) clearTimeout(timerRef.current)
+    timerRef.current = setTimeout(() => commit(v), 500)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -215,8 +230,8 @@ export function SettingsInput({ value, onChange, type = 'text', ...props }: Sett
       type={type}
       {...props}
       value={localValue}
-      onChange={(e) => setLocalValue(e.target.value)}
-      onBlur={handleBlur}
+      onChange={handleChange}
+      onBlur={() => commit(String(localValue))}
       onKeyDown={handleKeyDown}
     />
   )
