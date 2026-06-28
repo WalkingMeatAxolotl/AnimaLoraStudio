@@ -55,8 +55,16 @@ function SaveIndicator({ status }: { status: SaveStatus }) {
     return <span className="text-xs text-fg-tertiary">{t('settings.saveStatus.saving')}</span>
   }
   if (status.state === 'saved') {
-    const time = new Date(status.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    return <span className="text-xs text-fg-tertiary">{t('settings.saveStatus.saved', { time })}</span>
+    const time = new Date(status.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    // key={status.at}：每次保存重挂载 → 重播 flash 动画，连续保存也能一眼看出"又存了"。
+    return (
+      <span key={status.at} className="settings-saved-flash text-xs inline-flex items-center gap-1">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M20 6L9 17l-5-5" />
+        </svg>
+        {t('settings.saveStatus.saved', { time })}
+      </span>
+    )
   }
   if (status.state === 'error') {
     return <span className="text-xs text-err">{t('settings.saveStatus.error')}</span>

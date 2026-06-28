@@ -150,10 +150,10 @@ export function SettingsDataProvider({ children }: { children: ReactNode }) {
       .then(() => api.updateSecrets(patch))
       .then((authoritative) => {
         pendingRef.current -= 1
-        if (pendingRef.current === 0) {
-          setSecrets(authoritative)
-          setSaveStatus({ state: 'saved', at: Date.now() })
-        }
+        // 每个 PUT 完成都刷新「已保存」时间戳，让连续保存每次都有可见反馈；
+        // 权威结果只在队列清空时回写一次，避免中途覆盖后续字段的乐观值。
+        if (pendingRef.current === 0) setSecrets(authoritative)
+        setSaveStatus({ state: 'saved', at: Date.now() })
       })
       .catch((e) => {
         pendingRef.current -= 1

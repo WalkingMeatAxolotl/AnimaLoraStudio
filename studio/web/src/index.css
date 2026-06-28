@@ -17,3 +17,14 @@ input[type='radio'] {
 .overflow-y-auto {
   scrollbar-gutter: stable;
 }
+
+/* 设置页「已保存」指示：每次保存（React key 变 → 重挂载）重播，从 accent 色
+   淡入再渐变回常态色——让同一分钟内的连续保存也有一眼可见的反馈。 */
+@keyframes settings-saved-flash {
+  0% { color: var(--accent); opacity: 0.5; }
+  100% { color: var(--fg-tertiary); opacity: 1; }
+}
+.settings-saved-flash {
+  color: var(--fg-tertiary);
+  animation: settings-saved-flash 0.9s ease-out;
+}
