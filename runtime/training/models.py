@@ -78,6 +78,21 @@ class VAEWrapper:
         # auto 解决大显存卡整图 decode 接近占满时触发「系统内存回退」→ 单次 decode
         # 从 <1s 退化到上百秒的卡死（reactive OOM 兜底救不了，因为没抛干净 OOM）。
         self.tiling = str(tiling or "auto").lower().strip()
+        # 分块决策 / OOM 回退日志去重：latent 缓存逐 bucket 调 encode（200 张不同尺寸
+        # 的图 → 200 次调用），每次都记会刷屏。同一 wrapper 实例下每种事件只记一次。
+        self._logged_once: set[str] = set()
+
+    def _log_once(self, key: str, log_fn, msg: str, *args) -> None:
+        """同一 wrapper 实例下，相同 ``key`` 的日志只发一次（其余静默）。
+
+        缓存阶段 transformer/Qwen 已驻留 GPU（models_phase 早于 dataset_phase），
+        free 显存低 → auto 判定对几乎每张图都分块。分块本身是对的（整图 op 会把
+        占用推过 WDDM 显存换页崖），只是逐图重复记日志没有信息量，故去重。
+        """
+        if key in self._logged_once:
+            return
+        self._logged_once.add(key)
+        log_fn(msg, *args)
 
     def _est_decode_peak_bytes(self, z) -> int:
         b, _c, t, H, W = z.shape
@@ -123,7 +138,10 @@ class VAEWrapper:
             used = total - free
             est = self._est_decode_peak_bytes(z)
             if self._should_auto_tile(used, est, total):
-                logger.info(
+                # debug 级：缓存阶段模型驻留 → free 低 → 几乎张张分块属正常，
+                # 默认不显示，免得「已用 X > 总显存」被误读成显存不足。
+                self._log_once(
+                    "auto_decode", logger.debug,
                     "VAE decode 主动分块（tiling=auto）：已用 %.1fG + 预计峰值 %.1fG > 总显存 %.1fG×%.2f",
                     used / 1024 ** 3, est / 1024 ** 3, total / 1024 ** 3, self._TILE_VRAM_FRACTION,
                 )
@@ -134,9 +152,10 @@ class VAEWrapper:
             return self.model.decode(z, self.scale)
         except torch.cuda.OutOfMemoryError:
             torch.cuda.empty_cache()
-            logger.warning(
+            self._log_once(
+                "oom_decode", logger.warning,
                 "VAE 整图 decode OOM，回退到 tiled decode "
-                "(tile=%dpx, overlap=%dpx)",
+                "(tile=%dpx, overlap=%dpx)（同类后续不再重复）",
                 self._TILE_LATENT * self._UPSAMPLE,
                 (self._TILE_LATENT - self._STRIDE_LATENT) * self._UPSAMPLE,
             )
@@ -156,7 +175,10 @@ class VAEWrapper:
             used = total - free
             est = self._est_encode_peak_bytes(pixels)
             if self._should_auto_tile(used, est, total):
-                logger.info(
+                # debug 级：缓存阶段模型驻留 → free 低 → 几乎张张分块属正常，
+                # 默认不显示，免得「已用 X > 总显存」被误读成显存不足。
+                self._log_once(
+                    "auto_encode", logger.debug,
                     "VAE encode 主动分块（tiling=auto）：已用 %.1fG + 预计峰值 %.1fG > 总显存 %.1fG×%.2f",
                     used / 1024 ** 3, est / 1024 ** 3, total / 1024 ** 3, self._TILE_VRAM_FRACTION,
                 )
@@ -166,9 +188,10 @@ class VAEWrapper:
             return self.model.encode(pixels, self.scale)
         except torch.cuda.OutOfMemoryError:
             torch.cuda.empty_cache()
-            logger.warning(
+            self._log_once(
+                "oom_encode", logger.warning,
                 "VAE 整图 encode OOM，回退到 tiled encode "
-                "(tile=%dpx, overlap=%dpx)",
+                "(tile=%dpx, overlap=%dpx)（同类后续不再重复）",
                 self._TILE_LATENT * self._UPSAMPLE,
                 (self._TILE_LATENT - self._STRIDE_LATENT) * self._UPSAMPLE,
             )
