@@ -618,10 +618,10 @@
     "trashCleared": "清空了 {{n}} 个项目",
     "newProjectTitle": "项目名称",
     "titlePlaceholder": "例：Cosmic Kaguya",
-    "slugLabel": "文件夹名（slug）",
+    "slugLabel": "项目 slug",
     "slugPlaceholder": "留空则按名称自动生成",
     "slugInvalid": "仅允许小写字母、数字、-",
-    "slugPreviewHint": "文件夹：{{slug}}",
+    "slugPreviewHint": "slug：{{slug}}",
     "versionLabel": "初始版本标签",
     "versionPlaceholder": "v1 / baseline / ...",
     "notesPlaceholder": "训练目标 / 备注",
@@ -644,8 +644,7 @@
     "unarchiveConfirm": "把项目「{{title}}」恢复回项目列表？",
     "unarchived": "已恢复: {{title}}",
     "editProject": "编辑项目",
-    "edited": "已保存「{{title}}」",
-    "editSlugNote": "slug 与输出名固定不变"
+    "edited": "已保存「{{title}}」"
   },
   "eval": {
     "evaluatingProgress": "评估中 {{done}}/{{total}}",

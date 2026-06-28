@@ -618,10 +618,10 @@
     "trashCleared": "Cleared {{n}} projects",
     "newProjectTitle": "Project name",
     "titlePlaceholder": "e.g. Cosmic Kaguya",
-    "slugLabel": "Folder name (slug)",
+    "slugLabel": "Project slug",
     "slugPlaceholder": "leave empty to derive from name",
     "slugInvalid": "Lowercase letters, digits and - only",
-    "slugPreviewHint": "folder: {{slug}}",
+    "slugPreviewHint": "slug: {{slug}}",
     "versionLabel": "Initial version label",
     "versionPlaceholder": "v1 / baseline / ...",
     "notesPlaceholder": "Training goal / notes",
@@ -644,8 +644,7 @@
     "unarchiveConfirm": "Restore project \"{{title}}\" to the project list?",
     "unarchived": "Restored: {{title}}",
     "editProject": "Edit project",
-    "edited": "Saved \"{{title}}\"",
-    "editSlugNote": "slug and output name stay fixed"
+    "edited": "Saved \"{{title}}\""
   },
   "eval": {
     "evaluatingProgress": "Evaluating {{done}}/{{total}}",

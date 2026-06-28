@@ -659,7 +659,7 @@ function NewProjectDialog({
         onClick={(e) => e.stopPropagation()}
         onSubmit={submit}
         className="bg-surface border border-dim rounded-xl p-7 flex flex-col gap-[18px] shadow-lg"
-        style={{ width: '90%', maxWidth: 440 }}
+        style={{ width: '90%', maxWidth: 660 }}
       >
         <h2 className="m-0 text-xl font-semibold">{t('projects.newProject')}</h2>
 
@@ -758,7 +758,7 @@ function EditProjectDialog({
         onClick={(e) => e.stopPropagation()}
         onSubmit={submit}
         className="bg-surface border border-dim rounded-xl p-7 flex flex-col gap-[18px] shadow-lg"
-        style={{ width: '90%', maxWidth: 440 }}
+        style={{ width: '90%', maxWidth: 660 }}
       >
         <h2 className="m-0 text-xl font-semibold">{t('projects.editProject')}</h2>
 
@@ -772,6 +772,16 @@ function EditProjectDialog({
           />
         </FieldLabel>
 
+        <FieldLabel label={t('projects.slugLabel')} hint="slug">
+          {/* slug 是磁盘路径 / LoRA 输出名锚点，创建后不可改 */}
+          <input
+            className="input input-mono"
+            value={project.slug}
+            disabled
+            readOnly
+          />
+        </FieldLabel>
+
         <FieldLabel label={t('common.notes')} hint="note（可选）">
           <textarea
             className="input"
@@ -782,12 +792,6 @@ function EditProjectDialog({
             style={{ resize: 'vertical' }}
           />
         </FieldLabel>
-
-        <p className="m-0 text-xs text-fg-tertiary">
-          <span className="font-mono">{project.slug}</span>
-          {' · '}
-          {t('projects.editSlugNote')}
-        </p>
 
         <div className="flex gap-2 justify-end">
           <button type="button" className="btn btn-secondary" onClick={onCancel}>{t('common.cancel')}</button>
