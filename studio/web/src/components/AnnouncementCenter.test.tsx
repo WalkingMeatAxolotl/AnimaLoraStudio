@@ -48,8 +48,10 @@ describe('AnnouncementCenter', () => {
     renderCenter()
     await waitFor(() =>
       expect(screen.getByTestId('announcement-center')).toBeInTheDocument())
-    // 默认选中第一篇（pin 的 migration）→ 已读、无红点
-    expect(screen.queryByTestId('announcement-dot-p-migration')).toBeNull()
+    // 默认选中第一篇（pin 的 migration）→ 已读、无红点。标记已读是选中后的 effect，
+    // 比 modal 出现晚一个 tick，用 waitFor 等状态稳定（同步断言在慢机/CI 上会 flake）。
+    await waitFor(() =>
+      expect(screen.queryByTestId('announcement-dot-p-migration')).toBeNull())
     // notice 仍未读 → 有红点
     expect(screen.getByTestId('announcement-dot-p-notice')).toBeInTheDocument()
     // 正文显示选中篇的中文正文
