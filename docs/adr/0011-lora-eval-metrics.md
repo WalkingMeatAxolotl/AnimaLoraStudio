@@ -1,6 +1,6 @@
 # 0011 — LoRA 评估指标体系与可审查 PR 拆分
 
-**状态**：Proposed
+**状态**：Accepted（已落地：eval 指标体系 PR #138 / #319 / #321–324）
 **日期**：2026-05-27
 **决策者**：@WalkingMeatAxolotl
 
