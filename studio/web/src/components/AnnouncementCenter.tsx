@@ -55,13 +55,20 @@ export function AnnouncementCenter() {
 
   return (
     <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="announcement-center-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-md p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4"
+      onClick={closeCenter}
       data-testid="announcement-center"
     >
-      <div className="w-full max-w-[820px] h-[78vh] flex flex-col bg-elevated border border-dim rounded-lg shadow-xl overflow-hidden">
+      {/* 点蒙版退出（公告栏不是 onboarding 那种不可打断）；点面板内部不冒泡 */}
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="announcement-center-title"
+        onClick={(e) => e.stopPropagation()}
+        /* 宽度：居中弹窗，大屏最宽 1080px、小屏 92vw 自适应（左 list 256px 固定，
+           其余给正文）。借鉴 SettingsDrawer 的响应式思路但居中、不占满。 */
+        className="w-[min(1080px,92vw)] h-[78vh] flex flex-col bg-elevated border border-dim rounded-lg shadow-xl overflow-hidden"
+      >
         {/* header */}
         <div className="flex items-center gap-3 px-5 py-3 border-b border-dim shrink-0">
           <h1 id="announcement-center-title" className="m-0 text-lg font-semibold text-fg-primary flex-1">

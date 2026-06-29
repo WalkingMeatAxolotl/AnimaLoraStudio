@@ -76,4 +76,18 @@ describe('AnnouncementCenter', () => {
     expect(screen.queryByTestId('announcement-item-p-migration')).toBeNull()
     expect(screen.getByTestId('announcement-item-p-notice')).toBeInTheDocument()
   })
+
+  it('点蒙版退出；点面板内部不退出', async () => {
+    localStorage.setItem('studio.announcements.lastVersion', '0.15.0')
+    renderCenter()
+    await waitFor(() =>
+      expect(screen.getByTestId('announcement-center')).toBeInTheDocument())
+    // 点面板内部（某篇）→ 不关
+    fireEvent.click(screen.getByTestId('announcement-item-p-notice'))
+    expect(screen.getByTestId('announcement-center')).toBeInTheDocument()
+    // 点蒙版（外层）→ 关
+    fireEvent.click(screen.getByTestId('announcement-center'))
+    await waitFor(() =>
+      expect(screen.queryByTestId('announcement-center')).toBeNull())
+  })
 })
