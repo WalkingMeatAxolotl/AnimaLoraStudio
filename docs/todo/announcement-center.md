@@ -1,6 +1,6 @@
 # 设计草案 — 统一公告栏（Announcement Center）
 
-**状态**：Draft（讨论中，待 review 后实现）
+**状态**：✅ 已实现（Phase 1 #336 / Phase 2 #337 / Phase 3 #339）— 保留作设计记录
 **日期**：2026-06-28
 **相关**：升级现有 `release_notes` 展示；首篇公告承载 ADR 0012（`/studio→/`）迁移提示
 

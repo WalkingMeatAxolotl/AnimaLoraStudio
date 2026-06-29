@@ -22,7 +22,7 @@
 | [tagging-guide.md](user-guide/tagging-guide.md) | Anima 标签格式、最佳实践、tag 顺序 |
 | [training-tips.md](user-guide/training-tips.md) | 训练参数、显存配置矩阵、过拟合/欠拟合排查、ComfyUI 用法 |
 | [optimizers.md](user-guide/optimizers.md) | 各优化器（Lion / Prodigy / PPSF / SOAP 等）起步参数与换算 |
-| [regularization.md](user-guide/regularization.md) | 正则集生成原理（tag 分布贪心搜索 + AR 聚类） |
+| [regularization.md](user-guide/regularization.md) | 正则化方案分析报告（weight decay / 梯度裁剪 / dropout 等，2025-02，历史参考） |
 | [caption-format.md](user-guide/caption-format.md) | JSON caption 格式 + 分类 shuffle |
 
 ## Architecture
