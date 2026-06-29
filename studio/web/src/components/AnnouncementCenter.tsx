@@ -2,15 +2,35 @@
 //
 // 游戏式：左 list（tag 过滤 + 未读红点）/ 右正文。开关 / read 状态 / 更新检查
 // 由 lib/Announcements 的 context 持有；Topbar 铃铛点击 → openCenter()。
-// 正文暂用 whitespace-pre-wrap 显示 markdown 原文（沿用现有 release notes detail
-// 约定，依赖最少）；真 markdown 渲染留作后续（需引 react-markdown 依赖，单独定）。
+// 正文用 react-markdown + remark-gfm 渲染；元素经 components 映射到现有 Tailwind
+// token（标题/列表/链接/代码），不另起 CSS、不猜 CSS 变量名。
+import type { ComponentPropsWithoutRef } from 'react'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import type { AnnouncementPost } from '../api/client'
 import { useAnnouncements } from '../lib/Announcements'
 import { useSettingsDrawer } from '../lib/SettingsDrawer'
 
 const TAG_ORDER: AnnouncementPost['tag'][] = ['release', 'notice', 'migration']
+
+// markdown 元素 → Tailwind class（公告正文用，复用 modal 既有 token）。
+type MdProps<T extends keyof React.JSX.IntrinsicElements> = ComponentPropsWithoutRef<T>
+const MD_COMPONENTS = {
+  h1: (p: MdProps<'h1'>) => <h3 className="mt-4 mb-1.5 text-base font-semibold text-fg-primary" {...p} />,
+  h2: (p: MdProps<'h2'>) => <h3 className="mt-4 mb-1.5 text-[15px] font-semibold text-fg-primary" {...p} />,
+  h3: (p: MdProps<'h3'>) => <h4 className="mt-3 mb-1 text-sm font-semibold text-fg-primary" {...p} />,
+  h4: (p: MdProps<'h4'>) => <h4 className="mt-3 mb-1 text-sm font-semibold text-fg-primary" {...p} />,
+  p: (p: MdProps<'p'>) => <p className="my-2 leading-relaxed" {...p} />,
+  ul: (p: MdProps<'ul'>) => <ul className="my-1.5 pl-5 list-disc space-y-1" {...p} />,
+  ol: (p: MdProps<'ol'>) => <ol className="my-1.5 pl-5 list-decimal space-y-1" {...p} />,
+  li: (p: MdProps<'li'>) => <li className="leading-relaxed" {...p} />,
+  a: (p: MdProps<'a'>) => <a className="text-accent underline" target="_blank" rel="noreferrer" {...p} />,
+  code: (p: MdProps<'code'>) => <code className="px-1 py-0.5 rounded bg-surface text-[0.85em] font-mono" {...p} />,
+  hr: () => <hr className="my-3 border-dim" />,
+  blockquote: (p: MdProps<'blockquote'>) => <blockquote className="my-2 pl-3 border-l-2 border-dim text-fg-tertiary" {...p} />,
+} as const
 
 function tagChipClass(tag: AnnouncementPost['tag']): string {
   switch (tag) {
@@ -165,8 +185,10 @@ export function AnnouncementCenter() {
                 <div className="mt-1 text-xs text-fg-tertiary">
                   {selected.date}{selected.version ? ` · v${selected.version}` : ''}
                 </div>
-                <div className="mt-4 text-sm text-fg-secondary whitespace-pre-wrap leading-relaxed">
-                  {selected.body[lang]}
+                <div className="mt-4 text-sm text-fg-secondary">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
+                    {selected.body[lang]}
+                  </ReactMarkdown>
                 </div>
               </>
             ) : (

@@ -90,4 +90,20 @@ describe('AnnouncementCenter', () => {
     await waitFor(() =>
       expect(screen.queryByTestId('announcement-center')).toBeNull())
   })
+
+  it('正文按 markdown 渲染（### → 标题、- → 列表，而非原文）', async () => {
+    vi.spyOn(api, 'getAnnouncements').mockResolvedValue([
+      { id: 'md', date: '2026-06-28', tag: 'release', pin: false, version: '9.0.0',
+        title: { zh: 'v9 更新', en: 'v9 release' },
+        body: { zh: '### 新增\n\n- 甲项\n- 乙项', en: '### Added\n\n- a' } },
+    ])
+    localStorage.setItem('studio.announcements.lastVersion', '0.15.0')
+    renderCenter()
+    await waitFor(() =>
+      expect(screen.getByTestId('announcement-center')).toBeInTheDocument())
+    // ### 解析成标题（原文 "### 新增" 不会有 heading role）
+    expect(screen.getByRole('heading', { name: '新增' })).toBeInTheDocument()
+    // - 解析成列表项
+    expect(screen.getByText('甲项')).toBeInTheDocument()
+  })
 })
