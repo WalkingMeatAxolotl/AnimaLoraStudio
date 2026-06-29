@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { TFunction } from 'i18next'
 import { Trans, useTranslation } from 'react-i18next'
 import {
@@ -13,7 +13,7 @@ import {
   type SystemUpdateStatus,
   type SystemVersion,
 } from '../../../api/client'
-import { useAnnouncements } from '../../../lib/Announcements'
+import { useAnnouncements, extractReleaseHighlights } from '../../../lib/Announcements'
 import { useDialog } from '../../../components/Dialog'
 import {
   clearOnboardingDone,
@@ -111,8 +111,18 @@ export function VersionSection() {
   // 时确认更新前要弹一个"强制覆盖"确认 modal，复用 useDialog().confirm。
   const dialog = useDialog()
   // release notes 已并入公告栏：版本 section 的入口直接打开公告栏 modal。
-  const { openCenter } = useAnnouncements()
+  const { posts, openCenter } = useAnnouncements()
   const [version, setVersion] = useState<SystemVersion | null>(null)
+  // 版本面板「更新内容」概览：取当前版（匹配不到则最新）release post 的前 5 条要点；
+  // 「查看更新公告」与详细内容统一打开公告栏（不再是旧的 detail modal）。
+  const announcementLang = i18n.language.toLowerCase().startsWith('zh') ? 'zh' : 'en'
+  const releaseOverview = useMemo(() => {
+    const releases = posts.filter((p) => p.tag === 'release')
+    if (!releases.length) return null
+    const post = releases.find((p) => p.version === version?.version) ?? releases[0]
+    const highlights = extractReleaseHighlights(post.body[announcementLang], 5)
+    return highlights.length ? { title: post.title[announcementLang], highlights } : null
+  }, [posts, version, announcementLang])
   const [check, setCheck] = useState<SystemUpdateCheck | null>(null)
   const [status, setStatus] = useState<SystemUpdateStatus | null>(null)
   // status 是否已拉过（成功 / 失败都置 true）。回滚提示行占位骨架靠它判「加载中」，
@@ -567,6 +577,21 @@ export function VersionSection() {
             />
           )}
         </div>
+        {releaseOverview && (
+          <div className="mt-3 pt-3 border-t border-dim">
+            <div className="flex items-center justify-between gap-3 mb-2">
+              <span className="text-sm font-semibold text-fg-primary">{releaseOverview.title}</span>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => openCenter()}>
+                <VersionIcon name="note" />{t('settings.viewAnnouncements')}
+              </button>
+            </div>
+            <ul className="m-0 pl-5 list-disc space-y-1 text-sm text-fg-secondary marker:text-fg-tertiary">
+              {releaseOverview.highlights.map((h, i) => (
+                <li key={i} className="leading-relaxed">{h}</li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
 
       {logModal.open && (
