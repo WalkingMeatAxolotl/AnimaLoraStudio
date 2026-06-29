@@ -2415,6 +2415,19 @@
     "failed": "Failed",
     "etaPrefix": "ETA"
   },
+  "announcements": {
+    "title": "Announcements",
+    "close": "Close",
+    "empty": "No announcements",
+    "bellTitle": "Announcements / Updates",
+    "updateAvailable": "New version {{tag}}",
+    "tags": {
+      "all": "All",
+      "release": "Release notes",
+      "notice": "Notice",
+      "migration": "Migration"
+    }
+  },
   "onboarding": {
     "title": "Welcome to AnimaLoraStudio",
     "subtitle": "Here are the basics you'll want set up. Tick what you need and install them in one go. Already-installed items are auto-checked.",

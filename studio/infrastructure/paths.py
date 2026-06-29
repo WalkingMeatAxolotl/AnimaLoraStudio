@@ -76,6 +76,10 @@ TASKS_DIR = STUDIO_DATA / "tasks"
 WEB_DIR = REPO_ROOT / "studio" / "web"
 WEB_DIST = WEB_DIR / "dist"
 
+# 公告栏数据源（docs/announcements/<id>.md + <id>.en.md），见
+# docs/todo/announcement-center.md。仓库内 docs/ 下，随版本一起 git 更新到达。
+ANNOUNCEMENTS_DIR = REPO_ROOT / "docs" / "announcements"
+
 
 def migrate_configs_to_presets() -> None:
     """旧版本把 yaml 放在 studio_data/configs/，这里把目录原地重命名为 presets/。

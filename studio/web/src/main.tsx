@@ -1,11 +1,13 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
+import { AnnouncementCenter } from './components/AnnouncementCenter'
 import { DialogProvider } from './components/Dialog'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { FirstRunLangModal } from './components/FirstRunLangModal'
 import { FirstRunOnboardingModal } from './components/FirstRunOnboardingModal'
 import { ToastProvider } from './components/Toast'
+import { AnnouncementsProvider } from './lib/Announcements'
 import { installGlobalErrorHandlers } from './lib/errors/setup'
 import { SettingsDataProvider } from './lib/SettingsData'
 import { SettingsDrawerProvider } from './lib/SettingsDrawer'
@@ -25,9 +27,12 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         <DialogProvider>
           <SettingsDataProvider>
             <SettingsDrawerProvider>
-              <FirstRunLangModal />
-              <FirstRunOnboardingModal />
-              <App />
+              <AnnouncementsProvider>
+                <FirstRunLangModal />
+                <FirstRunOnboardingModal />
+                <AnnouncementCenter />
+                <App />
+              </AnnouncementsProvider>
             </SettingsDrawerProvider>
           </SettingsDataProvider>
         </DialogProvider>

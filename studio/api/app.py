@@ -19,6 +19,7 @@ from .lifespan import lifespan
 from .middleware import _SelectiveGZipMiddleware
 from .trace_middleware import TraceIdMiddleware
 from .routers import (
+    announcements,
     browse,
     client_errors,
     data_exports,
@@ -71,6 +72,8 @@ app.include_router(browse.router)
 app.include_router(events_sse.router)
 # ADR-0009 PR-3 C1: 前端错误上报 (ErrorBoundary / window.onerror / unhandledrejection)
 app.include_router(client_errors.router)
+# 公告栏（announcement-center Phase 1）：docs/announcements/ → GET /api/announcements
+app.include_router(announcements.router)
 # PR-6 commit 1: 5 个小 router（root / samples / logs / data_exports / tagger）
 app.include_router(root.router)
 app.include_router(samples.router)

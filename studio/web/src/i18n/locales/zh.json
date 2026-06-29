@@ -2415,6 +2415,19 @@
     "failed": "失败",
     "etaPrefix": "剩余"
   },
+  "announcements": {
+    "title": "公告",
+    "close": "关闭",
+    "empty": "暂无公告",
+    "bellTitle": "公告 / 更新",
+    "updateAvailable": "新版本 {{tag}}",
+    "tags": {
+      "all": "全部",
+      "release": "更新日志",
+      "notice": "公告",
+      "migration": "迁移"
+    }
+  },
   "onboarding": {
     "title": "欢迎使用 AnimaLoraStudio",
     "subtitle": "下面是建议安装的基础能力,勾选后一键安装。已装好的会自动打勾。",

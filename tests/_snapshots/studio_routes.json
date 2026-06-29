@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 200,
+  "count": 201,
   "routes": [
     {
       "path": "/",
@@ -9,6 +9,14 @@
         "GET"
       ],
       "name": "root",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/announcements",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_announcements",
       "type": "APIRoute"
     },
     {
