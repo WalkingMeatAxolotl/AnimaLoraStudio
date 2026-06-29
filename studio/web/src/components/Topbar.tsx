@@ -230,10 +230,6 @@ export default function Topbar() {
           })}
         </div>
 
-        <SystemStats />
-
-        {/* 版本更新入口已并入右侧公告栏铃铛（D8） */}
-
         {runningTask && (
           <button
             onClick={() => navigate(`/queue/${runningTask.id}`)}
@@ -256,6 +252,10 @@ export default function Topbar() {
             <span>{t('topbar.pendingCount', { n: pendingCount })}</span>
           </button>
         )}
+
+        <SystemStats />
+
+        {/* 版本更新入口已并入右侧公告栏铃铛（D8） */}
 
         <button
           onClick={openCenter}

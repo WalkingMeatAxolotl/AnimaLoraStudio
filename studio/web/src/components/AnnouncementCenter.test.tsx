@@ -48,8 +48,10 @@ describe('AnnouncementCenter', () => {
     renderCenter()
     await waitFor(() =>
       expect(screen.getByTestId('announcement-center')).toBeInTheDocument())
-    // 默认选中第一篇（pin 的 migration）→ 已读、无红点
-    expect(screen.queryByTestId('announcement-dot-p-migration')).toBeNull()
+    // 默认选中第一篇（pin 的 migration）→ 已读、无红点。标记已读是选中后的 effect，
+    // 比 modal 出现晚一个 tick，用 waitFor 等状态稳定（同步断言在慢机/CI 上会 flake）。
+    await waitFor(() =>
+      expect(screen.queryByTestId('announcement-dot-p-migration')).toBeNull())
     // notice 仍未读 → 有红点
     expect(screen.getByTestId('announcement-dot-p-notice')).toBeInTheDocument()
     // 正文显示选中篇的中文正文
@@ -89,5 +91,21 @@ describe('AnnouncementCenter', () => {
     fireEvent.click(screen.getByTestId('announcement-center'))
     await waitFor(() =>
       expect(screen.queryByTestId('announcement-center')).toBeNull())
+  })
+
+  it('正文按 markdown 渲染（### → 标题、- → 列表，而非原文）', async () => {
+    vi.spyOn(api, 'getAnnouncements').mockResolvedValue([
+      { id: 'md', date: '2026-06-28', tag: 'release', pin: false, version: '9.0.0',
+        title: { zh: 'v9 更新', en: 'v9 release' },
+        body: { zh: '### 新增\n\n- 甲项\n- 乙项', en: '### Added\n\n- a' } },
+    ])
+    localStorage.setItem('studio.announcements.lastVersion', '0.15.0')
+    renderCenter()
+    await waitFor(() =>
+      expect(screen.getByTestId('announcement-center')).toBeInTheDocument())
+    // ### 解析成标题（原文 "### 新增" 不会有 heading role）
+    expect(screen.getByRole('heading', { name: '新增' })).toBeInTheDocument()
+    // - 解析成列表项
+    expect(screen.getByText('甲项')).toBeInTheDocument()
   })
 })

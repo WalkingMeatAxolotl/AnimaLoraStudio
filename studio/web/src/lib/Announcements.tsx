@@ -134,3 +134,33 @@ export function useAnnouncements(): AnnouncementsCtx {
   if (!v) throw new Error('useAnnouncements must be used within AnnouncementsProvider')
   return v
 }
+
+/** 版本面板「更新内容」概览的一条：kind（来自所属 `### 分组`）+ summary（要点首句）。 */
+export interface ReleaseEntry {
+  kind: string
+  summary: string
+}
+
+// release post 正文的 `### 分组标题`（中/英）→ kind，对齐 Keep a Changelog 类目。
+const RELEASE_KIND_BY_HEADING: Record<string, string> = {
+  新增: 'added', 变更: 'changed', 改进: 'improved', 修复: 'fixed',
+  弃用: 'deprecated', 删除: 'removed', 安全: 'security',
+  Added: 'added', Changed: 'changed', Improved: 'improved', Fixed: 'fixed',
+  Deprecated: 'deprecated', Removed: 'removed', Security: 'security',
+}
+
+/** 从 release post 正文抽「更新内容」概览条目，给版本面板用。
+ *  依赖 CONTENT-GUIDE 约定：`### 分组` 决定 kind，组内每个顶层要点 `- **首句**`
+ *  是一条 summary（剥尾部 PR 号、跳过缩进子要点）。返回全部条目，截断由调用方做。 */
+export function extractReleaseEntries(body: string): ReleaseEntry[] {
+  const out: ReleaseEntry[] = []
+  let kind = 'changed'
+  for (const line of body.split('\n')) {
+    const h = line.match(/^###\s+(.+?)\s*$/)
+    if (h) { kind = RELEASE_KIND_BY_HEADING[h[1].trim()] ?? 'changed'; continue }
+    const m = line.match(/^- \*\*(.+?)\*\*\s*$/)
+    if (!m) continue
+    out.push({ kind, summary: m[1].replace(/[（(]#[#\d,，\s]+[）)]\s*$/, '').trim() })
+  }
+  return out
+}
