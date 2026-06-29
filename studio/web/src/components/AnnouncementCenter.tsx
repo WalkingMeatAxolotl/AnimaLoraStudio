@@ -18,17 +18,21 @@ const TAG_ORDER: AnnouncementPost['tag'][] = ['release', 'notice', 'migration']
 // markdown 元素 → Tailwind class（公告正文用，复用 modal 既有 token）。
 type MdProps<T extends keyof React.JSX.IntrinsicElements> = ComponentPropsWithoutRef<T>
 const MD_COMPONENTS = {
-  h1: (p: MdProps<'h1'>) => <h3 className="mt-4 mb-1.5 text-base font-semibold text-fg-primary" {...p} />,
-  h2: (p: MdProps<'h2'>) => <h3 className="mt-4 mb-1.5 text-[15px] font-semibold text-fg-primary" {...p} />,
-  h3: (p: MdProps<'h3'>) => <h4 className="mt-3 mb-1 text-sm font-semibold text-fg-primary" {...p} />,
-  h4: (p: MdProps<'h4'>) => <h4 className="mt-3 mb-1 text-sm font-semibold text-fg-primary" {...p} />,
-  p: (p: MdProps<'p'>) => <p className="my-2 leading-relaxed" {...p} />,
-  ul: (p: MdProps<'ul'>) => <ul className="my-1.5 pl-5 list-disc space-y-1" {...p} />,
-  ol: (p: MdProps<'ol'>) => <ol className="my-1.5 pl-5 list-decimal space-y-1" {...p} />,
-  li: (p: MdProps<'li'>) => <li className="leading-relaxed" {...p} />,
-  a: (p: MdProps<'a'>) => <a className="text-accent underline" target="_blank" rel="noreferrer" {...p} />,
-  code: (p: MdProps<'code'>) => <code className="px-1 py-0.5 rounded bg-surface text-[0.85em] font-mono" {...p} />,
-  hr: () => <hr className="my-3 border-dim" />,
+  // # / ## 罕见（正文最高用 ###）；都按版块标题处理
+  h1: (p: MdProps<'h1'>) => <h3 className="mt-5 mb-2 pb-1 text-[15px] font-bold text-fg-primary border-b border-dim" {...p} />,
+  h2: (p: MdProps<'h2'>) => <h3 className="mt-5 mb-2 pb-1 text-[15px] font-bold text-fg-primary border-b border-dim" {...p} />,
+  // ### = 分组标题（新增/变更/改进/修复…）：加粗 + 下划线，清晰分段
+  h3: (p: MdProps<'h3'>) => <h4 className="mt-5 mb-2 pb-1 text-sm font-bold text-fg-primary border-b border-dim first:mt-1" {...p} />,
+  h4: (p: MdProps<'h4'>) => <h4 className="mt-4 mb-1.5 text-sm font-semibold text-fg-primary" {...p} />,
+  p: (p: MdProps<'p'>) => <p className="my-2 leading-7" {...p} />,
+  // 要点首句加粗 → 用主色，跟正文（次色）拉开
+  strong: (p: MdProps<'strong'>) => <strong className="font-semibold text-fg-primary" {...p} />,
+  ul: (p: MdProps<'ul'>) => <ul className="my-2 pl-5 list-disc space-y-2 marker:text-fg-tertiary" {...p} />,
+  ol: (p: MdProps<'ol'>) => <ol className="my-2 pl-5 list-decimal space-y-2 marker:text-fg-tertiary" {...p} />,
+  li: (p: MdProps<'li'>) => <li className="leading-7" {...p} />,
+  a: (p: MdProps<'a'>) => <a className="text-accent underline hover:opacity-80" target="_blank" rel="noreferrer" {...p} />,
+  code: (p: MdProps<'code'>) => <code className="rounded bg-surface border border-dim px-1.5 py-0.5 text-[0.85em] font-mono text-fg-primary" {...p} />,
+  hr: () => <hr className="my-4 border-dim" />,
   blockquote: (p: MdProps<'blockquote'>) => <blockquote className="my-2 pl-3 border-l-2 border-dim text-fg-tertiary" {...p} />,
 } as const
 
@@ -185,7 +189,7 @@ export function AnnouncementCenter() {
                 <div className="mt-1 text-xs text-fg-tertiary">
                   {selected.date}{selected.version ? ` · v${selected.version}` : ''}
                 </div>
-                <div className="mt-4 text-sm text-fg-secondary">
+                <div className="mt-4 text-sm text-fg-secondary [&_ul_ul]:list-[circle] [&_li_p]:my-1">
                   <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
                     {selected.body[lang]}
                   </ReactMarkdown>
