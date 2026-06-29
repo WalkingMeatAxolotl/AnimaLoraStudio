@@ -6,6 +6,10 @@
 > 以 [`docs/announcements/README.md`](announcements/README.md) 为准；下文涉及
 > `release_notes.yaml` / 结构化 `kind`+`summary`+`pr_refs` / `summary≤80` 的**机制部分已过时**。
 > 本文**仍然适用的是与格式无关的写作原则**：语气、内容取舍、粒度、diff 视角、GFM 坑等。
+>
+> **📌 写作规范已统一升级到 [`docs/announcements/CONTENT-GUIDE.md`](announcements/CONTENT-GUIDE.md)**
+> （覆盖 release / notice / migration 等所有公告类型，综合 Apple HIG + Keep a Changelog +
+> 业界实践）。新写公告以 CONTENT-GUIDE 为准；本文保留为历史参考与更细的 release-notes 例子。
 
 本文是给写 release notes 的 agent 看的——人 / Claude / 任何 LLM。读完应当
 **不需要任何额外问问题**就能：(1) 知道改哪个文件、(2) 从哪儿拿内容、

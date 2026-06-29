@@ -3,6 +3,9 @@
 本目录的 markdown 会被后端解析、在 app 内「公告栏」（右上角铃铛）展示。
 整体设计见 [`docs/todo/announcement-center.md`](../todo/announcement-center.md)。
 
+**本文管「文件格式 / frontmatter / tag / 工具」；「写什么 / 怎么写」（各类公告的内容与文风）见
+[`CONTENT-GUIDE.md`](CONTENT-GUIDE.md)。**
+
 ## 一篇 = 两个文件（双语）
 
 - `<id>.md` —— 中文（必有）
