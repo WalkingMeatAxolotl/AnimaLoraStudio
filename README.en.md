@@ -4,9 +4,7 @@
 
 **End-to-end pipeline**: Booru scraping → curation → tagging → regularization set → training → image-gen testing, all in one browser panel. Tuned for [Anima](https://huggingface.co/circlestone-labs/Anima) (Cosmos DiT, anime-specialized).
 
-![Studio training page](docs/images/studio-train.png)
-
-<!-- TODO: add a demo GIF (asset pending) -->
+![Studio training page](docs/images/studio-train-en.png)
 
 ## Features
 

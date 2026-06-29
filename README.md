@@ -6,8 +6,6 @@
 
 ![Studio 训练页](docs/images/studio-train.png)
 
-<!-- TODO: 加一张流程演示 GIF（待补素材） -->
-
 ## 特性
 
 - **一站式流水线**：Booru 抓图 / 筛选 / 预处理（去重·放大·裁剪）/ 打标 / 正则集 / 训练 / 出图测试，全在一个浏览器面板，Stepper 引导。
