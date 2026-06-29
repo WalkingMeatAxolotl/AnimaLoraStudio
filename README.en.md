@@ -34,7 +34,7 @@ studio.bat          # Windows
 
 First run automatically creates `venv/` → installs GPU-matched CUDA torch → builds the frontend → starts the backend → opens <http://127.0.0.1:8765/>, with an onboarding modal to one-click install models. Once open, go to **Settings → Models** to download the weights (default `./models/`).
 
-→ Full walkthrough (launch options / model download / mirrors / pipeline steps): see the **[Getting Started guide](docs/user-guide/getting-started.md)**.
+→ Full walkthrough (launch options / model download / mirrors / pipeline steps): see the **[Getting Started guide](docs/user-guide/getting-started.en.md)**.
 
 ## Hardware requirements
 
@@ -46,9 +46,9 @@ First run automatically creates `venv/` → installs GPU-matched CUDA torch → 
 
 Entry point: [docs/README.md](docs/README.md).
 
-- **Getting started** → [getting-started.md](docs/user-guide/getting-started.md)
+- **Getting started** → [getting-started.md](docs/user-guide/getting-started.en.md)
 - **User guide** → [tag format](docs/user-guide/tagging-guide.md) · [training tips / algorithms](docs/user-guide/training-tips.md) · [optimizers](docs/user-guide/optimizers.md) · [caption format](docs/user-guide/caption-format.md)
-- **Architecture** → [pipeline overview](docs/architecture/studio-pipeline.md) · [project structure](docs/architecture/project-structure.md) · [studio internals](studio/README.md)
+- **Architecture** → [pipeline overview](docs/architecture/studio-pipeline.md) · [project structure](docs/architecture/project-structure.en.md) · [studio internals](studio/README.md)
 - **CLI tools** → [tools/README.md](tools/README.md)
 - **Contributing** → [CONTRIBUTING.md](CONTRIBUTING.md) · [docs/AGENTS.md](docs/AGENTS.md)
 - **Decision records** → [docs/adr/](docs/adr/) · **Changelog** → [CHANGELOG.md](CHANGELOG.md)
