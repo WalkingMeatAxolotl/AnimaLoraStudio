@@ -1,19 +1,20 @@
-"""release_notes.yaml 校验 + 版本号同步 + CHANGELOG.md 派生。
+"""release post 校验 + 版本号同步 + CHANGELOG.md 派生（ADR 0013）。
 
-详见 docs/release-notes-spec.md。本工具不创建 entries —— 那是 agent 改 yaml 的事。
+changelog 来源 = `docs/announcements/` 下 `tag: release` 的 markdown post，
+一版一文件（双文件双语，工具只用中文 `<id>.md`）。编写指南见
+`docs/announcements/README.md`。本工具不创建 post —— 那是维护者发版时写 md 的事。
 
 Subcommands:
-    validate         schema 校验整个 yaml
-    bump             同步 yaml top version 到 __init__.py / package.json / package-lock.json
-                     + 重写 CHANGELOG.md
-    render-changelog 仅重写 CHANGELOG.md，不动版本号文件
-    verify-versions  跨文件 drift 检查：__init__.py / package.json / package-lock.json
-                     必须三者一致。CI 用，bump 完自检也调
+    validate         校验全部 release post 的 frontmatter（version/date/title/文件名自洽/唯一）
+    bump             同步「最高版本」release post 的 version 到 __init__.py / package.json /
+                     package-lock.json + 重写 CHANGELOG.md
+    render-changelog 仅从 release post 重写 CHANGELOG.md，不动版本号文件
+    verify-versions  跨文件 drift 检查：__init__.py / package.json / package-lock.json 必须一致
 
 Examples:
     python tools/bump_version.py validate
-    python tools/bump_version.py bump           # 读 yaml top version
-    python tools/bump_version.py bump --version 0.6.1
+    python tools/bump_version.py bump                 # 取最高版本的 release post
+    python tools/bump_version.py bump --version 0.16.0
     python tools/bump_version.py render-changelog
     python tools/bump_version.py verify-versions
 """
@@ -29,48 +30,85 @@ from typing import Any, Optional
 
 import yaml
 
-# Windows Python stdout 默认 cp932 / cp936（活动 code page），打中文校验
-# 信息直接 UnicodeEncodeError 挂掉。每次跑前 `set PYTHONIOENCODING=utf-8`
-# 容易忘 —— 工具自带正确编码，跨平台一致行为。
-# `reconfigure` 是 Py3.7+；3.9+ 一直支持。
+# Windows Python stdout 默认 cp936，打中文直接 UnicodeEncodeError。工具自带正确编码。
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         try:
             _stream.reconfigure(encoding="utf-8")
         except Exception:
-            # 罕见环境（如 IO 被替换成不支持 reconfigure 的对象）忽略，
-            # 让 caller 走原编码 —— 至少非中文 path 不会被这行打挂。
             pass
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-YAML_PATH = REPO_ROOT / "release_notes.yaml"
+ANNOUNCEMENTS_DIR = REPO_ROOT / "docs" / "announcements"
 CHANGELOG_PATH = REPO_ROOT / "CHANGELOG.md"
 STUDIO_INIT_PATH = REPO_ROOT / "studio" / "__init__.py"
 PACKAGE_JSON_PATH = REPO_ROOT / "studio" / "web" / "package.json"
 PACKAGE_LOCK_PATH = REPO_ROOT / "studio" / "web" / "package-lock.json"
 
-# ─── 校验规则（与 docs/release-notes-spec.md §8 一致） ──────────────────────
-
-KIND_WHITELIST = ("added", "changed", "improved", "fixed", "removed", "deprecated", "security")
-KIND_DISPLAY = {
-    "added": "新增",
-    "changed": "变更",
-    "improved": "改进",
-    "fixed": "修复",
-    "removed": "删除",
-    "deprecated": "弃用",
-    "security": "安全",
-}
-KIND_ORDER = ("security", "added", "changed", "improved", "fixed", "deprecated", "removed")
 SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][\w.\-]+)?$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-SUMMARY_MAX = 80
-MARKDOWN_FORBIDDEN_IN_SUMMARY = ("**",)  # 只检 `**bold**`；`__init__.py` 之类 `_` 太常见
 
 
+# ─── release post 加载 ──────────────────────────────────────────────────────
+@dataclass
+class ReleasePost:
+    version: str
+    date: str
+    title: str
+    body: str
+    filename: str
+
+
+def _split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
+    """`---\\n<yaml>\\n---\\n<body>` → (meta, body)。无 frontmatter → ({}, 全文)。"""
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}, text
+    end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+    if end is None:
+        return {}, text
+    try:
+        meta = yaml.safe_load("\n".join(lines[1:end])) or {}
+    except yaml.YAMLError:
+        meta = {}
+    if not isinstance(meta, dict):
+        meta = {}
+    return meta, "\n".join(lines[end + 1:]).strip("\n")
+
+
+def _semver_tuple(v: str) -> tuple[int, ...]:
+    core = v.split("-", 1)[0].split("+", 1)[0]
+    try:
+        return tuple(int(x) for x in core.split("."))
+    except ValueError:
+        return (0,)
+
+
+def load_release_posts() -> list[ReleasePost]:
+    """读 docs/announcements/ 下 `tag: release` 的中文 post，按 version 降序。"""
+    posts: list[ReleasePost] = []
+    if not ANNOUNCEMENTS_DIR.is_dir():
+        return posts
+    for p in sorted(ANNOUNCEMENTS_DIR.glob("*.md")):
+        if p.name.endswith(".en.md") or p.name.lower() == "readme.md":
+            continue
+        meta, body = _split_frontmatter(p.read_text(encoding="utf-8"))
+        if meta.get("tag") != "release":
+            continue
+        posts.append(ReleasePost(
+            version=str(meta.get("version", "")).strip(),
+            date=str(meta.get("date", "")).strip(),
+            title=str(meta.get("title", "")).strip(),
+            body=body,
+            filename=p.name,
+        ))
+    posts.sort(key=lambda r: _semver_tuple(r.version), reverse=True)
+    return posts
+
+
+# ─── 校验 ───────────────────────────────────────────────────────────────────
 @dataclass
 class ValidateIssue:
-    """单条校验问题。level: error 让 bump 退出非零；warn 仅打印。"""
     level: str   # "error" | "warn"
     location: str
     message: str
@@ -91,136 +129,43 @@ class ValidateResult:
         return any(i.level == "error" for i in self.issues)
 
 
-def _semver_tuple(v: str) -> tuple[int, ...]:
-    """`0.6.1` → (0, 6, 1)；带 suffix 也吃，比较时只看 numeric 主版本。"""
-    core = v.split("-", 1)[0].split("+", 1)[0]
-    return tuple(int(x) for x in core.split("."))
-
-
-def load_yaml() -> list[dict[str, Any]]:
-    """读 yaml 返回 versions list。空 / 不存在 → []。yaml 解析错抛 ValueError。"""
-    if not YAML_PATH.exists():
-        return []
-    try:
-        data = yaml.safe_load(YAML_PATH.read_text(encoding="utf-8"))
-    except yaml.YAMLError as e:
-        raise ValueError(f"release_notes.yaml YAML 解析失败：{e}") from e
-    if data is None:
-        return []
-    if not isinstance(data, list):
-        raise ValueError("release_notes.yaml 顶层必须是 list[version block]")
-    return data
-
-
-def validate(versions: list[dict[str, Any]]) -> ValidateResult:
-    """schema 校验整个 yaml。详见 docs/release-notes-spec.md §8。"""
+def validate(posts: list[ReleasePost]) -> ValidateResult:
+    """校验 release post frontmatter。详见 docs/announcements/README.md。"""
     r = ValidateResult()
-    if not versions:
-        r.add_error("/", "release_notes.yaml 至少要有一个 version block")
+    if not posts:
+        r.add_error("/", "docs/announcements/ 下没有 tag: release 的 post")
         return r
 
-    seen_versions: set[str] = set()
-    prev_tuple: Optional[tuple[int, ...]] = None
-    pr_count: dict[int, int] = {}
-
-    for idx, block in enumerate(versions):
-        loc = f"[{idx}]"
-        if not isinstance(block, dict):
-            r.add_error(loc, "version block 必须是 dict")
-            continue
-
-        # version
-        version = block.get("version")
-        if not isinstance(version, str) or not SEMVER_RE.match(version):
-            r.add_error(f"{loc}.version", f"无效 semver：{version!r}")
+    seen: set[str] = set()
+    for post in posts:
+        loc = post.filename
+        if not SEMVER_RE.match(post.version):
+            r.add_error(f"{loc}.version", f"无效 semver：{post.version!r}")
+        elif post.version in seen:
+            r.add_error(f"{loc}.version", f"重复版本 {post.version}")
         else:
-            if version in seen_versions:
-                r.add_error(f"{loc}.version", f"重复版本 {version}")
-            seen_versions.add(version)
-            cur_tuple = _semver_tuple(version)
-            if prev_tuple is not None and cur_tuple >= prev_tuple:
-                r.add_error(
-                    f"{loc}.version",
-                    f"版本顺序错误（应当 latest 在 top）：{version} 不该排在前一个之后",
-                )
-            prev_tuple = cur_tuple
+            seen.add(post.version)
 
-        # date
-        date = block.get("date")
-        if not isinstance(date, str) or not DATE_RE.match(date):
-            r.add_error(f"{loc}.date", f"date 必须是 ISO YYYY-MM-DD：{date!r}")
+        if not DATE_RE.match(post.date):
+            r.add_error(f"{loc}.date", f"date 必须是 ISO YYYY-MM-DD：{post.date!r}")
+        if not post.title:
+            r.add_error(f"{loc}.title", "title 必填")
+        if not post.body.strip():
+            r.add_warn(f"{loc}", "正文为空")
 
-        # summary (block-level, optional)
-        block_summary = block.get("summary")
-        if block_summary is not None and not isinstance(block_summary, str):
-            r.add_error(f"{loc}.summary", "block summary 必须是 str（或省略）")
-
-        # entries
-        entries = block.get("entries")
-        if not isinstance(entries, list) or not entries:
-            r.add_error(f"{loc}.entries", "entries 必须是非空 list")
-            continue
-        if len(entries) >= 12:
-            r.add_warn(f"{loc}.entries", f"{len(entries)} 条 entry 偏多，考虑合并同主题")
-
-        for ei, entry in enumerate(entries):
-            eloc = f"{loc}.entries[{ei}]"
-            if not isinstance(entry, dict):
-                r.add_error(eloc, "entry 必须是 dict")
-                continue
-
-            kind = entry.get("kind")
-            if kind not in KIND_WHITELIST:
-                r.add_error(f"{eloc}.kind", f"未知 kind：{kind!r}（允许：{', '.join(KIND_WHITELIST)}）")
-
-            summary = entry.get("summary")
-            if not isinstance(summary, str) or not summary.strip():
-                r.add_error(f"{eloc}.summary", "summary 必填且非空")
-            else:
-                if len(summary) > SUMMARY_MAX:
-                    r.add_error(
-                        f"{eloc}.summary",
-                        f"summary 超长（{len(summary)} > {SUMMARY_MAX} 字符）：{summary[:40]}…",
-                    )
-                for tok in MARKDOWN_FORBIDDEN_IN_SUMMARY:
-                    if tok in summary:
-                        r.add_error(
-                            f"{eloc}.summary",
-                            f"summary 不允许 markdown 标记 {tok!r}（放进 detail）",
-                        )
-                if len(summary.strip()) < 8:
-                    r.add_warn(f"{eloc}.summary", "summary 太短可能信息量不足")
-
-            pr_refs = entry.get("pr_refs")
-            if pr_refs is not None:
-                if not isinstance(pr_refs, list):
-                    r.add_error(f"{eloc}.pr_refs", "pr_refs 必须是 list[int] 或省略")
-                else:
-                    for pi, p in enumerate(pr_refs):
-                        if not isinstance(p, int) or p <= 0 or p > 9999:
-                            r.add_error(f"{eloc}.pr_refs[{pi}]", f"PR 号必须是正 int ≤ 9999：{p!r}")
-                        elif isinstance(p, int):
-                            pr_count[p] = pr_count.get(p, 0) + 1
-
-            detail = entry.get("detail")
-            if detail is not None and not isinstance(detail, str):
-                r.add_error(f"{eloc}.detail", "detail 必须是 str（或省略）")
-
-    # PR 重复出现警告
-    for p, count in pr_count.items():
-        if count > 3:
-            r.add_warn("/", f"PR #{p} 出现在 {count} 条 entry 里（可能拆得太细）")
-
+        # 文件名约定：<date>-v<version>.md
+        if DATE_RE.match(post.date) and SEMVER_RE.match(post.version):
+            expect = f"{post.date}-v{post.version}.md"
+            if post.filename != expect:
+                r.add_warn(f"{loc}", f"文件名建议 {expect}（与 frontmatter 自洽）")
     return r
 
 
 def print_validate_result(r: ValidateResult) -> None:
-    """打印校验结果。"""
     errors = [i for i in r.issues if i.level == "error"]
     warns = [i for i in r.issues if i.level == "warn"]
     for i in r.issues:
-        marker = "✗" if i.level == "error" else "!"
-        print(f"  {marker} {i.location}: {i.message}")
+        print(f"  {'✗' if i.level == 'error' else '!'} {i.location}: {i.message}")
     if not errors and not warns:
         print("validate ok — 没有问题")
     elif not errors:
@@ -229,96 +174,42 @@ def print_validate_result(r: ValidateResult) -> None:
         print(f"validate FAILED — {len(errors)} 个 error / {len(warns)} 个 warning")
 
 
-def render_changelog(versions: list[dict[str, Any]]) -> str:
-    """从 yaml 派生 CHANGELOG.md markdown 内容。"""
-    lines: list[str] = []
-    lines.append("# Changelog")
-    lines.append("")
-    lines.append("> **本文件由 [`tools/bump_version.py render-changelog`](tools/bump_version.py)")
-    lines.append("> 从 [`release_notes.yaml`](release_notes.yaml) 自动派生 —— 请改 yaml，不要改本文件。")
-    lines.append("> 编写规范见 [`docs/release-notes-spec.md`](docs/release-notes-spec.md)。")
-    lines.append("")
-    lines.append("---")
-    lines.append("")
-
-    for block in versions:
-        version = block.get("version", "?")
-        date = block.get("date", "?")
-        block_summary = block.get("summary")
-        lines.append(f"## [{version}] — {date}")
+# ─── CHANGELOG 派生 ─────────────────────────────────────────────────────────
+def render_changelog(posts: list[ReleasePost]) -> str:
+    """从 release post（version 降序）拼出 CHANGELOG.md（ADR 0013）。"""
+    lines: list[str] = [
+        "# Changelog",
+        "",
+        "> **本文件由 [`tools/bump_version.py render-changelog`](tools/bump_version.py)"
+        " 从 [`docs/announcements/`](docs/announcements/) 的 `tag: release` post 自动派生**",
+        "> —— 请改那些 markdown，不要改本文件。编写指南见"
+        " [`docs/announcements/README.md`](docs/announcements/README.md)。",
+        "",
+        "---",
+        "",
+    ]
+    for post in posts:
+        lines.append(f"## v{post.version} — {post.date}")
         lines.append("")
-        if block_summary:
-            lines.append(block_summary)
+        if post.body.strip():
+            lines.append(post.body.rstrip())
             lines.append("")
-
-        # entries 按 KIND_ORDER 分组（同 kind 内保留 yaml 出现顺序）
-        by_kind: dict[str, list[dict[str, Any]]] = {}
-        for entry in block.get("entries", []):
-            by_kind.setdefault(entry.get("kind", "other"), []).append(entry)
-
-        for kind in KIND_ORDER:
-            if kind not in by_kind:
-                continue
-            lines.append(f"### {KIND_DISPLAY.get(kind, kind)}")
-            lines.append("")
-            for entry in by_kind[kind]:
-                summary = entry.get("summary", "").strip()
-                lines.append(f"- **{summary}**")
-                detail = entry.get("detail")
-                if detail:
-                    # detail 整段以两空格缩进作为 bullet 的子内容
-                    for line in detail.rstrip().splitlines():
-                        if line.strip():
-                            lines.append(f"  {line}")
-                        else:
-                            lines.append("")
-                lines.append("")
         lines.append("---")
         lines.append("")
-
     return "\n".join(lines).rstrip() + "\n"
 
 
 def write_atomic(path: Path, content: str) -> None:
-    """写文件：先写 .tmp 再 rename，避免崩溃中途破坏现有文件。"""
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(content, encoding="utf-8")
     tmp.replace(path)
 
 
-def cmd_validate(_args: argparse.Namespace) -> int:
-    try:
-        versions = load_yaml()
-    except (OSError, ValueError) as e:
-        print(f"load failed: {e}", file=sys.stderr)
-        return 2
-    r = validate(versions)
-    print_validate_result(r)
-    return 1 if r.has_errors else 0
-
-
-def cmd_render_changelog(_args: argparse.Namespace) -> int:
-    try:
-        versions = load_yaml()
-    except (OSError, ValueError) as e:
-        print(f"load failed: {e}", file=sys.stderr)
-        return 2
-    r = validate(versions)
-    if r.has_errors:
-        print("validate FAILED — render-changelog 拒绝执行：")
-        print_validate_result(r)
-        return 1
-    content = render_changelog(versions)
-    write_atomic(CHANGELOG_PATH, content)
-    print(f"[render] {CHANGELOG_PATH.relative_to(REPO_ROOT)} 重写完成（{len(versions)} 个版本）")
-    return 0
-
-
+# ─── 版本号文件读写 ─────────────────────────────────────────────────────────
 def _read_studio_version() -> Optional[str]:
     if not STUDIO_INIT_PATH.exists():
         return None
-    txt = STUDIO_INIT_PATH.read_text(encoding="utf-8")
-    m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', txt)
+    m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', STUDIO_INIT_PATH.read_text(encoding="utf-8"))
     return m.group(1) if m else None
 
 
@@ -327,11 +218,7 @@ def _write_studio_version(new_version: str) -> bool:
         return False
     txt = STUDIO_INIT_PATH.read_text(encoding="utf-8")
     new_txt, n = re.subn(
-        r'(__version__\s*=\s*["\'])([^"\']+)(["\'])',
-        rf'\g<1>{new_version}\g<3>',
-        txt,
-        count=1,
-    )
+        r'(__version__\s*=\s*["\'])([^"\']+)(["\'])', rf'\g<1>{new_version}\g<3>', txt, count=1)
     if n == 0:
         return False
     write_atomic(STUDIO_INIT_PATH, new_txt)
@@ -341,21 +228,15 @@ def _write_studio_version(new_version: str) -> bool:
 def _read_package_json_version() -> Optional[str]:
     if not PACKAGE_JSON_PATH.exists():
         return None
-    data = json.loads(PACKAGE_JSON_PATH.read_text(encoding="utf-8"))
-    return data.get("version")
+    return json.loads(PACKAGE_JSON_PATH.read_text(encoding="utf-8")).get("version")
 
 
 def _write_package_json_version(new_version: str) -> bool:
     if not PACKAGE_JSON_PATH.exists():
         return False
-    # 用正则替换 "version": "..." 一行，保留原始 indent / trailing newline。
     txt = PACKAGE_JSON_PATH.read_text(encoding="utf-8")
     new_txt, n = re.subn(
-        r'(\"version\"\s*:\s*\")([^\"]+)(\")',
-        rf'\g<1>{new_version}\g<3>',
-        txt,
-        count=1,
-    )
+        r'(\"version\"\s*:\s*\")([^\"]+)(\")', rf'\g<1>{new_version}\g<3>', txt, count=1)
     if n == 0:
         return False
     write_atomic(PACKAGE_JSON_PATH, new_txt)
@@ -363,32 +244,18 @@ def _write_package_json_version(new_version: str) -> bool:
 
 
 def _read_package_lock_version() -> Optional[str]:
-    """读 package-lock.json 顶层 version。lockfile 里另有 packages[""].version
-    一处，正常应当与顶层一致；verify-versions 单独校验，这里只取顶层。"""
     if not PACKAGE_LOCK_PATH.exists():
         return None
-    data = json.loads(PACKAGE_LOCK_PATH.read_text(encoding="utf-8"))
-    return data.get("version")
+    return json.loads(PACKAGE_LOCK_PATH.read_text(encoding="utf-8")).get("version")
 
 
 def _write_package_lock_version(new_version: str) -> bool:
-    """更新 lockfile 顶层 + packages[""] 两处 version 字段。
-
-    用正则替换前两处 `"version": "..."` —— 顶层 + packages[""] 段第一个。后面
-    deps 也有大量 version 字段，绝不能动；count=2 严格只改前两处。
-
-    v0.8.1 漏 bump 这个文件，结果 npm install 启动期自动改它，工作树 dirty
-    卡死 self-update preflight，是这个改动的直接动因。
-    """
+    """更新 lockfile 顶层 + packages[""] 两处 version（count=2，绝不动 deps 的 version）。"""
     if not PACKAGE_LOCK_PATH.exists():
         return False
     txt = PACKAGE_LOCK_PATH.read_text(encoding="utf-8")
     new_txt, n = re.subn(
-        r'(\"version\"\s*:\s*\")([^\"]+)(\")',
-        rf'\g<1>{new_version}\g<3>',
-        txt,
-        count=2,
-    )
+        r'(\"version\"\s*:\s*\")([^\"]+)(\")', rf'\g<1>{new_version}\g<3>', txt, count=2)
     if n < 2:
         return False
     write_atomic(PACKAGE_LOCK_PATH, new_txt)
@@ -396,129 +263,107 @@ def _write_package_lock_version(new_version: str) -> bool:
 
 
 def _read_package_lock_packages_version() -> Optional[str]:
-    """读 lockfile 里 packages[""].version。verify-versions 跟顶层比对用。"""
     if not PACKAGE_LOCK_PATH.exists():
         return None
-    data = json.loads(PACKAGE_LOCK_PATH.read_text(encoding="utf-8"))
-    pkgs = data.get("packages") or {}
+    pkgs = (json.loads(PACKAGE_LOCK_PATH.read_text(encoding="utf-8")).get("packages") or {})
     root = pkgs.get("") or {}
     return root.get("version") if isinstance(root, dict) else None
 
 
-def cmd_bump(args: argparse.Namespace) -> int:
-    try:
-        versions = load_yaml()
-    except (OSError, ValueError) as e:
-        print(f"load failed: {e}", file=sys.stderr)
-        return 2
+# ─── subcommands ────────────────────────────────────────────────────────────
+def cmd_validate(_args: argparse.Namespace) -> int:
+    r = validate(load_release_posts())
+    print_validate_result(r)
+    return 1 if r.has_errors else 0
 
-    r = validate(versions)
+
+def cmd_render_changelog(_args: argparse.Namespace) -> int:
+    posts = load_release_posts()
+    r = validate(posts)
+    if r.has_errors:
+        print("validate FAILED — render-changelog 拒绝执行：")
+        print_validate_result(r)
+        return 1
+    write_atomic(CHANGELOG_PATH, render_changelog(posts))
+    print(f"[render] {CHANGELOG_PATH.relative_to(REPO_ROOT)} 重写完成（{len(posts)} 个版本）")
+    return 0
+
+
+def cmd_bump(args: argparse.Namespace) -> int:
+    posts = load_release_posts()
+    r = validate(posts)
     if r.has_errors:
         print("validate FAILED — bump 拒绝执行：")
         print_validate_result(r)
         return 1
     print_validate_result(r)
-
-    if not versions:
-        print("release_notes.yaml 没有版本 block，bump 无事可做", file=sys.stderr)
+    if not posts:
+        print("没有 release post，bump 无事可做", file=sys.stderr)
         return 2
 
-    top_version = versions[0]["version"]
+    top_version = posts[0].version  # 已按 semver 降序
     if args.version and args.version != top_version:
         print(
-            f"--version={args.version} 与 yaml top version={top_version} 不符。\n"
-            "yaml 是 source of truth；要 bump 到 {args.version}，请先在 yaml 顶部加该 block。",
+            f"--version={args.version} 与最高 release post 版本={top_version} 不符。\n"
+            "release post 是 source of truth；要 bump 到该版本，请先写"
+            f" docs/announcements/<date>-v{args.version}.md。",
             file=sys.stderr,
         )
         return 2
 
-    target_version = args.version or top_version
-    cur_studio = _read_studio_version()
-    cur_pkg = _read_package_json_version()
-    cur_lock = _read_package_lock_version()
+    target = args.version or top_version
+    print(f"\n[bump] target version: {target}")
+    print(f"[bump] studio/__init__.py: {_read_studio_version()} → {target}")
+    print(f"[bump] studio/web/package.json: {_read_package_json_version()} → {target}")
+    print(f"[bump] studio/web/package-lock.json: {_read_package_lock_version()} → {target}")
 
-    print(f"\n[bump] target version: {target_version}")
-    print(f"[bump] studio/__init__.py: {cur_studio} → {target_version}")
-    print(f"[bump] studio/web/package.json: {cur_pkg} → {target_version}")
-    print(f"[bump] studio/web/package-lock.json: {cur_lock} → {target_version}")
+    if not _write_studio_version(target):
+        print("[bump] WARN: studio/__init__.py 没找到 __version__，跳过", file=sys.stderr)
+    if not _write_package_json_version(target):
+        print("[bump] WARN: package.json 没找到 version，跳过", file=sys.stderr)
+    if not _write_package_lock_version(target):
+        print("[bump] WARN: package-lock.json 没找到两处 version，跳过", file=sys.stderr)
 
-    if not _write_studio_version(target_version):
-        print("[bump] WARN: studio/__init__.py 没找到 __version__ 字段，跳过", file=sys.stderr)
-    if not _write_package_json_version(target_version):
-        print("[bump] WARN: package.json 没找到 version 字段，跳过", file=sys.stderr)
-    if not _write_package_lock_version(target_version):
-        print("[bump] WARN: package-lock.json 没找到两处 version 字段，跳过", file=sys.stderr)
-
-    content = render_changelog(versions)
-    write_atomic(CHANGELOG_PATH, content)
+    write_atomic(CHANGELOG_PATH, render_changelog(posts))
     print(f"[bump] {CHANGELOG_PATH.relative_to(REPO_ROOT)} 重写完成")
 
-    # 自检：bump 完三个 version 文件必须一致。捕获自己写错的边角 case
-    # （e.g. lockfile 缺第二个 "version" → _write 返 False → 静默 drift）。
     drift_rc = cmd_verify_versions(argparse.Namespace())
     if drift_rc != 0:
-        print("[bump] FAIL: 自检发现 drift，请人工核对（上面已打印 verify-versions 详情）", file=sys.stderr)
+        print("[bump] FAIL: 自检发现 drift，请人工核对", file=sys.stderr)
         return drift_rc
 
-    print()
-    print("next: 检查 git diff 后")
-    print(f"  git add -A && git commit -m 'chore(release): {target_version}'")
-    print(f"  git tag v{target_version}")
-    print(f"  git push --tags")
+    print(f"\nnext: git add -A && git commit -m 'chore(release): {target}' && git tag v{target} && git push --tags")
     return 0
 
 
-def cmd_verify_versions(args: argparse.Namespace) -> int:
-    """跨文件 version drift 校验。__init__.py / package.json / lockfile（顶层 +
-    packages[""]）四处必须一致；任一不等返 1 + 打印每处实际值。
-
-    bump 自检 + CI gate 两处用。文件缺失视为 drift（None ≠ 任何字符串）。
-    """
-    studio_v = _read_studio_version()
-    pkg_v = _read_package_json_version()
-    lock_top_v = _read_package_lock_version()
-    lock_pkg_v = _read_package_lock_packages_version()
-
+def cmd_verify_versions(_args: argparse.Namespace) -> int:
+    """跨文件 version drift 校验。四处必须一致；任一不等返 1。"""
     rows = [
-        ("studio/__init__.py (__version__)", studio_v),
-        ("studio/web/package.json (version)", pkg_v),
-        ("studio/web/package-lock.json (top version)", lock_top_v),
-        ('studio/web/package-lock.json (packages[""].version)', lock_pkg_v),
+        ("studio/__init__.py (__version__)", _read_studio_version()),
+        ("studio/web/package.json (version)", _read_package_json_version()),
+        ("studio/web/package-lock.json (top version)", _read_package_lock_version()),
+        ('studio/web/package-lock.json (packages[""].version)', _read_package_lock_packages_version()),
     ]
     distinct = {v for _, v in rows}
     if len(distinct) == 1 and None not in distinct:
         print(f"[verify-versions] OK · 四处一致 = {distinct.pop()}")
         return 0
-
     print("[verify-versions] FAIL · 跨文件 version drift：", file=sys.stderr)
     for label, value in rows:
         print(f"  {label:<55} = {value!r}", file=sys.stderr)
-    print(
-        "\nv0.8.1 ZIP 用户卡 self-update 的根因就是这种 drift："
-        " npm install 启动期会自动修 lockfile → 工作树 dirty → preflight 拒绝更新。"
-        "\n修法：跑 `python tools/bump_version.py bump` 重新同步，或手动校准。",
-        file=sys.stderr,
-    )
+    print("\n修法：跑 `python tools/bump_version.py bump` 重新同步，或手动校准。", file=sys.stderr)
     return 1
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="bump_version", description=__doc__.splitlines()[0] if __doc__ else "")
     sub = p.add_subparsers(dest="cmd")
-
-    p_v = sub.add_parser("validate", help="schema 校验 release_notes.yaml")
-    p_v.set_defaults(func=cmd_validate)
-
-    p_r = sub.add_parser("render-changelog", help="从 yaml 重写 CHANGELOG.md")
-    p_r.set_defaults(func=cmd_render_changelog)
-
-    p_b = sub.add_parser("bump", help="同步版本号到 __init__.py + package.json + lockfile + CHANGELOG.md")
-    p_b.add_argument("--version", help="期望的目标版本（与 yaml top 不符时报错）", default=None)
+    sub.add_parser("validate", help="校验 release post frontmatter").set_defaults(func=cmd_validate)
+    sub.add_parser("render-changelog", help="从 release post 重写 CHANGELOG.md").set_defaults(func=cmd_render_changelog)
+    p_b = sub.add_parser("bump", help="同步版本号 + 重写 CHANGELOG.md")
+    p_b.add_argument("--version", help="期望目标版本（与最高 release post 不符则报错）", default=None)
     p_b.set_defaults(func=cmd_bump)
-
-    p_vv = sub.add_parser("verify-versions", help="跨文件 version drift 检查（CI gate）")
-    p_vv.set_defaults(func=cmd_verify_versions)
-
+    sub.add_parser("verify-versions", help="跨文件 version drift 检查（CI gate）").set_defaults(func=cmd_verify_versions)
     return p
 
 

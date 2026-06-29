@@ -60,7 +60,7 @@ studio_data/
 │           └── monitor_state.json        该 version 训练 loss/lr 曲线
 ```
 
-> v0.8 起 项目 / 版本删除是直接 `rmtree`（无回收站）— 之前有过 `_trash/` 软删但无恢复 UI / 无定期清理，等同硬删却 silently 累积孤儿目录，故移除（详见 [release notes 0.8.0](../../release_notes.yaml)）。
+> v0.8 起 项目 / 版本删除是直接 `rmtree`（无回收站）— 之前有过 `_trash/` 软删但无恢复 UI / 无定期清理，等同硬删却 silently 累积孤儿目录，故移除（详见 [CHANGELOG 0.8.0](../../CHANGELOG.md)）。
 
 **slug 规则**：title 转 ASCII 小写 + 连字符；冲突时加 `-2` `-3` 后缀。
 **id**：自增，与 slug 一起组成目录名 `{id}-{slug}`。
