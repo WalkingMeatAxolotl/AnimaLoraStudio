@@ -1853,6 +1853,16 @@ export interface ModelsRootMigrateStatus {
   error: string
 }
 
+export interface AnnouncementPost {
+  id: string
+  date: string
+  tag: 'release' | 'notice' | 'migration'
+  title: { zh: string; en: string }
+  body: { zh: string; en: string }
+  pin: boolean
+  version: string | null
+}
+
 export const api = {
   health: () => req<HealthResponse>('/api/health'),
   systemStats: () => req<SystemStats>('/api/system/stats'),
@@ -2924,6 +2934,8 @@ export const api = {
     const qs = new URLSearchParams({ channel, force: String(force) })
     return req<SystemUpdateCheck>(`/api/system/update_check?${qs.toString()}`)
   },
+  getAnnouncements: () =>
+    req<{ posts: AnnouncementPost[] }>('/api/announcements').then((r) => r.posts),
 
   // 请求 update：写 .update_pending + 触发 SIGINT 重启。
   // 422 = running task 或 dirty working tree（force=true 时跳过 dirty 闸，

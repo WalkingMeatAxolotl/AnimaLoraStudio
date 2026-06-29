@@ -5,7 +5,7 @@ import { useProjectCtx } from '../context/ProjectContext'
 import { api, type Task } from '../api/client'
 import { useEventStream, type StudioEvent } from '../lib/useEventStream'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
-import { useSettingsDrawer } from '../lib/SettingsDrawer'
+import { useAnnouncements } from '../lib/Announcements'
 import CommandPalette from './CommandPalette'
 import SystemStats from './SystemStats'
 
@@ -19,6 +19,13 @@ const QueueIcon = (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
     <rect x="2" y="3" width="20" height="14" rx="2" />
     <path d="M8 21h8M12 17v4" />
+  </svg>
+)
+
+const BellIcon = (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+    <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
   </svg>
 )
 
@@ -107,24 +114,14 @@ export default function Topbar() {
   const crumbs = useBreadcrumbs()
   const navigate = useNavigate()
   const ctx = useProjectCtx()
-  const settingsDrawer = useSettingsDrawer()
+  const { unreadCount, updateInfo, openCenter } = useAnnouncements()
   const [paletteOpen, setPaletteOpen] = useState(false)
   const searchBtnRef = useRef<HTMLButtonElement>(null)
 
   const [runningTask, setRunningTask] = useState<Task | null>(null)
   const [pendingCount, setPendingCount] = useState(0)
 
-  const [updateInfo, setUpdateInfo] = useState<{ has_update: boolean; latest_tag: string | null; latest_commit: string } | null>(null)
-  useEffect(() => {
-    let cancelled = false
-    void api.checkSystemUpdate('master').then((r) => {
-      if (cancelled) return
-      if (r.has_update) {
-        setUpdateInfo({ has_update: true, latest_tag: r.latest_tag, latest_commit: r.latest_commit })
-      }
-    }).catch(() => { /* silent */ })
-    return () => { cancelled = true }
-  }, [])
+  // 「有可用更新」检查已迁到 lib/Announcements（D8：公告栏铃铛统一承载）。
 
   const { state: monitor } = useMonitorProgress(runningTask?.id ?? null)
 
@@ -235,16 +232,7 @@ export default function Topbar() {
 
         <SystemStats />
 
-        {updateInfo?.has_update && (
-          <button
-            onClick={() => settingsDrawer.open({ section: 'version' })}
-            title={t('topbar.newVersion', { tag: updateInfo.latest_tag ?? updateInfo.latest_commit.slice(0, 8) })}
-            className="flex items-center gap-1.5 px-2 py-[5px] rounded-md text-xs font-mono text-accent bg-accent-soft border border-accent cursor-pointer hover:bg-accent/10 transition-colors shrink-0"
-          >
-            <span className="w-1.5 h-1.5 rounded-full bg-accent" />
-            <span>{updateInfo.latest_tag ?? t('topbar.newVersion', { tag: '' }).trim()}</span>
-          </button>
-        )}
+        {/* 版本更新入口已并入右侧公告栏铃铛（D8） */}
 
         {runningTask && (
           <button
@@ -268,6 +256,22 @@ export default function Topbar() {
             <span>{t('topbar.pendingCount', { n: pendingCount })}</span>
           </button>
         )}
+
+        <button
+          onClick={openCenter}
+          title={t('announcements.bellTitle')}
+          aria-label={t('announcements.bellTitle')}
+          className="relative flex items-center justify-center text-fg-tertiary bg-surface border border-dim rounded-md cursor-pointer w-8 h-8 hover:border-bold hover:text-fg-secondary transition-colors shrink-0"
+          data-testid="announcement-bell"
+        >
+          {BellIcon}
+          {(unreadCount > 0 || updateInfo?.has_update) && (
+            <span
+              className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-err border border-canvas"
+              data-testid="announcement-bell-dot"
+            />
+          )}
+        </button>
 
         <button
           ref={searchBtnRef}
