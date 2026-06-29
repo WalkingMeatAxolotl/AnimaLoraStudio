@@ -181,8 +181,8 @@ dev 攒到一组改动后，**看最重的改动**决定 bump 哪一位：
 >
 > 「feature 少」很正常——大多数 release 是 PATCH，攒到一个 feat 时再 bump MINOR。
 
-**对应 release_notes.yaml 的 `kind`**：本周期 entries 全是 `fixed` / `improved` /
-`removed` / `deprecated` → PATCH；含任一 `added` / `changed` → MINOR；纯
+**按改动性质判**：本周期全是 bug fix / 改进 / 删除 / 弃用 → PATCH；含任一新增功能 /
+行为变更 → MINOR；纯
 `security` hotfix → PATCH（紧急 patch 即使含 `changed` 也走 PATCH，让用户
 敢升）。
 
@@ -195,25 +195,29 @@ git checkout dev
 git pull origin dev
 ```
 
-**写 release notes（结构化 yaml，agent 友好）**
+**写 release notes（一版一篇 markdown，ADR 0013）**
 
-source of truth 是 [`release_notes.yaml`](release_notes.yaml)；`CHANGELOG.md`
-由工具从 yaml 派生，**不要手改** CHANGELOG（下次 render 会被覆盖）。
+source of truth 是 [`docs/announcements/`](docs/announcements/) 下 `tag: release` 的
+markdown post（一版一文件、双语双文件）；`CHANGELOG.md` 由工具从这些 post 派生，
+**不要手改** CHANGELOG（下次 render 会被覆盖）。
 
-按 [`docs/release-notes-spec.md`](docs/release-notes-spec.md) 在 yaml 顶部
-插入新版本 block，每个 user-facing PR 一条 entry（纯 chore / docs / 内部
-refactor PR 跳过）：
+新增一篇 `docs/announcements/<date>-v0.X.0.md`（+ 对应 `.en.md`）：文件格式 / frontmatter /
+tag 见 [`docs/announcements/README.md`](docs/announcements/README.md)，写什么 / 怎么写（语气 /
+内容取舍 / 粒度 / 各类公告）见 [`docs/announcements/CONTENT-GUIDE.md`](docs/announcements/CONTENT-GUIDE.md)。正文 markdown，本周期每个
+user-facing PR 写进去（纯 chore / docs / 内部 refactor 跳过）：
 
-```yaml
-- version: "0.X.0"
-  date: "YYYY-MM-DD"
-  summary: "一句话总览"
-  entries:
-    - kind: added            # added/changed/improved/fixed/removed/deprecated/security
-      summary: "user-facing 一行，≤ 80 字符，结尾带 PR 号（#NN）"
-      pr_refs: [NN]
-      detail: |              # 可选，markdown 多行
-        markdown 多行细节
+```markdown
+---
+date: YYYY-MM-DD
+tag: release
+title: v0.X.0
+version: "0.X.0"
+---
+一句话总览
+
+### 新增
+- user-facing 一行（结尾带 PR 号 #NN）
+  可选 markdown 细节
 ```
 
 拉本周期所有 merge 的 PR（命令样例）：
@@ -224,23 +228,21 @@ gh pr list --state merged --base dev \
   --json number,title,body,labels,author,mergedAt --limit 100
 ```
 
-详细 do/don't / kind 分类规则 / good vs bad 例子见 release-notes-spec.md。
-
-**`bump_version.py` 一键同步版本号 + 重写 CHANGELOG.md**
+**`bump_version.py` 同步版本号 + 重写 CHANGELOG.md**
 
 ```bash
-python tools/bump_version.py validate                 # 先校验 yaml schema
+python tools/bump_version.py validate                 # 校验 release post frontmatter
 python tools/bump_version.py bump --version 0.X.0     # 同步版本号 + 重写 CHANGELOG.md
 ```
 
 工具自动改：
 
 1. `studio/__init__.py` — `__version__ = "0.X.0"`
-2. `studio/web/package.json` — `"version": "0.X.0"`
-3. `CHANGELOG.md` — 从 yaml 派生
+2. `studio/web/package.json`（+ package-lock.json）— `"version": "0.X.0"`
+3. `CHANGELOG.md` — 从 release post 派生
 
-`bump` 跑前自动跑 `validate`，schema 错（kind 不在白名单 / summary > 80 字 /
-版本顺序错 / pr_refs 不是 int / etc.）会直接拒。
+`bump` 跑前自动跑 `validate`（version 非法 / 重复 / 缺 title / 文件名不自洽会拒），
+完成后自检跨文件 version drift。`--version` 必须等于最高版本的 release post（即你已写好该篇）。
 
 **还需要手动改一处**：`README.md` 顶部 shields.io badge URL + 「## 版本」
 段「当前版本 **0.X.0**」（README 风格用户偏好强，工具暂不动）。
@@ -284,8 +286,8 @@ grep -rn "<旧版本号，例 0.5.0>" --include="*.md" --include="*.json" \
 提一个 commit：
 
 ```bash
-git add release_notes.yaml CHANGELOG.md \
-        studio/__init__.py studio/web/package.json README.md
+git add docs/announcements/ CHANGELOG.md \
+        studio/__init__.py studio/web/package.json studio/web/package-lock.json README.md
 git commit -m "chore(release): v0.X.0"
 git push origin dev
 ```

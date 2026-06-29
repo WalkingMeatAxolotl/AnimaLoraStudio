@@ -2959,16 +2959,6 @@ export const api = {
   // 完整 .update_log 文本（PR-C，失败时 UI 弹 modal 用）。
   getSystemUpdateLog: () => req<{ content: string }>('/api/system/update_log'),
 
-  // chunk 2 — 解析 CHANGELOG.md，返回指定 tag 的 release notes
-  // （MasterCard 用此填进 change-block；缺失时 found=false 优雅退化）
-  getReleaseNotes: (tag: string) =>
-    req<ReleaseNotes>(`/api/system/release_notes?tag=${encodeURIComponent(tag)}`),
-
-  // yaml 内全部 release notes（latest first）。详情 modal 版本切换用，
-  // 一次拉完前端缓存在 modal 生命周期内导航；yaml 缺失 → versions=[]
-  getAllReleaseNotes: () =>
-    req<{ versions: ReleaseNotes[] }>('/api/system/release_notes_all'),
-
   // chunk 3 — git fetch + log origin/dev，返回最近 N 个 commit
   // （DevCard 时间线 + 任意 commit 切换用）。limit 默认 10，clamp 1-50。
   getDevCommits: (limit = 10) =>
@@ -3061,26 +3051,6 @@ export interface SystemUpdateStatus {
    *  --tags --exact-match 拿；commit 没打 tag → null。UI 优先显示 tag，
    *  fallback 到 sha 前 8 位 */
   rollback_target_tag?: string | null
-}
-
-/** chunk 2 重做 — release_notes.yaml 派生的 release notes。
- *  schema + 编写规范见 docs/release-notes-spec.md。`found=false` → UI 退化到 CHANGELOG 链接。 */
-export type ReleaseNotesKind =
-  | 'added' | 'changed' | 'improved' | 'fixed' | 'removed' | 'deprecated' | 'security'
-
-export interface ReleaseNotesEntry {
-  kind: ReleaseNotesKind
-  summary: string         // ≤ 80 chars, plain text, user-facing
-  pr_refs: number[]       // 关联 PR 号；空 list 表示无关联 PR
-  detail: string | null   // optional markdown 多行说明
-}
-
-export interface ReleaseNotes {
-  tag: string             // caller 传入的 tag（v 前缀保留）
-  found: boolean
-  date: string | null     // ISO YYYY-MM-DD
-  summary: string | null  // 整版本一句话总览（block-level summary）
-  entries: ReleaseNotesEntry[]
 }
 
 /** chunk 3 — dev 通道最近 commit 摘要。fetched=false 时表示 git fetch 失败

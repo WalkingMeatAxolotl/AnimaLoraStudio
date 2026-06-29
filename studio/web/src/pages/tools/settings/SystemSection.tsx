@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useState } from 'react'
 import type { TFunction } from 'i18next'
 import { Trans, useTranslation } from 'react-i18next'
 import {
@@ -7,13 +7,13 @@ import {
   type DevCommitsResult,
   type ModelsRootInfo,
   type PreflightResult,
-  type ReleaseNotes,
   type StudioDataInfo,
   type SystemPrefsConfig,
   type SystemUpdateCheck,
   type SystemUpdateStatus,
   type SystemVersion,
 } from '../../../api/client'
+import { useAnnouncements } from '../../../lib/Announcements'
 import { useDialog } from '../../../components/Dialog'
 import {
   clearOnboardingDone,
@@ -110,6 +110,8 @@ export function VersionSection() {
   // chunk 4：update 预览走 inline preview 面板（不用 dialog）。例外：工作树 dirty
   // 时确认更新前要弹一个"强制覆盖"确认 modal，复用 useDialog().confirm。
   const dialog = useDialog()
+  // release notes 已并入公告栏：版本 section 的入口直接打开公告栏 modal。
+  const { openCenter } = useAnnouncements()
   const [version, setVersion] = useState<SystemVersion | null>(null)
   const [check, setCheck] = useState<SystemUpdateCheck | null>(null)
   const [status, setStatus] = useState<SystemUpdateStatus | null>(null)
@@ -118,8 +120,6 @@ export function VersionSection() {
   const [statusLoaded, setStatusLoaded] = useState(false)
   const [prefs, setPrefs] = useState<SystemPrefsConfig | null>(null)
   const [devCheck, setDevCheck] = useState<SystemUpdateCheck | null>(null)
-  // chunk 2 — 当前显示的 release notes（hasUpdate 时为 target tag，否则 current tag）
-  const [releaseNotes, setReleaseNotes] = useState<ReleaseNotes | null>(null)
   // chunk 3 — dev 通道最近 commit 列表 + 选中状态（用户点 commit 准备切换）
   const [devCommits, setDevCommits] = useState<DevCommitsResult | null>(null)
   const [selectedSha, setSelectedSha] = useState<string | null>(null)
@@ -136,13 +136,6 @@ export function VersionSection() {
   const [logModal, setLogModal] = useState<{ open: boolean; content: string; loading: boolean }>(
     { open: false, content: '', loading: false },
   )
-  // chunk 2 重做：release notes 详细内容 modal（含 detail markdown）
-  const [detailModalOpen, setDetailModalOpen] = useState(false)
-  // modal 打开时定位的版本 tag（默认当前；从右上角"更新日志"入口打开则用 latest）
-  const [detailInitialTag, setDetailInitialTag] = useState<string | null>(null)
-  // 全量历史 release notes（modal 左右切换用）。lazy：modal 首次打开时拉。
-  // 拉之前 / 失败 → null，modal 退化到只显示传入的单版本（无左右按钮）。
-  const [allReleaseNotes, setAllReleaseNotes] = useState<ReleaseNotes[] | null>(null)
   // 0.8.1 hotfix — zip 安装用户首次 init git 仓库
   const [initing, setIniting] = useState(false)
   const [initError, setInitError] = useState<string | null>(null)
@@ -424,49 +417,6 @@ export function VersionSection() {
   // 上次 update 失败 banner（aborted / failed / partial 时显示红色提示）
   const statusBadFailed = !!status && (status.status === 'failed' || status.status === 'aborted' || status.status === 'partial')
 
-  // 打开 release notes modal：默认定位到当前展示 tag；从"更新日志"入口
-  // 打开则传 null → 默认 latest（modal 内 findIndex 找不到时回退到 idx 0）
-  const openReleaseNotesModal = useCallback((tag: string | null) => {
-    setDetailInitialTag(tag)
-    setDetailModalOpen(true)
-    // lazy 加载全量历史：仅首次打开拉一次，后续 modal 复用同一份
-    if (allReleaseNotes === null) {
-      void api.getAllReleaseNotes()
-        .then((r) => setAllReleaseNotes(r.versions))
-        .catch(() => setAllReleaseNotes([]))
-    }
-  }, [allReleaseNotes])
-
-  // 预取全量历史 release notes：进入版本 section 即后台拉一次，让「更新日志」
-  // modal 一打开就有完整版本列表，避免 ‹ › 切换按钮延迟出现把控制栏撑大。
-  useEffect(() => {
-    if (allReleaseNotes !== null) return
-    void api.getAllReleaseNotes()
-      .then((r) => setAllReleaseNotes(r.versions))
-      .catch(() => setAllReleaseNotes([]))
-  }, [allReleaseNotes])
-
-  // release notes 拉对应 tag：stable 通道有更新时展示目标版本，否则展示当前
-  // 已装版本；dev 通道不展示 release notes（dev 是滚动的，没有版本号语义）
-  const displayedTag = showDevView
-    ? null
-    : masterHasUpdate
-      ? (check?.latest_version ?? check?.latest_tag ?? null)
-      : (version?.stable_version ?? version?.tag ?? (version ? `v${version.version}` : null))
-  useEffect(() => {
-    if (!displayedTag) {
-      setReleaseNotes(null)
-      return
-    }
-    let cancelled = false
-    void api.getReleaseNotes(displayedTag).then((r) => {
-      if (!cancelled) setReleaseNotes(r)
-    }).catch(() => {
-      if (!cancelled) setReleaseNotes(null)
-    })
-    return () => { cancelled = true }
-  }, [displayedTag])
-
   return (
     <SettingsSection
       id="version"
@@ -481,17 +431,14 @@ export function VersionSection() {
               <li>{t('settings.versionInfoPreflight')}</li>
             </ul>
           </InfoButton>
-          {/* webui 的"更新日志"入口：打开 detail modal 并定位到 latest
-              历史版本，配合左右切换可浏览全部 release notes（防止 hotfix
-              发布后看不到之前主版本的更新内容） */}
+          {/* 更新内容已并入公告栏：入口直接打开公告栏 modal（铃铛同款） */}
           <button
             type="button"
             className="btn btn-ghost btn-sm text-xs text-fg-tertiary ml-auto inline-flex items-center gap-1"
-            onClick={() => openReleaseNotesModal(null)}
-            title={t('settings.viewUpdateHistoryHint')}
+            onClick={() => openCenter()}
           >
             <VersionIcon name="log" />
-            {t('settings.viewUpdateHistory')}
+            {t('settings.viewAnnouncements')}
           </button>
         </>
       }
@@ -583,8 +530,6 @@ export function VersionSection() {
               hasUpdate={masterHasUpdate}
               hasRollback={hasRollback}
               statusBadFailed={statusBadFailed}
-              releaseNotes={releaseNotes}
-              onShowReleaseNotesDetail={() => openReleaseNotesModal(displayedTag)}
               checking={checking}
               busy={busy}
               cardState={masterState}
@@ -630,27 +575,6 @@ export function VersionSection() {
           content={logModal.content}
           onClose={() => setLogModal({ open: false, content: '', loading: false })}
         />
-      )}
-
-      {/* allNotes 没拉到 / 还在拉 → 退化到单版本（无左右切换，旧行为）；
-          拉到后 modal 自动重渲染，左右按钮出现 */}
-      {detailModalOpen && (allReleaseNotes && allReleaseNotes.length > 0
-        ? (
-          <ReleaseNotesDetailModal
-            allNotes={allReleaseNotes}
-            initialTag={detailInitialTag ?? allReleaseNotes[0].tag}
-            onClose={() => setDetailModalOpen(false)}
-          />
-        )
-        : releaseNotes?.found
-          ? (
-            <ReleaseNotesDetailModal
-              allNotes={[releaseNotes]}
-              initialTag={releaseNotes.tag}
-              onClose={() => setDetailModalOpen(false)}
-            />
-          )
-          : null
       )}
     </SettingsSection>
   )
@@ -701,8 +625,6 @@ export type MasterCardProps = {
   hasUpdate: boolean
   hasRollback: boolean
   statusBadFailed: boolean
-  releaseNotes: ReleaseNotes | null
-  onShowReleaseNotesDetail: () => void
   checking: boolean
   busy: boolean
   cardState: CardState
@@ -718,36 +640,15 @@ export type MasterCardProps = {
   onViewLog: () => void
 }
 
-// chunk 2 重做 — release_notes.yaml 派生 entries 渲染。每条 [kind 徽章] +
-// summary，kind 颜色复用 vs-pill 体系。detail 通过 title hover 透出。
-// 超 RN_MAX_ITEMS 折成 "+ 还有 N 项 · 详见 CHANGELOG.md"。
-export const RN_MAX_ITEMS = 5
-
-// kind → vs-pill class（复用 master/dev/here/info 四套色）+ 中文 label
-export const KIND_PILL_CLASS: Record<string, string> = {
-  added:      'vs-pill-stable',   // 绿（新东西，正面）
-  improved:   'vs-pill-info',     // 蓝（优化）
-  changed:    'vs-pill-info',     // 蓝（中性）
-  fixed:      'vs-pill-dev',      // 橙（修 bug，提醒）
-  removed:    'vs-pill-here',     // accent（强调，需注意）
-  deprecated: 'vs-pill-here',     // accent
-  security:   'vs-pill-here',     // accent
-}
-
-export const KIND_LABEL_KEY: Record<string, string> = {
-  added: 'kindAdded', changed: 'kindChanged', improved: 'kindImproved', fixed: 'kindFixed',
-  removed: 'kindRemoved', deprecated: 'kindDeprecated', security: 'kindSecurity',
-}
-
 // chunk 4 — preview / progress 通用面板。channel 决定主按钮配色（master=primary
-// orange / dev=warn yellow）。details 部分由 caller 决定渲染什么（master 用
-// release notes，dev 用 commit msg / author）。
+// orange / dev=warn yellow）。details 可选，由 caller 决定渲染什么（dev 用
+// commit msg / author；master 不再内联 release notes，留空）。
 export type PreviewPaneProps = {
   channel: 'master' | 'dev'
   fromLabel: string
   toLabel: string
   badge?: string
-  details: React.ReactNode
+  details?: React.ReactNode
   preflight: PreflightResult | null
   loading: boolean
   busy: boolean
@@ -842,94 +743,6 @@ export function ProgressPane({ fromLabel, toLabel }: { fromLabel: string; toLabe
   )
 }
 
-// inline「更新内容」预览固定渲染 RN_MAX_ITEMS 条 + 1 条「详细内容」入口共
-// RN_SLOTS 个行槽位：加载中填骨架行、有数据填真实 entry、不足填空占位行。
-// 高度恒由固定行数撑出（不靠像素估算），异步拉取 / 切换显示版本时列表都不撑大。
-export const RN_SLOTS = RN_MAX_ITEMS + 1
-
-export function MasterReleaseNotes({
-  notes, onShowDetail,
-}: { notes: ReleaseNotes | null; onShowDetail: () => void }) {
-  const { t } = useTranslation()
-  const loading = notes === null
-  const entries = notes?.found ? notes.entries : []
-  const total = entries.length
-  const shown = entries.slice(0, RN_MAX_ITEMS)
-  const overflow = total - shown.length
-  // 任意 entry 有 detail → 即使全部顶层 entries 都显示，"详细内容" 入口仍有意义
-  const anyDetail = entries.some((e) => !!e.detail)
-  const showDetailLink = overflow > 0 || anyDetail
-
-  const rows: ReactNode[] = []
-  if (!loading) {
-    shown.forEach((e, i) => {
-      rows.push(
-        <li key={`e${i}`}>
-          <span
-            className={`vs-pill ${KIND_PILL_CLASS[e.kind] || 'vs-pill-info'}`}
-            style={{ flexShrink: 0 }}
-            title={e.detail ?? ''}
-          >
-            {t(`settings.${KIND_LABEL_KEY[e.kind] ?? ''}`, { defaultValue: e.kind })}
-          </span>
-          <span className="vs-txt">{e.summary}</span>
-        </li>
-      )
-    })
-    if (showDetailLink) {
-      rows.push(
-        <li key="detail">
-          <span className="vs-glyph">·</span>
-          <span className="vs-txt" style={{ color: 'var(--fg-tertiary)' }}>
-            {overflow > 0 && t('settings.moreItems', { count: overflow })}
-            <button
-              type="button"
-              onClick={onShowDetail}
-              className="vs-lnk"
-              style={{ display: 'inline' }}
-            >
-              {t('settings.detailContent')}
-            </button>
-          </span>
-        </li>
-      )
-    } else if (total === 0) {
-      rows.push(
-        <li key="hint">
-          <span className="vs-glyph">▸</span>
-          <span className="vs-txt">
-            {notes && !notes.found
-              ? <Trans i18nKey="settings.releaseNoEntry" components={{ code: <code /> }} />
-              : <Trans i18nKey="settings.releaseSeeChangelog" components={{ code: <code /> }} />}
-          </span>
-        </li>
-      )
-    }
-  }
-  // 补足到固定行数：加载态填骨架行、否则填空占位行 —— 保证列表高度恒定（无像素估算）
-  while (rows.length < RN_SLOTS) {
-    const i = rows.length
-    rows.push(
-      loading ? (
-        <li key={`sk${i}`} className="vs-rn-sk" aria-hidden="true">
-          <span className="vs-rn-sk-pill" />
-          <span className="vs-rn-sk-bar" />
-        </li>
-      ) : (
-        <li key={`pad${i}`} className="vs-rn-empty" aria-hidden="true">
-          &nbsp;
-        </li>
-      )
-    )
-  }
-
-  return (
-    <ul className="vs-change-list" aria-busy={loading || undefined}>
-      {rows}
-    </ul>
-  )
-}
-
 export function MasterCard(p: MasterCardProps) {
   const { t } = useTranslation()
   // 装的是 stable 时显示当前稳定版号，否则 ver-tag 区不显示 from（"你装的"
@@ -960,12 +773,6 @@ export function MasterCard(p: MasterCardProps) {
           channel="master"
           fromLabel={currentTag ?? p.version?.installed_label ?? t('settings.currentShort')}
           toLabel={p.pendingTarget.label}
-          details={
-            <div className="vs-change-block">
-              <div className="vs-h">{t('settings.targetUpdateContent', { label: p.pendingTarget.label })}</div>
-              <MasterReleaseNotes notes={p.releaseNotes} onShowDetail={p.onShowReleaseNotesDetail} />
-            </div>
-          }
           preflight={p.preflight}
           loading={p.preflightLoading}
           busy={p.busy}
@@ -1062,15 +869,6 @@ export function MasterCard(p: MasterCardProps) {
           {!p.hasUpdate && p.solo && (
             <div className="vs-ver-tagline">{t('settings.topbarMasterOnly')}</div>
           )}
-        </div>
-
-        {p.solo && <div className="vs-v-rule" />}
-
-        <div className="vs-change-block">
-          <div className="vs-h">
-            {p.hasUpdate ? t('settings.targetUpdateContent', { label: targetTag }) : t('settings.targetThisVersion', { label: targetTag || currentTag || '' })}
-          </div>
-          <MasterReleaseNotes notes={p.releaseNotes} onShowDetail={p.onShowReleaseNotesDetail} />
         </div>
       </div>
 
@@ -1408,155 +1206,6 @@ export function UpdateLogModal({
               {content}
             </pre>
           )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// chunk 2 重做 — release notes 全量详细内容 modal。结构：
-//   header: [←] tag · date · (n / N) [→]  + 关闭   |  body: entries 列表
-// 接收 allNotes 全量（latest first），按 initialTag 定位起始 index；
-// 左右键 / 按钮在版本间切换，作为 webui 的更新日志浏览器。
-// detail 字段是 markdown 但这里不渲染 markdown 库（依赖最少），直接
-// whitespace-pre-wrap 显示原文；未来想真渲染 markdown 再加 marked /
-// react-markdown 依赖。
-export function ReleaseNotesDetailModal({
-  allNotes, initialTag, onClose,
-}: { allNotes: ReleaseNotes[]; initialTag: string; onClose: () => void }) {
-  const { t } = useTranslation()
-  // 起始 index：按 tag 匹配；找不到（dev / custom 或 yaml 没该 tag）退到 latest
-  const initialIdx = useMemo(() => {
-    const i = allNotes.findIndex((n) => n.tag === initialTag)
-    return i >= 0 ? i : 0
-  }, [allNotes, initialTag])
-  const [idx, setIdx] = useState(initialIdx)
-  // initialTag / allNotes 变化时同步（modal 复用同一实例打开多版本）
-  useEffect(() => { setIdx(initialIdx) }, [initialIdx])
-
-  const total = allNotes.length
-  const current: ReleaseNotes | null = total > 0 ? allNotes[idx] : null
-  // yaml latest-first：idx + 1 = 更旧，idx - 1 = 更新
-  const hasOlder = idx < total - 1
-  const hasNewer = idx > 0
-
-  const goOlder = useCallback(() => {
-    setIdx((i) => Math.min(i + 1, Math.max(0, total - 1)))
-  }, [total])
-  const goNewer = useCallback(() => {
-    setIdx((i) => Math.max(i - 1, 0))
-  }, [])
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { onClose(); return }
-      // 输入框内按方向键不切版本，避免误触
-      const target = e.target as HTMLElement | null
-      const tag = target?.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return
-      if (e.key === 'ArrowLeft') { goOlder(); e.preventDefault() }
-      else if (e.key === 'ArrowRight') { goNewer(); e.preventDefault() }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, goOlder, goNewer])
-
-  // 换版本时滚回顶部，避免长 detail 看完后切版本仍停在底部
-  const bodyRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (bodyRef.current) bodyRef.current.scrollTop = 0
-  }, [idx])
-
-  if (!current) return null
-  const navBtnCls = 'text-fg-dim hover:text-fg-primary disabled:opacity-25 disabled:hover:text-fg-dim disabled:cursor-not-allowed text-lg leading-none px-2 py-1 rounded'
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-      onClick={onClose}
-    >
-      <div
-        className="bg-surface border border-subtle rounded-md shadow-lg w-[50vw] h-[80vh] flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* 顶部控制栏：左右切换 + 关闭，放在 title 上方独立一行 */}
-        <div className="flex items-center gap-1 border-b border-subtle px-3 py-2">
-          {/* ‹ › 始终渲染（单版本时 disabled）：让控制栏高度从 modal 打开就固定，
-              不因 allNotes 异步到位后切换按钮才出现而撑大 */}
-          <button
-            type="button"
-            onClick={goOlder}
-            disabled={!hasOlder}
-            className={navBtnCls}
-            aria-label={t('settings.releaseNotesOlder')}
-            title={t('settings.releaseNotesOlder')}
-          >‹</button>
-          <button
-            type="button"
-            onClick={goNewer}
-            disabled={!hasNewer}
-            className={navBtnCls}
-            aria-label={t('settings.releaseNotesNewer')}
-            title={t('settings.releaseNotesNewer')}
-          >›</button>
-          {total > 1 && (
-            <span className="text-2xs text-fg-dim font-mono ml-1">
-              {t('settings.releaseNotesPosition', { index: idx + 1, total })}
-            </span>
-          )}
-          <div className="flex-1" />
-          <button
-            onClick={onClose}
-            className="text-fg-dim hover:text-fg-primary text-xl leading-none px-1"
-            aria-label={t('common.close')}
-          >×</button>
-        </div>
-        {/* title 行：tag · date / summary */}
-        <div className="flex flex-col gap-0.5 border-b border-subtle px-5 py-3 min-w-0">
-          <h3 className="text-base font-semibold text-fg-primary font-mono">
-            <span>{current.tag}</span>
-            {current.date && <span className="text-fg-tertiary font-normal text-sm font-sans"> · {current.date}</span>}
-          </h3>
-          {current.summary && (
-            <span className="text-xs text-fg-secondary">{current.summary}</span>
-          )}
-        </div>
-        <div ref={bodyRef} className="flex-1 overflow-y-auto p-5 flex flex-col gap-4">
-          {current.entries.map((e, i) => (
-            <div key={i} className="flex flex-col gap-1.5">
-              <div className="flex items-start gap-2 flex-wrap">
-                <span
-                  className={`vs-pill ${KIND_PILL_CLASS[e.kind] || 'vs-pill-info'}`}
-                  style={{ flexShrink: 0, marginTop: 2 }}
-                >
-                  {t(`settings.${KIND_LABEL_KEY[e.kind] ?? ''}`, { defaultValue: e.kind })}
-                </span>
-                <span className="text-sm text-fg-primary font-medium leading-snug">
-                  {e.summary}
-                </span>
-              </div>
-              {e.pr_refs.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 ml-1 mt-0.5">
-                  {e.pr_refs.map((pr) => (
-                    <a
-                      key={pr}
-                      href={`https://github.com/WalkingMeatAxolotl/AnimaLoraStudio/pull/${pr}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-2xs font-mono text-fg-tertiary hover:text-accent underline-offset-2 hover:underline"
-                    >
-                      #{pr}
-                    </a>
-                  ))}
-                </div>
-              )}
-              {e.detail && (
-                <pre className="text-xs font-mono text-fg-secondary whitespace-pre-wrap break-words bg-sunken border border-subtle rounded p-3 mt-1 leading-relaxed">
-                  {e.detail.trimEnd()}
-                </pre>
-              )}
-            </div>
-          ))}
         </div>
       </div>
     </div>

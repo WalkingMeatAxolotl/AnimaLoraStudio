@@ -2,7 +2,7 @@
 
 每个文件 = 一个域。api/app.py 一次性 `app.include_router` 全部。
 
-## 16 顶层 router + 1 子包（27 文件）
+## 17 顶层 router + 1 子包
 
 | router 文件 | routes | 说明 |
 |---|---:|---|
@@ -10,7 +10,8 @@
 | `presets.py`       | 13  | preset CRUD + import/export + schema + configs redirect |
 | `browse.py`        | 3   | datasets / browse / dataset thumbnail |
 | `events_sse.py`    | 1   | /api/events SSE |
-| `root.py`          | 1   | / → /studio/ 302 redirect |
+| `announcements.py` | 1   | /api/announcements（公告栏，docs/announcements/ 派生） |
+| `root.py`          | 3   | / → SPA index；/studio、/studio/{rest} → / 兼容跳转（ADR 0012） |
 | `samples.py`       | 1   | /samples/{filename} |
 | `logs.py`          | 1   | /api/logs/{task_id} |
 | `data_exports.py`  | 1   | /api/data-exports |
@@ -20,12 +21,12 @@
 | `models.py`        | 3   | models catalog / path-defaults / download |
 | `upscalers.py`     | 2   | upscaler select / custom download |
 | `installs.py`      | 10  | wd14 + torch + flash-attn + xformers + llm-tagger admin |
-| `system.py`        | 11  | restart / update / rollback / preflight / dev_commits / release_notes |
+| `system.py`        | 9   | restart / update / rollback / preflight / dev_commits / init_git |
 | `generate.py`      | 8   | 测试出图 + daemon 控制 + TAEFlux |
 | `queue/`           | 20  | 内拆 lifecycle (12) / io (3) / outputs (5) |
 | `projects/`        | 71  | 内拆 crud (16) / exports (6) / ingestion (14) / curation (12) / training (23) |
 
-**合计**：155 routes（+ 5 非 APIRoute：SPA mount + openapi/docs/redoc 等）= 160。
+**合计**：约 156 routes（+ 5 非 APIRoute：SPA mount + openapi/docs/redoc 等）。route 三元组精确集见 `tests/_snapshots/studio_routes.json`（snapshot 测试守门）。
 
 ## 子包内部 helpers
 

@@ -104,7 +104,7 @@ Topbar 现有的「有新版本」pill（`Topbar.tsx`：`checkSystemUpdate('mast
 
 顺序原则：基建是有价值、可独立 review 的单元；内容迁移机械、可一步步来；英文回填最枯燥、架构零风险，放最后。
 
-- **Phase 1 — 公告栏基建（infra）**【先做】
+- **Phase 1 — 公告栏基建（infra）**【已合入 dev：#336】
   - 定义 `docs/announcements/` 格式（frontmatter + zh/en 双文件）。
   - 后端：announcements service（读 `docs/announcements/*.md` + 配对 zh/en + 解析 frontmatter）+ `GET /api/announcements`。
   - 前端：公告栏 modal（list + tag 过滤 + 红点 + 正文 markdown）+ 自动弹 + read 状态（localStorage）。
@@ -113,7 +113,7 @@ Topbar 现有的「有新版本」pill（`Topbar.tsx`：`checkSystemUpdate('mast
   - **不动** `release_notes.yaml` / 现有 Settings changelog —— 暂共存，下个 phase 再迁。
   - 产出：一个自包含可 review 的 PR；公告栏能跑、能显示新 post。
 
-- **Phase 2 — 迁移现有 changelog 进公告栏（增量）**
+- **Phase 2 — 迁移现有 changelog 进公告栏**【本 PR · 见 ADR 0013】
   - `release_notes.yaml` → 每版一篇 `docs/announcements/<version>.md`（先迁现有**中文**内容，en 暂缺）。
   - 重构 `tools/bump_version.py`（新格式 + 从 per-file 生成 CHANGELOG.md）+ 改 CONTRIBUTING 发版流程。
   - 现有 Settings release-notes 展示 → 收进公告栏 / 废旧端点（`/api/system/release_notes*`）。

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 201,
+  "count": 199,
   "routes": [
     {
       "path": "/",
@@ -1375,22 +1375,6 @@
         "GET"
       ],
       "name": "system_preflight",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/system/release_notes",
-      "methods": [
-        "GET"
-      ],
-      "name": "system_release_notes",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/system/release_notes_all",
-      "methods": [
-        "GET"
-      ],
-      "name": "system_release_notes_all",
       "type": "APIRoute"
     },
     {
