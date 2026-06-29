@@ -65,9 +65,9 @@ export function AnnouncementCenter() {
         aria-modal="true"
         aria-labelledby="announcement-center-title"
         onClick={(e) => e.stopPropagation()}
-        /* 宽度：居中弹窗，大屏最宽 1080px、小屏 92vw 自适应（左 list 256px 固定，
+        /* 宽度：居中弹窗，大屏最宽 1440px、小屏 80vw 自适应（左 list 256px 固定，
            其余给正文）。借鉴 SettingsDrawer 的响应式思路但居中、不占满。 */
-        className="w-[min(1080px,92vw)] h-[78vh] flex flex-col bg-elevated border border-dim rounded-lg shadow-xl overflow-hidden"
+        className="w-[min(1440px,80vw)] h-[78vh] flex flex-col bg-elevated border border-dim rounded-lg shadow-xl overflow-hidden"
       >
         {/* header */}
         <div className="flex items-center gap-3 px-5 py-3 border-b border-dim shrink-0">
