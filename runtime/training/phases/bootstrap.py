@@ -176,7 +176,16 @@ def run(ctx: TrainingContext) -> None:
     _resolve_sample_seed(args)
 
     ctx.device = "cuda" if torch.cuda.is_available() else "cpu"
-    ctx.dtype = torch.bfloat16 if args.mixed_precision == "bf16" else torch.float32
+    if args.mixed_precision == "bf16":
+        ctx.dtype = torch.bfloat16
+    elif args.mixed_precision == "fp16":
+        ctx.dtype = torch.float16
+        ctx.scaler = torch.cuda.amp.GradScaler()
+    else:
+        ctx.dtype = torch.float32
+    # VAE 精度与训练精度解耦：fp16 路径下 VAE 仍用 fp32（见 TrainingContext.vae_dtype）；
+    # bf16/fp32 时 VAE 跟随主精度不变。
+    ctx.vae_dtype = torch.float32 if ctx.dtype == torch.float16 else ctx.dtype
 
     # 创建输出目录
     ctx.output_dir = Path(args.output_dir)
