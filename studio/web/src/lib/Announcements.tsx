@@ -134,3 +134,16 @@ export function useAnnouncements(): AnnouncementsCtx {
   if (!v) throw new Error('useAnnouncements must be used within AnnouncementsProvider')
   return v
 }
+
+/** 从 release post 正文抽前 max 条「要点首句」（顶层加粗 lead），给版本面板做概览。
+ *  依赖 CONTENT-GUIDE 约定：每条顶层要点是 `- **首句**`。剥尾部 PR 号让概览更干净。 */
+export function extractReleaseHighlights(body: string, max = 5): string[] {
+  const out: string[] = []
+  for (const line of body.split('\n')) {
+    const m = line.match(/^- \*\*(.+?)\*\*\s*$/)
+    if (!m) continue
+    out.push(m[1].replace(/[（(]#[#\d,，\s]+[）)]\s*$/, '').trim())
+    if (out.length >= max) break
+  }
+  return out
+}
