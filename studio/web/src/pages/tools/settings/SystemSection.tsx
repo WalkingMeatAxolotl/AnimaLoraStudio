@@ -13,7 +13,7 @@ import {
   type SystemUpdateStatus,
   type SystemVersion,
 } from '../../../api/client'
-import { useAnnouncements, extractReleaseHighlights } from '../../../lib/Announcements'
+import { useAnnouncements, extractReleaseEntries, type ReleaseEntry } from '../../../lib/Announcements'
 import { useDialog } from '../../../components/Dialog'
 import {
   clearOnboardingDone,
@@ -34,6 +34,18 @@ import {
 import i18n from '../../../i18n'
 import { textInputClass } from './constants'
 import { SettingsField, SettingsSection } from './fields'
+
+// 版本面板「更新内容」概览：展示前 N 条要点；kind → vs-pill 配色 + i18n label（与历史
+// release notes 概览同一套着色，数据源改为从公告 post 正文解析）。
+const RELEASE_OVERVIEW_MAX = 5
+const KIND_PILL_CLASS: Record<string, string> = {
+  added: 'vs-pill-stable', improved: 'vs-pill-info', changed: 'vs-pill-info',
+  fixed: 'vs-pill-dev', removed: 'vs-pill-here', deprecated: 'vs-pill-here', security: 'vs-pill-here',
+}
+const KIND_LABEL_KEY: Record<string, string> = {
+  added: 'kindAdded', changed: 'kindChanged', improved: 'kindImproved', fixed: 'kindFixed',
+  removed: 'kindRemoved', deprecated: 'kindDeprecated', security: 'kindSecurity',
+}
 
 // ── System Section（系统 tab）─────────────────────────────────────────────
 //
@@ -113,15 +125,15 @@ export function VersionSection() {
   // release notes 已并入公告栏：版本 section 的入口直接打开公告栏 modal。
   const { posts, openCenter } = useAnnouncements()
   const [version, setVersion] = useState<SystemVersion | null>(null)
-  // 版本面板「更新内容」概览：取当前版（匹配不到则最新）release post 的前 5 条要点；
-  // 「查看更新公告」与详细内容统一打开公告栏（不再是旧的 detail modal）。
+  // 版本面板「更新内容」概览：取当前版（匹配不到则最新）release post，按 `### 分组`
+  // 解析出带 kind 的要点条目；详细 / 查看入口统一打开公告栏（不再是旧的 detail modal）。
   const announcementLang = i18n.language.toLowerCase().startsWith('zh') ? 'zh' : 'en'
   const releaseOverview = useMemo(() => {
     const releases = posts.filter((p) => p.tag === 'release')
     if (!releases.length) return null
     const post = releases.find((p) => p.version === version?.version) ?? releases[0]
-    const highlights = extractReleaseHighlights(post.body[announcementLang], 5)
-    return highlights.length ? { title: post.title[announcementLang], highlights } : null
+    const entries = extractReleaseEntries(post.body[announcementLang])
+    return entries.length ? { title: post.title[announcementLang], entries } : null
   }, [posts, version, announcementLang])
   const [check, setCheck] = useState<SystemUpdateCheck | null>(null)
   const [status, setStatus] = useState<SystemUpdateStatus | null>(null)
@@ -553,6 +565,8 @@ export function VersionSection() {
               onSwitchToMaster={handleSwitchToMaster}
               onRollback={handleRollback}
               onViewLog={handleViewLog}
+              releaseOverview={releaseOverview}
+              onOpenAnnouncements={openCenter}
             />
           ) : (
             <DevCard
@@ -577,21 +591,6 @@ export function VersionSection() {
             />
           )}
         </div>
-        {releaseOverview && (
-          <div className="mt-3 pt-3 border-t border-dim">
-            <div className="flex items-center justify-between gap-3 mb-2">
-              <span className="text-sm font-semibold text-fg-primary">{releaseOverview.title}</span>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => openCenter()}>
-                <VersionIcon name="note" />{t('settings.viewAnnouncements')}
-              </button>
-            </div>
-            <ul className="m-0 pl-5 list-disc space-y-1 text-sm text-fg-secondary marker:text-fg-tertiary">
-              {releaseOverview.highlights.map((h, i) => (
-                <li key={i} className="leading-relaxed">{h}</li>
-              ))}
-            </ul>
-          </div>
-        )}
       </div>
 
       {logModal.open && (
@@ -663,6 +662,8 @@ export type MasterCardProps = {
   onSwitchToMaster: () => void
   onRollback: () => void
   onViewLog: () => void
+  releaseOverview: { title: string; entries: ReleaseEntry[] } | null
+  onOpenAnnouncements: () => void
 }
 
 // chunk 4 — preview / progress 通用面板。channel 决定主按钮配色（master=primary
@@ -895,6 +896,35 @@ export function MasterCard(p: MasterCardProps) {
             <div className="vs-ver-tagline">{t('settings.topbarMasterOnly')}</div>
           )}
         </div>
+
+        {p.solo && <div className="vs-v-rule" />}
+
+        {p.releaseOverview && (
+          <div className="vs-change-block">
+            <div className="vs-h">{p.releaseOverview.title}</div>
+            <ul className="vs-change-list">
+              {p.releaseOverview.entries.slice(0, RELEASE_OVERVIEW_MAX).map((e, i) => (
+                <li key={i}>
+                  <span className={`vs-pill ${KIND_PILL_CLASS[e.kind] || 'vs-pill-info'}`} style={{ flexShrink: 0 }}>
+                    {t(`settings.${KIND_LABEL_KEY[e.kind] ?? ''}`, { defaultValue: e.kind })}
+                  </span>
+                  <span className="vs-txt">{e.summary}</span>
+                </li>
+              ))}
+              {p.releaseOverview.entries.length > RELEASE_OVERVIEW_MAX && (
+                <li>
+                  <span className="vs-glyph">·</span>
+                  <span className="vs-txt" style={{ color: 'var(--fg-tertiary)' }}>
+                    {t('settings.moreItems', { count: p.releaseOverview.entries.length - RELEASE_OVERVIEW_MAX })}
+                    <button type="button" onClick={p.onOpenAnnouncements} className="vs-lnk" style={{ display: 'inline' }}>
+                      {t('settings.detailContent')}
+                    </button>
+                  </span>
+                </li>
+              )}
+            </ul>
+          </div>
+        )}
       </div>
 
       <div className="vs-chan-foot">
