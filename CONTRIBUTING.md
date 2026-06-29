@@ -257,7 +257,7 @@ grep -rn "<旧版本号，例 0.5.0>" --include="*.md" --include="*.json" \
 ```
 
 输出里属于「历史记录」的保留不动（CHANGELOG 历史段、ADR 引用上次发版
-的事实、release_notes.yaml 历史 entries）；属于「当前展示」的更新到新版本
+的事实、`docs/announcements/` 历史 release post）；属于「当前展示」的更新到新版本
 （README badge / docs 示意图 / 任何描述「当前版本」的句子）。
 
 **审阅 README + docs 全量内容**（不只是版本号 — 内容本身是否还对得上）：
