@@ -1,6 +1,6 @@
 # 0003 — anima_train.py 模块化重构（plugin 边界 + adapter hook protocol）
 
-**状态**：Proposed
+**状态**：Accepted（已落地：`runtime/training/` 子包 + plugin registry + adapter hook）
 **日期**：2026-05-14
 **决策者**：@WalkingMeatAxolotl
 

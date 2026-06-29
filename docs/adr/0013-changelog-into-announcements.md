@@ -1,6 +1,6 @@
 # 0013 — Changelog 迁入公告系统（移除 release_notes.yaml + 旧端点）
 
-**状态**：Proposed
+**状态**：Accepted
 **日期**：2026-06-28
 **决策者**：@WalkingMeatAxolotl
 **相关**：公告栏设计 [`docs/todo/announcement-center.md`](../todo/announcement-center.md)（Phase 2）

@@ -1393,7 +1393,7 @@ class Supervisor:
         Python 端映射成 SIGBREAK（sig=21），由 resume phase 注册的 handler 捕获。
         POSIX：`SIGINT` — 跟 SIGTERM 分流，cancel 走 SIGTERM 不撞。
 
-        Spike 报告 docs/design/queue-pause-spike-report.md 验证过链路通。
+        信号链路经 spike 验证（决策见 ADR 0006）。
         """
         try:
             if os.name == "nt":

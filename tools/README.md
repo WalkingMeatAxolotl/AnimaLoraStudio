@@ -106,7 +106,7 @@ python tools/infonoise_e2e_verify.py --out-dir tmp/my_run --no-plots
 ## Release / schema 维护
 
 ### `bump_version.py`
-`docs/announcements/` 的 `tag: release` post 校验 + 版本号同步 + `CHANGELOG.md` 派生（ADR 0013）。格式见 `docs/announcements/README.md`，写作规范见 `docs/release-notes-spec.md`。**不创建 post**，那是维护者发版时写 markdown 的事。
+`docs/announcements/` 的 `tag: release` post 校验 + 版本号同步 + `CHANGELOG.md` 派生（ADR 0013）。格式见 `docs/announcements/README.md`，写作规范见 `docs/announcements/CONTENT-GUIDE.md`。**不创建 post**，那是维护者发版时写 markdown 的事。
 
 ```
 python tools/bump_version.py validate          # schema 校验整个 yaml

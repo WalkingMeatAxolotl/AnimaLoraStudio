@@ -1,6 +1,6 @@
 # JSON Caption 格式规范
 
-AnimaLoraToolkit 支持结构化的 JSON 标签文件，相比传统 TXT 文件有以下优势：
+AnimaLoraStudio 支持结构化的 JSON 标签文件，相比传统 TXT 文件有以下优势：
 
 - **分类 Shuffle**：appearance/tags/environment 各自内部打乱，保持语义结构
 - **固定字段**：quality/character/series/artist 始终在前，不被打乱
@@ -119,18 +119,14 @@ appearance: ["blue eyes", "school uniform", "long hair"]
 tags: ["looking at viewer", "smile", "standing"]
 ```
 
-## 与 batch_tag.py 配合
+## 如何生成
 
-`batch_tag.py` 可以自动生成符合此格式的 JSON 文件：
-
-```bash
-python batch_tag.py --input ./raw_images --output ./dataset --format json
-```
+在 Studio 的打标页用 **LLM 打标器**、选 JSON 输出预设（如 `general_json` / `style_json`）即可自动生成符合此格式的 JSON 文件。
 
 生成的 JSON 包含：
 - 从目录结构提取的 character/variant
-- VLM 打标的 count/appearance/tags/environment/nl
-- 配置文件中的 fixed 字段
+- LLM 打标的 count/appearance/tags/environment/nl
+- 配置中的 fixed 字段
 
 ## 配置示例
 
@@ -156,7 +152,7 @@ tag_dropout: 0.05        # 可选：5% 标签随机丢弃
 
 ### 从 TXT 迁移到 JSON
 
-1. 使用 `batch_tag.py` 重新打标，指定 `--format json`
+1. 在 Studio 打标页用 LLM 打标器、选 JSON 输出预设重新打标
 2. 或手动转换：
 
 ```python

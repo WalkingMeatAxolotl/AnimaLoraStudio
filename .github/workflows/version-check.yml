@@ -5,7 +5,7 @@ name: version-check
 # tree。这个 workflow 防同类回归。
 #
 # 跑两件事：
-#   1. release_notes.yaml schema 校验（validate）
+#   1. docs/announcements/ release post 校验（validate，ADR 0013）
 #   2. __init__.py / package.json / package-lock.json 四处 version 一致（verify-versions）
 on:
   pull_request:
@@ -24,7 +24,7 @@ jobs:
           python-version: "3.11"
       - name: Install pyyaml
         run: pip install pyyaml
-      - name: Validate release_notes.yaml schema
+      - name: Validate announcements release posts
         run: python tools/bump_version.py validate
       - name: Verify version sync across __init__.py / package.json / lockfile
         run: python tools/bump_version.py verify-versions

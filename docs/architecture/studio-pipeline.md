@@ -69,7 +69,7 @@ studio_data/
 
 ## 3. SQLite Schema
 
-DB 落在 `studio_data/studio.db`。Migrations 在 `studio/migrations/` 顺序应用（`PRAGMA user_version` 控制）。
+DB 落在 `studio_data/studio.db`。Migrations 在 `studio/infrastructure/migrations/` 顺序应用（`PRAGMA user_version` 控制）。
 
 ```sql
 CREATE TABLE projects (

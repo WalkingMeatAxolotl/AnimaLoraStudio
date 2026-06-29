@@ -238,6 +238,21 @@ EDM/Karras 论文里 δ=0.15 是常用经验值。
 
 ---
 
+## 训练算法选项
+
+可选的 loss / 采样 / 优化器 / adapter，在 Advanced 模式按需配置。
+
+- **Loss 函数**：MSE / Huber，可配置权重曲线（`min_snr` / `cosmap` / `detail_inv_t` 等）。
+- **Timestep 采样**：`uniform` / `logit_normal` / `mode` / `mixed_uniform` 等，含可配置 schedule shift。
+- **InfoNoise 自适应采样**（可选）：基于 I-MMSE 的反 CDF 时间步采样器。
+- **自蒸馏 / 表征对齐**（可选，进阶）：LeapAlign 两步跳跃自蒸馏（含 FlowBP 四变体）、SRA v2 中间表征对齐 VAE latent。
+- **优化器**：AdamW / Lion / Automagic / Prodigy / Prodigy+ScheduleFree / SOAP / Schedule-Free SOAP（起步参数 / 切换换算见 [optimizers.md](optimizers.md)）。
+- **Adapter**：LoRA + LyCORIS LoKr（走 [lycoris-lora](https://github.com/KohakuBlueleaf/LyCORIS) 官方库，含 DoRA / rs-LoRA / dropout）。
+- **分层 rank**：`lora_rank_rules` 按层名正则配不同 rank，便于按模块重要性差异化分配参数预算。
+- **Attention backend**：xformers / flash_attn / PyTorch SDPA。
+
+---
+
 ## Schema 简单/高级模式 与 字段位置（0.7.1 改动）
 
 0.7.1 引入了 Train 页和 Presets 页的 **简单/高级** 切换：
