@@ -26,7 +26,8 @@ from ..infrastructure.paths import ANNOUNCEMENTS_DIR
 
 logger = logging.getLogger(__name__)
 
-# tag 白名单。新增 tag 在这里加一行（前端的颜色/文案也要同步）。
+# tag 白名单（运行时权威）。编写指南 + 「加新 tag 要同步哪 5 处」见
+# docs/announcements/README.md。不在白名单的 tag 会被跳过。
 VALID_TAGS = frozenset({"release", "notice", "migration"})
 
 
@@ -80,6 +81,8 @@ def list_posts(directory: Optional[Path] = None) -> list[AnnouncementPost]:
     for zh_path in sorted(base.glob("*.md")):
         if zh_path.name.endswith(".en.md"):
             continue
+        if zh_path.name.lower() == "readme.md":
+            continue  # 目录说明（编写指南），不是 post
         post_id = zh_path.stem
         zh = _read(zh_path)
         if zh is None:

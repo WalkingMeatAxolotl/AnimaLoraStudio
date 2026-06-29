@@ -77,6 +77,14 @@ def test_missing_directory_returns_empty(tmp_path: Path) -> None:
     assert svc.list_posts(tmp_path / "nope") == []
 
 
+def test_ignores_readme(tmp_path: Path) -> None:
+    # 目录说明文件不该被当 post（也不该刷 warning）
+    (tmp_path / "README.md").write_text("# 公告编写指南\n不是 post", encoding="utf-8")
+    _write(tmp_path, "ok.md",
+           frontmatter="date: 2026-06-28\ntag: notice\ntitle: ok", body="b")
+    assert [p.id for p in svc.list_posts(tmp_path)] == ["ok"]
+
+
 def test_endpoint_shape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(tmp_path, "2026-06-28-welcome.md",
            frontmatter="date: 2026-06-28\ntag: notice\ntitle: hi", body="b")
