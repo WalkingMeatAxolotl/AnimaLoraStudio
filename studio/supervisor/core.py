@@ -140,6 +140,11 @@ class Supervisor:
         self._daemon_state_poller: Optional[MonitorStatePoller] = None
         self._daemon_cancel_pending: bool = False
         self._daemon_listener_registered = False
+        # 0.17 item1：generate task 走 daemon 无 run.log → LogTab 空。派活时开该 task
+        # 的 run.log，把 daemon 在其运行期间的日志落盘 + emit task_log_appended（daemon
+        # 串行跑一个，归属清晰）；finalize 时关。log 线程与 supervisor 线程都碰它，
+        # 一律在 _daemon_lock 下访问。
+        self._daemon_log_fp: Optional[Any] = None
 
     # ------------------------------------------------------------------ 控制
     def start(self) -> None:
@@ -950,6 +955,15 @@ class Supervisor:
         with self._daemon_lock:
             self._daemon_active_task_id = task_id
             self._daemon_cancel_pending = False
+            # 0.17 item1：开该 generate task 的 run.log（LogTab 读 /api/logs →
+            # tasks/<id>/run.log）。daemon 串行跑一个，其间的日志都归这个 task。
+            try:
+                lp = task_log_path(task_id)
+                lp.parent.mkdir(parents=True, exist_ok=True)
+                self._daemon_log_fp = open(lp, "ab")
+            except Exception:
+                logger.exception("open daemon task log failed")
+                self._daemon_log_fp = None
 
         # poller：daemon 写 monitor_state.json → SSE monitor_progress (增量协议)
         def _on_state_delta(delta: dict[str, Any]) -> None:
@@ -1036,13 +1050,31 @@ class Supervisor:
             self._emit_daemon_state()
 
     def _on_daemon_log_line(self, entry: dict[str, Any]) -> None:
-        """daemon stderr 增量行 → SSE daemon_log_line（前端日志抽屉用）。"""
+        """daemon stderr 增量行 → SSE daemon_log_line（前端日志抽屉用）。
+
+        0.17 item1：同时落当前 active generate task 的 run.log + emit task_log_appended
+        （LogTab 实时更新）。file 写在锁内避免与 finalize 的 close 竞态；SSE 在锁外发。
+        """
+        line = entry.get("line")
         self._on_event({
             "type": "daemon_log_line",
             "ts": entry.get("ts"),
             "seq": entry.get("seq"),
-            "line": entry.get("line"),
+            "line": line,
         })
+        with self._daemon_lock:
+            tid = self._daemon_active_task_id
+            fp = self._daemon_log_fp
+            if tid is not None and fp is not None and isinstance(line, str):
+                try:
+                    fp.write((line + "\n").encode("utf-8", errors="replace"))
+                    fp.flush()
+                except Exception:
+                    logger.exception("write daemon task log failed")
+            else:
+                tid = None
+        if tid is not None and isinstance(line, str):
+            self._on_event({"type": "task_log_appended", "task_id": tid, "text": line})
 
     def _on_daemon_global_event(self, event: dict[str, Any]) -> None:
         """daemon 进程级事件（loaded / unloaded / stopped）。"""
@@ -1101,9 +1133,16 @@ class Supervisor:
                 self._daemon_cancel_pending = False
             poller = self._daemon_state_poller
             self._daemon_state_poller = None
+            log_fp = self._daemon_log_fp
+            self._daemon_log_fp = None
         if poller is not None:
             try:
                 poller.stop()
+            except Exception:
+                pass
+        if log_fp is not None:  # 0.17 item1：关该 task 的 run.log
+            try:
+                log_fp.close()
             except Exception:
                 pass
 
@@ -1135,6 +1174,13 @@ class Supervisor:
         with self._daemon_lock:
             if self._daemon_active_task_id == task_id:
                 self._daemon_active_task_id = None
+            log_fp = self._daemon_log_fp
+            self._daemon_log_fp = None
+        if log_fp is not None:  # 0.17 item1：兜底关 run.log（一般此路径未开）
+            try:
+                log_fp.close()
+            except Exception:
+                pass
         with db.connection_for(self._db_path) as conn:
             db.update_task(
                 conn, task_id,
