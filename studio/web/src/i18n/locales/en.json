@@ -1417,6 +1417,7 @@
     "imageCount": "{{n}} images",
     "backToCurrent": "Back to current",
     "historyLorasMissing": "{{n}} LoRA(s) from history not found locally; please re-pick",
+    "taskResultUnavailable": "Render for task #{{id}} is no longer available (server restarted or cache cleared)",
     "loraNotFoundHint": "Not found locally; please re-pick",
     "repickLora": "Re-pick",
     "emptyHint": "Fill parameters, then click “Start generate”",

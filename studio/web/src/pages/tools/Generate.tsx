@@ -31,6 +31,7 @@ import { saveSingleSamples, saveXYMatrix } from './generate/saveTestImages'
 import { useGenerateHistory } from './generate/useGenerateHistory'
 import {
   entryImageUrl,
+  entryTaskId,
   type HistoryEntry,
 } from './generate/entryAdapter'
 import PreviewXYGrid from './generate/PreviewXYGrid'
@@ -333,10 +334,16 @@ export default function GeneratePage() {
     setPreviewStep(null)
   }, [currentTask?.id, mode, samples.length])
 
-  // 切 task / 切 mode 时清掉历史回看 override（让主预览跟着走当前 task）
+  // 切 task 时清掉历史回看 override（让主预览跟着走当前 task）。
   useEffect(() => {
     setHistoryOverride(null)
-  }, [currentTask?.id, mode])
+  }, [currentTask?.id])
+  // 切 mode 时只清「属于别的 mode」的 override：手动切 mode 仍清（rail 按 mode 分桶，
+  // override.mode 恒等于旧 mode ≠ 新 mode → 清）；但 ?task= 深链到异 mode 的 task 时
+  // handleHistorySelect 会把 mode 对齐到 entry.mode，此时 override.mode===新 mode → 保留。
+  useEffect(() => {
+    setHistoryOverride((cur) => (cur && cur.mode !== mode ? null : cur))
+  }, [mode])
 
   // task done + 有样本 → 入库历史。lastSnapshotRef 防同 task 多次触发
   // 之前 dedup 还比 mode → 用户切 mode 时同 task 反复入库（"历史克隆"bug）。
@@ -522,6 +529,29 @@ export default function GeneratePage() {
     })
     })()
   }
+
+  // 0.17 P-H 深链回看：队列详情「查看出图结果」→ /tools/generate?task=<id>。Task 不带
+  // mode/params，只有出图历史条目自带 → 等历史加载后按 task_id 命中条目，走现成的
+  // historyOverride 回看路径（handleHistorySelect 会对齐 mode + 回填 sidebar）。
+  const deepLinkTaskId = useMemo(() => {
+    const v = new URLSearchParams(window.location.search).get('task')
+    const n = v ? Number(v) : NaN
+    return Number.isFinite(n) ? n : null
+  }, [])
+  const deepLinkConsumedRef = useRef(false)
+  useEffect(() => {
+    if (deepLinkTaskId == null || deepLinkConsumedRef.current || history.loading) return
+    deepLinkConsumedRef.current = true
+    // 清 query 避免刷新重触发（同 ?lora= 范式）
+    const url = new URL(window.location.href)
+    url.searchParams.delete('task')
+    window.history.replaceState({}, '', url.toString())
+    const entry = history.entries.find((e) => entryTaskId(e) === deepLinkTaskId)
+    if (entry) handleHistorySelect(entry)
+    // 图源（cache 同 session 未淘汰 / disk save 开着）都没了 = 物理上回看不了，兜底提示。
+    else toast(t('generate.taskResultUnavailable', { id: deepLinkTaskId }), 'info')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepLinkTaskId, history.loading, history.entries])
 
   const handleGenerate = async () => {
     const datasetSuffix = datasetPick && datasetPick.tags.length > 0

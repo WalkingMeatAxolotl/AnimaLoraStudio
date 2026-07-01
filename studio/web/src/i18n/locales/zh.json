@@ -1417,6 +1417,7 @@
     "imageCount": "{{n}} 张",
     "backToCurrent": "返回当前",
     "historyLorasMissing": "历史里的 {{n}} 个 LoRA 在本机找不到，请手动重选",
+    "taskResultUnavailable": "任务 #{{id}} 的出图结果已释放（server 重启或被清理），无法回看",
     "loraNotFoundHint": "本机找不到，请重选",
     "repickLora": "重选",
     "emptyHint": "填写参数后点击「开始生成」",
