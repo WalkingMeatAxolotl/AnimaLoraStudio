@@ -66,7 +66,10 @@ describe('AnnouncementCenter', () => {
     fireEvent.click(screen.getByTestId('announcement-item-p-notice'))
     await waitFor(() =>
       expect(screen.queryByTestId('announcement-dot-p-notice')).toBeNull())
-    expect(screen.getByText('公告正文')).toBeInTheDocument()
+    // 正文切换是点击后异步渲染（markdown），跟红点消失不同 tick；CI 慢机上同步
+    // getByText 会 flake（红点已消失但正文未渲染）→ 用 waitFor 等正文到位。
+    await waitFor(() =>
+      expect(screen.getByText('公告正文')).toBeInTheDocument())
   })
 
   it('tag 过滤只显示该类', async () => {
