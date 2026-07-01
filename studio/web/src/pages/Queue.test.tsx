@@ -111,6 +111,25 @@ describe('QueuePage 分区 + 分页', () => {
     )
   })
 
+  it('输入搜索 → 防抖后带 q 请求后端（live + history）', async () => {
+    vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
+    const liveSpy = vi.spyOn(api, 'listQueueLive').mockResolvedValue([])
+    const historySpy = vi.spyOn(api, 'listQueueHistory').mockResolvedValue({
+      items: [], total: 0, page: 1, page_size: 20,
+    })
+
+    renderQueue()
+    await waitFor(() => expect(screen.getByTestId('queue-filter-toggle')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('queue-filter-toggle'))
+    fireEvent.change(screen.getByTestId('queue-search'), { target: { value: 'abc' } })
+
+    await waitFor(
+      () => expect(historySpy).toHaveBeenCalledWith(expect.objectContaining({ q: 'abc' })),
+      { timeout: 2000 },
+    )
+    expect(liveSpy).toHaveBeenCalledWith('abc')
+  })
+
   it('过滤行默认收起，点漏斗才显示搜索框（与项目页一致）', async () => {
     vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
     vi.spyOn(api, 'listQueueLive').mockResolvedValue([
