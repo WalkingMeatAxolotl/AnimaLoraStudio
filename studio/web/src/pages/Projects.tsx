@@ -241,6 +241,7 @@ export default function ProjectsPage() {
       <PageHeader
         title={t('projects.title')}
         subtitle={t('projects.description')}
+        sticky
         actions={
           <>
             {/* btn 词汇与 Queue / Generate 页 header 统一：轻操作 ghost、
