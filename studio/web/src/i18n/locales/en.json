@@ -694,6 +694,8 @@
     "perPage": "{{n}} / page",
     "prevPage": "Prev",
     "nextPage": "Next",
+    "filters": "Filters",
+    "filtersActive": "Filters active",
     "pauseSent": "Pause request sent",
     "resumeSent": "Resume request sent for #{{id}}",
     "holdSet": "Queue held",

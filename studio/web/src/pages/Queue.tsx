@@ -302,6 +302,8 @@ export default function QueuePage() {
   const [historyStatus, setHistoryStatus] = useState<TaskStatus | null>(null)
   const [historyPage, setHistoryPage] = useState(1)
   const [historyPageSize, setHistoryPageSize] = useState(HISTORY_PAGE_SIZES[0])
+  // 过滤行折叠（与项目页一致：默认收起，header 漏斗按钮开关，收起且有筛选时带小圆点）。
+  const [filtersOpen, setFiltersOpen] = useState(false)
   const reloadTimer = useRef<number | null>(null)
   const { toast } = useToast()
   const { confirm } = useDialog()
@@ -561,12 +563,8 @@ export default function QueuePage() {
     />
   )
 
-  const HISTORY_FILTERS: { key: TaskStatus | null; label: string }[] = [
-    { key: null, label: t('queue.filterAll') },
-    { key: 'done', label: t('status.done') },
-    { key: 'failed', label: t('status.failed') },
-    { key: 'canceled', label: t('status.canceled') },
-  ]
+  // 收起过滤行时用来在漏斗按钮上点小圆点。
+  const filtering = search.trim() !== '' || historyStatus !== null
 
   return (
     <StepShell
@@ -575,6 +573,22 @@ export default function QueuePage() {
       subtitle={t('queue.description')}
       actions={
         <>
+          {/* 过滤漏斗：折叠态不占行，开关过滤行；有筛选生效且收起时带小圆点（与项目页一致）。 */}
+          <button
+            className={`btn btn-sm ${filtersOpen ? 'btn-secondary' : 'btn-ghost'}`}
+            onClick={() => setFiltersOpen((o) => !o)}
+            aria-expanded={filtersOpen}
+            aria-label={t('queue.filters')}
+            title={t('queue.filters')}
+            data-testid="queue-filter-toggle"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 4h18l-7 8v6l-4 2v-8L3 4z" />
+            </svg>
+            {!filtersOpen && filtering && (
+              <span className="dot dot-running" aria-label={t('queue.filtersActive')} />
+            )}
+          </button>
           {runningTask?.is_pausable && (
             <button
               onClick={() => requestPause(runningTask)}
@@ -674,16 +688,42 @@ export default function QueuePage() {
           </div>
         )}
 
-        {/* 0.17 P-C 搜索框 —— 跨 live + history 走后端搜 name/config。 */}
-        {(!isEmpty || searchDebounced) && (
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder={t('queue.searchPlaceholder')}
-            className="input"
-            data-testid="queue-search"
-          />
+        {/* 0.17 P-C 过滤行 —— 与项目页 FilterBar 一致：搜索 60% + 状态 select。
+            折叠默认收起（header 漏斗开关）。搜索防抖下沉后端搜 name/config；状态
+            select 是历史段终态子过滤（done/failed/canceled）。 */}
+        {filtersOpen && (
+          <div
+            className="flex items-center gap-3 pb-2.5 border-b border-subtle"
+            data-testid="queue-filterbar"
+          >
+            <input
+              className="input"
+              style={{ width: '60%' }}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={t('queue.searchPlaceholder')}
+              aria-label={t('common.search')}
+              data-testid="queue-search"
+            />
+            <span className="flex-1" />
+            <select
+              className="input"
+              style={{ width: '10%', minWidth: 120 }}
+              value={historyStatus ?? 'all'}
+              onChange={(e) => {
+                const v = e.target.value
+                setHistoryStatus(v === 'all' ? null : (v as TaskStatus))
+                setHistoryPage(1)
+              }}
+              aria-label={t('common.status')}
+              data-testid="history-status-filter"
+            >
+              <option value="all">{t('queue.filterAll')}</option>
+              <option value="done">{t('status.done')}</option>
+              <option value="failed">{t('status.failed')}</option>
+              <option value="canceled">{t('status.canceled')}</option>
+            </select>
+          </div>
         )}
 
         {!loaded ? (
@@ -738,23 +778,9 @@ export default function QueuePage() {
 
             {/* 历史（terminal，后端分页） */}
             <section className="flex flex-col gap-2">
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <h3 className="text-xs font-semibold text-fg-tertiary uppercase tracking-wide">
-                  {t('queue.sectionHistory')} ({history.total})
-                </h3>
-                <div className="flex items-center gap-1.5">
-                  {HISTORY_FILTERS.map((f) => (
-                    <button
-                      key={f.key ?? 'all'}
-                      onClick={() => { setHistoryStatus(f.key); setHistoryPage(1) }}
-                      className={`btn btn-sm ${historyStatus === f.key ? 'btn-secondary' : 'btn-ghost'}`}
-                      data-testid={`history-filter-${f.key ?? 'all'}`}
-                    >
-                      {f.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <h3 className="text-xs font-semibold text-fg-tertiary uppercase tracking-wide">
+                {t('queue.sectionHistory')} ({history.total})
+              </h3>
 
               {history.items.length === 0 ? (
                 <div className="rounded-lg border border-subtle bg-surface py-8 text-center text-sm text-fg-tertiary">

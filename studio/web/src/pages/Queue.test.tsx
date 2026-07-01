@@ -110,4 +110,23 @@ describe('QueuePage 分区 + 分页', () => {
       expect(historySpy).toHaveBeenCalledWith(expect.objectContaining({ page: 2 })),
     )
   })
+
+  it('过滤行默认收起，点漏斗才显示搜索框（与项目页一致）', async () => {
+    vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
+    vi.spyOn(api, 'listQueueLive').mockResolvedValue([
+      makeTask({ id: 10, name: 'run', status: 'running', started_at: 1000 }),
+    ])
+    vi.spyOn(api, 'listQueueHistory').mockResolvedValue({
+      items: [], total: 0, page: 1, page_size: 20,
+    })
+
+    renderQueue()
+
+    await waitFor(() => expect(screen.getByTestId('queue-filter-toggle')).toBeInTheDocument())
+    // 默认收起：搜索框不在
+    expect(screen.queryByTestId('queue-search')).not.toBeInTheDocument()
+    // 点漏斗 → 过滤行展开，搜索框出现
+    fireEvent.click(screen.getByTestId('queue-filter-toggle'))
+    expect(screen.getByTestId('queue-search')).toBeInTheDocument()
+  })
 })

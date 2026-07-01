@@ -694,6 +694,8 @@
     "perPage": "每页 {{n}}",
     "prevPage": "上一页",
     "nextPage": "下一页",
+    "filters": "筛选",
+    "filtersActive": "有筛选生效",
     "pauseSent": "暂停请求已发送",
     "resumeSent": "恢复请求已发送 #{{id}}",
     "holdSet": "队列已挂起",
