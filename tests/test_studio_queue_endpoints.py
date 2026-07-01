@@ -547,6 +547,80 @@ def test_reorder(client: TestClient) -> None:
     assert [i["id"] for i in items] == [b, a]
 
 
+# --- 0.17 P-A/P-C/P-E 队列分区 + 分页 + 搜索 -------------------------------
+
+def _seed(status: str, *, name: str = "t", task_type: str = "train") -> int:
+    with db.connection_for() as conn:
+        tid = db.create_task(conn, name=name, config_name=name)
+        db.update_task(conn, tid, status=status, task_type=task_type)
+    return tid
+
+
+def test_group_live_only_returns_live_statuses(client: TestClient) -> None:
+    _seed("running", name="run")
+    _seed("pending", name="pend")
+    _seed("paused", name="pause")
+    _seed("done", name="hist")
+    items = client.get("/api/queue?group=live").json()["items"]
+    assert {i["status"] for i in items} == {"running", "pending", "paused"}
+
+
+def test_group_history_paginates_with_total(client: TestClient) -> None:
+    ids = [_seed("done", name=f"d{i}") for i in range(5)]
+    body = client.get("/api/queue?group=history&page=1&page_size=2").json()
+    assert body["total"] == 5
+    assert body["page"] == 1
+    assert body["page_size"] == 2
+    assert [i["id"] for i in body["items"]] == [ids[4], ids[3]]  # id DESC
+    page3 = client.get("/api/queue?group=history&page=3&page_size=2").json()
+    assert [i["id"] for i in page3["items"]] == [ids[0]]
+
+
+def test_group_history_page_size_clamped(client: TestClient) -> None:
+    _seed("done")
+    body = client.get("/api/queue?group=history&page_size=9999").json()
+    assert body["page_size"] == 100  # _MAX_PAGE_SIZE
+
+
+def test_group_history_search_q(client: TestClient) -> None:
+    _seed("done", name="alpha_lora")
+    _seed("done", name="beta_run")
+    body = client.get("/api/queue?group=history&q=alpha").json()
+    assert [i["name"] for i in body["items"]] == ["alpha_lora"]
+    assert body["total"] == 1
+
+
+def test_group_history_status_subfilter(client: TestClient) -> None:
+    _seed("done", name="d")
+    _seed("failed", name="f")
+    _seed("canceled", name="c")
+    body = client.get("/api/queue?group=history&status=failed").json()
+    assert [i["name"] for i in body["items"]] == ["f"]
+    assert body["total"] == 1
+
+
+def test_group_history_excludes_generate_and_reg_by_default(client: TestClient) -> None:
+    _seed("done", name="train")
+    _seed("done", name="reg", task_type="reg_ai")
+    _seed("done", name="gen", task_type="generate")
+    body = client.get("/api/queue?group=history").json()
+    assert [i["name"] for i in body["items"]] == ["train"]
+    assert body["total"] == 1  # total 也要反映排除后的数
+
+
+def test_invalid_group_400(client: TestClient) -> None:
+    resp = client.get("/api/queue?group=banana")
+    assert resp.status_code == 400
+
+
+def test_no_group_returns_all_backward_compat(client: TestClient) -> None:
+    """不传 group 保持旧行为（Overview/Generate/Topbar 依赖）。"""
+    _seed("running")
+    _seed("done")
+    items = client.get("/api/queue").json()["items"]
+    assert {i["status"] for i in items} == {"running", "done"}
+
+
 def test_logs_missing_returns_empty(client: TestClient) -> None:
     resp = client.get("/api/logs/9999")
     assert resp.status_code == 200

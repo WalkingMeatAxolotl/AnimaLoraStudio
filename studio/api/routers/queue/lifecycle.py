@@ -67,28 +67,8 @@ def _is_resumable(task: dict[str, Any]) -> bool:
     return True
 
 
-@router.get("/api/queue")
-def list_queue(
-    status: Optional[str] = None,
-    include_generate: bool = False,
-) -> dict[str, Any]:
-    """队列默认隐藏 generate 测试出图任务（commit 15 P0-2）。
-
-    generate task 走 daemon 不占 train slot，且生命周期短（出完图就结束），
-    出现在队列里只会让用户混淆"为什么队列卡住"。需要排查时加
-    `?include_generate=true` 兜底。
-    """
-    if status and status not in db.VALID_STATUSES:
-        raise ValidationError(
-            f"Unsupported status filter: {status}",
-            code="queue.status_filter_invalid", details={"status": status},
-            http_status=400,
-        )
-    with db.connection_for() as conn:
-        items = db.list_tasks(conn, status=status)
-    if not include_generate:
-        items = db.filter_out_task_types(items, ("generate", "reg_ai"))
-    # ADR 0006 PR-4 — is_pausable 信号每行注入（§8.1 / 上面 get_queue_item 注释）
+def _enrich_tasks(items: list[dict[str, Any]]) -> None:
+    """给每行注入 is_pausable（ADR 0006 PR-4 §8.1）+ is_resumable（Addendum 2）。就地改。"""
     try:
         sup = _supervisor()
         for it in items:
@@ -96,10 +76,85 @@ def list_queue(
     except HTTPException:
         for it in items:
             it["is_pausable"] = False
-    # ADR Addendum 2 — is_resumable 信号（paused/failed/canceled + 恢复点文件在盘）
     for it in items:
         it["is_resumable"] = _is_resumable(it)
-    return {"items": items}
+
+
+# 0.17 P-E — history 分页 page_size 上限，防一次拉爆。
+_MAX_PAGE_SIZE = 100
+
+
+@router.get("/api/queue")
+def list_queue(
+    status: Optional[str] = None,
+    include_generate: bool = False,
+    group: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 20,
+    q: Optional[str] = None,
+) -> dict[str, Any]:
+    """队列默认隐藏 generate 测试出图任务（commit 15 P0-2）。
+
+    generate task 走 daemon 不占 train slot，且生命周期短（出完图就结束），
+    出现在队列里只会让用户混淆"为什么队列卡住"。需要排查时加
+    `?include_generate=true` 兜底。
+
+    0.17 P-A/P-C/P-E 队列页改造新增 `group`（分区 + 分页）：
+      - 不传 group：全量返回（兼容 Overview / Generate / Topbar / Monitor 的
+        `listQueue()`）。
+      - `group=live`：进行中 + 等待（running/paused/pending），不分页，`{items}`。
+      - `group=history`：已结束（done/failed/canceled），分页返回
+        `{items, total, page, page_size}`；`status` 作终态子过滤，`q` 搜
+        name/config_name。类型排除下沉 SQL 让 total 与分页一致。
+    """
+    if status and status not in db.VALID_STATUSES:
+        raise ValidationError(
+            f"Unsupported status filter: {status}",
+            code="queue.status_filter_invalid", details={"status": status},
+            http_status=400,
+        )
+    if group is not None and group not in ("live", "history"):
+        raise ValidationError(
+            f"Unsupported queue group: {group}",
+            code="queue.group_invalid", details={"group": group},
+            http_status=400,
+        )
+    exclude = () if include_generate else ("generate", "reg_ai")
+
+    if group is None:
+        # 兼容旧行为：全量（其它页面靠 listQueue() 拿全部再自行过滤）。
+        with db.connection_for() as conn:
+            items = db.list_tasks(conn, status=status)
+        if not include_generate:
+            items = db.filter_out_task_types(items, ("generate", "reg_ai"))
+        _enrich_tasks(items)
+        return {"items": items}
+
+    if group == "live":
+        with db.connection_for() as conn:
+            items = db.list_tasks_page(
+                conn, statuses=db.LIVE_STATUSES, exclude_types=exclude, q=q,
+            )
+        _enrich_tasks(items)
+        return {"items": items}
+
+    # group == "history" —— 分页
+    statuses = (
+        (status,) if status in db.HISTORY_STATUSES else db.HISTORY_STATUSES
+    )
+    page = max(1, page)
+    page_size = min(_MAX_PAGE_SIZE, max(1, page_size))
+    offset = (page - 1) * page_size
+    with db.connection_for() as conn:
+        total = db.count_tasks(
+            conn, statuses=statuses, exclude_types=exclude, q=q,
+        )
+        items = db.list_tasks_page(
+            conn, statuses=statuses, exclude_types=exclude, q=q,
+            limit=page_size, offset=offset,
+        )
+    _enrich_tasks(items)
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
 @router.post("/api/queue")

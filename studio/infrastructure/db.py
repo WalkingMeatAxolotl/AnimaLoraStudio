@@ -36,6 +36,10 @@ CREATE INDEX IF NOT EXISTS idx_tasks_queue
 VALID_STATUSES = {"pending", "running", "done", "failed", "canceled", "paused"}
 # `paused` 不进 terminal —— task 已暂停但可被 resume，不算结束态。
 TERMINAL_STATUSES = {"done", "failed", "canceled"}
+# 队列页分区用的两个有序状态组（0.17 P-A/P-E）：live = 进行中+等待，history = 已结束。
+# 用 tuple 保序，供 SQL `status IN (...)` + 分页。
+LIVE_STATUSES = ("running", "paused", "pending")
+HISTORY_STATUSES = ("done", "failed", "canceled")
 
 
 def connect(path: Optional[Path] = None) -> sqlite3.Connection:
@@ -126,6 +130,80 @@ def list_tasks(
     else:
         sql = "SELECT * FROM tasks ORDER BY priority DESC, created_at ASC"
         params = ()
+    return [dict(r) for r in conn.execute(sql, params)]
+
+
+def _escape_like(s: str) -> str:
+    """转义 LIKE 元字符（\\ % _），配合 `ESCAPE '\\'` 让搜索按字面匹配。"""
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _build_task_filter(
+    *,
+    statuses: tuple[str, ...],
+    exclude_types: tuple[str, ...],
+    q: Optional[str],
+) -> tuple[str, list[Any]]:
+    """构造 WHERE 子句 + 参数（不含 ORDER/LIMIT），供 count_tasks / list_tasks_page 共用。
+
+    - statuses：`status IN (...)`（保序 tuple）
+    - exclude_types：`COALESCE(task_type,'train') NOT IN (...)`——老行 NULL 兜底成
+      'train' 不会被误排除（0.17 P-F 前默认排掉 generate/reg_ai，保证分页 total 准）
+    - q：name / config_name 子串（LIKE + ESCAPE，元字符转义）
+    """
+    clauses: list[str] = []
+    params: list[Any] = []
+    if statuses:
+        clauses.append(f"status IN ({','.join('?' for _ in statuses)})")
+        params.extend(statuses)
+    if exclude_types:
+        clauses.append(
+            f"COALESCE(task_type, 'train') NOT IN ({','.join('?' for _ in exclude_types)})"
+        )
+        params.extend(exclude_types)
+    if q:
+        like = f"%{_escape_like(q)}%"
+        clauses.append("(name LIKE ? ESCAPE '\\' OR config_name LIKE ? ESCAPE '\\')")
+        params.extend([like, like])
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    return where, params
+
+
+def count_tasks(
+    conn: sqlite3.Connection,
+    *,
+    statuses: tuple[str, ...],
+    exclude_types: tuple[str, ...] = (),
+    q: Optional[str] = None,
+) -> int:
+    """匹配 statuses（+ 可选 exclude_types / q）的 task 总数，供分页 total。"""
+    where, params = _build_task_filter(
+        statuses=statuses, exclude_types=exclude_types, q=q
+    )
+    row = conn.execute(f"SELECT COUNT(*) AS n FROM tasks{where}", params).fetchone()
+    return int(row["n"]) if row else 0
+
+
+def list_tasks_page(
+    conn: sqlite3.Connection,
+    *,
+    statuses: tuple[str, ...],
+    exclude_types: tuple[str, ...] = (),
+    q: Optional[str] = None,
+    limit: Optional[int] = None,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """按 statuses（+ 可选 exclude_types / q）取 task，`id DESC`（近的在前）。
+
+    limit=None 不分页（live 组全量）；给 limit 则 `LIMIT ? OFFSET ?`（history 组）。
+    """
+    where, params = _build_task_filter(
+        statuses=statuses, exclude_types=exclude_types, q=q
+    )
+    sql = f"SELECT * FROM tasks{where} ORDER BY id DESC"
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params = [*params, int(limit), int(offset)]
     return [dict(r) for r in conn.execute(sql, params)]
 
 
