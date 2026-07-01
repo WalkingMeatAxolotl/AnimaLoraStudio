@@ -665,46 +665,44 @@ export default function QueuePage() {
           <button onClick={() => void reload()} className="btn btn-ghost btn-sm">{t('common.refresh')}</button>
         </>
       }
+      belowHeader={filtersOpen && (
+        // 0.17 P-C 过滤行 —— 与项目页 FilterBar 一致：header 下全宽条，搜索 60% +
+        // 状态 select。搜索防抖下沉后端搜 name/config；状态 select 是历史段终态子过滤。
+        <div
+          className="px-6 py-2 border-b border-subtle flex items-center gap-3"
+          data-testid="queue-filterbar"
+        >
+          <input
+            className="input"
+            style={{ width: '60%' }}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={t('queue.searchPlaceholder')}
+            aria-label={t('common.search')}
+            data-testid="queue-search"
+          />
+          <span className="flex-1" />
+          <select
+            className="input"
+            style={{ width: '10%', minWidth: 120 }}
+            value={historyStatus ?? 'all'}
+            onChange={(e) => {
+              const v = e.target.value
+              setHistoryStatus(v === 'all' ? null : (v as TaskStatus))
+              setHistoryPage(1)
+            }}
+            aria-label={t('common.status')}
+            data-testid="history-status-filter"
+          >
+            <option value="all">{t('queue.filterAll')}</option>
+            <option value="done">{t('status.done')}</option>
+            <option value="failed">{t('status.failed')}</option>
+            <option value="canceled">{t('status.canceled')}</option>
+          </select>
+        </div>
+      )}
     >
       <div className="flex flex-col gap-2.5 flex-1 min-h-0 overflow-y-auto">
-        {/* 0.17 P-C 过滤行 —— 与项目页 FilterBar 一致：贴 header 的全宽条
-            （-mx-6/-mt-6 抵消 StepShell 内容区 p-6），搜索 60% + 状态 select。折叠默认
-            收起（header 漏斗开关）。搜索防抖下沉后端搜 name/config；状态 select 是历史
-            段终态子过滤（done/failed/canceled）。 */}
-        {filtersOpen && (
-          <div
-            className="-mx-6 -mt-6 mb-1 px-6 py-2 border-b border-subtle flex items-center gap-3"
-            data-testid="queue-filterbar"
-          >
-            <input
-              className="input"
-              style={{ width: '60%' }}
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={t('queue.searchPlaceholder')}
-              aria-label={t('common.search')}
-              data-testid="queue-search"
-            />
-            <span className="flex-1" />
-            <select
-              className="input"
-              style={{ width: '10%', minWidth: 120 }}
-              value={historyStatus ?? 'all'}
-              onChange={(e) => {
-                const v = e.target.value
-                setHistoryStatus(v === 'all' ? null : (v as TaskStatus))
-                setHistoryPage(1)
-              }}
-              aria-label={t('common.status')}
-              data-testid="history-status-filter"
-            >
-              <option value="all">{t('queue.filterAll')}</option>
-              <option value="done">{t('status.done')}</option>
-              <option value="failed">{t('status.failed')}</option>
-              <option value="canceled">{t('status.canceled')}</option>
-            </select>
-          </div>
-        )}
         {/* ADR §4.1 队列挂起 banner — 仅 held=true 时显示，sticky 顶部。 */}
         {holdState?.held && (
           <div
