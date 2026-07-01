@@ -3,18 +3,23 @@ import { useTranslation } from 'react-i18next'
 import { useOutletContext } from 'react-router-dom'
 import {
   api,
+  type DuplicateScanOptions,
+  type DuplicateScanResult,
   type Job,
   type ProjectDetail,
   type UpscalerVariant,
   type Version,
 } from '../../../api/client'
+import { DEFAULT_DUPLICATE_OPTIONS } from '../../../components/DuplicateReviewPanel'
 import { parseFolderMeta } from '../../../lib/folderMeta'
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import ImagePreviewModal from '../../../components/ImagePreviewModal'
 import PreprocessToolsBar from '../../../components/preprocess/PreprocessToolsBar'
+import QualityReviewPanel, { qualityPreviewNames } from '../../../components/preprocess/QualityReviewPanel'
 import StepShell from '../../../components/StepShell'
 import BarHistogram from '../../../components/BarHistogram'
 import { PX_BINS, pxBinFor, computePixelHist, type PxBinId } from '../../../lib/pixelBins'
+import { useDialog } from '../../../components/Dialog'
 import { useToast } from '../../../components/Toast'
 import { useEventStream } from '../../../lib/useEventStream'
 
@@ -28,6 +33,12 @@ interface Status {
   job: Job | null
   log_tail: string
   summary: { image_count: number }
+}
+
+interface QualityLog {
+  ts: number
+  text: string
+  status?: string
 }
 
 interface FilesView {
@@ -73,6 +84,7 @@ export default function PreprocessPage() {
   const { t } = useTranslation()
   const { project, activeVersion, reload } = useOutletContext<Ctx>()
   const { toast } = useToast()
+  const { confirm } = useDialog()
   const vid = activeVersion?.id ?? 0
 
   const [files, setFiles] = useState<FilesView | null>(null)
@@ -90,6 +102,18 @@ export default function PreprocessPage() {
   const [selAnchor, setSelAnchor] = useState<string | null>(null)
   // 大图预览：index 引用 visibleRows[]（filter 当前的可见 ImageRow 列表）
   const [previewIdx, setPreviewIdx] = useState<number | null>(null)
+  const [qualityOptions, setQualityOptions] = useState<DuplicateScanOptions>({
+    ...DEFAULT_DUPLICATE_OPTIONS,
+    detect_blur: true,
+    detect_crops: true,
+  })
+  const [qualityResult, setQualityResult] = useState<DuplicateScanResult | null>(null)
+  const [qualitySelected, setQualitySelected] = useState<Set<string>>(new Set())
+  const [qualityBusy, setQualityBusy] = useState(false)
+  const [qualityLogs, setQualityLogs] = useState<QualityLog[]>([])
+  const [qualityLogVisible, setQualityLogVisible] = useState(false)
+  const [qualityPreviewIdx, setQualityPreviewIdx] = useState<number | null>(null)
+  const lastQualityLogAtRef = useRef(0)
 
   // 模型权重就绪状态（catalog 取一次，下载完成后用户手动刷新或 SSE 更新）
   const [allUpscalers, setAllUpscalers] = useState<UpscalerVariant[]>([])
@@ -159,6 +183,15 @@ export default function PreprocessPage() {
     void refreshUpscaler()
   }, [refreshFiles, refreshStatus, refreshUpscaler])
 
+  useEffect(() => {
+    lastQualityLogAtRef.current = 0
+    setQualityResult(null)
+    setQualitySelected(new Set())
+    setQualityLogs([])
+    setQualityLogVisible(false)
+    setQualityPreviewIdx(null)
+  }, [project.id, vid])
+
   const jobIdRef = useRef<number | null>(null)
   jobIdRef.current = status?.job?.id ?? null
   useEventStream((evt) => {
@@ -177,6 +210,19 @@ export default function PreprocessPage() {
       void refreshFiles()
     } else if (evt.type === 'model_download_changed') {
       void refreshUpscaler()
+    } else if (evt.type === 'duplicate_scan_progress' && evt.project_id === project.id) {
+      const now = Date.now()
+      const status = String(evt.status ?? '')
+      if (status === 'running' && now - lastQualityLogAtRef.current < 1000) return
+      lastQualityLogAtRef.current = now
+      setQualityLogs((prev) => [
+        ...prev.slice(-119),
+        {
+          ts: now,
+          status,
+          text: String(evt.text ?? status),
+        },
+      ])
     }
   }, { onOpen: () => void refreshStatus() })
 
@@ -283,6 +329,16 @@ export default function PreprocessPage() {
     return { count: names.length, names }
   }, [sel])
 
+  const qualityNames = useMemo(
+    () => qualityPreviewNames(qualityResult),
+    [qualityResult],
+  )
+
+  const openQualityPreview = (name: string) => {
+    const index = qualityNames.indexOf(name)
+    setQualityPreviewIdx(index >= 0 ? index : 0)
+  }
+
   // ----- 操作 ---------------------------------------------------------------
   const downloadModel = async () => {
     if (downloadingModel) return
@@ -359,6 +415,65 @@ export default function PreprocessPage() {
     }
   }
 
+  const scanQuality = async () => {
+    if (qualityBusy || isLive) return
+    if (!qualityOptions.detect_blur && !qualityOptions.detect_crops) {
+      toast(t('duplicates.qualityNeedDetector'), 'error')
+      return
+    }
+    setQualityBusy(true)
+    setQualityResult(null)
+    setQualitySelected(new Set())
+    setQualityPreviewIdx(null)
+    setQualityLogVisible(true)
+    setQualityLogs([{ ts: Date.now(), status: 'running', text: t('duplicates.qualityLogStarted') }])
+    try {
+      const next = await api.scanDuplicatesTrain(project.id, vid, qualityOptions)
+      setQualityResult(next)
+      toast(
+        t('duplicates.qualityScanDone', {
+          blur: next.blur_candidate_count,
+          crops: next.crop_relation_count,
+        }),
+        'success',
+      )
+    } catch (e) {
+      toast(String(e), 'error')
+      setQualityLogs((prev) => [...prev, { ts: Date.now(), status: 'error', text: String(e) }])
+    } finally {
+      setQualityBusy(false)
+    }
+  }
+
+  const applyQuality = async () => {
+    if (qualityBusy || qualitySelected.size === 0) return
+    const names = Array.from(qualitySelected)
+    const ok = await confirm(
+      t('duplicates.qualityConfirmApply', { n: names.length }),
+      { tone: 'warn', okText: t('duplicates.applyOk') },
+    )
+    if (!ok) return
+    setQualityBusy(true)
+    try {
+      const res = await api.applyDuplicateActionTrain(project.id, vid, { names })
+      toast(
+        t('duplicates.appliedToast', { n: res.removed.length }) +
+          (res.skipped.length ? t('duplicates.appliedSkipped', { n: res.skipped.length }) : '') +
+          (res.missing.length ? t('duplicates.appliedMissing', { n: res.missing.length }) : ''),
+        'success',
+      )
+      setQualitySelected(new Set())
+      setQualityResult(null)
+      setQualityPreviewIdx(null)
+      void refreshFiles()
+      void reload()
+    } catch (e) {
+      toast(String(e), 'error')
+    } finally {
+      setQualityBusy(false)
+    }
+  }
+
   // 撤销 (restore) 流程已迁移到「总览」tab (PreprocessOverview)，作为
   // 跨工具统一入口，避免每个工具页都有自己的撤销按钮。
 
@@ -385,6 +500,18 @@ export default function PreprocessPage() {
           startedAt: job.started_at,
           finishedAt: job.finished_at,
           onCancel: () => void cancel(),
+        },
+        qualityLogVisible && qualityLogs.length > 0 && {
+          key: 'quality_scan',
+          label: t('logDrawer.dupScan'),
+          status: qualityBusy
+            ? ('running' as const)
+            : qualityLogs[qualityLogs.length - 1]?.status === 'error'
+              ? ('failed' as const)
+              : ('done' as const),
+          lines: qualityLogs.map((l) => l.text),
+          startedAt: qualityLogs[0] ? qualityLogs[0].ts / 1000 : null,
+          finishedAt: qualityBusy ? null : qualityLogs[qualityLogs.length - 1] ? qualityLogs[qualityLogs.length - 1].ts / 1000 : null,
         },
       ]}
     >
@@ -420,6 +547,32 @@ export default function PreprocessPage() {
               onStartSelected={() =>
                 void startPreprocess('selected', selectedTargets.names)
               }
+            />
+            <QualityAuditPanel
+              projectId={project.id}
+              versionId={vid}
+              options={qualityOptions}
+              result={qualityResult}
+              selected={qualitySelected}
+              selectedCount={qualitySelected.size}
+              sourceTotal={project.download_image_count}
+              busy={qualityBusy}
+              scanDisabled={isLive}
+              onOptionsChange={setQualityOptions}
+              onScan={() => void scanQuality()}
+              onApply={() => void applyQuality()}
+              onSelectNames={(names) => {
+                const next = new Set(qualitySelected)
+                names.forEach((name) => next.add(name))
+                setQualitySelected(next)
+              }}
+              onToggle={(name) => {
+                const next = new Set(qualitySelected)
+                if (next.has(name)) next.delete(name)
+                else next.add(name)
+                setQualitySelected(next)
+              }}
+              onPreview={openQualityPreview}
             />
 
             <ImagesPanel
@@ -489,6 +642,26 @@ export default function PreprocessPage() {
           onNext={() => previewIdx < visibleRows.length - 1 && setPreviewIdx(previewIdx + 1)}
         />
       )}
+      {qualityPreviewIdx !== null && qualityNames[qualityPreviewIdx] && (() => {
+        const rel = qualityNames[qualityPreviewIdx]
+        const i = rel.lastIndexOf('/')
+        const folder = i >= 0 ? rel.slice(0, i) : ''
+        const filename = i >= 0 ? rel.slice(i + 1) : rel
+        return (
+          <ImagePreviewModal
+            src={api.versionThumbUrl(project.id, vid, 'train', filename, folder, 1600)}
+            caption={rel}
+            index={qualityPreviewIdx}
+            total={qualityNames.length}
+            hasPrev={qualityPreviewIdx > 0}
+            hasNext={qualityPreviewIdx < qualityNames.length - 1}
+            onClose={() => setQualityPreviewIdx(null)}
+            onPrev={() => qualityPreviewIdx > 0 && setQualityPreviewIdx(qualityPreviewIdx - 1)}
+            onNext={() => qualityPreviewIdx < qualityNames.length - 1 && setQualityPreviewIdx(qualityPreviewIdx + 1)}
+            shortcutHint={t('duplicates.qualityPreviewHint')}
+          />
+        )
+      })()}
     </StepShell>
   )
 }
@@ -718,6 +891,182 @@ function OperationPanel({
         </div>
       )}
     </section>
+  )
+}
+
+interface QualityAuditPanelProps {
+  projectId: number
+  versionId: number
+  options: DuplicateScanOptions
+  result: DuplicateScanResult | null
+  selected: Set<string>
+  selectedCount: number
+  sourceTotal?: number | null
+  busy: boolean
+  scanDisabled?: boolean
+  onOptionsChange: (next: DuplicateScanOptions) => void
+  onScan: () => void
+  onApply: () => void
+  onSelectNames: (names: string[]) => void
+  onToggle: (name: string) => void
+  onPreview: (name: string) => void
+}
+
+function QualityAuditPanel({
+  projectId,
+  versionId,
+  options,
+  result,
+  selected,
+  selectedCount,
+  sourceTotal,
+  busy,
+  scanDisabled = false,
+  onOptionsChange,
+  onScan,
+  onApply,
+  onSelectNames,
+  onToggle,
+  onPreview,
+}: QualityAuditPanelProps) {
+  const { t } = useTranslation()
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const total = result?.total_images ?? sourceTotal ?? 0
+  const qualityCount = (result?.blur_candidate_count ?? 0) + (result?.crop_relation_count ?? 0)
+  const detectorEnabled = options.detect_blur || options.detect_crops
+  const patch = <K extends keyof DuplicateScanOptions>(key: K, value: DuplicateScanOptions[K]) => {
+    onOptionsChange({ ...options, [key]: value })
+  }
+
+  return (
+    <>
+      <section className="flex flex-col gap-1.5 rounded-md border border-subtle bg-surface px-3 py-2.5 shrink-0">
+        <h3 className="caption flex items-center gap-1.5">
+          <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-accent" />
+          {t('duplicates.qualityTitle')}
+        </h3>
+        <div className="flex items-center gap-2 text-sm flex-wrap">
+          <label className="flex items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={options.detect_blur}
+              disabled={busy}
+              onChange={(e) => patch('detect_blur', e.target.checked)}
+            />
+            <span className="text-fg-tertiary">{t('duplicates.detectBlur')}</span>
+          </label>
+          <label className="flex items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={options.detect_crops}
+              disabled={busy}
+              onChange={(e) => patch('detect_crops', e.target.checked)}
+            />
+            <span className="text-fg-tertiary">{t('duplicates.detectCrops')}</span>
+          </label>
+          <span className="text-fg-secondary text-xs">
+            {result
+              ? t('duplicates.qualityPanelSummary', { total, candidates: qualityCount, selected: selectedCount })
+              : t('duplicates.qualityEmpty')}
+          </span>
+          <div className="flex items-center gap-2 ml-auto shrink-0">
+            <button
+              type="button"
+              onClick={onScan}
+              disabled={busy || scanDisabled || !detectorEnabled}
+              className="btn btn-secondary btn-sm"
+              title={!detectorEnabled ? t('duplicates.qualityNeedDetector') : scanDisabled ? t('duplicates.qualityWaitForUpscale') : ''}
+            >
+              {busy ? t('duplicates.scanningQuality') : t('duplicates.scanQualityBtn')}
+            </button>
+            <button
+              type="button"
+              onClick={onApply}
+              disabled={busy || selectedCount === 0}
+              className="btn btn-sm bg-warn-soft text-warn border-warn"
+            >
+              {t('duplicates.applyBtn', { n: selectedCount })}
+            </button>
+          </div>
+        </div>
+        <div className="flex flex-col gap-1.5 rounded-sm bg-sunken/40 border border-subtle px-2.5 py-1.5">
+          <button
+            type="button"
+            onClick={() => setAdvancedOpen((v) => !v)}
+            className="flex items-baseline gap-2 text-left bg-transparent border-0 p-0 cursor-pointer flex-1 min-w-0"
+          >
+            <span className="text-fg-tertiary w-3 inline-block shrink-0">{advancedOpen ? '▾' : '▸'}</span>
+            <span className="text-accent shrink-0">✦</span>
+            <span className="font-medium text-fg-secondary shrink-0">{t('duplicates.qualityParams')}</span>
+            <span className="text-fg-tertiary truncate text-xs">{t('duplicates.qualityParamsDesc')}</span>
+          </button>
+          {advancedOpen && (
+            <div className="flex items-center gap-2 text-sm flex-wrap">
+              <QualityNumberOption label={t('duplicates.blurScore')} value={options.blur_score_threshold} min={0} max={1000} step={5} disabled={busy || !options.detect_blur} onChange={(value) => patch('blur_score_threshold', value)} width={72} />
+              <QualityNumberOption label={t('duplicates.blurLocal')} value={options.blur_local_ratio} min={0} max={0.5} step={0.005} disabled={busy || !options.detect_blur} onChange={(value) => patch('blur_local_ratio', value)} width={72} />
+              <QualityNumberOption label={t('duplicates.cropScore')} value={options.crop_score} min={0.3} max={0.98} step={0.01} disabled={busy || !options.detect_crops} onChange={(value) => patch('crop_score', value)} width={66} />
+              <QualityNumberOption label={t('duplicates.cropHash')} value={options.crop_hash_threshold} min={0} max={64} step={1} disabled={busy || !options.detect_crops} onChange={(value) => patch('crop_hash_threshold', value)} width={58} />
+              <QualityNumberOption label={t('duplicates.cropSide')} value={options.crop_max_side} min={128} max={768} step={32} disabled={busy || !options.detect_crops} onChange={(value) => patch('crop_max_side', value)} width={66} />
+              <QualityNumberOption label={t('duplicates.cropWorkers')} value={options.crop_workers} min={1} max={32} step={1} disabled={busy || !options.detect_crops} onChange={(value) => patch('crop_workers', value)} width={56} />
+              <QualityNumberOption label={t('duplicates.cropSegments')} value={options.crop_prefilter_min_segments} min={1} max={8} step={1} disabled={busy || !options.detect_crops} onChange={(value) => patch('crop_prefilter_min_segments', value)} width={54} />
+              <QualityNumberOption label={t('duplicates.cropCoverage')} value={options.crop_prefilter_min_coverage} min={0} max={1} step={0.01} disabled={busy || !options.detect_crops} onChange={(value) => patch('crop_prefilter_min_coverage', value)} width={66} />
+              <QualityNumberOption label={t('duplicates.cropAspectPrefilter')} value={options.crop_prefilter_aspect_tolerance} min={0} max={1.5} step={0.01} disabled={busy || !options.detect_crops} onChange={(value) => patch('crop_prefilter_aspect_tolerance', value)} width={66} />
+              <QualityNumberOption label={t('duplicates.cropCandidateCap')} value={options.crop_max_candidates_per_image} min={0} max={100} step={1} disabled={busy || !options.detect_crops} onChange={(value) => patch('crop_max_candidates_per_image', value)} width={58} />
+            </div>
+          )}
+        </div>
+      </section>
+      {result && (
+        <QualityReviewPanel
+          projectId={projectId}
+          versionId={versionId}
+          result={result}
+          selected={selected}
+          busy={busy}
+          onSelectNames={onSelectNames}
+          onToggle={onToggle}
+          onPreview={onPreview}
+          className="shrink-0 min-h-[220px] max-h-[360px]"
+        />
+      )}
+    </>
+  )
+}
+
+function QualityNumberOption({
+  label,
+  value,
+  min,
+  max,
+  step,
+  disabled,
+  onChange,
+  width = 68,
+}: {
+  label: string
+  value: number
+  min: number
+  max: number
+  step: number
+  disabled: boolean
+  onChange: (value: number) => void
+  width?: number
+}) {
+  return (
+    <label className="flex items-center gap-1.5">
+      <span className="text-fg-tertiary">{label}</span>
+      <input
+        type="number"
+        className="input input-mono text-sm"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(Number(e.target.value))}
+        style={{ width, padding: '2px 6px' }}
+      />
+    </label>
   )
 }
 
