@@ -47,6 +47,9 @@ export async function saveSingleSamples(
       fd.append('mode', 'single')
       fd.append('image', blob, 'single.png')
       fd.append('params', JSON.stringify(params))
+      // 0.17 item3：带上 task_id，server enrich 进 PNG anima_params，`?task=` 深链
+      // 回看才能按 task_id 命中该磁盘条目（此前漏发 → 落盘图都无 task_id → 回看失败）。
+      fd.append('task_id', String(taskId))
       const r = await fetch('/api/generate/save', { method: 'POST', body: fd })
       if (!r.ok) { paths.push(null); continue }
       const data = await r.json() as SingleSaveResult
@@ -100,6 +103,7 @@ export async function saveXYMatrix(
     fd.append('mode', 'xy')
     fd.append('image', composite, 'xy plot.png')
     fd.append('params', JSON.stringify(xySnapshot))
+    fd.append('task_id', String(taskId))  // 0.17 item3：同 single，供 ?task= 深链回看命中
     const manifest = cellEntries.map(({ xi, yi, params }) => ({ xi, yi, params }))
     fd.append('cells_manifest', JSON.stringify(manifest))
     for (const { xi, yi, blob } of cellEntries) {
