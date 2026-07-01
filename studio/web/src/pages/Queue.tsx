@@ -667,33 +667,13 @@ export default function QueuePage() {
       }
     >
       <div className="flex flex-col gap-2.5 flex-1 min-h-0 overflow-y-auto">
-        {/* ADR §4.1 队列挂起 banner — 仅 held=true 时显示，sticky 顶部。 */}
-        {holdState?.held && (
-          <div
-            className="sticky top-0 z-10 px-3.5 py-2.5 rounded-md bg-warn-soft border border-warn text-warn text-xs flex items-center justify-between"
-            data-testid="queue-hold-banner"
-          >
-            <span>{t('queue.heldBanner')}</span>
-            <button
-              onClick={() => void releaseQueue()}
-              className="btn btn-ghost btn-xs text-warn"
-            >
-              {t('queue.releaseQueue')}
-            </button>
-          </div>
-        )}
-        {error && (
-          <div className="px-3.5 py-2.5 rounded-md bg-err-soft border border-err text-err text-xs font-mono">
-            {error}
-          </div>
-        )}
-
-        {/* 0.17 P-C 过滤行 —— 与项目页 FilterBar 一致：搜索 60% + 状态 select。
-            折叠默认收起（header 漏斗开关）。搜索防抖下沉后端搜 name/config；状态
-            select 是历史段终态子过滤（done/failed/canceled）。 */}
+        {/* 0.17 P-C 过滤行 —— 与项目页 FilterBar 一致：贴 header 的全宽条
+            （-mx-6/-mt-6 抵消 StepShell 内容区 p-6），搜索 60% + 状态 select。折叠默认
+            收起（header 漏斗开关）。搜索防抖下沉后端搜 name/config；状态 select 是历史
+            段终态子过滤（done/failed/canceled）。 */}
         {filtersOpen && (
           <div
-            className="flex items-center gap-3 pb-2.5 border-b border-subtle"
+            className="-mx-6 -mt-6 mb-1 px-6 py-2 border-b border-subtle flex items-center gap-3"
             data-testid="queue-filterbar"
           >
             <input
@@ -723,6 +703,26 @@ export default function QueuePage() {
               <option value="failed">{t('status.failed')}</option>
               <option value="canceled">{t('status.canceled')}</option>
             </select>
+          </div>
+        )}
+        {/* ADR §4.1 队列挂起 banner — 仅 held=true 时显示，sticky 顶部。 */}
+        {holdState?.held && (
+          <div
+            className="sticky top-0 z-10 px-3.5 py-2.5 rounded-md bg-warn-soft border border-warn text-warn text-xs flex items-center justify-between"
+            data-testid="queue-hold-banner"
+          >
+            <span>{t('queue.heldBanner')}</span>
+            <button
+              onClick={() => void releaseQueue()}
+              className="btn btn-ghost btn-xs text-warn"
+            >
+              {t('queue.releaseQueue')}
+            </button>
+          </div>
+        )}
+        {error && (
+          <div className="px-3.5 py-2.5 rounded-md bg-err-soft border border-err text-err text-xs font-mono">
+            {error}
           </div>
         )}
 
