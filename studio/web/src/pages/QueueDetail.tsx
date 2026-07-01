@@ -7,6 +7,7 @@ import {
   type Task,
   type TaskOutputs,
   type TaskStatus,
+  type TaskType,
 } from '../api/client'
 import { PauseProgressModal } from '../components/PauseProgressModal'
 import { useDialog } from '../components/Dialog'
@@ -16,8 +17,18 @@ import { useTaskEvalProgress } from '../lib/useEvalProgress'
 import MonitorDashboard, { EvalMetricsPanel } from '../components/MonitorDashboard'
 import TaskLogDrawer, { type LogSource, type LogSourceStatus } from '../components/TaskLogDrawer'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
+import { taskKind } from './Queue'
 
 type Tab = 'overview' | 'log' | 'monitor' | 'eval' | 'outputs' | 'snapshot'
+
+// 0.17 P-H：QueueDetail 按 task_type 差异化。train 保留全部 tab；reg_ai/generate 是
+// 推理/出图循环，无训练 monitor/eval/snapshot，只留 overview + log，结果靠 header 的
+// 「查看结果」深链跳原生页。
+const VISIBLE_TABS_BY_TYPE: Record<TaskType, readonly Tab[]> = {
+  train: ['overview', 'log', 'monitor', 'eval', 'outputs', 'snapshot'],
+  reg_ai: ['overview', 'log'],
+  generate: ['overview', 'log'],
+}
 
 const STATUS_BADGE: Record<TaskStatus, string> = {
   pending: 'badge badge-neutral',
@@ -120,6 +131,13 @@ export default function QueueDetailPage() {
       setTab((prev) => (prev === v ? prev : (v as Tab)))
     }
   }, [location.hash])
+
+  // P-H：task 加载后若当前 tab 因类型收敛而不可见（如带 #monitor 进 generate 详情），
+  // 回落 overview。放在早退之前，和其它 hash effect 一起（rules-of-hooks）。
+  useEffect(() => {
+    const vt = VISIBLE_TABS_BY_TYPE[task ? taskKind(task) : 'train']
+    if (!vt.includes(tab)) setTab('overview')
+  }, [task, tab])
 
   // reload 串行号：SSE 事件密集时多个 getTask 并发在飞，HTTP 响应可能乱序回来。
   // 只让「最后发起」的那次写 state，避免旧快照覆盖新状态（典型故障：恢复后
@@ -245,7 +263,10 @@ export default function QueueDetailPage() {
     paused: t('status.paused'),
   }
 
-  const tabs: Array<{ key: Tab; label: string }> = [
+  // 按 task_type 过滤可见 tab（task 未加载时先按 train 给全量，加载后收敛）。
+  const kind = task ? taskKind(task) : 'train'
+  const visibleTabs = VISIBLE_TABS_BY_TYPE[kind]
+  const allTabs: Array<{ key: Tab; label: string }> = [
     { key: 'overview', label: t('queueDetail.tabOverview') },
     { key: 'log',      label: t('queueDetail.tabLogs') },
     { key: 'monitor',  label: t('queueDetail.tabMonitor') },
@@ -253,6 +274,7 @@ export default function QueueDetailPage() {
     { key: 'outputs',  label: t('queueDetail.tabOutputs') },
     { key: 'snapshot', label: t('queueDetail.tabSnapshot') },
   ]
+  const tabs = allTabs.filter((tb) => visibleTabs.includes(tb.key))
 
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden">
@@ -284,6 +306,21 @@ export default function QueueDetailPage() {
             </span>
           )}
           <span className="flex-1" />
+          {/* P-H 深链：generate/reg_ai 无训练结果 tab，跳原生页看结果 */}
+          {task && kind === 'generate' && (
+            <button
+              onClick={() => navigate(`/tools/generate?task=${task.id}`)}
+              className="btn btn-secondary btn-sm"
+              data-testid="detail-view-generate"
+            >{t('queueDetail.viewInGenerate')}</button>
+          )}
+          {task && kind === 'reg_ai' && task.project_id && task.version_id && (
+            <button
+              onClick={() => navigate(`/projects/${task.project_id}/v/${task.version_id}/reg`)}
+              className="btn btn-secondary btn-sm"
+              data-testid="detail-view-reg"
+            >{t('queueDetail.viewInReg')}</button>
+          )}
           {isLive && status === 'running' && task?.is_pausable && (
             <button onClick={pauseRunning} disabled={busy || pauseModalOpen} className="btn btn-sm"
               data-testid="detail-pause-btn"

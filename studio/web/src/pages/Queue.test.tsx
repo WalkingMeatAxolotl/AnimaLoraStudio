@@ -55,6 +55,8 @@ class FakeEventSource {
 }
 
 beforeEach(() => {
+  // 队列过滤持久化到 localStorage（0.17 item4）→ 清掉避免测试间泄漏。
+  localStorage.clear()
   FakeEventSource.instances = []
   vi.stubGlobal('EventSource', FakeEventSource)
   // monitor / eval 等次要拉取统一 404 安静失败；queue 数据源单独 spy。
@@ -127,7 +129,42 @@ describe('QueuePage 分区 + 分页', () => {
       () => expect(historySpy).toHaveBeenCalledWith(expect.objectContaining({ q: 'abc' })),
       { timeout: 2000 },
     )
-    expect(liveSpy).toHaveBeenCalledWith('abc')
+    // 默认类型过滤是 train，搜索时随行带上。
+    expect(liveSpy).toHaveBeenCalledWith('abc', 'train')
+  })
+
+  it('选类型过滤 → 带 type 请求后端（live + history）', async () => {
+    vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
+    const liveSpy = vi.spyOn(api, 'listQueueLive').mockResolvedValue([])
+    const historySpy = vi.spyOn(api, 'listQueueHistory').mockResolvedValue({
+      items: [], total: 0, page: 1, page_size: 20,
+    })
+
+    renderQueue()
+    await waitFor(() => expect(screen.getByTestId('queue-filter-toggle')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('queue-filter-toggle'))
+    fireEvent.change(screen.getByTestId('queue-type-filter'), { target: { value: 'generate' } })
+
+    await waitFor(
+      () => expect(historySpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'generate' })),
+    )
+    expect(liveSpy).toHaveBeenCalledWith(undefined, 'generate')
+  })
+
+  it('默认类型过滤为训练；generate 行有「出图结果」跳转按钮', async () => {
+    vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
+    const liveSpy = vi.spyOn(api, 'listQueueLive').mockResolvedValue([
+      makeTask({ id: 88, name: 'gen', status: 'running', started_at: 1000, task_type: 'generate' }),
+    ])
+    vi.spyOn(api, 'listQueueHistory').mockResolvedValue({
+      items: [], total: 0, page: 1, page_size: 20,
+    })
+
+    renderQueue()
+    // 默认按训练过滤（第二个参数）
+    await waitFor(() => expect(liveSpy).toHaveBeenCalledWith(undefined, 'train'))
+    // generate 行渲染跳转按钮（mock 忽略过滤参数，照返 generate 任务）
+    await waitFor(() => expect(screen.getByTestId('jump-btn-88')).toBeInTheDocument())
   })
 
   it('过滤行默认收起，点漏斗才显示搜索框（与项目页一致）', async () => {

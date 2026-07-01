@@ -92,20 +92,19 @@ def list_queue(
     page: int = 1,
     page_size: int = 20,
     q: Optional[str] = None,
+    types: Optional[str] = None,
 ) -> dict[str, Any]:
-    """队列默认隐藏 generate 测试出图任务（commit 15 P0-2）。
+    """队列任务列表。
 
-    generate task 走 daemon 不占 train slot，且生命周期短（出完图就结束），
-    出现在队列里只会让用户混淆"为什么队列卡住"。需要排查时加
-    `?include_generate=true` 兜底。
+    - 不传 group：全量返回，**仍隐藏 generate/reg_ai**（兼容 Overview / Generate /
+      Topbar / Monitor 的 `listQueue()`——它们靠这个默认避免把 generate 当训练任务、
+      或自锁）。
+    - `group=live`：进行中 + 等待（running/paused/pending），不分页，`{items}`。
+    - `group=history`：已结束（done/failed/canceled），分页返回
+      `{items, total, page, page_size}`；`status` 作终态子过滤，`q` 搜 name/config_name。
 
-    0.17 P-A/P-C/P-E 队列页改造新增 `group`（分区 + 分页）：
-      - 不传 group：全量返回（兼容 Overview / Generate / Topbar / Monitor 的
-        `listQueue()`）。
-      - `group=live`：进行中 + 等待（running/paused/pending），不分页，`{items}`。
-      - `group=history`：已结束（done/failed/canceled），分页返回
-        `{items, total, page, page_size}`；`status` 作终态子过滤，`q` 搜
-        name/config_name。类型排除下沉 SQL 让 total 与分页一致。
+    0.17 P-F：**live/history 不再隐藏 generate/reg_ai**（队列页要全类型可见），改由
+    `types`（逗号分隔 train/reg_ai/generate）做正向类型过滤，下沉 SQL 保证分页 total 准。
     """
     if status and status not in db.VALID_STATUSES:
         raise ValidationError(
@@ -119,10 +118,19 @@ def list_queue(
             code="queue.group_invalid", details={"group": group},
             http_status=400,
         )
-    exclude = () if include_generate else ("generate", "reg_ai")
+    type_tuple: tuple[str, ...] = ()
+    if types:
+        type_tuple = tuple(t for t in (s.strip() for s in types.split(",")) if t)
+        bad = [t for t in type_tuple if t not in db.VALID_TASK_TYPES]
+        if bad:
+            raise ValidationError(
+                f"Unsupported task type filter: {','.join(bad)}",
+                code="queue.type_filter_invalid", details={"types": bad},
+                http_status=400,
+            )
 
     if group is None:
-        # 兼容旧行为：全量（其它页面靠 listQueue() 拿全部再自行过滤）。
+        # 兼容旧行为：全量 + 隐藏 generate/reg_ai（无 group 调用方依赖此默认）。
         with db.connection_for() as conn:
             items = db.list_tasks(conn, status=status)
         if not include_generate:
@@ -133,7 +141,7 @@ def list_queue(
     if group == "live":
         with db.connection_for() as conn:
             items = db.list_tasks_page(
-                conn, statuses=db.LIVE_STATUSES, exclude_types=exclude, q=q,
+                conn, statuses=db.LIVE_STATUSES, q=q, types=type_tuple,
             )
         _enrich_tasks(items)
         return {"items": items}
@@ -147,10 +155,10 @@ def list_queue(
     offset = (page - 1) * page_size
     with db.connection_for() as conn:
         total = db.count_tasks(
-            conn, statuses=statuses, exclude_types=exclude, q=q,
+            conn, statuses=statuses, q=q, types=type_tuple,
         )
         items = db.list_tasks_page(
-            conn, statuses=statuses, exclude_types=exclude, q=q,
+            conn, statuses=statuses, q=q, types=type_tuple,
             limit=page_size, offset=offset,
         )
     _enrich_tasks(items)

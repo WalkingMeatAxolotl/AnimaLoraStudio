@@ -115,6 +115,17 @@ export function entryParams(e: HistoryEntry): GenerateParamsSnapshot {
   return e.params  // 两个 source 字段名一致
 }
 
+/** entry 对应的 generate task id（0.17 P-H `?task=` 深链按此命中条目）。
+ *  cache 顶层带 taskId；disk 藏在 server enrich 进 PNG anima_params 的 task_id。 */
+export function entryTaskId(e: HistoryEntry): number | undefined {
+  switch (e.source) {
+    case 'cache':
+      return e.taskId
+    case 'disk':
+      return (e.params as { task_id?: number }).task_id
+  }
+}
+
 /** entry 显示标签（PreviewHistoryRail / badges 文案）。 */
 export function entryDisplayLabel(e: HistoryEntry): string {
   switch (e.source) {

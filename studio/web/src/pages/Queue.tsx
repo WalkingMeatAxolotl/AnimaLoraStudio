@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import {
   api, type QueueHistoryPage, type QueueHoldState, type Task, type TaskStatus,
 } from '../api/client'
@@ -13,6 +13,7 @@ import { useToast } from '../components/Toast'
 import { useEventStream } from '../lib/useEventStream'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
 import { useEvaluatingTasks, type EvalProgress } from '../lib/useEvalProgress'
+import { useLocalStorageState } from '../lib/useLocalStorageState'
 
 async function pickJsonFile(jsonErrorMsg: string): Promise<unknown | null> {
   return new Promise((resolve, reject) => {
@@ -50,6 +51,8 @@ export function taskKind(task: Task): TaskKind {
 
 // 0.17 P-E — 历史分页可选每页条数。
 const HISTORY_PAGE_SIZES = [20, 50, 100]
+// 0.17 P-F — 队列默认只看训练（generate/reg_ai 短任务多、会淹没列表）。
+const DEFAULT_TYPE_FILTER: TaskKind = 'train'
 
 function fmtAgo(ts: number): string {
   const sec = Math.max(0, Date.now() / 1000 - ts)
@@ -100,13 +103,14 @@ function QueueTaskRow({
   onCancelPaused: (task: Task) => void | Promise<void>
 }) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const STATUS_LABEL: Record<TaskStatus, string> = {
     pending:  t('status.queued'), running: t('status.running'),
     done:     t('status.done'),   failed:  t('status.failed'),
     canceled: t('status.canceled'), paused: t('status.paused'),
   }
   const KIND_LABEL: Record<TaskKind, string> = {
-    train: t('nav.train'), reg_ai: t('nav.reg'), generate: t('nav.generate'),
+    train: t('queue.typeTrain'), reg_ai: t('queue.typeReg'), generate: t('queue.typeGenerate'),
   }
   const isRunning = task.status === 'running'
   const isPaused = task.status === 'paused'
@@ -116,14 +120,25 @@ function QueueTaskRow({
   const eta = estimateEta(task)
   const tone = STATUS_TONE[task.status]
 
+  // 0.17 P-H 跳转列：按类型跳原生页看结果/配置。train→训练配置页、reg_ai→正则集、
+  // generate→那次出图（?task= 深链回看）。
+  const jump: { path: string; label: string } | null =
+    kind === 'generate'
+      ? { path: `/tools/generate?task=${task.id}`, label: t('queue.jumpGenerate') }
+      : kind === 'reg_ai' && hasProject
+        ? { path: `/projects/${task.project_id}/v/${task.version_id}/reg`, label: t('queue.jumpReg') }
+        : kind === 'train' && hasProject
+          ? { path: `/projects/${task.project_id}/v/${task.version_id}/train`, label: t('queue.jumpTrain') }
+          : null
+
   return (
     <button
       onClick={() => onOpen(task.id)}
       className={`card card-hover block overflow-hidden text-left p-0 ${isRunning ? 'cursor-pointer border border-accent bg-accent-soft' : 'cursor-default border border-subtle bg-surface'}`}
     >
       <div
-        className="px-[22px] py-4 grid gap-4 items-center"
-        style={{ gridTemplateColumns: '60px 1fr 110px 1fr 160px' }}
+        className="px-[22px] py-4 grid gap-3 items-center"
+        style={{ gridTemplateColumns: '48px minmax(0,1fr) 88px 96px 150px 128px 104px' }}
       >
         <span className={`font-mono text-sm ${isRunning ? 'text-accent font-semibold' : 'text-fg-tertiary font-normal'}`}>
           #{task.id}
@@ -133,20 +148,18 @@ function QueueTaskRow({
           <div className="font-semibold text-fg-primary text-sm overflow-hidden text-ellipsis whitespace-nowrap">
             {task.name}
           </div>
-          <div className="font-mono text-xs text-fg-tertiary mt-0.5 flex items-center gap-1.5">
-            <span>{KIND_LABEL[kind]}</span>
-            <span>{task.config_name}</span>
-            {hasProject && (
-              <Link
-                to={`/projects/${task.project_id}?version=${task.version_id}`}
-                onClick={(e) => e.stopPropagation()}
-                className="text-accent text-xs no-underline hover:underline shrink-0"
-              >
-                {t('queue.project')}
-              </Link>
-            )}
+          <div className="font-mono text-xs text-fg-tertiary mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap">
+            {task.config_name}
           </div>
         </div>
+
+        {/* 0.17 类型列（原在 title 下方，改独立 column） */}
+        <span
+          className="text-xs text-fg-secondary overflow-hidden text-ellipsis whitespace-nowrap"
+          title={KIND_LABEL[kind]}
+        >
+          {KIND_LABEL[kind]}
+        </span>
 
         <span className={`badge badge-${tone} text-xs text-center`}>
           {isRunning && <span className="dot dot-running" />}
@@ -279,6 +292,19 @@ function QueueTaskRow({
             </span>
           )}
         </span>
+
+        {/* 0.17 跳转列：按类型跳原生页（配置页 / 正则集 / 出图结果） */}
+        <div className="text-right">
+          {jump && (
+            <button
+              onClick={(e) => { e.stopPropagation(); navigate(jump.path) }}
+              className="btn btn-ghost btn-sm whitespace-nowrap"
+              data-testid={`jump-btn-${task.id}`}
+            >
+              {jump.label} →
+            </button>
+          )}
+        </div>
       </div>
     </button>
   )
@@ -296,12 +322,19 @@ export default function QueuePage() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [exporting, setExporting] = useState(false)
-  // 搜索（防抖后进后端）+ 历史分页 / 终态子过滤
-  const [search, setSearch] = useState('')
-  const [searchDebounced, setSearchDebounced] = useState('')
-  const [historyStatus, setHistoryStatus] = useState<TaskStatus | null>(null)
+  // 搜索（防抖后进后端）+ 历史分页 / 终态子过滤。0.17 item4：过滤条件持久化到
+  // localStorage，切走队列页再回来不丢（page 不持久，回来回第 1 页）。
+  const [search, setSearch] = useLocalStorageState('studio:queue:search', '')
+  const [searchDebounced, setSearchDebounced] = useState(search)
+  const [historyStatus, setHistoryStatus] =
+    useLocalStorageState<TaskStatus | null>('studio:queue:historyStatus', null)
+  // 0.17 P-F 类型过滤（train/reg_ai/generate），跨 live + history 走后端。默认只看
+  // 训练（generate/reg_ai 短任务多、会淹没列表；用户可切「全部」看全类型）。
+  const [typeFilter, setTypeFilter] =
+    useLocalStorageState<TaskKind | null>('studio:queue:typeFilter', DEFAULT_TYPE_FILTER)
   const [historyPage, setHistoryPage] = useState(1)
-  const [historyPageSize, setHistoryPageSize] = useState(HISTORY_PAGE_SIZES[0])
+  const [historyPageSize, setHistoryPageSize] =
+    useLocalStorageState('studio:queue:pageSize', HISTORY_PAGE_SIZES[0])
   // 过滤行折叠（与项目页一致：默认收起，header 漏斗按钮开关，收起且有筛选时带小圆点）。
   const [filtersOpen, setFiltersOpen] = useState(false)
   const reloadTimer = useRef<number | null>(null)
@@ -325,19 +358,22 @@ export default function QueuePage() {
   }, [])
 
   const reloadLive = useCallback(async () => {
-    try { setLive(await api.listQueueLive(searchDebounced || undefined)); setError(null) }
-    catch (e) { setError(String(e)) }
-  }, [searchDebounced])
+    try {
+      setLive(await api.listQueueLive(searchDebounced || undefined, typeFilter ?? undefined))
+      setError(null)
+    } catch (e) { setError(String(e)) }
+  }, [searchDebounced, typeFilter])
 
   const reloadHistory = useCallback(async () => {
     try {
       const r = await api.listQueueHistory({
         page: historyPage, pageSize: historyPageSize,
         q: searchDebounced || undefined, status: historyStatus ?? undefined,
+        type: typeFilter ?? undefined,
       })
       setHistory(r); setError(null)
     } catch (e) { setError(String(e)) }
-  }, [historyPage, historyPageSize, searchDebounced, historyStatus])
+  }, [historyPage, historyPageSize, searchDebounced, historyStatus, typeFilter])
 
   const reload = useCallback(async () => {
     await Promise.all([reloadLive(), reloadHistory()])
@@ -546,7 +582,8 @@ export default function QueuePage() {
   }
 
   const isEmpty =
-    live.length === 0 && history.total === 0 && !searchDebounced && !historyStatus
+    live.length === 0 && history.total === 0
+    && !searchDebounced && !historyStatus && typeFilter === DEFAULT_TYPE_FILTER
 
   const renderRow = (task: Task) => (
     <QueueTaskRow
@@ -563,8 +600,9 @@ export default function QueuePage() {
     />
   )
 
-  // 收起过滤行时用来在漏斗按钮上点小圆点。
-  const filtering = search.trim() !== '' || historyStatus !== null
+  // 收起过滤行时在漏斗按钮上点小圆点：typeFilter 默认 train 不算「筛选中」。
+  const filtering =
+    search.trim() !== '' || historyStatus !== null || typeFilter !== DEFAULT_TYPE_FILTER
 
   return (
     <StepShell
@@ -666,8 +704,9 @@ export default function QueuePage() {
         </>
       }
       belowHeader={filtersOpen && (
-        // 0.17 P-C 过滤行 —— 与项目页 FilterBar 一致：header 下全宽条，搜索 60% +
-        // 状态 select。搜索防抖下沉后端搜 name/config；状态 select 是历史段终态子过滤。
+        // 0.17 P-C/P-F 过滤行 —— 与项目页 FilterBar 一致：header 下全宽条。搜索 60%
+        // 下沉后端搜 name/config；类型 select 跨 live+history 按 task_type 过滤；状态
+        // select 是历史段终态子过滤。
         <div
           className="px-6 py-2 border-b border-subtle flex items-center gap-3"
           data-testid="queue-filterbar"
@@ -682,6 +721,23 @@ export default function QueuePage() {
             data-testid="queue-search"
           />
           <span className="flex-1" />
+          <select
+            className="input"
+            style={{ width: '10%', minWidth: 120 }}
+            value={typeFilter ?? 'all'}
+            onChange={(e) => {
+              const v = e.target.value
+              setTypeFilter(v === 'all' ? null : (v as TaskKind))
+              setHistoryPage(1)
+            }}
+            aria-label={t('queue.typeFilterLabel')}
+            data-testid="queue-type-filter"
+          >
+            <option value="all">{t('queue.filterAll')}</option>
+            <option value="train">{t('queue.typeTrain')}</option>
+            <option value="reg_ai">{t('queue.typeReg')}</option>
+            <option value="generate">{t('queue.typeGenerate')}</option>
+          </select>
           <select
             className="input"
             style={{ width: '10%', minWidth: 120 }}
@@ -729,17 +785,19 @@ export default function QueuePage() {
             {Array.from({ length: 3 }).map((_, i) => (
               <div
                 key={i}
-                className={`py-[18px] px-[22px] grid gap-4 items-center opacity-40 ${i < 2 ? 'border-b border-subtle' : 'border-b-0'}`}
-                style={{ gridTemplateColumns: '60px 1fr 110px 1fr 160px' }}
+                className={`py-[18px] px-[22px] grid gap-3 items-center opacity-40 ${i < 2 ? 'border-b border-subtle' : 'border-b-0'}`}
+                style={{ gridTemplateColumns: '48px minmax(0,1fr) 88px 96px 150px 128px 104px' }}
               >
                 <div className="h-3.5 rounded bg-overlay" />
                 <div className="flex flex-col gap-1">
                   <div className="h-[13px] rounded bg-overlay w-3/5" />
                   <div className="h-2.5 rounded bg-overlay w-2/5" />
                 </div>
+                <div className="h-2.5 rounded bg-overlay" />
                 <div className="h-5 rounded bg-overlay" />
                 <div className="h-2.5 rounded bg-overlay" />
                 <div className="h-2.5 rounded bg-overlay" />
+                <div className="h-6 rounded bg-overlay" />
               </div>
             ))}
           </div>
@@ -787,48 +845,52 @@ export default function QueuePage() {
               ) : (
                 history.items.map(renderRow)
               )}
-
-              {/* 分页 */}
-              {history.total > historyPageSize && (
-                <div className="flex items-center justify-between flex-wrap gap-2 pt-1">
-                  <div className="flex items-center gap-2 text-xs text-fg-tertiary">
-                    <span>{t('queue.pageIndicator', { page: history.page, pages: totalPages })}</span>
-                    <select
-                      value={historyPageSize}
-                      onChange={(e) => { setHistoryPageSize(Number(e.target.value)); setHistoryPage(1) }}
-                      className="input"
-                      style={{ width: 'auto' }}
-                      data-testid="history-page-size"
-                    >
-                      {HISTORY_PAGE_SIZES.map((n) => (
-                        <option key={n} value={n}>{t('queue.perPage', { n })}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      onClick={() => setHistoryPage((p) => Math.max(1, p - 1))}
-                      disabled={history.page <= 1}
-                      className="btn btn-ghost btn-sm"
-                      data-testid="history-prev"
-                    >
-                      {t('queue.prevPage')}
-                    </button>
-                    <button
-                      onClick={() => setHistoryPage((p) => Math.min(totalPages, p + 1))}
-                      disabled={history.page >= totalPages}
-                      className="btn btn-ghost btn-sm"
-                      data-testid="history-next"
-                    >
-                      {t('queue.nextPage')}
-                    </button>
-                  </div>
-                </div>
-              )}
             </section>
           </div>
         )}
       </div>
+
+      {/* 0.17 item6：分页下沉成 fixed 底栏（-mx-6/-mb-6 抵消内容区 padding 做全宽贴底）。
+          item2：只要历史超过最小每页数就常显（切到 50/100 只剩一页时不消失，能切回
+          20）；样式压缩省空间。 */}
+      {loaded && !isEmpty && history.total > HISTORY_PAGE_SIZES[0] && (
+        <div className="shrink-0 -mx-6 -mb-6 px-6 py-1 border-t border-subtle flex items-center justify-between flex-wrap gap-2 bg-canvas text-[11px]">
+          <div className="flex items-center gap-2 text-fg-tertiary">
+            <span>{t('queue.pageIndicator', { page: history.page, pages: totalPages })}</span>
+            <select
+              value={historyPageSize}
+              onChange={(e) => { setHistoryPageSize(Number(e.target.value)); setHistoryPage(1) }}
+              className="input"
+              style={{ width: 'auto', padding: '1px 6px', fontSize: 11 }}
+              data-testid="history-page-size"
+            >
+              {HISTORY_PAGE_SIZES.map((n) => (
+                <option key={n} value={n}>{t('queue.perPage', { n })}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setHistoryPage((p) => Math.max(1, p - 1))}
+              disabled={history.page <= 1}
+              className="btn btn-ghost"
+              style={{ padding: '2px 10px', fontSize: 11 }}
+              data-testid="history-prev"
+            >
+              {t('queue.prevPage')}
+            </button>
+            <button
+              onClick={() => setHistoryPage((p) => Math.min(totalPages, p + 1))}
+              disabled={history.page >= totalPages}
+              className="btn btn-ghost"
+              style={{ padding: '2px 10px', fontSize: 11 }}
+              data-testid="history-next"
+            >
+              {t('queue.nextPage')}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ADR Addendum 1 §UI：暂停 confirm modal — 告知用户语义后才调 api。 */}
       {pauseConfirmTaskId !== null && (
