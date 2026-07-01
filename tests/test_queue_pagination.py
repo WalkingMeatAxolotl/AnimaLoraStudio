@@ -63,6 +63,19 @@ def test_exclude_types_lowers_count(env: Path) -> None:
         assert [r["name"] for r in rows] == ["t"]
 
 
+def test_types_include_filter(env: Path) -> None:
+    """0.17 P-F 类型过滤（正向包含），与 exclude_types 对称。"""
+    _mk(env, "t", status="done", task_type="train")
+    _mk(env, "r", status="done", task_type="reg_ai")
+    _mk(env, "g", status="done", task_type="generate")
+    with db.connection_for(env) as conn:
+        assert db.count_tasks(conn, statuses=db.HISTORY_STATUSES, types=("generate",)) == 1
+        rows = db.list_tasks_page(
+            conn, statuses=db.HISTORY_STATUSES, types=("reg_ai", "generate"),
+        )
+        assert {r["name"] for r in rows} == {"r", "g"}
+
+
 def test_pagination_slices_and_orders_desc(env: Path) -> None:
     ids = [_mk(env, f"d{i}", status="done") for i in range(5)]  # id 递增
     with db.connection_for(env) as conn:

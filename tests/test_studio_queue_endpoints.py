@@ -599,13 +599,39 @@ def test_group_history_status_subfilter(client: TestClient) -> None:
     assert body["total"] == 1
 
 
-def test_group_history_excludes_generate_and_reg_by_default(client: TestClient) -> None:
+def test_group_history_includes_all_types_by_default(client: TestClient) -> None:
+    """0.17 P-F：live/history 不再隐藏 generate/reg_ai（队列页要全类型可见）。"""
     _seed("done", name="train")
     _seed("done", name="reg", task_type="reg_ai")
     _seed("done", name="gen", task_type="generate")
     body = client.get("/api/queue?group=history").json()
-    assert [i["name"] for i in body["items"]] == ["train"]
-    assert body["total"] == 1  # total 也要反映排除后的数
+    assert {i["name"] for i in body["items"]} == {"train", "reg", "gen"}
+    assert body["total"] == 3
+
+
+def test_group_history_type_filter(client: TestClient) -> None:
+    _seed("done", name="train")
+    _seed("done", name="reg", task_type="reg_ai")
+    _seed("done", name="gen", task_type="generate")
+    body = client.get("/api/queue?group=history&types=generate").json()
+    assert [i["name"] for i in body["items"]] == ["gen"]
+    assert body["total"] == 1
+    # 多类型逗号分隔
+    body2 = client.get("/api/queue?group=history&types=reg_ai,generate").json()
+    assert {i["name"] for i in body2["items"]} == {"reg", "gen"}
+    assert body2["total"] == 2
+
+
+def test_group_live_type_filter(client: TestClient) -> None:
+    _seed("running", name="train")
+    _seed("pending", name="gen", task_type="generate")
+    items = client.get("/api/queue?group=live&types=generate").json()["items"]
+    assert [i["name"] for i in items] == ["gen"]
+
+
+def test_invalid_type_filter_400(client: TestClient) -> None:
+    resp = client.get("/api/queue?group=history&types=banana")
+    assert resp.status_code == 400
 
 
 def test_invalid_group_400(client: TestClient) -> None:
