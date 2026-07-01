@@ -454,7 +454,8 @@ def _rewrite_per_layer_alpha_(network: Optional[nn.Module], sd: dict[str, torch.
 def _apply_reg_dims_(network: nn.Module, lora_reg_dims: dict[str, int]) -> None:
     """分层 rank：对 lora_name 正则全匹配的模块重新分配 rank。
 
-    支持 LoRA/LoCoN（lora_A / lora_B）和 LoKr 非全矩阵分支（lokr_w2_a / lokr_w2_b）。
+    支持 LoRA/LoCoN（lora_A / lora_B 参数式，或 lora_up / lora_down 子模块式 ——
+    lycoris 不同代码路径命名不同）和 LoKr 非全矩阵分支（lokr_w2_a / lokr_w2_b）。
     LoKr 全矩阵分支（lokr_w2，use_w2=True）的 rank 不适用分层覆盖，跳过并 warn。
 
     re-init 策略与 lycoris 原始初始化一致：
@@ -489,6 +490,25 @@ def _apply_reg_dims_(network: nn.Module, lora_reg_dims: dict[str, int]) -> None:
             nn.init.kaiming_uniform_(new_A, a=math.sqrt(5))
             lora_mod.lora_A = nn.Parameter(new_A)
             lora_mod.lora_B = nn.Parameter(torch.zeros(out_f, new_dim, device=dev, dtype=dt))
+            lora_mod.lora_dim = new_dim
+            changed += 1
+
+        # ── LoRA/LoCoN 子模块式（本 lycoris 版本 LoConModule：lora_up/lora_down 是
+        #    nn.Linear）。仅处理 Linear；conv（lora_mid/Conv2d）不适用分层覆盖 ──
+        elif (
+            isinstance(getattr(lora_mod, "lora_down", None), nn.Linear)
+            and isinstance(getattr(lora_mod, "lora_up", None), nn.Linear)
+        ):
+            in_f = lora_mod.lora_down.in_features
+            out_f = lora_mod.lora_up.out_features
+            p = lora_mod.lora_down.weight
+            dev, dt = p.device, p.dtype
+            new_down = nn.Linear(in_f, new_dim, bias=False, device=dev, dtype=dt)
+            nn.init.kaiming_uniform_(new_down.weight, a=math.sqrt(5))
+            new_up = nn.Linear(new_dim, out_f, bias=False, device=dev, dtype=dt)
+            nn.init.zeros_(new_up.weight)
+            lora_mod.lora_down = new_down
+            lora_mod.lora_up = new_up
             lora_mod.lora_dim = new_dim
             changed += 1
 
