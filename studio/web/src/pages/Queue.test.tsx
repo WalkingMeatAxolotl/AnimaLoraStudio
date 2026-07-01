@@ -55,6 +55,8 @@ class FakeEventSource {
 }
 
 beforeEach(() => {
+  // 队列过滤持久化到 localStorage（0.17 item4）→ 清掉避免测试间泄漏。
+  localStorage.clear()
   FakeEventSource.instances = []
   vi.stubGlobal('EventSource', FakeEventSource)
   // monitor / eval 等次要拉取统一 404 安静失败；queue 数据源单独 spy。

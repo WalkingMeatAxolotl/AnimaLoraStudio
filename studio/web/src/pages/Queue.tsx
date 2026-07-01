@@ -13,6 +13,7 @@ import { useToast } from '../components/Toast'
 import { useEventStream } from '../lib/useEventStream'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
 import { useEvaluatingTasks, type EvalProgress } from '../lib/useEvalProgress'
+import { useLocalStorageState } from '../lib/useLocalStorageState'
 
 async function pickJsonFile(jsonErrorMsg: string): Promise<unknown | null> {
   return new Promise((resolve, reject) => {
@@ -137,7 +138,7 @@ function QueueTaskRow({
     >
       <div
         className="px-[22px] py-4 grid gap-3 items-center"
-        style={{ gridTemplateColumns: '52px minmax(0,1.3fr) 92px 92px minmax(0,1fr) 150px 104px' }}
+        style={{ gridTemplateColumns: '48px minmax(0,1fr) 88px 96px 150px 128px 104px' }}
       >
         <span className={`font-mono text-sm ${isRunning ? 'text-accent font-semibold' : 'text-fg-tertiary font-normal'}`}>
           #{task.id}
@@ -321,15 +322,19 @@ export default function QueuePage() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [exporting, setExporting] = useState(false)
-  // 搜索（防抖后进后端）+ 历史分页 / 终态子过滤
-  const [search, setSearch] = useState('')
-  const [searchDebounced, setSearchDebounced] = useState('')
-  const [historyStatus, setHistoryStatus] = useState<TaskStatus | null>(null)
+  // 搜索（防抖后进后端）+ 历史分页 / 终态子过滤。0.17 item4：过滤条件持久化到
+  // localStorage，切走队列页再回来不丢（page 不持久，回来回第 1 页）。
+  const [search, setSearch] = useLocalStorageState('studio:queue:search', '')
+  const [searchDebounced, setSearchDebounced] = useState(search)
+  const [historyStatus, setHistoryStatus] =
+    useLocalStorageState<TaskStatus | null>('studio:queue:historyStatus', null)
   // 0.17 P-F 类型过滤（train/reg_ai/generate），跨 live + history 走后端。默认只看
   // 训练（generate/reg_ai 短任务多、会淹没列表；用户可切「全部」看全类型）。
-  const [typeFilter, setTypeFilter] = useState<TaskKind | null>(DEFAULT_TYPE_FILTER)
+  const [typeFilter, setTypeFilter] =
+    useLocalStorageState<TaskKind | null>('studio:queue:typeFilter', DEFAULT_TYPE_FILTER)
   const [historyPage, setHistoryPage] = useState(1)
-  const [historyPageSize, setHistoryPageSize] = useState(HISTORY_PAGE_SIZES[0])
+  const [historyPageSize, setHistoryPageSize] =
+    useLocalStorageState('studio:queue:pageSize', HISTORY_PAGE_SIZES[0])
   // 过滤行折叠（与项目页一致：默认收起，header 漏斗按钮开关，收起且有筛选时带小圆点）。
   const [filtersOpen, setFiltersOpen] = useState(false)
   const reloadTimer = useRef<number | null>(null)
@@ -781,7 +786,7 @@ export default function QueuePage() {
               <div
                 key={i}
                 className={`py-[18px] px-[22px] grid gap-3 items-center opacity-40 ${i < 2 ? 'border-b border-subtle' : 'border-b-0'}`}
-                style={{ gridTemplateColumns: '52px minmax(0,1.3fr) 92px 92px minmax(0,1fr) 150px 104px' }}
+                style={{ gridTemplateColumns: '48px minmax(0,1fr) 88px 96px 150px 128px 104px' }}
               >
                 <div className="h-3.5 rounded bg-overlay" />
                 <div className="flex flex-col gap-1">
@@ -846,16 +851,17 @@ export default function QueuePage() {
       </div>
 
       {/* 0.17 item6：分页下沉成 fixed 底栏（-mx-6/-mb-6 抵消内容区 padding 做全宽贴底）。
-          仅历史超过一页时显示。 */}
-      {loaded && !isEmpty && history.total > historyPageSize && (
-        <div className="shrink-0 -mx-6 -mb-6 mt-2 px-6 py-2.5 border-t border-subtle flex items-center justify-between flex-wrap gap-2 bg-canvas">
-          <div className="flex items-center gap-2 text-xs text-fg-tertiary">
+          item2：只要历史超过最小每页数就常显（切到 50/100 只剩一页时不消失，能切回
+          20）；样式压缩省空间。 */}
+      {loaded && !isEmpty && history.total > HISTORY_PAGE_SIZES[0] && (
+        <div className="shrink-0 -mx-6 -mb-6 px-6 py-1 border-t border-subtle flex items-center justify-between flex-wrap gap-2 bg-canvas text-[11px]">
+          <div className="flex items-center gap-2 text-fg-tertiary">
             <span>{t('queue.pageIndicator', { page: history.page, pages: totalPages })}</span>
             <select
               value={historyPageSize}
               onChange={(e) => { setHistoryPageSize(Number(e.target.value)); setHistoryPage(1) }}
               className="input"
-              style={{ width: 'auto' }}
+              style={{ width: 'auto', padding: '1px 6px', fontSize: 11 }}
               data-testid="history-page-size"
             >
               {HISTORY_PAGE_SIZES.map((n) => (
@@ -863,11 +869,12 @@ export default function QueuePage() {
               ))}
             </select>
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1">
             <button
               onClick={() => setHistoryPage((p) => Math.max(1, p - 1))}
               disabled={history.page <= 1}
-              className="btn btn-ghost btn-sm"
+              className="btn btn-ghost"
+              style={{ padding: '2px 10px', fontSize: 11 }}
               data-testid="history-prev"
             >
               {t('queue.prevPage')}
@@ -875,7 +882,8 @@ export default function QueuePage() {
             <button
               onClick={() => setHistoryPage((p) => Math.min(totalPages, p + 1))}
               disabled={history.page >= totalPages}
-              className="btn btn-ghost btn-sm"
+              className="btn btn-ghost"
+              style={{ padding: '2px 10px', fontSize: 11 }}
               data-testid="history-next"
             >
               {t('queue.nextPage')}
