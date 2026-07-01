@@ -1476,6 +1476,9 @@ export interface XformersInstallResult {
 
 export type TaskStatus = 'pending' | 'running' | 'done' | 'failed' | 'canceled' | 'paused'
 
+/** tasks.task_type 的合法值（_v5 migration）。0.17 P-F 类型过滤用。 */
+export type TaskType = 'train' | 'reg_ai' | 'generate'
+
 /** Terminal task statuses — UI 一般禁用这些上的操作按钮（cancel / pause 等）。
  *  `paused` **不**进 terminal — 它可被 resume 复活。 */
 export const TERMINAL_TASK_STATUSES: ReadonlyArray<TaskStatus> = [
@@ -1489,7 +1492,7 @@ export interface Task {
   /** 0.17 P-D — 后端权威任务类型（_v5 migration 加，值 train/reg_ai/generate）。
    *  老行经 `NOT NULL DEFAULT 'train'` 的 ALTER 自动 backfill；此处可选仅为兼容
    *  未带该字段的测试 mock，运行时恒有值。 */
-  task_type?: 'train' | 'reg_ai' | 'generate'
+  task_type?: TaskType
   status: TaskStatus
   priority: number
   created_at: number
@@ -2641,15 +2644,18 @@ export const api = {
   },
   // 0.17 P-A/P-C —— 队列页分区数据源。live = 进行中 + 等待（running/paused/pending），
   // 不分页；q 搜 name/config_name。
-  listQueueLive: (q?: string) => {
+  // 不分页；q 搜 name/config_name；type 按 task_type 过滤（0.17 P-F）。
+  listQueueLive: (q?: string, type?: TaskType) => {
     const params = new URLSearchParams({ group: 'live' })
     if (q) params.set('q', q)
+    if (type) params.set('types', type)
     return req<{ items: Task[] }>(`/api/queue?${params}`).then((r) => r.items)
   },
   // 0.17 P-E —— history = 已结束（done/failed/canceled），后端分页。status 传终态
-  // 做子过滤，q 搜 name/config_name。返回 { items, total, page, page_size }。
+  // 做子过滤，q 搜 name/config_name，type 按 task_type 过滤（P-F）。返回
+  // { items, total, page, page_size }。
   listQueueHistory: (opts: {
-    page: number; pageSize: number; q?: string; status?: TaskStatus
+    page: number; pageSize: number; q?: string; status?: TaskStatus; type?: TaskType
   }) => {
     const params = new URLSearchParams({
       group: 'history',
@@ -2658,6 +2664,7 @@ export const api = {
     })
     if (opts.q) params.set('q', opts.q)
     if (opts.status) params.set('status', opts.status)
+    if (opts.type) params.set('types', opts.type)
     return req<QueueHistoryPage>(`/api/queue?${params}`)
   },
   getTask: (id: number) => req<Task>(`/api/queue/${id}`),

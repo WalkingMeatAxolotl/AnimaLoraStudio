@@ -219,3 +219,32 @@ describe('QueueDetailPage 暂停按钮 SSE 刷新', () => {
     expect(getTaskCalls()).toBe(before)
   })
 })
+
+// ── P-H 类型差异化 tab ───────────────────────────────────────────────────────
+describe('QueueDetailPage 类型差异化 tab（P-H）', () => {
+  it('generate 任务只留 overview+log，隐藏 monitor/eval/snapshot，带查看出图结果深链', async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url === QUEUE_ITEM_URL) {
+        return Promise.resolve(queueItemResponse(makeTask({
+          id: 119, task_type: 'generate', status: 'done', finished_at: 1200,
+        })))
+      }
+      return Promise.resolve({
+        ok: false, status: 404, json: async () => null, text: async () => '',
+        headers: new Headers(),
+      } as Response)
+    })
+
+    renderDetailPage()
+
+    // task 加载后深链按钮出现（证明是 generate 且已 hydrate）
+    await waitFor(() => expect(screen.getByTestId('detail-view-generate')).toBeInTheDocument())
+    // 训练专用 tab 隐藏
+    expect(screen.queryByText('监控')).not.toBeInTheDocument()
+    expect(screen.queryByText('指标')).not.toBeInTheDocument()
+    expect(screen.queryByText('关联配置')).not.toBeInTheDocument()
+    expect(screen.queryByText('输出')).not.toBeInTheDocument()
+    // overview tab 仍在
+    expect(screen.getByText('详情')).toBeInTheDocument()
+  })
+})

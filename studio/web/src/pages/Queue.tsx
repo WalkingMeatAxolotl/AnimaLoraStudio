@@ -106,7 +106,7 @@ function QueueTaskRow({
     canceled: t('status.canceled'), paused: t('status.paused'),
   }
   const KIND_LABEL: Record<TaskKind, string> = {
-    train: t('nav.train'), reg_ai: t('nav.reg'), generate: t('nav.generate'),
+    train: t('queue.typeTrain'), reg_ai: t('queue.typeReg'), generate: t('queue.typeGenerate'),
   }
   const isRunning = task.status === 'running'
   const isPaused = task.status === 'paused'
@@ -300,6 +300,8 @@ export default function QueuePage() {
   const [search, setSearch] = useState('')
   const [searchDebounced, setSearchDebounced] = useState('')
   const [historyStatus, setHistoryStatus] = useState<TaskStatus | null>(null)
+  // 0.17 P-F 类型过滤（train/reg_ai/generate），跨 live + history 走后端。
+  const [typeFilter, setTypeFilter] = useState<TaskKind | null>(null)
   const [historyPage, setHistoryPage] = useState(1)
   const [historyPageSize, setHistoryPageSize] = useState(HISTORY_PAGE_SIZES[0])
   // 过滤行折叠（与项目页一致：默认收起，header 漏斗按钮开关，收起且有筛选时带小圆点）。
@@ -325,19 +327,22 @@ export default function QueuePage() {
   }, [])
 
   const reloadLive = useCallback(async () => {
-    try { setLive(await api.listQueueLive(searchDebounced || undefined)); setError(null) }
-    catch (e) { setError(String(e)) }
-  }, [searchDebounced])
+    try {
+      setLive(await api.listQueueLive(searchDebounced || undefined, typeFilter ?? undefined))
+      setError(null)
+    } catch (e) { setError(String(e)) }
+  }, [searchDebounced, typeFilter])
 
   const reloadHistory = useCallback(async () => {
     try {
       const r = await api.listQueueHistory({
         page: historyPage, pageSize: historyPageSize,
         q: searchDebounced || undefined, status: historyStatus ?? undefined,
+        type: typeFilter ?? undefined,
       })
       setHistory(r); setError(null)
     } catch (e) { setError(String(e)) }
-  }, [historyPage, historyPageSize, searchDebounced, historyStatus])
+  }, [historyPage, historyPageSize, searchDebounced, historyStatus, typeFilter])
 
   const reload = useCallback(async () => {
     await Promise.all([reloadLive(), reloadHistory()])
@@ -546,7 +551,8 @@ export default function QueuePage() {
   }
 
   const isEmpty =
-    live.length === 0 && history.total === 0 && !searchDebounced && !historyStatus
+    live.length === 0 && history.total === 0
+    && !searchDebounced && !historyStatus && !typeFilter
 
   const renderRow = (task: Task) => (
     <QueueTaskRow
@@ -564,7 +570,7 @@ export default function QueuePage() {
   )
 
   // 收起过滤行时用来在漏斗按钮上点小圆点。
-  const filtering = search.trim() !== '' || historyStatus !== null
+  const filtering = search.trim() !== '' || historyStatus !== null || typeFilter !== null
 
   return (
     <StepShell
@@ -666,8 +672,9 @@ export default function QueuePage() {
         </>
       }
       belowHeader={filtersOpen && (
-        // 0.17 P-C 过滤行 —— 与项目页 FilterBar 一致：header 下全宽条，搜索 60% +
-        // 状态 select。搜索防抖下沉后端搜 name/config；状态 select 是历史段终态子过滤。
+        // 0.17 P-C/P-F 过滤行 —— 与项目页 FilterBar 一致：header 下全宽条。搜索 60%
+        // 下沉后端搜 name/config；类型 select 跨 live+history 按 task_type 过滤；状态
+        // select 是历史段终态子过滤。
         <div
           className="px-6 py-2 border-b border-subtle flex items-center gap-3"
           data-testid="queue-filterbar"
@@ -682,6 +689,23 @@ export default function QueuePage() {
             data-testid="queue-search"
           />
           <span className="flex-1" />
+          <select
+            className="input"
+            style={{ width: '10%', minWidth: 120 }}
+            value={typeFilter ?? 'all'}
+            onChange={(e) => {
+              const v = e.target.value
+              setTypeFilter(v === 'all' ? null : (v as TaskKind))
+              setHistoryPage(1)
+            }}
+            aria-label={t('queue.typeFilterLabel')}
+            data-testid="queue-type-filter"
+          >
+            <option value="all">{t('queue.filterAll')}</option>
+            <option value="train">{t('queue.typeTrain')}</option>
+            <option value="reg_ai">{t('queue.typeReg')}</option>
+            <option value="generate">{t('queue.typeGenerate')}</option>
+          </select>
           <select
             className="input"
             style={{ width: '10%', minWidth: 120 }}
