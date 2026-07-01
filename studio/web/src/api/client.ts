@@ -1486,6 +1486,10 @@ export interface Task {
   id: number
   name: string
   config_name: string
+  /** 0.17 P-D — 后端权威任务类型（_v5 migration 加，值 train/reg_ai/generate）。
+   *  老行经 `NOT NULL DEFAULT 'train'` 的 ALTER 自动 backfill；此处可选仅为兼容
+   *  未带该字段的测试 mock，运行时恒有值。 */
+  task_type?: 'train' | 'reg_ai' | 'generate'
   status: TaskStatus
   priority: number
   created_at: number

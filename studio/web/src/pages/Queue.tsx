@@ -26,7 +26,10 @@ async function pickJsonFile(jsonErrorMsg: string): Promise<unknown | null> {
   })
 }
 
-type TaskKind = 'train' | 'tag' | 'reg' | 'download' | 'curate' | 'unknown'
+// tasks 表真实 task_type 只有这三值（train/reg_ai/generate）。0.17 P-D 前这里
+// 靠 config_name 子串猜、且掺入 tag/download/curate 等 project_jobs 的 kind（对
+// 队列列表是死分支），现收敛为后端权威字段。
+type TaskKind = 'train' | 'reg_ai' | 'generate'
 
 const STATUS_TONE: Record<TaskStatus, string> = {
   pending:   'neutral',
@@ -37,14 +40,10 @@ const STATUS_TONE: Record<TaskStatus, string> = {
   paused:    'warn',
 }
 
-function inferKind(task: Task): TaskKind {
-  const n = task.config_name.toLowerCase()
-  if (n.includes('train') || n.includes('lora')) return 'train'
-  if (n.includes('tag') || n.includes('caption') || n.includes('wd14')) return 'tag'
-  if (n.includes('reg') || n.includes('regular')) return 'reg'
-  if (n.includes('download') || n.includes('booru')) return 'download'
-  if (n.includes('curate') || n.includes('filter')) return 'curate'
-  return 'unknown'
+/** 读后端权威 task_type；老行 backfill 为 'train'，`?? 'train'` 仅作类型兜底。
+ *  导出供 Queue.test.tsx 直接测（不再受 config_name 影响是本函数的契约）。 */
+export function taskKind(task: Task): TaskKind {
+  return task.task_type ?? 'train'
 }
 
 function fmtAgo(ts: number): string {
@@ -112,8 +111,7 @@ export default function QueuePage() {
   }, [])
 
   const KIND_LABEL: Record<TaskKind, string> = {
-    train: t('nav.train'), tag: t('nav.tag'), reg: t('nav.reg'),
-    download: t('nav.download'), curate: t('nav.curate'), unknown: t('monitor.taskLabel'),
+    train: t('nav.train'), reg_ai: t('nav.reg'), generate: t('nav.generate'),
   }
   const reload = useCallback(async () => {
     try { setTasks(await api.listQueue()); setError(null) }
@@ -460,7 +458,7 @@ export default function QueuePage() {
               const isTerminal = ['done', 'failed', 'canceled'].includes(task.status)
               const hasProject = !!(task.project_id && task.version_id)
               const isWaitingForRelease = task.status === 'pending' && holdState?.held === true
-              const kind = inferKind(task)
+              const kind = taskKind(task)
               const eta = estimateEta(task)
               const tone = STATUS_TONE[task.status]
 
