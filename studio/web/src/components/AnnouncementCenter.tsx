@@ -61,20 +61,27 @@ export function AnnouncementCenter() {
     [posts],
   )
 
-  // 打开 / 切换过滤后，默认选中第一篇并标记已读。
+  // 打开 / 切换过滤后，默认选中第一篇。必须用函数式更新读「当前」选中值：
+  // 旧实现直接读闭包里的 selectedId，慢机上用户点击（setSelectedId）可能发生在
+  // 本 effect 的 passive flush 之前，effect 随后带着 stale 的 selectedId=null 跑，
+  // 把用户刚点的选中覆盖回第一篇——红点已消（markRead 生效）但正文永远不切换
+  // （#349 / #354 两次 CI flake 的真因，测试侧加 waitFor 等不来）。
   useEffect(() => {
     if (!open) return
     if (filtered.length === 0) { setSelectedId(null); return }
-    if (selectedId === null || !filtered.some((p) => p.id === selectedId)) {
-      setSelectedId(filtered[0].id)
-      markRead(filtered[0].id)
-    }
-  }, [open, filtered, selectedId, markRead])
+    setSelectedId((cur) =>
+      cur !== null && filtered.some((p) => p.id === cur) ? cur : filtered[0].id)
+  }, [open, filtered])
+
+  // 选中即已读——默认选中和点击选中共用这一条路径。
+  useEffect(() => {
+    if (selectedId !== null) markRead(selectedId)
+  }, [selectedId, markRead])
 
   if (!open) return null
 
   const selected = posts.find((p) => p.id === selectedId) ?? null
-  const select = (p: AnnouncementPost) => { setSelectedId(p.id); markRead(p.id) }
+  const select = (p: AnnouncementPost) => setSelectedId(p.id)
   const tagLabel = (tg: 'all' | AnnouncementPost['tag']) => t(`announcements.tags.${tg}`)
 
   return (
