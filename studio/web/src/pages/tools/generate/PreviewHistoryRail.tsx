@@ -16,9 +16,10 @@ import { useTranslation } from 'react-i18next'
 import type { Task } from '../../../api/client'
 import { entryBadge, entryDisplayLabel, entryThumbUrl, type HistoryEntry } from './entryAdapter'
 
-// item 56px 方形 + 4px 间距 = 60px stride
-const ITEM_SIZE = 56
-const ITEM_STRIDE = 60
+// item 84px 方形 + 6px 间距 = 90px stride（0.17：从 56 放大 1.5× —— 原来太小、✕ 易误触、
+// 内部小字看不清）
+const ITEM_SIZE = 84
+const ITEM_STRIDE = 90
 const OVERSCAN = 4
 const VIEWPORT_FALLBACK = 2000
 
@@ -77,7 +78,7 @@ export default function PreviewHistoryRail({
   return (
     <div
       className="card flex flex-col gap-1 self-stretch"
-      style={{ width: 80, padding: 8 }}
+      style={{ width: 100, padding: 8 }}
     >
       {onRefresh && (
         <button
@@ -144,7 +145,7 @@ function HistoryItem({ entry, onSelect }: { entry: HistoryEntry; onSelect: () =>
         loading="lazy"
       />
       {badge && (
-        <span className="absolute bottom-0 right-0 bg-canvas/80 text-fg-primary text-[9px] px-1 rounded-tl">
+        <span className="absolute bottom-0 right-0 bg-canvas/80 text-fg-primary text-[10px] px-1 rounded-tl">
           {badge}
         </span>
       )}
@@ -164,16 +165,17 @@ function LiveItem({ task, onSelect, onCancel }: { task: Task; onSelect: () => vo
       title={`#${task.id} · ${running ? t('status.running') : t('status.queued')}`}
     >
       {running
-        ? <span className="dot dot-running" />
-        : <span className="text-fg-tertiary text-[9px] text-center leading-tight px-0.5">{t('status.queued')}</span>}
+        ? <span className="dot dot-running" style={{ transform: 'scale(1.4)' }} />
+        : <span className="text-fg-secondary text-xs text-center leading-tight px-1">{t('status.queued')}</span>}
+      {/* ✕ 放大 + 内缩 + 圆底，做成明确目标，避免和点选卡片本体误触。 */}
       <button
         onClick={(e) => { e.stopPropagation(); onCancel() }}
-        className="absolute top-0 right-0 text-err bg-canvas/80 leading-none px-0.5 cursor-pointer border-0"
+        className="absolute top-1 right-1 text-err bg-canvas/90 hover:bg-canvas rounded text-sm leading-none px-1.5 py-0.5 cursor-pointer border-0 font-bold"
         title={t('common.cancel')}
         aria-label={t('common.cancel')}
         data-testid={`timeline-cancel-${task.id}`}
       >✕</button>
-      <span className="absolute bottom-0 left-0 bg-canvas/80 text-fg-tertiary text-[9px] px-0.5 rounded-tr">
+      <span className="absolute bottom-0 left-0 bg-canvas/80 text-fg-tertiary text-[11px] px-1 rounded-tr">
         #{task.id}
       </span>
     </div>

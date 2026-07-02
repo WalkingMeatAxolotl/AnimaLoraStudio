@@ -725,27 +725,27 @@ export default function GeneratePage() {
         subtitle={t('generate.subtitle')}
         actions={
           <div className="flex items-center gap-2">
-            {/* 0.17 P-I：取消（当前正在跑/排队的显示 task）+ 清空队列（所有 pending），
-                放在「清理显存」（DaemonControls）左边。 */}
-            {cancelable && (
-              <button
-                className="btn btn-ghost text-warn border-warn"
-                onClick={handleCancel}
-                title={t('generate.cancelCurrentTitle')}
-              >
-                {t('common.cancel')}
-              </button>
-            )}
-            {pendingGenerateIds.length > 0 && (
-              <button
-                className="btn btn-ghost"
-                onClick={() => void clearQueue()}
-                title={t('generate.clearQueueTitle')}
-                data-testid="generate-clear-queue"
-              >
-                {t('generate.clearQueue', { n: pendingGenerateIds.length })}
-              </button>
-            )}
+            {/* 0.17 P-I：取消（当前显示 task）+ 清空队列（所有 pending）始终在位，不可用时
+                disabled，放「清理显存」（DaemonControls）左边。 */}
+            <button
+              className="btn btn-ghost text-warn border-warn"
+              onClick={handleCancel}
+              disabled={!cancelable}
+              title={t('generate.cancelCurrentTitle')}
+            >
+              {t('common.cancel')}
+            </button>
+            <button
+              className="btn btn-ghost"
+              onClick={() => void clearQueue()}
+              disabled={pendingGenerateIds.length === 0}
+              title={t('generate.clearQueueTitle')}
+              data-testid="generate-clear-queue"
+            >
+              {pendingGenerateIds.length > 0
+                ? t('generate.clearQueue', { n: pendingGenerateIds.length })
+                : t('generate.clearQueueEmpty')}
+            </button>
             <DaemonControls onToggleLog={() => setLogOpen((v) => !v)} />
           </div>
         }
@@ -950,12 +950,19 @@ export default function GeneratePage() {
                 >
                   {generateLabel}
                 </button>
-                {/* 0.17 P-I：batch size（每次入队 task 数），固定宽不随生成状态抖动；取消
-                    已移到右上（DaemonControls 左）。xy 一次一个矩阵、不适用。 */}
+                {/* 0.17 P-I：batch size（每次入队 task 数），固定宽不抖动、无 label，hover
+                    显示「批次数量」。取消已移右上。xy 一次一个矩阵、不适用。 */}
                 {mode !== 'xy' && (
-                  <div className="shrink-0" style={{ width: 76 }}>
-                    <NumField label={t('generate.batchSize')} value={count} onChange={setCount} min={1} max={32} />
-                  </div>
+                  <input
+                    type="number"
+                    className="input shrink-0"
+                    style={{ width: 64, textAlign: 'center' }}
+                    min={1} max={32}
+                    value={count}
+                    onChange={(e) => setCount(Number(e.target.value))}
+                    title={t('generate.batchSizeTitle')}
+                    aria-label={t('generate.batchSizeTitle')}
+                  />
                 )}
               </div>
             </div>
