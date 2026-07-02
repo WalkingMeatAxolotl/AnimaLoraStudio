@@ -435,6 +435,61 @@ def test_image_dataset_loads_caption_utils_when_prefer_json(tmp_path: Path) -> N
         assert key in dataset.caption_utils
 
 
+def test_json_caption_list_shape_does_not_crash_issue_345(tmp_path: Path) -> None:
+    """#345: Studio 打标写出的简化 JSON（tags 为扁平 list、非分类 dict）以前被
+    误判为标准格式直接喂给 build，触发 'list' object has no attribute 'get'。
+    现在应正常构建 caption：trigger 在首位、tags 全部保留、trigger 去重。"""
+    pytest.importorskip("torch")
+    import json
+
+    from runtime.training.dataset import ImageDataset
+
+    payload = {
+        "tags": ["mika_pikazo", "1girl", "solo", "blue hair"],
+        "meta": {"trigger": "mika_pikazo"},
+    }
+    jp = tmp_path / "10032281.json"
+    jp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    dataset = ImageDataset(tmp_path, prefer_json=True)
+    caption = dataset._process_caption_json(jp)
+
+    assert caption is not None, "list 形式 caption 不应崩溃 / 静默返回 None"
+    assert caption.startswith("mika_pikazo"), "trigger 应在首位（keep_tokens 保护）"
+    assert "1girl" in caption and "blue hair" in caption
+    assert caption.count("mika_pikazo") == 1, "trigger 与 tags 内重复项应去重"
+
+
+def test_json_caption_preflight_rejects_broken_json(tmp_path: Path) -> None:
+    """#345 follow-up: JSON 样本没有 txt 兜底（_make_sample 置 txt_path=None），
+    caption 解析失败会静默以空 caption 训练。预检应在开训前直接报错拒绝。"""
+    pytest.importorskip("torch")
+    from runtime.training.dataset import ImageDataset
+
+    img = _touch_image(tmp_path, "a.png")
+    img.with_suffix(".json").write_text("{ not valid json", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="拒绝开训"):
+        ImageDataset(tmp_path, prefer_json=True)
+
+
+def test_json_caption_preflight_passes_healthy_flat_json(tmp_path: Path) -> None:
+    """健康的扁平 list caption（#345 场景修复后）应通过预检正常建数据集。"""
+    pytest.importorskip("torch")
+    import json
+
+    from runtime.training.dataset import ImageDataset
+
+    img = _touch_image(tmp_path, "a.png")
+    img.with_suffix(".json").write_text(
+        json.dumps({"tags": ["mika_pikazo", "1girl"], "meta": {"trigger": "mika_pikazo"}}),
+        encoding="utf-8",
+    )
+
+    dataset = ImageDataset(tmp_path, prefer_json=True)
+    assert len(dataset.samples) == 1
+
+
 def test_parse_repeat_kohya_prefix() -> None:
     assert datasets.parse_repeat("5_concept") == (5, "concept")
     assert datasets.parse_repeat("12_a_long_name") == (12, "a_long_name")
