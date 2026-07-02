@@ -121,12 +121,22 @@ tags: ["looking at viewer", "smile", "standing"]
 
 ## 如何生成
 
-在 Studio 的打标页用 **LLM 打标器**、选 JSON 输出预设（如 `general_json` / `style_json`）即可自动生成符合此格式的 JSON 文件。
+落盘格式跟着打标产物走，不再单独选择输出格式：
+
+- **LLM 打标器 + JSON 输出预设**（如 `general_json` / `style_json`）→ 生成符合此格式的 `.json` 文件
+- **本地打标器**（wd14 / CLTagger）与 **LLM 文本预设** → 生成 `.txt` 文件（触发词 prepend 在第一位）
+- 图片已有 `.json` 时，重新打标会更新其中的 `tags` 数组并保留其余字段（含 `meta.trigger`），不改变文件格式
 
 生成的 JSON 包含：
 - 从目录结构提取的 character/variant
 - LLM 打标的 count/appearance/tags/environment/nl
 - 配置中的 fixed 字段
+
+### Legacy 扁平格式
+
+早期版本的本地打标器可选输出 `{"tags": ["tag1", "tag2", ...], "meta": {"trigger": "..."}}`
+形式的扁平 JSON（tags 为列表而非分类对象）。该格式**读取永久兼容**——训练时
+`meta.trigger` 在第一位、其余 tags 作为可打乱区处理——但不再新生成。
 
 ## 配置示例
 
@@ -142,11 +152,17 @@ tag_dropout: 0.05        # 可选：5% 标签随机丢弃
 
 ## 回退机制
 
-如果 JSON 文件不存在或解析失败，会自动回退到同名 TXT 文件：
+同名 caption 文件按扩展名取优先级（文件级，扫描时决定）：
 
 ```
 优先级: image001.json > image001.txt
 ```
+
+注意：优先级是文件级的（扫描时按扩展名决定）——选中 `.json` 后不会再逐样本
+回退同名 `.txt`。
+
+TXT 模式下 `tag_dropout` 同样生效：`keep_tokens` 前缀不参与打乱与 dropout，
+其余 tag 逐个独立丢弃（与 kohya 语义一致）。
 
 ## 迁移指南
 

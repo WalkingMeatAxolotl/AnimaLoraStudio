@@ -342,7 +342,12 @@ class ImageDataset(Dataset):
         return samples
 
     def _process_caption_txt(self, caption):
-        """处理 TXT caption: 传统 tag 打乱 + keep_tokens"""
+        """处理 TXT caption：kohya 语义的 keep_tokens + shuffle + tag_dropout。
+
+        keep_tokens 前缀既不参与打乱也不参与 dropout（kohya 同款语义——dropout
+        可能丢掉触发词是生态已知行为，保护靠用户显式配 keep_tokens，不做隐式
+        按值保护）；其余 tag 先 shuffle 再逐个独立 dropout，无保底。
+        """
         if not caption:
             return ""
         if "," in caption:
@@ -350,16 +355,14 @@ class ImageDataset(Dataset):
         else:
             tags = caption.split()
 
-        if self.keep_tokens > 0:
-            kept = tags[:self.keep_tokens]
-            rest = tags[self.keep_tokens:]
-            if self.shuffle_caption:
-                random.shuffle(rest)
-            tags = kept + rest
-        elif self.shuffle_caption:
-            random.shuffle(tags)
+        kept = tags[:self.keep_tokens]
+        rest = tags[self.keep_tokens:]
+        if self.shuffle_caption:
+            random.shuffle(rest)
+        if self.tag_dropout > 0:
+            rest = [t for t in rest if random.random() > self.tag_dropout]
 
-        return ", ".join(tags)
+        return ", ".join(kept + rest)
 
     def _process_caption_json(self, json_path):
         """处理 JSON caption: 分类 shuffle"""

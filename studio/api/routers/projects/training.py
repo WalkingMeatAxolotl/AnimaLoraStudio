@@ -104,11 +104,6 @@ def start_tag(pid: int, vid: int, body: TagJobRequest) -> dict[str, Any]:
             code="tag.tagger_invalid", details={"name": body.tagger},
             http_status=400,
         )
-    if body.output_format not in {"txt", "json"}:
-        raise ValidationError(
-            "Output format must be txt or json",
-            code="tag.output_format_invalid", http_status=400,
-        )
     if body.on_existing not in {"overwrite", "skip", "append"}:
         raise ValidationError(
             "On-existing mode must be overwrite, skip, or append",
@@ -131,7 +126,6 @@ def start_tag(pid: int, vid: int, body: TagJobRequest) -> dict[str, Any]:
     params: dict[str, Any] = {
         "tagger": body.tagger,
         "version_id": vid,
-        "output_format": body.output_format,
     }
     # 默认值 "overwrite" 不写入 params（worker 端默认就是 overwrite），减小 payload。
     if body.on_existing != "overwrite":

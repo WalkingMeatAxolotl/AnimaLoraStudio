@@ -93,7 +93,6 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             params={
                 "tagger": "wd14",
                 "version_id": v["id"],
-                "output_format": "txt",
             },
         )
     return {"db": dbfile, "p": p, "v": v, "job_id": job["id"], "train": train}
@@ -106,8 +105,9 @@ def test_run_creates_txt_captions(env) -> None:
     assert (env["train"] / "b.txt").read_text(encoding="utf-8") == "tag_b, common"
 
 
-def test_run_with_json_format(env, monkeypatch: pytest.MonkeyPatch) -> None:
-    # 改 job 的 output_format 为 json
+def test_legacy_output_format_param_is_ignored(env, monkeypatch: pytest.MonkeyPatch) -> None:
+    """老客户端仍可能传 output_format=json —— 请求级格式已删，worker 应忽略：
+    本地打标（无 caption_json）新 caption 一律落 .txt。"""
     with db.connection_for(env["db"]) as conn:
         conn.execute(
             "UPDATE project_jobs SET params = json_set(params, '$.output_format', 'json') "
@@ -117,8 +117,8 @@ def test_run_with_json_format(env, monkeypatch: pytest.MonkeyPatch) -> None:
         conn.commit()
     rc = tag_worker.run(env["job_id"])
     assert rc == 0
-    data = json.loads((env["train"] / "a.json").read_text(encoding="utf-8"))
-    assert data["tags"] == ["tag_a", "common"]
+    assert (env["train"] / "a.txt").read_text(encoding="utf-8") == "tag_a, common"
+    assert not (env["train"] / "a.json").exists()
 
 
 def test_run_passes_wd14_overrides_through(env, monkeypatch) -> None:
@@ -173,29 +173,7 @@ def test_run_passes_cltagger_overrides_through(env, monkeypatch) -> None:
 
 
 def test_run_writes_llm_json_caption(env, monkeypatch) -> None:
-    monkeypatch.setattr(
-        "studio.workers.tag_worker.get_tagger",
-        lambda name, overrides=None: _FakeLLMTagger(),
-    )
-    with db.connection_for(env["db"]) as conn:
-        conn.execute(
-            "UPDATE project_jobs SET params = json_set(params, "
-            "'$.tagger', 'llm', '$.output_format', 'json') WHERE id = ?",
-            (env["job_id"],),
-        )
-        conn.commit()
-
-    rc = tag_worker.run(env["job_id"])
-    assert rc == 0
-    data = json.loads((env["train"] / "a.json").read_text(encoding="utf-8"))
-    assert data["ai_output"]["count"] == "1girl"
-    assert data["ai_output"]["appearance"] == ["watercolor"]
-    assert data["ai_output"]["environment"] == ["blue background"]
-    assert data["ai_output"]["nl"] == "Soft watercolor style."
-    assert not (env["train"] / "a.txt").exists()
-
-
-def test_run_writes_llm_txt_caption(env, monkeypatch) -> None:
+    """LLM json preset 产出 caption_json → 落 .json（格式跟着产物走，无需请求级 fmt）。"""
     monkeypatch.setattr(
         "studio.workers.tag_worker.get_tagger",
         lambda name, overrides=None: _FakeLLMTagger(),
@@ -210,9 +188,52 @@ def test_run_writes_llm_txt_caption(env, monkeypatch) -> None:
 
     rc = tag_worker.run(env["job_id"])
     assert rc == 0
+    data = json.loads((env["train"] / "a.json").read_text(encoding="utf-8"))
+    assert data["ai_output"]["count"] == "1girl"
+    assert data["ai_output"]["appearance"] == ["watercolor"]
+    assert data["ai_output"]["environment"] == ["blue background"]
+    assert data["ai_output"]["nl"] == "Soft watercolor style."
+    assert not (env["train"] / "a.txt").exists()
+
+
+class _FakeLLMTextTagger:
+    """LLM text preset：只有 caption 文本，无 caption_json（对齐 llm.py 真实返回）。"""
+    name = "llm"
+    requires_service = True
+
+    def is_available(self):
+        return True, "ok"
+
+    def prepare(self):
+        pass
+
+    def tag(self, paths, on_progress=lambda d, t: None):
+        text = "1girl, watercolor, blue background. Soft watercolor style."
+        for i, p in enumerate(paths):
+            on_progress(i + 1, len(paths))
+            yield {"image": p, "tags": [text], "caption": text}
+
+
+def test_run_writes_llm_txt_caption(env, monkeypatch) -> None:
+    """LLM text preset 无 caption_json → 落 .txt（格式跟着产物走）。"""
+    monkeypatch.setattr(
+        "studio.workers.tag_worker.get_tagger",
+        lambda name, overrides=None: _FakeLLMTextTagger(),
+    )
+    with db.connection_for(env["db"]) as conn:
+        conn.execute(
+            "UPDATE project_jobs SET params = json_set(params, '$.tagger', 'llm') "
+            "WHERE id = ?",
+            (env["job_id"],),
+        )
+        conn.commit()
+
+    rc = tag_worker.run(env["job_id"])
+    assert rc == 0
     assert (env["train"] / "a.txt").read_text(encoding="utf-8") == (
         "1girl, watercolor, blue background. Soft watercolor style."
     )
+    assert not (env["train"] / "a.json").exists()
 
 
 def test_run_unknown_job(env) -> None:
@@ -243,25 +264,25 @@ def test_trigger_word_prepended_to_txt(env) -> None:
     assert (env["train"] / "b.txt").read_text(encoding="utf-8") == "ohwx, tag_b, common"
 
 
-def test_trigger_word_writes_meta_in_simple_json(env) -> None:
-    """fmt=json + tagger 只给 tags list（无 caption_json）→ meta.trigger 写入。"""
+def test_trigger_word_writes_meta_when_updating_existing_json(env) -> None:
+    """已有 .json（legacy 扁平格式）+ 本地打标 → tagedit 更新 tags 并补 meta.trigger；
+    没有 caption 的图落 .txt（不再新写扁平 json）。"""
     _set_trigger(env, "ohwx")
-    with db.connection_for(env["db"]) as conn:
-        conn.execute(
-            "UPDATE project_jobs SET params = json_set(params, '$.output_format', 'json') "
-            "WHERE id = ?",
-            (env["job_id"],),
-        )
-        conn.commit()
+    (env["train"] / "a.json").write_text(
+        json.dumps({"tags": ["old"]}), encoding="utf-8"
+    )
     rc = tag_worker.run(env["job_id"])
     assert rc == 0
     data = json.loads((env["train"] / "a.json").read_text(encoding="utf-8"))
     assert data["tags"] == ["ohwx", "tag_a", "common"]
     assert data["meta"]["trigger"] == "ohwx"
+    # b 没有现成 caption → 新写 .txt（trigger prepend），不产生 .json
+    assert (env["train"] / "b.txt").read_text(encoding="utf-8") == "ohwx, tag_b, common"
+    assert not (env["train"] / "b.json").exists()
 
 
 def test_trigger_word_writes_meta_in_llm_json(env, monkeypatch) -> None:
-    """LLM tagger + fmt=json → documented_full 增加顶层 meta.trigger。"""
+    """LLM json preset（caption_json）→ documented_full 增加顶层 meta.trigger。"""
     _set_trigger(env, "ohwx")
     monkeypatch.setattr(
         "studio.workers.tag_worker.get_tagger",
@@ -269,8 +290,8 @@ def test_trigger_word_writes_meta_in_llm_json(env, monkeypatch) -> None:
     )
     with db.connection_for(env["db"]) as conn:
         conn.execute(
-            "UPDATE project_jobs SET params = json_set(params, "
-            "'$.tagger', 'llm', '$.output_format', 'json') WHERE id = ?",
+            "UPDATE project_jobs SET params = json_set(params, '$.tagger', 'llm') "
+            "WHERE id = ?",
             (env["job_id"],),
         )
         conn.commit()
@@ -284,11 +305,11 @@ def test_trigger_word_writes_meta_in_llm_json(env, monkeypatch) -> None:
 
 
 def test_trigger_word_prepended_to_llm_txt(env, monkeypatch) -> None:
-    """LLM tagger + fmt=txt → caption_text 前 prepend trigger。"""
+    """LLM text preset（无 caption_json）→ .txt 前 prepend trigger。"""
     _set_trigger(env, "ohwx")
     monkeypatch.setattr(
         "studio.workers.tag_worker.get_tagger",
-        lambda name, overrides=None: _FakeLLMTagger(),
+        lambda name, overrides=None: _FakeLLMTextTagger(),
     )
     with db.connection_for(env["db"]) as conn:
         conn.execute(
@@ -343,8 +364,9 @@ def test_trigger_word_empty_string_no_op(env) -> None:
 
 
 def test_trigger_word_dataset_loader_sees_meta(env, tmp_path: Path) -> None:
-    """端到端：worker 写 meta.trigger → utils.caption_utils.build_caption_from_json
-    把 trigger 输出在第一位。验证 dataset 训练时确实拿到 trigger。"""
+    """端到端：worker 更新已有 .json 写 meta.trigger →
+    utils.caption_utils.load_and_build_caption 把 trigger 输出在第一位。
+    验证 dataset 训练时确实拿到 trigger。"""
     import sys
 
     # 把仓库根加进 sys.path 让 `import utils.caption_utils` 工作
@@ -354,13 +376,9 @@ def test_trigger_word_dataset_loader_sees_meta(env, tmp_path: Path) -> None:
     from utils.caption_utils import load_and_build_caption
 
     _set_trigger(env, "ohwx")
-    with db.connection_for(env["db"]) as conn:
-        conn.execute(
-            "UPDATE project_jobs SET params = json_set(params, '$.output_format', 'json') "
-            "WHERE id = ?",
-            (env["job_id"],),
-        )
-        conn.commit()
+    (env["train"] / "a.json").write_text(
+        json.dumps({"tags": ["old"]}), encoding="utf-8"
+    )
     rc = tag_worker.run(env["job_id"])
     assert rc == 0
     caption = load_and_build_caption(env["train"] / "a.json", shuffle=False)

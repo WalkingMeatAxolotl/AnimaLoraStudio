@@ -57,7 +57,9 @@ class LLMTaggerOverrides(BaseModel):
 
 class TagJobRequest(BaseModel):
     tagger: str = "wd14"
-    output_format: str = "txt"                # "txt" | "json"
+    # 落盘格式跟着产物走，不再由请求指定（老客户端传 output_format 会被忽略）：
+    # LLM json preset 产出结构化 caption_json → .json；其余（本地打标 tag list /
+    # LLM text preset）→ .txt。已存在的 .json 仍按 .json 更新。
     # 已有 caption 文件时的策略："overwrite"（默认，覆盖）| "skip"（保留原文件）
     # | "append"（tag 级 merge + dedupe，写回原格式）。
     on_existing: str = "overwrite"

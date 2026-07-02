@@ -96,7 +96,8 @@ class TrainingConfig(BaseModel):
     )
     keep_tokens: int = Field(
         0, ge=0,
-        description="保护前 N 个标签不打乱（仅 TXT 模式）",
+        description="保护前 N 个标签不参与打乱与 dropout（仅 TXT 模式；JSON 模式由"
+                    " meta.trigger 与固定字段承担同类角色）",
         json_schema_extra=_meta("caption"),
     )
     flip_augment: bool = Field(

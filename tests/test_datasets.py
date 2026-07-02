@@ -442,6 +442,26 @@ def test_parse_repeat_kohya_prefix() -> None:
     assert datasets.parse_repeat("0_zero") == (0, "zero")
 
 
+def test_txt_caption_tag_dropout_kohya_semantics(tmp_path: Path) -> None:
+    """TXT 路径 tag_dropout（kohya 语义）：keep_tokens 前缀免 shuffle 免 dropout，
+    其余 tag 逐个独立 dropout、无保底。dropout 丢触发词是生态已知行为，保护靠
+    用户显式配 keep_tokens。"""
+    pytest.importorskip("torch")
+    from runtime.training.dataset import ImageDataset
+
+    # dropout=1.0 → 非保护区全部丢弃（确定性）；keep_tokens 前缀原序保留
+    ds = ImageDataset(tmp_path, shuffle_caption=True, keep_tokens=2, tag_dropout=1.0)
+    assert ds._process_caption_txt("trigger, quality, a, b, c") == "trigger, quality"
+
+    # keep_tokens=0 + dropout=1.0 → 全丢、无保底（kohya 同款）
+    ds_all = ImageDataset(tmp_path, shuffle_caption=False, keep_tokens=0, tag_dropout=1.0)
+    assert ds_all._process_caption_txt("a, b, c") == ""
+
+    # dropout=0 → 原样（不 shuffle 时顺序不变）
+    ds_off = ImageDataset(tmp_path, shuffle_caption=False, keep_tokens=0, tag_dropout=0.0)
+    assert ds_off._process_caption_txt("a, b, c") == "a, b, c"
+
+
 def test_caption_kind_priority(tmp_path: Path) -> None:
     img = _touch_image(tmp_path, "a.png")
     assert datasets.caption_kind(img) == "none"

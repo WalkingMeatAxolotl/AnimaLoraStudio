@@ -4,10 +4,14 @@
     {
       "tagger": "wd14" | "cltagger" | "joycaption",
       "version_id": int,
-      "output_format": "txt"|"json",  # 默认 "txt"，已存在的 .json 仍按 .json 写
       "on_existing": "overwrite"|"skip"|"append",  # 默认 "overwrite"
       "<tagger>_overrides": {...}     # 可选；本次任务对全局 settings 的覆盖
     }
+
+落盘格式跟着产物走：LLM json preset 产出结构化 caption_json → .json；其余
+（本地打标 tag list / LLM text preset）→ .txt。已存在的 .json 仍按 .json 更新
+（格式决策唯一入口是 LLM preset 的 output_format；请求级 output_format 已删，
+老客户端传了会被忽略）。
 
 打标永远覆盖 train/ 下全部 repeat 子目录（不再支持按 folder 划分）。
 
@@ -115,7 +119,6 @@ def run(job_id: int) -> int:
     try:
         tagger_name = params.get("tagger", "wd14")
         version_id = int(params["version_id"])
-        fmt = str(params.get("output_format", "txt"))
         # 触发词：worker 端 prepend 到 caption 第一位。空串 / 缺省 = 不启用。
         trigger_word = str(params.get("trigger_word") or "").strip()
         on_existing = str(params.get("on_existing") or "overwrite")
@@ -143,7 +146,7 @@ def run(job_id: int) -> int:
 
         progress(
             f"[start] tagger={tagger_name} version={v['label']} "
-            f"images={total_images} format={fmt} on_existing={on_existing}"
+            f"images={total_images} on_existing={on_existing}"
         )
         if trigger_word:
             progress(f"[trigger] '{trigger_word}' 将作为第一个 tag prepend 到每张图")
@@ -180,7 +183,6 @@ def run(job_id: int) -> int:
             action = _write_caption(
                 r["image"],
                 r.get("tags") or [],
-                fmt,
                 caption_text=r.get("caption"),
                 caption_json=r.get("caption_json"),
                 trigger_word=trigger_word,
@@ -229,14 +231,15 @@ def _prepend_trigger_to_text(text: str, trigger_word: str) -> str:
 def _write_caption(
     image: Path,
     tags: list[str],
-    fmt: str,
     *,
     caption_text: str | None = None,
     caption_json: dict[str, Any] | None = None,
     trigger_word: str = "",
     on_existing: str = "overwrite",
 ) -> str:
-    """fmt 仅决定「不存在 caption 时」用什么格式；已存在的 .json 仍走 .json。
+    """落盘格式跟着产物走：caption_json（LLM json preset）→ .json；
+    其余（本地打标 tag list / LLM text preset）→ .txt；已存在的 .json 仍走
+    .json 更新（tagedit 路径）。请求级 output_format 已删。
 
     on_existing：已有 caption 文件（.txt 或 .json）时的策略
       - "overwrite"（默认）：覆盖（原行为）
@@ -247,9 +250,8 @@ def _write_caption(
 
     trigger_word 非空时（仅 overwrite 路径需特殊 prepend；append 走 merge 顺序自然处理）：
       - 标签列表：作为第 0 项 prepend（去重）
-      - 字符串 caption：prepend 到最前
       - JSON：写入 ``meta.trigger`` 字段；caption_utils.build_caption_from_json
-        会把它作为输出的第一个 token，不参与 shuffle —— 与 .txt 路径行为一致。
+        会把它作为输出的第一个 token，不参与 shuffle / dropout。
     """
     existing_path = tagedit.caption_path(image)
     if existing_path is not None:
@@ -266,36 +268,22 @@ def _write_caption(
             )
             return "appended"
     if caption_json is not None:
-        if fmt == "json":
-            doc = standard_to_documented_full(caption_json)
-            if trigger_word:
-                meta = doc.get("meta")
-                if not isinstance(meta, dict):
-                    meta = {}
-                meta["trigger"] = trigger_word
-                doc["meta"] = meta
-            image.with_suffix(".json").write_text(
-                json.dumps(doc, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            image.with_suffix(".txt").unlink(missing_ok=True)
-            return "wrote"
-        text = caption_text if caption_text is not None else caption_json_to_text(caption_json)
-        text = _prepend_trigger_to_text(text, trigger_word)
-        image.with_suffix(".txt").write_text(text, encoding="utf-8")
-        image.with_suffix(".json").unlink(missing_ok=True)
-        return "wrote"
-    if fmt == "json" and not image.with_suffix(".txt").exists():
-        # 强制写 json（即使没有现成 json 文件）
-        data: dict[str, Any] = {"tags": _prepend_trigger_to_tags(tags, trigger_word)}
+        # LLM 结构化产物 → 落 .json（documented full 形状）
+        doc = standard_to_documented_full(caption_json)
         if trigger_word:
-            data["meta"] = {"trigger": trigger_word}
+            meta = doc.get("meta")
+            if not isinstance(meta, dict):
+                meta = {}
+            meta["trigger"] = trigger_word
+            doc["meta"] = meta
         image.with_suffix(".json").write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
+            json.dumps(doc, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        image.with_suffix(".txt").unlink(missing_ok=True)
         return "wrote"
-    # 否则交给 tagedit 决定（已有 .json 就写 .json，否则 .txt）。
+    # 非结构化产物（本地打标 tag list / LLM text preset）交给 tagedit 决定
+    # （已有 .json 就写 .json，否则 .txt）。
     # 已有 .json 时 tagedit 保留其他字段（包括 meta.trigger 如有），只覆盖 tags 数组；
     # 这里我们把 trigger prepend 进 tags list，并保证 .json 走 tagedit 的同时也补 meta.trigger。
     new_tags = _prepend_trigger_to_tags(tags, trigger_word)

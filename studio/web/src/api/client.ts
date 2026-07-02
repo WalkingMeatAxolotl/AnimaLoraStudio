@@ -2303,10 +2303,10 @@ export const api = {
     vid: number,
     body: {
       tagger: TaggerName
-      output_format?: 'txt' | 'json'
       /**
        * 已有 caption 文件时的策略：overwrite（默认覆盖）/ skip（保留原文件）
        * / append（tag 级 merge + dedupe 后写回原格式）。
+       * 落盘格式跟着产物走（LLM json preset → .json，其余 → .txt），不再由请求指定。
        */
       on_existing?: 'overwrite' | 'skip' | 'append'
       /**
