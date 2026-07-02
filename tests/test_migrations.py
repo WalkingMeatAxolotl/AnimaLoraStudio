@@ -58,6 +58,26 @@ def test_v5_adds_task_type_column(tmp_path: Path) -> None:
         assert row["task_type"] == "train"
 
 
+def test_v14_adds_generate_meta_columns(tmp_path: Path) -> None:
+    """v14: tasks 加 generate_params / generate_cover（0.17 P-I forward-write），全 nullable。"""
+    dbfile = tmp_path / "fresh.db"
+    db.init_db(dbfile)
+    with _open(dbfile) as c:
+        cols = {r["name"] for r in c.execute("PRAGMA table_info(tasks)")}
+        assert "generate_params" in cols
+        assert "generate_cover" in cols
+        # 老 task（不写这两列）保持 NULL
+        c.execute(
+            "INSERT INTO tasks(name, config_name, status, priority, created_at) "
+            "VALUES (?, ?, 'pending', 0, ?)",
+            ("legacy", "cfg", time.time()),
+        )
+        c.commit()
+        row = c.execute("SELECT generate_params, generate_cover FROM tasks").fetchone()
+        assert row["generate_params"] is None
+        assert row["generate_cover"] is None
+
+
 def test_v1_db_upgrades_in_place_preserving_tasks(tmp_path: Path) -> None:
     """模拟 PP0 之前留下来的 v1 库（只有 tasks 表）：执行 init_db 应升到 v2 且数据不丢。"""
     dbfile = tmp_path / "legacy.db"

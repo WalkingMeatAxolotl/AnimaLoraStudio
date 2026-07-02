@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import logging
 import os
 import re
 import shutil
@@ -49,8 +50,26 @@ from ...infrastructure.event_bus import bus
 from ...infrastructure.paths import STUDIO_DATA
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 TEST_IMAGES_DIR = STUDIO_DATA / "test"
+
+
+def _write_generate_cover(task_id: Optional[int], cover_path: Path) -> None:
+    """0.17 P-I forward-write：落盘时把封面图（磁盘）相对地址写进 task.generate_cover
+    （相对 TEST_IMAGES_DIR，_v14 列）。前端暂不读；未来 DB 驱动出图时间线据此定位/判
+    存在。task_id 缺省（老前端/异常）或写失败时静默跳过——纯攒未来数据，不影响出图。"""
+    if task_id is None:
+        return
+    try:
+        rel = str(cover_path.relative_to(TEST_IMAGES_DIR))
+    except ValueError:
+        rel = str(cover_path)
+    try:
+        with db.connection_for() as conn:
+            db.update_task(conn, task_id, generate_cover=rel)
+    except Exception:
+        logger.warning("write generate_cover for task %s failed", task_id, exc_info=True)
 
 # v2 命名（决策 #6）：父目录区分 mode，文件名仅 "<label> N.png"
 _DISPLAY_LABELS = {"single": "single image", "xy": "xy plot"}
@@ -243,8 +262,17 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
         bus.publish({"type": "task_state_changed", "task_id": task_id, "status": "failed"})
         raise HTTPException(500, f"failed to enqueue generate task: {e}")
 
+    # 0.17 P-I forward-write：把参数快照落 DB（generate_params 列，_v14）。前端暂不读，
+    # 为未来「纯 DB 出图时间线」攒数据——那时按 params + generate_cover(出图完成时写)
+    # 直接定位/回填，无需扫盘、无需迁移。参数就是前端随 body 发来的 params_snapshot。
+    generate_params = (
+        json.dumps(body.params_snapshot, ensure_ascii=False)
+        if body.params_snapshot else None
+    )
     with db.connection_for() as conn:
-        db.update_task(conn, task_id, config_path=str(cfg_path))
+        db.update_task(
+            conn, task_id, config_path=str(cfg_path), generate_params=generate_params,
+        )
         task = db.get_task(conn, task_id)
 
     bus.publish({"type": "task_state_changed", "task_id": task_id, "status": "pending"})
@@ -650,6 +678,7 @@ async def save_test_image(
         idx = _next_image_index(target_dir, mode)
         target = target_dir / f"{_DISPLAY_LABELS[mode]} {idx}.png"
         _atomic_write_png(target, raw)
+        _write_generate_cover(task_id, target)  # 0.17 P-I forward-write
         return {"path": str(target), "index": idx, "filename": target.name}
 
     # ----- mode == "xy" -----
@@ -736,6 +765,7 @@ async def save_test_image(
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise HTTPException(500, f"failed to write xy folder: {e}")
 
+    _write_generate_cover(task_id, final_dir / _XY_COMPOSITE_NAME)  # 0.17 P-I forward-write
     return {
         "folder": str(final_dir),
         "index": idx,
