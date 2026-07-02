@@ -599,7 +599,7 @@ export default function GeneratePage() {
         project_id: l.project_id ?? null,
         version_id: l.version_id ?? null,
       }))
-      const dispatchSnapshot: GenerateParamsSnapshot = {
+      const baseSnapshot: GenerateParamsSnapshot = {
         schema_version: PARAMS_SNAPSHOT_VERSION,
         mode,
         prompts,
@@ -608,7 +608,7 @@ export default function GeneratePage() {
         cfg_scale: cfgScale,
         sampler_name: samplerName,
         scheduler,
-        count: mode === 'xy' ? 1 : count,
+        count: 1,  // 0.17 P-I：每个 task 出 1 张；batch 拆成多 task（下面循环）
         seed,
         base_model: baseModel,
         loras: snapshotLoras,
@@ -620,36 +620,49 @@ export default function GeneratePage() {
           : null,
         dataset_pick: datasetPick,
       }
-      const body: GenerateRequest = {
-        prompts: mergedPrompts,
-        base_model: baseModel ?? undefined,
-        negative_prompt: negPrompt,
-        width, height, steps,
-        count: mode === 'xy' ? 1 : count,
-        seed,
-        cfg_scale: cfgScale,
-        sampler_name: samplerName,
-        scheduler,
-        lora_configs: loraConfigs,
-        // attention_backend 不带：server 端套 Comfy-style runtime 并读取 generate backend。
-        xy_matrix,
-        params_snapshot: dispatchSnapshot as unknown as Record<string, unknown>,
-      }
-      const task = await api.enqueueGenerate(body)
-      // #1 + P-I：把本次运行态定格存进 per-task Map（xDraft/yDraft 是纯原始对象浅拷贝
-      // 隔离后续编辑；snapshot 复用上面的 dispatchSnapshot）。显示/入库各按 taskId 取。
-      runsRef.current.set(task.id, {
-        xDraft: { ...xDraft },
-        yDraft: yDraft ? { ...yDraft } : null,
-        snapshot: dispatchSnapshot,
-      })
-      // 刷新队列：拿到新 pending + 若 daemon idle 立即领取则显示跟上。首次生成（当前无
-      // 显示）时乐观置为该 task，让用户立刻看到「排队/开始」而非空屏。
-      if (!currentTaskRef.current || TERMINAL_TASK_STATUSES.includes(currentTaskRef.current.status)) {
-        setCurrentTask(task)
+      // 0.17 P-I：count 现在 = **batch size**（每次入队的 task 数）。single 拆成 batch 个
+      // task（各出 1 张、seed 递增区分）→ 在右栏时间线逐个排队；xy 一次一个矩阵（batch 忽略）。
+      const batch = mode === 'xy' ? 1 : Math.max(1, count)
+      let firstId: number | null = null
+      for (let i = 0; i < batch; i++) {
+        const taskSeed = seed + i
+        const snap: GenerateParamsSnapshot = { ...baseSnapshot, seed: taskSeed }
+        const body: GenerateRequest = {
+          prompts: mergedPrompts,
+          base_model: baseModel ?? undefined,
+          negative_prompt: negPrompt,
+          width, height, steps,
+          count: 1,
+          seed: taskSeed,
+          cfg_scale: cfgScale,
+          sampler_name: samplerName,
+          scheduler,
+          lora_configs: loraConfigs,
+          // attention_backend 不带：server 端套 Comfy-style runtime 并读取 generate backend。
+          xy_matrix,
+          params_snapshot: snap as unknown as Record<string, unknown>,
+        }
+        const task = await api.enqueueGenerate(body)
+        // #1 + P-I：每 task 的运行态定格存进 Map（xDraft/yDraft 纯原始对象浅拷贝隔离后续
+        // 编辑；snapshot 各带自己的 seed）。显示/入库各按 taskId 取。
+        runsRef.current.set(task.id, {
+          xDraft: { ...xDraft }, yDraft: yDraft ? { ...yDraft } : null, snapshot: snap,
+        })
+        if (firstId === null) {
+          firstId = task.id
+          // 首次生成（当前无显示）乐观置为第一个 task，立刻看到「排队/开始」而非空屏。
+          if (!currentTaskRef.current || TERMINAL_TASK_STATUSES.includes(currentTaskRef.current.status)) {
+            setCurrentTask(task)
+          }
+        }
       }
       void refreshLiveGenerates()
-      toast(t('generate.taskEnqueued', { id: task.id }), 'success')
+      toast(
+        batch > 1
+          ? t('generate.batchEnqueued', { n: batch })
+          : t('generate.taskEnqueued', { id: firstId ?? 0 }),
+        'success',
+      )
     } catch (e) {
       toast(String(e), 'error')
     } finally {
@@ -667,7 +680,7 @@ export default function GeneratePage() {
     }
   }
 
-  // 0.17 P-I：取消某条排队中的 generate（排队小列表单条 ✕）。
+  // 0.17 P-I：取消某条排队中的 generate（时间线 live 项单条 ✕）。
   const cancelQueued = async (id: number) => {
     try {
       await api.cancelTask(id)
@@ -676,6 +689,18 @@ export default function GeneratePage() {
     } catch (e) {
       toast(String(e), 'error')
     }
+  }
+
+  // 0.17 P-I：清空队列——取消所有等待中（pending）的 generate（不动正在跑的那张）。
+  const pendingGenerateIds = useMemo(
+    () => liveGenerates.filter((t) => t.status === 'pending').map((t) => t.id),
+    [liveGenerates],
+  )
+  const clearQueue = async () => {
+    if (pendingGenerateIds.length === 0) return
+    await Promise.allSettled(pendingGenerateIds.map((id) => api.cancelTask(id)))
+    toast(t('generate.queueCleared', { n: pendingGenerateIds.length }), 'info')
+    void refreshLiveGenerates()
   }
 
   const cancelable = currentTask
@@ -698,7 +723,32 @@ export default function GeneratePage() {
       <PageHeader
         title={t('generate.title')}
         subtitle={t('generate.subtitle')}
-        actions={<DaemonControls onToggleLog={() => setLogOpen((v) => !v)} />}
+        actions={
+          <div className="flex items-center gap-2">
+            {/* 0.17 P-I：取消（当前正在跑/排队的显示 task）+ 清空队列（所有 pending），
+                放在「清理显存」（DaemonControls）左边。 */}
+            {cancelable && (
+              <button
+                className="btn btn-ghost text-warn border-warn"
+                onClick={handleCancel}
+                title={t('generate.cancelCurrentTitle')}
+              >
+                {t('common.cancel')}
+              </button>
+            )}
+            {pendingGenerateIds.length > 0 && (
+              <button
+                className="btn btn-ghost"
+                onClick={() => void clearQueue()}
+                title={t('generate.clearQueueTitle')}
+                data-testid="generate-clear-queue"
+              >
+                {t('generate.clearQueue', { n: pendingGenerateIds.length })}
+              </button>
+            )}
+            <DaemonControls onToggleLog={() => setLogOpen((v) => !v)} />
+          </div>
+        }
       />
 
       {/* 三列各自独立滚动，整页固定高度 = viewport */}
@@ -822,9 +872,7 @@ export default function GeneratePage() {
                 <div className="flex gap-2">
                   <NumField label={t('generate.steps')} value={steps} onChange={setSteps} min={1} max={150} />
                   <NumField label="CFG" value={cfgScale} onChange={setCfgScale} min={0} max={20} step={0.5} />
-                  {mode !== 'xy' && (
-                    <NumField label={t('generate.perPrompt')} value={count} onChange={setCount} min={1} max={32} />
-                  )}
+                  {/* 0.17 P-I：count 移到「开始生成」旁改为 batch size（每次入队 task 数）。 */}
                 </div>
                 <div className="flex gap-2">
                   <div className="flex-1 min-w-0">
@@ -902,21 +950,11 @@ export default function GeneratePage() {
                 >
                   {generateLabel}
                 </button>
-                {cancelable && (
-                  <button className="btn btn-ghost" onClick={handleCancel} title={t('generate.cancelCurrentTitle')}>
-                    {t('common.cancel')}
-                  </button>
-                )}
-                {!cancelable && (
-                  <div className="font-mono text-xs text-fg-tertiary text-right" style={{ lineHeight: 1.3 }}>
-                    <div>{width}×{height}</div>
-                    <div>
-                      {busy
-                        ? t('generate.generating')
-                        : activeBlockingTask
-                          ? t('generate.blockedByActiveTaskHint', { id: activeBlockingTask.id })
-                          : t('generate.sharedGpu')}
-                    </div>
+                {/* 0.17 P-I：batch size（每次入队 task 数），固定宽不随生成状态抖动；取消
+                    已移到右上（DaemonControls 左）。xy 一次一个矩阵、不适用。 */}
+                {mode !== 'xy' && (
+                  <div className="shrink-0" style={{ width: 76 }}>
+                    <NumField label={t('generate.batchSize')} value={count} onChange={setCount} min={1} max={32} />
                   </div>
                 )}
               </div>
@@ -1000,13 +1038,7 @@ export default function GeneratePage() {
                     {historyOverride.source === 'disk'
                       ? (historyOverride.folder ?? (historyOverride.filename ?? '').replace(/\.png$/i, ''))
                       : t('generate.historyTask', { id: historyOverride.taskId })}
-                    <button
-                      className="btn btn-ghost text-xs ml-2"
-                      style={{ padding: '2px 8px' }}
-                      onClick={() => setHistoryOverride(null)}
-                    >
-                      {t('generate.backToCurrent')}
-                    </button>
+                    {/* 0.17 P-I：删「返回当前」——统一时间线后回到实时点右栏 running 项即可。 */}
                   </div>
                 </div>
               ) : !currentTask ? (

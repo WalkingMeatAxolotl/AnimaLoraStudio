@@ -226,8 +226,8 @@ describe('GeneratePage 端到端 smoke', () => {
 
     const btn = await screen.findByRole('button', { name: /开始生成/ })
     await waitFor(() => expect(btn).toBeDisabled())
+    // 0.17 P-I：内联提示文字已移除（改 batch size 框）；阻塞原因仍在 button title tooltip。
     expect(btn).toHaveAttribute('title', expect.stringContaining('#42'))
-    expect(screen.getByText(/等队列 #42 完成/)).toBeInTheDocument()
   })
 
   it('URL ?lora= 进入时 replace 缓存 LoRA list + clamp xDraft.loraIndex', async () => {
