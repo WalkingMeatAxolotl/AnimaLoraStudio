@@ -1384,6 +1384,7 @@
     "promptOrDatasetRequired": "Enter at least one prompt, or choose a caption from the training set",
     "xySinglePromptOnly": "XY mode only supports one prompt (multiple prompts and XY are mutually exclusive)",
     "taskEnqueued": "Generate task #{{id}} queued",
+    "queuedCount": "{{n}} queued",
     "cancelRequested": "Cancel requested for #{{id}}",
     "generating": "Generating…",
     "startGenerate": "Start generate",

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   api,
+  TERMINAL_TASK_STATUSES,
   type GenerateRequest,
   type LoraEntry,
   type Task,
@@ -191,18 +192,21 @@ export default function GeneratePage() {
   // 之前用 useState 时遇过 SSE 漏事件 / race 后 busy=true 卡住，按钮 disabled
   // 没法重试也没法取消（status=failed 时 cancelable=false）
   const [submitting, setSubmitting] = useState(false)
+  // 0.17 P-I：currentTask = **显示目标**（daemon 正在跑 / 最近一张），不再是「最后
+  // 提交」。提交只入队，显示跟着 running 走（refreshLiveGenerates）。
   const [currentTask, setCurrentTask] = useState<Task | null>(null)
-  // #1：本次生成「运行态」定格。dispatch 成功时把当时的 XY 轴 + 完整参数
-  // 快照冻进这里；活动结果网格 / 双图对比 / 完成入库三处都读它，而不是读
-  // live xDraft/yDraft/prefs。这样任务开始后改 sidebar（取消某个 XY LoRA、
-  // 调参数等）只影响「下次生成」，不会串改已出 / 在出的右侧结果与入库元数据。
-  // taskId 不匹配当前任务时回退 live（如刷新后中途回看的边缘场景，无回归）。
-  const [run, setRun] = useState<{
-    taskId: number
+  // 0.17 P-I：本会话提交的 generate 里 running + pending（含自己），驱动「排队中 N 张」
+  // 列表 + running 检测。来自 listQueueLive(undefined,'generate')。
+  const [liveGenerates, setLiveGenerates] = useState<Task[]>([])
+  const prevGenIdsRef = useRef<Set<number>>(new Set())
+  // #1：每条 task 的「运行态」定格（XY 轴 + 完整参数快照），dispatch 时存。活动结果
+  // 网格 / 双图对比 / 入库读它而非 live prefs，任务开始后改 sidebar 不串改已出结果。
+  // 0.17 P-I：单值 → 按 taskId 存 Map，多任务各取各的。
+  const runsRef = useRef<Map<number, {
     xDraft: XYAxisDraft
     yDraft: XYAxisDraft | null
     snapshot: GenerateParamsSnapshot
-  } | null>(null)
+  }>>(new Map())
   // 本次出图临时选用的底模（null = 跟随设置页 selected_anima）。不进 prefs
   // 持久化：每次进页面都回到「设置页默认底模」，符合「默认用设置里的」。
   const [baseModel, setBaseModel] = useState<string | null>(null)
@@ -226,10 +230,18 @@ export default function GeneratePage() {
   const [activeBlockingTask, setActiveBlockingTask] = useState<Task | null>(null)
   // commit 16：图片历史栏。点击历史项 → 主预览替换为该项封面
   const history = useGenerateHistory()
+  // 0.17 P-I：useGenerateHistory 每渲染返回新对象（refresh/refreshCache 非 memoized）。
+  // 用 ref 取最新，让 ingestGenerateTask/refreshLiveGenerates deps 稳定，避免 mount
+  // effect 因它们 identity 每渲染变而无限重跑（fetch 风暴）。
+  const historyRef = useRef(history)
+  historyRef.current = history
   const [historyOverride, setHistoryOverride] = useState<HistoryEntry | null>(null)
   const taskIdRef = useRef<number | null>(null)
   taskIdRef.current = currentTask?.id ?? null
-  const lastSnapshotRef = useRef<{ taskId: number; mode: ViewMode } | null>(null)
+  const currentTaskRef = useRef<Task | null>(null)
+  currentTaskRef.current = currentTask
+  // 0.17 P-I：已入库的 taskId（去重，替代旧 lastSnapshotRef）。
+  const ingestedRef = useRef<Set<number>>(new Set())
 
   // 切到 single 时清掉 XY 选择（与 XY 结果绑定，单图模式无意义）
   useEffect(() => {
@@ -255,12 +267,21 @@ export default function GeneratePage() {
   // 用 useMemo 稳定引用：monitorState 不变时 samples 引用不变，避免下方
   // useEffect 把 samples 当依赖触发不必要的重跑
   const samples = useMemo(() => monitorState?.samples ?? [], [monitorState])
+  const samplesRef = useRef(samples)
+  samplesRef.current = samples
 
-  // #1：活动结果网格用「dispatch 时定格的轴」(run) 而非 live xDraft/yDraft。
-  // run 对应当前任务时取冻结值（任务开始后改 sidebar 不串改右侧）；否则回退 live。
-  const frozenRun = run && currentTask && run.taskId === currentTask.id ? run : null
+  // #1：活动结果网格用「dispatch 时定格的轴」而非 live xDraft/yDraft。
+  // 显示任务有定格 run（runsRef）时取冻结值（任务开始后改 sidebar 不串改右侧）；否则
+  // 回退 live。runsRef 是 ref，但 currentTask 变会 re-render → 这里随之重算，够 reactive。
+  const frozenRun = currentTask ? runsRef.current.get(currentTask.id) ?? null : null
   const gridXDraft = frozenRun ? frozenRun.xDraft : xDraft
   const gridYDraft = frozenRun ? frozenRun.yDraft : yDraft
+
+  // 0.17 P-I：排队中（pending）的 generate，按 id 升序 = 派发顺序（同优先级 created ASC）。
+  const pendingGenerates = useMemo(
+    () => liveGenerates.filter((t) => t.status === 'pending').sort((a, b) => a.id - b.id),
+    [liveGenerates],
+  )
 
   // XY mode 时，按钮显示「生成 N×M=K 张」
   const xyCellCount = useMemo(() => {
@@ -283,23 +304,99 @@ export default function GeneratePage() {
     }
   }, [])
 
+  // 0.17 P-I：入库某条 generate。**每条 done 时各入各的，跟「当前显示哪张」解耦**
+  // （多任务下 currentTask 跟着 running 走，不会在每条 done 停留）。
+  // temp（默认 save_test_images=off）：server 在 image_done 已把图 + 参数写进加密 cache
+  //   → 只 refreshCache 拉新 index。
+  // disk（on）：用该 task 的定格 run（runsRef）+ samples 落盘。samplesOverride：显示
+  //   任务已有 live samples 时直接传，省一次 getMonitorState。
+  const ingestGenerateTask = useCallback(async (taskId: number, samplesOverride?: typeof samples) => {
+    if (ingestedRef.current.has(taskId)) return
+    const sec = await api.getSecrets().catch(() => null)
+    const saveToDisk = !!sec?.generate?.save_test_images
+    if (!saveToDisk) {
+      ingestedRef.current.add(taskId)
+      await historyRef.current.refreshCache()
+      return
+    }
+    const runSnap = runsRef.current.get(taskId)
+    const snapMode = runSnap?.snapshot.mode
+    if (snapMode !== 'single' && snapMode !== 'xy') return  // compare / 缺 run → 无法重建，不标记（留后重试）
+    let s = samplesOverride ?? []
+    if (s.length === 0) {
+      const st = await api.getMonitorState(taskId).catch(() => null)
+      s = (st?.samples as typeof samples | undefined) ?? []
+    }
+    if (s.length === 0) return
+    ingestedRef.current.add(taskId)
+    const params = runSnap!.snapshot
+    const filenames = s.map((x) => x.path.split(/[\\/]/).pop() ?? '').filter(Boolean)
+    if (snapMode === 'single') {
+      await saveSingleSamples(taskId, filenames, params)
+    } else {
+      const xd = runSnap!.xDraft
+      const yd = runSnap!.yDraft
+      const xValues = xd.raw.split(',').map((v) => v.trim()).filter(Boolean)
+      const yValues = yd ? yd.raw.split(',').map((v) => v.trim()).filter(Boolean) : [null as string | null]
+      const xySamples = s
+        .filter((x): x is typeof x & { xy: NonNullable<typeof x.xy> } => x.xy != null)
+        .map((x) => ({ path: x.path, xy: { xi: x.xy.xi, yi: x.xy.yi } }))
+      await saveXYMatrix({
+        samples: xySamples,
+        taskId,
+        xAxis: xd.axis as Parameters<typeof saveXYMatrix>[0]['xAxis'],
+        yAxis: (yd?.axis ?? null) as Parameters<typeof saveXYMatrix>[0]['yAxis'],
+        xValues,
+        yValues,
+      }, params)
+    }
+    await historyRef.current.refresh()
+  }, [])
+
+  // 0.17 P-I：拉本类型 running+pending generate（listQueueLive 的 type 参数），驱动排队
+  // 列表 + 显示跟 running 走 + 对刚离开列表（done/failed/canceled）的每条各自入库。
+  const refreshLiveGenerates = useCallback(async () => {
+    let items: Task[]
+    try { items = await api.listQueueLive(undefined, 'generate') } catch { return }
+    setLiveGenerates(items)
+    const newIds = new Set(items.map((t) => t.id))
+    // finished = 上次在 live、这次不在 = 刚跑完/取消。
+    const finished = [...prevGenIdsRef.current].filter((id) => !newIds.has(id))
+    prevGenIdsRef.current = newIds
+    const cur = currentTaskRef.current
+    const running = items.find((t) => t.status === 'running') ?? null
+    if (running) {
+      // 显示跟着正在跑的那张走
+      if (!cur || cur.id !== running.id) setCurrentTask(running)
+    } else if (cur && finished.includes(cur.id)) {
+      // 无 running 且当前显示那张刚跑完 → 拉终态定格状态徽章（图 samples 已在盘/cache）
+      void api.getGenerateTask(cur.id).then(setCurrentTask).catch(() => {})
+    }
+    // 每条刚完成的各自入库（显示那张用 live samples，省一次 getMonitorState）
+    for (const id of finished) {
+      void ingestGenerateTask(id, id === cur?.id ? samplesRef.current : undefined)
+    }
+  }, [ingestGenerateTask])
+
   useEffect(() => {
     void refreshBlockingTask()
-  }, [refreshBlockingTask])
+    void refreshLiveGenerates()
+  }, [refreshBlockingTask, refreshLiveGenerates])
 
   // SSE：task_state_changed 触发 task refresh；monitor_state_updated 推 sample 列表。
   useEventStream((evt) => {
-    if (evt.type === 'task_state_changed') void refreshBlockingTask()
+    if (evt.type === 'task_state_changed') {
+      void refreshBlockingTask()
+      // 0.17 P-I：显示态 + 排队列表 + 逐条入库统一由 refreshLiveGenerates 推进。
+      void refreshLiveGenerates()
+    }
     const tid = taskIdRef.current
     if (tid == null) return
     if (evt.type === 'task_state_changed' && evt.task_id === tid) {
-      void api.getGenerateTask(tid).then((t) => {
-        setCurrentTask(t)
-        if (t.status === 'done' || t.status === 'failed' || t.status === 'canceled') {
-          // busy 已是派生自 status，无需 setBusy；只清进度防残留
-          setProgress({ batchIdx: null, batchTotal: null, currentStep: null, totalSteps: null })
-        }
-      }).catch(() => { /* task 已清也走这里 */ })
+      // currentTask 的推进交给 refreshLiveGenerates；这里只在显示任务终态时清进度。
+      if (evt.status === 'done' || evt.status === 'failed' || evt.status === 'canceled') {
+        setProgress({ batchIdx: null, batchTotal: null, currentStep: null, totalSteps: null })
+      }
     } else if (
       evt.type === 'generate_preview_step'
       && String(evt.task_id) === String(tid)
@@ -345,122 +442,6 @@ export default function GeneratePage() {
     setHistoryOverride((cur) => (cur && cur.mode !== mode ? null : cur))
   }, [mode])
 
-  // task done + 有样本 → 入库历史。lastSnapshotRef 防同 task 多次触发
-  // 之前 dedup 还比 mode → 用户切 mode 时同 task 反复入库（"历史克隆"bug）。
-  // 修：只 dedup taskId；entry.mode 记当时生成时的 mode，不被切 mode 影响。
-  useEffect(() => {
-    if (!currentTask || currentTask.status !== 'done') return
-    if (samples.length === 0) return
-    const snap = lastSnapshotRef.current
-    if (snap?.taskId === currentTask.id) return
-    lastSnapshotRef.current = { taskId: currentTask.id, mode }
-    const taskId = currentTask.id
-    // #1：入库元数据（落盘 / cache 的 xyMeta + 参数快照）用本次运行态定格 run，
-    // 而非 live prefs —— 任务开始后改 sidebar 不污染已生成结果的入库轴与参数。
-    // run 不匹配当前任务时回退 live（刷新后中途完成的边缘场景）。
-    const runFrozen = run && run.taskId === currentTask.id ? run : null
-    const metaXDraft = runFrozen ? runFrozen.xDraft : xDraft
-    const metaYDraft = runFrozen ? runFrozen.yDraft : yDraft
-    // 选封面 sample
-    let coverIdx = 0
-    // XY：找 (xi=0, yi=0) 那张；找不到 fallback 0
-    if (mode === 'xy') {
-      const found = samples.findIndex(
-        (s) => s.xy && s.xy.xi === 0 && s.xy.yi === 0
-      )
-      if (found >= 0) coverIdx = found
-    }
-    const cover = samples[coverIdx]
-    if (!cover) return
-    const filename = (cover.path.split(/[\\/]/).pop() ?? '')
-    if (!filename) return
-    // badge 字段不再存 entry（adapter.entryBadge 计算）
-    const filenames = samples
-      .map((s) => s.path.split(/[\\/]/).pop() ?? '')
-      .filter(Boolean)
-    // commit: xy 历史回看用 PreviewXYGrid 重建网格 → 入库时收集 axis + sample 元数据
-    let xyMeta: import('./generate/useGenerateHistory').HistoryXYMeta | undefined
-    if (mode === 'xy') {
-      const xValues = metaXDraft.raw.split(',').map((s) => s.trim()).filter(Boolean)
-      const yValues = metaYDraft
-        ? metaYDraft.raw.split(',').map((s) => s.trim()).filter(Boolean)
-        : [null as string | null]
-      const xySamples = samples
-        .filter((s): s is typeof s & { xy: NonNullable<typeof s.xy> } => s.xy != null)
-        .map((s) => ({
-          path: s.path,
-          xy: {
-            xi: s.xy.xi, yi: s.xy.yi,
-            xv: s.xy.xv ?? '', yv: s.xy.yv ?? null,
-          },
-        }))
-      xyMeta = {
-        xAxis: metaXDraft.axis, yAxis: metaYDraft?.axis ?? null,
-        xValues, yValues, samples: xySamples,
-      }
-    }
-    // 参数快照（落盘 PNG metadata + cache entry 共用，回填用）。
-    // #1：优先用 dispatch 时定格的完整快照（runFrozen.snapshot）——任务开始后
-    // 改任意参数都不污染落盘 / cache 元数据。run 缺失时（边缘）回退按 live 现构造，
-    // xy_draft 用上面定格的轴 metaXDraft/metaYDraft。
-    // LoRA 只存 name + ids（不存 path 避免泄露 / 跨机器死链）；回填时通过
-    // projectLoras 用 ids → path resolve。
-    const params: GenerateParamsSnapshot = runFrozen?.snapshot ?? {
-      schema_version: PARAMS_SNAPSHOT_VERSION,
-      mode,
-      prompts,
-      negative_prompt: negPrompt,
-      width, height, steps,
-      cfg_scale: cfgScale,
-      sampler_name: samplerName,
-      scheduler,
-      count, seed,
-      base_model: baseModel,
-      loras: loras.map((l) => ({
-        name: loraBasename(l.path),
-        scale: l.scale,
-        project_id: l.project_id ?? null,
-        version_id: l.version_id ?? null,
-      })),
-      xy_draft: mode === 'xy'
-        ? {
-            x: transformAxisRawForSnapshot(metaXDraft),
-            y: metaYDraft ? transformAxisRawForSnapshot(metaYDraft) : null,
-          }
-        : null,
-      dataset_pick: datasetPick,
-    }
-    // 决策 #5 二元模式：开关开 = 落盘 + refresh disk-history（DiskEntry 由
-    // server 给）；开关关 = server 已自动入加密 cache，前端 refreshCache
-    // 拉新 index 即可（不再前端构造 CacheEntry）。compare 不入历史（保留现状）。
-    if (mode !== 'single' && mode !== 'xy') return
-    void (async () => {
-      const sec = await api.getSecrets().catch(() => null)
-      const saveToDisk = !!sec?.generate?.save_test_images
-      if (saveToDisk) {
-        // 持久路径：落盘 + 重拉 disk-history（DiskEntry 由 server 端 disk-history
-        // 接口构造，含 sha1 id + thumb url + 已 URL-encoded image url）
-        if (mode === 'single') {
-          await saveSingleSamples(taskId, filenames, params)
-        } else if (xyMeta) {
-          await saveXYMatrix({
-            samples: xyMeta.samples.map((s) => ({ path: s.path, xy: { xi: s.xy.xi, yi: s.xy.yi } })),
-            taskId,
-            xAxis: xyMeta.xAxis as Parameters<typeof saveXYMatrix>[0]['xAxis'],
-            yAxis: xyMeta.yAxis as Parameters<typeof saveXYMatrix>[0]['yAxis'],
-            xValues: xyMeta.xValues,
-            yValues: xyMeta.yValues,
-          }, params)
-        }
-        await history.refresh()
-      } else {
-        // 临时路径：server 端 image_done 已写入加密 disk cache（含 snapshot +
-        // xy 元数据），这里只拉新 index
-        await history.refreshCache()
-      }
-    })()
-  }, [currentTask, samples, mode, selectedIndices, history, run, xDraft, yDraft,
-      prompts, negPrompt, width, height, steps, cfgScale, samplerName, scheduler, count, seed, baseModel, loras, datasetPick])
 
   const handleHistorySelect = (entry: HistoryEntry) => {
     setHistoryOverride(entry)  // 先切图（同步），sidebar 回填随 ckpts 解析异步补上
@@ -583,12 +564,10 @@ export default function GeneratePage() {
       }
     }
 
+    // 0.17 P-I：提交只入队，**不清空/不劫持显示**——显示跟着正在跑的那张走，新提交的
+    // 排到队尾（daemon 逐个跑）。旧的 setCurrentTask(null)/setRun(null)/清 selection/progress
+    // 会打断正在出图那张，已移除。
     setSubmitting(true)
-    setCurrentTask(null)
-    setRun(null)  // #1：清掉上一次的运行态定格，本次 enqueue 成功后重新冻结
-    // monitorState 由 useMonitorProgress hook 自动随 currentTask 切 null → 清空
-    setSelectedIndices([])  // 新一轮生成 — 旧选择已失效
-    setProgress({ batchIdx: null, batchTotal: null, currentStep: null, totalSteps: null })
     try {
       // 拼接顺序：手写正向在前，dataset tags 在后（与产品约定一致）
       const baseTrimmed = prompts.map((p) => p.trim()).filter((p) => p)
@@ -643,19 +622,19 @@ export default function GeneratePage() {
         params_snapshot: dispatchSnapshot as unknown as Record<string, unknown>,
       }
       const task = await api.enqueueGenerate(body)
-      // 立即同步 ref，避免 supervisor 在 enqueue 返回 → setCurrentTask 渲染
-      // 之间已经处理完任务并发了 task_state_changed 事件（config 缺失这种
-      // 早期失败会马上发 SSE，handler 拿 taskIdRef 还是 null → 漏事件）
-      taskIdRef.current = task.id
-      setCurrentTask(task)
-      // #1：定格本次运行态。xDraft/yDraft 是 {axis,raw,loraIndex} 纯原始对象，
-      // 浅拷贝即可隔离后续 sidebar 编辑；snapshot 复用上面已构造的 dispatchSnapshot。
-      setRun({
-        taskId: task.id,
+      // #1 + P-I：把本次运行态定格存进 per-task Map（xDraft/yDraft 是纯原始对象浅拷贝
+      // 隔离后续编辑；snapshot 复用上面的 dispatchSnapshot）。显示/入库各按 taskId 取。
+      runsRef.current.set(task.id, {
         xDraft: { ...xDraft },
         yDraft: yDraft ? { ...yDraft } : null,
         snapshot: dispatchSnapshot,
       })
+      // 刷新队列：拿到新 pending + 若 daemon idle 立即领取则显示跟上。首次生成（当前无
+      // 显示）时乐观置为该 task，让用户立刻看到「排队/开始」而非空屏。
+      if (!currentTaskRef.current || TERMINAL_TASK_STATUSES.includes(currentTaskRef.current.status)) {
+        setCurrentTask(task)
+      }
+      void refreshLiveGenerates()
       toast(t('generate.taskEnqueued', { id: task.id }), 'success')
     } catch (e) {
       toast(String(e), 'error')
@@ -674,6 +653,17 @@ export default function GeneratePage() {
     }
   }
 
+  // 0.17 P-I：取消某条排队中的 generate（排队小列表单条 ✕）。
+  const cancelQueued = async (id: number) => {
+    try {
+      await api.cancelTask(id)
+      toast(t('generate.cancelRequested', { id }), 'info')
+      void refreshLiveGenerates()
+    } catch (e) {
+      toast(String(e), 'error')
+    }
+  }
+
   const cancelable = currentTask
     && (currentTask.status === 'pending' || currentTask.status === 'running')
 
@@ -681,7 +671,9 @@ export default function GeneratePage() {
   //（done/failed/canceled）一律 busy=false，让 button 立刻可点重试
   const busy: boolean = submitting || Boolean(cancelable)
 
-  const generateLabel = busy
+  // 0.17 P-I：按钮现在正在出图时也可点（提交新任务入队），所以 label 只在本次入队
+  // HTTP 窗口（submitting）显示「生成中」，其余显示动作 label。
+  const generateLabel = submitting
     ? t('generate.generating')
     : mode === 'xy' && xyCellCount > 0
       ? t('generate.startGenerateCount', { n: xyCellCount })
@@ -887,7 +879,7 @@ export default function GeneratePage() {
                   className="btn btn-primary flex-1"
                   style={{ padding: 12, fontWeight: 600, justifyContent: 'center' }}
                   onClick={handleGenerate}
-                  disabled={busy || activeBlockingTask !== null}
+                  disabled={submitting || activeBlockingTask !== null}
                   title={
                     activeBlockingTask
                       ? t('generate.blockedByActiveTask', { id: activeBlockingTask.id })
@@ -935,6 +927,28 @@ export default function GeneratePage() {
                 </div>
                 <ViewModeTabs mode={mode} onModeChange={setMode} />
               </div>
+
+              {/* 0.17 P-I：排队中的 generate 小列表（带单条取消）。当前显示的是正在跑的
+                  那张；这里列出后面排队的。 */}
+              {pendingGenerates.length > 0 && (
+                <div className="flex items-center gap-1.5 flex-wrap mb-3" data-testid="generate-queue">
+                  <span className="text-xs text-fg-tertiary">
+                    {t('generate.queuedCount', { n: pendingGenerates.length })}
+                  </span>
+                  {pendingGenerates.map((qt) => (
+                    <span key={qt.id} className="badge badge-neutral text-xs inline-flex items-center gap-1">
+                      #{qt.id}
+                      <button
+                        onClick={() => void cancelQueued(qt.id)}
+                        className="text-err bg-transparent border-0 cursor-pointer p-0 leading-none"
+                        title={t('common.cancel')}
+                        aria-label={t('common.cancel')}
+                        data-testid={`generate-queue-cancel-${qt.id}`}
+                      >✕</button>
+                    </span>
+                  ))}
+                </div>
+              )}
 
               <GenerateProgressBar busy={busy} progress={progress} />
 

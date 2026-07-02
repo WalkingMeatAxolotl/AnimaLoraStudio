@@ -110,6 +110,39 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(body.attention_backend).toBeUndefined()
   })
 
+  it('多任务（P-I）：running + pending → 排队列表带取消，提交按钮不禁用', async () => {
+    const genTask = (id: number, status: string) => ({
+      id, name: 'generate', config_name: 'generate', status, priority: 0,
+      created_at: 0, started_at: status === 'running' ? 1 : null, finished_at: null,
+      pid: null, exit_code: null, output_dir: null, error_msg: null,
+    })
+    const jsonOk = (body: unknown) => Promise.resolve({
+      ok: true, status: 200, json: async () => body,
+      text: async () => JSON.stringify(body),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    } as Response)
+    fetchMock.mockImplementation((url: string) => {
+      if (url.endsWith('/api/projects')) return jsonOk({ items: [] })
+      // group=live&types=generate → running #5 + pending #6,#7
+      if (url.includes('group=live')) {
+        return jsonOk({ items: [genTask(5, 'running'), genTask(6, 'pending'), genTask(7, 'pending')] })
+      }
+      // listQueue('running')（无 group，训练阻塞检测）→ 无阻塞
+      if (url.startsWith('/api/queue')) return jsonOk({ items: [] })
+      return Promise.resolve({ ok: false, status: 404, json: async () => null, text: async () => '', headers: new Headers() } as Response)
+    })
+
+    setup()
+    // 排队小列表出现，pending #6/#7 各带取消
+    await waitFor(() => expect(screen.getByTestId('generate-queue')).toBeInTheDocument())
+    expect(screen.getByTestId('generate-queue-cancel-6')).toBeInTheDocument()
+    expect(screen.getByTestId('generate-queue-cancel-7')).toBeInTheDocument()
+    // running #5 不算 pending → 无取消项
+    expect(screen.queryByTestId('generate-queue-cancel-5')).toBeNull()
+    // 正在出图时提交按钮仍可点（能继续入队）
+    expect(screen.getByRole('button', { name: /开始生成/ })).not.toBeDisabled()
+  })
+
   it('mode=xy 默认 X=steps 20,25,30：按钮显示「开始生成 · 3 张」并 enqueue 正确 xy_matrix', async () => {
     const user = userEvent.setup()
     setup()
@@ -167,7 +200,12 @@ describe('GeneratePage 端到端 smoke', () => {
     // train / reg-ai 等抢 GPU 的任务。
     const previousImpl = fetchMock.getMockImplementation()
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
-      if (url.startsWith('/api/queue') && (init?.method ?? 'GET') === 'GET') {
+      // 只覆盖 listQueue('running')（阻塞检测）；group=live&types=generate 走
+      // previousImpl 返 [] —— 后端会按 types=generate 过滤掉 train，本用例没提交 generate。
+      if (
+        url.startsWith('/api/queue') && !url.includes('group=live')
+        && (init?.method ?? 'GET') === 'GET'
+      ) {
         const running = {
           id: 42, name: 'train', config_name: 'train', status: 'running',
           priority: 0, created_at: 0, started_at: 0, finished_at: null,
