@@ -1,45 +1,55 @@
-/** 右侧竖排图片历史栏。Step 4 重写：用 entryAdapter helper 不直接 switch source。
+/** 右侧竖排出图时间线（0.17 P-I：从「只列 done 历史」升级成统一时间线）。
  *
- * - 按当前 mode 过滤显示（single / xy / compare）
- * - 64-72px 宽，垂直堆叠缩略图，溢出滚动
- * - DiskEntry 用 server thumb URL（带 ETag + HTTP cache）；CacheEntry 直接
- *   用 imageUrl + CSS 自缩（session 期间不多）
- * - XY entry 右下角 badge ("XY 5×3"); single 无
- * - 点击 → onSelect(entry) 给父组件
- * - 顶部 [刷新] 按钮 → 调 refresh() 重拉 disk-history（多 tab 同步 / 外部改
- *   studio_data 后用户主动同步）
+ * item 两种：
+ *  - live（pending / running，来自队列）：占位卡。pending 灰底「排队中」+ ✕；running
+ *    脉冲边框「生成中」，点击回到实时视图。
+ *  - done（来自 cache/disk 扫盘）：缩略图，点击回看（onSelect(entry)）。
+ * live 恒在最上（最新提交的），done 按 createdAt 往下——天然一条时间线。
  *
- * 虚拟滚动（#2）：图多了（落盘历史累积成百上千张）整列全量渲染会卡 —— 一次性
- * 挂出所有 thumbnail 节点 + 触发全部缩略图请求。改成定高窗口化：只渲染滚动可见
- * 区间（+overscan）的项，外层用 total×stride 的占位高度撑出正确滚动条。item 用
- * 绝对定位放到 idx×stride，省去 flex gap 的累计误差。
+ * - 按当前 mode 过滤（single / xy / compare）；live item 的 mode 由父组件按 runsRef 定。
+ * - 定高窗口化虚拟滚动（item 同尺寸，uniform stride）：只渲染可见区间 + overscan，
+ *   外层 total×stride 占位撑滚动条，item 绝对定位到 idx×stride。
+ * - 顶部 [刷新] 重拉 disk-history（多 tab / 外部改盘后手动同步）。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import type { Task } from '../../../api/client'
 import { entryBadge, entryDisplayLabel, entryThumbUrl, type HistoryEntry } from './entryAdapter'
 
-// item 56px 方形 + 4px 间距 = 60px stride（与旧 gap-1 视觉一致）
+// item 56px 方形 + 4px 间距 = 60px stride
 const ITEM_SIZE = 56
 const ITEM_STRIDE = 60
-// 上下各多渲染几行，滚动时不露白
 const OVERSCAN = 4
-// mount 前 / jsdom 无布局（clientHeight=0）时的视口兜底高度：先从宽渲染，
-// ResizeObserver 测到真实高度后收敛（仿 PreviewXYGrid 的 maxW 兜底）。
 const VIEWPORT_FALLBACK = 2000
 
+/** 统一时间线一项：进行中（队列 task）或已完成（历史 entry）。 */
+export type TimelineItem =
+  | { kind: 'live'; task: Task; mode: 'single' | 'xy' | 'compare' }
+  | { kind: 'done'; entry: HistoryEntry }
+
+function itemMode(it: TimelineItem): 'single' | 'xy' | 'compare' {
+  return it.kind === 'live' ? it.mode : it.entry.mode
+}
+function itemKey(it: TimelineItem): string {
+  return it.kind === 'live' ? `live:${it.task.id}` : it.entry.id
+}
+
 interface Props {
-  entries: HistoryEntry[]
+  items: TimelineItem[]
   mode: 'single' | 'xy' | 'compare'
-  onSelect: (entry: HistoryEntry) => void
+  /** 点 done 项回看 / 点 running 项回到实时视图。pending 项不触发（只可取消）。 */
+  onSelect: (it: TimelineItem) => void
+  /** 取消某条 pending/running 的 generate。 */
+  onCancel: (taskId: number) => void
   onRefresh?: () => Promise<void>
   loading?: boolean
 }
 
 export default function PreviewHistoryRail({
-  entries, mode, onSelect, onRefresh, loading,
+  items, mode, onSelect, onCancel, onRefresh, loading,
 }: Props) {
   const { t } = useTranslation()
-  const list = useMemo(() => entries.filter((e) => e.mode === mode), [entries, mode])
+  const list = useMemo(() => items.filter((it) => itemMode(it) === mode), [items, mode])
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const [scrollTop, setScrollTop] = useState(0)
@@ -50,7 +60,6 @@ export default function PreviewHistoryRail({
     if (!el) return
     const update = () => setViewportH(el.clientHeight || VIEWPORT_FALLBACK)
     update()
-    // jsdom 没有 ResizeObserver；测试 env 降级为 window resize 监听
     if (typeof ResizeObserver !== 'undefined') {
       const ro = new ResizeObserver(update)
       ro.observe(el)
@@ -89,13 +98,12 @@ export default function PreviewHistoryRail({
           className="flex-1 min-h-0 overflow-y-auto"
           onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
         >
-          {/* 占位高度 = total×stride 撑出真实滚动条；可见项绝对定位到各自 idx */}
           <div style={{ height: total * ITEM_STRIDE, position: 'relative' }}>
-            {slice.map((entry, i) => {
+            {slice.map((it, i) => {
               const idx = start + i
               return (
                 <div
-                  key={entry.id}
+                  key={itemKey(it)}
                   style={{
                     position: 'absolute',
                     top: idx * ITEM_STRIDE,
@@ -105,7 +113,11 @@ export default function PreviewHistoryRail({
                     justifyContent: 'center',
                   }}
                 >
-                  <HistoryItem entry={entry} onSelect={() => onSelect(entry)} />
+                  {it.kind === 'done' ? (
+                    <HistoryItem entry={it.entry} onSelect={() => onSelect(it)} />
+                  ) : (
+                    <LiveItem task={it.task} onSelect={() => onSelect(it)} onCancel={() => onCancel(it.task.id)} />
+                  )}
                 </div>
               )
             })}
@@ -116,12 +128,7 @@ export default function PreviewHistoryRail({
   )
 }
 
-interface ItemProps {
-  entry: HistoryEntry
-  onSelect: () => void
-}
-
-function HistoryItem({ entry, onSelect }: ItemProps) {
+function HistoryItem({ entry, onSelect }: { entry: HistoryEntry; onSelect: () => void }) {
   const badge = entryBadge(entry)
   return (
     <div
@@ -137,12 +144,38 @@ function HistoryItem({ entry, onSelect }: ItemProps) {
         loading="lazy"
       />
       {badge && (
-        <span
-          className="absolute bottom-0 right-0 bg-canvas/80 text-fg-primary text-[9px] px-1 rounded-tl"
-        >
+        <span className="absolute bottom-0 right-0 bg-canvas/80 text-fg-primary text-[9px] px-1 rounded-tl">
           {badge}
         </span>
       )}
+    </div>
+  )
+}
+
+/** 进行中项：pending 灰占位 + ✕；running 脉冲边框，点击回到实时视图。 */
+function LiveItem({ task, onSelect, onCancel }: { task: Task; onSelect: () => void; onCancel: () => void }) {
+  const { t } = useTranslation()
+  const running = task.status === 'running'
+  return (
+    <div
+      className={`relative rounded-sm border overflow-hidden flex items-center justify-center ${running ? 'border-accent cursor-pointer' : 'border-subtle border-dashed'}`}
+      style={{ width: ITEM_SIZE, height: ITEM_SIZE, flexShrink: 0, background: 'var(--bg-overlay)' }}
+      onClick={running ? onSelect : undefined}
+      title={`#${task.id} · ${running ? t('status.running') : t('status.queued')}`}
+    >
+      {running
+        ? <span className="dot dot-running" />
+        : <span className="text-fg-tertiary text-[9px] text-center leading-tight px-0.5">{t('status.queued')}</span>}
+      <button
+        onClick={(e) => { e.stopPropagation(); onCancel() }}
+        className="absolute top-0 right-0 text-err bg-canvas/80 leading-none px-0.5 cursor-pointer border-0"
+        title={t('common.cancel')}
+        aria-label={t('common.cancel')}
+        data-testid={`timeline-cancel-${task.id}`}
+      >✕</button>
+      <span className="absolute bottom-0 left-0 bg-canvas/80 text-fg-tertiary text-[9px] px-0.5 rounded-tr">
+        #{task.id}
+      </span>
     </div>
   )
 }

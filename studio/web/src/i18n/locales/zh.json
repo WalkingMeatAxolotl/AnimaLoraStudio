@@ -1384,7 +1384,6 @@
     "promptOrDatasetRequired": "请输入至少一条提示词（或从训练集选一条 caption）",
     "xySinglePromptOnly": "XY 模式只支持单条 prompt（多 prompt 与 XY 互斥）",
     "taskEnqueued": "测试任务 #{{id}} 已入队",
-    "queuedCount": "排队中 {{n}} 张",
     "cancelRequested": "已请求取消 #{{id}}",
     "generating": "生成中…",
     "startGenerate": "开始生成",

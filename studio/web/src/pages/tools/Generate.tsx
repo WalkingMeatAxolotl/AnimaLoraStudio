@@ -21,7 +21,7 @@ import DaemonLogDrawer from './generate/DaemonLogDrawer'
 import GenerateProgressBar, { type GenerateProgress } from './generate/GenerateProgress'
 import NumField from './generate/NumField'
 import PreviewCompare from './generate/PreviewCompare'
-import PreviewHistoryRail from './generate/PreviewHistoryRail'
+import PreviewHistoryRail, { type TimelineItem } from './generate/PreviewHistoryRail'
 import PromptFromDatasetPicker, { type DatasetPick } from './generate/PromptFromDatasetPicker'
 import {
   PARAMS_SNAPSHOT_VERSION, applySnapshot, loraBasename, resolveLoraFromCkpts,
@@ -277,11 +277,26 @@ export default function GeneratePage() {
   const gridXDraft = frozenRun ? frozenRun.xDraft : xDraft
   const gridYDraft = frozenRun ? frozenRun.yDraft : yDraft
 
-  // 0.17 P-I：排队中（pending）的 generate，按 id 升序 = 派发顺序（同优先级 created ASC）。
-  const pendingGenerates = useMemo(
-    () => liveGenerates.filter((t) => t.status === 'pending').sort((a, b) => a.id - b.id),
-    [liveGenerates],
-  )
+  // 0.17 P-I：统一出图时间线 = live 队列(pending/running) ∪ done 历史(cache/disk 扫盘)，
+  // 按 taskId 去重（running→done 过渡窗口）。live 恒在最上（最新提交），done 往下。喂右栏。
+  // 未来换后端 D 端点只改这一处派生（前端其余不动）。
+  const timelineItems = useMemo<TimelineItem[]>(() => {
+    const doneIds = new Set(
+      history.entries.map(entryTaskId).filter((x): x is number => x != null),
+    )
+    const done: TimelineItem[] = [...history.entries]
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .map((entry) => ({ kind: 'done', entry }))
+    const live: TimelineItem[] = [...liveGenerates]
+      .filter((task) => !doneIds.has(task.id))
+      .sort((a, b) => b.created_at - a.created_at)
+      .map((task) => ({
+        kind: 'live',
+        task,
+        mode: runsRef.current.get(task.id)?.snapshot.mode ?? 'single',
+      }))
+    return [...live, ...done]
+  }, [liveGenerates, history.entries])
 
   // XY mode 时，按钮显示「生成 N×M=K 张」
   const xyCellCount = useMemo(() => {
@@ -431,10 +446,9 @@ export default function GeneratePage() {
     setPreviewStep(null)
   }, [currentTask?.id, mode, samples.length])
 
-  // 切 task 时清掉历史回看 override（让主预览跟着走当前 task）。
-  useEffect(() => {
-    setHistoryOverride(null)
-  }, [currentTask?.id])
+  // 0.17 P-I：**不再**随 currentTask.id 变自动清 override。多任务下 currentTask 跟着
+  // running 自动走，若在此清 override 会把用户正回看的 done 项踢回实时视图。改为只在
+  // 用户显式操作时清：点 running 时间线项（rail onSelect）→ 清；或切 mode（下面）→ 清。
   // 切 mode 时只清「属于别的 mode」的 override：手动切 mode 仍清（rail 按 mode 分桶，
   // override.mode 恒等于旧 mode ≠ 新 mode → 清）；但 ?task= 深链到异 mode 的 task 时
   // handleHistorySelect 会把 mode 对齐到 entry.mode，此时 override.mode===新 mode → 保留。
@@ -928,28 +942,7 @@ export default function GeneratePage() {
                 <ViewModeTabs mode={mode} onModeChange={setMode} />
               </div>
 
-              {/* 0.17 P-I：排队中的 generate 小列表（带单条取消）。当前显示的是正在跑的
-                  那张；这里列出后面排队的。 */}
-              {pendingGenerates.length > 0 && (
-                <div className="flex items-center gap-1.5 flex-wrap mb-3" data-testid="generate-queue">
-                  <span className="text-xs text-fg-tertiary">
-                    {t('generate.queuedCount', { n: pendingGenerates.length })}
-                  </span>
-                  {pendingGenerates.map((qt) => (
-                    <span key={qt.id} className="badge badge-neutral text-xs inline-flex items-center gap-1">
-                      #{qt.id}
-                      <button
-                        onClick={() => void cancelQueued(qt.id)}
-                        className="text-err bg-transparent border-0 cursor-pointer p-0 leading-none"
-                        title={t('common.cancel')}
-                        aria-label={t('common.cancel')}
-                        data-testid={`generate-queue-cancel-${qt.id}`}
-                      >✕</button>
-                    </span>
-                  ))}
-                </div>
-              )}
-
+              {/* 0.17 P-I：排队中的项已并入右栏时间线（live 占位 + 取消），不再单列。 */}
               <GenerateProgressBar busy={busy} progress={progress} />
 
               {historyOverride ? (
@@ -1063,11 +1056,17 @@ export default function GeneratePage() {
             </div>
           </div>
 
-          {/* 右：图片历史栏（按当前 mode 分桶） */}
+          {/* 右：出图时间线（live 队列 + done 历史，按当前 mode 分桶） */}
           <PreviewHistoryRail
-            entries={history.entries}
+            items={timelineItems}
             mode={mode}
-            onSelect={handleHistorySelect}
+            onSelect={(it) => {
+              if (it.kind === 'done') handleHistorySelect(it.entry)
+              // running 项：清 override 回到实时视图（currentTask 已跟着 running 走）。
+              else if (it.task.status === 'running') setHistoryOverride(null)
+              // pending 项：无内容，不选中（只可取消）。
+            }}
+            onCancel={cancelQueued}
             onRefresh={history.refresh}
             loading={history.loading}
           />

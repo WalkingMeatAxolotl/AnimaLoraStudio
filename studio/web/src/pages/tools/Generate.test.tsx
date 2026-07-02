@@ -133,12 +133,10 @@ describe('GeneratePage 端到端 smoke', () => {
     })
 
     setup()
-    // 排队小列表出现，pending #6/#7 各带取消
-    await waitFor(() => expect(screen.getByTestId('generate-queue')).toBeInTheDocument())
-    expect(screen.getByTestId('generate-queue-cancel-6')).toBeInTheDocument()
-    expect(screen.getByTestId('generate-queue-cancel-7')).toBeInTheDocument()
-    // running #5 不算 pending → 无取消项
-    expect(screen.queryByTestId('generate-queue-cancel-5')).toBeNull()
+    // 右栏时间线出现 pending #6/#7（各带取消），running #5 也在（同为 live 项、可取消）
+    await waitFor(() => expect(screen.getByTestId('timeline-cancel-6')).toBeInTheDocument())
+    expect(screen.getByTestId('timeline-cancel-7')).toBeInTheDocument()
+    expect(screen.getByTestId('timeline-cancel-5')).toBeInTheDocument()
     // 正在出图时提交按钮仍可点（能继续入队）
     expect(screen.getByRole('button', { name: /开始生成/ })).not.toBeDisabled()
   })
