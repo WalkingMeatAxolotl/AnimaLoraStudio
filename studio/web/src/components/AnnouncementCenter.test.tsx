@@ -66,8 +66,9 @@ describe('AnnouncementCenter', () => {
     fireEvent.click(screen.getByTestId('announcement-item-p-notice'))
     await waitFor(() =>
       expect(screen.queryByTestId('announcement-dot-p-notice')).toBeNull())
-    // 正文切换是点击后异步渲染（markdown），跟红点消失不同 tick；CI 慢机上同步
-    // getByText 会 flake（红点已消失但正文未渲染）→ 用 waitFor 等正文到位。
+    // 正文切换与红点消失不同 tick → waitFor 等正文到位。曾两次 CI flake
+    // （#349 补 waitFor、后又超时）：真因是组件默认选中 effect 的 stale closure
+    // 会覆盖点击选中（已在 AnnouncementCenter 内改函数式更新修复），非等待不够长。
     await waitFor(() =>
       expect(screen.getByText('公告正文')).toBeInTheDocument())
   })
