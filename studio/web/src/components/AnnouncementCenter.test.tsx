@@ -68,8 +68,12 @@ describe('AnnouncementCenter', () => {
       expect(screen.queryByTestId('announcement-dot-p-notice')).toBeNull())
     // 正文切换是点击后异步渲染（markdown），跟红点消失不同 tick；CI 慢机上同步
     // getByText 会 flake（红点已消失但正文未渲染）→ 用 waitFor 等正文到位。
-    await waitFor(() =>
-      expect(screen.getByText('公告正文')).toBeInTheDocument())
+    // waitFor 默认 1s 超时在 CI 慢机上仍不够（#349 后再次发作，实测 1047ms
+    // 耗尽默认窗口）→ 显式放宽到 5s；本地正常毫秒级完成，不拖慢绿色路径。
+    await waitFor(
+      () => expect(screen.getByText('公告正文')).toBeInTheDocument(),
+      { timeout: 5000 },
+    )
   })
 
   it('tag 过滤只显示该类', async () => {
