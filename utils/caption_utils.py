@@ -244,8 +244,12 @@ def batch_convert_json(
             if raw_json is None:
                 continue
             
-            # 跳过已经是标准格式的
-            if "tags" in raw_json and "meta" in raw_json:
+            # 跳过已经是标准格式的——tags 必须是分类 dict（与 load_and_build_caption
+            # 同款判断，#345）；扁平 {"tags": [...]} 需要转换，不能误判为已标准。
+            if (
+                isinstance(raw_json.get("tags"), dict)
+                and isinstance(raw_json.get("meta"), dict)
+            ):
                 continue
             
             normalized = normalize_caption_json(raw_json)
