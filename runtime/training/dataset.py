@@ -170,6 +170,7 @@ class ImageDataset(Dataset):
         txt_count = len(self.samples) - json_count
         unique_count = len(set(id(s) for s in self.samples))
         logger.info(f"数据集: {unique_count} 张图 → {len(self.samples)} 样本（含 repeat）(JSON: {json_count}, TXT: {txt_count})")
+        self._preflight_json_captions()
         self.bucket_for_index = self._build_bucket_for_index()
 
     def _build_bucket_for_index(self):
@@ -341,6 +342,52 @@ class ImageDataset(Dataset):
 
         return samples
 
+    def _preflight_json_captions(self):
+        """开训前预检所有 JSON caption，构建失败直接拒绝开训（fail-fast）。
+
+        JSON 样本没有 .txt 兜底（``_make_sample`` 里 prefer_json 命中时
+        txt_path=None），caption 构建失败会在 ``__getitem__`` 静默退成空
+        caption——连触发词都不剩，整炉 LoRA 白炼且训练照常跑完（#345）。
+        与其训练中逐样本 warning 刷屏，不如开训前一次性报清楚并中止。
+
+        shuffle=False + dropout=0 保证预检确定性且不消耗随机数状态。
+        caption_override 全局覆盖时不读 caption 文件，跳过。
+        """
+        if self.caption_override is not None:
+            return
+        json_paths = []
+        seen = set()
+        for s in self.samples:
+            jp = s.get("json_path")
+            if jp and jp not in seen:
+                seen.add(jp)
+                json_paths.append(jp)
+        if not json_paths:
+            return
+        if self.caption_utils is None:
+            raise ValueError(
+                f"数据集含 {len(json_paths)} 个 JSON caption，但 caption_utils 加载失败"
+                f"（见上方 warning），这些图将以空 caption 训练，已拒绝开训。"
+            )
+        bad = []
+        for jp in json_paths:
+            try:
+                caption = self.caption_utils["load_and_build"](
+                    jp, shuffle=False, tag_dropout=0.0
+                )
+            except Exception:
+                caption = None
+            if caption is None:
+                bad.append(jp)
+        if bad:
+            preview = "\n".join(f"  - {p}" for p in bad[:5])
+            more = f"\n  ...等共 {len(bad)} 个" if len(bad) > 5 else ""
+            raise ValueError(
+                f"{len(bad)} 个 JSON caption 解析失败，对应图片将以空 caption"
+                f"（连触发词都没有）参与训练，已拒绝开训。"
+                f"请在打标页检查或重新打标这些文件：\n{preview}{more}"
+            )
+
     def _process_caption_txt(self, caption):
         """处理 TXT caption: 传统 tag 打乱 + keep_tokens"""
         if not caption:
@@ -365,24 +412,17 @@ class ImageDataset(Dataset):
         """处理 JSON caption: 分类 shuffle"""
         if self.caption_utils is None:
             return None
-        
+
         try:
-            raw_json = self.caption_utils["load_json"](json_path)
-            if raw_json is None:
-                return None
-            
-            # 检查是否已经是标准格式
-            if "tags" in raw_json and "meta" in raw_json:
-                normalized = raw_json
-            else:
-                normalized = self.caption_utils["normalize"](raw_json)
-            
-            # 构建 caption（分类 shuffle）
-            return self.caption_utils["build"](
-                normalized,
-                shuffle_appearance=self.shuffle_caption,
-                shuffle_tags=self.shuffle_caption,
-                shuffle_environment=self.shuffle_caption,
+            # 走 caption_utils 的权威编排（load → 判断标准格式 → normalize → build）。
+            # 早期这里 copy 了一份判断，用 `"tags" in raw_json` 只查 key 是否存在，会把
+            # Studio 打标写出的简化形式 {"tags": [list], "meta": {trigger}} 误判为标准
+            # 格式直接喂给 build，导致 build 对 list 调 .get() 崩（#345）。load_and_build
+            # 用 isinstance(tags, dict) 正确判断：list 形式走 normalize 搬到 tags.tags，
+            # 复用单一源避免逻辑再次漂移。
+            return self.caption_utils["load_and_build"](
+                json_path,
+                shuffle=self.shuffle_caption,
                 tag_dropout=self.tag_dropout,
             )
         except Exception as e:
