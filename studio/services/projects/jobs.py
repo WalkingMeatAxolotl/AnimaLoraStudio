@@ -34,6 +34,9 @@ VALID_STATUSES: frozenset[str] = frozenset({
     "pending", "running", "done", "failed", "canceled"
 })
 TERMINAL_STATUSES: frozenset[str] = frozenset({"done", "failed", "canceled"})
+# 0.17 P-G 数据作业只读区：live / history 两段（有序 tuple 供 SQL IN + 分页）。
+LIVE_STATUSES: tuple[str, ...] = ("running", "pending")
+HISTORY_STATUSES: tuple[str, ...] = ("done", "failed", "canceled")
 
 
 from studio.domain.errors import DomainError
@@ -123,6 +126,47 @@ def list_jobs(
         sql += " AND status = ?"
         params.append(status)
     sql += " ORDER BY id DESC"
+    return [_row_to_dict(r) or {} for r in conn.execute(sql, params)]
+
+
+def _jobs_filter(
+    statuses: tuple[str, ...], kind: Optional[str]
+) -> tuple[str, list[Any]]:
+    placeholders = ",".join("?" for _ in statuses)
+    where = f" WHERE status IN ({placeholders})"
+    params: list[Any] = list(statuses)
+    if kind:
+        where += " AND kind = ?"
+        params.append(kind)
+    return where, params
+
+
+def count_jobs(
+    conn: sqlite3.Connection,
+    *,
+    statuses: tuple[str, ...],
+    kind: Optional[str] = None,
+) -> int:
+    """0.17 P-G — 按状态组（+ 可选 kind）计数，供 history 分页 total。"""
+    where, params = _jobs_filter(statuses, kind)
+    row = conn.execute(f"SELECT COUNT(*) FROM project_jobs{where}", params).fetchone()
+    return int(row[0])
+
+
+def list_jobs_page(
+    conn: sqlite3.Connection,
+    *,
+    statuses: tuple[str, ...],
+    kind: Optional[str] = None,
+    limit: Optional[int] = None,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """0.17 P-G — 按状态组取 job，`id DESC`；limit=None 不分页（live 组全量）。"""
+    where, params = _jobs_filter(statuses, kind)
+    sql = f"SELECT * FROM project_jobs{where} ORDER BY id DESC"
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params = [*params, int(limit), int(offset)]
     return [_row_to_dict(r) or {} for r in conn.execute(sql, params)]
 
 

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 200,
+  "count": 201,
   "routes": [
     {
       "path": "/",
@@ -247,6 +247,14 @@
         "GET"
       ],
       "name": "health",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/jobs",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_jobs_endpoint",
       "type": "APIRoute"
     },
     {
