@@ -693,6 +693,7 @@
     "startNowHint": "不等计划时间，立即转入等待队列",
     "startNowSent": "#{{id}} 已转入等待队列",
     "startNowConfirm": "立即开始计划任务 #{{id}}？将跳过计划时间，进入等待队列排队。",
+    "taskDetailTooltip": "任务详情",
     "cancelScheduled": "取消计划",
     "cancelScheduledHint": "取消这个计划任务（移入历史，可从历史重新入队）",
     "cancelScheduledConfirm": "取消计划任务 #{{id}}？任务将移入历史，可从历史重新入队。",

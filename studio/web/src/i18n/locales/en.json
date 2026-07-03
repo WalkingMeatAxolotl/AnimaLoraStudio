@@ -693,6 +693,7 @@
     "startNowHint": "Skip the scheduled time and move it to the waiting queue now",
     "startNowSent": "#{{id}} moved to the waiting queue",
     "startNowConfirm": "Start scheduled task #{{id}} now? It skips the scheduled time and joins the waiting queue.",
+    "taskDetailTooltip": "Task details",
     "cancelScheduled": "Cancel schedule",
     "cancelScheduledHint": "Cancel this scheduled task (moves to history; you can retry it from there)",
     "cancelScheduledConfirm": "Cancel scheduled task #{{id}}? It moves to history and can be retried from there.",

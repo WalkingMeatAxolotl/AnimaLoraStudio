@@ -158,7 +158,8 @@ function QueueTaskRow({
   return (
     <button
       onClick={() => onOpen(task.id)}
-      className={`card card-hover block overflow-hidden text-left p-0 ${isRunning ? 'cursor-pointer border border-accent bg-accent-soft' : 'cursor-default border border-subtle bg-surface'}`}
+      title={t('queue.taskDetailTooltip')}
+      className={`card card-hover block overflow-hidden text-left p-0 cursor-pointer ${isRunning ? 'border border-accent bg-accent-soft' : 'border border-subtle bg-surface'}`}
     >
       <div
         className="px-[22px] py-4 grid gap-3 items-center"
@@ -343,7 +344,7 @@ function QueueTaskRow({
                 aria-label={t('queue.startNow')}
                 data-testid={`startnow-btn-${task.id}`}
               >
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M8 5v14l11-7z" />
                 </svg>
               </button>
@@ -354,7 +355,7 @@ function QueueTaskRow({
                 aria-label={t('queue.cancelScheduled')}
                 data-testid={`cancel-scheduled-btn-${task.id}`}
               >
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                   <path d="M18 6L6 18M6 6l12 12" />
                 </svg>
               </button>
@@ -368,7 +369,7 @@ function QueueTaskRow({
               aria-label={jump.label}
               data-testid={`jump-btn-${task.id}`}
             >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M7 17L17 7M7 7h10v10" />
               </svg>
             </button>
