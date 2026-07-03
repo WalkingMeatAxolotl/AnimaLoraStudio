@@ -708,8 +708,10 @@ export default function QueuePage() {
   return (
     <StepShell
       idx={-1}
-      title={t('queue.title')}
-      subtitle={t('queue.description')}
+      /* 0.17 P-G — title/描述随视图切换：明确这是两条独立队列，不是同一列表的
+         类型 filter。 */
+      title={queueTab === 'jobs' ? t('queue.titleJobs') : t('queue.title')}
+      subtitle={queueTab === 'jobs' ? t('queue.descriptionJobs') : t('queue.description')}
       actions={
         <>
           {queueTab === 'jobs' && <>

@@ -652,8 +652,10 @@
     "evaluatingHint": "Training finished; metrics are being computed against the validation set for each checkpoint (sampling + CLIP / DINO). This disappears when done. See the Eval tab in task detail for details."
   },
   "queue": {
-    "title": "Queue",
-    "description": "One task at a time · Auto-start next on completion",
+    "title": "GPU task queue",
+    "description": "Train / reg AI / test render · one at a time, next auto-starts on completion",
+    "titleJobs": "Data task queue",
+    "descriptionJobs": "Download / tagging / preprocess / reg build / eval · separate serial lane scheduled alongside the GPU queue",
     "clearDone": "Clear done",
     "cancelCurrent": "Cancel current task",
     "cancelHint": "Send cancel signal to stop the running task",

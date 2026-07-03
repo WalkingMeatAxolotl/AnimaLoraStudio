@@ -652,8 +652,10 @@
     "evaluatingHint": "训练已结束，正在用验证集对各 checkpoint 算指标（出图 + CLIP / DINO），完成后这里消失。明细看任务详情的「评估」tab。"
   },
   "queue": {
-    "title": "队列",
-    "description": "同一时刻仅运行一个任务 · 完成后自动启动下一个",
+    "title": "GPU 任务队列",
+    "description": "训练 / 正则 AI / 测试出图 · 同一时刻仅运行一个，完成后自动启动下一个",
+    "titleJobs": "数据任务队列",
+    "descriptionJobs": "下载 / 打标 / 预处理 / 正则构建 / 评估 · 独立串行车道，与 GPU 队列并行调度",
     "clearDone": "清理已完成",
     "cancelCurrent": "取消当前任务",
     "cancelHint": "发送取消信号，让当前运行任务停止",
