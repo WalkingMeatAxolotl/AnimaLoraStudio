@@ -14,6 +14,7 @@ import { useEventStream } from '../lib/useEventStream'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
 import { useEvaluatingTasks, type EvalProgress } from '../lib/useEvalProgress'
 import { useLocalStorageState } from '../lib/useLocalStorageState'
+import DataJobsPanel from './queue/DataJobsPanel'
 
 async function pickJsonFile(jsonErrorMsg: string): Promise<unknown | null> {
   return new Promise((resolve, reject) => {
@@ -407,6 +408,9 @@ export default function QueuePage() {
     useLocalStorageState('studio:queue:pageSize', HISTORY_PAGE_SIZES[0])
   // 过滤行折叠（与项目页一致：默认收起，header 漏斗按钮开关，收起且有筛选时带小圆点）。
   const [filtersOpen, setFiltersOpen] = useState(false)
+  // 0.17 P-G — 顶层 tab：任务队列（tasks 表）/ 数据作业（project_jobs 只读区）。
+  const [queueTab, setQueueTab] =
+    useLocalStorageState<'tasks' | 'jobs'>('studio:queue:tab', 'tasks')
   const reloadTimer = useRef<number | null>(null)
   const { toast } = useToast()
   const { confirm } = useDialog()
@@ -722,7 +726,7 @@ export default function QueuePage() {
       title={t('queue.title')}
       subtitle={t('queue.description')}
       actions={
-        <>
+        queueTab === 'tasks' && <>
           {/* 过滤漏斗：折叠态不占行，开关过滤行；有筛选生效且收起时带小圆点（与项目页一致）。 */}
           <button
             className={`btn btn-sm ${filtersOpen ? 'btn-secondary' : 'btn-ghost'}`}
@@ -815,7 +819,7 @@ export default function QueuePage() {
           <button onClick={() => void reload()} className="btn btn-ghost btn-sm">{t('common.refresh')}</button>
         </>
       }
-      belowHeader={filtersOpen && (
+      belowHeader={queueTab === 'tasks' && filtersOpen && (
         // 0.17 P-C/P-F 过滤行 —— 与项目页 FilterBar 一致：header 下全宽条。搜索 60%
         // 下沉后端搜 name/config；类型 select 跨 live+history 按 task_type 过滤；状态
         // select 是历史段终态子过滤。
@@ -871,7 +875,28 @@ export default function QueuePage() {
       )}
     >
       <div className="flex flex-col gap-2.5 flex-1 min-h-0 overflow-y-auto">
-        {/* ADR §4.1 队列挂起 banner — 仅 held=true 时显示，sticky 顶部。 */}
+        {/* 0.17 P-G — 顶层 tab：任务队列 / 数据作业（只读区）。 */}
+        <div className="flex items-center gap-1 shrink-0">
+          <button
+            className={`btn btn-sm ${queueTab === 'tasks' ? 'btn-secondary' : 'btn-ghost'}`}
+            onClick={() => setQueueTab('tasks')}
+            aria-pressed={queueTab === 'tasks'}
+            data-testid="queue-tab-tasks"
+          >
+            {t('queue.tabTasks')}
+          </button>
+          <button
+            className={`btn btn-sm ${queueTab === 'jobs' ? 'btn-secondary' : 'btn-ghost'}`}
+            onClick={() => setQueueTab('jobs')}
+            aria-pressed={queueTab === 'jobs'}
+            data-testid="queue-tab-jobs"
+          >
+            {t('queue.tabJobs')}
+          </button>
+        </div>
+
+        {/* ADR §4.1 队列挂起 banner — 仅 held=true 时显示，sticky 顶部。
+            hold 覆盖全队列（含数据作业派发），两个 tab 都显示。 */}
         {holdState?.held && (
           <div
             className="sticky top-0 z-10 px-3.5 py-2.5 rounded-md bg-warn-soft border border-warn text-warn text-xs flex items-center justify-between"
@@ -892,7 +917,10 @@ export default function QueuePage() {
           </div>
         )}
 
-        {!loaded ? (
+        {queueTab === 'jobs' ? (
+          /* 0.17 P-G — 数据作业只读区（project_jobs），独立数据源/过滤/分页。 */
+          <DataJobsPanel />
+        ) : !loaded ? (
           <div className="rounded-lg border border-subtle bg-surface overflow-hidden">
             {Array.from({ length: 3 }).map((_, i) => (
               <div
@@ -975,7 +1003,7 @@ export default function QueuePage() {
       {/* 0.17 item6：分页下沉成 fixed 底栏（-mx-6/-mb-6 抵消内容区 padding 做全宽贴底）。
           item2：只要历史超过最小每页数就常显（切到 50/100 只剩一页时不消失，能切回
           20）；样式压缩省空间。 */}
-      {loaded && !isEmpty && history.total > HISTORY_PAGE_SIZES[0] && (
+      {queueTab === 'tasks' && loaded && !isEmpty && history.total > HISTORY_PAGE_SIZES[0] && (
         <div className="shrink-0 -mx-6 -mb-6 px-6 py-1 border-t border-subtle flex items-center justify-between flex-wrap gap-2 bg-canvas text-[11px]">
           <div className="flex items-center gap-2 text-fg-tertiary">
             <span>{t('queue.pageIndicator', { page: history.page, pages: totalPages })}</span>

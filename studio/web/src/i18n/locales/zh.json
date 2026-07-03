@@ -694,6 +694,28 @@
     "startNowSent": "#{{id}} 已转入等待队列",
     "startNowConfirm": "立即开始计划任务 #{{id}}？将跳过计划时间，进入等待队列排队。",
     "taskDetailTooltip": "任务详情",
+    "tabTasks": "任务队列",
+    "tabJobs": "数据作业",
+    "jobs": {
+      "kind": {
+        "download": "素材下载",
+        "preprocess": "预处理",
+        "tag": "打标",
+        "reg_build": "正则集构建",
+        "eval_samples": "评估出图",
+        "eval_clip": "CLIP 评估",
+        "eval_dino": "DINO 评估",
+        "eval_tag": "Tag 评估",
+        "eval_ccip": "CCIP 评估"
+      },
+      "empty": "暂无数据作业",
+      "emptyHint": "下载 / 打标 / 正则构建 / 评估等数据作业会显示在这里",
+      "cancel": "取消作业",
+      "cancelOk": "取消作业",
+      "cancelConfirm": "取消数据作业 #{{id}}？运行中的作业会被终止。",
+      "jump": "打开所在页面",
+      "expandTooltip": "展开日志 / 参数"
+    },
     "cancelScheduled": "取消计划",
     "cancelScheduledHint": "取消这个计划任务（移入历史，可从历史重新入队）",
     "cancelScheduledConfirm": "取消计划任务 #{{id}}？任务将移入历史，可从历史重新入队。",

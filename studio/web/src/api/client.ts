@@ -834,7 +834,17 @@ export interface ProjectDetail extends ProjectSummary {
 // ---- jobs (PP2) -----------------------------------------------------------
 
 export type JobStatus = 'pending' | 'running' | 'done' | 'failed' | 'canceled'
-export type JobKind = 'download' | 'preprocess' | 'tag' | 'reg_build'
+export type JobKind =
+  | 'download' | 'preprocess' | 'tag' | 'reg_build'
+  | 'eval_samples' | 'eval_clip' | 'eval_dino' | 'eval_tag' | 'eval_ccip'
+
+/** 0.17 P-G — /api/jobs?group=history 分页返回。 */
+export interface JobsHistoryPage {
+  items: Job[]
+  total: number
+  page: number
+  page_size: number
+}
 
 export interface Job {
   id: number
@@ -2279,6 +2289,19 @@ export const api = {
       body: JSON.stringify({ crops }),
     }),
 
+  // 0.17 P-G — 数据作业只读区数据源。live = running+pending 不分页；history 分页。
+  listJobsLive: (kind?: JobKind) => {
+    const params = new URLSearchParams({ group: 'live' })
+    if (kind) params.set('kind', kind)
+    return req<{ items: Job[] }>(`/api/jobs?${params}`).then((r) => r.items)
+  },
+  listJobsHistory: (opts: { page: number; pageSize: number; kind?: JobKind }) => {
+    const params = new URLSearchParams({
+      group: 'history', page: String(opts.page), page_size: String(opts.pageSize),
+    })
+    if (opts.kind) params.set('kind', opts.kind)
+    return req<JobsHistoryPage>(`/api/jobs?${params}`)
+  },
   getJob: (jid: number) => req<Job>(`/api/jobs/${jid}`),
   getJobLog: (jid: number, tail?: number) => {
     const qs = tail ? `?tail=${tail}` : ''

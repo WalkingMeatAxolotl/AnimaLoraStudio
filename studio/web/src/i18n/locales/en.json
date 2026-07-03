@@ -694,6 +694,28 @@
     "startNowSent": "#{{id}} moved to the waiting queue",
     "startNowConfirm": "Start scheduled task #{{id}} now? It skips the scheduled time and joins the waiting queue.",
     "taskDetailTooltip": "Task details",
+    "tabTasks": "Task queue",
+    "tabJobs": "Data jobs",
+    "jobs": {
+      "kind": {
+        "download": "Download",
+        "preprocess": "Preprocess",
+        "tag": "Tagging",
+        "reg_build": "Reg build",
+        "eval_samples": "Eval samples",
+        "eval_clip": "CLIP eval",
+        "eval_dino": "DINO eval",
+        "eval_tag": "Tag eval",
+        "eval_ccip": "CCIP eval"
+      },
+      "empty": "No data jobs yet",
+      "emptyHint": "Download / tagging / reg build / eval jobs show up here",
+      "cancel": "Cancel job",
+      "cancelOk": "Cancel job",
+      "cancelConfirm": "Cancel data job #{{id}}? A running job will be terminated.",
+      "jump": "Open source page",
+      "expandTooltip": "Expand log / params"
+    },
     "cancelScheduled": "Cancel schedule",
     "cancelScheduledHint": "Cancel this scheduled task (moves to history; you can retry it from there)",
     "cancelScheduledConfirm": "Cancel scheduled task #{{id}}? It moves to history and can be retried from there.",

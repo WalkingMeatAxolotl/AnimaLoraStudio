@@ -217,6 +217,33 @@ describe('QueuePage 分区 + 分页', () => {
     await waitFor(() => expect(startSpy).toHaveBeenCalledWith(21))
   })
 
+  it('切到「数据作业」tab → 渲染只读区、任务分区隐藏（P-G）', async () => {
+    vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
+    vi.spyOn(api, 'listQueueLive').mockResolvedValue([
+      makeTask({ id: 10, name: 'run', status: 'running', started_at: 1000 }),
+    ])
+    vi.spyOn(api, 'listQueueHistory').mockResolvedValue({
+      items: [], total: 0, page: 1, page_size: 20,
+    })
+    vi.spyOn(api, 'listJobsLive').mockResolvedValue([])
+    vi.spyOn(api, 'listJobsHistory').mockResolvedValue({
+      items: [], total: 0, page: 1, page_size: 20,
+    })
+    vi.spyOn(api, 'listProjects').mockResolvedValue([])
+
+    renderQueue()
+    await waitFor(() => expect(screen.getByText(/进行中/)).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('queue-tab-jobs'))
+    await waitFor(() => expect(screen.getByTestId('data-jobs-panel')).toBeInTheDocument())
+    // 任务分区没了；任务 tab 的 header 过滤漏斗也没了
+    expect(screen.queryByText(/等待入队/)).not.toBeInTheDocument()
+    expect(screen.queryByTestId('queue-filter-toggle')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('queue-tab-tasks'))
+    await waitFor(() => expect(screen.getByText(/进行中/)).toBeInTheDocument())
+  })
+
   it('过滤行默认收起，点漏斗才显示搜索框（与项目页一致）', async () => {
     vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
     vi.spyOn(api, 'listQueueLive').mockResolvedValue([
