@@ -227,7 +227,7 @@ export const EMPTY: Secrets = {
     batch_size: 8,
   },
   models: { root: null, selected_anima: '1.0', custom_anima_paths: [], selected_upscaler: '4x-AnimeSharp', auto_sync_paths: true },
-  queue: { allow_gpu_during_train: false },
+  queue: { light_tasks_during_train: true },
   generate: { preview_every_n_steps: 3, attention_backend: 'auto', vae_precision: 'bf16', idle_timeout_minutes: 10, save_test_images: false },
   system: { update_channel: 'stable', show_dev_channel: false },
   proxy: {

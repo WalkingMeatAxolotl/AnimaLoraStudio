@@ -49,9 +49,13 @@ from ..services.inference.daemon import (
     STATE_STOPPED as _DAEMON_STOPPED,
     get_daemon,
 )
+from .resources import (
+    RESOURCE_EXCLUSIVE,
+    RESOURCE_LIGHT,
+    job_resource_class,
+)
 from .cmd_builder import (
     _EVENT_MARKER,
-    GPU_BOUND_JOB_KINDS,
     CmdBuilder,
     EventCallback,
     JobCmdBuilder,
@@ -377,17 +381,15 @@ class Supervisor:
             if rc is not None:
                 self._finish_slot(slot, rc)
 
-        # 2) 给空闲槽位派活（按槽位职责分工）
+        # 2) 给空闲槽位派活（按槽位职责分工）。R-1：generate 并入 exclusive
+        #    统一派发（同表 FIFO + 集中准入），不再有独立的第 3 步。
         for slot in self._slots:
             if slot.busy:
                 continue
             if slot.name == SLOT_TRAIN:
-                self._dispatch_train(slot)
+                self._dispatch_exclusive_tasks(slot)
             elif slot.name == SLOT_DATA:
                 self._dispatch_data(slot)
-
-        # 3) 派 generate task 给 daemon（独立资源，不占 _Slot）
-        self._dispatch_generate()
 
     def _promote_due_scheduled(self) -> None:
         """0.17 P-B：scheduled_at 到点的 task → pending + publish 状态事件。"""
@@ -414,46 +416,72 @@ class Supervisor:
                 return t
         return None
 
-    def _dispatch_train(self, slot: _Slot) -> None:
-        """TRAIN 槽：跑 train / reg_ai task。generate 走 daemon，不在这。
+    # ---- R-1 资源档位准入（docs/design/queue-resource-model-0.17.md §3） ----
 
-        commit 12：派活前先要求 daemon 让位（unload 释放 VRAM），除非
-        secrets.queue.allow_gpu_during_train=true。daemon 在跑 generate
-        时不强中断，等下次 tick 它跑完再卸载。
-
-        ADR 0006 PR-2：queue_held=True 时跳过本次派发（ADR §3.2）。已 running
-        的 task 不受影响（继续跑到自然结束/暂停/取消）。
-        """
-        if self._queue_held():
-            return
-        task = self._next_pending_task_in(("train", "reg_ai"))
-        if task is None:
-            return
-        if self._maybe_yield_daemon():
-            return  # daemon 还占 GPU，等下次 tick 派
-        self._spawn_task(slot, task)
-
-    def _dispatch_generate(self) -> None:
-        """commit 9：把 generate pending task 提交给 daemon，daemon idle 时执行。
-
-        ADR 0006 PR-2：queue_held=True 时跳过（hold 语义全队列覆盖，不区分
-        task type）。
-        """
-        if self._queue_held():
-            return
+    def _daemon_active(self) -> bool:
+        """daemon 是否有 active generate task（提交后到 finalize 前）。"""
         with self._daemon_lock:
-            if self._daemon_active_task_id is not None:
-                return
-        task = self._next_pending_task_in(("generate",))
+            return self._daemon_active_task_id is not None
+
+    def _data_slot_exclusive_busy(self) -> bool:
+        """DATA 槽是否正在跑 exclusive 档 job（eval_samples，底模级显存）。"""
+        for slot in self._slots:
+            if (
+                slot.name == SLOT_DATA and slot.busy
+                and slot.job_kind is not None
+                and job_resource_class(slot.job_kind) == RESOURCE_EXCLUSIVE
+            ):
+                return True
+        return False
+
+    def _exclusive_busy(self) -> bool:
+        """全系统是否有 exclusive 档工作在跑（同时最多 1 个的准入前提）。
+
+        三个执行位逐一检查：TRAIN 槽（train/reg_ai）、daemon（active generate）、
+        DATA 槽（eval_samples）。修 L1（generate 与训练互斥缺后端守卫）/
+        L2（训练不躲正在跑的 eval_samples）的共同根。
+        """
+        return (
+            self._train_busy()
+            or self._daemon_active()
+            or self._data_slot_exclusive_busy()
+        )
+
+    def _dispatch_exclusive_tasks(self, slot: _Slot) -> None:
+        """exclusive 档统一派发（tasks 表：train / reg_ai / generate 同表 FIFO）。
+
+        D-R3 平级 FIFO：三类之间无优先级，按 `priority DESC, created_at ASC`
+        取队首；running 永不被中断。路由：train/reg_ai → TRAIN 槽子进程；
+        generate → daemon（daemon 是 exclusive 档的执行器之一，不是独立车道）。
+
+        eval_samples（project_jobs 表）在 R-3 台账合并前由 `_dispatch_data`
+        派发，但共享同一个 `_exclusive_busy` 准入 —— 过渡期跨表顺序为
+        tasks 侧优先抢空隙，R-3 后统一进同表 FIFO。
+
+        ADR 0006 PR-2：queue_held=True 时跳过本次派发（ADR §3.2）。
+        """
+        if self._queue_held():
+            return
+        if self._exclusive_busy():
+            return
+        task = self._next_pending_task_in(("train", "reg_ai", "generate"))
         if task is None:
             return
-        # enqueue_generate 先 create_task(pending, task_type=generate) 再写 config.json
-        # 落 config_path —— 两步之间（含 detect_attention_backend 等耗时）这条 task 已
-        # 是 pending+generate 但 config_path 还是 NULL。此时别提交（否则 daemon 报
-        # "config not found: <none>"），等下个 tick config_path 落库后再派。
-        if not task.get("config_path"):
+        if (task.get("task_type") or "train") == "generate":
+            # enqueue_generate 先 create_task(pending) 再写 config.json 落
+            # config_path —— 两步之间这条 task 已 pending 但 config_path 还是
+            # NULL。此时别提交（daemon 会报 "config not found"），等下个 tick。
+            # FIFO 语义：不越过它取后面的任务（窗口 <1s）。
+            if not task.get("config_path"):
+                return
+            self._submit_to_daemon(task)
             return
-        self._submit_to_daemon(task)
+        # train / reg_ai：daemon 常驻模型是 exclusive 租约，spawn 前必须吊销
+        # （unload 释放 VRAM）。daemon 在跑 generate 的情况已被 _exclusive_busy
+        # 拦下，这里只处理 idle-but-loaded 的租约。
+        if self._maybe_yield_daemon():
+            return  # daemon 还占 VRAM，等下次 tick 派
+        self._spawn_task(slot, task)
 
     def _queue_held(self) -> bool:
         """ADR §3.2 queue hold 开关，跨 supervisor 重启保留（db kv）。"""
@@ -465,18 +493,20 @@ class Supervisor:
             return False  # 读失败默认放行，安全降级
 
     def _maybe_yield_daemon(self) -> bool:
-        """commit 12：daemon 占着 GPU 且不许并行 → 触发 unload，调用方应跳过这次派发。
+        """daemon 占着 VRAM → 触发 unload，调用方应跳过这次派发。
+
+        R-1：daemon 常驻模型 = exclusive 租约。要派 exclusive 档工作
+        （train / reg_ai / eval_samples）前必须吊销租约——**不再受任何开关
+        豁免**（老 allow_gpu_during_train 会放行「训练 + 常驻底模」并存，
+        是 L3 的一部分）。light 档开关关闭时的保守路径也复用本函数。
 
         返回值：
           - True：daemon 还占着 VRAM（在跑 generate 或刚发了 unload 请求），
-                  调用方不应该派 GPU 任务，等下次 tick 重检
-          - False：daemon 没占 GPU（未起 / 已 unloaded / 用户允许并行）
-                  调用方可立刻派
+                  调用方不应该派，等下次 tick 重检
+          - False：daemon 没占 GPU（未起 / 已 unloaded），可立刻派
         """
         daemon = get_daemon()
         if not daemon.is_model_loaded:
-            return False
-        if self._allow_gpu_during_train():
             return False
         if daemon.is_busy:
             # 用户主动触发的 generate 不强中断；等它跑完
@@ -489,31 +519,38 @@ class Supervisor:
         return True
 
     def _dispatch_data(self, slot: _Slot) -> None:
-        """DATA 槽：跑 project_jobs（download / tag / reg_build）。
+        """DATA 槽：跑 project_jobs。R-1 按资源档位准入（修 L2/L3）：
 
-        - download 永远 OK（IO-only，不抢 GPU）
-        - tag / reg_build 是 GPU-bound：
-            * 训练正在跑且未开 `allow_gpu_during_train` → 跳过
-            * daemon 占着 VRAM 且未开 `allow_gpu_during_train` → 触发 daemon
-              让位（_maybe_yield_daemon），跳过等下次 tick
+        - io（download）：恒放行（仅受 queue_held 约束）
+        - light（tag / preprocess / reg_build / eval 指标）：无 exclusive 运行时
+          恒放行（daemon idle 常驻模型无碍——小模型体量）；有 exclusive 运行时看
+          `queue.light_tasks_during_train`（默认开）。开关**关闭**时保守等同
+          旧默认：额外要求 daemon 租约已释放
+        - exclusive（eval_samples，底模级）：与 train 同规格——无 exclusive
+          运行 + daemon 租约吊销后才派，**无视 light 开关**（修 L3）
 
         ADR 0006 PR-2：queue_held=True 时跳过本次派发，包含 download。语义上
-        hold 是"全队列暂停新派活"，不区分 GPU vs IO。
+        hold 是"全队列暂停新派活"，不区分档位。
         """
         if self._queue_held():
             return
-        train_busy = self._train_busy()
-        allow_gpu = self._allow_gpu_during_train()
+        exclusive_busy = self._exclusive_busy()
+        light_parallel = self._light_tasks_during_train()
         with db.connection_for(self._db_path) as conn:
             pending = project_jobs.list_jobs(conn, status="pending")
         pending.sort(key=project_jobs.dispatch_order)
         for job in pending:
-            kind = job["kind"]
-            if kind in GPU_BOUND_JOB_KINDS:
-                if train_busy and not allow_gpu:
+            cls = job_resource_class(job["kind"])
+            if cls == RESOURCE_EXCLUSIVE:
+                if exclusive_busy:
                     continue
                 if self._maybe_yield_daemon():
-                    continue  # daemon 还占 GPU，等
+                    continue  # 吊销 daemon 租约，等下次 tick
+            elif cls == RESOURCE_LIGHT:
+                if exclusive_busy and not light_parallel:
+                    continue
+                if not light_parallel and self._maybe_yield_daemon():
+                    continue  # 保守模式：等 daemon 卸载
             self._spawn_job(slot, job)
             return
 
@@ -523,9 +560,10 @@ class Supervisor:
                 return True
         return False
 
-    def _allow_gpu_during_train(self) -> bool:
+    def _light_tasks_during_train(self) -> bool:
+        """R-1：exclusive 运行时是否放行 light 档（默认开；读失败取 schema 默认）。"""
         try:
-            return bool(_secrets.load().queue.allow_gpu_during_train)
+            return bool(_secrets.load().queue.light_tasks_during_train)
         except Exception:
             return False
 
@@ -850,6 +888,7 @@ class Supervisor:
         slot.proc = proc
         slot.kind = "job"
         slot.id = job["id"]
+        slot.job_kind = job["kind"]  # R-1：供 _exclusive_busy 判档位
         slot.log_fp = log_fp
         slot.cancel_pending = False
 

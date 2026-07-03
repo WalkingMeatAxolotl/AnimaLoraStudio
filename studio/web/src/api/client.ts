@@ -485,9 +485,10 @@ export interface ModelsConfig {
 }
 
 export interface QueueConfig {
-  /** PP10.2：默认 false，训练时推迟 tag/reg_build job 避免 GPU OOM。
-   * 用户开后允许 GPU job 与训练并行（自己确认显存够）。 */
-  allow_gpu_during_train: boolean
+  /** R-1 资源档位：exclusive（训练/正则 AI/出图/评估出图）运行时是否放行
+   *  light 档（打标/超分/正则构建/评估指标，小模型）。默认 true。独占档
+   *  永不并行，不受此开关影响。 */
+  light_tasks_during_train: boolean
 }
 
 /** Phase 2 commit 14 — 测试出图 daemon 行为。 */

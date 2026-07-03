@@ -418,15 +418,18 @@ class CLTaggerConfig(BaseModel):
 
 
 class QueueConfig(BaseModel):
-    """队列调度策略（PP10.2）。
+    """队列调度策略（R-1 资源档位模型，docs/design/queue-resource-model-0.17.md）。
 
-    Studio supervisor 使用双槽位调度：TRAIN 槽跑训练 task，DATA 槽跑
-    数据准备 job（download / tag / reg_build）。download 永远与训练并行
-    （IO-only，不抢 GPU）；tag / reg_build 走 GPU，默认在训练时**推迟执行**
-    避免 OOM。把 `allow_gpu_during_train` 打开后才允许并行（用户自己确认
-    显存够）。
+    工作项分三档：exclusive（训练/正则 AI/出图/评估出图，底模级显存，全系统
+    同时只跑 1 个，永不并行）、light（打标/超分/正则构建/评估指标，数百 MB
+    小模型）、io（下载，恒放行）。
+
+    - `light_tasks_during_train`：exclusive 任务运行时是否允许 light 档并行。
+      默认开启——轻量任务只加载小模型。独占档不受此开关影响（老开关
+      `allow_gpu_during_train` 会连评估出图一起放行，是 OOM 隐患，已废弃；
+      语义变化故不迁移旧值）。
     """
-    allow_gpu_during_train: bool = False
+    light_tasks_during_train: bool = True
 
 
 class ModelsConfig(BaseModel):
@@ -673,6 +676,14 @@ def _migrate_legacy_schema(raw: dict[str, Any]) -> dict[str, Any]:
         # 新字段已显式设过 → 不覆盖（幂等）
         if "update_channel" not in sys_raw and sys_raw.get("show_dev_channel") is True:
             sys_raw["update_channel"] = "dev"
+
+    # 8. R-1 资源档位（0.17）：queue.allow_gpu_during_train 废弃。语义变化
+    #    （老开关连 eval_samples 等底模级任务一起放行，是 OOM 隐患；新开关
+    #    light_tasks_during_train 只辖轻量档且默认开），且 save() 全量落盘使
+    #    「显式 false」与「默认 false」不可分辨 —— 故不迁移旧值，直接丢弃。
+    q_raw = raw.get("queue")
+    if isinstance(q_raw, dict):
+        q_raw.pop("allow_gpu_during_train", None)
 
     # 7. gelbooru 的图片入库设置搬到全局 download.*（这三个本被所有 booru 下载 /
     #    reg / 本地上传共用，不该挂在 gelbooru 下）。download 侧未显式设过才搬，幂等。

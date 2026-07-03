@@ -21,7 +21,7 @@
 Job 调度
 --------
 preprocess 是 GPU-bound job kind，走 DATA 槽位：
-- 训练正在跑 + 未开 `allow_gpu_during_train` → 推迟
+- light 档：训练正在跑时按 `queue.light_tasks_during_train` 开关放行（默认开）
 - daemon 占着 VRAM → 触发让位（_maybe_yield_daemon），等下次 tick
 
 不复用 download_worker 的并发设计 —— 串行处理就行，模型加载到 GPU 后
