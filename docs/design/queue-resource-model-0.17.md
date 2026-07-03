@@ -76,7 +76,7 @@ light 档同理平级 FIFO；现 `dispatch_order` 的「指标插队在出图前
 1. **队列页 = 两个视图**：「GPU 任务」（= exclusive 档）/「数据任务」（= light + io 档），header 切换钮、过滤、分页、详情页交互均维持现有形态（P-G 已定稿）。
 2. **eval 出图（评估出图）出现在「GPU 任务」视图**，eval 指标留在「数据任务」视图——本版随档位模型一步到位，用户第一次见到的就是最终归属。
 3. **执行顺序 = 所见队列顺序**（平级 FIFO + 手动 reorder），无隐藏的类型间插队。
-4. **设置项文案**改为「训练时允许轻量任务并行」（语义 = 仅 light 档），不再暗示可放行重任务。
+4. **设置项升级三态**：「训练时轻量任务并行：关闭 / 始终允许 / 自动（按剩余显存，推荐）」（语义 = 仅 light 档），不再暗示可放行重任务。
 5. 训练运行时提交 generate：照常入队排队（不再默认禁用按钮——后端已有正确准入，前端 activeBlockingTask 硬禁用改为提示性文案），到点自动执行。
 
 ## 5. 落地排期（全部在 0.17.0 发布前）
@@ -87,10 +87,10 @@ light 档同理平级 FIFO；现 `dispatch_order` 的「指标插队在出图前
 | **R-2 台账合并 schema** | `_v17`：tasks 加 `params` JSON、`task_type` 扩容 job kinds、日志路径统一 `tasks/<id>/run.log`；新作业写 tasks；旧 `project_jobs` 转只读历史（不迁移旧行，避免 ID 重映射污染 eval run 引用） | schema + 写路径切换，可回滚 |
 | **R-3 调度收编 + FIFO** | DATA 槽从 tasks 按档位取活；删 `dispatch_order` 硬编码；原 job 类白得 reorder / scheduled / 类型过滤 | 后端调度 |
 | **R-4 事件/API 统一** | `job_state_changed` → `task_state_changed`（带 kind）；`/api/jobs*` 留兼容 shim 读旧表历史 | 契约 |
-| **R-5 前端合流** | Queue 单数据源，两个视图变同源过滤预设；`QueueJobDetail` 并入 `QueueDetail`；eval_samples 显示归位 GPU 视图；generate 页训练时提交解禁（§4-5） | 前端 |
+| **R-5 前端数据源合流（视图不变）** | 两个视图（GPU 任务 / 数据任务）**像素级维持现状**，只把数据源合一：同读 tasks 表按档位过滤（GPU 视图 = exclusive，数据视图 = light+io）；`QueueJobDetail` 并入 `QueueDetail`（本就同款）；事件/ID 空间归一。用户可见变化仅两处（均为 §4 锚点）：eval_samples 归位 GPU 视图、generate 页训练时提交解禁 | 前端 |
+| **R-6 light 档自动放行**（用户定为本版必做） | 设置三态化：`关闭 / 始终允许 / 自动`。自动 = 派发 light 前 NVML 探测剩余显存 ≥ 阈值（默认 2048MB，secrets 可配）才放行；探测不可用（AMD / 驱动异常）**保守降级为关闭**并记一次日志。老配置迁移：`allow_gpu_during_train=true`→始终允许、`false`→自动（D-R4，默认值待终审：自动是行为变化——今天训练时 light 一律推迟；保守方案是默认关闭） | 后端 + Settings |
 
 **后续优化（0.17.0 后，明确不改变用户感知）**：
-- light 档放行条件从布尔升级「关 / 开 / 自动（nvml free-VRAM ≥ 阈值，失败降级布尔）」；
 - light 档并发上限做成配置（>1）；多 GPU exclusive>1；
 - 旧 project_jobs 只读历史表的最终淘汰。
 
@@ -103,6 +103,11 @@ light 档同理平级 FIFO；现 `dispatch_order` 的「指标插队在出图前
 
 ## 7. 开放问题
 
-- **Q-R1** R-2~R-5 若 0.17.0 发布窗口不够，最小可发布集是 R-1 + R-5 的§4-5 文案部分吗？（eval_samples 归位视图依赖 R-2/R-3，若延后则「数据任务视图里有一个 exclusive 档任务」的过渡态是否可接受——违反§4-2 锚点，需拍板）
+- ~~**Q-R1** 发布窗口不够时的最小可发布集~~ **已决（2026-07-04）：发布窗口充足，质量优先，R-1~R-6 整包发布，不做最小集/过渡态。**
 - **Q-R2** 旧 project_jobs 历史聚合的展示位置（历史区双源合并 vs 独立「旧数据任务」入口）。
 - **Q-R3** `_v17` 后 `/api/jobs*` shim 的保留时长（一个 minor 版本？）。
+- **Q-R4（=D-R4）** 自动模式作为默认值 vs 保守默认关闭（老配置 `false` 的迁移目标）。
+
+## 8. 澄清备忘：「前端合流」≠ 合并视图
+
+用户感知的「两个车道」（GPU 任务 / 数据任务双视图）**就是最终形态**（§4-1 锚点）。R-5 的"合流"仅指管道层：今天两个视图是两套数据源（/api/queue vs /api/jobs）、两个 ID 空间（撞号）、两个详情页、两套事件；合流后同读 tasks 表按档位过滤，视觉与交互零变化。底层物理执行位仍是三个（exclusive / light / io），但 io（下载）不值得独立视图，挂在数据视图内——用户感知两车道与底层三执行位并存，互不矛盾。
