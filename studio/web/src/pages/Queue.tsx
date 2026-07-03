@@ -798,15 +798,21 @@ export default function QueuePage() {
               version 私有、导出恒空导入恒跳过）；后端 route 待单独清理 PR。 */}
           <button onClick={() => void reload()} className="btn btn-ghost btn-sm">{t('common.refresh')}</button>
           </>}
-          {/* 0.17 P-G — 视图切换（放最右）：文字显示要切去的视图，一眼可知当前
-              不在哪边（用户反馈静态文字+高亮看不出状态）。 */}
+          {/* 0.17 P-G — 视图切换（放最右）：前置切换 icon（行为）+ 目标视图名
+              （宾语），读作「切到 X」——名词+后缀箭头会歧义成「当前+动作」。 */}
           <button
             className="btn btn-secondary btn-sm"
             onClick={() => setQueueTab(queueTab === 'jobs' ? 'tasks' : 'jobs')}
             aria-pressed={queueTab === 'jobs'}
             data-testid="queue-jobs-toggle"
           >
-            {queueTab === 'jobs' ? t('queue.tabTasks') : t('queue.tabJobs')} ⇄
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M17 1l4 4-4 4" />
+              <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+              <path d="M7 23l-4-4 4-4" />
+              <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+            </svg>
+            <span>{queueTab === 'jobs' ? t('queue.tabTasks') : t('queue.tabJobs')}</span>
           </button>
         </>
       }
