@@ -1474,7 +1474,8 @@ export interface XformersInstallResult {
   restart_required: boolean
 }
 
-export type TaskStatus = 'pending' | 'running' | 'done' | 'failed' | 'canceled' | 'paused'
+export type TaskStatus =
+  'pending' | 'running' | 'done' | 'failed' | 'canceled' | 'paused' | 'scheduled'
 
 /** tasks.task_type 的合法值（_v5 migration）。0.17 P-F 类型过滤用。 */
 export type TaskType = 'train' | 'reg_ai' | 'generate'
@@ -1518,6 +1519,9 @@ export interface Task {
   paused_step?: number | null
   /** ADR 0006 PR-2 — paused 时间（unix 秒）。 */
   paused_at?: number | null
+  /** 0.17 P-B — 计划开始时间（unix 秒）。status='scheduled' 时有值；到点提升为
+   *  pending 后保留作记录。非计划任务恒 null。 */
+  scheduled_at?: number | null
   /** ADR 0006 PR-4 — is_pausable 信号（§8.1）：UI 用来决定是否显示暂停
    *  按钮。supervisor 跑得起来时由 server enrich；空载默认 false。 */
   is_pausable?: boolean
@@ -2545,10 +2549,17 @@ export const api = {
       `/api/projects/${pid}/versions/${vid}/config/save_as_preset`,
       { method: 'POST', body: JSON.stringify({ name, overwrite }) }
     ),
-  enqueueVersionTraining: (pid: number, vid: number) =>
+  /** 0.17 P-B — scheduledAt（unix 秒）给了则建成 scheduled（计划任务），到点
+   *  由 supervisor 提升为 pending；不给立即入队（原行为）。 */
+  enqueueVersionTraining: (pid: number, vid: number, opts?: { scheduledAt?: number }) =>
     req<Task>(
       `/api/projects/${pid}/versions/${vid}/queue`,
-      { method: 'POST' }
+      {
+        method: 'POST',
+        ...(opts?.scheduledAt != null
+          ? { body: JSON.stringify({ scheduled_at: opts.scheduledAt }) }
+          : {}),
+      }
     ),
 
   // Curation (PP3) -------------------------------------------------------
@@ -2675,6 +2686,11 @@ export const api = {
     }),
   cancelTask: (id: number) =>
     req<{ task_id: number; canceled: boolean }>(`/api/queue/${id}/cancel`, {
+      method: 'POST',
+    }),
+  /** 0.17 P-B — scheduled task 手动提前：立即转 pending 参与调度。非 scheduled 409。 */
+  startTaskNow: (id: number) =>
+    req<{ task_id: number; status: string }>(`/api/queue/${id}/start_now`, {
       method: 'POST',
     }),
   retryTask: (id: number) =>

@@ -157,13 +157,19 @@ P-G (数据作业只读区) ── 独立只读面板，复用现有 jobs API，
   才把 task 转 pending；UI 支持「凌晨 3:00 开始」的绝对时间点和「N 小时后」的相对延迟。
   不做依赖触发（A 完成跑 B）——现有两条自动链（训练→eval、sample→指标）是硬编码事件驱动，
   本版不引入通用 DAG。
+- **D8 计划任务实现细节**（PR-5 拍板，原 Q1）：独立 `scheduled` 状态（非 pending 子集，
+  _v15 加 `scheduled_at` 列）；提升挂在 supervisor 既有 1s tick 里（`_tick` 开头
+  `promote_due_scheduled`），不起新线程；设定入口**仅提交时**（训练页入队弹层），已有
+  pending 不能转定时——想定时就取消重排；scheduled 行给「立即开始」（`start_now` 端点）
+  和「取消」；UI 入口本版只做训练页（后端机制类型无关）；提升后 `scheduled_at` 保留作记录。
 
 ---
 
 ## 6. Open questions（待细化 / 未定）
 
-- **Q1（P-B 入口）**：定时的设定入口——是 enqueue 时一次性设定，还是也允许对已有 pending
-  任务追加/修改排程？dispatcher 判时精度（1s poll 够用）？
+- ~~**Q1（P-B 入口）**：定时的设定入口——是 enqueue 时一次性设定，还是也允许对已有 pending
+  任务追加/修改排程？dispatcher 判时精度（1s poll 够用）？~~ **已决 → D8**（仅 enqueue 时
+  设定；1s tick 复用 supervisor 主循环）。
 - **Q2（P-A 历史边界）**：历史区默认展示多少 / 保留多久？是否需要"清理历史"动作？（关联 P-E 分页）
 - **Q3（P-G 面板位置）**：数据作业只读区放队列页的 tab、底部折叠面板、还是侧栏？是否按 project
   过滤？

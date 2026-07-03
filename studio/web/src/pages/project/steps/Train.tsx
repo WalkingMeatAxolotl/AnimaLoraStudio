@@ -78,6 +78,9 @@ export default function TrainPage() {
   // 预设 picker（dropdown 模式，与 Presets 页一致）
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerSearch, setPickerSearch] = useState('')
+  // 0.17 P-B — 定时训练弹层（延迟 N 小时 / 指定绝对时间两种入口，D7）。
+  const [scheduleOpen, setScheduleOpen] = useState(false)
+  const [scheduleTime, setScheduleTime] = useState('')
   const [advancedMode, toggleAdvancedMode] = useAdvancedMode()
   const pickerAnchorRef = useRef<HTMLButtonElement | null>(null)
   const pickerPopRef = useRef<HTMLDivElement | null>(null)
@@ -427,7 +430,7 @@ export default function TrainPage() {
     }
   }
 
-  const onEnqueue = async () => {
+  const onEnqueue = async (scheduledAt?: number) => {
     if (!configResp?.has_config) {
       toast(t('train.noPresetError'), 'error')
       return
@@ -450,8 +453,18 @@ export default function TrainPage() {
       if (cur && JSON.stringify(cur) !== savedJsonRef.current) {
         await persistConfig(cur)
       }
-      const task = await api.enqueueVersionTraining(project.id, vid)
-      toast(t('train.enqueuedNav', { id: task.id }), 'success')
+      const task = await api.enqueueVersionTraining(
+        project.id, vid, scheduledAt != null ? { scheduledAt } : undefined,
+      )
+      if (scheduledAt != null) {
+        toast(t('train.scheduledNav', {
+          id: task.id,
+          time: new Date(scheduledAt * 1000).toLocaleString('zh-CN', { hour12: false }),
+        }), 'success')
+      } else {
+        toast(t('train.enqueuedNav', { id: task.id }), 'success')
+      }
+      setScheduleOpen(false)
       void reload()
       navigate('/queue')
     } catch (e) {
@@ -461,19 +474,100 @@ export default function TrainPage() {
     }
   }
 
+  // datetime-local 的 value 格式（本地时区，分钟精度）。
+  const toLocalInputValue = (d: Date) => {
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+      + `T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  }
+
+  const onScheduleAbsolute = () => {
+    if (!scheduleTime) return
+    const ts = new Date(scheduleTime).getTime() / 1000
+    if (!Number.isFinite(ts) || ts <= Date.now() / 1000 + 30) {
+      toast(t('train.schedulePast'), 'error')
+      return
+    }
+    void onEnqueue(ts)
+  }
+
   return (
     <StepShell
       idx={6}
       title={t('steps.train.title')}
       subtitle={t('steps.train.subtitle')}
       actions={
-        <button
-          onClick={() => void onEnqueue()}
-          disabled={busy || !configResp?.has_config}
-          className="btn btn-primary"
-        >
-          {t('train.startTrainBtn')}
-        </button>
+        <div className="relative flex items-center gap-2">
+          {/* 0.17 P-B — 定时训练：延迟 N 小时 / 指定时间，建成 scheduled task */}
+          <button
+            onClick={() => setScheduleOpen((o) => !o)}
+            disabled={busy || !configResp?.has_config}
+            className={`btn btn-sm ${scheduleOpen ? 'btn-secondary' : 'btn-ghost'}`}
+            title={t('train.scheduleHint')}
+            data-testid="train-schedule-btn"
+          >
+            {t('train.scheduleBtn')}
+          </button>
+          <button
+            onClick={() => void onEnqueue()}
+            disabled={busy || !configResp?.has_config}
+            className="btn btn-primary"
+          >
+            {t('train.startTrainBtn')}
+          </button>
+          {scheduleOpen && (
+            <>
+              {/* 透明遮罩：点外面关闭 */}
+              <div className="fixed inset-0 z-30" onClick={() => setScheduleOpen(false)} />
+              <div
+                className="absolute right-0 top-full mt-2 z-40 w-[300px] rounded-md border border-dim bg-surface shadow-lg p-4 flex flex-col gap-3"
+                data-testid="train-schedule-popover"
+              >
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-xs font-semibold text-fg-tertiary uppercase tracking-wide">
+                    {t('train.scheduleDelaySection')}
+                  </span>
+                  <div className="flex gap-1.5">
+                    {[1, 2, 4, 8].map((h) => (
+                      <button
+                        key={h}
+                        onClick={() => void onEnqueue(Date.now() / 1000 + h * 3600)}
+                        disabled={busy}
+                        className="btn btn-secondary btn-sm flex-1"
+                        data-testid={`train-schedule-delay-${h}h`}
+                      >
+                        +{h}h
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-xs font-semibold text-fg-tertiary uppercase tracking-wide">
+                    {t('train.scheduleAbsoluteSection')}
+                  </span>
+                  <div className="flex gap-1.5">
+                    <input
+                      type="datetime-local"
+                      className="input flex-1"
+                      value={scheduleTime}
+                      min={toLocalInputValue(new Date())}
+                      onChange={(e) => setScheduleTime(e.target.value)}
+                      data-testid="train-schedule-time"
+                    />
+                    <button
+                      onClick={onScheduleAbsolute}
+                      disabled={busy || !scheduleTime}
+                      className="btn btn-primary btn-sm"
+                      data-testid="train-schedule-confirm"
+                    >
+                      {t('train.scheduleConfirm')}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
       }
     >
       <div className="flex flex-col h-full gap-3">

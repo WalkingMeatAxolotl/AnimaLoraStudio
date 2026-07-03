@@ -471,6 +471,34 @@ function StatusBanner({
   }
 
   if (version.status === 'training') {
+    // 0.17 P-B — 计划任务还没真跑：独立 banner（不给跑动进度条误导），
+    // 显示计划时间 + 立即开始 / 取消计划。
+    if (latestTask?.status === 'scheduled') {
+      return (
+        <BannerShell
+          tint="accent" iconChar="◷" iconColor="var(--accent)"
+          title={`${version.label} · ${t('overview.banner.scheduledTitle')}`}
+          sub={latestTask.scheduled_at
+            ? `${t('overview.banner.scheduledFor')} ${fmtTime(latestTask.scheduled_at)}`
+            : undefined}
+        >
+          <div style={bannerActions}>
+            {taskId && (
+              <button
+                onClick={() => api.startTaskNow(taskId).catch((e) => toast(String(e), 'error'))}
+                className="btn btn-primary btn-sm"
+              >{t('queue.startNow')}</button>
+            )}
+            {taskId && (
+              <button
+                onClick={() => api.cancelTask(taskId).catch((e) => toast(String(e), 'error'))}
+                className="btn btn-secondary btn-sm"
+              >{t('queue.cancelScheduled')}</button>
+            )}
+          </div>
+        </BannerShell>
+      )
+    }
     const startedAt = latestTask?.started_at
     return (
       <BannerShell
@@ -1114,7 +1142,7 @@ function DetailGrid({ project, version }: { project: ProjectDetail; version: Ver
 
 const TASK_STATUS_BADGE: Record<string, string> = {
   pending: 'neutral', running: 'accent', paused: 'warn',
-  done: 'ok', failed: 'err', canceled: 'neutral',
+  done: 'ok', failed: 'err', canceled: 'neutral', scheduled: 'neutral',
 }
 
 function VersionTasksPanel({ projectId, versionId }: { projectId: number; versionId: number | null }) {

@@ -37,6 +37,7 @@ const STATUS_BADGE: Record<TaskStatus, string> = {
   failed: 'badge badge-err',
   canceled: 'badge badge-neutral',
   paused: 'badge badge-warn',
+  scheduled: 'badge badge-neutral',
 }
 
 const TERMINAL: ReadonlyArray<TaskStatus> = ['done', 'failed', 'canceled']
@@ -254,6 +255,21 @@ export default function QueueDetailPage() {
     }
   }
 
+  // 0.17 P-B — scheduled task 手动提前：立即转 pending 参与排队。
+  const startNow = async () => {
+    if (!task) return
+    setBusy(true)
+    try {
+      await api.startTaskNow(task.id)
+      toast(t('queue.startNowSent', { id: task.id }), 'success')
+      void reload()
+    } catch (e) {
+      toast(String(e), 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const STATUS_LABEL: Record<TaskStatus, string> = {
     pending: t('status.pending'),
     running: t('status.running'),
@@ -261,6 +277,7 @@ export default function QueueDetailPage() {
     failed: t('status.failed'),
     canceled: t('status.canceled'),
     paused: t('status.paused'),
+    scheduled: t('status.scheduled'),
   }
 
   // 按 task_type 过滤可见 tab（task 未加载时先按 train 给全量，加载后收敛）。
@@ -330,6 +347,19 @@ export default function QueueDetailPage() {
           {isLive && (
             <button onClick={cancel} disabled={busy} className="btn btn-sm bg-warn-soft border border-warn text-warn"
             >{t('queueDetail.cancelTask')}</button>
+          )}
+          {/* 0.17 P-B — scheduled：可手动提前 / 取消计划 */}
+          {status === 'scheduled' && (
+            <>
+              <button onClick={startNow} disabled={busy} className="btn btn-primary btn-sm"
+                data-testid="detail-startnow-btn"
+                title={t('queue.startNowHint')}
+              >{t('queue.startNow')}</button>
+              <button onClick={cancel} disabled={busy}
+                className="btn btn-sm bg-warn-soft border border-warn text-warn"
+                title={t('queue.cancelScheduledHint')}
+              >{t('queue.cancelScheduled')}</button>
+            </>
           )}
           {status === 'paused' && (
             <>
@@ -450,6 +480,7 @@ function OverviewTab({ task }: { task: Task }) {
   const statusLabel: Record<string, string> = {
     pending: t('status.pending'), running: t('status.running'), done: t('status.done'),
     failed: t('status.failed'), canceled: t('status.canceled'), paused: t('status.paused'),
+    scheduled: t('status.scheduled'),
   }
   const items: Array<{ label: string; value: React.ReactNode; mono?: boolean }> = [
     { label: 'ID',     value: <code className="font-mono">{task.id}</code> },
@@ -458,6 +489,10 @@ function OverviewTab({ task }: { task: Task }) {
     { label: t('common.status'), value: <span className={STATUS_BADGE[task.status]}>{task.status === 'running' && <span className="dot dot-running" />}{statusLabel[task.status]}</span> },
     { label: t('queueDetail.priority'), value: task.priority, mono: true },
     { label: t('queueDetail.enqueuedAt'), value: fmtTime(task.created_at) },
+    // 0.17 P-B — 计划任务显示计划开始时间（提升为 pending 后保留作记录）。
+    ...(task.scheduled_at
+      ? [{ label: t('queueDetail.scheduledAt'), value: fmtTime(task.scheduled_at) }]
+      : []),
     { label: t('queueDetail.startedAt'), value: fmtTime(task.started_at) },
     { label: t('queueDetail.finishedAt'), value: fmtTime(task.finished_at) },
     { label: t('queueDetail.duration'), value: fmtDuration(task.started_at, task.finished_at), mono: true },

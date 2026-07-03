@@ -167,6 +167,52 @@ describe('QueuePage 分区 + 分页', () => {
     await waitFor(() => expect(screen.getByTestId('jump-btn-88')).toBeInTheDocument())
   })
 
+  it('scheduled 任务渲染独立「计划任务」分区，带立即开始/取消计划按钮', async () => {
+    vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
+    vi.spyOn(api, 'listQueueLive').mockResolvedValue([
+      makeTask({ id: 20, name: 'pend', status: 'pending', started_at: null, pid: null }),
+      makeTask({
+        id: 21, name: 'sched', status: 'scheduled', started_at: null, pid: null,
+        scheduled_at: Date.now() / 1000 + 3600,
+      }),
+    ])
+    vi.spyOn(api, 'listQueueHistory').mockResolvedValue({
+      items: [], total: 0, page: 1, page_size: 20,
+    })
+
+    renderQueue()
+
+    await waitFor(() =>
+      expect(screen.getByTestId('queue-scheduled-section')).toBeInTheDocument(),
+    )
+    expect(screen.getByText(/计划任务/)).toBeInTheDocument()
+    // scheduled 行有专属操作；pending 行没有
+    expect(screen.getByTestId('startnow-btn-21')).toBeInTheDocument()
+    expect(screen.getByTestId('cancel-scheduled-btn-21')).toBeInTheDocument()
+    expect(screen.queryByTestId('startnow-btn-20')).not.toBeInTheDocument()
+  })
+
+  it('点「立即开始」→ 调 startTaskNow 并刷新', async () => {
+    vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
+    vi.spyOn(api, 'listQueueLive').mockResolvedValue([
+      makeTask({
+        id: 21, name: 'sched', status: 'scheduled', started_at: null, pid: null,
+        scheduled_at: Date.now() / 1000 + 3600,
+      }),
+    ])
+    vi.spyOn(api, 'listQueueHistory').mockResolvedValue({
+      items: [], total: 0, page: 1, page_size: 20,
+    })
+    const startSpy = vi.spyOn(api, 'startTaskNow').mockResolvedValue({
+      task_id: 21, status: 'pending',
+    })
+
+    renderQueue()
+    await waitFor(() => expect(screen.getByTestId('startnow-btn-21')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('startnow-btn-21'))
+    await waitFor(() => expect(startSpy).toHaveBeenCalledWith(21))
+  })
+
   it('过滤行默认收起，点漏斗才显示搜索框（与项目页一致）', async () => {
     vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
     vi.spyOn(api, 'listQueueLive').mockResolvedValue([
