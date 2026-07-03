@@ -984,8 +984,10 @@ export default function GeneratePage() {
             </div>
           </div>
 
-          {/* 中：结果独立 scroll，card flex-1 占满列高 */}
-          <div className="flex-1 min-w-0 flex flex-col overflow-y-auto self-stretch">
+          {/* 中：card flex-1 占满列高。overflow-hidden（非 auto）——内容本就 fit（预览区
+              flex-1 min-h-0，XY 网格自带滚动），auto 会因一点点溢出触发幻影滚动条、吃掉
+              10px 宽把 card 挤窄 → 结果卡与右栏之间凭空多出 10px margin（#2 根因）。 */}
+          <div className="flex-1 min-w-0 flex flex-col overflow-hidden self-stretch">
             <div className="card flex-1 flex flex-col" style={{ padding: 18, minHeight: 0 }}>
               <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
                 <div className="flex items-center gap-2">
