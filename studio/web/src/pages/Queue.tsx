@@ -93,6 +93,59 @@ function estimateEta(task: Task): string | null {
   return `已运行 ${fmtDurationShort(elapsed)}`
 }
 
+/** 历史分页固定底栏（GPU / 数据两个视图共用同款，P-G 反馈统一）。
+ *  只要 total 超过最小每页数就常显；testid 复用（同一时刻只渲染一个视图）。 */
+function PaginationBar({
+  page, total, pageSize, onPage, onPageSize,
+}: {
+  page: number
+  total: number
+  pageSize: number
+  onPage: (updater: (p: number) => number) => void
+  onPageSize: (n: number) => void
+}) {
+  const { t } = useTranslation()
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  return (
+    <div className="shrink-0 -mx-6 -mb-6 px-6 py-1 border-t border-subtle flex items-center justify-between flex-wrap gap-2 bg-canvas text-[11px]">
+      <div className="flex items-center gap-2 text-fg-tertiary">
+        <span>{t('queue.pageIndicator', { page, pages: totalPages })}</span>
+        <select
+          value={pageSize}
+          onChange={(e) => onPageSize(Number(e.target.value))}
+          className="input"
+          style={{ width: 'auto', padding: '1px 6px', fontSize: 11 }}
+          data-testid="history-page-size"
+        >
+          {HISTORY_PAGE_SIZES.map((n) => (
+            <option key={n} value={n}>{t('queue.perPage', { n })}</option>
+          ))}
+        </select>
+      </div>
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => onPage((p) => Math.max(1, p - 1))}
+          disabled={page <= 1}
+          className="btn btn-ghost"
+          style={{ padding: '2px 10px', fontSize: 11 }}
+          data-testid="history-prev"
+        >
+          {t('queue.prevPage')}
+        </button>
+        <button
+          onClick={() => onPage((p) => Math.min(totalPages, p + 1))}
+          disabled={page >= totalPages}
+          className="btn btn-ghost"
+          style={{ padding: '2px 10px', fontSize: 11 }}
+          data-testid="history-next"
+        >
+          {t('queue.nextPage')}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 /** 队列行卡片。0.17 P-A 从 QueuePage 内联 map 抽出，供三个分区复用同一行渲染。
  *  monitor 只对 running 且 id===runningTaskId 的那行有意义；evalInfo 只对 terminal
  *  且仍在评估的行有值。 */
@@ -403,12 +456,18 @@ export default function QueuePage() {
   const [jobsSearch, setJobsSearch] = useLocalStorageState('studio:queue:jobsSearch', '')
   const [jobsSearchDebounced, setJobsSearchDebounced] = useState(jobsSearch)
   const [jobsRefreshToken, setJobsRefreshToken] = useState(0)
+  // 数据任务历史分页（与 GPU 视图同款固定底栏；total 由 Panel 拉取后回报）。
+  const [jobsHistoryPage, setJobsHistoryPage] = useState(1)
+  const [jobsPageSize, setJobsPageSize] =
+    useLocalStorageState('studio:queue:jobsPageSize', HISTORY_PAGE_SIZES[0])
+  const [jobsHistoryTotal, setJobsHistoryTotal] = useState(0)
 
-  // 数据任务搜索防抖 300ms（同任务视图搜索）。
+  // 数据任务搜索防抖 300ms（同任务视图搜索）；过滤条件变化回第 1 页。
   useEffect(() => {
     const id = window.setTimeout(() => setJobsSearchDebounced(jobsSearch), 300)
     return () => window.clearTimeout(id)
   }, [jobsSearch])
+  useEffect(() => { setJobsHistoryPage(1) }, [jobsKind, jobsSearchDebounced])
   const reloadTimer = useRef<number | null>(null)
   const { toast } = useToast()
   const { confirm } = useDialog()
@@ -542,7 +601,6 @@ export default function QueuePage() {
     return count
   }, [liveSorted])
 
-  const totalPages = Math.max(1, Math.ceil(history.total / historyPageSize))
 
   const requestPause = (task: Task) => {
     setPauseConfirmTaskId(task.id)
@@ -936,6 +994,9 @@ export default function QueuePage() {
           <DataJobsPanel
             kind={jobsKind}
             q={jobsSearchDebounced || undefined}
+            historyPage={jobsHistoryPage}
+            pageSize={jobsPageSize}
+            onHistoryTotal={setJobsHistoryTotal}
             refreshToken={jobsRefreshToken}
           />
         ) : !loaded ? (
@@ -1020,44 +1081,24 @@ export default function QueuePage() {
 
       {/* 0.17 item6：分页下沉成 fixed 底栏（-mx-6/-mb-6 抵消内容区 padding 做全宽贴底）。
           item2：只要历史超过最小每页数就常显（切到 50/100 只剩一页时不消失，能切回
-          20）；样式压缩省空间。 */}
+          20）；样式压缩省空间。GPU / 数据两个视图共用同款底栏（P-G 反馈）。 */}
       {queueTab === 'tasks' && loaded && !isEmpty && history.total > HISTORY_PAGE_SIZES[0] && (
-        <div className="shrink-0 -mx-6 -mb-6 px-6 py-1 border-t border-subtle flex items-center justify-between flex-wrap gap-2 bg-canvas text-[11px]">
-          <div className="flex items-center gap-2 text-fg-tertiary">
-            <span>{t('queue.pageIndicator', { page: history.page, pages: totalPages })}</span>
-            <select
-              value={historyPageSize}
-              onChange={(e) => { setHistoryPageSize(Number(e.target.value)); setHistoryPage(1) }}
-              className="input"
-              style={{ width: 'auto', padding: '1px 6px', fontSize: 11 }}
-              data-testid="history-page-size"
-            >
-              {HISTORY_PAGE_SIZES.map((n) => (
-                <option key={n} value={n}>{t('queue.perPage', { n })}</option>
-              ))}
-            </select>
-          </div>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => setHistoryPage((p) => Math.max(1, p - 1))}
-              disabled={history.page <= 1}
-              className="btn btn-ghost"
-              style={{ padding: '2px 10px', fontSize: 11 }}
-              data-testid="history-prev"
-            >
-              {t('queue.prevPage')}
-            </button>
-            <button
-              onClick={() => setHistoryPage((p) => Math.min(totalPages, p + 1))}
-              disabled={history.page >= totalPages}
-              className="btn btn-ghost"
-              style={{ padding: '2px 10px', fontSize: 11 }}
-              data-testid="history-next"
-            >
-              {t('queue.nextPage')}
-            </button>
-          </div>
-        </div>
+        <PaginationBar
+          page={history.page}
+          total={history.total}
+          pageSize={historyPageSize}
+          onPage={setHistoryPage}
+          onPageSize={(n) => { setHistoryPageSize(n); setHistoryPage(1) }}
+        />
+      )}
+      {queueTab === 'jobs' && jobsHistoryTotal > HISTORY_PAGE_SIZES[0] && (
+        <PaginationBar
+          page={jobsHistoryPage}
+          total={jobsHistoryTotal}
+          pageSize={jobsPageSize}
+          onPage={setJobsHistoryPage}
+          onPageSize={(n) => { setJobsPageSize(n); setJobsHistoryPage(1) }}
+        />
       )}
 
       {/* ADR Addendum 1 §UI：暂停 confirm modal — 告知用户语义后才调 api。 */}

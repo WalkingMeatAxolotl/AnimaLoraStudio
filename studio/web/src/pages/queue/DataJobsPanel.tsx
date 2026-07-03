@@ -20,15 +20,17 @@ import {
   JOB_KINDS, JOB_STATUS_TONE, fmtJobAgo, fmtJobDuration, jobJumpPath,
 } from './jobUtils'
 
-const HISTORY_PAGE_SIZE = 20
-
 export default function DataJobsPanel({
-  kind, q, refreshToken,
+  kind, q, historyPage, pageSize, onHistoryTotal, refreshToken,
 }: {
   /** kind 过滤（Queue 页 header 漏斗下发；null = 全部）。 */
   kind: JobKind | null
   /** 项目 title/slug 搜索（已防抖；undefined = 不过滤）。 */
   q?: string
+  /** 历史分页（分页底栏在 Queue 页，与 GPU 视图同款；total 经 onHistoryTotal 回报）。 */
+  historyPage: number
+  pageSize: number
+  onHistoryTotal: (total: number) => void
   /** 递增触发重拉（Queue 页 header 刷新按钮）。 */
   refreshToken: number
 }) {
@@ -39,32 +41,28 @@ export default function DataJobsPanel({
 
   const [live, setLive] = useState<Job[]>([])
   const [history, setHistory] = useState<JobsHistoryPage>({
-    items: [], total: 0, page: 1, page_size: HISTORY_PAGE_SIZE,
+    items: [], total: 0, page: 1, page_size: 20,
   })
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [historyPage, setHistoryPage] = useState(1)
   const [projectTitles, setProjectTitles] = useState<Record<number, string>>({})
   const reloadTimer = useRef<number | null>(null)
-
-  // kind / 搜索变化回第 1 页。
-  useEffect(() => { setHistoryPage(1) }, [kind, q])
 
   const reload = useCallback(async () => {
     try {
       const [l, h] = await Promise.all([
         api.listJobsLive(kind ?? undefined, q),
         api.listJobsHistory({
-          page: historyPage, pageSize: HISTORY_PAGE_SIZE, kind: kind ?? undefined, q,
+          page: historyPage, pageSize, kind: kind ?? undefined, q,
         }),
       ])
-      setLive(l); setHistory(h); setError(null)
+      setLive(l); setHistory(h); onHistoryTotal(h.total); setError(null)
     } catch (e) {
       setError(String(e))
     } finally {
       setLoaded(true)
     }
-  }, [kind, q, historyPage])
+  }, [kind, q, historyPage, pageSize, onHistoryTotal])
   const reloadRef = useRef(reload); reloadRef.current = reload
 
   useEffect(() => { void reload() }, [reload, refreshToken])
@@ -103,7 +101,6 @@ export default function DataJobsPanel({
     }
   }
 
-  const totalPages = Math.max(1, Math.ceil(history.total / HISTORY_PAGE_SIZE))
   const isEmpty = loaded && live.length === 0 && history.total === 0 && !kind && !q
 
   const KIND_LABEL = useMemo(() => Object.fromEntries(
@@ -230,31 +227,6 @@ export default function DataJobsPanel({
               </div>
             ) : (
               history.items.map(renderRow)
-            )}
-            {history.total > HISTORY_PAGE_SIZE && (
-              <div className="flex items-center justify-between text-[11px] text-fg-tertiary pt-1">
-                <span>{t('queue.pageIndicator', { page: history.page, pages: totalPages })}</span>
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => setHistoryPage((p) => Math.max(1, p - 1))}
-                    disabled={history.page <= 1}
-                    className="btn btn-ghost"
-                    style={{ padding: '2px 10px', fontSize: 11 }}
-                    data-testid="jobs-history-prev"
-                  >
-                    {t('queue.prevPage')}
-                  </button>
-                  <button
-                    onClick={() => setHistoryPage((p) => Math.min(totalPages, p + 1))}
-                    disabled={history.page >= totalPages}
-                    className="btn btn-ghost"
-                    style={{ padding: '2px 10px', fontSize: 11 }}
-                    data-testid="jobs-history-next"
-                  >
-                    {t('queue.nextPage')}
-                  </button>
-                </div>
-              </div>
             )}
           </section>
         </>

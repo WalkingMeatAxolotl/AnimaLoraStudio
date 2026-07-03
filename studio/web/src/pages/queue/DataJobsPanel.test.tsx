@@ -48,7 +48,15 @@ function renderPanel(kind: JobKind | null = null, q?: string) {
       <ToastProvider>
         <DialogProvider>
           <Routes>
-            <Route path="/" element={<DataJobsPanel kind={kind} q={q} refreshToken={0} />} />
+            <Route
+              path="/"
+              element={
+                <DataJobsPanel
+                  kind={kind} q={q} historyPage={1} pageSize={20}
+                  onHistoryTotal={() => {}} refreshToken={0}
+                />
+              }
+            />
             <Route path="/queue/jobs/:jid" element={<div data-testid="job-detail-route" />} />
           </Routes>
         </DialogProvider>
