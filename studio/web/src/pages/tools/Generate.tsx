@@ -728,7 +728,7 @@ export default function GeneratePage() {
             {/* 0.17 P-I：取消（当前显示 task）+ 清空队列（所有 pending）始终在位，不可用时
                 disabled，放「清理显存」（DaemonControls）左边。 */}
             <button
-              className="btn btn-ghost text-warn border-warn"
+              className="btn btn-ghost"
               onClick={handleCancel}
               disabled={!cancelable}
               title={t('generate.cancelCurrentTitle')}
@@ -936,7 +936,8 @@ export default function GeneratePage() {
               style={{ borderTop: '1px solid var(--border-subtle)', padding: 12 }}
             >
               <SidebarSectionTabs tab={sidebarTab} onTabChange={setSidebarTab} mode={mode} />
-              <div className="flex items-center gap-3">
+              {/* items-stretch：batch 框跟「开始生成」按钮等高（按钮 padding:12 定高度）。 */}
+              <div className="flex items-stretch gap-3">
                 <button
                   className="btn btn-primary flex-1"
                   style={{ padding: 12, fontWeight: 600, justifyContent: 'center' }}

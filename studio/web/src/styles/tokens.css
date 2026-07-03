@@ -211,6 +211,12 @@ select option:checked {
 .btn-warn { background: var(--warn); color: white; border-color: var(--warn); }
 .btn-warn:hover { filter: brightness(1.08); }
 .btn-sm { padding: 4px 10px; font-size: var(--t-sm); }
+/* 禁用态：半透明 + not-allowed，hover 不再高亮/提亮（此前无 :disabled 规则，禁用看不出来）。 */
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-primary:disabled:hover { background: var(--accent); }
+.btn-ghost:disabled:hover { background: transparent; color: var(--fg-secondary); }
+.btn-secondary:disabled:hover { background: var(--bg-surface); border-color: var(--border-default); }
+.btn-danger:disabled:hover, .btn-warn:disabled:hover { filter: none; }
 
 .card {
   background: var(--bg-surface);
