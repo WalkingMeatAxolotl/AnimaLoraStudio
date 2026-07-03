@@ -2291,17 +2291,22 @@ export const api = {
       body: JSON.stringify({ crops }),
     }),
 
-  // 0.17 P-G — 数据作业只读区数据源。live = running+pending 不分页；history 分页。
-  listJobsLive: (kind?: JobKind) => {
+  // 0.17 P-G — 数据作业只读区数据源。live = running+pending 不分页；history 分页；
+  // q 按所属项目 title/slug 搜索（job 自身无 name）。
+  listJobsLive: (kind?: JobKind, q?: string) => {
     const params = new URLSearchParams({ group: 'live' })
     if (kind) params.set('kind', kind)
+    if (q) params.set('q', q)
     return req<{ items: Job[] }>(`/api/jobs?${params}`).then((r) => r.items)
   },
-  listJobsHistory: (opts: { page: number; pageSize: number; kind?: JobKind }) => {
+  listJobsHistory: (opts: {
+    page: number; pageSize: number; kind?: JobKind; q?: string
+  }) => {
     const params = new URLSearchParams({
       group: 'history', page: String(opts.page), page_size: String(opts.pageSize),
     })
     if (opts.kind) params.set('kind', opts.kind)
+    if (opts.q) params.set('q', opts.q)
     return req<JobsHistoryPage>(`/api/jobs?${params}`)
   },
   getJob: (jid: number) => req<Job>(`/api/jobs/${jid}`),

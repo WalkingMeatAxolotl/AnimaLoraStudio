@@ -400,7 +400,15 @@ export default function QueuePage() {
     useLocalStorageState<'tasks' | 'jobs'>('studio:queue:tab', 'tasks')
   const [jobsKind, setJobsKind] =
     useLocalStorageState<JobKind | null>('studio:queue:jobsKind', null)
+  const [jobsSearch, setJobsSearch] = useLocalStorageState('studio:queue:jobsSearch', '')
+  const [jobsSearchDebounced, setJobsSearchDebounced] = useState(jobsSearch)
   const [jobsRefreshToken, setJobsRefreshToken] = useState(0)
+
+  // 数据任务搜索防抖 300ms（同任务视图搜索）。
+  useEffect(() => {
+    const id = window.setTimeout(() => setJobsSearchDebounced(jobsSearch), 300)
+    return () => window.clearTimeout(id)
+  }, [jobsSearch])
   const reloadTimer = useRef<number | null>(null)
   const { toast } = useToast()
   const { confirm } = useDialog()
@@ -717,7 +725,7 @@ export default function QueuePage() {
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M3 4h18l-7 8v6l-4 2v-8L3 4z" />
               </svg>
-              {!filtersOpen && jobsKind !== null && (
+              {!filtersOpen && (jobsKind !== null || jobsSearch.trim() !== '') && (
                 <span className="dot dot-running" aria-label={t('queue.filtersActive')} />
               )}
             </button>
@@ -808,6 +816,15 @@ export default function QueuePage() {
           className="px-6 py-2 border-b border-subtle flex items-center gap-3"
           data-testid="queue-jobs-filterbar"
         >
+          <input
+            className="input"
+            style={{ width: '60%' }}
+            value={jobsSearch}
+            onChange={(e) => setJobsSearch(e.target.value)}
+            placeholder={t('queue.jobs.searchPlaceholder')}
+            aria-label={t('common.search')}
+            data-testid="jobs-search"
+          />
           <span className="flex-1" />
           <select
             className="input"
@@ -908,7 +925,11 @@ export default function QueuePage() {
 
         {queueTab === 'jobs' ? (
           /* 0.17 P-G — 数据作业只读区（project_jobs）。kind 过滤/刷新由 header 下发。 */
-          <DataJobsPanel kind={jobsKind} refreshToken={jobsRefreshToken} />
+          <DataJobsPanel
+            kind={jobsKind}
+            q={jobsSearchDebounced || undefined}
+            refreshToken={jobsRefreshToken}
+          />
         ) : !loaded ? (
           <div className="rounded-lg border border-subtle bg-surface overflow-hidden">
             {Array.from({ length: 3 }).map((_, i) => (

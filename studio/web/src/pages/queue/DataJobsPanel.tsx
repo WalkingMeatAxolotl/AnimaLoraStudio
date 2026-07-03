@@ -23,10 +23,12 @@ import {
 const HISTORY_PAGE_SIZE = 20
 
 export default function DataJobsPanel({
-  kind, refreshToken,
+  kind, q, refreshToken,
 }: {
   /** kind 过滤（Queue 页 header 漏斗下发；null = 全部）。 */
   kind: JobKind | null
+  /** 项目 title/slug 搜索（已防抖；undefined = 不过滤）。 */
+  q?: string
   /** 递增触发重拉（Queue 页 header 刷新按钮）。 */
   refreshToken: number
 }) {
@@ -45,15 +47,15 @@ export default function DataJobsPanel({
   const [projectTitles, setProjectTitles] = useState<Record<number, string>>({})
   const reloadTimer = useRef<number | null>(null)
 
-  // kind 过滤变化回第 1 页。
-  useEffect(() => { setHistoryPage(1) }, [kind])
+  // kind / 搜索变化回第 1 页。
+  useEffect(() => { setHistoryPage(1) }, [kind, q])
 
   const reload = useCallback(async () => {
     try {
       const [l, h] = await Promise.all([
-        api.listJobsLive(kind ?? undefined),
+        api.listJobsLive(kind ?? undefined, q),
         api.listJobsHistory({
-          page: historyPage, pageSize: HISTORY_PAGE_SIZE, kind: kind ?? undefined,
+          page: historyPage, pageSize: HISTORY_PAGE_SIZE, kind: kind ?? undefined, q,
         }),
       ])
       setLive(l); setHistory(h); setError(null)
@@ -62,7 +64,7 @@ export default function DataJobsPanel({
     } finally {
       setLoaded(true)
     }
-  }, [kind, historyPage])
+  }, [kind, q, historyPage])
   const reloadRef = useRef(reload); reloadRef.current = reload
 
   useEffect(() => { void reload() }, [reload, refreshToken])
@@ -102,7 +104,7 @@ export default function DataJobsPanel({
   }
 
   const totalPages = Math.max(1, Math.ceil(history.total / HISTORY_PAGE_SIZE))
-  const isEmpty = loaded && live.length === 0 && history.total === 0 && !kind
+  const isEmpty = loaded && live.length === 0 && history.total === 0 && !kind && !q
 
   const KIND_LABEL = useMemo(() => Object.fromEntries(
     JOB_KINDS.map((k) => [k, t(`queue.jobs.kind.${k}`)]),

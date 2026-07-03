@@ -714,6 +714,7 @@
       "cancelOk": "Cancel task",
       "cancelConfirm": "Cancel data task #{{id}}? A running task will be terminated.",
       "jump": "Open source page",
+      "searchPlaceholder": "Search project name / slug",
       "project": "Project",
       "version": "Version",
       "paramsSection": "Params",

@@ -714,6 +714,7 @@
       "cancelOk": "取消任务",
       "cancelConfirm": "取消数据任务 #{{id}}？运行中的任务会被终止。",
       "jump": "打开所在页面",
+      "searchPlaceholder": "搜索项目名 / slug",
       "project": "项目",
       "version": "版本",
       "paramsSection": "参数",

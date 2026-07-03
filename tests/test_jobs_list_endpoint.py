@@ -39,8 +39,8 @@ def _seed_job(pid: int, kind: str, status: str) -> int:
     return int(job["id"])
 
 
-def _make_project(client: TestClient) -> int:
-    return int(client.post("/api/projects", json={"title": "P"}).json()["id"])
+def _make_project(client: TestClient, title: str = "P") -> int:
+    return int(client.post("/api/projects", json={"title": title}).json()["id"])
 
 
 def test_group_live_returns_running_and_pending(client: TestClient) -> None:
@@ -94,6 +94,24 @@ def test_created_at_written_on_create(client: TestClient) -> None:
     items = client.get("/api/jobs?group=live").json()["items"]
     assert items[0]["created_at"] is not None
     assert before - 1 <= items[0]["created_at"] <= _time.time() + 1
+
+
+def test_q_searches_project_title_and_slug(client: TestClient) -> None:
+    """q 按所属项目 title/slug 搜（job 自身无 name），live+history 都生效且 total 准。"""
+    pid_a = _make_project(client, title="usashiro")
+    pid_b = _make_project(client, title="other")
+    a_run = _seed_job(pid_a, "tag", "running")
+    _seed_job(pid_b, "tag", "running")
+    a_done = _seed_job(pid_a, "download", "done")
+    _seed_job(pid_b, "download", "done")
+
+    live = client.get("/api/jobs?group=live&q=usa").json()["items"]
+    assert [i["id"] for i in live] == [a_run]
+    hist = client.get("/api/jobs?group=history&q=usa").json()
+    assert [i["id"] for i in hist["items"]] == [a_done]
+    assert hist["total"] == 1
+    # 未命中 → 空
+    assert client.get("/api/jobs?group=live&q=zzz").json()["items"] == []
 
 
 def test_invalid_group_and_kind_400(client: TestClient) -> None:

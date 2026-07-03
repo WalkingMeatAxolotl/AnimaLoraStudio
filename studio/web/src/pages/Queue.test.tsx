@@ -240,6 +240,7 @@ describe('QueuePage 分区 + 分页', () => {
     expect(screen.queryByText(/等待入队/)).not.toBeInTheDocument()
     fireEvent.click(screen.getByTestId('queue-filter-toggle'))
     expect(screen.getByTestId('jobs-kind-filter')).toBeInTheDocument()
+    expect(screen.getByTestId('jobs-search')).toBeInTheDocument()
     // 任务视图专属的搜索框不在
     expect(screen.queryByTestId('queue-search')).not.toBeInTheDocument()
 

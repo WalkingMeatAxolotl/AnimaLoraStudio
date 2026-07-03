@@ -42,13 +42,13 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-function renderPanel(kind: JobKind | null = null) {
+function renderPanel(kind: JobKind | null = null, q?: string) {
   return render(
     <MemoryRouter>
       <ToastProvider>
         <DialogProvider>
           <Routes>
-            <Route path="/" element={<DataJobsPanel kind={kind} refreshToken={0} />} />
+            <Route path="/" element={<DataJobsPanel kind={kind} q={q} refreshToken={0} />} />
             <Route path="/queue/jobs/:jid" element={<div data-testid="job-detail-route" />} />
           </Routes>
         </DialogProvider>
@@ -119,16 +119,16 @@ describe('DataJobsPanel', () => {
     expect(screen.getByTestId('job-jump-btn-9')).toBeInTheDocument()
   })
 
-  it('kind prop 传给两个数据源', async () => {
+  it('kind / q prop 传给两个数据源', async () => {
     const liveSpy = vi.spyOn(api, 'listJobsLive').mockResolvedValue([])
     const histSpy = vi.spyOn(api, 'listJobsHistory').mockResolvedValue({
       items: [], total: 0, page: 1, page_size: 20,
     })
 
-    renderPanel('download')
-    await waitFor(() => expect(liveSpy).toHaveBeenCalledWith('download'))
+    renderPanel('download', 'usa')
+    await waitFor(() => expect(liveSpy).toHaveBeenCalledWith('download', 'usa'))
     expect(histSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: 'download' }),
+      expect.objectContaining({ kind: 'download', q: 'usa' }),
     )
   })
 })
