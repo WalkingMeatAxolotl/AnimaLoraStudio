@@ -27,8 +27,8 @@ version: "0.16.0"        # 可选，关联版本号
 正文（markdown）
 ```
 
-> 正文目前前端按纯文本 `whitespace-pre-wrap` 显示（依赖最少，真 markdown 渲染待后续）。
-> 所以请把正文写得**适合纯文本阅读**：少用 `#` 标题（会显示成原文），`-` 列表、链接 URL 没问题。
+> 正文按完整 markdown 渲染（`ReactMarkdown` + GFM，0.16.0 起）：标题 / 列表 / 链接 / 代码块都可用，
+> 写法约定见 [`CONTENT-GUIDE.md`](CONTENT-GUIDE.md)。
 
 ## tag 枚举（白名单）
 

@@ -1,6 +1,6 @@
 # AnimaLoraStudio
 
-[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-lightgrey)](README.md) [![English](https://img.shields.io/badge/lang-English-blue)](README.en.md) [![Version](https://img.shields.io/badge/version-0.16.0-blue)](CHANGELOG.md) [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-lightgrey)](README.md) [![English](https://img.shields.io/badge/lang-English-blue)](README.en.md) [![Version](https://img.shields.io/badge/version-0.17.0-blue)](CHANGELOG.md) [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 
 **End-to-end pipeline**: Booru scraping → curation → tagging → regularization set → training → image-gen testing, all in one browser panel. Tuned for [Anima](https://huggingface.co/circlestone-labs/Anima) (Cosmos DiT, anime-specialized).
 
@@ -13,7 +13,7 @@
 - **Booru scraping**: native Gelbooru / Danbooru (Cloudflare-compatible UA, rate limiting, account auth).
 - **Automatic regularization sets**: reverse-search by your training set's tag distribution + aspect-ratio clustering, or AI priors from the base model (no LoRA needed).
 - **Project / Version two-tier management**: one project holds multiple versions sharing downloaded data, with independent config / output; presets fork both ways with the global pool.
-- **Multi-task queue**: enqueue, pause (resume from the last epoch boundary), resume, and queue-level hold.
+- **Multi-task queue**: training, generation and data jobs in one unified ledger; enqueue, scheduled start, pause (resume from the last epoch boundary), resume, and queue-level hold.
 - **Built-in image-gen testing**: single-image / XY-grid eval + a resident inference daemon; output `lora_unet_*` drops straight into ComfyUI, no conversion.
 - **Rich training algorithms**: multiple loss / timestep sampling / optimizers (AdamW · Lion · Prodigy · SOAP, etc.) / LoRA · LyCORIS adapters — see [Training algorithm options](docs/user-guide/training-tips.md#训练算法选项).
 - **Self-healing setup + in-app self-update**: GPU-aware torch on first install, dependency hash checks, git pull / restart / rollback.
