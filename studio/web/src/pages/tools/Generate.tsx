@@ -760,14 +760,16 @@ export default function GeneratePage() {
         }
       />
 
-      {/* 出图进度条：贴页面 header 下方的全宽细线（浏览器加载条式）+ 小相位文字，横跨整页。
-          覆盖 load/clip/sample/vae 全阶段；切历史图回看时也照常显示当前进度。 */}
-      {(busy || progress.currentStep != null || progress.phase != null) && (
-        <GenerateProgressBar busy={busy} progress={progress} />
-      )}
-
-      {/* 三列各自独立滚动，整页固定高度 = viewport */}
-      <div className="p-6 flex gap-4 items-stretch flex-wrap xl:flex-nowrap flex-1 min-h-0">
+      {/* 三列各自独立滚动，整页固定高度 = viewport。relative：进度条 absolute 叠在顶部
+          p-6 既有 gap 上、不占布局，出现/消失不推动内容（防页面抖动）。 */}
+      <div className="relative p-6 flex gap-4 items-stretch flex-wrap xl:flex-nowrap flex-1 min-h-0">
+        {/* 出图进度条：全宽细线（浏览器加载条式）+ 小相位文字，绝对定位叠在 header 与内容间
+            的既有 gap 上；覆盖 load/clip/sample/vae 全阶段，切历史图也照常显示当前进度。 */}
+        {(busy || progress.currentStep != null || progress.phase != null) && (
+          <div className="absolute top-0 inset-x-0 z-10 pointer-events-none">
+            <GenerateProgressBar busy={busy} progress={progress} />
+          </div>
+        )}
 
           {/* 左：sidebar — 单卡片包裹；内容区独立 scroll，底部 footer 固定 tab + 生成按钮 */}
           <div className="card flex flex-col w-full xl:w-[420px] shrink-0 self-stretch min-h-0 overflow-hidden">
