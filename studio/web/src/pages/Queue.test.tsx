@@ -130,7 +130,7 @@ describe('QueuePage 分区 + 分页', () => {
       { timeout: 2000 },
     )
     // 默认类型过滤是 train，搜索时随行带上。
-    expect(liveSpy).toHaveBeenCalledWith('abc', 'train')
+    expect(liveSpy).toHaveBeenCalledWith('abc', 'train', 'exclusive')
   })
 
   it('选类型过滤 → 带 type 请求后端（live + history）', async () => {
@@ -148,7 +148,7 @@ describe('QueuePage 分区 + 分页', () => {
     await waitFor(
       () => expect(historySpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'generate' })),
     )
-    expect(liveSpy).toHaveBeenCalledWith(undefined, 'generate')
+    expect(liveSpy).toHaveBeenCalledWith(undefined, 'generate', 'exclusive')
   })
 
   it('默认类型过滤为训练；generate 行有「出图结果」跳转按钮', async () => {
@@ -162,7 +162,7 @@ describe('QueuePage 分区 + 分页', () => {
 
     renderQueue()
     // 默认按训练过滤（第二个参数）
-    await waitFor(() => expect(liveSpy).toHaveBeenCalledWith(undefined, 'train'))
+    await waitFor(() => expect(liveSpy).toHaveBeenCalledWith(undefined, 'train', 'exclusive'))
     // generate 行渲染跳转按钮（mock 忽略过滤参数，照返 generate 任务）
     await waitFor(() => expect(screen.getByTestId('jump-btn-88')).toBeInTheDocument())
   })
@@ -223,10 +223,6 @@ describe('QueuePage 分区 + 分页', () => {
       makeTask({ id: 10, name: 'run', status: 'running', started_at: 1000 }),
     ])
     vi.spyOn(api, 'listQueueHistory').mockResolvedValue({
-      items: [], total: 0, page: 1, page_size: 20,
-    })
-    vi.spyOn(api, 'listJobsLive').mockResolvedValue([])
-    vi.spyOn(api, 'listJobsHistory').mockResolvedValue({
       items: [], total: 0, page: 1, page_size: 20,
     })
     vi.spyOn(api, 'listProjects').mockResolvedValue([])

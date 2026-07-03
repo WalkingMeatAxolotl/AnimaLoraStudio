@@ -27,7 +27,6 @@ from .routers import (
     generate,
     health,
     installs,
-    jobs,
     logs,
     models,
     models_storage,
@@ -80,8 +79,7 @@ app.include_router(samples.router)
 app.include_router(logs.router)
 app.include_router(data_exports.router)
 app.include_router(tagger.router)
-# PR-6 commit 2: 4 个 admin router（jobs / secrets / models / upscalers）
-app.include_router(jobs.router)
+# PR-6 commit 2: admin router（secrets / models / upscalers）。jobs router 已删（R-5 台账合并，数据作业走 /api/queue）
 app.include_router(secrets_router.router)
 app.include_router(models.router)
 app.include_router(upscalers.router)

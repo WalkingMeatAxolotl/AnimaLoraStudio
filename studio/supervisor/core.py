@@ -219,7 +219,12 @@ class Supervisor:
             )
             return True
         if task["status"] == "running":
-            slot = self._find_slot(kind="task", id=task_id)
+            # R-5：台账合并后 running 的可能是数据作业（DATA 槽 kind="job"）——
+            # 统一从这个入口取消，SIGTERM 语义同 cancel_job。
+            slot = (
+                self._find_slot(kind="task", id=task_id)
+                or self._find_slot(kind="job", id=task_id)
+            )
             if slot is not None:
                 self._signal_terminate_async(slot)
                 return True
@@ -286,32 +291,6 @@ class Supervisor:
             return False, "task is being canceled"
         self._signal_pause_async(slot)
         return True, ""
-
-    def cancel_job(self, job_id: int) -> bool:
-        """取消 project_job：pending → canceled；running → 异步发信号立即返回。"""
-        with db.connection_for(self._db_path) as conn:
-            job = project_jobs.get_job(conn, job_id)
-            if not job:
-                return False
-            if job["status"] == "pending":
-                project_jobs.mark_canceled(conn, job_id)
-                self._on_event(
-                    {
-                        "type": "job_state_changed",
-                        "job_id": job_id,
-                        "project_id": job["project_id"],
-                        "version_id": job.get("version_id"),
-                        "kind": job["kind"],
-                        "status": "canceled",
-                    }
-                )
-                return True
-        if job["status"] == "running":
-            slot = self._find_slot(kind="job", id=job_id)
-            if slot is not None:
-                self._signal_terminate_async(slot)
-                return True
-        return False
 
     @property
     def current_task_id(self) -> Optional[int]:

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 201,
+  "count": 195,
   "routes": [
     {
       "path": "/",
@@ -247,38 +247,6 @@
         "GET"
       ],
       "name": "health",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/jobs",
-      "methods": [
-        "GET"
-      ],
-      "name": "list_jobs_endpoint",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/jobs/{jid}",
-      "methods": [
-        "GET"
-      ],
-      "name": "get_job_endpoint",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/jobs/{jid}/cancel",
-      "methods": [
-        "POST"
-      ],
-      "name": "cancel_job_endpoint",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/jobs/{jid}/log",
-      "methods": [
-        "GET"
-      ],
-      "name": "get_job_log",
       "type": "APIRoute"
     },
     {
@@ -1154,14 +1122,6 @@
       "type": "APIRoute"
     },
     {
-      "path": "/api/queue/export",
-      "methods": [
-        "GET"
-      ],
-      "name": "export_queue",
-      "type": "APIRoute"
-    },
-    {
       "path": "/api/queue/hold",
       "methods": [
         "GET"
@@ -1175,14 +1135,6 @@
         "POST"
       ],
       "name": "hold_queue",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/queue/import",
-      "methods": [
-        "POST"
-      ],
-      "name": "import_queue",
       "type": "APIRoute"
     },
     {

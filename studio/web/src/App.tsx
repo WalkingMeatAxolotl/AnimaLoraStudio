@@ -22,7 +22,6 @@ import { useSettingsDrawer } from './lib/SettingsDrawer'
 import ProjectsPage from './pages/Projects'
 import QueuePage from './pages/Queue'
 import QueueDetailPage from './pages/QueueDetail'
-import QueueJobDetailPage from './pages/QueueJobDetail'
 import ProjectLayout from './pages/project/Layout'
 import ProjectOverview from './pages/project/Overview'
 import CurationPage from './pages/project/steps/Curation'
@@ -100,8 +99,6 @@ const router = createBrowserRouter(
       children: [
         { path: '/', element: <ProjectsPage /> },
         { path: '/queue', element: <QueuePage /> },
-        // P-G 数据作业详情。静态段 ranking 高于 /queue/:id，无冲突。
-        { path: '/queue/jobs/:jid', element: <QueueJobDetailPage /> },
         { path: '/queue/:id', element: <QueueDetailPage /> },
         { path: '/queue/:id/log', element: <QueueDetailRedirect tab="log" /> },
         { path: '/queue/:id/monitor', element: <QueueDetailRedirect tab="monitor" /> },

@@ -198,7 +198,9 @@ def _build_task_filter(
     - types：`COALESCE(task_type,'train') IN (...)`——0.17 P-F 类型过滤（正向包含）
     - exclude_types：`COALESCE(task_type,'train') NOT IN (...)`——老行 NULL 兜底成
       'train' 不会被误排除（保证分页 total 准）
-    - q：name / config_name 子串（LIKE + ESCAPE，元字符转义）
+    - q：name / config_name 子串 + 所属项目 title/slug 子串（LIKE + ESCAPE，
+      元字符转义）。R-5：数据作业 name=kind 无搜索价值，靠项目名子查询命中；
+      GPU 任务顺带获得按项目搜索能力
     """
     clauses: list[str] = []
     params: list[Any] = []
@@ -217,8 +219,12 @@ def _build_task_filter(
         params.extend(exclude_types)
     if q:
         like = f"%{_escape_like(q)}%"
-        clauses.append("(name LIKE ? ESCAPE '\\' OR config_name LIKE ? ESCAPE '\\')")
-        params.extend([like, like])
+        clauses.append(
+            "(name LIKE ? ESCAPE '\\' OR config_name LIKE ? ESCAPE '\\' "
+            "OR project_id IN (SELECT id FROM projects "
+            "WHERE title LIKE ? ESCAPE '\\' OR slug LIKE ? ESCAPE '\\'))"
+        )
+        params.extend([like, like, like, like])
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     return where, params
 
