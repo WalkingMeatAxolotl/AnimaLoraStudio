@@ -70,9 +70,9 @@ export default function GenerateProgressBar({
   const batchTag = bt && bt > 1 && bi != null ? `${bi + 1}/${bt} · ` : ''
 
   return (
-    <div className="flex flex-col">
-      {/* 细进度条（贴 header 下沿，3px） */}
-      <div style={{ height: 3, background: 'var(--bg-sunken)', overflow: 'hidden' }}>
+    <div className="shrink-0">
+      {/* 浏览器加载条式：贴页面 header 下沿的全宽细线（2px） */}
+      <div style={{ height: 2, background: 'var(--bg-sunken)', overflow: 'hidden' }}>
         <div
           style={{
             width: `${pct}%`,
@@ -82,14 +82,8 @@ export default function GenerateProgressBar({
           }}
         />
       </div>
-      {/* 相位标签行：小字 + 渐隐底，读得清又不挡图；pointer-events-none 由父层给 */}
-      <div
-        className="flex items-center justify-between px-2 font-mono text-2xs"
-        style={{
-          paddingTop: 2, paddingBottom: 2,
-          background: 'linear-gradient(to bottom, var(--bg-surface) 55%, transparent)',
-        }}
-      >
+      {/* 小相位文字（与页面内容 p-6 对齐） */}
+      <div className="flex items-center justify-between px-6 font-mono text-2xs" style={{ paddingTop: 2, paddingBottom: 2 }}>
         <span className="text-fg-secondary truncate">{batchTag}{phaseLabel}</span>
         <span className="text-fg-tertiary shrink-0 ml-2">{pct}%</span>
       </div>

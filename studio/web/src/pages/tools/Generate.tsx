@@ -760,9 +760,14 @@ export default function GeneratePage() {
         }
       />
 
-      {/* 三列各自独立滚动，整页固定高度 = viewport。max-w + mx-auto：超宽屏不过度拉伸
-          （否则 center 过宽 → 单图 object-contain 居中留白变大、右侧空一块）。 */}
-      <div className="p-6 flex gap-4 items-stretch flex-wrap xl:flex-nowrap flex-1 min-h-0 w-full max-w-[1760px] mx-auto">
+      {/* 出图进度条：贴页面 header 下方的全宽细线（浏览器加载条式）+ 小相位文字，横跨整页。
+          覆盖 load/clip/sample/vae 全阶段；切历史图回看时也照常显示当前进度。 */}
+      {(busy || progress.currentStep != null || progress.phase != null) && (
+        <GenerateProgressBar busy={busy} progress={progress} />
+      )}
+
+      {/* 三列各自独立滚动，整页固定高度 = viewport */}
+      <div className="p-6 flex gap-4 items-stretch flex-wrap xl:flex-nowrap flex-1 min-h-0">
 
           {/* 左：sidebar — 单卡片包裹；内容区独立 scroll，底部 footer 固定 tab + 生成按钮 */}
           <div className="card flex flex-col w-full xl:w-[420px] shrink-0 self-stretch min-h-0 overflow-hidden">
@@ -998,15 +1003,7 @@ export default function GeneratePage() {
                 <ViewModeTabs mode={mode} onModeChange={setMode} />
               </div>
 
-              {/* 0.17 P-I：进度条 = header 下方**细条** overlay（absolute、pointer-events-none）：
-                  贴在预览顶沿、不挤压预览、不增加上下高度；切历史图回看时也照常显示当前进度。
-                  覆盖 load/clip/sample/vae 全阶段（见 GenerateProgressBar）。 */}
-              <div className="relative flex-1 flex flex-col min-h-0">
-                {(busy || progress.currentStep != null || progress.phase != null) && (
-                  <div className="absolute top-0 inset-x-0 z-10 pointer-events-none">
-                    <GenerateProgressBar busy={busy} progress={progress} />
-                  </div>
-                )}
+              {/* 进度条已上移到页面 header 下（全宽细线），不再在结果卡内。 */}
               {historyOverride ? (
                 <div className="flex-1 min-h-0 flex flex-col gap-2">
                   {historyOverride.mode === 'xy' && historyOverride.xyMeta ? (
@@ -1109,7 +1106,6 @@ export default function GeneratePage() {
               ) : (
                 <SampleGallery samples={samples} taskId={currentTask.id} />
               )}
-              </div>{/* /预览区 relative wrapper */}
             </div>
           </div>
 
