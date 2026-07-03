@@ -130,19 +130,25 @@ def list_queue(
                 http_status=400,
             )
 
+    # R-3 台账合并：数据作业进了 tasks 表。GPU 视图（本端点）在 R-5 档位化前
+    # 默认排除 JOB_TASK_TYPES——显式 types 过滤时不排（调用方自己指定）。
     if group is None:
-        # 兼容旧行为：全量 + 隐藏 generate/reg_ai（无 group 调用方依赖此默认）。
+        # 兼容旧行为：全量 + 隐藏 generate/reg_ai（无 group 调用方依赖此默认）
+        # + 隐藏数据作业（保护 Topbar/Overview/Monitor 不把它们当训练任务）。
         with db.connection_for() as conn:
             items = db.list_tasks(conn, status=status)
+        items = db.filter_out_task_types(items, db.JOB_TASK_TYPES)
         if not include_generate:
             items = db.filter_out_task_types(items, ("generate", "reg_ai"))
         _enrich_tasks(items)
         return {"items": items}
 
+    exclude = () if type_tuple else db.JOB_TASK_TYPES
     if group == "live":
         with db.connection_for() as conn:
             items = db.list_tasks_page(
                 conn, statuses=db.LIVE_STATUSES, q=q, types=type_tuple,
+                exclude_types=exclude,
             )
         _enrich_tasks(items)
         return {"items": items}
@@ -156,10 +162,10 @@ def list_queue(
     offset = (page - 1) * page_size
     with db.connection_for() as conn:
         total = db.count_tasks(
-            conn, statuses=statuses, q=q, types=type_tuple,
+            conn, statuses=statuses, q=q, types=type_tuple, exclude_types=exclude,
         )
         items = db.list_tasks_page(
-            conn, statuses=statuses, q=q, types=type_tuple,
+            conn, statuses=statuses, q=q, types=type_tuple, exclude_types=exclude,
             limit=page_size, offset=offset,
         )
     _enrich_tasks(items)
@@ -415,7 +421,9 @@ def retry_task(task_id: int) -> dict[str, Any]:
             priority=original["priority"],
         )
         copy_fields: dict[str, Any] = {}
-        for k in ("config_path", "project_id", "version_id"):
+        # R-3：task_type / params 必须一并复制——数据作业类 task 重跑靠它们
+        # 路由 worker 与还原参数（漏了会退化成 train 跑错脚本）。
+        for k in ("config_path", "project_id", "version_id", "task_type", "params"):
             if original.get(k) is not None:
                 copy_fields[k] = original[k]
         if copy_fields:

@@ -39,33 +39,39 @@ def _setup_project(isolated) -> dict:
         return projects.create_project(conn, title="P")
 
 
-def test_eval_metric_jobs_dispatch_before_later_eval_samples(isolated) -> None:
-    """Completed samples should get metrics before spending GPU on more samples."""
+def test_eval_metrics_not_blocked_by_earlier_eval_samples(isolated) -> None:
+    """R-3：指标（light 档）与出图（exclusive 档）分档准入 —— 老 dispatch_order
+    的「指标插队」硬编码删除后，_dispatch_data 天然跳过 exclusive 档的
+    eval_samples（它走 exclusive 统一 FIFO），先入队的 sample 不再堵住指标。"""
+    from unittest.mock import MagicMock
     p = _setup_project(isolated)
     with db.connection_for(isolated["db"]) as conn:
-        sample = project_jobs.create_job(
-            conn,
-            project_id=p["id"],
-            kind="eval_samples",
+        project_jobs.create_job(
+            conn, project_id=p["id"], kind="eval_samples",
             params={"run_id": "run-later"},
         )
         clip = project_jobs.create_job(
-            conn,
-            project_id=p["id"],
-            kind="eval_clip",
+            conn, project_id=p["id"], kind="eval_clip",
             params={"run_id": "run-ready"},
         )
-        dino = project_jobs.create_job(
-            conn,
-            project_id=p["id"],
-            kind="eval_dino",
-            params={"run_id": "run-ready"},
+
+    from studio.services.inference import daemon as _daemon_mod
+    fake = MagicMock(); fake.is_model_loaded = False; fake.is_busy = False
+    _daemon_mod._INSTANCE = fake  # type: ignore[attr-defined]
+    try:
+        sup = Supervisor(
+            on_event=lambda _e: None,
+            db_path=isolated["db"], logs_dir=isolated["logs"],
         )
-        pending = project_jobs.list_jobs(conn, status="pending")
+        spawned: list = []
+        sup._spawn_job = lambda slot, job: spawned.append(job)  # type: ignore
+        data_slot = next(s for s in sup._slots if s.name == "data")
+        sup._dispatch_data(data_slot)
+    finally:
+        _daemon_mod._INSTANCE = None  # type: ignore[attr-defined]
 
-    pending.sort(key=project_jobs.dispatch_order)
-
-    assert [job["id"] for job in pending[:3]] == [clip["id"], dino["id"], sample["id"]]
+    assert [j["id"] for j in spawned] == [clip["id"]], \
+        "light 档指标不被更早入队的 exclusive 档 eval_samples 堵住"
 
 
 def test_download_job_runs_in_parallel_with_training_task(isolated, tmp_path) -> None:

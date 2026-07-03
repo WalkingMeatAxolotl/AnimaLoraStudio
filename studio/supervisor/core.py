@@ -464,10 +464,13 @@ class Supervisor:
             return
         if self._exclusive_busy():
             return
-        task = self._next_pending_task_in(("train", "reg_ai", "generate"))
+        task = self._next_pending_task_in(
+            ("train", "reg_ai", "generate", "eval_samples")
+        )
         if task is None:
             return
-        if (task.get("task_type") or "train") == "generate":
+        ttype = task.get("task_type") or "train"
+        if ttype == "generate":
             # enqueue_generate 先 create_task(pending) 再写 config.json 落
             # config_path —— 两步之间这条 task 已 pending 但 config_path 还是
             # NULL。此时别提交（daemon 会报 "config not found"），等下个 tick。
@@ -475,6 +478,19 @@ class Supervisor:
             if not task.get("config_path"):
                 return
             self._submit_to_daemon(task)
+            return
+        if ttype == "eval_samples":
+            # R-3：exclusive 档数据作业。排队语义与 train/generate 同一 FIFO
+            # （D-R3 跨类型平级），执行位在 DATA 槽（worker 子进程）。DATA 槽
+            # 被 light 作业占着时等它结束（light 都是短任务），不越队。
+            data_slot = next(
+                (s for s in self._slots if s.name == SLOT_DATA), None
+            )
+            if data_slot is None or data_slot.busy:
+                return
+            if self._maybe_yield_daemon():
+                return
+            self._spawn_job(data_slot, project_jobs.as_job(dict(task)) or task)
             return
         # train / reg_ai：daemon 常驻模型是 exclusive 租约，spawn 前必须吊销
         # （unload 释放 VRAM）。daemon 在跑 generate 的情况已被 _exclusive_busy
@@ -537,16 +553,14 @@ class Supervisor:
         exclusive_busy = self._exclusive_busy()
         light_parallel = self._light_tasks_during_train()
         with db.connection_for(self._db_path) as conn:
-            pending = project_jobs.list_jobs(conn, status="pending")
-        pending.sort(key=project_jobs.dispatch_order)
+            pending = project_jobs.list_pending_fifo(conn)
         for job in pending:
             cls = job_resource_class(job["kind"])
             if cls == RESOURCE_EXCLUSIVE:
-                if exclusive_busy:
-                    continue
-                if self._maybe_yield_daemon():
-                    continue  # 吊销 daemon 租约，等下次 tick
-            elif cls == RESOURCE_LIGHT:
+                # eval_samples 走 exclusive 统一 FIFO（_dispatch_exclusive_tasks
+                # 与 train/generate 平级排队），本函数只管 light + io。
+                continue
+            if cls == RESOURCE_LIGHT:
                 if exclusive_busy and not light_parallel:
                     continue
                 if not light_parallel and self._maybe_yield_daemon():
@@ -1402,8 +1416,9 @@ class Supervisor:
                 elif status == "canceled":
                     project_jobs.mark_canceled(conn, cid)
                 else:
-                    # B-1.6: 同 task — tail jobs log 拼 error_msg
-                    tail = _tail_log_for_error_msg(self._logs_dir / f"{cid}.log")
+                    # B-1.6: 同 task — tail 作业 log 拼 error_msg。
+                    # R-3：作业日志已随台账合并搬到 tasks/<id>/run.log。
+                    tail = _tail_log_for_error_msg(project_jobs.log_path_for(cid))
                     err_msg = f"exit code {rc}\n{tail}" if tail else f"exit code {rc}"
                     project_jobs.mark_failed(conn, cid, err_msg)
                 job = project_jobs.get_job(conn, cid)

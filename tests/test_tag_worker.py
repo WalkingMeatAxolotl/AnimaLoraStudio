@@ -110,7 +110,7 @@ def test_legacy_output_format_param_is_ignored(env, monkeypatch: pytest.MonkeyPa
     本地打标（无 caption_json）新 caption 一律落 .txt。"""
     with db.connection_for(env["db"]) as conn:
         conn.execute(
-            "UPDATE project_jobs SET params = json_set(params, '$.output_format', 'json') "
+            "UPDATE tasks SET params = json_set(params, '$.output_format', 'json') "
             "WHERE id = ?",
             (env["job_id"],),
         )
@@ -134,7 +134,7 @@ def test_run_passes_wd14_overrides_through(env, monkeypatch) -> None:
 
     with db.connection_for(env["db"]) as conn:
         conn.execute(
-            "UPDATE project_jobs SET params = json_set(params, "
+            "UPDATE tasks SET params = json_set(params, "
             "'$.wd14_overrides', json(?)) WHERE id = ?",
             (json.dumps({"threshold_general": 0.2}), env["job_id"]),
         )
@@ -159,7 +159,7 @@ def test_run_passes_cltagger_overrides_through(env, monkeypatch) -> None:
 
     with db.connection_for(env["db"]) as conn:
         conn.execute(
-            "UPDATE project_jobs SET params = json_set(params, "
+            "UPDATE tasks SET params = json_set(params, "
             "'$.tagger', 'cltagger', "
             "'$.cltagger_overrides', json(?)) WHERE id = ?",
             (json.dumps({"threshold_character": 0.55}), env["job_id"]),
@@ -180,7 +180,7 @@ def test_run_writes_llm_json_caption(env, monkeypatch) -> None:
     )
     with db.connection_for(env["db"]) as conn:
         conn.execute(
-            "UPDATE project_jobs SET params = json_set(params, '$.tagger', 'llm') "
+            "UPDATE tasks SET params = json_set(params, '$.tagger', 'llm') "
             "WHERE id = ?",
             (env["job_id"],),
         )
@@ -222,7 +222,7 @@ def test_run_writes_llm_txt_caption(env, monkeypatch) -> None:
     )
     with db.connection_for(env["db"]) as conn:
         conn.execute(
-            "UPDATE project_jobs SET params = json_set(params, '$.tagger', 'llm') "
+            "UPDATE tasks SET params = json_set(params, '$.tagger', 'llm') "
             "WHERE id = ?",
             (env["job_id"],),
         )
@@ -248,7 +248,7 @@ def test_run_unknown_job(env) -> None:
 def _set_trigger(env, trigger: str) -> None:
     with db.connection_for(env["db"]) as conn:
         conn.execute(
-            "UPDATE project_jobs SET params = json_set(params, '$.trigger_word', ?) "
+            "UPDATE tasks SET params = json_set(params, '$.trigger_word', ?) "
             "WHERE id = ?",
             (trigger, env["job_id"]),
         )
@@ -290,7 +290,7 @@ def test_trigger_word_writes_meta_in_llm_json(env, monkeypatch) -> None:
     )
     with db.connection_for(env["db"]) as conn:
         conn.execute(
-            "UPDATE project_jobs SET params = json_set(params, '$.tagger', 'llm') "
+            "UPDATE tasks SET params = json_set(params, '$.tagger', 'llm') "
             "WHERE id = ?",
             (env["job_id"],),
         )
@@ -313,7 +313,7 @@ def test_trigger_word_prepended_to_llm_txt(env, monkeypatch) -> None:
     )
     with db.connection_for(env["db"]) as conn:
         conn.execute(
-            "UPDATE project_jobs SET params = json_set(params, '$.tagger', 'llm') "
+            "UPDATE tasks SET params = json_set(params, '$.tagger', 'llm') "
             "WHERE id = ?",
             (env["job_id"],),
         )
@@ -395,7 +395,7 @@ def test_trigger_word_dataset_loader_sees_meta(env, tmp_path: Path) -> None:
 def _set_on_existing(env, mode: str) -> None:
     with db.connection_for(env["db"]) as conn:
         conn.execute(
-            "UPDATE project_jobs SET params = json_set(params, '$.on_existing', ?) "
+            "UPDATE tasks SET params = json_set(params, '$.on_existing', ?) "
             "WHERE id = ?",
             (mode, env["job_id"]),
         )
@@ -540,7 +540,7 @@ def _val_dir(env, folder: str = "1_data") -> Path:
 def _set_scope(env, scope: str) -> None:
     with db.connection_for(env["db"]) as conn:
         conn.execute(
-            "UPDATE project_jobs SET params = json_set(params, '$.scope', ?) "
+            "UPDATE tasks SET params = json_set(params, '$.scope', ?) "
             "WHERE id = ?",
             (scope, env["job_id"]),
         )

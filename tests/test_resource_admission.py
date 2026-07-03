@@ -224,7 +224,11 @@ def test_light_deferred_when_switch_off_but_io_still_runs(
 
 
 def test_eval_samples_requires_daemon_lease_release(env, fake_daemon, fake_secrets):
-    """eval_samples 与 train 同规格：daemon idle 常驻模型 → 先吊销租约再派。"""
+    """eval_samples 与 train 同规格：daemon idle 常驻模型 → 先吊销租约再派。
+
+    R-3 起 eval_samples 走 exclusive 统一 FIFO（_dispatch_exclusive_tasks），
+    执行位仍是 DATA 槽。
+    """
     fake_daemon.is_model_loaded = True
     fake_daemon.is_busy = False
     sup = _make_sup(env)
@@ -232,13 +236,36 @@ def test_eval_samples_requires_daemon_lease_release(env, fake_daemon, fake_secre
     sup._spawn_job = lambda slot, job: spawned_jobs.append(job)  # type: ignore
     _make_job(env, kind="eval_samples")
 
-    sup._dispatch_data(_slot(sup, "data"))
+    sup._dispatch_exclusive_tasks(_slot(sup, "train"))
     assert spawned_jobs == []
     fake_daemon.request_unload.assert_called_once()
 
     fake_daemon.is_model_loaded = False
-    sup._dispatch_data(_slot(sup, "data"))
+    sup._dispatch_exclusive_tasks(_slot(sup, "train"))
     assert len(spawned_jobs) == 1
+    assert spawned_jobs[0]["kind"] == "eval_samples"
+
+
+def test_exclusive_fifo_eval_samples_before_train(env, fake_daemon, fake_secrets):
+    """D-R3 跨类型平级：先入队的 eval_samples 先跑，后入队的 train 排队等。"""
+    sup = _make_sup(env)
+    spawned_jobs: list[Any] = []
+    spawned_tasks: list[Any] = []
+    sup._spawn_job = lambda slot, job: spawned_jobs.append(job)  # type: ignore
+    sup._spawn_task = lambda slot, task: spawned_tasks.append(task)  # type: ignore
+    ev = _make_job(env, kind="eval_samples")
+    with db.connection_for(env["db"]) as conn:
+        db.update_task(conn, ev, created_at=100.0)
+    _make_task(env, task_type="train", created_at=200.0)
+
+    sup._dispatch_exclusive_tasks(_slot(sup, "train"))
+    assert [j["id"] for j in spawned_jobs] == [ev] and spawned_tasks == []
+
+    # eval_samples 结束 → train 轮到
+    with db.connection_for(env["db"]) as conn:
+        db.update_task(conn, ev, status="done")
+    sup._dispatch_exclusive_tasks(_slot(sup, "train"))
+    assert len(spawned_tasks) == 1
 
 
 # ---------------------------------------------------------------------------

@@ -33,7 +33,7 @@ def _seed_job(pid: int, kind: str, status: str) -> int:
             conn, project_id=pid, kind=kind, params={"n": 1}
         )
         conn.execute(
-            "UPDATE project_jobs SET status = ? WHERE id = ?", (status, job["id"])
+            "UPDATE tasks SET status = ? WHERE id = ?", (status, job["id"])
         )
         conn.commit()
     return int(job["id"])

@@ -137,7 +137,7 @@ def test_worker_full_mode_clears_existing_reg(env) -> None:
     # set incremental=False
     with db.connection_for(env["db"]) as conn:
         conn.execute(
-            "UPDATE project_jobs "
+            "UPDATE tasks "
             "SET params = json_set(params, '$.incremental', 0, "
             "                      '$.auto_dedup', 0) "
             "WHERE id = ?",
@@ -208,7 +208,7 @@ def test_worker_auto_dedup_disabled_skips_scan(env, monkeypatch) -> None:
     monkeypatch.setattr("studio.services.reg.dedup.scan_for_dedup", fake_scan)
     with db.connection_for(env["db"]) as conn:
         conn.execute(
-            "UPDATE project_jobs SET params = "
+            "UPDATE tasks SET params = "
             "json_set(params, '$.auto_dedup', 0) WHERE id = ?",
             (env["job_id"],),
         )
@@ -232,7 +232,7 @@ def test_worker_routes_to_cltagger_when_kind_set(env, monkeypatch) -> None:
     )
     with db.connection_for(env["db"]) as conn:
         conn.execute(
-            "UPDATE project_jobs "
+            "UPDATE tasks "
             "SET params = json_set(params, '$.auto_tag_kind', 'cltagger') "
             "WHERE id = ?",
             (env["job_id"],),
@@ -269,7 +269,7 @@ def test_worker_skips_auto_tag_when_disabled(env) -> None:
     # 改 job 的 auto_tag 为 False
     with db.connection_for(env["db"]) as conn:
         conn.execute(
-            "UPDATE project_jobs SET params = json_set(params, '$.auto_tag', 0) "
+            "UPDATE tasks SET params = json_set(params, '$.auto_tag', 0) "
             "WHERE id = ?",
             (env["job_id"],),
         )

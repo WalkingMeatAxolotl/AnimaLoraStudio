@@ -42,15 +42,18 @@ TERMINAL_STATUSES = {"done", "failed", "canceled"}
 # pending，到点由 supervisor tick 提升（promote_due_scheduled）。
 LIVE_STATUSES = ("running", "paused", "pending", "scheduled")
 HISTORY_STATUSES = ("done", "failed", "canceled")
-# tasks.task_type 的合法值。R-2 台账合并起扩容纳九类数据作业 kind——tasks 表
-# 是全部工作项的统一台账（写路径切换在 R-3）。档位归属的权威在
-# supervisor/resources.py（infrastructure 不反向依赖 supervisor，此处平铺
-# 列出，tests/test_resource_admission.py 有同步断言防漂移）。
-VALID_TASK_TYPES = (
-    "train", "reg_ai", "generate",
+# tasks.task_type 的合法值。R-2/R-3 台账合并：tasks 表是全部工作项的统一台账。
+# 档位归属的权威在 supervisor/resources.py（infrastructure 不反向依赖
+# supervisor，此处平铺列出，tests 有同步断言防漂移）。
+GPU_TASK_TYPES = ("train", "reg_ai", "generate")
+# 数据作业 kind（R-3 起写入 tasks）。/api/queue 的 GPU 视图在 R-5 档位化前
+# 默认排除它们（含 no-group 兼容路径，保护 Topbar/Overview/Monitor 不把
+# 数据作业当训练任务）。
+JOB_TASK_TYPES = (
     "download", "preprocess", "tag", "reg_build",
     "eval_samples", "eval_clip", "eval_dino", "eval_tag", "eval_ccip",
 )
+VALID_TASK_TYPES = GPU_TASK_TYPES + JOB_TASK_TYPES
 
 
 def connect(path: Optional[Path] = None) -> sqlite3.Connection:
