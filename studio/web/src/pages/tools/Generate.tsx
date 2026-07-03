@@ -18,7 +18,7 @@ import { useLocalStorageState } from '../../lib/useLocalStorageState'
 import AspectChips, { aspectFromDimensions, type AspectName } from './generate/AspectChips'
 import DaemonControls from './generate/DaemonControls'
 import DaemonLogDrawer from './generate/DaemonLogDrawer'
-import GenerateProgressBar, { type GenerateProgress } from './generate/GenerateProgress'
+import GenerateProgressBar, { type GenerateProgress, type GeneratePhase } from './generate/GenerateProgress'
 import NumField from './generate/NumField'
 import PreviewCompare from './generate/PreviewCompare'
 import PreviewHistoryRail, { type TimelineItem } from './generate/PreviewHistoryRail'
@@ -219,7 +219,7 @@ export default function GeneratePage() {
   const [previewStep, setPreviewStep] = useState<{ step: number; total: number; dataUrl: string } | null>(null)
   // 生成进度（image_started + preview_step 聚合）
   const [progress, setProgress] = useState<GenerateProgress>({
-    batchIdx: null, batchTotal: null, currentStep: null, totalSteps: null,
+    phase: null, batchIdx: null, batchTotal: null, currentStep: null, totalSteps: null,
   })
   const [datasetPickerOpen, setDatasetPickerOpen] = useState(false)
   // 左侧配置区当前分页（LoRA/XY · 提示词 · 配置）。跨 session 记忆用户停留的页。
@@ -411,8 +411,15 @@ export default function GeneratePage() {
     if (evt.type === 'task_state_changed' && evt.task_id === tid) {
       // currentTask 的推进交给 refreshLiveGenerates；这里只在显示任务终态时清进度。
       if (evt.status === 'done' || evt.status === 'failed' || evt.status === 'canceled') {
-        setProgress({ batchIdx: null, batchTotal: null, currentStep: null, totalSteps: null })
+        setProgress({ phase: null, batchIdx: null, batchTotal: null, currentStep: null, totalSteps: null })
       }
+    } else if (
+      evt.type === 'generate_phase'
+      && String(evt.task_id) === String(tid)
+    ) {
+      // 阶段推进（load/clip/sample/vae）→ 进度条覆盖非采样阶段
+      const name = typeof evt.name === 'string' ? (evt.name as GeneratePhase) : null
+      setProgress((p) => ({ ...p, phase: name }))
     } else if (
       evt.type === 'generate_preview_step'
       && String(evt.task_id) === String(tid)
@@ -432,8 +439,9 @@ export default function GeneratePage() {
       evt.type === 'generate_image_started'
       && String(evt.task_id) === String(tid)
     ) {
-      // 新 batch 开始 → 重置 step 进度，更新 batch 计数
+      // 新 batch 开始 → 重置 step 进度，更新 batch 计数（phase 由后续 generate_phase 驱动）
       setProgress({
+        phase: null,
         batchIdx: typeof evt.batch_idx === 'number' ? evt.batch_idx : null,
         batchTotal: typeof evt.batch_total === 'number' ? evt.batch_total : null,
         currentStep: 0,
@@ -990,19 +998,13 @@ export default function GeneratePage() {
                 <ViewModeTabs mode={mode} onModeChange={setMode} />
               </div>
 
-              {/* 0.17 P-I：排队中的项已并入右栏时间线（live 占位 + 取消），不再单列。
-                  进度条学 ComfyUI 悬浮在 header 下方固定位（absolute overlay）：不挤压预览、
-                  不抖动；切历史图回看时也照常显示「正在跑那张」的进度。pointer-events-none
-                  让底下 xy 格子仍可点。 */}
+              {/* 0.17 P-I：进度条 = header 下方**细条** overlay（absolute、pointer-events-none）：
+                  贴在预览顶沿、不挤压预览、不增加上下高度；切历史图回看时也照常显示当前进度。
+                  覆盖 load/clip/sample/vae 全阶段（见 GenerateProgressBar）。 */}
               <div className="relative flex-1 flex flex-col min-h-0">
-                {(busy || progress.currentStep != null) && (
+                {(busy || progress.currentStep != null || progress.phase != null) && (
                   <div className="absolute top-0 inset-x-0 z-10 pointer-events-none">
-                    <div
-                      className="rounded-md px-3 py-2"
-                      style={{ background: 'var(--bg-overlay)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--sh-md)' }}
-                    >
-                      <GenerateProgressBar busy={busy} progress={progress} />
-                    </div>
+                    <GenerateProgressBar busy={busy} progress={progress} />
                   </div>
                 )}
               {historyOverride ? (

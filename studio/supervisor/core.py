@@ -1016,6 +1016,14 @@ class Supervisor:
             return
         if kind in ("image_done", "image_error"):
             return
+        if kind == "phase":
+            # 出图阶段（load/clip/sample/vae）→ 前端进度条覆盖非采样阶段（不再卡 0%/100%）
+            self._on_event({
+                "type": "generate_phase",
+                "task_id": tid,
+                "name": event.get("name"),
+            })
+            return
         if kind == "preview_step":
             # commit 14：中间步进度 + 可选预览。step/total 永远有，image_b64
             # 取决于 settings.preview_every_n_steps + TAEFlux 是否可用

@@ -678,6 +678,8 @@ def _run_generate(
     update_monitor = _setup_monitor(cfg)
 
     _raise_if_canceled(cancel_event)
+    # phase 上报：加载模型/LoRA 阶段（clip/sample/vae 由 sample_image 内部报）→ 进度条覆盖全流程
+    _emit_for(req_id, "phase", name="load")
     CACHE.ensure_loaded(cfg)
     adapters = CACHE.apply_loras(cfg.get("lora_configs", []))
 
@@ -685,6 +687,9 @@ def _run_generate(
     # preview_every_n_steps>0 时附 image_b64 中间预览图（commit 14）。
     preview_every = int(cfg.get("preview_every_n_steps", 0) or 0)
     preview_callback = _build_preview_callback(req_id, preview_every, cancel_event)
+
+    def _phase_cb(name: str) -> None:
+        _emit_for(req_id, "phase", name=name)
 
     prompts: list[str] = cfg.get("prompts") or [
         "newest, safe, 1girl, masterpiece, best quality"
@@ -710,6 +715,7 @@ def _run_generate(
             height=height, width=width,
             update_monitor=update_monitor,
             preview_callback=preview_callback,
+            phase_callback=_phase_cb,
             cancel_event=cancel_event,
         )
         return
@@ -748,6 +754,7 @@ def _run_generate(
                     device=CACHE.device,
                     dtype=CACHE.dtype,
                     step_callback=preview_callback,
+                    phase_callback=_phase_cb,
                     seed=seed,
                 )
                 CACHE._move_runtime_to_device()
@@ -794,6 +801,7 @@ def _run_xy(
     width: int,
     update_monitor: Any,
     preview_callback: Any = None,
+    phase_callback: Any = None,
     cancel_event: threading.Event | None = None,
 ) -> None:
     x_spec = xy_matrix["x"]
@@ -875,6 +883,7 @@ def _run_xy(
                     width=width,
                     steps=cur_steps,
                     step_callback=preview_callback,
+                    phase_callback=phase_callback,
                     cfg_scale=cur_cfg_scale,
                     negative_prompt=negative_prompt,
                     sampler_name=base_sampler,

@@ -254,6 +254,7 @@ def sample_image(
     device="cuda",
     dtype=torch.bfloat16,
     step_callback=None,
+    phase_callback=None,
     seed: int | None = None,
 ):
     """采样出图（Comfy-style，唯一线路）—— 训练预览 / Generate / RegAI 共用。
@@ -290,7 +291,9 @@ def sample_image(
     # 对齐 ComfyUI：负面提示词没有隐式默认，None 即空。
     negative_prompt = "" if negative_prompt is None else str(negative_prompt)
 
-    # 文本编码
+    # 文本编码（CLIP/T5+Qwen）—— phase 上报供进度条覆盖非采样阶段
+    if phase_callback:
+        phase_callback("clip")
     try:
         def build_cross(prompt_text: str):
             qwen_text, t5_ids, t5_attn, t5_w = build_comfy_anima_conditioning_inputs(
@@ -417,6 +420,8 @@ def sample_image(
     }
     if sampler_name_l == "dpmpp_3m_sde":
         sampler_kwargs["require_brownian_tree"] = True
+    if phase_callback:
+        phase_callback("sample")
     try:
         x = sampler_fn(denoise_fn, x, sigmas, **sampler_kwargs)
     finally:
@@ -427,6 +432,8 @@ def sample_image(
             logger.warning("xformers re-enabled after per-image SDPA fallback（本张图非 exact parity）")
 
     # VAE 解码
+    if phase_callback:
+        phase_callback("vae")
     latents = x.to(device=device, dtype=dtype)
     logger.info(f"[Debug] Final latents: mean={latents.mean().item():.4f}, std={latents.std().item():.4f}")
     del denoise_fn, x, cross_cond, cross_uncond, pad_mask, sigmas, empty_latent
