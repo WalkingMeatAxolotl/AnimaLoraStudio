@@ -67,11 +67,12 @@ describe('Dialog (useDialog API)', () => {
     expect(screen.getByText('算了')).toBeInTheDocument()
   })
 
-  it('confirm tone=danger 给确认按钮加 btn-danger', async () => {
+  it('confirm 确认键恒为 btn-primary（tone 不换按钮底色）', async () => {
     const user = userEvent.setup()
     wrap((api) => api.confirm('删除？', { tone: 'danger' }))
     await user.click(screen.getByText('trigger'))
-    expect(screen.getByText('确认')).toHaveClass('btn-danger')
+    expect(screen.getByText('确认')).toHaveClass('btn-primary')
+    expect(screen.getByText('确认')).not.toHaveClass('btn-danger')
   })
 
   it('prompt 输入后点确定返回字符串', async () => {
