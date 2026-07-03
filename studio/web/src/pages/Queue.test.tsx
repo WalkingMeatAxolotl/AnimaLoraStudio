@@ -192,7 +192,7 @@ describe('QueuePage 分区 + 分页', () => {
     expect(screen.queryByTestId('startnow-btn-20')).not.toBeInTheDocument()
   })
 
-  it('点「立即开始」→ 调 startTaskNow 并刷新', async () => {
+  it('点「立即开始」→ confirm 后调 startTaskNow', async () => {
     vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
     vi.spyOn(api, 'listQueueLive').mockResolvedValue([
       makeTask({
@@ -210,6 +210,10 @@ describe('QueuePage 分区 + 分页', () => {
     renderQueue()
     await waitFor(() => expect(screen.getByTestId('startnow-btn-21')).toBeInTheDocument())
     fireEvent.click(screen.getByTestId('startnow-btn-21'))
+    // confirm modal 弹出（行按钮已 icon 化，「立即开始」文案只在 dialog 确认键上）
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
+    expect(startSpy).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByText('立即开始'))
     await waitFor(() => expect(startSpy).toHaveBeenCalledWith(21))
   })
 

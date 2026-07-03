@@ -115,7 +115,7 @@ function statusLabel(status: string): string {
   switch (status) {
     case 'running': return '运行中'
     case 'pending': return '排队中'
-    case 'scheduled': return '已排程'
+    case 'scheduled': return '等待入队'
     case 'done': return '已完成'
     case 'failed': return '失败'
     case 'canceled': return '已取消'

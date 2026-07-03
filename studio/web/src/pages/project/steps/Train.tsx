@@ -497,32 +497,41 @@ export default function TrainPage() {
       title={t('steps.train.title')}
       subtitle={t('steps.train.subtitle')}
       actions={
-        <div className="relative flex items-center gap-2">
-          {/* 0.17 P-B — 定时训练：延迟 N 小时 / 指定时间，建成 scheduled task */}
+        <>
+          {/* 0.17 P-B — 定时训练：延迟 N 小时 / 指定时间，建成 scheduled task。
+              样式对齐项目页「导入项目」（btn-ghost btn-sm）。 */}
           <button
-            onClick={() => setScheduleOpen((o) => !o)}
+            onClick={() => setScheduleOpen(true)}
             disabled={busy || !configResp?.has_config}
-            className={`btn btn-sm ${scheduleOpen ? 'btn-secondary' : 'btn-ghost'}`}
+            className="btn btn-ghost btn-sm"
             title={t('train.scheduleHint')}
             data-testid="train-schedule-btn"
           >
             {t('train.scheduleBtn')}
           </button>
+          {/* 样式对齐项目页「新建项目」（btn-primary btn-sm + icon + 文字） */}
           <button
             onClick={() => void onEnqueue()}
             disabled={busy || !configResp?.has_config}
-            className="btn btn-primary"
+            className="btn btn-primary btn-sm"
           >
-            {t('train.startTrainBtn')}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+            <span>{t('train.startTrainBtn')}</span>
           </button>
           {scheduleOpen && (
-            <>
-              {/* 透明遮罩：点外面关闭 */}
-              <div className="fixed inset-0 z-30" onClick={() => setScheduleOpen(false)} />
-              <div
-                className="absolute right-0 top-full mt-2 z-40 w-[300px] rounded-md border border-dim bg-surface shadow-lg p-4 flex flex-col gap-3"
-                data-testid="train-schedule-popover"
-              >
+            <div
+              role="dialog"
+              aria-modal="true"
+              className="fixed inset-0 z-40 flex items-center justify-center bg-black/50"
+              onMouseDown={(e) => { if (e.target === e.currentTarget) setScheduleOpen(false) }}
+              data-testid="train-schedule-modal"
+            >
+              <div className="bg-elevated border border-dim rounded-lg w-[90%] max-w-[440px] p-6 flex flex-col gap-4 shadow-xl">
+                <h2 className="m-0 text-lg font-semibold text-fg-primary">
+                  {t('train.scheduleBtn')}
+                </h2>
                 <div className="flex flex-col gap-1.5">
                   <span className="text-xs font-semibold text-fg-tertiary uppercase tracking-wide">
                     {t('train.scheduleDelaySection')}
@@ -545,29 +554,35 @@ export default function TrainPage() {
                   <span className="text-xs font-semibold text-fg-tertiary uppercase tracking-wide">
                     {t('train.scheduleAbsoluteSection')}
                   </span>
-                  <div className="flex gap-1.5">
-                    <input
-                      type="datetime-local"
-                      className="input flex-1"
-                      value={scheduleTime}
-                      min={toLocalInputValue(new Date())}
-                      onChange={(e) => setScheduleTime(e.target.value)}
-                      data-testid="train-schedule-time"
-                    />
-                    <button
-                      onClick={onScheduleAbsolute}
-                      disabled={busy || !scheduleTime}
-                      className="btn btn-primary btn-sm"
-                      data-testid="train-schedule-confirm"
-                    >
-                      {t('train.scheduleConfirm')}
-                    </button>
-                  </div>
+                  <input
+                    type="datetime-local"
+                    className="input"
+                    value={scheduleTime}
+                    min={toLocalInputValue(new Date())}
+                    onChange={(e) => setScheduleTime(e.target.value)}
+                    data-testid="train-schedule-time"
+                  />
+                </div>
+                <div className="flex gap-2 justify-end mt-1">
+                  <button
+                    onClick={() => setScheduleOpen(false)}
+                    className="btn btn-secondary"
+                  >
+                    {t('common.cancel')}
+                  </button>
+                  <button
+                    onClick={onScheduleAbsolute}
+                    disabled={busy || !scheduleTime}
+                    className="btn btn-primary"
+                    data-testid="train-schedule-confirm"
+                  >
+                    {t('train.scheduleConfirm')}
+                  </button>
                 </div>
               </div>
-            </>
+            </div>
           )}
-        </div>
+        </>
       }
     >
       <div className="flex flex-col h-full gap-3">

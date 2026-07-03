@@ -410,19 +410,25 @@ export default function RegularizationPage() {
         },
       ]}
       actions={
+        /* 样式对齐项目页「新建项目」（btn-primary btn-sm + icon + 文字） */
         <button
           onClick={() => {
             if (source === 'ai') void handleAiGenerate()
             else void startBuild()
           }}
           disabled={isLive || trainImageCount <= 0}
-          className="btn btn-primary"
+          className="btn btn-primary btn-sm"
         >
-          {isLive
-            ? t('reg.generatingBtn')
-            : source === 'ai'
-              ? t('reg.aiGenerateBtn')
-              : t('reg.startBuildBtn')}
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M8 5v14l11-7z" />
+          </svg>
+          <span>
+            {isLive
+              ? t('reg.generatingBtn')
+              : source === 'ai'
+                ? t('reg.aiGenerateBtn')
+                : t('reg.startBuildBtn')}
+          </span>
         </button>
       }
     >

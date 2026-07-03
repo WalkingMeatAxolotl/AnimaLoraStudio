@@ -162,7 +162,7 @@ function QueueTaskRow({
     >
       <div
         className="px-[22px] py-4 grid gap-3 items-center"
-        style={{ gridTemplateColumns: '48px minmax(0,1fr) 88px 96px 150px 128px 104px' }}
+        style={{ gridTemplateColumns: '48px minmax(0,1fr) 88px 96px 150px 128px 176px' }}
       >
         <span className={`font-mono text-sm ${isRunning ? 'text-accent font-semibold' : 'text-fg-tertiary font-normal'}`}>
           #{task.id}
@@ -287,30 +287,17 @@ function QueueTaskRow({
               )}
             </span>
           ) : isScheduled ? (
-            /* 0.17 P-B — 计划任务：显示计划时间，可手动提前 / 取消计划。 */
-            <span className="flex flex-col items-end gap-1">
-              <span className="flex gap-1.5">
-                <button
-                  onClick={(e) => { e.stopPropagation(); void onStartNow(task) }}
-                  className="btn btn-secondary btn-xs"
-                  title={t('queue.startNowHint')}
-                  data-testid={`startnow-btn-${task.id}`}
-                >
-                  {t('queue.startNow')}
-                </button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); void onCancelScheduled(task) }}
-                  className="btn btn-ghost btn-xs text-err"
-                  title={t('queue.cancelScheduledHint')}
-                  data-testid={`cancel-scheduled-btn-${task.id}`}
-                >
-                  {t('queue.cancelScheduled')}
-                </button>
-              </span>
-              {task.scheduled_at && (
-                <span className="text-xs text-fg-tertiary font-normal">
-                  {fmtScheduledAbs(task.scheduled_at)} · {fmtUntil(task.scheduled_at)}
-                </span>
+            /* 0.17 P-B — 计划任务：计划时间 + 倒计时（操作在右侧 action 列） */
+            <span className="flex flex-col items-end gap-0.5">
+              {task.scheduled_at ? (
+                <>
+                  <span>{fmtScheduledAbs(task.scheduled_at)}</span>
+                  <span className="text-xs text-fg-tertiary font-normal">
+                    {fmtUntil(task.scheduled_at)}
+                  </span>
+                </>
+              ) : (
+                <span>—</span>
               )}
             </span>
           ) : task.finished_at ? (
@@ -344,15 +331,46 @@ function QueueTaskRow({
           )}
         </span>
 
-        {/* 0.17 跳转列：按类型跳原生页（配置页 / 正则集 / 出图结果） */}
-        <div className="text-right">
+        {/* 0.17 action 列：跳转 + scheduled 的立即开始/取消计划，全 icon 化
+            （hover title 显示文字）。 */}
+        <div className="flex items-center justify-end gap-1.5">
+          {isScheduled && (
+            <>
+              <button
+                onClick={(e) => { e.stopPropagation(); void onStartNow(task) }}
+                className="btn btn-ghost btn-sm px-2"
+                title={t('queue.startNow')}
+                aria-label={t('queue.startNow')}
+                data-testid={`startnow-btn-${task.id}`}
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); void onCancelScheduled(task) }}
+                className="btn btn-ghost btn-sm px-2 text-err"
+                title={t('queue.cancelScheduled')}
+                aria-label={t('queue.cancelScheduled')}
+                data-testid={`cancel-scheduled-btn-${task.id}`}
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <path d="M18 6L6 18M6 6l12 12" />
+                </svg>
+              </button>
+            </>
+          )}
           {jump && (
             <button
               onClick={(e) => { e.stopPropagation(); navigate(jump.path) }}
-              className="btn btn-ghost btn-sm whitespace-nowrap"
+              className="btn btn-ghost btn-sm px-2"
+              title={jump.label}
+              aria-label={jump.label}
               data-testid={`jump-btn-${task.id}`}
             >
-              {jump.label} →
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M7 17L17 7M7 7h10v10" />
+              </svg>
             </button>
           )}
         </div>
@@ -581,6 +599,11 @@ export default function QueuePage() {
 
   // 0.17 P-B — scheduled task 手动提前：立即转 pending 参与排队。
   const startNow = async (task: Task) => {
+    const ok = await confirm(
+      t('queue.startNowConfirm', { id: task.id }),
+      { okText: t('queue.startNow') },
+    )
+    if (!ok) return
     try {
       await api.startTaskNow(task.id)
       toast(t('queue.startNowSent', { id: task.id }), 'success')
@@ -874,7 +897,7 @@ export default function QueuePage() {
               <div
                 key={i}
                 className={`py-[18px] px-[22px] grid gap-3 items-center opacity-40 ${i < 2 ? 'border-b border-subtle' : 'border-b-0'}`}
-                style={{ gridTemplateColumns: '48px minmax(0,1fr) 88px 96px 150px 128px 104px' }}
+                style={{ gridTemplateColumns: '48px minmax(0,1fr) 88px 96px 150px 128px 176px' }}
               >
                 <div className="h-3.5 rounded bg-overlay" />
                 <div className="flex flex-col gap-1">

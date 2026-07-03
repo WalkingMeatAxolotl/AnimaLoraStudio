@@ -334,12 +334,18 @@ export default function TaggingPage() {
         },
       ]}
       actions={
+        /* 样式对齐项目页「新建项目」（btn-primary btn-sm + icon + 文字） */
         <button
           onClick={startTagging}
           disabled={isLive || !taggerStatus?.ok}
-          className="btn btn-primary"
+          className="btn btn-primary btn-sm"
         >
-          {isLive ? t('tag.taggingBtn') : taggerStatus === null ? t('tag.checkingBtn') : t('tag.startBtn')}
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M8 5v14l11-7z" />
+          </svg>
+          <span>
+            {isLive ? t('tag.taggingBtn') : taggerStatus === null ? t('tag.checkingBtn') : t('tag.startBtn')}
+          </span>
         </button>
       }
     >
