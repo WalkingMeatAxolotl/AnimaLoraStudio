@@ -17,20 +17,6 @@ import { useEvaluatingTasks, type EvalProgress } from '../lib/useEvalProgress'
 import { useLocalStorageState } from '../lib/useLocalStorageState'
 import DataJobsPanel from './queue/DataJobsPanel'
 
-async function pickJsonFile(jsonErrorMsg: string): Promise<unknown | null> {
-  return new Promise((resolve, reject) => {
-    const input = document.createElement('input')
-    input.type = 'file'; input.accept = '.json,application/json'
-    input.onchange = async () => {
-      const f = input.files?.[0]
-      if (!f) { resolve(null); return }
-      try { resolve(JSON.parse(await f.text())) }
-      catch { reject(new Error(jsonErrorMsg)) }
-    }
-    input.click()
-  })
-}
-
 // tasks 表真实 task_type 只有这三值（train/reg_ai/generate）。0.17 P-D 前这里
 // 靠 config_name 子串猜、且掺入 tag/download/curate 等 project_jobs 的 kind（对
 // 队列列表是死分支），现收敛为后端权威字段。
@@ -393,7 +379,6 @@ export default function QueuePage() {
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [exporting, setExporting] = useState(false)
   // 搜索（防抖后进后端）+ 历史分页 / 终态子过滤。0.17 item4：过滤条件持久化到
   // localStorage，切走队列页再回来不丢（page 不持久，回来回第 1 页）。
   const [search, setSearch] = useLocalStorageState('studio:queue:search', '')
@@ -493,23 +478,10 @@ export default function QueuePage() {
           // task 状态变化可能把 task 移进 history（terminal）或移出 live，两边都刷。
           void reloadLiveRef.current(); void reloadHistoryRef.current()
         }, 100)
-      } else if (evt.type === 'queue_export_ready' || evt.type === 'queue_export_failed') {
-        setExporting(false)
-        if (evt.type === 'queue_export_failed') {
-          const err = typeof evt.error === 'string' ? evt.error : '?'
-          setError(t('queue.exportFailed', { error: err }))
-        }
       }
     },
     { onOpen: () => { void reloadLiveRef.current(); void reloadHistoryRef.current(); void reloadHold() } },
   )
-
-  // 兜底：SSE 事件丢失时 60s 强制清 exporting 状态。
-  useEffect(() => {
-    if (!exporting) return
-    const tid = window.setTimeout(() => setExporting(false), 60_000)
-    return () => window.clearTimeout(tid)
-  }, [exporting])
 
   useEffect(() => { void reloadHold() }, [reloadHold])
 
@@ -814,38 +786,8 @@ export default function QueuePage() {
               {t('queue.releaseQueue')}
             </button>
           )}
-          <button
-            disabled={busy || exporting || (live.length === 0 && history.total === 0)}
-            onClick={() => {
-              if (exporting) return
-              setExporting(true)
-              const a = document.createElement('a')
-              a.href = api.queueExportUrl()
-              a.download = `queue_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`
-              document.body.appendChild(a)
-              a.click()
-              document.body.removeChild(a)
-            }}
-            className="btn btn-ghost btn-sm"
-          >{exporting ? t('queue.exporting') : t('common.export')}</button>
-          <button
-            disabled={busy}
-            onClick={async () => {
-              let payload: unknown
-              try { payload = await pickJsonFile(t('queue.jsonError')) }
-              catch (e) { toast(String(e), 'error'); return }
-              if (!payload) return
-              setBusy(true)
-              try {
-                const r = await api.importQueue(payload)
-                const renamedCount = Object.keys(r.renamed).length
-                toast(t('queue.imported', { n: r.imported_count, renamed: renamedCount ? `（${renamedCount} 个改名）` : '' }), 'success')
-                await reload()
-              } catch (e) { setError(String(e)) }
-              finally { setBusy(false) }
-            }}
-            className="btn btn-ghost btn-sm"
-          >{t('common.import')}</button>
+          {/* 队列 JSON 导入/导出已下线（预设池时代遗留：现代任务 config 是
+              version 私有、导出恒空导入恒跳过）；后端 route 待单独清理 PR。 */}
           <button onClick={() => void reload()} className="btn btn-ghost btn-sm">{t('common.refresh')}</button>
           </>}
           {/* 0.17 P-G — 视图切换（放最右）：文字显示要切去的视图，一眼可知当前

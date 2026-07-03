@@ -694,8 +694,8 @@
     "startNowSent": "#{{id}} moved to the waiting queue",
     "startNowConfirm": "Start scheduled task #{{id}} now? It skips the scheduled time and joins the waiting queue.",
     "taskDetailTooltip": "Task details",
-    "tabTasks": "Task queue",
-    "tabJobs": "Data jobs",
+    "tabTasks": "GPU tasks",
+    "tabJobs": "Data tasks",
     "jobs": {
       "kind": {
         "download": "Download",
@@ -708,11 +708,11 @@
         "eval_tag": "Tag eval",
         "eval_ccip": "CCIP eval"
       },
-      "empty": "No data jobs yet",
-      "emptyHint": "Download / tagging / reg build / eval jobs show up here",
-      "cancel": "Cancel job",
-      "cancelOk": "Cancel job",
-      "cancelConfirm": "Cancel data job #{{id}}? A running job will be terminated.",
+      "empty": "No data tasks yet",
+      "emptyHint": "Download / tagging / reg build / eval tasks show up here",
+      "cancel": "Cancel task",
+      "cancelOk": "Cancel task",
+      "cancelConfirm": "Cancel data task #{{id}}? A running task will be terminated.",
       "jump": "Open source page",
       "project": "Project",
       "version": "Version",
@@ -744,7 +744,9 @@
         "crops": "Crop boxes",
         "task_id": "Linked task",
         "run_id": "Eval run",
-        "checkpoints": "Checkpoints"
+        "checkpoints": "Checkpoints",
+        "postprocess_method": "Postprocess method",
+        "postprocess_max_crop_ratio": "Max crop ratio"
       }
     },
     "cancelScheduled": "Cancel schedule",

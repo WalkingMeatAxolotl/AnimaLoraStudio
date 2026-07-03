@@ -233,6 +233,8 @@ function OverviewTab({
     ? Object.entries(job.params_decoded)
     : []
 
+  // 标签列 break-all：未映射的长参数原 key（postprocess_max_crop_ratio 之类）
+  // 在 140px 列内换行，不再溢出压到值上。
   const renderRows = (
     rows: Array<{ label: string; value: React.ReactNode; mono?: boolean }>,
   ) => rows.map((row, i) => (
@@ -241,16 +243,18 @@ function OverviewTab({
       className={`grid gap-3 items-center px-[18px] py-2.5 ${i < rows.length - 1 ? 'border-b border-subtle' : 'border-b-0'}`}
       style={{ gridTemplateColumns: '140px 1fr' }}
     >
-      <span className="text-sm text-fg-tertiary font-normal">{row.label}</span>
-      <span className={`text-sm text-fg-primary ${row.mono ? 'font-mono' : ''}`}>
+      <span className="text-sm text-fg-tertiary font-normal break-all min-w-0">{row.label}</span>
+      <span className={`text-sm text-fg-primary break-all min-w-0 ${row.mono ? 'font-mono' : ''}`}>
         {row.value}
       </span>
     </div>
   ))
 
+  // 注意不能用 flex 列布局包卡片：flex 子项默认可收缩，内容超高时卡片被
+  // 压缩 + overflow-hidden 裁行（用户截图的「上下挤压」）。块级流式即可。
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto p-5 flex flex-col gap-4">
-      <div className="card overflow-hidden p-0" style={{ maxWidth: 720 }}>
+    <div className="flex-1 min-h-0 overflow-y-auto p-5">
+      <div className="card overflow-hidden p-0 mb-4" style={{ maxWidth: 720 }}>
         {renderRows(items)}
       </div>
 

@@ -694,8 +694,8 @@
     "startNowSent": "#{{id}} 已转入等待队列",
     "startNowConfirm": "立即开始计划任务 #{{id}}？将跳过计划时间，进入等待队列排队。",
     "taskDetailTooltip": "任务详情",
-    "tabTasks": "任务队列",
-    "tabJobs": "数据作业",
+    "tabTasks": "GPU 任务",
+    "tabJobs": "数据任务",
     "jobs": {
       "kind": {
         "download": "素材下载",
@@ -708,11 +708,11 @@
         "eval_tag": "Tag 评估",
         "eval_ccip": "CCIP 评估"
       },
-      "empty": "暂无数据作业",
-      "emptyHint": "下载 / 打标 / 正则构建 / 评估等数据作业会显示在这里",
-      "cancel": "取消作业",
-      "cancelOk": "取消作业",
-      "cancelConfirm": "取消数据作业 #{{id}}？运行中的作业会被终止。",
+      "empty": "暂无数据任务",
+      "emptyHint": "下载 / 打标 / 正则构建 / 评估等数据任务会显示在这里",
+      "cancel": "取消任务",
+      "cancelOk": "取消任务",
+      "cancelConfirm": "取消数据任务 #{{id}}？运行中的任务会被终止。",
       "jump": "打开所在页面",
       "project": "项目",
       "version": "版本",
@@ -744,7 +744,9 @@
         "crops": "裁剪框",
         "task_id": "关联任务",
         "run_id": "评估轮次",
-        "checkpoints": "检查点"
+        "checkpoints": "检查点",
+        "postprocess_method": "后处理方式",
+        "postprocess_max_crop_ratio": "后处理最大裁剪比"
       }
     },
     "cancelScheduled": "取消计划",

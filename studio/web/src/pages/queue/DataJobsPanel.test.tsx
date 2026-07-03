@@ -102,7 +102,7 @@ describe('DataJobsPanel', () => {
 
     await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
     expect(cancelSpy).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByText('取消作业', { selector: 'button[type="submit"]' }))
+    fireEvent.click(screen.getByText('取消任务', { selector: 'button[type="submit"]' }))
     await waitFor(() => expect(cancelSpy).toHaveBeenCalledWith(10))
   })
 
