@@ -1,5 +1,6 @@
-/** 0.17 P-G — 数据作业详情页：meta/参数（i18n 映射 + 原 key 兜底）/日志。 */
-import { render, screen, waitFor } from '@testing-library/react'
+/** 0.17 P-G — 数据作业详情页（QueueDetail 同款 tab 结构）：
+ *  概览（meta + 参数 i18n 映射/原 key 兜底）/ 日志 tab / 头部操作。 */
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DialogProvider } from '../components/Dialog'
@@ -62,29 +63,34 @@ function renderDetail(job: Job) {
 }
 
 describe('QueueJobDetailPage', () => {
-  it('渲染 header + meta（含入队时间）+ 参数（映射标签 / 原 key 兜底）+ 日志', async () => {
+  it('概览 tab：meta（含入队时间）+ 参数（映射标签 / 原 key 兜底 / 布尔人话）', async () => {
     renderDetail(makeJob())
 
     await waitFor(() => expect(screen.getByText('#7')).toBeInTheDocument())
-    // meta：入队时间标签 + 项目名
     expect(screen.getByText('入队时间')).toBeInTheDocument()
     await waitFor(() => expect(screen.getByText('MyProj')).toBeInTheDocument())
-    // 参数：tagger 有映射 → 「打标器」；mystery_key 无映射 → 原 key 兜底
     const params = screen.getByTestId('job-detail-params')
     expect(params).toHaveTextContent('打标器')
     expect(params).toHaveTextContent('wd14')
     expect(params).toHaveTextContent('mystery_key')
-    // 布尔值人话化
     expect(params).toHaveTextContent('是')
-    // 日志
+  })
+
+  it('切日志 tab → 拉 getJobLog 显示内容', async () => {
+    renderDetail(makeJob())
+    await waitFor(() => expect(screen.getByText('#7')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByText('日志'))
     await waitFor(() =>
       expect(screen.getByTestId('job-detail-log')).toHaveTextContent('hello log line'),
     )
+    expect(api.getJobLog).toHaveBeenCalledWith(7)
   })
 
-  it('running 显示取消按钮；done 不显示', async () => {
+  it('running 显示取消按钮；终态只剩跳转', async () => {
     renderDetail(makeJob({ status: 'running' }))
     await waitFor(() => expect(screen.getByTestId('job-detail-cancel')).toBeInTheDocument())
+    expect(screen.getByTestId('job-detail-jump')).toBeInTheDocument()
   })
 
   it('终态没有取消按钮，仍有跳转', async () => {

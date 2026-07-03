@@ -732,15 +732,6 @@ export default function QueuePage() {
       subtitle={t('queue.description')}
       actions={
         <>
-          {/* 0.17 P-G — 数据作业视图开关（对齐项目页「已归档」toggle 模式）。 */}
-          <button
-            className={`btn btn-sm ${queueTab === 'jobs' ? 'btn-secondary' : 'btn-ghost'}`}
-            onClick={() => setQueueTab(queueTab === 'jobs' ? 'tasks' : 'jobs')}
-            aria-pressed={queueTab === 'jobs'}
-            data-testid="queue-jobs-toggle"
-          >
-            {t('queue.tabJobs')}
-          </button>
           {queueTab === 'jobs' && <>
             {/* 数据作业视图：漏斗（kind 过滤）+ 刷新，与任务视图同位交互。 */}
             <button
@@ -857,6 +848,16 @@ export default function QueuePage() {
           >{t('common.import')}</button>
           <button onClick={() => void reload()} className="btn btn-ghost btn-sm">{t('common.refresh')}</button>
           </>}
+          {/* 0.17 P-G — 视图切换（放最右）：文字显示要切去的视图，一眼可知当前
+              不在哪边（用户反馈静态文字+高亮看不出状态）。 */}
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => setQueueTab(queueTab === 'jobs' ? 'tasks' : 'jobs')}
+            aria-pressed={queueTab === 'jobs'}
+            data-testid="queue-jobs-toggle"
+          >
+            {queueTab === 'jobs' ? t('queue.tabTasks') : t('queue.tabJobs')} ⇄
+          </button>
         </>
       }
       belowHeader={filtersOpen && (queueTab === 'jobs' ? (

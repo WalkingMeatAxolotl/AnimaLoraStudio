@@ -694,6 +694,7 @@
     "startNowSent": "#{{id}} 已转入等待队列",
     "startNowConfirm": "立即开始计划任务 #{{id}}？将跳过计划时间，进入等待队列排队。",
     "taskDetailTooltip": "任务详情",
+    "tabTasks": "任务队列",
     "tabJobs": "数据作业",
     "jobs": {
       "kind": {

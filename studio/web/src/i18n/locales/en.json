@@ -694,6 +694,7 @@
     "startNowSent": "#{{id}} moved to the waiting queue",
     "startNowConfirm": "Start scheduled task #{{id}} now? It skips the scheduled time and joins the waiting queue.",
     "taskDetailTooltip": "Task details",
+    "tabTasks": "Task queue",
     "tabJobs": "Data jobs",
     "jobs": {
       "kind": {
