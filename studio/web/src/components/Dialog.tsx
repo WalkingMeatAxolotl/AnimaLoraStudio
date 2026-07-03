@@ -258,19 +258,20 @@ function DialogRoot({ state, onCancel, onOk }: RootProps) {
           </p>
         )}
 
+        {/* min-w + justify-center：两键等宽观感（「取消」vs 四字 okText 不再一大一小）。 */}
         <div className="flex gap-2 justify-end mt-1">
           {state.type !== 'alert' && (
             <button
               type="button"
               onClick={onCancel}
-              className="btn btn-secondary"
+              className="btn btn-secondary min-w-[80px] justify-center"
             >
               {state.options.cancelText ?? '取消'}
             </button>
           )}
           <button
             type="submit"
-            className={toneButtonClass(state.options.tone)}
+            className={`${toneButtonClass(state.options.tone)} min-w-[80px] justify-center`}
           >
             {state.options.okText ??
               (state.type === 'confirm'
