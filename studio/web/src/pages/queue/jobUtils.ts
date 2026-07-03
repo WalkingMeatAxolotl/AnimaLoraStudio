@@ -1,10 +1,16 @@
-/** 0.17 P-G — 数据作业共享工具（列表 DataJobsPanel + 详情 QueueJobDetail 共用）。 */
-import type { Job, JobKind } from '../../api/client'
+/** 数据作业共享工具（DataJobsPanel + QueueDetail 共用）。
+ *  R-5 台账合并后作业就是 task（task_type = kind），工具全部按 Task 形状取字段。 */
+import type { Task, TaskType } from '../../api/client'
 
-export const JOB_KINDS: JobKind[] = [
+/** 数据视图（light + io 档）的 kind 全集。eval_samples 是 exclusive 档，
+ *  归 GPU 视图（锚点 §4-2），不在此列。 */
+export const DATA_VIEW_KINDS: TaskType[] = [
   'download', 'preprocess', 'tag', 'reg_build',
-  'eval_samples', 'eval_clip', 'eval_dino', 'eval_tag', 'eval_ccip',
+  'eval_clip', 'eval_dino', 'eval_tag', 'eval_ccip',
 ]
+
+/** 全部作业 kind（i18n 标签遍历用，含 eval_samples）。 */
+export const JOB_KINDS: TaskType[] = ['eval_samples', ...DATA_VIEW_KINDS]
 
 export const JOB_STATUS_TONE: Record<string, string> = {
   pending: 'neutral', running: 'accent', done: 'ok', failed: 'err', canceled: 'neutral',
@@ -33,14 +39,16 @@ export function fmtJobTime(ts: number | null | undefined): string {
   return new Date(ts * 1000).toLocaleString('zh-CN', { hour12: false })
 }
 
-/** kind → 原生步骤页深链（download 是 project 级，其余 version 级；eval_* 落训练页）。 */
-export function jobJumpPath(job: Job): string | null {
-  const pid = job.project_id
-  const vid = job.version_id
-  if (!pid) return null
-  if (job.kind === 'download') return `/projects/${pid}/download`
+/** 作业 kind → 原生步骤页深链（download 是 project 级，其余 version 级；
+ *  eval_* 落训练页）。非作业类型返回 null（train/generate 的跳转另有专链）。 */
+export function jobJumpPath(task: Task): string | null {
+  const kind = task.task_type ?? 'train'
+  const pid = task.project_id
+  const vid = task.version_id
+  if (!pid || !JOB_KINDS.includes(kind)) return null
+  if (kind === 'download') return `/projects/${pid}/download`
   if (!vid) return null
-  switch (job.kind) {
+  switch (kind) {
     case 'preprocess': return `/projects/${pid}/v/${vid}/preprocess`
     case 'tag': return `/projects/${pid}/v/${vid}/tag`
     case 'reg_build': return `/projects/${pid}/v/${vid}/reg`

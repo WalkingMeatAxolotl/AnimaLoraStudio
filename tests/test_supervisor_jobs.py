@@ -312,7 +312,8 @@ def test_cancel_pending_job(isolated) -> None:
         job = project_jobs.create_job(
             conn, project_id=p["id"], kind="download", params={}
         )
-    assert sup.cancel_job(job["id"]) is True
+    # R-5：作业与任务同台账，统一走 Supervisor.cancel（cancel_job 已删）。
+    assert sup.cancel(job["id"]) is True
     with db.connection_for(isolated["db"]) as conn:
         got = project_jobs.get_job(conn, job["id"])
     assert got["status"] == "canceled"

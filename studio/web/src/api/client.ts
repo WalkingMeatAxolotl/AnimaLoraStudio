@@ -839,14 +839,6 @@ export type JobKind =
   | 'download' | 'preprocess' | 'tag' | 'reg_build'
   | 'eval_samples' | 'eval_clip' | 'eval_dino' | 'eval_tag' | 'eval_ccip'
 
-/** 0.17 P-G — /api/jobs?group=history 分页返回。 */
-export interface JobsHistoryPage {
-  items: Job[]
-  total: number
-  page: number
-  page_size: number
-}
-
 export interface Job {
   id: number
   project_id: number
@@ -1490,8 +1482,15 @@ export interface XformersInstallResult {
 export type TaskStatus =
   'pending' | 'running' | 'done' | 'failed' | 'canceled' | 'paused' | 'scheduled'
 
-/** tasks.task_type 的合法值（_v5 migration）。0.17 P-F 类型过滤用。 */
-export type TaskType = 'train' | 'reg_ai' | 'generate'
+/** tasks.task_type 的合法值。R-3 台账合并起含九类数据作业 kind。
+ *  档位：exclusive = train/reg_ai/generate/eval_samples；light = 其余；io = download。 */
+export type TaskType =
+  | 'train' | 'reg_ai' | 'generate'
+  | 'download' | 'preprocess' | 'tag' | 'reg_build'
+  | 'eval_samples' | 'eval_clip' | 'eval_dino' | 'eval_tag' | 'eval_ccip'
+
+/** R-5 档位视图参数：GPU 视图 = exclusive，数据视图 = data（light+io）。 */
+export type QueueResourceClass = 'exclusive' | 'data'
 
 /** Terminal task statuses — UI 一般禁用这些上的操作按钮（cancel / pause 等）。
  *  `paused` **不**进 terminal — 它可被 resume 复活。 */
@@ -1535,6 +1534,10 @@ export interface Task {
   /** 0.17 P-B — 计划开始时间（unix 秒）。status='scheduled' 时有值；到点提升为
    *  pending 后保留作记录。非计划任务恒 null。 */
   scheduled_at?: number | null
+  /** R-2/_v17 — 数据作业类 task 的 kind 专属参数 JSON；train/reg_ai 恒 null。 */
+  params?: string | null
+  /** 后端读路径附带解码（同旧 jobs DAO 约定）。 */
+  params_decoded?: Record<string, unknown> | null
   /** ADR 0006 PR-4 — is_pausable 信号（§8.1）：UI 用来决定是否显示暂停
    *  按钮。supervisor 跑得起来时由 server enrich；空载默认 false。 */
   is_pausable?: boolean
@@ -2292,33 +2295,15 @@ export const api = {
       body: JSON.stringify({ crops }),
     }),
 
-  // 0.17 P-G — 数据作业只读区数据源。live = running+pending 不分页；history 分页；
-  // q 按所属项目 title/slug 搜索（job 自身无 name）。
-  listJobsLive: (kind?: JobKind, q?: string) => {
-    const params = new URLSearchParams({ group: 'live' })
-    if (kind) params.set('kind', kind)
-    if (q) params.set('q', q)
-    return req<{ items: Job[] }>(`/api/jobs?${params}`).then((r) => r.items)
-  },
-  listJobsHistory: (opts: {
-    page: number; pageSize: number; kind?: JobKind; q?: string
-  }) => {
-    const params = new URLSearchParams({
-      group: 'history', page: String(opts.page), page_size: String(opts.pageSize),
-    })
-    if (opts.kind) params.set('kind', opts.kind)
-    if (opts.q) params.set('q', opts.q)
-    return req<JobsHistoryPage>(`/api/jobs?${params}`)
-  },
-  getJob: (jid: number) => req<Job>(`/api/jobs/${jid}`),
-  getJobLog: (jid: number, tail?: number) => {
-    const qs = tail ? `?tail=${tail}` : ''
-    return req<{ job_id: number; content: string; size: number }>(
-      `/api/jobs/${jid}/log${qs}`
-    )
-  },
+  // R-5 台账合并：/api/jobs* 已删，作业与任务同源 /api/queue（单一 ID 空间）。
+  // getJob / cancelJob 保留函数名给步骤页（Download/Tagging/Reg/Preprocess），
+  // 内部改指 /api/queue；kind 由 task_type 派生。
+  getJob: (jid: number) =>
+    req<Task & { kind?: JobKind }>(`/api/queue/${jid}`).then(
+      (t) => ({ ...t, kind: (t.task_type ?? 'train') as JobKind }) as unknown as Job,
+    ),
   cancelJob: (jid: number) =>
-    req<{ job_id: number; canceled: boolean }>(`/api/jobs/${jid}/cancel`, {
+    req<{ task_id: number; canceled: boolean }>(`/api/queue/${jid}/cancel`, {
       method: 'POST',
     }),
   getLatestVersionJob: (
@@ -2687,17 +2672,19 @@ export const api = {
   // 0.17 P-A/P-C —— 队列页分区数据源。live = 进行中 + 等待（running/paused/pending），
   // 不分页；q 搜 name/config_name。
   // 不分页；q 搜 name/config_name；type 按 task_type 过滤（0.17 P-F）。
-  listQueueLive: (q?: string, type?: TaskType) => {
+  listQueueLive: (q?: string, type?: TaskType, resourceClass?: QueueResourceClass) => {
     const params = new URLSearchParams({ group: 'live' })
     if (q) params.set('q', q)
     if (type) params.set('types', type)
+    if (resourceClass) params.set('resource_class', resourceClass)
     return req<{ items: Task[] }>(`/api/queue?${params}`).then((r) => r.items)
   },
   // 0.17 P-E —— history = 已结束（done/failed/canceled），后端分页。status 传终态
   // 做子过滤，q 搜 name/config_name，type 按 task_type 过滤（P-F）。返回
   // { items, total, page, page_size }。
   listQueueHistory: (opts: {
-    page: number; pageSize: number; q?: string; status?: TaskStatus; type?: TaskType
+    page: number; pageSize: number; q?: string; status?: TaskStatus;
+    type?: TaskType; resourceClass?: QueueResourceClass
   }) => {
     const params = new URLSearchParams({
       group: 'history',
@@ -2707,6 +2694,7 @@ export const api = {
     if (opts.q) params.set('q', opts.q)
     if (opts.status) params.set('status', opts.status)
     if (opts.type) params.set('types', opts.type)
+    if (opts.resourceClass) params.set('resource_class', opts.resourceClass)
     return req<QueueHistoryPage>(`/api/queue?${params}`)
   },
   getTask: (id: number) => req<Task>(`/api/queue/${id}`),
@@ -2949,20 +2937,6 @@ export const api = {
       `/api/projects/${pid}/versions/${vid}/eval/run`,
       { method: 'POST', body: JSON.stringify(body) },
     ),
-
-  // Queue import / export ---------------------------------------------
-  /** 队列导出直链。响应带 Content-Disposition: attachment,<a href download>
-   * 触发就走浏览器原生下载。后端 publish queue_export_ready/_failed SSE
-   * 供前端清 app-side "导出中..." 状态。 */
-  queueExportUrl: (ids?: ReadonlyArray<number>) => {
-    const qs = ids && ids.length ? `?ids=${ids.join(',')}` : ''
-    return `/api/queue/export${qs}`
-  },
-  importQueue: (payload: unknown) =>
-    req<ImportResult>('/api/queue/import', {
-      method: 'POST',
-      body: JSON.stringify({ payload }),
-    }),
 
   // Datasets -----------------------------------------------------------
   listDatasets: (path?: string) => {

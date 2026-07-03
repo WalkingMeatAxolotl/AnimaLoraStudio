@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import {
-  api, type JobKind, type QueueHistoryPage, type QueueHoldState, type Task,
-  type TaskStatus,
+  api, type QueueHistoryPage, type QueueHoldState, type Task,
+  type TaskStatus, type TaskType,
 } from '../api/client'
+import { DATA_VIEW_KINDS } from './queue/jobUtils'
 import { HoldQueueModal, type HoldDecision } from '../components/HoldQueueModal'
 import { PauseConfirmModal } from '../components/PauseConfirmModal'
 import { PauseProgressModal } from '../components/PauseProgressModal'
@@ -17,10 +18,9 @@ import { useEvaluatingTasks, type EvalProgress } from '../lib/useEvalProgress'
 import { useLocalStorageState } from '../lib/useLocalStorageState'
 import DataJobsPanel from './queue/DataJobsPanel'
 
-// tasks 表真实 task_type 只有这三值（train/reg_ai/generate）。0.17 P-D 前这里
-// 靠 config_name 子串猜、且掺入 tag/download/curate 等 project_jobs 的 kind（对
-// 队列列表是死分支），现收敛为后端权威字段。
-type TaskKind = 'train' | 'reg_ai' | 'generate'
+// GPU 视图（exclusive 档）的行类型。R-5：eval_samples（评估出图，底模级）
+// 随台账合并归位本视图（用户感知锚点 §4-2）。
+type TaskKind = 'train' | 'reg_ai' | 'generate' | 'eval_samples'
 
 const STATUS_TONE: Record<TaskStatus, string> = {
   pending:   'neutral',
@@ -35,7 +35,7 @@ const STATUS_TONE: Record<TaskStatus, string> = {
 /** 读后端权威 task_type；老行 backfill 为 'train'，`?? 'train'` 仅作类型兜底。
  *  导出供 Queue.test.tsx 直接测（不再受 config_name 影响是本函数的契约）。 */
 export function taskKind(task: Task): TaskKind {
-  return task.task_type ?? 'train'
+  return (task.task_type ?? 'train') as TaskKind
 }
 
 // 0.17 P-E — 历史分页可选每页条数。
@@ -174,7 +174,8 @@ function QueueTaskRow({
     scheduled: t('status.scheduled'),
   }
   const KIND_LABEL: Record<TaskKind, string> = {
-    train: t('queue.typeTrain'), reg_ai: t('queue.typeReg'), generate: t('queue.typeGenerate'),
+    train: t('queue.typeTrain'), reg_ai: t('queue.typeReg'),
+    generate: t('queue.typeGenerate'), eval_samples: t('queue.jobs.kind.eval_samples'),
   }
   const isRunning = task.status === 'running'
   const isPaused = task.status === 'paused'
@@ -192,7 +193,8 @@ function QueueTaskRow({
       ? { path: `/tools/generate?task=${task.id}`, label: t('queue.jumpGenerate') }
       : kind === 'reg_ai' && hasProject
         ? { path: `/projects/${task.project_id}/v/${task.version_id}/reg`, label: t('queue.jumpReg') }
-        : kind === 'train' && hasProject
+        : (kind === 'train' || kind === 'eval_samples') && hasProject
+          // eval_samples 的结果面板挂在版本训练页（EvalMetricsPanel），同 train 深链
           ? { path: `/projects/${task.project_id}/v/${task.version_id}/train`, label: t('queue.jumpTrain') }
           : null
 
@@ -452,7 +454,7 @@ export default function QueuePage() {
   const [queueTab, setQueueTab] =
     useLocalStorageState<'tasks' | 'jobs'>('studio:queue:tab', 'tasks')
   const [jobsKind, setJobsKind] =
-    useLocalStorageState<JobKind | null>('studio:queue:jobsKind', null)
+    useLocalStorageState<TaskType | null>('studio:queue:jobsKind', null)
   const [jobsSearch, setJobsSearch] = useLocalStorageState('studio:queue:jobsSearch', '')
   const [jobsSearchDebounced, setJobsSearchDebounced] = useState(jobsSearch)
   const [jobsRefreshToken, setJobsRefreshToken] = useState(0)
@@ -488,9 +490,12 @@ export default function QueuePage() {
     }
   }, [])
 
+  // R-5：GPU 视图 = exclusive 档（「全部」= 档位全集，含 eval_samples）。
   const reloadLive = useCallback(async () => {
     try {
-      setLive(await api.listQueueLive(searchDebounced || undefined, typeFilter ?? undefined))
+      setLive(await api.listQueueLive(
+        searchDebounced || undefined, typeFilter ?? undefined, 'exclusive',
+      ))
       setError(null)
     } catch (e) { setError(String(e)) }
   }, [searchDebounced, typeFilter])
@@ -500,7 +505,7 @@ export default function QueuePage() {
       const r = await api.listQueueHistory({
         page: historyPage, pageSize: historyPageSize,
         q: searchDebounced || undefined, status: historyStatus ?? undefined,
-        type: typeFilter ?? undefined,
+        type: typeFilter ?? undefined, resourceClass: 'exclusive',
       })
       setHistory(r); setError(null)
     } catch (e) { setError(String(e)) }
@@ -532,6 +537,8 @@ export default function QueuePage() {
     (evt) => {
       if (
         evt.type === 'task_state_changed' ||
+        // R-5：数据作业（含 GPU 视图里的 eval_samples）仍发 job_* 事件
+        evt.type === 'job_state_changed' ||
         evt.type === 'train_loop_started' ||
         evt.type === 'auto_epoch_backup_written' ||
         evt.type === 'queue_hold_changed'
@@ -898,15 +905,13 @@ export default function QueuePage() {
             value={jobsKind ?? 'all'}
             onChange={(e) => {
               const v = e.target.value
-              setJobsKind(v === 'all' ? null : (v as JobKind))
+              setJobsKind(v === 'all' ? null : (v as TaskType))
             }}
             aria-label={t('queue.typeFilterLabel')}
             data-testid="jobs-kind-filter"
           >
             <option value="all">{t('queue.filterAll')}</option>
-            {(['download', 'preprocess', 'tag', 'reg_build',
-              'eval_samples', 'eval_clip', 'eval_dino', 'eval_tag', 'eval_ccip',
-            ] as JobKind[]).map((k) => (
+            {DATA_VIEW_KINDS.map((k) => (
               <option key={k} value={k}>{t(`queue.jobs.kind.${k}`)}</option>
             ))}
           </select>
@@ -945,6 +950,7 @@ export default function QueuePage() {
             <option value="train">{t('queue.typeTrain')}</option>
             <option value="reg_ai">{t('queue.typeReg')}</option>
             <option value="generate">{t('queue.typeGenerate')}</option>
+            <option value="eval_samples">{t('queue.jobs.kind.eval_samples')}</option>
           </select>
           <select
             className="input"

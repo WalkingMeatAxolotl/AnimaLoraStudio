@@ -27,14 +27,30 @@ from ...schemas.queue import EnqueueRequest, ReorderRequest
 from .... import db
 from ....domain.errors import (
     ConflictError,
+    DomainError,
     NotFoundError,
     PresetNotFoundError,
     ValidationError,
 )
 from ....infrastructure.event_bus import bus
 from ....paths import USER_PRESETS_DIR, task_dir
+from ....supervisor.resources import (
+    JOB_KIND_RESOURCE_CLASS,
+    RESOURCE_EXCLUSIVE,
+    TASK_TYPE_RESOURCE_CLASS,
+)
 
 router = APIRouter()
+
+# R-5 档位视图：GPU 视图 = exclusive 档（train/reg_ai/generate/eval_samples），
+# 数据视图 = light + io 档。由 resources.py 档位映射派生，防漂移。
+EXCLUSIVE_VIEW_TYPES: tuple[str, ...] = tuple(TASK_TYPE_RESOURCE_CLASS) + tuple(
+    k for k, c in JOB_KIND_RESOURCE_CLASS.items() if c == RESOURCE_EXCLUSIVE
+)
+DATA_VIEW_TYPES: tuple[str, ...] = tuple(
+    k for k, c in JOB_KIND_RESOURCE_CLASS.items() if c != RESOURCE_EXCLUSIVE
+)
+_RESOURCE_CLASS_TYPES = {"exclusive": EXCLUSIVE_VIEW_TYPES, "data": DATA_VIEW_TYPES}
 
 # resume 允许的起点状态（ADR 0006 Addendum 2）。done 不进 — 语义是重训，
 # 走 retry / ResumeFieldPicker。
@@ -74,7 +90,7 @@ def _enrich_tasks(items: list[dict[str, Any]]) -> None:
         sup = _supervisor()
         for it in items:
             it["is_pausable"] = sup.is_task_pausable(int(it["id"]))
-    except HTTPException:
+    except (HTTPException, DomainError):
         for it in items:
             it["is_pausable"] = False
     for it in items:
@@ -94,6 +110,7 @@ def list_queue(
     page_size: int = 20,
     q: Optional[str] = None,
     types: Optional[str] = None,
+    resource_class: Optional[str] = None,
 ) -> dict[str, Any]:
     """队列任务列表。
 
@@ -129,6 +146,16 @@ def list_queue(
                 code="queue.type_filter_invalid", details={"types": bad},
                 http_status=400,
             )
+    # R-5 档位视图参数：显式 types 优先（单类型已隐含档位）；否则按档位展开。
+    if resource_class is not None:
+        if resource_class not in _RESOURCE_CLASS_TYPES:
+            raise ValidationError(
+                f"Unsupported resource class: {resource_class}",
+                code="queue.resource_class_invalid",
+                details={"resource_class": resource_class}, http_status=400,
+            )
+        if not type_tuple:
+            type_tuple = _RESOURCE_CLASS_TYPES[resource_class]
 
     # R-3 台账合并：数据作业进了 tasks 表。GPU 视图（本端点）在 R-5 档位化前
     # 默认排除 JOB_TASK_TYPES——显式 types 过滤时不排（调用方自己指定）。
@@ -266,7 +293,7 @@ def get_queue_item(task_id: int) -> dict[str, Any]:
     # 仅 supervisor 跑得起来时计算；空载（test / 启动期）默认 False。
     try:
         task["is_pausable"] = _supervisor().is_task_pausable(task_id)
-    except HTTPException:
+    except (HTTPException, DomainError):
         task["is_pausable"] = False
     task["is_resumable"] = _is_resumable(task)
     return task

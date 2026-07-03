@@ -37,14 +37,18 @@ class _StubSupervisor:
     def __init__(self) -> None:
         self.canceled: list[int] = []
 
-    def cancel_job(self, jid: int) -> bool:
+    def cancel(self, task_id: int) -> bool:
+        # R-5：作业与任务同台账，统一走 /api/queue/{id}/cancel。
         with db.connection_for() as conn:
-            j = project_jobs.get_job(conn, jid)
-            if not j or j["status"] in project_jobs.TERMINAL_STATUSES:
+            t = db.get_task(conn, task_id)
+            if not t or t["status"] not in ("pending", "scheduled", "running"):
                 return False
-            project_jobs.mark_canceled(conn, jid)
-        self.canceled.append(jid)
+            db.update_task(conn, task_id, status="canceled")
+        self.canceled.append(task_id)
         return True
+
+    def is_task_pausable(self, task_id: int) -> bool:
+        return False
 
 
 @pytest.fixture
@@ -188,17 +192,21 @@ def test_download_status_no_jobs(client: TestClient) -> None:
     assert r["job"] is None
 
 
-def test_get_job_log_returns_tail(client: TestClient, isolated) -> None:
+def test_get_job_log_via_task_logs(client: TestClient, isolated, monkeypatch) -> None:
+    """R-5：/api/jobs/{id}/log 已删——作业日志走统一的 /api/logs/{id}
+    （tasks/<id>/run.log，read_task_log 兼容读取）。"""
+    from studio.infrastructure import paths as _paths
+    monkeypatch.setattr(_paths, "TASKS_DIR", isolated["db"].parent / "tasks")
     p = _make_project(client)
     job = client.post(
         f"/api/projects/{p['id']}/download",
         json={"tag": "a", "count": 1},
     ).json()
-    log_path = Path(job["log_path"])
+    log_path = _paths.task_log_path(job["id"])
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.write_text("a\nb\nc\nd\n", encoding="utf-8")
-    r = client.get(f"/api/jobs/{job['id']}/log?tail=2").json()
-    assert r["content"].splitlines() == ["c", "d"]
+    r = client.get(f"/api/logs/{job['id']}").json()
+    assert r["content"].splitlines() == ["a", "b", "c", "d"]
 
 
 # ---------------------------------------------------------------------------
@@ -520,15 +528,16 @@ def test_upload_400_for_no_files(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_cancel_pending_job_endpoint(client: TestClient) -> None:
+def test_cancel_pending_job_via_queue_endpoint(client: TestClient) -> None:
+    """R-5：作业取消统一走 /api/queue/{id}/cancel（单一 ID 空间）。"""
     p = _make_project(client)
     job = client.post(
         f"/api/projects/{p['id']}/download",
         json={"tag": "x", "count": 1},
     ).json()
-    r = client.post(f"/api/jobs/{job['id']}/cancel")
+    r = client.post(f"/api/queue/{job['id']}/cancel")
     assert r.status_code == 200
-    again = client.get(f"/api/jobs/{job['id']}").json()
+    again = client.get(f"/api/queue/{job['id']}").json()
     assert again["status"] == "canceled"
 
 
@@ -540,5 +549,5 @@ def test_cancel_terminal_job_400(client: TestClient) -> None:
     ).json()
     with db.connection_for() as conn:
         project_jobs.mark_done(conn, job["id"])
-    r = client.post(f"/api/jobs/{job['id']}/cancel")
+    r = client.post(f"/api/queue/{job['id']}/cancel")
     assert r.status_code == 400

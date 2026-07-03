@@ -192,7 +192,7 @@ describe('GeneratePage 端到端 smoke', () => {
     expect(promptArea).toHaveValue('my custom prompt')
   })
 
-  it('训练 / reg-ai 等任务在跑时，禁用生成按钮 + 鼠标 hover tooltip 说明原因', async () => {
+  it('训练 / reg-ai 等任务在跑时，按钮可用（提交排队）+ tooltip 说明会排队', async () => {
     // listQueue('running') 默认返 [] —— 覆盖这次返回 1 个 running task。
     // /api/queue 默认排除 generate task（client.ts:1918），所以这里返的就是
     // train / reg-ai 等抢 GPU 的任务。
@@ -225,9 +225,12 @@ describe('GeneratePage 端到端 smoke', () => {
     setup()
 
     const btn = await screen.findByRole('button', { name: /开始生成/ })
-    await waitFor(() => expect(btn).toBeDisabled())
-    // 0.17 P-I：内联提示文字已移除（改 batch size 框）；阻塞原因仍在 button title tooltip。
-    expect(btn).toHaveAttribute('title', expect.stringContaining('#42'))
+    // R-5：后端准入（R-1）已保证互斥，前端不再硬禁用——提交只是入队排队；
+    // tooltip 说明当前 GPU 被 #42 占用、提交会排队。
+    await waitFor(() =>
+      expect(btn).toHaveAttribute('title', expect.stringContaining('#42')),
+    )
+    expect(btn).not.toBeDisabled()
   })
 
   it('URL ?lora= 进入时 replace 缓存 LoRA list + clamp xDraft.loraIndex', async () => {

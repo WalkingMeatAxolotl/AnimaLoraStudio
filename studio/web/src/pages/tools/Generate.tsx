@@ -955,14 +955,16 @@ export default function GeneratePage() {
               <SidebarSectionTabs tab={sidebarTab} onTabChange={setSidebarTab} mode={mode} />
               {/* items-stretch：batch 框跟「开始生成」按钮等高（按钮 padding:12 定高度）。 */}
               <div className="flex items-stretch gap-3">
+                {/* R-5：GPU 任务运行时不再硬禁用——后端准入（R-1）保证互斥，
+                    提交只是入队排队（锚点 §4-5）。按钮 title 提示会排队。 */}
                 <button
                   className="btn btn-primary flex-1"
                   style={{ padding: 12, fontWeight: 600, justifyContent: 'center' }}
                   onClick={handleGenerate}
-                  disabled={submitting || activeBlockingTask !== null}
+                  disabled={submitting}
                   title={
                     activeBlockingTask
-                      ? t('generate.blockedByActiveTask', { id: activeBlockingTask.id })
+                      ? t('generate.queuedBehindActiveTask', { id: activeBlockingTask.id })
                       : undefined
                   }
                 >

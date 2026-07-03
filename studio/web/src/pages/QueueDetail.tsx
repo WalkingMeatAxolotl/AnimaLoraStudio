@@ -18,6 +18,7 @@ import MonitorDashboard, { EvalMetricsPanel } from '../components/MonitorDashboa
 import TaskLogDrawer, { type LogSource, type LogSourceStatus } from '../components/TaskLogDrawer'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
 import { taskKind } from './Queue'
+import { fmtParamValue, jobJumpPath, paramLabel } from './queue/jobUtils'
 
 type Tab = 'overview' | 'log' | 'monitor' | 'eval' | 'outputs' | 'snapshot'
 
@@ -28,6 +29,16 @@ const VISIBLE_TABS_BY_TYPE: Record<TaskType, readonly Tab[]> = {
   train: ['overview', 'log', 'monitor', 'eval', 'outputs', 'snapshot'],
   reg_ai: ['overview', 'log'],
   generate: ['overview', 'log'],
+  // R-5 台账合并：数据作业类 task 走 D5 轻方案（概览 + 日志，结果靠跳转深链）
+  download: ['overview', 'log'],
+  preprocess: ['overview', 'log'],
+  tag: ['overview', 'log'],
+  reg_build: ['overview', 'log'],
+  eval_samples: ['overview', 'log'],
+  eval_clip: ['overview', 'log'],
+  eval_dino: ['overview', 'log'],
+  eval_tag: ['overview', 'log'],
+  eval_ccip: ['overview', 'log'],
 }
 
 const STATUS_BADGE: Record<TaskStatus, string> = {
@@ -338,6 +349,14 @@ export default function QueueDetailPage() {
               data-testid="detail-view-reg"
             >{t('queueDetail.viewInReg')}</button>
           )}
+          {/* R-5：数据作业类 task 跳原生步骤页（download→项目下载页、tag→打标页…） */}
+          {task && jobJumpPath(task) && (
+            <button
+              onClick={() => navigate(jobJumpPath(task)!)}
+              className="btn btn-secondary btn-sm"
+              data-testid="detail-view-job-source"
+            >{t('queue.jobs.jump')} →</button>
+          )}
           {isLive && status === 'running' && task?.is_pausable && (
             <button onClick={pauseRunning} disabled={busy || pauseModalOpen} className="btn btn-sm"
               data-testid="detail-pause-btn"
@@ -519,6 +538,16 @@ function OverviewTab({ task }: { task: Task }) {
   if (task.error_msg) {
     items.push({ label: t('common.error'), value: <code className="font-mono text-xs break-all text-err">{task.error_msg}</code> })
   }
+  // R-5：数据作业类 task 的参数全字段（用户在原生页面配置的内容；映射人话标签，
+  // 未映射退回原 key）。train/reg_ai 无 params 不进此分支。
+  if (task.params_decoded && typeof task.params_decoded === 'object') {
+    for (const [k, v] of Object.entries(task.params_decoded)) {
+      items.push({
+        label: paramLabel(k, t),
+        value: <span className="font-mono text-xs break-all">{fmtParamValue(v, t)}</span>,
+      })
+    }
+  }
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto p-5">
@@ -648,7 +677,8 @@ function useEvalLogSource(
     for (const j of jobs) {
       if (buffersRef.current[j.id] === undefined) {
         buffersRef.current[j.id] = ''
-        void api.getJobLog(j.id).then((r) => {
+        // R-5：eval 作业与任务同台账，日志走统一 /api/logs/{id}
+        void api.getLog(j.id).then((r) => {
           if (!alive) return
           buffersRef.current[j.id] = r.content || ''
           setBuffers({ ...buffersRef.current })

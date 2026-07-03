@@ -95,10 +95,13 @@ def derive_status_from_tasks(
 
     0.17 P-B：scheduled（计划任务，还没到点）与 pending 同等对待 —— 版本已被
     该任务占用（enqueue 端点会 409），状态必须体现出来。
+    R-5：台账合并后 tasks 表也装数据作业（tag/download/eval…），派生只看
+    GPU 任务类型 —— 否则一个 pending 打标作业会把 version 顶成「训练中」。
     """
     row = conn.execute(
         "SELECT 1 FROM tasks "
         "WHERE version_id = ? AND status IN ('pending', 'running', 'paused', 'scheduled') "
+        "AND COALESCE(task_type, 'train') IN ('train', 'reg_ai', 'generate') "
         "LIMIT 1",
         (version_id,),
     ).fetchone()
@@ -108,6 +111,7 @@ def derive_status_from_tasks(
     row = conn.execute(
         "SELECT status FROM tasks "
         "WHERE version_id = ? AND status IN ('done', 'failed', 'canceled') "
+        "AND COALESCE(task_type, 'train') IN ('train', 'reg_ai', 'generate') "
         "ORDER BY created_at DESC LIMIT 1",
         (version_id,),
     ).fetchone()

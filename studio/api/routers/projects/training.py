@@ -802,10 +802,12 @@ def enqueue_version_training(
     scheduled_at = body.scheduled_at if body else None
 
     with db.connection_for() as conn:
-        # 该 version 当前是否已有 active task
+        # 该 version 当前是否已有 active GPU task（R-5：台账合并后 tasks 也装
+        # 数据作业，pending 打标不该挡训练入队——只查 GPU 类型）
         active = conn.execute(
             "SELECT id, status FROM tasks "
             "WHERE version_id = ? AND status IN ('pending', 'running', 'scheduled') "
+            "AND COALESCE(task_type, 'train') IN ('train', 'reg_ai', 'generate') "
             "LIMIT 1",
             (vid,),
         ).fetchone()
