@@ -33,12 +33,14 @@ CREATE INDEX IF NOT EXISTS idx_tasks_queue
     ON tasks(status, priority DESC, created_at ASC);
 """
 
-VALID_STATUSES = {"pending", "running", "done", "failed", "canceled", "paused"}
+VALID_STATUSES = {"pending", "running", "done", "failed", "canceled", "paused", "scheduled"}
 # `paused` 不进 terminal —— task 已暂停但可被 resume，不算结束态。
 TERMINAL_STATUSES = {"done", "failed", "canceled"}
 # 队列页分区用的两个有序状态组（0.17 P-A/P-E）：live = 进行中+等待，history = 已结束。
 # 用 tuple 保序，供 SQL `status IN (...)` + 分页。
-LIVE_STATUSES = ("running", "paused", "pending")
+# `scheduled`（0.17 P-B 计划任务）进 live —— 在队列页第 4 段展示；dispatcher 只看
+# pending，到点由 supervisor tick 提升（promote_due_scheduled）。
+LIVE_STATUSES = ("running", "paused", "pending", "scheduled")
 HISTORY_STATUSES = ("done", "failed", "canceled")
 # tasks.task_type 的合法值（_v5 migration）；0.17 P-F 类型过滤校验用。
 VALID_TASK_TYPES = ("train", "reg_ai", "generate")
@@ -89,6 +91,7 @@ def create_task(
     name: str,
     config_name: str,
     priority: int = 0,
+    scheduled_at: Optional[float] = None,
 ) -> int:
     # ADR-0009 PR-1 C6: 入 task 时存当前 ContextVar trace_id（HTTP 请求那一刻
     # 由 TraceIdMiddleware 已 bind）。无则用 bg-{uuid} 标后台触发（CLI / 测试 /
@@ -96,10 +99,14 @@ def create_task(
     # worker 子进程让 worker log 跟用户请求 trace_id 对得上。
     from .logging import get_trace_id, new_trace_id
     request_trace_id = get_trace_id() or f"bg-{new_trace_id()}"
+    # 0.17 P-B：带 scheduled_at → 建成 scheduled，supervisor tick 到点提升为
+    # pending。过去的时间也照建 —— 下一个 tick（≤1s）自然提升，无需特判。
+    status = "scheduled" if scheduled_at is not None else "pending"
     cur = conn.execute(
-        "INSERT INTO tasks(name, config_name, status, priority, created_at, request_trace_id) "
-        "VALUES (?, ?, 'pending', ?, ?, ?)",
-        (name, config_name, priority, time.time(), request_trace_id),
+        "INSERT INTO tasks(name, config_name, status, priority, created_at, "
+        "request_trace_id, scheduled_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (name, config_name, status, priority, time.time(), request_trace_id,
+         scheduled_at),
     )
     conn.commit()
     return int(cur.lastrowid)
@@ -216,6 +223,31 @@ def list_tasks_page(
         sql += " LIMIT ? OFFSET ?"
         params = [*params, int(limit), int(offset)]
     return [dict(r) for r in conn.execute(sql, params)]
+
+
+def promote_due_scheduled(
+    conn: sqlite3.Connection, now: Optional[float] = None
+) -> list[int]:
+    """0.17 P-B：把到点的 scheduled task 提升为 pending，返回提升的 id 列表。
+
+    supervisor 每个 tick（1s）调一次；scheduled_at 保留不清（记录原计划时间）。
+    调用方负责对返回的每个 id publish task_state_changed(pending)。
+    """
+    ts = time.time() if now is None else now
+    ids = [
+        int(r["id"]) for r in conn.execute(
+            "SELECT id FROM tasks WHERE status = 'scheduled' AND scheduled_at <= ? "
+            "ORDER BY id ASC",
+            (ts,),
+        )
+    ]
+    if ids:
+        conn.executemany(
+            "UPDATE tasks SET status = 'pending' WHERE id = ? AND status = 'scheduled'",
+            [(i,) for i in ids],
+        )
+        conn.commit()
+    return ids
 
 
 def next_pending(conn: sqlite3.Connection) -> Optional[dict[str, Any]]:

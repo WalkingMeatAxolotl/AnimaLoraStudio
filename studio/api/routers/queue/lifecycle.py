@@ -1,8 +1,9 @@
 """Queue 任务生命周期（PR-6 commit 6 从 server.py 抽出）。
 
-12 routes：
+13 routes：
     GET   /api/queue                 list（默认隐藏 generate / reg_ai）
-    POST  /api/queue                 enqueue（按 preset 名）
+    POST  /api/queue                 enqueue（按 preset 名，可带 scheduled_at 定时）
+    POST  /api/queue/{task_id}/start_now  scheduled 手动提前转 pending（0.17 P-B）
     GET   /api/queue/hold            查队列挂起状态 + 等待恢复 pending 数
     POST  /api/queue/hold            挂起队列（dispatcher 停拉新 task）
     POST  /api/queue/release         恢复调度
@@ -176,13 +177,39 @@ def enqueue(body: EnqueueRequest) -> dict[str, Any]:
     name = body.name or body.config_name
     with db.connection_for() as conn:
         task_id = db.create_task(
-            conn, name=name, config_name=body.config_name, priority=body.priority
+            conn, name=name, config_name=body.config_name, priority=body.priority,
+            scheduled_at=body.scheduled_at,
         )
         task = db.get_task(conn, task_id)
+    bus.publish({
+        "type": "task_state_changed",
+        "task_id": task_id,
+        "status": task["status"] if task else "pending",
+    })
+    return task or {"id": task_id}
+
+
+@router.post("/api/queue/{task_id}/start_now")
+def start_scheduled_now(task_id: int) -> dict[str, Any]:
+    """0.17 P-B —— scheduled task 手动提前：立即转 pending 参与调度。
+
+    scheduled_at 保留作记录（「原计划 3:00，手动提前」可追溯）；仅 scheduled
+    状态可调，其余 409。
+    """
+    with db.connection_for() as conn:
+        task = db.get_task(conn, task_id)
+        if not task:
+            raise NotFoundError("Task not found", code="task.not_found", details={"task_id": task_id})
+        if task["status"] != "scheduled":
+            raise ConflictError(
+                "Only scheduled tasks can be started early",
+                code="task.not_scheduled", details={"status": task["status"]},
+            )
+        db.update_task(conn, task_id, status="pending")
     bus.publish(
         {"type": "task_state_changed", "task_id": task_id, "status": "pending"}
     )
-    return task or {"id": task_id}
+    return {"task_id": task_id, "status": "pending"}
 
 
 @router.get("/api/queue/hold")

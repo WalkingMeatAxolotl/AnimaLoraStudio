@@ -50,9 +50,10 @@ class _StubSupervisor:
         self.canceled: list[int] = []
         self.current_task_id: int | None = None
     def cancel(self, task_id: int) -> bool:
+        # 镜像真 supervisor：pending / scheduled / running 可取消（0.17 P-B）。
         with db.connection_for() as conn:
             task = db.get_task(conn, task_id)
-            if not task or task["status"] not in ("pending", "running"):
+            if not task or task["status"] not in ("pending", "scheduled", "running"):
                 return False
             db.update_task(conn, task_id, status="canceled")
         self.canceled.append(task_id)
@@ -645,6 +646,77 @@ def test_no_group_returns_all_backward_compat(client: TestClient) -> None:
     _seed("done")
     items = client.get("/api/queue").json()["items"]
     assert {i["status"] for i in items} == {"running", "done"}
+
+
+# --- 0.17 P-B 计划任务（scheduled 状态 + start_now） -----------------------
+
+
+def test_enqueue_with_scheduled_at_creates_scheduled(client: TestClient) -> None:
+    """带 scheduled_at → status=scheduled；不带 → pending（原行为）。"""
+    import time as _time
+    future = _time.time() + 3600
+    resp = client.post(
+        "/api/queue", json={"config_name": "good", "scheduled_at": future},
+    )
+    assert resp.status_code == 200, resp.text
+    task = resp.json()
+    assert task["status"] == "scheduled"
+    assert task["scheduled_at"] == pytest.approx(future)
+
+
+def test_scheduled_appears_in_group_live(client: TestClient) -> None:
+    import time as _time
+    client.post(
+        "/api/queue",
+        json={"config_name": "good", "scheduled_at": _time.time() + 3600},
+    )
+    items = client.get("/api/queue?group=live").json()["items"]
+    assert [i["status"] for i in items] == ["scheduled"]
+
+
+def test_start_now_promotes_scheduled_to_pending(client: TestClient) -> None:
+    import time as _time
+    future = _time.time() + 3600
+    tid = client.post(
+        "/api/queue", json={"config_name": "good", "scheduled_at": future},
+    ).json()["id"]
+    resp = client.post(f"/api/queue/{tid}/start_now")
+    assert resp.status_code == 200
+    task = client.get(f"/api/queue/{tid}").json()
+    assert task["status"] == "pending"
+    # scheduled_at 保留作记录（原计划时间可追溯）
+    assert task["scheduled_at"] == pytest.approx(future)
+
+
+def test_start_now_rejects_non_scheduled(client: TestClient) -> None:
+    tid = client.post("/api/queue", json={"config_name": "good"}).json()["id"]
+    resp = client.post(f"/api/queue/{tid}/start_now")
+    assert resp.status_code == 409
+    missing = client.post("/api/queue/9999/start_now")
+    assert missing.status_code == 404
+
+
+def test_cancel_scheduled_task(client: TestClient) -> None:
+    import time as _time
+    tid = client.post(
+        "/api/queue",
+        json={"config_name": "good", "scheduled_at": _time.time() + 3600},
+    ).json()["id"]
+    resp = client.post(f"/api/queue/{tid}/cancel")
+    assert resp.status_code == 200
+    assert client.get(f"/api/queue/{tid}").json()["status"] == "canceled"
+
+
+def test_status_filter_accepts_scheduled(client: TestClient) -> None:
+    import time as _time
+    client.post(
+        "/api/queue",
+        json={"config_name": "good", "scheduled_at": _time.time() + 3600},
+    )
+    _seed("pending", name="p")
+    resp = client.get("/api/queue?status=scheduled")
+    assert resp.status_code == 200
+    assert [i["status"] for i in resp.json()["items"]] == ["scheduled"]
 
 
 def test_logs_missing_returns_empty(client: TestClient) -> None:

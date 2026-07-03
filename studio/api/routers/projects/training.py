@@ -44,6 +44,7 @@ from ...deps import _resolve_anima_model_paths
 from ...errors import _safe_join_or_400
 from ..logs import read_task_log
 from ...responses import _thumb_response
+from ...schemas.queue import ScheduleTrainingRequest
 from ...schemas.training import (
     BatchOp,
     CaptionEdit,
@@ -779,12 +780,17 @@ def save_version_config_as_preset_endpoint(
 
 
 @router.post("/api/projects/{pid}/versions/{vid}/queue")
-def enqueue_version_training(pid: int, vid: int) -> dict[str, Any]:
+def enqueue_version_training(
+    pid: int, vid: int, body: Optional[ScheduleTrainingRequest] = None,
+) -> dict[str, Any]:
     """PP6.3 — 把 version 入队训练。
 
     校验：
     - version 已配置训练参数（version_config 存在）
-    - 该 version 没有 active task（pending / running）
+    - 该 version 没有 active task（pending / running / scheduled）
+
+    0.17 P-B：body 带 scheduled_at（unix 秒）→ task 建成 scheduled，到点由
+    supervisor 提升为 pending；不带 body / 不带该字段 → 立即 pending（原行为）。
     """
     project, ver = _project_and_version_or_404(pid, vid)
     if not version_config.has_version_config(project, ver):
@@ -793,12 +799,13 @@ def enqueue_version_training(pid: int, vid: int) -> dict[str, Any]:
             code="version.config_missing", http_status=400,
         )
     cfg_path = version_config.version_config_path(project, ver)
+    scheduled_at = body.scheduled_at if body else None
 
     with db.connection_for() as conn:
         # 该 version 当前是否已有 active task
         active = conn.execute(
             "SELECT id, status FROM tasks "
-            "WHERE version_id = ? AND status IN ('pending', 'running') "
+            "WHERE version_id = ? AND status IN ('pending', 'running', 'scheduled') "
             "LIMIT 1",
             (vid,),
         ).fetchone()
@@ -815,14 +822,16 @@ def enqueue_version_training(pid: int, vid: int) -> dict[str, Any]:
         label = ver["label"]
         task_name = f"{slug}_{label}"
         config_name = ver["config_name"] or f"proj_{pid}_{label}"  # informational
+        status = "scheduled" if scheduled_at is not None else "pending"
         # ADR-0009 PR-1 C6: 同 db.create_task — 存 ContextVar trace_id
         from studio.infrastructure.logging import get_trace_id, new_trace_id
         req_tid = get_trace_id() or f"bg-{new_trace_id()}"
         cur = conn.execute(
             "INSERT INTO tasks(name, config_name, status, priority, created_at, "
-            "project_id, version_id, config_path, request_trace_id) "
-            "VALUES (?, ?, 'pending', 0, ?, ?, ?, ?, ?)",
-            (task_name, config_name, time.time(), pid, vid, str(cfg_path), req_tid),
+            "project_id, version_id, config_path, request_trace_id, scheduled_at) "
+            "VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?)",
+            (task_name, config_name, status, time.time(), pid, vid,
+             str(cfg_path), req_tid, scheduled_at),
         )
         tid = int(cur.lastrowid)
         conn.commit()
@@ -832,7 +841,7 @@ def enqueue_version_training(pid: int, vid: int) -> dict[str, Any]:
     bus.publish({
         "type": "task_state_changed",
         "task_id": tid,
-        "status": "pending",
+        "status": status,
     })
     return task or {}
 

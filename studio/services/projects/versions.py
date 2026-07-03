@@ -89,13 +89,16 @@ def derive_status_from_tasks(
 ) -> str:
     """按 ADR §11.3-C 派生 version.status：
 
-    - 有 active task（pending / running / paused）→ training
+    - 有 active task（pending / running / paused / scheduled）→ training
     - 无 active 看最近终态 task → completed / failed / canceled
     - 从未有 task → preparing
+
+    0.17 P-B：scheduled（计划任务，还没到点）与 pending 同等对待 —— 版本已被
+    该任务占用（enqueue 端点会 409），状态必须体现出来。
     """
     row = conn.execute(
         "SELECT 1 FROM tasks "
-        "WHERE version_id = ? AND status IN ('pending', 'running', 'paused') "
+        "WHERE version_id = ? AND status IN ('pending', 'running', 'paused', 'scheduled') "
         "LIMIT 1",
         (version_id,),
     ).fetchone()

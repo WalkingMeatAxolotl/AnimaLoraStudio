@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 199,
+  "count": 200,
   "routes": [
     {
       "path": "/",
@@ -1295,6 +1295,14 @@
         "GET"
       ],
       "name": "get_task_snapshot_config",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/queue/{task_id}/start_now",
+      "methods": [
+        "POST"
+      ],
+      "name": "start_scheduled_now",
       "type": "APIRoute"
     },
     {

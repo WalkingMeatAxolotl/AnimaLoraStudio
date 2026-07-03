@@ -331,3 +331,49 @@ def test_enqueue_rejects_active_task(client: TestClient, env) -> None:
     assert r1.status_code == 200
     r2 = client.post(f"/api/projects/{pid}/versions/{vid}/queue")
     assert r2.status_code == 409
+
+
+def test_enqueue_with_schedule_creates_scheduled_task(
+    client: TestClient, env
+) -> None:
+    """0.17 P-B：body 带 scheduled_at → task 建成 scheduled。"""
+    import time as _time
+    pid, vid = _make(client)
+    _seed_preset(env, "tpl")
+    client.post(
+        f"/api/projects/{pid}/versions/{vid}/config/from_preset",
+        json={"name": "tpl"},
+    )
+    future = _time.time() + 3600
+    r = client.post(
+        f"/api/projects/{pid}/versions/{vid}/queue",
+        json={"scheduled_at": future},
+    )
+    assert r.status_code == 200, r.text
+    task = r.json()
+    assert task["status"] == "scheduled"
+    assert task["scheduled_at"] == pytest.approx(future)
+    assert task["project_id"] == pid
+    assert task["config_path"] and task["config_path"].endswith("config.yaml")
+
+
+def test_enqueue_rejects_when_scheduled_active(client: TestClient, env) -> None:
+    """0.17 P-B：version 已有 scheduled task → 再入队（含定时）都 409。"""
+    import time as _time
+    pid, vid = _make(client)
+    _seed_preset(env, "tpl")
+    client.post(
+        f"/api/projects/{pid}/versions/{vid}/config/from_preset",
+        json={"name": "tpl"},
+    )
+    r1 = client.post(
+        f"/api/projects/{pid}/versions/{vid}/queue",
+        json={"scheduled_at": _time.time() + 3600},
+    )
+    assert r1.status_code == 200
+    assert client.post(f"/api/projects/{pid}/versions/{vid}/queue").status_code == 409
+    r3 = client.post(
+        f"/api/projects/{pid}/versions/{vid}/queue",
+        json={"scheduled_at": _time.time() + 7200},
+    )
+    assert r3.status_code == 409

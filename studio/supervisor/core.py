@@ -176,7 +176,7 @@ class Supervisor:
         return None
 
     def cancel(self, task_id: int) -> bool:
-        """取消 task：pending → status=canceled；running → 异步发信号立即返回。
+        """取消 task：pending/scheduled → status=canceled；running → 异步发信号立即返回。
 
         ADR 0006 PR-2：paused task 也可被取消，状态从 paused 直接改 canceled。
         ADR Addendum 2：恢复点文件保留（canceled 之后仍可 resume），只清
@@ -190,7 +190,7 @@ class Supervisor:
             task = db.get_task(conn, task_id)
             if not task:
                 return False
-            if task["status"] == "pending":
+            if task["status"] in ("pending", "scheduled"):
                 db.update_task(
                     conn, task_id, status="canceled", finished_at=time.time()
                 )
@@ -363,6 +363,11 @@ class Supervisor:
                 logger.info("orphan running jobs → failed: %d", n)
 
     def _tick(self) -> None:
+        # 0) 0.17 P-B：到点的 scheduled task 提升为 pending，让下面的 dispatch
+        #    看得见。不看 queue_held —— hold 语义是"停派活"，提升只是状态澄清，
+        #    提升后的 pending 照样被 hold 拦住。
+        self._promote_due_scheduled()
+
         # 1) 先收尸：所有 busy 槽位 poll 一遍，退出的走 _finish_slot
         for slot in self._slots:
             if not slot.busy:
@@ -383,6 +388,20 @@ class Supervisor:
 
         # 3) 派 generate task 给 daemon（独立资源，不占 _Slot）
         self._dispatch_generate()
+
+    def _promote_due_scheduled(self) -> None:
+        """0.17 P-B：scheduled_at 到点的 task → pending + publish 状态事件。"""
+        try:
+            with db.connection_for(self._db_path) as conn:
+                promoted = db.promote_due_scheduled(conn)
+        except Exception:
+            logger.exception("promote_due_scheduled failed")
+            return
+        for tid in promoted:
+            logger.info("scheduled task %d due → pending", tid)
+            self._on_event(
+                {"type": "task_state_changed", "task_id": tid, "status": "pending"}
+            )
 
     # ---- pending task 选择 ----------------------------------------------------
     def _next_pending_task_in(self, types: tuple[str, ...]) -> Optional[dict[str, Any]]:
