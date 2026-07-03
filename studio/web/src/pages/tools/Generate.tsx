@@ -752,8 +752,9 @@ export default function GeneratePage() {
         }
       />
 
-      {/* 三列各自独立滚动，整页固定高度 = viewport */}
-      <div className="p-6 flex gap-4 items-stretch flex-wrap xl:flex-nowrap flex-1 min-h-0">
+      {/* 三列各自独立滚动，整页固定高度 = viewport。max-w + mx-auto：超宽屏不过度拉伸
+          （否则 center 过宽 → 单图 object-contain 居中留白变大、右侧空一块）。 */}
+      <div className="p-6 flex gap-4 items-stretch flex-wrap xl:flex-nowrap flex-1 min-h-0 w-full max-w-[1760px] mx-auto">
 
           {/* 左：sidebar — 单卡片包裹；内容区独立 scroll，底部 footer 固定 tab + 生成按钮 */}
           <div className="card flex flex-col w-full xl:w-[420px] shrink-0 self-stretch min-h-0 overflow-hidden">

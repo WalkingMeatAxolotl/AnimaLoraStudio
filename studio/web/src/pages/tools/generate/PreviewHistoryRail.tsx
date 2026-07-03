@@ -78,7 +78,7 @@ export default function PreviewHistoryRail({
   return (
     <div
       className="card flex flex-col gap-1 self-stretch"
-      style={{ width: 120, padding: 18 }}
+      style={{ width: 110, padding: 8 }}
     >
       {onRefresh && (
         <button
@@ -110,8 +110,6 @@ export default function PreviewHistoryRail({
                     top: idx * ITEM_STRIDE,
                     left: 0,
                     right: 0,
-                    display: 'flex',
-                    justifyContent: 'center',
                   }}
                 >
                   {it.kind === 'done' ? (
@@ -134,7 +132,7 @@ function HistoryItem({ entry, onSelect }: { entry: HistoryEntry; onSelect: () =>
   return (
     <div
       className="relative rounded-sm border border-subtle hover:border-strong cursor-pointer overflow-hidden"
-      style={{ width: ITEM_SIZE, height: ITEM_SIZE, flexShrink: 0 }}
+      style={{ width: '100%', height: ITEM_SIZE, flexShrink: 0 }}
       onClick={onSelect}
       title={`${entryDisplayLabel(entry)} · ${new Date(entry.createdAt).toLocaleString()}`}
     >
@@ -160,7 +158,7 @@ function LiveItem({ task, onSelect, onCancel }: { task: Task; onSelect: () => vo
   return (
     <div
       className={`relative rounded-sm border overflow-hidden flex items-center justify-center ${running ? 'border-accent cursor-pointer' : 'border-subtle border-dashed'}`}
-      style={{ width: ITEM_SIZE, height: ITEM_SIZE, flexShrink: 0, background: 'var(--bg-overlay)' }}
+      style={{ width: '100%', height: ITEM_SIZE, flexShrink: 0, background: 'var(--bg-overlay)' }}
       onClick={running ? onSelect : undefined}
       title={`#${task.id} · ${running ? t('status.running') : t('status.queued')}`}
     >
