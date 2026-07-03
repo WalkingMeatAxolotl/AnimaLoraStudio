@@ -65,7 +65,6 @@ const DEFAULT_GENERATE_PREFS = {
   cfgScale: 4.0,
   samplerName: DEFAULT_SAMPLER as SamplerName,
   scheduler: DEFAULT_SCHEDULER as SchedulerName,
-  count: 1,
   seed: 0,
   // single / xy 的 LoRA 列表完全独立（用户决策 2026-05-29）：切 mode 互不影响。
   // compare 是 xy 的子视图，跟 xy 共用 xyLoras。
@@ -86,7 +85,7 @@ type GeneratePrefs = typeof DEFAULT_GENERATE_PREFS
  *    xyLoras；越界会让 submit 抛 axisLoraMissing）。
  */
 function normalizePrefs(p: GeneratePrefs): GeneratePrefs {
-  const anyP = p as Partial<GeneratePrefs> & { loras?: LoraEntry[] }
+  const anyP = p as Partial<GeneratePrefs> & { loras?: LoraEntry[]; count?: number }
   const legacy = Array.isArray(anyP.loras) ? anyP.loras : []
   const singleLoras = Array.isArray(anyP.singleLoras) ? anyP.singleLoras : legacy
   const xyLoras = Array.isArray(anyP.xyLoras) ? anyP.xyLoras : legacy
@@ -94,7 +93,7 @@ function normalizePrefs(p: GeneratePrefs): GeneratePrefs {
     if (!d || d.loraIndex == null || d.loraIndex < xyLoras.length) return d
     return { ...d, loraIndex: xyLoras.length > 0 ? 0 : null }
   }
-  const { loras: _legacy, ...rest } = anyP
+  const { loras: _legacy, count: _count, ...rest } = anyP  // count 已改瞬态，丢弃老持久值
   return {
     ...DEFAULT_GENERATE_PREFS,
     ...rest,
@@ -132,7 +131,7 @@ export default function GeneratePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const { mode, prompts, negPrompt, aspect, width, height, steps, cfgScale, samplerName, scheduler, count, seed, xDraft, yDraft, datasetPick } = prefs
+  const { mode, prompts, negPrompt, aspect, width, height, steps, cfgScale, samplerName, scheduler, seed, xDraft, yDraft, datasetPick } = prefs
   // LoRA 列表按 mode 完全独立：single 用 singleLoras，xy（含 compare 子视图）用
   // xyLoras。读写都按当前 mode 路由，切 mode 互不影响。
   const loras = mode === 'single' ? prefs.singleLoras : prefs.xyLoras
@@ -148,8 +147,10 @@ export default function GeneratePage() {
   const setCfgScale = (cfgScale: number) => setPrefs((p) => ({ ...p, cfgScale }))
   const setSamplerName = (samplerName: SamplerName) => setPrefs((p) => ({ ...p, samplerName }))
   const setScheduler = (scheduler: SchedulerName) => setPrefs((p) => ({ ...p, scheduler }))
-  const setCount = (count: number) => setPrefs((p) => ({ ...p, count }))
   const setSeed = (seed: number) => setPrefs((p) => ({ ...p, seed }))
+  // 0.17 P-I：batch size（每次入队 task 数）是**瞬态** UI 值——不进 prefs、不持久化、
+  // 不随点历史图回填（用户用 2 就一直 2）；刷新页面重置回 1。
+  const [batchSize, setBatchSize] = useState(1)
 
   // LoRA 预填 via URL query (?lora=<path>&projectId=N&versionId=N)
   // Overview StatusBanner "在测试中加载" CTA 跳进来时，URL 是显式 "测这条 LoRA"
@@ -508,9 +509,9 @@ export default function GeneratePage() {
         cfgScale: applied.cfgScale,
         samplerName: applied.samplerName,
         scheduler: applied.scheduler,
-        count: applied.count,
         seed: applied.seed,
         datasetPick: applied.datasetPick,
+        // 0.17 P-I：batch size 是瞬态值，点历史图**不回填**（用户设的值保持不变）。
       }
       if (applied.mode === 'single') {
         return { ...base, singleLoras: applied.loras }
@@ -622,7 +623,7 @@ export default function GeneratePage() {
       }
       // 0.17 P-I：count 现在 = **batch size**（每次入队的 task 数）。single 拆成 batch 个
       // task（各出 1 张、seed 递增区分）→ 在右栏时间线逐个排队；xy 一次一个矩阵（batch 忽略）。
-      const batch = mode === 'xy' ? 1 : Math.max(1, count)
+      const batch = mode === 'xy' ? 1 : Math.max(1, batchSize)
       let firstId: number | null = null
       for (let i = 0; i < batch; i++) {
         const taskSeed = seed + i
@@ -959,8 +960,8 @@ export default function GeneratePage() {
                     className="input shrink-0"
                     style={{ width: 64, textAlign: 'center' }}
                     min={1} max={32}
-                    value={count}
-                    onChange={(e) => setCount(Number(e.target.value))}
+                    value={batchSize}
+                    onChange={(e) => setBatchSize(Number(e.target.value))}
                     title={t('generate.batchSizeTitle')}
                     aria-label={t('generate.batchSizeTitle')}
                   />
@@ -988,9 +989,21 @@ export default function GeneratePage() {
                 <ViewModeTabs mode={mode} onModeChange={setMode} />
               </div>
 
-              {/* 0.17 P-I：排队中的项已并入右栏时间线（live 占位 + 取消），不再单列。 */}
-              <GenerateProgressBar busy={busy} progress={progress} />
-
+              {/* 0.17 P-I：排队中的项已并入右栏时间线（live 占位 + 取消），不再单列。
+                  进度条学 ComfyUI 悬浮在 header 下方固定位（absolute overlay）：不挤压预览、
+                  不抖动；切历史图回看时也照常显示「正在跑那张」的进度。pointer-events-none
+                  让底下 xy 格子仍可点。 */}
+              <div className="relative flex-1 flex flex-col min-h-0">
+                {(busy || progress.currentStep != null) && (
+                  <div className="absolute top-0 inset-x-0 z-10 pointer-events-none">
+                    <div
+                      className="rounded-md px-3 py-2"
+                      style={{ background: 'var(--bg-overlay)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--sh-md)' }}
+                    >
+                      <GenerateProgressBar busy={busy} progress={progress} />
+                    </div>
+                  </div>
+                )}
               {historyOverride ? (
                 <div className="flex-1 min-h-0 flex flex-col gap-2">
                   {historyOverride.mode === 'xy' && historyOverride.xyMeta ? (
@@ -1093,6 +1106,7 @@ export default function GeneratePage() {
               ) : (
                 <SampleGallery samples={samples} taskId={currentTask.id} />
               )}
+              </div>{/* /预览区 relative wrapper */}
             </div>
           </div>
 

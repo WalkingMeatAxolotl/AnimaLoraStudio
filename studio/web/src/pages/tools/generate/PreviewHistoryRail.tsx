@@ -78,7 +78,7 @@ export default function PreviewHistoryRail({
   return (
     <div
       className="card flex flex-col gap-1 self-stretch"
-      style={{ width: 100, padding: 8 }}
+      style={{ width: 120, padding: 18 }}
     >
       {onRefresh && (
         <button

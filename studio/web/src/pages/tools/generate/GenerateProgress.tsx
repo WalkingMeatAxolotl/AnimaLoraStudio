@@ -54,7 +54,7 @@ export default function GenerateProgressBar({
   }
 
   return (
-    <div className="flex flex-col gap-1.5" style={{ marginBottom: 12 }}>
+    <div className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between text-xs">
         <span className="text-fg-secondary font-mono">{phase}</span>
         {showBatch && (
