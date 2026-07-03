@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import {
-  api, type QueueHistoryPage, type QueueHoldState, type Task, type TaskStatus,
+  api, type JobKind, type QueueHistoryPage, type QueueHoldState, type Task,
+  type TaskStatus,
 } from '../api/client'
 import { HoldQueueModal, type HoldDecision } from '../components/HoldQueueModal'
 import { PauseConfirmModal } from '../components/PauseConfirmModal'
@@ -408,9 +409,13 @@ export default function QueuePage() {
     useLocalStorageState('studio:queue:pageSize', HISTORY_PAGE_SIZES[0])
   // 过滤行折叠（与项目页一致：默认收起，header 漏斗按钮开关，收起且有筛选时带小圆点）。
   const [filtersOpen, setFiltersOpen] = useState(false)
-  // 0.17 P-G — 顶层 tab：任务队列（tasks 表）/ 数据作业（project_jobs 只读区）。
+  // 0.17 P-G — 数据作业视图开关（header toggle，对齐项目页「已归档」模式）+
+  // kind 过滤（漏斗下发给 DataJobsPanel）+ 刷新令牌。
   const [queueTab, setQueueTab] =
     useLocalStorageState<'tasks' | 'jobs'>('studio:queue:tab', 'tasks')
+  const [jobsKind, setJobsKind] =
+    useLocalStorageState<JobKind | null>('studio:queue:jobsKind', null)
+  const [jobsRefreshToken, setJobsRefreshToken] = useState(0)
   const reloadTimer = useRef<number | null>(null)
   const { toast } = useToast()
   const { confirm } = useDialog()
@@ -726,7 +731,41 @@ export default function QueuePage() {
       title={t('queue.title')}
       subtitle={t('queue.description')}
       actions={
-        queueTab === 'tasks' && <>
+        <>
+          {/* 0.17 P-G — 数据作业视图开关（对齐项目页「已归档」toggle 模式）。 */}
+          <button
+            className={`btn btn-sm ${queueTab === 'jobs' ? 'btn-secondary' : 'btn-ghost'}`}
+            onClick={() => setQueueTab(queueTab === 'jobs' ? 'tasks' : 'jobs')}
+            aria-pressed={queueTab === 'jobs'}
+            data-testid="queue-jobs-toggle"
+          >
+            {t('queue.tabJobs')}
+          </button>
+          {queueTab === 'jobs' && <>
+            {/* 数据作业视图：漏斗（kind 过滤）+ 刷新，与任务视图同位交互。 */}
+            <button
+              className={`btn btn-sm ${filtersOpen ? 'btn-secondary' : 'btn-ghost'}`}
+              onClick={() => setFiltersOpen((o) => !o)}
+              aria-expanded={filtersOpen}
+              aria-label={t('queue.filters')}
+              title={t('queue.filters')}
+              data-testid="queue-filter-toggle"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 4h18l-7 8v6l-4 2v-8L3 4z" />
+              </svg>
+              {!filtersOpen && jobsKind !== null && (
+                <span className="dot dot-running" aria-label={t('queue.filtersActive')} />
+              )}
+            </button>
+            <button
+              onClick={() => setJobsRefreshToken((n) => n + 1)}
+              className="btn btn-ghost btn-sm"
+            >
+              {t('common.refresh')}
+            </button>
+          </>}
+          {queueTab === 'tasks' && <>
           {/* 过滤漏斗：折叠态不占行，开关过滤行；有筛选生效且收起时带小圆点（与项目页一致）。 */}
           <button
             className={`btn btn-sm ${filtersOpen ? 'btn-secondary' : 'btn-ghost'}`}
@@ -817,9 +856,36 @@ export default function QueuePage() {
             className="btn btn-ghost btn-sm"
           >{t('common.import')}</button>
           <button onClick={() => void reload()} className="btn btn-ghost btn-sm">{t('common.refresh')}</button>
+          </>}
         </>
       }
-      belowHeader={queueTab === 'tasks' && filtersOpen && (
+      belowHeader={filtersOpen && (queueTab === 'jobs' ? (
+        // 0.17 P-G — 数据作业过滤行：kind 单选（与任务视图的过滤行同位）。
+        <div
+          className="px-6 py-2 border-b border-subtle flex items-center gap-3"
+          data-testid="queue-jobs-filterbar"
+        >
+          <span className="flex-1" />
+          <select
+            className="input"
+            style={{ width: '15%', minWidth: 150 }}
+            value={jobsKind ?? 'all'}
+            onChange={(e) => {
+              const v = e.target.value
+              setJobsKind(v === 'all' ? null : (v as JobKind))
+            }}
+            aria-label={t('queue.typeFilterLabel')}
+            data-testid="jobs-kind-filter"
+          >
+            <option value="all">{t('queue.filterAll')}</option>
+            {(['download', 'preprocess', 'tag', 'reg_build',
+              'eval_samples', 'eval_clip', 'eval_dino', 'eval_tag', 'eval_ccip',
+            ] as JobKind[]).map((k) => (
+              <option key={k} value={k}>{t(`queue.jobs.kind.${k}`)}</option>
+            ))}
+          </select>
+        </div>
+      ) : (
         // 0.17 P-C/P-F 过滤行 —— 与项目页 FilterBar 一致：header 下全宽条。搜索 60%
         // 下沉后端搜 name/config；类型 select 跨 live+history 按 task_type 过滤；状态
         // select 是历史段终态子过滤。
@@ -872,31 +938,11 @@ export default function QueuePage() {
             <option value="canceled">{t('status.canceled')}</option>
           </select>
         </div>
-      )}
+      ))}
     >
       <div className="flex flex-col gap-2.5 flex-1 min-h-0 overflow-y-auto">
-        {/* 0.17 P-G — 顶层 tab：任务队列 / 数据作业（只读区）。 */}
-        <div className="flex items-center gap-1 shrink-0">
-          <button
-            className={`btn btn-sm ${queueTab === 'tasks' ? 'btn-secondary' : 'btn-ghost'}`}
-            onClick={() => setQueueTab('tasks')}
-            aria-pressed={queueTab === 'tasks'}
-            data-testid="queue-tab-tasks"
-          >
-            {t('queue.tabTasks')}
-          </button>
-          <button
-            className={`btn btn-sm ${queueTab === 'jobs' ? 'btn-secondary' : 'btn-ghost'}`}
-            onClick={() => setQueueTab('jobs')}
-            aria-pressed={queueTab === 'jobs'}
-            data-testid="queue-tab-jobs"
-          >
-            {t('queue.tabJobs')}
-          </button>
-        </div>
-
         {/* ADR §4.1 队列挂起 banner — 仅 held=true 时显示，sticky 顶部。
-            hold 覆盖全队列（含数据作业派发），两个 tab 都显示。 */}
+            hold 覆盖全队列（含数据作业派发），两个视图都显示。 */}
         {holdState?.held && (
           <div
             className="sticky top-0 z-10 px-3.5 py-2.5 rounded-md bg-warn-soft border border-warn text-warn text-xs flex items-center justify-between"
@@ -918,8 +964,8 @@ export default function QueuePage() {
         )}
 
         {queueTab === 'jobs' ? (
-          /* 0.17 P-G — 数据作业只读区（project_jobs），独立数据源/过滤/分页。 */
-          <DataJobsPanel />
+          /* 0.17 P-G — 数据作业只读区（project_jobs）。kind 过滤/刷新由 header 下发。 */
+          <DataJobsPanel kind={jobsKind} refreshToken={jobsRefreshToken} />
         ) : !loaded ? (
           <div className="rounded-lg border border-subtle bg-surface overflow-hidden">
             {Array.from({ length: 3 }).map((_, i) => (

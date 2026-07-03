@@ -854,6 +854,8 @@ export interface Job {
   params: string
   params_decoded?: Record<string, unknown> | null
   status: JobStatus
+  /** v16 — 入队时间；老作业 NULL（入队时刻未记录，UI 显示 —）。 */
+  created_at?: number | null
   started_at: number | null
   finished_at: number | null
   pid: number | null

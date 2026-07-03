@@ -85,6 +85,17 @@ def test_params_decoded_present(client: TestClient) -> None:
     assert items[0]["params_decoded"] == {"n": 1}
 
 
+def test_created_at_written_on_create(client: TestClient) -> None:
+    """v16 — 新作业 create_job 时写入队时间。"""
+    import time as _time
+    pid = _make_project(client)
+    before = _time.time()
+    _seed_job(pid, "tag", "pending")
+    items = client.get("/api/jobs?group=live").json()["items"]
+    assert items[0]["created_at"] is not None
+    assert before - 1 <= items[0]["created_at"] <= _time.time() + 1
+
+
 def test_invalid_group_and_kind_400(client: TestClient) -> None:
     assert client.get("/api/jobs?group=banana").status_code == 400
     assert client.get("/api/jobs?group=live&kind=banana").status_code == 400

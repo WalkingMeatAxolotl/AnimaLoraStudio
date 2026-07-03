@@ -78,9 +78,9 @@ def create_job(
     if kind not in VALID_KINDS:
         raise JobError(f"非法 kind: {kind!r}")
     cur = conn.execute(
-        "INSERT INTO project_jobs(project_id, version_id, kind, params, status) "
-        "VALUES (?, ?, ?, ?, 'pending')",
-        (project_id, version_id, kind, json.dumps(params)),
+        "INSERT INTO project_jobs(project_id, version_id, kind, params, status, created_at) "
+        "VALUES (?, ?, ?, ?, 'pending', ?)",
+        (project_id, version_id, kind, json.dumps(params), time.time()),
     )
     conn.commit()
     jid = int(cur.lastrowid)
