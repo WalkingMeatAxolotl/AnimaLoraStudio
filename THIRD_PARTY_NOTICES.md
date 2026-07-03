@@ -149,6 +149,20 @@
   `precond_in_state=False` 把可重算的 GG/Q 剔出 state_dict 保持 ckpt 小 + resume
   冷重建。原文件头 MIT license block 已贴在 `utils/soap_optimizer.py` 顶部，请勿删除。
 
+### yangluo7 / CAME — CAME optimizer (MIT)
+
+- **来源**：[`yangluo7/CAME`](https://github.com/yangluo7/CAME) — Yang Luo
+- **论文**：Luo et al. 2023, *CAME: Confidence-guided Adaptive Memory Efficient Optimization*,
+  [arXiv:2307.02047](https://arxiv.org/abs/2307.02047)（ACL 2023 Outstanding Paper）
+- **许可**：MIT — Copyright (c) 2023 Yang Luo
+- **涉及文件**：
+  - `utils/optimizer_utils.py` `class CAME` / `create_came` — Adafactor 式分解二阶矩
+    + 置信度引导（instability EMA）update，step 公式派生自官方实现
+  - `runtime/training/optimizers/came.py` — registry 接线（本仓库代码）
+- **修改点**：optimizer state 固定 fp32（bf16 LoRA/LoKr 训练数值稳定，同 SOAP）；
+  bf16/fp16 参数写回走 stochastic rounding（`_copy_stochastic`）；`load_state_dict`
+  后恢复 fp32 state（resume fixup）。算法公式未改动。
+
 ### facebookresearch / schedule-free — Schedule-Free 机制 (Apache-2.0, research attribution)
 
 - **来源**：[`facebookresearch/schedule-free`](https://github.com/facebookresearch/schedule-free)

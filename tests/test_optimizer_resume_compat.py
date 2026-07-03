@@ -1,4 +1,4 @@
-"""Automagic v1/v2 + Lion 断点续训兼容性测试。
+"""Automagic v1/v2 + Lion + CAME 断点续训兼容性测试。
 
 走真实 save_training_state → load_training_state 链路（torch.save/load 序列化），
 覆盖三类优化器各自的 resume 风险点：
@@ -9,6 +9,8 @@
 - Automagic v2：scalar lr / 二阶矩在 load fixup 后恢复 fp32（PyTorch 在 bf16
   param 下会把它们降成 bf16）；fused backward hook 在 resume 后继续工作。
 - Lion：标准 PyTorch state（exp_avg），无自定义钩子，验证数值保留 + 续步可跑。
+- CAME：factored state（行/列二阶矩 + instability）数值保留；bf16 param 下
+  load fixup 恢复 fp32 state（PyTorch load 会 cast 到 param dtype）。
 
 注意：pause snapshot freeze（bootstrap）保证 UI 路径下 resume 不会换 optimizer
 类型 / variant；跨 variant 手动 resume（CLI 改 yaml）不在支持范围，v2 加载 v1
@@ -23,7 +25,7 @@ import pytest
 import torch
 from torch import nn
 
-from utils.optimizer_utils import Automagic, Automagic2, Lion
+from utils.optimizer_utils import CAME, Automagic, Automagic2, Lion
 
 
 class _StubInjector:
@@ -202,5 +204,67 @@ def test_lion_resume_roundtrip(tmp_path: Path) -> None:
     assert optim2.param_groups[0]["lr"] == 1e-5
     # 续步可跑
     model2(torch.randn(2, 8)).sum().backward()
+    optim2.step()
+    assert torch.isfinite(p2).all()
+
+
+# ---------------------------------------------------------------------------
+# CAME
+# ---------------------------------------------------------------------------
+
+
+def test_came_resume_roundtrip_fp32(tmp_path: Path) -> None:
+    torch.manual_seed(0)
+    model = nn.Linear(8, 8, bias=False)
+    optim = CAME(model.parameters(), lr=1e-3)
+    for _ in range(3):
+        model(torch.randn(2, 8)).sum().backward()
+        optim.step()
+        optim.zero_grad()
+    p1 = next(iter(model.parameters()))
+    st1 = optim.state[p1]
+    row_before = st1["exp_avg_sq_row"].clone()
+    res_row_before = st1["exp_avg_res_row"].clone()
+    exp_avg_before = st1["exp_avg"].clone()
+
+    optim2, model2 = _roundtrip(
+        tmp_path, optim,
+        lambda: nn.Linear(8, 8, bias=False),
+        lambda m: CAME(m.parameters(), lr=1e-3),
+    )
+    p2 = next(iter(model2.parameters()))
+    st2 = optim2.state[p2]
+    assert torch.allclose(st2["exp_avg"], exp_avg_before)
+    assert torch.allclose(st2["exp_avg_sq_row"], row_before)
+    assert torch.allclose(st2["exp_avg_res_row"], res_row_before)
+    assert st2["step"] == 3
+    # 续步可跑
+    model2(torch.randn(2, 8)).sum().backward()
+    optim2.step()
+    assert torch.isfinite(p2).all()
+
+
+def test_came_resume_bf16_state_restored_fp32(tmp_path: Path) -> None:
+    """bf16 param 下 PyTorch load 会把 fp32 state 降成 bf16，
+    CAME.load_state_dict fixup 必须恢复 fp32。"""
+    torch.manual_seed(0)
+    model = nn.Linear(8, 8, bias=False).to(torch.bfloat16)
+    optim = CAME(model.parameters(), lr=1e-3)
+    model(torch.randn(2, 8, dtype=torch.bfloat16)).sum().backward()
+    optim.step()
+    optim.zero_grad()
+
+    optim2, model2 = _roundtrip(
+        tmp_path, optim,
+        lambda: nn.Linear(8, 8, bias=False).to(torch.bfloat16),
+        lambda m: CAME(m.parameters(), lr=1e-3),
+    )
+    p2 = next(iter(model2.parameters()))
+    st = optim2.state[p2]
+    for key in ("exp_avg", "exp_avg_sq_row", "exp_avg_sq_col",
+                "exp_avg_res_row", "exp_avg_res_col"):
+        assert st[key].dtype == torch.float32, f"{key} 应在 resume 后恢复 fp32"
+    # 续步 stochastic rounding 写回可跑
+    model2(torch.randn(2, 8, dtype=torch.bfloat16)).sum().backward()
     optim2.step()
     assert torch.isfinite(p2).all()

@@ -18,11 +18,13 @@ import torch
 from torch import nn
 
 from utils.optimizer_utils import (
+    CAME,
     Automagic,
     Automagic2,
     Lion,
     create_automagic,
     create_automagic_v2,
+    create_came,
     create_optimizer,
     create_prodigy_plus_schedulefree,
     get_optimizer_monitor_metrics,
@@ -265,6 +267,138 @@ def test_automagic_state_dict_roundtrip() -> None:
         assert "lr_mask" in s2
         assert torch.equal(s1["lr_mask"].quantized, s2["lr_mask"].quantized)
         assert s1["lr_mask"].scale == s2["lr_mask"].scale
+
+
+# ---------------------------------------------------------------------------
+# CAME
+# ---------------------------------------------------------------------------
+
+
+def _came_reference_step(
+    p: torch.Tensor,
+    grad: torch.Tensor,
+    lr: float,
+    betas: tuple[float, float, float],
+    eps: tuple[float, float],
+    clip_threshold: float,
+) -> torch.Tensor:
+    """按官方实现（yangluo7/CAME, Algorithm 1）独立重算首步后的参数值。
+
+    首步（所有 EMA state 从 0 起）的 factored 路径，用于 codify 公式防回归
+    （AGENTS.md §0.4：外部论文实现先 verify 再用单测钉死）。
+    """
+    beta1, beta2, beta3 = betas
+    eps1, eps2 = eps
+
+    def rms(t: torch.Tensor) -> torch.Tensor:
+        return t.norm(2) / (t.numel() ** 0.5)
+
+    def approx(row: torch.Tensor, col: torch.Tensor) -> torch.Tensor:
+        r = (row / row.mean(dim=-1, keepdim=True)).rsqrt().unsqueeze(-1)
+        c = col.unsqueeze(-2).rsqrt()
+        return r * c
+
+    sq = grad**2 + eps1
+    row = (1.0 - beta2) * sq.mean(dim=-1)
+    col = (1.0 - beta2) * sq.mean(dim=-2)
+    update = approx(row, col) * grad
+    update = update / torch.clamp(rms(update) / clip_threshold, min=1.0)
+    exp_avg = (1.0 - beta1) * update
+    res = (update - exp_avg) ** 2 + eps2
+    res_row = (1.0 - beta3) * res.mean(dim=-1)
+    res_col = (1.0 - beta3) * res.mean(dim=-2)
+    final = approx(res_row, res_col) * exp_avg
+    return p - lr * final
+
+
+def test_came_first_step_matches_reference_formula() -> None:
+    """CAME 首步（factored 2D 参数）与按论文/官方实现独立重算的结果一致。"""
+    torch.manual_seed(3)
+    lr, betas, eps, clip = 1e-2, (0.9, 0.999, 0.9999), (1e-30, 1e-16), 1.0
+
+    p = nn.Parameter(torch.randn(6, 4))
+    grad = torch.randn(6, 4)
+    expected = _came_reference_step(p.detach(), grad, lr, betas, eps, clip)
+
+    optim = CAME([p], lr=lr, betas=betas, eps=eps, clip_threshold=clip)
+    p.grad = grad.clone()
+    optim.step()
+
+    assert torch.allclose(p.detach(), expected, atol=1e-7), (
+        f"CAME 首步与 reference 公式不一致：max diff = "
+        f"{(p.detach() - expected).abs().max().item():.3e}"
+    )
+
+
+def test_came_factored_state_keys() -> None:
+    """2D 参数走 factored 路径（行/列二阶矩 + 行/列 instability），1D 用完整二阶矩。"""
+    mat = nn.Parameter(torch.randn(4, 3))
+    vec = nn.Parameter(torch.randn(5))
+    optim = CAME([mat, vec], lr=1e-3)
+    mat.grad = torch.randn_like(mat)
+    vec.grad = torch.randn_like(vec)
+    optim.step()
+
+    st_mat = optim.state[mat]
+    assert {"exp_avg", "exp_avg_sq_row", "exp_avg_sq_col",
+            "exp_avg_res_row", "exp_avg_res_col"} <= set(st_mat)
+    assert "exp_avg_sq" not in st_mat
+    assert st_mat["exp_avg_sq_row"].shape == (4,)
+    assert st_mat["exp_avg_sq_col"].shape == (3,)
+
+    st_vec = optim.state[vec]
+    assert "exp_avg_sq" in st_vec
+    assert "exp_avg_sq_row" not in st_vec
+
+
+def test_came_bf16_param_state_fp32_and_finite() -> None:
+    """bf16 参数下 state 固定 fp32（EMA 增量不被 bf16 round 吞掉），写回有限。"""
+    p = nn.Parameter(torch.randn(8, 8, dtype=torch.bfloat16))
+    optim = CAME([p], lr=1e-3)
+    p.grad = torch.randn_like(p)
+    optim.step()
+
+    st = optim.state[p]
+    for key in ("exp_avg", "exp_avg_sq_row", "exp_avg_sq_col",
+                "exp_avg_res_row", "exp_avg_res_col"):
+        assert st[key].dtype == torch.float32, f"{key} 应为 fp32"
+    assert torch.isfinite(p).all()
+
+
+def test_create_came_backfills_beta3_and_eps_pair() -> None:
+    """上层 create_optimizer 默认传 Adam 风格 betas 2 元组 / 标量 eps 时，
+    工厂补论文默认 β3=0.9999 / eps=(1e-30, 1e-16)。"""
+    model = nn.Linear(4, 4)
+    optim = create_optimizer("came", model.parameters(), learning_rate=1e-4)
+    assert isinstance(optim, CAME)
+    assert optim.param_groups[0]["betas"] == (0.9, 0.999, 0.9999)
+    assert optim.param_groups[0]["eps"] == (1e-30, 1e-16)
+
+    # 显式传 3 元组 / eps 对则尊重
+    model2 = nn.Linear(4, 4)
+    optim2 = create_came(
+        model2.parameters(), lr=1e-4, betas=(0.8, 0.99, 0.999), eps=(1e-20, 1e-12),
+    )
+    assert optim2.param_groups[0]["betas"] == (0.8, 0.99, 0.999)
+    assert optim2.param_groups[0]["eps"] == (1e-20, 1e-12)
+
+
+def test_came_rejects_invalid_hyperparams() -> None:
+    model = nn.Linear(2, 2)
+    with pytest.raises(ValueError, match="Invalid betas"):
+        CAME(model.parameters(), lr=1e-4, betas=(0.9, 1.5, 0.9999))
+    with pytest.raises(ValueError, match="Invalid learning rate"):
+        CAME(model.parameters(), lr=0.0)
+
+
+def test_came_weight_decay_shrinks_params() -> None:
+    """weight_decay 是解耦 L2：零梯度下参数按 (1 - wd*lr) 收缩。"""
+    p = nn.Parameter(torch.ones(4, 4))
+    optim = CAME([p], lr=1e-2, weight_decay=0.1)
+    p.grad = torch.zeros_like(p)
+    optim.step()
+    # grad=0 → update 全 0，只剩 weight decay 项：p ← p - wd*lr*p
+    assert torch.allclose(p.detach(), torch.full((4, 4), 1.0 - 0.1 * 1e-2))
 
 
 def test_create_lion_optimizer_updates_parameters() -> None:

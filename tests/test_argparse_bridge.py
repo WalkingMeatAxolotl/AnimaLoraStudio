@@ -220,6 +220,23 @@ def test_training_config_cli_lion() -> None:
     assert ns.lion_beta2 == 0.98
 
 
+def test_training_config_cli_came() -> None:
+    parser = bridge.build_parser(TrainingConfig)
+    ns = parser.parse_args([
+        "--optimizer-type", "came",
+        "--came-beta1", "0.85",
+        "--came-beta3", "0.9995",
+        "--came-eps2", "1e-15",
+        "--came-clip-threshold", "0.8",
+    ])
+    assert ns.optimizer_type == "came"
+    assert ns.came_beta1 == 0.85
+    assert ns.came_beta2 == 0.999  # 默认值
+    assert ns.came_beta3 == 0.9995
+    assert ns.came_eps2 == 1e-15
+    assert ns.came_clip_threshold == 0.8
+
+
 def test_training_config_cli_automagic() -> None:
     parser = bridge.build_parser(TrainingConfig)
     ns = parser.parse_args([

@@ -279,9 +279,9 @@ class TrainingConfig(BaseModel):
         description="cosine_with_warmup 预热步数",
         json_schema_extra=_meta("training", show_when="lr_scheduler==cosine_with_warmup", advanced=True),
     )
-    optimizer_type: Literal["adamw", "automagic", "lion", "prodigy", "prodigy_plus_schedulefree", "soap", "soap_sf"] = Field(
+    optimizer_type: Literal["adamw", "automagic", "came", "lion", "prodigy", "prodigy_plus_schedulefree", "soap", "soap_sf"] = Field(
         "adamw",
-        description="优化器。adamw 标准基线；automagic 自适应每参数 lr（推荐 lr=1e-6）；lion 显存约 AdamW 一半（推荐 lr=AdamW lr / 3）；prodigy / prodigy_plus_schedulefree 自适应估 lr（lr 填 1.0）；soap Adam-in-Shampoo-eigenbasis 二阶预条件（拟合更快，lr 同 AdamW 量级）；soap_sf SOAP + Schedule-Free（lr_scheduler 固定 none）",
+        description="优化器。adamw 标准基线；automagic 自适应每参数 lr（推荐 lr=1e-6）；came 置信度引导 + 分解二阶矩（state 显存低于 AdamW，lr 同 AdamW 量级）；lion 显存约 AdamW 一半（推荐 lr=AdamW lr / 3）；prodigy / prodigy_plus_schedulefree 自适应估 lr（lr 填 1.0）；soap Adam-in-Shampoo-eigenbasis 二阶预条件（拟合更快，lr 同 AdamW 量级）；soap_sf SOAP + Schedule-Free（lr_scheduler 固定 none）",
         json_schema_extra=_meta("training"),
     )
     prodigy_d_coef: float = Field(
@@ -293,6 +293,39 @@ class TrainingConfig(BaseModel):
         True,
         description="Prodigy warmup 期间防止 d 被初期高梯度推高；默认开启更稳",
         json_schema_extra=_meta("training", show_when="optimizer_type==prodigy", advanced=True),
+    )
+    # ---------------------------- CAME 专属字段 ----------------------------
+    # CAME = Confidence-guided Adaptive Memory Efficient（Luo et al. 2023,
+    # arxiv 2307.02047）。lr 用 AdamW 量级真实值，可配常规 lr_scheduler。
+    came_beta1: float = Field(
+        0.9, ge=0.0, le=1.0,
+        description="CAME β1（update 动量 EMA 衰减）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==came", advanced=True),
+    )
+    came_beta2: float = Field(
+        0.999, ge=0.0, le=1.0,
+        description="CAME β2（分解二阶矩 EMA 衰减）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==came", advanced=True),
+    )
+    came_beta3: float = Field(
+        0.9999, ge=0.0, le=1.0,
+        description="CAME β3（置信度 instability EMA 衰减；越大置信度估计越平滑）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==came", advanced=True),
+    )
+    came_eps1: float = Field(
+        1e-30, ge=0.0,
+        description="CAME eps1（二阶矩正则项，防除零）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==came", advanced=True),
+    )
+    came_eps2: float = Field(
+        1e-16, ge=0.0,
+        description="CAME eps2（instability 正则项；越大置信度加权越接近关闭）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==came", advanced=True),
+    )
+    came_clip_threshold: float = Field(
+        1.0, gt=0.0,
+        description="CAME update RMS 裁剪阈值（同 Adafactor 的 d）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==came", advanced=True),
     )
     lion_beta1: float = Field(
         0.9, ge=0.0, lt=1.0,

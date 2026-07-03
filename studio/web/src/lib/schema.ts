@@ -121,6 +121,7 @@ export const SCHEMA_ENUM_LABEL_KEYS: Record<string, Record<string, string>> = {
   optimizer_type: {
     adamw: 'schema.enums.optimizerType.adamw',
     automagic: 'schema.enums.optimizerType.automagic',
+    came: 'schema.enums.optimizerType.came',
     lion: 'schema.enums.optimizerType.lion',
     prodigy: 'schema.enums.optimizerType.prodigy',
     prodigy_plus_schedulefree: 'schema.enums.optimizerType.prodigyPlusSchedulefree',
