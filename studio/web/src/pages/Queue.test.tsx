@@ -217,6 +217,38 @@ describe('QueuePage 分区 + 分页', () => {
     await waitFor(() => expect(startSpy).toHaveBeenCalledWith(21))
   })
 
+  it('右上角「数据作业」toggle → 切换只读区，漏斗变 kind 过滤（P-G）', async () => {
+    vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
+    vi.spyOn(api, 'listQueueLive').mockResolvedValue([
+      makeTask({ id: 10, name: 'run', status: 'running', started_at: 1000 }),
+    ])
+    vi.spyOn(api, 'listQueueHistory').mockResolvedValue({
+      items: [], total: 0, page: 1, page_size: 20,
+    })
+    vi.spyOn(api, 'listJobsLive').mockResolvedValue([])
+    vi.spyOn(api, 'listJobsHistory').mockResolvedValue({
+      items: [], total: 0, page: 1, page_size: 20,
+    })
+    vi.spyOn(api, 'listProjects').mockResolvedValue([])
+
+    renderQueue()
+    await waitFor(() => expect(screen.getByText(/进行中/)).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('queue-jobs-toggle'))
+    await waitFor(() => expect(screen.getByTestId('data-jobs-panel')).toBeInTheDocument())
+    // 任务分区没了；漏斗还在（数据作业视图的 kind 过滤），点开出 kind select
+    expect(screen.queryByText(/等待入队/)).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('queue-filter-toggle'))
+    expect(screen.getByTestId('jobs-kind-filter')).toBeInTheDocument()
+    expect(screen.getByTestId('jobs-search')).toBeInTheDocument()
+    // 任务视图专属的搜索框不在
+    expect(screen.queryByTestId('queue-search')).not.toBeInTheDocument()
+
+    // 再点 toggle 切回任务视图
+    fireEvent.click(screen.getByTestId('queue-jobs-toggle'))
+    await waitFor(() => expect(screen.getByText(/进行中/)).toBeInTheDocument())
+  })
+
   it('过滤行默认收起，点漏斗才显示搜索框（与项目页一致）', async () => {
     vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
     vi.spyOn(api, 'listQueueLive').mockResolvedValue([

@@ -30,6 +30,7 @@ from ._v12_project_archived import migrate as _migrate_v12
 from ._v13_last_state import migrate as _migrate_v13
 from ._v14_generate_meta import migrate as _migrate_v14
 from ._v15_scheduled_at import migrate as _migrate_v15
+from ._v16_job_created_at import migrate as _migrate_v16
 
 Migration = Callable[[sqlite3.Connection], None]
 
@@ -49,6 +50,7 @@ MIGRATIONS: list[Migration] = [
     _migrate_v13, # v13: tasks.last_state_* 列（ADR 0006 Addendum 2 terminal-resume）
     _migrate_v14, # v14: tasks.generate_params / generate_cover（0.17 P-I forward-write，前端暂不读）
     _migrate_v15, # v15: tasks.scheduled_at（0.17 P-B 计划任务，配套新 scheduled 状态）
+    _migrate_v16, # v16: project_jobs.created_at（0.17 P-G 数据作业详情页入队时间）
 ]
 
 

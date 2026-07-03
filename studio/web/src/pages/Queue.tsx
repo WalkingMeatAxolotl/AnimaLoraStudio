@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import {
-  api, type QueueHistoryPage, type QueueHoldState, type Task, type TaskStatus,
+  api, type JobKind, type QueueHistoryPage, type QueueHoldState, type Task,
+  type TaskStatus,
 } from '../api/client'
 import { HoldQueueModal, type HoldDecision } from '../components/HoldQueueModal'
 import { PauseConfirmModal } from '../components/PauseConfirmModal'
@@ -14,20 +15,7 @@ import { useEventStream } from '../lib/useEventStream'
 import { useMonitorProgress } from '../lib/useMonitorProgress'
 import { useEvaluatingTasks, type EvalProgress } from '../lib/useEvalProgress'
 import { useLocalStorageState } from '../lib/useLocalStorageState'
-
-async function pickJsonFile(jsonErrorMsg: string): Promise<unknown | null> {
-  return new Promise((resolve, reject) => {
-    const input = document.createElement('input')
-    input.type = 'file'; input.accept = '.json,application/json'
-    input.onchange = async () => {
-      const f = input.files?.[0]
-      if (!f) { resolve(null); return }
-      try { resolve(JSON.parse(await f.text())) }
-      catch { reject(new Error(jsonErrorMsg)) }
-    }
-    input.click()
-  })
-}
+import DataJobsPanel from './queue/DataJobsPanel'
 
 // tasks 表真实 task_type 只有这三值（train/reg_ai/generate）。0.17 P-D 前这里
 // 靠 config_name 子串猜、且掺入 tag/download/curate 等 project_jobs 的 kind（对
@@ -103,6 +91,59 @@ function estimateEta(task: Task): string | null {
   if (task.status !== 'running' || !task.started_at) return null
   const elapsed = (Date.now() / 1000 - task.started_at) * 1000
   return `已运行 ${fmtDurationShort(elapsed)}`
+}
+
+/** 历史分页固定底栏（GPU / 数据两个视图共用同款，P-G 反馈统一）。
+ *  只要 total 超过最小每页数就常显；testid 复用（同一时刻只渲染一个视图）。 */
+function PaginationBar({
+  page, total, pageSize, onPage, onPageSize,
+}: {
+  page: number
+  total: number
+  pageSize: number
+  onPage: (updater: (p: number) => number) => void
+  onPageSize: (n: number) => void
+}) {
+  const { t } = useTranslation()
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  return (
+    <div className="shrink-0 -mx-6 -mb-6 px-6 py-1 border-t border-subtle flex items-center justify-between flex-wrap gap-2 bg-canvas text-[11px]">
+      <div className="flex items-center gap-2 text-fg-tertiary">
+        <span>{t('queue.pageIndicator', { page, pages: totalPages })}</span>
+        <select
+          value={pageSize}
+          onChange={(e) => onPageSize(Number(e.target.value))}
+          className="input"
+          style={{ width: 'auto', padding: '1px 6px', fontSize: 11 }}
+          data-testid="history-page-size"
+        >
+          {HISTORY_PAGE_SIZES.map((n) => (
+            <option key={n} value={n}>{t('queue.perPage', { n })}</option>
+          ))}
+        </select>
+      </div>
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => onPage((p) => Math.max(1, p - 1))}
+          disabled={page <= 1}
+          className="btn btn-ghost"
+          style={{ padding: '2px 10px', fontSize: 11 }}
+          data-testid="history-prev"
+        >
+          {t('queue.prevPage')}
+        </button>
+        <button
+          onClick={() => onPage((p) => Math.min(totalPages, p + 1))}
+          disabled={page >= totalPages}
+          className="btn btn-ghost"
+          style={{ padding: '2px 10px', fontSize: 11 }}
+          data-testid="history-next"
+        >
+          {t('queue.nextPage')}
+        </button>
+      </div>
+    </div>
+  )
 }
 
 /** 队列行卡片。0.17 P-A 从 QueuePage 内联 map 抽出，供三个分区复用同一行渲染。
@@ -391,7 +432,6 @@ export default function QueuePage() {
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [exporting, setExporting] = useState(false)
   // 搜索（防抖后进后端）+ 历史分页 / 终态子过滤。0.17 item4：过滤条件持久化到
   // localStorage，切走队列页再回来不丢（page 不持久，回来回第 1 页）。
   const [search, setSearch] = useLocalStorageState('studio:queue:search', '')
@@ -407,6 +447,27 @@ export default function QueuePage() {
     useLocalStorageState('studio:queue:pageSize', HISTORY_PAGE_SIZES[0])
   // 过滤行折叠（与项目页一致：默认收起，header 漏斗按钮开关，收起且有筛选时带小圆点）。
   const [filtersOpen, setFiltersOpen] = useState(false)
+  // 0.17 P-G — 数据作业视图开关（header toggle，对齐项目页「已归档」模式）+
+  // kind 过滤（漏斗下发给 DataJobsPanel）+ 刷新令牌。
+  const [queueTab, setQueueTab] =
+    useLocalStorageState<'tasks' | 'jobs'>('studio:queue:tab', 'tasks')
+  const [jobsKind, setJobsKind] =
+    useLocalStorageState<JobKind | null>('studio:queue:jobsKind', null)
+  const [jobsSearch, setJobsSearch] = useLocalStorageState('studio:queue:jobsSearch', '')
+  const [jobsSearchDebounced, setJobsSearchDebounced] = useState(jobsSearch)
+  const [jobsRefreshToken, setJobsRefreshToken] = useState(0)
+  // 数据任务历史分页（与 GPU 视图同款固定底栏；total 由 Panel 拉取后回报）。
+  const [jobsHistoryPage, setJobsHistoryPage] = useState(1)
+  const [jobsPageSize, setJobsPageSize] =
+    useLocalStorageState('studio:queue:jobsPageSize', HISTORY_PAGE_SIZES[0])
+  const [jobsHistoryTotal, setJobsHistoryTotal] = useState(0)
+
+  // 数据任务搜索防抖 300ms（同任务视图搜索）；过滤条件变化回第 1 页。
+  useEffect(() => {
+    const id = window.setTimeout(() => setJobsSearchDebounced(jobsSearch), 300)
+    return () => window.clearTimeout(id)
+  }, [jobsSearch])
+  useEffect(() => { setJobsHistoryPage(1) }, [jobsKind, jobsSearchDebounced])
   const reloadTimer = useRef<number | null>(null)
   const { toast } = useToast()
   const { confirm } = useDialog()
@@ -484,23 +545,10 @@ export default function QueuePage() {
           // task 状态变化可能把 task 移进 history（terminal）或移出 live，两边都刷。
           void reloadLiveRef.current(); void reloadHistoryRef.current()
         }, 100)
-      } else if (evt.type === 'queue_export_ready' || evt.type === 'queue_export_failed') {
-        setExporting(false)
-        if (evt.type === 'queue_export_failed') {
-          const err = typeof evt.error === 'string' ? evt.error : '?'
-          setError(t('queue.exportFailed', { error: err }))
-        }
       }
     },
     { onOpen: () => { void reloadLiveRef.current(); void reloadHistoryRef.current(); void reloadHold() } },
   )
-
-  // 兜底：SSE 事件丢失时 60s 强制清 exporting 状态。
-  useEffect(() => {
-    if (!exporting) return
-    const tid = window.setTimeout(() => setExporting(false), 60_000)
-    return () => window.clearTimeout(tid)
-  }, [exporting])
 
   useEffect(() => { void reloadHold() }, [reloadHold])
 
@@ -553,7 +601,6 @@ export default function QueuePage() {
     return count
   }, [liveSorted])
 
-  const totalPages = Math.max(1, Math.ceil(history.total / historyPageSize))
 
   const requestPause = (task: Task) => {
     setPauseConfirmTaskId(task.id)
@@ -719,10 +766,37 @@ export default function QueuePage() {
   return (
     <StepShell
       idx={-1}
-      title={t('queue.title')}
-      subtitle={t('queue.description')}
+      /* 0.17 P-G — title/描述随视图切换：明确这是两条独立队列，不是同一列表的
+         类型 filter。 */
+      title={queueTab === 'jobs' ? t('queue.titleJobs') : t('queue.title')}
+      subtitle={queueTab === 'jobs' ? t('queue.descriptionJobs') : t('queue.description')}
       actions={
         <>
+          {queueTab === 'jobs' && <>
+            {/* 数据作业视图：漏斗（kind 过滤）+ 刷新，与任务视图同位交互。 */}
+            <button
+              className={`btn btn-sm ${filtersOpen ? 'btn-secondary' : 'btn-ghost'}`}
+              onClick={() => setFiltersOpen((o) => !o)}
+              aria-expanded={filtersOpen}
+              aria-label={t('queue.filters')}
+              title={t('queue.filters')}
+              data-testid="queue-filter-toggle"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 4h18l-7 8v6l-4 2v-8L3 4z" />
+              </svg>
+              {!filtersOpen && (jobsKind !== null || jobsSearch.trim() !== '') && (
+                <span className="dot dot-running" aria-label={t('queue.filtersActive')} />
+              )}
+            </button>
+            <button
+              onClick={() => setJobsRefreshToken((n) => n + 1)}
+              className="btn btn-ghost btn-sm"
+            >
+              {t('common.refresh')}
+            </button>
+          </>}
+          {queueTab === 'tasks' && <>
           {/* 过滤漏斗：折叠态不占行，开关过滤行；有筛选生效且收起时带小圆点（与项目页一致）。 */}
           <button
             className={`btn btn-sm ${filtersOpen ? 'btn-secondary' : 'btn-ghost'}`}
@@ -780,42 +854,64 @@ export default function QueuePage() {
               {t('queue.releaseQueue')}
             </button>
           )}
-          <button
-            disabled={busy || exporting || (live.length === 0 && history.total === 0)}
-            onClick={() => {
-              if (exporting) return
-              setExporting(true)
-              const a = document.createElement('a')
-              a.href = api.queueExportUrl()
-              a.download = `queue_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`
-              document.body.appendChild(a)
-              a.click()
-              document.body.removeChild(a)
-            }}
-            className="btn btn-ghost btn-sm"
-          >{exporting ? t('queue.exporting') : t('common.export')}</button>
-          <button
-            disabled={busy}
-            onClick={async () => {
-              let payload: unknown
-              try { payload = await pickJsonFile(t('queue.jsonError')) }
-              catch (e) { toast(String(e), 'error'); return }
-              if (!payload) return
-              setBusy(true)
-              try {
-                const r = await api.importQueue(payload)
-                const renamedCount = Object.keys(r.renamed).length
-                toast(t('queue.imported', { n: r.imported_count, renamed: renamedCount ? `（${renamedCount} 个改名）` : '' }), 'success')
-                await reload()
-              } catch (e) { setError(String(e)) }
-              finally { setBusy(false) }
-            }}
-            className="btn btn-ghost btn-sm"
-          >{t('common.import')}</button>
+          {/* 队列 JSON 导入/导出已下线（预设池时代遗留：现代任务 config 是
+              version 私有、导出恒空导入恒跳过）；后端 route 待单独清理 PR。 */}
           <button onClick={() => void reload()} className="btn btn-ghost btn-sm">{t('common.refresh')}</button>
+          </>}
+          {/* 0.17 P-G — 视图切换（放最右）：前置切换 icon（行为）+ 目标视图名
+              （宾语），读作「切到 X」——名词+后缀箭头会歧义成「当前+动作」。 */}
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => setQueueTab(queueTab === 'jobs' ? 'tasks' : 'jobs')}
+            aria-pressed={queueTab === 'jobs'}
+            data-testid="queue-jobs-toggle"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M17 1l4 4-4 4" />
+              <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+              <path d="M7 23l-4-4 4-4" />
+              <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+            </svg>
+            <span>{queueTab === 'jobs' ? t('queue.tabTasks') : t('queue.tabJobs')}</span>
+          </button>
         </>
       }
-      belowHeader={filtersOpen && (
+      belowHeader={filtersOpen && (queueTab === 'jobs' ? (
+        // 0.17 P-G — 数据作业过滤行：kind 单选（与任务视图的过滤行同位）。
+        <div
+          className="px-6 py-2 border-b border-subtle flex items-center gap-3"
+          data-testid="queue-jobs-filterbar"
+        >
+          <input
+            className="input"
+            style={{ width: '60%' }}
+            value={jobsSearch}
+            onChange={(e) => setJobsSearch(e.target.value)}
+            placeholder={t('queue.jobs.searchPlaceholder')}
+            aria-label={t('common.search')}
+            data-testid="jobs-search"
+          />
+          <span className="flex-1" />
+          <select
+            className="input"
+            style={{ width: '15%', minWidth: 150 }}
+            value={jobsKind ?? 'all'}
+            onChange={(e) => {
+              const v = e.target.value
+              setJobsKind(v === 'all' ? null : (v as JobKind))
+            }}
+            aria-label={t('queue.typeFilterLabel')}
+            data-testid="jobs-kind-filter"
+          >
+            <option value="all">{t('queue.filterAll')}</option>
+            {(['download', 'preprocess', 'tag', 'reg_build',
+              'eval_samples', 'eval_clip', 'eval_dino', 'eval_tag', 'eval_ccip',
+            ] as JobKind[]).map((k) => (
+              <option key={k} value={k}>{t(`queue.jobs.kind.${k}`)}</option>
+            ))}
+          </select>
+        </div>
+      ) : (
         // 0.17 P-C/P-F 过滤行 —— 与项目页 FilterBar 一致：header 下全宽条。搜索 60%
         // 下沉后端搜 name/config；类型 select 跨 live+history 按 task_type 过滤；状态
         // select 是历史段终态子过滤。
@@ -868,10 +964,11 @@ export default function QueuePage() {
             <option value="canceled">{t('status.canceled')}</option>
           </select>
         </div>
-      )}
+      ))}
     >
       <div className="flex flex-col gap-2.5 flex-1 min-h-0 overflow-y-auto">
-        {/* ADR §4.1 队列挂起 banner — 仅 held=true 时显示，sticky 顶部。 */}
+        {/* ADR §4.1 队列挂起 banner — 仅 held=true 时显示，sticky 顶部。
+            hold 覆盖全队列（含数据作业派发），两个视图都显示。 */}
         {holdState?.held && (
           <div
             className="sticky top-0 z-10 px-3.5 py-2.5 rounded-md bg-warn-soft border border-warn text-warn text-xs flex items-center justify-between"
@@ -892,7 +989,17 @@ export default function QueuePage() {
           </div>
         )}
 
-        {!loaded ? (
+        {queueTab === 'jobs' ? (
+          /* 0.17 P-G — 数据作业只读区（project_jobs）。kind 过滤/刷新由 header 下发。 */
+          <DataJobsPanel
+            kind={jobsKind}
+            q={jobsSearchDebounced || undefined}
+            historyPage={jobsHistoryPage}
+            pageSize={jobsPageSize}
+            onHistoryTotal={setJobsHistoryTotal}
+            refreshToken={jobsRefreshToken}
+          />
+        ) : !loaded ? (
           <div className="rounded-lg border border-subtle bg-surface overflow-hidden">
             {Array.from({ length: 3 }).map((_, i) => (
               <div
@@ -974,44 +1081,24 @@ export default function QueuePage() {
 
       {/* 0.17 item6：分页下沉成 fixed 底栏（-mx-6/-mb-6 抵消内容区 padding 做全宽贴底）。
           item2：只要历史超过最小每页数就常显（切到 50/100 只剩一页时不消失，能切回
-          20）；样式压缩省空间。 */}
-      {loaded && !isEmpty && history.total > HISTORY_PAGE_SIZES[0] && (
-        <div className="shrink-0 -mx-6 -mb-6 px-6 py-1 border-t border-subtle flex items-center justify-between flex-wrap gap-2 bg-canvas text-[11px]">
-          <div className="flex items-center gap-2 text-fg-tertiary">
-            <span>{t('queue.pageIndicator', { page: history.page, pages: totalPages })}</span>
-            <select
-              value={historyPageSize}
-              onChange={(e) => { setHistoryPageSize(Number(e.target.value)); setHistoryPage(1) }}
-              className="input"
-              style={{ width: 'auto', padding: '1px 6px', fontSize: 11 }}
-              data-testid="history-page-size"
-            >
-              {HISTORY_PAGE_SIZES.map((n) => (
-                <option key={n} value={n}>{t('queue.perPage', { n })}</option>
-              ))}
-            </select>
-          </div>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => setHistoryPage((p) => Math.max(1, p - 1))}
-              disabled={history.page <= 1}
-              className="btn btn-ghost"
-              style={{ padding: '2px 10px', fontSize: 11 }}
-              data-testid="history-prev"
-            >
-              {t('queue.prevPage')}
-            </button>
-            <button
-              onClick={() => setHistoryPage((p) => Math.min(totalPages, p + 1))}
-              disabled={history.page >= totalPages}
-              className="btn btn-ghost"
-              style={{ padding: '2px 10px', fontSize: 11 }}
-              data-testid="history-next"
-            >
-              {t('queue.nextPage')}
-            </button>
-          </div>
-        </div>
+          20）；样式压缩省空间。GPU / 数据两个视图共用同款底栏（P-G 反馈）。 */}
+      {queueTab === 'tasks' && loaded && !isEmpty && history.total > HISTORY_PAGE_SIZES[0] && (
+        <PaginationBar
+          page={history.page}
+          total={history.total}
+          pageSize={historyPageSize}
+          onPage={setHistoryPage}
+          onPageSize={(n) => { setHistoryPageSize(n); setHistoryPage(1) }}
+        />
+      )}
+      {queueTab === 'jobs' && jobsHistoryTotal > HISTORY_PAGE_SIZES[0] && (
+        <PaginationBar
+          page={jobsHistoryPage}
+          total={jobsHistoryTotal}
+          pageSize={jobsPageSize}
+          onPage={setJobsHistoryPage}
+          onPageSize={(n) => { setJobsPageSize(n); setJobsHistoryPage(1) }}
+        />
       )}
 
       {/* ADR Addendum 1 §UI：暂停 confirm modal — 告知用户语义后才调 api。 */}
