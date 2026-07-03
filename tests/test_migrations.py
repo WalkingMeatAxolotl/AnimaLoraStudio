@@ -104,6 +104,15 @@ def test_v16_adds_job_created_at_column(tmp_path: Path) -> None:
         assert "created_at" in cols
 
 
+def test_v17_adds_tasks_params_column(tmp_path: Path) -> None:
+    """v17: tasks 加 params（R-2 台账合并），nullable 不 backfill。"""
+    dbfile = tmp_path / "fresh.db"
+    db.init_db(dbfile)
+    with _open(dbfile) as c:
+        cols = {r["name"] for r in c.execute("PRAGMA table_info(tasks)")}
+        assert "params" in cols
+
+
 def test_v1_db_upgrades_in_place_preserving_tasks(tmp_path: Path) -> None:
     """模拟 PP0 之前留下来的 v1 库（只有 tasks 表）：执行 init_db 应升到 v2 且数据不丢。"""
     dbfile = tmp_path / "legacy.db"

@@ -42,8 +42,15 @@ TERMINAL_STATUSES = {"done", "failed", "canceled"}
 # pending，到点由 supervisor tick 提升（promote_due_scheduled）。
 LIVE_STATUSES = ("running", "paused", "pending", "scheduled")
 HISTORY_STATUSES = ("done", "failed", "canceled")
-# tasks.task_type 的合法值（_v5 migration）；0.17 P-F 类型过滤校验用。
-VALID_TASK_TYPES = ("train", "reg_ai", "generate")
+# tasks.task_type 的合法值。R-2 台账合并起扩容纳九类数据作业 kind——tasks 表
+# 是全部工作项的统一台账（写路径切换在 R-3）。档位归属的权威在
+# supervisor/resources.py（infrastructure 不反向依赖 supervisor，此处平铺
+# 列出，tests/test_resource_admission.py 有同步断言防漂移）。
+VALID_TASK_TYPES = (
+    "train", "reg_ai", "generate",
+    "download", "preprocess", "tag", "reg_build",
+    "eval_samples", "eval_clip", "eval_dino", "eval_tag", "eval_ccip",
+)
 
 
 def connect(path: Optional[Path] = None) -> sqlite3.Connection:
@@ -82,7 +89,18 @@ def init_db(path: Optional[Path] = None) -> None:
 
 
 def _row_to_dict(row: Optional[sqlite3.Row]) -> Optional[dict[str, Any]]:
-    return dict(row) if row else None
+    if not row:
+        return None
+    out = dict(row)
+    # R-2：params（kind 专属参数 JSON，_v17）附带解码，消费端免二次 parse
+    # （同 project_jobs DAO 的 params_decoded 约定）。
+    if isinstance(out.get("params"), str):
+        try:
+            import json as _json
+            out["params_decoded"] = _json.loads(out["params"])
+        except Exception:
+            out["params_decoded"] = None
+    return out
 
 
 def create_task(
@@ -92,7 +110,20 @@ def create_task(
     config_name: str,
     priority: int = 0,
     scheduled_at: Optional[float] = None,
+    task_type: Optional[str] = None,
+    params: Optional[dict[str, Any]] = None,
+    project_id: Optional[int] = None,
+    version_id: Optional[int] = None,
 ) -> int:
+    """建 pending（或 scheduled）task。
+
+    R-2 台账合并：tasks 表承接全部工作项。`task_type` 缺省 'train'（老调用方
+    兼容）；数据作业类（download/tag/…）带 `params`（kind 专属参数 JSON）+
+    project_id/version_id 入库。写路径切换（services 从 create_job 改到这里）
+    在 R-3。
+    """
+    if task_type is not None and task_type not in VALID_TASK_TYPES:
+        raise ValueError(f"invalid task_type: {task_type!r}")
     # ADR-0009 PR-1 C6: 入 task 时存当前 ContextVar trace_id（HTTP 请求那一刻
     # 由 TraceIdMiddleware 已 bind）。无则用 bg-{uuid} 标后台触发（CLI / 测试 /
     # supervisor 直接拉起）。supervisor dispatcher 后续读这个列 → env 注入
@@ -102,11 +133,15 @@ def create_task(
     # 0.17 P-B：带 scheduled_at → 建成 scheduled，supervisor tick 到点提升为
     # pending。过去的时间也照建 —— 下一个 tick（≤1s）自然提升，无需特判。
     status = "scheduled" if scheduled_at is not None else "pending"
+    import json as _json
     cur = conn.execute(
         "INSERT INTO tasks(name, config_name, status, priority, created_at, "
-        "request_trace_id, scheduled_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "request_trace_id, scheduled_at, task_type, params, project_id, version_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, 'train'), ?, ?, ?)",
         (name, config_name, status, priority, time.time(), request_trace_id,
-         scheduled_at),
+         scheduled_at, task_type,
+         _json.dumps(params) if params is not None else None,
+         project_id, version_id),
     )
     conn.commit()
     return int(cur.lastrowid)
@@ -139,7 +174,7 @@ def list_tasks(
     else:
         sql = "SELECT * FROM tasks ORDER BY priority DESC, created_at ASC"
         params = ()
-    return [dict(r) for r in conn.execute(sql, params)]
+    return [_row_to_dict(r) or {} for r in conn.execute(sql, params)]
 
 
 def _escape_like(s: str) -> str:
@@ -222,7 +257,7 @@ def list_tasks_page(
     if limit is not None:
         sql += " LIMIT ? OFFSET ?"
         params = [*params, int(limit), int(offset)]
-    return [dict(r) for r in conn.execute(sql, params)]
+    return [_row_to_dict(r) or {} for r in conn.execute(sql, params)]
 
 
 def promote_due_scheduled(
