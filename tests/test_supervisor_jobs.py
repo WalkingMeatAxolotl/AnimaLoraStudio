@@ -114,8 +114,17 @@ def test_download_job_runs_in_parallel_with_training_task(isolated, tmp_path) ->
         sup.stop(timeout=10.0)
 
 
-def test_gpu_job_deferred_during_training_by_default(isolated, tmp_path) -> None:
-    """PP10.2.b：训练 task 在跑时，tag / reg_build job 默认推迟（避免抢 GPU）。"""
+def test_light_job_deferred_during_training_when_disabled(
+    isolated, tmp_path, monkeypatch,
+) -> None:
+    """R-1：关闭 light 并行开关后，训练 task 在跑时 tag job 推迟。"""
+    from studio import secrets as _sec
+    secrets_file = tmp_path / "secrets.json"
+    monkeypatch.setattr(_sec, "SECRETS_FILE", secrets_file)
+    sec = _sec.Secrets()
+    sec.queue.light_tasks_during_train = False
+    _sec.save(sec)
+
     p = _setup_project(isolated)
     events: list[dict] = []
     task_sleep = lambda t, _cfg: [
@@ -168,16 +177,13 @@ def test_gpu_job_deferred_during_training_by_default(isolated, tmp_path) -> None
         sup.stop(timeout=10.0)
 
 
-def test_gpu_job_runs_during_training_when_allowed(isolated, tmp_path, monkeypatch) -> None:
-    """PP10.2.b：开 secrets.queue.allow_gpu_during_train=True 后，tag job
-    可以跟训练 task 并行（用户自己确认显存够）。"""
+def test_light_job_runs_during_training_by_default(isolated, tmp_path, monkeypatch) -> None:
+    """R-1 新默认：tag job（light 档）与训练 task 并行，无需任何开关。"""
     from studio import secrets as _sec
-    # 写一份 secrets 进 tmp，monkeypatch 切到这里
+    # 写一份默认 secrets 进 tmp，monkeypatch 切到这里（验证的就是默认值）
     secrets_file = tmp_path / "secrets.json"
     monkeypatch.setattr(_sec, "SECRETS_FILE", secrets_file)
-    sec = _sec.Secrets()
-    sec.queue.allow_gpu_during_train = True
-    _sec.save(sec)
+    _sec.save(_sec.Secrets())
 
     p = _setup_project(isolated)
     events: list[dict] = []

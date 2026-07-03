@@ -25,6 +25,9 @@ class _Slot:
     proc: Optional[subprocess.Popen] = None
     kind: Optional[str] = None  # "task" | "job"
     id: Optional[int] = None
+    # R-1 资源准入：DATA 槽当前 job 的 kind（spawn 时记下，供 _exclusive_busy
+    # 判断「正在跑的 job 是不是 exclusive 档（eval_samples）」，免每 tick 查库）。
+    job_kind: Optional[str] = None
     log_fp: Optional[Any] = None
     tailer: Optional[LogTailer] = None
     state_poller: Optional[MonitorStatePoller] = None
@@ -57,6 +60,7 @@ class _Slot:
         self.proc = None
         self.kind = None
         self.id = None
+        self.job_kind = None
         self.log_fp = None
         self.tailer = None
         self.state_poller = None

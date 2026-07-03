@@ -123,7 +123,7 @@ const initialServerState = {
     batch_size: 8,
   },
   models: { root: null, selected_anima: '1.0', selected_upscaler: '4x-AnimeSharp', auto_sync_paths: true },
-  queue: { allow_gpu_during_train: false },
+  queue: { light_tasks_during_train: true },
   download_source: 'huggingface',
   modelscope: { token: '' },
   generate: { preview_every_n_steps: 0, attention_backend: 'sdpa' },

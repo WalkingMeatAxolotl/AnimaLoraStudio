@@ -640,10 +640,10 @@ export default function SettingsPage() {
       {tab === 'training' && (<>
       <SettingsSection id="queue" title={t('settings.queueSchedule')}>
         <SettingsField
-          label={t('settings.allowGpuDuringTrain')}
-          helpTooltip={<p>{t('settings.allowGpuDuringTrainHelp')}</p>}
+          label={t('settings.lightTasksDuringTrain')}
+          helpTooltip={<p>{t('settings.lightTasksDuringTrainHelp')}</p>}
         >
-          <Bool value={draft.queue.allow_gpu_during_train} onChange={(v) => update('queue', 'allow_gpu_during_train', v)} />
+          <Bool value={draft.queue.light_tasks_during_train} onChange={(v) => update('queue', 'light_tasks_during_train', v)} />
         </SettingsField>
       </SettingsSection>
 

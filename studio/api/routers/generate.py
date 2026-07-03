@@ -178,7 +178,7 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
         db.update_task(conn, task_id, task_type="generate")
 
     # create_task 已把 task 落成 pending+generate，但 config_path 还没写；supervisor
-    # _dispatch_generate 会跳过 config_path=NULL 的 generate task（视为还在入队），等
+    # _dispatch_exclusive_tasks 会跳过 config_path=NULL 的 generate task（视为还在入队），等
     # 下面 config.json 落库后再派。这里任一步失败必须把 task 标 failed，否则它会以
     # config_path=NULL 永远 pending（dispatcher 永远跳过）。
     try:

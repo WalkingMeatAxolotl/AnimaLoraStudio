@@ -46,7 +46,7 @@ def fake_daemon():
 def fake_secrets(monkeypatch):
     """把 secrets.load() 替换成可调的 fake，避免读真实 secrets 文件。"""
     cfg = MagicMock()
-    cfg.queue.allow_gpu_during_train = False
+    cfg.queue.light_tasks_during_train = True  # R-1 新默认：light 档并行开
     monkeypatch.setattr(
         "studio.supervisor._secrets.load", lambda: cfg
     )
@@ -113,20 +113,23 @@ def test_yield_daemon_busy_no_unload(env, fake_daemon, fake_secrets):
     fake_daemon.request_unload.assert_not_called()
 
 
-def test_yield_allow_gpu_during_train(env, fake_daemon, fake_secrets):
-    """用户允许并行 → 不让位。"""
+def test_yield_ignores_light_switch(env, fake_daemon, fake_secrets):
+    """R-1：light 开关不豁免 exclusive 让位——开关开着照样吊销 daemon 租约。
+
+    （老 allow_gpu_during_train 会放行「训练 + 常驻底模」并存，是 L3 的一部分。）
+    """
     fake_daemon.is_model_loaded = True
     fake_daemon.is_busy = False
-    fake_secrets.queue.allow_gpu_during_train = True
+    fake_secrets.queue.light_tasks_during_train = True
     sup = Supervisor(
         on_event=lambda _e: None,
         db_path=env["db"], logs_dir=env["logs"], configs_dir=env["configs"],
     )
-    assert sup._maybe_yield_daemon() is False
-    fake_daemon.request_unload.assert_not_called()
+    assert sup._maybe_yield_daemon() is True
+    fake_daemon.request_unload.assert_called_once()
 
 
-# ---------- _dispatch_train 集成 -------------------------------------------
+# ---------- _dispatch_exclusive_tasks 集成 -------------------------------------------
 
 
 def test_dispatch_train_skipped_while_daemon_loaded(env, fake_daemon, fake_secrets):
@@ -145,7 +148,7 @@ def test_dispatch_train_skipped_while_daemon_loaded(env, fake_daemon, fake_secre
     _make_train_task(env)
     # 取 SLOT_TRAIN slot 调 dispatch_train
     train_slot = next(s for s in sup._slots if s.name == "train")
-    sup._dispatch_train(train_slot)
+    sup._dispatch_exclusive_tasks(train_slot)
     assert spawned == [], "train task should not be spawned while daemon holds GPU"
     fake_daemon.request_unload.assert_called_once()
 
@@ -164,7 +167,7 @@ def test_dispatch_train_proceeds_after_daemon_unloaded(env, fake_daemon, fake_se
 
     _make_train_task(env)
     train_slot = next(s for s in sup._slots if s.name == "train")
-    sup._dispatch_train(train_slot)
+    sup._dispatch_exclusive_tasks(train_slot)
     assert len(spawned) == 1
     fake_daemon.request_unload.assert_not_called()
 
@@ -172,10 +175,13 @@ def test_dispatch_train_proceeds_after_daemon_unloaded(env, fake_daemon, fake_se
 # ---------- _dispatch_data 集成 --------------------------------------------
 
 
-def test_dispatch_data_tag_job_yields_to_daemon_load(env, fake_daemon, fake_secrets):
-    """tag job pending + daemon 占 GPU + 不许并行 → 让位，不 spawn job。"""
+def test_dispatch_data_tag_job_yields_to_daemon_load_when_disabled(
+    env, fake_daemon, fake_secrets,
+):
+    """开关关闭（保守模式）：tag job pending + daemon 占 GPU → 让位，不 spawn。"""
     fake_daemon.is_model_loaded = True
     fake_daemon.is_busy = False
+    fake_secrets.queue.light_tasks_during_train = False
 
     spawned_jobs: list[Any] = []
     sup = Supervisor(
@@ -189,6 +195,27 @@ def test_dispatch_data_tag_job_yields_to_daemon_load(env, fake_daemon, fake_secr
     sup._dispatch_data(data_slot)
     assert spawned_jobs == []
     fake_daemon.request_unload.assert_called_once()
+
+
+def test_dispatch_data_tag_job_runs_alongside_daemon_by_default(
+    env, fake_daemon, fake_secrets,
+):
+    """R-1 新默认（light 并行开）：tag job 与 idle 常驻 daemon 共存，不吊销租约。"""
+    fake_daemon.is_model_loaded = True
+    fake_daemon.is_busy = False
+
+    spawned_jobs: list[Any] = []
+    sup = Supervisor(
+        on_event=lambda _e: None,
+        db_path=env["db"], logs_dir=env["logs"], configs_dir=env["configs"],
+    )
+    sup._spawn_job = lambda slot, job: spawned_jobs.append(job)  # type: ignore
+
+    _make_tag_job(env)
+    data_slot = next(s for s in sup._slots if s.name == "data")
+    sup._dispatch_data(data_slot)
+    assert len(spawned_jobs) == 1
+    fake_daemon.request_unload.assert_not_called()
 
 
 def test_dispatch_data_download_not_blocked_by_daemon(env, fake_daemon, fake_secrets):
