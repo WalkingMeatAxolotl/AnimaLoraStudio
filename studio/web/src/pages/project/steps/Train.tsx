@@ -15,6 +15,7 @@ import {
 import { parseFolderMeta } from '../../../lib/folderMeta'
 import { useLocalStorageState } from '../../../lib/useLocalStorageState'
 import ConfigSkeleton from '../../../components/ConfigSkeleton'
+import ConfigYamlPanel from '../../../components/ConfigYamlPanel'
 import { useDialog } from '../../../components/Dialog'
 import SchemaForm, { visibleSchemaGroups } from '../../../components/SchemaForm'
 import SchemaSectionIndex from '../../../components/SchemaSectionIndex'
@@ -268,6 +269,7 @@ export default function TrainPage() {
   const schemaScrollRef = useRef<HTMLDivElement | null>(null)
   // 右侧训练集分布预览抽屉的展开/收起（持久化）。收起时把横向空间让给表单。
   const [previewOpen, setPreviewOpen] = useLocalStorageState('train.previewOpen', true)
+  const [previewTab, setPreviewTab] = useLocalStorageState<'stats' | 'config'>('train.previewTab', 'stats')
   const visibleGroups = useMemo(
     () => (schema ? visibleSchemaGroups(schema, advancedMode) : []),
     [schema, advancedMode],
@@ -790,16 +792,51 @@ export default function TrainPage() {
           </button>
         </div>
 
-        {/* 右栏：训练集分布预览抽屉（可收回）。flex-[1] 与左表单 flex-[3] 还原老
-            grid 的 3:1 比例（按比例而非固定宽）；收起时整列不渲染、空间归表单。 */}
+        {/* 右栏：预览抽屉（可收回），双 tab：数据分布 / 生效配置。flex-[1] 与左
+            表单 flex-[3] 还原老 grid 的 3:1 比例（按比例而非固定宽）；收起时整列
+            不渲染、空间归表单。生效配置 = 按 show_when 裁剪后的 yaml，实时跟随
+            表单，与落盘 config.yaml 同内容。 */}
         {previewOpen && (
-          <div className="flex-[1] min-w-0 overflow-y-auto">
-            <DatasetStatsPanel
-              projectId={project.id}
-              activeVersion={activeVersion}
-              reg={reg}
-              config={config}
-            />
+          <div className="flex-[1] min-w-0 flex flex-col min-h-0">
+            <div className="shrink-0 mb-2">
+              <div className="inline-flex rounded-md border border-subtle overflow-hidden text-xs">
+                <button
+                  type="button"
+                  onClick={() => setPreviewTab('stats')}
+                  className={`px-3 py-1 transition-colors ${previewTab === 'stats' ? 'bg-accent text-white' : 'bg-surface text-fg-secondary hover:bg-subtle'}`}
+                >
+                  {t('train.previewTabStats')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewTab('config')}
+                  className={`px-3 py-1 transition-colors ${previewTab === 'config' ? 'bg-accent text-white' : 'bg-surface text-fg-secondary hover:bg-subtle'}`}
+                >
+                  {t('train.previewTabConfig')}
+                </button>
+              </div>
+            </div>
+            {previewTab === 'stats' ? (
+              <div className="flex-1 min-h-0 overflow-y-auto">
+                <DatasetStatsPanel
+                  projectId={project.id}
+                  activeVersion={activeVersion}
+                  reg={reg}
+                  config={config}
+                />
+              </div>
+            ) : config ? (
+              <ConfigYamlPanel
+                config={config}
+                schema={schema}
+                fileLabel="config.yaml"
+                className="flex-1 flex flex-col min-h-0"
+              />
+            ) : (
+              <div className="flex-1 flex items-center justify-center text-fg-tertiary text-sm rounded-md border border-dashed border-dim">
+                {t('train.noConfigHint')}
+              </div>
+            )}
           </div>
         )}
       </div>

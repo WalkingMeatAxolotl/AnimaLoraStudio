@@ -21,18 +21,7 @@ import {
   loadPresetDescriptions,
   savePresetDescriptions,
 } from '../../lib/preset-helpers'
-import { pruneInactiveConfig } from '../../lib/schema'
-import { configToYaml } from '../../lib/yamlPreview'
-
-// ── YAML 预览：与落盘 yaml 相同的键序和内容 ────────────────────────────────
-// GET 回来的 config 被 pydantic 补满了全部默认字段；预览前按 show_when 裁掉
-// 当前不生效的字段，与后端落盘 yaml（config_prune）保持同一内容。
-function generateYaml(config: ConfigData, schema: SchemaResponse | null): string {
-  const active = schema
-    ? pruneInactiveConfig(config, schema.schema.properties)
-    : config
-  return configToYaml(active)
-}
+import ConfigYamlPanel from '../../components/ConfigYamlPanel'
 
 // 预设名校验 / 描述存储 / schema 默认值 抽到 lib/preset-helpers.ts，
 // 跟 Train 页面「新建预设」内联表单共享，避免两份维护。
@@ -100,7 +89,7 @@ export default function PresetsPage() {
   // ── UI 状态 ──
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerSearch, setPickerSearch] = useState('')
-  const [yamlOpen, setYamlOpen] = useState(false)
+  const [effectiveConfigOpen, setEffectiveConfigOpen] = useState(false)
   const [exportDialogOpen, setExportDialogOpen] = useState(false)
   const [showImportPathPicker, setShowImportPathPicker] = useState(false)
   const [advancedMode, toggleAdvancedMode] = useAdvancedMode()
@@ -537,6 +526,15 @@ export default function PresetsPage() {
             if (fileInputRef.current) fileInputRef.current.value = ''
           }}
         />
+        <button
+          onClick={() => setEffectiveConfigOpen(true)}
+          disabled={busy || !config}
+          className="btn btn-ghost btn-sm"
+          title={t('presets.effectiveConfigTitle')}
+        >
+          {t('presets.effectiveConfig')}
+        </button>
+        <span style={{ width: 1, height: 22, background: 'var(--border-subtle)' }} />
         <button onClick={onImportClick} disabled={busy} className="btn btn-ghost btn-sm">
           {t('presets.importUpload')}
         </button>
@@ -777,41 +775,6 @@ export default function PresetsPage() {
             </section>
           )}
 
-          {/* YAML 预览（默认折叠） */}
-          {config && Object.keys(config).length > 0 && (
-            <section className={`rounded-md border border-subtle bg-surface ${yamlOpen ? 'px-3.5 py-2.5' : 'px-3.5 py-1.5'}`}>
-              <button
-                type="button"
-                onClick={() => setYamlOpen((v) => !v)}
-                className="w-full flex items-center gap-2 bg-transparent border-none p-0 cursor-pointer text-left"
-              >
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-info shrink-0" />
-                <span className="caption uppercase tracking-[0.06em] text-xs">{t('presets.yamlPreview')}</span>
-                <span className="text-[10px] text-fg-tertiary">
-                  {yamlOpen ? t('presets.yamlMatchesFile') : t('presets.yamlCollapsed')}
-                </span>
-                <span className="flex-1" />
-                {yamlOpen && (
-                  <button
-                    className="btn btn-ghost btn-sm text-xs"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      const yamlText = generateYaml(config, schema)
-                      navigator.clipboard.writeText(yamlText)
-                        .then(() => toast(t('presets.copied'), 'success'))
-                        .catch(() => toast(t('presets.copyFailed'), 'error'))
-                    }}
-                  >{t('common.copy')}</button>
-                )}
-                <span className="text-fg-tertiary">{yamlOpen ? '▾' : '▸'}</span>
-              </button>
-              {yamlOpen && (
-                <pre className="m-0 mt-2.5 p-3 bg-sunken rounded-sm font-mono text-xs text-fg-secondary leading-[1.7] whitespace-pre-wrap break-words max-h-80 overflow-auto">
-                  {generateYaml(config, schema)}
-                </pre>
-              )}
-            </section>
-          )}
         </div>
 
         {/* 右侧锚点导航：跟 Settings 页一个套路，sticky 跟随滚动 */}
@@ -827,6 +790,37 @@ export default function PresetsPage() {
         </aside>
         </div>
       </div>
+
+      {/* 「生效配置」查看器：与落盘 yaml 一致的只读视图（居中 modal） */}
+      {effectiveConfigOpen && config && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-40 flex items-center justify-center bg-black/50"
+          onMouseDown={(e) => { if (e.target === e.currentTarget) setEffectiveConfigOpen(false) }}
+        >
+          <div className="bg-elevated border border-dim rounded-lg w-[90%] max-w-[720px] max-h-[85vh] p-6 flex flex-col gap-3 shadow-xl">
+            <div className="shrink-0">
+              <h2 className="m-0 text-lg font-semibold text-fg-primary">{t('presets.effectiveConfig')}</h2>
+              <p className="mt-1 mb-0 text-sm text-fg-secondary">{t('presets.effectiveConfigHint')}</p>
+            </div>
+            <ConfigYamlPanel
+              config={config}
+              schema={schema}
+              fileLabel={isNew
+                ? `${newName.trim() || 'preset'}.yaml`
+                : `${selected}.yaml`}
+              hint={isNew || dirty ? t('presets.effectiveConfigDirty') : undefined}
+              className="flex-1 flex flex-col min-h-0"
+            />
+            <div className="flex justify-end shrink-0">
+              <button type="button" className="btn btn-secondary" onClick={() => setEffectiveConfigOpen(false)}>
+                {t('common.close')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {exportDialogOpen && (
         <PresetExportDialog
