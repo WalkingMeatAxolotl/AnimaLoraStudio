@@ -79,6 +79,24 @@ export function evalShowWhen(
   return true
 }
 
+/**
+ * 按 show_when 过滤掉当前配置下 UI 不可见的字段。与后端落盘裁剪
+ * （studio/domain/config_prune.py）同一语义，让 TOML 预览和 yaml 内容一致。
+ * 没有 show_when 的字段（含 hidden / disable_when 字段）原样保留。
+ */
+export function pruneInactiveConfig(
+  config: Record<string, unknown>,
+  properties: Record<string, SchemaProperty>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [name, value] of Object.entries(config)) {
+    const prop = properties[name]
+    if (prop?.show_when && !evalShowWhen(prop.show_when, config)) continue
+    out[name] = value
+  }
+  return out
+}
+
 /** 字段的人类可读 label：首字母大写 + 下划线变空格。 */
 export function fieldLabel(name: string): string {
   return name

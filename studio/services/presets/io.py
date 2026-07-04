@@ -15,6 +15,7 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
+from ...domain.config_prune import prune_inactive_fields
 from ...paths import REPO_ROOT, USER_PRESETS_DIR
 from ...schema import TrainingConfig
 
@@ -265,7 +266,11 @@ def write_preset(name: str, data: dict[str, Any], base: Path | None = None) -> P
             details={"reason": str(exc)},
             http_status=400,
         ) from exc
-    dumped = _absolutize_model_paths(cfg.model_dump(mode="python"))
+    # 落盘前裁掉 show_when 为假的字段（UI 不可见 = 不生效）；read_preset 时
+    # pydantic 把缺失字段补回默认值，API 返回给前端的仍是完整 config。
+    dumped = prune_inactive_fields(
+        _absolutize_model_paths(cfg.model_dump(mode="python"))
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         yaml.safe_dump(dumped, allow_unicode=True, sort_keys=False, default_flow_style=False),

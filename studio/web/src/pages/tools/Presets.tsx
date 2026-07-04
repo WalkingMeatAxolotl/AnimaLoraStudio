@@ -21,6 +21,7 @@ import {
   loadPresetDescriptions,
   savePresetDescriptions,
 } from '../../lib/preset-helpers'
+import { pruneInactiveConfig } from '../../lib/schema'
 
 // ── TOML 生成（键按字母排序，值尽量保留原始类型） ──────────────────────────
 function toTomlValue(v: unknown): string {
@@ -41,9 +42,14 @@ function toTomlValue(v: unknown): string {
   return s
 }
 
-function generateToml(config: ConfigData): string {
-  const keys = Object.keys(config).sort()
-  return keys.map((k) => `${k} = ${toTomlValue(config[k])}`).join('\n')
+// GET 回来的 config 被 pydantic 补满了全部默认字段；预览前按 show_when 裁掉
+// 当前不生效的字段，与后端落盘 yaml（config_prune）保持同一内容。
+function generateToml(config: ConfigData, schema: SchemaResponse | null): string {
+  const active = schema
+    ? pruneInactiveConfig(config, schema.schema.properties)
+    : config
+  const keys = Object.keys(active).sort()
+  return keys.map((k) => `${k} = ${toTomlValue(active[k])}`).join('\n')
 }
 
 // 预设名校验 / 描述存储 / schema 默认值 抽到 lib/preset-helpers.ts，
@@ -808,7 +814,7 @@ export default function PresetsPage() {
                     className="btn btn-ghost btn-sm text-xs"
                     onClick={(e) => {
                       e.stopPropagation()
-                      const toml = generateToml(config)
+                      const toml = generateToml(config, schema)
                       navigator.clipboard.writeText(toml)
                         .then(() => toast(t('presets.copied'), 'success'))
                         .catch(() => toast(t('presets.copyFailed'), 'error'))
@@ -819,7 +825,7 @@ export default function PresetsPage() {
               </button>
               {tomlOpen && (
                 <pre className="m-0 mt-2.5 p-3 bg-sunken rounded-sm font-mono text-xs text-fg-secondary leading-[1.7] whitespace-pre-wrap break-words max-h-80 overflow-auto">
-                  {generateToml(config)}
+                  {generateToml(config, schema)}
                 </pre>
               )}
             </section>

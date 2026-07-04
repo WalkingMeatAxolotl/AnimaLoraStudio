@@ -16,6 +16,7 @@ from typing import Any
 import yaml
 
 from .presets.io import _absolutize_model_paths, _tolerant_validate
+from ..domain.config_prune import prune_inactive_fields
 from ..schema import TrainingConfig
 from .projects.versions import version_dir
 from .projects import projects as _projects
@@ -148,7 +149,9 @@ def write_version_config(
     if force_project_overrides:
         payload.update(project_specific_overrides(project, version))
     cfg, _, _ = _tolerant_validate(payload)
-    dumped = cfg.model_dump(mode="python")
+    # 落盘前裁掉 show_when 为假的字段（UI 不可见 = 不生效），读取时 pydantic
+    # 会把缺失字段补回 schema 默认值，GET 返回给前端的仍是完整 config。
+    dumped = prune_inactive_fields(cfg.model_dump(mode="python"))
     p = version_config_path(project, version)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(

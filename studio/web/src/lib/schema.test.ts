@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SchemaProperty } from '../api/client'
-import { controlKind, evalShowWhen, fieldLabel } from './schema'
+import { controlKind, evalShowWhen, fieldLabel, pruneInactiveConfig } from './schema'
 
 describe('controlKind', () => {
   it('uses explicit control field when provided', () => {
@@ -102,6 +102,33 @@ describe('evalShowWhen', () => {
         optimizer_type: 'adamw',
       })
     ).toBe(false)
+  })
+})
+
+// 语义与后端 studio/domain/config_prune.py 的 prune_inactive_fields 保持对照
+describe('pruneInactiveConfig', () => {
+  const properties = {
+    optimizer_type: {} as SchemaProperty,
+    came_beta1: { show_when: 'optimizer_type==came' } as SchemaProperty,
+    lr_scheduler: { disable_when: 'optimizer_type==prodigy' } as SchemaProperty,
+  }
+
+  it('drops fields whose show_when is false, even with stale values', () => {
+    const config = { optimizer_type: 'adamw', came_beta1: 0.5, lr_scheduler: 'cosine' }
+    expect(pruneInactiveConfig(config, properties)).toEqual({
+      optimizer_type: 'adamw',
+      lr_scheduler: 'cosine',
+    })
+  })
+
+  it('keeps fields whose show_when is true', () => {
+    const config = { optimizer_type: 'came', came_beta1: 0.5, lr_scheduler: 'cosine' }
+    expect(pruneInactiveConfig(config, properties)).toEqual(config)
+  })
+
+  it('keeps disable_when fields and keys without schema entry', () => {
+    const config = { optimizer_type: 'prodigy', lr_scheduler: 'none', unknown_key: 1 }
+    expect(pruneInactiveConfig(config, properties)).toEqual(config)
   })
 })
 
