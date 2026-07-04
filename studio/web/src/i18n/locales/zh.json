@@ -2288,7 +2288,6 @@
     "loadingConfig": "加载预设配置中",
     "trainingParams": "训练参数",
     "yamlPreview": "YAML 预览",
-    "yamlPreviewTitle": "查看将写入 yaml 的实际生效参数",
     "yamlPreviewHint": "按当前表单生成，与保存到磁盘的 yaml 内容一致；未启用的参数已省略",
     "yamlPreviewDirty": "包含未保存的修改",
     "copied": "已复制到剪贴板",

@@ -22,6 +22,7 @@ import {
   savePresetDescriptions,
 } from '../../lib/preset-helpers'
 import ConfigYamlPanel from '../../components/ConfigYamlPanel'
+import { useLocalStorageState } from '../../lib/useLocalStorageState'
 
 // 预设名校验 / 描述存储 / schema 默认值 抽到 lib/preset-helpers.ts，
 // 跟 Train 页面「新建预设」内联表单共享，避免两份维护。
@@ -89,7 +90,8 @@ export default function PresetsPage() {
   // ── UI 状态 ──
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerSearch, setPickerSearch] = useState('')
-  const [effectiveConfigOpen, setEffectiveConfigOpen] = useState(false)
+  // YAML 预览抽屉（与 Train 页同款把手 + 竖线；预设页无数据分布，无 tab）。默认折叠。
+  const [previewOpen, setPreviewOpen] = useLocalStorageState('presets.previewOpen', false)
   const [exportDialogOpen, setExportDialogOpen] = useState(false)
   const [showImportPathPicker, setShowImportPathPicker] = useState(false)
   const [advancedMode, toggleAdvancedMode] = useAdvancedMode()
@@ -526,15 +528,6 @@ export default function PresetsPage() {
             if (fileInputRef.current) fileInputRef.current.value = ''
           }}
         />
-        <button
-          onClick={() => setEffectiveConfigOpen(true)}
-          disabled={busy || !config}
-          className="btn btn-ghost btn-sm"
-          title={t('presets.yamlPreviewTitle')}
-        >
-          {t('presets.yamlPreview')}
-        </button>
-        <span style={{ width: 1, height: 22, background: 'var(--border-subtle)' }} />
         <button onClick={onImportClick} disabled={busy} className="btn btn-ghost btn-sm">
           {t('presets.importUpload')}
         </button>
@@ -678,12 +671,10 @@ export default function PresetsPage() {
           )}
       </div>
 
-      {/* ── content（scroll） ── */}
-      <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-auto p-4">
-        <div
-          className="grid gap-10"
-          style={{ gridTemplateColumns: '3fr 1fr' }}
-        >
+      {/* ── content：左表单（自己滚动）+ 锚点导航 + 把手 + YAML 预览抽屉。
+          布局与 Train 页一致：抽屉收起时空间归表单。 ── */}
+      <div className="flex-1 min-h-0 flex gap-4 p-4">
+        <div ref={scrollContainerRef} className="flex-[3] min-w-0 overflow-y-auto">
         <div className="flex flex-col gap-3 min-w-0">
 
           {/* 名称 / 描述 */}
@@ -776,33 +767,38 @@ export default function PresetsPage() {
           )}
 
         </div>
-
-        {/* 右侧锚点导航：跟 Settings 页一个套路，sticky 跟随滚动 */}
-        <aside className="hidden lg:block">
-          <div className="sticky top-0">
-            {schema && config && visibleGroups.length > 0 && (
-              <SchemaSectionIndex
-                groups={visibleGroups}
-                scrollContainer={scrollContainerRef}
-              />
-            )}
-          </div>
-        </aside>
         </div>
-      </div>
 
-      {/* YAML 预览：与落盘 yaml 一致的只读视图（居中 modal） */}
-      {effectiveConfigOpen && config && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 z-40 flex items-center justify-center bg-black/50"
-          onMouseDown={(e) => { if (e.target === e.currentTarget) setEffectiveConfigOpen(false) }}
-        >
-          <div className="bg-elevated border border-dim rounded-lg w-[90%] max-w-[720px] max-h-[85vh] p-6 flex flex-col gap-3 shadow-xl">
-            <div className="shrink-0">
-              <h2 className="m-0 text-lg font-semibold text-fg-primary">{t('presets.yamlPreview')}</h2>
-              <p className="mt-1 mb-0 text-sm text-fg-secondary">{t('presets.yamlPreviewHint')}</p>
+        {/* 章节锚点导航（固定窄列，跟 Train 页一致） */}
+        {schema && config && visibleGroups.length > 0 && (
+          <aside className="hidden lg:block shrink-0 w-[168px] overflow-y-auto">
+            <SchemaSectionIndex
+              groups={visibleGroups}
+              scrollContainer={scrollContainerRef}
+            />
+          </aside>
+        )}
+
+        {/* 把手：单竖线 + 顶部圆圈 ›/‹ —— 分隔 YAML 预览抽屉（与 Train 页同款） */}
+        <div className="relative w-3 shrink-0 self-stretch flex justify-center">
+          <div className="w-px bg-subtle" />
+          <button
+            type="button"
+            onClick={() => setPreviewOpen((v) => !v)}
+            title={previewOpen ? t('train.collapsePreview') : t('train.expandPreview')}
+            aria-label={previewOpen ? t('train.collapsePreview') : t('train.expandPreview')}
+            className="absolute top-1 left-1/2 -translate-x-1/2 w-6 h-6 rounded-full border border-subtle bg-surface text-fg-tertiary hover:text-accent hover:border-accent flex items-center justify-center text-xs leading-none shadow-sm"
+          >
+            {previewOpen ? '›' : '‹'}
+          </button>
+        </div>
+
+        {/* YAML 预览抽屉：与落盘 yaml 一致的只读视图，实时跟随表单编辑 */}
+        {previewOpen && config && (
+          <div className="flex-[2] min-w-0 flex flex-col min-h-0">
+            <div className="shrink-0 mb-2 flex items-center gap-2" title={t('presets.yamlPreviewHint')}>
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-info shrink-0" />
+              <span className="caption uppercase tracking-[0.06em] text-xs">{t('presets.yamlPreview')}</span>
             </div>
             <ConfigYamlPanel
               config={config}
@@ -813,14 +809,9 @@ export default function PresetsPage() {
               hint={isNew || dirty ? t('presets.yamlPreviewDirty') : undefined}
               className="flex-1 flex flex-col min-h-0"
             />
-            <div className="flex justify-end shrink-0">
-              <button type="button" className="btn btn-secondary" onClick={() => setEffectiveConfigOpen(false)}>
-                {t('common.close')}
-              </button>
-            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {exportDialogOpen && (
         <PresetExportDialog

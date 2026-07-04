@@ -2288,7 +2288,6 @@
     "loadingConfig": "Loading preset config",
     "trainingParams": "Training parameters",
     "yamlPreview": "YAML preview",
-    "yamlPreviewTitle": "View the effective parameters written to yaml",
     "yamlPreviewHint": "Generated from the current form; matches the yaml saved to disk. Inactive parameters are omitted.",
     "yamlPreviewDirty": "Includes unsaved changes",
     "copied": "Copied to clipboard",
