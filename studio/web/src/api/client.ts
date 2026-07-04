@@ -125,8 +125,10 @@ export interface HuggingFaceConfig {
   endpoint: string
 }
 
-export interface WandBConfig {
-  enabled: boolean
+/** 一套 WandB 账号 + 上传策略预设（0.18 预设化，对齐 LLMPreset 模式）。 */
+export interface WandBPreset {
+  id: string
+  label: string
   api_key: string
   project: string
   entity: string
@@ -134,7 +136,7 @@ export interface WandBConfig {
   mode: 'online' | 'offline' | 'disabled'
   /** 是否把训练采样图上传到 wandb.ai，默认开；私有 / NSFW 数据集请关掉。 */
   log_samples: boolean
-  /** 上传前缩到最长边像素，默认 1216 */
+  /** 上传前缩到最长边像素 */
   sample_max_side: number
   /** step 节流：>0 时只在 global_step % N == 0 上传，0 = 不额外节流 */
   sample_every_n_steps: number
@@ -150,6 +152,13 @@ export interface WandBConfig {
   upload_state_auto: boolean
   /** 自动状态 artifact 保留策略 */
   upload_state_auto_policy: 'all' | 'last'
+}
+
+/** 全局 WandB：顶层只留总开关 + 预设切换，字段全在 preset 里。 */
+export interface WandBConfig {
+  enabled: boolean
+  current_preset: string
+  presets: WandBPreset[]
 }
 
 export interface ModelScopeConfig {

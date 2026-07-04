@@ -3,9 +3,30 @@ import {
   DEFAULT_WD14_MODELS,
   type LLMPreset,
   type Secrets,
+  type WandBPreset,
 } from '../../../api/client'
 
 export const MASK = '***'
+
+/** WandB 预设默认值（与后端 WandBPresetConfig 默认一致），新建/导入预设的底板。 */
+export const DEFAULT_WANDB_PRESET: WandBPreset = {
+  id: 'default',
+  label: 'Default',
+  api_key: '',
+  project: 'AnimaLoraStudio',
+  entity: '',
+  base_url: '',
+  mode: 'online',
+  log_samples: true,
+  sample_max_side: 512,
+  sample_every_n_steps: 0,
+  upload_model: false,
+  upload_model_policy: 'last',
+  upload_state_manual: false,
+  upload_state_manual_policy: 'last',
+  upload_state_auto: false,
+  upload_state_auto_policy: 'last',
+}
 
 export type Section =
   | 'gelbooru'
@@ -175,20 +196,8 @@ export const EMPTY: Secrets = {
   huggingface: { token: '', endpoint: '' },
   wandb: {
     enabled: false,
-    api_key: '',
-    project: 'AnimaLoraStudio',
-    entity: '',
-    base_url: '',
-    mode: 'online',
-    log_samples: true,
-    sample_max_side: 1216,
-    sample_every_n_steps: 0,
-    upload_model: false,
-    upload_model_policy: 'last',
-    upload_state_manual: false,
-    upload_state_manual_policy: 'last',
-    upload_state_auto: false,
-    upload_state_auto_policy: 'last',
+    current_preset: 'default',
+    presets: [DEFAULT_WANDB_PRESET],
   },
   modelscope: { token: '' },
   eval_metrics: {

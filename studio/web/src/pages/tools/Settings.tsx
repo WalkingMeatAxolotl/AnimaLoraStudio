@@ -6,7 +6,7 @@ import {
   type LLMPreset,
   type Secrets,
   type SecretsPatch,
-  type WandBConfig,
+  type WandBPreset,
 } from '../../api/client'
 import { useDialog } from '../../components/Dialog'
 import LLMTaggerWorkspace from '../../components/LLMTaggerWorkspace'
@@ -17,6 +17,7 @@ import { useSettingsData, type SaveStatus } from '../../lib/SettingsData'
 import { useSettingsDrawer } from '../../lib/SettingsDrawer'
 import {
   DEFAULT_LLM_PRESETS,
+  DEFAULT_WANDB_PRESET,
   EMPTY,
   getStoredTab,
   _makeFallbackPreset,
@@ -233,6 +234,111 @@ export default function SettingsPage() {
     }
     update('llm_tagger', 'presets', [...draft.llm_tagger.presets, next])
     update('llm_tagger', 'current_preset', id)
+  }
+
+  // —— WandB 预设管理（0.18 预设化，复刻 llm_tagger 模式）——
+  const wandbImportRef = useRef<HTMLInputElement | null>(null)
+  const currentWandbPreset: WandBPreset =
+    draft.wandb.presets.find((p) => p.id === draft.wandb.current_preset)
+    ?? draft.wandb.presets[0]
+    ?? DEFAULT_WANDB_PRESET
+
+  const updateWandbPreset = <K extends keyof WandBPreset>(field: K, value: WandBPreset[K]) => {
+    if (value === MASK) return // SensitiveInput 未编辑回传 MASK = 未改
+    const next = draft.wandb.presets.map((p) =>
+      p.id === currentWandbPreset.id ? { ...p, [field]: value } : p
+    )
+    update('wandb', 'presets', next)
+  }
+
+  const wandbPresetIdFor = (label: string): string => {
+    const slug = label.toLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'preset'
+    const used = new Set(draft.wandb.presets.map((p) => p.id))
+    let id = slug
+    let idx = 1
+    while (used.has(id)) {
+      idx += 1
+      id = `${slug}_${idx}`
+    }
+    return id
+  }
+
+  const addWandbPreset = async () => {
+    const label = await prompt(t('settings.newPresetName'), {
+      placeholder: 'team-b',
+      validate: (v) => (v.trim() ? null : t('settings.nameRequired')),
+    })
+    if (!label) return
+    const id = wandbPresetIdFor(label)
+    const next: WandBPreset = { ...DEFAULT_WANDB_PRESET, id, label: label.trim() }
+    update('wandb', 'presets', [...draft.wandb.presets, next])
+    update('wandb', 'current_preset', id)
+  }
+
+  const duplicateWandbPreset = async () => {
+    const label = await prompt(t('settings.newPresetName'), {
+      defaultValue: t('settings.presetCopy', { label: currentWandbPreset.label }),
+      validate: (v) => (v.trim() ? null : t('settings.nameRequired')),
+    })
+    if (!label) return
+    const id = wandbPresetIdFor(label)
+    // api_key 不复制：draft 里是 MASK 掩码，复制过去会被后端当"保持原值"哨兵，
+    // 但新 preset 没有原值可保持 —— 语义混乱，明确留空让用户重填。
+    const next: WandBPreset = { ...currentWandbPreset, api_key: '', id, label: label.trim() }
+    update('wandb', 'presets', [...draft.wandb.presets, next])
+    update('wandb', 'current_preset', id)
+  }
+
+  const deleteCurrentWandbPreset = async () => {
+    if (draft.wandb.presets.length <= 1) return
+    if (!(await confirm(t('settings.confirmDeletePreset', { label: currentWandbPreset.label }), { tone: 'danger' }))) return
+    const next = draft.wandb.presets.filter((p) => p.id !== currentWandbPreset.id)
+    update('wandb', 'presets', next)
+    update('wandb', 'current_preset', next[0]?.id ?? 'default')
+  }
+
+  // 导出不含 api_key（secrets 不出 secrets.json；draft 里本来也只有掩码）
+  const exportCurrentWandbPreset = () => {
+    const { api_key: _key, id: _id, ...rest } = currentWandbPreset
+    const payload = { kind: 'anima-wandb-preset', version: 1, preset: rest }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `wandb-preset-${currentWandbPreset.id}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
+  const importWandbPreset = async (file: File) => {
+    try {
+      const data: unknown = JSON.parse(await file.text())
+      const rawPreset =
+        data && typeof data === 'object' && 'preset' in data
+          ? (data as { preset: unknown }).preset
+          : data
+      if (!rawPreset || typeof rawPreset !== 'object' || Array.isArray(rawPreset)) {
+        throw new Error('invalid shape')
+      }
+      const preset = rawPreset as Partial<WandBPreset>
+      const label = String(preset.label || file.name.replace(/\.json$/i, '')).trim() || 'imported'
+      const id = wandbPresetIdFor(label)
+      const next: WandBPreset = {
+        ...DEFAULT_WANDB_PRESET,
+        ...preset,
+        // 导入文件带 api_key 时使用（自己备份恢复的场景）；MASK 哨兵不当值
+        api_key: typeof preset.api_key === 'string' && preset.api_key !== MASK ? preset.api_key : '',
+        id,
+        label,
+      }
+      update('wandb', 'presets', [...draft.wandb.presets, next])
+      update('wandb', 'current_preset', id)
+      toast(t('settings.wandbPresetImported', { label }), 'success')
+    } catch {
+      toast(t('settings.wandbImportInvalid'), 'error')
+    }
   }
 
   const refreshLLMModels = async () => {
@@ -745,18 +851,72 @@ export default function SettingsPage() {
         <SettingsField label={t('settings.enableWandb')} desc={t('settings.enableWandbHint')}>
           <Bool value={draft.wandb.enabled} onChange={(v) => update('wandb', 'enabled', v)} />
         </SettingsField>
+
+        {/* 预设切换 + 管理（对齐 llm_tagger 预设模式）。导出不含 API Key。 */}
+        <SettingsField label={t('settings.wandbPreset')} desc={t('settings.wandbPresetHint')}>
+          <div className="flex items-center gap-2 flex-wrap">
+            <select
+              value={currentWandbPreset.id}
+              onChange={(e) => update('wandb', 'current_preset', e.target.value)}
+              className={`${textInputClass} max-w-56`}
+            >
+              {draft.wandb.presets.map((p) => (
+                <option key={p.id} value={p.id}>{p.label || p.id}</option>
+              ))}
+            </select>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => void addWandbPreset()}>
+              {t('settings.wandbPresetNew')}
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => void duplicateWandbPreset()}>
+              {t('settings.wandbPresetSaveAs')}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => void deleteCurrentWandbPreset()}
+              disabled={draft.wandb.presets.length <= 1}
+              style={{ color: 'var(--err)' }}
+            >
+              {t('common.delete')}
+            </button>
+            <span style={{ width: 1, height: 18, background: 'var(--border-subtle)' }} />
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={exportCurrentWandbPreset}
+              title={t('settings.wandbExportNoKeyTitle')}
+            >
+              {t('settings.wandbPresetExport')}
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => wandbImportRef.current?.click()}>
+              {t('settings.wandbPresetImport')}
+            </button>
+            <input
+              ref={wandbImportRef}
+              type="file"
+              accept=".json"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                if (f) void importWandbPreset(f)
+                if (wandbImportRef.current) wandbImportRef.current.value = ''
+              }}
+            />
+          </div>
+        </SettingsField>
+
         <SettingsField label={t('settings.fieldApiKey')}>
           <SensitiveInput
-            value={draft.wandb.api_key}
-            serverValue={server?.wandb.api_key ?? ''}
-            onChange={(v) => update('wandb', 'api_key', v)}
+            value={currentWandbPreset.api_key}
+            serverValue={server?.wandb.presets.find((p) => p.id === currentWandbPreset.id)?.api_key ?? ''}
+            onChange={(v) => updateWandbPreset('api_key', v)}
           />
         </SettingsField>
         <SettingsField label={t('settings.fieldProject')}>
           <SettingsInput
             type="text"
-            value={draft.wandb.project}
-            onChange={(v) => update('wandb', 'project', v)}
+            value={currentWandbPreset.project}
+            onChange={(v) => updateWandbPreset('project', v)}
             placeholder="AnimaLoraStudio"
             className={textInputClass}
           />
@@ -764,24 +924,24 @@ export default function SettingsPage() {
         <SettingsField label={t('settings.fieldEntity')} desc={t('settings.wandbEntityHint')}>
           <SettingsInput
             type="text"
-            value={draft.wandb.entity}
-            onChange={(v) => update('wandb', 'entity', v)}
+            value={currentWandbPreset.entity}
+            onChange={(v) => updateWandbPreset('entity', v)}
             className={textInputClass}
           />
         </SettingsField>
         <SettingsField label={t('settings.fieldBaseUrl')} desc={t('settings.wandbBaseUrlHint')}>
           <SettingsInput
             type="text"
-            value={draft.wandb.base_url}
-            onChange={(v) => update('wandb', 'base_url', v)}
+            value={currentWandbPreset.base_url}
+            onChange={(v) => updateWandbPreset('base_url', v)}
             placeholder="https://api.wandb.ai"
             className={textInputClass}
           />
         </SettingsField>
         <SettingsField label={t('settings.fieldMode')}>
           <select
-            value={draft.wandb.mode}
-            onChange={(e) => update('wandb', 'mode', e.target.value as WandBConfig['mode'])}
+            value={currentWandbPreset.mode}
+            onChange={(e) => updateWandbPreset('mode', e.target.value as WandBPreset['mode'])}
             className={`${textInputClass} max-w-32`}
           >
             <option value="online">online</option>
@@ -795,9 +955,9 @@ export default function SettingsPage() {
             <p><Trans i18nKey="settings.logSamplesHelp" components={{ code: <code /> }} /></p>
           }
         >
-          <Bool value={draft.wandb.log_samples} onChange={(v) => update('wandb', 'log_samples', v)} />
+          <Bool value={currentWandbPreset.log_samples} onChange={(v) => updateWandbPreset('log_samples', v)} />
         </SettingsField>
-        {draft.wandb.log_samples && (
+        {currentWandbPreset.log_samples && (
           <div className="grid grid-cols-2 gap-3">
             <SettingsField
               label={t('settings.sampleMaxSide')}
@@ -807,8 +967,8 @@ export default function SettingsPage() {
                 type="number"
                 min={64}
                 step={64}
-                value={draft.wandb.sample_max_side}
-                onChange={(v) => update('wandb', 'sample_max_side', Math.max(64, parseInt(v) || 1216))}
+                value={currentWandbPreset.sample_max_side}
+                onChange={(v) => updateWandbPreset('sample_max_side', Math.max(64, parseInt(v) || 1216))}
                 className={textInputClass}
               />
             </SettingsField>
@@ -822,8 +982,8 @@ export default function SettingsPage() {
                 type="number"
                 min={0}
                 step={50}
-                value={draft.wandb.sample_every_n_steps}
-                onChange={(v) => update('wandb', 'sample_every_n_steps', Math.max(0, parseInt(v) || 0))}
+                value={currentWandbPreset.sample_every_n_steps}
+                onChange={(v) => updateWandbPreset('sample_every_n_steps', Math.max(0, parseInt(v) || 0))}
                 className={textInputClass}
               />
             </SettingsField>
@@ -836,11 +996,11 @@ export default function SettingsPage() {
               helpTooltip={<p>{t('settings.uploadModelHelp')}</p>}
             >
               <div className="flex items-center gap-3">
-                <Bool value={draft.wandb.upload_model} onChange={(v) => update('wandb', 'upload_model', v)} />
-                {draft.wandb.upload_model && (
+                <Bool value={currentWandbPreset.upload_model} onChange={(v) => updateWandbPreset('upload_model', v)} />
+                {currentWandbPreset.upload_model && (
                   <select
-                    value={draft.wandb.upload_model_policy}
-                    onChange={(e) => update('wandb', 'upload_model_policy', e.target.value as 'all' | 'last')}
+                    value={currentWandbPreset.upload_model_policy}
+                    onChange={(e) => updateWandbPreset('upload_model_policy', e.target.value as 'all' | 'last')}
                     className={textInputClass + ' max-w-32'}
                   >
                     <option value="last">{t('settings.policyLast')}</option>
@@ -854,11 +1014,11 @@ export default function SettingsPage() {
               helpTooltip={<p>{t('settings.uploadStateManualHelp')}</p>}
             >
               <div className="flex items-center gap-3">
-                <Bool value={draft.wandb.upload_state_manual} onChange={(v) => update('wandb', 'upload_state_manual', v)} />
-                {draft.wandb.upload_state_manual && (
+                <Bool value={currentWandbPreset.upload_state_manual} onChange={(v) => updateWandbPreset('upload_state_manual', v)} />
+                {currentWandbPreset.upload_state_manual && (
                   <select
-                    value={draft.wandb.upload_state_manual_policy}
-                    onChange={(e) => update('wandb', 'upload_state_manual_policy', e.target.value as 'all' | 'last')}
+                    value={currentWandbPreset.upload_state_manual_policy}
+                    onChange={(e) => updateWandbPreset('upload_state_manual_policy', e.target.value as 'all' | 'last')}
                     className={textInputClass + ' max-w-32'}
                   >
                     <option value="last">{t('settings.policyLast')}</option>
@@ -872,11 +1032,11 @@ export default function SettingsPage() {
               helpTooltip={<p>{t('settings.uploadStateAutoHelp')}</p>}
             >
               <div className="flex items-center gap-3">
-                <Bool value={draft.wandb.upload_state_auto} onChange={(v) => update('wandb', 'upload_state_auto', v)} />
-                {draft.wandb.upload_state_auto && (
+                <Bool value={currentWandbPreset.upload_state_auto} onChange={(v) => updateWandbPreset('upload_state_auto', v)} />
+                {currentWandbPreset.upload_state_auto && (
                   <select
-                    value={draft.wandb.upload_state_auto_policy}
-                    onChange={(e) => update('wandb', 'upload_state_auto_policy', e.target.value as 'all' | 'last')}
+                    value={currentWandbPreset.upload_state_auto_policy}
+                    onChange={(e) => updateWandbPreset('upload_state_auto_policy', e.target.value as 'all' | 'last')}
                     className={textInputClass + ' max-w-32'}
                   >
                     <option value="last">{t('settings.policyLast')}</option>
