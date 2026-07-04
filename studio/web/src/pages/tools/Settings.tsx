@@ -243,10 +243,12 @@ export default function SettingsPage() {
     ?? draft.wandb.presets[0]
     ?? DEFAULT_WANDB_PRESET
 
-  const updateWandbPreset = <K extends keyof WandBPreset>(field: K, value: WandBPreset[K]) => {
-    if (value === MASK) return // SensitiveInput 未编辑回传 MASK = 未改
+  /** patch 形式：一次动作可同改多个字段（upload 开关 + policy 合并下拉需要），
+   * 两次单字段调用会各自基于同一份 stale draft 相互覆盖。 */
+  const updateWandbPreset = (patch: Partial<WandBPreset>) => {
+    if (Object.values(patch).some((v) => v === MASK)) return // SensitiveInput 未编辑回传 MASK = 未改
     const next = draft.wandb.presets.map((p) =>
-      p.id === currentWandbPreset.id ? { ...p, [field]: value } : p
+      p.id === currentWandbPreset.id ? { ...p, ...patch } : p
     )
     update('wandb', 'presets', next)
   }

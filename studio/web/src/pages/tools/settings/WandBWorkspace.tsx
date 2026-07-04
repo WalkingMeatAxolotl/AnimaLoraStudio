@@ -5,11 +5,14 @@ import { Caption, PBtn } from '../../../components/LLMTaggerWorkspace'
 import { textInputClass } from './constants'
 import { Bool, SensitiveInput, SettingsField, SettingsInput } from './fields'
 
+/** artifact 上传三档合并进一个 dropdown：关闭 / 仅保留最新 / 保留全部。 */
+type UploadChoice = 'off' | 'last' | 'all'
+
 /**
  * WandB 预设工作区 —— 骨架与 LLMTaggerWorkspace 完全同款：
  * 卡片(header 标题 + PresetBar 预设条 + 主体)。区别只有两点：
  * header 右侧带全局 enabled 总开关；主体简化为单 section(wandb 字段少,
- * 不需要 LLM 那种双栏)。预设条右侧多导出/导入(导出不含 API Key)。
+ * 不需要 LLM 那种双栏)。预设条右侧多导出/导入(导出 yaml 含 API Key)。
  */
 export default function WandBWorkspace({
   title,
@@ -31,7 +34,9 @@ export default function WandBWorkspace({
   currentPreset: WandBPreset
   onToggleEnabled: (v: boolean) => void
   onSelectPreset: (id: string) => void
-  onUpdatePreset: <K extends keyof WandBPreset>(field: K, value: WandBPreset[K]) => void
+  /** patch 形式：一次动作可同改多个字段（如 upload 开关 + policy），
+   * 避免两次单字段提交用同一份 stale draft 相互覆盖。 */
+  onUpdatePreset: (patch: Partial<WandBPreset>) => void
   onAddPreset: () => void
   onSaveAs: () => void
   onDeletePreset: () => void
@@ -41,6 +46,32 @@ export default function WandBWorkspace({
   const { t } = useTranslation()
   const importRef = useRef<HTMLInputElement | null>(null)
   const serverPreset = serverPresets.find((p) => p.id === currentPreset.id)
+
+  const uploadChoice = (enabled: boolean, policy: 'all' | 'last'): UploadChoice =>
+    enabled ? policy : 'off'
+  const uploadSelect = (
+    label: string,
+    help: string,
+    enabled: boolean,
+    policy: 'all' | 'last',
+    apply: (enabled: boolean, policy: 'all' | 'last') => void,
+  ) => (
+    <SettingsField label={label} helpTooltip={<p>{help}</p>}>
+      <select
+        value={uploadChoice(enabled, policy)}
+        onChange={(e) => {
+          const v = e.target.value as UploadChoice
+          if (v === 'off') apply(false, policy)
+          else apply(true, v)
+        }}
+        className={`${textInputClass} max-w-40`}
+      >
+        <option value="off">{t('settings.boolDisabled')}</option>
+        <option value="last">{t('settings.policyLast')}</option>
+        <option value="all">{t('settings.policyAll')}</option>
+      </select>
+    </SettingsField>
+  )
 
   return (
     <div
@@ -137,14 +168,14 @@ export default function WandBWorkspace({
           <SensitiveInput
             value={currentPreset.api_key}
             serverValue={serverPreset?.api_key ?? ''}
-            onChange={(v) => onUpdatePreset('api_key', v)}
+            onChange={(v) => onUpdatePreset({ api_key: v })}
           />
         </SettingsField>
         <SettingsField label={t('settings.fieldProject')}>
           <SettingsInput
             type="text"
             value={currentPreset.project}
-            onChange={(v) => onUpdatePreset('project', v)}
+            onChange={(v) => onUpdatePreset({ project: v })}
             placeholder="AnimaLoraStudio"
             className={textInputClass}
           />
@@ -153,7 +184,7 @@ export default function WandBWorkspace({
           <SettingsInput
             type="text"
             value={currentPreset.entity}
-            onChange={(v) => onUpdatePreset('entity', v)}
+            onChange={(v) => onUpdatePreset({ entity: v })}
             className={textInputClass}
           />
         </SettingsField>
@@ -161,7 +192,7 @@ export default function WandBWorkspace({
           <SettingsInput
             type="text"
             value={currentPreset.base_url}
-            onChange={(v) => onUpdatePreset('base_url', v)}
+            onChange={(v) => onUpdatePreset({ base_url: v })}
             placeholder="https://api.wandb.ai"
             className={textInputClass}
           />
@@ -169,7 +200,7 @@ export default function WandBWorkspace({
         <SettingsField label={t('settings.fieldMode')}>
           <select
             value={currentPreset.mode}
-            onChange={(e) => onUpdatePreset('mode', e.target.value as WandBPreset['mode'])}
+            onChange={(e) => onUpdatePreset({ mode: e.target.value as WandBPreset['mode'] })}
             className={`${textInputClass} max-w-32`}
           >
             <option value="online">online</option>
@@ -183,10 +214,10 @@ export default function WandBWorkspace({
             <p><Trans i18nKey="settings.logSamplesHelp" components={{ code: <code /> }} /></p>
           }
         >
-          <Bool value={currentPreset.log_samples} onChange={(v) => onUpdatePreset('log_samples', v)} />
+          <Bool value={currentPreset.log_samples} onChange={(v) => onUpdatePreset({ log_samples: v })} />
         </SettingsField>
         {currentPreset.log_samples && (
-          <div className="grid grid-cols-2 gap-3">
+          <>
             <SettingsField
               label={t('settings.sampleMaxSide')}
               helpTooltip={<p>{t('settings.sampleMaxSideHelp')}</p>}
@@ -196,7 +227,7 @@ export default function WandBWorkspace({
                 min={64}
                 step={64}
                 value={currentPreset.sample_max_side}
-                onChange={(v) => onUpdatePreset('sample_max_side', Math.max(64, parseInt(v) || 1216))}
+                onChange={(v) => onUpdatePreset({ sample_max_side: Math.max(64, parseInt(v) || 1216) })}
                 className={textInputClass}
               />
             </SettingsField>
@@ -211,71 +242,41 @@ export default function WandBWorkspace({
                 min={0}
                 step={50}
                 value={currentPreset.sample_every_n_steps}
-                onChange={(v) => onUpdatePreset('sample_every_n_steps', Math.max(0, parseInt(v) || 0))}
+                onChange={(v) => onUpdatePreset({ sample_every_n_steps: Math.max(0, parseInt(v) || 0) })}
                 className={textInputClass}
               />
             </SettingsField>
-          </div>
+          </>
         )}
 
-        {/* artifact 上传与采样图无关，不随 log_samples 隐藏 */}
+        {/* artifact 上传与采样图无关，不随 log_samples 隐藏；
+            开关 + 保留策略两个下拉合并为三档单下拉：关闭 / 仅保留最新 / 保留全部 */}
         <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mt-4 mb-2">
           {t('settings.uploadArtifacts')}
         </h4>
-        <SettingsField
-          label={t('settings.uploadModel')}
-          helpTooltip={<p>{t('settings.uploadModelHelp')}</p>}
-        >
-          <div className="flex items-center gap-3">
-            <Bool value={currentPreset.upload_model} onChange={(v) => onUpdatePreset('upload_model', v)} />
-            {currentPreset.upload_model && (
-              <select
-                value={currentPreset.upload_model_policy}
-                onChange={(e) => onUpdatePreset('upload_model_policy', e.target.value as 'all' | 'last')}
-                className={textInputClass + ' max-w-32'}
-              >
-                <option value="last">{t('settings.policyLast')}</option>
-                <option value="all">{t('settings.policyAll')}</option>
-              </select>
-            )}
-          </div>
-        </SettingsField>
-        <SettingsField
-          label={t('settings.uploadStateManual')}
-          helpTooltip={<p>{t('settings.uploadStateManualHelp')}</p>}
-        >
-          <div className="flex items-center gap-3">
-            <Bool value={currentPreset.upload_state_manual} onChange={(v) => onUpdatePreset('upload_state_manual', v)} />
-            {currentPreset.upload_state_manual && (
-              <select
-                value={currentPreset.upload_state_manual_policy}
-                onChange={(e) => onUpdatePreset('upload_state_manual_policy', e.target.value as 'all' | 'last')}
-                className={textInputClass + ' max-w-32'}
-              >
-                <option value="last">{t('settings.policyLast')}</option>
-                <option value="all">{t('settings.policyAll')}</option>
-              </select>
-            )}
-          </div>
-        </SettingsField>
-        <SettingsField
-          label={t('settings.uploadStateAuto')}
-          helpTooltip={<p>{t('settings.uploadStateAutoHelp')}</p>}
-        >
-          <div className="flex items-center gap-3">
-            <Bool value={currentPreset.upload_state_auto} onChange={(v) => onUpdatePreset('upload_state_auto', v)} />
-            {currentPreset.upload_state_auto && (
-              <select
-                value={currentPreset.upload_state_auto_policy}
-                onChange={(e) => onUpdatePreset('upload_state_auto_policy', e.target.value as 'all' | 'last')}
-                className={textInputClass + ' max-w-32'}
-              >
-                <option value="last">{t('settings.policyLast')}</option>
-                <option value="all">{t('settings.policyAll')}</option>
-              </select>
-            )}
-          </div>
-        </SettingsField>
+        {uploadSelect(
+          t('settings.uploadModel'),
+          t('settings.uploadModelHelp'),
+          currentPreset.upload_model,
+          currentPreset.upload_model_policy,
+          (enabled, policy) => onUpdatePreset({ upload_model: enabled, upload_model_policy: policy }),
+        )}
+        {uploadSelect(
+          t('settings.uploadStateManual'),
+          t('settings.uploadStateManualHelp'),
+          currentPreset.upload_state_manual,
+          currentPreset.upload_state_manual_policy,
+          (enabled, policy) =>
+            onUpdatePreset({ upload_state_manual: enabled, upload_state_manual_policy: policy }),
+        )}
+        {uploadSelect(
+          t('settings.uploadStateAuto'),
+          t('settings.uploadStateAutoHelp'),
+          currentPreset.upload_state_auto,
+          currentPreset.upload_state_auto_policy,
+          (enabled, policy) =>
+            onUpdatePreset({ upload_state_auto: enabled, upload_state_auto_policy: policy }),
+        )}
       </div>
     </div>
   )
