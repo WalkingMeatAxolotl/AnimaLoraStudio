@@ -698,6 +698,58 @@ def _apply_mask(node: Any, segs: list[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# WandB preset 导入导出（0.18 预设化）
+# ---------------------------------------------------------------------------
+
+
+def get_wandb_preset(preset_id: str) -> Optional["WandBPresetConfig"]:
+    """按 id 取 preset（**含真实 api_key**，绕过 mask）——只给显式导出端点用。"""
+    for preset in load().wandb.presets:
+        if preset.id == preset_id:
+            return preset
+    return None
+
+
+def import_wandb_preset(
+    data: Any, fallback_label: str = ""
+) -> tuple[Secrets, "WandBPresetConfig"]:
+    """导入一条 wandb preset：id 撞名自动加后缀，导入后设为当前选中。
+
+    - 兼容旧前端 JSON 导出格式 ``{kind, version, preset: {...}}``（自动解包）
+    - ``api_key == MASK`` 哨兵（旧客户端导出）按空处理；带真实 key 的备份文件
+      原样恢复
+    - 值非法时抛 pydantic ValidationError，由 caller 翻 400
+    """
+    if not isinstance(data, dict):
+        raise ValueError("preset data must be a mapping")
+    payload = dict(data)
+    inner = payload.get("preset")
+    if isinstance(inner, dict):
+        payload = dict(inner)
+    if str(payload.get("api_key") or "") == MASK:
+        payload["api_key"] = ""
+
+    label = str(payload.get("label") or fallback_label or "imported").strip() or "imported"
+    slug = "".join(
+        ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in label
+    ).strip("_") or "imported"
+
+    s = load()
+    used = {p.id for p in s.wandb.presets}
+    pid, idx = slug, 1
+    while pid in used:
+        idx += 1
+        pid = f"{slug}_{idx}"
+
+    preset = WandBPresetConfig(**{**payload, "id": pid, "label": label})
+    s.wandb.presets.append(preset)
+    s.wandb.current_preset = preset.id
+    new = Secrets.model_validate(s.model_dump())  # 重跑 validator（去重/回退保底）
+    save(new)
+    return new, preset
+
+
+# ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
 

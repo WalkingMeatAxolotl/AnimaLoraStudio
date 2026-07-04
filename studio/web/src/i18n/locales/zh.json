@@ -1050,7 +1050,7 @@
     "wandbPresetSaveAs": "另存为",
     "wandbPresetExport": "导出",
     "wandbPresetImport": "导入",
-    "wandbExportNoKeyTitle": "导出为 JSON 文件；不包含 API Key",
+    "wandbExportKeyTitle": "导出为 yaml 文件（包含 API Key，注意保管）",
     "wandbPresetImported": "已导入预设「{{label}}」",
     "wandbImportInvalid": "导入失败：不是有效的 WandB 预设 JSON",
     "wandbEntityHint": "可选；团队/用户名，留空使用 wandb 默认账号",

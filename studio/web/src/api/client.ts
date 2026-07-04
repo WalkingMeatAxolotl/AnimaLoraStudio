@@ -1966,6 +1966,24 @@ export const api = {
     return (await resp.json()) as { name: string; path: string }
   },
 
+  /** WandB preset yaml 下载直链（**含真实 api_key**，服务端显式导出端点）。
+   *  <a href={...} download> 触发即可，不发 fetch。 */
+  wandbPresetExportUrl: (id: string) =>
+    `/api/secrets/wandb/presets/${encodeURIComponent(id)}/export`,
+  /** 上传 yaml/json 导入 wandb preset；返回新 preset 标识 + 最新 masked secrets。 */
+  importWandbPreset: async (
+    file: File,
+  ): Promise<{ id: string; label: string; secrets: Secrets }> => {
+    const fd = new FormData()
+    fd.append('file', file, file.name)
+    const resp = await fetch('/api/secrets/wandb/presets/import', { method: 'POST', body: fd })
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => null)
+      throw makeApiError(resp.status, resp.statusText, body, resp.headers.get('X-Trace-Id'))
+    }
+    return (await resp.json()) as { id: string; label: string; secrets: Secrets }
+  },
+
   // 兼容别名：PP0 之前叫 listConfigs / getConfig / ...。保留一段时间。
   listConfigs: () =>
     req<{ items: PresetSummary[] }>('/api/presets').then((r) => r.items),

@@ -297,47 +297,26 @@ export default function SettingsPage() {
     update('wandb', 'current_preset', next[0]?.id ?? 'default')
   }
 
-  // 导出不含 api_key（secrets 不出 secrets.json；draft 里本来也只有掩码）
+  // 导出走后端端点：yaml 文件**包含真实 api_key**（draft 里只有掩码拿不到），
+  // 用户显式动作，文件自行保管。
   const exportCurrentWandbPreset = () => {
-    const { api_key: _key, id: _id, ...rest } = currentWandbPreset
-    const payload = { kind: 'anima-wandb-preset', version: 1, preset: rest }
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
-    a.href = url
-    a.download = `wandb-preset-${currentWandbPreset.id}.json`
+    a.href = api.wandbPresetExportUrl(currentWandbPreset.id)
+    a.download = `wandb-preset-${currentWandbPreset.id}.yaml`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
-    URL.revokeObjectURL(url)
   }
 
+  // 导入走后端端点（yaml/json 上传，后端解析 + 校验 + 落盘 + 切换选中），
+  // 用返回的权威 masked snapshot 回写 context。
   const importWandbPreset = async (file: File) => {
     try {
-      const data: unknown = JSON.parse(await file.text())
-      const rawPreset =
-        data && typeof data === 'object' && 'preset' in data
-          ? (data as { preset: unknown }).preset
-          : data
-      if (!rawPreset || typeof rawPreset !== 'object' || Array.isArray(rawPreset)) {
-        throw new Error('invalid shape')
-      }
-      const preset = rawPreset as Partial<WandBPreset>
-      const label = String(preset.label || file.name.replace(/\.json$/i, '')).trim() || 'imported'
-      const id = wandbPresetIdFor(label)
-      const next: WandBPreset = {
-        ...DEFAULT_WANDB_PRESET,
-        ...preset,
-        // 导入文件带 api_key 时使用（自己备份恢复的场景）；MASK 哨兵不当值
-        api_key: typeof preset.api_key === 'string' && preset.api_key !== MASK ? preset.api_key : '',
-        id,
-        label,
-      }
-      update('wandb', 'presets', [...draft.wandb.presets, next])
-      update('wandb', 'current_preset', id)
-      toast(t('settings.wandbPresetImported', { label }), 'success')
-    } catch {
-      toast(t('settings.wandbImportInvalid'), 'error')
+      const r = await api.importWandbPreset(file)
+      setServer(r.secrets)
+      toast(t('settings.wandbPresetImported', { label: r.label }), 'success')
+    } catch (e) {
+      toast(`${t('settings.wandbImportInvalid')}: ${e}`, 'error')
     }
   }
 

@@ -54,10 +54,10 @@ export default function WandBWorkspace({
       >
         <h2 className="text-sm font-semibold text-fg-primary m-0">{title}</h2>
         <label
-          className="flex items-center gap-2 text-xs text-fg-secondary cursor-pointer"
+          className="flex items-center gap-2 text-xs text-fg-secondary cursor-pointer shrink-0"
           title={t('settings.enableWandbHint')}
         >
-          {t('settings.enableWandb')}
+          <span className="whitespace-nowrap">{t('settings.enableWandb')}</span>
           <Bool value={config.enabled} onChange={onToggleEnabled} />
         </label>
       </div>
@@ -111,14 +111,14 @@ export default function WandBWorkspace({
             <PBtn variant="danger" onClick={onDeletePreset}>{t('common.delete')}</PBtn>
           )}
           <span style={{ width: 1, height: 18, background: 'var(--border-subtle)' }} />
-          <PBtn onClick={onExport} title={t('settings.wandbExportNoKeyTitle')}>
+          <PBtn onClick={onExport} title={t('settings.wandbExportKeyTitle')}>
             {t('settings.wandbPresetExport')}
           </PBtn>
           <PBtn onClick={() => importRef.current?.click()}>{t('settings.wandbPresetImport')}</PBtn>
           <input
             ref={importRef}
             type="file"
-            accept=".json"
+            accept=".yaml,.yml,.json"
             style={{ display: 'none' }}
             onChange={(e) => {
               const f = e.target.files?.[0]

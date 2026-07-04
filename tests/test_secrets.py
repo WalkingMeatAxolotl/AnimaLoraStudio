@@ -664,6 +664,43 @@ def test_wandb_preset_mask_roundtrip_keeps_real_key(secrets_file: Path) -> None:
     assert s.wandb.active.project == "renamed"
 
 
+def test_wandb_get_preset_returns_real_key_for_export(secrets_file: Path) -> None:
+    """导出端点用的 get_wandb_preset 绕过 mask 返回真实 key。"""
+    secrets.update({"wandb": {"presets": [{"id": "default", "api_key": "real-key"}]}})
+    preset = secrets.get_wandb_preset("default")
+    assert preset is not None
+    assert preset.api_key == "real-key"
+    assert secrets.get_wandb_preset("nonexistent") is None
+
+
+def test_wandb_import_preset_appends_and_selects(secrets_file: Path) -> None:
+    new, preset = secrets.import_wandb_preset(
+        {"label": "Team B", "entity": "b", "api_key": "k2", "mode": "offline"}
+    )
+    assert preset.entity == "b"
+    assert preset.api_key == "k2"  # 带真实 key 的备份文件原样恢复
+    assert new.wandb.current_preset == preset.id
+    assert any(p.id == preset.id for p in secrets.load().wandb.presets)
+
+
+def test_wandb_import_preset_unwraps_wrapper_and_uniquifies_id(secrets_file: Path) -> None:
+    """旧前端 JSON 导出格式 {kind, preset} 自动解包；MASK 哨兵按空；撞名加后缀。"""
+    new, preset = secrets.import_wandb_preset({
+        "kind": "anima-wandb-preset",
+        "version": 1,
+        "preset": {"label": "default", "api_key": secrets.MASK, "mode": "offline"},
+    })
+    assert preset.api_key == ""
+    assert preset.mode == "offline"
+    assert preset.id == "default_2"  # 与既有 default 撞名
+    assert new.wandb.current_preset == "default_2"
+
+
+def test_wandb_import_preset_rejects_non_mapping(secrets_file: Path) -> None:
+    with pytest.raises(ValueError):
+        secrets.import_wandb_preset(["not", "a", "dict"])
+
+
 def test_wandb_current_preset_falls_back_when_missing(secrets_file: Path) -> None:
     """current_preset 指向不存在的 id 时回落到第一个 preset。"""
     secrets.update({

@@ -1050,7 +1050,7 @@
     "wandbPresetSaveAs": "Save as",
     "wandbPresetExport": "Export",
     "wandbPresetImport": "Import",
-    "wandbExportNoKeyTitle": "Export as a JSON file; the API key is not included",
+    "wandbExportKeyTitle": "Export as a yaml file (includes the API key — keep it safe)",
     "wandbPresetImported": "Imported preset \"{{label}}\"",
     "wandbImportInvalid": "Import failed: not a valid WandB preset JSON",
     "wandbEntityHint": "Optional; team/user name, blank uses the default wandb account",
