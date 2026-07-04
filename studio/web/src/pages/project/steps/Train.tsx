@@ -798,7 +798,9 @@ export default function TrainPage() {
             show_when 裁剪后的 yaml，实时跟随表单，与落盘 config.yaml 同内容。 */}
         {previewOpen && (
           <div className={`${previewTab === 'config' ? 'flex-[2]' : 'flex-[1]'} min-w-0 flex flex-col min-h-0`}>
-            <div className="shrink-0 mb-2">
+            {/* tab 条靠右：切 YAML tab 时抽屉加宽、左缘会移动，右对齐锚在固定的
+                右缘上，切换时开关自身不跟着跳。 */}
+            <div className="shrink-0 mb-2 flex justify-end">
               <div className="inline-flex rounded-md border border-subtle overflow-hidden text-xs">
                 <button
                   type="button"
