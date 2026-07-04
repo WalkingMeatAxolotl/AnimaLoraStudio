@@ -709,7 +709,8 @@ function Step({ children }: { children: React.ReactNode }) {
   )
 }
 
-function Caption({ children }: { children: React.ReactNode }) {
+// 导出给 WandBWorkspace 复用（同款预设工作区骨架）
+export function Caption({ children }: { children: React.ReactNode }) {
   return (
     <span style={{
       fontFamily: 'var(--font-mono)', fontSize: 'var(--t-2xs)',
@@ -846,7 +847,8 @@ function ChipButton({ children, onClick, disabled, active }: {
   )
 }
 
-function PBtn({ children, onClick, variant, title }: {
+// 导出给 WandBWorkspace 复用（同款预设工作区骨架）
+export function PBtn({ children, onClick, variant, title }: {
   children: React.ReactNode
   onClick?: () => void
   variant?: 'default' | 'primary' | 'danger'
