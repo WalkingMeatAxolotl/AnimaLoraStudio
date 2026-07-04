@@ -323,12 +323,14 @@ def test_default_cmd_builder_includes_monitor_flag() -> None:
 def test_popen_injects_wandb_env(env, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = secrets.Secrets()
     cfg.wandb.enabled = True
-    cfg.wandb.api_key = "wandb-key"
-    cfg.wandb.project = "anima"
-    cfg.wandb.entity = "team"
-    cfg.wandb.base_url = "https://wandb.example"
-    cfg.wandb.mode = "offline"
-    cfg.wandb.log_samples = False
+    # 0.18 预设化：字段在当前选中的 preset 上
+    wb = cfg.wandb.active
+    wb.api_key = "wandb-key"
+    wb.project = "anima"
+    wb.entity = "team"
+    wb.base_url = "https://wandb.example"
+    wb.mode = "offline"
+    wb.log_samples = False
     monkeypatch.setattr("studio.supervisor._secrets.load", lambda: cfg)
     captured: dict[str, Any] = {}
 
