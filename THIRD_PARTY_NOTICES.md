@@ -160,8 +160,9 @@
     + 置信度引导（instability EMA）update，step 公式派生自官方实现
   - `runtime/training/optimizers/came.py` — registry 接线（本仓库代码）
 - **修改点**：optimizer state 固定 fp32（bf16 LoRA/LoKr 训练数值稳定，同 SOAP）；
-  bf16/fp16 参数写回走 stochastic rounding（`_copy_stochastic`）；`load_state_dict`
-  后恢复 fp32 state（resume fixup）。算法公式未改动。
+  bf16 参数写回走 stochastic rounding（`_copy_stochastic`；fp16 为普通 cast，
+  bit-trick 仅适用 bf16）；`load_state_dict` 后恢复 fp32 state（resume fixup）。
+  算法公式未改动。
 
 ### facebookresearch / schedule-free — Schedule-Free 机制 (Apache-2.0, research attribution)
 

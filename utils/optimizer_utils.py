@@ -1081,7 +1081,8 @@ class CAME(Optimizer):
     派生自官方实现 yangluo7/CAME（MIT License, Copyright (c) 2023 Yang Luo），
     做了本仓库统一的工程调整（算法公式与官方 step 逐行对齐，未改动）：
     - optimizer state 固定 fp32（bf16 LoRA/LoKr 训练数值稳定，同 SOAP）
-    - bf16/fp16 参数写回走 stochastic rounding（_copy_stochastic）
+    - bf16 参数写回走 stochastic rounding（_copy_stochastic 的 bit-trick 仅
+      适用 bf16；fp16 写回为普通 cast，但计算与 state 仍全程 fp32）
     - load_state_dict 后恢复 fp32 state（PyTorch load 会 cast 到 param dtype）
 
     Args:
@@ -1104,10 +1105,13 @@ class CAME(Optimizer):
     ) -> None:
         if lr <= 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
-        if len(betas) != 3 or not all(0.0 <= beta <= 1.0 for beta in betas):
-            raise ValueError(f"Invalid betas: {betas} (CAME needs 0 <= β1, β2, β3 <= 1)")
-        if len(eps) != 2 or not all(e >= 0.0 for e in eps):
-            raise ValueError(f"Invalid eps: {eps} (CAME needs non-negative (eps1, eps2))")
+        # β=1.0 会让对应 EMA 永远停在初始零值，_approx_sq_grad 算出 0/0=NaN
+        # 首步即毒化参数，故与 Lion 同样取开区间上界
+        if len(betas) != 3 or not all(0.0 <= beta < 1.0 for beta in betas):
+            raise ValueError(f"Invalid betas: {betas} (CAME needs 0 <= β1, β2, β3 < 1)")
+        # eps=0 在整张梯度为零（如 LoRA 零初始化首步）时同样产生 0/0=NaN
+        if len(eps) != 2 or not all(e > 0.0 for e in eps):
+            raise ValueError(f"Invalid eps: {eps} (CAME needs positive (eps1, eps2))")
         if clip_threshold <= 0.0:
             raise ValueError(f"Invalid clip_threshold: {clip_threshold}")
         if weight_decay < 0.0:
@@ -1136,22 +1140,14 @@ class CAME(Optimizer):
         c_factor = exp_avg_sq_col.unsqueeze(-2).rsqrt()
         return torch.mul(r_factor, c_factor)
 
-    _FP32_STATE_KEYS = (
-        "exp_avg",
-        "exp_avg_sq",
-        "exp_avg_sq_row",
-        "exp_avg_sq_col",
-        "exp_avg_res_row",
-        "exp_avg_res_col",
-    )
-
     def load_state_dict(self, state_dict):
         result = super().load_state_dict(state_dict)
         # PyTorch load 会把 float state cast 到 param dtype；CAME state 固定
         # fp32（bf16 下 (1-β2)=1e-3 的 EMA 增量会被 bf16 round 吞掉），统一恢复。
+        # 不列 key 白名单：CAME 创建的张量 state 全是 fp32（"step" 是 int），
+        # 恢复所有浮点张量即可，未来新增 state key 也不会漏。
         for state in self.state.values():
-            for key in self._FP32_STATE_KEYS:
-                value = state.get(key)
+            for key, value in state.items():
                 if isinstance(value, torch.Tensor) and value.is_floating_point() \
                         and value.dtype != torch.float32:
                     state[key] = value.float()
@@ -1226,7 +1222,8 @@ class CAME(Optimizer):
                 else:
                     update = exp_avg.clone()
 
-                p_data_fp32 = p if p.dtype == torch.float32 else p.detach().clone().float()
+                # .float() 对非 fp32 张量本身就返回新拷贝，无需先 clone
+                p_data_fp32 = p if p.dtype == torch.float32 else p.detach().float()
 
                 if weight_decay != 0.0:
                     p_data_fp32.add_(p_data_fp32, alpha=-weight_decay * lr)
@@ -1256,19 +1253,26 @@ def create_came(
 
     Args:
         betas: (β1, β2, β3) — 动量 / 分解二阶矩 / instability EMA 衰减。
-            上层 create_optimizer 默认传 Adam 风格 2 元组时自动补论文默认 β3。
-        eps: (eps1, eps2) — 二阶矩正则 / instability 正则。上层默认传
-            Adam 风格标量时回退论文默认 (1e-30, 1e-16)。
+            上层 create_optimizer 传其 Adam 默认 (0.9, 0.999) 时补论文默认 β3；
+            其余 2 元组视为配置错误，交给 CAME.__init__ 报 Invalid betas。
+        eps: (eps1, eps2) — 二阶矩正则 / instability 正则。上层 create_optimizer
+            传其 Adam 默认标量 1e-8 时回退论文默认 (1e-30, 1e-16)；显式传其他
+            标量则报错（标量 eps 对 CAME 无意义，静默替换会吞掉用户配置）。
         clip_threshold: update RMS 裁剪阈值（同 Adafactor d 参数）。
     """
     betas = tuple(betas)
-    if len(betas) == 2:
-        # create_optimizer 的通用默认是 Adam 2 元组；CAME 需要 (β1, β2, β3)
-        betas = (*betas, 0.9999)
+    if betas == (0.9, 0.999):
+        # create_optimizer 的通用 Adam 默认；CAME 需要 (β1, β2, β3)，同 PPSF
+        # 的默认哨兵检测，只映射默认值，显式 2 元组由 CAME.__init__ 拒绝
+        betas = (0.9, 0.999, 0.9999)
     if isinstance(eps, (int, float)):
-        # Adam 风格标量 eps 对 CAME 无意义（语义是 (eps1, eps2) 正则对），
-        # 未显式配置时回退论文默认
-        eps = (1e-30, 1e-16)
+        if eps == 1e-8:
+            # create_optimizer 的通用 Adam 默认标量；回退论文默认
+            eps = (1e-30, 1e-16)
+        else:
+            raise ValueError(
+                f"CAME needs eps as an (eps1, eps2) pair, got scalar {eps}"
+            )
 
     param_list = params if _is_param_groups(params) else list(params)
     optimizer = CAME(

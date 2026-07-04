@@ -52,7 +52,7 @@ CAME（Luo et al. 2023, [arxiv 2307.02047](https://arxiv.org/abs/2307.02047)，A
 - **lr**：AdamW 量级真实值（**不像 Prodigy 填 1.0**），LoRA 起步 1e-4；论文经验 CAME 可承受比 Adafactor 略大的 lr
 - **scheduler**：常规优化器，cosine / cosine_with_warmup 都可配
 - **state 显存**：exp_avg（全尺寸）+ 4 条行/列分解向量 ≈ AdamW 的一半多一点；比 Lion 大（多了分解统计），比 AdamW / SOAP 小
-- `came_beta3`（默认 0.9999）是置信度 EMA 衰减，一般不动；`came_eps2` 调大等价于逐渐关闭置信度加权（退化回 Adafactor 风格）
+- `came_beta3`（默认 0.9999）是置信度 EMA 衰减，一般不动；`came_eps2` 是 instability 的下限正则：调大会压平逐坐标的置信度差异，同时整体步长随之缩小（不是中性地"关闭"置信度加权）
 
 实现派生自官方 [yangluo7/CAME](https://github.com/yangluo7/CAME)（MIT），做了 bf16 训练工程适配（state 固定 fp32 + stochastic rounding 写回 + resume fixup），算法公式与官方逐行对齐。
 

@@ -424,7 +424,7 @@
       "came_beta2": "CAME β2（分解二阶矩 EMA 衰减）",
       "came_beta3": "CAME β3（置信度 instability EMA 衰减；越大置信度估计越平滑）",
       "came_eps1": "CAME eps1（二阶矩正则项，防除零）",
-      "came_eps2": "CAME eps2（instability 正则项；越大置信度加权越接近关闭）",
+      "came_eps2": "CAME eps2（instability 下限正则；调大会压平逐坐标置信度差异并整体缩小步长）",
       "came_clip_threshold": "CAME update RMS 裁剪阈值（同 Adafactor 的 d）",
       "lion_beta1": "Lion β1（动量插值系数）",
       "lion_beta2": "Lion β2（动量累计系数）",

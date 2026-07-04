@@ -298,28 +298,28 @@ class TrainingConfig(BaseModel):
     # CAME = Confidence-guided Adaptive Memory Efficient（Luo et al. 2023,
     # arxiv 2307.02047）。lr 用 AdamW 量级真实值，可配常规 lr_scheduler。
     came_beta1: float = Field(
-        0.9, ge=0.0, le=1.0,
+        0.9, ge=0.0, lt=1.0,
         description="CAME β1（update 动量 EMA 衰减）",
         json_schema_extra=_meta("training", show_when="optimizer_type==came", advanced=True),
     )
     came_beta2: float = Field(
-        0.999, ge=0.0, le=1.0,
+        0.999, ge=0.0, lt=1.0,
         description="CAME β2（分解二阶矩 EMA 衰减）",
         json_schema_extra=_meta("training", show_when="optimizer_type==came", advanced=True),
     )
     came_beta3: float = Field(
-        0.9999, ge=0.0, le=1.0,
+        0.9999, ge=0.0, lt=1.0,
         description="CAME β3（置信度 instability EMA 衰减；越大置信度估计越平滑）",
         json_schema_extra=_meta("training", show_when="optimizer_type==came", advanced=True),
     )
     came_eps1: float = Field(
-        1e-30, ge=0.0,
+        1e-30, gt=0.0,
         description="CAME eps1（二阶矩正则项，防除零）",
         json_schema_extra=_meta("training", show_when="optimizer_type==came", advanced=True),
     )
     came_eps2: float = Field(
-        1e-16, ge=0.0,
-        description="CAME eps2（instability 正则项；越大置信度加权越接近关闭）",
+        1e-16, gt=0.0,
+        description="CAME eps2（instability 下限正则；调大会压平逐坐标置信度差异并整体缩小步长）",
         json_schema_extra=_meta("training", show_when="optimizer_type==came", advanced=True),
     )
     came_clip_threshold: float = Field(

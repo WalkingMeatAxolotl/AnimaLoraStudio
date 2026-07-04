@@ -424,7 +424,7 @@
       "came_beta2": "CAME β2 (factored second-moment EMA decay)",
       "came_beta3": "CAME β3 (confidence instability EMA decay; larger = smoother confidence estimate)",
       "came_eps1": "CAME eps1 (second-moment regularizer, prevents division by zero)",
-      "came_eps2": "CAME eps2 (instability regularizer; larger values effectively disable confidence weighting)",
+      "came_eps2": "CAME eps2 (instability floor; larger values flatten per-coordinate confidence differences and shrink the overall step)",
       "came_clip_threshold": "CAME update RMS clipping threshold (same as Adafactor's d)",
       "lion_beta1": "Lion β1 (momentum interpolation coefficient)",
       "lion_beta2": "Lion β2 (momentum accumulation coefficient)",

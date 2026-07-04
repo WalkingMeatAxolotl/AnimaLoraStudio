@@ -366,8 +366,8 @@ def test_came_bf16_param_state_fp32_and_finite() -> None:
 
 
 def test_create_came_backfills_beta3_and_eps_pair() -> None:
-    """上层 create_optimizer 默认传 Adam 风格 betas 2 元组 / 标量 eps 时，
-    工厂补论文默认 β3=0.9999 / eps=(1e-30, 1e-16)。"""
+    """上层 create_optimizer 传其 Adam 默认（betas=(0.9,0.999) / eps=1e-8）时，
+    工厂按默认哨兵映射到论文默认 β3=0.9999 / eps=(1e-30, 1e-16)。"""
     model = nn.Linear(4, 4)
     optim = create_optimizer("came", model.parameters(), learning_rate=1e-4)
     assert isinstance(optim, CAME)
@@ -383,12 +383,33 @@ def test_create_came_backfills_beta3_and_eps_pair() -> None:
     assert optim2.param_groups[0]["eps"] == (1e-20, 1e-12)
 
 
+def test_create_came_rejects_explicit_scalar_eps_and_short_betas() -> None:
+    """非默认哨兵的错形状配置必须响亮失败，不许静默替换：
+    显式标量 eps（≠ Adam 默认 1e-8）报错；显式 2 元组 betas（≠ Adam 默认）
+    由 CAME.__init__ 拒绝。"""
+    model = nn.Linear(4, 4)
+    with pytest.raises(ValueError, match="eps1, eps2"):
+        create_came(model.parameters(), lr=1e-4, eps=1e-6)
+    with pytest.raises(ValueError, match="Invalid betas"):
+        create_came(model.parameters(), lr=1e-4, betas=(0.8, 0.99))
+
+
 def test_came_rejects_invalid_hyperparams() -> None:
     model = nn.Linear(2, 2)
     with pytest.raises(ValueError, match="Invalid betas"):
         CAME(model.parameters(), lr=1e-4, betas=(0.9, 1.5, 0.9999))
     with pytest.raises(ValueError, match="Invalid learning rate"):
         CAME(model.parameters(), lr=0.0)
+    # β=1.0 会让 EMA 停在零值 → _approx_sq_grad 首步 0/0=NaN，必须拒绝
+    with pytest.raises(ValueError, match="Invalid betas"):
+        CAME(model.parameters(), lr=1e-4, betas=(0.9, 1.0, 0.9999))
+    with pytest.raises(ValueError, match="Invalid betas"):
+        CAME(model.parameters(), lr=1e-4, betas=(0.9, 0.999, 1.0))
+    # eps=0 在整张梯度为零（LoRA 零初始化首步）时 0/0=NaN，必须拒绝
+    with pytest.raises(ValueError, match="Invalid eps"):
+        CAME(model.parameters(), lr=1e-4, eps=(0.0, 1e-16))
+    with pytest.raises(ValueError, match="Invalid eps"):
+        CAME(model.parameters(), lr=1e-4, eps=(1e-30, 0.0))
 
 
 def test_came_weight_decay_shrinks_params() -> None:
