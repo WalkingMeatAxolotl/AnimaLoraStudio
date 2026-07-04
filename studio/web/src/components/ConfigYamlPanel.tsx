@@ -6,10 +6,11 @@ import { configToYaml } from '../lib/yamlPreview'
 import { useToast } from './Toast'
 
 /**
- * 「生效配置」查看器：把当前表单 config 按 show_when 裁掉未启用字段后,
- * 渲染成与落盘 yaml 一致的文本(键序 / 引号规则对齐 yaml.safe_dump)。
+ * YAML 预览：把当前表单 config 按 show_when 裁掉未启用字段后,渲染成与落盘
+ * yaml 一致的文本(键序 / 引号规则对齐 yaml.safe_dump)。
  * Presets 页包在居中 modal 里,Train 页作为右栏预览抽屉的 tab。
- * 高度由外层控制:className 传 flex 布局类,<pre> 自己滚动。
+ * 高度由外层控制:className 传 flex 布局类,<pre> 自己滚动;长行不折行、
+ * 横向滚动(路径等长值折行后完全没法读)。
  */
 export default function ConfigYamlPanel({
   config,
@@ -53,7 +54,7 @@ export default function ConfigYamlPanel({
           }}
         >{t('common.copy')}</button>
       </div>
-      <pre className="flex-1 min-h-0 m-0 p-3 bg-sunken rounded-sm font-mono text-xs text-fg-secondary leading-[1.7] whitespace-pre-wrap break-words overflow-auto">
+      <pre className="flex-1 min-h-0 m-0 p-3 bg-sunken rounded-sm font-mono text-xs text-fg-secondary leading-[1.7] whitespace-pre overflow-auto">
         {yamlText}
       </pre>
     </div>

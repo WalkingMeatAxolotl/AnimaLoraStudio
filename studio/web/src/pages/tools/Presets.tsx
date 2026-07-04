@@ -530,9 +530,9 @@ export default function PresetsPage() {
           onClick={() => setEffectiveConfigOpen(true)}
           disabled={busy || !config}
           className="btn btn-ghost btn-sm"
-          title={t('presets.effectiveConfigTitle')}
+          title={t('presets.yamlPreviewTitle')}
         >
-          {t('presets.effectiveConfig')}
+          {t('presets.yamlPreview')}
         </button>
         <span style={{ width: 1, height: 22, background: 'var(--border-subtle)' }} />
         <button onClick={onImportClick} disabled={busy} className="btn btn-ghost btn-sm">
@@ -791,7 +791,7 @@ export default function PresetsPage() {
         </div>
       </div>
 
-      {/* 「生效配置」查看器：与落盘 yaml 一致的只读视图（居中 modal） */}
+      {/* YAML 预览：与落盘 yaml 一致的只读视图（居中 modal） */}
       {effectiveConfigOpen && config && (
         <div
           role="dialog"
@@ -801,8 +801,8 @@ export default function PresetsPage() {
         >
           <div className="bg-elevated border border-dim rounded-lg w-[90%] max-w-[720px] max-h-[85vh] p-6 flex flex-col gap-3 shadow-xl">
             <div className="shrink-0">
-              <h2 className="m-0 text-lg font-semibold text-fg-primary">{t('presets.effectiveConfig')}</h2>
-              <p className="mt-1 mb-0 text-sm text-fg-secondary">{t('presets.effectiveConfigHint')}</p>
+              <h2 className="m-0 text-lg font-semibold text-fg-primary">{t('presets.yamlPreview')}</h2>
+              <p className="mt-1 mb-0 text-sm text-fg-secondary">{t('presets.yamlPreviewHint')}</p>
             </div>
             <ConfigYamlPanel
               config={config}
@@ -810,7 +810,7 @@ export default function PresetsPage() {
               fileLabel={isNew
                 ? `${newName.trim() || 'preset'}.yaml`
                 : `${selected}.yaml`}
-              hint={isNew || dirty ? t('presets.effectiveConfigDirty') : undefined}
+              hint={isNew || dirty ? t('presets.yamlPreviewDirty') : undefined}
               className="flex-1 flex flex-col min-h-0"
             />
             <div className="flex justify-end shrink-0">

@@ -792,12 +792,12 @@ export default function TrainPage() {
           </button>
         </div>
 
-        {/* 右栏：预览抽屉（可收回），双 tab：数据分布 / 生效配置。flex-[1] 与左
-            表单 flex-[3] 还原老 grid 的 3:1 比例（按比例而非固定宽）；收起时整列
-            不渲染、空间归表单。生效配置 = 按 show_when 裁剪后的 yaml，实时跟随
-            表单，与落盘 config.yaml 同内容。 */}
+        {/* 右栏：预览抽屉（可收回），双 tab：数据分布 / YAML 预览。数据分布保持
+            与左表单 flex-[3] 的 3:1 老比例；YAML tab 加宽到 3:2（yaml 行长，1/4
+            宽不断折行看不清）。收起时整列不渲染、空间归表单。YAML 预览 = 按
+            show_when 裁剪后的 yaml，实时跟随表单，与落盘 config.yaml 同内容。 */}
         {previewOpen && (
-          <div className="flex-[1] min-w-0 flex flex-col min-h-0">
+          <div className={`${previewTab === 'config' ? 'flex-[2]' : 'flex-[1]'} min-w-0 flex flex-col min-h-0`}>
             <div className="shrink-0 mb-2">
               <div className="inline-flex rounded-md border border-subtle overflow-hidden text-xs">
                 <button
@@ -812,7 +812,7 @@ export default function TrainPage() {
                   onClick={() => setPreviewTab('config')}
                   className={`px-3 py-1 transition-colors ${previewTab === 'config' ? 'bg-accent text-white' : 'bg-surface text-fg-secondary hover:bg-subtle'}`}
                 >
-                  {t('train.previewTabConfig')}
+                  {t('train.previewTabYaml')}
                 </button>
               </div>
             </div>
