@@ -852,58 +852,85 @@ export default function SettingsPage() {
           <Bool value={draft.wandb.enabled} onChange={(v) => update('wandb', 'enabled', v)} />
         </SettingsField>
 
-        {/* 预设切换 + 管理（对齐 llm_tagger 预设模式）。导出不含 API Key。 */}
-        <SettingsField label={t('settings.wandbPreset')} desc={t('settings.wandbPresetHint')}>
-          <div className="flex items-center gap-2 flex-wrap">
-            <select
-              value={currentWandbPreset.id}
-              onChange={(e) => update('wandb', 'current_preset', e.target.value)}
-              className={`${textInputClass} max-w-56`}
-            >
-              {draft.wandb.presets.map((p) => (
-                <option key={p.id} value={p.id}>{p.label || p.id}</option>
-              ))}
-            </select>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => void addWandbPreset()}>
-              {t('settings.wandbPresetNew')}
-            </button>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => void duplicateWandbPreset()}>
-              {t('settings.wandbPresetSaveAs')}
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={() => void deleteCurrentWandbPreset()}
-              disabled={draft.wandb.presets.length <= 1}
-              style={{ color: 'var(--err)' }}
-            >
-              {t('common.delete')}
-            </button>
-            <span style={{ width: 1, height: 18, background: 'var(--border-subtle)' }} />
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={exportCurrentWandbPreset}
-              title={t('settings.wandbExportNoKeyTitle')}
-            >
-              {t('settings.wandbPresetExport')}
-            </button>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => wandbImportRef.current?.click()}>
-              {t('settings.wandbPresetImport')}
-            </button>
-            <input
-              ref={wandbImportRef}
-              type="file"
-              accept=".json"
-              style={{ display: 'none' }}
-              onChange={(e) => {
-                const f = e.target.files?.[0]
-                if (f) void importWandbPreset(f)
-                if (wandbImportRef.current) wandbImportRef.current.value = ''
+        {/* 预设卡片条：样式对齐 LLMTaggerWorkspace 的 PresetBar（sunken pill +
+            透明 select 覆盖切换），让「这是一套可切换的预设」一眼可见。
+            导出不含 API Key。 */}
+        <div className="rounded-md border border-subtle">
+          <div className="flex items-center gap-3 flex-wrap px-3.5 py-2.5">
+            <span className="caption uppercase tracking-[0.06em] text-xs shrink-0">
+              {t('settings.wandbPreset')}
+            </span>
+            <div
+              className="relative flex items-center gap-2.5 cursor-pointer min-w-0"
+              style={{
+                background: 'var(--bg-sunken)',
+                border: '1px solid var(--border-default)',
+                borderRadius: 'var(--r-md)',
+                padding: '7px 14px 7px 12px',
+                fontSize: 'var(--t-sm)',
+                color: 'var(--fg-primary)',
+                fontWeight: 500,
+                minWidth: 220,
               }}
-            />
+            >
+              <select
+                value={currentWandbPreset.id}
+                onChange={(e) => update('wandb', 'current_preset', e.target.value)}
+                className="absolute inset-0 opacity-0 cursor-pointer"
+                aria-label={t('settings.wandbPreset')}
+              >
+                {draft.wandb.presets.map((p) => (
+                  <option key={p.id} value={p.id}>{p.label || p.id}</option>
+                ))}
+              </select>
+              <span className="truncate">{currentWandbPreset.label || currentWandbPreset.id}</span>
+              <span className="ml-auto" style={{ color: 'var(--fg-tertiary)' }}>▾</span>
+            </div>
+            <span className="flex-1" />
+            <div className="flex items-center gap-1.5">
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => void addWandbPreset()}>
+                {t('settings.wandbPresetNew')}
+              </button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => void duplicateWandbPreset()}>
+                {t('settings.wandbPresetSaveAs')}
+              </button>
+              {draft.wandb.presets.length > 1 && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => void deleteCurrentWandbPreset()}
+                  style={{ color: 'var(--err)' }}
+                >
+                  {t('common.delete')}
+                </button>
+              )}
+              <span style={{ width: 1, height: 18, background: 'var(--border-subtle)' }} />
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={exportCurrentWandbPreset}
+                title={t('settings.wandbExportNoKeyTitle')}
+              >
+                {t('settings.wandbPresetExport')}
+              </button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => wandbImportRef.current?.click()}>
+                {t('settings.wandbPresetImport')}
+              </button>
+              <input
+                ref={wandbImportRef}
+                type="file"
+                accept=".json"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  if (f) void importWandbPreset(f)
+                  if (wandbImportRef.current) wandbImportRef.current.value = ''
+                }}
+              />
+            </div>
           </div>
-        </SettingsField>
+          <p className="px-3.5 pb-2.5 m-0 text-xs text-fg-tertiary">{t('settings.wandbPresetHint')}</p>
+        </div>
 
         <SettingsField label={t('settings.fieldApiKey')}>
           <SensitiveInput
@@ -987,66 +1014,67 @@ export default function SettingsPage() {
                 className={textInputClass}
               />
             </SettingsField>
-
-            <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mt-4 mb-2">
-              {t('settings.uploadArtifacts')}
-            </h4>
-            <SettingsField
-              label={t('settings.uploadModel')}
-              helpTooltip={<p>{t('settings.uploadModelHelp')}</p>}
-            >
-              <div className="flex items-center gap-3">
-                <Bool value={currentWandbPreset.upload_model} onChange={(v) => updateWandbPreset('upload_model', v)} />
-                {currentWandbPreset.upload_model && (
-                  <select
-                    value={currentWandbPreset.upload_model_policy}
-                    onChange={(e) => updateWandbPreset('upload_model_policy', e.target.value as 'all' | 'last')}
-                    className={textInputClass + ' max-w-32'}
-                  >
-                    <option value="last">{t('settings.policyLast')}</option>
-                    <option value="all">{t('settings.policyAll')}</option>
-                  </select>
-                )}
-              </div>
-            </SettingsField>
-            <SettingsField
-              label={t('settings.uploadStateManual')}
-              helpTooltip={<p>{t('settings.uploadStateManualHelp')}</p>}
-            >
-              <div className="flex items-center gap-3">
-                <Bool value={currentWandbPreset.upload_state_manual} onChange={(v) => updateWandbPreset('upload_state_manual', v)} />
-                {currentWandbPreset.upload_state_manual && (
-                  <select
-                    value={currentWandbPreset.upload_state_manual_policy}
-                    onChange={(e) => updateWandbPreset('upload_state_manual_policy', e.target.value as 'all' | 'last')}
-                    className={textInputClass + ' max-w-32'}
-                  >
-                    <option value="last">{t('settings.policyLast')}</option>
-                    <option value="all">{t('settings.policyAll')}</option>
-                  </select>
-                )}
-              </div>
-            </SettingsField>
-            <SettingsField
-              label={t('settings.uploadStateAuto')}
-              helpTooltip={<p>{t('settings.uploadStateAutoHelp')}</p>}
-            >
-              <div className="flex items-center gap-3">
-                <Bool value={currentWandbPreset.upload_state_auto} onChange={(v) => updateWandbPreset('upload_state_auto', v)} />
-                {currentWandbPreset.upload_state_auto && (
-                  <select
-                    value={currentWandbPreset.upload_state_auto_policy}
-                    onChange={(e) => updateWandbPreset('upload_state_auto_policy', e.target.value as 'all' | 'last')}
-                    className={textInputClass + ' max-w-32'}
-                  >
-                    <option value="last">{t('settings.policyLast')}</option>
-                    <option value="all">{t('settings.policyAll')}</option>
-                  </select>
-                )}
-              </div>
-            </SettingsField>
           </div>
         )}
+
+        {/* artifact 上传与采样图无关，不随 log_samples 隐藏（修掉历史错误嵌套） */}
+        <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mt-4 mb-2">
+          {t('settings.uploadArtifacts')}
+        </h4>
+        <SettingsField
+          label={t('settings.uploadModel')}
+          helpTooltip={<p>{t('settings.uploadModelHelp')}</p>}
+        >
+          <div className="flex items-center gap-3">
+            <Bool value={currentWandbPreset.upload_model} onChange={(v) => updateWandbPreset('upload_model', v)} />
+            {currentWandbPreset.upload_model && (
+              <select
+                value={currentWandbPreset.upload_model_policy}
+                onChange={(e) => updateWandbPreset('upload_model_policy', e.target.value as 'all' | 'last')}
+                className={textInputClass + ' max-w-32'}
+              >
+                <option value="last">{t('settings.policyLast')}</option>
+                <option value="all">{t('settings.policyAll')}</option>
+              </select>
+            )}
+          </div>
+        </SettingsField>
+        <SettingsField
+          label={t('settings.uploadStateManual')}
+          helpTooltip={<p>{t('settings.uploadStateManualHelp')}</p>}
+        >
+          <div className="flex items-center gap-3">
+            <Bool value={currentWandbPreset.upload_state_manual} onChange={(v) => updateWandbPreset('upload_state_manual', v)} />
+            {currentWandbPreset.upload_state_manual && (
+              <select
+                value={currentWandbPreset.upload_state_manual_policy}
+                onChange={(e) => updateWandbPreset('upload_state_manual_policy', e.target.value as 'all' | 'last')}
+                className={textInputClass + ' max-w-32'}
+              >
+                <option value="last">{t('settings.policyLast')}</option>
+                <option value="all">{t('settings.policyAll')}</option>
+              </select>
+            )}
+          </div>
+        </SettingsField>
+        <SettingsField
+          label={t('settings.uploadStateAuto')}
+          helpTooltip={<p>{t('settings.uploadStateAutoHelp')}</p>}
+        >
+          <div className="flex items-center gap-3">
+            <Bool value={currentWandbPreset.upload_state_auto} onChange={(v) => updateWandbPreset('upload_state_auto', v)} />
+            {currentWandbPreset.upload_state_auto && (
+              <select
+                value={currentWandbPreset.upload_state_auto_policy}
+                onChange={(e) => updateWandbPreset('upload_state_auto_policy', e.target.value as 'all' | 'last')}
+                className={textInputClass + ' max-w-32'}
+              >
+                <option value="last">{t('settings.policyLast')}</option>
+                <option value="all">{t('settings.policyAll')}</option>
+              </select>
+            )}
+          </div>
+        </SettingsField>
       </SettingsSection>
       </>)}
 
