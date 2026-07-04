@@ -22,34 +22,16 @@ import {
   savePresetDescriptions,
 } from '../../lib/preset-helpers'
 import { pruneInactiveConfig } from '../../lib/schema'
+import { configToYaml } from '../../lib/yamlPreview'
 
-// ── TOML 生成（键按字母排序，值尽量保留原始类型） ──────────────────────────
-function toTomlValue(v: unknown): string {
-  if (v === null || v === undefined) return ''
-  if (typeof v === 'boolean') return v ? 'true' : 'false'
-  if (typeof v === 'number') return String(v)
-  if (Array.isArray(v)) return '[' + v.map(toTomlValue).join(', ') + ']'
-  if (typeof v === 'object') {
-    const lines: string[] = []
-    for (const [k, vv] of Object.entries(v as Record<string, unknown>)) {
-      lines.push(`  ${k} = ${toTomlValue(vv)}`)
-    }
-    return '{\n' + lines.join('\n') + '\n}'
-  }
-  const s = String(v)
-  if (/[\n"'#[\]{}]/.test(s)) return `'''\n${s}\n'''`
-  if (s.includes(' ') || s === '' || /[^\w.\-]/.test(s)) return `"${s}"`
-  return s
-}
-
+// ── YAML 预览：与落盘 yaml 相同的键序和内容 ────────────────────────────────
 // GET 回来的 config 被 pydantic 补满了全部默认字段；预览前按 show_when 裁掉
 // 当前不生效的字段，与后端落盘 yaml（config_prune）保持同一内容。
-function generateToml(config: ConfigData, schema: SchemaResponse | null): string {
+function generateYaml(config: ConfigData, schema: SchemaResponse | null): string {
   const active = schema
     ? pruneInactiveConfig(config, schema.schema.properties)
     : config
-  const keys = Object.keys(active).sort()
-  return keys.map((k) => `${k} = ${toTomlValue(active[k])}`).join('\n')
+  return configToYaml(active)
 }
 
 // 预设名校验 / 描述存储 / schema 默认值 抽到 lib/preset-helpers.ts，
@@ -118,7 +100,7 @@ export default function PresetsPage() {
   // ── UI 状态 ──
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerSearch, setPickerSearch] = useState('')
-  const [tomlOpen, setTomlOpen] = useState(false)
+  const [yamlOpen, setYamlOpen] = useState(false)
   const [exportDialogOpen, setExportDialogOpen] = useState(false)
   const [showImportPathPicker, setShowImportPathPicker] = useState(false)
   const [advancedMode, toggleAdvancedMode] = useAdvancedMode()
@@ -795,37 +777,37 @@ export default function PresetsPage() {
             </section>
           )}
 
-          {/* TOML 预览（默认折叠） */}
+          {/* YAML 预览（默认折叠） */}
           {config && Object.keys(config).length > 0 && (
-            <section className={`rounded-md border border-subtle bg-surface ${tomlOpen ? 'px-3.5 py-2.5' : 'px-3.5 py-1.5'}`}>
+            <section className={`rounded-md border border-subtle bg-surface ${yamlOpen ? 'px-3.5 py-2.5' : 'px-3.5 py-1.5'}`}>
               <button
                 type="button"
-                onClick={() => setTomlOpen((v) => !v)}
+                onClick={() => setYamlOpen((v) => !v)}
                 className="w-full flex items-center gap-2 bg-transparent border-none p-0 cursor-pointer text-left"
               >
                 <span className="inline-block w-1.5 h-1.5 rounded-full bg-info shrink-0" />
-                <span className="caption uppercase tracking-[0.06em] text-xs">{t('presets.tomlPreview')}</span>
+                <span className="caption uppercase tracking-[0.06em] text-xs">{t('presets.yamlPreview')}</span>
                 <span className="text-[10px] text-fg-tertiary">
-                  {tomlOpen ? t('presets.tomlReadable') : t('presets.tomlCollapsed')}
+                  {yamlOpen ? t('presets.yamlMatchesFile') : t('presets.yamlCollapsed')}
                 </span>
                 <span className="flex-1" />
-                {tomlOpen && (
+                {yamlOpen && (
                   <button
                     className="btn btn-ghost btn-sm text-xs"
                     onClick={(e) => {
                       e.stopPropagation()
-                      const toml = generateToml(config, schema)
-                      navigator.clipboard.writeText(toml)
+                      const yamlText = generateYaml(config, schema)
+                      navigator.clipboard.writeText(yamlText)
                         .then(() => toast(t('presets.copied'), 'success'))
                         .catch(() => toast(t('presets.copyFailed'), 'error'))
                     }}
                   >{t('common.copy')}</button>
                 )}
-                <span className="text-fg-tertiary">{tomlOpen ? '▾' : '▸'}</span>
+                <span className="text-fg-tertiary">{yamlOpen ? '▾' : '▸'}</span>
               </button>
-              {tomlOpen && (
+              {yamlOpen && (
                 <pre className="m-0 mt-2.5 p-3 bg-sunken rounded-sm font-mono text-xs text-fg-secondary leading-[1.7] whitespace-pre-wrap break-words max-h-80 overflow-auto">
-                  {generateToml(config, schema)}
+                  {generateYaml(config, schema)}
                 </pre>
               )}
             </section>

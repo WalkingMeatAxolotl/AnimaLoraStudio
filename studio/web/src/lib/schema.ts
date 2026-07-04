@@ -81,7 +81,7 @@ export function evalShowWhen(
 
 /**
  * 按 show_when 过滤掉当前配置下 UI 不可见的字段。与后端落盘裁剪
- * （studio/domain/config_prune.py）同一语义，让 TOML 预览和 yaml 内容一致。
+ * （studio/domain/config_prune.py）同一语义，让 YAML 预览和落盘内容一致。
  * 没有 show_when 的字段（含 hidden / disable_when 字段）原样保留。
  */
 export function pruneInactiveConfig(

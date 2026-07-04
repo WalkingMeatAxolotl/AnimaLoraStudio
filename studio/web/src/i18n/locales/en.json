@@ -2287,9 +2287,9 @@
     "descPlaceholder": "Describe its purpose; shown on the training preset card…",
     "loadingConfig": "Loading preset config",
     "trainingParams": "Training parameters",
-    "tomlPreview": "TOML preview",
-    "tomlReadable": "sd-scripts-readable config file",
-    "tomlCollapsed": "Expand to view / copy",
+    "yamlPreview": "YAML preview",
+    "yamlMatchesFile": "Matches the saved yaml file",
+    "yamlCollapsed": "Expand to view / copy",
     "copied": "Copied to clipboard",
     "copyFailed": "Copy failed",
     "saveBeforeDownload": "Save the preset first; download streams the on-disk yaml from the server."
