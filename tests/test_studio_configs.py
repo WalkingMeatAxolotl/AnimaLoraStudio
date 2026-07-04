@@ -52,7 +52,9 @@ def test_schema_is_complete() -> None:
         "sample_prompt", "sample_prompts", "no_monitor",
     ):
         assert name in fields, f"missing: {name}"
-    assert "wandb_enabled" in fields
+    # 0.18: wandb per-config 覆盖块已移除（secrets 不进训练 yaml），schema 里不
+    # 应再出现任何 wandb_* 字段
+    assert not [n for n in fields if n.startswith("wandb_")]
     lora_annotation = fields["lora_type"].annotation
     lora_options = getattr(lora_annotation, "__args__", ())
     assert "ortho" in lora_options
@@ -110,7 +112,7 @@ def test_schema_carries_ui_metadata(client: TestClient) -> None:
     assert props["automagic_max_lr"]["show_when"] == "optimizer_type==automagic"
     assert props["automagic_variant"]["show_when"] == "optimizer_type==automagic"
     assert props["automagic_agreement_threshold"]["show_when"] == "optimizer_type==automagic&&automagic_variant==v2"
-    assert props["wandb_enabled"]["group"] == "wandb"
+    assert not [n for n in props if n.startswith("wandb_")]
     # PPSF 字段都按 optimizer_type==prodigy_plus_schedulefree 显示
     for ppsf_field in (
         "ppsf_d_coef", "ppsf_prodigy_steps", "ppsf_beta1", "ppsf_beta2",

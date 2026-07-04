@@ -1281,25 +1281,27 @@ class Supervisor:
         try:
             wandb_cfg = _secrets.load().wandb
             if wandb_cfg.enabled:
+                # 0.18 预设化：enabled 是顶层总开关，其余字段读当前选中的 preset。
+                wb = wandb_cfg.active
                 env.setdefault("WANDB_ENABLED", "1")
-                env.setdefault("WANDB_MODE", wandb_cfg.mode)
-                env.setdefault("WANDB_LOG_SAMPLES", "1" if wandb_cfg.log_samples else "0")
-                env.setdefault("WANDB_SAMPLE_MAX_SIDE", str(wandb_cfg.sample_max_side))
-                env.setdefault("WANDB_SAMPLE_EVERY_N_STEPS", str(wandb_cfg.sample_every_n_steps))
-                env.setdefault("WANDB_UPLOAD_MODEL", "1" if wandb_cfg.upload_model else "0")
-                env.setdefault("WANDB_UPLOAD_MODEL_POLICY", wandb_cfg.upload_model_policy)
-                env.setdefault("WANDB_UPLOAD_STATE_MANUAL", "1" if wandb_cfg.upload_state_manual else "0")
-                env.setdefault("WANDB_UPLOAD_STATE_MANUAL_POLICY", wandb_cfg.upload_state_manual_policy)
-                env.setdefault("WANDB_UPLOAD_STATE_AUTO", "1" if wandb_cfg.upload_state_auto else "0")
-                env.setdefault("WANDB_UPLOAD_STATE_AUTO_POLICY", wandb_cfg.upload_state_auto_policy)
-                if wandb_cfg.api_key:
-                    env.setdefault("WANDB_API_KEY", wandb_cfg.api_key)
-                if wandb_cfg.project:
-                    env.setdefault("WANDB_PROJECT", wandb_cfg.project)
-                if wandb_cfg.entity:
-                    env.setdefault("WANDB_ENTITY", wandb_cfg.entity)
-                if wandb_cfg.base_url:
-                    env.setdefault("WANDB_BASE_URL", wandb_cfg.base_url)
+                env.setdefault("WANDB_MODE", wb.mode)
+                env.setdefault("WANDB_LOG_SAMPLES", "1" if wb.log_samples else "0")
+                env.setdefault("WANDB_SAMPLE_MAX_SIDE", str(wb.sample_max_side))
+                env.setdefault("WANDB_SAMPLE_EVERY_N_STEPS", str(wb.sample_every_n_steps))
+                env.setdefault("WANDB_UPLOAD_MODEL", "1" if wb.upload_model else "0")
+                env.setdefault("WANDB_UPLOAD_MODEL_POLICY", wb.upload_model_policy)
+                env.setdefault("WANDB_UPLOAD_STATE_MANUAL", "1" if wb.upload_state_manual else "0")
+                env.setdefault("WANDB_UPLOAD_STATE_MANUAL_POLICY", wb.upload_state_manual_policy)
+                env.setdefault("WANDB_UPLOAD_STATE_AUTO", "1" if wb.upload_state_auto else "0")
+                env.setdefault("WANDB_UPLOAD_STATE_AUTO_POLICY", wb.upload_state_auto_policy)
+                if wb.api_key:
+                    env.setdefault("WANDB_API_KEY", wb.api_key)
+                if wb.project:
+                    env.setdefault("WANDB_PROJECT", wb.project)
+                if wb.entity:
+                    env.setdefault("WANDB_ENTITY", wb.entity)
+                if wb.base_url:
+                    env.setdefault("WANDB_BASE_URL", wb.base_url)
         except Exception:
             logger.exception("failed to load wandb settings")
         if extra_env:

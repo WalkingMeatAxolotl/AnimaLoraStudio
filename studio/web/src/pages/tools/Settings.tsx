@@ -6,7 +6,7 @@ import {
   type LLMPreset,
   type Secrets,
   type SecretsPatch,
-  type WandBConfig,
+  type WandBPreset,
 } from '../../api/client'
 import { useDialog } from '../../components/Dialog'
 import LLMTaggerWorkspace from '../../components/LLMTaggerWorkspace'
@@ -17,6 +17,7 @@ import { useSettingsData, type SaveStatus } from '../../lib/SettingsData'
 import { useSettingsDrawer } from '../../lib/SettingsDrawer'
 import {
   DEFAULT_LLM_PRESETS,
+  DEFAULT_WANDB_PRESET,
   EMPTY,
   getStoredTab,
   _makeFallbackPreset,
@@ -47,6 +48,7 @@ import {
   XformersSection,
 } from './settings/sections'
 import { SystemSection } from './settings/SystemSection'
+import WandBWorkspace from './settings/WandBWorkspace'
 
 // 全局保存状态指示（instant-apply 取代旧的顶部保存按钮）。idle 不渲染。
 function SaveIndicator({ status }: { status: SaveStatus }) {
@@ -233,6 +235,91 @@ export default function SettingsPage() {
     }
     update('llm_tagger', 'presets', [...draft.llm_tagger.presets, next])
     update('llm_tagger', 'current_preset', id)
+  }
+
+  // —— WandB 预设管理（0.18 预设化，复刻 llm_tagger 模式）——
+  const currentWandbPreset: WandBPreset =
+    draft.wandb.presets.find((p) => p.id === draft.wandb.current_preset)
+    ?? draft.wandb.presets[0]
+    ?? DEFAULT_WANDB_PRESET
+
+  /** patch 形式：一次动作可同改多个字段（upload 开关 + policy 合并下拉需要），
+   * 两次单字段调用会各自基于同一份 stale draft 相互覆盖。 */
+  const updateWandbPreset = (patch: Partial<WandBPreset>) => {
+    if (Object.values(patch).some((v) => v === MASK)) return // SensitiveInput 未编辑回传 MASK = 未改
+    const next = draft.wandb.presets.map((p) =>
+      p.id === currentWandbPreset.id ? { ...p, ...patch } : p
+    )
+    update('wandb', 'presets', next)
+  }
+
+  const wandbPresetIdFor = (label: string): string => {
+    const slug = label.toLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'preset'
+    const used = new Set(draft.wandb.presets.map((p) => p.id))
+    let id = slug
+    let idx = 1
+    while (used.has(id)) {
+      idx += 1
+      id = `${slug}_${idx}`
+    }
+    return id
+  }
+
+  const addWandbPreset = async () => {
+    const label = await prompt(t('settings.newPresetName'), {
+      placeholder: 'team-b',
+      validate: (v) => (v.trim() ? null : t('settings.nameRequired')),
+    })
+    if (!label) return
+    const id = wandbPresetIdFor(label)
+    const next: WandBPreset = { ...DEFAULT_WANDB_PRESET, id, label: label.trim() }
+    update('wandb', 'presets', [...draft.wandb.presets, next])
+    update('wandb', 'current_preset', id)
+  }
+
+  const duplicateWandbPreset = async () => {
+    const label = await prompt(t('settings.newPresetName'), {
+      defaultValue: t('settings.presetCopy', { label: currentWandbPreset.label }),
+      validate: (v) => (v.trim() ? null : t('settings.nameRequired')),
+    })
+    if (!label) return
+    const id = wandbPresetIdFor(label)
+    // api_key 不复制：draft 里是 MASK 掩码，复制过去会被后端当"保持原值"哨兵，
+    // 但新 preset 没有原值可保持 —— 语义混乱，明确留空让用户重填。
+    const next: WandBPreset = { ...currentWandbPreset, api_key: '', id, label: label.trim() }
+    update('wandb', 'presets', [...draft.wandb.presets, next])
+    update('wandb', 'current_preset', id)
+  }
+
+  const deleteCurrentWandbPreset = async () => {
+    if (draft.wandb.presets.length <= 1) return
+    if (!(await confirm(t('settings.confirmDeletePreset', { label: currentWandbPreset.label }), { tone: 'danger' }))) return
+    const next = draft.wandb.presets.filter((p) => p.id !== currentWandbPreset.id)
+    update('wandb', 'presets', next)
+    update('wandb', 'current_preset', next[0]?.id ?? 'default')
+  }
+
+  // 导出走后端端点：yaml 文件**包含真实 api_key**（draft 里只有掩码拿不到），
+  // 用户显式动作，文件自行保管。
+  const exportCurrentWandbPreset = () => {
+    const a = document.createElement('a')
+    a.href = api.wandbPresetExportUrl(currentWandbPreset.id)
+    a.download = `wandb-preset-${currentWandbPreset.id}.yaml`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+  }
+
+  // 导入走后端端点（yaml/json 上传，后端解析 + 校验 + 落盘 + 切换选中），
+  // 用返回的权威 masked snapshot 回写 context。
+  const importWandbPreset = async (file: File) => {
+    try {
+      const r = await api.importWandbPreset(file)
+      setServer(r.secrets)
+      toast(t('settings.wandbPresetImported', { label: r.label }), 'success')
+    } catch (e) {
+      toast(`${t('settings.wandbImportInvalid')}: ${e}`, 'error')
+    }
   }
 
   const refreshLLMModels = async () => {
@@ -741,153 +828,25 @@ export default function SettingsPage() {
         </SettingsField>
       </SettingsSection>
 
-      <SettingsSection id="wandb" title="Weights & Biases">
-        <SettingsField label={t('settings.enableWandb')} desc={t('settings.enableWandbHint')}>
-          <Bool value={draft.wandb.enabled} onChange={(v) => update('wandb', 'enabled', v)} />
-        </SettingsField>
-        <SettingsField label={t('settings.fieldApiKey')}>
-          <SensitiveInput
-            value={draft.wandb.api_key}
-            serverValue={server?.wandb.api_key ?? ''}
-            onChange={(v) => update('wandb', 'api_key', v)}
-          />
-        </SettingsField>
-        <SettingsField label={t('settings.fieldProject')}>
-          <SettingsInput
-            type="text"
-            value={draft.wandb.project}
-            onChange={(v) => update('wandb', 'project', v)}
-            placeholder="AnimaLoraStudio"
-            className={textInputClass}
-          />
-        </SettingsField>
-        <SettingsField label={t('settings.fieldEntity')} desc={t('settings.wandbEntityHint')}>
-          <SettingsInput
-            type="text"
-            value={draft.wandb.entity}
-            onChange={(v) => update('wandb', 'entity', v)}
-            className={textInputClass}
-          />
-        </SettingsField>
-        <SettingsField label={t('settings.fieldBaseUrl')} desc={t('settings.wandbBaseUrlHint')}>
-          <SettingsInput
-            type="text"
-            value={draft.wandb.base_url}
-            onChange={(v) => update('wandb', 'base_url', v)}
-            placeholder="https://api.wandb.ai"
-            className={textInputClass}
-          />
-        </SettingsField>
-        <SettingsField label={t('settings.fieldMode')}>
-          <select
-            value={draft.wandb.mode}
-            onChange={(e) => update('wandb', 'mode', e.target.value as WandBConfig['mode'])}
-            className={`${textInputClass} max-w-32`}
-          >
-            <option value="online">online</option>
-            <option value="offline">offline</option>
-            <option value="disabled">disabled</option>
-          </select>
-        </SettingsField>
-        <SettingsField
-          label={t('settings.logSamples')}
-          helpTooltip={
-            <p><Trans i18nKey="settings.logSamplesHelp" components={{ code: <code /> }} /></p>
-          }
-        >
-          <Bool value={draft.wandb.log_samples} onChange={(v) => update('wandb', 'log_samples', v)} />
-        </SettingsField>
-        {draft.wandb.log_samples && (
-          <div className="grid grid-cols-2 gap-3">
-            <SettingsField
-              label={t('settings.sampleMaxSide')}
-              helpTooltip={<p>{t('settings.sampleMaxSideHelp')}</p>}
-            >
-              <SettingsInput
-                type="number"
-                min={64}
-                step={64}
-                value={draft.wandb.sample_max_side}
-                onChange={(v) => update('wandb', 'sample_max_side', Math.max(64, parseInt(v) || 1216))}
-                className={textInputClass}
-              />
-            </SettingsField>
-            <SettingsField
-              label={t('settings.sampleEveryNSteps')}
-              helpTooltip={
-                <p><Trans i18nKey="settings.sampleEveryNStepsHelp" components={{ code: <code /> }} /></p>
-              }
-            >
-              <SettingsInput
-                type="number"
-                min={0}
-                step={50}
-                value={draft.wandb.sample_every_n_steps}
-                onChange={(v) => update('wandb', 'sample_every_n_steps', Math.max(0, parseInt(v) || 0))}
-                className={textInputClass}
-              />
-            </SettingsField>
-
-            <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mt-4 mb-2">
-              {t('settings.uploadArtifacts')}
-            </h4>
-            <SettingsField
-              label={t('settings.uploadModel')}
-              helpTooltip={<p>{t('settings.uploadModelHelp')}</p>}
-            >
-              <div className="flex items-center gap-3">
-                <Bool value={draft.wandb.upload_model} onChange={(v) => update('wandb', 'upload_model', v)} />
-                {draft.wandb.upload_model && (
-                  <select
-                    value={draft.wandb.upload_model_policy}
-                    onChange={(e) => update('wandb', 'upload_model_policy', e.target.value as 'all' | 'last')}
-                    className={textInputClass + ' max-w-32'}
-                  >
-                    <option value="last">{t('settings.policyLast')}</option>
-                    <option value="all">{t('settings.policyAll')}</option>
-                  </select>
-                )}
-              </div>
-            </SettingsField>
-            <SettingsField
-              label={t('settings.uploadStateManual')}
-              helpTooltip={<p>{t('settings.uploadStateManualHelp')}</p>}
-            >
-              <div className="flex items-center gap-3">
-                <Bool value={draft.wandb.upload_state_manual} onChange={(v) => update('wandb', 'upload_state_manual', v)} />
-                {draft.wandb.upload_state_manual && (
-                  <select
-                    value={draft.wandb.upload_state_manual_policy}
-                    onChange={(e) => update('wandb', 'upload_state_manual_policy', e.target.value as 'all' | 'last')}
-                    className={textInputClass + ' max-w-32'}
-                  >
-                    <option value="last">{t('settings.policyLast')}</option>
-                    <option value="all">{t('settings.policyAll')}</option>
-                  </select>
-                )}
-              </div>
-            </SettingsField>
-            <SettingsField
-              label={t('settings.uploadStateAuto')}
-              helpTooltip={<p>{t('settings.uploadStateAutoHelp')}</p>}
-            >
-              <div className="flex items-center gap-3">
-                <Bool value={draft.wandb.upload_state_auto} onChange={(v) => update('wandb', 'upload_state_auto', v)} />
-                {draft.wandb.upload_state_auto && (
-                  <select
-                    value={draft.wandb.upload_state_auto_policy}
-                    onChange={(e) => update('wandb', 'upload_state_auto_policy', e.target.value as 'all' | 'last')}
-                    className={textInputClass + ' max-w-32'}
-                  >
-                    <option value="last">{t('settings.policyLast')}</option>
-                    <option value="all">{t('settings.policyAll')}</option>
-                  </select>
-                )}
-              </div>
-            </SettingsField>
-          </div>
-        )}
-      </SettingsSection>
+      {/* WandBWorkspace 自带 card（同 LLMTaggerWorkspace 骨架：header 标题 +
+          enabled 总开关、PresetBar 预设条、单 section 主体）；外层 div 只承担
+          id（section index 滚动定位）+ 锚点偏移，与 llm-tagger 的嵌法一致。 */}
+      <div id="wandb" className="scroll-mt-24">
+        <WandBWorkspace
+          title="Weights & Biases"
+          config={draft.wandb}
+          serverPresets={server?.wandb.presets ?? []}
+          currentPreset={currentWandbPreset}
+          onToggleEnabled={(v) => update('wandb', 'enabled', v)}
+          onSelectPreset={(id) => update('wandb', 'current_preset', id)}
+          onUpdatePreset={updateWandbPreset}
+          onAddPreset={() => void addWandbPreset()}
+          onSaveAs={() => void duplicateWandbPreset()}
+          onDeletePreset={() => void deleteCurrentWandbPreset()}
+          onExport={exportCurrentWandbPreset}
+          onImportFile={(f) => void importWandbPreset(f)}
+        />
+      </div>
       </>)}
 
       {tab === 'preprocess' && (

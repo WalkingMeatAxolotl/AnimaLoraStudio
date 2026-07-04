@@ -288,8 +288,7 @@
       "output": "Output & saving",
       "sample": "Sampling",
       "evalValidation": "Post-training metrics",
-      "monitor": "Monitor & progress",
-      "wandb": "WandB (preset override)"
+      "monitor": "Monitor & progress"
     },
     "enums": {
       "loraType": {
@@ -345,15 +344,6 @@
         "none": "Disabled",
         "offset": "Noise Offset",
         "pyramid": "Pyramid noise"
-      },
-      "wandbMode": {
-        "online": "Online",
-        "offline": "Offline",
-        "disabled": "Disabled"
-      },
-      "wandbPolicy": {
-        "all": "Keep all",
-        "last": "Keep latest only"
       },
       "sampler": {
         "erSde": "ER SDE",
@@ -502,23 +492,7 @@
       "sample_seed": "Sample seed (0 = random)",
       "sample_negative_prompt": "Negative prompt",
       "sample_prompt": "Single prompt mode: all sample images during training share this prompt (ignored when sample_prompts is set)",
-      "sample_prompts": "Multiple prompt rotation (takes priority over sample_prompt)",
-      "wandb_notice": "⚠️ Do not fill in these settings unless you know what you are doing",
-      "wandb_enabled": "Preset-level WandB toggle (blank = use global settings)",
-      "wandb_api_key": "WandB API Key (overrides global settings)",
-      "wandb_project": "WandB project name (blank = use global settings)",
-      "wandb_entity": "WandB team/user name (blank = use global settings)",
-      "wandb_base_url": "WandB custom server URL (blank = use global settings)",
-      "wandb_mode": "WandB mode (online / offline / disabled)",
-      "wandb_log_samples": "Preset-level sample logging toggle (blank = use global settings)",
-      "wandb_sample_max_side": "Sample max side (0 = use global settings)",
-      "wandb_sample_every_n_steps": "Step throttle (-1 = use global settings)",
-      "wandb_upload_model": "Preset-level model upload toggle (blank = use global settings)",
-      "wandb_upload_model_policy": "Model artifact retention (all = keep all, last = keep latest only)",
-      "wandb_upload_state_manual": "Preset-level manual training state upload toggle (blank = use global settings)",
-      "wandb_upload_state_manual_policy": "Manual training state artifact retention policy",
-      "wandb_upload_state_auto": "Preset-level auto training state upload toggle (blank = use global settings)",
-      "wandb_upload_state_auto_policy": "Auto training state artifact retention policy"
+      "sample_prompts": "Multiple prompt rotation (takes priority over sample_prompt)"
     },
     "altDescriptions": {
       "timestep_sampling": "[Timestep sampling] Distribution; when InfoNoise is enabled this is the warmup baseline, then adaptive CDF takes over",
@@ -1070,6 +1044,15 @@
     "lightTasksDuringTrainHelp": "Light tasks are tagging (WD14 / CLTagger inference), upscale preprocessing, regularization-set building and eval metrics — they only load small models (a few hundred MB). Enabled by default: they keep running while training (or another GPU-exclusive task) is active. When disabled, light tasks wait until the exclusive task finishes. Heavy tasks (training / test render / eval sampling, base-model-scale VRAM) are always mutually exclusive and queue one at a time, regardless of this toggle. Downloads are IO-only and always run in parallel.",
     "enableWandb": "Enable WandB",
     "enableWandbHint": "When enabled, all training tasks write to W&B; no longer occupies training config fields",
+    "wandbPreset": "Config preset",
+    "wandbPresetHint": "Switch the whole account + upload policy set; the API key lives only in the local secrets.json and never enters any training yaml",
+    "wandbPresetNew": "New",
+    "wandbPresetSaveAs": "Save as",
+    "wandbPresetExport": "Export",
+    "wandbPresetImport": "Import",
+    "wandbExportKeyTitle": "Export as a yaml file (includes the API key — keep it safe)",
+    "wandbPresetImported": "Imported preset \"{{label}}\"",
+    "wandbImportInvalid": "Import failed: not a valid WandB preset JSON",
     "wandbEntityHint": "Optional; team/user name, blank uses the default wandb account",
     "wandbBaseUrlHint": "Optional; use for private W&B/self-hosted instances",
     "logSamples": "Log sample images",

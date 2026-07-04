@@ -119,7 +119,6 @@ export const SCHEMA_GROUP_LABEL_KEYS: Record<string, string> = {
   sample: 'schema.groups.sample',
   eval_validation: 'schema.groups.evalValidation',
   monitor: 'schema.groups.monitor',
-  wandb: 'schema.groups.wandb',
 }
 
 export const SCHEMA_ENUM_LABEL_KEYS: Record<string, Record<string, string>> = {
@@ -185,27 +184,6 @@ export const SCHEMA_ENUM_LABEL_KEYS: Record<string, Record<string, string>> = {
     simple: 'schema.enums.scheduler.simple',
     sgm_uniform: 'schema.enums.scheduler.sgmUniform',
   },
-  wandb_mode: {
-    '': 'field.useGlobal',
-    online: 'schema.enums.wandbMode.online',
-    offline: 'schema.enums.wandbMode.offline',
-    disabled: 'schema.enums.wandbMode.disabled',
-  },
-  wandb_upload_model_policy: {
-    '': 'field.useGlobal',
-    all: 'schema.enums.wandbPolicy.all',
-    last: 'schema.enums.wandbPolicy.last',
-  },
-  wandb_upload_state_manual_policy: {
-    '': 'field.useGlobal',
-    all: 'schema.enums.wandbPolicy.all',
-    last: 'schema.enums.wandbPolicy.last',
-  },
-  wandb_upload_state_auto_policy: {
-    '': 'field.useGlobal',
-    all: 'schema.enums.wandbPolicy.all',
-    last: 'schema.enums.wandbPolicy.last',
-  }
 }
 
 export function schemaGroupLabel(key: string, fallback: string, t: TFunction): string {

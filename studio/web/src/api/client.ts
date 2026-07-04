@@ -125,8 +125,10 @@ export interface HuggingFaceConfig {
   endpoint: string
 }
 
-export interface WandBConfig {
-  enabled: boolean
+/** 一套 WandB 账号 + 上传策略预设（0.18 预设化，对齐 LLMPreset 模式）。 */
+export interface WandBPreset {
+  id: string
+  label: string
   api_key: string
   project: string
   entity: string
@@ -134,7 +136,7 @@ export interface WandBConfig {
   mode: 'online' | 'offline' | 'disabled'
   /** 是否把训练采样图上传到 wandb.ai，默认开；私有 / NSFW 数据集请关掉。 */
   log_samples: boolean
-  /** 上传前缩到最长边像素，默认 1216 */
+  /** 上传前缩到最长边像素 */
   sample_max_side: number
   /** step 节流：>0 时只在 global_step % N == 0 上传，0 = 不额外节流 */
   sample_every_n_steps: number
@@ -150,6 +152,13 @@ export interface WandBConfig {
   upload_state_auto: boolean
   /** 自动状态 artifact 保留策略 */
   upload_state_auto_policy: 'all' | 'last'
+}
+
+/** 全局 WandB：顶层只留总开关 + 预设切换，字段全在 preset 里。 */
+export interface WandBConfig {
+  enabled: boolean
+  current_preset: string
+  presets: WandBPreset[]
 }
 
 export interface ModelScopeConfig {
@@ -1955,6 +1964,24 @@ export const api = {
       throw makeApiError(resp.status, resp.statusText, body, resp.headers.get('X-Trace-Id'))
     }
     return (await resp.json()) as { name: string; path: string }
+  },
+
+  /** WandB preset yaml 下载直链（**含真实 api_key**，服务端显式导出端点）。
+   *  <a href={...} download> 触发即可，不发 fetch。 */
+  wandbPresetExportUrl: (id: string) =>
+    `/api/secrets/wandb/presets/${encodeURIComponent(id)}/export`,
+  /** 上传 yaml/json 导入 wandb preset；返回新 preset 标识 + 最新 masked secrets。 */
+  importWandbPreset: async (
+    file: File,
+  ): Promise<{ id: string; label: string; secrets: Secrets }> => {
+    const fd = new FormData()
+    fd.append('file', file, file.name)
+    const resp = await fetch('/api/secrets/wandb/presets/import', { method: 'POST', body: fd })
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => null)
+      throw makeApiError(resp.status, resp.statusText, body, resp.headers.get('X-Trace-Id'))
+    }
+    return (await resp.json()) as { id: string; label: string; secrets: Secrets }
   },
 
   // 兼容别名：PP0 之前叫 listConfigs / getConfig / ...。保留一段时间。
