@@ -207,6 +207,24 @@ def test_tolerant_validate_infonoise_mutex_disables_infonoise() -> None:
             assert getattr(cfg, k) == v, overrides
 
 
+def test_tolerant_validate_silently_drops_retired_monitor_keys() -> None:
+    """退役的 monitor server 键：历史 dump 每份 yaml 都写过这组默认值，
+    必须静默丢弃、不进 dropped_fields —— 否则所有旧配置一打开就弹兼容横幅。"""
+    cfg, dropped, defaulted = presets_io._tolerant_validate({
+        "no_monitor": True,
+        "monitor_host": "127.0.0.1",
+        "monitor_port": 8765,
+        "no_browser": True,
+        "epochs": 12,
+    })
+    assert dropped == []
+    assert defaulted == []
+    assert cfg.epochs == 12
+    # 真正的未知键仍要报
+    _, dropped2, _ = presets_io._tolerant_validate({"totally_unknown_key": 1})
+    assert dropped2 == ["totally_unknown_key"]
+
+
 def test_tolerant_validate_infonoise_mutex_multi_conflict_one_pass() -> None:
     """同时 4 条互斥全冲突 → 一刀关 InfoNoise，4 字段全保留，defaulted 只有
     "infonoise_enabled"（一次性处理，不重复 append）。"""

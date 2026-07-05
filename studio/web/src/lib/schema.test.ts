@@ -130,6 +130,28 @@ describe('pruneInactiveConfig', () => {
     const config = { optimizer_type: 'prodigy', lr_scheduler: 'none', unknown_key: 1 }
     expect(pruneInactiveConfig(config, properties)).toEqual(config)
   })
+
+  it('drops hidden fields at their schema default, keeps overrides', () => {
+    const props = {
+      no_progress: { hidden: true, default: true } as SchemaProperty,
+      log_every: { hidden: true, default: 10 } as SchemaProperty,
+      trigger_word: { hidden: true, default: '' } as SchemaProperty,
+    }
+    expect(
+      pruneInactiveConfig(
+        { no_progress: true, log_every: 10, trigger_word: 'miku' },
+        props
+      )
+    ).toEqual({ trigger_word: 'miku' })
+    expect(
+      pruneInactiveConfig({ no_progress: false, trigger_word: '' }, props)
+    ).toEqual({ no_progress: false })
+  })
+
+  it('keeps hidden fields when schema carries no default', () => {
+    const props = { mystery: { hidden: true } as SchemaProperty }
+    expect(pruneInactiveConfig({ mystery: 1 }, props)).toEqual({ mystery: 1 })
+  })
 })
 
 describe('fieldLabel', () => {

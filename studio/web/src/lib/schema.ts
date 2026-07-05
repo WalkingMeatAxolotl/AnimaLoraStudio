@@ -80,9 +80,11 @@ export function evalShowWhen(
 }
 
 /**
- * 按 show_when 过滤掉当前配置下 UI 不可见的字段。与后端落盘裁剪
- * （studio/domain/config_prune.py）同一语义，让 YAML 预览和落盘内容一致。
- * 没有 show_when 的字段（含 hidden / disable_when 字段）原样保留。
+ * 过滤掉 yaml 落盘不需要的字段。与后端落盘裁剪
+ * （studio/domain/config_prune.py）同一语义，让 YAML 预览和落盘内容一致：
+ * 1. show_when 求值为假 —— 当前配置下 UI 不可见的字段；
+ * 2. hidden=true 且值等于 schema 默认值 —— UI 永不渲染的字段，非默认覆盖保留。
+ * disable_when 字段与无元数据字段原样保留。
  */
 export function pruneInactiveConfig(
   config: Record<string, unknown>,
@@ -92,6 +94,12 @@ export function pruneInactiveConfig(
   for (const [name, value] of Object.entries(config)) {
     const prop = properties[name]
     if (prop?.show_when && !evalShowWhen(prop.show_when, config)) continue
+    if (
+      prop?.hidden &&
+      prop.default !== undefined &&
+      JSON.stringify(value) === JSON.stringify(prop.default)
+    )
+      continue
     out[name] = value
   }
   return out

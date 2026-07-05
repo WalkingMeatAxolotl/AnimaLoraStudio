@@ -1101,8 +1101,10 @@ class TrainingConfig(BaseModel):
     # 这一组对 Studio 用户全部隐藏（hidden=True）—— Studio 跑训练用 subprocess 把
     # stdout 重定向到 task log（非 tty），这些「终端体验」字段对 web 用户没意义；
     # monitor 页用的是 monitor_state.json，跟这些值零相关。
-    # 字段保留在 schema 是为了：(1) 旧 project yaml 里写过的值不丢；(2) 裸 CLI 用户
-    # 仍可在 yaml 手动覆盖。BaseConfig.extra="forbid" 也要求字段定义存在。
+    # 字段保留在 schema 只为裸 CLI 用户仍可在 yaml 手动覆盖；等于默认值时
+    # config_prune 不落盘（hidden 裁剪），非默认覆盖照常保留。
+    # 旧的 HTTP monitor server 字段（no_monitor / monitor_host / monitor_port /
+    # no_browser）已随 server 一并删除，见 migrations.RETIRED_MONITOR_KEYS。
     loss_curve_steps: int = Field(
         100, ge=10,
         description="终端 rich live 曲线宽度（仅 CLI 终端，不影响 Studio 监控页）",
@@ -1119,28 +1121,5 @@ class TrainingConfig(BaseModel):
     log_every: int = Field(
         10, ge=1,
         description="终端日志输出间隔（仅在禁用 rich 进度条时生效）",
-        json_schema_extra=_meta("monitor", hidden=True),
-    )
-    # PP6.1：以下字段保留是为了不破坏既有 yaml；HTTP monitor server 已退役，
-    # 这些值不再生效。Studio 前端通过 /api/state?task_id= 读 monitor_state.json，
-    # 路径由 --monitor-state-file（CLI-only）决定。
-    no_monitor: bool = Field(
-        True,
-        description="(已废弃) 内置 Web monitor server 已删除；保留字段兼容旧 yaml",
-        json_schema_extra=_meta("monitor", hidden=True),
-    )
-    monitor_host: str = Field(
-        "127.0.0.1",
-        description="(已废弃) 旧 monitor server 绑定地址；当前忽略",
-        json_schema_extra=_meta("monitor", hidden=True),
-    )
-    monitor_port: int = Field(
-        8765, ge=1, le=65535,
-        description="(已废弃) 旧 monitor server 端口；当前忽略",
-        json_schema_extra=_meta("monitor", hidden=True),
-    )
-    no_browser: bool = Field(
-        True,
-        description="(已废弃) 旧 monitor server 自动开浏览器；当前忽略",
         json_schema_extra=_meta("monitor", hidden=True),
     )
