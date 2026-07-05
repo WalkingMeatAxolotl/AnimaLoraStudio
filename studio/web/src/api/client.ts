@@ -2995,11 +2995,14 @@ export const api = {
   // 模型根目录存储位置（镜像 studio_data，但迁移完无需重启，立即生效）----------
   getModelsRootInfo: (withScan = true) =>
     req<ModelsRootInfo>(`/api/models-root/info?scan=${withScan}`),
-  // 422 = 目标不合法 / 有 running task；409 = 已有迁移在跑。
-  startModelsRootMigrate: (target: string) =>
+  // 422 = 目标不合法 / 有 running task；409 code models_root.migration_busy = 已有
+  // 迁移在跑；409 code models_root.target_conflict = 目标已有 models 数据（detail 带
+  // existing_files/existing_bytes/same_name_files，modal 弹「跳过/覆盖/取消」后带
+  // onConflict 重发）。
+  startModelsRootMigrate: (target: string, onConflict?: 'skip' | 'overwrite') =>
     req<{ ok: boolean }>('/api/models-root/migrate', {
       method: 'POST',
-      body: JSON.stringify({ target }),
+      body: JSON.stringify({ target, on_conflict: onConflict ?? null }),
     }),
   getModelsRootMigrateStatus: () =>
     req<ModelsRootMigrateStatus>('/api/models-root/migrate_status'),

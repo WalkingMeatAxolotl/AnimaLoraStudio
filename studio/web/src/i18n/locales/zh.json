@@ -972,7 +972,12 @@
       "modelsRootHelp": "存放下载的 Anima / VAE / 文本编码器 / tokenizer / WD14 等模型权重，默认在程序根目录的 models/。更改位置会把现有权重复制到所选目录的 models 子目录并立即生效（无需重启），原数据保留不删除。",
       "modelsMigrateTitle": "迁移模型根目录",
       "modelsKeepOriginalNote": "原位置数据不会被删除。复制完成后立即生效，无需重启。",
-      "modelsDoneNote": "已切换到新模型根目录，立即生效（无需重启）；原位置数据已保留，确认无误后可自行删除。"
+      "modelsDoneNote": "已切换到新模型根目录，立即生效（无需重启）；原位置数据已保留，确认无误后可自行删除。",
+      "conflictTitle": "目标目录已包含 models 数据",
+      "conflictSummary": "{{path}} 已有 {{files}} 个文件（{{size}}），其中 {{same}} 个与当前目录中的文件同名。",
+      "conflictHint": "「跳过已有文件」只复制目标缺少的文件，同名文件保留目标现有版本；「覆盖已有文件」用当前目录的副本替换全部同名文件。两种方式完成后都会切换到新位置，原位置数据保留不删除。",
+      "conflictSkip": "跳过已有文件",
+      "conflictOverwrite": "覆盖已有文件"
     },
     "gelbooru": "Gelbooru",
     "danbooru": "Danbooru",
@@ -2748,6 +2753,11 @@
     "studio_data": {
       "target_invalid": "目标位置无效：{{reason}}",
       "migration_busy": "数据迁移已在进行中"
+    },
+    "models_root": {
+      "target_invalid": "目标位置无效：{{reason}}",
+      "migration_busy": "模型根目录迁移已在进行中",
+      "target_conflict": "目标目录已包含 models 数据"
     },
     "export": {
       "name_conflict": "导出文件名「{{name}}」冲突过多，请重命名后重试"

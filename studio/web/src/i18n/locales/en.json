@@ -972,7 +972,12 @@
       "modelsRootHelp": "Holds downloaded model weights (Anima / VAE / text encoder / tokenizer / WD14, etc.); defaults to models/ in the app root. Changing the location copies existing weights into a models subdirectory of the chosen directory and takes effect immediately (no restart); the original is kept.",
       "modelsMigrateTitle": "Migrate models root",
       "modelsKeepOriginalNote": "Data at the original location is kept, not deleted. Takes effect immediately after copying — no restart needed.",
-      "modelsDoneNote": "Switched to the new models root, effective immediately (no restart). The original data is kept; delete it yourself once verified."
+      "modelsDoneNote": "Switched to the new models root, effective immediately (no restart). The original data is kept; delete it yourself once verified.",
+      "conflictTitle": "Target already contains models data",
+      "conflictSummary": "{{path}} already has {{files}} files ({{size}}), {{same}} of which have the same names as files in the current root.",
+      "conflictHint": "\"Skip existing files\" copies only files missing at the target and keeps the target's version of same-name files. \"Overwrite existing files\" replaces all same-name files with copies from the current root. Either way, the new location takes effect after copying and the original data is kept.",
+      "conflictSkip": "Skip existing files",
+      "conflictOverwrite": "Overwrite existing files"
     },
     "gelbooru": "Gelbooru",
     "danbooru": "Danbooru",
@@ -2748,6 +2753,11 @@
     "studio_data": {
       "target_invalid": "Invalid target location: {{reason}}",
       "migration_busy": "A data migration is already in progress"
+    },
+    "models_root": {
+      "target_invalid": "Invalid target location: {{reason}}",
+      "migration_busy": "A models-root migration is already in progress",
+      "target_conflict": "Target already contains models data"
     },
     "export": {
       "name_conflict": "Too many files named \"{{name}}\"; rename and try again"
