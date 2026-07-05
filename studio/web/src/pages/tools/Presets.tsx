@@ -316,6 +316,10 @@ export default function PresetsPage() {
       }
       savedJsonRef.current = JSON.stringify(config)
       setDescDirty(false)
+      // savePreset 全量重写 yaml（validate + prune），磁盘上不再有旧字段 ——
+      // 兼容横幅的信息已过期，清掉。
+      setDroppedFields([])
+      setDefaultedFields([])
       if (isNew) {
         setSelected(name)
         setNewName('')
@@ -325,6 +329,22 @@ export default function PresetsPage() {
         toast(t('presets.saved'), 'success')
       }
       refreshList()
+    } catch (e) { toast(String(e), 'error') }
+    finally { setBusy(false) }
+  }
+
+  // 兼容横幅「清理旧字段」：把当前生效 config 原样写回（savePreset 全量重写
+  // yaml），磁盘上的旧字段 / 非法值随之消失，横幅不再出现。含未保存编辑时
+  // 一并落盘 —— 语义就是「按当前所见重写文件」。
+  const handleCleanLegacy = async () => {
+    if (!selected || !config) return
+    setBusy(true)
+    try {
+      await api.savePreset(selected, config)
+      savedJsonRef.current = JSON.stringify(config)
+      setDroppedFields([])
+      setDefaultedFields([])
+      toast(t('presets.cleanLegacyDone'), 'success')
     } catch (e) { toast(String(e), 'error') }
     finally { setBusy(false) }
   }
@@ -744,7 +764,20 @@ export default function PresetsPage() {
               </div>
               {(droppedFields.length > 0 || defaultedFields.length > 0) && (
                 <div className="mb-3 rounded-md border border-amber-400/50 bg-amber-950/60 px-3.5 py-2.5 text-xs text-amber-100 space-y-1">
-                  <span className="font-semibold text-amber-300">{t('presets.compatNoticeTitle')}</span>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-amber-300">{t('presets.compatNoticeTitle')}</span>
+                    {selected !== null && (
+                      <button
+                        type="button"
+                        onClick={() => void handleCleanLegacy()}
+                        disabled={busy}
+                        className="shrink-0 rounded border border-amber-400/50 bg-transparent px-2 py-0.5 text-[11px] font-medium text-amber-200 hover:bg-amber-400/10 cursor-pointer disabled:opacity-50"
+                        title={t('presets.cleanLegacyTitle')}
+                      >
+                        {t('presets.cleanLegacyBtn')}
+                      </button>
+                    )}
+                  </div>
                   {droppedFields.length > 0 && (
                     <div>{t('presets.droppedFieldsBody')}<code className="ml-1 text-[11px] opacity-80">{droppedFields.join(', ')}</code></div>
                   )}
