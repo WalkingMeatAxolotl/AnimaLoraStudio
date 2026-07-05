@@ -134,16 +134,36 @@ def test_prune_keeps_disable_when_and_plain_fields() -> None:
     pruned = prune_inactive_fields(dumped)
     # lr_scheduler 是 disable_when 字段：Prodigy 下前端钉成 "none"，必须保留
     assert "lr_scheduler" in pruned
-    # 无 show_when 的字段全部保留（含 hidden 字段）
-    no_show_when = {
+    # 无 show_when 且非 hidden 的字段全部保留
+    plain = {
         name
         for name, field in TrainingConfig.model_fields.items()
         if not (
             isinstance(field.json_schema_extra, dict)
-            and field.json_schema_extra.get("show_when")
+            and (
+                field.json_schema_extra.get("show_when")
+                or field.json_schema_extra.get("hidden")
+            )
         )
     }
-    assert no_show_when <= set(pruned)
+    assert plain <= set(pruned)
+
+
+def test_prune_drops_hidden_fields_at_default() -> None:
+    """hidden 字段（UI 永不渲染）等于 schema 默认值时不落盘 —— 终端体验旋钮
+    与空 trigger_word 都属于纯噪音；yaml 缺键后 runtime 落回同一默认值。"""
+    pruned = prune_inactive_fields(_dump())
+    for name in ("loss_curve_steps", "no_progress", "log_every", "trigger_word"):
+        assert name not in pruned, name
+
+
+def test_prune_keeps_hidden_fields_with_override() -> None:
+    """hidden 字段的非默认值必须保留：裸 CLI 手写覆盖 / Tagging 页写入的触发词。"""
+    pruned = prune_inactive_fields(_dump(no_progress=False, trigger_word="miku"))
+    assert pruned["no_progress"] is False
+    assert pruned["trigger_word"] == "miku"
+    # 同组里仍是默认值的照裁
+    assert "log_every" not in pruned
 
 
 def test_prune_roundtrip_is_stable() -> None:

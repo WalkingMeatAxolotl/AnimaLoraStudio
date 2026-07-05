@@ -1,16 +1,20 @@
-"""按 show_when 元数据裁剪「当前配置下 UI 不可见」的字段。
+"""按 UI 可见性元数据裁剪 yaml 落盘不需要的字段。
 
-前端 SchemaForm 用 Field 元数据里的 show_when 决定字段显隐（求值器在
-studio/web/src/lib/schema.ts 的 evalShowWhen）。这里提供同一语义的 Python
-镜像，在 yaml 落盘前把 show_when 为假的字段从 dump 里删掉，让 config.yaml /
-预设文件 / 任务快照只包含真正生效的参数。改这里的求值语义必须同步改前端。
+两条裁剪规则（studio/web/src/lib/schema.ts 的 pruneInactiveConfig 是同一
+语义的前端镜像，YAML 预览抽屉靠它和落盘内容一致，改语义必须两边同步）：
+
+1. show_when 求值为假 —— 当前配置下 UI 不可见、值不生效的字段
+   （求值器 eval_show_when 逐字镜像前端 evalShowWhen）。
+2. hidden=True 且值等于 schema 默认值 —— UI 永不渲染的字段（终端体验旋钮、
+   trigger_word 等），默认值落盘纯属噪音；非默认值（裸 CLI 用户手写覆盖 /
+   Tagging 页写入的 trigger_word）照常保留。
 
 runtime 侧的安全性：argparse parser 与默认值同样派生自 TrainingConfig
 （studio/infrastructure/argparse_bridge.py），yaml 缺失的键在
 merge_yaml_into_namespace 后落回同一份 schema 默认值，与显式写默认值等价。
 
-只裁 show_when —— disable_when 命中的字段被前端 reset 到 disable_value，
-而 disable_value 可能不等于字段默认值（如 Prodigy 时 lr_scheduler 被钉在
+不裁 disable_when —— 命中的字段被前端 reset 到 disable_value，而
+disable_value 可能不等于字段默认值（如 Prodigy 时 lr_scheduler 被钉在
 "none"），裁掉会让 runtime 读回默认值改变行为，所以保留。
 """
 from typing import Any, Mapping
@@ -65,11 +69,11 @@ def eval_show_when(expr: str | None, values: Mapping[str, Any]) -> bool:
 def prune_inactive_fields(
     dumped: dict[str, Any], model_cls: type[BaseModel] = TrainingConfig
 ) -> dict[str, Any]:
-    """从 model_dump 结果里删掉 show_when 求值为假的字段。
+    """从 model_dump 结果里删掉 show_when 求值为假的字段，以及 hidden=True
+    且仍是 schema 默认值的字段。
 
     所有表达式都对完整的 `dumped` 求值（与前端对完整表单 state 求值一致），
-    先删的字段不影响后续判断。没有 show_when 的字段（含 hidden / disable_when
-    字段）原样保留。
+    先删的字段不影响后续判断。disable_when 字段与无元数据字段原样保留。
     """
     out = dict(dumped)
     for name, field in model_cls.model_fields.items():
@@ -79,4 +83,8 @@ def prune_inactive_fields(
         expr = extra.get("show_when")
         if isinstance(expr, str) and expr and not eval_show_when(expr, dumped):
             out.pop(name, None)
+            continue
+        if extra.get("hidden") and name in out:
+            if out[name] == field.get_default(call_default_factory=True):
+                out.pop(name)
     return out

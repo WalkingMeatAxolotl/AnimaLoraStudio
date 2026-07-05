@@ -213,11 +213,13 @@ export default function TrainPage() {
    *   - 相等 → 用户没动过，安全 sync server 归一化结果到 UI
    *   - 不等 → 用户有新内容，只更新 savedJson baseline，UI state 不动；
    *            useEffect debounce 会自然为新内容触发下一轮 save 收敛 */
-  const persistConfig = useCallback(async (cfg: ConfigData): Promise<void> => {
+  const persistConfig = useCallback(async (cfg: ConfigData, force = false): Promise<void> => {
     while (inFlightSaveRef.current) {
       await inFlightSaveRef.current
     }
-    if (JSON.stringify(cfg) === savedJsonRef.current) return
+    // force：内容没变也要 PUT（「清理旧字段」重写 yaml —— 磁盘上的旧键不在
+    // GET 归一化结果里，JSON diff 看不出差异）。
+    if (!force && JSON.stringify(cfg) === savedJsonRef.current) return
     const p = (async () => {
       const r = await api.putVersionConfig(project.id, vid!, cfg)
       setConfigResp((prev) => prev ? { ...prev, has_config: true, config: r.config } : prev)
@@ -227,10 +229,13 @@ export default function TrainPage() {
         configRef.current = r.config
         setConfig(r.config)
       }
+      // PUT 全量重写 yaml（tolerant validate + prune），磁盘上不再有旧字段 /
+      // 非法值 —— 兼容横幅的信息已过期，清掉。
+      applyPresetWarnings({})
     })()
     inFlightSaveRef.current = p
     try { await p } finally { inFlightSaveRef.current = null }
-  }, [project.id, vid])
+  }, [project.id, vid, applyPresetWarnings])
 
   // ── auto-save ─────────────────────────────────────────────────────────
   // config 变化 → 600ms 后没新改动就落盘。中途又改 → cleanup clearTimeout 重置。
@@ -743,7 +748,23 @@ export default function TrainPage() {
                 </div>
                 {(droppedFields.length > 0 || defaultedFields.length > 0) && (
                   <div className="mb-3 rounded-md border border-amber-400/50 bg-amber-950/60 px-3.5 py-2.5 text-xs text-amber-100 space-y-1">
-                    <span className="font-semibold text-amber-300">{t('presets.compatNoticeTitle')}</span>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-amber-300">{t('presets.compatNoticeTitle')}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const cur = configRef.current
+                          if (!cur) return
+                          void persistConfig(cur, true)
+                            .then(() => toast(t('presets.cleanLegacyDone'), 'success'))
+                            .catch((e) => toast(t('train.saveFailed', { error: e }), 'error'))
+                        }}
+                        className="shrink-0 rounded border border-amber-400/50 bg-transparent px-2 py-0.5 text-[11px] font-medium text-amber-200 hover:bg-amber-400/10 cursor-pointer"
+                        title={t('presets.cleanLegacyTitle')}
+                      >
+                        {t('presets.cleanLegacyBtn')}
+                      </button>
+                    </div>
                     {droppedFields.length > 0 && (
                       <div>{t('presets.droppedFieldsBody')}<code className="ml-1 text-[11px] opacity-80">{droppedFields.join(', ')}</code></div>
                     )}

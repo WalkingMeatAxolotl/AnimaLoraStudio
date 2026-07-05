@@ -16,6 +16,7 @@ import yaml
 from pydantic import ValidationError
 
 from ...domain.config_prune import prune_inactive_fields
+from ...domain.migrations import RETIRED_MONITOR_KEYS
 from ...paths import REPO_ROOT, USER_PRESETS_DIR
 from ...schema import TrainingConfig
 
@@ -160,6 +161,9 @@ def _tolerant_validate(raw: dict[str, Any]) -> tuple[TrainingConfig, list[str], 
             data["attention_backend"] = "none"
     data.pop("flash_attn", None)
     data.pop("xformers", None)
+    # 退役的 monitor server 键：历史 dump 全都写过，静默丢弃不进 dropped 提示。
+    for key in RETIRED_MONITOR_KEYS:
+        data.pop(key, None)
 
     dropped = sorted(k for k in data if k not in known)
     data = {k: v for k, v in data.items() if k in known}

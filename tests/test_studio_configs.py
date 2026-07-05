@@ -49,12 +49,14 @@ def test_schema_is_complete() -> None:
         "ppsf_d_coef", "ppsf_prodigy_steps", "ppsf_beta1", "ppsf_beta2",
         "ppsf_split_groups", "ppsf_split_groups_mean", "ppsf_use_speed",
         "ppsf_fused_back_pass", "ppsf_use_stableadamw",
-        "sample_prompt", "sample_prompts", "no_monitor",
+        "sample_prompt", "sample_prompts", "no_progress",
     ):
         assert name in fields, f"missing: {name}"
     # 0.18: wandb per-config 覆盖块已移除（secrets 不进训练 yaml），schema 里不
     # 应再出现任何 wandb_* 字段
     assert not [n for n in fields if n.startswith("wandb_")]
+    # 退役的 monitor server 字段不应回归（老 yaml 键静默丢弃，见 migrations）
+    assert not {"no_monitor", "monitor_host", "monitor_port", "no_browser"} & set(fields)
     lora_annotation = fields["lora_type"].annotation
     lora_options = getattr(lora_annotation, "__args__", ())
     assert "ortho" in lora_options
