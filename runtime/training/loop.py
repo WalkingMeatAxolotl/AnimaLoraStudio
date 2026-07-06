@@ -89,6 +89,24 @@ def _resolve_sra_effective_weight(args: Any, global_step: int, total_steps: int 
     return base * max(0.0, min(1.0, scale))
 
 
+def _compute_loss_weight_from_args(args, t, device):
+    """按 args 的 loss_weighting 配置算 timestep-dependent 权重；scheme=none 返回 None。
+
+    navit（逐图 t）与标准（per-sample t）两条路径共用同一套参数组装，
+    避免加新 scheme 参数时两处漂移。"""
+    scheme = str(getattr(args, "loss_weighting", "none") or "none")
+    if scheme == "none":
+        return None
+    return compute_loss_weight(
+        t,
+        scheme=scheme,
+        min_snr_gamma=float(getattr(args, "min_snr_gamma", 5.0) or 5.0),
+        weight_cap_ratio=float(getattr(args, "weight_cap_ratio", 0.0) or 0.0),
+        detail_inv_t_min=float(getattr(args, "detail_inv_t_min", 1.0) or 1.0),
+        detail_inv_t_max=float(getattr(args, "detail_inv_t_max", 5.0) or 5.0),
+    ).to(device=device, dtype=torch.float32)
+
+
 def _accumulation_step(batch_idx, dl_len, grad_accum):
     """返回 (group_size, is_group_end)：该 micro-batch 所在梯度累积组的实际大小，
     以及它是否是该组最后一个（触发 optimizer.step / zero_grad）。
@@ -263,16 +281,8 @@ def run(ctx: TrainingContext) -> None:
                     _piw = None
                     if "loss_weight" in batch:
                         _piw = batch["loss_weight"].to(ctx.device, dtype=torch.float32)
-                    _lw_scheme = str(getattr(args, "loss_weighting", "none") or "none")
-                    if _lw_scheme != "none":
-                        _lw = compute_loss_weight(
-                            t,
-                            scheme=_lw_scheme,
-                            min_snr_gamma=float(getattr(args, "min_snr_gamma", 5.0) or 5.0),
-                            weight_cap_ratio=float(getattr(args, "weight_cap_ratio", 0.0) or 0.0),
-                            detail_inv_t_min=float(getattr(args, "detail_inv_t_min", 1.0) or 1.0),
-                            detail_inv_t_max=float(getattr(args, "detail_inv_t_max", 5.0) or 5.0),
-                        ).to(device=ctx.device, dtype=torch.float32)
+                    _lw = _compute_loss_weight_from_args(args, t, ctx.device)
+                    if _lw is not None:
                         _piw = _lw if _piw is None else _piw * _lw
                     loss, pred, _navit_info = navit_packed_forward_and_loss(
                         ctx.model, navit_latents, t, cross_packed, text_seqlens,
@@ -371,16 +381,8 @@ def run(ctx: TrainingContext) -> None:
                         w = batch["loss_weight"].to(ctx.device).view(-1, *([1] * (loss_per_sample.dim() - 1)))
                         loss_per_sample = loss_per_sample * w
                     # timestep-dependent loss 权重
-                    lw_scheme = str(getattr(args, "loss_weighting", "none") or "none")
-                    if lw_scheme != "none":
-                        lw = compute_loss_weight(
-                            t,
-                            scheme=lw_scheme,
-                            min_snr_gamma=float(getattr(args, "min_snr_gamma", 5.0) or 5.0),
-                            weight_cap_ratio=float(getattr(args, "weight_cap_ratio", 0.0) or 0.0),
-                            detail_inv_t_min=float(getattr(args, "detail_inv_t_min", 1.0) or 1.0),
-                            detail_inv_t_max=float(getattr(args, "detail_inv_t_max", 5.0) or 5.0),
-                        ).to(device=ctx.device, dtype=torch.float32)
+                    lw = _compute_loss_weight_from_args(args, t, ctx.device)
+                    if lw is not None:
                         loss_per_sample = loss_per_sample * lw.view(-1, *([1] * (loss_per_sample.dim() - 1)))
                     loss = loss_per_sample.mean()
                     denoise_loss_log = loss.detach()
