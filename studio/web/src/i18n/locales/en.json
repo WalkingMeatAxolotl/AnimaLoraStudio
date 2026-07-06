@@ -545,7 +545,7 @@
     "textCaption": "Text caption",
     "assistTagger": "Assist tagger",
     "assistOff": "Off",
-    "assistTaggerHelp": "Pre-tags each image with a local tagger and injects the tags into the %TAGS% placeholder in the prompt. Only takes effect when the prompt contains %TAGS%.",
+    "assistTaggerHelp": "Pre-tags each image with a local tagger and injects the tags into the %TAGS% placeholder in the prompt. Only takes effect when the prompt contains %TAGS%. Pre-tagging uses the WD14 / CLTagger parameters from global Settings (thresholds, blacklist, etc.).",
     "assistNeedsTags": "Assist tagger is selected, but the prompt has no %TAGS% placeholder — it will not take effect.",
     "responsesWarning": "⚠️ Responses endpoint only uses system + first user message; other messages are ignored",
     "secretSavedPlaceholder": "Saved (hidden); enter a new value to overwrite",

@@ -16,6 +16,7 @@ import {
 } from '../../../api/client'
 import LLMMessagesEditor from '../../../components/LLMMessagesEditor'
 import TagsInput from '../../../components/TagsInput'
+import { SettingsField } from '../../tools/settings/fields'
 import StepShell from '../../../components/StepShell'
 import { useToast } from '../../../components/Toast'
 import { useSettingsDrawer } from '../../../lib/SettingsDrawer'
@@ -742,6 +743,12 @@ function LLMTaggerPanel({
     form.preset_id !== defaults.current_preset ||
     JSON.stringify(form) !== JSON.stringify(fromLLMPreset(activePreset))
 
+  // 与设置页 LLM 工作区同款警示：开了 assist 但提示词（含本次临时编辑）没有
+  // {{tags}} 占位符时，预打标不会生效。
+  const assistNeedsTags =
+    !!form.assist_tagger &&
+    !form.messages.some((m) => m.type === 'text' && m.content.includes('{{tags}}'))
+
   const restore = () => {
     const original = activePresetOf(defaults)
     if (original) onChange(fromLLMPreset(original))
@@ -769,13 +776,12 @@ function LLMTaggerPanel({
         )}
       </div>
 
-      <label className="grid grid-cols-[140px_1fr] items-center gap-2">
-        <span className="text-fg-tertiary font-mono text-xs">preset</span>
+      <SettingsField label="preset">
         <select
           value={form.preset_id}
           onChange={(e) => switchPreset(e.target.value)}
           disabled={disabled}
-          className={`input input-mono ${form.preset_id !== defaults.current_preset ? 'border-warn' : ''}`}
+          className={llmCtl(form.preset_id !== defaults.current_preset)}
         >
           {defaults.presets.map((p) => (
             <option key={p.id} value={p.id}>
@@ -783,84 +789,100 @@ function LLMTaggerPanel({
             </option>
           ))}
         </select>
-      </label>
+      </SettingsField>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-        <LabeledInput label="base_url" value={form.base_url} placeholder="http://localhost:8000/v1" disabled={disabled} onChange={(v) => onChange({ ...form, base_url: v })} modified={form.base_url !== activePreset.base_url} />
+      <SettingsField label="base_url">
+        <input
+          type="text"
+          value={form.base_url}
+          placeholder="http://localhost:8000/v1"
+          disabled={disabled}
+          onChange={(e) => onChange({ ...form, base_url: e.target.value })}
+          className={llmCtl(form.base_url !== activePreset.base_url)}
+        />
+      </SettingsField>
+
+      <SettingsField label="model">
         {activePreset.model_ids.length > 0 ? (
-          <label className="grid grid-cols-[140px_1fr] items-center gap-2">
-            <span className="text-fg-tertiary font-mono text-xs">model</span>
-            <select
-              value={form.model}
-              onChange={(e) => onChange({ ...form, model: e.target.value })}
-              disabled={disabled}
-              className={`input input-mono ${form.model !== activePreset.model ? 'border-warn' : ''}`}
-            >
-              {!activePreset.model_ids.includes(form.model) && form.model && (
-                <option value={form.model}>{form.model}</option>
-              )}
-              {activePreset.model_ids.map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
-          </label>
+          <select
+            value={form.model}
+            onChange={(e) => onChange({ ...form, model: e.target.value })}
+            disabled={disabled}
+            className={llmCtl(form.model !== activePreset.model)}
+          >
+            {!activePreset.model_ids.includes(form.model) && form.model && (
+              <option value={form.model}>{form.model}</option>
+            )}
+            {activePreset.model_ids.map((m) => <option key={m} value={m}>{m}</option>)}
+          </select>
         ) : (
-          <LabeledInput label="model" value={form.model} placeholder={t('tag.modelPlaceholder')} disabled={disabled} onChange={(v) => onChange({ ...form, model: v })} modified={form.model !== activePreset.model} />
+          <input
+            type="text"
+            value={form.model}
+            placeholder={t('tag.modelPlaceholder')}
+            disabled={disabled}
+            onChange={(e) => onChange({ ...form, model: e.target.value })}
+            className={llmCtl(form.model !== activePreset.model)}
+          />
         )}
-        <label className="grid grid-cols-[140px_1fr] items-center gap-2">
-          <span className="text-fg-tertiary font-mono text-xs">endpoint</span>
-          <select
-            value={form.endpoint}
-            onChange={(e) => onChange({ ...form, endpoint: e.target.value as LLMPreset['endpoint'] })}
-            disabled={disabled}
-            className={`input input-mono ${form.endpoint !== activePreset.endpoint ? 'border-warn' : ''}`}
-          >
-            <option value="chat_completions">Chat Completions</option>
-            <option value="responses">Responses</option>
-          </select>
-        </label>
-        <label className="grid grid-cols-[140px_1fr] items-center gap-2">
-          <span className="text-fg-tertiary font-mono text-xs">output_format</span>
-          <select
-            value={form.output_format}
-            onChange={(e) => onChange({ ...form, output_format: e.target.value as LLMPreset['output_format'] })}
-            disabled={disabled}
-            className={`input input-mono ${form.output_format !== activePreset.output_format ? 'border-warn' : ''}`}
-          >
-            <option value="json">JSON</option>
-            <option value="text">Text</option>
-          </select>
-        </label>
-        <label className="grid grid-cols-[140px_1fr] items-center gap-2">
-          <span className="text-fg-tertiary font-mono text-xs">assist_tagger</span>
-          <select
-            value={form.assist_tagger}
-            onChange={(e) => onChange({ ...form, assist_tagger: e.target.value })}
-            disabled={disabled}
-            title={t('llmWorkspace.assistTaggerHelp').split('%TAGS%').join('{{tags}}')}
-            className={`input input-mono ${form.assist_tagger !== activePreset.assist_tagger ? 'border-warn' : ''}`}
-          >
-            <option value="">Off</option>
-            <option value="wd14">WD14</option>
-            <option value="cltagger">CLTagger</option>
-          </select>
-        </label>
-        <p className="text-fg-tertiary text-[11px] leading-snug m-0">
-          {t('llmWorkspace.assistTaggerHelp').split('%TAGS%').join('{{tags}}')}
-        </p>
-      </div>
+      </SettingsField>
 
-      <div className="flex items-center gap-3 flex-wrap">
-        <LLMNumberInput label="temperature" value={form.temperature} base={activePreset.temperature} step={0.05} min={0} max={2} disabled={disabled} onChange={(v) => onChange({ ...form, temperature: v })} />
-        <LLMNumberInput label="max_tokens" value={form.max_tokens} base={activePreset.max_tokens} step={1} min={64} max={4096} disabled={disabled} onChange={(v) => onChange({ ...form, max_tokens: Math.round(v) })} />
-        <LLMNumberInput label="concurrency" value={form.concurrency} base={activePreset.concurrency} step={1} min={1} max={8} disabled={disabled} onChange={(v) => onChange({ ...form, concurrency: Math.round(v) })} />
-        <button type="button" onClick={() => setAdvOpen(!advOpen)} className="btn btn-ghost btn-sm text-xs text-fg-tertiary">
-          {advOpen ? '▾' : '▸'} {t('tag.advanced')}
-        </button>
-      </div>
+      <SettingsField label="endpoint">
+        <select
+          value={form.endpoint}
+          onChange={(e) => onChange({ ...form, endpoint: e.target.value as LLMPreset['endpoint'] })}
+          disabled={disabled}
+          className={llmCtl(form.endpoint !== activePreset.endpoint)}
+        >
+          <option value="chat_completions">Chat Completions</option>
+          <option value="responses">Responses</option>
+        </select>
+      </SettingsField>
+
+      <SettingsField label="output_format">
+        <select
+          value={form.output_format}
+          onChange={(e) => onChange({ ...form, output_format: e.target.value as LLMPreset['output_format'] })}
+          disabled={disabled}
+          className={llmCtl(form.output_format !== activePreset.output_format)}
+        >
+          <option value="json">JSON</option>
+          <option value="text">Text</option>
+        </select>
+      </SettingsField>
+
+      <SettingsField
+        label="assist_tagger"
+        helpTooltip={t('llmWorkspace.assistTaggerHelp').split('%TAGS%').join('{{tags}}')}
+      >
+        <select
+          value={form.assist_tagger}
+          onChange={(e) => onChange({ ...form, assist_tagger: e.target.value })}
+          disabled={disabled}
+          className={llmCtl(form.assist_tagger !== activePreset.assist_tagger)}
+        >
+          <option value="">Off</option>
+          <option value="wd14">WD14</option>
+          <option value="cltagger">CLTagger</option>
+        </select>
+        {assistNeedsTags && (
+          <p className="text-warn text-[11px] leading-snug mt-1 mb-0">
+            {t('llmWorkspace.assistNeedsTags').split('%TAGS%').join('{{tags}}')}
+          </p>
+        )}
+      </SettingsField>
+
+      <LLMNumberField label="temperature" value={form.temperature} base={activePreset.temperature} step={0.05} min={0} max={2} disabled={disabled} onChange={(v) => onChange({ ...form, temperature: v })} />
+      <LLMNumberField label="max_tokens" value={form.max_tokens} base={activePreset.max_tokens} min={64} max={4096} disabled={disabled} onChange={(v) => onChange({ ...form, max_tokens: Math.round(v) })} />
+      <LLMNumberField label="concurrency" value={form.concurrency} base={activePreset.concurrency} min={1} max={8} disabled={disabled} onChange={(v) => onChange({ ...form, concurrency: Math.round(v) })} />
+
+      <button type="button" onClick={() => setAdvOpen(!advOpen)} className="btn btn-ghost btn-sm text-xs text-fg-tertiary self-start">
+        {advOpen ? '▾' : '▸'} {t('tag.advanced')}
+      </button>
 
       {advOpen && (
         <>
-          <label className="grid grid-cols-[140px_1fr] items-start gap-2">
-            <span className="text-fg-tertiary font-mono text-xs pt-1">messages</span>
+          <SettingsField label="messages">
             <div className="flex flex-col gap-1.5">
               {form.endpoint === 'responses' && (
                 <div className="text-[10px] text-warn">{t('tag.responsesWarning')}</div>
@@ -871,54 +893,39 @@ function LLMTaggerPanel({
                 disabled={disabled}
               />
             </div>
-          </label>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-1">
-            <LLMLabeledNumber label="timeout" value={form.timeout} base={activePreset.timeout} min={5} max={600} disabled={disabled} onChange={(v) => onChange({ ...form, timeout: Math.round(v) })} />
-            <LLMLabeledNumber label="max_retries" value={form.max_retries} base={activePreset.max_retries} min={1} max={10} disabled={disabled} onChange={(v) => onChange({ ...form, max_retries: Math.round(v) })} />
-            <LLMLabeledNumber label="requests_per_second" value={form.requests_per_second} base={activePreset.requests_per_second} min={0} max={60} step={0.1} disabled={disabled} onChange={(v) => onChange({ ...form, requests_per_second: v })} />
-            <LLMLabeledNumber label="max_requests_per_minute" value={form.max_requests_per_minute} base={activePreset.max_requests_per_minute} min={0} max={3600} disabled={disabled} onChange={(v) => onChange({ ...form, max_requests_per_minute: Math.round(v) })} />
-            <LLMLabeledNumber label="max_side" value={form.max_side} base={activePreset.max_side} min={64} max={4096} disabled={disabled} onChange={(v) => onChange({ ...form, max_side: Math.round(v) })} />
-            <LLMLabeledNumber label="jpeg_quality" value={form.jpeg_quality} base={activePreset.jpeg_quality} min={1} max={100} disabled={disabled} onChange={(v) => onChange({ ...form, jpeg_quality: Math.round(v) })} />
-            <LLMLabeledNumber label="max_image_mb" value={form.max_image_mb} base={activePreset.max_image_mb} min={0.1} max={25} step={0.1} disabled={disabled} onChange={(v) => onChange({ ...form, max_image_mb: v })} />
-          </div>
+          </SettingsField>
+          <LLMNumberField label="timeout" value={form.timeout} base={activePreset.timeout} min={5} max={600} disabled={disabled} onChange={(v) => onChange({ ...form, timeout: Math.round(v) })} />
+          <LLMNumberField label="max_retries" value={form.max_retries} base={activePreset.max_retries} min={1} max={10} disabled={disabled} onChange={(v) => onChange({ ...form, max_retries: Math.round(v) })} />
+          <LLMNumberField label="requests_per_second" value={form.requests_per_second} base={activePreset.requests_per_second} min={0} max={60} step={0.1} disabled={disabled} onChange={(v) => onChange({ ...form, requests_per_second: v })} />
+          <LLMNumberField label="max_requests_per_minute" value={form.max_requests_per_minute} base={activePreset.max_requests_per_minute} min={0} max={3600} disabled={disabled} onChange={(v) => onChange({ ...form, max_requests_per_minute: Math.round(v) })} />
+          <LLMNumberField label="max_side" value={form.max_side} base={activePreset.max_side} min={64} max={4096} disabled={disabled} onChange={(v) => onChange({ ...form, max_side: Math.round(v) })} />
+          <LLMNumberField label="jpeg_quality" value={form.jpeg_quality} base={activePreset.jpeg_quality} min={1} max={100} disabled={disabled} onChange={(v) => onChange({ ...form, jpeg_quality: Math.round(v) })} />
+          <LLMNumberField label="max_image_mb" value={form.max_image_mb} base={activePreset.max_image_mb} min={0.1} max={25} step={0.1} disabled={disabled} onChange={(v) => onChange({ ...form, max_image_mb: v })} />
         </>
       )}
     </section>
   )
 }
 
-function LLMNumberInput({ label, value, base, min, max, step, disabled, onChange }: {
-  label: string; value: number; base: number; min: number; max: number; step: number
-  disabled: boolean; onChange: (v: number) => void
-}) {
-  return (
-    <label className="flex items-center gap-1.5">
-      <span className="text-fg-tertiary font-mono text-xs">{label}</span>
-      <input
-        type="number" min={min} max={max} step={step} value={value}
-        onChange={(e) => { const n = Number(e.target.value); if (!Number.isNaN(n)) onChange(Math.max(min, Math.min(max, n))) }}
-        disabled={disabled}
-        className={`input input-mono ${value !== base ? 'border-warn' : ''}`}
-        style={{ width: 88 }}
-      />
-    </label>
-  )
+// 对齐全局设置页 textInputClass 的控件样式；modified 时整体切换边框色，
+// 避免 border-subtle / border-warn 两个颜色类共存时优先级不确定。
+function llmCtl(modified: boolean): string {
+  return `w-full px-2 py-1 outline-none rounded-sm bg-sunken border text-sm text-fg-primary font-mono focus:border-accent disabled:opacity-60 ${modified ? 'border-warn' : 'border-subtle'}`
 }
 
-function LLMLabeledNumber({ label, value, base, min, max, step = 1, disabled, onChange }: {
+function LLMNumberField({ label, value, base, min, max, step = 1, disabled, onChange }: {
   label: string; value: number; base: number; min: number; max: number; step?: number
   disabled: boolean; onChange: (v: number) => void
 }) {
   return (
-    <label className="grid grid-cols-[140px_1fr] items-center gap-2">
-      <span className="text-fg-tertiary font-mono text-xs">{label}</span>
+    <SettingsField label={label}>
       <input
         type="number" min={min} max={max} step={step} value={value}
         onChange={(e) => { const n = Number(e.target.value); if (!Number.isNaN(n)) onChange(Math.max(min, Math.min(max, n))) }}
         disabled={disabled}
-        className={`input input-mono ${value !== base ? 'border-warn' : ''}`}
+        className={`${llmCtl(value !== base)} max-w-32`}
       />
-    </label>
+    </SettingsField>
   )
 }
 
