@@ -689,6 +689,9 @@ export default function SettingsPage() {
           <SettingsField label={t('settings.fieldAddCopyright')}>
             <Bool value={draft.cltagger.add_copyright_tag} onChange={(v) => update('cltagger', 'add_copyright_tag', v)} />
           </SettingsField>
+          <SettingsField label={t('settings.fieldAddArtist')}>
+            <Bool value={draft.cltagger.add_artist_tag} onChange={(v) => update('cltagger', 'add_artist_tag', v)} />
+          </SettingsField>
           <SettingsField label={t('settings.fieldAddMeta')}>
             <Bool value={draft.cltagger.add_meta_tag} onChange={(v) => update('cltagger', 'add_meta_tag', v)} />
           </SettingsField>

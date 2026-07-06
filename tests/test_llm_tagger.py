@@ -97,6 +97,143 @@ class _SlowSession:
                 self.active -= 1
 
 
+def test_apply_tags_substitutes_placeholder() -> None:
+    msgs = [
+        secrets.LLMMessage(type="text", role="system", content="Tags: {{tags}}"),
+        secrets.LLMMessage(type="image"),
+    ]
+
+    out = llm_tagger._apply_tags(msgs, "1girl, solo")
+
+    assert out[0].content == "Tags: 1girl, solo"
+    assert out[1].type == "image"
+    # cfg.messages is shared across calls; placeholder substitution must be read-only.
+    assert msgs[0].content == "Tags: {{tags}}"
+
+
+def test_apply_tags_empty_string_when_no_tags() -> None:
+    msgs = [secrets.LLMMessage(type="text", role="user", content="X {{tags}} Y")]
+
+    out = llm_tagger._apply_tags(msgs, "")
+
+    assert out[0].content == "X  Y"
+
+
+def test_assist_tagger_injects_tags_into_payload(
+    isolated_secrets, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secrets.update(
+        {
+            "llm_tagger": {
+                "presets": [
+                    {
+                        "id": "style_json",
+                        "base_url": "http://x/v1",
+                        "model": "vision",
+                        "max_retries": 1,
+                        "assist_tagger": "wd14",
+                        "messages": [
+                            {
+                                "type": "text",
+                                "role": "system",
+                                "content": "Reference: {{tags}}",
+                            },
+                            {"type": "image"},
+                        ],
+                    }
+                ]
+            }
+        }
+    )
+    img = _png(tmp_path / "1.png")
+
+    class _FakeTagger:
+        def prepare(self) -> None:
+            pass
+
+        def tag(self, paths, on_progress=lambda d, t: None):
+            for p in paths:
+                yield {"image": p, "tags": ["1girl", "solo"]}
+
+    monkeypatch.setattr(llm_tagger, "get_tagger", lambda name: _FakeTagger())
+    sess = MagicMock()
+    sess.post.return_value = _chat_response('{"tags":["ink"]}')
+
+    list(llm_tagger.LLMTagger(session=sess).tag([img]))
+
+    body = sess.post.call_args.kwargs["json"]
+    assert body["messages"][0]["content"] == "Reference: 1girl, solo"
+
+
+def test_assist_skipped_when_no_placeholder(
+    isolated_secrets, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secrets.update(
+        {
+            "llm_tagger": {
+                "presets": [
+                    {
+                        "id": "style_json",
+                        "base_url": "http://x/v1",
+                        "model": "vision",
+                        "max_retries": 1,
+                        "assist_tagger": "wd14",
+                        "messages": [
+                            {"type": "text", "role": "system", "content": "No placeholder"},
+                            {"type": "image"},
+                        ],
+                    }
+                ]
+            }
+        }
+    )
+    img = _png(tmp_path / "1.png")
+    called: list[str] = []
+    monkeypatch.setattr(llm_tagger, "get_tagger", lambda name: called.append(name))
+    sess = MagicMock()
+    sess.post.return_value = _chat_response('{"tags":["ink"]}')
+
+    list(llm_tagger.LLMTagger(session=sess).tag([img]))
+
+    assert called == []
+
+
+def test_assist_prepare_failure_raises(
+    isolated_secrets, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secrets.update(
+        {
+            "llm_tagger": {
+                "presets": [
+                    {
+                        "id": "style_json",
+                        "base_url": "http://x/v1",
+                        "model": "vision",
+                        "max_retries": 1,
+                        "assist_tagger": "wd14",
+                        "messages": [
+                            {"type": "text", "role": "system", "content": "Ref: {{tags}}"},
+                            {"type": "image"},
+                        ],
+                    }
+                ]
+            }
+        }
+    )
+    img = _png(tmp_path / "1.png")
+
+    class _BadTagger:
+        def prepare(self) -> None:
+            raise RuntimeError("assist model missing")
+
+        def tag(self, paths, on_progress=lambda d, t: None):
+            yield from ()
+
+    monkeypatch.setattr(llm_tagger, "get_tagger", lambda name: _BadTagger())
+    with pytest.raises(RuntimeError, match="assist model missing"):
+        list(llm_tagger.LLMTagger(session=MagicMock()).tag([img]))
+
+
 def test_is_available_requires_model(isolated_secrets) -> None:
     secrets.update(
         {"llm_tagger": {"presets": [{"id": "style_json", "model": ""}]}}

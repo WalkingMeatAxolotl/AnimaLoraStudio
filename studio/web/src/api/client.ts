@@ -295,6 +295,8 @@ export interface LLMPreset {
   endpoint: 'chat_completions' | 'responses'
   messages: LLMMessage[]
   output_format: 'json' | 'text'
+  /** Local ONNX tagger used to pre-tag images and inject {{tags}} into messages ('' = off). */
+  assist_tagger: string
   temperature: number
   max_tokens: number
   max_side: number
@@ -342,6 +344,7 @@ export interface CLTaggerConfig {
   threshold_general: number
   threshold_character: number
   add_copyright_tag: boolean
+  add_artist_tag: boolean
   add_meta_tag: boolean
   add_model_tag: boolean
   add_rating_tag: boolean

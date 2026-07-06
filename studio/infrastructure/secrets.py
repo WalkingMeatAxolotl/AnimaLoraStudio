@@ -261,6 +261,9 @@ class LLMPresetConfig(BaseModel):
     # prompt 消息序列（含图片位置）
     messages: list[LLMMessage] = Field(default_factory=lambda: _default_messages_for(""))
     output_format: str = "json"  # json | text
+    # Assist tagging: pre-tag images with a local ONNX tagger before LLM calls,
+    # then inject tags into {{tags}} placeholders in text messages.
+    assist_tagger: str = ""  # "" | wd14 | cltagger
     # 生成参数
     temperature: float = 0.2
     max_tokens: int = 700
@@ -300,6 +303,8 @@ class LLMPresetConfig(BaseModel):
             self.endpoint = "chat_completions"
         if self.output_format not in {"json", "text"}:
             self.output_format = "json"
+        if self.assist_tagger not in {"", "wd14", "cltagger"}:
+            self.assist_tagger = ""
         self.temperature = max(0.0, min(float(self.temperature), 2.0))
         self.max_tokens = max(64, int(self.max_tokens or 700))
         self.timeout = max(5, int(self.timeout or 60))
@@ -452,11 +457,12 @@ class CLTaggerConfig(BaseModel):
     tag_mapping_path: str = "cl_tagger_1_02/tag_mapping.json"
     threshold_general: float = 0.35
     threshold_character: float = 0.6
-    # CLTagger 模型输出 7 个 category：General / Character 走阈值过滤，其余 5 个
+    # CLTagger 模型输出 8 个 category：General / Character 走阈值过滤，其余 6 个
     # 按 bool 开关 gate。默认勾上 General / Character / Copyright 三类——LoRA
-    # 训练标准 caption 形态；Meta / Model / Rating / Quality 默认关，避免污染
-    # caption（例如 "highres", "best quality", "explicit" 这类元信息）。
+    # 训练标准 caption 形态；Artist / Meta / Model / Rating / Quality 默认关，
+    # 避免污染 caption（画师名以及 "highres", "best quality", "explicit" 这类元信息）。
     add_copyright_tag: bool = True
+    add_artist_tag: bool = False
     add_meta_tag: bool = False
     add_model_tag: bool = False
     add_rating_tag: bool = False

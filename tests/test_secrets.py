@@ -107,6 +107,8 @@ def test_llm_tagger_defaults(secrets_file: Path) -> None:
         "general_json",
         "txt_tags",
         "joycaption",
+        "assist_json",
+        "assist_text",
     ]
     assert all(p.builtin for p in s.llm_tagger.presets)
     # joycaption builtin preset 预填了 vLLM 推荐配置
@@ -154,6 +156,29 @@ def test_llm_preset_keeps_model_in_model_ids(secrets_file: Path) -> None:
     joy = next(p for p in s.llm_tagger.presets if p.id == "joycaption")
     assert joy.model == "vision-a"
     assert joy.model_ids == ["vision-a"]
+
+
+def test_llm_preset_assist_tagger_normalization() -> None:
+    assert secrets.LLMPresetConfig(id="p", assist_tagger="wd14").assist_tagger == "wd14"
+    assert (
+        secrets.LLMPresetConfig(id="p", assist_tagger="cltagger").assist_tagger
+        == "cltagger"
+    )
+    # Invalid values normalize to off.
+    assert secrets.LLMPresetConfig(id="p", assist_tagger="bogus").assist_tagger == ""
+    assert secrets.LLMPresetConfig(id="p", assist_tagger="joycaption").assist_tagger == ""
+    assert secrets.LLMPresetConfig(id="p").assist_tagger == ""
+
+
+def test_builtin_assist_presets_carry_tags_placeholder() -> None:
+    from studio.infrastructure.llm_presets import builtin_llm_presets
+
+    by_id = {p["id"]: p for p in builtin_llm_presets()}
+    for pid in ("assist_json", "assist_text"):
+        assert pid in by_id, f"missing builtin assist preset {pid}"
+        cfg = secrets.LLMPresetConfig(**by_id[pid])
+        assert cfg.assist_tagger in ("wd14", "cltagger")
+        assert any("{{tags}}" in m.content for m in cfg.messages if m.type == "text")
 
 
 def test_wd14_legacy_file_without_model_ids_gets_defaults(
