@@ -140,7 +140,12 @@ class TrainingConfig(BaseModel):
         False,
         description="启用 NaViT / Patch-n-Pack 块对角打包：按 token 预算把多张不同尺寸的图"
                     "拼进一个训练序列（零 padding），替代 ARB 固定桶分批。需配合 cache_latents",
-        json_schema_extra=_meta("system", advanced=True),
+        json_schema_extra=_meta(
+            "system",
+            advanced=True,
+            disable_when="leap_enabled==true||infonoise_enabled==true||sra_enabled==true||lora_type==tlora",
+            disable_hint="与 LeapAlign / InfoNoise / SRA / T-LoRA 互斥（navit v1 未适配），需先关掉它们",
+        ),
     )
     navit_token_budget: int = Field(
         16384, ge=1,
