@@ -60,8 +60,6 @@ def navit_packed_forward_and_loss(
     pyramid_iters: int = 0,
     pyramid_discount: float = 0.35,
     use_checkpoint: bool = False,
-    ms_flags: list[bool] | None = None,
-    ms_loss_weight: float = 1.0,
     per_image_weights: torch.Tensor | None = None,
 ):
     """一个 NaViT/Patch-n-Pack 训练步：逐图加噪 → 打包前向 → 逐图 loss。
@@ -79,8 +77,6 @@ def navit_packed_forward_and_loss(
         loss_fn: ``LossProtocol`` — ``compute(pred, target, t) -> per-element loss``。
         noise_offset / pyramid_iters / pyramid_discount: 噪声参数（透传 ``make_noise``）。
         use_checkpoint: 逐块梯度检查点（峰值激活 ≈ 1 block）。
-        ms_flags: per-image "是否为缩放副本"标志（``navit_multiscale``；None/全 False 时行为中立）。
-        ms_loss_weight: 缩放副本的 loss 权重（1.0=等权；<1 削弱副本影响）。
         per_image_weights: ``[G]`` per-image 权重（正则集 ``loss_weight`` × ``loss_weighting``
             的 t-dependent 权重，由训练循环按 per-image t 组合传入；None=等权，行为中立）。
 
@@ -146,15 +142,6 @@ def navit_packed_forward_and_loss(
         seg_id.unsqueeze(0) == torch.arange(G, device=token_loss.device).unsqueeze(1)
     ).to(token_loss.dtype)                             # [G, ΣN]
     per_image = (onehot @ token_loss) / counts.to(token_loss.dtype)  # [G], grad-bearing
-
-    # navit_multiscale：缩放副本的逐图 loss 权重（原生份恒 1.0）。
-    # 放在 t-加权之前：缩放的是"该图组装完的全部逐图贡献"。默认 1.0 时不构建权重向量。
-    if ms_flags is not None and ms_loss_weight != 1.0 and any(ms_flags):
-        w_vec = torch.tensor(
-            [ms_loss_weight if f else 1.0 for f in ms_flags],
-            device=per_image.device, dtype=per_image.dtype,
-        )
-        per_image = per_image * w_vec
 
     # per-image 权重：正则集 loss_weight × timestep-dependent loss_weighting
     # （min_snr / cosmap / detail_inv_t）。由训练循环按 per-image t 组合后传入，与标准

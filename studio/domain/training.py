@@ -179,26 +179,6 @@ class TrainingConfig(BaseModel):
         description="丢弃最后一个未填满的包（对齐 step 计数；False=保留短包）",
         json_schema_extra=_meta("system", advanced=True),
     )
-    navit_native_resolution: bool = Field(
-        False,
-        description="原生定尺寸：按源图尺寸 floor 对齐到 16px（VAE 8×patch 2），不 resize/crop",
-        json_schema_extra=_meta("system", advanced=True),
-    )
-    navit_multiscale: bool = Field(
-        False,
-        description="多尺度阶梯：为每张大图额外生成降采样副本（≤指定 token 档），拼入打包序列",
-        json_schema_extra=_meta("system", advanced=True),
-    )
-    navit_multiscale_token_ladder: str = Field(
-        "4096",
-        description="多尺度 token 档位（逗号分隔，如 \"4096,16384\"），每张大于该档的图生成一份缩放副本",
-        json_schema_extra=_meta("system", advanced=True),
-    )
-    navit_multiscale_loss_weight: float = Field(
-        1.0, ge=0.0,
-        description="多尺度副本的 loss 权重（1.0=等权；<1 削弱副本影响）",
-        json_schema_extra=_meta("system", advanced=True),
-    )
     cache_encode_tiled: bool = Field(
         False,
         description="缓存编码分块：超大图按 tile_px 分块 VAE encode + latent 羽化拼接（峰值显存 ∝ 单块像素）",
@@ -1054,7 +1034,6 @@ class TrainingConfig(BaseModel):
         前置要求：
         - cache_latents：navit 打包按 latent token 数预算分包，需要预编码缓存。
         - navit_token_budget > 0：必须显式设置（按显存定）。
-        - navit_multiscale → navit_native_resolution：副本经原生定尺寸路径生成。
         """
         if not self.navit_packing:
             return self
@@ -1084,11 +1063,6 @@ class TrainingConfig(BaseModel):
             raise ValueError(
                 "navit_packing 需要显式设置 navit_token_budget（>0，按显存定，"
                 "见 docs/navit-packing.md 显存对照表）。"
-            )
-        if self.navit_multiscale and not self.navit_native_resolution:
-            raise ValueError(
-                "navit_multiscale 需要 navit_native_resolution=true"
-                "（副本经原生定尺寸路径生成；ARB 桶定尺寸暂不支持）。"
             )
         return self
 

@@ -4,7 +4,6 @@
   1) pack_cross_embeddings：trim / no-trim 两路径的拼接长度与 text_seqlens 正确。
   2) navit_packed_forward_and_loss：loss 有限、带梯度、per_image_loss 形状 [G]。
   3) grad_checkpoint 路径输出 ≡ 非检查点路径，且仍可反向。
-  4) ms_loss_weight：缩放副本的逐图 loss 权重生效。
 
 Needs CUDA + xformers（varlen kernels GPU-only）；缺则 skip。
 """
@@ -159,44 +158,6 @@ def test_navit_checkpoint_equivalence():
         torch.isfinite(p.grad).all()
         for p in model.parameters() if p.grad is not None
     )
-
-
-@requires_cuda
-def test_navit_ms_loss_weight():
-    """ms_loss_weight < 1 时缩放副本的 per-image loss 被削弱。"""
-    set_xformers_enabled(True)
-    dtype = torch.float16
-    model = _model(dtype)
-    D = 128
-
-    latent_shapes = [(4, 4), (6, 8)]
-    text_lens = [5, 9]
-    timesteps = [0.3, 0.7]
-    latents_list = [
-        torch.randn(1, 16, 1, h, w, device="cuda", dtype=dtype)
-        for h, w in latent_shapes
-    ]
-    cross_list = [torch.randn(1, L, D, device="cuda", dtype=dtype) for L in text_lens]
-    cross_packed = torch.cat(cross_list, dim=1)
-    t = torch.tensor(timesteps, device="cuda", dtype=dtype)
-    loss_fn = MseLoss()
-
-    # 等权（默认）
-    torch.manual_seed(42)
-    _, _, info_eq = navit_packed_forward_and_loss(
-        model, latents_list, t, cross_packed, text_lens, loss_fn,
-        ms_flags=[False, True], ms_loss_weight=1.0,
-    )
-    # 副本权重 0.5
-    torch.manual_seed(42)
-    _, _, info_w = navit_packed_forward_and_loss(
-        model, latents_list, t, cross_packed, text_lens, loss_fn,
-        ms_flags=[False, True], ms_loss_weight=0.5,
-    )
-    # 原生份（idx=0）不受影响
-    torch.testing.assert_close(info_eq["per_image_loss"][0], info_w["per_image_loss"][0])
-    # 副本（idx=1）被削弱
-    assert info_w["per_image_loss"][1] < info_eq["per_image_loss"][1]
 
 
 @requires_cuda

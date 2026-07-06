@@ -281,8 +281,6 @@ def run(ctx: TrainingContext) -> None:
                         pyramid_iters=int(getattr(args, "pyramid_noise_iters", 0) or 0),
                         pyramid_discount=float(getattr(args, "pyramid_noise_discount", 0.35) or 0.35),
                         use_checkpoint=bool(args.grad_checkpoint),
-                        ms_flags=batch.get("navit_ms_flags"),
-                        ms_loss_weight=float(getattr(args, "navit_multiscale_loss_weight", 1.0) or 1.0),
                         per_image_weights=_piw,
                     )
                     denoise_loss_log = loss.detach()
