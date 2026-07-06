@@ -187,17 +187,17 @@ class TrainingConfig(BaseModel):
     cache_encode_tile_px: int = Field(
         1024, ge=64,
         description="分块 encode 的像素块边长（须为 VAE 下采样 8 的整倍数）",
-        json_schema_extra=_meta("system", advanced=True),
+        json_schema_extra=_meta("system", show_when="cache_encode_tiled==true", advanced=True),
     )
     cache_encode_tile_overlap: int = Field(
         128, ge=0,
         description="分块重叠像素（羽化接缝宽度；0=无重叠硬接缝）",
-        json_schema_extra=_meta("system", advanced=True),
+        json_schema_extra=_meta("system", show_when="cache_encode_tiled==true", advanced=True),
     )
     cache_encode_max_pixels: int = Field(
         0, ge=0,
         description="单次 encode 总像素上限（含翻转份）；0=用内置保守默认 4M。也是分块触发阈值",
-        json_schema_extra=_meta("system", advanced=True),
+        json_schema_extra=_meta("system", show_when="cache_encode_tiled==true", advanced=True),
     )
 
     # ------------------------------------------------------------------- LoRA
