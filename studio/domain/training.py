@@ -820,6 +820,7 @@ class TrainingConfig(BaseModel):
         json_schema_extra=_meta(
             "system",
             disable_when="navit_packing==true",
+            disable_value="xformers",
             disable_hint="NaViT 打包已强制 xformers varlen（块对角必需，需安装 xformers）",
         ),
     )
