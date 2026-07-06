@@ -72,13 +72,13 @@ def _assert_block_equiv(use_adaln_lora):
     with torch.no_grad():
         legacy = blk.forward_tokens(
             x, emb_tok, cross, rope_emb_L_1_1_D=None,
-            attn_mask=self_bias, token_mask_f=None,
+            attn_mask=self_bias,
             adaln_lora_B_T_3D=lora_tok_arg, cross_attn_mask=cross_bias,
             token_wise_mod=True,
         )
         new = blk.forward_tokens(
             x, emb_G, cross, rope_emb_L_1_1_D=None,
-            attn_mask=self_bias, token_mask_f=None,
+            attn_mask=self_bias,
             adaln_lora_B_T_3D=lora_G_arg, cross_attn_mask=cross_bias,
             token_wise_mod=True, mod_index=mod_index,
         )
