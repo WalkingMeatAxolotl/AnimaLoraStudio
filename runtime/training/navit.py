@@ -156,6 +156,5 @@ def navit_packed_forward_and_loss(
     info = {
         "visual_seqlens": vseq,
         "per_image_loss": per_image.detach(),
-        "per_image_loss_grad": per_image,
     }
     return loss, pred, info

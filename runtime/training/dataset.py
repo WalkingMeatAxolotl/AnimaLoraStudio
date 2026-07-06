@@ -661,45 +661,6 @@ class BucketBatchSampler:
 _CACHE_ENCODE_MAX_PIXELS = 4 * 1024 * 1024
 
 
-def _plan_encode_batches(indices, bucket_of, max_batch, max_encode_pixels, flip):
-    """把待编码样本索引按 bucket（像素尺寸）分组，再按张数 / 显存像素预算切成 micro-batch。
-
-    同一 micro-batch 内尺寸一致 → 可 stack 成一个张量一次送进 VAE。
-    flip=True 时每张图在 encode 时会额外拼一份水平翻转，一次进网络的张数是 2×，
-    像素预算据此折半。
-
-    参数：
-        indices:           待编码样本索引（指向 self.samples）。
-        bucket_of:         callable(idx) -> (h, w) 或 None；返回该样本的像素分桶尺寸。
-        max_batch:         单个 micro-batch 的原图张数上限（>=1）。
-        max_encode_pixels: 单次 encode 进网络的总像素上限（含翻转份）；<=0 表示不按像素限。
-        flip:              是否会拼翻转份（影响像素预算折算）。
-    返回：list[list[idx]]，保持桶内原顺序，覆盖且仅覆盖所有输入索引；同批尺寸一致。
-    """
-    max_batch = max(1, int(max_batch))
-    groups: dict = {}
-    order = []
-    for i in indices:
-        key = bucket_of(i)
-        key = tuple(key) if key else (0, 0)
-        if key not in groups:
-            groups[key] = []
-            order.append(key)
-        groups[key].append(i)
-
-    planned = []
-    for key in order:
-        idxs = groups[key]
-        h, w = int(key[0] or 0), int(key[1] or 0)
-        per = max_batch
-        if max_encode_pixels and max_encode_pixels > 0 and h > 0 and w > 0:
-            mult = 2 if flip else 1
-            per = min(per, max(1, int(max_encode_pixels) // (mult * h * w)))
-        for j in range(0, len(idxs), per):
-            planned.append(idxs[j:j + per])
-    return planned
-
-
 class CachedLatentDataset(Dataset):
     """Kohya 风格 npz 文件缓存的数据集。
 
