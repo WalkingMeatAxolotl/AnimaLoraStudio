@@ -1,7 +1,7 @@
 """数据集与 collate：ARB 分桶 + ImageDataset + 正则集 merge + cached latent。
 
 NaViT / Patch-n-Pack 块对角打包（Phase 2 数据层）：
-- 分块 VAE encode tiled_vae_encode（cache_encode_tiled）
+- 分块 VAE encode：委托 VAEWrapper._tiled_encode（cache_encode_tiled）
 - token 预算打包 NavitPackBatchSampler + pack_indices_by_budget / pack_indices_ffd_windowed
 - CachedLatentDataset 扩展：分块 encode、token_count_for_index
 - collate_fn_navit_pack —— 异构 latent 逐图列表 collate
@@ -661,89 +661,6 @@ class BucketBatchSampler:
 _CACHE_ENCODE_MAX_PIXELS = 4 * 1024 * 1024
 
 
-def _tile_starts(total: int, tile: int, stride: int):
-    """1D 分块起点：步长 stride 覆盖 [0, total)，末块贴齐右边界（保持满块尺寸，
-    避免残块）。total <= tile 时单块。"""
-    if total <= tile:
-        return [0]
-    starts = list(range(0, total - tile + 1, stride))
-    if starts[-1] + tile < total:
-        starts.append(total - tile)
-    return starts
-
-
-def _blend_ramp(n: int, ov: int, device, dtype):
-    """块内 1D 混合权重：两端 ov 个位置线性升/降（严格 >0），中间恒 1。
-    与邻块的对称权重在重叠区归一化后线性交叉渐变（羽化接缝）。"""
-    w = torch.ones(n, device=device, dtype=dtype)
-    if ov > 0:
-        r = torch.linspace(1.0 / (ov + 1), ov / (ov + 1), ov, device=device, dtype=dtype)
-        w[:ov] = torch.minimum(w[:ov], r)
-        w[-ov:] = torch.minimum(w[-ov:], r.flip(0))
-    return w
-
-
-def tiled_vae_encode(encode_fn, pixels_5d, tile_px, overlap_px, down=8):
-    """分块 VAE encode + latent 域羽化拼接（cache_encode_tiled）。
-
-    把 ``pixels_5d [B,C,T,H,W]`` 按 ``tile_px``（重叠 ``overlap_px``）切成像素块，
-    逐块 ``encode_fn`` 后在 latent 网格上按线性羽化权重累加并归一化——峰值显存从
-    ∝ 整图像素降到 ∝ 单块像素。VAE conv 感受野越过块边界的部分是近似（非逐 bit
-    等价），overlap 越大误差越小。
-
-    要求 H/W/tile/overlap 均为 ``down`` 的整倍数（latent 边界落整格）；不满足时
-    fail-fast。单块可覆盖整图时直接整图 encode（逐 bit 等价，零混合开销）。
-    """
-    tile = int(tile_px)
-    ov = int(overlap_px)
-    d = max(1, int(down))
-    B, C, T, H, W = pixels_5d.shape
-    if H <= tile and W <= tile:
-        return encode_fn(pixels_5d)
-    for name, v in (("H", H), ("W", W), ("tile_px", tile), ("overlap_px", ov)):
-        if v % d != 0:
-            raise ValueError(
-                f"tiled_vae_encode 要求 {name}={v} 是 VAE 下采样 {d} 的整倍数"
-                "（latent 块边界需落在整格上）。"
-            )
-    if not (0 <= ov < tile):
-        raise ValueError(f"overlap_px={ov} 必须满足 0 <= overlap < tile_px={tile}")
-    stride = tile - ov
-    ys = _tile_starts(H, tile, stride)
-    xs = _tile_starts(W, tile, stride)
-
-    canvas = None
-    weight = None
-    out_dtype = None
-    for y0 in ys:
-        y1 = min(y0 + tile, H)
-        for x0 in xs:
-            x1 = min(x0 + tile, W)
-            lat = encode_fn(pixels_5d[..., y0:y1, x0:x1])
-            out_dtype = lat.dtype
-            lh, lw = lat.shape[-2], lat.shape[-1]
-            if (lh, lw) != ((y1 - y0) // d, (x1 - x0) // d):
-                raise ValueError(
-                    f"encode_fn 输出空间尺寸 {lh}x{lw} 与预期 "
-                    f"{(y1 - y0) // d}x{(x1 - x0) // d} 不符（down={d} 假设不成立）。"
-                )
-            if canvas is None:
-                canvas = torch.zeros(
-                    *lat.shape[:-2], H // d, W // d,
-                    device=lat.device, dtype=torch.float32,
-                )
-                weight = torch.zeros(
-                    H // d, W // d, device=lat.device, dtype=torch.float32,
-                )
-            ov_lat = ov // d
-            wy = _blend_ramp(lh, ov_lat if len(ys) > 1 else 0, lat.device, torch.float32)
-            wx = _blend_ramp(lw, ov_lat if len(xs) > 1 else 0, lat.device, torch.float32)
-            w2d = wy[:, None] * wx[None, :]
-            canvas[..., y0 // d:y1 // d, x0 // d:x1 // d] += lat.float() * w2d
-            weight[y0 // d:y1 // d, x0 // d:x1 // d] += w2d
-    return (canvas / weight).to(out_dtype)
-
-
 def _plan_encode_batches(indices, bucket_of, max_batch, max_encode_pixels, flip):
     """把待编码样本索引按 bucket（像素尺寸）分组，再按张数 / 显存像素预算切成 micro-batch。
 
@@ -990,9 +907,10 @@ class CachedLatentDataset(Dataset):
             """分块 encode 单张图（cache_encode_tiled 超像素预算时）。"""
             pixels = pixel_tensor.unsqueeze(0).to(device, dtype=dtype).unsqueeze(2)  # [1,C,1,H,W]
             with torch.inference_mode():
-                lat = tiled_vae_encode(
-                    lambda x: vae.encode(x),
-                    pixels, self.encode_tile_px, self.encode_tile_overlap,
+                # 直接用 VAEWrapper 的分块 encode（可配 tile 尺寸）：单层分块 + 统一
+                # cosine 羽化，避免外层再套一层 vae.encode 导致的双重分块。
+                lat = vae._tiled_encode(
+                    pixels, self.encode_tile_px, self.encode_tile_overlap
                 )
             return lat.detach().cpu().float()[0]
 
