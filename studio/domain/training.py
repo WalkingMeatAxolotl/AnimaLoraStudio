@@ -152,32 +152,32 @@ class TrainingConfig(BaseModel):
     navit_token_budget: int = Field(
         16384, ge=1,
         description="单个打包序列的 token 预算上限（所有图 token 数之和 ≤ 此值）",
-        json_schema_extra=_meta("system", advanced=True),
+        json_schema_extra=_meta("system", show_when="navit_packing==true", advanced=True),
     )
     navit_max_images_per_pack: int = Field(
         0, ge=0,
         description="每个包最多图片数（0=不限，仅受 token 预算约束）",
-        json_schema_extra=_meta("system", advanced=True),
+        json_schema_extra=_meta("system", show_when="navit_packing==true", advanced=True),
     )
     navit_text_trim_padding: bool = Field(
         False,
         description="cross-attn 文本截断 padding（数据层标志，仅 navit_packing 时生效）",
-        json_schema_extra=_meta("system", advanced=True),
+        json_schema_extra=_meta("system", show_when="navit_packing==true", advanced=True),
     )
     navit_pack_strategy: Literal["next_fit", "ffd"] = Field(
         "next_fit",
         description="打包策略：next_fit=顺序贪心（快、包较松）；ffd=First-Fit-Decreasing 窗口化（包更紧、更少步）",
-        json_schema_extra=_meta("system", advanced=True),
+        json_schema_extra=_meta("system", show_when="navit_packing==true", advanced=True),
     )
     navit_pack_ffd_window: int = Field(
         256, ge=0,
         description="FFD 窗口大小（0=全局 FFD，每 epoch 包固定；>0=窗口内 FFD + 跨 epoch reshuffle）",
-        json_schema_extra=_meta("system", advanced=True),
+        json_schema_extra=_meta("system", show_when="navit_packing==true", advanced=True),
     )
     navit_drop_last: bool = Field(
         False,
         description="丢弃最后一个未填满的包（对齐 step 计数；False=保留短包）",
-        json_schema_extra=_meta("system", advanced=True),
+        json_schema_extra=_meta("system", show_when="navit_packing==true", advanced=True),
     )
     cache_encode_tiled: bool = Field(
         False,
