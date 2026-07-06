@@ -121,8 +121,10 @@ def run(ctx: TrainingContext) -> None:
     # 少数无 __len__ 的 dataloader 回退旧行为（见 _accumulation_step）。
     try:
         dl_len = len(ctx.dataloader)
+        _has_len = True
     except TypeError:
         dl_len = None
+        _has_len = False
 
     for epoch in range(ctx.start_epoch, args.epochs):
         ctx.current_epoch = epoch
@@ -130,6 +132,12 @@ def run(ctx: TrainingContext) -> None:
         epoch_step_count = 0
         if ctx.use_cached and hasattr(ctx.dataloader, "batch_sampler") and hasattr(ctx.dataloader.batch_sampler, "set_epoch"):
             ctx.dataloader.batch_sampler.set_epoch(epoch)
+            # NaViT 打包器每 epoch reshuffle 后包数会变（next-fit/窗口 FFD 顺序依赖），
+            # 须在 set_epoch 后刷新 dl_len，否则 _accumulation_step 的尾组判定沿用
+            # epoch-0 的陈旧包数 → 梯度累积尾组被丢弃或跨 epoch 泄漏。
+            # ARB BucketBatchSampler 包数与 shuffle 无关，刷新是幂等的。
+            if _has_len:
+                dl_len = len(ctx.dataloader)
         for batch_idx, batch in enumerate(ctx.dataloader):
             # 在累积周期开始时记录时间
             if batch_idx % args.grad_accum == 0:
