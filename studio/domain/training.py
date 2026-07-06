@@ -192,13 +192,6 @@ class TrainingConfig(BaseModel):
         description="单次 encode 总像素上限（含翻转份）；0=用内置保守默认 4M。也是分块触发阈值",
         json_schema_extra=_meta("system", show_when="cache_encode_tiled==true", advanced=True),
     )
-    vae_tiling: Literal["auto", "on", "off"] = Field(
-        "auto",
-        description="VAE 分块 decode：auto=可用显存紧张时自动分块（推荐）；on=始终分块（省显存、慢约 30%）；"
-                    "off=整图，仅真正 OOM 时回退。大显存卡整图 decode 接近占满显存时会触发系统内存回退、"
-                    "单次 decode 从不到 1 秒退化到上百秒，auto 可避免",
-        json_schema_extra=_meta("system", advanced=True),
-    )
 
     # ------------------------------------------------------------------- LoRA
     lora_type: Literal["lora", "lokr", "loha", "ortho", "tlora"] = Field(
@@ -542,6 +535,13 @@ class TrainingConfig(BaseModel):
     kv_trim: bool = Field(
         False,
         description="Cross-attention KV trim：按实际 token 数裁到最近 bucket（64/128/256/512），减少 padding 计算量",
+        json_schema_extra=_meta("system", advanced=True),
+    )
+    vae_tiling: Literal["auto", "on", "off"] = Field(
+        "auto",
+        description="VAE 分块 decode：auto=可用显存紧张时自动分块（推荐）；on=始终分块（省显存、慢约 30%）；"
+                    "off=整图，仅真正 OOM 时回退。大显存卡整图 decode 接近占满显存时会触发系统内存回退、"
+                    "单次 decode 从不到 1 秒退化到上百秒，auto 可避免",
         json_schema_extra=_meta("system", advanced=True),
     )
     noise_enhancement_type: Literal["none", "offset", "pyramid"] = Field(
