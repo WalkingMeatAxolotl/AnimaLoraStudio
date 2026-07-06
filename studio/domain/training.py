@@ -139,7 +139,7 @@ class TrainingConfig(BaseModel):
     navit_packing: bool = Field(
         False,
         description="启用 NaViT / Patch-n-Pack 块对角打包：按 token 预算把多张不同尺寸的图"
-                    "拼进一个训练序列（零 padding），替代 ARB 固定桶分批。需配合 cache_latents",
+                    "拼进一个训练序列（零 padding），替代 ARB 固定桶分批。需配合 cache_latents + 安装 xformers",
         json_schema_extra=_meta(
             "system",
             advanced=True,
@@ -817,7 +817,11 @@ class TrainingConfig(BaseModel):
     attention_backend: AttentionBackend = Field(
         "flash_attn",
         description="Attention 后端。none = PyTorch SDPA 默认；xformers 显存更省；flash_attn 最快（需 Ampere+ GPU 支持）",
-        json_schema_extra=_meta("system"),
+        json_schema_extra=_meta(
+            "system",
+            disable_when="navit_packing==true",
+            disable_hint="NaViT 打包训练固定走 xformers varlen（块对角必需，需安装 xformers）；此选项不影响 navit 训练步",
+        ),
     )
     num_workers: int = Field(
         0, ge=0,
