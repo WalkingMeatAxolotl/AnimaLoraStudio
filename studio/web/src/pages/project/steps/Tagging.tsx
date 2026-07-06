@@ -370,7 +370,7 @@ export default function TaggingPage() {
           <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 shrink-0 text-sm">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
               <TagField
-                label="tagger"
+                label={t('tag.fieldTagger')}
                 help={
                   <span className="inline-flex items-center gap-2 flex-wrap">
                     <span
@@ -538,15 +538,15 @@ function Wd14Panel({
       <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 flex flex-col gap-2 shrink-0 text-sm">
         <PanelHeader dirty={dirty} onRestore={restore} disabled={disabled} />
         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
-          <TagFieldNumber label="threshold_general" value={form.threshold_general} base={defaults.threshold_general} min={0} max={1} step={0.01} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_general: v })} />
-          <TagFieldNumber label="threshold_character" value={form.threshold_character} base={defaults.threshold_character} min={0} max={1} step={0.01} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_character: v })} />
+          <TagFieldNumber label={t('settings.fieldThresholdGeneral')} value={form.threshold_general} base={defaults.threshold_general} min={0} max={1} step={0.01} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_general: v })} />
+          <TagFieldNumber label={t('settings.fieldThresholdCharacter')} value={form.threshold_character} base={defaults.threshold_character} min={0} max={1} step={0.01} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_character: v })} />
         </div>
       </section>
 
       <AdvancedSection>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
           <TagFieldModelSelect
-            label="model_id"
+            label={t('settings.fieldModelId')}
             value={form.model_id}
             options={defaults.model_ids}
             disabled={disabled}
@@ -554,7 +554,7 @@ function Wd14Panel({
             modified={form.model_id !== defaults.model_id}
             settingsSection="wd14"
           />
-          <TagField label={t('tag.blacklistLabel')} className="md:col-span-2">
+          <TagField label={t('settings.fieldBlacklistTags')} className="md:col-span-2">
             <TagListInput
               value={form.blacklist_tags}
               placeholder={t('tag.blacklistPlaceholder1')}
@@ -663,15 +663,15 @@ function CLTaggerPanel({
       <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 flex flex-col gap-2 shrink-0 text-sm">
         <PanelHeader dirty={dirty} onRestore={restore} disabled={disabled} />
         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
-          <TagFieldNumber label="threshold_general" value={form.threshold_general} base={defaults.threshold_general} min={0} max={1} step={0.01} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_general: v })} />
-          <TagFieldNumber label="threshold_character" value={form.threshold_character} base={defaults.threshold_character} min={0} max={1} step={0.01} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_character: v })} />
+          <TagFieldNumber label={t('settings.fieldThresholdGeneral')} value={form.threshold_general} base={defaults.threshold_general} min={0} max={1} step={0.01} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_general: v })} />
+          <TagFieldNumber label={t('settings.fieldThresholdCharacter')} value={form.threshold_character} base={defaults.threshold_character} min={0} max={1} step={0.01} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_character: v })} />
         </div>
       </section>
 
       <AdvancedSection>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
           <TagField
-            label="model"
+            label={t('tag.fieldModel')}
             labelExtra={
               <button
                 type="button"
@@ -713,7 +713,7 @@ function CLTaggerPanel({
               <TagFieldCheckbox label="quality" checked={form.add_quality_tag} disabled={disabled} onChange={(v) => onChange({ ...form, add_quality_tag: v })} />
             </div>
           </TagField>
-          <TagField label={t('tag.blacklistLabel')} className="md:col-span-2">
+          <TagField label={t('settings.fieldBlacklistTags')} className="md:col-span-2">
             <TagListInput
               value={form.blacklist_tags}
               placeholder={t('tag.blacklistPlaceholder2')}
@@ -782,7 +782,7 @@ function LLMTaggerPanel({
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
         <TagFieldSelect
-          label="preset"
+          label={t('tag.fieldPreset')}
           value={form.preset_id}
           disabled={disabled}
           onChange={switchPreset}
@@ -796,10 +796,10 @@ function LLMTaggerPanel({
           ))}
         </TagFieldSelect>
 
-        <TagFieldInput label="base_url" value={form.base_url} placeholder="http://localhost:8000/v1" disabled={disabled} onChange={(v) => onChange({ ...form, base_url: v })} modified={form.base_url !== activePreset.base_url} />
+        <TagFieldInput label={t('settings.fieldBaseUrl')} value={form.base_url} placeholder="http://localhost:8000/v1" disabled={disabled} onChange={(v) => onChange({ ...form, base_url: v })} modified={form.base_url !== activePreset.base_url} />
         {activePreset.model_ids.length > 0 ? (
           <TagFieldSelect
-            label="model"
+            label={t('tag.fieldModel')}
             value={form.model}
             disabled={disabled}
             onChange={(v) => onChange({ ...form, model: v })}
@@ -811,11 +811,11 @@ function LLMTaggerPanel({
             {activePreset.model_ids.map((m) => <option key={m} value={m}>{m}</option>)}
           </TagFieldSelect>
         ) : (
-          <TagFieldInput label="model" value={form.model} placeholder={t('tag.modelPlaceholder')} disabled={disabled} onChange={(v) => onChange({ ...form, model: v })} modified={form.model !== activePreset.model} />
+          <TagFieldInput label={t('tag.fieldModel')} value={form.model} placeholder={t('tag.modelPlaceholder')} disabled={disabled} onChange={(v) => onChange({ ...form, model: v })} modified={form.model !== activePreset.model} />
         )}
 
         <TagFieldSelect
-          label="endpoint"
+          label={t('tag.fieldEndpoint')}
           value={form.endpoint}
           disabled={disabled}
           onChange={(v) => onChange({ ...form, endpoint: v as LLMPreset['endpoint'] })}
@@ -826,7 +826,7 @@ function LLMTaggerPanel({
         </TagFieldSelect>
 
         <TagFieldSelect
-          label="output_format"
+          label={t('tag.fieldOutputFormat')}
           value={form.output_format}
           disabled={disabled}
           onChange={(v) => onChange({ ...form, output_format: v as LLMPreset['output_format'] })}
@@ -837,7 +837,7 @@ function LLMTaggerPanel({
         </TagFieldSelect>
 
         <TagFieldSelect
-          label="assist_tagger"
+          label={t('llmWorkspace.assistTagger')}
           value={form.assist_tagger}
           disabled={disabled}
           onChange={(v) => onChange({ ...form, assist_tagger: v })}
@@ -857,15 +857,15 @@ function LLMTaggerPanel({
           <option value="cltagger">CLTagger</option>
         </TagFieldSelect>
 
-        <TagFieldNumber label="temperature" value={form.temperature} base={activePreset.temperature} min={0} max={2} step={0.05} disabled={disabled} onChange={(v) => onChange({ ...form, temperature: v })} />
-        <TagFieldNumber label="max_tokens" value={form.max_tokens} base={activePreset.max_tokens} min={64} max={4096} disabled={disabled} onChange={(v) => onChange({ ...form, max_tokens: Math.round(v) })} />
-        <TagFieldNumber label="concurrency" value={form.concurrency} base={activePreset.concurrency} min={1} max={8} disabled={disabled} onChange={(v) => onChange({ ...form, concurrency: Math.round(v) })} />
+        <TagFieldNumber label={t('tag.fieldTemperature')} value={form.temperature} base={activePreset.temperature} min={0} max={2} step={0.05} disabled={disabled} onChange={(v) => onChange({ ...form, temperature: v })} />
+        <TagFieldNumber label={t('tag.fieldMaxTokens')} value={form.max_tokens} base={activePreset.max_tokens} min={64} max={4096} disabled={disabled} onChange={(v) => onChange({ ...form, max_tokens: Math.round(v) })} />
+        <TagFieldNumber label={t('tag.fieldConcurrency')} value={form.concurrency} base={activePreset.concurrency} min={1} max={8} disabled={disabled} onChange={(v) => onChange({ ...form, concurrency: Math.round(v) })} />
       </div>
     </section>
 
     <AdvancedSection>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
-        <TagField label="messages" className="md:col-span-2">
+        <TagField label={t('tag.fieldMessages')} className="md:col-span-2">
           <div className="flex flex-col gap-1.5">
             {form.endpoint === 'responses' && (
               <div className="text-xs text-warn">{t('tag.responsesWarning')}</div>
@@ -877,13 +877,13 @@ function LLMTaggerPanel({
             />
           </div>
         </TagField>
-        <TagFieldNumber label="timeout" value={form.timeout} base={activePreset.timeout} min={5} max={600} disabled={disabled} onChange={(v) => onChange({ ...form, timeout: Math.round(v) })} />
-        <TagFieldNumber label="max_retries" value={form.max_retries} base={activePreset.max_retries} min={1} max={10} disabled={disabled} onChange={(v) => onChange({ ...form, max_retries: Math.round(v) })} />
-        <TagFieldNumber label="requests_per_second" value={form.requests_per_second} base={activePreset.requests_per_second} min={0} max={60} step={0.1} disabled={disabled} onChange={(v) => onChange({ ...form, requests_per_second: v })} />
-        <TagFieldNumber label="max_requests_per_minute" value={form.max_requests_per_minute} base={activePreset.max_requests_per_minute} min={0} max={3600} disabled={disabled} onChange={(v) => onChange({ ...form, max_requests_per_minute: Math.round(v) })} />
-        <TagFieldNumber label="max_side" value={form.max_side} base={activePreset.max_side} min={64} max={4096} disabled={disabled} onChange={(v) => onChange({ ...form, max_side: Math.round(v) })} />
-        <TagFieldNumber label="jpeg_quality" value={form.jpeg_quality} base={activePreset.jpeg_quality} min={1} max={100} disabled={disabled} onChange={(v) => onChange({ ...form, jpeg_quality: Math.round(v) })} />
-        <TagFieldNumber label="max_image_mb" value={form.max_image_mb} base={activePreset.max_image_mb} min={0.1} max={25} step={0.1} disabled={disabled} onChange={(v) => onChange({ ...form, max_image_mb: v })} />
+        <TagFieldNumber label={t('tag.fieldTimeout')} value={form.timeout} base={activePreset.timeout} min={5} max={600} disabled={disabled} onChange={(v) => onChange({ ...form, timeout: Math.round(v) })} />
+        <TagFieldNumber label={t('tag.fieldMaxRetries')} value={form.max_retries} base={activePreset.max_retries} min={1} max={10} disabled={disabled} onChange={(v) => onChange({ ...form, max_retries: Math.round(v) })} />
+        <TagFieldNumber label={t('tag.fieldRequestsPerSecond')} value={form.requests_per_second} base={activePreset.requests_per_second} min={0} max={60} step={0.1} disabled={disabled} onChange={(v) => onChange({ ...form, requests_per_second: v })} />
+        <TagFieldNumber label={t('tag.fieldMaxRequestsPerMinute')} value={form.max_requests_per_minute} base={activePreset.max_requests_per_minute} min={0} max={3600} disabled={disabled} onChange={(v) => onChange({ ...form, max_requests_per_minute: Math.round(v) })} />
+        <TagFieldNumber label={t('tag.fieldMaxSide')} value={form.max_side} base={activePreset.max_side} min={64} max={4096} disabled={disabled} onChange={(v) => onChange({ ...form, max_side: Math.round(v) })} />
+        <TagFieldNumber label={t('tag.fieldJpegQuality')} value={form.jpeg_quality} base={activePreset.jpeg_quality} min={1} max={100} disabled={disabled} onChange={(v) => onChange({ ...form, jpeg_quality: Math.round(v) })} />
+        <TagFieldNumber label={t('tag.fieldMaxImageMb')} value={form.max_image_mb} base={activePreset.max_image_mb} min={0.1} max={25} step={0.1} disabled={disabled} onChange={(v) => onChange({ ...form, max_image_mb: v })} />
       </div>
     </AdvancedSection>
     </>
