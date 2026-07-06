@@ -19,8 +19,10 @@ from training.dataset import (
     CachedLatentDataset,
     ImageDataset,
     MergedDataset,
+    NavitPackBatchSampler,
     collate_fn,
     collate_fn_cached,
+    collate_fn_navit_pack,
 )
 
 
@@ -107,11 +109,19 @@ def run(ctx: TrainingContext) -> None:
         ctx.dataset = CachedLatentDataset(
             ctx.dataset, ctx.vae, ctx.device, ctx.vae_dtype,
             cache_batch_size=cache_batch_size,
+            encode_tiled=getattr(args, "cache_encode_tiled", False),
+            encode_tile_px=getattr(args, "cache_encode_tile_px", 1024),
+            encode_tile_overlap=getattr(args, "cache_encode_tile_overlap", 128),
+            encode_max_pixels=getattr(args, "cache_encode_max_pixels", 0),
         )
     if ctx.reg_dataset is not None and ctx.use_cached:
         ctx.reg_dataset = CachedLatentDataset(
             ctx.reg_dataset, ctx.vae, ctx.device, ctx.vae_dtype,
             cache_batch_size=cache_batch_size,
+            encode_tiled=getattr(args, "cache_encode_tiled", False),
+            encode_tile_px=getattr(args, "cache_encode_tile_px", 1024),
+            encode_tile_overlap=getattr(args, "cache_encode_tile_overlap", 128),
+            encode_max_pixels=getattr(args, "cache_encode_max_pixels", 0),
         )
 
     # repeat: 主数据集和正则数据集均通过文件夹名 Kohya 风格 repeat（如 5_concept），无需全局 repeat
@@ -123,7 +133,26 @@ def run(ctx: TrainingContext) -> None:
         logger.warning("num_workers > 0 在 Windows 上容易崩溃：已强制设为 0（避免多进程 spawn 问题）")
         args.num_workers = 0
 
-    if ctx.use_cached:
+    if getattr(args, "navit_packing", False):
+        # NaViT / Patch-n-Pack 块对角打包：按 token 预算把多张不同尺寸的图拼进
+        # 一个训练序列（零 padding），替代 ARB 固定桶分批。需配合 cache_latents。
+        batch_sampler = NavitPackBatchSampler(
+            ctx.dataset,
+            token_budget=int(getattr(args, "navit_token_budget", 16384) or 16384),
+            max_images_per_pack=int(getattr(args, "navit_max_images_per_pack", 0) or 0),
+            shuffle=True,
+            seed=getattr(args, "seed", 42),
+            drop_last=getattr(args, "navit_drop_last", False),
+            strategy=getattr(args, "navit_pack_strategy", "next_fit"),
+            # 不用 `or 256`：0 是合法值（全局 FFD，每 epoch 包固定），会被 falsy 吞掉。
+            ffd_window=int(getattr(args, "navit_pack_ffd_window", 256)),
+        )
+        ctx.dataloader = DataLoader(
+            ctx.dataset, batch_sampler=batch_sampler,
+            collate_fn=collate_fn_navit_pack,
+            num_workers=args.num_workers,
+        )
+    elif ctx.use_cached:
         # drop_last=False：桶尾不足 batch_size 出短 batch 而非丢图。
         # 对齐 kohya sd-scripts / ostris ai-toolkit；diffusion 用 LayerNorm/GroupNorm，
         # 对动态 batch 不敏感，loop.py 也按 latents.shape[0] 动态读 bs。

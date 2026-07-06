@@ -130,14 +130,72 @@ class TrainingConfig(BaseModel):
     vae_cache_batch_size: int = Field(
         0, ge=0,
         description="VAE latent 缓存编码批次大小；0=跟随训练 batch size，显存不足时设为 1 逐张编码",
+        json_schema_extra=_meta("system", show_when="cache_latents==true", advanced=True),
+    )
+
+    # --------------------------------------------------- NaViT / Patch-n-Pack
+    # 块对角打包训练（Phase 2 数据层）。以下字段全部默认关闭 / 行为中立：
+    # navit_packing=False 时走原有 ARB 分桶路径，字节等价。
+    navit_packing: bool = Field(
+        False,
+        description="启用 NaViT / Patch-n-Pack 块对角打包：按 token 预算把多张不同尺寸的图"
+                    "拼进一个训练序列（零 padding），替代 ARB 固定桶分批。需配合 cache_latents + 安装 xformers",
+        json_schema_extra=_meta(
+            "system",
+            advanced=True,
+            disable_when="leap_enabled==true||infonoise_enabled==true||sra_enabled==true||lora_type==tlora",
+            disable_hint="与 LeapAlign / InfoNoise / SRA / T-LoRA 互斥（navit v1 未适配），需先关掉它们",
+        ),
+    )
+    navit_token_budget: int = Field(
+        16384, ge=1,
+        description="单个打包序列的 token 预算上限（所有图 token 数之和 ≤ 此值）",
+        json_schema_extra=_meta("system", show_when="navit_packing==true", advanced=True),
+    )
+    navit_max_images_per_pack: int = Field(
+        0, ge=0,
+        description="每个包最多图片数（0=不限，仅受 token 预算约束）",
+        json_schema_extra=_meta("system", show_when="navit_packing==true", advanced=True),
+    )
+    navit_text_trim_padding: bool = Field(
+        False,
+        description="cross-attn 文本截断 padding（数据层标志，仅 navit_packing 时生效）",
+        json_schema_extra=_meta("system", show_when="navit_packing==true", advanced=True),
+    )
+    navit_pack_strategy: Literal["next_fit", "ffd"] = Field(
+        "next_fit",
+        description="打包策略：next_fit=顺序贪心（快、包较松）；ffd=First-Fit-Decreasing 窗口化（包更紧、更少步）",
+        json_schema_extra=_meta("system", show_when="navit_packing==true", advanced=True),
+    )
+    navit_pack_ffd_window: int = Field(
+        256, ge=0,
+        description="FFD 窗口大小（0=全局 FFD，每 epoch 包固定；>0=窗口内 FFD + 跨 epoch reshuffle）",
+        json_schema_extra=_meta("system", show_when="navit_packing==true", advanced=True),
+    )
+    navit_drop_last: bool = Field(
+        False,
+        description="丢弃最后一个未填满的包（对齐 step 计数；False=保留短包）",
+        json_schema_extra=_meta("system", show_when="navit_packing==true", advanced=True),
+    )
+    cache_encode_tiled: bool = Field(
+        False,
+        description="缓存编码分块：超大图按 tile_px 分块 VAE encode + latent 羽化拼接（峰值显存 ∝ 单块像素）",
         json_schema_extra=_meta("system", advanced=True),
     )
-    vae_tiling: Literal["auto", "on", "off"] = Field(
-        "auto",
-        description="VAE 分块 decode：auto=可用显存紧张时自动分块（推荐）；on=始终分块（省显存、慢约 30%）；"
-                    "off=整图，仅真正 OOM 时回退。大显存卡整图 decode 接近占满显存时会触发系统内存回退、"
-                    "单次 decode 从不到 1 秒退化到上百秒，auto 可避免",
-        json_schema_extra=_meta("system", advanced=True),
+    cache_encode_tile_px: int = Field(
+        1024, ge=64,
+        description="分块 encode 的像素块边长（须为 VAE 下采样 8 的整倍数）",
+        json_schema_extra=_meta("system", show_when="cache_encode_tiled==true", advanced=True),
+    )
+    cache_encode_tile_overlap: int = Field(
+        128, ge=0,
+        description="分块重叠像素（羽化接缝宽度；0=无重叠硬接缝）",
+        json_schema_extra=_meta("system", show_when="cache_encode_tiled==true", advanced=True),
+    )
+    cache_encode_max_pixels: int = Field(
+        0, ge=0,
+        description="单次 encode 总像素上限（含翻转份）；0=用内置保守默认 4M。也是分块触发阈值",
+        json_schema_extra=_meta("system", show_when="cache_encode_tiled==true", advanced=True),
     )
 
     # ------------------------------------------------------------------- LoRA
@@ -484,6 +542,13 @@ class TrainingConfig(BaseModel):
         description="Cross-attention KV trim：按实际 token 数裁到最近 bucket（64/128/256/512），减少 padding 计算量",
         json_schema_extra=_meta("system", advanced=True),
     )
+    vae_tiling: Literal["auto", "on", "off"] = Field(
+        "auto",
+        description="VAE 分块 decode：auto=可用显存紧张时自动分块（推荐）；on=始终分块（省显存、慢约 30%）；"
+                    "off=整图，仅真正 OOM 时回退。大显存卡整图 decode 接近占满显存时会触发系统内存回退、"
+                    "单次 decode 从不到 1 秒退化到上百秒，auto 可避免",
+        json_schema_extra=_meta("system", advanced=True),
+    )
     noise_enhancement_type: Literal["none", "offset", "pyramid"] = Field(
         "none",
         description="噪声增强机制（默认 none）。offset 在噪声上加 per-sample DC 偏置；pyramid 在多个尺度叠加低频噪声。两者机制不同，但都改变低频成分，互斥防双倍叠加。LoRA 训练默认保持 none",
@@ -752,7 +817,12 @@ class TrainingConfig(BaseModel):
     attention_backend: AttentionBackend = Field(
         "flash_attn",
         description="Attention 后端。none = PyTorch SDPA 默认；xformers 显存更省；flash_attn 最快（需 Ampere+ GPU 支持）",
-        json_schema_extra=_meta("system"),
+        json_schema_extra=_meta(
+            "system",
+            disable_when="navit_packing==true",
+            disable_value="xformers",
+            disable_hint="NaViT 打包已强制 xformers varlen（块对角必需，需安装 xformers）",
+        ),
     )
     num_workers: int = Field(
         0, ge=0,
@@ -804,6 +874,17 @@ class TrainingConfig(BaseModel):
                 data["sample_sampler_name"] = "er_sde"
             if data.get("sample_scheduler") not in (None, "simple", "sgm_uniform"):
                 data["sample_scheduler"] = "simple"
+        return data
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_navit_attention_backend(cls, data: Any) -> Any:
+        """NaViT 打包的块对角 attention 必需 xformers varlen（运行时只认 xformers 是否
+        安装、不看 attention_backend 值）。navit_packing 开启时强制 attention_backend=
+        xformers——避免用户选了 flash/none 以为对 navit 训练生效，实际 navit 训练步只
+        走 xformers varlen。参考 PPSF 工厂内覆盖 lr 的强制模式。"""
+        if isinstance(data, dict) and data.get("navit_packing"):
+            data["attention_backend"] = "xformers"
         return data
 
     @model_validator(mode="after")
@@ -952,6 +1033,58 @@ class TrainingConfig(BaseModel):
                     "内联自蒸馏目标，绕过 ctx.loss_fn 分发，huber 会被静默忽略。"
                     "请二选一：(a) 关闭 leap；或 (b) 设 loss_type=mse 走 leap 自蒸馏。"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_navit_exclusive(self) -> "TrainingConfig":
+        """NaViT / Patch-n-Pack 打包训练的配置校验与互斥。
+
+        NaViT 改变了 batch 语义（一包异构图、逐图 t），许多按"批量网格 + 逐 batch
+        单 timestep"假设写的特性会语义错位。v1 的策略是 fail-fast：同时开 → 启动即
+        报错，提示显式关掉，避免"开着却悄悄不生效"的隐性行为改变。
+
+        互斥项（详见 docs/navit-packing.md 第 3 节）：
+        - leap_enabled：leap 假设批量网格 + 共享 noise，与逐图打包不兼容。
+        - infonoise_enabled：InfoNoise 的 I-MMSE record 需走标准路径的 per-sample
+          MSE；navit 路径的 per-image loss 语义不同，v1 未适配。
+        - lora_type=tlora：T-LoRA 的 rank mask 按 batch 维匹配 timestep，navit 是
+          B=1 打包序列 + 逐图 t，维度不匹配。
+        - sra_enabled：SRA v2 表征对齐按批量网格中间特征 tap 对齐，navit 是 B=1
+          打包序列 + 逐图，per-image 适配 v1 未做（loop 路径已守卫跳过，这里 fail-fast）。
+
+        前置要求：
+        - cache_latents：navit 打包按 latent token 数预算分包，需要预编码缓存。
+        - navit_token_budget > 0：必须显式设置（按显存定）。
+        """
+        if not self.navit_packing:
+            return self
+
+        _conflicts = []
+        if self.leap_enabled:
+            _conflicts.append("leap_enabled")
+        if self.infonoise_enabled:
+            _conflicts.append("infonoise_enabled")
+        if self.lora_type == "tlora":
+            _conflicts.append("lora_type=tlora")
+        if self.sra_enabled:
+            _conflicts.append("sra_enabled")
+        if _conflicts:
+            raise ValueError(
+                "navit_packing(v1) 暂不支持与以下特性同时开启："
+                + ", ".join(_conflicts)
+                + "。请关掉它们，或暂不使用 NaViT 打包。"
+            )
+
+        if not self.cache_latents:
+            raise ValueError(
+                "navit_packing 需要 cache_latents=true（打包按 latent token 数预算分包，"
+                "需要预编码缓存）。"
+            )
+        if self.navit_token_budget <= 0:
+            raise ValueError(
+                "navit_packing 需要显式设置 navit_token_budget（>0，按显存定，"
+                "见 docs/navit-packing.md 显存对照表）。"
+            )
         return self
 
     # ---------------------------------------------------------------- 输出/保存
