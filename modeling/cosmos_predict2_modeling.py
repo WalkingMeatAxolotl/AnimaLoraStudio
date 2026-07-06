@@ -769,6 +769,21 @@ class VideoRopePosition3DEmb(VideoPositionEmb):
             torch.arange(0, dim_t, 2)[: (dim_t // 2)].float().to(self.dim_spatial_range.device) / dim_t
         )
 
+    def _rope_freqs(self, h_ntk_factor=None, w_ntk_factor=None, t_ntk_factor=None, device=None):
+        """(h, w, t) RoPE 频率 = 1/(10000·ntk)^dim_range。generate_embeddings 与打包
+        路径 _packed_rope_from_grid 共用同一公式；ntk_factor None 时用 self 默认，
+        device 非 None 时把 dim_range 搬到该设备（打包路径按 grid 设备取）。"""
+        h_ntk = h_ntk_factor if h_ntk_factor is not None else self.h_ntk_factor
+        w_ntk = w_ntk_factor if w_ntk_factor is not None else self.w_ntk_factor
+        t_ntk = t_ntk_factor if t_ntk_factor is not None else self.t_ntk_factor
+        sp = self.dim_spatial_range if device is None else self.dim_spatial_range.to(device)
+        tp = self.dim_temporal_range if device is None else self.dim_temporal_range.to(device)
+        return (
+            1.0 / ((10000.0 * h_ntk) ** sp),
+            1.0 / ((10000.0 * w_ntk) ** sp),
+            1.0 / ((10000.0 * t_ntk) ** tp),
+        )
+
     def generate_embeddings(
         self,
         B_T_H_W_C: torch.Size,
@@ -790,17 +805,9 @@ class VideoRopePosition3DEmb(VideoPositionEmb):
         Returns:
             Not specified in the original code snippet.
         """
-        h_ntk_factor = h_ntk_factor if h_ntk_factor is not None else self.h_ntk_factor
-        w_ntk_factor = w_ntk_factor if w_ntk_factor is not None else self.w_ntk_factor
-        t_ntk_factor = t_ntk_factor if t_ntk_factor is not None else self.t_ntk_factor
-
-        h_theta = 10000.0 * h_ntk_factor  # type: ignore
-        w_theta = 10000.0 * w_ntk_factor  # type: ignore
-        t_theta = 10000.0 * t_ntk_factor  # type: ignore
-
-        h_spatial_freqs = 1.0 / (h_theta**self.dim_spatial_range)
-        w_spatial_freqs = 1.0 / (w_theta**self.dim_spatial_range)
-        temporal_freqs = 1.0 / (t_theta**self.dim_temporal_range)
+        h_spatial_freqs, w_spatial_freqs, temporal_freqs = self._rope_freqs(
+            h_ntk_factor, w_ntk_factor, t_ntk_factor
+        )
 
         B, T, H, W, _ = B_T_H_W_C
         assert (
@@ -1867,12 +1874,7 @@ class MiniTrainDIT(nn.Module):
         if _cache is not None and _cache[0] == _key:
             h_freqs, w_freqs, t_freqs = _cache[1]
         else:
-            h_theta = 10000.0 * pe.h_ntk_factor
-            w_theta = 10000.0 * pe.w_ntk_factor
-            t_theta = 10000.0 * pe.t_ntk_factor
-            h_freqs = 1.0 / (h_theta**pe.dim_spatial_range.to(dev))
-            w_freqs = 1.0 / (w_theta**pe.dim_spatial_range.to(dev))
-            t_freqs = 1.0 / (t_theta**pe.dim_temporal_range.to(dev))
+            h_freqs, w_freqs, t_freqs = pe._rope_freqs(device=dev)
             self._packed_rope_freqs_cache = (_key, (h_freqs, w_freqs, t_freqs))
         row = grid_B_2_N[:, 0, :].float()
         col = grid_B_2_N[:, 1, :].float()
