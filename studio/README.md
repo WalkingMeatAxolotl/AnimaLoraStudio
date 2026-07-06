@@ -56,12 +56,12 @@ python -m studio.server --host 0.0.0.0 --port 8765 --reload
 ```bash
 cd studio/web
 npm install            # 首次
-npm run dev            # → http://127.0.0.1:5173/studio/
+npm run dev            # → http://127.0.0.1:5173/
 ```
 
 Vite dev server 会把 `/api`、`/samples` 反代到后端。
 
-生产构建（产物给后端挂在 `/studio`）：
+生产构建（产物给后端挂在根路径 `/`，ADR 0012）：
 
 ```bash
 cd studio/web
@@ -84,11 +84,10 @@ npm run build          # 输出到 studio/web/dist/
 
 ## 前端页面（已上线）
 
-- `/` 旧监控页（loss / lr / 采样图）
-- `/studio/` React 应用入口
+- `/` React 应用入口（ADR 0012：SPA 挂在根路径，不再用 /studio 子路径）
   - `监控` 守护进程状态 + 跳转旧监控
   - `配置` schema-driven 表单 + 列表（新建 / 保存 / 复制 / 删除）
-  - `队列` 入队 / 取消 / 重试 / 删除 / 查日志 / JSON 导入导出；SSE 实时刷新
+  - `队列` 全类型任务 + 数据作业统一台账（0.17）；取消 / 重试 / 删除 / 暂停恢复 / 定时 / 查日志；分区 + 搜索过滤分页；SSE 实时刷新
   - `/queue/{id}/log` 全屏日志查看（自动滚动 + 运行中每 2 秒拉一次）
   - `数据集` 扫描子目录、解析 Kohya 前缀、统计 caption 类型、缩略图预览
 
@@ -97,13 +96,13 @@ npm run build          # 输出到 studio/web/dist/
 ```bash
 cd studio/web
 npm install
-npm run dev      # http://127.0.0.1:5173/studio/
+npm run dev      # http://127.0.0.1:5173/
 ```
 
-或构建后由后端 `/studio/` 路径服务：
+或构建后由后端根路径 `/` 服务：
 
 ```bash
 cd studio/web && npm run build
 # 启动后端：python -m studio.server
-# 浏览器：http://127.0.0.1:8765/studio/
+# 浏览器：http://127.0.0.1:8765/
 ```

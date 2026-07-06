@@ -1,6 +1,6 @@
 # 0007 — Project / Version / Task 生命周期重构
 
-**状态**：Proposed
+**状态**：Accepted（已落地：`_v8`/`_v9` migration + VersionStatus/Phase + lifecycle 路由）
 **日期**：2026-05-23
 **决策者**：@WalkingMeatAxolotl
 

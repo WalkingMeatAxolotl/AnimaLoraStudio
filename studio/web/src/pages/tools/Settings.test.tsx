@@ -27,14 +27,27 @@ const initialServerState = {
   huggingface: { token: '', endpoint: '' },
   wandb: {
     enabled: false,
-    api_key: '',
-    project: 'AnimaLoraStudio',
-    entity: '',
-    base_url: '',
-    mode: 'online',
-    log_samples: true,
-    sample_max_side: 1216,
-    sample_every_n_steps: 0,
+    current_preset: 'default',
+    presets: [
+      {
+        id: 'default',
+        label: 'Default',
+        api_key: '',
+        project: 'AnimaLoraStudio',
+        entity: '',
+        base_url: '',
+        mode: 'online',
+        log_samples: true,
+        sample_max_side: 1216,
+        sample_every_n_steps: 0,
+        upload_model: false,
+        upload_model_policy: 'last',
+        upload_state_manual: false,
+        upload_state_manual_policy: 'last',
+        upload_state_auto: false,
+        upload_state_auto_policy: 'last',
+      },
+    ],
   },
   llm_tagger: {
     current_preset: 'style_json',
@@ -105,7 +118,6 @@ const initialServerState = {
       'SmilingWolf/wd-vit-large-tagger-v3',
       'SmilingWolf/wd-v1-4-convnext-tagger-v2',
     ],
-    local_dir: null,
     threshold_general: 0.35,
     threshold_character: 0.85,
     blacklist_tags: [],
@@ -115,7 +127,6 @@ const initialServerState = {
     model_id: 'cella110n/cl_tagger',
     model_path: 'cl_tagger_1_02/model.onnx',
     tag_mapping_path: 'cl_tagger_1_02/tag_mapping.json',
-    local_dir: null,
     threshold_general: 0.35,
     threshold_character: 0.6,
     add_copyright_tag: true,
@@ -127,7 +138,7 @@ const initialServerState = {
     batch_size: 8,
   },
   models: { root: null, selected_anima: '1.0', selected_upscaler: '4x-AnimeSharp', auto_sync_paths: true },
-  queue: { allow_gpu_during_train: false },
+  queue: { light_tasks_during_train: true },
   download_source: 'huggingface',
   modelscope: { token: '' },
   generate: { preview_every_n_steps: 0, attention_backend: 'sdpa' },
@@ -306,11 +317,8 @@ describe('SettingsPage (PP0)', () => {
     const userInput = await screen.findByDisplayValue('alice')
     await user.clear(userInput)
     await user.type(userInput, 'bob')
-
-    // 主表单 Save 按钮文案就是「保存」；Models 区块的「保存路径」按钮
-    // 也含「保存」字样，正则匹配会撞 → 用精确名定位主按钮。
-    const saveBtn = screen.getByRole('button', { name: '保存' })
-    await user.click(saveBtn)
+    // instant-apply：文本框失焦即提交，无显式保存按钮
+    await user.tab()
 
     await waitFor(() => {
       const putCall = fetchMock.mock.calls.find(
@@ -384,7 +392,7 @@ describe('SettingsPage (PP0)', () => {
     const v2Row = screen.getByText('cl_tagger_v2_v2_01a').closest('li')
     expect(v2Row).not.toBeNull()
     await user.click(within(v2Row as HTMLElement).getByRole('radio'))
-    await user.click(screen.getByRole('button', { name: '保存' }))
+    // instant-apply：选 variant 即时提交，无显式保存按钮
 
     await waitFor(() => {
       const putCall = fetchMock.mock.calls.find(
@@ -400,46 +408,4 @@ describe('SettingsPage (PP0)', () => {
     })
   })
 
-  it('switching CLTagger variant stashes the leaving version local_dir per label', async () => {
-    // v1 起始带一个自定义 local_dir：切到 v2 时应把它暂存到
-    // variant_local_dirs['cl_tagger_1_02']，而 v2（无记忆）回到自动下载（null）。
-    const v1Custom = {
-      ...initialServerState,
-      cltagger: { ...initialServerState.cltagger, local_dir: '/custom/v1' },
-    }
-    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
-      if (init?.method === 'PUT') {
-        const body = JSON.parse(String(init.body)) as Record<string, Record<string, unknown>>
-        const merged = JSON.parse(JSON.stringify(v1Custom))
-        for (const k of Object.keys(body)) Object.assign(merged[k], body[k])
-        return Promise.resolve(new Response(JSON.stringify(merged), { status: 200 }))
-      }
-      if (typeof url === 'string' && url.includes('/api/models/catalog')) {
-        return Promise.resolve(new Response(JSON.stringify(emptyModelsCatalog), { status: 200 }))
-      }
-      if (typeof url === 'string' && url.includes('/api/wd14/runtime')) {
-        return Promise.resolve(new Response(JSON.stringify({
-          installed: 'onnxruntime', version: '1.18.0', providers: ['CPUExecutionProvider'],
-          cuda_available: false, cuda_detect: { available: false, driver_version: null, gpu_name: null },
-        }), { status: 200 }))
-      }
-      return Promise.resolve(new Response(JSON.stringify(v1Custom), { status: 200 }))
-    })
-
-    const user = userEvent.setup()
-    renderPage()
-    await user.click(await screen.findByRole('button', { name: '打标' }))
-    const v2Row = screen.getByText('cl_tagger_v2_v2_01a').closest('li')
-    await user.click(within(v2Row as HTMLElement).getByRole('radio'))
-    await user.click(screen.getByRole('button', { name: '保存' }))
-
-    await waitFor(() => {
-      const putCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT')
-      expect(putCall).toBeDefined()
-      const body = JSON.parse(String(putCall![1].body))
-      expect(body.cltagger.variant_local_dirs).toMatchObject({ cl_tagger_1_02: '/custom/v1' })
-      expect(body.cltagger.local_dir).toBeNull()
-      expect(body.cltagger.model_id).toBe('cella110n/cl_tagger_v2')
-    })
-  })
 })

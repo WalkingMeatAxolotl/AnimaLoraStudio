@@ -8,6 +8,7 @@ export type LogSourceStatus =
   | 'failed'
   | 'canceled'
   | 'paused'
+  | 'scheduled'
 
 /** 一条可回放的任务日志流（job / task / 前端合成日志通吃）。 */
 export interface LogSource {
@@ -29,6 +30,8 @@ const STATUS_BADGE: Record<LogSourceStatus, string> = {
   failed: 'badge badge-err',
   canceled: 'badge badge-neutral',
   paused: 'badge badge-neutral',
+  // 0.17 P-B：scheduled（计划任务）还没跑，无日志，视觉同 pending。
+  scheduled: 'badge badge-neutral',
 }
 
 const isLiveStatus = (s: LogSourceStatus) => s === 'pending' || s === 'running'

@@ -13,6 +13,7 @@ import {
   type Task,
   type Version,
 } from '../../../api/client'
+import BaseModelSelect from '../../../components/BaseModelSelect'
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import ImagePreviewModal from '../../../components/ImagePreviewModal'
 import StepShell from '../../../components/StepShell'
@@ -112,6 +113,8 @@ export default function RegularizationPage() {
   const [aiCfg, setAiCfg] = useState(4.0)
   const [aiSeed, setAiSeed] = useState(0)
   const [aiIncremental, setAiIncremental] = useState(false)
+  // 本次先验生成临时选用的底模（null = 跟随设置页 selected_anima）。
+  const [aiBaseModel, setAiBaseModel] = useState<string | null>(null)
   const [aiBusy, setAiBusy] = useState(false)
   // AI 先验 task：同上；hydrate 时顺带把 aiBusy 同步到 task 真实状态
   const {
@@ -289,6 +292,7 @@ export default function RegularizationPage() {
     try {
       const body: RegAiRequest = {
         excluded_tags: Array.from(excluded),
+        base_model: aiBaseModel ?? undefined,
         negative_prompt: aiNeg,
         width: aiWidth,
         height: aiHeight,
@@ -397,22 +401,34 @@ export default function RegularizationPage() {
           lines: aiLogs,
           startedAt: aiTask.started_at,
           finishedAt: aiTask.finished_at,
+          onCancel: () => {
+            void api
+              .cancelTask(aiTask.id)
+              .then(() => toast(t('reg.cancelToast'), 'success'))
+              .catch((e) => toast(String(e), 'error'))
+          },
         },
       ]}
       actions={
+        /* 样式对齐项目页「新建项目」（btn-primary btn-sm + icon + 文字） */
         <button
           onClick={() => {
             if (source === 'ai') void handleAiGenerate()
             else void startBuild()
           }}
           disabled={isLive || trainImageCount <= 0}
-          className="btn btn-primary"
+          className="btn btn-primary btn-sm"
         >
-          {isLive
-            ? t('reg.generatingBtn')
-            : source === 'ai'
-              ? t('reg.aiGenerateBtn')
-              : t('reg.startBuildBtn')}
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M8 5v14l11-7z" />
+          </svg>
+          <span>
+            {isLive
+              ? t('reg.generatingBtn')
+              : source === 'ai'
+                ? t('reg.aiGenerateBtn')
+                : t('reg.startBuildBtn')}
+          </span>
         </button>
       }
     >
@@ -465,6 +481,7 @@ export default function RegularizationPage() {
                 steps={aiSteps} onStepsChange={setAiSteps}
                 cfg={aiCfg} onCfgChange={setAiCfg}
                 seed={aiSeed} onSeedChange={setAiSeed}
+                baseModel={aiBaseModel} onBaseModelChange={setAiBaseModel}
                 incremental={aiIncremental}
                 onIncrementalChange={setAiIncremental}
               />
@@ -521,6 +538,8 @@ export default function RegularizationPage() {
         <ImagePreviewModal
           src={regOrigUrl(project.id, vid, reg.files[previewIdx])}
           caption={previewCaption}
+          index={previewIdx}
+          total={reg.files.length}
           hasPrev={previewIdx > 0}
           hasNext={previewIdx < reg.files.length - 1}
           onClose={() => setPreviewIdx(null)}
@@ -858,6 +877,7 @@ function AiForm({
   steps, onStepsChange,
   cfg, onCfgChange,
   seed, onSeedChange,
+  baseModel, onBaseModelChange,
   incremental, onIncrementalChange,
 }: {
   trainTags: RegTagCount[]
@@ -870,6 +890,7 @@ function AiForm({
   steps: number; onStepsChange: (v: number) => void
   cfg: number; onCfgChange: (v: number) => void
   seed: number; onSeedChange: (v: number) => void
+  baseModel: string | null; onBaseModelChange: (v: string) => void
   incremental: boolean; onIncrementalChange: (v: boolean) => void
 }) {
   const { t } = useTranslation()
@@ -966,6 +987,17 @@ function AiForm({
             />
           </Field>
         </div>
+        <Field
+          label={t('reg.baseModelLabel')}
+          hint={t('reg.baseModelHint')}
+        >
+          <BaseModelSelect
+            value={baseModel}
+            onChange={onBaseModelChange}
+            className="select input"
+            ariaLabel={t('reg.baseModelLabel')}
+          />
+        </Field>
       </GrpCard>
     </>
   )

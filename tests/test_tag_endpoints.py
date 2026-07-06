@@ -81,13 +81,13 @@ def test_start_tag_creates_job(client: TestClient) -> None:
     pid, vid = _make(client)
     r = client.post(
         f"/api/projects/{pid}/versions/{vid}/tag",
-        json={"tagger": "wd14", "output_format": "txt"},
+        json={"tagger": "wd14"},
     )
     assert r.status_code == 200, r.text
     job = r.json()
     assert job["kind"] == "tag"
     assert job["status"] == "pending"
-    # 不再有 folders 入参；params 只剩 tagger / version_id / output_format
+    # 不再有 folders 入参；params 只剩 tagger / version_id
     import json as _json
     p_dict = _json.loads(job["params"])
     assert "folders" not in p_dict
@@ -103,11 +103,47 @@ def test_start_tag_unknown_tagger_400(client: TestClient) -> None:
     assert r.status_code == 400
 
 
-def test_start_tag_bad_format_400(client: TestClient) -> None:
+def test_start_tag_legacy_output_format_ignored(client: TestClient) -> None:
+    """请求级 output_format 已删（格式跟着产物走）；老客户端传了任意值 → 忽略、
+    不进 params、不报错。"""
+    import json as _json
     pid, vid = _make(client)
     r = client.post(
         f"/api/projects/{pid}/versions/{vid}/tag",
         json={"tagger": "wd14", "output_format": "yaml"},
+    )
+    assert r.status_code == 200, r.text
+    assert "output_format" not in _json.loads(r.json()["params"])
+
+
+def test_start_tag_scope_validation_into_params(client: TestClient) -> None:
+    pid, vid = _make(client)
+    r = client.post(
+        f"/api/projects/{pid}/versions/{vid}/tag",
+        json={"tagger": "wd14", "scope": "validation"},
+    )
+    assert r.status_code == 200, r.text
+    import json as _json
+    assert _json.loads(r.json()["params"])["scope"] == "validation"
+
+
+def test_start_tag_scope_all_default_not_in_params(client: TestClient) -> None:
+    pid, vid = _make(client)
+    r = client.post(
+        f"/api/projects/{pid}/versions/{vid}/tag",
+        json={"tagger": "wd14"},
+    )
+    assert r.status_code == 200, r.text
+    import json as _json
+    assert "scope" not in _json.loads(r.json()["params"])
+
+
+def test_start_tag_scope_traversal_400(client: TestClient) -> None:
+    """scope 取 train 文件夹名时会拼进路径，必须挡 path traversal。"""
+    pid, vid = _make(client)
+    r = client.post(
+        f"/api/projects/{pid}/versions/{vid}/tag",
+        json={"tagger": "wd14", "scope": "../../etc"},
     )
     assert r.status_code == 400
 
@@ -120,7 +156,6 @@ def test_start_tag_with_wd14_overrides(client: TestClient) -> None:
         f"/api/projects/{pid}/versions/{vid}/tag",
         json={
             "tagger": "wd14",
-            "output_format": "txt",
             "wd14_overrides": {
                 "threshold_general": 0.2,
                 "blacklist_tags": ["solo"],
@@ -143,7 +178,6 @@ def test_start_tag_with_cltagger_overrides(client: TestClient) -> None:
         f"/api/projects/{pid}/versions/{vid}/tag",
         json={
             "tagger": "cltagger",
-            "output_format": "txt",
             "cltagger_overrides": {
                 "threshold_general": 0.25,
                 "threshold_character": 0.55,
@@ -170,7 +204,6 @@ def test_start_tag_with_llm_overrides(client: TestClient) -> None:
         f"/api/projects/{pid}/versions/{vid}/tag",
         json={
             "tagger": "llm",
-            "output_format": "json",
             "llm_overrides": {
                 "current_preset": "joycaption",
                 "endpoint": "responses",
@@ -303,7 +336,6 @@ def test_start_tag_drops_empty_wd14_overrides(client: TestClient) -> None:
         f"/api/projects/{pid}/versions/{vid}/tag",
         json={
             "tagger": "wd14",
-            "output_format": "txt",
             "wd14_overrides": {
                 "threshold_general": None,
                 "threshold_character": None,
@@ -320,7 +352,7 @@ def test_start_tag_on_existing_skip(client: TestClient) -> None:
     pid, vid = _make(client)
     r = client.post(
         f"/api/projects/{pid}/versions/{vid}/tag",
-        json={"tagger": "wd14", "output_format": "txt", "on_existing": "skip"},
+        json={"tagger": "wd14", "on_existing": "skip"},
     )
     assert r.status_code == 200, r.text
     params = _json.loads(r.json()["params"])
@@ -332,7 +364,7 @@ def test_start_tag_on_existing_append(client: TestClient) -> None:
     pid, vid = _make(client)
     r = client.post(
         f"/api/projects/{pid}/versions/{vid}/tag",
-        json={"tagger": "wd14", "output_format": "txt", "on_existing": "append"},
+        json={"tagger": "wd14", "on_existing": "append"},
     )
     assert r.status_code == 200, r.text
     params = _json.loads(r.json()["params"])
@@ -345,7 +377,7 @@ def test_start_tag_on_existing_overwrite_not_persisted(client: TestClient) -> No
     pid, vid = _make(client)
     r = client.post(
         f"/api/projects/{pid}/versions/{vid}/tag",
-        json={"tagger": "wd14", "output_format": "txt", "on_existing": "overwrite"},
+        json={"tagger": "wd14", "on_existing": "overwrite"},
     )
     assert r.status_code == 200, r.text
     params = _json.loads(r.json()["params"])
@@ -356,7 +388,7 @@ def test_start_tag_on_existing_bad_value_400(client: TestClient) -> None:
     pid, vid = _make(client)
     r = client.post(
         f"/api/projects/{pid}/versions/{vid}/tag",
-        json={"tagger": "wd14", "output_format": "txt", "on_existing": "bogus"},
+        json={"tagger": "wd14", "on_existing": "bogus"},
     )
     assert r.status_code == 400
 

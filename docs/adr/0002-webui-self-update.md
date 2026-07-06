@@ -1,6 +1,6 @@
 # 0002 — Webui 内自更新（flag + shell wrapper loop）
 
-**状态**：Proposed
+**状态**：Accepted（已落地：`studio/services/runtime/updater.py` + Settings 版本卡）
 **日期**：2026-05-12
 **决策者**：@WalkingMeatAxolotl
 

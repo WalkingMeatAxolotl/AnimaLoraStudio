@@ -1,9 +1,8 @@
 """WD14 ONNX 打标（PP4）。
 
 模型解析顺序：
-    1. secrets.wd14.local_dir 给了 → 必须含 model.onnx + selected_tags.csv
-    2. models/wd14/{model_id}/ 存在 → 用本地
-    3. 否则 huggingface_hub.snapshot_download 拉到 models/wd14/{model_id}/
+    1. models/wd14/{model_id}/ 存在 → 用本地
+    2. 否则 huggingface_hub.snapshot_download 拉到 models/wd14/{model_id}/
 
 依赖：onnxruntime（CPU 默认；GPU 请用户自行装 onnxruntime-gpu）+
 huggingface_hub + Pillow + numpy。
@@ -33,7 +32,7 @@ class WD14Tagger(OnnxTaggerBase):
         """`overrides` 是本次打标的临时覆盖（仅内存生效）。
 
         合并自 `secrets.WD14Config` 的同名字段（`threshold_general` /
-        `threshold_character` / `model_id` / `local_dir` / `blacklist_tags`）；
+        `threshold_character` / `model_id` / `blacklist_tags`）；
         值为 None 的项沿用全局 settings，不影响 secrets.json 文件。
         """
         super().__init__()
@@ -59,23 +58,12 @@ class WD14Tagger(OnnxTaggerBase):
 
     def _local_model_dir_status(self) -> tuple[Path, bool]:
         cfg = self._cfg()
-        if cfg.local_dir:
-            d = Path(cfg.local_dir)
-            ok = (d / "model.onnx").exists() and (d / "selected_tags.csv").exists()
-            return d, ok
         d = model_downloader.wd14_target_dir(model_downloader.models_root(), cfg.model_id)
         ok = (d / "model.onnx").exists() and (d / "selected_tags.csv").exists()
         return d, ok
 
     def _resolve_model_dir(self) -> Path:
         cfg = self._cfg()
-        if cfg.local_dir:
-            d = Path(cfg.local_dir)
-            if not (d / "model.onnx").exists() or not (d / "selected_tags.csv").exists():
-                raise FileNotFoundError(
-                    f"local_dir 缺少 model.onnx 或 selected_tags.csv: {d}"
-                )
-            return d
         default = model_downloader.wd14_target_dir(model_downloader.models_root(), cfg.model_id)
         if (default / "model.onnx").exists() and (default / "selected_tags.csv").exists():
             return default
@@ -102,8 +90,6 @@ class WD14Tagger(OnnxTaggerBase):
             return False, str(exc)
         if ok:
             return True, f"模型: {d.name}"
-        if self._cfg().local_dir:
-            return False, f"local_dir 缺少 model.onnx 或 selected_tags.csv: {d}"
         return False, f"需下载模型: {d.name}"
 
     def prepare(self) -> None:
@@ -125,6 +111,11 @@ class WD14Tagger(OnnxTaggerBase):
                 # SmilingWolf 模型用 underscore，UI 习惯空格
                 self._tags.append(row["name"].replace("_", " "))
                 self._tag_categories.append(int(row.get("category", 0)))
+
+    def known_tags(self) -> list[str]:
+        """模型词表（空格小写前的空格形式）；`prepare()` 后可用。
+        eval tag-recall 用它过滤「WD14 认识的」prompt tag。"""
+        return list(self._tags)
 
     # -------------------- inference --------------------
 

@@ -37,7 +37,8 @@ def test_defaults_when_file_missing(secrets_file: Path) -> None:
     # joycaption 已合并为 llm_tagger 的 builtin preset
     joy = next(p for p in s.llm_tagger.presets if p.id == "joycaption")
     assert joy.base_url.startswith("http://")
-    assert s.wandb.project == "AnimaLoraStudio"
+    assert s.wandb.active.project == "AnimaLoraStudio"
+    assert s.wandb.current_preset == s.wandb.presets[0].id
 
 
 def test_load_corrupt_json_returns_defaults(secrets_file: Path) -> None:
@@ -58,24 +59,44 @@ def test_cltagger_defaults_use_1_02(secrets_file: Path) -> None:
     assert s.cltagger.model_id == "cella110n/cl_tagger"
     assert s.cltagger.model_path == "cl_tagger_1_02/model.onnx"
     assert s.cltagger.tag_mapping_path == "cl_tagger_1_02/tag_mapping.json"
-    assert s.cltagger.variant_local_dirs == {}
     assert s.cltagger.threshold_character == pytest.approx(0.6)
 
-
-def test_cltagger_variant_local_dirs_persist(secrets_file: Path) -> None:
-    secrets.update({
-        "cltagger": {
-            "local_dir": "/models/cltagger-v2",
-            "variant_local_dirs": {
-                "cl_tagger_v2_v2_01a": "/models/cltagger-v2",
-                "cl_tagger_1_02": "/models/cltagger-102",
+def test_legacy_local_dir_dropped_on_load(secrets_file: Path) -> None:
+    """旧 secrets.json 里残留的 local_dir / variant_local_dirs 字段：load 时被
+    pydantic（extra=ignore）静默丢弃，不报错、不再出现在模型上。"""
+    secrets_file.write_text(
+        json.dumps({
+            "wd14": {"local_dir": "/old/wd14"},
+            "cltagger": {
+                "local_dir": "/old/cltagger",
+                "variant_local_dirs": {"cl_tagger_1_02": "/old/cltagger"},
             },
+        }),
+        encoding="utf-8",
+    )
+    s = secrets.load()
+    assert not hasattr(s.wd14, "local_dir")
+    assert not hasattr(s.cltagger, "local_dir")
+    assert not hasattr(s.cltagger, "variant_local_dirs")
+
+
+def test_eval_metrics_defaults_and_persistence(secrets_file: Path) -> None:
+    s = secrets.load()
+    assert s.eval_metrics.clip_model_name == "openai/clip-vit-base-patch32"
+    assert s.eval_metrics.dino_model_name == "facebook/dinov2-small"
+    assert s.eval_metrics.eval_baseline_enabled is True
+
+    secrets.update({
+        "eval_metrics": {
+            "clip_model_name": "/models/clip",
+            "dino_model_name": "/models/dino",
+            "eval_baseline_enabled": False,
         }
     })
-    s = secrets.load()
-    assert s.cltagger.local_dir == "/models/cltagger-v2"
-    assert s.cltagger.variant_local_dirs["cl_tagger_v2_v2_01a"] == "/models/cltagger-v2"
-    assert s.cltagger.variant_local_dirs["cl_tagger_1_02"] == "/models/cltagger-102"
+    saved = secrets.load()
+    assert saved.eval_metrics.clip_model_name == "/models/clip"
+    assert saved.eval_metrics.dino_model_name == "/models/dino"
+    assert saved.eval_metrics.eval_baseline_enabled is False
 
 
 def test_llm_tagger_defaults(secrets_file: Path) -> None:
@@ -411,7 +432,7 @@ def test_to_masked_dict_replaces_sensitive(secrets_file: Path) -> None:
         {
             "gelbooru": {"user_id": "alice", "api_key": "secret"},
             "huggingface": {"token": "hf_secret"},
-            "wandb": {"api_key": "wandb_secret"},
+            "wandb": {"presets": [{"id": "default", "api_key": "wandb_secret"}]},
             "llm_tagger": {
                 "presets": [{"id": "joycaption", "api_key": "llm_secret"}]
             },
@@ -421,7 +442,8 @@ def test_to_masked_dict_replaces_sensitive(secrets_file: Path) -> None:
     assert masked["gelbooru"]["user_id"] == "alice"  # 非敏感字段保留
     assert masked["gelbooru"]["api_key"] == secrets.MASK
     assert masked["huggingface"]["token"] == secrets.MASK
-    assert masked["wandb"]["api_key"] == secrets.MASK
+    # wandb.presets.*.api_key 通配
+    assert masked["wandb"]["presets"][0]["api_key"] == secrets.MASK
     # llm_tagger.presets.*.api_key 通配
     joy_masked = next(p for p in masked["llm_tagger"]["presets"] if p["id"] == "joycaption")
     assert joy_masked["api_key"] == secrets.MASK
@@ -432,7 +454,8 @@ def test_to_masked_dict_keeps_empty_sensitive_empty(secrets_file: Path) -> None:
     masked = secrets.to_masked_dict(secrets.load())
     assert masked["gelbooru"]["api_key"] == ""
     assert masked["huggingface"]["token"] == ""
-    assert masked["wandb"]["api_key"] == ""
+    for preset in masked["wandb"]["presets"]:
+        assert preset["api_key"] == ""
     for preset in masked["llm_tagger"]["presets"]:
         assert preset["api_key"] == ""
 
@@ -608,3 +631,112 @@ def test_system_show_dev_channel_migration_does_not_overwrite_explicit_pref(
     )
     s = secrets.load()
     assert s.system.update_channel == "stable"  # 显式设过不被 legacy 覆盖
+
+
+# ---------------------------------------------------------------------------
+# WandB 预设化（0.18）
+# ---------------------------------------------------------------------------
+
+
+def test_wandb_legacy_flat_schema_migration(secrets_file: Path) -> None:
+    """老扁平 wandb {enabled, api_key, ...} → {enabled, current_preset, presets}。"""
+    secrets_file.write_text(
+        json.dumps({
+            "wandb": {
+                "enabled": True,
+                "api_key": "legacy-key",
+                "project": "my-proj",
+                "entity": "team",
+                "base_url": "https://wandb.example",
+                "mode": "offline",
+                "log_samples": False,
+                "sample_max_side": 768,
+                "upload_model": True,
+                "upload_model_policy": "all",
+            }
+        }),
+        encoding="utf-8",
+    )
+    s = secrets.load()
+    assert s.wandb.enabled is True
+    assert s.wandb.current_preset == "default"
+    assert len(s.wandb.presets) == 1
+    wb = s.wandb.active
+    assert wb.api_key == "legacy-key"
+    assert wb.project == "my-proj"
+    assert wb.entity == "team"
+    assert wb.base_url == "https://wandb.example"
+    assert wb.mode == "offline"
+    assert wb.log_samples is False
+    assert wb.sample_max_side == 768
+    assert wb.upload_model is True
+    assert wb.upload_model_policy == "all"
+
+
+def test_wandb_preset_mask_roundtrip_keeps_real_key(secrets_file: Path) -> None:
+    """前端 PUT 整个 presets 列表且 api_key=*** 时，按 id 合并保留真实 key。"""
+    secrets.update({"wandb": {"presets": [{"id": "default", "api_key": "real-key"}]}})
+    secrets.update({
+        "wandb": {
+            "current_preset": "default",
+            "presets": [
+                {"id": "default", "api_key": secrets.MASK, "project": "renamed"}
+            ],
+        }
+    })
+    s = secrets.load()
+    assert s.wandb.active.api_key == "real-key"
+    assert s.wandb.active.project == "renamed"
+
+
+def test_wandb_get_preset_returns_real_key_for_export(secrets_file: Path) -> None:
+    """导出端点用的 get_wandb_preset 绕过 mask 返回真实 key。"""
+    secrets.update({"wandb": {"presets": [{"id": "default", "api_key": "real-key"}]}})
+    preset = secrets.get_wandb_preset("default")
+    assert preset is not None
+    assert preset.api_key == "real-key"
+    assert secrets.get_wandb_preset("nonexistent") is None
+
+
+def test_wandb_import_preset_appends_and_selects(secrets_file: Path) -> None:
+    new, preset = secrets.import_wandb_preset(
+        {"label": "Team B", "entity": "b", "api_key": "k2", "mode": "offline"}
+    )
+    assert preset.entity == "b"
+    assert preset.api_key == "k2"  # 带真实 key 的备份文件原样恢复
+    assert new.wandb.current_preset == preset.id
+    assert any(p.id == preset.id for p in secrets.load().wandb.presets)
+
+
+def test_wandb_import_preset_unwraps_wrapper_and_uniquifies_id(secrets_file: Path) -> None:
+    """旧前端 JSON 导出格式 {kind, preset} 自动解包；MASK 哨兵按空；撞名加后缀。"""
+    new, preset = secrets.import_wandb_preset({
+        "kind": "anima-wandb-preset",
+        "version": 1,
+        "preset": {"label": "default", "api_key": secrets.MASK, "mode": "offline"},
+    })
+    assert preset.api_key == ""
+    assert preset.mode == "offline"
+    assert preset.id == "default_2"  # 与既有 default 撞名
+    assert new.wandb.current_preset == "default_2"
+
+
+def test_wandb_import_preset_rejects_non_mapping(secrets_file: Path) -> None:
+    with pytest.raises(ValueError):
+        secrets.import_wandb_preset(["not", "a", "dict"])
+
+
+def test_wandb_current_preset_falls_back_when_missing(secrets_file: Path) -> None:
+    """current_preset 指向不存在的 id 时回落到第一个 preset。"""
+    secrets.update({
+        "wandb": {
+            "presets": [
+                {"id": "default"},
+                {"id": "team_b", "label": "Team B", "entity": "b"},
+            ],
+            "current_preset": "nonexistent",
+        }
+    })
+    s = secrets.load()
+    assert s.wandb.current_preset == "default"
+    assert [p.id for p in s.wandb.presets] == ["default", "team_b"]

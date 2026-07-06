@@ -37,8 +37,11 @@ def main() -> None:
         return
     rt = o.current_runtime()
     print(json.dumps(rt, indent=2, ensure_ascii=False, default=str))
+    if rt.get("ort_cuda_major_mismatch"):
+        print(">>> 警告：已装 ORT 的 CUDA 大版本与 torch 不一致 —— "
+              "重装时按 torch 的 major 选 cu12(<1.26) 或 cu13(>=1.26) build")
 
-    section("系统 CUDA 检测（决定 preload 是否被 skip）")
+    section("系统 CUDA 检测（决定 preload 是否被 skip + ORT 走 cu12 还是 cu13）")
     print("CUDA_HOME:", os.environ.get("CUDA_HOME"))
     print("CUDA_PATH:", os.environ.get("CUDA_PATH"))
     print("/usr/local/cuda/lib64 存在:", os.path.isdir("/usr/local/cuda/lib64"))
@@ -46,6 +49,9 @@ def main() -> None:
     print("ld 路径里 cublas:", ctypes.util.find_library("cublas"))
     print("ld 路径里 cudnn:", ctypes.util.find_library("cudnn"))
     print("_has_system_cuda_libs():", o._has_system_cuda_libs())
+    # ORT build 的 CUDA 大版本锚点（= torch.version.cuda major）；装 onnxruntime-gpu
+    # 必须跟它同 major，否则 import 期 dlopen 挂 libcudart.so.13（cu128 torch → 12）
+    print("_resolve_cuda_major():", o._resolve_cuda_major())
 
     section("torch")
     try:
@@ -59,7 +65,7 @@ def main() -> None:
     except Exception as exc:  # noqa: BLE001
         print("torch import 失败:", exc)
 
-    section("nvidia-*-cu12 wheels（torch wheel preload 来源） + onnxruntime")
+    section("nvidia CUDA wheels（torch wheel preload 来源）+ onnxruntime")
     out = subprocess.run(
         [sys.executable, "-m", "pip", "list"],
         capture_output=True, text=True,

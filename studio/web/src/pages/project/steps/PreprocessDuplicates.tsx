@@ -285,6 +285,8 @@ export default function PreprocessDuplicatesPage() {
         <ImagePreviewModal
           src={api.versionThumbUrl(project.id, vid, 'train', filename, folder, 1600)}
           caption={rel}
+          index={previewIdx}
+          total={previewNames.length}
           hasPrev={previewIdx > 0}
           hasNext={previewIdx < previewNames.length - 1}
           onClose={() => setPreviewIdx(null)}

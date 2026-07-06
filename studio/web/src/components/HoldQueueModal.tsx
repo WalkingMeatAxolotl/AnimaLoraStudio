@@ -97,10 +97,12 @@ export function HoldQueueModal({ runningTask, onCancel, onConfirm }: HoldQueueMo
         )}
 
         <div className="flex justify-end gap-2 pt-1">
+          {/* 统一 modal footer 范式：btn-secondary / btn-primary（原裸 tailwind 类
+              和 .btn 体系尺寸/圆角不一致）。 */}
           <button
             type="button"
             onClick={onCancel}
-            className="px-3 py-1.5 text-sm rounded border border-dim bg-surface hover:bg-surface-hover text-fg-primary"
+            className="btn btn-secondary"
             data-testid="hold-cancel-btn"
           >
             {t('common.cancel', { defaultValue: 'Cancel' })}
@@ -108,7 +110,7 @@ export function HoldQueueModal({ runningTask, onCancel, onConfirm }: HoldQueueMo
           <button
             type="button"
             onClick={handleConfirm}
-            className="px-3 py-1.5 text-sm rounded bg-accent text-accent-on hover:bg-accent-hover"
+            className="btn btn-primary"
             data-testid="hold-confirm-btn"
           >
             {confirmText}

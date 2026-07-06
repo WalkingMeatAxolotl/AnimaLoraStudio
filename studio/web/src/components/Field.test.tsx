@@ -209,6 +209,95 @@ describe('Field number input (PP10.3)', () => {
   })
 })
 
+const stringListProp: SchemaProperty = {
+  type: 'array',
+  items: { type: 'string' },
+  default: [],
+  group: 'sample',
+  control: 'string-list',
+  description: '',
+}
+
+describe('Field string-list input (sample_prompts 换行)', () => {
+  it('preserves the newline while typing a second line', async () => {
+    const onChange = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <Field
+        name="sample_prompts"
+        prop={stringListProp}
+        value={['first prompt']}
+        onChange={onChange}
+      />,
+    )
+
+    const input = screen.getByRole('textbox') as HTMLTextAreaElement
+    // 敲回车的瞬间（尾部空行还没内容）换行不能被 split+filter 吃掉
+    await user.type(input, '{Enter}')
+    expect(input.value).toBe('first prompt\n')
+    await user.type(input, 'second prompt')
+    expect(input.value).toBe('first prompt\nsecond prompt')
+    expect(onChange).toHaveBeenLastCalledWith(['first prompt', 'second prompt'])
+  })
+
+  it('does not commit empty lines, and blur normalizes the raw text', async () => {
+    const onChange = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <Field
+        name="sample_prompts"
+        prop={stringListProp}
+        value={['first prompt']}
+        onChange={onChange}
+      />,
+    )
+
+    const input = screen.getByRole('textbox') as HTMLTextAreaElement
+    await user.type(input, '{Enter}{Enter}  second prompt  ')
+    expect(onChange).toHaveBeenLastCalledWith(['first prompt', 'second prompt'])
+    fireEvent.blur(input)
+    expect(input.value).toBe('first prompt\nsecond prompt')
+  })
+
+  it('external value change syncs display only when not focused', async () => {
+    const onChange = vi.fn()
+    const user = userEvent.setup()
+    const { rerender } = render(
+      <Field
+        name="sample_prompts"
+        prop={stringListProp}
+        value={['a']}
+        onChange={onChange}
+      />,
+    )
+    const input = screen.getByRole('textbox') as HTMLTextAreaElement
+
+    // focus 中外部 value 变化不覆盖用户半截输入
+    await user.type(input, '{Enter}b')
+    rerender(
+      <Field
+        name="sample_prompts"
+        prop={stringListProp}
+        value={['reset']}
+        onChange={onChange}
+      />,
+    )
+    expect(input.value).toBe('a\nb')
+
+    // blur 后外部变化才同步
+    await user.tab()
+    rerender(
+      <Field
+        name="sample_prompts"
+        prop={stringListProp}
+        value={['x', 'y']}
+        onChange={onChange}
+      />,
+    )
+    expect(input.value).toBe('x\ny')
+  })
+})
+
 describe('Field code input', () => {
   it('renders object values as formatted JSON and commits parsed objects on blur', () => {
     const onChange = vi.fn()

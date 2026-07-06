@@ -32,7 +32,6 @@ type Wd14Form = {
   threshold_general: number
   threshold_character: number
   model_id: string
-  local_dir: string
   blacklist_tags: string[]
 }
 
@@ -42,7 +41,6 @@ type CLTaggerForm = {
   model_id: string
   model_path: string
   tag_mapping_path: string
-  local_dir: string
   add_copyright_tag: boolean
   add_meta_tag: boolean
   add_model_tag: boolean
@@ -76,7 +74,6 @@ function fromConfig(cfg: WD14Config): Wd14Form {
     threshold_general: cfg.threshold_general,
     threshold_character: cfg.threshold_character,
     model_id: cfg.model_id,
-    local_dir: cfg.local_dir ?? '',
     blacklist_tags: cfg.blacklist_tags,
   }
 }
@@ -88,7 +85,6 @@ function fromCLTaggerConfig(cfg: CLTaggerConfig): CLTaggerForm {
     model_id: cfg.model_id,
     model_path: cfg.model_path,
     tag_mapping_path: cfg.tag_mapping_path,
-    local_dir: cfg.local_dir ?? '',
     add_copyright_tag: cfg.add_copyright_tag,
     add_meta_tag: cfg.add_meta_tag,
     add_model_tag: cfg.add_model_tag,
@@ -132,11 +128,15 @@ export default function TaggingPage() {
 
   const [tagger, setTagger] = useState<TaggerName>('wd14')
   const [taggerStatus, setTaggerStatus] = useState<TaggerStatus | null>(null)
-  const [outputFormat, setOutputFormat] = useState<'txt' | 'json'>('txt')
+  // 落盘格式跟着产物走（LLM json preset → .json，其余 → .txt），不再由请求指定。
   const [onExisting, setOnExisting] = useState<'overwrite' | 'skip' | 'append'>('overwrite')
   // 触发词：初值从 activeVersion 取（持久化在 version 表）；启动打标时一并提交，
   // 后端会同步落库 + 传给 worker prepend 到每张 caption。
   const [triggerWord, setTriggerWord] = useState<string>('')
+  // 打标范围：'all'（默认 train + validation）/ 'validation' / 某个 train 文件夹名。
+  // folders 给 dropdown 列 train 子文件夹选项（从 curation 拿）。
+  const [scope, setScope] = useState<string>('all')
+  const [folders, setFolders] = useState<string[]>([])
 
   const [wd14Defaults, setWd14Defaults] = useState<WD14Config | null>(null)
   const [wd14Form, setWd14Form] = useState<Wd14Form | null>(null)
@@ -195,6 +195,17 @@ export default function TaggingPage() {
     setTriggerWord(activeVersion?.trigger_word ?? '')
   }, [activeVersion?.id, activeVersion?.trigger_word])
 
+  // 打标范围 dropdown 的 train 文件夹选项：拿当前版本的 curation folders。
+  // 切版本时 scope 复位 'all'（旧版本的文件夹名在新版本可能不存在）。
+  useEffect(() => {
+    setScope('all')
+    if (vid == null) { setFolders([]); return }
+    void api
+      .getCuration(project.id, vid)
+      .then((v) => setFolders(v.folders))
+      .catch(() => setFolders([]))
+  }, [project.id, vid])
+
   useEventStream((evt) => {
     const jid = jobIdRef.current
     if (evt.type === 'job_log_appended' && jid && evt.job_id === jid) {
@@ -221,8 +232,6 @@ export default function TaggingPage() {
     if (wd14Form.threshold_character !== wd14Defaults.threshold_character)
       out.threshold_character = wd14Form.threshold_character
     if (wd14Form.model_id !== wd14Defaults.model_id) out.model_id = wd14Form.model_id
-    const localDirChanged = (wd14Form.local_dir || null) !== (wd14Defaults.local_dir ?? null)
-    if (localDirChanged) out.local_dir = wd14Form.local_dir || null
     if (JSON.stringify(wd14Form.blacklist_tags) !== JSON.stringify(wd14Defaults.blacklist_tags))
       out.blacklist_tags = wd14Form.blacklist_tags
     return Object.keys(out).length ? out : undefined
@@ -239,8 +248,6 @@ export default function TaggingPage() {
     if (cltaggerForm.model_path !== cltaggerDefaults.model_path) out.model_path = cltaggerForm.model_path
     if (cltaggerForm.tag_mapping_path !== cltaggerDefaults.tag_mapping_path)
       out.tag_mapping_path = cltaggerForm.tag_mapping_path
-    const localDirChanged = (cltaggerForm.local_dir || null) !== (cltaggerDefaults.local_dir ?? null)
-    if (localDirChanged) out.local_dir = cltaggerForm.local_dir || null
     if (cltaggerForm.add_copyright_tag !== cltaggerDefaults.add_copyright_tag)
       out.add_copyright_tag = cltaggerForm.add_copyright_tag
     if (cltaggerForm.add_meta_tag !== cltaggerDefaults.add_meta_tag)
@@ -288,7 +295,8 @@ export default function TaggingPage() {
       const overrides = wd14_overrides ?? cltagger_overrides ?? llm_overrides
       const trigger = triggerWord.trim()
       const j = await api.startTag(project.id, activeVersion.id, {
-        tagger, output_format: outputFormat, on_existing: onExisting,
+        tagger, on_existing: onExisting,
+        scope,
         wd14_overrides, cltagger_overrides, llm_overrides,
         // 传 trigger 永远，让 server 决定是否落库（与现有值比较），空串显式清空
         trigger_word: trigger,
@@ -328,12 +336,18 @@ export default function TaggingPage() {
         },
       ]}
       actions={
+        /* 样式对齐项目页「新建项目」（btn-primary btn-sm + icon + 文字） */
         <button
           onClick={startTagging}
           disabled={isLive || !taggerStatus?.ok}
-          className="btn btn-primary"
+          className="btn btn-primary btn-sm"
         >
-          {isLive ? t('tag.taggingBtn') : taggerStatus === null ? t('tag.checkingBtn') : t('tag.startBtn')}
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M8 5v14l11-7z" />
+          </svg>
+          <span>
+            {isLive ? t('tag.taggingBtn') : taggerStatus === null ? t('tag.checkingBtn') : t('tag.startBtn')}
+          </span>
         </button>
       }
     >
@@ -391,15 +405,20 @@ export default function TaggingPage() {
             )}
 
             <span className="text-dim">|</span>
-            <span className="text-fg-tertiary">format</span>
+            <span className="text-fg-tertiary" title={t('tag.scopeHint')}>{t('tag.scope')}</span>
             <select
-              value={outputFormat}
-              onChange={(e) => setOutputFormat(e.target.value as 'txt' | 'json')}
+              value={scope}
+              onChange={(e) => setScope(e.target.value)}
+              disabled={isLive}
               className="input text-sm"
               style={{ padding: '3px 8px' }}
+              title={t('tag.scopeHint')}
             >
-              <option value="txt">.txt</option>
-              <option value="json">.json</option>
+              <option value="all">{t('tag.scopeAll')}</option>
+              {folders.map((f) => (
+                <option key={f} value={f}>{f}</option>
+              ))}
+              <option value="validation">{t('tag.scopeValidation')}</option>
             </select>
 
             <span className="text-dim">|</span>
@@ -515,7 +534,6 @@ function Wd14Panel({
     form.threshold_general !== defaults.threshold_general ||
     form.threshold_character !== defaults.threshold_character ||
     form.model_id !== defaults.model_id ||
-    (form.local_dir || null) !== (defaults.local_dir ?? null) ||
     JSON.stringify(form.blacklist_tags) !== JSON.stringify(defaults.blacklist_tags)
 
   const restore = () => onChange(fromConfig(defaults))
@@ -566,14 +584,6 @@ function Wd14Panel({
             onChange={(v) => onChange({ ...form, model_id: v })}
             modified={form.model_id !== defaults.model_id}
           />
-          <LabeledInput
-            label="local_dir"
-            value={form.local_dir}
-            placeholder={t('tag.blankDir')}
-            disabled={disabled}
-            onChange={(v) => onChange({ ...form, local_dir: v })}
-            modified={(form.local_dir || null) !== (defaults.local_dir ?? null)}
-          />
           <TagsInput
             className="md:col-span-2"
             label={t('tag.blacklistLabel')}
@@ -615,7 +625,6 @@ function CLTaggerPanel({
     form.model_id !== defaults.model_id ||
     form.model_path !== defaults.model_path ||
     form.tag_mapping_path !== defaults.tag_mapping_path ||
-    (form.local_dir || null) !== (defaults.local_dir ?? null) ||
     form.add_copyright_tag !== defaults.add_copyright_tag ||
     form.add_meta_tag !== defaults.add_meta_tag ||
     form.add_model_tag !== defaults.add_model_tag ||
@@ -684,7 +693,6 @@ function CLTaggerPanel({
       {advOpen && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-1">
           <LabeledInput label="model_id" value={form.model_id} disabled={disabled} onChange={(v) => onChange({ ...form, model_id: v })} modified={form.model_id !== defaults.model_id} />
-          <LabeledInput label="local_dir" value={form.local_dir} placeholder={t('tag.blankDir')} disabled={disabled} onChange={(v) => onChange({ ...form, local_dir: v })} modified={(form.local_dir || null) !== (defaults.local_dir ?? null)} />
           <LabeledInput label="model_path" value={form.model_path} disabled={disabled} onChange={(v) => onChange({ ...form, model_path: v })} modified={form.model_path !== defaults.model_path} />
           <LabeledInput label="tag_mapping_path" value={form.tag_mapping_path} disabled={disabled} onChange={(v) => onChange({ ...form, tag_mapping_path: v })} modified={form.tag_mapping_path !== defaults.tag_mapping_path} />
           <TagsInput

@@ -10,7 +10,7 @@ import { useTranslation } from 'react-i18next'
  *   shortcutHint 不传时按当前可用方向动态拼接（避免在单行 / 单列 / 角落格上撒谎）
  */
 export default function FullscreenViewer({
-  src, alt, caption, onClose,
+  src, alt, caption, index, total, onClose,
   hasPrev, hasNext, hasUp, hasDown,
   onPrev, onNext, onUp, onDown,
   shortcutHint,
@@ -18,6 +18,9 @@ export default function FullscreenViewer({
   src: string
   alt?: string
   caption?: string
+  /** 列表中的 0-based 位置；与 total 同传时底部显示 "index+1 / total" 计数。 */
+  index?: number
+  total?: number
   onClose: () => void
   hasPrev?: boolean
   hasNext?: boolean
@@ -70,6 +73,8 @@ export default function FullscreenViewer({
     const nav = dirs.length > 0 ? t('generate.fullscreenNavPrefix', { dirs: dirs.join(' / ') }) : ''
     return `${nav}${t('generate.fullscreenCloseHint')}`
   }, [shortcutHint, hasPrev, hasNext, hasUp, hasDown, t])
+
+  const counter = index != null && total != null ? `${index + 1} / ${total}` : null
 
   return (
     <div
@@ -141,6 +146,11 @@ export default function FullscreenViewer({
         {caption && (
           <div className="text-xs text-fg-secondary font-mono text-center">
             {caption}
+          </div>
+        )}
+        {counter && (
+          <div className="text-xs text-fg-secondary font-mono text-center">
+            {counter}
           </div>
         )}
         <div className="text-2xs text-fg-tertiary">

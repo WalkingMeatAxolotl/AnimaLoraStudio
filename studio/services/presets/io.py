@@ -15,6 +15,8 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
+from ...domain.config_prune import prune_inactive_fields
+from ...domain.migrations import RETIRED_MONITOR_KEYS
 from ...paths import REPO_ROOT, USER_PRESETS_DIR
 from ...schema import TrainingConfig
 
@@ -159,6 +161,9 @@ def _tolerant_validate(raw: dict[str, Any]) -> tuple[TrainingConfig, list[str], 
             data["attention_backend"] = "none"
     data.pop("flash_attn", None)
     data.pop("xformers", None)
+    # 退役的 monitor server 键：历史 dump 全都写过，静默丢弃不进 dropped 提示。
+    for key in RETIRED_MONITOR_KEYS:
+        data.pop(key, None)
 
     dropped = sorted(k for k in data if k not in known)
     data = {k: v for k, v in data.items() if k in known}
@@ -265,7 +270,11 @@ def write_preset(name: str, data: dict[str, Any], base: Path | None = None) -> P
             details={"reason": str(exc)},
             http_status=400,
         ) from exc
-    dumped = _absolutize_model_paths(cfg.model_dump(mode="python"))
+    # 落盘前裁掉 show_when 为假的字段（UI 不可见 = 不生效）；read_preset 时
+    # pydantic 把缺失字段补回默认值，API 返回给前端的仍是完整 config。
+    dumped = prune_inactive_fields(
+        _absolutize_model_paths(cfg.model_dump(mode="python"))
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         yaml.safe_dump(dumped, allow_unicode=True, sort_keys=False, default_flow_style=False),

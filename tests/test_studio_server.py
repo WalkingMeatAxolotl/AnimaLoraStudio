@@ -26,6 +26,7 @@ def isolated_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str,
     from studio import db
     from studio.api.routers import root as _root_router
     from studio.api.routers import samples as _samples_router
+    from studio.services.projects import projects
     output = tmp_path / "output"
     samples_dir = output / "samples"
     web_dist = tmp_path / "web_dist"  # 不创建即模拟未构建
@@ -39,6 +40,7 @@ def isolated_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str,
     monkeypatch.setattr(server, "WEB_DIST", web_dist)
     monkeypatch.setattr(_samples_router, "OUTPUT_DIR", output)
     monkeypatch.setattr(_root_router, "WEB_DIST", web_dist)
+    monkeypatch.setattr(projects, "PROJECTS_DIR", tmp_path / "projects")
     return {
         "tmp": tmp_path,
         "db": dbfile,
@@ -309,6 +311,46 @@ def test_state_by_task_id_returns_parsed_json(
     assert resp.json() == payload
 
 
+def test_state_includes_eval_context_for_bound_task(
+    client: TestClient, isolated_paths: dict[str, Path]
+) -> None:
+    from studio import db as _db
+    from studio.services.projects import projects, versions
+
+    payload = {
+        "losses": [],
+        "lr_history": [],
+        "epoch": 1,
+        "step": 10,
+        "total_steps": 20,
+        "speed": 1.0,
+        "samples": [],
+        "start_time": 1700000000.0,
+        "config": {},
+    }
+    tid = _make_task_with_state(isolated_paths, payload)
+    with _db.connection_for(isolated_paths["db"]) as conn:
+        project = projects.create_project(conn, title="Eval Monitor")
+        version = versions.create_version(conn, project_id=project["id"], label="v1")
+        _db.update_task(
+            conn,
+            tid,
+            project_id=project["id"],
+            version_id=version["id"],
+        )
+
+    resp = client.get(f"/api/state?task_id={tid}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["project_id"] == project["id"]
+    assert body["project_slug"] == project["slug"]
+    assert body["version_id"] == version["id"]
+    assert body["version_label"] == "v1"
+    assert body["task_id"] == tid
+    assert body["step"] == 10
+
+
 def test_state_corrupt_returns_500(
     client: TestClient, isolated_paths: dict[str, Path]
 ) -> None:
@@ -479,14 +521,17 @@ def test_sample_with_task_id_finds_in_state_dir_samples(
 # /
 # ---------------------------------------------------------------------------
 
-def test_root_redirects_to_studio_when_built(
+def test_root_serves_index_when_built(
     client: TestClient, isolated_paths: dict[str, Path]
 ) -> None:
-    """前端 dist 存在时，/ 应 302 跳转到 /studio/。"""
-    isolated_paths["web_dist"].mkdir(parents=True, exist_ok=True)
+    """ADR 0012：前端 dist 存在时，/ 直接吐 index.html，不再重定向。"""
+    web_dist = isolated_paths["web_dist"]
+    web_dist.mkdir(parents=True, exist_ok=True)
+    (web_dist / "index.html").write_text("<!doctype html><title>anima</title>", encoding="utf-8")
     resp = client.get("/", follow_redirects=False)
-    assert resp.status_code == 302
-    assert resp.headers["location"] == "/studio/"
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "<title>anima</title>" in resp.text
 
 
 def test_root_fallback_when_no_dist(
@@ -498,6 +543,19 @@ def test_root_fallback_when_no_dist(
     assert resp.status_code == 200
     body = resp.json()
     assert "AnimaStudio" in body["message"]
+
+
+def test_legacy_studio_path_redirects_to_root(
+    client: TestClient, isolated_paths: dict[str, Path]
+) -> None:
+    """ADR 0012 legacy：老 /studio/... 链接一次性 307 跳到根路径，保留 query。"""
+    resp = client.get("/studio/projects/1?tab=log", follow_redirects=False)
+    assert resp.status_code == 307
+    assert resp.headers["location"] == "/projects/1?tab=log"
+    # 裸 /studio → /
+    resp = client.get("/studio", follow_redirects=False)
+    assert resp.status_code == 307
+    assert resp.headers["location"] == "/"
 
 
 # ---------------------------------------------------------------------------
@@ -661,6 +719,34 @@ def test_system_update_rejects_when_dirty(
     assert resp.status_code == 422
     body = resp.json()
     assert body["error"]["code"] == "system.working_tree_dirty"
+
+
+def test_system_update_force_bypasses_dirty(
+    client: TestClient,
+    isolated_paths: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """force=True：dirty 工作树不再 422，写 pending + force marker（启动期
+    apply_pending 会 reset --hard 覆盖本地改动）。"""
+    from studio.services.runtime import updater
+    dirty = updater.VersionInfo(
+        version="0.6.0", commit="abc", commit_short="abc", commit_time_iso="",
+        branch="master", tag=None, is_dirty=True,
+    )
+    monkeypatch.setattr(updater, "current_version", lambda: dirty)
+    pending = tmp_path / ".update_pending"
+    force_flag = tmp_path / ".update_force"
+    restart_flag = tmp_path / "tmp" / "restart"
+    monkeypatch.setattr(updater, "UPDATE_PENDING", pending)
+    monkeypatch.setattr(updater, "UPDATE_FORCE", force_flag)
+    monkeypatch.setattr(updater, "RESTART_FLAG", restart_flag)
+    monkeypatch.setattr("studio.api.routers.system._raise_sigint_after_response", lambda: None)
+
+    resp = client.post("/api/system/update", json={"target": "origin/master", "force": True})
+    assert resp.status_code == 200
+    assert pending.read_text(encoding="utf-8") == "origin/master"
+    assert force_flag.exists()
 
 
 def test_system_update_writes_pending_and_restart_flag(
@@ -895,12 +981,14 @@ def test_preflight_clean_no_running_no_diff(
     assert keys == ["dirty", "running_tasks", "requirements_diff", "last_version"]
 
 
-def test_preflight_dirty_blocks(
+def test_preflight_dirty_warns_overridable(
     client: TestClient,
     isolated_paths: dict[str, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """is_dirty=True → dirty check level=err，blocking=True。"""
+    """is_dirty=True → dirty check level=warn（不再硬阻断），working_tree_dirty=True，
+    blocking=False（仅 dirty 时）。前端据此弹"强制覆盖"确认 modal，确认后带 force
+    提交。running task / self_update 等才是不可绕过的 err。"""
     from studio.services.runtime import updater
     monkeypatch.setattr(updater, "current_version", lambda: updater.VersionInfo(
         version="0.6.0", commit="x", commit_short="x", commit_time_iso="",
@@ -911,9 +999,10 @@ def test_preflight_dirty_blocks(
     monkeypatch.setattr(updater, "target_has_self_update", lambda _ref: True)
 
     body = client.get("/api/system/preflight?target=origin/master").json()
-    assert body["blocking"] is True
+    assert body["blocking"] is False
+    assert body["working_tree_dirty"] is True
     dirty_check = next(c for c in body["checks"] if c["key"] == "dirty")
-    assert dirty_check["level"] == "err"
+    assert dirty_check["level"] == "warn"
 
 
 def test_preflight_running_tasks_block(

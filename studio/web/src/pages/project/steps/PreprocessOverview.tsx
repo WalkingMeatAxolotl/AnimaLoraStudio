@@ -331,6 +331,8 @@ export default function PreprocessOverviewPage() {
           srcLabel={previewItem.compareSrc ? t('preprocessOverview.compareOriginal') : undefined}
           compareLabel={previewItem.compareSrc ? t('preprocessOverview.compareProcessed') : undefined}
           caption={previewItem.caption}
+          index={previewIdx!}
+          total={items.length}
           hasPrev={previewIdx! > 0}
           hasNext={previewIdx! < items.length - 1}
           onClose={() => setPreviewIdx(null)}

@@ -42,6 +42,31 @@ def test_unique_slug_appends_suffix(isolated) -> None:
     assert c["slug"] == "same-3"
 
 
+def test_create_uses_explicit_slug(isolated) -> None:
+    """显式 slug 覆盖 title 派生；和 title 派生共用同一唯一性命名空间。"""
+    with db.connection_for(isolated["db"]) as conn:
+        # 全中文 title 但显式给 ASCII slug → 文件夹名可读，不再塌成 project
+        p = projects.create_project(conn, title="甘雨", slug="ganyu")
+        assert p["slug"] == "ganyu"
+        assert p["title"] == "甘雨"  # title 原样保留中文
+        # 显式 slug 仍过 slugify 归一化（大小写 / 非法字符 / 防 API 绕过前端）
+        q = projects.create_project(conn, title="x", slug="My Cool/Name")
+        assert q["slug"] == "my-cool-name"
+        # 显式 slug 与 title 派生撞名 → 照样走 -N 后缀
+        r = projects.create_project(conn, title="Ganyu")  # 派生 slug=ganyu
+        assert r["slug"] == "ganyu-2"
+
+
+def test_create_blank_slug_falls_back_to_title(isolated) -> None:
+    """slug 留空 / 纯空白 / 清理后为空 → 回退到从 title 派生。"""
+    with db.connection_for(isolated["db"]) as conn:
+        a = projects.create_project(conn, title="Hello World", slug="   ")
+        assert a["slug"] == "hello-world"
+        # 全中文 + 留空 slug → 仍走 project 兜底（现状不变）
+        b = projects.create_project(conn, title="中文名", slug="")
+        assert b["slug"] == "project"
+
+
 # ---------------------------------------------------------------------------
 # create / dirs / project.json
 # ---------------------------------------------------------------------------

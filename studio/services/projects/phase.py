@@ -67,15 +67,9 @@ def check_editing(stats: dict[str, Any]) -> CheckResult:
 def check_regularizing(
     conn: sqlite3.Connection, version_id: int
 ) -> CheckResult:
-    """无 reg_build job 处于 pending/running（§11.5-B；可跳过 = 不强求正则集非空）。"""
-    row = conn.execute(
-        "SELECT COUNT(*) FROM project_jobs "
-        "WHERE version_id = ? "
-        "  AND kind = 'reg_build' "
-        "  AND status IN ('pending', 'running')",
-        (version_id,),
-    ).fetchone()
-    if int(row[0]) > 0:
+    """无 reg_build 作业处于 pending/running（§11.5-B；可跳过 = 不强求正则集非空）。"""
+    from . import jobs as project_jobs
+    if project_jobs.count_active(conn, version_id=version_id, kind="reg_build") > 0:
         return CheckResult(False, "正则任务进行中，请等待完成")
     return CheckResult(True)
 
@@ -88,14 +82,8 @@ def check_preprocessing(
     跟 `check_regularizing` 同 pattern——预处理是可选 phase（upscale / crop /
     去重等都可跳过，接受训练时默认放大算法）；校验仅防 concurrent job 撞车。
     """
-    row = conn.execute(
-        "SELECT COUNT(*) FROM project_jobs "
-        "WHERE version_id = ? "
-        "  AND kind = 'preprocess' "
-        "  AND status IN ('pending', 'running')",
-        (version_id,),
-    ).fetchone()
-    if int(row[0]) > 0:
+    from . import jobs as project_jobs
+    if project_jobs.count_active(conn, version_id=version_id, kind="preprocess") > 0:
         return CheckResult(False, "预处理任务进行中，请等待完成")
     return CheckResult(True)
 

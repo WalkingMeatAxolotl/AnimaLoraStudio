@@ -11,8 +11,6 @@
     GET  /api/system/preflight      4 项前置检查 + requirements diff 摘要
     GET  /api/system/dev_commits    `git log origin/dev -N` 摘要
     POST /api/system/init_git       zip 用户初始化 git 仓库（幂等）
-    GET  /api/system/release_notes  yaml 取指定 tag 的结构化 release notes
-    GET  /api/system/release_notes_all  yaml 全量历史版本（modal 切换用）
 
 重启协议（参见 docs/adr/0002-webui-self-update.md）：
     1. server 写 REPO_ROOT/tmp/restart 标志
@@ -38,7 +36,6 @@ from ..schemas.system import UpdateRequest
 from ... import db
 from ...domain.errors import ConflictError, DomainError, ValidationError
 from ...paths import REPO_ROOT
-from ...services import release_notes as release_notes_svc
 from ...services.runtime import updater
 
 router = APIRouter()
@@ -144,13 +141,15 @@ def system_update(body: UpdateRequest, background: BackgroundTasks) -> dict[str,
     _check_no_running_tasks()
 
     cur = updater.current_version()
-    if cur.is_dirty:
+    # force=True：用户在 UI 上已确认"强制覆盖本地改动"，跳过 dirty 闸；启动期
+    # apply_pending 的 git reset --hard 会丢弃这些未提交改动（不可恢复）。
+    if cur.is_dirty and not body.force:
         raise ValidationError(
             "Local changes are uncommitted; commit or stash them before updating",
             code="system.working_tree_dirty", http_status=422,
         )
 
-    updater.request_update(body.target)
+    updater.request_update(body.target, force=body.force)
     background.add_task(_raise_sigint_after_response)
     return {"ok": True, "message": f"update scheduled → {body.target}"}
 
@@ -240,8 +239,12 @@ def system_preflight(target: str = "origin/master") -> dict[str, Any]:
     checks: list[dict[str, str]] = []
 
     if cur.is_dirty:
-        checks.append({"key": "dirty", "level": "err",
-                       "label": "工作树有未提交修改 — 操作会被拒绝"})
+        # warn 而非 err：dirty 不再硬阻断，前端确认时弹"强制覆盖"modal，确认后
+        # 带 force 提交 → reset --hard 覆盖本地改动。running task / self_update 等
+        # 才是不可绕过的 err。（package-lock.json 等自动 churn 已在 updater 的
+        # dirty 判定里剔除，不会走到这。）
+        checks.append({"key": "dirty", "level": "warn",
+                       "label": "工作树有未提交修改 — 确认更新会覆盖这些改动"})
     else:
         checks.append({"key": "dirty", "level": "ok",
                        "label": "工作树干净 · 无未提交改动"})
@@ -285,6 +288,9 @@ def system_preflight(target: str = "origin/master") -> dict[str, Any]:
         "target_resolved": target_resolved,
         "checks": checks,
         "blocking": blocking,
+        # 工作树脏（真实改动；自动 churn 已剔除）。前端据此在确认时弹"强制覆盖"
+        # modal —— dirty 是 warn 不进 blocking，但仍需用户显式确认才覆盖。
+        "working_tree_dirty": cur.is_dirty,
         "requirements_diff": {
             "added": req_diff.added,
             "removed": req_diff.removed,
@@ -332,34 +338,3 @@ def system_init_git() -> dict[str, Any]:
         )
 
     return {"ok": True, "already_initialized": False, **asdict(result)}
-
-
-def _serialize_release_notes(result: release_notes_svc.ReleaseNotesResult) -> dict[str, Any]:
-    return {
-        "tag": result.tag,
-        "found": result.found,
-        "date": result.date,
-        "summary": result.summary,
-        "entries": [asdict(e) for e in result.entries],
-    }
-
-
-@router.get("/api/system/release_notes")
-def system_release_notes(tag: str) -> dict[str, Any]:
-    """读 release_notes.yaml，返回指定 tag 的结构化 release notes。
-
-    数据模型见 docs/release-notes-spec.md。tag 接受 `v0.6.0` 或 `0.6.0`。
-    yaml 缺该 tag → found=false，UI 退化到 CHANGELOG.md 链接占位。
-    """
-    return _serialize_release_notes(release_notes_svc.parse(tag))
-
-
-@router.get("/api/system/release_notes_all")
-def system_release_notes_all() -> dict[str, Any]:
-    """yaml 内全部 release notes（latest first）。modal 版本切换用。
-
-    yaml 不存在 / 全部损坏 → versions=[]，前端 fallback 到只显示当前版本。
-    payload 约 ~120KB（~20 版本），一次拉完，前端缓存在 modal 生命周期内。
-    """
-    versions = [_serialize_release_notes(r) for r in release_notes_svc.parse_all()]
-    return {"versions": versions}

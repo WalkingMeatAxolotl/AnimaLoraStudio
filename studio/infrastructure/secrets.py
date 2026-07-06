@@ -20,7 +20,7 @@ SENSITIVE_FIELDS: tuple[str, ...] = (
     "gelbooru.api_key",
     "danbooru.api_key",
     "huggingface.token",
-    "wandb.api_key",
+    "wandb.presets.*.api_key",
     "llm_tagger.presets.*.api_key",
     "modelscope.token",
 )
@@ -59,8 +59,14 @@ class HuggingFaceConfig(BaseModel):
     endpoint: str = ""
 
 
-class WandBConfig(BaseModel):
-    enabled: bool = False
+class WandBPresetConfig(BaseModel):
+    """一套 WandB 账号 + 上传策略预设（对齐 LLMPresetConfig 的预设模式）。
+
+    0.18 起 WandB 配置预设化：顶层 WandBConfig 只留 enabled + 预设切换，
+    账号（api_key/entity/base_url）和上传策略全部下沉到 preset，可整套切换。
+    """
+    id: str = "default"
+    label: str = "Default"
     api_key: str = ""
     project: str = "AnimaLoraStudio"
     entity: str = ""
@@ -84,7 +90,12 @@ class WandBConfig(BaseModel):
     upload_state_auto_policy: str = "last"
 
     @model_validator(mode="after")
-    def _normalize_values(self) -> "WandBConfig":
+    def _normalize_values(self) -> "WandBPresetConfig":
+        self.id = "".join(
+            ch if ch.isalnum() or ch in ("_", "-") else "_"
+            for ch in str(self.id or "").strip()
+        ).strip("_") or "default"
+        self.label = str(self.label or self.id).strip()
         if self.mode not in {"online", "offline", "disabled"}:
             self.mode = "online"
         self.sample_max_side = max(64, int(self.sample_max_side or 512))
@@ -99,11 +110,71 @@ class WandBConfig(BaseModel):
         return self
 
 
+class WandBConfig(BaseModel):
+    """全局 WandB：顶层只留总开关 + 当前预设指针，字段全在 preset 里。
+
+    老扁平 schema（enabled + 平铺字段）由 _migrate_legacy_schema 包成
+    id="default" 的单 preset。训练进程经 supervisor 注入 WANDB_* env 读
+    `active` 预设 —— secrets 不落任何 yaml。
+    """
+    enabled: bool = False
+    current_preset: str = "default"
+    presets: list[WandBPresetConfig] = Field(
+        default_factory=lambda: [WandBPresetConfig()]
+    )
+
+    @model_validator(mode="after")
+    def _normalize_values(self) -> "WandBConfig":
+        # id 去重保序 + 保底至少一个 preset + current 指向存在的 id
+        merged: list[WandBPresetConfig] = []
+        seen: set[str] = set()
+        for preset in self.presets:
+            if preset.id and preset.id not in seen:
+                merged.append(preset)
+                seen.add(preset.id)
+        if not merged:
+            merged = [WandBPresetConfig()]
+        self.presets = merged
+        if self.current_preset not in {p.id for p in self.presets}:
+            self.current_preset = self.presets[0].id
+        return self
+
+    @property
+    def active(self) -> WandBPresetConfig:
+        """当前选中的 preset；validator 保证至少有一个。"""
+        for preset in self.presets:
+            if preset.id == self.current_preset:
+                return preset
+        return self.presets[0]
+
+
 class ModelScopeConfig(BaseModel):
     token: str = ""
     # 魔搭社区（modelscope.cn）下载 token。公开模型不填也能下，私有 / 限速时需要。
     # 使用前需 pip install modelscope；下载时会优先找 MODELSCOPE_REPO_MAP 里的对应仓库，
     # 没有映射的模型自动回退 HuggingFace。
+
+
+class EvalMetricModelsConfig(BaseModel):
+    """LoRA eval metric model defaults.
+
+    Metric API callers may still pass `model_name` explicitly. Empty request
+    values fall back to these defaults so server-local ModelScope/HF cache paths
+    do not need to be repeated for every metric run.
+    """
+    clip_model_name: str = "openai/clip-vit-base-patch32"
+    dino_model_name: str = "facebook/dinov2-small"
+    ccip_model_name: str = "ccip-caformer-24-randaug-pruned"
+    # 启用哪些评估指标（Settings 复选框，见 eval_registry）。eval 只算勾选的；
+    # 默认保留现有三指标，anime 域新指标（ccip_i / tag_recall）默认关、需用户开。
+    enabled_metrics: list[str] = Field(
+        default_factory=lambda: ["clip_t", "clip_i", "dino_i"]
+    )
+    # baseline 对照：训练后评估额外出一组纯底模(lora_scale=0)同 prompt/seed 图，
+    # 各指标给出 Δ = checkpoint − baseline（解「绝对值难解读」）。每 task 一次。
+    # 评估统一在训练后跑（inline / checkpoint-trigger 已移除）；是否评估由每个
+    # version 训练配置的 eval_validation_enabled 决定。
+    eval_baseline_enabled: bool = True
 
 
 class DownloadConfig(BaseModel):
@@ -357,7 +428,6 @@ class WD14Config(BaseModel):
     model_ids: list[str] = Field(
         default_factory=lambda: list(DEFAULT_WD14_MODELS)
     )
-    local_dir: Optional[str] = None
     threshold_general: float = 0.35
     threshold_character: float = 0.85
     blacklist_tags: list[str] = Field(default_factory=list)
@@ -385,11 +455,6 @@ class CLTaggerConfig(BaseModel):
     model_id: str = "cella110n/cl_tagger"
     model_path: str = "cl_tagger_1_02/model.onnx"
     tag_mapping_path: str = "cl_tagger_1_02/tag_mapping.json"
-    local_dir: Optional[str] = None
-    # 每个 variant（label → 路径）各记一份自定义 local_dir：v1/v2 来自不同 repo、
-    # 落地目录不同，切版本时从这里还原对应目录，避免共用一个 local_dir 串台。
-    # 留空 = 该版本走自动下载目录（不固定路径，跟随 models_root）。
-    variant_local_dirs: dict[str, str] = Field(default_factory=dict)
     threshold_general: float = 0.35
     threshold_character: float = 0.6
     # CLTagger 模型输出 7 个 category：General / Character 走阈值过滤，其余 5 个
@@ -407,15 +472,18 @@ class CLTaggerConfig(BaseModel):
 
 
 class QueueConfig(BaseModel):
-    """队列调度策略（PP10.2）。
+    """队列调度策略（R-1 资源档位模型，docs/design/queue-resource-model-0.17.md）。
 
-    Studio supervisor 使用双槽位调度：TRAIN 槽跑训练 task，DATA 槽跑
-    数据准备 job（download / tag / reg_build）。download 永远与训练并行
-    （IO-only，不抢 GPU）；tag / reg_build 走 GPU，默认在训练时**推迟执行**
-    避免 OOM。把 `allow_gpu_during_train` 打开后才允许并行（用户自己确认
-    显存够）。
+    工作项分三档：exclusive（训练/正则 AI/出图/评估出图，底模级显存，全系统
+    同时只跑 1 个，永不并行）、light（打标/超分/正则构建/评估指标，数百 MB
+    小模型）、io（下载，恒放行）。
+
+    - `light_tasks_during_train`：exclusive 任务运行时是否允许 light 档并行。
+      默认开启——轻量任务只加载小模型。独占档不受此开关影响（老开关
+      `allow_gpu_during_train` 会连评估出图一起放行，是 OOM 隐患，已废弃；
+      语义变化故不迁移旧值）。
     """
-    allow_gpu_during_train: bool = False
+    light_tasks_during_train: bool = True
 
 
 class ModelsConfig(BaseModel):
@@ -516,6 +584,9 @@ class Secrets(BaseModel):
     huggingface: HuggingFaceConfig = Field(default_factory=HuggingFaceConfig)
     wandb: WandBConfig = Field(default_factory=WandBConfig)
     modelscope: ModelScopeConfig = Field(default_factory=ModelScopeConfig)
+    eval_metrics: EvalMetricModelsConfig = Field(
+        default_factory=EvalMetricModelsConfig
+    )
     # 旧的全局下载源（已退役为「迁移种子」）。不再有 UI 开关；新模型按类型在
     # download_sources 里各自选源。保留此字段仅为兼容旧 secrets.json：load 时把它
     # 的值种子填充到尚未设过的 download_sources 类型，避免老（尤其国内设了
@@ -632,6 +703,58 @@ def _apply_mask(node: Any, segs: list[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# WandB preset 导入导出（0.18 预设化）
+# ---------------------------------------------------------------------------
+
+
+def get_wandb_preset(preset_id: str) -> Optional["WandBPresetConfig"]:
+    """按 id 取 preset（**含真实 api_key**，绕过 mask）——只给显式导出端点用。"""
+    for preset in load().wandb.presets:
+        if preset.id == preset_id:
+            return preset
+    return None
+
+
+def import_wandb_preset(
+    data: Any, fallback_label: str = ""
+) -> tuple[Secrets, "WandBPresetConfig"]:
+    """导入一条 wandb preset：id 撞名自动加后缀，导入后设为当前选中。
+
+    - 兼容旧前端 JSON 导出格式 ``{kind, version, preset: {...}}``（自动解包）
+    - ``api_key == MASK`` 哨兵（旧客户端导出）按空处理；带真实 key 的备份文件
+      原样恢复
+    - 值非法时抛 pydantic ValidationError，由 caller 翻 400
+    """
+    if not isinstance(data, dict):
+        raise ValueError("preset data must be a mapping")
+    payload = dict(data)
+    inner = payload.get("preset")
+    if isinstance(inner, dict):
+        payload = dict(inner)
+    if str(payload.get("api_key") or "") == MASK:
+        payload["api_key"] = ""
+
+    label = str(payload.get("label") or fallback_label or "imported").strip() or "imported"
+    slug = "".join(
+        ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in label
+    ).strip("_") or "imported"
+
+    s = load()
+    used = {p.id for p in s.wandb.presets}
+    pid, idx = slug, 1
+    while pid in used:
+        idx += 1
+        pid = f"{slug}_{idx}"
+
+    preset = WandBPresetConfig(**{**payload, "id": pid, "label": label})
+    s.wandb.presets.append(preset)
+    s.wandb.current_preset = preset.id
+    new = Secrets.model_validate(s.model_dump())  # 重跑 validator（去重/回退保底）
+    save(new)
+    return new, preset
+
+
+# ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
 
@@ -659,6 +782,28 @@ def _migrate_legacy_schema(raw: dict[str, Any]) -> dict[str, Any]:
         # 新字段已显式设过 → 不覆盖（幂等）
         if "update_channel" not in sys_raw and sys_raw.get("show_dev_channel") is True:
             sys_raw["update_channel"] = "dev"
+
+    # 8. R-1 资源档位（0.17）：queue.allow_gpu_during_train 废弃。语义变化
+    #    （老开关连 eval_samples 等底模级任务一起放行，是 OOM 隐患；新开关
+    #    light_tasks_during_train 只辖轻量档且默认开），且 save() 全量落盘使
+    #    「显式 false」与「默认 false」不可分辨 —— 故不迁移旧值，直接丢弃。
+    q_raw = raw.get("queue")
+    if isinstance(q_raw, dict):
+        q_raw.pop("allow_gpu_during_train", None)
+
+    # 9. WandB 预设化（0.18）：老扁平 wandb {enabled, api_key, project, ...} →
+    #    {enabled, current_preset, presets: [{id: "default", ...}]}。enabled 留
+    #    顶层（总开关不随预设切换），其余字段整体下沉成 id="default" 的 preset。
+    #    幂等：已有 presets 键直接跳过。
+    wb_raw = raw.get("wandb")
+    if isinstance(wb_raw, dict) and "presets" not in wb_raw:
+        enabled = bool(wb_raw.pop("enabled", False))
+        preset = {**wb_raw, "id": "default", "label": "Default"}
+        raw["wandb"] = {
+            "enabled": enabled,
+            "current_preset": "default",
+            "presets": [preset],
+        }
 
     # 7. gelbooru 的图片入库设置搬到全局 download.*（这三个本被所有 booru 下载 /
     #    reg / 本地上传共用，不该挂在 gelbooru 下）。download 侧未显式设过才搬，幂等。

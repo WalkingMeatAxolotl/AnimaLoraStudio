@@ -6,3 +6,4 @@ from pydantic import BaseModel
 
 class UpdateRequest(BaseModel):
     target: str = "origin/master"  # ref / commit sha / origin/branch
+    force: bool = False            # True = 覆盖 dirty 工作树（用户已确认强制覆盖）

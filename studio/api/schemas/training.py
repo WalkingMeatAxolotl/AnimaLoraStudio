@@ -12,7 +12,6 @@ class Wd14Overrides(BaseModel):
     threshold_general: Optional[float] = None
     threshold_character: Optional[float] = None
     model_id: Optional[str] = None
-    local_dir: Optional[str] = None
     blacklist_tags: Optional[list[str]] = None
 
 
@@ -23,7 +22,6 @@ class CLTaggerOverrides(BaseModel):
     model_id: Optional[str] = None
     model_path: Optional[str] = None
     tag_mapping_path: Optional[str] = None
-    local_dir: Optional[str] = None
     add_copyright_tag: Optional[bool] = None
     add_meta_tag: Optional[bool] = None
     add_model_tag: Optional[bool] = None
@@ -59,7 +57,9 @@ class LLMTaggerOverrides(BaseModel):
 
 class TagJobRequest(BaseModel):
     tagger: str = "wd14"
-    output_format: str = "txt"                # "txt" | "json"
+    # 落盘格式跟着产物走，不再由请求指定（老客户端传 output_format 会被忽略）：
+    # LLM json preset 产出结构化 caption_json → .json；其余（本地打标 tag list /
+    # LLM text preset）→ .txt。已存在的 .json 仍按 .json 更新。
     # 已有 caption 文件时的策略："overwrite"（默认，覆盖）| "skip"（保留原文件）
     # | "append"（tag 级 merge + dedupe，写回原格式）。
     on_existing: str = "overwrite"
@@ -69,6 +69,10 @@ class TagJobRequest(BaseModel):
     # 触发词；空串 / None = 不启用。打标时作为第一个 tag prepend 到 caption；
     # 同时持久化到 version.trigger_word，后续 train 阶段从私有 yaml 读出。
     trigger_word: Optional[str] = None
+    # 打标范围："all"（默认，train 全部文件夹 + validation）| "validation"（只打
+    # held-out 验证集）|  某个 train 子文件夹名（如 "1_data"，只打那一个）。
+    # 手动加入的验证图原本没 caption，靠这个把验证集纳入打标。
+    scope: str = "all"
 
 
 class CaptionEdit(BaseModel):
@@ -142,6 +146,9 @@ class RegDeleteFilesRequest(BaseModel):
 class RegAiRequest(BaseModel):
     """先验生成请求 —— 不含 lora_configs，先验生成不带 LoRA。"""
     excluded_tags: list[str] = []
+    # 本次先验生成临时选用的底模（官方 variant key 或注册的本地 custom 路径）；
+    # None → 用 Settings 里 selected_anima。只换 transformer 权重。
+    base_model: Optional[str] = None
     negative_prompt: str = ""
     width: int = 1024
     height: int = 1024

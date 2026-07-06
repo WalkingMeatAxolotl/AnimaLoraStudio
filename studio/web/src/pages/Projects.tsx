@@ -8,6 +8,7 @@ import UploadProgressBar from '../components/UploadProgressBar'
 import VersionStatusBadge from '../components/VersionStatusBadge'
 import { useDialog } from '../components/Dialog'
 import { useToast } from '../components/Toast'
+import { useSelectedProject, useSelectedProjectSetter } from '../context/ProjectContext'
 import { useEventStream } from '../lib/useEventStream'
 import { useLocalStorageState } from '../lib/useLocalStorageState'
 import { useUploadProgress } from '../lib/useUploadProgress'
@@ -60,6 +61,8 @@ export default function ProjectsPage() {
   const { toast } = useToast()
   const { confirm } = useDialog()
   const uploadProgress = useUploadProgress()
+  const selectedProject = useSelectedProject()
+  const setSelectedProject = useSelectedProjectSetter()
 
   const refresh = async () => {
     try {
@@ -75,6 +78,15 @@ export default function ProjectsPage() {
 
   useEffect(() => { void refresh() }, [])
 
+  // 侧边栏的粘性"已选中项目"快照在项目被删（含清空回收站）后会变陈旧 ——
+  // 列表里已不存在就清掉，避免点侧栏步骤跳到 404。归档项目仍在列表里，不清。
+  useEffect(() => {
+    if (loading || !selectedProject) return
+    if (!items.some((p) => p.id === selectedProject.project.id)) {
+      setSelectedProject?.(null)
+    }
+  }, [items, loading, selectedProject, setSelectedProject])
+
   useEventStream((evt) => {
     if (evt.type === 'project_state_changed') void refresh()
   })
@@ -84,6 +96,7 @@ export default function ProjectsPage() {
     try {
       const p = await api.createProject({
         title: form.title,
+        slug: form.slug.trim() || undefined,
         note: form.note || undefined,
         initial_version_label: form.initial_version_label || 'v1',
       })
@@ -228,6 +241,7 @@ export default function ProjectsPage() {
       <PageHeader
         title={t('projects.title')}
         subtitle={t('projects.description')}
+        sticky
         actions={
           <>
             {/* btn 词汇与 Queue / Generate 页 header 统一：轻操作 ghost、
@@ -605,8 +619,21 @@ function ProjectCard({
 
 interface NewProjectForm {
   title: string
+  slug: string
   note: string
   initial_version_label: string
+}
+
+// 后端 slugify 的前端镜像：仅用于「留空时」实时预览最终 slug，让用户感知
+// 全中文标题会塌成 project。真正的归一化仍在后端做。
+const SLUG_RE = /^[a-z0-9-]+$/
+function slugPreview(title: string): string {
+  return (
+    title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'project'
+  )
 }
 
 function NewProjectDialog({
@@ -621,13 +648,18 @@ function NewProjectDialog({
   const { t } = useTranslation()
   const [form, setForm] = useState<NewProjectForm>({
     title: '',
+    slug: '',
     note: '',
     initial_version_label: 'v1',
   })
 
+  const slugRaw = form.slug.trim()
+  const slugValid = slugRaw === '' || SLUG_RE.test(slugRaw)
+  const effectiveSlug = slugRaw || slugPreview(form.title)
+
   const submit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!form.title.trim()) return
+    if (!form.title.trim() || !slugValid) return
     onSubmit(form)
   }
 
@@ -640,7 +672,7 @@ function NewProjectDialog({
         onClick={(e) => e.stopPropagation()}
         onSubmit={submit}
         className="bg-surface border border-dim rounded-xl p-7 flex flex-col gap-[18px] shadow-lg"
-        style={{ width: '90%', maxWidth: 440 }}
+        style={{ width: '90%', maxWidth: 660 }}
       >
         <h2 className="m-0 text-xl font-semibold">{t('projects.newProject')}</h2>
 
@@ -652,6 +684,23 @@ function NewProjectDialog({
             onChange={(e) => setForm({ ...form, title: e.target.value })}
             placeholder={t('projects.titlePlaceholder')}
           />
+        </FieldLabel>
+
+        <FieldLabel label={t('projects.slugLabel')} hint="slug（可选）">
+          <input
+            className="input input-mono"
+            value={form.slug}
+            onChange={(e) => setForm({ ...form, slug: e.target.value })}
+            placeholder={t('projects.slugPlaceholder')}
+            aria-invalid={!slugValid}
+          />
+          {!slugValid ? (
+            <span className="text-xs text-err">{t('projects.slugInvalid')}</span>
+          ) : (
+            <span className="text-xs text-fg-tertiary font-mono">
+              {t('projects.slugPreviewHint', { slug: effectiveSlug })}
+            </span>
+          )}
         </FieldLabel>
 
         <FieldLabel label={t('projects.versionLabel')} hint="initial_version_label">
@@ -679,7 +728,7 @@ function NewProjectDialog({
           <button
             type="submit"
             className="btn btn-primary"
-            disabled={busy || !form.title.trim()}
+            disabled={busy || !form.title.trim() || !slugValid}
           >
             {busy ? t('projects.creating') : t('common.create')}
           </button>
@@ -722,7 +771,7 @@ function EditProjectDialog({
         onClick={(e) => e.stopPropagation()}
         onSubmit={submit}
         className="bg-surface border border-dim rounded-xl p-7 flex flex-col gap-[18px] shadow-lg"
-        style={{ width: '90%', maxWidth: 440 }}
+        style={{ width: '90%', maxWidth: 660 }}
       >
         <h2 className="m-0 text-xl font-semibold">{t('projects.editProject')}</h2>
 
@@ -736,6 +785,16 @@ function EditProjectDialog({
           />
         </FieldLabel>
 
+        <FieldLabel label={t('projects.slugLabel')} hint="slug">
+          {/* slug 是磁盘路径 / LoRA 输出名锚点，创建后不可改 */}
+          <input
+            className="input input-mono"
+            value={project.slug}
+            disabled
+            readOnly
+          />
+        </FieldLabel>
+
         <FieldLabel label={t('common.notes')} hint="note（可选）">
           <textarea
             className="input"
@@ -746,12 +805,6 @@ function EditProjectDialog({
             style={{ resize: 'vertical' }}
           />
         </FieldLabel>
-
-        <p className="m-0 text-xs text-fg-tertiary">
-          <span className="font-mono">{project.slug}</span>
-          {' · '}
-          {t('projects.editSlugNote')}
-        </p>
 
         <div className="flex gap-2 justify-end">
           <button type="button" className="btn btn-secondary" onClick={onCancel}>{t('common.cancel')}</button>

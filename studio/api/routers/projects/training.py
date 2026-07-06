@@ -32,6 +32,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import asdict
 from typing import Any, Optional
@@ -43,6 +44,7 @@ from ...deps import _resolve_anima_model_paths
 from ...errors import _safe_join_or_400
 from ..logs import read_task_log
 from ...responses import _thumb_response
+from ...schemas.queue import ScheduleTrainingRequest
 from ...schemas.training import (
     BatchOp,
     CaptionEdit,
@@ -83,6 +85,10 @@ from ....services.dataset import tagedit
 from ....services.tagging.base import VALID_TAGGER_NAMES
 
 router = APIRouter()
+
+# 打标 scope 取单个 train 文件夹时的合法名（Kohya 风格，挡 path traversal），
+# 与 dataset.curation._FOLDER_PATTERN 同规则。
+_TAG_SCOPE_FOLDER_RE = re.compile(r"^([0-9]+_)?[A-Za-z][A-Za-z0-9_-]*$")
 logger = logging.getLogger(__name__)
 
 
@@ -99,15 +105,17 @@ def start_tag(pid: int, vid: int, body: TagJobRequest) -> dict[str, Any]:
             code="tag.tagger_invalid", details={"name": body.tagger},
             http_status=400,
         )
-    if body.output_format not in {"txt", "json"}:
-        raise ValidationError(
-            "Output format must be txt or json",
-            code="tag.output_format_invalid", http_status=400,
-        )
     if body.on_existing not in {"overwrite", "skip", "append"}:
         raise ValidationError(
             "On-existing mode must be overwrite, skip, or append",
             code="tag.on_existing_invalid", http_status=400,
+        )
+    # 打标范围："all" / "validation" / 单个 train 文件夹名。后两者直接拼进路径，
+    # 必须挡 path traversal —— 文件夹名走 Kohya 规则（可选 N_ 前缀 + 字母开头）。
+    if body.scope not in {"all", "validation"} and not _TAG_SCOPE_FOLDER_RE.fullmatch(body.scope):
+        raise ValidationError(
+            f'Invalid tagging scope: "{body.scope}"',
+            code="tag.scope_invalid", details={"scope": body.scope}, http_status=400,
         )
     _, v, _ = _version_train_dir_or_404(pid, vid)
 
@@ -119,13 +127,15 @@ def start_tag(pid: int, vid: int, body: TagJobRequest) -> dict[str, Any]:
     params: dict[str, Any] = {
         "tagger": body.tagger,
         "version_id": vid,
-        "output_format": body.output_format,
     }
     # 默认值 "overwrite" 不写入 params（worker 端默认就是 overwrite），减小 payload。
     if body.on_existing != "overwrite":
         params["on_existing"] = body.on_existing
     if trigger_word:
         params["trigger_word"] = trigger_word
+    # "all" 是 worker 默认，不写入减小 payload。
+    if body.scope != "all":
+        params["scope"] = body.scope
     # 通用：按 tagger 名取 `<name>_overrides` 字段并落到 params 同名键。
     # 仅保留用户实际填写的字段；空 dict 也不写。
     overrides_field = getattr(body, f"{body.tagger}_overrides", None)
@@ -430,7 +440,7 @@ def get_reg_caption(pid: int, vid: int, path: str) -> dict[str, Any]:
 @router.post("/api/projects/{pid}/versions/{vid}/reg/generate-prior")
 def reg_generate_prior(pid: int, vid: int, body: RegAiRequest) -> dict[str, Any]:
     """启动先验生成 task —— base 模型给每张 train 图的 tag 反向出对照图。"""
-    model_paths = _resolve_anima_model_paths()
+    model_paths = _resolve_anima_model_paths(body.base_model)
     _, _, vdir = _version_dir_or_404(pid, vid)
     train = vdir / "train"
     has_image = train.exists() and any(
@@ -770,12 +780,17 @@ def save_version_config_as_preset_endpoint(
 
 
 @router.post("/api/projects/{pid}/versions/{vid}/queue")
-def enqueue_version_training(pid: int, vid: int) -> dict[str, Any]:
+def enqueue_version_training(
+    pid: int, vid: int, body: Optional[ScheduleTrainingRequest] = None,
+) -> dict[str, Any]:
     """PP6.3 — 把 version 入队训练。
 
     校验：
     - version 已配置训练参数（version_config 存在）
-    - 该 version 没有 active task（pending / running）
+    - 该 version 没有 active task（pending / running / scheduled）
+
+    0.17 P-B：body 带 scheduled_at（unix 秒）→ task 建成 scheduled，到点由
+    supervisor 提升为 pending；不带 body / 不带该字段 → 立即 pending（原行为）。
     """
     project, ver = _project_and_version_or_404(pid, vid)
     if not version_config.has_version_config(project, ver):
@@ -784,12 +799,15 @@ def enqueue_version_training(pid: int, vid: int) -> dict[str, Any]:
             code="version.config_missing", http_status=400,
         )
     cfg_path = version_config.version_config_path(project, ver)
+    scheduled_at = body.scheduled_at if body else None
 
     with db.connection_for() as conn:
-        # 该 version 当前是否已有 active task
+        # 该 version 当前是否已有 active GPU task（R-5：台账合并后 tasks 也装
+        # 数据作业，pending 打标不该挡训练入队——只查 GPU 类型）
         active = conn.execute(
             "SELECT id, status FROM tasks "
-            "WHERE version_id = ? AND status IN ('pending', 'running') "
+            "WHERE version_id = ? AND status IN ('pending', 'running', 'scheduled') "
+            "AND COALESCE(task_type, 'train') IN ('train', 'reg_ai', 'generate') "
             "LIMIT 1",
             (vid,),
         ).fetchone()
@@ -806,14 +824,16 @@ def enqueue_version_training(pid: int, vid: int) -> dict[str, Any]:
         label = ver["label"]
         task_name = f"{slug}_{label}"
         config_name = ver["config_name"] or f"proj_{pid}_{label}"  # informational
+        status = "scheduled" if scheduled_at is not None else "pending"
         # ADR-0009 PR-1 C6: 同 db.create_task — 存 ContextVar trace_id
         from studio.infrastructure.logging import get_trace_id, new_trace_id
         req_tid = get_trace_id() or f"bg-{new_trace_id()}"
         cur = conn.execute(
             "INSERT INTO tasks(name, config_name, status, priority, created_at, "
-            "project_id, version_id, config_path, request_trace_id) "
-            "VALUES (?, ?, 'pending', 0, ?, ?, ?, ?, ?)",
-            (task_name, config_name, time.time(), pid, vid, str(cfg_path), req_tid),
+            "project_id, version_id, config_path, request_trace_id, scheduled_at) "
+            "VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?)",
+            (task_name, config_name, status, time.time(), pid, vid,
+             str(cfg_path), req_tid, scheduled_at),
         )
         tid = int(cur.lastrowid)
         conn.commit()
@@ -823,7 +843,7 @@ def enqueue_version_training(pid: int, vid: int) -> dict[str, Any]:
     bus.publish({
         "type": "task_state_changed",
         "task_id": tid,
-        "status": "pending",
+        "status": status,
     })
     return task or {}
 
@@ -838,7 +858,7 @@ def version_thumb(
     name: str = "",
     size: int = 256,
 ) -> FileResponse:
-    if bucket not in {"train", "reg", "samples"}:
+    if bucket not in {"train", "reg", "samples", "validation"}:
         raise InvalidPathError("Invalid path", code="path.invalid")
     with db.connection_for() as conn:
         v = versions.get_version(conn, vid)
@@ -848,7 +868,7 @@ def version_thumb(
             "Version not found", code="version.not_found", details={"id": vid},
         )
     vdir = versions.version_dir(p["id"], p["slug"], v["label"]) / bucket
-    if bucket in {"train", "reg"}:
+    if bucket in {"train", "reg", "validation"}:
         if not folder:
             raise InvalidPathError("Invalid path", code="path.invalid")
         f = _safe_join_or_400(vdir, folder, name)

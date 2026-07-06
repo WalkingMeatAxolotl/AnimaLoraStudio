@@ -30,7 +30,26 @@ const PHASE_TO_STEP_KEY: Record<VersionPhase, string> = {
   regularizing:  'reg',
   ready:         'train',
 }
-import { useProjectCtx } from '../context/ProjectContext'
+import { useProjectCtx, useSelectedProject } from '../context/ProjectContext'
+import type { ProjectCtxValue } from '../context/ProjectContext'
+
+/** 侧边栏项目区数据源：在项目页内用 live ProjectContext（带版本管理回调，
+ *  interactive=true）；离开后回退到只读粘性快照（interactive=false）。两者都
+ *  没有 → null（不渲染项目区）。 */
+type ProjectView =
+  | (ProjectCtxValue & { interactive: true })
+  | {
+      project: ProjectCtxValue['project']
+      activeVersion: ProjectCtxValue['activeVersion']
+      interactive: false
+    }
+function useProjectView(): ProjectView | null {
+  const live = useProjectCtx()
+  const sticky = useSelectedProject()
+  if (live) return { ...live, interactive: true }
+  if (sticky) return { project: sticky.project, activeVersion: sticky.activeVersion, interactive: false }
+  return null
+}
 
 // ── icons ──────────────────────────────────────────────────────────────────
 const I = {
@@ -149,10 +168,10 @@ function NavButton({ onClick, label, icon, active, collapsed, prominent = false 
 
 // ── project info block (项目名 + active version label，放最上) ──────────────
 function ProjectInfoBlock({ collapsed }: { collapsed: boolean }) {
-  const ctx = useProjectCtx()
-  if (!ctx) return null
+  const view = useProjectView()
+  if (!view) return null
   if (collapsed) return null
-  const { project } = ctx
+  const { project } = view
   return (
     <div className="px-3 py-1.5">
       <div className="font-semibold text-fg-primary text-sm overflow-hidden text-ellipsis whitespace-nowrap" title={project.title}>
@@ -168,11 +187,26 @@ function ProjectInfoBlock({ collapsed }: { collapsed: boolean }) {
 // ── version picker block (header "训练 vX [+/-]" 始终显示，展开后下方再渲染完整 list) ─
 function VersionPickerBlock({ collapsed }: { collapsed: boolean }) {
   const { t } = useTranslation()
-  const ctx = useProjectCtx()
+  const view = useProjectView()
   const [expanded, setExpanded] = useState(false)
-  if (!ctx) return null
+  if (!view) return null
   if (collapsed) return null
-  const { project, activeVersion, onSelectVersion, onCreateVersion, onExportTrain, onDeleteVersion, exporting } = ctx
+  const { project, activeVersion } = view
+
+  // 离开项目页（只读粘性快照）：版本增删 / 导出需要 live Layout，此处不可用 ——
+  // 只显示当前版本只读头；要管理版本点任意步骤回到项目内。
+  if (!view.interactive) {
+    return (
+      <div className="flex items-center gap-2.5 rounded-md py-2 px-3 text-sm text-fg-secondary">
+        <span className="w-5 h-5 grid place-items-center text-fg-tertiary shrink-0">{I.train}</span>
+        <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
+          {t('sidebar.trainingVersionPrefix')} <span className="font-mono text-fg-primary">{activeVersion?.label ?? '—'}</span>
+        </span>
+      </div>
+    )
+  }
+
+  const { onSelectVersion, onCreateVersion, onExportTrain, onDeleteVersion, exporting } = view
 
   const header = (
     <div className="flex items-center gap-2.5 rounded-md py-2 px-3 text-sm text-fg-secondary hover:bg-overlay transition-colors">
@@ -253,12 +287,14 @@ function VersionPickerBlock({ collapsed }: { collapsed: boolean }) {
 }
 
 // ── project stepper nav ────────────────────────────────────────────────────
-function ProjectStepperNav({ pid, activeVid, currentStep, version, collapsed }: {
+function ProjectStepperNav({ pid, activeVid, currentStep, version, collapsed, inRoute }: {
   pid: string
   activeVid: string | null
   currentStep: string | null
   version: Version | null
   collapsed: boolean
+  /** 是否当前正处于该项目的路由内（决定"概览"是否高亮；离开项目页只导航不高亮）。 */
+  inRoute: boolean
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -277,7 +313,7 @@ function ProjectStepperNav({ pid, activeVid, currentStep, version, collapsed }: 
     { key: 'train',      labelKey: 'nav.train',      idx: '6', icon: I.train,    scope: 'version' as const },
   ]
 
-  const overviewActive = currentStep === null
+  const overviewActive = inRoute && currentStep === null
   // ADR-0007 §11.5 cursor 派生：cursor 之前的 phase = done（仅 version 级）。
   // 项目级 ①② 不参与 cursor、不显示完成态。
   const cursorPhase: VersionPhase = (version?.phase as VersionPhase | undefined) ?? 'curating'
@@ -467,19 +503,24 @@ const SIDEBAR_KEY = 'studio.sidebar.expanded'
 export default function Sidebar() {
   const { t } = useTranslation()
   const location = useLocation()
-  const ctx = useProjectCtx()
+  const view = useProjectView()
   const settingsDrawer = useSettingsDrawer()
 
-  const pid = location.pathname.match(/^\/projects\/([^/]+)/)?.[1] ?? null
+  // 路由内的 pid（用于步骤高亮）；离开项目页后回退到粘性快照的项目 id，让项目区
+  // 跨页保留用于导航。
+  const routePid = location.pathname.match(/^\/projects\/([^/]+)/)?.[1] ?? null
   const urlVid = location.pathname.match(/\/v\/([^/]+)/)?.[1] ?? null
   const stepMatch = location.pathname.match(/\/v\/[^/]+\/([^/]+)$/)
   // ADR 0010: preprocess 从 project scope 移到 version scope；project scope 只剩 download
   const projectScopeStep = location.pathname.match(/^\/projects\/[^/]+\/(download)$/)?.[1] ?? null
   const currentStep = stepMatch?.[1] ?? projectScopeStep
 
-  const activeVid = ctx?.activeVersion?.id?.toString() ?? urlVid
+  const inRoute = routePid !== null
+  const pid = routePid ?? view?.project.id?.toString() ?? null
+  const activeVid = view?.activeVersion?.id?.toString() ?? urlVid
 
-  const inProject = pid !== null
+  // 有项目（路由内 live 或粘性快照）就展示项目区
+  const inProject = view !== null && pid !== null
 
   const [expandedOverride, setExpandedOverride] = useState<boolean | null>(() => {
     try {
@@ -515,14 +556,14 @@ export default function Sidebar() {
       </div>
 
       <nav className={`flex-1 flex flex-col gap-0.5 overflow-hidden ${collapsed ? 'px-2 py-2.5' : 'px-2 py-3.5'}`}>
-        <NavItem to="/" label={t('nav.projects')} icon={I.folder} active={!inProject && location.pathname === '/'} collapsed={collapsed} prominent />
+        <NavItem to="/" label={t('nav.projects')} icon={I.folder} active={location.pathname === '/'} collapsed={collapsed} prominent />
 
         {/* 当前项目下的全部内容（概览 + ①② + VersionPanel + ③-⑦）夹在 项目 / 队列 之间。
             sub-nav 性质，缩进表达从属（折叠态不缩进）。
             VersionPanel 由 ProjectStepperNav 在 project→version scope 切换点插入。 */}
         {inProject && pid && (
           <div className={`flex flex-col gap-0.5 ${collapsed ? '' : 'ml-3'}`}>
-            <ProjectStepperNav pid={pid} activeVid={activeVid} currentStep={currentStep} version={ctx?.activeVersion ?? null} collapsed={collapsed} />
+            <ProjectStepperNav pid={pid} activeVid={activeVid} currentStep={currentStep} version={view?.activeVersion ?? null} collapsed={collapsed} inRoute={inRoute} />
           </div>
         )}
 

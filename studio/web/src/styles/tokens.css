@@ -206,11 +206,20 @@ select option:checked {
 .btn-secondary:hover { background: var(--bg-overlay); border-color: var(--border-strong); }
 .btn-ghost { background: transparent; color: var(--fg-secondary); }
 .btn-ghost:hover { background: var(--bg-overlay); color: var(--fg-primary); }
-.btn-danger { background: var(--err); color: white; border-color: var(--err); }
-.btn-danger:hover { filter: brightness(1.08); }
-.btn-warn { background: var(--warn); color: white; border-color: var(--warn); }
-.btn-warn:hover { filter: brightness(1.08); }
+/* 警示/危险按钮走全 app 统一的 soft 语言（soft 底 + 色字 + 色边，同 badge-warn /
+   bg-err-soft 系）；hover 实心化给确认前的强提示。原实心白字版和页面语言脱节。 */
+.btn-danger { background: var(--err-soft); color: var(--err); border-color: var(--err); }
+.btn-danger:hover { background: var(--err); color: white; }
+.btn-warn { background: var(--warn-soft); color: var(--warn); border-color: var(--warn); }
+.btn-warn:hover { background: var(--warn); color: white; }
 .btn-sm { padding: 4px 10px; font-size: var(--t-sm); }
+/* 禁用态：半透明 + not-allowed，hover 不再高亮/提亮（此前无 :disabled 规则，禁用看不出来）。 */
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-primary:disabled:hover { background: var(--accent); }
+.btn-ghost:disabled:hover { background: transparent; color: var(--fg-secondary); }
+.btn-secondary:disabled:hover { background: var(--bg-surface); border-color: var(--border-default); }
+.btn-danger:disabled:hover { background: var(--err-soft); color: var(--err); }
+.btn-warn:disabled:hover { background: var(--warn-soft); color: var(--warn); }
 
 .card {
   background: var(--bg-surface);

@@ -11,7 +11,7 @@
  */
 import type { TFunction } from 'i18next'
 import { Trans, useTranslation } from 'react-i18next'
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { LLMPreset } from '../api/client'
 import LLMMessagesEditor from './LLMMessagesEditor'
 
@@ -317,10 +317,10 @@ function ConnectionSection({
             />
           )}
         >
-          <input
+          <BufferedInput
             type="text"
             value={preset.base_url}
-            onChange={(e) => onUpdate('base_url', e.target.value)}
+            onCommit={(v) => onUpdate('base_url', v)}
             placeholder="https://api.openai.com/v1"
             style={inputStyle}
             onFocus={(e) => e.currentTarget.style.boxShadow = '0 0 0 3px var(--accent-soft)'}
@@ -360,10 +360,10 @@ function ConnectionSection({
                 ))}
               </select>
             ) : (
-              <input
+              <BufferedInput
                 type="text"
                 value={preset.model}
-                onChange={(e) => onUpdate('model', e.target.value)}
+                onCommit={(v) => onUpdate('model', v)}
                 placeholder={t('llmWorkspace.modelPlaceholder')}
                 style={{ ...inputStyle, paddingRight: 130 }}
               />
@@ -469,49 +469,49 @@ function SamplingSection({ preset, onUpdate, bottomBorder }: {
         </Field>
         <Row2>
           <Field label="Timeout" optional="s">
-            <input
+            <BufferedInput
               type="number" min={5} max={600}
               value={preset.timeout}
-              onChange={(e) => onUpdate('timeout', Math.max(5, Number(e.target.value) || 5))}
+              onCommit={(v) => onUpdate('timeout', Math.max(5, Number(v) || 5))}
               style={inputStyle}
             />
           </Field>
           <Field label="Max retries">
-            <input
+            <BufferedInput
               type="number" min={1} max={10}
               value={preset.max_retries}
-              onChange={(e) => onUpdate('max_retries', Math.max(1, Number(e.target.value) || 1))}
+              onCommit={(v) => onUpdate('max_retries', Math.max(1, Number(v) || 1))}
               style={inputStyle}
             />
           </Field>
         </Row2>
         <Row2>
           <Field label="Concurrency" optional="requests">
-            <input
+            <BufferedInput
               type="number" min={1} max={8}
               value={preset.concurrency}
-              onChange={(e) => onUpdate('concurrency',
-                Math.max(1, Math.min(8, Number(e.target.value) || 1)))}
+              onCommit={(v) => onUpdate('concurrency',
+                Math.max(1, Math.min(8, Number(v) || 1)))}
               style={inputStyle}
             />
           </Field>
           <Field label="Max/min" optional="0 = no limit">
-            <input
+            <BufferedInput
               type="number" min={0} max={3600}
               value={preset.max_requests_per_minute}
-              onChange={(e) => onUpdate('max_requests_per_minute',
-                Math.max(0, Math.min(3600, Math.round(Number(e.target.value) || 0))))}
+              onCommit={(v) => onUpdate('max_requests_per_minute',
+                Math.max(0, Math.min(3600, Math.round(Number(v) || 0))))}
               style={inputStyle}
             />
           </Field>
         </Row2>
         <Row2>
           <Field label="Requests/sec" optional="0 = no limit">
-            <input
+            <BufferedInput
               type="number" min={0} max={60} step={0.1}
               value={preset.requests_per_second}
-              onChange={(e) => onUpdate('requests_per_second',
-                Math.max(0, Math.min(60, Number(e.target.value) || 0)))}
+              onCommit={(v) => onUpdate('requests_per_second',
+                Math.max(0, Math.min(60, Number(v) || 0)))}
               style={inputStyle}
             />
           </Field>
@@ -538,20 +538,20 @@ function ImageSection({ preset, onUpdate, bottomBorder }: {
         </Field>
         <Row2>
           <Field label="JPEG quality">
-            <input
+            <BufferedInput
               type="number" min={1} max={100}
               value={preset.jpeg_quality}
-              onChange={(e) => onUpdate('jpeg_quality',
-                Math.max(1, Math.min(100, Number(e.target.value) || 85)))}
+              onCommit={(v) => onUpdate('jpeg_quality',
+                Math.max(1, Math.min(100, Number(v) || 85)))}
               style={inputStyle}
             />
           </Field>
           <Field label="Max size" optional="MB">
-            <input
+            <BufferedInput
               type="number" min={0.1} max={25} step={0.1}
               value={preset.max_image_mb}
-              onChange={(e) => onUpdate('max_image_mb',
-                Math.max(0.1, Number(e.target.value) || 5))}
+              onCommit={(v) => onUpdate('max_image_mb',
+                Math.max(0.1, Number(v) || 5))}
               style={inputStyle}
             />
           </Field>
@@ -752,7 +752,8 @@ function Step({ children }: { children: React.ReactNode }) {
   )
 }
 
-function Caption({ children }: { children: React.ReactNode }) {
+// 导出给 WandBWorkspace 复用（同款预设工作区骨架）
+export function Caption({ children }: { children: React.ReactNode }) {
   return (
     <span style={{
       fontFamily: 'var(--font-mono)', fontSize: 'var(--t-2xs)',
@@ -889,7 +890,8 @@ function ChipButton({ children, onClick, disabled, active }: {
   )
 }
 
-function PBtn({ children, onClick, variant, title }: {
+// 导出给 WandBWorkspace 复用（同款预设工作区骨架）
+export function PBtn({ children, onClick, variant, title }: {
   children: React.ReactNode
   onClick?: () => void
   variant?: 'default' | 'primary' | 'danger'
@@ -987,20 +989,34 @@ function SliderRow({ value, min, max, step, onChange, integer }: {
   integer?: boolean
 }) {
   const clamp = (v: number) => Math.max(min, Math.min(max, v))
+  // 本地缓冲：range 拖动 / number 输入只更新本地显示，松手或失焦才上抛 onChange。
+  // 外部 value（落盘后回流）变化时同步本地。range 与 number 共享同一 local。
+  const [local, setLocal] = useState(value)
+  useEffect(() => {
+    setLocal(value)
+  }, [value])
+  const commit = (raw: number) => {
+    const c = clamp(raw)
+    if (c !== value) onChange(c)
+  }
   return (
     <div className="grid items-center" style={{ gridTemplateColumns: '1fr 64px', gap: 10 }}>
       <input
         type="range"
         min={min} max={max} step={step ?? 1}
-        value={value}
-        onChange={(e) => onChange(clamp(Number(e.target.value)))}
+        value={local}
+        onChange={(e) => setLocal(clamp(Number(e.target.value)))}
+        onPointerUp={(e) => commit(Number(e.currentTarget.value))}
+        onKeyUp={(e) => commit(Number(e.currentTarget.value))}
         style={{ width: '100%', accentColor: 'var(--accent)' }}
       />
       <input
         type="number"
         min={min} max={max} step={step ?? 1}
-        value={integer ? Math.round(value) : value}
-        onChange={(e) => onChange(clamp(Number(e.target.value)))}
+        value={integer ? Math.round(local) : local}
+        onChange={(e) => setLocal(Number(e.target.value))}
+        onBlur={(e) => commit(Number(e.currentTarget.value))}
+        onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
         style={{
           background: 'var(--bg-sunken)',
           border: '1px solid var(--border-subtle)',
@@ -1024,18 +1040,64 @@ function SensitiveInput({ value, serverValue, onChange }: {
   onChange: (v: string) => void
 }) {
   const { t } = useTranslation()
-  const masked = value === MASK
+  // 本地缓冲 + 失焦提交：逐字只更新本地，blur/Enter 才上抛（instant-apply 下避免逐字 PUT）。
+  const [localValue, setLocalValue] = useState(value)
+  useEffect(() => {
+    setLocalValue(value)
+  }, [value])
+  const masked = localValue === MASK
+  const handleBlur = () => {
+    if (localValue !== value) onChange(localValue)
+  }
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') e.currentTarget.blur()
+  }
   return (
     <input
       type="password"
-      value={masked ? '' : value}
+      value={masked ? '' : localValue}
       placeholder={serverValue === MASK ? t('llmWorkspace.secretSavedPlaceholder') : ''}
-      onChange={(e) => onChange(e.target.value || MASK)}
+      onChange={(e) => setLocalValue(e.target.value || MASK)}
+      onBlur={handleBlur}
+      onKeyDown={handleKeyDown}
       autoComplete="new-password"
       data-lpignore="true"
       data-1p-ignore
       data-form-type="other"
       style={inputStyle}
+    />
+  )
+}
+
+// 文本 / 数字通用的本地缓冲输入：逐字只更新本地 state，失焦(onBlur)或 Enter 才把
+// 原始字符串交给 onCommit（调用方在 onCommit 内套用原有的 Number()/clamp/取整逻辑）。
+// instant-apply 重构下用来把"每个字符上抛父"压成"失焦提交一次"。
+type BufferedInputProps = Omit<
+  React.InputHTMLAttributes<HTMLInputElement>,
+  'value' | 'onChange'
+> & {
+  value: string | number
+  onCommit: (raw: string) => void
+}
+
+function BufferedInput({ value, onCommit, onBlur, onKeyDown, ...rest }: BufferedInputProps) {
+  const [local, setLocal] = useState(String(value))
+  useEffect(() => {
+    setLocal(String(value))
+  }, [value])
+  return (
+    <input
+      {...rest}
+      value={local}
+      onChange={(e) => setLocal(e.target.value)}
+      onBlur={(e) => {
+        if (local !== String(value)) onCommit(local)
+        onBlur?.(e)
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur()
+        onKeyDown?.(e)
+      }}
     />
   )
 }

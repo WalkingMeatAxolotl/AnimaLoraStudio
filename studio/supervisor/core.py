@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from .. import db, secrets as _secrets
+from ..services import eval_auto, eval_validation
 from ..services.projects import jobs as project_jobs
 from ..infrastructure.log_tail import LogTailer, MonitorStatePoller
 from ..paths import (
@@ -48,9 +49,13 @@ from ..services.inference.daemon import (
     STATE_STOPPED as _DAEMON_STOPPED,
     get_daemon,
 )
+from .resources import (
+    RESOURCE_EXCLUSIVE,
+    RESOURCE_LIGHT,
+    job_resource_class,
+)
 from .cmd_builder import (
     _EVENT_MARKER,
-    GPU_BOUND_JOB_KINDS,
     CmdBuilder,
     EventCallback,
     JobCmdBuilder,
@@ -139,6 +144,11 @@ class Supervisor:
         self._daemon_state_poller: Optional[MonitorStatePoller] = None
         self._daemon_cancel_pending: bool = False
         self._daemon_listener_registered = False
+        # 0.17 item1：generate task 走 daemon 无 run.log → LogTab 空。派活时开该 task
+        # 的 run.log，把 daemon 在其运行期间的日志落盘 + emit task_log_appended（daemon
+        # 串行跑一个，归属清晰）；finalize 时关。log 线程与 supervisor 线程都碰它，
+        # 一律在 _daemon_lock 下访问。
+        self._daemon_log_fp: Optional[Any] = None
 
     # ------------------------------------------------------------------ 控制
     def start(self) -> None:
@@ -170,7 +180,7 @@ class Supervisor:
         return None
 
     def cancel(self, task_id: int) -> bool:
-        """取消 task：pending → status=canceled；running → 异步发信号立即返回。
+        """取消 task：pending/scheduled → status=canceled；running → 异步发信号立即返回。
 
         ADR 0006 PR-2：paused task 也可被取消，状态从 paused 直接改 canceled。
         ADR Addendum 2：恢复点文件保留（canceled 之后仍可 resume），只清
@@ -184,7 +194,7 @@ class Supervisor:
             task = db.get_task(conn, task_id)
             if not task:
                 return False
-            if task["status"] == "pending":
+            if task["status"] in ("pending", "scheduled"):
                 db.update_task(
                     conn, task_id, status="canceled", finished_at=time.time()
                 )
@@ -209,7 +219,12 @@ class Supervisor:
             )
             return True
         if task["status"] == "running":
-            slot = self._find_slot(kind="task", id=task_id)
+            # R-5：台账合并后 running 的可能是数据作业（DATA 槽 kind="job"）——
+            # 统一从这个入口取消，SIGTERM 语义同 cancel_job。
+            slot = (
+                self._find_slot(kind="task", id=task_id)
+                or self._find_slot(kind="job", id=task_id)
+            )
             if slot is not None:
                 self._signal_terminate_async(slot)
                 return True
@@ -277,32 +292,6 @@ class Supervisor:
         self._signal_pause_async(slot)
         return True, ""
 
-    def cancel_job(self, job_id: int) -> bool:
-        """取消 project_job：pending → canceled；running → 异步发信号立即返回。"""
-        with db.connection_for(self._db_path) as conn:
-            job = project_jobs.get_job(conn, job_id)
-            if not job:
-                return False
-            if job["status"] == "pending":
-                project_jobs.mark_canceled(conn, job_id)
-                self._on_event(
-                    {
-                        "type": "job_state_changed",
-                        "job_id": job_id,
-                        "project_id": job["project_id"],
-                        "version_id": job.get("version_id"),
-                        "kind": job["kind"],
-                        "status": "canceled",
-                    }
-                )
-                return True
-        if job["status"] == "running":
-            slot = self._find_slot(kind="job", id=job_id)
-            if slot is not None:
-                self._signal_terminate_async(slot)
-                return True
-        return False
-
     @property
     def current_task_id(self) -> Optional[int]:
         for slot in self._slots:
@@ -357,6 +346,11 @@ class Supervisor:
                 logger.info("orphan running jobs → failed: %d", n)
 
     def _tick(self) -> None:
+        # 0) 0.17 P-B：到点的 scheduled task 提升为 pending，让下面的 dispatch
+        #    看得见。不看 queue_held —— hold 语义是"停派活"，提升只是状态澄清，
+        #    提升后的 pending 照样被 hold 拦住。
+        self._promote_due_scheduled()
+
         # 1) 先收尸：所有 busy 槽位 poll 一遍，退出的走 _finish_slot
         for slot in self._slots:
             if not slot.busy:
@@ -366,17 +360,29 @@ class Supervisor:
             if rc is not None:
                 self._finish_slot(slot, rc)
 
-        # 2) 给空闲槽位派活（按槽位职责分工）
+        # 2) 给空闲槽位派活（按槽位职责分工）。R-1：generate 并入 exclusive
+        #    统一派发（同表 FIFO + 集中准入），不再有独立的第 3 步。
         for slot in self._slots:
             if slot.busy:
                 continue
             if slot.name == SLOT_TRAIN:
-                self._dispatch_train(slot)
+                self._dispatch_exclusive_tasks(slot)
             elif slot.name == SLOT_DATA:
                 self._dispatch_data(slot)
 
-        # 3) 派 generate task 给 daemon（独立资源，不占 _Slot）
-        self._dispatch_generate()
+    def _promote_due_scheduled(self) -> None:
+        """0.17 P-B：scheduled_at 到点的 task → pending + publish 状态事件。"""
+        try:
+            with db.connection_for(self._db_path) as conn:
+                promoted = db.promote_due_scheduled(conn)
+        except Exception:
+            logger.exception("promote_due_scheduled failed")
+            return
+        for tid in promoted:
+            logger.info("scheduled task %d due → pending", tid)
+            self._on_event(
+                {"type": "task_state_changed", "task_id": tid, "status": "pending"}
+            )
 
     # ---- pending task 选择 ----------------------------------------------------
     def _next_pending_task_in(self, types: tuple[str, ...]) -> Optional[dict[str, Any]]:
@@ -389,46 +395,88 @@ class Supervisor:
                 return t
         return None
 
-    def _dispatch_train(self, slot: _Slot) -> None:
-        """TRAIN 槽：跑 train / reg_ai task。generate 走 daemon，不在这。
+    # ---- R-1 资源档位准入（docs/design/queue-resource-model-0.17.md §3） ----
 
-        commit 12：派活前先要求 daemon 让位（unload 释放 VRAM），除非
-        secrets.queue.allow_gpu_during_train=true。daemon 在跑 generate
-        时不强中断，等下次 tick 它跑完再卸载。
-
-        ADR 0006 PR-2：queue_held=True 时跳过本次派发（ADR §3.2）。已 running
-        的 task 不受影响（继续跑到自然结束/暂停/取消）。
-        """
-        if self._queue_held():
-            return
-        task = self._next_pending_task_in(("train", "reg_ai"))
-        if task is None:
-            return
-        if self._maybe_yield_daemon():
-            return  # daemon 还占 GPU，等下次 tick 派
-        self._spawn_task(slot, task)
-
-    def _dispatch_generate(self) -> None:
-        """commit 9：把 generate pending task 提交给 daemon，daemon idle 时执行。
-
-        ADR 0006 PR-2：queue_held=True 时跳过（hold 语义全队列覆盖，不区分
-        task type）。
-        """
-        if self._queue_held():
-            return
+    def _daemon_active(self) -> bool:
+        """daemon 是否有 active generate task（提交后到 finalize 前）。"""
         with self._daemon_lock:
-            if self._daemon_active_task_id is not None:
-                return
-        task = self._next_pending_task_in(("generate",))
+            return self._daemon_active_task_id is not None
+
+    def _data_slot_exclusive_busy(self) -> bool:
+        """DATA 槽是否正在跑 exclusive 档 job（eval_samples，底模级显存）。"""
+        for slot in self._slots:
+            if (
+                slot.name == SLOT_DATA and slot.busy
+                and slot.job_kind is not None
+                and job_resource_class(slot.job_kind) == RESOURCE_EXCLUSIVE
+            ):
+                return True
+        return False
+
+    def _exclusive_busy(self) -> bool:
+        """全系统是否有 exclusive 档工作在跑（同时最多 1 个的准入前提）。
+
+        三个执行位逐一检查：TRAIN 槽（train/reg_ai）、daemon（active generate）、
+        DATA 槽（eval_samples）。修 L1（generate 与训练互斥缺后端守卫）/
+        L2（训练不躲正在跑的 eval_samples）的共同根。
+        """
+        return (
+            self._train_busy()
+            or self._daemon_active()
+            or self._data_slot_exclusive_busy()
+        )
+
+    def _dispatch_exclusive_tasks(self, slot: _Slot) -> None:
+        """exclusive 档统一派发（tasks 表：train / reg_ai / generate 同表 FIFO）。
+
+        D-R3 平级 FIFO：三类之间无优先级，按 `priority DESC, created_at ASC`
+        取队首；running 永不被中断。路由：train/reg_ai → TRAIN 槽子进程；
+        generate → daemon（daemon 是 exclusive 档的执行器之一，不是独立车道）。
+
+        eval_samples（project_jobs 表）在 R-3 台账合并前由 `_dispatch_data`
+        派发，但共享同一个 `_exclusive_busy` 准入 —— 过渡期跨表顺序为
+        tasks 侧优先抢空隙，R-3 后统一进同表 FIFO。
+
+        ADR 0006 PR-2：queue_held=True 时跳过本次派发（ADR §3.2）。
+        """
+        if self._queue_held():
+            return
+        if self._exclusive_busy():
+            return
+        task = self._next_pending_task_in(
+            ("train", "reg_ai", "generate", "eval_samples")
+        )
         if task is None:
             return
-        # enqueue_generate 先 create_task(pending, task_type=generate) 再写 config.json
-        # 落 config_path —— 两步之间（含 detect_attention_backend 等耗时）这条 task 已
-        # 是 pending+generate 但 config_path 还是 NULL。此时别提交（否则 daemon 报
-        # "config not found: <none>"），等下个 tick config_path 落库后再派。
-        if not task.get("config_path"):
+        ttype = task.get("task_type") or "train"
+        if ttype == "generate":
+            # enqueue_generate 先 create_task(pending) 再写 config.json 落
+            # config_path —— 两步之间这条 task 已 pending 但 config_path 还是
+            # NULL。此时别提交（daemon 会报 "config not found"），等下个 tick。
+            # FIFO 语义：不越过它取后面的任务（窗口 <1s）。
+            if not task.get("config_path"):
+                return
+            self._submit_to_daemon(task)
             return
-        self._submit_to_daemon(task)
+        if ttype == "eval_samples":
+            # R-3：exclusive 档数据作业。排队语义与 train/generate 同一 FIFO
+            # （D-R3 跨类型平级），执行位在 DATA 槽（worker 子进程）。DATA 槽
+            # 被 light 作业占着时等它结束（light 都是短任务），不越队。
+            data_slot = next(
+                (s for s in self._slots if s.name == SLOT_DATA), None
+            )
+            if data_slot is None or data_slot.busy:
+                return
+            if self._maybe_yield_daemon():
+                return
+            self._spawn_job(data_slot, project_jobs.as_job(dict(task)) or task)
+            return
+        # train / reg_ai：daemon 常驻模型是 exclusive 租约，spawn 前必须吊销
+        # （unload 释放 VRAM）。daemon 在跑 generate 的情况已被 _exclusive_busy
+        # 拦下，这里只处理 idle-but-loaded 的租约。
+        if self._maybe_yield_daemon():
+            return  # daemon 还占 VRAM，等下次 tick 派
+        self._spawn_task(slot, task)
 
     def _queue_held(self) -> bool:
         """ADR §3.2 queue hold 开关，跨 supervisor 重启保留（db kv）。"""
@@ -440,18 +488,20 @@ class Supervisor:
             return False  # 读失败默认放行，安全降级
 
     def _maybe_yield_daemon(self) -> bool:
-        """commit 12：daemon 占着 GPU 且不许并行 → 触发 unload，调用方应跳过这次派发。
+        """daemon 占着 VRAM → 触发 unload，调用方应跳过这次派发。
+
+        R-1：daemon 常驻模型 = exclusive 租约。要派 exclusive 档工作
+        （train / reg_ai / eval_samples）前必须吊销租约——**不再受任何开关
+        豁免**（老 allow_gpu_during_train 会放行「训练 + 常驻底模」并存，
+        是 L3 的一部分）。light 档开关关闭时的保守路径也复用本函数。
 
         返回值：
           - True：daemon 还占着 VRAM（在跑 generate 或刚发了 unload 请求），
-                  调用方不应该派 GPU 任务，等下次 tick 重检
-          - False：daemon 没占 GPU（未起 / 已 unloaded / 用户允许并行）
-                  调用方可立刻派
+                  调用方不应该派，等下次 tick 重检
+          - False：daemon 没占 GPU（未起 / 已 unloaded），可立刻派
         """
         daemon = get_daemon()
         if not daemon.is_model_loaded:
-            return False
-        if self._allow_gpu_during_train():
             return False
         if daemon.is_busy:
             # 用户主动触发的 generate 不强中断；等它跑完
@@ -464,31 +514,36 @@ class Supervisor:
         return True
 
     def _dispatch_data(self, slot: _Slot) -> None:
-        """DATA 槽：跑 project_jobs（download / tag / reg_build）。
+        """DATA 槽：跑 project_jobs。R-1 按资源档位准入（修 L2/L3）：
 
-        - download 永远 OK（IO-only，不抢 GPU）
-        - tag / reg_build 是 GPU-bound：
-            * 训练正在跑且未开 `allow_gpu_during_train` → 跳过
-            * daemon 占着 VRAM 且未开 `allow_gpu_during_train` → 触发 daemon
-              让位（_maybe_yield_daemon），跳过等下次 tick
+        - io（download）：恒放行（仅受 queue_held 约束）
+        - light（tag / preprocess / reg_build / eval 指标）：无 exclusive 运行时
+          恒放行（daemon idle 常驻模型无碍——小模型体量）；有 exclusive 运行时看
+          `queue.light_tasks_during_train`（默认开）。开关**关闭**时保守等同
+          旧默认：额外要求 daemon 租约已释放
+        - exclusive（eval_samples，底模级）：与 train 同规格——无 exclusive
+          运行 + daemon 租约吊销后才派，**无视 light 开关**（修 L3）
 
         ADR 0006 PR-2：queue_held=True 时跳过本次派发，包含 download。语义上
-        hold 是"全队列暂停新派活"，不区分 GPU vs IO。
+        hold 是"全队列暂停新派活"，不区分档位。
         """
         if self._queue_held():
             return
-        train_busy = self._train_busy()
-        allow_gpu = self._allow_gpu_during_train()
+        exclusive_busy = self._exclusive_busy()
+        light_parallel = self._light_tasks_during_train()
         with db.connection_for(self._db_path) as conn:
-            pending = project_jobs.list_jobs(conn, status="pending")
-        pending.sort(key=lambda j: j["id"])
+            pending = project_jobs.list_pending_fifo(conn)
         for job in pending:
-            kind = job["kind"]
-            if kind in GPU_BOUND_JOB_KINDS:
-                if train_busy and not allow_gpu:
+            cls = job_resource_class(job["kind"])
+            if cls == RESOURCE_EXCLUSIVE:
+                # eval_samples 走 exclusive 统一 FIFO（_dispatch_exclusive_tasks
+                # 与 train/generate 平级排队），本函数只管 light + io。
+                continue
+            if cls == RESOURCE_LIGHT:
+                if exclusive_busy and not light_parallel:
                     continue
-                if self._maybe_yield_daemon():
-                    continue  # daemon 还占 GPU，等
+                if not light_parallel and self._maybe_yield_daemon():
+                    continue  # 保守模式：等 daemon 卸载
             self._spawn_job(slot, job)
             return
 
@@ -498,9 +553,10 @@ class Supervisor:
                 return True
         return False
 
-    def _allow_gpu_during_train(self) -> bool:
+    def _light_tasks_during_train(self) -> bool:
+        """R-1：exclusive 运行时是否放行 light 档（默认开；读失败取 schema 默认）。"""
         try:
-            return bool(_secrets.load().queue.allow_gpu_during_train)
+            return bool(_secrets.load().queue.light_tasks_during_train)
         except Exception:
             return False
 
@@ -541,6 +597,10 @@ class Supervisor:
             log_path = task_log_path(task["id"])
             log_path.parent.mkdir(parents=True, exist_ok=True)
             log_fp = open(log_path, "wb")
+
+            # 训练前：若 task 启用了验证集指标且设了分隔比例，从 train/ 划 held-out
+            # 到 validation/（移动，不参与训练）。失败不阻断训练，只记日志。
+            self._maybe_split_validation(task, cfg_path, log_fp)
 
             cmd = self._cmd_builder(task, cfg_path)
             # ADR 0006 PR-1：LORA_TASK_ID 注入让训练子进程把用户周期 save 写到
@@ -595,6 +655,31 @@ class Supervisor:
         if explicit_cfg:
             return Path(explicit_cfg)
         return self._configs_dir / f"{task['config_name']}.yaml"
+
+    def _maybe_split_validation(
+        self, task: dict[str, Any], cfg_path: Path, log_fp: Any
+    ) -> None:
+        """训练前把 held-out 验证集从 train/ 划到 validation/（移动）。
+
+        仅当 task 启用 eval_validation 且 ratio>0 时生效；按比例补足、够了不动、
+        永不移回。失败只记日志，不阻断训练。
+        """
+        try:
+            with db.connection_for(self._db_path) as conn:
+                summary = eval_validation.split_for_task(conn, task, cfg_path)
+        except Exception:
+            logger.exception("validation split failed for task=%s", task.get("id"))
+            return
+        if summary and summary.get("moved"):
+            try:
+                log_fp.write(
+                    f"[eval-validation] moved {summary['moved']} image(s) to "
+                    f"validation/ (train={summary['train']}, "
+                    f"validation={summary['validation']})\n".encode("utf-8")
+                )
+                log_fp.flush()
+            except Exception:
+                pass
 
     def _fail_task_config_missing(
         self, task: dict[str, Any], cfg_path: Path
@@ -689,6 +774,8 @@ class Supervisor:
                     # 覆盖式单文件不会堆积，删了反而造成「resume 后到下一
                     # epoch 末之间无恢复点」的窗口。
                     self._clear_pause_fields(tid)
+                elif evt_type == "eval_training_finished":
+                    slot.eval_training_finished_payload = dict(payload)
                 self._on_event({
                     "type": evt_type,
                     "task_id": tid,
@@ -702,6 +789,36 @@ class Supervisor:
                 "seq": next(self._log_seq),
             })
         return _on_task_log
+
+    def _queue_auto_eval_after_training(
+        self, tid: int, payload: dict[str, Any]
+    ) -> None:
+        try:
+            with db.connection_for(self._db_path) as conn:
+                task = db.get_task(conn, tid)
+                if not task:
+                    return
+                queued = eval_auto.queue_training_finished_eval(conn, task, payload)
+        except Exception:
+            logger.exception("after-training auto eval enqueue failed for task=%s", tid)
+            return
+        if not queued:
+            return
+        for job, run in queued:
+            self._on_event({
+                "type": "eval_auto_sample_queued",
+                "task_id": tid,
+                "job_id": job.get("id"),
+                "project_id": job.get("project_id"),
+                "version_id": job.get("version_id"),
+                "run_id": run.get("run_id"),
+                "checkpoint": run.get("checkpoint"),
+            })
+        self._on_event({
+            "type": "eval_auto_after_training_queued",
+            "task_id": tid,
+            "count": len(queued),
+        })
 
     def _make_monitor_callback(
         self, tid: int
@@ -764,6 +881,7 @@ class Supervisor:
         slot.proc = proc
         slot.kind = "job"
         slot.id = job["id"]
+        slot.job_kind = job["kind"]  # R-1：供 _exclusive_busy 判档位
         slot.log_fp = log_fp
         slot.cancel_pending = False
 
@@ -888,6 +1006,15 @@ class Supervisor:
         with self._daemon_lock:
             self._daemon_active_task_id = task_id
             self._daemon_cancel_pending = False
+            # 0.17 item1：开该 generate task 的 run.log（LogTab 读 /api/logs →
+            # tasks/<id>/run.log）。daemon 串行跑一个，其间的日志都归这个 task。
+            try:
+                lp = task_log_path(task_id)
+                lp.parent.mkdir(parents=True, exist_ok=True)
+                self._daemon_log_fp = open(lp, "ab")
+            except Exception:
+                logger.exception("open daemon task log failed")
+                self._daemon_log_fp = None
 
         # poller：daemon 写 monitor_state.json → SSE monitor_progress (增量协议)
         def _on_state_delta(delta: dict[str, Any]) -> None:
@@ -940,6 +1067,14 @@ class Supervisor:
             return
         if kind in ("image_done", "image_error"):
             return
+        if kind == "phase":
+            # 出图阶段（load/clip/sample/vae）→ 前端进度条覆盖非采样阶段（不再卡 0%/100%）
+            self._on_event({
+                "type": "generate_phase",
+                "task_id": tid,
+                "name": event.get("name"),
+            })
+            return
         if kind == "preview_step":
             # commit 14：中间步进度 + 可选预览。step/total 永远有，image_b64
             # 取决于 settings.preview_every_n_steps + TAEFlux 是否可用
@@ -974,13 +1109,31 @@ class Supervisor:
             self._emit_daemon_state()
 
     def _on_daemon_log_line(self, entry: dict[str, Any]) -> None:
-        """daemon stderr 增量行 → SSE daemon_log_line（前端日志抽屉用）。"""
+        """daemon stderr 增量行 → SSE daemon_log_line（前端日志抽屉用）。
+
+        0.17 item1：同时落当前 active generate task 的 run.log + emit task_log_appended
+        （LogTab 实时更新）。file 写在锁内避免与 finalize 的 close 竞态；SSE 在锁外发。
+        """
+        line = entry.get("line")
         self._on_event({
             "type": "daemon_log_line",
             "ts": entry.get("ts"),
             "seq": entry.get("seq"),
-            "line": entry.get("line"),
+            "line": line,
         })
+        with self._daemon_lock:
+            tid = self._daemon_active_task_id
+            fp = self._daemon_log_fp
+            if tid is not None and fp is not None and isinstance(line, str):
+                try:
+                    fp.write((line + "\n").encode("utf-8", errors="replace"))
+                    fp.flush()
+                except Exception:
+                    logger.exception("write daemon task log failed")
+            else:
+                tid = None
+        if tid is not None and isinstance(line, str):
+            self._on_event({"type": "task_log_appended", "task_id": tid, "text": line})
 
     def _on_daemon_global_event(self, event: dict[str, Any]) -> None:
         """daemon 进程级事件（loaded / unloaded / stopped）。"""
@@ -1039,9 +1192,16 @@ class Supervisor:
                 self._daemon_cancel_pending = False
             poller = self._daemon_state_poller
             self._daemon_state_poller = None
+            log_fp = self._daemon_log_fp
+            self._daemon_log_fp = None
         if poller is not None:
             try:
                 poller.stop()
+            except Exception:
+                pass
+        if log_fp is not None:  # 0.17 item1：关该 task 的 run.log
+            try:
+                log_fp.close()
             except Exception:
                 pass
 
@@ -1073,6 +1233,13 @@ class Supervisor:
         with self._daemon_lock:
             if self._daemon_active_task_id == task_id:
                 self._daemon_active_task_id = None
+            log_fp = self._daemon_log_fp
+            self._daemon_log_fp = None
+        if log_fp is not None:  # 0.17 item1：兜底关 run.log（一般此路径未开）
+            try:
+                log_fp.close()
+            except Exception:
+                pass
         with db.connection_for(self._db_path) as conn:
             db.update_task(
                 conn, task_id,
@@ -1114,25 +1281,27 @@ class Supervisor:
         try:
             wandb_cfg = _secrets.load().wandb
             if wandb_cfg.enabled:
+                # 0.18 预设化：enabled 是顶层总开关，其余字段读当前选中的 preset。
+                wb = wandb_cfg.active
                 env.setdefault("WANDB_ENABLED", "1")
-                env.setdefault("WANDB_MODE", wandb_cfg.mode)
-                env.setdefault("WANDB_LOG_SAMPLES", "1" if wandb_cfg.log_samples else "0")
-                env.setdefault("WANDB_SAMPLE_MAX_SIDE", str(wandb_cfg.sample_max_side))
-                env.setdefault("WANDB_SAMPLE_EVERY_N_STEPS", str(wandb_cfg.sample_every_n_steps))
-                env.setdefault("WANDB_UPLOAD_MODEL", "1" if wandb_cfg.upload_model else "0")
-                env.setdefault("WANDB_UPLOAD_MODEL_POLICY", wandb_cfg.upload_model_policy)
-                env.setdefault("WANDB_UPLOAD_STATE_MANUAL", "1" if wandb_cfg.upload_state_manual else "0")
-                env.setdefault("WANDB_UPLOAD_STATE_MANUAL_POLICY", wandb_cfg.upload_state_manual_policy)
-                env.setdefault("WANDB_UPLOAD_STATE_AUTO", "1" if wandb_cfg.upload_state_auto else "0")
-                env.setdefault("WANDB_UPLOAD_STATE_AUTO_POLICY", wandb_cfg.upload_state_auto_policy)
-                if wandb_cfg.api_key:
-                    env.setdefault("WANDB_API_KEY", wandb_cfg.api_key)
-                if wandb_cfg.project:
-                    env.setdefault("WANDB_PROJECT", wandb_cfg.project)
-                if wandb_cfg.entity:
-                    env.setdefault("WANDB_ENTITY", wandb_cfg.entity)
-                if wandb_cfg.base_url:
-                    env.setdefault("WANDB_BASE_URL", wandb_cfg.base_url)
+                env.setdefault("WANDB_MODE", wb.mode)
+                env.setdefault("WANDB_LOG_SAMPLES", "1" if wb.log_samples else "0")
+                env.setdefault("WANDB_SAMPLE_MAX_SIDE", str(wb.sample_max_side))
+                env.setdefault("WANDB_SAMPLE_EVERY_N_STEPS", str(wb.sample_every_n_steps))
+                env.setdefault("WANDB_UPLOAD_MODEL", "1" if wb.upload_model else "0")
+                env.setdefault("WANDB_UPLOAD_MODEL_POLICY", wb.upload_model_policy)
+                env.setdefault("WANDB_UPLOAD_STATE_MANUAL", "1" if wb.upload_state_manual else "0")
+                env.setdefault("WANDB_UPLOAD_STATE_MANUAL_POLICY", wb.upload_state_manual_policy)
+                env.setdefault("WANDB_UPLOAD_STATE_AUTO", "1" if wb.upload_state_auto else "0")
+                env.setdefault("WANDB_UPLOAD_STATE_AUTO_POLICY", wb.upload_state_auto_policy)
+                if wb.api_key:
+                    env.setdefault("WANDB_API_KEY", wb.api_key)
+                if wb.project:
+                    env.setdefault("WANDB_PROJECT", wb.project)
+                if wb.entity:
+                    env.setdefault("WANDB_ENTITY", wb.entity)
+                if wb.base_url:
+                    env.setdefault("WANDB_BASE_URL", wb.base_url)
         except Exception:
             logger.exception("failed to load wandb settings")
         if extra_env:
@@ -1216,6 +1385,11 @@ class Supervisor:
                 {"type": "task_state_changed", "task_id": cid, "status": status}
             )
             logger.info("task %d finished: %s (rc=%d)", cid, status, rc)
+            if status == "done" and slot.eval_training_finished_payload is not None:
+                self._queue_auto_eval_after_training(
+                    cid,
+                    slot.eval_training_finished_payload,
+                )
         else:  # job
             with db.connection_for(self._db_path) as conn:
                 if status == "done":
@@ -1223,8 +1397,9 @@ class Supervisor:
                 elif status == "canceled":
                     project_jobs.mark_canceled(conn, cid)
                 else:
-                    # B-1.6: 同 task — tail jobs log 拼 error_msg
-                    tail = _tail_log_for_error_msg(self._logs_dir / f"{cid}.log")
+                    # B-1.6: 同 task — tail 作业 log 拼 error_msg。
+                    # R-3：作业日志已随台账合并搬到 tasks/<id>/run.log。
+                    tail = _tail_log_for_error_msg(project_jobs.log_path_for(cid))
                     err_msg = f"exit code {rc}\n{tail}" if tail else f"exit code {rc}"
                     project_jobs.mark_failed(conn, cid, err_msg)
                 job = project_jobs.get_job(conn, cid)
@@ -1326,7 +1501,7 @@ class Supervisor:
         Python 端映射成 SIGBREAK（sig=21），由 resume phase 注册的 handler 捕获。
         POSIX：`SIGINT` — 跟 SIGTERM 分流，cancel 走 SIGTERM 不撞。
 
-        Spike 报告 docs/design/queue-pause-spike-report.md 验证过链路通。
+        信号链路经 spike 验证（决策见 ADR 0006）。
         """
         try:
             if os.name == "nt":

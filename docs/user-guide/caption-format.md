@@ -1,6 +1,6 @@
 # JSON Caption 格式规范
 
-AnimaLoraToolkit 支持结构化的 JSON 标签文件，相比传统 TXT 文件有以下优势：
+AnimaLoraStudio 支持结构化的 JSON 标签文件，相比传统 TXT 文件有以下优势：
 
 - **分类 Shuffle**：appearance/tags/environment 各自内部打乱，保持语义结构
 - **固定字段**：quality/character/series/artist 始终在前，不被打乱
@@ -119,18 +119,24 @@ appearance: ["blue eyes", "school uniform", "long hair"]
 tags: ["looking at viewer", "smile", "standing"]
 ```
 
-## 与 batch_tag.py 配合
+## 如何生成
 
-`batch_tag.py` 可以自动生成符合此格式的 JSON 文件：
+落盘格式跟着打标产物走，不再单独选择输出格式：
 
-```bash
-python batch_tag.py --input ./raw_images --output ./dataset --format json
-```
+- **LLM 打标器 + JSON 输出预设**（如 `general_json` / `style_json`）→ 生成符合此格式的 `.json` 文件
+- **本地打标器**（wd14 / CLTagger）与 **LLM 文本预设** → 生成 `.txt` 文件（触发词 prepend 在第一位）
+- 图片已有 `.json` 时，重新打标会更新其中的 `tags` 数组并保留其余字段（含 `meta.trigger`），不改变文件格式
 
 生成的 JSON 包含：
 - 从目录结构提取的 character/variant
-- VLM 打标的 count/appearance/tags/environment/nl
-- 配置文件中的 fixed 字段
+- LLM 打标的 count/appearance/tags/environment/nl
+- 配置中的 fixed 字段
+
+### Legacy 扁平格式
+
+早期版本的本地打标器可选输出 `{"tags": ["tag1", "tag2", ...], "meta": {"trigger": "..."}}`
+形式的扁平 JSON（tags 为列表而非分类对象）。该格式**读取永久兼容**——训练时
+`meta.trigger` 在第一位、其余 tags 作为可打乱区处理——但不再新生成。
 
 ## 配置示例
 
@@ -146,17 +152,23 @@ tag_dropout: 0.05        # 可选：5% 标签随机丢弃
 
 ## 回退机制
 
-如果 JSON 文件不存在或解析失败，会自动回退到同名 TXT 文件：
+同名 caption 文件按扩展名取优先级（文件级，扫描时决定）：
 
 ```
 优先级: image001.json > image001.txt
 ```
 
+注意：优先级是文件级的（扫描时按扩展名决定）——选中 `.json` 后不会再逐样本
+回退同名 `.txt`。
+
+TXT 模式下 `tag_dropout` 同样生效：`keep_tokens` 前缀不参与打乱与 dropout，
+其余 tag 逐个独立丢弃（与 kohya 语义一致）。
+
 ## 迁移指南
 
 ### 从 TXT 迁移到 JSON
 
-1. 使用 `batch_tag.py` 重新打标，指定 `--format json`
+1. 在 Studio 打标页用 LLM 打标器、选 JSON 输出预设重新打标
 2. 或手动转换：
 
 ```python

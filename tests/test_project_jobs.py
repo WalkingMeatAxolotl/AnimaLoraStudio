@@ -31,7 +31,8 @@ def test_create_job_assigns_log_path(isolated) -> None:
             params={"tag": "x", "count": 5},
         )
     assert job["status"] == "pending"
-    assert job["log_path"].endswith(f"{job['id']}.log")
+    # R-3 台账合并：作业日志与 GPU 任务同款布局 tasks/<id>/run.log
+    assert job["log_path"].replace("\\", "/").endswith(f"{job['id']}/run.log")
     assert job["params_decoded"] == {"tag": "x", "count": 5}
 
 
@@ -83,13 +84,15 @@ def test_mark_failed_sets_error_msg(isolated) -> None:
     assert got["error_msg"] == "boom"
 
 
-def test_next_pending_picks_oldest(isolated) -> None:
+def test_list_pending_fifo_picks_oldest_first(isolated) -> None:
+    """R-3：派发顺序 = priority DESC, created_at ASC（与 GPU 任务同 FIFO 语义）。"""
     with db.connection_for(isolated["db"]) as conn:
         a = project_jobs.create_job(conn, project_id=isolated['project_id'], kind="download", params={})
         b = project_jobs.create_job(conn, project_id=isolated['project_id'], kind="download", params={})
-        project_jobs.mark_running(conn, b["id"])
-        nxt = project_jobs.next_pending(conn)
-    assert nxt and nxt["id"] == a["id"]
+        db.update_task(conn, a["id"], created_at=100.0)
+        db.update_task(conn, b["id"], created_at=200.0)
+        pending = project_jobs.list_pending_fifo(conn)
+    assert [j["id"] for j in pending] == [a["id"], b["id"]]
 
 
 def test_latest_for_returns_most_recent(isolated) -> None:
@@ -100,17 +103,26 @@ def test_latest_for_returns_most_recent(isolated) -> None:
     assert latest and latest["id"] == b["id"]
 
 
-def test_cleanup_orphan_running(isolated) -> None:
+def test_cleanup_orphan_running_only_touches_legacy_table(isolated) -> None:
+    """R-3：作业已并入 tasks（孤儿由 supervisor task 收割统一处理）；
+    cleanup_orphan_running 只兜旧 project_jobs 遗留表。"""
     with db.connection_for(isolated["db"]) as conn:
+        # 新作业（tasks 表）running —— cleanup 不碰它
         job = project_jobs.create_job(
             conn, project_id=isolated['project_id'], kind="download", params={}
         )
         project_jobs.mark_running(conn, job["id"])
+        # 旧表遗留 running 行 —— cleanup 标 failed
+        conn.execute(
+            "INSERT INTO project_jobs(project_id, version_id, kind, params, status) "
+            "VALUES (?, NULL, 'download', '{}', 'running')",
+            (isolated["project_id"],),
+        )
+        conn.commit()
         n = project_jobs.cleanup_orphan_running(conn)
         got = project_jobs.get_job(conn, job["id"])
     assert n == 1
-    assert got["status"] == "failed"
-    assert "orphan" in (got["error_msg"] or "")
+    assert got["status"] == "running", "tasks 表的新作业不该被 legacy cleanup 碰"
 
 
 def test_list_jobs_filters(isolated) -> None:

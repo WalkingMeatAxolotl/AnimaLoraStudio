@@ -10,6 +10,8 @@
 """
 from __future__ import annotations
 
+import logging
+
 import pytest
 import torch
 
@@ -325,3 +327,32 @@ def test_est_encode_peak_scales_with_pixels_and_dtype() -> None:
     assert est_fp32 == pytest.approx(5500 * 1024 * 1024, rel=1e-6)
     px16 = torch.zeros(1, 3, 1, 1024, 1024, dtype=torch.bfloat16)
     assert wrapper._est_encode_peak_bytes(px16) == pytest.approx(est_fp32 / 2, rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# 分块决策 / OOM 回退日志去重（缓存逐图调用不刷屏）
+# ---------------------------------------------------------------------------
+
+
+def test_log_once_same_key_logs_only_first(caplog) -> None:
+    """同一 key 调多次只记一次：latent 缓存逐 bucket 调 encode 不刷屏。"""
+    wrapper = _make_wrapper(_RecordingModel())
+    logger = logging.getLogger("training.models")
+    with caplog.at_level(logging.INFO, logger="training.models"):
+        for i in range(200):
+            wrapper._log_once("auto_encode", logger.info, "主动分块 #%d", i)
+    hits = [r for r in caplog.records if "主动分块" in r.getMessage()]
+    assert len(hits) == 1
+    assert "#0" in hits[0].getMessage()  # 记的是首次那条
+
+
+def test_log_once_distinct_keys_each_logged_once(caplog) -> None:
+    """不同事件（encode/decode 决策、OOM 回退）各自独立去重，互不抑制。"""
+    wrapper = _make_wrapper(_RecordingModel())
+    logger = logging.getLogger("training.models")
+    with caplog.at_level(logging.WARNING, logger="training.models"):
+        wrapper._log_once("auto_encode", logger.warning, "encode 分块")
+        wrapper._log_once("auto_decode", logger.warning, "decode 分块")
+        wrapper._log_once("auto_encode", logger.warning, "encode 分块")  # 重复，抑制
+    msgs = [r.getMessage() for r in caplog.records]
+    assert msgs == ["encode 分块", "decode 分块"]

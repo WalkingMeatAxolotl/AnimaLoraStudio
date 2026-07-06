@@ -105,6 +105,90 @@ def test_decide_target_invalid() -> None:
 
 
 # ---------------------------------------------------------------------------
+# GPU 版本约束按 torch CUDA 大版本分流（cu12 钉 <1.26 / cu13 用 >=1.26）
+# ---------------------------------------------------------------------------
+
+
+def test_decide_target_gpu_cu12_when_torch_cu12(monkeypatch: pytest.MonkeyPatch) -> None:
+    """torch CUDA 12 → onnxruntime-gpu>=1.20,<1.26（ORT 1.26+ 默认 CUDA 13，必须钉死）。"""
+    monkeypatch.setattr(ors, "_resolve_cuda_major", lambda: 12)
+    assert ors._decide_target("gpu") == "onnxruntime-gpu>=1.20,<1.26"
+
+
+def test_decide_target_gpu_cu13_when_torch_cu13(monkeypatch: pytest.MonkeyPatch) -> None:
+    """torch CUDA 13 → onnxruntime-gpu>=1.26（CUDA 13 线）。"""
+    monkeypatch.setattr(ors, "_resolve_cuda_major", lambda: 13)
+    assert ors._decide_target("gpu") == "onnxruntime-gpu>=1.26,<2.0"
+
+
+def test_decide_target_gpu_defaults_cu12_when_major_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """torch 拿不到 CUDA major → 默认 cu12（=旧行为，零回归）。"""
+    monkeypatch.setattr(ors, "_resolve_cuda_major", lambda: None)
+    assert ors._decide_target("gpu") == "onnxruntime-gpu>=1.20,<1.26"
+
+
+def test_decide_target_auto_linux_follows_torch_major(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Linux + GPU 的 auto 路径也按 torch major 选 spec（不止 explicit gpu）。"""
+    monkeypatch.setattr(ors.sys, "platform", "linux")
+    monkeypatch.setattr(
+        ors, "detect_cuda",
+        lambda: {"available": True, "driver_version": "551.86", "gpu_name": "RTX 5090"},
+    )
+    monkeypatch.setattr(ors, "_resolve_cuda_major", lambda: 13)
+    assert ors._decide_target("auto") == "onnxruntime-gpu>=1.26,<2.0"
+
+
+# ---------------------------------------------------------------------------
+# _resolve_cuda_major — ORT build 的 CUDA 大版本锚点
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_cuda_major_from_torch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """torch CUDA build 的 version.cuda 决定 major（最权威锚点）。"""
+    import sys as _sys
+    fake_torch = MagicMock()
+    fake_torch.version.cuda = "12.8"
+    monkeypatch.setitem(_sys.modules, "torch", fake_torch)
+    assert ors._resolve_cuda_major() == 12
+    fake_torch.version.cuda = "13.0"
+    assert ors._resolve_cuda_major() == 13
+
+
+def test_resolve_cuda_major_none_when_cpu_build_no_gpu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """torch CPU build（version.cuda=None）+ 无 GPU 驱动 → None（调用方走默认 cu12）。"""
+    import sys as _sys
+    fake_torch = MagicMock()
+    fake_torch.version.cuda = None
+    monkeypatch.setitem(_sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(
+        ors, "detect_cuda",
+        lambda: {"available": False, "driver_version": None, "gpu_name": None},
+    )
+    assert ors._resolve_cuda_major() is None
+
+
+def test_resolve_cuda_major_falls_back_to_driver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """torch CPU build 但有 NVIDIA 驱动 → recommend_cu_tag 推 cu126 → major 12。"""
+    import sys as _sys
+    fake_torch = MagicMock()
+    fake_torch.version.cuda = None
+    monkeypatch.setitem(_sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(
+        ors, "detect_cuda",
+        lambda: {"available": True, "driver_version": "551.86", "gpu_name": "RTX 5090"},
+    )
+    assert ors._resolve_cuda_major() == 12
+
+
+# ---------------------------------------------------------------------------
 # install_runtime — mock pip
 # ---------------------------------------------------------------------------
 
@@ -401,6 +485,37 @@ def test_preload_loads_present_libs(
     assert mode == ors.ctypes.RTLD_GLOBAL
 
 
+def test_preload_loads_cu13_sonames_via_glob(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """glob 不写死 soname：libcurand.so.13（cu13）照样被 RTLD_GLOBAL 加载
+    （验证预加载对 cu12 / cu13 自适应，无需维护两份 soname 表）。"""
+    monkeypatch.setattr(ors.sys, "platform", "linux")
+    pkg_root = tmp_path / "nvidia_curand_pkg"
+    (pkg_root / "lib").mkdir(parents=True)
+    so = pkg_root / "lib" / "libcurand.so.13"
+    so.write_bytes(b"")
+
+    fake_mod = MagicMock()
+    fake_mod.__path__ = [str(pkg_root)]
+
+    def _import(name: str):
+        if name == "nvidia.curand":
+            return fake_mod
+        raise ImportError(name)
+
+    monkeypatch.setattr(ors.importlib, "import_module", _import)
+    cdll_calls: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        ors.ctypes, "CDLL",
+        lambda path, mode=0: cdll_calls.append((path, mode)) or MagicMock(),
+    )
+    res = ors._preload_torch_cuda_libs()
+    assert str(so) in res["preloaded"]
+    mode = next(m for p, m in cdll_calls if p == str(so))
+    assert mode == ors.ctypes.RTLD_GLOBAL
+
+
 def test_record_cuda_load_error_round_trip(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -426,16 +541,16 @@ def test_install_cuda_runtime_wheels_skip_on_non_linux(
     assert res["installed"] == []
 
 
-def test_install_cuda_runtime_wheels_installs_missing(
+def test_install_cuda_runtime_wheels_installs_missing_cu12(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Linux 上首次装：cuDNN 已存在 → 跳过；其它 6 个全装。"""
+    """Linux cu12：cuDNN 已存在 → 跳过；其它 6 个全装 nvidia-*-cu12。"""
     monkeypatch.setattr(ors.sys, "platform", "linux")
     # cuDNN 已装（torch 带的）；其它都没装
     monkeypatch.setattr(
         ors,
         "_is_dist_installed",
-        lambda p: p == ors._NVIDIA_CUDNN_WHEEL,
+        lambda p: p == ors._NVIDIA_CUDNN_WHEEL_CU12,
     )
     pip_calls: list[list[str]] = []
 
@@ -444,16 +559,36 @@ def test_install_cuda_runtime_wheels_installs_missing(
         return 0, "Successfully installed nvidia-curand-cu12 ..."
 
     monkeypatch.setattr(ors, "_pip", fake_pip)
-    res = ors._install_cuda_runtime_wheels()
+    res = ors._install_cuda_runtime_wheels(major=12)
     assert res["platform_skip"] is False
-    assert ors._NVIDIA_CUDNN_WHEEL in res["skipped"]
-    assert ors._NVIDIA_CUDNN_WHEEL not in res["installed"]
+    assert res["cuda_major"] == 12
+    assert ors._NVIDIA_CUDNN_WHEEL_CU12 in res["skipped"]
+    assert ors._NVIDIA_CUDNN_WHEEL_CU12 not in res["installed"]
     # 6 个都进了 install args
-    for pkg in ors._NVIDIA_CUDA_RUNTIME_WHEELS:
+    for pkg in ors._NVIDIA_CUDA_RUNTIME_WHEELS_CU12:
         assert pkg in res["installed"]
     # 单次 pip install 调用
     install_calls = [c for c in pip_calls if c[0] == "install"]
     assert len(install_calls) == 1
+
+
+def test_install_cuda_runtime_wheels_cu13_uses_unversioned_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """cu13：装去后缀的 nvidia-cuda-runtime / nvidia-cublas … + nvidia-cudnn-cu13
+    （`-cu13` 后缀包是 PyPI 上的废弃空占位，不能装）。"""
+    monkeypatch.setattr(ors.sys, "platform", "linux")
+    monkeypatch.setattr(ors, "_is_dist_installed", lambda _p: False)
+    monkeypatch.setattr(ors, "_pip", lambda args: (0, "ok"))
+    res = ors._install_cuda_runtime_wheels(major=13)
+    assert res["cuda_major"] == 13
+    installed = res["installed"]
+    assert "nvidia-cublas" in installed
+    assert "nvidia-cuda-runtime" in installed
+    assert ors._NVIDIA_CUDNN_WHEEL_CU13 in installed
+    # cu13 不能用 cu12 后缀名，也不该出现废弃的 -cu13 runtime 包
+    assert not any(p.endswith("-cu12") for p in installed)
+    assert "nvidia-cuda-runtime-cu13" not in installed
 
 
 def test_install_cuda_runtime_wheels_noop_when_all_present(

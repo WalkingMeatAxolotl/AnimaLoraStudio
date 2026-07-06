@@ -30,22 +30,17 @@ def _make_local_model(model_dir: Path, tags: list[tuple[str, int]]) -> None:
             w.writerow([i, n, c])
 
 
-def test_resolve_local_dir(isolated_secrets: Path) -> None:
-    model_dir = isolated_secrets / "models" / "x"
-    _make_local_model(model_dir, [("a", 0)])
-    secrets.update({"wd14": {"local_dir": str(model_dir)}})
+def test_resolve_default_models_root(
+    isolated_secrets: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """无 local_dir 概念后：模型从 models_root 下的默认目录解析，存在即用、不下载。"""
+    root = isolated_secrets / "models"
+    monkeypatch.setattr(wd14_tagger.model_downloader, "models_root", lambda: root)
+    model_id = secrets.load().wd14.model_id
+    target = wd14_tagger.model_downloader.wd14_target_dir(root, model_id)
+    _make_local_model(target, [("a", 0)])
     t = wd14_tagger.WD14Tagger()
-    resolved = t._resolve_model_dir()
-    assert resolved == model_dir
-
-
-def test_resolve_local_dir_missing_files_raises(isolated_secrets: Path) -> None:
-    bad = isolated_secrets / "bad"
-    bad.mkdir()
-    secrets.update({"wd14": {"local_dir": str(bad)}})
-    t = wd14_tagger.WD14Tagger()
-    with pytest.raises(FileNotFoundError, match="缺少"):
-        t._resolve_model_dir()
+    assert t._resolve_model_dir() == target
 
 
 def test_postprocess_filters_by_threshold(isolated_secrets: Path) -> None:
@@ -134,24 +129,6 @@ def test_overrides_none_falls_back_to_global(isolated_secrets: Path) -> None:
     t = wd14_tagger.WD14Tagger(overrides={"threshold_general": None})
     cfg = t._cfg()
     assert cfg.threshold_general == 0.7
-
-
-def test_overrides_redirect_local_dir(isolated_secrets: Path) -> None:
-    """override 的 local_dir 改路径解析，不改全局。"""
-    a = isolated_secrets / "a"
-    b = isolated_secrets / "b"
-    _make_local_model(a, [("x", 0)])
-    _make_local_model(b, [("y", 0)])
-    secrets.update({"wd14": {"local_dir": str(a)}})
-
-    # 不带 overrides → 走 a
-    assert wd14_tagger.WD14Tagger()._resolve_model_dir() == a
-    # 带 override → 走 b，全局仍是 a
-    assert (
-        wd14_tagger.WD14Tagger(overrides={"local_dir": str(b)})._resolve_model_dir()
-        == b
-    )
-    assert secrets.load().wd14.local_dir == str(a)
 
 
 def test_tag_iterator_handles_io_error(

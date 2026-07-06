@@ -877,3 +877,232 @@ def test_download_flat_hints_on_gated_auth_error(
 
     assert ok is False
     assert any(("token" in m.lower() or "gated" in m.lower()) for m in logs)
+
+
+# ---------------------------------------------------------------------------
+# eval 指标模型（CLIP / DINO）接入统一下载中心
+# ---------------------------------------------------------------------------
+
+
+def test_build_catalog_includes_eval_metrics(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from studio import secrets
+
+    monkeypatch.setattr(secrets, "load", lambda: secrets.Secrets())
+    cat = model_downloader.build_catalog(tmp_path)
+    em = cat["eval_metrics"]
+    assert em["id"] == "eval_metrics"
+    kinds = {v["kind"]: v for v in em["variants"]}
+    assert set(kinds) == {"clip", "dino", "ccip"}
+    assert kinds["ccip"]["model_id"] == "ccip-caformer-24-randaug-pruned"
+    assert kinds["ccip"]["exists"] is False
+    assert kinds["ccip"]["size_estimate"] > 0
+    assert kinds["clip"]["model_id"] == "openai/clip-vit-base-patch32"
+    assert kinds["clip"]["exists"] is False
+    assert kinds["clip"]["size_estimate"] > 0  # 已知模型给下载前预估
+    assert kinds["clip"]["target_path"].replace("\\", "/").endswith(
+        "eval/clip/openai_clip-vit-base-patch32"
+    )
+    assert cat["download_source_options"]["eval"] == {
+        "current": "huggingface", "available": ["huggingface", "modelscope"]
+    }
+    # 指标 registry（Settings 复选框列表）也随 catalog 暴露
+    keys = [m["key"] for m in cat["eval_metric_catalog"]]
+    assert keys == ["clip_t", "clip_i", "dino_i", "ccip_i", "tag_recall"]
+    assert all({"label", "default", "desc", "note"} <= set(m) for m in cat["eval_metric_catalog"])
+
+
+def test_trigger_eval_clip_dispatches_to_download(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from studio import secrets
+
+    captured: dict = {}
+
+    def fake_start(key, fn):
+        captured["key"] = key
+        captured["ok"] = fn(lambda _l: None)
+
+    def fake_download_eval(kind, model_id, root, *, on_log=print):
+        captured["args"] = (kind, model_id, root)
+        return True
+
+    monkeypatch.setattr("studio.services.models.downloader.models_root", lambda: tmp_path)
+    monkeypatch.setattr(secrets, "load", lambda: secrets.Secrets())
+    monkeypatch.setattr("studio.services.models.downloader.start_download_async", fake_start)
+    monkeypatch.setattr("studio.services.models.downloader.download_eval_model", fake_download_eval)
+
+    key = model_downloader.trigger("eval_dino", "facebook/dinov2-small")
+    assert key == "eval_dino:facebook/dinov2-small"
+    assert captured["args"] == ("dino", "facebook/dinov2-small", tmp_path)
+    assert captured["ok"] is True
+
+
+def test_download_ccip_model_calls_snapshot_with_variant_patterns(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict = {}
+
+    def fake_snapshot(repo, target, *, allow_patterns=None, on_log=print):
+        captured["repo"] = repo
+        captured["target"] = str(target)
+        captured["patterns"] = allow_patterns
+        return True
+
+    monkeypatch.setattr("studio.services.models.sources.download_snapshot", fake_snapshot)
+    ok = model_downloader.download_ccip_model("ccip-x", tmp_path)
+    assert ok is True
+    assert captured["repo"] == "deepghs/ccip_onnx"
+    assert captured["target"].replace("\\", "/").endswith("eval/ccip")
+    assert set(captured["patterns"]) == {
+        "ccip-x/model_feat.onnx", "ccip-x/model_metrics.onnx", "ccip-x/metrics.json",
+    }
+
+
+def test_trigger_eval_ccip_dispatches_to_ccip_download(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict = {}
+
+    def fake_start(key, fn):
+        captured["key"] = key
+        captured["ok"] = fn(lambda _l: None)
+
+    def fake_ccip(variant, root, *, on_log=print):
+        captured["args"] = (variant, root)
+        return True
+
+    monkeypatch.setattr("studio.services.models.downloader.models_root", lambda: tmp_path)
+    monkeypatch.setattr("studio.services.models.downloader.start_download_async", fake_start)
+    monkeypatch.setattr("studio.services.models.downloader.download_ccip_model", fake_ccip)
+    key = model_downloader.trigger("eval_ccip", "ccip-caformer-24-randaug-pruned")
+    assert key == "eval_ccip:ccip-caformer-24-randaug-pruned"
+    assert captured["args"] == ("ccip-caformer-24-randaug-pruned", tmp_path)
+    assert captured["ok"] is True
+
+
+def test_ensure_ccip_model_skips_when_files_present(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("studio.services.models.downloader.models_root", lambda: tmp_path)
+    d = model_downloader.ccip_model_dir(tmp_path, "ccip-x")
+    d.mkdir(parents=True)
+    for f in ("model_feat.onnx", "model_metrics.onnx", "metrics.json"):
+        (d / f).write_bytes(b"x")
+    called: list = []
+    monkeypatch.setattr(
+        "studio.services.models.downloader.download_ccip_model",
+        lambda *a, **k: called.append(1) or True,
+    )
+    got = model_downloader.ensure_ccip_model("ccip-x")
+    assert got == d
+    assert not called  # 三文件齐全，不触发下载
+
+
+def test_download_eval_model_routes_modelscope_when_mapped(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from studio import secrets
+
+    monkeypatch.delenv("MODELSCOPE_SOURCE", raising=False)
+    monkeypatch.setattr(
+        secrets, "load",
+        lambda: secrets.Secrets(download_sources={"eval": "modelscope"}),
+    )
+    ms: list = []
+    hf: list = []
+    monkeypatch.setattr(
+        "studio.services.models.sources.download_snapshot_ms",
+        lambda repo, target, *, on_log=print: ms.append((repo, str(target))) or True,
+    )
+    monkeypatch.setattr(
+        "studio.services.models.sources.download_snapshot",
+        lambda repo, target, *, on_log=print, allow_patterns=None: hf.append(repo) or True,
+    )
+    ok = model_downloader.download_eval_model(
+        "dino", "facebook/dinov2-small", tmp_path, on_log=lambda _l: None
+    )
+    assert ok
+    assert ms and ms[0][0] == "AI-ModelScope/dinov2-small"
+    assert not hf
+
+
+def test_download_eval_model_falls_back_to_hf_without_ms_map(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from studio import secrets
+
+    monkeypatch.delenv("MODELSCOPE_SOURCE", raising=False)
+    monkeypatch.setattr(
+        secrets, "load",
+        lambda: secrets.Secrets(download_sources={"eval": "modelscope"}),
+    )
+    hf: list = []
+    monkeypatch.setattr(
+        "studio.services.models.sources.download_snapshot",
+        lambda repo, target, *, on_log=print, allow_patterns=None: hf.append(repo) or True,
+    )
+    # 自定义 repo 无魔搭映射 → 回退 HuggingFace
+    ok = model_downloader.download_eval_model(
+        "clip", "some/custom-clip", tmp_path, on_log=lambda _l: None
+    )
+    assert ok
+    assert hf == ["some/custom-clip"]
+
+
+def test_ensure_eval_model_returns_existing_without_download(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = model_downloader.eval_model_target_dir(
+        tmp_path, "clip", "openai/clip-vit-base-patch32"
+    )
+    target.mkdir(parents=True)
+    (target / "config.json").write_text("{}", encoding="utf-8")
+    called: list = []
+    monkeypatch.setattr(
+        "studio.services.models.downloader.download_eval_model",
+        lambda *a, **k: called.append(a) or True,
+    )
+    got = model_downloader.ensure_eval_model(
+        "clip", "openai/clip-vit-base-patch32", tmp_path
+    )
+    assert got == target
+    assert not called
+
+
+def test_ensure_eval_model_downloads_when_missing(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = model_downloader.eval_model_target_dir(tmp_path, "dino", "facebook/dinov2-small")
+    called: list = []
+
+    def fake_download(kind, model_id, root, *, on_log=print):
+        called.append((kind, model_id))
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "config.json").write_text("{}", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(
+        "studio.services.models.downloader.download_eval_model", fake_download
+    )
+    got = model_downloader.ensure_eval_model("dino", "facebook/dinov2-small", tmp_path)
+    assert got == target
+    assert called == [("dino", "facebook/dinov2-small")]
+
+
+def test_ensure_eval_model_uses_user_local_dir(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """model_id 是用户填的本地已有目录 → 直接用，不当 repo id 下载。"""
+    local = tmp_path / "my-local-clip"
+    local.mkdir()
+    (local / "config.json").write_text("{}", encoding="utf-8")
+    called: list = []
+    monkeypatch.setattr(
+        "studio.services.models.downloader.download_eval_model",
+        lambda *a, **k: called.append(a) or True,
+    )
+    got = model_downloader.ensure_eval_model("clip", str(local), tmp_path)
+    assert got == local
+    assert not called

@@ -33,9 +33,27 @@ CREATE INDEX IF NOT EXISTS idx_tasks_queue
     ON tasks(status, priority DESC, created_at ASC);
 """
 
-VALID_STATUSES = {"pending", "running", "done", "failed", "canceled", "paused"}
+VALID_STATUSES = {"pending", "running", "done", "failed", "canceled", "paused", "scheduled"}
 # `paused` 不进 terminal —— task 已暂停但可被 resume，不算结束态。
 TERMINAL_STATUSES = {"done", "failed", "canceled"}
+# 队列页分区用的两个有序状态组（0.17 P-A/P-E）：live = 进行中+等待，history = 已结束。
+# 用 tuple 保序，供 SQL `status IN (...)` + 分页。
+# `scheduled`（0.17 P-B 计划任务）进 live —— 在队列页第 4 段展示；dispatcher 只看
+# pending，到点由 supervisor tick 提升（promote_due_scheduled）。
+LIVE_STATUSES = ("running", "paused", "pending", "scheduled")
+HISTORY_STATUSES = ("done", "failed", "canceled")
+# tasks.task_type 的合法值。R-2/R-3 台账合并：tasks 表是全部工作项的统一台账。
+# 档位归属的权威在 supervisor/resources.py（infrastructure 不反向依赖
+# supervisor，此处平铺列出，tests 有同步断言防漂移）。
+GPU_TASK_TYPES = ("train", "reg_ai", "generate")
+# 数据作业 kind（R-3 起写入 tasks）。/api/queue 的 GPU 视图在 R-5 档位化前
+# 默认排除它们（含 no-group 兼容路径，保护 Topbar/Overview/Monitor 不把
+# 数据作业当训练任务）。
+JOB_TASK_TYPES = (
+    "download", "preprocess", "tag", "reg_build",
+    "eval_samples", "eval_clip", "eval_dino", "eval_tag", "eval_ccip",
+)
+VALID_TASK_TYPES = GPU_TASK_TYPES + JOB_TASK_TYPES
 
 
 def connect(path: Optional[Path] = None) -> sqlite3.Connection:
@@ -74,7 +92,18 @@ def init_db(path: Optional[Path] = None) -> None:
 
 
 def _row_to_dict(row: Optional[sqlite3.Row]) -> Optional[dict[str, Any]]:
-    return dict(row) if row else None
+    if not row:
+        return None
+    out = dict(row)
+    # R-2：params（kind 专属参数 JSON，_v17）附带解码，消费端免二次 parse
+    # （同 project_jobs DAO 的 params_decoded 约定）。
+    if isinstance(out.get("params"), str):
+        try:
+            import json as _json
+            out["params_decoded"] = _json.loads(out["params"])
+        except Exception:
+            out["params_decoded"] = None
+    return out
 
 
 def create_task(
@@ -83,17 +112,39 @@ def create_task(
     name: str,
     config_name: str,
     priority: int = 0,
+    scheduled_at: Optional[float] = None,
+    task_type: Optional[str] = None,
+    params: Optional[dict[str, Any]] = None,
+    project_id: Optional[int] = None,
+    version_id: Optional[int] = None,
 ) -> int:
+    """建 pending（或 scheduled）task。
+
+    R-2 台账合并：tasks 表承接全部工作项。`task_type` 缺省 'train'（老调用方
+    兼容）；数据作业类（download/tag/…）带 `params`（kind 专属参数 JSON）+
+    project_id/version_id 入库。写路径切换（services 从 create_job 改到这里）
+    在 R-3。
+    """
+    if task_type is not None and task_type not in VALID_TASK_TYPES:
+        raise ValueError(f"invalid task_type: {task_type!r}")
     # ADR-0009 PR-1 C6: 入 task 时存当前 ContextVar trace_id（HTTP 请求那一刻
     # 由 TraceIdMiddleware 已 bind）。无则用 bg-{uuid} 标后台触发（CLI / 测试 /
     # supervisor 直接拉起）。supervisor dispatcher 后续读这个列 → env 注入
     # worker 子进程让 worker log 跟用户请求 trace_id 对得上。
     from .logging import get_trace_id, new_trace_id
     request_trace_id = get_trace_id() or f"bg-{new_trace_id()}"
+    # 0.17 P-B：带 scheduled_at → 建成 scheduled，supervisor tick 到点提升为
+    # pending。过去的时间也照建 —— 下一个 tick（≤1s）自然提升，无需特判。
+    status = "scheduled" if scheduled_at is not None else "pending"
+    import json as _json
     cur = conn.execute(
-        "INSERT INTO tasks(name, config_name, status, priority, created_at, request_trace_id) "
-        "VALUES (?, ?, 'pending', ?, ?, ?)",
-        (name, config_name, priority, time.time(), request_trace_id),
+        "INSERT INTO tasks(name, config_name, status, priority, created_at, "
+        "request_trace_id, scheduled_at, task_type, params, project_id, version_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, 'train'), ?, ?, ?)",
+        (name, config_name, status, priority, time.time(), request_trace_id,
+         scheduled_at, task_type,
+         _json.dumps(params) if params is not None else None,
+         project_id, version_id),
     )
     conn.commit()
     return int(cur.lastrowid)
@@ -126,7 +177,121 @@ def list_tasks(
     else:
         sql = "SELECT * FROM tasks ORDER BY priority DESC, created_at ASC"
         params = ()
-    return [dict(r) for r in conn.execute(sql, params)]
+    return [_row_to_dict(r) or {} for r in conn.execute(sql, params)]
+
+
+def _escape_like(s: str) -> str:
+    """转义 LIKE 元字符（\\ % _），配合 `ESCAPE '\\'` 让搜索按字面匹配。"""
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _build_task_filter(
+    *,
+    statuses: tuple[str, ...],
+    exclude_types: tuple[str, ...],
+    q: Optional[str],
+    types: tuple[str, ...] = (),
+) -> tuple[str, list[Any]]:
+    """构造 WHERE 子句 + 参数（不含 ORDER/LIMIT），供 count_tasks / list_tasks_page 共用。
+
+    - statuses：`status IN (...)`（保序 tuple）
+    - types：`COALESCE(task_type,'train') IN (...)`——0.17 P-F 类型过滤（正向包含）
+    - exclude_types：`COALESCE(task_type,'train') NOT IN (...)`——老行 NULL 兜底成
+      'train' 不会被误排除（保证分页 total 准）
+    - q：name / config_name 子串 + 所属项目 title/slug 子串（LIKE + ESCAPE，
+      元字符转义）。R-5：数据作业 name=kind 无搜索价值，靠项目名子查询命中；
+      GPU 任务顺带获得按项目搜索能力
+    """
+    clauses: list[str] = []
+    params: list[Any] = []
+    if statuses:
+        clauses.append(f"status IN ({','.join('?' for _ in statuses)})")
+        params.extend(statuses)
+    if types:
+        clauses.append(
+            f"COALESCE(task_type, 'train') IN ({','.join('?' for _ in types)})"
+        )
+        params.extend(types)
+    if exclude_types:
+        clauses.append(
+            f"COALESCE(task_type, 'train') NOT IN ({','.join('?' for _ in exclude_types)})"
+        )
+        params.extend(exclude_types)
+    if q:
+        like = f"%{_escape_like(q)}%"
+        clauses.append(
+            "(name LIKE ? ESCAPE '\\' OR config_name LIKE ? ESCAPE '\\' "
+            "OR project_id IN (SELECT id FROM projects "
+            "WHERE title LIKE ? ESCAPE '\\' OR slug LIKE ? ESCAPE '\\'))"
+        )
+        params.extend([like, like, like, like])
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    return where, params
+
+
+def count_tasks(
+    conn: sqlite3.Connection,
+    *,
+    statuses: tuple[str, ...],
+    exclude_types: tuple[str, ...] = (),
+    q: Optional[str] = None,
+    types: tuple[str, ...] = (),
+) -> int:
+    """匹配 statuses（+ 可选 types / exclude_types / q）的 task 总数，供分页 total。"""
+    where, params = _build_task_filter(
+        statuses=statuses, exclude_types=exclude_types, q=q, types=types
+    )
+    row = conn.execute(f"SELECT COUNT(*) AS n FROM tasks{where}", params).fetchone()
+    return int(row["n"]) if row else 0
+
+
+def list_tasks_page(
+    conn: sqlite3.Connection,
+    *,
+    statuses: tuple[str, ...],
+    exclude_types: tuple[str, ...] = (),
+    q: Optional[str] = None,
+    types: tuple[str, ...] = (),
+    limit: Optional[int] = None,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """按 statuses（+ 可选 types / exclude_types / q）取 task，`id DESC`（近的在前）。
+
+    limit=None 不分页（live 组全量）；给 limit 则 `LIMIT ? OFFSET ?`（history 组）。
+    """
+    where, params = _build_task_filter(
+        statuses=statuses, exclude_types=exclude_types, q=q, types=types
+    )
+    sql = f"SELECT * FROM tasks{where} ORDER BY id DESC"
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params = [*params, int(limit), int(offset)]
+    return [_row_to_dict(r) or {} for r in conn.execute(sql, params)]
+
+
+def promote_due_scheduled(
+    conn: sqlite3.Connection, now: Optional[float] = None
+) -> list[int]:
+    """0.17 P-B：把到点的 scheduled task 提升为 pending，返回提升的 id 列表。
+
+    supervisor 每个 tick（1s）调一次；scheduled_at 保留不清（记录原计划时间）。
+    调用方负责对返回的每个 id publish task_state_changed(pending)。
+    """
+    ts = time.time() if now is None else now
+    ids = [
+        int(r["id"]) for r in conn.execute(
+            "SELECT id FROM tasks WHERE status = 'scheduled' AND scheduled_at <= ? "
+            "ORDER BY id ASC",
+            (ts,),
+        )
+    ]
+    if ids:
+        conn.executemany(
+            "UPDATE tasks SET status = 'pending' WHERE id = ? AND status = 'scheduled'",
+            [(i,) for i in ids],
+        )
+        conn.commit()
+    return ids
 
 
 def next_pending(conn: sqlite3.Connection) -> Optional[dict[str, Any]]:

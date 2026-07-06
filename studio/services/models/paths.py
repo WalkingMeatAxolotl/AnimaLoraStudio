@@ -281,6 +281,25 @@ def wd14_target_dir(root: Path, model_id: str) -> Path:
     return root / "wd14" / safe_dir_name(model_id)
 
 
+def eval_model_target_dir(root: Path, kind: str, model_id: str) -> Path:
+    """CLIP / DINO eval 指标模型的本地目录（kind: ``clip`` | ``dino``）。
+
+    多文件 transformers repo，整目录由 snapshot_download 落地，eval 时
+    from_pretrained 指向这里，统一归项目 models/ 管理而非 ~/.cache/huggingface。
+    """
+    return root / "eval" / kind / safe_dir_name(model_id)
+
+
+def ccip_model_dir(root: Path, variant: str) -> Path:
+    """CCIP（anime 角色身份）ONNX 变体本地目录。
+
+    deepghs/ccip_onnx 每个变体子目录含 model_feat.onnx + model_metrics.onnx +
+    metrics.json，只选这 3 个下到这里（repo 整库 3.5GB 含 torch ckpt + png，按
+    文件名选择性下载）。
+    """
+    return root / "eval" / "ccip" / safe_dir_name(variant)
+
+
 def cltagger_target_root(root: Path, model_id: str) -> Path:
     """CLTagger repo 的本地根目录。子目录布局来自 CLTAGGER_VERSIONS。"""
     return root / "cltagger" / safe_dir_name(model_id)
@@ -363,6 +382,26 @@ def selected_anima_transformer_path() -> str:
     return str(anima_main_target(models_root(), selected_anima_variant()))
 
 
+def anima_transformer_path_for(sel: Optional[str]) -> str:
+    """把一个显式的主模型选择解析成 transformer 绝对路径。
+
+    `sel` 语义同 `secrets.models.selected_anima`：官方 variant key（"1.0" /
+    "latest" 等）或注册的本地 custom `.safetensors` 绝对路径。空值 → 回退到
+    Settings 里 `selected_anima` 的解析结果（`selected_anima_transformer_path`），
+    即先验生成 / 测试出图沿用「设置页选定的底模」。custom 路径失效（被删 /
+    移走）→ 回退当前 selected，绝不返回不存在的死路径。
+    """
+    s = (sel or "").strip()
+    if not s:
+        return selected_anima_transformer_path()
+    if s == "latest" or s in ANIMA_VARIANTS:
+        return str(anima_main_target(models_root(), s))
+    p = Path(s).expanduser()
+    if p.exists():
+        return str(p)
+    return selected_anima_transformer_path()
+
+
 def selected_upscaler() -> str:
     """读 `secrets.models.selected_upscaler`，回退 DEFAULT_UPSCALER。
 
@@ -385,16 +424,19 @@ def selected_upscaler() -> str:
     return DEFAULT_UPSCALER
 
 
-def default_paths_for_new_version() -> dict[str, str]:
+def default_paths_for_new_version(base_model: Optional[str] = None) -> dict[str, str]:
     """Studio 创建新 version 时用：返回 4 项路径的**绝对路径字符串**。
 
     根据当前 `secrets.models.root` 和 `secrets.models.selected_anima` 计算。
     用户在 settings 切了 selected_anima（官方 variant 或注册的本地 custom 路径）
     → 之后新建的 version 自动用新选择；已存在 version 的 yaml 不动（重现性）。
+
+    `base_model` 非空时只覆盖 transformer_path（先验生成 / 测试出图按用户在
+    页面上临时选定的底模出图）；vae / text_encoder / t5 仍跟随全局设置。
     """
     root = models_root()
     return {
-        "transformer_path": selected_anima_transformer_path(),
+        "transformer_path": anima_transformer_path_for(base_model),
         "vae_path": str(anima_vae_target(root)),
         "text_encoder_path": str(qwen_dir(root)),
         "t5_tokenizer_path": str(t5_tokenizer_dir(root)),

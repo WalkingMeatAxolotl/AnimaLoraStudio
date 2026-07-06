@@ -43,10 +43,12 @@ export function PauseConfirmModal({ onCancel, onConfirm }: PauseConfirmModalProp
         </p>
 
         <div className="flex justify-end gap-3 mt-2">
+          {/* 统一 modal footer 范式：全尺寸 btn-secondary / btn-primary（同 Dialog /
+              新建项目 modal；原 ghost+sm 小一号）。 */}
           <button
             type="button"
             onClick={onCancel}
-            className="btn btn-ghost btn-sm"
+            className="btn btn-secondary"
             data-testid="pause-confirm-cancel"
           >
             {t('queue.pauseConfirm.cancel')}
@@ -54,7 +56,7 @@ export function PauseConfirmModal({ onCancel, onConfirm }: PauseConfirmModalProp
           <button
             type="button"
             onClick={onConfirm}
-            className="btn btn-primary btn-sm"
+            className="btn btn-primary"
             data-testid="pause-confirm-ok"
           >
             {t('queue.pauseConfirm.confirm')}

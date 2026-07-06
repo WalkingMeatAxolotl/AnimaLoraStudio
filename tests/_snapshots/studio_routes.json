@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 186,
+  "count": 197,
   "routes": [
     {
       "path": "/",
@@ -9,6 +9,14 @@
         "GET"
       ],
       "name": "root",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/announcements",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_announcements",
       "type": "APIRoute"
     },
     {
@@ -239,30 +247,6 @@
         "GET"
       ],
       "name": "health",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/jobs/{jid}",
-      "methods": [
-        "GET"
-      ],
-      "name": "get_job_endpoint",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/jobs/{jid}/cancel",
-      "methods": [
-        "POST"
-      ],
-      "name": "cancel_job_endpoint",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/jobs/{jid}/log",
-      "methods": [
-        "GET"
-      ],
-      "name": "get_job_log",
       "type": "APIRoute"
     },
     {
@@ -802,6 +786,102 @@
       "type": "APIRoute"
     },
     {
+      "path": "/api/projects/{pid}/versions/{vid}/curation/validation",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_curation_validation",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/curation/validation/copy",
+      "methods": [
+        "POST"
+      ],
+      "name": "copy_to_validation",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/curation/validation/remove",
+      "methods": [
+        "POST"
+      ],
+      "name": "remove_from_validation",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/eval/jobs",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_task_eval_jobs_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/eval/metrics",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_eval_metric_results_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/eval/run",
+      "methods": [
+        "POST"
+      ],
+      "name": "run_task_eval_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/eval/samples",
+      "methods": [
+        "GET"
+      ],
+      "name": "list_eval_sample_runs_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/eval/samples/{run_id}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_eval_sample_run_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/eval/samples/{run_id}/images/{filename}",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_eval_sample_image_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/eval/samples/{run_id}/metrics",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_eval_metric_result_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/eval/samples/{run_id}/metrics/clip",
+      "methods": [
+        "POST"
+      ],
+      "name": "start_eval_clip_metrics_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/eval/samples/{run_id}/metrics/dino",
+      "methods": [
+        "POST"
+      ],
+      "name": "start_eval_dino_metrics_endpoint",
+      "type": "APIRoute"
+    },
+    {
       "path": "/api/projects/{pid}/versions/{vid}/export-bundle",
       "methods": [
         "POST"
@@ -1042,14 +1122,6 @@
       "type": "APIRoute"
     },
     {
-      "path": "/api/queue/export",
-      "methods": [
-        "GET"
-      ],
-      "name": "export_queue",
-      "type": "APIRoute"
-    },
-    {
       "path": "/api/queue/hold",
       "methods": [
         "GET"
@@ -1063,14 +1135,6 @@
         "POST"
       ],
       "name": "hold_queue",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/queue/import",
-      "methods": [
-        "POST"
-      ],
-      "name": "import_queue",
       "type": "APIRoute"
     },
     {
@@ -1194,6 +1258,14 @@
       "type": "APIRoute"
     },
     {
+      "path": "/api/queue/{task_id}/start_now",
+      "methods": [
+        "POST"
+      ],
+      "name": "start_scheduled_now",
+      "type": "APIRoute"
+    },
+    {
       "path": "/api/schema",
       "methods": [
         "GET"
@@ -1215,6 +1287,22 @@
         "PUT"
       ],
       "name": "put_secrets",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/secrets/wandb/presets/import",
+      "methods": [
+        "POST"
+      ],
+      "name": "import_wandb_preset",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/secrets/wandb/presets/{preset_id}/export",
+      "methods": [
+        "GET"
+      ],
+      "name": "export_wandb_preset",
       "type": "APIRoute"
     },
     {
@@ -1271,22 +1359,6 @@
         "GET"
       ],
       "name": "system_preflight",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/system/release_notes",
-      "methods": [
-        "GET"
-      ],
-      "name": "system_release_notes",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/system/release_notes_all",
-      "methods": [
-        "GET"
-      ],
-      "name": "system_release_notes_all",
       "type": "APIRoute"
     },
     {
@@ -1499,6 +1571,22 @@
         "GET"
       ],
       "name": "get_sample",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/studio",
+      "methods": [
+        "GET"
+      ],
+      "name": "legacy_studio_redirect",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/studio/{rest:path}",
+      "methods": [
+        "GET"
+      ],
+      "name": "legacy_studio_redirect",
       "type": "APIRoute"
     }
   ]

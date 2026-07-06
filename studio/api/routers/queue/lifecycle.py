@@ -1,8 +1,9 @@
 """Queue 任务生命周期（PR-6 commit 6 从 server.py 抽出）。
 
-12 routes：
+13 routes：
     GET   /api/queue                 list（默认隐藏 generate / reg_ai）
-    POST  /api/queue                 enqueue（按 preset 名）
+    POST  /api/queue                 enqueue（按 preset 名，可带 scheduled_at 定时）
+    POST  /api/queue/{task_id}/start_now  scheduled 手动提前转 pending（0.17 P-B）
     GET   /api/queue/hold            查队列挂起状态 + 等待恢复 pending 数
     POST  /api/queue/hold            挂起队列（dispatcher 停拉新 task）
     POST  /api/queue/release         恢复调度
@@ -26,14 +27,30 @@ from ...schemas.queue import EnqueueRequest, ReorderRequest
 from .... import db
 from ....domain.errors import (
     ConflictError,
+    DomainError,
     NotFoundError,
     PresetNotFoundError,
     ValidationError,
 )
 from ....infrastructure.event_bus import bus
 from ....paths import USER_PRESETS_DIR, task_dir
+from ....supervisor.resources import (
+    JOB_KIND_RESOURCE_CLASS,
+    RESOURCE_EXCLUSIVE,
+    TASK_TYPE_RESOURCE_CLASS,
+)
 
 router = APIRouter()
+
+# R-5 档位视图：GPU 视图 = exclusive 档（train/reg_ai/generate/eval_samples），
+# 数据视图 = light + io 档。由 resources.py 档位映射派生，防漂移。
+EXCLUSIVE_VIEW_TYPES: tuple[str, ...] = tuple(TASK_TYPE_RESOURCE_CLASS) + tuple(
+    k for k, c in JOB_KIND_RESOURCE_CLASS.items() if c == RESOURCE_EXCLUSIVE
+)
+DATA_VIEW_TYPES: tuple[str, ...] = tuple(
+    k for k, c in JOB_KIND_RESOURCE_CLASS.items() if c != RESOURCE_EXCLUSIVE
+)
+_RESOURCE_CLASS_TYPES = {"exclusive": EXCLUSIVE_VIEW_TYPES, "data": DATA_VIEW_TYPES}
 
 # resume 允许的起点状态（ADR 0006 Addendum 2）。done 不进 — 语义是重训，
 # 走 retry / ResumeFieldPicker。
@@ -67,16 +84,45 @@ def _is_resumable(task: dict[str, Any]) -> bool:
     return True
 
 
+def _enrich_tasks(items: list[dict[str, Any]]) -> None:
+    """给每行注入 is_pausable（ADR 0006 PR-4 §8.1）+ is_resumable（Addendum 2）。就地改。"""
+    try:
+        sup = _supervisor()
+        for it in items:
+            it["is_pausable"] = sup.is_task_pausable(int(it["id"]))
+    except (HTTPException, DomainError):
+        for it in items:
+            it["is_pausable"] = False
+    for it in items:
+        it["is_resumable"] = _is_resumable(it)
+
+
+# 0.17 P-E — history 分页 page_size 上限，防一次拉爆。
+_MAX_PAGE_SIZE = 100
+
+
 @router.get("/api/queue")
 def list_queue(
     status: Optional[str] = None,
     include_generate: bool = False,
+    group: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 20,
+    q: Optional[str] = None,
+    types: Optional[str] = None,
+    resource_class: Optional[str] = None,
 ) -> dict[str, Any]:
-    """队列默认隐藏 generate 测试出图任务（commit 15 P0-2）。
+    """队列任务列表。
 
-    generate task 走 daemon 不占 train slot，且生命周期短（出完图就结束），
-    出现在队列里只会让用户混淆"为什么队列卡住"。需要排查时加
-    `?include_generate=true` 兜底。
+    - 不传 group：全量返回，**仍隐藏 generate/reg_ai**（兼容 Overview / Generate /
+      Topbar / Monitor 的 `listQueue()`——它们靠这个默认避免把 generate 当训练任务、
+      或自锁）。
+    - `group=live`：进行中 + 等待（running/paused/pending），不分页，`{items}`。
+    - `group=history`：已结束（done/failed/canceled），分页返回
+      `{items, total, page, page_size}`；`status` 作终态子过滤，`q` 搜 name/config_name。
+
+    0.17 P-F：**live/history 不再隐藏 generate/reg_ai**（队列页要全类型可见），改由
+    `types`（逗号分隔 train/reg_ai/generate）做正向类型过滤，下沉 SQL 保证分页 total 准。
     """
     if status and status not in db.VALID_STATUSES:
         raise ValidationError(
@@ -84,22 +130,73 @@ def list_queue(
             code="queue.status_filter_invalid", details={"status": status},
             http_status=400,
         )
+    if group is not None and group not in ("live", "history"):
+        raise ValidationError(
+            f"Unsupported queue group: {group}",
+            code="queue.group_invalid", details={"group": group},
+            http_status=400,
+        )
+    type_tuple: tuple[str, ...] = ()
+    if types:
+        type_tuple = tuple(t for t in (s.strip() for s in types.split(",")) if t)
+        bad = [t for t in type_tuple if t not in db.VALID_TASK_TYPES]
+        if bad:
+            raise ValidationError(
+                f"Unsupported task type filter: {','.join(bad)}",
+                code="queue.type_filter_invalid", details={"types": bad},
+                http_status=400,
+            )
+    # R-5 档位视图参数：显式 types 优先（单类型已隐含档位）；否则按档位展开。
+    if resource_class is not None:
+        if resource_class not in _RESOURCE_CLASS_TYPES:
+            raise ValidationError(
+                f"Unsupported resource class: {resource_class}",
+                code="queue.resource_class_invalid",
+                details={"resource_class": resource_class}, http_status=400,
+            )
+        if not type_tuple:
+            type_tuple = _RESOURCE_CLASS_TYPES[resource_class]
+
+    # R-3 台账合并：数据作业进了 tasks 表。GPU 视图（本端点）在 R-5 档位化前
+    # 默认排除 JOB_TASK_TYPES——显式 types 过滤时不排（调用方自己指定）。
+    if group is None:
+        # 兼容旧行为：全量 + 隐藏 generate/reg_ai（无 group 调用方依赖此默认）
+        # + 隐藏数据作业（保护 Topbar/Overview/Monitor 不把它们当训练任务）。
+        with db.connection_for() as conn:
+            items = db.list_tasks(conn, status=status)
+        items = db.filter_out_task_types(items, db.JOB_TASK_TYPES)
+        if not include_generate:
+            items = db.filter_out_task_types(items, ("generate", "reg_ai"))
+        _enrich_tasks(items)
+        return {"items": items}
+
+    exclude = () if type_tuple else db.JOB_TASK_TYPES
+    if group == "live":
+        with db.connection_for() as conn:
+            items = db.list_tasks_page(
+                conn, statuses=db.LIVE_STATUSES, q=q, types=type_tuple,
+                exclude_types=exclude,
+            )
+        _enrich_tasks(items)
+        return {"items": items}
+
+    # group == "history" —— 分页
+    statuses = (
+        (status,) if status in db.HISTORY_STATUSES else db.HISTORY_STATUSES
+    )
+    page = max(1, page)
+    page_size = min(_MAX_PAGE_SIZE, max(1, page_size))
+    offset = (page - 1) * page_size
     with db.connection_for() as conn:
-        items = db.list_tasks(conn, status=status)
-    if not include_generate:
-        items = db.filter_out_task_types(items, ("generate", "reg_ai"))
-    # ADR 0006 PR-4 — is_pausable 信号每行注入（§8.1 / 上面 get_queue_item 注释）
-    try:
-        sup = _supervisor()
-        for it in items:
-            it["is_pausable"] = sup.is_task_pausable(int(it["id"]))
-    except HTTPException:
-        for it in items:
-            it["is_pausable"] = False
-    # ADR Addendum 2 — is_resumable 信号（paused/failed/canceled + 恢复点文件在盘）
-    for it in items:
-        it["is_resumable"] = _is_resumable(it)
-    return {"items": items}
+        total = db.count_tasks(
+            conn, statuses=statuses, q=q, types=type_tuple, exclude_types=exclude,
+        )
+        items = db.list_tasks_page(
+            conn, statuses=statuses, q=q, types=type_tuple, exclude_types=exclude,
+            limit=page_size, offset=offset,
+        )
+    _enrich_tasks(items)
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
 @router.post("/api/queue")
@@ -113,13 +210,39 @@ def enqueue(body: EnqueueRequest) -> dict[str, Any]:
     name = body.name or body.config_name
     with db.connection_for() as conn:
         task_id = db.create_task(
-            conn, name=name, config_name=body.config_name, priority=body.priority
+            conn, name=name, config_name=body.config_name, priority=body.priority,
+            scheduled_at=body.scheduled_at,
         )
         task = db.get_task(conn, task_id)
+    bus.publish({
+        "type": "task_state_changed",
+        "task_id": task_id,
+        "status": task["status"] if task else "pending",
+    })
+    return task or {"id": task_id}
+
+
+@router.post("/api/queue/{task_id}/start_now")
+def start_scheduled_now(task_id: int) -> dict[str, Any]:
+    """0.17 P-B —— scheduled task 手动提前：立即转 pending 参与调度。
+
+    scheduled_at 保留作记录（「原计划 3:00，手动提前」可追溯）；仅 scheduled
+    状态可调，其余 409。
+    """
+    with db.connection_for() as conn:
+        task = db.get_task(conn, task_id)
+        if not task:
+            raise NotFoundError("Task not found", code="task.not_found", details={"task_id": task_id})
+        if task["status"] != "scheduled":
+            raise ConflictError(
+                "Only scheduled tasks can be started early",
+                code="task.not_scheduled", details={"status": task["status"]},
+            )
+        db.update_task(conn, task_id, status="pending")
     bus.publish(
         {"type": "task_state_changed", "task_id": task_id, "status": "pending"}
     )
-    return task or {"id": task_id}
+    return {"task_id": task_id, "status": "pending"}
 
 
 @router.get("/api/queue/hold")
@@ -170,7 +293,7 @@ def get_queue_item(task_id: int) -> dict[str, Any]:
     # 仅 supervisor 跑得起来时计算；空载（test / 启动期）默认 False。
     try:
         task["is_pausable"] = _supervisor().is_task_pausable(task_id)
-    except HTTPException:
+    except (HTTPException, DomainError):
         task["is_pausable"] = False
     task["is_resumable"] = _is_resumable(task)
     return task
@@ -325,7 +448,9 @@ def retry_task(task_id: int) -> dict[str, Any]:
             priority=original["priority"],
         )
         copy_fields: dict[str, Any] = {}
-        for k in ("config_path", "project_id", "version_id"):
+        # R-3：task_type / params 必须一并复制——数据作业类 task 重跑靠它们
+        # 路由 worker 与还原参数（漏了会退化成 train 跑错脚本）。
+        for k in ("config_path", "project_id", "version_id", "task_type", "params"):
             if original.get(k) is not None:
                 copy_fields[k] = original[k]
         if copy_fields:

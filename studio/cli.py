@@ -671,7 +671,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         _check_torch_cuda()
         _try_enable_flash_attn()
         _check_onnxruntime()
-        url = f"http://{args.host}:{args.port}/studio/"
+        url = f"http://{args.host}:{args.port}/"
         _say(f"启动后端 → {url}")
         if not args.no_browser and not opened_browser:
             _spawn_browser_opener(url)
@@ -734,10 +734,10 @@ def cmd_dev(args: argparse.Namespace) -> int:
                 "--reload",
             ],
         )
-        frontend_url = f"http://127.0.0.1:{args.fe_port}/studio/"
+        frontend_url = f"http://127.0.0.1:{args.fe_port}/"
         print(
             f"[studio] frontend → {frontend_url}  "
-            f"backend → http://{args.host}:{args.port}/studio/"
+            f"backend → http://{args.host}:{args.port}/"
         )
         if not args.no_browser:
             # dev 模式打开 Vite 端口（HMR 能用），不开 backend 端口

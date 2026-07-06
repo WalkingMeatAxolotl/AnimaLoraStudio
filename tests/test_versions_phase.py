@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from studio import db
-from studio.services.projects import projects, versions, phase as versions_phase
+from studio.services.projects import jobs as project_jobs, projects, versions, phase as versions_phase
 from studio.services.projects.phase import CheckResult
 
 
@@ -96,12 +96,11 @@ def test_check_regularizing_no_jobs(isolated) -> None:
 def test_check_regularizing_blocks_when_job_running(isolated) -> None:
     v = _make_version(isolated)
     with db.connection_for(isolated["db"]) as conn:
-        conn.execute(
-            "INSERT INTO project_jobs(project_id, version_id, kind, params, status) "
-            "VALUES (?, ?, 'reg_build', '{}', 'running')",
-            (v["project_id"], v["id"]),
+        _job = project_jobs.create_job(
+            conn, project_id=v["project_id"], version_id=v["id"],
+            kind="reg_build", params={},
         )
-        conn.commit()
+        project_jobs.update_status(conn, _job["id"], "running")
         result = versions_phase.check_regularizing(conn, v["id"])
     assert not result.ok
     assert "正则" in result.reason
@@ -110,12 +109,10 @@ def test_check_regularizing_blocks_when_job_running(isolated) -> None:
 def test_check_regularizing_blocks_when_job_pending(isolated) -> None:
     v = _make_version(isolated)
     with db.connection_for(isolated["db"]) as conn:
-        conn.execute(
-            "INSERT INTO project_jobs(project_id, version_id, kind, params, status) "
-            "VALUES (?, ?, 'reg_build', '{}', 'pending')",
-            (v["project_id"], v["id"]),
+        _job = project_jobs.create_job(
+            conn, project_id=v["project_id"], version_id=v["id"],
+            kind="reg_build", params={},
         )
-        conn.commit()
         result = versions_phase.check_regularizing(conn, v["id"])
     assert not result.ok
 
@@ -124,12 +121,11 @@ def test_check_regularizing_done_job_doesnt_block(isolated) -> None:
     """已完成的 reg job 不阻塞 cursor 前进。"""
     v = _make_version(isolated)
     with db.connection_for(isolated["db"]) as conn:
-        conn.execute(
-            "INSERT INTO project_jobs(project_id, version_id, kind, params, status) "
-            "VALUES (?, ?, 'reg_build', '{}', 'done')",
-            (v["project_id"], v["id"]),
+        _job = project_jobs.create_job(
+            conn, project_id=v["project_id"], version_id=v["id"],
+            kind="reg_build", params={},
         )
-        conn.commit()
+        project_jobs.update_status(conn, _job["id"], "done")
         result = versions_phase.check_regularizing(conn, v["id"])
     assert result.ok
 
@@ -227,12 +223,11 @@ def test_skip_phase_preprocessing_blocked_by_running_job(isolated) -> None:
     v = _make_version(isolated)
     with db.connection_for(isolated["db"]) as conn:
         versions.update_version(conn, v["id"], phase="preprocessing")
-        conn.execute(
-            "INSERT INTO project_jobs(project_id, version_id, kind, params, status) "
-            "VALUES (?, ?, 'preprocess', '{}', 'running')",
-            (v["project_id"], v["id"]),
+        _job = project_jobs.create_job(
+            conn, project_id=v["project_id"], version_id=v["id"],
+            kind="preprocess", params={},
         )
-        conn.commit()
+        project_jobs.update_status(conn, _job["id"], "running")
         advanced, result, _ = versions_phase.skip_phase(conn, v["id"])
     assert not advanced
     assert "预处理" in result.reason
@@ -262,12 +257,11 @@ def test_skip_phase_regularizing_blocked_by_running_job(isolated) -> None:
     v = _make_version(isolated)
     with db.connection_for(isolated["db"]) as conn:
         versions.update_version(conn, v["id"], phase="regularizing")
-        conn.execute(
-            "INSERT INTO project_jobs(project_id, version_id, kind, params, status) "
-            "VALUES (?, ?, 'reg_build', '{}', 'running')",
-            (v["project_id"], v["id"]),
+        _job = project_jobs.create_job(
+            conn, project_id=v["project_id"], version_id=v["id"],
+            kind="reg_build", params={},
         )
-        conn.commit()
+        project_jobs.update_status(conn, _job["id"], "running")
         advanced, result, _ = versions_phase.skip_phase(conn, v["id"])
     assert not advanced
     assert "正则" in result.reason

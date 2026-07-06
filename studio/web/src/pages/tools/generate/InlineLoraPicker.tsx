@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { api, type LoraCkpt } from '../../../api/client'
-import type { ProjectLora } from './types'
+import { type LoraCkpt } from '../../../api/client'
+import type { LoraCatalog } from './useLoraCatalog'
 
 function basenameOf(path: string): string {
   return path.split(/[\\/]/).pop() ?? path
@@ -19,7 +19,8 @@ export interface PickedLora {
 }
 
 interface CommonProps {
-  projectLoras: ProjectLora[]
+  /** 懒级联数据源：picker 自己按需拉 projects / versions / ckpts（见 useLoraCatalog） */
+  catalog: LoraCatalog
   /** × 按钮回调：单选模式 = 删整个槽；多选模式 = 关 inline 面板 */
   onClose: () => void
   onPickExternal?: () => void
@@ -83,32 +84,35 @@ type Props = SingleModeProps | MultiModeProps
  *   传 `showWeight=false` 隐藏权重栏。
  */
 export default function InlineLoraPicker(props: Props) {
-  const { projectLoras, onClose, onPickExternal } = props
+  const { catalog, onClose, onPickExternal } = props
+  // 解构出稳定的 loader（useCallback）+ 响应式数据，effect deps 用纯标识符。
+  const { projects, ensureProjects, ensureVersions, versionsOf, fetchCkpts } = catalog
   const isSingle = props.mode === 'single'
   const showWeight = isSingle ? true : (props.showWeight ?? true)
   const existingPaths = isSingle ? new Set<string>() : (props.existingPaths ?? new Set<string>())
 
-  // 项目下拉：projectLoras 去重 by projectId
-  const projects = useMemo(() => {
-    const map = new Map<number, { id: number; title: string }>()
-    for (const l of projectLoras) {
-      if (!map.has(l.projectId)) map.set(l.projectId, { id: l.projectId, title: l.projectTitle })
-    }
-    return Array.from(map.values())
-  }, [projectLoras])
+  // 项目下拉：picker mount 即懒拉项目列表（catalog 缓存 + 去重，不开 picker 不发）
+  useEffect(() => { ensureProjects() }, [ensureProjects])
 
   // multi mode 受控锚定：caller 给 initialPid/Vid 时直接采纳（历史回填走这条）
   const multiInitialPid = !isSingle ? (props as MultiModeProps).initialPid ?? null : null
   const multiInitialVid = !isSingle ? (props as MultiModeProps).initialVid ?? null : null
-  // 初始 pid/vid：single 用 value 的；multi 用 initialPid/Vid 兜底，再 fallback projects[0]
+  // 初始 pid/vid：single 用 value 的；multi 用 initialPid/Vid 兜底。
+  // 懒级联下项目列表 mount 时还没到 → 起步 null；projects 到了再由下方 effect
+  // 自动锚第一个项目（保留「打开 picker 即看到第一个项目 ckpts」的既有 UX）。
   const initialPid = isSingle
-    ? (props.value?.projectId ?? projects[0]?.id ?? null)
-    : (multiInitialPid ?? projects[0]?.id ?? null)
+    ? (props.value?.projectId ?? null)
+    : (multiInitialPid ?? null)
   const initialVid = isSingle
     ? (props.value?.versionId ?? null)
-    : (multiInitialVid ?? projectLoras.find((l) => l.projectId === projects[0]?.id)?.versionId ?? null)
+    : (multiInitialVid ?? null)
 
   const [pid, setPid] = useState<number | null>(initialPid)
+
+  // pid 定下来（含 anchor 回填 / 用户选）→ 懒拉该项目的 versions
+  useEffect(() => {
+    if (pid != null) ensureVersions(pid)
+  }, [ensureVersions, pid])
 
   // 决策 #8（plan §9.2）：single 模式是受控的，pid 必须跟 props.value.projectId
   // 同步 —— 否则历史回填 / URL ?lora= 流回新 LoraEntry 时，下拉框还卡在
@@ -128,12 +132,21 @@ export default function InlineLoraPicker(props: Props) {
     setPid((cur) => (cur === multiInitialPid ? cur : multiInitialPid))
   }, [isSingle, multiInitialPid])
 
-  const versions = useMemo(() => {
-    if (pid === null) return []
-    return projectLoras
-      .filter((l) => l.projectId === pid)
-      .map((l) => ({ id: l.versionId, label: l.versionLabel, status: l.status }))
-  }, [projectLoras, pid])
+  // 无 anchor（single value=null / multi 无 initialPid）时，projects 懒加载到位后
+  // 自动锚第一个项目 —— 保留既有 UX：打开 picker 即看到第一个项目的 ckpts（不必
+  // 先手选项目）。有 anchor 时上面两个 sync effect 接手，这里跳过。
+  const hasAnchor = isSingle ? singleValue != null : multiInitialPid != null
+  useEffect(() => {
+    if (hasAnchor) return
+    if (projects.length === 0) return
+    setPid((cur) => (cur != null ? cur : projects[0].id))
+  }, [hasAnchor, projects])
+
+  // 版本下拉：来自 catalog（pid 定后由上面 effect 懒拉）。还没到时为空数组。
+  const versions = useMemo(
+    () => (pid != null ? versionsOf(pid) ?? [] : []),
+    [versionsOf, pid],
+  )
 
   const [vid, setVid] = useState<number | null>(initialVid)
   // 同 pid：single 模式下 value 非 null 时 vid 跟 props.value.versionId 同步
@@ -163,15 +176,21 @@ export default function InlineLoraPicker(props: Props) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // vid 不变量：要么 null（解析中），要么属于当前 pid 的 versions（切 project 时
+  // 由下拉 onChange 同步清空、auto-vid effect 从 versions 选定）。所以这里只在
+  // vid 非 null 时拉 ckpt —— 不会出现 (newPid, oldVid) 这种触发 404 的组合。
   useEffect(() => {
-    if (pid === null || vid === null) {
-      setCkpts([])
+    if (pid === null) {
+      setCkpts([])  // 没选项目 → 清空
       return
     }
+    // 切 project 的过渡帧（vid 暂为 null，等 auto-vid 选定）：保留旧 chips 不清，
+    // 由 settling 显加载态。否则会先闪一下「加载中/空」再出新 chips。
+    if (vid === null) return
     let cancelled = false
     setLoading(true)
     setError(null)
-    void api.listVersionLoraCkpts(pid, vid)
+    void fetchCkpts(pid, vid)
       .then((items) => {
         if (cancelled) return
         setCkpts(items)
@@ -184,7 +203,15 @@ export default function InlineLoraPicker(props: Props) {
         setLoading(false)
       })
     return () => { cancelled = true }
-  }, [pid, vid])
+  }, [pid, vid, fetchCkpts])
+
+  // 切项目后、新项目 versions 还在网络加载（vid 尚未选定）的窄窗口 —— 显「加载中」
+  // 避免长时间空白。仅此一种；版本切换（vid 直接换值、不经 null）不触发，所以
+  // 同项目内换 checkpoint 不闪。已加载但确实无版本的项目（versionsOf 返 []）不算。
+  const settling = pid !== null && vid === null && versionsOf(pid) === undefined
+  // 更新中：ckpt 请求在飞 或 切项目等新 versions。期间旧 chips 仍显示但禁止点击
+  // （避免点到上一次的 ckpt），并给个不占布局的小提示。
+  const updating = loading || settling
 
   // 搜索过滤
   const [search, setSearch] = useState('')
@@ -339,6 +366,10 @@ export default function InlineLoraPicker(props: Props) {
       {/* header */}
       <div className="flex items-center gap-2">
         <span className="text-xs font-semibold text-fg-secondary shrink-0">选 LoRA</span>
+        {/* 更新中（旧 chips 还在原地）时给个不占布局的小提示，不替换 grid 内容 */}
+        {updating && ckpts.length > 0 && (
+          <span className="text-2xs text-fg-tertiary shrink-0">加载中…</span>
+        )}
         <span className="flex-1" />
         {onPickExternal && (
           <button
@@ -364,7 +395,13 @@ export default function InlineLoraPicker(props: Props) {
         <select
           className="input text-xs flex-1"
           value={pid ?? ''}
-          onChange={(e) => setPid(e.target.value ? Number(e.target.value) : null)}
+          onChange={(e) => {
+            // 切项目：pid + vid 同批更新，立即把 vid 清成 null（与 setPid 一起
+            // 提交），避免出现 (newPid, oldVid) 一拍让 ckpt effect 拉错触发 404。
+            // 新 versions 懒加载到位后 auto-vid effect 再选定该项目的版本。
+            setPid(e.target.value ? Number(e.target.value) : null)
+            setVid(null)
+          }}
           aria-label="选项目"
         >
           <option value="">选项目…</option>
@@ -412,7 +449,10 @@ export default function InlineLoraPicker(props: Props) {
         className="grid gap-1.5 overflow-y-auto"
         style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', maxHeight: 280, padding: 2 }}
       >
-        {loading && <div className="text-2xs text-fg-tertiary px-1 py-2" style={{ gridColumn: '1 / -1' }}>加载中…</div>}
+        {/* 「加载中」只在真的没东西可显示时出现（首次拉取）。切换版本/项目时旧
+            chips 仍渲染（见下方 filtered.map 不再被 loading 门控），等新结果到位
+            原地替换，不闪空列表。 */}
+        {updating && ckpts.length === 0 && <div className="text-2xs text-fg-tertiary px-1 py-2" style={{ gridColumn: '1 / -1' }}>加载中…</div>}
         {!loading && projects.length === 0 && (
           <div className="text-fg-tertiary text-xs px-1 py-4 text-center" style={{ gridColumn: '1 / -1' }}>
             还没有训练好的 LoRA —— 先去训练一个{onPickExternal ? '，或用「外部文件」' : ''}
@@ -423,7 +463,7 @@ export default function InlineLoraPicker(props: Props) {
             该版本没扫到 ckpt 文件
           </div>
         )}
-        {!loading && filtered.map((c) => {
+        {filtered.map((c) => {
           const isExisting = existingPaths.has(c.path)
           const isPicked = isSingle ? c.path === selectedPath : picked.has(c.path)
           const marker = isExisting ? '✓' : (isPicked ? '✓' : '+')
@@ -432,7 +472,7 @@ export default function InlineLoraPicker(props: Props) {
               key={c.path}
               type="button"
               onClick={() => onChipClick(c)}
-              disabled={isExisting}
+              disabled={isExisting || updating}
               className="font-mono flex items-center gap-1 min-w-0"
               style={{
                 fontSize: 11,

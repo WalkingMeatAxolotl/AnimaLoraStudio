@@ -163,7 +163,7 @@ export function PauseProgressModal({ taskId, taskName, onClose }: PauseProgressM
               <button
                 type="button"
                 onClick={handleClose}
-                className="px-3 py-1.5 text-sm rounded bg-accent text-accent-on hover:bg-accent-hover"
+                className="btn btn-primary"
               >
                 {t('queue.pauseProgress.ok')}
               </button>
@@ -219,14 +219,14 @@ export function PauseProgressModal({ taskId, taskName, onClose }: PauseProgressM
               <button
                 type="button"
                 onClick={handleViewLogs}
-                className="px-3 py-1.5 text-sm rounded border border-dim bg-surface hover:bg-surface-hover"
+                className="btn btn-secondary"
               >
                 {t('queue.pauseProgress.viewLogs')}
               </button>
               <button
                 type="button"
                 onClick={handleClose}
-                className="px-3 py-1.5 text-sm rounded bg-accent text-accent-on hover:bg-accent-hover"
+                className="btn btn-primary"
               >
                 {t('queue.pauseProgress.ok')}
               </button>

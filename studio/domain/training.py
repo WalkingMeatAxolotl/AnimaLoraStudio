@@ -96,7 +96,8 @@ class TrainingConfig(BaseModel):
     )
     keep_tokens: int = Field(
         0, ge=0,
-        description="保护前 N 个标签不打乱（仅 TXT 模式）",
+        description="保护前 N 个标签不参与打乱与 dropout（仅 TXT 模式；JSON 模式由"
+                    " meta.trigger 与固定字段承担同类角色）",
         json_schema_extra=_meta("caption"),
     )
     flip_augment: bool = Field(
@@ -278,9 +279,9 @@ class TrainingConfig(BaseModel):
         description="cosine_with_warmup 预热步数",
         json_schema_extra=_meta("training", show_when="lr_scheduler==cosine_with_warmup", advanced=True),
     )
-    optimizer_type: Literal["adamw", "automagic", "lion", "prodigy", "prodigy_plus_schedulefree", "soap", "soap_sf"] = Field(
+    optimizer_type: Literal["adamw", "automagic", "came", "lion", "prodigy", "prodigy_plus_schedulefree", "soap", "soap_sf"] = Field(
         "adamw",
-        description="优化器。adamw 标准基线；automagic 自适应每参数 lr（推荐 lr=1e-6）；lion 显存约 AdamW 一半（推荐 lr=AdamW lr / 3）；prodigy / prodigy_plus_schedulefree 自适应估 lr（lr 填 1.0）；soap Adam-in-Shampoo-eigenbasis 二阶预条件（拟合更快，lr 同 AdamW 量级）；soap_sf SOAP + Schedule-Free（lr_scheduler 固定 none）",
+        description="优化器。adamw 标准基线；automagic 自适应每参数 lr（推荐 lr=1e-6）；came 置信度引导 + 分解二阶矩（state 显存低于 AdamW，lr 同 AdamW 量级）；lion 显存约 AdamW 一半（推荐 lr=AdamW lr / 3）；prodigy / prodigy_plus_schedulefree 自适应估 lr（lr 填 1.0）；soap Adam-in-Shampoo-eigenbasis 二阶预条件（拟合更快，lr 同 AdamW 量级）；soap_sf SOAP + Schedule-Free（lr_scheduler 固定 none）",
         json_schema_extra=_meta("training"),
     )
     prodigy_d_coef: float = Field(
@@ -292,6 +293,39 @@ class TrainingConfig(BaseModel):
         True,
         description="Prodigy warmup 期间防止 d 被初期高梯度推高；默认开启更稳",
         json_schema_extra=_meta("training", show_when="optimizer_type==prodigy", advanced=True),
+    )
+    # ---------------------------- CAME 专属字段 ----------------------------
+    # CAME = Confidence-guided Adaptive Memory Efficient（Luo et al. 2023,
+    # arxiv 2307.02047）。lr 用 AdamW 量级真实值，可配常规 lr_scheduler。
+    came_beta1: float = Field(
+        0.9, ge=0.0, lt=1.0,
+        description="CAME β1（update 动量 EMA 衰减）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==came", advanced=True),
+    )
+    came_beta2: float = Field(
+        0.999, ge=0.0, lt=1.0,
+        description="CAME β2（分解二阶矩 EMA 衰减）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==came", advanced=True),
+    )
+    came_beta3: float = Field(
+        0.9999, ge=0.0, lt=1.0,
+        description="CAME β3（置信度 instability EMA 衰减；越大置信度估计越平滑）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==came", advanced=True),
+    )
+    came_eps1: float = Field(
+        1e-30, gt=0.0,
+        description="CAME eps1（二阶矩正则项，防除零）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==came", advanced=True),
+    )
+    came_eps2: float = Field(
+        1e-16, gt=0.0,
+        description="CAME eps2（instability 下限正则；调大会压平逐坐标置信度差异并整体缩小步长）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==came", advanced=True),
+    )
+    came_clip_threshold: float = Field(
+        1.0, gt=0.0,
+        description="CAME update RMS 裁剪阈值（同 Adafactor 的 d）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==came", advanced=True),
     )
     lion_beta1: float = Field(
         0.9, ge=0.0, lt=1.0,
@@ -1037,94 +1071,40 @@ class TrainingConfig(BaseModel):
         json_schema_extra=_meta("sample", hidden=True),
     )
 
-    # --------------------------------------------------------------- WandB 预设覆盖
-    wandb_notice: str = Field(
-        "",
-        description="⚠️ 如果你不知道自己在做什么，请不要填写这里的设置。此处的值会覆盖全局 Settings 页的 WandB 配置，留空则使用全局设置。",
-        json_schema_extra=_meta("wandb", "notice", advanced=True),
+    # ----------------------------------------------------------- 训练后指标评估
+    eval_validation_enabled: bool = Field(
+        False,
+        description="训练结束后用验证集（held-out）出图并计算 CLIP-T / CLIP-I / DINO-I 指标。"
+                    "验证集是从训练集划出、不参与训练的图，放在与 train/ 同级的 validation/。",
+        json_schema_extra=_meta("eval_validation"),
     )
-    wandb_enabled: Optional[bool] = Field(
-        None,
-        description="启用 WandB（留空使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
+    eval_validation_split_ratio: float = Field(
+        0.0, ge=0.0, le=1.0,
+        description="训练开始前从数据集随机划入验证集的比例（0–1，0=不自动划分）。"
+                    "推荐约 0.1。按比例补足：验证集已达到该比例就不再划分；数据集很小时取整后可能为 0。",
+        json_schema_extra=_meta("eval_validation", show_when="eval_validation_enabled==true"),
     )
-    wandb_api_key: str = Field(
-        "",
-        description="API Key（留空使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
-    wandb_project: str = Field(
-        "",
-        description="项目名（留空使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
-    wandb_entity: str = Field(
-        "",
-        description="Entity / Team（留空使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
-    wandb_base_url: str = Field(
-        "",
-        description="自定义 WandB 服务地址（留空使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
-    wandb_mode: Literal["", "online", "offline", "disabled"] = Field(
-        "",
-        description="运行模式 online/offline/disabled（留空使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
-    wandb_log_samples: Optional[bool] = Field(
-        None,
-        description="上传采样图到 WandB（留空使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
-    wandb_sample_max_side: int = Field(
+    eval_validation_split_seed: int = Field(
         0, ge=0,
-        description="采样图缩放最长边像素（0=使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
+        description="验证集随机划分的种子，固定后划分结果可复现。",
+        json_schema_extra=_meta("eval_validation", show_when="eval_validation_enabled==true"),
     )
-    wandb_sample_every_n_steps: int = Field(
-        -1, ge=-1,
-        description="采样图上传节流步数（-1=使用全局设置，0=不节流）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
-    wandb_upload_model: Optional[bool] = Field(
-        None,
-        description="上传模型 artifact（留空使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
-    wandb_upload_model_policy: Literal["", "all", "last"] = Field(
-        "",
-        description="模型保留策略 all/last（留空使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
-    wandb_upload_state_manual: Optional[bool] = Field(
-        None,
-        description="上传手动保存的训练状态 artifact（留空使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
-    wandb_upload_state_manual_policy: Literal["", "all", "last"] = Field(
-        "",
-        description="手动状态保留策略 all/last（留空使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
-    wandb_upload_state_auto: Optional[bool] = Field(
-        None,
-        description="上传自动保存的训练状态 artifact（留空使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
-    wandb_upload_state_auto_policy: Literal["", "all", "last"] = Field(
-        "",
-        description="自动状态保留策略 all/last（留空使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
+
+    # WandB：0.18 起 per-config 覆盖块整体移除 —— wandb 属于账号/工作流级配置,
+    # 不随项目变化;api_key/entity/base_url 写进 yaml 会随预设分享/bundle 导出/
+    # 任务快照明文外泄。全局配置在 Settings(secrets.WandBConfig),经 supervisor
+    # 注入 WANDB_* 环境变量到训练进程,secrets 不落盘任何 yaml。
+    # 老 yaml 里的 wandb_* 键由 _tolerant_validate 当未知字段丢弃(dropped_fields
+    # 提示),argparse bridge 对未知键直接跳过。
 
     # ---------------------------------------------------------------- 监控/进度
     # 这一组对 Studio 用户全部隐藏（hidden=True）—— Studio 跑训练用 subprocess 把
     # stdout 重定向到 task log（非 tty），这些「终端体验」字段对 web 用户没意义；
     # monitor 页用的是 monitor_state.json，跟这些值零相关。
-    # 字段保留在 schema 是为了：(1) 旧 project yaml 里写过的值不丢；(2) 裸 CLI 用户
-    # 仍可在 yaml 手动覆盖。BaseConfig.extra="forbid" 也要求字段定义存在。
+    # 字段保留在 schema 只为裸 CLI 用户仍可在 yaml 手动覆盖；等于默认值时
+    # config_prune 不落盘（hidden 裁剪），非默认覆盖照常保留。
+    # 旧的 HTTP monitor server 字段（no_monitor / monitor_host / monitor_port /
+    # no_browser）已随 server 一并删除，见 migrations.RETIRED_MONITOR_KEYS。
     loss_curve_steps: int = Field(
         100, ge=10,
         description="终端 rich live 曲线宽度（仅 CLI 终端，不影响 Studio 监控页）",
@@ -1141,28 +1121,5 @@ class TrainingConfig(BaseModel):
     log_every: int = Field(
         10, ge=1,
         description="终端日志输出间隔（仅在禁用 rich 进度条时生效）",
-        json_schema_extra=_meta("monitor", hidden=True),
-    )
-    # PP6.1：以下字段保留是为了不破坏既有 yaml；HTTP monitor server 已退役，
-    # 这些值不再生效。Studio 前端通过 /api/state?task_id= 读 monitor_state.json，
-    # 路径由 --monitor-state-file（CLI-only）决定。
-    no_monitor: bool = Field(
-        True,
-        description="(已废弃) 内置 Web monitor server 已删除；保留字段兼容旧 yaml",
-        json_schema_extra=_meta("monitor", hidden=True),
-    )
-    monitor_host: str = Field(
-        "127.0.0.1",
-        description="(已废弃) 旧 monitor server 绑定地址；当前忽略",
-        json_schema_extra=_meta("monitor", hidden=True),
-    )
-    monitor_port: int = Field(
-        8765, ge=1, le=65535,
-        description="(已废弃) 旧 monitor server 端口；当前忽略",
-        json_schema_extra=_meta("monitor", hidden=True),
-    )
-    no_browser: bool = Field(
-        True,
-        description="(已废弃) 旧 monitor server 自动开浏览器；当前忽略",
         json_schema_extra=_meta("monitor", hidden=True),
     )

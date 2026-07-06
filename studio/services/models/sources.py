@@ -38,6 +38,24 @@ def _ms_wd14_repo_id(hf_repo_id: str) -> Optional[str]:
     return None
 
 
+# CLIP / DINO eval 指标模型的 ModelScope 镜像映射。社区镜像组织 AI-ModelScope
+# 同步了 HF 上常见的视觉/多模态模型，repo 名一般一致。没有映射的返回 None →
+# 回退 HuggingFace（与 wd14 非 SmilingWolf 前缀同样的优雅回退）。MS 源仅在用户
+# 主动把 eval 源切到 modelscope 时才走到；默认 HF。具体 repo 是否存在以
+# ModelScope 实际为准，缺失时该模型下载失败、用户可切回 HF 源。
+_MS_EVAL_REPO_IDS = {
+    "openai/clip-vit-base-patch32": "AI-ModelScope/clip-vit-base-patch32",
+    "openai/clip-vit-large-patch14": "AI-ModelScope/clip-vit-large-patch14",
+    "facebook/dinov2-small": "AI-ModelScope/dinov2-small",
+    "facebook/dinov2-base": "AI-ModelScope/dinov2-base",
+}
+
+
+def _ms_eval_repo_id(hf_repo_id: str) -> Optional[str]:
+    """CLIP / DINO 模型的 ModelScope 镜像 id；无映射返回 None（回退 HF）。"""
+    return _MS_EVAL_REPO_IDS.get(hf_repo_id)
+
+
 # ---------------------------------------------------------------------------
 # 同步下载 helper
 # ---------------------------------------------------------------------------
@@ -271,6 +289,82 @@ def download_flat(
                 break
             parent = parent.parent
     on_log(f"   ✓ {target.name}")
+    return True
+
+
+def download_snapshot(
+    repo_id: str,
+    target_dir: Path,
+    *,
+    allow_patterns: Optional[list[str]] = None,
+    on_log: Callable[[str], None] = print,
+) -> bool:
+    """从 HF 把整个 repo 下到 target_dir（多文件 transformers 模型用）。
+
+    与 download_flat（单文件 + 扁平 rename）不同，这里保留 repo 目录结构整目录
+    落地，from_pretrained 直接指向 target_dir。已就绪（有 config.json）则跳过。
+    """
+    if (target_dir / "config.json").exists():
+        on_log(f"   ✓ {target_dir.name} 已存在，跳过")
+        return True
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError:
+        on_log("   ✗ 缺 huggingface_hub")
+        return False
+    target_dir.mkdir(parents=True, exist_ok=True)
+    endpoint = _resolve_endpoint()
+    token = _hf_token()
+    try:
+        kwargs: dict = dict(repo_id=repo_id, local_dir=str(target_dir))
+        if allow_patterns:
+            kwargs["allow_patterns"] = allow_patterns
+        if endpoint:
+            kwargs["endpoint"] = endpoint
+        if token:
+            kwargs["token"] = token
+        snapshot_download(**kwargs)
+    except Exception as exc:
+        on_log(f"   ✗ {target_dir.name}: {exc}")
+        if _is_gated_auth_error(exc):
+            on_log(
+                "   ↳ 该仓库可能是 gated/private：请先到 huggingface.co 申请并接受"
+                "模型授权，再到 设置→密钥 填 HuggingFace token 后重试。"
+            )
+        return False
+    on_log(f"   ✓ {target_dir.name}")
+    return True
+
+
+def download_snapshot_ms(
+    ms_repo_id: str,
+    target_dir: Path,
+    *,
+    on_log: Callable[[str], None] = print,
+) -> bool:
+    """从 ModelScope 把整个 repo 下到 target_dir（多文件模型用）。
+
+    需要 ``pip install modelscope``；未安装返回 False。已就绪则跳过。
+    """
+    if (target_dir / "config.json").exists():
+        on_log(f"   ✓ {target_dir.name} 已存在，跳过")
+        return True
+    try:
+        from modelscope import snapshot_download as ms_snapshot
+    except ImportError:
+        on_log("   ✗ 缺 modelscope（pip install modelscope）")
+        return False
+    target_dir.mkdir(parents=True, exist_ok=True)
+    token = _ms_token()
+    try:
+        kwargs: dict = dict(model_id=ms_repo_id, local_dir=str(target_dir))
+        if token:
+            kwargs["token"] = token
+        ms_snapshot(**kwargs)
+    except Exception as exc:
+        on_log(f"   ✗ {target_dir.name} (ModelScope): {exc}")
+        return False
+    on_log(f"   ✓ {target_dir.name} (via ModelScope)")
     return True
 
 

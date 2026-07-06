@@ -50,9 +50,10 @@ class _StubSupervisor:
         self.canceled: list[int] = []
         self.current_task_id: int | None = None
     def cancel(self, task_id: int) -> bool:
+        # 镜像真 supervisor：pending / scheduled / running 可取消（0.17 P-B）。
         with db.connection_for() as conn:
             task = db.get_task(conn, task_id)
-            if not task or task["status"] not in ("pending", "running"):
+            if not task or task["status"] not in ("pending", "scheduled", "running"):
                 return False
             db.update_task(conn, task_id, status="canceled")
         self.canceled.append(task_id)
@@ -545,6 +546,177 @@ def test_reorder(client: TestClient) -> None:
     assert resp.status_code == 200
     items = client.get("/api/queue?status=pending").json()["items"]
     assert [i["id"] for i in items] == [b, a]
+
+
+# --- 0.17 P-A/P-C/P-E 队列分区 + 分页 + 搜索 -------------------------------
+
+def _seed(status: str, *, name: str = "t", task_type: str = "train") -> int:
+    with db.connection_for() as conn:
+        tid = db.create_task(conn, name=name, config_name=name)
+        db.update_task(conn, tid, status=status, task_type=task_type)
+    return tid
+
+
+def test_group_live_only_returns_live_statuses(client: TestClient) -> None:
+    _seed("running", name="run")
+    _seed("pending", name="pend")
+    _seed("paused", name="pause")
+    _seed("done", name="hist")
+    items = client.get("/api/queue?group=live").json()["items"]
+    assert {i["status"] for i in items} == {"running", "pending", "paused"}
+
+
+def test_group_history_paginates_with_total(client: TestClient) -> None:
+    ids = [_seed("done", name=f"d{i}") for i in range(5)]
+    body = client.get("/api/queue?group=history&page=1&page_size=2").json()
+    assert body["total"] == 5
+    assert body["page"] == 1
+    assert body["page_size"] == 2
+    assert [i["id"] for i in body["items"]] == [ids[4], ids[3]]  # id DESC
+    page3 = client.get("/api/queue?group=history&page=3&page_size=2").json()
+    assert [i["id"] for i in page3["items"]] == [ids[0]]
+
+
+def test_group_history_page_size_clamped(client: TestClient) -> None:
+    _seed("done")
+    body = client.get("/api/queue?group=history&page_size=9999").json()
+    assert body["page_size"] == 100  # _MAX_PAGE_SIZE
+
+
+def test_group_history_search_q(client: TestClient) -> None:
+    _seed("done", name="alpha_lora")
+    _seed("done", name="beta_run")
+    body = client.get("/api/queue?group=history&q=alpha").json()
+    assert [i["name"] for i in body["items"]] == ["alpha_lora"]
+    assert body["total"] == 1
+
+
+def test_group_history_status_subfilter(client: TestClient) -> None:
+    _seed("done", name="d")
+    _seed("failed", name="f")
+    _seed("canceled", name="c")
+    body = client.get("/api/queue?group=history&status=failed").json()
+    assert [i["name"] for i in body["items"]] == ["f"]
+    assert body["total"] == 1
+
+
+def test_group_history_includes_all_types_by_default(client: TestClient) -> None:
+    """0.17 P-F：live/history 不再隐藏 generate/reg_ai（队列页要全类型可见）。"""
+    _seed("done", name="train")
+    _seed("done", name="reg", task_type="reg_ai")
+    _seed("done", name="gen", task_type="generate")
+    body = client.get("/api/queue?group=history").json()
+    assert {i["name"] for i in body["items"]} == {"train", "reg", "gen"}
+    assert body["total"] == 3
+
+
+def test_group_history_type_filter(client: TestClient) -> None:
+    _seed("done", name="train")
+    _seed("done", name="reg", task_type="reg_ai")
+    _seed("done", name="gen", task_type="generate")
+    body = client.get("/api/queue?group=history&types=generate").json()
+    assert [i["name"] for i in body["items"]] == ["gen"]
+    assert body["total"] == 1
+    # 多类型逗号分隔
+    body2 = client.get("/api/queue?group=history&types=reg_ai,generate").json()
+    assert {i["name"] for i in body2["items"]} == {"reg", "gen"}
+    assert body2["total"] == 2
+
+
+def test_group_live_type_filter(client: TestClient) -> None:
+    _seed("running", name="train")
+    _seed("pending", name="gen", task_type="generate")
+    items = client.get("/api/queue?group=live&types=generate").json()["items"]
+    assert [i["name"] for i in items] == ["gen"]
+
+
+def test_invalid_type_filter_400(client: TestClient) -> None:
+    resp = client.get("/api/queue?group=history&types=banana")
+    assert resp.status_code == 400
+
+
+def test_invalid_group_400(client: TestClient) -> None:
+    resp = client.get("/api/queue?group=banana")
+    assert resp.status_code == 400
+
+
+def test_no_group_returns_all_backward_compat(client: TestClient) -> None:
+    """不传 group 保持旧行为（Overview/Generate/Topbar 依赖）。"""
+    _seed("running")
+    _seed("done")
+    items = client.get("/api/queue").json()["items"]
+    assert {i["status"] for i in items} == {"running", "done"}
+
+
+# --- 0.17 P-B 计划任务（scheduled 状态 + start_now） -----------------------
+
+
+def test_enqueue_with_scheduled_at_creates_scheduled(client: TestClient) -> None:
+    """带 scheduled_at → status=scheduled；不带 → pending（原行为）。"""
+    import time as _time
+    future = _time.time() + 3600
+    resp = client.post(
+        "/api/queue", json={"config_name": "good", "scheduled_at": future},
+    )
+    assert resp.status_code == 200, resp.text
+    task = resp.json()
+    assert task["status"] == "scheduled"
+    assert task["scheduled_at"] == pytest.approx(future)
+
+
+def test_scheduled_appears_in_group_live(client: TestClient) -> None:
+    import time as _time
+    client.post(
+        "/api/queue",
+        json={"config_name": "good", "scheduled_at": _time.time() + 3600},
+    )
+    items = client.get("/api/queue?group=live").json()["items"]
+    assert [i["status"] for i in items] == ["scheduled"]
+
+
+def test_start_now_promotes_scheduled_to_pending(client: TestClient) -> None:
+    import time as _time
+    future = _time.time() + 3600
+    tid = client.post(
+        "/api/queue", json={"config_name": "good", "scheduled_at": future},
+    ).json()["id"]
+    resp = client.post(f"/api/queue/{tid}/start_now")
+    assert resp.status_code == 200
+    task = client.get(f"/api/queue/{tid}").json()
+    assert task["status"] == "pending"
+    # scheduled_at 保留作记录（原计划时间可追溯）
+    assert task["scheduled_at"] == pytest.approx(future)
+
+
+def test_start_now_rejects_non_scheduled(client: TestClient) -> None:
+    tid = client.post("/api/queue", json={"config_name": "good"}).json()["id"]
+    resp = client.post(f"/api/queue/{tid}/start_now")
+    assert resp.status_code == 409
+    missing = client.post("/api/queue/9999/start_now")
+    assert missing.status_code == 404
+
+
+def test_cancel_scheduled_task(client: TestClient) -> None:
+    import time as _time
+    tid = client.post(
+        "/api/queue",
+        json={"config_name": "good", "scheduled_at": _time.time() + 3600},
+    ).json()["id"]
+    resp = client.post(f"/api/queue/{tid}/cancel")
+    assert resp.status_code == 200
+    assert client.get(f"/api/queue/{tid}").json()["status"] == "canceled"
+
+
+def test_status_filter_accepts_scheduled(client: TestClient) -> None:
+    import time as _time
+    client.post(
+        "/api/queue",
+        json={"config_name": "good", "scheduled_at": _time.time() + 3600},
+    )
+    _seed("pending", name="p")
+    resp = client.get("/api/queue?status=scheduled")
+    assert resp.status_code == 200
+    assert [i["status"] for i in resp.json()["items"]] == ["scheduled"]
 
 
 def test_logs_missing_returns_empty(client: TestClient) -> None:

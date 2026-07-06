@@ -1,7 +1,9 @@
 # Anima LoRA 训练正则化方案分析报告
 
+> ⚠️ **历史分析报告（2025-02）**：早期对「该不该加 weight decay / 梯度裁剪 / dropout 等」的方案分析，结论多数已落地（项目已支持多优化器 + weight decay + 梯度裁剪）。**§1.3「当前训练配置」是当时状态、已过期**；保留作设计背景参考（尤其 §2 Cosmos-DiT vs SD 架构差异）。
+
 **模型**: Anima（基于 Cosmos 的 DiT 二次元特调模型）  
-**训练框架**: AnimaLoraToolkit  
+**训练框架**: AnimaLoraStudio  
 **分析日期**: 2025-02
 
 ---

@@ -27,11 +27,13 @@ from ...responses import _thumb_response
 from ....domain.errors import DomainError, NotFoundError, ValidationError
 from ...schemas.curation import (
     CopyRequest,
+    CopyValidationRequest,
     DeleteFilesRequest,
     DuplicateApplyRequest,
     DuplicateScanRequest,
     FolderOp,
     RemoveRequest,
+    RemoveValidationRequest,
 )
 from ._shared import _publish_project_state
 from .... import db
@@ -209,7 +211,16 @@ def project_thumb(
 # 本 endpoint 因为路径在 /api/projects/ 下，归 projects 子包。
 # ---------------------------------------------------------------------------
 
-_HYDRATABLE_JOB_KINDS = {"download", "tag", "reg_build"}
+_HYDRATABLE_JOB_KINDS = {
+    "download",
+    "tag",
+    "reg_build",
+    "eval_samples",
+    "eval_clip",
+    "eval_dino",
+    "eval_tag",
+    "eval_ccip",
+}
 
 
 @router.get("/api/projects/{pid}/versions/{vid}/jobs/latest")
@@ -247,6 +258,37 @@ def get_latest_version_job(pid: int, vid: int, kind: str) -> dict[str, Any]:
 def get_curation(pid: int, vid: int) -> dict[str, Any]:
     with db.connection_for() as conn:
         return curation.curation_view(conn, pid, vid)
+
+
+# ---------------------------------------------------------------------------
+# held-out 验证集手动维护（与 train curation 对称，但右栏扁平、无文件夹）
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/projects/{pid}/versions/{vid}/curation/validation")
+def get_curation_validation(pid: int, vid: int) -> dict[str, Any]:
+    with db.connection_for() as conn:
+        return curation.curation_validation_view(conn, pid, vid)
+
+
+@router.post("/api/projects/{pid}/versions/{vid}/curation/validation/copy")
+def copy_to_validation(
+    pid: int, vid: int, body: CopyValidationRequest,
+) -> dict[str, Any]:
+    """download → validation/1_data/ 复制（连 caption）；已在 train/validation
+    的名字 skip 防泄漏。"""
+    with db.connection_for() as conn:
+        return curation.copy_download_to_validation(conn, pid, vid, body.files)
+
+
+@router.post("/api/projects/{pid}/versions/{vid}/curation/validation/remove")
+def remove_from_validation(
+    pid: int, vid: int, body: RemoveValidationRequest,
+) -> dict[str, Any]:
+    with db.connection_for() as conn:
+        return curation.remove_from_validation(
+            conn, pid, vid, [item.model_dump() for item in body.items],
+        )
 
 
 # ---------------------------------------------------------------------------

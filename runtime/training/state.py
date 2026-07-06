@@ -25,6 +25,7 @@ def save_training_state(
     path, injector, optimizer, epoch, global_step,
     loss_history=None, rng_state=None, monitor_state=None,
     scheduler=None, timestep_sampler=None, sra_aligner=None,
+    scaler=None,
 ):
     """保存完整训练状态，支持断点续训。
 
@@ -61,6 +62,10 @@ def save_training_state(
             sampler_state = None
         if sampler_state:  # 空 dict（baseline）不存
             state["timestep_sampler_state"] = sampler_state
+    if scaler is not None:
+        # fp16 GradScaler 的 scale 因子 / growth tracker。resume 不带 → 重置成默认 2^16，
+        # 头几步重新溢出空跳直到收敛。bf16/fp32 时 ctx.scaler 为 None，跳过不存。
+        state["scaler_state"] = scaler.state_dict()
     # ADR 0006 Addendum 2：tmp + os.replace 原子落盘。auto_epoch_state.pt 是
     # 覆盖式单文件恢复点，直接 torch.save 在断电 / 强杀砸中写盘窗口时会把
     # 唯一恢复点写成半截；先写 sibling tmp 再 rename，旧文件要么完整保留
@@ -75,7 +80,7 @@ def save_training_state(
     logger.info(f"训练状态已保存: {path} (epoch={epoch}, step={global_step})")
 
 
-def load_training_state(path, injector, optimizer, scheduler=None, timestep_sampler=None, sra_aligner=None):
+def load_training_state(path, injector, optimizer, scheduler=None, timestep_sampler=None, sra_aligner=None, scaler=None):
     """加载训练状态，返回 (epoch, global_step, loss_history, monitor_state)。
 
     timestep_sampler（ADR 0006 Addendum 1）：如 ckpt 含 timestep_sampler_state 且 sampler
@@ -117,6 +122,14 @@ def load_training_state(path, injector, optimizer, scheduler=None, timestep_samp
             scheduler.load_state_dict(state["scheduler_state_dict"])
         except Exception as e:
             logger.warning(f"调度器状态恢复失败（将从头开始）: {e}")
+
+    # 恢复 GradScaler（fp16）。老 ckpt / bf16·fp32 run 无此 key → 保持默认 scale 冷启动。
+    if scaler is not None and "scaler_state" in state:
+        try:
+            scaler.load_state_dict(state["scaler_state"])
+            logger.info("GradScaler 状态已恢复")
+        except Exception as e:
+            logger.warning(f"GradScaler 状态恢复失败（按默认 scale 冷启动）: {e}")
 
     # 恢复随机数状态
     if "rng_state" in state:

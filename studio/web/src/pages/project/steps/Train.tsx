@@ -15,6 +15,7 @@ import {
 import { parseFolderMeta } from '../../../lib/folderMeta'
 import { useLocalStorageState } from '../../../lib/useLocalStorageState'
 import ConfigSkeleton from '../../../components/ConfigSkeleton'
+import ConfigYamlPanel from '../../../components/ConfigYamlPanel'
 import { useDialog } from '../../../components/Dialog'
 import SchemaForm, { visibleSchemaGroups } from '../../../components/SchemaForm'
 import SchemaSectionIndex from '../../../components/SchemaSectionIndex'
@@ -78,6 +79,9 @@ export default function TrainPage() {
   // 预设 picker（dropdown 模式，与 Presets 页一致）
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerSearch, setPickerSearch] = useState('')
+  // 0.17 P-B — 定时训练弹层（延迟 N 小时 / 指定绝对时间两种入口，D7）。
+  const [scheduleOpen, setScheduleOpen] = useState(false)
+  const [scheduleTime, setScheduleTime] = useState('')
   const [advancedMode, toggleAdvancedMode] = useAdvancedMode()
   const pickerAnchorRef = useRef<HTMLButtonElement | null>(null)
   const pickerPopRef = useRef<HTMLDivElement | null>(null)
@@ -209,11 +213,13 @@ export default function TrainPage() {
    *   - 相等 → 用户没动过，安全 sync server 归一化结果到 UI
    *   - 不等 → 用户有新内容，只更新 savedJson baseline，UI state 不动；
    *            useEffect debounce 会自然为新内容触发下一轮 save 收敛 */
-  const persistConfig = useCallback(async (cfg: ConfigData): Promise<void> => {
+  const persistConfig = useCallback(async (cfg: ConfigData, force = false): Promise<void> => {
     while (inFlightSaveRef.current) {
       await inFlightSaveRef.current
     }
-    if (JSON.stringify(cfg) === savedJsonRef.current) return
+    // force：内容没变也要 PUT（「清理旧字段」重写 yaml —— 磁盘上的旧键不在
+    // GET 归一化结果里，JSON diff 看不出差异）。
+    if (!force && JSON.stringify(cfg) === savedJsonRef.current) return
     const p = (async () => {
       const r = await api.putVersionConfig(project.id, vid!, cfg)
       setConfigResp((prev) => prev ? { ...prev, has_config: true, config: r.config } : prev)
@@ -223,10 +229,13 @@ export default function TrainPage() {
         configRef.current = r.config
         setConfig(r.config)
       }
+      // PUT 全量重写 yaml（tolerant validate + prune），磁盘上不再有旧字段 /
+      // 非法值 —— 兼容横幅的信息已过期，清掉。
+      applyPresetWarnings({})
     })()
     inFlightSaveRef.current = p
     try { await p } finally { inFlightSaveRef.current = null }
-  }, [project.id, vid])
+  }, [project.id, vid, applyPresetWarnings])
 
   // ── auto-save ─────────────────────────────────────────────────────────
   // config 变化 → 600ms 后没新改动就落盘。中途又改 → cleanup clearTimeout 重置。
@@ -265,6 +274,7 @@ export default function TrainPage() {
   const schemaScrollRef = useRef<HTMLDivElement | null>(null)
   // 右侧训练集分布预览抽屉的展开/收起（持久化）。收起时把横向空间让给表单。
   const [previewOpen, setPreviewOpen] = useLocalStorageState('train.previewOpen', true)
+  const [previewTab, setPreviewTab] = useLocalStorageState<'stats' | 'config'>('train.previewTab', 'stats')
   const visibleGroups = useMemo(
     () => (schema ? visibleSchemaGroups(schema, advancedMode) : []),
     [schema, advancedMode],
@@ -427,7 +437,7 @@ export default function TrainPage() {
     }
   }
 
-  const onEnqueue = async () => {
+  const onEnqueue = async (scheduledAt?: number) => {
     if (!configResp?.has_config) {
       toast(t('train.noPresetError'), 'error')
       return
@@ -450,8 +460,18 @@ export default function TrainPage() {
       if (cur && JSON.stringify(cur) !== savedJsonRef.current) {
         await persistConfig(cur)
       }
-      const task = await api.enqueueVersionTraining(project.id, vid)
-      toast(t('train.enqueuedNav', { id: task.id }), 'success')
+      const task = await api.enqueueVersionTraining(
+        project.id, vid, scheduledAt != null ? { scheduledAt } : undefined,
+      )
+      if (scheduledAt != null) {
+        toast(t('train.scheduledNav', {
+          id: task.id,
+          time: new Date(scheduledAt * 1000).toLocaleString('zh-CN', { hour12: false }),
+        }), 'success')
+      } else {
+        toast(t('train.enqueuedNav', { id: task.id }), 'success')
+      }
+      setScheduleOpen(false)
       void reload()
       navigate('/queue')
     } catch (e) {
@@ -461,19 +481,115 @@ export default function TrainPage() {
     }
   }
 
+  // datetime-local 的 value 格式（本地时区，分钟精度）。
+  const toLocalInputValue = (d: Date) => {
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+      + `T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  }
+
+  const onScheduleAbsolute = () => {
+    if (!scheduleTime) return
+    const ts = new Date(scheduleTime).getTime() / 1000
+    if (!Number.isFinite(ts) || ts <= Date.now() / 1000 + 30) {
+      toast(t('train.schedulePast'), 'error')
+      return
+    }
+    void onEnqueue(ts)
+  }
+
   return (
     <StepShell
       idx={6}
       title={t('steps.train.title')}
       subtitle={t('steps.train.subtitle')}
       actions={
-        <button
-          onClick={() => void onEnqueue()}
-          disabled={busy || !configResp?.has_config}
-          className="btn btn-primary"
-        >
-          {t('train.startTrainBtn')}
-        </button>
+        <>
+          {/* 0.17 P-B — 定时训练：延迟 N 小时 / 指定时间，建成 scheduled task。
+              样式对齐项目页「导入项目」（btn-ghost btn-sm）。 */}
+          <button
+            onClick={() => setScheduleOpen(true)}
+            disabled={busy || !configResp?.has_config}
+            className="btn btn-ghost btn-sm"
+            title={t('train.scheduleHint')}
+            data-testid="train-schedule-btn"
+          >
+            {t('train.scheduleBtn')}
+          </button>
+          {/* 样式对齐项目页「新建项目」（btn-primary btn-sm + icon + 文字） */}
+          <button
+            onClick={() => void onEnqueue()}
+            disabled={busy || !configResp?.has_config}
+            className="btn btn-primary btn-sm"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+            <span>{t('train.startTrainBtn')}</span>
+          </button>
+          {scheduleOpen && (
+            <div
+              role="dialog"
+              aria-modal="true"
+              className="fixed inset-0 z-40 flex items-center justify-center bg-black/50"
+              onMouseDown={(e) => { if (e.target === e.currentTarget) setScheduleOpen(false) }}
+              data-testid="train-schedule-modal"
+            >
+              <div className="bg-elevated border border-dim rounded-lg w-[90%] max-w-[440px] p-6 flex flex-col gap-4 shadow-xl">
+                <h2 className="m-0 text-lg font-semibold text-fg-primary">
+                  {t('train.scheduleBtn')}
+                </h2>
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-xs font-semibold text-fg-tertiary uppercase tracking-wide">
+                    {t('train.scheduleDelaySection')}
+                  </span>
+                  <div className="flex gap-1.5">
+                    {[1, 2, 4, 8].map((h) => (
+                      <button
+                        key={h}
+                        onClick={() => void onEnqueue(Date.now() / 1000 + h * 3600)}
+                        disabled={busy}
+                        className="btn btn-secondary btn-sm flex-1"
+                        data-testid={`train-schedule-delay-${h}h`}
+                      >
+                        +{h}h
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-xs font-semibold text-fg-tertiary uppercase tracking-wide">
+                    {t('train.scheduleAbsoluteSection')}
+                  </span>
+                  <input
+                    type="datetime-local"
+                    className="input"
+                    value={scheduleTime}
+                    min={toLocalInputValue(new Date())}
+                    onChange={(e) => setScheduleTime(e.target.value)}
+                    data-testid="train-schedule-time"
+                  />
+                </div>
+                <div className="flex gap-2 justify-end mt-1">
+                  <button
+                    onClick={() => setScheduleOpen(false)}
+                    className="btn btn-secondary"
+                  >
+                    {t('common.cancel')}
+                  </button>
+                  <button
+                    onClick={onScheduleAbsolute}
+                    disabled={busy || !scheduleTime}
+                    className="btn btn-primary"
+                    data-testid="train-schedule-confirm"
+                  >
+                    {t('train.scheduleConfirm')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
       }
     >
       <div className="flex flex-col h-full gap-3">
@@ -632,7 +748,23 @@ export default function TrainPage() {
                 </div>
                 {(droppedFields.length > 0 || defaultedFields.length > 0) && (
                   <div className="mb-3 rounded-md border border-amber-400/50 bg-amber-950/60 px-3.5 py-2.5 text-xs text-amber-100 space-y-1">
-                    <span className="font-semibold text-amber-300">{t('presets.compatNoticeTitle')}</span>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-amber-300">{t('presets.compatNoticeTitle')}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const cur = configRef.current
+                          if (!cur) return
+                          void persistConfig(cur, true)
+                            .then(() => toast(t('presets.cleanLegacyDone'), 'success'))
+                            .catch((e) => toast(t('train.saveFailed', { error: e }), 'error'))
+                        }}
+                        className="shrink-0 rounded border border-amber-400/50 bg-transparent px-2 py-0.5 text-[11px] font-medium text-amber-200 hover:bg-amber-400/10 cursor-pointer"
+                        title={t('presets.cleanLegacyTitle')}
+                      >
+                        {t('presets.cleanLegacyBtn')}
+                      </button>
+                    </div>
                     {droppedFields.length > 0 && (
                       <div>{t('presets.droppedFieldsBody')}<code className="ml-1 text-[11px] opacity-80">{droppedFields.join(', ')}</code></div>
                     )}
@@ -681,16 +813,53 @@ export default function TrainPage() {
           </button>
         </div>
 
-        {/* 右栏：训练集分布预览抽屉（可收回）。flex-[1] 与左表单 flex-[3] 还原老
-            grid 的 3:1 比例（按比例而非固定宽）；收起时整列不渲染、空间归表单。 */}
+        {/* 右栏：预览抽屉（可收回），双 tab：数据分布 / YAML 预览。数据分布保持
+            与左表单 flex-[3] 的 3:1 老比例；YAML tab 加宽到 3:2（yaml 行长，1/4
+            宽不断折行看不清）。收起时整列不渲染、空间归表单。YAML 预览 = 按
+            show_when 裁剪后的 yaml，实时跟随表单，与落盘 config.yaml 同内容。 */}
         {previewOpen && (
-          <div className="flex-[1] min-w-0 overflow-y-auto">
-            <DatasetStatsPanel
-              projectId={project.id}
-              activeVersion={activeVersion}
-              reg={reg}
-              config={config}
-            />
+          <div className={`${previewTab === 'config' ? 'flex-[2]' : 'flex-[1]'} min-w-0 flex flex-col min-h-0`}>
+            {/* tab 条靠右：切 YAML tab 时抽屉加宽、左缘会移动，右对齐锚在固定的
+                右缘上，切换时开关自身不跟着跳。 */}
+            <div className="shrink-0 mb-2 flex justify-end">
+              <div className="inline-flex rounded-md border border-subtle overflow-hidden text-xs">
+                <button
+                  type="button"
+                  onClick={() => setPreviewTab('stats')}
+                  className={`px-3 py-1 transition-colors ${previewTab === 'stats' ? 'bg-accent text-white' : 'bg-surface text-fg-secondary hover:bg-subtle'}`}
+                >
+                  {t('train.previewTabStats')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewTab('config')}
+                  className={`px-3 py-1 transition-colors ${previewTab === 'config' ? 'bg-accent text-white' : 'bg-surface text-fg-secondary hover:bg-subtle'}`}
+                >
+                  {t('train.previewTabYaml')}
+                </button>
+              </div>
+            </div>
+            {previewTab === 'stats' ? (
+              <div className="flex-1 min-h-0 overflow-y-auto">
+                <DatasetStatsPanel
+                  projectId={project.id}
+                  activeVersion={activeVersion}
+                  reg={reg}
+                  config={config}
+                />
+              </div>
+            ) : config ? (
+              <ConfigYamlPanel
+                config={config}
+                schema={schema}
+                fileLabel="config.yaml"
+                className="flex-1 flex flex-col min-h-0"
+              />
+            ) : (
+              <div className="flex-1 flex items-center justify-center text-fg-tertiary text-sm rounded-md border border-dashed border-dim">
+                {t('train.noConfigHint')}
+              </div>
+            )}
           </div>
         )}
       </div>

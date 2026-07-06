@@ -17,7 +17,7 @@ import type { LoraEntry, XYAxisType } from '../../../api/client'
 import type { DatasetPick } from './PromptFromDatasetPicker'
 import {
   DEFAULT_SAMPLER, DEFAULT_SCHEDULER, SAMPLER_OPTIONS, SCHEDULER_OPTIONS,
-  type ProjectLora, type SamplerName, type SchedulerName,
+  type SamplerName, type SchedulerName,
 } from './types'
 import type { XYAxisDraft } from './xy'
 
@@ -66,6 +66,9 @@ export interface GenerateParamsSnapshot {
   /** v1 早期快照无此二字段（当时固定 er_sde/simple）；回填时缺省到默认值 */
   sampler_name?: string
   scheduler?: string
+  /** 当时选用的底模（官方 variant key 或本地 custom 路径）；null/缺省 = 跟随
+   *  设置页默认底模。老快照无此字段，回填到 null（沿用默认）。 */
+  base_model?: string | null
   /** xy 模式下 daemon 端强制 1，仅 single 有意义 */
   count: number
   seed: number
@@ -102,26 +105,21 @@ export function transformAxisRawForSnapshot(draft: XYAxisDraft): SnapshotXYAxis 
   return { axis: draft.axis, raw, loraIndex: draft.loraIndex }
 }
 
-/** 回填：SnapshotLora → LoraEntry，按 ids 主键、name 兜底 resolve 当前机器上的 path。
- *  resolve 失败 → path 留空（submit 时 `.filter(l => l.path.trim())` 会跳过这条），
- *  UI 上用户能看到一条 path 空的 LoRA 卡片提示重选。 */
-export function resolveSnapshotLora(
-  snap: SnapshotLora, projectLoras: ProjectLora[],
+/** 回填：给定某 (project, version) 下的 ckpts，把快照 LoRA 解析成当前机器 path。
+ *  优先 basename 精确匹配，否则取版本代表 ckpt（list_lora_ckpts 已按 final→step↓
+ *  排，ckpts[0] 即最新）。解析失败 → path 留空（submit 时 `.filter(l => l.path.trim())`
+ *  跳过；SidebarLoras 渲染 ⚠ 卡片提示重选）。
+ *
+ *  ckpts 由调用方按需拉（懒级联，见 useLoraCatalog.fetchCkpts）—— 不再依赖
+ *  mount 时一把拉好的全量 projectLoras。无 ids / 外部 LoRA → 调用方传 []。 */
+export function resolveLoraFromCkpts(
+  snap: SnapshotLora, ckpts: readonly { path: string }[],
 ): LoraEntry {
-  if (snap.project_id != null && snap.version_id != null) {
-    const hit = projectLoras.find(
-      (p) => p.projectId === snap.project_id && p.versionId === snap.version_id,
-    )
-    if (hit) return {
-      path: hit.path, scale: snap.scale,
-      project_id: snap.project_id, version_id: snap.version_id,
-    }
-  }
-  // 兜底：按 basename 匹配（外部 LoRA 无 ids，或 picker 重建 ids 变了）
-  const byName = projectLoras.find((p) => loraBasename(p.path) === snap.name)
-  if (byName) return {
-    path: byName.path, scale: snap.scale,
-    project_id: byName.projectId, version_id: byName.versionId,
+  const byName = ckpts.find((c) => loraBasename(c.path) === snap.name)
+  const path = byName?.path ?? ckpts[0]?.path ?? ''
+  if (path) return {
+    path, scale: snap.scale,
+    project_id: snap.project_id ?? null, version_id: snap.version_id ?? null,
   }
   return {
     path: '', scale: snap.scale,
@@ -130,6 +128,10 @@ export function resolveSnapshotLora(
     name: snap.name,
   }
 }
+
+/** 解析单条快照 LoRA → 当前机器 LoraEntry。由 Generate 用 catalog.fetchCkpts
+ *  实现（按需拉对应版本 ckpts 再 resolveLoraFromCkpts），注入避免本模块依赖网络。 */
+export type SnapshotLoraResolver = (snap: SnapshotLora) => Promise<LoraEntry>
 
 /** applySnapshot 输出（决策 #8 / Arch v2 Step 3）：把 snapshot 转成"prefs 字段补丁"。
  *
@@ -149,6 +151,8 @@ export interface AppliedSnapshot {
   scheduler: SchedulerName
   count: number
   seed: number
+  /** 当时选用的底模；null = 跟随设置默认 */
+  baseModel: string | null
   datasetPick: DatasetPick | null
   /** 按 mode 二选一灌入 prefs.singleLoras / prefs.xyLoras */
   loras: LoraEntry[]
@@ -157,15 +161,6 @@ export interface AppliedSnapshot {
   yDraft?: SnapshotXYAxis | null
   /** resolve 失败的 LoRA 数量（>0 时调用方应 toast 提示重选） */
   unresolvedLoraCount: number
-}
-
-/** dataset_pick 的 project 是否还在当前机器上能 resolve（heuristic：projectLoras
- *  里有任何这个 projectId 的条目就算"活着"）。用作 applySnapshot 决定是 picker
- *  受控回填还是 fallback 到正向 prompt 的判据。 */
-function isDatasetProjectAlive(
-  pick: DatasetPick, projectLoras: ProjectLora[],
-): boolean {
-  return projectLoras.some((p) => p.projectId === pick.projectId)
 }
 
 /** dataset_pick 失败兜底：把 tags 追加到第一条 prompt 末尾。
@@ -189,22 +184,24 @@ function coerceScheduler(v: string | undefined): SchedulerName {
   return (SCHEDULER_OPTIONS as readonly string[]).includes(v ?? '') ? (v as SchedulerName) : DEFAULT_SCHEDULER
 }
 
-export function applySnapshot(
+export async function applySnapshot(
   snap: GenerateParamsSnapshot,
-  projectLoras: ProjectLora[],
-): AppliedSnapshot {
-  const resolved = snap.loras.map((l) => resolveSnapshotLora(l, projectLoras))
+  resolveLora: SnapshotLoraResolver,
+  projectExists: (projectId: number) => boolean,
+): Promise<AppliedSnapshot> {
+  const resolved = await Promise.all(snap.loras.map((l) => resolveLora(l)))
   const unresolved = resolved.filter((l) => !l.path).length
   // compare 视图回填到 xy（compare 是 xy 子视图，无 selectedIndices 不直接进）
   const mode: 'single' | 'xy' = snap.mode === 'single' ? 'single' : 'xy'
 
   // dataset_pick fallback：snap 存了 dataset_pick 但 project 在当前机器上没了
-  // （project 被删 / 跨机器 / projectLoras 还没 load）→ tags 拼进 prompts[0]，
-  // 不再回填 picker（datasetPick=null）。用户能在正向 textarea 里直接看到具体
-  // 内容，否则 picker 关着 tags 不可见、又会偷偷在 handleGenerate 里拼一次。
+  // （project 被删 / 跨机器）→ tags 拼进 prompts[0]，不再回填 picker
+  // （datasetPick=null）。用户能在正向 textarea 里直接看到具体内容，否则 picker
+  // 关着 tags 不可见、又会偷偷在 handleGenerate 里拼一次。projectExists 由调用方
+  // 用 catalog 已加载的项目列表判定。
   let prompts = snap.prompts
   let datasetPick = snap.dataset_pick ?? null
-  if (datasetPick && datasetPick.tags.length > 0 && !isDatasetProjectAlive(datasetPick, projectLoras)) {
+  if (datasetPick && datasetPick.tags.length > 0 && !projectExists(datasetPick.projectId)) {
     prompts = mergeTagsIntoFirstPrompt(prompts, datasetPick.tags)
     datasetPick = null
   }
@@ -221,6 +218,7 @@ export function applySnapshot(
     scheduler: coerceScheduler(snap.scheduler),
     count: snap.count,
     seed: snap.seed,
+    baseModel: snap.base_model ?? null,
     datasetPick,
     loras: resolved,
     unresolvedLoraCount: unresolved,

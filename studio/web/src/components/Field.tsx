@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import type { SchemaProperty } from '../api/client'
 import { useProjectCtx } from '../context/ProjectContext'
 import { controlKind, fieldLabel, schemaEnumLabel } from '../lib/schema'
+import { useAutoGrowTextarea } from '../lib/useAutoGrowTextarea'
 import PathPicker from './PathPicker'
 import ResumeFieldPicker from './ResumeFieldPicker'
 
@@ -124,46 +125,28 @@ export default function Field({
   // textarea ------------------------------------------------------------
   if (kind === 'textarea') {
     return (
-      <div className="py-1.5">
-        <div className="text-sm font-medium text-fg-secondary mb-1">
-          {label}{hintNode}
-        </div>
-        <textarea
-          rows={3}
-          value={String(value ?? '')}
-          onChange={(e) => onChange(e.target.value)}
-          disabled={disabled}
-          className="input input-mono" style={inputStyle}
-        />
-        {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
-      </div>
+      <TextareaField
+        label={label}
+        help={help}
+        value={value}
+        onChange={onChange}
+        disabled={disabled}
+        hintNode={hintNode}
+      />
     )
   }
 
   // string-list ---------------------------------------------------------
   if (kind === 'string-list') {
-    const list = Array.isArray(value) ? (value as string[]) : []
-    const text = list.join('\n')
     return (
-      <div className="py-1.5">
-        <div className="text-sm font-medium text-fg-secondary mb-1">
-          {label}{t('field.multilineHint')}{hintNode}
-        </div>
-        <textarea
-          rows={Math.max(3, list.length + 1)}
-          value={text}
-          onChange={(e) => {
-            const arr = e.target.value
-              .split('\n')
-              .map((s) => s.trim())
-              .filter((s) => s.length > 0)
-            onChange(arr)
-          }}
-          disabled={disabled}
-          className="input input-mono" style={inputStyle}
-        />
-        {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
-      </div>
+      <StringListField
+        label={`${label}${t('field.multilineHint')}`}
+        help={help}
+        value={value}
+        onChange={onChange}
+        disabled={disabled}
+        hintNode={hintNode}
+      />
     )
   }
 
@@ -227,6 +210,80 @@ export default function Field({
       hintNode={hintNode}
       suffix={suffix}
     />
+  )
+}
+
+interface TextareaFieldProps {
+  label: string
+  help: string | undefined
+  value: unknown
+  onChange: (v: unknown) => void
+  disabled?: boolean
+  hintNode?: React.ReactNode
+}
+
+function TextareaField({
+  label, help, value, onChange, disabled = false, hintNode,
+}: TextareaFieldProps) {
+  const taRef = useRef<HTMLTextAreaElement>(null)
+  const text = String(value ?? '')
+  useAutoGrowTextarea(taRef, text)
+  return (
+    <div className="py-1.5">
+      <div className="text-sm font-medium text-fg-secondary mb-1">
+        {label}{hintNode}
+      </div>
+      <textarea
+        ref={taRef}
+        rows={5}
+        value={text}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        className="input input-mono resize-none overflow-hidden" style={inputStyle}
+      />
+      {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
+    </div>
+  )
+}
+
+/** 字符串列表输入（每行一条）。textarea 显示走本地 raw 缓冲：受控值若直接用
+ *  join('\n') 回显，刚敲的换行（尾部空行）会被 split+filter 吃掉、光标换不了
+ *  行。raw 保留用户原始输入，解析后的数组仍每次击键同步给父级，blur 时把
+ *  raw 归一化（去空行 / 首尾空白）。 */
+function StringListField({
+  label, help, value, onChange, disabled = false, hintNode,
+}: TextareaFieldProps) {
+  const joined = Array.isArray(value) ? (value as string[]).join('\n') : ''
+  const [raw, setRaw] = useState<string>(joined)
+  const taRef = useRef<HTMLTextAreaElement>(null)
+  useAutoGrowTextarea(taRef, raw)
+
+  useEffect(() => {
+    if (document.activeElement !== taRef.current) setRaw(joined)
+  }, [joined])
+
+  const parse = (text: string) =>
+    text.split('\n').map((s) => s.trim()).filter((s) => s.length > 0)
+
+  return (
+    <div className="py-1.5">
+      <div className="text-sm font-medium text-fg-secondary mb-1">
+        {label}{hintNode}
+      </div>
+      <textarea
+        ref={taRef}
+        rows={5}
+        value={raw}
+        onChange={(e) => {
+          setRaw(e.target.value)
+          onChange(parse(e.target.value))
+        }}
+        onBlur={() => setRaw(parse(raw).join('\n'))}
+        disabled={disabled}
+        className="input input-mono resize-none overflow-hidden" style={inputStyle}
+      />
+      {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
+    </div>
   )
 }
 

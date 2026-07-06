@@ -435,11 +435,86 @@ def test_image_dataset_loads_caption_utils_when_prefer_json(tmp_path: Path) -> N
         assert key in dataset.caption_utils
 
 
+def test_json_caption_list_shape_does_not_crash_issue_345(tmp_path: Path) -> None:
+    """#345: Studio 打标写出的简化 JSON（tags 为扁平 list、非分类 dict）以前被
+    误判为标准格式直接喂给 build，触发 'list' object has no attribute 'get'。
+    现在应正常构建 caption：trigger 在首位、tags 全部保留、trigger 去重。"""
+    pytest.importorskip("torch")
+    import json
+
+    from runtime.training.dataset import ImageDataset
+
+    payload = {
+        "tags": ["mika_pikazo", "1girl", "solo", "blue hair"],
+        "meta": {"trigger": "mika_pikazo"},
+    }
+    jp = tmp_path / "10032281.json"
+    jp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    dataset = ImageDataset(tmp_path, prefer_json=True)
+    caption = dataset._process_caption_json(jp)
+
+    assert caption is not None, "list 形式 caption 不应崩溃 / 静默返回 None"
+    assert caption.startswith("mika_pikazo"), "trigger 应在首位（keep_tokens 保护）"
+    assert "1girl" in caption and "blue hair" in caption
+    assert caption.count("mika_pikazo") == 1, "trigger 与 tags 内重复项应去重"
+
+
+def test_json_caption_preflight_rejects_broken_json(tmp_path: Path) -> None:
+    """#345 follow-up: JSON 样本没有 txt 兜底（_make_sample 置 txt_path=None），
+    caption 解析失败会静默以空 caption 训练。预检应在开训前直接报错拒绝。"""
+    pytest.importorskip("torch")
+    from runtime.training.dataset import ImageDataset
+
+    img = _touch_image(tmp_path, "a.png")
+    img.with_suffix(".json").write_text("{ not valid json", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="拒绝开训"):
+        ImageDataset(tmp_path, prefer_json=True)
+
+
+def test_json_caption_preflight_passes_healthy_flat_json(tmp_path: Path) -> None:
+    """健康的扁平 list caption（#345 场景修复后）应通过预检正常建数据集。"""
+    pytest.importorskip("torch")
+    import json
+
+    from runtime.training.dataset import ImageDataset
+
+    img = _touch_image(tmp_path, "a.png")
+    img.with_suffix(".json").write_text(
+        json.dumps({"tags": ["mika_pikazo", "1girl"], "meta": {"trigger": "mika_pikazo"}}),
+        encoding="utf-8",
+    )
+
+    dataset = ImageDataset(tmp_path, prefer_json=True)
+    assert len(dataset.samples) == 1
+
+
 def test_parse_repeat_kohya_prefix() -> None:
     assert datasets.parse_repeat("5_concept") == (5, "concept")
     assert datasets.parse_repeat("12_a_long_name") == (12, "a_long_name")
     assert datasets.parse_repeat("noprefix") == (1, "noprefix")
     assert datasets.parse_repeat("0_zero") == (0, "zero")
+
+
+def test_txt_caption_tag_dropout_kohya_semantics(tmp_path: Path) -> None:
+    """TXT 路径 tag_dropout（kohya 语义）：keep_tokens 前缀免 shuffle 免 dropout，
+    其余 tag 逐个独立 dropout、无保底。dropout 丢触发词是生态已知行为，保护靠
+    用户显式配 keep_tokens。"""
+    pytest.importorskip("torch")
+    from runtime.training.dataset import ImageDataset
+
+    # dropout=1.0 → 非保护区全部丢弃（确定性）；keep_tokens 前缀原序保留
+    ds = ImageDataset(tmp_path, shuffle_caption=True, keep_tokens=2, tag_dropout=1.0)
+    assert ds._process_caption_txt("trigger, quality, a, b, c") == "trigger, quality"
+
+    # keep_tokens=0 + dropout=1.0 → 全丢、无保底（kohya 同款）
+    ds_all = ImageDataset(tmp_path, shuffle_caption=False, keep_tokens=0, tag_dropout=1.0)
+    assert ds_all._process_caption_txt("a, b, c") == ""
+
+    # dropout=0 → 原样（不 shuffle 时顺序不变）
+    ds_off = ImageDataset(tmp_path, shuffle_caption=False, keep_tokens=0, tag_dropout=0.0)
+    assert ds_off._process_caption_txt("a, b, c") == "a, b, c"
 
 
 def test_caption_kind_priority(tmp_path: Path) -> None:

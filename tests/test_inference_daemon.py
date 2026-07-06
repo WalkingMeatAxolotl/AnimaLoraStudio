@@ -378,8 +378,9 @@ def test_supervisor_train_dispatch_skips_generate(env, monkeypatch):
 
 def test_dispatch_generate_skips_task_without_config_path(env, monkeypatch):
     """enqueue 竞态：task 已 pending+generate 但 config_path 还没落库时，
-    _dispatch_generate 必须跳过（不能 submit → daemon 报 config not found: <none>），
-    等 config_path 落库后下个 tick 才派。"""
+    exclusive 派发必须跳过（不能 submit → daemon 报 config not found: <none>），
+    等 config_path 落库后下个 tick 才派。R-1 起 generate 走
+    _dispatch_exclusive_tasks 统一派发。"""
     from studio.supervisor import Supervisor
 
     sup = Supervisor(
@@ -388,18 +389,19 @@ def test_dispatch_generate_skips_task_without_config_path(env, monkeypatch):
     )
     submitted: list[int] = []
     monkeypatch.setattr(sup, "_submit_to_daemon", lambda t: submitted.append(t["id"]))
+    train_slot = next(s for s in sup._slots if s.name == "train")
 
     # config_path 还是 NULL（模拟 create_task 刚落、config.json 还没写）
     with db.connection_for(env["db"]) as conn:
         tid = db.create_task(conn, name="g", config_name="gen", priority=0)
         db.update_task(conn, tid, task_type="generate")
 
-    sup._dispatch_generate()
+    sup._dispatch_exclusive_tasks(train_slot)
     assert submitted == [], "config_path=NULL 的 generate task 不应被 submit"
     assert _task_status(env["db"], tid) == "pending", "应保持 pending 等待，不该 failed"
 
     # config_path 落库后应被派
     with db.connection_for(env["db"]) as conn:
         db.update_task(conn, tid, config_path=str(env["configs"] / "gen.json"))
-    sup._dispatch_generate()
+    sup._dispatch_exclusive_tasks(train_slot)
     assert submitted == [tid]

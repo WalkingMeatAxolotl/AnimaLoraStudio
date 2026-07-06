@@ -79,6 +79,32 @@ export function evalShowWhen(
   return true
 }
 
+/**
+ * 过滤掉 yaml 落盘不需要的字段。与后端落盘裁剪
+ * （studio/domain/config_prune.py）同一语义，让 YAML 预览和落盘内容一致：
+ * 1. show_when 求值为假 —— 当前配置下 UI 不可见的字段；
+ * 2. hidden=true 且值等于 schema 默认值 —— UI 永不渲染的字段，非默认覆盖保留。
+ * disable_when 字段与无元数据字段原样保留。
+ */
+export function pruneInactiveConfig(
+  config: Record<string, unknown>,
+  properties: Record<string, SchemaProperty>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [name, value] of Object.entries(config)) {
+    const prop = properties[name]
+    if (prop?.show_when && !evalShowWhen(prop.show_when, config)) continue
+    if (
+      prop?.hidden &&
+      prop.default !== undefined &&
+      JSON.stringify(value) === JSON.stringify(prop.default)
+    )
+      continue
+    out[name] = value
+  }
+  return out
+}
+
 /** 字段的人类可读 label：首字母大写 + 下划线变空格。 */
 export function fieldLabel(name: string): string {
   return name
@@ -99,8 +125,8 @@ export const SCHEMA_GROUP_LABEL_KEYS: Record<string, string> = {
   system: 'schema.groups.system',
   output: 'schema.groups.output',
   sample: 'schema.groups.sample',
+  eval_validation: 'schema.groups.evalValidation',
   monitor: 'schema.groups.monitor',
-  wandb: 'schema.groups.wandb',
 }
 
 export const SCHEMA_ENUM_LABEL_KEYS: Record<string, Record<string, string>> = {
@@ -120,6 +146,7 @@ export const SCHEMA_ENUM_LABEL_KEYS: Record<string, Record<string, string>> = {
   optimizer_type: {
     adamw: 'schema.enums.optimizerType.adamw',
     automagic: 'schema.enums.optimizerType.automagic',
+    came: 'schema.enums.optimizerType.came',
     lion: 'schema.enums.optimizerType.lion',
     prodigy: 'schema.enums.optimizerType.prodigy',
     prodigy_plus_schedulefree: 'schema.enums.optimizerType.prodigyPlusSchedulefree',
@@ -165,27 +192,6 @@ export const SCHEMA_ENUM_LABEL_KEYS: Record<string, Record<string, string>> = {
     simple: 'schema.enums.scheduler.simple',
     sgm_uniform: 'schema.enums.scheduler.sgmUniform',
   },
-  wandb_mode: {
-    '': 'field.useGlobal',
-    online: 'schema.enums.wandbMode.online',
-    offline: 'schema.enums.wandbMode.offline',
-    disabled: 'schema.enums.wandbMode.disabled',
-  },
-  wandb_upload_model_policy: {
-    '': 'field.useGlobal',
-    all: 'schema.enums.wandbPolicy.all',
-    last: 'schema.enums.wandbPolicy.last',
-  },
-  wandb_upload_state_manual_policy: {
-    '': 'field.useGlobal',
-    all: 'schema.enums.wandbPolicy.all',
-    last: 'schema.enums.wandbPolicy.last',
-  },
-  wandb_upload_state_auto_policy: {
-    '': 'field.useGlobal',
-    all: 'schema.enums.wandbPolicy.all',
-    last: 'schema.enums.wandbPolicy.last',
-  }
 }
 
 export function schemaGroupLabel(key: string, fallback: string, t: TFunction): string {

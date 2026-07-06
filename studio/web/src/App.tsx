@@ -10,7 +10,14 @@ import {
 import SettingsDrawer from './components/SettingsDrawer'
 import Sidebar from './components/Sidebar'
 import Topbar from './components/Topbar'
-import { ProjectContext, ProjectSetterContext, type ProjectCtxValue } from './context/ProjectContext'
+import {
+  ProjectContext,
+  ProjectSetterContext,
+  SelectedProjectContext,
+  SelectedProjectSetterContext,
+  type ProjectCtxValue,
+  type SelectedProjectValue,
+} from './context/ProjectContext'
 import { useSettingsDrawer } from './lib/SettingsDrawer'
 import ProjectsPage from './pages/Projects'
 import QueuePage from './pages/Queue'
@@ -62,9 +69,10 @@ function QueueDetailRedirect({ tab }: { tab: 'log' | 'monitor' }) {
 }
 
 /** Sidebar + Topbar 外壳；所有路由 element 渲染进 <Outlet />。
- *  SettingsDrawer 挂在主内容列内（含 Topbar），用 absolute 定位铺满该列 —— 这样
- *  backdrop 自然不会盖到左侧 Sidebar，sidebar 上的导航 / 主题切换照常可用。
- *  列父级 position:relative 给 drawer 的 absolute inset-0 做锚点。 */
+ *  SettingsDrawer 用 fixed inset-0 铺满整个 viewport（含左侧 Sidebar）—— 这样点
+ *  backdrop 的任意位置（包括 Sidebar 区域）都会收起抽屉。
+ *  列父级 position:relative 保留作 <main> 内 absolute 元素（如任务日志抽屉贴底
+ *  footer）的定位锚点。 */
 function RootLayout() {
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
@@ -125,18 +133,25 @@ const router = createBrowserRouter(
     },
   ],
   {
-    basename: '/studio',
+    // ADR 0012：SPA 挂在根路径，不再用 /studio 子路径前缀。
+    basename: '/',
     future: { v7_relativeSplatPath: true },
   },
 )
 
 export default function App() {
   const [projectCtx, setProjectCtx] = useState<ProjectCtxValue | null>(null)
+  // 跨页保留的"已选中项目"快照（见 ProjectContext 注释）
+  const [selectedProject, setSelectedProject] = useState<SelectedProjectValue | null>(null)
 
   return (
     <ProjectContext.Provider value={projectCtx}>
       <ProjectSetterContext.Provider value={setProjectCtx}>
-        <RouterProvider router={router} />
+        <SelectedProjectContext.Provider value={selectedProject}>
+          <SelectedProjectSetterContext.Provider value={setSelectedProject}>
+            <RouterProvider router={router} />
+          </SelectedProjectSetterContext.Provider>
+        </SelectedProjectContext.Provider>
       </ProjectSetterContext.Provider>
     </ProjectContext.Provider>
   )

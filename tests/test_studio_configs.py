@@ -41,16 +41,22 @@ def test_schema_is_complete() -> None:
         "optimizer_type", "prodigy_d_coef", "prodigy_safeguard_warmup",
         "lr_scheduler_warmup_steps",
         "lion_beta1", "lion_beta2",
+        "came_beta1", "came_beta2", "came_beta3",
+        "came_eps1", "came_eps2", "came_clip_threshold",
         "automagic_min_lr", "automagic_max_lr", "automagic_lr_bump",
         "automagic_beta2", "automagic_eps", "automagic_clip_threshold",
         # ProdigyPlusScheduleFree 字段
         "ppsf_d_coef", "ppsf_prodigy_steps", "ppsf_beta1", "ppsf_beta2",
         "ppsf_split_groups", "ppsf_split_groups_mean", "ppsf_use_speed",
         "ppsf_fused_back_pass", "ppsf_use_stableadamw",
-        "sample_prompt", "sample_prompts", "no_monitor",
+        "sample_prompt", "sample_prompts", "no_progress",
     ):
         assert name in fields, f"missing: {name}"
-    assert "wandb_enabled" in fields
+    # 0.18: wandb per-config 覆盖块已移除（secrets 不进训练 yaml），schema 里不
+    # 应再出现任何 wandb_* 字段
+    assert not [n for n in fields if n.startswith("wandb_")]
+    # 退役的 monitor server 字段不应回归（老 yaml 键静默丢弃，见 migrations）
+    assert not {"no_monitor", "monitor_host", "monitor_port", "no_browser"} & set(fields)
     lora_annotation = fields["lora_type"].annotation
     lora_options = getattr(lora_annotation, "__args__", ())
     assert "ortho" in lora_options
@@ -63,6 +69,7 @@ def test_schema_is_complete() -> None:
     # Literal 的 __args__ 包含所有合法值
     optimizer_options = getattr(optimizer_annotation, "__args__", ())
     assert "automagic" in optimizer_options
+    assert "came" in optimizer_options
     assert "lion" in optimizer_options
     assert "prodigy_plus_schedulefree" in optimizer_options
 
@@ -98,6 +105,8 @@ def test_schema_carries_ui_metadata(client: TestClient) -> None:
     assert props["tlora_use_ortho"]["show_when"] == "lora_type==tlora"
     assert props["lion_beta1"]["show_when"] == "optimizer_type==lion"
     assert props["lion_beta2"]["show_when"] == "optimizer_type==lion"
+    assert props["came_beta3"]["show_when"] == "optimizer_type==came"
+    assert props["came_clip_threshold"]["show_when"] == "optimizer_type==came"
     assert "automagic" not in props["learning_rate"]["disable_when"]
     assert props["lr_scheduler"]["disable_when"] == "optimizer_type==automagic||optimizer_type==prodigy||optimizer_type==prodigy_plus_schedulefree||optimizer_type==soap_sf"
     assert props["lr_scheduler_warmup_steps"]["show_when"] == "lr_scheduler==cosine_with_warmup"
@@ -105,7 +114,7 @@ def test_schema_carries_ui_metadata(client: TestClient) -> None:
     assert props["automagic_max_lr"]["show_when"] == "optimizer_type==automagic"
     assert props["automagic_variant"]["show_when"] == "optimizer_type==automagic"
     assert props["automagic_agreement_threshold"]["show_when"] == "optimizer_type==automagic&&automagic_variant==v2"
-    assert props["wandb_enabled"]["group"] == "wandb"
+    assert not [n for n in props if n.startswith("wandb_")]
     # PPSF 字段都按 optimizer_type==prodigy_plus_schedulefree 显示
     for ppsf_field in (
         "ppsf_d_coef", "ppsf_prodigy_steps", "ppsf_beta1", "ppsf_beta2",

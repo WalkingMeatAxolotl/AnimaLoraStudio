@@ -20,10 +20,12 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import logging
 import os
 import re
 import shutil
 import time
+import zlib
 from datetime import date
 from pathlib import Path
 from typing import Any, Optional
@@ -48,8 +50,26 @@ from ...infrastructure.event_bus import bus
 from ...infrastructure.paths import STUDIO_DATA
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 TEST_IMAGES_DIR = STUDIO_DATA / "test"
+
+
+def _write_generate_cover(task_id: Optional[int], cover_path: Path) -> None:
+    """0.17 P-I forward-write：落盘时把封面图（磁盘）相对地址写进 task.generate_cover
+    （相对 TEST_IMAGES_DIR，_v14 列）。前端暂不读；未来 DB 驱动出图时间线据此定位/判
+    存在。task_id 缺省（老前端/异常）或写失败时静默跳过——纯攒未来数据，不影响出图。"""
+    if task_id is None:
+        return
+    try:
+        rel = str(cover_path.relative_to(TEST_IMAGES_DIR))
+    except ValueError:
+        rel = str(cover_path)
+    try:
+        with db.connection_for() as conn:
+            db.update_task(conn, task_id, generate_cover=rel)
+    except Exception:
+        logger.warning("write generate_cover for task %s failed", task_id, exc_info=True)
 
 # v2 命名（决策 #6）：父目录区分 mode，文件名仅 "<label> N.png"
 _DISPLAY_LABELS = {"single": "single image", "xy": "xy plot"}
@@ -149,7 +169,7 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
     """启动测试出图 task。"""
     from ...services.inference.core import generate_tempdir
 
-    model_paths = _resolve_anima_model_paths()
+    model_paths = _resolve_anima_model_paths(body.base_model)
 
     with db.connection_for() as conn:
         task_id = db.create_task(
@@ -158,7 +178,7 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
         db.update_task(conn, task_id, task_type="generate")
 
     # create_task 已把 task 落成 pending+generate，但 config_path 还没写；supervisor
-    # _dispatch_generate 会跳过 config_path=NULL 的 generate task（视为还在入队），等
+    # _dispatch_exclusive_tasks 会跳过 config_path=NULL 的 generate task（视为还在入队），等
     # 下面 config.json 落库后再派。这里任一步失败必须把 task 标 failed，否则它会以
     # config_path=NULL 永远 pending（dispatcher 永远跳过）。
     try:
@@ -242,8 +262,17 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
         bus.publish({"type": "task_state_changed", "task_id": task_id, "status": "failed"})
         raise HTTPException(500, f"failed to enqueue generate task: {e}")
 
+    # 0.17 P-I forward-write：把参数快照落 DB（generate_params 列，_v14）。前端暂不读，
+    # 为未来「纯 DB 出图时间线」攒数据——那时按 params + generate_cover(出图完成时写)
+    # 直接定位/回填，无需扫盘、无需迁移。参数就是前端随 body 发来的 params_snapshot。
+    generate_params = (
+        json.dumps(body.params_snapshot, ensure_ascii=False)
+        if body.params_snapshot else None
+    )
     with db.connection_for() as conn:
-        db.update_task(conn, task_id, config_path=str(cfg_path))
+        db.update_task(
+            conn, task_id, config_path=str(cfg_path), generate_params=generate_params,
+        )
         task = db.get_task(conn, task_id)
 
     bus.publish({"type": "task_state_changed", "task_id": task_id, "status": "pending"})
@@ -438,23 +467,73 @@ def _inject_png_metadata(raw: bytes, params: dict[str, Any], *, mode: str) -> by
         return raw
 
 
-def _read_png_anima_params(path: Path) -> dict[str, Any] | None:
-    """从 PNG `anima_params` tEXt / zTXt 块解析 params；无 / 解析失败返 None。
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
-    决策 #16：只读 PNG header chunk（PIL `Image.open` 已自动解析 tEXt/zTXt），
-    **不调 `img.load()`**（不 decode 像素）。500 张 4K PNG mount 用时从 15-30s
-    降到 1-2s。
+
+def _decode_png_text_chunk(ctype: bytes, data: bytes) -> str | None:
+    """从 PNG 文本 chunk 取出 keyword==`anima_params` 的文本；非该 keyword /
+    解析失败返 None。
+
+    - tEXt：keyword\\0 + latin-1 明文
+    - zTXt：keyword\\0 + 压缩方法(1 字节) + zlib 压缩流（latin-1）
+    - iTXt：keyword\\0 + 压缩 flag(1) + 压缩方法(1) + 语言\\0 + 翻译 keyword\\0 + 文本(utf-8)
+
+    解码用 PIL 读 PNG 文本块的同一套规则（tEXt/zTXt → latin-1，iTXt → utf-8），
+    保证与旧 PIL 实现逐值一致。
+    """
+    keyword, sep, rest = data.partition(b"\x00")
+    if not sep or keyword != b"anima_params":
+        return None
+    try:
+        if ctype == b"tEXt":
+            return rest.decode("latin-1")
+        if ctype == b"zTXt":
+            return zlib.decompress(rest[1:]).decode("latin-1") if rest else None
+        if ctype == b"iTXt":
+            if len(rest) < 2:
+                return None
+            comp_flag = rest[0]
+            body = rest[2:]
+            _, _, body = body.partition(b"\x00")  # 跳语言 tag
+            _, _, body = body.partition(b"\x00")  # 跳翻译 keyword
+            return (zlib.decompress(body) if comp_flag else body).decode("utf-8")
+    except Exception:
+        return None
+    return None
+
+
+def _read_png_anima_params(path: Path) -> dict[str, Any] | None:
+    """从 PNG `anima_params` tEXt / zTXt / iTXt 块解析 params；无 / 解析失败返 None。
+
+    直接顺序扫 PNG chunk，读到第一个 IDAT（像素数据起始）前找 `anima_params`
+    文本块即停。`anima_params` 由 `PngInfo.add_text(..., zip=True)` 写成 zTXt 且
+    位于 IDAT 之前，必然在 header 区命中。
+
+    原实现走 `PIL.Image.open` 只读 header（不 decode 像素），但实测 PIL open 每
+    文件 ~30-40ms，disk-history 扫数百张落盘图要 10-15s（冷缓存可达 ~1min）。
+    手写 chunk 扫描每文件 ~0.1ms（实测 356 张 15s → 0.04s，~350×），且对全部
+    历史 PNG 与旧实现逐值一致。
     """
     try:
-        from PIL import Image
-        with Image.open(path) as img:
-            # img.text 在 PIL 8+ 由 open() 阶段读 PNG chunks（含 tEXt/zTXt）填充；
-            # 不需要 img.load() 触发像素解码
-            text = img.text.get("anima_params") if hasattr(img, "text") else None
-        if not text:
-            return None
-        data = json.loads(text)
-        return data if isinstance(data, dict) else None
+        with open(path, "rb") as f:
+            if f.read(8) != _PNG_SIGNATURE:
+                return None
+            while True:
+                head = f.read(8)
+                if len(head) < 8:
+                    return None
+                length = int.from_bytes(head[:4], "big")
+                ctype = head[4:8]
+                if ctype == b"IDAT":
+                    return None  # 到像素数据，header 区没有 anima_params
+                if ctype in (b"tEXt", b"zTXt", b"iTXt"):
+                    text = _decode_png_text_chunk(ctype, f.read(length))
+                    f.read(4)  # CRC
+                    if text is not None:
+                        parsed = json.loads(text)
+                        return parsed if isinstance(parsed, dict) else None
+                else:
+                    f.seek(length + 4, 1)  # 跳 chunk data + CRC（IHDR 等）
     except Exception:
         return None
 
@@ -599,6 +678,7 @@ async def save_test_image(
         idx = _next_image_index(target_dir, mode)
         target = target_dir / f"{_DISPLAY_LABELS[mode]} {idx}.png"
         _atomic_write_png(target, raw)
+        _write_generate_cover(task_id, target)  # 0.17 P-I forward-write
         return {"path": str(target), "index": idx, "filename": target.name}
 
     # ----- mode == "xy" -----
@@ -685,6 +765,7 @@ async def save_test_image(
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise HTTPException(500, f"failed to write xy folder: {e}")
 
+    _write_generate_cover(task_id, final_dir / _XY_COMPOSITE_NAME)  # 0.17 P-I forward-write
     return {
         "folder": str(final_dir),
         "index": idx,

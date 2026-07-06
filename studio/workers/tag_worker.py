@@ -4,10 +4,14 @@
     {
       "tagger": "wd14" | "cltagger" | "joycaption",
       "version_id": int,
-      "output_format": "txt"|"json",  # 默认 "txt"，已存在的 .json 仍按 .json 写
       "on_existing": "overwrite"|"skip"|"append",  # 默认 "overwrite"
       "<tagger>_overrides": {...}     # 可选；本次任务对全局 settings 的覆盖
     }
+
+落盘格式跟着产物走：LLM json preset 产出结构化 caption_json → .json；其余
+（本地打标 tag list / LLM text preset）→ .txt。已存在的 .json 仍按 .json 更新
+（格式决策唯一入口是 LLM preset 的 output_format；请求级 output_format 已删，
+老客户端传了会被忽略）。
 
 打标永远覆盖 train/ 下全部 repeat 子目录（不再支持按 folder 划分）。
 
@@ -42,11 +46,12 @@ from studio.services.dataset import tagedit
 from studio.services.tagging.base import get_tagger
 
 
-def _collect_images(train_dir: Path) -> list[Path]:
-    if not train_dir.exists():
+def _collect_from_root(root: Path) -> list[Path]:
+    """`root/<folder>/<image>` 结构里所有图（train/ 或 validation/）。"""
+    if not root.exists():
         return []
     out: list[Path] = []
-    for d in (sub for sub in train_dir.iterdir() if sub.is_dir()):
+    for d in (sub for sub in root.iterdir() if sub.is_dir()):
         out.extend(
             sorted(
                 f for f in d.iterdir()
@@ -54,6 +59,34 @@ def _collect_images(train_dir: Path) -> list[Path]:
             )
         )
     return out
+
+
+def _collect_from_folder(folder: Path) -> list[Path]:
+    """单个叶子文件夹（直接含图）里的所有图。"""
+    if not folder.exists():
+        return []
+    return sorted(
+        f for f in folder.iterdir()
+        if f.is_file() and f.suffix.lower() in IMAGE_EXTS
+    )
+
+
+def _collect_for_scope(version_dir: Path, scope: str) -> list[Path]:
+    """按打标范围收图：
+    - "all"（默认）：train/ 全部 + validation/ 全部
+    - "validation"：只 held-out validation/
+    - 其它：当作 train 子文件夹名，只收 train/<scope>/
+
+    手动加入的验证图原本没 caption（打标历来只扫 train/），靠 "all" / "validation"
+    把验证集纳入打标，eval 才有 prompt 用。scope 的 traversal 安全在 endpoint 校验。
+    """
+    train = version_dir / "train"
+    val = version_dir / "validation"
+    if scope == "validation":
+        return _collect_from_root(val)
+    if scope and scope != "all":
+        return _collect_from_folder(train / scope)
+    return _collect_from_root(train) + _collect_from_root(val)
 
 
 def _filter_existing_captions(images: list[Path]) -> tuple[list[Path], list[Path]]:
@@ -86,12 +119,13 @@ def run(job_id: int) -> int:
     try:
         tagger_name = params.get("tagger", "wd14")
         version_id = int(params["version_id"])
-        fmt = str(params.get("output_format", "txt"))
         # 触发词：worker 端 prepend 到 caption 第一位。空串 / 缺省 = 不启用。
         trigger_word = str(params.get("trigger_word") or "").strip()
         on_existing = str(params.get("on_existing") or "overwrite")
         if on_existing not in ("skip", "overwrite", "append"):
             on_existing = "overwrite"
+        # 打标范围：all（默认 train+validation）/ validation / 单个 train 文件夹名
+        scope = str(params.get("scope") or "all")
         # 约定：每个支持本次覆盖的 tagger 都把 overrides 存在 `<name>_overrides` 键下
         overrides = params.get(f"{tagger_name}_overrides") or None
 
@@ -102,17 +136,17 @@ def run(job_id: int) -> int:
                 return 1
             p = projects.get_project(conn, v["project_id"])
         assert p is not None
-        train_dir = versions.version_dir(p["id"], p["slug"], v["label"]) / "train"
+        version_dir = versions.version_dir(p["id"], p["slug"], v["label"])
 
-        images = _collect_images(train_dir)
+        images = _collect_for_scope(version_dir, scope)
         if not images:
-            progress("[done] 没有图可打标（train/ 是空的）")
+            progress(f"[done] 没有图可打标（范围 {scope} 下没有图）")
             return 0
         total_images = len(images)
 
         progress(
             f"[start] tagger={tagger_name} version={v['label']} "
-            f"images={total_images} format={fmt} on_existing={on_existing}"
+            f"images={total_images} on_existing={on_existing}"
         )
         if trigger_word:
             progress(f"[trigger] '{trigger_word}' 将作为第一个 tag prepend 到每张图")
@@ -149,7 +183,6 @@ def run(job_id: int) -> int:
             action = _write_caption(
                 r["image"],
                 r.get("tags") or [],
-                fmt,
                 caption_text=r.get("caption"),
                 caption_json=r.get("caption_json"),
                 trigger_word=trigger_word,
@@ -198,14 +231,15 @@ def _prepend_trigger_to_text(text: str, trigger_word: str) -> str:
 def _write_caption(
     image: Path,
     tags: list[str],
-    fmt: str,
     *,
     caption_text: str | None = None,
     caption_json: dict[str, Any] | None = None,
     trigger_word: str = "",
     on_existing: str = "overwrite",
 ) -> str:
-    """fmt 仅决定「不存在 caption 时」用什么格式；已存在的 .json 仍走 .json。
+    """落盘格式跟着产物走：caption_json（LLM json preset）→ .json；
+    其余（本地打标 tag list / LLM text preset）→ .txt；已存在的 .json 仍走
+    .json 更新（tagedit 路径）。请求级 output_format 已删。
 
     on_existing：已有 caption 文件（.txt 或 .json）时的策略
       - "overwrite"（默认）：覆盖（原行为）
@@ -216,9 +250,8 @@ def _write_caption(
 
     trigger_word 非空时（仅 overwrite 路径需特殊 prepend；append 走 merge 顺序自然处理）：
       - 标签列表：作为第 0 项 prepend（去重）
-      - 字符串 caption：prepend 到最前
       - JSON：写入 ``meta.trigger`` 字段；caption_utils.build_caption_from_json
-        会把它作为输出的第一个 token，不参与 shuffle —— 与 .txt 路径行为一致。
+        会把它作为输出的第一个 token，不参与 shuffle / dropout。
     """
     existing_path = tagedit.caption_path(image)
     if existing_path is not None:
@@ -235,36 +268,22 @@ def _write_caption(
             )
             return "appended"
     if caption_json is not None:
-        if fmt == "json":
-            doc = standard_to_documented_full(caption_json)
-            if trigger_word:
-                meta = doc.get("meta")
-                if not isinstance(meta, dict):
-                    meta = {}
-                meta["trigger"] = trigger_word
-                doc["meta"] = meta
-            image.with_suffix(".json").write_text(
-                json.dumps(doc, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            image.with_suffix(".txt").unlink(missing_ok=True)
-            return "wrote"
-        text = caption_text if caption_text is not None else caption_json_to_text(caption_json)
-        text = _prepend_trigger_to_text(text, trigger_word)
-        image.with_suffix(".txt").write_text(text, encoding="utf-8")
-        image.with_suffix(".json").unlink(missing_ok=True)
-        return "wrote"
-    if fmt == "json" and not image.with_suffix(".txt").exists():
-        # 强制写 json（即使没有现成 json 文件）
-        data: dict[str, Any] = {"tags": _prepend_trigger_to_tags(tags, trigger_word)}
+        # LLM 结构化产物 → 落 .json（documented full 形状）
+        doc = standard_to_documented_full(caption_json)
         if trigger_word:
-            data["meta"] = {"trigger": trigger_word}
+            meta = doc.get("meta")
+            if not isinstance(meta, dict):
+                meta = {}
+            meta["trigger"] = trigger_word
+            doc["meta"] = meta
         image.with_suffix(".json").write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
+            json.dumps(doc, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        image.with_suffix(".txt").unlink(missing_ok=True)
         return "wrote"
-    # 否则交给 tagedit 决定（已有 .json 就写 .json，否则 .txt）。
+    # 非结构化产物（本地打标 tag list / LLM text preset）交给 tagedit 决定
+    # （已有 .json 就写 .json，否则 .txt）。
     # 已有 .json 时 tagedit 保留其他字段（包括 meta.trigger 如有），只覆盖 tags 数组；
     # 这里我们把 trigger prepend 进 tags list，并保证 .json 走 tagedit 的同时也补 meta.trigger。
     new_tags = _prepend_trigger_to_tags(tags, trigger_word)

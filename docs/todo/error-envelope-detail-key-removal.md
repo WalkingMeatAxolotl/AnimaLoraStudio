@@ -1,5 +1,7 @@
 # 错误 envelope `detail` key 移除（ADR 0009 Phase 2 / 3 收尾）
 
+> ✅ **已完成** — 三阶段随 0.15.0 发布；保留作记录。
+
 **创建于** 2026-06-19
 **触发** 0.14.0 发版核对时发现 [ADR 0009](../adr/0009-logging-error-system.md) §错误 envelope 渐进迁移的 Phase 2/3 早已滑期：ADR 当时把 Phase 2 排到 0.13.0、Phase 3 排到 0.14.0，但实际只有 Phase 1 跟 0.12.0 发出去了，后两阶段一直没人做。已把目标版本下调（Phase 2 → 0.15.0、Phase 3 → 0.16.0）并立此条防再忘。
 **当前状态** ✅ 全部完成。Phase 1 已发布（0.12.0）；Phase 2 已合 dev（PR #294）；**Phase 3 已实现**（分支 `feat/error-envelope-phase3`，删 legacy `detail` key，错误响应只发 `error`；唯一例外 RequestValidationError 的 422 list）。三阶段随 0.15.0 一起发布后本条可归档。

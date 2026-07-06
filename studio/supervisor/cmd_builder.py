@@ -12,10 +12,14 @@ from typing import Any, Callable
 
 from ..paths import REPO_ROOT, task_monitor_state_path
 
-# PP10.2.b：哪些 job kind 吃 GPU。这些 kind 在训练运行中默认会被推迟，
-# 除非 secrets.queue.allow_gpu_during_train=True 显式允许并行。
-# preprocess 走 spandrel super-resolution，加载权重到 GPU 推理。
-GPU_BOUND_JOB_KINDS: frozenset[str] = frozenset({"preprocess", "tag", "reg_build"})
+# R-1 起调度准入不再用这个集合（改走 resources.py 的档位模型：exclusive /
+# light / io，见 docs/design/queue-resource-model-0.17.md）。此处保留为
+# 「吃 GPU 的 job kind」派生事实（= 非 io 档），供文档性断言使用。
+from .resources import JOB_KIND_RESOURCE_CLASS as _JOB_CLASS, RESOURCE_IO as _IO
+
+GPU_BOUND_JOB_KINDS: frozenset[str] = frozenset(
+    k for k, c in _JOB_CLASS.items() if c != _IO
+)
 
 # Worker → supervisor 的结构化事件标记。worker 写
 #   __EVENT__:my_event_type:{"foo":1,"bar":"x"}
@@ -35,7 +39,7 @@ def _default_cmd_builder(task: dict[str, Any], config_path: Path) -> list[str]:
     train (默认 / 老 task): runtime/anima_train.py
     reg_ai: runtime/anima_reg_ai.py（先验生成）
     generate: 走 inference_daemon，**不**经这个 cmd_builder，supervisor
-        在 _dispatch_generate 里直接派给 daemon。这里 fallback 到 anima_generate.py
+        在 _dispatch_exclusive_tasks 里直接派给 daemon。这里 fallback 到 anima_generate.py
         只是为了某天测试可能注入 cmd_builder 时不爆 KeyError —— 实际跑
         不到这条 path（_next_pending_task_in 在 dispatch_train 里只挑
         train/reg_ai）。

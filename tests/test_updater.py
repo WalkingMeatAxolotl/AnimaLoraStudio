@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -31,10 +32,12 @@ def _isolate_flags(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     避免污染开发机的标志文件。"""
     monkeypatch.setattr(updater, "RESTART_FLAG", tmp_path / "tmp" / "restart")
     monkeypatch.setattr(updater, "UPDATE_PENDING", tmp_path / ".update_pending")
+    monkeypatch.setattr(updater, "UPDATE_FORCE", tmp_path / ".update_force")
     monkeypatch.setattr(updater, "UPDATE_CACHE", tmp_path / ".update_cache")
     monkeypatch.setattr(updater, "LAST_VERSION", tmp_path / ".last_version")
     monkeypatch.setattr(updater, "UPDATE_LOG", tmp_path / ".update_log")
     monkeypatch.setattr(updater, "UPDATE_STATUS", tmp_path / ".update_status")
+    monkeypatch.setattr(updater, "PRESERVE_HOLDING", tmp_path / ".update_preserve")
     return tmp_path
 
 
@@ -56,6 +59,54 @@ def test_current_version_smoke() -> None:
 
 
 # ---------------------------------------------------------------------------
+# _porcelain_dirty_paths — allowlist 剔除（自动 churn 文件不算 dirty）
+# ---------------------------------------------------------------------------
+
+def test_porcelain_dirty_paths_clean(monkeypatch: pytest.MonkeyPatch) -> None:
+    """git status --porcelain 输出空 → 工作树干净。"""
+    monkeypatch.setattr(updater, "_git", lambda *a, **k: (0, "", ""))
+    assert updater._porcelain_dirty_paths() == []
+
+
+def test_porcelain_dirty_paths_excludes_lockfile(monkeypatch: pytest.MonkeyPatch) -> None:
+    """唯一改动是 package-lock.json（npm 按本机版本自动 churn）→ 视为干净。
+
+    用户报的 bug：新 npm 启动期改写 lockfile 补 "peer": true → working tree
+    凭空 dirty → 自更新 precondition 闸死。allowlist 剔除后不再触发。
+    """
+    monkeypatch.setattr(
+        updater, "_git",
+        lambda *a, **k: (0, " M studio/web/package-lock.json", ""),
+    )
+    assert updater._porcelain_dirty_paths() == []
+
+
+def test_porcelain_dirty_paths_keeps_real_changes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """lockfile churn + 真实手改文件混在一起 → 只剩真实改动，仍算 dirty。"""
+    out = " M studio/web/package-lock.json\n M runtime/anima_train.py"
+    monkeypatch.setattr(updater, "_git", lambda *a, **k: (0, out, ""))
+    assert updater._porcelain_dirty_paths() == ["runtime/anima_train.py"]
+
+
+def test_porcelain_dirty_paths_rename_uses_new_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """重命名行 `R  old -> new` 取箭头右侧的新路径。"""
+    monkeypatch.setattr(updater, "_git", lambda *a, **k: (0, "R  a/old.py -> a/new.py", ""))
+    assert updater._porcelain_dirty_paths() == ["a/new.py"]
+
+
+def test_current_version_clean_when_only_lockfile_churn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """current_version().is_dirty 跟随 _porcelain_dirty_paths：仅 lockfile churn →
+    is_dirty=False（这条把"自更新被 lockfile 卡死"的回归守住）。"""
+    monkeypatch.setattr(updater, "_porcelain_dirty_paths", lambda: [])
+    monkeypatch.setattr(updater, "git_repo_status",
+                        lambda: updater.GitRepoStatus(True, True, True))
+    monkeypatch.setattr(updater, "_git", lambda *a, **k: (0, "abc123def456", ""))
+    assert updater.current_version().is_dirty is False
+    monkeypatch.setattr(updater, "_porcelain_dirty_paths", lambda: ["runtime/x.py"])
+    assert updater.current_version().is_dirty is True
+
+
+# ---------------------------------------------------------------------------
 # request_update / has_pending
 # ---------------------------------------------------------------------------
 
@@ -73,6 +124,25 @@ def test_request_update_writes_flags(_isolate_flags: Path) -> None:
 def test_request_update_custom_target(_isolate_flags: Path) -> None:
     updater.request_update("abc1234567")
     assert updater.UPDATE_PENDING.read_text(encoding="utf-8") == "abc1234567"
+
+
+def test_request_update_no_force_marker_by_default(_isolate_flags: Path) -> None:
+    updater.request_update("origin/master")
+    assert not updater.UPDATE_FORCE.exists()
+
+
+def test_request_update_force_writes_marker(_isolate_flags: Path) -> None:
+    updater.request_update("origin/master", force=True)
+    assert updater.UPDATE_FORCE.exists()
+
+
+def test_request_update_clears_stale_force_marker(_isolate_flags: Path) -> None:
+    """上次写过 force marker 但没消费；本次普通（非 force）请求必须清掉它，
+    避免普通更新被误判成 force 覆盖 dirty 工作树。"""
+    updater.UPDATE_FORCE.parent.mkdir(parents=True, exist_ok=True)
+    updater.UPDATE_FORCE.touch()
+    updater.request_update("origin/master")  # force 默认 False
+    assert not updater.UPDATE_FORCE.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +182,43 @@ def test_apply_pending_dirty_tree_aborts(
     assert "[abort] working tree dirty" in log
     # 不应该调任何 git 命令（fetch / reset / pull 都不该跑）
     assert git_calls == []
+
+
+def test_apply_pending_force_overwrites_dirty(
+    _isolate_flags: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """force marker 存在时，dirty 工作树**不**中止：照常 git fetch + reset --hard
+    （覆盖本地改动），收尾清掉 force marker，status=ok。"""
+    fake = updater.VersionInfo(
+        version="0.0.0", commit="abc", commit_short="abc",
+        commit_time_iso="", branch="master", tag=None, is_dirty=True,
+        installed_kind="custom", installed_label="自定义（master @ abc）",
+        stable_version=None,
+    )
+    monkeypatch.setattr(updater, "current_version", lambda: fake)
+    monkeypatch.setattr(updater, "_requirements_marker_stale", lambda: False)
+    monkeypatch.setattr(updater, "_package_json_changed", lambda: False)
+
+    git_calls: list[tuple] = []
+    def _fake_git(*args, **kwargs):
+        git_calls.append(args)
+        return 0, "", ""
+    monkeypatch.setattr(updater, "_git", _fake_git)
+
+    updater.request_update("origin/master", force=True)
+    result = updater.apply_pending(emit=lambda _: None)
+
+    assert result is True
+    # 没 abort：fetch + reset --hard 都跑了
+    assert any(c[:2] == ("fetch", "origin") for c in git_calls), "force 路径应当 git fetch"
+    assert any(c[0] == "reset" and "--hard" in c for c in git_calls), "force 路径应当 reset --hard"
+    # force marker + pending 都清了
+    assert not updater.UPDATE_FORCE.exists()
+    assert not updater.UPDATE_PENDING.exists()
+    st = updater.last_status()
+    assert st is not None and st.status == "ok"
+    log = updater.UPDATE_LOG.read_text(encoding="utf-8")
+    assert "[force]" in log and "[abort]" not in log
 
 
 def test_apply_pending_records_last_version(
@@ -1377,3 +1484,134 @@ def test_check_update_fetch_error_returns_detached(
     r = updater.check_update("master", use_cache=False)
     assert r.state == "detached"
     assert r.error is not None
+
+
+# ---------------------------------------------------------------------------
+# 模型数据文件保护（_PRESERVE_ON_RESET）：reset --hard 跨过"删模型数据"的 commit
+# 时，老用户磁盘上的已下载文件必须保住，不被删→重下
+# ---------------------------------------------------------------------------
+
+def _init_git_repo(repo: Path) -> None:
+    repo.mkdir(parents=True, exist_ok=True)
+    def g(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=str(repo),
+                       capture_output=True, text=True, check=True)
+    g("init", "-q")
+    g("config", "user.email", "t@example.com")
+    g("config", "user.name", "tester")
+    g("config", "commit.gpgsign", "false")
+
+
+def _git_in(repo: Path, *args: str) -> str:
+    return subprocess.run(["git", *args], cwd=str(repo),
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
+def test_preserve_model_data_survives_reset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """真 git 仓库验证护栏：reset --hard 跨过"删模型数据文件"的 commit 时，
+    hardcode 清单里的文件被备份 → reset 删掉 → 还原，磁盘副本保住、内容不变、
+    且变为 untracked（更新零感知，不触发重下）。"""
+    repo = tmp_path / "repo"
+    _init_git_repo(repo)
+    monkeypatch.setattr(updater, "REPO_ROOT", repo)
+
+    rel = "models/t5_tokenizer/spiece.model"  # _PRESERVE_ON_RESET 里的一项
+    f = repo / rel
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_bytes(b"SENTINEL-WEIGHTS-9f3a")
+    _git_in(repo, "add", "-A")
+    _git_in(repo, "commit", "-qm", "A: model data tracked (old version)")
+
+    # 新版本：git rm 掉它 + 整体 ignore models/
+    _git_in(repo, "rm", "-q", rel)
+    (repo / ".gitignore").write_text("models/\n", encoding="utf-8")
+    _git_in(repo, "add", "-A")
+    _git_in(repo, "commit", "-qm", "B: untrack + ignore models/")
+    target = _git_in(repo, "rev-parse", "HEAD")
+
+    # 老用户：回到 A（文件被追踪 + 在磁盘）
+    _git_in(repo, "checkout", "-q", "HEAD~1")
+    assert f.exists()
+
+    log: list[str] = []
+    saved = updater._backup_preserved_files(log)
+    assert rel in saved, "应备份这个 hardcode 的模型数据文件"
+
+    rc, _, err = updater._git("reset", "--hard", target)
+    assert rc == 0, err
+    assert not f.exists(), "前置确认：reset --hard 确实会删掉这个已追踪文件"
+
+    updater._restore_preserved_files(saved, emit=lambda _: None, log_lines=log)
+    assert f.exists(), "护栏应把文件还原回磁盘（更新不重下）"
+    assert f.read_bytes() == b"SENTINEL-WEIGHTS-9f3a", "内容必须原样"
+    assert _git_in(repo, "ls-files", "--", rel) == "", "还原后应为 untracked"
+    assert not updater.PRESERVE_HOLDING.exists(), "备份目录应收尾清掉"
+
+
+def test_preserve_only_touches_hardcoded_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """护栏只认 hardcode 清单：不在清单里的文件（含代码 / 未来新增）即便被删也
+    照常删，不会被误留 —— 守"不要对其他文件或未来代码文件生效"。"""
+    repo = tmp_path / "repo"
+    _init_git_repo(repo)
+    monkeypatch.setattr(updater, "REPO_ROOT", repo)
+
+    rel = "models/some_future_module.py"  # 不在 _PRESERVE_ON_RESET 里
+    f = repo / rel
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("# code\n", encoding="utf-8")
+    _git_in(repo, "add", "-A")
+    _git_in(repo, "commit", "-qm", "A")
+    _git_in(repo, "rm", "-q", rel)
+    _git_in(repo, "commit", "-qm", "B: delete it")
+    target = _git_in(repo, "rev-parse", "HEAD")
+    _git_in(repo, "checkout", "-q", "HEAD~1")
+    assert f.exists()
+
+    log: list[str] = []
+    saved = updater._backup_preserved_files(log)
+    assert saved == [], "非清单文件不应被备份"
+
+    rc, _, err = updater._git("reset", "--hard", target)
+    assert rc == 0, err
+    updater._restore_preserved_files(saved, emit=lambda _: None, log_lines=log)
+    assert not f.exists(), "非清单文件应被 reset 正常删除，不被护栏挽留"
+
+
+def test_preserve_skips_file_user_moved_away(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """用户把模型迁走/删掉(文件已不在磁盘)时,护栏绝不"复活"它:备份只认
+    "既被追踪又在磁盘上"的文件,缺一不可 → 不备份 → reset 后不还原。
+    守"用户迁移 models 后不会被我们还原回来"。"""
+    repo = tmp_path / "repo"
+    _init_git_repo(repo)
+    monkeypatch.setattr(updater, "REPO_ROOT", repo)
+
+    rel = "models/t5_tokenizer/spiece.model"  # _PRESERVE_ON_RESET 里的一项
+    f = repo / rel
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_bytes(b"OLD")
+    _git_in(repo, "add", "-A")
+    _git_in(repo, "commit", "-qm", "A: tracked")
+    _git_in(repo, "rm", "-q", rel)
+    (repo / ".gitignore").write_text("models/\n", encoding="utf-8")
+    _git_in(repo, "add", "-A")
+    _git_in(repo, "commit", "-qm", "B: untrack")
+    target = _git_in(repo, "rev-parse", "HEAD")
+
+    _git_in(repo, "checkout", "-q", "HEAD~1")  # 回到 A：文件被追踪
+    f.unlink()                                  # 用户把它迁走/删了：磁盘上没了
+    assert not f.exists()
+
+    log: list[str] = []
+    saved = updater._backup_preserved_files(log)
+    assert saved == [], "磁盘上不存在的文件不该被备份"
+
+    rc, _, err = updater._git("reset", "--hard", target)
+    assert rc == 0, err
+    updater._restore_preserved_files(saved, emit=lambda _: None, log_lines=log)
+    assert not f.exists(), "用户迁走/删掉的文件不该被护栏还原回来"

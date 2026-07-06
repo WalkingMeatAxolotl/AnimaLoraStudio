@@ -2,11 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   api,
+  TERMINAL_TASK_STATUSES,
   type GenerateRequest,
   type LoraEntry,
   type Task,
   type XYMatrixSpec,
 } from '../../api/client'
+import BaseModelSelect from '../../components/BaseModelSelect'
 import PageHeader from '../../components/PageHeader'
 import { useToast } from '../../components/Toast'
 import { schemaEnumLabel } from '../../lib/schema'
@@ -16,13 +18,13 @@ import { useLocalStorageState } from '../../lib/useLocalStorageState'
 import AspectChips, { aspectFromDimensions, type AspectName } from './generate/AspectChips'
 import DaemonControls from './generate/DaemonControls'
 import DaemonLogDrawer from './generate/DaemonLogDrawer'
-import GenerateProgressBar, { type GenerateProgress } from './generate/GenerateProgress'
+import GenerateProgressBar, { type GenerateProgress, type GeneratePhase } from './generate/GenerateProgress'
 import NumField from './generate/NumField'
 import PreviewCompare from './generate/PreviewCompare'
-import PreviewHistoryRail from './generate/PreviewHistoryRail'
+import PreviewHistoryRail, { type TimelineItem } from './generate/PreviewHistoryRail'
 import PromptFromDatasetPicker, { type DatasetPick } from './generate/PromptFromDatasetPicker'
 import {
-  PARAMS_SNAPSHOT_VERSION, applySnapshot, loraBasename,
+  PARAMS_SNAPSHOT_VERSION, applySnapshot, loraBasename, resolveLoraFromCkpts,
   transformAxisRawForSnapshot,
   type GenerateParamsSnapshot, type SnapshotLora,
 } from './generate/paramsSnapshot'
@@ -30,6 +32,7 @@ import { saveSingleSamples, saveXYMatrix } from './generate/saveTestImages'
 import { useGenerateHistory } from './generate/useGenerateHistory'
 import {
   entryImageUrl,
+  entryTaskId,
   type HistoryEntry,
 } from './generate/entryAdapter'
 import PreviewXYGrid from './generate/PreviewXYGrid'
@@ -46,7 +49,7 @@ import {
   SAMPLER_OPTIONS, SCHEDULER_OPTIONS,
   type SamplerName, type SchedulerName,
 } from './generate/types'
-import { useProjectLoras } from './generate/useProjectLoras'
+import { useLoraCatalog } from './generate/useLoraCatalog'
 import { buildXYMatrix, cellCount, parseAxisValues, type XYAxisDraft } from './generate/xy'
 
 const GENERATE_PREFS_KEY = 'studio:generate:params:v1'
@@ -62,7 +65,6 @@ const DEFAULT_GENERATE_PREFS = {
   cfgScale: 4.0,
   samplerName: DEFAULT_SAMPLER as SamplerName,
   scheduler: DEFAULT_SCHEDULER as SchedulerName,
-  count: 1,
   seed: 0,
   // single / xy 的 LoRA 列表完全独立（用户决策 2026-05-29）：切 mode 互不影响。
   // compare 是 xy 的子视图，跟 xy 共用 xyLoras。
@@ -83,7 +85,7 @@ type GeneratePrefs = typeof DEFAULT_GENERATE_PREFS
  *    xyLoras；越界会让 submit 抛 axisLoraMissing）。
  */
 function normalizePrefs(p: GeneratePrefs): GeneratePrefs {
-  const anyP = p as Partial<GeneratePrefs> & { loras?: LoraEntry[] }
+  const anyP = p as Partial<GeneratePrefs> & { loras?: LoraEntry[]; count?: number }
   const legacy = Array.isArray(anyP.loras) ? anyP.loras : []
   const singleLoras = Array.isArray(anyP.singleLoras) ? anyP.singleLoras : legacy
   const xyLoras = Array.isArray(anyP.xyLoras) ? anyP.xyLoras : legacy
@@ -91,7 +93,7 @@ function normalizePrefs(p: GeneratePrefs): GeneratePrefs {
     if (!d || d.loraIndex == null || d.loraIndex < xyLoras.length) return d
     return { ...d, loraIndex: xyLoras.length > 0 ? 0 : null }
   }
-  const { loras: _legacy, ...rest } = anyP
+  const { loras: _legacy, count: _count, ...rest } = anyP  // count 已改瞬态，丢弃老持久值
   return {
     ...DEFAULT_GENERATE_PREFS,
     ...rest,
@@ -129,7 +131,7 @@ export default function GeneratePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const { mode, prompts, negPrompt, aspect, width, height, steps, cfgScale, samplerName, scheduler, count, seed, xDraft, yDraft, datasetPick } = prefs
+  const { mode, prompts, negPrompt, aspect, width, height, steps, cfgScale, samplerName, scheduler, seed, xDraft, yDraft, datasetPick } = prefs
   // LoRA 列表按 mode 完全独立：single 用 singleLoras，xy（含 compare 子视图）用
   // xyLoras。读写都按当前 mode 路由，切 mode 互不影响。
   const loras = mode === 'single' ? prefs.singleLoras : prefs.xyLoras
@@ -145,8 +147,10 @@ export default function GeneratePage() {
   const setCfgScale = (cfgScale: number) => setPrefs((p) => ({ ...p, cfgScale }))
   const setSamplerName = (samplerName: SamplerName) => setPrefs((p) => ({ ...p, samplerName }))
   const setScheduler = (scheduler: SchedulerName) => setPrefs((p) => ({ ...p, scheduler }))
-  const setCount = (count: number) => setPrefs((p) => ({ ...p, count }))
   const setSeed = (seed: number) => setPrefs((p) => ({ ...p, seed }))
+  // 0.17 P-I：batch size（每次入队 task 数）是**瞬态** UI 值——不进 prefs、不持久化、
+  // 不随点历史图回填（用户用 2 就一直 2）；刷新页面重置回 1。
+  const [batchSize, setBatchSize] = useState(1)
 
   // LoRA 预填 via URL query (?lora=<path>&projectId=N&versionId=N)
   // Overview StatusBanner "在测试中加载" CTA 跳进来时，URL 是显式 "测这条 LoRA"
@@ -189,7 +193,24 @@ export default function GeneratePage() {
   // 之前用 useState 时遇过 SSE 漏事件 / race 后 busy=true 卡住，按钮 disabled
   // 没法重试也没法取消（status=failed 时 cancelable=false）
   const [submitting, setSubmitting] = useState(false)
+  // 0.17 P-I：currentTask = **显示目标**（daemon 正在跑 / 最近一张），不再是「最后
+  // 提交」。提交只入队，显示跟着 running 走（refreshLiveGenerates）。
   const [currentTask, setCurrentTask] = useState<Task | null>(null)
+  // 0.17 P-I：本会话提交的 generate 里 running + pending（含自己），驱动「排队中 N 张」
+  // 列表 + running 检测。来自 listQueueLive(undefined,'generate')。
+  const [liveGenerates, setLiveGenerates] = useState<Task[]>([])
+  const prevGenIdsRef = useRef<Set<number>>(new Set())
+  // #1：每条 task 的「运行态」定格（XY 轴 + 完整参数快照），dispatch 时存。活动结果
+  // 网格 / 双图对比 / 入库读它而非 live prefs，任务开始后改 sidebar 不串改已出结果。
+  // 0.17 P-I：单值 → 按 taskId 存 Map，多任务各取各的。
+  const runsRef = useRef<Map<number, {
+    xDraft: XYAxisDraft
+    yDraft: XYAxisDraft | null
+    snapshot: GenerateParamsSnapshot
+  }>>(new Map())
+  // 本次出图临时选用的底模（null = 跟随设置页 selected_anima）。不进 prefs
+  // 持久化：每次进页面都回到「设置页默认底模」，符合「默认用设置里的」。
+  const [baseModel, setBaseModel] = useState<string | null>(null)
   // monitor 走 useMonitorProgress hook (PR #37 增量协议)：currentTask 变 →
   // hook 自动重拉快照 + 订阅 SSE delta 合并；本组件只用 samples 字段，其余
   // 字段在这页生成场景下不需要。
@@ -198,7 +219,7 @@ export default function GeneratePage() {
   const [previewStep, setPreviewStep] = useState<{ step: number; total: number; dataUrl: string } | null>(null)
   // 生成进度（image_started + preview_step 聚合）
   const [progress, setProgress] = useState<GenerateProgress>({
-    batchIdx: null, batchTotal: null, currentStep: null, totalSteps: null,
+    phase: null, batchIdx: null, batchTotal: null, currentStep: null, totalSteps: null,
   })
   const [datasetPickerOpen, setDatasetPickerOpen] = useState(false)
   // 左侧配置区当前分页（LoRA/XY · 提示词 · 配置）。跨 session 记忆用户停留的页。
@@ -210,10 +231,18 @@ export default function GeneratePage() {
   const [activeBlockingTask, setActiveBlockingTask] = useState<Task | null>(null)
   // commit 16：图片历史栏。点击历史项 → 主预览替换为该项封面
   const history = useGenerateHistory()
+  // 0.17 P-I：useGenerateHistory 每渲染返回新对象（refresh/refreshCache 非 memoized）。
+  // 用 ref 取最新，让 ingestGenerateTask/refreshLiveGenerates deps 稳定，避免 mount
+  // effect 因它们 identity 每渲染变而无限重跑（fetch 风暴）。
+  const historyRef = useRef(history)
+  historyRef.current = history
   const [historyOverride, setHistoryOverride] = useState<HistoryEntry | null>(null)
   const taskIdRef = useRef<number | null>(null)
   taskIdRef.current = currentTask?.id ?? null
-  const lastSnapshotRef = useRef<{ taskId: number; mode: ViewMode } | null>(null)
+  const currentTaskRef = useRef<Task | null>(null)
+  currentTaskRef.current = currentTask
+  // 0.17 P-I：已入库的 taskId（去重，替代旧 lastSnapshotRef）。
+  const ingestedRef = useRef<Set<number>>(new Set())
 
   // 切到 single 时清掉 XY 选择（与 XY 结果绑定，单图模式无意义）
   useEffect(() => {
@@ -235,10 +264,40 @@ export default function GeneratePage() {
   // xy mode 内部 selectedIndices=2 时切 compare sub-view
   const showCompareView = mode === 'xy' && selectedIndices.length === 2
 
-  const projectLoras = useProjectLoras()
+  const catalog = useLoraCatalog()
   // 用 useMemo 稳定引用：monitorState 不变时 samples 引用不变，避免下方
   // useEffect 把 samples 当依赖触发不必要的重跑
   const samples = useMemo(() => monitorState?.samples ?? [], [monitorState])
+  const samplesRef = useRef(samples)
+  samplesRef.current = samples
+
+  // #1：活动结果网格用「dispatch 时定格的轴」而非 live xDraft/yDraft。
+  // 显示任务有定格 run（runsRef）时取冻结值（任务开始后改 sidebar 不串改右侧）；否则
+  // 回退 live。runsRef 是 ref，但 currentTask 变会 re-render → 这里随之重算，够 reactive。
+  const frozenRun = currentTask ? runsRef.current.get(currentTask.id) ?? null : null
+  const gridXDraft = frozenRun ? frozenRun.xDraft : xDraft
+  const gridYDraft = frozenRun ? frozenRun.yDraft : yDraft
+
+  // 0.17 P-I：统一出图时间线 = live 队列(pending/running) ∪ done 历史(cache/disk 扫盘)，
+  // 按 taskId 去重（running→done 过渡窗口）。live 恒在最上（最新提交），done 往下。喂右栏。
+  // 未来换后端 D 端点只改这一处派生（前端其余不动）。
+  const timelineItems = useMemo<TimelineItem[]>(() => {
+    const doneIds = new Set(
+      history.entries.map(entryTaskId).filter((x): x is number => x != null),
+    )
+    const done: TimelineItem[] = [...history.entries]
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .map((entry) => ({ kind: 'done', entry }))
+    const live: TimelineItem[] = [...liveGenerates]
+      .filter((task) => !doneIds.has(task.id))
+      .sort((a, b) => b.created_at - a.created_at)
+      .map((task) => ({
+        kind: 'live',
+        task,
+        mode: runsRef.current.get(task.id)?.snapshot.mode ?? 'single',
+      }))
+    return [...live, ...done]
+  }, [liveGenerates, history.entries])
 
   // XY mode 时，按钮显示「生成 N×M=K 张」
   const xyCellCount = useMemo(() => {
@@ -261,23 +320,106 @@ export default function GeneratePage() {
     }
   }, [])
 
+  // 0.17 P-I：入库某条 generate。**每条 done 时各入各的，跟「当前显示哪张」解耦**
+  // （多任务下 currentTask 跟着 running 走，不会在每条 done 停留）。
+  // temp（默认 save_test_images=off）：server 在 image_done 已把图 + 参数写进加密 cache
+  //   → 只 refreshCache 拉新 index。
+  // disk（on）：用该 task 的定格 run（runsRef）+ samples 落盘。samplesOverride：显示
+  //   任务已有 live samples 时直接传，省一次 getMonitorState。
+  const ingestGenerateTask = useCallback(async (taskId: number, samplesOverride?: typeof samples) => {
+    if (ingestedRef.current.has(taskId)) return
+    const sec = await api.getSecrets().catch(() => null)
+    const saveToDisk = !!sec?.generate?.save_test_images
+    if (!saveToDisk) {
+      ingestedRef.current.add(taskId)
+      await historyRef.current.refreshCache()
+      return
+    }
+    const runSnap = runsRef.current.get(taskId)
+    const snapMode = runSnap?.snapshot.mode
+    if (snapMode !== 'single' && snapMode !== 'xy') return  // compare / 缺 run → 无法重建，不标记（留后重试）
+    let s = samplesOverride ?? []
+    if (s.length === 0) {
+      const st = await api.getMonitorState(taskId).catch(() => null)
+      s = (st?.samples as typeof samples | undefined) ?? []
+    }
+    if (s.length === 0) return
+    ingestedRef.current.add(taskId)
+    const params = runSnap!.snapshot
+    const filenames = s.map((x) => x.path.split(/[\\/]/).pop() ?? '').filter(Boolean)
+    if (snapMode === 'single') {
+      await saveSingleSamples(taskId, filenames, params)
+    } else {
+      const xd = runSnap!.xDraft
+      const yd = runSnap!.yDraft
+      const xValues = xd.raw.split(',').map((v) => v.trim()).filter(Boolean)
+      const yValues = yd ? yd.raw.split(',').map((v) => v.trim()).filter(Boolean) : [null as string | null]
+      const xySamples = s
+        .filter((x): x is typeof x & { xy: NonNullable<typeof x.xy> } => x.xy != null)
+        .map((x) => ({ path: x.path, xy: { xi: x.xy.xi, yi: x.xy.yi } }))
+      await saveXYMatrix({
+        samples: xySamples,
+        taskId,
+        xAxis: xd.axis as Parameters<typeof saveXYMatrix>[0]['xAxis'],
+        yAxis: (yd?.axis ?? null) as Parameters<typeof saveXYMatrix>[0]['yAxis'],
+        xValues,
+        yValues,
+      }, params)
+    }
+    await historyRef.current.refresh()
+  }, [])
+
+  // 0.17 P-I：拉本类型 running+pending generate（listQueueLive 的 type 参数），驱动排队
+  // 列表 + 显示跟 running 走 + 对刚离开列表（done/failed/canceled）的每条各自入库。
+  const refreshLiveGenerates = useCallback(async () => {
+    let items: Task[]
+    try { items = await api.listQueueLive(undefined, 'generate') } catch { return }
+    setLiveGenerates(items)
+    const newIds = new Set(items.map((t) => t.id))
+    // finished = 上次在 live、这次不在 = 刚跑完/取消。
+    const finished = [...prevGenIdsRef.current].filter((id) => !newIds.has(id))
+    prevGenIdsRef.current = newIds
+    const cur = currentTaskRef.current
+    const running = items.find((t) => t.status === 'running') ?? null
+    if (running) {
+      // 显示跟着正在跑的那张走
+      if (!cur || cur.id !== running.id) setCurrentTask(running)
+    } else if (cur && finished.includes(cur.id)) {
+      // 无 running 且当前显示那张刚跑完 → 拉终态定格状态徽章（图 samples 已在盘/cache）
+      void api.getGenerateTask(cur.id).then(setCurrentTask).catch(() => {})
+    }
+    // 每条刚完成的各自入库（显示那张用 live samples，省一次 getMonitorState）
+    for (const id of finished) {
+      void ingestGenerateTask(id, id === cur?.id ? samplesRef.current : undefined)
+    }
+  }, [ingestGenerateTask])
+
   useEffect(() => {
     void refreshBlockingTask()
-  }, [refreshBlockingTask])
+    void refreshLiveGenerates()
+  }, [refreshBlockingTask, refreshLiveGenerates])
 
   // SSE：task_state_changed 触发 task refresh；monitor_state_updated 推 sample 列表。
   useEventStream((evt) => {
-    if (evt.type === 'task_state_changed') void refreshBlockingTask()
+    if (evt.type === 'task_state_changed') {
+      void refreshBlockingTask()
+      // 0.17 P-I：显示态 + 排队列表 + 逐条入库统一由 refreshLiveGenerates 推进。
+      void refreshLiveGenerates()
+    }
     const tid = taskIdRef.current
     if (tid == null) return
     if (evt.type === 'task_state_changed' && evt.task_id === tid) {
-      void api.getGenerateTask(tid).then((t) => {
-        setCurrentTask(t)
-        if (t.status === 'done' || t.status === 'failed' || t.status === 'canceled') {
-          // busy 已是派生自 status，无需 setBusy；只清进度防残留
-          setProgress({ batchIdx: null, batchTotal: null, currentStep: null, totalSteps: null })
-        }
-      }).catch(() => { /* task 已清也走这里 */ })
+      // currentTask 的推进交给 refreshLiveGenerates；这里只在显示任务终态时清进度。
+      if (evt.status === 'done' || evt.status === 'failed' || evt.status === 'canceled') {
+        setProgress({ phase: null, batchIdx: null, batchTotal: null, currentStep: null, totalSteps: null })
+      }
+    } else if (
+      evt.type === 'generate_phase'
+      && String(evt.task_id) === String(tid)
+    ) {
+      // 阶段推进（load/clip/sample/vae）→ 进度条覆盖非采样阶段
+      const name = typeof evt.name === 'string' ? (evt.name as GeneratePhase) : null
+      setProgress((p) => ({ ...p, phase: name }))
     } else if (
       evt.type === 'generate_preview_step'
       && String(evt.task_id) === String(tid)
@@ -297,8 +439,9 @@ export default function GeneratePage() {
       evt.type === 'generate_image_started'
       && String(evt.task_id) === String(tid)
     ) {
-      // 新 batch 开始 → 重置 step 进度，更新 batch 计数
+      // 新 batch 开始 → 重置 step 进度，更新 batch 计数（phase 由后续 generate_phase 驱动）
       setProgress({
+        phase: null,
         batchIdx: typeof evt.batch_idx === 'number' ? evt.batch_idx : null,
         batchTotal: typeof evt.batch_total === 'number' ? evt.batch_total : null,
         currentStep: 0,
@@ -312,126 +455,40 @@ export default function GeneratePage() {
     setPreviewStep(null)
   }, [currentTask?.id, mode, samples.length])
 
-  // 切 task / 切 mode 时清掉历史回看 override（让主预览跟着走当前 task）
+  // 0.17 P-I：**不再**随 currentTask.id 变自动清 override。多任务下 currentTask 跟着
+  // running 自动走，若在此清 override 会把用户正回看的 done 项踢回实时视图。改为只在
+  // 用户显式操作时清：点 running 时间线项（rail onSelect）→ 清；或切 mode（下面）→ 清。
+  // 切 mode 时只清「属于别的 mode」的 override：手动切 mode 仍清（rail 按 mode 分桶，
+  // override.mode 恒等于旧 mode ≠ 新 mode → 清）；但 ?task= 深链到异 mode 的 task 时
+  // handleHistorySelect 会把 mode 对齐到 entry.mode，此时 override.mode===新 mode → 保留。
   useEffect(() => {
-    setHistoryOverride(null)
-  }, [currentTask?.id, mode])
+    setHistoryOverride((cur) => (cur && cur.mode !== mode ? null : cur))
+  }, [mode])
 
-  // task done + 有样本 → 入库历史。lastSnapshotRef 防同 task 多次触发
-  // 之前 dedup 还比 mode → 用户切 mode 时同 task 反复入库（"历史克隆"bug）。
-  // 修：只 dedup taskId；entry.mode 记当时生成时的 mode，不被切 mode 影响。
-  useEffect(() => {
-    if (!currentTask || currentTask.status !== 'done') return
-    if (samples.length === 0) return
-    const snap = lastSnapshotRef.current
-    if (snap?.taskId === currentTask.id) return
-    lastSnapshotRef.current = { taskId: currentTask.id, mode }
-    const taskId = currentTask.id
-    // 选封面 sample
-    let coverIdx = 0
-    // XY：找 (xi=0, yi=0) 那张；找不到 fallback 0
-    if (mode === 'xy') {
-      const found = samples.findIndex(
-        (s) => s.xy && s.xy.xi === 0 && s.xy.yi === 0
-      )
-      if (found >= 0) coverIdx = found
-    }
-    const cover = samples[coverIdx]
-    if (!cover) return
-    const filename = (cover.path.split(/[\\/]/).pop() ?? '')
-    if (!filename) return
-    // badge 字段不再存 entry（adapter.entryBadge 计算）
-    const filenames = samples
-      .map((s) => s.path.split(/[\\/]/).pop() ?? '')
-      .filter(Boolean)
-    // commit: xy 历史回看用 PreviewXYGrid 重建网格 → 入库时收集 axis + sample 元数据
-    let xyMeta: import('./generate/useGenerateHistory').HistoryXYMeta | undefined
-    if (mode === 'xy') {
-      const xValues = xDraft.raw.split(',').map((s) => s.trim()).filter(Boolean)
-      const yValues = yDraft
-        ? yDraft.raw.split(',').map((s) => s.trim()).filter(Boolean)
-        : [null as string | null]
-      const xySamples = samples
-        .filter((s): s is typeof s & { xy: NonNullable<typeof s.xy> } => s.xy != null)
-        .map((s) => ({
-          path: s.path,
-          xy: {
-            xi: s.xy.xi, yi: s.xy.yi,
-            xv: s.xy.xv ?? '', yv: s.xy.yv ?? null,
-          },
-        }))
-      xyMeta = {
-        xAxis: xDraft.axis, yAxis: yDraft?.axis ?? null,
-        xValues, yValues, samples: xySamples,
-      }
-    }
-    // 参数快照（落盘 PNG metadata + cache entry 共用，回填用）。
-    // LoRA 只存 name + ids（不存 path 避免泄露 / 跨机器死链）；回填时通过
-    // projectLoras 用 ids → path resolve。
-    const snapshotLoras: SnapshotLora[] = loras.map((l) => ({
-      name: loraBasename(l.path),
-      scale: l.scale,
-      project_id: l.project_id ?? null,
-      version_id: l.version_id ?? null,
-    }))
-    const params: GenerateParamsSnapshot = {
-      schema_version: PARAMS_SNAPSHOT_VERSION,
-      mode,
-      prompts,
-      negative_prompt: negPrompt,
-      width, height, steps,
-      cfg_scale: cfgScale,
-      sampler_name: samplerName,
-      scheduler,
-      count, seed,
-      loras: snapshotLoras,
-      xy_draft: mode === 'xy'
-        ? {
-            x: transformAxisRawForSnapshot(xDraft),
-            y: yDraft ? transformAxisRawForSnapshot(yDraft) : null,
-          }
-        : null,
-      dataset_pick: datasetPick,
-    }
-    // 决策 #5 二元模式：开关开 = 落盘 + refresh disk-history（DiskEntry 由
-    // server 给）；开关关 = server 已自动入加密 cache，前端 refreshCache
-    // 拉新 index 即可（不再前端构造 CacheEntry）。compare 不入历史（保留现状）。
-    if (mode !== 'single' && mode !== 'xy') return
-    void (async () => {
-      const sec = await api.getSecrets().catch(() => null)
-      const saveToDisk = !!sec?.generate?.save_test_images
-      if (saveToDisk) {
-        // 持久路径：落盘 + 重拉 disk-history（DiskEntry 由 server 端 disk-history
-        // 接口构造，含 sha1 id + thumb url + 已 URL-encoded image url）
-        if (mode === 'single') {
-          await saveSingleSamples(taskId, filenames, params)
-        } else if (xyMeta) {
-          await saveXYMatrix({
-            samples: xyMeta.samples.map((s) => ({ path: s.path, xy: { xi: s.xy.xi, yi: s.xy.yi } })),
-            taskId,
-            xAxis: xyMeta.xAxis as Parameters<typeof saveXYMatrix>[0]['xAxis'],
-            yAxis: xyMeta.yAxis as Parameters<typeof saveXYMatrix>[0]['yAxis'],
-            xValues: xyMeta.xValues,
-            yValues: xyMeta.yValues,
-          }, params)
-        }
-        await history.refresh()
-      } else {
-        // 临时路径：server 端 image_done 已写入加密 disk cache（含 snapshot +
-        // xy 元数据），这里只拉新 index
-        await history.refreshCache()
-      }
-    })()
-  }, [currentTask, samples, mode, selectedIndices, history, xDraft, yDraft,
-      prompts, negPrompt, width, height, steps, cfgScale, samplerName, scheduler, count, seed, loras, datasetPick])
 
   const handleHistorySelect = (entry: HistoryEntry) => {
-    setHistoryOverride(entry)
-    // applySnapshot 统一所有"应用快照"入口（决策 #8 / Step 3）；老 entry 缺
-    // params 会走 catch 兜底（snap.loras 等访问报错 → 不回填，仅切图）
+    setHistoryOverride(entry)  // 先切图（同步），sidebar 回填随 ckpts 解析异步补上
+    // applySnapshot 统一所有"应用快照"入口（决策 #8 / Step 3）；现在 async：
+    // LoRA 解析按需拉对应版本 ckpts（懒级联），不依赖 mount 全量列表。老 entry
+    // 缺 params 会走 catch 兜底（snap.loras 等访问报错 → 不回填，仅切图）。
+    void (async () => {
     let applied
     try {
-      applied = applySnapshot(entry.params, projectLoras)
+      const projects = await catalog.loadProjects()
+      const projIds = new Set(projects.map((p) => p.id))
+      applied = await applySnapshot(
+        entry.params,
+        async (snap) => {
+          if (snap.project_id == null || snap.version_id == null) {
+            return resolveLoraFromCkpts(snap, [])
+          }
+          const ckpts = await catalog
+            .fetchCkpts(snap.project_id, snap.version_id)
+            .catch(() => [])
+          return resolveLoraFromCkpts(snap, ckpts)
+        },
+        (pid) => projIds.has(pid),
+      )
     } catch {
       return
     }
@@ -445,6 +502,8 @@ export default function GeneratePage() {
     if (applied.datasetPick) {
       setDatasetPickerOpen(true)
     }
+    // 底模不在 prefs 里（独立 ephemeral state）→ 单独回填。
+    setBaseModel(applied.baseModel)
     setPrefs((prev) => {
       const base: GeneratePrefs = {
         ...prev,
@@ -458,9 +517,9 @@ export default function GeneratePage() {
         cfgScale: applied.cfgScale,
         samplerName: applied.samplerName,
         scheduler: applied.scheduler,
-        count: applied.count,
         seed: applied.seed,
         datasetPick: applied.datasetPick,
+        // 0.17 P-I：batch size 是瞬态值，点历史图**不回填**（用户设的值保持不变）。
       }
       if (applied.mode === 'single') {
         return { ...base, singleLoras: applied.loras }
@@ -472,7 +531,31 @@ export default function GeneratePage() {
         yDraft: applied.yDraft ?? null,
       }
     })
+    })()
   }
+
+  // 0.17 P-H 深链回看：队列详情「查看出图结果」→ /tools/generate?task=<id>。Task 不带
+  // mode/params，只有出图历史条目自带 → 等历史加载后按 task_id 命中条目，走现成的
+  // historyOverride 回看路径（handleHistorySelect 会对齐 mode + 回填 sidebar）。
+  const deepLinkTaskId = useMemo(() => {
+    const v = new URLSearchParams(window.location.search).get('task')
+    const n = v ? Number(v) : NaN
+    return Number.isFinite(n) ? n : null
+  }, [])
+  const deepLinkConsumedRef = useRef(false)
+  useEffect(() => {
+    if (deepLinkTaskId == null || deepLinkConsumedRef.current || history.loading) return
+    deepLinkConsumedRef.current = true
+    // 清 query 避免刷新重触发（同 ?lora= 范式）
+    const url = new URL(window.location.href)
+    url.searchParams.delete('task')
+    window.history.replaceState({}, '', url.toString())
+    const entry = history.entries.find((e) => entryTaskId(e) === deepLinkTaskId)
+    if (entry) handleHistorySelect(entry)
+    // 图源（cache 同 session 未淘汰 / disk save 开着）都没了 = 物理上回看不了，兜底提示。
+    else toast(t('generate.taskResultUnavailable', { id: deepLinkTaskId }), 'info')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepLinkTaskId, history.loading, history.entries])
 
   const handleGenerate = async () => {
     const datasetSuffix = datasetPick && datasetPick.tags.length > 0
@@ -504,11 +587,10 @@ export default function GeneratePage() {
       }
     }
 
+    // 0.17 P-I：提交只入队，**不清空/不劫持显示**——显示跟着正在跑的那张走，新提交的
+    // 排到队尾（daemon 逐个跑）。旧的 setCurrentTask(null)/setRun(null)/清 selection/progress
+    // 会打断正在出图那张，已移除。
     setSubmitting(true)
-    setCurrentTask(null)
-    // monitorState 由 useMonitorProgress hook 自动随 currentTask 切 null → 清空
-    setSelectedIndices([])  // 新一轮生成 — 旧选择已失效
-    setProgress({ batchIdx: null, batchTotal: null, currentStep: null, totalSteps: null })
     try {
       // 拼接顺序：手写正向在前，dataset tags 在后（与产品约定一致）
       const baseTrimmed = prompts.map((p) => p.trim()).filter((p) => p)
@@ -526,7 +608,7 @@ export default function GeneratePage() {
         project_id: l.project_id ?? null,
         version_id: l.version_id ?? null,
       }))
-      const dispatchSnapshot: GenerateParamsSnapshot = {
+      const baseSnapshot: GenerateParamsSnapshot = {
         schema_version: PARAMS_SNAPSHOT_VERSION,
         mode,
         prompts,
@@ -535,8 +617,9 @@ export default function GeneratePage() {
         cfg_scale: cfgScale,
         sampler_name: samplerName,
         scheduler,
-        count: mode === 'xy' ? 1 : count,
+        count: 1,  // 0.17 P-I：每个 task 出 1 张；batch 拆成多 task（下面循环）
         seed,
+        base_model: baseModel,
         loras: snapshotLoras,
         xy_draft: mode === 'xy'
           ? {
@@ -546,27 +629,49 @@ export default function GeneratePage() {
           : null,
         dataset_pick: datasetPick,
       }
-      const body: GenerateRequest = {
-        prompts: mergedPrompts,
-        negative_prompt: negPrompt,
-        width, height, steps,
-        count: mode === 'xy' ? 1 : count,
-        seed,
-        cfg_scale: cfgScale,
-        sampler_name: samplerName,
-        scheduler,
-        lora_configs: loraConfigs,
-        // attention_backend 不带：server 端套 Comfy-style runtime 并读取 generate backend。
-        xy_matrix,
-        params_snapshot: dispatchSnapshot as unknown as Record<string, unknown>,
+      // 0.17 P-I：count 现在 = **batch size**（每次入队的 task 数）。single 拆成 batch 个
+      // task（各出 1 张、seed 递增区分）→ 在右栏时间线逐个排队；xy 一次一个矩阵（batch 忽略）。
+      const batch = mode === 'xy' ? 1 : Math.max(1, batchSize)
+      let firstId: number | null = null
+      for (let i = 0; i < batch; i++) {
+        const taskSeed = seed + i
+        const snap: GenerateParamsSnapshot = { ...baseSnapshot, seed: taskSeed }
+        const body: GenerateRequest = {
+          prompts: mergedPrompts,
+          base_model: baseModel ?? undefined,
+          negative_prompt: negPrompt,
+          width, height, steps,
+          count: 1,
+          seed: taskSeed,
+          cfg_scale: cfgScale,
+          sampler_name: samplerName,
+          scheduler,
+          lora_configs: loraConfigs,
+          // attention_backend 不带：server 端套 Comfy-style runtime 并读取 generate backend。
+          xy_matrix,
+          params_snapshot: snap as unknown as Record<string, unknown>,
+        }
+        const task = await api.enqueueGenerate(body)
+        // #1 + P-I：每 task 的运行态定格存进 Map（xDraft/yDraft 纯原始对象浅拷贝隔离后续
+        // 编辑；snapshot 各带自己的 seed）。显示/入库各按 taskId 取。
+        runsRef.current.set(task.id, {
+          xDraft: { ...xDraft }, yDraft: yDraft ? { ...yDraft } : null, snapshot: snap,
+        })
+        if (firstId === null) {
+          firstId = task.id
+          // 首次生成（当前无显示）乐观置为第一个 task，立刻看到「排队/开始」而非空屏。
+          if (!currentTaskRef.current || TERMINAL_TASK_STATUSES.includes(currentTaskRef.current.status)) {
+            setCurrentTask(task)
+          }
+        }
       }
-      const task = await api.enqueueGenerate(body)
-      // 立即同步 ref，避免 supervisor 在 enqueue 返回 → setCurrentTask 渲染
-      // 之间已经处理完任务并发了 task_state_changed 事件（config 缺失这种
-      // 早期失败会马上发 SSE，handler 拿 taskIdRef 还是 null → 漏事件）
-      taskIdRef.current = task.id
-      setCurrentTask(task)
-      toast(t('generate.taskEnqueued', { id: task.id }), 'success')
+      void refreshLiveGenerates()
+      toast(
+        batch > 1
+          ? t('generate.batchEnqueued', { n: batch })
+          : t('generate.taskEnqueued', { id: firstId ?? 0 }),
+        'success',
+      )
     } catch (e) {
       toast(String(e), 'error')
     } finally {
@@ -584,6 +689,29 @@ export default function GeneratePage() {
     }
   }
 
+  // 0.17 P-I：取消某条排队中的 generate（时间线 live 项单条 ✕）。
+  const cancelQueued = async (id: number) => {
+    try {
+      await api.cancelTask(id)
+      toast(t('generate.cancelRequested', { id }), 'info')
+      void refreshLiveGenerates()
+    } catch (e) {
+      toast(String(e), 'error')
+    }
+  }
+
+  // 0.17 P-I：清空队列——取消所有等待中（pending）的 generate（不动正在跑的那张）。
+  const pendingGenerateIds = useMemo(
+    () => liveGenerates.filter((t) => t.status === 'pending').map((t) => t.id),
+    [liveGenerates],
+  )
+  const clearQueue = async () => {
+    if (pendingGenerateIds.length === 0) return
+    await Promise.allSettled(pendingGenerateIds.map((id) => api.cancelTask(id)))
+    toast(t('generate.queueCleared', { n: pendingGenerateIds.length }), 'info')
+    void refreshLiveGenerates()
+  }
+
   const cancelable = currentTask
     && (currentTask.status === 'pending' || currentTask.status === 'running')
 
@@ -591,7 +719,9 @@ export default function GeneratePage() {
   //（done/failed/canceled）一律 busy=false，让 button 立刻可点重试
   const busy: boolean = submitting || Boolean(cancelable)
 
-  const generateLabel = busy
+  // 0.17 P-I：按钮现在正在出图时也可点（提交新任务入队），所以 label 只在本次入队
+  // HTTP 窗口（submitting）显示「生成中」，其余显示动作 label。
+  const generateLabel = submitting
     ? t('generate.generating')
     : mode === 'xy' && xyCellCount > 0
       ? t('generate.startGenerateCount', { n: xyCellCount })
@@ -602,11 +732,44 @@ export default function GeneratePage() {
       <PageHeader
         title={t('generate.title')}
         subtitle={t('generate.subtitle')}
-        actions={<DaemonControls onToggleLog={() => setLogOpen((v) => !v)} />}
+        actions={
+          <div className="flex items-center gap-2">
+            {/* 0.17 P-I：取消（当前显示 task）+ 清空队列（所有 pending）始终在位，不可用时
+                disabled，放「清理显存」（DaemonControls）左边。 */}
+            <button
+              className="btn btn-ghost"
+              onClick={handleCancel}
+              disabled={!cancelable}
+              title={t('generate.cancelCurrentTitle')}
+            >
+              {t('common.cancel')}
+            </button>
+            <button
+              className="btn btn-ghost"
+              onClick={() => void clearQueue()}
+              disabled={pendingGenerateIds.length === 0}
+              title={t('generate.clearQueueTitle')}
+              data-testid="generate-clear-queue"
+            >
+              {pendingGenerateIds.length > 0
+                ? t('generate.clearQueue', { n: pendingGenerateIds.length })
+                : t('generate.clearQueueEmpty')}
+            </button>
+            <DaemonControls onToggleLog={() => setLogOpen((v) => !v)} />
+          </div>
+        }
       />
 
-      {/* 三列各自独立滚动，整页固定高度 = viewport */}
-      <div className="p-6 flex gap-4 items-stretch flex-wrap xl:flex-nowrap flex-1 min-h-0">
+      {/* 三列各自独立滚动，整页固定高度 = viewport。relative：进度条 absolute 叠在顶部
+          p-6 既有 gap 上、不占布局，出现/消失不推动内容（防页面抖动）。 */}
+      <div className="relative p-6 flex gap-4 items-stretch flex-wrap xl:flex-nowrap flex-1 min-h-0">
+        {/* 出图进度条：全宽细线（浏览器加载条式）+ 小相位文字，绝对定位叠在 header 与内容间
+            的既有 gap 上；覆盖 load/clip/sample/vae 全阶段，切历史图也照常显示当前进度。 */}
+        {(busy || progress.currentStep != null || progress.phase != null) && (
+          <div className="absolute top-0 inset-x-0 z-10 pointer-events-none">
+            <GenerateProgressBar busy={busy} progress={progress} />
+          </div>
+        )}
 
           {/* 左：sidebar — 单卡片包裹；内容区独立 scroll，底部 footer 固定 tab + 生成按钮 */}
           <div className="card flex flex-col w-full xl:w-[420px] shrink-0 self-stretch min-h-0 overflow-hidden">
@@ -629,7 +792,7 @@ export default function GeneratePage() {
                   <SidebarLoras
                     loras={loras}
                     onChange={setLoras}
-                    projectLoras={projectLoras}
+                    catalog={catalog}
                   />
                 </>
               ) : (
@@ -640,7 +803,7 @@ export default function GeneratePage() {
                   onYChange={setYDraft}
                   loras={loras}
                   onLorasChange={setLoras}
-                  projectLoras={projectLoras}
+                  catalog={catalog}
                 />
               )}
             </div>
@@ -726,9 +889,7 @@ export default function GeneratePage() {
                 <div className="flex gap-2">
                   <NumField label={t('generate.steps')} value={steps} onChange={setSteps} min={1} max={150} />
                   <NumField label="CFG" value={cfgScale} onChange={setCfgScale} min={0} max={20} step={0.5} />
-                  {mode !== 'xy' && (
-                    <NumField label={t('generate.perPrompt')} value={count} onChange={setCount} min={1} max={32} />
-                  )}
+                  {/* 0.17 P-I：count 移到「开始生成」旁改为 batch size（每次入队 task 数）。 */}
                 </div>
                 <div className="flex gap-2">
                   <div className="flex-1 min-w-0">
@@ -768,6 +929,18 @@ export default function GeneratePage() {
                 <div className="text-2xs text-fg-tertiary font-mono" style={{ marginTop: -4 }}>
                   {t('generate.seedHint')}
                 </div>
+                <div>
+                  <label className="caption block mb-1">{t('generate.baseModel')}</label>
+                  <BaseModelSelect
+                    value={baseModel}
+                    onChange={setBaseModel}
+                    className="input text-xs w-full"
+                    ariaLabel={t('generate.baseModel')}
+                  />
+                  <div className="text-2xs text-fg-tertiary font-mono mt-1">
+                    {t('generate.baseModelHint')}
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -780,43 +953,45 @@ export default function GeneratePage() {
               style={{ borderTop: '1px solid var(--border-subtle)', padding: 12 }}
             >
               <SidebarSectionTabs tab={sidebarTab} onTabChange={setSidebarTab} mode={mode} />
-              <div className="flex items-center gap-3">
+              {/* items-stretch：batch 框跟「开始生成」按钮等高（按钮 padding:12 定高度）。 */}
+              <div className="flex items-stretch gap-3">
+                {/* R-5：GPU 任务运行时不再硬禁用——后端准入（R-1）保证互斥，
+                    提交只是入队排队（锚点 §4-5）。按钮 title 提示会排队。 */}
                 <button
                   className="btn btn-primary flex-1"
                   style={{ padding: 12, fontWeight: 600, justifyContent: 'center' }}
                   onClick={handleGenerate}
-                  disabled={busy || activeBlockingTask !== null}
+                  disabled={submitting}
                   title={
                     activeBlockingTask
-                      ? t('generate.blockedByActiveTask', { id: activeBlockingTask.id })
+                      ? t('generate.queuedBehindActiveTask', { id: activeBlockingTask.id })
                       : undefined
                   }
                 >
                   {generateLabel}
                 </button>
-                {cancelable && (
-                  <button className="btn btn-ghost" onClick={handleCancel} title={t('generate.cancelCurrentTitle')}>
-                    {t('common.cancel')}
-                  </button>
-                )}
-                {!cancelable && (
-                  <div className="font-mono text-xs text-fg-tertiary text-right" style={{ lineHeight: 1.3 }}>
-                    <div>{width}×{height}</div>
-                    <div>
-                      {busy
-                        ? t('generate.generating')
-                        : activeBlockingTask
-                          ? t('generate.blockedByActiveTaskHint', { id: activeBlockingTask.id })
-                          : t('generate.sharedGpu')}
-                    </div>
-                  </div>
+                {/* 0.17 P-I：batch size（每次入队 task 数），固定宽不抖动、无 label，hover
+                    显示「批次数量」。取消已移右上。xy 一次一个矩阵、不适用。 */}
+                {mode !== 'xy' && (
+                  <input
+                    type="number"
+                    className="input shrink-0"
+                    style={{ width: 64, textAlign: 'center' }}
+                    min={1} max={32}
+                    value={batchSize}
+                    onChange={(e) => setBatchSize(Number(e.target.value))}
+                    title={t('generate.batchSizeTitle')}
+                    aria-label={t('generate.batchSizeTitle')}
+                  />
                 )}
               </div>
             </div>
           </div>
 
-          {/* 中：结果独立 scroll，card flex-1 占满列高 */}
-          <div className="flex-1 min-w-0 flex flex-col overflow-y-auto self-stretch">
+          {/* 中：card flex-1 占满列高。overflow-hidden（非 auto）——内容本就 fit（预览区
+              flex-1 min-h-0，XY 网格自带滚动），auto 会因一点点溢出触发幻影滚动条、吃掉
+              10px 宽把 card 挤窄 → 结果卡与右栏之间凭空多出 10px margin（#2 根因）。 */}
+          <div className="flex-1 min-w-0 flex flex-col overflow-hidden self-stretch">
             <div className="card flex-1 flex flex-col" style={{ padding: 18, minHeight: 0 }}>
               <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
                 <div className="flex items-center gap-2">
@@ -834,8 +1009,7 @@ export default function GeneratePage() {
                 <ViewModeTabs mode={mode} onModeChange={setMode} />
               </div>
 
-              <GenerateProgressBar busy={busy} progress={progress} />
-
+              {/* 进度条已上移到页面 header 下（全宽细线），不再在结果卡内。 */}
               {historyOverride ? (
                 <div className="flex-1 min-h-0 flex flex-col gap-2">
                   {historyOverride.mode === 'xy' && historyOverride.xyMeta ? (
@@ -891,13 +1065,7 @@ export default function GeneratePage() {
                     {historyOverride.source === 'disk'
                       ? (historyOverride.folder ?? (historyOverride.filename ?? '').replace(/\.png$/i, ''))
                       : t('generate.historyTask', { id: historyOverride.taskId })}
-                    <button
-                      className="btn btn-ghost text-xs ml-2"
-                      style={{ padding: '2px 8px' }}
-                      onClick={() => setHistoryOverride(null)}
-                    >
-                      {t('generate.backToCurrent')}
-                    </button>
+                    {/* 0.17 P-I：删「返回当前」——统一时间线后回到实时点右栏 running 项即可。 */}
                   </div>
                 </div>
               ) : !currentTask ? (
@@ -910,16 +1078,16 @@ export default function GeneratePage() {
                   samples={samples}
                   taskId={currentTask.id}
                   selectedIndices={selectedIndices as [number, number]}
-                  xDraft={xDraft}
-                  yDraft={yDraft}
+                  xDraft={gridXDraft}
+                  yDraft={gridYDraft}
                   onBack={() => setSelectedIndices([])}
                 />
               ) : mode === 'xy' ? (
                 <PreviewXYGrid
                   samples={samples}
                   taskId={currentTask.id}
-                  xDraft={xDraft}
-                  yDraft={yDraft}
+                  xDraft={gridXDraft}
+                  yDraft={gridYDraft}
                   onCellClick={handleCellClick}
                   selectedIndices={selectedIndices}
                 />
@@ -947,11 +1115,17 @@ export default function GeneratePage() {
             </div>
           </div>
 
-          {/* 右：图片历史栏（按当前 mode 分桶） */}
+          {/* 右：出图时间线（live 队列 + done 历史，按当前 mode 分桶） */}
           <PreviewHistoryRail
-            entries={history.entries}
+            items={timelineItems}
             mode={mode}
-            onSelect={handleHistorySelect}
+            onSelect={(it) => {
+              if (it.kind === 'done') handleHistorySelect(it.entry)
+              // running 项：清 override 回到实时视图（currentTask 已跟着 running 走）。
+              else if (it.task.status === 'running') setHistoryOverride(null)
+              // pending 项：无内容，不选中（只可取消）。
+            }}
+            onCancel={cancelQueued}
             onRefresh={history.refresh}
             loading={history.loading}
           />

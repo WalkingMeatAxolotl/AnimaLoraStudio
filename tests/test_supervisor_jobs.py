@@ -39,6 +39,41 @@ def _setup_project(isolated) -> dict:
         return projects.create_project(conn, title="P")
 
 
+def test_eval_metrics_not_blocked_by_earlier_eval_samples(isolated) -> None:
+    """R-3：指标（light 档）与出图（exclusive 档）分档准入 —— 老 dispatch_order
+    的「指标插队」硬编码删除后，_dispatch_data 天然跳过 exclusive 档的
+    eval_samples（它走 exclusive 统一 FIFO），先入队的 sample 不再堵住指标。"""
+    from unittest.mock import MagicMock
+    p = _setup_project(isolated)
+    with db.connection_for(isolated["db"]) as conn:
+        project_jobs.create_job(
+            conn, project_id=p["id"], kind="eval_samples",
+            params={"run_id": "run-later"},
+        )
+        clip = project_jobs.create_job(
+            conn, project_id=p["id"], kind="eval_clip",
+            params={"run_id": "run-ready"},
+        )
+
+    from studio.services.inference import daemon as _daemon_mod
+    fake = MagicMock(); fake.is_model_loaded = False; fake.is_busy = False
+    _daemon_mod._INSTANCE = fake  # type: ignore[attr-defined]
+    try:
+        sup = Supervisor(
+            on_event=lambda _e: None,
+            db_path=isolated["db"], logs_dir=isolated["logs"],
+        )
+        spawned: list = []
+        sup._spawn_job = lambda slot, job: spawned.append(job)  # type: ignore
+        data_slot = next(s for s in sup._slots if s.name == "data")
+        sup._dispatch_data(data_slot)
+    finally:
+        _daemon_mod._INSTANCE = None  # type: ignore[attr-defined]
+
+    assert [j["id"] for j in spawned] == [clip["id"]], \
+        "light 档指标不被更早入队的 exclusive 档 eval_samples 堵住"
+
+
 def test_download_job_runs_in_parallel_with_training_task(isolated, tmp_path) -> None:
     """PP10.2.b：download job (IO-only) 应该跟训练 task 并行跑，不互相堵塞。"""
     p = _setup_project(isolated)
@@ -85,8 +120,17 @@ def test_download_job_runs_in_parallel_with_training_task(isolated, tmp_path) ->
         sup.stop(timeout=10.0)
 
 
-def test_gpu_job_deferred_during_training_by_default(isolated, tmp_path) -> None:
-    """PP10.2.b：训练 task 在跑时，tag / reg_build job 默认推迟（避免抢 GPU）。"""
+def test_light_job_deferred_during_training_when_disabled(
+    isolated, tmp_path, monkeypatch,
+) -> None:
+    """R-1：关闭 light 并行开关后，训练 task 在跑时 tag job 推迟。"""
+    from studio import secrets as _sec
+    secrets_file = tmp_path / "secrets.json"
+    monkeypatch.setattr(_sec, "SECRETS_FILE", secrets_file)
+    sec = _sec.Secrets()
+    sec.queue.light_tasks_during_train = False
+    _sec.save(sec)
+
     p = _setup_project(isolated)
     events: list[dict] = []
     task_sleep = lambda t, _cfg: [
@@ -139,16 +183,13 @@ def test_gpu_job_deferred_during_training_by_default(isolated, tmp_path) -> None
         sup.stop(timeout=10.0)
 
 
-def test_gpu_job_runs_during_training_when_allowed(isolated, tmp_path, monkeypatch) -> None:
-    """PP10.2.b：开 secrets.queue.allow_gpu_during_train=True 后，tag job
-    可以跟训练 task 并行（用户自己确认显存够）。"""
+def test_light_job_runs_during_training_by_default(isolated, tmp_path, monkeypatch) -> None:
+    """R-1 新默认：tag job（light 档）与训练 task 并行，无需任何开关。"""
     from studio import secrets as _sec
-    # 写一份 secrets 进 tmp，monkeypatch 切到这里
+    # 写一份默认 secrets 进 tmp，monkeypatch 切到这里（验证的就是默认值）
     secrets_file = tmp_path / "secrets.json"
     monkeypatch.setattr(_sec, "SECRETS_FILE", secrets_file)
-    sec = _sec.Secrets()
-    sec.queue.allow_gpu_during_train = True
-    _sec.save(sec)
+    _sec.save(_sec.Secrets())
 
     p = _setup_project(isolated)
     events: list[dict] = []
@@ -271,7 +312,8 @@ def test_cancel_pending_job(isolated) -> None:
         job = project_jobs.create_job(
             conn, project_id=p["id"], kind="download", params={}
         )
-    assert sup.cancel_job(job["id"]) is True
+    # R-5：作业与任务同台账，统一走 Supervisor.cancel（cancel_job 已删）。
+    assert sup.cancel(job["id"]) is True
     with db.connection_for(isolated["db"]) as conn:
         got = project_jobs.get_job(conn, job["id"])
     assert got["status"] == "canceled"

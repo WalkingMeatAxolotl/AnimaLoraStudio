@@ -4,17 +4,25 @@
  * 现读 secrets.models.root）。所以 done 态不给「立即重启」，只给「完成」+ 关闭，
  * 并回调 onDone 让父级刷新当前路径显示。
  *
- * 四态：loading（拉 info 扫描）→ confirm（文件数/大小/顶层明细 + 确认）→
+ * 相位：loading（拉 info 扫描）→ confirm（文件数/大小/顶层明细 + 确认）→
  * running（进度条，SSE 驱动）→ done / error。running 期间 modal 不可关。
+ * 目标已有 models 数据时后端回 409 target_conflict → conflict 相位（issue #351）：
+ * 「跳过已有文件」（合并补齐，同名保留目标现有版本）/「覆盖已有文件」/ 取消。
  */
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { api, type ModelsRootInfo } from '../api/client'
+import { api, type ApiError, type ModelsRootInfo } from '../api/client'
 import { formatBytes } from '../lib/useUploadProgress'
 import { useEventStream } from '../lib/useEventStream'
 
-type Phase = 'loading' | 'confirm' | 'running' | 'done' | 'error'
+type Phase = 'loading' | 'confirm' | 'conflict' | 'running' | 'done' | 'error'
+
+interface ConflictInfo {
+  existingFiles: number
+  existingBytes: number
+  sameNameFiles: number
+}
 
 interface Progress {
   doneFiles: number
@@ -42,6 +50,7 @@ export default function ModelsRootMigrateModal({ target, onClose, onDone }: {
   const [phase, setPhase] = useState<Phase>('loading')
   const [info, setInfo] = useState<ModelsRootInfo | null>(null)
   const [progress, setProgress] = useState<Progress>(EMPTY_PROGRESS)
+  const [conflict, setConflict] = useState<ConflictInfo | null>(null)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -91,12 +100,23 @@ export default function ModelsRootMigrateModal({ target, onClose, onDone }: {
     },
   })
 
-  const handleStart = async () => {
+  const handleStart = async (onConflict?: 'skip' | 'overwrite') => {
     setPhase('running')
     setProgress(EMPTY_PROGRESS)
     try {
-      await api.startModelsRootMigrate(target)
+      await api.startModelsRootMigrate(target, onConflict)
     } catch (e) {
+      const err = e as ApiError
+      if (err.code === 'models_root.target_conflict') {
+        const d = (err.detail ?? {}) as Record<string, unknown>
+        setConflict({
+          existingFiles: Number(d.existing_files) || 0,
+          existingBytes: Number(d.existing_bytes) || 0,
+          sameNameFiles: Number(d.same_name_files) || 0,
+        })
+        setPhase('conflict')
+        return
+      }
       setError(String(e))
       setPhase('error')
     }
@@ -169,6 +189,25 @@ export default function ModelsRootMigrateModal({ target, onClose, onDone }: {
             </>
           )}
 
+          {phase === 'conflict' && conflict && (
+            <>
+              <div className="text-sm font-semibold">
+                {t('settings.storage.conflictTitle')}
+              </div>
+              <div className="text-xs text-fg-secondary">
+                {t('settings.storage.conflictSummary', {
+                  path: destination,
+                  files: conflict.existingFiles,
+                  size: formatBytes(conflict.existingBytes),
+                  same: conflict.sameNameFiles,
+                })}
+              </div>
+              <div className="text-xs text-fg-tertiary">
+                {t('settings.storage.conflictHint')}
+              </div>
+            </>
+          )}
+
           {phase === 'running' && (
             <>
               <div className="text-sm">{t('settings.storage.migrating')}</div>
@@ -213,6 +252,19 @@ export default function ModelsRootMigrateModal({ target, onClose, onDone }: {
               <button className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
               <button className="btn btn-primary" onClick={() => void handleStart()}>
                 {t('settings.storage.startMigrate')}
+              </button>
+            </>
+          )}
+          {phase === 'conflict' && (
+            <>
+              <button className="btn btn-ghost" onClick={() => setPhase('confirm')}>
+                {t('common.cancel')}
+              </button>
+              <button className="btn btn-danger" onClick={() => void handleStart('overwrite')}>
+                {t('settings.storage.conflictOverwrite')}
+              </button>
+              <button className="btn btn-primary" onClick={() => void handleStart('skip')}>
+                {t('settings.storage.conflictSkip')}
               </button>
             </>
           )}

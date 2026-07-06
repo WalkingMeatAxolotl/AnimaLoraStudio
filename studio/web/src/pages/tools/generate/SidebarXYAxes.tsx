@@ -5,7 +5,7 @@ import PathPicker from '../../../components/PathPicker'
 import AddSlotButton from './AddSlotButton'
 import InlineLoraPicker from './InlineLoraPicker'
 import NumberListInput from './NumberListInput'
-import type { ProjectLora } from './types'
+import type { LoraCatalog } from './useLoraCatalog'
 import { AXIS_VALUE_TYPE, REQUIRES_LORA_INDEX, axisLabel, ckptStemFromPath, type XYAxisDraft } from './xy'
 
 const ALL_AXES: XYAxisType[] = ['lora_ckpt', 'lora_scale', 'cfg_scale', 'steps']
@@ -24,13 +24,13 @@ function placeholderFor(axis: XYAxisType): string {
  * axis.loraIndex 指向那个槽；axis.raw 是 picks.map(path).join(', ')。
  */
 function AxisLoraCkptPicker({
-  draft, onDraftChange, loras, onLorasChange, projectLoras,
+  draft, onDraftChange, loras, onLorasChange, catalog,
 }: {
   draft: XYAxisDraft
   onDraftChange: (d: XYAxisDraft) => void
   loras: LoraEntry[]
   onLorasChange: (l: LoraEntry[]) => void
-  projectLoras: ProjectLora[]
+  catalog: LoraCatalog
 }) {
   const [externalOpen, setExternalOpen] = useState(false)
 
@@ -67,11 +67,19 @@ function AxisLoraCkptPicker({
     })
   }
 
-  // 显示已绑的 LoRA 摘要（如果 raw 非空 + loraIndex 有效）
+  // 显示已绑的 LoRA 摘要（如果 raw 非空 + loraIndex 有效）。项目/版本名从 catalog
+  // 取（下面的 picker mount 会懒拉对应 project/versions）；还没加载时下面回退到
+  // ckptStemFromPath(bound.path)。
   const bound = draft.loraIndex !== null && draft.loraIndex < loras.length
     ? loras[draft.loraIndex]
     : null
-  const matched = bound ? projectLoras.find((p) => p.versionId === bound.version_id) : null
+  const boundProject = bound ? catalog.projects.find((p) => p.id === bound.project_id) : null
+  const boundVersion = bound && bound.project_id != null
+    ? catalog.versionsOf(bound.project_id)?.find((v) => v.id === bound.version_id)
+    : undefined
+  const matchedLabel = boundProject && boundVersion
+    ? `${boundProject.title} / ${boundVersion.label}`
+    : null
   const pickedCount = draft.raw.trim() ? draft.raw.split(',').filter((s) => s.trim()).length : 0
 
   // 受控同步给 InlineLoraPicker：raw 字符串当 path/basename 列表喂过去 + 锚定
@@ -96,7 +104,7 @@ function AxisLoraCkptPicker({
         >
           <span>扫:</span>
           <span className="font-medium" style={{ color: 'var(--fg-secondary)' }}>
-            {matched ? `${matched.projectTitle} / ${matched.versionLabel}` : ckptStemFromPath(bound.path)}
+            {matchedLabel ?? ckptStemFromPath(bound.path)}
           </span>
           <span className="font-mono">· {pickedCount} 个 ckpt</span>
         </div>
@@ -104,7 +112,7 @@ function AxisLoraCkptPicker({
       <InlineLoraPicker
         mode="multi"
         live
-        projectLoras={projectLoras}
+        catalog={catalog}
         existingPaths={new Set()}
         showWeight={false}
         selectedPaths={selectedPaths}
@@ -129,7 +137,7 @@ function AxisLoraCkptPicker({
 }
 
 function AxisCard({
-  label, draft, onChange, onRemove, loras, onLorasChange, projectLoras,
+  label, draft, onChange, onRemove, loras, onLorasChange, catalog,
 }: {
   label: 'X' | 'Y'
   draft: XYAxisDraft
@@ -137,7 +145,7 @@ function AxisCard({
   onRemove?: () => void
   loras: LoraEntry[]
   onLorasChange: (l: LoraEntry[]) => void
-  projectLoras: ProjectLora[]
+  catalog: LoraCatalog
 }) {
   const { t } = useTranslation()
   const isCkpt = draft.axis === 'lora_ckpt'
@@ -194,7 +202,7 @@ function AxisCard({
           onDraftChange={onChange}
           loras={loras}
           onLorasChange={onLorasChange}
-          projectLoras={projectLoras}
+          catalog={catalog}
         />
       ) : draft.axis === 'lora_scale' ? (
         <NumberListInput
@@ -224,7 +232,7 @@ function AxisCard({
  */
 export default function SidebarXYAxes({
   xDraft, yDraft, onXChange, onYChange,
-  loras, onLorasChange, projectLoras,
+  loras, onLorasChange, catalog,
 }: {
   xDraft: XYAxisDraft
   yDraft: XYAxisDraft | null
@@ -232,7 +240,7 @@ export default function SidebarXYAxes({
   onYChange: (d: XYAxisDraft | null) => void
   loras: LoraEntry[]
   onLorasChange: (l: LoraEntry[]) => void
-  projectLoras: ProjectLora[]
+  catalog: LoraCatalog
 }) {
   return (
     // 外层不再套 .card —— 父级 sidebar 已是统一卡片，这里只做内容分组避免双重边框。
@@ -243,14 +251,14 @@ export default function SidebarXYAxes({
       <div className="flex flex-col gap-2">
         <AxisCard
           label="X" draft={xDraft} onChange={onXChange}
-          loras={loras} onLorasChange={onLorasChange} projectLoras={projectLoras}
+          loras={loras} onLorasChange={onLorasChange} catalog={catalog}
         />
         {yDraft ? (
           <AxisCard
             label="Y" draft={yDraft}
             onChange={(d) => onYChange(d)}
             onRemove={() => onYChange(null)}
-            loras={loras} onLorasChange={onLorasChange} projectLoras={projectLoras}
+            loras={loras} onLorasChange={onLorasChange} catalog={catalog}
           />
         ) : (
           <AddSlotButton

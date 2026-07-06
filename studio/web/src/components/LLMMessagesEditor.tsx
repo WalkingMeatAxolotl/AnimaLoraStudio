@@ -15,7 +15,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { LLMMessage } from '../api/client'
 
@@ -145,6 +145,12 @@ function SortableMessage({
   t: ReturnType<typeof useTranslation>['t']
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
+  // 本地缓冲：逐字只更新本地，失焦(onBlur)才把 content 上抛父（instant-apply 下避免逐字 PUT）。
+  // 外部 message.content（落盘后回流）变化时同步本地。role 切换仍即时，不走缓冲。
+  const [draft, setDraft] = useState(message.content)
+  useEffect(() => {
+    setDraft(message.content)
+  }, [message.content])
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -267,8 +273,9 @@ function SortableMessage({
         </div>
       ) : (
         <textarea
-          value={message.content}
-          onChange={(e) => onChange({ content: e.target.value })}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={() => { if (draft !== message.content) onChange({ content: draft }) }}
           disabled={disabled}
           rows={3}
           className="w-full bg-transparent border-0 outline-none text-sm text-fg-primary block"

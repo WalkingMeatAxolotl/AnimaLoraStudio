@@ -11,6 +11,13 @@
 """
 from typing import Any
 
+# PP6.1 退役的内置 HTTP monitor server 字段 —— 值早已不生效，schema 字段已删。
+# 历史上每份 dump 都把这组默认值写进 yaml，所以读老配置时必须静默丢弃，
+# 不能进 _tolerant_validate 的 dropped_fields 提示（否则所有旧 config.yaml /
+# 预设一打开就弹兼容横幅）。TrainingConfig extra="ignore" 与 argparse_bridge
+# 跳过未知键已保证不报错，这个集合只服务 dropped_fields 的降噪。
+RETIRED_MONITOR_KEYS = frozenset({"no_monitor", "monitor_host", "monitor_port", "no_browser"})
+
 
 def migrate_legacy_save_keys(data: Any) -> Any:
     """把老 cfg 的 save_every / save_state_every 改名带单位后缀。

@@ -22,6 +22,21 @@ class RemoveRequest(BaseModel):
     files: list[str]
 
 
+class CopyValidationRequest(BaseModel):
+    """download → validation 复制（落固定 validation/1_data/，无 dest_folder）。"""
+    files: list[str]
+
+
+class ValidationItem(BaseModel):
+    folder: str
+    name: str
+
+
+class RemoveValidationRequest(BaseModel):
+    """按 (folder, name) 精确删 —— 多选可能跨 auto-split 的不同 repeat 文件夹。"""
+    items: list[ValidationItem]
+
+
 class FolderOp(BaseModel):
     op: str  # "create" | "rename" | "delete"
     name: str

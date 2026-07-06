@@ -84,6 +84,25 @@ def test_write_then_read(env) -> None:
     assert cfg_out["lora_rank"] == 64
 
 
+def test_write_prunes_inactive_fields(env) -> None:
+    """config.yaml 只落 show_when 生效的字段；GET 读回时缺失字段补默认值。"""
+    p, v = _make_pv(env)
+    cfg_in = _minimal_config(optimizer_type="came", came_beta1=0.5)
+    version_config.write_version_config(p, v, cfg_in)
+
+    raw = yaml.safe_load(
+        version_config.version_config_path(p, v).read_text(encoding="utf-8")
+    )
+    assert raw["came_beta1"] == 0.5  # active 字段照写
+    assert "lion_beta1" not in raw  # 未启用 optimizer 的子参数不落盘
+    assert "infonoise_K" not in raw
+    assert "lr_scheduler" in raw  # disable_when 字段保留
+
+    cfg_out = version_config.read_version_config(p, v)
+    assert cfg_out["came_beta1"] == 0.5
+    assert "lion_beta1" in cfg_out  # 读回时补默认值，前端表单拿到完整 config
+
+
 def test_write_tolerates_stale_preset_fields(env) -> None:
     p, v = _make_pv(env)
     cfg_in = _minimal_config(

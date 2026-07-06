@@ -160,12 +160,10 @@ export function useDialog(): DialogApi {
 
 // ────────────────────────────────────────────────────────────────────────────
 
-function toneButtonClass(tone: DialogTone | undefined): string {
-  switch (tone) {
-    case 'danger': return 'btn btn-danger'
-    case 'warn':   return 'btn btn-warn'
-    default:       return 'btn btn-primary'
-  }
+/** 确认键恒用全局 accent 主色（btn-primary）——tone 只影响语义/文案，不换按钮
+ *  底色。此前 warn/danger 换成橙/红实心底，用户点名和全 app 惯用主色不一致。 */
+function toneButtonClass(_tone: DialogTone | undefined): string {
+  return 'btn btn-primary'
 }
 
 interface RootProps {
@@ -258,19 +256,21 @@ function DialogRoot({ state, onCancel, onOk }: RootProps) {
           </p>
         )}
 
+        {/* min-w-[96px] + justify-center：两键等宽（96px 盖住 4 字 okText 的自然宽
+            ~90px，「取消」不再比「取消计划」窄一截）。 */}
         <div className="flex gap-2 justify-end mt-1">
           {state.type !== 'alert' && (
             <button
               type="button"
               onClick={onCancel}
-              className="btn btn-secondary"
+              className="btn btn-secondary min-w-[96px] justify-center"
             >
               {state.options.cancelText ?? '取消'}
             </button>
           )}
           <button
             type="submit"
-            className={toneButtonClass(state.options.tone)}
+            className={`${toneButtonClass(state.options.tone)} min-w-[96px] justify-center`}
           >
             {state.options.okText ??
               (state.type === 'confirm'

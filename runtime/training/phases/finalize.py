@@ -9,6 +9,7 @@ import logging
 
 from training.context import TrainingContext
 from training.observability import render_loss_curve
+from training.snapshot import emit_event
 from utils.optimizer_utils import optimizer_eval_mode
 
 
@@ -29,6 +30,12 @@ def run(ctx: TrainingContext) -> None:
     # PPSF：最终输出走 averaged weights
     with optimizer_eval_mode(ctx.optimizer):
         ctx.injector.save(final_path)
+    # 训练全部结束 → supervisor 排训练后评估（inline / checkpoint-trigger 已移除，
+    # 评估统一走训练后的独立 job）。
+    emit_event("eval_training_finished", {
+        "epoch": int(ctx.current_epoch or 0),
+        "step": int(ctx.global_step or 0),
+    })
 
     # 清理 SRA v2 hook（MLP 不保存到 LoRA safetensors，训练完即丢弃）
     if ctx.sra_aligner is not None:

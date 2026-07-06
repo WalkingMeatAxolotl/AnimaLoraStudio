@@ -13,18 +13,48 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, type ModelsCatalog, type Secrets } from '../api/client'
+import { api, type ModelsCatalog, type Secrets, type SecretsPatch } from '../api/client'
 import { useToast } from '../components/Toast'
 import { useEventStream } from './useEventStream'
+
+// 全局「已保存」状态指示（instant-apply 下取代旧的保存按钮 dirty 态）。
+export type SaveStatus =
+  | { state: 'idle' }
+  | { state: 'saving' }
+  | { state: 'saved'; at: number }
+  | { state: 'error'; error: string }
+
+// 把单字段 patch 浅合并进本地 secrets（乐观更新用）。secrets 是两层结构
+// （section → fields），顶层标量字段（如 download_source）直接覆盖。
+function mergePatchLocal(base: Secrets, patch: SecretsPatch): Secrets {
+  const out = { ...base } as Record<string, unknown>
+  for (const key of Object.keys(patch)) {
+    const pv = (patch as Record<string, unknown>)[key]
+    const bv = out[key]
+    if (pv && typeof pv === 'object' && !Array.isArray(pv)
+        && bv && typeof bv === 'object' && !Array.isArray(bv)) {
+      out[key] = { ...(bv as object), ...(pv as object) }
+    } else {
+      out[key] = pv
+    }
+  }
+  return out as unknown as Secrets
+}
 
 interface SettingsData {
   secrets: Secrets | null
   secretsError: string | null
   setSecrets: (s: Secrets) => void
+  /** instant-apply 统一写入入口：乐观更新 + 串行 PUT 单字段 patch。 */
+  commitSecrets: (patch: SecretsPatch) => void
+  /** 包装一次性即时 PUT（下载源 / 主模型 / upscaler 等独立保存），驱动 saveStatus 指示。 */
+  runSave: <T>(fn: () => Promise<T>) => Promise<T>
+  saveStatus: SaveStatus
   catalog: ModelsCatalog | null
   catalogError: string | null
   reloadCatalog: () => Promise<ModelsCatalog | null>
@@ -43,6 +73,10 @@ export function SettingsDataProvider({ children }: { children: ReactNode }) {
   const [catalog, setCatalog] = useState<ModelsCatalog | null>(null)
   const [catalogError, setCatalogError] = useState<string | null>(null)
   const [downloadBusy, setDownloadBusy] = useState<Set<string>>(new Set())
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>({ state: 'idle' })
+  // 串行 PUT 队列 + in-flight 计数：保证顺序避免后端读改写竞态。
+  const saveQueueRef = useRef<Promise<unknown>>(Promise.resolve())
+  const pendingRef = useRef(0)
 
   useEffect(() => {
     api.getSecrets()
@@ -97,18 +131,57 @@ export function SettingsDataProvider({ children }: { children: ReactNode }) {
   // draft）。刻意不 setSecrets —— 否则会让 SettingsPage 的 draft/server 失同步，
   // 表单 Save 时把这次改动 clobber 回去。dropdown 当前值读 catalog（reloadCatalog
   // 刷新），不依赖表单 secrets。
+  // 即时保存包装：给「不进 commitSecrets 队列」的独立 PUT（下载源 / 主模型 /
+  // upscaler / auto_sync 等切换类）也驱动右上角 saveStatus 指示，反馈统一。
+  const runSave = useCallback(async <T,>(fn: () => Promise<T>): Promise<T> => {
+    setSaveStatus({ state: 'saving' })
+    try {
+      const r = await fn()
+      setSaveStatus({ state: 'saved', at: Date.now() })
+      return r
+    } catch (e) {
+      setSaveStatus({ state: 'error', error: String(e) })
+      throw e
+    }
+  }, [])
+
   const setDownloadSource = useCallback(async (type: string, source: string) => {
     try {
-      await api.updateSecrets({ download_sources: { [type]: source } })
+      await runSave(() => api.updateSecrets({ download_sources: { [type]: source } }))
       await reloadCatalog()
     } catch (e) {
       toast(String(e), 'error')
     }
-  }, [reloadCatalog, toast])
+  }, [runSave, reloadCatalog, toast])
+
+  // instant-apply 统一写入：乐观更新本地 secrets 让控件立即反映，PUT 单字段
+  // patch 入串行队列。队列全部清空后用后端权威结果回写一次（拿 validator
+  // 规范化 + 敏感字段 mask）——避免连改多个字段时早 PUT 的权威结果覆盖掉
+  // 后面字段的乐观值（中途闪回）。失败时重拉 secrets 恢复一致。
+  const commitSecrets = useCallback((patch: SecretsPatch) => {
+    setSecrets((s) => (s ? mergePatchLocal(s, patch) : s))
+    setSaveStatus({ state: 'saving' })
+    pendingRef.current += 1
+    saveQueueRef.current = saveQueueRef.current
+      .then(() => api.updateSecrets(patch))
+      .then((authoritative) => {
+        pendingRef.current -= 1
+        // 每个 PUT 完成都刷新「已保存」时间戳，让连续保存每次都有可见反馈；
+        // 权威结果只在队列清空时回写一次，避免中途覆盖后续字段的乐观值。
+        if (pendingRef.current === 0) setSecrets(authoritative)
+        setSaveStatus({ state: 'saved', at: Date.now() })
+      })
+      .catch((e) => {
+        pendingRef.current -= 1
+        setSaveStatus({ state: 'error', error: String(e) })
+        toast(String(e), 'error')
+        api.getSecrets().then((s) => setSecrets(s)).catch(() => {})
+      })
+  }, [toast])
 
   return (
     <Ctx.Provider value={{
-      secrets, secretsError, setSecrets,
+      secrets, secretsError, setSecrets, commitSecrets, runSave, saveStatus,
       catalog, catalogError, reloadCatalog,
       downloadBusy, startDownload, setDownloadSource,
     }}>
