@@ -556,8 +556,9 @@ class LLMTagger:
             else:
                 image = Path(result["image"])
                 out[image] = ", ".join(result.get("tags") or [])
-            if done % 20 == 0 or done == total:
-                logger.info("LLM assist: %d/%d pre-tagged", done, total)
+            # 每张一行，与 LLM 阶段 [progress] 的密度对齐——预打标是纯前置阶段，
+            # 任务进度条不动，日志是用户唯一能确认它在推进的地方。
+            logger.info("LLM assist: %d/%d pre-tagged", done, total)
         return out
 
     def _tag_one(
