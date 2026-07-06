@@ -357,105 +357,98 @@ export default function TaggingPage() {
 
         {/* 左栏：参数区整体滚动；任务日志走 StepShell 的统一抽屉（issue #251） */}
         <div className="flex flex-col gap-3 min-h-0 min-w-0 overflow-y-auto">
-          <section className="rounded-md border border-subtle bg-surface px-3 py-2 flex flex-wrap items-center gap-2 shrink-0 text-sm">
-            <span className="text-fg-tertiary">tagger</span>
-            <select
-              value={tagger}
-              onChange={(e) => setTagger(e.target.value as TaggerName)}
-              className="input text-sm"
-              style={{ padding: '3px 8px' }}
-            >
-              <option value="wd14">WD14（本地 ONNX）</option>
-              <option value="cltagger">CLTagger（本地 ONNX）</option>
-              <option value="llm">LLM（OpenAI compatible，含 JoyCaption preset）</option>
-            </select>
-            <span
-              className={
-                taggerStatus
-                  ? taggerStatus.ok ? 'badge badge-ok' : 'badge badge-err'
-                  : 'badge badge-neutral'
-              }
-              title={taggerStatus?.msg ?? t('tag.checkingBtn')}
-            >
-              {taggerStatus
-                ? taggerStatus.ok
-                  ? `${t('tag.statusReady')} ${taggerStatus.msg}`
-                  : `${t('tag.statusUnavail')} ${taggerStatus.msg}`
-                : t('tag.statusChecking')}
-            </span>
-            {taggerStatus && !taggerStatus.ok && taggerStatus.msg.includes('未安装 onnxruntime') && (
-              <button
-                type="button"
-                onClick={() => settingsDrawer.open({ section: 'onnxruntime' })}
-                className="text-xs text-accent underline bg-transparent border-none p-0 cursor-pointer"
-                title={t('tag.goInstallOnnx')}
+          <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 shrink-0 text-sm">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
+              <TagField
+                label="tagger"
+                help={
+                  <span className="inline-flex items-center gap-2 flex-wrap">
+                    <span
+                      className={
+                        taggerStatus
+                          ? taggerStatus.ok ? 'badge badge-ok' : 'badge badge-err'
+                          : 'badge badge-neutral'
+                      }
+                      title={taggerStatus?.msg ?? t('tag.checkingBtn')}
+                    >
+                      {taggerStatus
+                        ? taggerStatus.ok
+                          ? `${t('tag.statusReady')} ${taggerStatus.msg}`
+                          : `${t('tag.statusUnavail')} ${taggerStatus.msg}`
+                        : t('tag.statusChecking')}
+                    </span>
+                    {taggerStatus && !taggerStatus.ok && taggerStatus.msg.includes('未安装 onnxruntime') && (
+                      <button
+                        type="button"
+                        onClick={() => settingsDrawer.open({ section: 'onnxruntime' })}
+                        className="text-accent underline bg-transparent border-none p-0 cursor-pointer"
+                      >
+                        {t('tag.goInstallOnnx')}
+                      </button>
+                    )}
+                    {taggerStatus && !taggerStatus.ok && taggerStatus.msg.includes('需下载模型') && (
+                      <button
+                        type="button"
+                        onClick={() => settingsDrawer.open({ section: tagger === 'cltagger' ? 'cltagger' : 'wd14' })}
+                        className="text-accent underline bg-transparent border-none p-0 cursor-pointer"
+                      >
+                        {t('tag.goDownload')}
+                      </button>
+                    )}
+                  </span>
+                }
               >
-                {t('tag.goInstallOnnx')}
-              </button>
-            )}
-            {taggerStatus && !taggerStatus.ok && taggerStatus.msg.includes('需下载模型') && (
-              <button
-                type="button"
-                onClick={() => settingsDrawer.open({ section: tagger === 'cltagger' ? 'cltagger' : 'wd14' })}
-                className="text-xs text-accent underline bg-transparent border-none p-0 cursor-pointer"
-                title={t('tag.goDownload')}
-              >
-                {t('tag.goDownload')}
-              </button>
-            )}
+                <select
+                  value={tagger}
+                  onChange={(e) => setTagger(e.target.value as TaggerName)}
+                  className="input" style={fieldInputStyle}
+                >
+                  <option value="wd14">WD14（本地 ONNX）</option>
+                  <option value="cltagger">CLTagger（本地 ONNX）</option>
+                  <option value="llm">LLM（OpenAI compatible，含 JoyCaption preset）</option>
+                </select>
+              </TagField>
 
-            <span className="text-dim">|</span>
-            <span className="text-fg-tertiary" title={t('tag.scopeHint')}>{t('tag.scope')}</span>
-            <select
-              value={scope}
-              onChange={(e) => setScope(e.target.value)}
-              disabled={isLive}
-              className="input text-sm"
-              style={{ padding: '3px 8px' }}
-              title={t('tag.scopeHint')}
-            >
-              <option value="all">{t('tag.scopeAll')}</option>
-              {folders.map((f) => (
-                <option key={f} value={f}>{f}</option>
-              ))}
-              <option value="validation">{t('tag.scopeValidation')}</option>
-            </select>
+              <TagField label={t('tag.scope')} help={t('tag.scopeHint')}>
+                <select
+                  value={scope}
+                  onChange={(e) => setScope(e.target.value)}
+                  disabled={isLive}
+                  className="input" style={fieldInputStyle}
+                >
+                  <option value="all">{t('tag.scopeAll')}</option>
+                  {folders.map((f) => (
+                    <option key={f} value={f}>{f}</option>
+                  ))}
+                  <option value="validation">{t('tag.scopeValidation')}</option>
+                </select>
+              </TagField>
 
-            <span className="text-dim">|</span>
-            <span className="text-fg-tertiary" title={t('tag.onExistingHint')}>
-              {t('tag.onExisting')}
-            </span>
-            <select
-              value={onExisting}
-              onChange={(e) => setOnExisting(e.target.value as 'overwrite' | 'skip' | 'append')}
-              disabled={isLive}
-              className="input text-sm"
-              style={{ padding: '3px 8px' }}
-              title={t('tag.onExistingHint')}
-            >
-              <option value="overwrite">{t('tag.onExistingOverwrite')}</option>
-              <option value="skip">{t('tag.onExistingSkip')}</option>
-              <option value="append">{t('tag.onExistingAppend')}</option>
-            </select>
+              <TagField label={t('tag.onExisting')} help={t('tag.onExistingHint')}>
+                <select
+                  value={onExisting}
+                  onChange={(e) => setOnExisting(e.target.value as 'overwrite' | 'skip' | 'append')}
+                  disabled={isLive}
+                  className="input" style={fieldInputStyle}
+                >
+                  <option value="overwrite">{t('tag.onExistingOverwrite')}</option>
+                  <option value="skip">{t('tag.onExistingSkip')}</option>
+                  <option value="append">{t('tag.onExistingAppend')}</option>
+                </select>
+              </TagField>
 
-            <span className="text-dim">|</span>
-            <span className="text-fg-tertiary" title={t('tag.triggerWordHint')}>
-              {t('tag.triggerWord')}
-            </span>
-            <input
-              type="text"
-              value={triggerWord}
-              onChange={(e) => setTriggerWord(e.target.value)}
-              placeholder={t('tag.triggerWordPlaceholder')}
-              disabled={isLive}
-              className={`input input-mono text-sm ${
-                triggerWord.trim() !== (activeVersion.trigger_word ?? '') ? 'border-warn' : ''
-              }`}
-              style={{ padding: '3px 8px', width: 180 }}
-              title={t('tag.triggerWordHint')}
-            />
-
-            <span className="flex-1" />
+              <TagField label={t('tag.triggerWord')} help={t('tag.triggerWordHint')}>
+                <input
+                  type="text"
+                  value={triggerWord}
+                  onChange={(e) => setTriggerWord(e.target.value)}
+                  placeholder={t('tag.triggerWordPlaceholder')}
+                  disabled={isLive}
+                  className="input input-mono"
+                  style={fieldCtlStyle(triggerWord.trim() !== (activeVersion.trigger_word ?? ''))}
+                />
+              </TagField>
+            </div>
           </section>
 
           {tagger === 'wd14' && (
@@ -584,6 +577,7 @@ function Wd14Panel({
             disabled={disabled}
             onChange={(v) => onChange({ ...form, model_id: v })}
             modified={form.model_id !== defaults.model_id}
+            settingsSection="wd14"
           />
           <TagField label={t('tag.blacklistLabel')} className="md:col-span-2">
             <TagListInput
@@ -901,12 +895,22 @@ function fieldCtlStyle(modified?: boolean): React.CSSProperties {
   return modified ? { ...fieldInputStyle, borderColor: 'var(--warn)' } : fieldInputStyle
 }
 
-function TagField({ label, help, className = '', children }: {
-  label: string; help?: React.ReactNode; className?: string; children: React.ReactNode
+function TagField({ label, labelExtra, help, className = '', children }: {
+  label: string
+  /** label 行内后缀（对齐训练配置页 label 旁小字徽章 / 链接，如「全局设置」跳转）。 */
+  labelExtra?: React.ReactNode
+  help?: React.ReactNode
+  className?: string
+  children: React.ReactNode
 }) {
   return (
     <div className={`py-1.5 ${className}`}>
-      <div className="text-sm font-medium text-fg-secondary mb-1">{label}</div>
+      <div className="text-sm font-medium text-fg-secondary mb-1">
+        {label}
+        {labelExtra && (
+          <span className="ml-2 text-[11px] font-normal align-middle">{labelExtra}</span>
+        )}
+      </div>
       {children}
       {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
     </div>
@@ -968,33 +972,36 @@ function TagFieldSelect({ label, value, disabled, onChange, modified, help, clas
   )
 }
 
-function TagFieldModelSelect({ label, value, options, disabled, onChange, modified }: {
+function TagFieldModelSelect({ label, value, options, disabled, onChange, modified, settingsSection }: {
   label: string; value: string; options: string[]; disabled: boolean
   onChange: (v: string) => void; modified?: boolean
+  /** 全局设置抽屉的目标区段（label 旁「全局设置」链接跳转用）。 */
+  settingsSection?: string
 }) {
   const { t } = useTranslation()
   const settingsDrawer = useSettingsDrawer()
   const opts = options.includes(value) ? options : [value, ...options]
   return (
-    <TagField label={label}>
-      <div className="flex items-center gap-1.5 min-w-0">
-        <select
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          disabled={disabled}
-          className="input input-mono min-w-0 flex-1" style={fieldCtlStyle(modified)}
-        >
-          {opts.map((m) => <option key={m} value={m}>{m}</option>)}
-        </select>
+    <TagField
+      label={label}
+      labelExtra={
         <button
           type="button"
-          onClick={() => settingsDrawer.open()}
-          className="text-xs text-fg-tertiary shrink-0 bg-transparent border-none p-0 cursor-pointer"
-          title={t('tag.globalSettings')}
+          onClick={() => settingsDrawer.open(settingsSection ? { section: settingsSection } : undefined)}
+          className="text-accent bg-transparent border-none p-0 cursor-pointer hover:underline"
         >
-          +
+          {t('tag.globalSettings')}
         </button>
-      </div>
+      }
+    >
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        className="input input-mono" style={fieldCtlStyle(modified)}
+      >
+        {opts.map((m) => <option key={m} value={m}>{m}</option>)}
+      </select>
     </TagField>
   )
 }
