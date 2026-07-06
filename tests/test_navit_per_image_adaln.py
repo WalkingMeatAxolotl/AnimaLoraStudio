@@ -6,8 +6,9 @@ gather per-token via ``index_select(mod_index)`` (new path). Same value within
 a row → mathematically equivalent; differences can only come from GEMM row-count
 differences in floating-point reduction order.
 
-This test asserts Block / FinalLayer equivalence in fp32 for both layouts
-(AdaLN-LoRA on/off), and asserts ``index_select`` output contiguity.
+This test asserts Block (bf16 — varlen attention has no fp32 kernel on newer
+archs like RTX 5090 sm_120) / FinalLayer (fp32, no attention) equivalence for
+both layouts (AdaLN-LoRA on/off), and asserts ``index_select`` output contiguity.
 
 Needs CUDA + xformers (block-diagonal varlen attention); skipped otherwise.
 """
@@ -55,18 +56,21 @@ def _mk_inputs(dtype=torch.float32):
             mod_index, self_bias, cross_bias)
 
 
-def _block(use_adaln_lora):
+def _block(use_adaln_lora, dtype=torch.float32):
     torch.manual_seed(1)
     blk = Block(D, CTX, num_heads=2, mlp_ratio=2.0,
                 use_adaln_lora=use_adaln_lora, adaln_lora_dim=16,
                 self_attention_backend="torch", cross_attention_backend="torch")
-    return blk.to(device="cuda", dtype=torch.float32).eval()
+    return blk.to(device="cuda", dtype=dtype).eval()
 
 
 def _assert_block_equiv(use_adaln_lora):
-    blk = _block(use_adaln_lora)
+    # block-diagonal varlen attention 只有 fp16/bf16 kernel（新架构如 RTX 5090
+    # sm_120 无 fp32 varlen），且 navit 实际以 bf16/fp16 跑——用 bf16 反映真实运行。
+    dtype = torch.bfloat16
+    blk = _block(use_adaln_lora, dtype)
     (x, cross, emb_G, lora_G, emb_tok, lora_tok,
-     mod_index, self_bias, cross_bias) = _mk_inputs()
+     mod_index, self_bias, cross_bias) = _mk_inputs(dtype)
     lora_G_arg = lora_G if use_adaln_lora else None
     lora_tok_arg = lora_tok if use_adaln_lora else None
     with torch.no_grad():
@@ -82,9 +86,9 @@ def _assert_block_equiv(use_adaln_lora):
             adaln_lora_B_T_3D=lora_G_arg, cross_attn_mask=cross_bias,
             token_wise_mod=True, mod_index=mod_index,
         )
-    # fp32: same-value rows via different M GEMMs; tolerance leaves float reduction
-    # room (in practice usually bit-identical)
-    torch.testing.assert_close(new, legacy, rtol=1e-5, atol=1e-5)
+    # bf16 varlen: same-value rows via different M GEMMs; tolerance widened to
+    # bf16 reduction level (fp32 varlen has no kernel on sm_120 / RTX 5090).
+    torch.testing.assert_close(new, legacy, rtol=1.6e-2, atol=1e-2)
 
 
 @requires_cuda
