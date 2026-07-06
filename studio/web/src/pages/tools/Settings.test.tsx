@@ -130,6 +130,7 @@ const initialServerState = {
     threshold_general: 0.35,
     threshold_character: 0.6,
     add_copyright_tag: true,
+    add_artist_tag: false,
     add_meta_tag: false,
     add_model_tag: false,
     add_rating_tag: false,

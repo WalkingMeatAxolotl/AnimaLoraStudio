@@ -23,6 +23,7 @@ class CLTaggerOverrides(BaseModel):
     model_path: Optional[str] = None
     tag_mapping_path: Optional[str] = None
     add_copyright_tag: Optional[bool] = None
+    add_artist_tag: Optional[bool] = None
     add_meta_tag: Optional[bool] = None
     add_model_tag: Optional[bool] = None
     add_rating_tag: Optional[bool] = None

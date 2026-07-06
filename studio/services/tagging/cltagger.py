@@ -36,6 +36,7 @@ _CATEGORY_ALIASES = {
     "9": "Rating",
     "rating": "Rating",
     "copyright": "Copyright",
+    "artist": "Artist",
     "meta": "Meta",
     "model": "Model",
     "quality": "Quality",
@@ -312,10 +313,11 @@ class CLTagger(OnnxTaggerBase):
         # blacklist 比对归一（与 wd14 一致）：下划线↔空格、大小写不敏感。
         # 注意此处 tag 还是原始下划线形式（输出时才转空格），归一后比对。
         blacklist = {_blacklist_key(b) for b in cfg.blacklist_tags}
-        # CLTagger 7 category gate：General / Character 走阈值（不在此表里
+        # CLTagger 8 category gate：General / Character 走阈值（不在此表里
         # 始终参与），其余按 cfg 开关；未知 category 当 General 处理。
         category_gates = {
             "Copyright": cfg.add_copyright_tag,
+            "Artist": cfg.add_artist_tag,
             "Meta": cfg.add_meta_tag,
             "Model": cfg.add_model_tag,
             "Rating": cfg.add_rating_tag,

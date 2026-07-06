@@ -44,6 +44,7 @@ type CLTaggerForm = {
   model_path: string
   tag_mapping_path: string
   add_copyright_tag: boolean
+  add_artist_tag: boolean
   add_meta_tag: boolean
   add_model_tag: boolean
   add_rating_tag: boolean
@@ -88,6 +89,7 @@ function fromCLTaggerConfig(cfg: CLTaggerConfig): CLTaggerForm {
     model_path: cfg.model_path,
     tag_mapping_path: cfg.tag_mapping_path,
     add_copyright_tag: cfg.add_copyright_tag,
+    add_artist_tag: cfg.add_artist_tag,
     add_meta_tag: cfg.add_meta_tag,
     add_model_tag: cfg.add_model_tag,
     add_rating_tag: cfg.add_rating_tag,
@@ -260,6 +262,8 @@ export default function TaggingPage() {
       out.tag_mapping_path = cltaggerForm.tag_mapping_path
     if (cltaggerForm.add_copyright_tag !== cltaggerDefaults.add_copyright_tag)
       out.add_copyright_tag = cltaggerForm.add_copyright_tag
+    if (cltaggerForm.add_artist_tag !== cltaggerDefaults.add_artist_tag)
+      out.add_artist_tag = cltaggerForm.add_artist_tag
     if (cltaggerForm.add_meta_tag !== cltaggerDefaults.add_meta_tag)
       out.add_meta_tag = cltaggerForm.add_meta_tag
     if (cltaggerForm.add_model_tag !== cltaggerDefaults.add_model_tag)
@@ -638,6 +642,7 @@ function CLTaggerPanel({
     form.model_path !== defaults.model_path ||
     form.tag_mapping_path !== defaults.tag_mapping_path ||
     form.add_copyright_tag !== defaults.add_copyright_tag ||
+    form.add_artist_tag !== defaults.add_artist_tag ||
     form.add_meta_tag !== defaults.add_meta_tag ||
     form.add_model_tag !== defaults.add_model_tag ||
     form.add_rating_tag !== defaults.add_rating_tag ||
@@ -707,6 +712,7 @@ function CLTaggerPanel({
           <TagField label={t('tag.cltaggerExtraTags')} className="md:col-span-2">
             <div className="flex items-center gap-4 flex-wrap py-0.5">
               <TagFieldCheckbox label="copyright" checked={form.add_copyright_tag} disabled={disabled} onChange={(v) => onChange({ ...form, add_copyright_tag: v })} />
+              <TagFieldCheckbox label="artist" checked={form.add_artist_tag} disabled={disabled} onChange={(v) => onChange({ ...form, add_artist_tag: v })} />
               <TagFieldCheckbox label="meta" checked={form.add_meta_tag} disabled={disabled} onChange={(v) => onChange({ ...form, add_meta_tag: v })} />
               <TagFieldCheckbox label="model" checked={form.add_model_tag} disabled={disabled} onChange={(v) => onChange({ ...form, add_model_tag: v })} />
               <TagFieldCheckbox label="rating" checked={form.add_rating_tag} disabled={disabled} onChange={(v) => onChange({ ...form, add_rating_tag: v })} />

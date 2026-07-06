@@ -344,6 +344,7 @@ export interface CLTaggerConfig {
   threshold_general: number
   threshold_character: number
   add_copyright_tag: boolean
+  add_artist_tag: boolean
   add_meta_tag: boolean
   add_model_tag: boolean
   add_rating_tag: boolean

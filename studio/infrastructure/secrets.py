@@ -457,11 +457,12 @@ class CLTaggerConfig(BaseModel):
     tag_mapping_path: str = "cl_tagger_1_02/tag_mapping.json"
     threshold_general: float = 0.35
     threshold_character: float = 0.6
-    # CLTagger 模型输出 7 个 category：General / Character 走阈值过滤，其余 5 个
+    # CLTagger 模型输出 8 个 category：General / Character 走阈值过滤，其余 6 个
     # 按 bool 开关 gate。默认勾上 General / Character / Copyright 三类——LoRA
-    # 训练标准 caption 形态；Meta / Model / Rating / Quality 默认关，避免污染
-    # caption（例如 "highres", "best quality", "explicit" 这类元信息）。
+    # 训练标准 caption 形态；Artist / Meta / Model / Rating / Quality 默认关，
+    # 避免污染 caption（画师名以及 "highres", "best quality", "explicit" 这类元信息）。
     add_copyright_tag: bool = True
+    add_artist_tag: bool = False
     add_meta_tag: bool = False
     add_model_tag: bool = False
     add_rating_tag: bool = False

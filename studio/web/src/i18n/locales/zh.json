@@ -1028,6 +1028,7 @@
     "fieldBlacklistTags": "屏蔽 Tags",
     "fieldBatchSize": "批大小",
     "fieldAddCopyright": "添加版权 Tag",
+    "fieldAddArtist": "添加画师 Tag",
     "fieldAddMeta": "添加元数据 Tag",
     "fieldAddModel": "添加模型 Tag",
     "fieldAddRating": "添加分级 Tag",

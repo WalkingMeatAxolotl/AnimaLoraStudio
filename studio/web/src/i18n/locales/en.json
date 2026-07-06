@@ -1028,6 +1028,7 @@
     "fieldBlacklistTags": "Blacklisted tags",
     "fieldBatchSize": "Batch size",
     "fieldAddCopyright": "Add copyright tag",
+    "fieldAddArtist": "Add artist tag",
     "fieldAddMeta": "Add meta tag",
     "fieldAddModel": "Add model tag",
     "fieldAddRating": "Add rating tag",
