@@ -711,7 +711,8 @@ function RegTab({
   )
 }
 
-// 来源 segmented control + 下方常驻 hint。
+// 来源选择：与页内其它字段同款的字段块 select（训练配置页 Field 语言），
+// 说明文字在控件下方随选择切换。
 function SourceSegmented({
   source, onChange,
 }: {
@@ -720,60 +721,23 @@ function SourceSegmented({
 }) {
   const { t } = useTranslation()
   return (
-    <div className="mb-4">
-      <div
-        className="inline-flex p-0.5 gap-0.5 rounded-md border border-dim bg-sunken"
+    <div className="mb-3.5">
+      <label className="block text-sm font-medium text-fg-secondary mb-1">
+        {t('reg.sourceLabel')}
+      </label>
+      <select
+        className="select input"
+        style={{ ...fieldInputStyle, maxWidth: 420 }}
+        value={source}
+        onChange={(e) => onChange(e.target.value as 'ai' | 'booru')}
       >
-        <SourceSegBtn
-          active={source === 'ai'}
-          onClick={() => onChange('ai')}
-          label={t('reg.sourceAi')}
-          sub={t('reg.sourceAiSub')}
-        />
-        <SourceSegBtn
-          active={source === 'booru'}
-          onClick={() => onChange('booru')}
-          label={t('reg.sourceBooru')}
-          sub={t('reg.sourceBooruSub')}
-        />
-      </div>
-      <p className="mt-2 text-xs text-fg-tertiary leading-relaxed max-w-[720px]">
-        <span className="mr-1.5">{source === 'ai' ? '◈' : '⚡'}</span>
+        <option value="ai">{t('reg.sourceAi')} · {t('reg.sourceAiSub')}</option>
+        <option value="booru">{t('reg.sourceBooru')} · {t('reg.sourceBooruSub')}</option>
+      </select>
+      <p className="mt-1 text-xs text-fg-tertiary leading-relaxed max-w-[720px]">
         {source === 'ai' ? t('reg.sourceAiHint') : t('reg.sourceBooruHint')}
       </p>
     </div>
-  )
-}
-
-function SourceSegBtn({
-  active, onClick, label, sub,
-}: {
-  active: boolean
-  onClick: () => void
-  label: string
-  sub: string
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={
-        'inline-flex items-center gap-1.5 px-4 py-1.5 rounded text-sm font-medium border-0 cursor-pointer whitespace-nowrap transition-colors ' +
-        (active
-          ? 'bg-accent text-white'
-          : 'bg-transparent text-fg-secondary hover:text-fg-primary')
-      }
-    >
-      <span>{label}</span>
-      <span
-        className={
-          'text-2xs font-normal ' +
-          (active ? 'opacity-80' : 'text-fg-tertiary')
-        }
-      >
-        · {sub}
-      </span>
-    </button>
   )
 }
 
@@ -838,7 +802,16 @@ function GrpCard({
   )
 }
 
-// 单字段封装：label + control。
+// 与训练配置页 components/Field.tsx 的 inputStyle 同款（紧凑；canvas 背景）。
+const fieldInputStyle: React.CSSProperties = {
+  width: '100%', padding: '5px 10px',
+  background: 'var(--bg-canvas)', border: '1px solid var(--border-default)',
+  borderRadius: 'var(--r-sm)', fontSize: 'var(--t-sm)',
+  color: 'var(--fg-primary)',
+}
+
+// 单字段封装：对齐训练配置页 Field 语言 — label 在上、控件在下、
+// 说明文字（hint / locked）在控件下方。
 function Field({
   label, hint, locked, children,
 }: {
@@ -848,18 +821,14 @@ function Field({
   children: React.ReactNode
 }) {
   return (
-    <div className="pt-4">
-      <label className="block text-xs text-fg-secondary mb-1.5 font-medium">
+    <div className="py-1.5">
+      <label className="block text-sm font-medium text-fg-secondary mb-1">
         {label}
-        {hint && (
-          <span className="ml-1.5 text-fg-tertiary font-normal text-2xs">
-            {hint}
-          </span>
-        )}
       </label>
       {children}
+      {hint && <div className="text-xs text-fg-tertiary mt-1">{hint}</div>}
       {locked && (
-        <div className="font-mono text-2xs text-fg-tertiary mt-1.5">
+        <div className="font-mono text-2xs text-fg-tertiary mt-1">
           {locked}
         </div>
       )}
@@ -899,8 +868,8 @@ function AiForm({
       <GrpCard title={t('reg.grpAiGen')} tag={t('reg.grpTagCommon')}>
         <Field label={t('reg.negPrompt')}>
           <textarea
-            className="input font-mono text-sm"
-            style={{ minHeight: 78, lineHeight: 1.6, padding: '10px 12px' }}
+            className="input font-mono"
+            style={{ ...fieldInputStyle, minHeight: 78, lineHeight: 1.6 }}
             rows={3}
             value={neg}
             onChange={(e) => onNegChange(e.target.value)}
@@ -934,6 +903,7 @@ function AiForm({
         >
           <select
             className="select input"
+            style={fieldInputStyle}
             value={incremental ? 'incremental' : 'full'}
             onChange={(e) => onIncrementalChange(e.target.value === 'incremental')}
           >
@@ -960,6 +930,7 @@ function AiForm({
             <input
               type="number"
               className="input font-mono"
+              style={fieldInputStyle}
               value={steps}
               onChange={(e) => onStepsChange(Number(e.target.value) || 0)}
               min={1} max={150}
@@ -969,6 +940,7 @@ function AiForm({
             <input
               type="number"
               className="input font-mono"
+              style={fieldInputStyle}
               value={cfg}
               onChange={(e) => onCfgChange(Number(e.target.value) || 0)}
               min={0} max={20} step={0.5}
@@ -981,6 +953,7 @@ function AiForm({
             <input
               type="number"
               className="input font-mono"
+              style={fieldInputStyle}
               value={seed}
               onChange={(e) => onSeedChange(Number(e.target.value) || 0)}
               min={0}
@@ -995,6 +968,7 @@ function AiForm({
             value={baseModel}
             onChange={onBaseModelChange}
             className="select input"
+            style={fieldInputStyle}
             ariaLabel={t('reg.baseModelLabel')}
           />
         </Field>
@@ -1048,6 +1022,7 @@ function BooruForm({
           <Field label={t('reg.source')}>
             <select
               className="select input"
+              style={fieldInputStyle}
               value={apiSource}
               onChange={(e) => onApiSourceChange(e.target.value as 'gelbooru' | 'danbooru')}
             >
@@ -1061,6 +1036,7 @@ function BooruForm({
           >
             <select
               className="select input"
+              style={fieldInputStyle}
               value={buildMode}
               onChange={(e) => onBuildModeChange(e.target.value as 'mirror' | 'flat')}
               disabled={modeLocked}
@@ -1079,6 +1055,7 @@ function BooruForm({
             <input
               type="number"
               className="input font-mono"
+              style={fieldInputStyle}
               value={mirror ? String(trainImageCount) : targetCount}
               onChange={(e) => onTargetCountChange(e.target.value)}
               placeholder={String(trainImageCount)}
@@ -1092,6 +1069,7 @@ function BooruForm({
           >
             <select
               className="select input"
+              style={fieldInputStyle}
               value={mode}
               onChange={(e) => onModeChange(e.target.value as 'full' | 'incremental')}
             >
@@ -1100,13 +1078,11 @@ function BooruForm({
             </select>
           </Field>
         </div>
-        <Field label="">
-          <CheckRow
-            checked={autoTag}
-            onChange={onAutoTagChange}
-            label={t('reg.autoTagLabel')}
-          />
-        </Field>
+        <CheckRow
+          checked={autoTag}
+          onChange={onAutoTagChange}
+          label={t('reg.autoTagLabel')}
+        />
       </GrpCard>
 
       <ExcludeTags
@@ -1128,6 +1104,7 @@ function BooruForm({
         >
           <select
             className="select input"
+            style={fieldInputStyle}
             value={autoTagKind}
             onChange={(e) => onAutoTagKindChange(e.target.value as 'wd14' | 'cltagger')}
             disabled={!autoTag}
@@ -1136,14 +1113,12 @@ function BooruForm({
             <option value="cltagger">CLTagger</option>
           </select>
         </Field>
-        <Field label="">
-          <CheckRow
-            checked={autoDedup}
-            onChange={onAutoDedupChange}
-            label={t('reg.autoDedupLabel')}
-            sub={t('reg.autoDedupSub')}
-          />
-        </Field>
+        <CheckRow
+          checked={autoDedup}
+          onChange={onAutoDedupChange}
+          label={t('reg.autoDedupLabel')}
+          sub={t('reg.autoDedupSub')}
+        />
         <AdvancedFields value={advanced} onChange={onAdvancedChange} />
       </GrpCard>
     </>
@@ -1164,7 +1139,7 @@ function UnitInput({
       <input
         type="number"
         className="input font-mono"
-        style={{ paddingRight: 36 }}
+        style={{ ...fieldInputStyle, paddingRight: 36 }}
         value={value}
         onChange={(e) => onChange(Number(e.target.value) || 0)}
         min={min} max={max} step={step}
@@ -1176,7 +1151,7 @@ function UnitInput({
   )
 }
 
-// checkbox 行
+// checkbox 块：对齐训练配置页 bool 字段（checkbox 左，label 主色，说明换行在下）。
 function CheckRow({
   checked, onChange, label, sub,
 }: {
@@ -1186,15 +1161,18 @@ function CheckRow({
   sub?: string
 }) {
   return (
-    <label className="inline-flex items-center gap-2.5 cursor-pointer text-sm text-fg-secondary select-none">
+    <label className="flex items-start gap-3 py-1.5 cursor-pointer select-none">
       <input
         type="checkbox"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
-        className="w-4 h-4 accent-accent cursor-pointer"
+        className="accent-accent cursor-pointer"
+        style={{ marginTop: 2, height: 16, width: 16, borderRadius: 'var(--r-sm)' }}
       />
-      <span>{label}</span>
-      {sub && <span className="text-2xs text-fg-tertiary">{sub}</span>}
+      <span className="flex-1">
+        <span className="block text-sm text-fg-primary">{label}</span>
+        {sub && <span className="block text-xs text-fg-tertiary mt-0.5">{sub}</span>}
+      </span>
     </label>
   )
 }
@@ -1315,7 +1293,8 @@ function ExcludeTags({
         <div className="relative flex-1">
           <input
             ref={inputRef}
-            className="input font-mono w-full text-sm"
+            className="input font-mono w-full"
+            style={fieldInputStyle}
             value={draft}
             onChange={(e) => { setDraft(e.target.value); suggest.notifyChange() }}
             onKeyDown={(e) => {
@@ -1375,6 +1354,7 @@ function AdvancedFields({
           <div className="grid grid-cols-2 gap-3.5 mt-2">
             <input
               type="number" className="input font-mono"
+              style={fieldInputStyle}
               min={0.1} max={1} step={0.05}
               value={value.min_aspect_ratio}
               onChange={(e) =>
@@ -1383,6 +1363,7 @@ function AdvancedFields({
             />
             <input
               type="number" className="input font-mono"
+              style={fieldInputStyle}
               min={1} max={10} step={0.1}
               value={value.max_aspect_ratio}
               onChange={(e) =>
@@ -1396,6 +1377,7 @@ function AdvancedFields({
         <div className="grid grid-cols-2 gap-3.5">
           <select
             className="select input"
+            style={fieldInputStyle}
             value={value.postprocess_method}
             onChange={(e) => set('postprocess_method', e.target.value as 'smart' | 'stretch' | 'crop')}
           >
@@ -1405,6 +1387,7 @@ function AdvancedFields({
           </select>
           <input
             type="number" className="input font-mono"
+            style={fieldInputStyle}
             min={0.05} max={0.5} step={0.05}
             value={value.postprocess_max_crop_ratio}
             onChange={(e) =>

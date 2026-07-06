@@ -2388,6 +2388,7 @@
     "tabAi": "Prior generation",
     "tabGenerate": "Generate",
     "sourcePickerLabel": "Source",
+    "sourceLabel": "Source",
     "sourceAi": "AI prior",
     "sourceBooru": "Booru scrape",
     "sourceAiHint": "Aligned with the DreamBooth paper; first launch downloads the base model and uses the GPU.",

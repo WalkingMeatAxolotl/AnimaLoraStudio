@@ -2388,6 +2388,7 @@
     "tabAi": "先验生成",
     "tabGenerate": "生成",
     "sourcePickerLabel": "来源",
+    "sourceLabel": "生成来源",
     "sourceAi": "AI 先验",
     "sourceBooru": "Booru 抓取",
     "sourceAiHint": "对齐 DreamBooth 本意；首次启动需下基底模型 + 占 GPU。",
