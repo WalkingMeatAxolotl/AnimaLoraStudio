@@ -37,6 +37,7 @@ runtime/training/
 ├── timestep_sampling.py    ← 训练 step 用 sample_t（logit_normal / uniform / mode）；
 │                            被 timestep_samplers/baseline.py 复用
 ├── noise.py                ← make_noise（offset + pyramid）
+├── navit.py                ← NaViT / Patch-n-Pack 训练步核心（逐图加噪 → 打包前向 → 逐图 loss）
 ├── loss_weighting.py       ← compute_loss_weight（min_snr / cosmap / detail_inv_t）；
 │                            注意：是 *loss 权重*（Flow Matching 步级缩放系数），
 │                            跟 *loss 类型*（mse / huber，见 losses/）正交

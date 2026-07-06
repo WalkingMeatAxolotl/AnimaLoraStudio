@@ -28,6 +28,7 @@ from training.leap import (
 )
 from training.loss_weighting import compute_loss_weight
 from training.model_loading import forward_with_optional_checkpoint
+from training.navit import navit_packed_forward_and_loss, pack_cross_embeddings
 from training.noise import make_noise
 from training.observability import render_curve_panel
 from training.sample_runner import run_sample
@@ -137,15 +138,22 @@ def run(ctx: TrainingContext) -> None:
             captions = batch["captions"]
 
             # 获取 latents（缓存模式或实时编码）
-            if ctx.use_cached:
+            navit_latents = None
+            if bool(getattr(args, "navit_packing", False)):
+                # NaViT pack: per-image cached latents (shapes differ → kept as a list).
+                navit_latents = [
+                    l.to(ctx.device, dtype=ctx.dtype) for l in batch["navit_latents"]
+                ]
+                bs = len(navit_latents)
+            elif ctx.use_cached:
                 latents = batch["latents"].to(ctx.device, dtype=ctx.dtype)
+                bs = latents.shape[0]
             else:
                 pixels = batch["pixel_values"].to(ctx.device, dtype=ctx.dtype)
                 with torch.no_grad():
                     pixels_5d = pixels.unsqueeze(2)  # [B,C,1,H,W]
                     latents = ctx.vae.model.encode(pixels_5d, ctx.vae.scale)
-
-            bs = latents.shape[0]
+                bs = latents.shape[0]
 
             # 文本编码
             with torch.no_grad():
@@ -198,35 +206,79 @@ def run(ctx: TrainingContext) -> None:
             )
             ctx.injector.on_step_begin(step_ctx)
 
-            t_exp = t.view(-1, 1, 1, 1, 1)
-            noise = make_noise(
-                latents,
-                noise_offset=float(getattr(args, "noise_offset", 0.0) or 0.0),
-                pyramid_iters=int(getattr(args, "pyramid_noise_iters", 0) or 0),
-                pyramid_discount=float(getattr(args, "pyramid_noise_discount", 0.35) or 0.35),
-            )
+            # NaViT 自己在打包前向里逐图加噪（各图各自的 t / 形状），不走批量网格加噪。
+            t_exp = noise = pad_mask = None
+            use_leap_this_step = False
+            if navit_latents is None:
+                t_exp = t.view(-1, 1, 1, 1, 1)
+                noise = make_noise(
+                    latents,
+                    noise_offset=float(getattr(args, "noise_offset", 0.0) or 0.0),
+                    pyramid_iters=int(getattr(args, "pyramid_noise_iters", 0) or 0),
+                    pyramid_discount=float(getattr(args, "pyramid_noise_discount", 0.35) or 0.35),
+                )
 
-            leap_enabled = bool(getattr(args, "leap_enabled", False))
-            # 方式 A 混合训练：每个 micro-batch 按 leap_ratio 概率掷骰子决定走哪条目标。
-            # leap 管全局结构、传统管细节锐度，两股梯度叠在同一组 LoRA 权重上各取所长。
-            # ratio=1.0 纯 leap；0.0 纯传统；0.6 大头 leap 留点细节（默认）。
-            # 用 Python random（bootstrap 设过 random.seed）而非 torch.rand，避免每步消耗 torch
-            # global RNG 状态——否则"同种子换 leap_ratio"的对照实验里，标准路径的 noise / timestep
-            # 会随 leap_ratio 漂移。
-            # 注：缺省/None 才回落到 0.6；leap_ratio=0.0（纯传统）是合法值，不能被 `or` 吞成默认。
-            _leap_ratio = getattr(args, "leap_ratio", 0.6)
-            use_leap_this_step = leap_enabled and (
-                random.random() < (0.6 if _leap_ratio is None else float(_leap_ratio))
-            )
+                leap_enabled = bool(getattr(args, "leap_enabled", False))
+                # 方式 A 混合训练：每个 micro-batch 按 leap_ratio 概率掷骰子决定走哪条目标。
+                # leap 管全局结构、传统管细节锐度，两股梯度叠在同一组 LoRA 权重上各取所长。
+                # ratio=1.0 纯 leap；0.0 纯传统；0.6 大头 leap 留点细节（默认）。
+                # 用 Python random（bootstrap 设过 random.seed）而非 torch.rand，避免每步消耗 torch
+                # global RNG 状态——否则"同种子换 leap_ratio"的对照实验里，标准路径的 noise / timestep
+                # 会随 leap_ratio 漂移。
+                # 注：缺省/None 才回落到 0.6；leap_ratio=0.0（纯传统）是合法值，不能被 `or` 吞成默认。
+                _leap_ratio = getattr(args, "leap_ratio", 0.6)
+                use_leap_this_step = leap_enabled and (
+                    random.random() < (0.6 if _leap_ratio is None else float(_leap_ratio))
+                )
 
-            # 前向
-            pad_mask = torch.zeros(bs, 1, latents.shape[-2], latents.shape[-1], device=ctx.device, dtype=ctx.dtype)
+                # 前向
+                pad_mask = torch.zeros(bs, 1, latents.shape[-2], latents.shape[-1], device=ctx.device, dtype=ctx.dtype)
             denoise_loss_log = None
             sra_align_loss_log = None
             sra_weighted_loss_log = None
             sra_effective_weight_log = None
             with torch.autocast("cuda", dtype=ctx.dtype):
-                if use_leap_this_step:
+                if navit_latents is not None:
+                    # ── NaViT / Patch-n-Pack 块对角打包路径 ──
+                    # per-image noise + one packed forward (block-diagonal self/cross)。
+                    # 标准 path 的 leap / SRA / InfoNoise 假设批量网格 + 逐 batch 单 t，
+                    # 与逐图打包不兼容——互斥校验已 fail-fast 强制关闭。
+                    # loss_weighting / 正则集 loss_weight 不在此列：navit 的逐图 t 正好对应
+                    # per-sample SNR 权重语义，按 per-image 接入（见下方 per_image_weights）。
+                    cross_packed, text_seqlens = pack_cross_embeddings(
+                        cross, t5_attn,
+                        bool(getattr(args, "navit_text_trim_padding", False)),
+                    )
+                    # per-image 权重：正则集 loss_weight × timestep-dependent loss_weighting。
+                    # 与标准路径对称——navit 逐图 t 对应 per-sample SNR 权重（min_snr / cosmap /
+                    # detail_inv_t 按 per-image t 算权重，语义自洽；不像 leap 是多 timestep）。
+                    _piw = None
+                    if "loss_weight" in batch:
+                        _piw = batch["loss_weight"].to(ctx.device, dtype=torch.float32)
+                    _lw_scheme = str(getattr(args, "loss_weighting", "none") or "none")
+                    if _lw_scheme != "none":
+                        _lw = compute_loss_weight(
+                            t,
+                            scheme=_lw_scheme,
+                            min_snr_gamma=float(getattr(args, "min_snr_gamma", 5.0) or 5.0),
+                            weight_cap_ratio=float(getattr(args, "weight_cap_ratio", 0.0) or 0.0),
+                            detail_inv_t_min=float(getattr(args, "detail_inv_t_min", 1.0) or 1.0),
+                            detail_inv_t_max=float(getattr(args, "detail_inv_t_max", 5.0) or 5.0),
+                        ).to(device=ctx.device, dtype=torch.float32)
+                        _piw = _lw if _piw is None else _piw * _lw
+                    loss, pred, _navit_info = navit_packed_forward_and_loss(
+                        ctx.model, navit_latents, t, cross_packed, text_seqlens,
+                        ctx.loss_fn,
+                        noise_offset=float(getattr(args, "noise_offset", 0.0) or 0.0),
+                        pyramid_iters=int(getattr(args, "pyramid_noise_iters", 0) or 0),
+                        pyramid_discount=float(getattr(args, "pyramid_noise_discount", 0.35) or 0.35),
+                        use_checkpoint=bool(args.grad_checkpoint),
+                        ms_flags=batch.get("navit_ms_flags"),
+                        ms_loss_weight=float(getattr(args, "navit_multiscale_loss_weight", 1.0) or 1.0),
+                        per_image_weights=_piw,
+                    )
+                    denoise_loss_log = loss.detach()
+                elif use_leap_this_step:
                     # ── LeapAlign / FlowBP 轨迹自蒸馏路径（四 variant）──
                     # 用真实 latent 当 x0，沿解析构造的代理轨迹积分出 x̂0，
                     # 自蒸馏 loss = MSE(x̂0, 真实 x0)。variant 决定轨迹结构，详见 training/leap.py：
@@ -327,8 +379,8 @@ def run(ctx: TrainingContext) -> None:
                     loss = loss_per_sample.mean()
                     denoise_loss_log = loss.detach()
 
-                # SRA v2 表征对齐 loss（标准路径；leap 路径不适用）
-                if ctx.sra_aligner is not None and not use_leap_this_step:
+                # SRA v2 表征对齐 loss（标准路径；leap / navit 路径不适用）
+                if ctx.sra_aligner is not None and not use_leap_this_step and navit_latents is None:
                     sra_weight = _resolve_sra_effective_weight(args, ctx.global_step, ctx.total_steps)
                     sra_effective_weight_log = sra_weight
                     if sra_weight != 0.0:

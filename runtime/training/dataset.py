@@ -1,26 +1,182 @@
 """数据集与 collate：ARB 分桶 + ImageDataset + 正则集 merge + cached latent。
 
+NaViT / Patch-n-Pack 块对角打包（Phase 2 数据层）：
+- 原生定尺寸 plan_native_fit_image + 多尺度阶梯 plan_multiscale_copy
+- 分块 VAE encode tiled_vae_encode（cache_encode_tiled）
+- token 预算打包 NavitPackBatchSampler + pack_indices_by_budget / pack_indices_ffd_windowed
+- CachedLatentDataset 扩展：分块 encode、多尺度 sidecar（.ms<T>.npz）、token_count_for_index
+- collate_fn_navit_pack —— 异构 latent 逐图列表 collate
+
 抽自原 runtime/anima_train.py L1144-1675 + L1939-1962（ADR 0003 PR-A）。
 
 公开：
 - BucketManager / ImageDataset / RepeatDataset / MergedDataset
 - BucketBatchSampler / CachedLatentDataset
 - collate_fn / collate_fn_cached — DataLoader collate
+- plan_native_fit_image / plan_multiscale_copy — NaViT 原生 / 多尺度定尺寸
+- NavitPackBatchSampler / collate_fn_navit_pack — 块对角打包
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
 import math
 import random
 import re
 from pathlib import Path
+from typing import Optional
 
 import torch
 from torch.utils.data import Dataset
 
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================ NaViT 定尺寸辅助
+# 原生 16px 对齐（VAE 下采样 8 × patch 2 = 16px/token 轴）+ 多尺度阶梯副本规划。
+# 上游无 FiT，以下为 NaViT 独立实现，不依赖任何 FiT 辅助。
+
+
+@dataclass(frozen=True)
+class NativeFitImagePlan:
+    """原生定尺寸规划结果（16px 对齐）。"""
+    source_width: int
+    source_height: int
+    width: int
+    height: int
+    align_unit: int
+    token_count: int
+    token_h: int
+    token_w: int
+    was_padded: bool
+    was_resized: bool = False
+    was_cropped: bool = False
+
+
+def _ceil_to_multiple(value: int, multiple: int) -> int:
+    value = max(1, int(value))
+    multiple = max(1, int(multiple))
+    return ((value + multiple - 1) // multiple) * multiple
+
+
+def _floor_to_multiple(value: int, multiple: int) -> int:
+    value = max(1, int(value))
+    multiple = max(1, int(multiple))
+    return max(multiple, (value // multiple) * multiple)
+
+
+def plan_native_fit_image(
+    width: int,
+    height: int,
+    *,
+    max_tokens: int = 65536,
+    patch_size: int = 2,
+    vae_downsample: int = 8,
+    align_mode: str = "pad",
+    over_budget_strategy: str = "fail",
+) -> NativeFitImagePlan:
+    """原生定尺寸规划：不 resize/crop，按 16px 对齐单元 pad 或 floor。
+
+    返回的尺寸是交给 VAE 的像素尺寸。默认 pad 模式向上对齐到 VAE+patch 粒度，
+    保留所有源像素，padding token 后续可 mask。
+    """
+    source_w = int(width)
+    source_h = int(height)
+    if source_w <= 0 or source_h <= 0:
+        raise ValueError(f"image dimensions must be positive, got {source_w}x{source_h}")
+
+    patch = max(1, int(patch_size))
+    down = max(1, int(vae_downsample))
+    align_unit = patch * down
+    align_mode = (align_mode or "pad").lower()
+    if align_mode in ("pad", "ceil"):
+        planned_w = _ceil_to_multiple(source_w, align_unit)
+        planned_h = _ceil_to_multiple(source_h, align_unit)
+    elif align_mode == "floor":
+        planned_w = _floor_to_multiple(source_w, align_unit)
+        planned_h = _floor_to_multiple(source_h, align_unit)
+    else:
+        raise ValueError(f"unknown align_mode={align_mode!r}; expected pad, ceil, or floor")
+
+    token_w = planned_w // align_unit
+    token_h = planned_h // align_unit
+    token_count = token_w * token_h
+    max_tokens = max(1, int(max_tokens))
+    strategy = (over_budget_strategy or "fail").lower()
+    if token_count > max_tokens:
+        if strategy in ("fail", "skip"):
+            raise ValueError(
+                f"image {source_w}x{source_h} produces {token_count} tokens, "
+                f"which exceeds max_tokens={max_tokens}. "
+                "Increase max_tokens or set over_budget_strategy."
+            )
+        raise NotImplementedError(
+            f"image {source_w}x{source_h} produces {token_count} tokens, "
+            f"above max_tokens={max_tokens}; over_budget_strategy={strategy!r} "
+            "is not implemented yet in native sizing mode."
+        )
+
+    return NativeFitImagePlan(
+        source_width=source_w,
+        source_height=source_h,
+        width=planned_w,
+        height=planned_h,
+        align_unit=align_unit,
+        token_count=token_count,
+        token_h=token_h,
+        token_w=token_w,
+        was_padded=(planned_w != source_w or planned_h != source_h),
+        was_resized=False,
+        was_cropped=False,
+    )
+
+
+def plan_multiscale_copy(
+    width: int,
+    height: int,
+    target_tokens: int,
+    *,
+    patch_size: int = 2,
+    vae_downsample: int = 8,
+) -> Optional[NativeFitImagePlan]:
+    """规划等比降采样副本（NaViT 多尺度阶梯）。
+
+    返回 token 数 ≤ target_tokens、像素为 16px 整倍数的规划。副本经 resize-cover +
+    center-crop 产生，有效区填满整张 latent（mask 恒全 1）。源 token 数 ≤ 目标档时
+    返回 None——阶梯不上采样、不产出与原生同档的副本。
+    """
+    align = max(1, int(patch_size)) * max(1, int(vae_downsample))
+    w, h = int(width), int(height)
+    tgt = int(target_tokens)
+    if w <= 0 or h <= 0 or tgt <= 0:
+        return None
+    src_tokens = (w // align) * (h // align)
+    if src_tokens <= tgt:
+        return None
+    s = math.sqrt(tgt * align * align / float(w * h))
+    tok_w = max(1, int(w * s) // align)
+    tok_h = max(1, int(h * s) // align)
+    if tok_w * tok_h > tgt:
+        if tok_w >= tok_h:
+            tok_w = max(1, tgt // tok_h)
+        else:
+            tok_h = max(1, tgt // tok_w)
+    pw, ph = tok_w * align, tok_h * align
+    return NativeFitImagePlan(
+        source_width=pw,
+        source_height=ph,
+        width=pw,
+        height=ph,
+        align_unit=align,
+        token_count=tok_w * tok_h,
+        token_h=tok_h,
+        token_w=tok_w,
+        was_padded=False,
+        was_resized=True,
+        was_cropped=True,
+    )
 
 
 class BucketManager:
@@ -647,6 +803,135 @@ class BucketBatchSampler:
                 yield batch
 
 
+# ============================================================ 分块 VAE encode
+# cache_encode_tiled：把超大图按像素块切、逐块 encode 后在 latent 网格羽化拼接。
+# 峰值显存从 ∝ 整图像素降到 ∝ 单块像素。
+
+_CACHE_ENCODE_MAX_PIXELS = 4 * 1024 * 1024
+
+
+def _tile_starts(total: int, tile: int, stride: int):
+    """1D 分块起点：步长 stride 覆盖 [0, total)，末块贴齐右边界（保持满块尺寸，
+    避免残块）。total <= tile 时单块。"""
+    if total <= tile:
+        return [0]
+    starts = list(range(0, total - tile + 1, stride))
+    if starts[-1] + tile < total:
+        starts.append(total - tile)
+    return starts
+
+
+def _blend_ramp(n: int, ov: int, device, dtype):
+    """块内 1D 混合权重：两端 ov 个位置线性升/降（严格 >0），中间恒 1。
+    与邻块的对称权重在重叠区归一化后线性交叉渐变（羽化接缝）。"""
+    w = torch.ones(n, device=device, dtype=dtype)
+    if ov > 0:
+        r = torch.linspace(1.0 / (ov + 1), ov / (ov + 1), ov, device=device, dtype=dtype)
+        w[:ov] = torch.minimum(w[:ov], r)
+        w[-ov:] = torch.minimum(w[-ov:], r.flip(0))
+    return w
+
+
+def tiled_vae_encode(encode_fn, pixels_5d, tile_px, overlap_px, down=8):
+    """分块 VAE encode + latent 域羽化拼接（cache_encode_tiled）。
+
+    把 ``pixels_5d [B,C,T,H,W]`` 按 ``tile_px``（重叠 ``overlap_px``）切成像素块，
+    逐块 ``encode_fn`` 后在 latent 网格上按线性羽化权重累加并归一化——峰值显存从
+    ∝ 整图像素降到 ∝ 单块像素。VAE conv 感受野越过块边界的部分是近似（非逐 bit
+    等价），overlap 越大误差越小。
+
+    要求 H/W/tile/overlap 均为 ``down`` 的整倍数（latent 边界落整格）；不满足时
+    fail-fast。单块可覆盖整图时直接整图 encode（逐 bit 等价，零混合开销）。
+    """
+    tile = int(tile_px)
+    ov = int(overlap_px)
+    d = max(1, int(down))
+    B, C, T, H, W = pixels_5d.shape
+    if H <= tile and W <= tile:
+        return encode_fn(pixels_5d)
+    for name, v in (("H", H), ("W", W), ("tile_px", tile), ("overlap_px", ov)):
+        if v % d != 0:
+            raise ValueError(
+                f"tiled_vae_encode 要求 {name}={v} 是 VAE 下采样 {d} 的整倍数"
+                "（latent 块边界需落在整格上）。"
+            )
+    if not (0 <= ov < tile):
+        raise ValueError(f"overlap_px={ov} 必须满足 0 <= overlap < tile_px={tile}")
+    stride = tile - ov
+    ys = _tile_starts(H, tile, stride)
+    xs = _tile_starts(W, tile, stride)
+
+    canvas = None
+    weight = None
+    out_dtype = None
+    for y0 in ys:
+        y1 = min(y0 + tile, H)
+        for x0 in xs:
+            x1 = min(x0 + tile, W)
+            lat = encode_fn(pixels_5d[..., y0:y1, x0:x1])
+            out_dtype = lat.dtype
+            lh, lw = lat.shape[-2], lat.shape[-1]
+            if (lh, lw) != ((y1 - y0) // d, (x1 - x0) // d):
+                raise ValueError(
+                    f"encode_fn 输出空间尺寸 {lh}x{lw} 与预期 "
+                    f"{(y1 - y0) // d}x{(x1 - x0) // d} 不符（down={d} 假设不成立）。"
+                )
+            if canvas is None:
+                canvas = torch.zeros(
+                    *lat.shape[:-2], H // d, W // d,
+                    device=lat.device, dtype=torch.float32,
+                )
+                weight = torch.zeros(
+                    H // d, W // d, device=lat.device, dtype=torch.float32,
+                )
+            ov_lat = ov // d
+            wy = _blend_ramp(lh, ov_lat if len(ys) > 1 else 0, lat.device, torch.float32)
+            wx = _blend_ramp(lw, ov_lat if len(xs) > 1 else 0, lat.device, torch.float32)
+            w2d = wy[:, None] * wx[None, :]
+            canvas[..., y0 // d:y1 // d, x0 // d:x1 // d] += lat.float() * w2d
+            weight[y0 // d:y1 // d, x0 // d:x1 // d] += w2d
+    return (canvas / weight).to(out_dtype)
+
+
+def _plan_encode_batches(indices, bucket_of, max_batch, max_encode_pixels, flip):
+    """把待编码样本索引按 bucket（像素尺寸）分组，再按张数 / 显存像素预算切成 micro-batch。
+
+    同一 micro-batch 内尺寸一致 → 可 stack 成一个张量一次送进 VAE。
+    flip=True 时每张图在 encode 时会额外拼一份水平翻转，一次进网络的张数是 2×，
+    像素预算据此折半。
+
+    参数：
+        indices:           待编码样本索引（指向 self.samples）。
+        bucket_of:         callable(idx) -> (h, w) 或 None；返回该样本的像素分桶尺寸。
+        max_batch:         单个 micro-batch 的原图张数上限（>=1）。
+        max_encode_pixels: 单次 encode 进网络的总像素上限（含翻转份）；<=0 表示不按像素限。
+        flip:              是否会拼翻转份（影响像素预算折算）。
+    返回：list[list[idx]]，保持桶内原顺序，覆盖且仅覆盖所有输入索引；同批尺寸一致。
+    """
+    max_batch = max(1, int(max_batch))
+    groups: dict = {}
+    order = []
+    for i in indices:
+        key = bucket_of(i)
+        key = tuple(key) if key else (0, 0)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(i)
+
+    planned = []
+    for key in order:
+        idxs = groups[key]
+        h, w = int(key[0] or 0), int(key[1] or 0)
+        per = max_batch
+        if max_encode_pixels and max_encode_pixels > 0 and h > 0 and w > 0:
+            mult = 2 if flip else 1
+            per = min(per, max(1, int(max_encode_pixels) // (mult * h * w)))
+        for j in range(0, len(idxs), per):
+            planned.append(idxs[j:j + per])
+    return planned
+
+
 class CachedLatentDataset(Dataset):
     """Kohya 风格 npz 文件缓存的数据集。
 
@@ -658,7 +943,9 @@ class CachedLatentDataset(Dataset):
     50% 数据被永久镜像污染；新版通过 _is_cache_valid 检测缺 latent_flipped
     键，自动重 encode 修复。
     """
-    def __init__(self, base_dataset, vae, device, dtype, cache_dir=None, cache_batch_size=1):
+    def __init__(self, base_dataset, vae, device, dtype, cache_dir=None, cache_batch_size=1,
+                 encode_tiled=False, encode_tile_px=1024, encode_tile_overlap=128,
+                 encode_max_pixels=0):
         import numpy as np
         self.base_dataset = base_dataset
         self.base_image_dataset = self._get_base_image_dataset(base_dataset)
@@ -674,10 +961,20 @@ class CachedLatentDataset(Dataset):
         self._multi_reso = {img for img, rs in _resos_per_img.items() if len(rs) > 1}
         self.cache_dir = Path(cache_dir) if cache_dir else None
         self.bucket_for_index = []
+        self.token_count_for_index = []  # NaViT 打包器读（默认空，由 _fill 填充）
         self.cache_batch_size = max(1, int(cache_batch_size or 1))
         # cache 是否需要双份 latent —— 取决于底层 ImageDataset.flip_augment
         self.flip_augment = bool(
             getattr(self.base_image_dataset, "flip_augment", False)
+        )
+        # cache_encode_tiled（opt-in）：超大图改走分块 encode + latent 羽化拼接，
+        # 峰值显存 ∝ 单块像素。阈值内的图路径不变（逐字节等价）。
+        self.encode_tiled = bool(encode_tiled)
+        self.encode_tile_px = int(encode_tile_px or 1024)
+        self.encode_tile_overlap = int(encode_tile_overlap or 128)
+        self.encode_max_pixels = (
+            int(encode_max_pixels) if int(encode_max_pixels or 0) > 0
+            else _CACHE_ENCODE_MAX_PIXELS
         )
         self._build_cache(vae, device, dtype)
 
@@ -714,13 +1011,19 @@ class CachedLatentDataset(Dataset):
         except Exception:
             return None
 
-    def _get_npz_path(self, img_path, target_reso=None):
+    def _get_npz_path(self, img_path, target_reso=None, ms_tokens=0):
         """图像对应的 npz 缓存路径。
 
         单分辨率图 → ``img.npz``（不动现有缓存）；同图 fan-out 到多分辨率 →
         ``img.r{reso}.npz``，避免不同分辨率 latent 互相覆盖。
+
+        NaViT 多尺度副本（``ms_tokens > 0``）用独立 sidecar ``img.ms<T>.npz``，
+        与原生份互不覆盖；开关 multiscale 不会使原生 npz 失效。
         """
         img_path = Path(img_path)
+        ms_tokens = int(ms_tokens or 0)
+        if ms_tokens > 0:
+            return img_path.with_name(f"{img_path.stem}.ms{ms_tokens}.npz")
         if target_reso is not None and str(img_path) in getattr(self, "_multi_reso", set()):
             return img_path.with_suffix(f".r{int(target_reso)}.npz")
         return img_path.with_suffix(".npz")
@@ -776,7 +1079,8 @@ class CachedLatentDataset(Dataset):
         unique_total = 0
         for i, sample in enumerate(self.samples):
             img_path = sample["image"]
-            npz_path = self._get_npz_path(img_path, sample.get("target_reso"))
+            npz_path = self._get_npz_path(
+                img_path, sample.get("target_reso"), sample.get("ms_tokens_target", 0))
             if npz_path in seen_npz:
                 continue
             seen_npz.add(npz_path)
@@ -794,10 +1098,16 @@ class CachedLatentDataset(Dataset):
 
     def _fill_bucket_for_index(self):
         """Fill bucket_for_index for all samples (needed for BucketBatchSampler).
-        Uses latent spatial shape (h, w) as grouping key so batches have consistent tensor sizes."""
+        Uses latent spatial shape (h, w) as grouping key so batches have consistent tensor sizes.
+
+        Also fills token_count_for_index (NaViT packer reads it; patch_spatial=2)."""
         self.bucket_for_index = [None] * len(self.samples)
+        self.token_count_for_index = [0] * len(self.samples)
+        patch_spatial = 2
         for i in range(len(self.samples)):
-            npz_path = self._get_npz_path(self.samples[i]["image"], self.samples[i].get("target_reso"))
+            npz_path = self._get_npz_path(
+                self.samples[i]["image"], self.samples[i].get("target_reso"),
+                self.samples[i].get("ms_tokens_target", 0))
             if not npz_path.exists():
                 continue
             with self.np.load(npz_path) as data:
@@ -808,6 +1118,7 @@ class CachedLatentDataset(Dataset):
             else:
                 _, _, h, w = s
             self.bucket_for_index[i] = (int(h), int(w))
+            self.token_count_for_index[i] = (int(h) // patch_spatial) * (int(w) // patch_spatial)
 
     def _encode_and_save(self, indices, vae, device, dtype):
         """编码图像并保存为 npz。
@@ -817,6 +1128,7 @@ class CachedLatentDataset(Dataset):
         flip_augment=False 时只编码一次，存 `latent`。
 
         按实际 bucket 尺寸分组并批量送入 VAE；不同尺寸不能 stack，分别攒批。
+        cache_encode_tiled=True 时，超像素预算的图改走分块 encode + latent 羽化拼接。
         """
         base_img = self.base_image_dataset
         want_flip = self.flip_augment and base_img is not None
@@ -830,10 +1142,53 @@ class CachedLatentDataset(Dataset):
                 latents = vae.encode(pixels.unsqueeze(2))
             return latents.detach().cpu().float()
 
+        def _encode_tiled_single(pixel_tensor):
+            """分块 encode 单张图（cache_encode_tiled 超像素预算时）。"""
+            pixels = pixel_tensor.unsqueeze(0).to(device, dtype=dtype).unsqueeze(2)  # [1,C,1,H,W]
+            with torch.inference_mode():
+                lat = tiled_vae_encode(
+                    lambda x: vae.encode(x),
+                    pixels, self.encode_tile_px, self.encode_tile_overlap,
+                )
+            return lat.detach().cpu().float()[0]
+
         def _flush(bucket_key):
             nonlocal encoded_count
             batch = pending.pop(bucket_key, [])
             if not batch:
+                return
+
+            h, w = int(batch[0]["bucket_h"]), int(batch[0]["bucket_w"])
+            use_tiled = (
+                getattr(self, "encode_tiled", False)
+                and h > 0 and w > 0
+                and h * w > self.encode_max_pixels
+            )
+
+            if use_tiled:
+                logger.info(
+                    "[cache-tiled] %dx%d 超像素预算，分块 encode（tile=%d overlap=%d）",
+                    w, h, self.encode_tile_px, self.encode_tile_overlap,
+                )
+                for entry in batch:
+                    lat = _encode_tiled_single(entry["pixels"])
+                    lat_f = _encode_tiled_single(entry["pixels_flipped"]) if want_flip else None
+                    npz_kwargs = {"latent": lat.numpy()}
+                    if lat_f is not None:
+                        npz_kwargs["latent_flipped"] = lat_f.numpy()
+                    _entry_sample = self.samples[entry["index"]]
+                    npz_path = self._get_npz_path(
+                        _entry_sample["image"], _entry_sample.get("target_reso"),
+                        _entry_sample.get("ms_tokens_target", 0))
+                    self.np.savez(
+                        npz_path,
+                        bucket_w=entry["bucket_w"],
+                        bucket_h=entry["bucket_h"],
+                        **npz_kwargs,
+                    )
+                    encoded_count += 1
+                    if encoded_count % 10 == 0 or encoded_count == len(indices):
+                        logger.info(f"  编码进度: {encoded_count}/{len(indices)}")
                 return
 
             latents = _encode_pixels([entry["pixels"] for entry in batch])
@@ -848,7 +1203,9 @@ class CachedLatentDataset(Dataset):
                     npz_kwargs["latent_flipped"] = latents_flipped[n].numpy()
 
                 _entry_sample = self.samples[entry["index"]]
-                npz_path = self._get_npz_path(_entry_sample["image"], _entry_sample.get("target_reso"))
+                npz_path = self._get_npz_path(
+                    _entry_sample["image"], _entry_sample.get("target_reso"),
+                    _entry_sample.get("ms_tokens_target", 0))
                 self.np.savez(
                     npz_path,
                     bucket_w=entry["bucket_w"],
@@ -894,7 +1251,8 @@ class CachedLatentDataset(Dataset):
 
     def __getitem__(self, idx):
         sample = self.samples[idx]
-        npz_path = self._get_npz_path(sample["image"], sample.get("target_reso"))
+        npz_path = self._get_npz_path(
+            sample["image"], sample.get("target_reso"), sample.get("ms_tokens_target", 0))
         data = self.np.load(npz_path)
         # flip_augment=True 且 npz 有 latent_flipped 时 50% 概率取镜像版本，
         # 跟非 cache 路径 ImageDataset.__getitem__ 的 flip 概率一致。
@@ -927,7 +1285,13 @@ class CachedLatentDataset(Dataset):
         if caption is None:
             caption = ""
         
-        return {"latent": latent, "caption": caption}
+        return {
+            "latent": latent,
+            "caption": caption,
+            # navit collate 需要逐图 image 路径 + 多尺度副本标记
+            "image": str(sample["image"]),
+            "ms_tokens_target": int(sample.get("ms_tokens_target", 0) or 0),
+        }
 
 
 def collate_fn(batch):
@@ -948,5 +1312,269 @@ def collate_fn_cached(batch):
     result = {"latents": latents, "captions": captions}
     if "loss_weight" in batch[0]:
         result["loss_weight"] = torch.tensor([b["loss_weight"] for b in batch], dtype=torch.float32)
+        result["is_reg"] = torch.tensor([b["is_reg"] for b in batch], dtype=torch.bool)
+    return result
+
+
+# =================================================== NaViT / Patch-n-Pack 打包
+# token 预算打包器 + 块对角 collate：把不同 token 数的图拼进一个训练序列（零 padding）。
+
+
+def pack_indices_by_budget(token_counts, token_budget, order, max_images_per_pack=0):
+    """贪心 next-fit 打包：把样本索引分进 token 总数 ≤ budget 的包。
+
+    NaViT 块对角打包无 padding，一个包的代价 = 各图 token 数之和。``order`` 是
+    已打乱的索引序列；自身 token 数超 budget 的图单独成包（调用方 warn）。
+    结果覆盖 ``order`` 中每个索引恰好一次，保持顺序。
+    """
+    packs = []
+    cur, cur_sum = [], 0
+    cap = int(max_images_per_pack or 0)
+    budget = int(token_budget)
+    for idx in order:
+        n = int(token_counts[idx])
+        over_budget = bool(cur) and (cur_sum + n > budget)
+        over_count = cap > 0 and len(cur) >= cap
+        if over_budget or over_count:
+            packs.append(cur)
+            cur, cur_sum = [], 0
+        cur.append(idx)
+        cur_sum += n
+    if cur:
+        packs.append(cur)
+    return packs
+
+
+def pack_indices_ffd_windowed(token_counts, token_budget, order,
+                              max_images_per_pack=0, window=0):
+    """First-Fit-Decreasing 窗口化打包：在（已打乱的）``order`` 的窗口内做 FFD。
+
+    经典 FFD（按尺寸降序，逐个放入第一个能放下的桶）比 next-fit 打包更紧——更少、
+    更满的包 ⇒ 更少 optimizer step、更少浪费的 token 预算（见 NeMo sequence-packing /
+    ICLR'23 "Efficient Sequence Packing"）。代价：全局降序排序会让每 epoch 把相同图
+    分到一起（尺寸顺序固定），削弱小数据 SGD 的 batch 多样性。
+
+    解决方案是 ``window``：``order`` 被分成 ``window`` 大小的连续窗口，FFD 在每个
+    窗口内运行。因 ``order`` 每 epoch 重新打乱，窗口成员（及分组）跨 epoch 变化，
+    而窗口内降序排序仍恢复大部分填充收益。``window<=0`` 表示一个全局窗口（最大填充，
+    但每 epoch 包固定——仅适合单 pass 数据）。
+
+    覆盖 ``order`` 中每个索引恰好一次。自身超 budget 的图单独成包（同 next-fit）。
+    """
+    budget = int(token_budget)
+    cap = int(max_images_per_pack or 0)
+    win = int(window or 0)
+    order = list(order)
+    if win <= 0:
+        windows = [order]
+    else:
+        windows = [order[i:i + win] for i in range(0, len(order), win)]
+
+    packs = []
+    for w in windows:
+        items = sorted(w, key=lambda i: int(token_counts[i]), reverse=True)
+        bins = []  # each: [list_of_indices, summed_tokens]
+        for idx in items:
+            n = int(token_counts[idx])
+            placed = False
+            for b in bins:
+                over_count = cap > 0 and len(b[0]) >= cap
+                if (not over_count) and (b[1] + n <= budget):
+                    b[0].append(idx)
+                    b[1] += n
+                    placed = True
+                    break
+            if not placed:
+                bins.append([[idx], n])
+        packs.extend(b[0] for b in bins)
+    return packs
+
+
+def _lookup_token_count_walk(d, idx):
+    """通过遍历数据集包装器解析样本的 token 数（NaViT 打包器的自由函数版本）。"""
+    main = getattr(d, "main_dataset", None)
+    reg = getattr(d, "reg_dataset", None)
+    if main is not None and reg is not None:
+        ml = getattr(d, "_main_len", len(main))
+        if idx < ml:
+            return _lookup_token_count_walk(main, idx)
+        return _lookup_token_count_walk(reg, idx - ml)
+    inner = getattr(d, "dataset", None)
+    if inner is not None and inner is not d and not isinstance(inner, list):
+        return _lookup_token_count_walk(inner, idx % len(inner))
+    counts = getattr(d, "token_count_for_index", None)
+    if counts is not None and len(counts) > 0:
+        return int(counts[idx % len(counts)])
+    inner = getattr(d, "base_dataset", None)
+    if inner is not None and inner is not d:
+        return _lookup_token_count_walk(inner, idx % len(inner))
+    return 0
+
+
+def _walk_attr_list(dataset, attr):
+    """在单链包装器（RepeatDataset/CachedLatentDataset）中查找叶数据集的
+    per-index 列表属性 ``attr``，通过 ``% len`` 映射到 ``len(dataset)``。
+    对 MergedDataset（两分支）或属性不存在时返回 None。"""
+    cur = dataset
+    for _ in range(12):
+        if getattr(cur, "main_dataset", None) is not None and getattr(cur, "reg_dataset", None) is not None:
+            return None  # MergedDataset: not a single chain
+        v = getattr(cur, attr, None)
+        if v is not None and len(v) > 0:
+            n = len(dataset)
+            return [v[i % len(v)] for i in range(n)]
+        nxt = getattr(cur, "dataset", None)
+        if nxt is None or nxt is cur or isinstance(nxt, list):
+            nxt = getattr(cur, "base_dataset", None)
+        if nxt is None or nxt is cur:
+            return None
+        cur = nxt
+    return None
+
+
+def dataset_token_counts(dataset, patch_spatial=2):
+    """NaViT 打包的逐索引 token 数。
+
+    优先用已填充的 ``token_count_for_index``（CachedLatentDataset 填充）。若该字段
+    全 0 或不存在，则从缓存 latent 形状 ``bucket_for_index = (h, w)``（latent px）
+    推导为 ``(h // patch_spatial) * (w // patch_spatial)``——即 patchify 后的 token 数。
+    若两者都不可用，逐索引 walk 兜底（返回 0 → 打包器会 fail-fast）。
+    """
+    counts = _walk_attr_list(dataset, "token_count_for_index")
+    if counts is not None and any(int(c) > 0 for c in counts):
+        return [int(c) for c in counts]
+
+    shapes = _walk_attr_list(dataset, "bucket_for_index")
+    if shapes is not None:
+        ps = max(1, int(patch_spatial))
+        derived = []
+        for s in shapes:
+            if not s:
+                derived.append(0)
+                continue
+            h, w = int(s[0]), int(s[1])
+            derived.append((h // ps) * (w // ps))
+        if any(c > 0 for c in derived):
+            return derived
+
+    return [int(_lookup_token_count_walk(dataset, i) or 0) for i in range(len(dataset))]
+
+
+class NavitPackBatchSampler:
+    """为 NaViT/Patch-n-Pack 块对角训练产出数据集索引包。
+
+    每个产出的列表是一个打包训练序列：其各图 token 数之和 ≤ ``token_budget``，
+    整包作为一个零 padding 的块对角 forward。把"每步图片数"与单图形状解耦——
+    不同 token 数和长宽比的图可以共享一个包，小数据集也能填满大 effective batch。
+    """
+
+    def __init__(self, dataset, token_budget, max_images_per_pack=0,
+                 shuffle=True, seed=42, drop_last=False,
+                 strategy="next_fit", ffd_window=256):
+        self.dataset = dataset
+        self.token_budget = int(token_budget)
+        self.max_images_per_pack = int(max_images_per_pack or 0)
+        self.shuffle = bool(shuffle)
+        self.seed = int(seed)
+        self.drop_last = bool(drop_last)
+        self.strategy = str(strategy or "next_fit").lower()
+        if self.strategy not in ("next_fit", "ffd"):
+            raise ValueError(
+                f"navit pack strategy 必须是 'next_fit' 或 'ffd'，收到 {strategy!r}"
+            )
+        self.ffd_window = int(ffd_window or 0)
+        self.epoch = 0
+        self.token_counts = dataset_token_counts(dataset)
+        self._cached_packs = None
+        # Fail-fast：全 0 token 数意味着无法解析每图尺寸（token_count_for_index 与
+        # bucket_for_index 都不可用/全 0）。不检查的话 `cur_sum + 0 > budget` 永远
+        # 不触发 → 整个数据集打包成一个 ~500k-token 序列 → OOM。
+        if not self.token_counts or not any(int(c) > 0 for c in self.token_counts):
+            raise RuntimeError(
+                "[NavitPack] 无法解析任一样本的 token 数（token_count_for_index 与 "
+                "bucket_for_index 都不可用/全 0）。NaViT 打包需要缓存数据集 "
+                "（cache_latents=true）以拿到每图 latent 形状。"
+            )
+        mx = max(self.token_counts) if self.token_counts else 0
+        if self.token_counts and self.token_budget < mx:
+            logger.warning(
+                "[NavitPack] token_budget=%d < 最大单图 token=%d：该图将单独成包，"
+                "可能超出预算并 OOM。建议 token_budget >= 最大单图 token。",
+                self.token_budget, mx,
+            )
+        logger.info(
+            "[NavitPack] dataset_len=%d token_budget=%d max_images_per_pack=%s "
+            "strategy=%s ffd_window=%s (token 数范围 %d..%d)",
+            len(self.token_counts), self.token_budget,
+            self.max_images_per_pack or "∞", self.strategy,
+            (self.ffd_window or "全局") if self.strategy == "ffd" else "-",
+            min(self.token_counts) if self.token_counts else 0, mx,
+        )
+        if self.strategy == "ffd" and self.ffd_window <= 0:
+            logger.warning(
+                "[NavitPack] strategy=ffd 且 ffd_window<=0（全局 FFD）：每 epoch 的包将完全相同"
+                "（按尺寸排序固定），削弱小数据 SGD 的 batch 多样性。多 epoch 训练建议设正窗口。"
+            )
+
+    def set_epoch(self, epoch):
+        self.epoch = int(epoch)
+        self._cached_packs = None
+
+    def _build_packs(self):
+        order = list(range(len(self.token_counts)))
+        if self.shuffle:
+            random.Random(self.seed + self.epoch).shuffle(order)
+        if self.strategy == "ffd":
+            packs = pack_indices_ffd_windowed(
+                self.token_counts, self.token_budget, order,
+                self.max_images_per_pack, self.ffd_window,
+            )
+        else:
+            packs = pack_indices_by_budget(
+                self.token_counts, self.token_budget, order, self.max_images_per_pack
+            )
+        if self.drop_last and len(packs) > 1:
+            last_sum = sum(self.token_counts[i] for i in packs[-1])
+            if last_sum < self.token_budget:
+                packs = packs[:-1]
+        return packs
+
+    def __iter__(self):
+        packs = self._build_packs()
+        self._cached_packs = packs
+        for pack in packs:
+            yield pack
+
+    def __len__(self):
+        if self._cached_packs is None:
+            self._cached_packs = self._build_packs()
+        return len(self._cached_packs)
+
+
+def collate_fn_navit_pack(batch):
+    """NaViT 打包 collate。
+
+    一个包内的缓存 latent 有不同的空间形状，无法 stack；保留为列表。训练循环
+    将每张图 patchify 为 token，拼接 token 和 per-image RoPE grid，编码 caption 并
+    拼接对应的 ``text_seqlens``，然后调用 ``forward_packed_navit``。
+    """
+    latents = [b["latent"] for b in batch]        # each [C, T, h_i, w_i]
+    captions = [b["caption"] for b in batch]
+    images = [b.get("image", "") for b in batch]
+    # navit_multiscale：逐图"是否为缩放副本"标志（无副本时全 False，行为中立——
+    # 训练循环仅在 navit_multiscale_loss_weight != 1.0 且存在副本时才用它构建权重）。
+    ms_flags = [bool(int(b.get("ms_tokens_target", 0) or 0)) for b in batch]
+    result = {
+        "navit_latents": latents,
+        "captions": captions,
+        "images": images,
+        "navit_ms_flags": ms_flags,
+    }
+    # 正则集降权：与 collate_fn_cached 对齐——透传 loss_weight / is_reg 供训练循环
+    # 在 per-image loss 上应用（navit 路径同样尊重 batch 的 loss_weight）。
+    if "loss_weight" in batch[0]:
+        result["loss_weight"] = torch.tensor(
+            [b["loss_weight"] for b in batch], dtype=torch.float32
+        )
         result["is_reg"] = torch.tensor([b["is_reg"] for b in batch], dtype=torch.bool)
     return result

@@ -140,6 +140,86 @@ class TrainingConfig(BaseModel):
         json_schema_extra=_meta("system", advanced=True),
     )
 
+    # --------------------------------------------------- NaViT / Patch-n-Pack
+    # 块对角打包训练（Phase 2 数据层）。以下字段全部默认关闭 / 行为中立：
+    # navit_packing=False 时走原有 ARB 分桶路径，字节等价。
+    navit_packing: bool = Field(
+        False,
+        description="启用 NaViT / Patch-n-Pack 块对角打包：按 token 预算把多张不同尺寸的图"
+                    "拼进一个训练序列（零 padding），替代 ARB 固定桶分批。需配合 cache_latents",
+        json_schema_extra=_meta("system", advanced=True),
+    )
+    navit_token_budget: int = Field(
+        16384, ge=1,
+        description="单个打包序列的 token 预算上限（所有图 token 数之和 ≤ 此值）",
+        json_schema_extra=_meta("system", advanced=True),
+    )
+    navit_max_images_per_pack: int = Field(
+        0, ge=0,
+        description="每个包最多图片数（0=不限，仅受 token 预算约束）",
+        json_schema_extra=_meta("system", advanced=True),
+    )
+    navit_text_trim_padding: bool = Field(
+        False,
+        description="cross-attn 文本截断 padding（数据层标志，仅 navit_packing 时生效）",
+        json_schema_extra=_meta("system", advanced=True),
+    )
+    navit_pack_strategy: Literal["next_fit", "ffd"] = Field(
+        "next_fit",
+        description="打包策略：next_fit=顺序贪心（快、包较松）；ffd=First-Fit-Decreasing 窗口化（包更紧、更少步）",
+        json_schema_extra=_meta("system", advanced=True),
+    )
+    navit_pack_ffd_window: int = Field(
+        256, ge=0,
+        description="FFD 窗口大小（0=全局 FFD，每 epoch 包固定；>0=窗口内 FFD + 跨 epoch reshuffle）",
+        json_schema_extra=_meta("system", advanced=True),
+    )
+    navit_drop_last: bool = Field(
+        False,
+        description="丢弃最后一个未填满的包（对齐 step 计数；False=保留短包）",
+        json_schema_extra=_meta("system", advanced=True),
+    )
+    navit_native_resolution: bool = Field(
+        False,
+        description="原生定尺寸：按源图尺寸 floor 对齐到 16px（VAE 8×patch 2），不 resize/crop",
+        json_schema_extra=_meta("system", advanced=True),
+    )
+    navit_multiscale: bool = Field(
+        False,
+        description="多尺度阶梯：为每张大图额外生成降采样副本（≤指定 token 档），拼入打包序列",
+        json_schema_extra=_meta("system", advanced=True),
+    )
+    navit_multiscale_token_ladder: str = Field(
+        "4096",
+        description="多尺度 token 档位（逗号分隔，如 \"4096,16384\"），每张大于该档的图生成一份缩放副本",
+        json_schema_extra=_meta("system", advanced=True),
+    )
+    navit_multiscale_loss_weight: float = Field(
+        1.0, ge=0.0,
+        description="多尺度副本的 loss 权重（1.0=等权；<1 削弱副本影响）",
+        json_schema_extra=_meta("system", advanced=True),
+    )
+    cache_encode_tiled: bool = Field(
+        False,
+        description="缓存编码分块：超大图按 tile_px 分块 VAE encode + latent 羽化拼接（峰值显存 ∝ 单块像素）",
+        json_schema_extra=_meta("system", advanced=True),
+    )
+    cache_encode_tile_px: int = Field(
+        1024, ge=64,
+        description="分块 encode 的像素块边长（须为 VAE 下采样 8 的整倍数）",
+        json_schema_extra=_meta("system", advanced=True),
+    )
+    cache_encode_tile_overlap: int = Field(
+        128, ge=0,
+        description="分块重叠像素（羽化接缝宽度；0=无重叠硬接缝）",
+        json_schema_extra=_meta("system", advanced=True),
+    )
+    cache_encode_max_pixels: int = Field(
+        0, ge=0,
+        description="单次 encode 总像素上限（含翻转份）；0=用内置保守默认 4M。也是分块触发阈值",
+        json_schema_extra=_meta("system", advanced=True),
+    )
+
     # ------------------------------------------------------------------- LoRA
     lora_type: Literal["lora", "lokr", "loha", "ortho", "tlora"] = Field(
         "lokr",
@@ -952,6 +1032,64 @@ class TrainingConfig(BaseModel):
                     "内联自蒸馏目标，绕过 ctx.loss_fn 分发，huber 会被静默忽略。"
                     "请二选一：(a) 关闭 leap；或 (b) 设 loss_type=mse 走 leap 自蒸馏。"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_navit_exclusive(self) -> "TrainingConfig":
+        """NaViT / Patch-n-Pack 打包训练的配置校验与互斥。
+
+        NaViT 改变了 batch 语义（一包异构图、逐图 t），许多按"批量网格 + 逐 batch
+        单 timestep"假设写的特性会语义错位。v1 的策略是 fail-fast：同时开 → 启动即
+        报错，提示显式关掉，避免"开着却悄悄不生效"的隐性行为改变。
+
+        互斥项（详见 docs/navit-packing.md 第 3 节）：
+        - leap_enabled：leap 假设批量网格 + 共享 noise，与逐图打包不兼容。
+        - infonoise_enabled：InfoNoise 的 I-MMSE record 需走标准路径的 per-sample
+          MSE；navit 路径的 per-image loss 语义不同，v1 未适配。
+        - lora_type=tlora：T-LoRA 的 rank mask 按 batch 维匹配 timestep，navit 是
+          B=1 打包序列 + 逐图 t，维度不匹配。
+        - sra_enabled：SRA v2 表征对齐按批量网格中间特征 tap 对齐，navit 是 B=1
+          打包序列 + 逐图，per-image 适配 v1 未做（loop 路径已守卫跳过，这里 fail-fast）。
+
+        前置要求：
+        - cache_latents：navit 打包按 latent token 数预算分包，需要预编码缓存。
+        - navit_token_budget > 0：必须显式设置（按显存定）。
+        - navit_multiscale → navit_native_resolution：副本经原生定尺寸路径生成。
+        """
+        if not self.navit_packing:
+            return self
+
+        _conflicts = []
+        if self.leap_enabled:
+            _conflicts.append("leap_enabled")
+        if self.infonoise_enabled:
+            _conflicts.append("infonoise_enabled")
+        if self.lora_type == "tlora":
+            _conflicts.append("lora_type=tlora")
+        if self.sra_enabled:
+            _conflicts.append("sra_enabled")
+        if _conflicts:
+            raise ValueError(
+                "navit_packing(v1) 暂不支持与以下特性同时开启："
+                + ", ".join(_conflicts)
+                + "。请关掉它们，或暂不使用 NaViT 打包。"
+            )
+
+        if not self.cache_latents:
+            raise ValueError(
+                "navit_packing 需要 cache_latents=true（打包按 latent token 数预算分包，"
+                "需要预编码缓存）。"
+            )
+        if self.navit_token_budget <= 0:
+            raise ValueError(
+                "navit_packing 需要显式设置 navit_token_budget（>0，按显存定，"
+                "见 docs/navit-packing.md 显存对照表）。"
+            )
+        if self.navit_multiscale and not self.navit_native_resolution:
+            raise ValueError(
+                "navit_multiscale 需要 navit_native_resolution=true"
+                "（副本经原生定尺寸路径生成；ARB 桶定尺寸暂不支持）。"
+            )
         return self
 
     # ---------------------------------------------------------------- 输出/保存
