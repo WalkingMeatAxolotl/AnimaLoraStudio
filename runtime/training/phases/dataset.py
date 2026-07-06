@@ -144,7 +144,8 @@ def run(ctx: TrainingContext) -> None:
             seed=getattr(args, "seed", 42),
             drop_last=getattr(args, "navit_drop_last", False),
             strategy=getattr(args, "navit_pack_strategy", "next_fit"),
-            ffd_window=int(getattr(args, "navit_pack_ffd_window", 256) or 256),
+            # 不用 `or 256`：0 是合法值（全局 FFD，每 epoch 包固定），会被 falsy 吞掉。
+            ffd_window=int(getattr(args, "navit_pack_ffd_window", 256)),
         )
         ctx.dataloader = DataLoader(
             ctx.dataset, batch_sampler=batch_sampler,
