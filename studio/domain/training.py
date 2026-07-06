@@ -820,7 +820,7 @@ class TrainingConfig(BaseModel):
         json_schema_extra=_meta(
             "system",
             disable_when="navit_packing==true",
-            disable_hint="NaViT 打包训练固定走 xformers varlen（块对角必需，需安装 xformers）；此选项不影响 navit 训练步",
+            disable_hint="NaViT 打包已强制 xformers varlen（块对角必需，需安装 xformers）",
         ),
     )
     num_workers: int = Field(
@@ -873,6 +873,17 @@ class TrainingConfig(BaseModel):
                 data["sample_sampler_name"] = "er_sde"
             if data.get("sample_scheduler") not in (None, "simple", "sgm_uniform"):
                 data["sample_scheduler"] = "simple"
+        return data
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_navit_attention_backend(cls, data: Any) -> Any:
+        """NaViT 打包的块对角 attention 必需 xformers varlen（运行时只认 xformers 是否
+        安装、不看 attention_backend 值）。navit_packing 开启时强制 attention_backend=
+        xformers——避免用户选了 flash/none 以为对 navit 训练生效，实际 navit 训练步只
+        走 xformers varlen。参考 PPSF 工厂内覆盖 lr 的强制模式。"""
+        if isinstance(data, dict) and data.get("navit_packing"):
+            data["attention_backend"] = "xformers"
         return data
 
     @model_validator(mode="after")

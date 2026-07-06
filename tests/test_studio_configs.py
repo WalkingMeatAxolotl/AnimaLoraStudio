@@ -147,6 +147,24 @@ def test_ppsf_accepts_none_scheduler() -> None:
     assert cfg.optimizer_type == "prodigy_plus_schedulefree"
 
 
+def test_navit_forces_xformers_backend() -> None:
+    """navit_packing 开启时 attention_backend 强制 xformers（块对角只走 xformers varlen）。"""
+    payload = TrainingConfig().model_dump(mode="python")
+    payload["navit_packing"] = True
+    payload["attention_backend"] = "flash_attn"
+    cfg = TrainingConfig.model_validate(payload)
+    assert cfg.attention_backend == "xformers"
+
+
+def test_navit_off_keeps_user_attention_backend() -> None:
+    """navit 关闭时 attention_backend 保持用户选择，不被强制。"""
+    payload = TrainingConfig().model_dump(mode="python")
+    payload["navit_packing"] = False
+    payload["attention_backend"] = "flash_attn"
+    cfg = TrainingConfig.model_validate(payload)
+    assert cfg.attention_backend == "flash_attn"
+
+
 def test_prodigy_rejects_non_none_scheduler() -> None:
     """普通 Prodigy 也固定常数学习率，不允许外部 scheduler。"""
     payload = TrainingConfig().model_dump(mode="python")
