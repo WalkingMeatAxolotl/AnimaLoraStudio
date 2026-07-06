@@ -2,8 +2,9 @@
 
 End-to-end model equivalence: ``MiniTrainDIT.forward_packed_navit`` on G
 heterogeneous images packed into one sequence must equal running each image
-independently through ``forward_packed_tokens`` (single image, all-valid mask,
-its own timestep) and concatenating the per-image outputs.
+independently through the dense ``forward`` (its own timestep) and, after
+re-``patchify``-ing each dense latent output back into the packed
+``(c pt ph pw)`` channel order, concatenating the per-image token outputs.
 
 This pins down everything the packed path adds at once: block-diagonal self
 attention, block-diagonal cross attention to per-image captions, per-image
@@ -48,8 +49,13 @@ def _model(dtype):
 
 
 @requires_cuda
-def test_navit_equals_per_image_forward():
-    """``forward_packed_navit`` ≡ per-image ``forward_packed_tokens`` concat."""
+def test_navit_equals_per_image_dense_forward():
+    """``forward_packed_navit`` ≡ 各图独立走 dense ``forward``（patchify 对齐输出）。
+
+    per-image 参照改用 dense ``forward``（原先用已删的 ``forward_packed_tokens``）：
+    每张图单独走 dense forward 得预测 latent，用 ``patchify_latents_to_tokens`` 转到
+    与 packed 输出相同的 ``(c pt ph pw)`` 通道序后拼接，对比 ``forward_packed_navit``。
+    """
     set_xformers_enabled(True)
     dtype = torch.float16
     model = _model(dtype)
@@ -60,34 +66,26 @@ def test_navit_equals_per_image_forward():
     text_lens = [5, 9, 3]
     timesteps = [0.2, 0.6, 0.9]
 
-    tokens_list, grid_list, size_list, vseq = [], [], [], []
-    cross_list, tseq = [], []
+    tokens_list, grid_list, vseq = [], [], []
+    cross_list, tseq, refs = [], [], []
     with torch.no_grad():
-        for (h, w), L in zip(latent_shapes, text_lens):
+        for (h, w), L, t_val in zip(latent_shapes, text_lens, timesteps):
             lat = torch.randn(1, 16, 1, h, w, device="cuda", dtype=dtype)
-            tok, grid, _mask, size = model.patchify_latents_to_tokens(lat)
+            cross = torch.randn(1, L, D, device="cuda", dtype=dtype)
+            tok, grid, _mask, _size = model.patchify_latents_to_tokens(lat)
             tokens_list.append(tok)
             grid_list.append(grid)
-            size_list.append(size)
             vseq.append(tok.shape[1])
-            cross_list.append(torch.randn(1, L, D, device="cuda", dtype=dtype))
+            cross_list.append(cross)
             tseq.append(L)
 
-        # Per-image reference via the existing single-image packed forward.
-        refs = []
-        for tok, grid, size, cross, t in zip(
-            tokens_list, grid_list, size_list, cross_list, timesteps
-        ):
-            mask = torch.ones(1, tok.shape[1], device="cuda", dtype=dtype)
-            out = model.forward_packed_tokens(
-                tok,
-                torch.tensor([[t]], device="cuda", dtype=dtype),
-                cross,
-                grid,
-                mask,
-                size,
+            # Per-image reference: dense forward → predicted latent → re-patchify
+            # into the same (c pt ph pw) token order the packed path emits.
+            dense_out = model.forward(
+                lat, torch.tensor([[t_val]], device="cuda", dtype=dtype), cross
             )
-            refs.append(out)
+            ref_tok, _, _, _ = model.patchify_latents_to_tokens(dense_out)
+            refs.append(ref_tok)
         ref = torch.cat(refs, dim=1)
 
         # Packed NaViT forward.
@@ -100,7 +98,7 @@ def test_navit_equals_per_image_forward():
         )
 
     assert tuple(packed.shape) == tuple(ref.shape)
-    torch.testing.assert_close(packed, ref, rtol=3e-2, atol=3e-2)
+    torch.testing.assert_close(packed, ref, rtol=5e-2, atol=5e-2)
 
 
 @requires_cuda

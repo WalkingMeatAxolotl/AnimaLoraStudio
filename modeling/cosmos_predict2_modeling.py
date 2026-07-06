@@ -1410,17 +1410,14 @@ class Block(nn.Module):
         crossattn_emb: torch.Tensor,
         rope_emb_L_1_1_D: Optional[torch.Tensor] = None,
         attn_mask: Optional[torch.Tensor] = None,
-        token_mask_f: Optional[torch.Tensor] = None,
         adaln_lora_B_T_3D: Optional[torch.Tensor] = None,
         cross_attn_mask: Optional[torch.Tensor] = None,
         token_wise_mod: bool = False,
         mod_index: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        # ``attn_mask`` (additive key-padding mask) and ``token_mask_f`` (float
-        # zeroing mask) are precomputed once per step by the caller via
-        # ``MiniTrainDIT._build_packed_masks`` — not rebuilt here per block. Both are
-        # None when every token is valid (constant-N / token-bucket), so attention
-        # takes SDPA's fast maskless path and no output zeroing is needed.
+        # ``attn_mask`` is None on the dense path and an xformers ``BlockDiagonalMask``
+        # bias on the packed path (built once per step by the caller, reused across
+        # blocks). None lets attention take SDPA's fast maskless path.
         #
         # NaViT/FiT packing path (``token_wise_mod=True``): ``attn_mask`` and
         # ``cross_attn_mask`` are xformers ``BlockDiagonalMask`` biases (per-image
@@ -1510,8 +1507,6 @@ class Block(nn.Module):
         )
         result_B_N_D = self.mlp(normalized_x_B_N_D)
         x_B_N_D = x_B_N_D + gate_mlp_B_1_D * result_B_N_D
-        if token_mask_f is not None:
-            x_B_N_D = x_B_N_D * token_mask_f
         return x_B_N_D
 
 
@@ -1825,26 +1820,6 @@ class MiniTrainDIT(nn.Module):
         size = torch.tensor([[[token_h, token_w]]], device=x_B_C_T_H_W.device, dtype=torch.int32).repeat(B, 1, 1)
         return tokens, grid, mask, size
 
-    def unpatchify_tokens(self, tokens_B_N_M: torch.Tensor, size_B_1_2: torch.Tensor) -> torch.Tensor:
-        sizes = size_B_1_2[:, 0, :].to(device="cpu", dtype=torch.long)
-        if not bool((sizes == sizes[:1]).all()):
-            raise ValueError("unpatchify_tokens currently requires a uniform token grid")
-        token_h = int(sizes[0, 0].item())
-        token_w = int(sizes[0, 1].item())
-        token_t = max(1, tokens_B_N_M.shape[1] // max(1, token_h * token_w))
-        channels = tokens_B_N_M.shape[-1] // (self.patch_temporal * self.patch_spatial * self.patch_spatial)
-        return rearrange(
-            tokens_B_N_M,
-            "b (t h w) (c pt ph pw) -> b c (t pt) (h ph) (w pw)",
-            t=token_t,
-            h=token_h,
-            w=token_w,
-            pt=self.patch_temporal,
-            ph=self.patch_spatial,
-            pw=self.patch_spatial,
-            c=channels,
-        )
-
     def _output_tokens_to_patch_tokens(
         self,
         tokens_B_N_M: torch.Tensor,
@@ -1910,77 +1885,6 @@ class MiniTrainDIT(nn.Module):
         # 5-D freqs ([B, S, 1, 1, D]); the upstream does not.  B is always 1 for packed
         # sequences (the whole pack is one sequence), so emb[0] is exact.
         return emb[0, :, None, None, :].float()
-
-    def _build_packed_masks(self, token_mask: Optional[torch.Tensor], dtype: torch.dtype):
-        """Build the additive attention mask + float zeroing mask ONCE for the whole
-        block stack, instead of rebuilding them (and re-syncing) inside every block.
-
-        Returns ``(attn_mask, token_mask_f)``. Both are None when every token is valid
-        (constant-N / token-bucket): a None ``attn_mask`` lets SDPA take its fast
-        maskless path (xformers/flash) instead of the slower additive-mask kernel, and
-        no output zeroing is needed. The empty-sequence validation and the all-valid
-        test are each a single data-dependent ``bool(...)`` GPU→CPU sync — done once
-        here rather than once per block (was N_blocks syncs/step). Skipped under
-        ``torch.compile``, where the token-bucket invariant guarantees a constant,
-        all-valid sequence (and a ``bool(...)`` would graph-break the trace)."""
-        if token_mask is None or torch.compiler.is_compiling():
-            return None, None
-        bool_mask = token_mask.to(dtype=torch.bool)
-        if not bool(bool_mask.any(dim=1).all()):
-            raise ValueError("packed FiT sequence contains a sample with no valid tokens")
-        if bool(bool_mask.all()):
-            return None, None
-        key_valid = bool_mask[:, None, None, :]
-        attn_mask = torch.zeros_like(key_valid, dtype=dtype)
-        attn_mask = attn_mask.masked_fill(~key_valid, -1.0e4)
-        token_mask_f = token_mask.to(dtype=dtype).unsqueeze(-1)
-        return attn_mask, token_mask_f
-
-    def forward_packed_tokens(
-        self,
-        tokens_B_N_M: torch.Tensor,
-        timesteps_B_T: torch.Tensor,
-        crossattn_emb: torch.Tensor,
-        grid_B_2_N: torch.Tensor,
-        mask_B_N: torch.Tensor,
-        size_B_1_2: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        if size_B_1_2 is None:
-            raise ValueError("size_B_1_2 (token grid shape) is required for packed FiT")
-        expected = self.x_embedder.proj[1].in_features
-        if tokens_B_N_M.shape[-1] < expected:
-            tokens_B_N_M = F.pad(tokens_B_N_M, (0, expected - tokens_B_N_M.shape[-1]))
-        elif tokens_B_N_M.shape[-1] > expected:
-            raise ValueError(
-                f"packed tokens have dim={tokens_B_N_M.shape[-1]}, but x_embedder expects {expected}"
-            )
-        x_B_N_D = self.x_embedder.proj[1](tokens_B_N_M)
-
-        if timesteps_B_T.ndim == 1:
-            timesteps_B_T = timesteps_B_T.unsqueeze(1)
-        t_embedding_B_T_D, adaln_lora_B_T_3D = self.t_embedder(timesteps_B_T)
-        t_embedding_B_T_D = self.t_embedding_norm(t_embedding_B_T_D)
-
-        self.affline_scale_log_info = {"t_embedding_B_T_D": t_embedding_B_T_D.detach()}
-        self.affline_emb = t_embedding_B_T_D
-        self.crossattn_emb = crossattn_emb
-
-        rope_emb = self._packed_rope_from_grid(grid_B_2_N)
-        attn_mask, token_mask_f = self._build_packed_masks(mask_B_N, x_B_N_D.dtype)
-        for block in self.blocks:
-            x_B_N_D = block.forward_tokens(
-                x_B_N_D,
-                t_embedding_B_T_D,
-                crossattn_emb,
-                rope_emb_L_1_1_D=rope_emb,
-                attn_mask=attn_mask,
-                token_mask_f=token_mask_f,
-                adaln_lora_B_T_3D=adaln_lora_B_T_3D,
-            )
-
-        out = self.final_layer.forward_tokens(x_B_N_D, t_embedding_B_T_D, adaln_lora_B_T_3D=adaln_lora_B_T_3D)
-        out = self._output_tokens_to_patch_tokens(out, size_B_1_2)
-        return out * mask_B_N.to(dtype=out.dtype).unsqueeze(-1)
 
     def forward_packed_navit(
         self,
@@ -2088,7 +1992,6 @@ class MiniTrainDIT(nn.Module):
                     crossattn_packed_1_L_D,
                     rope_emb_L_1_1_D=rope_emb,
                     attn_mask=self_bias,
-                    token_mask_f=None,
                     adaln_lora_B_T_3D=adaln_lora_1_G_3D,
                     cross_attn_mask=cross_bias,
                     token_wise_mod=True,
