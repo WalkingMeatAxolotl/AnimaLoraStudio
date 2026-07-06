@@ -553,7 +553,9 @@
       "styleJson": "Style LoRA JSON",
       "generalJson": "General LoRA JSON",
       "txtTags": "TXT tag list",
-      "joycaption": "JoyCaption (local vLLM)"
+      "joycaption": "JoyCaption (local vLLM)",
+      "assistJson": "Local tagger assist · JSON",
+      "assistText": "Local tagger assist · Text"
     }
   },
   "llmMessages": {

@@ -22,6 +22,8 @@ const LLM_PRESET_LABEL_KEYS: Record<string, string> = {
   general_json: 'llmWorkspace.presetLabels.generalJson',
   txt_tags: 'llmWorkspace.presetLabels.txtTags',
   joycaption: 'llmWorkspace.presetLabels.joycaption',
+  assist_json: 'llmWorkspace.presetLabels.assistJson',
+  assist_text: 'llmWorkspace.presetLabels.assistText',
 }
 
 function presetLabel(preset: LLMPreset, t: TFunction): string {

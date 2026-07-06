@@ -553,7 +553,9 @@
       "styleJson": "画风 LoRA JSON",
       "generalJson": "通用 LoRA JSON",
       "txtTags": "TXT 标签列表",
-      "joycaption": "JoyCaption（vLLM 本地）"
+      "joycaption": "JoyCaption（vLLM 本地）",
+      "assistJson": "本地 tagger 辅助 · JSON",
+      "assistText": "本地 tagger 辅助 · 文本"
     }
   },
   "llmMessages": {
