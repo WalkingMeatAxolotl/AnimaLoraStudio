@@ -2195,6 +2195,7 @@
     "restore": "↻ 还原",
     "advanced": "高级",
     "blacklistLabel": "blacklist_tags（逗号分隔）",
+    "cltaggerExtraTags": "附加标签类别",
     "blacklistPlaceholder1": "如 monochrome, comic",
     "blacklistPlaceholder2": "如 low quality, signature",
     "cltaggerLoading": "加载 CLTagger 默认参数...",

@@ -15,7 +15,7 @@ import {
   type WD14Config,
 } from '../../../api/client'
 import LLMMessagesEditor from '../../../components/LLMMessagesEditor'
-import TagsInput from '../../../components/TagsInput'
+import { TagListInput } from '../../../components/TagsInput'
 import StepShell from '../../../components/StepShell'
 import { useToast } from '../../../components/Toast'
 import { useSettingsDrawer } from '../../../lib/SettingsDrawer'
@@ -566,17 +566,18 @@ function Wd14Panel({
         )}
       </div>
 
-      <div className="flex items-center gap-3 flex-wrap">
-        <ThresholdInput label="general" value={form.threshold_general} base={defaults.threshold_general} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_general: v })} />
-        <ThresholdInput label="character" value={form.threshold_character} base={defaults.threshold_character} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_character: v })} />
-        <button type="button" onClick={() => setAdvOpen(!advOpen)} className="btn btn-ghost btn-sm text-xs text-fg-tertiary">
-          {advOpen ? '▾' : '▸'} {t('tag.advanced')}
-        </button>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
+        <TagFieldNumber label="threshold_general" value={form.threshold_general} base={defaults.threshold_general} min={0} max={1} step={0.01} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_general: v })} />
+        <TagFieldNumber label="threshold_character" value={form.threshold_character} base={defaults.threshold_character} min={0} max={1} step={0.01} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_character: v })} />
       </div>
 
+      <button type="button" onClick={() => setAdvOpen(!advOpen)} className="btn btn-ghost btn-sm text-xs text-fg-tertiary self-start">
+        {advOpen ? '▾' : '▸'} {t('tag.advanced')}
+      </button>
+
       {advOpen && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-1">
-          <LabeledModelSelect
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
+          <TagFieldModelSelect
             label="model_id"
             value={form.model_id}
             options={defaults.model_ids}
@@ -584,15 +585,16 @@ function Wd14Panel({
             onChange={(v) => onChange({ ...form, model_id: v })}
             modified={form.model_id !== defaults.model_id}
           />
-          <TagsInput
-            className="md:col-span-2"
-            label={t('tag.blacklistLabel')}
-            value={form.blacklist_tags}
-            placeholder={t('tag.blacklistPlaceholder1')}
-            disabled={disabled}
-            onChange={(tags) => onChange({ ...form, blacklist_tags: tags })}
-            modified={JSON.stringify(form.blacklist_tags) !== JSON.stringify(defaults.blacklist_tags)}
-          />
+          <TagField label={t('tag.blacklistLabel')} className="md:col-span-2">
+            <TagListInput
+              value={form.blacklist_tags}
+              placeholder={t('tag.blacklistPlaceholder1')}
+              disabled={disabled}
+              onChange={(tags) => onChange({ ...form, blacklist_tags: tags })}
+              className="input input-mono"
+              style={fieldCtlStyle(JSON.stringify(form.blacklist_tags) !== JSON.stringify(defaults.blacklist_tags))}
+            />
+          </TagField>
         </div>
       )}
     </section>
@@ -662,48 +664,39 @@ function CLTaggerPanel({
         )}
       </div>
 
-      <div className="flex items-center gap-3 flex-wrap">
-        <ThresholdInput label="general" value={form.threshold_general} base={defaults.threshold_general} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_general: v })} />
-        <ThresholdInput label="character" value={form.threshold_character} base={defaults.threshold_character} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_character: v })} />
-        <label className="flex items-center gap-1.5 text-xs text-fg-tertiary">
-          <input type="checkbox" checked={form.add_copyright_tag} disabled={disabled} onChange={(e) => onChange({ ...form, add_copyright_tag: e.target.checked })} />
-          copyright
-        </label>
-        <label className="flex items-center gap-1.5 text-xs text-fg-tertiary">
-          <input type="checkbox" checked={form.add_meta_tag} disabled={disabled} onChange={(e) => onChange({ ...form, add_meta_tag: e.target.checked })} />
-          meta
-        </label>
-        <label className="flex items-center gap-1.5 text-xs text-fg-tertiary">
-          <input type="checkbox" checked={form.add_model_tag} disabled={disabled} onChange={(e) => onChange({ ...form, add_model_tag: e.target.checked })} />
-          model
-        </label>
-        <label className="flex items-center gap-1.5 text-xs text-fg-tertiary">
-          <input type="checkbox" checked={form.add_rating_tag} disabled={disabled} onChange={(e) => onChange({ ...form, add_rating_tag: e.target.checked })} />
-          rating
-        </label>
-        <label className="flex items-center gap-1.5 text-xs text-fg-tertiary">
-          <input type="checkbox" checked={form.add_quality_tag} disabled={disabled} onChange={(e) => onChange({ ...form, add_quality_tag: e.target.checked })} />
-          quality
-        </label>
-        <button type="button" onClick={() => setAdvOpen(!advOpen)} className="btn btn-ghost btn-sm text-xs text-fg-tertiary">
-          {advOpen ? '▾' : '▸'} {t('tag.advanced')}
-        </button>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
+        <TagFieldNumber label="threshold_general" value={form.threshold_general} base={defaults.threshold_general} min={0} max={1} step={0.01} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_general: v })} />
+        <TagFieldNumber label="threshold_character" value={form.threshold_character} base={defaults.threshold_character} min={0} max={1} step={0.01} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_character: v })} />
+        <TagField label={t('tag.cltaggerExtraTags')} className="md:col-span-2">
+          <div className="flex items-center gap-4 flex-wrap py-0.5">
+            <TagFieldCheckbox label="copyright" checked={form.add_copyright_tag} disabled={disabled} onChange={(v) => onChange({ ...form, add_copyright_tag: v })} />
+            <TagFieldCheckbox label="meta" checked={form.add_meta_tag} disabled={disabled} onChange={(v) => onChange({ ...form, add_meta_tag: v })} />
+            <TagFieldCheckbox label="model" checked={form.add_model_tag} disabled={disabled} onChange={(v) => onChange({ ...form, add_model_tag: v })} />
+            <TagFieldCheckbox label="rating" checked={form.add_rating_tag} disabled={disabled} onChange={(v) => onChange({ ...form, add_rating_tag: v })} />
+            <TagFieldCheckbox label="quality" checked={form.add_quality_tag} disabled={disabled} onChange={(v) => onChange({ ...form, add_quality_tag: v })} />
+          </div>
+        </TagField>
       </div>
 
+      <button type="button" onClick={() => setAdvOpen(!advOpen)} className="btn btn-ghost btn-sm text-xs text-fg-tertiary self-start">
+        {advOpen ? '▾' : '▸'} {t('tag.advanced')}
+      </button>
+
       {advOpen && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-1">
-          <LabeledInput label="model_id" value={form.model_id} disabled={disabled} onChange={(v) => onChange({ ...form, model_id: v })} modified={form.model_id !== defaults.model_id} />
-          <LabeledInput label="model_path" value={form.model_path} disabled={disabled} onChange={(v) => onChange({ ...form, model_path: v })} modified={form.model_path !== defaults.model_path} />
-          <LabeledInput label="tag_mapping_path" value={form.tag_mapping_path} disabled={disabled} onChange={(v) => onChange({ ...form, tag_mapping_path: v })} modified={form.tag_mapping_path !== defaults.tag_mapping_path} />
-          <TagsInput
-            className="md:col-span-2"
-            label={t('tag.blacklistLabel')}
-            value={form.blacklist_tags}
-            placeholder={t('tag.blacklistPlaceholder2')}
-            disabled={disabled}
-            onChange={(tags) => onChange({ ...form, blacklist_tags: tags })}
-            modified={JSON.stringify(form.blacklist_tags) !== JSON.stringify(defaults.blacklist_tags)}
-          />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
+          <TagFieldInput label="model_id" value={form.model_id} disabled={disabled} onChange={(v) => onChange({ ...form, model_id: v })} modified={form.model_id !== defaults.model_id} />
+          <TagFieldInput label="model_path" value={form.model_path} disabled={disabled} onChange={(v) => onChange({ ...form, model_path: v })} modified={form.model_path !== defaults.model_path} />
+          <TagFieldInput label="tag_mapping_path" value={form.tag_mapping_path} disabled={disabled} onChange={(v) => onChange({ ...form, tag_mapping_path: v })} modified={form.tag_mapping_path !== defaults.tag_mapping_path} />
+          <TagField label={t('tag.blacklistLabel')} className="md:col-span-2">
+            <TagListInput
+              value={form.blacklist_tags}
+              placeholder={t('tag.blacklistPlaceholder2')}
+              disabled={disabled}
+              onChange={(tags) => onChange({ ...form, blacklist_tags: tags })}
+              className="input input-mono"
+              style={fieldCtlStyle(JSON.stringify(form.blacklist_tags) !== JSON.stringify(defaults.blacklist_tags))}
+            />
+          </TagField>
         </div>
       )}
     </section>
@@ -775,104 +768,100 @@ function LLMTaggerPanel({
         )}
       </div>
 
-      <label className="grid grid-cols-[140px_1fr] items-center gap-2">
-        <span className="text-fg-tertiary font-mono text-xs">preset</span>
-        <select
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
+        <TagFieldSelect
+          label="preset"
           value={form.preset_id}
-          onChange={(e) => switchPreset(e.target.value)}
           disabled={disabled}
-          className={`input input-mono ${form.preset_id !== defaults.current_preset ? 'border-warn' : ''}`}
+          onChange={switchPreset}
+          modified={form.preset_id !== defaults.current_preset}
+          className="md:col-span-2"
         >
           {defaults.presets.map((p) => (
             <option key={p.id} value={p.id}>
               {p.label}{p.builtin ? t('tag.builtin') : ''}
             </option>
           ))}
-        </select>
-      </label>
+        </TagFieldSelect>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-        <LabeledInput label="base_url" value={form.base_url} placeholder="http://localhost:8000/v1" disabled={disabled} onChange={(v) => onChange({ ...form, base_url: v })} modified={form.base_url !== activePreset.base_url} />
+        <TagFieldInput label="base_url" value={form.base_url} placeholder="http://localhost:8000/v1" disabled={disabled} onChange={(v) => onChange({ ...form, base_url: v })} modified={form.base_url !== activePreset.base_url} />
         {activePreset.model_ids.length > 0 ? (
-          <label className="grid grid-cols-[140px_1fr] items-center gap-2">
-            <span className="text-fg-tertiary font-mono text-xs">model</span>
-            <select
-              value={form.model}
-              onChange={(e) => onChange({ ...form, model: e.target.value })}
-              disabled={disabled}
-              className={`input input-mono ${form.model !== activePreset.model ? 'border-warn' : ''}`}
-            >
-              {!activePreset.model_ids.includes(form.model) && form.model && (
-                <option value={form.model}>{form.model}</option>
-              )}
-              {activePreset.model_ids.map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
-          </label>
+          <TagFieldSelect
+            label="model"
+            value={form.model}
+            disabled={disabled}
+            onChange={(v) => onChange({ ...form, model: v })}
+            modified={form.model !== activePreset.model}
+          >
+            {!activePreset.model_ids.includes(form.model) && form.model && (
+              <option value={form.model}>{form.model}</option>
+            )}
+            {activePreset.model_ids.map((m) => <option key={m} value={m}>{m}</option>)}
+          </TagFieldSelect>
         ) : (
-          <LabeledInput label="model" value={form.model} placeholder={t('tag.modelPlaceholder')} disabled={disabled} onChange={(v) => onChange({ ...form, model: v })} modified={form.model !== activePreset.model} />
+          <TagFieldInput label="model" value={form.model} placeholder={t('tag.modelPlaceholder')} disabled={disabled} onChange={(v) => onChange({ ...form, model: v })} modified={form.model !== activePreset.model} />
         )}
-        <label className="grid grid-cols-[140px_1fr] items-center gap-2">
-          <span className="text-fg-tertiary font-mono text-xs">endpoint</span>
-          <select
-            value={form.endpoint}
-            onChange={(e) => onChange({ ...form, endpoint: e.target.value as LLMPreset['endpoint'] })}
-            disabled={disabled}
-            className={`input input-mono ${form.endpoint !== activePreset.endpoint ? 'border-warn' : ''}`}
-          >
-            <option value="chat_completions">Chat Completions</option>
-            <option value="responses">Responses</option>
-          </select>
-        </label>
-        <label className="grid grid-cols-[140px_1fr] items-center gap-2">
-          <span className="text-fg-tertiary font-mono text-xs">output_format</span>
-          <select
-            value={form.output_format}
-            onChange={(e) => onChange({ ...form, output_format: e.target.value as LLMPreset['output_format'] })}
-            disabled={disabled}
-            className={`input input-mono ${form.output_format !== activePreset.output_format ? 'border-warn' : ''}`}
-          >
-            <option value="json">JSON</option>
-            <option value="text">Text</option>
-          </select>
-        </label>
-        <label className="grid grid-cols-[140px_1fr] items-center gap-2">
-          <span className="text-fg-tertiary font-mono text-xs">assist_tagger</span>
-          <select
-            value={form.assist_tagger}
-            onChange={(e) => onChange({ ...form, assist_tagger: e.target.value })}
-            disabled={disabled}
-            title={t('llmWorkspace.assistTaggerHelp').split('%TAGS%').join('{{tags}}')}
-            className={`input input-mono ${form.assist_tagger !== activePreset.assist_tagger ? 'border-warn' : ''}`}
-          >
-            <option value="">Off</option>
-            <option value="wd14">WD14</option>
-            <option value="cltagger">CLTagger</option>
-          </select>
-        </label>
+
+        <TagFieldSelect
+          label="endpoint"
+          value={form.endpoint}
+          disabled={disabled}
+          onChange={(v) => onChange({ ...form, endpoint: v as LLMPreset['endpoint'] })}
+          modified={form.endpoint !== activePreset.endpoint}
+        >
+          <option value="chat_completions">Chat Completions</option>
+          <option value="responses">Responses</option>
+        </TagFieldSelect>
+
+        <TagFieldSelect
+          label="output_format"
+          value={form.output_format}
+          disabled={disabled}
+          onChange={(v) => onChange({ ...form, output_format: v as LLMPreset['output_format'] })}
+          modified={form.output_format !== activePreset.output_format}
+        >
+          <option value="json">JSON</option>
+          <option value="text">Text</option>
+        </TagFieldSelect>
+
+        <TagFieldSelect
+          label="assist_tagger"
+          value={form.assist_tagger}
+          disabled={disabled}
+          onChange={(v) => onChange({ ...form, assist_tagger: v })}
+          modified={form.assist_tagger !== activePreset.assist_tagger}
+          className="md:col-span-2"
+          help={
+            <>
+              {assistNeedsTags && (
+                <span className="block text-warn">
+                  {t('llmWorkspace.assistNeedsTags').split('%TAGS%').join('{{tags}}')}
+                </span>
+              )}
+              {t('llmWorkspace.assistTaggerHelp').split('%TAGS%').join('{{tags}}')}
+            </>
+          }
+        >
+          <option value="">Off</option>
+          <option value="wd14">WD14</option>
+          <option value="cltagger">CLTagger</option>
+        </TagFieldSelect>
+
+        <TagFieldNumber label="temperature" value={form.temperature} base={activePreset.temperature} min={0} max={2} step={0.05} disabled={disabled} onChange={(v) => onChange({ ...form, temperature: v })} />
+        <TagFieldNumber label="max_tokens" value={form.max_tokens} base={activePreset.max_tokens} min={64} max={4096} disabled={disabled} onChange={(v) => onChange({ ...form, max_tokens: Math.round(v) })} />
+        <TagFieldNumber label="concurrency" value={form.concurrency} base={activePreset.concurrency} min={1} max={8} disabled={disabled} onChange={(v) => onChange({ ...form, concurrency: Math.round(v) })} />
       </div>
 
-      {assistNeedsTags && (
-        <p className="text-warn text-[11px] leading-snug m-0">
-          {t('llmWorkspace.assistNeedsTags').split('%TAGS%').join('{{tags}}')}
-        </p>
-      )}
-
-      <div className="flex items-center gap-3 flex-wrap">
-        <LLMNumberInput label="temperature" value={form.temperature} base={activePreset.temperature} step={0.05} min={0} max={2} disabled={disabled} onChange={(v) => onChange({ ...form, temperature: v })} />
-        <LLMNumberInput label="max_tokens" value={form.max_tokens} base={activePreset.max_tokens} step={1} min={64} max={4096} disabled={disabled} onChange={(v) => onChange({ ...form, max_tokens: Math.round(v) })} />
-        <LLMNumberInput label="concurrency" value={form.concurrency} base={activePreset.concurrency} step={1} min={1} max={8} disabled={disabled} onChange={(v) => onChange({ ...form, concurrency: Math.round(v) })} />
-        <button type="button" onClick={() => setAdvOpen(!advOpen)} className="btn btn-ghost btn-sm text-xs text-fg-tertiary">
-          {advOpen ? '▾' : '▸'} {t('tag.advanced')}
-        </button>
-      </div>
+      <button type="button" onClick={() => setAdvOpen(!advOpen)} className="btn btn-ghost btn-sm text-xs text-fg-tertiary self-start">
+        {advOpen ? '▾' : '▸'} {t('tag.advanced')}
+      </button>
 
       {advOpen && (
-        <>
-          <label className="grid grid-cols-[140px_1fr] items-start gap-2">
-            <span className="text-fg-tertiary font-mono text-xs pt-1">messages</span>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
+          <TagField label="messages" className="md:col-span-2">
             <div className="flex flex-col gap-1.5">
               {form.endpoint === 'responses' && (
-                <div className="text-[10px] text-warn">{t('tag.responsesWarning')}</div>
+                <div className="text-xs text-warn">{t('tag.responsesWarning')}</div>
               )}
               <LLMMessagesEditor
                 messages={form.messages}
@@ -880,78 +869,106 @@ function LLMTaggerPanel({
                 disabled={disabled}
               />
             </div>
-          </label>
-          <div className="flex items-center gap-3 flex-wrap pt-1">
-            <LLMNumberInput label="timeout" value={form.timeout} base={activePreset.timeout} step={1} min={5} max={600} disabled={disabled} onChange={(v) => onChange({ ...form, timeout: Math.round(v) })} />
-            <LLMNumberInput label="max_retries" value={form.max_retries} base={activePreset.max_retries} step={1} min={1} max={10} disabled={disabled} onChange={(v) => onChange({ ...form, max_retries: Math.round(v) })} />
-            <LLMNumberInput label="requests_per_second" value={form.requests_per_second} base={activePreset.requests_per_second} step={0.1} min={0} max={60} disabled={disabled} onChange={(v) => onChange({ ...form, requests_per_second: v })} />
-            <LLMNumberInput label="max_requests_per_minute" value={form.max_requests_per_minute} base={activePreset.max_requests_per_minute} step={1} min={0} max={3600} disabled={disabled} onChange={(v) => onChange({ ...form, max_requests_per_minute: Math.round(v) })} />
-            <LLMNumberInput label="max_side" value={form.max_side} base={activePreset.max_side} step={1} min={64} max={4096} disabled={disabled} onChange={(v) => onChange({ ...form, max_side: Math.round(v) })} />
-            <LLMNumberInput label="jpeg_quality" value={form.jpeg_quality} base={activePreset.jpeg_quality} step={1} min={1} max={100} disabled={disabled} onChange={(v) => onChange({ ...form, jpeg_quality: Math.round(v) })} />
-            <LLMNumberInput label="max_image_mb" value={form.max_image_mb} base={activePreset.max_image_mb} step={0.1} min={0.1} max={25} disabled={disabled} onChange={(v) => onChange({ ...form, max_image_mb: v })} />
-          </div>
-        </>
+          </TagField>
+          <TagFieldNumber label="timeout" value={form.timeout} base={activePreset.timeout} min={5} max={600} disabled={disabled} onChange={(v) => onChange({ ...form, timeout: Math.round(v) })} />
+          <TagFieldNumber label="max_retries" value={form.max_retries} base={activePreset.max_retries} min={1} max={10} disabled={disabled} onChange={(v) => onChange({ ...form, max_retries: Math.round(v) })} />
+          <TagFieldNumber label="requests_per_second" value={form.requests_per_second} base={activePreset.requests_per_second} min={0} max={60} step={0.1} disabled={disabled} onChange={(v) => onChange({ ...form, requests_per_second: v })} />
+          <TagFieldNumber label="max_requests_per_minute" value={form.max_requests_per_minute} base={activePreset.max_requests_per_minute} min={0} max={3600} disabled={disabled} onChange={(v) => onChange({ ...form, max_requests_per_minute: Math.round(v) })} />
+          <TagFieldNumber label="max_side" value={form.max_side} base={activePreset.max_side} min={64} max={4096} disabled={disabled} onChange={(v) => onChange({ ...form, max_side: Math.round(v) })} />
+          <TagFieldNumber label="jpeg_quality" value={form.jpeg_quality} base={activePreset.jpeg_quality} min={1} max={100} disabled={disabled} onChange={(v) => onChange({ ...form, jpeg_quality: Math.round(v) })} />
+          <TagFieldNumber label="max_image_mb" value={form.max_image_mb} base={activePreset.max_image_mb} min={0.1} max={25} step={0.1} disabled={disabled} onChange={(v) => onChange({ ...form, max_image_mb: v })} />
+        </div>
       )}
     </section>
   )
 }
 
-function LLMNumberInput({ label, value, base, min, max, step, disabled, onChange }: {
-  label: string; value: number; base: number; min: number; max: number; step: number
-  disabled: boolean; onChange: (v: number) => void
+// ---------------------------------------------------------------------------
+// 面板字段块：对齐训练配置页 components/Field.tsx 的视觉（label 上 / 控件全宽
+// 在下 / 说明文字在控件下方），叠加打标页特有的 modified 语义（本次任务覆盖值
+// ≠ 预填值 → 橙色边框 + title 提示原值）。
+// ---------------------------------------------------------------------------
+
+// 与 components/Field.tsx 的 inputStyle 同款（更紧凑；背景用 canvas）。
+const fieldInputStyle: React.CSSProperties = {
+  width: '100%', padding: '5px 10px',
+  background: 'var(--bg-canvas)', border: '1px solid var(--border-default)',
+  borderRadius: 'var(--r-sm)', fontSize: 'var(--t-sm)',
+  color: 'var(--fg-primary)',
+}
+
+function fieldCtlStyle(modified?: boolean): React.CSSProperties {
+  return modified ? { ...fieldInputStyle, borderColor: 'var(--warn)' } : fieldInputStyle
+}
+
+function TagField({ label, help, className = '', children }: {
+  label: string; help?: React.ReactNode; className?: string; children: React.ReactNode
 }) {
   return (
-    <label className="flex items-center gap-1.5">
-      <span className="text-fg-tertiary font-mono text-xs whitespace-nowrap">{label}</span>
-      <input
-        type="number" min={min} max={max} step={step} value={value}
-        onChange={(e) => { const n = Number(e.target.value); if (!Number.isNaN(n)) onChange(Math.max(min, Math.min(max, n))) }}
-        disabled={disabled}
-        className={`input input-mono ${value !== base ? 'border-warn' : ''}`}
-        style={{ width: 88 }}
-      />
-    </label>
+    <div className={`py-1.5 ${className}`}>
+      <div className="text-sm font-medium text-fg-secondary mb-1">{label}</div>
+      {children}
+      {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
+    </div>
   )
 }
 
-function ThresholdInput({ label, value, base, disabled, onChange }: {
-  label: string; value: number; base: number; disabled: boolean; onChange: (v: number) => void
-}) {
-  const { t } = useTranslation()
-  const modified = value !== base
-  return (
-    <label className="flex items-center gap-1.5">
-      <span className="text-fg-tertiary font-mono text-xs">{label}</span>
-      <input
-        type="number" min={0} max={1} step={0.01} value={value}
-        onChange={(e) => { const n = Number(e.target.value); if (!Number.isNaN(n)) onChange(Math.max(0, Math.min(1, n))) }}
-        disabled={disabled}
-        className={`input input-mono ${modified ? 'border-warn' : ''}`}
-        style={{ width: 72 }}
-        title={modified ? `${t('tag.globalSettings')}: ${base}` : undefined}
-      />
-    </label>
-  )
-}
-
-function LabeledInput({ label, value, placeholder, disabled, onChange, modified, className = '' }: {
+function TagFieldInput({ label, value, placeholder, disabled, onChange, modified, help, className }: {
   label: string; value: string; placeholder?: string; disabled: boolean
-  onChange: (v: string) => void; modified?: boolean; className?: string
+  onChange: (v: string) => void; modified?: boolean; help?: React.ReactNode; className?: string
 }) {
   return (
-    <label className={'grid grid-cols-[140px_1fr] items-center gap-2 ' + className}>
-      <span className="text-fg-tertiary font-mono text-xs">{label}</span>
+    <TagField label={label} help={help} className={className}>
       <input
         type="text" value={value} placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
-        className={`input input-mono ${modified ? 'border-warn' : ''}`}
+        className="input input-mono" style={fieldCtlStyle(modified)}
       />
-    </label>
+    </TagField>
   )
 }
 
-function LabeledModelSelect({ label, value, options, disabled, onChange, modified }: {
+function TagFieldNumber({ label, value, base, min, max, step = 1, disabled, onChange, help }: {
+  label: string; value: number; base: number; min: number; max: number; step?: number
+  disabled: boolean; onChange: (v: number) => void; help?: React.ReactNode
+}) {
+  const { t } = useTranslation()
+  const modified = value !== base
+  return (
+    <TagField label={label} help={help}>
+      <input
+        type="number" min={min} max={max} step={step} value={value}
+        onChange={(e) => { const n = Number(e.target.value); if (!Number.isNaN(n)) onChange(Math.max(min, Math.min(max, n))) }}
+        disabled={disabled}
+        className="input input-mono" style={fieldCtlStyle(modified)}
+        title={modified ? `${t('tag.modified')} · ${base}` : undefined}
+      />
+    </TagField>
+  )
+}
+
+function TagFieldSelect({ label, value, disabled, onChange, modified, help, className, title, children }: {
+  label: string; value: string; disabled: boolean
+  onChange: (v: string) => void; modified?: boolean; help?: React.ReactNode
+  className?: string; title?: string; children: React.ReactNode
+}) {
+  return (
+    <TagField label={label} help={help} className={className}>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        className="input input-mono" style={fieldCtlStyle(modified)}
+        title={title}
+      >
+        {children}
+      </select>
+    </TagField>
+  )
+}
+
+function TagFieldModelSelect({ label, value, options, disabled, onChange, modified }: {
   label: string; value: string; options: string[]; disabled: boolean
   onChange: (v: string) => void; modified?: boolean
 }) {
@@ -959,14 +976,13 @@ function LabeledModelSelect({ label, value, options, disabled, onChange, modifie
   const settingsDrawer = useSettingsDrawer()
   const opts = options.includes(value) ? options : [value, ...options]
   return (
-    <label className="grid grid-cols-[140px_1fr] items-center gap-2">
-      <span className="text-fg-tertiary font-mono text-xs">{label}</span>
+    <TagField label={label}>
       <div className="flex items-center gap-1.5 min-w-0">
         <select
           value={value}
           onChange={(e) => onChange(e.target.value)}
           disabled={disabled}
-          className={`input input-mono min-w-0 flex-1 ${modified ? 'border-warn' : ''}`}
+          className="input input-mono min-w-0 flex-1" style={fieldCtlStyle(modified)}
         >
           {opts.map((m) => <option key={m} value={m}>{m}</option>)}
         </select>
@@ -979,6 +995,21 @@ function LabeledModelSelect({ label, value, options, disabled, onChange, modifie
           +
         </button>
       </div>
+    </TagField>
+  )
+}
+
+function TagFieldCheckbox({ label, checked, disabled, onChange }: {
+  label: string; checked: boolean; disabled: boolean; onChange: (v: boolean) => void
+}) {
+  return (
+    <label className={`flex items-center gap-1.5 text-sm text-fg-secondary ${disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
+      <input
+        type="checkbox" checked={checked} disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+        style={{ height: 16, width: 16, borderRadius: 'var(--r-sm)' }}
+      />
+      {label}
     </label>
   )
 }

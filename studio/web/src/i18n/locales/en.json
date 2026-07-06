@@ -2195,6 +2195,7 @@
     "restore": "↻ Restore",
     "advanced": "Advanced",
     "blacklistLabel": "blacklist_tags (comma separated)",
+    "cltaggerExtraTags": "Extra tag categories",
     "blacklistPlaceholder1": "e.g. monochrome, comic",
     "blacklistPlaceholder2": "e.g. low quality, signature",
     "cltaggerLoading": "Loading CLTagger defaults...",

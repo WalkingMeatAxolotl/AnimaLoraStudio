@@ -19,12 +19,14 @@ export function parseTags(s: string): string[] {
  * blur 时文本归整成 `tags.join(', ')`，再进编辑态看到的是规范形式。
  * 给自带外层 label 的场景（Settings 的 SettingsField）直接用这个；要 140px
  * grid label 的用下面的 {@link TagsInput}。 */
-export function TagListInput({ value, onChange, placeholder, disabled, className = '', commitOnBlur = false }: {
+export function TagListInput({ value, onChange, placeholder, disabled, className = '', style, commitOnBlur = false }: {
   value: string[]
   onChange: (v: string[]) => void
   placeholder?: string
   disabled?: boolean
   className?: string
+  /** 内联样式透传（打标页 TagField 块用它对齐训练配置页控件视觉）。 */
+  style?: React.CSSProperties
   /** true：编辑过程只更新本地文本，blur 时才上抛父一次（instant-apply 设置页用，
    *  避免逐字 commit → 逐字 PUT）。默认 false 保持逐字上抛（打标页等本地编辑场景）。 */
   commitOnBlur?: boolean
@@ -97,6 +99,7 @@ export function TagListInput({ value, onChange, placeholder, disabled, className
           }}
           disabled={disabled}
           className={className}
+          style={style}
         />
         <TagSuggestList
           open={suggest.open}
@@ -122,6 +125,7 @@ export function TagListInput({ value, onChange, placeholder, disabled, className
       onClick={() => { if (!disabled) setEditing(true) }}
       onFocus={() => { if (!disabled) setEditing(true) }}
       className={`${className} flex flex-wrap items-center gap-1 min-h-[1.75rem] ${disabled ? '' : 'cursor-text'}`}
+      style={style}
     >
       {value.length === 0
         // nbsp 占位：撑住一行行高，空列表时容器不塌缩成一条线（必须是真实
