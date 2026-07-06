@@ -656,7 +656,13 @@ class Attention(nn.Module):
         v: torch.Tensor,
         attn_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        result = self.attn_op(q, k, v, attn_mask=attn_mask)  # [B, S, H, D]
+        # attn_mask is None 时不传 kwarg：保持默认路径与改动前逐字节等价，且不破坏
+        # transformer_engine 后端（其 DotProductAttention 用 `attention_mask=`，无 `attn_mask=`）。
+        # 打包路径（navit）走 torch 后端，attn_op=torch_attention_op，接受 attn_mask=。
+        if attn_mask is None:
+            result = self.attn_op(q, k, v)  # [B, S, H, D]
+        else:
+            result = self.attn_op(q, k, v, attn_mask=attn_mask)
         return self.output_dropout(self.output_proj(result))
 
     def forward(
