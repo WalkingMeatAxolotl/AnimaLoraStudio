@@ -130,14 +130,7 @@ class TrainingConfig(BaseModel):
     vae_cache_batch_size: int = Field(
         0, ge=0,
         description="VAE latent 缓存编码批次大小；0=跟随训练 batch size，显存不足时设为 1 逐张编码",
-        json_schema_extra=_meta("system", advanced=True),
-    )
-    vae_tiling: Literal["auto", "on", "off"] = Field(
-        "auto",
-        description="VAE 分块 decode：auto=可用显存紧张时自动分块（推荐）；on=始终分块（省显存、慢约 30%）；"
-                    "off=整图，仅真正 OOM 时回退。大显存卡整图 decode 接近占满显存时会触发系统内存回退、"
-                    "单次 decode 从不到 1 秒退化到上百秒，auto 可避免",
-        json_schema_extra=_meta("system", advanced=True),
+        json_schema_extra=_meta("system", show_when="cache_latents==true", advanced=True),
     )
 
     # --------------------------------------------------- NaViT / Patch-n-Pack
@@ -198,6 +191,13 @@ class TrainingConfig(BaseModel):
         0, ge=0,
         description="单次 encode 总像素上限（含翻转份）；0=用内置保守默认 4M。也是分块触发阈值",
         json_schema_extra=_meta("system", show_when="cache_encode_tiled==true", advanced=True),
+    )
+    vae_tiling: Literal["auto", "on", "off"] = Field(
+        "auto",
+        description="VAE 分块 decode：auto=可用显存紧张时自动分块（推荐）；on=始终分块（省显存、慢约 30%）；"
+                    "off=整图，仅真正 OOM 时回退。大显存卡整图 decode 接近占满显存时会触发系统内存回退、"
+                    "单次 decode 从不到 1 秒退化到上百秒，auto 可避免",
+        json_schema_extra=_meta("system", advanced=True),
     )
 
     # ------------------------------------------------------------------- LoRA
