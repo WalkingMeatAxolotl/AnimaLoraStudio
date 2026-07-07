@@ -21,6 +21,7 @@ import logging
 import math
 import random
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import torch
@@ -28,6 +29,120 @@ from torch.utils.data import Dataset
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class NativeFitImagePlan:
+    """NaViT 原生定尺寸的规划结果（``navit_native_resolution``）。
+
+    ``width``/``height`` 是最终喂给 VAE 的像素尺寸（``align`` 的整倍数）。像素路径
+    复用 ``ImageDataset`` 现有的 resize-cover + center-crop（零 padding），因此有效区
+    永远填满整张 latent（navit 缓存路径不携带 mask 的前提成立）。
+    """
+    source_width: int
+    source_height: int
+    width: int
+    height: int
+    token_w: int
+    token_h: int
+    token_count: int
+    was_downscaled: bool
+
+
+def plan_native_fit_image(
+    width: int,
+    height: int,
+    *,
+    max_tokens: int = 0,
+    max_side_tokens: int = 0,
+    align: int = 16,
+    over_budget: str = "downscale",
+) -> NativeFitImagePlan:
+    """规划单张图的原生定尺寸（floor 对齐到 ``align``，可选超预算 downscale）。
+
+    移植自同族早期 fork ``anima-lora-train``（``trainer/data.py::plan_native_fit_image``
+    的 floor 分支 + ``plan_multiscale_copy`` 的等比缩数学；同 GPL-3.0 血缘，见 PR 说明）。
+    与上游早期版不同：本函数**真正实现** downscale（早期版对非 fail 策略是 NotImplementedError）。
+
+    对齐单元 ``align = patch_spatial(2) × vae_downsample(8) = 16px``。
+
+    - 普通情形（原生 token ≤ ``max_tokens`` 且各边 ≤ ``max_side_tokens``）：每边 floor 到
+      ``align`` 整倍数（丢 ≤align-1 px），不缩放、宽高比几乎不变。
+    - 超预算（token 数超 ``max_tokens`` 或单边超 ``max_side_tokens``）：
+        * ``over_budget="downscale"``（默认）：等比缩到同时满足两个上限，再各轴 floor 到
+          ``align``（``floor(a)·floor(b) ≤ a·b`` 保证不超预算）。调用方随后 resize-cover +
+          center-crop 削掉 floor 造成的 ≤align-1 px 溢出 → 精确对齐、零 padding。
+        * ``over_budget="fail"``：直接 ``raise ValueError``（要求调大预算 / 数据集端裁图）。
+
+    ``max_tokens`` / ``max_side_tokens`` 为 0 表示该维不设限。
+    """
+    W, H = int(width), int(height)
+    if W <= 0 or H <= 0:
+        raise ValueError(f"image dimensions must be positive, got {W}x{H}")
+    align = max(1, int(align))
+    max_tokens = max(0, int(max_tokens or 0))
+    max_side = max(0, int(max_side_tokens or 0))
+
+    # 原生 floor 网格（patch-token 单位）
+    gw, gh = W // align, H // align
+    if gw <= 0 or gh <= 0:
+        raise ValueError(
+            f"image {W}x{H} smaller than one align unit ({align}px); cannot form a token"
+        )
+
+    over_side = bool(max_side and (gw > max_side or gh > max_side))
+    over_budget_tokens = bool(max_tokens and gw * gh > max_tokens)
+
+    if not over_side and not over_budget_tokens:
+        return NativeFitImagePlan(
+            source_width=W, source_height=H,
+            width=gw * align, height=gh * align,
+            token_w=gw, token_h=gh, token_count=gw * gh,
+            was_downscaled=False,
+        )
+
+    strategy = (over_budget or "downscale").lower()
+    if strategy == "fail":
+        reasons = []
+        if over_budget_tokens:
+            reasons.append(f"{gw * gh} tokens > navit_token_budget={max_tokens}")
+        if over_side:
+            reasons.append(
+                f"side {max(gw, gh)} tokens > RoPE 单边上限 {max_side}"
+                f"（≈{max_side * align}px）"
+            )
+        raise ValueError(
+            f"[navit-native] 图 {W}x{H} 原生尺寸超限（{'；'.join(reasons)}）。"
+            "调大 navit_token_budget / 提高 max_img_h·max_img_w，或把 "
+            "navit_native_over_budget 设为 downscale（默认，自动等比降采样）。"
+        )
+    if strategy != "downscale":
+        raise ValueError(
+            f"unknown navit_native_over_budget={over_budget!r}; expected downscale or fail"
+        )
+
+    # downscale：等比缩到同时满足单边上限与 token 预算
+    s = 1.0
+    if over_side:
+        s = min(s, max_side / float(max(gw, gh)))
+    if max_tokens and gw * gh > max_tokens:
+        s = min(s, math.sqrt(max_tokens / float(gw * gh)))
+    ngw = max(1, int(gw * s))
+    ngh = max(1, int(gh * s))
+    # floor 后的舍入兜底：单边 / 预算仍可能被 max(1,·) 顶超，压回主轴
+    if max_side:
+        ngw, ngh = min(ngw, max_side), min(ngh, max_side)
+    if max_tokens and ngw * ngh > max_tokens:
+        if ngw >= ngh:
+            ngw = max(1, max_tokens // ngh)
+        else:
+            ngh = max(1, max_tokens // ngw)
+    return NativeFitImagePlan(
+        source_width=W, source_height=H,
+        width=ngw * align, height=ngh * align,
+        token_w=ngw, token_h=ngh, token_count=ngw * ngh,
+        was_downscaled=True,
+    )
 
 
 class BucketManager:
@@ -130,7 +245,10 @@ class ImageDataset(Dataset):
     def __init__(self, data_dir, resolution=1024, bucket_mgr=None,
                  shuffle_caption=False, keep_tokens=0, flip_augment=False,
                  tag_dropout=0.0, prefer_json=True, caption_override=None,
-                 resolutions=None, aspect_ratio_limit=2.0):
+                 resolutions=None, aspect_ratio_limit=2.0,
+                 native_resolution=False, native_token_budget=0,
+                 native_over_budget="downscale", native_max_side_tokens=0,
+                 native_align=16):
         self.data_dir = Path(data_dir)
         self.resolution = resolution
         # 多分辨率：bucket_mgr 是 base 分辨率的 manager（向后兼容，单一 ARB 路径仍走它，
@@ -141,6 +259,20 @@ class ImageDataset(Dataset):
         self.aspect_ratio_limit = aspect_ratio_limit
         self.resolutions = [int(r) for r in resolutions] if resolutions else [resolution]
         self.bucket_mgrs = {}
+        # NaViT 原生定尺寸（navit_native_resolution，opt-in）：开启时单图按原生尺寸
+        # floor 对齐 16px 定尺寸（见 _target_size_for / plan_native_fit_image），
+        # 完全绕过 ARB 桶量化；关闭（默认）时下面这些为惰值、与桶路径逐字节等价。
+        self.native_resolution = bool(native_resolution)
+        self.native_token_budget = int(native_token_budget or 0)
+        self.native_over_budget = str(native_over_budget or "downscale").lower()
+        self.native_max_side_tokens = int(native_max_side_tokens or 0)
+        self.native_align = int(native_align or 16)
+        if self.native_resolution and len(self.resolutions) > 1:
+            logger.warning(
+                "[navit-native] navit_native_resolution 下多分辨率 fan-out 无意义"
+                "（同图各档产同一原生尺寸）：已忽略额外分辨率档 %s，按原生单份处理。",
+                self.resolutions[1:],
+            )
         self.shuffle_caption = shuffle_caption
         self.keep_tokens = keep_tokens
         self.flip_augment = flip_augment
@@ -203,12 +335,13 @@ class ImageDataset(Dataset):
         out = []
         for s in self.samples:
             target_reso = s.get("target_reso")
-            mgr = self._bucket_mgr_for(target_reso)
-            if mgr is None:
+            # 非 native 且该档不分桶（base 方桶）→ None（sampler 退回普通切批），保持旧路径不变
+            if not self.native_resolution and self._bucket_mgr_for(target_reso) is None:
                 out.append(None)
                 continue
             path = str(s["image"])
-            key = (path, target_reso)
+            # native 忽略 target_reso（原生尺寸只取决于源图）；桶路径仍按 target_reso 分键
+            key = (path, None if self.native_resolution else target_reso)
             if key not in by_key:
                 if path not in dims:
                     try:
@@ -217,9 +350,32 @@ class ImageDataset(Dataset):
                     except Exception:
                         dims[path] = None
                 wh = dims[path]
-                by_key[key] = mgr.get_bucket(*wh) if wh else None
+                by_key[key] = self._target_size_for(*wh, target_reso=target_reso) if wh else None
             out.append(by_key[key])
         return out
+
+    def _target_size_for(self, img_w, img_h, target_reso=None):
+        """单张图的目标像素尺寸 ``(tw, th)``（16 整倍数），供定尺寸/缓存校验共用一条口径。
+
+        - ``native_resolution=False``（默认）：走 ARB 桶 ``_bucket_mgr_for(target_reso).get_bucket``；
+          该档不分桶（base 方桶，``bucket_mgr=None``）→ 返回 ``None``（调用方退回方桶语义）。
+          与改动前逐字节等价。
+        - ``native_resolution=True``：走 ``plan_native_fit_image``（原生 floor-16 + 超预算 downscale），
+          完全忽略 ``target_reso`` 与桶。
+        """
+        if self.native_resolution:
+            plan = plan_native_fit_image(
+                img_w, img_h,
+                max_tokens=self.native_token_budget,
+                max_side_tokens=self.native_max_side_tokens,
+                align=self.native_align,
+                over_budget=self.native_over_budget,
+            )
+            return (plan.width, plan.height)
+        mgr = self._bucket_mgr_for(target_reso)
+        if mgr is None:
+            return None
+        return mgr.get_bucket(img_w, img_h)
 
     @staticmethod
     def _parse_folder_meta(name: str) -> tuple[int | None, int, str]:
@@ -480,11 +636,12 @@ class ImageDataset(Dataset):
         if caption is None:
             caption = ""
 
-        # ARB 分桶（按样本 target_reso 选对应 manager；base 档走 self.bucket_mgr）
+        # 目标尺寸：ARB 桶（native 关）或原生 floor-16 定尺寸（native 开）。统一走
+        # _target_size_for；返回 None（base 方桶不分桶档）时退回 target_reso 方桶。
         target_reso = sample.get("target_reso")
-        mgr = self._bucket_mgr_for(target_reso)
-        if mgr:
-            tw, th = mgr.get_bucket(img.width, img.height)
+        size = self._target_size_for(img.width, img.height, target_reso)
+        if size is not None:
+            tw, th = size
         else:
             tw = th = target_reso or self.resolution
 
@@ -729,12 +886,16 @@ class CachedLatentDataset(Dataset):
         try:
             from PIL import Image
             with Image.open(img_path) as img:
-                if hasattr(base, "_bucket_mgr_for"):
+                # 与 ImageDataset.get_with_flip 同一条定尺寸口径（桶 or 原生），保证缓存
+                # 校验尺寸 == 实际 encode 尺寸。native 下取原生 floor-16 尺寸。
+                if hasattr(base, "_target_size_for"):
+                    size = base._target_size_for(img.width, img.height, target_reso)
+                    if size is not None:
+                        return size
+                elif hasattr(base, "_bucket_mgr_for"):
                     mgr = base._bucket_mgr_for(target_reso)
-                else:
-                    mgr = getattr(base, "bucket_mgr", None)
-                if mgr:
-                    return mgr.get_bucket(img.width, img.height)
+                    if mgr:
+                        return mgr.get_bucket(img.width, img.height)
                 resolution = int(target_reso or getattr(base, "resolution"))
                 return (resolution, resolution)
         except Exception:
