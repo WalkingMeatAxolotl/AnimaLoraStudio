@@ -263,6 +263,9 @@ def run(ctx: TrainingContext) -> None:
             sra_align_loss_log = None
             sra_weighted_loss_log = None
             sra_effective_weight_log = None
+            ffl_loss_log = None
+            ffl_weighted_loss_log = None
+            ffl_gate_frac_log = None
             with torch.autocast("cuda", dtype=ctx.dtype):
                 if navit_latents is not None:
                     # ── NaViT / Patch-n-Pack 块对角打包路径 ──
@@ -403,6 +406,34 @@ def run(ctx: TrainingContext) -> None:
                     else:
                         sra_weighted_loss_log = loss.new_tensor(0.0).detach()
 
+                # ① 频域 loss（FFL）：标准路径专属；leap 步无单一 x̂₀，与 SRA 平列跳过。
+                # 对免费的 x̂₀ = noisy − t·pred 与真实 latents 在 latent 空间做 focal
+                # frequency 对齐，直接惩罚高频/难合成频率学不像。默认全 t（ffl_t_threshold
+                # =1.0），可选按低 t 门控。reg 集不参与、尊重 loss_weight 降权（与 SRA 一致）。
+                if ctx.ffl is not None and not use_leap_this_step:
+                    ffl_tau = float(getattr(args, "ffl_t_threshold", 1.0) or 1.0)
+                    if ffl_tau < 1.0:
+                        ffl_sel = t < ffl_tau
+                    else:
+                        ffl_sel = torch.ones_like(t, dtype=torch.bool)
+                    if "is_reg" in batch:
+                        ffl_sel = ffl_sel & (~batch["is_reg"].to(t.device))
+                    ffl_gate_frac_log = float(ffl_sel.float().mean().item())
+                    if bool(ffl_sel.any()):
+                        x_hat0 = (noisy - t_exp * pred)[ffl_sel]        # 带梯度子 batch
+                        x0_ref = latents[ffl_sel].detach()             # 真实 x0（target）
+                        ffl_ps = ctx.ffl.compute(x_hat0, x0_ref)        # per-sample (n,)
+                        if "loss_weight" in batch:                      # 尊重 reg 降权，与 SRA 一致
+                            w_ffl = batch["loss_weight"].to(ctx.device)[ffl_sel].to(ffl_ps.dtype)
+                            ffl_val = (ffl_ps * w_ffl).mean()
+                        else:
+                            ffl_val = ffl_ps.mean()
+                        ffl_weight = float(getattr(args, "ffl_weight", 1.0) or 1.0)
+                        weighted_ffl = ffl_weight * ffl_val
+                        loss = loss + weighted_ffl
+                        ffl_loss_log = ffl_val.detach()
+                        ffl_weighted_loss_log = weighted_ffl.detach()
+
                 # PR-C：adapter hook — 变体可加正则项（OFT orth penalty /
                 # Ortho-Hydra balance loss 等）。LyCORIS 返回 None，noop。
                 reg = ctx.injector.regularization_loss(step_ctx)
@@ -468,6 +499,15 @@ def run(ctx: TrainingContext) -> None:
                     float(sra_weighted_loss_log.item())
                     if sra_weighted_loss_log is not None else None
                 )
+                ffl_loss_val = (
+                    float(ffl_loss_log.item())
+                    if ffl_loss_log is not None else None
+                )
+                ffl_weighted_loss_val = (
+                    float(ffl_weighted_loss_log.item())
+                    if ffl_weighted_loss_log is not None else None
+                )
+                ffl_suffix = f" ffl={ffl_loss_val:.6f}" if ffl_loss_val is not None else ""
                 epoch_loss_sum += loss_val
                 epoch_step_count += 1
                 if args.loss_curve_steps and len(ctx.loss_history) < args.loss_curve_steps:
@@ -490,6 +530,10 @@ def run(ctx: TrainingContext) -> None:
                             monitor_metrics["sra_weighted_loss"] = sra_weighted_loss_val
                         if sra_effective_weight_log is not None:
                             monitor_metrics["sra_effective_weight"] = float(sra_effective_weight_log)
+                        if ffl_loss_val is not None:
+                            monitor_metrics["ffl_loss"] = ffl_loss_val
+                        if ffl_gate_frac_log is not None:
+                            monitor_metrics["ffl_gate_frac"] = float(ffl_gate_frac_log)
                         update_monitor(
                             loss=loss_val, lr=lr, epoch=epoch + 1,
                             total_epochs=int(args.epochs or 0),
@@ -514,6 +558,11 @@ def run(ctx: TrainingContext) -> None:
                     log_payload["train/sra_weighted_loss"] = sra_weighted_loss_val
                 if sra_effective_weight_log is not None:
                     log_payload["train/sra_effective_weight"] = float(sra_effective_weight_log)
+                if ffl_loss_val is not None:
+                    log_payload["train/ffl_loss"] = ffl_loss_val
+                    log_payload["train/ffl_weighted_loss"] = ffl_weighted_loss_val
+                if ffl_gate_frac_log is not None:
+                    log_payload["train/ffl_gate_frac"] = float(ffl_gate_frac_log)
                 if "d" in optimizer_metrics:
                     log_payload["train/optimizer_d"] = float(optimizer_metrics["d"])
                 if "base_lr" in optimizer_metrics:
@@ -549,7 +598,7 @@ def run(ctx: TrainingContext) -> None:
                         if sra_align_loss_val is not None and sra_weighted_loss_val is not None
                         else f" denoise={denoise_loss_val:.6f}"
                     )
-                    print(f"epoch {epoch+1}/{args.epochs} step {ctx.global_step} loss={loss_val:.6f}{sra_suffix} lr={lr:.2e} speed={ctx.speed_ema:.2f} it/s", end="\r", flush=True)
+                    print(f"epoch {epoch+1}/{args.epochs} step {ctx.global_step} loss={loss_val:.6f}{sra_suffix}{ffl_suffix} lr={lr:.2e} speed={ctx.speed_ema:.2f} it/s", end="\r", flush=True)
                 elif args.log_every and ctx.global_step % args.log_every == 0:
                     sra_suffix = (
                         f" denoise={denoise_loss_val:.6f}"
@@ -558,7 +607,7 @@ def run(ctx: TrainingContext) -> None:
                         if sra_align_loss_val is not None and sra_weighted_loss_val is not None
                         else f" denoise={denoise_loss_val:.6f}"
                     )
-                    print(f"epoch={epoch} step={ctx.global_step} loss={loss_val:.6f}{sra_suffix} lr={lr:.2e} speed={steps_per_sec:.2f} it/s")
+                    print(f"epoch={epoch} step={ctx.global_step} loss={loss_val:.6f}{sra_suffix}{ffl_suffix} lr={lr:.2e} speed={steps_per_sec:.2f} it/s")
 
                 # 按 step 采样（轮换提示词）
                 if args.sample_steps > 0 and ctx.global_step % args.sample_steps == 0:
