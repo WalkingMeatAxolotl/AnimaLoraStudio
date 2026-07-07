@@ -189,6 +189,24 @@ class TrainingConfig(BaseModel):
                     "downscale=等比降采样到 fit（默认，永不 OOM/爆 token）；fail=报错要求调大预算或数据集端裁图",
         json_schema_extra=_meta("system", show_when="navit_native_resolution==true", advanced=True),
     )
+    navit_multiscale: bool = Field(
+        False,
+        description="多尺度阶梯：为原生大图追加低 token 档的等比缩小副本参与打包（填满大图包剩余预算 + "
+                    "缓解 train-large/infer-small 尺度偏移）。需 navit_native_resolution",
+        json_schema_extra=_meta("system", show_when="navit_native_resolution==true", advanced=True),
+    )
+    navit_multiscale_token_ladder: str = Field(
+        "",
+        description="多尺度副本的 token 档（逗号分隔，如 \"4096\" 或 \"4096,8192\"）；每档 ≤ navit_token_budget。"
+                    "只降不升采样：原生 token 数 ≤ 某档的图跳过该档",
+        json_schema_extra=_meta("system", show_when="navit_multiscale==true", advanced=True),
+    )
+    navit_multiscale_loss_weight: float = Field(
+        1.0, ge=0.0,
+        description="多尺度副本的 per-image loss 权重（只作用于副本）。1.0=与原生等权（默认，贴合本仓库每图等权）；"
+                    "<1.0=副本降权、让原生尺度主导梯度",
+        json_schema_extra=_meta("system", show_when="navit_multiscale==true", advanced=True),
+    )
     cache_encode_tiled: bool = Field(
         False,
         description="缓存编码分块：超大图按 tile_px 分块 VAE encode + latent 羽化拼接（峰值显存 ∝ 单块像素）",
@@ -1072,6 +1090,16 @@ class TrainingConfig(BaseModel):
             raise ValueError(
                 "navit_native_resolution=true 需要 navit_packing=true"
                 "（原生定尺寸只在 NaViT 块对角打包路径生效）。"
+            )
+        if self.navit_multiscale and not self.navit_native_resolution:
+            raise ValueError(
+                "navit_multiscale=true 需要 navit_native_resolution=true"
+                "（多尺度副本建立在原生定尺寸之上）。"
+            )
+        if self.navit_multiscale and not (self.navit_multiscale_token_ladder or "").strip():
+            raise ValueError(
+                "navit_multiscale=true 需要 navit_multiscale_token_ladder 非空"
+                "（逗号分隔的 token 档，如 \"4096\"）。"
             )
         if not self.navit_packing:
             return self

@@ -145,6 +145,25 @@ def plan_native_fit_image(
     )
 
 
+def plan_multiscale_copy(width, height, target_tokens, *, align=16):
+    """NaViT 多尺度阶梯（`navit_multiscale`）：规划一份 token 数 ≤ `target_tokens` 的**等比缩小副本**。
+
+    副本经 resize-cover + center-crop 到规划尺寸（16px 整倍数、零 padding，有效区填满整张 latent）。
+    **只降不升采样**：源图（按 `align` floor 后）token 数 ≤ 目标档时返回 None（不产出与原生同档 / 更大的副本）。
+
+    复用 `plan_native_fit_image` 的 downscale 数学（`over_budget="downscale"`）；语义与同族 fork
+    `anima-lora-train::plan_multiscale_copy` 一致。
+    """
+    W, H = int(width), int(height)
+    tgt = int(target_tokens)
+    align = max(1, int(align))
+    if W <= 0 or H <= 0 or tgt <= 0:
+        return None
+    if (W // align) * (H // align) <= tgt:
+        return None  # 源已 ≤ 目标档：不上采样、不产同档副本
+    return plan_native_fit_image(W, H, max_tokens=tgt, align=align, over_budget="downscale")
+
+
 class BucketManager:
     """ARB 分桶管理.
 
@@ -248,7 +267,8 @@ class ImageDataset(Dataset):
                  resolutions=None, aspect_ratio_limit=2.0,
                  native_resolution=False, native_token_budget=0,
                  native_over_budget="downscale", native_max_side_tokens=0,
-                 native_align=16):
+                 native_align=16, native_ms_token_ladder=None,
+                 native_ms_loss_weight=1.0):
         self.data_dir = Path(data_dir)
         self.resolution = resolution
         # 多分辨率：bucket_mgr 是 base 分辨率的 manager（向后兼容，单一 ARB 路径仍走它，
@@ -267,6 +287,15 @@ class ImageDataset(Dataset):
         self.native_over_budget = str(native_over_budget or "downscale").lower()
         self.native_max_side_tokens = int(native_max_side_tokens or 0)
         self.native_align = int(native_align or 16)
+        # navit 多尺度阶梯（navit_multiscale）：为原生大图追加低 token 档等比缩小副本参与打包。
+        # 仅在 native_resolution 下生效；空 → 关闭（默认）。native_ms_loss_weight 只作用于副本
+        # 的 per-image loss（1.0=与原生等权，本仓库默认；<1.0=副本降权、原生尺度主导）。
+        self.native_ms_token_ladder = sorted(
+            {int(x) for x in (native_ms_token_ladder or []) if int(x) > 0}
+        )
+        self.native_ms_loss_weight = float(
+            native_ms_loss_weight if native_ms_loss_weight is not None else 1.0
+        )
         if self.native_resolution and len(self.resolutions) > 1:
             logger.warning(
                 "[navit-native] navit_native_resolution 下多分辨率 fan-out 无意义"
@@ -316,6 +345,10 @@ class ImageDataset(Dataset):
         logger.info(f"数据集: {unique_count} 张图 → {len(self.samples)} 样本（含 repeat）(JSON: {json_count}, TXT: {txt_count})")
         self._preflight_json_captions()
         self.bucket_for_index = self._build_bucket_for_index()
+        # navit 多尺度阶梯：在 CachedLatentDataset 物化缓存/token 数之前展开副本，使其与原生
+        # 条目在 samples / bucket_for_index 里同等存在（按索引对齐）。
+        if self.native_resolution and self.native_ms_token_ladder:
+            self._expand_multiscale_samples()
 
     def _build_bucket_for_index(self):
         """预扫每张图尺寸，算出每个样本的桶 (tw, th)，供 BucketBatchSampler 按桶分批。
@@ -354,16 +387,25 @@ class ImageDataset(Dataset):
             out.append(by_key[key])
         return out
 
-    def _target_size_for(self, img_w, img_h, target_reso=None):
+    def _target_size_for(self, img_w, img_h, target_reso=None, ms_tokens_target=0):
         """单张图的目标像素尺寸 ``(tw, th)``（16 整倍数），供定尺寸/缓存校验共用一条口径。
 
+        - ``ms_tokens_target > 0``（navit 多尺度副本）：走 ``plan_multiscale_copy``，等比缩到
+          ≤ 该档 token 数。
+        - ``native_resolution=True``：走 ``plan_native_fit_image``（原生 floor-16 + 超预算 downscale），
+          完全忽略 ``target_reso`` 与桶。
         - ``native_resolution=False``（默认）：走 ARB 桶 ``_bucket_mgr_for(target_reso).get_bucket``；
           该档不分桶（base 方桶，``bucket_mgr=None``）→ 返回 ``None``（调用方退回方桶语义）。
           与改动前逐字节等价。
-        - ``native_resolution=True``：走 ``plan_native_fit_image``（原生 floor-16 + 超预算 downscale），
-          完全忽略 ``target_reso`` 与桶。
         """
         if self.native_resolution:
+            if int(ms_tokens_target or 0) > 0:
+                copy = plan_multiscale_copy(
+                    img_w, img_h, int(ms_tokens_target), align=self.native_align
+                )
+                if copy is not None:
+                    return (copy.width, copy.height)
+                # 源已 ≤ 该档（不该被展开成副本，防御性回退到原生）
             plan = plan_native_fit_image(
                 img_w, img_h,
                 max_tokens=self.native_token_budget,
@@ -376,6 +418,44 @@ class ImageDataset(Dataset):
         if mgr is None:
             return None
         return mgr.get_bucket(img_w, img_h)
+
+    def _expand_multiscale_samples(self):
+        """navit 多尺度阶梯：为每个原生条目追加低 token 档的等比缩小副本（作为正式样本参与打包）。
+
+        确定性展开——每图每档每 epoch 恰见一次（可复现、可归因，非随机填充）。只降不升采样：
+        原生 token 数 ≤ 目标档的图跳过该档。副本 caption 与原生共享（tag caption 无分辨率语义）。
+        副本样本带 ``ms_tokens_target`` 标记：`_target_size_for` 据此定副本尺寸、`_get_npz_path`
+        据此走独立 sidecar（`.ms<T>.npz`）、`CachedLatentDataset.__getitem__` 据此透传 `ms_weight`。
+
+        与 `bucket_for_index` 同步 extend（按索引对齐；原生条目 size 为 (tw, th)）。
+        """
+        from collections import Counter
+        align = self.native_align
+        added_samples, added_sizes = [], []
+        per_target = Counter()
+        for sample, size in zip(list(self.samples), list(self.bucket_for_index)):
+            if size is None or int(sample.get("ms_tokens_target", 0) or 0) > 0:
+                continue
+            tw, th = size
+            native_tokens = (int(tw) // align) * (int(th) // align)
+            for tgt in self.native_ms_token_ladder:
+                copy = plan_multiscale_copy(tw, th, tgt, align=align)
+                if copy is None or copy.token_count >= native_tokens:
+                    continue
+                ms = dict(sample)
+                ms["ms_tokens_target"] = int(tgt)
+                added_samples.append(ms)
+                added_sizes.append((copy.width, copy.height))
+                per_target[int(tgt)] += 1
+        if added_samples:
+            self.samples.extend(added_samples)
+            self.bucket_for_index.extend(added_sizes)
+        logger.info(
+            "[navit-multiscale] token 阶梯 %s：追加 %d 个缩放副本（%s），样本 %d → %d",
+            self.native_ms_token_ladder, len(added_samples),
+            ", ".join(f"≤{t}tok×{n}" for t, n in sorted(per_target.items())) or "无",
+            len(self.samples) - len(added_samples), len(self.samples),
+        )
 
     @staticmethod
     def _parse_folder_meta(name: str) -> tuple[int | None, int, str]:
@@ -639,7 +719,10 @@ class ImageDataset(Dataset):
         # 目标尺寸：ARB 桶（native 关）或原生 floor-16 定尺寸（native 开）。统一走
         # _target_size_for；返回 None（base 方桶不分桶档）时退回 target_reso 方桶。
         target_reso = sample.get("target_reso")
-        size = self._target_size_for(img.width, img.height, target_reso)
+        size = self._target_size_for(
+            img.width, img.height, target_reso,
+            ms_tokens_target=sample.get("ms_tokens_target", 0),
+        )
         if size is not None:
             tw, th = size
         else:
@@ -879,17 +962,20 @@ class CachedLatentDataset(Dataset):
             return self._get_base_image_dataset(dataset.dataset)
         return None
 
-    def _expected_bucket_size(self, img_path, target_reso=None):
+    def _expected_bucket_size(self, img_path, target_reso=None, ms_tokens_target=0):
         base = self.base_image_dataset
         if base is None:
             return None
         try:
             from PIL import Image
             with Image.open(img_path) as img:
-                # 与 ImageDataset.get_with_flip 同一条定尺寸口径（桶 or 原生），保证缓存
-                # 校验尺寸 == 实际 encode 尺寸。native 下取原生 floor-16 尺寸。
+                # 与 ImageDataset.get_with_flip 同一条定尺寸口径（桶 / 原生 / 多尺度副本），保证缓存
+                # 校验尺寸 == 实际 encode 尺寸。native 下取原生 floor-16；ms_tokens_target>0 取副本尺寸。
                 if hasattr(base, "_target_size_for"):
-                    size = base._target_size_for(img.width, img.height, target_reso)
+                    size = base._target_size_for(
+                        img.width, img.height, target_reso,
+                        ms_tokens_target=ms_tokens_target,
+                    )
                     if size is not None:
                         return size
                 elif hasattr(base, "_bucket_mgr_for"):
@@ -901,18 +987,21 @@ class CachedLatentDataset(Dataset):
         except Exception:
             return None
 
-    def _get_npz_path(self, img_path, target_reso=None):
+    def _get_npz_path(self, img_path, target_reso=None, ms_tokens_target=0):
         """图像对应的 npz 缓存路径。
 
         单分辨率图 → ``img.npz``（不动现有缓存）；同图 fan-out 到多分辨率 →
-        ``img.r{reso}.npz``，避免不同分辨率 latent 互相覆盖。
+        ``img.r{reso}.npz``；navit 多尺度副本（``ms_tokens_target>0``）→ ``img.ms{T}.npz``，
+        与原生份（及各变体）互不覆盖。
         """
         img_path = Path(img_path)
+        if int(ms_tokens_target or 0) > 0:
+            return img_path.with_suffix(f".ms{int(ms_tokens_target)}.npz")
         if target_reso is not None and str(img_path) in getattr(self, "_multi_reso", set()):
             return img_path.with_suffix(f".r{int(target_reso)}.npz")
         return img_path.with_suffix(".npz")
 
-    def _is_cache_valid(self, img_path, npz_path, target_reso=None):
+    def _is_cache_valid(self, img_path, npz_path, target_reso=None, ms_tokens_target=0):
         """检查缓存是否有效（图像未修改，且格式兼容当前 flip_augment 设置）。
 
         - 缺 `latent` 键 / 其他模型的不兼容缓存 → 删除重 encode
@@ -934,7 +1023,7 @@ class CachedLatentDataset(Dataset):
                     return False
                 if getattr(self, "flip_augment", False) and "latent_flipped" not in data.files:
                     return False
-                expected_bucket = self._expected_bucket_size(img_path, target_reso)
+                expected_bucket = self._expected_bucket_size(img_path, target_reso, ms_tokens_target)
                 if expected_bucket is not None:
                     if "bucket_w" not in data.files or "bucket_h" not in data.files:
                         return False
@@ -964,12 +1053,13 @@ class CachedLatentDataset(Dataset):
         for i, sample in enumerate(self.samples):
             img_path = sample["image"]
             npz_path = self._get_npz_path(
-                img_path, sample.get("target_reso"))
+                img_path, sample.get("target_reso"), sample.get("ms_tokens_target", 0))
             if npz_path in seen_npz:
                 continue
             seen_npz.add(npz_path)
             unique_total += 1
-            if not self._is_cache_valid(img_path, npz_path, sample.get("target_reso")):
+            if not self._is_cache_valid(img_path, npz_path, sample.get("target_reso"),
+                                        sample.get("ms_tokens_target", 0)):
                 to_encode.append(i)
 
         if to_encode:
@@ -990,7 +1080,8 @@ class CachedLatentDataset(Dataset):
         patch_spatial = 2
         for i in range(len(self.samples)):
             npz_path = self._get_npz_path(
-                self.samples[i]["image"], self.samples[i].get("target_reso"))
+                self.samples[i]["image"], self.samples[i].get("target_reso"),
+                self.samples[i].get("ms_tokens_target", 0))
             if not npz_path.exists():
                 continue
             with self.np.load(npz_path) as data:
@@ -1062,7 +1153,8 @@ class CachedLatentDataset(Dataset):
                         npz_kwargs["latent_flipped"] = lat_f.numpy()
                     _entry_sample = self.samples[entry["index"]]
                     npz_path = self._get_npz_path(
-                        _entry_sample["image"], _entry_sample.get("target_reso"))
+                        _entry_sample["image"], _entry_sample.get("target_reso"),
+                        _entry_sample.get("ms_tokens_target", 0))
                     self.np.savez(
                         npz_path,
                         bucket_w=entry["bucket_w"],
@@ -1087,7 +1179,8 @@ class CachedLatentDataset(Dataset):
 
                 _entry_sample = self.samples[entry["index"]]
                 npz_path = self._get_npz_path(
-                    _entry_sample["image"], _entry_sample.get("target_reso"))
+                    _entry_sample["image"], _entry_sample.get("target_reso"),
+                    _entry_sample.get("ms_tokens_target", 0))
                 self.np.savez(
                     npz_path,
                     bucket_w=entry["bucket_w"],
@@ -1134,7 +1227,8 @@ class CachedLatentDataset(Dataset):
     def __getitem__(self, idx):
         sample = self.samples[idx]
         npz_path = self._get_npz_path(
-            sample["image"], sample.get("target_reso"))
+            sample["image"], sample.get("target_reso"),
+            sample.get("ms_tokens_target", 0))
         data = self.np.load(npz_path)
         # flip_augment=True 且 npz 有 latent_flipped 时 50% 概率取镜像版本，
         # 跟非 cache 路径 ImageDataset.__getitem__ 的 flip 概率一致。
@@ -1166,13 +1260,21 @@ class CachedLatentDataset(Dataset):
         
         if caption is None:
             caption = ""
-        
-        return {
+
+        result = {
             "latent": latent,
             "caption": caption,
             # navit collate 需要逐图 image 路径
             "image": str(sample["image"]),
         }
+        # navit 多尺度副本降权：透传 ms_weight（!=1.0 才带，保持等权时行为中立）。
+        # collate_fn_navit_pack 会把它折进 per-image 权重（与正则集 loss_weight 正交相乘）。
+        ms_tgt = int(sample.get("ms_tokens_target", 0) or 0)
+        if ms_tgt > 0:
+            ms_w = float(getattr(base, "native_ms_loss_weight", 1.0) or 1.0)
+            if ms_w != 1.0:
+                result["ms_weight"] = ms_w
+        return result
 
 
 def collate_fn(batch):
@@ -1447,11 +1549,15 @@ def collate_fn_navit_pack(batch):
         "captions": captions,
         "images": images,
     }
-    # 正则集降权：与 collate_fn_cached 对齐——透传 loss_weight / is_reg 供训练循环
-    # 在 per-image loss 上应用（navit 路径同样尊重 batch 的 loss_weight）。
-    if "loss_weight" in batch[0]:
-        result["loss_weight"] = torch.tensor(
-            [b["loss_weight"] for b in batch], dtype=torch.float32
+    # per-image 权重：正则集 loss_weight（reg 降权）× 多尺度副本 ms_weight（正交相乘）。
+    # 任一非平凡才发 loss_weight/is_reg —— 无 reg 且无 multiscale 降权时与改动前逐字节等价。
+    has_reg = "loss_weight" in batch[0]
+    weights = [
+        float(b.get("loss_weight", 1.0)) * float(b.get("ms_weight", 1.0)) for b in batch
+    ]
+    if has_reg or any(w != 1.0 for w in weights):
+        result["loss_weight"] = torch.tensor(weights, dtype=torch.float32)
+        result["is_reg"] = torch.tensor(
+            [bool(b.get("is_reg", False)) for b in batch], dtype=torch.bool
         )
-        result["is_reg"] = torch.tensor([b["is_reg"] for b in batch], dtype=torch.bool)
     return result

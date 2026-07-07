@@ -54,6 +54,25 @@ def _rope_max_side_tokens(ctx) -> int:
         return 0
 
 
+def _parse_token_ladder(value) -> list[int]:
+    """把 navit_multiscale_token_ladder（逗号分隔字符串 / 列表 / 标量）解析成正整数 list。"""
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        items = value
+    else:
+        items = str(value).replace("，", ",").split(",")
+    out = []
+    for it in items:
+        try:
+            n = int(str(it).strip())
+        except (TypeError, ValueError):
+            continue
+        if n > 0:
+            out.append(n)
+    return sorted(set(out))
+
+
 def _native_dataset_kwargs(args, ctx) -> dict:
     """navit_native_resolution 开启时给 ImageDataset 的原生定尺寸参数；关闭 → 空 dict（行为中立）。"""
     navit_packing = bool(getattr(args, "navit_packing", False))
@@ -71,6 +90,15 @@ def _native_dataset_kwargs(args, ctx) -> dict:
         kwargs["native_over_budget"], kwargs["native_token_budget"],
         kwargs["native_max_side_tokens"] or "不限",
     )
+    # navit 多尺度阶梯（navit_multiscale）：为原生大图追加低 token 档副本参与打包。
+    if bool(getattr(args, "navit_multiscale", False)):
+        ladder = _parse_token_ladder(getattr(args, "navit_multiscale_token_ladder", ""))
+        kwargs["native_ms_token_ladder"] = ladder
+        kwargs["native_ms_loss_weight"] = float(getattr(args, "navit_multiscale_loss_weight", 1.0) or 1.0)
+        logger.info(
+            "[navit-multiscale] 多尺度阶梯已启用：token 档=%s，副本 loss 权重=%.3g（1.0=等权）。",
+            ladder or "（空，无副本）", kwargs["native_ms_loss_weight"],
+        )
     return kwargs
 
 

@@ -54,7 +54,27 @@ navit_native_over_budget: downscale # 超大图策略：downscale（默认）/ f
 
 **RoPE 单边上限**：单边 token 数 ≤ 模型 `max_img_h/max_img_w // patch_spatial`（默认 1024//2=512 token
 ≈ 8192px/边）；`_packed_rope_from_grid` 前向也有 fail-fast 兜底。原生大图缓存 VAE 峰值显存见
-下方 `cache_encode_tiled`。多尺度阶梯（multiscale）暂未实现，见 `docs/todo/navit-native-resolution.md`。
+下方 `cache_encode_tiled`。
+
+### 多尺度阶梯（`navit_multiscale`，opt-in，需 `navit_native_resolution`）
+
+```yaml
+navit_multiscale: true                 # 默认 false；需 navit_native_resolution
+navit_multiscale_token_ladder: "4096"  # 副本 token 档（逗号分隔，如 "4096" 或 "4096,8192"）；每档 ≤ token_budget
+navit_multiscale_loss_weight: 1.0       # 副本 per-image loss 权重；1.0=与原生等权（默认）；<1.0=副本降权
+```
+
+**解决什么问题**：原生大图相对预算很大时每包只装得下一张、尾部浪费预算；且 LoRA 只见过原生尺度统计
+（train-large / infer-small 尺度偏移）。多尺度对原生 token 数超档的每张图，缓存阶段**额外编码一份等比缩小副本**
+（floor 16px + resize-cover + center-crop → 零 padding），作为正式样本参与打包（`navit_pack_strategy: ffd`
+会自然装出"1 大图 + N 小副本"的高填充包）。
+
+**确定性展开**：每图每档每 epoch 恰见一次（可复现、可归因，非随机填充）。**只降不升**：原生 token 数 ≤ 某档的图跳过该档。
+副本 caption 与原生共享。副本 npz 是独立 sidecar（`<stem>.ms<T>.npz`），开关 multiscale 不使原生缓存失效。
+
+**loss 权重**：本仓库 navit 是**每图等权**（`per_image.mean()`）。`navit_multiscale_loss_weight=1.0`（默认）保持等权；
+设 <1.0 只给副本降权，让原生尺度主导梯度（例：1 大图 + 4 副本时原生只占 1/5 梯度权重，可据此调）。缓存体积
+×(1+命中档数)（flip 再 ×2）。
 
 ### 缓存分块 encode（`cache_encode_tiled`，opt-in）
 
@@ -120,6 +140,8 @@ detail_inv_t，按 per-image t 算权重）、正则集降权（`loss_weight`，
 - `test_navit_per_image_weights`：per-image 权重（正则集 loss_weight × loss_weighting）按权重缩放 loss。
 - `test_navit_native_resolution`：原生 floor-16 定尺寸 / 超预算 downscale / RoPE 单边封顶 /
   **接线测试**（`ImageDataset(native_resolution=True)` 真的走原生定尺寸，与桶路径尺寸不同）。
+- `test_navit_multiscale`：`plan_multiscale_copy` 只降不升 / 副本 ≤ 档 / **展开接线**（大图真展成副本样本）/
+  collate 折 `ms_weight` 进 per-image 权重（× 正则集）/ config 校验。
 
 **尚未本地验证（云端 smoke 必做）**：训练循环端到端接线、真模型（head_dim 128）首跑、
 与 LoRA/LoKr 注入的实跑交互。
