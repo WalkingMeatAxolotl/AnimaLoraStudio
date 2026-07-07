@@ -23,14 +23,24 @@ def get_proxy_dict() -> Optional[Dict[str, str]]:
             return None
 
         proxies: Dict[str, str] = {}
-        if cfg.http_proxy and cfg.http_proxy.startswith("socks5://"):
-            proxies["http"] = cfg.http_proxy
-            proxies["https"] = cfg.http_proxy
-        else:
-            if cfg.http_proxy:
-                proxies["http"] = cfg.http_proxy
-            if cfg.https_proxy:
-                proxies["https"] = cfg.https_proxy
+        http_p = (cfg.http_proxy or "").strip()
+        https_p = (cfg.https_proxy or "").strip()
+        # 任一字段留空 → 回退到另一个。本地代理（clash / v2ray / socks5 …）通常
+        # 单个端口同时转发 http 与 https 目标流量，用户往往只填一个字段。这也兑现
+        # 设置页 tips3「HTTPS 留空回退用 HTTP 代理」的承诺。
+        #
+        # 旧逻辑只在 `http_proxy` 显式以 socks5:// 开头时才镜像到 https；明文 HTTP
+        # 代理只填 http_proxy 时 proxies["https"] 不设 → 所有 booru（全 https）请求
+        # 直连 → 超时。这里对所有 scheme 统一回退，socks5 特例被此逻辑吸收；两字段
+        # 都显式填写时各自尊重，不再互相覆盖。
+        if http_p and not https_p:
+            https_p = http_p
+        elif https_p and not http_p:
+            http_p = https_p
+        if http_p:
+            proxies["http"] = http_p
+        if https_p:
+            proxies["https"] = https_p
 
         logger.info(f"Using proxies: {proxies}")
         return proxies if proxies else None
