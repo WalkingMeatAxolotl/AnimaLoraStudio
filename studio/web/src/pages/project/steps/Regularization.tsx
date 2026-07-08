@@ -496,7 +496,7 @@ export default function RegularizationPage() {
 
           {/* 左栏：来源切换 + AI / Booru 表单 */}
           <div className="flex flex-col min-h-0 min-w-0 overflow-y-auto">
-            <div className="py-2">
+            <div>
               <SourceSegmented
                 source={source}
                 onChange={setSource}

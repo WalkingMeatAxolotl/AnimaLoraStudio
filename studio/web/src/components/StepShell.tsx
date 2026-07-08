@@ -28,8 +28,8 @@ export default function StepShell({ title, subtitle, actions, topRight, children
       />
       {belowHeader}
       {/* flex column container: overflow:hidden stops page scroll; children use flex:1 to fill。
-          有 belowHeader（自带 border-b 分隔）时内容用 pt-4 贴着，和项目页一致。 */}
-      <div className={`flex-1 min-h-0 flex flex-col overflow-hidden ${belowHeader ? 'px-6 pb-6 pt-4' : 'p-6'}`}>
+          内容区四周统一 p-6（含 belowHeader 分隔线下方也对称留白，不再顶部特例 pt-4）。 */}
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden p-6">
         {children}
       </div>
       {/* 页面级 footer 抽屉：全宽贴底，展开时 overlay 在内容上方（issue #251） */}
