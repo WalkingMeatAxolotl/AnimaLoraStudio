@@ -2451,7 +2451,7 @@
     "autoTagKindTitle": "打标使用的 tagger（WD14 本地 / CLTagger 本地）",
     "autoDedupLabel": "拉取后算法去重",
     "autoDedupTitle": "build 后扫重复 → 每组留 1 张 → 不够则增量补足；最多 3 轮。在分辨率聚类前跑。",
-    "modeLabel": "模式",
+    "modeLabel": "生成范围",
     "modeIncremental": "增量",
     "modeFull": "全量",
     "modeTitle": "增量：沿用已有图，只补缺 + 排除已删；全量：清空 reg/ 从零开始（也清 .deleted_ids.json）。",

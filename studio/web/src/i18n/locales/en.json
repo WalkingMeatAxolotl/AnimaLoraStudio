@@ -2451,7 +2451,7 @@
     "autoTagKindTitle": "Tagger to use (WD14 local / CLTagger local)",
     "autoDedupLabel": "Algorithmic dedup after fetch",
     "autoDedupTitle": "After build: scan duplicates → keep 1 per group → incremental top-up if short. Up to 3 rounds. Runs before resolution clustering.",
-    "modeLabel": "Mode",
+    "modeLabel": "Range",
     "modeIncremental": "Incremental",
     "modeFull": "Full",
     "modeTitle": "Incremental: keep existing images, top up the gap + exclude deleted. Full: wipe reg/ (including .deleted_ids.json).",

@@ -14,6 +14,7 @@ import {
   type Version,
 } from '../../../api/client'
 import BaseModelSelect from '../../../components/BaseModelSelect'
+import { InfoButton } from '../../../components/InfoButton'
 import ImageGrid, { applySelection } from '../../../components/ImageGrid'
 import ImagePreviewModal from '../../../components/ImagePreviewModal'
 import StepShell from '../../../components/StepShell'
@@ -886,21 +887,26 @@ const fieldInputStyle: React.CSSProperties = {
   color: 'var(--fg-primary)',
 }
 
-// 单字段封装：对齐训练配置页 Field 语言 — label 在上、控件在下、
-// 说明文字（hint / locked）在控件下方。
+// 单字段封装：对齐训练配置页 / 打标页 Field 语言 — 静态说明放 label 旁 ⓘ tooltip
+// （helpTooltip，不占控件下方空间）；控件下方只留必须常驻的动态提示（hint 如锁定
+// 警示 / locked）。
 function Field({
-  label, hint, locked, children,
+  label, helpTooltip, hint, locked, children,
 }: {
   label: React.ReactNode
+  /** 静态说明 → label 旁 ⓘ 点开弹层（对齐打标页 TagField.helpTooltip）。 */
+  helpTooltip?: React.ReactNode
+  /** 控件下方常驻：留给动态状态 / 锁定警示等必须一直可见的信息。 */
   hint?: React.ReactNode
   locked?: React.ReactNode
   children: React.ReactNode
 }) {
   return (
     <div className="py-1.5">
-      <label className="block text-sm font-medium text-fg-secondary mb-1">
-        {label}
-      </label>
+      <div className="flex items-center gap-2 text-sm font-medium text-fg-secondary mb-1">
+        <span>{label}</span>
+        {helpTooltip && <InfoButton>{helpTooltip}</InfoButton>}
+      </div>
       {children}
       {hint && <div className="text-xs text-fg-tertiary mt-1">{hint}</div>}
       {locked && (
@@ -945,7 +951,7 @@ function AiForm({
       <GrpCard title={t('reg.grpRegSettings')}>
         <Field
           label={t('reg.modeLabel')}
-          hint={t('reg.modeHintAi')}
+          helpTooltip={t('reg.modeHintAi')}
         >
           <select
             className="select input"
@@ -1016,7 +1022,7 @@ function AiForm({
           </Field>
           <Field
             label={t('reg.seedLabel')}
-            hint={t('reg.seedHintRandom')}
+            helpTooltip={t('reg.seedHintRandom')}
           >
             <input
               type="number"
@@ -1030,7 +1036,7 @@ function AiForm({
         </div>
         <Field
           label={t('reg.baseModelLabel')}
-          hint={t('reg.baseModelHint')}
+          helpTooltip={t('reg.baseModelHint')}
         >
           <BaseModelSelect
             value={baseModel}
@@ -1125,7 +1131,7 @@ function BooruForm({
         <div className="grid grid-cols-2 gap-3.5">
           <Field
             label={t('reg.targetCount')}
-            hint={t('reg.targetCountHint')}
+            helpTooltip={t('reg.targetCountHint')}
             locked={mirror ? t('reg.targetMirrorLocked', { n: trainImageCount }) : undefined}
           >
             <input
@@ -1141,7 +1147,7 @@ function BooruForm({
           </Field>
           <Field
             label={t('reg.modeLabel')}
-            hint={t('reg.modeHintBooru')}
+            helpTooltip={t('reg.modeHintBooru')}
           >
             <select
               className="select input"
@@ -1221,29 +1227,30 @@ function UnitInput({
   )
 }
 
-// checkbox 块：对齐训练配置页 bool 字段（checkbox 左，label 主色，说明换行在下）。
+// checkbox 块：checkbox 左 + label，说明放 label 旁 ⓘ tooltip（helpTooltip）。
+// ⓘ 放在 <label> 之外（同排 sibling），点它只开弹层、不会误触发勾选。
 function CheckRow({
-  checked, onChange, label, sub,
+  checked, onChange, label, helpTooltip,
 }: {
   checked: boolean
   onChange: (v: boolean) => void
   label: string
-  sub?: string
+  helpTooltip?: React.ReactNode
 }) {
   return (
-    <label className="flex items-start gap-3 py-1.5 cursor-pointer select-none">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        className="accent-accent cursor-pointer"
-        style={{ marginTop: 2, height: 16, width: 16, borderRadius: 'var(--r-sm)' }}
-      />
-      <span className="flex-1">
-        <span className="block text-sm text-fg-primary">{label}</span>
-        {sub && <span className="block text-xs text-fg-tertiary mt-0.5">{sub}</span>}
-      </span>
-    </label>
+    <div className="flex items-center gap-2 py-1.5">
+      <label className="flex items-center gap-3 cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => onChange(e.target.checked)}
+          className="accent-accent cursor-pointer"
+          style={{ height: 16, width: 16, borderRadius: 'var(--r-sm)' }}
+        />
+        <span className="text-sm text-fg-primary">{label}</span>
+      </label>
+      {helpTooltip && <InfoButton>{helpTooltip}</InfoButton>}
+    </div>
   )
 }
 
@@ -1416,15 +1423,15 @@ function AdvancedFields({
   return (
     <>
       {/* 长宽比过滤：「启用」勾选与标题合并成单个「长宽比过滤」CheckRow */}
-      <div className="py-1.5">
+      <div>
         <CheckRow
           checked={value.aspect_ratio_filter_enabled}
           onChange={(v) => set('aspect_ratio_filter_enabled', v)}
           label={t('reg.aspectFilter')}
-          sub={t('reg.aspectFilterHint')}
+          helpTooltip={t('reg.aspectFilterHint')}
         />
         {value.aspect_ratio_filter_enabled && (
-          <div className="grid grid-cols-2 gap-3.5 mt-2">
+          <div className="grid grid-cols-2 gap-3.5 mt-1 mb-1.5">
             <input
               type="number" className="input font-mono"
               style={fieldInputStyle}
@@ -1476,13 +1483,13 @@ function AdvancedFields({
         checked={value.skip_similar}
         onChange={(v) => set('skip_similar', v)}
         label={t('reg.skipSimilarLabel')}
-        sub={t('reg.skipSimilarTitle')}
+        helpTooltip={t('reg.skipSimilarTitle')}
       />
       <CheckRow
         checked={autoDedup}
         onChange={onAutoDedupChange}
         label={t('reg.autoDedupLabel')}
-        sub={t('reg.autoDedupSub')}
+        helpTooltip={t('reg.autoDedupSub')}
       />
     </>
   )
