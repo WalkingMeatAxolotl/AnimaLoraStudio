@@ -9,6 +9,7 @@ import {
   type LLMMessage,
   type LLMPreset,
   type LLMTaggerConfig,
+  type ModelsCatalog,
   type ProjectDetail,
   type TaggerName,
   type TaggerStatus,
@@ -20,6 +21,8 @@ import LLMMessagesEditor from '../../../components/LLMMessagesEditor'
 import { TagListInput } from '../../../components/TagsInput'
 import StepShell from '../../../components/StepShell'
 import { useToast } from '../../../components/Toast'
+import { CLTaggerModelCard, SourceSelect, WD14ModelCard } from '../../tools/settings/modelCards'
+import { useSettingsData } from '../../../lib/SettingsData'
 import { useSettingsDrawer } from '../../../lib/SettingsDrawer'
 import { useEventStream } from '../../../lib/useEventStream'
 import { useLatestJobReplay } from '../../../lib/useLatestJobReplay'
@@ -129,6 +132,10 @@ export default function TaggingPage() {
   const { project, activeVersion, reload } = useOutletContext<Ctx>()
   const { toast } = useToast()
   const settingsDrawer = useSettingsDrawer()
+  const {
+    catalog, downloadBusy, startDownload, setDownloadSource,
+    secrets, commitSecrets, reloadCatalog,
+  } = useSettingsData()
 
   const [tagger, setTagger] = useState<TaggerName>('wd14')
   const [taggerStatus, setTaggerStatus] = useState<TaggerStatus | null>(null)
@@ -148,15 +155,6 @@ export default function TaggingPage() {
   const [cltaggerForm, setCltaggerForm] = useState<CLTaggerForm | null>(null)
   const [llmDefaults, setLlmDefaults] = useState<LLMTaggerConfig | null>(null)
   const [llmForm, setLlmForm] = useState<LLMTaggerForm | null>(null)
-  // CLTagger 变体列表（model dropdown 选项）；拉不到 → dropdown 退化为只显示当前值。
-  const [clVariants, setClVariants] = useState<CLTaggerVariantInfo[]>([])
-
-  useEffect(() => {
-    void api
-      .getModelsCatalog()
-      .then((c) => setClVariants(c.cltagger.variants))
-      .catch(() => {})
-  }, [])
 
   const vid = activeVersion?.id ?? null
 
@@ -235,6 +233,13 @@ export default function TaggingPage() {
   }
 
   const isLive = job?.status === 'running' || job?.status === 'pending'
+
+  // 各打标器的简介：挪进「打标器」下拉旁的问号 tooltip（不再占右栏一整块）。
+  const taggerDesc =
+    tagger === 'wd14' ? t('tag.wd14Desc')
+      : tagger === 'cltagger' ? t('tag.cltaggerDesc')
+        : tagger === 'llm' ? t('tag.llmDesc')
+          : ''
 
   const buildWd14Overrides = (): Record<string, unknown> | undefined => {
     if (!wd14Form || !wd14Defaults) return undefined
@@ -375,6 +380,7 @@ export default function TaggingPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
               <TagField
                 label={t('tag.fieldTagger')}
+                helpTooltip={taggerDesc}
                 help={
                   <span className="inline-flex items-center gap-2 flex-wrap">
                     <span
@@ -480,7 +486,7 @@ export default function TaggingPage() {
               defaults={cltaggerDefaults}
               onChange={setCltaggerForm}
               disabled={isLive}
-              variants={clVariants}
+              variants={catalog?.cltagger.variants ?? []}
             />
           )}
 
@@ -495,12 +501,32 @@ export default function TaggingPage() {
 
         </div>
 
-        {/* 右栏：预览面板 */}
-        <TagPreviewPanel
+        {/* 右栏：模型面板（本地 tagger 内嵌下载中心 / LLM 连接状态） */}
+        <TagModelPanel
           tagger={tagger}
           taggerStatus={taggerStatus}
-          isLive={isLive}
           taggerOk={taggerStatus?.ok ?? false}
+          isLive={isLive}
+          catalog={catalog}
+          downloadBusy={downloadBusy}
+          startDownload={startDownload}
+          wd14Form={wd14Form}
+          setWd14Form={setWd14Form}
+          wd14Candidates={secrets?.wd14.model_ids ?? wd14Defaults?.model_ids ?? []}
+          onWd14CandidatesChange={(next) => {
+            commitSecrets({ wd14: { model_ids: next } })
+            void reloadCatalog()
+          }}
+          cltaggerForm={cltaggerForm}
+          setCltaggerForm={setCltaggerForm}
+          sourceOptions={
+            tagger === 'wd14'
+              ? catalog?.download_source_options?.wd14
+              : tagger === 'cltagger'
+                ? catalog?.download_source_options?.cltagger
+                : undefined
+          }
+          onSetDownloadSource={(s) => void setDownloadSource(tagger, s)}
         />
       </div>
     </div>
@@ -1050,53 +1076,100 @@ function PanelDot() {
 }
 
 // ---------------------------------------------------------------------------
-// 右侧预览面板
+// 右侧模型面板
+// 本地 tagger（wd14 / cltagger）：内嵌设置页的下载中心卡片——列出该类型所有
+// 模型 + 下载状态，「选用」只改本次打标的 override（不动全局默认），下载 / 加
+// 候选是全局副作用。tagger 就绪状态在左栏字段旁已显示，这里不再重复。
+// LLM 无本地模型，改显示 base_url / model 连接就绪状态。
 // ---------------------------------------------------------------------------
 
-function TagPreviewPanel({
-  tagger, taggerStatus, isLive, taggerOk,
+function TagModelPanel({
+  tagger, taggerStatus, taggerOk, isLive,
+  catalog, downloadBusy, startDownload,
+  wd14Form, setWd14Form, wd14Candidates, onWd14CandidatesChange,
+  cltaggerForm, setCltaggerForm,
+  sourceOptions, onSetDownloadSource,
 }: {
   tagger: string
   taggerStatus: { ok: boolean; msg: string } | null
-  isLive: boolean
   taggerOk: boolean
+  isLive: boolean
+  catalog: ModelsCatalog | null
+  downloadBusy: Set<string>
+  startDownload: (model_id: string, variant?: string) => Promise<void>
+  wd14Form: Wd14Form | null
+  setWd14Form: (f: Wd14Form) => void
+  wd14Candidates: string[]
+  onWd14CandidatesChange: (next: string[]) => void
+  cltaggerForm: CLTaggerForm | null
+  setCltaggerForm: (f: CLTaggerForm) => void
+  sourceOptions?: { current: string; available: string[] }
+  onSetDownloadSource: (source: string) => void
 }) {
   const { t } = useTranslation()
-
-  const taggerDesc = tagger === 'wd14'
-    ? t('tag.wd14Desc')
-    : tagger === 'cltagger'
-      ? t('tag.cltaggerDesc')
-      : tagger === 'llm'
-        ? t('tag.llmDesc')
-        : tagger
+  // 下载源交给 SourceSelect 自己判：多源可选，单源（如 CLTagger）自动 disable +
+  // 显示「固定单源」说明，与全局设置页一致。
 
   return (
-    <div className="flex flex-col gap-3 min-w-0">
-      <div className="rounded-md border border-subtle bg-surface px-3 py-2.5">
-        <div className="flex items-center gap-1.5 mb-2">
-          <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${taggerOk ? 'bg-ok' : 'bg-err'}`} />
-          <span className="caption">{t('tag.statusTitle')}</span>
-        </div>
-        <div className="text-xs text-fg-secondary">
-          <div className={`font-mono font-medium ${taggerOk ? 'text-ok' : 'text-err'}`}>
-            {tagger} {taggerStatus
-              ? (taggerOk ? t('tag.statusReady') : t('tag.statusUnavail'))
-              : t('tag.statusChecking')}
-          </div>
-          {!taggerOk && taggerStatus && (
-            <div className="mt-1 text-fg-tertiary break-all">{taggerStatus.msg}</div>
-          )}
-        </div>
-      </div>
+    <div className="flex flex-col gap-3 min-w-0 overflow-y-auto">
+      {tagger === 'wd14' && wd14Form && (
+        <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 flex flex-col gap-3 shrink-0">
+          <SourceSelect opt={sourceOptions} onChange={onSetDownloadSource} />
+          <WD14ModelCard
+            catalog={catalog}
+            busy={downloadBusy}
+            start={startDownload}
+            currentModelId={wd14Form.model_id}
+            onSelectModelId={(id) => setWd14Form({ ...wd14Form, model_id: id })}
+            candidates={wd14Candidates}
+            onCandidatesChange={onWd14CandidatesChange}
+            t={t}
+          />
+        </section>
+      )}
 
-      <div className="rounded-md border border-subtle bg-surface px-3 py-2.5">
-        <div className="flex items-center gap-1.5 mb-2">
-          <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
-          <span className="caption">{t('tag.descTitle')}</span>
+      {tagger === 'cltagger' && cltaggerForm && (
+        <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 flex flex-col gap-3 shrink-0">
+          <SourceSelect opt={sourceOptions} onChange={onSetDownloadSource} />
+          <CLTaggerModelCard
+            catalog={catalog}
+            busy={downloadBusy}
+            start={startDownload}
+            currentModelPath={cltaggerForm.model_path}
+            currentTagMappingPath={cltaggerForm.tag_mapping_path}
+            modelId={cltaggerForm.model_id}
+            onSelectVariant={(v) =>
+              setCltaggerForm({
+                ...cltaggerForm,
+                model_id: v.model_id,
+                model_path: v.model_path,
+                tag_mapping_path: v.tag_mapping_path,
+              })
+            }
+            onModelIdChange={(id) => setCltaggerForm({ ...cltaggerForm, model_id: id })}
+            t={t}
+          />
+        </section>
+      )}
+
+      {tagger === 'llm' && (
+        <div className="rounded-md border border-subtle bg-surface px-3 py-2.5">
+          <div className="flex items-center gap-1.5 mb-2">
+            <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${taggerOk ? 'bg-ok' : 'bg-err'}`} />
+            <span className="caption">{t('tag.statusTitle')}</span>
+          </div>
+          <div className="text-xs text-fg-secondary">
+            <div className={`font-mono font-medium ${taggerOk ? 'text-ok' : 'text-err'}`}>
+              {tagger} {taggerStatus
+                ? (taggerOk ? t('tag.statusReady') : t('tag.statusUnavail'))
+                : t('tag.statusChecking')}
+            </div>
+            {!taggerOk && taggerStatus && (
+              <div className="mt-1 text-fg-tertiary break-all">{taggerStatus.msg}</div>
+            )}
+          </div>
         </div>
-        <div className="text-xs text-fg-secondary leading-relaxed">{taggerDesc}</div>
-      </div>
+      )}
 
       {isLive && (
         <div className="rounded-md border border-subtle bg-surface px-3 py-2.5 text-center">
