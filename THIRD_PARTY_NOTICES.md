@@ -51,6 +51,11 @@
     `runtime/anima_daemon.py`、`runtime/training/sample_runner.py`、
     `studio/api/routers/generate.py` — 将测试出图与训练 sample 接到 Comfy-style
     parity runtime 的本项目 glue/config 代码
+  - `runtime/anima_daemon.py` — 中间步预览的 `_WAN21_LATENT_RGB_FACTORS` /
+    `_WAN21_LATENT_RGB_BIAS` 常量取自 ComfyUI `comfy/latent_formats.py` 的 `Wan21`
+    （Qwen-Image VAE 复用 Wan2.1 latent 空间：`comfy/supported_models.py`
+    `QwenImage.latent_format = Wan21`）；`_decode_latent2rgb_preview` 的投影 + 范围
+    映射对齐 ComfyUI `latent_preview.py` `Latent2RGBPreviewer`
 
 > 由于包含/派生自 GPL-3.0 代码，本项目整体以 GPL-3.0 发布（见 `LICENSE`）。
 

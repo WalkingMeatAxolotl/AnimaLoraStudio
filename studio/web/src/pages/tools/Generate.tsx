@@ -1100,11 +1100,14 @@ export default function GeneratePage() {
               ) : samples.length === 0 && previewStep ? (
                 <div className="flex-1 min-h-0 flex flex-col items-center gap-2">
                   <div className="flex-1 min-h-0 w-full flex items-center justify-center">
+                    {/* 中间步预览是低分辨率 latent2rgb 图（模糊但能看出大致图）：铺满结果区
+                        —— width/height:100% + object-contain 会放大小图并保持比例；旧的
+                        maxWidth/maxHeight 只限上限，小图不放大 → 显示成中间一小块。 */}
                     <img
                       src={previewStep.dataUrl}
                       alt={`step ${previewStep.step}/${previewStep.total}`}
-                      className="rounded-md object-contain"
-                      style={{ maxWidth: '100%', maxHeight: '100%' }}
+                      className="rounded-md"
+                      style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                     />
                   </div>
                   <div className="text-xs text-fg-tertiary shrink-0">

@@ -195,8 +195,6 @@ class ModelCache:
     第一次 task 进来 load_model_paths()；之后路径不变则复用；adapters
     在 lora_configs 改变时才重 inject（commit 9 简化：每次都重 inject，
     成本 ~1-2s/LoRA，相比 30s+ model load 可忽略；后续 commit 优化）。
-
-    commit 14：lazy 加载 TAEFlux（中间步预览用），失败不阻塞主流程。
     """
 
     def __init__(self) -> None:
@@ -221,40 +219,8 @@ class ModelCache:
         self.adapters: list[Any] = []
         self.last_lora_specs: list[LoRASpec] = []
         self.last_lora_metas: list[LoRAMeta] = []
-        # commit 14：TAEFlux for preview
-        self.taeflux: Any = None
-        self.taeflux_attempted: bool = False  # 失败后不再重试
-
-    def ensure_taeflux(self) -> Any:
-        """lazy 加载 TAEFlux。已加载或上次失败 → 返回缓存（可能是 None）。
-
-        缺失时**自动后台下载**（1.6MB ~1-2s）：用户开启预览后第一次跑生成
-        会触发；下载期间该次生成跳过预览，下次正常。失败标 attempted=True
-        不再重试，避免反复尝试（用户排查后手动重启或 settings 重新触发）。
-        """
-        if self.taeflux is not None or self.taeflux_attempted:
-            return self.taeflux
-        self.taeflux_attempted = True
-        try:
-            from studio.services import models as _md
-            if not _md.taeflux_available():
-                # 自动下载（1.6MB；用户配置的 HF mirror 自动生效）
-                logger.info("taeflux missing → auto-downloading (~1.6MB)…")
-                ok = _md.download_taeflux(on_log=lambda m: logger.info("[taeflux] %s", m))
-                if not ok:
-                    logger.warning("taeflux auto-download failed; preview disabled")
-                    return None
-            from diffusers import AutoencoderTiny
-            tae = AutoencoderTiny.from_pretrained(
-                str(_md.taeflux_dir()), torch_dtype=self.dtype,
-            ).to(self.device)
-            tae.eval()
-            self.taeflux = tae
-            logger.info("taeflux loaded")
-        except Exception as e:
-            logger.warning("taeflux load failed: %s; preview disabled", e)
-            self.taeflux = None
-        return self.taeflux
+        # 中间步预览用 latent2rgb 线性投影（见 _decode_latent2rgb_preview）——
+        # 无外部模型 / 无下载，故 CACHE 不再持任何 preview decoder 状态。
 
     @property
     def loaded(self) -> bool:
@@ -481,9 +447,6 @@ class ModelCache:
         self.adapters = []
         self.last_lora_specs = []
         self.last_lora_metas = []
-        # taeflux 也卸（占很小但保持一致）
-        self.taeflux = None
-        self.taeflux_attempted = False
         try:
             import gc
             gc.collect()
@@ -588,30 +551,28 @@ def _build_preview_callback(
     every_n: int,
     cancel_event: threading.Event | None = None,
 ) -> Any:
-    """每步推 preview_step 事件；TAEFlux 可用 + 节流命中时附 image_b64。
+    """每步推 preview_step 事件；节流命中时附 latent2rgb 预览图 image_b64。
 
     用户反馈：进度条始终要可见（"当前在做什么，第几步"），预览图按需。
     本 callback 拆成两路：
       - 永远 emit preview_step { step, total } —— 前端进度条
-      - every_n>0 且步命中（含末步）+ TAEFlux 加载 OK → 附 image_b64
-    callback 在 daemon 主线程同步执行；空逻辑 ~微秒级，TAEFlux decode +
-    JPEG 编码 ~10-20ms。
+      - every_n>0 且步命中（含末步）→ latent2rgb decode + 附 image_b64
+    callback 在 daemon 主线程同步执行；空逻辑 ~微秒级，latent2rgb（纯线性
+    投影，无 NN forward）+ JPEG 编码 ~1-2ms。
 
     cancel_event 注入后每步检查，取消延迟从"整张图"降到"一步"。
     """
     def _cb(step: int, total: int, latent: Any) -> None:
         _raise_if_canceled(cancel_event)
-        # 是否带预览图：preview_every_n_steps>0 + 节流命中 + TAEFlux 可用
+        # 是否带预览图：preview_every_n_steps>0 + 节流命中（含末步）。
         with_image = False
         b64: Optional[str] = None
         byte_size = 0
         if every_n > 0 and (step % every_n == 0 or step == total - 1):
-            tae = CACHE.ensure_taeflux()
-            if tae is not None:
-                img = _decode_taeflux_preview(tae, latent, CACHE.dtype)
-                if img is not None:
-                    b64, byte_size = _encode_jpeg(img, quality=80)
-                    with_image = True
+            img = _decode_latent2rgb_preview(latent)
+            if img is not None:
+                b64, byte_size = _encode_jpeg(img, quality=80)
+                with_image = True
         payload: dict[str, Any] = {"step": step + 1, "total": total}
         if with_image:
             payload["image_b64"] = b64
@@ -620,32 +581,72 @@ def _build_preview_callback(
     return _cb
 
 
-def _decode_taeflux_preview(taeflux: Any, latent: Any, dtype: Any) -> Optional[Any]:
-    """latent → TAEFlux decode → PIL.Image (256px)。失败返 None（preview 不阻塞）。
+# Wan2.1 VAE 的 latent→RGB 线性投影系数（16 通道 → RGB）。
+# Anima 的 VAE 是 Qwen-Image VAE（models/vae/qwen_image_vae.safetensors），其 latent
+# 空间就是 Wan2.1 的 16-ch 空间——ComfyUI supported_models.py 里
+# `QwenImage.latent_format = latent_formats.Wan21`，且本仓库 models.py 的 VAE
+# 归一化 mean/std 与 ComfyUI Wan21.latents_mean/std 逐位一致。系数与 bias 取自
+# ComfyUI comfy/latent_formats.py 的 `Wan21.latent_rgb_factors[_bias]`（latent2rgb
+# 快速预览，即"模糊但能看出图"）。之前误用 TAEFlux（Flux VAE 的 tiny decoder）解码
+# 这个 WAN latent，空间不匹配 → 颜色反相/错乱，已废弃。
+_WAN21_LATENT_RGB_FACTORS = [
+    [-0.1299, -0.1692, 0.2932],
+    [0.0671, 0.0406, 0.0442],
+    [0.3568, 0.2548, 0.1747],
+    [0.0372, 0.2344, 0.1420],
+    [0.0313, 0.0189, -0.0328],
+    [0.0296, -0.0956, -0.0665],
+    [-0.3477, -0.4059, -0.2925],
+    [0.0166, 0.1902, 0.1975],
+    [-0.0412, 0.0267, -0.1364],
+    [-0.1293, 0.0740, 0.1636],
+    [0.0680, 0.3019, 0.1128],
+    [0.0032, 0.0581, 0.0639],
+    [-0.1251, 0.0927, 0.1699],
+    [0.0060, -0.0633, 0.0005],
+    [0.3477, 0.2275, 0.2950],
+    [0.1984, 0.0913, 0.1861],
+]
+_WAN21_LATENT_RGB_BIAS = [-0.1835, -0.0868, -0.3360]
+# 预览放大目标（最长边像素）。latent 是 1/8 分辨率（1024²→128²），latent2rgb 直出
+# 128²；放大到 512 让前端铺满时不至于过糊，JPEG 仍很小。
+_PREVIEW_TARGET_PX = 512
 
-    Anima latent shape：[B, 16, F=1, H, W]；TAEFlux 期望 [B, 16, H, W]。
+
+def _decode_latent2rgb_preview(latent: Any) -> Optional[Any]:
+    """latent → Wan2.1 latent2rgb 线性投影 → PIL.Image。失败返 None（preview 不阻塞）。
+
+    Anima latent shape：[B, 16, F=1, H, W]。对齐 ComfyUI Latent2RGBPreviewer：
+      x0 = latent[0, :, 0]                          # [16, H, W]
+      rgb[h,w,r] = Σ_c x0[c,h,w]·factors[c,r] + bias[r]
+      img = ((rgb + 1) / 2).clamp(0,1) · 255        # [-1,1] → [0,255]
     """
     try:
         import numpy as np
         from PIL import Image
         with torch.no_grad():
-            # 去掉 frame 维 (F=1)，转 dtype
-            x = latent[:, :, 0].to(dtype=dtype)
-            decoded = taeflux.decode(x).sample  # [B, 3, H, W] in [-1, 1]
-            decoded = (decoded.clamp(-1, 1) + 1) / 2
-            arr = decoded[0].permute(1, 2, 0).cpu().float().numpy()
-            arr = (arr * 255).clip(0, 255).astype(np.uint8)
+            x = latent[0, :, 0].float()  # [16, H, W]
+            factors = torch.tensor(
+                _WAN21_LATENT_RGB_FACTORS, device=x.device, dtype=x.dtype,
+            )  # [16, 3]
+            bias = torch.tensor(
+                _WAN21_LATENT_RGB_BIAS, device=x.device, dtype=x.dtype,
+            )  # [3]
+            rgb = torch.einsum("chw,cr->hwr", x, factors) + bias  # [H, W, 3]
+            rgb = ((rgb + 1.0) / 2.0).clamp(0.0, 1.0)
+            arr = (rgb.cpu().numpy() * 255).astype(np.uint8)  # [H, W, 3]
             img = Image.fromarray(arr)
-            # 缩到 256px（保持比例）
+            # 放大到 _PREVIEW_TARGET_PX 最长边（保持比例），前端再铺满结果区
             w, h = img.size
-            scale = 256.0 / max(w, h)
-            img = img.resize(
-                (max(1, int(w * scale)), max(1, int(h * scale))),
-                Image.BILINEAR,
-            )
+            scale = _PREVIEW_TARGET_PX / max(w, h)
+            if scale > 1.0:
+                img = img.resize(
+                    (max(1, round(w * scale)), max(1, round(h * scale))),
+                    Image.BILINEAR,
+                )
             return img
     except Exception:
-        logger.exception("taeflux decode failed")
+        logger.exception("latent2rgb preview decode failed")
         return None
 
 
