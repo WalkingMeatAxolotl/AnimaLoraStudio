@@ -1530,6 +1530,7 @@
     "selectedDatasetTagsAria": "已选 caption 的 tags（只读）",
     "datasetPreviewAlt": "训练集图片预览",
     "datasetPreviewEmpty": "悬停或选中一行看大图",
+    "datasetPreviewZoomTitle": "点击放大",
     "replaceCurrentPrompt": "替换当前提示词",
     "appendToCurrentPrompt": "追加到当前提示词",
     "weight": "权重",

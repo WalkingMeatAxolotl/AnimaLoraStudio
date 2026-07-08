@@ -1530,6 +1530,7 @@
     "selectedDatasetTagsAria": "Selected caption tags (read-only)",
     "datasetPreviewAlt": "Training image preview",
     "datasetPreviewEmpty": "Hover or select a row to preview",
+    "datasetPreviewZoomTitle": "Click to enlarge",
     "replaceCurrentPrompt": "Replace current prompt",
     "appendToCurrentPrompt": "Append to current prompt",
     "weight": "Weight",

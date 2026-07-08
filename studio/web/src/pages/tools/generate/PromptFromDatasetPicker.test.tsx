@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, type CaptionEntry, type ProjectDetail, type ProjectSummary } from '../../../api/client'
@@ -122,5 +122,34 @@ describe('PromptFromDatasetPicker — thumbnail / pid·vid 同步', () => {
     const src = rowThumb().getAttribute('src') ?? ''
     expect(src).toContain('/versions/11/thumb')
     expect(src).not.toContain('/versions/12/thumb')
+  })
+
+  it('点击底部大图预览放大成全屏 modal（复用 ImagePreviewModal，请求 1600 大图）', async () => {
+    vi.spyOn(api, 'listProjects').mockResolvedValue(projects)
+    vi.spyOn(api, 'getProject').mockResolvedValue(projectDetail)
+    vi.spyOn(api, 'listCaptionsFull').mockResolvedValue({ folder: null, items: [cap('shot.png', 'x')] })
+
+    const user = await selectProjectAndV1()
+    await waitFor(() => expect(screen.getByText('shot.png')).toBeInTheDocument())
+
+    // 悬停一行 → 底部大图预览出现，其可点击放大按钮 aria-label="点击放大"
+    await user.hover(screen.getByText('shot.png'))
+    const zoomBtn = await screen.findByRole('button', { name: '点击放大' })
+
+    // 点击放大按钮 → 全屏 ImagePreviewModal，主图 alt=文件名、URL 请求 1600 大图 + 当前 (pid,vid)。
+    // 用 fireEvent.click 而非 user.click：userEvent 点击前会把指针移出再移入目标，途中触发 picker
+    // 根节点 onMouseLeave 清掉 hoveredKey，使放大按钮在点击前卸载（真实浏览器里指针从列表行到大图
+    // 连续移动、始终在 picker 内，根节点 mouseleave 不会触发，故属模拟 artifact）。这里只验证
+    // 「点击放大按钮」本身，直接派发 click 更贴切。
+    fireEvent.click(zoomBtn)
+    const modalImg = await screen.findByAltText('shot.png')
+    const src = modalImg.getAttribute('src') ?? ''
+    expect(src).toContain('/projects/1/versions/11/thumb')
+    expect(src).toContain('name=shot.png')
+    expect(src).toContain('size=1600')
+
+    // Esc 关闭（ImagePreviewModal 的键盘监听；picker 自身不监听 Esc，不冲突）
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByAltText('shot.png')).not.toBeInTheDocument())
   })
 })
