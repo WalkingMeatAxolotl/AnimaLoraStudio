@@ -17,7 +17,13 @@ Design notes (mirrors SRA / LPL — an additive term on the standard RF path):
   forward); grads flow through pred to the LoRA.
 - Zero trainable parameters. No optimizer group / state / resume wiring.
 
-Faithful to the official implementation (github.com/EndlessSora/focal-frequency-loss):
+Attribution: self-implemented from the paper; the focal-weight / normalization
+details were cross-checked against the official reference implementation
+``EndlessSora/focal-frequency-loss`` (MIT, Copyright (c) 2021 Liming Jiang) —
+verified for parity, NOT copied verbatim (latent-space + per-sample reduction are
+this project's adaptation). See THIRD_PARTY_NOTICES.md.
+
+Formula (matches the reference):
 - ``torch.fft.fft2(x, norm="ortho")``, real/imag stacked.
 - frequency distance = (Δreal)² + (Δimag)²  (squared Euclidean per frequency).
 - focal weight = ‖Δ‖^alpha, normalised per (sample, channel) by its spatial max,

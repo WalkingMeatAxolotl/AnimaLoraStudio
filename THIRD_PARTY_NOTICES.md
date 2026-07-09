@@ -194,6 +194,21 @@
   reference 代码。Anima 在 Flow Matching `t ∈ (0,1)` 空间内做了 `σ = t/(1-t)` 适配，
   与论文 σ-空间设计保持一致。
 
+### Focal Frequency Loss (research attribution — 自实现)
+
+- **论文**：Jiang et al. 2021, *Focal Frequency Loss for Image Reconstruction and
+  Synthesis*, [arXiv:2012.12821](https://arxiv.org/abs/2012.12821)（ICCV 2021）
+- **Reference 实现对照**（仅用于校对，未直接复制代码）：
+  [`EndlessSora/focal-frequency-loss`](https://github.com/EndlessSora/focal-frequency-loss)
+  （MIT — Copyright (c) 2021 Liming Jiang）
+- **涉及文件**：
+  - `runtime/training/ffl.py` `class FocalFrequencyLoss`
+- **关系**：按论文的 focal frequency 目标自实现；`fft2(norm="ortho")` / 频率距离
+  `(Δreal)²+(Δimag)²` / focal 权重 `‖Δ‖^alpha` 逐 (样本,通道) 空间 max 归一 + clamp[0,1]
+  + detach 等公式细节**对照官方实现校对**，未逐行复制。latent 空间 + per-sample reduction
+  为本项目改造。MIT 不强制 attribution；论文引用 + reference URL 作学术礼貌已在
+  `ffl.py` docstring 与本条目标注。
+
 ---
 
 ## Pip 依赖（许可随各自 wheel 分发）
