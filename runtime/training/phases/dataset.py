@@ -41,6 +41,39 @@ def _as_resolutions(value) -> list[int]:
     return [int(value)]
 
 
+def _rope_max_side_tokens(ctx) -> int:
+    """模型 RoPE 单边可寻址的 patch-token 上限（= max_img_h // patch_spatial）。
+
+    NaViT 原生定尺寸据此在数据层封顶单边，避免超 ``_packed_rope_from_grid`` 的前向 fail-fast
+    （白白浪费一次全量 VAE 缓存）。取不到（如无模型的单测）→ 0（不早封顶，仍由前向 fail-fast 兜底）。
+    """
+    pe = getattr(getattr(ctx, "model", None), "pos_embedder", None)
+    try:
+        return int(min(int(pe.max_h), int(pe.max_w)))
+    except Exception:
+        return 0
+
+
+def _native_dataset_kwargs(args, ctx) -> dict:
+    """navit_native_resolution 开启时给 ImageDataset 的原生定尺寸参数；关闭 → 空 dict（行为中立）。"""
+    navit_packing = bool(getattr(args, "navit_packing", False))
+    if not (navit_packing and bool(getattr(args, "navit_native_resolution", False))):
+        return {}
+    kwargs = dict(
+        native_resolution=True,
+        native_token_budget=int(getattr(args, "navit_token_budget", 0) or 0),
+        native_over_budget=str(getattr(args, "navit_native_over_budget", "downscale") or "downscale"),
+        native_max_side_tokens=_rope_max_side_tokens(ctx),
+    )
+    logger.info(
+        "[navit-native] 原生定尺寸已启用：单图 floor 对齐 16px、零 padding，绕过 ARB 桶量化；"
+        "超预算策略=%s，token 预算=%d，RoPE 单边上限=%s tokens。",
+        kwargs["native_over_budget"], kwargs["native_token_budget"],
+        kwargs["native_max_side_tokens"] or "不限",
+    )
+    return kwargs
+
+
 def run(ctx: TrainingContext) -> None:
     """
     - 主数据集 / 正则数据集 + per-folder repeat
@@ -58,6 +91,9 @@ def run(ctx: TrainingContext) -> None:
     ar_limit = float(getattr(args, "aspect_ratio_limit", 2.0))
     base_reso = res_list[0]
 
+    # NaViT 原生定尺寸参数（navit_native_resolution）；关闭时为空 dict → 行为中立。
+    native_kwargs = _native_dataset_kwargs(args, ctx)
+
     # 数据集
     ctx.bucket_mgr = BucketManager(base_reso, aspect_ratio_limit=ar_limit)
     ctx.base_dataset = ImageDataset(
@@ -69,6 +105,7 @@ def run(ctx: TrainingContext) -> None:
         prefer_json=args.prefer_json,
         resolutions=res_list,
         aspect_ratio_limit=ar_limit,
+        **native_kwargs,
     )
     ctx.dataset = ctx.base_dataset
 
@@ -92,6 +129,7 @@ def run(ctx: TrainingContext) -> None:
                 caption_override=reg_caption if reg_caption else None,
                 resolutions=res_list,
                 aspect_ratio_limit=ar_limit,
+                **native_kwargs,
             )
             ctx.reg_dataset = reg_base
             reg_weight = float(getattr(args, "reg_weight", 1.0) or 1.0)
