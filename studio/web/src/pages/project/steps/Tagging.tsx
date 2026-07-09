@@ -257,16 +257,31 @@ export default function TaggingPage() {
       : onExisting === 'skip'
         ? (scope === 'all' ? Math.max(0, totalImages - taggedImages) : scopeTotal)
         : scopeTotal
-  // 打标模型（wd14 / cltagger 具体 model id；llm 无本地模型 → null → 该行跳过）
-  const modelLabel =
-    tagger === 'wd14' ? (wd14Form?.model_id || null)
-      : tagger === 'cltagger' ? (cltaggerForm?.model_id || null)
+  // 面板「打标方式/模型/预设/触发词」显示的是上一次实际打标用的配置（历史事实，
+  // 与正则集 meta 意义一致），从最近一次 tag job 的 params 复原；模型 / 预设未
+  // override 时退回当前默认（与 worker「override ?? default」解析一致，默认未变时
+  // 精确）。触发词持久化在 version（打标时写入），非当前表单临时值。
+  const lastParams = jobParams(job)
+  const lastTagger = typeof lastParams.tagger === 'string' ? lastParams.tagger : null
+  const lastMethodLabel =
+    lastTagger === 'wd14' ? 'WD14'
+      : lastTagger === 'cltagger' ? 'CLTagger'
+        : lastTagger === 'llm' ? 'LLM'
+          : null
+  const lastModelLabel =
+    lastTagger === 'wd14'
+      ? ((lastParams.wd14_overrides as { model_id?: string } | undefined)?.model_id || wd14Defaults?.model_id || null)
+      : lastTagger === 'cltagger'
+        ? ((lastParams.cltagger_overrides as { model_id?: string } | undefined)?.model_id || cltaggerDefaults?.model_id || null)
         : null
-  // LLM 预设 label（非 llm → null → 该行跳过）
-  const presetLabel =
-    tagger === 'llm' && llmForm && llmDefaults
-      ? (llmDefaults.presets.find((p) => p.id === llmForm.preset_id)?.label ?? llmForm.preset_id)
+  const lastPresetId =
+    lastTagger === 'llm'
+      ? ((lastParams.llm_overrides as { current_preset?: string } | undefined)?.current_preset || llmDefaults?.current_preset || null)
       : null
+  const lastPresetLabel = lastPresetId
+    ? (llmDefaults?.presets.find((p) => p.id === lastPresetId)?.label ?? lastPresetId)
+    : null
+  const lastTrigger = (activeVersion.trigger_word ?? '').trim()
 
   const buildWd14Overrides = (): Record<string, unknown> | undefined => {
     if (!wd14Form || !wd14Defaults) return undefined
@@ -578,14 +593,14 @@ export default function TaggingPage() {
 
         </div>
 
-        {/* 右栏：当前打标状态（进度 + 本次配置摘要 + 此轮需要打标） */}
+        {/* 右栏：训练集打标状态（进度 + 上一轮打标配置 + 此轮需要打标） */}
         <TagStatusPanel
-          tagger={tagger}
           totalImages={totalImages}
           taggedImages={taggedImages}
-          modelLabel={modelLabel}
-          presetLabel={presetLabel}
-          triggerWord={triggerWord}
+          methodLabel={lastMethodLabel}
+          modelLabel={lastModelLabel}
+          presetLabel={lastPresetLabel}
+          triggerWord={lastTrigger}
           latestTaggedAt={job?.finished_at ?? null}
           thisRoundNeed={thisRoundNeed}
           isLive={isLive}
@@ -1058,13 +1073,13 @@ function PanelDot() {
 // ---------------------------------------------------------------------------
 
 function TagStatusPanel({
-  tagger, totalImages, taggedImages,
-  modelLabel, presetLabel, triggerWord,
+  totalImages, taggedImages,
+  methodLabel, modelLabel, presetLabel, triggerWord,
   latestTaggedAt, thisRoundNeed, isLive,
 }: {
-  tagger: string
   totalImages: number
   taggedImages: number
+  methodLabel: string | null
   modelLabel: string | null
   presetLabel: string | null
   triggerWord: string
@@ -1073,7 +1088,6 @@ function TagStatusPanel({
   isLive: boolean
 }) {
   const { t } = useTranslation()
-  const methodLabel = tagger === 'wd14' ? 'WD14' : tagger === 'cltagger' ? 'CLTagger' : 'LLM'
   const trigger = triggerWord.trim()
   return (
     <div className="flex flex-col gap-3 min-w-0 overflow-y-auto">
@@ -1091,9 +1105,11 @@ function TagStatusPanel({
               </span>
             </span>
           </TagStatusRow>
-          <TagStatusRow label={t('tag.statusMethod')}>
-            <span className="font-mono">{methodLabel}</span>
-          </TagStatusRow>
+          {methodLabel && (
+            <TagStatusRow label={t('tag.statusMethod')}>
+              <span className="font-mono">{methodLabel}</span>
+            </TagStatusRow>
+          )}
           {modelLabel && (
             <TagStatusRow label={t('tag.statusModel')}>
               <span className="font-mono break-all">{modelLabel}</span>
@@ -1150,6 +1166,17 @@ function TagStatusRow({ label, children }: { label: string; children: React.Reac
       <span className="text-sm text-fg-primary text-right min-w-0 break-words">{children}</span>
     </div>
   )
+}
+
+// 最近一次 tag job 的参数：优先 params_decoded，退回解析 params 原始 JSON。
+function jobParams(job: Job | null): Record<string, unknown> {
+  if (!job) return {}
+  if (job.params_decoded && typeof job.params_decoded === 'object') return job.params_decoded
+  try {
+    return job.params ? (JSON.parse(job.params) as Record<string, unknown>) : {}
+  } catch {
+    return {}
+  }
 }
 
 // 相对时间（对齐正则集页 formatAgo）。
