@@ -142,3 +142,17 @@ def test_schema_ffl_bounds():
         TrainingConfig(ffl_t_threshold=1.5)
     with pytest.raises(ValidationError):
         TrainingConfig(ffl_weight=-1.0)
+
+
+def test_ffl_navit_symmetric_mutex():
+    """FFL ↔ NaViT 对称硬互斥（打包态批内尺寸不一，无法逐图 FFT）：两侧 disable_when 都要有。
+
+    这是前端锁（disable_when，非 pydantic 硬 raise）+ loop.py 的 navit_latents is None
+    第三守卫纵深防御；本测试锁住对称锁不被后续编辑单侧改漏。
+    """
+    from studio.domain.training import TrainingConfig
+    fields = TrainingConfig.model_fields
+    ffl_dw = (fields["ffl_enabled"].json_schema_extra or {}).get("disable_when", "")
+    navit_dw = (fields["navit_packing"].json_schema_extra or {}).get("disable_when", "")
+    assert "navit_packing==true" in ffl_dw, "FFL 侧缺 navit 锁"
+    assert "ffl_enabled==true" in navit_dw, "navit 侧缺 ffl 锁"

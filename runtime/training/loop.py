@@ -406,11 +406,12 @@ def run(ctx: TrainingContext) -> None:
                     else:
                         sra_weighted_loss_log = loss.new_tensor(0.0).detach()
 
-                # ① 频域 loss（FFL）：标准路径专属；leap 步无单一 x̂₀，与 SRA 平列跳过。
+                # ① 频域 loss（FFL）：标准路径专属；leap / navit 路径不适用（navit 逐图打包
+                # 无单一 latents / t_exp，与 SRA 同样三守卫跳过；且 schema 与 navit 硬互斥）。
                 # 对免费的 x̂₀ = noisy − t·pred 与真实 latents 在 latent 空间做 focal
                 # frequency 对齐，直接惩罚高频/难合成频率学不像。默认全 t（ffl_t_threshold
                 # =1.0），可选按低 t 门控。reg 集不参与、尊重 loss_weight 降权（与 SRA 一致）。
-                if ctx.ffl is not None and not use_leap_this_step:
+                if ctx.ffl is not None and not use_leap_this_step and navit_latents is None:
                     ffl_tau = float(getattr(args, "ffl_t_threshold", 1.0) or 1.0)
                     if ffl_tau < 1.0:
                         ffl_sel = t < ffl_tau

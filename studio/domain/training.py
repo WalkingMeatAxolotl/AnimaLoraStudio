@@ -143,8 +143,8 @@ class TrainingConfig(BaseModel):
         json_schema_extra=_meta(
             "system",
             advanced=True,
-            disable_when="leap_enabled==true||infonoise_enabled==true||sra_enabled==true||lora_type==tlora",
-            disable_hint="与 LeapAlign / InfoNoise / SRA / T-LoRA 互斥（navit v1 未适配），需先关掉它们",
+            disable_when="leap_enabled==true||infonoise_enabled==true||sra_enabled==true||ffl_enabled==true||lora_type==tlora",
+            disable_hint="与 LeapAlign / InfoNoise / SRA / FFL / T-LoRA 互斥（navit v1 未适配），需先关掉它们",
         ),
     )
     navit_token_budget: int = Field(
@@ -805,12 +805,18 @@ class TrainingConfig(BaseModel):
     # -------------------------------------------------------- FFL 频域损失
     # 论文：Focal Frequency Loss (Jiang et al., ICCV 2021)。附加 loss 项，与 SRA 同构
     # （标准路径专属、零可训练参数、训完丢弃）。在 latent 空间做，无 VAE decode、≈0 显存。
-    # 注：与 navit_packing 互斥（打包态空间维不齐无法逐图 FFT），navit 不在本分支，待其合入
-    # 时由后落者装两侧对称锁（同 navit 已对 SRA/leap 做的处理）。
+    # 与 navit_packing 硬互斥（打包态空间维不齐无法逐图 FFT）：对称锁 —— 此处 ffl_enabled
+    # disable_when navit，navit_packing 侧亦 disable_when ffl_enabled；同时 loop.py 用
+    # navit_latents is None 第三守卫纵深防御（与 SRA 一致）。
     ffl_enabled: bool = Field(
         False,
         description="【FFL 频域损失】在频率域比较预测的干净 latent 和真实 latent，对「难合成/高频」的频率成分自适应加权惩罚，弥补普通 MSE 容易把高频细节磨平的问题，改善纹理质感。开销很小：每步对 latent 多做一次 FFT，无需 VAE 解码；训练完不影响导出",
-        json_schema_extra=_meta("loss", advanced=True),
+        json_schema_extra=_meta(
+            "loss",
+            advanced=True,
+            disable_when="navit_packing==true",
+            disable_hint="与 NaViT 打包互斥（打包态批内尺寸不一，无法逐图 FFT），需先关闭 navit_packing",
+        ),
     )
     ffl_weight: float = Field(
         1.0, ge=0.0,
