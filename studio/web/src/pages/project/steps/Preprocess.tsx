@@ -371,11 +371,45 @@ export default function PreprocessPage() {
     )
   }
 
+  // 放大操作数量：有文件夹筛选时按筛选范围算，否则全部
+  const upscaleTotal = folderScopedNames ? folderScopedNames.length : rows.length
+  const upscaleBusy = busy || isLive
+
   return (
     <StepShell
       idx={2}
       title={t('steps.preprocess.title')}
       subtitle={t('steps.preprocess.subtitle')}
+      actions={
+        <>
+          {/* 放大全部 = ghost；放大选中 = primary + icon（选中项才启用），放最右 */}
+          <button
+            type="button"
+            onClick={() =>
+              void (folderScopedNames
+                ? startPreprocess('selected', folderScopedNames)
+                : startPreprocess('all'))
+            }
+            disabled={upscaleBusy || !modelReady || upscaleTotal === 0}
+            className="btn btn-ghost btn-sm"
+          >
+            {t('preprocess.upscaleAll', { n: upscaleTotal })}
+          </button>
+          <button
+            type="button"
+            onClick={() => void startPreprocess('selected', selectedTargets.names)}
+            disabled={upscaleBusy || !modelReady || selectedTargets.count === 0}
+            className="btn btn-primary btn-sm"
+            title={selectedTargets.count === 0 ? t('preprocess.upscaleSelectedHint') : ''}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+            <span>{t('preprocess.upscaleSelected', { n: selectedTargets.count })}</span>
+          </button>
+        </>
+      }
+      belowHeader={<PreprocessToolsBar current="upscale" projectId={project.id} versionId={vid} />}
       logSources={[
         job && {
           key: 'preprocess',
@@ -392,7 +426,6 @@ export default function PreprocessPage() {
         <div className="grid gap-3 flex-1 min-h-0" style={{ gridTemplateColumns: '1fr 260px' }}>
           {/* 左栏 */}
           <div className="flex flex-col gap-2 min-h-0 min-w-0">
-            <PreprocessToolsBar current="upscale" projectId={project.id} versionId={vid} />
             <OperationPanel
               tileSize={tileSize}
               setTileSize={setTileSize}
@@ -409,17 +442,7 @@ export default function PreprocessPage() {
               allUpscalers={allUpscalers}
               selectedModel={selectedModel}
               onSelectedModelChange={(label) => void changeSelectedModel(label)}
-              totalCount={folderScopedNames ? folderScopedNames.length : rows.length}
-              selectedCount={selectedTargets.count}
               busy={busy || isLive}
-              onStartAll={() =>
-                void (folderScopedNames
-                  ? startPreprocess('selected', folderScopedNames)
-                  : startPreprocess('all'))
-              }
-              onStartSelected={() =>
-                void startPreprocess('selected', selectedTargets.names)
-              }
             />
 
             <ImagesPanel
@@ -513,11 +536,7 @@ interface OperationPanelProps {
   allUpscalers: UpscalerVariant[]
   selectedModel: string
   onSelectedModelChange: (label: string) => void
-  totalCount: number
-  selectedCount: number
   busy: boolean
-  onStartAll: () => void
-  onStartSelected: () => void
 }
 
 function OperationPanel({
@@ -536,11 +555,7 @@ function OperationPanel({
   allUpscalers,
   selectedModel,
   onSelectedModelChange,
-  totalCount,
-  selectedCount,
   busy,
-  onStartAll,
-  onStartSelected,
 }: OperationPanelProps) {
   const { t } = useTranslation()
 
@@ -692,31 +707,8 @@ function OperationPanel({
           </select>
         </label>
 
-        <span className="flex-1" />
-
-        <button
-          onClick={onStartAll}
-          disabled={busy || !modelReady || totalCount === 0}
-          className="btn btn-ghost btn-sm"
-        >
-          {t('preprocess.upscaleAll', { n: totalCount })}
-        </button>
-        <button
-          onClick={onStartSelected}
-          disabled={busy || !modelReady || selectedCount === 0}
-          className="btn btn-primary btn-sm"
-          title={selectedCount === 0 ? t('preprocess.upscaleSelectedHint') : ''}
-        >
-          {t('preprocess.upscaleSelected', { n: selectedCount })}
-        </button>
       </div>
 
-      {/* 智能流水提示（tools 切换已移到页面顶部 PreprocessToolsBar） */}
-      {targetEdge !== null && (
-        <div className="flex items-center gap-2 mt-1 text-xs text-fg-tertiary">
-          <span title={t('preprocess.smartHint')}>{t('preprocess.smartHint')}</span>
-        </div>
-      )}
     </section>
   )
 }
