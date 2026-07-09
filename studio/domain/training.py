@@ -625,6 +625,18 @@ class TrainingConfig(BaseModel):
             disable_hint="InfoNoise 启用时禁用 schedule shift（schema 互斥，仅 1.0 兼容）",
         ),
     )
+    timestep_shift_resolution_aware: bool = Field(
+        False,
+        description="按每图 token 数对采样后的 t 做分辨率修正（SD3 式 s=sqrt(该图 token 数/基准档 token 数)，"
+                    "基准档取 resolution 首档）：基准档尺寸的图不变，更大的图偏向高噪声端、更小的偏向低噪声端。"
+                    "多分辨率与 NaViT 原生分辨率训练下，各尺寸的图落在与基准档等效的噪声水平；单分辨率训练下无效果",
+        json_schema_extra=_meta(
+            "timestep_sampling",
+            alt_description="Leap 启用时 leap 路径的 t_k/t_j 不做本修正，仅作用于 (1-leap_ratio) 比例的标准 step",
+            alt_description_when="leap_enabled==true",
+            advanced=True,
+        ),
+    )
     infonoise_enabled: bool = Field(
         False,
         description="【InfoNoise】启用自适应时间步采样：训练中根据信息量自动调整 t 分布，聚焦更有效的训练区间",
