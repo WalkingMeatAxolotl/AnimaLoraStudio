@@ -41,7 +41,9 @@ navit_native_over_budget: downscale # 超大图策略：downscale（默认）/ f
 ```
 
 开启后单图改按**原生尺寸** floor 对齐到 16px（`patch(2) × vae_downsample(8)`）定尺寸、**零 padding**，
-完全绕过桶量化，每张图保留自己的宽高比与近似原生尺寸。定尺寸算法（统一产出 16 整倍数目标尺寸，
+完全绕过桶量化，每张图保留自己的宽高比与近似原生尺寸。`resolution` / 多分辨率列表 /
+`Npx_` 文件夹前缀不再参与定尺寸（多分辨率 fan-out 自动收拢为单份，避免同图重复采样与重复缓存）。
+定尺寸算法（统一产出 16 整倍数目标尺寸，
 再复用现有 resize-cover + center-crop → 永远零 padding，navit 缓存路径无 mask 的前提成立）：
 
 - **普通图**（原生 token ≤ `navit_token_budget` 且各边 ≤ RoPE 单边上限）：每边 floor 到 16px 整倍数

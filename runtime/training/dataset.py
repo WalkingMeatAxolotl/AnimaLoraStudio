@@ -273,6 +273,9 @@ class ImageDataset(Dataset):
                 "（同图各档产同一原生尺寸）：已忽略额外分辨率档 %s，按原生单份处理。",
                 self.resolutions[1:],
             )
+            # 真正收拢 fan-out（_scan 之前）：不收的话同图仍按每档复制样本、每档各
+            # encode 一份内容相同的 npz（epoch 隐性 ×N + 缓存时间/磁盘 ×N）。
+            self.resolutions = self.resolutions[:1]
         self.shuffle_caption = shuffle_caption
         self.keep_tokens = keep_tokens
         self.flip_augment = flip_augment

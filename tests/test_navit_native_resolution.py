@@ -115,6 +115,29 @@ def test_dataset_native_downscale_wiring(tmp_path):
     assert (tw // 16) * (th // 16) <= budget
 
 
+def test_dataset_native_collapses_multi_resolution_fanout(tmp_path):
+    """native + 多分辨率列表：fan-out 收拢为单份。
+
+    不收拢的话同图按每档复制样本（epoch 隐性 ×N）、且 CachedLatentDataset 会按
+    (图, target_reso) 把内容相同的 latent 各 encode 一份 r{reso}.npz。
+    """
+    data_dir = _make_dataset_dir(tmp_path, [(1000, 1500), (777, 777)])
+
+    ds = ImageDataset(data_dir, resolution=1024, bucket_mgr=None,
+                      resolutions=[1024, 512],
+                      native_resolution=True, native_token_budget=1_000_000)
+    # 每张图恰好一个样本（未按分辨率档复制）
+    assert len(ds.samples) == 2
+    # 全部样本同一 target_reso → 缓存层不会按档分裂 npz（_multi_reso 判定为空）
+    assert len({s.get("target_reso") for s in ds.samples}) == 1
+
+    # 对照：native 关时多分辨率 fan-out 行为不变（回归保护）
+    bucketed = ImageDataset(data_dir, resolution=1024,
+                            bucket_mgr=BucketManager(1024, aspect_ratio_limit=2.0),
+                            resolutions=[1024, 512])
+    assert len(bucketed.samples) == 4
+
+
 # --------------------------------------------------------- config switch
 def test_config_default_off():
     from studio.domain import TrainingConfig
