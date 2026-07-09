@@ -177,6 +177,36 @@ class TrainingConfig(BaseModel):
         description="丢弃最后一个未填满的包（对齐 step 计数；False=保留短包）",
         json_schema_extra=_meta("system", show_when="navit_packing==true", advanced=True),
     )
+    navit_native_resolution: bool = Field(
+        False,
+        description="按原生分辨率定尺寸（floor 对齐 16px、零 padding），绕过 ARB 桶对单图尺寸的量化；"
+                    "超大图按 navit_native_over_budget 处理。需 navit_packing + cache_latents",
+        json_schema_extra=_meta("system", show_when="navit_packing==true", advanced=True),
+    )
+    navit_native_over_budget: Literal["downscale", "fail"] = Field(
+        "downscale",
+        description="原生 token 数超 navit_token_budget（或模型 RoPE 单边上限）时的处理："
+                    "downscale=等比降采样到 fit（默认，永不 OOM/爆 token）；fail=报错要求调大预算或数据集端裁图",
+        json_schema_extra=_meta("system", show_when="navit_native_resolution==true", advanced=True),
+    )
+    navit_multiscale: bool = Field(
+        False,
+        description="多尺度阶梯：为原生大图追加低 token 档的等比缩小副本参与打包（填满大图包剩余预算 + "
+                    "缓解 train-large/infer-small 尺度偏移）。需 navit_native_resolution",
+        json_schema_extra=_meta("system", show_when="navit_native_resolution==true", advanced=True),
+    )
+    navit_multiscale_token_ladder: str = Field(
+        "",
+        description="多尺度副本的 token 档（逗号分隔，如 \"4096\" 或 \"4096,8192\"）；每档 ≤ navit_token_budget。"
+                    "只降不升采样：原生 token 数 ≤ 某档的图跳过该档",
+        json_schema_extra=_meta("system", show_when="navit_multiscale==true", advanced=True),
+    )
+    navit_multiscale_loss_weight: float = Field(
+        1.0, ge=0.0,
+        description="多尺度副本的 per-image loss 权重（只作用于副本）。1.0=与原生等权（默认，贴合本仓库每图等权）；"
+                    "<1.0=副本降权、让原生尺度主导梯度",
+        json_schema_extra=_meta("system", show_when="navit_multiscale==true", advanced=True),
+    )
     cache_encode_tiled: bool = Field(
         False,
         description="缓存编码分块：超大图按 tile_px 分块 VAE encode + latent 羽化拼接（峰值显存 ∝ 单块像素）",
@@ -1056,6 +1086,21 @@ class TrainingConfig(BaseModel):
         - cache_latents：navit 打包按 latent token 数预算分包，需要预编码缓存。
         - navit_token_budget > 0：必须显式设置（按显存定）。
         """
+        if self.navit_native_resolution and not self.navit_packing:
+            raise ValueError(
+                "navit_native_resolution=true 需要 navit_packing=true"
+                "（原生定尺寸只在 NaViT 块对角打包路径生效）。"
+            )
+        if self.navit_multiscale and not self.navit_native_resolution:
+            raise ValueError(
+                "navit_multiscale=true 需要 navit_native_resolution=true"
+                "（多尺度副本建立在原生定尺寸之上）。"
+            )
+        if self.navit_multiscale and not (self.navit_multiscale_token_ladder or "").strip():
+            raise ValueError(
+                "navit_multiscale=true 需要 navit_multiscale_token_ladder 非空"
+                "（逗号分隔的 token 档，如 \"4096\"）。"
+            )
         if not self.navit_packing:
             return self
 

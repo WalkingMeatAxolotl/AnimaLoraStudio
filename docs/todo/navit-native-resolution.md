@@ -1,50 +1,38 @@
-# TODO：NaViT 原生分辨率 / 多尺度（暂缓）
+# NaViT 原生分辨率 / 多尺度：状态
 
-> 状态：**未实现，有意暂缓**（非遗忘）。PR #371 删除了未接线的骨架。
+> 状态：**原生分辨率（`navit_native_resolution`）与多尺度阶梯（`navit_multiscale`）均已实现**
+> （opt-in / default-off，见 `docs/navit-packing.md`）。本文保留为设计/历史记录。
 
-## 当前状态
+## 已落地：原生分辨率
 
-navit 打包（`navit_packing=true`）目前只做 **batching 优化**：把多张图的 token 按预算
-打包进一条序列（块对角注意力隔离、每图独立 timestep、varlen 快内核），替代 ARB
-的"分桶凑同尺寸 batch"。**打包的 latent 仍来自 ARB 分桶**（`ImageDataset` 按
-`resolution` resize/crop 到桶），所以 navit 目前是"半个 NaViT"——有打包填 batch，
-无原生分辨率。
+开 `navit_native_resolution=true` 后单图按**原生尺寸** floor 对齐 16px 定尺寸、零 padding，绕过 ARB 桶量化。
+超大图 `navit_native_over_budget`（`downscale` 默认 / `fail`）处理，消除 token 爆炸 / RoPE capacity / 显存顾虑：
 
-PR #371 删除的骨架：`navit_native_resolution` / `navit_multiscale` /
-`navit_multiscale_token_ladder` / `navit_multiscale_loss_weight` 四个 config 字段 +
-`plan_native_fit_image` / `plan_multiscale_copy` + `.ms<T>.npz` sidecar + `ms_flags`
-链路 + 校验器 multiscale→native 约束。这些在 base 版**也从未接线**（`ImageDataset`
-恒走 ARB，plan 函数只被测试调，`ms_tokens_target` 从不写入）。
+- **token 爆炸 / 超预算** → `downscale` 等比缩到 ≤ `navit_token_budget`（`fail` 报错）。
+- **RoPE capacity** → 数据层封顶单边 ≤ `max_img_h/w // patch_spatial`（默认 512 token）+ `_packed_rope_from_grid` 前向 fail-fast。
+- **显存** → 复用 `cache_encode_tiled` 分块 encode。
 
-## 为什么暂缓
+接线：`ImageDataset._target_size_for` / `plan_native_fit_image`（`runtime/training/dataset.py`）+
+`studio/domain/training.py` config + `runtime/training/phases/dataset.py` 传参；token 数从缓存 latent shape 推。
 
-从典型 anima LoRA 角度，native_resolution 的增量价值有限、复杂度高：
+## 已落地：多尺度阶梯
 
-- navit 对 LoRA 值钱的是"打包填 batch"（大 batch + 多分辨率 + 小数据集时），已工作、不依赖 native。
-- ARB 已处理宽高比；LoRA 数据集通常已 crop/preprocess；底模在固定分辨率范围工作最好。
-- native 引入超大图 token 爆炸：单张 4000×3000 原生 ≈ 47k token，可能超 `token_budget`
-  / 超 `_packed_rope_from_grid` 的 RoPE capacity（报错）/ 显存尖峰。原生细节保留的收益
-  抵不过这些复杂度——除非有极端宽高比数据集或超高清细节 LoRA 的特定需求。
+`navit_multiscale=true`（需 native）为原生大图追加低 token 档等比缩小副本参与打包：填满大图包剩余预算 +
+缓解 train-large / infer-small 尺度偏移。确定性展开（每图每档每 epoch 恰一次），只降不升，副本走独立
+`<stem>.ms<T>.npz` sidecar。`navit_multiscale_loss_weight`（默认 1.0=每图等权，贴合本仓库设计；<1.0 副本降权）。
 
-## 将来接线要点（若要做）
+接线：`ImageDataset._expand_multiscale_samples` / `plan_multiscale_copy` + `CachedLatentDataset` 缓存穿线
+`ms_tokens_target` + `collate_fn_navit_pack` 折 `ms_weight` 进 per-image 权重（与正则集 loss_weight 正交相乘）。
 
-1. **数据层**：`ImageDataset` 在 navit 模式下按源图**原生尺寸** floor 对齐 16px（VAE 8 ×
-   patch 2）缓存 latent，不走 ARB resize/crop。原 `plan_native_fit_image` 逻辑（floor/pad
-   对齐 + `max_tokens` 封顶 + over-budget 处理）可参考 PR #371 之前的实现。
-2. **打包器**：`NavitPackBatchSampler` 的 token 数按原生尺寸算（当前 `token_count_for_index`
-   从缓存 latent shape 推，改原生后自然跟随）。
-3. **前向**：**不需要** token-bucket 路径——`forward_packed_navit`（varlen）天然支持异构
-   token 数（`latents_list` 每个 `[1,C,T,h_i,w_i]` 逐图 patchify），原生尺寸 latent 直接喂。
-   （这也是 PR #371 删 `forward_packed_tokens` 系列的依据：varlen 覆盖了 token-bucket。）
-4. **超大图策略**：`max_tokens` 封顶后，超预算的图 fail / skip / 降采样三选一；降采样即
-   multiscale（大图追加低 token 档副本），依赖本功能先落地。
-5. **RoPE capacity**：原生大图的 token 网格不能超 `max_img_h/max_img_w`（模型构造参数），
-   否则 `_packed_rope_from_grid` 报错——接线时要么放大 capacity 要么在 plan 阶段封顶。
-6. **多尺度**（multiscale）：建立在 native 之上，大图追加降采样副本拼入打包序列 +
-   per-copy loss 降权。边际价值，建议 native 稳定后再评估。
+## 可能的将来（未实现）
+
+- **随机分辨率采样**（NaViT 论文 arXiv 2307.06304 的 resolution-sampling）：多尺度阶梯的随机版
+  （每 step 对每图随机抽一个尺度）。当前实现是确定性阶梯（可复现、可归因），随机版是否更优待评估。
+- fractional PE：RoPE3D 整数网格外推不需要（不做）。
 
 ## 关联
 
 - 设计文档：`docs/navit-packing.md`
+- 定尺寸 / 副本：`runtime/training/dataset.py::plan_native_fit_image` / `plan_multiscale_copy` / `ImageDataset._expand_multiscale_samples`
 - 前向天然支持异构 token：`runtime/training/navit.py::navit_packed_forward_and_loss`
-- 决策讨论：PR #371 review
+- 决策讨论：PR #371 review（骨架删除）→ 原生分辨率接线 PR → 多尺度阶梯 PR
