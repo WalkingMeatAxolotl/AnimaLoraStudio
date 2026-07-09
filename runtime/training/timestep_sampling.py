@@ -82,3 +82,42 @@ def _apply_timestep_schedule_shift(t: torch.Tensor, timestep_schedule_shift: flo
     if s == 1.0:
         return t
     return ((t * s) / (1 + (s - 1) * t)).clamp(1e-4, 1 - 1e-4)
+
+
+def latent_token_counts(latents, patch_spatial: int = 2) -> list[int]:
+    """每样本的 patch-token 数（``timestep_shift_resolution_aware`` 用）。
+
+    - list/tuple（NaViT 逐图 latent，各 ``[.,C,T,h_i,w_i]``，形状可异构）→ 逐图计数；
+    - 批量网格 tensor ``[B,C,T,H,W]``（ARB / 多分辨率，batch 内同尺寸）→ B 个等值计数。
+
+    ``patch_spatial=2`` 与 ``CachedLatentDataset._fill_bucket_for_index`` 的
+    token 口径一致（1 token = 16×16px）。
+    """
+    if isinstance(latents, (list, tuple)):
+        return [
+            int(l.shape[-2] // patch_spatial) * int(l.shape[-1] // patch_spatial)
+            for l in latents
+        ]
+    n = int(latents.shape[-2] // patch_spatial) * int(latents.shape[-1] // patch_spatial)
+    return [n] * int(latents.shape[0])
+
+
+def apply_resolution_shift(t: torch.Tensor, token_counts, base_tokens: int) -> torch.Tensor:
+    """SD3（arXiv 2403.03206 §5.3.2）分辨率相关 timestep shift 修正。
+
+    对每样本施加 Möbius 偏移 t' = (t·s)/(1+(s−1)·t)，s_i = sqrt(n_i / n_base)。
+    同一 t 下分辨率越高的图相邻像素相关性越强、等效 SNR 越高，需要更高的 t 才达到
+    与基准档等效的破坏程度——所以大图（n_i > n_base）推向高噪声端、小图反之，
+    n_i == n_base 恒等。
+
+    Möbius 偏移按 s 乘法复合（shift(s1) ∘ shift(s2) == shift(s1·s2)），因此本修正
+    与全局 timestep_shift / timestep_schedule_shift 正交：全局值仍是"基准档的校准值"，
+    本函数只补分辨率相对基准档的差。
+    """
+    s = (
+        torch.as_tensor(token_counts, dtype=t.dtype, device=t.device)
+        .clamp_min(1)
+        .div(float(max(1, int(base_tokens))))
+        .sqrt()
+    )
+    return ((t * s) / (1 + (s - 1) * t)).clamp(1e-4, 1 - 1e-4)

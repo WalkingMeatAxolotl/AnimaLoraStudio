@@ -45,6 +45,7 @@ from training.text_encoding import (
     tokenize_t5_comfy_literal,
     tokenize_t5_weighted,
 )
+from training.timestep_sampling import apply_resolution_shift, latent_token_counts
 from utils.optimizer_utils import get_optimizer_monitor_metrics, optimizer_eval_mode
 
 
@@ -144,6 +145,21 @@ def run(ctx: TrainingContext) -> None:
         dl_len = None
         _has_len = False
 
+    # timestep shift 分辨率修正（timestep_shift_resolution_aware，opt-in）：多分辨率 /
+    # NaViT 原生分辨率下按每图 token 数把 t 推到与基准档等效的噪声水平（SD3 §5.3.2，
+    # s_i = sqrt(n_i/n_base)）。基准档 = resolution 首档：该档 s=1 恒等，全局
+    # timestep_shift 仍是"基准档的校准值"；单分辨率训练下本开关是 no-op。
+    res_shift_base_tokens = 0
+    if bool(getattr(args, "timestep_shift_resolution_aware", False)):
+        _r = getattr(args, "resolution", 1024)
+        _base_reso = int(_r[0] if isinstance(_r, (list, tuple)) else _r)
+        res_shift_base_tokens = max(1, (_base_reso // 16) ** 2)
+        logger.info(
+            "[res-shift] timestep shift 分辨率修正已启用：s_i=sqrt(token_i/%d)"
+            "（基准档 %dpx），作用于采样后的 t。",
+            res_shift_base_tokens, _base_reso,
+        )
+
     for epoch in range(ctx.start_epoch, args.epochs):
         ctx.current_epoch = epoch
         epoch_loss_sum = 0.0
@@ -219,6 +235,18 @@ def run(ctx: TrainingContext) -> None:
             # Flow Matching：统一通过 timestep_sampler plugin 接口采样
             # （baseline = 4 种 mode；adaptive = InfoNoise 等；接口在 ADR 0003 plugin registry）
             t = ctx.timestep_sampler.sample(bs, ctx.device)
+
+            # 分辨率相关 shift 修正（见 run() 顶部 setup）：navit 逐图 latent 各算各的
+            # token 数；批量网格 batch 内同尺寸 → 等值向量。后续 record / sigma_t /
+            # 加噪全部看到修正后的 t（记录的是实际训练到的噪声水平）。
+            if res_shift_base_tokens:
+                t = apply_resolution_shift(
+                    t,
+                    latent_token_counts(
+                        navit_latents if navit_latents is not None else latents
+                    ),
+                    res_shift_base_tokens,
+                )
 
             # PR-C：adapter hook — 允许变体按 sigma_t / step 调整运行时结构
             # （T-LoRA / AdaLoRA / B-LoRA 等）。LyCORIS 走默认 no-op。
