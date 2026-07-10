@@ -19,6 +19,8 @@ from training.optimizers import (
     automagic,
     came,
     lion,
+    muon,
+    muon_sf,
     prodigy,
     prodigy_plus_schedulefree,
     soap,
@@ -34,6 +36,8 @@ BUILDERS: dict[str, Callable] = {
     "automagic": automagic.build,
     "came": came.build,
     "lion": lion.build,
+    "muon": muon.build,
+    "muon_sf": muon_sf.build,
     "prodigy": prodigy.build,
     "prodigy_plus_schedulefree": prodigy_plus_schedulefree.build,
     "soap": soap.build,
@@ -43,6 +47,7 @@ BUILDERS: dict[str, Callable] = {
 # 启动期校验函数（None / 未注册 = 跳过）
 VALIDATORS: dict[str, Callable[[object], None]] = {
     "automagic": automagic.validate,
+    "muon_sf": muon_sf.validate,
     "prodigy_plus_schedulefree": prodigy_plus_schedulefree.validate,
     "soap_sf": soap_sf.validate,
 }

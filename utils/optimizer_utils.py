@@ -242,11 +242,43 @@ def create_optimizer(
             **kwargs,
         )
 
+    elif optimizer_type == "muon":
+        from utils.muon_optimizer import Muon
+        valid_keys = {"momentum", "nesterov", "ns_steps", "correct_bias"}
+        muon_kwargs = {k: v for k, v in kwargs.items() if k in valid_keys}
+        ignored = [k for k in kwargs if k not in valid_keys]
+        if ignored:
+            logger.warning(f"[Muon] Ignored unsupported params: {ignored}")
+        param_list = params if _is_param_groups(params) else list(params)
+        logger.info(f"Creating Muon (lr={learning_rate}, wd={weight_decay}, betas={betas})")
+        return Muon(
+            param_list, lr=learning_rate, betas=betas,
+            weight_decay=weight_decay, eps=eps, **muon_kwargs,
+        )
+
+    elif optimizer_type in {"muon_sf", "muonsf"}:
+        from utils.muon_optimizer import MuonScheduleFree
+        if betas == (0.9, 0.999):
+            betas = (0.9, 0.95)
+        valid_keys = {
+            "ns_steps", "weight_lr_power", "r", "warmup_steps", "correct_bias",
+        }
+        sf_kwargs = {k: v for k, v in kwargs.items() if k in valid_keys}
+        ignored = [k for k in kwargs if k not in valid_keys]
+        if ignored:
+            logger.warning(f"[Muon-SF] Ignored unsupported params: {ignored}")
+        param_list = params if _is_param_groups(params) else list(params)
+        logger.info(f"Creating Muon-SF (lr={learning_rate}, wd={weight_decay}, betas={betas})")
+        return MuonScheduleFree(
+            param_list, lr=learning_rate, betas=betas,
+            weight_decay=weight_decay, eps=eps, **sf_kwargs,
+        )
+
     else:
         raise ValueError(
             f"Unknown optimizer type: {optimizer_type}. "
-            f"Choose from: adamw, automagic, automagic_v2, came, lion, prodigy, "
-            f"prodigy_plus_schedulefree, soap, soap_sf"
+            f"Choose from: adamw, automagic, automagic_v2, came, lion, muon, "
+            f"muon_sf, prodigy, prodigy_plus_schedulefree, soap, soap_sf"
         )
 
 
