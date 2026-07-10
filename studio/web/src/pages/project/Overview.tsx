@@ -144,15 +144,18 @@ const STATUS_LABEL: Record<VersionStatus, string> = {
 }
 
 function VersionRail({
-  versions, currentVid, onSelect, onCreate, onExport, exporting, exportEnabled,
+  versions, currentVid, onSelect, onCreate, onExport, onDelete, exporting, exportEnabled, deleteEnabled,
 }: {
   versions: Version[]
   currentVid: number | null
   onSelect: (vid: number) => void
   onCreate: () => void
   onExport: () => void
+  onDelete: () => void
   exporting: boolean
   exportEnabled: boolean
+  /** 多版本才允许删除（删掉最后一个版本无意义），与侧边栏一致。 */
+  deleteEnabled: boolean
 }) {
   const { t } = useTranslation()
   return (
@@ -203,6 +206,15 @@ function VersionRail({
         }}
       >+ {t('overview.versionSelector.newVersion')}</button>
       <span style={{ flex: 1 }} />
+      {deleteEnabled && (
+        <button
+          onClick={onDelete}
+          className="btn btn-ghost btn-sm"
+          style={{ color: 'var(--err)' }}
+        >
+          {t('overview.banner.deleteVersion')}
+        </button>
+      )}
       <button
         onClick={onExport}
         disabled={!exportEnabled || exporting}
@@ -1326,8 +1338,10 @@ export default function ProjectOverview() {
           onSelect={(vid) => { setSelectedVid(vid); ctx?.onSelectVersion(vid) }}
           onCreate={() => ctx && ctx.onCreateVersion()}
           onExport={() => ctx && ctx.onExportTrain()}
+          onDelete={() => { if (selectedVid != null) ctx?.onDeleteVersion(selectedVid) }}
           exporting={ctx?.exporting ?? false}
           exportEnabled={!!selectedVersion}
+          deleteEnabled={project.versions.length > 1}
         />
         {selectedVersion && (
           <StatusBanner
