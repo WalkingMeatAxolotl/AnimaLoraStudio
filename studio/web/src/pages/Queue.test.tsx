@@ -217,6 +217,63 @@ describe('QueuePage 分区 + 分页', () => {
     await waitFor(() => expect(startSpy).toHaveBeenCalledWith(21))
   })
 
+  it('paused 行：恢复/取消操作在 action 列，恢复走 confirm 后调 resumeTask', async () => {
+    vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
+    vi.spyOn(api, 'listQueueLive').mockResolvedValue([
+      makeTask({
+        id: 40, name: 'paused-task', status: 'paused', pid: null,
+        paused_step: 120, paused_at: 1200, is_resumable: true,
+      }),
+    ])
+    vi.spyOn(api, 'listQueueHistory').mockResolvedValue({
+      items: [], total: 0, page: 1, page_size: 20,
+    })
+    const resumeSpy = vi.spyOn(api, 'resumeTask').mockResolvedValue({
+      task_id: 40, status: 'pending',
+    })
+
+    renderQueue()
+    await waitFor(() => expect(screen.getByTestId('resume-btn-40')).toBeInTheDocument())
+    expect(screen.getByTestId('cancel-paused-btn-40')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('resume-btn-40'))
+    // 状态转移走 confirm（行按钮已 icon 化，「恢复」文案只在 dialog 确认键上）
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
+    expect(resumeSpy).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByText('恢复'))
+    await waitFor(() => expect(resumeSpy).toHaveBeenCalledWith(40))
+  })
+
+  it('失败/取消且恢复点在盘的历史行：继续训练在 action 列，confirm 后调 resumeTask', async () => {
+    vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
+    vi.spyOn(api, 'listQueueLive').mockResolvedValue([])
+    vi.spyOn(api, 'listQueueHistory').mockResolvedValue({
+      items: [
+        makeTask({
+          id: 30, name: 'dead', status: 'canceled', pid: null,
+          finished_at: 900, is_resumable: true,
+        }),
+        makeTask({
+          id: 31, name: 'dead-no-backup', status: 'canceled', pid: null,
+          finished_at: 800,
+        }),
+      ],
+      total: 2, page: 1, page_size: 20,
+    })
+    const resumeSpy = vi.spyOn(api, 'resumeTask').mockResolvedValue({
+      task_id: 30, status: 'pending',
+    })
+
+    renderQueue()
+    await waitFor(() => expect(screen.getByTestId('resume-btn-30')).toBeInTheDocument())
+    // 无恢复点的终态行没有继续训练按钮
+    expect(screen.queryByTestId('resume-btn-31')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('resume-btn-30'))
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
+    expect(resumeSpy).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByText('继续训练'))
+    await waitFor(() => expect(resumeSpy).toHaveBeenCalledWith(30))
+  })
+
   it('右上角「数据作业」toggle → 切换只读区，漏斗变 kind 过滤（P-G）', async () => {
     vi.spyOn(api, 'getQueueHold').mockResolvedValue({ held: false } as never)
     vi.spyOn(api, 'listQueueLive').mockResolvedValue([

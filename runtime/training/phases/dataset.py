@@ -19,8 +19,10 @@ from training.dataset import (
     CachedLatentDataset,
     ImageDataset,
     MergedDataset,
+    NavitPackBatchSampler,
     collate_fn,
     collate_fn_cached,
+    collate_fn_navit_pack,
 )
 
 
@@ -37,6 +39,39 @@ def _as_resolutions(value) -> list[int]:
         out = [int(v) for v in value]
         return out or [1024]
     return [int(value)]
+
+
+def _rope_max_side_tokens(ctx) -> int:
+    """模型 RoPE 单边可寻址的 patch-token 上限（= max_img_h // patch_spatial）。
+
+    NaViT 原生定尺寸据此在数据层封顶单边，避免超 ``_packed_rope_from_grid`` 的前向 fail-fast
+    （白白浪费一次全量 VAE 缓存）。取不到（如无模型的单测）→ 0（不早封顶，仍由前向 fail-fast 兜底）。
+    """
+    pe = getattr(getattr(ctx, "model", None), "pos_embedder", None)
+    try:
+        return int(min(int(pe.max_h), int(pe.max_w)))
+    except Exception:
+        return 0
+
+
+def _native_dataset_kwargs(args, ctx) -> dict:
+    """navit_native_resolution 开启时给 ImageDataset 的原生定尺寸参数；关闭 → 空 dict（行为中立）。"""
+    navit_packing = bool(getattr(args, "navit_packing", False))
+    if not (navit_packing and bool(getattr(args, "navit_native_resolution", False))):
+        return {}
+    kwargs = dict(
+        native_resolution=True,
+        native_token_budget=int(getattr(args, "navit_token_budget", 0) or 0),
+        native_over_budget=str(getattr(args, "navit_native_over_budget", "downscale") or "downscale"),
+        native_max_side_tokens=_rope_max_side_tokens(ctx),
+    )
+    logger.info(
+        "[navit-native] 原生定尺寸已启用：单图 floor 对齐 16px、零 padding，绕过 ARB 桶量化；"
+        "超预算策略=%s，token 预算=%d，RoPE 单边上限=%s tokens。",
+        kwargs["native_over_budget"], kwargs["native_token_budget"],
+        kwargs["native_max_side_tokens"] or "不限",
+    )
+    return kwargs
 
 
 def run(ctx: TrainingContext) -> None:
@@ -56,6 +91,9 @@ def run(ctx: TrainingContext) -> None:
     ar_limit = float(getattr(args, "aspect_ratio_limit", 2.0))
     base_reso = res_list[0]
 
+    # NaViT 原生定尺寸参数（navit_native_resolution）；关闭时为空 dict → 行为中立。
+    native_kwargs = _native_dataset_kwargs(args, ctx)
+
     # 数据集
     ctx.bucket_mgr = BucketManager(base_reso, aspect_ratio_limit=ar_limit)
     ctx.base_dataset = ImageDataset(
@@ -67,6 +105,7 @@ def run(ctx: TrainingContext) -> None:
         prefer_json=args.prefer_json,
         resolutions=res_list,
         aspect_ratio_limit=ar_limit,
+        **native_kwargs,
     )
     ctx.dataset = ctx.base_dataset
 
@@ -90,6 +129,7 @@ def run(ctx: TrainingContext) -> None:
                 caption_override=reg_caption if reg_caption else None,
                 resolutions=res_list,
                 aspect_ratio_limit=ar_limit,
+                **native_kwargs,
             )
             ctx.reg_dataset = reg_base
             reg_weight = float(getattr(args, "reg_weight", 1.0) or 1.0)
@@ -107,11 +147,19 @@ def run(ctx: TrainingContext) -> None:
         ctx.dataset = CachedLatentDataset(
             ctx.dataset, ctx.vae, ctx.device, ctx.vae_dtype,
             cache_batch_size=cache_batch_size,
+            encode_tiled=getattr(args, "cache_encode_tiled", False),
+            encode_tile_px=getattr(args, "cache_encode_tile_px", 1024),
+            encode_tile_overlap=getattr(args, "cache_encode_tile_overlap", 128),
+            encode_max_pixels=getattr(args, "cache_encode_max_pixels", 0),
         )
     if ctx.reg_dataset is not None and ctx.use_cached:
         ctx.reg_dataset = CachedLatentDataset(
             ctx.reg_dataset, ctx.vae, ctx.device, ctx.vae_dtype,
             cache_batch_size=cache_batch_size,
+            encode_tiled=getattr(args, "cache_encode_tiled", False),
+            encode_tile_px=getattr(args, "cache_encode_tile_px", 1024),
+            encode_tile_overlap=getattr(args, "cache_encode_tile_overlap", 128),
+            encode_max_pixels=getattr(args, "cache_encode_max_pixels", 0),
         )
 
     # repeat: 主数据集和正则数据集均通过文件夹名 Kohya 风格 repeat（如 5_concept），无需全局 repeat
@@ -123,7 +171,26 @@ def run(ctx: TrainingContext) -> None:
         logger.warning("num_workers > 0 在 Windows 上容易崩溃：已强制设为 0（避免多进程 spawn 问题）")
         args.num_workers = 0
 
-    if ctx.use_cached:
+    if getattr(args, "navit_packing", False):
+        # NaViT / Patch-n-Pack 块对角打包：按 token 预算把多张不同尺寸的图拼进
+        # 一个训练序列（零 padding），替代 ARB 固定桶分批。需配合 cache_latents。
+        batch_sampler = NavitPackBatchSampler(
+            ctx.dataset,
+            token_budget=int(getattr(args, "navit_token_budget", 16384) or 16384),
+            max_images_per_pack=int(getattr(args, "navit_max_images_per_pack", 0) or 0),
+            shuffle=True,
+            seed=getattr(args, "seed", 42),
+            drop_last=getattr(args, "navit_drop_last", False),
+            strategy=getattr(args, "navit_pack_strategy", "next_fit"),
+            # 不用 `or 256`：0 是合法值（全局 FFD，每 epoch 包固定），会被 falsy 吞掉。
+            ffd_window=int(getattr(args, "navit_pack_ffd_window", 256)),
+        )
+        ctx.dataloader = DataLoader(
+            ctx.dataset, batch_sampler=batch_sampler,
+            collate_fn=collate_fn_navit_pack,
+            num_workers=args.num_workers,
+        )
+    elif ctx.use_cached:
         # drop_last=False：桶尾不足 batch_size 出短 batch 而非丢图。
         # 对齐 kohya sd-scripts / ostris ai-toolkit；diffusion 用 LayerNorm/GroupNorm，
         # 对动态 batch 不敏感，loop.py 也按 latents.shape[0] 动态读 bs。

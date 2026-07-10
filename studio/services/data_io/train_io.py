@@ -482,10 +482,15 @@ def export_bundle(
     config_included = False
     if opts.include_config:
         from .. import version_config as _vc
+        from ...domain.config_prune import prune_inactive_fields
         import yaml as _yaml
         try:
+            # read_version_config 经 pydantic 补回了全部默认字段，bundle 里的
+            # config 和落盘 yaml 一样只带生效字段，这里再裁一遍。
             cfg = _vc.read_version_config(p, v)
-            portable = {k: v_ for k, v_ in cfg.items() if k not in _vc.PROJECT_SPECIFIC_FIELDS}
+            portable = prune_inactive_fields(
+                {k: v_ for k, v_ in cfg.items() if k not in _vc.PROJECT_SPECIFIC_FIELDS}
+            )
             in_memory.append((
                 _yaml.safe_dump(portable, allow_unicode=True, sort_keys=False, default_flow_style=False),
                 VERSION_CONFIG_ARC,

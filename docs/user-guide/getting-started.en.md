@@ -70,7 +70,7 @@ Open <http://127.0.0.1:8765/>, click "+ New project" on the projects page, and t
 
 1. **Download** — Booru scraping (fill in Gelbooru / Danbooru credentials in Settings first) or local jpg / png / zip upload.
 2. **Curate** — download / train dual panels, multi-select to copy images into train/, subfolder management.
-3. **Preprocess** ✱ — overview (multi-select + one-click undo) + duplicate review + upscale (ESRGAN / Real-ESRGAN presets) + crop (manual box + smart AR-clustering prefill) + inpaint. Skip if not needed.
+3. **Preprocess** ✱ — overview (multi-select + one-click undo) + duplicate review + upscale (ESRGAN / Real-ESRGAN presets) + crop (manual box + auto AR-clustering prefill) + inpaint. Skip if not needed.
 4. **Tag** — WD14 / CLTagger / LLM (OpenAI-compatible, including a JoyCaption preset) + thresholds, automatic GPU EP fallback; a trigger word at the top is auto-injected into every caption and sample image.
 5. **Tag editor** — cached mode + restore points, bulk add / delete / replace, per-image edits.
 6. **Regularization set** ✱ — two generation modes: **AI prior generation** (default, the base model produces the reg set with no LoRA) or **Booru reverse search** (reverse-search Booru by tag distribution + auto WD14 tagging + aspect-ratio clustering). mirror / flat structure, editable / deletable / auto-dedup / dual tagger.

@@ -15,6 +15,7 @@ import {
 import { parseFolderMeta } from '../../../lib/folderMeta'
 import { useLocalStorageState } from '../../../lib/useLocalStorageState'
 import ConfigSkeleton from '../../../components/ConfigSkeleton'
+import ConfigYamlPanel from '../../../components/ConfigYamlPanel'
 import { useDialog } from '../../../components/Dialog'
 import SchemaForm, { visibleSchemaGroups } from '../../../components/SchemaForm'
 import SchemaSectionIndex from '../../../components/SchemaSectionIndex'
@@ -212,11 +213,13 @@ export default function TrainPage() {
    *   - 相等 → 用户没动过，安全 sync server 归一化结果到 UI
    *   - 不等 → 用户有新内容，只更新 savedJson baseline，UI state 不动；
    *            useEffect debounce 会自然为新内容触发下一轮 save 收敛 */
-  const persistConfig = useCallback(async (cfg: ConfigData): Promise<void> => {
+  const persistConfig = useCallback(async (cfg: ConfigData, force = false): Promise<void> => {
     while (inFlightSaveRef.current) {
       await inFlightSaveRef.current
     }
-    if (JSON.stringify(cfg) === savedJsonRef.current) return
+    // force：内容没变也要 PUT（「清理旧字段」重写 yaml —— 磁盘上的旧键不在
+    // GET 归一化结果里，JSON diff 看不出差异）。
+    if (!force && JSON.stringify(cfg) === savedJsonRef.current) return
     const p = (async () => {
       const r = await api.putVersionConfig(project.id, vid!, cfg)
       setConfigResp((prev) => prev ? { ...prev, has_config: true, config: r.config } : prev)
@@ -226,10 +229,13 @@ export default function TrainPage() {
         configRef.current = r.config
         setConfig(r.config)
       }
+      // PUT 全量重写 yaml（tolerant validate + prune），磁盘上不再有旧字段 /
+      // 非法值 —— 兼容横幅的信息已过期，清掉。
+      applyPresetWarnings({})
     })()
     inFlightSaveRef.current = p
     try { await p } finally { inFlightSaveRef.current = null }
-  }, [project.id, vid])
+  }, [project.id, vid, applyPresetWarnings])
 
   // ── auto-save ─────────────────────────────────────────────────────────
   // config 变化 → 600ms 后没新改动就落盘。中途又改 → cleanup clearTimeout 重置。
@@ -268,6 +274,7 @@ export default function TrainPage() {
   const schemaScrollRef = useRef<HTMLDivElement | null>(null)
   // 右侧训练集分布预览抽屉的展开/收起（持久化）。收起时把横向空间让给表单。
   const [previewOpen, setPreviewOpen] = useLocalStorageState('train.previewOpen', true)
+  const [previewTab, setPreviewTab] = useLocalStorageState<'stats' | 'config'>('train.previewTab', 'stats')
   const visibleGroups = useMemo(
     () => (schema ? visibleSchemaGroups(schema, advancedMode) : []),
     [schema, advancedMode],
@@ -741,7 +748,23 @@ export default function TrainPage() {
                 </div>
                 {(droppedFields.length > 0 || defaultedFields.length > 0) && (
                   <div className="mb-3 rounded-md border border-amber-400/50 bg-amber-950/60 px-3.5 py-2.5 text-xs text-amber-100 space-y-1">
-                    <span className="font-semibold text-amber-300">{t('presets.compatNoticeTitle')}</span>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-amber-300">{t('presets.compatNoticeTitle')}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const cur = configRef.current
+                          if (!cur) return
+                          void persistConfig(cur, true)
+                            .then(() => toast(t('presets.cleanLegacyDone'), 'success'))
+                            .catch((e) => toast(t('train.saveFailed', { error: e }), 'error'))
+                        }}
+                        className="shrink-0 rounded border border-amber-400/50 bg-transparent px-2 py-0.5 text-[11px] font-medium text-amber-200 hover:bg-amber-400/10 cursor-pointer"
+                        title={t('presets.cleanLegacyTitle')}
+                      >
+                        {t('presets.cleanLegacyBtn')}
+                      </button>
+                    </div>
                     {droppedFields.length > 0 && (
                       <div>{t('presets.droppedFieldsBody')}<code className="ml-1 text-[11px] opacity-80">{droppedFields.join(', ')}</code></div>
                     )}
@@ -790,16 +813,53 @@ export default function TrainPage() {
           </button>
         </div>
 
-        {/* 右栏：训练集分布预览抽屉（可收回）。flex-[1] 与左表单 flex-[3] 还原老
-            grid 的 3:1 比例（按比例而非固定宽）；收起时整列不渲染、空间归表单。 */}
+        {/* 右栏：预览抽屉（可收回），双 tab：数据分布 / YAML 预览。数据分布保持
+            与左表单 flex-[3] 的 3:1 老比例；YAML tab 加宽到 3:2（yaml 行长，1/4
+            宽不断折行看不清）。收起时整列不渲染、空间归表单。YAML 预览 = 按
+            show_when 裁剪后的 yaml，实时跟随表单，与落盘 config.yaml 同内容。 */}
         {previewOpen && (
-          <div className="flex-[1] min-w-0 overflow-y-auto">
-            <DatasetStatsPanel
-              projectId={project.id}
-              activeVersion={activeVersion}
-              reg={reg}
-              config={config}
-            />
+          <div className={`${previewTab === 'config' ? 'flex-[2]' : 'flex-[1]'} min-w-0 flex flex-col min-h-0`}>
+            {/* tab 条靠右：切 YAML tab 时抽屉加宽、左缘会移动，右对齐锚在固定的
+                右缘上，切换时开关自身不跟着跳。 */}
+            <div className="shrink-0 mb-2 flex justify-end">
+              <div className="inline-flex rounded-md border border-subtle overflow-hidden text-xs">
+                <button
+                  type="button"
+                  onClick={() => setPreviewTab('stats')}
+                  className={`px-3 py-1 transition-colors ${previewTab === 'stats' ? 'bg-accent text-white' : 'bg-surface text-fg-secondary hover:bg-subtle'}`}
+                >
+                  {t('train.previewTabStats')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewTab('config')}
+                  className={`px-3 py-1 transition-colors ${previewTab === 'config' ? 'bg-accent text-white' : 'bg-surface text-fg-secondary hover:bg-subtle'}`}
+                >
+                  {t('train.previewTabYaml')}
+                </button>
+              </div>
+            </div>
+            {previewTab === 'stats' ? (
+              <div className="flex-1 min-h-0 overflow-y-auto">
+                <DatasetStatsPanel
+                  projectId={project.id}
+                  activeVersion={activeVersion}
+                  reg={reg}
+                  config={config}
+                />
+              </div>
+            ) : config ? (
+              <ConfigYamlPanel
+                config={config}
+                schema={schema}
+                fileLabel="config.yaml"
+                className="flex-1 flex flex-col min-h-0"
+              />
+            ) : (
+              <div className="flex-1 flex items-center justify-center text-fg-tertiary text-sm rounded-md border border-dashed border-dim">
+                {t('train.noConfigHint')}
+              </div>
+            )}
           </div>
         )}
       </div>

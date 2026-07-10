@@ -33,6 +33,5 @@ GROUP_ORDER: list[tuple[str, str, bool]] = [
     ("output", "输出与保存", False),
     ("sample", "采样", False),
     ("eval_validation", "训练后指标评估", True),
-    ("wandb", "WandB (预设覆盖)", True),
     ("monitor", "监控与进度", False),
 ]

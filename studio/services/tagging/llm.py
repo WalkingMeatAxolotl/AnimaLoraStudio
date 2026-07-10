@@ -28,7 +28,7 @@ from .caption_format import (
     caption_json_to_text,
     normalize_caption_json,
 )
-from .base import ProgressFn, TagResult
+from .base import ProgressFn, TagResult, get_tagger
 
 
 logger = logging.getLogger(__name__)
@@ -396,6 +396,21 @@ def test_openai_compatible_connection(
         return result
 
 
+def _apply_tags(
+    messages: list["secrets.LLMMessage"], tags_str: str
+) -> list["secrets.LLMMessage"]:
+    """Replace {{tags}} placeholders without mutating the shared preset messages."""
+    out: list[secrets.LLMMessage] = []
+    for m in messages:
+        if m.type == "text" and "{{tags}}" in m.content:
+            out.append(
+                m.model_copy(update={"content": m.content.replace("{{tags}}", tags_str)})
+            )
+        else:
+            out.append(m)
+    return out
+
+
 class LLMTagger:
     name = "llm"
     requires_service = True
@@ -457,6 +472,7 @@ class LLMTagger:
         cfg = self._cfg()
         total = len(image_paths)
         on_progress(0, total)
+        assist_map = self._build_assist_map(cfg, image_paths)
         workers = min(max(1, int(cfg.concurrency or 1)), max(1, total))
         if workers <= 1 or total <= 1:
             done = 0
@@ -465,7 +481,12 @@ class LLMTagger:
                 max_requests_per_minute=cfg.max_requests_per_minute,
             )
             for p in image_paths:
-                yield self._tag_one(cfg, p, rate_limiter=rate_limiter)
+                yield self._tag_one(
+                    cfg,
+                    p,
+                    rate_limiter=rate_limiter,
+                    tags_str=assist_map.get(p, ""),
+                )
                 done += 1
                 on_progress(done, total)
             return
@@ -477,7 +498,13 @@ class LLMTagger:
         )
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {
-                pool.submit(self._tag_one, cfg, p, rate_limiter=rate_limiter): p
+                pool.submit(
+                    self._tag_one,
+                    cfg,
+                    p,
+                    rate_limiter=rate_limiter,
+                    tags_str=assist_map.get(p, ""),
+                ): p
                 for p in image_paths
             }
             done = 0
@@ -491,12 +518,56 @@ class LLMTagger:
                 done += 1
                 on_progress(done, total)
 
+    def _build_assist_map(
+        self,
+        cfg: "secrets.LLMPresetConfig",
+        image_paths: list[Path],
+    ) -> dict[Path, str]:
+        needs_assist = bool(cfg.assist_tagger) and any(
+            m.type == "text" and "{{tags}}" in m.content for m in cfg.messages
+        )
+        if not needs_assist:
+            if cfg.assist_tagger:
+                logger.warning(
+                    "LLM assist: assist_tagger=%s set but no {{tags}} placeholder in "
+                    "messages — assist is inert this run",
+                    cfg.assist_tagger,
+                )
+            return {}
+
+        assist = get_tagger(cfg.assist_tagger)
+        assist.prepare()
+        logger.info(
+            "LLM assist: pre-tagging %d images with %s",
+            len(image_paths),
+            cfg.assist_tagger,
+        )
+        out: dict[Path, str] = {}
+        done = 0
+        total = len(image_paths)
+        for result in assist.tag(image_paths):
+            done += 1
+            if result.get("error"):
+                logger.warning(
+                    "LLM assist: tagger failed on %s: %s",
+                    result.get("image"),
+                    result.get("error"),
+                )
+            else:
+                image = Path(result["image"])
+                out[image] = ", ".join(result.get("tags") or [])
+            # 每张一行，与 LLM 阶段 [progress] 的密度对齐——预打标是纯前置阶段，
+            # 任务进度条不动，日志是用户唯一能确认它在推进的地方。
+            logger.info("LLM assist: %d/%d pre-tagged", done, total)
+        return out
+
     def _tag_one(
         self,
         cfg: "secrets.LLMPresetConfig",
         image_path: Path,
         *,
         rate_limiter: _RequestRateLimiter,
+        tags_str: str = "",
     ) -> TagResult:
         try:
             data_url = self._image_to_data_url(
@@ -505,10 +576,12 @@ class LLMTagger:
                 quality=cfg.jpeg_quality,
                 max_image_mb=cfg.max_image_mb,
             )
+            messages = _apply_tags(cfg.messages, tags_str)
             content = self._call_with_retry(
                 cfg,
                 data_url,
                 image_path,
+                messages=messages,
                 rate_limiter=rate_limiter,
             )
             if cfg.output_format == "text":
@@ -547,6 +620,7 @@ class LLMTagger:
         data_url: str,
         image_path: Path,
         *,
+        messages: list["secrets.LLMMessage"],
         rate_limiter: _RequestRateLimiter | None = None,
     ) -> str:
         last_exc: Optional[Exception] = None
@@ -554,12 +628,12 @@ class LLMTagger:
             try:
                 if cfg.endpoint == "responses":
                     endpoint = _openai_compatible_endpoint(cfg.base_url, kind="responses")
-                    body = self._responses_payload(cfg, data_url, image_path)
+                    body = self._responses_payload(cfg, data_url, image_path, messages)
                 else:
                     endpoint = _openai_compatible_endpoint(
                         cfg.base_url, kind="chat/completions"
                     )
-                    body = self._chat_payload(cfg, data_url, image_path)
+                    body = self._chat_payload(cfg, data_url, image_path, messages)
                 if rate_limiter is not None:
                     rate_limiter.wait()
                 started = time.monotonic()
@@ -602,27 +676,28 @@ class LLMTagger:
         cfg: "secrets.LLMPresetConfig",
         data_url: str,
         image_path: Path,
+        messages: list["secrets.LLMMessage"],
     ) -> dict[str, Any]:
         """按 preset.messages 顺序构造 chat-completions messages 数组。
 
         text item → 单条 message；image item → 单条 `{role: user, content: [image_url]}`。
         相邻同 role 不自动合并（OpenAI 完全 OK；Anthropic 兼容层会自动处理）。
         """
-        messages: list[dict[str, Any]] = []
-        for item in cfg.messages:
+        payload_messages: list[dict[str, Any]] = []
+        for item in messages:
             if item.type == "image":
-                messages.append({
+                payload_messages.append({
                     "role": "user",
                     "content": [{"type": "image_url", "image_url": {"url": data_url}}],
                 })
             else:
-                messages.append({"role": item.role, "content": item.content})
+                payload_messages.append({"role": item.role, "content": item.content})
         return {
             "model": cfg.model,
             "temperature": cfg.temperature,
             "max_tokens": cfg.max_tokens,
             "stream": False,
-            "messages": messages,
+            "messages": payload_messages,
         }
 
     def _responses_payload(
@@ -630,6 +705,7 @@ class LLMTagger:
         cfg: "secrets.LLMPresetConfig",
         data_url: str,
         image_path: Path,
+        messages: list["secrets.LLMMessage"],
     ) -> dict[str, Any]:
         """Responses API 限制式适配：
 
@@ -643,7 +719,7 @@ class LLMTagger:
         """
         system_texts: list[str] = []
         user_text = ""
-        for item in cfg.messages:
+        for item in messages:
             if item.type != "text":
                 continue
             if item.role == "system":

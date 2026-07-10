@@ -21,30 +21,8 @@ import {
   loadPresetDescriptions,
   savePresetDescriptions,
 } from '../../lib/preset-helpers'
-
-// ── TOML 生成（键按字母排序，值尽量保留原始类型） ──────────────────────────
-function toTomlValue(v: unknown): string {
-  if (v === null || v === undefined) return ''
-  if (typeof v === 'boolean') return v ? 'true' : 'false'
-  if (typeof v === 'number') return String(v)
-  if (Array.isArray(v)) return '[' + v.map(toTomlValue).join(', ') + ']'
-  if (typeof v === 'object') {
-    const lines: string[] = []
-    for (const [k, vv] of Object.entries(v as Record<string, unknown>)) {
-      lines.push(`  ${k} = ${toTomlValue(vv)}`)
-    }
-    return '{\n' + lines.join('\n') + '\n}'
-  }
-  const s = String(v)
-  if (/[\n"'#[\]{}]/.test(s)) return `'''\n${s}\n'''`
-  if (s.includes(' ') || s === '' || /[^\w.\-]/.test(s)) return `"${s}"`
-  return s
-}
-
-function generateToml(config: ConfigData): string {
-  const keys = Object.keys(config).sort()
-  return keys.map((k) => `${k} = ${toTomlValue(config[k])}`).join('\n')
-}
+import ConfigYamlPanel from '../../components/ConfigYamlPanel'
+import { useLocalStorageState } from '../../lib/useLocalStorageState'
 
 // 预设名校验 / 描述存储 / schema 默认值 抽到 lib/preset-helpers.ts，
 // 跟 Train 页面「新建预设」内联表单共享，避免两份维护。
@@ -112,7 +90,8 @@ export default function PresetsPage() {
   // ── UI 状态 ──
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerSearch, setPickerSearch] = useState('')
-  const [tomlOpen, setTomlOpen] = useState(false)
+  // YAML 预览抽屉（与 Train 页同款把手 + 竖线；预设页无数据分布，无 tab）。默认折叠。
+  const [previewOpen, setPreviewOpen] = useLocalStorageState('presets.previewOpen', false)
   const [exportDialogOpen, setExportDialogOpen] = useState(false)
   const [showImportPathPicker, setShowImportPathPicker] = useState(false)
   const [advancedMode, toggleAdvancedMode] = useAdvancedMode()
@@ -337,6 +316,10 @@ export default function PresetsPage() {
       }
       savedJsonRef.current = JSON.stringify(config)
       setDescDirty(false)
+      // savePreset 全量重写 yaml（validate + prune），磁盘上不再有旧字段 ——
+      // 兼容横幅的信息已过期，清掉。
+      setDroppedFields([])
+      setDefaultedFields([])
       if (isNew) {
         setSelected(name)
         setNewName('')
@@ -346,6 +329,22 @@ export default function PresetsPage() {
         toast(t('presets.saved'), 'success')
       }
       refreshList()
+    } catch (e) { toast(String(e), 'error') }
+    finally { setBusy(false) }
+  }
+
+  // 兼容横幅「清理旧字段」：把当前生效 config 原样写回（savePreset 全量重写
+  // yaml），磁盘上的旧字段 / 非法值随之消失，横幅不再出现。含未保存编辑时
+  // 一并落盘 —— 语义就是「按当前所见重写文件」。
+  const handleCleanLegacy = async () => {
+    if (!selected || !config) return
+    setBusy(true)
+    try {
+      await api.savePreset(selected, config)
+      savedJsonRef.current = JSON.stringify(config)
+      setDroppedFields([])
+      setDefaultedFields([])
+      toast(t('presets.cleanLegacyDone'), 'success')
     } catch (e) { toast(String(e), 'error') }
     finally { setBusy(false) }
   }
@@ -692,12 +691,10 @@ export default function PresetsPage() {
           )}
       </div>
 
-      {/* ── content（scroll） ── */}
-      <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-auto p-4">
-        <div
-          className="grid gap-10"
-          style={{ gridTemplateColumns: '3fr 1fr' }}
-        >
+      {/* ── content：左表单（自己滚动）+ 锚点导航 + 把手 + YAML 预览抽屉。
+          布局与 Train 页一致：抽屉收起时空间归表单。 ── */}
+      <div className="flex-1 min-h-0 flex gap-4 p-4">
+        <div ref={scrollContainerRef} className="flex-[3] min-w-0 overflow-y-auto">
         <div className="flex flex-col gap-3 min-w-0">
 
           {/* 名称 / 描述 */}
@@ -767,7 +764,20 @@ export default function PresetsPage() {
               </div>
               {(droppedFields.length > 0 || defaultedFields.length > 0) && (
                 <div className="mb-3 rounded-md border border-amber-400/50 bg-amber-950/60 px-3.5 py-2.5 text-xs text-amber-100 space-y-1">
-                  <span className="font-semibold text-amber-300">{t('presets.compatNoticeTitle')}</span>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-amber-300">{t('presets.compatNoticeTitle')}</span>
+                    {selected !== null && (
+                      <button
+                        type="button"
+                        onClick={() => void handleCleanLegacy()}
+                        disabled={busy}
+                        className="shrink-0 rounded border border-amber-400/50 bg-transparent px-2 py-0.5 text-[11px] font-medium text-amber-200 hover:bg-amber-400/10 cursor-pointer disabled:opacity-50"
+                        title={t('presets.cleanLegacyTitle')}
+                      >
+                        {t('presets.cleanLegacyBtn')}
+                      </button>
+                    )}
+                  </div>
                   {droppedFields.length > 0 && (
                     <div>{t('presets.droppedFieldsBody')}<code className="ml-1 text-[11px] opacity-80">{droppedFields.join(', ')}</code></div>
                   )}
@@ -789,55 +799,51 @@ export default function PresetsPage() {
             </section>
           )}
 
-          {/* TOML 预览（默认折叠） */}
-          {config && Object.keys(config).length > 0 && (
-            <section className={`rounded-md border border-subtle bg-surface ${tomlOpen ? 'px-3.5 py-2.5' : 'px-3.5 py-1.5'}`}>
-              <button
-                type="button"
-                onClick={() => setTomlOpen((v) => !v)}
-                className="w-full flex items-center gap-2 bg-transparent border-none p-0 cursor-pointer text-left"
-              >
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-info shrink-0" />
-                <span className="caption uppercase tracking-[0.06em] text-xs">{t('presets.tomlPreview')}</span>
-                <span className="text-[10px] text-fg-tertiary">
-                  {tomlOpen ? t('presets.tomlReadable') : t('presets.tomlCollapsed')}
-                </span>
-                <span className="flex-1" />
-                {tomlOpen && (
-                  <button
-                    className="btn btn-ghost btn-sm text-xs"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      const toml = generateToml(config)
-                      navigator.clipboard.writeText(toml)
-                        .then(() => toast(t('presets.copied'), 'success'))
-                        .catch(() => toast(t('presets.copyFailed'), 'error'))
-                    }}
-                  >{t('common.copy')}</button>
-                )}
-                <span className="text-fg-tertiary">{tomlOpen ? '▾' : '▸'}</span>
-              </button>
-              {tomlOpen && (
-                <pre className="m-0 mt-2.5 p-3 bg-sunken rounded-sm font-mono text-xs text-fg-secondary leading-[1.7] whitespace-pre-wrap break-words max-h-80 overflow-auto">
-                  {generateToml(config)}
-                </pre>
-              )}
-            </section>
-          )}
+        </div>
         </div>
 
-        {/* 右侧锚点导航：跟 Settings 页一个套路，sticky 跟随滚动 */}
-        <aside className="hidden lg:block">
-          <div className="sticky top-0">
-            {schema && config && visibleGroups.length > 0 && (
-              <SchemaSectionIndex
-                groups={visibleGroups}
-                scrollContainer={scrollContainerRef}
-              />
-            )}
-          </div>
-        </aside>
+        {/* 章节锚点导航（固定窄列，跟 Train 页一致） */}
+        {schema && config && visibleGroups.length > 0 && (
+          <aside className="hidden lg:block shrink-0 w-[168px] overflow-y-auto">
+            <SchemaSectionIndex
+              groups={visibleGroups}
+              scrollContainer={scrollContainerRef}
+            />
+          </aside>
+        )}
+
+        {/* 把手：单竖线 + 顶部圆圈 ›/‹ —— 分隔 YAML 预览抽屉（与 Train 页同款） */}
+        <div className="relative w-3 shrink-0 self-stretch flex justify-center">
+          <div className="w-px bg-subtle" />
+          <button
+            type="button"
+            onClick={() => setPreviewOpen((v) => !v)}
+            title={previewOpen ? t('train.collapsePreview') : t('train.expandPreview')}
+            aria-label={previewOpen ? t('train.collapsePreview') : t('train.expandPreview')}
+            className="absolute top-1 left-1/2 -translate-x-1/2 w-6 h-6 rounded-full border border-subtle bg-surface text-fg-tertiary hover:text-accent hover:border-accent flex items-center justify-center text-xs leading-none shadow-sm"
+          >
+            {previewOpen ? '›' : '‹'}
+          </button>
         </div>
+
+        {/* YAML 预览抽屉：与落盘 yaml 一致的只读视图，实时跟随表单编辑 */}
+        {previewOpen && config && (
+          <div className="flex-[2] min-w-0 flex flex-col min-h-0">
+            <div className="shrink-0 mb-2 flex items-center gap-2" title={t('presets.yamlPreviewHint')}>
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-info shrink-0" />
+              <span className="caption uppercase tracking-[0.06em] text-xs">{t('presets.yamlPreview')}</span>
+            </div>
+            <ConfigYamlPanel
+              config={config}
+              schema={schema}
+              fileLabel={isNew
+                ? `${newName.trim() || 'preset'}.yaml`
+                : `${selected}.yaml`}
+              hint={isNew || dirty ? t('presets.yamlPreviewDirty') : undefined}
+              className="flex-1 flex flex-col min-h-0"
+            />
+          </div>
+        )}
       </div>
 
       {exportDialogOpen && (

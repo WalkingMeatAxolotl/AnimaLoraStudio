@@ -8,7 +8,7 @@ AnimaLoraStudio/
 │   ├── anima_train.py             # 训练入口
 │   ├── training/                  # 训练栈子包：context / phases / loop / sample_runner
 │   │   ├── adapters/              # plugin: lokr / loha / lora
-│   │   ├── optimizers/            # plugin: adamw / lion / automagic / prodigy / prodigy_plus_schedulefree / soap / soap_sf
+│   │   ├── optimizers/            # plugin: adamw / automagic / came / lion / prodigy / prodigy_plus_schedulefree / soap / soap_sf
 │   │   ├── schedulers/            # plugin: cosine / cosine_with_restart / cosine_with_warmup / none
 │   │   ├── inference_samplers/    # plugin: er_sde 等
 │   │   └── phases/                # bootstrap / models / dataset / optimizer / resume / finalize

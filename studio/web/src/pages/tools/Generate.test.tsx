@@ -488,4 +488,67 @@ describe('GeneratePage 端到端 smoke', () => {
     // ……但右侧已出结果网格冻结：仍含 "30" 表头，未被 live 编辑串改
     expect(screen.getByText('30')).toBeInTheDocument()
   })
+
+  // ---- 回看历史 XY 时点「开始生成」→ 回到实时视图（P-I 回归修复）----
+  it('回看 XY 历史时点开始生成：清掉历史 override，结果区回到实时新任务', async () => {
+    // 修前（P-I 删了「currentTask.id 变自动清 override」的 effect）：点开始生成不清
+    // override，结果区停留在正回看的老 XY 图，看不到新入队/正在跑的这次。
+    // 修后：提交即清 override，回到实时视图。
+    vi.mocked(useMonitorProgress).mockReturnValue({
+      state: {
+        samples: [{ path: 'cell x0 y0.png', xy: { xi: 0, yi: 0, xv: 20, yv: null } }],
+      },
+    } as never)
+    seedPrefs({ mode: 'xy' })  // 默认 X=steps raw "20, 25, 30"
+    const xySnapshotParams = {
+      schema_version: 1, mode: 'xy',
+      prompts: ['recall'], negative_prompt: '',
+      width: 1024, height: 1024, steps: 25, cfg_scale: 4, count: 1, seed: 0,
+      loras: [],
+      // 用 steps 轴（非 lora_ckpt）→ 回填后按钮仍是「· 3 张」，不引入 picker 异步
+      xy_draft: { x: { axis: 'steps', raw: '20, 25, 30', loraIndex: null }, y: null },
+      dataset_pick: null,
+    }
+    const diskEntry = {
+      id: 'disk:xy1', date: '2026-06-09', mode: 'xy', folder: 'xy plot 1',
+      path: '/tmp/test/2026-06-09/xy/xy plot 1',
+      image_url: '/api/generate/disk/image/2026-06-09/xy/xy%20plot%201/xy%20plot.png',
+      thumb_url: '/api/generate/disk/thumb/2026-06-09/xy/xy%20plot%201/xy%20plot.png?w=128',
+      created_at: 1717900000, schema_version: 2,
+      params: xySnapshotParams,
+      xy_meta: {
+        x_axis: 'steps', y_axis: null,
+        x_values: ['20', '25', '30'], y_values: [null], samples: [],
+      },
+    }
+    const previousImpl = fetchMock.getMockImplementation()
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/generate/disk/history') && (init?.method ?? 'GET') === 'GET') {
+        return Promise.resolve({
+          ok: true, status: 200,
+          json: async () => ({ entries: [diskEntry] }),
+          text: async () => JSON.stringify({ entries: [diskEntry] }),
+          headers: new Headers({ 'content-type': 'application/json' }),
+        } as Response)
+      }
+      return previousImpl ? previousImpl(url, init) : Promise.resolve({
+        ok: false, status: 404, json: async () => null, text: async () => '',
+        headers: new Headers(),
+      } as Response)
+    })
+
+    const user = userEvent.setup()
+    setup()
+    await waitForInitialLorasLoad()
+
+    // 点历史缩略图进入回看：结果区底部显示文件夹名 "xy plot 1"（override 生效标志）
+    const thumb = await screen.findByTitle(/xy plot 1 ·/)
+    await user.click(thumb)
+    await waitFor(() => expect(screen.getByText('xy plot 1')).toBeInTheDocument())
+
+    // 点开始生成 → 清掉 override，结果区回到实时任务：底部 "xy plot 1" 文本消失
+    await user.click(screen.getByRole('button', { name: /开始生成 · 3 张/ }))
+    await waitFor(() => expect(lastEnqueueBody).not.toBeNull())
+    await waitFor(() => expect(screen.queryByText('xy plot 1')).not.toBeInTheDocument())
+  })
 })

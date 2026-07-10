@@ -41,10 +41,21 @@ def models_root_info(scan: bool = True) -> dict[str, Any]:
 
 @router.post("/api/models-root/migrate")
 def models_root_migrate(body: ModelsRootMigrateRequest) -> dict[str, Any]:
-    """起迁移。约束：无 running task（复制期间训练继续读权重 / move 语义不安全）。"""
+    """起迁移。约束：无 running task（复制期间训练继续读权重 / move 语义不安全）。
+
+    目标已有非空 models/ 且未传 on_conflict → 409 `target_conflict`（details 带
+    目标现有文件统计 + 同名文件数），前端弹「跳过/覆盖/取消」后带 on_conflict 重发。
+    """
     _check_no_running_tasks()
     try:
-        svc.start_migration(Path(body.target))
+        svc.start_migration(Path(body.target), on_conflict=body.on_conflict)
+    except svc.TargetConflictError as exc:
+        # 注意放 except ValueError 前（它是 ValueError 子类）
+        raise ConflictError(
+            "Target already contains a non-empty models directory",
+            code="models_root.target_conflict",
+            details=exc.details,
+        ) from exc
     except ValueError as exc:
         raise ValidationError(
             f"Invalid target location: {exc}",

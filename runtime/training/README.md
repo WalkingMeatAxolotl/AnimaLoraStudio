@@ -31,12 +31,17 @@ runtime/training/
 ├── model_loading.py        ← prefix 推断 / safetensors / 路径解析 / xformers / forward checkpoint
 ├── models.py               ← load_anima_model / load_vae / load_text_encoders（sister script 也用）
 ├── text_encoding.py        ← Qwen / T5 加权 tokenize
+├── comfy_qwen.py           ← ComfyUI 风格 Qwen3 0.6B text encoder（与 Comfy 对齐）
 ├── state.py                ← save / load_training_state
-├── dataset.py              ← BucketManager + ImageDataset + 5 衍生类 + collate
+├── snapshot.py             ← pause / resume 用的 state snapshot helpers（ADR 0006）
+├── dataset.py              ← BucketManager + ImageDataset + 5 衍生类 + collate + navit sampler/collate
 ├── sampling.py             ← 推理用 sample_image + sigma 调度（被 sister script 也用）
 ├── timestep_sampling.py    ← 训练 step 用 sample_t（logit_normal / uniform / mode）；
 │                            被 timestep_samplers/baseline.py 复用
 ├── noise.py                ← make_noise（offset + pyramid）
+├── navit.py                ← NaViT / Patch-n-Pack 训练步核心（逐图加噪 → 打包前向 → 逐图 loss）
+├── leap.py                 ← LeapAlign / FlowBP 轨迹自蒸馏训练步（四变体）
+├── sra_align.py            ← SRA v2 VAE 自表征对齐（表征对齐 loss）
 ├── loss_weighting.py       ← compute_loss_weight（min_snr / cosmap / detail_inv_t）；
 │                            注意：是 *loss 权重*（Flow Matching 步级缩放系数），
 │                            跟 *loss 类型*（mse / huber，见 losses/）正交

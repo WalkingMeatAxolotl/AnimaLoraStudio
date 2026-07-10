@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 195,
+  "count": 197,
   "routes": [
     {
       "path": "/",
@@ -1287,6 +1287,22 @@
         "PUT"
       ],
       "name": "put_secrets",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/secrets/wandb/presets/import",
+      "methods": [
+        "POST"
+      ],
+      "name": "import_wandb_preset",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/secrets/wandb/presets/{preset_id}/export",
+      "methods": [
+        "GET"
+      ],
+      "name": "export_wandb_preset",
       "type": "APIRoute"
     },
     {

@@ -29,8 +29,8 @@ def parse_args():
     p.add_argument("--interactive", action="store_true", help="交互模式，提示输入缺失参数")
     p.add_argument("--no-live-curve", action="store_true", help="禁用实时 Loss 曲线刷新")
     # PP6.1 — 监控状态文件路径；不传则默认写到 output_dir/monitor_state.json
-    # 注：--no-monitor / --monitor-host / --monitor-port / --no-browser 由 schema
-    # 自动从 TrainingConfig 字段生成（保留只为兼容旧 yaml，运行时忽略）。
+    # 注：旧 monitor server 的 --no-monitor / --monitor-host / --monitor-port /
+    # --no-browser 已随 TrainingConfig 字段一并删除（yaml 老键静默丢弃）。
     p.add_argument(
         "--monitor-state-file",
         type=str,

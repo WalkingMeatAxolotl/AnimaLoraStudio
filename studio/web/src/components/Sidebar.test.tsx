@@ -1,9 +1,11 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { SettingsDrawerProvider } from '../lib/SettingsDrawer'
 import {
+  ProjectContext,
   SelectedProjectContext,
+  type ProjectCtxValue,
   type SelectedProjectValue,
 } from '../context/ProjectContext'
 import type { ProjectDetail, Version } from '../api/client'
@@ -43,6 +45,44 @@ const MOCK_PROJECT: ProjectDetail = {
   download_image_count: 0, preprocess_image_count: 0,
 }
 const STICKY: SelectedProjectValue = { project: MOCK_PROJECT, activeVersion: MOCK_VERSION }
+
+const V2: Version = {
+  ...MOCK_VERSION, id: 8, label: 'v2-exp', status: 'completed', phase: 'ready',
+}
+
+// live 态（项目内）：注入带回调的 ProjectContext（interactive=true）。
+function renderLive(path: string, ctx: ProjectCtxValue) {
+  return render(
+    <MemoryRouter
+      initialEntries={[path]}
+      future={{ v7_relativeSplatPath: true, v7_startTransition: true }}
+    >
+      <ToastProvider>
+        <DialogProvider>
+          <SettingsDrawerProvider>
+            <ProjectContext.Provider value={ctx}>
+              <Sidebar />
+            </ProjectContext.Provider>
+          </SettingsDrawerProvider>
+        </DialogProvider>
+      </ToastProvider>
+    </MemoryRouter>
+  )
+}
+
+function makeCtx(versions: Version[]): ProjectCtxValue {
+  const project: ProjectDetail = { ...MOCK_PROJECT, versions, active_version_id: versions[0].id }
+  return {
+    project,
+    activeVersion: versions[0],
+    reload: vi.fn(),
+    onSelectVersion: vi.fn(),
+    onCreateVersion: vi.fn(),
+    onExportTrain: vi.fn(),
+    onDeleteVersion: vi.fn(),
+    exporting: false,
+  }
+}
 
 describe('Sidebar (PP0)', () => {
   it('shows main items + tools with all 5 destinations', () => {
@@ -111,5 +151,53 @@ describe('Sidebar (PP0)', () => {
     renderAt('/queue')
     expect(screen.queryByText('甘雨')).toBeNull()
     expect(screen.queryByRole('link', { name: /概览/ })).toBeNull()
+  })
+
+  // 只读态（离开项目）：版本行只显示 label，四个 action 全部收起
+  it('read-only version row off the project route: no action buttons', () => {
+    renderAt('/queue', STICKY)
+    expect(screen.getByText('v1')).toBeInTheDocument()
+    expect(screen.queryByTitle('切换版本')).toBeNull()
+    expect(screen.queryByTitle('新版本')).toBeNull()
+    expect(screen.queryByTitle('打包导出当前版本训练集')).toBeNull()
+    expect(screen.queryByTitle('删除此版本（移到回收站）')).toBeNull()
+  })
+})
+
+describe('Sidebar version row (live / in project)', () => {
+  it('single version: new + export present, switch + delete hidden', () => {
+    renderLive('/projects/3', makeCtx([MOCK_VERSION]))
+    expect(screen.getByTitle('新版本')).toBeInTheDocument()
+    expect(screen.getByTitle('打包导出当前版本训练集')).toBeInTheDocument()
+    // 切换 / 删除只在多版本时出现
+    expect(screen.queryByTitle('切换版本')).toBeNull()
+    expect(screen.queryByTitle('删除此版本（移到回收站）')).toBeNull()
+  })
+
+  it('new + export invoke their handlers', () => {
+    const ctx = makeCtx([MOCK_VERSION])
+    renderLive('/projects/3', ctx)
+    fireEvent.click(screen.getByTitle('新版本'))
+    expect(ctx.onCreateVersion).toHaveBeenCalled()
+    fireEvent.click(screen.getByTitle('打包导出当前版本训练集'))
+    expect(ctx.onExportTrain).toHaveBeenCalled()
+  })
+
+  it('multi version: switch opens popover and picks a version', () => {
+    const ctx = makeCtx([MOCK_VERSION, V2])
+    renderLive('/projects/3', ctx)
+    const sw = screen.getByTitle('切换版本')
+    expect(sw).toBeInTheDocument()
+    fireEvent.click(sw)
+    // popover 列出两版本，点非当前的 v2-exp → onSelectVersion(8)
+    fireEvent.click(screen.getByRole('button', { name: 'v2-exp' }))
+    expect(ctx.onSelectVersion).toHaveBeenCalledWith(8)
+  })
+
+  it('multi version: delete calls onDeleteVersion with active id', () => {
+    const ctx = makeCtx([MOCK_VERSION, V2])
+    renderLive('/projects/3', ctx)
+    fireEvent.click(screen.getByTitle('删除此版本（移到回收站）'))
+    expect(ctx.onDeleteVersion).toHaveBeenCalledWith(7)
   })
 })

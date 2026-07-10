@@ -243,18 +243,33 @@ class VAEWrapper:
         return (acc / wsum).to(z.dtype)
 
     @torch.no_grad()
-    def _tiled_encode(self, pixels):
+    def _tiled_encode(self, pixels, tile_px=None, overlap_px=None):
         """在 H/W 维度切块独立 encode，latent 空间 cosine blend 拼回。
 
-        - tile=512px / stride=384px / overlap=128px（= decode 的 64/48/16 latent ×8）
+        - 默认 tile=512px / stride=384px / overlap=128px（= decode 的 64/48/16 latent ×8）
+        - ``tile_px`` / ``overlap_px``（像素）非 None 时覆盖默认，供缓存分块按 config 传入；
+          二者须为 VAE 下采样（``up``）的整倍数（latent 块边界落整格）
         - 像素起点恒为 8 的倍数 → latent 位置为整数（_TILE/_STRIDE×8 与 H/W 均整除 8）
-        - blend 在 latent 空间（tile=64 latent，fade=16 latent），accumulator 走 fp32
+        - blend 在 latent 空间，accumulator 走 fp32
         - encode 非线性，拼接为近似（overlap+cosine 抹平 tile 边界），用于 latent 缓存足够
         """
         b, _c, t, H, W = pixels.shape
         up = self._UPSAMPLE
-        tile_px = self._TILE_LATENT * up
-        stride_px = self._STRIDE_LATENT * up
+        if tile_px is None:
+            tile_px = self._TILE_LATENT * up
+            stride_px = self._STRIDE_LATENT * up
+        else:
+            tile_px = int(tile_px)
+            ov_px = int(overlap_px) if overlap_px is not None else (self._TILE_LATENT - self._STRIDE_LATENT) * up
+            for _name, _v in (("tile_px", tile_px), ("overlap_px", ov_px)):
+                if _v % up != 0:
+                    raise ValueError(
+                        f"_tiled_encode 要求 {_name}={_v} 是 VAE 下采样 {up} 的整倍数"
+                        "（latent 块边界需落整格）。"
+                    )
+            if not (0 <= ov_px < tile_px):
+                raise ValueError(f"overlap_px={ov_px} 必须满足 0 <= overlap < tile_px={tile_px}")
+            stride_px = tile_px - ov_px
 
         eff_h = min(tile_px, H)
         eff_w = min(tile_px, W)

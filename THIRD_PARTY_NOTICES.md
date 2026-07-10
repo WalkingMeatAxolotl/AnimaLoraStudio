@@ -51,6 +51,11 @@
     `runtime/anima_daemon.py`、`runtime/training/sample_runner.py`、
     `studio/api/routers/generate.py` — 将测试出图与训练 sample 接到 Comfy-style
     parity runtime 的本项目 glue/config 代码
+  - `runtime/anima_daemon.py` — 中间步预览的 `_WAN21_LATENT_RGB_FACTORS` /
+    `_WAN21_LATENT_RGB_BIAS` 常量取自 ComfyUI `comfy/latent_formats.py` 的 `Wan21`
+    （Qwen-Image VAE 复用 Wan2.1 latent 空间：`comfy/supported_models.py`
+    `QwenImage.latent_format = Wan21`）；`_decode_latent2rgb_preview` 的投影 + 范围
+    映射对齐 ComfyUI `latent_preview.py` `Latent2RGBPreviewer`
 
 > 由于包含/派生自 GPL-3.0 代码，本项目整体以 GPL-3.0 发布（见 `LICENSE`）。
 
@@ -148,6 +153,21 @@
 - **修改点**：optimizer state 固定 fp32（bf16 LoRA/LoKr 训练数值稳定）；新增
   `precond_in_state=False` 把可重算的 GG/Q 剔出 state_dict 保持 ckpt 小 + resume
   冷重建。原文件头 MIT license block 已贴在 `utils/soap_optimizer.py` 顶部，请勿删除。
+
+### yangluo7 / CAME — CAME optimizer (MIT)
+
+- **来源**：[`yangluo7/CAME`](https://github.com/yangluo7/CAME) — Yang Luo
+- **论文**：Luo et al. 2023, *CAME: Confidence-guided Adaptive Memory Efficient Optimization*,
+  [arXiv:2307.02047](https://arxiv.org/abs/2307.02047)（ACL 2023 Outstanding Paper）
+- **许可**：MIT — Copyright (c) 2023 Yang Luo
+- **涉及文件**：
+  - `utils/optimizer_utils.py` `class CAME` / `create_came` — Adafactor 式分解二阶矩
+    + 置信度引导（instability EMA）update，step 公式派生自官方实现
+  - `runtime/training/optimizers/came.py` — registry 接线（本仓库代码）
+- **修改点**：optimizer state 固定 fp32（bf16 LoRA/LoKr 训练数值稳定，同 SOAP）；
+  bf16 参数写回走 stochastic rounding（`_copy_stochastic`；fp16 为普通 cast，
+  bit-trick 仅适用 bf16）；`load_state_dict` 后恢复 fp32 state（resume fixup）。
+  算法公式未改动。
 
 ### facebookresearch / schedule-free — Schedule-Free 机制 (Apache-2.0, research attribution)
 

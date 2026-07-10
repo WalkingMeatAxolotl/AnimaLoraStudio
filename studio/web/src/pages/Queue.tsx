@@ -306,30 +306,12 @@ function QueueTaskRow({
               <span className="text-xs">{fmtAgo(task.started_at!)} 开始</span>
             </>
           ) : isPaused ? (
-            <span className="flex flex-col items-end gap-1">
-              <span className="flex gap-1.5">
-                <button
-                  onClick={(e) => { e.stopPropagation(); void onResume(task) }}
-                  className="btn btn-secondary btn-xs"
-                  title={t('queue.resumeHint')}
-                  data-testid={`resume-btn-${task.id}`}
-                >
-                  {t('queue.resume')}
-                </button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); void onCancelPaused(task) }}
-                  className="btn btn-ghost btn-xs text-err"
-                  title={t('queue.cancelPausedHint')}
-                >
-                  {t('queue.cancelPaused')}
-                </button>
-              </span>
-              {isWaitingForRelease && (
-                <span className="text-xs text-fg-tertiary">
-                  {t('queue.waitingForRelease')}
-                </span>
-              )}
-            </span>
+            /* 暂停时间在左侧 duration 列（pausedAtStep），操作在右侧 action 列 */
+            isWaitingForRelease ? (
+              <span className="text-xs font-normal">{t('queue.waitingForRelease')}</span>
+            ) : (
+              <span>—</span>
+            )
           ) : isScheduled ? (
             /* 0.17 P-B — 计划任务：计划时间 + 倒计时（操作在右侧 action 列） */
             <span className="flex flex-col items-end gap-0.5">
@@ -345,23 +327,10 @@ function QueueTaskRow({
               )}
             </span>
           ) : task.finished_at ? (
-            <span className="flex flex-col items-end gap-1">
-              {/* ADR 0006 Addendum 2 — failed/canceled 且恢复点在盘 → 继续训练。 */}
-              {task.is_resumable && (
-                <button
-                  onClick={(e) => { e.stopPropagation(); void onResume(task) }}
-                  className="btn btn-secondary btn-xs"
-                  title={t('queue.resumeTerminalHint')}
-                  data-testid={`resume-btn-${task.id}`}
-                >
-                  {t('queue.resumeTerminal')}
-                </button>
-              )}
-              <span>
-                <span>{fmtAgo(task.finished_at)}</span>
-                <br />
-                <span className="text-xs text-fg-tertiary">{t('status.done')}</span>
-              </span>
+            <span>
+              <span>{fmtAgo(task.finished_at)}</span>
+              <br />
+              <span className="text-xs text-fg-tertiary">{t('status.done')}</span>
             </span>
           ) : (
             <span className="flex flex-col items-end gap-0.5">
@@ -375,9 +344,49 @@ function QueueTaskRow({
           )}
         </span>
 
-        {/* 0.17 action 列：跳转 + scheduled 的立即开始/取消计划，全 icon 化
-            （hover title 显示文字）。 */}
+        {/* 0.17 action 列：跳转 + scheduled 的立即开始/取消计划 + paused 的恢复/取消
+            + 终态可恢复的继续训练，全 icon 化（hover title 显示文字）。 */}
         <div className="flex items-center justify-end gap-1.5">
+          {isPaused && (
+            <>
+              <button
+                onClick={(e) => { e.stopPropagation(); void onResume(task) }}
+                className="btn btn-ghost btn-sm px-2"
+                title={`${t('queue.resume')} — ${t('queue.resumeHint')}`}
+                aria-label={t('queue.resume')}
+                data-testid={`resume-btn-${task.id}`}
+              >
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); void onCancelPaused(task) }}
+                className="btn btn-ghost btn-sm px-2 text-err"
+                title={`${t('queue.cancelPaused')} — ${t('queue.cancelPausedHint')}`}
+                aria-label={t('queue.cancelPaused')}
+                data-testid={`cancel-paused-btn-${task.id}`}
+              >
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <path d="M18 6L6 18M6 6l12 12" />
+                </svg>
+              </button>
+            </>
+          )}
+          {/* ADR 0006 Addendum 2 — failed/canceled 且恢复点在盘 → 继续训练。 */}
+          {isTerminal && task.is_resumable && (
+            <button
+              onClick={(e) => { e.stopPropagation(); void onResume(task) }}
+              className="btn btn-ghost btn-sm px-2"
+              title={`${t('queue.resumeTerminal')} — ${t('queue.resumeTerminalHint')}`}
+              aria-label={t('queue.resumeTerminal')}
+              data-testid={`resume-btn-${task.id}`}
+            >
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+            </button>
+          )}
           {isScheduled && (
             <>
               <button
@@ -638,6 +647,10 @@ export default function QueuePage() {
   }
 
   const resumeTask = async (task: Task) => {
+    const label = task.status === 'paused' ? t('queue.resume') : t('queue.resumeTerminal')
+    const hint = task.status === 'paused' ? t('queue.resumeHint') : t('queue.resumeTerminalHint')
+    const ok = await confirm(`${label} #${task.id}？${hint}`, { okText: label })
+    if (!ok) return
     try {
       await api.resumeTask(task.id)
       toast(t('queue.resumeSent', { id: task.id }), 'success')

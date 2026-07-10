@@ -10,27 +10,7 @@ import {
 
 export const DEFAULT_DUPLICATE_OPTIONS: DuplicateScanOptions = {
   match_scope: 'both',
-  hash_size: 768,
-  hash_workers: 4,
-  tile_grids: [4, 6],
-  structure_threshold: 6,
-  variant_score: 72,
-  aspect_tolerance: 0.045,
-  min_close_tiles: 0.48,
-  tile_median: 14,
-  min_gray_close: 0.42,
-  detect_blur: false,
-  blur_score_threshold: 80,
-  blur_local_ratio: 0.06,
-  detect_crops: false,
-  crop_score: 0.74,
-  crop_hash_threshold: 30,
-  crop_max_side: 256,
-  crop_workers: 8,
-  crop_prefilter_min_segments: 2,
-  crop_prefilter_min_coverage: 0.18,
-  crop_prefilter_aspect_tolerance: 0.45,
-  crop_max_candidates_per_image: 10,
+  sensitivity: 'standard',
 }
 
 interface Props {

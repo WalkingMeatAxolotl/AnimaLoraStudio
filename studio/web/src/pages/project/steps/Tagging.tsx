@@ -1,3 +1,4 @@
+import type { TFunction } from 'i18next'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useOutletContext } from 'react-router-dom'
@@ -14,10 +15,13 @@ import {
   type Version,
   type WD14Config,
 } from '../../../api/client'
+import { InfoButton } from '../../../components/InfoButton'
 import LLMMessagesEditor from '../../../components/LLMMessagesEditor'
-import TagsInput from '../../../components/TagsInput'
+import { TagListInput } from '../../../components/TagsInput'
 import StepShell from '../../../components/StepShell'
 import { useToast } from '../../../components/Toast'
+import { CLTaggerModelCard, SourceSelect, WD14ModelCard } from '../../tools/settings/modelCards'
+import { useSettingsData } from '../../../lib/SettingsData'
 import { useSettingsDrawer } from '../../../lib/SettingsDrawer'
 import { useEventStream } from '../../../lib/useEventStream'
 import { useLatestJobReplay } from '../../../lib/useLatestJobReplay'
@@ -42,6 +46,7 @@ type CLTaggerForm = {
   model_path: string
   tag_mapping_path: string
   add_copyright_tag: boolean
+  add_artist_tag: boolean
   add_meta_tag: boolean
   add_model_tag: boolean
   add_rating_tag: boolean
@@ -56,6 +61,7 @@ type LLMTaggerForm = {
   endpoint: LLMPreset['endpoint']
   messages: LLMMessage[]
   output_format: LLMPreset['output_format']
+  assist_tagger: string
   temperature: number
   max_tokens: number
   timeout: number
@@ -85,6 +91,7 @@ function fromCLTaggerConfig(cfg: CLTaggerConfig): CLTaggerForm {
     model_path: cfg.model_path,
     tag_mapping_path: cfg.tag_mapping_path,
     add_copyright_tag: cfg.add_copyright_tag,
+    add_artist_tag: cfg.add_artist_tag,
     add_meta_tag: cfg.add_meta_tag,
     add_model_tag: cfg.add_model_tag,
     add_rating_tag: cfg.add_rating_tag,
@@ -105,6 +112,7 @@ function fromLLMPreset(p: LLMPreset): LLMTaggerForm {
     endpoint: p.endpoint,
     messages: p.messages.map((m) => ({ ...m })),
     output_format: p.output_format,
+    assist_tagger: p.assist_tagger,
     temperature: p.temperature,
     max_tokens: p.max_tokens,
     timeout: p.timeout,
@@ -123,6 +131,10 @@ export default function TaggingPage() {
   const { project, activeVersion, reload } = useOutletContext<Ctx>()
   const { toast } = useToast()
   const settingsDrawer = useSettingsDrawer()
+  const {
+    catalog, downloadBusy, startDownload, setDownloadSource,
+    secrets, commitSecrets, reloadCatalog,
+  } = useSettingsData()
 
   const [tagger, setTagger] = useState<TaggerName>('wd14')
   const [taggerStatus, setTaggerStatus] = useState<TaggerStatus | null>(null)
@@ -142,7 +154,6 @@ export default function TaggingPage() {
   const [cltaggerForm, setCltaggerForm] = useState<CLTaggerForm | null>(null)
   const [llmDefaults, setLlmDefaults] = useState<LLMTaggerConfig | null>(null)
   const [llmForm, setLlmForm] = useState<LLMTaggerForm | null>(null)
-  const [advOpen, setAdvOpen] = useState(false)
 
   const vid = activeVersion?.id ?? null
 
@@ -222,6 +233,56 @@ export default function TaggingPage() {
 
   const isLive = job?.status === 'running' || job?.status === 'pending'
 
+  // 各打标器的简介：挪进「打标器」下拉旁的问号 tooltip（不再占右栏一整块）。
+  const taggerDesc =
+    tagger === 'wd14' ? t('tag.wd14Desc')
+      : tagger === 'cltagger' ? t('tag.cltaggerDesc')
+        : tagger === 'llm' ? t('tag.llmDesc')
+          : ''
+
+  // ── 右栏打标状态面板数据（对齐正则集页 RegStatusPanel）──────────────────
+  // stats 由 outlet reload 刷新（打标 job done 时 reload → 拿新的 tagged 数）。
+  const stats = activeVersion.stats
+  const totalImages = stats?.train_image_count ?? 0
+  const taggedImages = stats?.tagged_image_count ?? 0
+  // 此轮需要打标：overwrite/append 全量、skip 只未打标。数据限制——后端只有整训练
+  // 集已打标数：scope=all 精确；选文件夹能拿总数但拿不到已打标数（skip 退回文件夹
+  // 总数）；validation 无计数（显示 —）。随 scope / onExisting 实时变。
+  const scopeTotal =
+    scope === 'all' ? totalImages
+      : scope === 'validation' ? null
+        : (stats?.train_folders.find((f) => f.name === scope)?.image_count ?? null)
+  const thisRoundNeed =
+    scopeTotal == null ? null
+      : onExisting === 'skip'
+        ? (scope === 'all' ? Math.max(0, totalImages - taggedImages) : scopeTotal)
+        : scopeTotal
+  // 面板「打标方式/模型/预设/触发词」显示的是上一次实际打标用的配置（历史事实，
+  // 与正则集 meta 意义一致），从最近一次 tag job 的 params 复原；模型 / 预设未
+  // override 时退回当前默认（与 worker「override ?? default」解析一致，默认未变时
+  // 精确）。触发词持久化在 version（打标时写入），非当前表单临时值。
+  const lastParams = jobParams(job)
+  const lastTagger = typeof lastParams.tagger === 'string' ? lastParams.tagger : null
+  const lastMethodLabel =
+    lastTagger === 'wd14' ? 'WD14'
+      : lastTagger === 'cltagger' ? 'CLTagger'
+        : lastTagger === 'llm' ? 'LLM'
+          : null
+  const lastModelLabel =
+    lastTagger === 'wd14'
+      ? ((lastParams.wd14_overrides as { model_id?: string } | undefined)?.model_id || wd14Defaults?.model_id || null)
+      : lastTagger === 'cltagger'
+        ? ((lastParams.cltagger_overrides as { model_id?: string } | undefined)?.model_id || cltaggerDefaults?.model_id || null)
+        : null
+  const lastPresetId =
+    lastTagger === 'llm'
+      ? ((lastParams.llm_overrides as { current_preset?: string } | undefined)?.current_preset || llmDefaults?.current_preset || null)
+      : null
+  const lastPresetLabel = lastPresetId
+    ? (llmDefaults?.presets.find((p) => p.id === lastPresetId)?.label ?? lastPresetId)
+    : null
+  const lastTrigger = (activeVersion.trigger_word ?? '').trim()
+
   const buildWd14Overrides = (): Record<string, unknown> | undefined => {
     if (!wd14Form || !wd14Defaults) return undefined
     const out: Record<string, unknown> = {}
@@ -248,6 +309,8 @@ export default function TaggingPage() {
       out.tag_mapping_path = cltaggerForm.tag_mapping_path
     if (cltaggerForm.add_copyright_tag !== cltaggerDefaults.add_copyright_tag)
       out.add_copyright_tag = cltaggerForm.add_copyright_tag
+    if (cltaggerForm.add_artist_tag !== cltaggerDefaults.add_artist_tag)
+      out.add_artist_tag = cltaggerForm.add_artist_tag
     if (cltaggerForm.add_meta_tag !== cltaggerDefaults.add_meta_tag)
       out.add_meta_tag = cltaggerForm.add_meta_tag
     if (cltaggerForm.add_model_tag !== cltaggerDefaults.add_model_tag)
@@ -268,7 +331,7 @@ export default function TaggingPage() {
     const out: Record<string, unknown> = {}
     if (llmForm.preset_id !== llmDefaults.current_preset) out.current_preset = llmForm.preset_id
     const fields: ReadonlyArray<Exclude<keyof LLMTaggerForm, 'preset_id'>> = [
-      'base_url', 'model', 'endpoint', 'messages', 'output_format',
+      'base_url', 'model', 'endpoint', 'messages', 'output_format', 'assist_tagger',
       'temperature', 'max_tokens', 'timeout', 'max_retries',
       'concurrency', 'requests_per_second', 'max_requests_per_minute',
       'max_side', 'jpeg_quality', 'max_image_mb',
@@ -355,105 +418,99 @@ export default function TaggingPage() {
 
         {/* 左栏：参数区整体滚动；任务日志走 StepShell 的统一抽屉（issue #251） */}
         <div className="flex flex-col gap-3 min-h-0 min-w-0 overflow-y-auto">
-          <section className="rounded-md border border-subtle bg-surface px-3 py-2 flex flex-wrap items-center gap-2 shrink-0 text-sm">
-            <span className="text-fg-tertiary">tagger</span>
-            <select
-              value={tagger}
-              onChange={(e) => setTagger(e.target.value as TaggerName)}
-              className="input text-sm"
-              style={{ padding: '3px 8px' }}
-            >
-              <option value="wd14">WD14（本地 ONNX）</option>
-              <option value="cltagger">CLTagger（本地 ONNX）</option>
-              <option value="llm">LLM（OpenAI compatible，含 JoyCaption preset）</option>
-            </select>
-            <span
-              className={
-                taggerStatus
-                  ? taggerStatus.ok ? 'badge badge-ok' : 'badge badge-err'
-                  : 'badge badge-neutral'
-              }
-              title={taggerStatus?.msg ?? t('tag.checkingBtn')}
-            >
-              {taggerStatus
-                ? taggerStatus.ok
-                  ? `${t('tag.statusReady')} ${taggerStatus.msg}`
-                  : `${t('tag.statusUnavail')} ${taggerStatus.msg}`
-                : t('tag.statusChecking')}
-            </span>
-            {taggerStatus && !taggerStatus.ok && taggerStatus.msg.includes('未安装 onnxruntime') && (
-              <button
-                type="button"
-                onClick={() => settingsDrawer.open({ section: 'onnxruntime' })}
-                className="text-xs text-accent underline bg-transparent border-none p-0 cursor-pointer"
-                title={t('tag.goInstallOnnx')}
+          <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 shrink-0 text-sm">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
+              <TagField
+                label={t('tag.fieldTagger')}
+                helpTooltip={taggerDesc}
+                help={
+                  <span className="inline-flex items-center gap-2 flex-wrap">
+                    <span
+                      className={
+                        taggerStatus
+                          ? taggerStatus.ok ? 'badge badge-ok' : 'badge badge-err'
+                          : 'badge badge-neutral'
+                      }
+                      title={taggerStatus?.msg ?? t('tag.checkingBtn')}
+                    >
+                      {taggerStatus
+                        ? taggerStatus.ok
+                          ? `${t('tag.statusReady')} ${taggerStatus.msg}`
+                          : `${t('tag.statusUnavail')} ${taggerStatus.msg}`
+                        : t('tag.statusChecking')}
+                    </span>
+                    {taggerStatus && !taggerStatus.ok && taggerStatus.msg.includes('未安装 onnxruntime') && (
+                      <button
+                        type="button"
+                        onClick={() => settingsDrawer.open({ section: 'onnxruntime' })}
+                        className="text-accent underline bg-transparent border-none p-0 cursor-pointer"
+                      >
+                        {t('tag.goInstallOnnx')}
+                      </button>
+                    )}
+                    {taggerStatus && !taggerStatus.ok && taggerStatus.msg.includes('需下载模型') && (
+                      <button
+                        type="button"
+                        onClick={() => settingsDrawer.open({ section: tagger === 'cltagger' ? 'cltagger' : 'wd14' })}
+                        className="text-accent underline bg-transparent border-none p-0 cursor-pointer"
+                      >
+                        {t('tag.goDownload')}
+                      </button>
+                    )}
+                  </span>
+                }
               >
-                {t('tag.goInstallOnnx')}
-              </button>
-            )}
-            {taggerStatus && !taggerStatus.ok && taggerStatus.msg.includes('需下载模型') && (
-              <button
-                type="button"
-                onClick={() => settingsDrawer.open({ section: tagger === 'cltagger' ? 'cltagger' : 'wd14' })}
-                className="text-xs text-accent underline bg-transparent border-none p-0 cursor-pointer"
-                title={t('tag.goDownload')}
-              >
-                {t('tag.goDownload')}
-              </button>
-            )}
+                <select
+                  value={tagger}
+                  onChange={(e) => setTagger(e.target.value as TaggerName)}
+                  className="input" style={fieldInputStyle}
+                >
+                  <option value="wd14">WD14（本地 ONNX）</option>
+                  <option value="cltagger">CLTagger（本地 ONNX）</option>
+                  <option value="llm">LLM（OpenAI compatible，含 JoyCaption preset）</option>
+                </select>
+              </TagField>
 
-            <span className="text-dim">|</span>
-            <span className="text-fg-tertiary" title={t('tag.scopeHint')}>{t('tag.scope')}</span>
-            <select
-              value={scope}
-              onChange={(e) => setScope(e.target.value)}
-              disabled={isLive}
-              className="input text-sm"
-              style={{ padding: '3px 8px' }}
-              title={t('tag.scopeHint')}
-            >
-              <option value="all">{t('tag.scopeAll')}</option>
-              {folders.map((f) => (
-                <option key={f} value={f}>{f}</option>
-              ))}
-              <option value="validation">{t('tag.scopeValidation')}</option>
-            </select>
+              <TagField label={t('tag.scope')} helpTooltip={t('tag.scopeHint')}>
+                <select
+                  value={scope}
+                  onChange={(e) => setScope(e.target.value)}
+                  disabled={isLive}
+                  className="input" style={fieldInputStyle}
+                >
+                  <option value="all">{t('tag.scopeAll')}</option>
+                  {folders.map((f) => (
+                    <option key={f} value={f}>{f}</option>
+                  ))}
+                  <option value="validation">{t('tag.scopeValidation')}</option>
+                </select>
+              </TagField>
 
-            <span className="text-dim">|</span>
-            <span className="text-fg-tertiary" title={t('tag.onExistingHint')}>
-              {t('tag.onExisting')}
-            </span>
-            <select
-              value={onExisting}
-              onChange={(e) => setOnExisting(e.target.value as 'overwrite' | 'skip' | 'append')}
-              disabled={isLive}
-              className="input text-sm"
-              style={{ padding: '3px 8px' }}
-              title={t('tag.onExistingHint')}
-            >
-              <option value="overwrite">{t('tag.onExistingOverwrite')}</option>
-              <option value="skip">{t('tag.onExistingSkip')}</option>
-              <option value="append">{t('tag.onExistingAppend')}</option>
-            </select>
+              <TagField label={t('tag.onExisting')} helpTooltip={t('tag.onExistingHint')}>
+                <select
+                  value={onExisting}
+                  onChange={(e) => setOnExisting(e.target.value as 'overwrite' | 'skip' | 'append')}
+                  disabled={isLive}
+                  className="input" style={fieldInputStyle}
+                >
+                  <option value="overwrite">{t('tag.onExistingOverwrite')}</option>
+                  <option value="skip">{t('tag.onExistingSkip')}</option>
+                  <option value="append">{t('tag.onExistingAppend')}</option>
+                </select>
+              </TagField>
 
-            <span className="text-dim">|</span>
-            <span className="text-fg-tertiary" title={t('tag.triggerWordHint')}>
-              {t('tag.triggerWord')}
-            </span>
-            <input
-              type="text"
-              value={triggerWord}
-              onChange={(e) => setTriggerWord(e.target.value)}
-              placeholder={t('tag.triggerWordPlaceholder')}
-              disabled={isLive}
-              className={`input input-mono text-sm ${
-                triggerWord.trim() !== (activeVersion.trigger_word ?? '') ? 'border-warn' : ''
-              }`}
-              style={{ padding: '3px 8px', width: 180 }}
-              title={t('tag.triggerWordHint')}
-            />
-
-            <span className="flex-1" />
+              <TagField label={t('tag.triggerWord')} helpTooltip={t('tag.triggerWordHint')}>
+                <input
+                  type="text"
+                  value={triggerWord}
+                  onChange={(e) => setTriggerWord(e.target.value)}
+                  placeholder={t('tag.triggerWordPlaceholder')}
+                  disabled={isLive}
+                  className="input input-mono"
+                  style={fieldCtlStyle(triggerWord.trim() !== (activeVersion.trigger_word ?? ''))}
+                />
+              </TagField>
+            </div>
           </section>
 
           {tagger === 'wd14' && (
@@ -461,9 +518,30 @@ export default function TaggingPage() {
               form={wd14Form}
               defaults={wd14Defaults}
               onChange={setWd14Form}
-              advOpen={advOpen}
-              setAdvOpen={setAdvOpen}
               disabled={isLive}
+              downloadCenter={
+                wd14Form && (
+                  <div className="flex flex-col gap-3">
+                    <SourceSelect
+                      opt={catalog?.download_source_options?.wd14}
+                      onChange={(s) => void setDownloadSource('wd14', s)}
+                    />
+                    <WD14ModelCard
+                      catalog={catalog}
+                      busy={downloadBusy}
+                      start={startDownload}
+                      currentModelId={wd14Form.model_id}
+                      onSelectModelId={(id) => setWd14Form({ ...wd14Form, model_id: id })}
+                      candidates={secrets?.wd14.model_ids ?? wd14Defaults?.model_ids ?? []}
+                      onCandidatesChange={(next) => {
+                        commitSecrets({ wd14: { model_ids: next } })
+                        void reloadCatalog()
+                      }}
+                      t={t}
+                    />
+                  </div>
+                )
+              }
             />
           )}
 
@@ -472,9 +550,35 @@ export default function TaggingPage() {
               form={cltaggerForm}
               defaults={cltaggerDefaults}
               onChange={setCltaggerForm}
-              advOpen={advOpen}
-              setAdvOpen={setAdvOpen}
               disabled={isLive}
+              downloadCenter={
+                cltaggerForm && (
+                  <div className="flex flex-col gap-3">
+                    <SourceSelect
+                      opt={catalog?.download_source_options?.cltagger}
+                      onChange={(s) => void setDownloadSource('cltagger', s)}
+                    />
+                    <CLTaggerModelCard
+                      catalog={catalog}
+                      busy={downloadBusy}
+                      start={startDownload}
+                      currentModelPath={cltaggerForm.model_path}
+                      currentTagMappingPath={cltaggerForm.tag_mapping_path}
+                      modelId={cltaggerForm.model_id}
+                      onSelectVariant={(v) =>
+                        setCltaggerForm({
+                          ...cltaggerForm,
+                          model_id: v.model_id,
+                          model_path: v.model_path,
+                          tag_mapping_path: v.tag_mapping_path,
+                        })
+                      }
+                      onModelIdChange={(id) => setCltaggerForm({ ...cltaggerForm, model_id: id })}
+                      t={t}
+                    />
+                  </div>
+                )
+              }
             />
           )}
 
@@ -483,20 +587,23 @@ export default function TaggingPage() {
               form={llmForm}
               defaults={llmDefaults}
               onChange={setLlmForm}
-              advOpen={advOpen}
-              setAdvOpen={setAdvOpen}
               disabled={isLive}
             />
           )}
 
         </div>
 
-        {/* 右栏：预览面板 */}
-        <TagPreviewPanel
-          tagger={tagger}
-          taggerStatus={taggerStatus}
+        {/* 右栏：训练集打标状态（进度 + 上一轮打标配置 + 此轮需要打标） */}
+        <TagStatusPanel
+          totalImages={totalImages}
+          taggedImages={taggedImages}
+          methodLabel={lastMethodLabel}
+          modelLabel={lastModelLabel}
+          presetLabel={lastPresetLabel}
+          triggerWord={lastTrigger}
+          latestTaggedAt={job?.finished_at ?? null}
+          thisRoundNeed={thisRoundNeed}
           isLive={isLive}
-          taggerOk={taggerStatus?.ok ?? false}
         />
       </div>
     </div>
@@ -509,17 +616,16 @@ export default function TaggingPage() {
 // ---------------------------------------------------------------------------
 
 function Wd14Panel({
-  form, defaults, onChange, advOpen, setAdvOpen, disabled,
+  form, defaults, onChange, disabled, downloadCenter,
 }: {
   form: Wd14Form | null
   defaults: WD14Config | null
   onChange: (f: Wd14Form) => void
-  advOpen: boolean
-  setAdvOpen: (b: boolean) => void
   disabled: boolean
+  /** 下载中心（下载源 + 模型卡）；替代原 model_id 下拉，放高级参数里。 */
+  downloadCenter?: React.ReactNode
 }) {
   const { t } = useTranslation()
-  const settingsDrawer = useSettingsDrawer()
   if (!form || !defaults) {
     return (
       <section className="rounded-md border border-subtle bg-surface px-3 py-2 text-xs text-fg-tertiary shrink-0">
@@ -537,78 +643,87 @@ function Wd14Panel({
   const restore = () => onChange(fromConfig(defaults))
 
   return (
-    <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 flex flex-col gap-2 shrink-0 text-sm">
-      <div className="flex items-center gap-2 flex-wrap">
-        <PanelDot />
-        <span className="caption">{t('tag.wd14Params')}</span>
-        <span className="text-xs text-fg-tertiary">
-          {t('tag.prefilledFrom')}{' '}
-          <button
-            type="button"
-            onClick={() => settingsDrawer.open({ section: 'wd14' })}
-            className="bg-transparent border-none p-0 text-accent cursor-pointer"
-            title={t('tag.globalSettings')}
-          >
-            {t('tag.globalSettings')}
-          </button>
-          {' · '}{t('tag.effectiveThisRun')}
-        </span>
-        <span className="flex-1" />
-        {dirty && (
-          <>
-            <span className="badge badge-warn">{t('tag.modified')}</span>
-            <button onClick={restore} disabled={disabled} className="btn btn-ghost btn-sm" title={t('tag.restore')}>
-              {t('tag.restore')}
-            </button>
-          </>
-        )}
-      </div>
-
-      <div className="flex items-center gap-3 flex-wrap">
-        <ThresholdInput label="general" value={form.threshold_general} base={defaults.threshold_general} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_general: v })} />
-        <ThresholdInput label="character" value={form.threshold_character} base={defaults.threshold_character} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_character: v })} />
-        <button type="button" onClick={() => setAdvOpen(!advOpen)} className="btn btn-ghost btn-sm text-xs text-fg-tertiary">
-          {advOpen ? '▾' : '▸'} {t('tag.advanced')}
-        </button>
-      </div>
-
-      {advOpen && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-1">
-          <LabeledModelSelect
-            label="model_id"
-            value={form.model_id}
-            options={defaults.model_ids}
-            disabled={disabled}
-            onChange={(v) => onChange({ ...form, model_id: v })}
-            modified={form.model_id !== defaults.model_id}
-          />
-          <TagsInput
-            className="md:col-span-2"
-            label={t('tag.blacklistLabel')}
-            value={form.blacklist_tags}
-            placeholder={t('tag.blacklistPlaceholder1')}
-            disabled={disabled}
-            onChange={(tags) => onChange({ ...form, blacklist_tags: tags })}
-            modified={JSON.stringify(form.blacklist_tags) !== JSON.stringify(defaults.blacklist_tags)}
-          />
+    <>
+      <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 flex flex-col gap-2 shrink-0 text-sm">
+        <PanelHeader dirty={dirty} onRestore={restore} disabled={disabled} />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
+          <TagFieldNumber label={t('settings.fieldThresholdGeneral')} value={form.threshold_general} base={defaults.threshold_general} min={0} max={1} step={0.01} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_general: v })} />
+          <TagFieldNumber label={t('settings.fieldThresholdCharacter')} value={form.threshold_character} base={defaults.threshold_character} min={0} max={1} step={0.01} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_character: v })} />
         </div>
+      </section>
+
+      <AdvancedSection>
+        <div className="flex flex-col gap-3">
+          {downloadCenter}
+          <TagField label={t('settings.fieldBlacklistTags')}>
+            <TagListInput
+              value={form.blacklist_tags}
+              placeholder={t('tag.blacklistPlaceholder1')}
+              disabled={disabled}
+              onChange={(tags) => onChange({ ...form, blacklist_tags: tags })}
+              className="input input-mono"
+              style={fieldCtlStyle(JSON.stringify(form.blacklist_tags) !== JSON.stringify(defaults.blacklist_tags))}
+            />
+          </TagField>
+        </div>
+      </AdvancedSection>
+    </>
+  )
+}
+
+// 面板公共 header：小圆点 + 统一标题「tagger 参数」+ dirty 徽章 / 还原。
+function PanelHeader({ dirty, onRestore, disabled, subtitle }: {
+  dirty: boolean; onRestore: () => void; disabled: boolean; subtitle?: string
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <PanelDot />
+      <span className="caption">{t('tag.taggerParams')}</span>
+      {subtitle && <span className="text-xs text-fg-tertiary">{subtitle}</span>}
+      <span className="flex-1" />
+      {dirty && (
+        <>
+          <span className="badge badge-warn">{t('tag.modified')}</span>
+          <button onClick={onRestore} disabled={disabled} className="btn btn-ghost btn-sm" title={t('tag.restore')}>
+            {t('tag.restore')}
+          </button>
+        </>
       )}
+    </div>
+  )
+}
+
+// 高级参数：独立折叠卡（对齐训练配置页 SchemaForm 分组 section），默认收起。
+function AdvancedSection({ children }: { children: React.ReactNode }) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  return (
+    <section className="rounded-md border border-subtle bg-surface shrink-0 text-sm">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between px-3.5 py-2.5 text-sm font-semibold text-fg-primary bg-transparent border-none cursor-pointer"
+      >
+        <span>{t('tag.advanced')}</span>
+        <span className="text-fg-tertiary text-xs">{open ? '▾' : '▸'}</span>
+      </button>
+      {open && <div className="px-3.5 pb-2.5">{children}</div>}
     </section>
   )
 }
 
 function CLTaggerPanel({
-  form, defaults, onChange, advOpen, setAdvOpen, disabled,
+  form, defaults, onChange, disabled, downloadCenter,
 }: {
   form: CLTaggerForm | null
   defaults: CLTaggerConfig | null
   onChange: (f: CLTaggerForm) => void
-  advOpen: boolean
-  setAdvOpen: (b: boolean) => void
   disabled: boolean
+  /** 下载中心（下载源 + 模型卡，含变体选择）；替代原模型下拉，放高级参数里。 */
+  downloadCenter?: React.ReactNode
 }) {
   const { t } = useTranslation()
-  const settingsDrawer = useSettingsDrawer()
   if (!form || !defaults) {
     return (
       <section className="rounded-md border border-subtle bg-surface px-3 py-2 text-xs text-fg-tertiary shrink-0">
@@ -624,6 +739,7 @@ function CLTaggerPanel({
     form.model_path !== defaults.model_path ||
     form.tag_mapping_path !== defaults.tag_mapping_path ||
     form.add_copyright_tag !== defaults.add_copyright_tag ||
+    form.add_artist_tag !== defaults.add_artist_tag ||
     form.add_meta_tag !== defaults.add_meta_tag ||
     form.add_model_tag !== defaults.add_model_tag ||
     form.add_rating_tag !== defaults.add_rating_tag ||
@@ -633,89 +749,50 @@ function CLTaggerPanel({
   const restore = () => onChange(fromCLTaggerConfig(defaults))
 
   return (
-    <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 flex flex-col gap-2 shrink-0 text-sm">
-      <div className="flex items-center gap-2 flex-wrap">
-        <PanelDot />
-        <span className="caption">{t('tag.cltaggerParams')}</span>
-        <span className="text-xs text-fg-tertiary">
-          {t('tag.prefilledFrom')}{' '}
-          <button
-            type="button"
-            onClick={() => settingsDrawer.open({ section: 'cltagger' })}
-            className="bg-transparent border-none p-0 text-accent cursor-pointer"
-            title={t('tag.globalSettings')}
-          >
-            {t('tag.globalSettings')}
-          </button>
-          {' · '}{t('tag.effectiveThisRun')}
-        </span>
-        <span className="flex-1" />
-        {dirty && (
-          <>
-            <span className="badge badge-warn">{t('tag.modified')}</span>
-            <button onClick={restore} disabled={disabled} className="btn btn-ghost btn-sm" title={t('tag.restore')}>
-              {t('tag.restore')}
-            </button>
-          </>
-        )}
-      </div>
-
-      <div className="flex items-center gap-3 flex-wrap">
-        <ThresholdInput label="general" value={form.threshold_general} base={defaults.threshold_general} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_general: v })} />
-        <ThresholdInput label="character" value={form.threshold_character} base={defaults.threshold_character} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_character: v })} />
-        <label className="flex items-center gap-1.5 text-xs text-fg-tertiary">
-          <input type="checkbox" checked={form.add_copyright_tag} disabled={disabled} onChange={(e) => onChange({ ...form, add_copyright_tag: e.target.checked })} />
-          copyright
-        </label>
-        <label className="flex items-center gap-1.5 text-xs text-fg-tertiary">
-          <input type="checkbox" checked={form.add_meta_tag} disabled={disabled} onChange={(e) => onChange({ ...form, add_meta_tag: e.target.checked })} />
-          meta
-        </label>
-        <label className="flex items-center gap-1.5 text-xs text-fg-tertiary">
-          <input type="checkbox" checked={form.add_model_tag} disabled={disabled} onChange={(e) => onChange({ ...form, add_model_tag: e.target.checked })} />
-          model
-        </label>
-        <label className="flex items-center gap-1.5 text-xs text-fg-tertiary">
-          <input type="checkbox" checked={form.add_rating_tag} disabled={disabled} onChange={(e) => onChange({ ...form, add_rating_tag: e.target.checked })} />
-          rating
-        </label>
-        <label className="flex items-center gap-1.5 text-xs text-fg-tertiary">
-          <input type="checkbox" checked={form.add_quality_tag} disabled={disabled} onChange={(e) => onChange({ ...form, add_quality_tag: e.target.checked })} />
-          quality
-        </label>
-        <button type="button" onClick={() => setAdvOpen(!advOpen)} className="btn btn-ghost btn-sm text-xs text-fg-tertiary">
-          {advOpen ? '▾' : '▸'} {t('tag.advanced')}
-        </button>
-      </div>
-
-      {advOpen && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-1">
-          <LabeledInput label="model_id" value={form.model_id} disabled={disabled} onChange={(v) => onChange({ ...form, model_id: v })} modified={form.model_id !== defaults.model_id} />
-          <LabeledInput label="model_path" value={form.model_path} disabled={disabled} onChange={(v) => onChange({ ...form, model_path: v })} modified={form.model_path !== defaults.model_path} />
-          <LabeledInput label="tag_mapping_path" value={form.tag_mapping_path} disabled={disabled} onChange={(v) => onChange({ ...form, tag_mapping_path: v })} modified={form.tag_mapping_path !== defaults.tag_mapping_path} />
-          <TagsInput
-            className="md:col-span-2"
-            label={t('tag.blacklistLabel')}
-            value={form.blacklist_tags}
-            placeholder={t('tag.blacklistPlaceholder2')}
-            disabled={disabled}
-            onChange={(tags) => onChange({ ...form, blacklist_tags: tags })}
-            modified={JSON.stringify(form.blacklist_tags) !== JSON.stringify(defaults.blacklist_tags)}
-          />
+    <>
+      <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 flex flex-col gap-2 shrink-0 text-sm">
+        <PanelHeader dirty={dirty} onRestore={restore} disabled={disabled} />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
+          <TagFieldNumber label={t('settings.fieldThresholdGeneral')} value={form.threshold_general} base={defaults.threshold_general} min={0} max={1} step={0.01} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_general: v })} />
+          <TagFieldNumber label={t('settings.fieldThresholdCharacter')} value={form.threshold_character} base={defaults.threshold_character} min={0} max={1} step={0.01} disabled={disabled} onChange={(v) => onChange({ ...form, threshold_character: v })} />
         </div>
-      )}
-    </section>
+      </section>
+
+      <AdvancedSection>
+        <div className="flex flex-col gap-3">
+          {downloadCenter}
+          <TagField label={t('tag.cltaggerExtraTags')}>
+            <div className="flex items-center gap-4 flex-wrap py-0.5">
+              <TagFieldCheckbox label="copyright" checked={form.add_copyright_tag} disabled={disabled} onChange={(v) => onChange({ ...form, add_copyright_tag: v })} />
+              <TagFieldCheckbox label="artist" checked={form.add_artist_tag} disabled={disabled} onChange={(v) => onChange({ ...form, add_artist_tag: v })} />
+              <TagFieldCheckbox label="meta" checked={form.add_meta_tag} disabled={disabled} onChange={(v) => onChange({ ...form, add_meta_tag: v })} />
+              <TagFieldCheckbox label="model" checked={form.add_model_tag} disabled={disabled} onChange={(v) => onChange({ ...form, add_model_tag: v })} />
+              <TagFieldCheckbox label="rating" checked={form.add_rating_tag} disabled={disabled} onChange={(v) => onChange({ ...form, add_rating_tag: v })} />
+              <TagFieldCheckbox label="quality" checked={form.add_quality_tag} disabled={disabled} onChange={(v) => onChange({ ...form, add_quality_tag: v })} />
+            </div>
+          </TagField>
+          <TagField label={t('settings.fieldBlacklistTags')}>
+            <TagListInput
+              value={form.blacklist_tags}
+              placeholder={t('tag.blacklistPlaceholder2')}
+              disabled={disabled}
+              onChange={(tags) => onChange({ ...form, blacklist_tags: tags })}
+              className="input input-mono"
+              style={fieldCtlStyle(JSON.stringify(form.blacklist_tags) !== JSON.stringify(defaults.blacklist_tags))}
+            />
+          </TagField>
+        </div>
+      </AdvancedSection>
+    </>
   )
 }
 
 function LLMTaggerPanel({
-  form, defaults, onChange, advOpen, setAdvOpen, disabled,
+  form, defaults, onChange, disabled,
 }: {
   form: LLMTaggerForm | null
   defaults: LLMTaggerConfig | null
   onChange: (f: LLMTaggerForm) => void
-  advOpen: boolean
-  setAdvOpen: (b: boolean) => void
   disabled: boolean
 }) {
   const { t } = useTranslation()
@@ -740,6 +817,12 @@ function LLMTaggerPanel({
     form.preset_id !== defaults.current_preset ||
     JSON.stringify(form) !== JSON.stringify(fromLLMPreset(activePreset))
 
+  // 与设置页 LLM 工作区同款警示：开了 assist 但提示词（含本次临时编辑）没有
+  // {{tags}} 占位符时，预打标不会生效。
+  const assistNeedsTags =
+    !!form.assist_tagger &&
+    !form.messages.some((m) => m.type === 'text' && m.content.includes('{{tags}}'))
+
   const restore = () => {
     const original = activePresetOf(defaults)
     if (original) onChange(fromLLMPreset(original))
@@ -751,223 +834,231 @@ function LLMTaggerPanel({
   }
 
   return (
+    <>
     <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 flex flex-col gap-2 shrink-0 text-sm">
-      <div className="flex items-center gap-2 flex-wrap">
-        <PanelDot />
-        <span className="caption">{t('tag.llmParams')}</span>
-        <span className="text-xs text-fg-tertiary">{t('tag.llmSubtitle')}</span>
-        <span className="flex-1" />
-        {dirty && (
-          <>
-            <span className="badge badge-warn">{t('tag.modified')}</span>
-            <button onClick={restore} disabled={disabled} className="btn btn-ghost btn-sm" title={t('tag.restore')}>
-              {t('tag.restore')}
-            </button>
-          </>
-        )}
-      </div>
+      <PanelHeader dirty={dirty} onRestore={restore} disabled={disabled} subtitle={t('tag.llmSubtitle')} />
 
-      <label className="grid grid-cols-[140px_1fr] items-center gap-2">
-        <span className="text-fg-tertiary font-mono text-xs">preset</span>
-        <select
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
+        <TagFieldSelect
+          label={t('tag.fieldPreset')}
           value={form.preset_id}
-          onChange={(e) => switchPreset(e.target.value)}
           disabled={disabled}
-          className={`input input-mono ${form.preset_id !== defaults.current_preset ? 'border-warn' : ''}`}
+          onChange={switchPreset}
+          modified={form.preset_id !== defaults.current_preset}
+          className="md:col-span-2"
         >
           {defaults.presets.map((p) => (
             <option key={p.id} value={p.id}>
               {p.label}{p.builtin ? t('tag.builtin') : ''}
             </option>
           ))}
-        </select>
-      </label>
+        </TagFieldSelect>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-        <LabeledInput label="base_url" value={form.base_url} placeholder="http://localhost:8000/v1" disabled={disabled} onChange={(v) => onChange({ ...form, base_url: v })} modified={form.base_url !== activePreset.base_url} />
+        <TagFieldInput label={t('settings.fieldBaseUrl')} value={form.base_url} placeholder="http://localhost:8000/v1" disabled={disabled} onChange={(v) => onChange({ ...form, base_url: v })} modified={form.base_url !== activePreset.base_url} />
         {activePreset.model_ids.length > 0 ? (
-          <label className="grid grid-cols-[140px_1fr] items-center gap-2">
-            <span className="text-fg-tertiary font-mono text-xs">model</span>
-            <select
-              value={form.model}
-              onChange={(e) => onChange({ ...form, model: e.target.value })}
-              disabled={disabled}
-              className={`input input-mono ${form.model !== activePreset.model ? 'border-warn' : ''}`}
-            >
-              {!activePreset.model_ids.includes(form.model) && form.model && (
-                <option value={form.model}>{form.model}</option>
-              )}
-              {activePreset.model_ids.map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
-          </label>
+          <TagFieldSelect
+            label={t('tag.fieldModel')}
+            value={form.model}
+            disabled={disabled}
+            onChange={(v) => onChange({ ...form, model: v })}
+            modified={form.model !== activePreset.model}
+          >
+            {!activePreset.model_ids.includes(form.model) && form.model && (
+              <option value={form.model}>{form.model}</option>
+            )}
+            {activePreset.model_ids.map((m) => <option key={m} value={m}>{m}</option>)}
+          </TagFieldSelect>
         ) : (
-          <LabeledInput label="model" value={form.model} placeholder={t('tag.modelPlaceholder')} disabled={disabled} onChange={(v) => onChange({ ...form, model: v })} modified={form.model !== activePreset.model} />
+          <TagFieldInput label={t('tag.fieldModel')} value={form.model} placeholder={t('tag.modelPlaceholder')} disabled={disabled} onChange={(v) => onChange({ ...form, model: v })} modified={form.model !== activePreset.model} />
         )}
-        <label className="grid grid-cols-[140px_1fr] items-center gap-2">
-          <span className="text-fg-tertiary font-mono text-xs">endpoint</span>
-          <select
-            value={form.endpoint}
-            onChange={(e) => onChange({ ...form, endpoint: e.target.value as LLMPreset['endpoint'] })}
-            disabled={disabled}
-            className={`input input-mono ${form.endpoint !== activePreset.endpoint ? 'border-warn' : ''}`}
-          >
-            <option value="chat_completions">Chat Completions</option>
-            <option value="responses">Responses</option>
-          </select>
-        </label>
-        <label className="grid grid-cols-[140px_1fr] items-center gap-2">
-          <span className="text-fg-tertiary font-mono text-xs">output_format</span>
-          <select
-            value={form.output_format}
-            onChange={(e) => onChange({ ...form, output_format: e.target.value as LLMPreset['output_format'] })}
-            disabled={disabled}
-            className={`input input-mono ${form.output_format !== activePreset.output_format ? 'border-warn' : ''}`}
-          >
-            <option value="json">JSON</option>
-            <option value="text">Text</option>
-          </select>
-        </label>
-      </div>
 
-      <div className="flex items-center gap-3 flex-wrap">
-        <LLMNumberInput label="temperature" value={form.temperature} base={activePreset.temperature} step={0.05} min={0} max={2} disabled={disabled} onChange={(v) => onChange({ ...form, temperature: v })} />
-        <LLMNumberInput label="max_tokens" value={form.max_tokens} base={activePreset.max_tokens} step={1} min={64} max={4096} disabled={disabled} onChange={(v) => onChange({ ...form, max_tokens: Math.round(v) })} />
-        <LLMNumberInput label="concurrency" value={form.concurrency} base={activePreset.concurrency} step={1} min={1} max={8} disabled={disabled} onChange={(v) => onChange({ ...form, concurrency: Math.round(v) })} />
-        <button type="button" onClick={() => setAdvOpen(!advOpen)} className="btn btn-ghost btn-sm text-xs text-fg-tertiary">
-          {advOpen ? '▾' : '▸'} {t('tag.advanced')}
-        </button>
-      </div>
+        <TagFieldSelect
+          label={t('tag.fieldEndpoint')}
+          value={form.endpoint}
+          disabled={disabled}
+          onChange={(v) => onChange({ ...form, endpoint: v as LLMPreset['endpoint'] })}
+          modified={form.endpoint !== activePreset.endpoint}
+        >
+          <option value="chat_completions">Chat Completions</option>
+          <option value="responses">Responses</option>
+        </TagFieldSelect>
 
-      {advOpen && (
-        <>
-          <label className="grid grid-cols-[140px_1fr] items-start gap-2">
-            <span className="text-fg-tertiary font-mono text-xs pt-1">messages</span>
-            <div className="flex flex-col gap-1.5">
-              {form.endpoint === 'responses' && (
-                <div className="text-[10px] text-warn">{t('tag.responsesWarning')}</div>
-              )}
-              <LLMMessagesEditor
-                messages={form.messages}
-                onChange={(msgs) => onChange({ ...form, messages: msgs })}
-                disabled={disabled}
-              />
-            </div>
-          </label>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-1">
-            <LLMLabeledNumber label="timeout" value={form.timeout} base={activePreset.timeout} min={5} max={600} disabled={disabled} onChange={(v) => onChange({ ...form, timeout: Math.round(v) })} />
-            <LLMLabeledNumber label="max_retries" value={form.max_retries} base={activePreset.max_retries} min={1} max={10} disabled={disabled} onChange={(v) => onChange({ ...form, max_retries: Math.round(v) })} />
-            <LLMLabeledNumber label="requests_per_second" value={form.requests_per_second} base={activePreset.requests_per_second} min={0} max={60} step={0.1} disabled={disabled} onChange={(v) => onChange({ ...form, requests_per_second: v })} />
-            <LLMLabeledNumber label="max_requests_per_minute" value={form.max_requests_per_minute} base={activePreset.max_requests_per_minute} min={0} max={3600} disabled={disabled} onChange={(v) => onChange({ ...form, max_requests_per_minute: Math.round(v) })} />
-            <LLMLabeledNumber label="max_side" value={form.max_side} base={activePreset.max_side} min={64} max={4096} disabled={disabled} onChange={(v) => onChange({ ...form, max_side: Math.round(v) })} />
-            <LLMLabeledNumber label="jpeg_quality" value={form.jpeg_quality} base={activePreset.jpeg_quality} min={1} max={100} disabled={disabled} onChange={(v) => onChange({ ...form, jpeg_quality: Math.round(v) })} />
-            <LLMLabeledNumber label="max_image_mb" value={form.max_image_mb} base={activePreset.max_image_mb} min={0.1} max={25} step={0.1} disabled={disabled} onChange={(v) => onChange({ ...form, max_image_mb: v })} />
-          </div>
-        </>
-      )}
+        <TagFieldSelect
+          label={t('tag.fieldOutputFormat')}
+          value={form.output_format}
+          disabled={disabled}
+          onChange={(v) => onChange({ ...form, output_format: v as LLMPreset['output_format'] })}
+          modified={form.output_format !== activePreset.output_format}
+        >
+          <option value="json">JSON</option>
+          <option value="text">Text</option>
+        </TagFieldSelect>
+
+        <TagFieldSelect
+          label={t('llmWorkspace.assistTagger')}
+          value={form.assist_tagger}
+          disabled={disabled}
+          onChange={(v) => onChange({ ...form, assist_tagger: v })}
+          modified={form.assist_tagger !== activePreset.assist_tagger}
+          className="md:col-span-2"
+          helpTooltip={t('llmWorkspace.assistTaggerHelp').split('%TAGS%').join('{{tags}}')}
+          help={
+            assistNeedsTags && (
+              <span className="text-warn">
+                {t('llmWorkspace.assistNeedsTags').split('%TAGS%').join('{{tags}}')}
+              </span>
+            )
+          }
+        >
+          <option value="">Off</option>
+          <option value="wd14">WD14</option>
+          <option value="cltagger">CLTagger</option>
+        </TagFieldSelect>
+
+        <TagFieldNumber label={t('tag.fieldTemperature')} value={form.temperature} base={activePreset.temperature} min={0} max={2} step={0.05} disabled={disabled} onChange={(v) => onChange({ ...form, temperature: v })} />
+        <TagFieldNumber label={t('tag.fieldMaxTokens')} value={form.max_tokens} base={activePreset.max_tokens} min={64} max={4096} disabled={disabled} onChange={(v) => onChange({ ...form, max_tokens: Math.round(v) })} />
+        <TagFieldNumber label={t('tag.fieldConcurrency')} value={form.concurrency} base={activePreset.concurrency} min={1} max={8} disabled={disabled} onChange={(v) => onChange({ ...form, concurrency: Math.round(v) })} />
+      </div>
     </section>
+
+    <AdvancedSection>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
+        <TagField label={t('tag.fieldMessages')} className="md:col-span-2">
+          <div className="flex flex-col gap-1.5">
+            {form.endpoint === 'responses' && (
+              <div className="text-xs text-warn">{t('tag.responsesWarning')}</div>
+            )}
+            <LLMMessagesEditor
+              messages={form.messages}
+              onChange={(msgs) => onChange({ ...form, messages: msgs })}
+              disabled={disabled}
+            />
+          </div>
+        </TagField>
+        <TagFieldNumber label={t('tag.fieldTimeout')} value={form.timeout} base={activePreset.timeout} min={5} max={600} disabled={disabled} onChange={(v) => onChange({ ...form, timeout: Math.round(v) })} />
+        <TagFieldNumber label={t('tag.fieldMaxRetries')} value={form.max_retries} base={activePreset.max_retries} min={1} max={10} disabled={disabled} onChange={(v) => onChange({ ...form, max_retries: Math.round(v) })} />
+        <TagFieldNumber label={t('tag.fieldRequestsPerSecond')} value={form.requests_per_second} base={activePreset.requests_per_second} min={0} max={60} step={0.1} disabled={disabled} onChange={(v) => onChange({ ...form, requests_per_second: v })} />
+        <TagFieldNumber label={t('tag.fieldMaxRequestsPerMinute')} value={form.max_requests_per_minute} base={activePreset.max_requests_per_minute} min={0} max={3600} disabled={disabled} onChange={(v) => onChange({ ...form, max_requests_per_minute: Math.round(v) })} />
+        <TagFieldNumber label={t('tag.fieldMaxSide')} value={form.max_side} base={activePreset.max_side} min={64} max={4096} disabled={disabled} onChange={(v) => onChange({ ...form, max_side: Math.round(v) })} />
+        <TagFieldNumber label={t('tag.fieldJpegQuality')} value={form.jpeg_quality} base={activePreset.jpeg_quality} min={1} max={100} disabled={disabled} onChange={(v) => onChange({ ...form, jpeg_quality: Math.round(v) })} />
+        <TagFieldNumber label={t('tag.fieldMaxImageMb')} value={form.max_image_mb} base={activePreset.max_image_mb} min={0.1} max={25} step={0.1} disabled={disabled} onChange={(v) => onChange({ ...form, max_image_mb: v })} />
+      </div>
+    </AdvancedSection>
+    </>
   )
 }
 
-function LLMNumberInput({ label, value, base, min, max, step, disabled, onChange }: {
-  label: string; value: number; base: number; min: number; max: number; step: number
-  disabled: boolean; onChange: (v: number) => void
+// ---------------------------------------------------------------------------
+// 面板字段块：对齐训练配置页 components/Field.tsx 的视觉（label 上 / 控件全宽
+// 在下 / 说明文字在控件下方），叠加打标页特有的 modified 语义（本次任务覆盖值
+// ≠ 预填值 → 橙色边框 + title 提示原值）。
+// ---------------------------------------------------------------------------
+
+// 与 components/Field.tsx 的 inputStyle 同款（更紧凑；背景用 canvas）。
+const fieldInputStyle: React.CSSProperties = {
+  width: '100%', padding: '5px 10px',
+  background: 'var(--bg-canvas)', border: '1px solid var(--border-default)',
+  borderRadius: 'var(--r-sm)', fontSize: 'var(--t-sm)',
+  color: 'var(--fg-primary)',
+}
+
+function fieldCtlStyle(modified?: boolean): React.CSSProperties {
+  return modified ? { ...fieldInputStyle, borderColor: 'var(--warn)' } : fieldInputStyle
+}
+
+function TagField({ label, labelExtra, helpTooltip, help, className = '', children }: {
+  label: string
+  /** label 行内后缀（对齐训练配置页 label 旁小字徽章 / 链接，如「全局设置」跳转）。 */
+  labelExtra?: React.ReactNode
+  /** 静态说明放 ⓘ tooltip（对齐全局设置页 SettingsField.helpTooltip）。 */
+  helpTooltip?: React.ReactNode
+  /** 控件下方常驻内容：留给警示 / 状态徽章等必须一直可见的信息。 */
+  help?: React.ReactNode
+  className?: string
+  children: React.ReactNode
 }) {
   return (
-    <label className="flex items-center gap-1.5">
-      <span className="text-fg-tertiary font-mono text-xs">{label}</span>
-      <input
-        type="number" min={min} max={max} step={step} value={value}
-        onChange={(e) => { const n = Number(e.target.value); if (!Number.isNaN(n)) onChange(Math.max(min, Math.min(max, n))) }}
-        disabled={disabled}
-        className={`input input-mono ${value !== base ? 'border-warn' : ''}`}
-        style={{ width: 88 }}
-      />
-    </label>
+    <div className={`py-1.5 ${className}`}>
+      <div className="flex items-center gap-2 text-sm font-medium text-fg-secondary mb-1">
+        <span>{label}</span>
+        {helpTooltip && <InfoButton>{helpTooltip}</InfoButton>}
+        {labelExtra && (
+          <span className="text-[11px] font-normal">{labelExtra}</span>
+        )}
+      </div>
+      {children}
+      {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
+    </div>
   )
 }
 
-function LLMLabeledNumber({ label, value, base, min, max, step = 1, disabled, onChange }: {
-  label: string; value: number; base: number; min: number; max: number; step?: number
-  disabled: boolean; onChange: (v: number) => void
-}) {
-  return (
-    <label className="grid grid-cols-[140px_1fr] items-center gap-2">
-      <span className="text-fg-tertiary font-mono text-xs">{label}</span>
-      <input
-        type="number" min={min} max={max} step={step} value={value}
-        onChange={(e) => { const n = Number(e.target.value); if (!Number.isNaN(n)) onChange(Math.max(min, Math.min(max, n))) }}
-        disabled={disabled}
-        className={`input input-mono ${value !== base ? 'border-warn' : ''}`}
-      />
-    </label>
-  )
-}
-
-function ThresholdInput({ label, value, base, disabled, onChange }: {
-  label: string; value: number; base: number; disabled: boolean; onChange: (v: number) => void
-}) {
-  const { t } = useTranslation()
-  const modified = value !== base
-  return (
-    <label className="flex items-center gap-1.5">
-      <span className="text-fg-tertiary font-mono text-xs">{label}</span>
-      <input
-        type="number" min={0} max={1} step={0.01} value={value}
-        onChange={(e) => { const n = Number(e.target.value); if (!Number.isNaN(n)) onChange(Math.max(0, Math.min(1, n))) }}
-        disabled={disabled}
-        className={`input input-mono ${modified ? 'border-warn' : ''}`}
-        style={{ width: 72 }}
-        title={modified ? `${t('tag.globalSettings')}: ${base}` : undefined}
-      />
-    </label>
-  )
-}
-
-function LabeledInput({ label, value, placeholder, disabled, onChange, modified, className = '' }: {
+function TagFieldInput({ label, value, placeholder, disabled, onChange, modified, help, className }: {
   label: string; value: string; placeholder?: string; disabled: boolean
-  onChange: (v: string) => void; modified?: boolean; className?: string
+  onChange: (v: string) => void; modified?: boolean; help?: React.ReactNode; className?: string
 }) {
   return (
-    <label className={'grid grid-cols-[140px_1fr] items-center gap-2 ' + className}>
-      <span className="text-fg-tertiary font-mono text-xs">{label}</span>
+    <TagField label={label} help={help} className={className}>
       <input
         type="text" value={value} placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
-        className={`input input-mono ${modified ? 'border-warn' : ''}`}
+        className="input input-mono" style={fieldCtlStyle(modified)}
       />
-    </label>
+    </TagField>
   )
 }
 
-function LabeledModelSelect({ label, value, options, disabled, onChange, modified }: {
-  label: string; value: string; options: string[]; disabled: boolean
-  onChange: (v: string) => void; modified?: boolean
+function TagFieldNumber({ label, value, base, min, max, step = 1, disabled, onChange, help }: {
+  label: string; value: number; base: number; min: number; max: number; step?: number
+  disabled: boolean; onChange: (v: number) => void; help?: React.ReactNode
 }) {
   const { t } = useTranslation()
-  const settingsDrawer = useSettingsDrawer()
-  const opts = options.includes(value) ? options : [value, ...options]
+  const modified = value !== base
   return (
-    <label className="grid grid-cols-[140px_1fr] items-center gap-2">
-      <span className="text-fg-tertiary font-mono text-xs">{label}</span>
-      <div className="flex items-center gap-1.5 min-w-0">
-        <select
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          disabled={disabled}
-          className={`input input-mono min-w-0 flex-1 ${modified ? 'border-warn' : ''}`}
-        >
-          {opts.map((m) => <option key={m} value={m}>{m}</option>)}
-        </select>
-        <button
-          type="button"
-          onClick={() => settingsDrawer.open()}
-          className="text-xs text-fg-tertiary shrink-0 bg-transparent border-none p-0 cursor-pointer"
-          title={t('tag.globalSettings')}
-        >
-          +
-        </button>
-      </div>
+    <TagField label={label} help={help}>
+      <input
+        type="number" min={min} max={max} step={step} value={value}
+        onChange={(e) => { const n = Number(e.target.value); if (!Number.isNaN(n)) onChange(Math.max(min, Math.min(max, n))) }}
+        disabled={disabled}
+        className="input input-mono" style={fieldCtlStyle(modified)}
+        title={modified ? `${t('tag.modified')} · ${base}` : undefined}
+      />
+    </TagField>
+  )
+}
+
+function TagFieldSelect({ label, value, disabled, onChange, modified, helpTooltip, help, className, title, children }: {
+  label: string; value: string; disabled: boolean
+  onChange: (v: string) => void; modified?: boolean
+  helpTooltip?: React.ReactNode; help?: React.ReactNode
+  className?: string; title?: string; children: React.ReactNode
+}) {
+  return (
+    <TagField label={label} helpTooltip={helpTooltip} help={help} className={className}>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        className="input input-mono" style={fieldCtlStyle(modified)}
+        title={title}
+      >
+        {children}
+      </select>
+    </TagField>
+  )
+}
+
+function TagFieldCheckbox({ label, checked, disabled, onChange }: {
+  label: string; checked: boolean; disabled: boolean; onChange: (v: boolean) => void
+}) {
+  return (
+    <label className={`flex items-center gap-1.5 text-sm text-fg-secondary ${disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
+      <input
+        type="checkbox" checked={checked} disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+        style={{ height: 16, width: 16, borderRadius: 'var(--r-sm)' }}
+      />
+      {label}
     </label>
   )
 }
@@ -977,53 +1068,86 @@ function PanelDot() {
 }
 
 // ---------------------------------------------------------------------------
-// 右侧预览面板
+// 右侧打标状态面板（对齐正则集页 RegStatusPanel）：当前版本打标进度 + 本次打标
+// 配置摘要 + 此轮需要打标估算。下载中心已挪进各 tagger 的「高级参数」里。
 // ---------------------------------------------------------------------------
 
-function TagPreviewPanel({
-  tagger, taggerStatus, isLive, taggerOk,
+function TagStatusPanel({
+  totalImages, taggedImages,
+  methodLabel, modelLabel, presetLabel, triggerWord,
+  latestTaggedAt, thisRoundNeed, isLive,
 }: {
-  tagger: string
-  taggerStatus: { ok: boolean; msg: string } | null
+  totalImages: number
+  taggedImages: number
+  methodLabel: string | null
+  modelLabel: string | null
+  presetLabel: string | null
+  triggerWord: string
+  latestTaggedAt: number | null
+  thisRoundNeed: number | null
   isLive: boolean
-  taggerOk: boolean
 }) {
   const { t } = useTranslation()
-
-  const taggerDesc = tagger === 'wd14'
-    ? t('tag.wd14Desc')
-    : tagger === 'cltagger'
-      ? t('tag.cltaggerDesc')
-      : tagger === 'llm'
-        ? t('tag.llmDesc')
-        : tagger
-
+  const trigger = triggerWord.trim()
   return (
-    <div className="flex flex-col gap-3 min-w-0">
-      <div className="rounded-md border border-subtle bg-surface px-3 py-2.5">
-        <div className="flex items-center gap-1.5 mb-2">
-          <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${taggerOk ? 'bg-ok' : 'bg-err'}`} />
-          <span className="caption">{t('tag.statusTitle')}</span>
+    <div className="flex flex-col gap-3 min-w-0 overflow-y-auto">
+      <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 flex flex-col gap-2.5">
+        <div className="flex items-center gap-1.5 mb-0.5">
+          <PanelDot />
+          <span className="caption">{t('tag.statusPanelTitle')}</span>
         </div>
-        <div className="text-xs text-fg-secondary">
-          <div className={`font-mono font-medium ${taggerOk ? 'text-ok' : 'text-err'}`}>
-            {tagger} {taggerStatus
-              ? (taggerOk ? t('tag.statusReady') : t('tag.statusUnavail'))
-              : t('tag.statusChecking')}
-          </div>
-          {!taggerOk && taggerStatus && (
-            <div className="mt-1 text-fg-tertiary break-all">{taggerStatus.msg}</div>
+        <div className="flex flex-col gap-2">
+          <TagStatusRow label={t('tag.statusImages')}>
+            <span className="font-mono">
+              <span className="text-ok">{taggedImages}</span>
+              <span className="text-fg-tertiary text-2xs font-normal ml-1">
+                / {totalImages} {t('tag.nImagesShort')}
+              </span>
+            </span>
+          </TagStatusRow>
+          {methodLabel && (
+            <TagStatusRow label={t('tag.statusMethod')}>
+              <span className="font-mono">{methodLabel}</span>
+            </TagStatusRow>
           )}
+          {modelLabel && (
+            <TagStatusRow label={t('tag.statusModel')}>
+              <span className="font-mono break-all">{modelLabel}</span>
+            </TagStatusRow>
+          )}
+          {presetLabel && (
+            <TagStatusRow label={t('tag.statusPreset')}>
+              <span className="font-mono break-all">{presetLabel}</span>
+            </TagStatusRow>
+          )}
+          {trigger && (
+            <TagStatusRow label={t('tag.statusTrigger')}>
+              <span className="font-mono break-all">{trigger}</span>
+            </TagStatusRow>
+          )}
+          <TagStatusRow label={t('tag.statusLatest')}>
+            <span className="text-fg-secondary text-sm">
+              {latestTaggedAt ? formatAgo(latestTaggedAt, t) : '—'}
+            </span>
+          </TagStatusRow>
         </div>
-      </div>
-
-      <div className="rounded-md border border-subtle bg-surface px-3 py-2.5">
-        <div className="flex items-center gap-1.5 mb-2">
-          <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
-          <span className="caption">{t('tag.descTitle')}</span>
+        <div className="pt-2.5 border-t border-subtle">
+          <TagStatusRow label={t('tag.statusThisRound')}>
+            <span className="font-mono">
+              {thisRoundNeed == null ? (
+                <span className="text-fg-tertiary">—</span>
+              ) : (
+                <>
+                  <span className="text-accent">{thisRoundNeed}</span>
+                  <span className="text-fg-tertiary text-2xs font-normal ml-1">
+                    {t('tag.nImagesShort')}
+                  </span>
+                </>
+              )}
+            </span>
+          </TagStatusRow>
         </div>
-        <div className="text-xs text-fg-secondary leading-relaxed">{taggerDesc}</div>
-      </div>
+      </section>
 
       {isLive && (
         <div className="rounded-md border border-subtle bg-surface px-3 py-2.5 text-center">
@@ -1032,4 +1156,35 @@ function TagPreviewPanel({
       )}
     </div>
   )
+}
+
+// 状态行：label 左 / value 右对齐（字号对齐任务详情页 OverviewTab）。
+function TagStatusRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <span className="text-sm text-fg-tertiary font-normal shrink-0">{label}</span>
+      <span className="text-sm text-fg-primary text-right min-w-0 break-words">{children}</span>
+    </div>
+  )
+}
+
+// 最近一次 tag job 的参数：优先 params_decoded，退回解析 params 原始 JSON。
+function jobParams(job: Job | null): Record<string, unknown> {
+  if (!job) return {}
+  if (job.params_decoded && typeof job.params_decoded === 'object') return job.params_decoded
+  try {
+    return job.params ? (JSON.parse(job.params) as Record<string, unknown>) : {}
+  } catch {
+    return {}
+  }
+}
+
+// 相对时间（对齐正则集页 formatAgo）。
+function formatAgo(unix: number, t: TFunction): string {
+  const now = Date.now() / 1000
+  const dt = now - unix
+  if (dt < 60) return t('tag.agoJustNow')
+  if (dt < 3600) return t('tag.agoMinutes', { n: Math.floor(dt / 60) })
+  if (dt < 86400) return t('tag.agoHours', { n: Math.floor(dt / 3600) })
+  return t('tag.agoDays', { n: Math.floor(dt / 86400) })
 }

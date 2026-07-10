@@ -659,6 +659,12 @@ export default function GeneratePage() {
         })
         if (firstId === null) {
           firstId = task.id
+          // 点「开始生成」= 明确要看这次出图 → 回到实时视图：清掉正在回看的历史
+          // override（否则结果区停留在老图，看不到新入队/正在跑的这次，XY 尤甚 ——
+          // 出图慢，用户常停在回看态点生成）。P-I 删掉了「currentTask.id 变自动清
+          // override」的 effect（多任务下会把回看中的 done 项踢回实时），这里改成只在
+          // 用户显式提交时清，兼顾两者。
+          setHistoryOverride(null)
           // 首次生成（当前无显示）乐观置为第一个 task，立刻看到「排队/开始」而非空屏。
           if (!currentTaskRef.current || TERMINAL_TASK_STATUSES.includes(currentTaskRef.current.status)) {
             setCurrentTask(task)
@@ -1094,11 +1100,14 @@ export default function GeneratePage() {
               ) : samples.length === 0 && previewStep ? (
                 <div className="flex-1 min-h-0 flex flex-col items-center gap-2">
                   <div className="flex-1 min-h-0 w-full flex items-center justify-center">
+                    {/* 中间步预览是低分辨率 latent2rgb 图（模糊但能看出大致图）：铺满结果区
+                        —— width/height:100% + object-contain 会放大小图并保持比例；旧的
+                        maxWidth/maxHeight 只限上限，小图不放大 → 显示成中间一小块。 */}
                     <img
                       src={previewStep.dataUrl}
                       alt={`step ${previewStep.step}/${previewStep.total}`}
-                      className="rounded-md object-contain"
-                      style={{ maxWidth: '100%', maxHeight: '100%' }}
+                      className="rounded-md"
+                      style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                     />
                   </div>
                   <div className="text-xs text-fg-tertiary shrink-0">

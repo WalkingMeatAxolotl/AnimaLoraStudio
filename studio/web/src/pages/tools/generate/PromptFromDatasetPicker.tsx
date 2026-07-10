@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, type CaptionEntry, type ProjectSummary } from '../../../api/client'
 import { useLocalStorageState } from '../../../lib/useLocalStorageState'
+import ImagePreviewModal from '../../../components/ImagePreviewModal'
 
 // 命名前缀对齐 useAdvancedMode 的 `studio:` 约定（PR #66 P1-4）。旧的
 // `anima.generate.promptDataset.*` key 在 mount 时 migrate 一次后丢弃。
@@ -89,6 +90,12 @@ export default function PromptFromDatasetPicker({
   const [search, setSearch] = useState('')
   // 鼠标悬停的 caption key，驱动底部大图预览（移开 → 回落到已选 value 的图）
   const [hoveredKey, setHoveredKey] = useState<string | null>(null)
+  // 点击底部大图放大成全屏 modal。存的是点击那一刻预览图的定位快照，而非实时
+  // previewMeta —— 鼠标移进覆盖全屏的 modal 会离开 picker、触发根节点 onMouseLeave 清空
+  // hoveredKey，若跟随实时值放大的图会瞬间消失。快照后与 hover 解耦，稳定显示到手动关闭。
+  const [zoomMeta, setZoomMeta] = useState<
+    { pid: number; vid: number; name: string; folder?: string } | null
+  >(null)
 
   // 1. 拉项目列表；若上次记的 pid 在新项目列表中不存在则清掉避免幽灵选择
   useEffect(() => {
@@ -173,12 +180,16 @@ export default function PromptFromDatasetPicker({
   const hoveredCaption = hoveredKey
     ? captions.find((c) => `${c.folder}/${c.name}` === hoveredKey) ?? null
     : null
-  const previewSrc =
+  // 当前预览图的定位信息，缩览图（512）和点击放大（1600）共用；null = 无图可显示。
+  const previewMeta =
     hoveredCaption && loaded
-      ? api.versionThumbUrl(loaded.pid, loaded.vid, 'train', hoveredCaption.name, hoveredCaption.folder, 512)
+      ? { pid: loaded.pid, vid: loaded.vid, name: hoveredCaption.name, folder: hoveredCaption.folder }
       : value && value.folder
-        ? api.versionThumbUrl(value.projectId, value.versionId, 'train', value.name, value.folder, 512)
-        : ''
+        ? { pid: value.projectId, vid: value.versionId, name: value.name, folder: value.folder }
+        : null
+  const previewSrc = previewMeta
+    ? api.versionThumbUrl(previewMeta.pid, previewMeta.vid, 'train', previewMeta.name, previewMeta.folder, 512)
+    : ''
 
   const handleRowClick = (c: CaptionEntry) => {
     // 行属于 loaded 这一组 captions，选中也要落到 loaded 的 (pid, vid)，不能用
@@ -204,9 +215,14 @@ export default function PromptFromDatasetPicker({
   }
 
   return (
+    <>
+    {/* onMouseLeave 绑在整个 picker（而非仅列表）：从列表行移到底部大图想点击放大时
+        不能丢 hover —— 否则未选中场景下大图与放大按钮会随 hoveredKey 清空而消失、点不到，
+        已选场景下则会回落成放大 value 的另一张图。移出整个 picker 才清空、回落到 value。 */}
     <div
       className="rounded-md border border-subtle bg-overlay p-2.5 flex flex-col gap-2"
       data-testid="prompt-dataset-picker"
+      onMouseLeave={() => setHoveredKey(null)}
     >
       {/* header */}
       <div className="flex items-center gap-2">
@@ -274,7 +290,6 @@ export default function PromptFromDatasetPicker({
       <div
         className="flex flex-col gap-px overflow-y-auto"
         style={{ maxHeight: 320 }}
-        onMouseLeave={() => setHoveredKey(null)}
       >
         {loading && <div className="text-2xs text-fg-tertiary">{t('common.loading')}</div>}
         {!loading && pid && vid && captions.length === 0 && !error && (
@@ -332,13 +347,21 @@ export default function PromptFromDatasetPicker({
           style={{ height: 240 }}
         >
           {previewSrc ? (
-            <img
-              src={previewSrc}
-              alt={t('generate.datasetPreviewAlt')}
-              loading="lazy"
-              className="w-full h-full object-contain"
-              onError={(e) => { e.currentTarget.style.visibility = 'hidden' }}
-            />
+            <button
+              type="button"
+              onClick={() => previewMeta && setZoomMeta(previewMeta)}
+              className="w-full h-full flex items-center justify-center border-none bg-transparent p-0 cursor-zoom-in"
+              title={t('generate.datasetPreviewZoomTitle')}
+              aria-label={t('generate.datasetPreviewZoomTitle')}
+            >
+              <img
+                src={previewSrc}
+                alt={t('generate.datasetPreviewAlt')}
+                loading="lazy"
+                className="w-full h-full object-contain"
+                onError={(e) => { e.currentTarget.style.visibility = 'hidden' }}
+              />
+            </button>
           ) : (
             <span className="text-2xs text-fg-tertiary px-1.5 text-center leading-snug">
               {t('generate.datasetPreviewEmpty')}
@@ -356,5 +379,13 @@ export default function PromptFromDatasetPicker({
         />
       </div>
     </div>
+    {zoomMeta && (
+      <ImagePreviewModal
+        src={api.versionThumbUrl(zoomMeta.pid, zoomMeta.vid, 'train', zoomMeta.name, zoomMeta.folder, 1600)}
+        caption={zoomMeta.name}
+        onClose={() => setZoomMeta(null)}
+      />
+    )}
+    </>
   )
 }

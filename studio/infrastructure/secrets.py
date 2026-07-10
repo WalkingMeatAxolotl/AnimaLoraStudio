@@ -20,7 +20,7 @@ SENSITIVE_FIELDS: tuple[str, ...] = (
     "gelbooru.api_key",
     "danbooru.api_key",
     "huggingface.token",
-    "wandb.api_key",
+    "wandb.presets.*.api_key",
     "llm_tagger.presets.*.api_key",
     "modelscope.token",
 )
@@ -59,8 +59,14 @@ class HuggingFaceConfig(BaseModel):
     endpoint: str = ""
 
 
-class WandBConfig(BaseModel):
-    enabled: bool = False
+class WandBPresetConfig(BaseModel):
+    """一套 WandB 账号 + 上传策略预设（对齐 LLMPresetConfig 的预设模式）。
+
+    0.18 起 WandB 配置预设化：顶层 WandBConfig 只留 enabled + 预设切换，
+    账号（api_key/entity/base_url）和上传策略全部下沉到 preset，可整套切换。
+    """
+    id: str = "default"
+    label: str = "Default"
     api_key: str = ""
     project: str = "AnimaLoraStudio"
     entity: str = ""
@@ -84,7 +90,12 @@ class WandBConfig(BaseModel):
     upload_state_auto_policy: str = "last"
 
     @model_validator(mode="after")
-    def _normalize_values(self) -> "WandBConfig":
+    def _normalize_values(self) -> "WandBPresetConfig":
+        self.id = "".join(
+            ch if ch.isalnum() or ch in ("_", "-") else "_"
+            for ch in str(self.id or "").strip()
+        ).strip("_") or "default"
+        self.label = str(self.label or self.id).strip()
         if self.mode not in {"online", "offline", "disabled"}:
             self.mode = "online"
         self.sample_max_side = max(64, int(self.sample_max_side or 512))
@@ -97,6 +108,44 @@ class WandBConfig(BaseModel):
         if self.upload_state_auto_policy not in _valid_policies:
             self.upload_state_auto_policy = "last"
         return self
+
+
+class WandBConfig(BaseModel):
+    """全局 WandB：顶层只留总开关 + 当前预设指针，字段全在 preset 里。
+
+    老扁平 schema（enabled + 平铺字段）由 _migrate_legacy_schema 包成
+    id="default" 的单 preset。训练进程经 supervisor 注入 WANDB_* env 读
+    `active` 预设 —— secrets 不落任何 yaml。
+    """
+    enabled: bool = False
+    current_preset: str = "default"
+    presets: list[WandBPresetConfig] = Field(
+        default_factory=lambda: [WandBPresetConfig()]
+    )
+
+    @model_validator(mode="after")
+    def _normalize_values(self) -> "WandBConfig":
+        # id 去重保序 + 保底至少一个 preset + current 指向存在的 id
+        merged: list[WandBPresetConfig] = []
+        seen: set[str] = set()
+        for preset in self.presets:
+            if preset.id and preset.id not in seen:
+                merged.append(preset)
+                seen.add(preset.id)
+        if not merged:
+            merged = [WandBPresetConfig()]
+        self.presets = merged
+        if self.current_preset not in {p.id for p in self.presets}:
+            self.current_preset = self.presets[0].id
+        return self
+
+    @property
+    def active(self) -> WandBPresetConfig:
+        """当前选中的 preset；validator 保证至少有一个。"""
+        for preset in self.presets:
+            if preset.id == self.current_preset:
+                return preset
+        return self.presets[0]
 
 
 class ModelScopeConfig(BaseModel):
@@ -212,6 +261,9 @@ class LLMPresetConfig(BaseModel):
     # prompt 消息序列（含图片位置）
     messages: list[LLMMessage] = Field(default_factory=lambda: _default_messages_for(""))
     output_format: str = "json"  # json | text
+    # Assist tagging: pre-tag images with a local ONNX tagger before LLM calls,
+    # then inject tags into {{tags}} placeholders in text messages.
+    assist_tagger: str = ""  # "" | wd14 | cltagger
     # 生成参数
     temperature: float = 0.2
     max_tokens: int = 700
@@ -251,6 +303,8 @@ class LLMPresetConfig(BaseModel):
             self.endpoint = "chat_completions"
         if self.output_format not in {"json", "text"}:
             self.output_format = "json"
+        if self.assist_tagger not in {"", "wd14", "cltagger"}:
+            self.assist_tagger = ""
         self.temperature = max(0.0, min(float(self.temperature), 2.0))
         self.max_tokens = max(64, int(self.max_tokens or 700))
         self.timeout = max(5, int(self.timeout or 60))
@@ -403,11 +457,12 @@ class CLTaggerConfig(BaseModel):
     tag_mapping_path: str = "cl_tagger_1_02/tag_mapping.json"
     threshold_general: float = 0.35
     threshold_character: float = 0.6
-    # CLTagger 模型输出 7 个 category：General / Character 走阈值过滤，其余 5 个
+    # CLTagger 模型输出 8 个 category：General / Character 走阈值过滤，其余 6 个
     # 按 bool 开关 gate。默认勾上 General / Character / Copyright 三类——LoRA
-    # 训练标准 caption 形态；Meta / Model / Rating / Quality 默认关，避免污染
-    # caption（例如 "highres", "best quality", "explicit" 这类元信息）。
+    # 训练标准 caption 形态；Artist / Meta / Model / Rating / Quality 默认关，
+    # 避免污染 caption（画师名以及 "highres", "best quality", "explicit" 这类元信息）。
     add_copyright_tag: bool = True
+    add_artist_tag: bool = False
     add_meta_tag: bool = False
     add_model_tag: bool = False
     add_rating_tag: bool = False
@@ -649,6 +704,58 @@ def _apply_mask(node: Any, segs: list[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# WandB preset 导入导出（0.18 预设化）
+# ---------------------------------------------------------------------------
+
+
+def get_wandb_preset(preset_id: str) -> Optional["WandBPresetConfig"]:
+    """按 id 取 preset（**含真实 api_key**，绕过 mask）——只给显式导出端点用。"""
+    for preset in load().wandb.presets:
+        if preset.id == preset_id:
+            return preset
+    return None
+
+
+def import_wandb_preset(
+    data: Any, fallback_label: str = ""
+) -> tuple[Secrets, "WandBPresetConfig"]:
+    """导入一条 wandb preset：id 撞名自动加后缀，导入后设为当前选中。
+
+    - 兼容旧前端 JSON 导出格式 ``{kind, version, preset: {...}}``（自动解包）
+    - ``api_key == MASK`` 哨兵（旧客户端导出）按空处理；带真实 key 的备份文件
+      原样恢复
+    - 值非法时抛 pydantic ValidationError，由 caller 翻 400
+    """
+    if not isinstance(data, dict):
+        raise ValueError("preset data must be a mapping")
+    payload = dict(data)
+    inner = payload.get("preset")
+    if isinstance(inner, dict):
+        payload = dict(inner)
+    if str(payload.get("api_key") or "") == MASK:
+        payload["api_key"] = ""
+
+    label = str(payload.get("label") or fallback_label or "imported").strip() or "imported"
+    slug = "".join(
+        ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in label
+    ).strip("_") or "imported"
+
+    s = load()
+    used = {p.id for p in s.wandb.presets}
+    pid, idx = slug, 1
+    while pid in used:
+        idx += 1
+        pid = f"{slug}_{idx}"
+
+    preset = WandBPresetConfig(**{**payload, "id": pid, "label": label})
+    s.wandb.presets.append(preset)
+    s.wandb.current_preset = preset.id
+    new = Secrets.model_validate(s.model_dump())  # 重跑 validator（去重/回退保底）
+    save(new)
+    return new, preset
+
+
+# ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
 
@@ -684,6 +791,20 @@ def _migrate_legacy_schema(raw: dict[str, Any]) -> dict[str, Any]:
     q_raw = raw.get("queue")
     if isinstance(q_raw, dict):
         q_raw.pop("allow_gpu_during_train", None)
+
+    # 9. WandB 预设化（0.18）：老扁平 wandb {enabled, api_key, project, ...} →
+    #    {enabled, current_preset, presets: [{id: "default", ...}]}。enabled 留
+    #    顶层（总开关不随预设切换），其余字段整体下沉成 id="default" 的 preset。
+    #    幂等：已有 presets 键直接跳过。
+    wb_raw = raw.get("wandb")
+    if isinstance(wb_raw, dict) and "presets" not in wb_raw:
+        enabled = bool(wb_raw.pop("enabled", False))
+        preset = {**wb_raw, "id": "default", "label": "Default"}
+        raw["wandb"] = {
+            "enabled": enabled,
+            "current_preset": "default",
+            "presets": [preset],
+        }
 
     # 7. gelbooru 的图片入库设置搬到全局 download.*（这三个本被所有 booru 下载 /
     #    reg / 本地上传共用，不该挂在 gelbooru 下）。download 侧未显式设过才搬，幂等。

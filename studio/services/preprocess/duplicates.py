@@ -57,15 +57,6 @@ DEFAULT_PREFILTER_DHASH = 20
 DEFAULT_PREFILTER_AHASH = 22
 DEFAULT_COLOR_ALERT = 14
 
-DEFAULT_DETECT_BLUR = False
-DEFAULT_BLUR_SCORE_THRESHOLD = 80.0
-DEFAULT_BLUR_LOCAL_RATIO = 0.06
-DEFAULT_BLUR_GRID = 12
-DEFAULT_BLUR_TILE_LAPLACIAN = 45.0
-DEFAULT_BLUR_TILE_STD = 30.0
-DEFAULT_BLUR_BACKGROUND_VALUE = 245.0
-DEFAULT_BLUR_BACKGROUND_SATURATION = 18.0
-
 DEFAULT_DETECT_CROPS = False
 DEFAULT_CROP_SCORE = 0.74
 DEFAULT_CROP_HASH_THRESHOLD = 30
@@ -81,6 +72,16 @@ DEFAULT_CROP_SCAN_DIVISIONS = 14
 DEFAULT_CROP_SCALES = (0.35, 0.45, 0.55, 0.60, 0.65, 0.72, 0.76, 0.85)
 DEFAULT_CROP_MAX_CANDIDATES_PER_IMAGE = 10
 DEFAULT_CROP_EARLY_ACCEPT_SCORE = 0.88
+
+# 灵敏度三档 → (variant_score, crop_score)：差分/裁剪判定的松紧，是 UI 唯一暴露的
+# 调节项；其余阈值/性能参数全固化为上面的 DEFAULT_*。宽松=阈值更低、更激进多找，
+# 严格=阈值更高、只留高置信匹配。仅「重复 + 同分镜差分」(both) 模式生效。
+DEFAULT_SENSITIVITY = "standard"
+SENSITIVITY_SCORES: dict[str, tuple[float, float]] = {
+    "loose": (62.0, 0.66),
+    "standard": (DEFAULT_VARIANT_SCORE, DEFAULT_CROP_SCORE),
+    "strict": (82.0, 0.82),
+}
 
 
 MatchScope = Literal["strict", "both"]
@@ -109,9 +110,6 @@ class DuplicateOptions:
     min_close_tiles: float = DEFAULT_MIN_CLOSE_TILES
     tile_median: float = DEFAULT_TILE_MEDIAN
     min_gray_close: float = DEFAULT_MIN_GRAY_CLOSE
-    detect_blur: bool = DEFAULT_DETECT_BLUR
-    blur_score_threshold: float = DEFAULT_BLUR_SCORE_THRESHOLD
-    blur_local_ratio: float = DEFAULT_BLUR_LOCAL_RATIO
     detect_crops: bool = DEFAULT_DETECT_CROPS
     crop_score: float = DEFAULT_CROP_SCORE
     crop_hash_threshold: int = DEFAULT_CROP_HASH_THRESHOLD
@@ -136,9 +134,6 @@ class ImageInfo:
     ahash: Any
     colorhash: Any
     grayprint: np.ndarray
-    blur_score: float = 0.0
-    local_blur_ratio: float = 0.0
-    largest_blur_region_ratio: float = 0.0
     crop_hash: Any | None = None
     edgehash: Any | None = None
     tilehashes: list[Any] | None = None
@@ -174,12 +169,6 @@ class PairMetrics:
     @property
     def is_match(self) -> bool:
         return self.match_type != "different"
-
-
-@dataclass
-class BlurCandidate:
-    image: ImageInfo
-    reason: str
 
 
 @dataclass
@@ -261,40 +250,14 @@ def _require_imagehash() -> None:
         ) from _IMAGEHASH_IMPORT_ERROR
 
 
-def parse_tile_grids(value: str | list[int] | tuple[int, ...]) -> tuple[int, ...]:
-    if isinstance(value, (list, tuple)):
-        parts = [str(v) for v in value]
-    else:
-        parts = str(value).replace(";", ",").split(",")
-    grids: list[int] = []
-    for raw in parts:
-        part = str(raw).strip()
-        if not part:
-            continue
-        try:
-            grid = int(part)
-        except ValueError as exc:
-            raise DuplicateFinderError(
-                f"Invalid tile grid value: {part}",
-                code="duplicate.tile_grid_invalid",
-                details={"value": part}, http_status=400,
-            ) from exc
-        if grid < 2 or grid > 12:
-            raise DuplicateFinderError(
-                "Tile grid must be between 2 and 12",
-                code="duplicate.tile_grid_out_of_range", http_status=400,
-            )
-        if grid not in grids:
-            grids.append(grid)
-    if not grids:
-        raise DuplicateFinderError(
-            "At least one tile grid is required",
-            code="duplicate.tile_grid_required", http_status=400,
-        )
-    return tuple(grids)
-
-
 def options_from_payload(payload: dict[str, Any]) -> DuplicateOptions:
+    """从扫描请求构造 DuplicateOptions。
+
+    UI 只暴露两项 —— match_scope（匹配范围）+ sensitivity（灵敏度）。其余阈值/性能
+    参数全部固化为 DuplicateOptions 的 DEFAULT_* 默认值，不再从 payload 读取。
+      - detect_crops 跟随 match_scope（both 才开裁剪/缩放检测）。
+      - variant_score / crop_score 由 sensitivity 三档映射（仅 both 模式实际生效）。
+    """
     match_scope = payload.get("match_scope", "both")
     if match_scope not in ("strict", "both"):
         raise DuplicateFinderError(
@@ -302,29 +265,19 @@ def options_from_payload(payload: dict[str, Any]) -> DuplicateOptions:
             code="duplicate.match_scope_invalid",
             details={"value": match_scope}, http_status=400,
         )
+    sensitivity = payload.get("sensitivity", DEFAULT_SENSITIVITY)
+    if sensitivity not in SENSITIVITY_SCORES:
+        raise DuplicateFinderError(
+            f"Invalid sensitivity: {sensitivity}",
+            code="duplicate.sensitivity_invalid",
+            details={"value": sensitivity}, http_status=400,
+        )
+    variant_score, crop_score = SENSITIVITY_SCORES[sensitivity]
     return DuplicateOptions(
         match_scope=match_scope,
-        hash_size=max(0, int(payload.get("hash_size", DEFAULT_HASH_SIZE))),
-        hash_workers=max(1, min(32, int(payload.get("hash_workers", DEFAULT_HASH_WORKERS)))),
-        tile_grids=parse_tile_grids(payload.get("tile_grids", DEFAULT_TILE_GRIDS)),
-        structure_threshold=max(0, int(payload.get("structure_threshold", DEFAULT_STRUCTURE_THRESHOLD))),
-        variant_score=float(payload.get("variant_score", DEFAULT_VARIANT_SCORE)),
-        aspect_tolerance=max(0.0001, float(payload.get("aspect_tolerance", DEFAULT_ASPECT_TOLERANCE))),
-        min_close_tiles=max(0.0, min(1.0, float(payload.get("min_close_tiles", DEFAULT_MIN_CLOSE_TILES)))),
-        tile_median=max(0.0, float(payload.get("tile_median", DEFAULT_TILE_MEDIAN))),
-        min_gray_close=max(0.0, min(1.0, float(payload.get("min_gray_close", DEFAULT_MIN_GRAY_CLOSE)))),
-        detect_blur=bool(payload.get("detect_blur", DEFAULT_DETECT_BLUR)),
-        blur_score_threshold=max(0.0, float(payload.get("blur_score_threshold", DEFAULT_BLUR_SCORE_THRESHOLD))),
-        blur_local_ratio=max(0.0, min(1.0, float(payload.get("blur_local_ratio", DEFAULT_BLUR_LOCAL_RATIO)))),
-        detect_crops=bool(payload.get("detect_crops", DEFAULT_DETECT_CROPS)),
-        crop_score=max(0.0, min(1.0, float(payload.get("crop_score", DEFAULT_CROP_SCORE)))),
-        crop_hash_threshold=max(0, int(payload.get("crop_hash_threshold", DEFAULT_CROP_HASH_THRESHOLD))),
-        crop_max_side=max(64, int(payload.get("crop_max_side", DEFAULT_CROP_MAX_SIDE))),
-        crop_workers=max(1, min(32, int(payload.get("crop_workers", DEFAULT_CROP_WORKERS)))),
-        crop_prefilter_min_segments=max(1, int(payload.get("crop_prefilter_min_segments", DEFAULT_CROP_PREFILTER_SEGMENTS))),
-        crop_prefilter_min_coverage=max(0.0, min(1.0, float(payload.get("crop_prefilter_min_coverage", DEFAULT_CROP_PREFILTER_COVERAGE)))),
-        crop_prefilter_aspect_tolerance=max(0.0, float(payload.get("crop_prefilter_aspect_tolerance", DEFAULT_CROP_PREFILTER_ASPECT_TOLERANCE))),
-        crop_max_candidates_per_image=max(0, int(payload.get("crop_max_candidates_per_image", DEFAULT_CROP_MAX_CANDIDATES_PER_IMAGE))),
+        variant_score=variant_score,
+        crop_score=crop_score,
+        detect_crops=(match_scope == "both"),
     )
 
 
@@ -340,9 +293,6 @@ def options_to_json(options: DuplicateOptions) -> dict[str, Any]:
         "min_close_tiles": options.min_close_tiles,
         "tile_median": options.tile_median,
         "min_gray_close": options.min_gray_close,
-        "detect_blur": options.detect_blur,
-        "blur_score_threshold": options.blur_score_threshold,
-        "blur_local_ratio": options.blur_local_ratio,
         "detect_crops": options.detect_crops,
         "crop_score": options.crop_score,
         "crop_hash_threshold": options.crop_hash_threshold,
@@ -442,9 +392,6 @@ def scan_train_duplicates(
     groups, pair_metrics, stats = group_similar_images(
         infos, options, on_progress=on_progress,
     )
-    blur_candidates = (
-        find_blur_candidates(infos, options) if options.detect_blur else []
-    )
     crop_relations: list[CropRelation] = []
     if options.detect_crops:
         if on_progress:
@@ -456,6 +403,12 @@ def scan_train_duplicates(
                 "text": f"Checking {total_pairs} crop/scale relation pairs...",
             })
         crop_relations = find_crop_relations(infos, options, on_progress=on_progress)
+        # 裁剪/缩放 = 更严格的重复判断：把 crop 关系当额外的重复边并进分组，
+        # 让 crop 候选像普通重复候选一样出现在同一个分组卡里（a,b → a,b,c）。
+        if crop_relations:
+            groups, pair_metrics = merge_crop_relations_into_groups(
+                infos, groups, pair_metrics, crop_relations,
+            )
     elapsed = time.monotonic() - started
 
     return {
@@ -465,7 +418,6 @@ def scan_train_duplicates(
         "readable_images": len(infos),
         "group_count": len(groups),
         "candidate_count": sum(max(0, len(g) - 1) for g in groups),
-        "blur_candidate_count": len(blur_candidates),
         "crop_relation_count": len(crop_relations),
         "elapsed_seconds": round(elapsed, 3),
         "options": options_to_json(options),
@@ -473,14 +425,6 @@ def scan_train_duplicates(
         "groups": [
             _group_to_json(index, group, pair_metrics)
             for index, group in enumerate(groups, start=1)
-        ],
-        "blur_candidates": [
-            _blur_candidate_to_json(candidate)
-            for candidate in blur_candidates
-        ],
-        "crop_relations": [
-            _crop_relation_to_json(relation)
-            for relation in crop_relations
         ],
     }
 
@@ -557,10 +501,6 @@ def build_image_info(source: tuple[str, Path], options: DuplicateOptions) -> Ima
         rgb, width, height = load_hash_image(path, options.hash_size)
         gray = rgb.convert("L")
         soft_gray = gray.filter(ImageFilter.GaussianBlur(radius=2))
-        if options.detect_blur:
-            blur_score_value, local_blur_ratio_value, largest_blur_region_ratio = blur_metrics(rgb, gray)
-        else:
-            blur_score_value, local_blur_ratio_value, largest_blur_region_ratio = 0.0, 0.0, 0.0
         return ImageInfo(
             name=name,
             path=path,
@@ -573,9 +513,6 @@ def build_image_info(source: tuple[str, Path], options: DuplicateOptions) -> Ima
             ahash=imagehash.average_hash(soft_gray),
             colorhash=imagehash.colorhash(rgb),
             grayprint=build_grayprint(gray),
-            blur_score=blur_score_value,
-            local_blur_ratio=local_blur_ratio_value,
-            largest_blur_region_ratio=largest_blur_region_ratio,
             crop_hash=build_crop_hash(rgb) if options.detect_crops else None,
             edgehash=build_edge_hash(gray),
             tilehashes=build_tile_hashes(soft_gray, options.tile_grids),
@@ -635,78 +572,6 @@ def build_edge_hash(gray: Image.Image) -> Any:
 def build_grayprint(gray: Image.Image) -> np.ndarray:
     small = gray.resize((DEFAULT_GRAYPRINT_SIZE, DEFAULT_GRAYPRINT_SIZE), RESAMPLE_FILTER)
     return np.asarray(small, dtype=np.int16).reshape(-1)
-
-
-def build_laplacian(gray: Image.Image) -> np.ndarray:
-    arr = np.asarray(gray, dtype=np.float32)
-    lap = -4 * arr
-    lap[:-1, :] += arr[1:, :]
-    lap[1:, :] += arr[:-1, :]
-    lap[:, :-1] += arr[:, 1:]
-    lap[:, 1:] += arr[:, :-1]
-    return lap
-
-
-def largest_connected_region(cells: set[tuple[int, int]]) -> int:
-    seen: set[tuple[int, int]] = set()
-    largest = 0
-    for cell in cells:
-        if cell in seen:
-            continue
-        stack = [cell]
-        seen.add(cell)
-        size = 0
-        while stack:
-            x, y = stack.pop()
-            size += 1
-            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                neighbor = (x + dx, y + dy)
-                if neighbor in cells and neighbor not in seen:
-                    seen.add(neighbor)
-                    stack.append(neighbor)
-        largest = max(largest, size)
-    return largest
-
-
-def blur_metrics(rgb: Image.Image, gray: Image.Image) -> tuple[float, float, float]:
-    laplacian = build_laplacian(gray)
-    score = float(laplacian.var())
-    gray_arr = np.asarray(gray, dtype=np.float32)
-    hsv = rgb.convert("HSV")
-    saturation = np.asarray(hsv.split()[1], dtype=np.float32)
-    value = np.asarray(hsv.split()[2], dtype=np.float32)
-
-    width, height = gray.size
-    flagged: set[tuple[int, int]] = set()
-    grid = DEFAULT_BLUR_GRID
-    for tile_y in range(grid):
-        for tile_x in range(grid):
-            left = tile_x * width // grid
-            right = (tile_x + 1) * width // grid
-            upper = tile_y * height // grid
-            lower = (tile_y + 1) * height // grid
-            tile_laplacian = laplacian[upper:lower, left:right]
-            tile_gray = gray_arr[upper:lower, left:right]
-            tile_saturation = saturation[upper:lower, left:right]
-            tile_value = value[upper:lower, left:right]
-            if tile_laplacian.size == 0:
-                continue
-
-            low_detail = (
-                float(tile_laplacian.var()) <= DEFAULT_BLUR_TILE_LAPLACIAN
-                and float(tile_gray.std()) <= DEFAULT_BLUR_TILE_STD
-            )
-            not_plain_light_background = (
-                float(tile_value.mean()) < DEFAULT_BLUR_BACKGROUND_VALUE
-                or float(tile_saturation.mean()) > DEFAULT_BLUR_BACKGROUND_SATURATION
-            )
-            if low_detail and not_plain_light_background:
-                flagged.add((tile_x, tile_y))
-
-    total_tiles = max(1, grid * grid)
-    local_ratio = len(flagged) / total_tiles
-    largest_ratio = largest_connected_region(flagged) / total_tiles
-    return round(score, 3), round(local_ratio, 4), round(largest_ratio, 4)
 
 
 def build_crop_hash(rgb: Image.Image) -> Any | None:
@@ -1018,29 +883,6 @@ def best_link_to_group(
         if item.name in (a, b) and (best is None or metrics.score > best.score):
             best = metrics
     return best
-
-
-def find_blur_candidates(images: list[ImageInfo], options: DuplicateOptions) -> list[BlurCandidate]:
-    candidates: list[BlurCandidate] = []
-    for image in images:
-        reasons: list[str] = []
-        if image.blur_score <= options.blur_score_threshold:
-            reasons.append(f"global blur score {image.blur_score:.1f}")
-        if image.largest_blur_region_ratio >= options.blur_local_ratio:
-            reasons.append(f"connected low-detail region {image.largest_blur_region_ratio:.1%}")
-        elif image.local_blur_ratio >= options.blur_local_ratio * 1.8:
-            reasons.append(f"total low-detail area {image.local_blur_ratio:.1%}")
-        if reasons:
-            candidates.append(BlurCandidate(image=image, reason="; ".join(reasons)))
-    candidates.sort(
-        key=lambda item: (
-            -item.image.largest_blur_region_ratio,
-            -item.image.local_blur_ratio,
-            item.image.blur_score,
-            item.image.name.lower(),
-        )
-    )
-    return candidates
 
 
 def crop_hash_summary(a: ImageInfo, b: ImageInfo) -> tuple[int, float, str]:
@@ -1577,38 +1419,61 @@ def find_crop_relations(
     return relations
 
 
-def _blur_candidate_to_json(candidate: BlurCandidate) -> dict[str, Any]:
-    image = candidate.image
-    return {
-        "name": image.name,
-        "width": image.width,
-        "height": image.height,
-        "filesize_kb": image.size // 1024,
-        "blur_score": image.blur_score,
-        "local_blur_ratio": image.local_blur_ratio,
-        "largest_blur_region_ratio": image.largest_blur_region_ratio,
-        "reason": candidate.reason,
-    }
+def crop_relation_to_metrics(relation: CropRelation) -> PairMetrics:
+    """把一条 crop/scale 关系折成一个 PairMetrics，让 crop 候选能像普通重复候选
+    一样进分组卡（复用 _group_to_json / _item_to_json 的既有渲染路径）。
+
+    前端只展示 match_type / score / note；其余结构化 diff 字段对 crop 无意义，填
+    占位。score 用 crop 匹配度（0–1）放大到 0–100，跟结构分数量级一致。
+    """
+    return PairMetrics(
+        score=round(relation.score * 100, 2),
+        match_type="crop-variant",
+        structure_diff=0,
+        phash_diff=0,
+        soft_phash_diff=0,
+        dhash_diff=0,
+        ahash_diff=0,
+        edge_diff=0,
+        color_diff=0,
+        tile_median=0.0,
+        tile_mean=0.0,
+        tile_close_ratio=0.0,
+        aspect_delta=0.0,
+        note=(
+            f"{relation.relation_kind} · larger={relation.larger_image} "
+            f"· area {relation.area_ratio}x"
+        ),
+    )
 
 
-def _crop_relation_to_json(relation: CropRelation) -> dict[str, Any]:
-    x, y, width, height = relation.source_window
-    return {
-        "source": relation.source.name,
-        "crop_candidate": relation.crop.name,
-        "score": relation.score,
-        "source_width": relation.source.width,
-        "source_height": relation.source.height,
-        "crop_width": relation.crop.width,
-        "crop_height": relation.crop.height,
-        "source_area": relation.source_area,
-        "crop_area": relation.crop_area,
-        "larger_image": relation.larger_image,
-        "area_ratio": relation.area_ratio,
-        "relation_kind": relation.relation_kind,
-        "source_window": {"x": x, "y": y, "width": width, "height": height},
-        "window_ratio": relation.window_ratio,
-        "segment_matches": relation.segment_matches,
-        "segment_coverage": relation.segment_coverage,
-        "note": relation.note,
-    }
+def merge_crop_relations_into_groups(
+    infos: list[ImageInfo],
+    groups: list[list[ImageInfo]],
+    pair_metrics: dict[tuple[str, str], PairMetrics],
+    crop_relations: list[CropRelation],
+) -> tuple[list[list[ImageInfo]], dict[tuple[str, str], PairMetrics]]:
+    """把 crop/scale 关系当作额外的重复边并进已有分组。
+
+    重新在全体 infos 上跑一次 union-find：先接回结构分组已连的边，再叠加 crop 边，
+    重新聚合成分组。crop pair 补一条 synthetic PairMetrics 进 pair_metrics，分组卡
+    里 crop 候选就带 match_type/score 正常展示。keep 选择沿用 sort_group_for_keep
+    （像素/体积最大者保留），裁剪小图自然落到「建议去除」。
+    """
+    uf = UnionFind([info.name for info in infos])
+    for group in groups:
+        anchor = group[0].name
+        for item in group[1:]:
+            uf.union(anchor, item.name)
+    for relation in crop_relations:
+        uf.union(relation.source.name, relation.crop.name)
+        pair_metrics[(relation.source.name, relation.crop.name)] = (
+            crop_relation_to_metrics(relation)
+        )
+
+    grouped: dict[str, list[ImageInfo]] = {}
+    for info in infos:
+        grouped.setdefault(uf.find(info.name), []).append(info)
+    merged = [sort_group_for_keep(group) for group in grouped.values() if len(group) > 1]
+    merged.sort(key=lambda group: (-len(group), group[0].name.lower()))
+    return merged, pair_metrics

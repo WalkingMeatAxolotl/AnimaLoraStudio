@@ -60,10 +60,20 @@ def test_explicit_min_max_override_is_respected() -> None:
     assert m.buckets == [(256, 256)]
 
 
-def test_get_bucket_snaps_by_aspect_ratio_only() -> None:
+def test_get_bucket_snaps_by_aspect_ratio_then_area() -> None:
     m = BucketManager()
     # 极宽 → 最宽桶（AR≈2.0）；图片绝对尺寸不影响选桶。
     bw, bh = m.get_bucket(5000, 1000)
     assert abs(bw / bh - 2.0) < 0.1
     # 同一 AR、不同绝对尺寸 → 同一桶
     assert m.get_bucket(800, 600) == m.get_bucket(1600, 1200)
+
+
+def test_get_bucket_ties_prefer_base_area_square() -> None:
+    # base=1536 会生成多个 1:1 桶（1472²/1536²/1600² 都在 ±10% 面积带内）。
+    # 选桶不能只吃生成顺序里的第一个较小方桶；AR 打平时应回到最接近 base² 的桶。
+    m = BucketManager(1536, aspect_ratio_limit=2.0)
+    assert (1472, 1472) in m.buckets
+    assert (1536, 1536) in m.buckets
+    assert (1600, 1600) in m.buckets
+    assert m.get_bucket(2048, 2048) == (1536, 1536)

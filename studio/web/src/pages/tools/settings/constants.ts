@@ -3,9 +3,30 @@ import {
   DEFAULT_WD14_MODELS,
   type LLMPreset,
   type Secrets,
+  type WandBPreset,
 } from '../../../api/client'
 
 export const MASK = '***'
+
+/** WandB 预设默认值（与后端 WandBPresetConfig 默认一致），新建/导入预设的底板。 */
+export const DEFAULT_WANDB_PRESET: WandBPreset = {
+  id: 'default',
+  label: 'Default',
+  api_key: '',
+  project: 'AnimaLoraStudio',
+  entity: '',
+  base_url: '',
+  mode: 'online',
+  log_samples: true,
+  sample_max_side: 512,
+  sample_every_n_steps: 0,
+  upload_model: false,
+  upload_model_policy: 'last',
+  upload_state_manual: false,
+  upload_state_manual_policy: 'last',
+  upload_state_auto: false,
+  upload_state_auto_policy: 'last',
+}
 
 export type Section =
   | 'gelbooru'
@@ -119,6 +140,7 @@ export function _makeFallbackPreset(id: string, label: string, output_format: 'j
       { type: 'image', role: 'user', content: '' },
     ],
     output_format,
+    assist_tagger: '',
     temperature: 0.2,
     max_tokens: 700,
     max_side: 1280,
@@ -175,20 +197,8 @@ export const EMPTY: Secrets = {
   huggingface: { token: '', endpoint: '' },
   wandb: {
     enabled: false,
-    api_key: '',
-    project: 'AnimaLoraStudio',
-    entity: '',
-    base_url: '',
-    mode: 'online',
-    log_samples: true,
-    sample_max_side: 1216,
-    sample_every_n_steps: 0,
-    upload_model: false,
-    upload_model_policy: 'last',
-    upload_state_manual: false,
-    upload_state_manual_policy: 'last',
-    upload_state_auto: false,
-    upload_state_auto_policy: 'last',
+    current_preset: 'default',
+    presets: [DEFAULT_WANDB_PRESET],
   },
   modelscope: { token: '' },
   eval_metrics: {
@@ -219,6 +229,7 @@ export const EMPTY: Secrets = {
     threshold_general: 0.35,
     threshold_character: 0.6,
     add_copyright_tag: true,
+    add_artist_tag: false,
     add_meta_tag: false,
     add_model_tag: false,
     add_rating_tag: false,

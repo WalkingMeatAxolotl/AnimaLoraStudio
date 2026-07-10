@@ -54,6 +54,10 @@ def run(ctx: TrainingContext) -> None:
     try:
         # ceil：最后一组不满 grad_accum 也算一个 update step（loop 末批会 step），
         # 与 _accumulation_step 的「尾组不满也 step」一致，scheduler 步数才对得上。
+        # 注：NaViT 打包器的 __len__ 是 epoch-0 采样的包数（next-fit/窗口 FFD 顺序依赖，
+        # 每 epoch 略有波动）。scheduler horizon 在此处一次性构造、无法中途重算，故 navit 下
+        # steps_per_epoch/total_steps 为估计值，LR 曲线触底点可能有几步偏差（可接受）；
+        # 梯度累积边界的精确性由 loop.py 每 epoch 刷新 dl_len 保证。
         _dl_len = len(ctx.dataloader)
         ctx.steps_per_epoch = (_dl_len + args.grad_accum - 1) // args.grad_accum
     except Exception:

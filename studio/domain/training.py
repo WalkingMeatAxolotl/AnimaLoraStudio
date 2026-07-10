@@ -130,14 +130,84 @@ class TrainingConfig(BaseModel):
     vae_cache_batch_size: int = Field(
         0, ge=0,
         description="VAE latent 缓存编码批次大小；0=跟随训练 batch size，显存不足时设为 1 逐张编码",
+        json_schema_extra=_meta("system", show_when="cache_latents==true", advanced=True),
+    )
+
+    # --------------------------------------------------- NaViT / Patch-n-Pack
+    # 块对角打包训练（Phase 2 数据层）。以下字段全部默认关闭 / 行为中立：
+    # navit_packing=False 时走原有 ARB 分桶路径，字节等价。
+    navit_packing: bool = Field(
+        False,
+        description="启用 NaViT / Patch-n-Pack 块对角打包：按 token 预算把多张不同尺寸的图"
+                    "拼进一个训练序列（零 padding），替代 ARB 固定桶分批。需配合 cache_latents + 安装 xformers",
+        json_schema_extra=_meta(
+            "system",
+            advanced=True,
+            disable_when="leap_enabled==true||infonoise_enabled==true||sra_enabled==true||lora_type==tlora",
+            disable_hint="与 LeapAlign / InfoNoise / SRA / T-LoRA 互斥（navit v1 未适配），需先关掉它们",
+        ),
+    )
+    navit_token_budget: int = Field(
+        16384, ge=1,
+        description="单个打包序列的 token 预算上限（所有图 token 数之和 ≤ 此值）",
+        json_schema_extra=_meta("system", show_when="navit_packing==true", advanced=True),
+    )
+    navit_max_images_per_pack: int = Field(
+        0, ge=0,
+        description="每个包最多图片数（0=不限，仅受 token 预算约束）",
+        json_schema_extra=_meta("system", show_when="navit_packing==true", advanced=True),
+    )
+    navit_text_trim_padding: bool = Field(
+        False,
+        description="cross-attn 文本截断 padding（数据层标志，仅 navit_packing 时生效）",
+        json_schema_extra=_meta("system", show_when="navit_packing==true", advanced=True),
+    )
+    navit_pack_strategy: Literal["next_fit", "ffd"] = Field(
+        "next_fit",
+        description="打包策略：next_fit=顺序贪心（快、包较松）；ffd=First-Fit-Decreasing 窗口化（包更紧、更少步）",
+        json_schema_extra=_meta("system", show_when="navit_packing==true", advanced=True),
+    )
+    navit_pack_ffd_window: int = Field(
+        256, ge=0,
+        description="FFD 窗口大小（0=全局 FFD，每 epoch 包固定；>0=窗口内 FFD + 跨 epoch reshuffle）",
+        json_schema_extra=_meta("system", show_when="navit_packing==true", advanced=True),
+    )
+    navit_drop_last: bool = Field(
+        False,
+        description="丢弃最后一个未填满的包（对齐 step 计数；False=保留短包）",
+        json_schema_extra=_meta("system", show_when="navit_packing==true", advanced=True),
+    )
+    navit_native_resolution: bool = Field(
+        False,
+        description="按原生分辨率定尺寸（floor 对齐 16px、零 padding），绕过 ARB 桶对单图尺寸的量化；"
+                    "超大图按 navit_native_over_budget 处理。需 navit_packing + cache_latents",
+        json_schema_extra=_meta("system", show_when="navit_packing==true", advanced=True),
+    )
+    navit_native_over_budget: Literal["downscale", "fail"] = Field(
+        "downscale",
+        description="原生 token 数超 navit_token_budget（或模型 RoPE 单边上限）时的处理："
+                    "downscale=等比降采样到 fit（默认，永不 OOM/爆 token）；fail=报错要求调大预算或数据集端裁图",
+        json_schema_extra=_meta("system", show_when="navit_native_resolution==true", advanced=True),
+    )
+    cache_encode_tiled: bool = Field(
+        False,
+        description="缓存编码分块：超大图按 tile_px 分块 VAE encode + latent 羽化拼接（峰值显存 ∝ 单块像素）",
         json_schema_extra=_meta("system", advanced=True),
     )
-    vae_tiling: Literal["auto", "on", "off"] = Field(
-        "auto",
-        description="VAE 分块 decode：auto=可用显存紧张时自动分块（推荐）；on=始终分块（省显存、慢约 30%）；"
-                    "off=整图，仅真正 OOM 时回退。大显存卡整图 decode 接近占满显存时会触发系统内存回退、"
-                    "单次 decode 从不到 1 秒退化到上百秒，auto 可避免",
-        json_schema_extra=_meta("system", advanced=True),
+    cache_encode_tile_px: int = Field(
+        1024, ge=64,
+        description="分块 encode 的像素块边长（须为 VAE 下采样 8 的整倍数）",
+        json_schema_extra=_meta("system", show_when="cache_encode_tiled==true", advanced=True),
+    )
+    cache_encode_tile_overlap: int = Field(
+        128, ge=0,
+        description="分块重叠像素（羽化接缝宽度；0=无重叠硬接缝）",
+        json_schema_extra=_meta("system", show_when="cache_encode_tiled==true", advanced=True),
+    )
+    cache_encode_max_pixels: int = Field(
+        0, ge=0,
+        description="单次 encode 总像素上限（含翻转份）；0=用内置保守默认 4M。也是分块触发阈值",
+        json_schema_extra=_meta("system", show_when="cache_encode_tiled==true", advanced=True),
     )
 
     # ------------------------------------------------------------------- LoRA
@@ -279,9 +349,9 @@ class TrainingConfig(BaseModel):
         description="cosine_with_warmup 预热步数",
         json_schema_extra=_meta("training", show_when="lr_scheduler==cosine_with_warmup", advanced=True),
     )
-    optimizer_type: Literal["adamw", "automagic", "lion", "prodigy", "prodigy_plus_schedulefree", "soap", "soap_sf"] = Field(
+    optimizer_type: Literal["adamw", "automagic", "came", "lion", "prodigy", "prodigy_plus_schedulefree", "soap", "soap_sf"] = Field(
         "adamw",
-        description="优化器。adamw 标准基线；automagic 自适应每参数 lr（推荐 lr=1e-6）；lion 显存约 AdamW 一半（推荐 lr=AdamW lr / 3）；prodigy / prodigy_plus_schedulefree 自适应估 lr（lr 填 1.0）；soap Adam-in-Shampoo-eigenbasis 二阶预条件（拟合更快，lr 同 AdamW 量级）；soap_sf SOAP + Schedule-Free（lr_scheduler 固定 none）",
+        description="优化器。adamw 标准基线；automagic 自适应每参数 lr（推荐 lr=1e-6）；came 置信度引导 + 分解二阶矩（state 显存低于 AdamW，lr 同 AdamW 量级）；lion 显存约 AdamW 一半（推荐 lr=AdamW lr / 3）；prodigy / prodigy_plus_schedulefree 自适应估 lr（lr 填 1.0）；soap Adam-in-Shampoo-eigenbasis 二阶预条件（拟合更快，lr 同 AdamW 量级）；soap_sf SOAP + Schedule-Free（lr_scheduler 固定 none）",
         json_schema_extra=_meta("training"),
     )
     prodigy_d_coef: float = Field(
@@ -293,6 +363,39 @@ class TrainingConfig(BaseModel):
         True,
         description="Prodigy warmup 期间防止 d 被初期高梯度推高；默认开启更稳",
         json_schema_extra=_meta("training", show_when="optimizer_type==prodigy", advanced=True),
+    )
+    # ---------------------------- CAME 专属字段 ----------------------------
+    # CAME = Confidence-guided Adaptive Memory Efficient（Luo et al. 2023,
+    # arxiv 2307.02047）。lr 用 AdamW 量级真实值，可配常规 lr_scheduler。
+    came_beta1: float = Field(
+        0.9, ge=0.0, lt=1.0,
+        description="CAME β1（update 动量 EMA 衰减）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==came", advanced=True),
+    )
+    came_beta2: float = Field(
+        0.999, ge=0.0, lt=1.0,
+        description="CAME β2（分解二阶矩 EMA 衰减）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==came", advanced=True),
+    )
+    came_beta3: float = Field(
+        0.9999, ge=0.0, lt=1.0,
+        description="CAME β3（置信度 instability EMA 衰减；越大置信度估计越平滑）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==came", advanced=True),
+    )
+    came_eps1: float = Field(
+        1e-30, gt=0.0,
+        description="CAME eps1（二阶矩正则项，防除零）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==came", advanced=True),
+    )
+    came_eps2: float = Field(
+        1e-16, gt=0.0,
+        description="CAME eps2（instability 下限正则；调大会压平逐坐标置信度差异并整体缩小步长）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==came", advanced=True),
+    )
+    came_clip_threshold: float = Field(
+        1.0, gt=0.0,
+        description="CAME update RMS 裁剪阈值（同 Adafactor 的 d）",
+        json_schema_extra=_meta("training", show_when="optimizer_type==came", advanced=True),
     )
     lion_beta1: float = Field(
         0.9, ge=0.0, lt=1.0,
@@ -451,6 +554,13 @@ class TrainingConfig(BaseModel):
         description="Cross-attention KV trim：按实际 token 数裁到最近 bucket（64/128/256/512），减少 padding 计算量",
         json_schema_extra=_meta("system", advanced=True),
     )
+    vae_tiling: Literal["auto", "on", "off"] = Field(
+        "auto",
+        description="VAE 分块 decode：auto=可用显存紧张时自动分块（推荐）；on=始终分块（省显存、慢约 30%）；"
+                    "off=整图，仅真正 OOM 时回退。大显存卡整图 decode 接近占满显存时会触发系统内存回退、"
+                    "单次 decode 从不到 1 秒退化到上百秒，auto 可避免",
+        json_schema_extra=_meta("system", advanced=True),
+    )
     noise_enhancement_type: Literal["none", "offset", "pyramid"] = Field(
         "none",
         description="噪声增强机制（默认 none）。offset 在噪声上加 per-sample DC 偏置；pyramid 在多个尺度叠加低频噪声。两者机制不同，但都改变低频成分，互斥防双倍叠加。LoRA 训练默认保持 none",
@@ -525,6 +635,18 @@ class TrainingConfig(BaseModel):
             advanced=True,
             disable_when="infonoise_enabled==true",
             disable_hint="InfoNoise 启用时禁用 schedule shift（schema 互斥，仅 1.0 兼容）",
+        ),
+    )
+    timestep_shift_resolution_aware: bool = Field(
+        False,
+        description="按每图 token 数对采样后的 t 做分辨率修正（SD3 式 s=sqrt(该图 token 数/基准档 token 数)，"
+                    "基准档取 resolution 首档）：基准档尺寸的图不变，更大的图偏向高噪声端、更小的偏向低噪声端。"
+                    "多分辨率与 NaViT 原生分辨率训练下，各尺寸的图落在与基准档等效的噪声水平；单分辨率训练下无效果",
+        json_schema_extra=_meta(
+            "timestep_sampling",
+            alt_description="Leap 启用时 leap 路径的 t_k/t_j 不做本修正，仅作用于 (1-leap_ratio) 比例的标准 step",
+            alt_description_when="leap_enabled==true",
+            advanced=True,
         ),
     )
     infonoise_enabled: bool = Field(
@@ -719,7 +841,12 @@ class TrainingConfig(BaseModel):
     attention_backend: AttentionBackend = Field(
         "flash_attn",
         description="Attention 后端。none = PyTorch SDPA 默认；xformers 显存更省；flash_attn 最快（需 Ampere+ GPU 支持）",
-        json_schema_extra=_meta("system"),
+        json_schema_extra=_meta(
+            "system",
+            disable_when="navit_packing==true",
+            disable_value="xformers",
+            disable_hint="NaViT 打包已强制 xformers varlen（块对角必需，需安装 xformers）",
+        ),
     )
     num_workers: int = Field(
         0, ge=0,
@@ -771,6 +898,17 @@ class TrainingConfig(BaseModel):
                 data["sample_sampler_name"] = "er_sde"
             if data.get("sample_scheduler") not in (None, "simple", "sgm_uniform"):
                 data["sample_scheduler"] = "simple"
+        return data
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_navit_attention_backend(cls, data: Any) -> Any:
+        """NaViT 打包的块对角 attention 必需 xformers varlen（运行时只认 xformers 是否
+        安装、不看 attention_backend 值）。navit_packing 开启时强制 attention_backend=
+        xformers——避免用户选了 flash/none 以为对 navit 训练生效，实际 navit 训练步只
+        走 xformers varlen。参考 PPSF 工厂内覆盖 lr 的强制模式。"""
+        if isinstance(data, dict) and data.get("navit_packing"):
+            data["attention_backend"] = "xformers"
         return data
 
     @model_validator(mode="after")
@@ -921,6 +1059,63 @@ class TrainingConfig(BaseModel):
                 )
         return self
 
+    @model_validator(mode="after")
+    def _validate_navit_exclusive(self) -> "TrainingConfig":
+        """NaViT / Patch-n-Pack 打包训练的配置校验与互斥。
+
+        NaViT 改变了 batch 语义（一包异构图、逐图 t），许多按"批量网格 + 逐 batch
+        单 timestep"假设写的特性会语义错位。v1 的策略是 fail-fast：同时开 → 启动即
+        报错，提示显式关掉，避免"开着却悄悄不生效"的隐性行为改变。
+
+        互斥项（详见 docs/navit-packing.md 第 3 节）：
+        - leap_enabled：leap 假设批量网格 + 共享 noise，与逐图打包不兼容。
+        - infonoise_enabled：InfoNoise 的 I-MMSE record 需走标准路径的 per-sample
+          MSE；navit 路径的 per-image loss 语义不同，v1 未适配。
+        - lora_type=tlora：T-LoRA 的 rank mask 按 batch 维匹配 timestep，navit 是
+          B=1 打包序列 + 逐图 t，维度不匹配。
+        - sra_enabled：SRA v2 表征对齐按批量网格中间特征 tap 对齐，navit 是 B=1
+          打包序列 + 逐图，per-image 适配 v1 未做（loop 路径已守卫跳过，这里 fail-fast）。
+
+        前置要求：
+        - cache_latents：navit 打包按 latent token 数预算分包，需要预编码缓存。
+        - navit_token_budget > 0：必须显式设置（按显存定）。
+        """
+        if self.navit_native_resolution and not self.navit_packing:
+            raise ValueError(
+                "navit_native_resolution=true 需要 navit_packing=true"
+                "（原生定尺寸只在 NaViT 块对角打包路径生效）。"
+            )
+        if not self.navit_packing:
+            return self
+
+        _conflicts = []
+        if self.leap_enabled:
+            _conflicts.append("leap_enabled")
+        if self.infonoise_enabled:
+            _conflicts.append("infonoise_enabled")
+        if self.lora_type == "tlora":
+            _conflicts.append("lora_type=tlora")
+        if self.sra_enabled:
+            _conflicts.append("sra_enabled")
+        if _conflicts:
+            raise ValueError(
+                "navit_packing(v1) 暂不支持与以下特性同时开启："
+                + ", ".join(_conflicts)
+                + "。请关掉它们，或暂不使用 NaViT 打包。"
+            )
+
+        if not self.cache_latents:
+            raise ValueError(
+                "navit_packing 需要 cache_latents=true（打包按 latent token 数预算分包，"
+                "需要预编码缓存）。"
+            )
+        if self.navit_token_budget <= 0:
+            raise ValueError(
+                "navit_packing 需要显式设置 navit_token_budget（>0，按显存定，"
+                "见 docs/navit-packing.md 显存对照表）。"
+            )
+        return self
+
     # ---------------------------------------------------------------- 输出/保存
     output_dir: str = Field(
         "./output",
@@ -1057,94 +1252,21 @@ class TrainingConfig(BaseModel):
         json_schema_extra=_meta("eval_validation", show_when="eval_validation_enabled==true"),
     )
 
-    # --------------------------------------------------------------- WandB 预设覆盖
-    wandb_notice: str = Field(
-        "",
-        description="⚠️ 如果你不知道自己在做什么，请不要填写这里的设置。此处的值会覆盖全局 Settings 页的 WandB 配置，留空则使用全局设置。",
-        json_schema_extra=_meta("wandb", "notice", advanced=True),
-    )
-    wandb_enabled: Optional[bool] = Field(
-        None,
-        description="启用 WandB（留空使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
-    wandb_api_key: str = Field(
-        "",
-        description="API Key（留空使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
-    wandb_project: str = Field(
-        "",
-        description="项目名（留空使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
-    wandb_entity: str = Field(
-        "",
-        description="Entity / Team（留空使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
-    wandb_base_url: str = Field(
-        "",
-        description="自定义 WandB 服务地址（留空使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
-    wandb_mode: Literal["", "online", "offline", "disabled"] = Field(
-        "",
-        description="运行模式 online/offline/disabled（留空使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
-    wandb_log_samples: Optional[bool] = Field(
-        None,
-        description="上传采样图到 WandB（留空使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
-    wandb_sample_max_side: int = Field(
-        0, ge=0,
-        description="采样图缩放最长边像素（0=使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
-    wandb_sample_every_n_steps: int = Field(
-        -1, ge=-1,
-        description="采样图上传节流步数（-1=使用全局设置，0=不节流）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
-    wandb_upload_model: Optional[bool] = Field(
-        None,
-        description="上传模型 artifact（留空使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
-    wandb_upload_model_policy: Literal["", "all", "last"] = Field(
-        "",
-        description="模型保留策略 all/last（留空使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
-    wandb_upload_state_manual: Optional[bool] = Field(
-        None,
-        description="上传手动保存的训练状态 artifact（留空使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
-    wandb_upload_state_manual_policy: Literal["", "all", "last"] = Field(
-        "",
-        description="手动状态保留策略 all/last（留空使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
-    wandb_upload_state_auto: Optional[bool] = Field(
-        None,
-        description="上传自动保存的训练状态 artifact（留空使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
-    wandb_upload_state_auto_policy: Literal["", "all", "last"] = Field(
-        "",
-        description="自动状态保留策略 all/last（留空使用全局设置）",
-        json_schema_extra=_meta("wandb", advanced=True),
-    )
+    # WandB：0.18 起 per-config 覆盖块整体移除 —— wandb 属于账号/工作流级配置,
+    # 不随项目变化;api_key/entity/base_url 写进 yaml 会随预设分享/bundle 导出/
+    # 任务快照明文外泄。全局配置在 Settings(secrets.WandBConfig),经 supervisor
+    # 注入 WANDB_* 环境变量到训练进程,secrets 不落盘任何 yaml。
+    # 老 yaml 里的 wandb_* 键由 _tolerant_validate 当未知字段丢弃(dropped_fields
+    # 提示),argparse bridge 对未知键直接跳过。
 
     # ---------------------------------------------------------------- 监控/进度
     # 这一组对 Studio 用户全部隐藏（hidden=True）—— Studio 跑训练用 subprocess 把
     # stdout 重定向到 task log（非 tty），这些「终端体验」字段对 web 用户没意义；
     # monitor 页用的是 monitor_state.json，跟这些值零相关。
-    # 字段保留在 schema 是为了：(1) 旧 project yaml 里写过的值不丢；(2) 裸 CLI 用户
-    # 仍可在 yaml 手动覆盖。BaseConfig.extra="forbid" 也要求字段定义存在。
+    # 字段保留在 schema 只为裸 CLI 用户仍可在 yaml 手动覆盖；等于默认值时
+    # config_prune 不落盘（hidden 裁剪），非默认覆盖照常保留。
+    # 旧的 HTTP monitor server 字段（no_monitor / monitor_host / monitor_port /
+    # no_browser）已随 server 一并删除，见 migrations.RETIRED_MONITOR_KEYS。
     loss_curve_steps: int = Field(
         100, ge=10,
         description="终端 rich live 曲线宽度（仅 CLI 终端，不影响 Studio 监控页）",
@@ -1161,28 +1283,5 @@ class TrainingConfig(BaseModel):
     log_every: int = Field(
         10, ge=1,
         description="终端日志输出间隔（仅在禁用 rich 进度条时生效）",
-        json_schema_extra=_meta("monitor", hidden=True),
-    )
-    # PP6.1：以下字段保留是为了不破坏既有 yaml；HTTP monitor server 已退役，
-    # 这些值不再生效。Studio 前端通过 /api/state?task_id= 读 monitor_state.json，
-    # 路径由 --monitor-state-file（CLI-only）决定。
-    no_monitor: bool = Field(
-        True,
-        description="(已废弃) 内置 Web monitor server 已删除；保留字段兼容旧 yaml",
-        json_schema_extra=_meta("monitor", hidden=True),
-    )
-    monitor_host: str = Field(
-        "127.0.0.1",
-        description="(已废弃) 旧 monitor server 绑定地址；当前忽略",
-        json_schema_extra=_meta("monitor", hidden=True),
-    )
-    monitor_port: int = Field(
-        8765, ge=1, le=65535,
-        description="(已废弃) 旧 monitor server 端口；当前忽略",
-        json_schema_extra=_meta("monitor", hidden=True),
-    )
-    no_browser: bool = Field(
-        True,
-        description="(已废弃) 旧 monitor server 自动开浏览器；当前忽略",
         json_schema_extra=_meta("monitor", hidden=True),
     )

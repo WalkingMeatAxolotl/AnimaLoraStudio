@@ -165,3 +165,101 @@ def test_apply_train_duplicate_mismatched_version_raises(env) -> None:
         assert exc.value.code == "version.not_found"
 
 
+# ---------------------------------------------------------------------------
+# merge_crop_relations_into_groups —— crop/scale 关系并入分组（更严格的重复判断）
+# ---------------------------------------------------------------------------
+
+
+def _info(name: str, w: int, h: int, size: int) -> duplicate_finder.ImageInfo:
+    """构造仅含 merge 所需字段的 ImageInfo（hash 字段 merge 不用，填 None）。"""
+    return duplicate_finder.ImageInfo(
+        name=name, path=Path(name), width=w, height=h, size=size,
+        phash=None, soft_phash=None, dhash=None, ahash=None, colorhash=None,
+        grayprint=None,  # type: ignore[arg-type]
+    )
+
+
+def _crop_rel(
+    source: duplicate_finder.ImageInfo,
+    crop: duplicate_finder.ImageInfo,
+    score: float = 0.85,
+) -> duplicate_finder.CropRelation:
+    return duplicate_finder.CropRelation(
+        source=source, crop=crop, score=score,
+        source_window=(0, 0, source.width, source.height),
+        window_ratio=0.5, segment_matches=3, segment_coverage=0.4, note="",
+    )
+
+
+def test_merge_crop_relations_folds_candidate_into_existing_group() -> None:
+    """已有结构分组 [a, b]，c 是 a 的裁剪 → 并成 [a, b, c]。"""
+    a = _info("1_data/a.png", 1000, 1000, 100_000)
+    b = _info("1_data/b.png", 1000, 1000, 90_000)
+    c = _info("1_data/c.png", 500, 500, 30_000)
+    merged, metrics = duplicate_finder.merge_crop_relations_into_groups(
+        [a, b, c], [[a, b]], {}, [_crop_rel(a, c)],
+    )
+    assert len(merged) == 1
+    assert sorted(img.name for img in merged[0]) == [
+        "1_data/a.png", "1_data/b.png", "1_data/c.png",
+    ]
+    # keep = 像素最大者（a/b 都是 1M px），裁剪小图 c 不会被选为 keep
+    assert merged[0][0].name in ("1_data/a.png", "1_data/b.png")
+    # crop pair 补了 synthetic metric，match_type 标 crop-variant
+    key = ("1_data/a.png", "1_data/c.png")
+    assert key in metrics
+    assert metrics[key].match_type == "crop-variant"
+
+
+def test_merge_crop_relations_creates_new_group() -> None:
+    """无结构分组时，crop 关系自身也能成组；无关单图不并进来。"""
+    a = _info("1_data/a.png", 1000, 1000, 100_000)
+    c = _info("1_data/c.png", 400, 400, 20_000)
+    d = _info("1_data/d.png", 800, 800, 50_000)  # 无关单图
+    merged, _ = duplicate_finder.merge_crop_relations_into_groups(
+        [a, c, d], [], {}, [_crop_rel(a, c)],
+    )
+    assert len(merged) == 1
+    assert sorted(img.name for img in merged[0]) == ["1_data/a.png", "1_data/c.png"]
+
+
+# ---------------------------------------------------------------------------
+# options_from_payload —— UI 只送 match_scope + sensitivity，其余固化为常量
+# ---------------------------------------------------------------------------
+
+
+def test_options_from_payload_sensitivity_maps_scores() -> None:
+    loose = duplicate_finder.options_from_payload({"match_scope": "both", "sensitivity": "loose"})
+    std = duplicate_finder.options_from_payload({"match_scope": "both", "sensitivity": "standard"})
+    strict = duplicate_finder.options_from_payload({"match_scope": "both", "sensitivity": "strict"})
+    # 越「严格」阈值越高（候选越少）
+    assert loose.variant_score < std.variant_score < strict.variant_score
+    assert loose.crop_score < std.crop_score < strict.crop_score
+    # standard 对齐默认
+    assert std.variant_score == duplicate_finder.DEFAULT_VARIANT_SCORE
+    assert std.crop_score == duplicate_finder.DEFAULT_CROP_SCORE
+
+
+def test_options_from_payload_detect_crops_follows_scope() -> None:
+    assert duplicate_finder.options_from_payload({"match_scope": "both"}).detect_crops is True
+    assert duplicate_finder.options_from_payload({"match_scope": "strict"}).detect_crops is False
+
+
+def test_options_from_payload_ignores_stray_tuning_fields() -> None:
+    """旧的逐项旋钮已固化：payload 里塞进来的阈值应被忽略、以常量为准。"""
+    opts = duplicate_finder.options_from_payload({
+        "match_scope": "both", "sensitivity": "standard",
+        "variant_score": 10, "crop_score": 0.1, "hash_size": 4, "structure_threshold": 99,
+    })
+    assert opts.variant_score == duplicate_finder.DEFAULT_VARIANT_SCORE
+    assert opts.crop_score == duplicate_finder.DEFAULT_CROP_SCORE
+    assert opts.hash_size == duplicate_finder.DEFAULT_HASH_SIZE
+    assert opts.structure_threshold == duplicate_finder.DEFAULT_STRUCTURE_THRESHOLD
+
+
+def test_options_from_payload_rejects_bad_sensitivity() -> None:
+    with pytest.raises(duplicate_finder.DuplicateFinderError) as exc:
+        duplicate_finder.options_from_payload({"match_scope": "both", "sensitivity": "wat"})
+    assert exc.value.code == "duplicate.sensitivity_invalid"
+
+

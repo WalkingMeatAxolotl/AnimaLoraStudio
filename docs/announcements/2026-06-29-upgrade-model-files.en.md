@@ -2,7 +2,6 @@
 date: 2026-06-29
 tag: migration
 title: After upgrading from an older version, check your T5 / text-encoder files before training
-pin: true
 version: "0.16.0"
 ---
 If you self-updated from a version **older than 0.15.0**, a few tiny model files (the T5 tokenizer's `spiece.model` and configs, and the text encoder's tokenizer / configs) may have been deleted during the update — so training can fail with a "file not found" error right after you upgrade. A quick check before training takes only a few seconds.

@@ -34,6 +34,23 @@ def test_write_then_read_roundtrip(presets_dir: Path) -> None:
     assert got["lora_rank"] == 64
 
 
+def test_write_prunes_inactive_fields_read_reinflates(presets_dir: Path) -> None:
+    """落盘 yaml 只带 show_when 生效的字段；读回时缺失字段补 schema 默认值。"""
+    import yaml
+
+    payload = _payload()  # optimizer_type 默认 adamw
+    payload["came_beta1"] = 0.5  # 隐藏字段的残留值，不应写盘
+    presets_io.write_preset("pruned", payload)
+
+    raw = yaml.safe_load((presets_dir / "pruned.yaml").read_text(encoding="utf-8"))
+    assert "came_beta1" not in raw
+    assert "infonoise_K" not in raw
+    assert "lr_scheduler" in raw  # disable_when 字段保留
+
+    got = presets_io.read_preset("pruned")
+    assert got["came_beta1"] == TrainingConfig().came_beta1  # 补回默认值
+
+
 def test_write_invalid_rejected(presets_dir: Path) -> None:
     with pytest.raises(presets_io.PresetError):
         presets_io.write_preset("bad", {"lora_rank": "not-an-int"})
@@ -188,6 +205,24 @@ def test_tolerant_validate_infonoise_mutex_disables_infonoise() -> None:
             if k == "infonoise_enabled":
                 continue
             assert getattr(cfg, k) == v, overrides
+
+
+def test_tolerant_validate_silently_drops_retired_monitor_keys() -> None:
+    """退役的 monitor server 键：历史 dump 每份 yaml 都写过这组默认值，
+    必须静默丢弃、不进 dropped_fields —— 否则所有旧配置一打开就弹兼容横幅。"""
+    cfg, dropped, defaulted = presets_io._tolerant_validate({
+        "no_monitor": True,
+        "monitor_host": "127.0.0.1",
+        "monitor_port": 8765,
+        "no_browser": True,
+        "epochs": 12,
+    })
+    assert dropped == []
+    assert defaulted == []
+    assert cfg.epochs == 12
+    # 真正的未知键仍要报
+    _, dropped2, _ = presets_io._tolerant_validate({"totally_unknown_key": 1})
+    assert dropped2 == ["totally_unknown_key"]
 
 
 def test_tolerant_validate_infonoise_mutex_multi_conflict_one_pass() -> None:

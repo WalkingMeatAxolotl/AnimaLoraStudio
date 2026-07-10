@@ -52,11 +52,13 @@ function basename(p: string): string {
  *  `className` 让各页面把 select 样式对齐自己页面里的其它 input
  *  （正则集用 "select input"，测试页用 "input text-xs w-full"）。 */
 export default function BaseModelSelect({
-  value, onChange, className = 'select input', ariaLabel,
+  value, onChange, className = 'select input', style, ariaLabel,
 }: {
   value: string | null
   onChange: (v: string) => void
   className?: string
+  /** 内联样式透传（正则集页用它对齐训练配置页控件视觉）。 */
+  style?: React.CSSProperties
   ariaLabel?: string
 }) {
   const { options, defaultValue } = useBaseModelOptions()
@@ -68,6 +70,7 @@ export default function BaseModelSelect({
   return (
     <select
       className={className}
+      style={style}
       value={effective}
       onChange={(e) => onChange(e.target.value)}
       aria-label={ariaLabel}

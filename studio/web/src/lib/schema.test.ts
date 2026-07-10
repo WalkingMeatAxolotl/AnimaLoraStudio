@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SchemaProperty } from '../api/client'
-import { controlKind, evalShowWhen, fieldLabel } from './schema'
+import { controlKind, evalShowWhen, fieldLabel, pruneInactiveConfig } from './schema'
 
 describe('controlKind', () => {
   it('uses explicit control field when provided', () => {
@@ -102,6 +102,55 @@ describe('evalShowWhen', () => {
         optimizer_type: 'adamw',
       })
     ).toBe(false)
+  })
+})
+
+// 语义与后端 studio/domain/config_prune.py 的 prune_inactive_fields 保持对照
+describe('pruneInactiveConfig', () => {
+  const properties = {
+    optimizer_type: {} as SchemaProperty,
+    came_beta1: { show_when: 'optimizer_type==came' } as SchemaProperty,
+    lr_scheduler: { disable_when: 'optimizer_type==prodigy' } as SchemaProperty,
+  }
+
+  it('drops fields whose show_when is false, even with stale values', () => {
+    const config = { optimizer_type: 'adamw', came_beta1: 0.5, lr_scheduler: 'cosine' }
+    expect(pruneInactiveConfig(config, properties)).toEqual({
+      optimizer_type: 'adamw',
+      lr_scheduler: 'cosine',
+    })
+  })
+
+  it('keeps fields whose show_when is true', () => {
+    const config = { optimizer_type: 'came', came_beta1: 0.5, lr_scheduler: 'cosine' }
+    expect(pruneInactiveConfig(config, properties)).toEqual(config)
+  })
+
+  it('keeps disable_when fields and keys without schema entry', () => {
+    const config = { optimizer_type: 'prodigy', lr_scheduler: 'none', unknown_key: 1 }
+    expect(pruneInactiveConfig(config, properties)).toEqual(config)
+  })
+
+  it('drops hidden fields at their schema default, keeps overrides', () => {
+    const props = {
+      no_progress: { hidden: true, default: true } as SchemaProperty,
+      log_every: { hidden: true, default: 10 } as SchemaProperty,
+      trigger_word: { hidden: true, default: '' } as SchemaProperty,
+    }
+    expect(
+      pruneInactiveConfig(
+        { no_progress: true, log_every: 10, trigger_word: 'miku' },
+        props
+      )
+    ).toEqual({ trigger_word: 'miku' })
+    expect(
+      pruneInactiveConfig({ no_progress: false, trigger_word: '' }, props)
+    ).toEqual({ no_progress: false })
+  })
+
+  it('keeps hidden fields when schema carries no default', () => {
+    const props = { mystery: { hidden: true } as SchemaProperty }
+    expect(pruneInactiveConfig({ mystery: 1 }, props)).toEqual({ mystery: 1 })
   })
 })
 

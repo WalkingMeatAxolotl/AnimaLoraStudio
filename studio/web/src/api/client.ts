@@ -125,8 +125,10 @@ export interface HuggingFaceConfig {
   endpoint: string
 }
 
-export interface WandBConfig {
-  enabled: boolean
+/** 一套 WandB 账号 + 上传策略预设（0.18 预设化，对齐 LLMPreset 模式）。 */
+export interface WandBPreset {
+  id: string
+  label: string
   api_key: string
   project: string
   entity: string
@@ -134,7 +136,7 @@ export interface WandBConfig {
   mode: 'online' | 'offline' | 'disabled'
   /** 是否把训练采样图上传到 wandb.ai，默认开；私有 / NSFW 数据集请关掉。 */
   log_samples: boolean
-  /** 上传前缩到最长边像素，默认 1216 */
+  /** 上传前缩到最长边像素 */
   sample_max_side: number
   /** step 节流：>0 时只在 global_step % N == 0 上传，0 = 不额外节流 */
   sample_every_n_steps: number
@@ -150,6 +152,13 @@ export interface WandBConfig {
   upload_state_auto: boolean
   /** 自动状态 artifact 保留策略 */
   upload_state_auto_policy: 'all' | 'last'
+}
+
+/** 全局 WandB：顶层只留总开关 + 预设切换，字段全在 preset 里。 */
+export interface WandBConfig {
+  enabled: boolean
+  current_preset: string
+  presets: WandBPreset[]
 }
 
 export interface ModelScopeConfig {
@@ -286,6 +295,8 @@ export interface LLMPreset {
   endpoint: 'chat_completions' | 'responses'
   messages: LLMMessage[]
   output_format: 'json' | 'text'
+  /** Local ONNX tagger used to pre-tag images and inject {{tags}} into messages ('' = off). */
+  assist_tagger: string
   temperature: number
   max_tokens: number
   max_side: number
@@ -333,6 +344,7 @@ export interface CLTaggerConfig {
   threshold_general: number
   threshold_character: number
   add_copyright_tag: boolean
+  add_artist_tag: boolean
   add_meta_tag: boolean
   add_model_tag: boolean
   add_rating_tag: boolean
@@ -1003,29 +1015,13 @@ export interface CopyResult {
   missing: string[]
 }
 
+/** 去重扫描请求体。算法内部还有一批阈值/性能参数，但都已固化为后端常量，
+ *  UI 只暴露这两项：
+ *   - match_scope：只查全图重复，还是连同分镜差分/裁剪一起（both 才开裁剪检测）
+ *   - sensitivity：差分/裁剪判定的松紧（驱动后端 variant_score + crop_score） */
 export interface DuplicateScanOptions {
   match_scope: 'strict' | 'both'
-  hash_size: number
-  hash_workers: number
-  tile_grids: number[]
-  structure_threshold: number
-  variant_score: number
-  aspect_tolerance: number
-  min_close_tiles: number
-  tile_median: number
-  min_gray_close: number
-  detect_blur: boolean
-  blur_score_threshold: number
-  blur_local_ratio: number
-  detect_crops: boolean
-  crop_score: number
-  crop_hash_threshold: number
-  crop_max_side: number
-  crop_workers: number
-  crop_prefilter_min_segments: number
-  crop_prefilter_min_coverage: number
-  crop_prefilter_aspect_tolerance: number
-  crop_max_candidates_per_image: number
+  sensitivity: 'loose' | 'standard' | 'strict'
 }
 
 export interface DuplicateMetrics {
@@ -1063,37 +1059,6 @@ export interface DuplicateGroup {
   best: DuplicateMetrics | null
 }
 
-export interface BlurCandidate {
-  name: string
-  width: number
-  height: number
-  filesize_kb: number
-  blur_score: number
-  local_blur_ratio: number
-  largest_blur_region_ratio: number
-  reason: string
-}
-
-export interface CropRelation {
-  source: string
-  crop_candidate: string
-  score: number
-  source_width: number
-  source_height: number
-  crop_width: number
-  crop_height: number
-  source_area: number
-  crop_area: number
-  larger_image: string
-  area_ratio: number
-  relation_kind: 'crop_smaller' | 'crop_upscaled' | 'crop_same_area' | string
-  source_window: { x: number; y: number; width: number; height: number }
-  window_ratio: number
-  segment_matches: number
-  segment_coverage: number
-  note: string
-}
-
 export interface DuplicateScanResult {
   target: 'preprocess' | 'download'
   match_scope: DuplicateScanOptions['match_scope']
@@ -1101,10 +1066,8 @@ export interface DuplicateScanResult {
   readable_images: number
   group_count: number
   candidate_count: number
-  blur_candidate_count: number
   crop_relation_count: number
   elapsed_seconds: number
-  options: DuplicateScanOptions
   stats: {
     total_pairs: number
     aspect_skipped_pairs: number
@@ -1112,8 +1075,6 @@ export interface DuplicateScanResult {
     compared_pairs: number
   }
   groups: DuplicateGroup[]
-  blur_candidates: BlurCandidate[]
-  crop_relations: CropRelation[]
 }
 
 export interface DuplicateApplyResult {
@@ -1955,6 +1916,24 @@ export const api = {
       throw makeApiError(resp.status, resp.statusText, body, resp.headers.get('X-Trace-Id'))
     }
     return (await resp.json()) as { name: string; path: string }
+  },
+
+  /** WandB preset yaml 下载直链（**含真实 api_key**，服务端显式导出端点）。
+   *  <a href={...} download> 触发即可，不发 fetch。 */
+  wandbPresetExportUrl: (id: string) =>
+    `/api/secrets/wandb/presets/${encodeURIComponent(id)}/export`,
+  /** 上传 yaml/json 导入 wandb preset；返回新 preset 标识 + 最新 masked secrets。 */
+  importWandbPreset: async (
+    file: File,
+  ): Promise<{ id: string; label: string; secrets: Secrets }> => {
+    const fd = new FormData()
+    fd.append('file', file, file.name)
+    const resp = await fetch('/api/secrets/wandb/presets/import', { method: 'POST', body: fd })
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => null)
+      throw makeApiError(resp.status, resp.statusText, body, resp.headers.get('X-Trace-Id'))
+    }
+    return (await resp.json()) as { id: string; label: string; secrets: Secrets }
   },
 
   // 兼容别名：PP0 之前叫 listConfigs / getConfig / ...。保留一段时间。
@@ -2968,11 +2947,14 @@ export const api = {
   // 模型根目录存储位置（镜像 studio_data，但迁移完无需重启，立即生效）----------
   getModelsRootInfo: (withScan = true) =>
     req<ModelsRootInfo>(`/api/models-root/info?scan=${withScan}`),
-  // 422 = 目标不合法 / 有 running task；409 = 已有迁移在跑。
-  startModelsRootMigrate: (target: string) =>
+  // 422 = 目标不合法 / 有 running task；409 code models_root.migration_busy = 已有
+  // 迁移在跑；409 code models_root.target_conflict = 目标已有 models 数据（detail 带
+  // existing_files/existing_bytes/same_name_files，modal 弹「跳过/覆盖/取消」后带
+  // onConflict 重发）。
+  startModelsRootMigrate: (target: string, onConflict?: 'skip' | 'overwrite') =>
     req<{ ok: boolean }>('/api/models-root/migrate', {
       method: 'POST',
-      body: JSON.stringify({ target }),
+      body: JSON.stringify({ target, on_conflict: onConflict ?? null }),
     }),
   getModelsRootMigrateStatus: () =>
     req<ModelsRootMigrateStatus>('/api/models-root/migrate_status'),

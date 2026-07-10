@@ -157,17 +157,35 @@ def test_postprocess_uses_character_threshold_and_optional_categories(
 def test_postprocess_default_gates_copyright_on_meta_quality_off(
     isolated_secrets: Path,
 ) -> None:
-    """默认勾 General / Character / Copyright 三类；Meta / Quality / Model / Rating 默认关。
-    保证老 secrets 升级后用户能直接拿到"干净"的 caption。"""
+    """默认勾 General / Character / Copyright 三类；Artist / Meta / Quality / Model /
+    Rating 默认关。保证老 secrets 升级后用户能直接拿到"干净"的 caption。"""
     secrets.update({"cltagger": {"threshold_general": 0.1, "threshold_character": 0.1}})
     t = cltagger_tagger.CLTagger()
     t._labels = cltagger_tagger._LabelData(
-        names=["1girl", "hero_name", "fate_series", "highres", "best_quality", "model_tag", "explicit"],
-        categories=["General", "Character", "Copyright", "Meta", "Quality", "Model", "Rating"],
+        names=["1girl", "hero_name", "fate_series", "some_artist", "highres", "best_quality", "model_tag", "explicit"],
+        categories=["General", "Character", "Copyright", "Artist", "Meta", "Quality", "Model", "Rating"],
     )
-    logits = np.array([4.0] * 7, dtype=np.float32)  # sigmoid≈0.98，全部超阈值
+    logits = np.array([4.0] * 8, dtype=np.float32)  # sigmoid≈0.98，全部超阈值
     tags, _ = t._postprocess_one(logits)
     assert set(tags) == {"1girl", "hero name", "fate series"}
+
+
+def test_postprocess_artist_gate_can_be_enabled(isolated_secrets: Path) -> None:
+    secrets.update({
+        "cltagger": {
+            "threshold_general": 0.1,
+            "threshold_character": 0.1,
+            "add_artist_tag": True,
+        }
+    })
+    t = cltagger_tagger.CLTagger()
+    t._labels = cltagger_tagger._LabelData(
+        names=["1girl", "some_artist"],
+        categories=["General", "Artist"],
+    )
+    logits = np.array([4.0, 4.0], dtype=np.float32)
+    tags, _ = t._postprocess_one(logits)
+    assert set(tags) == {"1girl", "some artist"}
 
 
 def test_postprocess_meta_and_quality_gates_can_be_enabled(
