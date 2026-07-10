@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { api, PHASE_ORDER, PHASE_SKIPPABLE, type Version, type VersionPhase, type VersionStatus } from '../api/client'
@@ -69,10 +69,12 @@ const I = {
   edit:    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 21h4l11-11-4-4L3 17z"/><path d="m14 5 4 4"/></svg>,
   reg:     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><circle cx="17.5" cy="17.5" r="3.5"/></svg>,
   train:   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 18 9 12l4 4 8-9"/><path d="M15 7h6v6"/></svg>,
-  export:  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>,
   plus:    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>,
   sun:     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>,
   moon:    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>,
+  branch:  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="8" r="2.4"/><path d="M6 8.4v7.2"/><path d="M18 10.4c0 3.4-3.2 3.9-6 4.4"/></svg>,
+  swap:    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="m17 3 4 4-4 4"/><path d="M21 7H8"/><path d="M7 21l-4-4 4-4"/><path d="M3 17h13"/></svg>,
+  trash:   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14"/></svg>,
 }
 
 // ── version status dot (ADR-0007 §11.3-B) ─────────────────────────────────
@@ -184,105 +186,163 @@ function ProjectInfoBlock({ collapsed }: { collapsed: boolean }) {
   )
 }
 
-// ── version picker block (header "训练 vX [+/-]" 始终显示，展开后下方再渲染完整 list) ─
+// ── version picker block（⑂ 版本名 + action：切换 popover / 新建 / 导出 / 删除）─
+// 层级锚点：这里是 project scope → version scope 的边界，正名为「版本选择器」
+// （不再叫"训练版本"——训练是第 6 步 STEP）。离开项目页（只读粘性快照）时退化为
+// 只读身份行、action 全部收起；要管理版本回到项目内。
+//   常驻：⑂ 版本名 [⇄切换]（切换仅多版本时出现）
+//   hover / 键盘 focus 才浮现：[＋新建] [⬇导出] [🗑删除]（删除仅多版本时出现）
 function VersionPickerBlock({ collapsed }: { collapsed: boolean }) {
   const { t } = useTranslation()
   const view = useProjectView()
-  const [expanded, setExpanded] = useState(false)
+  const [switching, setSwitching] = useState(false)
+  const rowRef = useRef<HTMLDivElement | null>(null)
   if (!view) return null
-  if (collapsed) return null
+  if (collapsed) return null // 折叠态不显示（版本没有独立页面）
   const { project, activeVersion } = view
+  const multiVersion = project.versions.length > 1
 
-  // 离开项目页（只读粘性快照）：版本增删 / 导出需要 live Layout，此处不可用 ——
-  // 只显示当前版本只读头；要管理版本点任意步骤回到项目内。
+  const idIcon = <span className="w-5 h-5 rounded-full bg-overlay grid place-items-center text-fg-tertiary shrink-0">{I.branch}</span>
+  const label = (
+    <span
+      className="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-fg-primary"
+      title={activeVersion?.label}
+    >
+      {activeVersion?.label ?? '—'}
+    </span>
+  )
+
+  // 只读（离开项目）：身份 + 状态点，无 action。
   if (!view.interactive) {
     return (
-      <div className="flex items-center gap-2.5 rounded-md py-2 px-3 text-sm text-fg-secondary">
-        <span className="w-5 h-5 grid place-items-center text-fg-tertiary shrink-0">{I.train}</span>
-        <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
-          {t('sidebar.trainingVersionPrefix')} <span className="font-mono text-fg-primary">{activeVersion?.label ?? '—'}</span>
-        </span>
+      <div className="flex items-center gap-2 rounded-md py-2 px-3 text-sm text-fg-secondary">
+        {idIcon}
+        {label}
+        {activeVersion && <span className={STATUS_DOT[activeVersion.status] ?? 'dot dot-neutral'} />}
       </div>
     )
   }
 
   const { onSelectVersion, onCreateVersion, onExportTrain, onDeleteVersion, exporting } = view
 
-  const header = (
-    <div className="flex items-center gap-2.5 rounded-md py-2 px-3 text-sm text-fg-secondary hover:bg-overlay transition-colors">
-      <span className="w-5 h-5 grid place-items-center text-fg-tertiary shrink-0">
-        {I.train}
-      </span>
-      <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
-        {t('sidebar.trainingVersionPrefix')} <span className="font-mono text-fg-primary">{activeVersion?.label ?? '—'}</span>
-      </span>
-      <button
-        onClick={() => setExpanded((v) => !v)}
-        title={expanded ? t('sidebar.collapseVersions') : t('sidebar.expandVersions')}
-        className="w-5 h-5 grid place-items-center text-fg-tertiary text-sm bg-transparent border border-dim rounded-sm cursor-pointer hover:bg-surface hover:text-accent shrink-0"
-      >
-        {expanded ? '−' : '+'}
-      </button>
+  return (
+    <div
+      ref={rowRef}
+      className="group relative flex items-center gap-2 rounded-md py-2 px-3 text-sm text-fg-secondary hover:bg-overlay transition-colors"
+    >
+      {idIcon}
+      {label}
+
+      <div className="flex items-center gap-0.5 shrink-0">
+        {/* 新建 / 导出 / 删除：hover（或键盘 focus）才浮现。用 hidden→flex（而非
+            opacity）让它们平时不占位，版本名 flex-1 得以伸展；hover 时才挤占空间。 */}
+        <span className="hidden group-hover:flex group-focus-within:flex items-center gap-0.5">
+          <VerAction icon={I.plus} title={t('sidebar.newVersion')} onClick={() => onCreateVersion()} />
+          <VerAction icon={I.download} title={t('sidebar.exportTitle')} onClick={onExportTrain} disabled={exporting} />
+          {multiVersion && (
+            <VerAction
+              icon={I.trash}
+              title={t('sidebar.deleteVersionTitle')}
+              danger
+              onClick={() => { if (activeVersion) onDeleteVersion(activeVersion.id) }}
+            />
+          )}
+        </span>
+        {/* 切换：常驻（多版本才有意义）。 */}
+        {multiVersion && (
+          <VerAction
+            icon={I.swap}
+            title={t('sidebar.switchVersion')}
+            active={switching}
+            onClick={() => setSwitching((v) => !v)}
+          />
+        )}
+      </div>
+
+      {switching && (
+        <VersionSwitchPopover
+          versions={project.versions}
+          activeId={project.active_version_id}
+          anchorRef={rowRef}
+          onPick={(vid) => { onSelectVersion(vid); setSwitching(false) }}
+          onClose={() => setSwitching(false)}
+        />
+      )}
     </div>
   )
+}
 
-  if (!expanded) return header
-
-  // 展开态：header（[-]）+ 下方完整版本列表 + 新建/导出
+/** 版本行的 icon-only action 按钮。 */
+function VerAction({ icon, title, onClick, disabled = false, active = false, danger = false }: {
+  icon: React.ReactNode; title: string; onClick: () => void
+  disabled?: boolean; active?: boolean; danger?: boolean
+}) {
   return (
-    <>
-      {header}
-      <div className="rounded-md border border-subtle bg-overlay px-2 pt-2 pb-1.5 flex flex-col gap-1 mb-1">
-      <div className="flex flex-col gap-px">
-        {project.versions.map((v) => {
-          const isActive = v.id === project.active_version_id
-          return (
-            <div key={v.id} className="flex items-center gap-0.5">
-              <button
-                onClick={() => onSelectVersion(v.id)}
-                className={[
-                  'flex-1 text-left px-1.5 py-0.5 rounded-sm font-mono text-xs flex items-center gap-1.5 border-none cursor-pointer transition-colors',
-                  isActive
-                    ? 'bg-accent-soft text-accent font-semibold'
-                    : 'text-fg-secondary font-normal bg-transparent hover:bg-surface',
-                ].join(' ')}
-              >
-                <span className={STATUS_DOT[v.status] ?? 'dot dot-neutral'} />
-                <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{v.label}</span>
-              </button>
-              {isActive && project.versions.length > 1 && (
-                <button
-                  onClick={() => onDeleteVersion(v.id)}
-                  title={t('sidebar.deleteVersionTitle')}
-                  className="px-[5px] py-0.5 text-fg-tertiary text-xs bg-transparent border-none cursor-pointer rounded-sm hover:text-err transition-colors shrink-0"
-                >
-                  ×
-                </button>
-              )}
-            </div>
-          )
-        })}
-      </div>
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className={[
+        'w-6 h-6 grid place-items-center rounded-sm bg-transparent border-none transition-colors shrink-0',
+        disabled ? 'opacity-40 cursor-default' : 'cursor-pointer',
+        active ? 'text-accent bg-surface' : 'text-fg-tertiary',
+        !disabled && !active ? (danger ? 'hover:bg-surface hover:text-err' : 'hover:bg-surface hover:text-fg-primary') : '',
+      ].join(' ')}
+    >
+      {icon}
+    </button>
+  )
+}
 
-      <div className="flex gap-1 mt-0.5">
-        <button
-          onClick={() => onCreateVersion()}
-          className="flex-1 flex items-center justify-center gap-1 py-1 px-1.5 text-xs text-fg-secondary bg-transparent border border-dashed border-dim rounded-sm cursor-pointer hover:bg-surface hover:text-accent transition-colors"
-        >
-          {I.plus} {t('sidebar.newVersion')}
-        </button>
-        <button
-          onClick={onExportTrain}
-          disabled={!activeVersion || exporting}
-          title={exporting ? t('sidebar.exporting') : t('sidebar.exportTitle')}
-          className={`flex items-center justify-center gap-1 py-1 px-2 text-xs text-fg-secondary bg-transparent border border-dim rounded-sm cursor-pointer hover:bg-surface hover:text-fg-primary transition-colors ${!activeVersion ? 'opacity-40' : ''}`}
-        >
-          {I.export}
-          {exporting ? t('sidebar.exporting') : t('sidebar.export')}
-        </button>
-      </div>
-      </div>
-    </>
+/** 切换版本 popover（照 ResumeFieldPicker 范式：点外 / Esc 关闭，anchor 到版本行）。 */
+function VersionSwitchPopover({ versions, activeId, anchorRef, onPick, onClose }: {
+  versions: Version[]
+  activeId: number | null
+  anchorRef: React.RefObject<HTMLElement | null>
+  onPick: (vid: number) => void
+  onClose: () => void
+}) {
+  const popRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const onDocClick = (e: MouseEvent) => {
+      if (popRef.current?.contains(e.target as Node)) return
+      if (anchorRef.current?.contains(e.target as Node)) return
+      onClose()
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('mousedown', onDocClick)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDocClick)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [onClose, anchorRef])
+
+  return (
+    <div
+      ref={popRef}
+      className="absolute z-40 left-2 right-2 top-full mt-1 max-h-[300px] overflow-y-auto rounded-md border border-dim bg-elevated shadow-xl py-1"
+    >
+      {versions.map((v) => {
+        const isActive = v.id === activeId
+        return (
+          <button
+            key={v.id}
+            type="button"
+            onClick={() => onPick(v.id)}
+            className={[
+              'w-full text-left px-2.5 py-1.5 font-mono text-xs flex items-center gap-2 border-none cursor-pointer transition-colors',
+              isActive ? 'bg-accent-soft text-accent font-semibold' : 'text-fg-secondary bg-transparent hover:bg-overlay',
+            ].join(' ')}
+          >
+            <span className={STATUS_DOT[v.status] ?? 'dot dot-neutral'} />
+            <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{v.label}</span>
+            {isActive && <span className="text-accent shrink-0">{I.check}</span>}
+          </button>
+        )
+      })}
+    </div>
   )
 }
 
