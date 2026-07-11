@@ -100,7 +100,7 @@ describe('ProjectLayout 版本切换（#386）', () => {
   })
 
   it('activate 在途时 activeVersion 已乐观切到新版本', async () => {
-    const d = deferred<ProjectDetail>()
+    const d = deferred<{ active_version_id: number }>()
     activateVersionMock.mockReturnValue(d.promise)
     renderLayout()
     await screen.findByTestId('active-vid')
@@ -110,12 +110,12 @@ describe('ProjectLayout 版本切换（#386）', () => {
     // 后端未返回，本地已经是 v1 —— 此刻点「开始训练」入队的就是 v1。
     expect(screen.getByTestId('active-vid')).toHaveTextContent('1')
 
-    await act(async () => { d.resolve(makeProject(1, [V1, V2])) })
+    await act(async () => { d.resolve({ active_version_id: 1 }) })
     expect(screen.getByTestId('active-vid')).toHaveTextContent('1')
   })
 
   it('activate 失败回滚到原版本并 toast', async () => {
-    const d = deferred<ProjectDetail>()
+    const d = deferred<{ active_version_id: number }>()
     activateVersionMock.mockReturnValue(d.promise)
     renderLayout()
     await screen.findByTestId('active-vid')
@@ -130,8 +130,8 @@ describe('ProjectLayout 版本切换（#386）', () => {
 
   it('快速连切两次，第一次失败不覆盖第二次的选择', async () => {
     getProjectMock.mockResolvedValue(makeProject(2, [V1, V2, V3]))
-    const d1 = deferred<ProjectDetail>()
-    const d2 = deferred<ProjectDetail>()
+    const d1 = deferred<{ active_version_id: number }>()
+    const d2 = deferred<{ active_version_id: number }>()
     activateVersionMock.mockImplementation((_pid: number, vid: number) =>
       vid === 1 ? d1.promise : d2.promise)
     renderLayout()
@@ -146,7 +146,7 @@ describe('ProjectLayout 版本切换（#386）', () => {
     expect(screen.getByTestId('active-vid')).toHaveTextContent('3')
     expect(toastMock).not.toHaveBeenCalled()
 
-    await act(async () => { d2.resolve(makeProject(3, [V1, V2, V3])) })
+    await act(async () => { d2.resolve({ active_version_id: 3 }) })
     expect(screen.getByTestId('active-vid')).toHaveTextContent('3')
   })
 })

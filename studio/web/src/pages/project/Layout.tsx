@@ -87,8 +87,9 @@ export default function ProjectLayout() {
     // 「切完版本马上点开始训练」会把旧版本入队（#386）。
     setProject((cur) => (cur ? { ...cur, active_version_id: vid } : cur))
     try {
-      const updated = await api.activateVersion(prev.id, vid)
-      if (seq === switchSeqRef.current) setProject(updated)
+      await api.activateVersion(prev.id, vid)
+      // 成功不应用响应（瘦响应）：乐观值即服务端新状态，全量数据由
+      // project_state_changed → reload 收敛。
     } catch (e) {
       if (seq === switchSeqRef.current) {
         // 只回滚 active_version_id 字段，不整包回退——避免吞掉在途 reload 带来的其他更新。

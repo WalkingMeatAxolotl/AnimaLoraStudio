@@ -2110,7 +2110,7 @@ export const api = {
       method: 'DELETE',
     }),
   activateVersion: (pid: number, vid: number) =>
-    req<ProjectDetail>(
+    req<{ active_version_id: number }>(
       `/api/projects/${pid}/versions/${vid}/activate`,
       { method: 'POST' }
     ),

@@ -176,6 +176,9 @@ def test_version_activate_updates_project(client: TestClient) -> None:
     )
     assert resp.status_code == 200
     assert resp.json()["active_version_id"] == v2["id"]
+    # 瘦响应只回 id，落库状态经 GET 验证。
+    got = client.get(f"/api/projects/{p['id']}").json()
+    assert got["active_version_id"] == v2["id"]
 
 
 def test_version_delete_endpoint(client: TestClient) -> None:

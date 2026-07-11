@@ -269,11 +269,13 @@ def activate_version_endpoint(pid: int, vid: int) -> dict[str, Any]:
                 "Version not found", code="version.not_found",
                 details={"id": vid},
             )
-        v = versions.activate_version(conn, vid)
+        versions.activate_version(conn, vid)
         p = projects.get_project(conn, pid)
     assert p is not None
     _publish_project_state(p)
-    return _project_payload(p)
+    # 瘦响应：不回全量 _project_payload（逐版本文件系统 stats，多版本项目可达秒级）。
+    # 前端乐观更新已持有新值，全量数据由 project_state_changed → reload 收敛。
+    return {"active_version_id": vid}
 
 
 # ---------------------------------------------------------------------------
