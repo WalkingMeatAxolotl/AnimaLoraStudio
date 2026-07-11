@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ...paths import REPO_ROOT
+from ..runtime import xformers as _xformers_svc
 from . import disk_cache as generate_cache
 
 logger = logging.getLogger(__name__)
@@ -230,6 +231,9 @@ class InferenceDaemon:
         env.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
         env.setdefault("TRANSFORMERS_VERBOSITY", "error")
         env.setdefault("DIFFUSERS_VERBOSITY", "error")
+        # xformers 的 triton 探测会把无害的 ImportError traceback 打进 daemon
+        # 日志抽屉；本 app 的 xformers 路径不用 triton kernel，无条件短路。
+        _xformers_svc.disable_triton_probe(env)
 
         creationflags = 0
         if os.name == "nt":

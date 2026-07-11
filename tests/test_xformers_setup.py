@@ -69,6 +69,25 @@ def test_torch_cuda_index_no_torch(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ---------------------------------------------------------------------------
+# disable_triton_probe — 子进程 env 注入的 triton 探测短路
+# ---------------------------------------------------------------------------
+
+
+def test_triton_probe_disabled() -> None:
+    """无条件设 XFORMERS_FORCE_DISABLE_TRITON=1（app 的 xformers 路径不用 triton）。"""
+    env: dict[str, str] = {}
+    xs.disable_triton_probe(env)
+    assert env == {"XFORMERS_FORCE_DISABLE_TRITON": "1"}
+
+
+def test_triton_probe_respects_explicit_value() -> None:
+    """用户显式设过（如 =0 强制探测）→ setdefault 不覆盖。"""
+    env = {"XFORMERS_FORCE_DISABLE_TRITON": "0"}
+    xs.disable_triton_probe(env)
+    assert env == {"XFORMERS_FORCE_DISABLE_TRITON": "0"}
+
+
+# ---------------------------------------------------------------------------
 # install
 # ---------------------------------------------------------------------------
 

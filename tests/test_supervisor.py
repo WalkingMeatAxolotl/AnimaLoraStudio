@@ -365,6 +365,32 @@ def test_popen_injects_wandb_env(env, tmp_path, monkeypatch: pytest.MonkeyPatch)
     assert captured["env"]["WANDB_UPLOAD_STATE_AUTO_POLICY"] == "last"
 
 
+def test_popen_disables_triton_probe(env, tmp_path, monkeypatch) -> None:
+    """子进程注入 XFORMERS_FORCE_DISABLE_TRITON=1，xformers 不再往 task log
+    打无害的 triton ImportError traceback（否则会被 _tail_log_for_error_msg
+    误当失败原因）。"""
+    # os.environ.copy() 起点：本机若设过该 var 会干扰断言
+    monkeypatch.delenv("XFORMERS_FORCE_DISABLE_TRITON", raising=False)
+    captured: dict[str, Any] = {}
+
+    class FakePopen:
+        pid = 123
+
+    def fake_popen(cmd, **kwargs):  # noqa: ANN001
+        captured["env"] = kwargs["env"]
+        return FakePopen()
+
+    monkeypatch.setattr("studio.supervisor.subprocess.Popen", fake_popen)
+    sup = Supervisor(
+        db_path=env["db"], logs_dir=env["logs"], configs_dir=env["configs"],
+    )
+    log_path = tmp_path / "x.log"
+    with log_path.open("wb") as fp:
+        sup._popen([sys.executable, "-c", "pass"], fp)
+
+    assert captured["env"]["XFORMERS_FORCE_DISABLE_TRITON"] == "1"
+
+
 def test_config_path_takes_priority(env, tmp_path) -> None:
     """PP6.3：task.config_path 设了就用它，不再读 _configs_dir。"""
     captured: dict[str, Any] = {}
