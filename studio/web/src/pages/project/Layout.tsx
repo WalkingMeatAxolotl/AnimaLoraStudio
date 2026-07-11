@@ -25,6 +25,8 @@ export default function ProjectLayout() {
   const [showExportDialog, setShowExportDialog] = useState(false)
   const projectRef = useRef<ProjectDetail | null>(null)
   projectRef.current = project
+  // 版本切换请求序号：快速连切时只认最后一次切换的结果，防止先发后至的响应/回滚覆盖新选择。
+  const switchSeqRef = useRef(0)
 
   const reload = useCallback(async () => {
     if (!Number.isFinite(projectId)) return
@@ -77,13 +79,22 @@ export default function ProjectLayout() {
   }, [project])
 
   const handleSelectVersion = useCallback(async (vid: number) => {
-    if (!projectRef.current) return
-    if (projectRef.current.active_version_id === vid) return
+    const prev = projectRef.current
+    if (!prev || prev.active_version_id === vid) return
+    const prevVid = prev.active_version_id
+    const seq = ++switchSeqRef.current
+    // 乐观更新：先本地切换再等后端。activate 往返期间 activeVersion 若停在旧值，
+    // 「切完版本马上点开始训练」会把旧版本入队（#386）。
+    setProject((cur) => (cur ? { ...cur, active_version_id: vid } : cur))
     try {
-      const updated = await api.activateVersion(projectRef.current.id, vid)
-      setProject(updated)
+      const updated = await api.activateVersion(prev.id, vid)
+      if (seq === switchSeqRef.current) setProject(updated)
     } catch (e) {
-      toast(String(e), 'error')
+      if (seq === switchSeqRef.current) {
+        // 只回滚 active_version_id 字段，不整包回退——避免吞掉在途 reload 带来的其他更新。
+        setProject((cur) => (cur ? { ...cur, active_version_id: prevVid } : cur))
+        toast(String(e), 'error')
+      }
     }
   }, [toast])
 
