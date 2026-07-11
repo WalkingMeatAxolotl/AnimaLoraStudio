@@ -506,7 +506,19 @@ def load_text_encoders(
     if t5_tokenizer_path and Path(t5_tokenizer_path).exists():
         t5_tokenizer = t5_cls.from_pretrained(t5_tokenizer_path)
     else:
-        t5_tokenizer = t5_cls.from_pretrained("google/t5-v1_1-xxl")
+        logger.warning(
+            "T5 tokenizer 本地目录缺失（t5_tokenizer_path=%s），"
+            "开始从 Hugging Face 下载 google/t5-v1_1-xxl",
+            t5_tokenizer_path or "未配置",
+        )
+        try:
+            t5_tokenizer = t5_cls.from_pretrained("google/t5-v1_1-xxl")
+        except Exception as e:
+            raise RuntimeError(
+                f"T5 tokenizer 下载失败（google/t5-v1_1-xxl）：{type(e).__name__}: {e}\n"
+                f"请检查网络后重试；或在 Studio 设置页下载 t5_tokenizer 模型，"
+                f"并确认 t5_tokenizer_path（当前值：{t5_tokenizer_path or '未配置'}）指向该目录。"
+            ) from e
 
     logger.info("文本编码器加载完成")
     return qwen_model, qwen_tokenizer, t5_tokenizer
