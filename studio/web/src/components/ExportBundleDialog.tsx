@@ -123,7 +123,6 @@ export default function ExportBundleDialog({ onConfirm, onCancel }: Props) {
                 <span className="text-sm text-fg-secondary">
                   {t('layout.exportBundleLatentCache')}
                 </span>
-                <span className="text-xs text-fg-tertiary">{t('layout.exportBundleLatentCacheHint')}</span>
               </label>
             </>
           )}
@@ -162,7 +161,6 @@ export default function ExportBundleDialog({ onConfirm, onCancel }: Props) {
                 <span className="text-sm text-fg-secondary">
                   {t('layout.exportBundleLatentCache')}
                 </span>
-                <span className="text-xs text-fg-tertiary">{t('layout.exportBundleLatentCacheHint')}</span>
               </label>
             </>
           )}

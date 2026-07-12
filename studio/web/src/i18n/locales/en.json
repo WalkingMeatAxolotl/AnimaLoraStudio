@@ -1793,7 +1793,6 @@
     "exportBundleConfig": "Training config",
     "exportBundleConfigHint": "(hyperparams for this version, no path fields)",
     "exportBundleLatentCache": "Include VAE latent cache (.npz)",
-    "exportBundleLatentCacheHint": "(skips re-encoding after import; bundle gets notably larger)",
     "exportBundleDestinationHint": "The bundle will be generated now, then downloaded by your browser or saved to data_exports/.",
     "exportBundleDestination": "Export destination",
     "exportBundleDownload": "Download to local",
