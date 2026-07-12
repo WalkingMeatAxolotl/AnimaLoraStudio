@@ -110,6 +110,7 @@ def export_version_bundle(
     reg: bool = False,
     reg_captions: bool = False,
     include_config: bool = False,
+    latent_cache: bool = False,
 ) -> FileResponse:
     """按选项临时打包 bundle.zip（schema_version 2）并交给浏览器下载。"""
     opts = train_io.BundleOptions(
@@ -118,6 +119,7 @@ def export_version_bundle(
         reg=reg,
         reg_captions=reg_captions,
         include_config=include_config,
+        latent_cache=latent_cache,
     )
 
     with db.connection_for() as conn:

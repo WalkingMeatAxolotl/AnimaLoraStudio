@@ -1792,6 +1792,8 @@
     "exportBundleCaptions": "包含 caption 文件 (.txt)",
     "exportBundleConfig": "训练配置",
     "exportBundleConfigHint": "（当前版本超参数，路径字段不含）",
+    "exportBundleLatentCache": "VAE latent 缓存 (.npz)",
+    "exportBundleLatentCacheHint": "（导入后免重新 encode；包体积会明显变大）",
     "exportBundleDestinationHint": "导出的 bundle 会即时生成，可交给浏览器下载，也可保存到 data_exports/。",
     "exportBundleDestination": "导出目标",
     "exportBundleDownload": "下载到本地",
