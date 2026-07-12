@@ -15,7 +15,6 @@ import InpaintCanvas, {
 } from '../../../components/preprocess/InpaintCanvas'
 import PreprocessToolsBar from '../../../components/preprocess/PreprocessToolsBar'
 import StepShell from '../../../components/StepShell'
-import { useDialog } from '../../../components/Dialog'
 import { useToast } from '../../../components/Toast'
 import { useLocalStorageState } from '../../../lib/useLocalStorageState'
 
@@ -50,7 +49,6 @@ export default function PreprocessInpaintPage() {
   const { t } = useTranslation()
   const { project, activeVersion, reload } = useOutletContext<Ctx>()
   const { toast } = useToast()
-  const { confirm } = useDialog()
   const vid = activeVersion?.id ?? 0
 
   // ────── Workspace data（复用 crop workspace：name + w/h + mtime）──────
@@ -275,30 +273,6 @@ export default function PreprocessInpaintPage() {
     }
   }, [editedNames, images, strokesByImage, rawUrl, project.id, vid, clearSaved, refreshWorkspace, reload, toast, t])
 
-  const restoreActive = useCallback(async () => {
-    if (!activeName) return
-    if (!(await confirm(
-      t('preprocessInpaint.confirmRestore', { name: activeName }),
-      { tone: 'danger', okText: t('preprocessInpaint.confirmRestoreOk') },
-    ))) return
-    setBusy(true)
-    try {
-      const r = await api.restorePreprocessFilesTrain(project.id, vid, [activeName])
-      if (r.no_origin.length > 0) {
-        toast(t('preprocessInpaint.restoreNoOrigin'), 'error')
-      } else {
-        toast(t('preprocessInpaint.restoredToast'), 'success')
-      }
-      clearSaved(activeName)
-      await refreshWorkspace()
-      void reload()
-    } catch (e) {
-      toast(String(e), 'error')
-    } finally {
-      setBusy(false)
-    }
-  }, [activeName, project.id, vid, confirm, clearSaved, refreshWorkspace, reload, toast, t])
-
   // ────── Render ──────
   if (!activeVersion) {
     return (
@@ -315,15 +289,8 @@ export default function PreprocessInpaintPage() {
       subtitle={t('preprocessInpaint.subtitle')}
       actions={
         <>
-          {/* 次操作 = ghost / 主操作 = primary + icon（对齐裁剪页 header 范式） */}
-          <button
-            type="button"
-            onClick={() => void restoreActive()}
-            disabled={busy || !activeName}
-            className="btn btn-ghost btn-sm"
-          >
-            {t('preprocessInpaint.restoreActive')}
-          </button>
+          {/* 次操作 = ghost / 主操作 = primary + icon（对齐裁剪页 header 范式）。
+              还原不放这页 —— 总览页是还原统一入口。 */}
           <button
             type="button"
             onClick={() => void saveAll()}
@@ -372,6 +339,18 @@ export default function PreprocessInpaintPage() {
               </span>
             )}
             <span className="flex-1" />
+            <button
+              onClick={undo}
+              disabled={!activeName || activeStrokes.length === 0}
+              className="btn btn-ghost btn-sm"
+              title="Ctrl+Z"
+            >↶ {t('preprocessInpaint.undo')}</button>
+            <button
+              onClick={redo}
+              disabled={!activeName || activeRedo.length === 0}
+              className="btn btn-ghost btn-sm"
+              title="Ctrl+Shift+Z"
+            >↷ {t('preprocessInpaint.redo')}</button>
             <button
               onClick={clearActive}
               disabled={!activeName || activeStrokes.length === 0}
@@ -437,10 +416,6 @@ export default function PreprocessInpaintPage() {
                   eyedropper={eyedropper}
                   setEyedropper={setEyedropper}
                   recentColors={recentColors}
-                  strokeCount={activeStrokes.length}
-                  redoCount={activeRedo.length}
-                  onUndo={undo}
-                  onRedo={redo}
                 />
               </div>
             )}
@@ -455,32 +430,43 @@ export default function PreprocessInpaintPage() {
 // Tool panel（right side）— PR-B 在顶部加「涂抹 | Mask」模式切换，布局不重排
 // ---------------------------------------------------------------------------
 
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex)
+  if (!m) return { r: 255, g: 255, b: 255 }
+  const v = parseInt(m[1], 16)
+  return { r: (v >> 16) & 255, g: (v >> 8) & 255, b: v & 255 }
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+  const c = (v: number) =>
+    Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')
+  return `#${c(r)}${c(g)}${c(b)}`
+}
+
 function ToolPanel({
   brush,
   setBrush,
   eyedropper,
   setEyedropper,
   recentColors,
-  strokeCount,
-  redoCount,
-  onUndo,
-  onRedo,
 }: {
   brush: BrushState
   setBrush: (v: BrushState | ((prev: BrushState) => BrushState)) => void
   eyedropper: boolean
   setEyedropper: (v: boolean) => void
   recentColors: string[]
-  strokeCount: number
-  redoCount: number
-  onUndo: () => void
-  onRedo: () => void
 }) {
   const { t } = useTranslation()
+  const [recentOpen, setRecentOpen] = useState(false)
+  const rgb = hexToRgb(brush.color)
+  const setChannel = (ch: 'r' | 'g' | 'b', v: number) => {
+    const next = { ...rgb, [ch]: v }
+    setBrush((p) => ({ ...p, color: rgbToHex(next.r, next.g, next.b) }))
+  }
   return (
     <div className="bg-sunken border border-subtle rounded-md flex flex-col h-full min-h-0 overflow-hidden">
       <div className="flex flex-col gap-3 p-2.5 flex-1 min-h-0 overflow-y-auto">
-        {/* 颜色 */}
+        {/* 颜色：行1 = 色轮（原生 picker）+ RGB 输入；行2 = 历史颜色（折叠）+ 取色 */}
         <div className="flex flex-col gap-1.5">
           <h3 className="caption">{t('preprocessInpaint.brushColor')}</h3>
           <div className="flex items-center gap-1.5">
@@ -488,21 +474,42 @@ function ToolPanel({
               type="color"
               value={brush.color}
               onChange={(e) => setBrush((p) => ({ ...p, color: e.target.value }))}
-              className="w-8 h-8 p-0 border border-subtle rounded cursor-pointer bg-transparent"
-              title={t('preprocessInpaint.brushColor')}
+              className="w-9 h-9 p-0 border border-subtle rounded cursor-pointer bg-transparent shrink-0"
+              title={t('preprocessInpaint.colorWheel')}
             />
-            <span className="text-xs font-mono text-fg-secondary">{brush.color}</span>
-            <span className="flex-1" />
+            {(['r', 'g', 'b'] as const).map((ch) => (
+              <label key={ch} className="flex flex-col items-center gap-0.5 text-[10px] text-fg-tertiary flex-1 min-w-0">
+                <span className="uppercase">{ch}</span>
+                <input
+                  type="number"
+                  min={0} max={255}
+                  value={rgb[ch]}
+                  onChange={(e) => setChannel(ch, Number(e.target.value) || 0)}
+                  className="input input-mono text-sm w-full min-w-0"
+                  style={{ padding: '2px 4px' }}
+                />
+              </label>
+            ))}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setRecentOpen((v) => !v)}
+              disabled={recentColors.length === 0}
+              className="btn btn-ghost btn-sm flex-1 min-w-0"
+            >
+              {t('preprocessInpaint.recentColors')} ({recentColors.length}) {recentOpen ? '▴' : '▾'}
+            </button>
             <button
               type="button"
               onClick={() => setEyedropper(!eyedropper)}
               className={
-                'btn btn-sm ' + (eyedropper ? 'btn-primary' : 'btn-ghost')
+                'btn btn-sm flex-1 min-w-0 ' + (eyedropper ? 'btn-primary' : 'btn-ghost')
               }
               title={t('preprocessInpaint.eyedropperHint')}
             >💧 {t('preprocessInpaint.eyedropper')}</button>
           </div>
-          {recentColors.length > 0 && (
+          {recentOpen && recentColors.length > 0 && (
             <div className="flex items-center gap-1 flex-wrap">
               {recentColors.map((c) => (
                 <button
@@ -562,28 +569,6 @@ function ToolPanel({
           </label>
         </div>
 
-        {/* 笔画 */}
-        <div className="flex flex-col gap-1.5">
-          <h3 className="caption">
-            {t('preprocessInpaint.strokesTitle')} · {strokeCount}
-          </h3>
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={onUndo}
-              disabled={strokeCount === 0}
-              className="btn btn-ghost btn-sm flex-1"
-              title="Ctrl+Z"
-            >↶ {t('preprocessInpaint.undo')}</button>
-            <button
-              type="button"
-              onClick={onRedo}
-              disabled={redoCount === 0}
-              className="btn btn-ghost btn-sm flex-1"
-              title="Ctrl+Shift+Z"
-            >↷ {t('preprocessInpaint.redo')}</button>
-          </div>
-        </div>
       </div>
 
       {/* 底部固定栏：保存语义提示（对齐裁剪页 AR 锁定固定栏位置） */}
