@@ -796,6 +796,8 @@ export interface VersionStats {
   train_image_count: number
   tagged_image_count: number
   train_folders: Array<{ name: string; image_count: number }>
+  validation_image_count: number
+  validation_tagged_count: number
   reg_image_count: number
   reg_meta_exists: boolean
   has_output: boolean
