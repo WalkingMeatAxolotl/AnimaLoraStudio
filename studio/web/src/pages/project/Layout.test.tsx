@@ -4,6 +4,7 @@
  * 场景：切换版本后 activate 请求还在途时立即点「开始训练」，Train 页读到的
  * activeVersion 必须已经是新版本（乐观更新），否则会把旧版本入队。
  */
+import { useEffect } from 'react'
 import { act, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useOutletContext } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -56,18 +57,28 @@ function makeProject(activeVid: number, versions: Version[]): ProjectDetail {
   }
 }
 
+type OutletCtx = {
+  activeVersion: Version | null
+  setVersionSwitchGuard: (g: (() => Promise<boolean>) | null) => void
+}
+
+let lastOutletCtx: OutletCtx | null = null
+let probeMounts = 0
+
 /** 模拟 Train 等步骤页：从 Outlet context 读 activeVersion（Train.tsx 入队用的就是它）。 */
 function Probe() {
-  const { activeVersion } = useOutletContext<{ activeVersion: Version | null }>()
-  return <div data-testid="active-vid">{activeVersion ? String(activeVersion.id) : 'none'}</div>
+  const octx = useOutletContext<OutletCtx>()
+  lastOutletCtx = octx
+  useEffect(() => { probeMounts += 1 }, [])
+  return <div data-testid="active-vid">{octx.activeVersion ? String(octx.activeVersion.id) : 'none'}</div>
 }
 
 let lastCtx: ProjectCtxValue | null = null
 
-function renderLayout() {
+function renderLayout(path = '/projects/3') {
   return render(
     <MemoryRouter
-      initialEntries={['/projects/3']}
+      initialEntries={[path]}
       future={{ v7_relativeSplatPath: true, v7_startTransition: true }}
     >
       <DialogProvider>
@@ -75,6 +86,9 @@ function renderLayout() {
           <Routes>
             <Route path="/projects/:pid" element={<ProjectLayout />}>
               <Route index element={<Probe />} />
+              <Route path="v/:vid">
+                <Route path="train" element={<Probe />} />
+              </Route>
             </Route>
           </Routes>
         </ProjectSetterContext.Provider>
@@ -101,6 +115,8 @@ async function ready() {
 describe('ProjectLayout 版本切换（#386）', () => {
   beforeEach(() => {
     lastCtx = null
+    lastOutletCtx = null
+    probeMounts = 0
     toastMock.mockClear()
     getProjectMock.mockReset()
     activateVersionMock.mockReset()
@@ -156,5 +172,37 @@ describe('ProjectLayout 版本切换（#386）', () => {
 
     await act(async () => { d2.resolve({ active_version_id: 3 }) })
     expect(screen.getByTestId('active-vid')).toHaveTextContent('3')
+  })
+
+  it('版本作用域路由：切版本重挂载步骤页', async () => {
+    activateVersionMock.mockResolvedValue({ active_version_id: 1 })
+    renderLayout('/projects/3/v/2/train')
+    await ready()
+    expect(probeMounts).toBe(1)
+
+    await act(async () => { lastCtx!.onSelectVersion(1) })
+    expect(screen.getByTestId('active-vid')).toHaveTextContent('1')
+    // 旧步骤页实例卸载、新实例重挂载 —— 本地缓存 / 选中态全部换代。
+    expect(probeMounts).toBe(2)
+  })
+
+  it('project 作用域路由（总览）：切版本不重挂载', async () => {
+    activateVersionMock.mockResolvedValue({ active_version_id: 1 })
+    renderLayout()
+    await ready()
+
+    await act(async () => { lastCtx!.onSelectVersion(1) })
+    expect(screen.getByTestId('active-vid')).toHaveTextContent('1')
+    expect(probeMounts).toBe(1)
+  })
+
+  it('切换守卫返回 false 时取消切换', async () => {
+    renderLayout('/projects/3/v/2/train')
+    await ready()
+    act(() => { lastOutletCtx!.setVersionSwitchGuard(() => Promise.resolve(false)) })
+
+    await act(async () => { lastCtx!.onSelectVersion(1) })
+    expect(screen.getByTestId('active-vid')).toHaveTextContent('2')
+    expect(activateVersionMock).not.toHaveBeenCalled()
   })
 })

@@ -21,6 +21,7 @@ interface Ctx {
   project: ProjectDetail
   activeVersion: Version | null
   reload: () => Promise<void>
+  setVersionSwitchGuard: (g: (() => Promise<boolean>) | null) => void
 }
 
 const keyOf = (folder: string, name: string) => `${folder}/${name}`
@@ -39,7 +40,7 @@ function arraysEqual(a: string[], b: string[]): boolean {
 
 export default function TagEditPage() {
   const { t } = useTranslation()
-  const { project, activeVersion, reload } = useOutletContext<Ctx>()
+  const { project, activeVersion, reload, setVersionSwitchGuard } = useOutletContext<Ctx>()
   const { toast } = useToast()
   const { confirm } = useDialog()
   const versionId = activeVersion?.id ?? null
@@ -131,6 +132,24 @@ export default function TagEditPage() {
     })
     return () => { cancelled = true }
   }, [blocker, confirm, t, dirtyKeys.length])
+
+  // 切版本会重挂载本页（Layout 的 Outlet key），不走路由导航、useBlocker 拦不住；
+  // dirty 时注册切换守卫，复用同一套 confirm 文案。
+  useEffect(() => {
+    if (!dirty) return
+    setVersionSwitchGuard(() =>
+      confirm(
+        t('tagEdit.unsavedConfirmMessage', { n: dirtyKeys.length }),
+        {
+          tone: 'danger',
+          title: t('tagEdit.unsavedConfirmTitle'),
+          okText: t('tagEdit.unsavedConfirmDiscard'),
+          cancelText: t('tagEdit.unsavedConfirmStay'),
+        },
+      )
+    )
+    return () => setVersionSwitchGuard(null)
+  }, [dirty, dirtyKeys.length, setVersionSwitchGuard, confirm, t])
 
   // folder 列表 + 每个 folder 的原始张数（不受 filterTag 影响，让 tab 数字稳定
   // 不抖动 — 同 Preprocess chip 风格）。单 folder 项目时 UI 不显示 tabs。
