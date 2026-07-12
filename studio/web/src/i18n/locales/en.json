@@ -1912,8 +1912,7 @@
       "dedupe": "Dedupe review",
       "upscale": "Upscale",
       "crop": "Crop",
-      "inpaint": "Inpaint",
-      "inpaintTitle": "Coming soon: brush inpaint (palette + Gaussian)"
+      "inpaint": "Inpaint"
     },
     "imagesTitle": "Images",
     "totalCount": "{{n}} total",
@@ -2024,6 +2023,48 @@
     "rrFromCrops": "crop AR",
     "toastStarted": "Crop job #{{id}} started",
     "toastNoCrops": "No crops to submit (draw at least one rect)"
+  },
+  "preprocessInpaint": {
+    "subtitle": "Upscale / crop / inpaint — Inpaint tool",
+    "saveActive": "Save current image",
+    "saveAll": "Save all ({{n}})",
+    "restoreActive": "Restore this image",
+    "clearActive": "Clear strokes",
+    "filter": {
+      "all": "All",
+      "pending": "Untouched",
+      "edited": "Painted"
+    },
+    "filmstripEmpty": {
+      "all": "Workspace is empty.",
+      "pending": "Every image already has strokes.",
+      "edited": "No image has been painted yet."
+    },
+    "loading": "Loading workspace...",
+    "emptyWorkspace": "Workspace is empty,",
+    "goToOverview": "go to Overview",
+    "canvasLoading": "Loading full-resolution image...",
+    "canvasHint": "Wheel to zoom · Space-drag to pan · Alt-click to pick color",
+    "zoomFit": "Fit",
+    "brushColor": "Color",
+    "eyedropper": "Eyedropper",
+    "eyedropperHint": "Click the canvas to pick a color (or Alt-click)",
+    "eyedropperNote": "Hold Alt and click the canvas to pick a color anytime.",
+    "brushTitle": "Brush",
+    "brushSize": "Size",
+    "brushHardness": "Hardness",
+    "strokesTitle": "Strokes",
+    "undo": "Undo",
+    "redo": "Redo",
+    "footNote": "Saving overwrites the train-set image (converted to png). Use \"Restore this image\" to recover from the dataset backup.",
+    "toastNotReady": "Image is still loading",
+    "toastSaved": "Saved {{name}}",
+    "toastSavedAll": "Saved {{n}} images",
+    "toastSavedAllPartial": "Done: {{ok}} saved, {{failed}} failed",
+    "confirmRestore": "Restore {{name}} from the dataset backup? All saved edits to this image (including upscale / crop products) will be overwritten by the original.",
+    "confirmRestoreOk": "Restore",
+    "restoredToast": "Restored from backup",
+    "restoreNoOrigin": "Backup missing: the original image is not in the dataset"
   },
   "steps": {
     "download": { "title": "Dataset", "subtitle": "Booru scraping + local upload" },

@@ -2,6 +2,7 @@ import { useSearchParams } from 'react-router-dom'
 import PreprocessUpscalePage from './Preprocess'
 import PreprocessCropPage from './PreprocessCrop'
 import PreprocessDuplicatesPage from './PreprocessDuplicates'
+import PreprocessInpaintPage from './PreprocessInpaint'
 import PreprocessOverviewPage from './PreprocessOverview'
 
 /** Route entry for `/projects/:pid/preprocess`.
@@ -11,10 +12,11 @@ import PreprocessOverviewPage from './PreprocessOverview'
  *    - `?tool=dedupe` → Duplicate / variant review
  *    - `?tool=upscale` → Upscale page
  *    - `?tool=crop` → Crop page
- *    - `?tool=inpaint` → not yet implemented; falls back to default
+ *    - `?tool=inpaint` → Inpaint page (取色笔刷涂抹)
  *
  *  Overview is default because it's the gallery that governs the dataset
- *  (peer to other navigable pages); upscale / crop / dedupe are transforms.
+ *  (peer to other navigable pages); upscale / crop / dedupe / inpaint are
+ *  transforms.
  *
  *  We use query string (not sub-path) so the sidebar's `/preprocess` matcher
  *  stays simple and the parent route doesn't unmount when switching tools.
@@ -27,5 +29,6 @@ export default function PreprocessHub() {
   if (tool === 'dedupe') return <PreprocessDuplicatesPage />
   if (tool === 'upscale') return <PreprocessUpscalePage />
   if (tool === 'crop') return <PreprocessCropPage />
+  if (tool === 'inpaint') return <PreprocessInpaintPage />
   return <PreprocessOverviewPage />
 }

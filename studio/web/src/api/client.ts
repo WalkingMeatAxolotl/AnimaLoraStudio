@@ -913,6 +913,16 @@ export interface CropWorkspaceItem {
   processed: boolean
 }
 
+/** 涂抹保存结果：产物统一 .png，源非 png 时 name 会改（X.jpg → X.png）。 */
+export interface InpaintSaveResult {
+  name: string
+  origin: string
+  mtime: number
+  size: number
+  w: number
+  h: number
+}
+
 /** 总览页「已删除」tab 一项：被去重审核标记的 entry。物理图仍在 download/{source}。 */
 export interface DuplicateRemovedItem {
   /** manifest entry 的 key（一般 == source）。restore 时按这个名传。 */
@@ -2275,6 +2285,27 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ crops }),
     }),
+  /** 涂抹整图保存（同步，无 job）：canvas 导出 PNG 覆盖 train/{name}。
+   *  multipart 绕过 req() 的 JSON header，让浏览器自加 boundary。 */
+  saveInpaintTrain: async (
+    pid: number,
+    vid: number,
+    name: string,
+    blob: Blob,
+  ): Promise<InpaintSaveResult> => {
+    const fd = new FormData()
+    fd.append('name', name)
+    fd.append('file', blob, 'inpaint.png')
+    const resp = await fetch(
+      `/api/projects/${pid}/versions/${vid}/preprocess/inpaint/save`,
+      { method: 'POST', body: fd },
+    )
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => null)
+      throw makeApiError(resp.status, resp.statusText, body, resp.headers.get('X-Trace-Id'))
+    }
+    return (await resp.json()) as InpaintSaveResult
+  },
 
   // R-5 台账合并：/api/jobs* 已删，作业与任务同源 /api/queue（单一 ID 空间）。
   // getJob / cancelJob 保留函数名给步骤页（Download/Tagging/Reg/Preprocess），

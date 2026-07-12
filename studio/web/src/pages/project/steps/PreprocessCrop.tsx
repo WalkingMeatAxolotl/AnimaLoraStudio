@@ -8,6 +8,7 @@ import {
   type ProjectDetail,
   type Version,
 } from '../../../api/client'
+import Filmstrip from '../../../components/preprocess/Filmstrip'
 import FreeCropEditor, { type CropRect } from '../../../components/preprocess/FreeCropEditor'
 import PreprocessToolsBar from '../../../components/preprocess/PreprocessToolsBar'
 import StepShell from '../../../components/StepShell'
@@ -462,7 +463,6 @@ export default function PreprocessCropPage() {
                     <Filmstrip
                       items={filteredImages}
                       activeName={activeName}
-                      cropsByImage={cropsByImage}
                       onSelect={(name) => {
                         setActiveName(name)
                         setSelectedRectId(null)
@@ -476,6 +476,28 @@ export default function PreprocessCropPage() {
                         ) + `&_=${im.mtime}`
                       }}
                       emptyHint={t(`preprocessCrop.filmstripEmpty.${filter}`)}
+                      renderOverlay={(im) => {
+                        const crops = cropsByImage[im.name] ?? []
+                        if (crops.length === 0) return null
+                        return (
+                          <>
+                            {crops.map((c, i) => (
+                              <div
+                                key={c.id}
+                                className={'fs-overlay ' + (crops.length > 1 ? 'is-multi' : '')}
+                                style={{
+                                  left: `${c.x * 100}%`,
+                                  top: `${c.y * 100}%`,
+                                  width: `${c.w * 100}%`,
+                                  height: `${c.h * 100}%`,
+                                }}
+                                aria-label={`crop ${i + 1}`}
+                              />
+                            ))}
+                            {crops.length > 1 && <span className="fs-badge">×{crops.length}</span>}
+                          </>
+                        )
+                      }}
                     />
 
                     <div className="min-w-0 min-h-0 overflow-hidden">
@@ -811,93 +833,6 @@ function RectListPanel({
           </label>
         )}
       </div>
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Filmstrip
-// ---------------------------------------------------------------------------
-
-function Filmstrip({
-  items,
-  activeName,
-  cropsByImage,
-  onSelect,
-  thumbUrl,
-  emptyHint,
-}: {
-  items: CropWorkspaceItem[]
-  activeName: string | null
-  cropsByImage: Record<string, CropRect[]>
-  onSelect: (name: string) => void
-  thumbUrl: (im: CropWorkspaceItem) => string
-  emptyHint?: string
-}) {
-  /* 3-col vertical grid with square cover thumbs. Squaring is intentional —
-     a 264-image dataset spans both portrait and landscape source ARs and
-     mixing them in a row leaves ragged gaps. Cover-crop keeps the grid tidy
-     and recognisable enough as a navigator (full AR is visible in the
-     canvas anyway). The existing crop rects still overlay in normalized
-     percent coords, so the user can spot which images already have crops. */
-  if (items.length === 0) {
-    // Render the same container so the parent grid keeps 3 columns; empty
-    // state lives inside.
-    return (
-      <div className="flex items-center justify-center bg-sunken/40 border border-subtle rounded p-3 h-full text-center text-fg-tertiary text-[11px] leading-snug">
-        {emptyHint ?? ''}
-      </div>
-    )
-  }
-  return (
-    <div className="grid grid-cols-3 gap-1 overflow-y-auto pr-1 bg-sunken/40 border border-subtle rounded p-1.5 h-full content-start">
-      {items.map((im) => {
-        const crops = cropsByImage[im.name] ?? []
-        const isActive = im.name === activeName
-        return (
-          <div key={im.name} className="fs-thumb-sq-cell">
-            <button
-              onClick={() => onSelect(im.name)}
-              className={'fs-thumb-sq ' + (isActive ? 'is-active' : '')}
-              title={im.name}
-            >
-              {/* <img> instead of background-image: browsers honour Cache-Control
-                  + ETag for <img src> reliably; CSS background-image hits the
-                  in-memory decoded-image cache and can keep showing stale bytes
-                  after an in-place crop output. object-fit: cover preserves the
-                  original squared-thumbnail look. */}
-              <img
-                src={thumbUrl(im)}
-                alt=""
-                draggable={false}
-                style={{
-                  position: 'absolute',
-                  inset: 0,
-                  width: '100%',
-                  height: '100%',
-                  objectFit: 'cover',
-                  objectPosition: 'center',
-                  pointerEvents: 'none',
-                }}
-              />
-              {crops.length > 0 && crops.map((c, i) => (
-                <div
-                  key={c.id}
-                  className={'fs-overlay ' + (crops.length > 1 ? 'is-multi' : '')}
-                  style={{
-                    left: `${c.x * 100}%`,
-                    top: `${c.y * 100}%`,
-                    width: `${c.w * 100}%`,
-                    height: `${c.h * 100}%`,
-                  }}
-                  aria-label={`crop ${i + 1}`}
-                />
-              ))}
-              {crops.length > 1 && <span className="fs-badge">×{crops.length}</span>}
-            </button>
-          </div>
-        )
-      })}
     </div>
   )
 }

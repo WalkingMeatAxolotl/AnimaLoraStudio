@@ -18,7 +18,7 @@ const TOOLS: ReadonlyArray<ToolDef> = [
   { id: 'dedupe',   i18nKey: 'dedupe' },
   { id: 'upscale',  i18nKey: 'upscale' },
   { id: 'crop',     i18nKey: 'crop' },
-  { id: 'inpaint',  i18nKey: 'inpaint', disabled: true },
+  { id: 'inpaint',  i18nKey: 'inpaint' },
 ]
 
 interface Props {
