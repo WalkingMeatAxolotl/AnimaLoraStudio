@@ -9,13 +9,14 @@
     POST /api/projects/{pid}/upload-from-path     服务端可见路径导入单图 / zip
     GET  /api/projects/{pid}/download/status      最近 download job + log_tail
 
-  预处理 (9)
+  预处理 (10)
     POST /api/projects/{pid}/preprocess/start
     GET  /api/projects/{pid}/preprocess/status
     GET  /api/projects/{pid}/preprocess/files
     GET  /api/projects/{pid}/preprocess/duplicates/removed
     GET  /api/projects/{pid}/preprocess/crop/workspace
     POST /api/projects/{pid}/preprocess/crop
+    POST /api/projects/{pid}/versions/{vid}/preprocess/inpaint/save
     POST /api/projects/{pid}/preprocess/files/reset
     POST /api/projects/{pid}/preprocess/files/restore
     GET  /api/projects/{pid}/preprocess/thumb     [Deprecated] 兼容旧 URL
@@ -28,7 +29,7 @@ import logging
 from pathlib import Path
 from typing import Any, BinaryIO
 
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, File, Form, UploadFile
 from fastapi.concurrency import run_in_threadpool
 
 from ...errors import _validate_component_or_400  # noqa: F401  reserved for future use
@@ -497,6 +498,27 @@ def start_preprocess_crop_train(
         )
     _publish_job_state(job)
     return job
+
+
+@router.post("/api/projects/{pid}/versions/{vid}/preprocess/inpaint/save")
+async def inpaint_save_train_endpoint(
+    pid: int, vid: int,
+    name: str = Form(...),
+    file: UploadFile = File(...),
+) -> dict[str, Any]:
+    """train scope 涂抹保存：前端 canvas 整图导出（PNG）覆盖 `train/{name}`。
+
+    同步写盘（无 job）；产物统一 `{folder}/{stem}.png`、manifest 标
+    processed=True（详 core.inpaint_save_train）。PIL 编码大图有秒级耗时，
+    走 threadpool 不堵 event loop。
+    """
+    p, v = _resolve_pv_or_404(pid, vid)
+    data = await file.read()
+    res = await run_in_threadpool(
+        preprocess_svc.inpaint_save_train, p, v["label"], name=name, data=data,
+    )
+    _publish_project_state(p)
+    return res
 
 
 @router.post("/api/projects/{pid}/versions/{vid}/preprocess/files/reset")

@@ -560,3 +560,109 @@ def restore_products_train(
         _validate_rel_name(raw)
         name_list.append(raw)
     return preprocess_manifest.train_restore(pdir, version_label, name_list)
+
+
+def inpaint_save_train(
+    p: dict[str, Any], version_label: str, *, name: str, data: bytes,
+) -> dict[str, Any]:
+    """涂抹整图保存（train scope）：前端 canvas 导出的图覆盖 `train/{name}`。
+
+    产物对齐 crop 约定统一 `{folder}/{stem}.png`；源图非 .png 时删旧源文件
+    （caption sidecar 因 stem 不变保留不动）。manifest 复用
+    train_replace_with_crops 的单产物路径（删旧 entry + 写新 entry，
+    processed=True），origin 沿用旧 entry。
+
+    上传图必须与现有源图同尺寸——涂抹是逐像素编辑，尺寸不符说明前端笔画
+    重放的对象错位，直接拒绝而不是静默接受。
+    """
+    import io
+    import os
+    import time
+
+    from PIL import Image
+
+    _validate_rel_name(name)
+    pdir = project_root(p)
+    train_dir = version_train_dir(p, version_label)
+    src_path = train_dir / name
+    if not src_path.is_file():
+        raise NotFoundError(
+            "Image not found in train set",
+            code="preprocess.inpaint_source_missing", details={"name": name},
+        )
+    try:
+        with Image.open(src_path) as im:
+            src_w, src_h = im.size
+    except (OSError, ValueError) as exc:
+        raise ValidationError(
+            "Source image is unreadable",
+            code="preprocess.inpaint_source_unreadable",
+            details={"name": name}, http_status=400,
+        ) from exc
+
+    try:
+        img = Image.open(io.BytesIO(data))
+        img.load()
+    except Exception as exc:  # PIL 解码失败抛的类型不稳定，统一翻 400
+        raise ValidationError(
+            "Uploaded image is not a valid image file",
+            code="preprocess.inpaint_image_invalid",
+            details={"name": name}, http_status=400,
+        ) from exc
+    if img.size != (src_w, src_h):
+        raise ValidationError(
+            "Uploaded image size does not match the source image",
+            code="preprocess.inpaint_size_mismatch",
+            details={
+                "name": name,
+                "expected": [src_w, src_h],
+                "got": [img.size[0], img.size[1]],
+            },
+            http_status=400,
+        )
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+
+    folder, filename = name.split("/", 1)
+    out_rel = f"{folder}/{Path(filename).stem}{PRODUCT_SUFFIX}"
+    out_path = train_dir / out_rel
+
+    # origin 沿用 manifest 已有 entry，否则回退源文件名（对齐 crop worker）
+    existing = preprocess_manifest.train_get_entry(pdir, version_label, name)
+    origin = (
+        preprocess_manifest.entry_origin(existing, filename)
+        if existing is not None else filename
+    )
+
+    tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
+    img.save(tmp_path, format="PNG", optimize=False)
+    os.replace(tmp_path, out_path)
+
+    if out_rel != name:
+        try:
+            src_path.unlink()
+        except OSError:
+            pass
+
+    try:
+        st = out_path.stat()
+        size, mtime = st.st_size, st.st_mtime
+    except OSError:
+        size, mtime = 0, time.time()
+
+    preprocess_manifest.train_replace_with_crops(
+        pdir, version_label,
+        source_name=name,
+        outputs=[{"name": out_rel, "origin": origin, "size": size, "mtime": mtime}],
+    )
+
+    try:
+        from studio.services.dataset import thumb_cache
+        thumb_cache.prewarm_from_image(out_path, img, [256, 768])
+    except Exception:  # noqa: BLE001
+        pass
+
+    return {
+        "name": out_rel, "origin": origin,
+        "mtime": mtime, "size": size, "w": src_w, "h": src_h,
+    }
