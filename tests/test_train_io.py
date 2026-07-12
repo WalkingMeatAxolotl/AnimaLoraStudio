@@ -294,10 +294,14 @@ def test_export_bundle_latent_cache_roundtrip(isolated, tmp_path: Path) -> None:
     with db.connection_for(isolated["db"]) as conn:
         result = train_io.export_bundle(
             conn, v["id"], dest,
-            train_io.BundleOptions(train=True, reg=True, latent_cache=True),
+            train_io.BundleOptions(
+                train=True, reg=True,
+                train_latent_cache=True, reg_latent_cache=True,
+            ),
         )
 
-    assert result["manifest"]["includes"]["latent_cache"] is True
+    assert result["manifest"]["includes"]["train_latent_cache"] is True
+    assert result["manifest"]["includes"]["reg_latent_cache"] is True
     assert result["manifest"]["stats"]["latent_cache_count"] == 3
     with zipfile.ZipFile(dest) as zf:
         names = set(zf.namelist())
@@ -336,7 +340,8 @@ def test_export_bundle_excludes_latent_cache_by_default(isolated, tmp_path: Path
             conn, v["id"], dest, train_io.BundleOptions(train=True),
         )
 
-    assert result["manifest"]["includes"]["latent_cache"] is False
+    assert result["manifest"]["includes"]["train_latent_cache"] is False
+    assert result["manifest"]["includes"]["reg_latent_cache"] is False
     assert result["manifest"]["stats"]["latent_cache_count"] == 0
     with zipfile.ZipFile(dest) as zf:
         assert not [n for n in zf.namelist() if n.endswith(".npz")]

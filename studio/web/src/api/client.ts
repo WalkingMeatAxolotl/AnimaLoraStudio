@@ -2808,7 +2808,8 @@ export const api = {
       reg?: boolean
       regCaptions?: boolean
       includeConfig?: boolean
-      latentCache?: boolean
+      trainLatentCache?: boolean
+      regLatentCache?: boolean
     },
   ): string => {
     const p = new URLSearchParams()
@@ -2817,7 +2818,8 @@ export const api = {
     p.set('reg', opts.reg ? '1' : '0')
     p.set('reg_captions', opts.regCaptions ? '1' : '0')
     p.set('include_config', opts.includeConfig ? '1' : '0')
-    p.set('latent_cache', opts.latentCache ? '1' : '0')
+    p.set('train_latent_cache', opts.trainLatentCache ? '1' : '0')
+    p.set('reg_latent_cache', opts.regLatentCache ? '1' : '0')
     return `/api/projects/${pid}/versions/${vid}/bundle.zip?${p.toString()}`
   },
   exportBundleToDataExports: (
@@ -2829,7 +2831,8 @@ export const api = {
       reg?: boolean
       regCaptions?: boolean
       includeConfig?: boolean
-      latentCache?: boolean
+      trainLatentCache?: boolean
+      regLatentCache?: boolean
     },
   ) =>
     req<DataExportItem>(`/api/projects/${pid}/versions/${vid}/export-bundle`, {
@@ -2840,7 +2843,8 @@ export const api = {
         reg: opts.reg === true,
         reg_captions: opts.regCaptions === true,
         include_config: opts.includeConfig === true,
-        latent_cache: opts.latentCache === true,
+        train_latent_cache: opts.trainLatentCache === true,
+        reg_latent_cache: opts.regLatentCache === true,
       }),
     }),
   listDataExports: () => req<DataExportItem[]>('/api/data-exports'),

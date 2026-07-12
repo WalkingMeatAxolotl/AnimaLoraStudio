@@ -66,8 +66,9 @@ class BundleOptions:
     reg_captions: bool = False
     # True = 导出本 version 的私有 config.yaml（去掉路径字段后）作为可移植训练配置
     include_config: bool = False
-    # True = 一并打包 train/reg 里的 VAE latent 缓存（*.npz），导入后免重新 encode
-    latent_cache: bool = False
+    # True = 一并打包对应目录里的 VAE latent 缓存（*.npz），导入后免重新 encode
+    train_latent_cache: bool = False
+    reg_latent_cache: bool = False
 
 
 from studio.domain.errors import DomainError, NotFoundError
@@ -480,7 +481,7 @@ def export_bundle(
     train_stats: dict[str, Any] = {}
     if opts.train:
         tp, train_stats = _collect_train(
-            vdir / "train", opts.train_captions, opts.latent_cache
+            vdir / "train", opts.train_captions, opts.train_latent_cache
         )
         if not tp:
             raise TrainIOError(
@@ -493,7 +494,7 @@ def export_bundle(
     reg_stats: dict[str, Any] = {}
     if opts.reg:
         rp, reg_stats = _collect_reg(
-            vdir / "reg", opts.reg_captions, opts.latent_cache
+            vdir / "reg", opts.reg_captions, opts.reg_latent_cache
         )
         payload.extend(rp)
 
@@ -537,7 +538,8 @@ def export_bundle(
             "reg": opts.reg,
             "reg_captions": opts.reg_captions,
             "config": config_included,
-            "latent_cache": opts.latent_cache,
+            "train_latent_cache": opts.train_latent_cache,
+            "reg_latent_cache": opts.reg_latent_cache,
         },
         "stats": {
             "train_image_count": train_stats.get("image_count", 0),
