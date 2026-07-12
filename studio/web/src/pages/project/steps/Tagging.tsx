@@ -245,18 +245,25 @@ export default function TaggingPage() {
   const stats = activeVersion.stats
   const totalImages = stats?.train_image_count ?? 0
   const taggedImages = stats?.tagged_image_count ?? 0
-  // 此轮需要打标：overwrite/append 全量、skip 只未打标。数据限制——后端只有整训练
-  // 集已打标数：scope=all 精确；选文件夹能拿总数但拿不到已打标数（skip 退回文件夹
-  // 总数）；validation 无计数（显示 —）。随 scope / onExisting 实时变。
-  const scopeTotal =
+  const valTotal = stats?.validation_image_count ?? 0
+  const valTagged = stats?.validation_tagged_count ?? 0
+  // 此轮需要打标（训练集 / 验证集面板各算各的）：overwrite/append 全量、skip 只
+  // 未打标。数据限制——选训练集文件夹时只有文件夹总数拿不到其已打标数（skip 退回
+  // 文件夹总数）。随 scope / onExisting 实时变。
+  const trainScopeTotal =
     scope === 'all' ? totalImages
-      : scope === 'validation' ? null
+      : scope === 'validation' ? 0
         : (stats?.train_folders.find((f) => f.name === scope)?.image_count ?? null)
-  const thisRoundNeed =
-    scopeTotal == null ? null
+  const trainThisRoundNeed =
+    trainScopeTotal == null ? null
       : onExisting === 'skip'
-        ? (scope === 'all' ? Math.max(0, totalImages - taggedImages) : scopeTotal)
-        : scopeTotal
+        ? (scope === 'all' ? Math.max(0, totalImages - taggedImages) : trainScopeTotal)
+        : trainScopeTotal
+  // 验证集只在 scope=all / validation 时参与本轮打标。
+  const valInScope = scope === 'all' || scope === 'validation'
+  const valThisRoundNeed = !valInScope
+    ? 0
+    : onExisting === 'skip' ? Math.max(0, valTotal - valTagged) : valTotal
   // 面板「打标方式/模型/预设/触发词」显示的是上一次实际打标用的配置（历史事实，
   // 与正则集 meta 意义一致），从最近一次 tag job 的 params 复原；模型 / 预设未
   // override 时退回当前默认（与 worker「override ?? default」解析一致，默认未变时
@@ -593,7 +600,7 @@ export default function TaggingPage() {
 
         </div>
 
-        {/* 右栏：训练集打标状态（进度 + 上一轮打标配置 + 此轮需要打标） */}
+        {/* 右栏：训练集 / 验证集打标状态（进度 + 上一轮打标配置 + 此轮需要打标） */}
         <TagStatusPanel
           totalImages={totalImages}
           taggedImages={taggedImages}
@@ -602,7 +609,10 @@ export default function TaggingPage() {
           presetLabel={lastPresetLabel}
           triggerWord={lastTrigger}
           latestTaggedAt={job?.finished_at ?? null}
-          thisRoundNeed={thisRoundNeed}
+          thisRoundNeed={trainThisRoundNeed}
+          validationTotal={valTotal}
+          validationTagged={valTagged}
+          validationThisRoundNeed={valThisRoundNeed}
           isLive={isLive}
         />
       </div>
@@ -1075,7 +1085,8 @@ function PanelDot() {
 function TagStatusPanel({
   totalImages, taggedImages,
   methodLabel, modelLabel, presetLabel, triggerWord,
-  latestTaggedAt, thisRoundNeed, isLive,
+  latestTaggedAt, thisRoundNeed,
+  validationTotal, validationTagged, validationThisRoundNeed, isLive,
 }: {
   totalImages: number
   taggedImages: number
@@ -1085,6 +1096,9 @@ function TagStatusPanel({
   triggerWord: string
   latestTaggedAt: number | null
   thisRoundNeed: number | null
+  validationTotal: number
+  validationTagged: number
+  validationThisRoundNeed: number | null
   isLive: boolean
 }) {
   const { t } = useTranslation()
@@ -1097,14 +1111,7 @@ function TagStatusPanel({
           <span className="caption">{t('tag.statusPanelTitle')}</span>
         </div>
         <div className="flex flex-col gap-2">
-          <TagStatusRow label={t('tag.statusImages')}>
-            <span className="font-mono">
-              <span className="text-ok">{taggedImages}</span>
-              <span className="text-fg-tertiary text-2xs font-normal ml-1">
-                / {totalImages} {t('tag.nImagesShort')}
-              </span>
-            </span>
-          </TagStatusRow>
+          <TagStatusImagesRow tagged={taggedImages} total={totalImages} />
           {methodLabel && (
             <TagStatusRow label={t('tag.statusMethod')}>
               <span className="font-mono">{methodLabel}</span>
@@ -1131,29 +1138,66 @@ function TagStatusPanel({
             </span>
           </TagStatusRow>
         </div>
-        <div className="pt-2.5 border-t border-subtle">
-          <TagStatusRow label={t('tag.statusThisRound')}>
-            <span className="font-mono">
-              {thisRoundNeed == null ? (
-                <span className="text-fg-tertiary">—</span>
-              ) : (
-                <>
-                  <span className="text-accent">{thisRoundNeed}</span>
-                  <span className="text-fg-tertiary text-2xs font-normal ml-1">
-                    {t('tag.nImagesShort')}
-                  </span>
-                </>
-              )}
-            </span>
-          </TagStatusRow>
-        </div>
+        <TagStatusThisRound need={thisRoundNeed} />
       </section>
+
+      {/* 验证集打标状态：仅当版本存在验证集图片时显示（与训练集 section 同款）。 */}
+      {validationTotal > 0 && (
+        <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 flex flex-col gap-2.5">
+          <div className="flex items-center gap-1.5 mb-0.5">
+            <PanelDot />
+            <span className="caption">{t('tag.validationStatusPanelTitle')}</span>
+          </div>
+          <div className="flex flex-col gap-2">
+            <TagStatusImagesRow tagged={validationTagged} total={validationTotal} />
+          </div>
+          <TagStatusThisRound need={validationThisRoundNeed} />
+        </section>
+      )}
 
       {isLive && (
         <div className="rounded-md border border-subtle bg-surface px-3 py-2.5 text-center">
           <div className="badge badge-warn">{t('tag.taggingBadge')}</div>
         </div>
       )}
+    </div>
+  )
+}
+
+// 「图片 n / m 张」行（训练集 / 验证集 section 共用）。
+function TagStatusImagesRow({ tagged, total }: { tagged: number; total: number }) {
+  const { t } = useTranslation()
+  return (
+    <TagStatusRow label={t('tag.statusImages')}>
+      <span className="font-mono">
+        <span className="text-ok">{tagged}</span>
+        <span className="text-fg-tertiary text-2xs font-normal ml-1">
+          / {total} {t('tag.nImagesShort')}
+        </span>
+      </span>
+    </TagStatusRow>
+  )
+}
+
+// 「此轮需要打标」分隔行（训练集 / 验证集 section 共用）；null 显示 —。
+function TagStatusThisRound({ need }: { need: number | null }) {
+  const { t } = useTranslation()
+  return (
+    <div className="pt-2.5 border-t border-subtle">
+      <TagStatusRow label={t('tag.statusThisRound')}>
+        <span className="font-mono">
+          {need == null ? (
+            <span className="text-fg-tertiary">—</span>
+          ) : (
+            <>
+              <span className="text-accent">{need}</span>
+              <span className="text-fg-tertiary text-2xs font-normal ml-1">
+                {t('tag.nImagesShort')}
+              </span>
+            </>
+          )}
+        </span>
+      </TagStatusRow>
     </div>
   )
 }

@@ -615,15 +615,17 @@ def activate_version(
 # ---------------------------------------------------------------------------
 
 
-def stats_for_version(p: dict[str, Any], v: dict[str, Any]) -> dict[str, Any]:
-    """train 子文件夹与图片计数 / 已打标计数 / reg 计数 / output 是否存在。"""
-    vdir = version_dir(p["id"], p["slug"], v["label"])
-    train_dir = vdir / "train"
-    train_folders: list[dict[str, Any]] = []
-    train_total = 0
-    tagged_total = 0
-    if train_dir.exists():
-        for sub in sorted(train_dir.iterdir()):
+def _scan_caption_dataset(root: Path) -> tuple[list[dict[str, Any]], int, int]:
+    """扫 root/<folder>/ 的图片数与已打标数（.txt / .json sidecar）。
+
+    train/ 与 validation/ 同构（validation 镜像 train 的子文件夹布局），共用一套扫描。
+    返回 (folders, total, tagged)。
+    """
+    folders: list[dict[str, Any]] = []
+    total = 0
+    tagged = 0
+    if root.exists():
+        for sub in sorted(root.iterdir()):
             if sub.is_dir():
                 cnt = 0
                 for f in sub.iterdir():
@@ -631,9 +633,17 @@ def stats_for_version(p: dict[str, Any], v: dict[str, Any]) -> dict[str, Any]:
                         continue
                     cnt += 1
                     if f.with_suffix(".txt").exists() or f.with_suffix(".json").exists():
-                        tagged_total += 1
-                train_folders.append({"name": sub.name, "image_count": cnt})
-                train_total += cnt
+                        tagged += 1
+                folders.append({"name": sub.name, "image_count": cnt})
+                total += cnt
+    return folders, total, tagged
+
+
+def stats_for_version(p: dict[str, Any], v: dict[str, Any]) -> dict[str, Any]:
+    """train / validation 图片与已打标计数 / reg 计数 / output 是否存在。"""
+    vdir = version_dir(p["id"], p["slug"], v["label"])
+    train_folders, train_total, tagged_total = _scan_caption_dataset(vdir / "train")
+    _, val_total, val_tagged = _scan_caption_dataset(vdir / "validation")
     reg_dir = vdir / "reg"
     reg_total = 0
     reg_meta_exists = False
@@ -649,6 +659,8 @@ def stats_for_version(p: dict[str, Any], v: dict[str, Any]) -> dict[str, Any]:
         "train_image_count": train_total,
         "tagged_image_count": tagged_total,
         "train_folders": train_folders,
+        "validation_image_count": val_total,
+        "validation_tagged_count": val_tagged,
         "reg_image_count": reg_total,
         "reg_meta_exists": reg_meta_exists,
         "has_output": has_output,
