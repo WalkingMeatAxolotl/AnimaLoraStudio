@@ -90,6 +90,14 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
+/** 等 Layout 首载完成：Probe 已渲染**且** setCtx effect 已 flush。慢环境（CI）下
+ * getProject 可能在 findByTestId 首次同步检查前就 resolve，元素直接命中、没走
+ * act 包裹的轮询路径 → passive effect 未跑、lastCtx 还是 null，必须显式再等。 */
+async function ready() {
+  await screen.findByTestId('active-vid')
+  await waitFor(() => expect(lastCtx).not.toBeNull())
+}
+
 describe('ProjectLayout 版本切换（#386）', () => {
   beforeEach(() => {
     lastCtx = null
@@ -103,7 +111,7 @@ describe('ProjectLayout 版本切换（#386）', () => {
     const d = deferred<{ active_version_id: number }>()
     activateVersionMock.mockReturnValue(d.promise)
     renderLayout()
-    await screen.findByTestId('active-vid')
+    await ready()
     expect(screen.getByTestId('active-vid')).toHaveTextContent('2')
 
     act(() => { lastCtx!.onSelectVersion(1) })
@@ -118,7 +126,7 @@ describe('ProjectLayout 版本切换（#386）', () => {
     const d = deferred<{ active_version_id: number }>()
     activateVersionMock.mockReturnValue(d.promise)
     renderLayout()
-    await screen.findByTestId('active-vid')
+    await ready()
 
     act(() => { lastCtx!.onSelectVersion(1) })
     expect(screen.getByTestId('active-vid')).toHaveTextContent('1')
@@ -135,7 +143,7 @@ describe('ProjectLayout 版本切换（#386）', () => {
     activateVersionMock.mockImplementation((_pid: number, vid: number) =>
       vid === 1 ? d1.promise : d2.promise)
     renderLayout()
-    await screen.findByTestId('active-vid')
+    await ready()
 
     act(() => { lastCtx!.onSelectVersion(1) })
     act(() => { lastCtx!.onSelectVersion(3) })
