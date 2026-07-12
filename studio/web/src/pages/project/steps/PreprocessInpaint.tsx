@@ -75,7 +75,6 @@ export default function PreprocessInpaintPage() {
   const [redoByImage, setRedoByImage] = useState<Record<string, InpaintStroke[]>>({})
   const [filter, setFilter] = useState<Filter>('all')
   const [busy, setBusy] = useState(false)
-  const [eyedropper, setEyedropper] = useState(false)
 
   const [brush, setBrush] = useLocalStorageState<BrushState>(
     'studio:inpaint:brush', DEFAULT_BRUSH,
@@ -200,7 +199,6 @@ export default function PreprocessInpaintPage() {
   const onPickColor = useCallback((hex: string) => {
     setBrush((prev) => ({ ...prev, color: hex }))
     pushRecentColor(hex)
-    setEyedropper(false)
   }, [setBrush, pushRecentColor])
 
   // ────── Save / restore ──────
@@ -404,7 +402,6 @@ export default function PreprocessInpaintPage() {
                     imageH={activeImage.h}
                     strokes={activeStrokes}
                     brush={brush}
-                    eyedropper={eyedropper}
                     onStrokeEnd={onStrokeEnd}
                     onPickColor={onPickColor}
                   />
@@ -413,8 +410,6 @@ export default function PreprocessInpaintPage() {
                 <ToolPanel
                   brush={brush}
                   setBrush={setBrush}
-                  eyedropper={eyedropper}
-                  setEyedropper={setEyedropper}
                   recentColors={recentColors}
                 />
               </div>
@@ -430,84 +425,40 @@ export default function PreprocessInpaintPage() {
 // Tool panel（right side）— PR-B 在顶部加「涂抹 | Mask」模式切换，布局不重排
 // ---------------------------------------------------------------------------
 
-function hexToRgb(hex: string): { r: number; g: number; b: number } {
-  const m = /^#?([0-9a-f]{6})$/i.exec(hex)
-  if (!m) return { r: 255, g: 255, b: 255 }
-  const v = parseInt(m[1], 16)
-  return { r: (v >> 16) & 255, g: (v >> 8) & 255, b: v & 255 }
-}
-
-function rgbToHex(r: number, g: number, b: number): string {
-  const c = (v: number) =>
-    Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')
-  return `#${c(r)}${c(g)}${c(b)}`
-}
-
 function ToolPanel({
   brush,
   setBrush,
-  eyedropper,
-  setEyedropper,
   recentColors,
 }: {
   brush: BrushState
   setBrush: (v: BrushState | ((prev: BrushState) => BrushState)) => void
-  eyedropper: boolean
-  setEyedropper: (v: boolean) => void
   recentColors: string[]
 }) {
   const { t } = useTranslation()
   const [recentOpen, setRecentOpen] = useState(false)
-  const rgb = hexToRgb(brush.color)
-  const setChannel = (ch: 'r' | 'g' | 'b', v: number) => {
-    const next = { ...rgb, [ch]: v }
-    setBrush((p) => ({ ...p, color: rgbToHex(next.r, next.g, next.b) }))
-  }
   return (
     <div className="bg-sunken border border-subtle rounded-md flex flex-col h-full min-h-0 overflow-hidden">
       <div className="flex flex-col gap-3 p-2.5 flex-1 min-h-0 overflow-y-auto">
-        {/* 颜色：行1 = 色轮（原生 picker）+ RGB 输入；行2 = 历史颜色（折叠）+ 取色 */}
+        {/* 颜色一行：caption + 色轮色块（原生 picker 自带取色器 / RGB 输入）
+            + 历史颜色 icon dropdown */}
         <div className="flex flex-col gap-1.5">
-          <h3 className="caption">{t('preprocessInpaint.brushColor')}</h3>
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-2">
+            <h3 className="caption m-0">{t('preprocessInpaint.brushColor')}</h3>
             <input
               type="color"
               value={brush.color}
               onChange={(e) => setBrush((p) => ({ ...p, color: e.target.value }))}
-              className="w-9 h-9 p-0 border border-subtle rounded cursor-pointer bg-transparent shrink-0"
+              className="w-10 h-7 p-0 border border-subtle rounded cursor-pointer bg-transparent shrink-0"
               title={t('preprocessInpaint.colorWheel')}
             />
-            {(['r', 'g', 'b'] as const).map((ch) => (
-              <label key={ch} className="flex flex-col items-center gap-0.5 text-[10px] text-fg-tertiary flex-1 min-w-0">
-                <span className="uppercase">{ch}</span>
-                <input
-                  type="number"
-                  min={0} max={255}
-                  value={rgb[ch]}
-                  onChange={(e) => setChannel(ch, Number(e.target.value) || 0)}
-                  className="input input-mono text-sm w-full min-w-0"
-                  style={{ padding: '2px 4px' }}
-                />
-              </label>
-            ))}
-          </div>
-          <div className="flex items-center gap-1.5">
+            <span className="flex-1" />
             <button
               type="button"
               onClick={() => setRecentOpen((v) => !v)}
               disabled={recentColors.length === 0}
-              className="btn btn-ghost btn-sm flex-1 min-w-0"
-            >
-              {t('preprocessInpaint.recentColors')} ({recentColors.length}) {recentOpen ? '▴' : '▾'}
-            </button>
-            <button
-              type="button"
-              onClick={() => setEyedropper(!eyedropper)}
-              className={
-                'btn btn-sm flex-1 min-w-0 ' + (eyedropper ? 'btn-primary' : 'btn-ghost')
-              }
-              title={t('preprocessInpaint.eyedropperHint')}
-            >💧 {t('preprocessInpaint.eyedropper')}</button>
+              className="btn btn-ghost btn-sm"
+              title={t('preprocessInpaint.recentColors')}
+            >🎨 {recentOpen ? '▴' : '▾'}</button>
           </div>
           {recentOpen && recentColors.length > 0 && (
             <div className="flex items-center gap-1 flex-wrap">
@@ -515,7 +466,10 @@ function ToolPanel({
                 <button
                   key={c}
                   type="button"
-                  onClick={() => setBrush((p) => ({ ...p, color: c }))}
+                  onClick={() => {
+                    setBrush((p) => ({ ...p, color: c }))
+                    setRecentOpen(false)
+                  }}
                   className={
                     'w-5 h-5 rounded border transition-transform hover:scale-110 ' +
                     (c === brush.color ? 'border-accent' : 'border-dim')
@@ -526,14 +480,10 @@ function ToolPanel({
               ))}
             </div>
           )}
-          <p className="text-[11px] text-fg-tertiary leading-snug m-0">
-            {t('preprocessInpaint.eyedropperNote')}
-          </p>
         </div>
 
-        {/* 笔刷 */}
+        {/* 笔刷参数 */}
         <div className="flex flex-col gap-1.5">
-          <h3 className="caption">{t('preprocessInpaint.brushTitle')}</h3>
           <label className="flex items-center gap-1.5 text-xs">
             <span className="text-fg-tertiary shrink-0 w-10">{t('preprocessInpaint.brushSize')}</span>
             <input

@@ -138,12 +138,11 @@ const InpaintCanvas = forwardRef<
     imageH: number
     strokes: InpaintStroke[]
     brush: { color: string; size: number; hardness: number }
-    eyedropper: boolean
     onStrokeEnd: (s: InpaintStroke) => void
     onPickColor: (hex: string) => void
   }
 >(function InpaintCanvas(
-  { imageUrl, imageW, imageH, strokes, brush, eyedropper, onStrokeEnd, onPickColor },
+  { imageUrl, imageW, imageH, strokes, brush, onStrokeEnd, onPickColor },
   ref,
 ) {
   const { t } = useTranslation()
@@ -355,7 +354,7 @@ const InpaintCanvas = forwardRef<
         return
       }
       if (e.button !== 0) return
-      if (eyedropper || e.altKey) {
+      if (e.altKey) {
         pickColor(e.clientX, e.clientY)
         return
       }
@@ -373,7 +372,7 @@ const InpaintCanvas = forwardRef<
       const ctx = canvasRef.current?.getContext('2d')
       if (ctx) strokePath(ctx, stroke)
     },
-    [loaded, eyedropper, pickColor, toImagePoint],
+    [loaded, pickColor, toImagePoint],
   )
 
   const onPointerMove = useCallback(
@@ -455,14 +454,13 @@ const InpaintCanvas = forwardRef<
           height={imageH}
           style={{ position: 'absolute', left: 0, top: 0, transformOrigin: '0 0' }}
         />
-        {/* 笔刷圆圈光标（吸管态换成方框） */}
+        {/* 笔刷圆圈光标 */}
         <div
           ref={cursorRef}
           className="absolute pointer-events-none rounded-full"
           style={{
             border: '1.5px solid rgba(255,255,255,0.9)',
             outline: '1px solid rgba(0,0,0,0.6)',
-            borderRadius: eyedropper ? '2px' : '9999px',
           }}
         />
         {!loaded && (
