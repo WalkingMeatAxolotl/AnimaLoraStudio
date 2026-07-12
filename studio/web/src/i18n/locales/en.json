@@ -2052,7 +2052,6 @@
     "brushHardness": "Hardness",
     "undo": "Undo",
     "redo": "Redo",
-    "footNote": "Saving overwrites the train-set image (converted to png); use Overview to restore the original.",
     "toastNotReady": "Image is still loading",
     "toastSaved": "Saved {{name}}",
     "toastSavedAll": "Saved {{n}} images",

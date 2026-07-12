@@ -2052,7 +2052,6 @@
     "brushHardness": "硬度",
     "undo": "撤销",
     "redo": "重做",
-    "footNote": "保存会覆盖训练集原图（统一转成 png）；需要恢复原图可到「总览」还原。",
     "toastNotReady": "图片还没加载完成",
     "toastSaved": "已保存 {{name}}",
     "toastSavedAll": "已保存 {{n}} 张",

@@ -438,94 +438,96 @@ function ToolPanel({
   const [recentOpen, setRecentOpen] = useState(false)
   return (
     <div className="bg-sunken border border-subtle rounded-md flex flex-col h-full min-h-0 overflow-hidden">
-      <div className="flex flex-col gap-3 p-2.5 flex-1 min-h-0 overflow-y-auto">
-        {/* 颜色一行：caption + 色轮色块（原生 picker 自带取色器 / RGB 输入）
-            + 历史颜色 icon dropdown */}
-        <div className="flex flex-col gap-1.5">
-          <div className="flex items-center gap-2">
-            <h3 className="caption m-0">{t('preprocessInpaint.brushColor')}</h3>
-            <input
-              type="color"
-              value={brush.color}
-              onChange={(e) => setBrush((p) => ({ ...p, color: e.target.value }))}
-              className="w-10 h-7 p-0 border border-subtle rounded cursor-pointer bg-transparent shrink-0"
-              title={t('preprocessInpaint.colorWheel')}
-            />
-            <span className="flex-1" />
-            <button
-              type="button"
-              onClick={() => setRecentOpen((v) => !v)}
-              disabled={recentColors.length === 0}
-              className="btn btn-ghost btn-sm"
-              title={t('preprocessInpaint.recentColors')}
-            >🎨 {recentOpen ? '▴' : '▾'}</button>
+      <div className="flex flex-col gap-2 p-2.5 flex-1 min-h-0 overflow-y-auto">
+        {/* 三行统一版式：label(w-10) + 主控件(flex-1) + 右侧控件(56px)。
+            色轮原生 picker 自带取色器 / RGB 输入；历史颜色 icon 点击下拉。 */}
+        <div className="flex items-center gap-1.5 text-xs">
+          <span className="text-fg-tertiary shrink-0 w-10">{t('preprocessInpaint.brushColor')}</span>
+          <input
+            type="color"
+            value={brush.color}
+            onChange={(e) => setBrush((p) => ({ ...p, color: e.target.value }))}
+            className="flex-1 min-w-0 h-7 p-0 border border-subtle rounded cursor-pointer bg-transparent"
+            title={t('preprocessInpaint.colorWheel')}
+          />
+          <button
+            type="button"
+            onClick={() => setRecentOpen((v) => !v)}
+            disabled={recentColors.length === 0}
+            className={
+              'btn btn-ghost btn-sm justify-center shrink-0 ' +
+              (recentOpen ? 'bg-overlay text-fg-primary' : '')
+            }
+            style={{ width: 56 }}
+            title={t('preprocessInpaint.recentColors')}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6a7 7 0 1 1 7 7 6.98 6.98 0 0 1-4.9-2l-1.42 1.42A8.96 8.96 0 0 0 13 21a9 9 0 0 0 0-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z" />
+            </svg>
+          </button>
+        </div>
+        {recentOpen && recentColors.length > 0 && (
+          <div className="flex items-center gap-1 flex-wrap">
+            {recentColors.map((c) => (
+              <button
+                key={c}
+                type="button"
+                onClick={() => {
+                  setBrush((p) => ({ ...p, color: c }))
+                  setRecentOpen(false)
+                }}
+                className={
+                  'w-5 h-5 rounded border transition-transform hover:scale-110 ' +
+                  (c === brush.color ? 'border-accent' : 'border-dim')
+                }
+                style={{ backgroundColor: c }}
+                title={c}
+              />
+            ))}
           </div>
-          {recentOpen && recentColors.length > 0 && (
-            <div className="flex items-center gap-1 flex-wrap">
-              {recentColors.map((c) => (
-                <button
-                  key={c}
-                  type="button"
-                  onClick={() => {
-                    setBrush((p) => ({ ...p, color: c }))
-                    setRecentOpen(false)
-                  }}
-                  className={
-                    'w-5 h-5 rounded border transition-transform hover:scale-110 ' +
-                    (c === brush.color ? 'border-accent' : 'border-dim')
-                  }
-                  style={{ backgroundColor: c }}
-                  title={c}
-                />
-              ))}
-            </div>
-          )}
-        </div>
+        )}
 
-        {/* 笔刷参数 */}
-        <div className="flex flex-col gap-1.5">
-          <label className="flex items-center gap-1.5 text-xs">
-            <span className="text-fg-tertiary shrink-0 w-10">{t('preprocessInpaint.brushSize')}</span>
-            <input
-              type="range"
-              min={1} max={400} step={1}
-              value={brush.size}
-              onChange={(e) => setBrush((p) => ({ ...p, size: Number(e.target.value) }))}
-              className="flex-1 min-w-0"
-            />
-            <input
-              type="number"
-              min={1} max={400}
-              value={brush.size}
-              onChange={(e) => setBrush((p) => ({
-                ...p, size: Math.max(1, Math.min(400, Number(e.target.value) || 1)),
-              }))}
-              className="input input-mono text-sm"
-              style={{ width: 56, padding: '2px 6px' }}
-            />
-          </label>
-          <label className="flex items-center gap-1.5 text-xs">
-            <span className="text-fg-tertiary shrink-0 w-10">{t('preprocessInpaint.brushHardness')}</span>
-            <input
-              type="range"
-              min={0} max={100} step={5}
-              value={Math.round(brush.hardness * 100)}
-              onChange={(e) => setBrush((p) => ({ ...p, hardness: Number(e.target.value) / 100 }))}
-              className="flex-1 min-w-0"
-            />
-            <span className="font-mono text-fg-secondary w-9 text-right">
-              {Math.round(brush.hardness * 100)}%
-            </span>
-          </label>
-        </div>
-
-      </div>
-
-      {/* 底部固定栏：保存语义提示（对齐裁剪页 AR 锁定固定栏位置） */}
-      <div className="shrink-0 border-t border-subtle px-2.5 py-2">
-        <p className="text-[11px] text-fg-tertiary leading-snug m-0">
-          {t('preprocessInpaint.footNote')}
-        </p>
+        <label className="flex items-center gap-1.5 text-xs">
+          <span className="text-fg-tertiary shrink-0 w-10">{t('preprocessInpaint.brushSize')}</span>
+          <input
+            type="range"
+            min={1} max={400} step={1}
+            value={brush.size}
+            onChange={(e) => setBrush((p) => ({ ...p, size: Number(e.target.value) }))}
+            className="flex-1 min-w-0"
+          />
+          <input
+            type="number"
+            min={1} max={400}
+            value={brush.size}
+            onChange={(e) => setBrush((p) => ({
+              ...p, size: Math.max(1, Math.min(400, Number(e.target.value) || 1)),
+            }))}
+            className="input input-mono text-sm shrink-0"
+            style={{ width: 56, padding: '2px 6px' }}
+          />
+        </label>
+        <label className="flex items-center gap-1.5 text-xs">
+          <span className="text-fg-tertiary shrink-0 w-10">{t('preprocessInpaint.brushHardness')}</span>
+          <input
+            type="range"
+            min={0} max={100} step={5}
+            value={Math.round(brush.hardness * 100)}
+            onChange={(e) => setBrush((p) => ({ ...p, hardness: Number(e.target.value) / 100 }))}
+            className="flex-1 min-w-0"
+          />
+          <input
+            type="number"
+            min={0} max={100} step={5}
+            value={Math.round(brush.hardness * 100)}
+            onChange={(e) => setBrush((p) => ({
+              ...p,
+              hardness: Math.max(0, Math.min(100, Number(e.target.value) || 0)) / 100,
+            }))}
+            className="input input-mono text-sm shrink-0"
+            style={{ width: 56, padding: '2px 6px' }}
+          />
+        </label>
       </div>
     </div>
   )
