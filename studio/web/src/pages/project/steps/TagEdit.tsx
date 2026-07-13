@@ -414,14 +414,14 @@ export default function TagEditPage() {
                 {activeFolder}/{activeName}
               </code>
             </div>
-            <div className="flex-1 relative bg-sunken p-2 min-h-0">
+            <div className="flex-1 relative p-2 min-h-0">
               {/* 原图分辨率 + zoom/pan（核对细节 tag 需要看清局部）；
-                  size=0 = 原图直出，本地服务加载可接受 */}
+                  size=0 = 原图直出，本地服务加载可接受。
+                  ZoomableImage 自带视口样式 + readout 条 */}
               <ZoomableImage
                 key={activeKey}
                 src={api.versionThumbUrl(project.id, activeVersion.id, 'train', activeName, activeFolder, 0)}
                 alt={activeName}
-                style={{ borderRadius: 4 }}
               />
             </div>
           </section>

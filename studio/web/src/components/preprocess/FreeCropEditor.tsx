@@ -322,7 +322,7 @@ export default function FreeCropEditor({
     <div className="flex flex-col w-full h-full overflow-hidden min-w-0 min-h-0 gap-1.5">
       <div
         ref={zp.wrapRef}
-        className="relative flex-1 min-h-0 overflow-hidden"
+        className="relative flex-1 min-h-0 overflow-hidden rounded border border-subtle bg-sunken"
         style={{ touchAction: 'none' }}
         onPointerDown={(e) => {
           if (zp.panPointerDown(e)) e.currentTarget.setPointerCapture(e.pointerId)

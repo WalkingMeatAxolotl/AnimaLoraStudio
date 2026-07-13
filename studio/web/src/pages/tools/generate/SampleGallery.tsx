@@ -35,13 +35,13 @@ export default function SampleGallery({ samples, taskId }: {
 
   return (
     <div className="flex-1 flex flex-col items-center gap-2 min-h-0">
-      <div className="flex-1 min-h-0 w-full rounded-md border border-subtle bg-sunken">
+      {/* ZoomableImage 自带视口边框 / 背景 + readout 条，外层不再包样式 */}
+      <div className="flex-1 min-h-0 w-full">
         <ZoomableImage
           key={fullUrl}
           src={fullUrl}
           alt={filename}
           onError={() => setErrored(true)}
-          style={{ borderRadius: 6 }}
         />
       </div>
       <div className="text-xs text-fg-tertiary font-mono truncate w-full text-center">

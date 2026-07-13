@@ -140,7 +140,6 @@ export default function FullscreenViewer({
           style={{
             width: 'calc(100vw - 80px)',
             height: 'calc(100vh - 160px)',
-            borderRadius: 6,
           }}
         />
         {caption && (

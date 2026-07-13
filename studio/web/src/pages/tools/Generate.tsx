@@ -1050,13 +1050,12 @@ export default function GeneratePage() {
                     />
                   ) : (
                     /* DiskEntry single / legacy XY（无 xyMeta） / CacheEntry single
-                       → 单图视图（内嵌缩放平移，useZoomPan） */
-                    <div className="flex-1 min-h-0 w-full rounded-md border border-subtle bg-sunken">
+                       → 单图视图（内嵌缩放平移；ZoomableImage 自带视口样式 + readout） */
+                    <div className="flex-1 min-h-0 w-full">
                       <ZoomableImage
                         key={historyOverride.id}
                         src={entryImageUrl(historyOverride, 0)}
                         alt=""
-                        style={{ borderRadius: 6 }}
                       />
                     </div>
                   )}
