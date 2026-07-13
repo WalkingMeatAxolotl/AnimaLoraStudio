@@ -29,6 +29,12 @@ interface Ctx {
 
 type Filter = 'all' | 'pending' | 'edited'
 
+/** 统一编辑历史条目：涂抹与 mask 笔画共用一条时间线。 */
+interface HistoryEntry {
+  kind: InpaintMode
+  stroke: InpaintStroke
+}
+
 interface BrushState {
   color: string
   size: number
@@ -74,13 +80,13 @@ export default function PreprocessInpaintPage() {
   useEffect(() => { void refreshWorkspace() }, [refreshWorkspace])
 
   // ────── Editor state ──────
+  // 统一编辑历史：涂抹与 mask 笔画混合入同一时间线 —— 模式只是笔刷，
+  // dirty / undo / 保存都跨模式共用，切模式不改变页面状态语义。
   const [mode, setMode] = useState<InpaintMode>('paint')
   const [maskErase, setMaskErase] = useState(false)
   const [activeName, setActiveName] = useState<string | null>(null)
-  const [strokesByImage, setStrokesByImage] = useState<Record<string, InpaintStroke[]>>({})
-  const [redoByImage, setRedoByImage] = useState<Record<string, InpaintStroke[]>>({})
-  const [maskStrokesByImage, setMaskStrokesByImage] = useState<Record<string, InpaintStroke[]>>({})
-  const [maskRedoByImage, setMaskRedoByImage] = useState<Record<string, InpaintStroke[]>>({})
+  const [historyByImage, setHistoryByImage] = useState<Record<string, HistoryEntry[]>>({})
+  const [redoByImage, setRedoByImage] = useState<Record<string, HistoryEntry[]>>({})
   const [maskCoverage, setMaskCoverage] = useState(0)
   const [filter, setFilter] = useState<Filter>('all')
   const [busy, setBusy] = useState(false)
@@ -106,37 +112,36 @@ export default function PreprocessInpaintPage() {
     () => images.find((im) => im.name === activeName) ?? null,
     [images, activeName],
   )
-  const isMask = mode === 'mask'
-  const activeStrokes = activeName
-    ? ((isMask ? maskStrokesByImage : strokesByImage)[activeName] ?? [])
-    : []
-  const activeRedo = activeName
-    ? ((isMask ? maskRedoByImage : redoByImage)[activeName] ?? [])
-    : []
+  const activeHistory = activeName ? (historyByImage[activeName] ?? []) : []
+  const activeRedo = activeName ? (redoByImage[activeName] ?? []) : []
+  const activePaintStrokes = useMemo(
+    () => activeHistory.filter((h) => h.kind === 'paint').map((h) => h.stroke),
+    [activeHistory],
+  )
+  const activeMaskStrokes = useMemo(
+    () => activeHistory.filter((h) => h.kind === 'mask').map((h) => h.stroke),
+    [activeHistory],
+  )
 
-  /** 当前模式的 dirty 图集合（保存全部 / filter / header 计数共用）。 */
-  const editedNames = useMemo(() => {
-    const bucket = isMask ? maskStrokesByImage : strokesByImage
-    return Object.entries(bucket)
-      .filter(([, s]) => s.length > 0)
-      .map(([n]) => n)
-  }, [isMask, maskStrokesByImage, strokesByImage])
+  /** dirty 图集合 = 任一数据面有未保存笔画（保存全部 / filter / 计数共用）。 */
+  const editedNames = useMemo(
+    () => Object.entries(historyByImage)
+      .filter(([, h]) => h.length > 0)
+      .map(([n]) => n),
+    [historyByImage],
+  )
 
   const counts = useMemo(() => {
-    const bucket = isMask ? maskStrokesByImage : strokesByImage
-    const edited = images.filter((im) => (bucket[im.name] ?? []).length > 0).length
+    const edited = images.filter((im) => (historyByImage[im.name] ?? []).length > 0).length
     return { all: images.length, pending: images.length - edited, edited }
-  }, [images, isMask, maskStrokesByImage, strokesByImage])
+  }, [images, historyByImage])
 
-  const filteredImages = useMemo(() => {
-    const bucket = isMask ? maskStrokesByImage : strokesByImage
-    return images.filter((im) => {
-      const n = (bucket[im.name] ?? []).length
-      if (filter === 'pending') return n === 0
-      if (filter === 'edited') return n > 0
-      return true
-    })
-  }, [images, filter, isMask, maskStrokesByImage, strokesByImage])
+  const filteredImages = useMemo(() => images.filter((im) => {
+    const n = (historyByImage[im.name] ?? []).length
+    if (filter === 'pending') return n === 0
+    if (filter === 'edited') return n > 0
+    return true
+  }), [images, filter, historyByImage])
 
   const rawUrl = useCallback((im: CropWorkspaceItem) => {
     const { folder, filename } = splitRel(im.name)
@@ -149,72 +154,62 @@ export default function PreprocessInpaintPage() {
     return api.maskUrl(project.id, vid, im.name) + `&_=${im.mask_mtime}`
   }, [project.id, vid])
 
-  // ────── Stroke mutations（按模式分发到对应桶）──────
+  // ────── Stroke mutations（统一时间线，undo/redo 跨模式）──────
   const pushRecentColor = useCallback((hex: string) => {
     setRecentColors((prev) => [hex, ...prev.filter((c) => c !== hex)].slice(0, 8))
   }, [setRecentColors])
 
-  const onStrokeEnd = useCallback((s: InpaintStroke) => {
+  const pushEntry = useCallback((entry: HistoryEntry) => {
     if (!activeName) return
-    setStrokesByImage((prev) => ({
+    setHistoryByImage((prev) => ({
       ...prev,
-      [activeName]: [...(prev[activeName] ?? []), s],
+      [activeName]: [...(prev[activeName] ?? []), entry],
     }))
     setRedoByImage((prev) => ({ ...prev, [activeName]: [] }))
+  }, [activeName])
+
+  const onStrokeEnd = useCallback((s: InpaintStroke) => {
+    pushEntry({ kind: 'paint', stroke: s })
     pushRecentColor(s.color)
-  }, [activeName, pushRecentColor])
+  }, [pushEntry, pushRecentColor])
 
   const onMaskStrokeEnd = useCallback((s: InpaintStroke) => {
-    if (!activeName) return
-    setMaskStrokesByImage((prev) => ({
-      ...prev,
-      [activeName]: [...(prev[activeName] ?? []), s],
-    }))
-    setMaskRedoByImage((prev) => ({ ...prev, [activeName]: [] }))
-  }, [activeName])
+    pushEntry({ kind: 'mask', stroke: s })
+  }, [pushEntry])
 
   const undo = useCallback(() => {
     if (!activeName) return
-    const setBucket = isMask ? setMaskStrokesByImage : setStrokesByImage
-    const setRedoBucket = isMask ? setMaskRedoByImage : setRedoByImage
-    setBucket((prev) => {
+    setHistoryByImage((prev) => {
       const cur = prev[activeName] ?? []
       if (cur.length === 0) return prev
       const last = cur[cur.length - 1]
-      setRedoBucket((r) => ({
+      setRedoByImage((r) => ({
         ...r,
         [activeName]: [...(r[activeName] ?? []), last],
       }))
       return { ...prev, [activeName]: cur.slice(0, -1) }
     })
-  }, [activeName, isMask])
+  }, [activeName])
 
   const redo = useCallback(() => {
     if (!activeName) return
-    const setBucket = isMask ? setMaskStrokesByImage : setStrokesByImage
-    const setRedoBucket = isMask ? setMaskRedoByImage : setRedoByImage
-    setRedoBucket((prev) => {
+    setRedoByImage((prev) => {
       const cur = prev[activeName] ?? []
       if (cur.length === 0) return prev
       const last = cur[cur.length - 1]
-      setBucket((s) => ({
-        ...s,
-        [activeName]: [...(s[activeName] ?? []), last],
+      setHistoryByImage((h) => ({
+        ...h,
+        [activeName]: [...(h[activeName] ?? []), last],
       }))
       return { ...prev, [activeName]: cur.slice(0, -1) }
     })
-  }, [activeName, isMask])
+  }, [activeName])
 
   const clearActive = useCallback(() => {
     if (!activeName) return
-    if (isMask) {
-      setMaskStrokesByImage((prev) => ({ ...prev, [activeName]: [] }))
-      setMaskRedoByImage((prev) => ({ ...prev, [activeName]: [] }))
-    } else {
-      setStrokesByImage((prev) => ({ ...prev, [activeName]: [] }))
-      setRedoByImage((prev) => ({ ...prev, [activeName]: [] }))
-    }
-  }, [activeName, isMask])
+    setHistoryByImage((prev) => ({ ...prev, [activeName]: [] }))
+    setRedoByImage((prev) => ({ ...prev, [activeName]: [] }))
+  }, [activeName])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -239,85 +234,82 @@ export default function PreprocessInpaintPage() {
     pushRecentColor(hex)
   }, [setBrush, pushRecentColor])
 
-  // ────── Save（按模式分发，§9 决策 2）──────
-  const clearSavedPaint = useCallback((name: string) => {
-    setStrokesByImage((prev) => {
-      const next = { ...prev }
-      delete next[name]
-      return next
-    })
-    setRedoByImage((prev) => {
-      const next = { ...prev }
-      delete next[name]
-      return next
-    })
+  // ────── Save（保存 = 该图全部未保存改动，两个数据面一次写完）──────
+  /** 保存成功后从历史滤掉对应数据面的 entries（redo 时间线随之作废）。 */
+  const clearSavedKind = useCallback((name: string, kind: InpaintMode) => {
+    setHistoryByImage((prev) => ({
+      ...prev,
+      [name]: (prev[name] ?? []).filter((h) => h.kind !== kind),
+    }))
+    setRedoByImage((prev) => ({ ...prev, [name]: [] }))
   }, [])
 
-  const clearSavedMask = useCallback((name: string) => {
-    setMaskStrokesByImage((prev) => {
-      const next = { ...prev }
-      delete next[name]
-      return next
-    })
-    setMaskRedoByImage((prev) => {
-      const next = { ...prev }
-      delete next[name]
-      return next
-    })
-  }, [])
-
-  const saveActivePaint = useCallback(async () => {
-    if (!activeName) return
-    const blob = await canvasRef.current?.exportBlob()
-    if (!blob) {
-      toast(t('preprocessInpaint.toastNotReady'), 'error')
-      return
+  /** 单图两面保存。涂抹先行 —— 产物可能改名（X.jpg→X.png），mask 的 PUT
+   *  必须用新 name（旧源文件已删，服务端按 name 校验源图存在）。
+   *  返回保存后的 name（无涂抹改动时原样）。 */
+  const saveImageBoth = useCallback(async (
+    im: CropWorkspaceItem,
+    paintStrokes: InpaintStroke[],
+    maskStrokes: InpaintStroke[],
+    exporters?: {
+      paint: () => Promise<Blob | null>
+      mask: () => Promise<{ blob: Blob; coverage: number } | null>
+    },
+  ): Promise<string> => {
+    let name = im.name
+    if (paintStrokes.length > 0) {
+      const blob = exporters
+        ? await exporters.paint()
+        : await renderInpaintedBlob(rawUrl(im), im.w, im.h, paintStrokes)
+      if (!blob) throw new Error('canvas not ready')
+      const res = await api.saveInpaintTrain(project.id, vid, name, blob)
+      clearSavedKind(im.name, 'paint')
+      name = res.name
     }
-    setBusy(true)
-    try {
-      const res = await api.saveInpaintTrain(project.id, vid, activeName, blob)
-      clearSavedPaint(activeName)
-      toast(t('preprocessInpaint.toastSaved', { name: res.name }), 'success')
-      await refreshWorkspace()
-      if (res.name !== activeName) setActiveName(res.name)
-      void reload()
-    } catch (e) {
-      toast(String(e), 'error')
-    } finally {
-      setBusy(false)
-    }
-  }, [activeName, project.id, vid, clearSavedPaint, refreshWorkspace, reload, toast, t])
-
-  const saveActiveMask = useCallback(async () => {
-    if (!activeName || !activeImage) return
-    setBusy(true)
-    try {
-      const res = await canvasRef.current?.exportMaskBlob()
-      if (res === undefined) {
-        toast(t('preprocessInpaint.toastNotReady'), 'error')
-        return
-      }
+    if (maskStrokes.length > 0) {
+      const res = exporters
+        ? await exporters.mask()
+        : await renderMaskBlob(maskBaseUrlFor(im), im.w, im.h, maskStrokes)
       if (res === null) {
-        // mask 为空 → 有旧文件则删（恢复全学），否则无事可做
-        if (activeImage.mask_mtime != null) {
-          await api.deleteMaskTrain(project.id, vid, activeName)
-          toast(t('preprocessInpaint.toastMaskCleared'), 'success')
-        }
+        if (im.mask_mtime != null) await api.deleteMaskTrain(project.id, vid, name)
       } else {
-        await api.saveMaskTrain(project.id, vid, activeName, res.blob)
-        toast(t('preprocessInpaint.toastMaskSaved', {
-          pct: Math.round(res.coverage * 100),
-        }), 'success')
+        await api.saveMaskTrain(project.id, vid, name, res.blob)
       }
-      clearSavedMask(activeName)
+      clearSavedKind(im.name, 'mask')
+    }
+    return name
+  }, [project.id, vid, rawUrl, maskBaseUrlFor, clearSavedKind])
+
+  const saveActive = useCallback(async () => {
+    if (!activeName || !activeImage) return
+    if (activeHistory.length === 0) return
+    setBusy(true)
+    try {
+      // 活动图用挂载中的 canvas 导出（所见即所得），非活动图才走离屏重放
+      const newName = await saveImageBoth(
+        activeImage, activePaintStrokes, activeMaskStrokes,
+        {
+          paint: () => canvasRef.current?.exportBlob() ?? Promise.resolve(null),
+          mask: async () => {
+            const r = await canvasRef.current?.exportMaskBlob()
+            return r ?? null
+          },
+        },
+      )
+      toast(t('preprocessInpaint.toastSaved', { name: newName }), 'success')
       await refreshWorkspace()
+      if (newName !== activeName) setActiveName(newName)
       void reload()
     } catch (e) {
       toast(String(e), 'error')
     } finally {
       setBusy(false)
     }
-  }, [activeName, activeImage, project.id, vid, clearSavedMask, refreshWorkspace, reload, toast, t])
+  }, [
+    activeName, activeImage, activeHistory.length,
+    activePaintStrokes, activeMaskStrokes,
+    saveImageBoth, refreshWorkspace, reload, toast, t,
+  ])
 
   const saveAll = useCallback(async () => {
     const dirty = editedNames
@@ -328,27 +320,14 @@ export default function PreprocessInpaintPage() {
     try {
       for (const name of dirty) {
         const im = images.find((i) => i.name === name)
-        if (!im) continue
+        const hist = historyByImage[name] ?? []
+        if (!im || hist.length === 0) continue
         try {
-          if (isMask) {
-            const strokes = maskStrokesByImage[name] ?? []
-            if (strokes.length === 0) continue
-            const res = await renderMaskBlob(maskBaseUrlFor(im), im.w, im.h, strokes)
-            if (res === null) {
-              if (im.mask_mtime != null) {
-                await api.deleteMaskTrain(project.id, vid, name)
-              }
-            } else {
-              await api.saveMaskTrain(project.id, vid, name, res.blob)
-            }
-            clearSavedMask(name)
-          } else {
-            const strokes = strokesByImage[name] ?? []
-            if (strokes.length === 0) continue
-            const blob = await renderInpaintedBlob(rawUrl(im), im.w, im.h, strokes)
-            await api.saveInpaintTrain(project.id, vid, name, blob)
-            clearSavedPaint(name)
-          }
+          await saveImageBoth(
+            im,
+            hist.filter((h) => h.kind === 'paint').map((h) => h.stroke),
+            hist.filter((h) => h.kind === 'mask').map((h) => h.stroke),
+          )
           ok++
         } catch {
           failed.push(name)
@@ -366,16 +345,15 @@ export default function PreprocessInpaintPage() {
       setBusy(false)
     }
   }, [
-    editedNames, images, isMask, maskStrokesByImage, strokesByImage,
-    maskBaseUrlFor, rawUrl, project.id, vid,
-    clearSavedMask, clearSavedPaint, refreshWorkspace, reload, toast, t,
+    editedNames, images, historyByImage, saveImageBoth,
+    refreshWorkspace, reload, toast, t,
   ])
 
-  /** 清除 mask（U5）：即时 DELETE 服务器文件 + 清本地笔画。 */
+  /** 清除 mask（U5）：即时 DELETE 服务器文件 + 从历史清掉 mask 笔画。 */
   const clearMask = useCallback(async () => {
     if (!activeName || !activeImage) return
     const hasServer = activeImage.mask_mtime != null
-    const hasLocal = (maskStrokesByImage[activeName] ?? []).length > 0
+    const hasLocal = activeMaskStrokes.length > 0
     if (!hasServer && !hasLocal) return
     if (hasServer && !(await confirm(
       t('preprocessInpaint.confirmClearMask'),
@@ -384,7 +362,7 @@ export default function PreprocessInpaintPage() {
     setBusy(true)
     try {
       if (hasServer) await api.deleteMaskTrain(project.id, vid, activeName)
-      clearSavedMask(activeName)
+      clearSavedKind(activeName, 'mask')
       await refreshWorkspace()
     } catch (e) {
       toast(String(e), 'error')
@@ -392,8 +370,8 @@ export default function PreprocessInpaintPage() {
       setBusy(false)
     }
   }, [
-    activeName, activeImage, maskStrokesByImage, project.id, vid,
-    confirm, clearSavedMask, refreshWorkspace, toast, t,
+    activeName, activeImage, activeMaskStrokes.length, project.id, vid,
+    confirm, clearSavedKind, refreshWorkspace, toast, t,
   ])
 
   // ────── Render ──────
@@ -412,24 +390,25 @@ export default function PreprocessInpaintPage() {
       subtitle={t('preprocessInpaint.subtitle')}
       actions={
         <>
+          {/* 保存 = 两个数据面的全部未保存改动；文案 / 可用性不随模式变 */}
           <button
             type="button"
             onClick={() => void saveAll()}
             disabled={busy || editedNames.length === 0}
             className="btn btn-ghost btn-sm"
           >
-            {t(isMask ? 'preprocessInpaint.saveAllMask' : 'preprocessInpaint.saveAll', { n: editedNames.length })}
+            {t('preprocessInpaint.saveAll', { n: editedNames.length })}
           </button>
           <button
             type="button"
-            onClick={() => void (isMask ? saveActiveMask() : saveActivePaint())}
-            disabled={busy || activeStrokes.length === 0}
+            onClick={() => void saveActive()}
+            disabled={busy || activeHistory.length === 0}
             className="btn btn-primary btn-sm"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
               <path d="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7l-4-4zm-5 16a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm3-10H5V5h10v4z" />
             </svg>
-            <span>{t(isMask ? 'preprocessInpaint.saveActiveMask' : 'preprocessInpaint.saveActive')}</span>
+            <span>{t('preprocessInpaint.saveActive')}</span>
           </button>
         </>
       }
@@ -462,7 +441,7 @@ export default function PreprocessInpaintPage() {
             <span className="flex-1" />
             <button
               onClick={undo}
-              disabled={!activeName || activeStrokes.length === 0}
+              disabled={!activeName || activeHistory.length === 0}
               className="btn btn-ghost btn-sm"
               title="Ctrl+Z"
             >↶ {t('preprocessInpaint.undo')}</button>
@@ -474,7 +453,7 @@ export default function PreprocessInpaintPage() {
             >↷ {t('preprocessInpaint.redo')}</button>
             <button
               onClick={clearActive}
-              disabled={!activeName || activeStrokes.length === 0}
+              disabled={!activeName || activeHistory.length === 0}
               className="btn btn-ghost btn-sm"
             >{t('preprocessInpaint.clearActive')}</button>
           </header>
@@ -509,9 +488,10 @@ export default function PreprocessInpaintPage() {
                   }}
                   emptyHint={t(`preprocessInpaint.filmstripEmpty.${filter}`)}
                   renderOverlay={(im) => {
-                    const hasPaint = (strokesByImage[im.name] ?? []).length > 0
+                    const hist = historyByImage[im.name] ?? []
+                    const hasPaint = hist.some((h) => h.kind === 'paint')
                     const hasMask = im.mask_mtime != null
-                      || (maskStrokesByImage[im.name] ?? []).length > 0
+                      || hist.some((h) => h.kind === 'mask')
                     if (!hasPaint && !hasMask) return null
                     return (
                       <span className="fs-badge">
@@ -529,8 +509,8 @@ export default function PreprocessInpaintPage() {
                     imageW={activeImage.w}
                     imageH={activeImage.h}
                     mode={mode}
-                    strokes={activeName ? (strokesByImage[activeName] ?? []) : []}
-                    maskStrokes={activeName ? (maskStrokesByImage[activeName] ?? []) : []}
+                    strokes={activePaintStrokes}
+                    maskStrokes={activeMaskStrokes}
                     maskBaseUrl={maskBaseUrlFor(activeImage)}
                     brush={brush}
                     maskErase={maskErase}
@@ -551,8 +531,7 @@ export default function PreprocessInpaintPage() {
                   setMaskErase={setMaskErase}
                   maskCoverage={maskCoverage}
                   canClearMask={
-                    activeImage.mask_mtime != null
-                    || (activeName ? (maskStrokesByImage[activeName] ?? []).length > 0 : false)
+                    activeImage.mask_mtime != null || activeMaskStrokes.length > 0
                   }
                   onClearMask={() => void clearMask()}
                   busy={busy}

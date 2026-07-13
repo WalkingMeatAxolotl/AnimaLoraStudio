@@ -2029,8 +2029,6 @@
     "subtitle": "Upscale / crop / inpaint — Inpaint tool",
     "saveActive": "Save current image",
     "saveAll": "Save all ({{n}})",
-    "saveActiveMask": "Save current mask",
-    "saveAllMask": "Save all masks ({{n}})",
     "mode": {
       "paint": "Paint",
       "mask": "Mask"
@@ -2043,8 +2041,6 @@
     "clearMask": "Clear mask",
     "confirmClearMask": "Clear the mask for this image? The saved mask file will be deleted and training resumes learning the full image.",
     "confirmClearMaskOk": "Clear",
-    "toastMaskSaved": "Mask saved ({{pct}}% covered)",
-    "toastMaskCleared": "Mask cleared",
     "clearActive": "Discard edits",
     "filter": {
       "all": "All",
