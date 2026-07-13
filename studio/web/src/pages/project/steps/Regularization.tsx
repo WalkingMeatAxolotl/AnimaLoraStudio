@@ -1734,8 +1734,8 @@ function regOrigUrl(pid: number, vid: number, rel: string): string {
   const idx = rel.lastIndexOf('/')
   const folder = idx >= 0 ? rel.slice(0, idx) : ''
   const name = idx >= 0 ? rel.slice(idx + 1) : rel
-  // 768px 预览（与 PP3 alt-hover 同尺寸）
-  return api.versionThumbUrl(pid, vid, 'reg', name, folder, 768)
+  // size=0 原图直出（modal 有缩放，缩略图放大即糊；与其他预览 modal 统一）
+  return api.versionThumbUrl(pid, vid, 'reg', name, folder, 0)
 }
 
 function formatAgo(unix: number, t: TFunction): string {
