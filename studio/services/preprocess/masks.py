@@ -29,10 +29,15 @@ MASKS_DIRNAME = "masks"
 def mask_path_for(train_dir: Path, rel_name: str) -> Path:
     """`1_data/X.jpg` → `{train_dir}/masks/1_data/X.png`。
 
-    调用方负责 rel_name 已通过 `_validate_rel_name`（严格两段）。
+    写入端点前置 `_validate_rel_name`（严格两段）；删除 / 查询路径还会被
+    manifest mutation 以**老式平铺 name**（无 folder 前缀，ADR 0004 兼容
+    数据）调到 —— 平铺 name 映射到 `masks/{stem}.png`，文件不存在时上层
+    no-op，不 crash。
     """
-    folder, filename = rel_name.split("/", 1)
-    return train_dir / MASKS_DIRNAME / folder / f"{Path(filename).stem}.png"
+    if "/" in rel_name:
+        folder, filename = rel_name.split("/", 1)
+        return train_dir / MASKS_DIRNAME / folder / f"{Path(filename).stem}.png"
+    return train_dir / MASKS_DIRNAME / f"{Path(rel_name).stem}.png"
 
 
 def write_mask(
