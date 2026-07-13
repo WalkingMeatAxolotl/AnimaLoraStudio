@@ -498,7 +498,7 @@ export default function PreprocessPage() {
           src={api.versionThumbUrl(
             project.id, vid, 'train',
             visibleRows[previewIdx].filename,
-            visibleRows[previewIdx].folder, 1600,
+            visibleRows[previewIdx].folder, 0,
           ) + `&_=${visibleRows[previewIdx].mtime}`}
           caption={`${visibleRows[previewIdx].name} · ${
             visibleRows[previewIdx].status === 'processed' ? '✓ 已处理' : '⊘ 未处理'

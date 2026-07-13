@@ -227,7 +227,7 @@ export default function PreprocessDuplicatesPage() {
         const filename = i >= 0 ? rel.slice(i + 1) : rel
         return (
         <ImagePreviewModal
-          src={api.versionThumbUrl(project.id, vid, 'train', filename, folder, 1600)}
+          src={api.versionThumbUrl(project.id, vid, 'train', filename, folder, 0)}
           caption={rel}
           index={previewIdx}
           total={previewNames.length}

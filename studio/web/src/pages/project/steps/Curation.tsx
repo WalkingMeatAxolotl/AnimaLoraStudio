@@ -525,11 +525,11 @@ export default function CurationPage() {
   const openLeftPreview = (name: string) => {
     setPreview({
       side: 'left', name,
-      url: api.projectThumbUrl(project.id, name, 'download', 1600),
+      url: api.projectThumbUrl(project.id, name, 'download', 0),
       caption: name,
       list: leftSortedNames,
       index: leftSortedNames.indexOf(name),
-      resolve: (n) => api.projectThumbUrl(project.id, n, 'download', 1600),
+      resolve: (n) => api.projectThumbUrl(project.id, n, 'download', 0),
     })
   }
   const openRightPreview = (name: string) => {
@@ -538,23 +538,23 @@ export default function CurationPage() {
       const folder = valFolderByName.get(name) ?? ''
       setPreview({
         side: 'right', name, folder,
-        url: api.versionThumbUrl(project.id, versionId, 'validation', name, folder, 1600),
+        url: api.versionThumbUrl(project.id, versionId, 'validation', name, folder, 0),
         caption: name,
         list: rightSortedNames,
         index: rightSortedNames.indexOf(name),
         resolve: (n) =>
-          api.versionThumbUrl(project.id, versionId, 'validation', n, valFolderByName.get(n) ?? '', 1600),
+          api.versionThumbUrl(project.id, versionId, 'validation', n, valFolderByName.get(n) ?? '', 0),
       })
       return
     }
     const folder = rightFolder
     setPreview({
       side: 'right', name, folder,
-      url: api.versionThumbUrl(project.id, versionId, 'train', name, folder, 1600),
+      url: api.versionThumbUrl(project.id, versionId, 'train', name, folder, 0),
       caption: `${folder}/${name}`,
       list: rightSortedNames,
       index: rightSortedNames.indexOf(name),
-      resolve: (n) => api.versionThumbUrl(project.id, versionId, 'train', n, folder, 1600),
+      resolve: (n) => api.versionThumbUrl(project.id, versionId, 'train', n, folder, 0),
     })
   }
   const stepPreview = (delta: number) => {

@@ -511,8 +511,10 @@ export default function PreprocessCropPage() {
                             const i = activeImage.name.lastIndexOf('/')
                             const folder = i >= 0 ? activeImage.name.slice(0, i) : ''
                             const filename = i >= 0 ? activeImage.name.slice(i + 1) : activeImage.name
+                            // size=0 原图直出：画布有缩放后 1024 缩略图放大即糊，
+                            // 精确裁边缘需要原图清晰度
                             return api.versionThumbUrl(
-                              project.id, vid, 'train', filename, folder, 1024,
+                              project.id, vid, 'train', filename, folder, 0,
                             ) + `&_=${activeImage.mtime}`
                           })(),
                         }}

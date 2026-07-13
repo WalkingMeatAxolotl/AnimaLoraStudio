@@ -774,10 +774,10 @@ function TrainSetCard({ project, version }: { project: ProjectDetail; version: V
     return out
   }, [view, version, project.id, selectedFolder])
 
-  // 预览大图 src（1600 大小）
+  // 预览大图 src（size=0 原图直出 —— modal 有缩放，缩略图放大会糊）
   const previewItem = previewIdx != null ? items[previewIdx] : null
   const previewSrc = previewItem && version
-    ? api.versionThumbUrl(project.id, version.id, 'train', previewItem.pureName, previewItem.folder, 1600)
+    ? api.versionThumbUrl(project.id, version.id, 'train', previewItem.pureName, previewItem.folder, 0)
     : ''
 
   const actionDisabled = !canGoVersionPhase(version, 'curating')

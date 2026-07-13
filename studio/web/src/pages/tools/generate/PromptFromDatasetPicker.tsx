@@ -180,7 +180,7 @@ export default function PromptFromDatasetPicker({
   const hoveredCaption = hoveredKey
     ? captions.find((c) => `${c.folder}/${c.name}` === hoveredKey) ?? null
     : null
-  // 当前预览图的定位信息，缩览图（512）和点击放大（1600）共用；null = 无图可显示。
+  // 当前预览图的定位信息，缩览图（512）和点击放大（原图）共用；null = 无图可显示。
   const previewMeta =
     hoveredCaption && loaded
       ? { pid: loaded.pid, vid: loaded.vid, name: hoveredCaption.name, folder: hoveredCaption.folder }
@@ -381,7 +381,7 @@ export default function PromptFromDatasetPicker({
     </div>
     {zoomMeta && (
       <ImagePreviewModal
-        src={api.versionThumbUrl(zoomMeta.pid, zoomMeta.vid, 'train', zoomMeta.name, zoomMeta.folder, 1600)}
+        src={api.versionThumbUrl(zoomMeta.pid, zoomMeta.vid, 'train', zoomMeta.name, zoomMeta.folder, 0)}
         caption={zoomMeta.name}
         onClose={() => setZoomMeta(null)}
       />

@@ -129,8 +129,8 @@ export default function PreprocessOverviewPage() {
           name: im.name,
           thumbUrl: trainThumb(256),
           // split 预览：左 = download 原图（origin 平铺名），右 = train 派生
-          previewUrl: api.projectThumbUrl(project.id, im.source, 'download', 1600, im.mtime, true),
-          compareSrc: trainThumb(1600),
+          previewUrl: api.projectThumbUrl(project.id, im.source, 'download', 0, im.mtime, true),
+          compareSrc: trainThumb(0),
           badge: t('preprocessOverview.badgeProcessed'),
           caption: `${im.name} · ${im.w}×${im.h}`,
         }
@@ -139,7 +139,7 @@ export default function PreprocessOverviewPage() {
       return {
         name: im.name,
         thumbUrl: trainThumb(256),
-        previewUrl: trainThumb(1600),
+        previewUrl: trainThumb(0),
         caption: `${im.name} · ${im.w}×${im.h}`,
       }
     }),
@@ -150,7 +150,7 @@ export default function PreprocessOverviewPage() {
       name: im.name,
       // duplicate_removed 物理已删；缩略图走 download bucket + im.source (origin)
       thumbUrl: api.projectThumbUrl(project.id, im.source, 'download', 256, im.mtime, true),
-      previewUrl: api.projectThumbUrl(project.id, im.source, 'download', 1600, im.mtime, true),
+      previewUrl: api.projectThumbUrl(project.id, im.source, 'download', 0, im.mtime, true),
       caption: im.w && im.h ? `${im.source} · ${im.w}×${im.h}` : im.source,
     })),
     [removed, project.id],

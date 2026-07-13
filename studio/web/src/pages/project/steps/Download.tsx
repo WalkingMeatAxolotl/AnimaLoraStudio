@@ -327,7 +327,7 @@ export default function DownloadPage() {
 
     {previewIdx !== null && files[previewIdx] && (
       <ImagePreviewModal
-        src={api.projectThumbUrl(project.id, files[previewIdx].name, 'download', 1600)}
+        src={api.projectThumbUrl(project.id, files[previewIdx].name, 'download', 0)}
         caption={files[previewIdx].name}
         index={previewIdx}
         total={files.length}

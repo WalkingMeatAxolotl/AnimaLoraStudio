@@ -124,7 +124,7 @@ describe('PromptFromDatasetPicker — thumbnail / pid·vid 同步', () => {
     expect(src).not.toContain('/versions/12/thumb')
   })
 
-  it('点击底部大图预览放大成全屏 modal（复用 ImagePreviewModal，请求 1600 大图）', async () => {
+  it('点击底部大图预览放大成全屏 modal（复用 ImagePreviewModal，请求原图）', async () => {
     vi.spyOn(api, 'listProjects').mockResolvedValue(projects)
     vi.spyOn(api, 'getProject').mockResolvedValue(projectDetail)
     vi.spyOn(api, 'listCaptionsFull').mockResolvedValue({ folder: null, items: [cap('shot.png', 'x')] })
@@ -136,7 +136,7 @@ describe('PromptFromDatasetPicker — thumbnail / pid·vid 同步', () => {
     await user.hover(screen.getByText('shot.png'))
     const zoomBtn = await screen.findByRole('button', { name: '点击放大' })
 
-    // 点击放大按钮 → 全屏 ImagePreviewModal，主图 alt=文件名、URL 请求 1600 大图 + 当前 (pid,vid)。
+    // 点击放大按钮 → 全屏 ImagePreviewModal，主图 alt=文件名、URL 请求原图（size=0）+ 当前 (pid,vid)。
     // 用 fireEvent.click 而非 user.click：userEvent 点击前会把指针移出再移入目标，途中触发 picker
     // 根节点 onMouseLeave 清掉 hoveredKey，使放大按钮在点击前卸载（真实浏览器里指针从列表行到大图
     // 连续移动、始终在 picker 内，根节点 mouseleave 不会触发，故属模拟 artifact）。这里只验证
@@ -146,7 +146,7 @@ describe('PromptFromDatasetPicker — thumbnail / pid·vid 同步', () => {
     const src = modalImg.getAttribute('src') ?? ''
     expect(src).toContain('/projects/1/versions/11/thumb')
     expect(src).toContain('name=shot.png')
-    expect(src).toContain('size=1600')
+    expect(src).toContain('size=0')
 
     // Esc 关闭（ImagePreviewModal 的键盘监听；picker 自身不监听 Esc，不冲突）
     await user.keyboard('{Escape}')
