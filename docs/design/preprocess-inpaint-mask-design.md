@@ -193,13 +193,37 @@ StepShell
 - 场景 1 提示（文档 / tooltip 级）：取色实心涂抹优于模糊；纯色块位置颜色
   不一致时学入风险低。
 
-## 9. Open questions（不阻塞 PR-A）
+## 9. PR-B 实现决策（2026-07-12 讨论定稿）
+
+1. **拆两个 PR**：
+   - **B1（studio 层，数据面闭环）**：mask 笔刷 UI + mask 读写端点 + 预处理
+     变换跟随（§7 矩阵）+ bundle 导出打包。合并后 mask 能画能存能跟预处理走，
+     训练不消费——先合先用，攒 mask 数据。
+   - **B2（训练器）**：dataset 变换同步、npz 缓存、loss 加权、config 开关、
+     NaViT gate。对齐 #389/#390 拆写读路径的先例。
+2. **保存交互**：涂抹笔画与 mask 双数据面共用「保存当前图 / 保存全部」按钮，
+   按当前模式分发（涂抹 → 整图上传；Mask → 灰度 PNG 写 mask 端点）。未保存
+   状态双桶独立（`strokesByImage` / `maskStrokesByImage`，对齐 Generate 页
+   LoRA 双桶先例）。
+3. **npz 缓存失效三条**（漏一条就训到旧 mask，全部进 `_is_cache_valid`）：
+   mask 存在但 npz 无 mask 键（新画）；mask mtime 新于 npz（重画）；mask 已删
+   但 npz 有 mask 键（清除）。下采样时机 = 编码期存 latent 分辨率进 npz
+   （对齐 `latent_flipped` 先例）。
+4. **latent 下采样插值 = area**（每 latent 位置 = 8×8 像素块 mask 均值），与
+   灰度连续权重语义自洽。不用 NEAREST（边缘跳变）/ max-pool（一像素吞整个
+   latent 位置）。注意与 §7 预处理跟随中 mask 图像本身的几何变换（NEAREST，
+   防灰度值被插值污染）是两回事。
+5. **config**：`masked_loss: bool` 放 loss 相关 group（与 `loss_weighting`
+   相邻）。UI：masks/ 非空且开关关闭 → 提示不代开；开关开但无 mask 文件 →
+   训练器 log 一条，不报错。
+6. **B2 合并门槛**：本地小 A/B（同数据集同 seed，手部 mask vs 无 mask），
+   确认 (a) loss 曲线正常无 NaN；(b) 出图 mask 区域不带崩坏特征。不达标则
+   B2 挂待判（先例：FFL）。
+
+## 10. Open questions（不阻塞）
 
 1. AI inpainting（LaMa / sd inpaint）作为第三种笔刷的可能性——依赖新模型下载，
    留待场景 1 用出真实需求后评估。
 2. 多分辨率训练（issue #246）落地后 `1024px_` 覆盖文件夹与 masks/ 镜像关系
    需要在该 feature 实现时一并确认。
-3. 打标页 / 画廊的 mask 角标展示范围（PR-B 内做最小版还是单独 polish）。
-4. npz 缓存内 mask 下采样时机：编码期存 latent 分辨率（读快、缓存失效逻辑重）
-   vs 训练期实时下采样原尺寸 mask（缓存简单、每步多一次 resize）——PR-B 实现
-   时按代码复杂度取舍，倾向前者（对齐 `latent_flipped` 先例）。
+3. 打标页 / 画廊的 mask 角标展示范围（B1 内做最小版还是单独 polish）。
