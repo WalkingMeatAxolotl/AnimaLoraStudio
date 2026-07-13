@@ -7,6 +7,7 @@ import {
   useState,
 } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useZoomPan } from '../../lib/useZoomPan'
 
 /** 一笔涂抹 / mask 笔画。坐标 / 直径都是**原图像素**单位 —— 视图缩放只影响
  *  显示，笔画数据与 zoom 无关，离屏重放（保存全部）才能与画布所见一致。 */
@@ -254,13 +255,7 @@ function toHex(r: number, g: number, b: number): string {
   return `#${c(r)}${c(g)}${c(b)}`
 }
 
-interface View {
-  scale: number
-  tx: number
-  ty: number
-}
-
-/** 涂抹主画布：原图分辨率 canvas + CSS transform 视图。
+/** 涂抹主画布：原图分辨率 canvas + useZoomPan 视口（空格 / 中键 pan）。
  *
  *  两个数据面（双桶受控）：
  *  - 涂抹笔画（strokes）：直接覆盖像素，重绘顺序 img → strokes。
@@ -268,8 +263,7 @@ interface View {
  *    maskLayer（红色 alpha 位图），主画布最后以半透明叠加显示。
  *
  *  绘制中在主画布增量画预览段（mask 橡皮擦以半透明白示意），pointerup
- *  提交后由 props 变化触发全量重绘校正。视图状态放 ref 直改 DOM
- *  transform —— pan/zoom 高频路径不走 React 渲染。
+ *  提交后由 props 变化触发全量重绘校正。
  */
 const InpaintCanvas = forwardRef<
   InpaintCanvasHandle,
@@ -297,7 +291,6 @@ const InpaintCanvas = forwardRef<
   ref,
 ) {
   const { t } = useTranslation()
-  const wrapRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const cursorRef = useRef<HTMLDivElement | null>(null)
   const imgRef = useRef<HTMLImageElement | null>(null)
@@ -306,14 +299,14 @@ const InpaintCanvas = forwardRef<
   const maskLayerRef = useRef<HTMLCanvasElement | null>(null)
   const maskBaseRef = useRef<HTMLCanvasElement | null>(null)
 
-  const viewRef = useRef<View>({ scale: 1, tx: 0, ty: 0 })
-  const interactedRef = useRef(false)
-  const spaceRef = useRef(false)
-  const panRef = useRef<{ x: number; y: number } | null>(null)
+  // 视口（zoom / pan / fit / 坐标换算）走共享 hook；画笔类场景左键留给
+  // 画笔（primaryButtonPans 缺省 false），pan 由空格 / 中键触发。
+  const zp = useZoomPan({ contentW: imageW, contentH: imageH })
+  const { wrapRef, contentRef, toContentPoint } = zp
+
   // 落笔时锁定归属（paint / mask），松手按此提交 —— 不事后按 mode 猜
   const drawingRef = useRef<{ stroke: InpaintStroke; target: InpaintMode } | null>(null)
 
-  const [zoomPct, setZoomPct] = useState(100)
   const [loaded, setLoaded] = useState(false)
   const [maskBaseTick, setMaskBaseTick] = useState(0)
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null)
@@ -345,15 +338,6 @@ const InpaintCanvas = forwardRef<
     return holder.current
   }, [imageW, imageH])
 
-  const applyView = useCallback(() => {
-    const v = viewRef.current
-    const el = canvasRef.current
-    if (el) {
-      el.style.transform = `translate(${v.tx}px, ${v.ty}px) scale(${v.scale})`
-    }
-    setZoomPct(Math.round(v.scale * 100))
-  }, [])
-
   const redraw = useCallback(() => {
     const canvas = canvasRef.current
     const img = imgRef.current
@@ -373,20 +357,6 @@ const InpaintCanvas = forwardRef<
     }
   }, [])
 
-  const fit = useCallback(() => {
-    const wrap = wrapRef.current
-    if (!wrap) return
-    const rect = wrap.getBoundingClientRect()
-    if (rect.width < 10 || rect.height < 10) return
-    const scale = Math.min(rect.width / imageW, rect.height / imageH) * 0.98
-    viewRef.current = {
-      scale,
-      tx: (rect.width - imageW * scale) / 2,
-      ty: (rect.height - imageH * scale) / 2,
-    }
-    applyView()
-  }, [imageW, imageH, applyView])
-
   // 图片加载（imageUrl 变化 = 换图或保存后 mtime 刷新）
   useEffect(() => {
     let cancelled = false
@@ -397,8 +367,7 @@ const InpaintCanvas = forwardRef<
         if (cancelled) return
         imgRef.current = img
         setLoaded(true)
-        interactedRef.current = false
-        fit()
+        zp.fit()
         redraw()
       },
       () => {
@@ -408,7 +377,8 @@ const InpaintCanvas = forwardRef<
     return () => {
       cancelled = true
     }
-  }, [imageUrl, fit, redraw])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [imageUrl, zp.fit, redraw])
 
   // mask 底图加载（URL 变化 = 换图 / 保存后刷新 / 本地清除→null）
   useEffect(() => {
@@ -446,68 +416,6 @@ const InpaintCanvas = forwardRef<
     redraw()
   }, [strokes, ensureLayer, redraw])
 
-  // 容器 resize：用户没手动动过视图时保持 fit
-  useEffect(() => {
-    const wrap = wrapRef.current
-    if (!wrap) return
-    const ro = new ResizeObserver(() => {
-      if (!interactedRef.current) fit()
-    })
-    ro.observe(wrap)
-    return () => ro.disconnect()
-  }, [fit])
-
-  // wheel zoom —— React onWheel 是 passive，必须手动挂 non-passive 才能 preventDefault
-  useEffect(() => {
-    const wrap = wrapRef.current
-    if (!wrap) return
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault()
-      const rect = wrap.getBoundingClientRect()
-      const mx = e.clientX - rect.left
-      const my = e.clientY - rect.top
-      const v = viewRef.current
-      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15
-      const next = Math.min(32, Math.max(0.02, v.scale * factor))
-      viewRef.current = {
-        scale: next,
-        tx: mx - ((mx - v.tx) * next) / v.scale,
-        ty: my - ((my - v.ty) * next) / v.scale,
-      }
-      interactedRef.current = true
-      applyView()
-      updateCursor(e.clientX, e.clientY)
-    }
-    wrap.addEventListener('wheel', onWheel, { passive: false })
-    return () => wrap.removeEventListener('wheel', onWheel)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [applyView])
-
-  // 空格 = pan 修饰键（表单元素聚焦时不劫持）
-  useEffect(() => {
-    const down = (e: KeyboardEvent) => {
-      if (e.code !== 'Space') return
-      const el = e.target as HTMLElement | null
-      if (
-        el &&
-        (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
-      ) {
-        return
-      }
-      spaceRef.current = true
-      e.preventDefault()
-    }
-    const up = (e: KeyboardEvent) => {
-      if (e.code === 'Space') spaceRef.current = false
-    }
-    window.addEventListener('keydown', down)
-    window.addEventListener('keyup', up)
-    return () => {
-      window.removeEventListener('keydown', down)
-      window.removeEventListener('keyup', up)
-    }
-  }, [])
-
   useImperativeHandle(ref, () => ({
     exportBlob: async () => {
       const canvas = canvasRef.current
@@ -538,33 +446,33 @@ const InpaintCanvas = forwardRef<
     },
   }), [ensureLayer])
 
-  const toImagePoint = useCallback((clientX: number, clientY: number) => {
-    const wrap = wrapRef.current
-    if (!wrap) return null
-    const rect = wrap.getBoundingClientRect()
-    const v = viewRef.current
-    return {
-      x: (clientX - rect.left - v.tx) / v.scale,
-      y: (clientY - rect.top - v.ty) / v.scale,
-    }
-  }, [])
-
+  // 笔刷圆圈光标（ref 直改 style；直径 = 笔刷 × 当前 scale）
+  const lastPointerRef = useRef<{ x: number; y: number } | null>(null)
   const updateCursor = useCallback((clientX: number, clientY: number) => {
     const cur = cursorRef.current
     const wrap = wrapRef.current
     if (!cur || !wrap) return
+    lastPointerRef.current = { x: clientX, y: clientY }
     const rect = wrap.getBoundingClientRect()
-    const d = brushRef.current.size * viewRef.current.scale
+    const d = brushRef.current.size * zp.viewRef.current.scale
     cur.style.left = `${clientX - rect.left - d / 2}px`
     cur.style.top = `${clientY - rect.top - d / 2}px`
     cur.style.width = `${d}px`
     cur.style.height = `${d}px`
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // wheel 缩放后光标直径要跟 scale 变（hook 不知道光标 —— 用 zoomPct 变化
+  // + 最后一次指针位置补一次更新）
+  useEffect(() => {
+    const p = lastPointerRef.current
+    if (p) updateCursor(p.x, p.y)
+  }, [zp.zoomPct, updateCursor])
 
   const pickColor = useCallback(
     (clientX: number, clientY: number) => {
       const canvas = canvasRef.current
-      const pt = toImagePoint(clientX, clientY)
+      const pt = toContentPoint(clientX, clientY)
       if (!canvas || !pt) return
       const x = Math.round(pt.x)
       const y = Math.round(pt.y)
@@ -574,23 +482,21 @@ const InpaintCanvas = forwardRef<
       const d = ctx.getImageData(x, y, 1, 1).data
       onPickColor(toHex(d[0], d[1], d[2]))
     },
-    [toImagePoint, onPickColor],
+    [toContentPoint, onPickColor],
   )
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
       if (!loaded) return
       e.currentTarget.setPointerCapture(e.pointerId)
-      if (spaceRef.current || e.button === 1) {
-        panRef.current = { x: e.clientX, y: e.clientY }
-        return
-      }
+      // pan 手势（空格 / 中键）交给视口 hook；本组件只管画笔
+      if (zp.panPointerDown(e)) return
       if (e.button !== 0) return
       if (e.altKey && modeRef.current === 'paint') {
         pickColor(e.clientX, e.clientY)
         return
       }
-      const pt = toImagePoint(e.clientX, e.clientY)
+      const pt = toContentPoint(e.clientX, e.clientY)
       if (!pt) return
       const b = brushRef.current
       const isMask = modeRef.current === 'mask'
@@ -618,36 +524,21 @@ const InpaintCanvas = forwardRef<
         ctx.restore()
       }
     },
-    [loaded, pickColor, toImagePoint],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [loaded, pickColor, toContentPoint, zp.panPointerDown],
   )
 
   const onPointerMove = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
       updateCursor(e.clientX, e.clientY)
-      const pt = toImagePoint(e.clientX, e.clientY)
+      const pt = toContentPoint(e.clientX, e.clientY)
       if (pt) {
         setCursorPos({
           x: Math.max(0, Math.min(imageW, Math.round(pt.x))),
           y: Math.max(0, Math.min(imageH, Math.round(pt.y))),
         })
       }
-      if (panRef.current) {
-        const dx = e.clientX - panRef.current.x
-        const dy = e.clientY - panRef.current.y
-        panRef.current = { x: e.clientX, y: e.clientY }
-        viewRef.current = {
-          ...viewRef.current,
-          tx: viewRef.current.tx + dx,
-          ty: viewRef.current.ty + dy,
-        }
-        interactedRef.current = true
-        const el = canvasRef.current
-        if (el) {
-          const v = viewRef.current
-          el.style.transform = `translate(${v.tx}px, ${v.ty}px) scale(${v.scale})`
-        }
-        return
-      }
+      if (zp.panPointerMove(e)) return
       const drawing = drawingRef.current
       if (!drawing || !pt) return
       const stroke = drawing.stroke
@@ -676,17 +567,19 @@ const InpaintCanvas = forwardRef<
         ctx.restore()
       }
     },
-    [updateCursor, toImagePoint, imageW, imageH],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [updateCursor, toContentPoint, imageW, imageH, zp.panPointerMove],
   )
 
   const endStroke = useCallback(() => {
-    panRef.current = null
+    zp.endPan()
     const drawing = drawingRef.current
     drawingRef.current = null
     if (!drawing) return
     if (drawing.target === 'mask') onMaskStrokeEnd(drawing.stroke)
     else onStrokeEnd(drawing.stroke)
-  }, [onStrokeEnd, onMaskStrokeEnd])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onStrokeEnd, onMaskStrokeEnd, zp.endPan])
 
   return (
     <div className="flex flex-col h-full min-h-0 gap-1.5">
@@ -708,7 +601,10 @@ const InpaintCanvas = forwardRef<
         }}
       >
         <canvas
-          ref={canvasRef}
+          ref={(el) => {
+            canvasRef.current = el
+            contentRef.current = el
+          }}
           width={imageW}
           height={imageH}
           style={{ position: 'absolute', left: 0, top: 0, transformOrigin: '0 0' }}
@@ -733,33 +629,16 @@ const InpaintCanvas = forwardRef<
 
       {/* readout 细条：zoom / 视图操作 / 光标像素坐标 */}
       <div className="shrink-0 flex items-center gap-2 text-[11px] font-mono text-fg-tertiary px-1">
-        <span>{zoomPct}%</span>
+        <span>{zp.zoomPct}%</span>
         <button
           type="button"
           className="px-1.5 py-0.5 rounded hover:bg-overlay hover:text-fg-primary"
-          onClick={() => {
-            interactedRef.current = false
-            fit()
-          }}
+          onClick={() => zp.fit()}
         >{t('preprocessInpaint.zoomFit')}</button>
         <button
           type="button"
           className="px-1.5 py-0.5 rounded hover:bg-overlay hover:text-fg-primary"
-          onClick={() => {
-            const wrap = wrapRef.current
-            if (!wrap) return
-            const rect = wrap.getBoundingClientRect()
-            const v = viewRef.current
-            const cx = rect.width / 2
-            const cy = rect.height / 2
-            viewRef.current = {
-              scale: 1,
-              tx: cx - ((cx - v.tx) * 1) / v.scale,
-              ty: cy - ((cy - v.ty) * 1) / v.scale,
-            }
-            interactedRef.current = true
-            applyView()
-          }}
+          onClick={() => zp.reset100()}
         >100%</button>
         <span className="flex-1" />
         {cursorPos && (

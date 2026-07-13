@@ -1,5 +1,7 @@
 import { useEffect } from 'react'
 
+import ZoomableImage from './ZoomableImage'
+
 interface Props {
   src: string
   /** 对比图：传了就改成左右 split 布局（左 src + 右 compareSrc）。窄屏时垂直堆叠。 */
@@ -112,12 +114,11 @@ export default function ImagePreviewModal({
             <SplitPane src={compareSrc} label={compareLabel} altFallback={caption} />
           </div>
         ) : (
-          <img
-            src={src}
-            alt={caption ?? 'preview'}
-            onClick={(e) => e.stopPropagation()}
-            className="max-w-full max-h-full object-contain"
-          />
+          // 单图：可缩放视口（滚轮 / 拖拽 / 双击，useZoomPan）。点视口不关闭
+          // （拖拽平移与点击无法两全）—— × 按钮 / ESC / 边缘遮罩仍可关。
+          <div className="w-full h-full" onClick={(e) => e.stopPropagation()}>
+            <ZoomableImage src={src} alt={caption ?? 'preview'} />
+          </div>
         )}
       </div>
       {(counter || caption || shortcutHint) && (

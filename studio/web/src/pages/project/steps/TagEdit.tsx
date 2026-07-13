@@ -15,6 +15,7 @@ import StepShell from '../../../components/StepShell'
 import TagEditor from '../../../components/TagEditor'
 import TagStatsPanel from '../../../components/TagStatsPanel'
 import { useToast } from '../../../components/Toast'
+import ZoomableImage from '../../../components/ZoomableImage'
 import { useEventStream } from '../../../lib/useEventStream'
 
 interface Ctx {
@@ -413,13 +414,14 @@ export default function TagEditPage() {
                 {activeFolder}/{activeName}
               </code>
             </div>
-            <div className="flex-1 relative bg-sunken">
-              <img
+            <div className="flex-1 relative bg-sunken p-2 min-h-0">
+              {/* 原图分辨率 + zoom/pan（核对细节 tag 需要看清局部）；
+                  size=0 = 原图直出，本地服务加载可接受 */}
+              <ZoomableImage
                 key={activeKey}
-                src={api.versionThumbUrl(project.id, activeVersion.id, 'train', activeName, activeFolder, 800)}
+                src={api.versionThumbUrl(project.id, activeVersion.id, 'train', activeName, activeFolder, 0)}
                 alt={activeName}
-                className="absolute inset-2 object-contain rounded-sm"
-                style={{ width: 'calc(100% - 16px)', height: 'calc(100% - 16px)' }}
+                style={{ borderRadius: 4 }}
               />
             </div>
           </section>
