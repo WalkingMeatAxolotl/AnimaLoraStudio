@@ -9,7 +9,7 @@
     POST /api/projects/{pid}/upload-from-path     服务端可见路径导入单图 / zip
     GET  /api/projects/{pid}/download/status      最近 download job + log_tail
 
-  预处理 (10)
+  预处理 (13)
     POST /api/projects/{pid}/preprocess/start
     GET  /api/projects/{pid}/preprocess/status
     GET  /api/projects/{pid}/preprocess/files
@@ -17,6 +17,9 @@
     GET  /api/projects/{pid}/preprocess/crop/workspace
     POST /api/projects/{pid}/preprocess/crop
     POST /api/projects/{pid}/versions/{vid}/preprocess/inpaint/save
+    GET  /api/projects/{pid}/versions/{vid}/preprocess/mask
+    PUT  /api/projects/{pid}/versions/{vid}/preprocess/mask
+    DELETE /api/projects/{pid}/versions/{vid}/preprocess/mask
     POST /api/projects/{pid}/preprocess/files/reset
     POST /api/projects/{pid}/preprocess/files/restore
     GET  /api/projects/{pid}/preprocess/thumb     [Deprecated] 兼容旧 URL
@@ -31,6 +34,7 @@ from typing import Any, BinaryIO
 
 from fastapi import APIRouter, File, Form, UploadFile
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse
 
 from ...errors import _validate_component_or_400  # noqa: F401  reserved for future use
 from ....domain.errors import (
@@ -517,6 +521,48 @@ async def inpaint_save_train_endpoint(
     res = await run_in_threadpool(
         preprocess_svc.inpaint_save_train, p, v["label"], name=name, data=data,
     )
+    _publish_project_state(p)
+    return res
+
+
+@router.get("/api/projects/{pid}/versions/{vid}/preprocess/mask")
+def get_mask_train_endpoint(pid: int, vid: int, name: str) -> FileResponse:
+    """训练 mask sidecar（灰度 PNG，尺寸=源图）。无 mask → 404（前端以此
+    区分「从未画过」）。前端带 mask_mtime cache-buster，这里只挂 no-cache。"""
+    p, v = _resolve_pv_or_404(pid, vid)
+    path = preprocess_svc.mask_file_train(p, v["label"], name=name)
+    if path is None:
+        raise NotFoundError(
+            "Mask not found", code="preprocess.mask_not_found",
+            details={"name": name},
+        )
+    return FileResponse(
+        path, media_type="image/png",
+        headers={"Cache-Control": "no-cache, must-revalidate"},
+    )
+
+
+@router.put("/api/projects/{pid}/versions/{vid}/preprocess/mask")
+async def put_mask_train_endpoint(
+    pid: int, vid: int,
+    name: str = Form(...),
+    file: UploadFile = File(...),
+) -> dict[str, Any]:
+    """写入训练 mask（前端 mask 层导出的灰度 PNG）。同步写盘无 job。"""
+    p, v = _resolve_pv_or_404(pid, vid)
+    data = await file.read()
+    res = await run_in_threadpool(
+        preprocess_svc.mask_save_train, p, v["label"], name=name, data=data,
+    )
+    _publish_project_state(p)
+    return res
+
+
+@router.delete("/api/projects/{pid}/versions/{vid}/preprocess/mask")
+def delete_mask_train_endpoint(pid: int, vid: int, name: str) -> dict[str, Any]:
+    """删除训练 mask（= 该图恢复全图正常学习）。"""
+    p, v = _resolve_pv_or_404(pid, vid)
+    res = preprocess_svc.mask_delete_train(p, v["label"], name=name)
     _publish_project_state(p)
     return res
 

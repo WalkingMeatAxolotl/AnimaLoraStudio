@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 198,
+  "count": 201,
   "routes": [
     {
       "path": "/",
@@ -975,6 +975,30 @@
         "POST"
       ],
       "name": "inpaint_save_train_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/preprocess/mask",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_mask_train_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/preprocess/mask",
+      "methods": [
+        "GET"
+      ],
+      "name": "get_mask_train_endpoint",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/projects/{pid}/versions/{vid}/preprocess/mask",
+      "methods": [
+        "PUT"
+      ],
+      "name": "put_mask_train_endpoint",
       "type": "APIRoute"
     },
     {

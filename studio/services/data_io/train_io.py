@@ -53,6 +53,9 @@ PRESETS_PREFIX = "presets/"
 CAPTION_EXTS = {".txt"}
 # VAE latent 缓存（CachedLatentDataset 的 {名}.npz / {名}.r{reso}.npz，紧挨图片）
 LATENT_CACHE_EXT = ".npz"
+# 训练 mask sidecar 目录（train/masks/{folder}/{stem}.png，详
+# services/preprocess/masks.py）。arcname 是三段路径，import 侧特判解包。
+MASKS_DIRNAME = "masks"
 
 
 VERSION_CONFIG_ARC = "presets/config.yaml"
@@ -69,6 +72,8 @@ class BundleOptions:
     # True = 一并打包对应目录里的 VAE latent 缓存（*.npz），导入后免重新 encode
     train_latent_cache: bool = False
     reg_latent_cache: bool = False
+    # True = 一并打包训练 mask sidecar（train/masks/**，masked loss 数据面）
+    train_masks: bool = False
 
 
 from studio.domain.errors import DomainError, NotFoundError
@@ -349,23 +354,39 @@ def import_train(
 
 
 def _collect_train(
-    train_dir: Path, include_captions: bool, include_latent_cache: bool = False
+    train_dir: Path, include_captions: bool, include_latent_cache: bool = False,
+    include_masks: bool = False,
 ) -> tuple[list[tuple[Path, str]], dict[str, Any]]:
-    """扫 train/ 目录，返回 (payload, stats_dict)。"""
+    """扫 train/ 目录，返回 (payload, stats_dict)。
+
+    masks/ 是保留目录（非 concept folder）：直下只有子目录所以不进 concept
+    循环；include_masks 时单独递归收集其中的 .png。
+    """
     payload: list[tuple[Path, str]] = []
     concepts: list[dict[str, Any]] = []
     image_count = 0
     tagged_count = 0
     latent_cache_count = 0
+    mask_count = 0
 
     if not train_dir.exists():
         return payload, {
             "image_count": 0, "tagged_count": 0, "concepts": [],
-            "latent_cache_count": 0,
+            "latent_cache_count": 0, "mask_count": 0,
         }
 
+    if include_masks:
+        masks_dir = train_dir / MASKS_DIRNAME
+        if masks_dir.exists():
+            for f in sorted(masks_dir.rglob("*.png")):
+                if not f.is_file():
+                    continue
+                rel = f.relative_to(train_dir).as_posix()
+                payload.append((f, f"{TRAIN_PREFIX}{rel}"))
+                mask_count += 1
+
     for sub in sorted(train_dir.iterdir()):
-        if not sub.is_dir():
+        if not sub.is_dir() or sub.name == MASKS_DIRNAME:
             continue
         cnt = 0
         for f in sorted(sub.iterdir()):
@@ -395,6 +416,7 @@ def _collect_train(
         "tagged_count": tagged_count,
         "concepts": concepts,
         "latent_cache_count": latent_cache_count,
+        "mask_count": mask_count,
     }
 
 
@@ -481,7 +503,8 @@ def export_bundle(
     train_stats: dict[str, Any] = {}
     if opts.train:
         tp, train_stats = _collect_train(
-            vdir / "train", opts.train_captions, opts.train_latent_cache
+            vdir / "train", opts.train_captions, opts.train_latent_cache,
+            include_masks=opts.train_masks,
         )
         if not tp:
             raise TrainIOError(
@@ -540,6 +563,7 @@ def export_bundle(
             "config": config_included,
             "train_latent_cache": opts.train_latent_cache,
             "reg_latent_cache": opts.reg_latent_cache,
+            "train_masks": opts.train_masks,
         },
         "stats": {
             "train_image_count": train_stats.get("image_count", 0),
@@ -550,6 +574,7 @@ def export_bundle(
                 train_stats.get("latent_cache_count", 0)
                 + reg_stats.get("latent_cache_count", 0)
             ),
+            "train_mask_count": train_stats.get("mask_count", 0),
         },
     }
 
@@ -578,6 +603,11 @@ def _safe_arc_bundle(name: str) -> Optional[tuple[str, str]]:
     if norm.startswith(TRAIN_PREFIX):
         inner = norm[len(TRAIN_PREFIX):]
         parts = inner.split("/")
+        # train/masks/{folder}/{stem}.png — mask sidecar 三层（保留目录）
+        if parts[0] == MASKS_DIRNAME:
+            if len(parts) != 3 or not all(parts) or not parts[2].endswith(".png"):
+                return None
+            return ("train", inner)
         if len(parts) != 2 or not parts[0] or not parts[1]:
             return None
         return ("train", inner)
@@ -766,6 +796,21 @@ def import_bundle(
             if train_entries:
                 train_dir = vdir / "train"
                 for info, inner in train_entries:
+                    if inner.startswith(f"{MASKS_DIRNAME}/"):
+                        # mask sidecar：`masks/{folder}/{stem}.png` 三段路径，
+                        # 逐段 safe_join（两段拆分会让 filename 带斜杠被拒）。
+                        # 不进 seen_train —— masks 不是 concept folder。
+                        parts = inner.split("/")
+                        if len(parts) != 3 or parts[2].startswith("."):
+                            raise TrainIOError(
+                                "Import file contains an invalid mask path",
+                                code="dataset.import_invalid", http_status=400,
+                            )
+                        target = safe_join(train_dir, *parts)
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        with zf.open(info) as src, target.open("wb") as dst:
+                            _copy_chunks(src, dst)
+                        continue
                     folder, filename = inner.split("/", 1)
                     if filename.startswith("."):
                         raise TrainIOError(

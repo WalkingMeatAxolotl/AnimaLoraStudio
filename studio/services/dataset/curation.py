@@ -25,6 +25,7 @@ from typing import Any
 from ..projects import projects, versions
 from .scan import IMAGE_EXTS
 from ..preprocess import manifest as preprocess_manifest
+from ..preprocess import masks as train_masks
 
 # Kohya: 可选 `N_` 前缀 + 字母（不允许纯数字 / `5_` 这种空 label）
 _FOLDER_PATTERN = re.compile(r"^([0-9]+_)?[A-Za-z][A-Za-z0-9_-]*$")
@@ -422,11 +423,12 @@ def remove_from_train(
                             mp.unlink()
                         except OSError:
                             pass
+                train_masks.delete_mask(train, f"{folder}/{origin_name}")
                 removed.append(origin_name)
             else:
                 missing.append(origin_name)
             continue
-        # 删所有派生物理文件 + 各派生 stem 的 metadata
+        # 删所有派生物理文件 + 各派生 stem 的 metadata + mask sidecar
         for rel in rels:
             _, filename = rel.split("/", 1)
             pp = fdir / filename
@@ -442,6 +444,7 @@ def remove_from_train(
                         mp.unlink()
                     except OSError:
                         pass
+            train_masks.delete_mask(train, rel)
         rels_to_pop.extend(rels)
         removed.append(origin_name)
 
