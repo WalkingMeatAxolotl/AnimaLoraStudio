@@ -2029,18 +2029,14 @@
     "subtitle": "Upscale / crop / inpaint — Inpaint tool",
     "saveActive": "Save current image",
     "saveAll": "Save all ({{n}})",
+    "modeLabel": "Mode",
     "mode": {
       "paint": "Paint",
       "mask": "Mask"
     },
-    "maskTool": "Tool",
-    "maskBrush": "Brush",
-    "maskEraser": "Eraser",
-    "maskCoverage": "Cover",
-    "maskCoverageWarn": "⚠ too large",
-    "clearMask": "Clear mask",
-    "confirmClearMask": "Clear the mask for this image? The saved mask file will be deleted and training resumes learning the full image.",
-    "confirmClearMaskOk": "Clear",
+    "toolLabel": "Tool",
+    "toolBrush": "Brush",
+    "toolEraser": "Eraser",
     "clearActive": "Discard edits",
     "filter": {
       "all": "All",

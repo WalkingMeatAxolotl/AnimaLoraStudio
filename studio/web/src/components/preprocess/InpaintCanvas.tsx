@@ -16,7 +16,7 @@ export interface InpaintStroke {
   size: number
   /** 1 = 实心；<1 时边缘按 size*(1-hardness)/2 的半径 blur 软化。 */
   hardness: number
-  /** mask 模式的橡皮擦（destination-out）。paint 模式不使用。 */
+  /** 橡皮擦（destination-out）：paint 模式擦未保存涂抹笔画、mask 模式擦 mask。 */
   erase?: boolean
   points: { x: number; y: number }[]
 }
@@ -90,28 +90,36 @@ function drawOneStroke(
   ctx.restore()
 }
 
-/** 重放涂抹笔画（场景 1，覆盖像素）。 */
-export function drawStrokes(
+/** 重放笔画到独立 layer（erase 走 destination-out —— 涂抹橡皮擦掉的是
+ *  未保存笔画露出底图，mask 橡皮擦掉 mask，两者语义一致）。 */
+function drawStrokesToLayer(
   ctx: CanvasRenderingContext2D,
   strokes: InpaintStroke[],
-  scratchRef?: ScratchRef,
+  scratchRef: ScratchRef,
+  colorOf: (s: InpaintStroke) => string,
 ): void {
-  const holder = scratchRef ?? { current: null }
-  for (const s of strokes) drawOneStroke(ctx, s, s.color, holder)
+  for (const s of strokes) {
+    ctx.save()
+    ctx.globalCompositeOperation = s.erase ? 'destination-out' : 'source-over'
+    drawOneStroke(ctx, s, colorOf(s), scratchRef)
+    ctx.restore()
+  }
 }
 
-/** 重放 mask 笔画到 mask 层（erase 走 destination-out）。 */
+function drawPaintStrokes(
+  ctx: CanvasRenderingContext2D,
+  strokes: InpaintStroke[],
+  scratchRef: ScratchRef,
+): void {
+  drawStrokesToLayer(ctx, strokes, scratchRef, (s) => s.color)
+}
+
 function drawMaskStrokes(
   ctx: CanvasRenderingContext2D,
   strokes: InpaintStroke[],
   scratchRef: ScratchRef,
 ): void {
-  for (const s of strokes) {
-    ctx.save()
-    ctx.globalCompositeOperation = s.erase ? 'destination-out' : 'source-over'
-    drawOneStroke(ctx, s, MASK_COLOR, scratchRef)
-    ctx.restore()
-  }
+  drawStrokesToLayer(ctx, strokes, scratchRef, () => MASK_COLOR)
 }
 
 function loadImage(url: string): Promise<HTMLImageElement> {
@@ -212,7 +220,7 @@ export async function renderMaskBlob(
   return await maskLayerToGray(layer)
 }
 
-/** 离屏重放涂抹：加载原图 → 重放笔画 → PNG blob。 */
+/** 离屏重放涂抹：加载原图 → layer 重放笔画（含橡皮）→ 合成 PNG blob。 */
 export async function renderInpaintedBlob(
   imageUrl: string,
   w: number,
@@ -226,7 +234,13 @@ export async function renderInpaintedBlob(
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('canvas 2d context unavailable')
   ctx.drawImage(img, 0, 0, w, h)
-  drawStrokes(ctx, strokes)
+  const layer = document.createElement('canvas')
+  layer.width = w
+  layer.height = h
+  const lctx = layer.getContext('2d')
+  if (!lctx) throw new Error('canvas 2d context unavailable')
+  drawPaintStrokes(lctx, strokes, { current: null })
+  ctx.drawImage(layer, 0, 0)
   return await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob(
       (b) => (b ? resolve(b) : reject(new Error('toBlob failed'))),
@@ -266,21 +280,19 @@ const InpaintCanvas = forwardRef<
     mode: InpaintMode
     strokes: InpaintStroke[]
     maskStrokes: InpaintStroke[]
-    /** 服务器已有 mask 的 URL；null = 无底图（含本地「清除 mask」后）。 */
+    /** 服务器已有 mask 的 URL；null = 无底图。 */
     maskBaseUrl: string | null
     brush: { color: string; size: number; hardness: number }
-    /** mask 模式当前是否橡皮擦。 */
-    maskErase: boolean
+    /** 当前工具是否橡皮擦（涂抹 / 遮罩两模式共用）。 */
+    erase: boolean
     onStrokeEnd: (s: InpaintStroke) => void
     onMaskStrokeEnd: (s: InpaintStroke) => void
     onPickColor: (hex: string) => void
-    /** mask 层变化后的覆盖率回调（0..1，缩样估算）。 */
-    onMaskCoverage?: (pct: number) => void
   }
 >(function InpaintCanvas(
   {
     imageUrl, imageW, imageH, mode, strokes, maskStrokes, maskBaseUrl,
-    brush, maskErase, onStrokeEnd, onMaskStrokeEnd, onPickColor, onMaskCoverage,
+    brush, erase, onStrokeEnd, onMaskStrokeEnd, onPickColor,
   },
   ref,
 ) {
@@ -290,6 +302,7 @@ const InpaintCanvas = forwardRef<
   const cursorRef = useRef<HTMLDivElement | null>(null)
   const imgRef = useRef<HTMLImageElement | null>(null)
   const scratchRef = useRef<HTMLCanvasElement | null>(null)
+  const paintLayerRef = useRef<HTMLCanvasElement | null>(null)
   const maskLayerRef = useRef<HTMLCanvasElement | null>(null)
   const maskBaseRef = useRef<HTMLCanvasElement | null>(null)
 
@@ -313,21 +326,23 @@ const InpaintCanvas = forwardRef<
   brushRef.current = brush
   const modeRef = useRef(mode)
   modeRef.current = mode
-  const maskEraseRef = useRef(maskErase)
-  maskEraseRef.current = maskErase
+  const eraseRef = useRef(erase)
+  eraseRef.current = erase
 
-  const ensureMaskLayer = useCallback((): HTMLCanvasElement => {
+  const ensureLayer = useCallback((
+    holder: React.MutableRefObject<HTMLCanvasElement | null>,
+  ): HTMLCanvasElement => {
     if (
-      !maskLayerRef.current ||
-      maskLayerRef.current.width !== imageW ||
-      maskLayerRef.current.height !== imageH
+      !holder.current ||
+      holder.current.width !== imageW ||
+      holder.current.height !== imageH
     ) {
       const c = document.createElement('canvas')
       c.width = imageW
       c.height = imageH
-      maskLayerRef.current = c
+      holder.current = c
     }
-    return maskLayerRef.current
+    return holder.current
   }, [imageW, imageH])
 
   const applyView = useCallback(() => {
@@ -347,7 +362,8 @@ const InpaintCanvas = forwardRef<
     if (!ctx) return
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
-    drawStrokes(ctx, strokesRef.current, scratchRef)
+    const paintLayer = paintLayerRef.current
+    if (paintLayer) ctx.drawImage(paintLayer, 0, 0)
     const layer = maskLayerRef.current
     if (layer) {
       ctx.save()
@@ -356,26 +372,6 @@ const InpaintCanvas = forwardRef<
       ctx.restore()
     }
   }, [])
-
-  /** 覆盖率估算：mask 层缩样到 64×64 读 alpha 均值（每笔一次，便宜）。 */
-  const reportCoverage = useCallback(() => {
-    if (!onMaskCoverage) return
-    const layer = maskLayerRef.current
-    if (!layer) {
-      onMaskCoverage(0)
-      return
-    }
-    const tiny = document.createElement('canvas')
-    tiny.width = 64
-    tiny.height = 64
-    const tctx = tiny.getContext('2d')
-    if (!tctx) return
-    tctx.drawImage(layer, 0, 0, 64, 64)
-    const px = tctx.getImageData(0, 0, 64, 64).data
-    let sum = 0
-    for (let i = 3; i < px.length; i += 4) sum += px[i]
-    onMaskCoverage(sum / 255 / (64 * 64))
-  }, [onMaskCoverage])
 
   const fit = useCallback(() => {
     const wrap = wrapRef.current
@@ -432,18 +428,23 @@ const InpaintCanvas = forwardRef<
     }
   }, [maskBaseUrl, imageW, imageH])
 
-  // mask 层重建（底图 / 笔画变化）→ 主画布重绘 + 覆盖率
+  // mask 层重建（底图 / 笔画变化）→ 主画布重绘
   useEffect(() => {
-    const layer = ensureMaskLayer()
+    const layer = ensureLayer(maskLayerRef)
     rebuildMaskLayer(layer, maskBaseRef.current, maskStrokes, scratchRef)
     redraw()
-    reportCoverage()
-  }, [maskStrokes, maskBaseTick, ensureMaskLayer, redraw, reportCoverage])
+  }, [maskStrokes, maskBaseTick, ensureLayer, redraw])
 
-  // 涂抹笔画变化全量重绘（undo / redo / 落笔提交 / 清除）
+  // 涂抹层重建（undo / redo / 落笔提交 / 清除 —— 含橡皮 composite）
   useEffect(() => {
+    const layer = ensureLayer(paintLayerRef)
+    const ctx = layer.getContext('2d')
+    if (ctx) {
+      ctx.clearRect(0, 0, layer.width, layer.height)
+      drawPaintStrokes(ctx, strokes, scratchRef)
+    }
     redraw()
-  }, [strokes, redraw])
+  }, [strokes, ensureLayer, redraw])
 
   // 容器 resize：用户没手动动过视图时保持 fit
   useEffect(() => {
@@ -512,24 +513,30 @@ const InpaintCanvas = forwardRef<
       const canvas = canvasRef.current
       const img = imgRef.current
       if (!canvas || !img) return null
-      // 导出不含 mask overlay：干净重绘 img + strokes
+      // 导出不含 mask overlay：干净重建 img + 涂抹层（含橡皮 composite）
       const out = document.createElement('canvas')
       out.width = canvas.width
       out.height = canvas.height
       const ctx = out.getContext('2d')
       if (!ctx) return null
       ctx.drawImage(img, 0, 0, out.width, out.height)
-      drawStrokes(ctx, strokesRef.current, scratchRef)
+      const layer = document.createElement('canvas')
+      layer.width = out.width
+      layer.height = out.height
+      const lctx = layer.getContext('2d')
+      if (!lctx) return null
+      drawPaintStrokes(lctx, strokesRef.current, scratchRef)
+      ctx.drawImage(layer, 0, 0)
       return await new Promise<Blob | null>((resolve) => {
         out.toBlob((b) => resolve(b), 'image/png')
       })
     },
     exportMaskBlob: async () => {
-      const layer = ensureMaskLayer()
+      const layer = ensureLayer(maskLayerRef)
       rebuildMaskLayer(layer, maskBaseRef.current, maskStrokesRef.current, scratchRef)
       return await maskLayerToGray(layer)
     },
-  }), [ensureMaskLayer])
+  }), [ensureLayer])
 
   const toImagePoint = useCallback((clientX: number, clientY: number) => {
     const wrap = wrapRef.current
@@ -591,17 +598,20 @@ const InpaintCanvas = forwardRef<
         color: isMask ? MASK_COLOR : b.color,
         size: b.size,
         hardness: b.hardness,
-        ...(isMask && maskEraseRef.current ? { erase: true } : {}),
+        ...(eraseRef.current ? { erase: true } : {}),
         points: [pt],
       }
       drawingRef.current = { stroke, target: isMask ? 'mask' : 'paint' }
-      // 单点立即可见（预览；mask 橡皮以半透明白示意，松手后全量重绘校正）
+      // 单点立即可见（预览；橡皮以半透明白示意，松手后全量重绘校正）
       const ctx = canvasRef.current?.getContext('2d')
       if (ctx) {
         ctx.save()
-        if (isMask) {
+        if (stroke.erase) {
+          ctx.globalAlpha = 0.5
+          strokePath(ctx, stroke, '#ffffff')
+        } else if (isMask) {
           ctx.globalAlpha = MASK_VIEW_ALPHA
-          strokePath(ctx, stroke, stroke.erase ? '#ffffff' : MASK_COLOR)
+          strokePath(ctx, stroke, MASK_COLOR)
         } else {
           strokePath(ctx, stroke)
         }
@@ -647,10 +657,15 @@ const InpaintCanvas = forwardRef<
       if (ctx) {
         ctx.save()
         const isMask = drawing.target === 'mask'
-        ctx.strokeStyle = isMask
-          ? (stroke.erase ? '#ffffff' : MASK_COLOR)
-          : stroke.color
-        if (isMask) ctx.globalAlpha = MASK_VIEW_ALPHA
+        if (stroke.erase) {
+          ctx.strokeStyle = '#ffffff'
+          ctx.globalAlpha = 0.5
+        } else if (isMask) {
+          ctx.strokeStyle = MASK_COLOR
+          ctx.globalAlpha = MASK_VIEW_ALPHA
+        } else {
+          ctx.strokeStyle = stroke.color
+        }
         ctx.lineWidth = stroke.size
         ctx.lineCap = 'round'
         ctx.lineJoin = 'round'
@@ -698,14 +713,14 @@ const InpaintCanvas = forwardRef<
           height={imageH}
           style={{ position: 'absolute', left: 0, top: 0, transformOrigin: '0 0' }}
         />
-        {/* 笔刷圆圈光标（mask 模式描红 / 橡皮描白） */}
+        {/* 笔刷圆圈光标（遮罩画笔描红 / 橡皮虚线白） */}
         <div
           ref={cursorRef}
           className="absolute pointer-events-none rounded-full"
           style={{
-            border: mode === 'mask'
-              ? `1.5px solid ${maskErase ? 'rgba(255,255,255,0.95)' : 'rgba(255,45,45,0.95)'}`
-              : '1.5px solid rgba(255,255,255,0.9)',
+            border: mode === 'mask' && !erase
+              ? '1.5px solid rgba(255,45,45,0.95)'
+              : `1.5px ${erase ? 'dashed' : 'solid'} rgba(255,255,255,0.9)`,
             outline: '1px solid rgba(0,0,0,0.6)',
           }}
         />

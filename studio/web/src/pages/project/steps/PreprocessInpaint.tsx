@@ -17,7 +17,6 @@ import InpaintCanvas, {
 } from '../../../components/preprocess/InpaintCanvas'
 import PreprocessToolsBar from '../../../components/preprocess/PreprocessToolsBar'
 import StepShell from '../../../components/StepShell'
-import { useDialog } from '../../../components/Dialog'
 import { useToast } from '../../../components/Toast'
 import { useLocalStorageState } from '../../../lib/useLocalStorageState'
 
@@ -58,7 +57,6 @@ export default function PreprocessInpaintPage() {
   const { t } = useTranslation()
   const { project, activeVersion, reload } = useOutletContext<Ctx>()
   const { toast } = useToast()
-  const { confirm } = useDialog()
   const vid = activeVersion?.id ?? 0
 
   // ────── Workspace data（复用 crop workspace：name + w/h + mtime + mask_mtime）──────
@@ -83,11 +81,11 @@ export default function PreprocessInpaintPage() {
   // 统一编辑历史：涂抹与 mask 笔画混合入同一时间线 —— 模式只是笔刷，
   // dirty / undo / 保存都跨模式共用，切模式不改变页面状态语义。
   const [mode, setMode] = useState<InpaintMode>('paint')
-  const [maskErase, setMaskErase] = useState(false)
+  // 画笔 / 橡皮跨模式共用：涂抹橡皮擦未保存笔画，遮罩橡皮擦 mask
+  const [erase, setErase] = useState(false)
   const [activeName, setActiveName] = useState<string | null>(null)
   const [historyByImage, setHistoryByImage] = useState<Record<string, HistoryEntry[]>>({})
   const [redoByImage, setRedoByImage] = useState<Record<string, HistoryEntry[]>>({})
-  const [maskCoverage, setMaskCoverage] = useState(0)
   const [filter, setFilter] = useState<Filter>('all')
   const [busy, setBusy] = useState(false)
 
@@ -349,31 +347,6 @@ export default function PreprocessInpaintPage() {
     refreshWorkspace, reload, toast, t,
   ])
 
-  /** 清除 mask（U5）：即时 DELETE 服务器文件 + 从历史清掉 mask 笔画。 */
-  const clearMask = useCallback(async () => {
-    if (!activeName || !activeImage) return
-    const hasServer = activeImage.mask_mtime != null
-    const hasLocal = activeMaskStrokes.length > 0
-    if (!hasServer && !hasLocal) return
-    if (hasServer && !(await confirm(
-      t('preprocessInpaint.confirmClearMask'),
-      { tone: 'danger', okText: t('preprocessInpaint.confirmClearMaskOk') },
-    ))) return
-    setBusy(true)
-    try {
-      if (hasServer) await api.deleteMaskTrain(project.id, vid, activeName)
-      clearSavedKind(activeName, 'mask')
-      await refreshWorkspace()
-    } catch (e) {
-      toast(String(e), 'error')
-    } finally {
-      setBusy(false)
-    }
-  }, [
-    activeName, activeImage, activeMaskStrokes.length, project.id, vid,
-    confirm, clearSavedKind, refreshWorkspace, toast, t,
-  ])
-
   // ────── Render ──────
   if (!activeVersion) {
     return (
@@ -513,28 +486,21 @@ export default function PreprocessInpaintPage() {
                     maskStrokes={activeMaskStrokes}
                     maskBaseUrl={maskBaseUrlFor(activeImage)}
                     brush={brush}
-                    maskErase={maskErase}
+                    erase={erase}
                     onStrokeEnd={onStrokeEnd}
                     onMaskStrokeEnd={onMaskStrokeEnd}
                     onPickColor={onPickColor}
-                    onMaskCoverage={setMaskCoverage}
                   />
                 </div>
 
                 <ToolPanel
                   mode={mode}
                   setMode={setMode}
+                  erase={erase}
+                  setErase={setErase}
                   brush={brush}
                   setBrush={setBrush}
                   recentColors={recentColors}
-                  maskErase={maskErase}
-                  setMaskErase={setMaskErase}
-                  maskCoverage={maskCoverage}
-                  canClearMask={
-                    activeImage.mask_mtime != null || activeMaskStrokes.length > 0
-                  }
-                  onClearMask={() => void clearMask()}
-                  busy={busy}
                 />
               </div>
             )}
@@ -549,55 +515,87 @@ export default function PreprocessInpaintPage() {
 // Tool panel（right side）
 // ---------------------------------------------------------------------------
 
+/** 胶囊 radio（视觉对齐设置页更新通道的 vs-channel-radio：圆点 + 文字）。 */
+function RadioPill({
+  on, label, onClick,
+}: {
+  on: boolean
+  label: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={on}
+      onClick={onClick}
+      className={
+        'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs transition-colors ' +
+        (on
+          ? 'border-accent text-accent bg-accent-soft'
+          : 'border-default text-fg-secondary bg-transparent hover:bg-overlay')
+      }
+    >
+      <span
+        className={
+          'w-[7px] h-[7px] rounded-full border border-current shrink-0 ' +
+          (on ? 'bg-current' : 'bg-transparent')
+        }
+      />
+      {label}
+    </button>
+  )
+}
+
 function ToolPanel({
   mode,
   setMode,
+  erase,
+  setErase,
   brush,
   setBrush,
   recentColors,
-  maskErase,
-  setMaskErase,
-  maskCoverage,
-  canClearMask,
-  onClearMask,
-  busy,
 }: {
   mode: InpaintMode
   setMode: (m: InpaintMode) => void
+  erase: boolean
+  setErase: (v: boolean) => void
   brush: BrushState
   setBrush: (v: BrushState | ((prev: BrushState) => BrushState)) => void
   recentColors: string[]
-  maskErase: boolean
-  setMaskErase: (v: boolean) => void
-  maskCoverage: number
-  canClearMask: boolean
-  onClearMask: () => void
-  busy: boolean
 }) {
   const { t } = useTranslation()
   const [recentOpen, setRecentOpen] = useState(false)
-  const coveragePct = Math.round(maskCoverage * 100)
   return (
     <div className="bg-sunken border border-subtle rounded-md flex flex-col h-full min-h-0 overflow-hidden">
       <div className="flex flex-col gap-2 p-2.5 flex-1 min-h-0 overflow-y-auto">
-        {/* 模式切换：涂抹（改像素）| Mask（训练不学区域） */}
-        <div className="flex items-center gap-0 rounded-md border border-subtle overflow-hidden">
+        {/* 模式 / 工具两行 radio（样式对齐设置页更新通道） */}
+        <div className="flex items-center gap-1.5 text-xs" role="radiogroup">
+          <span className="text-fg-tertiary shrink-0 w-10">{t('preprocessInpaint.modeLabel')}</span>
           {(['paint', 'mask'] as const).map((m) => (
-            <button
+            <RadioPill
               key={m}
-              type="button"
+              on={mode === m}
+              label={t(`preprocessInpaint.mode.${m}`)}
               onClick={() => setMode(m)}
-              className={
-                'flex-1 py-1.5 text-xs font-medium transition-colors ' +
-                (mode === m
-                  ? 'bg-accent text-white'
-                  : 'bg-transparent text-fg-secondary hover:bg-overlay')
-              }
-            >{t(`preprocessInpaint.mode.${m}`)}</button>
+            />
           ))}
         </div>
+        <div className="flex items-center gap-1.5 text-xs" role="radiogroup">
+          <span className="text-fg-tertiary shrink-0 w-10">{t('preprocessInpaint.toolLabel')}</span>
+          <RadioPill
+            on={!erase}
+            label={t('preprocessInpaint.toolBrush')}
+            onClick={() => setErase(false)}
+          />
+          <RadioPill
+            on={erase}
+            label={t('preprocessInpaint.toolEraser')}
+            onClick={() => setErase(true)}
+          />
+        </div>
 
-        {mode === 'paint' ? (
+        {mode === 'paint' && (
           <div className="flex items-center gap-1.5 text-xs">
             <span className="text-fg-tertiary shrink-0 w-10">{t('preprocessInpaint.brushColor')}</span>
             <input
@@ -623,44 +621,6 @@ function ToolPanel({
               </svg>
             </button>
           </div>
-        ) : (
-          <>
-            {/* mask 工具行：画笔 / 橡皮 切换（与颜色行同版式） */}
-            <div className="flex items-center gap-1.5 text-xs">
-              <span className="text-fg-tertiary shrink-0 w-10">{t('preprocessInpaint.maskTool')}</span>
-              <button
-                type="button"
-                onClick={() => setMaskErase(false)}
-                className={
-                  'btn btn-sm flex-1 min-w-0 ' + (!maskErase ? 'btn-primary' : 'btn-ghost')
-                }
-              >{t('preprocessInpaint.maskBrush')}</button>
-              <button
-                type="button"
-                onClick={() => setMaskErase(true)}
-                className={
-                  'btn btn-sm flex-1 min-w-0 ' + (maskErase ? 'btn-primary' : 'btn-ghost')
-                }
-              >{t('preprocessInpaint.maskEraser')}</button>
-            </div>
-            <div className="flex items-center gap-1.5 text-xs">
-              <span className="text-fg-tertiary shrink-0 w-10">{t('preprocessInpaint.maskCoverage')}</span>
-              <span
-                className={
-                  'font-mono flex-1 ' +
-                  (coveragePct > 50 ? 'text-warn' : 'text-fg-secondary')
-                }
-              >
-                {coveragePct}%{coveragePct > 50 ? ` ${t('preprocessInpaint.maskCoverageWarn')}` : ''}
-              </span>
-              <button
-                type="button"
-                onClick={onClearMask}
-                disabled={busy || !canClearMask}
-                className="btn btn-ghost btn-sm shrink-0"
-              >{t('preprocessInpaint.clearMask')}</button>
-            </div>
-          </>
         )}
         {mode === 'paint' && recentOpen && recentColors.length > 0 && (
           <div className="flex items-center gap-1 flex-wrap">
