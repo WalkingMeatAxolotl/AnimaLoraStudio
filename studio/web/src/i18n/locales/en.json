@@ -2029,6 +2029,7 @@
     "subtitle": "Upscale / crop / inpaint — Inpaint tool",
     "saveActive": "Save current image",
     "saveAll": "Save all ({{n}})",
+    "panelTitle": "Inpaint settings",
     "modeLabel": "Mode",
     "mode": {
       "paint": "Paint",

@@ -2029,6 +2029,7 @@
     "subtitle": "放大 / 裁剪 / 涂抹 — 涂抹工具",
     "saveActive": "保存当前图",
     "saveAll": "保存全部 ({{n}})",
+    "panelTitle": "涂抹设置",
     "modeLabel": "模式",
     "mode": {
       "paint": "涂抹",

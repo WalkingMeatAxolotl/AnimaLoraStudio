@@ -533,7 +533,7 @@ function RadioPill({
         'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs transition-colors ' +
         (on
           ? 'border-accent text-accent bg-accent-soft'
-          : 'border-default text-fg-secondary bg-transparent hover:bg-overlay')
+          : 'border-dim text-fg-secondary bg-transparent hover:bg-overlay')
       }
     >
       <span
@@ -569,6 +569,7 @@ function ToolPanel({
   return (
     <div className="bg-sunken border border-subtle rounded-md flex flex-col h-full min-h-0 overflow-hidden">
       <div className="flex flex-col gap-2 p-2.5 flex-1 min-h-0 overflow-y-auto">
+        <h3 className="caption">{t('preprocessInpaint.panelTitle')}</h3>
         {/* 模式 / 工具两行 radio（样式对齐设置页更新通道） */}
         <div className="flex items-center gap-1.5 text-xs" role="radiogroup">
           <span className="text-fg-tertiary shrink-0 w-10">{t('preprocessInpaint.modeLabel')}</span>
