@@ -12,6 +12,7 @@ export interface BundleExportOpts {
   includeConfig: boolean
   trainLatentCache: boolean
   regLatentCache: boolean
+  trainMasks: boolean
   destination: BundleExportDestination
 }
 
@@ -29,6 +30,7 @@ export default function ExportBundleDialog({ onConfirm, onCancel }: Props) {
   const [includeConfig, setIncludeConfig] = useState(false)
   const [trainLatentCache, setTrainLatentCache] = useState(false)
   const [regLatentCache, setRegLatentCache] = useState(false)
+  const [trainMasks, setTrainMasks] = useState(false)
   const [destination, setDestination] = useState<BundleExportDestination>('download')
 
   const nothingSelected = !train && !reg && !includeConfig
@@ -38,7 +40,7 @@ export default function ExportBundleDialog({ onConfirm, onCancel }: Props) {
     if (nothingSelected) return
     onConfirm({
       train, trainCaptions, reg, regCaptions, includeConfig,
-      trainLatentCache, regLatentCache, destination,
+      trainLatentCache, regLatentCache, trainMasks, destination,
     })
   }
 
@@ -122,6 +124,16 @@ export default function ExportBundleDialog({ onConfirm, onCancel }: Props) {
                 />
                 <span className="text-sm text-fg-secondary">
                   {t('layout.exportBundleLatentCache')}
+                </span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer pl-5">
+                <input
+                  type="checkbox"
+                  checked={trainMasks}
+                  onChange={(e) => setTrainMasks(e.target.checked)}
+                />
+                <span className="text-sm text-fg-secondary">
+                  {t('layout.exportBundleTrainMasks')}
                 </span>
               </label>
             </>

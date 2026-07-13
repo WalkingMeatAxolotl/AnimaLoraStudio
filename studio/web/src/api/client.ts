@@ -911,6 +911,8 @@ export interface CropWorkspaceItem {
   mtime: number
   size: number
   processed: boolean
+  /** 训练 mask sidecar 的 mtime；无 mask 时 null。兼作角标判据 + cache-buster。 */
+  mask_mtime: number | null
 }
 
 /** 涂抹保存结果：产物统一 .png，源非 png 时 name 会改（X.jpg → X.png）。 */
@@ -2306,6 +2308,35 @@ export const api = {
     }
     return (await resp.json()) as InpaintSaveResult
   },
+  /** 训练 mask 文件 URL（灰度 PNG，尺寸=源图）。无 mask → 404。 */
+  maskUrl: (pid: number, vid: number, name: string) =>
+    `/api/projects/${pid}/versions/${vid}/preprocess/mask?name=${encodeURIComponent(name)}`,
+  /** 写入训练 mask（前端 mask 层导出的灰度 PNG）。 */
+  saveMaskTrain: async (
+    pid: number,
+    vid: number,
+    name: string,
+    blob: Blob,
+  ): Promise<{ name: string; mtime: number; size: number }> => {
+    const fd = new FormData()
+    fd.append('name', name)
+    fd.append('file', blob, 'mask.png')
+    const resp = await fetch(
+      `/api/projects/${pid}/versions/${vid}/preprocess/mask`,
+      { method: 'PUT', body: fd },
+    )
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => null)
+      throw makeApiError(resp.status, resp.statusText, body, resp.headers.get('X-Trace-Id'))
+    }
+    return (await resp.json()) as { name: string; mtime: number; size: number }
+  },
+  /** 删除训练 mask（= 该图恢复全图正常学习）。 */
+  deleteMaskTrain: (pid: number, vid: number, name: string) =>
+    req<{ deleted: boolean }>(
+      `/api/projects/${pid}/versions/${vid}/preprocess/mask?name=${encodeURIComponent(name)}`,
+      { method: 'DELETE' },
+    ),
 
   // R-5 台账合并：/api/jobs* 已删，作业与任务同源 /api/queue（单一 ID 空间）。
   // getJob / cancelJob 保留函数名给步骤页（Download/Tagging/Reg/Preprocess），
@@ -2843,6 +2874,7 @@ export const api = {
       includeConfig?: boolean
       trainLatentCache?: boolean
       regLatentCache?: boolean
+      trainMasks?: boolean
     },
   ): string => {
     const p = new URLSearchParams()
@@ -2853,6 +2885,7 @@ export const api = {
     p.set('include_config', opts.includeConfig ? '1' : '0')
     p.set('train_latent_cache', opts.trainLatentCache ? '1' : '0')
     p.set('reg_latent_cache', opts.regLatentCache ? '1' : '0')
+    p.set('train_masks', opts.trainMasks ? '1' : '0')
     return `/api/projects/${pid}/versions/${vid}/bundle.zip?${p.toString()}`
   },
   exportBundleToDataExports: (
@@ -2866,6 +2899,7 @@ export const api = {
       includeConfig?: boolean
       trainLatentCache?: boolean
       regLatentCache?: boolean
+      trainMasks?: boolean
     },
   ) =>
     req<DataExportItem>(`/api/projects/${pid}/versions/${vid}/export-bundle`, {
@@ -2878,6 +2912,7 @@ export const api = {
         include_config: opts.includeConfig === true,
         train_latent_cache: opts.trainLatentCache === true,
         reg_latent_cache: opts.regLatentCache === true,
+        train_masks: opts.trainMasks === true,
       }),
     }),
   listDataExports: () => req<DataExportItem[]>('/api/data-exports'),

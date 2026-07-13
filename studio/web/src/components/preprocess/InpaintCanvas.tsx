@@ -8,25 +8,37 @@ import {
 } from 'react'
 import { useTranslation } from 'react-i18next'
 
-/** 一笔涂抹。坐标 / 直径都是**原图像素**单位 —— 视图缩放只影响显示，
- *  笔画数据与 zoom 无关，离屏重放（保存全部）才能与画布所见一致。 */
+/** 一笔涂抹 / mask 笔画。坐标 / 直径都是**原图像素**单位 —— 视图缩放只影响
+ *  显示，笔画数据与 zoom 无关，离屏重放（保存全部）才能与画布所见一致。 */
 export interface InpaintStroke {
   color: string
   /** 笔刷直径（原图 px）。 */
   size: number
   /** 1 = 实心；<1 时边缘按 size*(1-hardness)/2 的半径 blur 软化。 */
   hardness: number
+  /** mask 模式的橡皮擦（destination-out）。paint 模式不使用。 */
+  erase?: boolean
   points: { x: number; y: number }[]
 }
 
+export type InpaintMode = 'paint' | 'mask'
+
 export interface InpaintCanvasHandle {
-  /** 当前图 + 全部笔画合成导出 PNG。图片未加载完成时返回 null。 */
+  /** 当前图 + 全部涂抹笔画合成导出 PNG。图片未加载完成时返回 null。 */
   exportBlob: () => Promise<Blob | null>
+  /** mask 层导出灰度 PNG（255=学 0=不学）+ 覆盖率。
+   *  mask 为空（全学）→ null（调用方应 DELETE 而不是写全白文件）。 */
+  exportMaskBlob: () => Promise<{ blob: Blob; coverage: number } | null>
 }
 
-function strokePath(ctx: CanvasRenderingContext2D, s: InpaintStroke): void {
-  ctx.strokeStyle = s.color
-  ctx.fillStyle = s.color
+/** mask 在画布上的显示色（导出只看 alpha，色值无所谓）。 */
+const MASK_COLOR = '#ff2d2d'
+const MASK_VIEW_ALPHA = 0.45
+
+function strokePath(ctx: CanvasRenderingContext2D, s: InpaintStroke, color?: string): void {
+  const c = color ?? s.color
+  ctx.strokeStyle = c
+  ctx.fillStyle = c
   ctx.lineWidth = s.size
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
@@ -44,36 +56,60 @@ function strokePath(ctx: CanvasRenderingContext2D, s: InpaintStroke): void {
   ctx.stroke()
 }
 
-/** 重放全部笔画。软边笔画经复用的 scratch canvas + blur filter 合成。 */
+type ScratchRef = { current: HTMLCanvasElement | null }
+
+/** 画一笔（含软边：经复用 scratch canvas + blur filter 合成）。 */
+function drawOneStroke(
+  ctx: CanvasRenderingContext2D,
+  s: InpaintStroke,
+  color: string,
+  holder: ScratchRef,
+): void {
+  if (s.hardness >= 1 || s.points.length === 0) {
+    strokePath(ctx, s, color)
+    return
+  }
+  const w = ctx.canvas.width
+  const h = ctx.canvas.height
+  if (!holder.current || holder.current.width !== w || holder.current.height !== h) {
+    holder.current = document.createElement('canvas')
+    holder.current.width = w
+    holder.current.height = h
+  }
+  const sctx = holder.current.getContext('2d')
+  if (!sctx) {
+    strokePath(ctx, s, color)
+    return
+  }
+  sctx.clearRect(0, 0, w, h)
+  strokePath(sctx, s, color)
+  const blur = (s.size * (1 - s.hardness)) / 2
+  ctx.save()
+  ctx.filter = `blur(${blur}px)`
+  ctx.drawImage(holder.current, 0, 0)
+  ctx.restore()
+}
+
+/** 重放涂抹笔画（场景 1，覆盖像素）。 */
 export function drawStrokes(
   ctx: CanvasRenderingContext2D,
   strokes: InpaintStroke[],
-  scratchRef?: { current: HTMLCanvasElement | null },
+  scratchRef?: ScratchRef,
 ): void {
   const holder = scratchRef ?? { current: null }
+  for (const s of strokes) drawOneStroke(ctx, s, s.color, holder)
+}
+
+/** 重放 mask 笔画到 mask 层（erase 走 destination-out）。 */
+function drawMaskStrokes(
+  ctx: CanvasRenderingContext2D,
+  strokes: InpaintStroke[],
+  scratchRef: ScratchRef,
+): void {
   for (const s of strokes) {
-    if (s.hardness >= 1 || s.points.length === 0) {
-      strokePath(ctx, s)
-      continue
-    }
-    const w = ctx.canvas.width
-    const h = ctx.canvas.height
-    if (!holder.current || holder.current.width !== w || holder.current.height !== h) {
-      holder.current = document.createElement('canvas')
-      holder.current.width = w
-      holder.current.height = h
-    }
-    const sctx = holder.current.getContext('2d')
-    if (!sctx) {
-      strokePath(ctx, s)
-      continue
-    }
-    sctx.clearRect(0, 0, w, h)
-    strokePath(sctx, s)
-    const blur = (s.size * (1 - s.hardness)) / 2
     ctx.save()
-    ctx.filter = `blur(${blur}px)`
-    ctx.drawImage(holder.current, 0, 0)
+    ctx.globalCompositeOperation = s.erase ? 'destination-out' : 'source-over'
+    drawOneStroke(ctx, s, MASK_COLOR, scratchRef)
     ctx.restore()
   }
 }
@@ -87,8 +123,96 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   })
 }
 
-/** 离屏重放：加载原图 → 重放笔画 → PNG blob。「保存全部」对非活动图用这个，
- *  不需要把每张图都挂成显示 canvas。 */
+/** 服务器灰度 mask（255=学 0=不学）→ 画布 mask 层位图（红色 + alpha=不学度）。 */
+async function loadMaskBase(url: string, w: number, h: number): Promise<HTMLCanvasElement | null> {
+  let img: HTMLImageElement
+  try {
+    img = await loadImage(url)
+  } catch {
+    return null // 404 = 无 mask
+  }
+  const c = document.createElement('canvas')
+  c.width = w
+  c.height = h
+  const ctx = c.getContext('2d')
+  if (!ctx) return null
+  ctx.drawImage(img, 0, 0, w, h)
+  const data = ctx.getImageData(0, 0, w, h)
+  const px = data.data
+  for (let i = 0; i < px.length; i += 4) {
+    const v = px[i] // 灰度值（R 通道）
+    px[i] = 255
+    px[i + 1] = 45
+    px[i + 2] = 45
+    px[i + 3] = 255 - v
+  }
+  ctx.putImageData(data, 0, 0)
+  return c
+}
+
+/** 重建 mask 层：底图（服务器已有 mask）+ 本地笔画。 */
+function rebuildMaskLayer(
+  layer: HTMLCanvasElement,
+  base: HTMLCanvasElement | null,
+  strokes: InpaintStroke[],
+  scratchRef: ScratchRef,
+): void {
+  const ctx = layer.getContext('2d')
+  if (!ctx) return
+  ctx.clearRect(0, 0, layer.width, layer.height)
+  if (base) ctx.drawImage(base, 0, 0)
+  drawMaskStrokes(ctx, strokes, scratchRef)
+}
+
+/** mask 层 → 灰度 PNG（255=学 0=不学）+ 覆盖率。全空 → null。 */
+async function maskLayerToGray(
+  layer: HTMLCanvasElement,
+): Promise<{ blob: Blob; coverage: number } | null> {
+  const ctx = layer.getContext('2d')
+  if (!ctx) return null
+  const data = ctx.getImageData(0, 0, layer.width, layer.height)
+  const px = data.data
+  let sum = 0
+  for (let i = 0; i < px.length; i += 4) {
+    const a = px[i + 3]
+    sum += a
+    const v = 255 - a
+    px[i] = v
+    px[i + 1] = v
+    px[i + 2] = v
+    px[i + 3] = 255
+  }
+  const n = px.length / 4
+  const coverage = sum / 255 / n
+  if (sum === 0) return null
+  const out = document.createElement('canvas')
+  out.width = layer.width
+  out.height = layer.height
+  const octx = out.getContext('2d')
+  if (!octx) return null
+  octx.putImageData(data, 0, 0)
+  const blob = await new Promise<Blob | null>((resolve) => {
+    out.toBlob((b) => resolve(b), 'image/png')
+  })
+  return blob ? { blob, coverage } : null
+}
+
+/** 离屏重建 mask 并导出（「保存全部」对非活动图用）。null = mask 为空。 */
+export async function renderMaskBlob(
+  maskBaseUrl: string | null,
+  w: number,
+  h: number,
+  strokes: InpaintStroke[],
+): Promise<{ blob: Blob; coverage: number } | null> {
+  const layer = document.createElement('canvas')
+  layer.width = w
+  layer.height = h
+  const base = maskBaseUrl ? await loadMaskBase(maskBaseUrl, w, h) : null
+  rebuildMaskLayer(layer, base, strokes, { current: null })
+  return await maskLayerToGray(layer)
+}
+
+/** 离屏重放涂抹：加载原图 → 重放笔画 → PNG blob。 */
 export async function renderInpaintedBlob(
   imageUrl: string,
   w: number,
@@ -124,11 +248,14 @@ interface View {
 
 /** 涂抹主画布：原图分辨率 canvas + CSS transform 视图。
  *
- *  - 笔画为受控数据（strokes prop），绘制中在画布上增量画实心预览，
- *    pointerup 提交 onStrokeEnd 后由 strokes 变化触发全量重绘（软边生效）。
- *  - 滚轮以指针为中心缩放；空格按住 / 鼠标中键拖拽平移。
- *  - Alt+点击（或 eyedropper prop）吸管取色，取的是画布当前显示的合成色。
- *  - 视图状态放 ref 直改 DOM transform —— pan/zoom 高频路径不走 React 渲染。
+ *  两个数据面（双桶受控）：
+ *  - 涂抹笔画（strokes）：直接覆盖像素，重绘顺序 img → strokes。
+ *  - mask 笔画（maskStrokes）+ 服务器底图（maskBaseUrl）：合成到独立
+ *    maskLayer（红色 alpha 位图），主画布最后以半透明叠加显示。
+ *
+ *  绘制中在主画布增量画预览段（mask 橡皮擦以半透明白示意），pointerup
+ *  提交后由 props 变化触发全量重绘校正。视图状态放 ref 直改 DOM
+ *  transform —— pan/zoom 高频路径不走 React 渲染。
  */
 const InpaintCanvas = forwardRef<
   InpaintCanvasHandle,
@@ -136,13 +263,25 @@ const InpaintCanvas = forwardRef<
     imageUrl: string
     imageW: number
     imageH: number
+    mode: InpaintMode
     strokes: InpaintStroke[]
+    maskStrokes: InpaintStroke[]
+    /** 服务器已有 mask 的 URL；null = 无底图（含本地「清除 mask」后）。 */
+    maskBaseUrl: string | null
     brush: { color: string; size: number; hardness: number }
+    /** mask 模式当前是否橡皮擦。 */
+    maskErase: boolean
     onStrokeEnd: (s: InpaintStroke) => void
+    onMaskStrokeEnd: (s: InpaintStroke) => void
     onPickColor: (hex: string) => void
+    /** mask 层变化后的覆盖率回调（0..1，缩样估算）。 */
+    onMaskCoverage?: (pct: number) => void
   }
 >(function InpaintCanvas(
-  { imageUrl, imageW, imageH, strokes, brush, onStrokeEnd, onPickColor },
+  {
+    imageUrl, imageW, imageH, mode, strokes, maskStrokes, maskBaseUrl,
+    brush, maskErase, onStrokeEnd, onMaskStrokeEnd, onPickColor, onMaskCoverage,
+  },
   ref,
 ) {
   const { t } = useTranslation()
@@ -151,22 +290,45 @@ const InpaintCanvas = forwardRef<
   const cursorRef = useRef<HTMLDivElement | null>(null)
   const imgRef = useRef<HTMLImageElement | null>(null)
   const scratchRef = useRef<HTMLCanvasElement | null>(null)
+  const maskLayerRef = useRef<HTMLCanvasElement | null>(null)
+  const maskBaseRef = useRef<HTMLCanvasElement | null>(null)
 
   const viewRef = useRef<View>({ scale: 1, tx: 0, ty: 0 })
   const interactedRef = useRef(false)
   const spaceRef = useRef(false)
   const panRef = useRef<{ x: number; y: number } | null>(null)
-  const drawingRef = useRef<InpaintStroke | null>(null)
+  // 落笔时锁定归属（paint / mask），松手按此提交 —— 不事后按 mode 猜
+  const drawingRef = useRef<{ stroke: InpaintStroke; target: InpaintMode } | null>(null)
 
   const [zoomPct, setZoomPct] = useState(100)
   const [loaded, setLoaded] = useState(false)
+  const [maskBaseTick, setMaskBaseTick] = useState(0)
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null)
 
-  // strokes 最新引用给 redraw 闭包（避免 effect 依赖循环）
   const strokesRef = useRef(strokes)
   strokesRef.current = strokes
+  const maskStrokesRef = useRef(maskStrokes)
+  maskStrokesRef.current = maskStrokes
   const brushRef = useRef(brush)
   brushRef.current = brush
+  const modeRef = useRef(mode)
+  modeRef.current = mode
+  const maskEraseRef = useRef(maskErase)
+  maskEraseRef.current = maskErase
+
+  const ensureMaskLayer = useCallback((): HTMLCanvasElement => {
+    if (
+      !maskLayerRef.current ||
+      maskLayerRef.current.width !== imageW ||
+      maskLayerRef.current.height !== imageH
+    ) {
+      const c = document.createElement('canvas')
+      c.width = imageW
+      c.height = imageH
+      maskLayerRef.current = c
+    }
+    return maskLayerRef.current
+  }, [imageW, imageH])
 
   const applyView = useCallback(() => {
     const v = viewRef.current
@@ -186,7 +348,34 @@ const InpaintCanvas = forwardRef<
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
     drawStrokes(ctx, strokesRef.current, scratchRef)
+    const layer = maskLayerRef.current
+    if (layer) {
+      ctx.save()
+      ctx.globalAlpha = MASK_VIEW_ALPHA
+      ctx.drawImage(layer, 0, 0)
+      ctx.restore()
+    }
   }, [])
+
+  /** 覆盖率估算：mask 层缩样到 64×64 读 alpha 均值（每笔一次，便宜）。 */
+  const reportCoverage = useCallback(() => {
+    if (!onMaskCoverage) return
+    const layer = maskLayerRef.current
+    if (!layer) {
+      onMaskCoverage(0)
+      return
+    }
+    const tiny = document.createElement('canvas')
+    tiny.width = 64
+    tiny.height = 64
+    const tctx = tiny.getContext('2d')
+    if (!tctx) return
+    tctx.drawImage(layer, 0, 0, 64, 64)
+    const px = tctx.getImageData(0, 0, 64, 64).data
+    let sum = 0
+    for (let i = 3; i < px.length; i += 4) sum += px[i]
+    onMaskCoverage(sum / 255 / (64 * 64))
+  }, [onMaskCoverage])
 
   const fit = useCallback(() => {
     const wrap = wrapRef.current
@@ -225,7 +414,33 @@ const InpaintCanvas = forwardRef<
     }
   }, [imageUrl, fit, redraw])
 
-  // strokes 变化全量重绘（undo / redo / 落笔提交 / 清除）
+  // mask 底图加载（URL 变化 = 换图 / 保存后刷新 / 本地清除→null）
+  useEffect(() => {
+    let cancelled = false
+    maskBaseRef.current = null
+    if (!maskBaseUrl) {
+      setMaskBaseTick((v) => v + 1)
+      return
+    }
+    void loadMaskBase(maskBaseUrl, imageW, imageH).then((base) => {
+      if (cancelled) return
+      maskBaseRef.current = base
+      setMaskBaseTick((v) => v + 1)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [maskBaseUrl, imageW, imageH])
+
+  // mask 层重建（底图 / 笔画变化）→ 主画布重绘 + 覆盖率
+  useEffect(() => {
+    const layer = ensureMaskLayer()
+    rebuildMaskLayer(layer, maskBaseRef.current, maskStrokes, scratchRef)
+    redraw()
+    reportCoverage()
+  }, [maskStrokes, maskBaseTick, ensureMaskLayer, redraw, reportCoverage])
+
+  // 涂抹笔画变化全量重绘（undo / redo / 落笔提交 / 清除）
   useEffect(() => {
     redraw()
   }, [strokes, redraw])
@@ -253,7 +468,6 @@ const InpaintCanvas = forwardRef<
       const v = viewRef.current
       const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15
       const next = Math.min(32, Math.max(0.02, v.scale * factor))
-      // 保持指针下的图像点不动
       viewRef.current = {
         scale: next,
         tx: mx - ((mx - v.tx) * next) / v.scale,
@@ -296,13 +510,26 @@ const InpaintCanvas = forwardRef<
   useImperativeHandle(ref, () => ({
     exportBlob: async () => {
       const canvas = canvasRef.current
-      if (!canvas || !imgRef.current) return null
-      redraw()
+      const img = imgRef.current
+      if (!canvas || !img) return null
+      // 导出不含 mask overlay：干净重绘 img + strokes
+      const out = document.createElement('canvas')
+      out.width = canvas.width
+      out.height = canvas.height
+      const ctx = out.getContext('2d')
+      if (!ctx) return null
+      ctx.drawImage(img, 0, 0, out.width, out.height)
+      drawStrokes(ctx, strokesRef.current, scratchRef)
       return await new Promise<Blob | null>((resolve) => {
-        canvas.toBlob((b) => resolve(b), 'image/png')
+        out.toBlob((b) => resolve(b), 'image/png')
       })
     },
-  }), [redraw])
+    exportMaskBlob: async () => {
+      const layer = ensureMaskLayer()
+      rebuildMaskLayer(layer, maskBaseRef.current, maskStrokesRef.current, scratchRef)
+      return await maskLayerToGray(layer)
+    },
+  }), [ensureMaskLayer])
 
   const toImagePoint = useCallback((clientX: number, clientY: number) => {
     const wrap = wrapRef.current
@@ -315,7 +542,6 @@ const InpaintCanvas = forwardRef<
     }
   }, [])
 
-  /** 笔刷圆圈光标跟随（ref 直改 style，不走渲染）。 */
   const updateCursor = useCallback((clientX: number, clientY: number) => {
     const cur = cursorRef.current
     const wrap = wrapRef.current
@@ -348,29 +574,39 @@ const InpaintCanvas = forwardRef<
     (e: React.PointerEvent<HTMLDivElement>) => {
       if (!loaded) return
       e.currentTarget.setPointerCapture(e.pointerId)
-      // pan：空格按住 / 中键
       if (spaceRef.current || e.button === 1) {
         panRef.current = { x: e.clientX, y: e.clientY }
         return
       }
       if (e.button !== 0) return
-      if (e.altKey) {
+      if (e.altKey && modeRef.current === 'paint') {
         pickColor(e.clientX, e.clientY)
         return
       }
       const pt = toImagePoint(e.clientX, e.clientY)
       if (!pt) return
       const b = brushRef.current
+      const isMask = modeRef.current === 'mask'
       const stroke: InpaintStroke = {
-        color: b.color,
+        color: isMask ? MASK_COLOR : b.color,
         size: b.size,
         hardness: b.hardness,
+        ...(isMask && maskEraseRef.current ? { erase: true } : {}),
         points: [pt],
       }
-      drawingRef.current = stroke
-      // 单点立即可见
+      drawingRef.current = { stroke, target: isMask ? 'mask' : 'paint' }
+      // 单点立即可见（预览；mask 橡皮以半透明白示意，松手后全量重绘校正）
       const ctx = canvasRef.current?.getContext('2d')
-      if (ctx) strokePath(ctx, stroke)
+      if (ctx) {
+        ctx.save()
+        if (isMask) {
+          ctx.globalAlpha = MASK_VIEW_ALPHA
+          strokePath(ctx, stroke, stroke.erase ? '#ffffff' : MASK_COLOR)
+        } else {
+          strokePath(ctx, stroke)
+        }
+        ctx.restore()
+      }
     },
     [loaded, pickColor, toImagePoint],
   )
@@ -402,14 +638,19 @@ const InpaintCanvas = forwardRef<
         }
         return
       }
-      const stroke = drawingRef.current
-      if (!stroke || !pt) return
+      const drawing = drawingRef.current
+      if (!drawing || !pt) return
+      const stroke = drawing.stroke
       const prev = stroke.points[stroke.points.length - 1]
       stroke.points.push(pt)
-      // 增量画段（实心预览；软边在提交后的全量重绘生效）
       const ctx = canvasRef.current?.getContext('2d')
       if (ctx) {
-        ctx.strokeStyle = stroke.color
+        ctx.save()
+        const isMask = drawing.target === 'mask'
+        ctx.strokeStyle = isMask
+          ? (stroke.erase ? '#ffffff' : MASK_COLOR)
+          : stroke.color
+        if (isMask) ctx.globalAlpha = MASK_VIEW_ALPHA
         ctx.lineWidth = stroke.size
         ctx.lineCap = 'round'
         ctx.lineJoin = 'round'
@@ -417,6 +658,7 @@ const InpaintCanvas = forwardRef<
         ctx.moveTo(prev.x, prev.y)
         ctx.lineTo(pt.x, pt.y)
         ctx.stroke()
+        ctx.restore()
       }
     },
     [updateCursor, toImagePoint, imageW, imageH],
@@ -424,10 +666,12 @@ const InpaintCanvas = forwardRef<
 
   const endStroke = useCallback(() => {
     panRef.current = null
-    const stroke = drawingRef.current
+    const drawing = drawingRef.current
     drawingRef.current = null
-    if (stroke) onStrokeEnd(stroke)
-  }, [onStrokeEnd])
+    if (!drawing) return
+    if (drawing.target === 'mask') onMaskStrokeEnd(drawing.stroke)
+    else onStrokeEnd(drawing.stroke)
+  }, [onStrokeEnd, onMaskStrokeEnd])
 
   return (
     <div className="flex flex-col h-full min-h-0 gap-1.5">
@@ -454,12 +698,14 @@ const InpaintCanvas = forwardRef<
           height={imageH}
           style={{ position: 'absolute', left: 0, top: 0, transformOrigin: '0 0' }}
         />
-        {/* 笔刷圆圈光标 */}
+        {/* 笔刷圆圈光标（mask 模式描红 / 橡皮描白） */}
         <div
           ref={cursorRef}
           className="absolute pointer-events-none rounded-full"
           style={{
-            border: '1.5px solid rgba(255,255,255,0.9)',
+            border: mode === 'mask'
+              ? `1.5px solid ${maskErase ? 'rgba(255,255,255,0.95)' : 'rgba(255,45,45,0.95)'}`
+              : '1.5px solid rgba(255,255,255,0.9)',
             outline: '1px solid rgba(0,0,0,0.6)',
           }}
         />
@@ -489,7 +735,6 @@ const InpaintCanvas = forwardRef<
             if (!wrap) return
             const rect = wrap.getBoundingClientRect()
             const v = viewRef.current
-            // 以视口中心为锚点回 100%
             const cx = rect.width / 2
             const cy = rect.height / 2
             viewRef.current = {
