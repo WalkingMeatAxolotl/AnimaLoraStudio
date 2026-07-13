@@ -34,19 +34,15 @@ export default function SampleGallery({ samples, taskId }: {
   }
 
   return (
-    <div className="flex-1 flex flex-col items-center gap-2 min-h-0">
-      {/* ZoomableImage 自带视口边框 / 背景 + readout 条，外层不再包样式 */}
-      <div className="flex-1 min-h-0 w-full">
-        <ZoomableImage
-          key={fullUrl}
-          src={fullUrl}
-          alt={filename}
-          onError={() => setErrored(true)}
-        />
-      </div>
-      <div className="text-xs text-fg-tertiary font-mono truncate w-full text-center">
-        {filename}
-      </div>
+    // ZoomableImage 自带视口边框 / 背景 + readout 条；旧的 filename footer
+    //（"single image N.png"）与 readout 重复，已删
+    <div className="flex-1 min-h-0 w-full">
+      <ZoomableImage
+        key={fullUrl}
+        src={fullUrl}
+        alt={filename}
+        onError={() => setErrored(true)}
+      />
     </div>
   )
 }

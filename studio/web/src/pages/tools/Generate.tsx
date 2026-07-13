@@ -1059,12 +1059,15 @@ export default function GeneratePage() {
                       />
                     </div>
                   )}
-                  <div className="text-xs text-fg-tertiary shrink-0">
-                    {historyOverride.source === 'disk'
-                      ? (historyOverride.folder ?? (historyOverride.filename ?? '').replace(/\.png$/i, ''))
-                      : t('generate.historyTask', { id: historyOverride.taskId })}
-                    {/* 0.17 P-I：删「返回当前」——统一时间线后回到实时点右栏 running 项即可。 */}
-                  </div>
+                  {/* 单图视图不再显示 filename footer（"single image N" 与
+                      ZoomableImage readout 重复）；XY 网格保留 folder / 任务号
+                      作批次标识。0.17 P-I：删「返回当前」——统一时间线后回到
+                      实时点右栏 running 项即可。 */}
+                  {historyOverride.source === 'disk' && historyOverride.xyMeta && (
+                    <div className="text-xs text-fg-tertiary shrink-0">
+                      {historyOverride.folder ?? (historyOverride.filename ?? '').replace(/\.png$/i, '')}
+                    </div>
+                  )}
                 </div>
               ) : !currentTask ? (
                 <div className="flex-1 grid place-items-center rounded-md border border-subtle bg-sunken text-fg-tertiary text-sm">
