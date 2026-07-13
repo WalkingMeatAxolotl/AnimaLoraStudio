@@ -201,10 +201,11 @@ StepShell
      训练不消费——先合先用，攒 mask 数据。
    - **B2（训练器）**：dataset 变换同步、npz 缓存、loss 加权、config 开关、
      NaViT gate。对齐 #389/#390 拆写读路径的先例。
-2. **保存交互**：涂抹笔画与 mask 双数据面共用「保存当前图 / 保存全部」按钮，
-   按当前模式分发（涂抹 → 整图上传；Mask → 灰度 PNG 写 mask 端点）。未保存
-   状态双桶独立（`strokesByImage` / `maskStrokesByImage`，对齐 Generate 页
-   LoRA 双桶先例）。
+2. **保存交互**（B1 实装后修订，2026-07-13）：~~按当前模式分发 + 双桶独立~~
+   → **统一编辑历史**。双桶模型让切模式改变按钮文案 / 可用性，体感割裂成两个
+   页面；改为 `historyByImage` 单一时间线（`{kind: paint|mask, stroke}` 混合
+   序列），dirty / undo / redo / 撤销修改跨模式共用，「保存当前图」一次写两个
+   数据面（涂抹先行获取可能的改名，mask 用新 name 写入）。模式只是笔刷。
 3. **npz 缓存失效三条**（漏一条就训到旧 mask，全部进 `_is_cache_valid`）：
    mask 存在但 npz 无 mask 键（新画）；mask mtime 新于 npz（重画）；mask 已删
    但 npz 有 mask 键（清除）。下采样时机 = 编码期存 latent 分辨率进 npz
