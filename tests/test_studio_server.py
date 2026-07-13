@@ -599,6 +599,28 @@ def test_system_restart_writes_flag_and_schedules_shutdown(
     assert called["ran"], "_raise_sigint_after_response BackgroundTask 应被调度"
 
 
+def test_uvicorn_run_bounds_graceful_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """main() 必须给 uvicorn 传 timeout_graceful_shutdown 上限。
+
+    浏览器开着时 /api/events 的 SSE 长连接不主动断，graceful shutdown 默认
+    无限等 →「Waiting for connections to close」卡死；且 py3.12+ 的
+    asyncio.Server.wait_closed() 等全部活跃连接，二次 Ctrl+C 设 force_exit
+    也解不开。没有这个上限，终端 Ctrl+C 永远关不掉 server。
+    """
+    import uvicorn
+
+    from studio.api import main as main_mod
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(uvicorn, "run", lambda *a, **kw: captured.update(kw))
+    monkeypatch.setattr("sys.argv", ["anima-studio"])
+    main_mod.main()
+    timeout = captured.get("timeout_graceful_shutdown")
+    assert isinstance(timeout, (int, float)) and timeout > 0
+
+
 # ---------------------------------------------------------------------------
 # /api/system/version (ADR 0002 / PR-B)
 # ---------------------------------------------------------------------------
