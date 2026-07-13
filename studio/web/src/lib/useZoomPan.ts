@@ -37,6 +37,13 @@ export interface UseZoomPanOptions {
   contentH: number
   /** true = 左键拖拽即 pan（纯查看器）；false = 仅空格 / 中键（画笔类）。 */
   primaryButtonPans?: boolean
+  /** 缩放的 DOM 应用方式：
+   *  - 'transform'（默认）：translate+scale，纯 composite 最快；内容整体
+   *    视觉缩放（含边框 / 子元素）。
+   *  - 'size'：改宽高 + translate 平移 —— 内容按新尺寸重排，px 单位的
+   *    border / handle / label 不跟着缩放（DOM overlay 编辑器用，如
+   *    FreeCropEditor 的 % 定位 rect）。每帧触发 layout，小子树可接受。 */
+  applyMode?: 'transform' | 'size'
   /** fit 时的留边系数，默认 0.98。 */
   fitPadding?: number
   /** 缩放上下限（scale 值）。 */
@@ -48,6 +55,7 @@ export function useZoomPan({
   contentW,
   contentH,
   primaryButtonPans = false,
+  applyMode = 'transform',
   fitPadding = 0.98,
   minScale = 0.02,
   maxScale = 32,
@@ -62,14 +70,23 @@ export function useZoomPan({
   const draggedRef = useRef(false)
   const [zoomPct, setZoomPct] = useState(100)
 
-  const applyView = useCallback(() => {
+  const applyToDom = useCallback(() => {
     const v = viewRef.current
     const el = contentRef.current
-    if (el) {
+    if (!el) return
+    if (applyMode === 'size') {
+      el.style.width = `${contentW * v.scale}px`
+      el.style.height = `${contentH * v.scale}px`
+      el.style.transform = `translate(${v.tx}px, ${v.ty}px)`
+    } else {
       el.style.transform = `translate(${v.tx}px, ${v.ty}px) scale(${v.scale})`
     }
-    setZoomPct(Math.round(v.scale * 100))
-  }, [])
+  }, [applyMode, contentW, contentH])
+
+  const applyView = useCallback(() => {
+    applyToDom()
+    setZoomPct(Math.round(viewRef.current.scale * 100))
+  }, [applyToDom])
 
   const fit = useCallback(() => {
     const wrap = wrapRef.current
@@ -205,13 +222,9 @@ export function useZoomPan({
       ty: viewRef.current.ty + dy,
     }
     interactedRef.current = true
-    const el = contentRef.current
-    if (el) {
-      const v = viewRef.current
-      el.style.transform = `translate(${v.tx}px, ${v.ty}px) scale(${v.scale})`
-    }
+    applyToDom()
     return true
-  }, [])
+  }, [applyToDom])
 
   /** 结束 pan；返回本次手势是否发生过拖动（modal 据此决定是否当作点击关闭）。 */
   const endPan = useCallback((): boolean => {

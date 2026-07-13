@@ -20,6 +20,8 @@
     "confirm": "Confirm",
     "ok": "OK",
     "zoomHint": "Wheel to zoom · drag to pan · double-click to toggle fit/100%",
+    "zoomFit": "Fit",
+    "cropZoomHint": "Wheel to zoom · space-drag to pan",
     "gotIt": "Got it",
     "save": "Save",
     "delete": "Delete",

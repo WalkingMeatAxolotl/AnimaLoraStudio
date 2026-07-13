@@ -15,11 +15,14 @@ export default function ZoomableImage({
   alt,
   className,
   style,
+  onError,
 }: {
   src: string
   alt?: string
   className?: string
   style?: React.CSSProperties
+  /** img 加载失败回调（调用方切换占位 UI 用）。 */
+  onError?: () => void
 }) {
   const { t } = useTranslation()
   const [nat, setNat] = useState<{ w: number; h: number } | null>(null)
@@ -56,6 +59,7 @@ export default function ZoomableImage({
           w: e.currentTarget.naturalWidth,
           h: e.currentTarget.naturalHeight,
         })}
+        onError={onError}
         style={{
           position: 'absolute',
           left: 0,

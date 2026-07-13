@@ -21,6 +21,7 @@ import DaemonLogDrawer from './generate/DaemonLogDrawer'
 import GenerateProgressBar, { type GenerateProgress, type GeneratePhase } from './generate/GenerateProgress'
 import NumField from './generate/NumField'
 import PreviewCompare from './generate/PreviewCompare'
+import ZoomableImage from '../../components/ZoomableImage'
 import PreviewHistoryRail, { type TimelineItem } from './generate/PreviewHistoryRail'
 import PromptFromDatasetPicker, { type DatasetPick } from './generate/PromptFromDatasetPicker'
 import {
@@ -1048,24 +1049,16 @@ export default function GeneratePage() {
                       compositeUrl={historyOverride.source === 'disk' ? historyOverride.imageUrl : undefined}
                     />
                   ) : (
-                    /* DiskEntry single / legacy XY（无 xyMeta） / CacheEntry single → 单图视图 */
-                    <a
-                      className="flex-1 min-h-0 flex items-center justify-center w-full"
-                      href={entryImageUrl(historyOverride, 0)}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      <img
+                    /* DiskEntry single / legacy XY（无 xyMeta） / CacheEntry single
+                       → 单图视图（内嵌缩放平移，useZoomPan） */
+                    <div className="flex-1 min-h-0 w-full rounded-md border border-subtle bg-sunken">
+                      <ZoomableImage
                         key={historyOverride.id}
                         src={entryImageUrl(historyOverride, 0)}
-                        onError={(e) => {
-                          (e.currentTarget as HTMLImageElement).title = t('generate.originalReleasedThumbOnly')
-                        }}
                         alt=""
-                        className="rounded-md object-contain"
-                        style={{ maxWidth: '100%', maxHeight: '100%' }}
+                        style={{ borderRadius: 6 }}
                       />
-                    </a>
+                    </div>
                   )}
                   <div className="text-xs text-fg-tertiary shrink-0">
                     {historyOverride.source === 'disk'

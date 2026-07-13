@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { arLabel } from '../../lib/aspectRatio'
+import { useZoomPan } from '../../lib/useZoomPan'
 
 /** A normalized [0..1] crop rectangle on an image. */
 export interface CropRect {
@@ -29,10 +31,6 @@ export interface FreeCropEditorProps {
   selectedId: string | null
   /** When non-null, new + resize ops maintain this w:h aspect ratio. */
   arLock: { w: number; h: number } | null
-  /** Max width (px) the canvas may render at. */
-  maxWidth?: number
-  /** Max height (px) the canvas may render at. */
-  maxHeight?: number
   onSelect: (id: string | null) => void
   onChange: (id: string, rect: CropRect) => void
   onCreate: (rect: Omit<CropRect, 'id' | 'label'>) => void
@@ -168,12 +166,11 @@ export default function FreeCropEditor({
   crops,
   selectedId,
   arLock,
-  maxWidth = 1600,
-  maxHeight = 1200,
   onSelect,
   onChange,
   onCreate,
 }: FreeCropEditorProps) {
+  const { t } = useTranslation()
   const canvasRef = useRef<HTMLDivElement | null>(null)
   const dragRef = useRef<DragState | null>(null)
   const [hoverId, setHoverId] = useState<string | null>(null)
@@ -186,12 +183,24 @@ export default function FreeCropEditor({
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null)
   useEffect(() => { setNatural(null) }, [image.thumbUrl])
 
+  // 视口（zoom / pan / fit）：size 模式 —— 缩放通过改 wrapper 宽高实现，
+  // rect 的 % 定位自动跟随、px 单位的边框 / handle / label 不缩放；
+  // 所有拖拽数学基于 getBoundingClientRect 实时读取，缩放下自动正确。
+  // 左键留给画框（primaryButtonPans 缺省 false），pan = 空格 / 中键。
+  const zp = useZoomPan({
+    contentW: (natural ?? { w: image.w, h: image.h }).w,
+    contentH: (natural ?? { w: image.w, h: image.h }).h,
+    applyMode: 'size',
+  })
+
   const onPointerDown = (
     e: React.MouseEvent,
     mode: DragState['mode'],
     rect: CropRect | null,
     handle: DragState['handle'] | null,
   ) => {
+    // 空格 / 中键 = pan 手势，让路给视口（事件冒泡到视口容器处理）
+    if (e.button === 1 || zp.spaceRef.current) return
     e.preventDefault()
     e.stopPropagation()
     const cv = canvasRef.current?.getBoundingClientRect()
@@ -310,21 +319,36 @@ export default function FreeCropEditor({
   const arCss = `${arSrc.w} / ${arSrc.h}`
 
   return (
-    <div className="flex items-center justify-center w-full h-full overflow-hidden min-w-0 min-h-0">
+    <div className="flex flex-col w-full h-full overflow-hidden min-w-0 min-h-0 gap-1.5">
       <div
-        ref={canvasRef}
+        ref={zp.wrapRef}
+        className="relative flex-1 min-h-0 overflow-hidden"
+        style={{ touchAction: 'none' }}
+        onPointerDown={(e) => {
+          if (zp.panPointerDown(e)) e.currentTarget.setPointerCapture(e.pointerId)
+        }}
+        onPointerMove={(e) => { zp.panPointerMove(e) }}
+        onPointerUp={() => zp.endPan()}
+        onPointerCancel={() => zp.endPan()}
+      >
+      <div
+        ref={(el) => {
+          canvasRef.current = el
+          zp.contentRef.current = el
+        }}
         className="cropper-canvas"
         style={{
-          position: 'relative',
-          // aspect-ratio + max-w/max-h: browser sizes the wrapper to fit the
-          // container while preserving AR, no JS measurement needed. Wrapper
-          // ends up exactly the size the <img> renders at, so rect overlays
-          // (positioned in %) align 1:1 with image pixels.
+          // useZoomPan size 模式控制 width/height（= 原图尺寸 × scale）+
+          // translate 平移；rect overlays（% 定位）随 wrapper 缩放 1:1 对齐，
+          // px 边框 / handle 不缩放。arCss 仅作 onLoad 前的首帧尺寸提示。
+          position: 'absolute',
+          left: 0,
+          top: 0,
           aspectRatio: arCss,
-          maxWidth: `min(100%, ${maxWidth}px)`,
-          maxHeight: `min(100%, ${maxHeight}px)`,
         }}
         onMouseDown={(e) => {
+          // 空格 / 中键 = pan（冒泡给视口容器）；create 只响应纯左键
+          if (e.button !== 0 || zp.spaceRef.current) return
           // create on blank-canvas click. img has pointer-events:none so click
           // lands here; rect children stopPropagation in their own handlers.
           if (e.target === canvasRef.current || (e.target as HTMLElement).tagName === 'IMG') {
@@ -436,7 +460,25 @@ export default function FreeCropEditor({
           </div>
         )}
       </div>
+      </div>
 
+      {/* readout 细条（对齐涂抹页）：zoom / 适应 / 100% / 操作提示 */}
+      <div className="shrink-0 flex items-center gap-2 text-[11px] font-mono text-fg-tertiary px-1">
+        <span>{zp.zoomPct}%</span>
+        <button
+          type="button"
+          className="px-1.5 py-0.5 rounded hover:bg-overlay hover:text-fg-primary"
+          onClick={() => zp.fit()}
+        >{t('common.zoomFit')}</button>
+        <button
+          type="button"
+          className="px-1.5 py-0.5 rounded hover:bg-overlay hover:text-fg-primary"
+          onClick={() => zp.reset100()}
+        >100%</button>
+        <span className="flex-1" />
+        <span>{image.w}×{image.h}</span>
+        <span className="text-fg-disabled">{t('common.cropZoomHint')}</span>
+      </div>
     </div>
   )
 }

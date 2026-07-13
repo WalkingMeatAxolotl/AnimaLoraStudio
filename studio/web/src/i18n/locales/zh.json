@@ -20,6 +20,8 @@
     "confirm": "确认",
     "ok": "确定",
     "zoomHint": "滚轮缩放 · 拖拽平移 · 双击切换适应/100%",
+    "zoomFit": "适应窗口",
+    "cropZoomHint": "滚轮缩放 · 空格拖拽平移",
     "gotIt": "知道了",
     "save": "保存",
     "delete": "删除",
