@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -619,6 +620,36 @@ def test_uvicorn_run_bounds_graceful_shutdown(
     main_mod.main()
     timeout = captured.get("timeout_graceful_shutdown")
     assert isinstance(timeout, (int, float)) and timeout > 0
+
+
+def test_cancelled_asgi_noise_filter_scope() -> None:
+    """shutdown 超时取消 SSE 连接时，uvicorn 把 CancelledError 按
+    「Exception in ASGI application」打 ERROR traceback —— 主动取消不是
+    应用错误，应被过滤；其它 ASGI 异常 / 其它 message 必须照常放行。"""
+    import asyncio
+
+    from studio.api.lifespan import _CancelledAsgiNoiseFilter
+
+    f = _CancelledAsgiNoiseFilter()
+
+    def record(msg: str, exc: BaseException | None) -> logging.LogRecord:
+        return logging.LogRecord(
+            name="uvicorn.error", level=logging.ERROR, pathname=__file__,
+            lineno=1, msg=msg, args=(),
+            exc_info=(type(exc), exc, None) if exc is not None else None,
+        )
+
+    # 目标噪声：吞
+    assert not f.filter(
+        record("Exception in ASGI application\n", asyncio.CancelledError())
+    )
+    # 真实应用异常：放行
+    assert f.filter(
+        record("Exception in ASGI application\n", RuntimeError("boom"))
+    )
+    # 无异常信息 / 其它 message：放行
+    assert f.filter(record("Exception in ASGI application\n", None))
+    assert f.filter(record("Cancel 2 running task(s)", asyncio.CancelledError()))
 
 
 # ---------------------------------------------------------------------------
