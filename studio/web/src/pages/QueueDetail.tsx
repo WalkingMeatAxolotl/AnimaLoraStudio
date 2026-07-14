@@ -403,9 +403,13 @@ export default function QueueDetailPage() {
                   title={t('queue.resumeTerminalHint')}
                 >{t('queue.resumeTerminal')}</button>
               )}
+              {/* train 任务 done 后还挂着训练后评估：这里叫「重试」会被误读成
+                  重跑失败的评估（实际是复制配置从头重新训练），所以 train 显式
+                  叫「重新训练」；其余类型无此歧义保持「重试」。 */}
               <button onClick={retry} disabled={busy}
                 className={`btn btn-sm ${task?.is_resumable ? 'btn-secondary' : 'btn-primary'}`}
-              >{t('common.retry')}</button>
+                title={kind === 'train' ? t('queueDetail.retryTrainHint') : undefined}
+              >{kind === 'train' ? t('queueDetail.retryTrain') : t('common.retry')}</button>
               <button onClick={() => setConfirmDelete(true)} disabled={busy}
                 className="btn btn-sm bg-err-soft border border-err text-err"
               >{t('queueDetail.deleteRecord')}</button>
@@ -646,9 +650,12 @@ function useEvalLogSource(
   vid: number | undefined,
   taskId: number,
 ): LogSource | null {
+  const { t } = useTranslation()
+  const { toast } = useToast()
   const [jobs, setJobs] = useState<EvalJobInfo[]>([])
   const [buffers, setBuffers] = useState<Record<number, string>>({})
   const buffersRef = useRef<Record<number, string>>({})
+  const [retrying, setRetrying] = useState(false)
 
   const loadJobs = useCallback(async () => {
     if (!pid || !vid || !taskId) return
@@ -732,8 +739,23 @@ function useEvalLogSource(
           void loadJobs()
         }
       : undefined
-    return { key: `eval-${taskId}`, label: '评估', status, lines, onCancel }
-  }, [jobs, buffers, taskId, loadJobs])
+    // 重试：整体 failed 时对本轮同一批 checkpoint 完全重跑（后端 /eval/run 会
+    // 先清空上一轮 run 再排队 + 自动补 baseline），不做失败项增量。checkpoint
+    // 从本轮 job params 收集（baseline job 复用首个 checkpoint 路径，去重即可）。
+    const ckpts = [...new Set(
+      jobs.map((j) => j.checkpoint_path).filter((p): p is string => !!p),
+    )]
+    const onRetry = status === 'failed' && !retrying && pid && vid && ckpts.length
+      ? () => {
+          setRetrying(true)
+          api.runTaskEval(pid, vid, { task_id: taskId, checkpoints: ckpts })
+            .then(() => { toast(t('queueDetail.evalRetryQueued'), 'success'); return loadJobs() })
+            .catch((e) => toast(String(e), 'error'))
+            .finally(() => setRetrying(false))
+        }
+      : undefined
+    return { key: `eval-${taskId}`, label: '评估', status, lines, onCancel, onRetry }
+  }, [jobs, buffers, taskId, loadJobs, retrying, pid, vid, t, toast])
 }
 
 function EvalTab({ taskId }: { taskId: number }) {

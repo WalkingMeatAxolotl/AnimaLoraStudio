@@ -21,6 +21,8 @@ export interface LogSource {
   finishedAt?: number | null
   /** 缺省 = 不可取消（如去重扫描的前端合成日志）。 */
   onCancel?: () => void
+  /** failed 时 header 右侧显示重试按钮；缺省 = 不可重试。 */
+  onRetry?: () => void
 }
 
 const STATUS_BADGE: Record<LogSourceStatus, string> = {
@@ -149,6 +151,17 @@ export default function TaskLogDrawer({
               className="btn btn-ghost btn-sm text-err"
             >
               {t('common.cancel')}
+            </button>
+          )}
+          {active.status === 'failed' && active.onRetry && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                active.onRetry?.()
+              }}
+              className="btn btn-ghost btn-sm text-accent"
+            >
+              {t('common.retry')}
             </button>
           )}
         </div>
