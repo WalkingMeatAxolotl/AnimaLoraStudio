@@ -16,7 +16,6 @@ from __future__ import annotations
 import logging
 import math
 import sys
-import importlib
 from pathlib import Path
 
 import torch
@@ -24,7 +23,6 @@ import torch
 from training.model_loading import (
     _load_safetensors_state_dict,
     _load_weights_best_effort,
-    load_module_from_path,
 )
 
 
@@ -345,32 +343,16 @@ def load_anima_model(transformer_path, device, dtype, repo_root, *, flash_attn: 
     """
     from safetensors import safe_open
 
-    ensure_models_namespace(repo_root)
+    # repo_root 参数保留但已不使用（sister 契约签名「可加不可减不可改」）：模型
+    # 代码随仓库发布，走正常 import —— 单一模块身份，exec-load 已退役（多模型
+    # PR-2a），attention backend 开关不再需要跨模块别名广播。
+    from modeling.anima import anima_modeling, cosmos_predict2_modeling
 
-    # 加载模型类
-    cosmos_modeling = load_module_from_path(
-        "cosmos_predict2_modeling",
-        repo_root / "cosmos_predict2_modeling.py",
-    )
-    anima_modeling = load_module_from_path(
-        "anima_modeling",
-        repo_root / "anima_modeling.py",
-    )
     Anima = anima_modeling.Anima
 
-    # attention backend 全局开关：新模型代码用 set_attention_backend() 一次性清掉
-    # 未选中的 fast path；旧 standalone 副本仍 fallback 到 set_flash_attn_enabled()。
+    # attention backend 全局开关：set_attention_backend() 一次性清掉未选中的 fast path
     flash_enabled = False
-    flash_modules = [cosmos_modeling, anima_modeling]
-    for module_name in (
-        "modeling.cosmos_predict2_modeling", "modeling.anima_modeling",
-        "models.cosmos_predict2_modeling", "models.anima_modeling",  # 兼容外部 checkout
-    ):
-        try:
-            flash_modules.append(importlib.import_module(module_name))
-        except Exception:
-            pass
-    for module in flash_modules:
+    for module in (cosmos_predict2_modeling, anima_modeling):
         set_backend = getattr(module, "set_attention_backend", None)
         if set_backend is not None:
             try:
@@ -449,8 +431,8 @@ def load_anima_model(transformer_path, device, dtype, repo_root, *, flash_attn: 
 
 def load_vae(vae_path, device, dtype, repo_root, *, tiling: str = "auto"):
     """加载 VAE。``tiling`` 透传给 VAEWrapper（auto/on/off）。"""
-    wan_vae = load_module_from_path("wan_vae", repo_root / "wan" / "vae2_1.py")
-    WanVAE = wan_vae.WanVAE_
+    # 正常 import（exec-load 退役，多模型 PR-2a）；repo_root 参数保留但不再使用
+    from modeling.wan.vae2_1 import WanVAE_ as WanVAE
 
     cfg = dict(
         dim=96, z_dim=16, dim_mult=[1, 2, 4, 4],

@@ -29,9 +29,8 @@ AnimaLoraStudio/
 ├── tools/                         # 用户 CLI / 启动期 setup helper（见 tools/README.md）
 ├── utils/                         # anima_train 共享 utility（model loader / optimizer / lycoris_adapter / ...）
 ├── modeling/                      # 模型架构定义（tracked）：vendored diffusion-pipe 子集 + Anima 包装
-│   ├── anima_modeling.py          # Anima Cosmos transformer 的 PyTorch 实现（基于 ComfyUI）
-│   ├── cosmos_predict2_modeling.py
-│   └── wan/vae2_1.py              # Wan2.1 VAE 实现
+│   ├── anima/                     # Anima 族结构定义（anima_modeling.py + cosmos_predict2_modeling.py，基于 ComfyUI）
+│   └── wan/vae2_1.py              # Wan2.1 VAE 实现（跨族共享）
 ├── docs/                          # user-guide / architecture / adr / design / todo / announcements（见 docs/README.md）
 └── models/                        # 下载的权重 / tokenizer 数据落点（gitignored、按需创建）
     ├── diffusion_models/          # 用户下载的 Anima 主模型

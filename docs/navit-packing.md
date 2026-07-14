@@ -101,7 +101,7 @@ detail_inv_t，按 per-image t 算权重）、正则集降权（`loss_weight`，
 
 | 层 | 文件 |
 |---|---|
-| 注意力 op 块对角分支 | `modeling/cosmos_predict2_modeling.py` — `torch_attention_op` 接 `BlockDiagonalMask` |
+| 注意力 op 块对角分支 | `modeling/anima/cosmos_predict2_modeling.py` — `torch_attention_op` 接 `BlockDiagonalMask` |
 | 逐图 timestep 调制 | 同上 — `Block.forward_tokens` / `FinalLayer.forward_tokens` 的 `token_wise_mod` |
 | 打包前向 | 同上 — `MiniTrainDIT.forward_packed_navit`（块对角 self/cross + 逐图 RoPE + 逐图 AdaLN） |
 | token 预算打包 | `runtime/training/dataset.py` — `NavitPackBatchSampler` / `collate_fn_navit_pack` |

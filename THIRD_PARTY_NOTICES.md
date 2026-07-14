@@ -32,7 +32,7 @@
 - **来源**：[`comfyanonymous/ComfyUI`](https://github.com/comfyanonymous/ComfyUI)（现由 Comfy-Org 维护）
 - **许可**：GPL-3.0
 - **涉及文件**：
-  - `modeling/anima_modeling.py` — Anima DiT / LLMAdapter 结构与 ComfyUI
+  - `modeling/anima/anima_modeling.py` — Anima DiT / LLMAdapter 结构与 ComfyUI
     `comfy/ldm/anima/model.py` 高度相关
   - `runtime/training/comfy_qwen.py` — Comfy-style Anima Qwen3 0.6B text encoder
     路径，对应 ComfyUI `comfy/text_encoders/anima.py` 的 Qwen3 encoder 行为

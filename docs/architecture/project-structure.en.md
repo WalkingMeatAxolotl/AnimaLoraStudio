@@ -29,8 +29,7 @@ AnimaLoraStudio/
 ├── tools/                         # User CLI / launcher-time setup helpers (see tools/README.md)
 ├── utils/                         # Shared utilities for anima_train (model loader / optimizer / lycoris_adapter / ...)
 ├── modeling/                      # Model architecture defs (tracked): vendored diffusion-pipe subset + Anima wrapper
-│   ├── anima_modeling.py          # PyTorch implementation of Anima Cosmos transformer (based on ComfyUI)
-│   ├── cosmos_predict2_modeling.py
+│   ├── anima/                     # Anima family model code (anima_modeling.py + cosmos_predict2_modeling.py, based on ComfyUI)
 │   └── wan/vae2_1.py              # Wan2.1 VAE implementation
 ├── docs/                          # user-guide / architecture / adr / design / todo / announcements (see docs/README.md)
 └── models/                        # Downloaded weights / tokenizer data dir (gitignored, created on use)

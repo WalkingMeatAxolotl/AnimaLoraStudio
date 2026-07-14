@@ -48,11 +48,9 @@ def _set_model_xformers_enabled(model, enabled: bool) -> bool:
         for cls in type(model).__mro__
         if getattr(cls, "__module__", None)
     }
-    module_names.update({
-        "modeling.cosmos_predict2_modeling",
-        "models.cosmos_predict2_modeling",  # 兼容外部 diffusion-pipe checkout
-        "cosmos_predict2_modeling",
-    })
+    # exec-load 退役后模块身份唯一（多模型 PR-2a）；真名兜底覆盖「model 是
+    # wrapper/dummy、MRO 不含模型模块」的调用方
+    module_names.add("modeling.anima.cosmos_predict2_modeling")
 
     was_enabled = False
     for module_name in sorted(module_names):
