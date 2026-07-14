@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -597,6 +598,58 @@ def test_system_restart_writes_flag_and_schedules_shutdown(
     # BackgroundTask 在 starlette TestClient 上是同步执行的（response 走完后），
     # 所以这里 stub 一定被调用过
     assert called["ran"], "_raise_sigint_after_response BackgroundTask 应被调度"
+
+
+def test_uvicorn_run_bounds_graceful_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """main() 必须给 uvicorn 传 timeout_graceful_shutdown 上限。
+
+    浏览器开着时 /api/events 的 SSE 长连接不主动断，graceful shutdown 默认
+    无限等 →「Waiting for connections to close」卡死；且 py3.12+ 的
+    asyncio.Server.wait_closed() 等全部活跃连接，二次 Ctrl+C 设 force_exit
+    也解不开。没有这个上限，终端 Ctrl+C 永远关不掉 server。
+    """
+    import uvicorn
+
+    from studio.api import main as main_mod
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(uvicorn, "run", lambda *a, **kw: captured.update(kw))
+    monkeypatch.setattr("sys.argv", ["anima-studio"])
+    main_mod.main()
+    timeout = captured.get("timeout_graceful_shutdown")
+    assert isinstance(timeout, (int, float)) and timeout > 0
+
+
+def test_cancelled_asgi_noise_filter_scope() -> None:
+    """shutdown 超时取消 SSE 连接时，uvicorn 把 CancelledError 按
+    「Exception in ASGI application」打 ERROR traceback —— 主动取消不是
+    应用错误，应被过滤；其它 ASGI 异常 / 其它 message 必须照常放行。"""
+    import asyncio
+
+    from studio.api.lifespan import _CancelledAsgiNoiseFilter
+
+    f = _CancelledAsgiNoiseFilter()
+
+    def record(msg: str, exc: BaseException | None) -> logging.LogRecord:
+        return logging.LogRecord(
+            name="uvicorn.error", level=logging.ERROR, pathname=__file__,
+            lineno=1, msg=msg, args=(),
+            exc_info=(type(exc), exc, None) if exc is not None else None,
+        )
+
+    # 目标噪声：吞
+    assert not f.filter(
+        record("Exception in ASGI application\n", asyncio.CancelledError())
+    )
+    # 真实应用异常：放行
+    assert f.filter(
+        record("Exception in ASGI application\n", RuntimeError("boom"))
+    )
+    # 无异常信息 / 其它 message：放行
+    assert f.filter(record("Exception in ASGI application\n", None))
+    assert f.filter(record("Cancel 2 running task(s)", asyncio.CancelledError()))
 
 
 # ---------------------------------------------------------------------------

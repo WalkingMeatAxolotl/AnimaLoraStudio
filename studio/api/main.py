@@ -27,4 +27,11 @@ def main() -> None:
         port=args.port,
         reload=args.reload,
         log_level="info",
+        # 浏览器开着时 /api/events 的 SSE 长连接不会主动断，graceful shutdown
+        # 默认无限等 →「Waiting for connections to close」卡死；且 py3.12+ 的
+        # Server.wait_closed() 等全部活跃连接，二次 Ctrl+C 的 force_exit 也
+        # 解不开（transport 不被强关）。给 graceful 一个上限：超时后 uvicorn
+        # cancel 剩余连接 task → 连接关闭 → lifespan 正常收尾（supervisor /
+        # daemon 优雅停）。
+        timeout_graceful_shutdown=3,
     )

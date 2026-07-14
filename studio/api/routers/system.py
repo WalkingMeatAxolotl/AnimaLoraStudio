@@ -41,7 +41,7 @@ from ...services.runtime import updater
 router = APIRouter()
 
 _RESTART_FLAG = REPO_ROOT / "tmp" / "restart"
-_SHUTDOWN_FORCE_EXIT_TIMEOUT = 5.0
+_SHUTDOWN_FORCE_EXIT_TIMEOUT = 15.0
 
 
 def _raise_sigint_after_response() -> None:
@@ -50,13 +50,13 @@ def _raise_sigint_after_response() -> None:
     BackgroundTask 在 starlette 路径上是 response 完成后调度的；这里再 sleep
     一点点保险（防止某些代理 / keep-alive 情况下还有数据没冲走）。
 
-    Force-exit 兜底（PR-D fix）：`/api/events` 是长 SSE，generator 内的
-    `asyncio.wait_for(queue.get(), 15)` 不响应 uvicorn 关停信号，graceful
-    shutdown 会等 client 主动断开 → 表现为「后端卡在 waiting for
-    connection to close」，用户必须刷页让浏览器关 SSE 才能继续。给 graceful
-    5 秒窗口后强退（正常 in-flight 1-2s 收尾够用）。BackgroundTask 跑在
-    threadpool，graceful 成功路径主进程退出会带走此线程，os._exit 不会
-    触达；只有 graceful 卡住时才真正强退。
+    Force-exit 兜底（PR-D fix）：`/api/events` 是长 SSE，不响应 uvicorn 关停
+    信号，graceful shutdown 会等 client 主动断开。现在 uvicorn 启动参数带
+    timeout_graceful_shutdown=3（见 api/main.py）——3s 后强制 cancel 剩余
+    连接再走 lifespan 收尾（supervisor / daemon 优雅停，可能再要数秒），
+    所以兜底窗口必须 > 3s + lifespan 用时，否则会把即将成功的 graceful
+    半路 os._exit 掉。15s 只在 graceful 真卡死时触达；正常路径主进程退出
+    会带走此 daemon 线程，os._exit 不会执行。
     """
     import signal
     time.sleep(0.3)
