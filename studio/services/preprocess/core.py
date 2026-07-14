@@ -726,5 +726,4 @@ def mask_file_train(
     """mask 文件路径（不存在返回 None）。GET 端点用。"""
     _validate_rel_name(name)
     train_dir = version_train_dir(p, version_label)
-    path = train_masks.mask_path_for(train_dir, name)
-    return path if path.is_file() else None
+    return train_masks.mask_file(train_dir, name)

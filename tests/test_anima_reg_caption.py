@@ -236,7 +236,8 @@ def test_txt_caption_path_unchanged(reg_module, tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def test_scan_train_skips_reserved_masks_dir(reg_module, tmp_path: Path) -> None:
-    """mask sidecar（train/masks/{folder}/{stem}.png）不是训练图。
+    """mask 不是训练图：legacy masks/ 目录靠 TRAIN_RESERVED_DIRS 排除，
+    当前布局的 {stem}.mask sidecar 后缀不在 IMAGE_EXTS 天然不命中。
 
     TRAIN_RESERVED_DIRS 在 trainer / booru builder / versions 统计三处都
     排除了，reg_ai 的递归扫描漏掉会把 mask 灰度图计入生成清单——生成总数
@@ -245,7 +246,8 @@ def test_scan_train_skips_reserved_masks_dir(reg_module, tmp_path: Path) -> None
     (train / "1_data").mkdir(parents=True)
     (train / "1_data" / "a.png").write_bytes(b"png")
     (train / "1_data" / "b.png").write_bytes(b"png")
-    (train / "masks" / "1_data").mkdir(parents=True)
+    (train / "1_data" / "a.mask").write_bytes(b"png")  # 当前布局 sidecar
+    (train / "masks" / "1_data").mkdir(parents=True)   # legacy 布局残留
     (train / "masks" / "1_data" / "a.png").write_bytes(b"png")
 
     entries = reg_module._scan_train(train)

@@ -31,7 +31,7 @@
 | D2 | 场景 1 = 破坏性像素编辑，原地覆盖 `train/1_data/X.png` | 符合现有 stage 覆盖模型，restore 机制现成 |
 | D3 | 场景 2 = 非破坏性 mask sidecar + 训练器 masked loss | kohya sd-scripts / diffusion-pipe 生态标准做法 |
 | D4 | 前端在**原图分辨率** canvas 上编辑，整图上传写回 | 笔画后端重放难以精确复现前端抗锯齿 / 软边渲染；整图上传所见即所得，本地 10–20MB PNG 无压力 |
-| D5 | mask 存**平行目录** `train/masks/`，不用 `.mask.png` 双扩展名 | `.mask.png` 的 `suffix==".png"` 会被 studio 侧 `IMAGE_EXTS` 全部消费点 + 训练器独立白名单（6+ 处）误当训练图；平行目录一举绕开，且对齐 kohya `conditioning_data_dir` 约定 |
+| D5 | ~~mask 存**平行目录** `train/masks/`~~ → **修订（2026-07-13）**：mask 与图**同目录同 stem**，后缀恒 `.mask`（内容仍是灰度 PNG 字节） | 原方案否决的是 `.mask.png` 双扩展名（`suffix==".png"` 被 IMAGE_EXTS 误收），但平行目录实际是**开放集合雷区**——每个递归扫 train/ 的消费点都要记得豁免，reg_ai 漏豁免就把 mask 当训练图（生成数虚高）。`.mask` 单一非图片后缀让所有扫描点天然不命中，与 .txt/.json caption sidecar 同构、共享删除/导出/跟随基建（OneTrainer `-masklabel.png` 同思路，后缀更稳）。老布局 lazy 迁移（`migrate_legacy_masks`），`TRAIN_RESERVED_DIRS` 豁免保留防未迁移数据 |
 | D6 | mask 为单通道灰度 PNG，255=正常学习、0=不学，中间值=部分权重 | `loss * mask` 对 [0,1] 连续值天然成立，软边笔刷自动成为过渡权重 |
 | D7 | masked loss 是训练 config 显式开关，不因 masks/ 非空而自动开启 | 显式旋钮是用户责任；UI 检测到 masks 非空时提示但不代开 |
 | D8 | restore（从 download 复原）时**删除该图 mask** | restore 语义=回到 download 原点、派生一律作废，对齐「不做 partial undo」 |
@@ -43,14 +43,17 @@
 ```
 versions/{label}/train/
   manifest.json
-  1_data/X.png + X.txt          训练 bytes + caption（现状不变）
-  masks/1_data/X.png            ← 新增：mask sidecar，镜像 1_data 相对路径
+  1_data/X.png + X.txt + X.mask   训练 bytes + caption + mask sidecar（同目录同 stem）
 ```
 
-- mask 路径 = `train/masks/{manifest entry key}`，即镜像 `{N_label}/{stem}.png`
-  结构，避免多 folder 同名歧义。
+- mask 路径 = `train/{N_label}/{stem}.mask`（D5 修订，2026-07-13）：与 .txt/.json
+  caption 同构的 sidecar；后缀不在 IMAGE_EXTS，所有图片扫描点天然不命中。
 - **只有画过 mask 的图片才有 mask 文件**；无文件 = 全 255（正常训练）。
-- `masks/` 位于 `train/` 之下 → fork 版本 `_copytree("train")` 自动跟随，零改动。
+- mask 位于 `train/` 之内 → fork 版本 `_copytree("train")` 自动跟随，零改动。
+- **legacy**：首发版布局 `train/masks/{folder}/{stem}.png`（保留目录）由
+  `migrate_legacy_masks` lazy 搬迁（masks.py 各入口 + bundle 导出前触发）；
+  `TRAIN_RESERVED_DIRS` / trainer `RESERVED_SUBDIRS` 豁免保留，防未迁移老
+  数据被递归扫描当训练图。
 - manifest **不新增字段**（mask 有无以文件系统为准，过程信息不落盘）。场景 1
   的涂抹写回走现有 entry touch（`mtime/size/processed=true`）。
 
@@ -69,7 +72,7 @@ versions/{label}/train/
 | # | 场景 | 笔刷 | 输出 |
 |---|---|---|---|
 | U1 | 图上有字幕 / 水印，取周围颜色涂掉 | 取色笔刷（吸管 + 实心圆刷） | 覆盖 `1_data/X.png` |
-| U2 | 手崩，训练时不想学手 | mask 笔刷（半透明红 overlay） | 写 `masks/1_data/X.png` |
+| U2 | 手崩，训练时不想学手 | mask 笔刷（半透明红 overlay） | 写 `1_data/X.mask` |
 | U3 | 画错了撤销几笔 | — | 前端笔画级 undo/redo（会话内） |
 | U4 | 整张图改坏了想重来 | — | 现有 restore（download 复原，mask 同时作废，见 D8） |
 | U5 | mask 画了一半想清掉 | — | 「清除 mask」按钮 = 删 mask 文件 |
@@ -136,9 +139,9 @@ StepShell
 
 - mask 读写 endpoint（GET 返回 mask 文件或 404 / PUT 写入 / DELETE 清除）。
 - 预处理变换跟随（见 §7 矩阵）。
-- 删图 / restore 的 sidecar 跟随清理：现硬编码 `(".txt", ".json")` 的跟随集合
-  需登记 masks/ 路径。
-- bundle 导出可选打包 masks/（对齐 PR #391 latent 缓存打包的做法）。
+- 删图 / restore 的 sidecar 跟随清理：`.mask` 与 `.txt`/`.json` 同为同 stem
+  sidecar，走 `delete_mask` 跟随。
+- bundle 导出可选打包 `.mask` sidecar（对齐 PR #391 latent 缓存打包的做法）。
 
 **训练器**（触点已调研核实）：
 
@@ -172,8 +175,8 @@ StepShell
 
 | 操作 | 对 mask 的处理 |
 |---|---|
-| 裁剪（单框原地覆盖） | 同 rect 裁 mask（NEAREST），原地覆盖 `masks/` 对应文件 |
-| 裁剪（multi-crop fan-out `X_c0/_c1`） | mask 同步 fan-out 为 `masks/.../X_c0.png` 等，删原 mask |
+| 裁剪（单框原地覆盖） | 同 rect 裁 mask（NEAREST），原地覆盖对应 `.mask` 文件 |
+| 裁剪（multi-crop fan-out `X_c0/_c1`） | mask 同步 fan-out 为 `X_c0.mask` 等，删原 mask |
 | 放大 | mask 按相同目标尺寸 NEAREST resize（**不走** RealESRGAN） |
 | 涂抹（场景 1 改像素） | 不改几何 → mask 不动，天然对齐 |
 | restore（download 复原） | **删 mask**（D8）；即便尺寸恰好吻合也删，语义可预测优先 |
@@ -215,8 +218,8 @@ StepShell
    latent 位置）。注意与 §7 预处理跟随中 mask 图像本身的几何变换（NEAREST，
    防灰度值被插值污染）是两回事。
 5. **config**：`masked_loss: bool` 放 loss 相关 group（与 `loss_weighting`
-   相邻）。UI：masks/ 非空且开关关闭 → 提示不代开；开关开但无 mask 文件 →
-   训练器 log 一条，不报错。
+   相邻）。UI：存在 `.mask` 文件且开关关闭 → 提示不代开；开关开但无 mask
+   文件 → 训练器 log 一条，不报错。
 6. **B2 合并门槛**：本地小 A/B（同数据集同 seed，手部 mask vs 无 mask），
    确认 (a) loss 曲线正常无 NaN；(b) 出图 mask 区域不带崩坏特征。不达标则
    B2 挂待判（先例：FFL）。
@@ -225,6 +228,6 @@ StepShell
 
 1. AI inpainting（LaMa / sd inpaint）作为第三种笔刷的可能性——依赖新模型下载，
    留待场景 1 用出真实需求后评估。
-2. 多分辨率训练（issue #246）落地后 `1024px_` 覆盖文件夹与 masks/ 镜像关系
-   需要在该 feature 实现时一并确认。
+2. 多分辨率训练（issue #246）落地后 `1024px_` 覆盖文件夹内的 `.mask` sidecar
+   跟随关系需要在该 feature 实现时一并确认。
 3. 打标页 / 画廊的 mask 角标展示范围（B1 内做最小版还是单独 polish）。
