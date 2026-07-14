@@ -585,29 +585,14 @@ def _build_preview_callback(
 # Anima 的 VAE 是 Qwen-Image VAE（models/vae/qwen_image_vae.safetensors），其 latent
 # 空间就是 Wan2.1 的 16-ch 空间——ComfyUI supported_models.py 里
 # `QwenImage.latent_format = latent_formats.Wan21`，且本仓库 models.py 的 VAE
-# 归一化 mean/std 与 ComfyUI Wan21.latents_mean/std 逐位一致。系数与 bias 取自
-# ComfyUI comfy/latent_formats.py 的 `Wan21.latent_rgb_factors[_bias]`（latent2rgb
-# 快速预览，即"模糊但能看出图"）。之前误用 TAEFlux（Flux VAE 的 tiny decoder）解码
-# 这个 WAN latent，空间不匹配 → 颜色反相/错乱，已废弃。
-_WAN21_LATENT_RGB_FACTORS = [
-    [-0.1299, -0.1692, 0.2932],
-    [0.0671, 0.0406, 0.0442],
-    [0.3568, 0.2548, 0.1747],
-    [0.0372, 0.2344, 0.1420],
-    [0.0313, 0.0189, -0.0328],
-    [0.0296, -0.0956, -0.0665],
-    [-0.3477, -0.4059, -0.2925],
-    [0.0166, 0.1902, 0.1975],
-    [-0.0412, 0.0267, -0.1364],
-    [-0.1293, 0.0740, 0.1636],
-    [0.0680, 0.3019, 0.1128],
-    [0.0032, 0.0581, 0.0639],
-    [-0.1251, 0.0927, 0.1699],
-    [0.0060, -0.0633, 0.0005],
-    [0.3477, 0.2275, 0.2950],
-    [0.1984, 0.0913, 0.1861],
-]
-_WAN21_LATENT_RGB_BIAS = [-0.1835, -0.0868, -0.3360]
+# latent2rgb 快速预览系数（"模糊但能看出图"）。系数表已收编进 ModelSpec
+# （families/anima，D17）——单一来源，K2 同 latent 空间时直接复用。之前误用
+# TAEFlux（Flux VAE 的 tiny decoder）解码这个 WAN latent，空间不匹配 →
+# 颜色反相/错乱，已废弃。
+from training.families.anima import ANIMA_SPEC as _ANIMA_SPEC  # noqa: E402
+
+_WAN21_LATENT_RGB_FACTORS = [list(r) for r in _ANIMA_SPEC.latent.rgb_factors]
+_WAN21_LATENT_RGB_BIAS = list(_ANIMA_SPEC.latent.rgb_bias)
 # 预览放大目标（最长边像素）。latent 是 1/8 分辨率（1024²→128²），latent2rgb 直出
 # 128²；放大到 512 让前端铺满时不至于过糊，JPEG 仍很小。
 _PREVIEW_TARGET_PX = 512

@@ -9,6 +9,7 @@ import logging
 from pathlib import Path
 
 from training.context import TrainingContext
+from training.families.anima import ANIMA_SPEC as _ANIMA_SPEC
 from training.model_loading import (
     enable_xformers,
     find_diffusion_pipe_root,
@@ -110,7 +111,7 @@ def run(ctx: TrainingContext) -> None:
             patch_spatial=ctx.model.patch_spatial,
             patch_temporal=ctx.model.patch_temporal,
             model_channels=model_channels,
-            vae_channels=16,
+            vae_channels=_ANIMA_SPEC.latent.channels,
             device=ctx.device,
             dtype=ctx.dtype,
             normalize=bool(getattr(args, "sra_normalize", True)),

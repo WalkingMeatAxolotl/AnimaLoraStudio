@@ -27,6 +27,17 @@ from pathlib import Path
 import torch
 from torch.utils.data import Dataset
 
+from training.families.anima import ANIMA_SPEC
+
+# ── latent 规格单一来源（多模型 PR-1）─────────────────────────────────────
+# 单一族时代的桥接常量；PR-2b 起由 ctx.family.spec 传入各调用点。
+_ANIMA_LATENT = ANIMA_SPEC.latent
+#: latent npz 缓存布局版本（键集 / 张量布局变更时 bump，失配 → 删除重 encode）
+LATENT_CACHE_LAYOUT_VERSION = 1
+#: 无指纹键的存量缓存 grandfather 值：历史上只有 Wan21/Qwen-Image 这一个 VAE
+#: 产出过缓存（04-synthesis D12），避免升级即全量重 encode。
+_LEGACY_CACHE_FINGERPRINT = "wan21-f8c16"
+
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +66,7 @@ def plan_native_fit_image(
     *,
     max_tokens: int = 0,
     max_side_tokens: int = 0,
-    align: int = 16,
+    align: int = _ANIMA_LATENT.align_px,
     over_budget: str = "downscale",
 ) -> NativeFitImagePlan:
     """规划单张图的原生定尺寸（floor 对齐到 ``align``，可选超预算 downscale）。
@@ -248,7 +259,7 @@ class ImageDataset(Dataset):
                  resolutions=None, aspect_ratio_limit=2.0,
                  native_resolution=False, native_token_budget=0,
                  native_over_budget="downscale", native_max_side_tokens=0,
-                 native_align=16, load_masks=False):
+                 native_align=_ANIMA_LATENT.align_px, load_masks=False):
         self.data_dir = Path(data_dir)
         self.resolution = resolution
         # 多分辨率：bucket_mgr 是 base 分辨率的 manager（向后兼容，单一 ARB 路径仍走它，
@@ -266,7 +277,7 @@ class ImageDataset(Dataset):
         self.native_token_budget = int(native_token_budget or 0)
         self.native_over_budget = str(native_over_budget or "downscale").lower()
         self.native_max_side_tokens = int(native_max_side_tokens or 0)
-        self.native_align = int(native_align or 16)
+        self.native_align = int(native_align or _ANIMA_LATENT.align_px)
         if self.native_resolution and len(self.resolutions) > 1:
             logger.warning(
                 "[navit-native] navit_native_resolution 下多分辨率 fan-out 无意义"
@@ -716,7 +727,8 @@ class ImageDataset(Dataset):
             m = m.crop((left, top, left + tw, top + th))
             if flip:
                 m = m.transpose(Image.FLIP_LEFT_RIGHT)
-            m = m.resize((max(1, tw // 8), max(1, th // 8)), Image.BOX)
+            _vs = _ANIMA_LATENT.spatial_stride
+            m = m.resize((max(1, tw // _vs), max(1, th // _vs)), Image.BOX)
             # 灰度 255=学 / 0=不学 → [0,1] loss 空间权重
             mask_tensor = torch.from_numpy(
                 np.array(m).astype(np.float32) / 255.0
@@ -894,10 +906,17 @@ class CachedLatentDataset(Dataset):
     50% 数据被永久镜像污染；新版通过 _is_cache_valid 检测缺 latent_flipped
     键，自动重 encode 修复。
     """
+
+    #: latent 规格（指纹进缓存判据 / 写入）。类级默认 = Anima；__init__ 可覆盖，
+    #: PR-2b 起由 ctx.family.spec.latent 传入。
+    latent_spec = _ANIMA_LATENT
+
     def __init__(self, base_dataset, vae, device, dtype, cache_dir=None, cache_batch_size=1,
                  encode_tiled=False, encode_tile_px=1024, encode_tile_overlap=128,
-                 encode_max_pixels=0):
+                 encode_max_pixels=0, latent_spec=None):
         import numpy as np
+        if latent_spec is not None:
+            self.latent_spec = latent_spec
         self.base_dataset = base_dataset
         self.base_image_dataset = self._get_base_image_dataset(base_dataset)
         self.np = np
@@ -986,6 +1005,9 @@ class CachedLatentDataset(Dataset):
         """检查缓存是否有效（图像未修改，且格式兼容当前 flip_augment 设置）。
 
         - 缺 `latent` 键 / 其他模型的不兼容缓存 → 删除重 encode
+        - latent 指纹 / 布局版本失配（换 VAE latent 空间或缓存布局升级）→
+          删除重 encode；无指纹键的存量缓存 grandfather 为 wan21-f8c16
+          （历史唯一 VAE，避免升级即全量重 encode，04-synthesis D12）
         - flip_augment=True 且 npz 缺 `latent_flipped` 键 → 失效重 encode（旧
           单份 cache 即"flip 永久 baked"的污染状态，必须重 encode 修复）
         - flip_augment=False 且 npz 有 `latent_flipped` → 仍视为有效（双份
@@ -1008,6 +1030,25 @@ class CachedLatentDataset(Dataset):
                 if "latent" not in data.files:
                     npz_path.unlink()
                     logger.debug(f"已删除不兼容缓存: {npz_path.name}")
+                    return False
+                cache_fp = (
+                    str(data["latent_fingerprint"].item())
+                    if "latent_fingerprint" in data.files
+                    else _LEGACY_CACHE_FINGERPRINT
+                )
+                cache_ver = (
+                    int(data["layout_version"])
+                    if "layout_version" in data.files
+                    else LATENT_CACHE_LAYOUT_VERSION
+                )
+                if (cache_fp != self.latent_spec.fingerprint
+                        or cache_ver != LATENT_CACHE_LAYOUT_VERSION):
+                    npz_path.unlink()
+                    logger.debug(
+                        f"已删除指纹失配缓存: {npz_path.name} "
+                        f"({cache_fp} v{cache_ver} != "
+                        f"{self.latent_spec.fingerprint} v{LATENT_CACHE_LAYOUT_VERSION})"
+                    )
                     return False
                 if getattr(self, "flip_augment", False) and "latent_flipped" not in data.files:
                     return False
@@ -1077,7 +1118,7 @@ class CachedLatentDataset(Dataset):
         Also fills token_count_for_index (NaViT packer reads it; patch_spatial=2)."""
         self.bucket_for_index = [None] * len(self.samples)
         self.token_count_for_index = [0] * len(self.samples)
-        patch_spatial = 2
+        patch_spatial = _ANIMA_LATENT.patch_spatial
         for i in range(len(self.samples)):
             npz_path = self._get_npz_path(
                 self.samples[i]["image"], self.samples[i].get("target_reso"))
@@ -1168,6 +1209,8 @@ class CachedLatentDataset(Dataset):
                         npz_path,
                         bucket_w=entry["bucket_w"],
                         bucket_h=entry["bucket_h"],
+                        latent_fingerprint=self.latent_spec.fingerprint,
+                        layout_version=LATENT_CACHE_LAYOUT_VERSION,
                         **npz_kwargs,
                     )
                     encoded_count += 1
@@ -1194,6 +1237,8 @@ class CachedLatentDataset(Dataset):
                     npz_path,
                     bucket_w=entry["bucket_w"],
                     bucket_h=entry["bucket_h"],
+                    latent_fingerprint=self.latent_spec.fingerprint,
+                    layout_version=LATENT_CACHE_LAYOUT_VERSION,
                     **npz_kwargs,
                 )
                 encoded_count += 1
@@ -1308,7 +1353,11 @@ def collate_fn(batch):
     pixels = torch.stack([b["pixel_values"] for b in batch])
     captions = [b["caption"] for b in batch]
     result = {"pixel_values": pixels, "captions": captions}
-    masks = _stack_masks(batch, pixels.shape[-2] // 8, pixels.shape[-1] // 8)
+    masks = _stack_masks(
+        batch,
+        pixels.shape[-2] // _ANIMA_LATENT.spatial_stride,
+        pixels.shape[-1] // _ANIMA_LATENT.spatial_stride,
+    )
     if masks is not None:
         result["masks"] = masks
     if "loss_weight" in batch[0]:
@@ -1447,7 +1496,7 @@ def _walk_attr_list(dataset, attr):
     return None
 
 
-def dataset_token_counts(dataset, patch_spatial=2):
+def dataset_token_counts(dataset, patch_spatial=_ANIMA_LATENT.patch_spatial):
     """NaViT 打包的逐索引 token 数。
 
     优先用已填充的 ``token_count_for_index``（CachedLatentDataset 填充）。若该字段

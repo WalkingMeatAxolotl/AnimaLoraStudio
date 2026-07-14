@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import torch
 
+from training.families.anima import ANIMA_SPEC as _ANIMA_SPEC
+
 
 def sample_t(
     bs,
@@ -84,7 +86,9 @@ def _apply_timestep_schedule_shift(t: torch.Tensor, timestep_schedule_shift: flo
     return ((t * s) / (1 + (s - 1) * t)).clamp(1e-4, 1 - 1e-4)
 
 
-def latent_token_counts(latents, patch_spatial: int = 2) -> list[int]:
+def latent_token_counts(
+    latents, patch_spatial: int = _ANIMA_SPEC.latent.patch_spatial
+) -> list[int]:
     """每样本的 patch-token 数（``timestep_shift_resolution_aware`` 用）。
 
     - list/tuple（NaViT 逐图 latent，各 ``[.,C,T,h_i,w_i]``，形状可异构）→ 逐图计数；

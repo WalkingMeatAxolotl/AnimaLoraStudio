@@ -17,6 +17,7 @@ from typing import Optional
 import torch
 
 from training.context import TrainingContext
+from training.families.anima import ANIMA_SPEC as _ANIMA_SPEC
 from training.sampling import sample_image
 from utils.optimizer_utils import optimizer_eval_mode
 
@@ -50,9 +51,11 @@ def run_sample(
     base_reso = int(_res[0]) if isinstance(_res, (list, tuple)) and _res else int(_res)
     s_w = int(getattr(args, "sample_width", 0) or 0) or base_reso
     s_h = int(getattr(args, "sample_height", 0) or 0) or base_reso
-    # 必须 16 的倍数（VAE 8 × patch_spatial 2），否则 cosmos_predict2 spatial_patch 断言失败
-    s_w = max(16, (s_w // 16) * 16)
-    s_h = max(16, (s_h // 16) * 16)
+    # 必须 align_px（VAE stride 8 × patch_spatial 2 = 16）的倍数，
+    # 否则 cosmos_predict2 spatial_patch 断言失败
+    _align = _ANIMA_SPEC.latent.align_px
+    s_w = max(_align, (s_w // _align) * _align)
+    s_h = max(_align, (s_h // _align) * _align)
     s_cfg = float(getattr(args, "sample_cfg_scale", 4.0) or 4.0)
     s_neg = str(getattr(args, "sample_negative_prompt", "") or "")
     s_seed = int(getattr(args, "sample_seed", 0) or 0)
