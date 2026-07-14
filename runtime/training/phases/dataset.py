@@ -94,6 +94,17 @@ def run(ctx: TrainingContext) -> None:
     # NaViT 原生定尺寸参数（navit_native_resolution）；关闭时为空 dict → 行为中立。
     native_kwargs = _native_dataset_kwargs(args, ctx)
 
+    # masked loss（B2）：开关开启时数据层加载与图同目录的 {stem}.mask sidecar。
+    # NaViT 打包路径第一版不支持（逐图打包 loss 无批量网格，§5 决策）——警告并
+    # 关闭，避免 npz 白写 mask 键。
+    load_masks = bool(getattr(args, "masked_loss", False))
+    if load_masks and bool(getattr(args, "navit_packing", False)):
+        logger.warning(
+            "[masked-loss] NaViT 打包路径暂不支持 masked loss：本次训练忽略 mask"
+        )
+        load_masks = False
+        args.masked_loss = False
+
     # 数据集
     ctx.bucket_mgr = BucketManager(base_reso, aspect_ratio_limit=ar_limit)
     ctx.base_dataset = ImageDataset(
@@ -105,9 +116,27 @@ def run(ctx: TrainingContext) -> None:
         prefer_json=args.prefer_json,
         resolutions=res_list,
         aspect_ratio_limit=ar_limit,
+        load_masks=load_masks,
         **native_kwargs,
     )
     ctx.dataset = ctx.base_dataset
+
+    if load_masks:
+        # 统计有 mask 的图数（决策 5：开关开但零 mask 只 log 不报错）
+        n_masked = sum(
+            1 for s in ctx.base_dataset.samples
+            if ctx.base_dataset._mask_path_for(s["image"]).is_file()
+        )
+        if n_masked > 0:
+            logger.info(
+                "[masked-loss] 已启用：%d/%d 张图带 mask（其余全图正常学习）",
+                n_masked, len(ctx.base_dataset.samples),
+            )
+        else:
+            logger.info(
+                "[masked-loss] 开关已开但训练集没有任何 mask 文件（无 .mask sidecar）"
+                "——本次训练等效于未开启"
+            )
 
     # 正则数据集（Kohya 风格，防过拟合）
     reg_data_dir = getattr(args, "reg_data_dir", "") or ""

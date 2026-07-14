@@ -723,6 +723,15 @@ class TrainingConfig(BaseModel):
             disable_hint="InfoNoise / Leap 启用时禁用 loss 加权（schema 互斥，仅 none 兼容）",
         ),
     )
+    masked_loss: bool = Field(
+        False,
+        description="按训练 mask 加权 loss：预处理涂抹页画的 mask 区域（灰度 0=不学、255=正常学习、中间值=部分权重）不产生梯度，该区域生成时由 base 模型先验决定；没有 mask 的图不受影响",
+        json_schema_extra=_meta(
+            "loss",
+            disable_when="leap_enabled==true||navit_packing==true",
+            disable_hint="Leap（per-sample loss 无空间维度）/ NaViT 打包路径不支持 mask（schema 互斥）",
+        ),
+    )
     min_snr_gamma: float = Field(
         5.0, ge=0.1, le=20.0,
         description="Min-SNR 阈值：高 SNR 简单步（低 t 端）的权重压制阈值。默认 5.0；越小压制越强",

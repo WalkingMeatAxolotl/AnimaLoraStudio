@@ -248,7 +248,7 @@ class ImageDataset(Dataset):
                  resolutions=None, aspect_ratio_limit=2.0,
                  native_resolution=False, native_token_budget=0,
                  native_over_budget="downscale", native_max_side_tokens=0,
-                 native_align=16):
+                 native_align=16, load_masks=False):
         self.data_dir = Path(data_dir)
         self.resolution = resolution
         # 多分辨率：bucket_mgr 是 base 分辨率的 manager（向后兼容，单一 ARB 路径仍走它，
@@ -282,6 +282,10 @@ class ImageDataset(Dataset):
         self.tag_dropout = tag_dropout
         self.prefer_json = prefer_json
         self.caption_override = caption_override  # 正则集：统一 caption，如 "1girl, solo"
+        # masked loss（B2）：加载与图同目录的 {stem}.mask sidecar，随图走同一
+        # 几何变换后 area 下采样到 latent 分辨率，作为 loss 空间权重。
+        self.load_masks = bool(load_masks)
+        self._mask_warned: set = set()
         
         # 尝试导入 caption_utils（直接导入避开 __init__.py）
         self.caption_utils = None
@@ -606,6 +610,45 @@ class ImageDataset(Dataset):
     def __len__(self):
         return len(self.samples)
 
+    def _mask_path_for(self, img_path) -> Path:
+        """studio 训练 mask sidecar 路径：与图同目录同 stem 的 `{stem}.mask`。
+
+        与 studio/services/preprocess/masks.py 的落盘约定镜像（后缀恒 .mask，
+        内容灰度 PNG 字节）——stem 不含扩展名，X.jpg 与 X.png 共享同一 mask。
+        """
+        img_path = Path(img_path)
+        return img_path.parent / f"{img_path.stem}.mask"
+
+    def _load_mask_image(self, img_path, size):
+        """加载并校验 mask（灰度 L，尺寸必须等于图片当前尺寸）。
+
+        fail-safe（设计 §2）：缺文件 → None（全图正常学习）；尺寸不匹配 /
+        不可读 → warning 一次 + None，**不 crash 训练**。
+        """
+        from PIL import Image
+        mp = self._mask_path_for(img_path)
+        if not mp.is_file():
+            return None
+        try:
+            with Image.open(mp) as raw:
+                raw.load()
+                mask = raw.convert("L") if raw.mode != "L" else raw.copy()
+        except Exception as e:  # noqa: BLE001
+            if str(mp) not in self._mask_warned:
+                self._mask_warned.add(str(mp))
+                logger.warning(f"[masked-loss] mask 不可读，按无 mask 处理: {mp} ({e})")
+            return None
+        if mask.size != tuple(size):
+            if str(mp) not in self._mask_warned:
+                self._mask_warned.add(str(mp))
+                logger.warning(
+                    "[masked-loss] mask 尺寸 %sx%s 与图片 %sx%s 不匹配，按无 mask 处理"
+                    "（外部改图后请重画 mask）: %s",
+                    mask.size[0], mask.size[1], size[0], size[1], mp,
+                )
+            return None
+        return mask
+
     def __getitem__(self, idx):
         # 默认 path：DataLoader 不能传额外参数，所以由 flip_augment 决定是否随机翻转。
         # CachedLatentDataset 想显式控制 flip 时直接调 get_with_flip(idx, flip=...)，
@@ -648,6 +691,13 @@ class ImageDataset(Dataset):
         else:
             tw = th = target_reso or self.resolution
 
+        # masked loss：mask 在原始尺寸加载（校验 == 图片尺寸），下面随图走
+        # 完全相同的几何变换（NEAREST 防灰度插值污染），最后 area 下采样到
+        # latent /8（BOX = 块均值，§9 决策 4）。
+        mask_img = None
+        if self.load_masks:
+            mask_img = self._load_mask_image(sample["image"], (img.width, img.height))
+
         # 缩放裁剪
         scale = max(tw / img.width, th / img.height)
         nw, nh = int(img.width * scale), int(img.height * scale)
@@ -660,11 +710,23 @@ class ImageDataset(Dataset):
         if flip:
             img = img.transpose(Image.FLIP_LEFT_RIGHT)
 
+        mask_tensor = None
+        if mask_img is not None:
+            m = mask_img.resize((nw, nh), Image.NEAREST)
+            m = m.crop((left, top, left + tw, top + th))
+            if flip:
+                m = m.transpose(Image.FLIP_LEFT_RIGHT)
+            m = m.resize((max(1, tw // 8), max(1, th // 8)), Image.BOX)
+            # 灰度 255=学 / 0=不学 → [0,1] loss 空间权重
+            mask_tensor = torch.from_numpy(
+                np.array(m).astype(np.float32) / 255.0
+            )
+
         # 转 tensor [-1, 1]
         arr = np.array(img).astype(np.float32) / 127.5 - 1.0
         tensor = torch.from_numpy(arr).permute(2, 0, 1)
 
-        return {"pixel_values": tensor, "caption": caption}
+        return {"pixel_values": tensor, "caption": caption, "mask": mask_tensor}
 
 
 class RepeatDataset(Dataset):
@@ -856,6 +918,11 @@ class CachedLatentDataset(Dataset):
         self.flip_augment = bool(
             getattr(self.base_image_dataset, "flip_augment", False)
         )
+        # masked loss（B2）：底层 ImageDataset.load_masks 开启时，mask 随缓存
+        # 编码期一并下采样存进 npz（mask / mask_flipped 键，仿 latent_flipped）
+        self.load_masks = bool(
+            getattr(self.base_image_dataset, "load_masks", False)
+        )
         # cache_encode_tiled（opt-in）：超大图改走分块 encode + latent 羽化拼接，
         # 峰值显存 ∝ 单块像素。阈值内的图路径不变（逐字节等价）。
         self.encode_tiled = bool(encode_tiled)
@@ -924,11 +991,18 @@ class CachedLatentDataset(Dataset):
         - flip_augment=False 且 npz 有 `latent_flipped` → 仍视为有效（双份
           cache 是 flip 模式的超集，关 flip 后只读 latent 不浪费）
         - bucket 尺寸不匹配 → 失效
+        - masked loss 开启时 mask sidecar 与 npz 一致性三条（§9 决策 3，
+          漏一条就训到旧 mask）：mask 存在但 npz 无 `mask` 键（新画）；
+          mask mtime 新于 npz（重画）；mask 已删但 npz 有 `mask` 键（清除）。
+          load_masks 关闭时跳过这些校验（带 mask 键的缓存是超集，不浪费）。
         """
         if not npz_path.exists():
             return False
         if npz_path.stat().st_mtime < img_path.stat().st_mtime:
             return False
+        mask_path = None
+        if getattr(self, "load_masks", False) and self.base_image_dataset is not None:
+            mask_path = self.base_image_dataset._mask_path_for(img_path)
         try:
             with self.np.load(npz_path) as data:
                 if "latent" not in data.files:
@@ -942,6 +1016,19 @@ class CachedLatentDataset(Dataset):
                     if "bucket_w" not in data.files or "bucket_h" not in data.files:
                         return False
                     if (int(data["bucket_w"]), int(data["bucket_h"])) != expected_bucket:
+                        return False
+                if mask_path is not None:
+                    has_mask_file = mask_path.is_file()
+                    has_mask_key = "mask" in data.files
+                    if has_mask_file != has_mask_key:
+                        return False
+                    if has_mask_file and npz_path.stat().st_mtime < mask_path.stat().st_mtime:
+                        return False
+                    if (
+                        has_mask_key
+                        and getattr(self, "flip_augment", False)
+                        and "mask_flipped" not in data.files
+                    ):
                         return False
         except Exception:
             try:
@@ -1052,6 +1139,16 @@ class CachedLatentDataset(Dataset):
                 and h * w > self.encode_max_pixels
             )
 
+            def _mask_kwargs(entry):
+                """masked loss：mask 已在 get_with_flip 内下采样到 latent 分辨率，
+                直接存 npz（无 mask 图不写键 —— 键的有无是缓存失效判据）。"""
+                out = {}
+                if entry.get("mask") is not None:
+                    out["mask"] = entry["mask"].numpy()
+                if entry.get("mask_flipped") is not None:
+                    out["mask_flipped"] = entry["mask_flipped"].numpy()
+                return out
+
             if use_tiled:
                 logger.info(
                     "[cache-tiled] %dx%d 超像素预算，分块 encode（tile=%d overlap=%d）",
@@ -1063,6 +1160,7 @@ class CachedLatentDataset(Dataset):
                     npz_kwargs = {"latent": lat.numpy()}
                     if lat_f is not None:
                         npz_kwargs["latent_flipped"] = lat_f.numpy()
+                    npz_kwargs.update(_mask_kwargs(entry))
                     _entry_sample = self.samples[entry["index"]]
                     npz_path = self._get_npz_path(
                         _entry_sample["image"], _entry_sample.get("target_reso"))
@@ -1087,6 +1185,7 @@ class CachedLatentDataset(Dataset):
                 npz_kwargs = {"latent": latents[n].numpy()}
                 if want_flip:
                     npz_kwargs["latent_flipped"] = latents_flipped[n].numpy()
+                npz_kwargs.update(_mask_kwargs(entry))
 
                 _entry_sample = self.samples[entry["index"]]
                 npz_path = self._get_npz_path(
@@ -1113,15 +1212,19 @@ class CachedLatentDataset(Dataset):
             bucket_w, bucket_h = pw, ph
 
             pixels_flipped = None
+            mask_flipped = None
             if want_flip:
                 item_f = base_img.get_with_flip(i, flip=True)
                 pixels_flipped = item_f["pixel_values"]
+                mask_flipped = item_f.get("mask")
 
             bucket_key = (bucket_h, bucket_w)
             pending.setdefault(bucket_key, []).append({
                 "index": i,
                 "pixels": pixels,
                 "pixels_flipped": pixels_flipped,
+                "mask": item.get("mask"),
+                "mask_flipped": mask_flipped,
                 "bucket_w": bucket_w,
                 "bucket_h": bucket_h,
             })
@@ -1150,6 +1253,14 @@ class CachedLatentDataset(Dataset):
         latent_key = "latent_flipped" if use_flip else "latent"
         latent = torch.from_numpy(data[latent_key])
 
+        # masked loss：mask 与 latent 保持同一 flip 选择（错位会把权重贴到镜像
+        # 位置）。npz 无键 = 该图无 mask（collate 填全 1）。
+        mask = None
+        if getattr(self, "load_masks", False):
+            mask_key = "mask_flipped" if use_flip and "mask_flipped" in data.files else "mask"
+            if mask_key in data.files:
+                mask = torch.from_numpy(data[mask_key])
+
         # 获取 base_dataset 的引用（处理可能的嵌套）
         base = self.base_dataset
         while hasattr(base, "dataset"):
@@ -1173,9 +1284,23 @@ class CachedLatentDataset(Dataset):
         return {
             "latent": latent,
             "caption": caption,
+            "mask": mask,
             # navit collate 需要逐图 image 路径
             "image": str(sample["image"]),
         }
+
+
+def _stack_masks(batch, h, w):
+    """masked loss：批内任一样本有 mask 才输出（无 mask 时零开销）。
+
+    无 mask 的样本填全 1（正常学习）；同桶保证 mask 空间尺寸一致。
+    """
+    if not any(b.get("mask") is not None for b in batch):
+        return None
+    return torch.stack([
+        b["mask"] if b.get("mask") is not None else torch.ones(h, w)
+        for b in batch
+    ])
 
 
 def collate_fn(batch):
@@ -1183,6 +1308,9 @@ def collate_fn(batch):
     pixels = torch.stack([b["pixel_values"] for b in batch])
     captions = [b["caption"] for b in batch]
     result = {"pixel_values": pixels, "captions": captions}
+    masks = _stack_masks(batch, pixels.shape[-2] // 8, pixels.shape[-1] // 8)
+    if masks is not None:
+        result["masks"] = masks
     if "loss_weight" in batch[0]:
         result["loss_weight"] = torch.tensor([b["loss_weight"] for b in batch], dtype=torch.float32)
         result["is_reg"] = torch.tensor([b["is_reg"] for b in batch], dtype=torch.bool)
@@ -1194,6 +1322,9 @@ def collate_fn_cached(batch):
     latents = torch.stack([b["latent"] for b in batch])
     captions = [b["caption"] for b in batch]
     result = {"latents": latents, "captions": captions}
+    masks = _stack_masks(batch, latents.shape[-2], latents.shape[-1])
+    if masks is not None:
+        result["masks"] = masks
     if "loss_weight" in batch[0]:
         result["loss_weight"] = torch.tensor([b["loss_weight"] for b in batch], dtype=torch.float32)
         result["is_reg"] = torch.tensor([b["is_reg"] for b in batch], dtype=torch.bool)

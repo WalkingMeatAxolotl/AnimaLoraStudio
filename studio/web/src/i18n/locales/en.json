@@ -363,6 +363,7 @@
       "noise_enhancement_type": "Disabled while InfoNoise is enabled (schema mutex)",
       "loss_weighting": "Disabled while InfoNoise is enabled (schema mutex, only `none` compatible)",
       "loss_type": "Disabled while InfoNoise or Leap is enabled (schema mutex, only `mse` compatible)",
+      "masked_loss": "Not supported with Leap (per-sample loss has no spatial dims) or NaViT packing (schema mutex)",
       "timestep_schedule_shift": "Disabled while InfoNoise is enabled (schema mutex, only `1.0` compatible)",
       "infonoise_enabled": "Reset noise_enhancement / loss_weighting / loss_type / schedule_shift to defaults to enable (schema mutex)"
     },
@@ -457,6 +458,7 @@
       "loss_type": "Training loss type. mse classic; huber is robust to outliers (quadratic when |x|<δ, linear when |x|≥δ)",
       "huber_c": "[Huber loss] Delta coefficient (quadratic/linear transition point): larger = closer to MSE, smaller = more outlier-tolerant. Typical 0.1-0.3",
       "loss_weighting": "Loss weighting scheme: none = no weighting; min_snr suppresses weights on easy steps; detail_inv_t boosts low-t detail steps; cosmap uses SD3-style cosine mapping",
+      "masked_loss": "Weight the loss by training masks: regions masked on the inpaint page (grayscale 0 = don't learn, 255 = learn, in-between = partial weight) produce no gradient and are left to the base model's prior at generation time; images without a mask are unaffected",
       "min_snr_gamma": "Min-SNR threshold: caps the weight of high-SNR easy steps (low-t end). Default 5.0; smaller = stronger suppression",
       "weight_cap_ratio": "Batch max/min weight ratio cap: limits extreme weight contributions. 0 = disabled; recommended 5 for small batch + Prodigy",
       "detail_inv_t_min": "detail_inv_t weight lower bound. Default 1.0; raising to 1.5 lets high-t steps get a slight boost (<1.0 has no effect since 1/t≥1 always holds)",
@@ -2387,6 +2389,7 @@
     "folderTipReso": "{{name}}: {{repeat}} repeat × {{imgs}} imgs × {{resos}} resolutions = {{total}}",
     "bucketDistTitle": "Bucket distribution (actual)",
     "bucketDistHint": "Buckets group by resolution × aspect ratio; same bucket = same batch. Under-filled buckets emit a short batch — no images are dropped.",
+    "maskedLossHint": "{{n}} training image(s) have masks (Inpaint · Mask) but masked_loss is off — this run will not use them. Enable masked_loss in the loss group to apply.",
     "confirmReset": "Reset config to preset {{name}}? All customizations on the current version will be lost.",
     "resetOkText": "Reset",
     "resetSuccess": "Reset to preset {{name}} config",

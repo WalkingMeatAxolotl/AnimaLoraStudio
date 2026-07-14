@@ -1012,6 +1012,44 @@ function DatasetStatsPanel({
           activeVersion?.stats?.train_folders,
         ])}
       />
+
+      <MaskedLossHint
+        projectId={projectId}
+        vid={activeVersion?.id ?? 0}
+        maskedLoss={config?.masked_loss === true}
+      />
+    </div>
+  )
+}
+
+/** 训练集有 mask 但 masked_loss 关闭时的提示（决策 D7：只提示不代开）。 */
+function MaskedLossHint({
+  projectId, vid, maskedLoss,
+}: {
+  projectId: number
+  vid: number
+  maskedLoss: boolean
+}) {
+  const { t } = useTranslation()
+  const [maskCount, setMaskCount] = useState(0)
+
+  useEffect(() => {
+    if (!projectId || !vid) return
+    let cancelled = false
+    api.listCropWorkspaceTrain(projectId, vid)
+      .then((r) => {
+        if (!cancelled) {
+          setMaskCount(r.images.filter((im) => im.mask_mtime != null).length)
+        }
+      })
+      .catch(() => { if (!cancelled) setMaskCount(0) })
+    return () => { cancelled = true }
+  }, [projectId, vid])
+
+  if (maskCount === 0 || maskedLoss) return null
+  return (
+    <div className="rounded-md border border-subtle bg-surface px-3 py-2.5 text-xs text-fg-secondary leading-relaxed">
+      {t('train.maskedLossHint', { n: maskCount })}
     </div>
   )
 }

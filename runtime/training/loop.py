@@ -108,6 +108,27 @@ def _compute_loss_weight_from_args(args, t, device):
     ).to(device=device, dtype=torch.float32)
 
 
+def _masked_mean(per_element, spatial_mask):
+    """masked loss 的加权均值 reduction：`(loss*mask).sum() / mask.sum()`。
+
+    分母是 mask 元素和而非元素总数 —— 不同 mask 面积的样本在 batch 内权重
+    一致，避免 kohya 朴素 `mean()` 里大 mask 图被隐性降权（设计文档 §8）。
+    per-sample 权重（reg / timestep weighting）已乘在 per_element 上，分母
+    不含它们（与无 mask 时 `mean()` 的分母不含权重对称）。
+    """
+    m = spatial_mask.expand_as(per_element)
+    return (per_element * m).sum() / m.sum().clamp_min(1e-6)
+
+
+def _masked_mean_per_sample(per_element, spatial_mask):
+    """per-sample 版 masked mean（InfoNoise `_raw_mse` 记录用）：对每个样本
+    在非 batch 维上做 mask 加权均值，返回 (B,)。mask 区域的误差不进 I-MMSE
+    统计，否则无监督区域的噪声会污染 CDF。"""
+    m = spatial_mask.expand_as(per_element)
+    dims = list(range(1, per_element.dim()))
+    return (per_element * m).sum(dim=dims) / m.sum(dim=dims).clamp_min(1e-6)
+
+
 def _accumulation_step(batch_idx, dl_len, grad_accum):
     """返回 (group_size, is_group_end)：该 micro-batch 所在梯度累积组的实际大小，
     以及它是否是该组最后一个（触发 optimizer.step / zero_grad）。
@@ -381,6 +402,13 @@ def run(ctx: TrainingContext) -> None:
                         ctx.model, noisy, t.view(-1, 1), cross, pad_mask,
                         use_checkpoint=args.grad_checkpoint,
                     )
+                    # masked loss（B2）：dataset 已把 mask 下采样到 latent 分辨率，
+                    # (B,h,w) → (B,1,1,h,w) 广播到 loss 的 (B,C,T,H,W)。
+                    # masked_loss 关闭或本 batch 全无 mask 时为 None（零开销）。
+                    spatial_mask = None
+                    if bool(getattr(args, "masked_loss", False)) and "masks" in batch:
+                        _m = batch["masks"].to(ctx.device, dtype=torch.float32)
+                        spatial_mask = _m.view(bs, 1, 1, *_m.shape[-2:])
                     # 训练 loss 通过 losses/ plugin registry 派发（mse / huber / ...）
                     loss_per_sample = ctx.loss_fn.compute(pred.float(), target.float(), t)
                     # 自适应采样器（如 InfoNoise）记录原始 per-sample MSE（不受 huber/loss_weighting 等
@@ -389,9 +417,13 @@ def run(ctx: TrainingContext) -> None:
                     # 用 no_grad 避免构造 autograd 元数据（比 .detach() 少一份 grad_fn 开销）。
                     with torch.no_grad():
                         _raw_mse_per_sample = F.mse_loss(pred.float(), target.float(), reduction="none")
-                        _raw_mse = _raw_mse_per_sample.mean(
-                            dim=list(range(1, _raw_mse_per_sample.dim()))
-                        )
+                        if spatial_mask is not None:
+                            # mask 区域无监督，其误差不进 I-MMSE 统计
+                            _raw_mse = _masked_mean_per_sample(_raw_mse_per_sample, spatial_mask)
+                        else:
+                            _raw_mse = _raw_mse_per_sample.mean(
+                                dim=list(range(1, _raw_mse_per_sample.dim()))
+                            )
                     # 仅 main 集样本进 InfoNoise schedule 学习：I-MMSE 假设单一数据分布，
                     # reg 集典型是通用图（booru）vs main 集是单一主题，混入 record 学到的是
                     # mixture MMSE 不是 mmse_main(t)。用 is_reg flag 而非 loss_weight 阈值
@@ -412,7 +444,10 @@ def run(ctx: TrainingContext) -> None:
                     lw = _compute_loss_weight_from_args(args, t, ctx.device)
                     if lw is not None:
                         loss_per_sample = loss_per_sample * lw.view(-1, *([1] * (loss_per_sample.dim() - 1)))
-                    loss = loss_per_sample.mean()
+                    if spatial_mask is not None:
+                        loss = _masked_mean(loss_per_sample, spatial_mask)
+                    else:
+                        loss = loss_per_sample.mean()
                     denoise_loss_log = loss.detach()
 
                 # SRA v2 表征对齐 loss（标准路径；leap / navit 路径不适用）
