@@ -1,9 +1,9 @@
 """masked loss（PR-B B2）——dataset mask 管线 / npz 缓存失效 / collate / loss 数学。
 
-设计：docs/design/preprocess-inpaint-mask-design.md §5 / §9。
-mask sidecar 路径 = {data_dir}/masks/{rel.parent}/{stem}.png，灰度 255=学 0=不学；
-数据层随图同几何变换（NEAREST）后 area 下采样到 latent /8，loss 层加权均值
-reduction `(loss*mask).sum()/mask.sum()`。
+设计：docs/design/preprocess-inpaint-mask-design.md §5 / §9（D5 修订）。
+mask sidecar 路径 = 与图同目录的 {stem}.mask（内容灰度 PNG 字节），
+灰度 255=学 0=不学；数据层随图同几何变换（NEAREST）后 area 下采样到
+latent /8，loss 层加权均值 reduction `(loss*mask).sum()/mask.sum()`。
 """
 from __future__ import annotations
 
@@ -48,12 +48,13 @@ def _write_img(path: Path, size=(256, 256)) -> None:
     path.with_suffix(".txt").write_text("test", encoding="utf-8")
 
 
-def _write_mask(data_dir: Path, img_path: Path, builder) -> Path:
-    """builder(Image) 生成 mask 内容；路径按训练器约定落 masks/ 镜像。"""
-    rel = img_path.relative_to(data_dir)
-    mp = data_dir / "masks" / rel.parent / f"{img_path.stem}.png"
-    mp.parent.mkdir(parents=True, exist_ok=True)
-    builder().save(mp)
+def _write_mask(img_path: Path, builder) -> Path:
+    """builder(Image) 生成 mask 内容；路径按落盘约定 = 同目录 {stem}.mask。
+
+    .mask 后缀 PIL 推断不出格式，必须显式 format="PNG"。
+    """
+    mp = img_path.parent / f"{img_path.stem}.mask"
+    builder().save(mp, format="PNG")
     return mp
 
 
@@ -77,7 +78,7 @@ def _square_dataset(tmp_path: Path, **kwargs) -> ImageDataset:
 def test_mask_transforms_with_image(tmp_path: Path) -> None:
     img_path = tmp_path / "X.png"
     _write_img(img_path)
-    _write_mask(tmp_path, img_path, _half_mask)
+    _write_mask(img_path, _half_mask)
 
     ds = _square_dataset(tmp_path, load_masks=True)
     item = ds.get_with_flip(0, flip=False)
@@ -98,7 +99,7 @@ def test_mask_flips_with_image(tmp_path: Path) -> None:
         m.paste(0, (0, 0, 128, 256))  # 左半不学
         return m
 
-    _write_mask(tmp_path, img_path, left_mask)
+    _write_mask(img_path, left_mask)
     ds = _square_dataset(tmp_path, load_masks=True)
     m0 = ds.get_with_flip(0, flip=False)["mask"]
     m1 = ds.get_with_flip(0, flip=True)["mask"]
@@ -110,7 +111,7 @@ def test_mask_flips_with_image(tmp_path: Path) -> None:
 def test_mask_size_mismatch_degrades_to_none(tmp_path: Path) -> None:
     img_path = tmp_path / "X.png"
     _write_img(img_path)
-    _write_mask(tmp_path, img_path, lambda: Image.new("L", (128, 128), 0))
+    _write_mask(img_path, lambda: Image.new("L", (128, 128), 0))
 
     ds = _square_dataset(tmp_path, load_masks=True)
     assert ds.get_with_flip(0, flip=False)["mask"] is None
@@ -119,7 +120,7 @@ def test_mask_size_mismatch_degrades_to_none(tmp_path: Path) -> None:
 def test_mask_not_loaded_when_disabled(tmp_path: Path) -> None:
     img_path = tmp_path / "X.png"
     _write_img(img_path)
-    _write_mask(tmp_path, img_path, _half_mask)
+    _write_mask(img_path, _half_mask)
 
     ds = _square_dataset(tmp_path, load_masks=False)
     assert ds.get_with_flip(0, flip=False)["mask"] is None
@@ -136,7 +137,7 @@ def test_gray_mask_partial_weight(tmp_path: Path) -> None:
     """灰度中间值 = 部分权重（软边笔刷语义）。"""
     img_path = tmp_path / "X.png"
     _write_img(img_path)
-    _write_mask(tmp_path, img_path, lambda: Image.new("L", (256, 256), 128))
+    _write_mask(img_path, lambda: Image.new("L", (256, 256), 128))
 
     ds = _square_dataset(tmp_path, load_masks=True)
     mask = ds.get_with_flip(0, flip=False)["mask"]
@@ -151,7 +152,7 @@ def test_gray_mask_partial_weight(tmp_path: Path) -> None:
 def test_cache_stores_mask_keys(tmp_path: Path) -> None:
     img_path = tmp_path / "X.png"
     _write_img(img_path)
-    _write_mask(tmp_path, img_path, _half_mask)
+    _write_mask(img_path, _half_mask)
 
     ds = _square_dataset(tmp_path, load_masks=True, flip_augment=True)
     cached = CachedLatentDataset(ds, _FakeVAE(), device="cpu", dtype=torch.float32)
@@ -186,7 +187,7 @@ def test_cache_invalidation_three_rules(tmp_path: Path) -> None:
     assert cached._is_cache_valid(img_path, npz_path) is True
 
     # 1) 新画 mask（文件出现但 npz 无 mask 键）→ 失效
-    mp = _write_mask(tmp_path, img_path, _half_mask)
+    mp = _write_mask(img_path, _half_mask)
     assert cached._is_cache_valid(img_path, npz_path) is False
 
     # 重建缓存（含 mask）后有效
@@ -215,7 +216,7 @@ def test_cache_with_mask_keys_valid_when_masks_disabled(tmp_path: Path) -> None:
     """load_masks=False 时带 mask 键的缓存仍有效（超集语义，对齐 latent_flipped）。"""
     img_path = tmp_path / "X.png"
     _write_img(img_path)
-    _write_mask(tmp_path, img_path, _half_mask)
+    _write_mask(img_path, _half_mask)
     ds = _square_dataset(tmp_path, load_masks=True)
     CachedLatentDataset(ds, _FakeVAE(), device="cpu", dtype=torch.float32)
 

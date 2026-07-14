@@ -282,7 +282,7 @@ class ImageDataset(Dataset):
         self.tag_dropout = tag_dropout
         self.prefer_json = prefer_json
         self.caption_override = caption_override  # 正则集：统一 caption，如 "1girl, solo"
-        # masked loss（B2）：加载 masks/ 保留目录下的 mask sidecar，随图走同一
+        # masked loss（B2）：加载与图同目录的 {stem}.mask sidecar，随图走同一
         # 几何变换后 area 下采样到 latent 分辨率，作为 loss 空间权重。
         self.load_masks = bool(load_masks)
         self._mask_warned: set = set()
@@ -611,17 +611,13 @@ class ImageDataset(Dataset):
         return len(self.samples)
 
     def _mask_path_for(self, img_path) -> Path:
-        """studio 训练 mask sidecar 路径：`{data_dir}/masks/{rel.parent}/{stem}.png`。
+        """studio 训练 mask sidecar 路径：与图同目录同 stem 的 `{stem}.mask`。
 
-        与 studio/services/preprocess/masks.py 的落盘约定镜像（恒 .png、stem
-        对应图片）。根目录散图 rel.parent="." 时落 masks/{stem}.png。
+        与 studio/services/preprocess/masks.py 的落盘约定镜像（后缀恒 .mask，
+        内容灰度 PNG 字节）——stem 不含扩展名，X.jpg 与 X.png 共享同一 mask。
         """
         img_path = Path(img_path)
-        try:
-            rel = img_path.relative_to(self.data_dir)
-        except ValueError:
-            return self.data_dir / "masks" / f"{img_path.stem}.png"
-        return self.data_dir / "masks" / rel.parent / f"{img_path.stem}.png"
+        return img_path.parent / f"{img_path.stem}.mask"
 
     def _load_mask_image(self, img_path, size):
         """加载并校验 mask（灰度 L，尺寸必须等于图片当前尺寸）。

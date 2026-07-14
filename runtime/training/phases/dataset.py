@@ -94,7 +94,7 @@ def run(ctx: TrainingContext) -> None:
     # NaViT 原生定尺寸参数（navit_native_resolution）；关闭时为空 dict → 行为中立。
     native_kwargs = _native_dataset_kwargs(args, ctx)
 
-    # masked loss（B2）：开关开启时数据层加载 masks/ 保留目录下的 mask sidecar。
+    # masked loss（B2）：开关开启时数据层加载与图同目录的 {stem}.mask sidecar。
     # NaViT 打包路径第一版不支持（逐图打包 loss 无批量网格，§5 决策）——警告并
     # 关闭，避免 npz 白写 mask 键。
     load_masks = bool(getattr(args, "masked_loss", False))
@@ -134,7 +134,7 @@ def run(ctx: TrainingContext) -> None:
             )
         else:
             logger.info(
-                "[masked-loss] 开关已开但训练集没有任何 mask 文件（train/masks/ 为空）"
+                "[masked-loss] 开关已开但训练集没有任何 mask 文件（无 .mask sidecar）"
                 "——本次训练等效于未开启"
             )
 
