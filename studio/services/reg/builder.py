@@ -33,7 +33,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from ...services.dataset.scan import IMAGE_EXTS, TRAIN_RESERVED_DIRS
+from ...services.dataset.scan import IMAGE_EXTS
 from ..booru import api as booru_api, pool as booru_pool
 from .analysis import (
     _IMAGE_EXT_NODOT,
@@ -863,10 +863,6 @@ def preview_train_tag_distribution(
         return []
     for img in train_dir.rglob("*"):
         if not img.is_file() or img.suffix.lower() not in IMAGE_EXTS:
-            continue
-        # 保留目录（masks/ 的 mask 灰度图）不参与 tag 统计
-        rel = img.relative_to(train_dir)
-        if rel.parts and rel.parts[0] in TRAIN_RESERVED_DIRS:
             continue
         counter.update(analyze_tags_in_file(img))
     return counter.most_common(top)

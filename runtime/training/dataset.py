@@ -241,11 +241,6 @@ class ImageDataset(Dataset):
     # 保持与 studio/datasets.py:IMAGE_EXTS 同步（anima_train.py 是独立 CLI 脚本，
     # 不强制 import studio package；改一处时另一处也要跟着改）。
     EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
-    # data_dir 下的保留子目录（非 concept folder），扫描时跳过。masks/ 是训练
-    # mask sidecar（studio 侧写入，灰度 PNG，255=学/0=不学）——本类 _scan 对子
-    # 目录 rglob 递归，不排除会把 mask 图当训练样本吞掉。保持与
-    # studio/services/dataset/scan.py:TRAIN_RESERVED_DIRS 同步。
-    RESERVED_SUBDIRS = {"masks"}
 
     def __init__(self, data_dir, resolution=1024, bucket_mgr=None,
                  shuffle_caption=False, keep_tokens=0, flip_augment=False,
@@ -484,8 +479,6 @@ class ImageDataset(Dataset):
         # 子文件夹（解析 px 覆盖 + repeat）
         for subdir in sorted(self.data_dir.iterdir()):
             if not subdir.is_dir():
-                continue
-            if subdir.name in self.RESERVED_SUBDIRS:
                 continue
             reso_override, repeats, _label = self._parse_folder_meta(subdir.name)
             resos = [reso_override] if reso_override else self.resolutions

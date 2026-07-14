@@ -1,7 +1,7 @@
 """训练 mask sidecar（PR-B B1）——读写 / 变换跟随 / 删除路径联动 / bundle 往返。
 
-设计：docs/design/preprocess-inpaint-mask-design.md §2 / §7 / §9。
-mask 路径 = train/masks/{folder}/{stem}.png（恒 .png，stem 镜像图片）。
+设计：docs/design/preprocess-inpaint-mask-design.md §2 / §7 / §9（D5 修订）。
+mask 路径 = train/{folder}/{stem}.mask（与图同目录同 stem，内容灰度 PNG 字节）。
 """
 from __future__ import annotations
 
@@ -62,12 +62,12 @@ def _mask_bytes(size=(10, 10), value=0) -> bytes:
 # ---------------------------------------------------------------------------
 
 
-def test_mask_path_is_png_stem_mirror(isolated) -> None:
-    """mask 路径恒 .png 且镜像 stem —— X.jpg 与 X.png 共享同一 mask。"""
+def test_mask_path_is_stem_sidecar(isolated) -> None:
+    """mask 路径 = 同目录 {stem}.mask —— X.jpg 与 X.png 共享同一 mask。"""
     train = isolated["train"]
     p_jpg = train_masks.mask_path_for(train, _rel("X.jpg"))
     p_png = train_masks.mask_path_for(train, _rel("X.png"))
-    assert p_jpg == p_png == train / "masks" / DEFAULT_FOLDER / "X.png"
+    assert p_jpg == p_png == train / DEFAULT_FOLDER / "X.mask"
 
 
 def test_mask_save_roundtrip(isolated) -> None:
@@ -178,7 +178,7 @@ def test_crop_mask_like_noop_without_mask(isolated) -> None:
     train = isolated["train"]
     _write_png(isolated["sub"] / "X.png", (10, 10))
     train_masks.crop_mask_like(train, _rel("X.png"), [(0, 0, 5, 5)], [_rel("X.png")])
-    assert not (train / "masks").exists()
+    assert not train_masks.mask_path_for(train, _rel("X.png")).exists()
 
 
 def test_resize_mask_like(isolated) -> None:
@@ -252,13 +252,12 @@ def test_remove_from_train_deletes_mask(isolated) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 训练器 / studio 递归扫描排除
+# 训练器 / studio 递归扫描：.mask 天然不命中
 # ---------------------------------------------------------------------------
 
 
-def test_trainer_scan_skips_masks_dir(isolated, tmp_path: Path) -> None:
-    """runtime ImageDataset 对子目录 rglob 递归 —— masks/ 必须被排除，
-    否则 mask 灰度图会被当训练样本（RESERVED_SUBDIRS）。"""
+def test_trainer_scan_ignores_mask_sidecar(isolated, tmp_path: Path) -> None:
+    """.mask 后缀不在训练器 EXTS —— 同目录 sidecar 天然不会被当训练样本。"""
     from runtime.training.dataset import ImageDataset
 
     train = isolated["train"]
@@ -272,7 +271,7 @@ def test_trainer_scan_skips_masks_dir(isolated, tmp_path: Path) -> None:
     assert names == {"X.png"}
 
 
-def test_bucket_histogram_skips_masks_dir(isolated) -> None:
+def test_bucket_histogram_ignores_mask_sidecar(isolated) -> None:
     from studio.services.projects.versions import compute_bucket_histogram
 
     train = isolated["train"]
@@ -280,8 +279,6 @@ def test_bucket_histogram_skips_masks_dir(isolated) -> None:
     (isolated["sub"] / "X.txt").write_text("1girl", encoding="utf-8")
     mp = train_masks.mask_path_for(train, _rel("X.png"))
     _write_png(mp, (64, 64), color=0, mode="L")
-    # masks 下就算出现带 caption 的图也不参与（保留目录整体排除）
-    (train / "masks" / DEFAULT_FOLDER / "X.txt").write_text("1girl", encoding="utf-8")
 
     hist = compute_bucket_histogram(train, [64])
     total = sum(b["count"] for entry in hist for b in entry["buckets"])
@@ -312,7 +309,7 @@ def test_bundle_masks_roundtrip(isolated, tmp_path: Path) -> None:
         )
     assert res["manifest"]["stats"]["train_mask_count"] == 1
     with zipfile.ZipFile(dest) as zf:
-        assert f"train/masks/{DEFAULT_FOLDER}/X.png" in zf.namelist()
+        assert f"train/{DEFAULT_FOLDER}/X.mask" in zf.namelist()
 
     with db.connection_for(isolated["db"]) as conn:
         imported = train_io.import_bundle(
@@ -342,4 +339,4 @@ def test_bundle_masks_excluded_by_default(isolated, tmp_path: Path) -> None:
     with db.connection_for(isolated["db"]) as conn:
         train_io.export_bundle(conn, v["id"], dest, train_io.BundleOptions(train=True))
     with zipfile.ZipFile(dest) as zf:
-        assert not any(n.startswith("train/masks/") for n in zf.namelist())
+        assert not any(n.endswith(".mask") for n in zf.namelist())

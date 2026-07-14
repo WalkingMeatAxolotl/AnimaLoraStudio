@@ -1,7 +1,7 @@
 """训练 mask 数据链路快速检验（B1 数据面 → B2 变换数学 dry-run）。
 
-把涂抹页保存的 mask（train/masks/{folder}/{stem}.png）走一遍训练器将要执行的
-几何管线，验证「遮罩 → 训练」链路的数据面是通的：
+把涂抹页保存的 mask（train/{folder}/{stem}.mask 同目录 sidecar，内容灰度
+PNG）走一遍训练器将要执行的几何管线，验证「遮罩 → 训练」链路的数据面是通的：
 
   1. mask 存在性 + 尺寸校验（训练器 fail-safe 语义：不匹配 = 该图按无 mask）
   2. bucket 分桶 + resize-cover + center-crop（镜像 ImageDataset.get_with_flip
@@ -37,15 +37,15 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from PIL import Image  # noqa: E402
 
-from runtime.training.dataset import BucketManager, ImageDataset  # noqa: E402
+from runtime.training.dataset import BucketManager  # noqa: E402
 
 VAE_DOWNSAMPLE = 8
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
-MASKS_DIRNAME = "masks"
+MASK_SUFFIX = ".mask"
 
 
 def mask_path_for(train_dir: Path, folder: str, filename: str) -> Path:
-    return train_dir / MASKS_DIRNAME / folder / f"{Path(filename).stem}.png"
+    return train_dir / folder / f"{Path(filename).stem}{MASK_SUFFIX}"
 
 
 def bucket_geometry(
@@ -112,7 +112,7 @@ def main() -> int:
     bad: list[str] = []
 
     for sub in sorted(train_dir.iterdir()):
-        if not sub.is_dir() or sub.name in ImageDataset.RESERVED_SUBDIRS:
+        if not sub.is_dir():
             continue
         for f in sorted(sub.iterdir()):
             if not f.is_file() or f.suffix.lower() not in IMAGE_EXTS:

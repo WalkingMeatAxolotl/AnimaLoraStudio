@@ -1,18 +1,15 @@
-"""训练 mask sidecar（`train/masks/{folder}/{stem}.png`）读写 + 预处理变换跟随。
+"""训练 mask sidecar（`train/{folder}/{stem}.mask`）读写 + 预处理变换跟随。
 
 设计：docs/design/preprocess-inpaint-mask-design.md §2 / §7 / §9。
 
-- 路径镜像 manifest entry key 且恒 `.png`：`1_data/X.jpg` 的 mask 是
-  `masks/1_data/X.png`。stem 不含扩展名 —— crop / 涂抹把 X.jpg 产物统一成
-  X.png 时 mask 路径不变，天然免疫产物改名。
+- mask 与训练图**同目录同 stem**，后缀恒 `.mask`（内容是灰度 PNG 字节）。
+  与 .txt / .json caption sidecar 同构：后缀不在 IMAGE_EXTS，所有图片扫描点
+  （一级 / 递归）天然不会把它当训练图 —— 不需要任何豁免规则。
+- stem 不含扩展名 —— crop / 涂抹把 X.jpg 产物统一成 X.png 时 mask 路径不变，
+  天然免疫产物改名；同 stem sidecar 家族（.txt/.json/.mask）删除 / 导出 /
+  变换跟随共用一套心智模型。
 - 灰度 L 语义：255=正常学习、0=不学、中间值=部分权重（训练器 /255 作 loss
   权重）。无 mask 文件 = 全 255；「清除 mask」= 删文件。
-- `masks/` 位于 train/ 之下但**不是** concept folder：一级扫描点（studio
-  `_train_images_listing` / bundle `_collect_train`）只看子目录直下文件，
-  masks/ 直下只有目录所以天然不可见；**递归**扫描点（trainer
-  `ImageDataset._scan` / `compute_bucket_histogram` /
-  `preview_train_tag_distribution`）必须用 `TRAIN_RESERVED_DIRS` 排除，
-  否则 mask 灰度图会被当训练图吞掉。
 """
 from __future__ import annotations
 
@@ -23,21 +20,21 @@ from typing import Any, Iterable, Optional
 
 from studio.domain.errors import ValidationError
 
-MASKS_DIRNAME = "masks"
+MASK_SUFFIX = ".mask"
 
 
 def mask_path_for(train_dir: Path, rel_name: str) -> Path:
-    """`1_data/X.jpg` → `{train_dir}/masks/1_data/X.png`。
+    """`1_data/X.jpg` → `{train_dir}/1_data/X.mask`。
 
     写入端点前置 `_validate_rel_name`（严格两段）；删除 / 查询路径还会被
     manifest mutation 以**老式平铺 name**（无 folder 前缀，ADR 0004 兼容
-    数据）调到 —— 平铺 name 映射到 `masks/{stem}.png`，文件不存在时上层
-    no-op，不 crash。
+    数据）调到 —— 平铺 name 映射到 `{train_dir}/{stem}.mask`，文件不存在时
+    上层 no-op，不 crash。
     """
     if "/" in rel_name:
         folder, filename = rel_name.split("/", 1)
-        return train_dir / MASKS_DIRNAME / folder / f"{Path(filename).stem}.png"
-    return train_dir / MASKS_DIRNAME / f"{Path(rel_name).stem}.png"
+        return train_dir / folder / f"{Path(filename).stem}{MASK_SUFFIX}"
+    return train_dir / f"{Path(rel_name).stem}{MASK_SUFFIX}"
 
 
 def write_mask(
@@ -47,7 +44,7 @@ def write_mask(
     *,
     expected_size: tuple[int, int],
 ) -> dict[str, Any]:
-    """写入 mask（灰度 PNG，tmp + atomic replace）。
+    """写入 mask（灰度 PNG 字节，tmp + atomic replace）。
 
     尺寸必须等于对应训练图当前尺寸 —— mask 是逐像素对齐的数据面，
     不符说明前端导出对象错位，直接拒绝。
@@ -164,6 +161,12 @@ def resize_mask_like(
     tmp = p.with_suffix(p.suffix + ".tmp")
     img.save(tmp, format="PNG", optimize=False)
     os.replace(tmp, p)
+
+
+def mask_file(train_dir: Path, rel_name: str) -> Optional[Path]:
+    """mask 文件路径（不存在返回 None）。GET 端点用。"""
+    p = mask_path_for(train_dir, rel_name)
+    return p if p.is_file() else None
 
 
 def mask_stat(train_dir: Path, rel_name: str) -> Optional[dict[str, Any]]:
