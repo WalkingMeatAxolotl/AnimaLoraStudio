@@ -56,9 +56,6 @@ LATENT_CACHE_EXT = ".npz"
 # 训练 mask sidecar（train/{folder}/{stem}.mask，与图同目录，详
 # services/preprocess/masks.py）。arcname 两段与图片同构。
 MASK_SUFFIX = ".mask"
-# legacy 布局的保留目录（train/masks/{folder}/{stem}.png）——只在 import 侧
-# 接受老 bundle 时解析，导出不再产生；三段路径特判转写到新布局。
-MASKS_DIRNAME = "masks"
 
 
 VERSION_CONFIG_ARC = "presets/config.yaml"
@@ -362,9 +359,7 @@ def _collect_train(
 ) -> tuple[list[tuple[Path, str]], dict[str, Any]]:
     """扫 train/ 目录，返回 (payload, stats_dict)。
 
-    include_masks 时收集与图同目录的 `{stem}.mask` sidecar（收集前先触发
-    legacy `masks/` 布局迁移，保证老数据也以新格式打包）。masks/ 目录本身
-    是 legacy 保留目录，不进 concept 循环。
+    include_masks 时收集与图同目录的 `{stem}.mask` sidecar。
     """
     payload: list[tuple[Path, str]] = []
     concepts: list[dict[str, Any]] = []
@@ -379,12 +374,8 @@ def _collect_train(
             "latent_cache_count": 0, "mask_count": 0,
         }
 
-    if include_masks:
-        from ..preprocess import masks as train_masks
-        train_masks.migrate_legacy_masks(train_dir)
-
     for sub in sorted(train_dir.iterdir()):
-        if not sub.is_dir() or sub.name == MASKS_DIRNAME:
+        if not sub.is_dir():
             continue
         cnt = 0
         for f in sorted(sub.iterdir()):
@@ -604,12 +595,6 @@ def _safe_arc_bundle(name: str) -> Optional[tuple[str, str]]:
     if norm.startswith(TRAIN_PREFIX):
         inner = norm[len(TRAIN_PREFIX):]
         parts = inner.split("/")
-        # legacy bundle：train/masks/{folder}/{stem}.png 三层（老 mask 布局，
-        # 导入侧写入时转写为 {folder}/{stem}.mask）
-        if parts[0] == MASKS_DIRNAME:
-            if len(parts) != 3 or not all(parts) or not parts[2].endswith(".png"):
-                return None
-            return ("train", inner)
         if len(parts) != 2 or not parts[0] or not parts[1]:
             return None
         return ("train", inner)
@@ -798,24 +783,6 @@ def import_bundle(
             if train_entries:
                 train_dir = vdir / "train"
                 for info, inner in train_entries:
-                    if inner.startswith(f"{MASKS_DIRNAME}/"):
-                        # legacy bundle 的 mask：`masks/{folder}/{stem}.png`
-                        # 三段路径，转写到当前布局 `{folder}/{stem}.mask`。
-                        # 不进 seen_train —— mask 不是训练图。
-                        parts = inner.split("/")
-                        if len(parts) != 3 or parts[2].startswith("."):
-                            raise TrainIOError(
-                                "Import file contains an invalid mask path",
-                                code="dataset.import_invalid", http_status=400,
-                            )
-                        target = safe_join(
-                            train_dir, parts[1],
-                            f"{Path(parts[2]).stem}{MASK_SUFFIX}",
-                        )
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        with zf.open(info) as src, target.open("wb") as dst:
-                            _copy_chunks(src, dst)
-                        continue
                     folder, filename = inner.split("/", 1)
                     if filename.startswith("."):
                         raise TrainIOError(

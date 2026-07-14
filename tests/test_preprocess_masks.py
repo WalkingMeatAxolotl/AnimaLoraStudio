@@ -1,8 +1,7 @@
 """训练 mask sidecar（PR-B B1）——读写 / 变换跟随 / 删除路径联动 / bundle 往返。
 
 设计：docs/design/preprocess-inpaint-mask-design.md §2 / §7 / §9（D5 修订）。
-mask 路径 = train/{folder}/{stem}.mask（与图同目录同 stem，内容灰度 PNG 字节）；
-legacy 布局 train/masks/{folder}/{stem}.png 由 migrate_legacy_masks lazy 搬迁。
+mask 路径 = train/{folder}/{stem}.mask（与图同目录同 stem，内容灰度 PNG 字节）。
 """
 from __future__ import annotations
 
@@ -253,13 +252,12 @@ def test_remove_from_train_deletes_mask(isolated) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 训练器 / studio 递归扫描：.mask 天然不命中 + legacy masks/ 目录排除
+# 训练器 / studio 递归扫描：.mask 天然不命中
 # ---------------------------------------------------------------------------
 
 
 def test_trainer_scan_ignores_mask_sidecar(isolated, tmp_path: Path) -> None:
-    """.mask 后缀不在训练器 EXTS —— 同目录 sidecar 天然不会被当训练样本；
-    legacy masks/ 目录（未迁移老数据）仍靠 RESERVED_SUBDIRS 排除。"""
+    """.mask 后缀不在训练器 EXTS —— 同目录 sidecar 天然不会被当训练样本。"""
     from runtime.training.dataset import ImageDataset
 
     train = isolated["train"]
@@ -267,8 +265,6 @@ def test_trainer_scan_ignores_mask_sidecar(isolated, tmp_path: Path) -> None:
     (isolated["sub"] / "X.txt").write_text("1girl", encoding="utf-8")
     mp = train_masks.mask_path_for(train, _rel("X.png"))
     _write_png(mp, (64, 64), color=0, mode="L")
-    # legacy 布局残留（尚未触发迁移）
-    _write_png(train / "masks" / DEFAULT_FOLDER / "Y.png", (64, 64), color=0, mode="L")
 
     ds = ImageDataset(train, resolution=64)
     names = {Path(s["image"]).name for s in ds.samples}
@@ -283,62 +279,10 @@ def test_bucket_histogram_ignores_mask_sidecar(isolated) -> None:
     (isolated["sub"] / "X.txt").write_text("1girl", encoding="utf-8")
     mp = train_masks.mask_path_for(train, _rel("X.png"))
     _write_png(mp, (64, 64), color=0, mode="L")
-    # legacy masks/ 下就算出现带 caption 的图也不参与（保留目录整体排除）
-    _write_png(train / "masks" / DEFAULT_FOLDER / "Y.png", (64, 64), color=0, mode="L")
-    (train / "masks" / DEFAULT_FOLDER / "Y.txt").write_text("1girl", encoding="utf-8")
 
     hist = compute_bucket_histogram(train, [64])
     total = sum(b["count"] for entry in hist for b in entry["buckets"])
     assert total == 1
-
-
-# ---------------------------------------------------------------------------
-# legacy 布局迁移
-# ---------------------------------------------------------------------------
-
-
-def test_migrate_legacy_masks_moves_and_cleans(isolated) -> None:
-    """老布局 train/masks/{folder}/{stem}.png → 同目录 {stem}.mask；
-    搬空后 legacy 目录被清掉。任意 mask 入口（这里用 mask_stat）触发。"""
-    train = isolated["train"]
-    _write_png(isolated["sub"] / "X.png", (10, 10))
-    legacy = train / "masks" / DEFAULT_FOLDER / "X.png"
-    _write_png(legacy, (10, 10), color=0, mode="L")
-
-    stat = train_masks.mask_stat(train, _rel("X.png"))
-    assert stat is not None
-    new_path = train_masks.mask_path_for(train, _rel("X.png"))
-    assert new_path.is_file()
-    assert not legacy.exists()
-    assert not (train / "masks").exists()
-    with Image.open(new_path) as im:
-        assert im.mode == "L" and im.size == (10, 10)
-
-
-def test_migrate_legacy_masks_new_location_wins(isolated) -> None:
-    """新位置已有 mask（迁移后又画过）→ 保留新的，删老文件。"""
-    train = isolated["train"]
-    _write_png(isolated["sub"] / "X.png", (10, 10))
-    new_path = train_masks.mask_path_for(train, _rel("X.png"))
-    _write_png(new_path, (10, 10), color=255, mode="L")
-    legacy = train / "masks" / DEFAULT_FOLDER / "X.png"
-    _write_png(legacy, (10, 10), color=0, mode="L")
-
-    train_masks.migrate_legacy_masks(train)
-    assert not legacy.exists()
-    with Image.open(new_path) as im:
-        assert im.getpixel((0, 0)) == 255  # 新位置内容未被覆盖
-
-
-def test_migrate_legacy_masks_skips_orphans(isolated) -> None:
-    """目标 concept 目录已不存在的孤儿 mask：不搬不删，留在 legacy 目录。"""
-    train = isolated["train"]
-    legacy = train / "masks" / "9_gone" / "X.png"
-    _write_png(legacy, (10, 10), color=0, mode="L")
-
-    moved = train_masks.migrate_legacy_masks(train)
-    assert moved == 0
-    assert legacy.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -380,61 +324,6 @@ def test_bundle_masks_roundtrip(isolated, tmp_path: Path) -> None:
     assert new_mask.is_file()
     with Image.open(new_mask) as im:
         assert im.size == (10, 10)
-
-
-def test_bundle_export_migrates_legacy_layout(isolated, tmp_path: Path) -> None:
-    """老布局数据在导出前被迁移 —— zip 里永远是新格式 arcname。"""
-    from studio.services.data_io import train_io
-
-    v = isolated["version"]
-    train = isolated["train"]
-    _write_png(isolated["sub"] / "X.png", (10, 10))
-    _write_png(train / "masks" / DEFAULT_FOLDER / "X.png", (10, 10), color=0, mode="L")
-
-    dest = tmp_path / "bundle.zip"
-    with db.connection_for(isolated["db"]) as conn:
-        res = train_io.export_bundle(
-            conn, v["id"], dest,
-            train_io.BundleOptions(train=True, train_masks=True),
-        )
-    assert res["manifest"]["stats"]["train_mask_count"] == 1
-    with zipfile.ZipFile(dest) as zf:
-        assert f"train/{DEFAULT_FOLDER}/X.mask" in zf.namelist()
-        assert not any(n.startswith("train/masks/") for n in zf.namelist())
-
-
-def test_bundle_import_accepts_legacy_mask_paths(isolated, tmp_path: Path) -> None:
-    """老 bundle（train/masks/{folder}/{stem}.png 三段路径）导入 → 转写新布局。"""
-    import json as _json
-
-    from studio.services.data_io import train_io
-
-    src = tmp_path / "legacy_bundle.zip"
-    with zipfile.ZipFile(src, "w") as zf:
-        zf.writestr("manifest.json", _json.dumps({
-            "schema_version": 2,
-            "source": {"title": "legacy", "slug": "legacy"},
-            "version_label": "v1",
-        }))
-        buf = io.BytesIO()
-        Image.new("RGB", (10, 10), "red").save(buf, "PNG")
-        zf.writestr(f"train/{DEFAULT_FOLDER}/X.png", buf.getvalue())
-        zf.writestr(
-            f"train/masks/{DEFAULT_FOLDER}/X.png", _mask_bytes((10, 10), 0),
-        )
-
-    with db.connection_for(isolated["db"]) as conn:
-        imported = train_io.import_bundle(
-            conn, src, presets_base=tmp_path / "presets",
-        )
-    new_train = versions.version_dir(
-        imported["project"]["id"],
-        imported["project"]["slug"],
-        imported["version"]["label"],
-    ) / "train"
-    new_mask = train_masks.mask_path_for(new_train, _rel("X.png"))
-    assert new_mask.is_file()
-    assert not (new_train / "masks").exists()
 
 
 def test_bundle_masks_excluded_by_default(isolated, tmp_path: Path) -> None:

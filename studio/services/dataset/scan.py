@@ -12,13 +12,6 @@ from typing import Any
 # 保持与 anima_train.py:EXTS 同步（trainer 是独立脚本，不 import studio）。
 # 删了 .jxl：PIL 12 没注册 .jxl，需要 pillow-jxl-plugin 才能解，booru 生态见不到。
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
-# train/ 下的 **legacy** 保留子目录。mask sidecar 现落在图片同目录的
-# `{stem}.mask`（非图片后缀，任何扫描点天然不命中，见
-# services/preprocess/masks.py）；masks/ 是首发版（2026-07）的老布局，
-# 迁移（migrate_legacy_masks）是 lazy 的——递归扫 train/ 的消费点仍要排除
-# 本集合，防未迁移的老 mask PNG 被当训练图。保持与
-# runtime/training/dataset.py:RESERVED_SUBDIRS 同步。
-TRAIN_RESERVED_DIRS = {"masks"}
 KOHYA_PREFIX = re.compile(r"^(\d+)_(.+)$")
 
 

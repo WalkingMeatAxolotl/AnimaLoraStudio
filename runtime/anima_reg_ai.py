@@ -52,7 +52,6 @@ from studio.services.reg.builder import (  # noqa: E402
     read_meta,
     write_meta,
 )
-from studio.services.dataset.scan import TRAIN_RESERVED_DIRS  # noqa: E402
 from studio.services.tagging.caption_format import (  # noqa: E402
     caption_json_to_tags,
     caption_json_to_text,
@@ -292,12 +291,6 @@ def _scan_train(train_dir: Path) -> list[dict]:
                     "tags": _read_tags(f),
                 })
             elif f.is_dir():
-                # train/ 直下的 legacy 保留目录（老版 mask 布局 masks/）不是
-                # concept folder —— 未迁移的老 mask PNG 不排除会被当训练图、
-                # 生成总数虚高（见 services/preprocess/masks.py docstring；
-                # 当前 .mask sidecar 后缀不在 IMAGE_EXTS，天然不命中）。
-                if not sub and f.name in TRAIN_RESERVED_DIRS:
-                    continue
                 child = f.name if not sub else f"{sub}/{f.name}"
                 _scan(f, child)
 

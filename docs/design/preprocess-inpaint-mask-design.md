@@ -31,7 +31,7 @@
 | D2 | 场景 1 = 破坏性像素编辑，原地覆盖 `train/1_data/X.png` | 符合现有 stage 覆盖模型，restore 机制现成 |
 | D3 | 场景 2 = 非破坏性 mask sidecar + 训练器 masked loss | kohya sd-scripts / diffusion-pipe 生态标准做法 |
 | D4 | 前端在**原图分辨率** canvas 上编辑，整图上传写回 | 笔画后端重放难以精确复现前端抗锯齿 / 软边渲染；整图上传所见即所得，本地 10–20MB PNG 无压力 |
-| D5 | ~~mask 存**平行目录** `train/masks/`~~ → **修订（2026-07-13）**：mask 与图**同目录同 stem**，后缀恒 `.mask`（内容仍是灰度 PNG 字节） | 原方案否决的是 `.mask.png` 双扩展名（`suffix==".png"` 被 IMAGE_EXTS 误收），但平行目录实际是**开放集合雷区**——每个递归扫 train/ 的消费点都要记得豁免，reg_ai 漏豁免就把 mask 当训练图（生成数虚高）。`.mask` 单一非图片后缀让所有扫描点天然不命中，与 .txt/.json caption sidecar 同构、共享删除/导出/跟随基建（OneTrainer `-masklabel.png` 同思路，后缀更稳）。老布局 lazy 迁移（`migrate_legacy_masks`），`TRAIN_RESERVED_DIRS` 豁免保留防未迁移数据 |
+| D5 | ~~mask 存**平行目录** `train/masks/`~~ → **修订（2026-07-13）**：mask 与图**同目录同 stem**，后缀恒 `.mask`（内容仍是灰度 PNG 字节） | 原方案否决的是 `.mask.png` 双扩展名（`suffix==".png"` 被 IMAGE_EXTS 误收），但平行目录实际是**开放集合雷区**——每个递归扫 train/ 的消费点都要记得豁免，reg_ai 漏豁免就把 mask 当训练图（生成数虚高）。`.mask` 单一非图片后缀让所有扫描点天然不命中，与 .txt/.json caption sidecar 同构、共享删除/导出/跟随基建（OneTrainer `-masklabel.png` 同思路，后缀更稳）。旧布局仅存在于未发版的 dev 期、零存量，直接切换不做迁移，`TRAIN_RESERVED_DIRS` 豁免机制一并退役 |
 | D6 | mask 为单通道灰度 PNG，255=正常学习、0=不学，中间值=部分权重 | `loss * mask` 对 [0,1] 连续值天然成立，软边笔刷自动成为过渡权重 |
 | D7 | masked loss 是训练 config 显式开关，不因 masks/ 非空而自动开启 | 显式旋钮是用户责任；UI 检测到 masks 非空时提示但不代开 |
 | D8 | restore（从 download 复原）时**删除该图 mask** | restore 语义=回到 download 原点、派生一律作废，对齐「不做 partial undo」 |
@@ -50,10 +50,9 @@ versions/{label}/train/
   caption 同构的 sidecar；后缀不在 IMAGE_EXTS，所有图片扫描点天然不命中。
 - **只有画过 mask 的图片才有 mask 文件**；无文件 = 全 255（正常训练）。
 - mask 位于 `train/` 之内 → fork 版本 `_copytree("train")` 自动跟随，零改动。
-- **legacy**：首发版布局 `train/masks/{folder}/{stem}.png`（保留目录）由
-  `migrate_legacy_masks` lazy 搬迁（masks.py 各入口 + bundle 导出前触发）；
-  `TRAIN_RESERVED_DIRS` / trainer `RESERVED_SUBDIRS` 豁免保留，防未迁移老
-  数据被递归扫描当训练图。
+- 首发版的 `train/masks/` 平行目录布局只存在于未发版的 dev 期（零存量），
+  直接切换、不做迁移；`TRAIN_RESERVED_DIRS` / trainer `RESERVED_SUBDIRS`
+  豁免机制随之退役。
 - manifest **不新增字段**（mask 有无以文件系统为准，过程信息不落盘）。场景 1
   的涂抹写回走现有 entry touch（`mtime/size/processed=true`）。
 

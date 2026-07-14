@@ -10,11 +10,6 @@
   变换跟随共用一套心智模型。
 - 灰度 L 语义：255=正常学习、0=不学、中间值=部分权重（训练器 /255 作 loss
   权重）。无 mask 文件 = 全 255；「清除 mask」= 删文件。
-- **Legacy 布局迁移**：首发版（2026-07 PR #394）mask 落在保留目录
-  `train/masks/{folder}/{stem}.png`。本模块所有公开入口先调
-  `migrate_legacy_masks`（幂等；masks/ 不存在时一次 exists 即短路）把老文件
-  搬到新位置。`TRAIN_RESERVED_DIRS` / trainer `RESERVED_SUBDIRS` 的 masks/
-  豁免**保留**——防止尚未触发迁移的老数据被递归扫描点当训练图。
 """
 from __future__ import annotations
 
@@ -26,8 +21,6 @@ from typing import Any, Iterable, Optional
 from studio.domain.errors import ValidationError
 
 MASK_SUFFIX = ".mask"
-# 老布局的保留目录名（只用于迁移 + 各扫描点的 legacy 豁免，不再写入）。
-LEGACY_MASKS_DIRNAME = "masks"
 
 
 def mask_path_for(train_dir: Path, rel_name: str) -> Path:
@@ -44,53 +37,6 @@ def mask_path_for(train_dir: Path, rel_name: str) -> Path:
     return train_dir / f"{Path(rel_name).stem}{MASK_SUFFIX}"
 
 
-def migrate_legacy_masks(train_dir: Path) -> int:
-    """老布局 `train/masks/**.png` → 同目录 `.mask` sidecar。返回搬迁数。
-
-    幂等：legacy 目录不存在时一次 exists 检查即返回。逐文件 `os.replace`：
-    - 新位置已存在（迁移后又在新位置写过）→ 新的是权威，直接删老文件。
-    - 目标 concept 目录已不存在（folder 被删 / 改名后的孤儿 mask）→ 跳过
-      不搬也不删（留在 legacy 目录里无害——各扫描点仍豁免 masks/）。
-    搬空的子目录顺手 rmdir（失败忽略）。
-    """
-    legacy_root = train_dir / LEGACY_MASKS_DIRNAME
-    if not legacy_root.is_dir():
-        return 0
-
-    moved = 0
-
-    def _migrate_file(src: Path, target: Path) -> None:
-        nonlocal moved
-        try:
-            if target.exists():
-                src.unlink()
-            elif target.parent.is_dir():
-                os.replace(src, target)
-                moved += 1
-        except OSError:
-            pass
-
-    for child in sorted(legacy_root.iterdir()):
-        if child.is_file() and child.suffix.lower() == ".png":
-            # 平铺老 mask（masks/{stem}.png，ADR 0004 兼容数据）→ train 根
-            _migrate_file(child, train_dir / f"{child.stem}{MASK_SUFFIX}")
-        elif child.is_dir():
-            for f in sorted(child.iterdir()):
-                if f.is_file() and f.suffix.lower() == ".png":
-                    _migrate_file(
-                        f, train_dir / child.name / f"{f.stem}{MASK_SUFFIX}",
-                    )
-            try:
-                child.rmdir()
-            except OSError:
-                pass
-    try:
-        legacy_root.rmdir()
-    except OSError:
-        pass
-    return moved
-
-
 def write_mask(
     train_dir: Path,
     rel_name: str,
@@ -105,7 +51,6 @@ def write_mask(
     """
     from PIL import Image
 
-    migrate_legacy_masks(train_dir)
     try:
         img = Image.open(io.BytesIO(data))
         img.load()
@@ -140,7 +85,6 @@ def write_mask(
 
 def delete_mask(train_dir: Path, rel_name: str) -> bool:
     """删除 mask 文件。返回是否真的删了（不存在返回 False，不报错）。"""
-    migrate_legacy_masks(train_dir)
     p = mask_path_for(train_dir, rel_name)
     if not p.is_file():
         return False
@@ -174,7 +118,6 @@ def crop_mask_like(
     """
     from PIL import Image
 
-    migrate_legacy_masks(train_dir)
     src_mask = mask_path_for(train_dir, src_rel)
     if not src_mask.is_file():
         return
@@ -206,7 +149,6 @@ def resize_mask_like(
     防灰度值被超分模型污染）。无 mask → no-op。"""
     from PIL import Image
 
-    migrate_legacy_masks(train_dir)
     p = mask_path_for(train_dir, rel_name)
     if not p.is_file():
         return
@@ -223,14 +165,12 @@ def resize_mask_like(
 
 def mask_file(train_dir: Path, rel_name: str) -> Optional[Path]:
     """mask 文件路径（不存在返回 None）。GET 端点用。"""
-    migrate_legacy_masks(train_dir)
     p = mask_path_for(train_dir, rel_name)
     return p if p.is_file() else None
 
 
 def mask_stat(train_dir: Path, rel_name: str) -> Optional[dict[str, Any]]:
     """mask 存在时返回 {mtime, size}，否则 None（workspace 列表 has_mask 用）。"""
-    migrate_legacy_masks(train_dir)
     p = mask_path_for(train_dir, rel_name)
     try:
         st = p.stat()

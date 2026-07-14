@@ -232,34 +232,19 @@ def test_txt_caption_path_unchanged(reg_module, tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# _scan_train：train/ 直下保留目录（masks/）不算训练图
+# _scan_train：mask sidecar 不算训练图
 # ---------------------------------------------------------------------------
 
-def test_scan_train_skips_reserved_masks_dir(reg_module, tmp_path: Path) -> None:
-    """mask 不是训练图：legacy masks/ 目录靠 TRAIN_RESERVED_DIRS 排除，
-    当前布局的 {stem}.mask sidecar 后缀不在 IMAGE_EXTS 天然不命中。
-
-    TRAIN_RESERVED_DIRS 在 trainer / booru builder / versions 统计三处都
-    排除了，reg_ai 的递归扫描漏掉会把 mask 灰度图计入生成清单——生成总数
-    虚高（用户报告：删图后重新生成数量不降）。"""
+def test_scan_train_ignores_mask_sidecar(reg_module, tmp_path: Path) -> None:
+    """{stem}.mask sidecar 后缀不在 IMAGE_EXTS —— 递归扫描天然不命中，
+    不会把 mask 计入生成清单（曾有 bug：老 masks/ 目录布局下 mask 被当
+    训练图 → 生成总数虚高、删图后重新生成数量不降）。"""
     train = tmp_path / "train"
     (train / "1_data").mkdir(parents=True)
     (train / "1_data" / "a.png").write_bytes(b"png")
     (train / "1_data" / "b.png").write_bytes(b"png")
-    (train / "1_data" / "a.mask").write_bytes(b"png")  # 当前布局 sidecar
-    (train / "masks" / "1_data").mkdir(parents=True)   # legacy 布局残留
-    (train / "masks" / "1_data" / "a.png").write_bytes(b"png")
+    (train / "1_data" / "a.mask").write_bytes(b"png")
 
     entries = reg_module._scan_train(train)
     imgs = sorted(str(e["img"].relative_to(train)).replace("\\", "/") for e in entries)
     assert imgs == ["1_data/a.png", "1_data/b.png"]
-
-
-def test_scan_train_keeps_nested_concept_folders(reg_module, tmp_path: Path) -> None:
-    """排除只针对 train/ 直下的保留名；嵌套同名子目录仍是普通 concept 内容。"""
-    train = tmp_path / "train"
-    (train / "1_data" / "masks").mkdir(parents=True)
-    (train / "1_data" / "masks" / "c.png").write_bytes(b"png")
-
-    entries = reg_module._scan_train(train)
-    assert [e["subfolder"] for e in entries] == ["1_data/masks"]

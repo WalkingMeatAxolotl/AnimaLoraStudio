@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import projects
-from ...services.dataset.scan import IMAGE_EXTS, TRAIN_RESERVED_DIRS
+from ...services.dataset.scan import IMAGE_EXTS
 
 # ADR-0007 §11.3-B：versions 状态机用 status + phase 两个正交字段。
 # 老 stage 已在 PR-5 移除（PR-5 commit 2 删 VALID_STAGES / advance_stage）。
@@ -723,11 +723,9 @@ def compute_bucket_histogram(
         for p in sorted(train_dir.iterdir()):
             if p.is_file() and p.suffix.lower() in IMAGE_EXTS:
                 add_image(p, 1, base_resos)
-        # 子文件夹：递归扫 + px 覆盖 / repeat 解析（保留目录 masks/ 等跳过）
+        # 子文件夹：递归扫 + px 覆盖 / repeat 解析
         for sub in sorted(train_dir.iterdir()):
             if not sub.is_dir():
-                continue
-            if sub.name in TRAIN_RESERVED_DIRS:
                 continue
             reso_override, repeat, _label = ImageDataset._parse_folder_meta(sub.name)
             resos = [reso_override] if reso_override else base_resos
