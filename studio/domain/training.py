@@ -143,8 +143,8 @@ class TrainingConfig(BaseModel):
         json_schema_extra=_meta(
             "system",
             advanced=True,
-            disable_when="leap_enabled==true||infonoise_enabled==true||sra_enabled==true||lora_type==tlora",
-            disable_hint="与 LeapAlign / InfoNoise / SRA / T-LoRA 互斥（navit v1 未适配），需先关掉它们",
+            disable_when="leap_enabled==true||infonoise_enabled==true||sra_enabled==true||ffl_enabled==true||lora_type==tlora",
+            disable_hint="与 LeapAlign / InfoNoise / SRA / FFL / T-LoRA 互斥（navit v1 未适配），需先关掉它们",
         ),
     )
     navit_token_budget: int = Field(
@@ -824,6 +824,38 @@ class TrainingConfig(BaseModel):
         0.3, ge=0.0, le=1.0,
         description="【SRA v2】衰减终点（训练总步数比例）。linear/cosine 到此比例降为 0；jump 不使用此字段",
         json_schema_extra=_meta("loss", show_when="sra_enabled==true&&sra_decay_type!=none&&sra_decay_type!=jump", advanced=True),
+    )
+
+    # -------------------------------------------------------- FFL 频域损失
+    # 论文：Focal Frequency Loss (Jiang et al., ICCV 2021)。附加 loss 项，与 SRA 同构
+    # （标准路径专属、零可训练参数、训完丢弃）。在 latent 空间做，无 VAE decode、≈0 显存。
+    # 与 navit_packing 硬互斥（打包态空间维不齐无法逐图 FFT）：对称锁 —— 此处 ffl_enabled
+    # disable_when navit，navit_packing 侧亦 disable_when ffl_enabled；同时 loop.py 用
+    # navit_latents is None 第三守卫纵深防御（与 SRA 一致）。
+    ffl_enabled: bool = Field(
+        False,
+        description="【FFL 频域损失】在频率域比较预测的干净 latent 和真实 latent，对「难合成/高频」的频率成分自适应加权惩罚，弥补普通 MSE 容易把高频细节磨平的问题，改善纹理质感。开销很小：每步对 latent 多做一次 FFT，无需 VAE 解码；训练完不影响导出",
+        json_schema_extra=_meta(
+            "loss",
+            advanced=True,
+            disable_when="navit_packing==true",
+            disable_hint="与 NaViT 打包互斥（打包态批内尺寸不一，无法逐图 FFT），需先关闭 navit_packing",
+        ),
+    )
+    ffl_weight: float = Field(
+        1.0, ge=0.0,
+        description="【FFL】频域损失相对扩散损失的强度：频域 loss 乘以此值后加到总 loss。越大越强调频率对齐，过大会盖过去噪目标。典型 0.5–2.0；不同 loss 量级下最优值不同，可从 1.0 起手扫",
+        json_schema_extra=_meta("loss", show_when="ffl_enabled==true", advanced=True),
+    )
+    ffl_alpha: float = Field(
+        1.0, ge=0.0,
+        description="【FFL】焦点指数：控制对「难合成频率」的聚焦强度。越大越集中惩罚误差最大的少数频率，0 为各频率等权。原论文默认 1.0",
+        json_schema_extra=_meta("loss", show_when="ffl_enabled==true", advanced=True),
+    )
+    ffl_t_threshold: float = Field(
+        1.0, ge=0.0, le=1.0,
+        description="【FFL】只对噪声水平 t 低于此值的样本计算频域损失（t=0 为干净、t=1 为纯噪声）。默认 1.0 即对所有 t 都算；调低则只在低噪声（细节决定区、干净 latent 估计更可靠）计算。可看 ffl_gate 日志确认命中比例",
+        json_schema_extra=_meta("loss", show_when="ffl_enabled==true", advanced=True),
     )
 
     grad_clip_max_norm: float = Field(

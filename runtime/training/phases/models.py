@@ -115,3 +115,11 @@ def run(ctx: TrainingContext) -> None:
             dtype=ctx.dtype,
             normalize=bool(getattr(args, "sra_normalize", True)),
         )
+
+    # ① 频域 loss（FFL）：latent 空间 focal frequency 对齐，零可训练参数、≈0 显存、
+    # 无 VAE decode。只在 loop.py 标准路径按 t-gate 加一项（与 SRA 同构）。
+    if getattr(args, "ffl_enabled", False):
+        from training.ffl import FocalFrequencyLoss
+        ctx.ffl = FocalFrequencyLoss(
+            alpha=float(getattr(args, "ffl_alpha", 1.0)),
+        )
