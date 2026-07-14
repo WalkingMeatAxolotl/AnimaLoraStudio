@@ -115,4 +115,22 @@ describe('TaskLogDrawer (issue #251)', () => {
     )
     expect(screen.queryByRole('button', { name: '取消' })).toBeNull()
   })
+
+  it('failed 且提供 onRetry 时显示重试按钮，点击不触发开合', async () => {
+    const onRetry = vi.fn()
+    const user = userEvent.setup()
+    render(<TaskLogDrawer sources={[makeSource({ status: 'failed', onRetry })]} />)
+    const strip = screen.getByRole('button', { name: /打标任务/ })
+    expect(strip).toHaveAttribute('aria-expanded', 'false')
+    await user.click(screen.getByRole('button', { name: '重试' }))
+    expect(onRetry).toHaveBeenCalledOnce()
+    expect(strip).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('非 failed 不显示重试按钮', () => {
+    render(
+      <TaskLogDrawer sources={[makeSource({ status: 'done', onRetry: () => {} })]} />,
+    )
+    expect(screen.queryByRole('button', { name: '重试' })).toBeNull()
+  })
 })

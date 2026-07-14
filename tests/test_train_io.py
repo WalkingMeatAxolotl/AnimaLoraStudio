@@ -277,6 +277,76 @@ def test_export_bundle_records_version_and_preset_names(isolated, tmp_path: Path
     assert manifest["source"]["preset_name"] == "style_preset"
 
 
+def test_export_bundle_latent_cache_roundtrip(isolated, tmp_path: Path) -> None:
+    """latent_cache=True：train/reg 的 npz 一并打包；导入后 npz mtime ≥ 图片
+    mtime（_is_cache_valid 的不变量，否则缓存白搬）。"""
+    p, v, train = _make_project_with_train(isolated)
+    (train / "1_data").mkdir(parents=True, exist_ok=True)
+    (train / "1_data" / "a.png").write_bytes(_png())
+    (train / "1_data" / "a.npz").write_bytes(b"fake-latent")
+    (train / "1_data" / "a.r512.npz").write_bytes(b"fake-latent-512")
+    reg = train.parent / "reg" / "girl"
+    reg.mkdir(parents=True)
+    (reg / "r.png").write_bytes(_png(b"r"))
+    (reg / "r.npz").write_bytes(b"fake-reg-latent")
+
+    dest = tmp_path / "cache.bundle.zip"
+    with db.connection_for(isolated["db"]) as conn:
+        result = train_io.export_bundle(
+            conn, v["id"], dest,
+            train_io.BundleOptions(
+                train=True, reg=True,
+                train_latent_cache=True, reg_latent_cache=True,
+            ),
+        )
+
+    assert result["manifest"]["includes"]["train_latent_cache"] is True
+    assert result["manifest"]["includes"]["reg_latent_cache"] is True
+    assert result["manifest"]["stats"]["latent_cache_count"] == 3
+    with zipfile.ZipFile(dest) as zf:
+        names = set(zf.namelist())
+    assert "train/1_data/a.npz" in names
+    assert "train/1_data/a.r512.npz" in names
+    assert "reg/girl/r.npz" in names
+
+    with db.connection_for(isolated["db"]) as conn:
+        imported = train_io.import_bundle(conn, dest, presets_base=tmp_path / "presets")
+
+    new_dir = versions.version_dir(
+        imported["project"]["id"],
+        imported["project"]["slug"],
+        imported["version"]["label"],
+    )
+    npz = new_dir / "train" / "1_data" / "a.npz"
+    img = new_dir / "train" / "1_data" / "a.png"
+    reg_npz = new_dir / "reg" / "girl" / "r.npz"
+    reg_img = new_dir / "reg" / "girl" / "r.png"
+    assert npz.exists() and (new_dir / "train" / "1_data" / "a.r512.npz").exists()
+    assert reg_npz.exists()
+    # zip 内 npz 按字典序先于图片落盘，没有 touch 修正会比图片旧
+    assert npz.stat().st_mtime >= img.stat().st_mtime
+    assert reg_npz.stat().st_mtime >= reg_img.stat().st_mtime
+
+
+def test_export_bundle_excludes_latent_cache_by_default(isolated, tmp_path: Path) -> None:
+    p, v, train = _make_project_with_train(isolated)
+    (train / "1_data").mkdir(parents=True, exist_ok=True)
+    (train / "1_data" / "a.png").write_bytes(_png())
+    (train / "1_data" / "a.npz").write_bytes(b"fake-latent")
+
+    dest = tmp_path / "nocache.bundle.zip"
+    with db.connection_for(isolated["db"]) as conn:
+        result = train_io.export_bundle(
+            conn, v["id"], dest, train_io.BundleOptions(train=True),
+        )
+
+    assert result["manifest"]["includes"]["train_latent_cache"] is False
+    assert result["manifest"]["includes"]["reg_latent_cache"] is False
+    assert result["manifest"]["stats"]["latent_cache_count"] == 0
+    with zipfile.ZipFile(dest) as zf:
+        assert not [n for n in zf.namelist() if n.endswith(".npz")]
+
+
 def _named_bundle(tmp_path: Path, *, with_preset: bool) -> Path:
     bundle = tmp_path / "named.bundle.zip"
     with zipfile.ZipFile(bundle, "w", compression=zipfile.ZIP_STORED) as zf:

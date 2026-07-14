@@ -676,9 +676,16 @@ def cmd_run(args: argparse.Namespace) -> int:
         if not args.no_browser and not opened_browser:
             _spawn_browser_opener(url)
             opened_browser = True
-        rc = subprocess.call(
-            [find_python(), "-m", "studio.server", "--host", args.host, "--port", str(args.port)]
-        )
+        try:
+            rc = subprocess.call(
+                [find_python(), "-m", "studio.server", "--host", args.host, "--port", str(args.port)]
+            )
+        except KeyboardInterrupt:
+            # 终端 Ctrl+C：CTRL_C_EVENT 同时广播给 server 子进程（它自己走
+            # graceful shutdown）；父进程这边阻塞在 wait 的 KeyboardInterrupt
+            # 要等子进程退干净后才抛出来。用户主动停机，不打 traceback。
+            _say("已停止（Ctrl+C）")
+            return 130
 
         if not _RESTART_FLAG.exists():
             return rc

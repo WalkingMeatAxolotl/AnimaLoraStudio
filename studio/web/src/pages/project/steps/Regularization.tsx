@@ -1381,6 +1381,7 @@ function ExcludeTags({
                 addCustom()
               }
             }}
+            onClick={() => suggest.notifyClick()}
             onFocus={() => suggest.notifyFocus()}
             onBlur={() => suggest.notifyBlur()}
             placeholder={t('reg.excludePlaceholder')}

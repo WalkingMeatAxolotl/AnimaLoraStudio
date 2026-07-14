@@ -264,6 +264,7 @@ function EditTagInput({ editInputRef, value, setValue, onCommit, onCancel }: {
           if (e.key === 'Enter') onCommit()
           else if (e.key === 'Escape') onCancel()
         }}
+        onClick={() => suggest.notifyClick()}
         onFocus={() => suggest.notifyFocus()}
         onBlur={() => { suggest.notifyBlur(); onCancel() }}
         className="input input-mono w-full"

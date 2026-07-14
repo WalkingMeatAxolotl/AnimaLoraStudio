@@ -35,6 +35,7 @@ from typing import Any, Iterable, Optional
 from ...services.projects import jobs as project_jobs, projects
 from ...services.dataset.scan import IMAGE_EXTS
 from . import manifest as preprocess_manifest
+from . import masks as train_masks
 
 
 PREPROCESS_KIND = "preprocess"
@@ -490,6 +491,7 @@ def list_crop_workspace_train(
         except (OSError, ValueError):
             continue
         st = f.stat()
+        mask_info = train_masks.mask_stat(train_dir, rel)
         items.append({
             "name": rel,
             "source": origin,
@@ -497,6 +499,9 @@ def list_crop_workspace_train(
             "mtime": st.st_mtime,
             "size": st.st_size,
             "processed": _is_processed(entry),
+            # 训练 mask sidecar：无 mask 时 None。前端用它画角标 + 决定
+            # 是否 GET mask（值兼作 cache-buster）。
+            "mask_mtime": mask_info["mtime"] if mask_info else None,
         })
     return items
 
@@ -560,3 +565,165 @@ def restore_products_train(
         _validate_rel_name(raw)
         name_list.append(raw)
     return preprocess_manifest.train_restore(pdir, version_label, name_list)
+
+
+def inpaint_save_train(
+    p: dict[str, Any], version_label: str, *, name: str, data: bytes,
+) -> dict[str, Any]:
+    """涂抹整图保存（train scope）：前端 canvas 导出的图覆盖 `train/{name}`。
+
+    产物对齐 crop 约定统一 `{folder}/{stem}.png`；源图非 .png 时删旧源文件
+    （caption sidecar 因 stem 不变保留不动）。manifest 复用
+    train_replace_with_crops 的单产物路径（删旧 entry + 写新 entry，
+    processed=True），origin 沿用旧 entry。
+
+    上传图必须与现有源图同尺寸——涂抹是逐像素编辑，尺寸不符说明前端笔画
+    重放的对象错位，直接拒绝而不是静默接受。
+    """
+    import io
+    import os
+    import time
+
+    from PIL import Image
+
+    _validate_rel_name(name)
+    pdir = project_root(p)
+    train_dir = version_train_dir(p, version_label)
+    src_path = train_dir / name
+    if not src_path.is_file():
+        raise NotFoundError(
+            "Image not found in train set",
+            code="preprocess.inpaint_source_missing", details={"name": name},
+        )
+    try:
+        with Image.open(src_path) as im:
+            src_w, src_h = im.size
+    except (OSError, ValueError) as exc:
+        raise ValidationError(
+            "Source image is unreadable",
+            code="preprocess.inpaint_source_unreadable",
+            details={"name": name}, http_status=400,
+        ) from exc
+
+    try:
+        img = Image.open(io.BytesIO(data))
+        img.load()
+    except Exception as exc:  # PIL 解码失败抛的类型不稳定，统一翻 400
+        raise ValidationError(
+            "Uploaded image is not a valid image file",
+            code="preprocess.inpaint_image_invalid",
+            details={"name": name}, http_status=400,
+        ) from exc
+    if img.size != (src_w, src_h):
+        raise ValidationError(
+            "Uploaded image size does not match the source image",
+            code="preprocess.inpaint_size_mismatch",
+            details={
+                "name": name,
+                "expected": [src_w, src_h],
+                "got": [img.size[0], img.size[1]],
+            },
+            http_status=400,
+        )
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+
+    folder, filename = name.split("/", 1)
+    out_rel = f"{folder}/{Path(filename).stem}{PRODUCT_SUFFIX}"
+    out_path = train_dir / out_rel
+
+    # origin 沿用 manifest 已有 entry，否则回退源文件名（对齐 crop worker）
+    existing = preprocess_manifest.train_get_entry(pdir, version_label, name)
+    origin = (
+        preprocess_manifest.entry_origin(existing, filename)
+        if existing is not None else filename
+    )
+
+    tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
+    img.save(tmp_path, format="PNG", optimize=False)
+    os.replace(tmp_path, out_path)
+
+    if out_rel != name:
+        try:
+            src_path.unlink()
+        except OSError:
+            pass
+
+    try:
+        st = out_path.stat()
+        size, mtime = st.st_size, st.st_mtime
+    except OSError:
+        size, mtime = 0, time.time()
+
+    preprocess_manifest.train_replace_with_crops(
+        pdir, version_label,
+        source_name=name,
+        outputs=[{"name": out_rel, "origin": origin, "size": size, "mtime": mtime}],
+    )
+
+    try:
+        from studio.services.dataset import thumb_cache
+        thumb_cache.prewarm_from_image(out_path, img, [256, 768])
+    except Exception:  # noqa: BLE001
+        pass
+
+    return {
+        "name": out_rel, "origin": origin,
+        "mtime": mtime, "size": size, "w": src_w, "h": src_h,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 训练 mask sidecar（PR-B B1，详 services/preprocess/masks.py）
+# ---------------------------------------------------------------------------
+
+
+def _mask_source_size(
+    p: dict[str, Any], version_label: str, name: str,
+) -> tuple[Path, tuple[int, int]]:
+    """校验 rel name + 源图存在，返回 (train_dir, 源图尺寸)。"""
+    from PIL import Image
+
+    _validate_rel_name(name)
+    train_dir = version_train_dir(p, version_label)
+    src_path = train_dir / name
+    if not src_path.is_file():
+        raise NotFoundError(
+            "Image not found in train set",
+            code="preprocess.mask_source_missing", details={"name": name},
+        )
+    try:
+        with Image.open(src_path) as im:
+            return train_dir, im.size
+    except (OSError, ValueError) as exc:
+        raise ValidationError(
+            "Source image is unreadable",
+            code="preprocess.mask_source_unreadable",
+            details={"name": name}, http_status=400,
+        ) from exc
+
+
+def mask_save_train(
+    p: dict[str, Any], version_label: str, *, name: str, data: bytes,
+) -> dict[str, Any]:
+    """写入训练 mask（灰度 PNG，尺寸必须等于源图当前尺寸）。"""
+    train_dir, size = _mask_source_size(p, version_label, name)
+    return train_masks.write_mask(train_dir, name, data, expected_size=size)
+
+
+def mask_delete_train(
+    p: dict[str, Any], version_label: str, *, name: str,
+) -> dict[str, Any]:
+    """删除训练 mask（= 恢复全图正常学习）。mask 不存在也返回 ok。"""
+    _validate_rel_name(name)
+    train_dir = version_train_dir(p, version_label)
+    return {"deleted": train_masks.delete_mask(train_dir, name)}
+
+
+def mask_file_train(
+    p: dict[str, Any], version_label: str, *, name: str,
+) -> Optional[Path]:
+    """mask 文件路径（不存在返回 None）。GET 端点用。"""
+    _validate_rel_name(name)
+    train_dir = version_train_dir(p, version_label)
+    return train_masks.mask_file(train_dir, name)

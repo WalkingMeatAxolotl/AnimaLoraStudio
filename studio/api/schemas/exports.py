@@ -14,6 +14,9 @@ class BundleOptionsBody(BaseModel):
     reg: bool = False
     reg_captions: bool = False
     include_config: bool = False
+    train_latent_cache: bool = False
+    reg_latent_cache: bool = False
+    train_masks: bool = False
 
     def to_options(self) -> train_io.BundleOptions:
         return train_io.BundleOptions(
@@ -22,6 +25,9 @@ class BundleOptionsBody(BaseModel):
             reg=self.reg,
             reg_captions=self.reg_captions,
             include_config=self.include_config,
+            train_latent_cache=self.train_latent_cache,
+            reg_latent_cache=self.reg_latent_cache,
+            train_masks=self.train_masks,
         )
 
 

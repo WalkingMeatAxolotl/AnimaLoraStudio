@@ -796,6 +796,8 @@ export interface VersionStats {
   train_image_count: number
   tagged_image_count: number
   train_folders: Array<{ name: string; image_count: number }>
+  validation_image_count: number
+  validation_tagged_count: number
   reg_image_count: number
   reg_meta_exists: boolean
   has_output: boolean
@@ -909,6 +911,18 @@ export interface CropWorkspaceItem {
   mtime: number
   size: number
   processed: boolean
+  /** 训练 mask sidecar 的 mtime；无 mask 时 null。兼作角标判据 + cache-buster。 */
+  mask_mtime: number | null
+}
+
+/** 涂抹保存结果：产物统一 .png，源非 png 时 name 会改（X.jpg → X.png）。 */
+export interface InpaintSaveResult {
+  name: string
+  origin: string
+  mtime: number
+  size: number
+  w: number
+  h: number
 }
 
 /** 总览页「已删除」tab 一项：被去重审核标记的 entry。物理图仍在 download/{source}。 */
@@ -2110,7 +2124,7 @@ export const api = {
       method: 'DELETE',
     }),
   activateVersion: (pid: number, vid: number) =>
-    req<ProjectDetail>(
+    req<{ active_version_id: number }>(
       `/api/projects/${pid}/versions/${vid}/activate`,
       { method: 'POST' }
     ),
@@ -2273,6 +2287,56 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ crops }),
     }),
+  /** 涂抹整图保存（同步，无 job）：canvas 导出 PNG 覆盖 train/{name}。
+   *  multipart 绕过 req() 的 JSON header，让浏览器自加 boundary。 */
+  saveInpaintTrain: async (
+    pid: number,
+    vid: number,
+    name: string,
+    blob: Blob,
+  ): Promise<InpaintSaveResult> => {
+    const fd = new FormData()
+    fd.append('name', name)
+    fd.append('file', blob, 'inpaint.png')
+    const resp = await fetch(
+      `/api/projects/${pid}/versions/${vid}/preprocess/inpaint/save`,
+      { method: 'POST', body: fd },
+    )
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => null)
+      throw makeApiError(resp.status, resp.statusText, body, resp.headers.get('X-Trace-Id'))
+    }
+    return (await resp.json()) as InpaintSaveResult
+  },
+  /** 训练 mask 文件 URL（灰度 PNG，尺寸=源图）。无 mask → 404。 */
+  maskUrl: (pid: number, vid: number, name: string) =>
+    `/api/projects/${pid}/versions/${vid}/preprocess/mask?name=${encodeURIComponent(name)}`,
+  /** 写入训练 mask（前端 mask 层导出的灰度 PNG）。 */
+  saveMaskTrain: async (
+    pid: number,
+    vid: number,
+    name: string,
+    blob: Blob,
+  ): Promise<{ name: string; mtime: number; size: number }> => {
+    const fd = new FormData()
+    fd.append('name', name)
+    fd.append('file', blob, 'mask.png')
+    const resp = await fetch(
+      `/api/projects/${pid}/versions/${vid}/preprocess/mask`,
+      { method: 'PUT', body: fd },
+    )
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => null)
+      throw makeApiError(resp.status, resp.statusText, body, resp.headers.get('X-Trace-Id'))
+    }
+    return (await resp.json()) as { name: string; mtime: number; size: number }
+  },
+  /** 删除训练 mask（= 该图恢复全图正常学习）。 */
+  deleteMaskTrain: (pid: number, vid: number, name: string) =>
+    req<{ deleted: boolean }>(
+      `/api/projects/${pid}/versions/${vid}/preprocess/mask?name=${encodeURIComponent(name)}`,
+      { method: 'DELETE' },
+    ),
 
   // R-5 台账合并：/api/jobs* 已删，作业与任务同源 /api/queue（单一 ID 空间）。
   // getJob / cancelJob 保留函数名给步骤页（Download/Tagging/Reg/Preprocess），
@@ -2808,6 +2872,9 @@ export const api = {
       reg?: boolean
       regCaptions?: boolean
       includeConfig?: boolean
+      trainLatentCache?: boolean
+      regLatentCache?: boolean
+      trainMasks?: boolean
     },
   ): string => {
     const p = new URLSearchParams()
@@ -2816,6 +2883,9 @@ export const api = {
     p.set('reg', opts.reg ? '1' : '0')
     p.set('reg_captions', opts.regCaptions ? '1' : '0')
     p.set('include_config', opts.includeConfig ? '1' : '0')
+    p.set('train_latent_cache', opts.trainLatentCache ? '1' : '0')
+    p.set('reg_latent_cache', opts.regLatentCache ? '1' : '0')
+    p.set('train_masks', opts.trainMasks ? '1' : '0')
     return `/api/projects/${pid}/versions/${vid}/bundle.zip?${p.toString()}`
   },
   exportBundleToDataExports: (
@@ -2827,6 +2897,9 @@ export const api = {
       reg?: boolean
       regCaptions?: boolean
       includeConfig?: boolean
+      trainLatentCache?: boolean
+      regLatentCache?: boolean
+      trainMasks?: boolean
     },
   ) =>
     req<DataExportItem>(`/api/projects/${pid}/versions/${vid}/export-bundle`, {
@@ -2837,6 +2910,9 @@ export const api = {
         reg: opts.reg === true,
         reg_captions: opts.regCaptions === true,
         include_config: opts.includeConfig === true,
+        train_latent_cache: opts.trainLatentCache === true,
+        reg_latent_cache: opts.regLatentCache === true,
+        train_masks: opts.trainMasks === true,
       }),
     }),
   listDataExports: () => req<DataExportItem[]>('/api/data-exports'),

@@ -249,6 +249,26 @@ def test_stats_for_version_counts_train_and_reg(isolated) -> None:
         "5_concept": 2,
     }
     assert stats["has_output"] is False
+    assert stats["validation_image_count"] == 0
+    assert stats["validation_tagged_count"] == 0
+
+
+def test_stats_for_version_counts_validation(isolated) -> None:
+    p = _new_project(isolated)
+    with db.connection_for(isolated["db"]) as conn:
+        v = versions.create_version(conn, project_id=p["id"], label="v1")
+    vdir = versions.version_dir(p["id"], p["slug"], "v1")
+    val = vdir / "validation" / "1_data"
+    val.mkdir(parents=True)
+    (val / "a.png").write_bytes(b"x")
+    (val / "b.png").write_bytes(b"x")
+    (val / "b.txt").write_text("tag", encoding="utf-8")
+    stats = versions.stats_for_version(p, v)
+    assert stats["validation_image_count"] == 2
+    assert stats["validation_tagged_count"] == 1
+    # validation 不掺进训练集计数
+    assert stats["train_image_count"] == 0
+    assert stats["tagged_image_count"] == 0
 
 
 def test_create_version_provisions_default_train_folder(isolated) -> None:

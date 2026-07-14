@@ -229,3 +229,22 @@ def test_txt_caption_path_unchanged(reg_module, tmp_path: Path) -> None:
     assert "1girl" not in prompt
     on_disk = src.read_text(encoding="utf-8")
     assert on_disk == prompt
+
+
+# ---------------------------------------------------------------------------
+# _scan_train：mask sidecar 不算训练图
+# ---------------------------------------------------------------------------
+
+def test_scan_train_ignores_mask_sidecar(reg_module, tmp_path: Path) -> None:
+    """{stem}.mask sidecar 后缀不在 IMAGE_EXTS —— 递归扫描天然不命中，
+    不会把 mask 计入生成清单（曾有 bug：老 masks/ 目录布局下 mask 被当
+    训练图 → 生成总数虚高、删图后重新生成数量不降）。"""
+    train = tmp_path / "train"
+    (train / "1_data").mkdir(parents=True)
+    (train / "1_data" / "a.png").write_bytes(b"png")
+    (train / "1_data" / "b.png").write_bytes(b"png")
+    (train / "1_data" / "a.mask").write_bytes(b"png")
+
+    entries = reg_module._scan_train(train)
+    imgs = sorted(str(e["img"].relative_to(train)).replace("\\", "/") for e in entries)
+    assert imgs == ["1_data/a.png", "1_data/b.png"]

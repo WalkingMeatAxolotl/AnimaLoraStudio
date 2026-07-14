@@ -32,6 +32,7 @@ slug 冲突自动加 -imported-{ts}。
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import time
 import zipfile
@@ -50,6 +51,11 @@ TRAIN_PREFIX = "train/"
 REG_PREFIX = "reg/"
 PRESETS_PREFIX = "presets/"
 CAPTION_EXTS = {".txt"}
+# VAE latent 缓存（CachedLatentDataset 的 {名}.npz / {名}.r{reso}.npz，紧挨图片）
+LATENT_CACHE_EXT = ".npz"
+# 训练 mask sidecar（train/{folder}/{stem}.mask，与图同目录，详
+# services/preprocess/masks.py）。arcname 两段与图片同构。
+MASK_SUFFIX = ".mask"
 
 
 VERSION_CONFIG_ARC = "presets/config.yaml"
@@ -63,6 +69,11 @@ class BundleOptions:
     reg_captions: bool = False
     # True = 导出本 version 的私有 config.yaml（去掉路径字段后）作为可移植训练配置
     include_config: bool = False
+    # True = 一并打包对应目录里的 VAE latent 缓存（*.npz），导入后免重新 encode
+    train_latent_cache: bool = False
+    reg_latent_cache: bool = False
+    # True = 一并打包训练 mask sidecar（train/{folder}/{stem}.mask，masked loss 数据面）
+    train_masks: bool = False
 
 
 from studio.domain.errors import DomainError, NotFoundError
@@ -343,16 +354,25 @@ def import_train(
 
 
 def _collect_train(
-    train_dir: Path, include_captions: bool
+    train_dir: Path, include_captions: bool, include_latent_cache: bool = False,
+    include_masks: bool = False,
 ) -> tuple[list[tuple[Path, str]], dict[str, Any]]:
-    """扫 train/ 目录，返回 (payload, stats_dict)。"""
+    """扫 train/ 目录，返回 (payload, stats_dict)。
+
+    include_masks 时收集与图同目录的 `{stem}.mask` sidecar。
+    """
     payload: list[tuple[Path, str]] = []
     concepts: list[dict[str, Any]] = []
     image_count = 0
     tagged_count = 0
+    latent_cache_count = 0
+    mask_count = 0
 
     if not train_dir.exists():
-        return payload, {"image_count": 0, "tagged_count": 0, "concepts": []}
+        return payload, {
+            "image_count": 0, "tagged_count": 0, "concepts": [],
+            "latent_cache_count": 0, "mask_count": 0,
+        }
 
     for sub in sorted(train_dir.iterdir()):
         if not sub.is_dir():
@@ -370,6 +390,12 @@ def _collect_train(
                     if include_captions:
                         txt = f.with_suffix(".txt")
                         payload.append((txt, f"{TRAIN_PREFIX}{sub.name}/{txt.name}"))
+            elif ext == LATENT_CACHE_EXT and include_latent_cache:
+                latent_cache_count += 1
+                payload.append((f, f"{TRAIN_PREFIX}{sub.name}/{f.name}"))
+            elif ext == MASK_SUFFIX and include_masks:
+                mask_count += 1
+                payload.append((f, f"{TRAIN_PREFIX}{sub.name}/{f.name}"))
             elif ext in CAPTION_EXTS and include_captions:
                 # .txt 先由图片那侧 include，这里跳过避免重复
                 pass
@@ -381,18 +407,21 @@ def _collect_train(
         "image_count": image_count,
         "tagged_count": tagged_count,
         "concepts": concepts,
+        "latent_cache_count": latent_cache_count,
+        "mask_count": mask_count,
     }
 
 
 def _collect_reg(
-    reg_dir: Path, include_captions: bool
+    reg_dir: Path, include_captions: bool, include_latent_cache: bool = False
 ) -> tuple[list[tuple[Path, str]], dict[str, Any]]:
     """扫 reg/ 目录，返回 (payload, stats_dict)。"""
     payload: list[tuple[Path, str]] = []
     image_count = 0
+    latent_cache_count = 0
 
     if not reg_dir.exists():
-        return payload, {"image_count": 0}
+        return payload, {"image_count": 0, "latent_cache_count": 0}
 
     # meta.json
     meta = reg_dir / "meta.json"
@@ -413,14 +442,18 @@ def _collect_reg(
                     if include_captions and f.with_suffix(".txt").exists():
                         txt = f.with_suffix(".txt")
                         payload.append((txt, f"{REG_PREFIX}{item.name}/{txt.name}"))
+                elif ext == LATENT_CACHE_EXT and include_latent_cache:
+                    latent_cache_count += 1
+                    payload.append((f, f"{REG_PREFIX}{item.name}/{f.name}"))
                 elif ext in CAPTION_EXTS and include_captions:
                     pass  # 由图片侧 include
         elif item.is_file() and item.suffix.lower() in IMAGE_EXTS:
-            # reg/ 根目录直接放的图（非标准但兼容）
+            # reg/ 根目录直接放的图（非标准但兼容）。旁边的 npz 不收：
+            # 单层 reg/{file} 在 _safe_arc_bundle 里本就只放行 meta.json。
             image_count += 1
             payload.append((item, f"{REG_PREFIX}{item.name}"))
 
-    return payload, {"image_count": image_count}
+    return payload, {"image_count": image_count, "latent_cache_count": latent_cache_count}
 
 
 def export_bundle(
@@ -461,7 +494,10 @@ def export_bundle(
     # --- train section ---
     train_stats: dict[str, Any] = {}
     if opts.train:
-        tp, train_stats = _collect_train(vdir / "train", opts.train_captions)
+        tp, train_stats = _collect_train(
+            vdir / "train", opts.train_captions, opts.train_latent_cache,
+            include_masks=opts.train_masks,
+        )
         if not tp:
             raise TrainIOError(
                 "No images to export", code="dataset.export_empty",
@@ -472,7 +508,9 @@ def export_bundle(
     # --- reg section ---
     reg_stats: dict[str, Any] = {}
     if opts.reg:
-        rp, reg_stats = _collect_reg(vdir / "reg", opts.reg_captions)
+        rp, reg_stats = _collect_reg(
+            vdir / "reg", opts.reg_captions, opts.reg_latent_cache
+        )
         payload.extend(rp)
 
     # --- version 私有训练配置 ---
@@ -515,12 +553,20 @@ def export_bundle(
             "reg": opts.reg,
             "reg_captions": opts.reg_captions,
             "config": config_included,
+            "train_latent_cache": opts.train_latent_cache,
+            "reg_latent_cache": opts.reg_latent_cache,
+            "train_masks": opts.train_masks,
         },
         "stats": {
             "train_image_count": train_stats.get("image_count", 0),
             "train_tagged_count": train_stats.get("tagged_count", 0),
             "reg_image_count": reg_stats.get("image_count", 0),
             "config_included": config_included,
+            "latent_cache_count": (
+                train_stats.get("latent_cache_count", 0)
+                + reg_stats.get("latent_cache_count", 0)
+            ),
+            "train_mask_count": train_stats.get("mask_count", 0),
         },
     }
 
@@ -733,6 +779,7 @@ def import_bundle(
 
             # --- 写入 train ---
             seen_train: set[str] = set()
+            npz_targets: list[Path] = []
             if train_entries:
                 train_dir = vdir / "train"
                 for info, inner in train_entries:
@@ -747,6 +794,8 @@ def import_bundle(
                     seen_train.add(folder)
                     with zf.open(info) as src, target.open("wb") as dst:
                         _copy_chunks(src, dst)
+                    if target.suffix.lower() == LATENT_CACHE_EXT:
+                        npz_targets.append(target)
 
             # --- 写入 reg ---
             reg_image_count = 0
@@ -773,8 +822,16 @@ def import_bundle(
                         target.parent.mkdir(parents=True, exist_ok=True)
                         if target.suffix.lower() in IMAGE_EXTS:
                             reg_image_count += 1
+                        elif target.suffix.lower() == LATENT_CACHE_EXT:
+                            npz_targets.append(target)
                     with zf.open(info) as src, target.open("wb") as dst:
                         _copy_chunks(src, dst)
+
+            # latent 缓存 mtime 修正：训练侧 _is_cache_valid 要求 npz mtime ≥
+            # 图片 mtime，而逐条解包按字典序 npz 常先于同名图片落盘（.npz < .png）
+            # → 缓存会被判失效重 encode。解包完统一 touch 到当前时间。
+            for t in npz_targets:
+                os.utime(t, None)
 
             # --- 写入 version 训练配置 / 其他预设 ---
             # presets/config.yaml → 应用到新 version（force_project_overrides 自动填路径）

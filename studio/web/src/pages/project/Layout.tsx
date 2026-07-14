@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Outlet, useNavigate, useParams } from 'react-router-dom'
+import { Outlet, useMatch, useNavigate, useParams } from 'react-router-dom'
 import { api, type ProjectDetail } from '../../api/client'
 import { useProjectCtxSetter, useSelectedProjectSetter } from '../../context/ProjectContext'
 import { useDialog } from '../../components/Dialog'
@@ -25,6 +25,21 @@ export default function ProjectLayout() {
   const [showExportDialog, setShowExportDialog] = useState(false)
   const projectRef = useRef<ProjectDetail | null>(null)
   projectRef.current = project
+  // 版本切换请求序号：快速连切时只认最后一次切换的结果，防止先发后至的响应/回滚覆盖新选择。
+  const switchSeqRef = useRef(0)
+  // 版本切换守卫：步骤页有需确认才能丢弃的状态时（如 TagEdit 未保存编辑）注册，
+  // 返回 false 取消切换。切版本重挂载步骤页不走路由导航，useBlocker 拦不住，
+  // 需要这条独立通道。
+  const switchGuardRef = useRef<(() => Promise<boolean>) | null>(null)
+  const setVersionSwitchGuard = useCallback(
+    (g: (() => Promise<boolean>) | null) => { switchGuardRef.current = g },
+    [],
+  )
+  // 版本作用域路由（v/:vid/*）下 Outlet 以 activeVersion.id 为 key：切版本强制
+  // 步骤页重挂载，本地 state / 缓存全部换代，杜绝「挂着新版本显示旧数据」
+  //（如 Curation 的 view 缓存守卫不会因 vid 变化重拉）。Overview / Download 是
+  // project 作用域（Overview 另有自己的 selectedVid 本地态），不跟切。
+  const inVersionScope = useMatch('/projects/:pid/v/:vid/*') != null
 
   const reload = useCallback(async () => {
     if (!Number.isFinite(projectId)) return
@@ -77,13 +92,25 @@ export default function ProjectLayout() {
   }, [project])
 
   const handleSelectVersion = useCallback(async (vid: number) => {
-    if (!projectRef.current) return
-    if (projectRef.current.active_version_id === vid) return
+    const prev = projectRef.current
+    if (!prev || prev.active_version_id === vid) return
+    const guard = switchGuardRef.current
+    if (guard && !(await guard())) return
+    const prevVid = prev.active_version_id
+    const seq = ++switchSeqRef.current
+    // 乐观更新：先本地切换再等后端。activate 往返期间 activeVersion 若停在旧值，
+    // 「切完版本马上点开始训练」会把旧版本入队（#386）。
+    setProject((cur) => (cur ? { ...cur, active_version_id: vid } : cur))
     try {
-      const updated = await api.activateVersion(projectRef.current.id, vid)
-      setProject(updated)
+      await api.activateVersion(prev.id, vid)
+      // 成功不应用响应（瘦响应）：乐观值即服务端新状态，全量数据由
+      // project_state_changed → reload 收敛。
     } catch (e) {
-      toast(String(e), 'error')
+      if (seq === switchSeqRef.current) {
+        // 只回滚 active_version_id 字段，不整包回退——避免吞掉在途 reload 带来的其他更新。
+        setProject((cur) => (cur ? { ...cur, active_version_id: prevVid } : cur))
+        toast(String(e), 'error')
+      }
     }
   }, [toast])
 
@@ -106,6 +133,9 @@ export default function ProjectLayout() {
       reg: opts.reg,
       regCaptions: opts.regCaptions,
       includeConfig: opts.includeConfig,
+      trainLatentCache: opts.trainLatentCache,
+      regLatentCache: opts.regLatentCache,
+      trainMasks: opts.trainMasks,
     }
     if (opts.destination === 'download') {
       const filename = `${projectRef.current.slug}-${av.label}.bundle.zip`
@@ -145,6 +175,9 @@ export default function ProjectLayout() {
 
   const handleCreateVersion = useCallback(async (label: string, forkFromVersionId: number | null) => {
     if (!projectRef.current || creatingBusy) return
+    // 建新版本会激活它 → 步骤页重挂载，同样要过切换守卫（取消则对话框留在原地）。
+    const guard = switchGuardRef.current
+    if (guard && !(await guard())) return
     setCreatingBusy(true)
     try {
       const body: { label: string; fork_from_version_id?: number } = { label }
@@ -204,12 +237,13 @@ export default function ProjectLayout() {
 
   return (
     <div className="flex flex-col h-full">
-      <Outlet context={{
+      <Outlet key={inVersionScope ? activeVersion?.id ?? -1 : 'project'} context={{
         project,
         activeVersion,
         reload,
         onCreateVersion: (forkFromVid?: number) => setCreating({ forkFrom: forkFromVid ?? null }),
         creatingVersionBusy: creatingBusy,
+        setVersionSwitchGuard,
       }} />
       {creating && (
         <NewVersionDialog

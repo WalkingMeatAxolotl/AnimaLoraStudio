@@ -33,6 +33,7 @@ from studio.services.preprocess import core as preprocess
 from studio.services.projects import jobs as project_jobs, projects, versions
 from studio.services import models as model_downloader
 from studio.services.preprocess import manifest as preprocess_manifest
+from studio.services.preprocess import masks as train_masks
 from studio.services.inference import upscaler
 
 
@@ -257,6 +258,12 @@ def _run_upscale_train(
             preprocess_manifest.train_add_processed(
                 project_dir, version["label"], src_rel, meta,
             )
+            # mask sidecar 跟随：NEAREST resize 到放大后尺寸（无 mask 时 no-op）
+            try:
+                with Image.open(dst_path) as up_img:
+                    train_masks.resize_mask_like(train_dir, src_rel, up_img.size)
+            except Exception as exc:  # noqa: BLE001
+                log(f"   ⚠ mask 跟随放大失败: {exc}")
             succeeded += 1
             emit_event(
                 "preprocess_progress",
@@ -373,6 +380,7 @@ def _run_crop_train(
                 src_img = raw.convert("RGB") if raw.mode != "RGB" else raw.copy()
             sw, sh = src_img.size
             outputs: list[dict[str, Any]] = []
+            crop_boxes: list[tuple[int, int, int, int]] = []
             for r, out_rel in zip(rects, out_rels):
                 left = int(round(r["x"] * sw))
                 top = int(round(r["y"] * sh))
@@ -380,6 +388,7 @@ def _run_crop_train(
                 bottom = int(round((r["y"] + r["h"]) * sh))
                 right = max(left + 1, right)
                 bottom = max(top + 1, bottom)
+                crop_boxes.append((left, top, right, bottom))
                 piece = src_img.crop((left, top, right, bottom))
                 out_path = train_dir / out_rel
                 out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -420,6 +429,14 @@ def _run_crop_train(
                         )
                     except OSError as exc:
                         log(f"   ⚠ 删旧 {stale_rel} 失败: {exc}")
+
+            # mask sidecar 跟随：同 box 裁剪 + fan-out（源无 mask 时 no-op）
+            try:
+                train_masks.crop_mask_like(
+                    train_dir, src_rel, crop_boxes, out_rels,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log(f"   ⚠ mask 跟随裁剪失败: {exc}")
 
             preprocess_manifest.train_replace_with_crops(
                 project_dir, version["label"],

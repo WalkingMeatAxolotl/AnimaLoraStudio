@@ -1,6 +1,6 @@
 # AnimaLoraStudio
 
-[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-lightgrey)](README.md) [![English](https://img.shields.io/badge/lang-English-blue)](README.en.md) [![Version](https://img.shields.io/badge/version-0.18.0-blue)](CHANGELOG.md) [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+[![中文](https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-lightgrey)](README.md) [![English](https://img.shields.io/badge/lang-English-blue)](README.en.md) [![Version](https://img.shields.io/badge/version-0.19.0-blue)](CHANGELOG.md) [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 
 **End-to-end pipeline**: Booru scraping → curation → tagging → regularization set → training → image-gen testing, all in one browser panel. Tuned for [Anima](https://huggingface.co/circlestone-labs/Anima) (Cosmos DiT, anime-specialized).
 
@@ -8,7 +8,7 @@
 
 ## Features
 
-- **One-stop pipeline**: Booru scraping / curation / preprocessing (dedup · upscale · crop) / tagging / regularization set / training / image-gen testing — all in one browser panel, guided by a stepper.
+- **One-stop pipeline**: Booru scraping / curation / preprocessing (dedup · upscale · crop · retouch) / tagging / regularization set / training / image-gen testing — all in one browser panel, guided by a stepper.
 - **Three taggers**: WD14, CLTagger (local ONNX), LLM (OpenAI-compatible, long captions); a trigger word entered once is auto-injected into every caption and sample image.
 - **Booru scraping**: native Gelbooru / Danbooru (Cloudflare-compatible UA, rate limiting, account auth).
 - **Automatic regularization sets**: reverse-search by your training set's tag distribution + aspect-ratio clustering, or AI priors from the base model (no LoRA needed).

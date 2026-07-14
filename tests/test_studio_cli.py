@@ -587,6 +587,25 @@ def test_cmd_run_normal_restart_when_installer_unchanged(
     assert server_calls[0] == 2, "正常 restart 应当 loop 两次"
 
 
+def test_cmd_run_ctrl_c_returns_130_without_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """终端 Ctrl+C：父进程在 subprocess.call 等 server 期间收到的
+    KeyboardInterrupt 会在子进程退出后才抛出 —— 应按用户主动停机处理
+    （return 130），不冒 traceback。"""
+    _stub_run_bootstrap(monkeypatch, tmp_path)
+    monkeypatch.setattr(cli, "_RESTART_FLAG", tmp_path / "restart")
+
+    def fake(cmd, **_: Any) -> int:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli.subprocess, "call", fake)
+
+    rc = cli.main(["run", "--no-browser"])
+    assert rc == 130
+    assert "Ctrl+C" in capsys.readouterr().out
+
+
 def test_cmd_run_no_flag_no_dispatch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

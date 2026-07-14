@@ -33,6 +33,7 @@ from typing import Any, Callable, Optional
 
 from .. import db, secrets as _secrets
 from ..services import eval_auto, eval_validation
+from ..services.runtime import xformers as _xformers_svc
 from ..services.projects import jobs as project_jobs
 from ..infrastructure.log_tail import LogTailer, MonitorStatePoller
 from ..paths import (
@@ -1278,6 +1279,10 @@ class Supervisor:
         env.setdefault("TRANSFORMERS_VERBOSITY", "error")
         env.setdefault("DIFFUSERS_VERBOSITY", "error")
         env.setdefault("ACCELERATE_DISABLE_RICH", "1")
+        # xformers 的 triton 探测会把无害的 ImportError traceback 打进 task log
+        # （Windows 无官方 triton wheel），被失败摘要误当失败原因；本 app 的
+        # xformers 路径不用 triton kernel，无条件短路。
+        _xformers_svc.disable_triton_probe(env)
         try:
             wandb_cfg = _secrets.load().wandb
             if wandb_cfg.enabled:

@@ -51,6 +51,27 @@ def detect_attention_backend() -> str:
     return "none"
 
 
+def disable_triton_probe(env: dict[str, str]) -> None:
+    """替 xformers 短路 triton 探测（子进程 env 注入用）。
+
+    xformers 启用后其 `_is_triton_available()` 会 `import triton`。triton 官方
+    不发 Windows wheel，未安装时必然 ImportError，xformers 用
+    `logger.warning(..., exc_info=True)` 把完整 traceback 打进 task log ——
+    还会被失败摘要 `_tail_log_for_error_msg`（取最后一处 Traceback）误当
+    失败原因展示给用户。
+
+    无条件短路：xformers 里 triton 只服务 LLM 型 kernel（fmha triton_splitk /
+    rmsnorm / rope_padded / tiled_matmul），本 app 的 memory_efficient_attention
+    （含 NaViT varlen）走 cutlass/flash C++ kernel，triton 装没装、好没好都
+    零参与，探测结果与 warning 对用户均无价值。torch.compile 的 triton 使用
+    不读本变量，不受影响。`XFORMERS_FORCE_DISABLE_TRITON=1` 在 xformers 源码
+    里的检查位于 `import triton` 之前，设了就完全跳过探测；setdefault 保证
+    用户显式设过的值优先，且 xformers 侧 `XFORMERS_ENABLE_TRITON=1` 优先级
+    更高，仍是强开逃生口。
+    """
+    env.setdefault("XFORMERS_FORCE_DISABLE_TRITON", "1")
+
+
 def _torch_cuda_index() -> Optional[str]:
     """从 `torch.__version__` 的 `+cuXXX` 后缀推 PyTorch CUDA index URL。
 

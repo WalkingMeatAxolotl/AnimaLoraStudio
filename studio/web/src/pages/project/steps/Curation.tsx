@@ -604,30 +604,6 @@ export default function CurationPage() {
       subtitle={t('steps.curate.subtitle')}
       actions={
         <>
-          <div
-            className="flex items-center overflow-hidden rounded-md border border-subtle text-sm shrink-0"
-            role="tablist"
-            aria-label={t('curate.bucketSwitchLabel')}
-          >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={bucket === 'train'}
-              onClick={() => switchBucket('train')}
-              className={`px-2.5 py-0.5 ${bucket === 'train' ? 'bg-accent-soft text-accent' : 'text-fg-secondary'}`}
-            >
-              {t('curate.bucketTrain')}
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={bucket === 'validation'}
-              onClick={() => switchBucket('validation')}
-              className={`border-l border-subtle px-2.5 py-0.5 ${bucket === 'validation' ? 'bg-accent-soft text-accent' : 'text-fg-secondary'}`}
-            >
-              {t('curate.bucketValidation')}
-            </button>
-          </div>
           <label className="flex items-center gap-1.5 text-sm text-fg-secondary whitespace-nowrap shrink-0">
             {t('curate.sortLabel')}
             <select
@@ -641,6 +617,24 @@ export default function CurationPage() {
               ))}
             </select>
           </label>
+          {/* 数据集切换（对齐队列页数据任务/GPU 任务切换，放最右）：前置切换
+              icon（行为）+ 目标数据集名（宾语），读作「切到 X」；当前数据集看
+              右栏面板标题。 */}
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => switchBucket(bucket === 'validation' ? 'train' : 'validation')}
+            aria-pressed={bucket === 'validation'}
+            data-testid="curate-bucket-toggle"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M17 1l4 4-4 4" />
+              <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+              <path d="M7 23l-4-4 4-4" />
+              <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+            </svg>
+            <span>{bucket === 'validation' ? t('curate.bucketTrain') : t('curate.bucketValidation')}</span>
+          </button>
         </>
       }
     >

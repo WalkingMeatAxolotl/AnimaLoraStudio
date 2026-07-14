@@ -68,6 +68,36 @@ def _install_proactor_disconnect_filter(loop: asyncio.AbstractEventLoop) -> None
     loop.set_exception_handler(_filter)
 
 
+class _CancelledAsgiNoiseFilter(logging.Filter):
+    """吞 shutdown 收尾取消连接时 uvicorn 的 cosmetic CancelledError 噪声。
+
+    uvicorn 启动参数带 timeout_graceful_shutdown（见 api/main.py）：超时后
+    uvicorn cancel 剩余连接 task（/api/events 等 SSE 长连接），CancelledError
+    从 starlette 冒回 h11 的 run_asgi 时被 `except BaseException` 兜住、按
+    「Exception in ASGI application」打 ERROR + 完整 traceback —— 但这个取消
+    是关停流程主动要求的，不是应用错误，Ctrl+C 一次就刷两大坨假报错。
+
+    精确过滤：只吞 message 为该文案且异常类型是 CancelledError 的记录；
+    其它 ASGI 异常照常打。
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not str(record.msg).startswith("Exception in ASGI application"):
+            return True
+        exc = record.exc_info[1] if record.exc_info else None
+        return not isinstance(exc, asyncio.CancelledError)
+
+
+_cancelled_asgi_filter = _CancelledAsgiNoiseFilter()
+
+
+def _install_uvicorn_cancelled_asgi_filter() -> None:
+    """幂等挂到 uvicorn.error logger（测试里 lifespan 会反复 startup）。"""
+    uvicorn_logger = logging.getLogger("uvicorn.error")
+    if _cancelled_asgi_filter not in uvicorn_logger.filters:
+        uvicorn_logger.addFilter(_cancelled_asgi_filter)
+
+
 @asynccontextmanager
 async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
     """启动绑定 event bus 到当前 loop 并起 supervisor；关闭时停 supervisor。"""
@@ -78,6 +108,8 @@ async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
 
     # 装 Windows ProactorEventLoop 的 ConnectionResetError 过滤器（详见 helper docstring）
     _install_proactor_disconnect_filter(asyncio.get_running_loop())
+    # 装 shutdown 取消 SSE 连接时的 CancelledError 日志过滤器（详见 class docstring）
+    _install_uvicorn_cancelled_asgi_filter()
 
     # PR-5：从 server.py 顶层搬来的 import-time 副作用 —— 现在跟随 app 启动
     # 才落盘，便于测试 / 工具 import 而不写文件系统。

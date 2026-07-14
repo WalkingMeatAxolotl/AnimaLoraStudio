@@ -21,6 +21,7 @@ import DaemonLogDrawer from './generate/DaemonLogDrawer'
 import GenerateProgressBar, { type GenerateProgress, type GeneratePhase } from './generate/GenerateProgress'
 import NumField from './generate/NumField'
 import PreviewCompare from './generate/PreviewCompare'
+import ZoomableImage from '../../components/ZoomableImage'
 import PreviewHistoryRail, { type TimelineItem } from './generate/PreviewHistoryRail'
 import PromptFromDatasetPicker, { type DatasetPick } from './generate/PromptFromDatasetPicker'
 import {
@@ -1048,31 +1049,25 @@ export default function GeneratePage() {
                       compositeUrl={historyOverride.source === 'disk' ? historyOverride.imageUrl : undefined}
                     />
                   ) : (
-                    /* DiskEntry single / legacy XY（无 xyMeta） / CacheEntry single → 单图视图 */
-                    <a
-                      className="flex-1 min-h-0 flex items-center justify-center w-full"
-                      href={entryImageUrl(historyOverride, 0)}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      <img
+                    /* DiskEntry single / legacy XY（无 xyMeta） / CacheEntry single
+                       → 单图视图（内嵌缩放平移；ZoomableImage 自带视口样式 + readout） */
+                    <div className="flex-1 min-h-0 w-full">
+                      <ZoomableImage
                         key={historyOverride.id}
                         src={entryImageUrl(historyOverride, 0)}
-                        onError={(e) => {
-                          (e.currentTarget as HTMLImageElement).title = t('generate.originalReleasedThumbOnly')
-                        }}
                         alt=""
-                        className="rounded-md object-contain"
-                        style={{ maxWidth: '100%', maxHeight: '100%' }}
                       />
-                    </a>
+                    </div>
                   )}
-                  <div className="text-xs text-fg-tertiary shrink-0">
-                    {historyOverride.source === 'disk'
-                      ? (historyOverride.folder ?? (historyOverride.filename ?? '').replace(/\.png$/i, ''))
-                      : t('generate.historyTask', { id: historyOverride.taskId })}
-                    {/* 0.17 P-I：删「返回当前」——统一时间线后回到实时点右栏 running 项即可。 */}
-                  </div>
+                  {/* 单图视图不再显示 filename footer（"single image N" 与
+                      ZoomableImage readout 重复）；XY 网格保留 folder / 任务号
+                      作批次标识。0.17 P-I：删「返回当前」——统一时间线后回到
+                      实时点右栏 running 项即可。 */}
+                  {historyOverride.source === 'disk' && historyOverride.xyMeta && (
+                    <div className="text-xs text-fg-tertiary shrink-0">
+                      {historyOverride.folder ?? (historyOverride.filename ?? '').replace(/\.png$/i, '')}
+                    </div>
+                  )}
                 </div>
               ) : !currentTask ? (
                 <div className="flex-1 grid place-items-center rounded-md border border-subtle bg-sunken text-fg-tertiary text-sm">
