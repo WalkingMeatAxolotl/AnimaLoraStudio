@@ -195,6 +195,7 @@ export default function TagEditor({
                     e.preventDefault(); addTag(draft)
                   }
                 }}
+                onClick={() => draftSuggest.notifyClick()}
                 onFocus={() => draftSuggest.notifyFocus()}
                 onBlur={() => draftSuggest.notifyBlur()}
                 placeholder={t('tagEditor.addPlaceholder')}
@@ -231,7 +232,7 @@ export default function TagEditor({
               onChange={(e) => { setTextBuf(e.target.value); textSuggest.notifyChange() }}
               onKeyDown={(e) => { textSuggest.handleKeyDown(e) }}
               onKeyUp={() => textSuggest.notifySelect()}
-              onClick={() => textSuggest.notifySelect()}
+              onClick={() => textSuggest.notifyClick()}
               onFocus={() => textSuggest.notifyFocus()}
               onBlur={() => { textSuggest.notifyBlur(); commitText() }}
               placeholder={t('tagEditor.textPlaceholder')}
