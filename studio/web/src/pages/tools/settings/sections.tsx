@@ -14,6 +14,7 @@ import {
 import { useDialog } from '../../../components/Dialog'
 import { InfoButton } from '../../../components/InfoButton'
 import PathPicker from '../../../components/PathPicker'
+import { useTagAutocompleteEnabled } from '../../../tagDict/autocompleteToggle'
 import { useShowTagTranslation } from '../../../tagDict/showToggle'
 import { useTagDict, reloadDict } from '../../../tagDict/store'
 import { useToast } from '../../../components/Toast'
@@ -495,9 +496,15 @@ export function TagDictionarySection() {
   const { toast } = useToast()
   const dialog = useDialog()
   const dict = useTagDict()
+  const { runSave } = useSettingsData()
   const [show, setShow] = useShowTagTranslation()
+  const [acEnabled, setAcEnabled] = useTagAutocompleteEnabled()
   const [busy, setBusy] = useState<null | 'reset' | 'upload'>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+
+  // localStorage 即时设置也包一层 runSave：驱动右上角「已保存」指示，反馈跟
+  // 其他 instant-apply 设置一致（fn 同步落盘，不会失败）。
+  const applyLocal = (fn: () => void) => { void runSave(async () => { fn() }) }
 
   const meta = dict.meta
   const sourceLabel = meta?.kind === 'default'
@@ -585,7 +592,7 @@ export function TagDictionarySection() {
             className="btn btn-secondary btn-sm"
             title={t('settings.tagDictionary.resetHint')}
           >
-            {busy === 'reset' ? t('common.downloading') : t('settings.tagDictionary.resetButton')}
+            {busy === 'reset' ? t('settings.tagDictionary.resetBusy') : t('settings.tagDictionary.resetButton')}
           </button>
         </div>
       </SettingsField>
@@ -594,7 +601,14 @@ export function TagDictionarySection() {
         label={t('settings.tagDictionary.showToggleLabel')}
         desc={t('settings.tagDictionary.showToggleHint')}
       >
-        <Bool value={show} onChange={setShow} />
+        <Bool value={show} onChange={(v) => applyLocal(() => setShow(v))} />
+      </SettingsField>
+
+      <SettingsField
+        label={t('settings.tagDictionary.autocompleteToggleLabel')}
+        desc={t('settings.tagDictionary.autocompleteToggleHint')}
+      >
+        <Bool value={acEnabled} onChange={(v) => applyLocal(() => setAcEnabled(v))} />
       </SettingsField>
     </SettingsSection>
   )

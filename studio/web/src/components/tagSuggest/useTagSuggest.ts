@@ -3,6 +3,10 @@
  * 设计原则：hook 不修改用户的 value，仅在用户选中候选时回调 `onPick`。
  * caller 决定怎么落进数据（替换 token range / 推到 tags 数组 / append）。
  *
+ * 弹出规则：候选只在输入变化（notifyChange）后弹出；聚焦 / 鼠标点击移动光标
+ * 不弹，点击还会关掉已弹出的候选。全局开关（Settings「Tag 翻译词典」区）关掉
+ * 后所有入口都不弹。
+ *
  * 两种 token 模式：
  *   - `wholeAsToken: false`（默认）：根据 cursor + 逗号边界算当前 token，commit
  *     时给 caller `range` 以便切片替换。
@@ -12,6 +16,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type React from 'react'
 
+import { useTagAutocompleteEnabled } from '../../tagDict/autocompleteToggle'
 import { useTagDict } from '../../tagDict/store'
 import { extractCurrentToken, findSuggestions } from '../../tagDict/suggest'
 import type { TagSuggestion } from '../../tagDict/types'
@@ -42,13 +47,15 @@ export interface TagSuggestApi {
   cursor: number
   /** 在 input 的 onKeyDown 里第一句调；返回 true 表示已处理（caller 应 return）。 */
   handleKeyDown: (e: React.KeyboardEvent) => boolean
-  /** 在 input 的 onChange 里调（cursor 跟踪 + 自动 open）。 */
+  /** 在 input 的 onChange 里调（cursor 跟踪 + 自动 open）。唯一的弹出入口。 */
   notifyChange: () => void
-  /** 在 input 的 onFocus 里调。 */
+  /** 在 input 的 onFocus 里调（只跟踪 cursor，不弹候选）。 */
   notifyFocus: () => void
   /** 在 input 的 onBlur 里调（延迟关闭，给点击留时间）。 */
   notifyBlur: () => void
-  /** 在 input 的 onClick / onKeyUp 里调（用户移动光标）。 */
+  /** 在 input 的 onClick 里调：鼠标点击移动光标 → 关掉已弹出的候选。 */
+  notifyClick: () => void
+  /** 在 input 的 onKeyUp 里调（键盘移动光标时跟踪 cursor）。 */
   notifySelect: () => void
   /** 鼠标点选 / 程序触发用。 */
   pickAt: (i: number) => void
@@ -58,6 +65,8 @@ export function useTagSuggest({
   value, inputRef, onPick, wholeAsToken = false, disabled = false,
 }: Args): TagSuggestApi {
   const dict = useTagDict()
+  const [acEnabled] = useTagAutocompleteEnabled()
+  const off = disabled || !acEnabled
   const [open, setOpen] = useState(false)
   const [activeIdx, setActiveIdx] = useState(0)
   const [cursor, setCursor] = useState(0)
@@ -68,7 +77,7 @@ export function useTagSuggest({
   }, [value, cursor, wholeAsToken])
 
   const suggestions = useMemo(() => {
-    if (disabled || !open || dict.status !== 'ready' || !tokenInfo.token) return []
+    if (off || !open || dict.status !== 'ready' || !tokenInfo.token) return []
     return findSuggestions(tokenInfo.token, {
       entries: dict.entries,
       tagKeys: dict.tagKeys,
@@ -76,7 +85,7 @@ export function useTagSuggest({
       reverse: dict.reverse,
     })
   }, [
-    disabled, open, tokenInfo.token,
+    off, open, tokenInfo.token,
     dict.status, dict.entries, dict.tagKeys, dict.compactedKeys, dict.reverse,
   ])
 
@@ -98,7 +107,7 @@ export function useTagSuggest({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent): boolean => {
-    if (disabled) return false
+    if (off) return false
     if (!open || suggestions.length === 0) return false
     if (e.key === 'ArrowDown') {
       e.preventDefault(); setActiveIdx((activeIdx + 1) % suggestions.length); return true
@@ -120,10 +129,13 @@ export function useTagSuggest({
     open, suggestions, activeIdx, setActiveIdx, setOpen,
     cursor,
     handleKeyDown,
-    notifyChange: () => { syncCursor(); if (!disabled) setOpen(true) },
-    notifyFocus: () => { syncCursor(); if (!disabled) setOpen(true) },
+    notifyChange: () => { syncCursor(); if (!off) setOpen(true) },
+    // focus 只跟踪 cursor：候选只在输入变化后弹出，点进 prompt 中间不该弹
+    notifyFocus: () => { syncCursor() },
     // 100ms 延迟：给 onMouseDown(pick) 时间完成；用户切到别处不会卡 popover
     notifyBlur: () => { setTimeout(() => setOpen(false), 120) },
+    // 鼠标点击 = 用户在挪光标，不是在补全 → 关掉候选
+    notifyClick: () => { syncCursor(); setOpen(false) },
     notifySelect: () => { syncCursor() },
     pickAt,
   }

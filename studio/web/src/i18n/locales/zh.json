@@ -924,6 +924,7 @@
       "uploadLabel": "自定义词典",
       "uploadHint": "CSV / TXT 格式：每行 `english_tag,中文1 中文2`。上传后替换当前词典（不合并）。最大 10MB / 20 万条。",
       "resetButton": "恢复默认词典",
+      "resetBusy": "下载中…",
       "resetHint": "从 GitHub 重新下载 ffdkj Danbooru 标签中文翻译表（约 30MB，收录热度前 20 万条，每日更新）",
       "confirmReset": "恢复默认词典？当前词典会被覆盖。",
       "resetOk": "已恢复默认词典",
@@ -931,7 +932,9 @@
       "uploadOk": "已加载 {{name}}",
       "uploadFail": "上传失败",
       "showToggleLabel": "在 chip 上显示翻译",
-      "showToggleHint": "tag chip 上显示英文 + 中文，便于扫读。仅前端显示，不改 caption 数据。"
+      "showToggleHint": "tag chip 上显示英文 + 中文，便于扫读。仅前端显示，不改 caption 数据。",
+      "autocompleteToggleLabel": "输入时自动补全 tag",
+      "autocompleteToggleHint": "在 prompt / tag 输入框输入时弹出候选补全（基于本词典）。关闭后所有页面的输入框都不再弹出候选。"
     },
     "modelSource": "模型下载源",
     "evalMetricModels": "评估指标模型",

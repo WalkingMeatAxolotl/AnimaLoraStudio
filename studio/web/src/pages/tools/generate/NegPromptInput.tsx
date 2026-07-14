@@ -37,7 +37,7 @@ export default function NegPromptInput({ value, onChange }: {
         onChange={(e) => { onChange(e.target.value); suggest.notifyChange() }}
         onKeyDown={(e) => { suggest.handleKeyDown(e) }}
         onKeyUp={() => suggest.notifySelect()}
-        onClick={() => suggest.notifySelect()}
+        onClick={() => suggest.notifyClick()}
         onFocus={() => suggest.notifyFocus()}
         onBlur={() => suggest.notifyBlur()}
       />
