@@ -32,7 +32,7 @@ class AnimaFamily:
 
     def load_vae(self, path, device, dtype, *, tiling: str = "auto"):
         # 跨族共享实现（D6）；方法留在 family 上，第 3 族 VAE 不同款时零迁移
-        from training.models import load_vae
+        from training.vae import load_vae
 
         return load_vae(path, device, dtype, None, tiling=tiling)
 

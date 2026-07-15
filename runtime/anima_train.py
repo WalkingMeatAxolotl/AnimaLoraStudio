@@ -84,10 +84,8 @@ from training.families.anima.text_encoding import (  # noqa: E402
     tokenize_t5_weighted,
 )
 from training.state import load_training_state, save_training_state  # noqa: E402
-from training.models import (  # noqa: E402
-    ensure_models_namespace,
-    load_vae,
-)
+from training.model_loading import ensure_models_namespace  # noqa: E402
+from training.vae import load_vae  # noqa: E402
 from training.families import get_family, resolve_family  # noqa: E402  # 派发咽喉（D8'）
 from training.families.anima.loader import (  # noqa: E402
     load_anima_model,

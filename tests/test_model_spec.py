@@ -49,7 +49,7 @@ def test_anima_latent_constants():
 def test_spec_matches_vae_wrapper_constants():
     # VAEWrapper 内部常量是权重侧事实（03 §4.3 不抽象清单，刻意不读 spec）；
     # 此断言把 spec 与它的一致性 codify，防止两处漂移。
-    from training.models import VAEWrapper
+    from training.vae import VAEWrapper
 
     assert VAEWrapper._UPSAMPLE == ANIMA_SPEC.latent.spatial_stride
 

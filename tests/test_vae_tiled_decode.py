@@ -15,7 +15,7 @@ import logging
 import pytest
 import torch
 
-from training.models import (
+from training.vae import (
     VAEWrapper,
     _cosine_blend_mask,
     _tile_starts,
@@ -337,8 +337,8 @@ def test_est_encode_peak_scales_with_pixels_and_dtype() -> None:
 def test_log_once_same_key_logs_only_first(caplog) -> None:
     """同一 key 调多次只记一次：latent 缓存逐 bucket 调 encode 不刷屏。"""
     wrapper = _make_wrapper(_RecordingModel())
-    logger = logging.getLogger("training.models")
-    with caplog.at_level(logging.INFO, logger="training.models"):
+    logger = logging.getLogger("training.vae")
+    with caplog.at_level(logging.INFO, logger="training.vae"):
         for i in range(200):
             wrapper._log_once("auto_encode", logger.info, "主动分块 #%d", i)
     hits = [r for r in caplog.records if "主动分块" in r.getMessage()]
@@ -349,8 +349,8 @@ def test_log_once_same_key_logs_only_first(caplog) -> None:
 def test_log_once_distinct_keys_each_logged_once(caplog) -> None:
     """不同事件（encode/decode 决策、OOM 回退）各自独立去重，互不抑制。"""
     wrapper = _make_wrapper(_RecordingModel())
-    logger = logging.getLogger("training.models")
-    with caplog.at_level(logging.WARNING, logger="training.models"):
+    logger = logging.getLogger("training.vae")
+    with caplog.at_level(logging.WARNING, logger="training.vae"):
         wrapper._log_once("auto_encode", logger.warning, "encode 分块")
         wrapper._log_once("auto_decode", logger.warning, "decode 分块")
         wrapper._log_once("auto_encode", logger.warning, "encode 分块")  # 重复，抑制

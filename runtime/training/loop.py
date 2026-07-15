@@ -205,7 +205,7 @@ def run(ctx: TrainingContext) -> None:
             # 文本编码：整块下沉 family（cond 对循环 opaque，03 §2.7-4；
             # pad-to-512 / kv_trim / preprocess_text_embeds 均为 Anima 私货）
             cross = ctx.family.encode_text_for_batch(
-                (ctx.qwen_model, ctx.qwen_tok, ctx.t5_tok), ctx.model, captions,
+                ctx.text_stack, ctx.model, captions,
                 ctx.device, ctx.dtype,
                 comfy_encoding=bool(getattr(args, "caption_comfy_encoding", True)),
                 kv_trim=bool(getattr(args, "kv_trim", False)),

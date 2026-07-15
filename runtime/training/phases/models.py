@@ -75,7 +75,7 @@ def run(ctx: TrainingContext) -> None:
                                   tiling=getattr(args, "vae_tiling", "auto"))
 
     logger.info("加载文本编码器...")
-    ctx.qwen_model, ctx.qwen_tok, ctx.t5_tok = ctx.family.load_text(
+    ctx.text_stack = ctx.family.load_text(
         args.text_encoder_path, ctx.device, ctx.dtype,
         t5_tokenizer_path=args.t5_tokenizer_path,
     )

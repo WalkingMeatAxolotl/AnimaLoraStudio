@@ -1,7 +1,7 @@
 """模型加载基础设施：前缀推断、safetensors 读取、路径解析、xformers / 梯度检查点。
 
 抽自原 runtime/anima_train.py L370-612（ADR 0003 PR-A）。这里都是相对底层的 utils；
-更上层的 load_anima_model / load_vae / load_text_encoders 在 training.models。
+更上层的 load_vae 在 training.vae；load_anima_model / load_text_encoders 在 families/anima/loader。
 
 公开（被 sister script 用）：
 - find_diffusion_pipe_root / resolve_path_best_effort / enable_xformers
@@ -167,6 +167,15 @@ def _load_safetensors_state_dict(path: Path) -> dict:
         for k in f.keys():
             sd[k] = f.get_tensor(k)
     return sd
+
+
+def ensure_models_namespace(repo_root):
+    """确保 models 命名空间可用。"""
+    repo_root = Path(repo_root)
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    if str(repo_root.parent) not in sys.path:
+        sys.path.insert(0, str(repo_root.parent))
 
 
 def resolve_path_best_effort(path_str: str, bases: list[Path]) -> str:

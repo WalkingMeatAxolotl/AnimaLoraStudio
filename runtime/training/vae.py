@@ -325,15 +325,6 @@ def _cosine_blend_mask(h: int, w: int, *, fade: int, device) -> torch.Tensor:
     return mask_2d[None, None, None, :, :]
 
 
-def ensure_models_namespace(repo_root):
-    """确保 models 命名空间可用。"""
-    repo_root = Path(repo_root)
-    if str(repo_root) not in sys.path:
-        sys.path.insert(0, str(repo_root))
-    if str(repo_root.parent) not in sys.path:
-        sys.path.insert(0, str(repo_root.parent))
-
-
 def load_vae(vae_path, device, dtype, repo_root, *, tiling: str = "auto"):
     """加载 VAE。``tiling`` 透传给 VAEWrapper（auto/on/off）。"""
     # 正常 import（exec-load 退役，多模型 PR-2a）；repo_root 参数保留但不再使用

@@ -2,7 +2,7 @@
 
 load_anima_model / load_text_encoders 是族知识（checkpoint 形状推断两档、
 llm_adapter 缺失兜底、Qwen+T5 双 encoder）；VAEWrapper / load_vae 为跨族
-共享资产留在 training.models（D6）。
+共享资产留在 training.vae（D6）。
 """
 
 from __future__ import annotations

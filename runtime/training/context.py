@@ -56,9 +56,9 @@ class TrainingContext:
     repo_root: Optional[Path] = None
     model: Any = None
     vae: Any = None
-    qwen_model: Any = None
-    qwen_tok: Any = None
-    t5_tok: Any = None
+    # 文本编码器持有物（family 私有结构，Anima=(qwen_model, qwen_tok, t5_tok)；
+    # 对循环 opaque —— 多模型 PR-2b D15，替代原 qwen_model/qwen_tok/t5_tok 三字段）
+    text_stack: Any = None
     injector: Any = None
 
     # ─── dataset_phase 填充 ───

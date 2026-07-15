@@ -79,7 +79,7 @@ def run_sample(
             if s_seed:
                 torch.manual_seed(s_seed + seed_offset)
             img = sample_image(
-                ctx.model, ctx.vae, ctx.qwen_model, ctx.qwen_tok, ctx.t5_tok,
+                ctx.model, ctx.vae, *ctx.text_stack,
                 prompt, height=s_h, width=s_w, steps=s_steps, cfg_scale=s_cfg,
                 negative_prompt=s_neg,
                 sampler_name=s_sampler,
