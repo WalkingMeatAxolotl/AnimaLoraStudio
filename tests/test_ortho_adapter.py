@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from safetensors.torch import load_file
+from training.families.anima.preset import ANIMA_PRESET
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -33,7 +34,7 @@ def test_ortho_adapter_injects_and_saves_plain_lora(tmp_path: Path) -> None:
     from utils.ortho_adapter import OrthoLoRAAdapter
 
     model = MockDiT()
-    adapter = OrthoLoRAAdapter(rank=4, alpha=4)
+    adapter = OrthoLoRAAdapter(preset=ANIMA_PRESET, rank=4, alpha=4)
     injected = adapter.inject(model)
 
     assert len(injected) == 4
@@ -81,7 +82,7 @@ def test_ortho_tlora_mask_matches_source_formula() -> None:
     from utils.ortho_adapter import OrthoLoRAAdapter
 
     model = MockDiT(d=8)
-    adapter = OrthoLoRAAdapter(
+    adapter = OrthoLoRAAdapter(preset=ANIMA_PRESET, 
         rank=8,
         alpha=8,
         use_timestep_mask=True,
