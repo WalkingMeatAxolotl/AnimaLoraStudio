@@ -194,6 +194,19 @@
   reference 代码。Anima 在 Flow Matching `t ∈ (0,1)` 空间内做了 `σ = t/(1-t)` 适配，
   与论文 σ-空间设计保持一致。
 
+### kohya-ss / musubi-tuner — Krea2 training timestep shift (Apache-2.0)
+
+- **来源**：[`kohya-ss/musubi-tuner`](https://github.com/kohya-ss/musubi-tuner)；
+  固定参考 commit `8934cfbbb4b9bcfa8071ce209129f0c5eb5df2e6`
+- **许可**：Apache-2.0（上游 README `License` 段声明 other code 适用 Apache-2.0）
+- **涉及文件**：
+  - `runtime/training/timestep_samplers/krea2_shift.py` — Krea2 `krea2_shift` 的 image-sequence
+    length 线性 `mu`、`exp(mu)` 与 Möbius shift 公式；端点同时与 Hugging Face diffusers
+    Krea2 inference pipeline（Apache-2.0，commit
+    `bc529a5f677db9c4b3fc72c76962c4e2f61567e1`）交叉核对
+
+实现按本项目 timestep sampler protocol 重写，未复制上游类结构。
+
 ---
 
 ## Pip 依赖（许可随各自 wheel 分发）

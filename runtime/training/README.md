@@ -78,10 +78,11 @@ runtime/training/
     │   └── __init__.py     ← BUILDERS + build_inference_sampler
     │
     ├── timestep_samplers/  ← 训练 timestep 采样器（PR #66 引入）
-    │   ├── protocol.py     ← TimestepSamplerProtocol（1 必需 + 3 可选 hook）
+    │   ├── protocol.py     ← TimestepSamplerProtocol（可选 token_counts batch context）
     │   ├── baseline.py     ← sample_t 4 mode 的 thin wrapper（非自适应）
     │   ├── infonoise.py    ← InfoNoise I-MMSE 自适应采样器（arxiv 2602.18647）
-    │   └── __init__.py     ← BUILDERS + build_timestep_sampler（bool 派发，非 Literal）
+    │   ├── krea2_shift.py  ← Krea2 动态 resolution shift（Phase 3 family 接线前暂不暴露 schema）
+    │   └── __init__.py     ← BUILDERS + build_timestep_sampler
     │
     └── losses/             ← 训练 loss 类型（mse / huber / ...）
         ├── protocol.py     ← LossProtocol（compute(pred, target, t) → Tensor）
@@ -164,7 +165,9 @@ phases.finalize.run(ctx)               ──  final save + cleanup
 3. **派发**：同文件 `build_timestep_sampler` 加 if 分支（按优先级 `args.{name}_enabled == True`）
 4. **schema**：`studio/schema.py` 加 `{name}_enabled: bool` + 该采样器专属字段
 
-`loop.py` / `phases/optimizer.py` / `context.py` **零改动**（接口已通过 plugin 抽象屏蔽）。
+普通采样器对 `loop.py` / `phases/optimizer.py` / `context.py` **零改动**。如果算法需要
+逐样本 latent token 数，令 sampler 声明 `requires_token_counts = True`；共享循环会通过
+`sample(..., token_counts=...)` 注入通用 batch context，不得按 family 名称分支。
 
 如果将来有 ≥3 个 adaptive sampler，可考虑重构成 `timestep_sampler_kind: Literal["baseline",
 "infonoise", "min_snr_aware", ...]` 的 Literal 派发 + `validate_schema_consistency()`，跟

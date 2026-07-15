@@ -97,7 +97,7 @@ class InfoNoiseScheduler:
         self._refresh_degraded_count: int = 0
         self._warned_cold_start: bool = False
 
-    def sample(self, bs: int, device) -> torch.Tensor:
+    def sample(self, bs: int, device, *, token_counts=None) -> torch.Tensor:
         """采样 t ∈ (0,1)。热身期用 logit-normal baseline，之后用自适应 CDF。"""
         if self._cdf_values is None:
             return self._sample_baseline(bs, device)
