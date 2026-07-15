@@ -238,6 +238,9 @@ def test_run_passes_host_port(
     fake_dist = tmp_path / "dist"
     fake_dist.mkdir()
     monkeypatch.setattr(cli, "WEB_DIST", fake_dist)
+    # 本测试只验证 host/port 透传；前端新鲜度另有专项测试。若不隔离，结果会
+    # 依赖 checkout src mtime 与本机 npm 是否安装，违反测试卫生。
+    monkeypatch.setattr(cli, "_web_dist_is_stale", lambda: False)
     cli.main(["run", "--host", "0.0.0.0", "--port", "9999"])
     server_call = next(
         c for c in fake_calls if "studio.server" in " ".join(c)
