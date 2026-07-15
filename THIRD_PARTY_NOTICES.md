@@ -34,6 +34,10 @@
 - **涉及文件**：
   - `modeling/anima/anima_modeling.py` — Anima DiT / LLMAdapter 结构与 ComfyUI
     `comfy/ldm/anima/model.py` 高度相关
+  - `modeling/krea2/krea2_modeling.py` — Krea2 single-stream MMDiT 结构与参数模块
+    命名派生自 ComfyUI `comfy/ldm/krea2/model.py`，固定参考 commit
+    `87d23b81765161624889febfb3b81f19f3c8435b`；保留 `blocks.N.attn.*`、
+    `blocks.N.mlp.*`、`txtfusion.*`、`txtmlp.*` 路径以兼容 ComfyUI 的 kohya LoRA 映射
   - `runtime/training/comfy_qwen.py` — Comfy-style Anima Qwen3 0.6B text encoder
     路径，对应 ComfyUI `comfy/text_encoders/anima.py` 的 Qwen3 encoder 行为
   - `runtime/training/text_encoding.py` — Anima prompt / tag 权重 / T5 token weights
@@ -194,7 +198,7 @@
   reference 代码。Anima 在 Flow Matching `t ∈ (0,1)` 空间内做了 `σ = t/(1-t)` 适配，
   与论文 σ-空间设计保持一致。
 
-### kohya-ss / musubi-tuner — Krea2 training timestep shift (Apache-2.0)
+### kohya-ss / musubi-tuner — Krea2 training references (Apache-2.0)
 
 - **来源**：[`kohya-ss/musubi-tuner`](https://github.com/kohya-ss/musubi-tuner)；
   固定参考 commit `8934cfbbb4b9bcfa8071ce209129f0c5eb5df2e6`
@@ -204,8 +208,11 @@
     length 线性 `mu`、`exp(mu)` 与 Möbius shift 公式；端点同时与 Hugging Face diffusers
     Krea2 inference pipeline（Apache-2.0，commit
     `bc529a5f677db9c4b3fc72c76962c4e2f61567e1`）交叉核对
+  - `modeling/krea2/krea2_modeling.py` — 训练 tensor 布局、三轴 RoPE 与逐 block
+    gradient checkpointing 参考 `src/musubi_tuner/krea2/krea2_mmdit.py`；模型配置与结构同时
+    对照 Hugging Face diffusers `transformer_krea2.py`（Apache-2.0，同上固定 commit）
 
-实现按本项目 timestep sampler protocol 重写，未复制上游类结构。
+实现按本项目 timestep sampler protocol / 纯 torch modeling 边界适配；具体派生关系见各文件头。
 
 ---
 
