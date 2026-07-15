@@ -18,7 +18,7 @@ import torch
 
 from training.context import TrainingContext
 from training.families.anima import ANIMA_SPEC as _ANIMA_SPEC
-from training.sampling import sample_image
+from training.families.anima.sampling import sample_image
 from utils.optimizer_utils import optimizer_eval_mode
 
 

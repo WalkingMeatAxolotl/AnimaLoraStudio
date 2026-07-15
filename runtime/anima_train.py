@@ -77,7 +77,7 @@ from training.model_loading import (  # noqa: E402
     forward_with_optional_checkpoint,
     resolve_path_best_effort,
 )
-from training.text_encoding import (  # noqa: E402
+from training.families.anima.text_encoding import (  # noqa: E402
     _build_qwen_text_from_prompt,
     _parse_weighted_tag,
     encode_qwen,
@@ -93,7 +93,7 @@ from training.families.anima.loader import (  # noqa: E402
     load_anima_model,
     load_text_encoders,
 )
-from training.sampling import sample_image  # noqa: E402
+from training.families.anima.sampling import sample_image  # noqa: E402
 from training.dataset import (  # noqa: E402
     BucketBatchSampler,
     BucketManager,

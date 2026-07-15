@@ -14,15 +14,15 @@ from __future__ import annotations
 
 import torch
 
-import training.sampling as sampling
+import training.families.anima.sampling as sampling
 from training.inference_samplers import BUILDERS
-from training.sampling import (
+from training.families.anima.sampling import (
     _flow_sigmas_sgm_uniform,
     _flow_sigmas_simple,
     _prepare_comfy_t2i_noise,
     _time_snr_shift,
 )
-from training.text_encoding import build_comfy_anima_conditioning_inputs
+from training.families.anima.text_encoding import build_comfy_anima_conditioning_inputs
 
 
 def _ref_sgm_uniform(steps: int, *, shift: float = 3.0, timesteps: int = 1000) -> torch.Tensor:

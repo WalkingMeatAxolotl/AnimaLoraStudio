@@ -21,7 +21,7 @@ import torch
 import torch.nn.functional as F
 
 from training.families.anima import ANIMA_SPEC
-from training.text_encoding import (
+from training.families.anima.text_encoding import (
     build_comfy_anima_conditioning_inputs,
     encode_qwen,
 )

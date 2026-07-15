@@ -2,7 +2,7 @@ import pytest
 
 from studio.domain.comfy_parity import force_comfy_parity_runtime_config
 from studio.domain.training import TrainingConfig
-from training.sampling import (
+from training.families.anima.sampling import (
     _resolve_parity_sampler_scheduler,
     sample_image,
 )

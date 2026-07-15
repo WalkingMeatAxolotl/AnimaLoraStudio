@@ -94,7 +94,7 @@ def run(ctx: TrainingContext) -> None:
 
     # SRA v2 表征对齐（LoRA 注入后构造）
     if getattr(args, "sra_enabled", False):
-        from training.sra_align import SRAAligner
+        from training.families.anima.sra_align import SRAAligner
         model_channels = ctx.model.model_channels
         block_idx = int(getattr(args, "sra_block", 4))
         num_blocks = len(ctx.model.blocks)

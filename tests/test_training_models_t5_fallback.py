@@ -65,7 +65,7 @@ def _make_fake_transformers(t5_from_pretrained):
 
 @pytest.fixture()
 def tm():
-    from training import models  # noqa: PLC0415  (conftest 已把 runtime/ 注入 sys.path)
+    from training.families.anima import loader as models  # noqa: PLC0415  (load_text_encoders 已迁 families，多模型 PR-2b)
 
     return models
 

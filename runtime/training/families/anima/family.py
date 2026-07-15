@@ -1,8 +1,8 @@
 """AnimaFamily —— Anima 族的 ModelFamily 实现（多模型 PR-2b）。
 
 行为实现分居同目录模块：loader.py（DiT/TE 加载）、forward.py（检查点前向）、
-preset.py（LoRA target）；采样与文本编码当前仍在 training.sampling /
-training.text_encoding（S3 迁入本目录，方法已收口在此）。
+preset.py（LoRA target）；采样与文本编码当前仍在 training.families.anima.sampling /
+training.families.anima.text_encoding（S3 迁入本目录，方法已收口在此）。
 """
 
 from __future__ import annotations
@@ -60,7 +60,7 @@ class AnimaFamily:
         raise NotImplementedError("S3 接线：pad_mask 构造随文本块一并下沉后启用")
 
     def sample_image(self, *args, **kwargs):
-        from training.sampling import sample_image
+        from training.families.anima.sampling import sample_image
 
         return sample_image(*args, **kwargs)
 

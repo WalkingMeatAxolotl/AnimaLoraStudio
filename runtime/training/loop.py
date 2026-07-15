@@ -18,7 +18,7 @@ import torch
 import torch.nn.functional as F
 
 from training.context import TrainingContext
-from training.leap import (
+from training.families.anima.leap import (
     bridge_training_step,
     lagrange_training_step,
     leap_training_step,
@@ -28,7 +28,7 @@ from training.leap import (
 )
 from training.loss_weighting import compute_loss_weight
 from training.model_loading import forward_with_optional_checkpoint
-from training.navit import navit_packed_forward_and_loss, pack_cross_embeddings
+from training.families.anima.navit import navit_packed_forward_and_loss, pack_cross_embeddings
 from training.noise import make_noise
 from training.observability import render_curve_panel
 from training.sample_runner import run_sample
@@ -39,7 +39,7 @@ from training.snapshot import (
     write_config_snapshot,
 )
 from training.state import save_training_state
-from training.text_encoding import (
+from training.families.anima.text_encoding import (
     _build_qwen_text_from_prompt,
     encode_qwen,
     tokenize_t5_comfy_literal,

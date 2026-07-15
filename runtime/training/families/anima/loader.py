@@ -128,7 +128,7 @@ def load_text_encoders(
     # Qwen
     qwen_tokenizer = AutoTokenizer.from_pretrained(qwen_path, trust_remote_code=True)
     if comfy_qwen:
-        from training.comfy_qwen import load_comfy_qwen3_encoder
+        from training.families.anima.comfy_qwen import load_comfy_qwen3_encoder
 
         qwen_model = load_comfy_qwen3_encoder(qwen_path, device=device, dtype=dtype)
     else:
