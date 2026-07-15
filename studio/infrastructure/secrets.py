@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, computed_field, model_validator
 
 from .paths import STUDIO_DATA
 
@@ -511,10 +511,32 @@ class ModelsConfig(BaseModel):
       OFF → 独立模型用户：fork 时尊重预设值，4 字段可编辑 + picker。
     """
     root: Optional[str] = None
-    selected_anima: str = "1.0"
+    # per-family 选中主模型（多模型 PR-4）：family_id → variant key 或 custom 路径。
+    # 老键 selected_anima 由 before-validator 迁移（settings PUT 的 merged dict
+    # 会同时带两键——入站 selected_anima 优先，覆盖 merge 进来的旧 selected）。
+    selected: dict[str, str] = Field(default_factory=lambda: {"anima": "1.0"})
     custom_anima_paths: list[str] = Field(default_factory=list)
     selected_upscaler: str = "4x-AnimeSharp"
     auto_sync_paths: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_selected_anima(cls, data):
+        """老键 selected_anima → selected["anima"]（入站键覆盖，读写两路兼容）。"""
+        if isinstance(data, dict) and "selected_anima" in data:
+            data = dict(data)
+            legacy = data.pop("selected_anima")
+            sel = dict(data.get("selected") or {})
+            if legacy:
+                sel["anima"] = str(legacy)
+            data["selected"] = sel
+        return data
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def selected_anima(self) -> str:
+        """兼容读面（前端 settings 读 + dump 落盘回显）；写请走 selected。"""
+        return self.selected.get("anima") or "1.0"
 
 
 class GenerateConfig(BaseModel):
