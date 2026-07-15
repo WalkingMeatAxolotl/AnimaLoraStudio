@@ -403,6 +403,103 @@ def test_download_qwen3_modelscope_builds_complete_directory(
         assert (qwen_dir / f).read_text(encoding="utf-8") == f
 
 
+def test_download_krea2_main_uses_modelscope_comfy_org_mirror(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """训练源选 MS 时从 Comfy-Org/Krea-2 下载对应 bf16 单文件。"""
+    monkeypatch.setenv("MODELSCOPE_SOURCE", "modelscope")
+    hf_calls: list[tuple[str, str, str]] = []
+    ms_calls: list[tuple[str, str, str]] = []
+
+    def fake_hf(repo_id, repo_subpath, target, *, on_log=print):
+        hf_calls.append((repo_id, repo_subpath, str(target)))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"checkpoint")
+        return True
+
+    def fake_ms(repo_id, repo_subpath, target, *, on_log=print):
+        ms_calls.append((repo_id, repo_subpath, str(target)))
+        return True
+
+    monkeypatch.setattr("studio.services.models.sources.download_flat", fake_hf)
+    monkeypatch.setattr("studio.services.models.sources.download_flat_ms", fake_ms)
+    logs: list[str] = []
+
+    assert model_downloader.download_krea2_main(
+        tmp_path, "raw", on_log=logs.append,
+    )
+    assert hf_calls == []
+    assert ms_calls == [(
+        "Comfy-Org/Krea-2",
+        "diffusion_models/krea2_raw_bf16.safetensors",
+        str(tmp_path / "diffusion_models" / "krea2-raw-bf16.safetensors"),
+    )]
+
+
+def test_download_qwen3_vl_modelscope_builds_isolated_complete_directory(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MODELSCOPE_SOURCE", "modelscope")
+    calls: list[tuple[str, str, str]] = []
+
+    def fake_ms(repo_id, repo_subpath, target, *, on_log=print):
+        calls.append((repo_id, repo_subpath, str(target)))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(repo_subpath, encoding="utf-8")
+        return True
+
+    monkeypatch.setattr("studio.services.models.sources.download_flat_ms", fake_ms)
+    assert model_downloader.download_qwen3_vl(
+        tmp_path, on_log=lambda _line: None,
+    )
+
+    target_dir = tmp_path / "text_encoders" / "Qwen_Qwen3-VL-4B-Instruct"
+    assert [subpath for _, subpath, _ in calls] == model_downloader.QWEN3_VL_FILES
+    assert all(repo == model_downloader.QWEN3_VL_REPO for repo, _, _ in calls)
+    assert all((target_dir / filename).exists() for filename in model_downloader.QWEN3_VL_FILES)
+
+
+def test_trigger_routes_krea2_assets_to_async_downloaders(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: list[tuple[str, object]] = []
+
+    def fake_start(key, fn):
+        captured.append((key, fn))
+        return None
+
+    calls: list[tuple[str, str]] = []
+
+    def fake_main(root, variant, *, on_log=print):
+        assert root == tmp_path
+        calls.append(("main", variant))
+        return True
+
+    def fake_text(root, *, on_log=print):
+        assert root == tmp_path
+        calls.append(("text", ""))
+        return True
+
+    monkeypatch.setattr("studio.services.models.downloader.models_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        "studio.services.models.downloader.start_download_async", fake_start,
+    )
+    monkeypatch.setattr(
+        "studio.services.models.downloader.download_krea2_main", fake_main,
+    )
+    monkeypatch.setattr(
+        "studio.services.models.downloader.download_qwen3_vl", fake_text,
+    )
+
+    assert model_downloader.trigger("krea2_main", "raw") == "krea2_main:raw"
+    assert model_downloader.trigger("krea2_text_encoder") == "krea2_text_encoder"
+    assert [key for key, _ in captured] == [
+        "krea2_main:raw", "krea2_text_encoder",
+    ]
+    assert all(fn(lambda _line: None) for _, fn in captured)
+    assert calls == [("main", "raw"), ("text", "")]
+
+
 # ---------------------------------------------------------------------------
 # 预处理放大器
 # ---------------------------------------------------------------------------

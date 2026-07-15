@@ -48,9 +48,14 @@ After launch, go to **Settings → Models** and click to download all required w
 | Item | Source | Path | Size |
 |---|---|---|---|
 | Anima base model (latest = 1.0) | [circlestone-labs/Anima](https://huggingface.co/circlestone-labs/Anima) | `models/diffusion_models/` | ~4 GB |
-| Anima VAE | Same | `models/vae/` | ~250 MB |
+| Qwen-Image VAE (shared by Anima / Krea 2) | Same | `models/vae/` | ~250 MB |
 | Qwen3-0.6B-Base text encoder | [Qwen/Qwen3-0.6B-Base](https://huggingface.co/Qwen/Qwen3-0.6B-Base) | `models/text_encoders/` | ~1.2 GB |
 | T5 tokenizer (3 files only, no weights) | [google/t5-v1_1-xxl](https://huggingface.co/google/t5-v1_1-xxl) | `models/t5_tokenizer/` | <1 MB |
+| Krea 2 Raw (LoRA training / samples during training) | [krea/Krea-2-Raw](https://huggingface.co/krea/Krea-2-Raw) | `models/diffusion_models/krea2-raw-bf16.safetensors` | ~26.3 GB |
+| Krea 2 Turbo (inference testing) | [krea/Krea-2-Turbo](https://huggingface.co/krea/Krea-2-Turbo) | `models/diffusion_models/krea2-turbo-bf16.safetensors` | ~26.3 GB |
+| Krea 2 text encoder | [Qwen/Qwen3-VL-4B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct) | `models/text_encoders/Qwen_Qwen3-VL-4B-Instruct/` | ~8.89 GB |
+
+Krea 2 weights are governed by the [Krea 2 Community License](https://huggingface.co/krea/Krea-2-Raw/blob/main/LICENSE.pdf). Training and samples during training reuse Raw; Turbo is the inference-testing model. A LoRA trained on Raw can be loaded directly on Turbo. Krea 2 reuses Anima's existing VAE, so no duplicate VAE download is needed. When ModelScope is selected, Raw and Turbo are downloaded from [Comfy-Org/Krea-2](https://www.modelscope.cn/models/Comfy-Org/Krea-2).
 
 WD14 tagger models are not in this list — they are auto-downloaded from HF to `models/wd14/` on first use of the tagging step.
 
@@ -59,7 +64,9 @@ WD14 tagger models are not in this list — they are auto-downloaded from HF to 
 Or via CLI (shares the same code as the UI; full flags in [tools/README.md](../../tools/README.md)):
 
 ```bash
-python tools/download_models.py                   # Download everything (official HF)
+python tools/download_models.py                   # Anima (default, official HF)
+python tools/download_models.py --family krea2    # Krea 2 Raw + shared VAE + Qwen3-VL
+python tools/download_models.py --family krea2 --variant turbo
 python tools/download_models.py --endpoint URL    # Use self-hosted mirror
 python tools/download_models.py --modelscope      # Use ModelScope
 ```

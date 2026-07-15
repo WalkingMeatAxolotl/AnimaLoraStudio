@@ -1,17 +1,21 @@
 #!/usr/bin/env python
-"""下载 Anima 训练所需的全部模型 + tokenizer（CLI 薄壳）。
+"""下载指定模型族训练所需的全部模型 + tokenizer（CLI 薄壳）。
 
 实际逻辑在 `studio.services.model_downloader`，CLI 和 Studio 设置页 UI 共用。
 
-最终落地结构（默认 ./anima/，与 anima_train._guess_default_paths 一致）：
-    anima/
+最终落地结构（默认由 Settings 的 models_root 决定）：
+    models/
       diffusion_models/anima-base-v1.0.safetensors
+      diffusion_models/krea2-raw-bf16.safetensors
       vae/qwen_image_vae.safetensors
-      text_encoders/                # Qwen3 模型 + tokenizer
+      text_encoders/                # Anima Qwen3（legacy 扁平布局）
+      text_encoders/Qwen_Qwen3-VL-4B-Instruct/
       t5_tokenizer/                 # T5 仅 tokenizer，不要权重
 
 用法:
     python tools/download_models.py
+    python tools/download_models.py --family krea2
+    python tools/download_models.py --family krea2 --variant turbo
     python tools/download_models.py --variant preview3-base
     python tools/download_models.py --no-mirror
     python tools/download_models.py --skip-main --skip-vae
@@ -35,10 +39,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from studio.services.models import (  # noqa: E402
     ANIMA_VARIANTS,
+    KREA2_VARIANTS,
     LATEST_ANIMA,
+    LATEST_KREA2,
     download_anima_main,
     download_anima_vae,
+    download_krea2_main,
     download_qwen3,
+    download_qwen3_vl,
     download_t5_tokenizer,
     models_root,
 )
@@ -46,12 +54,16 @@ from studio.services.models import (  # noqa: E402
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="下载 Anima 训练所需的全部模型 + tokenizer",
+        description="下载 Anima / Krea 2 训练所需的模型 + tokenizer",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"""\
 Anima 主模型版本（--variant）:
 {chr(10).join(f"  {k:<14} {v}" for k, v in ANIMA_VARIANTS.items())}
   latest         (= {LATEST_ANIMA})
+
+Krea 2 主模型版本（--family krea2 --variant）:
+{chr(10).join(f"  {k:<14} {v['repo']}/{v['subpath']}" for k, v in KREA2_VARIANTS.items())}
+  latest         (= {LATEST_KREA2})
 
 下载源：默认从 secrets.huggingface.endpoint 读（首装是 "" = HF 官方）。
   - --no-mirror     强制使用 HuggingFace 官方源（覆盖 secrets，等价于 endpoint=https://huggingface.co）
@@ -61,6 +73,10 @@ Anima 主模型版本（--variant）:
 注：0.8.2 hotfix 起 hf-mirror.com 暂时不可用（详见 docs/todo/hf-mirror-recheck.md），
     Settings UI 已隐藏该 preset，但 --endpoint URL 仍接受任意值。
 """,
+    )
+    parser.add_argument(
+        "--family", default="anima", choices=["anima", "krea2"],
+        help="模型族（默认 anima）",
     )
     parser.add_argument(
         "--no-mirror", action="store_true",
@@ -76,12 +92,11 @@ Anima 主模型版本（--variant）:
     )
     parser.add_argument(
         "--output", default="",
-        help="目标根目录（默认 ./anima/）",
+        help="目标根目录（默认使用 Settings 的 models_root）",
     )
     parser.add_argument(
         "--variant", default="latest",
-        choices=list(ANIMA_VARIANTS) + ["latest"],
-        help=f"Anima 主模型版本（默认 latest = {LATEST_ANIMA}）",
+        help="主模型版本（Anima 默认 1.0；Krea 2 默认 raw）",
     )
     parser.add_argument("--skip-main", action="store_true")
     parser.add_argument("--skip-vae",  action="store_true")
@@ -106,14 +121,29 @@ Anima 主模型版本（--variant）:
     out_root = Path(args.output) if args.output else models_root()
     print(f"📁 目标根目录: {out_root.absolute()}")
 
+    variants = ANIMA_VARIANTS if args.family == "anima" else KREA2_VARIANTS
+    latest = LATEST_ANIMA if args.family == "anima" else LATEST_KREA2
+    variant = latest if args.variant == "latest" else args.variant
+    if variant not in variants:
+        parser.error(
+            f"{args.family} 不支持 variant {args.variant!r}；可选: "
+            f"{', '.join(variants)} / latest"
+        )
+
     ok = True
     if not args.skip_main:
-        ok &= download_anima_main(out_root, args.variant)
+        if args.family == "anima":
+            ok &= download_anima_main(out_root, variant)
+        else:
+            ok &= download_krea2_main(out_root, variant)
     if not args.skip_vae:
         ok &= download_anima_vae(out_root)
     if not args.skip_qwen:
-        ok &= download_qwen3(out_root)
-    if not args.skip_t5:
+        if args.family == "anima":
+            ok &= download_qwen3(out_root)
+        else:
+            ok &= download_qwen3_vl(out_root)
+    if args.family == "anima" and not args.skip_t5:
         ok &= download_t5_tokenizer(out_root)
 
     print()

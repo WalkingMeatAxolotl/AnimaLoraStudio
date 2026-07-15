@@ -48,9 +48,14 @@ python -m studio test         # pytest + vitest
 | 项 | 来源 | 路径 | 大小 |
 |---|---|---|---|
 | Anima 主模型（latest = 1.0）| [circlestone-labs/Anima](https://huggingface.co/circlestone-labs/Anima) | `models/diffusion_models/` | ~4 GB |
-| Anima VAE | 同上 | `models/vae/` | ~250 MB |
+| Qwen-Image VAE（Anima / Krea 2 共享） | 同上 | `models/vae/` | ~250 MB |
 | Qwen3-0.6B-Base 文本编码器 | [Qwen/Qwen3-0.6B-Base](https://huggingface.co/Qwen/Qwen3-0.6B-Base) | `models/text_encoders/` | ~1.2 GB |
 | T5 tokenizer（仅 3 文件，不下权重）| [google/t5-v1_1-xxl](https://huggingface.co/google/t5-v1_1-xxl) | `models/t5_tokenizer/` | <1 MB |
+| Krea 2 Raw（LoRA 训练 / 训练中采样） | [krea/Krea-2-Raw](https://huggingface.co/krea/Krea-2-Raw) | `models/diffusion_models/krea2-raw-bf16.safetensors` | ~26.3 GB |
+| Krea 2 Turbo（测试推理） | [krea/Krea-2-Turbo](https://huggingface.co/krea/Krea-2-Turbo) | `models/diffusion_models/krea2-turbo-bf16.safetensors` | ~26.3 GB |
+| Krea 2 文本编码器 | [Qwen/Qwen3-VL-4B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct) | `models/text_encoders/Qwen_Qwen3-VL-4B-Instruct/` | ~8.89 GB |
+
+Krea 2 权重受 [Krea 2 Community License](https://huggingface.co/krea/Krea-2-Raw/blob/main/LICENSE.pdf) 约束。训练和训练中采样直接复用 Raw；Turbo 作为测试推理模型。在 Raw 上训练的 LoRA 可直接加载到 Turbo。Krea 2 与 Anima 共享现有 VAE，无需重复下载。选择 ModelScope 时，Raw / Turbo 从 [Comfy-Org/Krea-2](https://www.modelscope.cn/models/Comfy-Org/Krea-2) 下载。
 
 WD14 打标模型不在这里——首次进 ④ 打标时自动从 HF 拉到 `models/wd14/`。
 
@@ -59,7 +64,9 @@ WD14 打标模型不在这里——首次进 ④ 打标时自动从 HF 拉到 `m
 也可走 CLI（与 UI 共用同一份代码，全部 flag 见 [tools/README.md](../../tools/README.md)）：
 
 ```bash
-python tools/download_models.py                   # 全量下（HF 官方源）
+python tools/download_models.py                   # Anima（默认，HF 官方源）
+python tools/download_models.py --family krea2    # Krea 2 Raw + 共享 VAE + Qwen3-VL
+python tools/download_models.py --family krea2 --variant turbo
 python tools/download_models.py --endpoint URL    # 走自建反代
 python tools/download_models.py --modelscope      # 走魔搭社区
 ```

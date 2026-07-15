@@ -488,6 +488,8 @@ export interface ModelsConfig {
    * Studio 创建新 version 时把它展开成绝对路径写到 yaml.transformer_path；
    * 已存在 version 不动（保证训练重现性）。 */
   selected_anima: string
+  /** 按模型族保存的默认主模型：variant key 或已注册的本地路径。 */
+  selected: Record<string, string>
   /** 用户注册的本地 custom 主模型（.safetensors 绝对路径）。微调训练 /
    * 在微调权重上测试出图用；仅登记路径，不下载不复制。 */
   custom_anima_paths: string[]
@@ -603,7 +605,7 @@ export interface AnimaVariantInfo extends ModelFileStatus {
 }
 
 /** 用户注册的本地 custom 主模型（PathPicker 选盘上已有的 .safetensors）。 */
-export interface CustomAnimaInfo extends ModelFileStatus {
+export interface CustomModelInfo extends ModelFileStatus {
   /** 注册的绝对路径（也是选中时写入 selected_anima 的值）。 */
   path: string
   /** 文件名，列表展示用。 */
@@ -617,7 +619,7 @@ export interface AnimaMainCatalog {
   repo: string
   variants: AnimaVariantInfo[]
   /** 本地注册的 custom 主模型列表。 */
-  custom: CustomAnimaInfo[]
+  custom: CustomModelInfo[]
   /** 当前选中的主模型：variant key 或 custom 路径。 */
   selected: string
   latest: string
@@ -631,8 +633,31 @@ export interface AnimaVaeCatalog extends ModelFileStatus {
   target_path: string
 }
 
+export interface Krea2VariantInfo extends ModelFileStatus {
+  variant: 'raw' | 'turbo'
+  is_latest: boolean
+  repo: string
+  purpose: 'training' | 'inference'
+  size_estimate: number
+  target_path: string
+}
+
+export interface Krea2MainCatalog {
+  id: 'krea2_main'
+  name: string
+  description: string
+  repo: string
+  variants: Krea2VariantInfo[]
+  /** 本地注册的 Krea2 主模型列表。 */
+  custom: CustomModelInfo[]
+  selected: string
+  latest: string
+  license: string
+  license_url: string
+}
+
 export interface ModelDirCatalog {
-  id: 'qwen3' | 't5_tokenizer'
+  id: 'qwen3' | 't5_tokenizer' | 'krea2_text_encoder'
   name: string
   description: string
   repo: string
@@ -742,6 +767,8 @@ export interface ModelsCatalog {
   anima_vae: AnimaVaeCatalog
   qwen3: ModelDirCatalog
   t5_tokenizer: ModelDirCatalog
+  krea2_main: Krea2MainCatalog
+  krea2_text_encoder: ModelDirCatalog
   wd14: WD14Catalog
   cltagger: CLTaggerCatalog
   eval_metrics?: EvalMetricsCatalog
@@ -2010,6 +2037,18 @@ export const api = {
   /** 注销一个本地 custom 主模型。返回新 catalog。 */
   removeCustomAnima: (path: string) =>
     req<ModelsCatalog>('/api/models/anima/custom', {
+      method: 'DELETE',
+      body: JSON.stringify({ path }),
+    }),
+  /** 注册一个本地 Krea2 .safetensors 主模型。返回新 catalog。 */
+  addCustomKrea2: (path: string) =>
+    req<ModelsCatalog>('/api/models/krea2/custom', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
+  /** 注销一个本地 Krea2 主模型。返回新 catalog。 */
+  removeCustomKrea2: (path: string) =>
+    req<ModelsCatalog>('/api/models/krea2/custom', {
       method: 'DELETE',
       body: JSON.stringify({ path }),
     }),
