@@ -85,10 +85,17 @@ def run(ctx: TrainingContext) -> None:
     logger.info(f"注入 {args.lora_type.upper()}...")
     from training.adapters import build_adapter
     ctx.injector = build_adapter(args)
+    ctx.injector.metadata_extra = ctx.family.lora_metadata()  # D13：产物族标记
     ctx.injector.inject(ctx.model)
 
-    # 从已有 LoRA 继续训练
+    # 从已有 LoRA 继续训练（D13：跨族 fail-fast；无标记存量产物 grandfather 为 anima）
     if getattr(args, "resume_lora", "") and Path(args.resume_lora).exists():
+        _lora_family = _read_lora_family(args.resume_lora)
+        if _lora_family != ctx.family.spec.family_id:
+            raise RuntimeError(
+                f"resume_lora 跨模型族被拒绝：{args.resume_lora} 属于 '{_lora_family}'，"
+                f"当前 model_family='{ctx.family.spec.family_id}'"
+            )
         ctx.injector.load(args.resume_lora)
         logger.info(f"将从已有 LoRA 继续训练: {args.resume_lora}")
 
@@ -112,3 +119,18 @@ def run(ctx: TrainingContext) -> None:
             dtype=ctx.dtype,
             normalize=bool(getattr(args, "sra_normalize", True)),
         )
+
+
+def _read_lora_family(path) -> str:
+    """从 safetensors metadata 读产物所属族；无标记 grandfather 为 anima（D13）。"""
+    import json
+
+    from safetensors import safe_open
+
+    try:
+        with safe_open(str(path), framework="pt", device="cpu") as f:
+            meta = f.metadata() or {}
+        args = json.loads(meta.get("ss_network_args") or "{}")
+        return str(args.get("model_family") or "anima")
+    except Exception:
+        return "anima"

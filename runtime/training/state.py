@@ -25,7 +25,7 @@ def save_training_state(
     path, injector, optimizer, epoch, global_step,
     loss_history=None, rng_state=None, monitor_state=None,
     scheduler=None, timestep_sampler=None, sra_aligner=None,
-    scaler=None,
+    scaler=None, model_family=None,
 ):
     """保存完整训练状态，支持断点续训。
 
@@ -44,6 +44,8 @@ def save_training_state(
             "random": random.getstate(),
         },
         "monitor_state": monitor_state,  # 保存监控面板数据（用于恢复 loss 曲线）
+        # 多模型 D13：族标记；load 侧跨族 fail-fast（strict=False 会静默冷启动）
+        "model_family": str(model_family or "anima"),
     }
     if scheduler is not None:
         state["scheduler_state_dict"] = scheduler.state_dict()
@@ -80,7 +82,7 @@ def save_training_state(
     logger.info(f"训练状态已保存: {path} (epoch={epoch}, step={global_step})")
 
 
-def load_training_state(path, injector, optimizer, scheduler=None, timestep_sampler=None, sra_aligner=None, scaler=None):
+def load_training_state(path, injector, optimizer, scheduler=None, timestep_sampler=None, sra_aligner=None, scaler=None, expected_family=None):
     """加载训练状态，返回 (epoch, global_step, loss_history, monitor_state)。
 
     timestep_sampler（ADR 0006 Addendum 1）：如 ckpt 含 timestep_sampler_state 且 sampler
@@ -88,6 +90,15 @@ def load_training_state(path, injector, optimizer, scheduler=None, timestep_samp
     """
     logger.info(f"加载训练状态: {path}")
     state = torch.load(path, map_location="cpu", weights_only=False)
+
+    # 多模型 D13：跨族 resume fail-fast。无标记的存量 state grandfather 为 anima。
+    saved_family = str(state.get("model_family") or "anima")
+    if expected_family is not None and saved_family != str(expected_family):
+        raise RuntimeError(
+            f"跨模型族 resume 被拒绝：恢复点属于 '{saved_family}'，"
+            f"当前 model_family='{expected_family}'。"
+            f"（strict=False 加载会静默变成全 missing 冷启动，比崩溃更糟）"
+        )
 
     # 加载 LoRA 权重（lycoris-lora backend）— 一次性导入 state_dict
     # 旧自实现 ckpt 在 Stage 4 plan 决策中**不做迁移**，strict=False 让缺失键

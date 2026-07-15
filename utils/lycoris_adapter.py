@@ -380,6 +380,9 @@ class LycorisAdapter:
         }
         if self.lora_reg_dims:
             ss_args["lora_reg_dims"] = self.lora_reg_dims
+        # 多模型 D13：族标记（phases/models 注入 family.lora_metadata()）；
+        # 无标记的存量产物读取侧 grandfather 为 anima
+        ss_args.update(getattr(self, "metadata_extra", None) or {})
         meta = {
             "ss_network_dim": str(self.rank),
             "ss_network_alpha": str(self.alpha),
