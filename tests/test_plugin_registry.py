@@ -465,7 +465,7 @@ def test_no_lr_scheduler_dispatch_in_phases_optimizer() -> None:
 
 
 def test_no_er_sde_inline_dispatch_in_sampling() -> None:
-    text = (RUNTIME_DIR / "training" / "sampling.py").read_text(encoding="utf-8")
+    text = (RUNTIME_DIR / "training" / "families" / "anima" / "sampling.py").read_text(encoding="utf-8")
     # sample_image 应该通过 build_inference_sampler 派发
     assert 'if sampler_name_l == "er_sde"' not in text
     assert "build_inference_sampler" in text

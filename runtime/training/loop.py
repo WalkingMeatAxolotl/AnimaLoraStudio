@@ -203,7 +203,7 @@ def run(ctx: TrainingContext) -> None:
                 bs = latents.shape[0]
 
             # 文本编码：整块下沉 family（cond 对循环 opaque，03 §2.7-4；
-            # pad-to-512 / kv_trim / preprocess_text_embeds 均为 Anima 私货）
+            # pad-to-512 / kv_trim / LLMAdapter 融合均为 Anima 私货）
             cross = ctx.family.encode_text_for_batch(
                 ctx.text_stack, ctx.model, captions,
                 ctx.device, ctx.dtype,
