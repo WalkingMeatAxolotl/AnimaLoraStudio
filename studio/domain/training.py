@@ -17,7 +17,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .common import AttentionBackend, _meta
+from .common import AttentionBackend, _meta, cap_gate, capability_violations
 from .migrations import migrate_legacy_save_keys, migrate_noise_enhancement_type
 
 
@@ -35,6 +35,12 @@ class TrainingConfig(BaseModel):
     # Train 页看到的总是无歧义的绝对路径，不用考虑相对路径锚定。
     # 这里的默认值仅 fallback：裸 CLI 跑训练 + yaml 完全没填时，按 repo
     # 相对路径解析（与历史行为一致）。
+    model_family: Literal["anima"] = Field(
+        "anima",
+        description="模型族。决定训练走哪套模型实现；其余字段按族能力自动显隐（多模型 D7，"
+                    "当前仅 Anima，Krea 2 随 Phase 3 加入）",
+        json_schema_extra=_meta("model", advanced=True),
+    )
     transformer_path: str = Field(
         "models/diffusion_models/anima-base-v1.0.safetensors",
         description="主扩散模型权重（.safetensors）",
@@ -52,8 +58,9 @@ class TrainingConfig(BaseModel):
     )
     t5_tokenizer_path: str = Field(
         "models/t5_tokenizer",
-        description="T5 tokenizer 目录",
-        json_schema_extra=_meta("model", "path", cli_alias="--t5-tokenizer"),
+        description="T5 tokenizer 目录（Anima 族专用）",
+        json_schema_extra=_meta("model", "path", cli_alias="--t5-tokenizer",
+                                show_when="model_family==anima"),
     )
 
     # ----------------------------------------------------------------- 数据集
@@ -92,13 +99,13 @@ class TrainingConfig(BaseModel):
     shuffle_caption: bool = Field(
         True,
         description="启用标签打乱（JSON 模式分类内打乱，TXT 模式全部打乱）",
-        json_schema_extra=_meta("caption"),
+        json_schema_extra=_meta("caption", show_when=cap_gate("caption_tag_ops")),
     )
     keep_tokens: int = Field(
         0, ge=0,
         description="保护前 N 个标签不参与打乱与 dropout（仅 TXT 模式；JSON 模式由"
                     " meta.trigger 与固定字段承担同类角色）",
-        json_schema_extra=_meta("caption"),
+        json_schema_extra=_meta("caption", show_when=cap_gate("caption_tag_ops")),
     )
     flip_augment: bool = Field(
         True,
@@ -108,7 +115,7 @@ class TrainingConfig(BaseModel):
     tag_dropout: float = Field(
         0.0, ge=0.0, le=1.0,
         description="训练时每个标签的随机丢弃概率（0 = 关闭）；非 0 帮助泛化、减弱单标签依赖",
-        json_schema_extra=_meta("caption"),
+        json_schema_extra=_meta("caption", show_when=cap_gate("caption_tag_ops")),
     )
     prefer_json: bool = Field(
         True,
@@ -143,6 +150,7 @@ class TrainingConfig(BaseModel):
         json_schema_extra=_meta(
             "system",
             advanced=True,
+            show_when=cap_gate("navit"),
             disable_when="leap_enabled==true||infonoise_enabled==true||sra_enabled==true||lora_type==tlora",
             disable_hint="与 LeapAlign / InfoNoise / SRA / T-LoRA 互斥（navit v1 未适配），需先关掉它们",
         ),
@@ -728,6 +736,7 @@ class TrainingConfig(BaseModel):
         description="按训练 mask 加权 loss：预处理涂抹页画的 mask 区域（灰度 0=不学、255=正常学习、中间值=部分权重）不产生梯度，该区域生成时由 base 模型先验决定；没有 mask 的图不受影响",
         json_schema_extra=_meta(
             "loss",
+            show_when=cap_gate("masked_loss"),
             disable_when="leap_enabled==true||navit_packing==true",
             disable_hint="Leap（per-sample loss 无空间维度）/ NaViT 打包路径不支持 mask（schema 互斥）",
         ),
@@ -758,6 +767,7 @@ class TrainingConfig(BaseModel):
         json_schema_extra=_meta(
             "loss",
             advanced=True,
+            show_when=cap_gate("leap"),
             disable_when="infonoise_enabled==true||loss_weighting!=none||loss_type==huber",
             disable_hint="互斥字段（InfoNoise / loss_weighting / loss_type=huber）非默认时不可启用（schema 互斥，与对侧形成对称锁）",
         ),
@@ -802,7 +812,7 @@ class TrainingConfig(BaseModel):
     sra_enabled: bool = Field(
         False,
         description="【SRA v2 表征对齐】启用 VAE Self-Representation Alignment：将中间 transformer block 的 hidden state 对齐到 clean VAE latent，加速收敛并正则化表征。仅增加 ~4% GFLOPs（一个轻量 MLP），训练完自动丢弃",
-        json_schema_extra=_meta("loss", advanced=True),
+        json_schema_extra=_meta("loss", advanced=True, show_when=cap_gate("sra")),
     )
     sra_block: int = Field(
         4, ge=1, le=35,
@@ -885,6 +895,18 @@ class TrainingConfig(BaseModel):
                 seen.add(n)
                 out.append(n)
         return out or [1024]
+
+    @model_validator(mode="after")
+    def _validate_family_capabilities(self):
+        # 多模型 PR-3 第二层防线（第一层 = show_when 作者写时展开；第三层 =
+        # trainer bootstrap）：拦手写 yaml / 裸 CLI 给当前族开不支持的能力
+        bad = capability_violations(self.model_family, self.__dict__)
+        if bad:
+            raise ValueError(
+                f"model_family='{self.model_family}' 不支持这些已启用字段: {bad}"
+                f"（各族能力见 studio/domain/common.py FAMILY_CAPABILITIES）"
+            )
+        return self
 
     @model_validator(mode="before")
     @classmethod

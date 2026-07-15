@@ -13,6 +13,66 @@ def _meta(group: str, control: str = "auto", **extra: Any) -> dict[str, Any]:
     return {"group": group, "control": control, **extra}
 
 
+# ─── 多模型能力矩阵（多模型 PR-3，04-synthesis D5/D11） ───────────────────
+# runtime training/families SPECS.capabilities 的镜像。studio/domain 不 import
+# runtime（trainer cli 反向 import 本模块，避免环 + server 启动不依赖 runtime
+# sys.path）；同步由 tests/test_model_family_gating.py 双向锁死。
+FAMILY_CAPABILITIES: dict[str, frozenset] = {
+    "anima": frozenset({
+        "navit", "sra", "leap", "compile_blocks",
+        "caption_tag_ops", "online_text", "masked_loss",
+    }),
+}
+
+#: schema model_family Literal 的值域（顺序即 UI 下拉顺序）
+MODEL_FAMILIES: tuple[str, ...] = tuple(FAMILY_CAPABILITIES)
+
+#: 字段 → 所需能力位。驱动三层防线：show_when（作者写时经 cap_gate 展开）、
+#: TrainingConfig validator、trainer bootstrap 校验。判定口径：字段值为
+#: 真值/非零才算"启用"该能力（默认关闭的字段对任何族都合法）。
+FIELD_CAPABILITY_REQUIREMENTS: dict[str, str] = {
+    "navit_packing": "navit",
+    "sra_enabled": "sra",
+    "leap_enabled": "leap",
+    "masked_loss": "masked_loss",
+    "shuffle_caption": "caption_tag_ops",
+    "keep_tokens": "caption_tag_ops",
+    "tag_dropout": "caption_tag_ops",
+}
+
+
+def cap_gate(capability: str) -> str:
+    """把能力位编译成 show_when 字段比较表达式（作者写时展开，运行时零新文法）。
+
+    cap_gate("navit") → "model_family==anima"；未来第 3 族支持该能力时自动
+    变为 "model_family==anima||model_family==foo"（只改 FAMILY_CAPABILITIES）。
+    三个 show_when 求值器（前端 schema.ts / config_prune / YAML 预览）零改动。
+    """
+    fams = sorted(f for f, caps in FAMILY_CAPABILITIES.items() if capability in caps)
+    if not fams:
+        raise ValueError(f"没有任何模型族支持能力位 '{capability}'")
+    return "||".join(f"model_family=={f}" for f in fams)
+
+
+def capability_violations(model_family: str, values: dict) -> list[str]:
+    """返回「已启用但当前族不支持」的字段名列表（validator / bootstrap 共用）。"""
+    caps = FAMILY_CAPABILITIES.get(str(model_family))
+    if caps is None:
+        return []  # 未知族由 Literal / resolve_family 各自报错，这里不重复
+    bad = []
+    for field, cap in FIELD_CAPABILITY_REQUIREMENTS.items():
+        if cap in caps:
+            continue
+        v = values.get(field)
+        if isinstance(v, bool):
+            active = v
+        else:
+            active = bool(v)  # int/float 非零即启用
+        if active:
+            bad.append(field)
+    return bad
+
+
 # attention backend 三选一（替代历史的 xformers / flash_attn 双 bool）
 AttentionBackend = Literal["none", "xformers", "flash_attn"]
 

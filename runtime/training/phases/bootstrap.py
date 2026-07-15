@@ -161,6 +161,20 @@ def run(ctx: TrainingContext) -> None:
     from training.families import resolve_family
 
     ctx.family = resolve_family(args)
+    # 第三层能力防线（多模型 PR-3）：config 可绕过 studio 直达 CLI，这里用
+    # runtime SPECS 再校验一次。studio.domain 在裸 CLI 场景不一定可 import → 跳过
+    try:
+        from studio.domain.common import capability_violations
+
+        _bad = capability_violations(
+            ctx.family.spec.family_id, {k: getattr(args, k, None) for k in vars(args)}
+        )
+        if _bad:
+            raise SystemExit(
+                f"model_family='{ctx.family.spec.family_id}' 不支持这些已启用字段: {_bad}"
+            )
+    except ImportError:
+        pass
 
     # 触发词注入：caption 端 tag_worker 把 trigger 写为第一个 tag，这里同步
     # 注入 sample_prompt(s)，让采样图天然带 trigger。pause snapshot 已 freeze
