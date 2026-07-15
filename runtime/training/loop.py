@@ -18,17 +18,7 @@ import torch
 import torch.nn.functional as F
 
 from training.context import TrainingContext
-from training.families.anima.leap import (
-    bridge_training_step,
-    lagrange_training_step,
-    leap_training_step,
-    sample_activation_timesteps,
-    sample_two_timesteps,
-    sparse_training_step,
-)
 from training.loss_weighting import compute_loss_weight
-from training.model_loading import forward_with_optional_checkpoint
-from training.families.anima.navit import navit_packed_forward_and_loss, pack_cross_embeddings
 from training.noise import make_noise
 from training.observability import render_curve_panel
 from training.sample_runner import run_sample
@@ -39,12 +29,6 @@ from training.snapshot import (
     write_config_snapshot,
 )
 from training.state import save_training_state
-from training.families.anima.text_encoding import (
-    _build_qwen_text_from_prompt,
-    encode_qwen,
-    tokenize_t5_comfy_literal,
-    tokenize_t5_weighted,
-)
 from training.timestep_sampling import apply_resolution_shift, latent_token_counts
 from utils.optimizer_utils import get_optimizer_monitor_metrics, optimizer_eval_mode
 
@@ -218,40 +202,14 @@ def run(ctx: TrainingContext) -> None:
                     latents = ctx.vae.model.encode(pixels_5d, ctx.vae.scale)
                 bs = latents.shape[0]
 
-            # 文本编码
-            with torch.no_grad():
-                if bool(getattr(args, "caption_comfy_encoding", True)):
-                    # Comfy-style（默认）：raw caption 进 Qwen（不清洗）；T5 整段
-                    # 字面 tokenize，不解析权重语法——booru 括号 tag 保持字面，
-                    # 等价于 CUI 用户推理时转义后 T5 看到的序列。与测试出图 /
-                    # 训练预览的 conditioning 同一链路。
-                    qwen_texts = [str(c) for c in captions]
-                    qwen_emb, qwen_attn = encode_qwen(ctx.qwen_model, ctx.qwen_tok, qwen_texts, ctx.device)
-                    t5_ids, t5_attn, t5_w = tokenize_t5_comfy_literal(ctx.t5_tok, captions, max_length=512)
-                else:
-                    # legacy（A/B 对照 / 旧 state 续训）：清洗 Qwen 文本；T5 按
-                    # 逗号逐 tag 分词 + (tag:1.3) 权重语法
-                    qwen_texts = [_build_qwen_text_from_prompt(c) for c in captions]
-                    qwen_emb, qwen_attn = encode_qwen(ctx.qwen_model, ctx.qwen_tok, qwen_texts, ctx.device)
-                    t5_ids, t5_attn, t5_w = tokenize_t5_weighted(ctx.t5_tok, captions, max_length=512)
-                t5_ids = t5_ids.to(ctx.device)
-                t5_attn = t5_attn.to(ctx.device)
-                t5_w = t5_w.to(ctx.device, dtype=torch.float32)
-                # t5_w 透传到 preprocess_text_embeds 内乘到 LLMAdapter 输出上（与
-                # ComfyUI 原生 `comfy/ldm/anima/model.py:198-206` 对齐）。
-                cross = ctx.model.preprocess_text_embeds(qwen_emb, t5_ids, t5xxl_weights=t5_w)
-                if cross.shape[1] < 512:
-                    cross = F.pad(cross, (0, 0, 0, 512 - cross.shape[1]))
-                # KV trim：把 padding 截到最近有效 token bucket（64/128/256/512）
-                # t5_attn=1 表示有效 token；取批次内最大实际长度再 round up
-                if getattr(args, "kv_trim", False):
-                    _actual = int(t5_attn.sum(dim=-1).max().item())
-                    _bucket = 512  # _actual > 512 时兜底（不裁，保持原行为）
-                    for _b in (64, 128, 256, 512):
-                        if _b >= _actual:
-                            _bucket = _b
-                            break
-                    cross = cross[:, :_bucket, :].contiguous()
+            # 文本编码：整块下沉 family（cond 对循环 opaque，03 §2.7-4；
+            # pad-to-512 / kv_trim / preprocess_text_embeds 均为 Anima 私货）
+            cross = ctx.family.encode_text_for_batch(
+                (ctx.qwen_model, ctx.qwen_tok, ctx.t5_tok), ctx.model, captions,
+                ctx.device, ctx.dtype,
+                comfy_encoding=bool(getattr(args, "caption_comfy_encoding", True)),
+                kv_trim=bool(getattr(args, "kv_trim", False)),
+            )
 
             # Flow Matching：统一通过 timestep_sampler plugin 接口采样
             # （baseline = 4 种 mode；adaptive = InfoNoise 等；接口在 ADR 0003 plugin registry）
@@ -306,8 +264,10 @@ def run(ctx: TrainingContext) -> None:
                     random.random() < (0.6 if _leap_ratio is None else float(_leap_ratio))
                 )
 
-                # 前向
-                pad_mask = torch.zeros(bs, 1, latents.shape[-2], latents.shape[-1], device=ctx.device, dtype=ctx.dtype)
+                # pad_mask：标准路径已随 forward_train 下沉 family（03-③）；
+                # 这里仅为 leap（Anima-only 门控代码）保留循环侧构造
+                if use_leap_this_step:
+                    pad_mask = torch.zeros(bs, 1, latents.shape[-2], latents.shape[-1], device=ctx.device, dtype=ctx.dtype)
             denoise_loss_log = None
             sra_align_loss_log = None
             sra_weighted_loss_log = None
@@ -320,6 +280,11 @@ def run(ctx: TrainingContext) -> None:
                     # 与逐图打包不兼容——互斥校验已 fail-fast 强制关闭。
                     # loss_weighting / 正则集 loss_weight 不在此列：navit 的逐图 t 正好对应
                     # per-sample SNR 权重语义，按 per-image 接入（见下方 per_image_weights）。
+                    from training.families.anima.navit import (  # noqa: PLC0415  能力门控（D5），惰性 import
+                        navit_packed_forward_and_loss,
+                        pack_cross_embeddings,
+                    )
+
                     cross_packed, text_seqlens = pack_cross_embeddings(
                         cross, t5_attn,
                         bool(getattr(args, "navit_text_trim_padding", False)),
@@ -352,6 +317,15 @@ def run(ctx: TrainingContext) -> None:
                     #   bridge    两步跳 + Euler 重构 connector（无 straight-through 偏差）
                     #   lagrange  两段跳 + 每段三点 Simpson 积分（6× 前向）
                     leap_variant = str(getattr(args, "leap_variant", "original") or "original")
+                    from training.families.anima.leap import (  # noqa: PLC0415  能力门控（D5），惰性 import
+                        bridge_training_step,
+                        lagrange_training_step,
+                        leap_training_step,
+                        sample_activation_timesteps,
+                        sample_two_timesteps,
+                        sparse_training_step,
+                    )
+
                     _leap_min_gap = float(getattr(args, "leap_min_gap", 0.1) or 0.1)
                     _leap_tsw = bool(getattr(args, "leap_traj_sim_weighting", False))
                     _leap_tsm = float(getattr(args, "leap_traj_sim_min", 0.1) or 0.1)
@@ -398,8 +372,8 @@ def run(ctx: TrainingContext) -> None:
                     # ── 标准 rectified flow 路径（零行为变化）──
                     noisy = (1 - t_exp) * latents + t_exp * noise
                     target = noise - latents
-                    pred = forward_with_optional_checkpoint(
-                        ctx.model, noisy, t.view(-1, 1), cross, pad_mask,
+                    pred = ctx.family.forward_train(
+                        ctx.model, noisy, t, cross,
                         use_checkpoint=args.grad_checkpoint,
                     )
                     # masked loss（B2）：dataset 已把 mask 下采样到 latent 分辨率，

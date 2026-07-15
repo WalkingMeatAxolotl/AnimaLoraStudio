@@ -52,12 +52,68 @@ class AnimaFamily:
         return None  # Anima 每步在线编码（spec.text.strategy="online"），无缓存
 
     def encode_text_for_batch(self, text, dit, captions, device, dtype, *,
-                              kv_trim: bool = True):
-        raise NotImplementedError("S3 接线：loop.py 文本编码块下沉后启用")
+                              comfy_encoding: bool = True, kv_trim: bool = False):
+        """每步在线编码（自 loop.py 文本块下沉，行为零变化）。
+
+        comfy_encoding=True（默认）：raw caption 进 Qwen；T5 整段字面 tokenize，
+        与测试出图 / 训练预览 conditioning 同一链路。False = legacy A/B 路径。
+        返回 cross —— 对循环 opaque（03 §2.7-4）。
+        """
+        import torch
+        import torch.nn.functional as F
+
+        from training.families.anima.text_encoding import (
+            _build_qwen_text_from_prompt,
+            encode_qwen,
+            tokenize_t5_comfy_literal,
+            tokenize_t5_weighted,
+        )
+
+        qwen_model, qwen_tok, t5_tok = text
+        max_len = self.spec.text.max_seq_len
+        with torch.no_grad():
+            if comfy_encoding:
+                qwen_texts = [str(c) for c in captions]
+                qwen_emb, _ = encode_qwen(qwen_model, qwen_tok, qwen_texts, device)
+                t5_ids, t5_attn, t5_w = tokenize_t5_comfy_literal(t5_tok, captions, max_length=max_len)
+            else:
+                qwen_texts = [_build_qwen_text_from_prompt(c) for c in captions]
+                qwen_emb, _ = encode_qwen(qwen_model, qwen_tok, qwen_texts, device)
+                t5_ids, t5_attn, t5_w = tokenize_t5_weighted(t5_tok, captions, max_length=max_len)
+            t5_ids = t5_ids.to(device)
+            t5_attn = t5_attn.to(device)
+            t5_w = t5_w.to(device, dtype=torch.float32)
+            # t5_w 在 preprocess_text_embeds 内乘到 LLMAdapter 输出上（ComfyUI 对齐）
+            cross = dit.preprocess_text_embeds(qwen_emb, t5_ids, t5xxl_weights=t5_w)
+            if cross.shape[1] < max_len:
+                cross = F.pad(cross, (0, 0, 0, max_len - cross.shape[1]))
+            if kv_trim:
+                # KV trim：padding 截到最近有效 token bucket（64/128/256/512）
+                _actual = int(t5_attn.sum(dim=-1).max().item())
+                _bucket = max_len
+                for _b in (64, 128, 256, max_len):
+                    if _b >= _actual:
+                        _bucket = _b
+                        break
+                cross = cross[:, :_bucket, :].contiguous()
+        return cross
 
     # ── 训练前向 / 采样 ──────────────────────────────────────────────────
     def forward_train(self, dit, noisy, t, cond, *, use_checkpoint: bool = False):
-        raise NotImplementedError("S3 接线：pad_mask 构造随文本块一并下沉后启用")
+        """v_pred = f(noisy, t, cond)。pad_mask（concat_padding_mask 私有输入）
+        与 t 形状按摩（(B,)→(B,1)）为族内部事务（03-③）。"""
+        import torch
+
+        from training.families.anima.forward import forward_with_optional_checkpoint
+
+        pad_mask = torch.zeros(
+            noisy.shape[0], 1, noisy.shape[-2], noisy.shape[-1],
+            device=noisy.device, dtype=noisy.dtype,
+        )
+        return forward_with_optional_checkpoint(
+            dit, noisy, t.view(-1, 1), cond, pad_mask,
+            use_checkpoint=use_checkpoint,
+        )
 
     def sample_image(self, *args, **kwargs):
         from training.families.anima.sampling import sample_image
