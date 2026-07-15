@@ -1,6 +1,6 @@
 # `runtime/training/` — 训练流水线包
 
-`anima_train.py` 调起的训练全流程实现。ADR 0003 把原 2901 行单文件拆成本子包，**main()** 现在只是 11 行编排：
+`anima_train.py` 调起的训练全流程实现。ADR 0003 把原 2901 行单文件拆成本子包，**main()** 现在只保留 phase 编排：
 
 ```python
 def main():
@@ -9,6 +9,7 @@ def main():
     phases.bootstrap.run(ctx)
     phases.models.run(ctx)
     phases.dataset.run(ctx)
+    phases.text_cache.run(ctx)
     phases.optimizer.run(ctx)
     phases.resume.run(ctx)
     loop.run(ctx)
@@ -35,6 +36,7 @@ runtime/training/
 ├── state.py                ← save / load_training_state
 ├── snapshot.py             ← pause / resume 用的 state snapshot helpers（ADR 0006）
 ├── dataset.py              ← BucketManager + ImageDataset + 5 衍生类 + collate + navit sampler/collate
+├── text_cache.py           ← varlen 文本 sidecar / train/.text-cache prompt bundle 协议与原子 safetensors I/O
 ├── sampling.py             ← 推理用 sample_image + sigma 调度（被 sister script 也用）
 ├── timestep_sampling.py    ← 训练 step 用 sample_t（logit_normal / uniform / mode）；
 │                            被 timestep_samplers/baseline.py 复用
@@ -46,11 +48,12 @@ runtime/training/
 │                            注意：是 *loss 权重*（Flow Matching 步级缩放系数），
 │                            跟 *loss 类型*（mse / huber，见 losses/）正交
 │
-├── phases/                 ← main() 的 6 个 phase；每个 run(ctx) in-place mutate
+├── phases/                 ← main() 的 7 个 phase；每个 run(ctx) in-place mutate
 │   ├── bootstrap.py        ← yaml + 交互 + seed + device + wandb + monitor_state writer +
 │   │                          调 6 个 plugin 子包的 validate_schema_consistency
 │   ├── models.py           ← path resolve + 加载 transformer/vae/text encoders + LoRA inject
 │   ├── dataset.py          ← build 主集 + 正则集 + dataloader + VAE roundtrip 自检
+│   ├── text_cache.py       ← cached_varlen 族预扫最终 caption + 调 family 编码缓存
 │   ├── optimizer.py        ← build_optimizer + validate + scheduler + total_steps +
 │   │                          build_timestep_sampler + build_loss
 │   ├── resume.py           ← init_progress + state recovery + SIGINT + sample prompts + baseline
@@ -96,9 +99,11 @@ TrainingContext(args=args)             │
         ↓                              │
 phases.bootstrap.run(ctx)              │  填 device / dtype / output_dir / wandb / monitor
         ↓                              │
-phases.models.run(ctx)                 │  填 repo_root / model / vae / qwen* / t5_tok / injector
+phases.models.run(ctx)                 │  填 repo_root / model / vae / text_stack / injector
         ↓                              ├─ 一次性 setup
 phases.dataset.run(ctx)                │  填 bucket_mgr / dataset / reg_dataset / dataloader
+        ↓                              │
+phases.text_cache.run(ctx)             │  cached_varlen 族写随图 sidecar；online 族 no-op
         ↓                              │
 phases.optimizer.run(ctx)              │  填 optimizer / scheduler / total_steps / trainable_params
         ↓                              │

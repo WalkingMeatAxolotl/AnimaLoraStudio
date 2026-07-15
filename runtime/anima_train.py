@@ -130,6 +130,7 @@ def main():
     phases.bootstrap.run(ctx)
     phases.models.run(ctx)
     phases.dataset.run(ctx)
+    phases.text_cache.run(ctx)
     phases.optimizer.run(ctx)
     phases.resume.run(ctx)
     loop.run(ctx)

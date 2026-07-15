@@ -32,7 +32,9 @@ class ModelFamily(Protocol):
 
     # ── 文本条件 ─────────────────────────────────────────────────────────
     def prepare_text_cache(self, captions: Iterable[str],
-                           extra_prompts: Iterable[str]) -> None: ...
+                           extra_prompts: Iterable[str], *, cache_entries=(),
+                           cache_root=None, text=None, device=None,
+                           dtype=None) -> None: ...
 
     def encode_text_for_batch(self, text, dit, captions: list[str],
                               device, dtype, *, kv_trim: bool = True) -> Any: ...

@@ -130,6 +130,14 @@ def validate_spec(spec: ModelSpec) -> None:
         raise ValueError(
             f"ModelSpec[{spec.family_id}] cached_varlen 与 caption_tag_ops 互斥"
         )
+    if spec.text.strategy == "cached_varlen" and "text_cache" not in spec.capabilities:
+        raise ValueError(
+            f"ModelSpec[{spec.family_id}] cached_varlen 必须声明 text_cache 能力"
+        )
+    if spec.text.strategy == "cached_varlen" and not spec.text.fingerprint.strip():
+        raise ValueError(
+            f"ModelSpec[{spec.family_id}] cached_varlen 必须声明非空 TE 指纹"
+        )
     if spec.latent.temporal:
         raise ValueError(
             f"ModelSpec[{spec.family_id}] temporal=True：v1 不支持视频族（03 §3.2）"
