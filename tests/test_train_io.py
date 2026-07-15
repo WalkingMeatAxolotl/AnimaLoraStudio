@@ -277,18 +277,26 @@ def test_export_bundle_records_version_and_preset_names(isolated, tmp_path: Path
     assert manifest["source"]["preset_name"] == "style_preset"
 
 
-def test_export_bundle_latent_cache_roundtrip(isolated, tmp_path: Path) -> None:
-    """latent_cache=True：train/reg 的 npz 一并打包；导入后 npz mtime ≥ 图片
-    mtime（_is_cache_valid 的不变量，否则缓存白搬）。"""
+def test_export_bundle_training_caches_roundtrip(isolated, tmp_path: Path) -> None:
+    """cache=True：train/reg 的 latent + text cache 一并打包。
+
+    导入后 npz mtime ≥ 图片 mtime（_is_cache_valid 的不变量，否则缓存白搬）；
+    text cache 只按文件内指纹失效，无 mtime 要求。
+    """
     p, v, train = _make_project_with_train(isolated)
     (train / "1_data").mkdir(parents=True, exist_ok=True)
     (train / "1_data" / "a.png").write_bytes(_png())
     (train / "1_data" / "a.npz").write_bytes(b"fake-latent")
     (train / "1_data" / "a.r512.npz").write_bytes(b"fake-latent-512")
+    (train / "1_data" / "a.png.text.safetensors").write_bytes(b"fake-text")
+    prompt_cache = train / ".text-cache" / "prompts.123456789abc.safetensors"
+    prompt_cache.parent.mkdir()
+    prompt_cache.write_bytes(b"fake-prompts")
     reg = train.parent / "reg" / "girl"
     reg.mkdir(parents=True)
     (reg / "r.png").write_bytes(_png(b"r"))
     (reg / "r.npz").write_bytes(b"fake-reg-latent")
+    (reg / "r.png.text.safetensors").write_bytes(b"fake-reg-text")
 
     dest = tmp_path / "cache.bundle.zip"
     with db.connection_for(isolated["db"]) as conn:
@@ -303,11 +311,15 @@ def test_export_bundle_latent_cache_roundtrip(isolated, tmp_path: Path) -> None:
     assert result["manifest"]["includes"]["train_latent_cache"] is True
     assert result["manifest"]["includes"]["reg_latent_cache"] is True
     assert result["manifest"]["stats"]["latent_cache_count"] == 3
+    assert result["manifest"]["stats"]["text_cache_count"] == 3
     with zipfile.ZipFile(dest) as zf:
         names = set(zf.namelist())
     assert "train/1_data/a.npz" in names
     assert "train/1_data/a.r512.npz" in names
     assert "reg/girl/r.npz" in names
+    assert "train/1_data/a.png.text.safetensors" in names
+    assert "train/.text-cache/prompts.123456789abc.safetensors" in names
+    assert "reg/girl/r.png.text.safetensors" in names
 
     with db.connection_for(isolated["db"]) as conn:
         imported = train_io.import_bundle(conn, dest, presets_base=tmp_path / "presets")
@@ -321,8 +333,12 @@ def test_export_bundle_latent_cache_roundtrip(isolated, tmp_path: Path) -> None:
     img = new_dir / "train" / "1_data" / "a.png"
     reg_npz = new_dir / "reg" / "girl" / "r.npz"
     reg_img = new_dir / "reg" / "girl" / "r.png"
+    text_cache = new_dir / "train" / "1_data" / "a.png.text.safetensors"
+    prompts = new_dir / "train" / ".text-cache" / "prompts.123456789abc.safetensors"
+    reg_text_cache = new_dir / "reg" / "girl" / "r.png.text.safetensors"
     assert npz.exists() and (new_dir / "train" / "1_data" / "a.r512.npz").exists()
     assert reg_npz.exists()
+    assert text_cache.exists() and prompts.exists() and reg_text_cache.exists()
     # zip 内 npz 按字典序先于图片落盘，没有 touch 修正会比图片旧
     assert npz.stat().st_mtime >= img.stat().st_mtime
     assert reg_npz.stat().st_mtime >= reg_img.stat().st_mtime
@@ -333,6 +349,7 @@ def test_export_bundle_excludes_latent_cache_by_default(isolated, tmp_path: Path
     (train / "1_data").mkdir(parents=True, exist_ok=True)
     (train / "1_data" / "a.png").write_bytes(_png())
     (train / "1_data" / "a.npz").write_bytes(b"fake-latent")
+    (train / "1_data" / "a.png.text.safetensors").write_bytes(b"fake-text")
 
     dest = tmp_path / "nocache.bundle.zip"
     with db.connection_for(isolated["db"]) as conn:
@@ -343,8 +360,10 @@ def test_export_bundle_excludes_latent_cache_by_default(isolated, tmp_path: Path
     assert result["manifest"]["includes"]["train_latent_cache"] is False
     assert result["manifest"]["includes"]["reg_latent_cache"] is False
     assert result["manifest"]["stats"]["latent_cache_count"] == 0
+    assert result["manifest"]["stats"]["text_cache_count"] == 0
     with zipfile.ZipFile(dest) as zf:
         assert not [n for n in zf.namelist() if n.endswith(".npz")]
+        assert not [n for n in zf.namelist() if n.endswith(".text.safetensors")]
 
 
 def _named_bundle(tmp_path: Path, *, with_preset: bool) -> Path:

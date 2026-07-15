@@ -6,12 +6,12 @@ Top-level repository layout. For Studio's internal module structure see [`studio
 AnimaLoraStudio/
 ├── runtime/                       # Anima runtime core (standalone process; launched by Studio as a subprocess or run via CLI)
 │   ├── anima_train.py             # Training entry
-│   ├── training/                  # Training stack subpackage: context / phases / loop / sample_runner
+│   ├── training/                  # Training stack: context / phases / text cache / loop / sample_runner
 │   │   ├── adapters/              # plugin: lokr / loha / lora
 │   │   ├── optimizers/            # plugin: adamw / automagic / came / lion / prodigy / prodigy_plus_schedulefree / soap / soap_sf
 │   │   ├── schedulers/            # plugin: cosine / cosine_with_restart / cosine_with_warmup / none
 │   │   ├── inference_samplers/    # plugin: er_sde, etc.
-│   │   └── phases/                # bootstrap / models / dataset / optimizer / resume / finalize
+│   │   └── phases/                # bootstrap / models / dataset / text_cache / optimizer / resume / finalize
 │   ├── anima_generate.py          # Image generation: single image / XY matrix
 │   ├── anima_daemon.py            # Inference daemon: keeps the base model and LoRA loaded in GPU
 │   ├── anima_reg_ai.py            # AI prior generation: no LoRA, base model produces reg set

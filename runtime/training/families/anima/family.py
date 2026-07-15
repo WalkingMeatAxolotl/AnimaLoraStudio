@@ -49,7 +49,9 @@ class AnimaFamily:
 
     # ── 文本条件 ─────────────────────────────────────────────────────────
     def prepare_text_cache(self, captions: Iterable[str],
-                           extra_prompts: Iterable[str]) -> None:
+                           extra_prompts: Iterable[str], *, cache_entries=(),
+                           cache_root=None, text=None, device=None,
+                           dtype=None) -> None:
         return None  # Anima 每步在线编码（spec.text.strategy="online"），无缓存
 
     def encode_text_for_batch(self, text, dit, captions, device, dtype, *,

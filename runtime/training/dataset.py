@@ -660,6 +660,26 @@ class ImageDataset(Dataset):
             return None
         return mask
 
+    def caption_for_sample(self, sample) -> str:
+        """解析一个 sample 的最终 caption，不打开图片。
+
+        训练 ``__getitem__``、latent cache wrapper 与 Phase 2 text-cache 预扫共用
+        同一事实源，避免三处 JSON/TXT/override 优先级漂移。caption shuffle/dropout
+        仍由既有处理函数决定；cached_varlen 族在 registry 层禁止这些随机操作，
+        因而预缓存与训练批次得到完全相同的确定文本。
+        """
+        caption = None
+        if self.caption_override is not None:
+            caption = self.caption_override
+        elif sample.get("json_path"):
+            caption = self._process_caption_json(sample["json_path"])
+
+        if caption is None and sample.get("txt_path"):
+            caption = sample["txt_path"].read_text(encoding="utf-8").strip()
+            caption = self._process_caption_txt(caption)
+
+        return "" if caption is None else str(caption)
+
     def __getitem__(self, idx):
         # 默认 path：DataLoader 不能传额外参数，所以由 flip_augment 决定是否随机翻转。
         # CachedLatentDataset 想显式控制 flip 时直接调 get_with_flip(idx, flip=...)，
@@ -680,18 +700,7 @@ class ImageDataset(Dataset):
         img = Image.open(sample["image"]).convert("RGB")
 
         # 获取 caption（正则集可用 caption_override 统一覆盖）
-        caption = None
-        if self.caption_override is not None:
-            caption = self.caption_override
-        elif sample.get("json_path"):
-            caption = self._process_caption_json(sample["json_path"])
-
-        if caption is None and sample.get("txt_path"):
-            caption = sample["txt_path"].read_text(encoding="utf-8").strip()
-            caption = self._process_caption_txt(caption)
-
-        if caption is None:
-            caption = ""
+        caption = self.caption_for_sample(sample)
 
         # 目标尺寸：ARB 桶（native 关）或原生 floor-16 定尺寸（native 开）。统一走
         # _target_size_for；返回 None（base 方桶不分桶档）时退回 target_reso 方桶。
@@ -1311,20 +1320,23 @@ class CachedLatentDataset(Dataset):
         while hasattr(base, "dataset"):
             base = base.dataset
         
-        # 处理 caption（正则集 caption_override 优先）
-        caption = None
-        if getattr(base, "caption_override", None) is not None:
-            caption = base.caption_override
-        elif sample.get("json_path") and hasattr(base, "_process_caption_json"):
-            caption = base._process_caption_json(sample["json_path"])
-        
-        if caption is None and sample.get("txt_path"):
-            caption = sample["txt_path"].read_text(encoding="utf-8").strip()
-            if hasattr(base, "_process_caption_txt"):
-                caption = base._process_caption_txt(caption)
-        
-        if caption is None:
-            caption = ""
+        # 处理 caption（与 ImageDataset / text-cache 预扫共用同一事实源）
+        if hasattr(base, "caption_for_sample"):
+            caption = base.caption_for_sample(sample)
+        else:  # 非 ImageDataset 的第三方 wrapper：保留 Phase 2 前的 duck-type 行为
+            caption = None
+            if getattr(base, "caption_override", None) is not None:
+                caption = base.caption_override
+            elif sample.get("json_path") and hasattr(base, "_process_caption_json"):
+                caption = base._process_caption_json(sample["json_path"])
+
+            if caption is None and sample.get("txt_path"):
+                caption = sample["txt_path"].read_text(encoding="utf-8").strip()
+                if hasattr(base, "_process_caption_txt"):
+                    caption = base._process_caption_txt(caption)
+
+            if caption is None:
+                caption = ""
         
         return {
             "latent": latent,

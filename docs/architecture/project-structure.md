@@ -6,12 +6,12 @@
 AnimaLoraStudio/
 ├── runtime/                       # Anima 运行时核心（独立进程；Studio 通过 subprocess 拉起，也可单独 CLI 跑）
 │   ├── anima_train.py             # 训练入口
-│   ├── training/                  # 训练栈子包：context / phases / loop / sample_runner
+│   ├── training/                  # 训练栈子包：context / phases / text cache / loop / sample_runner
 │   │   ├── adapters/              # plugin: lokr / loha / lora
 │   │   ├── optimizers/            # plugin: adamw / automagic / came / lion / prodigy / prodigy_plus_schedulefree / soap / soap_sf
 │   │   ├── schedulers/            # plugin: cosine / cosine_with_restart / cosine_with_warmup / none
 │   │   ├── inference_samplers/    # plugin: er_sde 等
-│   │   └── phases/                # bootstrap / models / dataset / optimizer / resume / finalize
+│   │   └── phases/                # bootstrap / models / dataset / text_cache / optimizer / resume / finalize
 │   ├── anima_generate.py          # 出图：单图 / XY 矩阵
 │   ├── anima_daemon.py            # 推理 daemon：常驻 GPU 加载 LoRA 和底模
 │   ├── anima_reg_ai.py            # AI 先验生成：无 LoRA 直接用底模出 reg 集

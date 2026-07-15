@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -72,6 +73,15 @@ def test_cached_varlen_excludes_caption_tag_ops():
     with pytest.raises(ValueError):
         validate_spec(_spec_with("cached_varlen", {"caption_tag_ops"}))
     validate_spec(_spec_with("cached_varlen", {"masked_loss", "text_cache"}))
+
+
+def test_cached_varlen_requires_capability_and_text_fingerprint():
+    with pytest.raises(ValueError, match="text_cache"):
+        validate_spec(_spec_with("cached_varlen", {"masked_loss"}))
+    spec = _spec_with("cached_varlen", {"masked_loss", "text_cache"})
+    spec = replace(spec, text=replace(spec.text, fingerprint=""))
+    with pytest.raises(ValueError, match="TE 指纹"):
+        validate_spec(spec)
 
 
 def test_unknown_capability_rejected():
