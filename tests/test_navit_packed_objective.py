@@ -14,8 +14,8 @@ import pytest
 torch = pytest.importorskip("torch")
 pytest.importorskip("xformers")
 
-from modeling.anima_modeling import Anima
-from modeling.cosmos_predict2_modeling import set_xformers_enabled
+from modeling.anima.anima_modeling import Anima
+from modeling.anima.cosmos_predict2_modeling import set_xformers_enabled
 from training.losses.mse import MseLoss
 from training.navit import navit_packed_forward_and_loss, pack_cross_embeddings
 

@@ -75,7 +75,6 @@ from training.model_loading import (  # noqa: E402
     enable_xformers,
     find_diffusion_pipe_root,
     forward_with_optional_checkpoint,
-    load_module_from_path,
     resolve_path_best_effort,
 )
 from training.text_encoding import (  # noqa: E402

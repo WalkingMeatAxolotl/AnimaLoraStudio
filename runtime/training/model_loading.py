@@ -10,7 +10,6 @@
 内部：
 - _strip_prefixes / _pick_best_prefix_remap — checkpoint key 前缀自动推断
 - _load_safetensors_state_dict / _load_weights_best_effort — 容错加载
-- load_module_from_path — 动态加载 anima_modeling.py
 """
 
 from __future__ import annotations
@@ -78,14 +77,8 @@ def enable_xformers(model):
         for cls in type(model).__mro__
         if getattr(cls, "__module__", None)
     }
-    module_names.update({
-        "modeling.cosmos_predict2_modeling",
-        "models.cosmos_predict2_modeling",  # 兼容外部 diffusion-pipe checkout
-        "cosmos_predict2_modeling",
-        "modeling.anima_modeling",
-        "models.anima_modeling",
-        "anima_modeling",
-    })
+    # exec-load 退役后模块身份唯一（多模型 PR-2a）：MRO 即可覆盖真实模块名
+    # （modeling.anima.cosmos_predict2_modeling / anima_modeling），无需别名广播。
     for module_name in sorted(module_names):
         module = sys.modules.get(module_name)
         fn = getattr(module, "set_xformers_enabled", None) if module is not None else None
@@ -123,44 +116,22 @@ def enable_xformers(model):
 # ============================================================================
 
 def find_diffusion_pipe_root():
-    """查找 diffusion-pipe 模型代码路径。
+    """[deprecated shim] 返回 Anima 模型代码目录（`modeling/anima/`）。
 
-    候选顺序（首个命中即返回）：
-      1. 仓库根 `modeling/`（本仓库自带的模型架构代码，现位置）
-      2. 脚本同目录 `diffusion_models/` / `models/`（CLI 直接 cd 进 scripts/ 跑）
-      3. 仓库根 `models/` / `diffusion_models/`（兼容旧布局 / 外部 diffusion-pipe
-         checkout 把代码放 models/ 的情况）
-      4. 环境变量 `DIFFUSION_PIPE_ROOT`（覆盖路径用）
+    模型代码随仓库发布并走正常 import（exec-load 与外部 diffusion-pipe checkout
+    兼容已退役，多模型 PR-2a）。函数名与返回语义保留 —— 它是 sister 契约 7 名
+    之一（docs/AGENTS.md §3.2「可加不可减不可改签名」），下游把返回值作为
+    `load_anima_model(..., repo_root=)` 透传，该参数现被忽略。
+
+    `DIFFUSION_PIPE_ROOT` 环境变量已不支持：检测到设置时打一次 warning，
+    下个 release 删除此检测。
     """
-    # 注：本模块从 runtime/training/model_loading.py 调用时，__file__ 在 runtime/training/
-    # 下，往上两级才是 repo_root。原 anima_train.py 在 runtime/，只往上一级。
-    # 用 __file__.parent.parent.parent 保持等价语义。
-    module_dir = Path(__file__).resolve().parent  # runtime/training
-    runtime_dir = module_dir.parent                 # runtime
-    repo_root = runtime_dir.parent                  # repo root
-    candidates = [
-        repo_root / "modeling",          # 本仓库自带的模型架构代码（现位置）
-        runtime_dir / "diffusion_models",
-        runtime_dir / "models",
-        repo_root / "models",            # 兼容旧布局 / 外部 diffusion-pipe checkout
-        repo_root / "diffusion_models",
-        Path(os.environ.get("DIFFUSION_PIPE_ROOT", "")) if os.environ.get("DIFFUSION_PIPE_ROOT") else None,
-    ]
-    for candidate in candidates:
-        if candidate and (candidate / "anima_modeling.py").exists():
-            return candidate
-        if candidate and (candidate / "models" / "anima_modeling.py").exists():
-            return candidate / "models"
-    raise RuntimeError("找不到 anima_modeling.py，请设置 DIFFUSION_PIPE_ROOT 或放置模型代码")
-
-
-def load_module_from_path(module_name, file_path):
-    """动态加载 Python 模块。"""
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(module_name, file_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    if os.environ.get("DIFFUSION_PIPE_ROOT"):
+        logger.warning(
+            "DIFFUSION_PIPE_ROOT 已不支持（模型代码随仓库发布，走正常 import），忽略该变量"
+        )
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    return repo_root / "modeling" / "anima"
 
 
 # ============================================================================
