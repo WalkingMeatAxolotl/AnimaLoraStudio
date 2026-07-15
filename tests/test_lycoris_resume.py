@@ -31,6 +31,7 @@ except Exception as e:
     pytest.skip(f"anima_train.py 加载失败: {e}", allow_module_level=True)
 
 from utils.lycoris_adapter import AnimaLycorisAdapter
+from training.families.anima.preset import ANIMA_PRESET
 
 
 class MockDiT(nn.Module):
@@ -46,7 +47,7 @@ def _make_trained_adapter(seed: int = 42) -> tuple[AnimaLycorisAdapter, MockDiT,
     """构造一个跑过若干 step 的 adapter + optimizer，让权重不再是初始化值"""
     torch.manual_seed(seed)
     model = MockDiT()
-    adapter = AnimaLycorisAdapter(algo="lokr", rank=4, alpha=4, factor=8)
+    adapter = AnimaLycorisAdapter(preset=ANIMA_PRESET, algo="lokr", rank=4, alpha=4, factor=8)
     adapter.inject(model)
 
     optimizer = torch.optim.AdamW(adapter.get_params(), lr=1e-3)
@@ -67,7 +68,7 @@ def test_adapter_state_dict_roundtrip_bit_exact(tmp_path):
 
     # 装载到新 adapter
     model2 = MockDiT()
-    adapter2 = AnimaLycorisAdapter(algo="lokr", rank=4, alpha=4, factor=8)
+    adapter2 = AnimaLycorisAdapter(preset=ANIMA_PRESET, algo="lokr", rank=4, alpha=4, factor=8)
     adapter2.inject(model2)
     adapter2.load_state_dict(sd, strict=True)
 
@@ -94,7 +95,7 @@ def test_save_training_state_roundtrip(tmp_path):
 
     # 新一组 adapter+optimizer 加载
     model2 = MockDiT()
-    adapter2 = AnimaLycorisAdapter(algo="lokr", rank=4, alpha=4, factor=8)
+    adapter2 = AnimaLycorisAdapter(preset=ANIMA_PRESET, algo="lokr", rank=4, alpha=4, factor=8)
     adapter2.inject(model2)
     optimizer2 = torch.optim.AdamW(adapter2.get_params(), lr=1e-3)
 
@@ -123,7 +124,7 @@ def test_save_load_preserves_w1_no_decay_grouping(tmp_path):
     save_training_state(state_path, adapter, optimizer, epoch=0, global_step=0)
 
     model2 = MockDiT()
-    adapter2 = AnimaLycorisAdapter(algo="lokr", rank=4, alpha=4, factor=8)
+    adapter2 = AnimaLycorisAdapter(preset=ANIMA_PRESET, algo="lokr", rank=4, alpha=4, factor=8)
     adapter2.inject(model2)
     optimizer2 = torch.optim.AdamW(adapter2.get_params(), lr=1e-3)
     load_training_state(state_path, adapter2, optimizer2)
@@ -153,7 +154,7 @@ def test_legacy_state_dict_strict_false_does_not_crash(tmp_path):
     }, state_path)
 
     model2 = MockDiT()
-    adapter2 = AnimaLycorisAdapter(algo="lokr", rank=4, alpha=4, factor=8)
+    adapter2 = AnimaLycorisAdapter(preset=ANIMA_PRESET, algo="lokr", rank=4, alpha=4, factor=8)
     adapter2.inject(model2)
     optimizer2 = torch.optim.AdamW(adapter2.get_params(), lr=1e-3)
 
@@ -164,7 +165,7 @@ def test_legacy_state_dict_strict_false_does_not_crash(tmp_path):
 def test_model_eval_cascades_to_lycoris_network():
     """model.eval() 必须同步到 LycorisNetwork（否则 sample 时走 dropout 分支报 device mismatch）"""
     model = MockDiT()
-    adapter = AnimaLycorisAdapter(
+    adapter = AnimaLycorisAdapter(preset=ANIMA_PRESET, 
         algo="lokr", rank=4, alpha=4, factor=8,
         rank_dropout=0.1,  # 触发 dropout 分支
     )
@@ -204,7 +205,7 @@ def test_rng_state_restored(tmp_path):
     torch.manual_seed(999)
     random.seed(999)
     model2 = MockDiT()
-    adapter2 = AnimaLycorisAdapter(algo="lokr", rank=4, alpha=4, factor=8)
+    adapter2 = AnimaLycorisAdapter(preset=ANIMA_PRESET, algo="lokr", rank=4, alpha=4, factor=8)
     adapter2.inject(model2)
     optimizer2 = torch.optim.AdamW(adapter2.get_params(), lr=1e-3)
     load_training_state(state_path, adapter2, optimizer2)

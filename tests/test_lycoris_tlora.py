@@ -26,12 +26,13 @@ sys.path.insert(0, str(REPO_ROOT))
 pytest.importorskip("lycoris")
 
 from utils.lycoris_adapter import AnimaLycorisAdapter  # noqa: E402
+from training.families.anima.preset import ANIMA_PRESET
 
 
 def _bare_tlora_adapter(rank: int, min_rank: int, alpha: float) -> AnimaLycorisAdapter:
     """构造 AnimaLycorisAdapter 但不调 inject() — 手动 setup mask buffer +
     单个虚拟 lora 模块占位，让 `_set_tlora_mask` 跑得通。"""
-    adapter = AnimaLycorisAdapter(
+    adapter = AnimaLycorisAdapter(preset=ANIMA_PRESET, 
         algo="tlora",
         rank=rank,
         alpha=float(rank),

@@ -7,7 +7,10 @@ from training.adapters.protocol import AdapterProtocol
 def build(args) -> AdapterProtocol:
     from utils.ortho_adapter import OrthoLoRAAdapter
 
+    from training.families.anima.preset import ANIMA_PRESET
+
     return OrthoLoRAAdapter(
+        preset=ANIMA_PRESET,
         rank=args.lora_rank,
         alpha=args.lora_alpha,
         dropout=float(getattr(args, "lora_dropout", 0.0) or 0.0),

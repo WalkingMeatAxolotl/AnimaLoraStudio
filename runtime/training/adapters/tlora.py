@@ -7,9 +7,11 @@ from training.adapters.protocol import AdapterProtocol
 
 def build(args) -> AdapterProtocol:
     if bool(getattr(args, "tlora_use_ortho", False)):
+        from training.families.anima.preset import ANIMA_PRESET
         from utils.ortho_adapter import OrthoLoRAAdapter
 
         return OrthoLoRAAdapter(
+            preset=ANIMA_PRESET,
             rank=args.lora_rank,
             alpha=args.lora_alpha,
             dropout=float(getattr(args, "lora_dropout", 0.0) or 0.0),
@@ -20,9 +22,11 @@ def build(args) -> AdapterProtocol:
             tlora_alpha_rank_scale=float(getattr(args, "tlora_alpha_rank_scale", 1.0)),
         )
 
-    from utils.lycoris_adapter import AnimaLycorisAdapter
+    from training.families.anima.preset import ANIMA_PRESET
+    from utils.lycoris_adapter import LycorisAdapter
 
-    return AnimaLycorisAdapter(
+    return LycorisAdapter(
+        preset=ANIMA_PRESET,
         algo="tlora",
         rank=args.lora_rank,
         alpha=args.lora_alpha,

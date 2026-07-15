@@ -6,7 +6,7 @@ F.linear——对普通 LoRA 是每层 ~2× FLOPs 的浪费（issue #182）。by
 
 本文件验证：
 1) lora algo (LoCon) 下，bypass=True 与 bypass=False 的 forward / backward 数值等价
-2) AnimaLycorisAdapter(algo='lora') 默认 bypass_mode=True
+2) AnimaLycorisAdapter(preset=ANIMA_PRESET, algo='lora') 默认 bypass_mode=True
 3) DoRA(weight_decompose=True) 强制 bypass_mode=False，避免 lycoris bypass 路径
    不走 wd 分支导致的静默失效
 4) LoKr / LoHa 保持 bypass_mode=False（默认 rebuild，行为不变）
@@ -18,6 +18,7 @@ import torch
 import torch.nn as nn
 
 from utils.lycoris_adapter import AnimaLycorisAdapter
+from training.families.anima.preset import ANIMA_PRESET
 
 pytest.importorskip("lycoris")
 
@@ -135,7 +136,7 @@ def test_adapter_lora_defaults_to_bypass_mode() -> None:
     """algo='lora' 不开 DoRA → 全部模块 bypass_mode=True（issue #182 默认快路径）"""
     torch.manual_seed(0)
     model = MockDiT()
-    adapter = AnimaLycorisAdapter(algo="lora", rank=8, alpha=8)
+    adapter = AnimaLycorisAdapter(preset=ANIMA_PRESET, algo="lora", rank=8, alpha=8)
     adapter.inject(model)
     modes = _bypass_modes(adapter)
     assert modes, "preset 应该至少匹配一个 q/k/v/output_proj"
@@ -146,7 +147,7 @@ def test_adapter_lora_with_dora_forces_rebuild() -> None:
     """algo='lora' + lora_dora=True：DoRA 数学上必须 rebuild，guard 不能让 bypass 静默吞掉 wd 分支"""
     torch.manual_seed(0)
     model = MockDiT()
-    adapter = AnimaLycorisAdapter(
+    adapter = AnimaLycorisAdapter(preset=ANIMA_PRESET, 
         algo="lora", rank=8, alpha=8, weight_decompose=True,
     )
     adapter.inject(model)
@@ -159,7 +160,7 @@ def test_adapter_lokr_keeps_rebuild() -> None:
     """algo='lokr' 行为不变（LoKr 的 bypass 数值等价但路径相当绕，本 PR 不动）"""
     torch.manual_seed(0)
     model = MockDiT()
-    adapter = AnimaLycorisAdapter(algo="lokr", rank=8, alpha=8, factor=8)
+    adapter = AnimaLycorisAdapter(preset=ANIMA_PRESET, algo="lokr", rank=8, alpha=8, factor=8)
     adapter.inject(model)
     modes = _bypass_modes(adapter)
     assert modes
@@ -170,7 +171,7 @@ def test_adapter_loha_keeps_rebuild() -> None:
     """algo='loha' 行为不变（LoHa bypass 内部仍 rebuild，开了反而慢；lycoris changelog 原话）"""
     torch.manual_seed(0)
     model = MockDiT()
-    adapter = AnimaLycorisAdapter(algo="loha", rank=8, alpha=8)
+    adapter = AnimaLycorisAdapter(preset=ANIMA_PRESET, algo="loha", rank=8, alpha=8)
     adapter.inject(model)
     modes = _bypass_modes(adapter)
     assert modes

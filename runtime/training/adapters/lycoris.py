@@ -18,8 +18,10 @@ from training.adapters.protocol import AdapterProtocol
 
 def build(args) -> AdapterProtocol:
     """从 args 读 lora_type / lora_rank / ... 实例化 AnimaLycorisAdapter。"""
-    from utils.lycoris_adapter import AnimaLycorisAdapter
-    return AnimaLycorisAdapter(
+    from training.families.anima.preset import ANIMA_PRESET
+    from utils.lycoris_adapter import LycorisAdapter
+    return LycorisAdapter(
+        preset=ANIMA_PRESET,
         algo=args.lora_type,
         rank=args.lora_rank,
         alpha=args.lora_alpha,

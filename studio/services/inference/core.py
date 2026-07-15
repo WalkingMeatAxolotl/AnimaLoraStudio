@@ -180,7 +180,10 @@ def apply_loras(
             continue
 
         meta = read_lora_meta(path)
+        from training.families.anima.preset import ANIMA_PRESET  # noqa: PLC0415
+
         adapter = AnimaLycorisAdapter(
+            preset=ANIMA_PRESET,
             algo=meta.algo,
             rank=meta.rank,
             alpha=meta.alpha,
