@@ -11,32 +11,21 @@ from typing import Any, Optional
 from ... import secrets
 from .. import eval_registry
 from .downloader import get_status_snapshot
+from .families import FAMILY_ASSETS
 from .paths import (
-    ANIMA_REPO,
-    ANIMA_VAE_PATH,
-    ANIMA_VARIANTS,
     CLTAGGER_VERSIONS,
     DEFAULT_UPSCALER,
-    LATEST_ANIMA,
-    QWEN_FILES,
-    QWEN_REPO,
-    T5_FILES,
-    T5_REPO,
     TAEFLUX_FILES,
     TAEFLUX_REPO,
     UPSCALER_EXTS,
     UPSCALER_VARIANTS,
     WD14_FILES,
-    anima_main_target,
-    anima_vae_target,
     ccip_model_dir,
     cltagger_required_files,
     cltagger_target_root,
     eval_model_target_dir,
     models_root,
-    qwen_dir,
     selected_upscaler,
-    t5_tokenizer_dir,
     taeflux_dir,
     upscaler_dir,
     upscaler_target,
@@ -84,31 +73,13 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
     """
     r = root or models_root()
 
-    anima_variants = []
-    for vname, subpath in ANIMA_VARIANTS.items():
-        target = anima_main_target(r, vname)
-        st = _file_status(target)
-        anima_variants.append({
-            "variant": vname,
-            "is_latest": vname == LATEST_ANIMA,
-            "target_path": str(target),
-            **st,
-        })
-
-    # 用户注册的本地 custom 主模型（PathPicker 选盘上已有的 .safetensors）。
+    # 模型族区块经 FAMILY_ASSETS registry 遍历（多模型 PR-4）；单族时输出与
+    # 旧实现逐字节一致，前端零改动
     models_cfg = secrets.load().models
-    custom_anima = []
-    for p in models_cfg.custom_anima_paths:
-        target = Path(str(p)).expanduser()
-        custom_anima.append({
-            "path": p,
-            "name": target.name,
-            **_file_status(target),
-        })
+    family_sections: dict[str, Any] = {}
+    for _assets in FAMILY_ASSETS.values():
+        family_sections.update(_assets.catalog_sections(r, models_cfg))
 
-    vae_target = anima_vae_target(r)
-    qwen_d = qwen_dir(r)
-    t5_d = t5_tokenizer_dir(r)
     cl_cfg = secrets.load().cltagger
     wd14_cfg = secrets.load().wd14
     eval_cfg = secrets.load().eval_metrics
@@ -244,44 +215,7 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
 
     return {
         "models_root": str(r),
-        "anima_main": {
-            "id": "anima_main",
-            "name": "Anima 主模型",
-            "description": "Cosmos transformer (~4 GB)",
-            "repo": ANIMA_REPO,
-            "variants": anima_variants,
-            "custom": custom_anima,
-            "selected": models_cfg.selected_anima,
-            "latest": LATEST_ANIMA,
-        },
-        "anima_vae": {
-            "id": "anima_vae",
-            "name": "Anima VAE",
-            "description": "qwen_image_vae (~250 MB)",
-            "repo": ANIMA_REPO,
-            "target_path": str(vae_target),
-            **_file_status(vae_target),
-        },
-        "qwen3": {
-            "id": "qwen3",
-            "name": "Qwen3-0.6B-Base",
-            "description": "Text encoder (~1.2 GB)",
-            "repo": QWEN_REPO,
-            "target_dir": str(qwen_d),
-            "files": [
-                {"name": f, **_file_status(qwen_d / f)} for f in QWEN_FILES
-            ],
-        },
-        "t5_tokenizer": {
-            "id": "t5_tokenizer",
-            "name": "T5 tokenizer",
-            "description": "spiece.model 等 3 个 tokenizer 文件（不含权重）",
-            "repo": T5_REPO,
-            "target_dir": str(t5_d),
-            "files": [
-                {"name": f, **_file_status(t5_d / f)} for f in T5_FILES
-            ],
-        },
+        **family_sections,
         "wd14": {
             "id": "wd14",
             "name": "WD14",

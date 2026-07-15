@@ -104,7 +104,7 @@ def remove_custom_anima(body: AnimaCustomModelRequest) -> dict[str, Any]:
     paths = [p for p in cur.models.custom_anima_paths if p != target]
     update: dict[str, Any] = {"custom_anima_paths": paths}
     if cur.models.selected_anima == target:
-        update["selected_anima"] = model_downloader.LATEST_ANIMA
+        update["selected"] = {**cur.models.selected, "anima": model_downloader.LATEST_ANIMA}
     new_models = cur.models.model_copy(update=update)
     secrets.save(cur.model_copy(update={"models": new_models}))
     return model_downloader.build_catalog()
