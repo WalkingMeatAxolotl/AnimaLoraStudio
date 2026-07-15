@@ -28,7 +28,7 @@ class ModelFamily(Protocol):
 
     def load_text(self, text_encoder_path: str, device, dtype, *,
                   t5_tokenizer_path: str = "", comfy_qwen: bool = False,
-                  purpose: str = "train") -> Any: ...
+                  t5_fast: bool = False, purpose: str = "train") -> Any: ...
 
     # ── 文本条件 ─────────────────────────────────────────────────────────
     def prepare_text_cache(self, captions: Iterable[str],

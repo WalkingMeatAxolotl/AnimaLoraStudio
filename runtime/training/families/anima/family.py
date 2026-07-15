@@ -38,12 +38,13 @@ class AnimaFamily:
 
     def load_text(self, text_encoder_path, device, dtype, *,
                   t5_tokenizer_path: str = "", comfy_qwen: bool = False,
-                  purpose: str = "train"):
+                  t5_fast: bool = False, purpose: str = "train"):
         from training.families.anima.loader import load_text_encoders
 
         return load_text_encoders(
             text_encoder_path, t5_tokenizer_path, device, dtype,
             comfy_qwen=(comfy_qwen or purpose == "generate"),
+            t5_fast=t5_fast,
         )
 
     # ── 文本条件 ─────────────────────────────────────────────────────────

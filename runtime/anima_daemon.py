@@ -300,9 +300,11 @@ class ModelCache:
         use_flash = backend == "flash_attn"
         use_xformers = backend == "xformers"
 
+        family = _T.get_family("anima")  # daemon 为 Anima 专属常驻壳（K2 接入形态 Phase 4 定）
         logger.info("loading transformer %s", transformer_path)
-        model = _T.load_anima_model(
-            transformer_path, device, dtype, repo_root, flash_attn=use_flash,
+        model = family.load_dit(
+            transformer_path, device, dtype,
+            attention_backend=("flash_attn" if use_flash else "none"), repo_root=repo_root,
         )
         if use_xformers and not _T.enable_xformers(model):
             raise RuntimeError(
@@ -311,14 +313,12 @@ class ModelCache:
             )
 
         logger.info("loading vae %s", vae_path)
-        vae = _T.load_vae(vae_path, device, vae_dtype, repo_root)
+        vae = family.load_vae(vae_path, device, vae_dtype)
 
         logger.info("loading text encoders %s", text_encoder_path)
-        qwen_model, qwen_tok, t5_tok = _T.load_text_encoders(
-            text_encoder_path,
-            t5_tokenizer_path or None,
-            device,
-            dtype,
+        qwen_model, qwen_tok, t5_tok = family.load_text(
+            text_encoder_path, device, dtype,
+            t5_tokenizer_path=t5_tokenizer_path or None,
             comfy_qwen=text_encoder_backend == "comfy_qwen3",
             t5_fast=t5_tokenizer_backend == "fast",
         )

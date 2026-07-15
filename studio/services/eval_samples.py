@@ -588,14 +588,17 @@ def _default_generator(
 
     progress("[eval-samples] loading base model")
     diffusion_root = _T.find_diffusion_pipe_root()
-    model = _T.load_anima_model(
-        transformer_path, device, dtype, diffusion_root, flash_attn=use_flash
+    family = _T.resolve_family(cfg)  # D8'
+    model = family.load_dit(
+        transformer_path, device, dtype,
+        attention_backend=("flash_attn" if use_flash else "none"), repo_root=diffusion_root,
     )
     if use_xformers:
         _T.enable_xformers(model)
-    vae = _T.load_vae(vae_path, device, dtype, diffusion_root)
-    qwen_model, qwen_tok, t5_tok = _T.load_text_encoders(
-        text_encoder_path, t5_tokenizer_path or None, device, dtype,
+    vae = family.load_vae(vae_path, device, dtype)
+    qwen_model, qwen_tok, t5_tok = family.load_text(
+        text_encoder_path, device, dtype,
+        t5_tokenizer_path=t5_tokenizer_path or None,
     )
 
     checkpoint = version_dir / run["checkpoint"]["path"]

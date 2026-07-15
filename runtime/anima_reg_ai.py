@@ -431,18 +431,23 @@ def main() -> None:
     if t5_tokenizer_path:
         t5_tokenizer_path = _T.resolve_path_best_effort(t5_tokenizer_path, bases)
 
+    family = _T.resolve_family(cfg)  # D8'
     logger.info("加载 Transformer...")
-    model = _T.load_anima_model(transformer_path, device, dtype, repo_root, flash_attn=use_flash)
+    model = family.load_dit(
+        transformer_path, device, dtype,
+        attention_backend=("flash_attn" if use_flash else "none"), repo_root=repo_root,
+    )
     if use_xformers:
         _T.enable_xformers(model)
 
     logger.info("加载 VAE...")
-    vae = _T.load_vae(vae_path, device, dtype, repo_root,
-                      tiling=str(cfg.get("vae_tiling", "auto")))
+    vae = family.load_vae(vae_path, device, dtype,
+                          tiling=str(cfg.get("vae_tiling", "auto")))
 
     logger.info("加载文本编码器...")
-    qwen_model, qwen_tok, t5_tok = _T.load_text_encoders(
-        text_encoder_path, t5_tokenizer_path or None, device, dtype,
+    qwen_model, qwen_tok, t5_tok = family.load_text(
+        text_encoder_path, device, dtype,
+        t5_tokenizer_path=t5_tokenizer_path or None,
     )
 
     model.eval()

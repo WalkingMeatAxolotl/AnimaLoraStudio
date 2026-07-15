@@ -71,10 +71,20 @@ def test_daemon_exact_ksampler_parity_fails_when_xformers_unavailable(monkeypatc
     reached: list[str] = []
 
     monkeypatch.setattr(mod._T, "find_diffusion_pipe_root", lambda: _REPO / "modeling")
-    monkeypatch.setattr(mod._T, "load_anima_model", lambda *args, **kwargs: object())
+    # daemon 加载已经 family 派发（多模型 PR-2b D8'）：mock 面升级为 family 缝
+    class _FakeFamily:
+        def load_dit(self, *args, **kwargs):
+            return object()
+
+        def load_vae(self, *args, **kwargs):
+            reached.append("vae")
+
+        def load_text(self, *args, **kwargs):
+            reached.append("text")
+            return (object(), object(), object())
+
+    monkeypatch.setattr(mod._T, "get_family", lambda _fid: _FakeFamily())
     monkeypatch.setattr(mod._T, "enable_xformers", lambda _model: False)
-    monkeypatch.setattr(mod._T, "load_vae", lambda *args, **kwargs: reached.append("vae"))
-    monkeypatch.setattr(mod._T, "load_text_encoders", lambda *args, **kwargs: reached.append("text"))
 
     with pytest.raises(RuntimeError, match="xformers"):
         cache._load(

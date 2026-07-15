@@ -52,8 +52,13 @@ def get_family(family_id: str):
 
 
 def resolve_family(args):
-    """从 args/config 解析 model_family（缺省 anima，D7 零迁移）。"""
-    return get_family(str(getattr(args, "model_family", "anima") or "anima"))
+    """从 args/cfg 解析 model_family（缺省 anima，D7 零迁移）。支持
+    argparse.Namespace 与 dict 两种载体（旁路调用方的 cfg 是 dict）。"""
+    if isinstance(args, dict):
+        fid = args.get("model_family") or "anima"
+    else:
+        fid = getattr(args, "model_family", "anima") or "anima"
+    return get_family(str(fid))
 
 
 def get_spec(family_id: str) -> ModelSpec:
