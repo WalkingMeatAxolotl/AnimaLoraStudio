@@ -27,7 +27,7 @@ class BaselineTimestepSampler:
         self.mix_low_prob = mix_low_prob
         self.timestep_schedule_shift = timestep_schedule_shift
 
-    def sample(self, bs: int, device) -> torch.Tensor:
+    def sample(self, bs: int, device, *, token_counts=None) -> torch.Tensor:
         return sample_t(
             bs,
             device,

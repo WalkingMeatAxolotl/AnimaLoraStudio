@@ -1,7 +1,7 @@
 """TimestepSamplerProtocol：所有 timestep 采样器的统一接口（ADR 0003 plugin registry）。
 
 设计模仿 training/adapters/protocol.py：
-- 必需 1 个方法：sample(bs, device) -> Tensor
+- 必需 1 个方法：sample(bs, device, *, token_counts=None) -> Tensor
 - 3 个可选 hook：record / maybe_refresh / status —— 默认 no-op；
   自适应采样器（InfoNoise 等）按需 override，纯分布采样器（logit_normal 等）保持 no-op
 
@@ -26,8 +26,13 @@ class TimestepSamplerProtocol(Protocol):
     不想强制继承。runtime_checkable 让单测 `isinstance` 校验仍然能用。
     """
 
-    def sample(self, bs: int, device) -> torch.Tensor:
-        """采样 bs 个 t ∈ (0, 1)。"""
+    def sample(self, bs: int, device, *, token_counts=None) -> torch.Tensor:
+        """采样 bs 个 t ∈ (0, 1)。
+
+        ``token_counts`` 是可选 batch context；需要它的 resolution-aware sampler
+        用 ``requires_token_counts = True`` 声明，loop 才会计算并传入。普通 sampler
+        不承担额外的逐 batch 计算。
+        """
         ...
 
     # ─── 可选 hook：默认 no-op；自适应采样器按需 override ───

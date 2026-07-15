@@ -135,6 +135,17 @@ def _accumulation_step(batch_idx, dl_len, grad_accum):
     return group_size, is_group_end
 
 
+def _sample_timesteps(timestep_sampler, bs: int, device, latents) -> torch.Tensor:
+    """按 sampler 能力声明按需注入 batch context，避免 family 分支进入共享循环。"""
+    if getattr(timestep_sampler, "requires_token_counts", False):
+        return timestep_sampler.sample(
+            bs,
+            device,
+            token_counts=latent_token_counts(latents),
+        )
+    return timestep_sampler.sample(bs, device)
+
+
 def run(ctx: TrainingContext) -> None:
     """跑训练直到 args.epochs 或 args.max_steps 上限。"""
     args = ctx.args
@@ -164,6 +175,10 @@ def run(ctx: TrainingContext) -> None:
             "（基准档 %dpx），作用于采样后的 t。",
             res_shift_base_tokens, _base_reso,
         )
+        if getattr(ctx.timestep_sampler, "applies_resolution_shift", False):
+            raise ValueError(
+                "timestep_shift_resolution_aware 不能与自带分辨率 shift 的 timestep sampler 同时启用"
+            )
 
     for epoch in range(ctx.start_epoch, args.epochs):
         ctx.current_epoch = epoch
@@ -213,7 +228,12 @@ def run(ctx: TrainingContext) -> None:
 
             # Flow Matching：统一通过 timestep_sampler plugin 接口采样
             # （baseline = 4 种 mode；adaptive = InfoNoise 等；接口在 ADR 0003 plugin registry）
-            t = ctx.timestep_sampler.sample(bs, ctx.device)
+            t = _sample_timesteps(
+                ctx.timestep_sampler,
+                bs,
+                ctx.device,
+                navit_latents if navit_latents is not None else latents,
+            )
 
             # 分辨率相关 shift 修正（见 run() 顶部 setup）：navit 逐图 latent 各算各的
             # token 数；批量网格 batch 内同尺寸 → 等值向量。后续 record / sigma_t /
