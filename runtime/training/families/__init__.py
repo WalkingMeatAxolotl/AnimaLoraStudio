@@ -33,6 +33,29 @@ def _register(spec: ModelSpec) -> None:
 _register(ANIMA_SPEC)
 
 
+_FAMILIES: dict[str, object] = {}
+
+
+def get_family(family_id: str):
+    """按族 id 取 ModelFamily 实例（惰性构造）。未知 id → ValueError。"""
+    get_spec(family_id)  # 未知 id 在此报错并列出已注册项
+    fam = _FAMILIES.get(family_id)
+    if fam is None:
+        if family_id == "anima":
+            from training.families.anima.family import AnimaFamily
+
+            fam = AnimaFamily()
+        else:  # pragma: no cover - registry 与 SPECS 同步维护
+            raise ValueError(f"模型族 '{family_id}' 缺少 ModelFamily 实现")
+        _FAMILIES[family_id] = fam
+    return fam
+
+
+def resolve_family(args):
+    """从 args/config 解析 model_family（缺省 anima，D7 零迁移）。"""
+    return get_family(str(getattr(args, "model_family", "anima") or "anima"))
+
+
 def get_spec(family_id: str) -> ModelSpec:
     """按族 id 取 ModelSpec。未知 id → ValueError 并列出已注册项。"""
     try:

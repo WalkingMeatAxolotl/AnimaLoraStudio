@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 class TrainingContext:
     # ─── bootstrap_phase 填充 ───
     args: Any  # argparse.Namespace
+    family: Any = None  # ModelFamily（多模型 PR-2b；resolve_family(args) 产物）
     config_path: Optional[Path] = None
     config_dir: Optional[Path] = None
     device: str = "cpu"

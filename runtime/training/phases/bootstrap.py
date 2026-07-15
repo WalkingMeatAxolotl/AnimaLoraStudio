@@ -156,6 +156,12 @@ def run(ctx: TrainingContext) -> None:
         ctx.args = prompt_for_args(args)
         args = ctx.args
 
+    # 多模型 PR-2b：族解析 fail-fast（args 定稿后、任何权重加载前；未知
+    # model_family 即死。pause snapshot 已 freeze args → 跨 pause 族一致性免费）
+    from training.families import resolve_family
+
+    ctx.family = resolve_family(args)
+
     # 触发词注入：caption 端 tag_worker 把 trigger 写为第一个 tag，这里同步
     # 注入 sample_prompt(s)，让采样图天然带 trigger。pause snapshot 已 freeze
     # trigger_word（写在 args 里），resume 也照此 normalize 一次幂等。
