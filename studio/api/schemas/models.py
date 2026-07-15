@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 class ModelDownloadRequest(BaseModel):
     model_id: str           # "anima_main" | "anima_vae" | "qwen3" | "t5_tokenizer"
-    variant: Optional[str] = None  # 仅 anima_main 用，其他忽略
+    variant: Optional[str] = None  # anima_main / krea2_main 使用，其他忽略
 
 
 class AnimaCustomModelRequest(BaseModel):

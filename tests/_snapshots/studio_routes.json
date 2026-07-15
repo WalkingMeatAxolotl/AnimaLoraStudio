@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 201,
+  "count": 203,
   "routes": [
     {
       "path": "/",
@@ -327,6 +327,22 @@
         "POST"
       ],
       "name": "start_model_download",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/models/krea2/custom",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "remove_custom_krea2",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/models/krea2/custom",
+      "methods": [
+        "POST"
+      ],
+      "name": "add_custom_krea2",
       "type": "APIRoute"
     },
     {

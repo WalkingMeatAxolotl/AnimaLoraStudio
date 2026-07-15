@@ -82,14 +82,18 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
   const dialog = useDialog()
   const { runSave } = useSettingsData()
   const [selectedAnima, setSelectedAnima] = useState<string>('1.0')
+  const [selectedKrea2, setSelectedKrea2] = useState<string>('raw')
   const [showPicker, setShowPicker] = useState(false)
+  const [showKrea2Picker, setShowKrea2Picker] = useState(false)
   const [addingCustom, setAddingCustom] = useState(false)
+  const [addingKrea2Custom, setAddingKrea2Custom] = useState(false)
 
   // 一次性拉 secrets 取 selected_anima（独立 PUT，不进全局 dirty 流程）。模型
   // 根目录已挪到「系统 → 存储位置」、自动配置模型路径已挪到「训练参数」，不在此渲染。
   useEffect(() => {
     void api.getSecrets().then((sec) => {
       setSelectedAnima(sec.models?.selected_anima ?? '1.0')
+      setSelectedKrea2(sec.models?.selected?.krea2 ?? 'raw')
     }).catch(() => { /* 显示用，拉不到不阻塞 */ })
   }, [])
 
@@ -98,6 +102,19 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
     setSelectedAnima(variant)
     try {
       await runSave(() => api.updateSecrets({ models: { selected_anima: variant } }))
+      toast(t('settings.mainModelSelected', { name: variant }), 'success')
+      await reloadCatalog()
+    } catch (e) {
+      toast(String(e), 'error')
+      void reloadCatalog()
+    }
+  }
+
+  const pickKrea2 = async (variant: string) => {
+    if (variant === selectedKrea2) return
+    setSelectedKrea2(variant)
+    try {
+      await runSave(() => api.updateSecrets({ models: { selected: { krea2: variant } } }))
       toast(t('settings.mainModelSelected', { name: variant }), 'success')
       await reloadCatalog()
     } catch (e) {
@@ -141,10 +158,89 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
     }
   }
 
+  const addKrea2Custom = async (picked: string) => {
+    setShowKrea2Picker(false)
+    const path = picked.trim()
+    if (!path) return
+    if (!path.toLowerCase().endsWith('.safetensors')) {
+      toast(t('settings.localModelInvalidExt'), 'error')
+      return
+    }
+    setAddingKrea2Custom(true)
+    try {
+      await runSave(() => api.addCustomKrea2(path))
+      toast(t('settings.localModelAdded', { name: path.split(/[\\/]/).pop() }), 'success')
+      await reloadCatalog()
+    } catch (e) {
+      toast(String(e), 'error')
+    } finally {
+      setAddingKrea2Custom(false)
+    }
+  }
+
+  const removeKrea2Custom = async (path: string) => {
+    const name = path.split(/[\\/]/).pop() || path
+    if (!(await dialog.confirm(t('settings.confirmRemoveLocalModel', { name }), { tone: 'danger' }))) return
+    try {
+      await runSave(() => api.removeCustomKrea2(path))
+      if (path === selectedKrea2) setSelectedKrea2('raw')
+      toast(t('settings.localModelRemoved'), 'success')
+      await reloadCatalog()
+    } catch (e) {
+      toast(String(e), 'error')
+    }
+  }
+
   const error = catalogError
 
+  const renderSharedVae = () => {
+    if (!catalog) return null
+    return (
+      <ModelGroupCard title={catalog.anima_vae.name}>
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-fg-tertiary">{translatedCatalogText(MODEL_DESCRIPTION_KEYS, 'anima_vae', catalog.anima_vae.description, t)} · <code>{catalog.anima_vae.repo}</code></span>
+          <span style={{ flex: 1 }} />
+          <ModelStatusBadge exists={catalog.anima_vae.exists} size={catalog.anima_vae.size} status={catalog.downloads.anima_vae?.status} />
+          <DownloadButton exists={catalog.anima_vae.exists} status={catalog.downloads.anima_vae?.status} busy={busy.has('anima_vae')} onClick={() => void start('anima_vae')} />
+        </div>
+      </ModelGroupCard>
+    )
+  }
+
+  const renderDownloadLogs = (family: 'anima' | 'krea2') => {
+    if (!catalog) return null
+    const downloads = Object.values(catalog.downloads).filter((download) => {
+      if (family === 'krea2') return download.key.startsWith('krea2_')
+      return !download.key.startsWith('krea2_')
+    })
+    const visible = downloads.filter((download) => download.status === 'running' || download.status === 'failed')
+    if (visible.length === 0) return null
+    return (
+      <details className="text-xs">
+        <summary className="cursor-pointer text-fg-tertiary">
+          {t('settings.downloadLogs', { n: visible.length })}
+        </summary>
+        <div className="mt-1 flex flex-col gap-2">
+          {visible.map((download) => (
+            <div key={download.key} className="rounded-sm border border-subtle bg-sunken p-2">
+              <div className="flex items-center gap-2 mb-1">
+                <code className="font-mono text-fg-secondary">{download.key}</code>
+                <ModelStatusBadge exists={download.status === 'done'} size={0} status={download.status} />
+                {download.message && <span className="text-err overflow-hidden text-ellipsis whitespace-nowrap">{download.message}</span>}
+              </div>
+              <pre className="text-xs font-mono text-fg-tertiary max-h-32 overflow-auto whitespace-pre-wrap m-0">
+                {download.log_tail.join('\n') || t('settings.emptyLog')}
+              </pre>
+            </div>
+          ))}
+        </div>
+      </details>
+    )
+  }
+
   return (
-    <SettingsSection id="models" title={t('settings.trainingModelsOneClick')}>
+    <>
+    <SettingsSection id="models" title={t('settings.animaModels')}>
       <SourceSelect
         opt={catalog?.download_source_options?.training}
         onChange={(s) => void setSource('training', s)}
@@ -182,8 +278,8 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
                       title={canSelect ? t('settings.selectDefaultMainModel') : v.exists ? t('settings.downloadInProgress') : t('settings.downloadRequiredFirst')}
                     />
                     <code className="font-mono text-fg-primary w-32 shrink-0">{v.variant}</code>
+                    <span className="flex-1" />
                     <ModelStatusBadge exists={v.exists} size={v.size} status={dl?.status} />
-                    <span style={{ flex: 1 }} />
                     <DownloadButton exists={v.exists} status={dl?.status} busy={busy.has(key)} onClick={() => void start('anima_main', v.variant)} />
                   </li>
                 )
@@ -202,11 +298,11 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
                       title={c.exists ? t('settings.selectDefaultMainModel') : t('settings.localModelMissing')}
                     />
                     <code className="font-mono text-fg-primary w-32 shrink-0 truncate" title={c.path}>{c.name}</code>
+                    <span className="flex-1" />
+                    <span className="text-2xs px-1 py-0.5 rounded-sm bg-overlay text-fg-tertiary shrink-0">{t('settings.storage.customBadge')}</span>
                     {c.exists
                       ? <ModelStatusBadge exists size={c.size} />
                       : <span className="text-err text-2xs">{t('settings.localModelMissing')}</span>}
-                    <span className="text-2xs px-1 py-0.5 rounded-sm bg-overlay text-fg-tertiary shrink-0">{t('settings.storage.customBadge')}</span>
-                    <span style={{ flex: 1 }} />
                     <button
                       onClick={() => void removeCustom(c.path)}
                       className="btn btn-secondary btn-sm shrink-0 min-w-[5rem] justify-center"
@@ -226,14 +322,7 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
           </ModelGroupCard>
 
           {/* VAE */}
-          <ModelGroupCard title={catalog.anima_vae.name}>
-            <div className="flex items-center gap-2 text-xs">
-              <span className="text-fg-tertiary">{translatedCatalogText(MODEL_DESCRIPTION_KEYS, 'anima_vae', catalog.anima_vae.description, t)} · <code>{catalog.anima_vae.repo}</code></span>
-              <span style={{ flex: 1 }} />
-              <ModelStatusBadge exists={catalog.anima_vae.exists} size={catalog.anima_vae.size} status={catalog.downloads.anima_vae?.status} />
-              <DownloadButton exists={catalog.anima_vae.exists} status={catalog.downloads.anima_vae?.status} busy={busy.has('anima_vae')} onClick={() => void start('anima_vae')} />
-            </div>
-          </ModelGroupCard>
+          {renderSharedVae()}
 
           {/* Qwen3 + T5（CLTagger 已挪到「打标」tab） */}
           {(['qwen3', 't5_tokenizer'] as const).map((id) => {
@@ -253,28 +342,7 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
             )
           })}
 
-          {/* 下载日志 */}
-          {Object.values(catalog.downloads).filter((d) => d.status === 'running' || d.status === 'failed').length > 0 && (
-            <details className="text-xs">
-              <summary className="cursor-pointer text-fg-tertiary">
-                {t('settings.downloadLogs', { n: Object.values(catalog.downloads).filter((d) => d.status === 'running' || d.status === 'failed').length })}
-              </summary>
-              <div className="mt-1 flex flex-col gap-2">
-                {Object.values(catalog.downloads).map((d) => (
-                  <div key={d.key} className="rounded-sm border border-subtle bg-sunken p-2">
-                    <div className="flex items-center gap-2 mb-1">
-                      <code className="font-mono text-fg-secondary">{d.key}</code>
-                      <ModelStatusBadge exists={d.status === 'done'} size={0} status={d.status} />
-                      {d.message && <span className="text-err overflow-hidden text-ellipsis whitespace-nowrap">{d.message}</span>}
-                    </div>
-                    <pre className="text-xs font-mono text-fg-tertiary max-h-32 overflow-auto whitespace-pre-wrap m-0">
-                      {d.log_tail.join('\n') || t('settings.emptyLog')}
-                    </pre>
-                  </div>
-                ))}
-              </div>
-            </details>
-          )}
+          {renderDownloadLogs('anima')}
         </div>
       )}
       {showPicker && (
@@ -285,6 +353,122 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
         />
       )}
     </SettingsSection>
+    <SettingsSection id="krea2-models" title={t('settings.krea2Models')}>
+      <SourceSelect
+        opt={catalog?.download_source_options?.training}
+        onChange={(source) => void setSource('training', source)}
+      />
+
+      {error && <div className="text-err text-xs font-mono">{error}</div>}
+      {!catalog ? (
+        <p className="text-fg-tertiary text-xs">{t('settings.loadingModelCatalog')}</p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          <ModelGroupCard
+            title={catalog.krea2_main.name}
+            helpTooltip={
+              <>
+                <p><Trans i18nKey="settings.repoHelp" values={{ desc: translatedCatalogText(MODEL_DESCRIPTION_KEYS, 'krea2_main', catalog.krea2_main.description, t), repo: catalog.krea2_main.repo }} components={{ code: <code /> }} /></p>
+                <p>
+                  <a href={catalog.krea2_main.license_url} target="_blank" rel="noreferrer" className="text-accent hover:underline">
+                    {t('settings.krea2LicenseNotice', { license: catalog.krea2_main.license })}
+                  </a>
+                </p>
+              </>
+            }
+          >
+            <ul className="list-none m-0 p-0 flex flex-col gap-1">
+              {catalog.krea2_main.variants.map((variant) => {
+                const key = `krea2_main:${variant.variant}`
+                const download = catalog.downloads[key]
+                const isSelected = variant.variant === selectedKrea2
+                const canSelect = variant.exists && download?.status !== 'running'
+                return (
+                  <li key={variant.variant} className={`flex items-center gap-2 text-xs px-1.5 py-1 rounded-sm ${
+                    isSelected ? 'bg-accent-soft border border-accent' : 'bg-transparent border border-transparent'
+                  }`}>
+                    <input type="radio" name="krea2_variant" checked={isSelected} disabled={!canSelect}
+                      onChange={() => void pickKrea2(variant.variant)}
+                      className="shrink-0"
+                      style={{ accentColor: 'var(--accent)' }}
+                      title={canSelect ? t('settings.selectDefaultMainModel') : variant.exists ? t('settings.downloadInProgress') : t('settings.downloadRequiredFirst')}
+                    />
+                    <code className="font-mono text-fg-primary w-32 shrink-0">{variant.variant}</code>
+                    <span className="flex-1" />
+                    <ModelStatusBadge exists={variant.exists} size={variant.size} status={download?.status} />
+                    <DownloadButton exists={variant.exists} status={download?.status} busy={busy.has(key)} onClick={() => void start('krea2_main', variant.variant)} />
+                  </li>
+                )
+              })}
+              {catalog.krea2_main.custom.map((custom) => {
+                const isSelected = custom.path === selectedKrea2
+                return (
+                  <li key={custom.path} className={`flex items-center gap-2 text-xs px-1.5 py-1 rounded-sm ${
+                    isSelected ? 'bg-accent-soft border border-accent' : 'bg-transparent border border-transparent'
+                  }`}>
+                    <input type="radio" name="krea2_variant" checked={isSelected} disabled={!custom.exists}
+                      onChange={() => void pickKrea2(custom.path)}
+                      className="shrink-0"
+                      style={{ accentColor: 'var(--accent)' }}
+                      title={custom.exists ? t('settings.selectDefaultMainModel') : t('settings.localModelMissing')}
+                    />
+                    <code className="font-mono text-fg-primary w-32 shrink-0 truncate" title={custom.path}>{custom.name}</code>
+                    <span className="flex-1" />
+                    <span className="text-2xs px-1 py-0.5 rounded-sm bg-overlay text-fg-tertiary shrink-0">{t('settings.storage.customBadge')}</span>
+                    {custom.exists
+                      ? <ModelStatusBadge exists size={custom.size} />
+                      : <span className="text-err text-2xs">{t('settings.localModelMissing')}</span>}
+                    <button
+                      onClick={() => void removeKrea2Custom(custom.path)}
+                      className="btn btn-secondary btn-sm shrink-0 min-w-[5rem] justify-center"
+                      title={t('settings.removeLocalModel')}
+                    >🗑 {t('settings.removeLocalModelShort')}</button>
+                  </li>
+                )
+              })}
+            </ul>
+            <button
+              onClick={() => setShowKrea2Picker(true)}
+              disabled={addingKrea2Custom}
+              className="btn btn-ghost btn-sm self-start mt-1"
+            >
+              {addingKrea2Custom ? t('common.saving') : t('settings.addLocalModel')}
+            </button>
+          </ModelGroupCard>
+
+          {/* Krea 2 与 Anima 共享同一份 Qwen-Image VAE。 */}
+          {renderSharedVae()}
+
+          {(() => {
+            const id = 'krea2_text_encoder' as const
+            const model = catalog[id]
+            const download = catalog.downloads[id]
+            const allExist = model.files.every((file) => file.exists)
+            const totalSize = model.files.reduce((sum, file) => sum + file.size, 0)
+            return (
+              <ModelGroupCard title={model.name}>
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-fg-tertiary">{translatedCatalogText(MODEL_DESCRIPTION_KEYS, id, model.description, t)} · <code>{model.repo}</code></span>
+                  <span style={{ flex: 1 }} />
+                  <ModelStatusBadge exists={allExist} size={totalSize} status={download?.status} fileCount={model.files.length} existsCount={model.files.filter((file) => file.exists).length} />
+                  <DownloadButton exists={allExist} status={download?.status} busy={busy.has(id)} onClick={() => void start(id)} />
+                </div>
+              </ModelGroupCard>
+            )
+          })()}
+
+          {renderDownloadLogs('krea2')}
+        </div>
+      )}
+      {showKrea2Picker && (
+        <PathPicker
+          initialPath={catalog?.models_root ?? undefined}
+          onPick={(path) => void addKrea2Custom(path)}
+          onClose={() => setShowKrea2Picker(false)}
+        />
+      )}
+    </SettingsSection>
+    </>
   )
 }
 

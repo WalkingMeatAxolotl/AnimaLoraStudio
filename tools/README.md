@@ -30,10 +30,12 @@ python tools/select_torch_index.py     # 检测到 → 输出 URL；否则静默
 ## 模型 / 环境 setup
 
 ### `download_models.py`
-下载 Anima 训练所需的全部模型 + tokenizer（CLI 薄壳，逻辑在 `studio.services.model_downloader`，跟 Studio 设置页 UI 共用）。
+下载 Anima / Krea 2 训练所需模型 + tokenizer（CLI 薄壳，逻辑在 `studio.services.model_downloader`，跟 Studio 设置页 UI 共用）。
 
 ```
 python tools/download_models.py
+python tools/download_models.py --family krea2
+python tools/download_models.py --family krea2 --variant turbo
 python tools/download_models.py --variant preview3-base
 python tools/download_models.py --no-mirror              # 不走 ModelScope 镜像
 python tools/download_models.py --skip-main --skip-vae

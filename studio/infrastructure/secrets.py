@@ -497,10 +497,9 @@ class ModelsConfig(BaseModel):
       `custom_anima_paths` 里某个本地 `.safetensors` 绝对路径。Studio 创建新
       version 时根据此字段把 `transformer_path` 写成绝对路径到 yaml；已存在
       version 不动（保证训练重现性）。
-    - `custom_anima_paths`：用户通过设置页 PathPicker 注册的本地主模型权重
-      （`.safetensors` 绝对路径列表）。用来微调训练 / 在微调权重上测试出图。
-      仅注册路径，不下载、不复制；条目失效（文件被删/移走）时解析自动回退到
-      官方 variant。
+    - `custom`：按模型族保存用户通过 PathPicker 注册的本地主模型权重。
+      `custom_anima_paths` 保留为旧客户端兼容读写面。仅注册路径，不下载、
+      不复制；条目失效时解析自动回退到官方 variant。
     - `selected_upscaler`：预处理默认放大器。可为预设 label（如 "4x-AnimeSharp"）
       或自定义/上传的文件名（如 "my-anime-model.pth"）。空串/None → 用
       DEFAULT_UPSCALER 兜底。
@@ -515,21 +514,31 @@ class ModelsConfig(BaseModel):
     # 老键 selected_anima 由 before-validator 迁移（settings PUT 的 merged dict
     # 会同时带两键——入站 selected_anima 优先，覆盖 merge 进来的旧 selected）。
     selected: dict[str, str] = Field(default_factory=lambda: {"anima": "1.0"})
-    custom_anima_paths: list[str] = Field(default_factory=list)
+    # per-family 本地主模型路径。老键 custom_anima_paths 由 validator 迁移，
+    # computed_field 保留旧客户端读面。
+    custom: dict[str, list[str]] = Field(default_factory=dict)
     selected_upscaler: str = "4x-AnimeSharp"
     auto_sync_paths: bool = True
 
     @model_validator(mode="before")
     @classmethod
-    def _migrate_selected_anima(cls, data):
-        """老键 selected_anima → selected["anima"]（入站键覆盖，读写两路兼容）。"""
-        if isinstance(data, dict) and "selected_anima" in data:
+    def _migrate_legacy_model_fields(cls, data):
+        """迁移 Anima 老键，同时保留按 family 的新结构。"""
+        if isinstance(data, dict) and (
+            "selected_anima" in data or "custom_anima_paths" in data
+        ):
             data = dict(data)
-            legacy = data.pop("selected_anima")
-            sel = dict(data.get("selected") or {})
-            if legacy:
-                sel["anima"] = str(legacy)
-            data["selected"] = sel
+            if "selected_anima" in data:
+                legacy_selected = data.pop("selected_anima")
+                selected = dict(data.get("selected") or {})
+                if legacy_selected:
+                    selected["anima"] = str(legacy_selected)
+                data["selected"] = selected
+            if "custom_anima_paths" in data:
+                legacy_custom = data.pop("custom_anima_paths")
+                custom = dict(data.get("custom") or {})
+                custom["anima"] = list(legacy_custom or [])
+                data["custom"] = custom
         return data
 
     @computed_field  # type: ignore[prop-decorator]
@@ -537,6 +546,12 @@ class ModelsConfig(BaseModel):
     def selected_anima(self) -> str:
         """兼容读面（前端 settings 读 + dump 落盘回显）；写请走 selected。"""
         return self.selected.get("anima") or "1.0"
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def custom_anima_paths(self) -> list[str]:
+        """兼容旧客户端的 Anima 本地模型列表；写请走 custom。"""
+        return list(self.custom.get("anima") or [])
 
 
 class GenerateConfig(BaseModel):

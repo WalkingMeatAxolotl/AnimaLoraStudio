@@ -1,9 +1,7 @@
 """逐模型高层下载流程 + 异步状态跟踪（PR-3.8 拆出 4-way 第 3 个）。
 
-含 download_anima_main / download_anima_vae / download_qwen3 / download_t5_tokenizer /
-download_cltagger / download_upscaler[_custom] / download_wd14 / download_taeflux 8 个
-逐模型函数，调 sources.py 的 download_flat[_ms] 实际下载，调 paths.py 拿
-target Path 和模型清单常量。
+含 Anima / Krea 2 训练资产与各类工具模型的逐模型下载函数，调 sources.py 的
+download_flat[_ms] 实际下载，调 paths.py / families 拿 target Path 和模型清单。
 
 异步：DownloadStatus / start_download_async / trigger 把同步下载包成后台 thread，
 向 event_bus 推 model_download_changed。
@@ -32,6 +30,14 @@ from .families.anima import (
     qwen_dir,
     selected_anima_variant,
     t5_tokenizer_dir,
+)
+from .families.krea2 import (
+    KREA2_VARIANTS,
+    LATEST_KREA2,
+    QWEN3_VL_FILES,
+    QWEN3_VL_REPO,
+    krea2_main_target,
+    qwen3_vl_dir,
 )
 from .paths import (
     CLTAGGER_VERSIONS,
@@ -98,6 +104,55 @@ def download_anima_vae(root: Path, *, on_log: Callable[[str], None] = print) -> 
     if _sources._source_for("training") == "modelscope":
         return _sources.download_flat_ms(ANIMA_REPO, ANIMA_VAE_PATH, target, on_log=on_log)
     return _sources.download_flat(ANIMA_REPO, ANIMA_VAE_PATH, target, on_log=on_log)
+
+
+def download_krea2_main(
+    root: Path, variant: str, *, on_log: Callable[[str], None] = print
+) -> bool:
+    """从 HuggingFace 官方仓库或 ModelScope Comfy-Org 镜像下载 Krea2。"""
+    if variant == "latest":
+        variant = LATEST_KREA2
+    info = KREA2_VARIANTS.get(variant)
+    if info is None:
+        on_log(f"✗ 未知 Krea 2 variant {variant!r}")
+        return False
+    target = krea2_main_target(root, variant)
+    on_log(f"\n📥 Krea 2 [{variant}] (~26.3 GB) → {target}")
+    if _sources._source_for("training") == "modelscope":
+        return _sources.download_flat_ms(
+            str(info["ms_repo"]), str(info["ms_subpath"]), target, on_log=on_log,
+        )
+    return _sources.download_flat(
+        str(info["repo"]), str(info["subpath"]), target, on_log=on_log,
+    )
+
+
+def download_qwen3_vl(
+    root: Path, *, on_log: Callable[[str], None] = print
+) -> bool:
+    """下载 Krea 2 使用的完整 Qwen3-VL-4B-Instruct transformers 目录。"""
+    target_dir = qwen3_vl_dir(root)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    use_modelscope = _sources._source_for("training") == "modelscope"
+    source_label = "ModelScope" if use_modelscope else "HuggingFace"
+    on_log(
+        f"\n📥 Krea 2 文本编码器 Qwen3-VL-4B-Instruct "
+        f"(~8.89 GB, {source_label}) → {target_dir}"
+    )
+    ok = True
+    for filename in QWEN3_VL_FILES:
+        target = target_dir / filename
+        if use_modelscope:
+            downloaded = _sources.download_flat_ms(
+                QWEN3_VL_REPO, filename, target, on_log=on_log,
+            )
+        else:
+            downloaded = _sources.download_flat(
+                QWEN3_VL_REPO, filename, target, on_log=on_log,
+            )
+        if not downloaded:
+            ok = False
+    return ok
 
 
 def download_qwen3(root: Path, *, on_log: Callable[[str], None] = print) -> bool:
@@ -491,6 +546,23 @@ def trigger(model_id: str, variant: Optional[str] = None) -> str:
         key = "anima_vae"
         start_download_async(
             key, lambda log: download_anima_vae(root, on_log=log)
+        )
+        return key
+    if model_id == "krea2_main":
+        v = variant or "latest"
+        if v == "latest":
+            v = LATEST_KREA2
+        if v not in KREA2_VARIANTS:
+            raise ValueError(f"unknown Krea 2 variant {variant!r}")
+        key = f"krea2_main:{v}"
+        start_download_async(
+            key, lambda log: download_krea2_main(root, v, on_log=log)
+        )
+        return key
+    if model_id == "krea2_text_encoder":
+        key = "krea2_text_encoder"
+        start_download_async(
+            key, lambda log: download_qwen3_vl(root, on_log=log)
         )
         return key
     if model_id == "qwen3":

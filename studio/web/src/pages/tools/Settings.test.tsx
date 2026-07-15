@@ -138,7 +138,7 @@ const initialServerState = {
     blacklist_tags: [],
     batch_size: 8,
   },
-  models: { root: null, selected_anima: '1.0', selected_upscaler: '4x-AnimeSharp', auto_sync_paths: true },
+  models: { root: null, selected: { anima: '1.0', krea2: 'raw' }, selected_anima: '1.0', custom_anima_paths: [], selected_upscaler: '4x-AnimeSharp', auto_sync_paths: true },
   queue: { light_tasks_during_train: true },
   download_source: 'huggingface',
   modelscope: { token: '' },
@@ -155,6 +155,8 @@ const emptyModelsCatalog = {
     description: 'test',
     repo: 'circlestone-labs/Anima',
     variants: [],
+    custom: [],
+    selected: '1.0',
     latest: 'preview3-base',
   },
   anima_vae: {
@@ -181,6 +183,44 @@ const emptyModelsCatalog = {
     description: 'test',
     repo: 'google/t5-v1_1-xxl',
     target_dir: '/tmp/anima/t5_tokenizer',
+    files: [],
+  },
+  krea2_main: {
+    id: 'krea2_main',
+    name: 'Krea 2 主模型',
+    description: 'test',
+    repo: 'krea/Krea-2-{Raw,Turbo}',
+    variants: [
+      {
+        variant: 'raw', is_latest: true, repo: 'krea/Krea-2-Raw',
+        purpose: 'training', size_estimate: 26_300_000_000,
+        target_path: '/tmp/anima/diffusion_models/krea2-raw-bf16.safetensors',
+        exists: false, size: 0, mtime: 0,
+      },
+      {
+        variant: 'turbo', is_latest: false, repo: 'krea/Krea-2-Turbo',
+        purpose: 'inference', size_estimate: 26_300_000_000,
+        target_path: '/tmp/anima/diffusion_models/krea2-turbo-bf16.safetensors',
+        exists: false, size: 0, mtime: 0,
+      },
+    ],
+    custom: [
+      {
+        path: '/tmp/models/my-krea2.safetensors', name: 'my-krea2.safetensors',
+        exists: true, size: 1024, mtime: 1,
+      },
+    ],
+    selected: 'raw',
+    latest: 'raw',
+    license: 'Krea 2 Community License',
+    license_url: 'https://huggingface.co/krea/Krea-2-Raw/blob/main/LICENSE.pdf',
+  },
+  krea2_text_encoder: {
+    id: 'krea2_text_encoder',
+    name: 'Krea 2 · Qwen3-VL-4B-Instruct',
+    description: 'test',
+    repo: 'Qwen/Qwen3-VL-4B-Instruct',
+    target_dir: '/tmp/anima/text_encoders/Qwen_Qwen3-VL-4B-Instruct',
     files: [],
   },
   wd14: {
@@ -255,6 +295,37 @@ beforeEach(() => {
       return Promise.resolve(
         new Response(JSON.stringify(emptyModelsCatalog), { status: 200 })
       )
+    }
+    if (typeof url === 'string' && url.includes('/api/torch/status')) {
+      return Promise.resolve(new Response(JSON.stringify({
+        installed: true,
+        version: '2.7.0+cu128',
+        cuda_build: 'cu128',
+        cuda_available: true,
+        device_name: 'Test GPU',
+        cuda_detect: { available: true, driver_version: '555.0', gpu_name: 'Test GPU' },
+        recommended_cu_tag: 'cu128',
+        is_cpu_with_gpu: false,
+        is_cuda_build_unavailable: false,
+      }), { status: 200 }))
+    }
+    if (typeof url === 'string' && url.includes('/api/flash-attention/status')) {
+      return Promise.resolve(new Response(JSON.stringify({
+        installed: false,
+        version: null,
+        env: {
+          python_tag: 'cp313', cuda_tag: 'cu128', cuda_ver: '12.8',
+          driver_cuda_ver: '12.8', torch_tag: 'torch2.7', torch_ver: '2.7.0',
+          torch_cuda_build: 'cu128', platform: 'win_amd64',
+        },
+        candidates: [],
+        fetch_error: null,
+      }), { status: 200 }))
+    }
+    if (typeof url === 'string' && url.includes('/api/xformers/status')) {
+      return Promise.resolve(new Response(JSON.stringify({
+        installed: false, version: null,
+      }), { status: 200 }))
     }
     if (typeof url === 'string' && url.includes('/api/wd14/runtime')) {
       return Promise.resolve(
@@ -369,6 +440,31 @@ describe('SettingsPage (PP0)', () => {
       const body = JSON.parse(String(putCall![1].body))
       expect(body.download_sources).toEqual({ wd14: 'modelscope' })
     })
+  })
+
+  it('splits Anima and Krea2 into separate model sections', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: '训练' }))
+    expect(await screen.findByRole('heading', { name: 'Anima 模型' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Krea2 模型' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Krea 2 主模型' })).toBeInTheDocument()
+    expect(screen.getByText('Krea 2 · Qwen3-VL-4B-Instruct')).toBeInTheDocument()
+    expect(screen.getByText('raw')).toBeInTheDocument()
+    expect(screen.getByText('turbo')).toBeInTheDocument()
+    expect(screen.getByText('my-krea2.safetensors')).toBeInTheDocument()
+    const customRow = screen.getByText('my-krea2.safetensors').closest('li')
+    expect(customRow).not.toBeNull()
+    const customRowChildren = Array.from(customRow!.children)
+    const rightSpacerIndex = customRowChildren.findIndex((child) => child.classList.contains('flex-1'))
+    const customBadgeIndex = customRowChildren.findIndex((child) => child.classList.contains('bg-overlay'))
+    const statusBadgeIndex = customRowChildren.findIndex((child) => child.classList.contains('bg-ok-soft'))
+    expect(rightSpacerIndex).toBeGreaterThan(-1)
+    expect(customBadgeIndex).toBeGreaterThan(rightSpacerIndex)
+    expect(statusBadgeIndex).toBeGreaterThan(customBadgeIndex)
+    expect(screen.getAllByRole('radio')).toHaveLength(3)
+    expect(screen.queryByText(/推荐工作流/)).not.toBeInTheDocument()
   })
 
   it('shows LLM request pool controls on the tagging settings tab', async () => {
