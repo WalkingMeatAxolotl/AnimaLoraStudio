@@ -1,4 +1,9 @@
-"""Strict Krea2 Raw checkpoint inspection and loading.
+"""Strict single-file Krea2 checkpoint inspection and loading.
+
+接受 Comfy/musubi 单文件布局（非 diffusers 分片布局）。**Raw 与 Turbo
+结构全等（同键同形状）——本 loader 对两者一视同仁，无法也不尝试区分**；
+「Turbo 不建议做训练底模」的防呆靠 studio 侧 catalog variant 的 purpose
+元数据（P4-4），不在加载层。
 
 The meta-device + ``assign=True`` loading strategy was adapted from
 kohya-ss/musubi-tuner (Apache-2.0):
@@ -6,8 +11,7 @@ Copyright 2026 Kohya S. and musubi-tuner contributors.
 https://github.com/kohya-ss/musubi-tuner/blob/8934cfbbb4b9bcfa8071ce209129f0c5eb5df2e6/src/musubi_tuner/krea2/krea2_utils.py
 
 Fingerprint validation, prefix handling, and diagnostics are original to this
-repository. The loader deliberately accepts the Comfy/musubi ``raw.safetensors``
-layout, not diffusers' renamed sharded transformer layout.
+repository.
 """
 
 from __future__ import annotations
@@ -34,9 +38,11 @@ _FLOAT_DTYPES = {
     "F16",
     "F32",
     "F64",
-    "F8_E4M3",
-    "F8_E5M2",
 }
+# fp8 是运行时量化技术（load-time 量化 + Linear forward patch + scale buffer），
+# 不是 checkpoint 交换格式——社区的「纯 fp8 cast」权重若静默 upcast 回 bf16，
+# 显存零收益还丢精度（A7'/C13）。显式报错并指路 bf16 版本。
+_FP8_DTYPES = {"F8_E4M3", "F8_E5M2"}
 
 
 @dataclass(frozen=True)
@@ -92,7 +98,7 @@ def _choose_prefix(source_keys: list[str], expected_keys: set[str]) -> str:
             if diffusers_hint
             else ""
         )
-        raise ValueError(f"不是可识别的 Krea2 Raw checkpoint：结构指纹零命中{hint}")
+        raise ValueError(f"不是可识别的 Krea2 checkpoint：结构指纹零命中{hint}")
     return best_prefix
 
 
@@ -138,6 +144,7 @@ def _inspect(
 
         shape_mismatches = []
         dtype_mismatches = []
+        fp8_keys = []
         for normalized in sorted(expected_keys & actual_keys):
             source_key = normalized_to_source[normalized]
             tensor_slice = handle.get_slice(source_key)
@@ -148,8 +155,17 @@ def _inspect(
                     f"{normalized}: {actual_shape} != {expected_shape}"
                 )
             actual_dtype = tensor_slice.get_dtype()
-            if actual_dtype not in _FLOAT_DTYPES:
+            if actual_dtype in _FP8_DTYPES:
+                fp8_keys.append(normalized)
+            elif actual_dtype not in _FLOAT_DTYPES:
                 dtype_mismatches.append(f"{normalized}: {actual_dtype}")
+        if fp8_keys:
+            raise ValueError(
+                f"Krea2 checkpoint 含 fp8 参数（{len(fp8_keys)} 个，如 "
+                f"{fp8_keys[0]}）。fp8 是推理端运行时量化格式，本训练器不支持"
+                f"（静默转回 bf16 显存零收益还丢精度）——请下载 bf16 版本权重"
+                f"（官方 Raw/Turbo 均为 bf16）。"
+            )
         if shape_mismatches:
             sample = "; ".join(shape_mismatches[:5])
             suffix = " ..." if len(shape_mismatches) > 5 else ""
@@ -199,7 +215,7 @@ def load_krea2_model(
     *,
     config: Krea2Config = KREA2_CONFIG,
 ) -> SingleStreamDiT:
-    """Strict-load a Krea2 Raw checkpoint into a frozen meta-created model."""
+    """Strict-load a single-file Krea2 checkpoint into a frozen meta-created model."""
     if dtype not in {torch.float16, torch.bfloat16, torch.float32, torch.float64}:
         raise ValueError(f"Krea2 loader 不支持 dtype={dtype}")
     target_device = torch.device(device)

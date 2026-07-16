@@ -54,6 +54,9 @@ interface ItemDerived {
 }
 
 // 从 catalog 派生底模套件状态（4 个子文件全 exists 算 done）。
+// 刻意只判 Anima 入门套件（约 30GB）：anima 是默认族（D7），首启一键装
+// krea2（Raw 26GB + Qwen3-VL 9GB）对新手不是好默认——文案已注明其它族
+// 去 设置 → 训练 下载（多模型 P4-6）。
 function deriveBaseStatus(c: ModelsCatalog | null, dl: Record<ItemKey, ItemStatus>): ItemDerived {
   if (!c) return { status: 'checking' }
   const animaLatest = c.anima_main.variants.find((v) => v.is_latest)

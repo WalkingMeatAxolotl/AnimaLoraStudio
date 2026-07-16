@@ -449,7 +449,7 @@
       "noise_enhancement_type": "Noise augmentation (default none). offset adds per-sample DC bias to noise; pyramid stacks low-frequency noise at multiple scales. Both alter low-frequency components through different mechanisms; mutually exclusive to prevent stacking. LoRA training defaults to none",
       "noise_offset": "DC bias strength (0-0.2, 0=off). Shifts noise mean away from 0, giving the model exposure to extreme brightness scenes (pure black / pure white / high contrast). Typical range 0.05-0.1; below 0.05 the noise is nearly identical to baseline, above 0.1 the initial loss rises substantially",
       "pyramid_noise_iters": "Number of pyramid noise levels (0-6, 0=off). Each level injects at spatial // 2^(k+1). Effective strength is controlled by pyramid_noise_discount — iters alone determines which frequency bands are covered; layer count makes little difference when discount is low",
-      "pyramid_noise_discount": "Per-level decay coefficient (0.1-0.9). Key knob for low-frequency strength: anima normalizes overall noise std to 1, so discount sets the low-frequency share. 0.1-0.4 leaves noise close to standard Gaussian after normalization (equivalent to off); 0.5-0.7 significantly alters low-frequency structure",
+      "pyramid_noise_discount": "Per-level decay coefficient (0.1-0.9). Key knob for low-frequency strength: this implementation normalizes overall noise std to 1, so discount sets the low-frequency share. 0.1-0.4 leaves noise close to standard Gaussian after normalization (equivalent to off); 0.5-0.7 significantly alters low-frequency structure",
       "timestep_sampling": "Sampling distribution. logit_normal biases the middle (SD3/Anima default); uniform is equal probability; mode is a single-peak shift; mixed_* blends uniform with a biased end (ratio controlled by timestep_mix_low_prob)",
       "timestep_shift": "Internal distribution shift for logit-normal / mode: >1 biases the high-noise end (coarse structure), <1 biases the low-noise end (details)",
       "timestep_mix_low_prob": "Ratio of samples sent to the biased end in mixed_* modes: 0 = all uniform; typical 0.15-0.30",
@@ -991,7 +991,7 @@
       "startMigrate": "Start migration",
       "restartNow": "Restart now",
       "modelsRootLabel": "Models root directory",
-      "modelsRootHelp": "Holds downloaded model weights (Anima / VAE / text encoder / tokenizer / WD14, etc.); defaults to models/ in the app root. Changing the location copies existing weights into a models subdirectory of the chosen directory and takes effect immediately (no restart); the original is kept.",
+      "modelsRootHelp": "Stores downloaded model weights (Anima / Krea 2 / VAE / text encoders / tokenizers / WD14, etc.), defaulting to models/ under the app root. Changing it copies existing weights into a models/ subfolder of the chosen directory and takes effect immediately (no restart); original data is kept.",
       "modelsMigrateTitle": "Migrate models root",
       "modelsKeepOriginalNote": "Data at the original location is kept, not deleted. Takes effect immediately after copying — no restart needed.",
       "modelsDoneNote": "Switched to the new models root, effective immediately (no restart). The original data is kept; delete it yourself once verified.",
@@ -1127,7 +1127,7 @@
     "savePath": "Save path",
     "trainingParams": "Training parameters",
     "autoSyncPathsLabel": "Auto-configure model paths",
-    "autoSyncPathsHelp": "ON (default / most users): when forking a preset to a version, the 4 model path fields (transformer/vae/text_encoder/t5_tokenizer) are auto-overwritten from Settings; these 4 fields are disabled in preset/project pages. OFF (custom-model users): fork respects the absolute paths stored in the preset; the 4 fields become editable with a picker.",
+    "autoSyncPathsHelp": "ON (default / most users): when forking a preset to a version, the model path fields (transformer / VAE / text encoder, varying by model family) are auto-overwritten from Settings; these fields are disabled in preset/project pages. OFF (custom-model users): fork respects the absolute paths stored in the preset; the fields become editable with a picker.",
     "autoSyncPathsOn": "On · fork auto-syncs global",
     "autoSyncPathsOff": "Off · fork respects preset values",
     "defaultTransformerHelp": "The selected version becomes the default transformer for <strong>new versions</strong>.",
@@ -2650,8 +2650,8 @@
     },
     "items": {
       "base": {
-        "label": "Base model bundle",
-        "description": "Anima main + VAE + Qwen3 + T5 — the core models needed for training (about 30 GB total)"
+        "label": "Anima base kit",
+        "description": "Anima main model + VAE + Qwen3 + T5 — the starter models for training (about 30 GB total). Other model families like Krea 2 can be downloaded later in Settings → Training"
       },
       "tagger": {
         "label": "Auto-tagging",

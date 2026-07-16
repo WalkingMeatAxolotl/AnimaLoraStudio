@@ -610,7 +610,7 @@ class TrainingConfig(BaseModel):
     )
     pyramid_noise_discount: float = Field(
         0.5, ge=0.1, le=0.9,
-        description="每层相对衰减系数（0.1-0.9）。控制低频强度的核心参数：anima 实现把整体噪声 std 归一化到 1，所以 discount 决定低频占比。0.1-0.4 归一化后噪声接近标准高斯，等价于关闭；0.5-0.7 显著改变低频结构",
+        description="每层相对衰减系数（0.1-0.9）。控制低频强度的核心参数：本实现把整体噪声 std 归一化到 1，所以 discount 决定低频占比。0.1-0.4 归一化后噪声接近标准高斯，等价于关闭；0.5-0.7 显著改变低频结构",
         json_schema_extra=_meta("noise_augmentation", show_when="noise_enhancement_type==pyramid", advanced=True),
     )
     timestep_sampling: Literal[
