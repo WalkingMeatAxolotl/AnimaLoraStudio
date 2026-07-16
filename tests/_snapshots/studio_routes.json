@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 204,
+  "count": 202,
   "routes": [
     {
       "path": "/",
@@ -298,22 +298,6 @@
       "type": "APIRoute"
     },
     {
-      "path": "/api/models/anima/custom",
-      "methods": [
-        "DELETE"
-      ],
-      "name": "remove_custom_anima",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/models/anima/custom",
-      "methods": [
-        "POST"
-      ],
-      "name": "add_custom_anima",
-      "type": "APIRoute"
-    },
-    {
       "path": "/api/models/catalog",
       "methods": [
         "GET"
@@ -338,27 +322,27 @@
       "type": "APIRoute"
     },
     {
-      "path": "/api/models/krea2/custom",
-      "methods": [
-        "DELETE"
-      ],
-      "name": "remove_custom_krea2",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/models/krea2/custom",
-      "methods": [
-        "POST"
-      ],
-      "name": "add_custom_krea2",
-      "type": "APIRoute"
-    },
-    {
       "path": "/api/models/path-defaults",
       "methods": [
         "GET"
       ],
       "name": "get_models_path_defaults",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/models/{family}/custom",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "remove_custom_model",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/models/{family}/custom",
+      "methods": [
+        "POST"
+      ],
+      "name": "add_custom_model",
       "type": "APIRoute"
     },
     {

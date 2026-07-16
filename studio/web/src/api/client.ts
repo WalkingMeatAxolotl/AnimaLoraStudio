@@ -602,10 +602,16 @@ export interface ModelFileStatus {
   mtime: number
 }
 
-export interface AnimaVariantInfo extends ModelFileStatus {
+/** 族主模型的官方 variant（多模型 P4-5 统一形状；anima 无 purpose/repo 细分）。 */
+export interface FamilyMainVariantInfo extends ModelFileStatus {
   variant: string
   is_latest: boolean
   target_path: string
+  /** variant 级 repo（krea2：Raw/Turbo 各自的 HF 仓库）；anima 用 section repo。 */
+  repo?: string
+  /** 用途声明（krea2：raw=training / turbo=inference）。 */
+  purpose?: 'training' | 'inference'
+  size_estimate?: number
 }
 
 /** 用户注册的本地 custom 主模型（PathPicker 选盘上已有的 .safetensors）。 */
@@ -616,17 +622,21 @@ export interface CustomModelInfo extends ModelFileStatus {
   name: string
 }
 
-export interface AnimaMainCatalog {
-  id: 'anima_main'
+/** 族主模型 catalog 区块的统一形状（anima_main / krea2_main 同构，P4-5）。 */
+export interface FamilyMainCatalog {
+  id: string
   name: string
   description: string
   repo: string
-  variants: AnimaVariantInfo[]
+  variants: FamilyMainVariantInfo[]
   /** 本地注册的 custom 主模型列表。 */
   custom: CustomModelInfo[]
   /** 当前选中的主模型：variant key 或 custom 路径。 */
   selected: string
   latest: string
+  /** 许可展示（krea2 社区许可；anima 无）。 */
+  license?: string
+  license_url?: string
 }
 
 export interface AnimaVaeCatalog extends ModelFileStatus {
@@ -635,29 +645,6 @@ export interface AnimaVaeCatalog extends ModelFileStatus {
   description: string
   repo: string
   target_path: string
-}
-
-export interface Krea2VariantInfo extends ModelFileStatus {
-  variant: 'raw' | 'turbo'
-  is_latest: boolean
-  repo: string
-  purpose: 'training' | 'inference'
-  size_estimate: number
-  target_path: string
-}
-
-export interface Krea2MainCatalog {
-  id: 'krea2_main'
-  name: string
-  description: string
-  repo: string
-  variants: Krea2VariantInfo[]
-  /** 本地注册的 Krea2 主模型列表。 */
-  custom: CustomModelInfo[]
-  selected: string
-  latest: string
-  license: string
-  license_url: string
 }
 
 export interface ModelDirCatalog {
@@ -778,11 +765,11 @@ export interface FamilySwitchResponse {
 
 export interface ModelsCatalog {
   models_root: string
-  anima_main: AnimaMainCatalog
+  anima_main: FamilyMainCatalog
   anima_vae: AnimaVaeCatalog
   qwen3: ModelDirCatalog
   t5_tokenizer: ModelDirCatalog
-  krea2_main: Krea2MainCatalog
+  krea2_main: FamilyMainCatalog
   krea2_text_encoder: ModelDirCatalog
   wd14: WD14Catalog
   cltagger: CLTaggerCatalog
@@ -2053,27 +2040,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
-  /** 注册一个本地 .safetensors 主模型（微调训练 / 微调上测试）。返回新 catalog。 */
-  addCustomAnima: (path: string) =>
-    req<ModelsCatalog>('/api/models/anima/custom', {
+  /** 注册一个本地 .safetensors 主模型到指定族（微调训练 / 微调上测试）。
+   *  返回新 catalog。路由按族参数化（多模型 P4-5）。 */
+  addCustomModel: (family: 'anima' | 'krea2', path: string) =>
+    req<ModelsCatalog>(`/api/models/${family}/custom`, {
       method: 'POST',
       body: JSON.stringify({ path }),
     }),
-  /** 注销一个本地 custom 主模型。返回新 catalog。 */
-  removeCustomAnima: (path: string) =>
-    req<ModelsCatalog>('/api/models/anima/custom', {
-      method: 'DELETE',
-      body: JSON.stringify({ path }),
-    }),
-  /** 注册一个本地 Krea2 .safetensors 主模型。返回新 catalog。 */
-  addCustomKrea2: (path: string) =>
-    req<ModelsCatalog>('/api/models/krea2/custom', {
-      method: 'POST',
-      body: JSON.stringify({ path }),
-    }),
-  /** 注销一个本地 Krea2 主模型。返回新 catalog。 */
-  removeCustomKrea2: (path: string) =>
-    req<ModelsCatalog>('/api/models/krea2/custom', {
+  /** 注销一个本地 custom 主模型；若为该族当前选中则回退最新官方 variant。 */
+  removeCustomModel: (family: 'anima' | 'krea2', path: string) =>
+    req<ModelsCatalog>(`/api/models/${family}/custom`, {
       method: 'DELETE',
       body: JSON.stringify({ path }),
     }),

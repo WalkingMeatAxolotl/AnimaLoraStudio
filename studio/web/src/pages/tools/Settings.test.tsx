@@ -465,6 +465,33 @@ describe('SettingsPage (PP0)', () => {
     expect(statusBadgeIndex).toBeGreaterThan(customBadgeIndex)
     expect(screen.getAllByRole('radio')).toHaveLength(3)
     expect(screen.queryByText(/推荐工作流/)).not.toBeInTheDocument()
+    // purpose 徽标（C10）：krea2 variant 行标注用途（raw=训练 / turbo=推理）
+    const rawRow = screen.getByText('raw').closest('li')!
+    const turboRow = screen.getByText('turbo').closest('li')!
+    expect(within(rawRow).getByText('训练')).toBeInTheDocument()
+    expect(within(turboRow).getByText('推理')).toBeInTheDocument()
+  })
+
+  it('picking a variant writes new-style selected.{family}（多模型 P4-5）', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: '训练' }))
+    await screen.findByRole('heading', { name: 'Krea 2 主模型' })
+    // fixture：官方 variants 都未下载（radio 禁用），只有 custom 可点
+    const customRow = screen.getByText('my-krea2.safetensors').closest('li')!
+    await user.click(within(customRow).getByRole('radio'))
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(
+        ([url, init]) => String(url).includes('/api/secrets') && init?.method === 'PUT'
+      )
+      expect(putCall).toBeDefined()
+      const body = JSON.parse(String(putCall![1].body))
+      // 统一写 selected.{family} 新结构——不再有 anima 写 legacy 键的分叉
+      expect(body).toEqual({
+        models: { selected: { krea2: '/tmp/models/my-krea2.safetensors' } },
+      })
+    })
   })
 
   it('shows LLM request pool controls on the tagging settings tab', async () => {

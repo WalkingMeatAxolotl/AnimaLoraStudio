@@ -740,3 +740,28 @@ def test_wandb_current_preset_falls_back_when_missing(secrets_file: Path) -> Non
     s = secrets.load()
     assert s.wandb.current_preset == "default"
     assert [p.id for p in s.wandb.presets] == ["default", "team_b"]
+
+
+# ---------------------------------------------------------------------------
+# update() 与 models 读兼容键（多模型 P4-5）
+# ---------------------------------------------------------------------------
+
+
+def test_update_new_style_selected_not_clobbered_by_stale_compat(secrets_file: Path) -> None:
+    """写新结构 selected.{family} 不被 merge base 里过期的 computed 读兼容键
+    （selected_anima）覆盖——修掉 Settings 双写路径（pickAnima 写 legacy /
+    pickKrea2 写新键）的根因。"""
+    secrets.update({"models": {"selected": {"anima": "1.0", "krea2": "raw"}}})
+    updated = secrets.update({"models": {"selected": {"anima": "preview2"}}})
+    assert updated.models.selected["anima"] == "preview2"
+    # deep-merge：另一族的 selected 不丢
+    assert updated.models.selected["krea2"] == "raw"
+    # 读兼容面跟随新值
+    assert updated.models.selected_anima == "preview2"
+
+
+def test_update_incoming_legacy_key_still_wins(secrets_file: Path) -> None:
+    """老客户端仍然只发 legacy 键：真正入站的 selected_anima 照旧生效。"""
+    secrets.update({"models": {"selected": {"anima": "1.0"}}})
+    updated = secrets.update({"models": {"selected_anima": "preview3-base"}})
+    assert updated.models.selected["anima"] == "preview3-base"

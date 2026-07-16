@@ -228,6 +228,8 @@ def catalog_sections(root: Path, models_cfg: Any) -> dict[str, Any]:
 class _Krea2Assets:
     family_id = "krea2"
     display_name = "Krea 2"
+    #: 注销 custom 时 selected 的回退目标（最新官方 variant key）
+    latest = LATEST_KREA2
 
     default_paths_for_new_version = staticmethod(default_paths_for_new_version)
     transformer_path_for = staticmethod(krea2_transformer_path_for)

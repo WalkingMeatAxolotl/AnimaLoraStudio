@@ -704,6 +704,14 @@ def update(partial: dict[str, Any]) -> Secrets:
     - 未提及的字段沿用旧值。
     """
     current_dict = load().model_dump()
+    # 剥离 models 的 read-compat computed 键（selected_anima / custom_anima_paths）：
+    # 它们不是存储字段，留在 merge base 里会以「入站 legacy 键」的身份经
+    # _migrate_legacy_model_fields 覆盖 partial 新写入的 selected/custom。
+    # 真正入站的 legacy 键（老客户端）在 partial 里，照旧获胜。
+    models_base = current_dict.get("models")
+    if isinstance(models_base, dict):
+        models_base.pop("selected_anima", None)
+        models_base.pop("custom_anima_paths", None)
     merged = _deep_merge(current_dict, partial)
     new = Secrets.model_validate(merged)
     save(new)

@@ -139,33 +139,37 @@ def start_model_download(body: ModelDownloadRequest) -> dict[str, Any]:
     return {"key": key, "status": snap.get(key, {}).get("status", "running")}
 
 
-@router.post("/api/models/anima/custom")
-def add_custom_anima(body: AnimaCustomModelRequest) -> dict[str, Any]:
+def _assets_or_400(family: str):
+    from ...services.models.families import get_assets
+
+    try:
+        return get_assets(family)
+    except ValueError as exc:
+        raise ValidationError(
+            f"Unknown model family: {family}",
+            code="model.family_invalid", details={"reason": str(exc)},
+            http_status=400,
+        ) from exc
+
+
+@router.post("/api/models/{family}/custom")
+def add_custom_model(family: str, body: AnimaCustomModelRequest) -> dict[str, Any]:
     """注册一个本地 `.safetensors` 主模型权重（去重 append），返回新 catalog。
 
     仅登记路径，不下载 / 不复制。校验文件存在 + 后缀白名单。注册后可在设置页
-    选作默认主模型，驱动训练新建默认 + 测试出图（在微调权重上炼丹 / 验证）。
+    选作该族默认主模型，驱动训练新建默认 + 测试出图（在微调权重上炼丹 / 验证）。
+    路由按族参数化（多模型 P4-5）：未知族 400。
     """
-    return _add_custom_model("anima", body.path)
+    assets = _assets_or_400(family)
+    return _add_custom_model(assets.family_id, body.path)
 
 
-@router.delete("/api/models/anima/custom")
-def remove_custom_anima(body: AnimaCustomModelRequest) -> dict[str, Any]:
+@router.delete("/api/models/{family}/custom")
+def remove_custom_model(family: str, body: AnimaCustomModelRequest) -> dict[str, Any]:
     """注销一个本地 custom 主模型，返回新 catalog。
 
-    若被删路径正是当前默认（`selected_anima`），把默认重置回最新官方 variant，
+    若被删路径正是该族当前默认，把默认重置回最新官方 variant，
     避免训练 / 出图解析落到已注销的路径。
     """
-    return _remove_custom_model("anima", body.path, model_downloader.LATEST_ANIMA)
-
-
-@router.post("/api/models/krea2/custom")
-def add_custom_krea2(body: AnimaCustomModelRequest) -> dict[str, Any]:
-    """注册本地 Krea2 `.safetensors` 主模型，返回新 catalog。"""
-    return _add_custom_model("krea2", body.path)
-
-
-@router.delete("/api/models/krea2/custom")
-def remove_custom_krea2(body: AnimaCustomModelRequest) -> dict[str, Any]:
-    """注销本地 Krea2 主模型；若当前选中则回退 Raw。"""
-    return _remove_custom_model("krea2", body.path, model_downloader.LATEST_KREA2)
+    assets = _assets_or_400(family)
+    return _remove_custom_model(assets.family_id, body.path, assets.latest)

@@ -228,6 +228,8 @@ class _AnimaAssets:
 
     family_id = "anima"
     display_name = "Anima"
+    #: 注销 custom 时 selected 的回退目标（最新官方 variant key）
+    latest = LATEST_ANIMA
 
     default_paths_for_new_version = staticmethod(default_paths_for_new_version)
     transformer_path_for = staticmethod(anima_transformer_path_for)
