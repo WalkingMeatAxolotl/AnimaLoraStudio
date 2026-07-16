@@ -88,6 +88,7 @@ def test_daemon_exact_ksampler_parity_fails_when_xformers_unavailable(monkeypatc
 
     with pytest.raises(RuntimeError, match="xformers"):
         cache._load(
+            family_id="anima",
             transformer_path="transformer.safetensors",
             vae_path="vae.safetensors",
             text_encoder_path="text_encoder",
@@ -105,12 +106,15 @@ def test_daemon_exact_ksampler_parity_fails_when_xformers_unavailable(monkeypatc
 def test_daemon_worker_reports_error_when_all_images_fail(monkeypatch, tmp_path) -> None:
     mod = importlib.import_module("anima_daemon")
 
+    class _BoomFamily:
+        def sample_image(self, *args, **kwargs):
+            raise RuntimeError("boom")
+
     class FakeCache:
         model = object()
         vae = object()
-        qwen_model = object()
-        qwen_tok = object()
-        t5_tok = object()
+        text_stack = (object(), object(), object())
+        family = _BoomFamily()
         device = "cpu"
         dtype = None
 
@@ -124,7 +128,6 @@ def test_daemon_worker_reports_error_when_all_images_fail(monkeypatch, tmp_path)
 
     monkeypatch.setattr(mod, "CACHE", FakeCache())
     monkeypatch.setattr(mod, "_emit_for", lambda req_id, kind, **extra: events.append({"id": req_id, "kind": kind, **extra}))
-    monkeypatch.setattr(mod._T, "sample_image", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
 
     mod._run_generate_worker(
         "req-1",
@@ -152,12 +155,16 @@ def test_daemon_restores_runtime_to_device_after_successful_generate(monkeypatch
 
     events: list[str] = []
 
+    class _RecordingFamily:
+        def sample_image(self, *_args, **_kwargs):
+            events.append("sample_image")
+            return Image.new("RGB", (1, 1))
+
     class FakeCache:
         model = object()
         vae = object()
-        qwen_model = object()
-        qwen_tok = object()
-        t5_tok = object()
+        text_stack = (object(), object(), object())
+        family = _RecordingFamily()
         device = "cuda"
         dtype = None
 
@@ -171,12 +178,7 @@ def test_daemon_restores_runtime_to_device_after_successful_generate(monkeypatch
         def _move_runtime_to_device(self):
             events.append("restore_runtime")
 
-    def fake_sample_image(*_args, **_kwargs):
-        events.append("sample_image")
-        return Image.new("RGB", (1, 1))
-
     monkeypatch.setattr(mod, "CACHE", FakeCache())
-    monkeypatch.setattr(mod._T, "sample_image", fake_sample_image)
     monkeypatch.setattr(
         mod,
         "_emit_for",

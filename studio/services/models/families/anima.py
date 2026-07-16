@@ -233,6 +233,8 @@ class _AnimaAssets:
     transformer_path_for = staticmethod(anima_transformer_path_for)
     selected_variant = staticmethod(selected_anima_variant)
     catalog_sections = staticmethod(catalog_sections)
+    # Anima 无蒸馏推理 variant
+    is_distilled_path = staticmethod(lambda path: False)
 
 
 ASSETS = _AnimaAssets()

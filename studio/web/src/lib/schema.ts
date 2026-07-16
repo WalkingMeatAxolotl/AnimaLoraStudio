@@ -191,10 +191,12 @@ export const SCHEMA_ENUM_LABEL_KEYS: Record<string, Record<string, string>> = {
   sample_sampler_name: {
     er_sde: 'schema.enums.sampler.erSde',
     dpmpp_3m_sde: 'schema.enums.sampler.dpmpp3mSde',
+    euler: 'schema.enums.sampler.euler',
   },
   sample_scheduler: {
     simple: 'schema.enums.scheduler.simple',
     sgm_uniform: 'schema.enums.scheduler.sgmUniform',
+    krea2_shift: 'schema.enums.scheduler.krea2Shift',
   },
 }
 

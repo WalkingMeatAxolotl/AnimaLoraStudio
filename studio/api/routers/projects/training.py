@@ -40,7 +40,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
-from ...deps import _resolve_anima_model_paths
+from ...deps import _resolve_model_paths
 from ...errors import _safe_join_or_400
 from ..logs import read_task_log
 from ...responses import _thumb_response
@@ -439,8 +439,20 @@ def get_reg_caption(pid: int, vid: int, path: str) -> dict[str, Any]:
 
 @router.post("/api/projects/{pid}/versions/{vid}/reg/generate-prior")
 def reg_generate_prior(pid: int, vid: int, body: RegAiRequest) -> dict[str, Any]:
-    """启动先验生成 task —— base 模型给每张 train 图的 tag 反向出对照图。"""
-    model_paths = _resolve_anima_model_paths(body.base_model)
+    """启动先验生成 task —— base 模型给每张 train 图的 tag 反向出对照图。
+
+    模型族跟随该 version 的训练配置（先验生成是 version 级操作，不是请求级
+    选择）：无 config 或未声明时按 anima。
+    """
+    project, ver = _project_and_version_or_404(pid, vid)
+    family = "anima"
+    if version_config.has_version_config(project, ver):
+        try:
+            vc = version_config.read_version_config(project, ver)
+            family = str(vc.get("model_family") or "anima")
+        except version_config.VersionConfigError:
+            pass  # 坏 config 不阻塞先验生成，按 anima 兜底
+    model_paths = _resolve_model_paths(body.base_model, family=family)
     _, _, vdir = _version_dir_or_404(pid, vid)
     train = vdir / "train"
     has_image = train.exists() and any(
@@ -456,9 +468,12 @@ def reg_generate_prior(pid: int, vid: int, body: RegAiRequest) -> dict[str, Any]
     rdir = _reg_dir(vdir)
     rdir.mkdir(parents=True, exist_ok=True)
 
+    from ....domain.common import FAMILY_SAMPLING
     from ....services.runtime.xformers import detect_attention_backend
+    sampling = FAMILY_SAMPLING[family]
     cfg = RegAiConfig(
         **model_paths,
+        model_family=family,
         train_dir=str(train),
         reg_dir=str(rdir),
         excluded_tags=list(body.excluded_tags),
@@ -467,8 +482,8 @@ def reg_generate_prior(pid: int, vid: int, body: RegAiRequest) -> dict[str, Any]
         height=body.height,
         steps=body.steps,
         cfg_scale=body.cfg_scale,
-        sampler_name=body.sampler_name,
-        scheduler=body.scheduler,
+        sampler_name=body.sampler_name or sampling["samplers"][0],
+        scheduler=body.scheduler or sampling["schedulers"][0],
         seed=body.seed,
         incremental=body.incremental,
         mixed_precision=body.mixed_precision,

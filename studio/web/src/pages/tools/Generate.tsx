@@ -8,7 +8,7 @@ import {
   type Task,
   type XYMatrixSpec,
 } from '../../api/client'
-import BaseModelSelect from '../../components/BaseModelSelect'
+import BaseModelSelect, { useBaseModelOptions } from '../../components/BaseModelSelect'
 import PageHeader from '../../components/PageHeader'
 import { useToast } from '../../components/Toast'
 import { schemaEnumLabel } from '../../lib/schema'
@@ -47,8 +47,9 @@ import StatusBadge from './generate/StatusBadge'
 import ViewModeTabs, { type ViewMode } from './generate/ViewModeTabs'
 import {
   DEFAULT_NEG, DEFAULT_SAMPLER, DEFAULT_SCHEDULER,
-  SAMPLER_OPTIONS, SCHEDULER_OPTIONS,
-  type SamplerName, type SchedulerName,
+  DISTILLED_GENERATE_DEFAULTS, FAMILY_GENERATE_DEFAULTS,
+  SAMPLER_OPTIONS_BY_FAMILY, SCHEDULER_OPTIONS_BY_FAMILY,
+  type GenerateFamily, type SamplerName, type SchedulerName,
 } from './generate/types'
 import { useLoraCatalog } from './generate/useLoraCatalog'
 import { buildXYMatrix, cellCount, parseAxisValues, type XYAxisDraft } from './generate/xy'
@@ -57,6 +58,7 @@ const GENERATE_PREFS_KEY = 'studio:generate:params:v1'
 
 const DEFAULT_GENERATE_PREFS = {
   mode: 'single' as ViewMode,
+  modelFamily: 'anima' as GenerateFamily,
   prompts: ['newest, safe, 1girl, masterpiece, best quality'],
   negPrompt: DEFAULT_NEG,
   aspect: '1:1' as AspectName,
@@ -95,13 +97,27 @@ function normalizePrefs(p: GeneratePrefs): GeneratePrefs {
     return { ...d, loraIndex: xyLoras.length > 0 ? 0 : null }
   }
   const { loras: _legacy, count: _count, ...rest } = anyP  // count 已改瞬态，丢弃老持久值
-  return {
+  const merged = {
     ...DEFAULT_GENERATE_PREFS,
     ...rest,
     singleLoras,
     xyLoras,
     xDraft: clampIdx(rest.xDraft ?? DEFAULT_GENERATE_PREFS.xDraft) ?? DEFAULT_GENERATE_PREFS.xDraft,
     yDraft: clampIdx(rest.yDraft ?? null),
+  }
+  // 族与 sampler 一致性（多模型 P4-4）：老 prefs 无 modelFamily / 持久化的
+  // sampler 与当前族白名单不符时（越族值后端 422），落回族默认（首项）。
+  const family: GenerateFamily =
+    merged.modelFamily === 'krea2' ? 'krea2' : 'anima'
+  const samplers = SAMPLER_OPTIONS_BY_FAMILY[family] as readonly string[]
+  const schedulers = SCHEDULER_OPTIONS_BY_FAMILY[family] as readonly string[]
+  return {
+    ...merged,
+    modelFamily: family,
+    samplerName: (samplers.includes(merged.samplerName)
+      ? merged.samplerName : samplers[0]) as SamplerName,
+    scheduler: (schedulers.includes(merged.scheduler)
+      ? merged.scheduler : schedulers[0]) as SchedulerName,
   }
 }
 
@@ -132,7 +148,7 @@ export default function GeneratePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const { mode, prompts, negPrompt, aspect, width, height, steps, cfgScale, samplerName, scheduler, seed, xDraft, yDraft, datasetPick } = prefs
+  const { mode, modelFamily, prompts, negPrompt, aspect, width, height, steps, cfgScale, samplerName, scheduler, seed, xDraft, yDraft, datasetPick } = prefs
   // LoRA 列表按 mode 完全独立：single 用 singleLoras，xy（含 compare 子视图）用
   // xyLoras。读写都按当前 mode 路由，切 mode 互不影响。
   const loras = mode === 'single' ? prefs.singleLoras : prefs.xyLoras
@@ -149,6 +165,19 @@ export default function GeneratePage() {
   const setSamplerName = (samplerName: SamplerName) => setPrefs((p) => ({ ...p, samplerName }))
   const setScheduler = (scheduler: SchedulerName) => setPrefs((p) => ({ ...p, scheduler }))
   const setSeed = (seed: number) => setPrefs((p) => ({ ...p, seed }))
+  /** 切模型族：sampler/scheduler/steps/cfg 落回目标族默认（越族值后端 422），
+   *  底模临时覆盖清空（variant key 是族内值）。 */
+  const setModelFamily = (family: GenerateFamily) => {
+    setBaseModel(null)
+    setPrefs((p) => ({
+      ...p,
+      modelFamily: family,
+      samplerName: SAMPLER_OPTIONS_BY_FAMILY[family][0] as SamplerName,
+      scheduler: SCHEDULER_OPTIONS_BY_FAMILY[family][0] as SchedulerName,
+      steps: FAMILY_GENERATE_DEFAULTS[family].steps,
+      cfgScale: FAMILY_GENERATE_DEFAULTS[family].cfgScale,
+    }))
+  }
   // 0.17 P-I：batch size（每次入队 task 数）是**瞬态** UI 值——不进 prefs、不持久化、
   // 不随点历史图回填（用户用 2 就一直 2）；刷新页面重置回 1。
   const [batchSize, setBatchSize] = useState(1)
@@ -212,6 +241,20 @@ export default function GeneratePage() {
   // 本次出图临时选用的底模（null = 跟随设置页 selected_anima）。不进 prefs
   // 持久化：每次进页面都回到「设置页默认底模」，符合「默认用设置里的」。
   const [baseModel, setBaseModel] = useState<string | null>(null)
+  // 当前族的底模选项（含 purpose 元数据）——选中蒸馏推理 variant（Krea2
+  // Turbo）时应用 8 步 / 无 CFG 的默认参数（可再改，A1 不加限制）
+  const { options: baseModelOptions } = useBaseModelOptions(modelFamily)
+  const onBaseModelChange = (v: string) => {
+    setBaseModel(v)
+    const picked = baseModelOptions.find((o) => o.value === v)
+    if (picked?.purpose === 'inference') {
+      setPrefs((p) => ({
+        ...p,
+        steps: DISTILLED_GENERATE_DEFAULTS.steps,
+        cfgScale: DISTILLED_GENERATE_DEFAULTS.cfgScale,
+      }))
+    }
+  }
   // monitor 走 useMonitorProgress hook (PR #37 增量协议)：currentTask 变 →
   // hook 自动重拉快照 + 订阅 SSE delta 合并；本组件只用 samples 字段，其余
   // 字段在这页生成场景下不需要。
@@ -509,6 +552,7 @@ export default function GeneratePage() {
       const base: GeneratePrefs = {
         ...prev,
         mode: applied.mode,
+        modelFamily: applied.modelFamily,
         prompts: applied.prompts.length > 0 ? applied.prompts : prev.prompts,
         negPrompt: applied.negPrompt,
         width: applied.width,
@@ -612,6 +656,7 @@ export default function GeneratePage() {
       const baseSnapshot: GenerateParamsSnapshot = {
         schema_version: PARAMS_SNAPSHOT_VERSION,
         mode,
+        model_family: modelFamily,
         prompts,
         negative_prompt: negPrompt,
         width, height, steps,
@@ -639,6 +684,7 @@ export default function GeneratePage() {
         const snap: GenerateParamsSnapshot = { ...baseSnapshot, seed: taskSeed }
         const body: GenerateRequest = {
           prompts: mergedPrompts,
+          model_family: modelFamily,
           base_model: baseModel ?? undefined,
           negative_prompt: negPrompt,
           width, height, steps,
@@ -907,8 +953,8 @@ export default function GeneratePage() {
                       onChange={(e) => setSamplerName(e.target.value as SamplerName)}
                       aria-label={t('generate.sampler')}
                     >
-                      {/* 文案与训练配置页共用 schema.enums.* 映射，两边保持一致 */}
-                      {SAMPLER_OPTIONS.map((s) => (
+                      {/* 文案与训练配置页共用 schema.enums.* 映射；选项按族白名单 */}
+                      {SAMPLER_OPTIONS_BY_FAMILY[modelFamily].map((s) => (
                         <option key={s} value={s}>{schemaEnumLabel('sample_sampler_name', s, t)}</option>
                       ))}
                     </select>
@@ -921,7 +967,7 @@ export default function GeneratePage() {
                       onChange={(e) => setScheduler(e.target.value as SchedulerName)}
                       aria-label={t('generate.scheduler')}
                     >
-                      {SCHEDULER_OPTIONS.map((s) => (
+                      {SCHEDULER_OPTIONS_BY_FAMILY[modelFamily].map((s) => (
                         <option key={s} value={s}>{schemaEnumLabel('sample_scheduler', s, t)}</option>
                       ))}
                     </select>
@@ -937,10 +983,23 @@ export default function GeneratePage() {
                   {t('generate.seedHint')}
                 </div>
                 <div>
+                  <label className="caption block mb-1">{t('generate.modelFamily')}</label>
+                  <select
+                    className="input text-xs w-full"
+                    value={modelFamily}
+                    onChange={(e) => setModelFamily(e.target.value as GenerateFamily)}
+                    aria-label={t('generate.modelFamily')}
+                  >
+                    <option value="anima">{schemaEnumLabel('model_family', 'anima', t)}</option>
+                    <option value="krea2">{schemaEnumLabel('model_family', 'krea2', t)}</option>
+                  </select>
+                </div>
+                <div>
                   <label className="caption block mb-1">{t('generate.baseModel')}</label>
                   <BaseModelSelect
                     value={baseModel}
-                    onChange={setBaseModel}
+                    onChange={onBaseModelChange}
+                    family={modelFamily}
                     className="input text-xs w-full"
                     ariaLabel={t('generate.baseModel')}
                   />

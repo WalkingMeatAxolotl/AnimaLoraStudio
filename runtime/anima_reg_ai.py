@@ -445,9 +445,11 @@ def main() -> None:
                           tiling=str(cfg.get("vae_tiling", "auto")))
 
     logger.info("加载文本编码器...")
-    qwen_model, qwen_tok, t5_tok = family.load_text(
+    # 族 opaque 文本栈不拆包；ad-hoc prompt 关缓存（cached_varlen 族 TE 常驻）
+    text_stack = family.load_text(
         text_encoder_path, device, dtype,
         t5_tokenizer_path=t5_tokenizer_path or None,
+        cache_enabled=False,
     )
 
     model.eval()
@@ -493,9 +495,9 @@ def main() -> None:
         logger.info(f"  prompt: {prompt[:80]}")
 
         try:
-            img = _T.sample_image(
-                model, vae, qwen_model, qwen_tok, t5_tok,
-                prompt=prompt,
+            img = family.sample_image(
+                model, vae, text_stack,
+                prompt,
                 height=height,
                 width=width,
                 steps=steps,

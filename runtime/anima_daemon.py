@@ -198,6 +198,8 @@ class ModelCache:
     """
 
     def __init__(self) -> None:
+        self.family_id: Optional[str] = None
+        self.family: Any = None
         self.transformer_path: Optional[str] = None
         self.vae_path: Optional[str] = None
         self.text_encoder_path: Optional[str] = None
@@ -212,9 +214,9 @@ class ModelCache:
         self.lora_dtype: Any = torch.float32
         self.model: Any = None
         self.vae: Any = None
-        self.qwen_model: Any = None
-        self.qwen_tok: Any = None
-        self.t5_tok: Any = None
+        # 族 opaque 文本栈（anima=(qwen_model, qwen_tok, t5_tok) 三元组，
+        # krea2=Krea2TextStack）——只经 family.sample_image 消费，daemon 不拆包
+        self.text_stack: Any = None
         # adapters 必须保持引用，否则 forward hook 失效（lycoris closure）
         self.adapters: list[Any] = []
         self.last_lora_specs: list[LoRASpec] = []
@@ -232,6 +234,7 @@ class ModelCache:
             cfg,
             force_exact_ksampler_backend=False,
         )
+        family_id = str(cfg.get("model_family") or "anima")
         backend = cfg.get("attention_backend", "none")
         precision = cfg.get("mixed_precision", "bf16")
         vae_precision = cfg.get("vae_precision", precision)
@@ -251,9 +254,10 @@ class ModelCache:
         if t5_tokenizer_path:
             t5_tokenizer_path = _T.resolve_path_best_effort(t5_tokenizer_path, bases)
 
-        # 比较是否需要 reload
+        # 比较是否需要 reload（换族 = 换整套模型栈，全重载）
         needs_reload = (
             not self.loaded
+            or self.family_id != family_id
             or self.transformer_path != transformer_path
             or self.vae_path != vae_path
             or self.text_encoder_path != text_encoder_path
@@ -268,6 +272,7 @@ class ModelCache:
         if needs_reload:
             self.unload()
             self._load(
+                family_id=family_id,
                 transformer_path=transformer_path,
                 vae_path=vae_path,
                 text_encoder_path=text_encoder_path,
@@ -283,6 +288,7 @@ class ModelCache:
     def _load(
         self,
         *,
+        family_id: str,
         transformer_path: str,
         vae_path: str,
         text_encoder_path: str,
@@ -300,8 +306,8 @@ class ModelCache:
         use_flash = backend == "flash_attn"
         use_xformers = backend == "xformers"
 
-        family = _T.get_family("anima")  # daemon 为 Anima 专属常驻壳（K2 接入形态 Phase 4 定）
-        logger.info("loading transformer %s", transformer_path)
+        family = _T.get_family(family_id)
+        logger.info("loading transformer [%s] %s", family_id, transformer_path)
         model = family.load_dit(
             transformer_path, device, dtype,
             attention_backend=("flash_attn" if use_flash else "none"), repo_root=repo_root,
@@ -316,18 +322,21 @@ class ModelCache:
         vae = family.load_vae(vae_path, device, vae_dtype)
 
         logger.info("loading text encoders %s", text_encoder_path)
-        qwen_model, qwen_tok, t5_tok = family.load_text(
+        # 族 opaque 文本栈，不拆包。generate 的 prompt 是 ad-hoc 交互输入，
+        # cached_varlen 族（krea2）关缓存让 TE 常驻逐 prompt 在线编码。
+        text_stack = family.load_text(
             text_encoder_path, device, dtype,
             t5_tokenizer_path=t5_tokenizer_path or None,
             comfy_qwen=text_encoder_backend == "comfy_qwen3",
             t5_fast=t5_tokenizer_backend == "fast",
+            cache_enabled=False,
         )
 
+        self.family_id = family_id
+        self.family = family
         self.model = model
         self.vae = vae
-        self.qwen_model = qwen_model
-        self.qwen_tok = qwen_tok
-        self.t5_tok = t5_tok
+        self.text_stack = text_stack
         self.transformer_path = transformer_path
         self.vae_path = vae_path
         self.text_encoder_path = text_encoder_path
@@ -421,7 +430,10 @@ class ModelCache:
         self.last_lora_specs = []
         self.last_lora_metas = []
 
-        self.adapters = apply_loras(self.model, specs, self.device, self.lora_dtype)
+        self.adapters = apply_loras(
+            self.model, specs, self.device, self.lora_dtype,
+            family_id=self.family_id or "anima",
+        )
         self.last_lora_specs = specs
         self.last_lora_metas = current_metas
         self.model.eval()
@@ -431,7 +443,13 @@ class ModelCache:
         if not self.device:
             return
         _move_module_to_device(self.model, self.device)
-        _move_module_to_device(self.qwen_model, self.device)
+        # anima 文本栈是 (qwen_model, qwen_tok, t5_tok) 三元组——采样内部的
+        # decode offload 会把 TE 挪去 CPU，这里搬回。自管 device 的栈
+        # （krea2 的 Krea2TextStack）没有裸模块成员，循环自然 no-op。
+        if isinstance(self.text_stack, (tuple, list)):
+            for member in self.text_stack:
+                if isinstance(member, torch.nn.Module):
+                    _move_module_to_device(member, self.device)
         for adapter in self.adapters:
             _move_adapter_to_device(adapter, self.device, self.lora_dtype)
 
@@ -441,9 +459,9 @@ class ModelCache:
         logger.info("unloading model")
         self.model = None
         self.vae = None
-        self.qwen_model = None
-        self.qwen_tok = None
-        self.t5_tok = None
+        self.text_stack = None
+        self.family_id = None
+        self.family = None
         self.adapters = []
         self.last_lora_specs = []
         self.last_lora_metas = []
@@ -581,21 +599,22 @@ def _build_preview_callback(
     return _cb
 
 
-# Wan2.1 VAE 的 latent→RGB 线性投影系数（16 通道 → RGB）。
-# Anima 的 VAE 是 Qwen-Image VAE（models/vae/qwen_image_vae.safetensors），其 latent
-# 空间就是 Wan2.1 的 16-ch 空间——ComfyUI supported_models.py 里
-# `QwenImage.latent_format = latent_formats.Wan21`，且本仓库 models.py 的 VAE
-# latent2rgb 快速预览系数（"模糊但能看出图"）。系数表已收编进 ModelSpec
-# （families/anima，D17）——单一来源，K2 同 latent 空间时直接复用。之前误用
-# TAEFlux（Flux VAE 的 tiny decoder）解码这个 WAN latent，空间不匹配 →
-# 颜色反相/错乱，已废弃。
-from training.families.anima import ANIMA_SPEC as _ANIMA_SPEC  # noqa: E402
+# latent→RGB 线性投影系数按**当前加载族的 spec** 取（D17 收编进 ModelSpec，
+# 单一来源在 families/latent_spaces.py）。Anima 与 Krea2 同为 Wan2.1 16-ch
+# latent 空间（Qwen-Image VAE：ComfyUI supported_models.py
+# `QwenImage.latent_format = latent_formats.Wan21`）；未来不同 latent 空间的族
+# 接入时预览自动跟随。之前误用 TAEFlux（Flux 解码器）→ 颜色反相，已废弃。
+from training.families.latent_spaces import WAN21_F8C16 as _WAN21_F8C16  # noqa: E402
 
-_WAN21_LATENT_RGB_FACTORS = [list(r) for r in _ANIMA_SPEC.latent.rgb_factors]
-_WAN21_LATENT_RGB_BIAS = list(_ANIMA_SPEC.latent.rgb_bias)
 # 预览放大目标（最长边像素）。latent 是 1/8 分辨率（1024²→128²），latent2rgb 直出
 # 128²；放大到 512 让前端铺满时不至于过糊，JPEG 仍很小。
 _PREVIEW_TARGET_PX = 512
+
+
+def _preview_latent_spec():
+    """当前加载族的 LatentSpec；未加载（单测 / 启动早期）回退 Wan21 共享空间。"""
+    family = getattr(CACHE, "family", None)
+    return family.spec.latent if family is not None else _WAN21_F8C16
 
 
 def _decode_latent2rgb_preview(latent: Any) -> Optional[Any]:
@@ -609,13 +628,15 @@ def _decode_latent2rgb_preview(latent: Any) -> Optional[Any]:
     try:
         import numpy as np
         from PIL import Image
+        latent_spec = _preview_latent_spec()
         with torch.no_grad():
             x = latent[0, :, 0].float()  # [16, H, W]
             factors = torch.tensor(
-                _WAN21_LATENT_RGB_FACTORS, device=x.device, dtype=x.dtype,
+                [list(r) for r in latent_spec.rgb_factors],
+                device=x.device, dtype=x.dtype,
             )  # [16, 3]
             bias = torch.tensor(
-                _WAN21_LATENT_RGB_BIAS, device=x.device, dtype=x.dtype,
+                list(latent_spec.rgb_bias), device=x.device, dtype=x.dtype,
             )  # [3]
             rgb = torch.einsum("chw,cr->hwr", x, factors) + bias  # [H, W, 3]
             rgb = ((rgb + 1.0) / 2.0).clamp(0.0, 1.0)
@@ -689,6 +710,9 @@ def _run_generate(
     scheduler: str = cfg.get("scheduler", "simple")
     count: int = max(1, int(cfg.get("count", 1)))
     base_seed: int = int(cfg.get("seed", 0))
+    # 蒸馏推理底模（Krea2 Turbo）：studio 按 catalog variant purpose 检测后注入；
+    # anima family 接受并忽略
+    distilled: bool = bool(cfg.get("distilled", False))
 
     xy_matrix = cfg.get("xy_matrix")
     if xy_matrix is not None:
@@ -726,10 +750,9 @@ def _run_generate(
                 batch_idx=img_idx, batch_total=total, total_steps=steps,
             )
             try:
-                img = _T.sample_image(
-                    CACHE.model, CACHE.vae,
-                    CACHE.qwen_model, CACHE.qwen_tok, CACHE.t5_tok,
-                    prompt=prompt,
+                img = CACHE.family.sample_image(
+                    CACHE.model, CACHE.vae, CACHE.text_stack,
+                    prompt,
                     height=height,
                     width=width,
                     steps=steps,
@@ -737,6 +760,7 @@ def _run_generate(
                     negative_prompt=negative_prompt,
                     sampler_name=sampler_name,
                     scheduler=scheduler,
+                    distilled=distilled,
                     device=CACHE.device,
                     dtype=CACHE.dtype,
                     step_callback=preview_callback,
@@ -794,6 +818,7 @@ def _run_xy(
     y_spec = xy_matrix.get("y")
     x_values = x_spec["values"]
     y_values = y_spec["values"] if y_spec else [None]
+    distilled: bool = bool(cfg.get("distilled", False))
 
     if base_seed == 0:
         base_seed = random.randint(0, 2**31 - 1)
@@ -861,10 +886,9 @@ def _run_xy(
                 batch_idx=img_idx, batch_total=total, total_steps=cur_steps,
             )
             try:
-                img = _T.sample_image(
-                    CACHE.model, CACHE.vae,
-                    CACHE.qwen_model, CACHE.qwen_tok, CACHE.t5_tok,
-                    prompt=prompt,
+                img = CACHE.family.sample_image(
+                    CACHE.model, CACHE.vae, CACHE.text_stack,
+                    prompt,
                     height=height,
                     width=width,
                     steps=cur_steps,
@@ -874,6 +898,7 @@ def _run_xy(
                     negative_prompt=negative_prompt,
                     sampler_name=base_sampler,
                     scheduler=scheduler,
+                    distilled=distilled,
                     device=CACHE.device,
                     dtype=CACHE.dtype,
                     seed=cur_seed,

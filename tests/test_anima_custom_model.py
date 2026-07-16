@@ -80,7 +80,7 @@ def test_default_paths_for_new_version_follows_custom(
 def test_generate_resolver_follows_selected_custom(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """测试/出图页 deps._resolve_anima_model_paths 跟随 selected_anima（含 custom），
+    """测试/出图页 deps._resolve_model_paths 跟随 selected_anima（含 custom），
     不再写死 v1.0。"""
     from studio.api import deps
 
@@ -90,7 +90,7 @@ def test_generate_resolver_follows_selected_custom(
         secrets, "load",
         lambda: _secrets(tmp_path, selected=str(custom), custom=[str(custom)]),
     )
-    assert deps._resolve_anima_model_paths()["transformer_path"] == str(custom)
+    assert deps._resolve_model_paths()["transformer_path"] == str(custom)
 
 
 # ---------------------------------------------------------------------------
@@ -144,14 +144,14 @@ def test_base_model_override_missing_custom_falls_back(
     assert resolved == str(model_downloader.anima_main_target(tmp_path, "1.0"))
 
 
-def test_resolve_anima_model_paths_threads_override(
+def test_resolve_model_paths_threads_override(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """deps._resolve_anima_model_paths(base_model) 透传到 transformer_path。"""
+    """deps._resolve_model_paths(base_model) 透传到 transformer_path。"""
     from studio.api import deps
 
     monkeypatch.setattr(secrets, "load", lambda: _secrets(tmp_path, selected="1.0"))
-    got = deps._resolve_anima_model_paths("preview3-base")["transformer_path"]
+    got = deps._resolve_model_paths("preview3-base")["transformer_path"]
     assert got == str(model_downloader.anima_main_target(tmp_path, "preview3-base"))
 
 

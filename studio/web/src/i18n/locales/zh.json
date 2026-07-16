@@ -348,11 +348,13 @@
       },
       "sampler": {
         "erSde": "ER SDE",
-        "dpmpp3mSde": "DPM++ 3M SDE"
+        "dpmpp3mSde": "DPM++ 3M SDE",
+        "euler": "Euler（FlowMatch）"
       },
       "scheduler": {
         "simple": "Simple",
-        "sgmUniform": "SGM Uniform"
+        "sgmUniform": "SGM Uniform",
+        "krea2Shift": "Krea2 动态 Shift"
       },
       "modelFamily": {
         "anima": "Anima",
@@ -1635,7 +1637,8 @@
     "noExportableXyData": "没有可导出的 XY 数据",
     "allCellsLoadFailed": "所有 cell 图都加载失败（可能原图已释放）",
     "canvas2dUnavailable": "canvas 2d 不可用",
-    "canvasToBlobNull": "canvas.toBlob 返回 null"
+    "canvasToBlobNull": "canvas.toBlob 返回 null",
+    "modelFamily": "模型族"
   },
   "overview": {
     "pipelineProgress": "流水线进度",
@@ -2855,5 +2858,11 @@
     "ok": "切换",
     "empty": "（空）",
     "failed": "模型族切换失败：{{error}}"
+  },
+  "baseModel": {
+    "purpose": {
+      "training": "训练",
+      "inference": "推理"
+    }
   }
 }

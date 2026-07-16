@@ -15,14 +15,17 @@ class GenerateRequest(BaseModel):
     height: int = 1024
     steps: int = 25
     cfg_scale: float = 4.0
-    sampler_name: Literal["er_sde", "dpmpp_3m_sde"] = "er_sde"
-    scheduler: Literal["simple", "sgm_uniform"] = "simple"
+    sampler_name: Literal["er_sde", "dpmpp_3m_sde", "euler"] = "er_sde"
+    scheduler: Literal["simple", "sgm_uniform", "krea2_shift"] = "simple"
     count: int = 1
     seed: int = 0
     lora_configs: list[LoraEntry] = []
     mixed_precision: str = "bf16"
+    # 底模所属模型族（多模型 P4-4）：决定路径解析 / daemon 加载与采样栈；
+    # sampler 按族白名单校验（GenerateConfig validator，越族 422）
+    model_family: Literal["anima", "krea2"] = "anima"
     # 本次出图临时选用的底模（官方 variant key 或注册的本地 custom 路径）；
-    # None → 用 Settings 里 selected_anima。只换 transformer 权重。
+    # None → 用 Settings 里该族 selected。只换 transformer 权重。
     base_model: Optional[str] = None
     # commit C：attention_backend 默认从 secrets.generate.attention_backend 读，
     # 前端 Generate 页不再发这个字段；保留 Optional 兼容老客户端 / 临时覆盖。

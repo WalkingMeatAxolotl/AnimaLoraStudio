@@ -17,6 +17,7 @@ from training.families.krea2.sampling import (
     KREA2_SCHEDULER,
     Krea2SamplingCondition,
     prepare_sampling_condition,
+    resolve_sampling_settings,
     sample_image,
 )
 from training.families.krea2.text_encoding import (
@@ -141,17 +142,28 @@ class Krea2Family:
     def sample_image(self, model, vae, text, prompt, *,
                      height: int = 1024, width: int = 1024,
                      steps: int | None = None,
-                     cfg_scale: float = KREA2_RAW_GUIDANCE,
+                     cfg_scale: float | None = None,
                      negative_prompt: str = "",
                      sampler_name: str | None = None,
                      scheduler: str | None = None,
+                     distilled: bool = False,
                      device="cuda", dtype=None, step_callback=None,
                      phase_callback=None, seed: int | None = None):
+        # 先按 Raw/Turbo 解析步数与 guidance（steps/cfg 未显式给时用族默认：
+        # Raw 28 步 / 4.5，Turbo 8 步 / 0.0——TDM 蒸馏无 uncond，guidance=0
+        # 时 prepare 不编码 negative、采样跳过 uncond forward）。
+        resolved_steps, guidance = resolve_sampling_settings(
+            distilled=distilled,
+            steps=steps,
+            cfg_scale=cfg_scale,
+            sampler_name=sampler_name,
+            scheduler=scheduler,
+        )
         condition = prepare_sampling_condition(
             text,
             prompt,
             negative_prompt=negative_prompt,
-            cfg_scale=cfg_scale,
+            cfg_scale=guidance,
             device=device,
             dtype=dtype,
             phase_callback=phase_callback,
@@ -162,10 +174,11 @@ class Krea2Family:
             condition,
             height=height,
             width=width,
-            steps=steps,
-            cfg_scale=cfg_scale,
+            steps=resolved_steps,
+            cfg_scale=guidance,
             sampler_name=sampler_name,
             scheduler=scheduler,
+            distilled=distilled,
             device=device,
             dtype=dtype,
             step_callback=step_callback,

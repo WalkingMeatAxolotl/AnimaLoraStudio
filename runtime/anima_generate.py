@@ -97,6 +97,7 @@ def main() -> None:
     scheduler: str = cfg.get("scheduler", "simple")
     count: int = max(1, int(cfg.get("count", 1)))
     base_seed: int = int(cfg.get("seed", 0))
+    distilled: bool = bool(cfg.get("distilled", False))
     lora_configs: list[dict] = cfg.get("lora_configs", [])
     mixed_precision: str = cfg.get("mixed_precision", "bf16")
     vae_precision: str = cfg.get("vae_precision", mixed_precision)
@@ -158,11 +159,13 @@ def main() -> None:
                           tiling=str(cfg.get("vae_tiling", "auto")))
 
     logger.info("加载文本编码器...")
-    qwen_model, qwen_tok, t5_tok = family.load_text(
+    # 族 opaque 文本栈不拆包；ad-hoc prompt 关缓存（cached_varlen 族 TE 常驻）
+    text_stack = family.load_text(
         text_encoder_path, device, dtype,
         t5_tokenizer_path=t5_tokenizer_path or None,
         comfy_qwen=text_encoder_backend == "comfy_qwen3",
         t5_fast=t5_tokenizer_backend == "fast",
+        cache_enabled=False,
     )
 
     # 多 LoRA：每份独立 inject + multiplier=scale。adapters 必须保持引用，否则
@@ -171,7 +174,8 @@ def main() -> None:
         LoRASpec(path=str(lc.get("path", "")), scale=float(lc.get("scale", 1.0)))
         for lc in lora_configs
     ]
-    _adapters = apply_loras(model, specs, device, torch.float32)  # noqa: F841 — 保持引用
+    _adapters = apply_loras(model, specs, device, torch.float32,  # noqa: F841 — 保持引用
+                            family_id=family.spec.family_id)
 
     model.eval()
 
@@ -189,10 +193,10 @@ def main() -> None:
             base_cfg_scale=cfg_scale,
             base_sampler=sampler_name,
             scheduler=scheduler,
+            distilled=distilled,
             height=height,
             width=width,
-            model=model, vae=vae,
-            qwen_model=qwen_model, qwen_tok=qwen_tok, t5_tok=t5_tok,
+            family=family, model=model, vae=vae, text=text_stack,
             device=device, dtype=dtype,
             output_dir=output_dir,
             update_monitor=_update_monitor,
@@ -213,9 +217,9 @@ def main() -> None:
 
             logger.info(f"[{img_idx + 1}/{total}] seed={seed}  prompt={prompt[:60]}...")
             try:
-                img = _T.sample_image(
-                    model, vae, qwen_model, qwen_tok, t5_tok,
-                    prompt=prompt,
+                img = family.sample_image(
+                    model, vae, text_stack,
+                    prompt,
                     height=height,
                     width=width,
                     steps=steps,
@@ -223,6 +227,7 @@ def main() -> None:
                     negative_prompt=negative_prompt,
                     sampler_name=sampler_name,
                     scheduler=scheduler,
+                    distilled=distilled,
                     device=device,
                     dtype=dtype,
                     seed=seed,
@@ -305,10 +310,11 @@ def _run_xy_matrix(
     scheduler: str,
     height: int,
     width: int,
-    model, vae, qwen_model, qwen_tok, t5_tok,
+    family, model, vae, text,
     device: str, dtype,
     output_dir,
     update_monitor,
+    distilled: bool = False,
 ) -> None:
     """循环 (yi, xi) 出 N×M 张图。
 
@@ -379,9 +385,9 @@ def _run_xy_matrix(
                 f"steps={cur_steps} cfg={cur_cfg_scale} seed={cur_seed} sampler={cur_sampler}"
             )
             try:
-                img = _T.sample_image(
-                    model, vae, qwen_model, qwen_tok, t5_tok,
-                    prompt=prompt,
+                img = family.sample_image(
+                    model, vae, text,
+                    prompt,
                     height=height,
                     width=width,
                     steps=cur_steps,
@@ -389,6 +395,7 @@ def _run_xy_matrix(
                     negative_prompt=negative_prompt,
                     sampler_name=cur_sampler,
                     scheduler=scheduler,
+                    distilled=distilled,
                     device=device,
                     dtype=dtype,
                     seed=cur_seed,

@@ -70,6 +70,8 @@ class LoRAMeta:
     weight_decompose: bool = False
     rs_lora: bool = False
     lora_reg_dims: Optional[dict[str, int]] = None
+    #: 产物所属模型族（D13 标记）；无标记的存量产物 grandfather 为 anima
+    model_family: str = "anima"
 
 
 def read_lora_meta(path: str) -> LoRAMeta:
@@ -146,6 +148,7 @@ def read_lora_meta(path: str) -> LoRAMeta:
         weight_decompose=weight_decompose,
         rs_lora=rs_lora,
         lora_reg_dims=lora_reg_dims,
+        model_family=str(ss_args.get("model_family") or "anima"),
     )
 
 
@@ -154,6 +157,7 @@ def apply_loras(
     specs: Sequence[LoRASpec],
     device: str,
     dtype: Any,
+    family_id: str = "anima",
 ) -> list[Any]:
     """对每个 LoRA 单独 inject 一份 AnimaLycorisAdapter；forward 时 hook 累加 delta。
 
@@ -180,10 +184,19 @@ def apply_loras(
             continue
 
         meta = read_lora_meta(path)
-        from training.families.anima.preset import ANIMA_PRESET  # noqa: PLC0415
+        # 跨族 fail-fast（A5，与训练侧 resume_lora 检查同款）：krea2 LoRA 配
+        # anima 底模（或反之）用错 preset 注入 = 键全 miss 的静默坏结果——
+        # 提前报错并给可操作文案。无标记存量产物 grandfather 为 anima。
+        if meta.model_family != family_id:
+            raise ValueError(
+                f"LoRA 跨模型族被拒绝：{Path(path).name} 属于 "
+                f"'{meta.model_family}'，当前底模族为 '{family_id}'。"
+                f"请换用同族 LoRA 或切换底模。"
+            )
+        from training.families import get_family  # noqa: PLC0415
 
         adapter = AnimaLycorisAdapter(
-            preset=ANIMA_PRESET,
+            preset=get_family(family_id).lora_preset(),
             algo=meta.algo,
             rank=meta.rank,
             alpha=meta.alpha,

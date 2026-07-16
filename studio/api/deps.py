@@ -29,7 +29,7 @@ def _supervisor() -> Supervisor:
     return sup
 
 
-def _resolve_anima_model_paths(
+def _resolve_model_paths(
     base_model: Optional[str] = None, *, family: str = "anima"
 ) -> dict[str, str]:
     """解析 base 模型默认路径（先验生成 / 测试出图共用）。

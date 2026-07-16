@@ -596,14 +596,17 @@ def _default_generator(
     if use_xformers:
         _T.enable_xformers(model)
     vae = family.load_vae(vae_path, device, dtype)
-    qwen_model, qwen_tok, t5_tok = family.load_text(
+    # 族 opaque 文本栈不拆包；eval prompt 是 ad-hoc 输入，关缓存
+    text_stack = family.load_text(
         text_encoder_path, device, dtype,
         t5_tokenizer_path=t5_tokenizer_path or None,
+        cache_enabled=False,
     )
 
     checkpoint = version_dir / run["checkpoint"]["path"]
     adapters = apply_loras(
-        model, [LoRASpec(path=str(checkpoint), scale=lora_scale)], device, dtype
+        model, [LoRASpec(path=str(checkpoint), scale=lora_scale)], device, dtype,
+        family_id=family.spec.family_id,
     )
     _ = adapters  # keep adapter references alive for forward hooks
     model.eval()
@@ -626,9 +629,9 @@ def _default_generator(
             f"prompt={str(item.get('prompt') or '')[:80]}"
         )
         try:
-            img = _T.sample_image(
-                model, vae, qwen_model, qwen_tok, t5_tok,
-                prompt=str(item.get("prompt") or ""),
+            img = family.sample_image(
+                model, vae, text_stack,
+                str(item.get("prompt") or ""),
                 height=height,
                 width=width,
                 steps=steps,

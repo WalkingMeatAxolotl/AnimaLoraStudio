@@ -348,11 +348,13 @@
       },
       "sampler": {
         "erSde": "ER SDE",
-        "dpmpp3mSde": "DPM++ 3M SDE"
+        "dpmpp3mSde": "DPM++ 3M SDE",
+        "euler": "Euler (FlowMatch)"
       },
       "scheduler": {
         "simple": "Simple",
-        "sgmUniform": "SGM Uniform"
+        "sgmUniform": "SGM Uniform",
+        "krea2Shift": "Krea2 Dynamic Shift"
       },
       "modelFamily": {
         "anima": "Anima",
@@ -1635,7 +1637,8 @@
     "noExportableXyData": "No exportable XY data",
     "allCellsLoadFailed": "All cell images failed to load (the originals may have been released)",
     "canvas2dUnavailable": "canvas 2d is unavailable",
-    "canvasToBlobNull": "canvas.toBlob returned null"
+    "canvasToBlobNull": "canvas.toBlob returned null",
+    "modelFamily": "Model family"
   },
   "overview": {
     "pipelineProgress": "Pipeline progress",
@@ -2855,5 +2858,11 @@
     "ok": "Switch",
     "empty": "(empty)",
     "failed": "Model family switch failed: {{error}}"
+  },
+  "baseModel": {
+    "purpose": {
+      "training": "training",
+      "inference": "inference"
+    }
   }
 }

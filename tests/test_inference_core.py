@@ -112,6 +112,37 @@ def test_read_lora_meta_invalid_fields(tmp_path: Path) -> None:
     assert meta.algo == "lokr"
 
 
+# ── 跨族 LoRA fail-fast（A5，多模型 P4-4）───────────────────────────────────
+
+
+def test_read_lora_meta_model_family_grandfather(tmp_path: Path) -> None:
+    """ss_network_args.model_family 有标记读标记；无标记存量产物 = anima（D13）。"""
+    marked = tmp_path / "k2.safetensors"
+    save_file({"x": torch.zeros(1)}, str(marked), metadata={
+        "ss_network_args": json.dumps({"algo": "lokr", "model_family": "krea2"}),
+    })
+    assert read_lora_meta(str(marked)).model_family == "krea2"
+
+    legacy = tmp_path / "legacy.safetensors"
+    _write_lora_safetensors(legacy, rank=32, alpha=16.0, algo="lokr", factor=8)
+    assert read_lora_meta(str(legacy)).model_family == "anima"
+
+
+def test_apply_loras_rejects_cross_family(tmp_path: Path) -> None:
+    """krea2 LoRA 配 anima 底模（或反之）→ 报错含可操作文案，不静默注错 preset。"""
+    import pytest
+
+    from studio.services.inference.core import LoRASpec, apply_loras
+
+    p = tmp_path / "k2_style.safetensors"
+    save_file({"x": torch.zeros(1)}, str(p), metadata={
+        "ss_network_args": json.dumps({"algo": "lokr", "model_family": "krea2"}),
+    })
+    with pytest.raises(ValueError, match="krea2"):
+        apply_loras(object(), [LoRASpec(path=str(p), scale=1.0)],
+                    "cpu", torch.float32, family_id="anima")
+
+
 def test_read_lora_meta_dora_and_rs_lora(tmp_path: Path) -> None:
     """DoRA / RS-LoRA 训练标志必须从 ss_network_args 读回。
 
@@ -352,7 +383,7 @@ def test_model_cache_moves_offloaded_model_before_injecting_lora(tmp_path: Path,
         def load_state_dict(self, *_args, **_kwargs):
             return MagicMock(missing_keys=[], unexpected_keys=[])
 
-    def fake_apply_loras(model, specs, device, dtype):
+    def fake_apply_loras(model, specs, device, dtype, family_id="anima"):
         events.append("apply_loras")
         assert "model.to:cuda" in events
         assert dtype == torch.float32

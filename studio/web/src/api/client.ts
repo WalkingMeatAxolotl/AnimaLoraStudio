@@ -1370,8 +1370,10 @@ export interface XYMatrixSpec {
 
 export interface GenerateRequest {
   prompts: string[]
+  /** 底模所属模型族（多模型 P4-4）；省略 = anima。 */
+  model_family?: 'anima' | 'krea2'
   /** 本次出图临时选用的底模（官方 variant key 或本地 custom 路径）；
-   *  省略 → server 用 Settings 里的 selected_anima。 */
+   *  省略 → server 用 Settings 里该族的 selected。 */
   base_model?: string
   negative_prompt?: string
   width?: number

@@ -122,6 +122,9 @@ class AnimaFamily:
     def sample_image(self, model, vae, text, prompt, **kwargs):
         from training.families.anima.sampling import sample_image
 
+        # distilled 是蒸馏推理族（Krea2 Turbo）的旋钮；Anima 无蒸馏变体，
+        # 接受并忽略（调用方按统一协议传，无需按族分支）。
+        kwargs.pop("distilled", None)
         return sample_image(model, vae, *text, prompt, **kwargs)
 
     # ── LoRA 产物 ────────────────────────────────────────────────────────

@@ -114,8 +114,24 @@ export default function RegularizationPage() {
   const [aiCfg, setAiCfg] = useState(4.0)
   const [aiSeed, setAiSeed] = useState(0)
   const [aiIncremental, setAiIncremental] = useState(false)
-  // 本次先验生成临时选用的底模（null = 跟随设置页 selected_anima）。
+  // 本次先验生成临时选用的底模（null = 跟随设置页该族 selected）。
   const [aiBaseModel, setAiBaseModel] = useState<string | null>(null)
+  // 先验生成的模型族跟随 version 训练配置（服务端权威解析；这里只为
+  // BaseModelSelect 列对族的底模）。无 config / 读失败 → anima。
+  const [aiFamily, setAiFamily] = useState<'anima' | 'krea2'>('anima')
+  useEffect(() => {
+    if (!vid) return
+    let alive = true
+    api.getVersionConfig(project.id, vid)
+      .then((r) => {
+        if (!alive) return
+        const fam = r.config?.model_family === 'krea2' ? 'krea2' : 'anima'
+        setAiFamily(fam)
+        setAiBaseModel(null)  // 族变 → 清临时底模覆盖（variant key 是族内值）
+      })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [project.id, vid])
   const [aiBusy, setAiBusy] = useState(false)
   // AI 先验 task：同上；hydrate 时顺带把 aiBusy 同步到 task 真实状态
   const {
@@ -514,6 +530,7 @@ export default function RegularizationPage() {
                   cfg={aiCfg} onCfgChange={setAiCfg}
                   seed={aiSeed} onSeedChange={setAiSeed}
                   baseModel={aiBaseModel} onBaseModelChange={setAiBaseModel}
+                  family={aiFamily}
                   incremental={aiIncremental}
                   onIncrementalChange={setAiIncremental}
                 />
@@ -928,7 +945,7 @@ function AiForm({
   steps, onStepsChange,
   cfg, onCfgChange,
   seed, onSeedChange,
-  baseModel, onBaseModelChange,
+  baseModel, onBaseModelChange, family,
   incremental, onIncrementalChange,
 }: {
   trainTags: RegTagCount[]
@@ -942,6 +959,8 @@ function AiForm({
   cfg: number; onCfgChange: (v: number) => void
   seed: number; onSeedChange: (v: number) => void
   baseModel: string | null; onBaseModelChange: (v: string) => void
+  /** version 训练配置声明的模型族（底模列表按族列） */
+  family: 'anima' | 'krea2'
   incremental: boolean; onIncrementalChange: (v: boolean) => void
 }) {
   const { t } = useTranslation()
@@ -1041,6 +1060,7 @@ function AiForm({
           <BaseModelSelect
             value={baseModel}
             onChange={onBaseModelChange}
+            family={family}
             className="select input"
             style={fieldInputStyle}
             ariaLabel={t('reg.baseModelLabel')}

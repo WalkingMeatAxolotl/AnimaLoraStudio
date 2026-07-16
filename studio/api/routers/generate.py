@@ -34,7 +34,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
 
-from ..deps import _resolve_anima_model_paths
+from ..deps import _resolve_model_paths
 from ..errors import _validate_component_or_400
 from ..schemas.generate import GenerateRequest
 from ... import db, secrets
@@ -168,8 +168,13 @@ _cleanup_xy_tmp_folders()
 def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
     """启动测试出图 task。"""
     from ...services.inference.core import generate_tempdir
+    from ...services.models.families import get_assets
 
-    model_paths = _resolve_anima_model_paths(body.base_model)
+    model_paths = _resolve_model_paths(body.base_model, family=body.model_family)
+    # Turbo 检测（A4/C9）：官方蒸馏 variant → daemon 走 8 步/guidance 0/固定 mu
+    # 的采样时刻表默认；custom 权重无 purpose 元数据按非蒸馏处理
+    distilled = bool(get_assets(body.model_family).is_distilled_path(
+        model_paths.get("transformer_path", "")))
 
     with db.connection_for() as conn:
         task_id = db.create_task(
@@ -204,6 +209,8 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
 
         cfg = GenerateConfig(
             **model_paths,
+            model_family=body.model_family,
+            distilled=distilled,
             output_dir=str(tempdir),
             prompts=body.prompts,
             negative_prompt=body.negative_prompt,

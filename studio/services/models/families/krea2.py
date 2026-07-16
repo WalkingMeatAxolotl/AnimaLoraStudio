@@ -150,6 +150,22 @@ def default_paths_for_new_version(base_model: Optional[str] = None) -> dict[str,
     }
 
 
+def is_distilled_path(path: str) -> bool:
+    """transformer 路径是否为官方 Turbo（TDM 蒸馏推理）variant。
+
+    Turbo 与 Raw 结构全等（430 键同形状），loader 指纹物理上无法区分——
+    只能按 catalog variant 的文件名判。用户注册的 custom 权重无 purpose
+    元数据，一律按非蒸馏处理（A1：不加白名单，采样参数由用户控制）。
+    """
+    if not path:
+        return False
+    name = Path(str(path)).name
+    return any(
+        info["purpose"] == "inference" and info["filename"] == name
+        for info in KREA2_VARIANTS.values()
+    )
+
+
 def _file_status(path: Path) -> dict[str, Any]:
     try:
         stat = path.stat()
@@ -217,6 +233,7 @@ class _Krea2Assets:
     transformer_path_for = staticmethod(krea2_transformer_path_for)
     selected_variant = staticmethod(selected_krea2_variant)
     catalog_sections = staticmethod(catalog_sections)
+    is_distilled_path = staticmethod(is_distilled_path)
 
 
 ASSETS = _Krea2Assets()
