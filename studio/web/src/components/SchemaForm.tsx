@@ -175,6 +175,17 @@ export default function SchemaForm({
                     evalShowWhen(prop.alt_description_when, values)
                       ? schemaAltDescription(name, prop.alt_description, t)
                       : schemaDescription(name, prop.description, t)
+                  // option_show_when：按当前 values 过滤下拉选项（多模型 P4-2）。
+                  // 当前已选中的值即使被门控也保留——表单如实反映 config，
+                  // 越族值由后端校验报错，不在 UI 里凭空消失。
+                  const gates = prop.option_show_when
+                  const enumOptions = gates
+                    ? (prop.enum ?? []).filter(
+                        (opt) =>
+                          evalShowWhen(gates[String(opt)], values) ||
+                          String(opt) === String(values[name] ?? '')
+                      )
+                    : undefined
                   return (
                     <Field
                       key={name}
@@ -186,6 +197,7 @@ export default function SchemaForm({
                       hint={hint}
                       descriptionOverride={descriptionOverride}
                       suffix={suffixes[name]}
+                      enumOptions={enumOptions}
                     />
                   )
                 })}

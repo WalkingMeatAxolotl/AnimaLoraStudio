@@ -203,3 +203,82 @@ describe('SchemaForm takeover behavior', () => {
   })
 
 })
+
+// ─── option_show_when：enum 选项按 model_family 过滤（多模型 P4-2） ─────────
+
+const gatedSchema: SchemaResponse = {
+  groups: [{ key: 'sample', label: '采样' }],
+  schema: {
+    properties: {
+      model_family: {
+        type: 'string',
+        enum: ['anima', 'krea2'],
+        default: 'anima',
+        group: 'sample',
+        description: 'Family',
+      },
+      sample_sampler_name: {
+        type: 'string',
+        enum: ['er_sde', 'dpmpp_3m_sde', 'euler'],
+        default: 'er_sde',
+        group: 'sample',
+        description: 'Sampler',
+        option_show_when: {
+          er_sde: 'model_family==anima',
+          dpmpp_3m_sde: 'model_family==anima',
+          euler: 'model_family==krea2',
+        },
+      },
+    },
+  },
+}
+
+describe('SchemaForm option_show_when filtering', () => {
+  const samplerSelect = () =>
+    screen
+      .getAllByRole('combobox')
+      .find((el) =>
+        Array.from((el as HTMLSelectElement).options).some((o) =>
+          ['er_sde', 'euler'].includes(o.value),
+        ),
+      ) as HTMLSelectElement
+
+  const optionValues = (el: HTMLSelectElement) =>
+    Array.from(el.options).map((o) => o.value)
+
+  it('hides options gated to another family', () => {
+    render(
+      <SchemaForm
+        schema={gatedSchema}
+        values={{ model_family: 'anima', sample_sampler_name: 'er_sde' }}
+        onChange={() => {}}
+      />,
+    )
+    expect(optionValues(samplerSelect())).toEqual(['er_sde', 'dpmpp_3m_sde'])
+  })
+
+  it('shows only the owning family options after switching family', () => {
+    render(
+      <SchemaForm
+        schema={gatedSchema}
+        values={{ model_family: 'krea2', sample_sampler_name: 'euler' }}
+        onChange={() => {}}
+      />,
+    )
+    expect(optionValues(samplerSelect())).toEqual(['euler'])
+  })
+
+  it('keeps the currently selected value visible even when gated out', () => {
+    // config 里存了越族值（如手改 yaml / 换族未迁移）：表单如实显示，
+    // 不凭空消失——拒绝该值是后端校验的职责
+    render(
+      <SchemaForm
+        schema={gatedSchema}
+        values={{ model_family: 'krea2', sample_sampler_name: 'er_sde' }}
+        onChange={() => {}}
+      />,
+    )
+    expect(optionValues(samplerSelect())).toEqual(['er_sde', 'euler'])
+    expect(samplerSelect().value).toBe('er_sde')
+  })
+})

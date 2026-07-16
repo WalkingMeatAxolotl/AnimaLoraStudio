@@ -47,6 +47,68 @@ FAMILY_CONFIG_DEFAULTS: dict[str, dict[str, Any]] = {
 #: schema model_family Literal 的值域（顺序即 UI 下拉顺序）
 MODEL_FAMILIES: tuple[str, ...] = tuple(FAMILY_CAPABILITIES)
 
+# ─── 采样端白名单（多模型 P4-2，A13） ─────────────────────────────────────
+# runtime SPECS[fam].sampling.samplers/schedulers 的镜像（首项 = 族默认值）。
+# 与能力矩阵同一纪律：studio 不 import runtime，同步由
+# tests/test_model_family_gating.py 双向锁死。
+# 这两个字段是硬白名单——两族的 sample_image 都在入口对名单外的值 raise
+# （anima: families/anima/sampling.py Comfy parity 校验；krea2:
+# families/krea2/sampling.py 同款），所以跨族值在配置层就报错（fail-fast）。
+FAMILY_SAMPLING: dict[str, dict[str, tuple[str, ...]]] = {
+    "anima": {
+        "samplers": ("er_sde", "dpmpp_3m_sde"),
+        "schedulers": ("simple", "sgm_uniform"),
+    },
+    "krea2": {
+        "samplers": ("euler",),
+        "schedulers": ("krea2_shift",),
+    },
+}
+
+#: Literal 收紧（#256）前就存在的族：sampler/scheduler 白名单外的存量值按
+#: #256 迁移契约静默归并到族默认（grandfather，与 D12 npz 无键 / D13 LoRA
+#: 无标记同款）。Literal 时代出生的族没有 legacy 语料——白名单外的 union 值
+#: 一律报错（fail-fast + 可操作文案），不静默改写。
+LEGACY_SAMPLING_FAMILIES: frozenset = frozenset({"anima"})
+
+#: timestep_sampling 里按族门控的选项。其余选项是共享循环通用实现，全族可用。
+#: krea2_shift 机制上任何族都能跑（loop 按 requires_token_counts 供
+#: token_counts），但 mu 插值按 K2 校准——只做 UI 引导性隐藏，后端不设闸
+#: （A1：同代码不限制）。第 3 个 resolution-aware 族复用该策略时加进元组即可。
+TIMESTEP_SAMPLING_OPTION_FAMILIES: dict[str, tuple[str, ...]] = {
+    "krea2_shift": ("krea2",),
+}
+
+
+def option_gates(option_families: dict[str, tuple[str, ...]]) -> dict[str, str]:
+    """把「选项 → 支持它的族」编译成 option 级 show_when 表达式映射。
+
+    cap_gate 的 option 级版本：作者写时展开，三个 show_when 求值器零新文法。
+    产物进 Field 元信息 `option_show_when`，前端按当前 model_family 过滤下拉
+    选项。未出现在映射里的选项永远可见。
+    """
+    return {
+        opt: "||".join(f"model_family=={f}" for f in sorted(fams))
+        for opt, fams in option_families.items()
+    }
+
+
+def sampling_option_gates(kind: str) -> dict[str, str]:
+    """从 FAMILY_SAMPLING 推导 samplers / schedulers 的 option 门控映射。
+
+    全族都支持的值不设门（永远可见）；其余值按支持它的族展开表达式。
+    """
+    by_option: dict[str, list[str]] = {}
+    for fam, spec in FAMILY_SAMPLING.items():
+        for value in spec[kind]:
+            by_option.setdefault(value, []).append(fam)
+    all_families = set(FAMILY_SAMPLING)
+    return option_gates({
+        value: tuple(fams)
+        for value, fams in by_option.items()
+        if set(fams) != all_families
+    })
+
 #: 字段 → 所需能力位。驱动三层防线：show_when（作者写时经 cap_gate 展开）、
 #: TrainingConfig validator、trainer bootstrap 校验。判定口径：字段值为
 #: 真值/非零才算"启用"该能力（默认关闭的字段对任何族都合法）。
