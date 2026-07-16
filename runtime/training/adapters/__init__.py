@@ -1,7 +1,7 @@
 """LoRA adapter plugin registry（ADR 0003 PR-C）。
 
 加新变体的步骤（参考 ADR 0003 Case 2-5 落地案例）：
-1. 写 training/adapters/{variant}.py 含 `build(args) -> AdapterProtocol`
+1. 写 training/adapters/{variant}.py 含 `build(args, *, preset) -> AdapterProtocol`
 2. 本文件 BUILDERS 字典加一行
 3. studio/schema.py 的 `lora_type: Literal[...]` 加一个枚举值 + 该变体专属字段
 4. 完。phases/models.py / loop.py / main() 0 改动。
@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from typing import Callable
+from typing import Any, Callable
 
 from training.adapters import lycoris, ortho, tlora
 from training.adapters.protocol import AdapterProtocol, StepContext
@@ -30,14 +30,14 @@ BUILDERS: dict[str, Callable[..., AdapterProtocol]] = {
 }
 
 
-def build_adapter(args) -> AdapterProtocol:
-    """按 args.lora_type 派发到对应 build()。"""
+def build_adapter(args, *, preset: dict[str, Any]) -> AdapterProtocol:
+    """按 args.lora_type 派发，并显式注入当前模型族的 target preset。"""
     lora_type = args.lora_type
     if lora_type not in BUILDERS:
         raise ValueError(
             f"未知 lora_type={lora_type!r}；已注册: {sorted(BUILDERS)}"
         )
-    return BUILDERS[lora_type](args)
+    return BUILDERS[lora_type](args, preset=preset)
 
 
 def validate_schema_consistency() -> None:

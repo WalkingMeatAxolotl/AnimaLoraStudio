@@ -1,6 +1,6 @@
 """LyCORIS 后端的 adapter build 函数（lokr / loha / lora）。
 
-抽自 phases/models.py 里的 AnimaLycorisAdapter 实例化逻辑（ADR 0003 PR-C）。
+抽自 phases/models.py 里的 LycorisAdapter 实例化逻辑（ADR 0003 PR-C）。
 
 由 training/adapters/__init__.py 的 BUILDERS 字典派发：
     BUILDERS["lokr"] = build
@@ -13,15 +13,16 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from training.adapters.protocol import AdapterProtocol
 
 
-def build(args) -> AdapterProtocol:
-    """从 args 读 lora_type / lora_rank / ... 实例化 AnimaLycorisAdapter。"""
-    from training.families.anima.preset import ANIMA_PRESET
+def build(args, *, preset: dict[str, Any]) -> AdapterProtocol:
+    """从 args 与显式 family preset 实例化 LycorisAdapter。"""
     from utils.lycoris_adapter import LycorisAdapter
     return LycorisAdapter(
-        preset=ANIMA_PRESET,
+        preset=preset,
         algo=args.lora_type,
         rank=args.lora_rank,
         alpha=args.lora_alpha,

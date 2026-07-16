@@ -213,6 +213,8 @@
     对照 Hugging Face diffusers `transformer_krea2.py`（Apache-2.0，同上固定 commit）
   - `runtime/training/families/krea2/loader.py` — meta-device + `assign=True` 的大权重
     加载策略参考 `src/musubi_tuner/krea2/krea2_utils.py`；结构指纹、前缀归一和错误诊断为本仓库实现
+  - `runtime/training/families/krea2/preset.py` — 全部 Linear target 与统一
+    `lora_unet` 前缀参考 `src/musubi_tuner/networks/lora_krea2.py`
 
 实现按本项目 timestep sampler protocol / 纯 torch modeling 边界适配；具体派生关系见各文件头。
 

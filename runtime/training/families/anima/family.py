@@ -128,7 +128,10 @@ class AnimaFamily:
         return ANIMA_PRESET
 
     def lora_metadata(self) -> dict[str, str]:
-        return {"model_family": self.spec.family_id}
+        return {
+            "model_family": self.spec.family_id,
+            "preset": self.spec.lora.preset_name,
+        }
 
     def convert_lora_state_dict(self, sd: dict) -> dict:
         return sd  # kohya 格式即产物格式（04 §7.1），恒等

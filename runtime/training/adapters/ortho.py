@@ -1,16 +1,16 @@
 """OrthoLoRA adapter builder."""
 from __future__ import annotations
 
+from typing import Any
+
 from training.adapters.protocol import AdapterProtocol
 
 
-def build(args) -> AdapterProtocol:
+def build(args, *, preset: dict[str, Any]) -> AdapterProtocol:
     from utils.ortho_adapter import OrthoLoRAAdapter
 
-    from training.families.anima.preset import ANIMA_PRESET
-
     return OrthoLoRAAdapter(
-        preset=ANIMA_PRESET,
+        preset=preset,
         rank=args.lora_rank,
         alpha=args.lora_alpha,
         dropout=float(getattr(args, "lora_dropout", 0.0) or 0.0),

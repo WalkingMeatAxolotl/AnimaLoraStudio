@@ -84,7 +84,7 @@ def run(ctx: TrainingContext) -> None:
     # training/adapters/__init__.py docstring
     logger.info(f"注入 {args.lora_type.upper()}...")
     from training.adapters import build_adapter
-    ctx.injector = build_adapter(args)
+    ctx.injector = build_adapter(args, preset=ctx.family.lora_preset())
     ctx.injector.metadata_extra = ctx.family.lora_metadata()  # D13：产物族标记
     ctx.injector.inject(ctx.model)
 
