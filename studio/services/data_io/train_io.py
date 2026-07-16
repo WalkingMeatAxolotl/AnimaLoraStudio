@@ -897,7 +897,14 @@ def import_bundle(
                             from .. import presets as _presets_svc
                             from .. import models as _md
                             if _presets_svc._auto_sync_paths():
-                                raw.update(_md.default_paths_for_new_version())
+                                family = str(raw.get("model_family") or "anima")
+                                try:
+                                    raw.update(_md.default_paths_for_new_version(
+                                        family=family))
+                                except ValueError:
+                                    # 未知族的 bundle：不覆路径，交给下面
+                                    # write_version_config 的 schema 校验拒绝
+                                    pass
                             try:
                                 _vc.write_version_config(p, v, raw, force_project_overrides=True)
                                 config_imported = True

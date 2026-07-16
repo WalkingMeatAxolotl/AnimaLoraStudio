@@ -81,14 +81,21 @@ def get_models_catalog() -> dict[str, Any]:
 
 
 @router.get("/api/models/path-defaults")
-def get_models_path_defaults() -> dict[str, str]:
-    """当前 Settings 算出的 4 个模型字段绝对路径。
+def get_models_path_defaults(family: str = "anima") -> dict[str, str]:
+    """当前 Settings 算出的 4 个模型字段绝对路径（按 `family` query 参数解析）。
 
     给预设页 reset 按钮和「新建预设」初始填充用——这两个场景没有 project
     上下文，拿不到 /api/projects/{pid}/versions/{vid}/config 里的
     project_specific_defaults，所以单独开一个端点。
     """
-    return model_downloader.default_paths_for_new_version()
+    try:
+        return model_downloader.default_paths_for_new_version(family=family)
+    except ValueError as exc:
+        raise ValidationError(
+            f"Unknown model family: {family}",
+            code="model.family_invalid", details={"reason": str(exc)},
+            http_status=400,
+        ) from exc
 
 
 @router.post("/api/models/download")

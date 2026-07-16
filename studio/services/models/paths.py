@@ -213,6 +213,16 @@ def models_root() -> Path:
     return REPO_ROOT / "models"
 
 
+def qwen_image_vae_target(root: Path) -> Path:
+    """Qwen-Image VAE 的本地落点——**族无关共享资产**，不属于任何模型族。
+
+    Anima 与 Krea 2 都用这同一个 VAE 文件（同 Wan2.1 latent 空间，D6/D7）；
+    它历史上挂在 Anima 名下只因 Anima 先到。下载渠道（从哪个 repo 拿）仍是
+    各族资产清单的知识，本函数只回答「文件放哪 / 训练配置指哪」。
+    """
+    return root / "vae" / "qwen_image_vae.safetensors"
+
+
 def taeflux_dir(root: Optional[Path] = None) -> Path:
     """TAEFlux 本地目录。daemon 用 AutoencoderTiny.from_pretrained 加载。"""
     r = root or models_root()

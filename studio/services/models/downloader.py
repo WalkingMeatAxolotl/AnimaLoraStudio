@@ -26,7 +26,6 @@ from .families.anima import (
     T5_FILES,
     T5_REPO,
     anima_main_target,
-    anima_vae_target,
     qwen_dir,
     selected_anima_variant,
     t5_tokenizer_dir,
@@ -53,6 +52,7 @@ from .paths import (
     cltagger_target_root,
     eval_model_target_dir,
     models_root,
+    qwen_image_vae_target,
     selected_upscaler,
     taeflux_dir,
     upscaler_dir,
@@ -99,7 +99,8 @@ def download_anima_main(
 
 
 def download_anima_vae(root: Path, *, on_log: Callable[[str], None] = print) -> bool:
-    target = anima_vae_target(root)
+    # 落点是族无关共享资产（Krea2 同用）；下载渠道走 Anima repo（文件在那儿）。
+    target = qwen_image_vae_target(root)
     on_log("\n📥 Anima VAE (~250 MB)")
     if _sources._source_for("training") == "modelscope":
         return _sources.download_flat_ms(ANIMA_REPO, ANIMA_VAE_PATH, target, on_log=on_log)

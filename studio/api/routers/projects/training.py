@@ -649,16 +649,19 @@ def get_version_config_endpoint(pid: int, vid: int) -> dict[str, Any]:
     """
     project, ver = _project_and_version_or_404(pid, vid)
     psf = sorted(version_config.PROJECT_SPECIFIC_FIELDS)
-    psd = {
-        **version_config.project_specific_overrides(project, ver),
-        **model_downloader.default_paths_for_new_version(),
-    }
+
+    def _psd(family: str) -> dict[str, Any]:
+        return {
+            **version_config.project_specific_overrides(project, ver),
+            **model_downloader.default_paths_for_new_version(family=family),
+        }
+
     if not version_config.has_version_config(project, ver):
         return {
             "has_config": False,
             "config": None,
             "project_specific_fields": psf,
-            "project_specific_defaults": psd,
+            "project_specific_defaults": _psd("anima"),
         }
     try:
         cfg, dropped, defaulted = version_config.read_version_config_with_warnings(project, ver)
@@ -668,6 +671,8 @@ def get_version_config_endpoint(pid: int, vid: int) -> dict[str, Any]:
             code="version.config_invalid", details={"reason": str(exc)},
             http_status=422,
         ) from exc
+    # 路径 hint 跟随 version 已声明的族（krea2 版本不该收到 anima 路径预填）
+    psd = _psd(str(cfg.get("model_family") or "anima"))
     return {
         "has_config": True,
         "config": cfg,

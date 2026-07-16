@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .... import secrets
-from ..paths import models_root
+from ..paths import models_root, qwen_image_vae_target
 
 ANIMA_REPO = "circlestone-labs/Anima"
 # 顺序：最新在前。`find_anima_main` 的 fallback 查找按本 dict 序遍历，
@@ -50,10 +50,6 @@ def anima_main_target(root: Path, variant: str) -> Path:
     if variant not in ANIMA_VARIANTS:
         raise ValueError(f"unknown variant {variant!r}")
     return root / "diffusion_models" / Path(ANIMA_VARIANTS[variant]).name
-
-
-def anima_vae_target(root: Path) -> Path:
-    return root / "vae" / Path(ANIMA_VAE_PATH).name
 
 
 def qwen_dir(root: Path) -> Path:
@@ -142,7 +138,7 @@ def default_paths_for_new_version(base_model: Optional[str] = None) -> dict[str,
     root = models_root()
     return {
         "transformer_path": anima_transformer_path_for(base_model),
-        "vae_path": str(anima_vae_target(root)),
+        "vae_path": str(qwen_image_vae_target(root)),
         "text_encoder_path": str(qwen_dir(root)),
         "t5_tokenizer_path": str(t5_tokenizer_dir(root)),
     }
@@ -182,7 +178,7 @@ def catalog_sections(root: Path, models_cfg: Any) -> dict[str, Any]:
             **_file_status(target),
         })
 
-    vae_target = anima_vae_target(root)
+    vae_target = qwen_image_vae_target(root)
     qwen_d = qwen_dir(root)
     t5_d = t5_tokenizer_dir(root)
     return {

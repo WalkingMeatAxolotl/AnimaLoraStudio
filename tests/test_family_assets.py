@@ -44,6 +44,55 @@ def test_krea2_assets_surface_uses_shared_vae_and_isolated_text_dir():
     assert paths["t5_tokenizer_path"] == ""
 
 
+# ── default_paths_for_new_version 按族派发（多模型 P4-1）───────────────────
+
+
+def test_default_paths_dispatches_by_family():
+    """门面函数经 registry 派发；无 family 参数 = anima（老调用方零迁移）。"""
+    from studio.services import models as model_downloader
+
+    anima = model_downloader.default_paths_for_new_version()
+    assert anima == get_assets("anima").default_paths_for_new_version()
+    krea2 = model_downloader.default_paths_for_new_version(family="krea2")
+    assert krea2["t5_tokenizer_path"] == ""
+    assert krea2["vae_path"] == anima["vae_path"]
+    with pytest.raises(ValueError, match="anima"):
+        model_downloader.default_paths_for_new_version(family="no-such-family")
+
+
+def test_krea2_default_paths_ignore_inference_selected(tmp_path, monkeypatch):
+    """Settings 选中 turbo（purpose=inference，为 Generate 页选的推理底模）时，
+    新训练 version 的默认主权重不静默跟随，落回 training variant（Raw）。"""
+    from studio import secrets
+    from studio.services import models as model_downloader
+
+    monkeypatch.setattr(secrets, "load", lambda: secrets.Secrets(models={
+        "root": str(tmp_path), "selected": {"krea2": "turbo"},
+    }))
+    paths = model_downloader.default_paths_for_new_version(family="krea2")
+    assert paths["transformer_path"].endswith("krea2-raw-bf16.safetensors")
+    # 显式 base_model 传 turbo = 用户显式选择，尊重（A1：不加底模白名单）
+    explicit = model_downloader.default_paths_for_new_version(
+        "turbo", family="krea2")
+    assert explicit["transformer_path"].endswith("krea2-turbo-bf16.safetensors")
+
+
+def test_krea2_default_paths_respect_custom_selected(tmp_path, monkeypatch):
+    """selected 是注册的本地 custom 权重（社区微调等，无 purpose 元数据）→ 尊重。"""
+    from studio import secrets
+    from studio.services import models as model_downloader
+
+    custom = tmp_path / "krea2-community-ft.safetensors"
+    custom.write_bytes(b"weights")
+    monkeypatch.setattr(secrets, "load", lambda: secrets.Secrets(models={
+        "root": str(tmp_path),
+        "selected": {"krea2": str(custom)},
+        "custom": {"krea2": [str(custom)]},
+    }))
+    paths = model_downloader.default_paths_for_new_version(family="krea2")
+    assert paths["transformer_path"] == str(custom)
+
+
 def test_catalog_sections_shape(tmp_path):
     """输出键与旧 build_catalog 内联实现一致（前端零改动的契约）。"""
     sections = get_assets("anima").catalog_sections(tmp_path, ModelsConfig())
