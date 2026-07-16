@@ -14,10 +14,14 @@ import pytest
 from studio.domain.common import (
     FAMILY_CAPABILITIES,
     FAMILY_CONFIG_DEFAULTS,
+    FAMILY_SAMPLING,
     FIELD_CAPABILITY_REQUIREMENTS,
     MODEL_FAMILIES,
+    TIMESTEP_SAMPLING_OPTION_FAMILIES,
     cap_gate,
     capability_violations,
+    option_gates,
+    sampling_option_gates,
 )
 from studio.domain.config_prune import eval_show_when
 from studio.schema import TrainingConfig
@@ -32,6 +36,30 @@ def test_capability_matrix_mirrors_runtime_specs():
             f"studio 镜像与 runtime SPECS['{fid}'].capabilities 失同步"
         )
         assert FAMILY_CONFIG_DEFAULTS[fid] == dict(spec.config_defaults)
+
+
+def test_sampling_whitelist_mirrors_runtime_specs():
+    """FAMILY_SAMPLING 是 SPECS[fam].sampling 的镜像；首项 = 族默认值。"""
+    from training.families import SPECS
+
+    assert set(FAMILY_SAMPLING) == set(SPECS)
+    for fid, spec in SPECS.items():
+        mirror = FAMILY_SAMPLING[fid]
+        assert mirror["samplers"] == tuple(spec.sampling.samplers), fid
+        assert mirror["schedulers"] == tuple(spec.sampling.schedulers), fid
+        assert mirror["samplers"][0] == spec.sampling.default_sampler, fid
+        assert mirror["schedulers"][0] == spec.sampling.default_scheduler, fid
+
+
+def test_timestep_option_gate_targets_registered_strategy():
+    """门控的 timestep 选项必须真实存在于 Literal 与 runtime BUILDERS。"""
+    from training.timestep_samplers import BUILDERS
+
+    literal = set(get_args(TrainingConfig.model_fields["timestep_sampling"].annotation))
+    for option, fams in TIMESTEP_SAMPLING_OPTION_FAMILIES.items():
+        assert option in literal, option
+        assert option in BUILDERS, option
+        assert set(fams) <= set(MODEL_FAMILIES), option
 
 
 def test_schema_literal_matches_families():
@@ -81,6 +109,79 @@ def test_default_config_valid_and_yaml_roundtrip():
         "euler", "krea2_shift",
     )
     assert (krea2.sample_infer_steps, krea2.sample_cfg_scale) == (28, 4.5)
+
+
+# ─── option 级门控 + sampler 越族值报错（多模型 P4-2，A13/C1）────────────────
+
+
+def test_option_gates_render_expressions():
+    assert sampling_option_gates("samplers") == {
+        "er_sde": "model_family==anima",
+        "dpmpp_3m_sde": "model_family==anima",
+        "euler": "model_family==krea2",
+    }
+    assert option_gates(TIMESTEP_SAMPLING_OPTION_FAMILIES) == {
+        "krea2_shift": "model_family==krea2",
+    }
+
+
+def test_option_show_when_wired_into_schema_fields():
+    """三个 enum 字段带 option_show_when，且键都在各自 Literal 值域内。"""
+    for field, kind in (
+        ("sample_sampler_name", "samplers"),
+        ("sample_scheduler", "schedulers"),
+    ):
+        extra = TrainingConfig.model_fields[field].json_schema_extra
+        gates = extra.get("option_show_when")
+        assert gates == sampling_option_gates(kind), field
+        literal = set(get_args(TrainingConfig.model_fields[field].annotation))
+        assert set(gates) <= literal, field
+    ts_extra = TrainingConfig.model_fields["timestep_sampling"].json_schema_extra
+    assert ts_extra.get("option_show_when") == option_gates(
+        TIMESTEP_SAMPLING_OPTION_FAMILIES
+    )
+
+
+def test_cross_family_sampler_asymmetric_grandfather():
+    """白名单外值的按族处理（#419 债 C1 的修法）：
+
+    - anima（Literal 收紧前就存在）：euler 等历史存量静默归并——#256 迁移
+      契约保留（test_comfy_parity_contract 另有原契约测试锁死）
+    - krea2（Literal 时代出生，无 legacy 语料）：union 内跨族值报错，
+      不静默改写显式配置
+    """
+    legacy = TrainingConfig(
+        model_family="anima",
+        sample_sampler_name="euler", sample_scheduler="krea2_shift",
+    )
+    assert (legacy.sample_sampler_name, legacy.sample_scheduler) == (
+        "er_sde", "simple",
+    )
+    with pytest.raises(ValueError, match="er_sde"):
+        TrainingConfig(model_family="krea2", sample_sampler_name="er_sde")
+    with pytest.raises(ValueError, match="simple"):
+        TrainingConfig(model_family="krea2", sample_scheduler="simple")
+
+
+def test_legacy_garbage_sampler_still_migrates_to_family_default():
+    """Literal 外的垃圾值任何族都归并族默认（加载健壮性），config 不整体失败。"""
+    cfg = TrainingConfig(
+        sample_sampler_name="ancient_free_text", sample_scheduler="karras",
+    )
+    assert (cfg.sample_sampler_name, cfg.sample_scheduler) == ("er_sde", "simple")
+    krea2 = TrainingConfig(
+        model_family="krea2",
+        sample_sampler_name="ancient_free_text", sample_scheduler="karras",
+    )
+    assert (krea2.sample_sampler_name, krea2.sample_scheduler) == (
+        "euler", "krea2_shift",
+    )
+
+
+def test_krea2_shift_timestep_allowed_for_any_family():
+    """timestep_sampling 不设后端硬闸（A1：共享循环同代码）——仅 UI 门控。"""
+    cfg = TrainingConfig(model_family="anima", timestep_sampling="krea2_shift")
+    assert cfg.timestep_sampling == "krea2_shift"
 
 
 def test_capability_violations_flags_unsupported(monkeypatch):

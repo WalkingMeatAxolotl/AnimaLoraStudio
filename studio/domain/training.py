@@ -20,9 +20,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from .common import (
     AttentionBackend,
     FAMILY_CONFIG_DEFAULTS,
+    FAMILY_SAMPLING,
+    LEGACY_SAMPLING_FAMILIES,
+    TIMESTEP_SAMPLING_OPTION_FAMILIES,
     _meta,
     cap_gate,
     capability_violations,
+    option_gates,
+    sampling_option_gates,
 )
 from .migrations import migrate_legacy_save_keys, migrate_noise_enhancement_type
 
@@ -622,6 +627,9 @@ class TrainingConfig(BaseModel):
             alt_description="【时间步采样】InfoNoise 启用时作为热身期 baseline，正式阶段由自适应 CDF 接管；Leap 启用时 leap 路径恒用 U(0,1)，本字段仅作用于 (1-leap_ratio) 比例的标准 step",
             alt_description_when="infonoise_enabled==true||leap_enabled==true",
             advanced=True,
+            # krea2_shift 的 mu 插值按 K2 校准，仅 UI 不向其他族展示；机制上
+            # 共享循环任何族都能跑，后端不设闸（A1），手改 yaml 尊重
+            option_show_when=option_gates(TIMESTEP_SAMPLING_OPTION_FAMILIES),
         ),
     )
     timestep_shift: float = Field(
@@ -946,25 +954,42 @@ class TrainingConfig(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _coerce_sample_sampler_scheduler(cls, data: Any) -> Any:
-        """sampler/scheduler 收紧为 Literal 前是自由文本，旧 preset / 旧版本
-        config 可能存了其他值（如 euler，当年走 inline Euler 兜底）。统一
-        归并到默认值而不是让整个 config 加载失败。"""
-        if isinstance(data, dict):
-            family = str(data.get("model_family") or "anima")
-            if family == "krea2":
-                samplers = (None, "euler")
-                schedulers = (None, "krea2_shift")
-                default_sampler = "euler"
-                default_scheduler = "krea2_shift"
+        """sampler / scheduler 白名单外值的按族处理（多模型 P4-2，还 #419 债）：
+
+        - **有 legacy 语料的族**（anima，Literal 收紧 #256 前就存在）：白名单外
+          一律静默归并到族默认——#256 的迁移契约原样保留（euler 等历史存量值
+          必须让老 config 能加载）。「UI 提供选项又静默改写」的 C1 病灶由
+          option_show_when 门控根除：UI 不再向 anima 展示 euler。
+        - **Literal 时代出生的族**（krea2 起）：无 legacy 语料。Literal 外的
+          垃圾值仍归并（加载健壮性）；**在 Literal 内但本族跑不了的值报错**
+          （两族 sample_image 都在入口 raise，配置层提前 fail-fast），不静默
+          改写显式配置。
+        """
+        if not isinstance(data, dict):
+            return data
+        family = str(data.get("model_family") or "anima")
+        allowed = FAMILY_SAMPLING.get(family)
+        if allowed is None:
+            return data  # 未知族由 model_family 的 Literal 校验报错，不在此重复
+        union: dict[str, tuple[str, ...]] = {}
+        for spec in FAMILY_SAMPLING.values():
+            for kind in ("samplers", "schedulers"):
+                union[kind] = tuple(dict.fromkeys(union.get(kind, ()) + spec[kind]))
+        legacy = family in LEGACY_SAMPLING_FAMILIES
+        for field, kind in (
+            ("sample_sampler_name", "samplers"),
+            ("sample_scheduler", "schedulers"),
+        ):
+            value = data.get(field)
+            if value is None or value in allowed[kind]:
+                continue
+            if legacy or value not in union[kind]:
+                data[field] = allowed[kind][0]  # grandfather / 垃圾值 → 族默认
             else:
-                samplers = (None, "er_sde", "dpmpp_3m_sde")
-                schedulers = (None, "simple", "sgm_uniform")
-                default_sampler = "er_sde"
-                default_scheduler = "simple"
-            if data.get("sample_sampler_name") not in samplers:
-                data["sample_sampler_name"] = default_sampler
-            if data.get("sample_scheduler") not in schedulers:
-                data["sample_scheduler"] = default_scheduler
+                raise ValueError(
+                    f"{field}='{value}' 不适用于 model_family='{family}'"
+                    f"（该族可用：{'、'.join(allowed[kind])}）"
+                )
         return data
 
     @model_validator(mode="before")
@@ -1253,14 +1278,20 @@ class TrainingConfig(BaseModel):
     )
     sample_sampler_name: Literal["er_sde", "dpmpp_3m_sde", "euler"] = Field(
         "er_sde",
-        description="采样器。er_sde 默认；dpmpp_3m_sde 与 ComfyUI 同款"
-                    "（BrownianTree 噪声，需要 torchsde）",
-        json_schema_extra=_meta("sample"),
+        description="采样器。er_sde / dpmpp_3m_sde 为 Anima 的 ComfyUI 同款栈"
+                    "（dpmpp_3m_sde 走 BrownianTree 噪声，需要 torchsde）；"
+                    "euler 为 Krea 2 的 FlowMatchEuler",
+        json_schema_extra=_meta(
+            "sample", option_show_when=sampling_option_gates("samplers"),
+        ),
     )
     sample_scheduler: Literal["simple", "sgm_uniform", "krea2_shift"] = Field(
         "simple",
-        description="调度器。simple 默认；sgm_uniform 为 ComfyUI 的 SGM 均匀切分",
-        json_schema_extra=_meta("sample"),
+        description="调度器。simple / sgm_uniform 为 Anima 的 ComfyUI 切分；"
+                    "krea2_shift 为 Krea 2 的分辨率感知动态 shift 时刻表",
+        json_schema_extra=_meta(
+            "sample", option_show_when=sampling_option_gates("schedulers"),
+        ),
     )
     sample_width: int = Field(
         0, ge=0,

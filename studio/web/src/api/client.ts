@@ -42,6 +42,10 @@ export interface SchemaProperty {
   control?: string
   cli_alias?: string
   show_when?: string
+  /** option 级 show_when（多模型 P4-2）：enum 值 → 表达式（语法同 show_when），
+   * 求值为假的选项从下拉隐藏。未列出的选项永远可见；当前已选中的值即使被
+   * 门控也保留显示（表单如实反映 config，越族值由后端校验报错）。 */
+  option_show_when?: Record<string, string>
   /** 当此表达式为真时字段在 UI 上 disabled（值由 SchemaForm 自动回退到 default）。
    * 表达式语法与 show_when 一致：`key==value` / `key!=value`。
    * 例：lr_scheduler 在 optimizer_type=prodigy_plus_schedulefree 时被 disable。 */

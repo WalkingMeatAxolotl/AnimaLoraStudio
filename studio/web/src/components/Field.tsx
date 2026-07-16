@@ -24,6 +24,9 @@ interface Props {
   /** path 字段右侧额外按钮槽（如「↺ 重置为全局默认」）。仅对 string/path
    * 字段渲染；其他类型字段忽略。 */
   suffix?: React.ReactNode
+  /** select 的可见选项覆盖（option_show_when 过滤后的 enum 子集，由
+   * SchemaForm 按当前 values 计算）。缺省渲染 prop.enum 全量。 */
+  enumOptions?: unknown[]
 }
 
 // input 覆盖 .input 默认值（更紧凑；背景用 canvas 而不是 surface）
@@ -41,6 +44,7 @@ const FieldHint = ({ children }: { children: React.ReactNode }) => (
 /** 单个表单字段，按 control kind 分发渲染。 */
 export default function Field({
   name, prop, value, onChange, disabled = false, hint, descriptionOverride, suffix,
+  enumOptions,
 }: Props) {
   const { t } = useTranslation()
   const kind = controlKind(prop)
@@ -111,7 +115,7 @@ export default function Field({
           disabled={disabled}
           className="input" style={inputStyle}
         >
-          {(prop.enum ?? []).map((opt) => (
+          {(enumOptions ?? prop.enum ?? []).map((opt) => (
             <option key={String(opt)} value={String(opt)}>
               {schemaEnumLabel(name, opt, t)}
             </option>
