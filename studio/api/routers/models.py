@@ -16,9 +16,14 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from ..schemas.models import AnimaCustomModelRequest, ModelDownloadRequest
+from ..schemas.models import (
+    AnimaCustomModelRequest,
+    FamilySwitchRequest,
+    ModelDownloadRequest,
+)
 from ... import secrets
 from ...domain.errors import ValidationError
+from ...domain.family_switch import switch_family
 from ...services import models as model_downloader
 
 router = APIRouter()
@@ -96,6 +101,27 @@ def get_models_path_defaults(family: str = "anima") -> dict[str, str]:
             code="model.family_invalid", details={"reason": str(exc)},
             http_status=400,
         ) from exc
+
+
+@router.post("/api/models/family-switch")
+def switch_model_family(body: FamilySwitchRequest) -> dict[str, Any]:
+    """训练配置切换模型族的预览计算（多模型 P4-3）。
+
+    纯计算不落盘：重算 4 个权重路径 + 重置族风味字段（sampler / scheduler /
+    timestep 等）+ 关闭目标族不支持的能力字段，返回切换后的完整 config 与
+    变更清单。前端拿去弹确认对话框，用户确认后走正常保存链路。
+    """
+    try:
+        path_defaults = model_downloader.default_paths_for_new_version(
+            family=body.target)
+    except ValueError as exc:
+        raise ValidationError(
+            f"Unknown model family: {body.target}",
+            code="model.family_invalid", details={"reason": str(exc)},
+            http_status=400,
+        ) from exc
+    new_config, changes = switch_family(body.config, body.target, path_defaults)
+    return {"config": new_config, "changes": changes}
 
 
 @router.post("/api/models/download")

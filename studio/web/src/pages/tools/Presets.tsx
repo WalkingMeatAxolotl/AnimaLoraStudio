@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   api,
@@ -15,6 +15,7 @@ import SchemaSectionIndex from '../../components/SchemaSectionIndex'
 import { useToast } from '../../components/Toast'
 import { useSettingsDrawer } from '../../lib/SettingsDrawer'
 import { useAdvancedMode } from '../../lib/useAdvancedMode'
+import { confirmFamilySwitch } from '../../lib/familySwitch'
 import {
   PRESET_NAME_RE,
   defaultsFromSchema,
@@ -185,6 +186,25 @@ export default function PresetsPage() {
     savedJsonRef.current = JSON.stringify(next)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelPathDefaults, selected, schema])
+
+  /** SchemaForm.onChange 入口：拦截 model_family 变化走切换动作（P4-3，
+   * 与 Train 页同款）。确认后应用后端重算的完整 config；取消保持旧值。 */
+  const onFormChange = useCallback((v: ConfigData) => {
+    const prevFamily = String(config?.model_family ?? 'anima')
+    const nextFamily = String(v.model_family ?? 'anima')
+    if (config && nextFamily !== prevFamily) {
+      void (async () => {
+        try {
+          const switched = await confirmFamilySwitch(nextFamily, config, confirm, t)
+          if (switched) setConfig(switched)
+        } catch (e) {
+          toast(t('familySwitch.failed', { error: e }), 'error')
+        }
+      })()
+      return
+    }
+    setConfig(v)
+  }, [config, confirm, t, toast])
 
   // ── 首次拿到列表后：自动选最近一个，省一次「切换」点击 ──
   const autoSelectedRef = useRef(false)
@@ -789,7 +809,7 @@ export default function PresetsPage() {
               <SchemaForm
                 schema={schema}
                 values={config}
-                onChange={setConfig}
+                onChange={onFormChange}
                 disabledFields={disabledFields}
                 disabledHints={disabledHints}
                 autoHints={autoHints}

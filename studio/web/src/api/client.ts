@@ -765,6 +765,17 @@ export interface UpscalersCatalog {
   variants: UpscalerVariant[]
 }
 
+export interface FamilySwitchChange {
+  field: string
+  from: unknown
+  to: unknown
+}
+
+export interface FamilySwitchResponse {
+  config: ConfigData
+  changes: FamilySwitchChange[]
+}
+
 export interface ModelsCatalog {
   models_root: string
   anima_main: AnimaMainCatalog
@@ -2027,6 +2038,14 @@ export const api = {
   getModelsCatalog: () => req<ModelsCatalog>('/api/models/catalog'),
   /** 当前 Settings 算出的 4 个模型字段绝对路径。预设页 reset / 新建用。 */
   getModelPathDefaults: () => req<Record<string, string>>('/api/models/path-defaults'),
+  /** 训练配置切换模型族的预览计算（多模型 P4-3）。纯计算不落盘：返回
+   * 重算路径 + 重置族风味字段后的完整 config 与变更清单，前端确认后走
+   * 正常保存链路。 */
+  switchModelFamily: (target: string, config: ConfigData) =>
+    req<FamilySwitchResponse>('/api/models/family-switch', {
+      method: 'POST',
+      body: JSON.stringify({ target, config }),
+    }),
   startModelDownload: (body: { model_id: string; variant?: string }) =>
     req<{ key: string; status: string }>('/api/models/download', {
       method: 'POST',

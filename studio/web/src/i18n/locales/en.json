@@ -353,6 +353,10 @@
       "scheduler": {
         "simple": "Simple",
         "sgmUniform": "SGM Uniform"
+      },
+      "modelFamily": {
+        "anima": "Anima",
+        "krea2": "Krea 2"
       }
     },
     "disableHints": {
@@ -368,6 +372,7 @@
       "infonoise_enabled": "Reset noise_enhancement / loss_weighting / loss_type / schedule_shift to defaults to enable (schema mutex)"
     },
     "descriptions": {
+      "model_family": "Model family. Decides which model implementation training uses; other fields show/hide by family capability. Switching recalculates model paths and resets family-specific defaults",
       "transformer_path": "Main diffusion model weights (.safetensors)",
       "vae_path": "VAE weights (.safetensors)",
       "text_encoder_path": "Qwen text encoder directory",
@@ -2083,12 +2088,30 @@
     "toastSavedAllPartial": "Done: {{ok}} saved, {{failed}} failed"
   },
   "steps": {
-    "download": { "title": "Dataset", "subtitle": "Booru scraping + local upload" },
-    "curate": { "title": "Train Set Curation", "subtitle": "Dataset → Train set" },
-    "preprocess": { "title": "Preprocess Tools", "subtitle": "Upscale / crop / inpaint — Upscale tool" },
-    "tag": { "title": "Auto tagging", "subtitle": "WD14 / CLTagger local inference, or remote LLM vision tagging" },
-    "reg": { "title": "Reg set (optional)", "subtitle": "Booru pull or base-model neutral prior; mirror train structure or flat single bucket 1_data/" },
-    "train": { "title": "Train", "subtitle": "Pick preset → Edit config → Queue training" }
+    "download": {
+      "title": "Dataset",
+      "subtitle": "Booru scraping + local upload"
+    },
+    "curate": {
+      "title": "Train Set Curation",
+      "subtitle": "Dataset → Train set"
+    },
+    "preprocess": {
+      "title": "Preprocess Tools",
+      "subtitle": "Upscale / crop / inpaint — Upscale tool"
+    },
+    "tag": {
+      "title": "Auto tagging",
+      "subtitle": "WD14 / CLTagger local inference, or remote LLM vision tagging"
+    },
+    "reg": {
+      "title": "Reg set (optional)",
+      "subtitle": "Booru pull or base-model neutral prior; mirror train structure or flat single bucket 1_data/"
+    },
+    "train": {
+      "title": "Train",
+      "subtitle": "Pick preset → Edit config → Queue training"
+    }
   },
   "curate": {
     "downloadTime": "Added time",
@@ -2439,7 +2462,6 @@
     "statusCellLatest": "LATEST",
     "statusCellSkipped": "skipped",
     "nImagesShort": "imgs",
-    "tabGenerate": "Generate",
     "grpAiGen": "Generation",
     "grpRegSettings": "Reg set",
     "grpImageSettings": "Image settings",
@@ -2822,5 +2844,13 @@
     "export": {
       "name_conflict": "Too many files named \"{{name}}\"; rename and try again"
     }
+  },
+  "familySwitch": {
+    "title": "Switch model family",
+    "message": "Switching to {{family}} will also adjust these fields:\n\n{{changes}}\n\nProceed?",
+    "messageNoChanges": "Switch to {{family}} (no other fields need adjusting). Proceed?",
+    "ok": "Switch",
+    "empty": "(empty)",
+    "failed": "Model family switch failed: {{error}}"
   }
 }

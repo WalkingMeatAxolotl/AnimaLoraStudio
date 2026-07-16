@@ -130,6 +130,10 @@ export const SCHEMA_GROUP_LABEL_KEYS: Record<string, string> = {
 }
 
 export const SCHEMA_ENUM_LABEL_KEYS: Record<string, Record<string, string>> = {
+  model_family: {
+    anima: 'schema.enums.modelFamily.anima',
+    krea2: 'schema.enums.modelFamily.krea2',
+  },
   lora_type: {
     lora: 'schema.enums.loraType.lora',
     lokr: 'schema.enums.loraType.lokr',

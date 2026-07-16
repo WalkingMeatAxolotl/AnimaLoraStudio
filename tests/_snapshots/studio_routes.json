@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 203,
+  "count": 204,
   "routes": [
     {
       "path": "/",
@@ -327,6 +327,14 @@
         "POST"
       ],
       "name": "start_model_download",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/models/family-switch",
+      "methods": [
+        "POST"
+      ],
+      "name": "switch_model_family",
       "type": "APIRoute"
     },
     {

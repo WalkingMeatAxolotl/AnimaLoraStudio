@@ -28,6 +28,7 @@ import {
   defaultsFromSchema,
   generateUniquePresetName,
 } from '../../../lib/preset-helpers'
+import { confirmFamilySwitch } from '../../../lib/familySwitch'
 
 // 全局模型字段来自全局设置，对版本维度只读
 const GLOBAL_MODEL_FIELDS = [
@@ -97,6 +98,27 @@ export default function TrainPage() {
     configRef.current = v
     setConfig(v)
   }, [])
+
+  /** SchemaForm.onChange 入口：拦截 model_family 变化走切换动作（P4-3）。
+   * 切族不是裸字段编辑——经后端重算路径 + 重置族风味字段 + 确认对话框，
+   * 用户取消则保持旧值不动。其余字段变更原样透传 setConfigSync。 */
+  const onFormChange = useCallback((v: ConfigData) => {
+    const prev = configRef.current
+    const prevFamily = String(prev?.model_family ?? 'anima')
+    const nextFamily = String(v.model_family ?? 'anima')
+    if (prev && nextFamily !== prevFamily) {
+      void (async () => {
+        try {
+          const switched = await confirmFamilySwitch(nextFamily, prev, confirm, t)
+          if (switched) setConfigSync(switched)
+        } catch (e) {
+          toast(t('familySwitch.failed', { error: e }), 'error')
+        }
+      })()
+      return
+    }
+    setConfigSync(v)
+  }, [confirm, t, toast, setConfigSync])
 
   const vid = activeVersion?.id ?? null
 
@@ -776,7 +798,7 @@ export default function TrainPage() {
                 <SchemaForm
                   schema={schema}
                   values={config}
-                  onChange={setConfigSync}
+                  onChange={onFormChange}
                   disabledFields={disabledFields}
                   disabledHints={disabledHints}
                   autoHints={autoHints}

@@ -353,6 +353,10 @@
       "scheduler": {
         "simple": "Simple",
         "sgmUniform": "SGM Uniform"
+      },
+      "modelFamily": {
+        "anima": "Anima",
+        "krea2": "Krea 2"
       }
     },
     "disableHints": {
@@ -368,6 +372,7 @@
       "infonoise_enabled": "需先把 noise_enhancement / loss_weighting / loss_type / schedule_shift 全部置默认才能启用（schema 互斥）"
     },
     "descriptions": {
+      "model_family": "模型族。决定训练走哪套模型实现；其余字段按族能力自动显隐。切换将重算模型路径并重置族相关默认值",
       "transformer_path": "主扩散模型权重（.safetensors）",
       "vae_path": "VAE 权重（.safetensors）",
       "text_encoder_path": "Qwen 文本编码器目录",
@@ -2083,12 +2088,30 @@
     "toastSavedAllPartial": "保存完成：成功 {{ok}} 张，失败 {{failed}} 张"
   },
   "steps": {
-    "download": { "title": "数据集", "subtitle": "Booru 抓取 + 本地上传" },
-    "curate": { "title": "训练集筛选", "subtitle": "数据集 → 训练集" },
-    "preprocess": { "title": "预处理工具", "subtitle": "放大 / 裁剪 / 涂抹 — 放大工具" },
-    "tag": { "title": "自动打标", "subtitle": "WD14 / CLTagger 本地推理，或远程 LLM 视觉打标" },
-    "reg": { "title": "正则集（可选）", "subtitle": "Booru 拉图或 base 模型自生成中性 prior；可镜像 train 结构或平铺单桶 1_data/" },
-    "train": { "title": "训练", "subtitle": "选预设 → 编辑 config → 入队训练" }
+    "download": {
+      "title": "数据集",
+      "subtitle": "Booru 抓取 + 本地上传"
+    },
+    "curate": {
+      "title": "训练集筛选",
+      "subtitle": "数据集 → 训练集"
+    },
+    "preprocess": {
+      "title": "预处理工具",
+      "subtitle": "放大 / 裁剪 / 涂抹 — 放大工具"
+    },
+    "tag": {
+      "title": "自动打标",
+      "subtitle": "WD14 / CLTagger 本地推理，或远程 LLM 视觉打标"
+    },
+    "reg": {
+      "title": "正则集（可选）",
+      "subtitle": "Booru 拉图或 base 模型自生成中性 prior；可镜像 train 结构或平铺单桶 1_data/"
+    },
+    "train": {
+      "title": "训练",
+      "subtitle": "选预设 → 编辑 config → 入队训练"
+    }
   },
   "curate": {
     "downloadTime": "加入时间",
@@ -2439,7 +2462,6 @@
     "statusCellLatest": "最近生成",
     "statusCellSkipped": "已跳过",
     "nImagesShort": "张",
-    "tabGenerate": "生成",
     "grpAiGen": "出图",
     "grpRegSettings": "正则集设置",
     "grpImageSettings": "出图设置",
@@ -2822,5 +2844,13 @@
     "export": {
       "name_conflict": "导出文件名「{{name}}」冲突过多，请重命名后重试"
     }
+  },
+  "familySwitch": {
+    "title": "切换模型族",
+    "message": "切换到 {{family}} 将同时调整以下字段：\n\n{{changes}}\n\n确认切换？",
+    "messageNoChanges": "切换到 {{family}}（当前配置无需调整其他字段）。确认切换？",
+    "ok": "切换",
+    "empty": "（空）",
+    "failed": "模型族切换失败：{{error}}"
   }
 }

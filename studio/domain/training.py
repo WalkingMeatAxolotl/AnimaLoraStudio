@@ -46,10 +46,12 @@ class TrainingConfig(BaseModel):
     # Train 页看到的总是无歧义的绝对路径，不用考虑相对路径锚定。
     # 这里的默认值仅 fallback：裸 CLI 跑训练 + yaml 完全没填时，按 repo
     # 相对路径解析（与历史行为一致）。
+    # 一级决策不藏高级区（P4-3）。前端对该字段的变更做「切换动作」拦截：
+    # 经 /api/models/family-switch 重算路径 + 重置族风味字段 + 确认后才写。
     model_family: Literal["anima", "krea2"] = Field(
         "anima",
-        description="模型族。决定训练走哪套模型实现；其余字段按族能力自动显隐",
-        json_schema_extra=_meta("model", advanced=True),
+        description="模型族。决定训练走哪套模型实现；其余字段按族能力自动显隐。切换将重算模型路径并重置族相关默认值",
+        json_schema_extra=_meta("model"),
     )
     transformer_path: str = Field(
         "models/diffusion_models/anima-base-v1.0.safetensors",
