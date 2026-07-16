@@ -11,6 +11,7 @@ import torch.nn as nn
 
 from training.families import get_family, get_spec, resolve_family
 from training.families.anima import ANIMA_SPEC
+from training.families.krea2 import KREA2_SPEC
 from training.families.protocol import ModelFamily
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -33,8 +34,7 @@ def test_resolve_family_defaults_and_carriers():
     assert resolve_family(SimpleNamespace()).spec.family_id == "anima"
     assert resolve_family({}).spec.family_id == "anima"
     assert resolve_family({"model_family": "anima"}).spec.family_id == "anima"
-    with pytest.raises(ValueError):
-        resolve_family({"model_family": "krea2"})  # Phase 3 前未注册
+    assert resolve_family({"model_family": "krea2"}).spec is KREA2_SPEC
 
 
 def test_family_lora_contract():
@@ -47,6 +47,46 @@ def test_family_lora_contract():
     assert fam.convert_lora_state_dict(sd) is sd  # 恒等（04 §7.1）
     assert fam.lora_preset()["lora_prefix"] == ANIMA_SPEC.lora.prefix
     assert fam.prepare_text_cache([], []) is None  # online 族 no-op
+
+    krea2 = get_family("krea2")
+    assert krea2 is get_family("krea2")
+    assert krea2.spec is KREA2_SPEC is get_spec("krea2")
+    assert isinstance(krea2, ModelFamily)
+    assert krea2.lora_preset()["lora_prefix"] == "lora_unet"
+    assert krea2.lora_metadata() == {
+        "model_family": "krea2",
+        "preset": "krea2_full",
+    }
+
+
+def test_krea2_and_anima_share_latent_space_identity():
+    assert KREA2_SPEC.latent == ANIMA_SPEC.latent
+
+
+def test_krea2_forward_train_passes_varlen_mask_and_checkpoint():
+    class _Condition:
+        context = torch.zeros(2, 7, 12, 2560)
+        attention_mask = torch.ones(2, 7, dtype=torch.bool)
+
+    class _FakeDiT(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.seen = None
+
+        def forward(self, noisy, t, context, *, attention_mask, use_checkpoint):
+            self.seen = (t, context, attention_mask, use_checkpoint)
+            return noisy
+
+    fam = get_family("krea2")
+    dit = _FakeDiT()
+    noisy = torch.zeros(2, 16, 1, 8, 8)
+    t = torch.rand(2)
+    out = fam.forward_train(dit, noisy, t, _Condition(), use_checkpoint=True)
+    assert out.shape == noisy.shape
+    assert dit.seen[0] is t
+    assert dit.seen[1] is _Condition.context
+    assert dit.seen[2] is _Condition.attention_mask
+    assert dit.seen[3] is True
 
 
 def test_forward_train_shapes_and_padding_mask():

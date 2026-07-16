@@ -17,8 +17,6 @@ from typing import Optional
 import torch
 
 from training.context import TrainingContext
-from training.families.anima import ANIMA_SPEC as _ANIMA_SPEC
-from training.families.anima.sampling import sample_image
 from utils.optimizer_utils import optimizer_eval_mode
 
 
@@ -53,15 +51,26 @@ def run_sample(
     s_h = int(getattr(args, "sample_height", 0) or 0) or base_reso
     # 必须 align_px（VAE stride 8 × patch_spatial 2 = 16）的倍数，
     # 否则 cosmos_predict2 spatial_patch 断言失败
-    _align = _ANIMA_SPEC.latent.align_px
+    spec = ctx.family.spec
+    _align = spec.latent.align_px
     s_w = max(_align, (s_w // _align) * _align)
     s_h = max(_align, (s_h // _align) * _align)
-    s_cfg = float(getattr(args, "sample_cfg_scale", 4.0) or 4.0)
+    s_cfg_value = getattr(args, "sample_cfg_scale", spec.sampling.default_cfg)
+    s_cfg = float(spec.sampling.default_cfg if s_cfg_value is None else s_cfg_value)
     s_neg = str(getattr(args, "sample_negative_prompt", "") or "")
     s_seed = int(getattr(args, "sample_seed", 0) or 0)
-    s_steps = int(getattr(args, "sample_infer_steps", 25) or 25)
-    s_sampler = str(getattr(args, "sample_sampler_name", "er_sde") or "er_sde")
-    s_sched = str(getattr(args, "sample_scheduler", "simple") or "simple")
+    s_steps = int(
+        getattr(args, "sample_infer_steps", spec.sampling.default_steps)
+        or spec.sampling.default_steps
+    )
+    s_sampler = str(
+        getattr(args, "sample_sampler_name", spec.sampling.default_sampler)
+        or spec.sampling.default_sampler
+    )
+    s_sched = str(
+        getattr(args, "sample_scheduler", spec.sampling.default_scheduler)
+        or spec.sampling.default_scheduler
+    )
 
     # T-LoRA：与 ControlGenAI/T-LoRA 官方推理一致 —— sample 阶段不应用 timestep
     # mask。官方 inferencer 不传 sigma_mask, forward 内 fallback 出全 1 mask =
@@ -78,8 +87,8 @@ def run_sample(
             ctx.model.eval()
             if s_seed:
                 torch.manual_seed(s_seed + seed_offset)
-            img = sample_image(
-                ctx.model, ctx.vae, *ctx.text_stack,
+            img = ctx.family.sample_image(
+                ctx.model, ctx.vae, ctx.text_stack,
                 prompt, height=s_h, width=s_w, steps=s_steps, cfg_scale=s_cfg,
                 negative_prompt=s_neg,
                 sampler_name=s_sampler,

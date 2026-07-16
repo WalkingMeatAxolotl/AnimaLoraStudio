@@ -148,6 +148,7 @@ def test_run_sample_clears_tlora_mask() -> None:
     用 stub injector 验证 hook 被调；不实际跑模型。"""
     from unittest.mock import MagicMock
     from runtime.training import sample_runner as sr
+    from runtime.training.families.anima import ANIMA_SPEC
     from runtime.training.sample_runner import run_sample
 
     clear_called = {"n": 0}
@@ -175,8 +176,11 @@ def test_run_sample_clears_tlora_mask() -> None:
     ctx.monitor_server = None
     ctx.dtype = torch.float32
     ctx.device = torch.device("cpu")
+    # 采样经 ctx.family 派发：spec 要真的（run_sample 拿 align_px / 采样默认值
+    # 做算术），出图本身由 MagicMock ctx 自动 stub 掉，不真跑模型。
+    ctx.family.spec = ANIMA_SPEC
 
-    # stub 掉 sample_image / optimizer_eval_mode，让 run_sample 不真跑模型
+    # stub 掉 optimizer_eval_mode
     from contextlib import contextmanager
 
     @contextmanager
@@ -184,16 +188,13 @@ def test_run_sample_clears_tlora_mask() -> None:
         yield
 
     orig_eval = sr.optimizer_eval_mode
-    orig_sample = sr.sample_image
     sr.optimizer_eval_mode = _noop_ctx  # type: ignore[assignment]
-    sr.sample_image = MagicMock(return_value=MagicMock(save=MagicMock()))  # type: ignore[assignment]
     ctx.emit = MagicMock()
 
     try:
         run_sample(ctx, prompt="x", sample_path=MagicMock())
     finally:
         sr.optimizer_eval_mode = orig_eval  # type: ignore[assignment]
-        sr.sample_image = orig_sample  # type: ignore[assignment]
 
     assert clear_called["n"] == 1, (
         "run_sample 必须调 injector.clear_timestep_mask() 让 sample 走满 rank"
@@ -205,6 +206,7 @@ def test_run_sample_no_clear_method_does_not_crash() -> None:
     run_sample 必须安全跳过，不能 AttributeError。"""
     from unittest.mock import MagicMock
     from runtime.training import sample_runner as sr
+    from runtime.training.families.anima import ANIMA_SPEC
     from runtime.training.sample_runner import run_sample
 
     class _NonTloraInjector:
@@ -230,6 +232,7 @@ def test_run_sample_no_clear_method_does_not_crash() -> None:
     ctx.monitor_server = None
     ctx.dtype = torch.float32
     ctx.device = torch.device("cpu")
+    ctx.family.spec = ANIMA_SPEC
 
     from contextlib import contextmanager
 
@@ -238,9 +241,7 @@ def test_run_sample_no_clear_method_does_not_crash() -> None:
         yield
 
     orig_eval = sr.optimizer_eval_mode
-    orig_sample = sr.sample_image
     sr.optimizer_eval_mode = _noop_ctx  # type: ignore[assignment]
-    sr.sample_image = MagicMock(return_value=MagicMock(save=MagicMock()))  # type: ignore[assignment]
     ctx.emit = MagicMock()
 
     try:
@@ -248,7 +249,6 @@ def test_run_sample_no_clear_method_does_not_crash() -> None:
         run_sample(ctx, prompt="x", sample_path=MagicMock())
     finally:
         sr.optimizer_eval_mode = orig_eval  # type: ignore[assignment]
-        sr.sample_image = orig_sample  # type: ignore[assignment]
 
 
 # ── test 4: bypass_mode invariant ──────────────────────────────────────────

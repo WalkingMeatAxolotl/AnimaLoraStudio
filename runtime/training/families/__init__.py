@@ -19,6 +19,7 @@ from training.families.spec import (  # noqa: F401  (re-export)
     validate_spec,
 )
 from training.families.anima import ANIMA_SPEC
+from training.families.krea2 import KREA2_SPEC
 
 SPECS: dict[str, ModelSpec] = {}
 
@@ -31,6 +32,7 @@ def _register(spec: ModelSpec) -> None:
 
 
 _register(ANIMA_SPEC)
+_register(KREA2_SPEC)
 
 
 _FAMILIES: dict[str, object] = {}
@@ -45,6 +47,10 @@ def get_family(family_id: str):
             from training.families.anima.family import AnimaFamily
 
             fam = AnimaFamily()
+        elif family_id == "krea2":
+            from training.families.krea2 import Krea2Family
+
+            fam = Krea2Family()
         else:  # pragma: no cover - registry 与 SPECS 同步维护
             raise ValueError(f"模型族 '{family_id}' 缺少 ModelFamily 实现")
         _FAMILIES[family_id] = fam

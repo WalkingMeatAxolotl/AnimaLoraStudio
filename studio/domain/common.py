@@ -22,6 +22,26 @@ FAMILY_CAPABILITIES: dict[str, frozenset] = {
         "navit", "sra", "leap", "compile_blocks",
         "caption_tag_ops", "online_text", "masked_loss",
     }),
+    "krea2": frozenset({"masked_loss", "text_cache"}),
+}
+
+# ModelSpec.config_defaults 的 studio 镜像。server 不反向 import runtime；同步由
+# tests/test_model_family_gating.py 双向锁死。只在字段缺失时 overlay，显式配置不改写。
+FAMILY_CONFIG_DEFAULTS: dict[str, dict[str, Any]] = {
+    "anima": {},
+    "krea2": {
+        "shuffle_caption": False,
+        "keep_tokens": 0,
+        "tag_dropout": 0.0,
+        "text_encoder_cache": True,
+        "attention_backend": "none",
+        "timestep_sampling": "krea2_shift",
+        "timestep_shift_resolution_aware": False,
+        "sample_sampler_name": "euler",
+        "sample_scheduler": "krea2_shift",
+        "sample_infer_steps": 28,
+        "sample_cfg_scale": 4.5,
+    },
 }
 
 #: schema model_family Literal 的值域（顺序即 UI 下拉顺序）

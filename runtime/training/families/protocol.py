@@ -28,7 +28,8 @@ class ModelFamily(Protocol):
 
     def load_text(self, text_encoder_path: str, device, dtype, *,
                   t5_tokenizer_path: str = "", comfy_qwen: bool = False,
-                  t5_fast: bool = False, purpose: str = "train") -> Any: ...
+                  t5_fast: bool = False, purpose: str = "train",
+                  cache_enabled: bool = True) -> Any: ...
 
     # ── 文本条件 ─────────────────────────────────────────────────────────
     def prepare_text_cache(self, captions: Iterable[str],
@@ -37,7 +38,8 @@ class ModelFamily(Protocol):
                            dtype=None) -> None: ...
 
     def encode_text_for_batch(self, text, dit, captions: list[str],
-                              device, dtype, *, kv_trim: bool = True) -> Any: ...
+                              device, dtype, *, comfy_encoding: bool = True,
+                              kv_trim: bool = True) -> Any: ...
 
     # ── 训练前向 / 采样 ──────────────────────────────────────────────────
     def forward_train(self, dit, noisy, t, cond, *, use_checkpoint: bool = False): ...

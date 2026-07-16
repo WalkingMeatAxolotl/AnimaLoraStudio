@@ -17,7 +17,13 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .common import AttentionBackend, _meta, cap_gate, capability_violations
+from .common import (
+    AttentionBackend,
+    FAMILY_CONFIG_DEFAULTS,
+    _meta,
+    cap_gate,
+    capability_violations,
+)
 from .migrations import migrate_legacy_save_keys, migrate_noise_enhancement_type
 
 
@@ -35,10 +41,9 @@ class TrainingConfig(BaseModel):
     # Train 页看到的总是无歧义的绝对路径，不用考虑相对路径锚定。
     # 这里的默认值仅 fallback：裸 CLI 跑训练 + yaml 完全没填时，按 repo
     # 相对路径解析（与历史行为一致）。
-    model_family: Literal["anima"] = Field(
+    model_family: Literal["anima", "krea2"] = Field(
         "anima",
-        description="模型族。决定训练走哪套模型实现；其余字段按族能力自动显隐（多模型 D7，"
-                    "当前仅 Anima，Krea 2 随 Phase 3 加入）",
+        description="模型族。决定训练走哪套模型实现；其余字段按族能力自动显隐",
         json_schema_extra=_meta("model", advanced=True),
     )
     transformer_path: str = Field(
@@ -61,6 +66,13 @@ class TrainingConfig(BaseModel):
         description="T5 tokenizer 目录（Anima 族专用）",
         json_schema_extra=_meta("model", "path", cli_alias="--t5-tokenizer",
                                 show_when="model_family==anima"),
+    )
+    text_encoder_cache: bool = Field(
+        True,
+        description="预缓存文本条件并释放文本编码器（推荐，节省约 9GB 显存）；关闭后不读写文本 sidecar，Qwen3-VL 常驻并逐 batch 编码，适合大显存但磁盘紧张的云端",
+        json_schema_extra=_meta(
+            "model", show_when=cap_gate("text_cache"), advanced=True,
+        ),
     )
 
     # ----------------------------------------------------------------- 数据集
@@ -601,9 +613,10 @@ class TrainingConfig(BaseModel):
         "mode",
         "mixed_uniform_low",
         "mixed_uniform_logit",
+        "krea2_shift",
     ] = Field(
         "logit_normal",
-        description="采样分布。logit_normal 偏中段（SD3/Anima 默认）；uniform 等概率；mode 单峰偏移；mixed_* 混合 uniform 与偏置端（比例由 timestep_mix_low_prob 控制）",
+        description="采样分布。logit_normal 偏中段（SD3/Anima 默认）；krea2_shift 按每图 token 数动态 shift；uniform 等概率；mode 单峰偏移；mixed_* 混合 uniform 与偏置端（比例由 timestep_mix_low_prob 控制）",
         json_schema_extra=_meta(
             "timestep_sampling",
             alt_description="【时间步采样】InfoNoise 启用时作为热身期 baseline，正式阶段由自适应 CDF 接管；Leap 启用时 leap 路径恒用 U(0,1)，本字段仅作用于 (1-leap_ratio) 比例的标准 step",
@@ -910,6 +923,18 @@ class TrainingConfig(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
+    def _apply_family_config_defaults(cls, data: Any) -> Any:
+        """Overlay ModelSpec defaults only when a family-specific field is absent."""
+        if not isinstance(data, dict):
+            return data
+        payload = dict(data)
+        family = str(payload.get("model_family") or "anima")
+        for field, value in FAMILY_CONFIG_DEFAULTS.get(family, {}).items():
+            payload.setdefault(field, value)
+        return payload
+
+    @model_validator(mode="before")
+    @classmethod
     def _migrate_save_keys(cls, data: Any) -> Any:
         return migrate_legacy_save_keys(data)
 
@@ -925,10 +950,21 @@ class TrainingConfig(BaseModel):
         config 可能存了其他值（如 euler，当年走 inline Euler 兜底）。统一
         归并到默认值而不是让整个 config 加载失败。"""
         if isinstance(data, dict):
-            if data.get("sample_sampler_name") not in (None, "er_sde", "dpmpp_3m_sde"):
-                data["sample_sampler_name"] = "er_sde"
-            if data.get("sample_scheduler") not in (None, "simple", "sgm_uniform"):
-                data["sample_scheduler"] = "simple"
+            family = str(data.get("model_family") or "anima")
+            if family == "krea2":
+                samplers = (None, "euler")
+                schedulers = (None, "krea2_shift")
+                default_sampler = "euler"
+                default_scheduler = "krea2_shift"
+            else:
+                samplers = (None, "er_sde", "dpmpp_3m_sde")
+                schedulers = (None, "simple", "sgm_uniform")
+                default_sampler = "er_sde"
+                default_scheduler = "simple"
+            if data.get("sample_sampler_name") not in samplers:
+                data["sample_sampler_name"] = default_sampler
+            if data.get("sample_scheduler") not in schedulers:
+                data["sample_scheduler"] = default_scheduler
         return data
 
     @model_validator(mode="before")
@@ -1215,13 +1251,13 @@ class TrainingConfig(BaseModel):
         description="CFG Scale",
         json_schema_extra=_meta("sample"),
     )
-    sample_sampler_name: Literal["er_sde", "dpmpp_3m_sde"] = Field(
+    sample_sampler_name: Literal["er_sde", "dpmpp_3m_sde", "euler"] = Field(
         "er_sde",
         description="采样器。er_sde 默认；dpmpp_3m_sde 与 ComfyUI 同款"
                     "（BrownianTree 噪声，需要 torchsde）",
         json_schema_extra=_meta("sample"),
     )
-    sample_scheduler: Literal["simple", "sgm_uniform"] = Field(
+    sample_scheduler: Literal["simple", "sgm_uniform", "krea2_shift"] = Field(
         "simple",
         description="调度器。simple 默认；sgm_uniform 为 ComfyUI 的 SGM 均匀切分",
         json_schema_extra=_meta("sample"),

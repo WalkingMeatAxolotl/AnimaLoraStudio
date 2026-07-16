@@ -13,6 +13,7 @@ import pytest
 
 from studio.domain.common import (
     FAMILY_CAPABILITIES,
+    FAMILY_CONFIG_DEFAULTS,
     FIELD_CAPABILITY_REQUIREMENTS,
     MODEL_FAMILIES,
     cap_gate,
@@ -30,6 +31,7 @@ def test_capability_matrix_mirrors_runtime_specs():
         assert FAMILY_CAPABILITIES[fid] == spec.capabilities, (
             f"studio 镜像与 runtime SPECS['{fid}'].capabilities 失同步"
         )
+        assert FAMILY_CONFIG_DEFAULTS[fid] == dict(spec.config_defaults)
 
 
 def test_schema_literal_matches_families():
@@ -44,13 +46,25 @@ def test_cap_gate_renders_field_comparison():
         cap_gate("warp_drive")
 
 
-def test_gated_fields_show_when_true_for_anima():
-    """当前只有 anima → 所有门控表达式恒真，对存量行为零变化。"""
+def test_gated_fields_follow_family_capabilities():
     values = {"model_family": "anima"}
     for field in ("t5_tokenizer_path", "navit_packing", "masked_loss",
                   "leap_enabled", "sra_enabled", "shuffle_caption"):
         extra = TrainingConfig.model_fields[field].json_schema_extra
         assert eval_show_when(extra.get("show_when"), values) is True, field
+    krea2 = {"model_family": "krea2"}
+    assert eval_show_when(
+        TrainingConfig.model_fields["masked_loss"].json_schema_extra["show_when"],
+        krea2,
+    ) is True
+    assert eval_show_when(
+        TrainingConfig.model_fields["text_encoder_cache"].json_schema_extra["show_when"],
+        krea2,
+    ) is True
+    for field in ("t5_tokenizer_path", "navit_packing", "leap_enabled",
+                  "sra_enabled", "shuffle_caption"):
+        extra = TrainingConfig.model_fields[field].json_schema_extra
+        assert eval_show_when(extra.get("show_when"), krea2) is False, field
 
 
 def test_default_config_valid_and_yaml_roundtrip():
@@ -58,6 +72,15 @@ def test_default_config_valid_and_yaml_roundtrip():
     assert cfg.model_family == "anima"
     # 显式开启 anima 支持的能力 → 合法
     TrainingConfig(navit_packing=True, masked_loss=True)
+    krea2 = TrainingConfig(model_family="krea2")
+    assert krea2.shuffle_caption is False
+    assert krea2.text_encoder_cache is True
+    assert krea2.attention_backend == "none"
+    assert krea2.timestep_sampling == "krea2_shift"
+    assert (krea2.sample_sampler_name, krea2.sample_scheduler) == (
+        "euler", "krea2_shift",
+    )
+    assert (krea2.sample_infer_steps, krea2.sample_cfg_scale) == (28, 4.5)
 
 
 def test_capability_violations_flags_unsupported(monkeypatch):
@@ -88,3 +111,12 @@ def test_prune_keeps_gated_fields_for_default_dump():
     for field in ("t5_tokenizer_path", "shuffle_caption", "masked_loss",
                   "navit_packing", "leap_enabled", "sra_enabled"):
         assert field in dumped, field
+
+    krea2 = prune_inactive_fields(
+        TrainingConfig(model_family="krea2").model_dump(mode="python")
+    )
+    assert krea2["text_encoder_cache"] is True
+    assert krea2["masked_loss"] is False
+    for field in ("t5_tokenizer_path", "shuffle_caption", "keep_tokens",
+                  "tag_dropout", "navit_packing", "leap_enabled", "sra_enabled"):
+        assert field not in krea2, field

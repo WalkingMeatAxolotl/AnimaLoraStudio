@@ -84,6 +84,19 @@ def run(ctx: TrainingContext) -> None:
     if strategy != "cached_varlen":  # registry 正常会先拦，这里保留可操作错误
         raise ValueError(f"未知文本策略: {strategy!r}")
 
+    if not bool(getattr(ctx.args, "text_encoder_cache", True)):
+        logger.info(
+            "[text-cache] 缓存已关闭：不扫描/读写 sidecar，文本编码器常驻并逐 batch 编码"
+        )
+        ctx.family.prepare_text_cache(
+            [],
+            [],
+            text=ctx.text_stack,
+            device=ctx.device,
+            dtype=ctx.dtype,
+        )
+        return
+
     entries = _collect_entries(ctx)
     captions = [entry.caption for entry in entries]
     extras = _extra_prompts(ctx.args)

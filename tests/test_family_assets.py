@@ -17,7 +17,6 @@ def test_family_assets_cover_runtime_families():
 
     assert set(FAMILY_CAPABILITIES) == set(SPECS)
     assert set(FAMILY_ASSETS) >= set(SPECS)
-    assert set(FAMILY_ASSETS) - set(SPECS) == {"krea2"}
 
 
 def test_get_assets_unknown_lists_registered():

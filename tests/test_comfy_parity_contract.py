@@ -88,8 +88,12 @@ def test_training_config_caption_comfy_encoding_default_true() -> None:
 def test_training_config_sampler_scheduler_are_enums() -> None:
     """收紧为 Literal 后 UI 自动渲染下拉，非法值在 config 层就挡掉。"""
     schema = TrainingConfig.model_json_schema()
-    assert set(schema["properties"]["sample_sampler_name"]["enum"]) == {"er_sde", "dpmpp_3m_sde"}
-    assert set(schema["properties"]["sample_scheduler"]["enum"]) == {"simple", "sgm_uniform"}
+    assert set(schema["properties"]["sample_sampler_name"]["enum"]) == {
+        "er_sde", "dpmpp_3m_sde", "euler",
+    }
+    assert set(schema["properties"]["sample_scheduler"]["enum"]) == {
+        "simple", "sgm_uniform", "krea2_shift",
+    }
 
 
 def test_training_config_coerces_legacy_sampler_values() -> None:

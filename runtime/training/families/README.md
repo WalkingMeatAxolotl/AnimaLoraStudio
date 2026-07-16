@@ -18,6 +18,8 @@
   凡这些之外的模型知识（文本编码、pad_mask、检查点展开、采样栈）归族内。
 - **共享代码禁止 `if family == "..."` 分支**——一律查 `spec.capabilities` 或 spec 字段。
 - 缓存指纹是 latent 空间身份（`wan21-f8c16`）而非族名：同空间的族自动共享缓存。
+- Krea2 的 `text_encoder_cache=true` 先预缓存并释放 Qwen3-VL、再加载 DiT；关闭时
+  完全不读写文本 sidecar，TE 与 DiT 常驻，供大显存/小磁盘云端逐 batch 编码。
 - 演化：方法追加参数一律 keyword-only 带默认值；禁止 `**kwargs`。
 
 ## 加第 3 个族的步骤

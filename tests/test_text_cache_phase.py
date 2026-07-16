@@ -99,3 +99,24 @@ def test_sampling_default_and_empty_negative_are_cached(tmp_path):
     text_cache.run(ctx)
 
     assert family.call[1] == ["1girl, masterpiece", ""]
+
+
+def test_cached_strategy_disabled_keeps_te_online_without_scanning(tmp_path):
+    class _ExplodingDataset:
+        @property
+        def samples(self):  # pragma: no cover - access is the failure
+            raise AssertionError("关闭缓存后不应扫描 caption")
+
+    args = _args(tmp_path)
+    args.text_encoder_cache = False
+    family = _Family("cached_varlen")
+    ctx = TrainingContext(args=args, family=family)
+    ctx.base_dataset = _ExplodingDataset()
+    ctx.text_stack = object()
+    ctx.device = "cuda"
+
+    text_cache.run(ctx)
+
+    assert family.call[0] == []
+    assert family.call[1] == []
+    assert family.call[2]["text"] is ctx.text_stack

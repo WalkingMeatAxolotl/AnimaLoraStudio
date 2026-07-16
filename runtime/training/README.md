@@ -10,6 +10,7 @@ def main():
     phases.models.run(ctx)
     phases.dataset.run(ctx)
     phases.text_cache.run(ctx)
+    phases.models.finish(ctx)
     phases.optimizer.run(ctx)
     phases.resume.run(ctx)
     loop.run(ctx)
@@ -81,7 +82,7 @@ runtime/training/
     │   ├── protocol.py     ← TimestepSamplerProtocol（可选 token_counts batch context）
     │   ├── baseline.py     ← sample_t 4 mode 的 thin wrapper（非自适应）
     │   ├── infonoise.py    ← InfoNoise I-MMSE 自适应采样器（arxiv 2602.18647）
-    │   ├── krea2_shift.py  ← Krea2 动态 resolution shift（Phase 3 family 接线前暂不暴露 schema）
+    │   ├── krea2_shift.py  ← Krea2 动态 resolution shift（按每图 token 数修正）
     │   └── __init__.py     ← BUILDERS + build_timestep_sampler
     │
     └── losses/             ← 训练 loss 类型（mse / huber / ...）
@@ -100,11 +101,13 @@ TrainingContext(args=args)             │
         ↓                              │
 phases.bootstrap.run(ctx)              │  填 device / dtype / output_dir / wandb / monitor
         ↓                              │
-phases.models.run(ctx)                 │  填 repo_root / model / vae / text_stack / injector
+phases.models.run(ctx)                 │  常规族填完整模型栈；cached_varlen 族先填 VAE / text_stack
         ↓                              ├─ 一次性 setup
 phases.dataset.run(ctx)                │  填 bucket_mgr / dataset / reg_dataset / dataloader
         ↓                              │
 phases.text_cache.run(ctx)             │  cached_varlen 族写随图 sidecar；online 族 no-op
+        ↓                              │
+phases.models.finish(ctx)              │  TE 释放后补载 deferred DiT + injector（常规族 no-op）
         ↓                              │
 phases.optimizer.run(ctx)              │  填 optimizer / scheduler / total_steps / trainable_params
         ↓                              │
