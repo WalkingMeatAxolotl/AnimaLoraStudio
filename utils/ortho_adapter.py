@@ -366,21 +366,22 @@ class OrthoLoRAAdapter:
         sd: dict[str, torch.Tensor] = {}
         for layer in self.loras:
             sd.update(layer.distilled_lora_state())
+        ss_args = {
+            "algo": "lora",
+            "source_algo": "tlora_ortho" if self.use_timestep_mask else "ortho",
+            "factor": 8,
+            "dropout": self.dropout,
+            "rank_dropout": self.rank_dropout,
+            "module_dropout": self.module_dropout,
+            "weight_decompose": False,
+            "rs_lora": False,
+        }
+        ss_args.update(getattr(self, "metadata_extra", None) or {})
         meta = {
             "ss_network_dim": str(self.rank),
             "ss_network_alpha": str(self.alpha),
             "ss_network_module": "lycoris.kohya",
-            "ss_network_args": json.dumps({
-                "algo": "lora",
-                "source_algo": "tlora_ortho" if self.use_timestep_mask else "ortho",
-                "factor": 8,
-                "preset": "anima_full",
-                "dropout": self.dropout,
-                "rank_dropout": self.rank_dropout,
-                "module_dropout": self.module_dropout,
-                "weight_decompose": False,
-                "rs_lora": False,
-            }),
+            "ss_network_args": json.dumps(ss_args),
         }
         save_file(sd, str(path), metadata=meta)
         logger.info("OrthoLoRA 保存到: %s (baked as plain LoRA)", path)

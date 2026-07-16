@@ -75,7 +75,25 @@ def test_build_adapter_raises_on_unknown_lora_type() -> None:
     from training.adapters import build_adapter
     args = argparse.Namespace(lora_type="bogus_xyz")
     with pytest.raises(ValueError, match="未知 lora_type"):
-        build_adapter(args)
+        build_adapter(args, preset=ANIMA_PRESET)
+
+
+def test_build_adapter_forwards_explicit_family_preset(monkeypatch) -> None:
+    from training.adapters import BUILDERS, build_adapter
+
+    family_preset = {"target_name": ["family-only"]}
+    sentinel = object()
+
+    def _build(args, *, preset):
+        assert args.lora_type == "lora"
+        assert preset is family_preset
+        return sentinel
+
+    monkeypatch.setitem(BUILDERS, "lora", _build)
+    assert build_adapter(
+        argparse.Namespace(lora_type="lora"),
+        preset=family_preset,
+    ) is sentinel
 
 
 def test_build_scheduler_returns_none_when_lr_scheduler_is_none() -> None:
@@ -455,6 +473,14 @@ def test_no_lora_type_dispatch_in_phases_models() -> None:
     text = (RUNTIME_DIR / "training" / "phases" / "models.py").read_text(encoding="utf-8")
     # 应该看不到 AnimaLycorisAdapter 直接实例化（被 build_adapter 替代）
     assert "AnimaLycorisAdapter(preset=ANIMA_PRESET, " not in text
+    assert "build_adapter(args, preset=ctx.family.lora_preset())" in text
+
+
+def test_adapter_builders_do_not_import_anima_preset() -> None:
+    adapters_dir = RUNTIME_DIR / "training" / "adapters"
+    for filename in ("lycoris.py", "ortho.py", "tlora.py"):
+        text = (adapters_dir / filename).read_text(encoding="utf-8")
+        assert "families.anima.preset" not in text
 
 
 def test_no_lr_scheduler_dispatch_in_phases_optimizer() -> None:

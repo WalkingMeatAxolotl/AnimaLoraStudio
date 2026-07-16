@@ -39,7 +39,10 @@ def test_resolve_family_defaults_and_carriers():
 
 def test_family_lora_contract():
     fam = get_family("anima")
-    assert fam.lora_metadata() == {"model_family": "anima"}
+    assert fam.lora_metadata() == {
+        "model_family": "anima",
+        "preset": ANIMA_SPEC.lora.preset_name,
+    }
     sd = {"k": torch.zeros(1)}
     assert fam.convert_lora_state_dict(sd) is sd  # 恒等（04 §7.1）
     assert fam.lora_preset()["lora_prefix"] == ANIMA_SPEC.lora.prefix

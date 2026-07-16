@@ -371,7 +371,6 @@ class LycorisAdapter:
         ss_args: dict[str, Any] = {
             "algo": self.algo,
             "factor": self.factor,
-            "preset": "anima_full",
             "dropout": self.dropout,
             "rank_dropout": self.rank_dropout,
             "module_dropout": self.module_dropout,
