@@ -215,6 +215,11 @@
     加载策略参考 `src/musubi_tuner/krea2/krea2_utils.py`；结构指纹、前缀归一和错误诊断为本仓库实现
   - `runtime/training/families/krea2/preset.py` — 全部 Linear target 与统一
     `lora_unet` 前缀参考 `src/musubi_tuner/networks/lora_krea2.py`
+  - `runtime/training/families/krea2/text_encoding.py` — Qwen3-VL prompt 模板、12 层
+    hidden-state 选择、有效 token gather 与 `(seq, 12, 2560)` 缓存布局派生自
+    `src/musubi_tuner/krea2/krea2_encoder.py` 和
+    `src/musubi_tuner/krea2_cache_text_encoder_outputs.py`；本仓库改为读取官方 HF
+    sharded 目录并接入共享 sidecar 协议与可选的 TE 惰性加载/释放生命周期
 
 实现按本项目 timestep sampler protocol / 纯 torch modeling 边界适配；具体派生关系见各文件头。
 

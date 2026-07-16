@@ -45,6 +45,7 @@
 | D7 | schema：新增 `model_family`（默认 `anima`，老配置零迁移）；`transformer_path/vae_path/text_encoder_path` 三字段跨族复用；`t5_tokenizer_path` 转 Anima-only `show_when` | K2 的 vae_path 指向同一个 Qwen-Image VAE 文件，无需新下载 |
 | D8 | 派发点：supervisor/cmd_builder 不动，入口脚本不变，`phases/models.py` 按 `model_family` 查 registry | |
 | D9 | K2 数据集打标推荐链路 = LLM tagger 自然语言 caption | WD14 tag 链路机制上仍可用但非推荐；trigger word 前置继续有效 |
+| D10 | K2 的 TE 缓存是训练配置且默认开启；关闭时完全不读写文本 sidecar，Qwen3-VL 常驻并逐 batch 在线编码 | 默认路径用磁盘换显存，预缓存后释放约 9GB TE；80/100GB 云端但本地盘紧张时可关闭，用显存换磁盘。Anima 行为不变；schema/UI 字段在 K2 family 接线阶段落地 |
 
 ## 5. 分阶段计划
 
