@@ -220,6 +220,10 @@
     `src/musubi_tuner/krea2/krea2_encoder.py` 和
     `src/musubi_tuner/krea2_cache_text_encoder_outputs.py`；本仓库改为读取官方 HF
     sharded 目录并接入共享 sidecar 协议与可选的 TE 惰性加载/释放生命周期
+  - `runtime/training/families/krea2/sampling.py` — 分辨率对齐、动态 `mu`、指数
+    timestep shift 与 FlowMatchEuler 循环派生自 `src/musubi_tuner/krea2/krea2_sampling.py`；
+    Raw/TDM 默认值和 Krea guidance `cond + g*(cond-uncond)` 同时对照 diffusers
+    `pipeline_krea2.py` 与 `scheduling_flow_match_euler_discrete.py`（固定 commit 见文件头）
 
 实现按本项目 timestep sampler protocol / 纯 torch modeling 边界适配；具体派生关系见各文件头。
 
