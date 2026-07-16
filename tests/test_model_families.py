@@ -60,7 +60,9 @@ def test_family_lora_contract():
 
 
 def test_krea2_and_anima_share_latent_space_identity():
-    assert KREA2_SPEC.latent == ANIMA_SPEC.latent
+    # 同一性而非相等性：两族引用 latent_spaces.WAN21_F8C16 同一实例，
+    # D6 的缓存跨族共享是结构事实，不靠副本 + 相等断言维持。
+    assert KREA2_SPEC.latent is ANIMA_SPEC.latent
 
 
 def test_krea2_forward_train_passes_varlen_mask_and_checkpoint():

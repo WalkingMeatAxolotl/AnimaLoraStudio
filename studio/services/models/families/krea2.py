@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 from .... import secrets
 from ..paths import models_root, safe_dir_name
-from .anima import anima_vae_target
+from ..paths import qwen_image_vae_target
 
 KREA2_VARIANTS: dict[str, dict[str, Any]] = {
     "raw": {
@@ -104,12 +104,47 @@ def krea2_transformer_path_for(sel: Optional[str]) -> str:
     return selected_krea2_transformer_path()
 
 
+def _training_variant() -> str:
+    for name, info in KREA2_VARIANTS.items():
+        if info["purpose"] == "training":
+            return name
+    return LATEST_KREA2
+
+
+def _training_default_transformer_path() -> str:
+    """新建训练 version 的默认主权重：官方 variant 必须是 training 用途。
+
+    Settings 的 selected 是训练 / 推理共用的一个选择——用户为 Generate 页
+    选中 Turbo（purpose=inference，TDM 蒸馏推理模型）时，新训练 version 不
+    静默跟随，落回 training variant（Raw）。用户注册的本地 custom 路径
+    （社区微调等）无 purpose 元数据，尊重用户选择不加白名单；显式传
+    base_model（含显式选 turbo）同样尊重，不经过本函数。
+    """
+    try:
+        selected = secrets.load().models.selected.get("krea2")
+    except Exception:
+        selected = None
+    if selected and selected not in KREA2_VARIANTS:
+        path = Path(str(selected).strip()).expanduser()
+        if path.is_file():
+            return str(path)
+    variant = selected if selected in KREA2_VARIANTS else LATEST_KREA2
+    if KREA2_VARIANTS[variant]["purpose"] != "training":
+        variant = _training_variant()
+    return str(krea2_main_target(models_root(), variant))
+
+
 def default_paths_for_new_version(base_model: Optional[str] = None) -> dict[str, str]:
     """返回 Krea 2 新 version 应使用的本地资产路径。"""
     root = models_root()
+    transformer = (
+        krea2_transformer_path_for(base_model)
+        if (base_model or "").strip()
+        else _training_default_transformer_path()
+    )
     return {
-        "transformer_path": krea2_transformer_path_for(base_model),
-        "vae_path": str(anima_vae_target(root)),
+        "transformer_path": transformer,
+        "vae_path": str(qwen_image_vae_target(root)),
         "text_encoder_path": str(qwen3_vl_dir(root)),
         "t5_tokenizer_path": "",
     }

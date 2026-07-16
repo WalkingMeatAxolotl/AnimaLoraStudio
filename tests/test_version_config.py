@@ -330,6 +330,29 @@ def test_fork_with_toggle_off_respects_preset(env, monkeypatch) -> None:
     assert cfg["transformer_path"] == custom
 
 
+def test_fork_krea2_preset_syncs_krea2_paths(env, monkeypatch) -> None:
+    """toggle ON + krea2 preset：路径按 preset 声明的族解析，不再覆成 anima 值。
+
+    回归保护（多模型 P4-1）：派发化之前这里无条件发 anima 路径——krea2 版本
+    一「换预设」，model_family: krea2 + anima transformer 的坏 config 就落盘了。
+    """
+    from studio.services import models as model_downloader
+    monkeypatch.setattr(preset_flow, "_auto_sync_paths", lambda: True)
+    p, v = _make_pv(env)
+    # shuffle_caption 是 anima-only 能力（caption_tag_ops），krea2 preset 必须关
+    _seed_preset(env, "tpl", model_family="krea2", shuffle_caption=False,
+                 transformer_path=_custom_path())
+    cfg = preset_flow.fork_preset_for_version("tpl", p, v)
+    assert cfg["model_family"] == "krea2"
+    expected = _normalize_default(
+        model_downloader.default_paths_for_new_version(family="krea2")
+        ["transformer_path"]
+    )
+    assert _normalize_default(cfg["transformer_path"]) == expected
+    assert cfg["transformer_path"].endswith("krea2-raw-bf16.safetensors")
+    assert "Qwen_Qwen3-VL-4B-Instruct" in cfg["text_encoder_path"]
+
+
 def test_save_as_preset_toggle_on_clears_model_paths(env, monkeypatch) -> None:
     """toggle ON：保存预设时 4 模型字段清回 default_paths（不带本机自定义出去）。"""
     from studio.services import models as model_downloader

@@ -74,7 +74,7 @@ def test_default_paths_for_new_version_follows_custom(
     paths = model_downloader.default_paths_for_new_version()
     assert paths["transformer_path"] == str(custom)
     # 其余三件套仍走标准位置（微调复用同一套 VAE/TE/T5）
-    assert paths["vae_path"] == str(model_downloader.anima_vae_target(tmp_path))
+    assert paths["vae_path"] == str(model_downloader.qwen_image_vae_target(tmp_path))
 
 
 def test_generate_resolver_follows_selected_custom(
@@ -108,7 +108,7 @@ def test_base_model_override_picks_variant(
         model_downloader.anima_main_target(tmp_path, "preview3-base")
     )
     # 其余三件套仍跟随全局，不受 override 影响
-    assert paths["vae_path"] == str(model_downloader.anima_vae_target(tmp_path))
+    assert paths["vae_path"] == str(model_downloader.qwen_image_vae_target(tmp_path))
 
 
 def test_base_model_override_picks_custom(
