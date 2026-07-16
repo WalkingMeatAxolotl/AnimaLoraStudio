@@ -1,0 +1,458 @@
+"""Krea2 Qwen3-VL text conditioning and variable-length cache lifecycle.
+
+The prompt template, selected hidden layers, interior-padding gather, and output
+layout are adapted from kohya-ss/musubi-tuner's Krea2 text encoder and cache
+implementation at commit 8934cfbbb4b9bcfa8071ce209129f0c5eb5df2e6.
+Copyright 2026 Kohya S. and musubi-tuner contributors. Apache-2.0.
+https://github.com/kohya-ss/musubi-tuner/blob/8934cfbbb4b9bcfa8071ce209129f0c5eb5df2e6/src/musubi_tuner/krea2/krea2_encoder.py
+https://github.com/kohya-ss/musubi-tuner/blob/8934cfbbb4b9bcfa8071ce209129f0c5eb5df2e6/src/musubi_tuner/krea2_cache_text_encoder_outputs.py
+
+This repository loads the official sharded Hugging Face directory, uses the
+shared ``TextCacheStore`` sidecar protocol, and owns the lazy load/release
+lifecycle needed to keep the 4B text encoder out of VRAM after pre-caching.
+"""
+
+from __future__ import annotations
+
+import gc
+import logging
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Iterable, Mapping, Sequence
+
+import torch
+from torch import Tensor
+
+from training.text_cache import TextCacheEntry, TextCacheStore
+
+
+logger = logging.getLogger(__name__)
+
+KREA2_TEXT_FINGERPRINT = "qwen3-vl-4b-instruct-krea2-12x2560-v1"
+KREA2_MAX_LENGTH = 512
+KREA2_SELECTED_LAYERS = (2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35)
+KREA2_TEXT_WIDTH = 2560
+
+_PROMPT_PREFIX = (
+    "<|im_start|>system\n"
+    "Describe the image by detailing the color, shape, size, texture, quantity, "
+    "text, spatial relationships of the objects and background:<|im_end|>\n"
+    "<|im_start|>user\n"
+)
+_PROMPT_SUFFIX = "<|im_end|>\n<|im_start|>assistant\n"
+_PREFIX_TOKENS = 34
+_SUFFIX_TOKENS = 5
+_CACHE_TENSOR_KEY = "context"
+
+
+@dataclass(frozen=True)
+class Krea2TextCondition:
+    """Padded Krea2 text condition consumed by the DiT."""
+
+    context: Tensor
+    attention_mask: Tensor
+
+
+def gather_valid_text(hidden_states: Tensor, attention_mask: Tensor) -> list[Tensor]:
+    """Gather valid tokens in order, including suffix tokens after interior padding."""
+
+    if hidden_states.ndim < 3:
+        raise ValueError("Krea2 hidden_states 必须至少为 (B, seq, features)")
+    if attention_mask.ndim != 2:
+        raise ValueError("Krea2 attention_mask 必须为 (B, seq)")
+    if hidden_states.shape[:2] != attention_mask.shape:
+        raise ValueError(
+            "Krea2 hidden_states 与 attention_mask 的 batch/seq 维不一致："
+            f"{tuple(hidden_states.shape[:2])} != {tuple(attention_mask.shape)}"
+        )
+
+    mask = attention_mask.to(dtype=torch.bool, device=hidden_states.device)
+    gathered = [hidden_states[index][mask[index]] for index in range(mask.shape[0])]
+    if any(item.shape[0] == 0 for item in gathered):
+        raise ValueError("Krea2 文本条件不能没有有效 token")
+    return gathered
+
+
+def pad_text_conditions(
+    contexts: Sequence[Tensor],
+    *,
+    device: torch.device | str,
+    dtype: torch.dtype,
+) -> Krea2TextCondition:
+    """Right-pad variable-length ``(seq, layers, width)`` tensors for one batch."""
+
+    if not contexts:
+        raise ValueError("Krea2 文本 batch 不能为空")
+    shape = tuple(contexts[0].shape[1:])
+    if contexts[0].ndim != 3 or any(
+        item.ndim != 3 or tuple(item.shape[1:]) != shape or item.shape[0] == 0
+        for item in contexts
+    ):
+        raise ValueError("Krea2 context 必须是非空且层数/宽度一致的 (seq, layers, width)")
+
+    target = torch.device(device)
+    max_length = max(item.shape[0] for item in contexts)
+    padded = torch.zeros(
+        len(contexts), max_length, *shape, device=target, dtype=dtype,
+    )
+    mask = torch.zeros(len(contexts), max_length, device=target, dtype=torch.bool)
+    for index, item in enumerate(contexts):
+        length = item.shape[0]
+        padded[index, :length].copy_(item.to(device=target, dtype=dtype))
+        mask[index, :length] = True
+    return Krea2TextCondition(context=padded, attention_mask=mask)
+
+
+def _default_model_loader(
+    model_path: Path,
+    device: torch.device,
+    dtype: torch.dtype,
+):
+    try:
+        from transformers import Qwen3VLForConditionalGeneration
+    except ImportError as exc:  # pragma: no cover - dependency error is environment-specific
+        raise RuntimeError(
+            "当前 transformers 不含 Qwen3VLForConditionalGeneration；请安装支持 "
+            "Qwen3-VL 的版本"
+        ) from exc
+
+    if not model_path.is_dir():
+        raise ValueError(f"Krea2 文本编码器必须是 Hugging Face 模型目录：{model_path}")
+    logger.info("加载 Krea2 Qwen3-VL 文本编码器：%s", model_path)
+    model = Qwen3VLForConditionalGeneration.from_pretrained(
+        str(model_path),
+        dtype=dtype,
+        local_files_only=True,
+        low_cpu_mem_usage=True,
+        device_map={"": str(device)},
+    )
+    return model.eval().requires_grad_(False)
+
+
+def _load_tokenizer(model_path: Path):
+    try:
+        from transformers import AutoTokenizer
+    except ImportError as exc:  # pragma: no cover - dependency error is environment-specific
+        raise RuntimeError("Krea2 文本编码需要 transformers") from exc
+
+    tokenizer = AutoTokenizer.from_pretrained(str(model_path), local_files_only=True)
+    prefix_tokens = tokenizer(_PROMPT_PREFIX, add_special_tokens=False)["input_ids"]
+    suffix_tokens = tokenizer(_PROMPT_SUFFIX, add_special_tokens=False)["input_ids"]
+    if len(prefix_tokens) != _PREFIX_TOKENS or len(suffix_tokens) != _SUFFIX_TOKENS:
+        raise ValueError(
+            "Krea2 tokenizer 与 Qwen3-VL-4B-Instruct prompt 模板不兼容："
+            f"prefix={len(prefix_tokens)}, suffix={len(suffix_tokens)}"
+        )
+    return tokenizer
+
+
+class Krea2TextStack:
+    """Lazy Qwen3-VL conditioner with cached and storage-free online modes."""
+
+    def __init__(
+        self,
+        model_path: str | Path,
+        *,
+        device: torch.device | str,
+        dtype: torch.dtype = torch.bfloat16,
+        cache_enabled: bool = True,
+        tokenizer=None,
+        model_loader: Callable[[Path, torch.device, torch.dtype], Any] | None = None,
+        text_fingerprint: str = KREA2_TEXT_FINGERPRINT,
+        max_length: int = KREA2_MAX_LENGTH,
+        selected_layers: Sequence[int] = KREA2_SELECTED_LAYERS,
+        hidden_width: int = KREA2_TEXT_WIDTH,
+        cache_batch_size: int = 1,
+    ) -> None:
+        self.model_path = Path(model_path)
+        self.device = torch.device(device)
+        self.dtype = dtype
+        self.cache_enabled = bool(cache_enabled)
+        self.tokenizer = tokenizer if tokenizer is not None else _load_tokenizer(self.model_path)
+        self._model_loader = model_loader or _default_model_loader
+        self._model = None
+        self.store = TextCacheStore(text_fingerprint)
+        self.max_length = int(max_length)
+        self.selected_layers = tuple(int(index) for index in selected_layers)
+        self.hidden_width = int(hidden_width)
+        self.cache_batch_size = int(cache_batch_size)
+        self._caption_entries: dict[str, list[TextCacheEntry]] = {}
+        self._prompt_captions: list[str] = []
+        self._cache_root: Path | None = None
+
+        if self.max_length <= 0 or not self.selected_layers or self.hidden_width <= 0:
+            raise ValueError("Krea2 文本编码配置必须为正数且 selected_layers 不能为空")
+        if self.cache_batch_size <= 0:
+            raise ValueError("Krea2 cache_batch_size 必须为正数")
+
+    @property
+    def is_model_loaded(self) -> bool:
+        return self._model is not None
+
+    def ensure_model(self):
+        if self._model is None:
+            self._model = self._model_loader(self.model_path, self.device, self.dtype)
+        return self._model
+
+    def release_model(self) -> None:
+        """Release the cached-mode TE before the 12.9B DiT occupies the device."""
+
+        if self._model is None:
+            return
+        self._model = None
+        gc.collect()
+        if self.device.type == "cuda" and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    def _tokenize(self, captions: Sequence[str]) -> tuple[Tensor, Tensor]:
+        text = [_PROMPT_PREFIX + str(caption) for caption in captions]
+        suffix = [_PROMPT_SUFFIX] * len(text)
+        encoded = self.tokenizer(
+            text,
+            truncation=True,
+            return_length=False,
+            return_overflowing_tokens=False,
+            padding="max_length",
+            max_length=self.max_length + _PREFIX_TOKENS - _SUFFIX_TOKENS,
+            return_tensors="pt",
+        )
+        suffix_encoded = self.tokenizer(suffix, return_tensors="pt")
+        input_ids = torch.cat(
+            [encoded["input_ids"], suffix_encoded["input_ids"]], dim=1,
+        ).to(self.device, non_blocking=True)
+        mask = torch.cat(
+            [encoded["attention_mask"].bool(), suffix_encoded["attention_mask"].bool()],
+            dim=1,
+        ).to(self.device, non_blocking=True)
+        return input_ids, mask
+
+    def _encode_many(self, captions: Sequence[str]) -> list[Tensor]:
+        if not captions:
+            return []
+        model = self.ensure_model()
+        input_ids, mask = self._tokenize(captions)
+        backbone = getattr(model, "model", model)
+        with torch.inference_mode():
+            outputs = backbone(
+                input_ids=input_ids,
+                attention_mask=mask,
+                output_hidden_states=True,
+                use_cache=False,
+                return_dict=True,
+            )
+        hidden_states = outputs.hidden_states
+        if hidden_states is None or max(self.selected_layers) >= len(hidden_states):
+            count = 0 if hidden_states is None else len(hidden_states)
+            raise RuntimeError(
+                f"Qwen3-VL 返回 hidden_states 层数不足：{count}，"
+                f"需要索引 {max(self.selected_layers)}"
+            )
+        stacked = torch.stack(
+            [hidden_states[index] for index in self.selected_layers], dim=2,
+        )[:, _PREFIX_TOKENS:]
+        cropped_mask = mask[:, _PREFIX_TOKENS:]
+        contexts = gather_valid_text(stacked, cropped_mask)
+        for context in contexts:
+            self._validate_context(context, source="Qwen3-VL 输出")
+        return contexts
+
+    def _encode_in_chunks(self, captions: Sequence[str]) -> dict[str, Tensor]:
+        encoded: dict[str, Tensor] = {}
+        unique = list(dict.fromkeys(str(caption) for caption in captions))
+        for start in range(0, len(unique), self.cache_batch_size):
+            chunk = unique[start:start + self.cache_batch_size]
+            contexts = self._encode_many(chunk)
+            for caption, context in zip(chunk, contexts):
+                encoded[caption] = context.detach().cpu().contiguous()
+        return encoded
+
+    def _validate_context(self, context: object, *, source: str) -> Tensor:
+        if not isinstance(context, Tensor):
+            raise ValueError(f"{source} 缺少 tensor context")
+        expected = (len(self.selected_layers), self.hidden_width)
+        if (
+            context.ndim != 3
+            or context.shape[0] == 0
+            or tuple(context.shape[1:]) != expected
+            or not context.is_floating_point()
+        ):
+            raise ValueError(
+                f"{source} context 必须为非空浮点 (seq, {expected[0]}, {expected[1]})，"
+                f"实际 {tuple(context.shape)} / {context.dtype}"
+            )
+        return context
+
+    def _context_from_payload(self, payload: Mapping[str, object] | None) -> Tensor | None:
+        if payload is None:
+            return None
+        context = payload.get(_CACHE_TENSOR_KEY)
+        try:
+            return self._validate_context(context, source="Krea2 文本缓存")
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _payload(context: Tensor) -> dict[str, Tensor]:
+        return {_CACHE_TENSOR_KEY: context}
+
+    def _prepare_caption_sidecars(self) -> None:
+        contexts: dict[str, Tensor] = {}
+        missing_entries: dict[str, list[TextCacheEntry]] = {}
+        for caption, entries in self._caption_entries.items():
+            context = None
+            for entry in entries:
+                cached = self._context_from_payload(self.store.read_caption(entry))
+                if cached is None:
+                    missing_entries.setdefault(caption, []).append(entry)
+                elif context is None:
+                    context = cached
+            if context is not None:
+                contexts[caption] = context
+
+        contexts.update(
+            self._encode_in_chunks(
+                [caption for caption in self._caption_entries if caption not in contexts],
+            )
+        )
+        for caption, entries in missing_entries.items():
+            for entry in entries:
+                self.store.write_caption(entry, self._payload(contexts[caption]))
+
+    def _prepare_prompt_bundle(self) -> None:
+        if not self._prompt_captions:
+            return
+        if self._cache_root is None:
+            raise ValueError("Krea2 prompt 缓存需要 cache_root")
+        payloads: dict[str, dict[str, Tensor]] = {}
+        missing = []
+        for caption in self._prompt_captions:
+            context = self._context_from_payload(
+                self.store.read_prompt(self._cache_root, caption),
+            )
+            if context is None:
+                missing.append(caption)
+            else:
+                payloads[caption] = self._payload(context)
+        for caption, context in self._encode_in_chunks(missing).items():
+            payloads[caption] = self._payload(context)
+        if missing:
+            self.store.write_prompt_bundle(self._cache_root, payloads)
+
+    def prepare_text_cache(
+        self,
+        captions: Iterable[str],
+        extra_prompts: Iterable[str],
+        *,
+        cache_entries: Iterable[TextCacheEntry] = (),
+        cache_root: str | Path | None = None,
+    ) -> None:
+        """Populate all known text caches, or retain the TE for online mode."""
+
+        entries = list(cache_entries)
+        self._caption_entries = {}
+        for entry in entries:
+            self._caption_entries.setdefault(entry.caption, []).append(entry)
+        caption_list = list(dict.fromkeys(str(caption) for caption in captions))
+        prompt_list = [str(prompt) for prompt in extra_prompts]
+        prompt_list.extend(
+            caption for caption in caption_list if caption not in self._caption_entries
+        )
+        self._prompt_captions = list(dict.fromkeys(prompt_list))
+        self._cache_root = Path(cache_root) if cache_root is not None else None
+
+        if not self.cache_enabled:
+            self.ensure_model()
+            return
+        try:
+            self._prepare_caption_sidecars()
+            self._prepare_prompt_bundle()
+        finally:
+            self.release_model()
+
+    def _repair_prompt_bundle(self, required: Sequence[str]) -> dict[str, Tensor]:
+        if self._cache_root is None:
+            raise ValueError("Krea2 cached 模式编码未知 prompt 时需要 cache_root")
+        self._prompt_captions = list(dict.fromkeys([*self._prompt_captions, *required]))
+        contexts: dict[str, Tensor] = {}
+        missing = []
+        for caption in self._prompt_captions:
+            context = self._context_from_payload(
+                self.store.read_prompt(self._cache_root, caption),
+            )
+            if context is None:
+                missing.append(caption)
+            else:
+                contexts[caption] = context
+        contexts.update(self._encode_in_chunks(missing))
+        if missing:
+            self.store.write_prompt_bundle(
+                self._cache_root,
+                {caption: self._payload(context) for caption, context in contexts.items()},
+            )
+        return contexts
+
+    def encode_text_for_batch(
+        self,
+        captions: Sequence[str],
+        *,
+        device: torch.device | str,
+        dtype: torch.dtype,
+    ) -> Krea2TextCondition:
+        """Return a padded condition; cached misses are repaired transparently."""
+
+        caption_list = [str(caption) for caption in captions]
+        if not caption_list:
+            raise ValueError("Krea2 文本 batch 不能为空")
+        if not self.cache_enabled:
+            contexts = self._encode_many(caption_list)
+            return pad_text_conditions(contexts, device=device, dtype=dtype)
+
+        unique = list(dict.fromkeys(caption_list))
+        contexts: dict[str, Tensor] = {}
+        missing_sidecars: list[str] = []
+        missing_prompts: list[str] = []
+        for caption in unique:
+            entries = self._caption_entries.get(caption)
+            if entries:
+                context = None
+                for entry in entries:
+                    context = self._context_from_payload(self.store.read_caption(entry))
+                    if context is not None:
+                        break
+                if context is None:
+                    missing_sidecars.append(caption)
+                else:
+                    contexts[caption] = context
+            else:
+                missing_prompts.append(caption)
+
+        try:
+            repaired = self._encode_in_chunks(missing_sidecars)
+            for caption, context in repaired.items():
+                contexts[caption] = context
+                for entry in self._caption_entries[caption]:
+                    self.store.write_caption(entry, self._payload(context))
+            if missing_prompts:
+                contexts.update(self._repair_prompt_bundle(missing_prompts))
+        finally:
+            self.release_model()
+
+        ordered = [contexts[caption] for caption in caption_list]
+        return pad_text_conditions(ordered, device=device, dtype=dtype)
+
+
+def load_krea2_text_stack(
+    model_path: str | Path,
+    *,
+    device: torch.device | str,
+    dtype: torch.dtype = torch.bfloat16,
+    cache_enabled: bool = True,
+) -> Krea2TextStack:
+    """Create a lazy Krea2 text stack; only the small tokenizer loads immediately."""
+
+    return Krea2TextStack(
+        model_path,
+        device=device,
+        dtype=dtype,
+        cache_enabled=cache_enabled,
+    )
