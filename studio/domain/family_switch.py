@@ -48,7 +48,15 @@ def switch_family(
     schema_defaults = TrainingConfig().model_dump(mode="python")
     new: dict[str, Any] = dict(config)
     new["model_family"] = target
-    new.update(path_defaults)
+    # 路径统一正斜杠（yaml 落盘同款归一化）；与旧值仅斜杠风格不同 = 同一
+    # 文件，保留原值不产生假变更行（str(Path) 在 Windows 上吐反斜杠）。
+    for key, value in path_defaults.items():
+        normalized = str(value).replace("\\", "/") if value else value
+        old = config.get(key)
+        if old is not None and str(old).replace("\\", "/") == normalized:
+            new[key] = old
+        else:
+            new[key] = normalized
 
     overlay = FAMILY_CONFIG_DEFAULTS.get(target, {})
     for key in sorted(_flavor_keys()):

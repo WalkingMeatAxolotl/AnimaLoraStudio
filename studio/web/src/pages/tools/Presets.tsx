@@ -15,7 +15,7 @@ import SchemaSectionIndex from '../../components/SchemaSectionIndex'
 import { useToast } from '../../components/Toast'
 import { useSettingsDrawer } from '../../lib/SettingsDrawer'
 import { useAdvancedMode } from '../../lib/useAdvancedMode'
-import { confirmFamilySwitch } from '../../lib/familySwitch'
+import FamilySwitchDialog from '../../components/FamilySwitchDialog'
 import {
   PRESET_NAME_RE,
   defaultsFromSchema,
@@ -187,24 +187,20 @@ export default function PresetsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelPathDefaults, selected, schema])
 
+  /** 待确认的族切换目标（非空时渲染 FamilySwitchDialog）。 */
+  const [familySwitchTarget, setFamilySwitchTarget] = useState<string | null>(null)
+
   /** SchemaForm.onChange 入口：拦截 model_family 变化走切换动作（P4-3，
    * 与 Train 页同款）。确认后应用后端重算的完整 config；取消保持旧值。 */
   const onFormChange = useCallback((v: ConfigData) => {
     const prevFamily = String(config?.model_family ?? 'anima')
     const nextFamily = String(v.model_family ?? 'anima')
     if (config && nextFamily !== prevFamily) {
-      void (async () => {
-        try {
-          const switched = await confirmFamilySwitch(nextFamily, config, confirm, t)
-          if (switched) setConfig(switched)
-        } catch (e) {
-          toast(t('familySwitch.failed', { error: e }), 'error')
-        }
-      })()
+      setFamilySwitchTarget(nextFamily)
       return
     }
     setConfig(v)
-  }, [config, confirm, t, toast])
+  }, [config])
 
   // ── 首次拿到列表后：自动选最近一个，省一次「切换」点击 ──
   const autoSelectedRef = useRef(false)
@@ -805,6 +801,17 @@ export default function PresetsPage() {
                     <div>{t('presets.defaultedFieldsBody')}<code className="ml-1 text-[11px] opacity-80">{defaultedFields.join(', ')}</code></div>
                   )}
                 </div>
+              )}
+              {familySwitchTarget && config && (
+                <FamilySwitchDialog
+                  target={familySwitchTarget}
+                  config={config}
+                  onApply={(switched) => {
+                    setConfig(switched)
+                    setFamilySwitchTarget(null)
+                  }}
+                  onCancel={() => setFamilySwitchTarget(null)}
+                />
               )}
               <SchemaForm
                 schema={schema}

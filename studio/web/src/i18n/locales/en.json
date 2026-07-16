@@ -2847,8 +2847,11 @@
   },
   "familySwitch": {
     "title": "Switch model family",
-    "message": "Switching to {{family}} will also adjust these fields:\n\n{{changes}}\n\nProceed?",
-    "messageNoChanges": "Switch to {{family}} (no other fields need adjusting). Proceed?",
+    "intro": "Switching from {{from}} to {{to}} will also adjust these fields:",
+    "pathsSection": "Model paths",
+    "paramsSection": "Parameter changes",
+    "noChanges": "No other fields need adjusting.",
+    "loading": "Computing changes…",
     "ok": "Switch",
     "empty": "(empty)",
     "failed": "Model family switch failed: {{error}}"

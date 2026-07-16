@@ -2847,8 +2847,11 @@
   },
   "familySwitch": {
     "title": "切换模型族",
-    "message": "切换到 {{family}} 将同时调整以下字段：\n\n{{changes}}\n\n确认切换？",
-    "messageNoChanges": "切换到 {{family}}（当前配置无需调整其他字段）。确认切换？",
+    "intro": "从 {{from}} 切换到 {{to}}，以下字段将同时调整：",
+    "pathsSection": "模型路径",
+    "paramsSection": "参数调整",
+    "noChanges": "当前配置无需调整其他字段。",
+    "loading": "正在计算变更……",
     "ok": "切换",
     "empty": "（空）",
     "failed": "模型族切换失败：{{error}}"

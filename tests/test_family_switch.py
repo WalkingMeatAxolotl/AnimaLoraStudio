@@ -61,6 +61,17 @@ def test_switch_same_family_reports_no_path_drift():
     assert new == cfg
 
 
+def test_switch_paths_slash_style_is_not_a_change():
+    """已落盘 config 是正斜杠、str(Path) 吐反斜杠——同一文件不同斜杠风格
+    不产生假变更行；写入值统一正斜杠（yaml 落盘同款归一化）。"""
+    cfg = TrainingConfig().model_dump(mode="python")
+    cfg.update({k: str(v).replace("\\", "/") for k, v in _paths("anima").items()})
+    new, changes = switch_family(cfg, "anima", _paths("anima"))
+    assert changes == []
+    krea2_new, _ = switch_family(cfg, "krea2", _paths("krea2"))
+    assert "\\" not in krea2_new["transformer_path"]
+
+
 def test_switch_partial_config_fills_missing():
     """config 允许部分字段缺失（preset 池里裁剪过的 yaml），缺失键 from=None。"""
     new, changes = switch_family(
