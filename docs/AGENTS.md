@@ -213,6 +213,9 @@ Stepper 高亮按 stage + version.stats 派生。**不要**在前端 mutate stag
 - 改了单一权威源（version / schema / secrets / SSE event）→ 派生方都同步
 - 改了 plugin registry / sister script / Stepper → 见 §8 陷阱清单确认无回归
 - UI 改动 → 截图放进 PR 描述
+- 前端改动 → **必须用内置浏览器做视觉校验**：`npm run build` 后起真服务、
+  浏览器打开受影响页面，确认改动真的渲染出来（vitest 绿 ≠ 视觉正确；
+  产物可能复用文件名，注意硬刷新）。校验截图即 PR 描述用图
 - 触发 ADR 条件（§7）→ 已起草新 ADR
 
 CI 已覆盖，AI 不必重复手测：本地 tsc / lint / pytest / vitest / plugin registry 启动校验。
