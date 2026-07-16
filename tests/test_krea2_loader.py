@@ -272,3 +272,18 @@ def test_load_rejects_meta_target_device(tmp_path: Path) -> None:
             torch.float32,
             config=_tiny_config(),
         )
+
+
+def test_inspect_rejects_fp8_checkpoint_with_actionable_error(tmp_path: Path) -> None:
+    """纯 fp8 cast 权重（社区推理格式）→ 显式报错，不静默 upcast 回 bf16
+    （显存零收益 + 丢精度，A7'/C13）。文案指路 bf16 版本。"""
+    config = _tiny_config()
+    state_dict = _state_dict(config)
+    fp8_state = {
+        key: value.to(torch.float8_e4m3fn) for key, value in state_dict.items()
+    }
+    checkpoint = tmp_path / "fp8.safetensors"
+    _write_checkpoint(checkpoint, fp8_state)
+
+    with pytest.raises(ValueError, match="fp8"):
+        inspect_krea2_checkpoint(checkpoint, config=config)

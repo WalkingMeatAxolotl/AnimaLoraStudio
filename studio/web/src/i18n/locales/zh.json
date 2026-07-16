@@ -449,7 +449,7 @@
       "noise_enhancement_type": "噪声增强机制（默认 none）。offset 在噪声上加 per-sample DC 偏置；pyramid 在多个尺度叠加低频噪声。两者机制不同，但都改变低频成分，互斥防双倍叠加。LoRA 训练默认保持 none",
       "noise_offset": "DC 偏置强度（0-0.2，0=关闭）。让噪声 mean 偏离 0，让模型有机会学习生成极端亮度场景（pure black / pure white / 强对比）。典型范围 0.05-0.1；0.05 以下噪声场跟 baseline 几乎一样，超过 0.1 起点 loss 会显著偏高",
       "pyramid_noise_iters": "金字塔噪声层数（0-6，0=关闭）。每层在 spatial // 2^(k+1) 尺度注入。实际效果强度由 pyramid_noise_discount 决定 —— iters 单独决定覆盖的频段范围，discount 低时层数多少差异很小",
-      "pyramid_noise_discount": "每层相对衰减系数（0.1-0.9）。控制低频强度的核心参数：anima 实现把整体噪声 std 归一化到 1，所以 discount 决定低频占比。0.1-0.4 归一化后噪声接近标准高斯，等价于关闭；0.5-0.7 显著改变低频结构",
+      "pyramid_noise_discount": "每层相对衰减系数（0.1-0.9）。控制低频强度的核心参数：本实现把整体噪声 std 归一化到 1，所以 discount 决定低频占比。0.1-0.4 归一化后噪声接近标准高斯，等价于关闭；0.5-0.7 显著改变低频结构",
       "timestep_sampling": "采样分布。logit_normal 偏中段（SD3/Anima 默认）；uniform 等概率；mode 单峰偏移；mixed_* 混合 uniform 与偏置端（比例由 timestep_mix_low_prob 控制）",
       "timestep_shift": "logit-normal / mode 内部的分布偏移：>1 偏向高噪声端（粗结构），<1 偏向低噪声端（细节）",
       "timestep_mix_low_prob": "mixed_* 模式下走偏置端的样本比例：0 = 全 uniform；典型 0.15-0.30",
@@ -991,7 +991,7 @@
       "startMigrate": "开始迁移",
       "restartNow": "立即重启",
       "modelsRootLabel": "模型根目录",
-      "modelsRootHelp": "存放下载的 Anima / VAE / 文本编码器 / tokenizer / WD14 等模型权重，默认在程序根目录的 models/。更改位置会把现有权重复制到所选目录的 models 子目录并立即生效（无需重启），原数据保留不删除。",
+      "modelsRootHelp": "存放下载的模型权重（Anima / Krea 2 / VAE / 文本编码器 / tokenizer / WD14 等），默认在程序根目录的 models/。更改位置会把现有权重复制到所选目录的 models 子目录并立即生效（无需重启），原数据保留不删除。",
       "modelsMigrateTitle": "迁移模型根目录",
       "modelsKeepOriginalNote": "原位置数据不会被删除。复制完成后立即生效，无需重启。",
       "modelsDoneNote": "已切换到新模型根目录，立即生效（无需重启）；原位置数据已保留，确认无误后可自行删除。",
@@ -1127,7 +1127,7 @@
     "savePath": "保存路径",
     "trainingParams": "训练参数",
     "autoSyncPathsLabel": "自动配置模型路径",
-    "autoSyncPathsHelp": "开启（默认 / 多数用户）：fork 预设到 version 时，4 个模型路径字段（transformer/vae/text_encoder/t5_tokenizer）自动用 Settings 全局值覆盖，预设里这 4 字段灰显不可改。关闭（独立模型用户）：fork 时尊重预设里的绝对路径，4 字段可编辑 + picker。",
+    "autoSyncPathsHelp": "开启（默认 / 多数用户）：fork 预设到 version 时，模型路径字段（transformer / VAE / 文本编码器等，按模型族而定）自动用 Settings 全局值覆盖，这些字段灰显不可改。关闭（独立模型用户）：fork 时尊重预设里的绝对路径，字段可编辑 + picker。",
     "autoSyncPathsOn": "已开启 · fork 自动同步全局",
     "autoSyncPathsOff": "已关闭 · fork 尊重预设值",
     "defaultTransformerHelp": "选中的版本会作为<strong>新建 version</strong> 的默认 transformer。",
@@ -2650,8 +2650,8 @@
     },
     "items": {
       "base": {
-        "label": "底模套件",
-        "description": "Anima 主模型 + VAE + Qwen3 + T5,训练所需基础模型(总计约 30GB)"
+        "label": "Anima 底模套件",
+        "description": "Anima 主模型 + VAE + Qwen3 + T5，入门训练所需基础模型（总计约 30GB）。Krea 2 等其它模型族可稍后在 设置 → 训练 下载"
       },
       "tagger": {
         "label": "打标功能",
