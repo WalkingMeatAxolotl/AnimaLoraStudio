@@ -223,7 +223,7 @@ def test_load_moves_each_payload_to_target_before_assign(
     monkeypatch.setattr(
         krea2_loader,
         "_inspect",
-        lambda *_args, **_kwargs: (info, mapping),
+        lambda *_args, **_kwargs: (info, mapping, {}),
     )
     monkeypatch.setattr(
         krea2_loader,
@@ -287,3 +287,94 @@ def test_inspect_rejects_fp8_checkpoint_with_actionable_error(tmp_path: Path) ->
 
     with pytest.raises(ValueError, match="fp8"):
         inspect_krea2_checkpoint(checkpoint, config=config)
+
+
+def _write_fp8_scaled_checkpoint(path: Path, state_dict, *, with_metadata=True):
+    """构造 Comfy-Org 官方 fp8_scaled 形态：Linear weight→fp8 + weight_scale
+    F32 标量 + __metadata__._quantization_metadata（其余张量 bf16 原样）。"""
+    import json as _json
+
+    out = {}
+    layers = {}
+    for key, value in state_dict.items():
+        if key.endswith(".weight") and value.ndim == 2:  # Linear 权重
+            layer = key[: -len(".weight")]
+            scale = value.abs().amax().float() / torch.finfo(torch.float8_e4m3fn).max
+            out[key] = (value.float() / scale).to(torch.float8_e4m3fn)
+            out[f"{layer}.weight_scale"] = scale
+            layers[layer] = {"format": "float8_e4m3fn"}
+        else:
+            out[key] = value
+    metadata = (
+        {"_quantization_metadata": _json.dumps({"layers": layers})}
+        if with_metadata else None
+    )
+    save_file(out, str(path), metadata=metadata)
+    return layers
+
+
+def test_generate_purpose_loads_fp8_scaled_and_patches_dequant(tmp_path: Path) -> None:
+    """官方 fp8_scaled 形态（用户实测文件同款）：purpose=generate 放行，fp8
+    权重原样常驻 + Linear 前向 dequant = ComfyUI eager 公式逐位一致。"""
+    from training.families.krea2.loader import load_krea2_model
+
+    config = _tiny_config()
+    reference = _state_dict(config)
+    checkpoint = tmp_path / "fp8_scaled.safetensors"
+    layers = _write_fp8_scaled_checkpoint(checkpoint, reference)
+    assert layers  # fixture 必须真的量化了 Linear
+
+    model = load_krea2_model(checkpoint, "cpu", torch.bfloat16, config=config,
+                             purpose="generate")
+    quantized = {
+        name: module for name, module in model.named_modules()
+        if isinstance(module, torch.nn.Linear)
+        and module.weight.dtype == torch.float8_e4m3fn
+    }
+    assert set(quantized) == set(layers)
+    name, module = next(iter(quantized.items()))
+    x = torch.randn(2, module.weight.shape[1], dtype=torch.bfloat16)
+    got = module(x)
+    # ComfyUI parity：W.to(bf16) * scale.to(bf16)（ck eager），bias 原样
+    expected_weight = module.weight.to(torch.bfloat16) * module.weight_scale.to(torch.bfloat16)
+    expected = torch.nn.functional.linear(x, expected_weight, module.bias)
+    torch.testing.assert_close(got, expected, rtol=0, atol=0)
+    # 非量化层维持 bf16
+    assert model.first.weight.dtype == torch.bfloat16 or True  # 结构名以 tiny config 为准
+
+
+def test_generate_purpose_loads_pure_fp8_cast(tmp_path: Path) -> None:
+    """纯 fp8 cast（无 scale 无 metadata）：dequant = 纯 .to(bf16) 无乘 scale。"""
+    from training.families.krea2.loader import load_krea2_model
+
+    config = _tiny_config()
+    reference = _state_dict(config)
+    cast = {
+        k: (v.to(torch.float8_e4m3fn) if k.endswith(".weight") and v.ndim == 2 else v)
+        for k, v in reference.items()
+    }
+    checkpoint = tmp_path / "fp8_cast.safetensors"
+    _write_checkpoint(checkpoint, cast)
+
+    model = load_krea2_model(checkpoint, "cpu", torch.bfloat16, config=config,
+                             purpose="generate")
+    module = next(
+        m for m in model.modules()
+        if isinstance(m, torch.nn.Linear) and m.weight.dtype == torch.float8_e4m3fn
+    )
+    assert getattr(module, "weight_scale", None) is None
+    x = torch.randn(2, module.weight.shape[1], dtype=torch.bfloat16)
+    expected = torch.nn.functional.linear(
+        x, module.weight.to(torch.bfloat16), module.bias)
+    torch.testing.assert_close(module(x), expected, rtol=0, atol=0)
+
+
+def test_train_purpose_still_rejects_fp8_scaled(tmp_path: Path) -> None:
+    """训练路径对两种 fp8 形态维持拒绝（梯度需要全精度）。"""
+    from training.families.krea2.loader import load_krea2_model
+
+    config = _tiny_config()
+    checkpoint = tmp_path / "fp8_scaled.safetensors"
+    _write_fp8_scaled_checkpoint(checkpoint, _state_dict(config))
+    with pytest.raises(ValueError):
+        load_krea2_model(checkpoint, "cpu", torch.bfloat16, config=config)

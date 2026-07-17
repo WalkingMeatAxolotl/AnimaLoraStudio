@@ -23,6 +23,10 @@ import torch
 from safetensors import safe_open
 
 from modeling.krea2 import KREA2_CONFIG, Krea2Config, SingleStreamDiT
+from training.families.krea2.quant_fp8 import (
+    parse_quantization_metadata,
+    patch_fp8_linears,
+)
 
 
 _PREFIX_CANDIDATES = (
@@ -117,15 +121,36 @@ def _inspect(
     config: Krea2Config,
     *,
     expected_shapes: dict[str, tuple[int, ...]] | None = None,
-) -> tuple[Krea2CheckpointInfo, dict[str, str]]:
+    allow_fp8: bool = False,
+) -> tuple[Krea2CheckpointInfo, dict[str, str], dict[str, str]]:
+    """校验 checkpoint 并返回 (info, 权重键映射, fp8 scale 键映射)。
+
+    ``allow_fp8=True``（推理路径）时：接受 fp8 权重；``{layer}.weight_scale``
+    F32 标量键被单独收集（fp8_scaled 形态），不参与键集比对。
+    """
     checkpoint = _checkpoint_path(path)
     if expected_shapes is None:
         _, expected_shapes = _expected_state(config)
     expected_keys = set(expected_shapes)
 
     with safe_open(str(checkpoint), framework="pt", device="cpu") as handle:
-        source_keys = list(handle.keys())
-        prefix = _choose_prefix(source_keys, expected_keys)
+        quant_meta = (
+            parse_quantization_metadata(handle.metadata()) if allow_fp8 else {}
+        )
+        all_source_keys = list(handle.keys())
+        prefix = _choose_prefix(all_source_keys, expected_keys)
+        # fp8_scaled 的 per-layer scale 键：归一后形如 blocks.N.xxx.weight_scale。
+        # 只在 allow_fp8 时剥离；训练路径它们会照旧落进「多出」报错。
+        scale_to_source: dict[str, str] = {}
+        source_keys = []
+        for source_key in all_source_keys:
+            normalized = _normalize_key(source_key, prefix)
+            if allow_fp8 and normalized.endswith(".weight_scale"):
+                layer = normalized[: -len(".weight_scale")]
+                if f"{layer}.weight" in expected_keys:
+                    scale_to_source[layer] = source_key
+                    continue
+            source_keys.append(source_key)
         normalized_to_source: dict[str, str] = {}
         for source_key in source_keys:
             normalized = _normalize_key(source_key, prefix)
@@ -159,13 +184,22 @@ def _inspect(
                 fp8_keys.append(normalized)
             elif actual_dtype not in _FLOAT_DTYPES:
                 dtype_mismatches.append(f"{normalized}: {actual_dtype}")
-        if fp8_keys:
+        if fp8_keys and not allow_fp8:
             raise ValueError(
                 f"Krea2 checkpoint 含 fp8 参数（{len(fp8_keys)} 个，如 "
-                f"{fp8_keys[0]}）。fp8 是推理端运行时量化格式，本训练器不支持"
-                f"（静默转回 bf16 显存零收益还丢精度）——请下载 bf16 版本权重"
-                f"（官方 Raw/Turbo 均为 bf16）。"
+                f"{fp8_keys[0]}）。fp8 权重仅推理（测试出图）支持；训练需要"
+                f"全精度梯度——请下载 bf16 版本权重（官方 Raw/Turbo 均为 bf16）。"
             )
+        # fp8_scaled 一致性：有 scale 的层权重必须是 fp8；metadata 声明的层
+        # 若既无 fp8 权重也无 scale 属异常文件
+        if allow_fp8:
+            fp8_set = set(fp8_keys)
+            for layer in scale_to_source:
+                if f"{layer}.weight" not in fp8_set:
+                    errors.append(f"{layer} 带 weight_scale 但权重不是 fp8")
+            for layer in quant_meta:
+                if f"{layer}.weight" not in fp8_set:
+                    errors.append(f"metadata 声明量化层 {layer} 但权重不是 fp8")
         if shape_mismatches:
             sample = "; ".join(shape_mismatches[:5])
             suffix = " ..." if len(shape_mismatches) > 5 else ""
@@ -188,6 +222,7 @@ def _inspect(
             parameter_count=parameter_count,
         ),
         normalized_to_source,
+        scale_to_source,
     )
 
 
@@ -204,7 +239,7 @@ def inspect_krea2_checkpoint(
     config: Krea2Config = KREA2_CONFIG,
 ) -> Krea2CheckpointInfo:
     """Validate keys and shapes from the safetensors header without reading payloads."""
-    info, _ = _inspect(path, config)
+    info, _, _ = _inspect(path, config)
     return info
 
 
@@ -214,22 +249,31 @@ def load_krea2_model(
     dtype: torch.dtype,
     *,
     config: Krea2Config = KREA2_CONFIG,
+    purpose: str = "train",
 ) -> SingleStreamDiT:
-    """Strict-load a single-file Krea2 checkpoint into a frozen meta-created model."""
+    """Strict-load a single-file Krea2 checkpoint into a frozen meta-created model.
+
+    ``purpose="generate"``（推理路径）允许 fp8 权重（纯 cast 与 fp8_scaled 两种
+    形态）：fp8 张量原样常驻显存，Linear 前向逐层 dequant 到 compute dtype
+    （ComfyUI parity，见 quant_fp8）。训练路径（默认）维持 bf16 全精度拒绝语义。
+    """
     if dtype not in {torch.float16, torch.bfloat16, torch.float32, torch.float64}:
         raise ValueError(f"Krea2 loader 不支持 dtype={dtype}")
     target_device = torch.device(device)
     if target_device.type == "meta":
         raise ValueError("Krea2 loader 的目标 device 不能是 meta")
+    allow_fp8 = purpose != "train"
 
     model, expected_shapes = _expected_state(config)
-    _, normalized_to_source = _inspect(
+    _, normalized_to_source, scale_to_source = _inspect(
         path,
         config,
         expected_shapes=expected_shapes,
+        allow_fp8=allow_fp8,
     )
 
     state_dict = {}
+    fp8_scales: dict[str, torch.Tensor | None] = {}
     checkpoint = _checkpoint_path(path)
     with safe_open(str(checkpoint), framework="pt", device="cpu") as handle:
         for normalized, source_key in normalized_to_source.items():
@@ -238,12 +282,27 @@ def load_krea2_model(
                 raise ValueError(
                     f"Krea2 checkpoint 含非浮点参数 {source_key}: {tensor.dtype}"
                 )
-            state_dict[normalized] = tensor.to(
+            if allow_fp8 and tensor.dtype in (
+                torch.float8_e4m3fn, torch.float8_e5m2,
+            ):
+                # fp8 原样常驻（显存收益所在），不 cast dtype
+                state_dict[normalized] = tensor.to(device=target_device)
+                if normalized.endswith(".weight"):
+                    layer = normalized[: -len(".weight")]
+                    fp8_scales.setdefault(layer, None)
+            else:
+                state_dict[normalized] = tensor.to(
+                    device=target_device,
+                    dtype=dtype,
+                )
+        for layer, source_key in scale_to_source.items():
+            fp8_scales[layer] = handle.get_tensor(source_key).to(
                 device=target_device,
-                dtype=dtype,
             )
 
     model.load_state_dict(state_dict, strict=True, assign=True)
     del state_dict
     model.requires_grad_(False)
+    if fp8_scales:
+        patch_fp8_linears(model, fp8_scales)
     return model

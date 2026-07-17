@@ -22,7 +22,8 @@ class ModelFamily(Protocol):
 
     # ── 加载（models_phase + 全部旁路调用方，04 D8'）─────────────────────
     def load_dit(self, path: str, device, dtype, *,
-                 attention_backend: str = "flash_attn", repo_root=None) -> Any: ...
+                 attention_backend: str = "flash_attn", repo_root=None,
+                 purpose: str = "train") -> Any: ...
 
     def load_vae(self, path: str, device, dtype, *, tiling: str = "auto") -> Any: ...
 

@@ -592,6 +592,7 @@ def _default_generator(
     model = family.load_dit(
         transformer_path, device, dtype,
         attention_backend=("flash_attn" if use_flash else "none"), repo_root=diffusion_root,
+        purpose="generate",
     )
     if use_xformers:
         _T.enable_xformers(model)

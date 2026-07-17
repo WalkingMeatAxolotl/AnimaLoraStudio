@@ -18,7 +18,10 @@ class AnimaFamily:
 
     # ── 加载 ─────────────────────────────────────────────────────────────
     def load_dit(self, path, device, dtype, *,
-                 attention_backend: str = "flash_attn", repo_root=None):
+                 attention_backend: str = "flash_attn", repo_root=None,
+                 purpose: str = "train"):
+        # purpose 是量化推理旋钮（krea2 fp8）；Anima 无量化形态，接受并忽略
+        del purpose
         from training.families.anima.loader import load_anima_model
         from training.model_loading import enable_xformers
 

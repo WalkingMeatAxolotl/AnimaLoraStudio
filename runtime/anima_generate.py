@@ -147,6 +147,7 @@ def main() -> None:
     model = family.load_dit(
         transformer_path, device, dtype,
         attention_backend=("flash_attn" if use_flash else "none"), repo_root=repo_root,
+        purpose="generate",
     )
     if use_xformers and not _T.enable_xformers(model):
         raise RuntimeError(
