@@ -16,6 +16,7 @@ import yaml
 from pydantic import ValidationError
 
 from ...domain.config_prune import prune_inactive_fields
+from ...domain.config_rules import apply_disable_rule_fixes
 from ...domain.migrations import RETIRED_MONITOR_KEYS
 from ...paths import REPO_ROOT, USER_PRESETS_DIR
 from ...schema import TrainingConfig
@@ -174,8 +175,14 @@ def _tolerant_validate(raw: dict[str, Any]) -> tuple[TrainingConfig, list[str], 
 
     defaults = TrainingConfig()
     defaulted: list[str] = []
-    # loop bound = data fields + 1 extra round for the InfoNoise compat shim
-    # below (which doesn't consume a field-level slot).
+    # disable_when 规则修复（刀 2 / R2 v2）：钉值/禁值违反按规则修（修复值 =
+    # disable_value，与前端 takeover 语义对齐；含 gate-first「优先关 InfoNoise
+    # 保住用户在 loss_weighting 等的投入」——历史 InfoNoise 专用垫片的泛化）。
+    # 先于逐字段回退跑：规则违反在 pydantic 里是 model-level 错（loc=()），
+    # 逐字段回退定位不到。
+    data, rule_fixed = apply_disable_rule_fixes(data, TrainingConfig)
+    defaulted.extend(rule_fixed)
+
     max_rounds = len(data) + 1
     for _ in range(max_rounds):
         try:
@@ -186,15 +193,8 @@ def _tolerant_validate(raw: dict[str, Any]) -> tuple[TrainingConfig, list[str], 
                 e["loc"][0] for e in exc.errors() if e.get("loc")
             }
             if not bad_fields:
-                # Model-level validator (loc=()) — for the InfoNoise mutex set
-                # (4 _validate_infonoise_*_exclusive), prefer to disable InfoNoise
-                # and preserve the user's investment in loss_weighting / loss_type /
-                # timestep_schedule_shift / noise_enhancement_type. Frontend shows
-                # this as a compat banner via defaulted_fields.
-                if data.get("infonoise_enabled") is True:
-                    data["infonoise_enabled"] = False
-                    defaulted.append("infonoise_enabled")
-                    continue
+                # 剩余 model-level 错 = §6.4 保留手写的校验（区间 / navit 前置），
+                # 无声明式修复策略 —— 按产品语义直接拒绝。
                 raise PresetError(
                     f"Preset validation failed: {exc}",
                     code="preset.invalid",

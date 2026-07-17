@@ -111,8 +111,10 @@ def test_gated_fields_follow_family_capabilities():
 def test_default_config_valid_and_yaml_roundtrip():
     cfg = TrainingConfig()
     assert cfg.model_family == "anima"
-    # 显式开启 anima 支持的能力 → 合法
-    TrainingConfig(navit_packing=True, masked_loss=True)
+    # 显式开启 anima 支持的能力 → 合法（分开开：navit×masked_loss 是
+    # disable_when 声明的互斥，刀 2 起后端也强制）
+    TrainingConfig(navit_packing=True)
+    TrainingConfig(masked_loss=True)
     krea2 = TrainingConfig(model_family="krea2")
     assert krea2.shuffle_caption is False
     assert krea2.text_encoder_cache is True
