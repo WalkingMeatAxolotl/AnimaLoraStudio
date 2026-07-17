@@ -50,6 +50,10 @@ export interface SchemaProperty {
    * 表达式语法与 show_when 一致：`key==value` / `key!=value`。
    * 例：lr_scheduler 在 optimizer_type=prodigy_plus_schedulefree 时被 disable。 */
   disable_when?: string
+  /** option 级禁值（刀 2 / R2 v2，D4）：enum 值 → 表达式为真时该选项灰显
+   * 不可选（不隐藏——用户能看见为什么不可选，title 显示 disable_hint）。
+   * 后端 _enforce_disable_rules 消费同一份声明做校验。 */
+  option_disable_when?: Record<string, string>
   /** disable_when 触发时写回的值；缺省回退到 default。 */
   disable_value?: unknown
   /** disable_when 触发时显示的提示徽章文本。 */
@@ -2031,6 +2035,13 @@ export const api = {
   getModelsCatalog: () => req<ModelsCatalog>('/api/models/catalog'),
   /** 当前 Settings 算出的 4 个模型字段绝对路径。预设页 reset / 新建用。 */
   getModelPathDefaults: () => req<Record<string, string>>('/api/models/path-defaults'),
+  /** YAML 预览（R4）：当前表单 config → 与保存后落盘文件同一序列化路径的
+   * yaml 文本。纯计算不落盘；tolerant 修复语义与保存一致。 */
+  previewConfigYaml: (config: ConfigData) =>
+    req<{ yaml: string }>('/api/schema/preview-yaml', {
+      method: 'POST',
+      body: JSON.stringify({ config }),
+    }),
   /** 训练配置切换模型族的预览计算（多模型 P4-3）。纯计算不落盘：返回
    * 重算路径 + 重置族风味字段后的完整 config 与变更清单，前端确认后走
    * 正常保存链路。 */

@@ -2868,6 +2868,12 @@
     "empty": "(empty)",
     "failed": "Model family switch failed: {{error}}"
   },
+  "ruleImpact": {
+    "title": "Linked parameters will be adjusted",
+    "intro": "Setting {{field}} to {{value}} will also adjust these modified parameters:",
+    "ok": "Apply",
+    "automagicLr": "Automagic starts from a per-parameter learning rate; the recommended initial value is 1e-6 (starting at AdamW magnitude makes adaptation ~100× slower to converge)"
+  },
   "baseModel": {
     "purpose": {
       "training": "training",

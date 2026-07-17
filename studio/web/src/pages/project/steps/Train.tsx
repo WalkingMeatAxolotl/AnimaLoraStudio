@@ -880,7 +880,6 @@ export default function TrainPage() {
             ) : config ? (
               <ConfigYamlPanel
                 config={config}
-                schema={schema}
                 fileLabel="config.yaml"
                 className="flex-1 flex flex-col min-h-0"
               />

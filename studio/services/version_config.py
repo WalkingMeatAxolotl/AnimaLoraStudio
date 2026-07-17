@@ -154,12 +154,10 @@ def write_version_config(
     dumped = prune_inactive_fields(cfg.model_dump(mode="python"))
     p = version_config_path(project, version)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(
-        yaml.safe_dump(
-            dumped, allow_unicode=True, sort_keys=False, default_flow_style=False
-        ),
-        encoding="utf-8",
-    )
+    # 序列化出口统一 render_config_yaml —— 预览端点与落盘同一条路径(R4)
+    from .presets.io import render_config_yaml
+
+    p.write_text(render_config_yaml(dumped), encoding="utf-8")
     return p
 
 

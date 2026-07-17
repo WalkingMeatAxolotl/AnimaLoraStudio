@@ -79,31 +79,10 @@ export function evalShowWhen(
   return true
 }
 
-/**
- * 过滤掉 yaml 落盘不需要的字段。与后端落盘裁剪
- * （studio/domain/config_prune.py）同一语义，让 YAML 预览和落盘内容一致：
- * 1. show_when 求值为假 —— 当前配置下 UI 不可见的字段；
- * 2. hidden=true 且值等于 schema 默认值 —— UI 永不渲染的字段，非默认覆盖保留。
- * disable_when 字段与无元数据字段原样保留。
- */
-export function pruneInactiveConfig(
-  config: Record<string, unknown>,
-  properties: Record<string, SchemaProperty>
-): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  for (const [name, value] of Object.entries(config)) {
-    const prop = properties[name]
-    if (prop?.show_when && !evalShowWhen(prop.show_when, config)) continue
-    if (
-      prop?.hidden &&
-      prop.default !== undefined &&
-      JSON.stringify(value) === JSON.stringify(prop.default)
-    )
-      continue
-    out[name] = value
-  }
-  return out
-}
+// pruneInactiveConfig（后端 config_prune 的前端镜像）已删除（刀 2 / R4，D3）：
+// YAML 预览改走 POST /api/schema/preview-yaml，与落盘同一条序列化路径。
+// evalShowWhen 仍是表单实时可见性的求值器，与后端 config_rules.eval_show_when
+// 保持逐字镜像（跨语言双实现的最后一处）。
 
 /** 字段的人类可读 label：首字母大写 + 下划线变空格。 */
 export function fieldLabel(name: string): string {

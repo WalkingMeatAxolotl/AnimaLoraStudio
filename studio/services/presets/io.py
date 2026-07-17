@@ -254,6 +254,25 @@ def read_preset_with_warnings(
     return _absolutize_model_paths(cfg.model_dump(mode="python")), dropped, defaulted
 
 
+def render_config_yaml(dumped: dict[str, Any]) -> str:
+    """裁剪后 config dict → yaml 文本。落盘(write_preset / write_version_config)
+    与预览端点(POST /api/schema/preview-yaml)共用的唯一序列化出口 ——
+    R4「预览物理一致」的依据,序列化参数只此一处。"""
+    return yaml.safe_dump(
+        dumped, allow_unicode=True, sort_keys=False, default_flow_style=False
+    )
+
+
+def preview_config_yaml_text(raw: dict[str, Any]) -> str:
+    """当前表单 config → 与保存后落盘文件完全同路径的 yaml 文本(R4)。
+
+    tolerant 语义与保存一致:修复 / 裁剪后的样子就是「点保存后文件的样子」。
+    纯计算不落盘。
+    """
+    cfg, _, _ = _tolerant_validate(raw)
+    return render_config_yaml(prune_inactive_fields(cfg.model_dump(mode="python")))
+
+
 def write_preset(name: str, data: dict[str, Any], base: Path | None = None) -> Path:
     """先校验后写盘；任何未知字段或类型不匹配都会拒绝。
 
@@ -276,10 +295,7 @@ def write_preset(name: str, data: dict[str, Any], base: Path | None = None) -> P
         _absolutize_model_paths(cfg.model_dump(mode="python"))
     )
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        yaml.safe_dump(dumped, allow_unicode=True, sort_keys=False, default_flow_style=False),
-        encoding="utf-8",
-    )
+    path.write_text(render_config_yaml(dumped), encoding="utf-8")
     return path
 
 

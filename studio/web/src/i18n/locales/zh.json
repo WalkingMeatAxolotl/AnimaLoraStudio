@@ -2868,6 +2868,12 @@
     "empty": "（空）",
     "failed": "模型族切换失败：{{error}}"
   },
+  "ruleImpact": {
+    "title": "关联参数将被调整",
+    "intro": "把 {{field}} 改为 {{value}} 后，以下已修改的参数会被一并调整：",
+    "ok": "应用",
+    "automagicLr": "Automagic 以每参数学习率起步，推荐初始值 1e-6（AdamW 量级起跑会让自适应收敛慢约 100 倍）"
+  },
   "baseModel": {
     "purpose": {
       "training": "训练",

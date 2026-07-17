@@ -27,6 +27,10 @@ interface Props {
   /** select 的可见选项覆盖（option_show_when 过滤后的 enum 子集，由
    * SchemaForm 按当前 values 计算）。缺省渲染 prop.enum 全量。 */
   enumOptions?: unknown[]
+  /** option_disable_when 命中的选项（D4：灰显不可选、不隐藏），由 SchemaForm
+   * 按当前 values 计算；title 显示 disabledOptionHint 解释为什么不可选。 */
+  disabledEnumOptions?: string[]
+  disabledOptionHint?: string
 }
 
 // input 覆盖 .input 默认值（更紧凑；背景用 canvas 而不是 surface）
@@ -44,7 +48,7 @@ const FieldHint = ({ children }: { children: React.ReactNode }) => (
 /** 单个表单字段，按 control kind 分发渲染。 */
 export default function Field({
   name, prop, value, onChange, disabled = false, hint, descriptionOverride, suffix,
-  enumOptions,
+  enumOptions, disabledEnumOptions, disabledOptionHint,
 }: Props) {
   const { t } = useTranslation()
   const kind = controlKind(prop)
@@ -115,11 +119,23 @@ export default function Field({
           disabled={disabled}
           className="input" style={inputStyle}
         >
-          {(enumOptions ?? prop.enum ?? []).map((opt) => (
-            <option key={String(opt)} value={String(opt)}>
-              {schemaEnumLabel(name, opt, t)}
-            </option>
-          ))}
+          {(enumOptions ?? prop.enum ?? []).map((opt) => {
+            // 当前已选中的值即使被禁也保持可选中状态渲染（表单如实反映
+            // config；非法组合由后端校验报错，不在 UI 里凭空清值）
+            const optDisabled =
+              disabledEnumOptions?.includes(String(opt)) &&
+              String(opt) !== String(value ?? '')
+            return (
+              <option
+                key={String(opt)}
+                value={String(opt)}
+                disabled={optDisabled}
+                title={optDisabled ? disabledOptionHint : undefined}
+              >
+                {schemaEnumLabel(name, opt, t)}
+              </option>
+            )
+          })}
         </select>
         {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
       </div>

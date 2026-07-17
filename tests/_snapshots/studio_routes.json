@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 202,
+  "count": 203,
   "routes": [
     {
       "path": "/",
@@ -1311,6 +1311,14 @@
         "GET"
       ],
       "name": "get_schema",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/schema/preview-yaml",
+      "methods": [
+        "POST"
+      ],
+      "name": "preview_config_yaml_endpoint",
       "type": "APIRoute"
     },
     {

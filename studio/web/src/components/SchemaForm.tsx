@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { SchemaResponse, ConfigData } from '../api/client'
 import { evalShowWhen, schemaAltDescription, schemaDisableHint, schemaDescription, schemaGroupLabel } from '../lib/schema'
 import Field from './Field'
+import RuleImpactDialog, { type RuleImpactChange } from './RuleImpactDialog'
 
 interface Props {
   schema: SchemaResponse
@@ -62,34 +63,78 @@ export default function SchemaForm({
     }
     return out
   })
-  const setField = (name: string, v: unknown) =>
-    onChange({ ...values, [name]: v })
-
   const props = schema.schema.properties
-  const isAutoLrOptimizer = values.optimizer_type === 'prodigy' || values.optimizer_type === 'prodigy_plus_schedulefree' || values.optimizer_type === 'automagic'
-  const shouldDisableField = (name: string, prop: typeof props[string]) => {
-    if (name === 'lr_scheduler' && isAutoLrOptimizer) return true
-    return !!prop.disable_when && evalShowWhen(prop.disable_when, values)
-  }
-  const takeoverValueForField = (name: string, prop: typeof props[string]) => {
-    if (name === 'lr_scheduler' && isAutoLrOptimizer) return 'none'
-    return prop.disable_value ?? prop.default
+  const shouldDisableField = (prop: typeof props[string]) =>
+    !!prop.disable_when && evalShowWhen(prop.disable_when, values)
+  const takeoverValueForField = (prop: typeof props[string]) =>
+    prop.disable_value ?? prop.default
+
+  /** R6 确认弹窗的待决改动（非空时渲染 RuleImpactDialog）。 */
+  const [pendingImpact, setPendingImpact] = useState<{
+    trigger: { field: string; from: unknown; to: unknown }
+    next: ConfigData
+    writes: RuleImpactChange[]
+  } | null>(null)
+
+  /** 某次改动落地后规则会写哪些字段（有损清单：目标值 ≠ 当前值才列入）。
+   * 来源：① disable_when takeover（reset 到 disable_value / default）；
+   * ② advisory 改写 —— 切到 automagic 时 learning_rate 建议 1e-6
+   *（upstream ostris/ai-toolkit + diffusion-pipe 默认；AdamW 量级 lr 起跑
+   * 会让 sign-agreement 自适应慢 ~100× 才收敛）。 */
+  const computeRuleWrites = (
+    next: ConfigData, triggerField: string,
+  ): RuleImpactChange[] => {
+    const writes: RuleImpactChange[] = []
+    for (const [name, prop] of Object.entries(props)) {
+      if (!prop.disable_when || !evalShowWhen(prop.disable_when, next)) continue
+      const target = takeoverValueForField(prop)
+      if (target !== undefined && next[name] !== target) {
+        writes.push({
+          field: name, from: next[name], to: target,
+          reason: schemaDisableHint(name, prop.disable_hint, t),
+        })
+      }
+    }
+    if (
+      triggerField === 'optimizer_type' && next.optimizer_type === 'automagic'
+      && Number(next.learning_rate) > 1e-5
+    ) {
+      writes.push({
+        field: 'learning_rate', from: next.learning_rate, to: 1e-6,
+        reason: t('ruleImpact.automagicLr'),
+      })
+    }
+    return writes
   }
 
-  // disable_when 触发 → 字段灰显 + 值 reset 到 disable_value（缺省回到 default）。
-  // 「先开的赢」语义：当 InfoNoise 与 loss_weighting / loss_type / schedule_shift /
-  // noise_enhancement_type 任一互斥，先把状态切到非默认的那一侧赢，另一侧灰显且
-  // reset 到 default。两侧都装 disable_when 形成对称锁。
-  //
-  // 老 config 同开（infonoise=on + 互斥字段非默认）由后端 _tolerant_validate 反向
-  // 处理：关掉 infonoise 保留用户原投入的 weighting / huber / shift / enhancement，
-  // 把 "infonoise_enabled" 写进 defaulted_fields，前端顶部 banner 提示。
+  // setField 入口拦截（R6，D6）：违反态不进表单 state —— 有损联动改值先弹
+  // 确认（确认 = 触发改动 + 全部联动写值一次性提交；取消 = 什么都不发生），
+  // 无损（联动目标本来就在钉值上）静默应用。model_family 不在任何 disable_when
+  // 里出现，族切换仍由调用方（Train/Presets 的 onFormChange）拦去 FamilySwitchDialog。
+  const setField = (name: string, v: unknown) => {
+    const next = { ...values, [name]: v }
+    const writes = computeRuleWrites(next, name)
+    if (writes.length === 0) {
+      onChange(next)
+      return
+    }
+    setPendingImpact({
+      trigger: { field: name, from: values[name], to: v },
+      next,
+      writes,
+    })
+  }
+
+  // 兜底静默 takeover：外部写路径（config 载入 / disabledFields 变化）带进来的
+  // 违反态直接修正，不弹窗（用户没有触发动作，弹窗无从「取消」）。正常交互
+  // 路径经 setField 拦截后不会走到这里。老 config 同开的互斥由后端
+  // _tolerant_validate 的 gate-first 修复 + defaulted_fields banner 处理。
   useEffect(() => {
     let nextValues = values
     let changed = false
     for (const [name, prop] of Object.entries(props)) {
-      if (!shouldDisableField(name, prop)) continue
-      const takeoverValue = takeoverValueForField(name, prop)
+      if (!shouldDisableField(prop)) continue
+      const takeoverValue = takeoverValueForField(prop)
       if (takeoverValue !== undefined && values[name] !== takeoverValue) {
         nextValues = { ...nextValues, [name]: takeoverValue }
         changed = true
@@ -99,24 +144,6 @@ export default function SchemaForm({
     // 故意只监听 values；onChange / props 引用稳定，加进去会无限循环。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [values])
-
-  // Automagic 推荐 init lr=1e-6（upstream ostris/ai-toolkit + diffusion-pipe 默认）；
-  // 用 AdamW 量级 lr (1e-4) 起跑会让 sign-agreement 自适应慢 ~100× 才收敛回工作区间。
-  // 用户从其他 optimizer 切到 automagic 时，自动改写为 1e-6；不 disable，用户可继续调整。
-  // 初次 mount（含加载 saved config）不触发，避免覆盖用户已保存值——saved config 路径由
-  // training runtime 的 logger.warning 兜底。
-  const prevOptimizerType = useRef(values.optimizer_type)
-  useEffect(() => {
-    const prev = prevOptimizerType.current
-    const curr = values.optimizer_type
-    if (prev !== curr) {
-      prevOptimizerType.current = curr
-      if (curr === 'automagic' && Number(values.learning_rate) > 1e-5) {
-        onChange({ ...values, learning_rate: 1e-6 })
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [values.optimizer_type])
 
   // 按 group 分桶。hidden=true 的字段直接跳过：值仍由 ConfigData 透传（PUT 时不丢），
   // 只是不在 UI 上渲染。如果一个组所有字段都 hidden，下面 `fields.length === 0`
@@ -162,7 +189,7 @@ export default function SchemaForm({
                   if (!evalShowWhen(prop.show_when, values)) return null
                   // disable_when（schema 驱动条件 disable，如 Prodigy → lr_scheduler）
                   // 优先级低于全局 disabledFields（项目预填）。
-                  const conditionallyDisabled = shouldDisableField(name, prop)
+                  const conditionallyDisabled = shouldDisableField(prop)
                   const isDisabled =
                     disabledSet.has(name) || conditionallyDisabled
                   const hint = disabledSet.has(name)
@@ -186,6 +213,14 @@ export default function SchemaForm({
                           String(opt) === String(values[name] ?? '')
                       )
                     : undefined
+                  // option_disable_when：命中的选项灰显不可选（D4：不隐藏，
+                  // 用户能看见为什么不可选——title 显示 disable_hint）。
+                  const dGates = prop.option_disable_when
+                  const disabledEnumOptions = dGates
+                    ? Object.keys(dGates).filter((opt) =>
+                        evalShowWhen(dGates[opt], values)
+                      )
+                    : undefined
                   return (
                     <Field
                       key={name}
@@ -198,6 +233,8 @@ export default function SchemaForm({
                       descriptionOverride={descriptionOverride}
                       suffix={suffixes[name]}
                       enumOptions={enumOptions}
+                      disabledEnumOptions={disabledEnumOptions}
+                      disabledOptionHint={schemaDisableHint(name, prop.disable_hint, t)}
                     />
                   )
                 })}
@@ -206,6 +243,19 @@ export default function SchemaForm({
           </section>
         )
       })}
+      {pendingImpact && (
+        <RuleImpactDialog
+          trigger={pendingImpact.trigger}
+          changes={pendingImpact.writes}
+          onApply={() => {
+            const applied = { ...pendingImpact.next }
+            for (const w of pendingImpact.writes) applied[w.field] = w.to
+            setPendingImpact(null)
+            onChange(applied)
+          }}
+          onCancel={() => setPendingImpact(null)}
+        />
+      )}
     </div>
   )
 }

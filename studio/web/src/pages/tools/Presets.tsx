@@ -862,7 +862,6 @@ export default function PresetsPage() {
             </div>
             <ConfigYamlPanel
               config={config}
-              schema={schema}
               fileLabel={isNew
                 ? `${newName.trim() || 'preset'}.yaml`
                 : `${selected}.yaml`}

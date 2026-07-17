@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { ConfigData, SchemaResponse } from '../api/client'
 import SchemaForm from './SchemaForm'
@@ -40,7 +40,7 @@ const schema: SchemaResponse = {
     properties: {
       optimizer_type: {
         type: 'string',
-        enum: ['adamw', 'prodigy', 'prodigy_plus_schedulefree'],
+        enum: ['adamw', 'prodigy', 'prodigy_plus_schedulefree', 'automagic'],
         default: 'adamw',
         group: 'training',
         description: 'Optimizer',
@@ -280,5 +280,78 @@ describe('SchemaForm option_show_when filtering', () => {
     )
     expect(optionValues(samplerSelect())).toEqual(['er_sde', 'euler'])
     expect(samplerSelect().value).toBe('er_sde')
+  })
+})
+
+// ─── R6（D6）：setField 入口拦截 —— 有损联动改值先弹确认 ────────────────────
+// mock 的 t() 对未知 key 返回 raw key，RuleImpactDialog 的按钮/标题按 key 断言。
+
+describe('SchemaForm rule takeover confirm (R6)', () => {
+  const base: ConfigData = {
+    optimizer_type: 'adamw',
+    learning_rate: 0.0001,
+    lr_scheduler: 'none',
+    infonoise_enabled: false,
+    timestep_sampling: 'uniform',
+  }
+
+  it('intercepts lossy takeover with a confirm dialog; apply commits all writes', () => {
+    const onChange = vi.fn()
+    render(<SchemaForm schema={schema} values={base} onChange={onChange} advancedMode />)
+    // 开 InfoNoise → timestep_sampling(uniform) 会被钉回 logit_normal = 有损
+    fireEvent.click(screen.getByRole('checkbox'))
+    expect(onChange).not.toHaveBeenCalled()  // 违反态不进表单 state
+    expect(screen.getByText('ruleImpact.title')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('ruleImpact.ok'))
+    expect(onChange).toHaveBeenCalledWith({
+      ...base,
+      infonoise_enabled: true,
+      timestep_sampling: 'logit_normal',
+    })
+  })
+
+  it('cancel leaves the form untouched', () => {
+    const onChange = vi.fn()
+    render(<SchemaForm schema={schema} values={base} onChange={onChange} advancedMode />)
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByText('common.cancel'))
+    expect(onChange).not.toHaveBeenCalled()
+    expect(screen.queryByText('ruleImpact.title')).not.toBeInTheDocument()
+  })
+
+  it('applies silently when linked fields are already at pinned values', () => {
+    const onChange = vi.fn()
+    render(
+      <SchemaForm
+        schema={schema}
+        values={{ ...base, timestep_sampling: 'logit_normal' }}
+        onChange={onChange}
+        advancedMode
+      />,
+    )
+    fireEvent.click(screen.getByRole('checkbox'))
+    // 无损（目标本来就在钉值上）→ 不弹窗直接提交
+    expect(screen.queryByText('ruleImpact.title')).not.toBeInTheDocument()
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ infonoise_enabled: true }),
+    )
+  })
+
+  it('advisory automagic learning-rate rewrite goes through the same dialog', () => {
+    const onChange = vi.fn()
+    const values: ConfigData = { ...base }
+    render(<SchemaForm schema={schema} values={values} onChange={onChange} advancedMode />)
+    const optimizerSelect = screen
+      .getAllByRole('combobox')
+      .find((el) =>
+        Array.from((el as HTMLSelectElement).options).some((o) => o.value === 'adamw'),
+      ) as HTMLSelectElement
+    fireEvent.change(optimizerSelect, { target: { value: 'automagic' } })
+    // learning_rate 0.0001 > 1e-5 → advisory 改写 1e-6，有损 → 弹窗
+    expect(screen.getByText('ruleImpact.title')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('ruleImpact.ok'))
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ optimizer_type: 'automagic', learning_rate: 1e-6 }),
+    )
   })
 })
