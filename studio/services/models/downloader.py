@@ -557,6 +557,60 @@ def start_download_async(
     return ds
 
 
+def delete_asset(model_id: str, variant: Optional[str] = None) -> None:
+    """删除一个已下载资产（下载按钮的逆操作：用户先删除、再下载）。
+
+    目标路径全部由服务端 target 函数解析——不接受任意路径；对应 key 的
+    下载进行中拒绝。覆盖 Settings 模型区的资产 id（主模型 variant / VAE /
+    文本编码器 / tokenizer）；打标、放大器等区暂不接入。文件被占用
+    （模型已加载 / 训练中）时 OSError 原样转可操作报错。
+    """
+    import shutil
+
+    root = models_root()
+    target: Path
+    key = model_id
+    if model_id == "anima_main":
+        v = variant or ""
+        if v not in ANIMA_VARIANTS:
+            raise ValueError(f"unknown anima variant {variant!r}")
+        key = f"anima_main:{v}"
+        target = anima_main_target(root, v)
+    elif model_id == "krea2_main":
+        v = variant or ""
+        if v not in KREA2_VARIANTS:
+            raise ValueError(f"unknown Krea 2 variant {variant!r}")
+        key = f"krea2_main:{v}"
+        target = krea2_main_target(root, v)
+    elif model_id == "anima_vae":
+        target = qwen_image_vae_target(root)
+    elif model_id == "qwen3":
+        target = qwen_dir(root)
+    elif model_id == "t5_tokenizer":
+        target = t5_tokenizer_dir(root)
+    elif model_id == "krea2_text_encoder":
+        target = qwen3_vl_dir(root)
+    elif model_id == "krea2_text_encoder_fp8":
+        target = qwen3_vl_fp8_dir(root)
+    else:
+        raise ValueError(f"asset {model_id!r} does not support deletion")
+
+    with _LOCK:
+        existing = _DOWNLOADS.get(key)
+        if existing and existing.status == "running":
+            raise RuntimeError(f"{key} 正在下载中，无法删除")
+
+    try:
+        if target.is_dir():
+            shutil.rmtree(target)
+        elif target.exists():
+            target.unlink()
+    except OSError as exc:
+        raise RuntimeError(
+            f"删除失败（文件可能被占用——模型已加载或训练中）：{exc}"
+        ) from exc
+
+
 def trigger(model_id: str, variant: Optional[str] = None) -> str:
     """便于端点调用的入口：根据 model_id 选对应的 download_* 函数 + 启动异步。
 

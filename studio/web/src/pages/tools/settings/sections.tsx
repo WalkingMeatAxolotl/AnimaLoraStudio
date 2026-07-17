@@ -165,6 +165,18 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
     }
   }
 
+  // 删除已下载资产（下载的逆操作）：confirm → DELETE → 刷 catalog
+  const deleteAsset = async (modelId: string, variant: string | undefined, name: string) => {
+    if (!(await dialog.confirm(t('settings.confirmDeleteAsset', { name }), { tone: 'danger' }))) return
+    try {
+      await api.deleteModelAsset(modelId, variant)
+      toast(t('settings.assetDeleted', { name }), 'success')
+      await reloadCatalog()
+    } catch (e) {
+      toast(String(e), 'error')
+    }
+  }
+
   // krea2 TE variant 选择（bf16/fp8）：与主模型 pick 同款直写 secrets
   const [teSelected, setTeSelected] = useState<'bf16' | 'fp8'>('bf16')
   useEffect(() => {
@@ -207,7 +219,7 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
           <span className="text-fg-tertiary">{translatedCatalogText(MODEL_DESCRIPTION_KEYS, 'anima_vae', catalog.anima_vae.description, t)} · <code>{catalog.anima_vae.repo}</code></span>
           <span style={{ flex: 1 }} />
           <ModelStatusBadge exists={catalog.anima_vae.exists} size={catalog.anima_vae.size} status={catalog.downloads.anima_vae?.status} />
-          <DownloadButton exists={catalog.anima_vae.exists} status={catalog.downloads.anima_vae?.status} busy={busy.has('anima_vae')} onClick={() => void start('anima_vae')} />
+          <DownloadButton exists={catalog.anima_vae.exists} status={catalog.downloads.anima_vae?.status} busy={busy.has('anima_vae')} onClick={() => void start('anima_vae')} onDelete={() => void deleteAsset('anima_vae', undefined, catalog.anima_vae.name)} />
         </div>
       </ModelGroupCard>
     )
@@ -304,7 +316,7 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
                         )}
                         <span className="flex-1" />
                         <ModelStatusBadge exists={v.exists} size={v.size} status={dl?.status} />
-                        <DownloadButton exists={v.exists} status={dl?.status} busy={busy.has(key)} onClick={() => void start(section.mainKey, v.variant)} />
+                        <DownloadButton exists={v.exists} status={dl?.status} busy={busy.has(key)} onClick={() => void start(section.mainKey, v.variant)} onDelete={() => void deleteAsset(section.mainKey, v.variant, v.variant)} />
                       </li>
                     )
                   })}
@@ -376,7 +388,7 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
                           </span>
                           <span style={{ flex: 1 }} />
                           <ModelStatusBadge exists={allExist} size={totalSize} status={dl?.status} fileCount={m.files.length} existsCount={m.files.filter((f) => f.exists).length} />
-                          <DownloadButton exists={allExist} status={dl?.status} busy={busy.has(m.id)} onClick={() => void start(m.id)} />
+                          <DownloadButton exists={allExist} status={dl?.status} busy={busy.has(m.id)} onClick={() => void start(m.id)} onDelete={() => void deleteAsset(m.id, undefined, `Qwen3-VL ${variant}`)} />
                         </li>
                       )
                     })}
@@ -396,7 +408,7 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
                       <span className="text-fg-tertiary">{translatedCatalogText(MODEL_DESCRIPTION_KEYS, id, m.description, t)} · <code>{m.repo}</code></span>
                       <span style={{ flex: 1 }} />
                       <ModelStatusBadge exists={allExist} size={totalSize} status={dl?.status} fileCount={m.files.length} existsCount={m.files.filter((f) => f.exists).length} />
-                      <DownloadButton exists={allExist} status={dl?.status} busy={busy.has(id)} onClick={() => void start(id)} />
+                      <DownloadButton exists={allExist} status={dl?.status} busy={busy.has(id)} onClick={() => void start(id)} onDelete={() => void deleteAsset(id, undefined, m.name)} />
                     </div>
                   </ModelGroupCard>
                 )

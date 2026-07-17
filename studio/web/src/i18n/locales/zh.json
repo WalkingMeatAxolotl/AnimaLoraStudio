@@ -1297,6 +1297,10 @@
       "optPerformance": "性能优先"
     },
     "krea2TeCardTitle": "Krea 2 · Qwen3-VL 文本编码器",
+    "deleteAsset": "删除",
+    "deleteAssetTitle": "删除已下载的文件（需要时可重新下载）",
+    "confirmDeleteAsset": "确定删除 {{name}} 的已下载文件？需要时可重新下载。",
+    "assetDeleted": "已删除：{{name}}",
     "teVariantSelected": "文本编码器已切换：{{name}}",
     "selectTeVariant": "设为默认文本编码器（训练与测试出图共用）",
     "teVariantNotDownloaded": "下载完成后可选中",

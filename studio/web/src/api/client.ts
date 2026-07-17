@@ -2064,6 +2064,14 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  /** 删除一个已下载资产（下载的逆操作：先删除、再重新下载）。路径由
+   *  服务端解析；下载中 / 文件被占用时 409。返回删除后的 catalog。 */
+  deleteModelAsset: (model_id: string, variant?: string) =>
+    req<ModelsCatalog>(
+      `/api/models/asset?model_id=${encodeURIComponent(model_id)}`
+      + (variant ? `&variant=${encodeURIComponent(variant)}` : ''),
+      { method: 'DELETE' },
+    ),
   /** 注册一个本地 .safetensors 主模型到指定族（微调训练 / 微调上测试）。
    *  返回新 catalog。路由按族参数化（多模型 P4-5）。 */
   addCustomModel: (family: 'anima' | 'krea2', path: string) =>

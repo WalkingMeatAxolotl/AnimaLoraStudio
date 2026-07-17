@@ -1297,6 +1297,10 @@
       "optPerformance": "Performance"
     },
     "krea2TeCardTitle": "Krea 2 · Qwen3-VL text encoder",
+    "deleteAsset": "Delete",
+    "deleteAssetTitle": "Delete the downloaded files (re-download anytime)",
+    "confirmDeleteAsset": "Delete the downloaded files of {{name}}? You can re-download anytime.",
+    "assetDeleted": "Deleted: {{name}}",
     "teVariantSelected": "Text encoder switched: {{name}}",
     "selectTeVariant": "Set as default text encoder (shared by training and test generation)",
     "teVariantNotDownloaded": "Available after download completes",

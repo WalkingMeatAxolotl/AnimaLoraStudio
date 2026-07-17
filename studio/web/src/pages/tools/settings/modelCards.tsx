@@ -412,13 +412,24 @@ export function StatusLabel({ bg, fg, text, pulse }: { bg: string; fg: string; t
   )
 }
 
-export function DownloadButton({ exists, status, busy, onClick }: {
+export function DownloadButton({ exists, status, busy, onClick, onDelete }: {
   exists: boolean; status?: ModelDownloadStatus['status']; busy: boolean; onClick: () => void
+  /** 提供时已下载状态的 action 变成「删除」（用户先删再下载）；未提供
+   *  保持「重下」（打标 / 放大器区尚未接删除 API）。 */
+  onDelete?: () => void
 }) {
   const { t } = useTranslation()
   const running = status === 'running' || busy
   if (running) {
     return <button disabled className="btn btn-secondary btn-sm min-w-[5rem] justify-center" style={{ opacity: 0.5 }}>...</button>
+  }
+  if (exists && onDelete) {
+    return (
+      <button onClick={onDelete} className="btn btn-secondary btn-sm min-w-[5rem] justify-center text-err"
+        title={t('settings.deleteAssetTitle')}>
+        🗑 {t('settings.deleteAsset')}
+      </button>
+    )
   }
   return (
     <button onClick={onClick} className="btn btn-secondary btn-sm min-w-[5rem] justify-center"
