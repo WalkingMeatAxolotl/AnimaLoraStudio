@@ -256,6 +256,68 @@ def test_merge_lokr_matches_comfy_kron_order():
     assert torch.equal(block.m.weight.detach(), expected.to(torch.bfloat16))
 
 
+def test_merge_loha_matches_comfy_hadamard():
+    model = _make_fp8_model()
+    block = model.blocks[0]
+    orig_m = block.m.weight.detach().clone()
+    torch.manual_seed(4)
+    w1a = torch.randn(4, 2, dtype=torch.float16)
+    w1b = torch.randn(2, 4, dtype=torch.float16)
+    w2a = torch.randn(4, 2, dtype=torch.float16)
+    w2b = torch.randn(2, 4, dtype=torch.float16)
+    sd = {
+        "lora_unet_blocks_0_m.hada_w1_a": w1a,
+        "lora_unet_blocks_0_m.hada_w1_b": w1b,
+        "lora_unet_blocks_0_m.hada_w2_a": w2a,
+        "lora_unet_blocks_0_m.hada_w2_b": w2b,
+        "lora_unet_blocks_0_m.alpha": torch.tensor(2.0),
+    }
+
+    merge_loras_into_fp8_model(model, [(sd, 0.5, "loha")])
+
+    diff = (torch.mm(w1a.float(), w1b.float())
+            * torch.mm(w2a.float(), w2b.float())).reshape(4, 4)
+    alpha = 2.0 / w1b.shape[0]  # divisor = w1_b 的 rank 维（comfy loha.py）
+    expected = orig_m.to(torch.float16) + ((0.5 * alpha) * diff).type(torch.float16)
+    assert torch.equal(block.m.weight.detach(), expected.to(torch.bfloat16))
+
+
+def test_merge_loha_no_alpha_means_scale_one():
+    model = _make_fp8_model()
+    block = model.blocks[0]
+    orig_m = block.m.weight.detach().clone()
+    torch.manual_seed(6)
+    sd = {
+        "lora_unet_blocks_0_m.hada_w1_a": torch.randn(4, 2, dtype=torch.float16),
+        "lora_unet_blocks_0_m.hada_w1_b": torch.randn(2, 4, dtype=torch.float16),
+        "lora_unet_blocks_0_m.hada_w2_a": torch.randn(4, 2, dtype=torch.float16),
+        "lora_unet_blocks_0_m.hada_w2_b": torch.randn(2, 4, dtype=torch.float16),
+    }
+
+    merge_loras_into_fp8_model(model, [(sd, 1.0, "loha")])
+
+    diff = (torch.mm(sd["lora_unet_blocks_0_m.hada_w1_a"].float(),
+                     sd["lora_unet_blocks_0_m.hada_w1_b"].float())
+            * torch.mm(sd["lora_unet_blocks_0_m.hada_w2_a"].float(),
+                       sd["lora_unet_blocks_0_m.hada_w2_b"].float())).reshape(4, 4)
+    expected = orig_m.to(torch.float16) + (1.0 * diff).type(torch.float16)
+    assert torch.equal(block.m.weight.detach(), expected.to(torch.bfloat16))
+
+
+def test_merge_rejects_loha_tucker():
+    model = _make_fp8_model()
+    sd = {
+        "lora_unet_blocks_0_q.hada_w1_a": torch.randn(2, 2),
+        "lora_unet_blocks_0_q.hada_w1_b": torch.randn(2, 2),
+        "lora_unet_blocks_0_q.hada_w2_a": torch.randn(2, 2),
+        "lora_unet_blocks_0_q.hada_w2_b": torch.randn(2, 2),
+        "lora_unet_blocks_0_q.hada_t1": torch.randn(2, 2, 1, 1),
+        "lora_unet_blocks_0_q.hada_t2": torch.randn(2, 2, 1, 1),
+    }
+    with pytest.raises(ValueError, match="t1/t2"):
+        merge_loras_into_fp8_model(model, [(sd, 1.0, "t")])
+
+
 def test_merge_rejects_dora_t2_unknown_and_all_miss():
     model = _make_fp8_model()
     dora = _plain_lora_sd(["blocks.0.q"])
@@ -320,7 +382,24 @@ def test_apply_loras_routes_fp8_model_to_merge(tmp_path):
     assert torch.equal(model.blocks[0].q.weight.view(torch.uint8), before)
 
 
-def test_apply_loras_fp8_rejects_rs_lora_and_dora_meta(tmp_path):
+def test_apply_loras_fp8_rejects_dora_meta(tmp_path):
+    from studio.services.inference.core import LoRASpec, apply_loras
+
+    model = _make_fp8_model()
+    path = _write_lora_file(
+        tmp_path, _plain_lora_sd(["blocks.0.q"]),
+        network_args={"algo": "lora", "weight_decompose": True},
+    )
+    with pytest.raises(ValueError, match="DoRA"):
+        apply_loras(
+            model, [LoRASpec(path=path, scale=1.0)], "cpu", torch.float32,
+            family_id="krea2",
+        )
+
+
+def test_apply_loras_fp8_accepts_rs_lora_meta(tmp_path):
+    """rs_lora 产物不再拒绝：lycoris 保存时已把 √rank 校正烘进 per-layer
+    alpha 键，merge 的标准 alpha/dim 公式数值自动正确。"""
     from studio.services.inference.core import LoRASpec, apply_loras
 
     model = _make_fp8_model()
@@ -328,11 +407,15 @@ def test_apply_loras_fp8_rejects_rs_lora_and_dora_meta(tmp_path):
         tmp_path, _plain_lora_sd(["blocks.0.q"]),
         network_args={"algo": "lora", "rs_lora": True},
     )
-    with pytest.raises(ValueError, match="rs_lora / DoRA"):
-        apply_loras(
-            model, [LoRASpec(path=path, scale=1.0)], "cpu", torch.float32,
-            family_id="krea2",
-        )
+    before = model.blocks[0].q.weight.detach().view(torch.uint8).clone()
+
+    adapters = apply_loras(
+        model, [LoRASpec(path=path, scale=1.0)], "cpu", torch.float32,
+        family_id="krea2",
+    )
+
+    assert isinstance(adapters[0], Fp8LoraMergeAdapter)
+    assert not torch.equal(model.blocks[0].q.weight.view(torch.uint8), before)
 
 
 # ---------------------------------------------------------------------------

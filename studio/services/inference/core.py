@@ -294,13 +294,17 @@ def apply_loras(
             algo = "lora"         # PEFT 双矩阵 = plain LoRA
 
         if fp8_merge:
-            # merge 是权重级线性操作，与 comfy 一致只认 alpha/dim 缩放——
-            # rs_lora（√rank 缩放）与 DoRA（非线性）在 merge 语义下无法
-            # 与训练语义对齐，提前拒绝
-            if meta.rs_lora or meta.weight_decompose:
+            # merge 是权重级线性操作，只认 per-layer alpha/dim 缩放。
+            # rs_lora 产物无需特判：lycoris 保存时把 √rank 校正烘进
+            # per-layer alpha 键（register_buffer("alpha", α·dim/√dim)，
+            # locon/loha/lokr 同款），标准 alpha/dim merge 得到的正是
+            # α/√rank——与 bf16 注入路径（建网 scale=α/√r）数值一致。
+            # DoRA（列范数归一化，非线性）merge 需要 comfy
+            # weight_decompose 语义，尚未实现，保持拒绝。
+            if meta.weight_decompose:
                 raise ValueError(
-                    f"fp8 量化底模不支持挂载 rs_lora / DoRA 训练的 LoRA："
-                    f"{Path(path).name}。请改用 bf16 版本底模。"
+                    f"fp8 量化底模不支持挂载 DoRA（weight_decompose）训练的 "
+                    f"LoRA：{Path(path).name}。请改用 bf16 版本底模。"
                 )
             merge_sources.append((sd_raw, float(spec.scale), Path(path).name))
             continue

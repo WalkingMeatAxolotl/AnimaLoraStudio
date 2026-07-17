@@ -21,8 +21,9 @@ eager 路径，docs/design/krea2-fp8-inference.md §1.5）：
 - dequant 直落 fp16 域：QuantizedTensor.to(fp16) 只改 orig_dtype 标记
   （ck tensor/base.py _handle_to），dequantize 即 qdata.to(fp16)*scale.to(fp16)，
   无 bf16 中转；fp16 = comfy lora_compute_dtype（should_use_fp16 现代卡）
-- delta 域：comfy weight_adapter lokr/lora——因子 cast fp32 做 mm/kron，
-  ``weight += ((strength * alpha) * diff).type(fp16)``，加法在 fp16 域
+- delta 域：comfy weight_adapter lokr/lora/loha——因子 cast fp32 做
+  mm/kron/Hadamard，``weight += ((strength * alpha) * diff).type(fp16)``，
+  加法在 fp16 域
 - requantize：quant_ops._TensorCoreFP8LayoutBase.quantize 的
   scale="recalculate" + stochastic_rounding 分支
 - SR：comfy/float.py（Generator(device)+manual_seed → randint(0,256,uint8)）
@@ -201,6 +202,23 @@ def _apply_lora_delta(
         lora_diff = torch.mm(
             mat1.flatten(start_dim=1), mat2.flatten(start_dim=1),
         ).reshape(w16.shape)
+        w16 += ((strength * alpha) * lora_diff).type(w16.dtype)
+        return w16
+
+    if "hada_w1_a" in tensors:  # LoHa
+        if "hada_t1" in tensors or "hada_t2" in tensors:
+            raise ValueError(f"fp8 merge 不支持 LoHa tucker（t1/t2）形态：{source} 层 {layer}")
+        m1 = torch.mm(
+            tensors["hada_w1_a"].to(device=device, dtype=torch.float32),
+            tensors["hada_w1_b"].to(device=device, dtype=torch.float32),
+        )
+        m2 = torch.mm(
+            tensors["hada_w2_a"].to(device=device, dtype=torch.float32),
+            tensors["hada_w2_b"].to(device=device, dtype=torch.float32),
+        )
+        # dim 语义照 comfy weight_adapter/loha.py：divisor = w1_b 的 rank 维
+        alpha = float(tensors["alpha"]) / tensors["hada_w1_b"].shape[0] if "alpha" in tensors else 1.0
+        lora_diff = (m1 * m2).reshape(w16.shape)
         w16 += ((strength * alpha) * lora_diff).type(w16.dtype)
         return w16
 
