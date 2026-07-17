@@ -19,7 +19,7 @@ import torch.nn.functional as F
 
 from training.context import TrainingContext
 from training.loss_weighting import compute_loss_weight
-from training.noise import make_noise
+from training.noise import make_noise, noise_params_from_args
 from training.observability import render_curve_panel
 from training.sample_runner import run_sample
 from training.snapshot import (
@@ -264,11 +264,14 @@ def run(ctx: TrainingContext) -> None:
             use_leap_this_step = False
             if navit_latents is None:
                 t_exp = t.view(-1, 1, 1, 1, 1)
+                # 噪声增强参数按 noise_enhancement_type 分派（审计 #3：残留的
+                # 另一组参数值不参与，防 offset+pyramid 静默叠加）
+                _no, _pi, _pd = noise_params_from_args(args)
                 noise = make_noise(
                     latents,
-                    noise_offset=float(getattr(args, "noise_offset", 0.0) or 0.0),
-                    pyramid_iters=int(getattr(args, "pyramid_noise_iters", 0) or 0),
-                    pyramid_discount=float(getattr(args, "pyramid_noise_discount", 0.35) or 0.35),
+                    noise_offset=_no,
+                    pyramid_iters=_pi,
+                    pyramid_discount=_pd,
                 )
 
                 leap_enabled = bool(getattr(args, "leap_enabled", False))
@@ -318,12 +321,13 @@ def run(ctx: TrainingContext) -> None:
                     _lw = _compute_loss_weight_from_args(args, t, ctx.device)
                     if _lw is not None:
                         _piw = _lw if _piw is None else _piw * _lw
+                    _no, _pi, _pd = noise_params_from_args(args)
                     loss, pred, _navit_info = navit_packed_forward_and_loss(
                         ctx.model, navit_latents, t, cross_packed, text_seqlens,
                         ctx.loss_fn,
-                        noise_offset=float(getattr(args, "noise_offset", 0.0) or 0.0),
-                        pyramid_iters=int(getattr(args, "pyramid_noise_iters", 0) or 0),
-                        pyramid_discount=float(getattr(args, "pyramid_noise_discount", 0.35) or 0.35),
+                        noise_offset=_no,
+                        pyramid_iters=_pi,
+                        pyramid_discount=_pd,
                         use_checkpoint=bool(args.grad_checkpoint),
                         per_image_weights=_piw,
                     )

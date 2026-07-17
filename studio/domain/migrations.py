@@ -53,8 +53,9 @@ def migrate_noise_enhancement_type(data: Any) -> Any:
          观察最接近。
       2. 反组字段强制清零 —— kohya_ss issue #2599 教训：序列化层就要互斥，
          UI 隐藏字段不等于清值，否则 yaml 残值会进训练。
-         注意：argparse_bridge 路径绕开 pydantic validator，清零必须在
-         migration 里做（不能只在 schema validator 里做）。
+         （历史注:argparse 路径曾绕开 pydantic validator;刀 1 / R1 起 trainer
+         与 Studio 同走 TrainingConfig 构造,本迁移对两路统一生效。runtime
+         make_noise 侧另有 noise_params_from_args 按 type 分派作纵深防御。）
 
     Idempotent：已显式给了 `noise_enhancement_type` 就直接尊重。
     """

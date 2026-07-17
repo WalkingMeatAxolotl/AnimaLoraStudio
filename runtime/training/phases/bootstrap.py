@@ -167,6 +167,16 @@ def run(ctx: TrainingContext) -> None:
 
     ctx.family = resolve_family(args)
 
+    # 审计 #2（设计文档 §10.1）：T-LoRA rank mask 按 batch 均值 timestep 生成，
+    # batch>1 时 per-sample「高噪声低 rank」退化为批均值近似 —— 不拦（硬拦会
+    # 误伤想跑小 batch 的用户），启动期显式提示
+    if getattr(args, "lora_type", "") == "tlora" and int(getattr(args, "batch_size", 1)) > 1:
+        logger.warning(
+            "T-LoRA 与 batch_size=%s 同用：rank mask 按 batch 均值 timestep 生成，"
+            "per-sample 掩码退化为批均值近似；要获得论文行为请用 batch_size=1",
+            args.batch_size,
+        )
+
     # 触发词注入：caption 端 tag_worker 把 trigger 写为第一个 tag，这里同步
     # 注入 sample_prompt(s)，让采样图天然带 trigger。pause snapshot 已 freeze
     # trigger_word（写在 args 里），resume 也照此 normalize 一次幂等。
