@@ -1294,13 +1294,12 @@
       "help": "How the text encoder and DiT share VRAM during test generation. Auto: everything stays resident when free VRAM allows (fastest); when it does not fit, the encode and sampling phases yield to each other (matches ComfyUI behavior). Save VRAM: force each phase to keep only the model it needs — lowest peak (fp8 base models run on 16GB GPUs), a few extra seconds of model transfer per image. Performance: keep every model resident — zero transfers, highest peak.",
       "optAuto": "Auto",
       "optSaveVram": "Save VRAM",
-      "optPerformance": "Performance",
-      "teLabel": "Text encoder precision",
-      "teDesc": "Default fp16; fp8 roughly halves weight VRAM (krea2)",
-      "teHelp": "Weight storage precision of the text encoder (Qwen3-VL) during test generation. fp16: original precision, about 8.9GB. fp8: quantized after loading, about 5GB, compute precision unchanged (fp32), with slight quantization noise in text embeddings — fp8 text encoders are widely used in the community. Takes effect on the next model load after switching.",
-      "teOptFp16": "fp16",
-      "teOptFp8": "fp8"
+      "optPerformance": "Performance"
     },
+    "krea2TeCardTitle": "Krea 2 · Qwen3-VL text encoder",
+    "teVariantSelected": "Text encoder switched: {{name}}",
+    "selectTeVariant": "Set as default text encoder (shared by training and test generation)",
+    "teVariantNotDownloaded": "Available after download completes",
     "vaePrecision": {
       "title": "VAE decode precision",
       "label": "Test generation VAE precision",
@@ -1516,7 +1515,7 @@
     "baseModel": "Base model",
     "baseModelHint": "Defaults to the main model selected in Settings; switch to another downloaded version for this run",
     "textEncoder": "Text encoder",
-    "textEncoderDefault": "Default (bf16, ~8.9 GB)",
+    "textEncoderBf16": "bf16 (~8.9 GB)",
     "textEncoderFp8": "fp8 (~5 GB, official quantization)",
     "textEncoderFp8NotDownloaded": "fp8 — not downloaded (Settings → Models)",
     "swapSizeTitle": "Swap width and height (landscape ↔ portrait)",

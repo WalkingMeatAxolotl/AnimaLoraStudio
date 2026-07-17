@@ -42,13 +42,12 @@ class AnimaFamily:
     def load_text(self, text_encoder_path, device, dtype, *,
                   t5_tokenizer_path: str = "", comfy_qwen: bool = False,
                   t5_fast: bool = False, purpose: str = "train",
-                  cache_enabled: bool = True, te_quantize: bool = False):
+                  cache_enabled: bool = True):
         from training.families.anima.loader import load_text_encoders
 
         # purpose 接受并忽略（load_dit 同款）：Anima 的 TE backend 只由调用方
         # 显式 comfy_qwen 决定——generate 调用面传 purpose 不得覆盖用户选择的
-        # text_encoder_backend（默认 hf）。te_quantize（krea2 TE fp8）同理
-        # 接受并忽略——Anima TE 不参与。
+        # text_encoder_backend（默认 hf）。
         return load_text_encoders(
             text_encoder_path, t5_tokenizer_path, device, dtype,
             comfy_qwen=comfy_qwen,

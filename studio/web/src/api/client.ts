@@ -498,6 +498,9 @@ export interface ModelsConfig {
   selected_anima: string
   /** 按模型族保存的默认主模型：variant key 或已注册的本地路径。 */
   selected: Record<string, string>
+  /** 按模型族选中的文本编码器 variant（krea2："bf16"|"fp8"，缺失=bf16）。
+   * 决定训练新建 version 的 text_encoder_path 默认 + 测试出图 TE 默认。 */
+  selected_te?: Record<string, string>
   /** 用户注册的本地 custom 主模型（.safetensors 绝对路径）。微调训练 /
    * 在微调权重上测试出图用；仅登记路径，不下载不复制。 */
   custom_anima_paths: string[]
@@ -531,9 +534,6 @@ export interface GenerateSecretsConfig {
    * 是否让位；save_vram=强制顺序化（峰值最低，每图多几秒搬运）；
    * performance=全部常驻显存（峰值最高、零搬运）。 */
   vram_policy: 'auto' | 'save_vram' | 'performance'
-  /** 测试出图文本编码器权重精度（krea2 生效）。fp16（默认）原精度约 8.9GB；
-   * fp8 加载后量化约 5GB，计算精度不变（fp32），嵌入有轻微量化噪声。 */
-  te_precision: 'fp16' | 'fp8'
   /** 开后每次出图自动落盘到 studio_data/test/<date>/{single,xy}/image_N.png。
    * 默认关；compare 模式始终不落盘。 */
   save_test_images: boolean
@@ -664,6 +664,8 @@ export interface ModelDirCatalog {
   description: string
   repo: string
   target_dir: string
+  /** krea2_text_encoder 专属：选中的 TE variant（'bf16' | 'fp8'）。 */
+  selected?: string
   files: Array<{ name: string; exists: boolean; size: number; mtime: number }>
 }
 
@@ -1374,9 +1376,9 @@ export interface GenerateRequest {
   /** 本次出图临时选用的底模（官方 variant key 或本地 custom 路径）；
    *  省略 → server 用 Settings 里该族的 selected。 */
   base_model?: string
-  /** 本次出图的文本编码器（krea2 生效）：省略/default = HF bf16 目录；
-   *  fp8 = 官方 fp8_scaled 单文件（需先在下载中心下载）。 */
-  text_encoder?: 'default' | 'fp8'
+  /** 本次出图的文本编码器 variant（krea2 生效）：省略 = 跟随下载中心选中
+   *  的 TE（selected_te）；显式 bf16/fp8 临时覆盖（与 base_model 对称）。 */
+  text_encoder?: 'bf16' | 'fp8'
   negative_prompt?: string
   width?: number
   height?: number

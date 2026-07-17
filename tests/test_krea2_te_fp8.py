@@ -1,18 +1,20 @@
-"""krea2 TE fp8（load-time rescale）：quantize_linears_to_fp8 + 文本栈接线。
+"""krea2 TE fp8：官方 comfy 单文件形态加载 + dequant 前向。
 
-官方 qwen3vl fp8 文件是 comfy 单文件布局、接不进 transformers HF 目录
-loader——改为加载后逐 Linear 现场量化（per-tensor scaled，RTN），dequant
-前向与 DiT fp8_scaled 同款。生成侧专属（te_precision=fp8）；训练侧不引入。
+官方 qwen3vl_4b_fp8_scaled 是 comfy 单文件布局：权重键是 HF 命名（text
+侧差一个 ``language_model.`` 前缀）、text Linear 为 F8_E4M3 + F32 标量
+weight_scale、visual/embed/norm 保持 bf16。loader 做前缀映射 + scale 收集
++ patch_fp8_linears（DiT fp8_scaled 完全同款）。TE 精度由目录形态决定
+（selected_te variant 选择），训练文本缓存指纹按形态区分（-tefp8）。
 """
 from __future__ import annotations
 
-import pytest
 import torch
 from torch import nn
 
 from training.families.krea2.quant_fp8 import (
+    _fp8_linear_forward,
     model_has_fp8_layers,
-    quantize_linears_to_fp8,
+    patch_fp8_linears,
 )
 
 
@@ -24,36 +26,29 @@ class _TinyTe(nn.Module):
         self.out = nn.Linear(4, 2, bias=False)
 
 
-def test_quantize_linears_converts_weights_and_registers_scale():
-    torch.manual_seed(0)
-    model = _TinyTe().to(torch.float16)
-    reference = {
-        name: module.weight.detach().float().clone()
-        for name, module in model.named_modules()
-        if isinstance(module, nn.Linear)
-    }
-
-    count = quantize_linears_to_fp8(model)
-
-    assert count == 2
-    assert model_has_fp8_layers(model)
-    assert model.embed.weight.dtype == torch.float16  # Embedding 不量化
+def _quantize_tiny(model: _TinyTe) -> None:
+    """手工构造 fp8_scaled 形态（per-tensor amax/448 + patch）。"""
+    scales = {}
     for name, module in model.named_modules():
         if not isinstance(module, nn.Linear):
             continue
-        assert module.weight.dtype == torch.float8_e4m3fn
-        assert module.weight_scale.dtype == torch.float32
-        # dequant 近似原权重（e4m3 相对误差 ≤ 2^-3 + scale 域余量）
-        back = module.weight.float() * module.weight_scale
-        ref = reference[name]
-        tol = ref.abs().amax() * 2**-3 + 1e-6
-        assert torch.all((back - ref).abs() <= tol)
+        with torch.no_grad():
+            wf = module.weight.detach().float()
+            scale = wf.abs().amax() / torch.finfo(torch.float8_e4m3fn).max
+            module.weight = nn.Parameter(
+                (wf / scale).to(torch.float8_e4m3fn), requires_grad=False,
+            )
+        scales[name] = scale.to(torch.float32)
+    patch_fp8_linears(model, scales)
 
 
-def test_quantized_forward_dequants_to_input_dtype_and_casts_bias():
+def test_fp8_forward_dequants_to_input_dtype_and_casts_bias():
+    """dequant 前向：weight/scale/bias 全 cast 到 input.dtype（TE fp32
+    compute 场景 fp16 bias 必须 cast；DiT 场景 no-op 等价）。"""
     torch.manual_seed(1)
     model = _TinyTe().to(torch.float16)
-    quantize_linears_to_fp8(model)
+    _quantize_tiny(model)
+    assert model_has_fp8_layers(model)
 
     x = torch.randn(3, 4, dtype=torch.float32)  # TE compute=fp32（manual_cast）
     got = model.proj(x)
@@ -68,68 +63,41 @@ def test_quantized_forward_dequants_to_input_dtype_and_casts_bias():
     torch.testing.assert_close(got, expected, rtol=0, atol=0)
 
 
-def test_quantize_is_idempotent_and_defensive():
-    model = _TinyTe().to(torch.float16)
-    assert quantize_linears_to_fp8(model) == 2
-    assert quantize_linears_to_fp8(model) == 0  # 已量化幂等
-    assert quantize_linears_to_fp8(object()) == 0  # 非 Module 防御
-    assert quantize_linears_to_fp8(None) == 0
-
-
-def test_quantize_zero_weight_layer_scale_falls_back_to_one():
-    model = _TinyTe().to(torch.float16)
+def test_fp8_forward_bias_cast_is_noop_when_dtypes_match():
+    """DiT 场景：bias 与 input 同 dtype 时 cast 为恒等（parity 不变）。"""
+    torch.manual_seed(2)
+    module = nn.Linear(4, 4, bias=True).to(torch.bfloat16)
     with torch.no_grad():
-        model.out.weight.zero_()
-    quantize_linears_to_fp8(model)
-    assert model.out.weight_scale.item() == pytest.approx(1.0)
-    assert torch.all(model.out.weight.float() == 0)
+        module.weight = nn.Parameter(
+            module.weight.to(torch.float8_e4m3fn), requires_grad=False,
+        )
+    from types import MethodType
 
-
-def test_text_stack_te_quantize_wiring(tmp_path):
-    """te_quantize=True：ensure_model 后 Linear 量化；fake 非 Module 安全跳过。"""
-    from tests.test_krea2_text_encoding import _FakeTokenizer
-
-    from training.families.krea2.text_encoding import Krea2TextStack
-
-    loads = []
-
-    def _loader(path, device, dtype):
-        model = _TinyTe().to(torch.float16)
-        loads.append(model)
-        return model
-
-    stack = Krea2TextStack(
-        tmp_path / "qwen",
-        device="cpu",
-        dtype=torch.float16,
-        compute_dtype=torch.float32,
-        cache_enabled=False,
-        tokenizer=_FakeTokenizer(),
-        model_loader=_loader,
-        max_length=8,
-        selected_layers=(1, 3),
-        hidden_width=4,
-        text_fingerprint="krea2-test-v1",
-        te_quantize=True,
+    module.forward = MethodType(_fp8_linear_forward, module)
+    x = torch.randn(2, 4, dtype=torch.bfloat16)
+    expected = torch.nn.functional.linear(
+        x, module.weight.to(torch.bfloat16), module.bias,
     )
-    model = stack.ensure_model()
-    assert model_has_fp8_layers(model)
-    assert stack.te_quantize is True
+    torch.testing.assert_close(module(x), expected, rtol=0, atol=0)
 
-    # 默认（te_quantize=False）不量化
-    stack_plain = Krea2TextStack(
-        tmp_path / "qwen",
-        device="cpu",
-        dtype=torch.float16,
-        cache_enabled=False,
-        tokenizer=_FakeTokenizer(),
-        model_loader=_loader,
-        max_length=8,
-        selected_layers=(1, 3),
-        hidden_width=4,
-        text_fingerprint="krea2-test-v1",
+
+def test_manual_cast_skips_fp8_linears():
+    """patch_manual_cast 不覆盖 fp8 层的 dequant 前向（覆盖会丢 scale）。"""
+    from training.families.krea2.text_encoding import patch_manual_cast
+
+    model = _TinyTe().to(torch.float16)
+    _quantize_tiny(model)
+    fp8_forward = model.proj.forward
+
+    patch_manual_cast(model, torch.float32)
+
+    assert model.proj.forward is fp8_forward  # 未被覆盖
+    x = torch.randn(2, 4, dtype=torch.float32)
+    expected_weight = model.proj.weight.to(torch.float32) * model.proj.weight_scale
+    expected = torch.nn.functional.linear(
+        x, expected_weight, model.proj.bias.to(torch.float32),
     )
-    assert not model_has_fp8_layers(stack_plain.ensure_model())
+    torch.testing.assert_close(model.proj(x), expected, rtol=0, atol=0)
 
 
 # ---------------------------------------------------------------------------
@@ -195,9 +163,6 @@ def test_comfy_single_file_te_loads_maps_keys_and_patches(tmp_path, monkeypatch)
     config = _tiny_qwen3vl_config()
     te_dir = tmp_path / "qwen3vl-fp8"
     ref, fp8_layers = _write_comfy_te_file(te_dir, config)
-    monkeypatch.setattr(
-        te_mod, "AutoConfig", None, raising=False,
-    )
     import transformers
 
     monkeypatch.setattr(
@@ -245,20 +210,30 @@ def test_comfy_single_file_detection(tmp_path):
     assert _comfy_te_single_file(single_dir) is not None
 
 
-def test_manual_cast_skips_fp8_linears():
-    """patch_manual_cast 不覆盖 fp8 层的 dequant 前向（覆盖会丢 scale）。"""
-    from training.families.krea2.text_encoding import patch_manual_cast
+def test_text_stack_fp8_storage_changes_fingerprint(tmp_path):
+    """fp8 单文件目录 → is_fp8_storage=True + 缓存指纹加 -tefp8 后缀
+    （fp8/bf16 编码的嵌入不混源）；HF 目录 → 原指纹。"""
+    from tests.test_krea2_text_encoding import _FakeTokenizer
 
-    model = _TinyTe().to(torch.float16)
-    quantize_linears_to_fp8(model)
-    fp8_forward = model.proj.forward
+    from training.families.krea2.text_encoding import Krea2TextStack
 
-    patch_manual_cast(model, torch.float32)
+    fp8_dir = tmp_path / "fp8"
+    fp8_dir.mkdir()
+    (fp8_dir / "w.safetensors").write_bytes(b"")
+    hf_dir = tmp_path / "hf"
+    hf_dir.mkdir()
+    (hf_dir / "model.safetensors.index.json").write_text("{}")
 
-    assert model.proj.forward is fp8_forward  # 未被覆盖
-    x = torch.randn(2, 4, dtype=torch.float32)
-    expected_weight = model.proj.weight.to(torch.float32) * model.proj.weight_scale
-    expected = torch.nn.functional.linear(
-        x, expected_weight, model.proj.bias.to(torch.float32),
+    common = dict(
+        device="cpu", dtype=torch.float16, cache_enabled=True,
+        tokenizer=_FakeTokenizer(), model_loader=lambda *a: None,
+        max_length=8, selected_layers=(1, 3), hidden_width=4,
+        text_fingerprint="krea2-test-v1",
     )
-    torch.testing.assert_close(model.proj(x), expected, rtol=0, atol=0)
+    fp8_stack = Krea2TextStack(fp8_dir, **common)
+    hf_stack = Krea2TextStack(hf_dir, **common)
+
+    assert fp8_stack.is_fp8_storage is True
+    assert fp8_stack.store.text_fingerprint == "krea2-test-v1-tefp8"
+    assert hf_stack.is_fp8_storage is False
+    assert hf_stack.store.text_fingerprint == "krea2-test-v1"

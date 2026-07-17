@@ -1294,13 +1294,12 @@
       "help": "测试出图时文本编码器与 DiT 的显存编排。自动：空闲显存装得下就全部常驻（最快），装不下时编码与采样阶段互相让位（对齐 ComfyUI 行为）。省显存：强制每个阶段只保留当前需要的模型，显存峰值最低（16GB 显卡可跑 fp8 底模），每张图多几秒模型搬运。性能优先：全部模型常驻显存，零搬运，显存峰值最高。",
       "optAuto": "自动",
       "optSaveVram": "省显存",
-      "optPerformance": "性能优先",
-      "teLabel": "文本编码器精度",
-      "teDesc": "默认 fp16；fp8 权重显存约减半（krea2 生效）",
-      "teHelp": "测试出图时文本编码器（Qwen3-VL）的权重存储精度。fp16：原精度，约 8.9GB。fp8：加载后量化，约 5GB，计算精度不变（fp32），文本嵌入有轻微量化噪声——社区跑图普遍使用 fp8 文本编码器。切换后下次出图重新加载模型生效。",
-      "teOptFp16": "fp16",
-      "teOptFp8": "fp8"
+      "optPerformance": "性能优先"
     },
+    "krea2TeCardTitle": "Krea 2 · Qwen3-VL 文本编码器",
+    "teVariantSelected": "文本编码器已切换：{{name}}",
+    "selectTeVariant": "设为默认文本编码器（训练与测试出图共用）",
+    "teVariantNotDownloaded": "下载完成后可选中",
     "vaePrecision": {
       "title": "VAE 解码精度",
       "label": "测试出图 VAE 精度",
@@ -1516,7 +1515,7 @@
     "baseModel": "底模",
     "baseModelHint": "默认用设置页选定的主模型；可临时换成其它已下载的版本出图",
     "textEncoder": "文本编码器",
-    "textEncoderDefault": "默认（bf16，约 8.9 GB）",
+    "textEncoderBf16": "bf16（约 8.9 GB）",
     "textEncoderFp8": "fp8（约 5 GB，官方量化）",
     "textEncoderFp8NotDownloaded": "fp8 —— 未下载（设置 → 模型下载）",
     "swapSizeTitle": "交换宽高（横版 ↔ 竖版）",

@@ -171,19 +171,20 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
     from ...services.models.families import get_assets
 
     model_paths = _resolve_model_paths(body.base_model, family=body.model_family)
-    # TE 选择（krea2）：fp8 → 官方 fp8_scaled 单文件目录；未下载给可操作报错
-    if body.text_encoder == "fp8" and body.model_family == "krea2":
-        from ...services.models.families.krea2 import qwen3_vl_fp8_dir
+    # TE variant 覆盖（krea2）：请求显式给 bf16/fp8 时覆盖 selected_te 默认
+    # （default_paths 已按 selected_te 解析）；fp8 未下载给可操作报错。
+    if body.text_encoder and body.model_family == "krea2":
+        from ...services.models.families.krea2 import qwen3_vl_dir_for
         from ...services.models.paths import models_root
 
-        fp8_dir = qwen3_vl_fp8_dir(models_root())
-        if not (fp8_dir / "config.json").exists():
+        te_dir = qwen3_vl_dir_for(models_root(), body.text_encoder)
+        if body.text_encoder == "fp8" and not (te_dir / "config.json").exists():
             raise HTTPException(
                 status_code=409,
                 detail="Qwen3-VL fp8 文本编码器未下载——请到 设置 → 模型下载 "
-                       "下载「Krea 2 · Qwen3-VL fp8」后重试。",
+                       "下载后重试。",
             )
-        model_paths["text_encoder_path"] = str(fp8_dir)
+        model_paths["text_encoder_path"] = str(te_dir)
     # Turbo 检测（A4/C9）：官方蒸馏 variant → daemon 走 8 步/guidance 0/固定 mu
     # 的采样时刻表默认；custom 权重无 purpose 元数据按非蒸馏处理
     distilled = bool(get_assets(body.model_family).is_distilled_path(
@@ -212,13 +213,11 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
             preview_n = int(gen_cfg.preview_every_n_steps or 0)
             vae_precision = str(getattr(gen_cfg, "vae_precision", "bf16") or "bf16")
             vram_policy = str(getattr(gen_cfg, "vram_policy", "auto") or "auto")
-            te_precision = str(getattr(gen_cfg, "te_precision", "fp16") or "fp16")
         except Exception:
             attn_default = "auto"
             preview_n = 0
             vae_precision = "bf16"
             vram_policy = "auto"
-            te_precision = "fp16"
         attn = body.attention_backend or attn_default
         if attn == "auto":
             from ...services.runtime.xformers import detect_attention_backend
@@ -244,7 +243,6 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
             vae_precision=vae_precision,
             attention_backend=attn,
             vram_policy=vram_policy,
-            te_precision=te_precision,
             xy_matrix=body.xy_matrix.model_dump() if body.xy_matrix else None,
         )
 

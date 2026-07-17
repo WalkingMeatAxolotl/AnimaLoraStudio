@@ -100,6 +100,23 @@ def qwen3_vl_fp8_dir(root: Path) -> Path:
     return root / "text_encoders" / "qwen3vl-4b-fp8"
 
 
+#: TE variant → 目录解析（bf16 在前 = 默认与 UI 顺序）
+QWEN3_VL_TE_VARIANTS = ("bf16", "fp8")
+
+
+def selected_te_variant() -> str:
+    """当前选中的 krea2 TE variant；缺失/非法回退 bf16。"""
+    try:
+        variant = secrets.load().models.selected_te.get("krea2")
+    except Exception:
+        variant = None
+    return str(variant) if variant in QWEN3_VL_TE_VARIANTS else "bf16"
+
+
+def qwen3_vl_dir_for(root: Path, variant: str) -> Path:
+    return qwen3_vl_fp8_dir(root) if variant == "fp8" else qwen3_vl_dir(root)
+
+
 def selected_krea2_variant() -> str:
     try:
         variant = secrets.load().models.selected.get("krea2")
@@ -174,7 +191,9 @@ def default_paths_for_new_version(base_model: Optional[str] = None) -> dict[str,
     return {
         "transformer_path": transformer,
         "vae_path": str(qwen_image_vae_target(root)),
-        "text_encoder_path": str(qwen3_vl_dir(root)),
+        # TE 按选中 variant（bf16 目录 / 官方 fp8 单文件目录）；训练与
+        # 测试出图共用该默认。fp8 训练=文本缓存指纹自动区分（-tefp8）。
+        "text_encoder_path": str(qwen3_vl_dir_for(root, selected_te_variant())),
         "t5_tokenizer_path": "",
     }
 
@@ -228,6 +247,9 @@ def catalog_sections(root: Path, models_cfg: Any) -> dict[str, Any]:
 
     text_dir = qwen3_vl_dir(root)
     fp8_dir = qwen3_vl_fp8_dir(root)
+    te_selected = (getattr(models_cfg, "selected_te", None) or {}).get("krea2")
+    if te_selected not in QWEN3_VL_TE_VARIANTS:
+        te_selected = "bf16"
     return {
         "krea2_main": {
             "id": "krea2_main",
@@ -250,6 +272,9 @@ def catalog_sections(root: Path, models_cfg: Any) -> dict[str, Any]:
             "description": "自然语言文本编码器（约 8.89 GB）",
             "repo": QWEN3_VL_REPO,
             "target_dir": str(text_dir),
+            # 选中的 TE variant（bf16/fp8）——前端 TE 卡 radio 与测试页
+            # TE 下拉的默认值都读这里
+            "selected": te_selected,
             "files": [
                 {"name": filename, **_file_status(text_dir / filename)}
                 for filename in QWEN3_VL_FILES

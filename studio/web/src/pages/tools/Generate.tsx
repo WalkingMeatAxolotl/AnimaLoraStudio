@@ -8,7 +8,7 @@ import {
   type Task,
   type XYMatrixSpec,
 } from '../../api/client'
-import BaseModelSelect, { useBaseModelOptions, useKrea2TeFp8Ready } from '../../components/BaseModelSelect'
+import BaseModelSelect, { useBaseModelOptions, useKrea2TeOptions } from '../../components/BaseModelSelect'
 import PageHeader from '../../components/PageHeader'
 import { useToast } from '../../components/Toast'
 import { schemaEnumLabel } from '../../lib/schema'
@@ -169,7 +169,7 @@ export default function GeneratePage() {
    *  底模临时覆盖清空（variant key 是族内值）。 */
   const setModelFamily = (family: GenerateFamily) => {
     setBaseModel(null)
-    setTextEncoder('default')
+    setTextEncoder(null)
     setPrefs((p) => ({
       ...p,
       modelFamily: family,
@@ -242,10 +242,11 @@ export default function GeneratePage() {
   // 本次出图临时选用的底模（null = 跟随设置页 selected_anima）。不进 prefs
   // 持久化：每次进页面都回到「设置页默认底模」，符合「默认用设置里的」。
   const [baseModel, setBaseModel] = useState<string | null>(null)
-  // 本次出图的文本编码器（krea2 生效）：default=HF bf16 目录；fp8=官方
-  // fp8_scaled 单文件（省 ~4GB 显存）。与 baseModel 同为瞬态不进 prefs。
-  const [textEncoder, setTextEncoder] = useState<'default' | 'fp8'>('default')
-  const krea2TeFp8Ready = useKrea2TeFp8Ready()
+  // 本次出图的文本编码器 variant（krea2 生效）：null=跟随下载中心选中
+  // （selected_te）；显式选择=临时覆盖。与 baseModel 同为瞬态不进 prefs。
+  const [textEncoder, setTextEncoder] = useState<'bf16' | 'fp8' | null>(null)
+  const teOptions = useKrea2TeOptions()
+  const effectiveTe = textEncoder ?? teOptions.selected
   // 当前族的底模选项（含 purpose 元数据）——选中蒸馏推理 variant（Krea2
   // Turbo）时应用 8 步 / 无 CFG 的默认参数（可再改，A1 不加限制）
   const { options: baseModelOptions } = useBaseModelOptions(modelFamily)
@@ -671,8 +672,7 @@ export default function GeneratePage() {
         count: 1,  // 0.17 P-I：每个 task 出 1 张；batch 拆成多 task（下面循环）
         seed,
         base_model: baseModel,
-        text_encoder: (modelFamily === 'krea2' && textEncoder === 'fp8')
-          ? 'fp8' : undefined,
+        text_encoder: modelFamily === 'krea2' ? effectiveTe : undefined,
         loras: snapshotLoras,
         xy_draft: mode === 'xy'
           ? {
@@ -693,8 +693,7 @@ export default function GeneratePage() {
           prompts: mergedPrompts,
           model_family: modelFamily,
           base_model: baseModel ?? undefined,
-          text_encoder: (modelFamily === 'krea2' && textEncoder === 'fp8')
-            ? 'fp8' : undefined,
+          text_encoder: modelFamily === 'krea2' ? effectiveTe : undefined,
           negative_prompt: negPrompt,
           width, height, steps,
           count: 1,
@@ -1021,13 +1020,13 @@ export default function GeneratePage() {
                     <label className="caption block mb-1">{t('generate.textEncoder')}</label>
                     <select
                       className="input text-xs w-full"
-                      value={textEncoder}
-                      onChange={(e) => setTextEncoder(e.target.value as 'default' | 'fp8')}
+                      value={effectiveTe}
+                      onChange={(e) => setTextEncoder(e.target.value as 'bf16' | 'fp8')}
                       aria-label={t('generate.textEncoder')}
                     >
-                      <option value="default">{t('generate.textEncoderDefault')}</option>
-                      <option value="fp8" disabled={!krea2TeFp8Ready}>
-                        {krea2TeFp8Ready
+                      <option value="bf16">{t('generate.textEncoderBf16')}</option>
+                      <option value="fp8" disabled={!teOptions.fp8Ready}>
+                        {teOptions.fp8Ready
                           ? t('generate.textEncoderFp8')
                           : t('generate.textEncoderFp8NotDownloaded')}
                       </option>

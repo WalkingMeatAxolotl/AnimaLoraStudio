@@ -169,7 +169,6 @@ def main() -> None:
         t5_fast=t5_tokenizer_backend == "fast",
         purpose="generate",
         cache_enabled=False,
-        te_quantize=str(cfg.get("te_precision") or "fp16") == "fp8",
     )
 
     # 多 LoRA：每份独立 inject + multiplier=scale。adapters 必须保持引用，否则

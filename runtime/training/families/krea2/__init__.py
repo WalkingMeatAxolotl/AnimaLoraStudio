@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 _GIB = 1024 ** 3
 #: TE 上卡所需：fp16 权重 8.9GB + embed 表 cast fp32 瞬时 ~1.5GB + 缓冲
 _TE_LOAD_NEED_BYTES = int(11 * _GIB)
-#: te_precision=fp8：Linear 权重 ~5GB + embed 仍 fp16（cast fp32 瞬时不变）
+#: 官方 fp8_scaled 单文件 TE：Linear ~5GB + embed 仍 fp16（cast fp32 瞬时不变）
 _TE_LOAD_NEED_BYTES_FP8 = int(7 * _GIB)
 
 
@@ -157,21 +157,19 @@ class Krea2Family:
     def load_text(self, text_encoder_path, device, dtype, *,
                   t5_tokenizer_path: str = "", comfy_qwen: bool = False,
                   t5_fast: bool = False, purpose: str = "train",
-                  cache_enabled: bool = True, te_quantize: bool = False):
+                  cache_enabled: bool = True):
         if purpose == "generate":
             # Comfy parity（sd.py:258）：生成场景 TE 固定 fp16 存储 + fp32
             # compute（text_encoder_dtype 默认 fp16 + set_model_compute_dtype
             # fp32），忽略调用方 dtype——与 TE offload 同款固定行为。
-            # te_quantize（te_precision=fp8）：加载后逐 Linear 量化 fp8
-            # （权重 8.9→~5GB），compute 仍 fp32。训练侧维持调用方 dtype
-            # （bf16）不动、不量化（两段式下 TE 不在训练峰值路径）。
+            # TE 精度由 text_encoder_path 指向的目录形态决定（HF 分片=
+            # bf16→fp16；comfy 单文件=官方 fp8_scaled 原样常驻）。
             return load_krea2_text_stack(
                 text_encoder_path,
                 device=device,
                 dtype=torch.float16,
                 compute_dtype=torch.float32,
                 cache_enabled=cache_enabled,
-                te_quantize=te_quantize,
             )
         return load_krea2_text_stack(
             text_encoder_path,
@@ -242,7 +240,7 @@ class Krea2Family:
             )
             te_need = (
                 _TE_LOAD_NEED_BYTES_FP8
-                if getattr(text, "te_quantize", False)
+                if getattr(text, "is_fp8_storage", False)
                 else _TE_LOAD_NEED_BYTES
             )
             if need_te_move and _should_yield_dit(vram_policy, device, te_need):

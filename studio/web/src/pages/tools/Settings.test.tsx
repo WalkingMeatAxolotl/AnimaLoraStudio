@@ -458,7 +458,10 @@ describe('SettingsPage (PP0)', () => {
     expect(await screen.findByRole('heading', { name: 'Anima 模型' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Krea2 模型' })).toBeInTheDocument()
     expect(await screen.findByRole('heading', { name: 'Krea 2 主模型' })).toBeInTheDocument()
-    expect(screen.getByText('Krea 2 · Qwen3-VL-4B-Instruct')).toBeInTheDocument()
+    // TE variant 合并卡（bf16/fp8 两行 radio，标题走 i18n）
+    expect(screen.getByText('Krea 2 · Qwen3-VL 文本编码器')).toBeInTheDocument()
+    expect(screen.getByText('bf16')).toBeInTheDocument()
+    expect(screen.getByText('fp8')).toBeInTheDocument()
     expect(screen.getByText('raw')).toBeInTheDocument()
     expect(screen.getByText('turbo')).toBeInTheDocument()
     expect(screen.getByText('my-krea2.safetensors')).toBeInTheDocument()
@@ -471,7 +474,8 @@ describe('SettingsPage (PP0)', () => {
     expect(rightSpacerIndex).toBeGreaterThan(-1)
     expect(customBadgeIndex).toBeGreaterThan(rightSpacerIndex)
     expect(statusBadgeIndex).toBeGreaterThan(customBadgeIndex)
-    expect(screen.getAllByRole('radio')).toHaveLength(3)
+    // 主模型 3（raw/turbo/custom）+ TE variant 卡 2（bf16/fp8）
+    expect(screen.getAllByRole('radio')).toHaveLength(5)
     expect(screen.queryByText(/推荐工作流/)).not.toBeInTheDocument()
     // purpose 徽标（C10）：krea2 variant 行标注用途（raw=训练 / turbo=推理）
     const rawRow = screen.getByText('raw').closest('li')!

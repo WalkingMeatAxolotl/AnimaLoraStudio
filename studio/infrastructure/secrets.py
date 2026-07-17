@@ -514,6 +514,10 @@ class ModelsConfig(BaseModel):
     # 老键 selected_anima 由 before-validator 迁移（settings PUT 的 merged dict
     # 会同时带两键——入站 selected_anima 优先，覆盖 merge 进来的旧 selected）。
     selected: dict[str, str] = Field(default_factory=lambda: {"anima": "1.0"})
+    # per-family 选中文本编码器 variant（krea2："bf16"|"fp8"，缺失=bf16）。
+    # 决定训练新建 version 的 text_encoder_path 默认 + 测试出图 TE 默认；
+    # 已存在 version 的 config 不动（训练重现性，与 selected 同口径）。
+    selected_te: dict[str, str] = Field(default_factory=dict)
     # per-family 本地主模型路径。老键 custom_anima_paths 由 validator 迁移，
     # computed_field 保留旧客户端读面。
     custom: dict[str, list[str]] = Field(default_factory=dict)
@@ -575,9 +579,6 @@ class GenerateConfig(BaseModel):
     - `vram_policy`：测试出图显存策略（krea2 生效）。`'auto'`（默认）按空闲
       显存决定文本编码器与 DiT 是否让位；`'save_vram'` 强制顺序化（峰值最
       低，每图多几秒搬运）；`'performance'` 全部常驻显存（峰值最高、零搬运）。
-    - `te_precision`：测试出图文本编码器权重精度（krea2 生效）。`'fp16'`
-      （默认）原精度约 8.9GB；`'fp8'` 加载后量化约 5GB，计算精度不变
-      （fp32），文本嵌入有轻微量化噪声。
     """
     preview_every_n_steps: int = 3
     attention_backend: str = "auto"
@@ -585,7 +586,6 @@ class GenerateConfig(BaseModel):
     idle_timeout_minutes: int = 10
     save_test_images: bool = False
     vram_policy: str = "auto"
-    te_precision: str = "fp16"
 
 
 class SystemConfig(BaseModel):

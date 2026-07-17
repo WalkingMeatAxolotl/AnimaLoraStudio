@@ -314,7 +314,6 @@ class Krea2TextStack:
         selected_layers: Sequence[int] = KREA2_SELECTED_LAYERS,
         hidden_width: int = KREA2_TEXT_WIDTH,
         cache_batch_size: int = 1,
-        te_quantize: bool = False,
     ) -> None:
         self.model_path = Path(model_path)
         self.device = torch.device(device)
@@ -322,15 +321,18 @@ class Krea2TextStack:
         # None = compute 跟随存储 dtype（训练路径现状）；生成场景传 fp32 +
         # dtype=fp16 复刻 ComfyUI「fp16 存储 + fp32 compute」口径（sd.py:258）
         self.compute_dtype = compute_dtype
-        # 加载后逐 Linear 量化 fp8（per-tensor scaled，权重 8.9→~5GB）；
-        # compute 仍走 compute_dtype（dequant 到 input.dtype），Embedding
-        # 不量化。生成侧专属（te_precision=fp8）。
-        self.te_quantize = bool(te_quantize)
+        # 目录是官方 fp8_scaled 单文件形态（comfy 布局）——影响编排层的
+        # TE 上卡显存判据（权重 ~5GB vs fp16 8.9GB）与训练文本缓存指纹
+        self.is_fp8_storage = _comfy_te_single_file(self.model_path) is not None
         self.cache_enabled = bool(cache_enabled)
         self.tokenizer = tokenizer if tokenizer is not None else _load_tokenizer(self.model_path)
         self._model_loader = model_loader or _default_model_loader
         self._model = None
         self._offloaded = False
+        # fp8 TE 编码的嵌入与 bf16 有量化级差异——指纹区分防缓存混源
+        # （换 TE 精度 → 指纹变 → sidecar 全量重编，一次性）
+        if self.is_fp8_storage:
+            text_fingerprint = f"{text_fingerprint}-tefp8"
         self.store = TextCacheStore(text_fingerprint)
         self.max_length = int(max_length)
         self.selected_layers = tuple(int(index) for index in selected_layers)
@@ -407,17 +409,6 @@ class Krea2TextStack:
             self._model = self._model_loader(self.model_path, self.device, self.dtype)
             if self.compute_dtype is not None and self.compute_dtype != self.dtype:
                 patch_manual_cast(self._model, self.compute_dtype)
-            if self.te_quantize:
-                # 顺序：manual_cast 先、fp8 后——fp8 patch 覆盖 Linear 的
-                # forward（dequant 到 input.dtype，语义是 manual_cast 的
-                # fp8 版）；Embedding 保持 manual_cast 的 fp32 lookup。
-                from training.families.krea2.quant_fp8 import (  # noqa: PLC0415
-                    quantize_linears_to_fp8,
-                )
-
-                if quantize_linears_to_fp8(self._model):
-                    if self.device.type == "cuda" and torch.cuda.is_available():
-                        torch.cuda.empty_cache()
         elif self._offloaded:
             # 上次采样前被 offload 到 CPU（见 offload_model）——搬回目标设备
             self._model.to(self.device)
@@ -728,7 +719,6 @@ def load_krea2_text_stack(
     dtype: torch.dtype = torch.bfloat16,
     compute_dtype: torch.dtype | None = None,
     cache_enabled: bool = True,
-    te_quantize: bool = False,
 ) -> Krea2TextStack:
     """Create a lazy Krea2 text stack; only the small tokenizer loads immediately."""
 
@@ -738,5 +728,4 @@ def load_krea2_text_stack(
         dtype=dtype,
         compute_dtype=compute_dtype,
         cache_enabled=cache_enabled,
-        te_quantize=te_quantize,
     )

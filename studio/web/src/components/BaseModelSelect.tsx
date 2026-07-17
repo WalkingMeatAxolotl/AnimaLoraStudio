@@ -78,25 +78,29 @@ export function useBaseModelOptions(family: BaseModelFamily = 'anima'): {
   }
 }
 
-/** Qwen3-VL fp8 TE 目录是否就绪（权重 + config 都已下载）——决定测试页
- *  文本编码器下拉里 fp8 选项的可选性（未就绪禁用并提示去下载中心）。 */
-export function useKrea2TeFp8Ready(): boolean {
-  const [ready, setReady] = useState(false)
+/** krea2 TE 选项状态：fp8 目录是否就绪（权重 + config 已下载，决定测试页
+ *  下拉里 fp8 的可选性）+ 下载中心选中的默认 variant（下拉初值）。 */
+export function useKrea2TeOptions(): { fp8Ready: boolean; selected: 'bf16' | 'fp8' } {
+  const [state, setState] = useState<{ fp8Ready: boolean; selected: 'bf16' | 'fp8' }>({
+    fp8Ready: false, selected: 'bf16',
+  })
   useEffect(() => {
     let alive = true
     api.getModelsCatalog().then((c) => {
       if (!alive) return
       const files = c.krea2_text_encoder_fp8?.files ?? []
       const existing = new Set(files.filter((f) => f.exists).map((f) => f.name))
-      setReady(
+      const fp8Ready = (
         files.some((f) => f.name.endsWith('.safetensors') && f.exists)
         && existing.has('config.json')
-        && existing.has('tokenizer.json'),
+        && existing.has('tokenizer.json')
       )
+      const sel = c.krea2_text_encoder?.selected
+      setState({ fp8Ready, selected: sel === 'fp8' ? 'fp8' : 'bf16' })
     }).catch(() => {})
     return () => { alive = false }
   }, [])
-  return ready
+  return state
 }
 
 function basename(p: string): string {

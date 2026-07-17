@@ -89,7 +89,9 @@ const FAMILY_MODEL_SECTIONS = [
     titleKey: 'settings.krea2Models',
     mainKey: 'krea2_main' as const,
     fallbackSelected: 'raw',
-    encoderIds: ['krea2_text_encoder', 'krea2_text_encoder_fp8'] as const,
+    // krea2 的 TE 卡是 variant 合并卡（bf16/fp8 radio），单独渲染不走
+    // encoderIds 的文件列表卡机制
+    encoderIds: [] as const,
     downloadKeyPrefixes: ['krea2_main', 'krea2_text_encoder'],
   },
 ]
@@ -160,6 +162,25 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
       toast(String(e), 'error')
     } finally {
       setAddingFamily(null)
+    }
+  }
+
+  // krea2 TE variant 选择（bf16/fp8）：与主模型 pick 同款直写 secrets
+  const [teSelected, setTeSelected] = useState<'bf16' | 'fp8'>('bf16')
+  useEffect(() => {
+    const sel = (catalog?.krea2_text_encoder as { selected?: string } | undefined)?.selected
+    if (sel === 'bf16' || sel === 'fp8') setTeSelected(sel)
+  }, [catalog])
+  const pickTe = async (variant: 'bf16' | 'fp8') => {
+    if (variant === teSelected) return
+    setTeSelected(variant)
+    try {
+      await runSave(() => api.updateSecrets({ models: { selected_te: { krea2: variant } } }))
+      toast(t('settings.teVariantSelected', { name: variant }), 'success')
+      await reloadCatalog()
+    } catch (e) {
+      toast(String(e), 'error')
+      void reloadCatalog()
     }
   }
 
@@ -326,6 +347,42 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
 
               {/* 共享 Qwen-Image VAE（两族同一份文件，族无关资产） */}
               {renderSharedVae()}
+
+              {/* krea2 TE variant 合并卡：bf16/fp8 两行 radio + 各自下载 */}
+              {section.family === 'krea2' && catalog.krea2_text_encoder && catalog.krea2_text_encoder_fp8 && (
+                <ModelGroupCard title={t('settings.krea2TeCardTitle')}>
+                  <ul className="flex flex-col gap-1.5 text-xs">
+                    {([
+                      ['bf16', catalog.krea2_text_encoder],
+                      ['fp8', catalog.krea2_text_encoder_fp8],
+                    ] as const).map(([variant, m]) => {
+                      const allExist = m.files.length > 0 && m.files.every((f) => f.exists)
+                      const totalSize = m.files.reduce((s, f) => s + f.size, 0)
+                      const dl = catalog.downloads[m.id]
+                      return (
+                        <li key={variant} className="flex items-center gap-2">
+                          <input
+                            type="radio"
+                            name="krea2-te-variant"
+                            checked={teSelected === variant}
+                            disabled={!allExist}
+                            onChange={() => void pickTe(variant)}
+                            style={{ accentColor: 'var(--accent)' }}
+                            title={allExist ? t('settings.selectTeVariant') : t('settings.teVariantNotDownloaded')}
+                          />
+                          <code className="font-mono text-fg-primary w-16 shrink-0">{variant}</code>
+                          <span className="text-fg-tertiary truncate">
+                            {translatedCatalogText(MODEL_DESCRIPTION_KEYS, m.id, m.description, t)}
+                          </span>
+                          <span style={{ flex: 1 }} />
+                          <ModelStatusBadge exists={allExist} size={totalSize} status={dl?.status} fileCount={m.files.length} existsCount={m.files.filter((f) => f.exists).length} />
+                          <DownloadButton exists={allExist} status={dl?.status} busy={busy.has(m.id)} onClick={() => void start(m.id)} />
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </ModelGroupCard>
+              )}
 
               {/* 该族的目录型资产（文本编码器 / tokenizer；CLTagger 在「打标」tab） */}
               {section.encoderIds.map((id) => {
@@ -1467,20 +1524,6 @@ export function VramPolicySection({
           <option value="auto">{t('settings.vramPolicy.optAuto')}</option>
           <option value="save_vram">{t('settings.vramPolicy.optSaveVram')}</option>
           <option value="performance">{t('settings.vramPolicy.optPerformance')}</option>
-        </select>
-      </SettingsField>
-      <SettingsField
-        label={t('settings.vramPolicy.teLabel')}
-        desc={t('settings.vramPolicy.teDesc')}
-        helpTooltip={<p>{t('settings.vramPolicy.teHelp')}</p>}
-      >
-        <select
-          value={draft.generate.te_precision ?? 'fp16'}
-          onChange={(e) => update('generate', 'te_precision', e.target.value as 'fp16' | 'fp8')}
-          className={`${textInputClass} max-w-40`}
-        >
-          <option value="fp16">{t('settings.vramPolicy.teOptFp16')}</option>
-          <option value="fp8">{t('settings.vramPolicy.teOptFp8')}</option>
         </select>
       </SettingsField>
     </SettingsSection>
