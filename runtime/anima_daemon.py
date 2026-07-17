@@ -474,6 +474,15 @@ class ModelCache:
             import gc
             gc.collect()
             if torch.cuda.is_available():
+                try:
+                    # cuBLAS workspace 是 C++ 级常驻分配（Python gc 不可见，
+                    # 仅 ~10MB），但会把所在 allocator segment 整段钉住——
+                    # 实测 fp8 采样后 8GB+ reserved 无法被 empty_cache 释放
+                    # （tmp/diag_vram_leak.py 复现）。ComfyUI soft_empty_cache
+                    # 同款处理；内部 API，失败可忽略（下轮加载会复用 cache）。
+                    torch._C._cuda_clearCublasWorkspaces()
+                except Exception:
+                    pass
                 torch.cuda.empty_cache()
         except Exception:
             pass

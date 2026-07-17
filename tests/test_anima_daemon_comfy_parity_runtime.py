@@ -202,3 +202,25 @@ def test_daemon_restores_runtime_to_device_after_successful_generate(monkeypatch
 
     assert events.index("sample_image") < events.index("restore_runtime")
     assert events.index("restore_runtime") < events.index("emit:image_done")
+
+
+def test_unload_clears_cublas_workspaces_before_empty_cache(monkeypatch) -> None:
+    """「清理显存」必须清 cuBLAS workspace：C++ 级常驻分配会把 allocator
+    segment 整段钉住（实测 fp8 采样后 8GB+ reserved empty_cache 清不掉）。
+    顺序约束：clear workspace 在 empty_cache 之前才能让 segment 变空闲。"""
+    mod = importlib.import_module("anima_daemon")
+    cache = mod.ModelCache()
+    cache.model = object()  # 让 loaded 为真
+
+    calls: list[str] = []
+    monkeypatch.setattr(mod.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(mod.torch.cuda, "empty_cache", lambda: calls.append("empty_cache"))
+    monkeypatch.setattr(
+        mod.torch._C, "_cuda_clearCublasWorkspaces",
+        lambda: calls.append("clear_cublas"), raising=False,
+    )
+
+    cache.unload()
+
+    assert calls == ["clear_cublas", "empty_cache"]
+    assert cache.model is None and cache.adapters == []
