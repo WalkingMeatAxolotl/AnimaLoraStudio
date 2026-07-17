@@ -171,6 +171,7 @@ class Krea2TextStack:
         self.tokenizer = tokenizer if tokenizer is not None else _load_tokenizer(self.model_path)
         self._model_loader = model_loader or _default_model_loader
         self._model = None
+        self._offloaded = False
         self.store = TextCacheStore(text_fingerprint)
         self.max_length = int(max_length)
         self.selected_layers = tuple(int(index) for index in selected_layers)
@@ -192,7 +193,26 @@ class Krea2TextStack:
     def ensure_model(self):
         if self._model is None:
             self._model = self._model_loader(self.model_path, self.device, self.dtype)
+        elif self._offloaded:
+            # 上次采样前被 offload 到 CPU（见 offload_model）——搬回目标设备
+            self._model.to(self.device)
+            self._offloaded = False
         return self._model
+
+    def offload_model(self) -> None:
+        """把 TE 挪到 CPU 给 DiT 腾显存（Comfy parity：free_memory 的
+        「编码后卸载 CLIP 到 offload_device」语义）。
+
+        Generate 场景 DiT(26.3GB bf16) + Qwen3-VL(8.9GB) 同驻 ≈ 35GB，超出
+        32GB 支持下限——采样前必须让 DiT 独占。下个 prompt 由 ensure_model
+        搬回（GPU↔CPU 秒级，远快于 release 后从盘重载）。
+        """
+        if self._model is None or self._offloaded:
+            return
+        self._model.to("cpu")
+        self._offloaded = True
+        if self.device.type == "cuda" and torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     def release_model(self) -> None:
         """Release the cached-mode TE before the 12.9B DiT occupies the device."""
@@ -200,6 +220,7 @@ class Krea2TextStack:
         if self._model is None:
             return
         self._model = None
+        self._offloaded = False
         gc.collect()
         if self.device.type == "cuda" and torch.cuda.is_available():
             torch.cuda.empty_cache()

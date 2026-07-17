@@ -167,6 +167,12 @@ class Krea2Family:
             dtype=dtype,
             phase_callback=phase_callback,
         )
+        # Comfy parity 编排：条件编码完成后把 TE 卸到 CPU，DiT 独占显存
+        # （free_memory 语义）。26.3GB DiT + 8.9GB TE 同驻超 32GB 支持下限。
+        # 下个 prompt 由 ensure_model 搬回；训练缓存模式 TE 本就已释放，no-op。
+        offload = getattr(text, "offload_model", None)
+        if callable(offload):
+            offload()
         return sample_image(
             model,
             vae,

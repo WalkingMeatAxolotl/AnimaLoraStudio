@@ -207,3 +207,34 @@ def test_cached_batch_miss_repairs_sidecar_after_prepare(tmp_path):
     assert entry.cache_path.is_file()
     assert not stack.is_model_loaded
     assert condition.attention_mask.sum().item() == 7
+
+
+def test_offload_model_round_trip():
+    """offload_model 把 TE 挪 CPU（DiT 独占显存）；ensure_model 搬回（Comfy
+    free_memory 语义）。未加载 / 重复调用安全 no-op。"""
+    import torch
+
+    from training.families.krea2.text_encoding import Krea2TextStack
+
+    class _FakeModel:
+        def __init__(self):
+            self.device_history = []
+
+        def to(self, device):
+            self.device_history.append(str(device))
+            return self
+
+    fake = _FakeModel()
+    stack = Krea2TextStack(
+        "unused-dir", device="cpu", cache_enabled=False,
+        tokenizer=object(), model_loader=lambda *a: fake,
+    )
+    stack.offload_model()          # 未加载 → no-op
+    assert fake.device_history == []
+    assert stack.ensure_model() is fake
+    stack.offload_model()
+    assert fake.device_history == ["cpu"]
+    stack.offload_model()          # 重复 → no-op
+    assert fake.device_history == ["cpu"]
+    assert stack.ensure_model() is fake   # 搬回 self.device
+    assert fake.device_history == ["cpu", "cpu"]
