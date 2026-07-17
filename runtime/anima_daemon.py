@@ -498,13 +498,68 @@ CACHE = ModelCache()
 
 def _set_lora_multiplier(adapter: Any, scale: float) -> None:
     if adapter.network is None:
-        # 含 fp8 merge 句柄（network=None）：scale 已烘进权重，non-scale 轴
-        # 的逐格重置调用安全跳过（lora_scale 轴在 _run_xy 入口已拒绝）
+        # 含 fp8 merge 句柄（network=None）：scale 已烘进权重，逐格设值
+        # 安全跳过（fp8 的 lora_scale 轴由 _cell_lora_configs →
+        # CACHE.apply_loras 重 merge 生效）
         return
     adapter.network.multiplier = float(scale)
     for lora in getattr(adapter.network, "loras", []):
         if hasattr(lora, "multiplier"):
             lora.multiplier = float(scale)
+
+
+def _swap_ckpt_for_axis(spec: dict[str, Any], val: Any,
+                        lora_configs: list[dict[str, Any]]) -> None:
+    """axis=lora_ckpt 时把 lora_configs[lora_index].path 改成 val。"""
+    if spec.get("axis") != "lora_ckpt":
+        return
+    idx = int(spec.get("lora_index") or 0)
+    if 0 <= idx < len(lora_configs):
+        lora_configs[idx]["path"] = str(val)
+
+
+def _cell_lora_configs(
+    x_spec: dict[str, Any],
+    y_spec: dict[str, Any] | None,
+    xv: Any,
+    yv: Any,
+    base_paths: list[str],
+    base_scales: list[float],
+    *,
+    fp8_scale_axes: bool,
+) -> list[dict[str, Any]] | None:
+    """组装本格需要重挂载的 lora_configs；无需重挂载时返回 None。
+
+    - lora_ckpt 轴：按 lora_index 换单条 path（bf16/fp8 都走这里）。
+    - lora_scale 轴仅在 fp8 底模（``fp8_scale_axes=True``）时在这里生效：
+      merge 无常驻 network，改强度必须 detach 还原 + 重 merge——
+      CACHE.apply_loras 对 supports_hot_reload=False 的句柄自动走该路径
+      （lora_ckpt 轴同款），specs 相同的格子被去重零成本跳过。bf16 走
+      _apply_axis 的 multiplier 热换，不进这里。
+      全局轴语义：所有条目 scale=cell 值；x/y 都是 scale 轴时 y 后写赢，
+      与 _apply_axis 的 x→y 调用顺序一致。
+    """
+    x_axis = x_spec.get("axis")
+    y_axis = y_spec.get("axis") if y_spec is not None else None
+    needs = x_axis == "lora_ckpt" or y_axis == "lora_ckpt" or (
+        fp8_scale_axes and "lora_scale" in (x_axis, y_axis)
+    )
+    if not needs:
+        return None
+    configs = [
+        {"path": p, "scale": s} for p, s in zip(base_paths, base_scales)
+    ]
+    _swap_ckpt_for_axis(x_spec, xv, configs)
+    if y_spec is not None and yv is not None:
+        _swap_ckpt_for_axis(y_spec, yv, configs)
+    if fp8_scale_axes:
+        if x_axis == "lora_scale":
+            for lc in configs:
+                lc["scale"] = float(xv)
+        if y_axis == "lora_scale" and yv is not None:
+            for lc in configs:
+                lc["scale"] = float(yv)
+    return configs
 
 
 def _apply_axis(
@@ -837,21 +892,16 @@ def _run_xy(
     y_values = y_spec["values"] if y_spec else [None]
     distilled: bool = bool(cfg.get("distilled", False))
 
-    # fp8 底模的 LoRA 是 merge 进权重的（无常驻 network），lora_scale 轴的
-    # multiplier 原地设值会静默 no-op——每格出一样的图。逐格重 merge（13GB
-    # dequant/requant）当前不提供；lora_ckpt 轴走 CACHE.apply_loras 重注入
-    # （detach 还原 + 重 merge）不受影响。
-    if any(
-        spec is not None and spec.get("axis") == "lora_scale"
-        for spec in (x_spec, y_spec)
-    ):
+    # fp8 底模的 LoRA 是 merge 进权重的（无常驻 network），lora_scale 轴
+    # 不能 multiplier 热换——逐格走 detach 还原 + 重 merge
+    # （_cell_lora_configs 组装 → CACHE.apply_loras，lora_ckpt 轴同款）。
+    # 每个不同 scale 值一次全模型重 merge：scale 放 Y 轴时每行只 merge
+    # 一次（specs 去重），放 X 轴则每格一次。
+    fp8_model = False
+    if CACHE.model is not None:
         from training.families.krea2.quant_fp8 import model_has_fp8_layers
 
-        if CACHE.model is not None and model_has_fp8_layers(CACHE.model):
-            raise ValueError(
-                "fp8 量化底模不支持 XY 的 LoRA 强度轴（LoRA 已合并进权重，"
-                "逐格调整需重新合并）。请改用 bf16 版本底模跑该轴。"
-            )
+        fp8_model = model_has_fp8_layers(CACHE.model)
 
     if base_seed == 0:
         base_seed = random.randint(0, 2**31 - 1)
@@ -862,34 +912,22 @@ def _run_xy(
     total = len(x_values) * len(y_values)
     _emit_for(req_id, "started", task_id=task_id, total=total)
 
-    def _swap_ckpt_for_axis(spec: dict[str, Any], val: Any, lora_configs: list[dict[str, Any]]) -> None:
-        """axis=lora_ckpt 时把 lora_configs[lora_index].path 改成 val。"""
-        if spec.get("axis") != "lora_ckpt":
-            return
-        idx = int(spec.get("lora_index") or 0)
-        if 0 <= idx < len(lora_configs):
-            lora_configs[idx]["path"] = str(val)
-
     img_idx = 0
     image_done_count = 0
     image_errors: list[str] = []
     for yi, yv in enumerate(y_values):
         for xi, xv in enumerate(x_values):
             _raise_if_canceled(cancel_event)
-            # lora_ckpt 切换：mutate cfg.lora_configs 的 path 然后调
-            # CACHE.apply_loras —— commit 20 detach 路径会快速 reinject。
-            x_is_ckpt = x_spec.get("axis") == "lora_ckpt"
-            y_is_ckpt = y_spec is not None and y_spec.get("axis") == "lora_ckpt"
-            if x_is_ckpt or y_is_ckpt:
-                lora_configs = [
-                    {"path": p, "scale": s}
-                    for p, s in zip(base_lora_paths, base_scales)
-                ]
-                _swap_ckpt_for_axis(x_spec, xv, lora_configs)
-                if y_spec is not None and yv is not None:
-                    _swap_ckpt_for_axis(y_spec, yv, lora_configs)
+            # lora_ckpt 换文件 /（fp8 时）lora_scale 换强度：组装本格
+            # lora_configs 调 CACHE.apply_loras —— detach 还原 + 重挂载
+            # （bf16 reinject / fp8 重 merge）。base_paths/base_scales 是
+            # 循环外快照，格间互不污染。
+            lora_configs = _cell_lora_configs(
+                x_spec, y_spec, xv, yv, base_lora_paths, base_scales,
+                fp8_scale_axes=fp8_model,
+            )
+            if lora_configs is not None:
                 adapters = CACHE.apply_loras(lora_configs)
-                base_scales = [float(s.scale) for s in CACHE.last_lora_specs]
 
             for i, s in enumerate(base_scales):
                 if i < len(adapters):
