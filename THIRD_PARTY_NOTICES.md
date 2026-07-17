@@ -226,6 +226,14 @@
     timestep shift 与 FlowMatchEuler 循环派生自 `src/musubi_tuner/krea2/krea2_sampling.py`；
     Raw/TDM 默认值和 Krea guidance `cond + g*(cond-uncond)` 同时对照 diffusers
     `pipeline_krea2.py` 与 `scheduling_flow_match_euler_discrete.py`（固定 commit 见文件头）
+  - `runtime/training/families/krea2/quant_fp8.py` — fp8 权重的 Linear 前向
+    monkey-patch 思路来自 `src/musubi_tuner/krea2/krea2_utils.py` 的
+    `apply_fp8_monkey_patch`；dequant 数值口径（`W.to(compute) * scale.to(compute)`、
+    目标 dtype=input.dtype、`_quantization_metadata` per-layer 协议）逐位对齐
+    ComfyUI（GPL-3.0）`comfy/ops.py cast_bias_weight`、`comfy/utils.py
+    convert_old_quants` 与 comfy_kitchen（Comfy-Org，见其 wheel 许可）
+    `backends/eager/quantization.py dequantize_per_tensor_fp8`——公式级对照，
+    未复制代码结构
 
 实现按本项目 timestep sampler protocol / 纯 torch modeling 边界适配；具体派生关系见各文件头。
 
