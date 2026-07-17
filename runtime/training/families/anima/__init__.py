@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from training.families.latent_spaces import WAN21_F8C16
-from training.families.spec import (
+# 相对导入：studio server 经 `runtime.training.dataset` 间接 import 本模块，
+# 那边 sys.path 没有 runtime/，`training.*` 绝对导入会 ModuleNotFoundError。
+from ..latent_spaces import WAN21_F8C16
+from ..spec import (
     ConstantShift,
     LoraOutputSpec,
     ModelSpec,

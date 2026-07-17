@@ -12,7 +12,9 @@ Qwen-Image VAE 复用它（`comfy/supported_models.py`
 
 from __future__ import annotations
 
-from training.families.spec import LatentSpec
+# 相对导入：studio server 经 `runtime.training.*` 命名间接 import 本模块（bucket
+# 分布预览），那边 sys.path 没有 runtime/，`training.*` 绝对导入会 ModuleNotFoundError。
+from .spec import LatentSpec
 
 # latent2rgb 快速预览的线性投影系数（"模糊但能看出图"）。取自 ComfyUI
 # comfy/latent_formats.py 的 `Wan21.latent_rgb_factors[_bias]`（GPL-3.0，

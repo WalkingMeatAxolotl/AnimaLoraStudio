@@ -7,8 +7,8 @@ from typing import Any, Iterable
 
 import torch
 
-from training.families.krea2.preset import KREA2_PRESET
-from training.families.krea2.sampling import (
+from .preset import KREA2_PRESET
+from .sampling import (
     KREA2_BASE_IMAGE_SEQ_LEN,
     KREA2_BASE_SHIFT,
     KREA2_MAX_IMAGE_SEQ_LEN,
@@ -22,14 +22,14 @@ from training.families.krea2.sampling import (
     resolve_sampling_settings,
     sample_image,
 )
-from training.families.krea2.text_encoding import (
+from .text_encoding import (
     KREA2_TEXT_FINGERPRINT,
     Krea2TextCondition,
     Krea2TextStack,
     load_krea2_text_stack,
 )
-from training.families.latent_spaces import WAN21_F8C16
-from training.families.spec import (
+from ..latent_spaces import WAN21_F8C16
+from ..spec import (
     LoraOutputSpec,
     ModelSpec,
     ConstantShift,

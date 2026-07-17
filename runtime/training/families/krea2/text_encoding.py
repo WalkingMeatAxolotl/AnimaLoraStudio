@@ -25,7 +25,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 import torch
 from torch import Tensor
 
-from training.text_cache import TextCacheEntry, TextCacheStore
+from ...text_cache import TextCacheEntry, TextCacheStore
 
 
 logger = logging.getLogger(__name__)
@@ -364,14 +364,25 @@ class Krea2TextStack:
             self._validate_context(context, source="Qwen3-VL 输出")
         return contexts
 
-    def _encode_in_chunks(self, captions: Sequence[str]) -> dict[str, Tensor]:
+    def _encode_in_chunks(
+        self, captions: Sequence[str], *, log_progress: bool = False,
+    ) -> dict[str, Tensor]:
+        # log_progress 只在预缓存阶段开（对齐 VAE 缓存的"编码进度"口径）；
+        # 训练中 miss repair 走的也是本函数，那边一两条不刷屏。
         encoded: dict[str, Tensor] = {}
         unique = list(dict.fromkeys(str(caption) for caption in captions))
+        next_mark = 10
         for start in range(0, len(unique), self.cache_batch_size):
             chunk = unique[start:start + self.cache_batch_size]
             contexts = self._encode_many(chunk)
             for caption, context in zip(chunk, contexts):
                 encoded[caption] = context.detach().cpu().contiguous()
+            if log_progress:
+                done = len(encoded)
+                if done >= next_mark or done == len(unique):
+                    logger.info("  文本编码进度: %d/%d", done, len(unique))
+                    while next_mark <= done:
+                        next_mark += 10
         return encoded
 
     def _validate_context(self, context: object, *, source: str) -> Tensor:
@@ -417,11 +428,21 @@ class Krea2TextStack:
             if context is not None:
                 contexts[caption] = context
 
-        contexts.update(
-            self._encode_in_chunks(
-                [caption for caption in self._caption_entries if caption not in contexts],
-            )
-        )
+        to_encode = [
+            caption for caption in self._caption_entries if caption not in contexts
+        ]
+        if self._caption_entries:
+            if to_encode:
+                logger.info(
+                    "[text-cache] caption sidecar 命中 %d/%d，需编码 %d 条...",
+                    len(contexts), len(self._caption_entries), len(to_encode),
+                )
+            else:
+                logger.info(
+                    "[text-cache] caption sidecar 全部命中（%d 条），跳过编码",
+                    len(self._caption_entries),
+                )
+        contexts.update(self._encode_in_chunks(to_encode, log_progress=True))
         for caption, entries in missing_entries.items():
             for entry in entries:
                 self.store.write_caption(entry, self._payload(contexts[caption]))

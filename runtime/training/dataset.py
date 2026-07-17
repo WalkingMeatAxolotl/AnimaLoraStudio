@@ -27,7 +27,9 @@ from pathlib import Path
 import torch
 from torch.utils.data import Dataset
 
-from training.families.anima import ANIMA_SPEC
+# 相对导入：本模块被 studio server 以 `runtime.training.dataset` 复用（bucket
+# 分布预览），那边 sys.path 只有仓库根，`training.*` 绝对导入会 ModuleNotFoundError。
+from .families.anima import ANIMA_SPEC
 
 # ── latent 规格单一来源（多模型 PR-1）─────────────────────────────────────
 # 单一族时代的桥接常量；PR-2b 起由 ctx.family.spec 传入各调用点。
@@ -922,10 +924,13 @@ class CachedLatentDataset(Dataset):
 
     def __init__(self, base_dataset, vae, device, dtype, cache_dir=None, cache_batch_size=1,
                  encode_tiled=False, encode_tile_px=1024, encode_tile_overlap=128,
-                 encode_max_pixels=0, latent_spec=None):
+                 encode_max_pixels=0, latent_spec=None, label=""):
         import numpy as np
         if latent_spec is not None:
             self.latent_spec = latent_spec
+        # 日志标注（如"训练集"/"正则集"）：主集与正则集各建一个实例，缓存日志
+        # 不标注会打出两段无法区分的"检查 VAE latent 缓存..."
+        self.label = str(label or "")
         self.base_dataset = base_dataset
         self.base_image_dataset = self._get_base_image_dataset(base_dataset)
         self.np = np
@@ -1097,7 +1102,8 @@ class CachedLatentDataset(Dataset):
         分辨率的图用 `img.r{reso}.npz` 分文件。按 npz_path 去重，每个 (图, reso) 最多
         encode 一次；否则同 npz 会被反复覆盖写 N 次（flip_augment 模式下再乘 2）。
         """
-        logger.info("检查 VAE latent 缓存...")
+        tag = f"（{self.label}）" if self.label else ""
+        logger.info(f"检查 VAE latent 缓存{tag}...")
         to_encode = []
         seen_npz = set()
         unique_total = 0
@@ -1113,10 +1119,10 @@ class CachedLatentDataset(Dataset):
                 to_encode.append(i)
 
         if to_encode:
-            logger.info(f"需要编码 {len(to_encode)}/{unique_total} 张图像...")
+            logger.info(f"需要编码 {len(to_encode)}/{unique_total} 张图像{tag}...")
             self._encode_and_save(to_encode, vae, device, dtype)
         else:
-            logger.info(f"所有 {unique_total} 张图像已缓存")
+            logger.info(f"所有 {unique_total} 张图像已缓存{tag}")
 
         self._fill_bucket_for_index()
 

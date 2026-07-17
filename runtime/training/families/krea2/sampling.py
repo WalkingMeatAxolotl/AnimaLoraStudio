@@ -24,7 +24,7 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
-from training.families.krea2.text_encoding import Krea2TextCondition
+from .text_encoding import Krea2TextCondition
 
 
 KREA2_SAMPLER = "euler"

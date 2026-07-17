@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -63,6 +65,29 @@ def test_only_captioned_images_counted(tmp_path: Path) -> None:
     _sq(tmp_path / "1_data", ["c"], caption=False)     # 无 caption
     out = compute_bucket_histogram(tmp_path, [1024], 2.0)
     assert sum(b["count"] for b in out[0]["buckets"]) == 2  # c 不计
+
+
+def test_dataset_importable_without_runtime_on_sys_path() -> None:
+    """studio server 的 sys.path 只有仓库根（没有 runtime/）——dataset.py 及其
+    导入链必须在 `runtime.training.*` 命名下可导入，否则 bucket-distribution
+    endpoint 500。conftest 会把 runtime/ 注入 sys.path，进程内测试测不出来，
+    必须开干净子进程。回归：多模型 PR-1 (#405) 引入的 `from training.*` 绝对
+    导入曾砸坏这条链（修复 = families 子树改相对导入）。"""
+    pytest.importorskip("torch")
+    repo_root = Path(__file__).resolve().parent.parent
+    code = (
+        "import sys; "
+        "sys.path[:] = [p for p in sys.path if 'runtime' not in p.lower()]; "
+        f"sys.path.insert(0, {str(repo_root)!r}); "
+        "from runtime.training.dataset import BucketManager, ImageDataset; "
+        "print('ok')"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True, text=True, timeout=120,
+    )
+    assert proc.returncode == 0, f"stderr:\n{proc.stderr}"
+    assert "ok" in proc.stdout
 
 
 def test_root_and_nested_images_counted(tmp_path: Path) -> None:

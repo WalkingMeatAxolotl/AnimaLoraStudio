@@ -7,7 +7,10 @@ ModelFamily 行为接口与 get_family() 派发随 PR-2b 落地，派发经 anim
 
 from __future__ import annotations
 
-from training.families.spec import (  # noqa: F401  (re-export)
+# families 子树用相对导入：studio server 以 `runtime.training.*` 命名复用本子树
+# （bucket 分布预览经 dataset.py），那边 sys.path 只有仓库根，`training.*` 绝对
+# 导入会 ModuleNotFoundError（tests/test_bucket_histogram.py 有回归导入测试）。
+from .spec import (  # noqa: F401  (re-export)
     ConstantShift,
     KNOWN_CAPABILITIES,
     LatentSpec,
@@ -18,8 +21,8 @@ from training.families.spec import (  # noqa: F401  (re-export)
     TextSpec,
     validate_spec,
 )
-from training.families.anima import ANIMA_SPEC
-from training.families.krea2 import KREA2_SPEC
+from .anima import ANIMA_SPEC
+from .krea2 import KREA2_SPEC
 
 SPECS: dict[str, ModelSpec] = {}
 
@@ -44,11 +47,11 @@ def get_family(family_id: str):
     fam = _FAMILIES.get(family_id)
     if fam is None:
         if family_id == "anima":
-            from training.families.anima.family import AnimaFamily
+            from .anima.family import AnimaFamily
 
             fam = AnimaFamily()
         elif family_id == "krea2":
-            from training.families.krea2 import Krea2Family
+            from .krea2 import Krea2Family
 
             fam = Krea2Family()
         else:  # pragma: no cover - registry 与 SPECS 同步维护
