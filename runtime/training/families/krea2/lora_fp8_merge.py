@@ -50,6 +50,19 @@ from training.families.krea2.quant_fp8 import _FP8_TORCH_DTYPES
 logger = logging.getLogger(__name__)
 
 _LORA_PREFIX = "lora_unet_"
+_COMFY_PREFIX = "diffusion_model."
+# PEFT/comfy 键后缀 → kohya/lycoris 命名（civitai 生态 krea2 LoRA 常见形态：
+# ``diffusion_model.{点分层名}.lora_A/lora_B``，lora_A=down、lora_B=up，
+# 通常无 alpha 键——comfy 对缺省 alpha 按缩放 1.0 处理，与 _apply_lora_delta
+# 的 "alpha" 缺省分支一致）
+_PEFT_SUFFIXES = (
+    ("lora_A.weight", "lora_down.weight"),
+    ("lora_B.weight", "lora_up.weight"),
+    ("lora_down.weight", "lora_down.weight"),
+    ("lora_up.weight", "lora_up.weight"),
+    ("alpha", "alpha"),
+    ("dora_scale", "dora_scale"),
+)
 
 
 def string_to_seed(key: str) -> int:
@@ -139,13 +152,28 @@ def _requantize_scaled(w16: Tensor, fp8_dtype: torch.dtype, seed: int) -> tuple[
 
 
 def _group_lora_layers(sd: dict[str, Tensor]) -> dict[str, dict[str, Tensor]]:
-    """lora_unet_{layer}.{suffix} → {layer_underscored: {suffix: tensor}}。"""
+    """按层聚合，两种键格式归一到 {layer_underscored: {kohya_suffix: tensor}}：
+
+    - kohya/lycoris：``lora_unet_{层名下划线}.{suffix}``（本 app 训练产物）
+    - PEFT/comfy：``diffusion_model.{层名点分}.{lora_A|lora_B|alpha}``
+      （civitai / musubi / comfy 生态）
+    """
     layers: dict[str, dict[str, Tensor]] = {}
     for key, tensor in sd.items():
-        if not key.startswith(_LORA_PREFIX):
-            continue
-        name, _, suffix = key.partition(".")
-        layers.setdefault(name[len(_LORA_PREFIX):], {})[suffix] = tensor
+        if key.startswith(_LORA_PREFIX):
+            name, _, suffix = key.partition(".")
+            layers.setdefault(name[len(_LORA_PREFIX):], {})[suffix] = tensor
+        elif key.startswith(_COMFY_PREFIX):
+            rest = key[len(_COMFY_PREFIX):]
+            for peft_suffix, kohya_suffix in _PEFT_SUFFIXES:
+                if rest.endswith("." + peft_suffix):
+                    layer = rest[: -len(peft_suffix) - 1]
+                    layers.setdefault(layer.replace(".", "_"), {})[kohya_suffix] = tensor
+                    break
+            else:
+                raise ValueError(
+                    f"fp8 merge 无法识别 comfy 形态 LoRA 键的后缀：{key}"
+                )
     return layers
 
 

@@ -333,3 +333,115 @@ def test_apply_loras_fp8_rejects_rs_lora_and_dora_meta(tmp_path):
             model, [LoRASpec(path=path, scale=1.0)], "cpu", torch.float32,
             family_id="krea2",
         )
+
+
+# ---------------------------------------------------------------------------
+# 外部生态文件（civitai / PEFT / comfy 键格式，无 ss_* metadata）
+# ---------------------------------------------------------------------------
+
+
+def _peft_lora_sd(layers: list[str], rank: int = 2, seed: int = 9,
+                  with_alpha: bool = False) -> dict[str, torch.Tensor]:
+    torch.manual_seed(seed)
+    sd: dict[str, torch.Tensor] = {}
+    for layer in layers:
+        prefix = f"diffusion_model.{layer}"
+        sd[f"{prefix}.lora_A.weight"] = torch.randn(rank, 4, dtype=torch.float16)
+        sd[f"{prefix}.lora_B.weight"] = torch.randn(4, rank, dtype=torch.float16)
+        if with_alpha:
+            sd[f"{prefix}.alpha"] = torch.tensor(1.0)
+    return sd
+
+
+def test_merge_accepts_peft_comfy_key_format_no_alpha_means_scale_one():
+    """civitai 形态：diffusion_model.{层}.lora_A/B、无 alpha → comfy 缩放 1.0。"""
+    model = _make_fp8_model()
+    block = model.blocks[0]
+    orig_m = block.m.weight.detach().clone()
+    sd = _peft_lora_sd(["blocks.0.m"])
+
+    merge_loras_into_fp8_model(model, [(sd, 0.5, "civit.safetensors")])
+
+    down = sd["diffusion_model.blocks.0.m.lora_A.weight"].float()
+    up = sd["diffusion_model.blocks.0.m.lora_B.weight"].float()
+    # 无 alpha 键 → alpha 系数 1.0（非 alpha/rank）
+    expected = orig_m.to(torch.float16) + ((0.5 * 1.0) * torch.mm(up, down)).type(torch.float16)
+    assert torch.equal(block.m.weight.detach(), expected.to(torch.bfloat16))
+
+
+def test_merge_peft_with_alpha_key_uses_alpha_over_rank():
+    model = _make_fp8_model()
+    block = model.blocks[0]
+    orig_m = block.m.weight.detach().clone()
+    sd = _peft_lora_sd(["blocks.0.m"], with_alpha=True)
+
+    merge_loras_into_fp8_model(model, [(sd, 1.0, "civit")])
+
+    down = sd["diffusion_model.blocks.0.m.lora_A.weight"].float()
+    up = sd["diffusion_model.blocks.0.m.lora_B.weight"].float()
+    alpha = 1.0 / down.shape[0]
+    expected = orig_m.to(torch.float16) + ((1.0 * alpha) * torch.mm(up, down)).type(torch.float16)
+    assert torch.equal(block.m.weight.detach(), expected.to(torch.bfloat16))
+
+
+def test_merge_rejects_unknown_comfy_suffix():
+    model = _make_fp8_model()
+    sd = {"diffusion_model.blocks.0.m.mystery.weight": torch.randn(2)}
+    with pytest.raises(ValueError, match="后缀"):
+        merge_loras_into_fp8_model(model, [(sd, 1.0, "u")])
+
+
+def test_read_lora_meta_family_explicit_semantics(tmp_path):
+    from safetensors.torch import save_file
+
+    from studio.services.inference.core import read_lora_meta
+
+    tagged = tmp_path / "tagged.safetensors"
+    save_file({"x": torch.zeros(1)}, str(tagged), metadata={
+        "ss_network_args": json.dumps({"algo": "lora", "model_family": "krea2"}),
+    })
+    untagged = tmp_path / "untagged.safetensors"
+    save_file({"x": torch.zeros(1)}, str(untagged))
+
+    m1 = read_lora_meta(str(tagged))
+    assert m1.model_family == "krea2" and m1.family_explicit is True
+    m2 = read_lora_meta(str(untagged))
+    assert m2.model_family == "anima" and m2.family_explicit is False
+
+
+def test_apply_loras_untagged_peft_file_routes_to_merge(tmp_path):
+    """用户场景复现：civitai krea2 LoRA（PEFT 键、零 metadata）挂 fp8 krea2
+    底模——不再被 grandfather 判成 anima 拒绝，直接走 merge。"""
+    from safetensors.torch import save_file
+
+    from studio.services.inference.core import LoRASpec, apply_loras
+
+    model = _make_fp8_model()
+    path = tmp_path / "civit_krea2.safetensors"
+    save_file(_peft_lora_sd(["blocks.0.q"]), str(path))  # 无任何 metadata
+    before = model.blocks[0].q.weight.detach().view(torch.uint8).clone()
+
+    adapters = apply_loras(
+        model, [LoRASpec(path=str(path), scale=1.0)], "cpu", torch.float32,
+        family_id="krea2",
+    )
+
+    assert isinstance(adapters[0], Fp8LoraMergeAdapter)
+    assert not torch.equal(model.blocks[0].q.weight.view(torch.uint8), before)
+
+
+def test_apply_loras_untagged_alien_keys_fail_fast(tmp_path):
+    """无标记 + 键全对不上（真异族/坏文件）→ merge 全 miss 报错，不静默。"""
+    from safetensors.torch import save_file
+
+    from studio.services.inference.core import LoRASpec, apply_loras
+
+    model = _make_fp8_model()
+    path = tmp_path / "alien.safetensors"
+    save_file(_plain_lora_sd(["no.such.layer"]), str(path))
+
+    with pytest.raises(ValueError, match="无法对应"):
+        apply_loras(
+            model, [LoRASpec(path=str(path), scale=1.0)], "cpu", torch.float32,
+            family_id="krea2",
+        )

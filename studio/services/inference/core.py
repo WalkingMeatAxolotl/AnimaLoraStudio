@@ -72,6 +72,10 @@ class LoRAMeta:
     lora_reg_dims: Optional[dict[str, int]] = None
     #: 产物所属模型族（D13 标记）；无标记的存量产物 grandfather 为 anima
     model_family: str = "anima"
+    #: model_family 是否来自显式 metadata 标记。外部生态文件（civitai /
+    #: musubi / comfy 系）不带我们的标记——grandfather 值只用于展示，
+    #: 跨族硬拒绝只对显式标记生效，无标记靠注入/merge 的键匹配兜底。
+    family_explicit: bool = False
 
 
 def read_lora_meta(path: str) -> LoRAMeta:
@@ -149,6 +153,7 @@ def read_lora_meta(path: str) -> LoRAMeta:
         rs_lora=rs_lora,
         lora_reg_dims=lora_reg_dims,
         model_family=str(ss_args.get("model_family") or "anima"),
+        family_explicit=bool(ss_args.get("model_family")),
     )
 
 
@@ -196,9 +201,11 @@ def apply_loras(
 
         meta = read_lora_meta(path)
         # 跨族 fail-fast（A5，与训练侧 resume_lora 检查同款）：krea2 LoRA 配
-        # anima 底模（或反之）用错 preset 注入 = 键全 miss 的静默坏结果——
-        # 提前报错并给可操作文案。无标记存量产物 grandfather 为 anima。
-        if meta.model_family != family_id:
+        # anima 底模（或反之）用错 preset 注入 = 键全 miss 的静默坏结果。
+        # 只对**显式标记**硬拒——外部生态文件（civitai/musubi/comfy 系）没有
+        # 我们的 model_family 标记，grandfather 值不可作拒绝依据；无标记文件
+        # 放行，由下方注入/merge 的键匹配兜底（全 miss 报错，不静默）。
+        if meta.family_explicit and meta.model_family != family_id:
             raise ValueError(
                 f"LoRA 跨模型族被拒绝：{Path(path).name} 属于 "
                 f"'{meta.model_family}'，当前底模族为 '{family_id}'。"
@@ -249,6 +256,13 @@ def apply_loras(
         result = adapter.load_state_dict(sd, strict=False)
         missing = len(getattr(result, "missing_keys", []) or [])
         unexpected = len(getattr(result, "unexpected_keys", []) or [])
+        if sd and unexpected >= len(sd):
+            # 键全部没被 LoRA 网络吃掉 = 异族文件或本路径不支持的键格式
+            # （无标记文件放行后的内容匹配兜底，防静默出无 LoRA 效果的图）
+            raise ValueError(
+                f"LoRA 与当前底模不匹配：{Path(path).name} 的键全部无法对应"
+                f"（可能属于其他模型族，或是本路径尚不支持的键格式）。"
+            )
         logger.info(
             f"已加载 LoRA: {Path(path).name} "
             f"(algo={meta.algo}, rank={meta.rank}, alpha={meta.alpha}, "
