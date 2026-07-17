@@ -157,6 +157,72 @@ def read_lora_meta(path: str) -> LoRAMeta:
     )
 
 
+_PEFT_LORA_PREFIX = "diffusion_model."
+_PEFT_SUFFIX_MAP = {
+    "lora_A.weight": "lora_down.weight",
+    "lora_B.weight": "lora_up.weight",
+    "alpha": "alpha",
+}
+
+
+def _normalize_peft_lora_sd(
+    sd: dict,
+) -> Optional[tuple[dict, int, Optional[dict[str, int]]]]:
+    """PEFT/comfy 键格式（civitai 生态）归一到 kohya/lycoris 约定。
+
+    ``diffusion_model.{点分层名}.lora_A/lora_B`` → ``lora_unet_{下划线层名}.
+    lora_down/lora_up.weight``；无 alpha 键 = comfy 缩放 1.0 语义 → 补
+    per-layer ``alpha = rank``（alpha/rank 式 loader 得 1.0，数值一致）；
+    rank 从 lora_A 张量形状推断（此类文件无 ss_* metadata，header 读不到），
+    混秩层进 lora_reg_dims。返回 (归一 sd, max_rank, reg_dims)；非纯 PEFT
+    形态返回 None（kohya/lycoris 文件原样走）。
+    """
+    import torch  # noqa: PLC0415
+
+    if not sd or not all(key.startswith(_PEFT_LORA_PREFIX) for key in sd):
+        return None
+    grouped: dict[str, dict[str, Any]] = {}
+    for key, tensor in sd.items():
+        rest = key[len(_PEFT_LORA_PREFIX):]
+        for peft_suffix, kohya_suffix in _PEFT_SUFFIX_MAP.items():
+            if rest.endswith("." + peft_suffix):
+                layer = rest[: -len(peft_suffix) - 1]
+                grouped.setdefault(layer, {})[kohya_suffix] = tensor
+                break
+        else:
+            if rest.endswith(".dora_scale"):
+                raise ValueError(
+                    "PEFT 形态的 DoRA LoRA 不支持（dora_scale 非线性）；"
+                    "请改用 kohya 格式导出的版本。"
+                )
+            raise ValueError(f"无法识别的 PEFT LoRA 键：{key}")
+
+    normalized: dict[str, Any] = {}
+    ranks: dict[str, int] = {}
+    for layer, tensors in grouped.items():
+        down = tensors.get("lora_down.weight")
+        up = tensors.get("lora_up.weight")
+        if down is None or up is None:
+            raise ValueError(f"PEFT LoRA 层缺 lora_A/lora_B 对：{layer}")
+        rank = int(down.shape[0])
+        ranks[layer] = rank
+        prefix = f"lora_unet_{layer.replace('.', '_')}"
+        normalized[f"{prefix}.lora_down.weight"] = down
+        normalized[f"{prefix}.lora_up.weight"] = up
+        alpha = tensors.get("alpha")
+        normalized[f"{prefix}.alpha"] = (
+            alpha if alpha is not None else torch.tensor(float(rank))
+        )
+
+    max_rank = max(ranks.values())
+    reg_dims = {
+        f"lora_unet_{layer.replace('.', '_')}": rank
+        for layer, rank in ranks.items()
+        if rank != max_rank
+    } or None
+    return normalized, max_rank, reg_dims
+
+
 def apply_loras(
     model: Any,
     specs: Sequence[LoRASpec],
@@ -211,6 +277,22 @@ def apply_loras(
                 f"'{meta.model_family}'，当前底模族为 '{family_id}'。"
                 f"请换用同族 LoRA 或切换底模。"
             )
+        sd_raw: dict = {}
+        with safe_open(str(path), framework="pt", device="cpu") as f:
+            for k in f.keys():
+                sd_raw[k] = f.get_tensor(k)
+
+        # 外部生态 PEFT 键格式归一（civitai 常见）：转 kohya 键 + 从张量
+        # 形状推断 rank/reg_dims（这类文件零 ss_* metadata，meta 里的
+        # rank=32 只是回退默认，碰运气不可用）
+        rank, alpha, algo = meta.rank, meta.alpha, meta.algo
+        reg_dims = meta.lora_reg_dims
+        peft = _normalize_peft_lora_sd(sd_raw)
+        if peft is not None:
+            sd_raw, rank, reg_dims = peft
+            alpha = float(rank)   # per-layer alpha 已补进 sd，全局值仅建网用
+            algo = "lora"         # PEFT 双矩阵 = plain LoRA
+
         if fp8_merge:
             # merge 是权重级线性操作，与 comfy 一致只认 alpha/dim 缩放——
             # rs_lora（√rank 缩放）与 DoRA（非线性）在 merge 语义下无法
@@ -220,23 +302,19 @@ def apply_loras(
                     f"fp8 量化底模不支持挂载 rs_lora / DoRA 训练的 LoRA："
                     f"{Path(path).name}。请改用 bf16 版本底模。"
                 )
-            sd_raw: dict = {}
-            with safe_open(str(path), framework="pt", device="cpu") as f:
-                for k in f.keys():
-                    sd_raw[k] = f.get_tensor(k)
             merge_sources.append((sd_raw, float(spec.scale), Path(path).name))
             continue
         from training.families import get_family  # noqa: PLC0415
 
         adapter = AnimaLycorisAdapter(
             preset=get_family(family_id).lora_preset(),
-            algo=meta.algo,
-            rank=meta.rank,
-            alpha=meta.alpha,
+            algo=algo,
+            rank=rank,
+            alpha=alpha,
             factor=meta.factor,
             weight_decompose=meta.weight_decompose,
             rs_lora=meta.rs_lora,
-            lora_reg_dims=meta.lora_reg_dims,
+            lora_reg_dims=reg_dims,
         )
         adapter.inject(model)
         if adapter.network is not None:
@@ -248,10 +326,7 @@ def apply_loras(
                 if hasattr(lora, "multiplier"):
                     lora.multiplier = float(spec.scale)
 
-        sd: dict = {}
-        with safe_open(str(path), framework="pt", device="cpu") as f:
-            for k in f.keys():
-                sd[k] = f.get_tensor(k).to(device=device, dtype=dtype)
+        sd = {k: v.to(device=device, dtype=dtype) for k, v in sd_raw.items()}
 
         result = adapter.load_state_dict(sd, strict=False)
         missing = len(getattr(result, "missing_keys", []) or [])
@@ -265,7 +340,7 @@ def apply_loras(
             )
         logger.info(
             f"已加载 LoRA: {Path(path).name} "
-            f"(algo={meta.algo}, rank={meta.rank}, alpha={meta.alpha}, "
+            f"(algo={algo}, rank={rank}, alpha={alpha}, "
             f"scale={spec.scale}; missing={missing}, unexpected={unexpected})"
         )
         adapters.append(adapter)

@@ -505,3 +505,108 @@ def test_cleanup_stale_generate_tempdirs(tmp_path: Path, monkeypatch: pytest.Mon
     assert not leak2.exists()
     assert keep.exists()  # 不带前缀的不动
     assert (keep / "important.txt").exists()
+
+
+# ---------------------------------------------------------------------------
+# 外部生态 PEFT 键格式（civitai）→ bf16 底模 lycoris 注入
+# ---------------------------------------------------------------------------
+
+
+def _peft_sd(layers: dict[str, int], *, with_alpha: bool = False, seed: int = 7) -> dict:
+    """构造 PEFT 形态 sd：{点分层名: rank}。"""
+    torch.manual_seed(seed)
+    sd: dict = {}
+    for layer, rank in layers.items():
+        sd[f"diffusion_model.{layer}.lora_A.weight"] = torch.randn(rank, 8, dtype=torch.float16)
+        sd[f"diffusion_model.{layer}.lora_B.weight"] = torch.randn(8, rank, dtype=torch.float16)
+        if with_alpha:
+            sd[f"diffusion_model.{layer}.alpha"] = torch.tensor(float(rank) / 2)
+    return sd
+
+
+def test_normalize_peft_lora_sd_converts_keys_and_infers_rank():
+    from studio.services.inference.core import _normalize_peft_lora_sd
+
+    sd = _peft_sd({"blocks.0.q": 4, "blocks.1.k": 2})
+    normalized, max_rank, reg_dims = _normalize_peft_lora_sd(sd)
+
+    assert max_rank == 4
+    assert reg_dims == {"lora_unet_blocks_1_k": 2}
+    assert set(normalized) == {
+        "lora_unet_blocks_0_q.lora_down.weight",
+        "lora_unet_blocks_0_q.lora_up.weight",
+        "lora_unet_blocks_0_q.alpha",
+        "lora_unet_blocks_1_k.lora_down.weight",
+        "lora_unet_blocks_1_k.lora_up.weight",
+        "lora_unet_blocks_1_k.alpha",
+    }
+    # 无 alpha 键 → 补 alpha=rank（comfy 缩放 1.0 语义）
+    assert float(normalized["lora_unet_blocks_0_q.alpha"]) == 4.0
+    assert float(normalized["lora_unet_blocks_1_k.alpha"]) == 2.0
+    # lora_A=down / lora_B=up 方向
+    assert normalized["lora_unet_blocks_0_q.lora_down.weight"].shape == (4, 8)
+    assert normalized["lora_unet_blocks_0_q.lora_up.weight"].shape == (8, 4)
+
+
+def test_normalize_peft_lora_sd_passthrough_and_rejects():
+    import pytest
+
+    from studio.services.inference.core import _normalize_peft_lora_sd
+
+    kohya = {"lora_unet_blocks_0_q.lora_down.weight": torch.zeros(2, 4)}
+    assert _normalize_peft_lora_sd(kohya) is None
+    assert _normalize_peft_lora_sd({}) is None
+
+    with_alpha = _peft_sd({"blocks.0.q": 2}, with_alpha=True)
+    normalized, _, _ = _normalize_peft_lora_sd(with_alpha)
+    assert float(normalized["lora_unet_blocks_0_q.alpha"]) == 1.0  # 保留原 alpha
+
+    dora = _peft_sd({"blocks.0.q": 2})
+    dora["diffusion_model.blocks.0.q.dora_scale"] = torch.ones(8, 1)
+    with pytest.raises(ValueError, match="DoRA"):
+        _normalize_peft_lora_sd(dora)
+
+    with pytest.raises(ValueError, match="无法识别"):
+        _normalize_peft_lora_sd({"diffusion_model.blocks.0.q.mystery": torch.zeros(1)})
+
+
+def test_apply_loras_bf16_model_accepts_peft_file(tmp_path: Path):
+    """用户场景：civitai PEFT 文件（零 metadata）挂 bf16 krea2 底模——
+    归一后 lycoris 正常注入，forward delta = scale × 1.0 × up@down。"""
+    import torch.nn as nn
+
+    from studio.services.inference.core import LoRASpec, apply_loras
+
+    class _Block(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.q = nn.Linear(8, 8, bias=False)
+
+    class _Tiny(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.blocks = nn.ModuleList([_Block()])
+
+        def forward(self, x):
+            return self.blocks[0].q(x)
+
+    torch.manual_seed(0)
+    model = _Tiny()
+    sd = _peft_sd({"blocks.0.q": 2})
+    path = tmp_path / "civit_peft.safetensors"
+    save_file(sd, str(path))  # 无任何 metadata
+
+    x = torch.randn(3, 8)
+    base = model(x).detach().clone()
+
+    adapters = apply_loras(
+        model, [LoRASpec(path=str(path), scale=0.7)], "cpu", torch.float32,
+        family_id="krea2",
+    )
+
+    assert len(adapters) == 1
+    out = model(x).detach()
+    up = sd["diffusion_model.blocks.0.q.lora_B.weight"].float()
+    down = sd["diffusion_model.blocks.0.q.lora_A.weight"].float()
+    expected = base + 0.7 * (x @ down.T @ up.T)   # scale=alpha/rank=1.0
+    assert torch.allclose(out, expected, atol=1e-5)
