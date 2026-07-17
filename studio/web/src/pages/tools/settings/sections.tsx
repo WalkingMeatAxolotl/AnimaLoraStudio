@@ -1443,6 +1443,37 @@ export function VaePrecisionSection({
 }
 
 
+export function VramPolicySection({
+  draft, update,
+}: {
+  draft: Secrets
+  update: <S extends Section, K extends keyof Secrets[S]>(
+    section: S, key: K, value: Secrets[S][K],
+  ) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <SettingsSection id="vram-policy" title={t('settings.vramPolicy.title')}>
+      <SettingsField
+        label={t('settings.vramPolicy.label')}
+        desc={t('settings.vramPolicy.desc')}
+        helpTooltip={<p>{t('settings.vramPolicy.help')}</p>}
+      >
+        <select
+          value={draft.generate.vram_policy ?? 'auto'}
+          onChange={(e) => update('generate', 'vram_policy', e.target.value as 'auto' | 'save_vram' | 'performance')}
+          className={`${textInputClass} max-w-40`}
+        >
+          <option value="auto">{t('settings.vramPolicy.optAuto')}</option>
+          <option value="save_vram">{t('settings.vramPolicy.optSaveVram')}</option>
+          <option value="performance">{t('settings.vramPolicy.optPerformance')}</option>
+        </select>
+      </SettingsField>
+    </SettingsSection>
+  )
+}
+
+
 export function TaeFluxSection({
   draft, update,
 }: {

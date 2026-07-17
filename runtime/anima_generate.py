@@ -101,6 +101,7 @@ def main() -> None:
     lora_configs: list[dict] = cfg.get("lora_configs", [])
     mixed_precision: str = cfg.get("mixed_precision", "bf16")
     vae_precision: str = cfg.get("vae_precision", mixed_precision)
+    vram_policy: str = str(cfg.get("vram_policy") or "auto")
     text_encoder_backend: str = cfg.get("text_encoder_backend", "hf")
     t5_tokenizer_backend: str = cfg.get("t5_tokenizer_backend", "slow")
     backend: str = cfg.get("attention_backend", "none")
@@ -202,6 +203,7 @@ def main() -> None:
             device=device, dtype=dtype,
             output_dir=output_dir,
             update_monitor=_update_monitor,
+            vram_policy=vram_policy,
         )
         logger.info("XY 矩阵生成完成")
         return
@@ -233,6 +235,7 @@ def main() -> None:
                     device=device,
                     dtype=dtype,
                     seed=seed,
+                    vram_policy=vram_policy,
                 )
                 fname = f"gen_{img_idx:04d}_p{pi}_c{ci}_s{seed}.png"
                 out_path = output_dir / fname
@@ -317,6 +320,7 @@ def _run_xy_matrix(
     output_dir,
     update_monitor,
     distilled: bool = False,
+    vram_policy: str = "auto",
 ) -> None:
     """循环 (yi, xi) 出 N×M 张图。
 
@@ -412,6 +416,7 @@ def _run_xy_matrix(
                     device=device,
                     dtype=dtype,
                     seed=cur_seed,
+                    vram_policy=vram_policy,
                 )
                 fname = f"xy_x{xi:02d}_y{yi:02d}_s{cur_seed}.png"
                 out_path = output_dir / fname

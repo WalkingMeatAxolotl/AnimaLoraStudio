@@ -523,6 +523,10 @@ export interface GenerateSecretsConfig {
   /** 测试出图 daemon 闲置 N 分钟自动卸载模型释放 VRAM。0 = 关闭，模型常驻
    * 直到手动点"清理显存"。计时只在 idle + 模型 loaded 时跑。 */
   idle_timeout_minutes: number
+  /** 测试出图显存策略（krea2 生效）。auto=按空闲显存决定文本编码器与 DiT
+   * 是否让位；save_vram=强制顺序化（峰值最低，每图多几秒搬运）；
+   * performance=全部常驻显存（峰值最高、零搬运）。 */
+  vram_policy: 'auto' | 'save_vram' | 'performance'
   /** 开后每次出图自动落盘到 studio_data/test/<date>/{single,xy}/image_N.png。
    * 默认关；compare 模式始终不落盘。 */
   save_test_images: boolean

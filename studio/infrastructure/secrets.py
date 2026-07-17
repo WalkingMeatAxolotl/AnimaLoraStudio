@@ -572,12 +572,16 @@ class GenerateConfig(BaseModel):
     - `save_test_images`：开关测试出图自动落盘。默认关；开后每次出完图前端
       会调 /api/generate/save 把成图存到 studio_data/test/<date>/{single,xy}/
       image_N.png（N 按当前文件夹已有最大编号+1）。compare 模式不落盘。
+    - `vram_policy`：测试出图显存策略（krea2 生效）。`'auto'`（默认）按空闲
+      显存决定文本编码器与 DiT 是否让位；`'save_vram'` 强制顺序化（峰值最
+      低，每图多几秒搬运）；`'performance'` 全部常驻显存（峰值最高、零搬运）。
     """
     preview_every_n_steps: int = 3
     attention_backend: str = "auto"
     vae_precision: str = "bf16"
     idle_timeout_minutes: int = 10
     save_test_images: bool = False
+    vram_policy: str = "auto"
 
 
 class SystemConfig(BaseModel):

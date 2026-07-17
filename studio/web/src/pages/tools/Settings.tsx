@@ -45,6 +45,7 @@ import {
   TrainingParamsSection,
   UpscalerSection,
   VaePrecisionSection,
+  VramPolicySection,
   XformersSection,
 } from './settings/sections'
 import { SystemSection } from './settings/SystemSection'
@@ -869,6 +870,7 @@ export default function SettingsPage() {
             secrets.generate.attention_backend (flash_attn / xformers / none).
             Only xformers is an exact ComfyUI KSampler parity target. */}
         <IdleTimeoutSection draft={draft} update={update} />
+        <VramPolicySection draft={draft} update={update} />
         <VaePrecisionSection draft={draft} update={update} />
         <TaeFluxSection draft={draft} update={update} />
         <SaveTestImagesSection draft={draft} update={update} />

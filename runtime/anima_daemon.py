@@ -773,6 +773,7 @@ def _run_generate(
                     step_callback=preview_callback,
                     phase_callback=_phase_cb,
                     seed=seed,
+                    vram_policy=str(cfg.get("vram_policy") or "auto"),
                 )
                 CACHE._move_runtime_to_device()
                 fname = f"gen_{img_idx:04d}_p{pi}_c{ci}_s{seed}.png"
@@ -925,6 +926,7 @@ def _run_xy(
                     device=CACHE.device,
                     dtype=CACHE.dtype,
                     seed=cur_seed,
+                    vram_policy=str(cfg.get("vram_policy") or "auto"),
                 )
                 CACHE._move_runtime_to_device()
                 fname = f"xy_x{xi:02d}_y{yi:02d}_s{cur_seed}.png"
