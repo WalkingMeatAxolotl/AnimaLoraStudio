@@ -80,23 +80,33 @@ def load_yaml_config(config_path):
 
 
 def apply_yaml_config(args, config):
-    """将 YAML 配置应用到 args；命令行显式参数优先于 YAML。
+    """将 YAML 与 CLI 显式参数合并，经 TrainingConfig 完整构造后返回新 args。
 
-    实现走 studio.argparse_bridge.merge_yaml_into_namespace —— 字段名 / 默认值
-    都从 studio.schema.TrainingConfig 这一份单一权威源派生，避免与 parse_args
-    脱节。未在 schema 中的 YAML 键会被忽略（拼写错误一目了然）。
+    config 管线刀 1（R1，docs/design/config-pipeline-refactor.md）：trainer 与
+    Studio 走同一条 pydantic 加载路径 —— 字段迁移 / FAMILY_CONFIG_DEFAULTS
+    族默认 overlay / 互斥与能力校验全部单点生效，本函数不再手工重放迁移
+    （旧 merge_yaml_into_namespace 绕过 validator 年代的产物）。
 
-    在 merge 前调用 save/noise 迁移兜底老 yaml；argparse_bridge 不走 pydantic validator，
-    schema 层的迁移逻辑无法生效，所以这里显式做一次。
+    命令行显式参数优先于 YAML：parse_args 以 suppress_defaults 构建 parser，
+    args 只含显式键，优先级是精确判定而非「值==默认值」近似。
+
+    校验失败逐条打印到 stderr 后 SystemExit(2) —— 与能力防线同款 fail-fast，
+    supervisor 截 stderr 尾部作为任务错误信息。
     """
-    from studio.infrastructure.argparse_bridge import merge_yaml_into_namespace
-    from studio.schema import (
-        TrainingConfig,
-        migrate_legacy_save_keys,
-        migrate_noise_enhancement_type,
-    )
-    config = migrate_noise_enhancement_type(migrate_legacy_save_keys(dict(config or {})))
-    return merge_yaml_into_namespace(args, config, TrainingConfig)
+    from pydantic import ValidationError
+
+    from studio.infrastructure.argparse_bridge import namespace_from_config
+    from studio.schema import TrainingConfig
+
+    try:
+        return namespace_from_config(args, dict(config or {}), TrainingConfig)
+    except ValidationError as exc:
+        errors = exc.errors()
+        print(f"配置校验失败（{len(errors)} 处）:", file=sys.stderr)
+        for err in errors:
+            loc = ".".join(str(p) for p in err["loc"]) or "config"
+            print(f"  {loc}: {err['msg']}", file=sys.stderr)
+        raise SystemExit(2) from exc
 
 
 def init_progress(show_progress, total_steps):

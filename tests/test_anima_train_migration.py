@@ -100,39 +100,59 @@ def test_deprecated_repeats_flags_silently_accepted(at, monkeypatch: pytest.Monk
 
 
 def test_no_prefer_json_flips_default(at, monkeypatch: pytest.MonkeyPatch) -> None:
-    """bridge 自动从 prefer_json: bool=True 派生 --prefer-json / --no-prefer-json。"""
+    """bridge 自动从 prefer_json: bool=True 派生 --prefer-json / --no-prefer-json。
+
+    刀 1 / R1 起 parse_args 是 sparse namespace（只含显式键）；schema 默认值
+    由 apply_yaml_config 经 TrainingConfig 统一补齐。
+    """
     monkeypatch.setattr(sys, "argv", ["anima_train.py", "--no-prefer-json"])
     assert at.parse_args().prefer_json is False
     monkeypatch.setattr(sys, "argv", ["anima_train.py"])
-    assert at.parse_args().prefer_json is True
+    sparse = at.parse_args()
+    assert not hasattr(sparse, "prefer_json")  # 未显式传 → 不在 sparse namespace
+    assert at.apply_yaml_config(sparse, {}).prefer_json is True
 
 
 # ---------------------------------------------------------------------------
-# YAML 合并
+# YAML 合并（apply_yaml_config 返回归一后的新 namespace，不再原地改）
 # ---------------------------------------------------------------------------
 
 
 def test_apply_yaml_overrides_defaults(at, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "argv", ["anima_train.py"])
-    args = at.parse_args()
-    yaml_data = {"epochs": 99, "lora_rank": 64}
-    at.apply_yaml_config(args, yaml_data)
+    args = at.apply_yaml_config(at.parse_args(), {"epochs": 99, "lora_rank": 64})
     assert args.epochs == 99
     assert args.lora_rank == 64
 
 
 def test_cli_wins_over_yaml(at, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "argv", ["anima_train.py", "--epochs", "3"])
-    args = at.parse_args()
-    at.apply_yaml_config(args, {"epochs": 99})
+    args = at.apply_yaml_config(at.parse_args(), {"epochs": 99})
     assert args.epochs == 3
+
+
+def test_cli_explicit_default_wins_over_yaml(at, monkeypatch: pytest.MonkeyPatch) -> None:
+    """显式传等于 schema 默认的值也算显式（SUPPRESS 精确判定；旧「值==默认值」
+    近似的盲区，epochs 默认 10）。"""
+    monkeypatch.setattr(sys, "argv", ["anima_train.py", "--epochs", "10"])
+    args = at.apply_yaml_config(at.parse_args(), {"epochs": 99})
+    assert args.epochs == 10
 
 
 def test_unknown_yaml_keys_ignored(at, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "argv", ["anima_train.py"])
-    args = at.parse_args()
-    at.apply_yaml_config(args, {"this_key_doesnt_exist": 42})
+    args = at.apply_yaml_config(at.parse_args(), {"this_key_doesnt_exist": 42})
     assert not hasattr(args, "this_key_doesnt_exist")
+
+
+def test_invalid_yaml_combo_exits(at, monkeypatch: pytest.MonkeyPatch) -> None:
+    """互斥组合经统一加载路径 fail-fast（刀 1 前 trainer 静默放行）。"""
+    monkeypatch.setattr(sys, "argv", ["anima_train.py"])
+    with pytest.raises(SystemExit):
+        at.apply_yaml_config(
+            at.parse_args(),
+            {"infonoise_enabled": True, "loss_weighting": "min_snr"},
+        )
 
 
 # ---------------------------------------------------------------------------

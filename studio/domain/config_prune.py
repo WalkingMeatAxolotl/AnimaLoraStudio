@@ -9,9 +9,12 @@
    trigger_word 等），默认值落盘纯属噪音；非默认值（裸 CLI 用户手写覆盖 /
    Tagging 页写入的 trigger_word）照常保留。
 
-runtime 侧的安全性：argparse parser 与默认值同样派生自 TrainingConfig
-（studio/infrastructure/argparse_bridge.py），yaml 缺失的键在
-merge_yaml_into_namespace 后落回同一份 schema 默认值，与显式写默认值等价。
+runtime 侧的安全性（config 管线刀 1 / R1 起）：trainer 加载 yaml 走与 Studio
+同一条 TrainingConfig 构造路径（argparse_bridge.namespace_from_config），缺失
+键经 pydantic 默认值 + FAMILY_CONFIG_DEFAULTS 族 overlay 补齐 —— 与保存端裁剪
+前的读回值逐字段一致。历史教训：旧 merge_yaml_into_namespace 用 argparse 裸
+默认补缺键、不走族 overlay，krea2 上被裁掉的 shuffle_caption 落回 anima 语义
+默认 True 而拒训；裁剪的安全性永远以「trainer 读回 == 保存端读回」为准。
 
 不裁 disable_when —— 命中的字段被前端 reset 到 disable_value，而
 disable_value 可能不等于字段默认值（如 Prodigy 时 lr_scheduler 被钉在

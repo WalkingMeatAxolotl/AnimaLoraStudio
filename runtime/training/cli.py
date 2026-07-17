@@ -19,11 +19,19 @@ def parse_args():
     """从 studio.schema.TrainingConfig 自动生成 parser；额外补 schema 之外的
     CLI-only 开关（auto-install / interactive / no-live-curve / 已弃用的
     --repeats 和 --reg-repeats）。
+
+    suppress_defaults=True（config 管线刀 1 / R1）：schema 字段不填 argparse
+    默认值，parse 产物只含用户显式传入的键。完整默认值由 apply_yaml_config
+    经 TrainingConfig 构造统一补齐（迁移 / 族默认 overlay / 校验单点生效），
+    CLI-only 开关保留普通默认、始终存在于 namespace。
     """
     from studio.infrastructure.argparse_bridge import build_parser
     from studio.schema import TrainingConfig
 
-    p = build_parser(TrainingConfig, prog="anima_train", description="Anima LoRA Trainer v2")
+    p = build_parser(
+        TrainingConfig, prog="anima_train",
+        description="Anima LoRA Trainer v2", suppress_defaults=True,
+    )
     # schema 之外的 CLI-only 开关
     p.add_argument("--auto-install", action="store_true", help="自动安装缺失依赖")
     p.add_argument("--interactive", action="store_true", help="交互模式，提示输入缺失参数")
