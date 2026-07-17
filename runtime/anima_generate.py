@@ -182,6 +182,23 @@ def main() -> None:
 
     model.eval()
 
+    # krea2 任务级 prompt 预编码（daemon _precache_prompts_and_offload 同款）：
+    # prompts 集合封闭（XY 时 schema 保证单条），预编码后卸 TE，采样期零占用。
+    # anima 文本栈（tuple）无此 API 自然跳过；performance 档不卸。
+    precache = getattr(text_stack, "precache_online_prompts", None)
+    if callable(precache):
+        try:
+            encoded = precache([*[str(p) for p in prompts], negative_prompt])
+        except Exception:
+            logger.exception("prompt 预编码失败；退回逐图惰性编码")
+        else:
+            if vram_policy != "performance":
+                offload = getattr(text_stack, "offload_model", None)
+                if callable(offload):
+                    offload()
+            if encoded:
+                logger.info("krea2 预编码 %d 条 prompt；采样期 TE 不占显存", encoded)
+
     # XY 矩阵分支（schema 已校验：xy_matrix 设值时 prompts 单条 + count=1）
     xy_matrix = cfg.get("xy_matrix")
     if xy_matrix is not None:

@@ -275,6 +275,28 @@ class Krea2TextStack:
             and all(str(caption) in self._online_lru for caption in captions)
         )
 
+    def precache_online_prompts(self, captions: Sequence[str]) -> int:
+        """任务级预编码：把这批 caption 编进在线 LRU（存 CPU）；返回新编码数。
+
+        XY / 多 prompt generate 的 prompt 集合在任务开始前就封闭——先全部
+        编码再 offload_model()，采样期 TE 归零显存占用（训练两段式加载的
+        推理版）。cached 模式（训练）不适用，no-op。LRU 容量按本批需求
+        抬升（上限 64，一条 ≈30MB CPU RAM），超出部分由逐格惰性路径兜底。
+        """
+        if self.cache_enabled:
+            return 0
+        unique = list(dict.fromkeys(str(caption) for caption in captions))
+        self._online_lru_capacity = max(
+            self._online_lru_capacity, min(len(unique), 64),
+        )
+        missing = [c for c in unique[:64] if c not in self._online_lru]
+        step = max(1, self.cache_batch_size)
+        for start in range(0, len(missing), step):
+            chunk = missing[start:start + step]
+            for caption, context in zip(chunk, self._encode_many(chunk)):
+                self._online_lru_put(caption, context.detach().to("cpu"))
+        return len(missing)
+
     def ensure_model(self):
         if self._model is None:
             self._model = self._model_loader(self.model_path, self.device, self.dtype)

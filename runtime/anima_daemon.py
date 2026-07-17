@@ -496,6 +496,40 @@ CACHE = ModelCache()
 # ---------------------------------------------------------------------------
 
 
+def _precache_prompts_and_offload(
+    prompts: list[str],
+    vram_policy: str,
+    phase_callback: Any = None,
+) -> None:
+    """krea2 任务级 prompt 预编码（训练两段式加载的推理版）。
+
+    XY / 多 prompt generate 的 prompt 集合在任务开始前就封闭——先把全部
+    prompt 编进在线 LRU，再把 TE 卸到 CPU：采样期 TE 归零显存占用（否则
+    auto 判据在余量充足时会让 8.9GB 的 TE 同驻到任务结束）。后续每格 /
+    每图经 LRU 全命中，TE 不再参与。
+
+    - performance 档不卸（用户显式要求全同驻零搬运）。
+    - anima 文本栈（tuple）无此 API，安全跳过。
+    - 预编码失败不阻塞任务：逐格惰性编码路径兜底。
+    """
+    precache = getattr(CACHE.text_stack, "precache_online_prompts", None)
+    if not callable(precache):
+        return
+    try:
+        if phase_callback is not None:
+            phase_callback("clip")
+        encoded = precache([str(p) for p in prompts])
+    except Exception:
+        logger.exception("prompt 预编码失败；退回逐格惰性编码")
+        return
+    if vram_policy != "performance":
+        offload = getattr(CACHE.text_stack, "offload_model", None)
+        if callable(offload):
+            offload()
+    if encoded:
+        logger.info("krea2 预编码 %d 条 prompt；采样期 TE 不再占用显存", encoded)
+
+
 def _set_lora_multiplier(adapter: Any, scale: float) -> None:
     if adapter.network is None:
         # 含 fp8 merge 句柄（network=None）：scale 已烘进权重，逐格设值
@@ -804,6 +838,13 @@ def _run_generate(
     total = count * len(prompts)
     _emit_for(req_id, "started", task_id=task_id, total=total)
 
+    # prompt 集合封闭（prompts × count 固定）：预编码后卸 TE，循环全程零占用
+    _precache_prompts_and_offload(
+        [*prompts, negative_prompt],
+        str(cfg.get("vram_policy") or "auto"),
+        _phase_cb,
+    )
+
     img_idx = 0
     image_done_count = 0
     image_errors: list[str] = []
@@ -911,6 +952,13 @@ def _run_xy(
     base_lora_paths = [str(s.path) for s in CACHE.last_lora_specs]
     total = len(x_values) * len(y_values)
     _emit_for(req_id, "started", task_id=task_id, total=total)
+
+    # XY 无 prompt 轴——prompt/negative 全程固定：预编码后卸 TE，逐格全命中
+    _precache_prompts_and_offload(
+        [prompt, negative_prompt],
+        str(cfg.get("vram_policy") or "auto"),
+        phase_callback,
+    )
 
     img_idx = 0
     image_done_count = 0
