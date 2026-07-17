@@ -36,6 +36,12 @@ from ..spec import (
     SamplingDefaults,
     TextSpec,
 )
+# 单源数据（刀 1 / R3）：见 anima/__init__.py 同位注释的依赖方向说明
+from studio.domain.common import (
+    FAMILY_CAPABILITIES,
+    FAMILY_CONFIG_DEFAULTS,
+    FAMILY_SAMPLING,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -104,8 +110,11 @@ KREA2_SPEC = ModelSpec(
         fingerprint=KREA2_TEXT_FINGERPRINT,
     ),
     sampling=SamplingDefaults(
-        samplers=(KREA2_SAMPLER,),
-        schedulers=(KREA2_SCHEDULER,),
+        # 白名单单源 studio/domain/common.py FAMILY_SAMPLING（刀 1 / R3）；
+        # KREA2_SAMPLER 等常量仍归 sampling.py（生成侧 parity 共用），
+        # 与单源数据的一致性由 tests/test_model_family_gating.py 锁死
+        samplers=FAMILY_SAMPLING["krea2"]["samplers"],
+        schedulers=FAMILY_SAMPLING["krea2"]["schedulers"],
         default_sampler=KREA2_SAMPLER,
         default_scheduler=KREA2_SCHEDULER,
         default_steps=KREA2_RAW_STEPS,
@@ -116,21 +125,9 @@ KREA2_SPEC = ModelSpec(
         # 动态 mu 保留为 build_krea2_sigmas(dynamic_mu=True) 非默认路径。
         shift_policy=ConstantShift(shift=1.15),
     ),
-    capabilities=frozenset({"masked_loss", "text_cache"}),
+    capabilities=FAMILY_CAPABILITIES["krea2"],
     lora=LoraOutputSpec(prefix="lora_unet", preset_name="krea2_full"),
-    config_defaults={
-        "shuffle_caption": False,
-        "keep_tokens": 0,
-        "tag_dropout": 0.0,
-        "text_encoder_cache": True,
-        "attention_backend": "none",
-        "timestep_sampling": "krea2_shift",
-        "timestep_shift_resolution_aware": False,
-        "sample_sampler_name": KREA2_SAMPLER,
-        "sample_scheduler": KREA2_SCHEDULER,
-        "sample_infer_steps": KREA2_RAW_STEPS,
-        "sample_cfg_scale": KREA2_RAW_GUIDANCE,
-    },
+    config_defaults=FAMILY_CONFIG_DEFAULTS["krea2"],
 )
 
 

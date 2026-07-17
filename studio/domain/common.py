@@ -14,9 +14,10 @@ def _meta(group: str, control: str = "auto", **extra: Any) -> dict[str, Any]:
 
 
 # ─── 多模型能力矩阵（多模型 PR-3，04-synthesis D5/D11） ───────────────────
-# runtime training/families SPECS.capabilities 的镜像。studio/domain 不 import
-# runtime（trainer cli 反向 import 本模块，避免环 + server 启动不依赖 runtime
-# sys.path）；同步由 tests/test_model_family_gating.py 双向锁死。
+# 单一权威源（config 管线刀 1 / R3）：runtime training/families 的 SPECS 直接
+# 引用本表（依赖方向 runtime → studio，本模块是零依赖纯数据叶子）。studio/domain
+# 仍不 import runtime（server 启动不依赖 runtime sys.path）。
+# tests/test_model_family_gating.py 锁 SPECS 与本表的同一性（防再复制成镜像）。
 FAMILY_CAPABILITIES: dict[str, frozenset] = {
     "anima": frozenset({
         "navit", "sra", "leap", "compile_blocks",
@@ -25,8 +26,9 @@ FAMILY_CAPABILITIES: dict[str, frozenset] = {
     "krea2": frozenset({"masked_loss", "text_cache"}),
 }
 
-# ModelSpec.config_defaults 的 studio 镜像。server 不反向 import runtime；同步由
-# tests/test_model_family_gating.py 双向锁死。只在字段缺失时 overlay，显式配置不改写。
+# 族默认 overlay 的单一权威源（ModelSpec.config_defaults 直接引用本表，R3）。
+# 只在字段缺失时 overlay，显式配置不改写。消费方:pydantic before-validator
+# `_apply_family_config_defaults`（studio 与 trainer 现共用这一条加载路径，R1）。
 FAMILY_CONFIG_DEFAULTS: dict[str, dict[str, Any]] = {
     "anima": {},
     "krea2": {
@@ -48,9 +50,8 @@ FAMILY_CONFIG_DEFAULTS: dict[str, dict[str, Any]] = {
 MODEL_FAMILIES: tuple[str, ...] = tuple(FAMILY_CAPABILITIES)
 
 # ─── 采样端白名单（多模型 P4-2，A13） ─────────────────────────────────────
-# runtime SPECS[fam].sampling.samplers/schedulers 的镜像（首项 = 族默认值）。
-# 与能力矩阵同一纪律：studio 不 import runtime，同步由
-# tests/test_model_family_gating.py 双向锁死。
+# 单一权威源（首项 = 族默认值）：runtime SPECS[fam].sampling.samplers/schedulers
+# 直接引用本表（R3，同能力矩阵的依赖方向说明）。
 # 这两个字段是硬白名单——两族的 sample_image 都在入口对名单外的值 raise
 # （anima: families/anima/sampling.py Comfy parity 校验；krea2:
 # families/krea2/sampling.py 同款），所以跨族值在配置层就报错（fail-fast）。

@@ -1,8 +1,8 @@
-"""model_family schema 门控三层防线 + studio↔runtime 能力矩阵镜像同步（多模型 PR-3）。
+"""model_family schema 门控防线 + studio↔runtime 族数据单源（多模型 PR-3 / 刀 1 R3）。
 
-studio/domain 刻意不 import runtime（trainer cli 反向依赖 + server sys.path），
-FAMILY_CAPABILITIES 是 runtime SPECS 的镜像——本文件是锁死两者同步的唯一机制，
-改任何一侧必须同时改另一侧。
+studio/domain/common.py 是能力矩阵 / 族默认 / 采样白名单的单一权威源，
+runtime SPECS 直接引用（依赖方向 runtime → studio）。本文件锁同一性——
+防止将来有人把引用又复制回字面量、退化成镜像。
 """
 
 from __future__ import annotations
@@ -27,28 +27,41 @@ from studio.domain.config_prune import eval_show_when
 from studio.schema import TrainingConfig
 
 
-def test_capability_matrix_mirrors_runtime_specs():
+def test_capability_matrix_single_source():
+    """SPECS 的 capabilities / config_defaults 必须是 studio 表的同一对象引用。"""
     from training.families import SPECS
 
     assert set(FAMILY_CAPABILITIES) == set(SPECS)
     for fid, spec in SPECS.items():
-        assert FAMILY_CAPABILITIES[fid] == spec.capabilities, (
-            f"studio 镜像与 runtime SPECS['{fid}'].capabilities 失同步"
+        assert spec.capabilities is FAMILY_CAPABILITIES[fid], (
+            f"SPECS['{fid}'].capabilities 不再引用 studio 单源——退化成镜像了"
         )
-        assert FAMILY_CONFIG_DEFAULTS[fid] == dict(spec.config_defaults)
+        assert spec.config_defaults is FAMILY_CONFIG_DEFAULTS[fid], fid
 
 
-def test_sampling_whitelist_mirrors_runtime_specs():
-    """FAMILY_SAMPLING 是 SPECS[fam].sampling 的镜像；首项 = 族默认值。"""
+def test_sampling_whitelist_single_source():
+    """SPECS 的 samplers/schedulers 引用 FAMILY_SAMPLING 单源；首项 = 族默认值。
+    default_sampler/default_scheduler 与 config_defaults 的 sample_* 仍是族内
+    常量（如 KREA2_SAMPLER），锁与单源的一致性。"""
     from training.families import SPECS
 
     assert set(FAMILY_SAMPLING) == set(SPECS)
     for fid, spec in SPECS.items():
-        mirror = FAMILY_SAMPLING[fid]
-        assert mirror["samplers"] == tuple(spec.sampling.samplers), fid
-        assert mirror["schedulers"] == tuple(spec.sampling.schedulers), fid
-        assert mirror["samplers"][0] == spec.sampling.default_sampler, fid
-        assert mirror["schedulers"][0] == spec.sampling.default_scheduler, fid
+        source = FAMILY_SAMPLING[fid]
+        assert spec.sampling.samplers is source["samplers"], fid
+        assert spec.sampling.schedulers is source["schedulers"], fid
+        assert source["samplers"][0] == spec.sampling.default_sampler, fid
+        assert source["schedulers"][0] == spec.sampling.default_scheduler, fid
+        # 族 config_defaults 声明的采样默认值（如 krea2）与 SamplingDefaults 一致
+        cd = spec.config_defaults
+        if "sample_sampler_name" in cd:
+            assert cd["sample_sampler_name"] == spec.sampling.default_sampler, fid
+        if "sample_scheduler" in cd:
+            assert cd["sample_scheduler"] == spec.sampling.default_scheduler, fid
+        if "sample_infer_steps" in cd:
+            assert cd["sample_infer_steps"] == spec.sampling.default_steps, fid
+        if "sample_cfg_scale" in cd:
+            assert cd["sample_cfg_scale"] == spec.sampling.default_cfg, fid
 
 
 def test_timestep_option_gate_targets_registered_strategy():
