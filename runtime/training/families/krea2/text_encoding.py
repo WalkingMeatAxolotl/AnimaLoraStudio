@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import gc
 import logging
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from types import MethodType
@@ -233,6 +234,12 @@ class Krea2TextStack:
         self._caption_entries: dict[str, list[TextCacheEntry]] = {}
         self._prompt_captions: list[str] = []
         self._cache_root: Path | None = None
+        # 在线模式（generate）的 prompt→context 内存 LRU（Comfy conditioning
+        # 节点缓存同款语义）：命中时 TE 完全不动。存 CPU、保原 dtype（fp32
+        # 一条 ≈63MB，容量 16 ≈1GB RAM）——cast 会破坏「首图与缓存命中图
+        # 逐位一致」。cached 模式（训练）不经此路径。
+        self._online_lru: OrderedDict[str, Tensor] = OrderedDict()
+        self._online_lru_capacity = 16
 
         if self.max_length <= 0 or not self.selected_layers or self.hidden_width <= 0:
             raise ValueError("Krea2 文本编码配置必须为正数且 selected_layers 不能为空")
@@ -242,6 +249,26 @@ class Krea2TextStack:
     @property
     def is_model_loaded(self) -> bool:
         return self._model is not None
+
+    def _online_lru_get(self, caption: str) -> Tensor | None:
+        context = self._online_lru.get(caption)
+        if context is not None:
+            self._online_lru.move_to_end(caption)
+        return context
+
+    def _online_lru_put(self, caption: str, context: Tensor) -> None:
+        self._online_lru[caption] = context
+        self._online_lru.move_to_end(caption)
+        while len(self._online_lru) > self._online_lru_capacity:
+            self._online_lru.popitem(last=False)
+
+    def online_conditions_cached(self, captions: Sequence[str]) -> bool:
+        """这批 caption 是否全部命中在线 LRU（编排层 peek：全命中 → 编码
+        阶段 TE 不需要上 GPU，按需让位判断可整体跳过）。"""
+        return (
+            not self.cache_enabled
+            and all(str(caption) in self._online_lru for caption in captions)
+        )
 
     def ensure_model(self):
         if self._model is None:
@@ -480,8 +507,21 @@ class Krea2TextStack:
         if not caption_list:
             raise ValueError("Krea2 文本 batch 不能为空")
         if not self.cache_enabled:
-            contexts = self._encode_many(caption_list)
-            return pad_text_conditions(contexts, device=device, dtype=dtype)
+            unique = list(dict.fromkeys(caption_list))
+            contexts: dict[str, Tensor] = {}
+            missing: list[str] = []
+            for caption in unique:
+                cached = self._online_lru_get(caption)
+                if cached is None:
+                    missing.append(caption)
+                else:
+                    contexts[caption] = cached
+            for caption, context in zip(missing, self._encode_many(missing)):
+                stored = context.detach().to("cpu")
+                contexts[caption] = stored
+                self._online_lru_put(caption, stored)
+            ordered = [contexts[caption] for caption in caption_list]
+            return pad_text_conditions(ordered, device=device, dtype=dtype)
 
         unique = list(dict.fromkeys(caption_list))
         contexts: dict[str, Tensor] = {}

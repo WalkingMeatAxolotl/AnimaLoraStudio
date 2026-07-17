@@ -281,3 +281,46 @@ def test_compute_dtype_none_leaves_model_unpatched():
     )
     stack.ensure_model()
     assert "forward" not in vars(model)
+
+
+def test_online_lru_skips_backbone_on_repeat_and_matches_first_encode(tmp_path):
+    """在线模式 prompt LRU：同 caption 二次编码零 backbone 调用，condition
+    与首次逐位一致（Comfy conditioning 节点缓存同款语义）。"""
+    loader = _Loader()
+    stack = _stack(tmp_path, loader, cache_enabled=False)
+
+    first = stack.encode_text_for_batch(["ab"], device="cpu", dtype=torch.float32)
+    calls_after_first = loader.models[0].model.calls
+    assert stack.online_conditions_cached(["ab"])
+    assert not stack.online_conditions_cached(["ab", "new"])
+
+    second = stack.encode_text_for_batch(["ab"], device="cpu", dtype=torch.float32)
+    assert loader.models[0].model.calls == calls_after_first
+    assert torch.equal(first.context, second.context)
+    assert torch.equal(first.attention_mask, second.attention_mask)
+
+
+def test_online_lru_evicts_beyond_capacity(tmp_path):
+    loader = _Loader()
+    stack = _stack(tmp_path, loader, cache_enabled=False)
+    stack._online_lru_capacity = 2
+
+    stack.encode_text_for_batch(["a"], device="cpu", dtype=torch.float32)
+    stack.encode_text_for_batch(["b"], device="cpu", dtype=torch.float32)
+    stack.encode_text_for_batch(["c"], device="cpu", dtype=torch.float32)
+
+    assert not stack.online_conditions_cached(["a"])   # 最旧被逐出
+    assert stack.online_conditions_cached(["b", "c"])
+
+
+def test_online_lru_dedupes_batch_and_not_used_in_cached_mode(tmp_path):
+    loader = _Loader()
+    stack = _stack(tmp_path, loader, cache_enabled=False)
+
+    condition = stack.encode_text_for_batch(
+        ["ab", "ab", "c"], device="cpu", dtype=torch.float32,
+    )
+    assert condition.context.shape[0] == 3      # 重复 caption 仍按位置返回
+
+    cached_stack = _stack(tmp_path, _Loader(), cache_enabled=True)
+    assert not cached_stack.online_conditions_cached(["ab"])  # cached 模式恒 False
