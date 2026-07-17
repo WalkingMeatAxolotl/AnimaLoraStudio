@@ -129,8 +129,10 @@ class AnimaFamily:
         from training.families.anima.sampling import sample_image
 
         # distilled 是蒸馏推理族（Krea2 Turbo）的旋钮；Anima 无蒸馏变体，
-        # 接受并忽略（调用方按统一协议传，无需按族分支）。
+        # 接受并忽略（调用方按统一协议传，无需按族分支）。vram_policy
+        # 同理——Anima 的 TE 常驻编排暂不参与显存策略。
         kwargs.pop("distilled", None)
+        kwargs.pop("vram_policy", None)
         return sample_image(model, vae, *text, prompt, **kwargs)
 
     # ── LoRA 产物 ────────────────────────────────────────────────────────

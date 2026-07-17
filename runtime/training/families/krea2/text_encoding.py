@@ -250,6 +250,11 @@ class Krea2TextStack:
     def is_model_loaded(self) -> bool:
         return self._model is not None
 
+    @property
+    def is_model_on_device(self) -> bool:
+        """TE 当前是否驻留目标设备（编排层判断是否需要腾显存搬它上来）。"""
+        return self._model is not None and not self._offloaded
+
     def _online_lru_get(self, caption: str) -> Tensor | None:
         context = self._online_lru.get(caption)
         if context is not None:

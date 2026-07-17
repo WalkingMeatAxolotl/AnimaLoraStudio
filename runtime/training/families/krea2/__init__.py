@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Iterable
 
+import torch
+
 from training.families.krea2.preset import KREA2_PRESET
 from training.families.krea2.sampling import (
     KREA2_BASE_IMAGE_SEQ_LEN,
@@ -37,6 +39,57 @@ from training.families.spec import (
 
 
 logger = logging.getLogger(__name__)
+
+
+_GIB = 1024 ** 3
+#: TE 上卡所需：fp16 权重 8.9GB + embed 表逐层 cast fp32 瞬时 ~1.5GB + 缓冲
+_TE_LOAD_NEED_BYTES = int(11 * _GIB)
+
+
+def _cuda_free_bytes(device) -> int | None:
+    """目标 CUDA 设备当前空闲显存；非 CUDA / 查询失败返回 None。"""
+    try:
+        dev = torch.device(device)
+        if dev.type != "cuda" or not torch.cuda.is_available():
+            return None
+        free, _total = torch.cuda.mem_get_info(dev)
+        return int(free)
+    except Exception:
+        return None
+
+
+def _sampling_headroom_bytes(height: int, width: int) -> int:
+    # 采样余量粗估不做 per-model 记账（编排方案 D1 用户拍板）：
+    # 2GB 底 + 3GB × 面积比（1024² → 5GB，1536² → 8.75GB）
+    area_ratio = (height * width) / (1024 * 1024)
+    return int((2.0 + 3.0 * area_ratio) * _GIB)
+
+
+def _should_yield_dit(policy: str, device) -> bool:
+    """编码前 TE 需要搬上 GPU 时，DiT 是否先撤到 CPU（comfy free_memory
+    的「装不下才让位」语义）。"""
+    if policy == "performance":
+        return False
+    if policy == "save_vram":
+        return True
+    free = _cuda_free_bytes(device)
+    return free is not None and free < _TE_LOAD_NEED_BYTES
+
+
+def _should_offload_te(policy: str, device, height: int, width: int,
+                       dit_yielded: bool) -> bool:
+    """采样前是否把 TE 卸到 CPU。auto 只在采样余量不足时卸——32GB fp8
+    三者同驻 free 充裕，从此零搬运。"""
+    if policy == "performance":
+        return False
+    if policy == "save_vram":
+        return True
+    if dit_yielded:
+        # DiT 刚让过位 = 显存装不下三者同驻，采样期必须让 DiT 独占；
+        # 且此刻 DiT 还在 CPU，free 虚高不可作判据
+        return True
+    free = _cuda_free_bytes(device)
+    return free is None or free < _sampling_headroom_bytes(height, width)
 
 
 KREA2_SPEC = ModelSpec(
@@ -106,8 +159,6 @@ class Krea2Family:
                   t5_fast: bool = False, purpose: str = "train",
                   cache_enabled: bool = True):
         if purpose == "generate":
-            import torch
-
             # Comfy parity（sd.py:258）：生成场景 TE 固定 fp16 存储 + fp32
             # compute（text_encoder_dtype 默认 fp16 + set_model_compute_dtype
             # fp32），忽略调用方 dtype、无旋钮——与 TE offload 同款固定行为。
@@ -162,7 +213,8 @@ class Krea2Family:
                      scheduler: str | None = None,
                      distilled: bool = False,
                      device="cuda", dtype=None, step_callback=None,
-                     phase_callback=None, seed: int | None = None):
+                     phase_callback=None, seed: int | None = None,
+                     vram_policy: str | None = None):
         # 先按 Raw/Turbo 解析步数与 guidance（steps/cfg 未显式给时用族默认：
         # Raw 28 步 / 4.5，Turbo 8 步 / 0.0——TDM 蒸馏无 uncond，guidance=0
         # 时 prepare 不编码 negative、采样跳过 uncond forward）。
@@ -173,6 +225,24 @@ class Krea2Family:
             sampler_name=sampler_name,
             scheduler=scheduler,
         )
+        # —— 显存编排（vram_policy=None 时维持旧行为，训练预览等调用面
+        # 绝不动 model：优化器状态引用会被 .to() 破坏）。
+        # 按需让位（comfy free_memory 语义）：编码需要把 TE 搬上 GPU 且
+        # 装不下时，DiT 先撤 CPU；prompt 全部命中在线 LRU 则整体跳过。
+        dit_yielded = False
+        if vram_policy is not None:
+            needed = [prompt] + ([negative_prompt] if guidance > 0 else [])
+            cached = getattr(text, "online_conditions_cached", None)
+            te_resident = bool(getattr(text, "is_model_on_device", False))
+            need_te_move = not te_resident and not (
+                callable(cached) and cached(needed)
+            )
+            if need_te_move and _should_yield_dit(vram_policy, device):
+                logger.info("krea2 显存编排：编码前 DiT 让位到 CPU")
+                model.to("cpu")
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                dit_yielded = True
         condition = prepare_sampling_condition(
             text,
             prompt,
@@ -182,12 +252,16 @@ class Krea2Family:
             dtype=dtype,
             phase_callback=phase_callback,
         )
-        # Comfy parity 编排：条件编码完成后把 TE 卸到 CPU，DiT 独占显存
-        # （free_memory 语义）。26.3GB DiT + 8.9GB TE 同驻超 32GB 支持下限。
-        # 下个 prompt 由 ensure_model 搬回；训练缓存模式 TE 本就已释放，no-op。
-        offload = getattr(text, "offload_model", None)
-        if callable(offload):
-            offload()
+        # 采样前 TE 处置：None=旧行为无条件卸（训练缓存模式 no-op）；
+        # auto 只在采样余量不足时卸——显存充裕则同驻，零搬运。
+        if vram_policy is None or _should_offload_te(
+            vram_policy, device, height, width, dit_yielded,
+        ):
+            offload = getattr(text, "offload_model", None)
+            if callable(offload):
+                offload()
+        if dit_yielded:
+            model.to(torch.device(device))
         return sample_image(
             model,
             vae,
