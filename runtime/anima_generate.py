@@ -166,6 +166,7 @@ def main() -> None:
         t5_tokenizer_path=t5_tokenizer_path or None,
         comfy_qwen=text_encoder_backend == "comfy_qwen3",
         t5_fast=t5_tokenizer_backend == "fast",
+        purpose="generate",
         cache_enabled=False,
     )
 

@@ -109,3 +109,6 @@
   基线；请用户看一眼启动器设置或启动日志首屏）
 - Comfy 侧生成 parity 样张时用与我们相同的 sampler/scheduler 组合（euler +
   固定 shift）
+- 用户 ComfyUI workflow 实际加载的 TE 文件 dtype（P-2 假定 fp16 存储；若是
+  fp8 版 TE 则口径另议）；以及其 fp16 权重与我们「HF bf16 目录 cast fp16」
+  是否同源逐位一致（两者都应是官方 bf16 的 RTN cast，真卡时抽查张量校验）

@@ -105,6 +105,20 @@ class Krea2Family:
                   t5_tokenizer_path: str = "", comfy_qwen: bool = False,
                   t5_fast: bool = False, purpose: str = "train",
                   cache_enabled: bool = True):
+        if purpose == "generate":
+            import torch
+
+            # Comfy parity（sd.py:258）：生成场景 TE 固定 fp16 存储 + fp32
+            # compute（text_encoder_dtype 默认 fp16 + set_model_compute_dtype
+            # fp32），忽略调用方 dtype、无旋钮——与 TE offload 同款固定行为。
+            # 训练侧维持调用方 dtype（bf16）不动。
+            return load_krea2_text_stack(
+                text_encoder_path,
+                device=device,
+                dtype=torch.float16,
+                compute_dtype=torch.float32,
+                cache_enabled=cache_enabled,
+            )
         return load_krea2_text_stack(
             text_encoder_path,
             device=device,

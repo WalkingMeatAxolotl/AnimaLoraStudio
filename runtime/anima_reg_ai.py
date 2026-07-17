@@ -450,6 +450,7 @@ def main() -> None:
     text_stack = family.load_text(
         text_encoder_path, device, dtype,
         t5_tokenizer_path=t5_tokenizer_path or None,
+        purpose="generate",
         cache_enabled=False,
     )
 

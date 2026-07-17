@@ -123,3 +123,46 @@ def test_no_direct_loader_literals_in_dispatch_sites():
     loop = (REPO_ROOT / "runtime/training/loop.py").read_text(encoding="utf-8")
     assert "preprocess_text_embeds" not in loop  # 文本块已下沉 family
     assert "forward_with_optional_checkpoint(" not in loop  # 前向经 family
+
+
+def test_krea2_load_text_generate_fixes_te_fp16_storage_fp32_compute(monkeypatch):
+    """generate 场景 TE 固定 fp16 存储 + fp32 compute（ComfyUI sd.py:258
+    口径，忽略调用方 dtype、无旋钮）；训练路径维持调用方 dtype，不设
+    compute_dtype。"""
+    import training.families.krea2 as krea2_module
+
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        krea2_module, "load_krea2_text_stack",
+        lambda path, **kwargs: calls.append(kwargs) or "stack",
+    )
+    family = krea2_module.Krea2Family()
+
+    assert family.load_text(
+        "te-dir", "cpu", torch.bfloat16, purpose="generate", cache_enabled=False,
+    ) == "stack"
+    assert calls[0]["dtype"] == torch.float16
+    assert calls[0]["compute_dtype"] == torch.float32
+    assert calls[0]["cache_enabled"] is False
+
+    assert family.load_text("te-dir", "cpu", torch.bfloat16) == "stack"
+    assert calls[1]["dtype"] == torch.bfloat16
+    assert "compute_dtype" not in calls[1]
+
+
+def test_anima_load_text_purpose_never_overrides_backend_choice(monkeypatch):
+    """purpose 对 Anima 接受并忽略（load_dit 同款）：generate 调用面传
+    purpose 不得把用户显式选择的 hf backend 静默切成 comfy_qwen。"""
+    import training.families.anima.loader as anima_loader
+
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        anima_loader, "load_text_encoders",
+        lambda *args, **kwargs: calls.append(kwargs) or "encoders",
+    )
+
+    fam = get_family("anima")
+    assert fam.load_text(
+        "te-dir", "cpu", torch.bfloat16, comfy_qwen=False, purpose="generate",
+    ) == "encoders"
+    assert calls[0]["comfy_qwen"] is False
