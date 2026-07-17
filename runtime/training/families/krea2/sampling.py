@@ -33,7 +33,10 @@ KREA2_RAW_STEPS = 28
 KREA2_RAW_GUIDANCE = 4.5
 KREA2_TURBO_STEPS = 8
 KREA2_TURBO_GUIDANCE = 0.0
-KREA2_DISTILLED_MU = 1.15
+# 推理 sigma 的固定 mu（Comfy parity：ModelSamplingFlux shift=1.15，Raw/Turbo 同）。
+# 曾名 KREA2_DISTILLED_MU——统一口径后它不再是蒸馏专属。
+KREA2_FIXED_MU = 1.15
+KREA2_DISTILLED_MU = KREA2_FIXED_MU  # 兼容别名
 KREA2_BASE_IMAGE_SEQ_LEN = 256
 KREA2_MAX_IMAGE_SEQ_LEN = 6400
 KREA2_BASE_SHIFT = 0.5
@@ -111,16 +114,28 @@ def build_krea2_sigmas(
     steps: int,
     *,
     distilled: bool = False,
+    dynamic_mu: bool = False,
     device: torch.device | str = "cpu",
 ) -> Tensor:
-    """Build the shifted ``1 → 0`` FlowMatchEuler sigma grid."""
+    """Build the shifted ``1 → 0`` FlowMatchEuler sigma grid.
+
+    默认固定 mu=1.15（Comfy parity 口径）：ComfyUI 把 Krea2 注册为
+    ModelType.FLUX → ModelSamplingFlux(shift=1.15)，其 flux_time_shift(mu, 1, t)
+    与本函数的 Möbius 形式恒等——Raw / Turbo 一律固定 mu，训练预览与 Generate
+    两面共用同一口径（与 Anima 的 ConstantShift 先例同构）。
+
+    ``dynamic_mu=True`` 保留 diffusers/musubi Raw pipeline 的分辨率感知插值
+    （1024² 约等效 mu≈0.906），非默认，供对照实验。``distilled`` 不再影响
+    sigma（只决定 resolve_sampling_settings 的步数 / guidance 默认）。
+    """
 
     if int(steps) <= 0:
         raise ValueError("Krea2 sampling steps 必须为正数")
+    del distilled  # sigma 口径统一后仅存于签名兼容；见 docstring
     mu = (
-        KREA2_DISTILLED_MU
-        if distilled
-        else calculate_krea2_mu(image_seq_len)
+        calculate_krea2_mu(image_seq_len)
+        if dynamic_mu
+        else KREA2_FIXED_MU
     )
     base = torch.linspace(
         1.0, 0.0, int(steps) + 1, device=device, dtype=torch.float32,

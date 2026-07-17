@@ -58,25 +58,37 @@ def test_mu_matches_reference_endpoints_and_1024_anchor():
     assert calculate_krea2_mu(8000) > 1.15  # upstream does not endpoint-clamp
 
 
-def test_shifted_sigmas_match_exponential_mobius_schedule():
+def test_default_sigmas_match_comfy_flux_time_shift():
+    """默认 sigma = Comfy parity 口径：固定 mu=1.15，与 ComfyUI
+    ModelSamplingFlux 的 flux_time_shift(1.15, 1.0, t) 逐位恒等，且与
+    分辨率无关（Raw / Turbo / 任何 image_seq_len 同一张表）。"""
     sigmas = build_krea2_sigmas(4096, 4)
-    base = torch.linspace(1.0, 0.0, 5)
-    shift = torch.tensor(0.90625).exp()
-    expected = shift * base / (1 + (shift - 1) * base)
-
+    t = torch.linspace(1.0, 0.0, 5)
+    mu = torch.tensor(1.15)
+    # flux_time_shift: exp(mu) / (exp(mu) + (1/t - 1)^1)；t=0 时定义为 0
+    expected = torch.where(
+        t > 0, mu.exp() / (mu.exp() + (1.0 / t.clamp_min(1e-12) - 1.0)),
+        torch.zeros(()),
+    )
     torch.testing.assert_close(sigmas, expected)
     assert sigmas[0] == 1
     assert sigmas[-1] == 0
     assert torch.all(sigmas[:-1] > sigmas[1:])
+    # 分辨率无关 + distilled 不再影响 sigma
+    torch.testing.assert_close(sigmas, build_krea2_sigmas(256, 4))
+    torch.testing.assert_close(sigmas, build_krea2_sigmas(4096, 4, distilled=True))
 
 
-def test_distilled_schedule_pins_mu_independent_of_resolution():
-    low = build_krea2_sigmas(256, 8, distilled=True)
-    high = build_krea2_sigmas(6400, 8, distilled=True)
-    raw_low = build_krea2_sigmas(256, 8, distilled=False)
-
-    torch.testing.assert_close(low, high)
-    assert not torch.equal(low, raw_low)
+def test_dynamic_mu_preserved_as_non_default():
+    """diffusers/musubi 的分辨率感知动态 mu 保留为 opt-in 对照路径。"""
+    dynamic = build_krea2_sigmas(4096, 4, dynamic_mu=True)
+    base = torch.linspace(1.0, 0.0, 5)
+    shift = torch.tensor(0.90625).exp()  # calculate_krea2_mu(4096)
+    expected = shift * base / (1 + (shift - 1) * base)
+    torch.testing.assert_close(dynamic, expected)
+    # 动态路径分辨率相关；与默认固定口径不同
+    assert not torch.equal(dynamic, build_krea2_sigmas(256, 4, dynamic_mu=True))
+    assert not torch.equal(dynamic, build_krea2_sigmas(4096, 4))
 
 
 def test_raw_and_turbo_defaults_and_sampler_validation():

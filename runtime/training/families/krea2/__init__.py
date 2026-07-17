@@ -30,7 +30,7 @@ from training.families.latent_spaces import WAN21_F8C16
 from training.families.spec import (
     LoraOutputSpec,
     ModelSpec,
-    ResolutionAwareShift,
+    ConstantShift,
     SamplingDefaults,
     TextSpec,
 )
@@ -57,12 +57,11 @@ KREA2_SPEC = ModelSpec(
         default_scheduler=KREA2_SCHEDULER,
         default_steps=KREA2_RAW_STEPS,
         default_cfg=KREA2_RAW_GUIDANCE,
-        shift_policy=ResolutionAwareShift(
-            base_shift=KREA2_BASE_SHIFT,
-            max_shift=KREA2_MAX_SHIFT,
-            base_image_seq_len=KREA2_BASE_IMAGE_SEQ_LEN,
-            max_image_seq_len=KREA2_MAX_IMAGE_SEQ_LEN,
-        ),
+        # Comfy parity 口径：固定 mu=1.15（ComfyUI ModelSamplingFlux 同款；
+        # 注意本值是 **mu（exp 前）**，与 Anima ConstantShift 的直接因子语义
+        # 不同——shift_policy 语义归 family 解释）。diffusers 的分辨率感知
+        # 动态 mu 保留为 build_krea2_sigmas(dynamic_mu=True) 非默认路径。
+        shift_policy=ConstantShift(shift=1.15),
     ),
     capabilities=frozenset({"masked_loss", "text_cache"}),
     lora=LoraOutputSpec(prefix="lora_unet", preset_name="krea2_full"),
