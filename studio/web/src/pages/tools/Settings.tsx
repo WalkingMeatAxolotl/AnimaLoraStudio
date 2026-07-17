@@ -12,8 +12,9 @@ import { useDialog } from '../../components/Dialog'
 import LLMTaggerWorkspace from '../../components/LLMTaggerWorkspace'
 import { TagListInput } from '../../components/TagsInput'
 import PageHeader from '../../components/PageHeader'
+import SaveIndicator from '../../components/SaveIndicator'
 import { useToast } from '../../components/Toast'
-import { useSettingsData, type SaveStatus } from '../../lib/SettingsData'
+import { useSettingsData } from '../../lib/SettingsData'
 import { useSettingsDrawer } from '../../lib/SettingsDrawer'
 import {
   DEFAULT_LLM_PRESETS,
@@ -51,29 +52,7 @@ import {
 import { SystemSection } from './settings/SystemSection'
 import WandBWorkspace from './settings/WandBWorkspace'
 
-// 全局保存状态指示（instant-apply 取代旧的顶部保存按钮）。idle 不渲染。
-function SaveIndicator({ status }: { status: SaveStatus }) {
-  const { t } = useTranslation()
-  if (status.state === 'saving') {
-    return <span className="text-xs text-fg-tertiary">{t('settings.saveStatus.saving')}</span>
-  }
-  if (status.state === 'saved') {
-    const time = new Date(status.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-    // key={status.at}：每次保存重挂载 → 重播 flash 动画，连续保存也能一眼看出"又存了"。
-    return (
-      <span key={status.at} className="settings-saved-flash text-xs inline-flex items-center gap-1">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M20 6L9 17l-5-5" />
-        </svg>
-        {t('settings.saveStatus.saved', { time })}
-      </span>
-    )
-  }
-  if (status.state === 'error') {
-    return <span className="text-xs text-err">{t('settings.saveStatus.error')}</span>
-  }
-  return null
-}
+// 保存状态指示已抽到 components/SaveIndicator（Train / Presets 页共用）。
 
 export default function SettingsPage() {
   const { t } = useTranslation()
