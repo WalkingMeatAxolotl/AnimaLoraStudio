@@ -535,8 +535,6 @@ export default function TrainPage() {
       subtitle={t('steps.train.subtitle')}
       actions={
         <>
-          {/* 自动保存指示（与 Settings 页同款）：600ms debounce 落盘后显示时间 */}
-          <SaveIndicator status={saveStatus} />
           {/* 0.17 P-B — 定时训练：延迟 N 小时 / 指定时间，建成 scheduled task。
               样式对齐项目页「导入项目」（btn-ghost btn-sm）。 */}
           <button
@@ -674,6 +672,8 @@ export default function TrainPage() {
             >
               {t('train.saveAsPreset')}
             </button>
+            {/* 自动保存指示（Settings / Presets 页同款）：600ms debounce 落盘后显示时间 */}
+            <SaveIndicator status={saveStatus} />
 
             {/* popover */}
             {pickerOpen && (
