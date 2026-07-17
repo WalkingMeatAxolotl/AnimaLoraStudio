@@ -157,6 +157,9 @@ def test_load_validates_header_before_reading_payload(
         def __exit__(self, *_args) -> None:
             return None
 
+        def metadata(self) -> None:
+            return None
+
         def keys(self):
             return expected.keys()
 
@@ -274,9 +277,9 @@ def test_load_rejects_meta_target_device(tmp_path: Path) -> None:
         )
 
 
-def test_inspect_rejects_fp8_checkpoint_with_actionable_error(tmp_path: Path) -> None:
-    """纯 fp8 cast 权重（社区推理格式）→ 显式报错，不静默 upcast 回 bf16
-    （显存零收益 + 丢精度，A7'/C13）。文案指路 bf16 版本。"""
+def test_inspect_accepts_fp8_checkpoint(tmp_path: Path) -> None:
+    """fp8（纯 cast）是合法 checkpoint 形态——inspect 校验通过（推理与
+    fp8_base 训练都支持，不再有全精度拒绝语义）。"""
     config = _tiny_config()
     state_dict = _state_dict(config)
     fp8_state = {
@@ -285,8 +288,8 @@ def test_inspect_rejects_fp8_checkpoint_with_actionable_error(tmp_path: Path) ->
     checkpoint = tmp_path / "fp8.safetensors"
     _write_checkpoint(checkpoint, fp8_state)
 
-    with pytest.raises(ValueError, match="fp8"):
-        inspect_krea2_checkpoint(checkpoint, config=config)
+    info = inspect_krea2_checkpoint(checkpoint, config=config)
+    assert info.key_count == len(state_dict)
 
 
 def _write_fp8_scaled_checkpoint(path: Path, state_dict, *, with_metadata=True):
@@ -369,12 +372,91 @@ def test_generate_purpose_loads_pure_fp8_cast(tmp_path: Path) -> None:
     torch.testing.assert_close(module(x), expected, rtol=0, atol=0)
 
 
-def test_train_purpose_still_rejects_fp8_scaled(tmp_path: Path) -> None:
-    """训练路径对两种 fp8 形态维持拒绝（梯度需要全精度）。"""
+def test_train_purpose_loads_fp8_scaled_frozen_with_dequant(tmp_path: Path) -> None:
+    """fp8_base 训练：purpose=train 接受 fp8_scaled，权重常驻 fp8 + dequant
+    前向 + 全模型 frozen（底模无梯度，LoRA 参数在 adapter 侧全精度）。"""
     from training.families.krea2.loader import load_krea2_model
 
     config = _tiny_config()
+    reference = _state_dict(config)
     checkpoint = tmp_path / "fp8_scaled.safetensors"
-    _write_fp8_scaled_checkpoint(checkpoint, _state_dict(config))
-    with pytest.raises(ValueError):
-        load_krea2_model(checkpoint, "cpu", torch.bfloat16, config=config)
+    layers = _write_fp8_scaled_checkpoint(checkpoint, reference)
+
+    model = load_krea2_model(checkpoint, "cpu", torch.bfloat16, config=config,
+                             purpose="train")
+    quantized = {
+        name for name, module in model.named_modules()
+        if isinstance(module, torch.nn.Linear)
+        and module.weight.dtype == torch.float8_e4m3fn
+    }
+    assert quantized == set(layers)
+    assert all(not p.requires_grad for p in model.parameters())
+
+
+def test_checkpoint_contains_fp8_probe(tmp_path: Path) -> None:
+    """header 级探测：bf16 → False；fp8 → True；坏路径 → False 不抛。"""
+    from training.families.krea2.loader import checkpoint_contains_fp8
+
+    config = _tiny_config()
+    reference = _state_dict(config)
+    bf16 = tmp_path / "bf16.safetensors"
+    _write_checkpoint(bf16, reference)
+    fp8 = tmp_path / "fp8.safetensors"
+    _write_fp8_scaled_checkpoint(fp8, reference)
+
+    assert checkpoint_contains_fp8(bf16) is False
+    assert checkpoint_contains_fp8(fp8) is True
+    assert checkpoint_contains_fp8(tmp_path / "missing.safetensors") is False
+
+
+# ---------------------------------------------------------------------------
+# 启动期防呆（phases/models._validate_fp8_base）
+# ---------------------------------------------------------------------------
+
+
+def _fp8_ctx(tmp_path: Path, **arg_overrides):
+    """duck-typed TrainingContext：_validate_fp8_base 只读 ctx.args。"""
+    from types import SimpleNamespace
+
+    checkpoint = tmp_path / "fp8_scaled.safetensors"
+    if not checkpoint.exists():
+        _write_fp8_scaled_checkpoint(checkpoint, _state_dict(_tiny_config()))
+    args = SimpleNamespace(
+        transformer_path=str(checkpoint),
+        grad_checkpoint=True,
+        lora_dora=False,
+    )
+    for key, value in arg_overrides.items():
+        setattr(args, key, value)
+    return SimpleNamespace(args=args)
+
+
+def test_validate_fp8_base_passes_with_checkpointing(tmp_path: Path) -> None:
+    from training.phases.models import _validate_fp8_base
+
+    _validate_fp8_base(_fp8_ctx(tmp_path))  # 不抛
+
+
+def test_validate_fp8_base_rejects_no_grad_checkpoint(tmp_path: Path) -> None:
+    """fp8 底模 + 关闭梯度检查点 → dequant 临时权重全量驻留，显存反超
+    bf16——启动期 fail-fast，不等 13GB 加载后才崩。"""
+    from training.phases.models import _validate_fp8_base
+
+    with pytest.raises(RuntimeError, match="grad_checkpoint"):
+        _validate_fp8_base(_fp8_ctx(tmp_path, grad_checkpoint=False))
+
+
+def test_validate_fp8_base_rejects_dora(tmp_path: Path) -> None:
+    from training.phases.models import _validate_fp8_base
+
+    with pytest.raises(RuntimeError, match="DoRA|lora_dora"):
+        _validate_fp8_base(_fp8_ctx(tmp_path, lora_dora=True))
+
+
+def test_validate_fp8_base_noop_for_bf16(tmp_path: Path) -> None:
+    from training.phases.models import _validate_fp8_base
+
+    bf16 = tmp_path / "bf16.safetensors"
+    _write_checkpoint(bf16, _state_dict(_tiny_config()))
+    ctx = _fp8_ctx(tmp_path, transformer_path=str(bf16), grad_checkpoint=False)
+    _validate_fp8_base(ctx)  # bf16 底模不受 fp8 约束

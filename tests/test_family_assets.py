@@ -111,8 +111,10 @@ def test_krea2_catalog_sections_report_raw_turbo_and_text_encoder(tmp_path):
     sections = get_assets("krea2").catalog_sections(tmp_path, cfg)
     assert set(sections) == {"krea2_main", "krea2_text_encoder"}
     main = sections["krea2_main"]
-    assert [v["variant"] for v in main["variants"]] == ["raw", "turbo"]
-    assert [v["purpose"] for v in main["variants"]] == ["training", "inference"]
+    assert [v["variant"] for v in main["variants"]] == ["raw", "raw_fp8", "turbo"]
+    assert [v["purpose"] for v in main["variants"]] == [
+        "training", "training", "inference",
+    ]
     assert main["selected"] == str(custom)
     assert main["custom"] == [{
         "path": str(custom),

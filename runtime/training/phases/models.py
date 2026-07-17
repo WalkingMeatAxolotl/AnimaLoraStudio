@@ -142,11 +142,49 @@ def _defer_dit_for_text_cache(ctx: TrainingContext) -> bool:
     )
 
 
+def _validate_fp8_base(ctx: TrainingContext) -> None:
+    """fp8 底模（fp8_base 训练）的组合校验——fail-fast 于任何大加载之前。
+
+    探测只读 safetensors header（毫秒级），非 fp8 底模零开销直通。目前只有
+    krea2 loader 接受 fp8 checkpoint（Anima loader 自行拒绝），但探测本身
+    族无关。两条硬约束：
+
+    - grad_checkpoint 必须开：fp8 的显存收益依赖重算段释放逐层 dequant 的
+      临时权重；不开则 autograd 全量驻留 264 层 bf16 副本，占用反超 bf16。
+    - DoRA 不支持：lycoris weight_decompose 初始化读底模权重数值（范数），
+      fp8 直接 cast 缺 scale 校正，数值不正确（与推理/merge 拒绝口径一致）。
+    """
+    from training.families.krea2.loader import checkpoint_contains_fp8
+
+    args = ctx.args
+    if not checkpoint_contains_fp8(getattr(args, "transformer_path", "") or ""):
+        return
+    problems = []
+    if not bool(getattr(args, "grad_checkpoint", True)):
+        problems.append(
+            "grad_checkpoint=false：fp8 底模的逐层 dequant 临时权重会被 "
+            "autograd 全量驻留，显存占用反超 bf16。请开启梯度检查点。"
+        )
+    if bool(getattr(args, "lora_dora", False)):
+        problems.append(
+            "lora_dora=true：DoRA 初始化读取底模权重数值，fp8 存储下数值"
+            "不正确。请关闭 DoRA 或改用 bf16 底模。"
+        )
+    if problems:
+        raise RuntimeError(
+            "fp8 底模与当前配置不兼容：\n- " + "\n- ".join(problems)
+        )
+    logger.info(
+        "检测到 fp8 底模：以 fp8_base 语义训练（权重常驻 fp8，前向逐层 dequant）"
+    )
+
+
 def run(ctx: TrainingContext) -> None:
     """Resolve paths and load either the complete stack or the cache-first half."""
     if ctx.family is None:
         ctx.family = resolve_family(ctx.args)
     _resolve_paths(ctx)
+    _validate_fp8_base(ctx)
 
     if _defer_dit_for_text_cache(ctx):
         logger.info(

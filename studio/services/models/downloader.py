@@ -118,7 +118,8 @@ def download_krea2_main(
         on_log(f"✗ 未知 Krea 2 variant {variant!r}")
         return False
     target = krea2_main_target(root, variant)
-    on_log(f"\n📥 Krea 2 [{variant}] (~26.3 GB) → {target}")
+    size_gb = float(info.get("size_estimate", 0)) / 1e9
+    on_log(f"\n📥 Krea 2 [{variant}] (~{size_gb:.1f} GB) → {target}")
     if _sources._source_for("training") == "modelscope":
         return _sources.download_flat_ms(
             str(info["ms_repo"]), str(info["ms_subpath"]), target, on_log=on_log,
