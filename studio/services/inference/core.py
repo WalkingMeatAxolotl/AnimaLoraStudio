@@ -176,6 +176,17 @@ def apply_loras(
 
     from utils.lycoris_adapter import AnimaLycorisAdapter
 
+    # fp8 量化底模走 ComfyUI merge 语义（dequant → 加 delta → stochastic
+    # rounding 回写，seed=层名 CRC32）——lycoris hook 直接注入 fp8 权重会因
+    # dtype 崩或产生与 Comfy 不一致的数值。目前只有 krea2 loader 会产出
+    # fp8 权重（Anima loader 拒绝 fp8）。
+    fp8_merge = False
+    if specs:
+        from training.families.krea2.quant_fp8 import model_has_fp8_layers  # noqa: PLC0415
+
+        fp8_merge = model_has_fp8_layers(model)
+
+    merge_sources: list[tuple[dict, float, str]] = []
     adapters: list[Any] = []
     for spec in specs:
         path = spec.path or ""
@@ -193,6 +204,21 @@ def apply_loras(
                 f"'{meta.model_family}'，当前底模族为 '{family_id}'。"
                 f"请换用同族 LoRA 或切换底模。"
             )
+        if fp8_merge:
+            # merge 是权重级线性操作，与 comfy 一致只认 alpha/dim 缩放——
+            # rs_lora（√rank 缩放）与 DoRA（非线性）在 merge 语义下无法
+            # 与训练语义对齐，提前拒绝
+            if meta.rs_lora or meta.weight_decompose:
+                raise ValueError(
+                    f"fp8 量化底模不支持挂载 rs_lora / DoRA 训练的 LoRA："
+                    f"{Path(path).name}。请改用 bf16 版本底模。"
+                )
+            sd_raw: dict = {}
+            with safe_open(str(path), framework="pt", device="cpu") as f:
+                for k in f.keys():
+                    sd_raw[k] = f.get_tensor(k)
+            merge_sources.append((sd_raw, float(spec.scale), Path(path).name))
+            continue
         from training.families import get_family  # noqa: PLC0415
 
         adapter = AnimaLycorisAdapter(
@@ -230,6 +256,14 @@ def apply_loras(
         )
         adapters.append(adapter)
 
+    if merge_sources:
+        from training.families.krea2.lora_fp8_merge import (  # noqa: PLC0415
+            merge_loras_into_fp8_model,
+        )
+
+        # 单个句柄对应全部 LoRA（merge 一次完成）；daemon 换 LoRA / 变
+        # scale 时 detach() 从备份还原后重 merge
+        return [merge_loras_into_fp8_model(model, merge_sources)]
     return adapters
 
 

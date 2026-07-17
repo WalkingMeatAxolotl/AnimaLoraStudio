@@ -114,9 +114,16 @@ def patch_fp8_linears(
     return patched
 
 
-def model_has_fp8_layers(model: torch.nn.Module) -> bool:
-    """采样/LoRA 路径判断底模是否为 fp8 量化形态。"""
+def model_has_fp8_layers(model: object) -> bool:
+    """采样/LoRA 路径判断底模是否为 fp8 量化形态。
+
+    非 nn.Module（测试 fake / 尚未加载）一律 False——fp8 形态只可能来自
+    真实 loader 产物。
+    """
+    modules = getattr(model, "modules", None)
+    if not callable(modules):
+        return False
     return any(
         isinstance(m, torch.nn.Linear) and m.weight.dtype in _FP8_TORCH_DTYPES
-        for m in model.modules()
+        for m in modules()
     )

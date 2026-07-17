@@ -234,6 +234,17 @@
     convert_old_quants` 与 comfy_kitchen（Comfy-Org，见其 wheel 许可）
     `backends/eager/quantization.py dequantize_per_tensor_fp8`——公式级对照，
     未复制代码结构
+  - `runtime/training/families/krea2/lora_fp8_merge.py` — LoRA×fp8 的 merge
+    回写语义逐位对齐 ComfyUI（GPL-3.0）：merge 编排与备份/还原来自
+    `comfy/model_patcher.py patch_weight_to_device`；delta 计算顺序（fp32
+    中间、`weight += ((strength*alpha)*diff).type(dtype)`）来自
+    `comfy/weight_adapter/lokr.py`、`comfy/weight_adapter/lora.py` 与
+    `comfy/lora.py calculate_weight`；requantize（scale=amax/448 + fp16 防
+    下溢 clamp）来自 `comfy/quant_ops.py`；stochastic rounding（Generator
+    RNG 形态 + 尾数随机进位公式）来自 `comfy/float.py stochastic_rounding`
+    与 comfy_kitchen `backends/eager/quantization.py calc_mantissa /
+    stochastic_rounding_fp8`；seed 的 CRC-32 口径来自 `comfy/utils.py
+    string_to_seed`（以 zlib.crc32 等价实现）——公式级对照，未复制代码结构
 
 实现按本项目 timestep sampler protocol / 纯 torch modeling 边界适配；具体派生关系见各文件头。
 

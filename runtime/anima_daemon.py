@@ -384,6 +384,9 @@ class ModelCache:
             and len(specs) == len(self.adapters) == len(self.last_lora_metas) == len(current_metas)
             and [_lora_topology(m) for m in current_metas]
             == [_lora_topology(m) for m in self.last_lora_metas]
+            # fp8 merge 句柄无常驻 network 权重可热换，必须 detach（还原
+            # 原始 fp8 权重）后重 merge
+            and all(getattr(a, "supports_hot_reload", True) for a in self.adapters)
         )
         if can_hot_reload:
             try:
@@ -486,6 +489,8 @@ CACHE = ModelCache()
 
 def _set_lora_multiplier(adapter: Any, scale: float) -> None:
     if adapter.network is None:
+        # 含 fp8 merge 句柄（network=None）：scale 已烘进权重，non-scale 轴
+        # 的逐格重置调用安全跳过（lora_scale 轴在 _run_xy 入口已拒绝）
         return
     adapter.network.multiplier = float(scale)
     for lora in getattr(adapter.network, "loras", []):
@@ -821,6 +826,22 @@ def _run_xy(
     x_values = x_spec["values"]
     y_values = y_spec["values"] if y_spec else [None]
     distilled: bool = bool(cfg.get("distilled", False))
+
+    # fp8 底模的 LoRA 是 merge 进权重的（无常驻 network），lora_scale 轴的
+    # multiplier 原地设值会静默 no-op——每格出一样的图。逐格重 merge（13GB
+    # dequant/requant）当前不提供；lora_ckpt 轴走 CACHE.apply_loras 重注入
+    # （detach 还原 + 重 merge）不受影响。
+    if any(
+        spec is not None and spec.get("axis") == "lora_scale"
+        for spec in (x_spec, y_spec)
+    ):
+        from training.families.krea2.quant_fp8 import model_has_fp8_layers
+
+        if CACHE.model is not None and model_has_fp8_layers(CACHE.model):
+            raise ValueError(
+                "fp8 量化底模不支持 XY 的 LoRA 强度轴（LoRA 已合并进权重，"
+                "逐格调整需重新合并）。请改用 bf16 版本底模跑该轴。"
+            )
 
     if base_seed == 0:
         base_seed = random.randint(0, 2**31 - 1)

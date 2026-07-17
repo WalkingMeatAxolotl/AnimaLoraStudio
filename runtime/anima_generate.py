@@ -344,6 +344,17 @@ def _run_xy_matrix(
             "CLI runner anima_generate.py 不支持热切换 LoRA 文件"
         )
 
+    # fp8 底模的 LoRA 是 merge 进权重的（无常驻 network），lora_scale 轴的
+    # multiplier 原地设值会静默 no-op——每格出一样的图（daemon 侧同款拒绝）
+    if x_spec.get("axis") == "lora_scale" or (y_spec and y_spec.get("axis") == "lora_scale"):
+        from training.families.krea2.quant_fp8 import model_has_fp8_layers
+
+        if model_has_fp8_layers(model):
+            raise ValueError(
+                "fp8 量化底模不支持 XY 的 LoRA 强度轴（LoRA 已合并进权重，"
+                "逐格调整需重新合并）。请改用 bf16 版本底模跑该轴。"
+            )
+
     if base_seed == 0:
         base_seed = random.randint(0, 2**31 - 1)
         logger.info(f"XY 共享种子（cfg.seed=0 随机化）: {base_seed}")
