@@ -575,6 +575,9 @@ class GenerateConfig(BaseModel):
     - `vram_policy`：测试出图显存策略（krea2 生效）。`'auto'`（默认）按空闲
       显存决定文本编码器与 DiT 是否让位；`'save_vram'` 强制顺序化（峰值最
       低，每图多几秒搬运）；`'performance'` 全部常驻显存（峰值最高、零搬运）。
+    - `te_precision`：测试出图文本编码器权重精度（krea2 生效）。`'fp16'`
+      （默认）原精度约 8.9GB；`'fp8'` 加载后量化约 5GB，计算精度不变
+      （fp32），文本嵌入有轻微量化噪声。
     """
     preview_every_n_steps: int = 3
     attention_backend: str = "auto"
@@ -582,6 +585,7 @@ class GenerateConfig(BaseModel):
     idle_timeout_minutes: int = 10
     save_test_images: bool = False
     vram_policy: str = "auto"
+    te_precision: str = "fp16"
 
 
 class SystemConfig(BaseModel):

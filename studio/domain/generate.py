@@ -109,6 +109,11 @@ class GenerateConfig(BaseModel):
                     "save_vram=强制顺序化，峰值最低（16GB 卡可跑 fp8）、每图多几秒 CPU↔GPU 搬运；"
                     "performance=全部常驻显存，峰值最高、零搬运",
     )
+    te_precision: Literal["fp16", "fp8"] = Field(
+        "fp16",
+        description="文本编码器权重精度（krea2 生效）：fp16=原精度（约 8.9 GB）；"
+                    "fp8=加载后量化（约 5 GB），计算精度不变（fp32），文本嵌入有轻微量化噪声",
+    )
 
     @model_validator(mode="after")
     def _validate_sampler_family(self) -> "GenerateConfig":

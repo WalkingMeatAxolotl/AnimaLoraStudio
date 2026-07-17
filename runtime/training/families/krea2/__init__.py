@@ -48,8 +48,10 @@ logger = logging.getLogger(__name__)
 
 
 _GIB = 1024 ** 3
-#: TE 上卡所需：fp16 权重 8.9GB + embed 表逐层 cast fp32 瞬时 ~1.5GB + 缓冲
+#: TE 上卡所需：fp16 权重 8.9GB + embed 表 cast fp32 瞬时 ~1.5GB + 缓冲
 _TE_LOAD_NEED_BYTES = int(11 * _GIB)
+#: te_precision=fp8：Linear 权重 ~5GB + embed 仍 fp16（cast fp32 瞬时不变）
+_TE_LOAD_NEED_BYTES_FP8 = int(7 * _GIB)
 
 
 def _cuda_free_bytes(device) -> int | None:
@@ -71,15 +73,16 @@ def _sampling_headroom_bytes(height: int, width: int) -> int:
     return int((2.0 + 3.0 * area_ratio) * _GIB)
 
 
-def _should_yield_dit(policy: str, device) -> bool:
+def _should_yield_dit(policy: str, device,
+                      need_bytes: int = _TE_LOAD_NEED_BYTES) -> bool:
     """编码前 TE 需要搬上 GPU 时，DiT 是否先撤到 CPU（comfy free_memory
-    的「装不下才让位」语义）。"""
+    的「装不下才让位」语义）。``need_bytes`` 按 TE 精度取值（fp8 减半）。"""
     if policy == "performance":
         return False
     if policy == "save_vram":
         return True
     free = _cuda_free_bytes(device)
-    return free is not None and free < _TE_LOAD_NEED_BYTES
+    return free is not None and free < need_bytes
 
 
 def _should_offload_te(policy: str, device, height: int, width: int,
@@ -154,18 +157,21 @@ class Krea2Family:
     def load_text(self, text_encoder_path, device, dtype, *,
                   t5_tokenizer_path: str = "", comfy_qwen: bool = False,
                   t5_fast: bool = False, purpose: str = "train",
-                  cache_enabled: bool = True):
+                  cache_enabled: bool = True, te_quantize: bool = False):
         if purpose == "generate":
             # Comfy parity（sd.py:258）：生成场景 TE 固定 fp16 存储 + fp32
             # compute（text_encoder_dtype 默认 fp16 + set_model_compute_dtype
-            # fp32），忽略调用方 dtype、无旋钮——与 TE offload 同款固定行为。
-            # 训练侧维持调用方 dtype（bf16）不动。
+            # fp32），忽略调用方 dtype——与 TE offload 同款固定行为。
+            # te_quantize（te_precision=fp8）：加载后逐 Linear 量化 fp8
+            # （权重 8.9→~5GB），compute 仍 fp32。训练侧维持调用方 dtype
+            # （bf16）不动、不量化（两段式下 TE 不在训练峰值路径）。
             return load_krea2_text_stack(
                 text_encoder_path,
                 device=device,
                 dtype=torch.float16,
                 compute_dtype=torch.float32,
                 cache_enabled=cache_enabled,
+                te_quantize=te_quantize,
             )
         return load_krea2_text_stack(
             text_encoder_path,
@@ -234,7 +240,12 @@ class Krea2Family:
             need_te_move = not te_resident and not (
                 callable(cached) and cached(needed)
             )
-            if need_te_move and _should_yield_dit(vram_policy, device):
+            te_need = (
+                _TE_LOAD_NEED_BYTES_FP8
+                if getattr(text, "te_quantize", False)
+                else _TE_LOAD_NEED_BYTES
+            )
+            if need_te_move and _should_yield_dit(vram_policy, device, te_need):
                 logger.info("krea2 显存编排：编码前 DiT 让位到 CPU")
                 model.to("cpu")
                 if torch.cuda.is_available():

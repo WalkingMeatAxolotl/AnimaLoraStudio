@@ -209,6 +209,7 @@ class ModelCache:
         self.vae_precision: Optional[str] = None
         self.text_encoder_backend: Optional[str] = None
         self.t5_tokenizer_backend: Optional[str] = None
+        self.te_precision: Optional[str] = None
         self.device: Optional[str] = None
         self.dtype: Any = None
         self.lora_dtype: Any = torch.float32
@@ -240,6 +241,7 @@ class ModelCache:
         vae_precision = cfg.get("vae_precision", precision)
         text_encoder_backend = cfg.get("text_encoder_backend", "hf")
         t5_tokenizer_backend = cfg.get("t5_tokenizer_backend", "slow")
+        te_precision = str(cfg.get("te_precision") or "fp16")
         transformer_path = cfg["transformer_path"]
         vae_path = cfg["vae_path"]
         text_encoder_path = cfg["text_encoder_path"]
@@ -267,6 +269,7 @@ class ModelCache:
             or self.vae_precision != vae_precision
             or self.text_encoder_backend != text_encoder_backend
             or self.t5_tokenizer_backend != t5_tokenizer_backend
+            or self.te_precision != te_precision
         )
 
         if needs_reload:
@@ -282,6 +285,7 @@ class ModelCache:
                 vae_precision=vae_precision,
                 text_encoder_backend=text_encoder_backend,
                 t5_tokenizer_backend=t5_tokenizer_backend,
+                te_precision=te_precision,
             )
             _emit_evt("loaded")
 
@@ -298,6 +302,7 @@ class ModelCache:
         vae_precision: str,
         text_encoder_backend: str,
         t5_tokenizer_backend: str,
+        te_precision: str = "fp16",
     ) -> None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         dtype = _torch_dtype_from_precision(precision)
@@ -332,6 +337,7 @@ class ModelCache:
             t5_fast=t5_tokenizer_backend == "fast",
             purpose="generate",
             cache_enabled=False,
+            te_quantize=te_precision == "fp8",
         )
 
         self.family_id = family_id
@@ -348,6 +354,7 @@ class ModelCache:
         self.vae_precision = vae_precision
         self.text_encoder_backend = text_encoder_backend
         self.t5_tokenizer_backend = t5_tokenizer_backend
+        self.te_precision = te_precision
         self.device = device
         self.dtype = dtype
         self.lora_dtype = torch.float32
@@ -417,10 +424,14 @@ class ModelCache:
                 self.text_encoder_path, self.t5_tokenizer_path,
                 self.attention_backend, self.mixed_precision,
                 self.vae_precision, self.text_encoder_backend,
-                self.t5_tokenizer_backend,
+                self.t5_tokenizer_backend, self.te_precision,
             )
+            # family_id 在 unload() 里被清空，必须先存——漏传曾是隐性
+            # TypeError（_load 的必需参数，P4-4 引入时本路径漏改）
+            saved_family = self.family_id or "anima"
             self.unload()
             self._load(
+                family_id=saved_family,
                 transformer_path=saved_paths[0],
                 vae_path=saved_paths[1],
                 text_encoder_path=saved_paths[2],
@@ -430,6 +441,7 @@ class ModelCache:
                 vae_precision=saved_paths[6] or saved_paths[5],
                 text_encoder_backend=saved_paths[7] or "hf",
                 t5_tokenizer_backend=saved_paths[8] or "slow",
+                te_precision=saved_paths[9] or "fp16",
             )
             _emit_evt("loaded")
         self.last_lora_specs = []

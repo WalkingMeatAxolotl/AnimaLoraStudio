@@ -21,7 +21,8 @@ dequant 路径无差别——解析后忽略。
 前向 patch 思路来自 kohya-ss/musubi-tuner 的 ``apply_fp8_monkey_patch``
 （Apache-2.0，见 THIRD_PARTY_NOTICES）；dequant 公式对齐 Comfy（GPL-3.0）。
 
-仅推理：patch 后权重 requires_grad=False，训练路径的 loader 依旧拒绝 fp8。
+patch 后权重 requires_grad=False；训练（fp8_base）与推理共用本 patch，
+底模恒 frozen，梯度只流经 LoRA 参数。
 """
 
 from __future__ import annotations
@@ -73,12 +74,18 @@ def parse_quantization_metadata(metadata: dict | None) -> dict[str, dict]:
 
 def _fp8_linear_forward(self, input: torch.Tensor) -> torch.Tensor:
     # ComfyUI parity：目标 dtype = input.dtype（cast_bias_weight :286-290）；
-    # scale 先转 compute dtype 再乘（ck eager dequantize_per_tensor_fp8）
+    # scale 先转 compute dtype 再乘（ck eager dequantize_per_tensor_fp8）。
+    # bias 同 cast_bias_weight cast 到 input.dtype——DiT 场景 bias 本就是
+    # input dtype（no-op 等价，parity 不变）；TE fp8（fp32 compute）场景
+    # bias 是 fp16 存储，必须 cast。
     weight = self.weight.to(input.dtype)
     scale = getattr(self, "weight_scale", None)
     if scale is not None:
         weight = weight * scale.to(input.dtype)
-    return torch.nn.functional.linear(input, weight, self.bias)
+    bias = self.bias
+    if bias is not None and bias.dtype != input.dtype:
+        bias = bias.to(input.dtype)
+    return torch.nn.functional.linear(input, weight, bias)
 
 
 def patch_fp8_linears(
@@ -112,6 +119,57 @@ def patch_fp8_linears(
     if patched:
         logger.info("Krea2 fp8 推理：%d 个 Linear 挂 dequant 前向", patched)
     return patched
+
+
+def quantize_linears_to_fp8(
+    model: object,
+    *,
+    fp8_dtype: torch.dtype = torch.float8_e4m3fn,
+) -> int:
+    """Load-time rescale：逐 Linear 量化成 per-tensor scaled fp8 并挂
+    dequant 前向；返回量化层数。
+
+    用途：TE（Qwen3-VL）fp8——官方 fp8 文件是 comfy 单文件布局，与
+    transformers HF 目录 loader 不兼容，改为 bf16/fp16 加载后现场量化
+    （docs/todo/krea2-vram-orchestration.md「后续：TE fp8」）。口径与
+    DiT fp8_scaled 同款：scale = amax/448 F32 标量，dequant =
+    ``W.to(input.dtype) * scale.to(input.dtype)``；舍入用 RTN（一次性
+    load-time 量化，非 merge 回写，无 SR/seed 语义）。
+
+    Embedding / Norm 不量化（comfy te fp8 同款范围）。已是 fp8 的层跳过
+    （幂等）；非 nn.Module（测试 fake / tuple 文本栈）返回 0。
+    """
+    modules = getattr(model, "modules", None)
+    if not callable(modules):
+        return 0
+    count = 0
+    for module in modules():
+        if not isinstance(module, torch.nn.Linear):
+            continue
+        weight = module.weight
+        if weight.dtype in _FP8_TORCH_DTYPES:
+            continue
+        with torch.no_grad():
+            wf = weight.detach().float()
+            scale = wf.abs().amax() / torch.finfo(fp8_dtype).max
+            if not torch.isfinite(scale) or scale <= 0:
+                scale = torch.ones((), device=wf.device)
+            qdata = (
+                (wf / scale)
+                .clamp(torch.finfo(fp8_dtype).min, torch.finfo(fp8_dtype).max)
+                .to(fp8_dtype)
+            )
+        module.weight = torch.nn.Parameter(qdata, requires_grad=False)
+        module.register_buffer(
+            "weight_scale",
+            scale.to(device=qdata.device, dtype=torch.float32),
+            persistent=False,
+        )
+        module.forward = MethodType(_fp8_linear_forward, module)
+        count += 1
+    if count:
+        logger.info("load-time fp8 量化：%d 个 Linear（per-tensor scaled）", count)
+    return count
 
 
 def model_has_fp8_layers(model: object) -> bool:

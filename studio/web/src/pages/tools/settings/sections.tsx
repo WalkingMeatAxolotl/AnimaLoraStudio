@@ -1469,6 +1469,20 @@ export function VramPolicySection({
           <option value="performance">{t('settings.vramPolicy.optPerformance')}</option>
         </select>
       </SettingsField>
+      <SettingsField
+        label={t('settings.vramPolicy.teLabel')}
+        desc={t('settings.vramPolicy.teDesc')}
+        helpTooltip={<p>{t('settings.vramPolicy.teHelp')}</p>}
+      >
+        <select
+          value={draft.generate.te_precision ?? 'fp16'}
+          onChange={(e) => update('generate', 'te_precision', e.target.value as 'fp16' | 'fp8')}
+          className={`${textInputClass} max-w-40`}
+        >
+          <option value="fp16">{t('settings.vramPolicy.teOptFp16')}</option>
+          <option value="fp8">{t('settings.vramPolicy.teOptFp8')}</option>
+        </select>
+      </SettingsField>
     </SettingsSection>
   )
 }

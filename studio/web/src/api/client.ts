@@ -531,6 +531,9 @@ export interface GenerateSecretsConfig {
    * 是否让位；save_vram=强制顺序化（峰值最低，每图多几秒搬运）；
    * performance=全部常驻显存（峰值最高、零搬运）。 */
   vram_policy: 'auto' | 'save_vram' | 'performance'
+  /** 测试出图文本编码器权重精度（krea2 生效）。fp16（默认）原精度约 8.9GB；
+   * fp8 加载后量化约 5GB，计算精度不变（fp32），嵌入有轻微量化噪声。 */
+  te_precision: 'fp16' | 'fp8'
   /** 开后每次出图自动落盘到 studio_data/test/<date>/{single,xy}/image_N.png。
    * 默认关；compare 模式始终不落盘。 */
   save_test_images: boolean
