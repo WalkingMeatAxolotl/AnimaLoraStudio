@@ -659,7 +659,7 @@ export interface AnimaVaeCatalog extends ModelFileStatus {
 }
 
 export interface ModelDirCatalog {
-  id: 'qwen3' | 't5_tokenizer' | 'krea2_text_encoder'
+  id: 'qwen3' | 't5_tokenizer' | 'krea2_text_encoder' | 'krea2_text_encoder_fp8'
   name: string
   description: string
   repo: string
@@ -782,6 +782,7 @@ export interface ModelsCatalog {
   t5_tokenizer: ModelDirCatalog
   krea2_main: FamilyMainCatalog
   krea2_text_encoder: ModelDirCatalog
+  krea2_text_encoder_fp8: ModelDirCatalog
   wd14: WD14Catalog
   cltagger: CLTaggerCatalog
   eval_metrics?: EvalMetricsCatalog
@@ -1373,6 +1374,9 @@ export interface GenerateRequest {
   /** 本次出图临时选用的底模（官方 variant key 或本地 custom 路径）；
    *  省略 → server 用 Settings 里该族的 selected。 */
   base_model?: string
+  /** 本次出图的文本编码器（krea2 生效）：省略/default = HF bf16 目录；
+   *  fp8 = 官方 fp8_scaled 单文件（需先在下载中心下载）。 */
+  text_encoder?: 'default' | 'fp8'
   negative_prompt?: string
   width?: number
   height?: number

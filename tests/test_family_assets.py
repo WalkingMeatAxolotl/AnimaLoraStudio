@@ -109,7 +109,15 @@ def test_krea2_catalog_sections_report_raw_turbo_and_text_encoder(tmp_path):
         custom={"krea2": [str(custom)]},
     )
     sections = get_assets("krea2").catalog_sections(tmp_path, cfg)
-    assert set(sections) == {"krea2_main", "krea2_text_encoder"}
+    assert set(sections) == {
+        "krea2_main", "krea2_text_encoder", "krea2_text_encoder_fp8",
+    }
+    fp8_te = sections["krea2_text_encoder_fp8"]
+    assert fp8_te["repo"] == "Comfy-Org/Krea-2"
+    assert any(
+        f["name"].endswith(".safetensors") for f in fp8_te["files"]
+    )
+    assert any(f["name"] == "config.json" for f in fp8_te["files"])
     main = sections["krea2_main"]
     assert [v["variant"] for v in main["variants"]] == ["raw", "raw_fp8", "turbo"]
     assert [v["purpose"] for v in main["variants"]] == [

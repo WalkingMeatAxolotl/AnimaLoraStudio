@@ -136,9 +136,15 @@ def patch_manual_cast(model: torch.nn.Module, compute_dtype: torch.dtype) -> int
     transformers 实现里 fp32 激活流叠 torch type promotion 与 Comfy 的
     weight-cast 语义数值一致。返回 patch 的模块数。
     """
+    from training.families.krea2.quant_fp8 import _FP8_TORCH_DTYPES  # noqa: PLC0415
+
     patched = 0
     for module in model.modules():
         if isinstance(module, torch.nn.Linear):
+            if module.weight.dtype in _FP8_TORCH_DTYPES:
+                # fp8_scaled 层已挂 dequant 前向（cast 到 input.dtype + 乘
+                # scale = manual_cast 的 fp8 版）；覆盖会丢 scale
+                continue
             module.forward = MethodType(_cast_linear_forward, module)
             patched += 1
         elif isinstance(module, torch.nn.Embedding):
@@ -151,6 +157,97 @@ def patch_manual_cast(model: torch.nn.Module, compute_dtype: torch.dtype) -> int
             patched, compute_dtype,
         )
     return patched
+
+
+#: comfy 单文件 TE 的 text 侧键前缀 → HF Qwen3VLForConditionalGeneration 键。
+#: comfy 打包（Comfy-Org qwen3vl_4b_fp8_scaled）把 language_model 直挂
+#: ``model.``；visual 侧（model.visual.*）两边一致零映射。
+_COMFY_TE_TEXT_PREFIXES = ("model.layers.", "model.embed_tokens.", "model.norm.")
+
+
+def _comfy_te_single_file(model_path: Path) -> Path | None:
+    """目录是 comfy 单文件 TE 布局时返回权重文件；HF 分片布局返回 None。"""
+    if (model_path / "model.safetensors.index.json").exists():
+        return None
+    candidates = sorted(model_path.glob("*.safetensors"))
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _load_comfy_single_file_te(
+    model_path: Path,
+    weights_file: Path,
+    device: torch.device,
+    dtype: torch.dtype,
+):
+    """加载 comfy 单文件布局的 Qwen3-VL（官方 fp8_scaled 形态）。
+
+    config/tokenizer 小文件仍来自目录（下载中心 fp8 条目一并下载）；权重键
+    做一条前缀映射（text 侧补 ``language_model.``），``comfy_quant`` 配置
+    blob 丢弃，``weight_scale`` F32 标量收集后经 patch_fp8_linears 挂
+    dequant 前向（与 DiT fp8_scaled 完全同款）。fp8 权重原样常驻；非量化
+    键（embed/norm/visual）cast 到存储 dtype。lm_head 与 embed tied——
+    文件不含该键，load 后 tie_weights() 重绑。
+    """
+    from safetensors import safe_open
+    from transformers import AutoConfig, Qwen3VLForConditionalGeneration
+
+    from training.families.krea2.quant_fp8 import (  # noqa: PLC0415
+        _FP8_TORCH_DTYPES,
+        patch_fp8_linears,
+    )
+
+    logger.info("加载 Krea2 Qwen3-VL（comfy 单文件形态）：%s", weights_file)
+    config = AutoConfig.from_pretrained(str(model_path), local_files_only=True)
+    with torch.device("meta"):
+        model = Qwen3VLForConditionalGeneration(config)
+
+    state_dict: dict[str, torch.Tensor] = {}
+    scales: dict[str, torch.Tensor] = {}
+    with safe_open(str(weights_file), framework="pt", device="cpu") as handle:
+        for key in handle.keys():
+            if key.endswith(".comfy_quant"):
+                continue
+            mapped = key
+            for prefix in _COMFY_TE_TEXT_PREFIXES:
+                if key.startswith(prefix):
+                    mapped = "model.language_model." + key[len("model."):]
+                    break
+            tensor = handle.get_tensor(key)
+            if mapped.endswith(".weight_scale"):
+                layer = mapped[: -len(".weight_scale")]
+                scales[layer] = tensor.to(device=device)
+                continue
+            if tensor.dtype in _FP8_TORCH_DTYPES:
+                state_dict[mapped] = tensor.to(device=device)
+            else:
+                state_dict[mapped] = tensor.to(device=device, dtype=dtype)
+
+    result = model.load_state_dict(state_dict, strict=False, assign=True)
+    unexpected = list(result.unexpected_keys)
+    missing = [k for k in result.missing_keys if k != "lm_head.weight"]
+    if missing or unexpected:
+        raise ValueError(
+            f"Qwen3-VL comfy 单文件键不匹配：缺少 {missing[:5]}，"
+            f"多出 {unexpected[:5]}"
+        )
+    # lm_head 与 embed tied（tie_word_embeddings）——文件不含该键；
+    # transformers 的 tie_weights() 对 meta 构造 + assign 加载不重绑，
+    # 手动指回 embed（零拷贝）。
+    out_emb = model.get_output_embeddings()
+    if out_emb is not None and out_emb.weight.device.type == "meta":
+        out_emb.weight = model.get_input_embeddings().weight
+    leftover_meta = [
+        name for name, param in model.named_parameters()
+        if param.device.type == "meta"
+    ]
+    if leftover_meta:
+        raise ValueError(
+            f"Qwen3-VL 单文件加载后仍有未物化参数：{leftover_meta[:5]}"
+        )
+    if scales:
+        patch_fp8_linears(model, scales)
+        logger.info("Qwen3-VL fp8_scaled：%d 层挂 dequant 前向", len(scales))
+    return model.eval().requires_grad_(False)
 
 
 def _default_model_loader(
@@ -168,6 +265,9 @@ def _default_model_loader(
 
     if not model_path.is_dir():
         raise ValueError(f"Krea2 文本编码器必须是 Hugging Face 模型目录：{model_path}")
+    single = _comfy_te_single_file(model_path)
+    if single is not None:
+        return _load_comfy_single_file_te(model_path, single, device, dtype)
     logger.info("加载 Krea2 Qwen3-VL 文本编码器：%s", model_path)
     model = Qwen3VLForConditionalGeneration.from_pretrained(
         str(model_path),

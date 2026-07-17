@@ -27,6 +27,9 @@ class GenerateRequest(BaseModel):
     # 本次出图临时选用的底模（官方 variant key 或注册的本地 custom 路径）；
     # None → 用 Settings 里该族 selected。只换 transformer 权重。
     base_model: Optional[str] = None
+    # 本次出图选用的文本编码器（krea2 生效）："default"/None → HF bf16 目录；
+    # "fp8" → 官方 fp8_scaled 单文件目录（下载中心 Qwen3-VL fp8 条目）。
+    text_encoder: Optional[Literal["default", "fp8"]] = None
     # commit C：attention_backend 默认从 secrets.generate.attention_backend 读，
     # 前端 Generate 页不再发这个字段；保留 Optional 兼容老客户端 / 临时覆盖。
     attention_backend: Optional[AttentionBackend] = None

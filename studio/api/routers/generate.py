@@ -171,6 +171,19 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
     from ...services.models.families import get_assets
 
     model_paths = _resolve_model_paths(body.base_model, family=body.model_family)
+    # TE 选择（krea2）：fp8 → 官方 fp8_scaled 单文件目录；未下载给可操作报错
+    if body.text_encoder == "fp8" and body.model_family == "krea2":
+        from ...services.models.families.krea2 import qwen3_vl_fp8_dir
+        from ...services.models.paths import models_root
+
+        fp8_dir = qwen3_vl_fp8_dir(models_root())
+        if not (fp8_dir / "config.json").exists():
+            raise HTTPException(
+                status_code=409,
+                detail="Qwen3-VL fp8 文本编码器未下载——请到 设置 → 模型下载 "
+                       "下载「Krea 2 · Qwen3-VL fp8」后重试。",
+            )
+        model_paths["text_encoder_path"] = str(fp8_dir)
     # Turbo 检测（A4/C9）：官方蒸馏 variant → daemon 走 8 步/guidance 0/固定 mu
     # 的采样时刻表默认；custom 权重无 purpose 元数据按非蒸馏处理
     distilled = bool(get_assets(body.model_family).is_distilled_path(

@@ -78,6 +78,27 @@ export function useBaseModelOptions(family: BaseModelFamily = 'anima'): {
   }
 }
 
+/** Qwen3-VL fp8 TE 目录是否就绪（权重 + config 都已下载）——决定测试页
+ *  文本编码器下拉里 fp8 选项的可选性（未就绪禁用并提示去下载中心）。 */
+export function useKrea2TeFp8Ready(): boolean {
+  const [ready, setReady] = useState(false)
+  useEffect(() => {
+    let alive = true
+    api.getModelsCatalog().then((c) => {
+      if (!alive) return
+      const files = c.krea2_text_encoder_fp8?.files ?? []
+      const existing = new Set(files.filter((f) => f.exists).map((f) => f.name))
+      setReady(
+        files.some((f) => f.name.endsWith('.safetensors') && f.exists)
+        && existing.has('config.json')
+        && existing.has('tokenizer.json'),
+      )
+    }).catch(() => {})
+    return () => { alive = false }
+  }, [])
+  return ready
+}
+
 function basename(p: string): string {
   const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
   return i >= 0 ? p.slice(i + 1) : p

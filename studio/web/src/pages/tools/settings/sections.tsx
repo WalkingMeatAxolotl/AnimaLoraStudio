@@ -89,7 +89,7 @@ const FAMILY_MODEL_SECTIONS = [
     titleKey: 'settings.krea2Models',
     mainKey: 'krea2_main' as const,
     fallbackSelected: 'raw',
-    encoderIds: ['krea2_text_encoder'] as const,
+    encoderIds: ['krea2_text_encoder', 'krea2_text_encoder_fp8'] as const,
     downloadKeyPrefixes: ['krea2_main', 'krea2_text_encoder'],
   },
 ]

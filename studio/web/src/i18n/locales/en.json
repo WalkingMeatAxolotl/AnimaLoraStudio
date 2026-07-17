@@ -1182,6 +1182,7 @@
       "t5Tokenizer": "3 tokenizer files including spiece.model (no weights)",
       "krea2Main": "Raw training base / Turbo inference base (~26.3 GB each)",
       "krea2TextEncoder": "Natural-language text encoder (~8.89 GB)",
+      "krea2TextEncoderFp8": "Official fp8-quantized text encoder (~5.24 GB) — optional for test generation, roughly halves weight VRAM",
       "wd14": "SmilingWolf ONNX tagging models",
       "cltagger": "cella110n CLTagger ONNX"
     },
@@ -1514,6 +1515,10 @@
     "seedHint": "Specific number → reproducible; 0 → random each time",
     "baseModel": "Base model",
     "baseModelHint": "Defaults to the main model selected in Settings; switch to another downloaded version for this run",
+    "textEncoder": "Text encoder",
+    "textEncoderDefault": "Default (bf16, ~8.9 GB)",
+    "textEncoderFp8": "fp8 (~5 GB, official quantization)",
+    "textEncoderFp8NotDownloaded": "fp8 — not downloaded (Settings → Models)",
     "swapSizeTitle": "Swap width and height (landscape ↔ portrait)",
     "cancelCurrentTitle": "Cancel current task",
     "sharedGpu": "Shares GPU with training",

@@ -260,6 +260,7 @@ export const MODEL_DESCRIPTION_KEYS: Record<string, string> = {
   t5_tokenizer: 'settings.modelDescriptions.t5Tokenizer',
   krea2_main: 'settings.modelDescriptions.krea2Main',
   krea2_text_encoder: 'settings.modelDescriptions.krea2TextEncoder',
+  krea2_text_encoder_fp8: 'settings.modelDescriptions.krea2TextEncoderFp8',
   wd14: 'settings.modelDescriptions.wd14',
   cltagger: 'settings.modelDescriptions.cltagger',
 }

@@ -1182,6 +1182,7 @@
       "t5Tokenizer": "spiece.model 等 3 个 tokenizer 文件（不含权重）",
       "krea2Main": "Raw 训练底模 / Turbo 推理底模（各约 26.3 GB）",
       "krea2TextEncoder": "自然语言文本编码器（约 8.89 GB）",
+      "krea2TextEncoderFp8": "官方 fp8 量化文本编码器（约 5.24 GB）——测试出图可选，权重显存约减半",
       "wd14": "SmilingWolf 系列 ONNX 打标模型",
       "cltagger": "cella110n CLTagger ONNX"
     },
@@ -1514,6 +1515,10 @@
     "seedHint": "填具体数字 → 固定可复现；0 → 每次随机",
     "baseModel": "底模",
     "baseModelHint": "默认用设置页选定的主模型；可临时换成其它已下载的版本出图",
+    "textEncoder": "文本编码器",
+    "textEncoderDefault": "默认（bf16，约 8.9 GB）",
+    "textEncoderFp8": "fp8（约 5 GB，官方量化）",
+    "textEncoderFp8NotDownloaded": "fp8 —— 未下载（设置 → 模型下载）",
     "swapSizeTitle": "交换宽高（横版 ↔ 竖版）",
     "cancelCurrentTitle": "取消当前任务",
     "sharedGpu": "与训练共享 GPU",

@@ -223,6 +223,14 @@ const emptyModelsCatalog = {
     target_dir: '/tmp/anima/text_encoders/Qwen_Qwen3-VL-4B-Instruct',
     files: [],
   },
+  krea2_text_encoder_fp8: {
+    id: 'krea2_text_encoder_fp8',
+    name: 'Krea 2 · Qwen3-VL fp8',
+    description: 'test',
+    repo: 'Comfy-Org/Krea-2',
+    target_dir: '/tmp/anima/text_encoders/qwen3vl-4b-fp8',
+    files: [],
+  },
   wd14: {
     id: 'wd14',
     name: 'WD14',

@@ -71,6 +71,9 @@ export interface GenerateParamsSnapshot {
   /** 当时选用的底模（官方 variant key 或本地 custom 路径）；null/缺省 = 跟随
    *  设置页默认底模。老快照无此字段，回填到 null（沿用默认）。 */
   base_model?: string | null
+  /** 当时选用的文本编码器（krea2）：'fp8' = 官方 fp8_scaled；缺省 = 默认
+   *  bf16。展示用；老快照无此字段。 */
+  text_encoder?: 'default' | 'fp8'
   /** xy 模式下 daemon 端强制 1，仅 single 有意义 */
   count: number
   seed: number

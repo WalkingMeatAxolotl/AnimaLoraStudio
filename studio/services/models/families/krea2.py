@@ -67,6 +67,17 @@ QWEN3_VL_FILES = [
     "video_preprocessor_config.json",
     "vocab.json",
 ]
+# Comfy-Org 官方 fp8_scaled 单文件 TE（5.24GB vs bf16 8.88GB）。权重键是
+# HF 命名（text 侧差一个 language_model. 前缀，loader 做映射）；config /
+# tokenizer 等小文件单文件里没有，从 Qwen 官方 repo 一并下到同目录
+# （= QWEN3_VL_FILES 去掉三份权重分片/索引）。
+QWEN3_VL_FP8_REPO = "Comfy-Org/Krea-2"
+QWEN3_VL_FP8_SUBPATH = "text_encoders/qwen3vl_4b_fp8_scaled.safetensors"
+QWEN3_VL_FP8_FILE = "qwen3vl_4b_fp8_scaled.safetensors"
+QWEN3_VL_FP8_SMALL_FILES = [
+    name for name in QWEN3_VL_FILES
+    if not name.startswith("model-") and name != "model.safetensors.index.json"
+]
 
 
 def krea2_main_target(root: Path, variant: str) -> Path:
@@ -82,6 +93,11 @@ def krea2_main_target(root: Path, variant: str) -> Path:
 def qwen3_vl_dir(root: Path) -> Path:
     """Krea 2 文本编码器目录；与 Anima 的 legacy 扁平目录隔离。"""
     return root / "text_encoders" / safe_dir_name(QWEN3_VL_REPO)
+
+
+def qwen3_vl_fp8_dir(root: Path) -> Path:
+    """官方 fp8_scaled 单文件 TE 的目录（含 config/tokenizer 小文件）。"""
+    return root / "text_encoders" / "qwen3vl-4b-fp8"
 
 
 def selected_krea2_variant() -> str:
@@ -211,6 +227,7 @@ def catalog_sections(root: Path, models_cfg: Any) -> dict[str, Any]:
         })
 
     text_dir = qwen3_vl_dir(root)
+    fp8_dir = qwen3_vl_fp8_dir(root)
     return {
         "krea2_main": {
             "id": "krea2_main",
@@ -236,6 +253,17 @@ def catalog_sections(root: Path, models_cfg: Any) -> dict[str, Any]:
             "files": [
                 {"name": filename, **_file_status(text_dir / filename)}
                 for filename in QWEN3_VL_FILES
+            ],
+        },
+        "krea2_text_encoder_fp8": {
+            "id": "krea2_text_encoder_fp8",
+            "name": "Krea 2 · Qwen3-VL fp8",
+            "description": "官方 fp8 量化文本编码器（约 5.24 GB，测试出图可选）",
+            "repo": QWEN3_VL_FP8_REPO,
+            "target_dir": str(fp8_dir),
+            "files": [
+                {"name": filename, **_file_status(fp8_dir / filename)}
+                for filename in [QWEN3_VL_FP8_FILE, *QWEN3_VL_FP8_SMALL_FILES]
             ],
         },
     }

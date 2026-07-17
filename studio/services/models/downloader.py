@@ -34,9 +34,14 @@ from .families.krea2 import (
     KREA2_VARIANTS,
     LATEST_KREA2,
     QWEN3_VL_FILES,
+    QWEN3_VL_FP8_FILE,
+    QWEN3_VL_FP8_REPO,
+    QWEN3_VL_FP8_SMALL_FILES,
+    QWEN3_VL_FP8_SUBPATH,
     QWEN3_VL_REPO,
     krea2_main_target,
     qwen3_vl_dir,
+    qwen3_vl_fp8_dir,
 )
 from .paths import (
     CLTAGGER_VERSIONS,
@@ -153,6 +158,32 @@ def download_qwen3_vl(
                 QWEN3_VL_REPO, filename, target, on_log=on_log,
             )
         if not downloaded:
+            ok = False
+    return ok
+
+
+def download_qwen3_vl_fp8(
+    root: Path, *, on_log: Callable[[str], None] = print
+) -> bool:
+    """下载官方 fp8_scaled 单文件 TE + config/tokenizer 小文件到独立目录。
+
+    权重来自 Comfy-Org/Krea-2（HF 与 ModelScope 同 repo 布局）；小文件来自
+    Qwen 官方 repo（单文件里没有，loader 需要 config 建结构、tokenizer
+    编码）。
+    """
+    target_dir = qwen3_vl_fp8_dir(root)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    use_ms = _sources._source_for("training") == "modelscope"
+    on_log(f"\n📥 Krea 2 文本编码器 Qwen3-VL fp8 (~5.24 GB) → {target_dir}")
+    download = _sources.download_flat_ms if use_ms else _sources.download_flat
+    ok = download(
+        QWEN3_VL_FP8_REPO, QWEN3_VL_FP8_SUBPATH,
+        target_dir / QWEN3_VL_FP8_FILE, on_log=on_log,
+    )
+    for filename in QWEN3_VL_FP8_SMALL_FILES:
+        if not download(
+            QWEN3_VL_REPO, filename, target_dir / filename, on_log=on_log,
+        ):
             ok = False
     return ok
 
@@ -565,6 +596,12 @@ def trigger(model_id: str, variant: Optional[str] = None) -> str:
         key = "krea2_text_encoder"
         start_download_async(
             key, lambda log: download_qwen3_vl(root, on_log=log)
+        )
+        return key
+    if model_id == "krea2_text_encoder_fp8":
+        key = "krea2_text_encoder_fp8"
+        start_download_async(
+            key, lambda log: download_qwen3_vl_fp8(root, on_log=log)
         )
         return key
     if model_id == "qwen3":
