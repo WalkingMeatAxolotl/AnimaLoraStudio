@@ -41,6 +41,16 @@ const inputStyle: React.CSSProperties = {
   color: 'var(--fg-primary)',
 }
 
+// disabled 灰显：行内 inputStyle 指定了 background/color，浏览器默认的
+// disabled 外观被盖掉 —— input/textarea 必须显式叠加（checkbox 的
+// opacity-60 wrapper / select 的原生灰显不受此影响）。
+const disabledInputStyle: React.CSSProperties = {
+  ...inputStyle, opacity: 0.55, cursor: 'not-allowed',
+}
+
+const fieldStyle = (disabled: boolean): React.CSSProperties =>
+  disabled ? disabledInputStyle : inputStyle
+
 const FieldHint = ({ children }: { children: React.ReactNode }) => (
   <span className="ml-2 text-[11px] text-warn align-middle">{children}</span>
 )
@@ -259,7 +269,7 @@ function TextareaField({
         value={text}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
-        className="input input-mono resize-none overflow-hidden" style={inputStyle}
+        className="input input-mono resize-none overflow-hidden" style={fieldStyle(disabled)}
       />
       {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
     </div>
@@ -300,7 +310,7 @@ function StringListField({
         }}
         onBlur={() => setRaw(parse(raw).join('\n'))}
         disabled={disabled}
-        className="input input-mono resize-none overflow-hidden" style={inputStyle}
+        className="input input-mono resize-none overflow-hidden" style={fieldStyle(disabled)}
       />
       {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
     </div>
@@ -373,7 +383,7 @@ function JsonCodeField({
         onBlur={commit}
         disabled={disabled}
         className="input input-mono"
-        style={inputStyle}
+        style={fieldStyle(disabled)}
       />
       {error && <div className="text-xs text-err mt-1">{error}</div>}
       {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
@@ -443,7 +453,7 @@ function IntListField({
           }
         }}
         disabled={disabled}
-        className="input input-mono" style={inputStyle}
+        className="input input-mono" style={fieldStyle(disabled)}
         placeholder={placeholder}
       />
       {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
@@ -520,7 +530,7 @@ function NumberField({
           }
         }}
         disabled={disabled}
-        className="input input-mono" style={inputStyle}
+        className="input input-mono" style={fieldStyle(disabled)}
       />
       {help && <div className="text-xs text-fg-tertiary mt-1">{help}</div>}
     </div>
@@ -572,7 +582,7 @@ function PathStringField({
           value={text}
           onChange={(e) => onChange(e.target.value)}
           disabled={disabled}
-          className={'input' + (kind === 'path' ? ' input-mono' : '')} style={inputStyle}
+          className={'input' + (kind === 'path' ? ' input-mono' : '')} style={fieldStyle(disabled)}
         />
         {kind === 'path' && (
           <button

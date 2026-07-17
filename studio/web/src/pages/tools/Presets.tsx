@@ -10,6 +10,8 @@ import {
 import ConfigSkeleton from '../../components/ConfigSkeleton'
 import { useDialog } from '../../components/Dialog'
 import PathPicker from '../../components/PathPicker'
+import SaveIndicator from '../../components/SaveIndicator'
+import type { SaveStatus } from '../../lib/SettingsData'
 import SchemaForm, { visibleSchemaGroups } from '../../components/SchemaForm'
 import SchemaSectionIndex from '../../components/SchemaSectionIndex'
 import { useToast } from '../../components/Toast'
@@ -58,6 +60,10 @@ export default function PresetsPage() {
 
   // 已保存快照，用于 dirty 判定
   const savedJsonRef = useRef<string | null>(null)
+  // savedJsonRef 更新不触发渲染 —— 自动保存成功后 bump 让 dirty memo 重算
+  const [savedTick, setSavedTick] = useState(0)
+  /** header 自动保存指示（Settings / Train 页同款）。 */
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>({ state: 'idle' })
   const [droppedFields, setDroppedFields] = useState<string[]>([])
   const [defaultedFields, setDefaultedFields] = useState<string[]>([])
 
@@ -219,8 +225,62 @@ export default function PresetsPage() {
   const dirty = useMemo(() => {
     if (!config) return false
     return JSON.stringify(config) !== savedJsonRef.current
-  }, [config])
+    // savedTick：自动保存成功只更新 ref，靠 tick 触发重算
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config, savedTick])
   const hasAnyChange = dirty || descDirty
+
+  // ── auto-save（已有 preset;与 Train/Settings 页统一,刀 2 UX 收尾）──
+  // config / 描述变化 → 600ms 没新改动就落盘。新建模式没有名字,仍走「创建」按钮。
+  useEffect(() => {
+    if (isNew || !selected || !config) return
+    if (!dirty && !descDirty) return
+    const name = selected
+    const cfg = config
+    const timer = setTimeout(() => {
+      void (async () => {
+        setSaveStatus({ state: 'saving' })
+        try {
+          await api.savePreset(name, cfg)
+          if (descDraft) {
+            const next = { ...descriptions, [name]: descDraft }
+            setDescriptions(next); savePresetDescriptions(next)
+          } else if (descriptions[name]) {
+            const { [name]: _, ...rest } = descriptions
+            setDescriptions(rest); savePresetDescriptions(rest)
+          }
+          savedJsonRef.current = JSON.stringify(cfg)
+          setSavedTick((n) => n + 1)
+          setDescDirty(false)
+          // savePreset 全量重写 yaml（validate + prune）—— 兼容横幅信息已过期
+          setDroppedFields([])
+          setDefaultedFields([])
+          setSaveStatus({ state: 'saved', at: Date.now() })
+          refreshList()
+        } catch (e) {
+          setSaveStatus({ state: 'error', error: String(e) })
+          toast(String(e), 'error')
+        }
+      })()
+    }, 600)
+    return () => clearTimeout(timer)
+    // descriptions 故意排除：保存回调 setDescriptions 后 descDirty 已 false，重跑即返回
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config, descDraft, dirty, descDirty, isNew, selected])
+
+  // 切换 preset / 卸载时把上一个 preset 未落盘的编辑 flush 出去（fire-and-forget，
+  // 与 Train 页卸载 flush 同款；cleanup 时 configRef 还是旧 preset 的内容）。
+  const configFlushRef = useRef<ConfigData | null>(null)
+  useEffect(() => { configFlushRef.current = config }, [config])
+  useEffect(() => {
+    const name = selected
+    return () => {
+      const cur = configFlushRef.current
+      if (!name || !cur) return
+      if (JSON.stringify(cur) === savedJsonRef.current) return
+      void api.savePreset(name, cur).catch(() => {})
+    }
+  }, [selected])
 
   const filteredPresets = useMemo(
     () => presets.filter((p) => !pickerSearch || p.name.toLowerCase().includes(pickerSearch.toLowerCase())),
@@ -308,42 +368,32 @@ export default function PresetsPage() {
   }, [pickerOpen])
 
   // ── 操作 ──
+  // 仅新建模式可达（已有 preset 走自动保存,「保存」按钮只在 isNew 渲染）
   const handleSave = async () => {
-    const name = isNew ? newName.trim() : selected
+    const name = newName.trim()
     if (!name) {
       setNewNameError(t('presets.nameRequired'))
       newNameInputRef.current?.focus()
       return
     }
     if (!config) return
-    if (isNew) {
-      if (!PRESET_NAME_RE.test(name)) { setNewNameError(t('presets.nameInvalid')); return }
-      if (presets.find((p) => p.name === name)) { setNewNameError(t('presets.nameExists')); return }
-    }
+    if (!PRESET_NAME_RE.test(name)) { setNewNameError(t('presets.nameInvalid')); return }
+    if (presets.find((p) => p.name === name)) { setNewNameError(t('presets.nameExists')); return }
     setBusy(true)
     try {
       await api.savePreset(name, config)
       if (descDraft) {
         const next = { ...descriptions, [name]: descDraft }
         setDescriptions(next); savePresetDescriptions(next)
-      } else if (descriptions[name]) {
-        const { [name]: _, ...rest } = descriptions
-        setDescriptions(rest); savePresetDescriptions(rest)
       }
       savedJsonRef.current = JSON.stringify(config)
       setDescDirty(false)
-      // savePreset 全量重写 yaml（validate + prune），磁盘上不再有旧字段 ——
-      // 兼容横幅的信息已过期，清掉。
       setDroppedFields([])
       setDefaultedFields([])
-      if (isNew) {
-        setSelected(name)
-        setNewName('')
-        setNewNameError('')
-        toast(t('presets.created', { name }), 'success')
-      } else {
-        toast(t('presets.saved'), 'success')
-      }
+      setSelected(name)
+      setNewName('')
+      setNewNameError('')
+      toast(t('presets.created', { name }), 'success')
       refreshList()
     } catch (e) { toast(String(e), 'error') }
     finally { setBusy(false) }
@@ -501,11 +551,8 @@ export default function PresetsPage() {
 
   const onImportClick = () => fileInputRef.current?.click()
 
-  const saveDisabled =
-    busy
-    || !config
-    || (isNew && !newName.trim())
-    || (!isNew && !hasAnyChange)
+  // 「创建」按钮仅新建模式渲染（已有 preset 是自动保存,无手动保存按钮）
+  const saveDisabled = busy || !config || !newName.trim()
 
   // ── 渲染 ──
   return (
@@ -539,15 +586,19 @@ export default function PresetsPage() {
           <span className="text-fg-tertiary text-md">▾</span>
         </button>
 
-        {/* 状态指示 */}
+        {/* 状态指示：新建模式显示「新建中」圆点;已有 preset 走自动保存,
+            与 Settings / Train 页同款 SaveIndicator */}
         <div className="flex items-center gap-2 min-w-0">
-          <span className={[
-            'inline-block w-2 h-2 rounded-full shrink-0',
-            hasAnyChange ? 'bg-warn' : isNew ? 'bg-accent' : 'bg-ok',
-          ].join(' ')} />
-          <span className="text-sm text-fg-secondary whitespace-nowrap">
-            {isNew ? t('presets.creating') : hasAnyChange ? t('presets.unsaved') : t('presets.savedStatus')}
-          </span>
+          {isNew ? (
+            <>
+              <span className="inline-block w-2 h-2 rounded-full shrink-0 bg-accent" />
+              <span className="text-sm text-fg-secondary whitespace-nowrap">
+                {t('presets.creating')}
+              </span>
+            </>
+          ) : (
+            <SaveIndicator status={saveStatus} />
+          )}
         </div>
 
         <span style={{ flex: 1 }} />
@@ -587,15 +638,17 @@ export default function PresetsPage() {
           </>
         )}
 
-        {/* 主操作 */}
-        <button
-          onClick={handleSave}
-          disabled={saveDisabled}
-          className="btn btn-primary btn-sm inline-flex items-center justify-center"
-          style={{ minWidth: 0, paddingLeft: 12, paddingRight: 12 }}
-        >
-          {t('common.save')}
-        </button>
+        {/* 主操作：仅新建模式需要（已有 preset 自动保存） */}
+        {isNew && (
+          <button
+            onClick={handleSave}
+            disabled={saveDisabled}
+            className="btn btn-primary btn-sm inline-flex items-center justify-center"
+            style={{ minWidth: 0, paddingLeft: 12, paddingRight: 12 }}
+          >
+            {t('common.save')}
+          </button>
+        )}
 
         {/* popover */}
         {pickerOpen && (
@@ -756,11 +809,10 @@ export default function PresetsPage() {
               <ConfigSkeleton variant="flat" label={t('presets.loadingConfig')} />
             </div>
           ) : (
-            <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5">
-              <div className="flex items-center gap-2 mb-2.5">
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-fg-tertiary shrink-0" />
-                <span className="caption uppercase tracking-[0.06em] text-xs">{t('presets.trainingParams')}</span>
-                <span className="flex-1" />
+            // 不再套「训练参数」标题容器（与 Train 页一致:SchemaForm 每个分组
+            // 自带 section 背景,外层再包一层 bg-surface 会让分组背景无法区分）
+            <section>
+              <div className="flex items-center justify-end mb-2.5">
                 <div className="inline-flex rounded-md border border-subtle overflow-hidden text-xs">
                   <button
                     type="button"
