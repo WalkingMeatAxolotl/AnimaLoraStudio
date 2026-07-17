@@ -43,6 +43,8 @@ def test_is_distilled_path_by_official_variant():
     krea2 = get_assets("krea2")
     assert krea2.is_distilled_path("G:/models/diffusion_models/krea2-turbo-bf16.safetensors")
     assert not krea2.is_distilled_path("G:/models/diffusion_models/krea2-raw-bf16.safetensors")
+    # fp8 Raw 是非蒸馏训练/推理底模——绝不能被 purpose 逻辑误判成 Turbo
+    assert not krea2.is_distilled_path("G:/models/diffusion_models/krea2-raw-fp8-scaled.safetensors")
     # custom 权重无 purpose 元数据 → 非蒸馏（A1：不加白名单，参数用户控制）
     assert not krea2.is_distilled_path("G:/models/my-community-turbo-mix.safetensors")
     assert not krea2.is_distilled_path("")

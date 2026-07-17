@@ -70,3 +70,23 @@ CPU → 采样。三个问题：
 
 daemon/family.sample_image 编排触点 + TE 初始 device + Krea2TextStack 在线
 LRU + 配置三件套（schema/Settings/i18n）+ 测试（判据分支/缓存命中/三档）。
+
+## 后续：TE（Qwen3-VL）fp8——生成侧专属（2026-07-17 拍板）
+
+TE 权重 fp8 存储（8.9GB → ~5GB），compute 维持 fp32（P-2 parity 不动）：
+
+- **收益面在生成侧**：32GB 同驻余量 +3.7GB（大分辨率更稳）；16GB 编排的
+  TE 让位/上卡搬运量近半——「内存吞吐压力」主要在这。encode 频率经在线
+  LRU 后本就低，吞吐无感。
+- **训练侧不引入**：两段式加载下 TE 只在 text cache 阶段上卡（DiT 未加载，
+  阶段峰值 ~9GB 远低于 DiT 阶段），fp8 省的显存不在训练峰值路径上；且
+  fp8 编码嵌入与 bf16 有微差，引入需给文本缓存指纹加 TE 精度维度——为
+  零收益付复杂度，不做。
+- **实现路径选 load-time rescale**（与 DiT 相反）：官方
+  `qwen3vl_4b_fp8_scaled.safetensors`（5.24GB）是 comfy 单文件布局，而
+  我们 TE loader 是 transformers HF 目录 `from_pretrained`（tokenizer 也
+  依赖该目录，comfy 单文件无 tokenizer）——接官方文件要写 comfy→HF 键
+  映射 + 混合加载，成本高。改为 HF bf16 目录照常加载后逐 Linear cast
+  fp8 + per-tensor scale，复用 `patch_fp8_linears` 机制（该函数本就族/
+  模型无关）。Embedding 表保持高精度不量化（comfy 同款范围）。
+- 时机：16GB 编排真机验证时一起做（收益最大场景），或作为独立小刀。

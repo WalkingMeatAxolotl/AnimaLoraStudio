@@ -23,6 +23,19 @@ KREA2_VARIANTS: dict[str, dict[str, Any]] = {
         "purpose": "training",
         "size_estimate": 26_300_000_000,
     },
+    # Comfy-Org 官方量化管线的 fp8_scaled Raw：训练（fp8_base，权重显存
+    # 25.6→13.1GB，24GB 卡可训）与推理（fp8 出图链）双用途。purpose 维持
+    # training——is_distilled_path 按 purpose=inference 判 Turbo 蒸馏，
+    # 本文件是 Raw（非蒸馏）不能标 inference。
+    "raw_fp8": {
+        "repo": "Comfy-Org/Krea-2",
+        "subpath": "diffusion_models/krea2_raw_fp8_scaled.safetensors",
+        "ms_repo": "Comfy-Org/Krea-2",
+        "ms_subpath": "diffusion_models/krea2_raw_fp8_scaled.safetensors",
+        "filename": "krea2-raw-fp8-scaled.safetensors",
+        "purpose": "training",
+        "size_estimate": 13_100_000_000,
+    },
     "turbo": {
         "repo": "krea/Krea-2-Turbo",
         "subpath": "turbo.safetensors",
@@ -202,7 +215,10 @@ def catalog_sections(root: Path, models_cfg: Any) -> dict[str, Any]:
         "krea2_main": {
             "id": "krea2_main",
             "name": "Krea 2 主模型",
-            "description": "Raw 训练底模 / Turbo 推理底模（各约 26.3 GB）",
+            "description": (
+                "Raw 训练底模（bf16 26.3 GB；fp8 13.1 GB，训练/出图权重"
+                "显存减半）/ Turbo 推理底模（26.3 GB）"
+            ),
             "repo": "krea/Krea-2-{Raw,Turbo}",
             "variants": variants,
             "custom": custom_models,

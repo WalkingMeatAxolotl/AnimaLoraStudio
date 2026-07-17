@@ -43,9 +43,9 @@ _FLOAT_DTYPES = {
     "F32",
     "F64",
 }
-# fp8 是运行时量化技术（load-time 量化 + Linear forward patch + scale buffer），
-# 不是 checkpoint 交换格式——社区的「纯 fp8 cast」权重若静默 upcast 回 bf16，
-# 显存零收益还丢精度（A7'/C13）。显式报错并指路 bf16 版本。
+# fp8 权重原样常驻 + Linear forward 逐层 dequant（quant_fp8）。推理与训练
+# （fp8_base：底模 frozen，LoRA 参数全精度，kohya/musubi 生态标准做法）都
+# 支持——绝不静默 upcast 回 bf16（显存零收益丢精度，A7'/C13）。
 _FP8_DTYPES = {"F8_E4M3", "F8_E5M2"}
 
 
@@ -140,7 +140,8 @@ def _inspect(
         all_source_keys = list(handle.keys())
         prefix = _choose_prefix(all_source_keys, expected_keys)
         # fp8_scaled 的 per-layer scale 键：归一后形如 blocks.N.xxx.weight_scale。
-        # 只在 allow_fp8 时剥离；训练路径它们会照旧落进「多出」报错。
+        # 只在 allow_fp8 时剥离；显式 allow_fp8=False 的调用面它们照旧落进
+        # 「多出」报错。
         scale_to_source: dict[str, str] = {}
         source_keys = []
         for source_key in all_source_keys:
@@ -187,8 +188,7 @@ def _inspect(
         if fp8_keys and not allow_fp8:
             raise ValueError(
                 f"Krea2 checkpoint 含 fp8 参数（{len(fp8_keys)} 个，如 "
-                f"{fp8_keys[0]}）。fp8 权重仅推理（测试出图）支持；训练需要"
-                f"全精度梯度——请下载 bf16 版本权重（官方 Raw/Turbo 均为 bf16）。"
+                f"{fp8_keys[0]}），但调用方要求全精度权重。"
             )
         # fp8_scaled 一致性：有 scale 的层权重必须是 fp8；metadata 声明的层
         # 若既无 fp8 权重也无 scale 属异常文件
@@ -238,9 +238,30 @@ def inspect_krea2_checkpoint(
     *,
     config: Krea2Config = KREA2_CONFIG,
 ) -> Krea2CheckpointInfo:
-    """Validate keys and shapes from the safetensors header without reading payloads."""
-    info, _, _ = _inspect(path, config)
+    """Validate keys and shapes from the safetensors header without reading payloads.
+
+    bf16 与 fp8（scaled / 纯 cast）两种形态都是合法 checkpoint。
+    """
+    info, _, _ = _inspect(path, config, allow_fp8=True)
     return info
+
+
+def checkpoint_contains_fp8(path: str | Path) -> bool:
+    """轻量探测：safetensors header 里是否有 fp8 权重（不读 payload）。
+
+    供训练启动期防呆用（fp8 底模 + grad_checkpoint 关闭等组合要 fail-fast，
+    不能等 13GB 加载完才崩）。非 safetensors / 读失败返回 False——真正的
+    结构校验由 loader 兜底。
+    """
+    try:
+        checkpoint = _checkpoint_path(path)
+        with safe_open(str(checkpoint), framework="pt", device="cpu") as handle:
+            return any(
+                handle.get_slice(key).get_dtype() in _FP8_DTYPES
+                for key in handle.keys()
+            )
+    except Exception:
+        return False
 
 
 def load_krea2_model(
@@ -253,16 +274,19 @@ def load_krea2_model(
 ) -> SingleStreamDiT:
     """Strict-load a single-file Krea2 checkpoint into a frozen meta-created model.
 
-    ``purpose="generate"``（推理路径）允许 fp8 权重（纯 cast 与 fp8_scaled 两种
-    形态）：fp8 张量原样常驻显存，Linear 前向逐层 dequant 到 compute dtype
-    （ComfyUI parity，见 quant_fp8）。训练路径（默认）维持 bf16 全精度拒绝语义。
+    fp8 权重（纯 cast 与 fp8_scaled 两种形态）推理与训练都接受：fp8 张量
+    原样常驻显存，Linear 前向逐层 dequant 到 compute dtype（ComfyUI parity，
+    见 quant_fp8）。训练即 kohya/musubi 生态的 fp8_base 语义——底模 frozen
+    无梯度，LoRA 参数全精度；显存收益依赖 grad checkpointing（dequant 临时
+    权重随重算段释放），该约束由 trainer 启动期校验强制（phases/models）。
+    ``purpose`` 当前不影响加载行为，保留作调用面语义标注。
     """
     if dtype not in {torch.float16, torch.bfloat16, torch.float32, torch.float64}:
         raise ValueError(f"Krea2 loader 不支持 dtype={dtype}")
     target_device = torch.device(device)
     if target_device.type == "meta":
         raise ValueError("Krea2 loader 的目标 device 不能是 meta")
-    allow_fp8 = purpose != "train"
+    allow_fp8 = True
 
     model, expected_shapes = _expected_state(config)
     _, normalized_to_source, scale_to_source = _inspect(
