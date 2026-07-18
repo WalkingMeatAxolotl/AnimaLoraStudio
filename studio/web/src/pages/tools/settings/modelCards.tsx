@@ -7,6 +7,7 @@ import {
   type ModelsCatalog,
 } from '../../../api/client'
 import { InfoButton } from '../../../components/InfoButton'
+import { useSettingsData } from '../../../lib/SettingsData'
 import { fmtBytes, MODEL_DESCRIPTION_KEYS, textInputClass, translatedCatalogText } from './constants'
 import { SettingsField, SettingsInput } from './fields'
 
@@ -169,6 +170,7 @@ export function WD14ModelCard({
   t: TFunction
 }) {
   const [advOpen, setAdvOpen] = useState(false)
+  const { deleteAsset } = useSettingsData()
   const wd14 = catalog?.wd14
   const wd14Description = translatedCatalogText(MODEL_DESCRIPTION_KEYS, 'wd14', wd14?.description, t)
   if (!wd14) {
@@ -205,6 +207,7 @@ export function WD14ModelCard({
               <DownloadButton
                 exists={v.exists} status={dl?.status} busy={busy.has(key)}
                 onClick={() => void start('wd14', v.model_id)}
+                onDelete={() => void deleteAsset('wd14', v.model_id, v.model_id)}
               />
             </li>
           )
@@ -239,6 +242,7 @@ export function EvalMetricModelCard({
   t: TFunction
 }) {
   const [advOpen, setAdvOpen] = useState(false)
+  const { deleteAsset } = useSettingsData()
   const em = catalog?.eval_metrics
   if (!em) {
     return <p className="text-fg-tertiary text-xs">{t('settings.loadingModelCatalog')}</p>
@@ -260,6 +264,7 @@ export function EvalMetricModelCard({
         <DownloadButton
           exists={exists} status={dl?.status} busy={busy.has(key)}
           onClick={() => void start(dlId, modelId)}
+          onDelete={() => void deleteAsset(dlId, modelId, modelId)}
         />
       </div>
       <button type="button" onClick={() => setAdvOpen(!advOpen)}
@@ -297,6 +302,7 @@ export function CLTaggerModelCard({
   t: TFunction
 }) {
   const [advOpen, setAdvOpen] = useState(false)
+  const { deleteAsset } = useSettingsData()
   const cl = catalog?.cltagger
   const clDescription = translatedCatalogText(MODEL_DESCRIPTION_KEYS, 'cltagger', cl?.description, t)
   if (!cl) {
@@ -343,6 +349,7 @@ export function CLTaggerModelCard({
               <DownloadButton
                 exists={v.exists} status={dl?.status} busy={busy.has(key)}
                 onClick={() => void start('cltagger', v.label)}
+                onDelete={() => void deleteAsset('cltagger', v.label, v.label)}
               />
             </li>
           )
@@ -412,29 +419,34 @@ export function StatusLabel({ bg, fg, text, pulse }: { bg: string; fg: string; t
   )
 }
 
+/** 已下载资产的「删除」按钮（下载的逆操作：用户先删再下载）。 */
+export function DeleteAssetButton({ onClick }: { onClick: () => void }) {
+  const { t } = useTranslation()
+  return (
+    <button onClick={onClick} className="btn btn-ghost btn-sm min-w-[5rem] justify-center"
+      title={t('settings.deleteAssetTitle')}>
+      🗑 {t('settings.deleteAsset')}
+    </button>
+  )
+}
+
 export function DownloadButton({ exists, status, busy, onClick, onDelete }: {
   exists: boolean; status?: ModelDownloadStatus['status']; busy: boolean; onClick: () => void
-  /** 提供时已下载状态的 action 变成「删除」（用户先删再下载）；未提供
-   *  保持「重下」（打标 / 放大器区尚未接删除 API）。 */
-  onDelete?: () => void
+  /** 已下载状态的 action：删除（用户先删再下载）。 */
+  onDelete: () => void
 }) {
   const { t } = useTranslation()
   const running = status === 'running' || busy
   if (running) {
     return <button disabled className="btn btn-secondary btn-sm min-w-[5rem] justify-center" style={{ opacity: 0.5 }}>...</button>
   }
-  if (exists && onDelete) {
-    return (
-      <button onClick={onDelete} className="btn btn-ghost btn-sm min-w-[5rem] justify-center"
-        title={t('settings.deleteAssetTitle')}>
-        🗑 {t('settings.deleteAsset')}
-      </button>
-    )
+  if (exists) {
+    return <DeleteAssetButton onClick={onDelete} />
   }
   return (
     <button onClick={onClick} className="btn btn-secondary btn-sm min-w-[5rem] justify-center"
-      title={exists ? t('settings.redownloadTitle') : t('common.download')}>
-      {exists ? t('settings.redownload') : t('settings.downloadAction')}
+      title={t('common.download')}>
+      {t('settings.downloadAction')}
     </button>
   )
 }

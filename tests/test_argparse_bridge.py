@@ -227,7 +227,7 @@ def test_training_config_builds_without_collisions() -> None:
     assert hasattr(ns, "config")
     # 抽样字段都能解析出正确类型
     assert ns.lora_rank == 32
-    assert ns.lora_type == "lokr"
+    assert ns.lora_type == "lora"
     assert ns.cache_latents is True
     assert ns.vae_cache_batch_size == 0
     assert ns.sample_prompts == []

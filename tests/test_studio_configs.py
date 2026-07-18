@@ -256,7 +256,7 @@ def test_yaml_on_disk_is_human_readable(client: TestClient, presets_dir: Path) -
     assert "transformer_path:" in text
     assert not text.startswith("{")
     parsed = yaml.safe_load(text)
-    assert parsed["lora_type"] == "lokr"
+    assert parsed["lora_type"] == "lora"
 
 
 # ---------------------------------------------------------------------------
