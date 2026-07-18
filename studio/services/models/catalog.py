@@ -80,10 +80,12 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
     for _assets in FAMILY_ASSETS.values():
         family_sections.update(_assets.catalog_sections(r, models_cfg))
 
-    cl_cfg = secrets.load().cltagger
-    wd14_cfg = secrets.load().wd14
-    eval_cfg = secrets.load().eval_metrics
-    src_cfg = secrets.load().download_sources
+    _secrets = secrets.load()
+    cl_cfg = _secrets.cltagger
+    wd14_cfg = _secrets.wd14
+    eval_cfg = _secrets.eval_metrics
+    src_cfg = _secrets.download_sources
+    source_cfg = _secrets.model_sources
 
     # CLIP / DINO eval 指标模型：各一行 variant，整目录有 config.json 即"已下载"。
     eval_variants = []
@@ -166,6 +168,102 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
             "size": total_size,
             "files": files,
         })
+
+    # ── 统一来源候选行（docs/design/model-source-unification.md §6）────────
+    #
+    # 每 domain 一个平铺列表：内置 preset + 用户候选（download / local），能力
+    # 位（removable / deletable）由这里拼好，前端泛化候选卡不再各自判断。
+    # 本键当前覆盖 wd14 / eval_*；upscaler / 主模型族 / cltagger 在各自区块
+    # 迁移时并入。
+
+    def _source_row(
+        *, kind: str, value: str, download_id: Optional[str],
+        exists: bool, size: int, is_current: bool,
+        label: Optional[str] = None, files: Optional[list] = None,
+        size_estimate: int = 0, extra: Optional[dict] = None,
+    ) -> dict[str, Any]:
+        return {
+            "kind": kind,               # preset | download | local
+            "value": value,             # 写进选中值字段的值（repo id / 绝对路径）
+            "label": label or value,
+            # 触发下载：POST /api/models/download {model_id: download_id,
+            # variant: value}；status key = f"{download_id}:{value}"。local 无。
+            "download_id": download_id,
+            "status_key": f"{download_id}:{value}" if download_id else None,
+            "exists": exists,
+            "size": size,
+            "files": files,
+            "size_estimate": size_estimate,
+            "is_current": is_current,
+            "removable": kind != "preset",   # 内置不可移除（保护默认）
+            "deletable": kind != "local",    # 本地文件永不从 UI 删除
+            "extra": extra or {},
+        }
+
+    def _wd14_row(kind: str, value: str) -> dict[str, Any]:
+        target = wd14_target_dir(r, value)
+        files = [{"name": f, **_file_status(target / f)} for f in WD14_FILES]
+        return _source_row(
+            kind=kind, value=value,
+            download_id="wd14" if kind != "local" else None,
+            exists=all(f["exists"] for f in files),
+            size=sum(f["size"] for f in files),
+            files=files,
+            is_current=value == wd14_cfg.model_id,
+        )
+
+    def _eval_row(domain: str, em_kind: str, kind: str, value: str) -> dict[str, Any]:
+        if em_kind == "ccip":
+            target = ccip_model_dir(r, value)
+            exists = all((target / f).exists() for f in _CCIP_FILES)
+        else:
+            target = eval_model_target_dir(r, em_kind, value)
+            exists = (target / "config.json").exists()
+        size = (
+            sum(f.stat().st_size for f in target.rglob("*") if f.is_file())
+            if target.exists() else 0
+        )
+        current = {
+            "eval_clip": eval_cfg.clip_model_name,
+            "eval_dino": eval_cfg.dino_model_name,
+            "eval_ccip": eval_cfg.ccip_model_name,
+        }[domain]
+        return _source_row(
+            kind=kind, value=value,
+            download_id=domain if kind != "local" else None,
+            exists=exists, size=size,
+            size_estimate=_EVAL_SIZE_ESTIMATES.get(value, 0),
+            is_current=value == current,
+        )
+
+    def _user_rows(domain: str, row_fn) -> list[dict[str, Any]]:
+        rows = []
+        for c in source_cfg.get(domain, []):
+            value = c.repo if c.kind == "download" else c.path
+            row = row_fn(c.kind, value)
+            row["extra"] = dict(c.extra)
+            rows.append(row)
+        return rows
+
+    model_source_rows: dict[str, list[dict[str, Any]]] = {
+        "wd14": (
+            [_wd14_row("preset", m) for m in secrets.DEFAULT_WD14_MODELS]
+            + _user_rows("wd14", _wd14_row)
+        ),
+    }
+    _eval_defaults = {
+        "eval_clip": ("clip", secrets.EvalMetricModelsConfig.model_fields["clip_model_name"].default),
+        "eval_dino": ("dino", secrets.EvalMetricModelsConfig.model_fields["dino_model_name"].default),
+        "eval_ccip": ("ccip", secrets.EvalMetricModelsConfig.model_fields["ccip_model_name"].default),
+    }
+    for _domain, (_em_kind, _default) in _eval_defaults.items():
+        model_source_rows[_domain] = (
+            [_eval_row(_domain, _em_kind, "preset", str(_default))]
+            + _user_rows(
+                _domain,
+                lambda kind, value, _d=_domain, _k=_em_kind: _eval_row(_d, _k, kind, value),
+            )
+        )
 
     # 放大器：预设 + 扫盘合并。
     # - Pass 1：UPSCALER_VARIANTS 全列（即便未下载，提供"下载"入口）
@@ -251,6 +349,8 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
             "target_dir": str(upscaler_dir(r)),
             "variants": upscaler_variants,
         },
+        # 统一来源候选行（前端泛化候选卡消费；键 = domain）。
+        "model_sources": model_source_rows,
         # 按类型的下载源选择：双源类型给 dropdown，固定 HF 的给单选指示。
         # current 来自 secrets.download_sources（已迁移种子）；available 决定前端
         # 渲染真 dropdown 还是 1-option 禁用框。

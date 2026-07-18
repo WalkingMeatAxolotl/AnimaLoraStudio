@@ -669,7 +669,7 @@ MODEL_SOURCE_REPO_DOMAINS: tuple[str, ...] = (
 )
 
 
-def _is_abs_path(value: str) -> bool:
+def is_abs_path(value: str) -> bool:
     """跨平台绝对路径判断（win 盘符 / UNC / posix 根）；repo id 形如
     `owner/name` 均为相对 → False。"""
     return (
@@ -812,7 +812,7 @@ class Secrets(BaseModel):
                 for c in cands
             ):
                 continue
-            if _is_abs_path(sel):
+            if is_abs_path(sel):
                 cands.append(SourceCandidate(kind="local", path=sel))
             elif domain == "cltagger":
                 # fork repo 迁移自带当前双文件相对路径（镜像覆盖退役，D4）

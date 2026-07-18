@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 205,
+  "count": 207,
   "routes": [
     {
       "path": "/",
@@ -279,6 +279,22 @@
         "GET"
       ],
       "name": "get_log",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/model-sources/{domain}",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "remove_model_source",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/model-sources/{domain}",
+      "methods": [
+        "POST"
+      ],
+      "name": "add_model_source",
       "type": "APIRoute"
     },
     {

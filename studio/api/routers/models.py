@@ -1,6 +1,6 @@
 """模型 catalog / 下载（PR-6 commit 2 从 server.py 抽出）。
 
-7 routes（PP7 第一刀域）：
+路由（PP7 第一刀域 + 统一模型来源候选）：
     GET    /api/models/catalog        列已知模型 + 各自磁盘状态 + 当前下载状态
     GET    /api/models/path-defaults  当前 Settings 算出的 4 个模型字段绝对路径
     POST   /api/models/download       启动后台下载，返回 status key
@@ -8,9 +8,12 @@
     DELETE /api/models/anima/custom   注销一个本地 custom 主模型
     POST   /api/models/krea2/custom   注册一个 Krea2 本地主模型
     DELETE /api/models/krea2/custom   注销一个 Krea2 本地主模型
+    POST   /api/model-sources/{domain}   添加一条来源候选（下载型 / 本地文件）
+    DELETE /api/model-sources/{domain}   移除一条候选（不动磁盘；选中项回退默认）
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +23,7 @@ from ..schemas.models import (
     AnimaCustomModelRequest,
     FamilySwitchRequest,
     ModelDownloadRequest,
+    ModelSourceCandidateRequest,
 )
 from ... import secrets
 from ...domain.errors import ValidationError
@@ -194,3 +198,210 @@ def remove_custom_model(family: str, body: AnimaCustomModelRequest) -> dict[str,
     """
     assets = _assets_or_400(family)
     return _remove_custom_model(assets.family_id, body.path, assets.latest)
+
+
+# ---------------------------------------------------------------------------
+# 统一模型来源候选（docs/design/model-source-unification.md §6）
+# ---------------------------------------------------------------------------
+
+# HF / MS repo id 形如 owner/name。校验从简（D3）：不做网络探测，repo 不存在
+# 等到下载时报错。
+_REPO_ID_RE = re.compile(r"^[\w.\-]+/[\w.\-]+$")
+
+
+def _source_domains() -> set[str]:
+    from ...services.models.families import FAMILY_ASSETS
+
+    return (
+        set(secrets.MODEL_SOURCE_REPO_DOMAINS)
+        | {"upscaler"}
+        | set(FAMILY_ASSETS.keys())
+    )
+
+
+def _domain_or_400(domain: str) -> str:
+    if domain not in _source_domains():
+        raise ValidationError(
+            f"Unknown model source domain: {domain}",
+            code="model_source.domain_invalid",
+            details={"domain": domain}, http_status=400,
+        )
+    return domain
+
+
+def _require_file(p: Path, exts: tuple[str, ...]) -> None:
+    if p.suffix.lower() not in exts:
+        raise ValidationError(
+            f"Select a {' / '.join(exts)} file",
+            code="file.ext_invalid", details={"types": " / ".join(exts)},
+            http_status=400,
+        )
+    if not p.is_file():
+        raise ValidationError(
+            "File not found", code="model.not_found",
+            details={"path": str(p)}, http_status=400,
+        )
+
+
+def _require_dir_with(p: Path, required: tuple[str, ...]) -> None:
+    missing = [f for f in required if not (p / f).exists()]
+    if not p.is_dir() or missing:
+        raise ValidationError(
+            "Directory is missing required model files",
+            code="model_source.dir_incomplete",
+            details={"path": str(p), "missing": missing}, http_status=400,
+        )
+
+
+def _validate_candidate(domain: str, cand: "secrets.SourceCandidate") -> None:
+    """简单校验（D3）：格式 / 存在性 / 域结构；运行时报错兜底。"""
+    from ...services.models.families import FAMILY_ASSETS
+    from ...services.models.paths import UPSCALER_EXTS, WD14_FILES
+
+    if cand.kind == "download":
+        if not _REPO_ID_RE.match(cand.repo):
+            raise ValidationError(
+                "Repository ID must look like owner/name",
+                code="model_source.repo_invalid",
+                details={"repo": cand.repo}, http_status=400,
+            )
+        # 单文件资产必须带 filename + 后缀白名单；目录型资产不接受 filename
+        if domain == "upscaler" or domain in FAMILY_ASSETS:
+            exts = UPSCALER_EXTS if domain == "upscaler" else (".safetensors",)
+            name = Path(cand.filename).name
+            if not name or not name.lower().endswith(exts):
+                raise ValidationError(
+                    f"File name must end with {' / '.join(exts)}",
+                    code="file.ext_invalid",
+                    details={"types": " / ".join(exts)}, http_status=400,
+                )
+        elif cand.filename:
+            raise ValidationError(
+                "This model type downloads a whole repository (no file name)",
+                code="model_source.filename_unexpected", http_status=400,
+            )
+        return
+
+    # kind == "local"
+    if not cand.path.strip() or not secrets.is_abs_path(cand.path):
+        raise ValidationError(
+            "An absolute local path is required",
+            code="model_source.path_invalid",
+            details={"path": cand.path}, http_status=400,
+        )
+    p = Path(cand.path).expanduser()
+    if domain == "wd14":
+        _require_dir_with(p, WD14_FILES)
+    elif domain in ("eval_clip", "eval_dino"):
+        _require_dir_with(p, ("config.json",))
+    elif domain == "eval_ccip":
+        _require_dir_with(
+            p, ("model_feat.onnx", "model_metrics.onnx", "metrics.json"))
+    elif domain == "upscaler":
+        _require_file(p, UPSCALER_EXTS)
+    elif domain == "cltagger":
+        _require_file(p, (".onnx",))
+        mapping = cand.extra.get("tag_mapping_path", "")
+        if not mapping or not secrets.is_abs_path(mapping):
+            raise ValidationError(
+                "tag_mapping_path (absolute path) is required",
+                code="model_source.path_invalid", http_status=400,
+            )
+        _require_file(Path(mapping).expanduser(), (".json",))
+    else:  # 主模型族：单文件 .safetensors（同 PathPicker 注册校验）
+        _require_file(p, (".safetensors",))
+
+
+def _candidate_from_request(body: ModelSourceCandidateRequest) -> "secrets.SourceCandidate":
+    if body.kind not in ("download", "local"):
+        raise ValidationError(
+            f"Unknown candidate kind: {body.kind}",
+            code="model_source.kind_invalid", http_status=400,
+        )
+    return secrets.SourceCandidate(
+        kind=body.kind,
+        repo=body.repo.strip(),
+        filename=Path(body.filename).name if body.filename.strip() else "",
+        path=body.path.strip(),
+        extra={k: str(v).strip() for k, v in body.extra.items() if str(v).strip()},
+    )
+
+
+def _selected_value_reset(domain: str, removed: "secrets.SourceCandidate") -> dict[str, Any]:
+    """移除的候选正是当前选中 → 附带把选中值回退默认的 update partial。"""
+    from ...services.models.families import FAMILY_ASSETS
+    from ...services.models.paths import DEFAULT_UPSCALER
+
+    s = secrets.load()
+    removed_value = removed.repo if removed.kind == "download" else removed.path
+    if domain == "wd14" and s.wd14.model_id == removed_value:
+        return {"wd14": {"model_id": secrets.DEFAULT_WD14_MODELS[0]}}
+    if domain == "cltagger" and s.cltagger.model_id == removed_value:
+        fields = secrets.CLTaggerConfig.model_fields
+        return {"cltagger": {
+            "model_id": fields["model_id"].default,
+            "model_path": fields["model_path"].default,
+            "tag_mapping_path": fields["tag_mapping_path"].default,
+        }}
+    if domain in ("eval_clip", "eval_dino", "eval_ccip"):
+        field = {
+            "eval_clip": "clip_model_name",
+            "eval_dino": "dino_model_name",
+            "eval_ccip": "ccip_model_name",
+        }[domain]
+        if getattr(s.eval_metrics, field) == removed_value:
+            default = secrets.EvalMetricModelsConfig.model_fields[field].default
+            return {"eval_metrics": {field: default}}
+    if domain == "upscaler":
+        sel = s.models.selected_upscaler
+        if sel and sel in (removed_value, removed.filename):
+            return {"models": {"selected_upscaler": DEFAULT_UPSCALER}}
+    if domain in FAMILY_ASSETS and s.models.selected.get(domain) == removed_value:
+        return {"models": {"selected": {
+            **s.models.selected, domain: FAMILY_ASSETS[domain].latest,
+        }}}
+    return {}
+
+
+@router.post("/api/model-sources/{domain}")
+def add_model_source(
+    domain: str, body: ModelSourceCandidateRequest
+) -> dict[str, Any]:
+    """添加一条来源候选（去重 append），返回新 catalog。
+
+    校验从简：repo 形如 owner/name、单文件资产的后缀白名单、本地路径存在 +
+    域结构（wd14 双文件 / eval config.json 等）。不做网络探测。
+    """
+    _domain_or_400(domain)
+    cand = _candidate_from_request(body)
+    _validate_candidate(domain, cand)
+    existing = secrets.load().model_sources.get(domain, [])
+    if all(c.identity() != cand.identity() for c in existing):
+        secrets.update({"model_sources": {
+            domain: [c.model_dump() for c in existing] + [cand.model_dump()],
+        }})
+    return model_downloader.build_catalog()
+
+
+@router.delete("/api/model-sources/{domain}")
+def remove_model_source(
+    domain: str, body: ModelSourceCandidateRequest
+) -> dict[str, Any]:
+    """移除一条候选（只移出列表，不动磁盘文件），返回新 catalog。
+
+    被移除的候选正是当前选中时，选中值回退该 domain 默认（wd14 首个内置 /
+    eval schema 默认 / cltagger 官方 preset / upscaler 默认 / 主模型族最新
+    官方 variant）——与「注销本地主模型回退 latest」的现状语义一致。
+    """
+    _domain_or_400(domain)
+    cand = _candidate_from_request(body)
+    existing = secrets.load().model_sources.get(domain, [])
+    remaining = [c for c in existing if c.identity() != cand.identity()]
+    if len(remaining) != len(existing):
+        partial: dict[str, Any] = {
+            "model_sources": {domain: [c.model_dump() for c in remaining]},
+        }
+        for key, val in _selected_value_reset(domain, cand).items():
+            partial[key] = val
+        secrets.update(partial)
+    return model_downloader.build_catalog()
