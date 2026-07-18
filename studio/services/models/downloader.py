@@ -561,8 +561,9 @@ def delete_asset(model_id: str, variant: Optional[str] = None) -> None:
     """删除一个已下载资产（下载按钮的逆操作：用户先删除、再下载）。
 
     目标路径全部由服务端 target 函数解析——不接受任意路径；对应 key 的
-    下载进行中拒绝。覆盖 Settings 模型区的资产 id（主模型 variant / VAE /
-    文本编码器 / tokenizer）；打标、放大器等区暂不接入。文件被占用
+    下载进行中拒绝。覆盖下载中心全部资产 id：训练模型区（主模型 variant /
+    VAE / 文本编码器 / tokenizer）、打标（wd14 / cltagger）、eval 指标
+    （clip / dino / ccip）、放大器（预设 + 自定义文件名）。文件被占用
     （模型已加载 / 训练中）时 OSError 原样转可操作报错。
     """
     import shutil
@@ -592,6 +593,41 @@ def delete_asset(model_id: str, variant: Optional[str] = None) -> None:
         target = qwen3_vl_dir(root)
     elif model_id == "krea2_text_encoder_fp8":
         target = qwen3_vl_fp8_dir(root)
+    elif model_id == "wd14":
+        if not variant:
+            raise ValueError("wd14 需要 variant=model_id")
+        key = f"wd14:{variant}"
+        target = wd14_target_dir(root, variant)
+    elif model_id == "cltagger":
+        preset = CLTAGGER_VERSIONS.get(variant or "")
+        if preset is None:
+            raise ValueError(f"unknown cltagger variant {variant!r}")
+        key = f"cltagger:{variant}"
+        # 只删该版本子目录——v1/v2 同 repo 根下可并存多版本
+        target = cltagger_target_root(root, preset["model_id"]) / Path(
+            preset["model_path"]
+        ).parent
+    elif model_id in ("eval_clip", "eval_dino"):
+        if not variant:
+            raise ValueError(f"{model_id} 需要 variant=model_id")
+        kind = "clip" if model_id == "eval_clip" else "dino"
+        key = f"{model_id}:{variant}"
+        target = eval_model_target_dir(root, kind, variant)
+    elif model_id == "eval_ccip":
+        if not variant:
+            raise ValueError("eval_ccip 需要 variant=ccip 变体名")
+        key = f"eval_ccip:{variant}"
+        target = ccip_model_dir(root, variant)
+    elif model_id == "upscaler":
+        if not variant:
+            raise ValueError("upscaler 需要 variant=label")
+        # 预设 label 或自定义文件名；upscaler_target 自带路径穿越校验
+        key = (
+            f"upscaler:{variant}"
+            if variant in UPSCALER_VARIANTS
+            else f"upscaler:custom:{variant}"
+        )
+        target = upscaler_target(variant, root)
     else:
         raise ValueError(f"asset {model_id!r} does not support deletion")
 

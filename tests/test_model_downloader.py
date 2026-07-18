@@ -1231,9 +1231,76 @@ def test_delete_asset_removes_known_targets(tmp_path, monkeypatch):
 
     import pytest as _pytest
     with _pytest.raises(ValueError, match="deletion"):
-        m.delete_asset("wd14")
+        m.delete_asset("taeflux")
     with _pytest.raises(ValueError, match="variant"):
         m.delete_asset("krea2_main", "bogus")
+
+
+def test_delete_asset_tagger_eval_upscaler(tmp_path, monkeypatch):
+    """打标 / eval / 放大器区的删除：目录与文件两形态 + variant 必填校验。"""
+    from pathlib import Path
+
+    from studio.services import models as m
+    from studio.services.models import downloader as dl
+    from studio.services.models.paths import CLTAGGER_VERSIONS
+
+    monkeypatch.setattr(dl, "models_root", lambda: tmp_path)
+
+    # wd14：整目录（model_id 里的 / 会被 sanitize 成 _）
+    wd_dir = tmp_path / "wd14" / "SmilingWolf_wd-eva02-large-tagger-v3"
+    wd_dir.mkdir(parents=True)
+    (wd_dir / "model.onnx").write_bytes(b"w")
+    m.delete_asset("wd14", "SmilingWolf/wd-eva02-large-tagger-v3")
+    assert not wd_dir.exists()
+
+    # cltagger：只删该版本子目录，repo 根下其他版本保留
+    label, preset = next(iter(CLTAGGER_VERSIONS.items()))
+    repo_root = tmp_path / "cltagger" / preset["model_id"].replace("/", "_")
+    version_dir = repo_root / Path(preset["model_path"]).parent
+    version_dir.mkdir(parents=True)
+    (version_dir / "model.onnx").write_bytes(b"w")
+    (repo_root / "other_version").mkdir()
+    m.delete_asset("cltagger", label)
+    assert not version_dir.exists()
+    assert (repo_root / "other_version").exists()
+
+    # eval：clip / ccip 各一个目录
+    clip_dir = tmp_path / "eval" / "clip" / "openai_clip-vit-base-patch32"
+    clip_dir.mkdir(parents=True)
+    (clip_dir / "config.json").write_text("{}", encoding="utf-8")
+    m.delete_asset("eval_clip", "openai/clip-vit-base-patch32")
+    assert not clip_dir.exists()
+
+    ccip_dir = tmp_path / "eval" / "ccip" / "ccip-caformer-24-randaug-pruned"
+    ccip_dir.mkdir(parents=True)
+    (ccip_dir / "model_feat.onnx").write_bytes(b"w")
+    m.delete_asset("eval_ccip", "ccip-caformer-24-randaug-pruned")
+    assert not ccip_dir.exists()
+
+    # upscaler：预设 label → 预设 filename；自定义文件名直接删
+    from studio.services.models.paths import DEFAULT_UPSCALER, UPSCALER_VARIANTS
+
+    up_dir = tmp_path / "upscalers"
+    up_dir.mkdir()
+    preset_file = up_dir / UPSCALER_VARIANTS[DEFAULT_UPSCALER]["filename"]
+    preset_file.write_bytes(b"w")
+    m.delete_asset("upscaler", DEFAULT_UPSCALER)
+    assert not preset_file.exists()
+
+    custom_file = up_dir / "4x-MyCustom.pth"
+    custom_file.write_bytes(b"w")
+    m.delete_asset("upscaler", "4x-MyCustom.pth")
+    assert not custom_file.exists()
+
+    import pytest as _pytest
+    for mid in ("wd14", "eval_clip", "eval_dino", "eval_ccip", "upscaler"):
+        with _pytest.raises(ValueError, match="variant"):
+            m.delete_asset(mid)
+    with _pytest.raises(ValueError, match="cltagger"):
+        m.delete_asset("cltagger", "bogus")
+    # 自定义 label 的路径穿越保护由 upscaler_target 兜底
+    with _pytest.raises(ValueError):
+        m.delete_asset("upscaler", "..\\evil.pth")
 
 
 def test_delete_asset_rejects_running_download(tmp_path, monkeypatch):

@@ -23,7 +23,7 @@ import { applyDensity, applyTheme, getStoredDensity, getStoredTheme, setStoredDe
 import i18n, { getStoredLangWithDefault, setStoredLang } from '../../../i18n'
 import { MODEL_DESCRIPTION_KEYS, textInputClass, translatedCatalogText, UPSCALER_DESCRIPTION_KEYS, type Section } from './constants'
 import { Bool, SettingsField, SettingsInput, SettingsSection } from './fields'
-import { DownloadButton, ModelGroupCard, ModelStatusBadge, SourceSelect, StatusLabel } from './modelCards'
+import { DeleteAssetButton, DownloadButton, ModelGroupCard, ModelStatusBadge, SourceSelect, StatusLabel } from './modelCards'
 
 // ── 训练参数 Section ─────────────────────────────────────────────────
 //
@@ -109,7 +109,7 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
 }) {
   const { toast } = useToast()
   const dialog = useDialog()
-  const { runSave } = useSettingsData()
+  const { runSave, deleteAsset } = useSettingsData()
   const [selected, setSelected] = useState<Record<FamilyId, string>>({
     anima: '1.0', krea2: 'raw',
   })
@@ -162,18 +162,6 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
       toast(String(e), 'error')
     } finally {
       setAddingFamily(null)
-    }
-  }
-
-  // 删除已下载资产（下载的逆操作）：confirm → DELETE → 刷 catalog
-  const deleteAsset = async (modelId: string, variant: string | undefined, name: string) => {
-    if (!(await dialog.confirm(t('settings.confirmDeleteAsset', { name }), { tone: 'danger' }))) return
-    try {
-      await api.deleteModelAsset(modelId, variant)
-      toast(t('settings.assetDeleted', { name }), 'success')
-      await reloadCatalog()
-    } catch (e) {
-      toast(String(e), 'error')
     }
   }
 
@@ -341,7 +329,7 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
                           : <span className="text-err text-2xs">{t('settings.localModelMissing')}</span>}
                         <button
                           onClick={() => void removeCustom(section.family, section.fallbackSelected, c.path)}
-                          className="btn btn-secondary btn-sm shrink-0 min-w-[5rem] justify-center"
+                          className="btn btn-ghost btn-sm shrink-0 min-w-[5rem] justify-center"
                           title={t('settings.removeLocalModel')}
                         >🗑 {t('settings.removeLocalModelShort')}</button>
                       </li>
@@ -442,7 +430,7 @@ export function UpscalerSection({
   t: TFunction
 }) {
   const { toast } = useToast()
-  const { runSave } = useSettingsData()
+  const { runSave, deleteAsset } = useSettingsData()
   const [customSource, setCustomSource] = useState<'hf' | 'ms'>('hf')
   const [customRepo, setCustomRepo] = useState('')
   const [customFile, setCustomFile] = useState('')
@@ -541,13 +529,17 @@ export function UpscalerSection({
                       </span>
                     </div>
                     <ModelStatusBadge exists={v.exists} size={v.size} status={dl?.status} />
-                    {v.kind === 'preset' && (
+                    {v.kind === 'preset' ? (
                       <DownloadButton
                         exists={v.exists}
                         status={dl?.status}
                         busy={busy.has(`upscaler:${v.label}`)}
                         onClick={() => void start('upscaler', v.label)}
+                        onDelete={() => void deleteAsset('upscaler', v.label, v.label)}
                       />
+                    ) : (
+                      /* custom：扫盘发现的文件，只有删除（重下走下方自定义下载表单） */
+                      <DeleteAssetButton onClick={() => void deleteAsset('upscaler', v.filename, v.label)} />
                     )}
                   </li>
                 )

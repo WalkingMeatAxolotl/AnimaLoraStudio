@@ -1134,8 +1134,6 @@
     "downloadLogs": "下载日志 ({{n}})",
     "partialFiles": "部分 ({{exists}}/{{total}})",
     "notDownloaded": "未下载",
-    "redownloadTitle": "已下载，点击重新下载",
-    "redownload": "↻ 重下",
     "downloadAction": "⤓ 下载",
     "upscalersPreprocess": "放大器（预处理）",
     "availableUpscalers": "可用放大器",

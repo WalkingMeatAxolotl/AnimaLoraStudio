@@ -19,6 +19,7 @@ import {
 } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, type ModelsCatalog, type Secrets, type SecretsPatch } from '../api/client'
+import { useDialog } from '../components/Dialog'
 import { useToast } from '../components/Toast'
 import { useEventStream } from './useEventStream'
 
@@ -60,6 +61,8 @@ interface SettingsData {
   reloadCatalog: () => Promise<ModelsCatalog | null>
   downloadBusy: Set<string>
   startDownload: (model_id: string, variant?: string) => Promise<void>
+  /** 下载的逆操作（confirm → DELETE → 刷 catalog），下载中心各区共用。 */
+  deleteAsset: (model_id: string, variant: string | undefined, name: string) => Promise<void>
   setDownloadSource: (type: string, source: string) => Promise<void>
 }
 
@@ -68,6 +71,7 @@ const Ctx = createContext<SettingsData | null>(null)
 export function SettingsDataProvider({ children }: { children: ReactNode }) {
   const { t } = useTranslation()
   const { toast } = useToast()
+  const dialog = useDialog()
   const [secrets, setSecrets] = useState<Secrets | null>(null)
   const [secretsError, setSecretsError] = useState<string | null>(null)
   const [catalog, setCatalog] = useState<ModelsCatalog | null>(null)
@@ -127,6 +131,19 @@ export function SettingsDataProvider({ children }: { children: ReactNode }) {
     }
   }, [reloadCatalog, t, toast])
 
+  // 删除已下载资产（下载的逆操作）：confirm → DELETE → 刷 catalog。
+  // 下载中心各区（训练模型 / 打标 / eval / 放大器）共用这一份流程。
+  const deleteAsset = useCallback(async (model_id: string, variant: string | undefined, name: string) => {
+    if (!(await dialog.confirm(t('settings.confirmDeleteAsset', { name }), { tone: 'danger' }))) return
+    try {
+      await api.deleteModelAsset(model_id, variant)
+      toast(t('settings.assetDeleted', { name }), 'success')
+      await reloadCatalog()
+    } catch (e) {
+      toast(String(e), 'error')
+    }
+  }, [dialog, reloadCatalog, t, toast])
+
   // 按类型选下载源：即时存（跟「下载」/ models.root 一样是立即动作，不进表单
   // draft）。刻意不 setSecrets —— 否则会让 SettingsPage 的 draft/server 失同步，
   // 表单 Save 时把这次改动 clobber 回去。dropdown 当前值读 catalog（reloadCatalog
@@ -183,7 +200,7 @@ export function SettingsDataProvider({ children }: { children: ReactNode }) {
     <Ctx.Provider value={{
       secrets, secretsError, setSecrets, commitSecrets, runSave, saveStatus,
       catalog, catalogError, reloadCatalog,
-      downloadBusy, startDownload, setDownloadSource,
+      downloadBusy, startDownload, deleteAsset, setDownloadSource,
     }}>
       {children}
     </Ctx.Provider>

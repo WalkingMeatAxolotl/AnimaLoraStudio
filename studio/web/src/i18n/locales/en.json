@@ -1134,8 +1134,6 @@
     "downloadLogs": "Download logs ({{n}})",
     "partialFiles": "Partial ({{exists}}/{{total}})",
     "notDownloaded": "Not downloaded",
-    "redownloadTitle": "Already downloaded, click to redownload",
-    "redownload": "↻ Redownload",
     "downloadAction": "⤓ Download",
     "upscalersPreprocess": "Upscalers (preprocess)",
     "availableUpscalers": "Available upscalers",
