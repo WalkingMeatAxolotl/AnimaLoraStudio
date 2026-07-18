@@ -122,20 +122,40 @@ def check_load_budget(enabled: bool, *, weight_paths, stage: str) -> None:
             f"设置 → 显存策略 关闭内存水位保护。"
         )
 
+    free = gpu_free_bytes_global()
+    if free is not None and free < need + _VRAM_BASE_BYTES:
+        raise RuntimeError(
+            f"GPU 空闲显存不足（{free / 1024**3:.1f}GB，本次{stage}"
+            f"约需 {(need + _VRAM_BASE_BYTES) / 1024**3:.1f}GB）。"
+            f"可能有其他进程占用显存（另一个出图/训练任务？）——"
+            f"请先释放后重试；如需强制继续，可在 设置 → 显存策略 "
+            f"关闭内存水位保护。"
+        )
+
+
+def gpu_free_bytes_global() -> int | None:
+    """全卡真实空闲显存；查询失败返回 None。
+
+    必须走 NVML：WDDM 下 ``cudaMemGetInfo`` 是**每进程虚拟化视角**，
+    看不到其他进程的占用（真机实测：他进程持有 20GB 时它仍报全量
+    free）——用它做跨进程护栏形同虚设。NVML 是全卡视角。
+    """
+    try:
+        import pynvml
+
+        pynvml.nvmlInit()
+        try:
+            handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            return int(pynvml.nvmlDeviceGetMemoryInfo(handle).free)
+        finally:
+            pynvml.nvmlShutdown()
+    except Exception:
+        pass
     try:
         import torch
 
         if torch.cuda.is_available():
-            free, _total = torch.cuda.mem_get_info()
-            if free < need + _VRAM_BASE_BYTES:
-                raise RuntimeError(
-                    f"GPU 空闲显存不足（{free / 1024**3:.1f}GB，本次{stage}"
-                    f"约需 {(need + _VRAM_BASE_BYTES) / 1024**3:.1f}GB）。"
-                    f"可能有其他进程占用显存（另一个出图/训练任务？）——"
-                    f"请先释放后重试；如需强制继续，可在 设置 → 显存策略 "
-                    f"关闭内存水位保护。"
-                )
-    except RuntimeError:
-        raise
+            return int(torch.cuda.mem_get_info()[0])
     except Exception:
         pass
+    return None

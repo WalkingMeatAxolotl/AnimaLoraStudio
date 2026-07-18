@@ -35,16 +35,32 @@ def test_budget_disabled_skips(tmp_path, monkeypatch):
 
 
 def test_budget_raises_when_ram_below_file_size(tmp_path, monkeypatch):
-    """预算制：avail < 文件大小 + 基底 → 拦（回答「做完之后还好吗」）。"""
-    weight = _write_weight(tmp_path, size=2 * 1024**3)
-    monkeypatch.setattr(sysmem, "available_ram_bytes", lambda: 3 * 1024**3)
+    """预算制：avail < 文件大小 + 基底 → 拦（回答「做完之后还好吗」）。
+
+    文件用 1KB 真身 + mock 大小（不写 GB 级临时文件——磁盘卫生）。
+    """
+    weight = _write_weight(tmp_path)
+    monkeypatch.setattr(sysmem, "_file_bytes", lambda paths: 13 * 1024**3)
+    monkeypatch.setattr(sysmem, "available_ram_bytes", lambda: 10 * 1024**3)
     with pytest.raises(RuntimeError, match="可用内存不足"):
         sysmem.check_load_budget(True, weight_paths=[weight], stage="模型加载")
 
 
-def test_budget_passes_with_headroom(tmp_path, monkeypatch):
-    weight = _write_weight(tmp_path, size=2 * 1024**3)
+def test_budget_raises_when_gpu_free_below_need(tmp_path, monkeypatch):
+    """VRAM 预算（NVML 全卡视角）：free < 文件 + 基底 → 拦（跨进程场景）。"""
+    weight = _write_weight(tmp_path)
+    monkeypatch.setattr(sysmem, "_file_bytes", lambda paths: 13 * 1024**3)
     monkeypatch.setattr(sysmem, "available_ram_bytes", lambda: 64 * 1024**3)
+    monkeypatch.setattr(sysmem, "gpu_free_bytes_global", lambda: 7 * 1024**3)
+    with pytest.raises(RuntimeError, match="显存不足"):
+        sysmem.check_load_budget(True, weight_paths=[weight], stage="模型加载")
+
+
+def test_budget_passes_with_headroom(tmp_path, monkeypatch):
+    weight = _write_weight(tmp_path)
+    monkeypatch.setattr(sysmem, "_file_bytes", lambda paths: 13 * 1024**3)
+    monkeypatch.setattr(sysmem, "available_ram_bytes", lambda: 64 * 1024**3)
+    monkeypatch.setattr(sysmem, "gpu_free_bytes_global", lambda: 30 * 1024**3)
     sysmem.check_load_budget(True, weight_paths=[weight], stage="模型加载")
 
 
