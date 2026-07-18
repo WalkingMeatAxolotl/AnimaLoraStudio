@@ -18,7 +18,7 @@ import LLMPresetEditorModal, { llmPresetLabel } from '../../../components/LLMPre
 import { TagListInput } from '../../../components/TagsInput'
 import StepShell from '../../../components/StepShell'
 import { useToast } from '../../../components/Toast'
-import { CLTaggerModelCard, ModelSourceCard, SourceSelect } from '../../tools/settings/modelCards'
+import { ModelSourceCard, SourceSelect } from '../../tools/settings/modelCards'
 import { useSettingsData } from '../../../lib/SettingsData'
 import { useSettingsDrawer } from '../../../lib/SettingsDrawer'
 import { useEventStream } from '../../../lib/useEventStream'
@@ -83,9 +83,7 @@ export default function TaggingPage() {
   const { project, activeVersion, reload } = useOutletContext<Ctx>()
   const { toast } = useToast()
   const settingsDrawer = useSettingsDrawer()
-  const {
-    catalog, downloadBusy, startDownload, setDownloadSource, secrets,
-  } = useSettingsData()
+  const { catalog, setDownloadSource, secrets } = useSettingsData()
 
   const [tagger, setTagger] = useState<TaggerName>('wd14')
   const [taggerStatus, setTaggerStatus] = useState<TaggerStatus | null>(null)
@@ -517,22 +515,21 @@ export default function TaggingPage() {
                       opt={catalog?.download_source_options?.cltagger}
                       onChange={(s) => void setDownloadSource('cltagger', s)}
                     />
-                    <CLTaggerModelCard
+                    <ModelSourceCard
+                      domain="cltagger"
+                      title={t('settings.clTaggerVersionTitle', { name: catalog?.cltagger?.name ?? 'CLTagger' })}
                       catalog={catalog}
-                      busy={downloadBusy}
-                      start={startDownload}
-                      currentModelPath={cltaggerForm.model_path}
-                      currentTagMappingPath={cltaggerForm.tag_mapping_path}
-                      modelId={cltaggerForm.model_id}
-                      onSelectVariant={(v) =>
+                      currentValue={`${cltaggerForm.model_id}|${cltaggerForm.model_path}|${cltaggerForm.tag_mapping_path}`}
+                      onSelect={(_, row) =>
                         setCltaggerForm({
                           ...cltaggerForm,
-                          model_id: v.model_id,
-                          model_path: v.model_path,
-                          tag_mapping_path: v.tag_mapping_path,
+                          model_id: row.extra.model_id ?? '',
+                          model_path: row.extra.model_path ?? '',
+                          tag_mapping_path: row.extra.tag_mapping_path ?? '',
                         })
                       }
-                      onModelIdChange={(id) => setCltaggerForm({ ...cltaggerForm, model_id: id })}
+                      addDownload={{ repoPlaceholder: 'cella110n/cl_tagger' }}
+                      addLocal={{ secondFileKey: 'tag_mapping_path' }}
                       t={t}
                     />
                   </div>

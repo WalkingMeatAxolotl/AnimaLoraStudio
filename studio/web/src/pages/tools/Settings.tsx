@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
 import {
   api,
-  type CLTaggerVariantInfo,
+  type ModelSourceRow,
   type LLMPreset,
   type Secrets,
   type SecretsPatch,
@@ -33,7 +33,7 @@ import {
   type Tab,
 } from './settings/constants'
 import { Bool, SectionIndex, SensitiveInput, SettingsField, SettingsInput, SettingsSection } from './settings/fields'
-import { CLTaggerModelCard, HFEndpointSelect, ModelSourceCard, SourceSelect } from './settings/modelCards'
+import { HFEndpointSelect, ModelSourceCard, SourceSelect } from './settings/modelCards'
 import {
   DisplaySection,
   FlashAttentionSection,
@@ -131,12 +131,14 @@ export default function SettingsPage() {
   }
 
 
-  const selectCLTaggerVariant = (variant: CLTaggerVariantInfo) => {
+  // CLTagger 选中值是 (model_id, model_path, tag_mapping_path) 三元组：行
+  // value 用 `|` 合成键匹配，选中时从统一行 extra 一次写回三字段。
+  const selectCLTaggerRow = (row: ModelSourceRow) => {
     commitSecrets({
       cltagger: {
-        model_id: variant.model_id,
-        model_path: variant.model_path,
-        tag_mapping_path: variant.tag_mapping_path,
+        model_id: row.extra.model_id ?? '',
+        model_path: row.extra.model_path ?? '',
+        tag_mapping_path: row.extra.tag_mapping_path ?? '',
       },
     } as SecretsPatch)
   }
@@ -553,15 +555,17 @@ export default function SettingsPage() {
           opt={catalog?.download_source_options?.cltagger}
           onChange={(s) => void setDownloadSource('cltagger', s)}
         />
-        <CLTaggerModelCard
+        <ModelSourceCard
+          domain="cltagger"
+          title={t('settings.clTaggerVersionTitle', { name: catalog?.cltagger?.name ?? 'CLTagger' })}
+          helpTooltip={
+            <p><Trans i18nKey="settings.repoHelp" values={{ desc: translatedCatalogText(MODEL_DESCRIPTION_KEYS, 'cltagger', catalog?.cltagger?.description, t), repo: catalog?.cltagger?.repo ?? '' }} components={{ code: <code /> }} /></p>
+          }
           catalog={catalog}
-          busy={downloadBusy}
-          start={startDownload}
-          currentModelPath={draft.cltagger.model_path}
-          currentTagMappingPath={draft.cltagger.tag_mapping_path}
-          onSelectVariant={selectCLTaggerVariant}
-          modelId={draft.cltagger.model_id}
-          onModelIdChange={(id) => update('cltagger', 'model_id', id)}
+          currentValue={`${draft.cltagger.model_id}|${draft.cltagger.model_path}|${draft.cltagger.tag_mapping_path}`}
+          onSelect={(_, row) => selectCLTaggerRow(row)}
+          addDownload={{ repoPlaceholder: 'cella110n/cl_tagger' }}
+          addLocal={{ secondFileKey: 'tag_mapping_path' }}
           t={t}
         />
         <div className="grid grid-cols-2 gap-3">

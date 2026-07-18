@@ -336,13 +336,20 @@ def _selected_value_reset(domain: str, removed: "secrets.SourceCandidate") -> di
     removed_value = removed.repo if removed.kind == "download" else removed.path
     if domain == "wd14" and s.wd14.model_id == removed_value:
         return {"wd14": {"model_id": secrets.DEFAULT_WD14_MODELS[0]}}
-    if domain == "cltagger" and s.cltagger.model_id == removed_value:
-        fields = secrets.CLTaggerConfig.model_fields
-        return {"cltagger": {
-            "model_id": fields["model_id"].default,
-            "model_path": fields["model_path"].default,
-            "tag_mapping_path": fields["tag_mapping_path"].default,
-        }}
+    if domain == "cltagger":
+        # download=fork repo（比 model_id）；local=双文件（比 model_path）
+        is_current = (
+            removed.kind == "download" and s.cltagger.model_id == removed.repo
+        ) or (
+            removed.kind == "local" and s.cltagger.model_path == removed.path
+        )
+        if is_current:
+            fields = secrets.CLTaggerConfig.model_fields
+            return {"cltagger": {
+                "model_id": fields["model_id"].default,
+                "model_path": fields["model_path"].default,
+                "tag_mapping_path": fields["tag_mapping_path"].default,
+            }}
     if domain in ("eval_clip", "eval_dino", "eval_ccip"):
         field = {
             "eval_clip": "clip_model_name",
@@ -374,6 +381,18 @@ def add_model_source(
     """
     _domain_or_400(domain)
     cand = _candidate_from_request(body)
+    if domain == "cltagger" and cand.kind == "download":
+        # fork repo 候选默认继承当前双文件相对路径（用户通常 fork 同版本；
+        # 当前是 local 绝对路径时回退首个内置 preset 的路径）
+        from ...services.models.paths import CLTAGGER_VERSIONS
+
+        cfg = secrets.load().cltagger
+        mp, tmp = cfg.model_path, cfg.tag_mapping_path
+        if secrets.is_abs_path(mp) or secrets.is_abs_path(tmp):
+            first = next(iter(CLTAGGER_VERSIONS.values()))
+            mp, tmp = str(first["model_path"]), str(first["tag_mapping_path"])
+        cand.extra.setdefault("model_path", mp)
+        cand.extra.setdefault("tag_mapping_path", tmp)
     _validate_candidate(domain, cand)
     existing = secrets.load().model_sources.get(domain, [])
     if all(c.identity() != cand.identity() for c in existing):

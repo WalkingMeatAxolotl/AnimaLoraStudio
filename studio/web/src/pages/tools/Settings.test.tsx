@@ -280,6 +280,36 @@ const emptyModelsCatalog = {
   // 统一来源候选行（ModelSourceCard 消费；缺键会渲染 loading 文案）
   model_sources: {
     wd14: [],
+    cltagger: [
+      {
+        kind: 'preset', candidate: null,
+        value: 'cella110n/cl_tagger|cl_tagger_1_02/model.onnx|cl_tagger_1_02/tag_mapping.json',
+        label: 'cl_tagger_1_02', description: '',
+        download_id: 'cltagger', download_variant: 'cl_tagger_1_02',
+        status_key: 'cltagger:cl_tagger_1_02', exists: false, size: 0,
+        files: [], size_estimate: 0, is_current: true,
+        removable: false, deletable: true,
+        extra: {
+          model_id: 'cella110n/cl_tagger',
+          model_path: 'cl_tagger_1_02/model.onnx',
+          tag_mapping_path: 'cl_tagger_1_02/tag_mapping.json',
+        },
+      },
+      {
+        kind: 'preset', candidate: null,
+        value: 'cella110n/cl_tagger_v2|v2_01a/model.onnx|v2_01a/model_vocabulary.json',
+        label: 'cl_tagger_v2_v2_01a', description: '',
+        download_id: 'cltagger', download_variant: 'cl_tagger_v2_v2_01a',
+        status_key: 'cltagger:cl_tagger_v2_v2_01a', exists: false, size: 0,
+        files: [], size_estimate: 0, is_current: false,
+        removable: false, deletable: true,
+        extra: {
+          model_id: 'cella110n/cl_tagger_v2',
+          model_path: 'v2_01a/model.onnx',
+          tag_mapping_path: 'v2_01a/model_vocabulary.json',
+        },
+      },
+    ],
     eval_clip: [],
     eval_dino: [],
     eval_ccip: [],

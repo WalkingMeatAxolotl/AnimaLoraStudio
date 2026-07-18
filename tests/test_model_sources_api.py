@@ -342,3 +342,95 @@ def test_family_rows_download_candidate_value_is_target_path(
 def test_trigger_family_custom_requires_registered_candidate() -> None:
     with pytest.raises(ValueError):
         model_downloader.trigger("anima_custom", "not-registered.safetensors")
+
+
+# ---------------------------------------------------------------------------
+# catalog 统一 shape — cltagger（三元组合成键 + fork 候选 + 双文件 local）
+# ---------------------------------------------------------------------------
+
+
+def test_cltagger_preset_rows_carry_triple_in_extra(client: TestClient) -> None:
+    rows = _rows(client.get("/api/models/catalog").json(), "cltagger")
+    presets = [r for r in rows if r["kind"] == "preset"]
+    assert presets
+    for r in presets:
+        assert r["value"] == "|".join((
+            r["extra"]["model_id"], r["extra"]["model_path"],
+            r["extra"]["tag_mapping_path"],
+        ))
+        assert not r["removable"]
+    assert any(r["is_current"] for r in presets)
+
+
+def test_cltagger_fork_candidate_inherits_current_paths(
+    client: TestClient,
+) -> None:
+    """fork repo 候选：extra 缺省时继承当前双文件相对路径（D4）。"""
+    res = client.post(
+        "/api/model-sources/cltagger",
+        json={"kind": "download", "repo": "someone/cl_tagger_fork"},
+    )
+    assert res.status_code == 200
+    dl = [r for r in _rows(res.json(), "cltagger") if r["kind"] == "download"]
+    assert len(dl) == 1
+    assert dl[0]["extra"]["model_id"] == "someone/cl_tagger_fork"
+    assert dl[0]["extra"]["model_path"] == "cl_tagger_1_02/model.onnx"
+    assert dl[0]["extra"]["tag_mapping_path"] == "cl_tagger_1_02/tag_mapping.json"
+    assert dl[0]["download_id"] == "cltagger_custom"
+
+
+def test_cltagger_local_requires_both_files(
+    client: TestClient, tmp_path: Path,
+) -> None:
+    model = tmp_path / "m.onnx"
+    model.write_bytes(b"onnx")
+    res = client.post(
+        "/api/model-sources/cltagger",
+        json={"kind": "local", "path": str(model)},
+    )
+    assert res.status_code == 400  # 缺 tag_mapping_path
+
+    mapping = tmp_path / "map.json"
+    mapping.write_text("{}", encoding="utf-8")
+    res = client.post(
+        "/api/model-sources/cltagger",
+        json={
+            "kind": "local", "path": str(model),
+            "extra": {"tag_mapping_path": str(mapping)},
+        },
+    )
+    assert res.status_code == 200
+    local = [r for r in _rows(res.json(), "cltagger") if r["kind"] == "local"]
+    assert len(local) == 1
+    assert local[0]["exists"] is True
+    assert local[0]["extra"]["model_path"] == str(model)
+    assert local[0]["extra"]["tag_mapping_path"] == str(mapping)
+    assert local[0]["download_id"] is None
+
+
+def test_cltagger_remove_current_fork_resets_official(
+    client: TestClient,
+) -> None:
+    client.post(
+        "/api/model-sources/cltagger",
+        json={"kind": "download", "repo": "someone/cl_tagger_fork"},
+    )
+    secrets.update({"cltagger": {"model_id": "someone/cl_tagger_fork"}})
+    client.request(
+        "DELETE", "/api/model-sources/cltagger",
+        json={"kind": "download", "repo": "someone/cl_tagger_fork"},
+    )
+    s = secrets.load()
+    assert s.cltagger.model_id == "cella110n/cl_tagger"
+    assert s.cltagger.model_path == "cl_tagger_1_02/model.onnx"
+
+
+def test_legacy_cltagger_fork_model_id_migrates_to_candidate(
+    client: TestClient,
+) -> None:
+    """旧「镜像覆盖」用法（改 model_id 单值）→ 自动迁移为 fork 候选，选中不变。"""
+    secrets.update({"cltagger": {"model_id": "old/mirror_fork"}})
+    rows = _rows(client.get("/api/models/catalog").json(), "cltagger")
+    dl = [r for r in rows if r["kind"] == "download"]
+    assert [r["extra"]["model_id"] for r in dl] == ["old/mirror_fork"]
+    assert dl[0]["is_current"] is True

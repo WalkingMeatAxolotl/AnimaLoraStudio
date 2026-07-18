@@ -1,9 +1,8 @@
 import { useState } from 'react'
 import type { TFunction } from 'i18next'
-import { Trans, useTranslation } from 'react-i18next'
+import { useTranslation } from 'react-i18next'
 import {
   api,
-  type CLTaggerVariantInfo,
   type ModelDownloadStatus,
   type ModelsCatalog,
   type ModelSourceCandidate,
@@ -13,7 +12,7 @@ import { InfoButton } from '../../../components/InfoButton'
 import PathPicker from '../../../components/PathPicker'
 import { useToast } from '../../../components/Toast'
 import { useSettingsData } from '../../../lib/SettingsData'
-import { fmtBytes, MODEL_DESCRIPTION_KEYS, textInputClass, translatedCatalogText } from './constants'
+import { fmtBytes, textInputClass } from './constants'
 import { SettingsField, SettingsInput } from './fields'
 
 // ── HFEndpointSelect ────────────────────────────────────────────────────────
@@ -124,8 +123,10 @@ export function ModelSourceCard({
   onSelect: (value: string, row: ModelSourceRow) => void
   /** 下载型添加表单；undefined = 该 domain 不支持下载型添加。 */
   addDownload?: { filenameField?: boolean; repoPlaceholder?: string; filenamePlaceholder?: string }
-  /** 本地文件添加；undefined = 不支持。 */
-  addLocal?: { dirOnly?: boolean }
+  /** 本地文件添加；undefined = 不支持。secondFileKey：双文件资产（如
+   *  cltagger 的 tag_mapping），第一次选主文件后再弹一次 PathPicker，第二个
+   *  路径写进候选 extra[secondFileKey]。 */
+  addLocal?: { dirOnly?: boolean; secondFileKey?: string }
   /** true：未下载的候选禁选（主模型/放大器语义）；false：可选中，运行时懒下载（wd14/eval 语义）。 */
   selectRequiresExists?: boolean
   /** 行副内容逃生舱（label 旁 chip，如主模型 purpose 徽标）。 */
@@ -136,9 +137,10 @@ export function ModelSourceCard({
 }) {
   const { toast } = useToast()
   const { deleteAsset, downloadBusy, startDownload, reloadCatalog } = useSettingsData()
-  const [adding, setAdding] = useState<null | 'download' | 'local'>(null)
+  const [adding, setAdding] = useState<null | 'download' | 'local' | 'local2'>(null)
   const [repoDraft, setRepoDraft] = useState('')
   const [fileDraft, setFileDraft] = useState('')
+  const [firstLocalPath, setFirstLocalPath] = useState('')
   const [submitBusy, setSubmitBusy] = useState(false)
 
   const rows = catalog?.model_sources?.[domain]
@@ -322,101 +324,30 @@ export function ModelSourceCard({
           initialPath={catalog.models_root}
           dirOnly={addLocal.dirOnly}
           onPick={(p) => {
-            setAdding(null)
-            void submitCandidate({ kind: 'local', path: p })
+            if (addLocal.secondFileKey) {
+              // 双文件资产：记住主文件，再选第二个文件
+              setFirstLocalPath(p)
+              setAdding('local2')
+            } else {
+              setAdding(null)
+              void submitCandidate({ kind: 'local', path: p })
+            }
           }}
           onClose={() => setAdding(null)}
         />
       )}
-    </ModelGroupCard>
-  )
-}
-
-// ── CLTagger Model Card（打标 tab 内嵌的模型管理器） ─────────────────────────
-
-export function CLTaggerModelCard({
-  catalog, busy, start,
-  currentModelPath, currentTagMappingPath, onSelectVariant,
-  modelId, onModelIdChange, t,
-}: {
-  catalog: ModelsCatalog | null
-  busy: Set<string>
-  start: (model_id: string, variant?: string) => Promise<void>
-  currentModelPath: string
-  currentTagMappingPath: string
-  onSelectVariant: (v: CLTaggerVariantInfo) => void
-  modelId: string
-  onModelIdChange: (id: string) => void
-  t: TFunction
-}) {
-  const [advOpen, setAdvOpen] = useState(false)
-  const { deleteAsset } = useSettingsData()
-  const cl = catalog?.cltagger
-  const clDescription = translatedCatalogText(MODEL_DESCRIPTION_KEYS, 'cltagger', cl?.description, t)
-  if (!cl) {
-    return <p className="text-fg-tertiary text-xs">{t('settings.loadingModelCatalog')}</p>
-  }
-  return (
-    <ModelGroupCard
-      title={t('settings.clTaggerVersionTitle', { name: cl.name })}
-      helpTooltip={
-        <p><Trans i18nKey="settings.repoHelp" values={{ desc: clDescription, repo: cl.repo }} components={{ code: <code /> }} /></p>
-      }
-    >
-      <ul className="list-none m-0 p-0 flex flex-col gap-1">
-        {cl.variants.map((v) => {
-          const key = `cltagger:${v.label}`
-          const dl = catalog.downloads[key]
-          const isSel =
-            v.model_id === modelId &&
-            v.model_path === currentModelPath &&
-            v.tag_mapping_path === currentTagMappingPath
-          return (
-            <li key={v.label} className={`flex items-center gap-2 text-xs px-1.5 py-1 rounded-sm ${
-              isSel ? 'bg-accent-soft border border-accent' : 'bg-transparent border border-transparent'
-            }`}>
-              <input type="radio" name="cltagger_variant" checked={isSel}
-                onChange={() => onSelectVariant(v)}
-                className="shrink-0"
-                style={{ accentColor: 'var(--accent)' }}
-                title={t('settings.selectClTaggerVersion')}
-              />
-              <div className="flex flex-col flex-1 min-w-0">
-                <code className="font-mono text-fg-primary overflow-hidden text-ellipsis whitespace-nowrap">{v.label}</code>
-                {v.version_dir && (
-                  <span className="text-[10px] text-fg-tertiary overflow-hidden text-ellipsis whitespace-nowrap" title={v.version_dir}>
-                    {t('settings.clTaggerFilesAt')}: <code>{v.version_dir}</code>
-                  </span>
-                )}
-              </div>
-              <ModelStatusBadge
-                exists={v.exists} size={v.size} status={dl?.status}
-                fileCount={v.files.length}
-                existsCount={v.files.filter((f) => f.exists).length}
-              />
-              <DownloadButton
-                exists={v.exists} status={dl?.status} busy={busy.has(key)}
-                onClick={() => void start('cltagger', v.label)}
-                onDelete={() => void deleteAsset('cltagger', v.label, v.label)}
-              />
-            </li>
-          )
-        })}
-      </ul>
-      <button type="button" onClick={() => setAdvOpen(!advOpen)}
-        className="btn btn-ghost btn-sm text-xs text-fg-tertiary self-start">
-        {advOpen ? '▾' : '▸'} {t('settings.customRepoAdvanced')}
-      </button>
-      {advOpen && (
-        <SettingsField label={t('settings.fieldModelId')}>
-          <SettingsInput
-            type="text"
-            value={modelId}
-            onChange={onModelIdChange}
-            className={textInputClass}
-            placeholder="cella110n/cl_tagger"
-          />
-        </SettingsField>
+      {adding === 'local2' && addLocal?.secondFileKey && (
+        <PathPicker
+          initialPath={firstLocalPath}
+          onPick={(p) => {
+            setAdding(null)
+            void submitCandidate({
+              kind: 'local', path: firstLocalPath,
+              extra: { [addLocal.secondFileKey!]: p },
+            })
+          }}
+          onClose={() => setAdding(null)}
+        />
       )}
     </ModelGroupCard>
   )

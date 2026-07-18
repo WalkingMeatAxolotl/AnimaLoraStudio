@@ -667,6 +667,12 @@ def delete_asset(model_id: str, variant: Optional[str] = None) -> None:
             else f"upscaler:custom:{variant}"
         )
         target = upscaler_target(variant, root)
+    elif model_id == "cltagger_custom":
+        # fork repo 专属根目录整删（与官方 repo 目录隔离，安全）
+        if not variant:
+            raise ValueError("cltagger_custom 需要 variant=repo")
+        key = f"cltagger_custom:{variant}"
+        target = cltagger_target_root(root, variant)
     elif model_id == "upscaler_custom":
         # 统一来源 download 候选落盘的文件（filename 即身份）
         if not variant:
@@ -813,6 +819,30 @@ def trigger(model_id: str, variant: Optional[str] = None) -> str:
         key = f"upscaler:{label}"
         start_download_async(
             key, lambda log: download_upscaler(label, root, on_log=log)
+        )
+        return key
+    if model_id == "cltagger_custom":
+        # fork repo 候选（镜像覆盖退役后的替代，D4）：variant=repo，双文件
+        # 相对路径从候选 extra 取，下载到该 fork 专属根目录。
+        if not variant:
+            raise ValueError("cltagger_custom 需要 variant=repo")
+        cand = next(
+            (c for c in secrets.load().model_sources.get("cltagger", [])
+             if c.kind == "download" and c.repo == variant),
+            None,
+        )
+        if cand is None:
+            raise ValueError(f"no cltagger download candidate {variant!r}")
+        cfg = secrets.CLTaggerConfig(**{
+            **secrets.load().cltagger.model_dump(),
+            "model_id": cand.repo,
+            "model_path": cand.extra.get("model_path", ""),
+            "tag_mapping_path": cand.extra.get("tag_mapping_path", ""),
+        })
+        key = f"cltagger_custom:{variant}"
+        target = cltagger_target_root(root, cand.repo)
+        start_download_async(
+            key, lambda log: download_cltagger(target, cfg, on_log=log)
         )
         return key
     if model_id == "upscaler_custom":

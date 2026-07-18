@@ -331,6 +331,77 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
                 **_file_status(f),
             })
 
+    # CLTagger 统一行：选中值是 (model_id, model_path, tag_mapping_path)
+    # 三元组，行 value 用 `|` 合成键；真实三元组放 extra，前端选中时取
+    # extra 一次写回三字段。fork repo（download 候选）自带双文件相对路径
+    # （镜像覆盖退役，D4）；local 候选 = 双绝对路径文件。
+    def _cl_value(mid: str, mp: str, tmp: str) -> str:
+        return f"{mid}|{mp}|{tmp}"
+
+    cl_rows: list[dict[str, Any]] = []
+    for v in cl_variants:
+        cl_rows.append(_source_row(
+            kind="preset",
+            value=_cl_value(v["model_id"], v["model_path"], v["tag_mapping_path"]),
+            label=v["label"],
+            download_id="cltagger", download_variant=v["label"],
+            status_key=f"cltagger:{v['label']}",
+            exists=v["exists"], size=v["size"], files=v["files"],
+            is_current=v["is_current"],
+            description=str(v.get("description", "")),
+            extra={
+                "model_id": v["model_id"], "model_path": v["model_path"],
+                "tag_mapping_path": v["tag_mapping_path"],
+            },
+        ))
+    for c in source_cfg.get("cltagger", []):
+        mp = c.path if c.kind == "local" else c.extra.get("model_path", "")
+        tmp = c.extra.get("tag_mapping_path", "")
+        if c.kind == "download":
+            variant_root = cltagger_target_root(r, c.repo)
+            files = [
+                {"name": f, **_file_status(variant_root / f)}
+                for f in cltagger_required_files(mp, tmp)
+            ]
+            cl_rows.append(_source_row(
+                kind="download", value=_cl_value(c.repo, mp, tmp), label=c.repo,
+                download_id="cltagger_custom", download_variant=c.repo,
+                exists=all(f["exists"] for f in files),
+                size=sum(f["size"] for f in files), files=files,
+                is_current=(
+                    cl_cfg.model_id == c.repo
+                    and cl_cfg.model_path == mp
+                    and cl_cfg.tag_mapping_path == tmp
+                ),
+                description=mp,
+                extra={
+                    "model_id": c.repo, "model_path": mp,
+                    "tag_mapping_path": tmp,
+                },
+                candidate=c.model_dump(),
+            ))
+        else:
+            p_model = Path(mp)
+            p_map = Path(tmp) if tmp else None
+            st = _file_status(p_model)
+            cl_rows.append(_source_row(
+                kind="local", value=_cl_value("", mp, tmp), label=p_model.name,
+                download_id=None,
+                exists=st["exists"] and bool(p_map and p_map.is_file()),
+                size=st["size"],
+                is_current=(
+                    cl_cfg.model_path == mp
+                    and cl_cfg.tag_mapping_path == tmp
+                ),
+                description=tmp,
+                extra={
+                    "model_id": "", "model_path": mp,
+                    "tag_mapping_path": tmp,
+                },
+                candidate=c.model_dump(),
+            ))
+    model_source_rows["cltagger"] = cl_rows
+
     # 放大器统一行：preset + download/local 候选 + 扫盘兜底（D6）。
     # value 语义与 selected_upscaler 一致：preset=label / download·scanned=
     # 文件名 / local=绝对路径。
