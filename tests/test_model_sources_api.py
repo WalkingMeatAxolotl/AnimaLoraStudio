@@ -265,3 +265,80 @@ def test_upscaler_target_accepts_absolute_path(tmp_path: Path) -> None:
 def test_upscaler_target_absolute_path_requires_known_ext(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         model_downloader.upscaler_target(str(tmp_path / "x.exe"), tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# catalog 统一 shape — upscaler / 主模型族
+# ---------------------------------------------------------------------------
+
+
+def test_upscaler_rows_presets_and_download_candidate(
+    client: TestClient,
+) -> None:
+    client.post(
+        "/api/model-sources/upscaler",
+        json={
+            "kind": "download", "repo": "Kim2091/UltraSharp",
+            "filename": "4x-UltraSharp.pth",
+        },
+    )
+    rows = _rows(client.get("/api/models/catalog").json(), "upscaler")
+    presets = [r for r in rows if r["kind"] == "preset"]
+    assert presets and all(not r["removable"] for r in presets)
+    dl = [r for r in rows if r["kind"] == "download"]
+    assert len(dl) == 1
+    # value = 文件名（selected_upscaler 语义）；status_key 与扫盘行同格式
+    assert dl[0]["value"] == "4x-UltraSharp.pth"
+    assert dl[0]["download_id"] == "upscaler_custom"
+    assert dl[0]["status_key"] == "upscaler:custom:4x-UltraSharp.pth"
+    assert dl[0]["description"] == "Kim2091/UltraSharp"
+    assert dl[0]["candidate"]["repo"] == "Kim2091/UltraSharp"
+
+
+def test_upscaler_scanned_rows_exclude_registered_candidates(
+    client: TestClient, tmp_path: Path,
+) -> None:
+    up_dir = tmp_path / "models" / "upscalers"
+    up_dir.mkdir(parents=True)
+    (up_dir / "manual-drop.pth").write_bytes(b"w")
+    (up_dir / "4x-UltraSharp.pth").write_bytes(b"w")
+    client.post(
+        "/api/model-sources/upscaler",
+        json={
+            "kind": "download", "repo": "Kim2091/UltraSharp",
+            "filename": "4x-UltraSharp.pth",
+        },
+    )
+    rows = _rows(client.get("/api/models/catalog").json(), "upscaler")
+    scanned = [r["value"] for r in rows if r["kind"] == "scanned"]
+    # 手放的文件被扫出；已登记为 download 候选的文件不重复出现
+    assert scanned == ["manual-drop.pth"]
+    dl = [r for r in rows if r["kind"] == "download"]
+    assert dl[0]["exists"] is True
+
+
+def test_family_rows_download_candidate_value_is_target_path(
+    client: TestClient, tmp_path: Path,
+) -> None:
+    client.post(
+        "/api/model-sources/anima",
+        json={
+            "kind": "download", "repo": "author/finetune",
+            "filename": "my-finetune.safetensors",
+        },
+    )
+    rows = _rows(client.get("/api/models/catalog").json(), "anima")
+    presets = [r for r in rows if r["kind"] == "preset"]
+    assert presets and presets[0]["download_id"] == "anima_main"
+    dl = [r for r in rows if r["kind"] == "download"]
+    assert len(dl) == 1
+    # value = 落盘绝对路径（selected 已支持路径语义），下载 variant = repo 内路径
+    expected = str(tmp_path / "models" / "diffusion_models" / "my-finetune.safetensors")
+    assert dl[0]["value"] == expected
+    assert dl[0]["download_id"] == "anima_custom"
+    assert dl[0]["download_variant"] == "my-finetune.safetensors"
+
+
+def test_trigger_family_custom_requires_registered_candidate() -> None:
+    with pytest.raises(ValueError):
+        model_downloader.trigger("anima_custom", "not-registered.safetensors")

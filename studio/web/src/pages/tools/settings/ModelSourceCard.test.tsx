@@ -18,9 +18,12 @@ const t = i18n.t.bind(i18n)
 function row(partial: Partial<ModelSourceRow>): ModelSourceRow {
   return {
     kind: 'preset',
+    candidate: null,
     value: 'SmilingWolf/wd-eva02-large-tagger-v3',
     label: 'SmilingWolf/wd-eva02-large-tagger-v3',
+    description: '',
     download_id: 'wd14',
+    download_variant: 'SmilingWolf/wd-eva02-large-tagger-v3',
     status_key: 'wd14:SmilingWolf/wd-eva02-large-tagger-v3',
     exists: false,
     size: 0,
@@ -39,18 +42,22 @@ const DOWNLOAD = row({
   kind: 'download',
   value: 'Custom/tagger-x',
   label: 'Custom/tagger-x',
+  download_variant: 'Custom/tagger-x',
   status_key: 'wd14:Custom/tagger-x',
   removable: true,
+  candidate: { kind: 'download', repo: 'Custom/tagger-x' },
 })
 const LOCAL = row({
   kind: 'local',
   value: 'D:/models/wd14-local',
   label: 'D:/models/wd14-local',
   download_id: null,
+  download_variant: null,
   status_key: null,
   removable: true,
   deletable: false,
   exists: false,
+  candidate: { kind: 'local', path: 'D:/models/wd14-local' },
 })
 
 const catalog = {

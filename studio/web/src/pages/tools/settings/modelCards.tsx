@@ -114,7 +114,7 @@ export function SourceSelect({ opt, onChange }: {
 
 export function ModelSourceCard({
   domain, title, helpTooltip, catalog, currentValue, onSelect,
-  addDownload, addLocal, selectRequiresExists = false, t,
+  addDownload, addLocal, selectRequiresExists = false, renderRowMeta, describeRow, t,
 }: {
   domain: string
   title: string
@@ -128,6 +128,10 @@ export function ModelSourceCard({
   addLocal?: { dirOnly?: boolean }
   /** true：未下载的候选禁选（主模型/放大器语义）；false：可选中，运行时懒下载（wd14/eval 语义）。 */
   selectRequiresExists?: boolean
+  /** 行副内容逃生舱（label 旁 chip，如主模型 purpose 徽标）。 */
+  renderRowMeta?: (row: ModelSourceRow) => React.ReactNode
+  /** 行描述文本覆盖（如放大器 preset 描述的 i18n 翻译）；默认 row.description。 */
+  describeRow?: (row: ModelSourceRow) => string
   t: TFunction
 }) {
   const { toast } = useToast()
@@ -161,9 +165,9 @@ export function ModelSourceCard({
   }
 
   const removeCandidate = async (row: ModelSourceRow) => {
-    const cand: ModelSourceCandidate = row.kind === 'local'
+    const cand: ModelSourceCandidate = row.candidate ?? (row.kind === 'local'
       ? { kind: 'local', path: row.value }
-      : { kind: 'download', repo: row.value, extra: row.extra }
+      : { kind: 'download', repo: row.value, extra: row.extra })
     try {
       await api.removeModelSource(domain, cand)
       toast(t('settings.candidateRemoved'), 'success')
@@ -210,17 +214,27 @@ export function ModelSourceCard({
                 style={{ accentColor: 'var(--accent)' }}
                 title={canSelect ? t('settings.selectSourceCandidate') : t('settings.downloadRequiredFirst')}
               />
-              <code className="font-mono text-fg-primary flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap" title={row.value}>
-                {row.label}
-              </code>
-              {row.kind === 'local' && (
-                <span className="text-[10px] px-1 py-0 rounded-sm bg-overlay text-fg-tertiary shrink-0">
-                  {t('settings.localBadge')}
-                </span>
-              )}
-              {row.kind !== 'preset' && row.kind !== 'local' && (
-                <span className="text-[10px] px-1 py-0 rounded-sm bg-overlay text-fg-tertiary shrink-0">custom</span>
-              )}
+              <div className="flex flex-col flex-1 min-w-0">
+                <div className="flex items-center gap-2 min-w-0">
+                  <code className="font-mono text-fg-primary min-w-0 overflow-hidden text-ellipsis whitespace-nowrap" title={row.value}>
+                    {row.label}
+                  </code>
+                  {row.kind === 'local' && (
+                    <span className="text-[10px] px-1 py-0 rounded-sm bg-overlay text-fg-tertiary shrink-0">
+                      {t('settings.localBadge')}
+                    </span>
+                  )}
+                  {(row.kind === 'download' || row.kind === 'scanned') && (
+                    <span className="text-[10px] px-1 py-0 rounded-sm bg-overlay text-fg-tertiary shrink-0">custom</span>
+                  )}
+                  {renderRowMeta?.(row)}
+                </div>
+                {(describeRow ? describeRow(row) : row.description) && (
+                  <span className="text-fg-tertiary text-[11px] truncate">
+                    {describeRow ? describeRow(row) : row.description}
+                  </span>
+                )}
+              </div>
               {!row.exists && row.size_estimate ? (
                 <span className="text-fg-tertiary shrink-0">~{fmtBytes(row.size_estimate)}</span>
               ) : null}
@@ -237,8 +251,8 @@ export function ModelSourceCard({
                 <DownloadButton
                   exists={row.exists} status={dl?.status}
                   busy={row.status_key ? downloadBusy.has(row.status_key) : false}
-                  onClick={() => void startDownload(row.download_id!, row.value)}
-                  onDelete={() => void deleteAsset(row.download_id!, row.value, row.label)}
+                  onClick={() => void startDownload(row.download_id!, row.download_variant ?? row.value)}
+                  onDelete={() => void deleteAsset(row.download_id!, row.download_variant ?? row.value, row.label)}
                 />
               )}
               {row.removable && (

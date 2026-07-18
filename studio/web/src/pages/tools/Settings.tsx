@@ -761,8 +761,6 @@ export default function SettingsPage() {
       {tab === 'preprocess' && (
         <UpscalerSection
           catalog={catalog}
-          busy={downloadBusy}
-          start={startDownload}
           setSource={setDownloadSource}
           reloadCatalog={reloadCatalog}
           t={t}

@@ -13,7 +13,6 @@ import {
 } from '../../../api/client'
 import { useDialog } from '../../../components/Dialog'
 import { InfoButton } from '../../../components/InfoButton'
-import PathPicker from '../../../components/PathPicker'
 import { useTagAutocompleteEnabled } from '../../../tagDict/autocompleteToggle'
 import { useShowTagTranslation } from '../../../tagDict/showToggle'
 import { useTagDict, reloadDict } from '../../../tagDict/store'
@@ -23,7 +22,7 @@ import { applyDensity, applyTheme, getStoredDensity, getStoredTheme, setStoredDe
 import i18n, { getStoredLangWithDefault, setStoredLang } from '../../../i18n'
 import { MODEL_DESCRIPTION_KEYS, textInputClass, translatedCatalogText, UPSCALER_DESCRIPTION_KEYS, type Section } from './constants'
 import { Bool, SettingsField, SettingsInput, SettingsSection } from './fields'
-import { DeleteAssetButton, DownloadButton, ModelGroupCard, ModelStatusBadge, SourceSelect, StatusLabel } from './modelCards'
+import { DownloadButton, ModelGroupCard, ModelSourceCard, ModelStatusBadge, SourceSelect, StatusLabel } from './modelCards'
 
 // ── 训练参数 Section ─────────────────────────────────────────────────
 //
@@ -108,13 +107,10 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
   t: TFunction
 }) {
   const { toast } = useToast()
-  const dialog = useDialog()
   const { runSave, deleteAsset } = useSettingsData()
   const [selected, setSelected] = useState<Record<FamilyId, string>>({
     anima: '1.0', krea2: 'raw',
   })
-  const [pickerFamily, setPickerFamily] = useState<FamilyId | null>(null)
-  const [addingFamily, setAddingFamily] = useState<FamilyId | null>(null)
 
   // 一次性拉 secrets 取各族 selected（独立 PUT，不进全局 dirty 流程）。模型
   // 根目录已挪到「系统 → 存储位置」、自动配置模型路径已挪到「训练参数」，不在此渲染。
@@ -143,28 +139,6 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
     }
   }
 
-  // PathPicker 选中本地 .safetensors → 注册到该族 custom（仅登记路径）。
-  // 注册后不自动选中：与官方 variant「下载完再点 radio」的流程一致。
-  const addCustom = async (family: FamilyId, picked: string) => {
-    setPickerFamily(null)
-    const p = picked.trim()
-    if (!p) return
-    if (!p.toLowerCase().endsWith('.safetensors')) {
-      toast(t('settings.localModelInvalidExt'), 'error')
-      return
-    }
-    setAddingFamily(family)
-    try {
-      await runSave(() => api.addCustomModel(family, p))
-      toast(t('settings.localModelAdded', { name: p.split(/[\\/]/).pop() }), 'success')
-      await reloadCatalog()
-    } catch (e) {
-      toast(String(e), 'error')
-    } finally {
-      setAddingFamily(null)
-    }
-  }
-
   // krea2 TE variant 选择（bf16/fp8）：与主模型 pick 同款直写 secrets
   const [teSelected, setTeSelected] = useState<'bf16' | 'fp8'>('bf16')
   useEffect(() => {
@@ -181,19 +155,6 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
     } catch (e) {
       toast(String(e), 'error')
       void reloadCatalog()
-    }
-  }
-
-  const removeCustom = async (family: FamilyId, fallback: string, p: string) => {
-    const name = p.split(/[\\/]/).pop() || p
-    if (!(await dialog.confirm(t('settings.confirmRemoveLocalModel', { name }), { tone: 'danger' }))) return
-    try {
-      await runSave(() => api.removeCustomModel(family, p))
-      if (p === selected[family]) setSelected((prev) => ({ ...prev, [family]: fallback }))
-      toast(t('settings.localModelRemoved'), 'success')
-      await reloadCatalog()
-    } catch (e) {
-      toast(String(e), 'error')
     }
   }
 
@@ -260,8 +221,9 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
             <p className="text-fg-tertiary text-xs">{t('settings.loadingModelCatalog')}</p>
           ) : (
             <div className="flex flex-col gap-2">
-              {/* 族主模型：官方 variants + 本地 custom */}
-              <ModelGroupCard
+              {/* 族主模型：官方 variants + 用户候选（下载型第三方微调 / 本地文件） */}
+              <ModelSourceCard
+                domain={section.family}
                 title={main.name}
                 helpTooltip={
                   <>
@@ -278,72 +240,25 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
                     )}
                   </>
                 }
-              >
-                <ul className="list-none m-0 p-0 flex flex-col gap-1">
-                  {main.variants.map((v) => {
-                    const key = `${section.mainKey}:${v.variant}`
-                    const dl = catalog.downloads[key]
-                    const isSel = v.variant === selected[section.family]
-                    const canSelect = v.exists && dl?.status !== 'running'
-                    return (
-                      <li key={v.variant} className={`flex items-center gap-2 text-xs px-1.5 py-1 rounded-sm ${
-                        isSel ? 'bg-accent-soft border border-accent' : 'bg-transparent border border-transparent'
-                      }`}>
-                        <input type="radio" name={`${section.family}_variant`} checked={isSel} disabled={!canSelect}
-                          onChange={() => void pick(section.family, v.variant)}
-                          className="shrink-0"
-                          style={{ accentColor: 'var(--accent)' }}
-                          title={canSelect ? t('settings.selectDefaultMainModel') : v.exists ? t('settings.downloadInProgress') : t('settings.downloadRequiredFirst')}
-                        />
-                        <code className="font-mono text-fg-primary w-32 shrink-0">{v.variant}</code>
-                        {/* purpose 徽标（C10）：raw=训练底模 / turbo=推理底模 */}
-                        {v.purpose && (
-                          <span className="text-2xs px-1 py-0.5 rounded-sm bg-overlay text-fg-tertiary shrink-0">
-                            {t(`baseModel.purpose.${v.purpose}`)}
-                          </span>
-                        )}
-                        <span className="flex-1" />
-                        <ModelStatusBadge exists={v.exists} size={v.size} status={dl?.status} />
-                        <DownloadButton exists={v.exists} status={dl?.status} busy={busy.has(key)} onClick={() => void start(section.mainKey, v.variant)} onDelete={() => void deleteAsset(section.mainKey, v.variant, v.variant)} />
-                      </li>
-                    )
-                  })}
-                  {/* 用户注册的本地 custom 主模型（微调权重 / 在微调上测试） */}
-                  {main.custom.map((c) => {
-                    const isSel = c.path === selected[section.family]
-                    return (
-                      <li key={c.path} className={`flex items-center gap-2 text-xs px-1.5 py-1 rounded-sm ${
-                        isSel ? 'bg-accent-soft border border-accent' : 'bg-transparent border border-transparent'
-                      }`}>
-                        <input type="radio" name={`${section.family}_variant`} checked={isSel} disabled={!c.exists}
-                          onChange={() => void pick(section.family, c.path)}
-                          className="shrink-0"
-                          style={{ accentColor: 'var(--accent)' }}
-                          title={c.exists ? t('settings.selectDefaultMainModel') : t('settings.localModelMissing')}
-                        />
-                        <code className="font-mono text-fg-primary w-32 shrink-0 truncate" title={c.path}>{c.name}</code>
-                        <span className="flex-1" />
-                        <span className="text-2xs px-1 py-0.5 rounded-sm bg-overlay text-fg-tertiary shrink-0">{t('settings.storage.customBadge')}</span>
-                        {c.exists
-                          ? <ModelStatusBadge exists size={c.size} />
-                          : <span className="text-err text-2xs">{t('settings.localModelMissing')}</span>}
-                        <button
-                          onClick={() => void removeCustom(section.family, section.fallbackSelected, c.path)}
-                          className="btn btn-ghost btn-sm shrink-0 min-w-[5rem] justify-center"
-                          title={t('settings.removeLocalModel')}
-                        >🗑 {t('settings.removeLocalModelShort')}</button>
-                      </li>
-                    )
-                  })}
-                </ul>
-                <button
-                  onClick={() => setPickerFamily(section.family)}
-                  disabled={addingFamily === section.family}
-                  className="btn btn-ghost btn-sm self-start mt-1"
-                >
-                  {addingFamily === section.family ? t('common.saving') : t('settings.addLocalModel')}
-                </button>
-              </ModelGroupCard>
+                catalog={catalog}
+                currentValue={selected[section.family]}
+                onSelect={(v) => void pick(section.family, v)}
+                addDownload={{
+                  filenameField: true,
+                  repoPlaceholder: 'author/finetune-repo',
+                  filenamePlaceholder: 'model.safetensors',
+                }}
+                addLocal={{}}
+                selectRequiresExists
+                renderRowMeta={(row) => (
+                  row.extra.purpose ? (
+                    <span className="text-2xs px-1 py-0.5 rounded-sm bg-overlay text-fg-tertiary shrink-0">
+                      {t(`baseModel.purpose.${row.extra.purpose}`)}
+                    </span>
+                  ) : null
+                )}
+                t={t}
+              />
 
               {/* 共享 Qwen-Image VAE（两族同一份文件，族无关资产） */}
               {renderSharedVae()}
@@ -405,13 +320,6 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
               {renderDownloadLogs(section.downloadKeyPrefixes)}
             </div>
           )}
-          {pickerFamily === section.family && (
-            <PathPicker
-              initialPath={catalog?.models_root ?? undefined}
-              onPick={(p) => void addCustom(section.family, p)}
-              onClose={() => setPickerFamily(null)}
-            />
-          )}
         </SettingsSection>
       )
     })}
@@ -420,21 +328,15 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
 }
 
 export function UpscalerSection({
-  catalog, busy, start, setSource, reloadCatalog, t,
+  catalog, setSource, reloadCatalog, t,
 }: {
   catalog: ModelsCatalog | null
-  busy: Set<string>
-  start: (model_id: string, variant?: string) => Promise<void>
   setSource: (type: string, source: string) => Promise<void>
   reloadCatalog: () => Promise<ModelsCatalog | null>
   t: TFunction
 }) {
   const { toast } = useToast()
-  const { runSave, deleteAsset } = useSettingsData()
-  const [customSource, setCustomSource] = useState<'hf' | 'ms'>('hf')
-  const [customRepo, setCustomRepo] = useState('')
-  const [customFile, setCustomFile] = useState('')
-  const [customBusy, setCustomBusy] = useState(false)
+  const { runSave } = useSettingsData()
 
   const pickUpscaler = async (label: string) => {
     try {
@@ -446,33 +348,6 @@ export function UpscalerSection({
     }
   }
 
-  const submitCustom = async () => {
-    const repo = customRepo.trim()
-    const file = customFile.trim()
-    if (!repo || !file) {
-      toast(t('settings.repoAndFilenameRequired'), 'error')
-      return
-    }
-    setCustomBusy(true)
-    try {
-      await api.startUpscalerCustomDownload({
-        source: customSource, repo_id: repo, filename: file,
-      })
-      toast(t('settings.downloadStarted', { name: file }), 'success')
-      setCustomRepo('')
-      setCustomFile('')
-      // SSE 推 model_download_changed 会刷 catalog；这里兜底
-      setTimeout(() => void reloadCatalog(), 1500)
-    } catch (e) {
-      toast(String(e), 'error')
-    } finally {
-      setCustomBusy(false)
-    }
-  }
-
-  const variants = catalog?.upscalers?.variants ?? []
-  const current = catalog?.upscalers?.current ?? ''
-
   return (
     <SettingsSection id="upscalers" title={t('settings.upscalersPreprocess')}>
       <SourceSelect
@@ -483,120 +358,36 @@ export function UpscalerSection({
         <p className="text-fg-tertiary text-xs">{t('common.loading')}</p>
       ) : (
         <div className="flex flex-col gap-2">
-          <ModelGroupCard
+          <ModelSourceCard
+            domain="upscaler"
             title={t('settings.availableUpscalers')}
             helpTooltip={
               <>
                 <p><Trans i18nKey="settings.upscalersHelpPath" values={{ path: catalog.upscalers?.target_dir }} components={{ code: <code /> }} /></p>
                 <p>{t('settings.upscalersHelpDefault')}</p>
-              </>
-            }
-          >
-            <ul className="list-none m-0 p-0 flex flex-col gap-1">
-              {variants.map((v) => {
-                const key = v.kind === 'custom'
-                  ? `upscaler:custom:${v.filename}`
-                  : `upscaler:${v.label}`
-                const dl = catalog.downloads[key]
-                const isSel = v.label === current
-                const canSelect = v.exists && dl?.status !== 'running'
-                return (
-                  <li key={v.label} className={`flex items-center gap-2 text-xs px-1.5 py-1 rounded-sm ${
-                    isSel ? 'bg-accent-soft border border-accent' : 'bg-transparent border border-transparent'
-                  }`}>
-                    <input
-                      type="radio"
-                      name="selected_upscaler"
-                      checked={isSel}
-                      disabled={!canSelect}
-                      onChange={() => void pickUpscaler(v.label)}
-                      className="shrink-0"
-                      style={{ accentColor: 'var(--accent)' }}
-                      title={canSelect ? t('settings.selectDefaultPreprocess') : v.exists ? t('settings.downloadInProgress') : t('settings.notDownloaded')}
-                    />
-                    <div className="flex flex-col min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <code className="font-mono text-fg-primary truncate">{v.label}</code>
-                        {v.kind === 'custom' && (
-                          <span className="text-[10px] px-1 py-0 rounded-sm bg-sunken text-fg-tertiary">custom</span>
-                        )}
-                      </div>
-                      <span className="text-fg-tertiary text-[11px] truncate">
-                        {translatedCatalogText(UPSCALER_DESCRIPTION_KEYS, v.label, v.description, t)}
-                        {v.hf_repo && <> · HF <code>{v.hf_repo}</code></>}
-                        {v.ms_repo && <> · MS <code>{v.ms_repo}</code></>}
-                        {v.size_mb != null && <> · ~{v.size_mb} MB</>}
-                      </span>
-                    </div>
-                    <ModelStatusBadge exists={v.exists} size={v.size} status={dl?.status} />
-                    {v.kind === 'preset' ? (
-                      <DownloadButton
-                        exists={v.exists}
-                        status={dl?.status}
-                        busy={busy.has(`upscaler:${v.label}`)}
-                        onClick={() => void start('upscaler', v.label)}
-                        onDelete={() => void deleteAsset('upscaler', v.label, v.label)}
-                      />
-                    ) : (
-                      /* custom：扫盘发现的文件，只有删除（重下走下方自定义下载表单） */
-                      <DeleteAssetButton onClick={() => void deleteAsset('upscaler', v.filename, v.label)} />
-                    )}
-                  </li>
-                )
-              })}
-            </ul>
-          </ModelGroupCard>
-
-          <ModelGroupCard
-            title={t('settings.customDownload')}
-            helpTooltip={
-              <>
                 <p><Trans i18nKey="settings.customUpscalerHelpTypes" components={{ code: <code /> }} /></p>
-                <p><Trans i18nKey="settings.customUpscalerHelpSources" components={{ code: <code /> }} /></p>
-                <p>{t('settings.customUpscalerHelpEnable')}</p>
               </>
             }
-          >
-            <div className="flex flex-col gap-2 text-xs">
-              <SettingsField label={t('settings.source')}>
-                <select
-                  value={customSource}
-                  onChange={(e) => setCustomSource(e.target.value as 'hf' | 'ms')}
-                  className={`${textInputClass} max-w-32`}
-                >
-                  <option value="hf">HuggingFace</option>
-                  <option value="ms">ModelScope</option>
-                </select>
-              </SettingsField>
-              <SettingsField label={t('settings.repoId')}>
-                <input
-                  type="text"
-                  value={customRepo}
-                  onChange={(e) => setCustomRepo(e.target.value)}
-                  placeholder={customSource === 'hf' ? 'Kim2091/UltraSharp' : 'libfishopen/upscaler'}
-                  className={`${textInputClass} flex-1 font-mono`}
-                />
-              </SettingsField>
-              <SettingsField label={t('common.filename')}>
-                <input
-                  type="text"
-                  value={customFile}
-                  onChange={(e) => setCustomFile(e.target.value)}
-                  placeholder="4x-UltraSharp.pth"
-                  className={`${textInputClass} flex-1 font-mono`}
-                />
-              </SettingsField>
-              <div className="flex justify-end">
-                <button
-                  onClick={() => void submitCustom()}
-                  disabled={customBusy || !customRepo.trim() || !customFile.trim()}
-                  className="btn btn-primary btn-sm"
-                >
-                  {customBusy ? t('settings.downloadInProgress') : t('common.download')}
-                </button>
-              </div>
-            </div>
-          </ModelGroupCard>
+            catalog={catalog}
+            currentValue={catalog.upscalers?.current ?? ''}
+            onSelect={(v) => void pickUpscaler(v)}
+            addDownload={{
+              filenameField: true,
+              repoPlaceholder: 'Kim2091/UltraSharp',
+              filenamePlaceholder: '4x-UltraSharp.pth',
+            }}
+            addLocal={{}}
+            selectRequiresExists
+            describeRow={(row) => {
+              const base = row.kind === 'preset'
+                ? translatedCatalogText(UPSCALER_DESCRIPTION_KEYS, row.value, row.description, t)
+                : row.description
+              const repo = row.extra.hf_repo
+                ? ` · HF ${row.extra.hf_repo}` : ''
+              return `${base ?? ''}${repo}`
+            }}
+            t={t}
+          />
 
           {/* 下载日志 */}
           {Object.values(catalog.downloads).filter((d) => d.key.startsWith('upscaler') && (d.status === 'running' || d.status === 'failed')).length > 0 && (

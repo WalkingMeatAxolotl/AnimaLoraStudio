@@ -181,21 +181,40 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
         exists: bool, size: int, is_current: bool,
         label: Optional[str] = None, files: Optional[list] = None,
         size_estimate: int = 0, extra: Optional[dict] = None,
+        download_variant: Optional[str] = None,
+        status_key: Optional[str] = None,
+        description: str = "",
+        removable: Optional[bool] = None,
+        candidate: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
+        variant = download_variant or value
         return {
-            "kind": kind,               # preset | download | local
-            "value": value,             # 写进选中值字段的值（repo id / 绝对路径）
+            # 用户候选的原始存储记录（DELETE /api/model-sources 的身份键）；
+            # preset / scanned 行无。
+            "candidate": candidate,
+            "kind": kind,               # preset | download | local | scanned
+            "value": value,             # 写进选中值字段的值（repo id / 绝对路径 / label）
             "label": label or value,
+            "description": description,
             # 触发下载：POST /api/models/download {model_id: download_id,
-            # variant: value}；status key = f"{download_id}:{value}"。local 无。
+            # variant: download_variant}；status key 默认拼接、可显式覆盖
+            # （upscaler custom 的 key 形如 upscaler:custom:{filename}）。local 无。
             "download_id": download_id,
-            "status_key": f"{download_id}:{value}" if download_id else None,
+            "download_variant": variant if download_id else None,
+            "status_key": (
+                status_key if status_key is not None
+                else (f"{download_id}:{variant}" if download_id else None)
+            ),
             "exists": exists,
             "size": size,
             "files": files,
             "size_estimate": size_estimate,
             "is_current": is_current,
-            "removable": kind != "preset",   # 内置不可移除（保护默认）
+            # 内置不可移除（保护默认）；扫盘行不在候选存储里、也不可移除
+            "removable": (
+                removable if removable is not None
+                else kind not in ("preset", "scanned")
+            ),
             "deletable": kind != "local",    # 本地文件永不从 UI 删除
             "extra": extra or {},
         }
@@ -242,6 +261,7 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
             value = c.repo if c.kind == "download" else c.path
             row = row_fn(c.kind, value)
             row["extra"] = dict(c.extra)
+            row["candidate"] = c.model_dump()
             rows.append(row)
         return rows
 
@@ -310,6 +330,104 @@ def build_catalog(root: Optional[Path] = None) -> dict[str, Any]:
                 "is_current": f.name == selected_label or f.stem == selected_label,
                 **_file_status(f),
             })
+
+    # 放大器统一行：preset + download/local 候选 + 扫盘兜底（D6）。
+    # value 语义与 selected_upscaler 一致：preset=label / download·scanned=
+    # 文件名 / local=绝对路径。
+    up_rows: list[dict[str, Any]] = []
+    for label, info in UPSCALER_VARIANTS.items():
+        target = upscaler_target(label, r)
+        st = _file_status(target)
+        up_rows.append(_source_row(
+            kind="preset", value=label,
+            download_id="upscaler",
+            exists=st["exists"], size=st["size"],
+            is_current=label == selected_label,
+            description=str(info.get("description", "")),
+            size_estimate=int(info.get("size_mb") or 0) * 1_000_000,
+            extra={
+                "hf_repo": (info.get("hf") or ("",))[0] or "",
+                "ms_repo": (info.get("ms") or ("",))[0] or "",
+            },
+        ))
+    _custom_filenames: set[str] = set()
+    for c in source_cfg.get("upscaler", []):
+        if c.kind == "download":
+            save_name = Path(c.filename).name
+            _custom_filenames.add(save_name)
+            target = upscaler_dir(r) / save_name
+            st = _file_status(target)
+            up_rows.append(_source_row(
+                kind="download", value=save_name,
+                download_id="upscaler_custom", download_variant=c.filename,
+                status_key=f"upscaler:custom:{save_name}",
+                exists=st["exists"], size=st["size"],
+                is_current=save_name == selected_label,
+                description=c.repo,
+                candidate=c.model_dump(),
+            ))
+        else:
+            p = Path(c.path)
+            st = _file_status(p)
+            up_rows.append(_source_row(
+                kind="local", value=c.path, label=p.name, download_id=None,
+                exists=st["exists"], size=st["size"],
+                is_current=c.path == selected_label,
+                candidate=c.model_dump(),
+            ))
+    for v in upscaler_variants:
+        # 扫盘发现、但既非预设也未被 download 候选登记的文件：只能删除
+        if v["kind"] != "custom" or v["filename"] in _custom_filenames:
+            continue
+        up_rows.append(_source_row(
+            kind="scanned", value=v["filename"], label=v["label"],
+            download_id="upscaler", download_variant=v["filename"],
+            status_key=f"upscaler:custom:{v['filename']}",
+            exists=bool(v.get("exists")), size=int(v.get("size") or 0),
+            is_current=bool(v.get("is_current")),
+        ))
+    model_source_rows["upscaler"] = up_rows
+
+    # 主模型族统一行：官方 variants（preset）+ download 候选（第三方微调，
+    # value=落盘绝对路径，与 local/selected 同语义）+ local（PathPicker 注册）。
+    for family_id in FAMILY_ASSETS:
+        main = family_sections.get(f"{family_id}_main")
+        if not main:
+            continue
+        selected_val = str(
+            models_cfg.selected.get(family_id) or main.get("latest") or "")
+        fam_rows: list[dict[str, Any]] = []
+        for v in main["variants"]:
+            fam_rows.append(_source_row(
+                kind="preset", value=v["variant"],
+                download_id=f"{family_id}_main",
+                exists=bool(v.get("exists")), size=int(v.get("size") or 0),
+                is_current=v["variant"] == selected_val,
+                extra={"purpose": str(v.get("purpose") or "")},
+            ))
+        for c in source_cfg.get(family_id, []):
+            if c.kind == "download":
+                save_name = Path(c.filename).name
+                target = r / "diffusion_models" / save_name
+                st = _file_status(target)
+                fam_rows.append(_source_row(
+                    kind="download", value=str(target), label=save_name,
+                    download_id=f"{family_id}_custom", download_variant=c.filename,
+                    exists=st["exists"], size=st["size"],
+                    is_current=str(target) == selected_val,
+                    description=c.repo,
+                    candidate=c.model_dump(),
+                ))
+            else:
+                p = Path(c.path)
+                st = _file_status(p)
+                fam_rows.append(_source_row(
+                    kind="local", value=c.path, label=p.name, download_id=None,
+                    exists=st["exists"], size=st["size"],
+                    is_current=c.path == selected_val,
+                    candidate=c.model_dump(),
+                ))
+        model_source_rows[family_id] = fam_rows
 
     return {
         "models_root": str(r),

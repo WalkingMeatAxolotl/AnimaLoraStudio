@@ -748,11 +748,17 @@ export interface ModelDownloadStatus {
  *  docs/design/model-source-unification.md §6。 */
 export interface ModelSourceRow {
   kind: 'preset' | 'download' | 'local' | 'scanned'
+  /** 用户候选的原始存储记录（DELETE 的身份键）；preset / scanned 行为 null。 */
+  candidate: ModelSourceCandidate | null
   /** 写进该 domain 选中值字段的值（repo id / 绝对路径 / 文件名）。 */
   value: string
   label: string
+  /** 行副标题（放大器描述 / 自定义候选的 repo 来源等）。 */
+  description: string
   /** POST /api/models/download 的 model_id；local 候选为 null（不可下载）。 */
   download_id: string | null
+  /** 下载触发的 variant 参数（默认 = value；主模型/放大器候选 = repo 内文件路径）。 */
+  download_variant: string | null
   /** catalog.downloads 的 status key；local 候选为 null。 */
   status_key: string | null
   exists: boolean

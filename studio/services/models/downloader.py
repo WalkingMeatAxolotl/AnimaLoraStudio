@@ -325,6 +325,45 @@ def download_upscaler_custom(
     return _sources.download_flat(repo_id, repo_subpath, target, on_log=on_log)
 
 
+def download_main_custom(
+    repo_id: str,
+    filename: str,
+    root: Optional[Path] = None,
+    *,
+    on_log: Callable[[str], None] = print,
+) -> bool:
+    """统一来源候选的第三方主模型单文件下载 → `{models_root}/diffusion_models/`。
+
+    filename 是 repo 内路径（可含子目录），落地时剥成纯文件名（与官方
+    variant 同目录，文件名即身份）。走 download_flat 的「有 MS 映射用 MS、
+    否则 HF」默认逻辑——自定义 repo 无映射即直连 HF。
+    """
+    save_name = Path(filename).name
+    if not save_name.lower().endswith(".safetensors"):
+        on_log(f"✗ 仅支持 .safetensors，收到 {save_name!r}")
+        return False
+    r = root or models_root()
+    target = r / "diffusion_models" / save_name
+    on_log(f"\n📥 自定义主模型 {repo_id}/{filename} → {target}")
+    return _sources.download_flat(repo_id, filename, target, on_log=on_log)
+
+
+def _download_candidate(domain: str, filename: str) -> "secrets.SourceCandidate":
+    """按 filename 查该 domain 的下载型候选（trigger / delete 共用）。"""
+    for c in secrets.load().model_sources.get(domain, []):
+        if c.kind == "download" and c.filename == filename:
+            return c
+    raise ValueError(f"no download candidate {filename!r} for domain {domain!r}")
+
+
+def _custom_family(model_id: str) -> Optional[str]:
+    """`{family}_custom` 形式的 model_id → family id（未注册族返回 None）。"""
+    from .families import FAMILY_ASSETS
+
+    family = model_id[: -len("_custom")]
+    return family if family in FAMILY_ASSETS else None
+
+
 def download_wd14(
     model_id: str,
     root: Optional[Path] = None,
@@ -628,6 +667,18 @@ def delete_asset(model_id: str, variant: Optional[str] = None) -> None:
             else f"upscaler:custom:{variant}"
         )
         target = upscaler_target(variant, root)
+    elif model_id == "upscaler_custom":
+        # 统一来源 download 候选落盘的文件（filename 即身份）
+        if not variant:
+            raise ValueError("upscaler_custom 需要 variant=filename")
+        save_name = Path(variant).name
+        key = f"upscaler:custom:{save_name}"
+        target = upscaler_dir(root) / save_name
+    elif model_id.endswith("_custom") and _custom_family(model_id) is not None:
+        if not variant:
+            raise ValueError(f"{model_id} 需要 variant=filename")
+        key = f"{model_id}:{variant}"
+        target = root / "diffusion_models" / Path(variant).name
     else:
         raise ValueError(f"asset {model_id!r} does not support deletion")
 
@@ -764,4 +815,33 @@ def trigger(model_id: str, variant: Optional[str] = None) -> str:
             key, lambda log: download_upscaler(label, root, on_log=log)
         )
         return key
+    if model_id == "upscaler_custom":
+        # 统一来源 download 候选（variant=filename；repo 从候选记录取，
+        # 源跟全局 download_sources.upscaler）。key 与扫盘行一致。
+        if not variant:
+            raise ValueError("upscaler_custom 需要 variant=filename")
+        cand = _download_candidate("upscaler", variant)
+        key = f"upscaler:custom:{Path(variant).name}"
+        source = "ms" if _sources._source_for("upscaler") == "modelscope" else "hf"
+        start_download_async(
+            key,
+            lambda log: download_upscaler_custom(
+                source, cand.repo, variant, root, on_log=log),
+        )
+        return key
+    if model_id.endswith("_custom"):
+        from .families import FAMILY_ASSETS
+
+        family = model_id[: -len("_custom")]
+        if family in FAMILY_ASSETS:
+            if not variant:
+                raise ValueError(f"{model_id} 需要 variant=filename")
+            cand = _download_candidate(family, variant)
+            key = f"{model_id}:{variant}"
+            start_download_async(
+                key,
+                lambda log: download_main_custom(
+                    cand.repo, variant, root, on_log=log),
+            )
+            return key
     raise ValueError(f"unknown model_id {model_id!r}")
