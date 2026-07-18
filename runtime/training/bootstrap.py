@@ -116,8 +116,17 @@ def init_progress(show_progress, total_steps):
     - 关闭进度时返回 `(None, None, None)`
     - Rich 可用时返回 `(Progress 实例, task_id, "rich")`
     - Rich 缺失时返回 `("plain", None, None)`（main() 据此走纯文本进度）
+
+    非 tty（studio spawn 的 pipe）强制降级走 log_every 纯文本分支——
+    rich 在 pipe 下既刷屏又吃掉 step 行（log_every 是 elif），存量
+    config 固化的 ``no_progress: false``（老默认 + 字段现已 hidden）
+    曾让 task log 里一行 step 日志都没有。裸终端 CLI 不受影响。
     """
     if not show_progress:
+        return None, None, None
+    import sys as _sys
+
+    if not (hasattr(_sys.stdout, "isatty") and _sys.stdout.isatty()):
         return None, None, None
     try:
         from rich.progress import (
