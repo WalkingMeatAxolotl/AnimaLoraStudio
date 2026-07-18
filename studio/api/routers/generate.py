@@ -351,6 +351,46 @@ def install_taeflux() -> dict[str, Any]:
     return {"ok": True}
 
 
+_TOKENIZER_CACHE: dict[str, Any] = {}
+
+
+@router.post("/api/generate/token_count")
+def count_prompt_tokens(body: dict) -> dict[str, Any]:
+    """prompt 的真实 token 数（前端角标用；tokenizer 与训练/推理同源）。
+
+    krea2 的文本条件训练口径 512 token，超出部分模型没见过（不拦截、
+    不警告——质量后果由用户掌握，前端只给中性计数）。tokenizer 惰性
+    加载并缓存；不可用时返回 tokens=null，前端隐藏角标。
+    """
+    text = str(body.get("text") or "")
+    family = str(body.get("model_family") or "anima")
+    try:
+        from ...services.models.paths import models_root
+
+        if family == "krea2":
+            from ...services.models.families.krea2 import (
+                qwen3_vl_dir_for, selected_te_variant,
+            )
+
+            tok_dir = str(qwen3_vl_dir_for(models_root(), selected_te_variant()))
+        else:
+            from ...services.models.families.anima import qwen_dir
+
+            tok_dir = str(qwen_dir(models_root()))
+        tokenizer = _TOKENIZER_CACHE.get(tok_dir)
+        if tokenizer is None:
+            from transformers import AutoTokenizer
+
+            tokenizer = AutoTokenizer.from_pretrained(
+                tok_dir, local_files_only=True,
+            )
+            _TOKENIZER_CACHE[tok_dir] = tokenizer
+        tokens = len(tokenizer(text, add_special_tokens=False)["input_ids"])
+        return {"tokens": tokens}
+    except Exception:
+        return {"tokens": None}
+
+
 @router.get("/api/generate/daemon/status")
 def get_daemon_status() -> dict[str, Any]:
     """查询 daemon 当前状态。前端 DaemonControls 用。"""

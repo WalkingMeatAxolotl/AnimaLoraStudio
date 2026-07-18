@@ -23,19 +23,24 @@ class _FakeTokenizer:
             return {"input_ids": list(range(34))}
 
         max_length = kwargs.get("max_length")
-        if max_length is None:  # fixed five-token suffix
+        # 后缀调用：无 padding 无 max_length（在线主调用带 padding="longest"）
+        if max_length is None and kwargs.get("padding") is None:
             return {
                 "input_ids": torch.arange(5).repeat(len(texts), 1),
                 "attention_mask": torch.ones(len(texts), 5, dtype=torch.long),
             }
 
-        ids = torch.zeros(len(texts), max_length, dtype=torch.long)
+        def _valid(value: str) -> int:
+            caption = value.rsplit("user\n", 1)[-1]
+            n = 34 + len(caption)
+            return min(max_length, n) if max_length else n
+
+        width = max_length or max(_valid(v) for v in texts)
+        ids = torch.zeros(len(texts), width, dtype=torch.long)
         mask = torch.zeros_like(ids)
         for index, value in enumerate(texts):
-            caption = value.rsplit("user\n", 1)[-1]
-            valid = min(max_length, 34 + len(caption))
-            ids[index] = torch.arange(max_length)
-            mask[index, :valid] = 1
+            ids[index] = torch.arange(width)
+            mask[index, :_valid(value)] = 1
         return {"input_ids": ids, "attention_mask": mask}
 
 
@@ -131,9 +136,10 @@ def test_online_mode_never_writes_cache_and_keeps_model_loaded(tmp_path):
     assert not (tmp_path / ".text-cache").exists()
     assert condition.context.shape == (2, 7, 2, 4)
     assert condition.attention_mask.sum(dim=1).tolist() == [7, 6]
-    # For "ab": positions 34/35, interior pad 36 skipped, suffix 37..41 retained.
+    # 在线模式不截断 + longest pad：最长条 "ab" 无 interior pad，token 连续
+    # （positions 34/35 + suffix 36..40）；旧定长口径的 pad 位移不复存在。
     assert condition.context[0, :, 0, 0].tolist() == [
-        134.0, 135.0, 137.0, 138.0, 139.0, 140.0, 141.0,
+        134.0, 135.0, 136.0, 137.0, 138.0, 139.0, 140.0,
     ]
 
 

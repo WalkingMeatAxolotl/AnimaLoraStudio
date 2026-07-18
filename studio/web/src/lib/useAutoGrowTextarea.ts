@@ -25,7 +25,9 @@ export function useAutoGrowTextarea(
       // scrollHeight 不含 border；box-sizing: border-box 下补回去，否则每次少
       // 2px 出现滚动条
       const border = el.offsetHeight - el.clientHeight
-      el.style.height = `${el.scrollHeight + border}px`
+      // 额外加一行行高：给右下角的 token 计数角标留空间（内容贴底时不重叠）
+      const lineHeight = parseFloat(getComputedStyle(el).lineHeight) || 20
+      el.style.height = `${el.scrollHeight + border + lineHeight}px`
     }
     fit()
     // 监听尺寸变化：tab 切换让元素从隐藏变可见时重算，宽度变化（换行影响高度）时也重算

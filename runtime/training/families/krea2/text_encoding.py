@@ -466,15 +466,30 @@ class Krea2TextStack:
     def _tokenize(self, captions: Sequence[str]) -> tuple[Tensor, Tensor]:
         text = [_PROMPT_PREFIX + str(caption) for caption in captions]
         suffix = [_PROMPT_SUFFIX] * len(text)
-        encoded = self.tokenizer(
-            text,
-            truncation=True,
-            return_length=False,
-            return_overflowing_tokens=False,
-            padding="max_length",
-            max_length=self.max_length + _PREFIX_TOKENS - _SUFFIX_TOKENS,
-            return_tensors="pt",
-        )
+        if not self.cache_enabled:
+            # 在线模式（generate）不截断：超过训练口径 512 token 的 prompt
+            # 完整进模型——质量后果由用户掌握（不拦截、不静默丢尾巴）。
+            # varlen 链路（gather_valid_text / DiT text_len）对任意长度无
+            # 结构约束；pad 到 batch 内最长即可。
+            encoded = self.tokenizer(
+                text,
+                truncation=False,
+                return_length=False,
+                return_overflowing_tokens=False,
+                padding="longest",
+                return_tensors="pt",
+            )
+        else:
+            # 训练 cached 模式维持官方训练口径 512 定长（缓存指纹语义不变）
+            encoded = self.tokenizer(
+                text,
+                truncation=True,
+                return_length=False,
+                return_overflowing_tokens=False,
+                padding="max_length",
+                max_length=self.max_length + _PREFIX_TOKENS - _SUFFIX_TOKENS,
+                return_tensors="pt",
+            )
         suffix_encoded = self.tokenizer(suffix, return_tensors="pt")
         input_ids = torch.cat(
             [encoded["input_ids"], suffix_encoded["input_ids"]], dim=1,

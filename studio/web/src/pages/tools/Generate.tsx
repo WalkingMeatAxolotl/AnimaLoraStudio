@@ -76,6 +76,10 @@ const DEFAULT_GENERATE_PREFS = {
   xDraft: { axis: 'steps', raw: '20, 25, 30', loraIndex: null } as XYAxisDraft,
   yDraft: null as XYAxisDraft | null,
   datasetPick: null as DatasetPick | null,
+  // 底模 / TE 的显式覆盖也持久化（用户反馈：切页面被重置回全局默认太烦）。
+  // null = 跟随设置页 selected / selected_te（仍是默认行为）。
+  baseModel: null as string | null,
+  textEncoder: null as 'bf16' | 'fp8' | null,
 }
 
 type GeneratePrefs = typeof DEFAULT_GENERATE_PREFS
@@ -118,6 +122,8 @@ function normalizePrefs(p: GeneratePrefs): GeneratePrefs {
       ? merged.samplerName : samplers[0]) as SamplerName,
     scheduler: (schedulers.includes(merged.scheduler)
       ? merged.scheduler : schedulers[0]) as SchedulerName,
+    textEncoder: (merged.textEncoder === 'bf16' || merged.textEncoder === 'fp8')
+      ? merged.textEncoder : null,
   }
 }
 
@@ -239,12 +245,13 @@ export default function GeneratePage() {
     yDraft: XYAxisDraft | null
     snapshot: GenerateParamsSnapshot
   }>>(new Map())
-  // 本次出图临时选用的底模（null = 跟随设置页 selected_anima）。不进 prefs
-  // 持久化：每次进页面都回到「设置页默认底模」，符合「默认用设置里的」。
-  const [baseModel, setBaseModel] = useState<string | null>(null)
-  // 本次出图的文本编码器 variant（krea2 生效）：null=跟随下载中心选中
-  // （selected_te）；显式选择=临时覆盖。与 baseModel 同为瞬态不进 prefs。
-  const [textEncoder, setTextEncoder] = useState<'bf16' | 'fp8' | null>(null)
+  // 本次出图选用的底模 / TE（null = 跟随设置页 selected / selected_te）。
+  // 显式覆盖持久化在 prefs（用户反馈：瞬态设计切页面即被重置太烦）。
+  const baseModel = prefs.baseModel
+  const setBaseModel = (v: string | null) => setPrefs((p) => ({ ...p, baseModel: v }))
+  const textEncoder = prefs.textEncoder
+  const setTextEncoder = (v: 'bf16' | 'fp8' | null) =>
+    setPrefs((p) => ({ ...p, textEncoder: v }))
   const teOptions = useKrea2TeOptions()
   const effectiveTe = textEncoder ?? teOptions.selected
   // 当前族的底模选项（含 purpose 元数据）——选中蒸馏推理 variant（Krea2
@@ -896,9 +903,9 @@ export default function GeneratePage() {
                 </div>
               )}
               <label className="caption block mb-1">{t('generate.positive')}</label>
-              <PromptList prompts={prompts} onChange={setPrompts} />
+              <PromptList prompts={prompts} onChange={setPrompts} modelFamily={modelFamily} />
               <label className="caption block mb-1 mt-3">{t('generate.negative')}</label>
-              <NegPromptInput value={negPrompt} onChange={setNegPrompt} />
+              <NegPromptInput value={negPrompt} onChange={setNegPrompt} modelFamily={modelFamily} />
             </div>
 
             {/* tab=config */}

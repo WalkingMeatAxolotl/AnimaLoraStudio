@@ -3,11 +3,14 @@ import { useRef } from 'react'
 import { TagSuggestList } from '../../../components/tagSuggest/TagSuggestList'
 import { useTagSuggest } from '../../../components/tagSuggest/useTagSuggest'
 import { useAutoGrowTextarea } from '../../../lib/useAutoGrowTextarea'
+import { useTokenCount } from '../../../lib/useTokenCount'
 
 /** 负向提示词输入：接 tag autocomplete，跟 PromptList 同 UX。 */
-export default function NegPromptInput({ value, onChange }: {
+export default function NegPromptInput({ value, onChange, modelFamily = 'anima' }: {
   value: string
   onChange: (v: string) => void
+  /** token 计数用的族（选对应 tokenizer）；不传默认 anima。 */
+  modelFamily?: string
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null)
   const suggest = useTagSuggest({
@@ -27,6 +30,7 @@ export default function NegPromptInput({ value, onChange }: {
     },
   })
   useAutoGrowTextarea(taRef, value)
+  const tokenCount = useTokenCount(value, modelFamily)
   return (
     <div className="relative">
       <textarea
@@ -41,6 +45,11 @@ export default function NegPromptInput({ value, onChange }: {
         onFocus={() => suggest.notifyFocus()}
         onBlur={() => suggest.notifyBlur()}
       />
+      {tokenCount != null && (
+        <span className="absolute bottom-1.5 right-2 text-2xs text-fg-tertiary pointer-events-none select-none">
+          {tokenCount} tokens
+        </span>
+      )}
       <TagSuggestList
         open={suggest.open}
         suggestions={suggest.suggestions}

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 204,
+  "count": 205,
   "routes": [
     {
       "path": "/",
@@ -223,6 +223,14 @@
         "GET"
       ],
       "name": "get_taeflux_status",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/generate/token_count",
+      "methods": [
+        "POST"
+      ],
+      "name": "count_prompt_tokens",
       "type": "APIRoute"
     },
     {
