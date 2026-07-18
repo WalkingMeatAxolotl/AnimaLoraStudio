@@ -18,7 +18,7 @@ import LLMPresetEditorModal, { llmPresetLabel } from '../../../components/LLMPre
 import { TagListInput } from '../../../components/TagsInput'
 import StepShell from '../../../components/StepShell'
 import { useToast } from '../../../components/Toast'
-import { CLTaggerModelCard, SourceSelect, WD14ModelCard } from '../../tools/settings/modelCards'
+import { CLTaggerModelCard, ModelSourceCard, SourceSelect } from '../../tools/settings/modelCards'
 import { useSettingsData } from '../../../lib/SettingsData'
 import { useSettingsDrawer } from '../../../lib/SettingsDrawer'
 import { useEventStream } from '../../../lib/useEventStream'
@@ -84,8 +84,7 @@ export default function TaggingPage() {
   const { toast } = useToast()
   const settingsDrawer = useSettingsDrawer()
   const {
-    catalog, downloadBusy, startDownload, setDownloadSource,
-    secrets, commitSecrets, reloadCatalog,
+    catalog, downloadBusy, startDownload, setDownloadSource, secrets,
   } = useSettingsData()
 
   const [tagger, setTagger] = useState<TaggerName>('wd14')
@@ -489,17 +488,14 @@ export default function TaggingPage() {
                       opt={catalog?.download_source_options?.wd14}
                       onChange={(s) => void setDownloadSource('wd14', s)}
                     />
-                    <WD14ModelCard
+                    <ModelSourceCard
+                      domain="wd14"
+                      title={t('settings.wd14CandidateTitle', { name: catalog?.wd14?.name ?? 'WD14' })}
                       catalog={catalog}
-                      busy={downloadBusy}
-                      start={startDownload}
-                      currentModelId={wd14Form.model_id}
-                      onSelectModelId={(id) => setWd14Form({ ...wd14Form, model_id: id })}
-                      candidates={secrets?.wd14.model_ids ?? wd14Defaults?.model_ids ?? []}
-                      onCandidatesChange={(next) => {
-                        commitSecrets({ wd14: { model_ids: next } })
-                        void reloadCatalog()
-                      }}
+                      currentValue={wd14Form.model_id}
+                      onSelect={(id) => setWd14Form({ ...wd14Form, model_id: id })}
+                      addDownload={{}}
+                      addLocal={{ dirOnly: true }}
                       t={t}
                     />
                   </div>

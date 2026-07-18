@@ -22,16 +22,18 @@ import {
   getStoredTab,
   _makeFallbackPreset,
   MASK,
+  MODEL_DESCRIPTION_KEYS,
   SECTION_TO_TAB,
   TAB_LIST,
   TAB_SECTIONS,
   TAB_STORAGE_KEY,
   textInputClass,
+  translatedCatalogText,
   type Section,
   type Tab,
 } from './settings/constants'
 import { Bool, SectionIndex, SensitiveInput, SettingsField, SettingsInput, SettingsSection } from './settings/fields'
-import { CLTaggerModelCard, EvalMetricModelCard, HFEndpointSelect, SourceSelect, WD14ModelCard } from './settings/modelCards'
+import { CLTaggerModelCard, HFEndpointSelect, ModelSourceCard, SourceSelect } from './settings/modelCards'
 import {
   DisplaySection,
   FlashAttentionSection,
@@ -497,14 +499,17 @@ export default function SettingsPage() {
           opt={catalog?.download_source_options?.wd14}
           onChange={(s) => void setDownloadSource('wd14', s)}
         />
-        <WD14ModelCard
+        <ModelSourceCard
+          domain="wd14"
+          title={t('settings.wd14CandidateTitle', { name: catalog?.wd14?.name ?? 'WD14' })}
+          helpTooltip={
+            <p><Trans i18nKey="settings.wd14CandidateHelp" values={{ desc: translatedCatalogText(MODEL_DESCRIPTION_KEYS, 'wd14', catalog?.wd14?.description, t) }} components={{ code: <code /> }} /></p>
+          }
           catalog={catalog}
-          busy={downloadBusy}
-          start={startDownload}
-          currentModelId={draft.wd14.model_id}
-          onSelectModelId={(id) => update('wd14', 'model_id', id)}
-          candidates={draft.wd14.model_ids}
-          onCandidatesChange={(next) => update('wd14', 'model_ids', next)}
+          currentValue={draft.wd14.model_id}
+          onSelect={(v) => update('wd14', 'model_id', v)}
+          addDownload={{}}
+          addLocal={{ dirOnly: true }}
           t={t}
         />
         <div className="grid grid-cols-2 gap-3">
@@ -655,28 +660,37 @@ export default function SettingsPage() {
           opt={catalog?.download_source_options?.eval}
           onChange={(s) => void setDownloadSource('eval', s)}
         />
-        <EvalMetricModelCard
-          catalog={catalog} busy={downloadBusy} start={startDownload}
-          kind="clip" dlId="eval_clip"
-          titleKey="settings.evalClipModel" helpKey="settings.evalClipModelHelp"
-          modelId={draft.eval_metrics.clip_model_name}
-          onModelIdChange={(id) => update('eval_metrics', 'clip_model_name', id)}
+        <ModelSourceCard
+          domain="eval_clip"
+          title={t('settings.evalClipModel')}
+          helpTooltip={<p>{t('settings.evalClipModelHelp')}</p>}
+          catalog={catalog}
+          currentValue={draft.eval_metrics.clip_model_name}
+          onSelect={(v) => update('eval_metrics', 'clip_model_name', v)}
+          addDownload={{}}
+          addLocal={{ dirOnly: true }}
           t={t}
         />
-        <EvalMetricModelCard
-          catalog={catalog} busy={downloadBusy} start={startDownload}
-          kind="dino" dlId="eval_dino"
-          titleKey="settings.evalDinoModel" helpKey="settings.evalDinoModelHelp"
-          modelId={draft.eval_metrics.dino_model_name}
-          onModelIdChange={(id) => update('eval_metrics', 'dino_model_name', id)}
+        <ModelSourceCard
+          domain="eval_dino"
+          title={t('settings.evalDinoModel')}
+          helpTooltip={<p>{t('settings.evalDinoModelHelp')}</p>}
+          catalog={catalog}
+          currentValue={draft.eval_metrics.dino_model_name}
+          onSelect={(v) => update('eval_metrics', 'dino_model_name', v)}
+          addDownload={{}}
+          addLocal={{ dirOnly: true }}
           t={t}
         />
-        <EvalMetricModelCard
-          catalog={catalog} busy={downloadBusy} start={startDownload}
-          kind="ccip" dlId="eval_ccip"
-          titleKey="settings.evalCcipModel" helpKey="settings.evalCcipModelHelp"
-          modelId={draft.eval_metrics.ccip_model_name}
-          onModelIdChange={(id) => update('eval_metrics', 'ccip_model_name', id)}
+        <ModelSourceCard
+          domain="eval_ccip"
+          title={t('settings.evalCcipModel')}
+          helpTooltip={<p>{t('settings.evalCcipModelHelp')}</p>}
+          catalog={catalog}
+          currentValue={draft.eval_metrics.ccip_model_name}
+          onSelect={(v) => update('eval_metrics', 'ccip_model_name', v)}
+          addDownload={{}}
+          addLocal={{ dirOnly: true }}
           t={t}
         />
         <SettingsField
