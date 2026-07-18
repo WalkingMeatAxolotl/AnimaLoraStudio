@@ -903,9 +903,9 @@ export default function GeneratePage() {
                 </div>
               )}
               <label className="caption block mb-1">{t('generate.positive')}</label>
-              <PromptList prompts={prompts} onChange={setPrompts} />
+              <PromptList prompts={prompts} onChange={setPrompts} modelFamily={modelFamily} />
               <label className="caption block mb-1 mt-3">{t('generate.negative')}</label>
-              <NegPromptInput value={negPrompt} onChange={setNegPrompt} />
+              <NegPromptInput value={negPrompt} onChange={setNegPrompt} modelFamily={modelFamily} />
             </div>
 
             {/* tab=config */}

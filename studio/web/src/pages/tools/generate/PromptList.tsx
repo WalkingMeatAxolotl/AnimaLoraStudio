@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { TagSuggestList } from '../../../components/tagSuggest/TagSuggestList'
 import { useTagSuggest } from '../../../components/tagSuggest/useTagSuggest'
 import { useAutoGrowTextarea } from '../../../lib/useAutoGrowTextarea'
+import { useTokenCount } from '../../../lib/useTokenCount'
 
 /** 正向提示词输入。
  *
@@ -12,9 +13,11 @@ import { useAutoGrowTextarea } from '../../../lib/useAutoGrowTextarea'
  *
  * 接入 tag autocomplete：cursor 所在 token 触发建议；↑↓/Tab/Enter 选中插入。
  */
-export default function PromptList({ prompts, onChange }: {
+export default function PromptList({ prompts, onChange, modelFamily = 'anima' }: {
   prompts: string[]
   onChange: (p: string[]) => void
+  /** token 计数用的族（选对应 tokenizer）；不传默认 anima。 */
+  modelFamily?: string
 }) {
   const { t } = useTranslation()
   const taRef = useRef<HTMLTextAreaElement>(null)
@@ -37,6 +40,7 @@ export default function PromptList({ prompts, onChange }: {
     },
   })
   useAutoGrowTextarea(taRef, value)
+  const tokenCount = useTokenCount(value, modelFamily)
   return (
     <div className="relative">
       <textarea
@@ -52,6 +56,11 @@ export default function PromptList({ prompts, onChange }: {
         onBlur={() => suggest.notifyBlur()}
         placeholder={t('generate.positivePlaceholder')}
       />
+      {tokenCount != null && (
+        <span className="absolute bottom-1.5 right-2 text-2xs text-fg-tertiary pointer-events-none select-none">
+          {tokenCount} tokens
+        </span>
+      )}
       <TagSuggestList
         open={suggest.open}
         suggestions={suggest.suggestions}
