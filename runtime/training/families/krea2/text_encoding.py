@@ -198,7 +198,18 @@ def _load_comfy_single_file_te(
 
     logger.info("加载 Krea2 Qwen3-VL（comfy 单文件形态）：%s", weights_file)
     config = AutoConfig.from_pretrained(str(model_path), local_files_only=True)
-    with torch.device("meta"):
+    try:
+        from accelerate import init_empty_weights
+    except ImportError as exc:  # pragma: no cover - 环境相关
+        raise RuntimeError(
+            "Qwen3-VL 单文件加载需要 accelerate（transformers 伴生依赖）"
+        ) from exc
+
+    # init_empty_weights 默认只把 parameters 放 meta；buffers（rotary
+    # inv_freq 等 non-persistent，不在权重文件里）在 CPU 真实构造带正确
+    # 值——纯 torch.device("meta") 上下文会把 buffer 也 meta 化，load 后
+    # 无法恢复（曾致 offload 的 .to("cpu") 撞 meta tensor 崩溃）。
+    with init_empty_weights():
         model = Qwen3VLForConditionalGeneration(config)
 
     state_dict: dict[str, torch.Tensor] = {}
@@ -236,14 +247,21 @@ def _load_comfy_single_file_te(
     out_emb = model.get_output_embeddings()
     if out_emb is not None and out_emb.weight.device.type == "meta":
         out_emb.weight = model.get_input_embeddings().weight
+    # 检查覆盖 parameters + buffers（漏 buffer 曾放过 rotary inv_freq 的
+    # meta 残留：编码侥幸能跑，offload 全模型 .to("cpu") 遍历到即崩）
     leftover_meta = [
-        name for name, param in model.named_parameters()
-        if param.device.type == "meta"
+        name for name, tensor in [
+            *model.named_parameters(), *model.named_buffers(),
+        ]
+        if tensor.device.type == "meta"
     ]
     if leftover_meta:
         raise ValueError(
             f"Qwen3-VL 单文件加载后仍有未物化参数：{leftover_meta[:5]}"
         )
+    # buffers 构造在 CPU（init_empty_weights 只 meta 化参数）——搬到目标
+    # device；参数已 assign 就位，.to() 对其 no-op
+    model.to(device)
     if scales:
         patch_fp8_linears(model, scales)
         logger.info("Qwen3-VL fp8_scaled：%d 层挂 dequant 前向", len(scales))

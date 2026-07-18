@@ -186,6 +186,10 @@ def test_comfy_single_file_te_loads_maps_keys_and_patches(tmp_path, monkeypatch)
     assert model.lm_head.weight.data_ptr() == \
         model.model.language_model.embed_tokens.weight.data_ptr()
     assert all(not p.requires_grad for p in model.parameters())
+    # buffers（rotary inv_freq 等）必须物化——meta 残留曾致 offload 的
+    # .to("cpu") 崩（真机案例：编码侥幸能跑，全模型遍历即崩）
+    assert all(b.device.type != "meta" for _, b in model.named_buffers())
+    model.to("cpu")  # offload_model 同款全模型遍历，回归不崩
     # dequant 数值近似原 bf16 权重
     name = fp8_layers[0]
     module = dict(model.named_modules())[name]
