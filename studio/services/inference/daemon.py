@@ -113,6 +113,12 @@ class InferenceDaemon:
         # PUT /api/secrets 后 router 也会调一次同步。
         self._idle_timeout_seconds: float = 0.0
         self._idle_timer: Optional[threading.Timer] = None
+        # 任务超时兜底（用户反馈：generate 卡死整机只能重启）：任务开始后
+        # 超 N 秒未完成 → 硬杀 daemon 进程（卡死场景协议级 cancel 无效）。
+        # reader 线程 EOF → _handle_proc_exit 自动标 error + 状态复位。
+        # 0 = 关闭（默认）。
+        self._task_timeout_seconds: float = 0.0
+        self._task_timer: Optional[threading.Timer] = None
 
     # ---------------------------------------------------------------- 状态
     @property
@@ -154,21 +160,25 @@ class InferenceDaemon:
             self._reschedule_idle_timer_locked()
 
     def sync_idle_timeout_from_secrets(self) -> None:
-        """从 secrets.generate.idle_timeout_minutes 读出并应用。
+        """从 secrets.generate 读出 idle / 任务超时配置并应用。
 
         失败（文件坏 / 字段缺）走 fallback：不改当前值，记一行 warning。
         """
         try:
             # 局部 import 避免 services/inference → infrastructure 模块层循环
             from ...infrastructure import secrets as _secrets
-            minutes = int(_secrets.load().generate.idle_timeout_minutes)
+            gen = _secrets.load().generate
+            minutes = int(gen.idle_timeout_minutes)
+            task_minutes = int(getattr(gen, "task_timeout_minutes", 0) or 0)
         except Exception:
             logger.warning(
-                "failed to read idle_timeout_minutes from secrets; keeping current value",
+                "failed to read timeouts from secrets; keeping current values",
                 exc_info=True,
             )
             return
         self.set_idle_timeout_seconds(max(0, minutes) * 60.0)
+        with self._lock:
+            self._task_timeout_seconds = max(0, task_minutes) * 60.0
 
     def _reschedule_idle_timer_locked(self) -> None:
         """根据当前状态重置 idle timer。**必须持 self._lock 调用。**
@@ -194,6 +204,41 @@ class InferenceDaemon:
             timer.name = "inference-daemon-idle-timer"
             self._idle_timer = timer
             timer.start()
+
+    def _cancel_task_timer_locked(self) -> None:
+        """取消任务超时 timer。**必须持 self._lock 调用。**"""
+        if self._task_timer is not None:
+            try:
+                self._task_timer.cancel()
+            except Exception:
+                pass
+            self._task_timer = None
+
+    def _on_task_timeout(self, req_id: str) -> None:
+        """任务超时兜底：仍在跑同一任务 → 硬杀 daemon 进程。
+
+        卡死场景（整机换页 / GPU hang）协议级 cancel 无效，只能进程级
+        kill；reader 线程随后 EOF → _handle_proc_exit 标 error + 状态
+        复位，下次任务自动重新 spawn。触发瞬间任务可能刚完成——按
+        request_id 复核后再杀。
+        """
+        with self._lock:
+            active = self._active
+            proc = self._proc
+            timeout = self._task_timeout_seconds
+            if (
+                active is None or active.request_id != req_id
+                or self._state != STATE_BUSY or proc is None
+            ):
+                return
+        logger.warning(
+            "generate task %s exceeded timeout (%.0fs); killing daemon process",
+            active.task_id, timeout,
+        )
+        try:
+            proc.kill()
+        except Exception:
+            logger.exception("task-timeout kill failed")
 
     def _on_idle_timeout(self) -> None:
         """idle timer 到期回调：仍 idle+loaded 时触发 unload。
@@ -356,6 +401,16 @@ class InferenceDaemon:
             )
             self._state = STATE_BUSY
             self._reschedule_idle_timer_locked()
+            # 任务超时兜底 timer（0=关闭）
+            self._cancel_task_timer_locked()
+            if self._task_timeout_seconds > 0:
+                timer = threading.Timer(
+                    self._task_timeout_seconds, self._on_task_timeout, args=[req_id],
+                )
+                timer.daemon = True
+                timer.name = "inference-daemon-task-timer"
+                self._task_timer = timer
+                timer.start()
             assert self._proc is not None and self._proc.stdin is not None
             stdin = self._proc.stdin
 
@@ -590,6 +645,7 @@ class InferenceDaemon:
             with self._lock:
                 self._active = None
                 self._state = STATE_IDLE
+                self._cancel_task_timer_locked()
                 # task 完成回 idle；模型还在 → 重启 idle 倒计时
                 self._reschedule_idle_timer_locked()
 
@@ -610,6 +666,7 @@ class InferenceDaemon:
             active = self._active
             self._active = None
             listeners = list(self._global_listeners)
+            self._cancel_task_timer_locked()
             self._reschedule_idle_timer_locked()
 
         if active is not None and prev_state != STATE_UNLOADING:

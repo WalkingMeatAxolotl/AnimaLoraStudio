@@ -583,6 +583,9 @@ class GenerateConfig(BaseModel):
       预算系统内存与 GPU 空闲显存，任一不足时中止并报可操作错误
       （默认开；显存检查可拦多进程叠加）；关闭后资源不足时继续加载，
       可能触发整机换页卡顿。
+    - `task_timeout_minutes`：出图任务超时兜底。任务开始后超 N 分钟未
+      完成 → 强制终止 daemon 进程（卡死场景协议级取消无效，只能进程级
+      kill；下次任务自动重启）。0（默认）= 关闭。
     """
     preview_every_n_steps: int = 3
     attention_backend: str = "auto"
@@ -591,6 +594,7 @@ class GenerateConfig(BaseModel):
     save_test_images: bool = False
     vram_policy: str = "auto"
     ram_guard: bool = True
+    task_timeout_minutes: int = 0
 
 
 class SystemConfig(BaseModel):

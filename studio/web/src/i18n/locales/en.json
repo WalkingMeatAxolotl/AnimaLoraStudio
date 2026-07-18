@@ -1285,7 +1285,11 @@
       "desc": "Default: 10 minutes",
       "help": "The generate daemon keeps the model in VRAM after the first run so you can quickly retry with different params. If no new generation arrives within this window, the model is auto-unloaded to free VRAM (next run reloads, ~30-60s). 0 = off, keep the model resident until you manually click \"Free VRAM\". Recommended: 10 minutes.",
       "minutesSuffix": "min",
-      "offHint": "Off: model stays resident until manually freed"
+      "offHint": "Off: model stays resident until manually freed",
+      "taskTimeoutLabel": "Task timeout force-kill (minutes)",
+      "taskTimeoutDesc": "Default 0 = disabled",
+      "taskTimeoutHelp": "Force-kill the generation process when a task exceeds the given duration (freeze safety net: a system-wide paging freeze or GPU hang makes normal cancellation useless — killing the process is the only way out). The task is marked failed; the next generation restarts the process and reloads models automatically. 0 = disabled.",
+      "taskTimeoutOffHint": "Disabled"
     },
     "vramPolicy": {
       "title": "VRAM policy",

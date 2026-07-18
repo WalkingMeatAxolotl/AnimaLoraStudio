@@ -1477,6 +1477,27 @@ export function IdleTimeoutSection({
           </span>
         </div>
       </SettingsField>
+      <SettingsField
+        label={t('settings.idleTimeout.taskTimeoutLabel')}
+        desc={t('settings.idleTimeout.taskTimeoutDesc')}
+        helpTooltip={<p>{t('settings.idleTimeout.taskTimeoutHelp')}</p>}
+      >
+        <div className="flex items-center gap-2">
+          <SettingsInput
+            type="number"
+            min={0}
+            max={240}
+            value={draft.generate.task_timeout_minutes ?? 0}
+            onChange={(v) => update('generate', 'task_timeout_minutes', Math.max(0, Number(v) || 0))}
+            className={`${textInputClass} max-w-32`}
+          />
+          <span className="text-xs text-fg-tertiary">
+            {(draft.generate.task_timeout_minutes ?? 0) === 0
+              ? t('settings.idleTimeout.taskTimeoutOffHint')
+              : t('settings.idleTimeout.minutesSuffix')}
+          </span>
+        </div>
+      </SettingsField>
     </SettingsSection>
   )
 }
