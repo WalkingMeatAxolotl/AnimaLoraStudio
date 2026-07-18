@@ -619,7 +619,15 @@ def run(ctx: TrainingContext) -> None:
                         if sra_align_loss_val is not None and sra_weighted_loss_val is not None
                         else f" denoise={denoise_loss_val:.6f}"
                     )
-                    print(f"epoch={epoch} step={ctx.global_step} loss={loss_val:.6f}{sra_suffix} lr={lr:.2e} speed={steps_per_sec:.2f} it/s")
+                    # flush 必须开：studio spawn 的 stdout 是 pipe（全缓冲
+                    # 8KB），不 flush 时 step 行滞留缓冲——短训练/中止的
+                    # task log 里一行都看不到（曾被误判为 krea2 没打日志）
+                    print(
+                        f"epoch={epoch} step={ctx.global_step} "
+                        f"loss={loss_val:.6f}{sra_suffix} lr={lr:.2e} "
+                        f"speed={steps_per_sec:.2f} it/s",
+                        flush=True,
+                    )
 
                 # 按 step 采样（轮换提示词）
                 if args.sample_steps > 0 and ctx.global_step % args.sample_steps == 0:
