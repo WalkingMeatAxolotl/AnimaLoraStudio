@@ -18,6 +18,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { LLMMessage } from '../api/client'
+import { useAutoGrowTextarea } from '../lib/useAutoGrowTextarea'
 
 interface Props {
   messages: LLMMessage[]
@@ -151,6 +152,9 @@ function SortableMessage({
   useEffect(() => {
     setDraft(message.content)
   }, [message.content])
+  // 与测试页 prompt 同款：随内容自动撑高，rows 定最小高度
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  useAutoGrowTextarea(textareaRef, draft)
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -273,16 +277,16 @@ function SortableMessage({
         </div>
       ) : (
         <textarea
+          ref={textareaRef}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={() => { if (draft !== message.content) onChange({ content: draft }) }}
           disabled={disabled}
           rows={3}
-          className="w-full bg-transparent border-0 outline-none text-sm text-fg-primary block"
+          className="w-full bg-transparent border-0 outline-none text-sm text-fg-primary block resize-none overflow-hidden"
           style={{
             padding: '12px 14px',
             fontFamily: 'var(--font-mono)',
-            resize: 'none',
             lineHeight: 1.55,
             minHeight: 80,
           }}

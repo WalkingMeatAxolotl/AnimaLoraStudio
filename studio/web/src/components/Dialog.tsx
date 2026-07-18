@@ -221,7 +221,7 @@ function DialogRoot({ state, onCancel, onOk }: RootProps) {
     <div
       role="dialog"
       aria-modal="true"
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/50"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50"
       onMouseDown={(e) => {
         // 只在点击在背景上时关 — 点 form 内部 mouseDown 不触发
         if (e.target === e.currentTarget) onCancel()

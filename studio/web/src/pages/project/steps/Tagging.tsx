@@ -1,13 +1,11 @@
 import type { TFunction } from 'i18next'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useOutletContext } from 'react-router-dom'
 import {
   api,
   type Job,
   type CLTaggerConfig,
-  type LLMMessage,
-  type LLMPreset,
   type LLMTaggerConfig,
   type ProjectDetail,
   type TaggerName,
@@ -16,7 +14,7 @@ import {
   type WD14Config,
 } from '../../../api/client'
 import { InfoButton } from '../../../components/InfoButton'
-import LLMMessagesEditor from '../../../components/LLMMessagesEditor'
+import LLMPresetEditorModal, { llmPresetLabel } from '../../../components/LLMPresetEditorModal'
 import { TagListInput } from '../../../components/TagsInput'
 import StepShell from '../../../components/StepShell'
 import { useToast } from '../../../components/Toast'
@@ -54,26 +52,6 @@ type CLTaggerForm = {
   blacklist_tags: string[]
 }
 
-type LLMTaggerForm = {
-  preset_id: string
-  base_url: string
-  model: string
-  endpoint: LLMPreset['endpoint']
-  messages: LLMMessage[]
-  output_format: LLMPreset['output_format']
-  assist_tagger: string
-  temperature: number
-  max_tokens: number
-  timeout: number
-  max_retries: number
-  concurrency: number
-  requests_per_second: number
-  max_requests_per_minute: number
-  max_side: number
-  jpeg_quality: number
-  max_image_mb: number
-}
-
 function fromConfig(cfg: WD14Config): Wd14Form {
   return {
     threshold_general: cfg.threshold_general,
@@ -100,32 +78,6 @@ function fromCLTaggerConfig(cfg: CLTaggerConfig): CLTaggerForm {
   }
 }
 
-function activePresetOf(cfg: LLMTaggerConfig): LLMPreset | null {
-  return cfg.presets.find((p) => p.id === cfg.current_preset) ?? cfg.presets[0] ?? null
-}
-
-function fromLLMPreset(p: LLMPreset): LLMTaggerForm {
-  return {
-    preset_id: p.id,
-    base_url: p.base_url,
-    model: p.model,
-    endpoint: p.endpoint,
-    messages: p.messages.map((m) => ({ ...m })),
-    output_format: p.output_format,
-    assist_tagger: p.assist_tagger,
-    temperature: p.temperature,
-    max_tokens: p.max_tokens,
-    timeout: p.timeout,
-    max_retries: p.max_retries,
-    concurrency: p.concurrency,
-    requests_per_second: p.requests_per_second,
-    max_requests_per_minute: p.max_requests_per_minute,
-    max_side: p.max_side,
-    jpeg_quality: p.jpeg_quality,
-    max_image_mb: p.max_image_mb,
-  }
-}
-
 export default function TaggingPage() {
   const { t } = useTranslation()
   const { project, activeVersion, reload } = useOutletContext<Ctx>()
@@ -148,12 +100,20 @@ export default function TaggingPage() {
   const [scope, setScope] = useState<string>('all')
   const [folders, setFolders] = useState<string[]>([])
 
-  const [wd14Defaults, setWd14Defaults] = useState<WD14Config | null>(null)
+  // defaults 直接从 SettingsData 的 live secrets 派生：设置抽屉 instant-apply
+  // 的改动关上抽屉立即回流本页（不再持有 mount 时的一次性 getSecrets 快照）。
+  const wd14Defaults: WD14Config | null = secrets?.wd14 ?? null
+  const cltaggerDefaults: CLTaggerConfig | null = secrets?.cltagger ?? null
+  const llmDefaults: LLMTaggerConfig | null = secrets?.llm_tagger ?? null
+
+  // form 是"本次运行覆盖"草稿（不落盘）。defaults 更新时：未改动（与上一份
+  // defaults 相等）→ 跟随刷新；改过 → 保留用户输入。
   const [wd14Form, setWd14Form] = useState<Wd14Form | null>(null)
-  const [cltaggerDefaults, setCltaggerDefaults] = useState<CLTaggerConfig | null>(null)
   const [cltaggerForm, setCltaggerForm] = useState<CLTaggerForm | null>(null)
-  const [llmDefaults, setLlmDefaults] = useState<LLMTaggerConfig | null>(null)
-  const [llmForm, setLlmForm] = useState<LLMTaggerForm | null>(null)
+  // LLM 瘦身后本次覆盖只剩预设选择；编辑字段一律走 LLMPresetEditorModal。
+  const [llmPresetId, setLlmPresetId] = useState<string | null>(null)
+  const llmPresetTouchedRef = useRef(false)
+  const [llmEditorOpen, setLlmEditorOpen] = useState(false)
 
   const vid = activeVersion?.id ?? null
 
@@ -168,21 +128,30 @@ export default function TaggingPage() {
     api.getLatestVersionJob(project.id, v, 'tag').then((r) => ({ item: r.job, log: r.log })),
   )
 
+  // secrets 回流时同步 form：初始化 + 未改动跟随（比较基准 = 上一份 defaults）。
+  const prevTaggerDefaultsRef = useRef<{ wd14?: WD14Config; cltagger?: CLTaggerConfig }>({})
   useEffect(() => {
-    void api
-      .getSecrets()
-      .then((s) => {
-        setWd14Defaults(s.wd14)
-        setWd14Form(fromConfig(s.wd14))
-        setCltaggerDefaults(s.cltagger)
-        setCltaggerForm(fromCLTaggerConfig(s.cltagger))
-        setLlmDefaults(s.llm_tagger)
-        const active = activePresetOf(s.llm_tagger)
-        if (active) setLlmForm(fromLLMPreset(active))
-      })
-      .catch((e) => toast(t('tag.loadDefaultsFailed', { error: e }), 'error'))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    if (!secrets) return
+    const prev = prevTaggerDefaultsRef.current
+    setWd14Form((f) =>
+      !f || (prev.wd14 && JSON.stringify(f) === JSON.stringify(fromConfig(prev.wd14)))
+        ? fromConfig(secrets.wd14)
+        : f)
+    setCltaggerForm((f) =>
+      !f || (prev.cltagger && JSON.stringify(f) === JSON.stringify(fromCLTaggerConfig(prev.cltagger)))
+        ? fromCLTaggerConfig(secrets.cltagger)
+        : f)
+    prevTaggerDefaultsRef.current = { wd14: secrets.wd14, cltagger: secrets.cltagger }
+  }, [secrets])
+
+  // LLM 预设选择：用户没手动切过就跟随全局默认；切过则保留（预设被删时回退默认）。
+  useEffect(() => {
+    if (!llmDefaults) return
+    setLlmPresetId((id) => {
+      if (!llmPresetTouchedRef.current || id === null) return llmDefaults.current_preset
+      return llmDefaults.presets.some((p) => p.id === id) ? id : llmDefaults.current_preset
+    })
+  }, [llmDefaults])
 
   useEffect(() => {
     setTaggerStatus(null)
@@ -331,24 +300,11 @@ export default function TaggingPage() {
     return Object.keys(out).length ? out : undefined
   }
 
+  // LLM 本次覆盖只剩预设选择：选了非全局默认的预设才发 current_preset override。
   const buildLLMOverrides = (): Record<string, unknown> | undefined => {
-    if (!llmForm || !llmDefaults) return undefined
-    const active = llmDefaults.presets.find((p) => p.id === llmForm.preset_id) ?? llmDefaults.presets[0]
-    if (!active) return undefined
-    const out: Record<string, unknown> = {}
-    if (llmForm.preset_id !== llmDefaults.current_preset) out.current_preset = llmForm.preset_id
-    const fields: ReadonlyArray<Exclude<keyof LLMTaggerForm, 'preset_id'>> = [
-      'base_url', 'model', 'endpoint', 'messages', 'output_format', 'assist_tagger',
-      'temperature', 'max_tokens', 'timeout', 'max_retries',
-      'concurrency', 'requests_per_second', 'max_requests_per_minute',
-      'max_side', 'jpeg_quality', 'max_image_mb',
-    ]
-    for (const key of fields) {
-      const value = llmForm[key]
-      const base = active[key]
-      if (JSON.stringify(value) !== JSON.stringify(base)) out[key] = value
-    }
-    return Object.keys(out).length ? out : undefined
+    if (!llmPresetId || !llmDefaults) return undefined
+    if (llmPresetId === llmDefaults.current_preset) return undefined
+    return { current_preset: llmPresetId }
   }
 
   const startTagging = async () => {
@@ -591,9 +547,13 @@ export default function TaggingPage() {
 
           {tagger === 'llm' && (
             <LLMTaggerPanel
-              form={llmForm}
+              presetId={llmPresetId}
               defaults={llmDefaults}
-              onChange={setLlmForm}
+              onSelect={(id) => {
+                llmPresetTouchedRef.current = true
+                setLlmPresetId(id)
+              }}
+              onEdit={() => setLlmEditorOpen(true)}
               disabled={isLive}
             />
           )}
@@ -617,6 +577,13 @@ export default function TaggingPage() {
         />
       </div>
     </div>
+
+    {llmEditorOpen && llmPresetId && (
+      <LLMPresetEditorModal
+        presetId={llmPresetId}
+        onClose={() => setLlmEditorOpen(false)}
+      />
+    )}
     </StepShell>
   )
 }
@@ -797,16 +764,19 @@ function CLTaggerPanel({
   )
 }
 
+// LLM 面板（瘦身版）：只保留本次运行的预设选择 + 预设编辑 modal 入口。
+// 字段级 per-run 覆盖已移除——要调参数就编辑预设本体（全局唯一编辑器）。
 function LLMTaggerPanel({
-  form, defaults, onChange, disabled,
+  presetId, defaults, onSelect, onEdit, disabled,
 }: {
-  form: LLMTaggerForm | null
+  presetId: string | null
   defaults: LLMTaggerConfig | null
-  onChange: (f: LLMTaggerForm) => void
+  onSelect: (id: string) => void
+  onEdit: () => void
   disabled: boolean
 }) {
   const { t } = useTranslation()
-  if (!form || !defaults) {
+  if (!defaults || !presetId) {
     return (
       <section className="rounded-md border border-subtle bg-surface px-3 py-2 text-xs text-fg-tertiary shrink-0">
         {t('tag.llmLoading')}
@@ -814,8 +784,8 @@ function LLMTaggerPanel({
     )
   }
 
-  const activePreset = defaults.presets.find((p) => p.id === form.preset_id) ?? defaults.presets[0]
-  if (!activePreset) {
+  const active = defaults.presets.find((p) => p.id === presetId) ?? defaults.presets[0]
+  if (!active) {
     return (
       <section className="rounded-md border border-subtle bg-surface px-3 py-2 text-xs text-err shrink-0">
         {t('tag.llmNoPreset')}
@@ -823,138 +793,64 @@ function LLMTaggerPanel({
     )
   }
 
-  const dirty =
-    form.preset_id !== defaults.current_preset ||
-    JSON.stringify(form) !== JSON.stringify(fromLLMPreset(activePreset))
-
-  // 与设置页 LLM 工作区同款警示：开了 assist 但提示词（含本次临时编辑）没有
-  // {{tags}} 占位符时，预打标不会生效。
+  const overridden = presetId !== defaults.current_preset
+  // 预设本体的健康提示：开了 assist 但提示词没有 {{tags}} 占位符时预打标不会生效。
   const assistNeedsTags =
-    !!form.assist_tagger &&
-    !form.messages.some((m) => m.type === 'text' && m.content.includes('{{tags}}'))
-
-  const restore = () => {
-    const original = activePresetOf(defaults)
-    if (original) onChange(fromLLMPreset(original))
-  }
-
-  const switchPreset = (id: string) => {
-    const next = defaults.presets.find((p) => p.id === id)
-    if (next) onChange(fromLLMPreset(next))
-  }
+    !!active.assist_tagger &&
+    !active.messages.some((m) => m.type === 'text' && m.content.includes('{{tags}}'))
 
   return (
-    <>
     <section className="rounded-md border border-subtle bg-surface px-3.5 py-2.5 flex flex-col gap-2 shrink-0 text-sm">
-      <PanelHeader dirty={dirty} onRestore={restore} disabled={disabled} subtitle={t('tag.llmSubtitle')} />
+      {/* header 与 WD14/CLTagger 面板同款 PanelHeader；还原 = 切回全局默认预设 */}
+      <PanelHeader
+        dirty={overridden}
+        onRestore={() => onSelect(defaults.current_preset)}
+        disabled={disabled}
+      />
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
+      <div className="grid grid-cols-1 gap-x-4">
         <TagFieldSelect
           label={t('tag.fieldPreset')}
-          value={form.preset_id}
+          labelExtra={
+            <button
+              type="button"
+              onClick={onEdit}
+              className="text-accent underline bg-transparent border-none p-0 cursor-pointer"
+            >
+              {t('tag.llmEditPreset')}
+            </button>
+          }
+          value={active.id}
           disabled={disabled}
-          onChange={switchPreset}
-          modified={form.preset_id !== defaults.current_preset}
-          className="md:col-span-2"
+          onChange={onSelect}
+          modified={overridden}
+          helpTooltip={t('tag.llmPresetScopeHint')}
+          help={
+            <>
+              {/* 选中预设的关键配置摘要——细节和编辑都在预设编辑器里 */}
+              <span className="font-mono">
+                {active.model || t('tag.llmNoModel')}
+                {' · '}{active.output_format === 'json' ? t('llmPreset.jsonCaption') : t('llmPreset.textCaption')}
+                {' · temp '}{active.temperature}
+                {' · ×'}{active.concurrency}
+                {active.assist_tagger ? ` · +${active.assist_tagger}` : ''}
+              </span>
+              {assistNeedsTags && (
+                <div className="text-warn mt-0.5">
+                  {t('llmPreset.assistNeedsTags').split('%TAGS%').join('{{tags}}')}
+                </div>
+              )}
+            </>
+          }
         >
           {defaults.presets.map((p) => (
             <option key={p.id} value={p.id}>
-              {p.label}{p.builtin ? t('tag.builtin') : ''}
+              {llmPresetLabel(p, t)}{p.builtin ? t('tag.builtin') : ''}
             </option>
           ))}
         </TagFieldSelect>
-
-        <TagFieldInput label={t('settings.fieldBaseUrl')} value={form.base_url} placeholder="http://localhost:8000/v1" disabled={disabled} onChange={(v) => onChange({ ...form, base_url: v })} modified={form.base_url !== activePreset.base_url} />
-        {activePreset.model_ids.length > 0 ? (
-          <TagFieldSelect
-            label={t('tag.fieldModel')}
-            value={form.model}
-            disabled={disabled}
-            onChange={(v) => onChange({ ...form, model: v })}
-            modified={form.model !== activePreset.model}
-          >
-            {!activePreset.model_ids.includes(form.model) && form.model && (
-              <option value={form.model}>{form.model}</option>
-            )}
-            {activePreset.model_ids.map((m) => <option key={m} value={m}>{m}</option>)}
-          </TagFieldSelect>
-        ) : (
-          <TagFieldInput label={t('tag.fieldModel')} value={form.model} placeholder={t('tag.modelPlaceholder')} disabled={disabled} onChange={(v) => onChange({ ...form, model: v })} modified={form.model !== activePreset.model} />
-        )}
-
-        <TagFieldSelect
-          label={t('tag.fieldEndpoint')}
-          value={form.endpoint}
-          disabled={disabled}
-          onChange={(v) => onChange({ ...form, endpoint: v as LLMPreset['endpoint'] })}
-          modified={form.endpoint !== activePreset.endpoint}
-        >
-          <option value="chat_completions">Chat Completions</option>
-          <option value="responses">Responses</option>
-        </TagFieldSelect>
-
-        <TagFieldSelect
-          label={t('tag.fieldOutputFormat')}
-          value={form.output_format}
-          disabled={disabled}
-          onChange={(v) => onChange({ ...form, output_format: v as LLMPreset['output_format'] })}
-          modified={form.output_format !== activePreset.output_format}
-        >
-          <option value="json">JSON</option>
-          <option value="text">Text</option>
-        </TagFieldSelect>
-
-        <TagFieldSelect
-          label={t('llmWorkspace.assistTagger')}
-          value={form.assist_tagger}
-          disabled={disabled}
-          onChange={(v) => onChange({ ...form, assist_tagger: v })}
-          modified={form.assist_tagger !== activePreset.assist_tagger}
-          className="md:col-span-2"
-          helpTooltip={t('llmWorkspace.assistTaggerHelp').split('%TAGS%').join('{{tags}}')}
-          help={
-            assistNeedsTags && (
-              <span className="text-warn">
-                {t('llmWorkspace.assistNeedsTags').split('%TAGS%').join('{{tags}}')}
-              </span>
-            )
-          }
-        >
-          <option value="">Off</option>
-          <option value="wd14">WD14</option>
-          <option value="cltagger">CLTagger</option>
-        </TagFieldSelect>
-
-        <TagFieldNumber label={t('tag.fieldTemperature')} value={form.temperature} base={activePreset.temperature} min={0} max={2} step={0.05} disabled={disabled} onChange={(v) => onChange({ ...form, temperature: v })} />
-        <TagFieldNumber label={t('tag.fieldMaxTokens')} value={form.max_tokens} base={activePreset.max_tokens} min={64} max={4096} disabled={disabled} onChange={(v) => onChange({ ...form, max_tokens: Math.round(v) })} />
-        <TagFieldNumber label={t('tag.fieldConcurrency')} value={form.concurrency} base={activePreset.concurrency} min={1} max={8} disabled={disabled} onChange={(v) => onChange({ ...form, concurrency: Math.round(v) })} />
       </div>
     </section>
-
-    <AdvancedSection>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
-        <TagField label={t('tag.fieldMessages')} className="md:col-span-2">
-          <div className="flex flex-col gap-1.5">
-            {form.endpoint === 'responses' && (
-              <div className="text-xs text-warn">{t('tag.responsesWarning')}</div>
-            )}
-            <LLMMessagesEditor
-              messages={form.messages}
-              onChange={(msgs) => onChange({ ...form, messages: msgs })}
-              disabled={disabled}
-            />
-          </div>
-        </TagField>
-        <TagFieldNumber label={t('tag.fieldTimeout')} value={form.timeout} base={activePreset.timeout} min={5} max={600} disabled={disabled} onChange={(v) => onChange({ ...form, timeout: Math.round(v) })} />
-        <TagFieldNumber label={t('tag.fieldMaxRetries')} value={form.max_retries} base={activePreset.max_retries} min={1} max={10} disabled={disabled} onChange={(v) => onChange({ ...form, max_retries: Math.round(v) })} />
-        <TagFieldNumber label={t('tag.fieldRequestsPerSecond')} value={form.requests_per_second} base={activePreset.requests_per_second} min={0} max={60} step={0.1} disabled={disabled} onChange={(v) => onChange({ ...form, requests_per_second: v })} />
-        <TagFieldNumber label={t('tag.fieldMaxRequestsPerMinute')} value={form.max_requests_per_minute} base={activePreset.max_requests_per_minute} min={0} max={3600} disabled={disabled} onChange={(v) => onChange({ ...form, max_requests_per_minute: Math.round(v) })} />
-        <TagFieldNumber label={t('tag.fieldMaxSide')} value={form.max_side} base={activePreset.max_side} min={64} max={4096} disabled={disabled} onChange={(v) => onChange({ ...form, max_side: Math.round(v) })} />
-        <TagFieldNumber label={t('tag.fieldJpegQuality')} value={form.jpeg_quality} base={activePreset.jpeg_quality} min={1} max={100} disabled={disabled} onChange={(v) => onChange({ ...form, jpeg_quality: Math.round(v) })} />
-        <TagFieldNumber label={t('tag.fieldMaxImageMb')} value={form.max_image_mb} base={activePreset.max_image_mb} min={0.1} max={25} step={0.1} disabled={disabled} onChange={(v) => onChange({ ...form, max_image_mb: v })} />
-      </div>
-    </AdvancedSection>
-    </>
   )
 }
 
@@ -1002,22 +898,6 @@ function TagField({ label, labelExtra, helpTooltip, help, className = '', childr
   )
 }
 
-function TagFieldInput({ label, value, placeholder, disabled, onChange, modified, help, className }: {
-  label: string; value: string; placeholder?: string; disabled: boolean
-  onChange: (v: string) => void; modified?: boolean; help?: React.ReactNode; className?: string
-}) {
-  return (
-    <TagField label={label} help={help} className={className}>
-      <input
-        type="text" value={value} placeholder={placeholder}
-        onChange={(e) => onChange(e.target.value)}
-        disabled={disabled}
-        className="input input-mono" style={fieldCtlStyle(modified)}
-      />
-    </TagField>
-  )
-}
-
 function TagFieldNumber({ label, value, base, min, max, step = 1, disabled, onChange, help }: {
   label: string; value: number; base: number; min: number; max: number; step?: number
   disabled: boolean; onChange: (v: number) => void; help?: React.ReactNode
@@ -1037,14 +917,14 @@ function TagFieldNumber({ label, value, base, min, max, step = 1, disabled, onCh
   )
 }
 
-function TagFieldSelect({ label, value, disabled, onChange, modified, helpTooltip, help, className, title, children }: {
-  label: string; value: string; disabled: boolean
+function TagFieldSelect({ label, labelExtra, value, disabled, onChange, modified, helpTooltip, help, className, title, children }: {
+  label: string; labelExtra?: React.ReactNode; value: string; disabled: boolean
   onChange: (v: string) => void; modified?: boolean
   helpTooltip?: React.ReactNode; help?: React.ReactNode
   className?: string; title?: string; children: React.ReactNode
 }) {
   return (
-    <TagField label={label} helpTooltip={helpTooltip} help={help} className={className}>
+    <TagField label={label} labelExtra={labelExtra} helpTooltip={helpTooltip} help={help} className={className}>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
