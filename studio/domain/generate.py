@@ -109,6 +109,11 @@ class GenerateConfig(BaseModel):
                     "save_vram=强制顺序化，峰值最低（16GB 卡可跑 fp8）、每图多几秒 CPU↔GPU 搬运；"
                     "performance=全部常驻显存，峰值最高、零搬运",
     )
+    ram_guard: bool = Field(
+        True,
+        description="系统内存水位保护：加载大模型前检查可用物理内存，不足 6GB 时中止并报错；"
+                    "关闭后内存不足时加载会继续，可能触发整机换页卡顿",
+    )
 
     @model_validator(mode="after")
     def _validate_sampler_family(self) -> "GenerateConfig":

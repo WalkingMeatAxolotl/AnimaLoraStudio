@@ -1538,6 +1538,16 @@ export function VramPolicySection({
           <option value="performance">{t('settings.vramPolicy.optPerformance')}</option>
         </select>
       </SettingsField>
+      <SettingsField
+        label={t('settings.vramPolicy.ramGuardLabel')}
+        desc={t('settings.vramPolicy.ramGuardDesc')}
+        helpTooltip={<p>{t('settings.vramPolicy.ramGuardHelp')}</p>}
+      >
+        <Bool
+          value={draft.generate.ram_guard ?? true}
+          onChange={(v) => update('generate', 'ram_guard', v)}
+        />
+      </SettingsField>
     </SettingsSection>
   )
 }

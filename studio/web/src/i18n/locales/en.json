@@ -1294,7 +1294,12 @@
       "help": "How the text encoder and DiT share VRAM during test generation. Auto: everything stays resident when free VRAM allows (fastest); when it does not fit, the encode and sampling phases yield to each other (matches ComfyUI behavior). Save VRAM: force each phase to keep only the model it needs — lowest peak (fp8 base models run on 16GB GPUs), a few extra seconds of model transfer per image. Performance: keep every model resident — zero transfers, highest peak.",
       "optAuto": "Auto",
       "optSaveVram": "Save VRAM",
-      "optPerformance": "Performance"
+      "optPerformance": "Performance",
+      "ramGuardLabel": "RAM guard",
+      "ramGuardDesc": "Check available system memory before loading large models (on by default)",
+      "ramGuardHelp": "Model weights must pass through system RAM (disk → RAM → VRAM) to reach the GPU, so loading large files temporarily uses tens of GB of RAM. On: abort with an error when available RAM is below 6GB before loading, avoiding a system-wide paging freeze. Off: keep loading under memory pressure, which may make the whole system unresponsive for a long time.",
+      "ramGuardOn": "On",
+      "ramGuardOff": "Off"
     },
     "krea2TeCardTitle": "Krea 2 · Qwen3-VL text encoder",
     "deleteAsset": "Delete",

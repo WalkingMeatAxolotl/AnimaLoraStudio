@@ -534,6 +534,9 @@ export interface GenerateSecretsConfig {
    * 是否让位；save_vram=强制顺序化（峰值最低，每图多几秒搬运）；
    * performance=全部常驻显存（峰值最高、零搬运）。 */
   vram_policy: 'auto' | 'save_vram' | 'performance'
+  /** 系统内存水位保护：加载大模型前可用物理内存不足 6GB 时中止并报错
+   * （默认开）；关闭后继续加载，可能触发整机换页卡顿。 */
+  ram_guard: boolean
   /** 开后每次出图自动落盘到 studio_data/test/<date>/{single,xy}/image_N.png。
    * 默认关；compare 模式始终不落盘。 */
   save_test_images: boolean

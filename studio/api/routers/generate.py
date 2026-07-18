@@ -213,11 +213,13 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
             preview_n = int(gen_cfg.preview_every_n_steps or 0)
             vae_precision = str(getattr(gen_cfg, "vae_precision", "bf16") or "bf16")
             vram_policy = str(getattr(gen_cfg, "vram_policy", "auto") or "auto")
+            ram_guard = bool(getattr(gen_cfg, "ram_guard", True))
         except Exception:
             attn_default = "auto"
             preview_n = 0
             vae_precision = "bf16"
             vram_policy = "auto"
+            ram_guard = True
         attn = body.attention_backend or attn_default
         if attn == "auto":
             from ...services.runtime.xformers import detect_attention_backend
@@ -243,6 +245,7 @@ def enqueue_generate(body: GenerateRequest) -> dict[str, Any]:
             vae_precision=vae_precision,
             attention_backend=attn,
             vram_policy=vram_policy,
+            ram_guard=ram_guard,
             xy_matrix=body.xy_matrix.model_dump() if body.xy_matrix else None,
         )
 

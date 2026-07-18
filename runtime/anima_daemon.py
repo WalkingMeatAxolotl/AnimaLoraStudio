@@ -209,6 +209,7 @@ class ModelCache:
         self.vae_precision: Optional[str] = None
         self.text_encoder_backend: Optional[str] = None
         self.t5_tokenizer_backend: Optional[str] = None
+        self.ram_guard: bool = True
         self.device: Optional[str] = None
         self.dtype: Any = None
         self.lora_dtype: Any = torch.float32
@@ -254,6 +255,8 @@ class ModelCache:
         if t5_tokenizer_path:
             t5_tokenizer_path = _T.resolve_path_best_effort(t5_tokenizer_path, bases)
 
+        self.ram_guard = bool(cfg.get("ram_guard", True))
+
         # 比较是否需要 reload（换族 = 换整套模型栈，全重载）
         needs_reload = (
             not self.loaded
@@ -270,6 +273,9 @@ class ModelCache:
         )
 
         if needs_reload:
+            from training.sysmem import check_ram_guard
+
+            check_ram_guard(self.ram_guard, stage="模型加载")
             self.unload()
             self._load(
                 family_id=family_id,
@@ -354,6 +360,11 @@ class ModelCache:
         self.adapters = []
         self.last_lora_specs = []
         self.last_lora_metas = []
+        # 大权重加载完：mmap 文件缓存页（DiT 13-26GB + VAE）归还系统，
+        # 防物理内存紧张机器换页卡死（TE lazy 加载后由 ensure_model 再 trim）
+        from training.sysmem import trim_working_set
+
+        trim_working_set()
 
     def apply_loras(self, lora_configs: list[dict[str, Any]]) -> list[Any]:
         """按 lora_configs inject adapters；同结构 checkpoint 切换时只热换权重。"""
@@ -519,6 +530,12 @@ def _precache_prompts_and_offload(
     precache = getattr(CACHE.text_stack, "precache_online_prompts", None)
     if not callable(precache):
         return
+    # TE 在此 lazy 加载（fp8 5GB / bf16 8.9GB 的 mmap 读盘）——水位护栏。
+    # 必须在兜底 try 之外：护栏错误要中止任务，不能被「退回逐格编码」吞掉
+    # 后照样加载 TE 卡死。
+    from training.sysmem import check_ram_guard
+
+    check_ram_guard(CACHE.ram_guard, stage="文本编码器加载")
     try:
         if phase_callback is not None:
             phase_callback("clip")

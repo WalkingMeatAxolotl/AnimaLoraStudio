@@ -409,6 +409,10 @@ class Krea2TextStack:
             self._model = self._model_loader(self.model_path, self.device, self.dtype)
             if self.compute_dtype is not None and self.compute_dtype != self.dtype:
                 patch_manual_cast(self._model, self.compute_dtype)
+            # TE 权重文件（5-18GB）的 mmap 缓存页归还系统（真机换页卡死案例）
+            from training.sysmem import trim_working_set  # noqa: PLC0415
+
+            trim_working_set()
         elif self._offloaded:
             # 上次采样前被 offload 到 CPU（见 offload_model）——搬回目标设备
             self._model.to(self.device)
