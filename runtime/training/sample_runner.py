@@ -82,6 +82,14 @@ def run_sample(
         clear_fn()
 
     was_training = bool(getattr(ctx.model, "training", True))
+    # 采样前归还训练积累的 allocator 碎片（多 bucket 形状的 reserved 段）。
+    # 采样分辨率 ≠ 训练 bucket 形状 → 采样激活是全新分配；不清理时
+    # 「训练 reserved + 采样新段」的瞬时提交可能顶穿 dedicated 上限，
+    # 触发 WDDM 把训练张量 demote 到共享内存（=系统 RAM）——之后每步
+    # 训练都走 PCIe，表现为采样后持续整机卡顿（显存/内存数字反而稳定）。
+    _log_vram_watermark("采样前")
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     try:
         with optimizer_eval_mode(ctx.optimizer):
             ctx.model.eval()
@@ -118,3 +126,35 @@ def run_sample(
             ctx.model.train()
         else:
             ctx.model.eval()
+        # 归还采样期的新形状分配，训练继续时 allocator 干净
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        _log_vram_watermark("采样后")
+
+
+def _log_vram_watermark(stage: str) -> None:
+    """采样前后水位一行日志：alloc/reserved（torch 视角）+ 全卡（NVML）。
+
+    reserved 与全卡的差额变化用于定位 WDDM demote（共享内存曲线跳升时
+    torch 侧数字反而稳定）。失败静默——日志不阻塞训练。"""
+    try:
+        if not torch.cuda.is_available():
+            return
+        alloc = torch.cuda.memory_allocated() / 1e9
+        reserved = torch.cuda.memory_reserved() / 1e9
+        line = f"[{stage}] 显存 alloc={alloc:.1f}GB reserved={reserved:.1f}GB"
+        try:
+            import pynvml
+
+            pynvml.nvmlInit()
+            try:
+                info = pynvml.nvmlDeviceGetMemoryInfo(
+                    pynvml.nvmlDeviceGetHandleByIndex(0))
+                line += f" 全卡={info.used / 1e9:.1f}GB"
+            finally:
+                pynvml.nvmlShutdown()
+        except Exception:
+            pass
+        logger.info(line)
+    except Exception:
+        pass
