@@ -119,7 +119,7 @@ def test_parse_json_works_via_yaml_superset() -> None:
     import json
     raw = json.dumps(_payload()).encode("utf-8")
     config, suggested = presets_io.parse_preset_bytes(raw, "old.json")
-    assert config["lora_type"] == "lokr"
+    assert config["lora_type"] == "lora"
     assert suggested == "old"
 
 

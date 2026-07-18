@@ -393,7 +393,7 @@
       "caption_comfy_encoding": "标签按 ComfyUI 方式编码（与测试出图同一链路，推荐开启）",
       "cache_latents": "缓存 VAE latent 加速训练",
       "vae_cache_batch_size": "VAE latent 缓存编码批次大小；0=跟随训练 batch size，显存不足时设为 1 逐张编码",
-      "lora_type": "适配器算法。lokr：Kronecker 分解，参数最省（默认）；lora：经典低秩，通用；loha：Hadamard 积，表达力较高但参数较多；ortho：正交参数化，可训练参数极少、防过拟合，适合小数据集人物/主体；tlora：噪声越高 rank 越小，专为单图/极少图主体定制防过拟合",
+      "lora_type": "适配器算法。lora：经典低秩，通用（默认）；lokr：Kronecker 分解，参数最省；loha：Hadamard 积，表达力较高但参数较多；ortho：正交参数化，可训练参数极少、防过拟合，适合小数据集人物/主体；tlora：噪声越高 rank 越小，专为单图/极少图主体定制防过拟合",
       "lora_rank": "rank：越大表达力越强，参数量与显存上升、易过拟合；越小越省但易欠拟合。常用 8/16/32/64",
       "lora_alpha": "alpha：LoRA 缩放系数，越大 LoRA 效果越强。通常等于 rank；启用 rs_lora 时常设为 √rank",
       "lokr_factor": "LoKr 矩阵分解因子：越大压缩越强、参数越少；越小参数越多。默认 8 适合大多数场景",

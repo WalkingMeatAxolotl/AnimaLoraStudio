@@ -244,8 +244,8 @@ class TrainingConfig(BaseModel):
 
     # ------------------------------------------------------------------- LoRA
     lora_type: Literal["lora", "lokr", "loha", "ortho", "tlora"] = Field(
-        "lokr",
-        description="适配器算法。lokr：Kronecker 分解，参数最省（默认）；lora：经典低秩，通用；loha：Hadamard 积，表达力较高但参数较多；ortho：正交参数化，可训练参数极少、防过拟合，适合小数据集人物/主体；tlora：噪声越高 rank 越小，专为单图/极少图主体定制防过拟合",
+        "lora",
+        description="适配器算法。lora：经典低秩，通用（默认）；lokr：Kronecker 分解，参数最省；loha：Hadamard 积，表达力较高但参数较多；ortho：正交参数化，可训练参数极少、防过拟合，适合小数据集人物/主体；tlora：噪声越高 rank 越小，专为单图/极少图主体定制防过拟合",
         json_schema_extra=_meta(
             "lora",
             # option 级禁值（forbid，R2 v2）：navit 是 B=1 打包序列 + 逐图 t，
