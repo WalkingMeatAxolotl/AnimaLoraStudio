@@ -42,6 +42,8 @@ def test_is_distilled_path_by_official_variant():
     """Turbo 与 Raw 结构全等，loader 指纹无法区分——只能按 catalog 文件名判。"""
     krea2 = get_assets("krea2")
     assert krea2.is_distilled_path("G:/models/diffusion_models/krea2-turbo-bf16.safetensors")
+    # 官方 fp8 Turbo 同为蒸馏推理靶子——测试页选中自动应用 8 步/无 CFG
+    assert krea2.is_distilled_path("G:/models/diffusion_models/krea2-turbo-fp8-scaled.safetensors")
     assert not krea2.is_distilled_path("G:/models/diffusion_models/krea2-raw-bf16.safetensors")
     # fp8 Raw 是非蒸馏训练/推理底模——绝不能被 purpose 逻辑误判成 Turbo
     assert not krea2.is_distilled_path("G:/models/diffusion_models/krea2-raw-fp8-scaled.safetensors")

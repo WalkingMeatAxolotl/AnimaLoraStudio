@@ -45,6 +45,18 @@ KREA2_VARIANTS: dict[str, dict[str, Any]] = {
         "purpose": "inference",
         "size_estimate": 26_300_000_000,
     },
+    # Comfy-Org 官方 fp8_scaled Turbo：TDM 蒸馏推理靶子的量化版（8 步 /
+    # 无 CFG，与 raw_fp8 同管线）。purpose=inference → is_distilled_path
+    # 判蒸馏，测试页选中自动应用蒸馏采样默认。
+    "turbo_fp8": {
+        "repo": "Comfy-Org/Krea-2",
+        "subpath": "diffusion_models/krea2_turbo_fp8_scaled.safetensors",
+        "ms_repo": "Comfy-Org/Krea-2",
+        "ms_subpath": "diffusion_models/krea2_turbo_fp8_scaled.safetensors",
+        "filename": "krea2-turbo-fp8-scaled.safetensors",
+        "purpose": "inference",
+        "size_estimate": 13_100_000_000,
+    },
 }
 LATEST_KREA2 = "raw"
 KREA2_LICENSE = "Krea 2 Community License"
@@ -255,8 +267,8 @@ def catalog_sections(root: Path, models_cfg: Any) -> dict[str, Any]:
             "id": "krea2_main",
             "name": "Krea 2 主模型",
             "description": (
-                "Raw 训练底模（bf16 26.3 GB；fp8 13.1 GB，训练/出图权重"
-                "显存减半）/ Turbo 推理底模（26.3 GB）"
+                "Raw 训练底模 / Turbo 推理底模，各有 bf16（26.3 GB）与"
+                "官方 fp8（13.1 GB，权重显存减半）两版"
             ),
             "repo": "krea/Krea-2-{Raw,Turbo}",
             "variants": variants,
