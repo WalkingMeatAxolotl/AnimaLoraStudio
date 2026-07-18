@@ -33,7 +33,13 @@ def test_anima_assets_surface():
     }
 
 
-def test_krea2_assets_surface_uses_shared_vae_and_isolated_text_dir():
+def test_krea2_assets_surface_uses_shared_vae_and_isolated_text_dir(monkeypatch):
+    # 隔离真实 secrets：断言硬编码官方文件名，开发机 selected 切 raw_fp8 会假红
+    from studio import secrets
+
+    monkeypatch.setattr(secrets, "load", lambda: secrets.Secrets(models={
+        "selected": {"anima": "1.0", "krea2": "raw"},
+    }))
     assets = get_assets("krea2")
     assert assets.family_id == "krea2"
     paths = assets.default_paths_for_new_version()

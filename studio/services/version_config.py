@@ -133,7 +133,38 @@ def read_version_config_with_warnings(
             code="version.config_invalid",
         )
     cfg, dropped, defaulted = _tolerant_validate(raw)
-    return _absolutize_model_paths(cfg.model_dump(mode="python")), dropped, defaulted
+    # overlay 在 absolutize 之前——覆盖值与 yaml 值走同一套路径归一
+    data = apply_global_path_overlay(cfg.model_dump(mode="python"))
+    return _absolutize_model_paths(data), dropped, defaulted
+
+
+#: auto_sync_paths=ON 时由全局设置管理的 4 个模型路径字段（Train 页对应
+#: 字段锁定并标「自动 · 全局设置」——读取出口 overlay 让徽标语义成立：
+#: 全局 selected / selected_te 变化后，已有 version 的显示与派生链
+#: （训练入队 / reg / eval）即时跟随，而非停留在创建时的快照）
+GLOBAL_MODEL_PATH_FIELDS = (
+    "transformer_path", "vae_path", "text_encoder_path", "t5_tokenizer_path",
+)
+
+
+def apply_global_path_overlay(data: dict[str, Any]) -> dict[str, Any]:
+    """auto_sync_paths=ON 时用当前全局设置覆盖 4 个模型路径字段。
+
+    与 fork / save_preset / bundle 导入的「写入时覆盖」同一语义的读取面；
+    OFF（独立模型用户）原样返回。失败静默返回原值（读取不因 secrets /
+    catalog 异常而失败）。
+    """
+    try:
+        from . import models as model_downloader
+        from .presets import _auto_sync_paths
+
+        if not _auto_sync_paths():
+            return data
+        family = str(data.get("model_family") or "anima")
+        data.update(model_downloader.default_paths_for_new_version(family=family))
+    except Exception:
+        pass
+    return data
 
 
 def write_version_config(

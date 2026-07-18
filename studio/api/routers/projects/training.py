@@ -819,6 +819,17 @@ def enqueue_version_training(
             code="version.config_missing", http_status=400,
         )
     cfg_path = version_config.version_config_path(project, ver)
+    # auto_sync_paths=ON：入队时把全局模型路径同步落盘——trainer 子进程
+    # 直接读 yaml（不经 studio 读取面的 overlay），全局 selected /
+    # selected_te 切换后训练必须用当前值（Train 页字段锁定并承诺
+    # 「自动 · 全局设置」）。OFF 时 read 不 overlay，写回幂等。
+    try:
+        synced = version_config.read_version_config(project, ver)
+        version_config.write_version_config(
+            project, ver, synced, force_project_overrides=True,
+        )
+    except version_config.VersionConfigError:
+        pass  # 坏 config 由下游校验报错，不在此处中断
     scheduled_at = body.scheduled_at if body else None
 
     with db.connection_for() as conn:

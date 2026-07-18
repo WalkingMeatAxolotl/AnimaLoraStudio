@@ -425,7 +425,7 @@ export function DownloadButton({ exists, status, busy, onClick, onDelete }: {
   }
   if (exists && onDelete) {
     return (
-      <button onClick={onDelete} className="btn btn-secondary btn-sm min-w-[5rem] justify-center text-err"
+      <button onClick={onDelete} className="btn btn-ghost btn-sm min-w-[5rem] justify-center"
         title={t('settings.deleteAssetTitle')}>
         🗑 {t('settings.deleteAsset')}
       </button>

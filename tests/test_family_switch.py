@@ -9,6 +9,17 @@ from studio.schema import TrainingConfig
 from studio.services.models import default_paths_for_new_version
 
 
+@pytest.fixture(autouse=True)
+def _fixed_selected(monkeypatch):
+    """隔离真实 secrets：断言硬编码官方文件名（krea2-raw-bf16 等），开发机
+    selected 切成 raw_fp8 / custom 会让 default_paths 变值假红。"""
+    from studio import secrets
+
+    monkeypatch.setattr(secrets, "load", lambda: secrets.Secrets(models={
+        "selected": {"anima": "1.0", "krea2": "raw"},
+    }))
+
+
 def _paths(family: str) -> dict[str, str]:
     return default_paths_for_new_version(family=family)
 

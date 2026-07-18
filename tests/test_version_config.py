@@ -12,6 +12,17 @@ from studio.services.projects import projects, versions
 from studio.services import presets as preset_flow, version_config
 
 
+@pytest.fixture(autouse=True)
+def _fixed_selected(monkeypatch):
+    """隔离真实 secrets：多个断言硬编码官方文件名（krea2-raw-bf16 等），
+    开发机 selected 切成 raw_fp8 / custom 会让 default_paths 变值假红。"""
+    from studio import secrets
+
+    monkeypatch.setattr(secrets, "load", lambda: secrets.Secrets(models={
+        "selected": {"anima": "1.0", "krea2": "raw"},
+    }))
+
+
 @pytest.fixture
 def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     dbfile = tmp_path / "studio.db"
