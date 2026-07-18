@@ -7,7 +7,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Optional
+from pathlib import PurePosixPath, PureWindowsPath
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, computed_field, model_validator
 
@@ -631,6 +632,52 @@ DOWNLOAD_SOURCE_TYPES: tuple[str, ...] = ("training", "wd14", "upscaler")
 DOWNLOAD_SOURCE_VALUES: tuple[str, ...] = ("huggingface", "modelscope")
 
 
+# ---------------------------------------------------------------------------
+# 统一模型来源候选（docs/design/model-source-unification.md）
+# ---------------------------------------------------------------------------
+
+
+class SourceCandidate(BaseModel):
+    """用户添加的模型来源候选。
+
+    - kind="download"：`repo`（HF/MS repo id）+ 单文件资产另需 `filename`
+      （upscaler / 主模型）；目录型资产（wd14 / eval / cltagger）只有 repo。
+    - kind="local"：`path` 本地绝对路径（文件或目录）。永不被删除文件，
+      移除只是移出候选列表。
+    - `extra`：域特有键（cltagger：model_path / tag_mapping_path 相对 repo
+      根的双文件路径）。
+    """
+    kind: Literal["download", "local"]
+    repo: str = ""
+    filename: str = ""
+    path: str = ""
+    extra: dict[str, str] = Field(default_factory=dict)
+
+    def identity(self) -> tuple[str, str, str]:
+        """去重身份键：download=(repo, filename)，local=(path,)。"""
+        if self.kind == "download":
+            return ("download", self.repo, self.filename)
+        return ("local", self.path, "")
+
+
+# repo 型 domain（选中值 = repo id 或本地绝对路径）。这些 domain 参与
+# 「选中值不在内置也不在候选 → 自动补候选」的统一不变量；upscaler
+# （文件名语义 + 扫盘兜底）与主模型族（families 注册表在 services 层，
+# 解析回退逻辑健全）不在此列，其候选完全由端点维护。
+MODEL_SOURCE_REPO_DOMAINS: tuple[str, ...] = (
+    "wd14", "cltagger", "eval_clip", "eval_dino", "eval_ccip",
+)
+
+
+def _is_abs_path(value: str) -> bool:
+    """跨平台绝对路径判断（win 盘符 / UNC / posix 根）；repo id 形如
+    `owner/name` 均为相对 → False。"""
+    return (
+        PureWindowsPath(value).is_absolute()
+        or PurePosixPath(value).is_absolute()
+    )
+
+
 class Secrets(BaseModel):
     gelbooru: GelbooruConfig = Field(default_factory=GelbooruConfig)
     danbooru: DanbooruConfig = Field(default_factory=DanbooruConfig)
@@ -660,6 +707,142 @@ class Secrets(BaseModel):
     generate: GenerateConfig = Field(default_factory=GenerateConfig)
     system: SystemConfig = Field(default_factory=SystemConfig)
     proxy: ProxyConfig = Field(default_factory=ProxyConfig)
+    # 统一模型来源候选：domain → 用户添加的候选列表。domain 白名单校验在
+    # API 层（families 注册表在 services 层）。内置 preset 不在此存储——
+    # 候选全集 = 代码内置 + 本字段。当前选中值仍写各 domain 原字段
+    # （wd14.model_id / eval_metrics.*_model_name / models.selected 等，两条
+    # 兼容纪律见 docs/design/model-source-unification.md §3）。
+    model_sources: dict[str, list[SourceCandidate]] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _sync_legacy_source_fields(cls, data: Any) -> Any:
+        """旧候选字段（wd14.model_ids / models.custom）→ model_sources 全量同步。
+
+        入站 dict **带这些键**时（旧盘文件 / 老客户端 PUT）以其为准重建对应
+        kind 的候选集——保留老客户端增删语义；`update()` 已把 merge base 里的
+        重建键剥掉，故新 UI 只写 model_sources 时不会被过期旧值覆盖。
+        另一半（model_sources → 旧字段重建写盘）见 after-validator。
+        """
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        raw_sources = data.get("model_sources")
+        sources: dict[str, list[dict[str, Any]]] = {}
+        if isinstance(raw_sources, dict):
+            for domain, cands in raw_sources.items():
+                if isinstance(cands, list):
+                    sources[str(domain)] = [
+                        dict(c) for c in cands if isinstance(c, dict)
+                    ]
+
+        def _sync(domain: str, kind: str, wanted: list[dict[str, Any]]) -> None:
+            cur = sources.get(domain, [])
+            kept = [c for c in cur if c.get("kind") != kind]
+            sources[domain] = wanted + kept
+
+        wd14_raw = data.get("wd14")
+        if isinstance(wd14_raw, dict) and isinstance(wd14_raw.get("model_ids"), list):
+            wanted = [
+                {"kind": "download", "repo": str(m)}
+                for m in wd14_raw["model_ids"]
+                if str(m).strip() and str(m) not in DEFAULT_WD14_MODELS
+            ]
+            _sync("wd14", "download", wanted)
+
+        models_raw = data.get("models")
+        if isinstance(models_raw, dict):
+            custom = models_raw.get("custom")
+            if not isinstance(custom, dict) and isinstance(
+                models_raw.get("custom_anima_paths"), list
+            ):
+                custom = {"anima": models_raw["custom_anima_paths"]}
+            if isinstance(custom, dict):
+                for family, paths in custom.items():
+                    if not isinstance(paths, list):
+                        continue
+                    wanted = [
+                        {"kind": "local", "path": str(p)}
+                        for p in paths if str(p).strip()
+                    ]
+                    _sync(str(family), "local", wanted)
+
+        data["model_sources"] = sources
+        return data
+
+    @model_validator(mode="after")
+    def _model_sources_invariants(self) -> "Secrets":
+        """统一不变量 + 兼容写盘面重建。
+
+        1. repo 型 domain 的当前选中值若既非内置 preset 也不在候选里 → 自动
+           补一条候选（WD14 现有「model_id 永远可见」不变量的推广；用户先切
+           走再移除，前端强制该顺序）。
+        2. 重建兼容面：wd14.model_ids = 内置 + download 候选（回滚可读）；
+           models.custom = 各族 local 候选路径。二者在 `update()` 的 merge
+           base 中被剥掉，唯一真源是 model_sources。
+        """
+        cltagger_official = str(
+            CLTaggerConfig.model_fields["model_id"].default
+        )
+        selected_by_domain: dict[str, tuple[str, tuple[str, ...]]] = {
+            "wd14": (self.wd14.model_id, DEFAULT_WD14_MODELS),
+            "cltagger": (self.cltagger.model_id, (cltagger_official,)),
+            "eval_clip": (
+                self.eval_metrics.clip_model_name,
+                (str(EvalMetricModelsConfig.model_fields["clip_model_name"].default),),
+            ),
+            "eval_dino": (
+                self.eval_metrics.dino_model_name,
+                (str(EvalMetricModelsConfig.model_fields["dino_model_name"].default),),
+            ),
+            "eval_ccip": (
+                self.eval_metrics.ccip_model_name,
+                (str(EvalMetricModelsConfig.model_fields["ccip_model_name"].default),),
+            ),
+        }
+        for domain in MODEL_SOURCE_REPO_DOMAINS:
+            sel, builtins = selected_by_domain[domain]
+            sel = (sel or "").strip()
+            if not sel or sel in builtins:
+                continue
+            cands = self.model_sources.setdefault(domain, [])
+            if any(
+                (c.kind == "download" and c.repo == sel)
+                or (c.kind == "local" and c.path == sel)
+                for c in cands
+            ):
+                continue
+            if _is_abs_path(sel):
+                cands.append(SourceCandidate(kind="local", path=sel))
+            elif domain == "cltagger":
+                # fork repo 迁移自带当前双文件相对路径（镜像覆盖退役，D4）
+                cands.append(SourceCandidate(
+                    kind="download", repo=sel,
+                    extra={
+                        "model_path": self.cltagger.model_path,
+                        "tag_mapping_path": self.cltagger.tag_mapping_path,
+                    },
+                ))
+            else:
+                cands.append(SourceCandidate(kind="download", repo=sel))
+
+        # 兼容面重建（写盘给旧版本读；运行时读的选中值字段不在此列）
+        wd14_downloads = [
+            c.repo for c in self.model_sources.get("wd14", [])
+            if c.kind == "download" and c.repo
+        ]
+        self.wd14.model_ids = list(DEFAULT_WD14_MODELS) + [
+            m for m in wd14_downloads if m not in DEFAULT_WD14_MODELS
+        ]
+        custom: dict[str, list[str]] = {}
+        for domain, cands in self.model_sources.items():
+            if domain in MODEL_SOURCE_REPO_DOMAINS or domain == "upscaler":
+                continue
+            paths = [c.path for c in cands if c.kind == "local" and c.path]
+            if paths or domain in self.models.custom:
+                custom[domain] = paths
+        self.models.custom = custom
+        return self
 
     @model_validator(mode="after")
     def _seed_and_normalize_download_sources(self) -> "Secrets":
@@ -729,6 +912,12 @@ def update(partial: dict[str, Any]) -> Secrets:
     if isinstance(models_base, dict):
         models_base.pop("selected_anima", None)
         models_base.pop("custom_anima_paths", None)
+        # model_sources 兼容重建键（同上语义）：留在 merge base 会经
+        # _sync_legacy_source_fields 用过期值覆盖 partial 新写入的 model_sources。
+        models_base.pop("custom", None)
+    wd14_base = current_dict.get("wd14")
+    if isinstance(wd14_base, dict):
+        wd14_base.pop("model_ids", None)
     merged = _deep_merge(current_dict, partial)
     new = Secrets.model_validate(merged)
     save(new)
