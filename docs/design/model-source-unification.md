@@ -86,7 +86,7 @@ SourceCandidate:
 | Eval ×3 | 单值升级为候选列表 | 新增：选目录 | 旧单值 ≠ 默认时生成一条 download 候选；选中值字段不动 |
 | 放大器 | 「自定义下载」独立卡退役 → 底部入口（repo + filename）；**候选持久化**（修复删后不能重下）；独立 source 下拉删除，跟全局 `download_sources` | 新增：选 .pth/.safetensors 登记路径 | 扫盘 custom 不迁移（继续扫盘兜底）；新下载起记录候选 |
 | 训练主模型 | **新增**：repo + filename（第三方微调主模型） | 现状 `custom[]` → `model_sources[family]` local 候选；行内 🗑 改 ×（语义修正） | `custom` computed 键保留 |
-| CLTagger | 用户候选 = (repo, model_path, tag_mapping_path)，添加时默认填最新版相对路径；**「自定义 repo」镜像覆盖退役（D4）** | 新增：选 model 文件 + tag_mapping 文件（extra 双路径） | `model_id` 为非官方值时生成一条 download 候选并重置为官方 repo |
+| CLTagger | 用户候选 = (repo, model_path, tag_mapping_path)，添加时默认继承当前双文件相对路径；**「自定义 repo」镜像覆盖退役（D4）** | 新增：选 model 文件 + tag_mapping 文件（extra 双路径） | `model_id` 为非官方值时生成一条 download 候选；**选中值不动**（纪律 1，用户 fork 继续生效），内置 preset 恒指官方 repo |
 
 ## 6. API 与前端
 

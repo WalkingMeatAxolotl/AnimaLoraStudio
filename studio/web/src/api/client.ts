@@ -2118,19 +2118,6 @@ export const api = {
       + (variant ? `&variant=${encodeURIComponent(variant)}` : ''),
       { method: 'DELETE' },
     ),
-  /** 注册一个本地 .safetensors 主模型到指定族（微调训练 / 微调上测试）。
-   *  返回新 catalog。路由按族参数化（多模型 P4-5）。 */
-  addCustomModel: (family: 'anima' | 'krea2', path: string) =>
-    req<ModelsCatalog>(`/api/models/${family}/custom`, {
-      method: 'POST',
-      body: JSON.stringify({ path }),
-    }),
-  /** 注销一个本地 custom 主模型；若为该族当前选中则回退最新官方 variant。 */
-  removeCustomModel: (family: 'anima' | 'krea2', path: string) =>
-    req<ModelsCatalog>(`/api/models/${family}/custom`, {
-      method: 'DELETE',
-      body: JSON.stringify({ path }),
-    }),
   /** 添加一条统一来源候选（下载型 / 本地文件），返回新 catalog。 */
   addModelSource: (domain: string, cand: ModelSourceCandidate) =>
     req<ModelsCatalog>(`/api/model-sources/${domain}`, {
@@ -2142,15 +2129,6 @@ export const api = {
     req<ModelsCatalog>(`/api/model-sources/${domain}`, {
       method: 'DELETE',
       body: JSON.stringify(cand),
-    }),
-  startUpscalerCustomDownload: (body: {
-    source: 'hf' | 'ms'
-    repo_id: string
-    filename: string
-  }) =>
-    req<{ key: string; status: string }>('/api/upscalers/download_custom', {
-      method: 'POST',
-      body: JSON.stringify(body),
     }),
   selectUpscaler: (label: string) =>
     req<{ selected: string }>('/api/upscalers/select', {
