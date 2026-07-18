@@ -67,6 +67,17 @@ QWEN3_VL_FILES = [
     "video_preprocessor_config.json",
     "vocab.json",
 ]
+# Comfy-Org 官方 fp8_scaled 单文件 TE（5.24GB vs bf16 8.88GB）。权重键是
+# HF 命名（text 侧差一个 language_model. 前缀，loader 做映射）；config /
+# tokenizer 等小文件单文件里没有，从 Qwen 官方 repo 一并下到同目录
+# （= QWEN3_VL_FILES 去掉三份权重分片/索引）。
+QWEN3_VL_FP8_REPO = "Comfy-Org/Krea-2"
+QWEN3_VL_FP8_SUBPATH = "text_encoders/qwen3vl_4b_fp8_scaled.safetensors"
+QWEN3_VL_FP8_FILE = "qwen3vl_4b_fp8_scaled.safetensors"
+QWEN3_VL_FP8_SMALL_FILES = [
+    name for name in QWEN3_VL_FILES
+    if not name.startswith("model-") and name != "model.safetensors.index.json"
+]
 
 
 def krea2_main_target(root: Path, variant: str) -> Path:
@@ -82,6 +93,28 @@ def krea2_main_target(root: Path, variant: str) -> Path:
 def qwen3_vl_dir(root: Path) -> Path:
     """Krea 2 文本编码器目录；与 Anima 的 legacy 扁平目录隔离。"""
     return root / "text_encoders" / safe_dir_name(QWEN3_VL_REPO)
+
+
+def qwen3_vl_fp8_dir(root: Path) -> Path:
+    """官方 fp8_scaled 单文件 TE 的目录（含 config/tokenizer 小文件）。"""
+    return root / "text_encoders" / "qwen3vl-4b-fp8"
+
+
+#: TE variant → 目录解析（bf16 在前 = 默认与 UI 顺序）
+QWEN3_VL_TE_VARIANTS = ("bf16", "fp8")
+
+
+def selected_te_variant() -> str:
+    """当前选中的 krea2 TE variant；缺失/非法回退 bf16。"""
+    try:
+        variant = secrets.load().models.selected_te.get("krea2")
+    except Exception:
+        variant = None
+    return str(variant) if variant in QWEN3_VL_TE_VARIANTS else "bf16"
+
+
+def qwen3_vl_dir_for(root: Path, variant: str) -> Path:
+    return qwen3_vl_fp8_dir(root) if variant == "fp8" else qwen3_vl_dir(root)
 
 
 def selected_krea2_variant() -> str:
@@ -158,7 +191,9 @@ def default_paths_for_new_version(base_model: Optional[str] = None) -> dict[str,
     return {
         "transformer_path": transformer,
         "vae_path": str(qwen_image_vae_target(root)),
-        "text_encoder_path": str(qwen3_vl_dir(root)),
+        # TE 按选中 variant（bf16 目录 / 官方 fp8 单文件目录）；训练与
+        # 测试出图共用该默认。fp8 训练=文本缓存指纹自动区分（-tefp8）。
+        "text_encoder_path": str(qwen3_vl_dir_for(root, selected_te_variant())),
         "t5_tokenizer_path": "",
     }
 
@@ -211,6 +246,10 @@ def catalog_sections(root: Path, models_cfg: Any) -> dict[str, Any]:
         })
 
     text_dir = qwen3_vl_dir(root)
+    fp8_dir = qwen3_vl_fp8_dir(root)
+    te_selected = (getattr(models_cfg, "selected_te", None) or {}).get("krea2")
+    if te_selected not in QWEN3_VL_TE_VARIANTS:
+        te_selected = "bf16"
     return {
         "krea2_main": {
             "id": "krea2_main",
@@ -233,9 +272,23 @@ def catalog_sections(root: Path, models_cfg: Any) -> dict[str, Any]:
             "description": "自然语言文本编码器（约 8.89 GB）",
             "repo": QWEN3_VL_REPO,
             "target_dir": str(text_dir),
+            # 选中的 TE variant（bf16/fp8）——前端 TE 卡 radio 与测试页
+            # TE 下拉的默认值都读这里
+            "selected": te_selected,
             "files": [
                 {"name": filename, **_file_status(text_dir / filename)}
                 for filename in QWEN3_VL_FILES
+            ],
+        },
+        "krea2_text_encoder_fp8": {
+            "id": "krea2_text_encoder_fp8",
+            "name": "Krea 2 · Qwen3-VL fp8",
+            "description": "官方 fp8 量化文本编码器（约 5.24 GB，测试出图可选）",
+            "repo": QWEN3_VL_FP8_REPO,
+            "target_dir": str(fp8_dir),
+            "files": [
+                {"name": filename, **_file_status(fp8_dir / filename)}
+                for filename in [QWEN3_VL_FP8_FILE, *QWEN3_VL_FP8_SMALL_FILES]
             ],
         },
     }

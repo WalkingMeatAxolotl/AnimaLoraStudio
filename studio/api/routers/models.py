@@ -124,6 +124,27 @@ def switch_model_family(body: FamilySwitchRequest) -> dict[str, Any]:
     return {"config": new_config, "changes": changes}
 
 
+@router.delete("/api/models/asset")
+def delete_model_asset(model_id: str, variant: str | None = None) -> dict[str, Any]:
+    """删除一个已下载资产（下载的逆操作：用户先删除、再重新下载）。
+
+    目标路径由服务端解析（不接受任意路径）；下载进行中 / 文件被占用时报错。
+    返回删除后的完整 catalog。
+    """
+    try:
+        model_downloader.delete_asset(model_id, variant)
+    except ValueError as exc:
+        raise ValidationError(
+            f"Invalid model selection: {exc}",
+            code="model.invalid", details={"reason": str(exc)}, http_status=400,
+        ) from exc
+    except RuntimeError as exc:
+        raise ValidationError(
+            str(exc), code="model.delete_failed", http_status=409,
+        ) from exc
+    return model_downloader.build_catalog()
+
+
 @router.post("/api/models/download")
 def start_model_download(body: ModelDownloadRequest) -> dict[str, Any]:
     """启动后台下载，立即返回 status key；前端通过 SSE

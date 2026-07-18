@@ -89,7 +89,9 @@ const FAMILY_MODEL_SECTIONS = [
     titleKey: 'settings.krea2Models',
     mainKey: 'krea2_main' as const,
     fallbackSelected: 'raw',
-    encoderIds: ['krea2_text_encoder'] as const,
+    // krea2 的 TE 卡是 variant 合并卡（bf16/fp8 radio），单独渲染不走
+    // encoderIds 的文件列表卡机制
+    encoderIds: [] as const,
     downloadKeyPrefixes: ['krea2_main', 'krea2_text_encoder'],
   },
 ]
@@ -163,6 +165,37 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
     }
   }
 
+  // 删除已下载资产（下载的逆操作）：confirm → DELETE → 刷 catalog
+  const deleteAsset = async (modelId: string, variant: string | undefined, name: string) => {
+    if (!(await dialog.confirm(t('settings.confirmDeleteAsset', { name }), { tone: 'danger' }))) return
+    try {
+      await api.deleteModelAsset(modelId, variant)
+      toast(t('settings.assetDeleted', { name }), 'success')
+      await reloadCatalog()
+    } catch (e) {
+      toast(String(e), 'error')
+    }
+  }
+
+  // krea2 TE variant 选择（bf16/fp8）：与主模型 pick 同款直写 secrets
+  const [teSelected, setTeSelected] = useState<'bf16' | 'fp8'>('bf16')
+  useEffect(() => {
+    const sel = (catalog?.krea2_text_encoder as { selected?: string } | undefined)?.selected
+    if (sel === 'bf16' || sel === 'fp8') setTeSelected(sel)
+  }, [catalog])
+  const pickTe = async (variant: 'bf16' | 'fp8') => {
+    if (variant === teSelected) return
+    setTeSelected(variant)
+    try {
+      await runSave(() => api.updateSecrets({ models: { selected_te: { krea2: variant } } }))
+      toast(t('settings.teVariantSelected', { name: variant }), 'success')
+      await reloadCatalog()
+    } catch (e) {
+      toast(String(e), 'error')
+      void reloadCatalog()
+    }
+  }
+
   const removeCustom = async (family: FamilyId, fallback: string, p: string) => {
     const name = p.split(/[\\/]/).pop() || p
     if (!(await dialog.confirm(t('settings.confirmRemoveLocalModel', { name }), { tone: 'danger' }))) return
@@ -186,7 +219,7 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
           <span className="text-fg-tertiary">{translatedCatalogText(MODEL_DESCRIPTION_KEYS, 'anima_vae', catalog.anima_vae.description, t)} · <code>{catalog.anima_vae.repo}</code></span>
           <span style={{ flex: 1 }} />
           <ModelStatusBadge exists={catalog.anima_vae.exists} size={catalog.anima_vae.size} status={catalog.downloads.anima_vae?.status} />
-          <DownloadButton exists={catalog.anima_vae.exists} status={catalog.downloads.anima_vae?.status} busy={busy.has('anima_vae')} onClick={() => void start('anima_vae')} />
+          <DownloadButton exists={catalog.anima_vae.exists} status={catalog.downloads.anima_vae?.status} busy={busy.has('anima_vae')} onClick={() => void start('anima_vae')} onDelete={() => void deleteAsset('anima_vae', undefined, catalog.anima_vae.name)} />
         </div>
       </ModelGroupCard>
     )
@@ -283,7 +316,7 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
                         )}
                         <span className="flex-1" />
                         <ModelStatusBadge exists={v.exists} size={v.size} status={dl?.status} />
-                        <DownloadButton exists={v.exists} status={dl?.status} busy={busy.has(key)} onClick={() => void start(section.mainKey, v.variant)} />
+                        <DownloadButton exists={v.exists} status={dl?.status} busy={busy.has(key)} onClick={() => void start(section.mainKey, v.variant)} onDelete={() => void deleteAsset(section.mainKey, v.variant, v.variant)} />
                       </li>
                     )
                   })}
@@ -327,6 +360,42 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
               {/* 共享 Qwen-Image VAE（两族同一份文件，族无关资产） */}
               {renderSharedVae()}
 
+              {/* krea2 TE variant 合并卡：bf16/fp8 两行 radio + 各自下载 */}
+              {section.family === 'krea2' && catalog.krea2_text_encoder && catalog.krea2_text_encoder_fp8 && (
+                <ModelGroupCard title={t('settings.krea2TeCardTitle')}>
+                  <ul className="flex flex-col gap-1.5 text-xs">
+                    {([
+                      ['bf16', catalog.krea2_text_encoder],
+                      ['fp8', catalog.krea2_text_encoder_fp8],
+                    ] as const).map(([variant, m]) => {
+                      const allExist = m.files.length > 0 && m.files.every((f) => f.exists)
+                      const totalSize = m.files.reduce((s, f) => s + f.size, 0)
+                      const dl = catalog.downloads[m.id]
+                      return (
+                        <li key={variant} className="flex items-center gap-2">
+                          <input
+                            type="radio"
+                            name="krea2-te-variant"
+                            checked={teSelected === variant}
+                            disabled={!allExist}
+                            onChange={() => void pickTe(variant)}
+                            style={{ accentColor: 'var(--accent)' }}
+                            title={allExist ? t('settings.selectTeVariant') : t('settings.teVariantNotDownloaded')}
+                          />
+                          <code className="font-mono text-fg-primary w-16 shrink-0">{variant}</code>
+                          <span className="text-fg-tertiary truncate">
+                            {translatedCatalogText(MODEL_DESCRIPTION_KEYS, m.id, m.description, t)}
+                          </span>
+                          <span style={{ flex: 1 }} />
+                          <ModelStatusBadge exists={allExist} size={totalSize} status={dl?.status} fileCount={m.files.length} existsCount={m.files.filter((f) => f.exists).length} />
+                          <DownloadButton exists={allExist} status={dl?.status} busy={busy.has(m.id)} onClick={() => void start(m.id)} onDelete={() => void deleteAsset(m.id, undefined, `Qwen3-VL ${variant}`)} />
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </ModelGroupCard>
+              )}
+
               {/* 该族的目录型资产（文本编码器 / tokenizer；CLTagger 在「打标」tab） */}
               {section.encoderIds.map((id) => {
                 const m = catalog[id]
@@ -339,7 +408,7 @@ export function ModelsSection({ catalog, busy, start, setSource, reloadCatalog, 
                       <span className="text-fg-tertiary">{translatedCatalogText(MODEL_DESCRIPTION_KEYS, id, m.description, t)} · <code>{m.repo}</code></span>
                       <span style={{ flex: 1 }} />
                       <ModelStatusBadge exists={allExist} size={totalSize} status={dl?.status} fileCount={m.files.length} existsCount={m.files.filter((f) => f.exists).length} />
-                      <DownloadButton exists={allExist} status={dl?.status} busy={busy.has(id)} onClick={() => void start(id)} />
+                      <DownloadButton exists={allExist} status={dl?.status} busy={busy.has(id)} onClick={() => void start(id)} onDelete={() => void deleteAsset(id, undefined, m.name)} />
                     </div>
                   </ModelGroupCard>
                 )
@@ -1468,6 +1537,16 @@ export function VramPolicySection({
           <option value="save_vram">{t('settings.vramPolicy.optSaveVram')}</option>
           <option value="performance">{t('settings.vramPolicy.optPerformance')}</option>
         </select>
+      </SettingsField>
+      <SettingsField
+        label={t('settings.vramPolicy.ramGuardLabel')}
+        desc={t('settings.vramPolicy.ramGuardDesc')}
+        helpTooltip={<p>{t('settings.vramPolicy.ramGuardHelp')}</p>}
+      >
+        <Bool
+          value={draft.generate.ram_guard ?? true}
+          onChange={(v) => update('generate', 'ram_guard', v)}
+        />
       </SettingsField>
     </SettingsSection>
   )

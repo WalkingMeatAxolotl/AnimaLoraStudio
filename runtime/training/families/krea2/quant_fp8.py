@@ -21,7 +21,8 @@ dequant 路径无差别——解析后忽略。
 前向 patch 思路来自 kohya-ss/musubi-tuner 的 ``apply_fp8_monkey_patch``
 （Apache-2.0，见 THIRD_PARTY_NOTICES）；dequant 公式对齐 Comfy（GPL-3.0）。
 
-仅推理：patch 后权重 requires_grad=False，训练路径的 loader 依旧拒绝 fp8。
+patch 后权重 requires_grad=False；训练（fp8_base）与推理共用本 patch，
+底模恒 frozen，梯度只流经 LoRA 参数。
 """
 
 from __future__ import annotations
@@ -73,12 +74,18 @@ def parse_quantization_metadata(metadata: dict | None) -> dict[str, dict]:
 
 def _fp8_linear_forward(self, input: torch.Tensor) -> torch.Tensor:
     # ComfyUI parity：目标 dtype = input.dtype（cast_bias_weight :286-290）；
-    # scale 先转 compute dtype 再乘（ck eager dequantize_per_tensor_fp8）
+    # scale 先转 compute dtype 再乘（ck eager dequantize_per_tensor_fp8）。
+    # bias 同 cast_bias_weight cast 到 input.dtype——DiT 场景 bias 本就是
+    # input dtype（no-op 等价，parity 不变）；TE fp8（fp32 compute）场景
+    # bias 是 fp16 存储，必须 cast。
     weight = self.weight.to(input.dtype)
     scale = getattr(self, "weight_scale", None)
     if scale is not None:
         weight = weight * scale.to(input.dtype)
-    return torch.nn.functional.linear(input, weight, self.bias)
+    bias = self.bias
+    if bias is not None and bias.dtype != input.dtype:
+        bias = bias.to(input.dtype)
+    return torch.nn.functional.linear(input, weight, bias)
 
 
 def patch_fp8_linears(

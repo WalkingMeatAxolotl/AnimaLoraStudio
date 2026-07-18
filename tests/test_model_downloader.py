@@ -1203,3 +1203,51 @@ def test_ensure_eval_model_uses_user_local_dir(
     got = model_downloader.ensure_eval_model("clip", str(local), tmp_path)
     assert got == local
     assert not called
+
+
+def test_delete_asset_removes_known_targets(tmp_path, monkeypatch):
+    """删除按 model_id 解析服务端 target（文件/目录两形态）；未知 id 报错。"""
+    from studio.services import models as m
+    from studio.services.models import downloader as dl
+
+    monkeypatch.setattr(dl, "models_root", lambda: tmp_path)
+
+    # 文件型：krea2_main variant
+    target = tmp_path / "diffusion_models" / "krea2-raw-fp8-scaled.safetensors"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"w")
+    m.delete_asset("krea2_main", "raw_fp8")
+    assert not target.exists()
+
+    # 目录型：fp8 TE
+    te_dir = tmp_path / "text_encoders" / "qwen3vl-4b-fp8"
+    te_dir.mkdir(parents=True)
+    (te_dir / "w.safetensors").write_bytes(b"w")
+    m.delete_asset("krea2_text_encoder_fp8")
+    assert not te_dir.exists()
+
+    # 不存在的 target：no-op 不抛
+    m.delete_asset("anima_vae")
+
+    import pytest as _pytest
+    with _pytest.raises(ValueError, match="deletion"):
+        m.delete_asset("wd14")
+    with _pytest.raises(ValueError, match="variant"):
+        m.delete_asset("krea2_main", "bogus")
+
+
+def test_delete_asset_rejects_running_download(tmp_path, monkeypatch):
+    from studio.services import models as m
+    from studio.services.models import downloader as dl
+
+    monkeypatch.setattr(dl, "models_root", lambda: tmp_path)
+    ds = dl.DownloadStatus(key="krea2_main:raw", status="running", started_at=0, log=[])
+    with dl._LOCK:
+        dl._DOWNLOADS["krea2_main:raw"] = ds
+    try:
+        import pytest as _pytest
+        with _pytest.raises(RuntimeError, match="下载中"):
+            m.delete_asset("krea2_main", "raw")
+    finally:
+        with dl._LOCK:
+            dl._DOWNLOADS.pop("krea2_main:raw", None)

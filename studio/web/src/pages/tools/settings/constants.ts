@@ -241,7 +241,7 @@ export const EMPTY: Secrets = {
   },
   models: { root: null, selected: { anima: '1.0', krea2: 'raw' }, selected_anima: '1.0', custom_anima_paths: [], selected_upscaler: '4x-AnimeSharp', auto_sync_paths: true },
   queue: { light_tasks_during_train: true },
-  generate: { preview_every_n_steps: 3, attention_backend: 'auto', vae_precision: 'bf16', idle_timeout_minutes: 10, save_test_images: false, vram_policy: 'auto' },
+  generate: { preview_every_n_steps: 3, attention_backend: 'auto', vae_precision: 'bf16', idle_timeout_minutes: 10, save_test_images: false, vram_policy: 'auto', ram_guard: true },
   system: { update_channel: 'stable', show_dev_channel: false },
   proxy: {
     enabled: false,
@@ -260,6 +260,7 @@ export const MODEL_DESCRIPTION_KEYS: Record<string, string> = {
   t5_tokenizer: 'settings.modelDescriptions.t5Tokenizer',
   krea2_main: 'settings.modelDescriptions.krea2Main',
   krea2_text_encoder: 'settings.modelDescriptions.krea2TextEncoder',
+  krea2_text_encoder_fp8: 'settings.modelDescriptions.krea2TextEncoderFp8',
   wd14: 'settings.modelDescriptions.wd14',
   cltagger: 'settings.modelDescriptions.cltagger',
 }

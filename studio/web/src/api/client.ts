@@ -498,6 +498,9 @@ export interface ModelsConfig {
   selected_anima: string
   /** 按模型族保存的默认主模型：variant key 或已注册的本地路径。 */
   selected: Record<string, string>
+  /** 按模型族选中的文本编码器 variant（krea2："bf16"|"fp8"，缺失=bf16）。
+   * 决定训练新建 version 的 text_encoder_path 默认 + 测试出图 TE 默认。 */
+  selected_te?: Record<string, string>
   /** 用户注册的本地 custom 主模型（.safetensors 绝对路径）。微调训练 /
    * 在微调权重上测试出图用；仅登记路径，不下载不复制。 */
   custom_anima_paths: string[]
@@ -531,6 +534,9 @@ export interface GenerateSecretsConfig {
    * 是否让位；save_vram=强制顺序化（峰值最低，每图多几秒搬运）；
    * performance=全部常驻显存（峰值最高、零搬运）。 */
   vram_policy: 'auto' | 'save_vram' | 'performance'
+  /** 系统内存水位保护：加载大模型前可用物理内存不足 6GB 时中止并报错
+   * （默认开）；关闭后继续加载，可能触发整机换页卡顿。 */
+  ram_guard: boolean
   /** 开后每次出图自动落盘到 studio_data/test/<date>/{single,xy}/image_N.png。
    * 默认关；compare 模式始终不落盘。 */
   save_test_images: boolean
@@ -656,11 +662,13 @@ export interface AnimaVaeCatalog extends ModelFileStatus {
 }
 
 export interface ModelDirCatalog {
-  id: 'qwen3' | 't5_tokenizer' | 'krea2_text_encoder'
+  id: 'qwen3' | 't5_tokenizer' | 'krea2_text_encoder' | 'krea2_text_encoder_fp8'
   name: string
   description: string
   repo: string
   target_dir: string
+  /** krea2_text_encoder 专属：选中的 TE variant（'bf16' | 'fp8'）。 */
+  selected?: string
   files: Array<{ name: string; exists: boolean; size: number; mtime: number }>
 }
 
@@ -779,6 +787,7 @@ export interface ModelsCatalog {
   t5_tokenizer: ModelDirCatalog
   krea2_main: FamilyMainCatalog
   krea2_text_encoder: ModelDirCatalog
+  krea2_text_encoder_fp8: ModelDirCatalog
   wd14: WD14Catalog
   cltagger: CLTaggerCatalog
   eval_metrics?: EvalMetricsCatalog
@@ -1370,6 +1379,9 @@ export interface GenerateRequest {
   /** 本次出图临时选用的底模（官方 variant key 或本地 custom 路径）；
    *  省略 → server 用 Settings 里该族的 selected。 */
   base_model?: string
+  /** 本次出图的文本编码器 variant（krea2 生效）：省略 = 跟随下载中心选中
+   *  的 TE（selected_te）；显式 bf16/fp8 临时覆盖（与 base_model 对称）。 */
+  text_encoder?: 'bf16' | 'fp8'
   negative_prompt?: string
   width?: number
   height?: number
@@ -2055,6 +2067,14 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  /** 删除一个已下载资产（下载的逆操作：先删除、再重新下载）。路径由
+   *  服务端解析；下载中 / 文件被占用时 409。返回删除后的 catalog。 */
+  deleteModelAsset: (model_id: string, variant?: string) =>
+    req<ModelsCatalog>(
+      `/api/models/asset?model_id=${encodeURIComponent(model_id)}`
+      + (variant ? `&variant=${encodeURIComponent(variant)}` : ''),
+      { method: 'DELETE' },
+    ),
   /** 注册一个本地 .safetensors 主模型到指定族（微调训练 / 微调上测试）。
    *  返回新 catalog。路由按族参数化（多模型 P4-5）。 */
   addCustomModel: (family: 'anima' | 'krea2', path: string) =>

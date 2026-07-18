@@ -77,6 +77,25 @@ def test_krea2_default_paths_ignore_inference_selected(tmp_path, monkeypatch):
     assert explicit["transformer_path"].endswith("krea2-turbo-bf16.safetensors")
 
 
+def test_krea2_default_paths_follow_selected_te(tmp_path, monkeypatch):
+    """selected_te=fp8 → 训练/出图默认 text_encoder_path 指向 fp8 单文件目录；
+    缺失/非法回退 bf16 目录。"""
+    from studio import secrets
+    from studio.services import models as model_downloader
+
+    monkeypatch.setattr(secrets, "load", lambda: secrets.Secrets(models={
+        "root": str(tmp_path), "selected_te": {"krea2": "fp8"},
+    }))
+    paths = model_downloader.default_paths_for_new_version(family="krea2")
+    assert paths["text_encoder_path"].endswith("qwen3vl-4b-fp8")
+
+    monkeypatch.setattr(secrets, "load", lambda: secrets.Secrets(models={
+        "root": str(tmp_path), "selected_te": {"krea2": "bogus"},
+    }))
+    paths = model_downloader.default_paths_for_new_version(family="krea2")
+    assert paths["text_encoder_path"].endswith("Qwen_Qwen3-VL-4B-Instruct")
+
+
 def test_krea2_default_paths_respect_custom_selected(tmp_path, monkeypatch):
     """selected 是注册的本地 custom 权重（社区微调等，无 purpose 元数据）→ 尊重。"""
     from studio import secrets
@@ -109,7 +128,15 @@ def test_krea2_catalog_sections_report_raw_turbo_and_text_encoder(tmp_path):
         custom={"krea2": [str(custom)]},
     )
     sections = get_assets("krea2").catalog_sections(tmp_path, cfg)
-    assert set(sections) == {"krea2_main", "krea2_text_encoder"}
+    assert set(sections) == {
+        "krea2_main", "krea2_text_encoder", "krea2_text_encoder_fp8",
+    }
+    fp8_te = sections["krea2_text_encoder_fp8"]
+    assert fp8_te["repo"] == "Comfy-Org/Krea-2"
+    assert any(
+        f["name"].endswith(".safetensors") for f in fp8_te["files"]
+    )
+    assert any(f["name"] == "config.json" for f in fp8_te["files"])
     main = sections["krea2_main"]
     assert [v["variant"] for v in main["variants"]] == ["raw", "raw_fp8", "turbo"]
     assert [v["purpose"] for v in main["variants"]] == [

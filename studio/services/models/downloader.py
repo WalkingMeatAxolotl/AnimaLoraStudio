@@ -34,9 +34,14 @@ from .families.krea2 import (
     KREA2_VARIANTS,
     LATEST_KREA2,
     QWEN3_VL_FILES,
+    QWEN3_VL_FP8_FILE,
+    QWEN3_VL_FP8_REPO,
+    QWEN3_VL_FP8_SMALL_FILES,
+    QWEN3_VL_FP8_SUBPATH,
     QWEN3_VL_REPO,
     krea2_main_target,
     qwen3_vl_dir,
+    qwen3_vl_fp8_dir,
 )
 from .paths import (
     CLTAGGER_VERSIONS,
@@ -153,6 +158,32 @@ def download_qwen3_vl(
                 QWEN3_VL_REPO, filename, target, on_log=on_log,
             )
         if not downloaded:
+            ok = False
+    return ok
+
+
+def download_qwen3_vl_fp8(
+    root: Path, *, on_log: Callable[[str], None] = print
+) -> bool:
+    """下载官方 fp8_scaled 单文件 TE + config/tokenizer 小文件到独立目录。
+
+    权重来自 Comfy-Org/Krea-2（HF 与 ModelScope 同 repo 布局）；小文件来自
+    Qwen 官方 repo（单文件里没有，loader 需要 config 建结构、tokenizer
+    编码）。
+    """
+    target_dir = qwen3_vl_fp8_dir(root)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    use_ms = _sources._source_for("training") == "modelscope"
+    on_log(f"\n📥 Krea 2 文本编码器 Qwen3-VL fp8 (~5.24 GB) → {target_dir}")
+    download = _sources.download_flat_ms if use_ms else _sources.download_flat
+    ok = download(
+        QWEN3_VL_FP8_REPO, QWEN3_VL_FP8_SUBPATH,
+        target_dir / QWEN3_VL_FP8_FILE, on_log=on_log,
+    )
+    for filename in QWEN3_VL_FP8_SMALL_FILES:
+        if not download(
+            QWEN3_VL_REPO, filename, target_dir / filename, on_log=on_log,
+        ):
             ok = False
     return ok
 
@@ -526,6 +557,60 @@ def start_download_async(
     return ds
 
 
+def delete_asset(model_id: str, variant: Optional[str] = None) -> None:
+    """删除一个已下载资产（下载按钮的逆操作：用户先删除、再下载）。
+
+    目标路径全部由服务端 target 函数解析——不接受任意路径；对应 key 的
+    下载进行中拒绝。覆盖 Settings 模型区的资产 id（主模型 variant / VAE /
+    文本编码器 / tokenizer）；打标、放大器等区暂不接入。文件被占用
+    （模型已加载 / 训练中）时 OSError 原样转可操作报错。
+    """
+    import shutil
+
+    root = models_root()
+    target: Path
+    key = model_id
+    if model_id == "anima_main":
+        v = variant or ""
+        if v not in ANIMA_VARIANTS:
+            raise ValueError(f"unknown anima variant {variant!r}")
+        key = f"anima_main:{v}"
+        target = anima_main_target(root, v)
+    elif model_id == "krea2_main":
+        v = variant or ""
+        if v not in KREA2_VARIANTS:
+            raise ValueError(f"unknown Krea 2 variant {variant!r}")
+        key = f"krea2_main:{v}"
+        target = krea2_main_target(root, v)
+    elif model_id == "anima_vae":
+        target = qwen_image_vae_target(root)
+    elif model_id == "qwen3":
+        target = qwen_dir(root)
+    elif model_id == "t5_tokenizer":
+        target = t5_tokenizer_dir(root)
+    elif model_id == "krea2_text_encoder":
+        target = qwen3_vl_dir(root)
+    elif model_id == "krea2_text_encoder_fp8":
+        target = qwen3_vl_fp8_dir(root)
+    else:
+        raise ValueError(f"asset {model_id!r} does not support deletion")
+
+    with _LOCK:
+        existing = _DOWNLOADS.get(key)
+        if existing and existing.status == "running":
+            raise RuntimeError(f"{key} 正在下载中，无法删除")
+
+    try:
+        if target.is_dir():
+            shutil.rmtree(target)
+        elif target.exists():
+            target.unlink()
+    except OSError as exc:
+        raise RuntimeError(
+            f"删除失败（文件可能被占用——模型已加载或训练中）：{exc}"
+        ) from exc
+
+
 def trigger(model_id: str, variant: Optional[str] = None) -> str:
     """便于端点调用的入口：根据 model_id 选对应的 download_* 函数 + 启动异步。
 
@@ -565,6 +650,12 @@ def trigger(model_id: str, variant: Optional[str] = None) -> str:
         key = "krea2_text_encoder"
         start_download_async(
             key, lambda log: download_qwen3_vl(root, on_log=log)
+        )
+        return key
+    if model_id == "krea2_text_encoder_fp8":
+        key = "krea2_text_encoder_fp8"
+        start_download_async(
+            key, lambda log: download_qwen3_vl_fp8(root, on_log=log)
         )
         return key
     if model_id == "qwen3":

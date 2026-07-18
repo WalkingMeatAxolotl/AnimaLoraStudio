@@ -136,9 +136,15 @@ def patch_manual_cast(model: torch.nn.Module, compute_dtype: torch.dtype) -> int
     transformers 实现里 fp32 激活流叠 torch type promotion 与 Comfy 的
     weight-cast 语义数值一致。返回 patch 的模块数。
     """
+    from training.families.krea2.quant_fp8 import _FP8_TORCH_DTYPES  # noqa: PLC0415
+
     patched = 0
     for module in model.modules():
         if isinstance(module, torch.nn.Linear):
+            if module.weight.dtype in _FP8_TORCH_DTYPES:
+                # fp8_scaled 层已挂 dequant 前向（cast 到 input.dtype + 乘
+                # scale = manual_cast 的 fp8 版）；覆盖会丢 scale
+                continue
             module.forward = MethodType(_cast_linear_forward, module)
             patched += 1
         elif isinstance(module, torch.nn.Embedding):
@@ -151,6 +157,115 @@ def patch_manual_cast(model: torch.nn.Module, compute_dtype: torch.dtype) -> int
             patched, compute_dtype,
         )
     return patched
+
+
+#: comfy 单文件 TE 的 text 侧键前缀 → HF Qwen3VLForConditionalGeneration 键。
+#: comfy 打包（Comfy-Org qwen3vl_4b_fp8_scaled）把 language_model 直挂
+#: ``model.``；visual 侧（model.visual.*）两边一致零映射。
+_COMFY_TE_TEXT_PREFIXES = ("model.layers.", "model.embed_tokens.", "model.norm.")
+
+
+def _comfy_te_single_file(model_path: Path) -> Path | None:
+    """目录是 comfy 单文件 TE 布局时返回权重文件；HF 分片布局返回 None。"""
+    if (model_path / "model.safetensors.index.json").exists():
+        return None
+    candidates = sorted(model_path.glob("*.safetensors"))
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _load_comfy_single_file_te(
+    model_path: Path,
+    weights_file: Path,
+    device: torch.device,
+    dtype: torch.dtype,
+):
+    """加载 comfy 单文件布局的 Qwen3-VL（官方 fp8_scaled 形态）。
+
+    config/tokenizer 小文件仍来自目录（下载中心 fp8 条目一并下载）；权重键
+    做一条前缀映射（text 侧补 ``language_model.``），``comfy_quant`` 配置
+    blob 丢弃，``weight_scale`` F32 标量收集后经 patch_fp8_linears 挂
+    dequant 前向（与 DiT fp8_scaled 完全同款）。fp8 权重原样常驻；非量化
+    键（embed/norm/visual）cast 到存储 dtype。lm_head 与 embed tied——
+    文件不含该键，load 后 tie_weights() 重绑。
+    """
+    from safetensors import safe_open
+    from transformers import AutoConfig, Qwen3VLForConditionalGeneration
+
+    from training.families.krea2.quant_fp8 import (  # noqa: PLC0415
+        _FP8_TORCH_DTYPES,
+        patch_fp8_linears,
+    )
+
+    logger.info("加载 Krea2 Qwen3-VL（comfy 单文件形态）：%s", weights_file)
+    config = AutoConfig.from_pretrained(str(model_path), local_files_only=True)
+    try:
+        from accelerate import init_empty_weights
+    except ImportError as exc:  # pragma: no cover - 环境相关
+        raise RuntimeError(
+            "Qwen3-VL 单文件加载需要 accelerate（transformers 伴生依赖）"
+        ) from exc
+
+    # init_empty_weights 默认只把 parameters 放 meta；buffers（rotary
+    # inv_freq 等 non-persistent，不在权重文件里）在 CPU 真实构造带正确
+    # 值——纯 torch.device("meta") 上下文会把 buffer 也 meta 化，load 后
+    # 无法恢复（曾致 offload 的 .to("cpu") 撞 meta tensor 崩溃）。
+    with init_empty_weights():
+        model = Qwen3VLForConditionalGeneration(config)
+
+    state_dict: dict[str, torch.Tensor] = {}
+    scales: dict[str, torch.Tensor] = {}
+    with safe_open(str(weights_file), framework="pt", device="cpu") as handle:
+        for key in handle.keys():
+            if key.endswith(".comfy_quant"):
+                continue
+            mapped = key
+            for prefix in _COMFY_TE_TEXT_PREFIXES:
+                if key.startswith(prefix):
+                    mapped = "model.language_model." + key[len("model."):]
+                    break
+            tensor = handle.get_tensor(key)
+            if mapped.endswith(".weight_scale"):
+                layer = mapped[: -len(".weight_scale")]
+                scales[layer] = tensor.to(device=device)
+                continue
+            if tensor.dtype in _FP8_TORCH_DTYPES:
+                state_dict[mapped] = tensor.to(device=device)
+            else:
+                state_dict[mapped] = tensor.to(device=device, dtype=dtype)
+
+    result = model.load_state_dict(state_dict, strict=False, assign=True)
+    unexpected = list(result.unexpected_keys)
+    missing = [k for k in result.missing_keys if k != "lm_head.weight"]
+    if missing or unexpected:
+        raise ValueError(
+            f"Qwen3-VL comfy 单文件键不匹配：缺少 {missing[:5]}，"
+            f"多出 {unexpected[:5]}"
+        )
+    # lm_head 与 embed tied（tie_word_embeddings）——文件不含该键；
+    # transformers 的 tie_weights() 对 meta 构造 + assign 加载不重绑，
+    # 手动指回 embed（零拷贝）。
+    out_emb = model.get_output_embeddings()
+    if out_emb is not None and out_emb.weight.device.type == "meta":
+        out_emb.weight = model.get_input_embeddings().weight
+    # 检查覆盖 parameters + buffers（漏 buffer 曾放过 rotary inv_freq 的
+    # meta 残留：编码侥幸能跑，offload 全模型 .to("cpu") 遍历到即崩）
+    leftover_meta = [
+        name for name, tensor in [
+            *model.named_parameters(), *model.named_buffers(),
+        ]
+        if tensor.device.type == "meta"
+    ]
+    if leftover_meta:
+        raise ValueError(
+            f"Qwen3-VL 单文件加载后仍有未物化参数：{leftover_meta[:5]}"
+        )
+    # buffers 构造在 CPU（init_empty_weights 只 meta 化参数）——搬到目标
+    # device；参数已 assign 就位，.to() 对其 no-op
+    model.to(device)
+    if scales:
+        patch_fp8_linears(model, scales)
+        logger.info("Qwen3-VL fp8_scaled：%d 层挂 dequant 前向", len(scales))
+    return model.eval().requires_grad_(False)
 
 
 def _default_model_loader(
@@ -168,6 +283,9 @@ def _default_model_loader(
 
     if not model_path.is_dir():
         raise ValueError(f"Krea2 文本编码器必须是 Hugging Face 模型目录：{model_path}")
+    single = _comfy_te_single_file(model_path)
+    if single is not None:
+        return _load_comfy_single_file_te(model_path, single, device, dtype)
     logger.info("加载 Krea2 Qwen3-VL 文本编码器：%s", model_path)
     model = Qwen3VLForConditionalGeneration.from_pretrained(
         str(model_path),
@@ -221,11 +339,18 @@ class Krea2TextStack:
         # None = compute 跟随存储 dtype（训练路径现状）；生成场景传 fp32 +
         # dtype=fp16 复刻 ComfyUI「fp16 存储 + fp32 compute」口径（sd.py:258）
         self.compute_dtype = compute_dtype
+        # 目录是官方 fp8_scaled 单文件形态（comfy 布局）——影响编排层的
+        # TE 上卡显存判据（权重 ~5GB vs fp16 8.9GB）与训练文本缓存指纹
+        self.is_fp8_storage = _comfy_te_single_file(self.model_path) is not None
         self.cache_enabled = bool(cache_enabled)
         self.tokenizer = tokenizer if tokenizer is not None else _load_tokenizer(self.model_path)
         self._model_loader = model_loader or _default_model_loader
         self._model = None
         self._offloaded = False
+        # fp8 TE 编码的嵌入与 bf16 有量化级差异——指纹区分防缓存混源
+        # （换 TE 精度 → 指纹变 → sidecar 全量重编，一次性）
+        if self.is_fp8_storage:
+            text_fingerprint = f"{text_fingerprint}-tefp8"
         self.store = TextCacheStore(text_fingerprint)
         self.max_length = int(max_length)
         self.selected_layers = tuple(int(index) for index in selected_layers)
@@ -275,11 +400,37 @@ class Krea2TextStack:
             and all(str(caption) in self._online_lru for caption in captions)
         )
 
+    def precache_online_prompts(self, captions: Sequence[str]) -> int:
+        """任务级预编码：把这批 caption 编进在线 LRU（存 CPU）；返回新编码数。
+
+        XY / 多 prompt generate 的 prompt 集合在任务开始前就封闭——先全部
+        编码再 offload_model()，采样期 TE 归零显存占用（训练两段式加载的
+        推理版）。cached 模式（训练）不适用，no-op。LRU 容量按本批需求
+        抬升（上限 64，一条 ≈30MB CPU RAM），超出部分由逐格惰性路径兜底。
+        """
+        if self.cache_enabled:
+            return 0
+        unique = list(dict.fromkeys(str(caption) for caption in captions))
+        self._online_lru_capacity = max(
+            self._online_lru_capacity, min(len(unique), 64),
+        )
+        missing = [c for c in unique[:64] if c not in self._online_lru]
+        step = max(1, self.cache_batch_size)
+        for start in range(0, len(missing), step):
+            chunk = missing[start:start + step]
+            for caption, context in zip(chunk, self._encode_many(chunk)):
+                self._online_lru_put(caption, context.detach().to("cpu"))
+        return len(missing)
+
     def ensure_model(self):
         if self._model is None:
             self._model = self._model_loader(self.model_path, self.device, self.dtype)
             if self.compute_dtype is not None and self.compute_dtype != self.dtype:
                 patch_manual_cast(self._model, self.compute_dtype)
+            # TE 权重文件（5-18GB）的 mmap 缓存页归还系统（真机换页卡死案例）
+            from training.sysmem import trim_working_set  # noqa: PLC0415
+
+            trim_working_set()
         elif self._offloaded:
             # 上次采样前被 offload 到 CPU（见 offload_model）——搬回目标设备
             self._model.to(self.device)

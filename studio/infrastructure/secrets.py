@@ -514,6 +514,10 @@ class ModelsConfig(BaseModel):
     # 老键 selected_anima 由 before-validator 迁移（settings PUT 的 merged dict
     # 会同时带两键——入站 selected_anima 优先，覆盖 merge 进来的旧 selected）。
     selected: dict[str, str] = Field(default_factory=lambda: {"anima": "1.0"})
+    # per-family 选中文本编码器 variant（krea2："bf16"|"fp8"，缺失=bf16）。
+    # 决定训练新建 version 的 text_encoder_path 默认 + 测试出图 TE 默认；
+    # 已存在 version 的 config 不动（训练重现性，与 selected 同口径）。
+    selected_te: dict[str, str] = Field(default_factory=dict)
     # per-family 本地主模型路径。老键 custom_anima_paths 由 validator 迁移，
     # computed_field 保留旧客户端读面。
     custom: dict[str, list[str]] = Field(default_factory=dict)
@@ -575,6 +579,10 @@ class GenerateConfig(BaseModel):
     - `vram_policy`：测试出图显存策略（krea2 生效）。`'auto'`（默认）按空闲
       显存决定文本编码器与 DiT 是否让位；`'save_vram'` 强制顺序化（峰值最
       低，每图多几秒搬运）；`'performance'` 全部常驻显存（峰值最高、零搬运）。
+    - `ram_guard`：内存/显存水位保护。加载大模型前按权重文件实际大小
+      预算系统内存与 GPU 空闲显存，任一不足时中止并报可操作错误
+      （默认开；显存检查可拦多进程叠加）；关闭后资源不足时继续加载，
+      可能触发整机换页卡顿。
     """
     preview_every_n_steps: int = 3
     attention_backend: str = "auto"
@@ -582,6 +590,7 @@ class GenerateConfig(BaseModel):
     idle_timeout_minutes: int = 10
     save_test_images: bool = False
     vram_policy: str = "auto"
+    ram_guard: bool = True
 
 
 class SystemConfig(BaseModel):

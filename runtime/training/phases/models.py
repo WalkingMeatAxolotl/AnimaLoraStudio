@@ -64,6 +64,10 @@ def _load_dit(ctx: TrainingContext) -> None:
         attention_backend=backend,
         repo_root=ctx.repo_root,
     )
+    # 大权重 mmap 缓存页归还系统（13-26GB；真机换页卡死案例，训练同样受益）
+    from training.sysmem import trim_working_set
+
+    trim_working_set()
 
 
 def _load_vae(ctx: TrainingContext) -> None:

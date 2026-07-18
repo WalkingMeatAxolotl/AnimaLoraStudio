@@ -324,3 +324,41 @@ def test_online_lru_dedupes_batch_and_not_used_in_cached_mode(tmp_path):
 
     cached_stack = _stack(tmp_path, _Loader(), cache_enabled=True)
     assert not cached_stack.online_conditions_cached(["ab"])  # cached 模式恒 False
+
+
+def test_precache_online_prompts_fills_lru_and_skips_hits(tmp_path):
+    """任务级预编码：miss 编码进 LRU（去重），已命中不再触发 backbone。"""
+    loader = _Loader()
+    stack = _stack(tmp_path, loader, cache_enabled=False)
+
+    encoded = stack.precache_online_prompts(["a", "b", "a"])
+    assert encoded == 2
+    assert stack.online_conditions_cached(["a", "b"])
+    calls = loader.models[0].model.calls
+
+    assert stack.precache_online_prompts(["a", "b"]) == 0
+    assert loader.models[0].model.calls == calls  # 全命中零编码
+
+    # 预编码后 encode_text_for_batch 命中 LRU，backbone 不再前向
+    stack.encode_text_for_batch(["a", "b"], device="cpu", dtype=torch.float32)
+    assert loader.models[0].model.calls == calls
+
+
+def test_precache_online_prompts_noop_in_cached_mode(tmp_path):
+    loader = _Loader()
+    stack = _stack(tmp_path, loader, cache_enabled=True)
+    assert stack.precache_online_prompts(["a", "b"]) == 0
+    assert loader.calls == 0  # cached 模式不加载模型
+
+
+def test_precache_online_prompts_raises_capacity_for_large_tasks(tmp_path):
+    """多 prompt 任务（>16 条默认容量）：容量抬到本批需求，预编码不自逐出。"""
+    loader = _Loader()
+    stack = _stack(tmp_path, loader, cache_enabled=False)
+    prompts = [f"p{i}" for i in range(20)]
+
+    encoded = stack.precache_online_prompts(prompts)
+
+    assert encoded == 20
+    assert stack._online_lru_capacity >= 20
+    assert stack.online_conditions_cached(prompts)
