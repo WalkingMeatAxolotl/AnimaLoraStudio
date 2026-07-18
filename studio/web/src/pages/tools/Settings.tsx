@@ -9,7 +9,7 @@ import {
   type WandBPreset,
 } from '../../api/client'
 import { useDialog } from '../../components/Dialog'
-import LLMTaggerWorkspace from '../../components/LLMTaggerWorkspace'
+import LLMPresetEditorModal, { llmPresetLabel } from '../../components/LLMPresetEditorModal'
 import { TagListInput } from '../../components/TagsInput'
 import PageHeader from '../../components/PageHeader'
 import SaveIndicator from '../../components/SaveIndicator'
@@ -17,7 +17,6 @@ import { useToast } from '../../components/Toast'
 import { useSettingsData } from '../../lib/SettingsData'
 import { useSettingsDrawer } from '../../lib/SettingsDrawer'
 import {
-  DEFAULT_LLM_PRESETS,
   DEFAULT_WANDB_PRESET,
   EMPTY,
   getStoredTab,
@@ -78,8 +77,8 @@ export default function SettingsPage() {
   const draft = server ?? EMPTY
   const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>(getStoredTab)
-  const [llmModelsBusy, setLlmModelsBusy] = useState(false)
-  const [llmTestBusy, setLlmTestBusy] = useState(false)
+  // LLM 预设编辑 modal：非 null = 正在编辑该 id 的预设
+  const [editingLlmPresetId, setEditingLlmPresetId] = useState<string | null>(null)
   const { toast } = useToast()
   const { prompt, confirm } = useDialog()
   const drawer = useSettingsDrawer()
@@ -140,25 +139,8 @@ export default function SettingsPage() {
     } as SecretsPatch)
   }
 
-  // 找到当前 active preset；如果 current_preset 指向不存在的 id（理论上 validator
-  // 已保底），fallback 到第一个，避免空 crash。
-  const currentPreset: LLMPreset =
-    draft.llm_tagger.presets.find((p) => p.id === draft.llm_tagger.current_preset)
-    ?? draft.llm_tagger.presets[0]
-    ?? DEFAULT_LLM_PRESETS[0]
-
-  const serverCurrentPreset: LLMPreset | undefined =
-    server?.llm_tagger.presets.find((p) => p.id === currentPreset.id)
-
-  /** 改 active preset 的某个字段。 */
-  const updatePreset = <K extends keyof LLMPreset>(field: K, value: LLMPreset[K]) => {
-    const next = draft.llm_tagger.presets.map((p) =>
-      p.id === currentPreset.id ? { ...p, [field]: value } : p
-    )
-    update('llm_tagger', 'presets', next)
-  }
-
-  const addPreset = () => {
+  // —— LLM 预设管理（列表 + 编辑 modal；字段编辑集中在 LLMPresetEditorModal）——
+  const addLlmPreset = () => {
     const used = new Set(draft.llm_tagger.presets.map((p) => p.id))
     let idx = 1
     let id = `preset_${idx}`
@@ -166,56 +148,13 @@ export default function SettingsPage() {
       idx += 1
       id = `preset_${idx}`
     }
-    const next: LLMPreset = _makeFallbackPreset(id, t('settings.newPresetLabel', { n: idx }), 'json')
+    const next: LLMPreset = _makeFallbackPreset(id, t('settings.newPresetLabel', { n: idx }), 'text')
     next.builtin = false
     update('llm_tagger', 'presets', [...draft.llm_tagger.presets, next])
-    update('llm_tagger', 'current_preset', id)
+    setEditingLlmPresetId(id)
   }
 
-  const deleteCurrentPreset = async () => {
-    if (currentPreset.builtin || draft.llm_tagger.presets.length <= 1) return
-    if (!(await confirm(t('settings.confirmDeletePreset', { label: currentPreset.label }), { tone: 'danger' }))) return
-    const next = draft.llm_tagger.presets.filter((p) => p.id !== currentPreset.id)
-    update('llm_tagger', 'presets', next)
-    update('llm_tagger', 'current_preset', next[0]?.id ?? 'style_json')
-  }
-
-  const resetCurrentPresetToBuiltin = async () => {
-    // 删除当前 builtin preset，让 backend validator 在 PUT 后从 defaults 补回
-    if (!currentPreset.builtin) return
-    if (!(await confirm(t('settings.confirmResetPreset', { label: currentPreset.label }), { tone: 'danger' }))) return
-    const next = draft.llm_tagger.presets.filter((p) => p.id !== currentPreset.id)
-    update('llm_tagger', 'presets', next)
-    // current_preset 不变；validator 会重建 preset
-  }
-
-  const saveAsNewPreset = async () => {
-    const label = await prompt(t('settings.newPresetName'), {
-      defaultValue: t('settings.presetCopy', { label: currentPreset.label }),
-      placeholder: 'my-preset',
-      validate: (v) => (v.trim() ? null : t('settings.nameRequired')),
-    })
-    if (!label) return
-    const slug = label.toLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'preset'
-    const used = new Set(draft.llm_tagger.presets.map((p) => p.id))
-    let idx = 1
-    let id = slug
-    while (used.has(id)) {
-      idx += 1
-      id = `${slug}_${idx}`
-    }
-    const next: LLMPreset = {
-      ...currentPreset,
-      // deep-copy messages 避免共享引用
-      messages: currentPreset.messages.map((m) => ({ ...m })),
-      model_ids: [...currentPreset.model_ids],
-      id,
-      label,
-      builtin: false,
-    }
-    update('llm_tagger', 'presets', [...draft.llm_tagger.presets, next])
-    update('llm_tagger', 'current_preset', id)
-  }
+  // 删除/恢复内置/另存为都住在 LLMPresetEditorModal footer 里，这里只管列表与新建。
 
   // —— WandB 预设管理（0.18 预设化，复刻 llm_tagger 模式）——
   const currentWandbPreset: WandBPreset =
@@ -299,60 +238,6 @@ export default function SettingsPage() {
       toast(t('settings.wandbPresetImported', { label: r.label }), 'success')
     } catch (e) {
       toast(`${t('settings.wandbImportInvalid')}: ${e}`, 'error')
-    }
-  }
-
-  const refreshLLMModels = async () => {
-    if (!server) return
-    setLlmModelsBusy(true)
-    setError(null)
-    try {
-      // instant-apply：preset 字段已即时落盘，直接用 server 当前值刷新。
-      const sourcePreset = server.llm_tagger.presets.find((p) => p.id === currentPreset.id)
-        ?? server.llm_tagger.presets[0]
-      const result = await api.refreshLLMModels({
-        preset_id: sourcePreset.id,
-        base_url: sourcePreset.base_url,
-        api_key: sourcePreset.api_key,
-        timeout: sourcePreset.timeout,
-      })
-      setServer(result.secrets)
-      toast(t('settings.modelsLoaded', { n: result.items.length }), 'success')
-    } catch (e) {
-      setError(String(e))
-      toast(t('settings.modelsLoadFailed', { error: String(e) }), 'error')
-    } finally {
-      setLlmModelsBusy(false)
-    }
-  }
-
-  const testLLMConnection = async () => {
-    setLlmTestBusy(true)
-    setError(null)
-    try {
-      const result = await api.testLLMConnection({
-        preset_id: currentPreset.id,
-        base_url: currentPreset.base_url,
-        api_key: currentPreset.api_key,
-        model: currentPreset.model,
-        endpoint: currentPreset.endpoint,
-        timeout: currentPreset.timeout,
-        max_tokens: Math.max(512, currentPreset.max_tokens),
-        temperature: currentPreset.temperature,
-      })
-      // 把延迟 / HTTP 状态 / 错误预览拼进 toast，避免移除 ConnBar 后用户拿不到详情。
-      const parts: string[] = [result.ok ? t('settings.llmTestOk') : t('settings.llmTestNotOk')]
-      if (result.elapsed_ms > 0) parts.push(`${result.elapsed_ms} ms`)
-      if (result.status_code !== null) parts.push(`HTTP ${result.status_code}`)
-      if (!result.ok) {
-        const detail = result.error || result.response_preview
-        if (detail) parts.push(detail.slice(0, 120))
-      }
-      toast(parts.join(' · '), result.ok ? 'success' : 'error')
-    } catch (e) {
-      toast(t('settings.llmTestFailed', { error: String(e) }), 'error')
-    } finally {
-      setLlmTestBusy(false)
     }
   }
 
@@ -558,27 +443,54 @@ export default function SettingsPage() {
       </>)}
 
       {tab === 'tagging' && (<>
-      {/* LLMTaggerWorkspace 自带 card；title 渲染在 card 内最顶部跟 WD14/CLTagger 视觉对齐。
-       * 外层 div 只承担 id（给 section index 滚动定位用）+ scroll-mt-24 锚点偏移。 */}
-      <div id="llm-tagger" className="scroll-mt-24">
-        <LLMTaggerWorkspace
-          title="LLM Tagger"
-          currentPreset={currentPreset}
-          serverCurrentPreset={serverCurrentPreset}
-          presets={draft.llm_tagger.presets}
-          currentPresetId={draft.llm_tagger.current_preset}
-          onSelectPreset={(id) => update('llm_tagger', 'current_preset', id)}
-          onUpdatePreset={updatePreset}
-          onResetToBuiltin={resetCurrentPresetToBuiltin}
-          onSaveAs={saveAsNewPreset}
-          onAddPreset={addPreset}
-          onDeletePreset={deleteCurrentPreset}
-          llmModelsBusy={llmModelsBusy}
-          llmTestBusy={llmTestBusy}
-          onRefreshModels={() => void refreshLLMModels()}
-          onTestConnection={() => void testLLMConnection()}
-        />
-      </div>
+      {/* LLM 预设管理：只做列表（选全局默认 + 行 action 编辑 + 右上角新建）；
+       * 字段编辑/删除/另存为集中在 LLMPresetEditorModal（打标页开同一个 modal）。
+       * 列表样式对齐下面下载中心的模型列表（bg-sunken 卡 + 行高亮 + StatusLabel chip）。 */}
+      <SettingsSection
+        id="llm-tagger"
+        title="LLM Tagger"
+        headerExtras={
+          <button type="button" onClick={addLlmPreset} className="btn btn-secondary btn-sm ml-auto">
+            {t('settings.llmPresetNew')}
+          </button>
+        }
+      >
+        <p className="text-xs text-fg-tertiary m-0">{t('settings.llmPresetListHint')}</p>
+        <div className="rounded-sm border border-subtle bg-sunken p-2.5">
+          <ul className="list-none m-0 p-0 flex flex-col gap-1">
+            {draft.llm_tagger.presets.map((p) => {
+              const isDefault = p.id === draft.llm_tagger.current_preset
+              return (
+                <li key={p.id} className={`flex items-center gap-2 text-xs px-1.5 py-1 rounded-sm ${
+                  isDefault ? 'bg-accent-soft border border-accent' : 'bg-transparent border border-transparent'
+                }`}>
+                  <input type="radio" name="llm_preset_default" checked={isDefault}
+                    onChange={() => update('llm_tagger', 'current_preset', p.id)}
+                    className="shrink-0"
+                    style={{ accentColor: 'var(--accent)' }}
+                    title={t('settings.llmPresetSetDefault')}
+                  />
+                  <span className="font-mono text-fg-primary flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
+                    {llmPresetLabel(p, t)}
+                  </span>
+                  {p.builtin && (
+                    <span className="text-xs px-1.5 py-0.5 rounded-sm font-mono bg-overlay text-fg-tertiary shrink-0">
+                      {t('llmPreset.builtin')}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setEditingLlmPresetId(p.id)}
+                    className="btn btn-secondary btn-sm min-w-[5rem] justify-center shrink-0"
+                  >
+                    {t('settings.llmPresetEdit')}
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        </div>
+      </SettingsSection>
 
       <SettingsSection id="wd14" title="WD14">
         <SourceSelect
@@ -961,6 +873,13 @@ export default function SettingsPage() {
     <SectionIndex sections={TAB_SECTIONS[tab]} scrollContainer={scrollContainerRef} />
     </div>
     </div>
+
+    {editingLlmPresetId && (
+      <LLMPresetEditorModal
+        presetId={editingLlmPresetId}
+        onClose={() => setEditingLlmPresetId(null)}
+      />
+    )}
     </div>
   )
 }

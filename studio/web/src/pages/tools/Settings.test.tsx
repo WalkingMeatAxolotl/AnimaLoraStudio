@@ -506,17 +506,40 @@ describe('SettingsPage (PP0)', () => {
     })
   })
 
-  it('shows LLM request pool controls on the tagging settings tab', async () => {
+  it('opens LLM preset editor modal with rate limit controls from the preset list', async () => {
     const user = userEvent.setup()
     renderPage()
 
     await user.click(await screen.findByRole('button', { name: '打标' }))
-    await user.click(screen.getByText('高级参数'))
+    // 预设列表：全局默认行高亮 + 每行「编辑」action
+    const defaultRow = screen.getByText('画风 LoRA JSON').closest('li')
+    expect(defaultRow).not.toBeNull()
+    expect(within(defaultRow as HTMLElement).getByRole('radio')).toBeChecked()
+    await user.click(within(defaultRow as HTMLElement).getByRole('button', { name: /编辑/ }))
 
-    expect(screen.getByText('Concurrency')).toBeInTheDocument()
-    expect(screen.getByText('Requests/sec')).toBeInTheDocument()
-    expect(screen.getByText('Max/min')).toBeInTheDocument()
-    expect(screen.getAllByText('0 = no limit').length).toBeGreaterThanOrEqual(2)
+    // 编辑 modal：名称字段（补上的预设改名）+ 采样限速字段都在
+    const modal = await screen.findByTestId('llm-preset-editor-modal')
+    expect(within(modal).getByText('预设名称')).toBeInTheDocument()
+    expect(within(modal).getByText('并发数')).toBeInTheDocument()
+    expect(within(modal).getByText('每秒请求数（0 = 不限）')).toBeInTheDocument()
+    expect(within(modal).getByText('每分钟最大请求数（0 = 不限）')).toBeInTheDocument()
+  })
+
+  it('selecting another LLM preset as global default PUTs current_preset', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: '打标' }))
+    const joyRow = screen.getByText('JoyCaption（vLLM 本地）').closest('li')
+    await user.click(within(joyRow as HTMLElement).getByRole('radio'))
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(([url, init]) => {
+        if (init?.method !== 'PUT' || !String(url).includes('/api/secrets')) return false
+        try { return JSON.parse(String(init.body)).llm_tagger?.current_preset === 'joycaption' } catch { return false }
+      })
+      expect(putCall).toBeDefined()
+    })
   })
 
 
