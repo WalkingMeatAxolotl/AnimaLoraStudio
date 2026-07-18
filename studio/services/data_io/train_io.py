@@ -53,12 +53,11 @@ PRESETS_PREFIX = "presets/"
 CAPTION_EXTS = {".txt"}
 # VAE latent 缓存（CachedLatentDataset 的 {名}.npz / {名}.r{reso}.npz，紧挨图片）
 LATENT_CACHE_EXT = ".npz"
-# Phase 2 文本缓存：随图 sidecar + train/.text-cache/ 下的 prompt 聚合缓存。
+# Phase 2 文本缓存：随图 sidecar。prompt 聚合缓存归 task 档案
+# （tasks/<id>/.text-cache/），不在 version 树里，bundle 不打包。
 # 继续复用现有 train_latent_cache / reg_latent_cache bundle 选项：两者表达的
 # 是“携带可重建训练缓存”，不改变默认导出体积。
 TEXT_CACHE_SIDECAR_SUFFIX = ".text.safetensors"
-TEXT_CACHE_PROMPT_DIR = ".text-cache"
-TEXT_CACHE_EXT = ".safetensors"
 # 训练 mask sidecar（train/{folder}/{stem}.mask，与图同目录，详
 # services/preprocess/masks.py）。arcname 两段与图片同构。
 MASK_SUFFIX = ".mask"
@@ -400,12 +399,8 @@ def _collect_train(
             elif ext == LATENT_CACHE_EXT and include_latent_cache:
                 latent_cache_count += 1
                 payload.append((f, f"{TRAIN_PREFIX}{sub.name}/{f.name}"))
-            elif include_latent_cache and (
-                f.name.endswith(TEXT_CACHE_SIDECAR_SUFFIX)
-                or (
-                    sub.name == TEXT_CACHE_PROMPT_DIR
-                    and ext == TEXT_CACHE_EXT
-                )
+            elif include_latent_cache and f.name.endswith(
+                TEXT_CACHE_SIDECAR_SUFFIX
             ):
                 text_cache_count += 1
                 payload.append((f, f"{TRAIN_PREFIX}{sub.name}/{f.name}"))

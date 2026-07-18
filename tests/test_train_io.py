@@ -289,9 +289,6 @@ def test_export_bundle_training_caches_roundtrip(isolated, tmp_path: Path) -> No
     (train / "1_data" / "a.npz").write_bytes(b"fake-latent")
     (train / "1_data" / "a.r512.npz").write_bytes(b"fake-latent-512")
     (train / "1_data" / "a.png.text.safetensors").write_bytes(b"fake-text")
-    prompt_cache = train / ".text-cache" / "prompts.123456789abc.safetensors"
-    prompt_cache.parent.mkdir()
-    prompt_cache.write_bytes(b"fake-prompts")
     reg = train.parent / "reg" / "girl"
     reg.mkdir(parents=True)
     (reg / "r.png").write_bytes(_png(b"r"))
@@ -311,14 +308,13 @@ def test_export_bundle_training_caches_roundtrip(isolated, tmp_path: Path) -> No
     assert result["manifest"]["includes"]["train_latent_cache"] is True
     assert result["manifest"]["includes"]["reg_latent_cache"] is True
     assert result["manifest"]["stats"]["latent_cache_count"] == 3
-    assert result["manifest"]["stats"]["text_cache_count"] == 3
+    assert result["manifest"]["stats"]["text_cache_count"] == 2
     with zipfile.ZipFile(dest) as zf:
         names = set(zf.namelist())
     assert "train/1_data/a.npz" in names
     assert "train/1_data/a.r512.npz" in names
     assert "reg/girl/r.npz" in names
     assert "train/1_data/a.png.text.safetensors" in names
-    assert "train/.text-cache/prompts.123456789abc.safetensors" in names
     assert "reg/girl/r.png.text.safetensors" in names
 
     with db.connection_for(isolated["db"]) as conn:
@@ -334,11 +330,10 @@ def test_export_bundle_training_caches_roundtrip(isolated, tmp_path: Path) -> No
     reg_npz = new_dir / "reg" / "girl" / "r.npz"
     reg_img = new_dir / "reg" / "girl" / "r.png"
     text_cache = new_dir / "train" / "1_data" / "a.png.text.safetensors"
-    prompts = new_dir / "train" / ".text-cache" / "prompts.123456789abc.safetensors"
     reg_text_cache = new_dir / "reg" / "girl" / "r.png.text.safetensors"
     assert npz.exists() and (new_dir / "train" / "1_data" / "a.r512.npz").exists()
     assert reg_npz.exists()
-    assert text_cache.exists() and prompts.exists() and reg_text_cache.exists()
+    assert text_cache.exists() and reg_text_cache.exists()
     # zip 内 npz 按字典序先于图片落盘，没有 touch 修正会比图片旧
     assert npz.stat().st_mtime >= img.stat().st_mtime
     assert reg_npz.stat().st_mtime >= reg_img.stat().st_mtime

@@ -37,7 +37,7 @@ runtime/training/
 ├── state.py                ← save / load_training_state
 ├── snapshot.py             ← pause / resume 用的 state snapshot helpers（ADR 0006）
 ├── dataset.py              ← BucketManager + ImageDataset + 5 衍生类 + collate + navit sampler/collate
-├── text_cache.py           ← varlen 文本 sidecar / train/.text-cache prompt bundle 协议与原子 safetensors I/O
+├── text_cache.py           ← varlen 文本 sidecar / task 档案 .text-cache prompt bundle 协议与原子 safetensors I/O
 ├── sampling.py             ← 推理用 sample_image + sigma 调度（被 sister script 也用）
 ├── timestep_sampling.py    ← 训练 step 用 sample_t（logit_normal / uniform / mode）；
 │                            被 timestep_samplers/baseline.py 复用
