@@ -66,7 +66,7 @@ def convert_lora_state_dict(self, sd: dict[str, Tensor]) -> dict[str, Tensor]:
 | D16 | family 加载器必须对「checkpoint 与所选 family 不匹配」fail-fast 并给可操作文案（消费级用户拿 Anima 权重配 K2 版本的错误必然发生） | 02-P7 |
 | D17 | `latent_rgb_factors`（latent2rgb 预览投影系数）进 `LatentSpec`——`anima_daemon` 硬编码的 Wan21 系数收编，K2 同 latent 空间直接复用 | 02-P1(a) |
 | D18 | K2 v1 训练中预览用 Raw 权重 + CFG 采样（模型已在显存里）；Turbo 热切换（musubi `--turbo_dit` 模式）不进 v1，Turbo 作为 Generate 页可选底模留给 Phase 4 评估 | 02 §10.3-6 |
-| D19 | text cache 与 latent npz 缓存同域：放数据集 train/ 目录随图 sidecar。理由：caption 本身在 train/ 下、与 VAE 缓存一致、直接被既有项目导出 npz bundle 机制（PR #391）覆盖。同 caption 跨图重复存储的代价接受。失效判据仍按 D3/D12（文件内嵌 caption hash + TE 指纹，失配自动重编码）；非 caption prompt（sample/negative）的聚合缓存文件同放 train/ 下，命名与格式为 Phase 2 实现细节 | 用户裁定 2026-07-14（取代本文原「集中式内容寻址」倾向） |
+| D19 | text cache 与 latent npz 缓存同域：放数据集 train/ 目录随图 sidecar。理由：caption 本身在 train/ 下、与 VAE 缓存一致、直接被既有项目导出 npz bundle 机制（PR #391）覆盖。同 caption 跨图重复存储的代价接受。失效判据仍按 D3/D12（文件内嵌 caption hash + TE 指纹，失配自动重编码）；非 caption prompt（sample/negative）的聚合缓存文件**修订（2026-07-18）**：改放 task 档案根（`tasks/<id>/.text-cache/`，纯 CLI 退回 output_dir），不落 train/——放 train/ 会被数据集扫描当 concept 文件夹误触；bundle 不再打包聚合缓存 | 用户裁定 2026-07-14（取代本文原「集中式内容寻址」倾向）；聚合缓存位置 2026-07-18 修订 |
 
 ## 5. 更新后的 Phase 1 执行序列
 

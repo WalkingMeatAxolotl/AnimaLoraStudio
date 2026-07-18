@@ -46,6 +46,10 @@ class TrainingContext:
     # 时 env 不存在 → None → state_dir() fallback 到 task_unknown 子目录。
     # 注意：跟 progress bar 的 task_id 字段（line ~80）是两回事，故意起不同名字。
     lora_task_id: Optional[int] = None
+    # task 档案根（studio_data/tasks/<id>/）。bootstrap 从 --monitor-state-file
+    # 上跳两层推出；纯 CLI 没传 → None。samples/ state/ 和 prompt 文本缓存
+    # （.text-cache/）都挂在这个根下。
+    task_archive_dir: Optional[Path] = None
     # ADR 0006 Addendum 2：auto_epoch_state.pt 落 task 档案（studio_data/tasks/
     # <id>/state/）。bootstrap 从 --monitor-state-file 推出档案根后填充（跟
     # sample_dir 同一约定）；纯 CLI 没传 → None → auto_state_dir() fallback

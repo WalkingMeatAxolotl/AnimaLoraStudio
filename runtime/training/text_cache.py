@@ -8,7 +8,9 @@
 - 图片 caption 缓存与图片同目录，使用 ``<完整图片名>.text.safetensors`` sidecar；
 - key 由最终 caption、TE 指纹和格式版本共同决定；
 - tensor 保留可变 token 长度，不 pad 到 512；
-- sample / negative prompt 聚合到数据集根目录的一个 safetensors 文件；
+- sample / negative prompt 聚合到 task 档案根（``tasks/<id>/.text-cache/``）的
+  一个 safetensors 文件——不落数据集 train/，避免被数据集扫描当 concept
+  文件夹误触（D19 修订）；
 - 写入使用 sibling tmp + ``os.replace``，训练中断不会留下半文件。
 """
 
@@ -77,8 +79,8 @@ def caption_sidecar_path(image_path) -> Path:
 def prompt_cache_path(root, text_fingerprint: str) -> Path:
     """sample/negative prompt 聚合缓存路径（按 TE 指纹隔离）。
 
-    聚合文件放进 ``train/.text-cache/``：仍与数据集同域，同时保持 bundle 的
-    ``train/{folder}/{file}`` 两层结构，导入时无需为根目录文件增加例外。
+    ``root`` 由调用方决定——训练里传 task 档案根（``tasks/<id>/``），聚合
+    文件落 ``<root>/.text-cache/``。
     """
 
     fp_short = hashlib.sha256(str(text_fingerprint).encode("utf-8")).hexdigest()[:12]

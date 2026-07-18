@@ -100,7 +100,10 @@ def run(ctx: TrainingContext) -> None:
     entries = _collect_entries(ctx)
     captions = [entry.caption for entry in entries]
     extras = _extra_prompts(ctx.args)
-    cache_root = Path(ctx.args.data_dir)
+    # prompt 聚合缓存归 task 档案（tasks/<id>/.text-cache/），不落数据集
+    # train/：放那里会被数据集扫描当成 concept 文件夹误触。纯 CLI（无 task
+    # 档案）退回 output_dir，同样在数据集扫描范围之外。
+    cache_root = ctx.task_archive_dir or ctx.output_dir
     logger.info(
         "[text-cache] 预缓存 %d 张图片 caption + %d 条采样/负面 prompt（varlen）",
         len(entries), len(extras),
