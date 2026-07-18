@@ -136,7 +136,7 @@ describe('ModelSourceCard action matrix', () => {
     )
     await waitFor(() => {
       const call = fetchMock.mock.calls.find(
-        ([url, init]: [string, RequestInit | undefined]) =>
+        ([url, init]) =>
           String(url).includes('/api/model-sources/wd14')
           && init?.method === 'DELETE'
       )
@@ -171,7 +171,7 @@ describe('ModelSourceCard action matrix', () => {
     )
     await waitFor(() => {
       const call = fetchMock.mock.calls.find(
-        ([url, init]: [string, RequestInit | undefined]) =>
+        ([url, init]) =>
           String(url).includes('/api/model-sources/wd14')
           && init?.method === 'POST'
       )
