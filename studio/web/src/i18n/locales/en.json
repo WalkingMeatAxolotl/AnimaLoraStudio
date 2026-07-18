@@ -1295,9 +1295,9 @@
       "optAuto": "Auto",
       "optSaveVram": "Save VRAM",
       "optPerformance": "Performance",
-      "ramGuardLabel": "RAM guard",
-      "ramGuardDesc": "Check available system memory before loading large models (on by default)",
-      "ramGuardHelp": "Model weights must pass through system RAM (disk → RAM → VRAM) to reach the GPU, so loading large files temporarily uses tens of GB of RAM. On: abort with an error when available RAM is below 6GB before loading, avoiding a system-wide paging freeze. Off: keep loading under memory pressure, which may make the whole system unresponsive for a long time.",
+      "ramGuardLabel": "RAM/VRAM guard",
+      "ramGuardDesc": "Budget system RAM and free VRAM against weight file sizes before loading (on by default)",
+      "ramGuardHelp": "Model weights must pass through system RAM (disk → RAM → VRAM) to reach the GPU, so loading temporarily uses RAM roughly equal to the file size. On: before loading, check available RAM and free VRAM against the actual size of the files about to be read, and abort with an error if either falls short — including when another process is holding VRAM (e.g. a leftover generation/training task) — avoiding a system-wide paging freeze. Off: keep loading under pressure, which may make the whole system unresponsive for a long time.",
       "ramGuardOn": "On",
       "ramGuardOff": "Off"
     },

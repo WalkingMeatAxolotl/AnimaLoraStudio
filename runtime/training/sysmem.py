@@ -72,26 +72,70 @@ def available_ram_bytes() -> int | None:
         return None
 
 
-#: RAM 水位护栏阈值：加载大模型前系统可用内存低于此值时中止（粗估口径，
-#: 不按文件大小精确预算——mmap 页可边读边回收，卡死风险来自 avail 逼近
-#: 耗尽后的换页风暴，6GB 余量足以让 OS 从 standby 平滑回收）。
-RAM_GUARD_MIN_BYTES = 6 * 1024**3
+#: RAM 预算基底：进程/torch 运行余量（真机实测进程基底 ~4GB + 换页安全边际）
+_RAM_BASE_BYTES = 4 * 1024**3
+#: VRAM 预算基底：CUDA context + 激活余量
+_VRAM_BASE_BYTES = 3 * 1024**3
 
 
-def check_ram_guard(enabled: bool, *, stage: str) -> None:
-    """RAM 水位护栏：可用内存不足时 raise 可操作错误（好过整机卡死）。
+def _file_bytes(paths) -> int:
+    """将读取的权重文件总大小（预算依据）；不存在的路径忽略。"""
+    import os
 
+    total = 0
+    for p in paths or ():
+        try:
+            path = str(p)
+            if os.path.isdir(path):
+                for entry in os.scandir(path):
+                    if entry.is_file():
+                        total += entry.stat().st_size
+            elif path:
+                total += os.stat(path).st_size
+        except OSError:
+            continue
+    return total
+
+
+def check_load_budget(enabled: bool, *, weight_paths, stage: str) -> None:
+    """双预算水位护栏：按即将加载的文件实际大小预算 RAM 与 VRAM。
+
+    静态阈值只回答「现在还好吗」；预算制回答「做完这件事之后还好吗」：
+    - RAM 需求 ≈ 文件总大小（mmap 读文件的瞬时峰值，真机实测 ≈1:1）+ 基底
+    - VRAM 需求 ≈ 文件总大小（权重上卡）+ 基底。GPU free 检查天然拦住
+      多进程叠加（另一个 daemon 驻留模型时第二个加载入口 fail-fast）
     ``enabled`` 来自用户配置（Settings → 显存策略）；查询失败静默放行。
     """
     if not enabled:
         return
-    avail = available_ram_bytes()
-    if avail is None:
+    need = _file_bytes(weight_paths)
+    if need <= 0:
         return
-    if avail < RAM_GUARD_MIN_BYTES:
+
+    avail = available_ram_bytes()
+    if avail is not None and avail < need + _RAM_BASE_BYTES:
         raise RuntimeError(
-            f"系统可用内存不足（{avail / 1024**3:.1f}GB < "
-            f"{RAM_GUARD_MIN_BYTES / 1024**3:.0f}GB），已中止{stage}以避免"
-            f"整机换页卡死。请关闭其他占用内存的应用后重试；"
-            f"如需强制继续，可在 设置 → 显存策略 关闭内存水位保护。"
+            f"系统可用内存不足（{avail / 1024**3:.1f}GB，本次{stage}约需 "
+            f"{(need + _RAM_BASE_BYTES) / 1024**3:.1f}GB：权重文件 "
+            f"{need / 1024**3:.1f}GB + 运行余量），已中止以避免整机换页"
+            f"卡死。请关闭其他占用内存的应用后重试；如需强制继续，可在 "
+            f"设置 → 显存策略 关闭内存水位保护。"
         )
+
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            free, _total = torch.cuda.mem_get_info()
+            if free < need + _VRAM_BASE_BYTES:
+                raise RuntimeError(
+                    f"GPU 空闲显存不足（{free / 1024**3:.1f}GB，本次{stage}"
+                    f"约需 {(need + _VRAM_BASE_BYTES) / 1024**3:.1f}GB）。"
+                    f"可能有其他进程占用显存（另一个出图/训练任务？）——"
+                    f"请先释放后重试；如需强制继续，可在 设置 → 显存策略 "
+                    f"关闭内存水位保护。"
+                )
+    except RuntimeError:
+        raise
+    except Exception:
+        pass

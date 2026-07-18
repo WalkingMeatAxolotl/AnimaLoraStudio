@@ -273,9 +273,13 @@ class ModelCache:
         )
 
         if needs_reload:
-            from training.sysmem import check_ram_guard
+            from training.sysmem import check_load_budget
 
-            check_ram_guard(self.ram_guard, stage="模型加载")
+            check_load_budget(
+                self.ram_guard,
+                weight_paths=[transformer_path, vae_path],
+                stage="模型加载",
+            )
             self.unload()
             self._load(
                 family_id=family_id,
@@ -530,12 +534,16 @@ def _precache_prompts_and_offload(
     precache = getattr(CACHE.text_stack, "precache_online_prompts", None)
     if not callable(precache):
         return
-    # TE 在此 lazy 加载（fp8 5GB / bf16 8.9GB 的 mmap 读盘）——水位护栏。
-    # 必须在兜底 try 之外：护栏错误要中止任务，不能被「退回逐格编码」吞掉
-    # 后照样加载 TE 卡死。
-    from training.sysmem import check_ram_guard
+    # TE 在此 lazy 加载（fp8 5GB / bf16 8.9GB 的 mmap 读盘）——按 TE 文件
+    # 大小预算 RAM/VRAM。必须在兜底 try 之外：护栏错误要中止任务，不能被
+    # 「退回逐格编码」吞掉后照样加载 TE 卡死。TE 已在卡上时零预算直通。
+    from training.sysmem import check_load_budget
 
-    check_ram_guard(CACHE.ram_guard, stage="文本编码器加载")
+    te_paths = (
+        [] if getattr(CACHE.text_stack, "is_model_loaded", False)
+        else [CACHE.text_encoder_path]
+    )
+    check_load_budget(CACHE.ram_guard, weight_paths=te_paths, stage="文本编码器加载")
     try:
         if phase_callback is not None:
             phase_callback("clip")

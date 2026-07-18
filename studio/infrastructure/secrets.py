@@ -579,9 +579,10 @@ class GenerateConfig(BaseModel):
     - `vram_policy`：测试出图显存策略（krea2 生效）。`'auto'`（默认）按空闲
       显存决定文本编码器与 DiT 是否让位；`'save_vram'` 强制顺序化（峰值最
       低，每图多几秒搬运）；`'performance'` 全部常驻显存（峰值最高、零搬运）。
-    - `ram_guard`：系统内存水位保护。加载大模型前检查可用物理内存，
-      不足 6GB 时中止并报可操作错误（默认开）；关闭后内存不足时继续
-      加载，可能触发整机换页卡顿。
+    - `ram_guard`：内存/显存水位保护。加载大模型前按权重文件实际大小
+      预算系统内存与 GPU 空闲显存，任一不足时中止并报可操作错误
+      （默认开；显存检查可拦多进程叠加）；关闭后资源不足时继续加载，
+      可能触发整机换页卡顿。
     """
     preview_every_n_steps: int = 3
     attention_backend: str = "auto"

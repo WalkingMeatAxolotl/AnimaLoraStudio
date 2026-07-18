@@ -111,8 +111,9 @@ class GenerateConfig(BaseModel):
     )
     ram_guard: bool = Field(
         True,
-        description="系统内存水位保护：加载大模型前检查可用物理内存，不足 6GB 时中止并报错；"
-                    "关闭后内存不足时加载会继续，可能触发整机换页卡顿",
+        description="内存/显存水位保护：加载大模型前按权重文件实际大小预算系统内存与 GPU 空闲显存，"
+                    "任一不足时中止并报错（含其他进程占用显存的情形）；"
+                    "关闭后资源不足时加载会继续，可能触发整机换页卡顿",
     )
 
     @model_validator(mode="after")
