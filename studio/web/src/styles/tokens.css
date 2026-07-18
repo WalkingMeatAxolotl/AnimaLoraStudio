@@ -32,6 +32,11 @@
   --accent-soft:   #fbe8de;
   --accent-fg:     #ffffff;
 
+  /* 列表选中行高亮（候选卡 / LLM 预设列表等 radio 行）。亮色跟随 accent
+   * 系原值；暗色单独调暗降饱和（accent-soft 的徽章/焦点环用途不受影响）。 */
+  --row-selected-bg:     var(--accent-soft);
+  --row-selected-border: var(--accent);
+
   --ok:    #2d7a4f;
   --ok-soft: #d6ebde;
   --warn:  #b97a16;
@@ -113,6 +118,10 @@
   --accent-hover:  #f78a5e;
   --accent-soft:   #3a1f12;
   --accent-fg:     #15140f;
+
+  /* 选中行在暗色下压暗降饱和：亮橙边框太扎眼（用户反馈），底色掺灰。 */
+  --row-selected-bg:     #2c211a;
+  --row-selected-border: #8a563b;
 
   --ok: #5fc78c;       --ok-soft: #1a3328;
   --warn: #e0a23a;     --warn-soft: #3a2a10;

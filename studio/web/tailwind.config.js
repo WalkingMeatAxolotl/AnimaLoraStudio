@@ -36,6 +36,14 @@ export default {
           fg:      'var(--accent-fg)',
         },
 
+        // ── 列表选中行 ───────────────────────────────────────────
+        // 用法: bg-selected-soft border-selected（radio 选中行高亮；暗色
+        // 下比 accent 系更暗淡低饱和，见 tokens.css --row-selected-*）
+        selected: {
+          DEFAULT: 'var(--row-selected-border)',
+          soft:    'var(--row-selected-bg)',
+        },
+
         // ── 状态色 ───────────────────────────────────────────────
         // 用法: bg-ok  text-ok  bg-ok-soft / bg-err  text-err  bg-err-soft / ...
         ok:   { DEFAULT: 'var(--ok)',   soft: 'var(--ok-soft)'   },

@@ -208,7 +208,7 @@ export function ModelSourceCard({
             : (dl?.status !== 'running' && (!selectRequiresExists || row.exists))
           return (
             <li key={`${row.kind}:${row.value}`} className={`flex items-center gap-2 text-xs px-1.5 py-1 rounded-sm ${
-              isSel ? 'bg-accent-soft border border-accent' : 'bg-transparent border border-transparent'
+              isSel ? 'bg-selected-soft border border-selected' : 'bg-transparent border border-transparent'
             }`}>
               <input type="radio" name={`source_${domain}`} checked={isSel} disabled={!canSelect}
                 onChange={() => onSelect(row.value, row)}
@@ -260,9 +260,9 @@ export function ModelSourceCard({
               {row.removable && (
                 <button
                   onClick={() => void removeCandidate(row)}
-                  className="text-xs text-fg-tertiary hover:text-err bg-transparent border-none cursor-pointer transition-colors shrink-0"
+                  className="btn btn-ghost btn-sm shrink-0 justify-center"
                   title={t('settings.removeCandidate')}
-                >×</button>
+                >✕ {t('settings.removeCandidateShort')}</button>
               )}
             </li>
           )

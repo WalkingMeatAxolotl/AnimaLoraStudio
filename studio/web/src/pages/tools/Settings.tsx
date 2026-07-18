@@ -466,7 +466,7 @@ export default function SettingsPage() {
               const isDefault = p.id === draft.llm_tagger.current_preset
               return (
                 <li key={p.id} className={`flex items-center gap-2 text-xs px-1.5 py-1 rounded-sm ${
-                  isDefault ? 'bg-accent-soft border border-accent' : 'bg-transparent border border-transparent'
+                  isDefault ? 'bg-selected-soft border border-selected' : 'bg-transparent border border-transparent'
                 }`}>
                   <input type="radio" name="llm_preset_default" checked={isDefault}
                     onChange={() => update('llm_tagger', 'current_preset', p.id)}

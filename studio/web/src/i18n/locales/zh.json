@@ -1067,6 +1067,7 @@
     "addDownloadCandidate": "添加下载",
     "addLocalCandidate": "添加本地文件",
     "removeCandidate": "从列表移除（不删除文件）",
+    "removeCandidateShort": "移除",
     "localBadge": "本地",
     "candidateAdded": "已添加 {{name}}",
     "candidateRemoved": "已从列表移除（文件保留）",

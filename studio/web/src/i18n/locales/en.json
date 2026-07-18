@@ -1067,6 +1067,7 @@
     "addDownloadCandidate": "Add download",
     "addLocalCandidate": "Add local file",
     "removeCandidate": "Remove from list (keeps files)",
+    "removeCandidateShort": "Remove",
     "localBadge": "local",
     "candidateAdded": "Added {{name}}",
     "candidateRemoved": "Removed from list (files kept)",
