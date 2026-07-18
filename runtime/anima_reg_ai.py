@@ -258,6 +258,28 @@ def _rewrite_json_caption_for_prompt(caption_path: Path, excluded_tags: set[str]
     return prompt
 
 
+def _peek_prompt_for_image(train_img_path: Path, excluded_tags: set[str]) -> str | None:
+    """纯读派生 prompt（分批预编码用）——不拷贝、不改写任何文件。
+
+    与循环内 _copy_caption_for_reg + _rewrite_caption_for_prompt 的产物
+    逐字一致（同源文件同规则），保证出图时在线 LRU 精确命中。寻源失败 /
+    读取失败返回 None（该条回退循环内惰性编码）。
+    """
+    src = _caption_path_for_image(train_img_path)
+    if src is None:
+        return None
+    try:
+        if src.suffix == ".json":
+            raw = json.loads(src.read_text(encoding="utf-8"))
+            normalized = normalize_caption_json(raw if isinstance(raw, dict) else {})
+            return caption_json_to_text(
+                _filter_normalized_caption(normalized, excluded_tags)
+            )
+        return _build_prompt_from_caption(src, excluded_tags)
+    except Exception:
+        return None
+
+
 def _rewrite_caption_for_prompt(caption_path: Path, excluded_tags: set[str]) -> str:
     """Persist the reg sidecar caption that corresponds to the generated image."""
     if caption_path.suffix == ".json":
@@ -432,15 +454,13 @@ def main() -> None:
         t5_tokenizer_path = _T.resolve_path_best_effort(t5_tokenizer_path, bases)
 
     family = _T.resolve_family(cfg)  # D8'
-    logger.info("加载 Transformer...")
-    model = family.load_dit(
-        transformer_path, device, dtype,
-        attention_backend=("flash_attn" if use_flash else "none"), repo_root=repo_root,
-        purpose="generate",
-    )
-    if use_xformers:
-        _T.enable_xformers(model)
+    from training.sysmem import check_load_budget, gpu_free_bytes_global
 
+    check_load_budget(
+        True,
+        weight_paths=[transformer_path, vae_path, text_encoder_path],
+        stage="正则生成模型加载",
+    )
     logger.info("加载 VAE...")
     vae = family.load_vae(vae_path, device, dtype,
                           tiling=str(cfg.get("vae_tiling", "auto")))
@@ -454,6 +474,56 @@ def main() -> None:
         cache_enabled=False,
     )
 
+    # TE 先行 + 分批预编码（krea2）：reg 的 prompt 是每张图各不相同的
+    # caption（每条只用一次），LRU 容量（64）装不下全量——按批组织：
+    # 每批开头 TE 上卡编码 64 条 → 彻底释放 → 批内出图全 LRU 命中。
+    # 首批在 DiT 加载前编码（零同驻）；批 2+ 的 TE 上卡与 DiT 同驻瞬时，
+    # 显存不足时跳过预编码回退逐图惰性路径。anima 文本栈无 API 全程跳过。
+    _PRECACHE_BATCH = 64
+
+    def _precache_batch(batch: list[dict], first: bool) -> None:
+        precache = getattr(text_stack, "precache_online_prompts", None)
+        if not callable(precache):
+            return
+        if not first:
+            free = gpu_free_bytes_global()
+            # TE 上卡需求上界（bf16 ~11GB；fp8 更小）——不足时跳过，
+            # 由 sample_image 内部的逐图路径兜底
+            if free is not None and free < 12 * 1024**3:
+                logger.info("显存余量不足，本批跳过预编码（回退逐图编码）")
+                return
+        prompts = [
+            p for p in (
+                _peek_prompt_for_image(entry["img"], excluded_tags)
+                for entry in batch
+            ) if p
+        ]
+        if not prompts:
+            return
+        # negative 固定一条但会被满批 evict——每批都带上保持命中
+        prompts.append(str(negative_prompt or ""))
+        try:
+            encoded = precache(prompts)
+            release = getattr(text_stack, "release_model", None)
+            if callable(release):
+                release()
+            if encoded:
+                logger.info("本批预编码 %d 条 caption；TE 已释放", encoded)
+        except Exception:
+            logger.exception("批预编码失败；回退逐图惰性编码")
+
+    if to_generate:
+        _precache_batch(to_generate[:_PRECACHE_BATCH], first=True)
+
+    logger.info("加载 Transformer...")
+    model = family.load_dit(
+        transformer_path, device, dtype,
+        attention_backend=("flash_attn" if use_flash else "none"), repo_root=repo_root,
+        purpose="generate",
+    )
+    if use_xformers:
+        _T.enable_xformers(model)
+
     model.eval()
 
     if not incremental:
@@ -465,6 +535,10 @@ def main() -> None:
     actual_count = 0
 
     for idx, entry in enumerate(to_generate):
+        if idx and idx % _PRECACHE_BATCH == 0:
+            _precache_batch(
+                to_generate[idx:idx + _PRECACHE_BATCH], first=False,
+            )
         seed = (base_seed + idx) if base_seed != 0 else random.randint(0, 2**31 - 1)
         torch.manual_seed(seed)
         random.seed(seed)
@@ -509,6 +583,7 @@ def main() -> None:
                 scheduler=scheduler,
                 device=device,
                 dtype=dtype,
+                vram_policy="auto",
             )
             img.save(out_path)
             actual_count += 1

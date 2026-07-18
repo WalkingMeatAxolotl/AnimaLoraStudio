@@ -589,13 +589,14 @@ def _default_generator(
     progress("[eval-samples] loading base model")
     diffusion_root = _T.find_diffusion_pipe_root()
     family = _T.resolve_family(cfg)  # D8'
-    model = family.load_dit(
-        transformer_path, device, dtype,
-        attention_backend=("flash_attn" if use_flash else "none"), repo_root=diffusion_root,
-        purpose="generate",
+    items_for_precache = run.get("items") if isinstance(run.get("items"), list) else []
+    from training.sysmem import check_load_budget
+
+    check_load_budget(
+        True,
+        weight_paths=[transformer_path, vae_path, text_encoder_path],
+        stage="评估出图模型加载",
     )
-    if use_xformers:
-        _T.enable_xformers(model)
     vae = family.load_vae(vae_path, device, dtype)
     # 族 opaque 文本栈不拆包；eval prompt 是 ad-hoc 输入，关缓存
     text_stack = family.load_text(
@@ -604,6 +605,31 @@ def _default_generator(
         purpose="generate",
         cache_enabled=False,
     )
+    # TE 先行编排（krea2，daemon/CLI 同款）：items 的 prompt 集合封闭——
+    # DiT 加载前预编码全部并彻底释放 TE，任一时刻 GPU 只有一个大模型。
+    # anima 文本栈无此 API 自然跳过。
+    precache = getattr(text_stack, "precache_online_prompts", None)
+    if callable(precache):
+        try:
+            prompts_all = [
+                str(item.get("prompt") or "") for item in items_for_precache
+            ] + [str(negative_prompt or "")]
+            encoded = precache(prompts_all)
+            release = getattr(text_stack, "release_model", None)
+            if callable(release):
+                release()
+            if encoded:
+                progress(f"[eval-samples] precached {encoded} prompts; TE released")
+        except Exception:
+            logger.exception("eval prompt 预编码失败；退回逐图惰性编码")
+
+    model = family.load_dit(
+        transformer_path, device, dtype,
+        attention_backend=("flash_attn" if use_flash else "none"), repo_root=diffusion_root,
+        purpose="generate",
+    )
+    if use_xformers:
+        _T.enable_xformers(model)
 
     checkpoint = version_dir / run["checkpoint"]["path"]
     adapters = apply_loras(
@@ -644,6 +670,7 @@ def _default_generator(
                 device=device,
                 dtype=dtype,
                 seed=seed,
+                vram_policy="auto",
             )
             img.save(output)
             run = mark_item_done(version_dir, load_run(version_dir, run["run_id"], scoped_root) or run, idx, scoped_root)
