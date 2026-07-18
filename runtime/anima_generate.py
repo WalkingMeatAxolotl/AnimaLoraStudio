@@ -144,18 +144,6 @@ def main() -> None:
         t5_tokenizer_path = _T.resolve_path_best_effort(t5_tokenizer_path, bases)
 
     family = _T.resolve_family(cfg)  # D8'：旁路调用方经 family 派发
-    logger.info("加载 Transformer...")
-    model = family.load_dit(
-        transformer_path, device, dtype,
-        attention_backend=("flash_attn" if use_flash else "none"), repo_root=repo_root,
-        purpose="generate",
-    )
-    if use_xformers and not _T.enable_xformers(model):
-        raise RuntimeError(
-            "Exact ComfyUI KSampler parity is guaranteed only with xformers, "
-            "but xformers could not be enabled"
-        )
-
     logger.info("加载 VAE...")
     vae = family.load_vae(vae_path, device, vae_dtype,
                           tiling=str(cfg.get("vae_tiling", "auto")))
@@ -171,6 +159,36 @@ def main() -> None:
         cache_enabled=False,
     )
 
+    # TE 先行编排（krea2，daemon 同款）：DiT 加载前预编码全部 prompt 并
+    # 彻底释放 TE——任一时刻 GPU 只有一个大模型。prompts 集合封闭（XY 时
+    # schema 保证单条）。anima 文本栈（tuple）无此 API 自然跳过；
+    # performance 档不释放。
+    precache = getattr(text_stack, "precache_online_prompts", None)
+    if callable(precache):
+        try:
+            encoded = precache([*[str(p) for p in prompts], negative_prompt])
+        except Exception:
+            logger.exception("prompt 预编码失败；退回逐图惰性编码")
+        else:
+            if vram_policy != "performance":
+                release = getattr(text_stack, "release_model", None)
+                if callable(release):
+                    release()
+            if encoded:
+                logger.info("krea2 预编码 %d 条 prompt；TE 已释放", encoded)
+
+    logger.info("加载 Transformer...")
+    model = family.load_dit(
+        transformer_path, device, dtype,
+        attention_backend=("flash_attn" if use_flash else "none"), repo_root=repo_root,
+        purpose="generate",
+    )
+    if use_xformers and not _T.enable_xformers(model):
+        raise RuntimeError(
+            "Exact ComfyUI KSampler parity is guaranteed only with xformers, "
+            "but xformers could not be enabled"
+        )
+
     # 多 LoRA：每份独立 inject + multiplier=scale。adapters 必须保持引用，否则
     # 被 GC 后 forward hook 失效（lycoris 通过 closure 持有 network）。
     specs = [
@@ -181,23 +199,6 @@ def main() -> None:
                             family_id=family.spec.family_id)
 
     model.eval()
-
-    # krea2 任务级 prompt 预编码（daemon _precache_prompts_and_offload 同款）：
-    # prompts 集合封闭（XY 时 schema 保证单条），预编码后卸 TE，采样期零占用。
-    # anima 文本栈（tuple）无此 API 自然跳过；performance 档不卸。
-    precache = getattr(text_stack, "precache_online_prompts", None)
-    if callable(precache):
-        try:
-            encoded = precache([*[str(p) for p in prompts], negative_prompt])
-        except Exception:
-            logger.exception("prompt 预编码失败；退回逐图惰性编码")
-        else:
-            if vram_policy != "performance":
-                offload = getattr(text_stack, "offload_model", None)
-                if callable(offload):
-                    offload()
-            if encoded:
-                logger.info("krea2 预编码 %d 条 prompt；采样期 TE 不占显存", encoded)
 
     # XY 矩阵分支（schema 已校验：xy_matrix 设值时 prompts 单条 + count=1）
     xy_matrix = cfg.get("xy_matrix")

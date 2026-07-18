@@ -210,6 +210,9 @@ class ModelCache:
         self.text_encoder_backend: Optional[str] = None
         self.t5_tokenizer_backend: Optional[str] = None
         self.ram_guard: bool = True
+        #: TE 先行栈的身份键（family_id, text_encoder_path）——ensure_text_ready
+        #: 据此复用/重建；_load 据此避免重复加载
+        self._text_ready_key: Optional[tuple] = None
         self.device: Optional[str] = None
         self.dtype: Any = None
         self.lora_dtype: Any = torch.float32
@@ -228,6 +231,42 @@ class ModelCache:
     @property
     def loaded(self) -> bool:
         return self.model is not None
+
+    def ensure_text_ready(self, cfg: dict[str, Any]) -> None:
+        """krea2 两段加载第一段：先就绪 TE 栈（不动 DiT）。
+
+        TE 先行编排（任务驱动分阶段，训练两段式的推理版）：任务开始先让
+        文本栈就绪 → precache 编码 → 彻底释放 → 才加载 13GB DiT——任一
+        时刻 GPU 上只有一个大模型（受控实测预编码期三者同驻峰值 24.1GB
+        → 错开后 ~15GB，16GB 卡免让位）。TE 参数变化只重建文本栈（在线
+        LRU 随之作废），不再触发全家桶重载。anima 族 no-op（TE 常驻语义
+        走 _load 全家桶）。
+        """
+        cfg = force_comfy_parity_runtime_config(
+            cfg, force_exact_ksampler_backend=False,
+        )
+        family_id = str(cfg.get("model_family") or "anima")
+        if family_id != "krea2":
+            return
+        repo_root = _T.find_diffusion_pipe_root()
+        bases = [Path.cwd(), _THIS_DIR, repo_root]
+        text_encoder_path = _T.resolve_path_best_effort(
+            cfg["text_encoder_path"], bases,
+        )
+        key = (family_id, text_encoder_path)
+        if self.text_stack is not None and self._text_ready_key == key:
+            return
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        dtype = _torch_dtype_from_precision(cfg.get("mixed_precision", "bf16"))
+        family = _T.get_family(family_id)
+        logger.info("loading text encoders (TE 先行) %s", text_encoder_path)
+        self.text_stack = family.load_text(
+            text_encoder_path, device, dtype,
+            purpose="generate",
+            cache_enabled=False,
+        )
+        self._text_ready_key = key
+        self.text_encoder_path = text_encoder_path
 
     def ensure_loaded(self, cfg: dict[str, Any]) -> None:
         """按 cfg 决定是否需要 (重新) 加载。路径或后端变了 → 全重载。"""
@@ -280,7 +319,8 @@ class ModelCache:
                 weight_paths=[transformer_path, vae_path],
                 stage="模型加载",
             )
-            self.unload()
+            # keep_text：TE 先行栈刚编码完（LRU 已填充），重载不清它
+            self.unload(keep_text=True)
             self._load(
                 family_id=family_id,
                 transformer_path=transformer_path,
@@ -332,17 +372,24 @@ class ModelCache:
         logger.info("loading vae %s", vae_path)
         vae = family.load_vae(vae_path, device, vae_dtype)
 
-        logger.info("loading text encoders %s", text_encoder_path)
-        # 族 opaque 文本栈，不拆包。generate 的 prompt 是 ad-hoc 交互输入，
-        # cached_varlen 族（krea2）关缓存让 TE 常驻逐 prompt 在线编码。
-        text_stack = family.load_text(
-            text_encoder_path, device, dtype,
-            t5_tokenizer_path=t5_tokenizer_path or None,
-            comfy_qwen=text_encoder_backend == "comfy_qwen3",
-            t5_fast=t5_tokenizer_backend == "fast",
-            purpose="generate",
-            cache_enabled=False,
-        )
+        # 族 opaque 文本栈，不拆包。krea2 的 TE 先行栈（ensure_text_ready）
+        # 已就绪且身份匹配时复用——保住预编码 LRU，不重复加载。
+        if (
+            family_id == "krea2"
+            and self.text_stack is not None
+            and self._text_ready_key == (family_id, text_encoder_path)
+        ):
+            text_stack = self.text_stack
+        else:
+            logger.info("loading text encoders %s", text_encoder_path)
+            text_stack = family.load_text(
+                text_encoder_path, device, dtype,
+                t5_tokenizer_path=t5_tokenizer_path or None,
+                comfy_qwen=text_encoder_backend == "comfy_qwen3",
+                t5_fast=t5_tokenizer_backend == "fast",
+                purpose="generate",
+                cache_enabled=False,
+            )
 
         self.family_id = family_id
         self.family = family
@@ -477,13 +524,26 @@ class ModelCache:
         for adapter in self.adapters:
             _move_adapter_to_device(adapter, self.device, self.lora_dtype)
 
-    def unload(self) -> None:
+    def unload(self, *, keep_text: bool = False) -> None:
+        """卸载模型栈。``keep_text``：保留 TE 先行栈（含预编码 LRU）——
+        ensure_loaded 的重载路径用，避免刚编码完的结果被清掉。"""
+        had_text = self.text_stack is not None
+        if not keep_text:
+            self.text_stack = None
+            self._text_ready_key = None
         if not self.loaded:
+            if had_text and not keep_text:
+                try:
+                    import gc
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
             return
         logger.info("unloading model")
         self.model = None
         self.vae = None
-        self.text_stack = None
         self.family_id = None
         self.family = None
         self.adapters = []
@@ -515,19 +575,20 @@ CACHE = ModelCache()
 # ---------------------------------------------------------------------------
 
 
-def _precache_prompts_and_offload(
+def _precache_prompts_and_release(
     prompts: list[str],
     vram_policy: str,
     phase_callback: Any = None,
 ) -> None:
-    """krea2 任务级 prompt 预编码（训练两段式加载的推理版）。
+    """krea2 任务级 prompt 预编码 + TE 彻底释放（训练两段式的推理版）。
 
     XY / 多 prompt generate 的 prompt 集合在任务开始前就封闭——先把全部
-    prompt 编进在线 LRU，再把 TE 卸到 CPU：采样期 TE 归零显存占用（否则
-    auto 判据在余量充足时会让 8.9GB 的 TE 同驻到任务结束）。后续每格 /
-    每图经 LRU 全命中，TE 不再参与。
+    prompt 编进在线 LRU，再**彻底释放** TE（release，非 offload：不留
+    ~5GB CPU 副本；conditioning 已在 LRU，下个任务 LRU miss 再从盘载
+    ~3s）。与 ensure_text_ready 组成 TE 先行编排：首次任务在 DiT 加载前
+    编码，任一时刻 GPU 只有一个大模型。
 
-    - performance 档不卸（用户显式要求全同驻零搬运）。
+    - performance 档不释放（用户显式要求全同驻零搬运）。
     - anima 文本栈（tuple）无此 API，安全跳过。
     - 预编码失败不阻塞任务：逐格惰性编码路径兜底。
     """
@@ -552,11 +613,11 @@ def _precache_prompts_and_offload(
         logger.exception("prompt 预编码失败；退回逐格惰性编码")
         return
     if vram_policy != "performance":
-        offload = getattr(CACHE.text_stack, "offload_model", None)
-        if callable(offload):
-            offload()
+        release = getattr(CACHE.text_stack, "release_model", None)
+        if callable(release):
+            release()
     if encoded:
-        logger.info("krea2 预编码 %d 条 prompt；采样期 TE 不再占用显存", encoded)
+        logger.info("krea2 预编码 %d 条 prompt；TE 已释放，采样期零占用", encoded)
 
 
 def _set_lora_multiplier(adapter: Any, scale: float) -> None:
@@ -819,15 +880,6 @@ def _run_generate(
     update_monitor = _setup_monitor(cfg)
 
     _raise_if_canceled(cancel_event)
-    # phase 上报：加载模型/LoRA 阶段（clip/sample/vae 由 sample_image 内部报）→ 进度条覆盖全流程
-    _emit_for(req_id, "phase", name="load")
-    CACHE.ensure_loaded(cfg)
-    adapters = CACHE.apply_loras(cfg.get("lora_configs", []))
-
-    # 进度推送：永远建 callback 推 preview_step（含 step/total）；
-    # preview_every_n_steps>0 时附 image_b64 中间预览图（commit 14）。
-    preview_every = int(cfg.get("preview_every_n_steps", 0) or 0)
-    preview_callback = _build_preview_callback(req_id, preview_every, cancel_event)
 
     def _phase_cb(name: str) -> None:
         _emit_for(req_id, "phase", name=name)
@@ -848,6 +900,25 @@ def _run_generate(
     # anima family 接受并忽略
     distilled: bool = bool(cfg.get("distilled", False))
 
+    # phase 上报：加载模型/LoRA 阶段（clip/sample/vae 由 sample_image 内部报）→ 进度条覆盖全流程
+    _emit_for(req_id, "phase", name="load")
+    # TE 先行编排（krea2）：prompt 集合封闭——DiT 加载前先让 TE 栈就绪、
+    # 编码全部 prompt、彻底释放 TE。任一时刻 GPU 只有一个大模型（预编码期
+    # 三者同驻峰值 24.1GB → ~15GB；16GB 卡免让位）。anima 族两步均 no-op。
+    CACHE.ensure_text_ready(cfg)
+    _precache_prompts_and_release(
+        [*prompts, negative_prompt],
+        str(cfg.get("vram_policy") or "auto"),
+        _phase_cb,
+    )
+    CACHE.ensure_loaded(cfg)
+    adapters = CACHE.apply_loras(cfg.get("lora_configs", []))
+
+    # 进度推送：永远建 callback 推 preview_step（含 step/total）；
+    # preview_every_n_steps>0 时附 image_b64 中间预览图（commit 14）。
+    preview_every = int(cfg.get("preview_every_n_steps", 0) or 0)
+    preview_callback = _build_preview_callback(req_id, preview_every, cancel_event)
+
     xy_matrix = cfg.get("xy_matrix")
     if xy_matrix is not None:
         _run_xy(
@@ -866,13 +937,6 @@ def _run_generate(
 
     total = count * len(prompts)
     _emit_for(req_id, "started", task_id=task_id, total=total)
-
-    # prompt 集合封闭（prompts × count 固定）：预编码后卸 TE，循环全程零占用
-    _precache_prompts_and_offload(
-        [*prompts, negative_prompt],
-        str(cfg.get("vram_policy") or "auto"),
-        _phase_cb,
-    )
 
     img_idx = 0
     image_done_count = 0
@@ -982,12 +1046,8 @@ def _run_xy(
     total = len(x_values) * len(y_values)
     _emit_for(req_id, "started", task_id=task_id, total=total)
 
-    # XY 无 prompt 轴——prompt/negative 全程固定：预编码后卸 TE，逐格全命中
-    _precache_prompts_and_offload(
-        [prompt, negative_prompt],
-        str(cfg.get("vram_policy") or "auto"),
-        phase_callback,
-    )
+    # XY 无 prompt 轴——prompt/negative 已由 _run_generate 的 TE 先行编排
+    # 统一预编码并释放 TE，此处逐格全 LRU 命中，无需重复。
 
     img_idx = 0
     image_done_count = 0

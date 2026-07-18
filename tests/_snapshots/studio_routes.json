@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 203,
+  "count": 204,
   "routes": [
     {
       "path": "/",
@@ -295,6 +295,14 @@
         "GET"
       ],
       "name": "models_root_migrate_status",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/models/asset",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "delete_model_asset",
       "type": "APIRoute"
     },
     {
