@@ -53,37 +53,8 @@
 .vs-channel-toggle-label {
   color: var(--fg-tertiary);
 }
-.vs-channel-radio {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--border-default);
-  background: transparent;
-  color: var(--fg-secondary);
-  cursor: pointer;
-  font-size: 12.5px;
-  transition: 120ms;
-}
-.vs-channel-radio:hover:not(.on) {
-  background: var(--bg-overlay);
-}
-.vs-channel-radio.on {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.vs-channel-radio .vs-channel-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  border: 1px solid currentColor;
-  background: transparent;
-}
-.vs-channel-radio.on .vs-channel-dot {
-  background: currentColor;
-}
+/* 通道 radio 的 pill 样式已泛化为 tokens.css 的 .pill-radio / .pill-radio-dot
+ * （显示设置的语言/主题/密度切换共用同一实现）。 */
 .vs-channel-hint {
   margin-left: auto;
   color: var(--fg-tertiary);

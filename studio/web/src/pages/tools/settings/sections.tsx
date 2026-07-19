@@ -21,7 +21,7 @@ import { useSettingsData } from '../../../lib/SettingsData'
 import { applyDensity, applyTheme, getStoredDensity, getStoredTheme, setStoredDensity, setStoredTheme, type Density, type Theme } from '../../../lib/theme'
 import i18n, { getStoredLangWithDefault, setStoredLang } from '../../../i18n'
 import { MODEL_DESCRIPTION_KEYS, textInputClass, translatedCatalogText, UPSCALER_DESCRIPTION_KEYS, type Section } from './constants'
-import { Bool, SettingsField, SettingsInput, SettingsSection } from './fields'
+import { Bool, PillRadioGroup, SettingsField, SettingsInput, SettingsSection } from './fields'
 import { DownloadButton, ModelGroupCard, ModelSourceCard, ModelStatusBadge, SourceSelect, StatusLabel } from './modelCards'
 
 // ── 训练参数 Section ─────────────────────────────────────────────────
@@ -1450,34 +1450,25 @@ export function DisplaySection() {
   return (
     <SettingsSection id="display" title={t('settings.display')}>
       <SettingsField label={t('settings.language')}>
-        <div className="flex gap-1">
-          {[
+        <PillRadioGroup
+          options={[
             { id: 'zh', label: t('settings.languageZh') },
             { id: 'en', label: t('settings.languageEn') },
-          ].map((l) => (
-            <button
-              key={l.id}
-              onClick={() => handleLangChange(l.id)}
-              className={`btn btn-sm ${lang === l.id ? 'btn-primary' : 'btn-secondary'}`}
-            >
-              {l.label}
-            </button>
-          ))}
-        </div>
+          ]}
+          value={lang}
+          onChange={handleLangChange}
+        />
       </SettingsField>
 
       <SettingsField label={t('settings.theme')}>
-        <div className="flex gap-1">
-          {(['light', 'dark'] as Theme[]).map((themeOption) => (
-            <button
-              key={themeOption}
-              onClick={() => handleThemeChange(themeOption)}
-              className={`btn btn-sm ${theme === themeOption ? 'btn-primary' : 'btn-secondary'}`}
-            >
-              {themeOption === 'light' ? t('settings.themeLight') : t('settings.themeDark')}
-            </button>
-          ))}
-        </div>
+        <PillRadioGroup
+          options={(['light', 'dark'] as Theme[]).map((themeOption) => ({
+            id: themeOption,
+            label: themeOption === 'light' ? t('settings.themeLight') : t('settings.themeDark'),
+          }))}
+          value={theme}
+          onChange={handleThemeChange}
+        />
       </SettingsField>
 
       <SettingsField
@@ -1490,17 +1481,13 @@ export function DisplaySection() {
           </>
         }
       >
-        <div className="flex gap-1">
-          {(['tight', 'default', 'loose'] as Density[]).map((d) => (
-            <button
-              key={d}
-              onClick={() => handleDensityChange(d)}
-              className={`btn btn-sm ${density === d ? 'btn-primary' : 'btn-secondary'}`}
-            >
-              {densityLabel(d)}
-            </button>
-          ))}
-        </div>
+        <PillRadioGroup
+          options={(['tight', 'default', 'loose'] as Density[]).map((d) => ({
+            id: d, label: densityLabel(d),
+          }))}
+          value={density}
+          onChange={handleDensityChange}
+        />
       </SettingsField>
     </SettingsSection>
   )

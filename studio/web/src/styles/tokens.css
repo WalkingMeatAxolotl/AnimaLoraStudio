@@ -271,6 +271,40 @@ select option:checked {
 .dot-running { background: var(--accent); animation: pulse 1.6s infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
+/* pill radio — 互斥选项组（更新通道 / 显示设置的语言·主题·密度等）。
+ * 原 version-section.css 的 .vs-channel-radio 泛化为通用类。 */
+.pill-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font-size: 12.5px;
+  transition: 120ms;
+}
+.pill-radio:hover:not(.on) {
+  background: var(--bg-overlay);
+}
+.pill-radio.on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.pill-radio .pill-radio-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  background: transparent;
+}
+.pill-radio.on .pill-radio-dot {
+  background: currentColor;
+}
+
 .input {
   background: var(--bg-surface);
   border: 1px solid var(--border-default);

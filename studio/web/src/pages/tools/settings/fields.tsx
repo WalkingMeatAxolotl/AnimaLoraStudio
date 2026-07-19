@@ -236,3 +236,28 @@ export function SettingsInput({ value, onChange, type = 'text', ...props }: Sett
     />
   )
 }
+
+/** 互斥选项 pill 组（样式同「系统 → 版本更新通道」的 .pill-radio）。
+ *  显示设置的语言 / 主题 / 密度等少选项切换用。 */
+export function PillRadioGroup<T extends string>({ options, value, onChange }: {
+  options: { id: T; label: string }[]
+  value: T
+  onChange: (v: T) => void
+}) {
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      {options.map((o) => (
+        <button
+          key={o.id}
+          type="button"
+          role="radio"
+          aria-checked={value === o.id}
+          className={`pill-radio${value === o.id ? ' on' : ''}`}
+          onClick={() => { if (value !== o.id) onChange(o.id) }}
+        >
+          <span className="pill-radio-dot" />{o.label}
+        </button>
+      ))}
+    </div>
+  )
+}
