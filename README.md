@@ -21,11 +21,11 @@
 - **环境自愈 + Web 内自更新**：首装自动选 GPU 兼容 torch、依赖哈希比对、git pull / 重启 / 回滚。
 - **中英双语**：首次启动选语言，Settings 内可切换。
 
-> 训练核心（`runtime/`）与 Studio 后端解耦，可独立 CLI 跑；adapter / optimizer / scheduler / loss / 推理 sampler / timestep 采样器六套 plugin registry，外加模型族 registry（`runtime/training/families/`，加第三个模型族 = 纯新增文件 + 各 registry 一行注册），均可扩展（见 [ADR 0003](docs/adr/0003-anima-train-refactor.md)）。
+> 训练核心（`runtime/`）与 Studio 后端解耦，可独立 CLI 跑；模型族与 adapter / optimizer / scheduler / loss / sampler / timestep 采样均为 plugin registry，可扩展（见 [ADR 0003](docs/adr/0003-anima-train-refactor.md)）。
 
 ## 快速开始
 
-**先决条件**（需自备）：NVIDIA GPU + CUDA（显存要求见下方按族分档）· Python 3.10+ · Node.js 18+ · Git。
+**先决条件**（需自备）：NVIDIA GPU + CUDA · Python 3.10+ · Node.js 18+ · Git。
 
 ```bash
 git clone https://github.com/WalkingMeatAxolotl/AnimaLoraStudio
@@ -34,7 +34,7 @@ studio.bat          # Windows
 ./studio.sh         # Linux / macOS
 ```
 
-首次运行自动建 `venv/` → 按 GPU 驱动装对应 CUDA torch → 构建前端 → 起后端 → 开浏览器到 <http://127.0.0.1:8765/>，并弹引导 modal 一键装 Anima 入门套件。打开后去 **设置 → 训练** 的模型下载中心，按模型族下载权重（Anima / Krea 2 分区，Krea 2 含 Raw / Turbo 各 bf16 与官方 fp8 版；默认落 `./models/`）。
+首次运行自动建 `venv/` → 按 GPU 驱动装对应 CUDA torch → 构建前端 → 起后端 → 开浏览器到 <http://127.0.0.1:8765/>，并弹引导 modal 一键装 Anima 入门套件。打开后去 **设置 → 训练** 的模型下载中心按模型族下载权重（默认落 `./models/`）。
 
 → 完整步骤（启动选项 / 模型下载 / 国内镜像 / 流水线 walkthrough）见 **[上手教程](docs/user-guide/getting-started.md)**。
 
@@ -42,8 +42,8 @@ studio.bat          # Windows
 
 - **GPU**：NVIDIA（A 卡 / Apple Silicon 不支持），按模型族分档：
   - **Anima**：**16 GB+ 显存推荐**（RTX 4060Ti 16G / 4070Ti / 4080 / 3090 / 4090 / 5090 等）；**8 GB 极限可跑**（需关 sample 输出 + 减小 batch / 分辨率，速度明显下降）。
-  - **Krea 2**（12.9B）：**训练**用官方 fp8 底模面向 24 GB 级显卡（1024² 训练建议留足峰值余量），bf16 底模需 32 GB；**出图**用 fp8 底模 16 GB 可跑（显存策略选「省显存」），24 GB+ 顺畅，bf16 底模建议 32 GB。
-- **RAM**：16 GB+；Krea 2 建议 32 GB+（26.3 GB 单文件权重加载期内存峰值约等于文件大小，启动期有护栏检查）
+  - **Krea 2**（12.9B）：**训练**用官方 fp8 底模 24 GB 级可跑，bf16 底模需 32 GB；**出图**用 fp8 底模 16 GB 起（「省显存」档），bf16 底模建议 32 GB。
+- **RAM**：16 GB+；Krea 2 建议 32 GB+（加载 26.3 GB 单文件权重时内存峰值约等于文件大小）
 - **存储**：SSD 强烈推荐（latent cache + sample 输出 IO 频繁）；Krea 2 权重体积大（Raw / Turbo bf16 各 26.3 GB、官方 fp8 各 13.1 GB、文本编码器 5.2–8.9 GB），预留磁盘空间
 
 ## 文档

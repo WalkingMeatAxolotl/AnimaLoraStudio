@@ -21,11 +21,11 @@
 - **Self-healing setup + in-app self-update**: GPU-aware torch on first install, dependency hash checks, git pull / restart / rollback.
 - **Bilingual**: pick a language on first launch, switchable in Settings.
 
-> The training core (`runtime/`) is decoupled from the Studio backend and runs standalone via CLI; adapters / optimizers / schedulers / losses / inference samplers / timestep samplers are six extensible plugin registries, plus the model-family registry (`runtime/training/families/` — adding a third family means new files plus one registration line per registry). See [ADR 0003](docs/adr/0003-anima-train-refactor.md).
+> The training core (`runtime/`) is decoupled from the Studio backend and runs standalone via CLI; model families and adapters / optimizers / schedulers / losses / samplers / timestep sampling are all extensible plugin registries (see [ADR 0003](docs/adr/0003-anima-train-refactor.md)).
 
 ## Quick start
 
-**Prerequisites** (install yourself): NVIDIA GPU + CUDA (VRAM requirements are per family, see below) · Python 3.10+ · Node.js 18+ · Git.
+**Prerequisites** (install yourself): NVIDIA GPU + CUDA · Python 3.10+ · Node.js 18+ · Git.
 
 ```bash
 git clone https://github.com/WalkingMeatAxolotl/AnimaLoraStudio
@@ -34,7 +34,7 @@ studio.bat          # Windows
 ./studio.sh         # Linux / macOS
 ```
 
-First run automatically creates `venv/` → installs GPU-matched CUDA torch → builds the frontend → starts the backend → opens <http://127.0.0.1:8765/>, with an onboarding modal to one-click install the Anima starter set. Once open, go to the model download center under **Settings → Training** and download weights per family (Anima / Krea 2 sections; Krea 2 offers Raw / Turbo in both bf16 and official fp8; defaults to `./models/`).
+First run automatically creates `venv/` → installs GPU-matched CUDA torch → builds the frontend → starts the backend → opens <http://127.0.0.1:8765/>, with an onboarding modal to one-click install the Anima starter set. Once open, go to the model download center under **Settings → Training** and download the weights for your model family (defaults to `./models/`).
 
 → Full walkthrough (launch options / model download / mirrors / pipeline steps): see the **[Getting Started guide](docs/user-guide/getting-started.en.md)**.
 
@@ -42,8 +42,8 @@ First run automatically creates `venv/` → installs GPU-matched CUDA torch → 
 
 - **GPU**: NVIDIA (AMD / Apple Silicon not supported), per family:
   - **Anima**: **16 GB+ VRAM recommended** (RTX 4060Ti 16G / 4070Ti / 4080 / 3090 / 4090 / 5090, etc.); **8 GB barely works** (turn off sample output + reduce batch / resolution; noticeably slower).
-  - **Krea 2** (12.9B): **training** with the official fp8 base model targets 24 GB-class GPUs (leave peak headroom at 1024²); bf16 base training needs 32 GB. **Generation** with an fp8 base runs on 16 GB (set the VRAM policy to "save VRAM"), is comfortable at 24 GB+, and bf16 bases want 32 GB.
-- **RAM**: 16 GB+; 32 GB+ recommended for Krea 2 (loading a 26.3 GB single-file checkpoint peaks at roughly file size in RAM; a startup guard checks headroom)
+  - **Krea 2** (12.9B): **training** runs on 24 GB-class GPUs with the official fp8 base model, or 32 GB for bf16; **generation** with an fp8 base runs from 16 GB (on the "save VRAM" policy), bf16 bases want 32 GB.
+- **RAM**: 16 GB+; 32 GB+ recommended for Krea 2 (loading a 26.3 GB single-file checkpoint peaks at roughly file size in RAM)
 - **Storage**: SSD strongly recommended (frequent latent-cache + sample IO); budget disk space for Krea 2 weights (Raw / Turbo bf16 26.3 GB each, official fp8 13.1 GB each, text encoder 5.2–8.9 GB)
 
 ## Documentation
