@@ -43,7 +43,7 @@ python -m studio test         # pytest + vitest
 
 ## Download models
 
-After launch, go to **Settings → Models** and click to download all required weights and tokenizers (defaults to `./models/`):
+After launch, go to the model download center under **Settings → Training**. Downloads are grouped by model family (Anima / Krea 2) — grab only the family you plan to train (defaults to `./models/`); Anima-only users can skip the large Krea 2 files:
 
 | Item | Source | Path | Size |
 |---|---|---|---|
@@ -52,10 +52,13 @@ After launch, go to **Settings → Models** and click to download all required w
 | Qwen3-0.6B-Base text encoder | [Qwen/Qwen3-0.6B-Base](https://huggingface.co/Qwen/Qwen3-0.6B-Base) | `models/text_encoders/` | ~1.2 GB |
 | T5 tokenizer (3 files only, no weights) | [google/t5-v1_1-xxl](https://huggingface.co/google/t5-v1_1-xxl) | `models/t5_tokenizer/` | <1 MB |
 | Krea 2 Raw (LoRA training / samples during training) | [krea/Krea-2-Raw](https://huggingface.co/krea/Krea-2-Raw) | `models/diffusion_models/krea2-raw-bf16.safetensors` | ~26.3 GB |
+| Krea 2 Raw **official fp8** (training / inference on 24 GB-class GPUs) | [Comfy-Org/Krea-2](https://huggingface.co/Comfy-Org/Krea-2) | `models/diffusion_models/krea2-raw-fp8-scaled.safetensors` | ~13.1 GB |
 | Krea 2 Turbo (inference testing) | [krea/Krea-2-Turbo](https://huggingface.co/krea/Krea-2-Turbo) | `models/diffusion_models/krea2-turbo-bf16.safetensors` | ~26.3 GB |
-| Krea 2 text encoder | [Qwen/Qwen3-VL-4B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct) | `models/text_encoders/Qwen_Qwen3-VL-4B-Instruct/` | ~8.89 GB |
+| Krea 2 Turbo **official fp8** (inference testing) | [Comfy-Org/Krea-2](https://huggingface.co/Comfy-Org/Krea-2) | `models/diffusion_models/krea2-turbo-fp8-scaled.safetensors` | ~13.1 GB |
+| Krea 2 text encoder (bf16) | [Qwen/Qwen3-VL-4B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct) | `models/text_encoders/Qwen_Qwen3-VL-4B-Instruct/` | ~8.89 GB |
+| Krea 2 text encoder **official fp8** | [Comfy-Org/Krea-2](https://huggingface.co/Comfy-Org/Krea-2) | `models/text_encoders/qwen3vl-4b-fp8/` | ~5.24 GB |
 
-Krea 2 weights are governed by the [Krea 2 Community License](https://huggingface.co/krea/Krea-2-Raw/blob/main/LICENSE.pdf). Training and samples during training reuse Raw; Turbo is the inference-testing model. A LoRA trained on Raw can be loaded directly on Turbo. Krea 2 reuses Anima's existing VAE, so no duplicate VAE download is needed. When ModelScope is selected, Raw and Turbo are downloaded from [Comfy-Org/Krea-2](https://www.modelscope.cn/models/Comfy-Org/Krea-2).
+Krea 2 weights are governed by the [Krea 2 Community License](https://huggingface.co/krea/Krea-2-Raw/blob/main/LICENSE.pdf). Training and samples during training reuse Raw; Turbo is the inference-testing model (a LoRA trained on Raw loads directly on Turbo). The official fp8 builds roughly halve weight VRAM: fp8 Raw works directly as a training base model (the choice for 24 GB-class GPUs — see [training-tips → Krea 2 training](training-tips.md#krea-2-训练)), and the text encoder toggles between bf16 / fp8 via a radio in Settings. Krea 2 reuses Anima's existing VAE, so no duplicate VAE download is needed. When ModelScope is selected, Krea 2 files are downloaded from [Comfy-Org/Krea-2](https://www.modelscope.cn/models/Comfy-Org/Krea-2).
 
 WD14 tagger models are not in this list — they are auto-downloaded from HF to `models/wd14/` on first use of the tagging step.
 
@@ -81,7 +84,7 @@ Open <http://127.0.0.1:8765/>, click "+ New project" on the projects page, and t
 4. **Tag** — WD14 / CLTagger / LLM (OpenAI-compatible, including a JoyCaption preset) + thresholds, automatic GPU EP fallback; a trigger word at the top is auto-injected into every caption and sample image.
 5. **Tag editor** — cached mode + restore points, bulk add / delete / replace, per-image edits.
 6. **Regularization set** ✱ — two generation modes: **AI prior generation** (default, the base model produces the reg set with no LoRA) or **Booru reverse search** (reverse-search Booru by tag distribution + auto WD14 tagging + aspect-ratio clustering). mirror / flat structure, editable / deletable / auto-dedup / dual tagger.
-7. **Train** — pick a preset to copy into the version's private config, edit parameters (autosaved with 600ms debounce, no save button), submit to the queue. The picker label shows "· customized" once the config has diverged; the preset pool is never modified. Simple / Advanced modes.
+7. **Train** — pick a preset to copy into the version's private config, edit parameters (autosaved with 600ms debounce, no save button), submit to the queue. The picker label shows "· customized" once the config has diverged; the preset pool is never modified. Simple / Advanced modes. **Model family** defaults to Anima; switching the dropdown to Krea 2 opens a confirmation dialog listing every weight path and family default about to be recomputed — confirm and the whole version trains as Krea 2 (see [training-tips → Krea 2 training](training-tips.md#krea-2-训练)).
 8. **Test** — single-image / XY matrix / inference daemon.
 
 View tasks on the **Queue** page; open **task detail** for logs / monitoring / output (with one-click full zip download).

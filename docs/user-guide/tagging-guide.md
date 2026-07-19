@@ -1,6 +1,11 @@
 # Anima LoRA 打标指南
 
 > 基于 Anima Model Card 和 ComfyUI 官方实现总结的打标最佳实践
+>
+> **适用范围**：本文的 booru tag 体系（tag 顺序 / 质量标签 / `@画师` 前缀等）是 **Anima 专属**。
+> Krea 2 走 Qwen3-VL 自然语言 caption——打标推荐用 LLM 打标器写长描述，tag
+> shuffle / keep_tokens / tag_dropout 等 tag 生态操作对 Krea 2 不适用（UI 已按族隐藏）；
+> 触发词机制两族通用。
 
 ## 核心规则
 

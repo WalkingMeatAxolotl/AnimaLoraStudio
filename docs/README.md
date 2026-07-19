@@ -19,17 +19,19 @@
 
 | 文档 | 内容 |
 |---|---|
-| [tagging-guide.md](user-guide/tagging-guide.md) | Anima 标签格式、最佳实践、tag 顺序 |
-| [training-tips.md](user-guide/training-tips.md) | 训练参数、显存配置矩阵、过拟合/欠拟合排查、ComfyUI 用法 |
+| [getting-started.md](user-guide/getting-started.md) | 上手教程：启动 / 按族下载模型 / 流水线 walkthrough |
+| [tagging-guide.md](user-guide/tagging-guide.md) | Anima 标签格式、最佳实践、tag 顺序（booru tag 生态；Krea 2 用自然语言 caption） |
+| [training-tips.md](user-guide/training-tips.md) | 训练参数、按族显存配置、Krea 2 专章、过拟合/欠拟合排查、ComfyUI 用法 |
 | [optimizers.md](user-guide/optimizers.md) | 各优化器（Lion / Prodigy / PPSF / SOAP 等）起步参数与换算 |
 | [regularization.md](user-guide/regularization.md) | 正则化方案分析报告（weight decay / 梯度裁剪 / dropout 等，2025-02，历史参考） |
-| [caption-format.md](user-guide/caption-format.md) | JSON caption 格式 + 分类 shuffle |
+| [caption-format.md](user-guide/caption-format.md) | JSON caption 格式 + 分类 shuffle（Anima tag 生态） |
 
 ## Architecture
 
 | 文档 | 内容 |
 |---|---|
 | [studio-pipeline.md](architecture/studio-pipeline.md) | 跨步骤架构总览：数据模型、目录布局、SQLite schema、secrets、SSE 事件、Tagger 抽象、Preset 池 |
+| [project-structure.md](architecture/project-structure.md) | 整仓顶层目录布局（含多模型族的 modeling / families 结构） |
 
 ## Architecture Decision Records (ADR)
 

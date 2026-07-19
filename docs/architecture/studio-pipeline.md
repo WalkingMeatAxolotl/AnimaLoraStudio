@@ -163,15 +163,26 @@ CREATE INDEX idx_tasks_queue ON tasks(status, priority DESC, created_at ASC);
     "prompt_template": "Descriptive Caption"
   },
   "wd14": {
-    "model_id": "SmilingWolf/wd-vit-tagger-v3",
+    "model_id": "SmilingWolf/wd-vit-tagger-v3",   // 当前选中值；候选列表统一在 model_sources
     "threshold_general": 0.35,
     "threshold_character": 0.85,
     "blacklist_tags": []
+  },
+  "models": {
+    "selected": { "anima": "latest", "krea2": "raw_fp8" },   // 按族选中的主模型 variant / 自定义绝对路径
+    "selected_te": { "krea2": "fp8" },                       // Krea 2 文本编码器精度（bf16 / fp8）
+    "vram_policy": "auto"                                    // 出图显存策略：auto / save_vram / performance
+  },
+  "model_sources": {
+    // 模型来源统一（0.20）：每个 domain = 候选列表（内置 preset + 用户候选），
+    // kind=download|local；覆盖 wd14 / cltagger / eval 指标 / 放大器 / 两族主模型八个 domain。
+    // 当前选中值仍写各自旧字段（wd14.model_id / models.selected 等），运行时消费方零改动。
+    "wd14": [ { "kind": "download", "value": "SmilingWolf/wd-vit-tagger-v3", "builtin": true } ]
   }
 }
 ```
 
-Pydantic 模型在 `studio/secrets.py`；GET / PUT `/api/secrets` 操作；敏感字段（`token` / `api_key`）GET 时显示 `"***"`，PUT 时客户端发 `"***"` 表示「保持不变」。
+Pydantic 模型在 `studio/infrastructure/secrets.py`（`studio/secrets.py` 是兼容 shim）；GET / PUT `/api/secrets` 操作；敏感字段（`token` / `api_key`）GET 时显示 `"***"`，PUT 时客户端发 `"***"` 表示「保持不变」。老字段（`wd14.model_ids` / `models.custom` / `selected_anima` 等）由 validator 迁移进新结构并保留写盘（回滚版本可读），入站旧键继续生效。
 
 前端 `/tools/settings` 表单分 7 个 tab（数据集 / 打标 / 训练 / 监控 / 测试 / 页面 / 系统），密码字段用 `<input type="password">`。系统 tab 含 webui 自更新版本卡片（详见 [ADR 0002](../adr/0002-webui-self-update.md)）和服务重启。
 
