@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
-import { SourceSegmented } from './Regularization'
+import { ExcludeTags, SourceSegmented } from './Regularization'
 
 describe('regularization source selector', () => {
   it('uses the shared pill style and switches source', async () => {
@@ -20,5 +20,26 @@ describe('regularization source selector', () => {
 
     await user.click(booru)
     expect(onChange).toHaveBeenCalledWith('booru')
+  })
+})
+
+describe('regularization exclusion chips', () => {
+  it('keeps a long natural-language tag inside a single-height chip', () => {
+    const longTag = 'a single girl with very long pale lavender hair faces toward the viewer while the background extends across the entire frame'
+    render(
+      <ExcludeTags
+        trainTags={[{ tag: longTag, count: 1 }]}
+        excluded={new Set()}
+        onToggle={vi.fn()}
+      />,
+    )
+
+    const text = screen.getByText(longTag)
+    const textContainer = text.parentElement
+    const chip = text.closest('button')
+
+    expect(chip).toHaveClass('h-6', 'max-w-full', 'overflow-hidden', 'whitespace-nowrap')
+    expect(textContainer).toHaveClass('min-w-0', 'truncate', 'text-left')
+    expect(textContainer).toHaveAttribute('title', longTag)
   })
 })

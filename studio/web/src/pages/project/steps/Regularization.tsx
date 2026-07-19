@@ -1275,7 +1275,7 @@ function CheckRow({
 }
 
 // 排除 tag — train 高频 tag 一栏列出 + 自定义排除一栏
-function ExcludeTags({
+export function ExcludeTags({
   trainTags, excluded, onToggle, modeHint,
 }: {
   trainTags: RegTagCount[]
@@ -1336,7 +1336,7 @@ function ExcludeTags({
                 key={info.tag}
                 onClick={() => onToggle(info.tag)}
                 className={
-                  'inline-flex items-center gap-1.5 h-6 px-2.5 rounded-md font-mono text-xs cursor-pointer transition-colors border ' +
+                  'inline-flex items-center gap-1.5 h-6 max-w-full overflow-hidden whitespace-nowrap px-2.5 rounded-md font-mono text-xs cursor-pointer transition-colors border ' +
                   (on
                     ? 'text-accent-hover'
                     : 'bg-sunken text-fg-secondary hover:text-fg-primary')
@@ -1348,11 +1348,16 @@ function ExcludeTags({
                 }
                 title={on ? t('reg.excludeUnclick') : t('reg.excludeClick')}
               >
-                <span className={on ? 'text-accent' : 'text-fg-tertiary'}>
+                <span className={`shrink-0 ${on ? 'text-accent' : 'text-fg-tertiary'}`}>
                   {on ? '✕' : '+'}
                 </span>
-                <TranslatedTag tag={info.tag.replace(/_/g, ' ')} />
-                <span className="text-fg-disabled text-2xs">×{info.count}</span>
+                <span
+                  className="min-w-0 truncate text-left"
+                  title={info.tag.replace(/_/g, ' ')}
+                >
+                  <TranslatedTag tag={info.tag.replace(/_/g, ' ')} />
+                </span>
+                <span className="shrink-0 text-fg-disabled text-2xs">×{info.count}</span>
               </button>
             )
           })}
@@ -1367,17 +1372,22 @@ function ExcludeTags({
           {customTags.map((tag) => (
             <span
               key={tag}
-              className="inline-flex items-center gap-1.5 h-6 px-2.5 rounded-md font-mono text-xs border"
+              className="inline-flex items-center gap-1.5 h-6 max-w-full overflow-hidden whitespace-nowrap px-2.5 rounded-md font-mono text-xs border"
               style={{
                 background: 'var(--warn-soft)',
                 borderColor: 'rgba(224,162,58,0.4)',
                 color: 'var(--warn)',
               }}
             >
-              <TranslatedTag tag={tag.replace(/_/g, ' ')} />
+              <span
+                className="min-w-0 truncate text-left"
+                title={tag.replace(/_/g, ' ')}
+              >
+                <TranslatedTag tag={tag.replace(/_/g, ' ')} />
+              </span>
               <button
                 onClick={() => onToggle(tag)}
-                className="bg-transparent border-none cursor-pointer p-0 text-warn opacity-80"
+                className="shrink-0 bg-transparent border-none cursor-pointer p-0 text-warn opacity-80"
                 aria-label={t('reg.excludeCustomRemoveAria', { tag })}
               >
                 ×
