@@ -260,7 +260,7 @@ export function ModelSourceCard({
               {row.removable && (
                 <button
                   onClick={() => void removeCandidate(row)}
-                  className="btn btn-ghost btn-sm shrink-0 justify-center"
+                  className="btn btn-ghost btn-sm min-w-[5rem] justify-center shrink-0"
                   title={t('settings.removeCandidate')}
                 >✕ {t('settings.removeCandidateShort')}</button>
               )}
