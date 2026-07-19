@@ -10,7 +10,7 @@
 
 - **一站式流水线**：Booru 抓图 / 筛选 / 预处理（去重·放大·裁剪·涂抹）/ 打标 / 正则集 / 训练 / 出图测试，全在一个浏览器面板，Stepper 引导。
 - **双模型族**：Anima 与 Krea 2 共用同一套流程；训练配置里一键切换模型族（权重路径与族默认值自动重算、逐项确认后生效），参数选项按族过滤，同一项目可并存两族版本。
-- **三种打标器**：WD14、CLTagger（本地 ONNX）、LLM（OpenAI 兼容，长 caption——Krea 2 的自然语言 caption 推荐用这个）；触发词填一次自动注入每张 caption 与采样图。
+- **三种打标器**：WD14、CLTagger（本地 ONNX）、LLM（OpenAI 兼容，长 caption）；触发词填一次自动注入每张 caption 与采样图。
 - **Booru 抓图集成**：原生 Gelbooru / Danbooru（Cloudflare 兼容 UA、速率限制、账号认证）。
 - **正则集自动生成**：训练集 tag 分布反向搜 + 长宽比聚类，或底模 AI 先验出图（无需 LoRA）。
 - **Project / Version 双层管理**：单项目多 version 共享数据、独立配置 / 输出；预设池双向 fork。
