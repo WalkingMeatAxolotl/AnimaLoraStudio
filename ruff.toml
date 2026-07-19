@@ -1,0 +1,12 @@
+# Python lint 门禁 —— 只做 F821（未定义名）。
+#
+# 定位（v0.20.1 教训）：t5_attn NameError 潜伏在 CI（无 GPU）跑不到的能力门控
+# 分支里一路发到 release——这类「重构残留引用」静态一扫就能抓。
+# 有意不开风格类规则：噪音大、价值靠 review 兜；本门禁只守正确性底线。
+# 与 tests/test_navit_text_encode_regression.py 的 symtable 扫描互补：
+# symtable 无 del+闭包误报（但只盖 runtime/training/），ruff 覆盖全仓库。
+
+extend-exclude = ["tmp", ".claude"]
+
+[lint]
+select = ["F821"]

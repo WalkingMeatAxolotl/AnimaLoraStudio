@@ -12,6 +12,7 @@ without loading torch.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -22,6 +23,8 @@ from typing import Any, Callable
 from . import eval_validation
 from .projects import jobs as project_jobs
 from .projects import versions
+
+logger = logging.getLogger(__name__)
 
 EVAL_DIRNAME = "eval"
 # Reproducible default generation seed when sample_seed is 0 (=random for samples).
