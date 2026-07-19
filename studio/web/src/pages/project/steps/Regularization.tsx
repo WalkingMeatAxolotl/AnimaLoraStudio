@@ -774,10 +774,10 @@ function RegTab({
   )
 }
 
-// 来源选择：container 卡片包住 + pill radio 切换，复用设置页「系统 / 版本 /
-// 更新通道」的 vs-channel-radio 样式（圆点 + accent 选中态），视觉与之一致。
+// 来源选择：container 卡片包住 + pill radio 切换，复用 tokens.css 的通用
+// pill-radio 样式（圆点 + accent 选中态），视觉与设置页更新通道一致。
 // 说明文字在控件下方随选择切换。
-function SourceSegmented({
+export function SourceSegmented({
   source, onChange,
 }: {
   source: 'ai' | 'booru'
@@ -810,8 +810,8 @@ function SourceSegmented({
   )
 }
 
-// 单个来源 pill：沿用 version-section.css 的 vs-channel-radio（全局 CSS，index.css
-// 已 import）。主名 + 浅色副标题小字（基底模型生成 / 简易·快）。
+// 单个来源 pill：沿用 tokens.css 的通用 pill-radio。主名 + 浅色副标题小字
+//（基底模型生成 / 简易·快）。
 function SourceRadio({
   on, onClick, label, sub,
 }: {
@@ -826,9 +826,9 @@ function SourceRadio({
       role="radio"
       aria-checked={on}
       onClick={onClick}
-      className={`vs-channel-radio${on ? ' on' : ''}`}
+      className={`pill-radio pill-radio-content${on ? ' on' : ''}`}
     >
-      <span className="vs-channel-dot" />
+      <span className="pill-radio-dot" />
       <span>{label}</span>
       <span className="text-2xs opacity-70">· {sub}</span>
     </button>
@@ -1275,7 +1275,7 @@ function CheckRow({
 }
 
 // 排除 tag — train 高频 tag 一栏列出 + 自定义排除一栏
-function ExcludeTags({
+export function ExcludeTags({
   trainTags, excluded, onToggle, modeHint,
 }: {
   trainTags: RegTagCount[]
@@ -1336,7 +1336,7 @@ function ExcludeTags({
                 key={info.tag}
                 onClick={() => onToggle(info.tag)}
                 className={
-                  'inline-flex items-center gap-1.5 h-6 px-2.5 rounded-md font-mono text-xs cursor-pointer transition-colors border ' +
+                  'inline-flex items-center gap-1.5 h-6 max-w-full overflow-hidden whitespace-nowrap px-2.5 rounded-md font-mono text-xs cursor-pointer transition-colors border ' +
                   (on
                     ? 'text-accent-hover'
                     : 'bg-sunken text-fg-secondary hover:text-fg-primary')
@@ -1348,11 +1348,16 @@ function ExcludeTags({
                 }
                 title={on ? t('reg.excludeUnclick') : t('reg.excludeClick')}
               >
-                <span className={on ? 'text-accent' : 'text-fg-tertiary'}>
+                <span className={`shrink-0 ${on ? 'text-accent' : 'text-fg-tertiary'}`}>
                   {on ? '✕' : '+'}
                 </span>
-                <TranslatedTag tag={info.tag.replace(/_/g, ' ')} />
-                <span className="text-fg-disabled text-2xs">×{info.count}</span>
+                <span
+                  className="min-w-0 truncate text-left"
+                  title={info.tag.replace(/_/g, ' ')}
+                >
+                  <TranslatedTag tag={info.tag.replace(/_/g, ' ')} />
+                </span>
+                <span className="shrink-0 text-fg-disabled text-2xs">×{info.count}</span>
               </button>
             )
           })}
@@ -1367,17 +1372,22 @@ function ExcludeTags({
           {customTags.map((tag) => (
             <span
               key={tag}
-              className="inline-flex items-center gap-1.5 h-6 px-2.5 rounded-md font-mono text-xs border"
+              className="inline-flex items-center gap-1.5 h-6 max-w-full overflow-hidden whitespace-nowrap px-2.5 rounded-md font-mono text-xs border"
               style={{
                 background: 'var(--warn-soft)',
                 borderColor: 'rgba(224,162,58,0.4)',
                 color: 'var(--warn)',
               }}
             >
-              <TranslatedTag tag={tag.replace(/_/g, ' ')} />
+              <span
+                className="min-w-0 truncate text-left"
+                title={tag.replace(/_/g, ' ')}
+              >
+                <TranslatedTag tag={tag.replace(/_/g, ' ')} />
+              </span>
               <button
                 onClick={() => onToggle(tag)}
-                className="bg-transparent border-none cursor-pointer p-0 text-warn opacity-80"
+                className="shrink-0 bg-transparent border-none cursor-pointer p-0 text-warn opacity-80"
                 aria-label={t('reg.excludeCustomRemoveAria', { tag })}
               >
                 ×

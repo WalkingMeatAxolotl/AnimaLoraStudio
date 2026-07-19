@@ -19,6 +19,8 @@ import torch.nn as nn
 
 from utils.lycoris_adapter import AnimaLycorisAdapter
 from training.families.anima.preset import ANIMA_PRESET
+from training.families.krea2.preset import KREA2_PRESET
+from training.families.krea2.quant_fp8 import patch_fp8_linears
 
 pytest.importorskip("lycoris")
 
@@ -165,6 +167,34 @@ def test_adapter_lokr_keeps_rebuild() -> None:
     modes = _bypass_modes(adapter)
     assert modes
     assert not any(modes), f"lokr 应保持 rebuild，但 bypass_mode={modes}"
+
+
+def test_adapter_lokr_fp8_base_forces_bypass_and_trains() -> None:
+    """Monkeypatched FP8 nn.Linear uses bypass and full-precision LoKr params."""
+    torch.manual_seed(0)
+    model = MockDiT(d=16)
+    scales = {}
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Linear):
+            module.weight.requires_grad_(False)
+            module.weight.data = module.weight.data.to(torch.float8_e4m3fn)
+            scales[name] = torch.tensor(0.5)
+    patch_fp8_linears(model, scales)
+
+    adapter = AnimaLycorisAdapter(
+        preset=KREA2_PRESET, algo="lokr", rank=4, alpha=4, factor=4,
+    )
+    adapter.inject(model)
+
+    modes = _bypass_modes(adapter)
+    assert modes and all(modes)
+    params = adapter.get_params()
+    assert params and all(p.dtype == torch.float32 for p in params)
+
+    output = model.q_proj(torch.randn(2, 3, 16))
+    output.square().mean().backward()
+    grads = [p.grad for p in params if p.grad is not None]
+    assert grads and all(torch.isfinite(g).all() for g in grads)
 
 
 def test_adapter_loha_keeps_rebuild() -> None:

@@ -28,6 +28,9 @@ from utils.lycoris_patch import apply_lokr_device_patch
 
 logger = logging.getLogger(__name__)
 
+_FP8_DTYPES = frozenset({torch.float8_e4m3fn, torch.float8_e5m2})
+_ADAPTER_DTYPES = frozenset({torch.float16, torch.bfloat16, torch.float32, torch.float64})
+
 # lycoris-lora 3.4.0 LokrModule.get_weight rank_dropout device bug 一次性修复。
 # 模块级调用：任何路径走到 lycoris_adapter（CLI 训练 / Studio worker / 测试）
 # 都会先 patch 一次。返回值供测试断言；正常 import 路径下结果落到 logger。
@@ -125,6 +128,21 @@ class LycorisAdapter:
         if self.algo == "lora" and not self.weight_decompose:
             extra["bypass_mode"] = True
 
+        # Krea2 FP8 checkpoints keep frozen Linear weights in float8 and
+        # monkeypatch Linear.forward to dequantize them to the input dtype.
+        # LyCORIS only recognizes dedicated quantized Linear subclasses, so a
+        # monkeypatched nn.Linear is otherwise mistaken for a regular layer and
+        # LoKr takes the rebuild path. That path casts the dense LoKr delta to
+        # the raw base-weight dtype; torch has no float8 mul/add kernels for it.
+        # Bypass preserves the patched base forward and computes LoKr separately.
+        has_fp8_base = any(
+            isinstance(module, nn.Linear) and module.weight.dtype in _FP8_DTYPES
+            for module in model.modules()
+        )
+        if self.algo == "lokr" and has_fp8_base:
+            extra["bypass_mode"] = True
+            logger.info("FP8 base detected: forcing LoKr bypass forward")
+
         self.network = LycorisNetwork(
             model,
             multiplier=1.0,
@@ -149,9 +167,17 @@ class LycorisAdapter:
         # 转成 fp32，以贴近 ComfyUI LoRA patch 的中间精度。
         try:
             ref = next(model.parameters())
-            self.network.to(device=ref.device, dtype=ref.dtype)
         except StopIteration:
-            pass
+            ref = None
+        if ref is not None:
+            # The first parameter may itself be FP8. Adapter parameters must
+            # stay in a trainable compute dtype; prefer the model's first
+            # non-FP8 floating dtype and fall back to fp32 for an all-FP8 model.
+            adapter_dtype = next(
+                (p.dtype for p in model.parameters() if p.dtype in _ADAPTER_DTYPES),
+                torch.float32,
+            )
+            self.network.to(device=ref.device, dtype=adapter_dtype)
 
         # LycorisNetwork 是独立 nn.Module，不在 model 子树里；model.eval()/.train() 不会
         # 级联到 lycoris 模块（self.training 永远 True）。这导致 sample 时仍进 rank_dropout

@@ -253,19 +253,19 @@ def test_run_sample_no_clear_method_does_not_crash() -> None:
 
 # ── test 4: bypass_mode invariant ──────────────────────────────────────────
 #
-# 设计 invariant：AnimaLycorisAdapter.inject() 里 line 111-112 只在
-#   self.algo == "lora" and not self.weight_decompose
-# 时设置 bypass_mode=True；algo == "tlora" 永远不进此分支，必走 rebuild
-# (make_weight) 路径，让 _install_tlora_masks 的 mask patch 真正生效。
+# 设计 invariant：AnimaLycorisAdapter.inject() 只允许两条 bypass 路径：
+#   1. self.algo == "lora" and not self.weight_decompose
+#   2. self.algo == "lokr" and has_fp8_base
+# algo == "tlora" 永远不进这两条分支，必走 rebuild (make_weight) 路径，
+# 让 _install_tlora_masks 的 mask patch 真正生效。
 #
 # 这里不依赖完整 inject (lycoris preset 与本机版本不兼容)，直接 inspect
 # AnimaLycorisAdapter.inject 源码确认 tlora 不会被设 bypass_mode=True。
 
 
 def test_tlora_inject_never_sets_bypass_mode() -> None:
-    """inject() 里给 lycoris 的 extra dict 设 bypass_mode=True 这件事只在
-    algo='lora' 分支发生；algo='tlora' 不进，必走 make_weight rebuild 路径让
-    _install_tlora_masks 的 mask patch 生效。
+    """inject() 只允许 LoRA 或 FP8 LoKr 设置 bypass_mode=True；
+    algo='tlora' 不进，必走 make_weight rebuild 路径让 mask patch 生效。
 
     防止后续维护误把 tlora 也加进 bypass 路径让 mask 静默失效。"""
     import re
@@ -279,15 +279,18 @@ def test_tlora_inject_never_sets_bypass_mode() -> None:
         "源码结构变了，需重写本 invariant 测试或重新评估 bypass_mode 默认行为。"
     )
     for m in matches:
-        # 该赋值之前 ~250 字符内必须出现 'self.algo == "lora"' 守卫（带或不带空格）
-        # 且必须不在跟 'tlora' 相关的条件里
+        # 该赋值之前 ~250 字符内必须出现两个受支持守卫之一，且不能提到 tlora。
+        # FP8 LoKr 必须同时检查 has_fp8_base，避免普通 LoKr 被误切到 bypass。
         ctx_start = max(0, m.start() - 250)
         ctx = src[ctx_start:m.start()]
         has_lora_guard = bool(re.search(r'self\.algo\s*==\s*["\']lora["\']', ctx))
+        has_fp8_lokr_guard = bool(re.search(
+            r'self\.algo\s*==\s*["\']lokr["\']\s+and\s+has_fp8_base', ctx,
+        ))
         mentions_tlora_nearby = "tlora" in ctx.lower()
-        assert has_lora_guard and not mentions_tlora_nearby, (
+        assert (has_lora_guard or has_fp8_lokr_guard) and not mentions_tlora_nearby, (
             f"extra['bypass_mode'] 赋值 (位置 {m.start()}) 上方 250 字符内未见到"
-            f" `self.algo == 'lora'` 独立守卫；可能让 tlora 也走 bypass 路径让"
-            f" make_weight mask patch 静默失效。"
+            f" LoRA 或 FP8 LoKr 的独立守卫；可能让 tlora / 普通 LoKr 误走"
+            f" bypass，让 make_weight 路径静默失效。"
             f" 上下文：\n{ctx[-200:]}"
         )
