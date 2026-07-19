@@ -62,12 +62,17 @@ class AnimaFamily:
         return None  # Anima 每步在线编码（spec.text.strategy="online"），无缓存
 
     def encode_text_for_batch(self, text, dit, captions, device, dtype, *,
-                              comfy_encoding: bool = True, kv_trim: bool = False):
+                              comfy_encoding: bool = True, kv_trim: bool = False,
+                              return_t5_attn: bool = False):
         """每步在线编码（自 loop.py 文本块下沉，行为零变化）。
 
         comfy_encoding=True（默认）：raw caption 进 Qwen；T5 整段字面 tokenize，
         与测试出图 / 训练预览 conditioning 同一链路。False = legacy A/B 路径。
         返回 cross —— 对循环 opaque（03 §2.7-4）。
+
+        return_t5_attn=True 时返回 (cross, t5_attn)：NaViT 打包需要逐图
+        attention mask 做 cross-attn padding 截断。navit 是 Anima 能力位（D5），
+        该 kwarg 为族私有、不进 protocol。
         """
         import torch
         import torch.nn.functional as F
@@ -106,6 +111,8 @@ class AnimaFamily:
                         _bucket = _b
                         break
                 cross = cross[:, :_bucket, :].contiguous()
+        if return_t5_attn:
+            return cross, t5_attn
         return cross
 
     # ── 训练前向 / 采样 ──────────────────────────────────────────────────
