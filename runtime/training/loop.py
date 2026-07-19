@@ -219,12 +219,24 @@ def run(ctx: TrainingContext) -> None:
 
             # 文本编码：整块下沉 family（cond 对循环 opaque，03 §2.7-4；
             # pad-to-512 / kv_trim / LLMAdapter 融合均为 Anima 私货）
-            cross = ctx.family.encode_text_for_batch(
-                ctx.text_stack, ctx.model, captions,
-                ctx.device, ctx.dtype,
+            _enc_kwargs = dict(
                 comfy_encoding=bool(getattr(args, "caption_comfy_encoding", True)),
                 kv_trim=bool(getattr(args, "kv_trim", False)),
             )
+            if navit_latents is not None:
+                # NaViT 打包需要逐图 attention mask 做 cross-attn padding 截断；
+                # navit 是 Anima 能力位（能力校验 fail-fast），族私有 kwarg 不进 protocol。
+                cross, t5_attn = ctx.family.encode_text_for_batch(
+                    ctx.text_stack, ctx.model, captions,
+                    ctx.device, ctx.dtype,
+                    return_t5_attn=True, **_enc_kwargs,
+                )
+            else:
+                cross = ctx.family.encode_text_for_batch(
+                    ctx.text_stack, ctx.model, captions,
+                    ctx.device, ctx.dtype,
+                    **_enc_kwargs,
+                )
 
             # Flow Matching：统一通过 timestep_sampler plugin 接口采样
             # （baseline = 4 种 mode；adaptive = InfoNoise 等；接口在 ADR 0003 plugin registry）
