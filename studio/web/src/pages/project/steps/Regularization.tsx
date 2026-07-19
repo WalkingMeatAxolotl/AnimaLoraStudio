@@ -774,10 +774,10 @@ function RegTab({
   )
 }
 
-// 来源选择：container 卡片包住 + pill radio 切换，复用设置页「系统 / 版本 /
-// 更新通道」的 vs-channel-radio 样式（圆点 + accent 选中态），视觉与之一致。
+// 来源选择：container 卡片包住 + pill radio 切换，复用 tokens.css 的通用
+// pill-radio 样式（圆点 + accent 选中态），视觉与设置页更新通道一致。
 // 说明文字在控件下方随选择切换。
-function SourceSegmented({
+export function SourceSegmented({
   source, onChange,
 }: {
   source: 'ai' | 'booru'
@@ -810,8 +810,8 @@ function SourceSegmented({
   )
 }
 
-// 单个来源 pill：沿用 version-section.css 的 vs-channel-radio（全局 CSS，index.css
-// 已 import）。主名 + 浅色副标题小字（基底模型生成 / 简易·快）。
+// 单个来源 pill：沿用 tokens.css 的通用 pill-radio。主名 + 浅色副标题小字
+//（基底模型生成 / 简易·快）。
 function SourceRadio({
   on, onClick, label, sub,
 }: {
@@ -826,9 +826,9 @@ function SourceRadio({
       role="radio"
       aria-checked={on}
       onClick={onClick}
-      className={`vs-channel-radio${on ? ' on' : ''}`}
+      className={`pill-radio pill-radio-content${on ? ' on' : ''}`}
     >
-      <span className="vs-channel-dot" />
+      <span className="pill-radio-dot" />
       <span>{label}</span>
       <span className="text-2xs opacity-70">· {sub}</span>
     </button>
