@@ -312,6 +312,17 @@ select option:checked {
 .pill-radio.on .pill-radio-dot {
   background: currentColor;
 }
+/* 带主/副标题的胶囊按内容撑开；圆点回到正常文档流，避免 120px 等宽
+ * 版本在窄卡片内把来源名称拆成两行。普通设置项仍保持等宽居中。 */
+.pill-radio.pill-radio-content {
+  width: auto;
+  gap: 5px;
+  padding: 4px 10px;
+}
+.pill-radio-content .pill-radio-dot {
+  position: static;
+  transform: none;
+}
 
 .input {
   background: var(--bg-surface);
