@@ -1,17 +1,19 @@
-"""放大器（upscaler）切换 / 自定义下载（PR-6 commit 2 从 server.py 抽出）。
+"""放大器（upscaler）切换（PR-6 commit 2 从 server.py 抽出）。
 
-2 routes：
-    POST /api/upscalers/select          切换默认放大器（预设 / custom 文件名）
-    POST /api/upscalers/download_custom 自定义放大器下载（HF / MS repo + filename）
+1 route：
+    POST /api/upscalers/select  切换默认放大器（预设 / custom 文件名 / 本地路径）
+
+自定义下载端点（POST /api/upscalers/download_custom）已被统一来源候选取代
+（POST /api/model-sources/upscaler 登记候选 + 通用 /api/models/download 触发，
+model_id=upscaler_custom）。
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter
 
-from ..schemas.models import UpscalerCustomDownloadRequest, UpscalerSelectRequest
+from ..schemas.models import UpscalerSelectRequest
 from ... import secrets
 from ...domain.errors import InvalidPathError, NotFoundError, ValidationError
 from ...services import models as model_downloader
@@ -48,41 +50,3 @@ def select_upscaler(body: UpscalerSelectRequest) -> dict[str, Any]:
     new = cur.model_copy(update={"models": new_models})
     secrets.save(new)
     return {"selected": label}
-
-
-@router.post("/api/upscalers/download_custom")
-def start_upscaler_custom_download(
-    body: UpscalerCustomDownloadRequest,
-) -> dict[str, Any]:
-    """自定义放大器下载：用户填 HF/MS repo + 文件名，落到 `{upscalers}/{filename}`。
-
-    复用通用 start_download_async；key 形如 `upscaler:custom:foo.pth` 便于前端 SSE
-    过滤 + catalog 状态匹配。
-    """
-    if body.source not in ("hf", "ms"):
-        raise ValidationError(
-            f"Unsupported download source: {body.source}",
-            code="upscaler.download_source_invalid",
-            details={"source": body.source}, http_status=400,
-        )
-    if not body.repo_id.strip() or not body.filename.strip():
-        raise ValidationError(
-            "Repository ID and file name are required",
-            code="upscaler.download_fields_required", http_status=400,
-        )
-    save_name = Path(body.filename).name
-    if not save_name.lower().endswith(model_downloader.UPSCALER_EXTS):
-        _exts = " / ".join(model_downloader.UPSCALER_EXTS)
-        raise ValidationError(
-            f"Select a {_exts} file",
-            code="file.ext_invalid", details={"types": _exts}, http_status=400,
-        )
-    key = f"upscaler:custom:{save_name}"
-    model_downloader.start_download_async(
-        key,
-        lambda log: model_downloader.download_upscaler_custom(
-            body.source, body.repo_id, body.filename, on_log=log
-        ),
-    )
-    snap = model_downloader.get_status_snapshot()
-    return {"key": key, "status": snap.get(key, {}).get("status", "running")}

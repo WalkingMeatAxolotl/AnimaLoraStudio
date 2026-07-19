@@ -1,4 +1,4 @@
-"""Krea2 本地主模型注册、选择与回退。"""
+"""Krea2 本地主模型注册、选择与回退（统一来源候选端点）。"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 
 from studio import secrets
-from studio.api.routers.models import add_custom_model, remove_custom_model
-from studio.api.schemas.models import AnimaCustomModelRequest
+from studio.api.routers.models import add_model_source, remove_model_source
+from studio.api.schemas.models import ModelSourceCandidateRequest
 from studio.services import models as model_downloader
 
 
@@ -43,18 +43,23 @@ def test_krea2_custom_endpoint_registers_dedupes_and_resets_selected(
     monkeypatch.setattr(
         secrets, "save", lambda value: state.update(settings=value),
     )
-    request = AnimaCustomModelRequest(path=str(custom))
+    request = ModelSourceCandidateRequest(kind="local", path=str(custom))
 
-    catalog = add_custom_model("krea2", request)
-    add_custom_model("krea2", request)
+    catalog = add_model_source("krea2", request)
+    add_model_source("krea2", request)
+    # local 候选同步进兼容面 models.custom（回滚可读）
     assert state["settings"].models.custom["krea2"] == [str(custom)]
     assert catalog["krea2_main"]["custom"][0]["path"] == str(custom)
+    local_rows = [
+        r for r in catalog["model_sources"]["krea2"] if r["kind"] == "local"
+    ]
+    assert [r["value"] for r in local_rows] == [str(custom)]
 
     selected = state["settings"].models.model_copy(update={
         "selected": {"anima": "1.0", "krea2": str(custom)},
     })
     state["settings"] = state["settings"].model_copy(update={"models": selected})
-    remove_custom_model("krea2", request)
+    remove_model_source("krea2", request)
 
-    assert state["settings"].models.custom["krea2"] == []
+    assert state["settings"].models.custom.get("krea2", []) == []
     assert state["settings"].models.selected["krea2"] == "raw"

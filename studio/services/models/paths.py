@@ -237,7 +237,12 @@ def taeflux_available(root: Optional[Path] = None) -> bool:
 
 
 def wd14_target_dir(root: Path, model_id: str) -> Path:
-    """WD14 单个 model_id 的本地目录。同 wd14_tagger 的 _resolve_model_dir 路径布局。"""
+    """WD14 单个 model_id 的本地目录。同 wd14_tagger 的 _resolve_model_dir 路径布局。
+
+    `model_id` 为绝对路径时（统一来源候选 local 型）直接指向该目录。
+    """
+    if secrets.is_abs_path(model_id):
+        return Path(model_id)
     return root / "wd14" / safe_dir_name(model_id)
 
 
@@ -246,7 +251,10 @@ def eval_model_target_dir(root: Path, kind: str, model_id: str) -> Path:
 
     多文件 transformers repo，整目录由 snapshot_download 落地，eval 时
     from_pretrained 指向这里，统一归项目 models/ 管理而非 ~/.cache/huggingface。
+    `model_id` 为绝对路径时（local 候选）直接指向该目录。
     """
+    if secrets.is_abs_path(model_id):
+        return Path(model_id)
     return root / "eval" / kind / safe_dir_name(model_id)
 
 
@@ -255,8 +263,10 @@ def ccip_model_dir(root: Path, variant: str) -> Path:
 
     deepghs/ccip_onnx 每个变体子目录含 model_feat.onnx + model_metrics.onnx +
     metrics.json，只选这 3 个下到这里（repo 整库 3.5GB 含 torch ckpt + png，按
-    文件名选择性下载）。
+    文件名选择性下载）。`variant` 为绝对路径时（local 候选）直接指向该目录。
     """
+    if secrets.is_abs_path(variant):
+        return Path(variant)
     return root / "eval" / "ccip" / safe_dir_name(variant)
 
 
@@ -277,9 +287,16 @@ def upscaler_target(label: str, root: Optional[Path] = None) -> Path:
     label 可以是：
       - 预设 key（在 UPSCALER_VARIANTS 中）→ 用预设里的 filename
       - 直接的文件名（带 .pth/.safetensors 扩展名）→ 视为自定义/已上传模型
+      - 绝对路径（统一来源候选 local 型，用户 PathPicker 登记的自有文件）→
+        直接返回，不落 upscalers/ 目录
 
-    路径穿越保护：禁止 label 含 `/`、`\\` 或 `..`，避免落到 upscalers/ 之外。
+    路径穿越保护：绝对路径之外禁止 label 含 `/`、`\\` 或 `..`，避免相对
+    片段落到 upscalers/ 之外。
     """
+    if secrets.is_abs_path(label):
+        if not label.lower().endswith(UPSCALER_EXTS):
+            raise ValueError(f"unknown upscaler {label!r}")
+        return Path(label)
     if "/" in label or "\\" in label or ".." in label:
         raise ValueError(f"invalid upscaler label {label!r}")
     if label in UPSCALER_VARIANTS:

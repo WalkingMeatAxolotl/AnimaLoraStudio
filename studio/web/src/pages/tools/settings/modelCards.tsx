@@ -1,14 +1,18 @@
 import { useState } from 'react'
 import type { TFunction } from 'i18next'
-import { Trans, useTranslation } from 'react-i18next'
+import { useTranslation } from 'react-i18next'
 import {
-  type CLTaggerVariantInfo,
+  api,
   type ModelDownloadStatus,
   type ModelsCatalog,
+  type ModelSourceCandidate,
+  type ModelSourceRow,
 } from '../../../api/client'
 import { InfoButton } from '../../../components/InfoButton'
+import PathPicker from '../../../components/PathPicker'
+import { useToast } from '../../../components/Toast'
 import { useSettingsData } from '../../../lib/SettingsData'
-import { fmtBytes, MODEL_DESCRIPTION_KEYS, textInputClass, translatedCatalogText } from './constants'
+import { fmtBytes, textInputClass } from './constants'
 import { SettingsField, SettingsInput } from './fields'
 
 // ── HFEndpointSelect ────────────────────────────────────────────────────────
@@ -99,276 +103,251 @@ export function SourceSelect({ opt, onChange }: {
   )
 }
 
-// ── ModelIdsEditor ──────────────────────────────────────────────────────────
+// ── ModelSourceCard（统一候选卡：候选列表 + 下载/本地文件双添加入口） ────────
+//
+// docs/design/model-source-unification.md：所有「这个功能用哪个模型」的卡片
+// 共用本组件。行数据来自 catalog.model_sources[domain]（后端拼好能力位）；
+// 当前选中受控于调用方（Settings draft / Tagging form），不读 is_current。
+// 动作矩阵（D2）：内置 preset 只有下载/删除；download 候选加 × 移除（不动
+// 磁盘）；local 候选只有 × 移除，永不删用户文件。
 
-export function ModelIdsEditor({ ids, currentId, onChange }: {
-  ids: string[]; currentId: string; onChange: (next: string[]) => void
+export function ModelSourceCard({
+  domain, title, helpTooltip, catalog, currentValue, onSelect,
+  addDownload, addLocal, selectRequiresExists = false, renderRowMeta, describeRow, t,
+}: {
+  domain: string
+  title: string
+  helpTooltip?: React.ReactNode
+  catalog: ModelsCatalog | null
+  currentValue: string
+  onSelect: (value: string, row: ModelSourceRow) => void
+  /** 下载型添加表单；undefined = 该 domain 不支持下载型添加。 */
+  addDownload?: { filenameField?: boolean; repoPlaceholder?: string; filenamePlaceholder?: string }
+  /** 本地文件添加；undefined = 不支持。secondFileKey：双文件资产（如
+   *  cltagger 的 tag_mapping），第一次选主文件后再弹一次 PathPicker，第二个
+   *  路径写进候选 extra[secondFileKey]。 */
+  addLocal?: { dirOnly?: boolean; secondFileKey?: string }
+  /** true：未下载的候选禁选（主模型/放大器语义）；false：可选中，运行时懒下载（wd14/eval 语义）。 */
+  selectRequiresExists?: boolean
+  /** 行副内容逃生舱（label 旁 chip，如主模型 purpose 徽标）。 */
+  renderRowMeta?: (row: ModelSourceRow) => React.ReactNode
+  /** 行描述文本覆盖（如放大器 preset 描述的 i18n 翻译）；默认 row.description。 */
+  describeRow?: (row: ModelSourceRow) => string
+  t: TFunction
 }) {
-  const { t } = useTranslation()
-  const [draft, setDraft] = useState('')
-  const seen = new Set(ids)
+  const { toast } = useToast()
+  const { deleteAsset, downloadBusy, startDownload, reloadCatalog } = useSettingsData()
+  const [adding, setAdding] = useState<null | 'download' | 'local' | 'local2'>(null)
+  const [repoDraft, setRepoDraft] = useState('')
+  const [fileDraft, setFileDraft] = useState('')
+  const [firstLocalPath, setFirstLocalPath] = useState('')
+  const [submitBusy, setSubmitBusy] = useState(false)
 
-  const add = () => {
-    const v = draft.trim()
-    if (!v) return
-    if (seen.has(v)) { setDraft(''); return }
-    onChange([...ids, v])
-    setDraft('')
+  const rows = catalog?.model_sources?.[domain]
+  if (!catalog || !rows) {
+    return <p className="text-fg-tertiary text-xs">{t('settings.loadingModelCatalog')}</p>
   }
-  const remove = (m: string) => {
-    if (m === currentId) return
-    onChange(ids.filter((x) => x !== m))
+
+  const submitCandidate = async (cand: ModelSourceCandidate) => {
+    setSubmitBusy(true)
+    try {
+      await api.addModelSource(domain, cand)
+      toast(t('settings.candidateAdded', {
+        name: cand.kind === 'local' ? cand.path : cand.repo,
+      }), 'success')
+      setAdding(null)
+      setRepoDraft('')
+      setFileDraft('')
+      await reloadCatalog()
+    } catch (e) {
+      toast(String(e), 'error')
+    } finally {
+      setSubmitBusy(false)
+    }
+  }
+
+  const removeCandidate = async (row: ModelSourceRow) => {
+    const cand: ModelSourceCandidate = row.candidate ?? (row.kind === 'local'
+      ? { kind: 'local', path: row.value }
+      : { kind: 'download', repo: row.value, extra: row.extra })
+    try {
+      await api.removeModelSource(domain, cand)
+      toast(t('settings.candidateRemoved'), 'success')
+      // 移除的是当前选中：服务端已把 secrets 回退默认；本地受控值同步到
+      // 首个内置 preset，避免 draft 悬空指向已移除的候选。
+      if (row.value === currentValue) {
+        const fallback = rows.find((r) => r.kind === 'preset')
+        if (fallback) onSelect(fallback.value, fallback)
+      }
+      await reloadCatalog()
+    } catch (e) {
+      toast(String(e), 'error')
+    }
+  }
+
+  const submitDownloadForm = () => {
+    const repo = repoDraft.trim()
+    if (!repo) return
+    const cand: ModelSourceCandidate = { kind: 'download', repo }
+    if (addDownload?.filenameField) {
+      const fname = fileDraft.trim()
+      if (!fname) return
+      cand.filename = fname
+    }
+    void submitCandidate(cand)
   }
 
   return (
-    <div className="flex flex-col gap-1.5">
-      <ul className="flex flex-col gap-1 list-none m-0 p-0">
-        {ids.map((m) => {
-          const isCurrent = m === currentId
+    <ModelGroupCard title={title} helpTooltip={helpTooltip}>
+      <ul className="list-none m-0 p-0 flex flex-col gap-1">
+        {rows.map((row) => {
+          const dl = row.status_key ? catalog.downloads[row.status_key] : undefined
+          const isSel = row.value === currentValue
+          const canSelect = row.kind === 'local'
+            ? row.exists
+            : (dl?.status !== 'running' && (!selectRequiresExists || row.exists))
           return (
-            <li key={m} className={`flex items-center gap-2 px-2 py-1 rounded-sm text-xs ${
-              isCurrent ? 'border border-accent bg-accent-soft' : 'border border-subtle bg-sunken'
+            <li key={`${row.kind}:${row.value}`} className={`flex items-center gap-2 text-xs px-1.5 py-1 rounded-sm ${
+              isSel ? 'bg-selected-soft border border-selected' : 'bg-transparent border border-transparent'
             }`}>
-              <code className="font-mono text-fg-primary flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{m}</code>
-              {isCurrent ? (
-                <span className="text-xs text-accent">{t('settings.current')}</span>
+              <input type="radio" name={`source_${domain}`} checked={isSel} disabled={!canSelect}
+                onChange={() => onSelect(row.value, row)}
+                className="shrink-0"
+                style={{ accentColor: 'var(--accent)' }}
+                title={canSelect ? t('settings.selectSourceCandidate') : t('settings.downloadRequiredFirst')}
+              />
+              <div className="flex flex-col flex-1 min-w-0">
+                <div className="flex items-center gap-2 min-w-0">
+                  <code className="font-mono text-fg-primary min-w-0 overflow-hidden text-ellipsis whitespace-nowrap" title={row.value}>
+                    {row.label}
+                  </code>
+                  {row.kind === 'local' && (
+                    <span className="text-[10px] px-1 py-0 rounded-sm bg-overlay text-fg-tertiary shrink-0">
+                      {t('settings.localBadge')}
+                    </span>
+                  )}
+                  {(row.kind === 'download' || row.kind === 'scanned') && (
+                    <span className="text-[10px] px-1 py-0 rounded-sm bg-overlay text-fg-tertiary shrink-0">custom</span>
+                  )}
+                  {renderRowMeta?.(row)}
+                </div>
+                {(describeRow ? describeRow(row) : row.description) && (
+                  <span className="text-fg-tertiary text-[11px] truncate">
+                    {describeRow ? describeRow(row) : row.description}
+                  </span>
+                )}
+              </div>
+              {!row.exists && row.size_estimate ? (
+                <span className="text-fg-tertiary shrink-0">~{fmtBytes(row.size_estimate)}</span>
+              ) : null}
+              {row.kind === 'local' && !row.exists ? (
+                <span className="text-err text-2xs shrink-0">{t('settings.localModelMissing')}</span>
               ) : (
-                <button onClick={() => remove(m)} className="text-xs text-fg-tertiary hover:text-err bg-transparent border-none cursor-pointer transition-colors">×</button>
+                <ModelStatusBadge
+                  exists={row.exists} size={row.size} status={dl?.status}
+                  fileCount={row.files?.length}
+                  existsCount={row.files ? row.files.filter((f) => f.exists).length : undefined}
+                />
+              )}
+              {row.download_id && (
+                <DownloadButton
+                  exists={row.exists} status={dl?.status}
+                  busy={row.status_key ? downloadBusy.has(row.status_key) : false}
+                  onClick={() => void startDownload(row.download_id!, row.download_variant ?? row.value)}
+                  onDelete={() => void deleteAsset(row.download_id!, row.download_variant ?? row.value, row.label)}
+                />
+              )}
+              {row.removable && (
+                <button
+                  onClick={() => void removeCandidate(row)}
+                  className="btn btn-ghost btn-sm min-w-[5rem] justify-center shrink-0"
+                  title={t('settings.removeCandidate')}
+                >✕ {t('settings.removeCandidateShort')}</button>
               )}
             </li>
           )
         })}
       </ul>
-      <div className="flex gap-1.5">
-        <input
-          type="text"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add() } }}
-          placeholder={t('settings.addHfModelId')}
-          className={`${textInputClass} flex-1`}                            />
-        <button onClick={add} disabled={!draft.trim() || seen.has(draft.trim())} className="btn btn-secondary btn-sm">{t('settings.add')}</button>
+
+      <div className="flex gap-1.5 mt-1">
+        {addDownload && (
+          <button type="button"
+            onClick={() => setAdding(adding === 'download' ? null : 'download')}
+            className="btn btn-ghost btn-sm text-xs text-fg-tertiary">
+            + {t('settings.addDownloadCandidate')}
+          </button>
+        )}
+        {addLocal && (
+          <button type="button" onClick={() => setAdding('local')}
+            className="btn btn-ghost btn-sm text-xs text-fg-tertiary">
+            + {t('settings.addLocalCandidate')}
+          </button>
+        )}
       </div>
-    </div>
-  )
-}
 
-// ── WD14 / CLTagger Model Cards（打标 tab 内嵌的模型管理器） ─────────────────
+      {adding === 'download' && addDownload && (
+        <div className="flex flex-col gap-1.5">
+          <div className="flex gap-1.5">
+            <input
+              type="text"
+              value={repoDraft}
+              onChange={(e) => setRepoDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !addDownload.filenameField) {
+                  e.preventDefault(); submitDownloadForm()
+                }
+              }}
+              placeholder={addDownload.repoPlaceholder ?? t('settings.addHfModelId')}
+              className={`${textInputClass} flex-1 font-mono`}
+            />
+            {addDownload.filenameField && (
+              <input
+                type="text"
+                value={fileDraft}
+                onChange={(e) => setFileDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); submitDownloadForm() } }}
+                placeholder={addDownload.filenamePlaceholder ?? t('common.filename')}
+                className={`${textInputClass} flex-1 font-mono`}
+              />
+            )}
+            <button
+              onClick={submitDownloadForm}
+              disabled={submitBusy || !repoDraft.trim() || (addDownload.filenameField ? !fileDraft.trim() : false)}
+              className="btn btn-secondary btn-sm"
+            >{t('settings.add')}</button>
+          </div>
+        </div>
+      )}
 
-export function WD14ModelCard({
-  catalog, busy, start,
-  currentModelId, onSelectModelId,
-  candidates, onCandidatesChange, t,
-}: {
-  catalog: ModelsCatalog | null
-  busy: Set<string>
-  start: (model_id: string, variant?: string) => Promise<void>
-  currentModelId: string
-  onSelectModelId: (id: string) => void
-  candidates: string[]
-  onCandidatesChange: (next: string[]) => void
-  t: TFunction
-}) {
-  const [advOpen, setAdvOpen] = useState(false)
-  const { deleteAsset } = useSettingsData()
-  const wd14 = catalog?.wd14
-  const wd14Description = translatedCatalogText(MODEL_DESCRIPTION_KEYS, 'wd14', wd14?.description, t)
-  if (!wd14) {
-    return <p className="text-fg-tertiary text-xs">{t('settings.loadingModelCatalog')}</p>
-  }
-  return (
-    <ModelGroupCard
-      title={t('settings.wd14CandidateTitle', { name: wd14.name })}
-      helpTooltip={
-        <p><Trans i18nKey="settings.wd14CandidateHelp" values={{ desc: wd14Description }} components={{ code: <code /> }} /></p>
-      }
-    >
-      <ul className="list-none m-0 p-0 flex flex-col gap-1">
-        {wd14.variants.map((v) => {
-          const key = `wd14:${v.model_id}`
-          const dl = catalog.downloads[key]
-          const isSel = v.model_id === currentModelId
-          return (
-            <li key={v.model_id} className={`flex items-center gap-2 text-xs px-1.5 py-1 rounded-sm ${
-              isSel ? 'bg-accent-soft border border-accent' : 'bg-transparent border border-transparent'
-            }`}>
-              <input type="radio" name="wd14_variant" checked={isSel}
-                onChange={() => onSelectModelId(v.model_id)}
-                className="shrink-0"
-                style={{ accentColor: 'var(--accent)' }}
-                title={t('settings.selectWd14ModelId')}
-              />
-              <code className="font-mono text-fg-primary flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{v.model_id}</code>
-              <ModelStatusBadge
-                exists={v.exists} size={v.size} status={dl?.status}
-                fileCount={v.files.length}
-                existsCount={v.files.filter((f) => f.exists).length}
-              />
-              <DownloadButton
-                exists={v.exists} status={dl?.status} busy={busy.has(key)}
-                onClick={() => void start('wd14', v.model_id)}
-                onDelete={() => void deleteAsset('wd14', v.model_id, v.model_id)}
-              />
-            </li>
-          )
-        })}
-      </ul>
-      <button type="button" onClick={() => setAdvOpen(!advOpen)}
-        className="btn btn-ghost btn-sm text-xs text-fg-tertiary self-start">
-        {advOpen ? '▾' : '▸'} {t('settings.candidateEditor')}
-      </button>
-      {advOpen && (
-        <ModelIdsEditor
-          ids={candidates} currentId={currentModelId}
-          onChange={onCandidatesChange}
+      {adding === 'local' && addLocal && (
+        <PathPicker
+          initialPath={catalog.models_root}
+          dirOnly={addLocal.dirOnly}
+          onPick={(p) => {
+            if (addLocal.secondFileKey) {
+              // 双文件资产：记住主文件，再选第二个文件
+              setFirstLocalPath(p)
+              setAdding('local2')
+            } else {
+              setAdding(null)
+              void submitCandidate({ kind: 'local', path: p })
+            }
+          }}
+          onClose={() => setAdding(null)}
         />
       )}
-    </ModelGroupCard>
-  )
-}
-
-export function EvalMetricModelCard({
-  catalog, busy, start, kind, dlId, titleKey, helpKey, modelId, onModelIdChange, t,
-}: {
-  catalog: ModelsCatalog | null
-  busy: Set<string>
-  start: (model_id: string, variant?: string) => Promise<void>
-  kind: 'clip' | 'dino' | 'ccip'
-  dlId: 'eval_clip' | 'eval_dino' | 'eval_ccip'
-  titleKey: string
-  helpKey: string
-  modelId: string
-  onModelIdChange: (id: string) => void
-  t: TFunction
-}) {
-  const [advOpen, setAdvOpen] = useState(false)
-  const { deleteAsset } = useSettingsData()
-  const em = catalog?.eval_metrics
-  if (!em) {
-    return <p className="text-fg-tertiary text-xs">{t('settings.loadingModelCatalog')}</p>
-  }
-  const variant = em.variants.find((x) => x.kind === kind)
-  const key = `${dlId}:${modelId}`
-  const dl = catalog.downloads[key]
-  // catalog 的 exists 按已保存的 model_id 算；草稿改了未保存时按未下载显示。
-  const exists = variant?.model_id === modelId ? !!variant?.exists : false
-  return (
-    <ModelGroupCard title={t(titleKey)} helpTooltip={<p>{t(helpKey)}</p>}>
-      <div className="flex items-center gap-2 text-xs">
-        <code className="font-mono text-fg-primary min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{modelId}</code>
-        {variant?.size_estimate ? (
-          <span className="text-fg-tertiary shrink-0">~{fmtBytes(variant.size_estimate)}</span>
-        ) : null}
-        <span style={{ flex: 1 }} />
-        <ModelStatusBadge exists={exists} size={variant?.size ?? 0} status={dl?.status} />
-        <DownloadButton
-          exists={exists} status={dl?.status} busy={busy.has(key)}
-          onClick={() => void start(dlId, modelId)}
-          onDelete={() => void deleteAsset(dlId, modelId, modelId)}
+      {adding === 'local2' && addLocal?.secondFileKey && (
+        <PathPicker
+          initialPath={firstLocalPath}
+          onPick={(p) => {
+            setAdding(null)
+            void submitCandidate({
+              kind: 'local', path: firstLocalPath,
+              extra: { [addLocal.secondFileKey!]: p },
+            })
+          }}
+          onClose={() => setAdding(null)}
         />
-      </div>
-      <button type="button" onClick={() => setAdvOpen(!advOpen)}
-        className="btn btn-ghost btn-sm text-xs text-fg-tertiary self-start">
-        {advOpen ? '▾' : '▸'} {t('settings.customRepoAdvanced')}
-      </button>
-      {advOpen && (
-        <SettingsField label={t('settings.fieldModelId')}>
-          <SettingsInput
-            type="text"
-            value={modelId}
-            onChange={onModelIdChange}
-            className={textInputClass}
-            placeholder={t('settings.addHfModelId')}
-          />
-        </SettingsField>
-      )}
-    </ModelGroupCard>
-  )
-}
-
-export function CLTaggerModelCard({
-  catalog, busy, start,
-  currentModelPath, currentTagMappingPath, onSelectVariant,
-  modelId, onModelIdChange, t,
-}: {
-  catalog: ModelsCatalog | null
-  busy: Set<string>
-  start: (model_id: string, variant?: string) => Promise<void>
-  currentModelPath: string
-  currentTagMappingPath: string
-  onSelectVariant: (v: CLTaggerVariantInfo) => void
-  modelId: string
-  onModelIdChange: (id: string) => void
-  t: TFunction
-}) {
-  const [advOpen, setAdvOpen] = useState(false)
-  const { deleteAsset } = useSettingsData()
-  const cl = catalog?.cltagger
-  const clDescription = translatedCatalogText(MODEL_DESCRIPTION_KEYS, 'cltagger', cl?.description, t)
-  if (!cl) {
-    return <p className="text-fg-tertiary text-xs">{t('settings.loadingModelCatalog')}</p>
-  }
-  return (
-    <ModelGroupCard
-      title={t('settings.clTaggerVersionTitle', { name: cl.name })}
-      helpTooltip={
-        <p><Trans i18nKey="settings.repoHelp" values={{ desc: clDescription, repo: cl.repo }} components={{ code: <code /> }} /></p>
-      }
-    >
-      <ul className="list-none m-0 p-0 flex flex-col gap-1">
-        {cl.variants.map((v) => {
-          const key = `cltagger:${v.label}`
-          const dl = catalog.downloads[key]
-          const isSel =
-            v.model_id === modelId &&
-            v.model_path === currentModelPath &&
-            v.tag_mapping_path === currentTagMappingPath
-          return (
-            <li key={v.label} className={`flex items-center gap-2 text-xs px-1.5 py-1 rounded-sm ${
-              isSel ? 'bg-accent-soft border border-accent' : 'bg-transparent border border-transparent'
-            }`}>
-              <input type="radio" name="cltagger_variant" checked={isSel}
-                onChange={() => onSelectVariant(v)}
-                className="shrink-0"
-                style={{ accentColor: 'var(--accent)' }}
-                title={t('settings.selectClTaggerVersion')}
-              />
-              <div className="flex flex-col flex-1 min-w-0">
-                <code className="font-mono text-fg-primary overflow-hidden text-ellipsis whitespace-nowrap">{v.label}</code>
-                {v.version_dir && (
-                  <span className="text-[10px] text-fg-tertiary overflow-hidden text-ellipsis whitespace-nowrap" title={v.version_dir}>
-                    {t('settings.clTaggerFilesAt')}: <code>{v.version_dir}</code>
-                  </span>
-                )}
-              </div>
-              <ModelStatusBadge
-                exists={v.exists} size={v.size} status={dl?.status}
-                fileCount={v.files.length}
-                existsCount={v.files.filter((f) => f.exists).length}
-              />
-              <DownloadButton
-                exists={v.exists} status={dl?.status} busy={busy.has(key)}
-                onClick={() => void start('cltagger', v.label)}
-                onDelete={() => void deleteAsset('cltagger', v.label, v.label)}
-              />
-            </li>
-          )
-        })}
-      </ul>
-      <button type="button" onClick={() => setAdvOpen(!advOpen)}
-        className="btn btn-ghost btn-sm text-xs text-fg-tertiary self-start">
-        {advOpen ? '▾' : '▸'} {t('settings.customRepoAdvanced')}
-      </button>
-      {advOpen && (
-        <SettingsField label={t('settings.fieldModelId')}>
-          <SettingsInput
-            type="text"
-            value={modelId}
-            onChange={onModelIdChange}
-            className={textInputClass}
-            placeholder="cella110n/cl_tagger"
-          />
-        </SettingsField>
       )}
     </ModelGroupCard>
   )

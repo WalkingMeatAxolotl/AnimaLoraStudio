@@ -744,6 +744,44 @@ export interface ModelDownloadStatus {
   log_tail: string[]
 }
 
+/** 统一模型来源候选行（catalog.model_sources[domain]，后端拼好能力位）。
+ *  docs/design/model-source-unification.md §6。 */
+export interface ModelSourceRow {
+  kind: 'preset' | 'download' | 'local' | 'scanned'
+  /** 用户候选的原始存储记录（DELETE 的身份键）；preset / scanned 行为 null。 */
+  candidate: ModelSourceCandidate | null
+  /** 写进该 domain 选中值字段的值（repo id / 绝对路径 / 文件名）。 */
+  value: string
+  label: string
+  /** 行副标题（放大器描述 / 自定义候选的 repo 来源等）。 */
+  description: string
+  /** POST /api/models/download 的 model_id；local 候选为 null（不可下载）。 */
+  download_id: string | null
+  /** 下载触发的 variant 参数（默认 = value；主模型/放大器候选 = repo 内文件路径）。 */
+  download_variant: string | null
+  /** catalog.downloads 的 status key；local 候选为 null。 */
+  status_key: string | null
+  exists: boolean
+  size: number
+  files?: Array<{ name: string; exists: boolean; size: number; mtime: number }> | null
+  size_estimate: number
+  is_current: boolean
+  /** 内置 preset 不可移除（保护默认）。 */
+  removable: boolean
+  /** local 候选永不从 UI 删除磁盘文件。 */
+  deletable: boolean
+  extra: Record<string, string>
+}
+
+/** POST/DELETE /api/model-sources/{domain} 的候选描述。 */
+export interface ModelSourceCandidate {
+  kind: 'download' | 'local'
+  repo?: string
+  filename?: string
+  path?: string
+  extra?: Record<string, string>
+}
+
 export interface UpscalerVariant {
   label: string
   filename: string
@@ -797,6 +835,8 @@ export interface ModelsCatalog {
   /** 评估指标 registry（Settings 复选框列表）。 */
   eval_metric_catalog?: EvalMetricCatalogItem[]
   upscalers?: UpscalersCatalog
+  /** 统一来源候选行（泛化候选卡消费；键 = domain：wd14 / eval_clip / ...）。 */
+  model_sources?: Record<string, ModelSourceRow[]>
   /** 按类型的下载源选项：current = 当前选中，available = 可选源（长度 1 = 固定单源）。 */
   download_source_options: Record<string, { current: string; available: string[] }>
   downloads: Record<string, ModelDownloadStatus>
@@ -2078,27 +2118,17 @@ export const api = {
       + (variant ? `&variant=${encodeURIComponent(variant)}` : ''),
       { method: 'DELETE' },
     ),
-  /** 注册一个本地 .safetensors 主模型到指定族（微调训练 / 微调上测试）。
-   *  返回新 catalog。路由按族参数化（多模型 P4-5）。 */
-  addCustomModel: (family: 'anima' | 'krea2', path: string) =>
-    req<ModelsCatalog>(`/api/models/${family}/custom`, {
+  /** 添加一条统一来源候选（下载型 / 本地文件），返回新 catalog。 */
+  addModelSource: (domain: string, cand: ModelSourceCandidate) =>
+    req<ModelsCatalog>(`/api/model-sources/${domain}`, {
       method: 'POST',
-      body: JSON.stringify({ path }),
+      body: JSON.stringify(cand),
     }),
-  /** 注销一个本地 custom 主模型；若为该族当前选中则回退最新官方 variant。 */
-  removeCustomModel: (family: 'anima' | 'krea2', path: string) =>
-    req<ModelsCatalog>(`/api/models/${family}/custom`, {
+  /** 移除一条候选（不动磁盘；移除当前选中项时服务端回退默认）。 */
+  removeModelSource: (domain: string, cand: ModelSourceCandidate) =>
+    req<ModelsCatalog>(`/api/model-sources/${domain}`, {
       method: 'DELETE',
-      body: JSON.stringify({ path }),
-    }),
-  startUpscalerCustomDownload: (body: {
-    source: 'hf' | 'ms'
-    repo_id: string
-    filename: string
-  }) =>
-    req<{ key: string; status: string }>('/api/upscalers/download_custom', {
-      method: 'POST',
-      body: JSON.stringify(body),
+      body: JSON.stringify(cand),
     }),
   selectUpscaler: (label: string) =>
     req<{ selected: string }>('/api/upscalers/select', {

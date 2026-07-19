@@ -18,7 +18,7 @@ import LLMPresetEditorModal, { llmPresetLabel } from '../../../components/LLMPre
 import { TagListInput } from '../../../components/TagsInput'
 import StepShell from '../../../components/StepShell'
 import { useToast } from '../../../components/Toast'
-import { CLTaggerModelCard, SourceSelect, WD14ModelCard } from '../../tools/settings/modelCards'
+import { ModelSourceCard, SourceSelect } from '../../tools/settings/modelCards'
 import { useSettingsData } from '../../../lib/SettingsData'
 import { useSettingsDrawer } from '../../../lib/SettingsDrawer'
 import { useEventStream } from '../../../lib/useEventStream'
@@ -83,10 +83,7 @@ export default function TaggingPage() {
   const { project, activeVersion, reload } = useOutletContext<Ctx>()
   const { toast } = useToast()
   const settingsDrawer = useSettingsDrawer()
-  const {
-    catalog, downloadBusy, startDownload, setDownloadSource,
-    secrets, commitSecrets, reloadCatalog,
-  } = useSettingsData()
+  const { catalog, setDownloadSource, secrets } = useSettingsData()
 
   const [tagger, setTagger] = useState<TaggerName>('wd14')
   const [taggerStatus, setTaggerStatus] = useState<TaggerStatus | null>(null)
@@ -489,17 +486,14 @@ export default function TaggingPage() {
                       opt={catalog?.download_source_options?.wd14}
                       onChange={(s) => void setDownloadSource('wd14', s)}
                     />
-                    <WD14ModelCard
+                    <ModelSourceCard
+                      domain="wd14"
+                      title={t('settings.wd14CandidateTitle', { name: catalog?.wd14?.name ?? 'WD14' })}
                       catalog={catalog}
-                      busy={downloadBusy}
-                      start={startDownload}
-                      currentModelId={wd14Form.model_id}
-                      onSelectModelId={(id) => setWd14Form({ ...wd14Form, model_id: id })}
-                      candidates={secrets?.wd14.model_ids ?? wd14Defaults?.model_ids ?? []}
-                      onCandidatesChange={(next) => {
-                        commitSecrets({ wd14: { model_ids: next } })
-                        void reloadCatalog()
-                      }}
+                      currentValue={wd14Form.model_id}
+                      onSelect={(id) => setWd14Form({ ...wd14Form, model_id: id })}
+                      addDownload={{}}
+                      addLocal={{ dirOnly: true }}
                       t={t}
                     />
                   </div>
@@ -521,22 +515,21 @@ export default function TaggingPage() {
                       opt={catalog?.download_source_options?.cltagger}
                       onChange={(s) => void setDownloadSource('cltagger', s)}
                     />
-                    <CLTaggerModelCard
+                    <ModelSourceCard
+                      domain="cltagger"
+                      title={t('settings.clTaggerVersionTitle', { name: catalog?.cltagger?.name ?? 'CLTagger' })}
                       catalog={catalog}
-                      busy={downloadBusy}
-                      start={startDownload}
-                      currentModelPath={cltaggerForm.model_path}
-                      currentTagMappingPath={cltaggerForm.tag_mapping_path}
-                      modelId={cltaggerForm.model_id}
-                      onSelectVariant={(v) =>
+                      currentValue={`${cltaggerForm.model_id}|${cltaggerForm.model_path}|${cltaggerForm.tag_mapping_path}`}
+                      onSelect={(_, row) =>
                         setCltaggerForm({
                           ...cltaggerForm,
-                          model_id: v.model_id,
-                          model_path: v.model_path,
-                          tag_mapping_path: v.tag_mapping_path,
+                          model_id: row.extra.model_id ?? '',
+                          model_path: row.extra.model_path ?? '',
+                          tag_mapping_path: row.extra.tag_mapping_path ?? '',
                         })
                       }
-                      onModelIdChange={(id) => setCltaggerForm({ ...cltaggerForm, model_id: id })}
+                      addDownload={{ repoPlaceholder: 'cella110n/cl_tagger' }}
+                      addLocal={{ secondFileKey: 'tag_mapping_path' }}
                       t={t}
                     />
                   </div>

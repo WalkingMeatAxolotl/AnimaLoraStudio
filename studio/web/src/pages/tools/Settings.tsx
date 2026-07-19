@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
 import {
   api,
-  type CLTaggerVariantInfo,
+  type ModelSourceRow,
   type LLMPreset,
   type Secrets,
   type SecretsPatch,
@@ -22,16 +22,18 @@ import {
   getStoredTab,
   _makeFallbackPreset,
   MASK,
+  MODEL_DESCRIPTION_KEYS,
   SECTION_TO_TAB,
   TAB_LIST,
   TAB_SECTIONS,
   TAB_STORAGE_KEY,
   textInputClass,
+  translatedCatalogText,
   type Section,
   type Tab,
 } from './settings/constants'
 import { Bool, SectionIndex, SensitiveInput, SettingsField, SettingsInput, SettingsSection } from './settings/fields'
-import { CLTaggerModelCard, EvalMetricModelCard, HFEndpointSelect, SourceSelect, WD14ModelCard } from './settings/modelCards'
+import { HFEndpointSelect, ModelSourceCard, SourceSelect } from './settings/modelCards'
 import {
   DisplaySection,
   FlashAttentionSection,
@@ -129,12 +131,14 @@ export default function SettingsPage() {
   }
 
 
-  const selectCLTaggerVariant = (variant: CLTaggerVariantInfo) => {
+  // CLTagger 选中值是 (model_id, model_path, tag_mapping_path) 三元组：行
+  // value 用 `|` 合成键匹配，选中时从统一行 extra 一次写回三字段。
+  const selectCLTaggerRow = (row: ModelSourceRow) => {
     commitSecrets({
       cltagger: {
-        model_id: variant.model_id,
-        model_path: variant.model_path,
-        tag_mapping_path: variant.tag_mapping_path,
+        model_id: row.extra.model_id ?? '',
+        model_path: row.extra.model_path ?? '',
+        tag_mapping_path: row.extra.tag_mapping_path ?? '',
       },
     } as SecretsPatch)
   }
@@ -462,7 +466,7 @@ export default function SettingsPage() {
               const isDefault = p.id === draft.llm_tagger.current_preset
               return (
                 <li key={p.id} className={`flex items-center gap-2 text-xs px-1.5 py-1 rounded-sm ${
-                  isDefault ? 'bg-accent-soft border border-accent' : 'bg-transparent border border-transparent'
+                  isDefault ? 'bg-selected-soft border border-selected' : 'bg-transparent border border-transparent'
                 }`}>
                   <input type="radio" name="llm_preset_default" checked={isDefault}
                     onChange={() => update('llm_tagger', 'current_preset', p.id)}
@@ -497,14 +501,17 @@ export default function SettingsPage() {
           opt={catalog?.download_source_options?.wd14}
           onChange={(s) => void setDownloadSource('wd14', s)}
         />
-        <WD14ModelCard
+        <ModelSourceCard
+          domain="wd14"
+          title={t('settings.wd14CandidateTitle', { name: catalog?.wd14?.name ?? 'WD14' })}
+          helpTooltip={
+            <p><Trans i18nKey="settings.wd14CandidateHelp" values={{ desc: translatedCatalogText(MODEL_DESCRIPTION_KEYS, 'wd14', catalog?.wd14?.description, t) }} components={{ code: <code /> }} /></p>
+          }
           catalog={catalog}
-          busy={downloadBusy}
-          start={startDownload}
-          currentModelId={draft.wd14.model_id}
-          onSelectModelId={(id) => update('wd14', 'model_id', id)}
-          candidates={draft.wd14.model_ids}
-          onCandidatesChange={(next) => update('wd14', 'model_ids', next)}
+          currentValue={draft.wd14.model_id}
+          onSelect={(v) => update('wd14', 'model_id', v)}
+          addDownload={{}}
+          addLocal={{ dirOnly: true }}
           t={t}
         />
         <div className="grid grid-cols-2 gap-3">
@@ -548,15 +555,17 @@ export default function SettingsPage() {
           opt={catalog?.download_source_options?.cltagger}
           onChange={(s) => void setDownloadSource('cltagger', s)}
         />
-        <CLTaggerModelCard
+        <ModelSourceCard
+          domain="cltagger"
+          title={t('settings.clTaggerVersionTitle', { name: catalog?.cltagger?.name ?? 'CLTagger' })}
+          helpTooltip={
+            <p><Trans i18nKey="settings.repoHelp" values={{ desc: translatedCatalogText(MODEL_DESCRIPTION_KEYS, 'cltagger', catalog?.cltagger?.description, t), repo: catalog?.cltagger?.repo ?? '' }} components={{ code: <code /> }} /></p>
+          }
           catalog={catalog}
-          busy={downloadBusy}
-          start={startDownload}
-          currentModelPath={draft.cltagger.model_path}
-          currentTagMappingPath={draft.cltagger.tag_mapping_path}
-          onSelectVariant={selectCLTaggerVariant}
-          modelId={draft.cltagger.model_id}
-          onModelIdChange={(id) => update('cltagger', 'model_id', id)}
+          currentValue={`${draft.cltagger.model_id}|${draft.cltagger.model_path}|${draft.cltagger.tag_mapping_path}`}
+          onSelect={(_, row) => selectCLTaggerRow(row)}
+          addDownload={{ repoPlaceholder: 'cella110n/cl_tagger' }}
+          addLocal={{ secondFileKey: 'tag_mapping_path' }}
           t={t}
         />
         <div className="grid grid-cols-2 gap-3">
@@ -655,28 +664,37 @@ export default function SettingsPage() {
           opt={catalog?.download_source_options?.eval}
           onChange={(s) => void setDownloadSource('eval', s)}
         />
-        <EvalMetricModelCard
-          catalog={catalog} busy={downloadBusy} start={startDownload}
-          kind="clip" dlId="eval_clip"
-          titleKey="settings.evalClipModel" helpKey="settings.evalClipModelHelp"
-          modelId={draft.eval_metrics.clip_model_name}
-          onModelIdChange={(id) => update('eval_metrics', 'clip_model_name', id)}
+        <ModelSourceCard
+          domain="eval_clip"
+          title={t('settings.evalClipModel')}
+          helpTooltip={<p>{t('settings.evalClipModelHelp')}</p>}
+          catalog={catalog}
+          currentValue={draft.eval_metrics.clip_model_name}
+          onSelect={(v) => update('eval_metrics', 'clip_model_name', v)}
+          addDownload={{}}
+          addLocal={{ dirOnly: true }}
           t={t}
         />
-        <EvalMetricModelCard
-          catalog={catalog} busy={downloadBusy} start={startDownload}
-          kind="dino" dlId="eval_dino"
-          titleKey="settings.evalDinoModel" helpKey="settings.evalDinoModelHelp"
-          modelId={draft.eval_metrics.dino_model_name}
-          onModelIdChange={(id) => update('eval_metrics', 'dino_model_name', id)}
+        <ModelSourceCard
+          domain="eval_dino"
+          title={t('settings.evalDinoModel')}
+          helpTooltip={<p>{t('settings.evalDinoModelHelp')}</p>}
+          catalog={catalog}
+          currentValue={draft.eval_metrics.dino_model_name}
+          onSelect={(v) => update('eval_metrics', 'dino_model_name', v)}
+          addDownload={{}}
+          addLocal={{ dirOnly: true }}
           t={t}
         />
-        <EvalMetricModelCard
-          catalog={catalog} busy={downloadBusy} start={startDownload}
-          kind="ccip" dlId="eval_ccip"
-          titleKey="settings.evalCcipModel" helpKey="settings.evalCcipModelHelp"
-          modelId={draft.eval_metrics.ccip_model_name}
-          onModelIdChange={(id) => update('eval_metrics', 'ccip_model_name', id)}
+        <ModelSourceCard
+          domain="eval_ccip"
+          title={t('settings.evalCcipModel')}
+          helpTooltip={<p>{t('settings.evalCcipModelHelp')}</p>}
+          catalog={catalog}
+          currentValue={draft.eval_metrics.ccip_model_name}
+          onSelect={(v) => update('eval_metrics', 'ccip_model_name', v)}
+          addDownload={{}}
+          addLocal={{ dirOnly: true }}
           t={t}
         />
         <SettingsField
@@ -747,8 +765,6 @@ export default function SettingsPage() {
       {tab === 'preprocess' && (
         <UpscalerSection
           catalog={catalog}
-          busy={downloadBusy}
-          start={startDownload}
           setSource={setDownloadSource}
           reloadCatalog={reloadCatalog}
           t={t}

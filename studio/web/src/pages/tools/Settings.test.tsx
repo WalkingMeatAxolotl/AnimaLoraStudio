@@ -277,6 +277,70 @@ const emptyModelsCatalog = {
     cltagger: { current: 'huggingface', available: ['huggingface'] },
     taeflux: { current: 'huggingface', available: ['huggingface'] },
   },
+  // 统一来源候选行（ModelSourceCard 消费；缺键会渲染 loading 文案）
+  model_sources: {
+    wd14: [],
+    cltagger: [
+      {
+        kind: 'preset', candidate: null,
+        value: 'cella110n/cl_tagger|cl_tagger_1_02/model.onnx|cl_tagger_1_02/tag_mapping.json',
+        label: 'cl_tagger_1_02', description: '',
+        download_id: 'cltagger', download_variant: 'cl_tagger_1_02',
+        status_key: 'cltagger:cl_tagger_1_02', exists: false, size: 0,
+        files: [], size_estimate: 0, is_current: true,
+        removable: false, deletable: true,
+        extra: {
+          model_id: 'cella110n/cl_tagger',
+          model_path: 'cl_tagger_1_02/model.onnx',
+          tag_mapping_path: 'cl_tagger_1_02/tag_mapping.json',
+        },
+      },
+      {
+        kind: 'preset', candidate: null,
+        value: 'cella110n/cl_tagger_v2|v2_01a/model.onnx|v2_01a/model_vocabulary.json',
+        label: 'cl_tagger_v2_v2_01a', description: '',
+        download_id: 'cltagger', download_variant: 'cl_tagger_v2_v2_01a',
+        status_key: 'cltagger:cl_tagger_v2_v2_01a', exists: false, size: 0,
+        files: [], size_estimate: 0, is_current: false,
+        removable: false, deletable: true,
+        extra: {
+          model_id: 'cella110n/cl_tagger_v2',
+          model_path: 'v2_01a/model.onnx',
+          tag_mapping_path: 'v2_01a/model_vocabulary.json',
+        },
+      },
+    ],
+    eval_clip: [],
+    eval_dino: [],
+    eval_ccip: [],
+    upscaler: [],
+    anima: [],
+    krea2: [
+      {
+        kind: 'preset', candidate: null, value: 'raw', label: 'raw',
+        description: '', download_id: 'krea2_main', download_variant: 'raw',
+        status_key: 'krea2_main:raw', exists: true, size: 1024, files: null,
+        size_estimate: 0, is_current: true, removable: false, deletable: true,
+        extra: { purpose: 'training' },
+      },
+      {
+        kind: 'preset', candidate: null, value: 'turbo', label: 'turbo',
+        description: '', download_id: 'krea2_main', download_variant: 'turbo',
+        status_key: 'krea2_main:turbo', exists: true, size: 1024, files: null,
+        size_estimate: 0, is_current: false, removable: false, deletable: true,
+        extra: { purpose: 'inference' },
+      },
+      {
+        kind: 'local',
+        candidate: { kind: 'local', path: '/tmp/models/my-krea2.safetensors' },
+        value: '/tmp/models/my-krea2.safetensors', label: 'my-krea2.safetensors',
+        description: '', download_id: null, download_variant: null,
+        status_key: null, exists: true, size: 1024, files: null,
+        size_estimate: 0, is_current: false, removable: true, deletable: false,
+        extra: {},
+      },
+    ],
+  },
   downloads: {},
 }
 
@@ -467,13 +531,12 @@ describe('SettingsPage (PP0)', () => {
     expect(screen.getByText('my-krea2.safetensors')).toBeInTheDocument()
     const customRow = screen.getByText('my-krea2.safetensors').closest('li')
     expect(customRow).not.toBeNull()
-    const customRowChildren = Array.from(customRow!.children)
-    const rightSpacerIndex = customRowChildren.findIndex((child) => child.classList.contains('flex-1'))
-    const customBadgeIndex = customRowChildren.findIndex((child) => child.classList.contains('bg-overlay'))
-    const statusBadgeIndex = customRowChildren.findIndex((child) => child.classList.contains('bg-ok-soft'))
-    expect(rightSpacerIndex).toBeGreaterThan(-1)
-    expect(customBadgeIndex).toBeGreaterThan(rightSpacerIndex)
-    expect(statusBadgeIndex).toBeGreaterThan(customBadgeIndex)
+    // 统一候选卡（D2）：local 行带「本地」徽标 + 状态 badge + × 移除（不删文件），
+    // 永远没有删除文件按钮
+    expect(within(customRow!).getByText('本地')).toBeInTheDocument()
+    expect(customRow!.querySelector('.bg-ok-soft')).not.toBeNull()
+    expect(within(customRow!).getByTitle('从列表移除（不删除文件）')).toBeInTheDocument()
+    expect(within(customRow!).queryByText(/🗑/)).not.toBeInTheDocument()
     // 主模型 3（raw/turbo/custom）+ TE variant 卡 2（bf16/fp8）
     expect(screen.getAllByRole('radio')).toHaveLength(5)
     expect(screen.queryByText(/推荐工作流/)).not.toBeInTheDocument()

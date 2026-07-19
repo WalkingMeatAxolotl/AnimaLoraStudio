@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated_from": "studio.server.app",
-  "count": 205,
+  "count": 204,
   "routes": [
     {
       "path": "/",
@@ -282,6 +282,22 @@
       "type": "APIRoute"
     },
     {
+      "path": "/api/model-sources/{domain}",
+      "methods": [
+        "DELETE"
+      ],
+      "name": "remove_model_source",
+      "type": "APIRoute"
+    },
+    {
+      "path": "/api/model-sources/{domain}",
+      "methods": [
+        "POST"
+      ],
+      "name": "add_model_source",
+      "type": "APIRoute"
+    },
+    {
       "path": "/api/models-root/info",
       "methods": [
         "GET"
@@ -343,22 +359,6 @@
         "GET"
       ],
       "name": "get_models_path_defaults",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/models/{family}/custom",
-      "methods": [
-        "DELETE"
-      ],
-      "name": "remove_custom_model",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/models/{family}/custom",
-      "methods": [
-        "POST"
-      ],
-      "name": "add_custom_model",
       "type": "APIRoute"
     },
     {
@@ -1543,14 +1543,6 @@
         "GET"
       ],
       "name": "torch_status",
-      "type": "APIRoute"
-    },
-    {
-      "path": "/api/upscalers/download_custom",
-      "methods": [
-        "POST"
-      ],
-      "name": "start_upscaler_custom_download",
       "type": "APIRoute"
     },
     {
