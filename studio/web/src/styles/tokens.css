@@ -276,7 +276,9 @@ select option:checked {
 .pill-radio {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
+  min-width: 72px;   /* 组内文字长短不一（中文/English 等）时按钮等宽整齐 */
   padding: 4px 10px;
   border-radius: 999px;
   border: 1px solid var(--border-default);
